@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+/AJAE.aux
+/AJAE.bbl
+/AJAE.blg
+/AJAE.fdb_latexmk
+/AJAE.fls
+/AJAE.log
+/AJAE.out
+/AJAE.synctex.gz
+/AJAE.toc

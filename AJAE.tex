@@ -1,0 +1,633 @@
+\PassOptionsToPackage{no-math}{fontspec}
+\documentclass[UTF8,a4paper,zihao=5,fontset=none]{ctexart}
+
+\usepackage{fontspec}
+\usepackage{xeCJK}
+\setmainfont{Times New Roman}
+\setsansfont{Times New Roman}
+\setmonofont{Times New Roman}
+\setCJKmainfont[AutoFakeBold=2.0,AutoFakeSlant=0.2]{SimSun}
+\setCJKsansfont[AutoFakeBold=2.0,AutoFakeSlant=0.2]{SimSun}
+\setCJKmonofont[AutoFakeBold=2.0]{SimSun}
+
+\usepackage[a4paper,top=1.75cm,bottom=1.65cm,left=1.80cm,right=1.80cm,footskip=0.70cm]{geometry}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage{setspace}
+\usepackage{caption}
+\usepackage[numbers,sort&compress]{natbib}
+\usepackage[hidelinks]{hyperref}
+\usepackage{multicol}
+\usepackage{titlesec}
+\usepackage{indentfirst}
+\usepackage{xcolor}
+\usepackage{needspace}
+
+\hypersetup{
+  hypertexnames=false,
+  pdftitle={AJAE：基于多帧累积证据的激光雷达异常分割},
+  pdfsubject={连续激光雷达异常分割开题报告}
+}
+\captionsetup{font=small,labelfont=bf,labelsep=quad,justification=centering,singlelinecheck=true,hypcap=false}
+\setstretch{1.05}
+\setlength{\parindent}{2em}
+\setlength{\parskip}{0pt}
+\setlength{\tabcolsep}{3.5pt}
+\setlength{\columnsep}{0.60cm}
+\setlist[enumerate]{leftmargin=2.25em,itemsep=0.15em,topsep=0.20em,parsep=0pt}
+\setlist[itemize]{leftmargin=2.10em,itemsep=0.12em,topsep=0.20em,parsep=0pt}
+\renewcommand{\tabularxcolumn}[1]{m{#1}}
+\newcolumntype{Y}{>{\raggedright\arraybackslash}X}
+\newcolumntype{L}[1]{>{\raggedright\arraybackslash}m{#1}}
+\titleformat{\section}{\bfseries\fontsize{12pt}{15pt}\selectfont}{\thesection}{0.55em}{}
+\titlespacing*{\section}{0pt}{0.85em}{0.35em}
+\titleformat{\subsection}{\bfseries\fontsize{10.5pt}{13pt}\selectfont}{\thesubsection}{0.50em}{}
+\titlespacing*{\subsection}{0pt}{0.55em}{0.20em}
+\pagestyle{plain}
+\raggedbottom
+\emergencystretch=1em
+
+\begin{document}
+\special{pdf:minorversion 7}
+\fontsize{9.5pt}{12.2pt}\selectfont
+
+\begin{center}
+  {\bfseries\fontsize{16pt}{20pt}\selectfont
+  AJAE：基于多帧累积证据的激光雷达异常分割}\\[0.15em]
+  {\fontsize{9.5pt}{12pt}\selectfont 开题报告}
+\end{center}
+
+\section*{摘要}
+
+车载激光雷达异常分割需要为当前扫描中的每个真实回波估计异常程度。远距离、遮挡和小尺寸物体在单次扫描中通常只留下少量回波，连续扫描则从不同观测时刻提供补充几何信息。本课题提出AJAE（\textit{Anomaly Judgement with Accumulated Evidence}），研究在当前帧判断保持可追溯的条件下，正确对应的因果历史能否改善当前点异常分类，以及这种改善能否同时避免正常点误报。
+
+AJAE采用“当前锚定的因子化因果窗口编码器”。模型用STU官方Mask4Former-3D检查点初始化共享空间编码器，各帧先独立提取低层和中层空间特征，再在p16、p8和p4三个尺度把历史证据写入当前帧表示。当前分支输出单帧逻辑值$z_i^{\mathrm{cur}}$；时间分支只产生幅度不超过4的修正$\delta_i$，得到$z_i^{\mathrm{win}}=z_i^{\mathrm{cur}}+\delta_i$。历史中缺少可用实证时，每个尺度、每个帧龄的显式空候选允许模型拒绝该帧证据，并使时间修正严格退化为零。
+
+本课题已用生成器真值完成24/16先导实验和96/64探索性实验，验证“对应已经解决时，历史内容是否有分类价值”。这两次schema 27实验使用旧的双槽Oracle-Select，并将Oracle-Proposal与Select联合训练，因此只构成真值候选上界证据，不能说明Proposal已经独立学会选择。下一实验在同一阶段A当前头下设置三个独立训练臂：单实证槽Clean Select、带直接匹配与空候选监督的Proposal-only，以及仅接受分类监督的Proposal-only。三个训练臂从逐字节一致的时间初始化开始，分别保存模型与优化器状态，Proposal两臂不接收任何Select梯度。
+
+新版三臂实验先在正常206与正常201的24/16窗口上检验去混杂后的候选选择，再以96/64窗口独立确认。验证报告平衡二元交叉熵、平均精确率、AUROC、正常点安全、同对象概率质量、空候选行为及p4支持分层结果。当前尚未实现不使用真值位移的可学习候选产生器；只有Proposal-only通过后，才研究p16粗定位、p8局部校正和p4精细取证。公开异常序列仍在方法冻结后用于官方评价。
+
+\noindent\textbf{关键词：} 激光雷达；异常分割；因果多帧；历史对应；稀疏卷积；自动驾驶
+
+\section{研究背景与意义}
+
+自动驾驶感知模型主要学习训练数据中反复出现的正常类别，而真实道路还会出现散落物、临时设施、遗落货物和其他开放类别障碍物。三维激光雷达异常分割直接为每个回波估计异常程度，能够保留异常物体的空间边界并支持后续对象聚合。STU提供真实道路异常场景、逐点与对象级标注、公开评价代码和隐藏测试，使不同方法能够在统一任务上报告结果\cite{nekrasov2025stu,stuofficial}。
+
+现有STU方法在推理时主要处理单次扫描。NDP在隐藏测试集上取得61.31\%平均精确率，说明单帧模型已经形成较强基线\cite{li2026ndp}。然而，单帧性能并不能消除稀疏观测造成的信息缺失：同一物体在相邻时刻可能得到新的表面回波，也可能因自车运动和物体运动改变遮挡关系。连续扫描包含这些额外证据，但车辆位姿只能对齐静态世界，运动对象的历史位置仍会偏离当前空间位置。若模型在错误位置读取历史特征，历史冲突本身可能被误当成异常线索。因此，本课题首先回答一个可证伪的机制问题：\textbf{当当前帧分类器完全固定、历史对应由生成真值给出时，正确历史内容能否安全改善当前点异常分类？}
+
+这一问题把历史内容的分类价值、给定候选后的选择能力和候选产生能力分开。真值对应上界测量历史内容在理想对应下的作用；独立的Proposal-only实验测量模型能否在静态、真值运动和空候选之间依据内容作出选择；不读取真值位移的候选产生器则属于后一阶段。这样的研究顺序能够避免把候选产生误差或Select真值梯度混入对多帧信息本身的判断。
+
+\section{国内外研究现状与选题依据}
+
+表~\ref{tab:stu-progress}整理在STU三维激光雷达异常分割任务上报告结果的代表性研究。STU原论文同时报告MC Dropout、MaxLogit、Void Classifier、RbA和Deep Ensemble等基准，因此表中以Deep Ensemble的完整结果表示STU基线。
+
+\Needspace{16\baselineskip}
+\begin{center}
+\captionof{table}{STU三维激光雷达异常分割研究及其主要结果}
+\label{tab:stu-progress}
+\begingroup
+\setlength{\tabcolsep}{2.0pt}
+\renewcommand{\arraystretch}{1.14}
+\fontsize{7.6pt}{9.2pt}\selectfont
+\begin{tabularx}{\dimexpr\textwidth-2pt\relax}{
+L{2.0cm}Y
+>{\centering\arraybackslash}m{1.70cm}
+>{\centering\arraybackslash}m{1.05cm}
+>{\centering\arraybackslash}m{1.05cm}
+>{\centering\arraybackslash}m{0.90cm}
+>{\centering\arraybackslash}m{1.10cm}}
+\toprule
+工作（年份） & 主要问题 & 评测数据 & \shortstack{AUROC\\$\uparrow$} & \shortstack{FPR95\\$\downarrow$} & \shortstack{AP\\$\uparrow$} & \shortstack{异常PQ\\$\uparrow$} \\
+\midrule
+STU\cite{nekrasov2025stu}\newline 2025
+& 真实道路异常数据很少，现有异常检测方法用在三维激光雷达上能达到什么水平？
+& \shortstack{公开验证\\隐藏测试}
+& \shortstack{90.93\\86.74}
+& \shortstack{37.34\\58.05}
+& \shortstack{6.94\\5.17}
+& \shortstack{7.27\\8.81} \\
+\addlinespace[0.25em]
+REL\cite{li2026rel}\newline 2025
+& 各类正常点数量差别较大时，怎样减少正常点被误报为异常？
+& \shortstack{公开验证\\隐藏测试}
+& \shortstack{97.85\\96.26}
+& \shortstack{9.60\\21.69}
+& \shortstack{10.68\\10.17}
+& \shortstack{10.62\\9.71} \\
+\addlinespace[0.25em]
+NDP\cite{li2026ndp}\newline 2026
+& 正常类别具有不同分数分布时，怎样校正这种差别并改善异常判断？
+& \shortstack{公开验证\\隐藏测试}
+& \shortstack{99.53\\99.26}
+& \shortstack{1.43\\3.30}
+& \shortstack{74.24\\61.31}
+& \shortstack{38.63\\24.99} \\
+\addlinespace[0.25em]
+LIDO\cite{mosco2026lido}\newline 2026
+& 仅学习正常类别特征分布时，怎样识别未知点？
+& \shortstack{公开验证\\隐藏测试}
+& \shortstack{95.05\\93.67}
+& \shortstack{34.86\\34.29}
+& \shortstack{27.53\\14.99}
+& \shortstack{21.23\\--} \\
+\addlinespace[0.25em]
+COVAL\cite{yang2026coval}\newline 2026
+& 异常物体改变后方可见性时，模型能否利用这种遮挡变化？
+& \shortstack{MinkNet验证\\M4F验证}
+& \shortstack{99.92\\97.70}
+& \shortstack{0.13\\7.33}
+& \shortstack{89.00\\62.16}
+& \shortstack{57.95\\22.47} \\
+\midrule
+AJAE（拟定）
+& 正确对应的因果历史能否安全改善当前点异常分类，并为可学习匹配提供依据？
+& \shortstack{机制验证\\官方评价}
+& 拟报告
+& 拟报告
+& 拟报告
+& 拟报告 \\
+\bottomrule
+\end{tabularx}
+\vspace{0.35em}
+\parbox{\textwidth}{\fontsize{7.2pt}{8.6pt}\selectfont 注：数值均为百分数。AUROC、AP和异常PQ越高越好，FPR95越低越好。“--”表示原文未报告。REL于2025年发布预印本，2026年正式发表。STU行采用Deep Ensemble的完整结果。M4F表示Mask4Former-3D。COVAL两组数字分别来自MinkNet-OursAL和Mask4Former-3D-OursAL。AJAE的机制验证与官方异常评价承担不同用途，前者不能替代后者。}
+\endgroup
+\end{center}
+
+STU建立了真实道路异常的统一数据和评价基础，隐藏测试集上的Deep Ensemble达到5.17\% AP\cite{nekrasov2025stu}。REL利用相对能量和Point Raise辅助异常，将隐藏测试AP提高到10.17\%\cite{li2026rel}。NDP通过分布先验和Perlin Raise校正类别间的异常分数偏差，取得61.31\%的隐藏测试AP和24.99\%的异常PQ\cite{li2026ndp}。LIDO只建模正常类别的特征原型，在隐藏测试上取得14.99\% AP\cite{mosco2026lido}。COVAL把物理一致对象插入与遮挡可见性结合，在公开验证集上取得89.00\% AP和57.95\%异常PQ\cite{yang2026coval}。这些方法发展了不确定性估计、正常特征建模、辅助异常监督和遮挡建模，但其异常推理仍主要以当前扫描为输入。
+
+多帧点云方法为本课题提供了空间编码和时间聚合基础。4D-PLS、MemorySeg、Mask4Former和TASeg利用连续点云改善语义或全景分割\cite{aygun2021four,li2023memoryseg,yilmaz2024mask4former,wu2024taseg}；OSIS和无监督实例研究说明局部对象结构可以组织离散回波\cite{wong2020osis,nunes2022instance}。GOOD在三维点云开集测试时适应中使用几何超点、多帧汇总和时序伪标签更新模型\cite{zou2026good}。这些工作说明多帧信息具有利用价值，但它们没有直接回答STU异常任务中的对应问题：当异常对象发生运动时，历史中哪个位置的特征才是当前点的相关证据，以及错误对应是否会制造伪异常线索。
+
+AJAE采用STU官方Mask4Former-3D作为空间初始化，NDP作为独立强单帧基线。研究重点不是把五帧直接堆叠为高密度三维点云，也不把五次完整预测在末端投票，而是在共享空间编码之后，以当前帧为锚点在多个尺度读取历史候选。该结构保留单帧预训练的输入分布，同时允许时间关系在中高层改变当前表示。
+
+\section{研究问题、任务与证据边界}
+
+\subsection{核心研究问题}
+
+本课题的输入是当前帧和最多四个已经到达的历史帧，输出是当前帧每个真实回波的异常逻辑值与异常概率。研究问题按以下依赖关系推进：
+
+\begin{enumerate}
+  \item 在当前帧空间编码和当前异常头固定时，由生成真值选择的正确历史证据能否降低异常分类误差，同时不抬高正常点的异常逻辑值？已完成的schema 27实验对当前合成分布给出了肯定的上界证据。
+  \item 在仍由生成真值提供静态位置和对象运动位置候选时，Proposal-only能否在不接受Clean Select梯度的条件下接近上界，直接匹配与空候选监督是否比仅靠分类损失更有效？
+  \item 若独立候选选择成立，不读取生成轨迹位移的粗到细候选产生器能否在可控计算量下找到同对象历史，并保持正常运动对象安全？
+\end{enumerate}
+
+第一层回答历史内容是否具有分类价值，第二层排除旧实验中Select联合梯度造成的混杂，第三层才回答部署时的历史搜索问题。当前完成的是第一层；新版三臂尚无实验结果，不使用真值位移的可学习匹配器也尚未实现。
+
+\subsection{数据用途}
+
+本课题使用STU正常206、正常201、公开异常验证和隐藏测试。各部分数据的用途见表~\ref{tab:data-role}。
+
+\begin{table}[htbp]
+\centering
+\caption{STU数据在AJAE中的用途}
+\label{tab:data-role}
+\fontsize{8.2pt}{10.2pt}\selectfont
+\begin{tabularx}{\textwidth}{L{2.25cm}L{2.20cm}L{2.45cm}Y}
+\toprule
+数据 & 当前范围 & 使用方式 & 具体用途 \\
+\midrule
+正常206 & 449帧 & 生成与训练 & 无填充的完整五帧窗口以当前帧4--448为锚点，共445窗；用于生成单轨迹射线一致异常并训练当前点异常头和时间残差。 \\
+正常201 & 682个原始帧文件 & 机制验证 & 帧0--3的文件内容精确重复，未来正常阈值统计排除这四帧；未来完整五帧窗口从当前帧8开始，共674窗，当前冻结的64个验证窗口不受影响。 \\
+公开异常验证 & 19序列 & 方法冻结后评价 & 按STU官方规则计算逐点AP、AUROC、FPR95和对象级异常PQ。 \\
+隐藏测试 & 51序列 & 最终官方测试 & 提交逐点异常分数并取得官方封闭标签评价结果。 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+已完成的24/16和96/64窗口只承担真值候选条件下的机制识别。它们来自正常206与正常201，不能替代公开异常序列上的泛化评价，也不能直接支持最终性能结论。正常201的帧0--3在原始文件中内容完全相同；当前冻结的64窗均避开这些文件，因此既有结果不受影响。后续计算正常点报警阈值时排除帧0--3，构造完整$K=4$窗口时还要排除任何包含这四个文件的窗口，即当前帧从8开始，共有674个合法完整窗口。公开异常标签不参与结构选择、损失权重设定或时间模块训练；方法冻结后才运行官方评价。
+
+现有实验使用的强度校准产物已经冻结，并已核对其中的全206非零强度与源扫描非零强度在位模式多重集上完全一致。该产物的SHA-256为\texttt{8ebd5d88\allowbreak{}9ecc7d1a\allowbreak{}14f5c78d\allowbreak{}9462c59d\allowbreak{}b58ebc0a\allowbreak{}a647bfa4\allowbreak{}c162028a\allowbreak{}ffde18f9}。由于最初按量程、扫描线和入射角构建分层校准的入口及逐点分层归属没有保留，当前只能做到产物级重现，不能声称能够从原始206重新生成同一分层校准。新版来源清单已经用相对路径、文件字节数和逐文件SHA-256组成的规范清单绑定206与201的点云、标签、标定和位姿；206与201整棵来源树的清单哈希分别为\texttt{3c2c3942\allowbreak{}8430f98f\allowbreak{}0a1cc305\allowbreak{}3338295a\allowbreak{}c8ebefea\allowbreak{}7f4d0781\allowbreak{}6559ee2c\allowbreak{}b3952930}和\texttt{9c332978\allowbreak{}e2328fea\allowbreak{}719c03ad\allowbreak{}0f74fd92\allowbreak{}a5278ac4\allowbreak{}4a974456\allowbreak{}27bb832e\allowbreak{}a7dccd5e}。这些身份能够确认使用了哪组原始文件，但不能替代对标签语义、重复内容和校准构造过程的科学核验。
+
+\subsection{因果窗口与历史长度}
+
+设序列第$j$帧为$X_j$，激光雷达位姿为$L_j$。本课题用$K$表示可用的历史帧数，而不是窗口内的总帧数：
+\begin{equation}
+  \mathcal W_t^{(K)}
+  =\left\{X_t,X_{t-1},\ldots,X_{t-K}\right\},
+  \qquad K\in\{0,1,2,4\}.
+  \label{eq:causal-window}
+\end{equation}
+其中$K=0$只包含当前帧，$K=4$对应完整五帧窗口。窗口不得跨越序列边界，不读取未来扫描，也不得通过重复首帧补足历史。历史长度1、2和4均从同一条已生成轨迹中截取最近的连续帧，因此改变的只有模型可读取的历史数量，不同时改变对象速度、方向或当前帧内容。正常201的帧0--3为文件内容精确重复的异常边界，后续完整五帧实验从当前帧8开始，使当前帧及四个历史帧均不含这些文件。
+
+对历史点$\boldsymbol x_{j,n}$，车辆位姿对齐到当前传感器坐标系的结果为
+\begin{equation}
+  \widetilde{\boldsymbol x}_{t\leftarrow j,n}
+  =\pi_3\!\left(
+  L_t^{-1}L_j
+  \begin{bmatrix}\boldsymbol x_{j,n}\\1\end{bmatrix}
+  \right),
+  \label{eq:ego-align}
+\end{equation}
+其中$\pi_3$取齐次坐标的前三个分量。式~\eqref{eq:ego-align}能够对齐静态世界，但不能把运动对象的历史回波带到当前对象位置，因此模型仍需处理静态位置与对象运动位置之间的候选选择。
+
+\section{单轨迹射线一致异常生成}
+
+机制训练不读取公开异常验证序列，因此AJAE在正常206中生成具有逐点真值和跨帧身份的辅助对象。每个窗口只放置一个程序化对象并生成一条世界坐标轨迹。该对象由两个相交且位置错开的相似椭球表面组成，在当前帧正常地面回波上确定接地点、尺度和朝向。各历史帧共享同一个对象身份和轨迹，再依据该帧真实激光雷达位姿、扫描线和原始场景重新计算回波。这样，$K=1,2,4$读取的是同一物理世界的不同历史截断。
+
+生成器逐射线比较原始场景和合成表面的最近交点。记原始最近交点距离为$d_r$，合成表面最近交点距离为$d_a$；无交点时取无穷大。原始压缩标签的低16位为raw语义编号，高16位为实例编号。二元异常标签固定为：raw 0取忽略值$\bot$，raw 2取异常标签1，其余非零raw语义取正常标签0；新生成且位于最前方的合成回波也取异常标签1。该二元标签只服务于当前点和窗口异常损失，STU正常语义分支仍使用独立的19类与255映射。反事实回波及标签定义为
+\begin{equation}
+  (d^{\star},y^{\star})=
+  \begin{cases}
+    (d_a,1), & d_a+0.05<d_r,\\
+    (d_r,y_r), & d_r\leq d_a+0.05\ \land\ d_r<\infty,\\
+    \varnothing, & d_r=d_a=\infty.
+  \end{cases}
+  \label{eq:ray-label}
+\end{equation}
+式~\eqref{eq:ray-label}使每条射线只保留最近回波。代码采用严格不等式$d_a+0.05<d_r$，因此只有合成表面相对原始回波的近距严格大于0.05米时，合成回波才获得异常标签并遮挡原有背景；近距等于0.05米时仍保留原始回波及原标签。生成器同时保存新增回波、被替换射线、遮挡关系、对象身份和世界轨迹。合成回波的强度由已冻结的分层校准产物按量程、扫描线和入射角取样，点数和可见表面由真实射线与遮挡关系决定；该校准当前只具有前述产物级来源保证。
+
+机制实验中的生成真值具有三个受限用途。二元异常标签用于当前帧和窗口分类损失；对象身份、轨迹和同对象可见性用于构造Clean Select上界；同一真值还可为Proposal-only提供对象运动候选以及直接匹配或空候选目标。合成比例、对象身份、轨迹位移、候选槽名称和监督目标均不得作为当前异常头、时间异常读出或最终逻辑值的输入。由于真值已经决定Clean Select读取什么内容，也为Proposal提供了正确运动候选，这两种条件仍是Oracle实验，不能代表部署时已经能够产生正确候选。
+
+\section{AJAE模型设计}
+
+\subsection{共享STU空间编码与当前分支}
+
+AJAE加载STU官方集成成员1检查点\texttt{59p6pq\_ens1.ckpt}，初始化Mask4Former-3D稀疏空间编码器\cite{nekrasov2025stu,stuofficial}。窗口内各帧使用同一套STU参数，并保留官方输入的反射强度与扫描中心距离两个通道。设$E_{\mathrm{STU}}$为共享空间编码器，则第$j$帧的多尺度稀疏特征为
+\begin{equation}
+  \left(B_j^{p1},B_j^{p2},B_j^{p4},B_j^{p8},B_j^{p16}\right)
+  =E_{\mathrm{STU}}(X_j).
+  \label{eq:stu-encoder}
+\end{equation}
+各帧先独立完成空间编码，时间证据随后在p16、p8和p4三个尺度进入当前帧解码路径。因此，模型属于当前锚定的因子化因果窗口编码器，不是从输入开始执行四维卷积的完整四维U-Net。
+
+当前帧通过官方解码路径和新建的逐点异常头得到
+\begin{equation}
+  z_i^{\mathrm{cur}}=h_{\mathrm{cur}}(f_{t,i}^{\mathrm{cur}}),
+  \qquad i\in\mathcal I_t,
+  \label{eq:current-logit}
+\end{equation}
+其中$\mathcal I_t$是当前帧真实回波集合。阶段A只训练$h_{\mathrm{cur}}$，STU空间参数保持冻结。阶段B进一步冻结$h_{\mathrm{cur}}$，使同一窗口在不同历史条件下共享完全相同的$f_{t,i}^{\mathrm{cur}}$和$z_i^{\mathrm{cur}}$。
+
+\subsection{静态位置与对象运动位置候选}
+
+在尺度$\ell\in\{p16,p8,p4\}$上，当前稀疏位置$i$向历史帧$j$发出两个查询。静态查询只使用式~\eqref{eq:ego-align}给出的车辆位姿变换；对象查询在同一查询上加入生成轨迹给出的对象位移。记两种查询坐标为$\boldsymbol q_{i,j,\ell}^{\mathrm{s}}$和$\boldsymbol q_{i,j,\ell}^{\mathrm{o}}$，MinkowskiEngine稀疏插值算子为$\mathcal I_\ell$，则
+\begin{equation}
+  h_{i,j,\ell}^{c}
+  =\mathcal I_\ell\!\left(B_j^\ell,\boldsymbol q_{i,j,\ell}^{c}\right),
+  \qquad c\in\{\mathrm{s},\mathrm{o}\}.
+  \label{eq:candidate-feature}
+\end{equation}
+每个候选同时带有有效性标记，只有插值核实际接触历史稀疏体素时才视为具有空间支持。对象候选在所有当前位置上使用同一接口，不通过候选数量暴露异常位置。
+
+两种候选服务于两个不同问题。Clean Select直接使用生成真值构造一个正确历史实证，估计“对应已经解决”时的分类上界。Proposal-only不把当前合成比例、对象身份或候选槽名称送入时间模块，只把静态、对象运动和空候选交给共享打分器。三臂实验中的Clean Select、带直接对应监督的Proposal-only和仅分类监督的Proposal-only分别训练时间参数，不共享模型状态或优化器更新。
+
+\subsection{Clean Select真值对应上界}
+
+在当前尺度$\ell$的稀疏体素$i$内，按照原始当前回波落入该体素的精确坐标键计数，定义合成异常回波比例
+\begin{equation}
+  r_{i,\ell}
+  =\frac{N_{i,\ell}^{\mathrm{syn}}}{N_{i,\ell}^{\mathrm{real}}}.
+  \label{eq:synthetic-fraction}
+\end{equation}
+若一个网络位置没有直接归属的当前真实回波，则$r_{i,\ell}$不定义，不能用最近点标签填补。设$v_{i,j,\ell}^{\mathrm{s}}$表示静态候选具有插值支持，$v_{i,j,\ell}^{\mathrm{o}}$表示对象候选的实际插值边至少接触一个包含同一合成对象回波的历史源体素，则Clean Select实证为
+\begin{equation}
+\begin{aligned}
+  h_{i,j,\ell}^{\mathrm{sel}}
+  ={}&(1-r_{i,\ell})
+  \mathbb I[r_{i,\ell}<1]\mathbb I[v_{i,j,\ell}^{\mathrm{s}}]
+  h_{i,j,\ell}^{\mathrm{s}}\\
+  &+r_{i,\ell}
+  \mathbb I[r_{i,\ell}>0]\mathbb I[v_{i,j,\ell}^{\mathrm{o}}]
+  h_{i,j,\ell}^{\mathrm{o}}.
+  \label{eq:oracle-select}
+\end{aligned}
+\end{equation}
+纯正常体素使用静态候选，纯合成体素使用对象候选，混合体素按实际回波比例组合两者。若某一分量缺少有效证据，该分量直接贡献零，不把剩余分量重新归一化为全部质量。每个尺度和帧龄只保留式~\eqref{eq:oracle-select}给出的一个实证槽以及一个零值空候选；实证完全无效时屏蔽该槽，只保留空候选。新版Clean Select不再为了匹配Proposal槽数而复制实证，避免在等分数初始化下把两份相同实证的概率质量相加。
+
+Clean Select是机制实验的真值对应上界，不是部署时可获得的输入。式~\eqref{eq:synthetic-fraction}、对象身份、生成轨迹、同对象源体素接触情况和真值有效性共同决定从历史特征图的什么位置读取内容。时间模块和异常头虽然不直接接收这些标量，但读取内容已经由真值决定，因此该条件只能回答理想对应下的历史价值。
+
+\subsection{Proposal-only候选选择与显式空候选}
+
+Proposal-only在每个尺度、每个历史帧龄提供静态候选、对象运动候选和空候选。三种候选使用共享的查询、键、值投影和年龄表示，不包含槽位类型编码，交换静态与对象候选的顺序不应改变输出。该路径不读取式~\eqref{eq:synthetic-fraction}或对象身份值，但对象运动坐标仍由生成轨迹提供，所以它只诊断给定真值候选后的选择能力，不等同于已经实现的可学习候选产生器。
+
+真实历史中可能没有相关回波。AJAE在每个尺度、每个帧龄$a=t-j$增加一个严格零值的显式空候选
+\begin{equation}
+  h_{i,a,\ell}^{\varnothing}=\boldsymbol 0.
+  \label{eq:null-feature}
+\end{equation}
+设$F_{i,\ell}$是该尺度的当前特征，$\operatorname{LN}$为不带可学习仿射项的层归一化，$e_{a,\ell}$为帧龄表示。把帧龄$a$内的真实候选和该帧龄空候选记为$\mathcal C_{i,a,\ell}$，全窗口候选集合为$\mathcal C_{i,\ell}=\bigcup_a\mathcal C_{i,a,\ell}$。共享分数与时间聚合概率为
+\begin{equation}
+\begin{aligned}
+  s_{i,j,\ell}
+  &=\frac{
+  Q_\ell\!\left(\operatorname{LN}(F_{i,\ell})\right)^{\!\top}
+  K_\ell\!\left(\operatorname{LN}(h_{i,j,\ell})+e_{a(j),\ell}\right)}
+  {\sqrt{d_\ell}},\\
+  a^{\mathrm{agg}}_{i,j,\ell}
+  &=\frac{\exp s_{i,j,\ell}}
+  {\displaystyle\sum_{j'\in\mathcal C_{i,\ell}}
+  \exp s_{i,j',\ell}}.
+  \label{eq:temporal-attention}
+\end{aligned}
+\end{equation}
+直接对应监督使用相同的$s_{i,j,\ell}$，但在每个帧龄内部单独归一化：
+\begin{equation}
+  a^{\mathrm{dir}}_{i,j,a,\ell}
+  =\frac{\exp s_{i,j,\ell}}
+  {\displaystyle\sum_{j'\in\mathcal C_{i,a,\ell}}
+  \exp s_{i,j',\ell}},
+  \qquad j\in\mathcal C_{i,a,\ell}.
+  \label{eq:direct-attention}
+\end{equation}
+这一归一化不增加查询、键、值、打分参数或分类输入。它只让监督能够区分“某个帧龄看得到同对象”和“另一个帧龄应选择空候选”，避免后一种目标被全窗口内其他帧龄的可见回波掩盖。Clean Select在每个帧龄的候选集合相应缩减为一个真值实证和一个空候选。空候选参与概率竞争，但其值严格为零，也不计作真实历史支持。尺度残差仍使用全窗口聚合概率：
+\begin{equation}
+  R_{i,\ell}=O_\ell\!\left(
+  \sum_{j\in\mathcal C_{i,\ell}}a^{\mathrm{agg}}_{i,j,\ell}
+  V_\ell\!\left(\operatorname{LN}(h_{i,j,\ell})\right)
+  \right).
+  \label{eq:scale-residual}
+\end{equation}
+输出投影$O_\ell$从零初始化。若一个位置没有任何真实候选有效，式~\eqref{eq:scale-residual}在结构上强制为零，而不是把空候选解释成可学习的历史存在信号。
+
+\subsection{多尺度时间残差与当前点输出}
+
+时间证据按粗到细顺序进入当前解码路径。p16残差改变高层对象范围内的上下文，带该残差的特征上采样到p8后再次读取历史，p4残差再补充更细的局部几何。最终解码得到窗口条件下的当前点特征$f_{t,i}^{\mathrm{win}}$。AJAE只从历史引起的特征差读取点级修正：
+\begin{equation}
+\begin{aligned}
+  \widehat\delta_i
+  &=4\tanh\!\left[
+  w_\delta^{\top}
+  \left(f_{t,i}^{\mathrm{win}}-f_{t,i}^{\mathrm{cur}}\right)
+  \right],\\
+  \delta_i
+  &=\mathbb I[s_{i}^{p4}=1]\widehat\delta_i,\\
+  z_i^{\mathrm{win}}
+  &=z_i^{\mathrm{cur}}+\delta_i,
+  \qquad
+  p_i^{\mathrm{anom}}=\sigma(z_i^{\mathrm{win}}),
+  \label{eq:point-correction}
+\end{aligned}
+\end{equation}
+其中$s_i^{p4}$表示该当前点对应的最近p4查询是否具有非空历史支持。式~\eqref{eq:point-correction}把修正幅度限制在$[-4,4]$，并保证无p4支持时$z_i^{\mathrm{win}}=z_i^{\mathrm{cur}}$。模型只输出当前帧真实回波，历史回波仅提供支持证据。
+
+\section{训练目标与参数约束}
+
+\subsection{阶段A：当前点基线}
+
+阶段A冻结STU空间编码器，只训练式~\eqref{eq:current-logit}中的当前点异常头。设当前帧有效异常点集合为$\mathcal A$，有效正常点集合为$\mathcal N$，类平衡二元交叉熵为
+\begin{equation}
+  \mathcal L_{\mathrm{cur}}
+  =\frac12\left[
+  \frac{1}{|\mathcal A|}\sum_{i\in\mathcal A}
+  \operatorname{softplus}(-z_i^{\mathrm{cur}})
+  +
+  \frac{1}{|\mathcal N|}\sum_{i\in\mathcal N}
+  \operatorname{softplus}(z_i^{\mathrm{cur}})
+  \right].
+  \label{eq:current-loss}
+\end{equation}
+正常与异常分别求均值后等权相加，使大量正常点不会淹没合成异常监督。阶段A采用预先固定的训练遍历次数，并保留最后一次遍历后的状态。
+
+\subsection{阶段B：冻结当前判断后的时间学习}
+
+阶段B固定STU空间编码器、当前点特征和当前异常头，只优化p16、p8、p4时间模块与点修正读出。对任一训练臂$c\in\{\mathrm{clean},\mathrm{direct},\mathrm{class}\}$，窗口分类损失为
+\begin{equation}
+  \mathcal L_{\mathrm{win}}^{c}
+  =\frac12\left[
+  \frac{1}{|\mathcal A|}\sum_{i\in\mathcal A}
+  \operatorname{softplus}(-z_i^{c})
+  +
+  \frac{1}{|\mathcal N|}\sum_{i\in\mathcal N}
+  \operatorname{softplus}(z_i^{c})
+  \right].
+  \label{eq:window-loss}
+\end{equation}
+正常点安全损失只惩罚历史使正常点逻辑值升高的部分：
+\begin{equation}
+  \mathcal L_{\mathrm{safe}}^{c}
+  =\frac{1}{|\mathcal N|}
+  \sum_{i\in\mathcal N}
+  \operatorname{ReLU}\!\left(
+  z_i^{c}-\operatorname{sg}(z_i^{\mathrm{cur}})
+  \right),
+  \label{eq:safety-loss}
+\end{equation}
+其中$\operatorname{sg}$表示停止梯度。修正幅度损失在两类内部先分别求均值：
+\begin{equation}
+\begin{aligned}
+  \mathcal L_{\mathrm{mag}}^{c}
+  =\frac12\biggl[
+  &\frac{1}{|\mathcal A|}\sum_{i\in\mathcal A}
+  \operatorname{SmoothL1}(\delta_i^c,0)\\
+  +{}&\frac{1}{|\mathcal N|}\sum_{i\in\mathcal N}
+  \operatorname{SmoothL1}(\delta_i^c,0)
+  \biggr].
+  \label{eq:magnitude-loss}
+\end{aligned}
+\end{equation}
+每个训练臂首先使用相同的点级时间目标
+\begin{equation}
+  \mathcal L_{\mathrm{temp}}^{c}
+  =\mathcal L_{\mathrm{win}}^{c}
+  +\mathcal L_{\mathrm{safe}}^{c}
+  +0.1\mathcal L_{\mathrm{mag}}^{c}.
+  \label{eq:temporal-loss}
+\end{equation}
+时间监督直接优化当前点最终分类，正常点安全项限制误报方向，幅度项限制时间分支重新承担完整分类任务。训练不要求历史帧数增加时每个点的异常逻辑值单调上升。
+
+Proposal-only的直接对应目标在每个尺度和帧龄上定义。令$\mathcal P_{i,a,\ell}\subset\mathcal C_{i,a,\ell}$为该帧龄内实际接触同一合成对象历史实证的全部真实候选，$r_{i,\ell}$仍表示当前稀疏单元中的合成回波占比。令$\mathcal M_\ell$为满足$r_{i,\ell}>0$且$\mathcal P_{i,a,\ell}\neq\varnothing$的查询--帧龄对$(i,a)$集合，则
+\begin{equation}
+  \mathcal L_{\mathrm{match}}^{\ell}
+  =-\frac{1}{\sum_{(i,a)\in\mathcal M_\ell}r_{i,\ell}}
+  \sum_{(i,a)\in\mathcal M_\ell}r_{i,\ell}
+  \log\!\left(
+  \max\!\left\{\sum_{j\in\mathcal P_{i,a,\ell}}
+  a^{\mathrm{dir}}_{i,j,a,\ell},\epsilon\right\}
+  \right).
+  \label{eq:match-loss}
+\end{equation}
+若某个查询--帧龄对没有同对象候选、但至少有一个有效的错误真实候选，则该对属于$\mathcal U_\ell$，并把该帧龄的空候选作为目标：
+\begin{equation}
+  \mathcal L_{\mathrm{null}}^{\ell}
+  =-\frac{1}{\sum_{(i,a)\in\mathcal U_\ell}r_{i,\ell}}
+  \sum_{(i,a)\in\mathcal U_\ell}r_{i,\ell}
+  \log\!\left(
+  \max\!\left\{a^{\mathrm{dir}}_{i,\varnothing,a,\ell},
+  \epsilon\right\}
+  \right).
+  \label{eq:null-loss}
+\end{equation}
+若该帧龄的全部真实候选都无效，空候选概率由掩码结构固定为1，损失和梯度恒为0。实现把这种情况记为结构性空目标并单独报告，但不让它进入式~\eqref{eq:null-loss}的分母，以免稀释真正需要学习的候选拒绝。
+三个尺度等权组成
+\begin{equation}
+  \mathcal L_{\mathrm{direct}}
+  =\frac13\sum_{\ell\in\{p16,p8,p4\}}
+  \left(\mathcal L_{\mathrm{match}}^{\ell}
+  +\mathcal L_{\mathrm{null}}^{\ell}\right).
+  \label{eq:direct-loss}
+\end{equation}
+其中$\epsilon$是实现中用于对数安全的最小正数截断。集合概率质量允许静态轨迹下两个重合候选同时作为正确解，不把固定槽位编号当作标签。当前版本只在$r_{i,\ell}>0$的生成对象查询上计算直接监督；没有生成对象身份的正常背景既不是同对象正例，也不会因缺少对象编号被标成空候选目标。对象身份、同对象集合和$r_{i,\ell}$只构造损失，不进入查询、键、值、时间上下文或异常分类器。训练前的全24窗只读审计发现，全窗口目标定义下的三个空目标均为结构性空目标，原$\mathcal L_{\mathrm{null}}$不会产生任何梯度；因此新版在参数更新前改为式~\eqref{eq:direct-attention}的按帧龄目标，正式阶段0必须分别验证$\mathcal L_{\mathrm{match}}$和可学习$\mathcal L_{\mathrm{null}}$到达p16、p8和p4打分器。
+
+下一实验的三个阶段B目标为
+\begin{equation}
+\begin{aligned}
+  \mathcal L_{\mathrm{A}}
+  &=\mathcal L_{\mathrm{temp}}^{\mathrm{clean}},\\
+  \mathcal L_{\mathrm{B}}
+  &=\mathcal L_{\mathrm{temp}}^{\mathrm{prop}}
+  +\mathcal L_{\mathrm{direct}},\\
+  \mathcal L_{\mathrm{C}}
+  &=\mathcal L_{\mathrm{temp}}^{\mathrm{prop}}.
+  \label{eq:stage-b-loss}
+\end{aligned}
+\end{equation}
+A为Clean Select单槽上界，B为带直接对应监督的Proposal-only，C为仅接受分类监督的Proposal-only。三者读取同一个阶段A状态，并从逐字节一致的时间参数初始化开始，但模型、优化器和随机状态分别保存。B和C不计算Select损失，也不接收任何Select梯度。新版把匹配、空候选和直接损失总权重均固定为1，未根据验证结果调整；三个尺度等权。新版三臂目前尚无实验结果。
+
+时间训练使用AdamW，学习率和权重衰减均为$10^{-4}$，采用FP32计算。阶段A结束后、阶段B更新前，先在8个冻结训练窗口上分别重新执行Proposal-only前向，并用\texttt{torch.autograd.grad}测量分类联合目标与直接对应联合目标对时间参数的梯度，不创建审计优化器，也不执行审计参数更新。设两类梯度的二范数为$g_{\mathrm{class}}$和$g_{\mathrm{direct}}$，总体逐窗比值的中位数须位于$[0.1,10]$，p16、p8和p4各尺度的中位数不得超过20；同时分别确认匹配损失与可学习空候选损失接通三个候选打分器。本实验预注册保持直接损失权重为1；只有上述无更新审计通过后才开始阶段B，并且不根据验证结果调整该权重。候选顺序交换检查分为两层：第一层使用阶段A最终当前头与未更新的时间参数初态；第二层复制模型，并只对副本时间参数施加固定种子的非零随机扰动。每层都对原顺序和交换顺序各执行两次，覆盖点逻辑值、三个尺度残差、分类损失、直接监督损失和全部时间参数梯度；交换差异相对于同顺序重复底噪判断，不要求CUDA浮点归约逐位相等。全部审计置于异常安全的状态保护中，任何成功或失败路径都恢复正式参数、随机状态、模型模式和梯度状态。
+
+\section{实验设计与评价方法}
+
+\subsection{已完成的真值候选上界实验}
+
+正常206/201上的24/16先导实验和96/64探索性实验已经完成。二者使用schema 27：Oracle-Select把同一个真值混合实证复制到两个槽位，Oracle-Proposal与Select共享时间参数，并以$\tfrac12\mathcal L_{\mathrm{temp}}^{\mathrm{sel}}+\tfrac12\mathcal L_{\mathrm{temp}}^{\mathrm{prop}}$联合训练。表~\ref{tab:old-results}给出96/64实验在固定64个验证窗口上的微平均结果。
+
+\begin{table}[htbp]
+\centering
+\caption{schema 27真值候选上界实验结果}
+\label{tab:old-results}
+\fontsize{8.0pt}{9.8pt}\selectfont
+\begin{tabularx}{\textwidth}{L{3.15cm}>{\centering\arraybackslash}m{2.0cm}>{\centering\arraybackslash}m{1.8cm}>{\centering\arraybackslash}m{1.8cm}Y}
+\toprule
+条件 & 平衡二元交叉熵$\downarrow$ & AP$\uparrow$ & AUROC$\uparrow$ & 条件边界 \\
+\midrule
+Current & 0.3450 & 0.0345 & 0.9570 & 冻结当前分支。 \\
+旧Oracle-Select-4 & 0.2086 & 0.1663 & 0.9924 & 双实证槽真值对应上界。 \\
+旧Oracle-Proposal-4 & 0.2115 & 0.1668 & 0.9922 & 真值运动候选，并接受Select联合梯度。 \\
+Fixed/Sham-Select-4 & 0.2281 & 0.1047 & 0.9886 & 静态位置或等幅错误位移。 \\
+Shuffle-Select-4 & 0.2758 & 0.0577 & 0.9803 & 保持支持结构，置换历史内容。 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+这些结果支持一个限定结论：在当前射线级合成对象、冻结96/64窗口和真值运动候选条件下，正确历史内容相对Current改善了分类，并且优于错位或置换历史。$K=2$取得最高的池化AP，$K=4$取得更好的平衡二元交叉熵和AUROC，因此现有证据只说明完整历史没有系统性失效，不支持历史长度与每个指标单调增加。窗口重抽样区间仅描述固定64窗中的逐窗稳定性，不能外推到跨道路、跨序列或真实异常总体。
+
+旧Oracle-Select不是新版Clean Select，旧Oracle-Proposal也不是Proposal-only。前者的双槽复制对非空历史有先验偏置，后者同时得到真值运动候选和Select联合梯度。因此旧结果不能证明模型能够自己产生历史候选，也不能证明Proposal能够在脱离Select后独立选择。
+
+\subsection{下一项独立三臂实验}
+
+下一实验先在同一24/16窗口上比较表~\ref{tab:new-arms}中的三个训练臂。三个训练臂共用同一个冻结阶段A当前头，并从逐字节一致的时间参数初始化开始；模型、优化器和随机状态彼此独立。A不向B或C传递梯度，B和C均不计算任何Select损失。
+
+\begin{table}[htbp]
+\centering
+\caption{新版24/16去混杂候选选择实验}
+\label{tab:new-arms}
+\fontsize{8.0pt}{9.8pt}\selectfont
+\begin{tabularx}{\textwidth}{L{1.05cm}L{3.0cm}L{3.3cm}Y}
+\toprule
+训练臂 & 候选结构 & 阶段B目标 & 回答的问题 \\
+\midrule
+A & 一个Clean Select真值实证加null & $\mathcal L_{\mathrm{A}}$ & 单槽、无复制先验的真值对应上界。 \\
+B & 静态、真值运动和null & $\mathcal L_{\mathrm{B}}$ & 直接对应监督能否让Proposal-only接近上界。 \\
+C & 静态、真值运动和null & $\mathcal L_{\mathrm{C}}$ & 仅靠最终分类能否形成候选选择。 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+24/16筛查使用三个训练臂各自的最终固定状态，比较Current、Clean Select、带直接监督的Proposal、仅分类Proposal和Null。B与C还在同一批候选真值上只读复算同对象概率质量、可学习空候选概率、结构性空目标数和直接损失，诊断B的变化是否确实来自候选选择。候选顺序交换、三臂各自的Null严格退化、静态条件恒等和全新稀疏图水合重复性均在训练前核验。候选顺序预检固定使用正常201的帧28；该帧只用于无参数更新的交换不变性检查，不进入16个验证指标窗口、逐窗条件差值或窗口重抽样区间。继续条件要求B在三个分类指标方向上优于C并不比C更远离A，逐窗区间满足预注册标准；p16、p8和p4上的同对象质量与可学习空候选质量均相对C提高；正常运动哨兵至少覆盖100点和2个窗口，B的正常二元交叉熵不得劣于Current，且B的正常二元交叉熵和平均正向逻辑值变化均不得劣于C。三臂Null必须逐点等于Current且p4非空支持数为0。通过只允许另行冻结并重新初始化96/64确认实验，不自动授权可学习匹配器。新版24/16与96/64三臂目前均无结果。
+
+\subsection{指标、分层与统计单位}
+
+机制实验的主要分类指标为平衡二元交叉熵、AP和AUROC。Proposal-only还按尺度、帧龄、静态或运动、同对象可见或不可见分别报告同对象候选概率质量、空候选概率、非空匹配召回和空候选校准。正常点安全同时报告历史导致的平均正向逻辑值变化
+\begin{equation}
+  \operatorname{normal\_up}
+  =\frac{1}{|\mathcal N|}\sum_{i\in\mathcal N}
+  \operatorname{ReLU}(z_i^{\mathrm{win}}-z_i^{\mathrm{cur}}),
+  \label{eq:normal-up}
+\end{equation}
+正常点二元交叉熵、$|\delta_i|$分位数，以及$|\delta_i|\geq3.8$的正常点与异常点比例。正常点结果进一步分为无实例编号背景、正常实例、可观测运动实例、可观测静态实例和历史不足实例，避免占多数的道路点掩盖少量正常运动对象的误报。旧schema 27完整实验中的可观测运动正常实例仅有154点、分布在4个窗口，二元交叉熵约由0.739升至0.834，$\operatorname{normal\_up}$约为0.172。该样本过少，不能判定总体失败，但其方向不安全，因此新版实验必须把正常运动实例作为独立哨兵层，不能用总体道路点结果替代。
+
+式~\eqref{eq:point-correction}要求p4非空支持，因此合成异常点按“有p4支持”和“无p4支持”分别报告点数、比例、平均和中位逻辑值增益、正增益比例、异常二元交叉熵改善量和最大绝对修正。若改善只出现在有支持子集，结果说明细尺度支持覆盖限制了收益，不能直接解释为所有异常点均能从历史获益。
+
+条件差异以窗口为统计单位。除微平均指标外，报告逐窗口差值及窗口重抽样置信区间，避免点数较多的少数窗口完全决定结论。24/16和96/64均属于正常场景内的合成机制实验，结论限定为当前生成分布、冻结STU表示、固定窗口清单和当前时间残差结构。旧实验只使用一个训练序列、一个验证序列、一个初始化和一个训练种子，相邻窗口还可能共享历史，因此其区间不是道路总体或异常类别总体的置信区间。
+
+\subsection{方法冻结后的官方评价}
+
+独立三臂实验通过后，后续才研究不使用真值位移的可学习候选产生器：p16以低维内容相关提出少量粗位移，p8在粗位移邻域内校正对象位置，p4完成精细取证并输出连续匹配置信度。候选产生器学习“在哪里找到同一对象的历史证据”，时间头继续学习“这些证据如何修正当前判断”。该模块目前尚未实现；只有完成候选召回、同对象概率质量、空候选校准和正常运动对象假匹配检查，并在正常206/201上冻结后，才在STU公开19条异常序列上进行官方验证并向51条隐藏测试序列提交结果。
+
+官方评价沿用STU有效点、距离范围和标签解释，报告AP、AUROC、FPR95与异常PQ\cite{nekrasov2025stu,stuofficial}。NDP使用其官方模型独立运行，作为强单帧基线；AJAE同时报告窗口长度、运行时间和显存占用。合成机制指标与公开异常指标分别呈现，前者不用于替代真实异常性能。
+
+\section{研究计划}
+
+研究按科学问题的依赖关系推进。旧schema 27的24/16和96/64实验已经完成，其作用是确认真值对应历史在当前合成分布中具有分类价值。下一阶段执行24/16独立三臂实验，比较单槽Clean Select、带直接对应监督的Proposal-only和仅分类监督的Proposal-only；通过后在96/64窗口上独立确认，并重点检查正常运动实例、空候选和多历史长度。
+
+候选选择去混杂后，再单独训练不使用真值位移的p16粗候选产生器，并以同对象召回、概率质量和空候选校准评价匹配本身；达到候选召回要求后才接入p8/p4精化与异常分类。可学习候选产生器和完整官方评价流水线尚未完成，当前不启动十轮正式训练。方法完成并冻结后，再在STU公开验证和隐藏测试上与STU、REL、NDP、LIDO及COVAL等方法比较逐点和对象级结果。
+
+\section{预期成果与拟研究贡献}
+
+本课题预期形成三项成果。第一，形成一个当前锚定的因子化因果窗口编码器：单帧STU权重负责空间初始化，历史证据在p16、p8和p4三个尺度进入当前解码路径，最终只输出当前帧真实回波。第二，形成一套把真值历史价值、给定候选后的选择能力和无真值位移的候选产生能力依次分开的研究方法，以Clean Select、Proposal-only直接监督、Proposal-only分类监督以及Sham、Shuffle和Null控制识别收益来源。第三，形成基于单轨迹射线一致对象的多历史长度训练与评价方案，使$K=0,1,2,4$只改变可读历史量，并明确区分合成机制证据与公开异常性能。
+
+预期研究贡献仍需由真实实验结果确认。旧96/64机制实验只能支持当前生成分布和真值候选条件下的历史利用结论；新版三臂尚无结果，可学习候选产生器也尚未实现。未来只有在不读取真值位移的对应模块完成后，公开异常验证与隐藏测试才能评价AJAE在真实未知物体上的泛化能力。固定运动速度、单一程序化几何或有限轨迹类型不能代表全部道路异常，后续训练只在前述机制成立后扩展速度、方向、遮挡和对象几何。
+
+\paragraph{工具使用说明。} 本报告在文献整理、代码与协议核对、公式检查、文字修订和版式生成中使用了人工智能辅助工具。研究问题、数据边界、方法选择和实验结论由研究者审定；报告不把计划性实验写成已完成结果，所有后续结果数字均须来自真实程序输出或可核验的一手来源。
+
+\Needspace{12\baselineskip}
+\phantomsection
+\section*{参考文献}
+\addcontentsline{toc}{section}{参考文献}
+\begin{multicols}{2}
+\fontsize{7.4pt}{8.5pt}\selectfont
+\renewcommand{\bibsection}{}
+\begin{thebibliography}{99}
+\setlength{\itemsep}{0.25em}
+\setlength{\parskip}{0pt}
+
+\bibitem{nekrasov2025stu}
+A. Nekrasov et al. Spotting the Unexpected (STU): A 3D LiDAR Dataset for Anomaly Segmentation in Autonomous Driving. \textit{CVPR}, 2025, pp. 11875--11885.
+\href{https://openaccess.thecvf.com/content/CVPR2025/html/Nekrasov_Spotting_the_Unexpected_STU_A_3D_LiDAR_Dataset_for_Anomaly_CVPR_2025_paper.html}{论文页}.
+
+\bibitem{stuofficial}
+A. Nekrasov et al. STU Dataset: Data, Evaluation Code, Checkpoints, and Test Submission Instructions. 2025--2026.
+\href{https://github.com/kumuji/stu_dataset}{官方仓库}.
+
+\bibitem{li2026ndp}
+Z. Li et al. Neural Distribution Prior for LiDAR Out-of-Distribution Detection. \textit{CVPR}, 2026, pp. 3035--3045.
+\href{https://openaccess.thecvf.com/content/CVPR2026/html/Li_Neural_Distribution_Prior_for_LiDAR_Out-of-Distribution_Detection_CVPR_2026_paper.html}{论文页}.
+
+\bibitem{li2026rel}
+Z. Li et al. Relative Energy Learning for LiDAR Out-of-Distribution Detection. \textit{ISPRS Journal of Photogrammetry and Remote Sensing}, vol. 239, 2026, pp. 334--346.
+\href{https://doi.org/10.1016/j.isprsjprs.2026.05.051}{DOI}.
+
+\bibitem{mosco2026lido}
+S. Mosco, D. Fusaro, and A. Pretto. Learning to Identify Out-of-Distribution Objects for 3D LiDAR Anomaly Segmentation. \textit{CVPR}, 2026, pp. 17204--17214.
+\href{https://openaccess.thecvf.com/content/CVPR2026/html/Mosco_Learning_to_Identify_Out-of-Distribution_Objects_for_3D_LiDAR_Anomaly_Segmentation_CVPR_2026_paper.html}{论文页}.
+
+\bibitem{yang2026coval}
+L. Yang, J. Liu, Y.-P. Tan, F. Shen, H. T. Shen, X. Zhu, and P. Hu. Counterfactual Occlusion-Aware Learning via Visibility Intervention for LiDAR Anomaly Detection. \textit{ICML}, 2026.
+\href{https://openreview.net/forum?id=Hly2QYcuLW}{论文页}；\href{https://icml.cc/virtual/2026/poster/65016}{会议页}.
+
+\bibitem{aygun2021four}
+M. Aygun et al. 4D Panoptic LiDAR Segmentation. \textit{CVPR}, 2021, pp. 5527--5537.
+\href{https://openaccess.thecvf.com/content/CVPR2021/html/Aygun_4D_Panoptic_LiDAR_Segmentation_CVPR_2021_paper.html}{论文页}.
+
+\bibitem{li2023memoryseg}
+E. Li, S. Casas, and R. Urtasun. MemorySeg: Online LiDAR Semantic Segmentation with a Latent Memory. \textit{ICCV}, 2023.
+\href{https://openaccess.thecvf.com/content/ICCV2023/html/Li_MemorySeg_Online_LiDAR_Semantic_Segmentation_with_a_Latent_Memory_ICCV_2023_paper.html}{论文页}.
+
+\bibitem{yilmaz2024mask4former}
+K. Yilmaz, J. Schult, A. Nekrasov, and B. Leibe. Mask4Former: Mask Transformer for 4D Panoptic Segmentation. \textit{ICRA}, 2024, pp. 9418--9425.
+\href{https://doi.org/10.1109/ICRA57147.2024.10610262}{DOI}.
+
+\bibitem{wu2024taseg}
+X. Wu et al. TASeg: Temporal Aggregation Network for LiDAR Semantic Segmentation. \textit{CVPR}, 2024, pp. 15311--15320.
+\href{https://openaccess.thecvf.com/content/CVPR2024/html/Wu_TASeg_Temporal_Aggregation_Network_for_LiDAR_Semantic_Segmentation_CVPR_2024_paper.html}{论文页}.
+
+\bibitem{wong2020osis}
+K. Wong et al. Identifying Unknown Instances for Autonomous Driving. \textit{CoRL}, 2020, pp. 384--393.
+\href{https://proceedings.mlr.press/v100/wong20a.html}{论文页}.
+
+\bibitem{nunes2022instance}
+L. Nunes et al. Unsupervised Class-Agnostic Instance Segmentation of 3D LiDAR Data for Autonomous Vehicles. \textit{IEEE Robotics and Automation Letters}, 2022.
+\href{https://doi.org/10.1109/LRA.2022.3187872}{DOI}.
+
+\bibitem{zou2026good}
+T. Zou et al. GOOD: Geometry-Guided Out-of-Distribution Modeling for Open-Set Test-Time Adaptation in Point Cloud Semantic Segmentation. \textit{ICLR}, 2026.
+\href{https://openreview.net/forum?id=HyNWlZd4iO}{论文页}；\href{https://iclr.cc/virtual/2026/poster/10010350}{会议页}.
+
+\end{thebibliography}
+\end{multicols}
+
+\end{document}

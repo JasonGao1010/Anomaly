@@ -1,0 +1,55 @@
+{
+  "format": "ajae-oracle-temporal-v4",
+  "status": "initialized_no_parameter_updates",
+  "scope": {
+    "mode": "micro",
+    "train_sequence": 206,
+    "validation_sequence": 201,
+    "train_windows": 24,
+    "validation_windows": 16,
+    "current_passes": 1,
+    "temporal_passes": 1,
+    "temporal_history_lengths": [
+      4
+    ],
+    "formal_training": false,
+    "learned_matcher": false
+  },
+  "manifest": "results/oracle_source.json",
+  "manifest_sha256": "fe16dd92faec56a4bdb869f528afd4bfa739a28ddf0bc9a98cd92059aa0d385b",
+  "experiment_protocol": "oracle.json",
+  "experiment_protocol_sha256": "ef709f71f25eb76c75e2e07f10dd0d44b552b887a0fb63ab39db2d685dc42ec1",
+  "config": {
+    "new_lr": 0.0001,
+    "weight_decay": 0.0001,
+    "seed": 20260813,
+    "minimum_current_anomaly_points": 1,
+    "gpu_memory_fraction": 0.7
+  },
+  "code_identity": {
+    "protocol_sha256": "1e89a93980bcde94404d02e392808082c3b7cc732894ea9f1369f53d60df0507",
+    "source_sha256": {
+      "train.py": "54053c78b867967d8c31f995c84e2422cd68acab80324580f6319cd2c65f4fc7",
+      "static.py": "925ed123ec1a3c0e25f321fee7ecae1bbd5b72c6386ee35fc4c1c850a678dc64",
+      "scene.py": "baa631953dc431fd5d9efc3406fe190633804b81ea54f0f98a7429147a2d9d3f",
+      "protocol.py": "2f4acc091dbca3cead6bdb906e0d92be976215a26be0307265f985c1a82ee508"
+    },
+    "stu_checkpoint_sha256": "743b10d39c4076d98533bf1e84d389ad2703016904d31146e48919618b07b67a",
+    "stu_model_state_sha256": "bd62c2ace0fd13911e2ba81f4969ca6633e73ec5270ffc0b1bd61840b05f924d",
+    "stu_model_state_tensor_sha256": "0be4805592a3d064b21655c6c6eeeb7227322c9670873345be52747b0a24d1fb",
+    "stu_source_identity": {
+      "file_count": 47,
+      "total_bytes": 177571,
+      "manifest_sha256": "f0cead4f5e721262f9f1c26231d116406bb4fb0a43139f22e3706be89b914891"
+    }
+  },
+  "micro_result": null,
+  "micro_result_sha256": null,
+  "environment": {
+    "python": "3.10.20 | packaged by conda-forge | (main, Jun 11 2026, 03:31:56) [GCC 14.3.0]",
+    "executable": "../DynaCAN-deps/envs/ndp/bin/python",
+    "torch": "2.12.0+cu130",
+    "cuda_runtime": "13.0",
+    "gpu": "NVIDIA GeForce RTX 5080 Laptop GPU"
+  }
+}
