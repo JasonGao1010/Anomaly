@@ -1139,17 +1139,88 @@ class ShapeSpec:
             has_entry = entry.any(axis=1)
             has_exit = exit_surface.any(axis=1)
             has_hit = np.where(starts_inside, has_exit, has_entry)
+            bracket_lo = np.full(ids.size, np.inf, dtype=np.float64)
+            bracket_hi = np.full(ids.size, np.inf, dtype=np.float64)
+            if bool(has_hit.any()):
+                hit_rows = np.flatnonzero(has_hit)
+                entry_index = np.argmax(entry[hit_rows], axis=1) + 1
+                exit_index = np.argmax(exit_surface[hit_rows], axis=1) + 1
+                first = np.where(starts_inside[hit_rows], exit_index, entry_index)
+                bracket_lo[hit_rows] = ray_t[hit_rows, first - 1]
+                bracket_hi[hit_rows] = ray_t[hit_rows, first]
+
+            # A thin outside-inside-outside segment can lie between two coarse
+            # samples. Refine only nearby positive intervals; a hit still
+            # requires an explicit sign change and is never inferred from
+            # proximity alone.
+            adaptive_rows = np.flatnonzero(~has_hit & ~starts_inside)
+            if adaptive_rows.size:
+                interval_ray = np.repeat(adaptive_rows, steps - 1)
+                interval_lo = ray_t[adaptive_rows, :-1].reshape(-1)
+                interval_hi = ray_t[adaptive_rows, 1:].reshape(-1)
+                value_lo = values[adaptive_rows, :-1].reshape(-1)
+                value_hi = values[adaptive_rows, 1:].reshape(-1)
+                width = interval_hi - interval_lo
+                keep = (
+                    (value_lo > 0.0)
+                    & (value_hi > 0.0)
+                    & (np.minimum(value_lo, value_hi) <= 4.0 * width)
+                )
+                interval_ray = interval_ray[keep]
+                interval_lo = interval_lo[keep]
+                interval_hi = interval_hi[keep]
+                value_lo = value_lo[keep]
+                value_hi = value_hi[keep]
+                for _depth in range(8):
+                    if not interval_ray.size:
+                        break
+                    middle = 0.5 * (interval_lo + interval_hi)
+                    middle_points = (
+                        origin[ids[interval_ray]]
+                        + middle[:, None] * directions[ids[interval_ray]]
+                    )
+                    value_middle = self.signed_distance(middle_points)
+                    crossed = value_middle <= 0.0
+                    for candidate in np.flatnonzero(crossed):
+                        ray = int(interval_ray[candidate])
+                        if interval_lo[candidate] < bracket_lo[ray]:
+                            bracket_lo[ray] = interval_lo[candidate]
+                            bracket_hi[ray] = middle[candidate]
+
+                    outside = ~crossed
+                    child_ray = np.concatenate(
+                        (interval_ray[outside], interval_ray[outside])
+                    )
+                    child_lo = np.concatenate(
+                        (interval_lo[outside], middle[outside])
+                    )
+                    child_hi = np.concatenate(
+                        (middle[outside], interval_hi[outside])
+                    )
+                    child_value_lo = np.concatenate(
+                        (value_lo[outside], value_middle[outside])
+                    )
+                    child_value_hi = np.concatenate(
+                        (value_middle[outside], value_hi[outside])
+                    )
+                    child_width = child_hi - child_lo
+                    keep = (
+                        (np.minimum(child_value_lo, child_value_hi) <= 4.0 * child_width)
+                        & (child_lo < bracket_lo[child_ray])
+                    )
+                    interval_ray = child_ray[keep]
+                    interval_lo = child_lo[keep]
+                    interval_hi = child_hi[keep]
+                    value_lo = child_value_lo[keep]
+                    value_hi = child_value_hi[keep]
+
+            has_hit = np.isfinite(bracket_lo)
             if not bool(has_hit.any()):
                 continue
             hit_ids = ids[has_hit]
-            hit_t = ray_t[has_hit]
             hit_starts_inside = starts_inside[has_hit]
-            entry_index = np.argmax(entry[has_hit], axis=1) + 1
-            exit_index = np.argmax(exit_surface[has_hit], axis=1) + 1
-            first = np.where(hit_starts_inside, exit_index, entry_index)
-            row = np.arange(hit_ids.size)
-            lo = hit_t[row, first - 1]
-            hi = hit_t[row, first]
+            lo = bracket_lo[has_hit]
+            hi = bracket_hi[has_hit]
             for _ in range(18):
                 middle = 0.5 * (lo + hi)
                 points = origin[hit_ids] + middle[:, None] * directions[hit_ids]
