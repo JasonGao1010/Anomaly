@@ -1370,6 +1370,17 @@ PASS 结论只能写为：**规范射线身份、内部 azimuth 邻接关系及�
 - PASS → **E16。**
 - FAIL → **E16 保持锁定，按实际失败构念处理。**
 
+**正式结果**
+
+E15-v2 PASS，解锁 E16。E15-v1 的历史 FAIL 与 evidence-state specification defect 永久保留。
+
+- train/206 的 55,638,667 条实际内部相邻边和 43,785 条实际环绕边全部连续，120 个 beam 为 `observed_continuous`、0 个为 `observed_discontinuous`、8 个为 `unidentifiable_from_observed_returns`；8 个不可识别项均由结构性空端点导致；
+- train/201 的 76,323,285 条实际内部相邻边和 55,374 条实际环绕边全部连续，同样为 120/0/8；其中 7 个不可识别项由结构性空端点导致，beam 125 为 `separately_observed_never_coobserved`，其 column 1023/column 0/共同观测帧数为 1/1/0；
+- 两个序列的布局、有限性、逐 frame/beam 回波覆盖、固定 mapping 双射、回波计数与身份往返以及 E14 数值/几何界限均通过；重复运行的数组、分类、哈希和摘要逐元素一致；
+- 摘要哈希为 `e39cddd13cee1d0247042f4e4fbec6c01cc41edaa0e7527a12e8b7255cdaf34d`。
+
+科学结论限定为：**规范射线身份、内部 azimuth 邻接关系及所有可观察环绕边在 train/206 与独立 train/201 上稳定；每个序列各有 8 条未发生端点共现的环绕边仅由固定射线模型定义，未获得直接观测验证。** 不得声称两个序列都直接验证了 128 行的全部环绕边。
+
 **FAIL 条件**
 
 某些序列不满足统一规则。
