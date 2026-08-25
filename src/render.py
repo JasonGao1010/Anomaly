@@ -181,6 +181,8 @@ class ShapeGenerationReport:
     too_large_rejections: int
     other_rejections: int
     accepted_size_m: float
+    accepted_lower_m: tuple[float, float, float]
+    accepted_upper_m: tuple[float, float, float]
     size_definition: str
 
 
@@ -816,6 +818,8 @@ class ShapeSpec:
                     too_large_rejections=too_large,
                     other_rejections=other,
                     accepted_size_m=diameter,
+                    accepted_lower_m=tuple(map(float, lower)),
+                    accepted_upper_m=tuple(map(float, upper)),
                     size_definition=size_definition,
                 )
             except RenderError:

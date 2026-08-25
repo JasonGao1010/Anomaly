@@ -507,6 +507,8 @@ def test_generator_schema2_rejects_continuous_size_violations_deterministically(
         lower, upper = shape.continuous_bounds(
             maximum_iterations=80, population_size=10
         )
+        np.testing.assert_array_equal(report.accepted_lower_m, lower)
+        np.testing.assert_array_equal(report.accepted_upper_m, upper)
         assert report.accepted_size_m == float(np.max(upper - lower))
 
 
