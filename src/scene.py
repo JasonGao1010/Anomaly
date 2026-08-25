@@ -1,15 +1,10 @@
 #!/usr/bin/env python3
-"""Read STU scans and build AJAE's causal per-frame input windows.
-
-Each scan keeps its original returns and reproduces the released STU
-pre-voxel coordinates and two input features. Ego poses also describe where
-the same returns lie in the current sensor coordinate system. The model can
-therefore encode every frame exactly as STU did before feature-level alignment.
-"""
+"""Read STU sequences and assemble center-symmetric five-frame worlds."""
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 from collections import OrderedDict
@@ -23,7 +18,9 @@ import numpy as np
 try:
     from .protocol import (
         AJAEProtocol,
+        ExperimentCondition,
         FrameSpan,
+        RELATIVE_TIMES,
         SequenceSpec,
         WINDOW_FRAMES,
         load_protocol,
@@ -31,7 +28,9 @@ try:
 except ImportError:  # Direct script execution.
     from protocol import (
         AJAEProtocol,
+        ExperimentCondition,
         FrameSpan,
+        RELATIVE_TIMES,
         SequenceSpec,
         WINDOW_FRAMES,
         load_protocol,
@@ -43,6 +42,7 @@ SCAN_DTYPE = np.dtype("<f4")
 LABEL_DTYPE = np.dtype("<u4")
 RIGID_ATOL = 1.0e-3
 IDENTITY_ATOL = 1.0e-9
+RAY_MAPPING_DOMAIN = 128 * 1024
 
 
 class SceneDataError(ValueError):
@@ -94,8 +94,23 @@ def _rigid(name: str, matrix: np.ndarray) -> None:
         raise SceneDataError(f"{name} rotation determinant is not +1")
 
 
+def canonical_ray_mapping_digest(mapping: np.ndarray) -> str:
+    """Bind a complete slot-to-ray permutation to immutable calibration bytes."""
+
+    values = np.asarray(mapping)
+    if values.dtype != np.int32 or values.shape != (RAY_MAPPING_DOMAIN,):
+        raise TypeError("canonical ray mapping must be int32[131072]")
+    if np.unique(values).size != values.size or np.any(
+        (values < 0) | (values >= RAY_MAPPING_DOMAIN)
+    ):
+        raise SceneDataError("canonical ray mapping must be a complete permutation")
+    return hashlib.sha256(
+        b"AJAE-schema30-OS1-128-slot-to-ray\0" + values.tobytes(order="C")
+    ).hexdigest()
+
+
 def official_stu_coordinates(xyzi: np.ndarray, lidar_pose: np.ndarray) -> np.ndarray:
-    """Reproduce the released STU coordinates before sparse quantization."""
+    """Reproduce STU's released pre-voxel coordinate formula exactly."""
 
     array = np.asarray(xyzi)
     if array.dtype != np.float32 or array.ndim != 2 or array.shape[1] != 4:
@@ -108,7 +123,9 @@ def official_stu_coordinates(xyzi: np.ndarray, lidar_pose: np.ndarray) -> np.nda
         raise TypeError("lidar_pose must be float64[4,4]")
     _rigid("lidar_pose", pose)
 
-    coordinates = array[:, :3] @ pose[:3, :3] + pose[3, :3]
+    # STU transposes its stored standard pose before this row-vector operation.
+    # Keeping T_W<-S standard here gives the equivalent R p + t transform.
+    coordinates = array[:, :3] @ pose[:3, :3].T + pose[:3, 3]
     return _freeze(coordinates.astype(np.float64, copy=False))
 
 
@@ -125,8 +142,35 @@ def official_stu_features(xyzi: np.ndarray, lidar_pose: np.ndarray) -> np.ndarra
 
 
 @dataclass(frozen=True, slots=True)
+class RayId:
+    """One canonical OS1-128 beam and azimuth-column identity."""
+
+    beam_id: int
+    azimuth_column: int
+
+    def __post_init__(self) -> None:
+        if not 0 <= _plain_int("RayId.beam_id", self.beam_id) < 128:
+            raise SceneDataError("RayId.beam_id must lie in [0,127]")
+        if not 0 <= _plain_int("RayId.azimuth_column", self.azimuth_column) < 1024:
+            raise SceneDataError("RayId.azimuth_column must lie in [0,1023]")
+
+
+@dataclass(frozen=True, slots=True)
+class PointId:
+    """Stable identity of one visible return in the canonical ray grid."""
+
+    frame_id: int
+    ray: RayId
+
+    def __post_init__(self) -> None:
+        _plain_int("PointId.frame_id", self.frame_id)
+        if not isinstance(self.ray, RayId):
+            raise TypeError("PointId.ray must be RayId")
+
+
+@dataclass(frozen=True, slots=True)
 class PointLabels:
-    """Labels aligned with one point array and isolated from model features."""
+    """Packed, raw, and optional STU-normal labels aligned with one point array."""
 
     packed: np.ndarray
     semantic: np.ndarray
@@ -168,8 +212,6 @@ class PointLabels:
 
     @property
     def group_key(self) -> np.ndarray:
-        """Return the complete raw semantic-instance identity."""
-
         return self.packed
 
     @property
@@ -178,11 +220,19 @@ class PointLabels:
         result.setflags(write=False)
         return result
 
+    @property
+    def binary_valid(self) -> np.ndarray:
+        result = self.semantic != np.uint16(0)
+        result.setflags(write=False)
+        return result
+
 
 @dataclass(frozen=True, slots=True)
 class SourceFrame:
-    """One complete STU scan with raw returns and official model inputs."""
+    """One complete STU file-slot scan and its frozen official model inputs."""
 
+    partition: str
+    sequence_id: int
     frame_id: int
     xyzi: np.ndarray
     lidar_pose: np.ndarray
@@ -193,6 +243,9 @@ class SourceFrame:
     labels: PointLabels | None
 
     def __post_init__(self) -> None:
+        if self.partition not in {"train", "val", "test", "fixture"}:
+            raise SceneDataError("SourceFrame.partition is invalid")
+        _plain_int("sequence_id", self.sequence_id)
         _plain_int("frame_id", self.frame_id)
         count = self.xyzi.shape[0]
         if self.xyzi.dtype != np.float32 or self.xyzi.shape != (count, 4):
@@ -204,9 +257,7 @@ class SourceFrame:
             raise TypeError("coordinates must be float64[N,3]")
         if self.features.dtype != np.float32 or self.features.shape != (count, 2):
             raise TypeError("features must be float32[N,2]")
-        if self.zero_slot_mask.dtype != np.bool_ or self.zero_slot_mask.shape != (
-            count,
-        ):
+        if self.zero_slot_mask.dtype != np.bool_ or self.zero_slot_mask.shape != (count,):
             raise TypeError("zero_slot_mask must be bool[N]")
         if self.real_slots.dtype != np.int32 or self.real_slots.ndim != 1:
             raise TypeError("real_slots must be int32[M]")
@@ -217,11 +268,7 @@ class SourceFrame:
             self.coordinates, official_stu_coordinates(self.xyzi, self.lidar_pose)
         ):
             raise SceneDataError("coordinates differ from STU's official definition")
-        if not np.array_equal(self.features[:, 0], self.xyzi[:, 3]):
-            raise SceneDataError("the first STU feature must be raw intensity")
-        if not np.array_equal(
-            self.features, official_stu_features(self.xyzi, self.lidar_pose)
-        ):
+        if not np.array_equal(self.features, official_stu_features(self.xyzi, self.lidar_pose)):
             raise SceneDataError("features differ from STU's official definition")
         expected_zero = np.all(self.xyzi[:, :3] == np.float32(0.0), axis=1)
         if not np.array_equal(self.zero_slot_mask, expected_zero):
@@ -250,7 +297,7 @@ class SourceFrame:
         return int(self.real_slots.size)
 
     def restore_real(self, values: np.ndarray) -> np.ndarray:
-        """Restore values for real returns to this frame's original file slots."""
+        """Restore visible-return values to this frame's complete file-slot order."""
 
         array = np.asarray(values)
         if array.ndim < 1 or array.shape[0] != self.real_count:
@@ -275,8 +322,11 @@ def make_source_frame(
     xyzi: np.ndarray,
     lidar_pose: np.ndarray,
     labels: PointLabels | None = None,
+    *,
+    partition: str,
+    sequence_id: int,
 ) -> SourceFrame:
-    """Build one real or counterfactual frame with the sole STU input formula."""
+    """Build one original or deterministically rendered STU frame."""
 
     frame = _plain_int("frame_id", frame_id)
     array = np.asarray(xyzi)
@@ -287,14 +337,15 @@ def make_source_frame(
         raise TypeError("lidar_pose must be float64[4,4]")
     _rigid("lidar_pose", pose)
     owned = _freeze(array.copy())
-    coordinates = official_stu_coordinates(owned, pose)
     zero_mask = _freeze(np.all(owned[:, :3] == np.float32(0.0), axis=1))
     real_slots = _freeze(np.flatnonzero(~zero_mask).astype(np.int32, copy=False))
     return SourceFrame(
+        partition=partition,
+        sequence_id=_plain_int("sequence_id", sequence_id),
         frame_id=frame,
         xyzi=owned,
         lidar_pose=_freeze(pose.copy()),
-        coordinates=coordinates,
+        coordinates=official_stu_coordinates(owned, pose),
         features=official_stu_features(owned, pose),
         zero_slot_mask=zero_mask,
         real_slots=real_slots,
@@ -304,175 +355,281 @@ def make_source_frame(
 
 @dataclass(frozen=True, slots=True)
 class WindowFrame:
-    """One source frame plus its age and rigid relation to the current frame."""
+    """One source frame and its rigid transform into the reference LiDAR frame."""
 
     source: SourceFrame
-    age: int
-    source_to_current: np.ndarray
+    source_offset: int
+    model_time_position: int
+    source_to_reference: np.ndarray
 
     def __post_init__(self) -> None:
-        _plain_int("frame age", self.age)
-        if self.age >= WINDOW_FRAMES:
-            raise SceneDataError("frame age exceeds the causal window")
-        if self.source_to_current.dtype != np.float64:
-            raise TypeError("source_to_current must be float64[4,4]")
-        _rigid("source_to_current", self.source_to_current)
-        self.source_to_current.setflags(write=False)
+        if self.model_time_position not in RELATIVE_TIMES:
+            raise SceneDataError("model_time_position must be one of -2,-1,0,1,2")
+        if self.source_to_reference.dtype != np.float64:
+            raise TypeError("source_to_reference must be float64[4,4]")
+        _rigid("source_to_reference", self.source_to_reference)
+        self.source_to_reference.setflags(write=False)
 
 
 @dataclass(frozen=True, slots=True)
-class WindowMembers:
-    """Real-return identities and geometry used after per-frame encoding."""
+class WindowPoints:
+    """Visible returns with separate physical-ray and file-slot identities."""
 
-    coordinates_current: np.ndarray
+    coordinates_reference: np.ndarray
     source_frame: np.ndarray
     source_slot: np.ndarray
-    frame_age: np.ndarray
+    source_ray: np.ndarray
+    model_time_position: np.ndarray
     frame_offsets: np.ndarray
+    ray_mapping_audited: bool
+    ray_mapping_digest: str | None
 
     def __post_init__(self) -> None:
-        count = self.coordinates_current.shape[0]
-        if (
-            self.coordinates_current.dtype != np.float32
-            or self.coordinates_current.shape != (count, 3)
-        ):
-            raise TypeError("coordinates_current must be float32[M,3]")
+        count = self.coordinates_reference.shape[0]
+        if self.coordinates_reference.dtype != np.float32 or self.coordinates_reference.shape != (count, 3):
+            raise TypeError("coordinates_reference must be float32[M,3]")
         for name, array, dtype in (
             ("source_frame", self.source_frame, np.int32),
             ("source_slot", self.source_slot, np.int32),
-            ("frame_age", self.frame_age, np.uint8),
+            ("source_ray", self.source_ray, np.int32),
+            ("model_time_position", self.model_time_position, np.int8),
         ):
             if array.dtype != dtype or array.shape != (count,):
                 raise TypeError(f"{name} must be {np.dtype(dtype).name}[M]")
         if self.frame_offsets.dtype != np.int64 or self.frame_offsets.ndim != 1:
             raise TypeError("frame_offsets must be int64[F+1]")
-        if self.frame_offsets.size < 2 or int(self.frame_offsets[0]) != 0:
-            raise SceneDataError("frame offsets must begin at zero")
-        if np.any(np.diff(self.frame_offsets) < 0):
-            raise SceneDataError("frame offsets must be nondecreasing")
+        if self.frame_offsets.size not in {2, WINDOW_FRAMES + 1}:
+            raise SceneDataError("window must contain one frame or five frames")
+        if type(self.ray_mapping_audited) is not bool:
+            raise TypeError("ray_mapping_audited must be boolean")
+        if self.ray_mapping_audited:
+            if (
+                not isinstance(self.ray_mapping_digest, str)
+                or len(self.ray_mapping_digest) != 64
+                or any(character not in "0123456789abcdef" for character in self.ray_mapping_digest)
+            ):
+                raise SceneDataError(
+                    "an audited ray mapping requires its calibration digest"
+                )
+        elif self.ray_mapping_digest is not None:
+            raise SceneDataError("an unaudited ray mapping cannot carry an audit digest")
+        if int(self.frame_offsets[0]) != 0 or np.any(np.diff(self.frame_offsets) < 0):
+            raise SceneDataError("frame offsets must begin at zero and be nondecreasing")
         if int(self.frame_offsets[-1]) != count:
-            raise SceneDataError("last frame offset must equal member count")
-        _finite("current-frame member coordinates", self.coordinates_current)
+            raise SceneDataError("last frame offset must equal point count")
+        _finite("reference-frame coordinates", self.coordinates_reference)
+        if np.any((self.source_ray < 0) | (self.source_ray >= 128 * 1024)):
+            raise SceneDataError("canonical ray IDs must lie in [0,131071]")
+        if count > 1:
+            if np.any(self.source_frame[1:] < self.source_frame[:-1]):
+                raise SceneDataError("point identities must be grouped by source frame")
+            same_frame = self.source_frame[1:] == self.source_frame[:-1]
+            if np.any(same_frame & (self.source_slot[1:] <= self.source_slot[:-1])):
+                raise SceneDataError("source slots must be strictly increasing per frame")
+            if np.any(same_frame & (self.source_ray[1:] == self.source_ray[:-1])):
+                raise SceneDataError("a frame cannot repeat one canonical ray")
         for array in (
-            self.coordinates_current,
+            self.coordinates_reference,
             self.source_frame,
             self.source_slot,
-            self.frame_age,
+            self.source_ray,
+            self.model_time_position,
             self.frame_offsets,
         ):
             array.setflags(write=False)
 
     @property
     def count(self) -> int:
-        return int(self.coordinates_current.shape[0])
+        return int(self.coordinates_reference.shape[0])
 
     @property
-    def current_slice(self) -> slice:
-        return slice(int(self.frame_offsets[-2]), int(self.frame_offsets[-1]))
+    def coordinates_center(self) -> np.ndarray:
+        """Alias for the offline main setting's reference coordinates."""
+
+        return self.coordinates_reference
+
+    @property
+    def relative_time(self) -> np.ndarray:
+        return self.model_time_position
 
     def frame_slice(self, local_frame: int) -> slice:
         index = _plain_int("local_frame", local_frame)
-        if index + 1 >= self.frame_offsets.size:
+        if index >= self.frame_offsets.size - 1:
             raise IndexError(index)
         return slice(int(self.frame_offsets[index]), int(self.frame_offsets[index + 1]))
+
+    def point_id(self, index: int) -> PointId:
+        point = _plain_int("point index", index)
+        if point >= self.count:
+            raise IndexError(point)
+        ray = int(self.source_ray[point])
+        return PointId(
+            int(self.source_frame[point]),
+            RayId(ray // 1024, ray % 1024),
+        )
 
 
 @dataclass(frozen=True, slots=True)
 class SceneWindow:
-    """The causal scene input for one current-frame AJAE prediction."""
+    """One single- or five-frame input in its declared reference coordinates."""
 
     spec: SequenceSpec
-    current_frame: int
+    condition: ExperimentCondition
+    anchor_frame: int
     frames: tuple[WindowFrame, ...]
-    members: WindowMembers
+    points: WindowPoints
     labels: PointLabels | None
 
     def __post_init__(self) -> None:
-        _plain_int("current_frame", self.current_frame)
-        if not 1 <= len(self.frames) <= WINDOW_FRAMES:
-            raise SceneDataError("a causal window must contain one through five frames")
+        anchor = _plain_int("anchor_frame", self.anchor_frame)
+        if not isinstance(self.condition, ExperimentCondition):
+            raise TypeError("condition must be ExperimentCondition")
+        if len(self.frames) != len(self.condition.frame_offsets):
+            raise SceneDataError("frame count does not match the experiment condition")
         frame_ids = tuple(item.source.frame_id for item in self.frames)
-        if frame_ids[-1] != self.current_frame:
-            raise SceneDataError("the last window frame must be current")
-        if frame_ids != tuple(range(frame_ids[0], self.current_frame + 1)):
-            raise SceneDataError("window frames must be consecutive")
-        expected_ages = tuple(self.current_frame - frame for frame in frame_ids)
-        if tuple(item.age for item in self.frames) != expected_ages:
-            raise SceneDataError("frame ages do not match source frames")
+        if frame_ids != tuple(anchor + offset for offset in self.condition.frame_offsets):
+            raise SceneDataError("window source frames do not match the condition offsets")
+        expected_positions = (0,) if len(self.frames) == 1 else RELATIVE_TIMES
+        if tuple(item.model_time_position for item in self.frames) != expected_positions:
+            raise SceneDataError("model time positions are not the fixed chronological slots")
+        reference_index = self.condition.frame_offsets.index(0)
         if not np.allclose(
-            self.frames[-1].source_to_current,
+            self.frames[reference_index].source_to_reference,
             np.eye(4, dtype=np.float64),
             atol=IDENTITY_ATOL,
             rtol=0.0,
         ):
-            raise SceneDataError("the current-frame transform must be identity")
-        if self.members.frame_offsets.size != len(self.frames) + 1:
-            raise SceneDataError("member offsets do not match window frames")
-        if self.labels is not None and self.labels.packed.size != self.members.count:
-            raise SceneDataError("window labels do not match real members")
+            raise SceneDataError("the coordinate-reference transform must be identity")
+        if self.labels is not None and self.labels.packed.size != self.points.count:
+            raise SceneDataError("window labels do not match visible returns")
+        for local_frame, item in enumerate(self.frames):
+            point_slice = self.points.frame_slice(local_frame)
+            if not np.all(self.points.source_frame[point_slice] == item.source.frame_id):
+                raise SceneDataError("point frame identities do not match window frames")
+            if not np.all(
+                self.points.model_time_position[point_slice] == item.model_time_position
+            ):
+                raise SceneDataError("point time positions do not match window frames")
+            if not np.array_equal(self.points.source_slot[point_slice], item.source.real_slots):
+                raise SceneDataError("point slots do not match visible source returns")
 
     @property
-    def current(self) -> SourceFrame:
-        return self.frames[-1].source
+    def reference(self) -> SourceFrame:
+        """Return the coordinate reference, which receives no extra model weight."""
 
-    def restore_current(self, values: np.ndarray) -> np.ndarray:
-        """Restore current real-return predictions to official file order."""
+        return self.frames[self.condition.frame_offsets.index(0)].source
 
-        return self.current.restore_real(values)
+    @property
+    def center(self) -> SourceFrame:
+        return self.reference
+
+    @property
+    def center_frame(self) -> int:
+        return self.anchor_frame
+
+    def restore_frame(self, local_frame: int, values: np.ndarray) -> np.ndarray:
+        """Restore one frame slice of window predictions to source file slots."""
+
+        index = _plain_int("local_frame", local_frame)
+        if index >= len(self.frames):
+            raise IndexError(index)
+        return self.frames[index].source.restore_real(values)
 
 
 def assemble_window(
     spec: SequenceSpec,
-    current_frame: int,
+    anchor_frame: int,
     sources: Sequence[SourceFrame],
+    *,
+    condition: ExperimentCondition | str = ExperimentCondition.B3,
+    canonical_ray_by_slot: np.ndarray | Mapping[int, np.ndarray] | None = None,
+    ray_mapping_audited: bool = False,
+    ray_mapping_digest: str | None = None,
 ) -> SceneWindow:
-    """Assemble real or rendered source scans with one shared point-order rule."""
+    """Assemble one declared condition while keeping ray and slot identities apart."""
 
     if not isinstance(spec, SequenceSpec):
         raise TypeError("spec must be SequenceSpec")
-    current = _plain_int("current_frame", current_frame)
-    frames_source = tuple(sources)
-    if not frames_source or len(frames_source) > WINDOW_FRAMES:
-        raise SceneDataError("sources must contain one through five scans")
-    frame_ids = tuple(source.frame_id for source in frames_source)
-    if frame_ids[-1] != current:
-        raise SceneDataError("the last source scan must be current")
-    if frame_ids != tuple(range(frame_ids[0], current + 1)):
-        raise SceneDataError("source scans must be consecutive")
-    labels_present = tuple(source.labels is not None for source in frames_source)
+    selected = ExperimentCondition(condition)
+    anchor = _plain_int("anchor_frame", anchor_frame)
+    source_frames = tuple(sources)
+    if len(source_frames) != len(selected.frame_offsets):
+        raise SceneDataError("source count does not match the experiment condition")
+    frame_ids = tuple(source.frame_id for source in source_frames)
+    expected_ids = tuple(anchor + offset for offset in selected.frame_offsets)
+    if frame_ids != expected_ids:
+        raise SceneDataError("sources do not match the experiment condition offsets")
+    if any(
+        source.partition != spec.partition or source.sequence_id != spec.sequence_id
+        for source in source_frames
+    ):
+        raise SceneDataError("source identity does not match the sequence specification")
+    if spec.span is not None and any(not spec.span.contains(frame_id) for frame_id in frame_ids):
+        raise SceneDataError("source frame lies outside the sequence span")
+    excluded = sorted(set(frame_ids).intersection(spec.excluded_source_frames))
+    if excluded:
+        raise SceneDataError(f"window contains excluded source frame(s) {excluded}")
+    labels_present = tuple(source.labels is not None for source in source_frames)
     if len(set(labels_present)) != 1:
-        raise SceneDataError("all source scans must have the same label availability")
+        raise SceneDataError("all scans must have the same label availability")
+    targets_present = tuple(
+        source.labels is not None and source.labels.semantic_target is not None
+        for source in source_frames
+    )
+    if labels_present[0] and len(set(targets_present)) != 1:
+        raise SceneDataError("all labels must have the same STU-target availability")
+    if ray_mapping_audited and canonical_ray_by_slot is None:
+        raise SceneDataError("an audited window requires an explicit calibrated mapping")
+    if not ray_mapping_audited and ray_mapping_digest is not None:
+        raise SceneDataError("an unaudited window cannot carry a calibration digest")
 
-    current_pose = frames_source[-1].lidar_pose
+    reference_index = selected.frame_offsets.index(0)
+    reference_pose = source_frames[reference_index].lidar_pose
+    model_positions = (0,) if len(source_frames) == 1 else RELATIVE_TIMES
     frames: list[WindowFrame] = []
     coordinates: list[np.ndarray] = []
-    source_frames: list[np.ndarray] = []
+    source_ids: list[np.ndarray] = []
     source_slots: list[np.ndarray] = []
-    frame_ages: list[np.ndarray] = []
+    source_rays: list[np.ndarray] = []
+    relative_times: list[np.ndarray] = []
     offsets = [0]
     packed: list[np.ndarray] = []
     semantic: list[np.ndarray] = []
     instance: list[np.ndarray] = []
     semantic_targets: list[np.ndarray] = []
 
-    for source in frames_source:
-        transform = np.linalg.solve(current_pose, source.lidar_pose)
-        _rigid(f"relative pose {current}<-{source.frame_id}", transform)
-        age = current - source.frame_id
-        frames.append(
-            WindowFrame(
-                source=source,
-                age=age,
-                source_to_current=_freeze(transform.astype(np.float64, copy=False)),
-            )
-        )
+    for source, source_offset, model_position in zip(
+        source_frames, selected.frame_offsets, model_positions, strict=True
+    ):
+        # Poses are T_W<-S; solve gives T_reference<-W @ T_W<-source.
+        transform = np.linalg.solve(reference_pose, source.lidar_pose)
+        _rigid(f"relative pose {anchor}<-{source.frame_id}", transform)
+        transform = _freeze(transform.astype(np.float64, copy=False))
+        frames.append(WindowFrame(source, source_offset, model_position, transform))
         slots = source.real_slots
-        xyz = source.xyzi[slots, :3].astype(np.float64, copy=False)
-        aligned = xyz @ transform[:3, :3].T + transform[:3, 3]
+        source_xyz = source.xyzi[slots, :3].astype(np.float64, copy=False)
+        aligned = source_xyz @ transform[:3, :3].T + transform[:3, 3]
         coordinates.append(aligned.astype(np.float32))
-        source_frames.append(np.full(slots.size, source.frame_id, dtype=np.int32))
+        source_ids.append(np.full(slots.size, source.frame_id, dtype=np.int32))
         source_slots.append(slots.copy())
-        frame_ages.append(np.full(slots.size, age, dtype=np.uint8))
+        if canonical_ray_by_slot is None:
+            mapping = np.arange(source.slot_count, dtype=np.int32)
+        elif isinstance(canonical_ray_by_slot, Mapping):
+            if source.frame_id not in canonical_ray_by_slot:
+                raise SceneDataError(f"canonical ray mapping lacks frame {source.frame_id}")
+            mapping = np.asarray(canonical_ray_by_slot[source.frame_id])
+        else:
+            mapping = np.asarray(canonical_ray_by_slot)
+        if mapping.dtype != np.int32 or mapping.shape != (source.slot_count,):
+            raise TypeError("canonical_ray_by_slot must provide int32[slot]")
+        if np.unique(mapping).size != mapping.size or np.any(
+            (mapping < 0) | (mapping >= RAY_MAPPING_DOMAIN)
+        ):
+            raise SceneDataError("canonical ray mapping must be an in-range one-to-one map")
+        if ray_mapping_audited and canonical_ray_mapping_digest(mapping) != ray_mapping_digest:
+            raise SceneDataError("canonical ray mapping does not match its calibration digest")
+        source_rays.append(mapping[slots].copy())
+        relative_times.append(np.full(slots.size, model_position, dtype=np.int8))
         offsets.append(offsets[-1] + int(slots.size))
         if source.labels is not None:
             packed.append(source.labels.packed[slots])
@@ -481,12 +638,15 @@ def assemble_window(
             if source.labels.semantic_target is not None:
                 semantic_targets.append(source.labels.semantic_target[slots])
 
-    members = WindowMembers(
-        coordinates_current=_freeze(np.concatenate(coordinates, axis=0)),
-        source_frame=_freeze(np.concatenate(source_frames)),
+    points = WindowPoints(
+        coordinates_reference=_freeze(np.concatenate(coordinates)),
+        source_frame=_freeze(np.concatenate(source_ids)),
         source_slot=_freeze(np.concatenate(source_slots)),
-        frame_age=_freeze(np.concatenate(frame_ages)),
+        source_ray=_freeze(np.concatenate(source_rays)),
+        model_time_position=_freeze(np.concatenate(relative_times)),
         frame_offsets=_freeze(np.asarray(offsets, dtype=np.int64)),
+        ray_mapping_audited=ray_mapping_audited,
+        ray_mapping_digest=ray_mapping_digest,
     )
     labels: PointLabels | None = None
     if labels_present[0]:
@@ -495,16 +655,10 @@ def assemble_window(
             semantic=_freeze(np.concatenate(semantic)),
             instance=_freeze(np.concatenate(instance)),
             semantic_target=(
-                _freeze(np.concatenate(semantic_targets)) if semantic_targets else None
+                _freeze(np.concatenate(semantic_targets)) if targets_present[0] else None
             ),
         )
-    return SceneWindow(
-        spec=spec,
-        current_frame=current,
-        frames=tuple(frames),
-        members=members,
-        labels=labels,
-    )
+    return SceneWindow(spec, selected, anchor, tuple(frames), points, labels)
 
 
 def _matrix(values: Sequence[float], name: str) -> np.ndarray:
@@ -593,16 +747,14 @@ def locate_sequence(data_root: Path | str, partition: str, sequence_id: int) -> 
     if partition not in {"train", "val", "test"}:
         raise ValueError("partition must be train, val, or test")
     identifier = _plain_int("sequence_id", sequence_id)
-    path = (
-        Path(data_root).expanduser().resolve(strict=True) / partition / str(identifier)
-    )
+    path = Path(data_root).expanduser().resolve(strict=True) / partition / str(identifier)
     if not path.is_dir():
         raise FileNotFoundError(path)
     return path.resolve()
 
 
 class STUSequence:
-    """Read one complete protocol-assigned STU sequence."""
+    """Read one protocol-assigned STU sequence with a bounded source-frame cache."""
 
     def __init__(
         self,
@@ -619,27 +771,36 @@ class STUSequence:
         if protocol.sequence(spec.partition, spec.sequence_id) != spec:
             raise SceneDataError("sequence spec is not part of this protocol")
         self.protocol = protocol
-        self.spec = spec
         self.sequence_dir = Path(sequence_dir).expanduser().resolve(strict=True)
         if not self.sequence_dir.is_dir():
             raise NotADirectoryError(self.sequence_dir)
-        if self.sequence_dir.name != str(spec.sequence_id):
-            raise SceneDataError("sequence directory does not match sequence identity")
-        if self.sequence_dir.parent.name != spec.partition:
-            raise SceneDataError("sequence directory does not match partition")
-
+        if self.sequence_dir.name != str(spec.sequence_id) or self.sequence_dir.parent.name != spec.partition:
+            raise SceneDataError("sequence directory does not match protocol identity")
         self.label_mode = LabelMode(label_mode)
         if self.label_mode is LabelMode.REQUIRED and not spec.labels_available:
             raise SceneDataError("labels are unavailable for this protocol role")
 
         self._scan_paths = _indexed_files(self.sequence_dir / "velodyne", ".bin")
         self.frame_count = len(self._scan_paths)
+        self.frame_ids = tuple(range(self.frame_count))
         if spec.span is not None and spec.span != FrameSpan(0, self.frame_count):
             raise SceneDataError(
                 f"{spec.partition}/{spec.sequence_id} has {self.frame_count} scans, "
                 f"expected {spec.frames}"
             )
         self.span = FrameSpan(0, self.frame_count)
+        actual_spec = SequenceSpec(
+            spec.partition,
+            spec.sequence_id,
+            spec.role,
+            spec.labels_available,
+            self.span,
+            spec.excluded_source_frames,
+        )
+        # Hidden sequence lengths are observable only after opening their files.
+        self.spec = actual_spec
+        self.center_frames = actual_spec.center_frames()
+        self._center_set = frozenset(self.center_frames)
 
         calibration = read_calibration(self.sequence_dir / "calib.txt")
         camera_poses = read_poses(self.sequence_dir / "poses.txt")
@@ -647,8 +808,7 @@ class STUSequence:
             raise SceneDataError("pose count does not match scan count")
         lidar_from_camera = np.linalg.inv(calibration["Tr"])
         lidar_poses = np.stack(
-            [lidar_from_camera @ pose @ calibration["Tr"] for pose in camera_poses],
-            axis=0,
+            [lidar_from_camera @ pose @ calibration["Tr"] for pose in camera_poses]
         )
         for frame, pose in enumerate(lidar_poses):
             _rigid(f"LiDAR pose {frame}", pose)
@@ -657,16 +817,15 @@ class STUSequence:
         self._label_paths: dict[int, Path] | None = None
         if self.label_mode is LabelMode.REQUIRED:
             paths = _indexed_files(self.sequence_dir / "labels", ".label")
-            if sorted(paths) != list(range(self.frame_count)):
+            if sorted(paths) != list(self.frame_ids):
                 raise SceneDataError("labels must cover every scan")
             self._label_paths = paths
-
         self._semantic_target_lut = np.full(1 << 16, -1, dtype=np.int16)
         for raw, target in protocol.normal_training_class_map.items():
             self._semantic_target_lut[raw] = target
         self._semantic_target_lut.setflags(write=False)
-
         self._frames: OrderedDict[int, SourceFrame] = OrderedDict()
+        self._cache_frames = int(protocol.training["cache_frames"])
 
     @classmethod
     def open(
@@ -677,7 +836,7 @@ class STUSequence:
         partition: str,
         sequence_id: int,
         label_mode: LabelMode | str,
-    ) -> STUSequence:
+    ) -> "STUSequence":
         spec = protocol.sequence(partition, sequence_id)
         return cls(
             locate_sequence(data_root, partition, sequence_id),
@@ -693,15 +852,12 @@ class STUSequence:
     def __len__(self) -> int:
         return self.frame_count
 
-    def __getitem__(self, frame_id: int) -> SceneWindow:
-        frame = _plain_int("frame_id", frame_id)
-        if frame >= self.frame_count:
-            raise IndexError(frame)
-        return self.window(frame)
+    def __getitem__(self, center_frame: int) -> SceneWindow:
+        return self.window(center_frame)
 
     def __iter__(self) -> Iterator[SceneWindow]:
-        for frame in range(self.frame_count):
-            yield self.window(frame)
+        for center in self.center_frames:
+            yield self.window(center)
 
     def lidar_pose(self, frame_id: int) -> np.ndarray:
         frame = _plain_int("frame_id", frame_id)
@@ -717,7 +873,6 @@ class STUSequence:
         if cached is not None:
             self._frames[frame] = cached
             return cached
-
         path = self._scan_paths[frame]
         record_bytes = SCAN_CHANNELS * SCAN_DTYPE.itemsize
         if path.stat().st_size <= 0 or path.stat().st_size % record_bytes:
@@ -727,11 +882,16 @@ class STUSequence:
             raise SceneDataError(f"scan cannot be reshaped to N x 4: {path}")
         xyzi = raw.reshape(-1, SCAN_CHANNELS).astype(np.float32, copy=False)
         _finite(f"scan {frame}", xyzi)
-
-        labels = self._read_labels(frame, xyzi.shape[0])
-        result = make_source_frame(frame, xyzi, self._lidar_poses[frame], labels)
+        result = make_source_frame(
+            frame,
+            xyzi,
+            self._lidar_poses[frame],
+            self._read_labels(frame, xyzi.shape[0]),
+            partition=self.spec.partition,
+            sequence_id=self.spec.sequence_id,
+        )
         self._frames[frame] = result
-        while len(self._frames) > WINDOW_FRAMES:
+        while len(self._frames) > self._cache_frames:
             self._frames.popitem(last=False)
         return result
 
@@ -749,37 +909,46 @@ class STUSequence:
         semantic = (packed & np.uint32(0xFFFF)).astype(np.uint16, copy=False)
         instance = (packed >> np.uint32(16)).astype(np.uint16, copy=False)
         semantic_target: np.ndarray | None = None
-        if self.spec.role in {"normal_training", "normal_validation"}:
+        if self.spec.supports_counterfactuals:
             mapped = self._semantic_target_lut[semantic]
             if np.any(mapped < 0):
                 unknown = sorted(map(int, np.unique(semantic[mapped < 0])))
-                raise SceneDataError(
-                    f"normal frame {frame} has unmapped labels {unknown}"
-                )
+                raise SceneDataError(f"normal frame {frame} has unmapped labels {unknown}")
             semantic_target = mapped.astype(np.uint8)
         return PointLabels(
             packed=_freeze(packed),
             semantic=_freeze(semantic),
             instance=_freeze(instance),
-            semantic_target=(
-                None if semantic_target is None else _freeze(semantic_target)
-            ),
+            semantic_target=None if semantic_target is None else _freeze(semantic_target),
         )
 
-    def window(self, current_frame: int) -> SceneWindow:
-        frame = _plain_int("current_frame", current_frame)
-        if frame >= self.frame_count:
-            raise IndexError(frame)
-        frame_ids = self.protocol.window_frame_ids(
-            self.spec.partition, self.spec.sequence_id, frame
-        )
-        return self._assemble(frame_ids, frame)
-
-    def _assemble(self, frame_ids: tuple[int, ...], current_frame: int) -> SceneWindow:
+    def window(
+        self,
+        anchor_frame: int,
+        *,
+        condition: ExperimentCondition | str = ExperimentCondition.B3,
+        canonical_ray_by_slot: np.ndarray | Mapping[int, np.ndarray] | None = None,
+        ray_mapping_audited: bool = False,
+        ray_mapping_digest: str | None = None,
+    ) -> SceneWindow:
+        anchor = _plain_int("anchor_frame", anchor_frame)
+        selected = ExperimentCondition(condition)
+        if anchor not in self.spec.legal_anchors(selected.frame_offsets):
+            raise SceneDataError(
+                f"frame {anchor} is not a legal {selected.value} window for "
+                f"{self.spec.partition}/{self.spec.sequence_id}"
+            )
+        frame_ids = tuple(anchor + offset for offset in selected.frame_offsets)
+        if frame_ids[-1] >= self.frame_count:
+            raise SceneDataError("protocol window refers to a missing source frame")
         return assemble_window(
             self.spec,
-            current_frame,
+            anchor,
             tuple(self.source_frame(frame_id) for frame_id in frame_ids),
+            condition=selected,
+            canonical_ray_by_slot=canonical_ray_by_slot,
+            ray_mapping_audited=ray_mapping_audited,
+            ray_mapping_digest=ray_mapping_digest,
         )
 
     def audit(self, *, deep: bool = False) -> dict[str, object]:
@@ -789,7 +958,10 @@ class STUSequence:
             "partition": self.spec.partition,
             "sequence": self.spec.sequence_id,
             "role": self.spec.role,
-            "frames": self.frame_count,
+            "source_frames": self.frame_count,
+            "legal_centered_windows": len(self.center_frames),
+            "first_center": self.center_frames[0],
+            "last_center": self.center_frames[-1],
             "labels_read": self.labels_available,
             "model_input": {
                 "coordinates": "released_STU_pre_voxel_coordinates",
@@ -800,8 +972,8 @@ class STUSequence:
             return result
         slots = 0
         real = 0
-        for frame in range(self.frame_count):
-            source = self.source_frame(frame)
+        for frame_id in self.frame_ids:
+            source = self.source_frame(frame_id)
             slots += source.slot_count
             real += source.real_count
         result.update(
@@ -818,36 +990,42 @@ def summarize_window(window: SceneWindow) -> dict[str, object]:
     return {
         "partition": window.spec.partition,
         "sequence": window.spec.sequence_id,
-        "current_frame": window.current_frame,
+        "condition": window.condition.value,
+        "anchor_frame": window.anchor_frame,
         "frame_ids": [item.source.frame_id for item in window.frames],
-        "frame_ages": [item.age for item in window.frames],
+        "source_offsets": [item.source_offset for item in window.frames],
+        "model_time_positions": [item.model_time_position for item in window.frames],
         "input_slots_by_frame": [item.source.slot_count for item in window.frames],
-        "real_members": window.members.count,
-        "current_real_returns": window.current.real_count,
+        "visible_returns": window.points.count,
+        "visible_returns_by_frame": [
+            item.source.real_count for item in window.frames
+        ],
         "feature_channels": 2,
         "labels_read": window.labels is not None,
+        "ray_mapping_audited": window.points.ray_mapping_audited,
     }
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Inspect AJAE schema-28 STU windows.")
-    parser.add_argument("--split", type=Path)
+    parser = argparse.ArgumentParser(description="Inspect AJAE schema-30 STU windows.")
+    parser.add_argument("--protocol", type=Path)
     parser.add_argument("--data-root", type=Path, required=True)
     parser.add_argument("--partition", choices=("train", "val", "test"), required=True)
     parser.add_argument("--sequence", type=int, required=True)
+    parser.add_argument("--labels", choices=tuple(mode.value for mode in LabelMode), required=True)
+    parser.add_argument("--center", type=int, action="append")
     parser.add_argument(
-        "--labels",
-        choices=tuple(mode.value for mode in LabelMode),
-        required=True,
+        "--condition",
+        choices=tuple(item.value for item in ExperimentCondition),
+        default=ExperimentCondition.B3.value,
     )
-    parser.add_argument("--frame", type=int, action="append")
     parser.add_argument("--check-all", action="store_true")
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
-    protocol = load_protocol() if args.split is None else load_protocol(args.split)
+    protocol = load_protocol() if args.protocol is None else load_protocol(args.protocol)
     sequence = STUSequence.open(
         args.data_root,
         protocol=protocol,
@@ -855,12 +1033,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         sequence_id=args.sequence,
         label_mode=args.labels,
     )
-    frames = args.frame or list(
-        dict.fromkeys((0, min(WINDOW_FRAMES - 1, sequence.frame_count - 1)))
-    )
+    condition = ExperimentCondition(args.condition)
+    anchors = sequence.spec.legal_anchors(condition.frame_offsets)
+    centers = args.center or [anchors[0], anchors[-1]]
     output = {
         "sequence": sequence.audit(deep=args.check_all),
-        "windows": [summarize_window(sequence.window(frame)) for frame in frames],
+        "windows": [
+            summarize_window(sequence.window(center, condition=condition))
+            for center in centers
+        ],
     }
     print(json.dumps(output, ensure_ascii=False, indent=2, sort_keys=True))
     return 0

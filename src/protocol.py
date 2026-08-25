@@ -1,171 +1,103 @@
 #!/usr/bin/env python3
-"""Read and validate AJAE's current causal-window scientific protocol.
-
-``split.json`` is the sole source for data roles, STU initialization, the
-current-anchored temporal mechanism, training boundaries, and official
-evaluation. This module exposes only the small stable interface needed by
-data loading, modeling, inference, and evaluation.
-"""
+"""Load the sole AJAE schema-30 protocol and fixed development worlds."""
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
-from collections.abc import Mapping, Sequence
+from bisect import bisect_right
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from types import MappingProxyType
+from typing import Mapping, Sequence
 
 
-DEFAULT_SPLIT_PATH = Path(__file__).resolve().parents[1] / "split.json"
-SCHEMA_VERSION = 28
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_PROTOCOL_PATH = PROJECT_ROOT / "protocol.json"
+SCHEMA_VERSION = 30
 WINDOW_FRAMES = 5
-GENERAL_COMPLETE_WINDOW_MINIMUM_CURRENT_FRAME = WINDOW_FRAMES - 1
-NORMAL_201_COMPLETE_WINDOW_MINIMUM_CURRENT_FRAME = 8
-HISTORY_LENGTHS = (0, 1, 2, 4)
-TEMPORAL_SCALES = ("p16", "p8", "p4")
-MODEL_NAME = "current-anchored factorized causal window encoder"
-CLEAN_SELECT_RULE = (
-    "At each scale and frame age, construct exactly one truth-selected h_mix real "
-    "candidate from the current synthetic fraction and valid static/object history, "
-    "plus one null candidate. Missing mass stays zero, and h_mix is never duplicated."
+RELATIVE_TIMES = (-2, -1, 0, 1, 2)
+CAUSAL_OFFSETS = (-4, -3, -2, -1, 0)
+PUBLIC_ANOMALY_IDS = (
+    125, 137, 138, 139, 140, 141, 142, 143, 144, 145,
+    146, 147, 148, 149, 150, 151, 152, 153, 169,
 )
-PROPOSAL_ORACLE_CANDIDATES_RULE = (
-    "At every sparse query, present static-aligned and truth-motion-aligned evidence "
-    "as exchangeable real hypotheses plus null, with shared candidate parameters "
-    "inside each independent Proposal arm and no candidate-type embedding."
+HIDDEN_TEST_IDS = (
+    100, 101, 102, 103, 104, 105, 106, 107, 108, 109,
+    110, 111, 112, 113, 114, 115, 116, 117, 118, 119,
+    120, 121, 122, 123, 124, 126, 127, 128, 129, 130,
+    131, 132, 133, 134, 135, 136, 154, 155, 156, 157,
+    158, 159, 160, 161, 162, 163, 164, 165, 166, 167, 168,
 )
-ORACLE_TRUTH_RULE = (
-    "Generator truth may construct Clean Select, provide the truth-motion proposal, "
-    "and define same-object or null supervision; it never enters q, k, v, temporal "
-    "context, the anomaly classifier, a learned gate, or candidate-slot identity."
+NORMAL_CONTROL_SEMANTICS = (10, 11, 15, 18, 20, 30, 31, 32)
+MOVING_NORMAL_SEMANTICS = (252, 253, 254, 255, 256, 257, 258, 259)
+GATE1_EVIDENCE = (
+    "ray_slot_audit",
+    "range_image_round_trip",
+    "render_source_leakage",
+    "beam_range_intensity",
 )
-NULL_RULE = (
-    "Append one learned-score, zero-value null candidate independently at every "
-    "temporal scale and every available history age."
-)
-TEMPORAL_OUTPUT_RULE = (
-    "For current point i, use z_win_i=z_cur_i+delta_i with "
-    "delta_i=4*tanh(h_temporal(f_cur_i,h_hist_i)); zero real-history support gives "
-    "delta_i=0 by construction."
-)
-TEMPORAL_STATE_ISOLATION_RULE = (
-    "All three arms start from the same frozen stage-A current head and identical "
-    "temporal initialization, then use independent temporal parameters, optimizers, "
-    "and random states. Proposal arms receive no Clean Select gradient."
-)
+ROUND_TRIP_POINT_TOLERANCE_M = 1.0e-9
+ROUND_TRIP_DIRECTION_TOLERANCE_RAD = 1.0e-6
 
-NORMAL_TRAINING_ID = ("train", 206)
-NORMAL_VALIDATION_ID = ("train", 201)
-PUBLIC_VALIDATION_IDS = (
-    125,
-    137,
-    138,
-    139,
-    140,
-    141,
-    142,
-    143,
-    144,
-    145,
-    146,
-    147,
-    148,
-    149,
-    150,
-    151,
-    152,
-    153,
-    169,
-)
-HIDDEN_TEST_IDS = tuple(range(100, 125)) + tuple(range(126, 137)) + tuple(
-    range(154, 169)
-)
-NORMAL_TRAINING_CLASS_MAP = {
-    0: 255,
-    1: 255,
-    2: 255,
-    10: 0,
-    11: 1,
-    13: 4,
-    15: 2,
-    16: 4,
-    18: 3,
-    20: 4,
-    30: 5,
-    31: 6,
-    32: 7,
-    40: 8,
-    44: 9,
-    48: 10,
-    49: 11,
-    50: 12,
-    51: 13,
-    52: 255,
-    60: 8,
-    70: 14,
-    71: 15,
-    72: 16,
-    80: 17,
-    81: 18,
-    99: 255,
-    252: 0,
-    253: 6,
-    254: 5,
-    255: 7,
-    256: 4,
-    257: 4,
-    258: 3,
-    259: 4,
-}
 
-_TOP_LEVEL_KEYS = {
-    "schema_version",
-    "dataset",
-    "purpose",
-    "task",
-    "data",
-    "label_semantics",
-    "pretrained_model",
-    "counterfactual_anomalies",
-    "model",
-    "training",
-    "inference",
-    "evaluation",
-}
 class ProtocolError(ValueError):
-    """Report a malformed or scientifically inconsistent configuration."""
+    """Report a protocol or development-world semantic violation."""
+
+
+class ExperimentCondition(str, Enum):
+    """Pre-registered conditions in the minimum comparison matrix."""
+
+    B0 = "B0"
+    B1 = "B1"
+    B2 = "B2"
+    B3 = "B3"
+    B4 = "B4"
+    B5 = "B5"
+
+    @property
+    def trainable(self) -> bool:
+        return self in {self.B1, self.B2, self.B3, self.B5}
+
+    @property
+    def frame_offsets(self) -> tuple[int, ...]:
+        if self in {self.B0, self.B1}:
+            return (0,)
+        if self is self.B5:
+            return CAUSAL_OFFSETS
+        return RELATIVE_TIMES
+
+    @property
+    def output_local_indices(self) -> tuple[int, ...]:
+        if self in {self.B0, self.B1}:
+            return (0,)
+        if self is self.B4:
+            return tuple(range(WINDOW_FRAMES))
+        if self is self.B5:
+            return (WINDOW_FRAMES - 1,)
+        return (2,)
+
+    @property
+    def cross_frame_enabled(self) -> bool:
+        return self not in {self.B0, self.B1, self.B2}
+
+    @property
+    def trained_checkpoint_condition(self) -> ExperimentCondition:
+        return self.B3 if self is self.B4 else self
 
 
 def _mapping(value: object, name: str) -> Mapping[str, object]:
     if not isinstance(value, Mapping) or any(not isinstance(key, str) for key in value):
-        raise ProtocolError(f"{name} must be an object with string keys")
+        raise ProtocolError(f"{name} must be a JSON object with string keys")
     return value
 
 
-def _field(parent: Mapping[str, object], key: str, name: str) -> object:
-    if key not in parent:
-        raise ProtocolError(f"{name} is missing {key!r}")
-    return parent[key]
-
-
-def _object(parent: Mapping[str, object], key: str, name: str) -> Mapping[str, object]:
-    return _mapping(_field(parent, key, name), f"{name}.{key}")
-
-
-def _exact_keys(value: Mapping[str, object], expected: set[str], name: str) -> None:
-    actual = set(value)
-    if actual != expected:
-        raise ProtocolError(
-            f"{name} has missing keys {sorted(expected - actual)} and "
-            f"unexpected keys {sorted(actual - expected)}"
-        )
-
-
-def _string(value: object, name: str) -> str:
-    if not isinstance(value, str) or not value.strip():
-        raise ProtocolError(f"{name} must be a non-empty string")
+def _list(value: object, name: str) -> list[object]:
+    if not isinstance(value, list):
+        raise ProtocolError(f"{name} must be a JSON array")
     return value
 
 
@@ -177,46 +109,54 @@ def _integer(value: object, name: str, *, minimum: int = 0) -> int:
 
 def _number(value: object, name: str) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise ProtocolError(f"{name} must be a finite number")
+        raise ProtocolError(f"{name} must be numeric")
     result = float(value)
     if not math.isfinite(result):
-        raise ProtocolError(f"{name} must be a finite number")
+        raise ProtocolError(f"{name} must be finite")
     return result
 
 
-def _list(value: object, name: str) -> list[object]:
-    if not isinstance(value, list):
-        raise ProtocolError(f"{name} must be an array")
-    return value
+def _exact_keys(value: Mapping[str, object], expected: set[str], name: str) -> None:
+    missing = sorted(expected - set(value))
+    extra = sorted(set(value) - expected)
+    if missing or extra:
+        raise ProtocolError(f"{name} keys differ; missing={missing}, extra={extra}")
 
 
-def _string_tuple(value: object, name: str) -> tuple[str, ...]:
-    items = _list(value, name)
-    result = tuple(_string(item, f"{name}[{i}]") for i, item in enumerate(items))
-    if len(result) != len(set(result)):
-        raise ProtocolError(f"{name} contains duplicate values")
-    return result
+def _int_tuple(value: object, name: str) -> tuple[int, ...]:
+    return tuple(_integer(item, f"{name}[{index}]") for index, item in enumerate(_list(value, name)))
 
 
-def _integer_tuple(value: object, name: str) -> tuple[int, ...]:
-    items = _list(value, name)
-    result = tuple(_integer(item, f"{name}[{i}]") for i, item in enumerate(items))
-    if len(result) != len(set(result)):
-        raise ProtocolError(f"{name} contains duplicate values")
-    return result
+def _signed_int_tuple(value: object, name: str) -> tuple[int, ...]:
+    result: list[int] = []
+    for index, item in enumerate(_list(value, name)):
+        if type(item) is not int:
+            raise ProtocolError(f"{name}[{index}] must be an integer")
+        result.append(item)
+    return tuple(result)
 
 
-def _frame_span(value: object, name: str, frames: int) -> FrameSpan:
-    items = _list(value, name)
-    if len(items) != 2:
-        raise ProtocolError(f"{name} must contain inclusive start and end frames")
-    span = FrameSpan(
-        start=_integer(items[0], f"{name}[0]"),
-        stop=_integer(items[1], f"{name}[1]") + 1,
-    )
-    if len(span) != frames:
-        raise ProtocolError(f"{name} contains {len(span)} frames, expected {frames}")
-    return span
+def _float_matrix(value: object, name: str, rows: int, columns: int) -> tuple[tuple[float, ...], ...]:
+    outer = _list(value, name)
+    if len(outer) != rows:
+        raise ProtocolError(f"{name} must contain {rows} rows")
+    result: list[tuple[float, ...]] = []
+    for row_index, row in enumerate(outer):
+        values = tuple(
+            _number(item, f"{name}[{row_index}][{column}]")
+            for column, item in enumerate(_list(row, f"{name}[{row_index}]"))
+        )
+        if len(values) != columns:
+            raise ProtocolError(f"{name}[{row_index}] must contain {columns} values")
+        result.append(values)
+    return tuple(result)
+
+
+def _int_matrix(value: object, name: str, rows: int, columns: int) -> tuple[tuple[int, ...], ...]:
+    matrix = _float_matrix(value, name, rows, columns)
+    if any(number != int(number) or number < 1 for row in matrix for number in row):
+        raise ProtocolError(f"{name} must contain positive integers")
+    return tuple(tuple(int(number) for number in row) for row in matrix)
 
 
 def _freeze(value: object) -> object:
@@ -237,7 +177,7 @@ def _plain(value: object) -> object:
 
 @dataclass(frozen=True, slots=True)
 class FrameSpan:
-    """A half-open contiguous range of source frames."""
+    """Half-open source-frame span."""
 
     start: int
     stop: int
@@ -246,34 +186,38 @@ class FrameSpan:
         _integer(self.start, "FrameSpan.start")
         _integer(self.stop, "FrameSpan.stop", minimum=1)
         if self.stop <= self.start:
-            raise ProtocolError("FrameSpan must satisfy start < stop")
+            raise ProtocolError("FrameSpan.stop must exceed start")
 
     def __len__(self) -> int:
         return self.stop - self.start
 
-    def contains(self, frame: int) -> bool:
-        return self.start <= frame < self.stop
+    def contains(self, frame_id: int) -> bool:
+        return self.start <= frame_id < self.stop
 
 
 @dataclass(frozen=True, slots=True)
 class SequenceSpec:
-    """One complete STU sequence and its sole role in the study."""
+    """One immutable sequence role and its legal source span."""
 
     partition: str
     sequence_id: int
     role: str
     labels_available: bool
     span: FrameSpan | None
+    excluded_source_frames: tuple[int, ...] = ()
 
     def __post_init__(self) -> None:
         if self.partition not in {"train", "val", "test"}:
             raise ProtocolError("sequence partition must be train, val, or test")
-        _integer(self.sequence_id, "SequenceSpec.sequence_id")
-        _string(self.role, "SequenceSpec.role")
+        _integer(self.sequence_id, "sequence_id")
+        if not self.role:
+            raise ProtocolError("sequence role must be non-empty")
         if type(self.labels_available) is not bool:
-            raise ProtocolError("SequenceSpec.labels_available must be boolean")
-        if self.span is not None and not isinstance(self.span, FrameSpan):
-            raise ProtocolError("SequenceSpec.span must be FrameSpan or None")
+            raise ProtocolError("labels_available must be boolean")
+        if tuple(sorted(set(self.excluded_source_frames))) != self.excluded_source_frames:
+            raise ProtocolError("excluded source frames must be sorted and unique")
+        if self.span is not None and any(not self.span.contains(item) for item in self.excluded_source_frames):
+            raise ProtocolError("excluded frame lies outside its sequence span")
 
     @property
     def frames(self) -> int | None:
@@ -281,976 +225,1033 @@ class SequenceSpec:
 
     @property
     def uses_gradients(self) -> bool:
-        return self.role == "normal_training"
+        return self.partition == "train" and self.sequence_id == 206
 
     @property
     def supports_counterfactuals(self) -> bool:
-        return self.role in {"normal_training", "normal_validation"}
+        return self.partition == "train" and self.sequence_id in {201, 206}
 
+    def legal_anchors(self, offsets: Sequence[int]) -> tuple[int, ...]:
+        if self.span is None:
+            raise ProtocolError("hidden sequences need their observed frame count before windowing")
+        frozen_offsets = tuple(int(item) for item in offsets)
+        excluded = frozenset(self.excluded_source_frames)
+        return tuple(
+            anchor
+            for anchor in range(self.span.start, self.span.stop)
+            if all(self.span.contains(anchor + offset) and anchor + offset not in excluded for offset in frozen_offsets)
+        )
 
-@dataclass(frozen=True, slots=True)
-class PretrainedModelSpec:
-    """The official STU model state used to initialize AJAE."""
-
-    source: str
-    checkpoint: str
-    initialized_components: tuple[str, ...]
-    input_channels: tuple[str, ...]
-    voxel_size_m: float
-    query_count: int
+    def center_frames(self) -> tuple[int, ...]:
+        return self.legal_anchors(RELATIVE_TIMES)
 
 
 @dataclass(frozen=True, slots=True)
 class EvaluationSpec:
-    """The fixed STU point and anomaly-instance evaluation parameters."""
-
     minimum_range_m: float
     maximum_range_m: float
-    minimum_anomaly_points_per_frame: int
-    point_metrics: tuple[str, ...]
+    minimum_anomaly_points: int
     normal_point_alarm_rate: float
-    dbscan_epsilon_m: float
-    dbscan_minimum_samples: int
+    dbscan_eps_m: float
+    dbscan_min_samples: int
+
+    def range_mask(self, ranges: object) -> object:
+        import numpy as np
+
+        values = np.asarray(ranges, dtype=np.float32)
+        return (values >= np.float32(self.minimum_range_m)) & (
+            values <= np.float32(self.maximum_range_m)
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class DevelopmentWorld:
+    world_id: int
+    seed: int
+    center_frame: int
+    world: Mapping[str, object]
+    difficulty: tuple[Mapping[str, object], ...]
+    mechanism: str
+
+
+@dataclass(frozen=True, slots=True)
+class DevelopmentWorlds:
+    format: str
+    protocol_schema: int
+    sequence_id: int
+    status: str
+    validation: Mapping[str, bool]
+    gate1: Mapping[str, object]
+    gate1_evidence_valid: bool
+    difficulty_coverage_valid: bool
+    in_generator: tuple[DevelopmentWorld, ...]
+    generator_held_out: tuple[DevelopmentWorld, ...]
+
+    @property
+    def validated(self) -> bool:
+        return (
+            self.status == "validated_frozen"
+            and bool(self.validation)
+            and all(self.validation.values())
+            and self.gate1.get("status") == "passed_with_real_evidence"
+            and self.gate1_evidence_valid
+            and self.difficulty_coverage_valid
+        )
 
 
 class AJAEProtocol:
-    """Validated, immutable view of one schema-28 ``split.json`` document."""
+    """Validated immutable view of the schema-30 research route."""
 
     def __init__(self, document: Mapping[str, object], *, path: Path) -> None:
-        source = _mapping(document, "split.json")
+        self._validate(document)
         self.path = path.expanduser().resolve(strict=True)
-        self._validate(source)
-        self._document = _freeze(source)
-
-        data = _object(source, "data", "split.json")
-        normal_training = _object(data, "normal_training", "data")
-        normal_validation = _object(data, "normal_validation", "data")
-        public = _object(data, "public_anomaly_validation", "data")
-        training_frames = _integer(
-            _field(normal_training, "frames", "data.normal_training"),
-            "data.normal_training.frames",
-            minimum=1,
-        )
-        validation_frames = _integer(
-            _field(normal_validation, "frames", "data.normal_validation"),
-            "data.normal_validation.frames",
-            minimum=1,
-        )
-        self.normal_training = SequenceSpec(
-            partition="train",
-            sequence_id=206,
-            role="normal_training",
-            labels_available=True,
-            span=_frame_span(
-                _field(normal_training, "frame_range", "data.normal_training"),
-                "data.normal_training.frame_range",
-                training_frames,
-            ),
-        )
-        self.normal_validation = SequenceSpec(
-            partition="train",
-            sequence_id=201,
-            role="normal_validation",
-            labels_available=True,
-            span=_frame_span(
-                _field(normal_validation, "frame_range", "data.normal_validation"),
-                "data.normal_validation.frame_range",
-                validation_frames,
-            ),
-        )
-        counts = _mapping(
-            _field(public, "sequence_frame_counts", "data.public_anomaly_validation"),
-            "data.public_anomaly_validation.sequence_frame_counts",
-        )
-        self.public_validation = tuple(
-            SequenceSpec(
-                partition="val",
-                sequence_id=sequence_id,
-                role="public_anomaly_validation",
-                labels_available=True,
-                span=FrameSpan(
-                    0,
-                    _integer(
-                        _field(counts, str(sequence_id), "public.sequence_frame_counts"),
-                        f"public.sequence_frame_counts.{sequence_id}",
-                        minimum=1,
-                    ),
-                ),
-            )
-            for sequence_id in PUBLIC_VALIDATION_IDS
-        )
-        self.hidden_test = tuple(
-            SequenceSpec(
-                partition="test",
-                sequence_id=sequence_id,
-                role="hidden_test",
-                labels_available=False,
-                span=None,
-            )
-            for sequence_id in HIDDEN_TEST_IDS
-        )
-
-        pretrained = _object(source, "pretrained_model", "split.json")
-        official_input = _object(pretrained, "official_input", "pretrained_model")
-        self.pretrained_model = PretrainedModelSpec(
-            source=_string(_field(pretrained, "source", "pretrained_model"), "pretrained_model.source"),
-            checkpoint=_string(
-                _field(pretrained, "checkpoint", "pretrained_model"),
-                "pretrained_model.checkpoint",
-            ),
-            initialized_components=_string_tuple(
-                _field(pretrained, "initialized_components", "pretrained_model"),
-                "pretrained_model.initialized_components",
-            ),
-            input_channels=_string_tuple(
-                _field(official_input, "channels", "pretrained_model.official_input"),
-                "pretrained_model.official_input.channels",
-            ),
-            voxel_size_m=_number(
-                _field(official_input, "voxel_size_m", "pretrained_model.official_input"),
-                "pretrained_model.official_input.voxel_size_m",
-            ),
-            query_count=_integer(
-                _field(pretrained, "query_count", "pretrained_model"),
-                "pretrained_model.query_count",
-                minimum=1,
-            ),
-        )
-
-        evaluation = _object(source, "evaluation", "split.json")
-        point_filter = _object(evaluation, "point_filter", "evaluation")
-        point_range = _list(
-            _field(point_filter, "source_frame_range_m", "evaluation.point_filter"),
-            "evaluation.point_filter.source_frame_range_m",
-        )
-        threshold = _object(evaluation, "normal_alarm_threshold", "evaluation")
-        instances = _object(evaluation, "anomaly_instances", "evaluation")
-        spatial = _object(instances, "spatial_split", "evaluation.anomaly_instances")
-        self.evaluation = EvaluationSpec(
-            minimum_range_m=_number(point_range[0], "evaluation.point_filter.range[0]"),
-            maximum_range_m=_number(point_range[1], "evaluation.point_filter.range[1]"),
-            minimum_anomaly_points_per_frame=_integer(
-                _field(point_filter, "minimum_anomaly_points_per_frame", "evaluation.point_filter"),
-                "evaluation.point_filter.minimum_anomaly_points_per_frame",
-                minimum=1,
-            ),
-            point_metrics=_string_tuple(
-                _field(evaluation, "point_metrics", "evaluation"),
-                "evaluation.point_metrics",
-            ),
-            normal_point_alarm_rate=_number(
-                _field(threshold, "normal_point_alarm_rate", "evaluation.normal_alarm_threshold"),
-                "evaluation.normal_alarm_threshold.normal_point_alarm_rate",
-            ),
-            dbscan_epsilon_m=_number(
-                _field(spatial, "epsilon_m", "evaluation.anomaly_instances.spatial_split"),
-                "evaluation.anomaly_instances.spatial_split.epsilon_m",
-            ),
-            dbscan_minimum_samples=_integer(
-                _field(spatial, "minimum_samples", "evaluation.anomaly_instances.spatial_split"),
-                "evaluation.anomaly_instances.spatial_split.minimum_samples",
-                minimum=1,
-            ),
-        )
-
-        # These immutable mappings preserve the existing scene/model/train API.
-        self.counterfactual_anomalies = self._document["counterfactual_anomalies"]
+        self.schema_version = SCHEMA_VERSION
+        self._document = _freeze(document)
+        self.authority = self._document["authority"]
+        self.task = self._document["task"]
+        self.data = self._document["data"]
+        self.labels = self._document["labels"]
+        self.stu = self._document["stu"]
+        self.render = self._document["render"]
+        self.window = self._document["window"]
         self.model = self._document["model"]
         self.training = self._document["training"]
-        self.inference = self._document["inference"]
-        self.normal_training_class_map = MappingProxyType(dict(NORMAL_TRAINING_CLASS_MAP))
-        all_specs = (
+        self.development = self._document["development"]
+        self.experiments = self._document["experiments"]
+        self.evaluation_document = self._document["evaluation"]
+        self.decision_gates = self._document["decision_gates"]
+        self.status = self._document["status"]
+
+        source_data = _mapping(document["data"], "data")
+        self.normal_training = self._sequence_from_record(
+            _mapping(source_data["normal_training"], "data.normal_training")
+        )
+        self.development_sequence = self._sequence_from_record(
+            _mapping(source_data["development"], "data.development")
+        )
+        public = _mapping(source_data["public_anomaly_validation"], "public validation")
+        public_counts = _mapping(public["sequence_frame_counts"], "public frame counts")
+        self.public_validation = tuple(
+            SequenceSpec(
+                "val", identifier, str(public["role"]), True,
+                FrameSpan(0, _integer(public_counts[str(identifier)], f"public frame count {identifier}")),
+            )
+            for identifier in PUBLIC_ANOMALY_IDS
+        )
+        hidden = _mapping(source_data["hidden_test"], "hidden test")
+        self.hidden_test = tuple(
+            SequenceSpec("test", identifier, str(hidden["role"]), False, None)
+            for identifier in HIDDEN_TEST_IDS
+        )
+        all_sequences = (
             self.normal_training,
-            self.normal_validation,
+            self.development_sequence,
             *self.public_validation,
             *self.hidden_test,
         )
-        self._sequences = {(spec.partition, spec.sequence_id): spec for spec in all_specs}
+        self._sequences = {(item.partition, item.sequence_id): item for item in all_sequences}
+        class_map = _mapping(_mapping(document["labels"], "labels")["normal_semantic_class_map"], "normal class map")
+        self.normal_training_class_map = MappingProxyType(
+            {int(raw): _integer(target, f"normal class {raw}") for raw, target in class_map.items()}
+        )
+        evaluation = _mapping(document["evaluation"], "evaluation")
+        self.evaluation_spec = EvaluationSpec(
+            _number(evaluation["minimum_range_m"], "evaluation.minimum_range_m"),
+            _number(evaluation["maximum_range_m"], "evaluation.maximum_range_m"),
+            _integer(evaluation["minimum_anomaly_points"], "evaluation.minimum_anomaly_points", minimum=1),
+            _number(evaluation["normal_point_alarm_rate"], "evaluation.normal_point_alarm_rate"),
+            _number(evaluation["dbscan_eps_m"], "evaluation.dbscan_eps_m"),
+            _integer(evaluation["dbscan_min_samples"], "evaluation.dbscan_min_samples", minimum=1),
+        )
+        self.evaluation = self.evaluation_spec
+
+    @staticmethod
+    def _sequence_from_record(record: Mapping[str, object]) -> SequenceSpec:
+        inclusive = _int_tuple(record["frame_range"], "frame_range")
+        if len(inclusive) != 2 or inclusive[1] < inclusive[0]:
+            raise ProtocolError("frame_range must be [first,last] inclusive")
+        return SequenceSpec(
+            str(record["partition"]),
+            _integer(record["sequence_id"], "sequence_id"),
+            str(record["role"]),
+            bool(record["labels_available"]),
+            FrameSpan(inclusive[0], inclusive[1] + 1),
+            _int_tuple(record["excluded_source_frames"], "excluded_source_frames"),
+        )
 
     @property
     def document(self) -> Mapping[str, object]:
-        return self._document
+        return self._document  # type: ignore[return-value]
 
     def plain_document(self) -> dict[str, object]:
-        """Return the complete validated configuration using plain JSON values."""
-
-        value = _plain(self._document)
-        if not isinstance(value, dict):
-            raise AssertionError("validated split document is not an object")
-        return value
+        plain = _plain(self._document)
+        if not isinstance(plain, dict):
+            raise AssertionError("protocol root is not a dictionary")
+        return plain
 
     @property
     def window_frames(self) -> int:
         return WINDOW_FRAMES
 
     @property
+    def relative_times(self) -> tuple[int, ...]:
+        return RELATIVE_TIMES
+
+    @property
     def public_sequence_ids(self) -> tuple[int, ...]:
-        return tuple(spec.sequence_id for spec in self.public_validation)
+        return PUBLIC_ANOMALY_IDS
 
     @property
     def hidden_sequence_ids(self) -> tuple[int, ...]:
-        return tuple(spec.sequence_id for spec in self.hidden_test)
+        return HIDDEN_TEST_IDS
 
     def sequence(self, partition: str, sequence_id: int) -> SequenceSpec:
-        key = (_string(partition, "partition"), _integer(sequence_id, "sequence_id"))
         try:
-            return self._sequences[key]
+            return self._sequences[(partition, sequence_id)]
         except KeyError as error:
-            raise ProtocolError(f"sequence {partition}/{sequence_id} has no AJAE role") from error
+            raise ProtocolError(f"sequence {partition}/{sequence_id} is outside this protocol") from error
+
+    def anchors(
+        self,
+        partition: str,
+        sequence_id: int,
+        condition: ExperimentCondition | str = ExperimentCondition.B3,
+    ) -> tuple[int, ...]:
+        selected = ExperimentCondition(condition)
+        return self.sequence(partition, sequence_id).legal_anchors(selected.frame_offsets)
+
+    def center_frames(self, partition: str, sequence_id: int) -> tuple[int, ...]:
+        return self.anchors(partition, sequence_id, ExperimentCondition.B3)
 
     def window_frame_ids(
-        self, partition: str, sequence_id: int, current_frame: int
+        self,
+        partition: str,
+        sequence_id: int,
+        anchor: int,
+        condition: ExperimentCondition | str = ExperimentCondition.B3,
     ) -> tuple[int, ...]:
-        """Return available causal scans without padding or frame repetition."""
-
-        spec = self.sequence(partition, sequence_id)
-        frame = _integer(current_frame, "current_frame")
-        start = 0
-        if spec.span is not None:
-            if not spec.span.contains(frame):
-                raise ProtocolError(f"frame {frame} lies outside {partition}/{sequence_id}")
-            start = spec.span.start
-        return tuple(range(max(start, frame - WINDOW_FRAMES + 1), frame + 1))
-
-    def complete_window_frame_ids(
-        self, partition: str, sequence_id: int, current_frame: int
-    ) -> tuple[int, ...]:
-        """Return one schema-28 five-scan window from an audited eligible anchor."""
-
-        identity = (_string(partition, "partition"), _integer(sequence_id, "sequence_id"))
-        frame = _integer(current_frame, "current_frame")
-        minimum = (
-            NORMAL_201_COMPLETE_WINDOW_MINIMUM_CURRENT_FRAME
-            if identity == NORMAL_VALIDATION_ID
-            else GENERAL_COMPLETE_WINDOW_MINIMUM_CURRENT_FRAME
-        )
-        if frame < minimum:
-            raise ProtocolError(
-                f"a complete schema-28 window for {identity[0]}/{identity[1]} "
-                f"requires current_frame >= {minimum}"
-            )
-        result = self.window_frame_ids(identity[0], identity[1], frame)
-        if len(result) != WINDOW_FRAMES:
-            raise ProtocolError("a complete schema-28 window must contain five scans")
-        return result
+        selected = ExperimentCondition(condition)
+        legal = self.anchors(partition, sequence_id, selected)
+        if anchor not in frozenset(legal):
+            raise ProtocolError(f"frame {anchor} is not a legal {selected.value} anchor")
+        return tuple(anchor + offset for offset in selected.frame_offsets)
 
     def checkpoint_path(self, project_root: Path | str | None = None) -> Path:
-        """Resolve the configured STU checkpoint without opening it."""
-
         root = self.path.parent if project_root is None else Path(project_root).expanduser().resolve()
-        return (root / self.pretrained_model.checkpoint).resolve()
+        return (root / str(self.stu["checkpoint"])).resolve()
+
+    def stu_repository_path(self, project_root: Path | str | None = None) -> Path:
+        root = self.path.parent if project_root is None else Path(project_root).expanduser().resolve()
+        return (root / str(self.stu["repository"])).resolve()
+
+    def development_worlds_path(self, project_root: Path | str | None = None) -> Path:
+        root = self.path.parent if project_root is None else Path(project_root).expanduser().resolve()
+        return (root / str(self.development["worlds_file"])).resolve()
+
+    def sensor_calibration_path(self, project_root: Path | str | None = None) -> Path:
+        root = self.path.parent if project_root is None else Path(project_root).expanduser().resolve()
+        return (root / str(self.render["calibration_file"])).resolve()
 
     def summary(self) -> dict[str, object]:
         return {
             "schema_version": SCHEMA_VERSION,
-            "dataset": "STU",
-            "model": MODEL_NAME,
-            "window_frames": WINDOW_FRAMES,
-            "general_complete_window_minimum_current_frame": (
-                GENERAL_COMPLETE_WINDOW_MINIMUM_CURRENT_FRAME
-            ),
-            "normal_201_complete_window_minimum_current_frame": (
-                NORMAL_201_COMPLETE_WINDOW_MINIMUM_CURRENT_FRAME
-            ),
-            "history_lengths": list(HISTORY_LENGTHS),
-            "normal_training": {
-                "partition": self.normal_training.partition,
-                "sequence": self.normal_training.sequence_id,
-                "frames": self.normal_training.frames,
-            },
-            "normal_validation": {
-                "partition": self.normal_validation.partition,
-                "sequence": self.normal_validation.sequence_id,
-                "frames": self.normal_validation.frames,
-            },
-            "public_validation_sequences": list(self.public_sequence_ids),
-            "public_evaluation_after_method_freeze": True,
-            "hidden_test_sequences": list(self.hidden_sequence_ids),
-            "checkpoint": self.pretrained_model.checkpoint,
-            "frozen_spatial_representation": True,
-            "point_metrics": list(self.evaluation.point_metrics),
+            "authority": self.authority["document"],
+            "train_windows": len(self.normal_training.center_frames()),
+            "development_windows": len(self.development_sequence.center_frames()),
+            "public_sequences": len(self.public_validation),
+            "hidden_sequences": len(self.hidden_test),
+            "training_seeds": list(self.training["seeds"]),
+            "model_levels": self.model["levels"],
         }
 
-    @staticmethod
-    def _validate(source: Mapping[str, object]) -> None:
-        _exact_keys(source, _TOP_LEVEL_KEYS, "split.json")
-        if _integer(_field(source, "schema_version", "split.json"), "schema_version") != SCHEMA_VERSION:
+    @classmethod
+    def _validate(cls, source: Mapping[str, object]) -> None:
+        expected = {
+            "schema_version", "authority", "task", "data", "labels", "stu",
+            "render", "window", "model", "training", "development",
+            "experiments", "evaluation", "decision_gates", "status",
+        }
+        _exact_keys(source, expected, "protocol")
+        if _integer(source["schema_version"], "schema_version") != SCHEMA_VERSION:
             raise ProtocolError(f"schema_version must be {SCHEMA_VERSION}")
-        if _string(_field(source, "dataset", "split.json"), "dataset") != "STU":
-            raise ProtocolError("dataset must be STU")
-        _string(_field(source, "purpose", "split.json"), "purpose")
-        AJAEProtocol._validate_task(source)
-        AJAEProtocol._validate_data(source)
-        AJAEProtocol._validate_labels_and_weights(source)
-        AJAEProtocol._validate_counterfactuals(source)
-        AJAEProtocol._validate_model_and_training(source)
-        AJAEProtocol._validate_inference_and_evaluation(source)
-
-    @staticmethod
-    def _validate_task(source: Mapping[str, object]) -> None:
-        task = _object(source, "task", "split.json")
+        cls._validate_data(_mapping(source["data"], "data"))
+        cls._validate_labels(_mapping(source["labels"], "labels"))
+        cls._validate_stu(_mapping(source["stu"], "stu"))
+        cls._validate_render(_mapping(source["render"], "render"))
+        cls._validate_window(_mapping(source["window"], "window"))
+        cls._validate_model(_mapping(source["model"], "model"))
+        cls._validate_training(_mapping(source["training"], "training"))
+        cls._validate_development(_mapping(source["development"], "development"))
+        cls._validate_evaluation(_mapping(source["evaluation"], "evaluation"))
+        experiments = _mapping(source["experiments"], "experiments")
+        if set(experiments) != {item.value for item in ExperimentCondition}:
+            raise ProtocolError("experiments must define exactly B0 through B5")
+        gates = _mapping(source["decision_gates"], "decision_gates")
         _exact_keys(
-            task,
+            gates,
+            {"gate1", "gate2", "gate3", "gate4", "criteria", "verdict_rule"},
+            "decision_gates",
+        )
+        if tuple(_list(gates["gate1"], "decision_gates.gate1")) != GATE1_EVIDENCE:
+            raise ProtocolError("gate1 evidence identities changed")
+        criteria = _mapping(gates["criteria"], "decision_gates.criteria")
+        _exact_keys(
+            criteria,
             {
-                "name",
-                "input",
-                "output",
-                "causal_window_frames",
-                "history_lengths",
-                "current_frame_only_output",
-                "window_startup_rule",
+                "status",
+                "gate1",
+                "gate2",
+                "gate3",
+                "gate4",
+                "development_difficulty_coverage",
             },
-            "task",
+            "decision_gates.criteria",
         )
-        if _string(task["name"], "task.name") != "AJAE":
-            raise ProtocolError("task.name must be AJAE")
-        if _integer(task["causal_window_frames"], "task.causal_window_frames") != WINDOW_FRAMES:
-            raise ProtocolError("AJAE requires one current and four causal history scans")
-        if _integer_tuple(task["history_lengths"], "task.history_lengths") != HISTORY_LENGTHS:
-            raise ProtocolError("history ablations must be K=0,1,2,4")
-        if task["current_frame_only_output"] is not True:
-            raise ProtocolError("AJAE must output only the current frame")
-        for key in ("input", "output"):
-            _string(task[key], f"task.{key}")
-        startup = _object(task, "window_startup_rule", "task")
-        _exact_keys(
-            startup,
-            {
-                "available_history_only",
-                "history_padding_forbidden",
-                "frame_repetition_forbidden",
-                "general_complete_window_minimum_current_frame",
-                "normal_201_complete_window_minimum_current_frame",
-                "complete_window_reason",
-            },
-            "task.window_startup_rule",
-        )
-        _string(startup["available_history_only"], "task.window_startup_rule.available_history_only")
-        _string(startup["complete_window_reason"], "task.window_startup_rule.complete_window_reason")
-        if (
-            startup["history_padding_forbidden"] is not True
-            or startup["frame_repetition_forbidden"] is not True
-            or _integer(
-                startup["general_complete_window_minimum_current_frame"],
-                "task.window_startup_rule.general_complete_window_minimum_current_frame",
-            )
-            != GENERAL_COMPLETE_WINDOW_MINIMUM_CURRENT_FRAME
-            or _integer(
-                startup["normal_201_complete_window_minimum_current_frame"],
-                "task.window_startup_rule.normal_201_complete_window_minimum_current_frame",
-            )
-            != NORMAL_201_COMPLETE_WINDOW_MINIMUM_CURRENT_FRAME
-        ):
-            raise ProtocolError(
-                "schema-28 complete windows start at frame 4 except normal 201, "
-                "which starts at frame 8 after duplicate-source exclusion"
-            )
-
-    @staticmethod
-    def _validate_data(source: Mapping[str, object]) -> None:
-        data = _object(source, "data", "split.json")
-        _exact_keys(
-            data,
-            {"normal_training", "normal_validation", "public_anomaly_validation", "hidden_test"},
-            "data",
-        )
-        for key, identity, expected_frames in (
-            ("normal_training", NORMAL_TRAINING_ID, 449),
-            ("normal_validation", NORMAL_VALIDATION_ID, 682),
-        ):
-            value = _object(data, key, "data")
-            found = (
-                _string(_field(value, "partition", f"data.{key}"), f"data.{key}.partition"),
-                _integer(_field(value, "sequence_id", f"data.{key}"), f"data.{key}.sequence_id"),
-            )
-            if found != identity:
-                raise ProtocolError(f"data.{key} must identify {identity[0]}/{identity[1]}")
-            frames = _integer(_field(value, "frames", f"data.{key}"), f"data.{key}.frames", minimum=1)
-            if frames != expected_frames:
-                raise ProtocolError(f"data.{key} must contain {expected_frames} frames")
-            _frame_span(_field(value, "frame_range", f"data.{key}"), f"data.{key}.frame_range", frames)
-
-        normal_training = _object(data, "normal_training", "data")
-        if (
-            _integer_tuple(
-                _field(
-                    normal_training,
-                    "complete_causal_window_current_range",
-                    "data.normal_training",
-                ),
-                "data.normal_training.complete_causal_window_current_range",
-            )
-            != (4, 448)
-            or _integer(
-                _field(
-                    normal_training,
-                    "complete_causal_windows",
-                    "data.normal_training",
-                ),
-                "data.normal_training.complete_causal_windows",
-            )
-            != 445
-        ):
-            raise ProtocolError("normal 206 must use complete-window anchors 4 through 448")
-
-        normal_validation = _object(data, "normal_validation", "data")
-        if (
-            _integer_tuple(
-                _field(
-                    normal_validation,
-                    "complete_causal_window_current_range",
-                    "data.normal_validation",
-                ),
-                "data.normal_validation.complete_causal_window_current_range",
-            )
-            != (8, 681)
-            or _integer(
-                _field(
-                    normal_validation,
-                    "complete_causal_windows",
-                    "data.normal_validation",
-                ),
-                "data.normal_validation.complete_causal_windows",
-            )
-            != 674
-            or _integer_tuple(
-                _field(
-                    normal_validation,
-                    "future_window_threshold_excluded_current_frames",
-                    "data.normal_validation",
-                ),
-                "data.normal_validation.future_window_threshold_excluded_current_frames",
-            )
-            != tuple(range(8))
-        ):
-            raise ProtocolError("normal 201 must use complete-window anchors 8 through 681")
-        duplicate = _object(
-            normal_validation, "source_duplicate_audit", "data.normal_validation"
-        )
-        if (
-            duplicate.get("status")
-            != "verified_exact_internal_scan_and_label_duplication"
-            or _integer_tuple(
-                _field(duplicate, "affected_source_frames", "source_duplicate_audit"),
-                "source_duplicate_audit.affected_source_frames",
-            )
-            != (0, 1, 2, 3)
-            or _integer(
-                _field(duplicate, "extra_duplicate_slots", "source_duplicate_audit"),
-                "source_duplicate_audit.extra_duplicate_slots",
-            )
-            != 786432
-            or _integer(
-                _field(
-                    duplicate,
-                    "extra_duplicate_real_returns",
-                    "source_duplicate_audit",
-                ),
-                "source_duplicate_audit.extra_duplicate_real_returns",
-            )
-            != 627219
-            or _integer(
-                _field(
-                    duplicate,
-                    "extra_duplicate_valid_normal_points_under_binary_rule",
-                    "source_duplicate_audit",
-                ),
-                "source_duplicate_audit.extra_duplicate_valid_normal_points_under_binary_rule",
-            )
-            != 572792
-        ):
-            raise ProtocolError("normal 201 duplicate-source audit changed")
-        for key in ("frame_0", "frame_1", "frame_2", "frame_3", "scope"):
-            _string(_field(duplicate, key, "source_duplicate_audit"), f"source_duplicate_audit.{key}")
-
-        public = _object(data, "public_anomaly_validation", "data")
-        if _string(_field(public, "partition", "public"), "public.partition") != "val":
-            raise ProtocolError("public anomaly validation must use val")
-        public_ids = _integer_tuple(_field(public, "sequence_ids", "public"), "public.sequence_ids")
-        if public_ids != PUBLIC_VALIDATION_IDS:
-            raise ProtocolError("public validation must use all 19 official sequences")
-        if _integer(_field(public, "sequences", "public"), "public.sequences") != 19:
-            raise ProtocolError("public validation sequence count must be 19")
-        counts = _mapping(_field(public, "sequence_frame_counts", "public"), "public.sequence_frame_counts")
-        if set(counts) != {str(item) for item in PUBLIC_VALIDATION_IDS}:
-            raise ProtocolError("public frame counts do not match sequence ids")
-        total = sum(
-            _integer(counts[str(item)], f"public.sequence_frame_counts.{item}", minimum=1)
-            for item in PUBLIC_VALIDATION_IDS
-        )
-        if total != _integer(_field(public, "frames", "public"), "public.frames", minimum=1):
-            raise ProtocolError("public validation frame total is inconsistent")
-        if public.get("use") != "official_public_evaluation_after_method_freeze" or public.get("method_freeze_required") is not True:
-            raise ProtocolError("public anomaly labels may be accessed only after method freeze")
-
-        hidden = _object(data, "hidden_test", "data")
-        if _string(_field(hidden, "partition", "hidden"), "hidden.partition") != "test":
-            raise ProtocolError("hidden sequences must use test")
-        hidden_ids = _integer_tuple(_field(hidden, "sequence_ids", "hidden"), "hidden.sequence_ids")
-        if hidden_ids != HIDDEN_TEST_IDS:
-            raise ProtocolError("hidden test must use the 51 official identities")
-        if _integer(_field(hidden, "sequences", "hidden"), "hidden.sequences") != 51:
-            raise ProtocolError("hidden test sequence count must be 51")
-        if hidden.get("labels_available") is not False:
-            raise ProtocolError("hidden test labels must be unavailable")
-        if hidden.get("use") != "official_hidden_test_submission_after_method_freeze":
-            raise ProtocolError("hidden-test submission is allowed only after method freeze")
-
-    @staticmethod
-    def _validate_labels_and_weights(source: Mapping[str, object]) -> None:
-        labels = _object(source, "label_semantics", "split.json")
-        class_map = _mapping(_field(labels, "normal_training_class_map", "labels"), "labels.normal_training_class_map")
-        expected = {str(raw): target for raw, target in NORMAL_TRAINING_CLASS_MAP.items()}
-        if dict(class_map) != expected or any(type(value) is not int for value in class_map.values()):
-            raise ProtocolError("normal training targets must match the official STU class map")
-        binary = _object(labels, "binary_anomaly_training", "label_semantics")
-        _exact_keys(
-            binary,
-            {
-                "raw_semantic_0",
-                "raw_semantic_2",
-                "other_nonzero_semantics",
-                "synthetic_members",
-                "strict_zero_coordinate_slots",
-                "normal_206_native_raw_2_points",
-                "normal_201_native_raw_2_points",
-                "audited_nonzero_semantic_target_255_normal_negatives",
-                "basis",
-            },
-            "label_semantics.binary_anomaly_training",
-        )
-        if (
-            binary["raw_semantic_0"] != "ignore"
-            or binary["raw_semantic_2"] != "anomaly"
-            or binary["other_nonzero_semantics"] != "normal"
-            or _integer(
-                binary["normal_206_native_raw_2_points"],
-                "binary_anomaly_training.normal_206_native_raw_2_points",
-            )
-            != 0
-            or _integer(
-                binary["normal_201_native_raw_2_points"],
-                "binary_anomaly_training.normal_201_native_raw_2_points",
-            )
-            != 0
-        ):
-            raise ProtocolError("binary anomaly labels must be raw 0 ignore and raw 2 positive")
-        audited = _mapping(
-            _field(
-                binary,
-                "audited_nonzero_semantic_target_255_normal_negatives",
-                "binary_anomaly_training",
-            ),
-            "binary_anomaly_training.audited_nonzero_semantic_target_255_normal_negatives",
-        )
-        if dict(audited) != {
-            "normal_206_raw_1_52_99": 1589676,
-            "normal_201_raw_1_52_99": 76735,
+        if criteria["status"] not in {
+            "unresolved_requires_owner_decision",
+            "frozen_before_training",
         }:
-            raise ProtocolError("audited binary normal-negative counts changed")
-        for key in ("synthetic_members", "strict_zero_coordinate_slots", "basis"):
-            _string(binary[key], f"binary_anomaly_training.{key}")
-        public_labels = _object(labels, "public_anomaly_evaluation", "label_semantics")
-        if dict(public_labels) != {
-            "raw_semantic_0": "ignore",
-            "raw_semantic_2": "anomaly",
-            "other_nonzero_semantics": "normal",
-        }:
-            raise ProtocolError("public anomaly label meanings differ from STU")
+            raise ProtocolError("decision-gate criteria status is invalid")
+        if criteria["status"] == "frozen_before_training" and any(
+            not isinstance(criteria[name], Mapping)
+            for name in (
+                "gate1",
+                "gate2",
+                "gate3",
+                "gate4",
+                "development_difficulty_coverage",
+            )
+        ):
+            raise ProtocolError("all scientific gate criteria must be frozen mappings")
 
-        pretrained = _object(source, "pretrained_model", "split.json")
-        if _string(_field(pretrained, "checkpoint", "pretrained"), "pretrained.checkpoint") != "weights/59p6pq_ens1.ckpt":
-            raise ProtocolError("AJAE must use the STU 59p6 ensemble member")
-        official_input = _object(pretrained, "official_input", "pretrained_model")
-        if _string_tuple(_field(official_input, "channels", "official_input"), "official_input.channels") != ("intensity", "official_STU_distance"):
-            raise ProtocolError("STU input must be intensity and official distance")
-        if not math.isclose(_number(_field(official_input, "voxel_size_m", "official_input"), "official_input.voxel_size_m"), 0.05):
+    @staticmethod
+    def _validate_data(data: Mapping[str, object]) -> None:
+        _exact_keys(data, {"normal_training", "development", "public_anomaly_validation", "hidden_test"}, "data")
+        train = _mapping(data["normal_training"], "data.normal_training")
+        development = _mapping(data["development"], "data.development")
+        if (train["partition"], train["sequence_id"], train["role"]) != (
+            "train", 206, "AJAE_parameter_updates_and_renderer_calibration"
+        ):
+            raise ProtocolError("train/206 must be the only AJAE update and renderer-calibration source")
+        if (development["partition"], development["sequence_id"], development["role"]) != (
+            "train", 201, "development_only_no_gradients"
+        ):
+            raise ProtocolError("train/201 must remain development-only")
+        public = _mapping(data["public_anomaly_validation"], "public validation")
+        hidden = _mapping(data["hidden_test"], "hidden test")
+        if _int_tuple(public["sequence_ids"], "public ids") != PUBLIC_ANOMALY_IDS:
+            raise ProtocolError("public validation must contain the fixed 19 sequences")
+        if _int_tuple(hidden["sequence_ids"], "hidden ids") != HIDDEN_TEST_IDS:
+            raise ProtocolError("hidden test must contain the fixed 51 sequences")
+        if public.get("method_freeze_required") is not True or hidden.get("method_freeze_required") is not True:
+            raise ProtocolError("public and hidden roles require method freeze")
+
+    @staticmethod
+    def _validate_labels(labels: Mapping[str, object]) -> None:
+        binary = _mapping(labels["binary_anomaly"], "labels.binary_anomaly")
+        if set(binary) != {"raw_semantic_0", "raw_semantic_2", "other_nonzero_semantics", "normal_control_return", "anomaly_proxy_return"}:
+            raise ProtocolError("binary label sources are incomplete")
+        if binary["normal_control_return"] != "normal" or binary["anomaly_proxy_return"] != "anomaly":
+            raise ProtocolError("normal controls and anomaly proxies have wrong targets")
+        controls = _mapping(labels["normal_control_classes"], "normal control classes")
+        if tuple(sorted(map(int, controls))) != NORMAL_CONTROL_SEMANTICS:
+            raise ProtocolError("normal-control semantic classes changed")
+        if _int_tuple(labels["moving_normal_semantic_ids"], "moving semantics") != MOVING_NORMAL_SEMANTICS:
+            raise ProtocolError("moving-normal diagnostic classes changed")
+
+    @staticmethod
+    def _validate_stu(stu: Mapping[str, object]) -> None:
+        required = {
+            "source", "checkpoint", "repository", "voxel_size_m", "input_channels",
+            "point_feature_dim", "normal_evidence_dim", "assignment_reliability_dim",
+            "no_object_reliability_dim", "query_count", "point_feature_source",
+            "normal_evidence_rule", "assignment_reliability_rule",
+            "no_object_reliability_rule", "b0_score", "frozen", "full_forward_is_eval",
+        }
+        _exact_keys(stu, required, "stu")
+        dimensions = (
+            stu["point_feature_dim"], stu["normal_evidence_dim"],
+            stu["assignment_reliability_dim"], stu["no_object_reliability_dim"],
+            stu["query_count"], stu["frozen"], stu["full_forward_is_eval"],
+        )
+        if dimensions != (128, 19, 1, 1, 100, True, True):
+            raise ProtocolError("frozen STU interface dimensions changed")
+        if not math.isclose(_number(stu["voxel_size_m"], "stu.voxel_size_m"), 0.05):
             raise ProtocolError("STU voxel size must be 0.05 m")
-        if _integer(_field(pretrained, "query_count", "pretrained"), "pretrained.query_count") != 100:
-            raise ProtocolError("STU Mask4Former-3D must use 100 queries")
-        _string_tuple(_field(pretrained, "initialized_components", "pretrained"), "pretrained.initialized_components")
-        _string(_field(pretrained, "initialization_role", "pretrained"), "pretrained.initialization_role")
+        if "argmax_q" not in str(stu["normal_evidence_rule"]) or stu["b0_score"] != "official_STU_MaxLogit":
+            raise ProtocolError("STU must use unique-query evidence and official MaxLogit B0")
 
     @staticmethod
-    def _validate_counterfactuals(source: Mapping[str, object]) -> None:
-        synthetic = _object(source, "counterfactual_anomalies", "split.json")
-        _exact_keys(
-            synthetic,
-            {
-                "source_data",
-                "views",
-                "object_construction",
-                "one_physical_trajectory_per_window",
-                "history_lengths",
-                "history_ablation",
-                "ray_rendering",
-                "intensity_sampling",
-                "current_visibility_rule",
-                "ineligible_ground_rule",
-                "oracle_truth_restriction",
-                "validation_generation",
-            },
-            "counterfactual_anomalies",
-        )
-        if synthetic["source_data"] != "normal_training":
-            raise ProtocolError("counterfactuals must come from normal 206")
-        if _string_tuple(synthetic["views"], "counterfactual_anomalies.views") != (
-            "original_normal_window",
-            "counterfactual_window_with_anomaly",
+    def _validate_render(render: Mapping[str, object]) -> None:
+        if render.get("source_sequence_id") != 206:
+            raise ProtocolError("renderer calibration and templates must come from 206")
+        calibration_file = render.get("calibration_file")
+        if calibration_file != "runs/ajae/calibration.pt":
+            raise ProtocolError("schema 30 has one authoritative sensor calibration path")
+        ray = _mapping(render["ray_grid"], "render.ray_grid")
+        if (ray.get("beam_count"), ray.get("column_count"), tuple(ray.get("canonical_identity", ()))) != (
+            128, 1024, ("beam_id", "azimuth_column")
         ):
-            raise ProtocolError("counterfactual training requires original and inserted-object views")
-        if synthetic["one_physical_trajectory_per_window"] is not True:
-            raise ProtocolError("each counterfactual window must contain one physical trajectory")
-        if _integer_tuple(synthetic["history_lengths"], "counterfactual_anomalies.history_lengths") != HISTORY_LENGTHS:
-            raise ProtocolError("counterfactual history ablations must be K=0,1,2,4")
-        for key in (
-            "object_construction",
-            "history_ablation",
-            "current_visibility_rule",
-            "ineligible_ground_rule",
-            "oracle_truth_restriction",
-            "validation_generation",
-        ):
-            _string(synthetic[key], f"counterfactual_anomalies.{key}")
-        ray = _object(synthetic, "ray_rendering", "counterfactual_anomalies")
-        for key in ("unit", "nearest_return_rule", "synthetic_front", "original_front", "no_intersection"):
-            _string(_field(ray, key, "ray_rendering"), f"ray_rendering.{key}")
-        if ray["synthetic_front"] != (
-            "Emit one anomaly return and occlude the original return only when the "
-            "synthetic surface is strictly more than 0.05 m nearer, i.e. "
-            "d_synthetic+0.05<d_original."
-        ):
-            raise ProtocolError("synthetic occlusion must use the strict 0.05 m rule")
-        _string_tuple(_field(ray, "preserved_properties", "ray_rendering"), "ray_rendering.preserved_properties")
-        intensity = _object(
-            synthetic, "intensity_sampling", "counterfactual_anomalies"
-        )
-        _exact_keys(
-            intensity,
-            {
-                "reference",
-                "strata",
-                "rule",
-                "verified_global_evidence",
-                "provenance_limit",
-            },
-            "intensity_sampling",
-        )
-        _string(intensity["reference"], "intensity_sampling.reference")
-        if _string_tuple(intensity["strata"], "intensity_sampling.strata") != (
-            "range",
-            "laser_beam",
-            "surface_incidence_angle",
-        ):
-            raise ProtocolError("synthetic intensity strata changed")
-        _string(intensity["rule"], "intensity_sampling.rule")
-        _string(
-            intensity["verified_global_evidence"],
-            "intensity_sampling.verified_global_evidence",
-        )
-        _string(intensity["provenance_limit"], "intensity_sampling.provenance_limit")
+            raise ProtocolError("canonical OS1-128 ray identity changed")
+        controls = _mapping(render["normal_controls"], "render.normal_controls")
+        if _int_tuple(controls["semantic_ids"], "normal control semantics") != NORMAL_CONTROL_SEMANTICS:
+            raise ProtocolError("normal-control source classes changed")
+        sensor = _mapping(render["sensor_model"], "render.sensor_model")
+        if tuple(sensor.get("conditioning", ())) != ("beam", "range", "incidence", "material"):
+            raise ProtocolError("return and intensity models must share beam/range/incidence/material conditioning")
+        probabilities = _mapping(render["world_types"], "render.world_types")
+        values = tuple(_number(value, f"render.world_types.{key}") for key, value in probabilities.items())
+        if set(probabilities) != {"pure_normal", "control_only", "mixed", "anomaly_only"} or any(value <= 0 for value in values) or not math.isclose(sum(values), 1.0, abs_tol=1e-9):
+            raise ProtocolError("all four world types need positive probabilities summing to one")
 
     @staticmethod
-    def _validate_model_and_training(source: Mapping[str, object]) -> None:
-        model = _object(source, "model", "split.json")
-        _exact_keys(
-            model,
-            {
-                "name",
-                "spatial_initialization",
-                "current_anchor",
-                "temporal_scales",
-                "history_correspondence",
-                "explicit_null",
-                "factorized_temporal_update",
-                "temporal_output",
-                "prediction",
-            },
-            "model",
-        )
-        if model["name"] != MODEL_NAME:
-            raise ProtocolError("schema 28 requires the current-anchored factorized window model")
-        if _string_tuple(model["temporal_scales"], "model.temporal_scales") != TEMPORAL_SCALES:
-            raise ProtocolError("temporal scales must be p16, p8, and p4")
-        correspondence = _object(model, "history_correspondence", "model")
-        _exact_keys(
-            correspondence,
-            {"clean_select", "proposal_oracle_candidates", "truth_use"},
-            "model.history_correspondence",
-        )
-        expected_correspondence = {
-            "clean_select": CLEAN_SELECT_RULE,
-            "proposal_oracle_candidates": PROPOSAL_ORACLE_CANDIDATES_RULE,
-            "truth_use": ORACLE_TRUTH_RULE,
-        }
-        if dict(correspondence) != expected_correspondence:
-            raise ProtocolError("Oracle correspondence semantics changed")
-        null = _object(model, "explicit_null", "model")
-        _exact_keys(null, {"rule", "scales", "ages", "feature_value", "counts_as_real_history_support"}, "model.explicit_null")
-        if null["rule"] != NULL_RULE:
-            raise ProtocolError("explicit null must use one learned score per scale and age")
-        if _string_tuple(null["scales"], "model.explicit_null.scales") != TEMPORAL_SCALES:
-            raise ProtocolError("explicit null must exist at p16, p8, and p4")
-        if _integer_tuple(null["ages"], "model.explicit_null.ages") != (1, 2, 3, 4):
-            raise ProtocolError("explicit null must exist independently at each history age")
-        if _number(null["feature_value"], "model.explicit_null.feature_value") != 0.0 or null["counts_as_real_history_support"] is not False:
-            raise ProtocolError("null must be zero-valued and excluded from real support")
-        for key in ("spatial_initialization", "current_anchor", "factorized_temporal_update", "temporal_output", "prediction"):
-            _string(model[key], f"model.{key}")
-        if model["temporal_output"] != TEMPORAL_OUTPUT_RULE:
-            raise ProtocolError("the bounded current-anchored temporal output changed")
+    def _validate_window(window: Mapping[str, object]) -> None:
+        offline = _mapping(window["offline_main"], "window.offline_main")
+        causal = _mapping(window["causal_ablation"], "window.causal_ablation")
+        if _signed_int_tuple(offline["frame_offsets"], "offline offsets") != RELATIVE_TIMES:
+            raise ProtocolError("offline main window must be center-symmetric five frames")
+        # Negative values need direct validation because _int_tuple is non-negative.
+        causal_offsets = tuple(causal["frame_offsets"]) if isinstance(causal.get("frame_offsets"), list) else ()
+        if causal_offsets != CAUSAL_OFFSETS:
+            raise ProtocolError("causal ablation must use [t-4,t]")
+        if tuple(window.get("point_identity", ())) != ("frame_id", "beam_id", "azimuth_column") or window.get("file_slot_is_not_identity") is not True:
+            raise ProtocolError("point identity must be canonical frame-ray, not file slot")
+        if window.get("padding") is not False or window.get("frame_repetition") is not False:
+            raise ProtocolError("sequence boundaries cannot be padded or repeated")
 
-        training = _object(source, "training", "split.json")
-        _exact_keys(
-            training,
-            {"gradient_data", "parameter_groups", "stage_a", "stage_b", "gradient_audit", "mechanism_experiment", "future_matcher"},
-            "training",
-        )
-        if _string_tuple(training["gradient_data"], "training.gradient_data") != (
-            "normal_206_original_windows",
-            "normal_206_counterfactual_windows",
+    @staticmethod
+    def _validate_model(model: Mapping[str, object]) -> None:
+        if (
+            model.get("input_dim"), model.get("levels"), model.get("pooling"),
+            model.get("upsample"), model.get("upsample_neighbors"),
+        ) != (150, 4, "per_time_mean_max", "same_time_3NN_with_high_resolution_skip", 3):
+            raise ProtocolError("AJAE fixed four-level model identity changed")
+        if _signed_int_tuple(model["attention_deltas"], "attention deltas") != RELATIVE_TIMES:
+            raise ProtocolError("attention deltas must be -2 through +2")
+        voxels = tuple(_number(item, "voxel size") for item in _list(model["voxel_sizes_m"], "voxel sizes"))
+        if len(voxels) != 3 or not all(right > left > 0 for left, right in zip(voxels, voxels[1:])):
+            raise ProtocolError("L1-L3 require three increasing voxel sizes")
+        radii = _float_matrix(model["attention_radii_m"], "attention radii", 4, 5)
+        neighbors = _int_matrix(model["neighbors"], "neighbors", 4, 5)
+        if any(radius <= 0 for row in radii for radius in row) or any(
+            not radii[level + 1][delta] > radii[level][delta]
+            for level in range(3) for delta in range(5)
         ):
-            raise ProtocolError("gradients may use only normal 206 and its counterfactuals")
-        groups = _object(training, "parameter_groups", "training")
-        _exact_keys(groups, {"always_frozen", "stage_a_trainable", "stage_b_trainable"}, "training.parameter_groups")
-        frozen = _string_tuple(groups["always_frozen"], "training.parameter_groups.always_frozen")
-        stage_a = _string_tuple(groups["stage_a_trainable"], "training.parameter_groups.stage_a_trainable")
-        stage_b = _string_tuple(groups["stage_b_trainable"], "training.parameter_groups.stage_b_trainable")
-        if frozen != (
-            "STU_sparse_backbone",
-            "STU_object_queries",
-            "STU_normal_semantic_branch",
-            "STU_instance_mask_branch",
-        ) or stage_a != ("current_point_anomaly_head",) or stage_b != (
-            "frame_age_embeddings",
-            "temporal_p16",
-            "temporal_p8",
-            "temporal_p4",
-            "temporal_point_delta",
-        ):
-            raise ProtocolError("schema-28 parameter groups changed")
-        if set(frozen) & (set(stage_a) | set(stage_b)) or set(stage_a) & set(stage_b):
-            raise ProtocolError("training parameter groups overlap")
+            raise ProtocolError("every time-stratified radius must grow from L0 to L3")
+        if not neighbors:
+            raise ProtocolError("time-stratified neighbor budgets are empty")
 
-        stage_a_spec = _object(training, "stage_a", "training")
-        _exact_keys(stage_a_spec, {"purpose", "objective", "state_rule"}, "training.stage_a")
-        if stage_a_spec["objective"] != "L_cur=balanced_BCE(z_cur,y)":
-            raise ProtocolError("stage A must train only balanced current-frame BCE")
-        stage_b_spec = _object(training, "stage_b", "training")
+    @staticmethod
+    def _validate_training(training: Mapping[str, object]) -> None:
+        banned = {"lambda_cf", "memory_beta", "memory_warmup_worlds", "memory_key", "point_window_weight"}
+        if set(training).intersection(banned):
+            raise ProtocolError("schema 30 forbids counterfactual memory and extra loss terms")
+        if (training.get("source_partition"), training.get("source_sequence_id"), training.get("micro_batch")) != ("train", 206, 1):
+            raise ProtocolError("training must use train/206 with one complete window per micro-batch")
+        seeds = _int_tuple(training["seeds"], "training.seeds")
+        if len(seeds) < 3 or len(set(seeds)) != len(seeds):
+            raise ProtocolError("formal development requires at least three unique training seeds")
+        if "only" not in str(training.get("loss", "")):
+            raise ProtocolError("training loss must explicitly contain only balanced BCE")
+        probabilities = _mapping(training["world_type_probabilities"], "training world probabilities")
+        if set(probabilities) != {"pure_normal", "control_only", "mixed", "anomaly_only"}:
+            raise ProtocolError("training must sample all four world types")
+        values = tuple(_number(value, f"training world probability {key}") for key, value in probabilities.items())
+        if any(value <= 0 for value in values) or not math.isclose(sum(values), 1.0, abs_tol=1e-9):
+            raise ProtocolError("training world probabilities must be positive and sum to one")
+
+    @staticmethod
+    def _validate_development(development: Mapping[str, object]) -> None:
+        if (
+            development.get("worlds_file"), development.get("sequence_id"),
+            development.get("in_generator_worlds"),
+            development.get("generator_held_out_worlds"),
+            development.get("held_out_affects_selection"),
+        ) != ("dev.json", 201, 24, 6, False):
+            raise ProtocolError("development must preserve the fixed 24+6 split on 201")
+        world_evaluation = _mapping(
+            development["fixed_world_evaluation"],
+            "development.fixed_world_evaluation",
+        )
         _exact_keys(
-            stage_b_spec,
-            {
-                "purpose",
-                "history_lengths",
-                "independent_arms",
-                "state_isolation",
-                "classification_objective",
-                "window_loss",
-                "normal_safety",
-                "magnitude_control",
-                "direct_match",
-                "direct_null",
-                "direct_weights",
-                "state_rule",
-            },
-            "training.stage_b",
+            world_evaluation,
+            {"status", "scope"},
+            "development.fixed_world_evaluation",
         )
-        if _integer_tuple(stage_b_spec["history_lengths"], "training.stage_b.history_lengths") != (1, 2, 4):
-            raise ProtocolError("stage B must expose K=1,2,4 histories")
-        arms = _mapping(
-            _field(stage_b_spec, "independent_arms", "training.stage_b"),
-            "training.stage_b.independent_arms",
-        )
-        if dict(arms) != {
-            "clean_select": "classification objective only; one truth-selected real candidate plus null per age",
-            "proposal_direct": "Proposal-only classification plus direct same-object probability-mass and null supervision",
-            "proposal_classification": "Proposal-only classification objective only",
+        if world_evaluation.get("status") not in {
+            "unresolved_requires_owner_decision",
+            "frozen_before_training",
         }:
-            raise ProtocolError("stage B must use the three independent selector arms")
-        if stage_b_spec["state_isolation"] != TEMPORAL_STATE_ISOLATION_RULE:
-            raise ProtocolError("selector arms must not share temporal updates")
-        expected_objectives = {
-            "classification_objective": "L_class=L_win+L_safe+0.1*L_mag",
-            "window_loss": "L_win=balanced_BCE(z_win,y)",
-            "normal_safety": "L_safe=mean_{i in normal} ReLU(z_win_i-stop_gradient(z_cur_i))",
-            "magnitude_control": "L_mag is class-balanced SmoothL1(delta_i,0) with beta=1.0.",
-            "direct_match": "L_match=-sum_(i,k) r_i*log(sum_{j in P_(i,k)} a_direct_(i,j,k))/sum_(i,k) r_i over generated-object query-age pairs with at least one same-object candidate; P_(i,k) may contain both static and truth-motion candidates.",
-            "direct_null": "L_null=-sum_(i,k) r_i*log(a_direct_(i,null,k))/sum_(i,k) r_i over generated-object query-age pairs with no same-object candidate but at least one valid competing real candidate. When every real candidate is invalid, null is structurally certain and the zero-gradient pair is reported but excluded from the loss denominator.",
-            "direct_weights": "proposal_direct uses L_class+1.0*(L_match+L_null), with p16, p8, and p4 weighted equally; the other arms do not use direct correspondence loss.",
-        }
-        for key, expected in expected_objectives.items():
-            if stage_b_spec[key] != expected:
-                raise ProtocolError(f"training.stage_b.{key} changes the frozen objective")
-        for value, name in ((stage_a_spec, "stage_a"), (stage_b_spec, "stage_b")):
-            for key, item in value.items():
-                if key not in {"history_lengths", "independent_arms"}:
-                    _string(item, f"training.{name}.{key}")
-
-        audit = _object(training, "gradient_audit", "training")
-        if _integer(_field(audit, "windows", "gradient_audit"), "gradient_audit.windows") != 8:
-            raise ProtocolError("the gradient audit must use eight windows")
-        if _string_tuple(_field(audit, "terms", "gradient_audit"), "gradient_audit.terms") != (
-            "L_win",
-            "L_safe",
-            "0.1*L_mag",
-            "L_match",
-            "L_null",
+            raise ProtocolError("fixed-world evaluation must declare its freeze status")
+        if world_evaluation.get("status") == "frozen_before_training" and not isinstance(
+            world_evaluation.get("scope"), Mapping
         ):
-            raise ProtocolError("the gradient audit must separate classification and direct terms")
-        if _string_tuple(
-            _field(audit, "branches", "gradient_audit"),
-            "gradient_audit.branches",
-        ) != stage_b[1:]:
-            raise ProtocolError("the gradient audit must cover every temporal branch")
-        _string(_field(audit, "rule", "gradient_audit"), "gradient_audit.rule")
-
-        mechanism = _object(training, "mechanism_experiment", "training")
-        if mechanism.get("status") != "exploratory_only":
-            raise ProtocolError("the Oracle mechanism work is exploratory only")
-        completed = _object(
-            mechanism, "completed_schema27_oracle_experiment", "mechanism_experiment"
-        )
-        screen = _object(
-            mechanism, "next_deconfounded_screen", "mechanism_experiment"
-        )
-        follow_up = _object(
-            mechanism, "conditional_confirmation", "mechanism_experiment"
-        )
-        if (
-            completed.get("status") != "completed_historical_evidence_only"
-            or completed.get("training_windows") != 96
-            or completed.get("validation_windows") != 64
-            or screen.get("status") != "not_run"
-            or screen.get("training_windows") != 24
-            or screen.get("validation_windows") != 16
-            or tuple(screen.get("arms", ()))
-            != ("clean_select", "proposal_direct", "proposal_classification")
-            or follow_up.get("status") != "not_authorized_until_screen_passes"
-            or follow_up.get("training_windows") != 96
-            or follow_up.get("validation_windows") != 64
-            or follow_up.get("requires_new_frozen_manifest") is not True
-        ):
-            raise ProtocolError("schema-28 experiments must proceed deconfounded 24/16 then new 96/64")
-        _string(_field(completed, "boundary", "completed_schema27_oracle_experiment"), "completed_schema27_oracle_experiment.boundary")
-        _string(_field(mechanism, "order", "mechanism_experiment"), "mechanism_experiment.order")
-        public_rule = _string(_field(mechanism, "public_anomaly_access", "mechanism_experiment"), "mechanism_experiment.public_anomaly_access")
-        if "Do not access" not in public_rule or "method is frozen" not in public_rule:
-            raise ProtocolError("public anomaly evaluation must remain unavailable before freeze")
-        matcher = _object(training, "future_matcher", "training")
-        _exact_keys(
-            matcher,
-            {
-                "implemented",
-                "activation_rule",
-                "direct_supervision",
-                "truth_motion_after_activation",
-            },
-            "training.future_matcher",
-        )
-        if matcher["implemented"] is not False:
-            raise ProtocolError("the learned candidate generator is not implemented")
-        _string(matcher["activation_rule"], "training.future_matcher.activation_rule")
-        _string(matcher["direct_supervision"], "training.future_matcher.direct_supervision")
-        _string(
-            matcher["truth_motion_after_activation"],
-            "training.future_matcher.truth_motion_after_activation",
-        )
+            raise ProtocolError("frozen fixed-world evaluation requires an explicit scope")
+        selection = _mapping(development["checkpoint_selection"], "checkpoint selection")
+        if selection.get("status") not in {
+            "proposed_requires_owner_confirmation",
+            "frozen_before_training",
+        } or selection.get("held_out_input_forbidden") is not True:
+            raise ProtocolError("checkpoint selection must exclude held-out worlds and declare its freeze status")
+        if _number(selection["tie_tolerance"], "checkpoint tie tolerance") <= 0:
+            raise ProtocolError("checkpoint tie tolerance must be positive")
+        difficulty = _mapping(development["difficulty_statistics"], "difficulty statistics")
+        if set(difficulty) != {"Nvis", "O", "d", "V"}:
+            raise ProtocolError("development difficulty must define Nvis, O, d, and V")
 
     @staticmethod
-    def _validate_inference_and_evaluation(source: Mapping[str, object]) -> None:
-        inference = _object(source, "inference", "split.json")
-        if _string(_field(inference, "mode", "inference"), "inference.mode") != "causal_current_frame":
-            raise ProtocolError("inference must produce only the causal current frame")
-        for key in ("history", "online_cache", "cache_reset", "output_restoration"):
-            _string(_field(inference, key, "inference"), f"inference.{key}")
-        _string_tuple(_field(inference, "reported_resources", "inference"), "inference.reported_resources")
-
-        evaluation = _object(source, "evaluation", "split.json")
-        point_filter = _object(evaluation, "point_filter", "evaluation")
-        point_range = _list(_field(point_filter, "source_frame_range_m", "point_filter"), "point_filter.source_frame_range_m")
-        if len(point_range) != 2 or not math.isclose(_number(point_range[0], "point_filter.range[0]"), 2.5) or not math.isclose(_number(point_range[1], "point_filter.range[1]"), 50.0):
-            raise ProtocolError("official point range must be 2.5 through 50 m")
-        if _integer(_field(point_filter, "minimum_anomaly_points_per_frame", "point_filter"), "point_filter.minimum_anomaly_points_per_frame") != 5:
-            raise ProtocolError("official evaluation requires 5 anomaly points")
-        if _string_tuple(_field(evaluation, "point_metrics", "evaluation"), "evaluation.point_metrics") != ("AP", "AUROC", "FPR95"):
-            raise ProtocolError("point metrics must be AP, AUROC, and FPR95")
-        threshold = _object(evaluation, "normal_alarm_threshold", "evaluation")
+    def _validate_evaluation(evaluation: Mapping[str, object]) -> None:
         if (
-            threshold.get("source")
-            != "normal_201_complete_causal_window_original_view"
-            or _integer_tuple(
-                _field(threshold, "eligible_current_frame_range", "threshold"),
-                "threshold.eligible_current_frame_range",
+            evaluation.get("minimum_range_m"), evaluation.get("maximum_range_m"),
+            evaluation.get("minimum_range_inclusive"), evaluation.get("maximum_range_inclusive"),
+            evaluation.get("minimum_anomaly_points"), evaluation.get("score_fusion"),
+        ) != (2.5, 50.0, True, True, 5, "equal_mean_of_probabilities_by_frame_and_canonical_ray"):
+            raise ProtocolError("official point range, frame gate, or probability fusion changed")
+        if tuple(evaluation.get("point_metrics", ())) != ("AP", "AUROC", "FPR95"):
+            raise ProtocolError("official point metrics changed")
+        frame_domain = _mapping(
+            evaluation["comparison_frame_domain"], "comparison frame domain"
+        )
+        if (
+            frame_domain.get("status")
+            not in {
+                "proposed_requires_owner_confirmation",
+                "frozen_before_evaluation",
+            }
+            or
+            frame_domain.get("rule")
+            != "intersection_of_complete_centered_q0_and_complete_causal_current_frames"
+            or _signed_int_tuple(
+                frame_domain.get("required_source_offsets"),
+                "comparison frame offsets",
             )
-            != (8, 681)
-            or _integer(
-                _field(threshold, "eligible_windows", "threshold"),
-                "threshold.eligible_windows",
-            )
-            != 674
-            or _integer_tuple(
-                _field(threshold, "excluded_current_frames", "threshold"),
-                "threshold.excluded_current_frames",
-            )
-            != tuple(range(8))
+            != (-4, -3, -2, -1, 0, 1, 2)
+            or tuple(frame_domain.get("applies_to", ()))
+            != tuple(f"B{index}" for index in range(6))
+            or frame_domain.get("padding_or_zero_fill_forbidden") is not True
+            or frame_domain.get("coverage_manifest_required") is not True
         ):
             raise ProtocolError(
-                "normal window threshold must exclude current frames 0 through 7"
+                "all B0--B5 comparisons require the same complete-window frame domain"
             )
-        if not math.isclose(_number(_field(threshold, "normal_point_alarm_rate", "threshold"), "threshold.normal_point_alarm_rate"), 0.001):
-            raise ProtocolError("normal point alarm rate must be 0.001")
-        instances = _object(evaluation, "anomaly_instances", "evaluation")
-        spatial = _object(instances, "spatial_split", "anomaly_instances")
-        if spatial.get("method") != "DBSCAN" or not math.isclose(_number(_field(spatial, "epsilon_m", "spatial"), "spatial.epsilon_m"), 1.0) or _integer(_field(spatial, "minimum_samples", "spatial"), "spatial.minimum_samples") != 1:
-            raise ProtocolError("DBSCAN must use epsilon 1.0 m and one sample")
-        baseline = _object(evaluation, "baseline", "evaluation")
-        if baseline.get("method") != "NDP" or baseline.get("used_inside_AJAE") is not False:
-            raise ProtocolError("NDP must remain an independent baseline")
-        if "After method freeze" not in _string(_field(evaluation, "public_evaluation", "evaluation"), "evaluation.public_evaluation"):
-            raise ProtocolError("official public evaluation must occur after method freeze")
+        if evaluation.get("threshold_comparison") != "score_strictly_greater_than_threshold":
+            raise ProtocolError("object threshold comparison must remain strict")
 
 
-def load_protocol(path: Path | str = DEFAULT_SPLIT_PATH) -> AJAEProtocol:
-    """Load one JSON document and validate every scientific role."""
+def _finite_statistics(value: Mapping[str, object], name: str) -> None:
+    found = False
+    stack: list[tuple[str, object]] = [(name, value)]
+    while stack:
+        path, item = stack.pop()
+        if isinstance(item, Mapping):
+            stack.extend((f"{path}.{key}", nested) for key, nested in item.items())
+        elif isinstance(item, (list, tuple)):
+            stack.extend((f"{path}[{index}]", nested) for index, nested in enumerate(item))
+        elif isinstance(item, (int, float)) and not isinstance(item, bool):
+            _number(item, path)
+            found = True
+    if not found:
+        raise ProtocolError(f"{name} must contain at least one finite numeric statistic")
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.expanduser().resolve(strict=True).open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _gate1_verdict_is_explicit(
+    value: object, expected_criterion: object
+) -> bool:
+    if not isinstance(value, Mapping) or not isinstance(expected_criterion, Mapping):
+        return False
+    criterion_id = expected_criterion.get("criterion_id")
+    return (
+        value.get("passed") is True
+        and value.get("decided_before_training") is True
+        and isinstance(criterion_id, str)
+        and bool(criterion_id.strip())
+        and value.get("criterion") == criterion_id
+        and isinstance(value.get("judgment"), str)
+        and bool(str(value.get("judgment")).strip())
+    )
+
+
+def _validate_gate1_evidence(
+    evidence: Mapping[str, object],
+    *,
+    protocol: AJAEProtocol,
+) -> bool:
+    """Validate evidence identity and return whether all four verdicts explicitly pass."""
+
+    calibration_digest = _sha256_file(protocol.sensor_calibration_path())
+    criteria_document = protocol.decision_gates["criteria"]
+    gate1_criteria = (
+        criteria_document.get("gate1")
+        if criteria_document.get("status") == "frozen_before_training"
+        else None
+    )
+    all_verdicts_pass = isinstance(gate1_criteria, Mapping)
+    for name in GATE1_EVIDENCE:
+        raw_item = evidence[name]
+        if raw_item is None:
+            all_verdicts_pass = False
+            continue
+        item = _mapping(raw_item, f"dev.gate1.evidence.{name}")
+        _finite_statistics(item, name)
+        identity = _mapping(item.get("input_identity"), f"{name}.input_identity")
+        required_identity = {
+            "protocol_schema": SCHEMA_VERSION,
+            "sequence_id": 206,
+            "partition": "train",
+            "first_frame": 0,
+            "last_frame": 448,
+            "frame_count": 449,
+            "calibration_sha256": calibration_digest,
+        }
+        if any(identity.get(key) != value for key, value in required_identity.items()):
+            raise ProtocolError(f"{name} is not bound to the full real 206 calibration")
+        audited_returns = _integer(
+            identity.get("audited_real_returns_all_frames"),
+            f"{name}.audited_real_returns_all_frames",
+            minimum=1,
+        )
+        provenance = _mapping(item.get("provenance"), f"{name}.provenance")
+        if not provenance:
+            raise ProtocolError(f"{name} provenance cannot be empty")
+
+        if name == "ray_slot_audit":
+            audit = _mapping(item.get("audit"), "ray_slot_audit.audit")
+            layout = _mapping(audit.get("slot_layout"), "ray_slot_audit.slot_layout")
+            round_trip = _mapping(
+                audit.get("round_trip"), "ray_slot_audit.round_trip"
+            )
+            if (
+                _integer(audit.get("frame_count"), "ray_slot_audit.frame_count", minimum=1)
+                != 17
+                or _integer(
+                    layout.get("forward_reverse_mismatches"),
+                    "ray_slot_audit.forward_reverse_mismatches",
+                    minimum=0,
+                )
+                != 0
+                or _number(
+                    round_trip.get("maximum_point_error_m"),
+                    "ray_slot_audit.maximum_point_error_m",
+                )
+                > ROUND_TRIP_POINT_TOLERANCE_M
+                or _number(
+                    round_trip.get("maximum_direction_error_rad"),
+                    "ray_slot_audit.maximum_direction_error_rad",
+                )
+                > ROUND_TRIP_DIRECTION_TOLERANCE_RAD
+            ):
+                raise ProtocolError("ray-slot evidence failed its exact identity checks")
+        elif name == "range_image_round_trip":
+            aggregate = _mapping(item.get("aggregate"), "range_image_round_trip.aggregate")
+            if (
+                _integer(
+                    aggregate.get("return_count_mismatch_frames"),
+                    "range_image_round_trip.return_count_mismatch_frames",
+                    minimum=0,
+                )
+                != 0
+                or _integer(
+                    aggregate.get("total_real_returns"),
+                    "range_image_round_trip.total_real_returns",
+                    minimum=1,
+                )
+                != audited_returns
+                or _number(
+                    aggregate.get("maximum_point_error_m"),
+                    "range_image_round_trip.maximum_point_error_m",
+                )
+                > ROUND_TRIP_POINT_TOLERANCE_M
+                or _number(
+                    aggregate.get("maximum_range_error_m"),
+                    "range_image_round_trip.maximum_range_error_m",
+                )
+                > ROUND_TRIP_POINT_TOLERANCE_M
+                or _number(
+                    aggregate.get("maximum_direction_error_rad"),
+                    "range_image_round_trip.maximum_direction_error_rad",
+                )
+                > ROUND_TRIP_DIRECTION_TOLERANCE_RAD
+            ):
+                raise ProtocolError("range-image evidence does not preserve all returns")
+        elif name == "render_source_leakage":
+            audit = _mapping(item.get("audit"), "render_source_leakage.audit")
+            train_groups = {
+                _integer(value, "render_source_leakage.train_group", minimum=0)
+                for value in _list(audit.get("train_groups"), "render_source_leakage.train_groups")
+            }
+            test_groups = {
+                _integer(value, "render_source_leakage.test_group", minimum=0)
+                for value in _list(audit.get("test_groups"), "render_source_leakage.test_groups")
+            }
+            spatial_match = _mapping(
+                item.get("spatial_match_distance_m"),
+                "render_source_leakage.spatial_match_distance_m",
+            )
+            matched = _integer(
+                item.get("matched_samples_per_class"),
+                "render_source_leakage.matched_samples_per_class",
+                minimum=1,
+            )
+            if (
+                audit.get("split_unit") != "frame_or_world_group"
+                or not train_groups
+                or not test_groups
+                or not train_groups.isdisjoint(test_groups)
+                or _integer(audit.get("train_samples"), "source train samples", minimum=1) < 1
+                or _integer(audit.get("test_samples"), "source test samples", minimum=1) < 1
+                or not 0.0 <= _number(
+                    audit.get("balanced_accuracy"), "source balanced accuracy"
+                ) <= 1.0
+                or not 0.0 <= _number(audit.get("auroc"), "source AUROC") <= 1.0
+                or _integer(spatial_match.get("count"), "source match count", minimum=1)
+                != matched
+            ):
+                raise ProtocolError("source-leakage evidence is not group-disjoint and matched")
+        else:
+            statistics = _mapping(item.get("statistics"), "beam_range_intensity.statistics")
+            comparison = _mapping(
+                item.get("comparison_summary"),
+                "beam_range_intensity.comparison_summary",
+            )
+            if (
+                _integer(statistics.get("frames"), "beam_range_intensity.frames", minimum=1)
+                != 449
+                or _integer(
+                    statistics.get("normal_control_returns"),
+                    "beam_range_intensity.normal_control_returns",
+                    minimum=1,
+                )
+                < 1
+                or not comparison
+            ):
+                raise ProtocolError("beam-range-intensity evidence lacks full sensor coverage")
+
+        conclusion = item.get("threshold_conclusion")
+        if name == "range_image_round_trip" and conclusion is None:
+            conclusion = _mapping(
+                item.get("aggregate"), "range_image_round_trip.aggregate"
+            ).get("threshold_conclusion")
+        expected_criterion = (
+            gate1_criteria.get(name)
+            if isinstance(gate1_criteria, Mapping)
+            else None
+        )
+        all_verdicts_pass &= _gate1_verdict_is_explicit(
+            conclusion, expected_criterion
+        )
+    return all_verdicts_pass
+
+
+def _development_difficulty_coverage_is_valid(
+    worlds: Sequence[DevelopmentWorld],
+    criteria: object,
+) -> bool:
+    if not isinstance(criteria, Mapping):
+        return False
+    expected = {
+        "criterion_id",
+        "require_each_label",
+        "V_required",
+        "Nvis_bin_edges",
+        "O_bin_edges",
+        "d_bin_edges",
+        "minimum_occupied_bins_per_label",
+    }
+    if set(criteria) != expected or criteria.get("require_each_label") is not True:
+        return False
+    criterion_id = criteria.get("criterion_id")
+    if not isinstance(criterion_id, str) or not criterion_id.strip():
+        return False
+
+    def integer_values(value: object, name: str) -> tuple[int, ...]:
+        if not isinstance(value, tuple):
+            raise ProtocolError(f"{name} must be a frozen integer sequence")
+        return tuple(_integer(item, name, minimum=1) for item in value)
+
+    def edges(value: object, name: str) -> tuple[float, ...]:
+        if not isinstance(value, tuple):
+            raise ProtocolError(f"{name} must be a frozen numeric sequence")
+        result = tuple(_number(item, name) for item in value)
+        if len(result) < 2 or any(right <= left for left, right in zip(result, result[1:])):
+            raise ProtocolError(f"{name} must contain increasing bin edges")
+        return result
+
+    required_visibility = set(integer_values(criteria.get("V_required"), "V_required"))
+    if required_visibility != {1, 2, 3, 4, 5}:
+        raise ProtocolError("development V coverage must predeclare all five strata")
+    nvis_edges = edges(criteria.get("Nvis_bin_edges"), "Nvis_bin_edges")
+    occlusion_edges = edges(criteria.get("O_bin_edges"), "O_bin_edges")
+    distance_edges = edges(criteria.get("d_bin_edges"), "d_bin_edges")
+    minimum_bins = _integer(
+        criteria.get("minimum_occupied_bins_per_label"),
+        "minimum_occupied_bins_per_label",
+        minimum=2,
+    )
+    if minimum_bins > min(
+        len(nvis_edges) + 1,
+        len(occlusion_edges) + 1,
+        len(distance_edges) + 1,
+    ):
+        raise ProtocolError("minimum occupied difficulty bins exceeds available bins")
+
+    records: dict[str, list[Mapping[str, object]]] = {
+        "normal-control": [],
+        "anomaly-proxy": [],
+    }
+    for world in worlds:
+        objects = _list(world.world.get("objects"), "development world objects")
+        labels = {
+            _integer(_mapping(item, "development object").get("object_id"), "object_id"):
+            str(_mapping(item, "development object").get("label"))
+            for item in objects
+        }
+        for entry in world.difficulty:
+            records[labels[int(entry["object_id"])]].append(entry)
+
+    for label, label_records in records.items():
+        if not label_records:
+            return False
+        if {int(item["V"]) for item in label_records} != required_visibility:
+            return False
+        for field, field_edges in (
+            ("Nvis", nvis_edges),
+            ("O", occlusion_edges),
+            ("d", distance_edges),
+        ):
+            occupied = {
+                bisect_right(field_edges, float(item[field]))
+                for item in label_records
+            }
+            if len(occupied) < minimum_bins:
+                return False
+    return True
+
+
+def load_development_worlds(
+    path: Path | str,
+    *,
+    protocol: AJAEProtocol,
+) -> DevelopmentWorlds:
+    """Load fixed 201 worlds; booleans alone can never validate gate 1."""
 
     resolved = Path(path).expanduser().resolve(strict=True)
     try:
-        with resolved.open("r", encoding="utf-8") as handle:
-            document = json.load(handle)
+        source = json.loads(resolved.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
-        raise ProtocolError(f"cannot load protocol: {resolved}") from error
-    return AJAEProtocol(_mapping(document, "split.json"), path=resolved)
+        raise ProtocolError(f"cannot read development worlds: {resolved}") from error
+    root = _mapping(source, "dev.json")
+    expected = {
+        "format", "protocol_schema", "sequence_id", "status", "validation",
+        "gate1", "in_generator", "generator_held_out",
+    }
+    _exact_keys(root, expected, "dev.json")
+    if (root["format"], root["protocol_schema"], root["sequence_id"]) != (
+        "ajae-development-worlds-v2", SCHEMA_VERSION, 201
+    ):
+        raise ProtocolError("dev.json is not the schema-30 fixed-world format")
+    validation_source = _mapping(root["validation"], "dev.validation")
+    required_validation = {
+        "physical_placement", "sequence_visibility", "difficulty_coverage",
+        "normal_control_and_proxy_composition", "held_out_mechanism_isolation",
+    }
+    _exact_keys(validation_source, required_validation, "dev.validation")
+    validation: dict[str, bool] = {}
+    for key, value in validation_source.items():
+        if type(value) is not bool:
+            raise ProtocolError(f"dev.validation.{key} must be boolean")
+        validation[key] = value
+    gate1_source = _mapping(root["gate1"], "dev.gate1")
+    _exact_keys(gate1_source, {"status", "evidence"}, "dev.gate1")
+    evidence = _mapping(gate1_source["evidence"], "dev.gate1.evidence")
+    _exact_keys(evidence, set(GATE1_EVIDENCE), "dev.gate1.evidence")
+    evidence_valid = _validate_gate1_evidence(evidence, protocol=protocol)
+    try:
+        from .render import (
+            HeldOutTorusShape,
+            NormalTemplateShape,
+            ShapeSpec,
+            WorldSpec,
+        )
+    except ImportError:  # pragma: no cover - direct script execution
+        from render import (  # type: ignore[no-redef]
+            HeldOutTorusShape,
+            NormalTemplateShape,
+            ShapeSpec,
+            WorldSpec,
+        )
 
+    def parse_group(value: object, name: str, mechanism: str) -> tuple[DevelopmentWorld, ...]:
+        records = _list(value, name)
+        parsed: list[DevelopmentWorld] = []
+        for index, record in enumerate(records):
+            item = _mapping(record, f"{name}[{index}]")
+            _exact_keys(
+                item,
+                {
+                    "world_id",
+                    "seed",
+                    "center_frame",
+                    "world",
+                    "difficulty",
+                    "mechanism",
+                },
+                f"{name}[{index}]",
+            )
+            center_frame = _integer(item["center_frame"], "center_frame")
+            if center_frame not in frozenset(protocol.development_sequence.center_frames()):
+                raise ProtocolError(
+                    "development center_frame is not a legal unexcluded five-frame center"
+                )
+            world = _mapping(item["world"], f"{name}[{index}].world")
+            try:
+                parsed_world = WorldSpec.from_dict(world)
+            except (TypeError, ValueError) as error:
+                raise ProtocolError(
+                    f"{name}[{index}] is not a valid authoritative WorldSpec"
+                ) from error
+            if (
+                parsed_world.seed != _integer(item["seed"], "seed")
+                or parsed_world.source_sequence_id != 201
+                or parsed_world.world_type != "mixed"
+            ):
+                raise ProtocolError("every fixed development world must be mixed train/201")
+            difficulty_values = tuple(
+                _mapping(entry, f"{name}[{index}].difficulty")
+                for entry in _list(item["difficulty"], f"{name}[{index}].difficulty")
+            )
+            for entry in difficulty_values:
+                if set(entry) != {"object_id", "Nvis", "O", "d", "V"}:
+                    raise ProtocolError("every entity difficulty record must define object_id,Nvis,O,d,V")
+                if _number(entry["Nvis"], "difficulty.Nvis") <= 0:
+                    raise ProtocolError("difficulty Nvis must be positive")
+                if not 0 <= _number(entry["O"], "difficulty.O") <= 1:
+                    raise ProtocolError("difficulty O must lie in [0,1]")
+                if _number(entry["d"], "difficulty.d") <= 0:
+                    raise ProtocolError("difficulty d must be positive")
+                if not 1 <= _integer(entry["V"], "difficulty.V", minimum=1) <= 5:
+                    raise ProtocolError("difficulty V must lie in [1,5]")
+            difficulty_ids = [int(entry["object_id"]) for entry in difficulty_values]
+            if (
+                len(difficulty_ids) != len(parsed_world.objects)
+                or len(set(difficulty_ids)) != len(difficulty_ids)
+                or set(difficulty_ids)
+                != {obj.object_id for obj in parsed_world.objects}
+            ):
+                raise ProtocolError(
+                    "difficulty records must identify every world object exactly once"
+                )
+            actual_mechanism = str(item["mechanism"])
+            if mechanism == "in_generator" and actual_mechanism != "in_generator":
+                raise ProtocolError("in-generator world uses a held-out mechanism")
+            if mechanism == "held_out" and actual_mechanism != "torus_SDF":
+                raise ProtocolError("held-out worlds must use the unseen torus_SDF mechanism")
+            objects = _list(world.get("objects"), f"{name}[{index}].world.objects")
+            object_records = tuple(_mapping(obj, "world object") for obj in objects)
+            labels = {str(obj.get("label")) for obj in object_records}
+            if labels != {"normal-control", "anomaly-proxy"}:
+                raise ProtocolError(
+                    "every fixed development world must contain controls and proxies"
+                )
+            expected_shape_kind = {
+                "normal-control": "normal-template-convex-hull",
+                "anomaly-proxy": (
+                    "procedural-csg" if mechanism == "in_generator" else "held-out-torus-sdf"
+                ),
+            }
+            for obj in object_records:
+                label = str(obj.get("label"))
+                shape = _mapping(obj.get("shape"), "world object shape")
+                if label not in expected_shape_kind or shape.get("kind") != expected_shape_kind[label]:
+                    raise ProtocolError(
+                        "development object label and generator mechanism are inconsistent"
+                    )
+            for obj in parsed_world.objects:
+                if obj.label == "normal-control" and not isinstance(
+                    obj.shape, NormalTemplateShape
+                ):
+                    raise ProtocolError("normal controls must use 206 normal templates")
+                if obj.label == "anomaly-proxy":
+                    expected_type = (
+                        ShapeSpec if mechanism == "in_generator" else HeldOutTorusShape
+                    )
+                    if not isinstance(obj.shape, expected_type):
+                        raise ProtocolError(
+                            "parsed anomaly shape violates generator-mechanism isolation"
+                        )
+            parsed.append(
+                DevelopmentWorld(
+                    _integer(item["world_id"], "world_id"),
+                    _integer(item["seed"], "seed"),
+                    center_frame,
+                    _freeze(world),  # type: ignore[arg-type]
+                    tuple(_freeze(entry) for entry in difficulty_values),  # type: ignore[arg-type]
+                    actual_mechanism,
+                )
+            )
+        return tuple(parsed)
 
-def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description="Inspect AJAE schema-28 data roles and causal windows."
+    in_generator = parse_group(root["in_generator"], "in_generator", "in_generator")
+    held_out = parse_group(root["generator_held_out"], "generator_held_out", "held_out")
+    if len(in_generator) != int(protocol.development["in_generator_worlds"]) or len(held_out) != int(protocol.development["generator_held_out_worlds"]):
+        raise ProtocolError("dev.json does not contain the fixed 24+6 worlds")
+    identifiers = tuple(item.world_id for item in (*in_generator, *held_out))
+    if identifiers != tuple(range(30)):
+        raise ProtocolError("development world IDs must be exactly 0 through 29")
+    criteria_document = protocol.decision_gates["criteria"]
+    difficulty_coverage_valid = (
+        criteria_document.get("status") == "frozen_before_training"
+        and _development_difficulty_coverage_is_valid(
+            in_generator,
+            criteria_document.get("development_difficulty_coverage"),
+        )
     )
-    parser.add_argument("--split", type=Path, default=DEFAULT_SPLIT_PATH)
-    parser.add_argument("--partition", choices=("train", "val", "test"))
-    parser.add_argument("--sequence", type=int)
-    parser.add_argument("--frame", type=int)
-    return parser
+    return DevelopmentWorlds(
+        str(root["format"]), SCHEMA_VERSION, 201, str(root["status"]),
+        MappingProxyType(validation),
+        _freeze(gate1_source),  # type: ignore[arg-type]
+        evidence_valid,
+        difficulty_coverage_valid,
+        in_generator, held_out,
+    )
 
 
-def main(argv: Sequence[str] | None = None) -> int:
-    args = _parser().parse_args(argv)
-    protocol = load_protocol(args.split)
-    supplied = (args.partition, args.sequence, args.frame)
-    if any(value is not None for value in supplied):
-        if any(value is None for value in supplied):
-            raise SystemExit("--partition, --sequence, and --frame must be used together")
-        output: object = {
-            "partition": args.partition,
-            "sequence": args.sequence,
-            "current_frame": args.frame,
-            "frame_ids": list(protocol.window_frame_ids(args.partition, args.sequence, args.frame)),
+def load_protocol(path: Path | str = DEFAULT_PROTOCOL_PATH) -> AJAEProtocol:
+    """Load and validate the single active AJAE protocol."""
+
+    resolved = Path(path).expanduser().resolve(strict=True)
+    try:
+        source = json.loads(resolved.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ProtocolError(f"cannot read protocol: {resolved}") from error
+    return AJAEProtocol(_mapping(source, "protocol"), path=resolved)
+
+
+def _main() -> None:
+    parser = argparse.ArgumentParser(description="Inspect the AJAE schema-30 route.")
+    parser.add_argument("--protocol", type=Path, default=DEFAULT_PROTOCOL_PATH)
+    parser.add_argument("--development", action="store_true")
+    args = parser.parse_args()
+    protocol = load_protocol(args.protocol)
+    output: dict[str, object] = protocol.summary()
+    if args.development:
+        worlds = load_development_worlds(protocol.development_worlds_path(), protocol=protocol)
+        output["development"] = {
+            "status": worlds.status,
+            "validated": worlds.validated,
+            "in_generator": len(worlds.in_generator),
+            "held_out": len(worlds.generator_held_out),
+            "gate1": worlds.gate1.get("status"),
         }
-    else:
-        output = protocol.summary()
     print(json.dumps(output, ensure_ascii=False, indent=2, sort_keys=True))
-    return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    _main()

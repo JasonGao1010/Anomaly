@@ -1,0 +1,220 @@
+{
+  "schema_version": 30,
+  "authority": {
+    "document": "AJAE新主线方案.md",
+    "route": "normal controls and anomaly proxies rendered by one OS1-128 first-return approximation, frozen STU, four-level time-stratified point model",
+    "supersedes": "schema 29 counterfactual-memory route"
+  },
+  "task": {
+    "name": "AJAE",
+    "window_output": "one anomaly logit for every visible return in every input frame",
+    "sequence_output": "one equal mean of window probabilities for every canonical frame-ray return",
+    "does_not_predict": ["object_identity", "instance_mask", "trajectory", "object_class"]
+  },
+  "data": {
+    "normal_training": {
+      "partition": "train", "sequence_id": 206,
+      "role": "AJAE_parameter_updates_and_renderer_calibration",
+      "labels_available": true, "frame_range": [0, 448], "excluded_source_frames": []
+    },
+    "development": {
+      "partition": "train", "sequence_id": 201,
+      "role": "development_only_no_gradients",
+      "labels_available": true, "frame_range": [0, 681],
+      "excluded_source_frames": [0, 1, 2, 3],
+      "exclusion_reason": "verified exact internal duplication in scans and labels"
+    },
+    "public_anomaly_validation": {
+      "partition": "val", "role": "one_time_real_anomaly_confirmation_after_method_freeze",
+      "labels_available": true, "method_freeze_required": true,
+      "sequence_ids": [125, 137, 138, 139, 140, 141, 142, 143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 169],
+      "sequence_frame_counts": {
+        "125": 255, "137": 560, "138": 516, "139": 542, "140": 481,
+        "141": 697, "142": 537, "143": 469, "144": 323, "145": 337,
+        "146": 374, "147": 401, "148": 602, "149": 378, "150": 505,
+        "151": 277, "152": 534, "153": 271, "169": 600
+      }
+    },
+    "hidden_test": {
+      "partition": "test", "role": "final_hidden_test_after_supported_public_confirmation",
+      "labels_available": false, "method_freeze_required": true,
+      "sequence_ids": [100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 154, 155, 156, 157, 158, 159, 160, 161, 162, 163, 164, 165, 166, 167, 168]
+    }
+  },
+  "labels": {
+    "packed_label": {"semantic_bits": [0, 15], "instance_bits": [16, 31]},
+    "binary_anomaly": {
+      "raw_semantic_0": "ignore unless replaced by a valid inserted return",
+      "raw_semantic_2": "anomaly", "other_nonzero_semantics": "normal",
+      "normal_control_return": "normal", "anomaly_proxy_return": "anomaly"
+    },
+    "zero_coordinate_slot": "not a visible return unless rendering creates a valid inserted return",
+    "normal_control_classes": {"10": "car", "11": "bicycle", "15": "motorcycle", "18": "truck", "20": "other-vehicle", "30": "person", "31": "bicyclist", "32": "motorcyclist"},
+    "moving_normal_semantic_ids": [252, 253, 254, 255, 256, 257, 258, 259],
+    "normal_semantic_class_map": {
+      "0": 255, "1": 255, "2": 255, "10": 0, "11": 1, "13": 4,
+      "15": 2, "16": 4, "18": 3, "20": 4, "30": 5, "31": 6,
+      "32": 7, "40": 8, "44": 9, "48": 10, "49": 11, "50": 12,
+      "51": 13, "52": 255, "60": 8, "70": 14, "71": 15, "72": 16,
+      "80": 17, "81": 18, "99": 255, "252": 0, "253": 6, "254": 5,
+      "255": 7, "256": 4, "257": 4, "258": 3, "259": 4
+    }
+  },
+  "stu": {
+    "source": "STU official Mask4Former-3D", "checkpoint": "weights/59p6pq_ens1.ckpt",
+    "repository": "../DynaCAN-deps/stu_dataset/Mask4Former3D", "voxel_size_m": 0.05,
+    "input_channels": ["intensity", "official_STU_distance"],
+    "point_feature_dim": 128, "normal_evidence_dim": 19,
+    "assignment_reliability_dim": 1, "no_object_reliability_dim": 1,
+    "query_count": 100, "point_feature_source": "point_features_head sparse output",
+    "normal_evidence_rule": "select minimum-index argmax_q sigmoid(mask[v,q])*max_c<19 softmax(logits[q])[c], then use sigmoid(mask[v,q*])*softmax(logits[q*])[:19]",
+    "assignment_reliability_rule": "sigmoid(mask[v,q*])*max_c<19 softmax(logits[q*])[c]",
+    "no_object_reliability_rule": "softmax(logits[q*])[19]",
+    "b0_score": "official_STU_MaxLogit", "frozen": true, "full_forward_is_eval": true
+  },
+  "render": {
+    "name": "rigid-single-frame OS1-128 first-return counterfactual approximation",
+    "source_sequence_id": 206,
+    "calibration_file": "runs/ajae/calibration.pt",
+    "ray_grid": {
+      "beam_count": 128, "column_count": 1024,
+      "canonical_identity": ["beam_id", "azimuth_column"],
+      "file_slot_role": "input_output_mapping_only",
+      "audit_required": ["slot_and_empty_pattern", "beam_elevation_rows", "beam_periodicity", "azimuth_continuity", "phase_aligned_cross_frame_direction_stability", "multi_return_or_duplicate_ray_reordering", "range_image_round_trip"],
+      "empty_ray_direction": "same-beam periodic interpolation, explicitly approximate without sensor metadata"
+    },
+    "normal_controls": {
+      "source_sequence_id": 206,
+      "semantic_ids": [10, 11, 15, 18, 20, 30, 31, 32],
+      "template_surface": "closed convex hull of one observed labeled instance scan",
+      "scale_range": [0.9, 1.1],
+      "vehicle_support_semantics": [40, 44],
+      "person_rider_support_semantics": [40, 48, 60]
+    },
+    "anomaly_proxies": {
+      "count_range": [0, 9], "primitive_count_range": [1, 5],
+      "size_m_range": [0.2, 3.0],
+      "training_mechanisms": ["superquadric", "CSG", "bend", "twist", "taper", "low_frequency_surface"],
+      "held_out_mechanism": "torus_SDF"
+    },
+    "world_types": {"pure_normal": 0.2, "control_only": 0.2, "mixed": 0.4, "anomaly_only": 0.2},
+    "common_entity_rules": {
+      "static_world_pose": true, "ground_semantic_ids": [40, 44, 48, 49, 60],
+      "support_plane": true, "observed_surface_collision_rejection": true,
+      "inserted_entity_collision_rejection": true, "tie_tolerance_m": 0.000001
+    },
+    "sensor_model": {
+      "conditioning": ["beam", "range", "incidence", "material"],
+      "return_probability": true, "intensity_quantiles": true,
+      "empty_surface_opportunity": "same-beam bracketing-return interpolation when adjacent ranges agree",
+      "range_bin_edges_m": [0.0, 10.0, 20.0, 30.0, 40.0, 50.0, 120.0],
+      "incidence_bin_edges_rad": [0.0, 0.5235987755982988, 1.0471975511965976, 1.5707963267948966],
+      "low_count_backoff": "pooled across beam at the same range-incidence cell",
+      "nearest_accepted_return": true, "allow_new_return_on_empty_ray": true,
+      "bidirectional_occlusion": true
+    },
+    "world_rule": "fix every entity, source template, placement, material and seed before rendering any frame",
+    "physical_scope_excludes": ["within-scan motion distortion", "beam divergence", "finite footprint", "multiple returns", "multipath", "all electronic noise", "unobserved hidden surfaces"]
+  },
+  "window": {
+    "offline_main": {"frames": 5, "frame_offsets": [-2, -1, 0, 1, 2], "coordinate_reference_offset": 0, "output_offsets": [-2, -1, 0, 1, 2]},
+    "causal_ablation": {"frames": 5, "frame_offsets": [-4, -3, -2, -1, 0], "coordinate_reference_offset": 0, "output_offsets": [0]},
+    "padding": false, "frame_repetition": false,
+    "point_identity": ["frame_id", "beam_id", "azimuth_column"],
+    "file_slot_is_not_identity": true, "center_frame_weighting": "none"
+  },
+  "model": {
+    "name": "AJAE four-level time-stratified spatiotemporal point transformer",
+    "stu_feature_dim": 128, "normal_evidence_dim": 19,
+    "assignment_reliability_dim": 1, "no_object_reliability_dim": 1,
+    "input_intensity_dim": 1, "input_dim": 150, "hidden_dim": 128,
+    "levels": 4, "level_names": ["L0_points", "L1_fine", "L2_part", "L3_local_scene"],
+    "voxel_sizes_m": [0.1, 0.2, 0.4], "attention_deltas": [-2, -1, 0, 1, 2],
+    "attention_radii_m": [[0.45, 0.35, 0.25, 0.35, 0.45], [0.9, 0.7, 0.5, 0.7, 0.9], [1.8, 1.4, 1.0, 1.4, 1.8], [3.6, 2.8, 2.0, 2.8, 3.6]],
+    "neighbors": [[6, 8, 12, 8, 6], [8, 12, 16, 12, 8], [12, 16, 24, 16, 12], [16, 24, 32, 24, 16]],
+    "heads": 4, "pooling": "per_time_mean_max", "same_time_residual": true,
+    "cross_time_gate": "sigmoid_zero_when_neighborhood_empty",
+    "upsample": "same_time_3NN_with_high_resolution_skip", "upsample_neighbors": 3,
+    "output": "one anomaly logit for every input return"
+  },
+  "training": {
+    "source_partition": "train", "source_sequence_id": 206, "seeds": [0, 1, 2],
+    "learning_rate": 0.0001, "weight_decay": 0.0001, "maximum_worlds": null,
+    "micro_batch": 1, "gradient_accumulation": 8, "worlds_per_evaluation": 5,
+    "patience": 8, "chunk_centers": 16, "cache_frames": 7,
+    "window_coverage": "every legal window exactly once per complete world",
+    "loss": "range-filtered empty-class-safe class-balanced binary cross entropy only",
+    "world_type_probabilities": {"pure_normal": 0.2, "control_only": 0.2, "mixed": 0.4, "anomaly_only": 0.2},
+    "output_dir": "runs/ajae"
+  },
+  "development": {
+    "worlds_file": "dev.json", "sequence_id": 201,
+    "in_generator_worlds": 24, "generator_held_out_worlds": 6,
+    "held_out_affects_selection": false, "pure_normal_is_separate": true,
+    "fixed_world_evaluation": {
+      "status": "unresolved_requires_owner_decision",
+      "scope": null
+    },
+    "checkpoint_selection": {
+      "status": "proposed_requires_owner_confirmation",
+      "primary": "maximum macro mean of per-world AP over the 24 in-generator worlds",
+      "tie_tolerance": 0.000001,
+      "first_tie_break": "lower pure-normal score q99.9",
+      "second_tie_break": "earlier completed world index",
+      "held_out_input_forbidden": true
+    },
+    "difficulty_statistics": {
+      "Nvis": "median accepted visible returns per entity over its visible frames",
+      "O": "one minus visible inserted returns divided by accepted object returns before nearest-return occlusion",
+      "d": "median range of accepted visible entity returns",
+      "V": "number of frames in a five-frame window with at least one accepted entity return"
+    },
+    "boundary_leakage_radius_m": 0.5,
+    "position_score_scale": ["standard_deviation", "q05", "q50", "q95"]
+  },
+  "experiments": {
+    "B0": "frozen STU single-frame official MaxLogit",
+    "B1": "single-frame AJAE point model with the common counterfactual supervision",
+    "B2": "five-frame AJAE with every nonzero-delta edge disabled; evaluate q=0 only",
+    "B3": "full center-symmetric five-frame AJAE; evaluate q=0 only",
+    "B4": "the exact B3 checkpoint with equal probability fusion over every valid window occurrence",
+    "B5": "causal five-frame AJAE [t-4,t]; evaluate current frame only"
+  },
+  "evaluation": {
+    "minimum_range_m": 2.5, "maximum_range_m": 50.0,
+    "minimum_range_inclusive": true, "maximum_range_inclusive": true,
+    "minimum_anomaly_points": 5, "point_metrics": ["AP", "AUROC", "FPR95"],
+    "comparison_frame_domain": {
+      "status": "proposed_requires_owner_confirmation",
+      "rule": "intersection_of_complete_centered_q0_and_complete_causal_current_frames",
+      "required_source_offsets": [-4, -3, -2, -1, 0, 1, 2],
+      "applies_to": ["B0", "B1", "B2", "B3", "B4", "B5"],
+      "padding_or_zero_fill_forbidden": true,
+      "coverage_manifest_required": true
+    },
+    "score_fusion": "equal_mean_of_probabilities_by_frame_and_canonical_ray",
+    "zero_coordinate_slot_score": 0.0, "normal_point_alarm_rate": 0.001,
+    "threshold_comparison": "score_strictly_greater_than_threshold",
+    "instance_construction": "per_frame_3D_DBSCAN_without_temporal_linking",
+    "dbscan_eps_m": 1.0, "dbscan_min_samples": 1,
+    "object_metrics": ["RecallQ", "SQ", "RQ", "UQ", "PQ", "TP", "FP", "FN"],
+    "uncertainty_units": ["training_seed", "development_world", "real_anomaly_sequence"],
+    "cost_reports": ["latency", "peak_memory", "throughput", "STU_cache_status", "temporal_input_budget"]
+  },
+  "decision_gates": {
+    "gate1": ["ray_slot_audit", "range_image_round_trip", "render_source_leakage", "beam_range_intensity"],
+    "gate2": ["B1_vs_B0", "pure_normal_safety", "normal_control_safety"],
+    "gate3": ["three_seed_B3_vs_B1", "three_seed_B3_vs_B2", "B4_vs_same_checkpoint_B3"],
+    "gate4": ["frozen_public_19_vs_B0_B1", "moving_normal_safety"],
+    "criteria": {
+      "status": "unresolved_requires_owner_decision",
+      "gate1": null,
+      "gate2": null,
+      "gate3": null,
+      "gate4": null,
+      "development_difficulty_coverage": null
+    },
+    "verdict_rule": "a gate verdict requires its real statistics and an explicit predeclared scientific judgment; artifact existence alone is never evidence"
+  },
+  "status": {"implementation_target": "schema30", "scientific_route": "conditional_continue", "performance_claims_available": false}
+}
