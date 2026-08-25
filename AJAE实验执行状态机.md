@@ -41,6 +41,9 @@ flowchart TB
     E09["E09-v2 128 beam row 身份恢复"]
     E10["E10-v3 可观察 azimuth 连续性与环绕可识别性"]
     E11["E11-v2 逐帧 ray→slot 映射重建"]
+    E11D1["E11-D1 STU 点坐标来源审计"]
+    E11D2["E11-D2 整帧刚体变换可解释性"]
+    E11D3["E11-D3 逐 column 时间/去畸变可解释性"]
     E12["E12 多回波重排风险"]
     E13["E13 raw→ray→raw 点数往返"]
     E14["E14 raw→ray→raw 几何往返"]
@@ -49,6 +52,11 @@ flowchart TB
     E09 --> E10
     E10 --> E11
     E11 --> E12
+    E11 -. "FAIL 诊断" .-> E11D1
+    E11D1 -. "已识别整帧变换" .-> E11D2
+    E11D1 -. "已获得时间/元数据" .-> E11D3
+    E11D2 -. "形成版本化物理解释" .-> E11
+    E11D3 -. "形成版本化物理解释" .-> E11
     E12 --> E13
     E13 --> E14
     E14 --> E15
@@ -809,6 +817,36 @@ $$
 
 - PASS → **E12；后续 renderer 必须使用已验证的逐帧 $\rho_f(r)$，禁止回退到固定 slot 映射。**
 - FAIL → **E12 保持锁定；E11-v1 与 E11-v2 的 FAIL 均永久保留。仅靠 train/206 当前回波与有序拓扑不足以在冻结尺度内稳定重建规范物理射线身份，不修改 AJAE 网络。**
+
+
+## E11-D1｜STU 点坐标来源审计
+
+**目的 / 唯一问题**
+
+判定 STU 发布的 `.bin` 中 XYZ 究竟是原始 LiDAR/传感器坐标下的笛卡尔点、经过整帧刚体变换的点，还是经过逐 column/逐点运动补偿的点；同时判断直接将 $XYZ/\lVert XYZ\rVert$ 解释为物理 beam direction 是否忽略了 Ouster 的 beam-origin 偏移。
+
+**审计范围**
+
+1. STU 官方论文与补充材料中的采集、ROS、KISS-ICP、运动补偿和导出说明。
+2. STU 官方仓库当前主分支与完整 Git 历史，查找原始数据生成/导出代码、deskew/dewarp、时间戳和 Ouster 元数据处理。
+3. train/206 的 `calib.txt`、`poses.txt`、`.bin` 实际内容和全部发布文件类型，查找 per-point/per-column timestamp、PCAP、ROS bag、OSF 或 Ouster metadata JSON。
+4. STU 官方训练/预处理代码中 `poses.txt` 与 `calib.txt` 对点的实际作用，区分“读入时变到全局坐标”与“发布的 `.bin` 已被变换”。
+5. Ouster 官方 XYZLut 的方向项、beam-origin 偏移项、stagger/destagger 与逐 column 采样时间语义。
+
+**冻结判定纪律**
+
+1. 只有官方生成代码、官方元数据说明或能从发布文件直接验证的变换，才能将坐标来源判为已识别。
+2. 论文只说 KISS-ICP “包含运动补偿”，不足以单独推出发布 `.bin` 已保存 deskew 结果；必须分清补偿仅用于估计 pose，还是已写回点坐标。
+3. 不把文件采用 SemanticKITTI 目录/二进制封装格式当作坐标语义证据。
+4. 若官方发布证据无法在 `raw_lidar_or_sensor_cartesian`、`whole_frame_rigid_transformed`、`per_column_or_per_point_motion_compensated` 三者中唯一定位，D1 必须记为 `insufficient_released_evidence`，不使用 E11 残差猜测一个 PASS 答案。
+5. 单独记录 Ouster beam-origin 偏移是否使 $XYZ/\lVert XYZ\rVert$ 不等于物理激光方向；该几何问题与 deskew 是两个不同的候选解释。
+
+**状态转移**
+
+- 只有识别出已作用于发布 XYZ 且可从发布文件逆变换的整帧刚体变换，才解锁 **E11-D2**。
+- 只有获得 per-point/per-column timestamp 与已使用的 deskew 轨迹/模型，或足以重建它们的原始 packet 和 Ouster metadata，才解锁 **E11-D3**。
+- 若发布证据不足，则 D2/D3 保持锁定，并将向数据作者索取生成语义/元数据作为唯一能改变判断的后续动作。
+- 禁止无约束 permutation、更高容量的 column shift 或根据 E11 残差拟合自由 ray mapping。E12 继续锁定。
 
 
 ## E12｜多回波重排风险

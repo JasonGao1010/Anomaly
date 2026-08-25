@@ -122,6 +122,17 @@
         "repeat_read_and_reconstruction_exact_match": true,
         "criteria_frozen_before_formal_run": true
       },
+      "coordinate_source_diagnostic": {
+        "version": "E11-D1",
+        "question": "Determine whether released STU .bin XYZ is raw lidar/sensor-frame Cartesian output, a whole-frame rigid transform, per-column or per-point motion-compensated output, or unresolved from released evidence.",
+        "required_evidence": ["official STU paper and supplementary material", "official STU repository including full history", "released calib.txt and poses.txt semantics", "released file inventory for timestamps, packets, bags, and Ouster metadata", "official Ouster Cartesian projection and motion-compensation definitions"],
+        "ouster_geometry_check": "distinguish physical beam direction from normalized Cartesian XYZ because Ouster XYZLut uses range-scaled direction plus a beam-origin-dependent offset",
+        "allowed_outcomes": ["raw_lidar_or_sensor_cartesian", "whole_frame_rigid_transformed", "per_column_or_per_point_motion_compensated", "insufficient_released_evidence"],
+        "whole_frame_test_unlock_rule": "E11-D2 is eligible only if a concrete whole-frame transform applied to released XYZ is identified and invertible from released calibration or poses.",
+        "deskew_test_unlock_rule": "E11-D3 is eligible only if per-point/per-column timestamps plus the applied deskew trajectory/model, or original Ouster packet metadata sufficient to reconstruct them, are available.",
+        "forbidden_followups": ["unconstrained permutation", "higher-capacity column relabelling", "free ray mapping fitted to E11 residuals"],
+        "E12_locked": true
+      },
       "empty_ray_direction": "same-beam periodic interpolation, explicitly approximate without sensor metadata"
     },
     "normal_controls": {
