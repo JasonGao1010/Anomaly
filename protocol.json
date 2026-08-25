@@ -108,7 +108,7 @@
         "mapping_family": "one integer cyclic column shift per frame and beam; no pointwise nearest-neighbour assignment, non-cyclic permutation, duplicate, or fabricated return",
         "mapping_estimator": "deterministic alternating maximization of observed unit-direction agreement with one fixed canonical direction template; equal-weight template update and exhaustive 1024-shift row update",
         "mapping_gauge": "for every beam, anchor the frame-0 cyclic shift to zero by an equivalent canonical-template roll",
-        "initial_template": "equal-weight normalized mean by raw row/column slot, used only as a deterministic initialization and re-estimated after every mapping update",
+        "initial_template": "equal-weight normalized mean by raw row/column slot; raw slots never observed in train/206 use deterministic same-beam periodic interpolation only for the direction template, never as a return; the template is re-estimated after every mapping update",
         "maximum_mapping_iterations": 100,
         "mapping_convergence": "all 449x128 integer shifts unchanged",
         "empty_slot_rule": "all 128x1024 canonical rays and raw slots remain in rho_f; an empty mapped ray has no return and normal range +infinity",
