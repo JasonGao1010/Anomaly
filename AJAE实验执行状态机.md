@@ -1674,15 +1674,39 @@ PASS，诊断问题得到明确裁决；E18a-B 的历史效率 FAIL 保持不变
 
 冻结的多数分叉因此选择 **`continuous_upper_bound`**：当前效率失败主要由原连续上界松弛造成，不得修改 proposal distribution，也不得放宽历史 50%/$Q_{0.99}\le8$ 标准。下一步必须先设计、实现并独立资格一个更紧但仍保守的正式连续上界，再按版本化协议重跑 E18a-B；在该设计获批前停止。
 
+### E18a-D2｜紧致保守连续上界资格
+
+**唯一问题与候选定义**
+
+E18a-D2 只回答一个准备进入正式 generator 的廉价连续上界，能否在保持严格保守的前提下显著减少 E18a-D1 已确认的证书松弛。D2 不修改 generator、proposal distribution、0.2–3.0 m 尺寸范围、原 E18a-B 效率门槛或历史结果。
+
+候选以固定 256 个 $z$ 薄层传播连续几何外包围。每个 primitive 先按最大表面位移对应的隐式 level set 解析扩张；在每个薄层内，根据该层离 primitive 中心的最小 $|z|$ 计算 superquadric 横截面的解析支撑矩形，再依顺序 CSG 传播：union 取包络、difference 保留左集合、intersection 取矩形交。随后在同一薄层内用区间算术联合传播 twist 的正余弦范围、taper 的正缩放范围和 bend 的 $z^2$ 范围，最后合并全部薄层。正式候选 AABB 取该薄层 AABB 与旧保守 AABB 的集合交；两个 AABB 都包含真实连续几何，因此其交仍是保守外包围，且逐轴不会比旧上界更松。候选尺寸上界为该交 AABB 的最大轴跨度。
+
+算法固定为 256 层，时间复杂度 $O(256P)$、内存复杂度 $O(256)$，其中 $P\le5$；禁止使用 Sobol、SLSQP、differential evolution、D1 三维分支定界、mesh/voxel resolution 或依数据自适应增加层数。D2 只资格该候选，不把它接入 schema 3。
+
+**固定样本与 PASS 条件**
+
+解析资格沿用 D1 的七个 fixture；每个解析真实最大轴尺寸必须不大于新上界，且用 $2^{18}$ 个独立连续 probes 不得发现真实 inside 点位于候选 AABB 外。历史资格严格重放 E18a-B 的同一 1,802 个上界拒绝对象，并要求调用索引、对象哈希和旧 $U$ 与 D1 产物逐元素一致。
+
+对全部 1,802 个对象，必须满足 $U_{\mathrm{new}}\le U_{\mathrm{old}}$，并且 D1 的严格真实内部见证下界不得超过 $U_{\mathrm{new}}$；任一 $\underline D_{\mathrm{HP}}>U_{\mathrm{new}}$ 即为确定的保守性反例并直接 FAIL。D1 已确认的 232 个 `true_oversize` 对象中，不允许任何对象出现 $U_{\mathrm{new}}\le3$ m。
+
+有效性门槛冻结为：1,502 个 `certificate_looseness` 对象中，至少 75%（即至少 1,127 个）满足 $U_{\mathrm{new}}\le3$ m；同时完整报告 $U_{\mathrm{old}}-U_{\mathrm{new}}$、$U_{\mathrm{old}}-\underline D_{\mathrm{HP}}$ 与 $U_{\mathrm{new}}-\underline D_{\mathrm{HP}}$ 的 median/$Q_{0.90}$/$Q_{0.99}$/maximum，不根据结果改门槛。
+
+成本在当前冻结机器上对 1,802 个对象逐个单线程计时；候选上界单次中位时间必须小于 5 ms、$Q_{0.99}$ 小于 20 ms。计时只用于成本资格，不进入确定性哈希。两次完整几何计算必须逐元素复现候选 AABB、$U_{\mathrm{new}}$、对象身份、分类、统计与运行哈希。
+
+PASS → 冻结并实施 E18a-B-v2：generator schema 4 只用新上界替换旧上界，proposal distribution 与历史效率门槛原样保留。FAIL → 不得接入 generator；根据失败项重新设计保守上界。E18a-B-v2、E18b 与 E19 当前均锁定。
+
 ## E18b｜CSG 与连续形变求交稳定性
 
-E18a 完整 PASS 前锁定。E18a-D1 已 PASS，但正式连续上界尚未修订并重新资格，因此 E18b 继续锁定。E18b 回答已经合法接收的 union、difference、intersection、非二次 exponent、bend、twist、taper 与低频表面形变是否支持稳定的 hit/miss、最近正交点、有限正距离、曲面残差、单位法向和独立高精度复现。具体压力样例与阈值必须在 E18a PASS 后、首次运行前冻结。
+E18a 完整 PASS 前锁定。E18a-D1 已 PASS，E18a-D2 已解锁，但新上界尚未资格，因此 E18a-B-v2、E18b 与 E19 继续锁定。E18b 回答已经合法接收的 union、difference、intersection、非二次 exponent、bend、twist、taper 与低频表面形变是否支持稳定的 hit/miss、最近正交点、有限正距离、曲面残差、单位法向和独立高精度复现。具体压力样例与阈值必须在 E18a PASS 后、首次运行前冻结。
 
 **状态转移**
 
 - E18a-A PASS → **E18a-B**
 - E18a-B PASS → **E18b**
 - E18a-B 仅效率 FAIL 且归因未知 → **E18a-D1**
+- E18a-D1 证书松弛过半 → **E18a-D2**
+- E18a-D2 PASS → **E18a-B-v2**
 - E18b PASS → **E19**
 - 任一层 FAIL → 修复对应测量、生成或求交构念；若需改变机制集合或提议分布，停止并重新修订协议。
 
