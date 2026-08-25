@@ -1696,6 +1696,17 @@ E18a-D2 只回答一个准备进入正式 generator 的廉价连续上界，能�
 
 PASS → 冻结并实施 E18a-B-v2：generator schema 4 只用新上界替换旧上界，proposal distribution 与历史效率门槛原样保留。FAIL → 不得接入 generator；根据失败项重新设计保守上界。E18a-B-v2、E18b 与 E19 当前均锁定。
 
+**E18a-D2 正式结果**
+
+FAIL；候选不得接入 generator，E18a-B-v2、E18b 与 E19 继续锁定。如果后续修订审计范围，本次结果永久记为 E18a-D2-v1 FAIL。
+
+- 七个解析 fixture 的真实尺寸均不超过候选上界，$7\times2^{18}$ 个独立 probes 没有发现 inside 点位于候选 AABB 外；1,802 个历史对象中没有出现 $\underline D_{\mathrm{HP}}>U_{\mathrm{new}}$ 的确定保守性反例，232 个 `true_oversize` 对象的误放行数为 0；
+- 1,502 个 `certificate_looseness` 对象中有 1,302 个满足 $U_{\mathrm{new}}\le3$ m，恢复率为 86.68%，超过冻结的 75%；候选单线程耗时 median/$Q_{0.99}$/maximum 为 0.253/0.438/0.834 ms，低于冻结的 5/20 ms；
+- 唯一失败条件是“全部 1,802 个对象 $U_{\mathrm{new}}\le U_{\mathrm{old}}$”：共有 19 个对象违反，最大差值为 0.819920 m；两次完整运行逐元素一致，运行哈希均为 `ec6834db4804008b9876cb935924843768dc5430d414700734aabaf187696523`，摘要哈希为 `3921ecf6c16720af52a5fad336f79278d59566ed0b37403a164a0997b55da09a`；产物 `runs/ajae/e18a_d2_tight_upper_bound.npz` 的 SHA-256 为 `559c06109b90b48a2adad3788bd90effef81dcacddb7d1f028216c69dde3e2db`；
+- 事后身份诊断确认这 19 个对象全部为默认混合路径中的单 primitive。单 primitive 的历史 $U_{\mathrm{old}}$ 来自 E16-v3 的全局连续优化，而多 primitive 的历史 $U_{\mathrm{old}}$ 来自 E18a-A 解析证书；D2 首版把准备替换多 primitive 证书的廉价候选错误地同时要求优于单 primitive 全局优化，因而混合了两种不同替换范围。
+
+本次 FAIL 不能通过事后删除 19 个对象改写。若修订为 E18a-D2-v2，必须在运行前明确冻结：单 primitive 原样继承 E16-v3 路径且不属于新上界替换域；D2-v2 只在实际将被 schema 4 替换的多 primitive 历史上界域内重新计算保守性、相对紧致性和松弛恢复率。该协议修订需先获批准。
+
 ## E18b｜CSG 与连续形变求交稳定性
 
 E18a 完整 PASS 前锁定。E18a-D1 已 PASS，E18a-D2 已解锁，但新上界尚未资格，因此 E18a-B-v2、E18b 与 E19 继续锁定。E18b 回答已经合法接收的 union、difference、intersection、非二次 exponent、bend、twist、taper 与低频表面形变是否支持稳定的 hit/miss、最近正交点、有限正距离、曲面残差、单位法向和独立高精度复现。具体压力样例与阈值必须在 E18a PASS 后、首次运行前冻结。
