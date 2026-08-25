@@ -1648,9 +1648,9 @@ $$
 [\underline D_{\mathrm{HP}},\overline D_{\mathrm{HP}}].
 $$
 
-独立估计器不得调用 `continuous_size_certificate`、`_continuous_outer_bounds`、`continuous_bounds` 或 resolution 31/41 mesh 报告。下界由独立确定性 Sobol 内部见证点及从这些点启动的连续约束极值优化给出；只有 SDF 有限且不大于 $10^{-9}$ 的实际内部/边界点才能形成下界。上界把未形变的解析 superquadric/CSG 外包围按 $z$ 轴均匀分为嵌套薄层，在每层内用区间算术传播 beam-independent twist、taper 与 bend，最后合并所有薄层；difference 只保留其左侧集合上界，intersection 取区间交，union 取区间并。该上界独立实现，不读取原证书的 bounds 数值。
+独立估计器不得调用 `continuous_size_certificate`、`_continuous_outer_bounds`、`continuous_bounds` 或 resolution 31/41 mesh 报告。下界由独立确定性 Sobol 内部见证点及从这些点启动的连续约束极值优化给出；只有 SDF 有限且不大于 $10^{-9}$ 的实际内部/边界点才能形成下界。上界从独立球形搜索域开始，对输出坐标盒做三维自适应区间分支定界：先用区间算术逆传播 bend、taper 与 twist，再传播解析 superquadric 隐式函数、顺序 CSG 的 min/max/difference 以及低频表面位移；隐式函数区间下界大于零的盒被严格排除，其余盒按当前目标轴的可能极值优先细分。该方法保留三维坐标相关性，不读取原证书的 bounds 数值。
 
-标准计算冻结为 $2^{14}$ 个 Sobol probes、每个轴向极值最多 8 个约束优化起点和 1,024 个 $z$ 薄层；严格计算冻结为嵌套的 $2^{16}$ probes、每个轴最多 24 个起点和 4,096 个薄层。约束优化使用 SLSQP，`ftol=1e-12`、`maxiter=500`；失败或不可行结果只能丢弃，不能用于缩小区间。最终使用严格区间归因。
+标准计算冻结为 $2^{14}$ 个 Sobol probes、每个轴向极值最多 8 个约束优化起点和 0.004 m 的分支定界终止宽度；严格计算冻结为嵌套的 $2^{16}$ probes、每个轴最多 24 个起点和 0.001 m 的终止宽度。约束优化使用 SLSQP，`ftol=1e-12`、`maxiter=500`；失败或不可行结果只能丢弃，不能用于缩小区间。每个轴向单侧极值最多检查 250,000 个区间盒，达到上限仍未收敛则该对象标记为 `estimator_unresolved`，不得归入真实超限或证书松弛。最终使用严格区间归因。
 
 估计器先在半径 0.1/1.5 m 球、yaw 0.4 的半轴 $(0.1,0.3,0.5)$ m 椭球、两个半径 1 m 且中心位于 $x=\pm0.5$ m 球的 union/intersection、半径 1 m 球减去内部半径 0.35 m 球，以及带非零 twist 的球上资格。全部解析真实最大轴尺寸必须位于标准与严格区间；严格下界不得小于标准下界，严格上界不得大于标准上界；严格解析区间最大宽度须小于 0.01 m。每个 fixture 再用 $2^{18}$ 个独立连续 probes 检查，不得发现真实 inside 点超出严格外包围。两次完整 D1 必须逐元素复现样本身份、区间、分类、统计和哈希。
 
@@ -1658,7 +1658,7 @@ $$
 
 - `true_oversize`：$\underline D_{\mathrm{HP}}>3$ m；真实内部见证已经足以推出超限。
 - `certificate_looseness`：$\overline D_{\mathrm{HP}}\le3$ m；独立保守上界足以推出候选合格，而原证书仍拒绝。
-- `boundary_unresolved`：其余跨越 3 m 的区间；不得强行归入前两类。
+- `boundary_unresolved`：其余跨越 3 m 的区间，以及达到区间盒上限的 `estimator_unresolved`；不得强行归入前两类。
 
 “主要”在运行前冻结为占全部 1,802 个上界拒绝对象严格超过 50%。若 `true_oversize` 严格过半，下一步只修 proposal parameterization/scale allocation，形成 schema 4 与 E18a-B-v2；若 `certificate_looseness` 严格过半，下一步只改进并重新资格连续上界，不改变异常代理提议分布；若两类都未过半，则报告三类比例并停止，先解决未决区间或确定单一优先修改对象。D1 是归因诊断，不以任一方向为预期 PASS，也不得据此改写 E18a-B 的历史 FAIL。
 
