@@ -1622,6 +1622,18 @@ E18a-A 已 PASS，E18a-B 解锁。生成器升为 schema 3，但只修改多 pri
 
 PASS → 解锁 E18b。正确性 FAIL → 修 schema-3 acceptance 后按原判据重跑；仅效率 FAIL → E18b 保持锁定，另行决定是否修订 proposal parameterization。
 
+**E18a-B 正式结果**
+
+FAIL，原因仅为预注册效率条件未满足；E18b 与 E19 保持锁定。schema-3 correctness 证据保留，但不得据此改写整体为 PASS。
+
+- 2,048 次生成调用全部在 64 次内成功，最终接受 primitive count 1–5 分别为 379/460/409/411/389；全部参数、SDF、resolution 31/41 非尺寸拓扑检查通过，生成报告与重新计算的连续尺寸/证书逐元素一致；
+- 接受对象的尺寸下界最小值为 0.202296 m，保守上界最大值为 2.997668 m，连续证书违反数、非尺寸失败数、报告不一致数与 proposal 记账错误数均为 0；
+- 共执行 4,970 次 proposal、拒绝 2,922 次，总体拒绝率为 58.7928%，超过冻结的 50%；proposal count 的 median/$Q_{0.90}$/$Q_{0.95}$/$Q_{0.99}$/maximum 为 2/5/6/9/18，其中 $Q_{0.99}=9$ 超过冻结的 8；
+- 拒绝原因中，下界证据不足 56 次、保守上界无法证明不超过请求上限 1,802 次、其他既有构造或几何检查拒绝 1,064 次；固定 count 2/3/4/5 的拒绝率随复杂度上升为 57.62%/61.39%/65.41%/68.97%；
+- 两次完整运行 bitwise 一致，运行哈希均为 `6d98f725c4d1c5867e1a4f5bc9ec0ff893a38abc70d7709b00271f1c3e796c59`，摘要哈希为 `1a62ab9b9dc2f4beda72743a8b5feb4ab3b471daadff29c496bf842c060fb80b`。
+
+该 FAIL 不表示 schema 3 接受了非法对象；它表明**未改变的 schema-2 proposal distribution 与新的完整连续资格域明显失配**，且复杂 primitive count 的失配更严重。继续必须在不改变连续合法性定义的前提下重新设计 proposal parameterization 或采样效率机制，并在运行前版本化冻结；不得放宽 50%/8 的历史标准，也不得恢复离散尺寸接收。
+
 ## E18b｜CSG 与连续形变求交稳定性
 
 E18a 完整 PASS 前锁定。它回答已经合法接收的 union、difference、intersection、非二次 exponent、bend、twist、taper 与低频表面形变是否支持稳定的 hit/miss、最近正交点、有限正距离、曲面残差、单位法向和独立高精度复现。具体压力样例与阈值必须在 E18a PASS 后、首次运行前冻结。
