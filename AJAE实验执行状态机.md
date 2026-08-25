@@ -1120,6 +1120,19 @@ $s_b$ 只取 D4a 已冻结的四组位移；$\rho_f$ 在所有 frame 中相同�
 
 E11-v3 PASS 支持的结论是“STU 发布数据可自标定出跨 206/201 稳定的 Ouster-like 规范物理射线身份”，不是“恢复了未经发布的原厂 metadata”。个别序列内零观测的 ray 仅由共享模型定义，其直接数据覆盖边界必须保留。
 
+**正式结果**
+
+E11-v3 PASS，解锁 E12。E11-v1/v2 的历史 FAIL、D4c-v1 的历史 FAIL 以及各自失效构念均永久保留。
+
+- 固定映射 $c=(a-s_b)\bmod1024$ 与逆映射 $a=(c+s_b)\bmod1024$ 在全部 128 行上构成完整双射；206 的 449 帧和 201 的 678 帧全部 raw XYZI 经 `raw→ray→raw` 往返逐 bit 相同；
+- train/206 共评估 56,196,767 个真实回波，角残差 median/$Q_{0.95}$/$Q_{0.99}$/maximum 为 $0.001913^\circ$/$0.008386^\circ$/$0.016528^\circ$/$0.055267^\circ$；最差 beam/canonical column/frame 的 $Q_{0.99}$ 为 $0.043732^\circ$/$0.045165^\circ$/$0.025624^\circ$；
+- train/201 共评估 77,782,123 个真实回波，角残差 median/$Q_{0.95}$/$Q_{0.99}$/maximum 为 $0.001860^\circ$/$0.006758^\circ$/$0.007872^\circ$/$0.064321^\circ$；最差 beam/canonical column/frame 的 $Q_{0.99}$ 为 $0.043732^\circ$/$0.045165^\circ$/$0.014995^\circ$；
+- 两个 sequence 的所有残差有限、全部恢复量程为正，且 128 个 beam、1024 个 canonical columns 和所有纳入 frame 均有真实覆盖；
+- 206 有 383 个、201 有 373 个单独 canonical rays 零观测；合并两序列后仍有 367 个 `model_defined_but_unobservable` rays。这些 ray 由共享传感器模型定义，但不声称获得直接回波验证；
+- 两次完整终审逐元素一致，摘要哈希为 `29dc63eec1b7647f38aff658e4ac373c88e86da201089aec4925d83fb1674740`。
+
+最终科学结论为：**文件槽位本身的归一化 XYZ 方向不是稳定物理 ray，但通过固定逐行 destagger 映射、beam-origin 与 128 组 beam angles 自标定后，可得到在 train/206 与独立 train/201 上稳定、可逆且满足冻结网格尺度的规范物理射线身份。** 后续 renderer 必须使用该几何模型，不得回退到 $XYZ/\lVert XYZ\rVert$。
+
 
 ## E12｜多回波重排风险
 
