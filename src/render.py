@@ -358,8 +358,27 @@ class ShapeSpec:
         lower = np.empty(3, dtype=np.float64)
         upper = np.empty(3, dtype=np.float64)
         angular_bounds = ((-0.5 * math.pi, 0.5 * math.pi), (-math.pi, math.pi))
+        probe_count = 2048
+        probe_id = np.arange(probe_count, dtype=np.float64)
+        probe_z = 1.0 - 2.0 * (probe_id + 0.5) / probe_count
+        probe_longitude = (
+            math.pi * (3.0 - math.sqrt(5.0)) * probe_id + math.pi
+        ) % (2.0 * math.pi) - math.pi
+        probe_angles = np.column_stack((np.arcsin(probe_z), probe_longitude))
+        probe_points = np.asarray(
+            [self._single_primitive_surface_point(a, b) for a, b in probe_angles]
+        )
         for axis in range(3):
             for sign in (-1.0, 1.0):
+                candidate_count = 2 * population
+                elite_count = candidate_count // 2
+                elite = np.argsort(sign * probe_points[:, axis])[-elite_count:]
+                coverage = np.linspace(
+                    0, probe_count - 1, candidate_count - elite_count, dtype=np.int64
+                )
+                initial_population = np.concatenate(
+                    (probe_angles[elite], probe_angles[coverage]), axis=0
+                )
                 result = differential_evolution(
                     lambda value: -sign
                     * self._single_primitive_surface_point(value[0], value[1])[axis],
@@ -370,6 +389,7 @@ class ShapeSpec:
                     tol=1.0e-10,
                     atol=1.0e-11,
                     polish=True,
+                    init=initial_population,
                     updating="immediate",
                     workers=1,
                 )
