@@ -1662,9 +1662,21 @@ $$
 
 “主要”在运行前冻结为占全部 1,802 个上界拒绝对象严格超过 50%。若 `true_oversize` 严格过半，下一步只修 proposal parameterization/scale allocation，形成 schema 4 与 E18a-B-v2；若 `certificate_looseness` 严格过半，下一步只改进并重新资格连续上界，不改变异常代理提议分布；若两类都未过半，则报告三类比例并停止，先解决未决区间或确定单一优先修改对象。D1 是归因诊断，不以任一方向为预期 PASS，也不得据此改写 E18a-B 的历史 FAIL。
 
+**E18a-D1 正式结果**
+
+PASS，诊断问题得到明确裁决；E18a-B 的历史效率 FAIL 保持不变，E18b 与 E19 继续锁定。
+
+- 七个解析 fixture 的真实连续尺寸全部位于标准与严格高精度区间；严格解析区间最大宽度为 0.001463 m，小于冻结的 0.01 m，$7\times2^{18}$ 个独立 probes 没有发现真实 inside 点超出严格外包围；
+- 只读重放逐调用恢复 E18a-B 的 2,048 个最终对象、4,970 次 proposal、2,922 次拒绝以及 56/1,802/1,064 三类拒绝计数，最终对象哈希、proposal count 和拒绝计数均与父产物完全一致；
+- 1,802 个上界拒绝候选中，`true_oversize` 为 232 个（12.87%），`certificate_looseness` 为 1,502 个（83.35%），`boundary_unresolved` 为 68 个（3.77%）；其中 66 个未决对象触及 250,000 盒上限，未被强行分类；
+- 证书松弛在默认路径和固定 primitive count 2/3/4/5 中分别为 574/704、232/288、229/269、230/261、237/280，因而不是单一审计组造成；
+- 两次完整运行逐元素一致，运行哈希均为 `a5f4fe7be9bf8b5c5fd22487a1e2737a1e1ec1629b36419bea223dd2bfa295c2`，摘要哈希为 `8d6acead5918abd06387525f44f0c2d2a5cde993021a3a327f7bf6fbceebe29f`；产物为 `runs/ajae/e18a_d1_upper_attribution.npz`，SHA-256 为 `e0eb4f82bd4a7233ffacd3a2e32d42d82b7686219b0c8483e6c8f222c7652685`。
+
+冻结的多数分叉因此选择 **`continuous_upper_bound`**：当前效率失败主要由原连续上界松弛造成，不得修改 proposal distribution，也不得放宽历史 50%/$Q_{0.99}\le8$ 标准。下一步必须先设计、实现并独立资格一个更紧但仍保守的正式连续上界，再按版本化协议重跑 E18a-B；在该设计获批前停止。
+
 ## E18b｜CSG 与连续形变求交稳定性
 
-E18a 完整 PASS 前锁定。当前 E18a-D1 已解锁，E18b 继续锁定。E18b 回答已经合法接收的 union、difference、intersection、非二次 exponent、bend、twist、taper 与低频表面形变是否支持稳定的 hit/miss、最近正交点、有限正距离、曲面残差、单位法向和独立高精度复现。具体压力样例与阈值必须在 E18a PASS 后、首次运行前冻结。
+E18a 完整 PASS 前锁定。E18a-D1 已 PASS，但正式连续上界尚未修订并重新资格，因此 E18b 继续锁定。E18b 回答已经合法接收的 union、difference、intersection、非二次 exponent、bend、twist、taper 与低频表面形变是否支持稳定的 hit/miss、最近正交点、有限正距离、曲面残差、单位法向和独立高精度复现。具体压力样例与阈值必须在 E18a PASS 后、首次运行前冻结。
 
 **状态转移**
 
