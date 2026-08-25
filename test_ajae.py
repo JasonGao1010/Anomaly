@@ -534,6 +534,30 @@ def test_generator_schema3_uses_csg_certificate_for_multi_primitive() -> None:
     assert report.accepted_size_upper_m <= 3.0
 
 
+def test_tight_continuous_outer_bound_is_conservative_and_no_looser() -> None:
+    shape = ShapeSpec(
+        ((1.0, 0.6, 0.8), (0.5, 0.4, 0.6)),
+        ((0.0, 0.0, 0.0), (0.3, 0.0, 0.1)),
+        ((1.0, 0.8), (1.2, 1.1)),
+        (0.35, -0.4),
+        ("union", "intersection"),
+        twist_rad_per_m=0.7,
+        bend_per_m=(0.04, -0.03),
+        taper_per_m=(0.08, -0.06),
+        surface_amplitude_m=0.01,
+    )
+    old_lower, old_upper = shape._continuous_outer_bounds()
+    new_lower, new_upper = shape.tight_continuous_outer_bounds()
+    assert np.all(new_lower >= old_lower)
+    assert np.all(new_upper <= old_upper)
+    rng = np.random.default_rng(20260826)
+    points = rng.uniform(old_lower, old_upper, size=(131_072, 3))
+    inside = points[shape.signed_distance(points) <= 0.0]
+    assert len(inside) > 0
+    assert np.all(inside >= new_lower)
+    assert np.all(inside <= new_upper)
+
+
 def test_continuous_primitive_bounds_match_an_analytic_rotated_ellipsoid() -> None:
     scales = (0.3, 0.7, 1.1)
     yaw = 0.4

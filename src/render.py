@@ -539,6 +539,259 @@ class ShapeSpec:
             raise RenderError("continuous CSG outer bounds are invalid")
         return _freeze(result_lower), _freeze(result_upper)
 
+    def tight_continuous_outer_bounds(
+        self,
+        *,
+        z_slabs: int = 256,
+        safety_margin_m: float = 1.0e-6,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Bound the deformed CSG with fixed-cost z-sliced interval propagation."""
+
+        slabs = _integer("z_slabs", z_slabs, minimum=16)
+        margin = _finite_scalar("safety_margin_m", safety_margin_m)
+        if margin < 0.0 or margin > 1.0e-3:
+            raise RenderError("continuous-bound safety margin must lie in [0,1e-3]")
+        old_lower, old_upper = self._continuous_outer_bounds(
+            safety_margin_m=margin
+        )
+        edges = np.linspace(old_lower[2], old_upper[2], slabs + 1)
+        z_lower = edges[:-1]
+        z_upper = edges[1:]
+        valid = np.zeros(slabs, dtype=np.bool_)
+        x_lower = np.zeros(slabs, dtype=np.float64)
+        x_upper = np.zeros(slabs, dtype=np.float64)
+        y_lower = np.zeros(slabs, dtype=np.float64)
+        y_upper = np.zeros(slabs, dtype=np.float64)
+
+        for index, (scale, offset, exponent, yaw, operation) in enumerate(
+            zip(
+                self.primitive_scales_m,
+                self.primitive_offsets_m,
+                self.primitive_exponents,
+                self.primitive_yaws_rad,
+                self.operations,
+                strict=True,
+            )
+        ):
+            a, b, c = scale
+            vertical, horizontal = exponent
+            level = 1.0 + self.surface_amplitude_m / min(scale)
+            primitive_z_lower = offset[2] - level * c
+            primitive_z_upper = offset[2] + level * c
+            active = (z_upper >= primitive_z_lower) & (
+                z_lower <= primitive_z_upper
+            )
+            nearest_z = np.where(
+                (z_lower <= offset[2]) & (z_upper >= offset[2]),
+                0.0,
+                np.minimum(
+                    np.abs(z_lower - offset[2]),
+                    np.abs(z_upper - offset[2]),
+                ),
+            )
+            radial_term = np.maximum(
+                0.0,
+                level ** (2.0 / vertical)
+                - (nearest_z / c) ** (2.0 / vertical),
+            )
+            cross_scale = radial_term ** (vertical / 2.0)
+            cosine = abs(math.cos(yaw))
+            sine = abs(math.sin(yaw))
+            planar_power = 2.0 / horizontal
+            if planar_power > 1.0 + 1.0e-12:
+                dual = planar_power / (planar_power - 1.0)
+                half_x = cross_scale * (
+                    (a * cosine) ** dual + (b * sine) ** dual
+                ) ** (1.0 / dual)
+                half_y = cross_scale * (
+                    (a * sine) ** dual + (b * cosine) ** dual
+                ) ** (1.0 / dual)
+            else:
+                # The rectangle support remains conservative for non-convex exponents.
+                half_x = cross_scale * (a * cosine + b * sine)
+                half_y = cross_scale * (a * sine + b * cosine)
+            primitive_x_lower = offset[0] - half_x
+            primitive_x_upper = offset[0] + half_x
+            primitive_y_lower = offset[1] - half_y
+            primitive_y_upper = offset[1] + half_y
+
+            if index == 0:
+                valid = active.copy()
+                x_lower = primitive_x_lower
+                x_upper = primitive_x_upper
+                y_lower = primitive_y_lower
+                y_upper = primitive_y_upper
+            elif operation == "union":
+                both = valid & active
+                x_lower = np.where(
+                    both,
+                    np.minimum(x_lower, primitive_x_lower),
+                    np.where(active, primitive_x_lower, x_lower),
+                )
+                x_upper = np.where(
+                    both,
+                    np.maximum(x_upper, primitive_x_upper),
+                    np.where(active, primitive_x_upper, x_upper),
+                )
+                y_lower = np.where(
+                    both,
+                    np.minimum(y_lower, primitive_y_lower),
+                    np.where(active, primitive_y_lower, y_lower),
+                )
+                y_upper = np.where(
+                    both,
+                    np.maximum(y_upper, primitive_y_upper),
+                    np.where(active, primitive_y_upper, y_upper),
+                )
+                valid |= active
+            elif operation == "intersection":
+                valid &= active
+                x_lower = np.maximum(x_lower, primitive_x_lower)
+                x_upper = np.minimum(x_upper, primitive_x_upper)
+                y_lower = np.maximum(y_lower, primitive_y_lower)
+                y_upper = np.minimum(y_upper, primitive_y_upper)
+                valid &= (x_lower <= x_upper) & (y_lower <= y_upper)
+            # Difference can only remove points from the accumulated left set.
+
+        if not bool(valid.any()):
+            raise RenderError("z-sliced continuous CSG outer bounds are empty")
+        z_lower = z_lower[valid]
+        z_upper = z_upper[valid]
+        x_lower = x_lower[valid]
+        x_upper = x_upper[valid]
+        y_lower = y_lower[valid]
+        y_upper = y_upper[valid]
+
+        def interval_product(
+            first_lower: np.ndarray,
+            first_upper: np.ndarray,
+            second_lower: np.ndarray,
+            second_upper: np.ndarray,
+        ) -> tuple[np.ndarray, np.ndarray]:
+            values = np.stack(
+                (
+                    first_lower * second_lower,
+                    first_lower * second_upper,
+                    first_upper * second_lower,
+                    first_upper * second_upper,
+                )
+            )
+            return np.min(values, axis=0), np.max(values, axis=0)
+
+        def trig_interval(
+            angle_lower: np.ndarray,
+            angle_upper: np.ndarray,
+            *,
+            cosine: bool,
+        ) -> tuple[np.ndarray, np.ndarray]:
+            function = np.cos if cosine else np.sin
+            result_lower = np.minimum(function(angle_lower), function(angle_upper))
+            result_upper = np.maximum(function(angle_lower), function(angle_upper))
+            maximum_phase = 0.0 if cosine else 0.5 * math.pi
+            minimum_phase = math.pi if cosine else -0.5 * math.pi
+            period = 2.0 * math.pi
+            contains_maximum = np.ceil(
+                (angle_lower - maximum_phase) / period
+            ) <= np.floor((angle_upper - maximum_phase) / period)
+            contains_minimum = np.ceil(
+                (angle_lower - minimum_phase) / period
+            ) <= np.floor((angle_upper - minimum_phase) / period)
+            return (
+                np.where(contains_minimum, -1.0, result_lower),
+                np.where(contains_maximum, 1.0, result_upper),
+            )
+
+        angle_a = self.twist_rad_per_m * z_lower
+        angle_b = self.twist_rad_per_m * z_upper
+        angle_lower = np.minimum(angle_a, angle_b)
+        angle_upper = np.maximum(angle_a, angle_b)
+        cosine_lower, cosine_upper = trig_interval(
+            angle_lower, angle_upper, cosine=True
+        )
+        sine_lower, sine_upper = trig_interval(
+            angle_lower, angle_upper, cosine=False
+        )
+        cosine_x_lower, cosine_x_upper = interval_product(
+            cosine_lower, cosine_upper, x_lower, x_upper
+        )
+        sine_y_lower, sine_y_upper = interval_product(
+            sine_lower, sine_upper, y_lower, y_upper
+        )
+        rotated_x_lower = cosine_x_lower - sine_y_upper
+        rotated_x_upper = cosine_x_upper - sine_y_lower
+        sine_x_lower, sine_x_upper = interval_product(
+            sine_lower, sine_upper, x_lower, x_upper
+        )
+        cosine_y_lower, cosine_y_upper = interval_product(
+            cosine_lower, cosine_upper, y_lower, y_upper
+        )
+        rotated_y_lower = sine_x_lower + cosine_y_lower
+        rotated_y_upper = sine_x_upper + cosine_y_upper
+
+        scale_z = max(item[2] for item in self.primitive_scales_m)
+
+        def deformation_interval(
+            coordinate_lower: np.ndarray,
+            coordinate_upper: np.ndarray,
+            taper: float,
+            bend: float,
+        ) -> tuple[np.ndarray, np.ndarray]:
+            factor_a = np.clip(1.0 + taper * z_lower / scale_z, 0.25, 4.0)
+            factor_b = np.clip(1.0 + taper * z_upper / scale_z, 0.25, 4.0)
+            factor_lower = np.minimum(factor_a, factor_b)
+            factor_upper = np.maximum(factor_a, factor_b)
+            scaled_lower, scaled_upper = interval_product(
+                coordinate_lower,
+                coordinate_upper,
+                factor_lower,
+                factor_upper,
+            )
+            z_square_lower = np.where(
+                (z_lower <= 0.0) & (z_upper >= 0.0),
+                0.0,
+                np.minimum(np.square(z_lower), np.square(z_upper)),
+            )
+            z_square_upper = np.maximum(np.square(z_lower), np.square(z_upper))
+            bend_lower = np.minimum(bend * z_square_lower, bend * z_square_upper)
+            bend_upper = np.maximum(bend * z_square_lower, bend * z_square_upper)
+            return scaled_lower + bend_lower, scaled_upper + bend_upper
+
+        deformed_x_lower, deformed_x_upper = deformation_interval(
+            rotated_x_lower,
+            rotated_x_upper,
+            self.taper_per_m[0],
+            self.bend_per_m[0],
+        )
+        deformed_y_lower, deformed_y_upper = deformation_interval(
+            rotated_y_lower,
+            rotated_y_upper,
+            self.taper_per_m[1],
+            self.bend_per_m[1],
+        )
+        sliced_lower = np.asarray(
+            (
+                float(np.min(deformed_x_lower)) - margin,
+                float(np.min(deformed_y_lower)) - margin,
+                float(np.min(z_lower)) - margin,
+            )
+        )
+        sliced_upper = np.asarray(
+            (
+                float(np.max(deformed_x_upper)) + margin,
+                float(np.max(deformed_y_upper)) + margin,
+                float(np.max(z_upper)) + margin,
+            )
+        )
+        result_lower = np.maximum(old_lower, sliced_lower)
+        result_upper = np.minimum(old_upper, sliced_upper)
+        if (
+            not np.isfinite(result_lower).all()
+            or not np.isfinite(result_upper).all()
+            or np.any(result_lower >= result_upper)
+        ):
+            raise RenderError("tight continuous CSG outer bounds are invalid")
+        return _freeze(result_lower), _freeze(result_upper)
+
     def continuous_size_certificate(
         self,
         *,
