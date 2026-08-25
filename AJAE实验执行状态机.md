@@ -1492,6 +1492,34 @@ E16-v2b FAIL，E17 保持锁定。E16-v2a 的连续尺寸测量器资格不受�
 - PASS → **E17**
 - FAIL → **修 primitive 参数化后重跑 E16。**
 
+## E16-v3｜连续尺寸接收的单 primitive 生成器
+
+**协议修订原因与唯一问题**
+
+E16-v2b 的 FAIL 永久保留。它已经确认旧生成器使用 resolution 41 离散尺寸接收候选，会接受连续几何意义下越过 $[0.2,3.0]$ m 上下界的对象。E16-v3 只修改单 primitive 候选的最终接收条件，不改变参数提议分布、尺寸目标区间或任何失败 seed。
+
+旧实现记为隐式 generator schema 1，新实现显式记为 generator schema 2。每个候选按原确定性随机流完成参数采样、连续几何构造和既有几何检查后，使用 E16-v2a 已资格确认的 `continuous_bounds(maximum_iterations=80, population_size=10)` 计算连续形变曲面的轴对齐包围盒最大轴向跨度。只有
+
+$$
+0.2\le D_{\mathrm{continuous}}\le3.0\ \mathrm{m}
+$$
+
+时才接受；过小或过大的候选沿同一 seed 的随机流继续提议，最多仍为 64 次。resolution 41 离散边界可以用于诊断或后续数值辅助，但不得参与单 primitive 接收裁决。禁止 seed 特判、修改提议参数分布、事后缩窄提议范围或移动连续尺寸区间。
+
+该 schema 版本必须进入实验登记，并与 `render.py` 源码哈希共同组成训练缓存中的 renderer/generator identity，使修改前后的世界缓存不能混用。E16-v3 只资格确认 `primitive_count=1`；E16-v2a 尚未资格确认多 primitive CSG 的连续尺寸，因此默认多 primitive 路径不得在本节点被错误宣称合格，继续留给 E18。
+
+**运行前冻结的正式审计**
+
+仍对 seed 0–1023 生成 1,024 个最终接受对象。每个对象必须在 64 次内成功生成，参数、保守半径和 $9\times9\times9$ 网格 SDF 有限，resolution 31 报告只检查有界、闭合、单连通，连续边界有限且有序，连续尺寸全部位于闭区间 $[0.2,3.0]$ m，尺寸失败容忍数为 0。两次完整独立生成必须逐元素复现参数、连续边界、尺寸、接收分类、提议统计、哈希和摘要。
+
+必须额外报告每个 seed 的 proposal count、总提议数与拒绝率、too-small/too-large/其他构造或几何拒绝数及最大 proposal count。这些效率量不改变 E16-v3 的 correctness 判定；若合法对象都能产生但拒绝极端严重，应另行预注册采样效率实验，不得在本节点同步改变提议分布。
+
+**状态转移**
+
+- PASS → **E17。**
+- 仍接受非法连续尺寸 → 修复 schema-2 acceptance 实现后按原 E16-v3 协议重跑。
+- 64 次提议耗尽或拒绝极端严重 → E17 保持锁定，另行决定是否修订提议分布。
+
 
 ## E17｜单 primitive 射线求交
 
