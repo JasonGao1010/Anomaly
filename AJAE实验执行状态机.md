@@ -1739,6 +1739,30 @@ E18a-D2-v2 PASS，紧致保守上界获得进入多 primitive / CSG 生成路径
 
 该 PASS 只资格确认候选上界在 multi-primitive / CSG 替换域内严格保守、相对旧解析证书更紧且成本受控；尚未证明 schema 4 完整生成器满足历史效率条件。下一步必须先冻结 E18a-B-v2，再只修改多 primitive acceptance 并执行完整生成器审计。
 
+### E18a-B-v2｜schema-4 完整生成器连续尺寸接收
+
+**修订范围与唯一问题**
+
+E18a-B-v1 永久保留 FAIL，其 correctness 证据有效，但历史效率条件未满足。E18a-B-v2 只回答：在提议分布完全不变的前提下，把 D2-v2 已资格的新上界只接入多 primitive / CSG 路径后，完整 generator 是否同时满足连续几何正确性、确定性和原冻结效率条件。
+
+generator identity 升为 schema 4。单 primitive 接收路径逐项继承 E16-v3，不调用紧致薄层上界，仍以合格的 `continuous_bounds` 连续优化结果同时作为尺寸下界和上界。多 primitive 仍用 E18a-A 标准证书的真实连续边界弦作为尺寸下界 $L$，但用 E18a-D2-v2 的 256 层紧致保守 AABB 最大轴跨度作为上界 $U_{\mathrm{tight}}$；只有 $L\ge d_{\min}$ 且 $U_{\mathrm{tight}}\le d_{\max}$ 才接受。生成报告的 outer bounds 与 upper size 必须来自紧致保守 AABB，lower size 与 witness 资格仍来自原标准证书。旧解析 AABB 可作为紧致上界内部的保守交集输入，但不得再单独决定 multi-primitive acceptance。
+
+除这一替换外，seed 到随机流、primitive-count 抽样、尺度/轴比/CSG 操作/形变参数分布、请求尺寸区间、连通性检查、每次最多 64 个 proposal 和拒绝顺序全部保持 schema 3 不变；禁止 seed 特判、缩窄尺寸范围或调整 proposal parameterization。
+
+**固定审计与 PASS 条件**
+
+完整审计原样继承 E18a-B-v1 的 2,048 次调用：默认训练路径 seed 0–1023，以及 primitive count 2、3、4、5 各 seed 0–255。两次独立完整生成必须逐元素一致。
+
+全部调用必须在 64 次内成功；接受对象的参数、保守半径、$9\times9\times9$ SDF 必须有限，resolution 31/41 只用于有界、闭合、单连通和分辨率不改变连续资格的检查。单 primitive 报告须与重新计算的 E16-v3 连续优化 bounds 逐元素一致；多 primitive 报告的 lower size 须与重新计算的 E18a-A witness lower 一致，outer bounds 和 upper size 须与重新计算的 D2-v2 紧致上界逐元素一致，并满足 $L\ge0.2$ m、$U_{\mathrm{tight}}\le3.0$ m。报告 schema、proposal count、三类拒绝计数和最终对象哈希必须正确。
+
+效率条件全部原样继承首次运行前的冻结值：总体按 proposal 计拒绝率严格小于 50%，proposal count 的 $Q_{0.99}\le8$，maximum $\le64$。完整报告总体与各审计组提议数、拒绝率、下界证据不足、紧致上界超限、其他构造/几何拒绝数，以及 proposal count 的 median/$Q_{0.90}$/$Q_{0.95}$/$Q_{0.99}$/maximum。不得根据 E18a-D2-v2 的恢复率重新调整任何条件。
+
+PASS → E18a 完整闭合并解锁 E18b。correctness FAIL → 修 schema-4 acceptance 实现后按原判据重跑；correctness 全部成立但效率仍 FAIL → 不改写结果，停止并重新判断 proposal distribution 是否成为主要瓶颈。
+
+**当前状态**
+
+E18a-B-v2 已解锁并完成预注册；E18b 与 E19 在正式结果前继续锁定。
+
 ## E18b｜CSG 与连续形变求交稳定性
 
 E18a 完整 PASS 前锁定。E18a-D1 已 PASS，E18a-D2-v1 已因替换域定义错误永久 FAIL，E18a-D2-v2 已解锁但尚未取得正式结果，因此 E18a-B-v2、E18b 与 E19 继续锁定。E18b 回答已经合法接收的 union、difference、intersection、非二次 exponent、bend、twist、taper 与低频表面形变是否支持稳定的 hit/miss、最近正交点、有限正距离、曲面残差、单位法向和独立高精度复现。具体压力样例与阈值必须在 E18a PASS 后、首次运行前冻结。
