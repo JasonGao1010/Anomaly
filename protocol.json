@@ -376,6 +376,24 @@
         "failure_tolerance": 0,
         "interpretation_limit": "E16 qualifies numerical finiteness and bounded single-entity output only. Ray intersection is E17; multi-primitive CSG and deformation stability are E18.",
         "criteria_frozen_before_formal_run": true
+      },
+      "continuous_size_estimator_qualification": {
+        "version": "E16-v2a",
+        "amends": "E16-v1 FAIL remains permanent; replace its fixed-resolution padded voxel diameter with a continuous implicit-surface AABB estimator before judging generator sizes",
+        "size_definition": "maximum axis-aligned span max(upper-lower) of the continuous single-primitive implicit surface after twist, bend, taper, and low-frequency displacement",
+        "estimator": "for every undeformed spherical direction solve the outer continuous implicit-surface root, map it through the analytic forward deformation, and optimize each signed Cartesian coordinate with deterministic scipy differential_evolution; add a fixed 1e-6 metre outward numerical margin",
+        "mesh_resolution_role": "none; geometry_report resolution 31, 41, or any other voxel resolution is not an estimator input",
+        "analytic_fixtures": ["radius-0.5 m sphere", "axis-aligned ellipsoid with half-axes (0.3,0.7,1.1) m", "the same ellipsoid at yaw 0.4 rad with analytic rotated AABB"],
+        "analytic_bound_coordinate_absolute_tolerance_m": 5e-6,
+        "deformed_fixture_seeds": [0, 5, 276, 559, 639, 987],
+        "standard_optimizer": {"maximum_iterations": 80, "population_size": 10},
+        "strict_optimizer": {"maximum_iterations": 160, "population_size": 15},
+        "standard_strict_bound_coordinate_max_difference_m": 0.0001,
+        "independent_surface_directions_per_deformed_fixture": 16384,
+        "surface_containment_tolerance_m": 2e-6,
+        "pass_conditions": ["all analytic fixture bounds match their closed-form continuous bounds", "all standard and strict estimates are finite and ordered", "every standard/strict coordinate difference is below the frozen convergence tolerance", "all independently evaluated continuous surface points lie within the strict bounds", "calling voxel geometry reports at resolutions 31 and 41 does not alter the estimator output", "two independent complete runs are bitwise identical"],
+        "interpretation_limit": "E16-v2a qualifies the size estimator only; it does not decide whether the 1024 formal generator samples satisfy [0.2,3.0] m. That decision is E16-v2b.",
+        "criteria_frozen_before_formal_run": true
       }
     },
     "world_types": {"pure_normal": 0.2, "control_only": 0.2, "mixed": 0.4, "anomaly_only": 0.2},

@@ -475,6 +475,30 @@ def test_training_and_heldout_geometry_are_disjoint_and_bounded() -> None:
         assert report["bounded"] and report["closed"] and report["components"] == 1
 
 
+def test_continuous_primitive_bounds_match_an_analytic_rotated_ellipsoid() -> None:
+    scales = (0.3, 0.7, 1.1)
+    yaw = 0.4
+    shape = ShapeSpec(
+        (scales,),
+        ((0.0, 0.0, 0.0),),
+        ((1.0, 1.0),),
+        (yaw,),
+        ("union",),
+    )
+    lower, upper = shape.continuous_bounds(
+        maximum_iterations=80, population_size=10
+    )
+    expected = np.asarray(
+        (
+            np.hypot(scales[0] * np.cos(yaw), scales[1] * np.sin(yaw)),
+            np.hypot(scales[0] * np.sin(yaw), scales[1] * np.cos(yaw)),
+            scales[2],
+        )
+    )
+    np.testing.assert_allclose(lower, -expected, atol=5.0e-6, rtol=0.0)
+    np.testing.assert_allclose(upper, expected, atol=5.0e-6, rtol=0.0)
+
+
 def test_mixed_training_world_pairs_support_distance_size_and_seed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

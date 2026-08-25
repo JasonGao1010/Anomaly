@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, Callable, Literal, TypeAlias
 
 import numpy as np
+from scipy.optimize import brentq, differential_evolution
 from scipy.spatial import ConvexHull, QhullError, cKDTree
 
 try:
@@ -263,6 +264,125 @@ class ShapeSpec:
             + max(map(abs, self.taper_per_m)) * primitive
         )
         return 1.15 * (primitive + deformation + 1.0e-3)
+
+    def _single_primitive_surface_point(
+        self, latitude: float, longitude: float
+    ) -> np.ndarray:
+        """Solve the continuous outer surface along one undeformed direction."""
+
+        if self.primitive_count != 1:
+            raise RenderError("continuous primitive bounds require exactly one primitive")
+        if self.operations != ("union",) or self.primitive_offsets_m != ((0.0, 0.0, 0.0),):
+            raise RenderError("continuous primitive bounds require one centered union primitive")
+        cosine = math.cos(latitude)
+        direction = np.asarray(
+            (
+                cosine * math.cos(longitude),
+                cosine * math.sin(longitude),
+                math.sin(latitude),
+            ),
+            dtype=np.float64,
+        )
+        scale = self.primitive_scales_m[0]
+        exponent = self.primitive_exponents[0]
+        yaw = self.primitive_yaws_rad[0]
+        minimum_scale = min(scale)
+        unit_value = float(
+            self._primitive_distance(direction[None], scale, (0.0, 0.0, 0.0), exponent, yaw)[0]
+            / minimum_scale
+            + 1.0
+        )
+        if not np.isfinite(unit_value) or unit_value <= 0.0:
+            raise RenderError("single-primitive radial function is not finite and positive")
+        upper = (1.0 + self.surface_amplitude_m / minimum_scale) / unit_value
+
+        def implicit(radius: float) -> float:
+            point = radius * direction
+            base = minimum_scale * (radius * unit_value - 1.0)
+            displacement = self.surface_amplitude_m * float(
+                np.mean(
+                    np.sin(
+                        point * np.asarray(self.surface_frequency_per_m)
+                        + np.asarray(self.surface_phase_rad)
+                    )
+                )
+            )
+            return base - displacement
+
+        samples = np.linspace(0.0, upper * (1.0 + 1.0e-12), 65)
+        values = np.asarray([implicit(float(value)) for value in samples])
+        crossings = np.flatnonzero((values[:-1] <= 0.0) & (values[1:] >= 0.0))
+        if crossings.size == 0:
+            raise RenderError("continuous surface root was not bracketed")
+        index = int(crossings[-1])
+        radius = brentq(
+            implicit,
+            float(samples[index]),
+            float(samples[index + 1]),
+            xtol=1.0e-13,
+            rtol=1.0e-13,
+        )
+        undeformed = radius * direction
+        z = float(undeformed[2])
+        angle = self.twist_rad_per_m * z
+        rotation_cosine = math.cos(angle)
+        rotation_sine = math.sin(angle)
+        rotated_x = rotation_cosine * undeformed[0] - rotation_sine * undeformed[1]
+        rotated_y = rotation_sine * undeformed[0] + rotation_cosine * undeformed[1]
+        scale_z = self.primitive_scales_m[0][2]
+        factor_x = float(np.clip(1.0 + self.taper_per_m[0] * z / scale_z, 0.25, 4.0))
+        factor_y = float(np.clip(1.0 + self.taper_per_m[1] * z / scale_z, 0.25, 4.0))
+        return np.asarray(
+            (
+                factor_x * rotated_x + self.bend_per_m[0] * z * z,
+                factor_y * rotated_y + self.bend_per_m[1] * z * z,
+                z,
+            ),
+            dtype=np.float64,
+        )
+
+    def continuous_bounds(
+        self,
+        *,
+        maximum_iterations: int = 160,
+        population_size: int = 15,
+        safety_margin_m: float = 1.0e-6,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Estimate continuous single-primitive AABB extrema without a mesh grid."""
+
+        iterations = _integer("maximum_iterations", maximum_iterations, minimum=20)
+        population = _integer("population_size", population_size, minimum=5)
+        margin = _finite_scalar("safety_margin_m", safety_margin_m)
+        if margin < 0.0 or margin > 1.0e-3:
+            raise RenderError("continuous-bound safety margin must lie in [0,1e-3]")
+        lower = np.empty(3, dtype=np.float64)
+        upper = np.empty(3, dtype=np.float64)
+        angular_bounds = ((-0.5 * math.pi, 0.5 * math.pi), (-math.pi, math.pi))
+        for axis in range(3):
+            for sign in (-1.0, 1.0):
+                result = differential_evolution(
+                    lambda value: -sign
+                    * self._single_primitive_surface_point(value[0], value[1])[axis],
+                    angular_bounds,
+                    seed=1009 + 17 * axis + int(sign > 0.0),
+                    maxiter=iterations,
+                    popsize=population,
+                    tol=1.0e-10,
+                    atol=1.0e-11,
+                    polish=True,
+                    updating="immediate",
+                    workers=1,
+                )
+                if not result.success or not np.isfinite(result.fun):
+                    raise RenderError("continuous-bound optimization did not converge")
+                value = -float(result.fun) * sign
+                if sign < 0.0:
+                    lower[axis] = value - margin
+                else:
+                    upper[axis] = value + margin
+        if not np.isfinite(lower).all() or not np.isfinite(upper).all() or np.any(lower >= upper):
+            raise RenderError("continuous primitive bounds are invalid")
+        return _freeze(lower), _freeze(upper)
 
     def _undeform(self, points: np.ndarray) -> np.ndarray:
         result = np.asarray(points, dtype=np.float64).copy()
