@@ -81,6 +81,25 @@
       "canonical_identity": ["beam_id", "azimuth_column"],
       "file_slot_role": "input_output_mapping_only",
       "audit_required": ["slot_and_empty_pattern", "beam_elevation_rows", "beam_periodicity", "azimuth_continuity", "phase_aligned_cross_frame_direction_stability", "multi_return_or_duplicate_ray_reordering", "range_image_round_trip"],
+      "azimuth_continuity_definition": {
+        "version": "E10-v2",
+        "unit": "within-beam-row adjacent candidate columns",
+        "eligible_edge": "both (b,a) and (b,(a+1) mod 1024) contain real XYZ returns; never bridge empty columns",
+        "circular_increment_deg": [0.1, 0.6],
+        "minimum_eligible_edges_per_beam_frame": 512,
+        "single_orientation_across_all_beams_and_frames": true,
+        "wraparound_checked_separately": true,
+        "minimum_wraparound_observations_per_beam": 1,
+        "repeat_read_exact_match": true,
+        "beam_offset_correction": false,
+        "cross_frame_absolute_phase_checked": false
+      },
+      "phase_aligned_cross_frame_direction_stability_definition": {
+        "version": "E11",
+        "independent_from_azimuth_continuity": true,
+        "checks_fixed_canonical_ray_physical_direction": true,
+        "criteria_frozen_before_formal_run": false
+      },
       "empty_ray_direction": "same-beam periodic interpolation, explicitly approximate without sensor metadata"
     },
     "normal_controls": {
