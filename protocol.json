@@ -232,6 +232,33 @@
         "labels_read": false,
         "criteria_frozen_before_formal_run": true
       },
+      "calibrated_canonical_ray_identity_qualification": {
+        "version": "E11-v3",
+        "question": "After replacing normalized XYZ with the D4a-D4c validated Ouster-like geometry, does one deterministic canonical ray identity r=(b,c) give a bijective raw-slot mapping and satisfy the frozen physical-direction limits on train/206 and independent train/201?",
+        "source_model": "the even-frame main model in runs/ajae/e11_d4b_calibration.npz",
+        "source_model_sha256": "42791278e2a6b36d975bbe9dc957c6f303b8b424c5b97cf54e42380ad191f253",
+        "source_cross_sequence_evidence": "runs/ajae/e11_d4c_v2_validation.npz",
+        "source_cross_sequence_evidence_sha256": "bdc85457de6add74f6e061ab7db43c8cb69919c0ac22f14fe812897bc3bf4fe8",
+        "canonical_mapping": {
+          "raw_to_ray": "raw slot (b,a) maps to r=(b,c), c=(a-s_b) mod 1024",
+          "ray_to_raw": "rho_f(b,c)=raw slot (b,(c+s_b) mod 1024), identical for every frame",
+          "encoder_angle": "eta_c=gamma-2*pi*c/1024",
+          "empty_return": "ray identity remains defined and normal range is +infinity"
+        },
+        "qualification_data": ["train/206 frames 0 through 448", "train/201 frames 4 through 681"],
+        "forbidden_adaptation": ["any refit", "per-sequence phase", "per-frame mapping", "per-point transform", "free permutation", "fabricated return"],
+        "round_trip": "all 128x1024 raw slots per frame must be recovered bijectively; XYZ and intensity are bitwise identical after raw-to-ray-to-raw",
+        "per_sequence_overall_q99_deg_exclusive_maximum": 0.17578125,
+        "per_sequence_overall_maximum_deg_exclusive_maximum": 0.3515625,
+        "every_observable_beam_column_frame_q99_deg_exclusive_maximum": 0.17578125,
+        "all_observed_residuals_finite": true,
+        "all_recovered_ranges_positive": true,
+        "unobservable_individual_ray_rule": "report as model-defined but not directly qualified; assign no residual and do not fabricate a return",
+        "key_coverage_rule": "every beam, canonical column, and included frame must have at least one real return",
+        "repeat_raw_read_exact_match": true,
+        "labels_read": false,
+        "criteria_frozen_before_formal_run": true
+      },
       "empty_ray_direction": "same-beam periodic interpolation, explicitly approximate without sensor metadata"
     },
     "normal_controls": {

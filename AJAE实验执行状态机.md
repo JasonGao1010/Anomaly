@@ -1075,6 +1075,52 @@ E11-D4c-v2 PASS，解锁 E11-v3；E12 继续锁定。E11-D4c-v1 的历史 FAIL �
 科学结论限定为：**仅由 train/206 自标定的同一套 Ouster-like 内参，在不使用 train/201 重新拟合任何参数的条件下，能够解释 train/201 的全部实际观测回波，并满足预注册的射线网格几何界限。** 这构成跨序列零适配证据，但不是原厂 metadata 身份证明，也不直接验证 373 个零观测 canonical rays。
 
 
+## E11-v3｜自标定规范物理射线身份终审
+
+**目的 / 唯一问题**
+
+在不再使用 $XYZ/\lVert XYZ\rVert$ 的条件下，将 D4a 的固定逐行位移和 D4b/D4c 验证过的 Ouster-like 内参组合为规范射线网格，最终判断 $r=(b,c)$ 是否具有确定、可逆并满足网格分辨尺度的物理 ray identity。
+
+**运行前冻结的规范身份与映射**
+
+对发布 raw slot $(b,a)$，固定
+
+$$
+c=(a-s_b)\bmod1024,
+\qquad
+r=(b,c),
+$$
+
+其逆映射为
+
+$$
+\rho_f(b,c)=\operatorname{raw\ slot}\left(b,(c+s_b)\bmod1024\right).
+$$
+
+$s_b$ 只取 D4a 已冻结的四组位移；$\rho_f$ 在所有 frame 中相同，不允许逐帧重新估计。规范 encoder angle 为 $\eta_c=\gamma-2\pi c/1024$，beam origin 和单位方向完全使用 D4b 偶数帧主模型。空 ray 身份仍存在，但没有回波时正常量程为 $+\infty$。
+
+**运行前冻结的数据与验证**
+
+1. 使用 train/206 帧 0–448 和 train/201 帧 4–681；不读取标签。D4b 模型及 D4a 位移均完全冻结，禁止按 sequence/frame/point 重新拟合相位、方向、原点或映射。
+2. 每帧全部 $128\times1024$ raw slots 执行 `raw slot → (b,c) → rho_f(b,c) → raw slot`。映射必须为双射；往返后的 XYZ 和 intensity 必须逐 bit 相同，空槽不得被补成回波。
+3. 对每个实际回波，以规范 ray 的 beam origin 为起点计算角残差、Cartesian 正交残差和恢复量程。train/206 与 train/201 分别独立报告总体及逐 beam、逐 canonical column、逐 frame 统计。
+4. 每个 beam、canonical column 和纳入 frame 必须至少有一个真实回波。单个 $(b,c)$ 在某一 sequence 中零观测时标记为 `model_defined_but_unobservable`，不计算伪残差；报告每序列和合并数据的 ray 覆盖。
+
+**运行前冻结的 PASS 条件**
+
+1. 两个 sequence 各自的总体角残差均满足 $Q_{0.99}<0.17578125^\circ$、maximum $<0.3515625^\circ$。
+2. 两个 sequence 中所有可观测 beam、canonical column、frame 的 $Q_{0.99}$ 均小于 $0.17578125^\circ$；不存在零观测的关键覆盖分组。
+3. 所有实际观测残差有限，恢复量程全部为正。
+4. 全槽映射双射，全部 raw 数据往返逐 bit 相同；两次独立原始读取和完整终审逐元素一致。
+
+**状态转移**
+
+- PASS → **E12；后续 renderer 使用该自标定规范射线网格和固定 $\rho_f$。**
+- FAIL → **E12 保持锁定；不得回退到 $XYZ/\lVert XYZ\rVert$ 或用逐点自由映射救结果。**
+
+E11-v3 PASS 支持的结论是“STU 发布数据可自标定出跨 206/201 稳定的 Ouster-like 规范物理射线身份”，不是“恢复了未经发布的原厂 metadata”。个别序列内零观测的 ray 仅由共享模型定义，其直接数据覆盖边界必须保留。
+
+
 ## E12｜多回波重排风险
 
 **目的 / 唯一问题**
