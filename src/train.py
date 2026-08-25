@@ -563,6 +563,26 @@ def balanced_bce_loss(logits: Tensor, targets: Tensor, valid: Tensor) -> Tensor:
     return torch.stack(terms).mean()
 
 
+@dataclass(frozen=True, slots=True)
+class FrameCacheKey:
+    """Bind one cached frame to every scientific input that can change it."""
+
+    world_identity: str
+    frame_identity: str
+    renderer_generator_identity: str
+    stu_identity: str
+
+    def __post_init__(self) -> None:
+        for name, value in (
+            ("world_identity", self.world_identity),
+            ("frame_identity", self.frame_identity),
+            ("renderer_generator_identity", self.renderer_generator_identity),
+            ("stu_identity", self.stu_identity),
+        ):
+            if len(value) != 64 or any(character not in "0123456789abcdef" for character in value):
+                raise ValueError(f"{name} must be a lowercase SHA-256 digest")
+
+
 class FrameCache:
     """Bound rendered frames and frozen STU outputs to a small time block."""
 
@@ -570,31 +590,31 @@ class FrameCache:
         if capacity < 1:
             raise ValueError("frame cache capacity must be positive")
         self.capacity = capacity
-        self.rendered: OrderedDict[int, object] = OrderedDict()
-        self.encoded: OrderedDict[int, object] = OrderedDict()
+        self.rendered: OrderedDict[FrameCacheKey, object] = OrderedDict()
+        self.encoded: OrderedDict[FrameCacheKey, object] = OrderedDict()
 
     @staticmethod
     def _get(
-        cache: OrderedDict[int, object],
-        frame_id: int,
-        factory: Callable[[int], object],
+        cache: OrderedDict[FrameCacheKey, object],
+        key: FrameCacheKey,
+        factory: Callable[[], object],
         capacity: int,
     ) -> object:
-        if frame_id in cache:
-            value = cache.pop(frame_id)
-            cache[frame_id] = value
+        if key in cache:
+            value = cache.pop(key)
+            cache[key] = value
             return value
-        value = factory(frame_id)
-        cache[frame_id] = value
+        value = factory()
+        cache[key] = value
         while len(cache) > capacity:
             cache.popitem(last=False)
         return value
 
-    def rendered_frame(self, frame_id: int, factory: Callable[[int], object]) -> object:
-        return self._get(self.rendered, frame_id, factory, self.capacity)
+    def rendered_frame(self, key: FrameCacheKey, factory: Callable[[], object]) -> object:
+        return self._get(self.rendered, key, factory, self.capacity)
 
-    def encoded_frame(self, frame_id: int, factory: Callable[[int], object]) -> object:
-        return self._get(self.encoded, frame_id, factory, self.capacity)
+    def encoded_frame(self, key: FrameCacheKey, factory: Callable[[], object]) -> object:
+        return self._get(self.encoded, key, factory, self.capacity)
 
     def clear(self) -> None:
         self.rendered.clear()
@@ -872,6 +892,22 @@ class AJAETrainer:
         for parameter in self.encoder.parameters():
             parameter.requires_grad_(False)
 
+        training_source = self.scientific_identity.get("training_source")
+        if not isinstance(training_source, Mapping):
+            raise TrainingError("scientific identity lacks the training source")
+        self.training_source_identity = str(training_source.get("content_sha256", ""))
+        self.renderer_generator_identity = str(
+            self.scientific_identity.get("renderer_generator_sha256", "")
+        )
+        self.stu_identity = str(self.scientific_identity.get("stu_identity_sha256", ""))
+        for name, value in (
+            ("training source", self.training_source_identity),
+            ("renderer/generator", self.renderer_generator_identity),
+            ("STU", self.stu_identity),
+        ):
+            if len(value) != 64:
+                raise TrainingError(f"scientific identity lacks a valid {name} digest")
+
     @staticmethod
     def _world_payload(world: object) -> dict[str, Any]:
         converter = getattr(world, "to_dict", None)
@@ -905,15 +941,34 @@ class AJAETrainer:
         if getattr(world, "source_sequence_id", None) != 206:
             raise TrainingError("training worlds must use the sole train/206 source")
 
+    def _cache_key(self, world: object, frame_id: int) -> FrameCacheKey:
+        world_identity = hashlib.sha256(
+            _canonical_json_object("world specification", self._world_payload(world)).encode(
+                "utf-8"
+            )
+        ).hexdigest()
+        frame_identity = hashlib.sha256(
+            f"{self.training_source_identity}:train:206:{frame_id}".encode("ascii")
+        ).hexdigest()
+        return FrameCacheKey(
+            world_identity,
+            frame_identity,
+            self.renderer_generator_identity,
+            self.stu_identity,
+        )
+
     def _render(self, world: object, frame_id: int) -> object:
+        key = self._cache_key(world, frame_id)
         return self.cache.rendered_frame(
-            frame_id,
-            lambda value: self.render_frame_callback(self.source_frame(value), world),
+            key,
+            lambda: self.render_frame_callback(self.source_frame(frame_id), world),
         )
 
     def _encode(self, world: object, frame_id: int) -> object:
-        def factory(value: int) -> object:
-            rendered = self._render(world, value)
+        key = self._cache_key(world, frame_id)
+
+        def factory() -> object:
+            rendered = self._render(world, frame_id)
             source = getattr(rendered, "source")
             with torch.no_grad():
                 return self.encoder(
@@ -922,7 +977,7 @@ class AJAETrainer:
                     source.real_slots,
                 )
 
-        return self.cache.encoded_frame(frame_id, factory)
+        return self.cache.encoded_frame(key, factory)
 
     def _window_data(self, world: object, center: int) -> WindowTrainingData:
         frame_ids = tuple(center + offset for offset in self.condition.frame_offsets)
@@ -1748,7 +1803,12 @@ def build_formal_training(
         raise TrainingError("formal training source must be exactly train/206")
 
     try:
-        from .model import AJAEPointTransformer, FrozenSTUPointEncoder
+        from .model import (
+            AJAEPointTransformer,
+            FrozenSTUPointEncoder,
+            stu_source_manifest,
+            stu_weight_identity,
+        )
         from .render import (
             extract_normal_template_library,
             load_sensor_calibration,
@@ -1762,7 +1822,12 @@ def build_formal_training(
             canonical_ray_mapping_digest,
         )
     except ImportError:  # pragma: no cover - direct script execution
-        from model import AJAEPointTransformer, FrozenSTUPointEncoder
+        from model import (
+            AJAEPointTransformer,
+            FrozenSTUPointEncoder,
+            stu_source_manifest,
+            stu_weight_identity,
+        )
         from render import (  # type: ignore[no-redef]
             extract_normal_template_library,
             load_sensor_calibration,
@@ -1906,6 +1971,12 @@ def build_formal_training(
     legal_centers = sequence.spec.legal_anchors(condition.frame_offsets)
     project_root = Path(getattr(protocol, "path")).parent
     run_root = project_root / config.output_dir / condition.name
+    stu_identity_payload = {
+        "weights": stu_weight_identity(getattr(protocol, "checkpoint_path")(project_root)),
+        "source_manifest_sha256": stu_source_manifest(
+            getattr(protocol, "stu_repository_path")(project_root)
+        )["manifest_sha256"],
+    }
     scientific_identity = {
         "protocol": preflight.protocol_document,
         "checkpoint_selection": preflight.checkpoint_selection,
@@ -1920,6 +1991,10 @@ def build_formal_training(
             "directory": str(sequence.sequence_dir),
             "content_sha256": training_source_sha256,
         },
+        "renderer_generator_sha256": _sha256_file(Path(__file__).with_name("render.py")),
+        "stu_identity_sha256": hashlib.sha256(
+            _canonical_json_object("STU identity", stu_identity_payload).encode("utf-8")
+        ).hexdigest(),
         "sensor_calibration": str(calibration_path),
         "calibration_sha256": calibration_sha256,
         "ray_mapping_digest": ray_mapping_digest,

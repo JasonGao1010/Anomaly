@@ -65,6 +65,8 @@ from src.train import (
     AJAETrainer,
     DevelopmentEvidence,
     DevelopmentWorldMetrics,
+    FrameCache,
+    FrameCacheKey,
     TrainingError,
     balanced_bce_loss,
     checkpoint_selection_key,
@@ -579,6 +581,35 @@ def test_common_renderer_is_deterministic_for_pure_normal_world() -> None:
     assert not bool(first.inserted_mask.any())
     assert not bool(first.anomaly_proxy_mask.any())
     assert np.all(first.unchanged_normal_mask)
+
+
+def test_frame_cache_isolates_same_frame_across_worlds() -> None:
+    cache = FrameCache(4)
+    digest = lambda value: hashlib.sha256(value.encode("ascii")).hexdigest()
+    trainer = object.__new__(AJAETrainer)
+    trainer.training_source_identity = digest("train/206/content")
+    trainer.renderer_generator_identity = digest("renderer-generator-v1")
+    trainer.stu_identity = digest("stu-v1")
+    first_key = trainer._cache_key(WorldSpec(9, 206), 7)
+    second_key = trainer._cache_key(WorldSpec(10, 206), 7)
+    assert isinstance(first_key, FrameCacheKey)
+    assert first_key.frame_identity == second_key.frame_identity
+    assert first_key.world_identity != second_key.world_identity
+    first_uncached = np.asarray((1.0, 7.0), dtype=np.float32)
+    second_uncached = np.asarray((2.0, 7.0), dtype=np.float32)
+    first_cached = cache.rendered_frame(first_key, lambda: first_uncached.copy())
+    second_cached = cache.rendered_frame(second_key, lambda: second_uncached.copy())
+    np.testing.assert_array_equal(first_cached, first_uncached)
+    np.testing.assert_array_equal(second_cached, second_uncached)
+    assert not np.array_equal(first_cached, second_cached)
+    np.testing.assert_array_equal(
+        cache.rendered_frame(first_key, lambda: np.asarray((-1.0, -1.0))),
+        first_uncached,
+    )
+    first_encoded = cache.encoded_frame(first_key, lambda: first_uncached.copy())
+    second_encoded = cache.encoded_frame(second_key, lambda: second_uncached.copy())
+    np.testing.assert_array_equal(first_encoded, first_uncached)
+    np.testing.assert_array_equal(second_encoded, second_uncached)
 
 
 def test_balanced_bce_is_empty_class_safe() -> None:
