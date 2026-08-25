@@ -1707,9 +1707,31 @@ FAIL；候选不得接入 generator，E18a-B-v2、E18b 与 E19 继续锁定。�
 
 本次 FAIL 不能通过事后删除 19 个对象改写。若修订为 E18a-D2-v2，必须在运行前明确冻结：单 primitive 原样继承 E16-v3 路径且不属于新上界替换域；D2-v2 只在实际将被 schema 4 替换的多 primitive 历史上界域内重新计算保守性、相对紧致性和松弛恢复率。该协议修订需先获批准。
 
+### E18a-D2-v2｜多 primitive 紧致保守连续上界资格
+
+**修订原因与替换域**
+
+E18a-D2-v1 永久保留 FAIL，原因为 `replacement-scope specification defect`：首版错误地把 E16-v3 单 primitive 连续优化上界和准备替换多 primitive / CSG 解析证书的候选上界放入同一个相对紧致性条件。D2-v2 不改写首版结果，只修订历史对象的比较域。
+
+正式替换域冻结为 E18a-D1 的 1,802 个历史上界拒绝对象中所有 `primitive_count > 1` 的对象。单 primitive 对象完全不进入历史相对紧致性、真实超限误放、松弛恢复率和运行成本的计算域；其生成与尺寸资格继续原样使用 E16-v3 的连续优化上界。对象是否属于替换域只由只读重放得到的 `primitive_count` 决定，不按 D2-v1 的候选结果、是否通过或上界差值筛选。重放必须逐元素恢复 D1 的调用索引、proposal occurrence、对象哈希及旧上界；正式运行同时报告替换域对象数及其中 D1 三类归因的固定分母。
+
+候选公式、256 个固定 $z$ 薄层、$O(256P)$ 时间和 $O(256)$ 内存、七个解析 fixture、每 fixture $2^{18}$ 个独立连续 probes，以及禁用全局搜索、mesh/voxel 和自适应增层的约束全部继承 D2-v1。七个 fixture 只用于候选本身的独立保守性反证，不属于历史替换域或恢复率分母。
+
+**冻结 PASS 条件**
+
+在全部多 primitive 替换域内必须同时满足：$U_{\mathrm{new}}\le U_{\mathrm{old}}$；D1 的严格真实内部见证下界不超过 $U_{\mathrm{new}}$，确定保守性反例数为 0；D1 已分类为 `true_oversize` 的对象中，$U_{\mathrm{new}}\le3$ m 的误放数为 0；D1 已分类为 `certificate_looseness` 的对象中，至少 75% 满足 $U_{\mathrm{new}}\le3$ m。75% 门槛原样继承，不根据 D2-v1 已观察到的 86.68% 调整；对应最小恢复数只由只读重放得到的多 primitive 松弛分母乘以 75% 后向上取整。
+
+七个解析 fixture 的真实尺寸必须不超过候选上界，全部独立真实 inside probes 必须位于候选 AABB 内。成本在冻结机器上仅对多 primitive 替换域逐对象单线程计时，中位数必须小于 5 ms、$Q_{0.99}$ 必须小于 20 ms。完整报告与 D2-v1 相同的旧上界、新上界及高精度下界之间的松弛分位数。两次完整几何计算必须逐元素复现替换域身份、候选 AABB、上界、分类、统计和运行哈希。
+
+D2-v2 仍不修改 generator、proposal distribution、0.2–3.0 m 范围或 E18a-B 的 50%/$Q_{0.99}\le8$ 效率条件，也不把候选接入任何生成路径。PASS 后才解锁 E18a-B-v2；FAIL 则候选继续禁止接入，并根据实际失败项停止或重新设计。
+
+**当前状态**
+
+E18a-D2-v2 已解锁；E18a-B-v2、E18b 与 E19 继续锁定，等待两次正式运行完成。
+
 ## E18b｜CSG 与连续形变求交稳定性
 
-E18a 完整 PASS 前锁定。E18a-D1 已 PASS，E18a-D2 已解锁，但新上界尚未资格，因此 E18a-B-v2、E18b 与 E19 继续锁定。E18b 回答已经合法接收的 union、difference、intersection、非二次 exponent、bend、twist、taper 与低频表面形变是否支持稳定的 hit/miss、最近正交点、有限正距离、曲面残差、单位法向和独立高精度复现。具体压力样例与阈值必须在 E18a PASS 后、首次运行前冻结。
+E18a 完整 PASS 前锁定。E18a-D1 已 PASS，E18a-D2-v1 已因替换域定义错误永久 FAIL，E18a-D2-v2 已解锁但尚未取得正式结果，因此 E18a-B-v2、E18b 与 E19 继续锁定。E18b 回答已经合法接收的 union、difference、intersection、非二次 exponent、bend、twist、taper 与低频表面形变是否支持稳定的 hit/miss、最近正交点、有限正距离、曲面残差、单位法向和独立高精度复现。具体压力样例与阈值必须在 E18a PASS 后、首次运行前冻结。
 
 **状态转移**
 
@@ -1717,7 +1739,7 @@ E18a 完整 PASS 前锁定。E18a-D1 已 PASS，E18a-D2 已解锁，但新上界
 - E18a-B PASS → **E18b**
 - E18a-B 仅效率 FAIL 且归因未知 → **E18a-D1**
 - E18a-D1 证书松弛过半 → **E18a-D2**
-- E18a-D2 PASS → **E18a-B-v2**
+- E18a-D2-v2 PASS → **E18a-B-v2**
 - E18b PASS → **E19**
 - 任一层 FAIL → 修复对应测量、生成或求交构念；若需改变机制集合或提议分布，停止并重新修订协议。
 
