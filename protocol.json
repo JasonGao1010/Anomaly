@@ -331,6 +331,24 @@
         "labels_read": false,
         "criteria_frozen_before_formal_run": true
       },
+      "multi_sequence_ray_qualification_v2": {
+        "version": "E15-v2",
+        "amends": "E15-v1 FAIL remains permanent; v2 changes only the legal classification of a wraparound edge whose two endpoint returns never co-occur",
+        "question": "Do the unchanged E08-E14 canonical-ray rules hold on normal train/206 and independent normal train/201 when observable continuity is separated from absence of co-observation?",
+        "data": ["train/206 frames 0 through 448", "train/201 frames 4 through 681"],
+        "unchanged_model": "E11-D4b even-frame geometry plus E11-v3 fixed c=(a-s_b) modulo 1024 mapping",
+        "wraparound_evidence_states": {
+          "observed_continuous": "the two endpoint returns co-occur in at least one frame and every actually observed circular increment uses the single negative orientation and lies in the inherited [0.10,0.60] degree magnitude interval",
+          "observed_discontinuous": "the endpoints co-occur in at least one frame and any actually observed circular increment violates the inherited orientation or interval; this directly fails E15-v2",
+          "unidentifiable_from_observed_returns": "the endpoint returns never co-occur in the audited sequence, including either a structurally empty endpoint or endpoints that are separately observed but never together"
+        },
+        "unidentifiable_reporting": ["beam ID", "column 1023 observed-frame count", "column 0 observed-frame count", "co-observed-frame count", "reason subtype: structurally_empty_endpoint or separately_observed_never_coobserved"],
+        "unchanged_pass_conditions": ["both sequence layouts are finite float32 128x1024x4", "all 128 rows exist and every frame/beam has at least one real return", "the fixed mapping is bijective", "XYZ-only occupancy and 0-or-1 published-return cardinality hold", "E13 count, mask, and identity round trip remains exact", "E14 numerical and calibrated geometry limits remain satisfied", "all actually observed internal adjacent edges are continuous", "all actually observed wraparound edges are continuous", "no wraparound edge is observed_discontinuous", "every unidentifiable edge is reported without interpolation, fabrication, or cross-beam substitution", "two independent complete runs reproduce every array, classification, hash, and summary exactly"],
+        "pass_conclusion": "Canonical ray identity, internal azimuth adjacency, and every observable wraparound edge are stable on train/206 and independent train/201; wraparound edges lacking endpoint co-observation remain model-defined and are not directly validated by returns.",
+        "forbidden_conclusion": "All 128 wraparound edges were directly validated in both sequences.",
+        "labels_read": false,
+        "criteria_frozen_before_formal_run": true
+      },
       "empty_ray_direction": "the fixed E11-v3 self-calibrated Ouster-like ray direction; no return is interpolated or fabricated"
     },
     "normal_controls": {
