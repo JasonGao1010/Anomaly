@@ -394,6 +394,20 @@
         "pass_conditions": ["all analytic fixture bounds match their closed-form continuous bounds", "all standard and strict estimates are finite and ordered", "every standard/strict coordinate difference is below the frozen convergence tolerance", "all independently evaluated continuous surface points lie within the strict bounds", "calling voxel geometry reports at resolutions 31 and 41 does not alter the estimator output", "two independent complete runs are bitwise identical"],
         "interpretation_limit": "E16-v2a qualifies the size estimator only; it does not decide whether the 1024 formal generator samples satisfy [0.2,3.0] m. That decision is E16-v2b.",
         "criteria_frozen_before_formal_run": true
+      },
+      "primitive_continuous_size_audit": {
+        "version": "E16-v2b",
+        "question": "Do the original 1024 deterministic single-primitive generator samples satisfy finite, bounded, closed, connected output and the frozen [0.2,3.0] metre size range under the E16-v2a qualified continuous estimator?",
+        "generator": "unchanged ShapeSpec.sample(seed, primitive_count=1, size_m_range=(0.2,3.0))",
+        "seeds": [0, 1023],
+        "size_estimator": "E16-v2a qualified continuous_bounds with maximum_iterations=80, population_size=10, and 1e-6 metre outward margin",
+        "size_definition": "maximum axis-aligned span max(upper-lower) of the continuous deformed implicit surface",
+        "inherited_non_size_checks": ["generation succeeds without rejection exhaustion", "all parameters, conservative radius, and fixed 9x9x9-bound-grid SDF values are finite", "resolution-31 geometry report is bounded and closed with one connected component", "continuous bounds are finite and ordered"],
+        "pass_conditions": ["all 1024 samples satisfy every inherited non-size check", "every continuous size lies in the inclusive frozen [0.2,3.0] metre range", "two independent complete runs reproduce every generated parameter, bound, size, classification, hash, and summary bitwise exactly"],
+        "failure_tolerance": 0,
+        "forbidden": ["changing generator parameters", "rescaling a failing sample", "using resolution-31 or resolution-41 reported diameter as size", "changing the [0.2,3.0] metre interval after observing results"],
+        "interpretation_limit": "FAIL identifies a generator implementation mismatch with its frozen continuous-size range; it does not invalidate the AJAE scientific route or authorize silent distribution changes.",
+        "criteria_frozen_before_formal_run": true
       }
     },
     "world_types": {"pure_normal": 0.2, "control_only": 0.2, "mixed": 0.4, "anomaly_only": 0.2},

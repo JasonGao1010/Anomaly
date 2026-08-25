@@ -1462,6 +1462,16 @@ E16-v2a PASS，解锁 E16-v2b；E17 继续锁定。首次测量器实现的 FAIL
 
 该 PASS 只资格确认连续尺寸测量器。固定 seed 639 的连续尺寸为 3.004505 m，已经提示 E16-v2b 可能发现真实生成器越界，但该数值在 E16-v2a 中只是测量器形变样例结果，不能提前替代对 1,024 个正式样本的完整裁决。
 
+## E16-v2b｜连续尺寸下的单 primitive 正式资格
+
+**唯一问题与运行前冻结条件**
+
+使用完全不变的 `ShapeSpec.sample(seed, primitive_count=1, size_m_range=(0.2,3.0))`，重新审计 seed 0–1023。尺寸只使用 E16-v2a 已资格确认的 `continuous_bounds(maximum_iterations=80, population_size=10)`，定义为连续形变 implicit surface 的最大 AABB 轴向跨度；不再读取 resolution 31/41 的报告直径作为尺寸。
+
+每个样本仍须成功生成，全部参数、保守半径与 $9\times9\times9$ 包围网格 SDF 有限，resolution 31 几何报告只检查 `bounded=true`、`closed=true`、`components=1`，连续边界必须有限且有序。全部 1,024 个连续尺寸必须位于当前生成器已冻结的闭区间 $[0.2,3.0]$ m，允许失败数为 0。两次完整运行必须 bitwise 复现生成参数、连续边界、尺寸、分类、哈希和摘要。
+
+禁止修改生成参数、缩放失败样本、恢复离散报告直径或看到结果后移动 $[0.2,3.0]$ m。PASS → E17；FAIL → E17 保持锁定，明确记录真实连续尺寸越界，再决定如何修生成器并版本化重跑，不影响 E16-v2a 测量器资格。
+
 **FAIL 条件**
 
 存在数值爆炸、无界或异常高拒绝率。
