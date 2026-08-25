@@ -188,6 +188,26 @@
         "interpretation_limit": "D4b is within-sequence identification. It cannot establish factory metadata identity or cross-sequence transfer; those are reserved for D4c.",
         "criteria_frozen_before_formal_run": true
       },
+      "ouster_intrinsics_cross_sequence_validation": {
+        "version": "E11-D4c",
+        "question": "Does the unchanged train/206 D4b main model predict the physical ray lines of the independent normal development sequence train/201?",
+        "source_model": "the even-frame main model in runs/ajae/e11_d4b_calibration.npz",
+        "source_model_sha256": "42791278e2a6b36d975bbe9dc957c6f303b8b424c5b97cf54e42380ad191f253",
+        "validation_sequence": "train/201 frames 4 through 681 inclusive",
+        "excluded_frames": [0, 1, 2, 3],
+        "exclusion_basis": "frozen protocol exclusion for verified exact internal scan and label duplication; all 678 included files are exactly 128x1024x4 float32",
+        "forbidden_adaptation": ["sequence-global phase fitting", "row-shift fitting", "beam-angle fitting", "beam-origin fitting", "per-frame fitting", "per-point transform"],
+        "minimum_real_returns_per_frame_beam": 512,
+        "overall_q99_deg_exclusive_maximum": 0.17578125,
+        "overall_maximum_deg_exclusive_maximum": 0.3515625,
+        "every_beam_q99_deg_exclusive_maximum": 0.17578125,
+        "every_column_q99_deg_exclusive_maximum": 0.17578125,
+        "every_frame_q99_deg_exclusive_maximum": 0.17578125,
+        "all_recovered_ranges_positive": true,
+        "repeat_raw_read_exact_match": true,
+        "labels_read": false,
+        "criteria_frozen_before_formal_run": true
+      },
       "empty_ray_direction": "same-beam periodic interpolation, explicitly approximate without sensor metadata"
     },
     "normal_controls": {
