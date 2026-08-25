@@ -34,7 +34,7 @@ WORLD_FORMAT = "ajae-world-v2"
 CALIBRATION_FORMAT = "ajae-sensor-calibration-v4"
 DEVELOPMENT_FORMAT = "ajae-development-worlds-v2"
 DEVELOPMENT_PROTOCOL_SCHEMA = 30
-PROCEDURAL_GENERATOR_SCHEMA = 2
+PROCEDURAL_GENERATOR_SCHEMA = 3
 GATE1_EVIDENCE_KEYS = (
     "ray_slot_audit",
     "range_image_round_trip",
@@ -178,12 +178,13 @@ class ShapeGenerationReport:
 
     generator_schema: int
     proposal_count: int
-    too_small_rejections: int
-    too_large_rejections: int
+    lower_certificate_rejections: int
+    upper_certificate_rejections: int
     other_rejections: int
-    accepted_size_m: float
-    accepted_lower_m: tuple[float, float, float]
-    accepted_upper_m: tuple[float, float, float]
+    accepted_size_lower_m: float
+    accepted_size_upper_m: float
+    outer_lower_m: tuple[float, float, float]
+    outer_upper_m: tuple[float, float, float]
     size_definition: str
 
 
@@ -949,8 +950,8 @@ class ShapeSpec:
         ):
             raise RenderError("primitive_count must lie in [1,5]")
         rng = np.random.default_rng(seed)
-        too_small = 0
-        too_large = 0
+        lower_rejections = 0
+        upper_rejections = 0
         other = 0
         for proposal_count in range(1, 65):
             count = (
@@ -1000,34 +1001,44 @@ class ShapeSpec:
                 )
                 # Require connectivity at both audit and placement resolutions.
                 result.geometry_report(resolution=31)
+                result.geometry_report(resolution=41)
                 if count == 1:
-                    # Schema 2 qualifies final single-primitive geometry itself.
+                    # Schema 3 preserves the E16-v3 qualified single path.
                     lower, upper = result.continuous_bounds(
                         maximum_iterations=80,
                         population_size=10,
                         safety_margin_m=1.0e-6,
                     )
+                    size_lower = float(np.max(upper - lower))
+                    size_upper = size_lower
                     size_definition = "continuous-deformed-surface-aabb"
                 else:
-                    # Multi-primitive continuous acceptance remains locked for E18.
-                    lower, upper = result.local_bounds(resolution=41)
-                    size_definition = "resolution-41-pending-E18"
-                diameter = float(np.max(upper - lower))
-                if diameter < minimum:
-                    too_small += 1
+                    certificate = result.continuous_size_certificate(
+                        sobol_probes=4096,
+                        maximum_interior_lines=64,
+                        safety_margin_m=1.0e-6,
+                    )
+                    lower = np.asarray(certificate.outer_lower_m, dtype=np.float64)
+                    upper = np.asarray(certificate.outer_upper_m, dtype=np.float64)
+                    size_lower = certificate.lower_size_m
+                    size_upper = certificate.upper_size_m
+                    size_definition = "continuous-csg-certified-interval"
+                if size_upper > maximum:
+                    upper_rejections += 1
                     continue
-                if diameter > maximum:
-                    too_large += 1
+                if size_lower < minimum:
+                    lower_rejections += 1
                     continue
                 return result, ShapeGenerationReport(
                     generator_schema=PROCEDURAL_GENERATOR_SCHEMA,
                     proposal_count=proposal_count,
-                    too_small_rejections=too_small,
-                    too_large_rejections=too_large,
+                    lower_certificate_rejections=lower_rejections,
+                    upper_certificate_rejections=upper_rejections,
                     other_rejections=other,
-                    accepted_size_m=diameter,
-                    accepted_lower_m=tuple(map(float, lower)),
-                    accepted_upper_m=tuple(map(float, upper)),
+                    accepted_size_lower_m=size_lower,
+                    accepted_size_upper_m=size_upper,
+                    outer_lower_m=tuple(map(float, lower)),
+                    outer_upper_m=tuple(map(float, upper)),
                     size_definition=size_definition,
                 )
             except RenderError:
@@ -1045,7 +1056,7 @@ class ShapeSpec:
         primitive_count: int | None = None,
         size_m_range: tuple[float, float] = (0.2, 3.0),
     ) -> "ShapeSpec":
-        """Sample a reproducible connected shape under generator schema 2."""
+        """Sample a reproducible connected shape under generator schema 3."""
 
         shape, _ = cls.sample_with_report(
             seed,
