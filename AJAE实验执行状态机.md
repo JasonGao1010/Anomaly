@@ -1614,7 +1614,13 @@ PASS → 解锁 E18a-B。FAIL → 先修组合几何证书，不得接入 genera
 
 ### E18a-B｜schema-3 完整生成器连续尺寸接收
 
-E18a-A PASS 前锁定。它将只修改多 primitive 最终接收条件并把生成器升为 schema 3，使所有正式训练 anomaly proxy 均以已资格确认的连续几何或保守连续证书接收；提议分布和 $[0.2,3.0]$ m 不变。正式判据须在接入代码前另行冻结。
+E18a-A 已 PASS，E18a-B 解锁。生成器升为 schema 3，但只修改多 primitive 最终接收条件：单 primitive 继续使用 E16-v3 的合格连续尺寸；多 primitive 使用 E18a-A 标准证书，只有 $L\ge d_{\min}$ 且 $U\le d_{\max}$ 才接受。参数提议分布、每 seed 64 次上限和请求尺寸区间均不变。证书拒绝只表示当前候选没有获得充分的连续合法性证明，不得写成其真实几何必然越界。
+
+正式审计共 2,048 次生成调用：默认训练路径 seed 0–1023，以及 primitive count 2、3、4、5 各自 seed 0–255。全部调用必须在 64 次内返回；接受对象的参数、保守半径、$9\times9\times9$ 网格 SDF 有限，resolution 31 只检查有界/闭合/单连通；重新计算合格连续尺寸或证书必须与生成报告逐元素一致。所有单 primitive 连续尺寸须位于请求区间，所有多 primitive 须满足证书 $L\ge d_{\min}$、$U\le d_{\max}$。两次完整运行必须逐元素一致。
+
+效率条件在运行前独立冻结为：总体按 proposal 计拒绝率小于 50%，proposal count 的 99% 分位不超过 8，最大不超过 64。完整报告各组总提议/拒绝率、下界证据不足拒绝数、上界保守超限拒绝数、其他构造或几何拒绝数及 proposal count 分位数。禁止 seed 特判、修改提议分布、缩窄请求尺寸区间或恢复 resolution 31/41 尺寸接收。
+
+PASS → 解锁 E18b。正确性 FAIL → 修 schema-3 acceptance 后按原判据重跑；仅效率 FAIL → E18b 保持锁定，另行决定是否修订 proposal parameterization。
 
 ## E18b｜CSG 与连续形变求交稳定性
 

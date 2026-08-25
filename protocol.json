@@ -462,6 +462,24 @@
         "mesh_resolution_role": "none in the certificate; voxel reports are invoked only for the frozen invariance check",
         "interpretation_limit": "E18a-A qualifies the conservative certificate only. It does not change generator acceptance or establish schema 3; that is E18a-B.",
         "criteria_frozen_before_formal_run": true
+      },
+      "csg_continuous_acceptance_generator": {
+        "version": "E18a-B",
+        "question": "Does generator schema 3 use qualified continuous geometry for every single- and multi-primitive acceptance decision while remaining deterministic and practically finite?",
+        "generator_schema": 3,
+        "superseded_generator_schema": 2,
+        "single_primitive_acceptance": "unchanged E16-v3 qualified continuous_bounds; its qualified continuous size must lie in [0.2,3.0] m",
+        "multi_primitive_acceptance": "E18a-A qualified standard certificate; accept only if lower_size_m >= requested minimum and upper_size_m <= requested maximum",
+        "proposal_parameter_distribution": "unchanged from schema 2",
+        "candidate_limit_per_seed": 64,
+        "audit_groups": [{"name": "default-training-path", "primitive_count": "sampled 1 through 5 by the unchanged proposal stream", "seeds": [0,1023]}, {"name": "fixed-count-2", "primitive_count": 2, "seeds": [0,255]}, {"name": "fixed-count-3", "primitive_count": 3, "seeds": [0,255]}, {"name": "fixed-count-4", "primitive_count": 4, "seeds": [0,255]}, {"name": "fixed-count-5", "primitive_count": 5, "seeds": [0,255]}],
+        "pass_conditions": ["all 2048 audited calls return an accepted geometry within 64 proposals", "every accepted single primitive satisfies its qualified continuous-size interval", "every accepted multi primitive has E18a-A certificate lower bound at or above the requested minimum and conservative upper bound at or below the requested maximum", "every accepted shape has finite parameters, conservative radius, and fixed 9x9x9 SDF values and passes resolution-31 bounded/closed/single-component checks", "recomputing the qualified size or certificate exactly reproduces the generation report", "two independent complete runs reproduce every accepted parameter, certificate, proposal statistic, classification, hash, and summary bitwise exactly"],
+        "efficiency_pass_conditions": ["overall rejection rate per proposal is below 0.50", "99th percentile proposal count is at most 8", "maximum proposal count is at most 64"],
+        "required_efficiency_diagnostics": ["proposal count per audit item", "overall and per-group rejection rate", "lower-certificate rejection count", "upper-certificate rejection count", "other construction or geometry rejection count", "proposal-count quantiles and maximum"],
+        "generator_identity": "schema 3 must enter the experiment manifest and renderer/generator cache identity together with the render.py source hash",
+        "forbidden": ["seed-specific rejection", "changing the proposal parameter distribution", "shrinking the requested size range", "using resolution-31 or resolution-41 diameter for acceptance", "treating a conservative certificate rejection as proof that the actual geometry is invalid"],
+        "failure_tolerance": 0,
+        "criteria_frozen_before_formal_run": true
       }
     },
     "world_types": {"pure_normal": 0.2, "control_only": 0.2, "mixed": 0.4, "anomaly_only": 0.2},
