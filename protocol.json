@@ -153,6 +153,41 @@
         "cross_sequence_validation_reserved_for": "E11-D4c",
         "criteria_frozen_before_formal_run": true
       },
+      "ouster_projection_self_calibration": {
+        "version": "E11-D4b",
+        "question": "Can the released Cartesian returns identify one Ouster-form projection model whose intrinsics learned from one disjoint frame split predict physical ray lines in the other split?",
+        "official_model": {
+          "encoder_angle": "eta_ba = gamma - 2*pi*a/1024 + s_b*(2*pi/1024), with D4a integer shifts s_b fixed and never re-optimized",
+          "beam_origin": "o_ba = (o_x*cos(eta_ba), o_x*sin(eta_ba), o_z)",
+          "ray_direction": "u_ba = (cos(eta_ba+beta_b)*cos(alpha_b), sin(eta_ba+beta_b)*cos(alpha_b), sin(alpha_b))",
+          "nuisance_range_elimination": "t = dot(u_ba, X-o_ba); X_hat=o_ba+t*u_ba; official range d=t+sqrt(o_x^2+o_z^2)"
+        },
+        "identifiable_parameters": ["one global column phase gamma", "o_x and o_z beam-origin translations", "128 beam altitude angles alpha_b", "128 beam azimuth offsets beta_b"],
+        "forbidden_parameters": ["per-frame phase", "per-frame beam parameters", "per-column free offsets", "per-point transform", "free permutation"],
+        "fit_split": "even-indexed frames of train/206",
+        "heldout_split": "odd-indexed frames of train/206",
+        "reverse_split_stability_check": true,
+        "global_fit_sample": "all real returns at columns a mod 16 = 0 in the fitting split; final beam angles are re-estimated from all real fitting returns",
+        "robust_loss": "Huber loss on orthogonal Cartesian line residual with 0.05 m transition",
+        "optimizer": "scipy L-BFGS-B, numerical gradient, maxiter=500, ftol=1e-12, gtol=1e-9",
+        "fixed_multistarts": "D4a common-phase consensus paired with (o_x,o_z) in {(0,0),(0.05,0),(0.05,0.05),(0.05,-0.05)} metres; choose the lowest objective, then lexicographic parameters on an exact tie",
+        "global_bounds": {
+          "gamma": "within one nominal column of the D4a circular common-phase consensus",
+          "o_x_m": [0.0, 0.2],
+          "o_z_m": [-0.2, 0.2]
+        },
+        "heldout_angular_q99_deg_exclusive_maximum": 0.17578125,
+        "heldout_angular_maximum_deg_exclusive_maximum": 0.3515625,
+        "every_beam_heldout_q99_deg_exclusive_maximum": 0.17578125,
+        "every_column_heldout_q99_deg_exclusive_maximum": 0.17578125,
+        "split_origin_l2_difference_m_exclusive_maximum": 0.01,
+        "split_ray_grid_q99_deg_exclusive_maximum": 0.17578125,
+        "split_ray_grid_maximum_deg_exclusive_maximum": 0.3515625,
+        "all_recovered_ranges_positive": true,
+        "repeat_read_and_fit_exact_match": true,
+        "interpretation_limit": "D4b is within-sequence identification. It cannot establish factory metadata identity or cross-sequence transfer; those are reserved for D4c.",
+        "criteria_frozen_before_formal_run": true
+      },
       "empty_ray_direction": "same-beam periodic interpolation, explicitly approximate without sensor metadata"
     },
     "normal_controls": {
