@@ -1632,16 +1632,45 @@ FAIL，原因仅为预注册效率条件未满足；E18b 与 E19 保持锁定。
 - 拒绝原因中，下界证据不足 56 次、保守上界无法证明不超过请求上限 1,802 次、其他既有构造或几何检查拒绝 1,064 次；固定 count 2/3/4/5 的拒绝率随复杂度上升为 57.62%/61.39%/65.41%/68.97%；
 - 两次完整运行 bitwise 一致，运行哈希均为 `6d98f725c4d1c5867e1a4f5bc9ec0ff893a38abc70d7709b00271f1c3e796c59`，摘要哈希为 `1a62ab9b9dc2f4beda72743a8b5feb4ab3b471daadff29c496bf842c060fb80b`。
 
-该 FAIL 不表示 schema 3 接受了非法对象；它表明**未改变的 schema-2 proposal distribution 与新的完整连续资格域明显失配**，且复杂 primitive count 的失配更严重。继续必须在不改变连续合法性定义的前提下重新设计 proposal parameterization 或采样效率机制，并在运行前版本化冻结；不得放宽 50%/8 的历史标准，也不得恢复离散尺寸接收。
+该 FAIL 不表示 schema 3 接受了非法对象。当前证据只能确定**原保守上界触发了大量拒绝**，尚不能区分候选真实连续尺寸超限与证书松弛；因此不得直接修改提议分布或放宽 50%/8 的历史标准。E18a-D1 先独立归因，E18b 与 E19 继续锁定。
+
+### E18a-D1｜上界拒绝归因诊断
+
+**唯一问题与固定样本**
+
+E18a-D1 只回答 E18a-B 中 1,802 个 $U>3$ m 的拒绝候选究竟主要是真实连续尺寸超限，还是原证书上界过松。正式样本严格限定为 E18a-B 的 2,048 个审计调用中、在最终接受候选之前实际发生的全部上界拒绝提议；通过相同 seed、primitive-count 请求与随机流只读重放，并要求每个调用的最终对象哈希、proposal count、三类拒绝计数以及总计 4,970/2,922/56/1,802/1,064 与 E18a-B 产物完全一致。诊断不得改变 generator、proposal distribution、3 m 上限、原连续证书或原效率门槛。
+
+**独立高精度尺寸区间**
+
+每个拒绝候选形成数值区间
+
+$$
+[\underline D_{\mathrm{HP}},\overline D_{\mathrm{HP}}].
+$$
+
+独立估计器不得调用 `continuous_size_certificate`、`_continuous_outer_bounds`、`continuous_bounds` 或 resolution 31/41 mesh 报告。下界由独立确定性 Sobol 内部见证点及从这些点启动的连续约束极值优化给出；只有 SDF 有限且不大于 $10^{-9}$ 的实际内部/边界点才能形成下界。上界把未形变的解析 superquadric/CSG 外包围按 $z$ 轴均匀分为嵌套薄层，在每层内用区间算术传播 beam-independent twist、taper 与 bend，最后合并所有薄层；difference 只保留其左侧集合上界，intersection 取区间交，union 取区间并。该上界独立实现，不读取原证书的 bounds 数值。
+
+标准计算冻结为 $2^{14}$ 个 Sobol probes、每个轴向极值最多 8 个约束优化起点和 1,024 个 $z$ 薄层；严格计算冻结为嵌套的 $2^{16}$ probes、每个轴最多 24 个起点和 4,096 个薄层。约束优化使用 SLSQP，`ftol=1e-12`、`maxiter=500`；失败或不可行结果只能丢弃，不能用于缩小区间。最终使用严格区间归因。
+
+估计器先在半径 0.1/1.5 m 球、yaw 0.4 的半轴 $(0.1,0.3,0.5)$ m 椭球、两个半径 1 m 且中心位于 $x=\pm0.5$ m 球的 union/intersection、半径 1 m 球减去内部半径 0.35 m 球，以及带非零 twist 的球上资格。全部解析真实最大轴尺寸必须位于标准与严格区间；严格下界不得小于标准下界，严格上界不得大于标准上界；严格解析区间最大宽度须小于 0.01 m。每个 fixture 再用 $2^{18}$ 个独立连续 probes 检查，不得发现真实 inside 点超出严格外包围。两次完整 D1 必须逐元素复现样本身份、区间、分类、统计和哈希。
+
+**冻结分类与分叉**
+
+- `true_oversize`：$\underline D_{\mathrm{HP}}>3$ m；真实内部见证已经足以推出超限。
+- `certificate_looseness`：$\overline D_{\mathrm{HP}}\le3$ m；独立保守上界足以推出候选合格，而原证书仍拒绝。
+- `boundary_unresolved`：其余跨越 3 m 的区间；不得强行归入前两类。
+
+“主要”在运行前冻结为占全部 1,802 个上界拒绝对象严格超过 50%。若 `true_oversize` 严格过半，下一步只修 proposal parameterization/scale allocation，形成 schema 4 与 E18a-B-v2；若 `certificate_looseness` 严格过半，下一步只改进并重新资格连续上界，不改变异常代理提议分布；若两类都未过半，则报告三类比例并停止，先解决未决区间或确定单一优先修改对象。D1 是归因诊断，不以任一方向为预期 PASS，也不得据此改写 E18a-B 的历史 FAIL。
 
 ## E18b｜CSG 与连续形变求交稳定性
 
-E18a 完整 PASS 前锁定。它回答已经合法接收的 union、difference、intersection、非二次 exponent、bend、twist、taper 与低频表面形变是否支持稳定的 hit/miss、最近正交点、有限正距离、曲面残差、单位法向和独立高精度复现。具体压力样例与阈值必须在 E18a PASS 后、首次运行前冻结。
+E18a 完整 PASS 前锁定。当前 E18a-D1 已解锁，E18b 继续锁定。E18b 回答已经合法接收的 union、difference、intersection、非二次 exponent、bend、twist、taper 与低频表面形变是否支持稳定的 hit/miss、最近正交点、有限正距离、曲面残差、单位法向和独立高精度复现。具体压力样例与阈值必须在 E18a PASS 后、首次运行前冻结。
 
 **状态转移**
 
 - E18a-A PASS → **E18a-B**
 - E18a-B PASS → **E18b**
+- E18a-B 仅效率 FAIL 且归因未知 → **E18a-D1**
 - E18b PASS → **E19**
 - 任一层 FAIL → 修复对应测量、生成或求交构念；若需改变机制集合或提议分布，停止并重新修订协议。
 
