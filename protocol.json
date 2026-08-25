@@ -290,7 +290,7 @@
         "criteria_frozen_before_formal_run": true
       },
       "canonical_return_count_round_trip": {
-        "version": "E13-v1",
+        "version": "E13",
         "question": "Does the E11-v3 raw-slot/canonical-ray bijection preserve every XYZ-defined published return without loss, duplication, or identity conflict?",
         "data": ["train/206 frames 0 through 448", "train/201 frames 4 through 681"],
         "canonical_mapping": "inherit E11-v3 c=(a-s_b) modulo 1024 and fixed inverse without refitting",
@@ -303,7 +303,7 @@
         "criteria_frozen_before_formal_run": true
       },
       "calibrated_geometry_round_trip": {
-        "version": "E14-v1",
+        "version": "E14",
         "question": "Does encoding each observed STU point as a scalar distance on its fixed E11-v3 Ouster-like beam and decoding it on the same beam preserve numerical range/direction while keeping the calibrated projection error within the already frozen ray-grid resolution?",
         "data": ["train/206 frames 0 through 448", "train/201 frames 4 through 681"],
         "ray_model": "unchanged E11-D4b even-frame model and E11-v3 raw-slot/canonical-ray bijection; the D4b artifact encoder gauge uses a fixed pi-radian encoder-to-Cartesian bearing offset",
