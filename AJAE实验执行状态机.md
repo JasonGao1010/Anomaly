@@ -1205,6 +1205,19 @@ Intensity 始终只是 payload，不参与 occupancy；空 XYZ 槽的 intensity 
 
 PASS 结论只能写为：**STU 发布数据形成稳定的 single-published-return/empty-slot canonical-ray interface。** 上游究竟选择 first、strongest、last 或预处理后的其他单回波仍未知；“first-return”只能作为 renderer 反事实近似的建模约定。
 
+**正式结果**
+
+E12-v2 PASS，解锁 E13。E12-v1 的历史 FAIL 与 specification defect 记录永久保留。
+
+- train/206 的 449 帧包含 58,851,328 个固定记录槽，其中 56,196,767 个发布回波、2,654,561 个空 XYZ 槽；train/201 的 678 帧包含 88,866,816 个固定记录槽，其中 77,782,123 个发布回波、11,084,693 个空 XYZ 槽；
+- 1,127 个文件全部严格为 $128\times1024\times4$ float32；每个 canonical ray 每帧恰有一个固定记录槽，发布回波基数为 0 或 1；
+- 所有 XYZ 非全零记录的 XYZI 均有限；发布接口只有 `(x,y,z,intensity)`，没有 return index/count/order、first/second/strongest 标志或并行 return array；
+- E11-v3 mapping 在所有帧保持同一双射，全部槽位 XYZI 往返逐 bit 相同。206 的空→有效/有效→空转换数为 598,025/597,885，201 为 1,924,721/1,904,673；这些占用变化始终保留同一 canonical ray 身份；
+- 空 XYZ 槽的 intensity 均作为 payload 原样保留，不参与 occupancy；两次完整读取的 occupancy、计数、转换、往返和哈希逐元素一致；
+- 摘要哈希为 `55332b8109db6ab1238c53a95538389d96569e84fd516461ca7cdd413f93e8f6`。
+
+科学结论限定为：**STU 发布数据形成稳定的 single-published-return/empty-slot canonical-ray interface。** 该结果排除了发布层面的多回波容器与动态 ray reorder，但不能识别上游采用 first、strongest、last 或其他预处理后的单回波选择策略。
+
 
 ## E13｜raw→ray→raw 点数往返
 
