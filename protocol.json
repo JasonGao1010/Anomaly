@@ -446,6 +446,22 @@
         "failure_tolerance": 0,
         "interpretation_limit": "E17 qualifies basic single-quadratic primitive intersection only. CSG, non-quadratic exponents, and twist/bend/taper/surface deformation remain E18.",
         "criteria_frozen_before_formal_run": true
+      },
+      "csg_continuous_size_certificate_qualification": {
+        "version": "E18a-A",
+        "question": "Can final multi-primitive CSG geometry receive a deterministic mesh-resolution-independent conservative size certificate whose lower and upper bounds enclose the true continuous maximum-axis span?",
+        "certificate_definition": "L is the largest continuous axis-line boundary chord found from verified interior Sobol witnesses and U is the maximum axis span of an analytic outer AABB propagated through primitive level-set expansion, sequential CSG, twist, taper, and bend; certify L <= D_continuous <= U",
+        "outer_bound": "expand each primitive level set by the maximum surface displacement, propagate AABBs by envelope for union, retain the left bound for difference, intersect bounds for intersection, then analytically propagate the global deformation and add a fixed 1e-6 metre outward margin",
+        "lower_witness": "draw deterministic nested Sobol points in the analytic outer AABB, retain verified interior points in sequence order, and solve continuous signed-distance roots from each witness toward both AABB faces along every Cartesian axis; every chord endpoint must independently satisfy the continuous surface equation",
+        "standard_search": {"sobol_probes": 4096, "maximum_interior_lines": 64},
+        "strict_search": {"sobol_probes": 32768, "maximum_interior_lines": 256},
+        "analytic_fixtures": ["union of radius-1 spheres centered at x=-0.5 and x=0.5", "intersection of radius-1 spheres centered at x=-0.5 and x=0.5", "radius-1 sphere minus an internal radius-0.35 sphere centered at x=0.2"],
+        "deformed_generator_fixtures": [{"seed": 0, "primitive_count": 2}, {"seed": 1, "primitive_count": 3}, {"seed": 2, "primitive_count": 4}, {"seed": 3, "primitive_count": 5}],
+        "independent_containment_probes_per_fixture": 131072,
+        "pass_conditions": ["all bounds and witness points are finite and ordered", "every analytic exact AABB is contained by the certified outer AABB within 2e-6 m", "every analytic exact maximum-axis size lies in the reported [L,U] interval", "every analytic certificate width U-L is below 0.35 m", "every returned chord endpoint has absolute continuous signed-distance residual below 1e-8 m", "the strict lower certificate is not smaller than the nested standard lower certificate", "standard and strict outer bounds are exactly equal", "no independently evaluated inside point lies outside the analytic outer AABB", "calling voxel geometry reports at resolutions 31 and 41 does not alter either certificate", "two independent complete runs reproduce every bound, witness, statistic, hash, and summary bitwise exactly"],
+        "mesh_resolution_role": "none in the certificate; voxel reports are invoked only for the frozen invariance check",
+        "interpretation_limit": "E18a-A qualifies the conservative certificate only. It does not change generator acceptance or establish schema 3; that is E18a-B.",
+        "criteria_frozen_before_formal_run": true
       }
     },
     "world_types": {"pure_normal": 0.2, "control_only": 0.2, "mixed": 0.4, "anomaly_only": 0.2},
