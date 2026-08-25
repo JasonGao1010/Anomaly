@@ -1775,7 +1775,35 @@ E18a-B-v2 PASS；E18a 的连续尺寸资格与 schema-4 完整生成器效率链
 
 ## E18b｜CSG 与连续形变求交稳定性
 
-E18a-D2-v2 与 E18a-B-v2 均已 PASS，E18b 解锁。E18b 回答已经合法接收的 union、difference、intersection、非二次 exponent、bend、twist、taper 与低频表面形变是否支持稳定的 hit/miss、最近正交点、有限正距离、曲面残差、单位法向和独立高精度复现。具体压力样例与阈值必须在首次运行前冻结。
+**唯一问题**
+
+E18a-D2-v2 与 E18a-B-v2 均已 PASS，E18b 解锁。E18b 只回答：对已获得连续尺寸资格的 union、difference、intersection、非二次 exponent、bend、twist、taper 与低频表面形变，当前 `ShapeSpec.intersect` 是否稳定返回与独立参考一致的最近正交点、hit/miss 和外向单位法向。E18b 不再修改尺寸证书、generator 或 proposal distribution。
+
+**固定几何与射线**
+
+解析组固定为三个无形变球体 CSG：中心位于 $x=\pm0.5$ m 的两个半径 1 m 球的 union、相同两球的 intersection、半径 1 m 外球减去中心位于 $x=0.2$ m 的半径 0.35 m 内球。其最近正交点由独立的解析 ray-sphere 区间布尔运算给出，不调用被测 SDF 扫描器。
+
+机制组固定为六个手工几何：非二次 exponent CSG、单独 bend、单独 twist、单独 taper、单独低频表面形变，以及同时包含三种 CSG 操作和全部连续形变的组合对象。压力组固定为 schema 4 下 primitive count 2、3、4、5 各 seed 0–15 的 64 个正式接受对象；不得根据求交结果替换 seed。最终必须报告每种 CSG operation 和每种形变机制的实际覆盖数。
+
+每个解析/机制 fixture 使用 2,048 条确定性射线，每个压力对象使用 256 条。射线原点位于对象保守球外，半数方向指向由冻结 Sobol 点生成的紧致 AABB 内目标，半数为冻结 Sobol 球面方向，用于同时覆盖 hit 与 miss；方向统一归一化。被测实现固定使用正式默认 `steps=96`，不得根据对象或结果增加采样步数。
+
+**独立高精度参考**
+
+除三个解析组外，参考求交器只调用连续 `signed_distance`，但不调用 `intersect`、`_sampled_sdf_intersection` 或其中的 96-step/bisection 实现。它在解析保守球的正向 ray interval 上分别使用 4,097 与 16,385 个等距节点寻找第一次 outside-to-inside 符号变化，再用 SciPy `brentq(xtol=10^{-12}, rtol=10^{-14})` 求最近正根。严格参考必须与标准参考 hit/miss 完全一致，且共同 hit 的距离差小于 $5\times10^{-5}$ m；否则参考资格 FAIL，不能据此裁决被测实现。严格参考无符号变化但最小绝对 SDF 不超过 $10^{-7}$ m 的测度零 grazing ray 标记为 `reference_unidentifiable`，不裁决 hit/miss，但其比例必须低于 0.5% 并逐 fixture 报告。
+
+参考法向使用严格交点两侧 $\delta=10^{-6}\max(1,R)$ m 的独立中心差分；再用 $2\delta$ 复算。两者夹角不超过 $0.05^\circ$ 才作为可微参考法向；不稳定点标记为 CSG seam/non-differentiable，只检查被测法向有限、单位长度且局部朝向满足 $\operatorname{SDF}(p+\epsilon n)>\operatorname{SDF}(p-\epsilon n)$，不强制与任一分支梯度对齐。所有分类和排除规则在读取被测结果前应用。
+
+**冻结 PASS 条件**
+
+参考资格必须先 PASS。对全部可裁决射线，被测 hit/miss 与解析或严格参考零不一致；共同 hit 必须返回有限正距离，最近距离绝对误差不超过 $10^{-4}$ m，交点连续 SDF 绝对残差不超过 $10^{-5}$ m；共同 miss 距离必须严格为 $+\infty$ 且法向为零。全部 hit 法向必须有限，单位长度误差不超过 $10^{-12}$，并满足外向性；在可微参考点法向夹角不超过 $0.1^\circ$。每个 fixture 和每个压力对象都必须至少包含 16 个参考 hit 与 16 个参考 miss，防止单一分类形成空洞审计。
+
+完整报告总射线数、可裁决/不可识别数、hit/miss 数、分类错误、距离误差 median/$Q_{0.95}$/$Q_{0.99}$/maximum、surface residual、法向误差、非可微点数及逐机制 failure rate。两次完整运行必须逐元素复现射线、参考根、被测输出、掩码、统计和哈希。
+
+PASS → 解锁 E19。FAIL → 永久保留首次结果；如果是参考资格失败，先修独立参考实验设计；如果参考合格但被测实现失败，修 `ShapeSpec.intersect` 后按版本化实验重跑，不得通过增加被测 `steps` 或删除失败机制改写结果。
+
+**当前状态**
+
+E18b 已完成预注册并解锁；E19 继续锁定，等待正式结果。
 
 **状态转移**
 
