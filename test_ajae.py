@@ -39,6 +39,7 @@ from src.protocol import (
     load_protocol,
 )
 from src.render import (
+    PROCEDURAL_GENERATOR_SCHEMA,
     HeldOutTorusShape,
     NormalTemplateShape,
     RayGrid,
@@ -469,10 +470,44 @@ def test_training_and_heldout_geometry_are_disjoint_and_bounded() -> None:
         heldout_shape = sample_held_out_anomaly_shape(seed)
         assert isinstance(training_shape, ShapeSpec)
         assert isinstance(heldout_shape, HeldOutTorusShape)
-        lower, upper = training_shape.local_bounds()
+        lower, upper = (
+            training_shape.continuous_bounds(
+                maximum_iterations=80, population_size=10
+            )
+            if training_shape.primitive_count == 1
+            else training_shape.local_bounds()
+        )
         assert 0.2 <= float(np.max(upper - lower)) <= 3.0
         report = training_shape.geometry_report()
         assert report["bounded"] and report["closed"] and report["components"] == 1
+
+
+def test_generator_schema2_rejects_continuous_size_violations_deterministically() -> None:
+    protocol = load_protocol(PROTOCOL_PATH)
+    frozen = protocol.render["anomaly_proxies"][
+        "continuous_size_acceptance_generator"
+    ]
+    assert PROCEDURAL_GENERATOR_SCHEMA == frozen["generator_schema"] == 2
+
+    for seed, rejection_kind in (
+        (501, "too_large_rejections"),
+        (688, "too_small_rejections"),
+    ):
+        shape, report = ShapeSpec.sample_with_report(seed, primitive_count=1)
+        repeated_shape, repeated_report = ShapeSpec.sample_with_report(
+            seed, primitive_count=1
+        )
+        assert shape.to_dict() == repeated_shape.to_dict()
+        assert report == repeated_report
+        assert report.generator_schema == 2
+        assert report.size_definition == "continuous-deformed-surface-aabb"
+        assert report.proposal_count > 1
+        assert getattr(report, rejection_kind) >= 1
+        assert 0.2 <= report.accepted_size_m <= 3.0
+        lower, upper = shape.continuous_bounds(
+            maximum_iterations=80, population_size=10
+        )
+        assert report.accepted_size_m == float(np.max(upper - lower))
 
 
 def test_continuous_primitive_bounds_match_an_analytic_rotated_ellipsoid() -> None:

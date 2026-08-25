@@ -1810,6 +1810,7 @@ def build_formal_training(
             stu_weight_identity,
         )
         from .render import (
+            PROCEDURAL_GENERATOR_SCHEMA,
             extract_normal_template_library,
             load_sensor_calibration,
             render_frame as render_counterfactual_frame,
@@ -1829,6 +1830,7 @@ def build_formal_training(
             stu_weight_identity,
         )
         from render import (  # type: ignore[no-redef]
+            PROCEDURAL_GENERATOR_SCHEMA,
             extract_normal_template_library,
             load_sensor_calibration,
             render_frame as render_counterfactual_frame,
@@ -1977,6 +1979,15 @@ def build_formal_training(
             getattr(protocol, "stu_repository_path")(project_root)
         )["manifest_sha256"],
     }
+    renderer_generator_payload = {
+        "generator_schema": PROCEDURAL_GENERATOR_SCHEMA,
+        "render_source_sha256": _sha256_file(Path(__file__).with_name("render.py")),
+    }
+    renderer_generator_sha256 = hashlib.sha256(
+        _canonical_json_object(
+            "renderer/generator identity", renderer_generator_payload
+        ).encode("utf-8")
+    ).hexdigest()
     scientific_identity = {
         "protocol": preflight.protocol_document,
         "checkpoint_selection": preflight.checkpoint_selection,
@@ -1991,7 +2002,8 @@ def build_formal_training(
             "directory": str(sequence.sequence_dir),
             "content_sha256": training_source_sha256,
         },
-        "renderer_generator_sha256": _sha256_file(Path(__file__).with_name("render.py")),
+        "renderer_generator": renderer_generator_payload,
+        "renderer_generator_sha256": renderer_generator_sha256,
         "stu_identity_sha256": hashlib.sha256(
             _canonical_json_object("STU identity", stu_identity_payload).encode("utf-8")
         ).hexdigest(),

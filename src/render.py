@@ -33,6 +33,7 @@ WORLD_FORMAT = "ajae-world-v2"
 CALIBRATION_FORMAT = "ajae-sensor-calibration-v4"
 DEVELOPMENT_FORMAT = "ajae-development-worlds-v2"
 DEVELOPMENT_PROTOCOL_SCHEMA = 30
+PROCEDURAL_GENERATOR_SCHEMA = 2
 GATE1_EVIDENCE_KEYS = (
     "ray_slot_audit",
     "range_image_round_trip",
@@ -168,6 +169,19 @@ def _component_count(mask: np.ndarray, *, stop_after: int = 2) -> int:
                     remaining[nx, ny, nz] = False
                     queue.append((nx, ny, nz))
     return components
+
+
+@dataclass(frozen=True, slots=True)
+class ShapeGenerationReport:
+    """Record deterministic proposal efficiency without changing shape identity."""
+
+    generator_schema: int
+    proposal_count: int
+    too_small_rejections: int
+    too_large_rejections: int
+    other_rejections: int
+    accepted_size_m: float
+    size_definition: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -706,14 +720,14 @@ class ShapeSpec:
         return _freeze(distance), _freeze(normal), _freeze(valid)
 
     @classmethod
-    def sample(
+    def sample_with_report(
         cls,
         seed: int,
         *,
         primitive_count: int | None = None,
         size_m_range: tuple[float, float] = (0.2, 3.0),
-    ) -> "ShapeSpec":
-        """Sample a reproducible connected shape; invalid CSG draws are rejected."""
+    ) -> tuple["ShapeSpec", ShapeGenerationReport]:
+        """Sample one shape and expose deterministic acceptance diagnostics."""
 
         _integer("seed", seed)
         minimum, maximum = _tuple_values("size_m_range", size_m_range, 2)
@@ -725,7 +739,10 @@ class ShapeSpec:
         ):
             raise RenderError("primitive_count must lie in [1,5]")
         rng = np.random.default_rng(seed)
-        for _ in range(64):
+        too_small = 0
+        too_large = 0
+        other = 0
+        for proposal_count in range(1, 65):
             count = (
                 int(rng.integers(1, 6)) if primitive_count is None else primitive_count
             )
@@ -773,15 +790,57 @@ class ShapeSpec:
                 )
                 # Require connectivity at both audit and placement resolutions.
                 result.geometry_report(resolution=31)
-                lower, upper = result.local_bounds(resolution=41)
+                if count == 1:
+                    # Schema 2 qualifies final single-primitive geometry itself.
+                    lower, upper = result.continuous_bounds(
+                        maximum_iterations=80,
+                        population_size=10,
+                        safety_margin_m=1.0e-6,
+                    )
+                    size_definition = "continuous-deformed-surface-aabb"
+                else:
+                    # Multi-primitive continuous acceptance remains locked for E18.
+                    lower, upper = result.local_bounds(resolution=41)
+                    size_definition = "resolution-41-pending-E18"
                 diameter = float(np.max(upper - lower))
-                if minimum <= diameter <= maximum:
-                    return result
+                if diameter < minimum:
+                    too_small += 1
+                    continue
+                if diameter > maximum:
+                    too_large += 1
+                    continue
+                return result, ShapeGenerationReport(
+                    generator_schema=PROCEDURAL_GENERATOR_SCHEMA,
+                    proposal_count=proposal_count,
+                    too_small_rejections=too_small,
+                    too_large_rejections=too_large,
+                    other_rejections=other,
+                    accepted_size_m=diameter,
+                    size_definition=size_definition,
+                )
             except RenderError:
+                other += 1
                 continue
         raise RenderError(
             "could not sample a connected shape within 64 deterministic attempts"
         )
+
+    @classmethod
+    def sample(
+        cls,
+        seed: int,
+        *,
+        primitive_count: int | None = None,
+        size_m_range: tuple[float, float] = (0.2, 3.0),
+    ) -> "ShapeSpec":
+        """Sample a reproducible connected shape under generator schema 2."""
+
+        shape, _ = cls.sample_with_report(
+            seed,
+            primitive_count=primitive_count,
+            size_m_range=size_m_range,
+        )
+        return shape
 
     def to_dict(self) -> dict[str, object]:
         return {
