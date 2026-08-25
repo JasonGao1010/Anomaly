@@ -1727,7 +1727,17 @@ D2-v2 仍不修改 generator、proposal distribution、0.2–3.0 m 范围或 E18
 
 **当前状态**
 
-E18a-D2-v2 已解锁；E18a-B-v2、E18b 与 E19 继续锁定，等待两次正式运行完成。
+E18a-D2-v2 PASS，紧致保守上界获得进入多 primitive / CSG 生成路径的资格；E18a-B-v2 解锁，E18b 与 E19 继续锁定。
+
+**正式结果**
+
+- 只读重放逐元素恢复全部 1,802 个 E18a-D1 历史上界拒绝对象；其中 19 个单 primitive 对象按冻结规则排除，正式多 primitive 替换域为 1,783 个对象，包含 214 个 `true_oversize`、1,502 个 `certificate_looseness` 和 67 个 `boundary_unresolved`；
+- 多 primitive 域内 $U_{\mathrm{new}}>U_{\mathrm{old}}$ 的对象数为 0，$\underline D_{\mathrm{HP}}>U_{\mathrm{new}}$ 的确定保守性反例数为 0，214 个真实超限对象的误放数为 0；七个解析 fixture 的真实尺寸违反数和 $7\times2^{18}$ 个独立 probes 的候选 AABB containment 违反数均为 0；
+- 1,502 个证书松弛对象中有 1,302 个被新证书恢复，恢复率为 86.6844%，超过原样冻结的 75%（至少 1,127 个）；
+- $U_{\mathrm{old}}-U_{\mathrm{new}}$ 的 median/$Q_{0.90}$/$Q_{0.99}$/maximum 为 1.993895/2.918876/3.692532/4.210985 m；$U_{\mathrm{new}}-\underline D_{\mathrm{HP}}$ 对应为 0.292516/0.625705/1.013985/1.413670 m；
+- 单线程成本 median/$Q_{0.99}$/maximum 为 0.251/0.336/0.709 ms，低于冻结的 5/20 ms；两次完整运行逐元素一致，运行哈希均为 `fe28b0ccb4705103094df62b582daedde3fb55a24f299f1bc78707d6e81b4458`，摘要哈希为 `ae2c11473f90393ee2d8224aba7dff5dfa5ec022c3baa8a8d7625859611b08be`；产物 `runs/ajae/e18a_d2_v2_tight_upper_bound.npz` 的 SHA-256 为 `60cb44fbfac7afc4327b1b9086b880f93abb784d3508c41f3930e587c1b649f1`。
+
+该 PASS 只资格确认候选上界在 multi-primitive / CSG 替换域内严格保守、相对旧解析证书更紧且成本受控；尚未证明 schema 4 完整生成器满足历史效率条件。下一步必须先冻结 E18a-B-v2，再只修改多 primitive acceptance 并执行完整生成器审计。
 
 ## E18b｜CSG 与连续形变求交稳定性
 
