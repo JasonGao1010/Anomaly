@@ -107,6 +107,23 @@ def test_public_sequences_are_sealed_before_path_resolution(
     assert not (tmp_path / "does-not-exist").exists()
 
 
+def test_hidden_sequences_are_sealed_before_path_resolution(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    protocol = load_protocol(PROTOCOL_PATH)
+    with pytest.raises(SceneDataError, match="sealed until"):
+        STUSequence.open(
+            tmp_path / "does-not-exist",
+            protocol=protocol,
+            partition="test",
+            sequence_id=protocol.hidden_sequence_ids[0],
+            label_mode=LabelMode.FORBIDDEN,
+        )
+    assert "Refused sealed sequence access" in caplog.text
+    assert not (tmp_path / "does-not-exist").exists()
+
+
 def _organized_frame(frame_id: int, *, real_slot: int = 0) -> object:
     xyzi = np.zeros((128 * 1024, 4), dtype=np.float32)
     xyzi[real_slot] = (5.0 + frame_id, 0.1, 0.2, 0.4)

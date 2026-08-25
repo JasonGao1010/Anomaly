@@ -2121,11 +2121,6 @@ def _predict_command(args: argparse.Namespace) -> dict[str, Any]:
     method_freeze = _validate_method_freeze(
         args.method_freeze_record, protocol, condition
     )
-    sealed_access = _grant_sealed_sequence_access(
-        protocol,
-        partition=args.partition,
-        condition=condition,
-    )
     public_confirmation: Mapping[str, Any] | None = None
     if args.partition == "test":
         if (
@@ -2147,6 +2142,11 @@ def _predict_command(args: argparse.Namespace) -> dict[str, Any]:
             public_results=args.public_result,
             public_official_results=args.public_official_result,
         )
+    sealed_access = _grant_sealed_sequence_access(
+        protocol,
+        partition=args.partition,
+        condition=condition,
+    )
     device = torch.device(args.device)
     slot_to_ray, ray_mapping_digest, calibration_digest = _protocol_slot_to_ray(
         protocol
@@ -2324,11 +2324,6 @@ def _instances_command(args: argparse.Namespace) -> dict[str, Any]:
     method_freeze = _validate_method_freeze(
         args.method_freeze_record, protocol, condition
     )
-    sealed_access = _grant_sealed_sequence_access(
-        protocol,
-        partition=args.partition,
-        condition=condition,
-    )
     if not math.isclose(
         float(args.threshold),
         float(method_freeze["object_score_threshold"]),
@@ -2357,6 +2352,11 @@ def _instances_command(args: argparse.Namespace) -> dict[str, Any]:
             public_results=args.public_result,
             public_official_results=args.public_official_result,
         )
+    sealed_access = _grant_sealed_sequence_access(
+        protocol,
+        partition=args.partition,
+        condition=condition,
+    )
     sequence_ids = tuple(args.sequence or ())
     if not sequence_ids:
         sequence_ids = (
