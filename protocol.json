@@ -365,7 +365,7 @@
       "training_mechanisms": ["superquadric", "CSG", "bend", "twist", "taper", "low_frequency_surface"],
       "held_out_mechanism": "torus_SDF",
       "primitive_finite_bounded_audit": {
-        "version": "E16",
+        "version": "E16-v1",
         "question": "Does the deterministic training anomaly generator produce finite, closed, connected, bounded single-superquadric entities across a fixed broad seed audit?",
         "seeds": [0, 1023],
         "primitive_count": 1,
