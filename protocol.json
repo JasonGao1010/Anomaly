@@ -259,6 +259,21 @@
         "labels_read": false,
         "criteria_frozen_before_formal_run": true
       },
+      "published_return_cardinality_audit": {
+        "version": "E12-v1",
+        "question": "Does the released STU interface expose exactly one fixed record slot per calibrated canonical ray, containing either no return or one published return, without a multi-return dimension or dynamic ray reassignment?",
+        "data": ["train/206 frames 0 through 448", "train/201 frames 4 through 681"],
+        "canonical_mapping": "inherit E11-v3 c=(a-s_b) mod 1024 and its fixed bijective inverse",
+        "record_layout": "one float32 (x,y,z,intensity) record for each of 128x1024 raw slots",
+        "empty_record": "x=y=z=0; nonzero intensity on an empty XYZ record is invalid",
+        "published_return": "finite XYZ not all zero; exactly one record occupies its canonical ray slot",
+        "required_checks": ["every included file has exactly 128x1024x4 float32 values", "no non-finite published XYZ or intensity", "no empty-XYZ record has nonzero intensity", "raw-to-canonical mapping is fixed and bijective in every frame", "raw-to-ray-to-raw XYZI is bitwise exact", "released files and official loader expose no return index, return count, first/second/strongest flag, or parallel return array", "occupancy changes across frames remain attached to the same canonical ray rather than changing the mapping"],
+        "pass_definition": "Every canonical ray has exactly one stable published record slot per frame and therefore 0 or 1 published point; no observable multi-return field or dynamic reorder exists in the released interface.",
+        "interpretation_limit": "PASS does not identify the upstream Ouster return-selection policy and does not prove the physical sensor emitted only one return. Renderer wording remains a single-published-return Ouster-like approximation; first-return is a modelling convention unless independently documented.",
+        "repeat_raw_read_exact_match": true,
+        "labels_read": false,
+        "criteria_frozen_before_formal_run": true
+      },
       "empty_ray_direction": "same-beam periodic interpolation, explicitly approximate without sensor metadata"
     },
     "normal_controls": {

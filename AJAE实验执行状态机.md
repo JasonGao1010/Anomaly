@@ -1138,24 +1138,34 @@ E11-v3 PASS，解锁 E12。E11-v1/v2 的历史 FAIL、D4c-v1 的历史 FAIL 以�
 
 **目的 / 唯一问题**
 
-排除多回波导致 slot/ray 身份被动态重排。
+判断 STU 发布接口是否为每个经 E11-v3 校准的 canonical ray 提供恰好一个固定记录槽，该槽在一帧中只能表示“无发布回波”或“一个发布回波”，并排除发布层面的多回波维度或动态 ray reassignment。
 
-**建模 / 实施**
+本实验不证明真实 OS1-128 物理上只能产生一个回波，也不从四字段 `.bin` 猜测上游选择的是 first、second 还是 strongest return。
 
-检查原始格式与多回波字段；搜索同一 ray 的回波排序变化和重复射线。
+**运行前冻结的数据与对象**
 
-**PASS 条件**
+1. 使用 train/206 帧 0–448 与 train/201 帧 4–681，不读取标签；canonical mapping 完全继承 E11-v3 的 $c=(a-s_b)\bmod1024$ 和固定双射逆映射。
+2. 每个发布 `.bin` 必须严格包含 $128\times1024\times4$ 个 float32，四字段固定解释为 `(x,y,z,intensity)`。一个 raw slot 经双射映射到且只映射到一个 canonical ray。
+3. `x=y=z=0` 是唯一空记录；空 XYZ 若带非零 intensity 记为无效。XYZ 非全零的记录是一个发布回波，XYZ 与 intensity 必须全部有限。
+4. 继承 E11-D1 对发布文件和官方 loader 的来源审计，重新确认发布接口中没有 return index、return count、first/second/strongest 标志或并行多回波数组。没有这些字段只能证明发布层没有可观测的多回波维度，不能识别上游 selection policy。
+5. 对每帧全部槽位执行 raw→canonical→raw，XYZ 与 intensity 必须逐 bit 一致。逐帧空/有效占用变化必须保持在同一 canonical ray 槽位，不得通过改变映射解释。
+6. 从原始文件独立执行两遍，逐元素复现有效掩码、每帧回波数、每 ray 观测次数、占用转换统计、往返哈希和摘要哈希。
 
-不存在影响第一回波身份的重排，或已显式提取第一回波并固定规则。
+**运行前冻结的 PASS 条件**
 
-**FAIL 条件**
+1. 所有纳入文件结构正确，不存在非有限记录或“空 XYZ + 非零 intensity”的歧义记录。
+2. 每帧每 canonical ray 恰有一个固定发布记录槽，因此基数只能为 0 或 1；映射在所有帧中保持同一双射，全部 XYZI 往返逐 bit 相同。
+3. 发布数据和官方 loader 不存在第二条并行 return、return-order 字段或会将一个 canonical ray 动态分配到多个槽位的机制。
+4. 两次独立读取与审计完全复现。
 
-存在未处理的 reorder。
+任一文件出现额外/缺失记录、一个 canonical ray 对应多个发布记录、动态 mapping、非有限/歧义记录或可观察但未处理的 return-order 机制即 FAIL。
 
 **状态转移**
 
 - PASS → **E13**
 - FAIL → **先处理 multi-return identity，再重跑 E12。**
+
+E12 PASS 的结论必须限定为“STU 发布接口是稳定的 single-published-return/empty-slot 接口”。在没有独立文档的情况下，不得把该结果写成“传感器没有多回波”或“发布点已被证实为原始 first return”。
 
 
 ## E13｜raw→ray→raw 点数往返
