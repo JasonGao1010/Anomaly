@@ -288,6 +288,19 @@
         "labels_read": false,
         "criteria_frozen_before_formal_run": true
       },
+      "canonical_return_count_round_trip": {
+        "version": "E13-v1",
+        "question": "Does the E11-v3 raw-slot/canonical-ray bijection preserve every XYZ-defined published return without loss, duplication, or identity conflict?",
+        "data": ["train/206 frames 0 through 448", "train/201 frames 4 through 681"],
+        "canonical_mapping": "inherit E11-v3 c=(a-s_b) modulo 1024 and fixed inverse without refitting",
+        "occupancy": "inherit E12-v2: return exists iff XYZ is not exactly (0,0,0); intensity is payload only",
+        "round_trip": "raw valid slot -> unique canonical ray -> inverse raw slot",
+        "pass_conditions": ["raw, canonical, and recovered valid-return counts are equal in every frame", "the recovered occupancy mask is bitwise identical to the raw occupancy mask", "every valid raw slot maps to exactly one in-range canonical ray", "no valid canonical ray is duplicated and the inverse recovers every source slot identity", "two independent complete reads reproduce all per-frame counts, masks, identities, hashes, and summaries exactly"],
+        "forbidden": ["interpolation", "fabricated return", "dropping an empty slot from the mapping domain", "geometry-dependent nearest-neighbour matching", "reading labels"],
+        "interpretation_limit": "PASS establishes only return-count and slot/ray identity preservation. Range, direction, and Cartesian fidelity remain E14 questions.",
+        "labels_read": false,
+        "criteria_frozen_before_formal_run": true
+      },
       "empty_ray_direction": "same-beam periodic interpolation, explicitly approximate without sensor metadata"
     },
     "normal_controls": {
