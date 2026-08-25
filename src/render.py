@@ -1943,6 +1943,10 @@ class RayGrid:
         plain = dict(value)
         if plain.pop("layout", None) != "beam_major":
             raise RenderError("ray-grid payload does not use STU's beam-major layout")
+        if "canonical_ray_by_slot" in plain:
+            plain["canonical_ray_by_slot"] = np.asarray(
+                plain["canonical_ray_by_slot"], dtype=np.int32
+            )
         try:
             return cls(**plain)  # type: ignore[arg-type]
         except TypeError as error:

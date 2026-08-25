@@ -812,7 +812,11 @@ def _validate_gate1_evidence(
             "calibration_sha256": calibration_digest,
         }
         if any(identity.get(key) != value for key, value in required_identity.items()):
-            raise ProtocolError(f"{name} is not bound to the full real 206 calibration")
+            # A replaced authoritative calibration invalidates old evidence.  It
+            # must keep the development gate closed without making the pending
+            # development-world document unreadable.
+            all_verdicts_pass = False
+            continue
         audited_returns = _integer(
             identity.get("audited_real_returns_all_frames"),
             f"{name}.audited_real_returns_all_frames",
