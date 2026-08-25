@@ -20,6 +20,7 @@ from typing import Any, Callable, Literal, TypeAlias
 import numpy as np
 from scipy.optimize import brentq, differential_evolution
 from scipy.spatial import ConvexHull, QhullError, cKDTree
+from scipy.stats import qmc
 
 try:
     from .scene import PointLabels, SourceFrame, make_source_frame
@@ -184,6 +185,21 @@ class ShapeGenerationReport:
     accepted_lower_m: tuple[float, float, float]
     accepted_upper_m: tuple[float, float, float]
     size_definition: str
+
+
+@dataclass(frozen=True, slots=True)
+class ShapeSizeCertificate:
+    """Conservative continuous size interval for one final CSG geometry."""
+
+    outer_lower_m: tuple[float, float, float]
+    outer_upper_m: tuple[float, float, float]
+    lower_size_m: float
+    upper_size_m: float
+    witness_start_m: tuple[float, float, float]
+    witness_end_m: tuple[float, float, float]
+    sobol_probes: int
+    interior_lines: int
+    maximum_surface_residual_m: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -419,6 +435,198 @@ class ShapeSpec:
         if not np.isfinite(lower).all() or not np.isfinite(upper).all() or np.any(lower >= upper):
             raise RenderError("continuous primitive bounds are invalid")
         return _freeze(lower), _freeze(upper)
+
+    def _continuous_outer_bounds(
+        self, *, safety_margin_m: float = 1.0e-6
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Propagate a conservative continuous AABB through CSG and deformation."""
+
+        margin = _finite_scalar("safety_margin_m", safety_margin_m)
+        if margin < 0.0 or margin > 1.0e-3:
+            raise RenderError("continuous-bound safety margin must lie in [0,1e-3]")
+        lower: np.ndarray | None = None
+        upper: np.ndarray | None = None
+        for scale, offset, yaw, operation in zip(
+            self.primitive_scales_m,
+            self.primitive_offsets_m,
+            self.primitive_yaws_rad,
+            self.operations,
+            strict=True,
+        ):
+            expansion = 1.0 + self.surface_amplitude_m / min(scale)
+            a, b, c = expansion * np.asarray(scale, dtype=np.float64)
+            cosine = abs(math.cos(yaw))
+            sine = abs(math.sin(yaw))
+            half = np.asarray(
+                (cosine * a + sine * b, sine * a + cosine * b, c),
+                dtype=np.float64,
+            )
+            center = np.asarray(offset, dtype=np.float64)
+            primitive_lower = center - half
+            primitive_upper = center + half
+            if lower is None:
+                lower = primitive_lower
+                upper = primitive_upper
+            elif operation == "union":
+                lower = np.minimum(lower, primitive_lower)
+                upper = np.maximum(upper, primitive_upper)
+            elif operation == "intersection":
+                lower = np.maximum(lower, primitive_lower)
+                upper = np.minimum(upper, primitive_upper)
+            # Difference cannot enlarge the accumulated left-hand geometry.
+        assert lower is not None and upper is not None
+        if np.any(lower >= upper):
+            raise RenderError("continuous CSG outer bounds are empty")
+
+        z_lower = float(lower[2])
+        z_upper = float(upper[2])
+        z_abs = max(abs(z_lower), abs(z_upper))
+        if abs(self.twist_rad_per_m) > EPSILON:
+            radial = math.hypot(
+                max(abs(float(lower[0])), abs(float(upper[0]))),
+                max(abs(float(lower[1])), abs(float(upper[1]))),
+            )
+            x_interval = (-radial, radial)
+            y_interval = (-radial, radial)
+        else:
+            x_interval = (float(lower[0]), float(upper[0]))
+            y_interval = (float(lower[1]), float(upper[1]))
+
+        scale_z = max(item[2] for item in self.primitive_scales_m)
+
+        def deformed_interval(
+            interval: tuple[float, float], taper: float, bend: float
+        ) -> tuple[float, float]:
+            factors = np.clip(
+                1.0 + taper * np.asarray((z_lower, z_upper)) / scale_z,
+                0.25,
+                4.0,
+            )
+            products = np.asarray(
+                [value * factor for value in interval for factor in factors],
+                dtype=np.float64,
+            )
+            z_square_min = (
+                0.0
+                if z_lower <= 0.0 <= z_upper
+                else min(z_lower * z_lower, z_upper * z_upper)
+            )
+            z_square_max = z_abs * z_abs
+            bend_values = bend * np.asarray((z_square_min, z_square_max))
+            return (
+                float(np.min(products) + np.min(bend_values)),
+                float(np.max(products) + np.max(bend_values)),
+            )
+
+        x_lower, x_upper = deformed_interval(
+            x_interval, self.taper_per_m[0], self.bend_per_m[0]
+        )
+        y_lower, y_upper = deformed_interval(
+            y_interval, self.taper_per_m[1], self.bend_per_m[1]
+        )
+        result_lower = np.asarray(
+            (x_lower - margin, y_lower - margin, z_lower - margin), dtype=np.float64
+        )
+        result_upper = np.asarray(
+            (x_upper + margin, y_upper + margin, z_upper + margin), dtype=np.float64
+        )
+        if (
+            not np.isfinite(result_lower).all()
+            or not np.isfinite(result_upper).all()
+            or np.any(result_lower >= result_upper)
+        ):
+            raise RenderError("continuous CSG outer bounds are invalid")
+        return _freeze(result_lower), _freeze(result_upper)
+
+    def continuous_size_certificate(
+        self,
+        *,
+        sobol_probes: int = 4096,
+        maximum_interior_lines: int = 64,
+        safety_margin_m: float = 1.0e-6,
+    ) -> ShapeSizeCertificate:
+        """Certify a mesh-free lower/upper interval for maximum-axis size."""
+
+        probes = _integer("sobol_probes", sobol_probes, minimum=256)
+        if probes & (probes - 1):
+            raise RenderError("sobol_probes must be a power of two")
+        line_limit = _integer(
+            "maximum_interior_lines", maximum_interior_lines, minimum=8
+        )
+        lower, upper = self._continuous_outer_bounds(
+            safety_margin_m=safety_margin_m
+        )
+        exponent = int(math.log2(probes))
+        unit = qmc.Sobol(d=3, scramble=False).random_base2(exponent)
+        points = lower + unit * (upper - lower)
+        values = self.signed_distance(points)
+        interior = np.flatnonzero(values < -1.0e-10)[:line_limit]
+        if interior.size == 0:
+            raise RenderError("continuous size certificate found no interior witness")
+
+        best_span = -math.inf
+        best_start: np.ndarray | None = None
+        best_end: np.ndarray | None = None
+        maximum_residual = 0.0
+        for point in points[interior]:
+            for axis in range(3):
+                left = point.copy()
+                right = point.copy()
+                left[axis] = lower[axis]
+                right[axis] = upper[axis]
+                left_value = float(self.signed_distance(left[None])[0])
+                right_value = float(self.signed_distance(right[None])[0])
+                point_value = float(self.signed_distance(point[None])[0])
+                if left_value <= 0.0 or right_value <= 0.0 or point_value >= 0.0:
+                    raise RenderError("continuous outer bound did not bracket the geometry")
+
+                def along(value: float) -> float:
+                    query = point.copy()
+                    query[axis] = value
+                    return float(self.signed_distance(query[None])[0])
+
+                left_root = brentq(
+                    along,
+                    float(lower[axis]),
+                    float(point[axis]),
+                    xtol=1.0e-13,
+                    rtol=1.0e-13,
+                )
+                right_root = brentq(
+                    along,
+                    float(point[axis]),
+                    float(upper[axis]),
+                    xtol=1.0e-13,
+                    rtol=1.0e-13,
+                )
+                start = point.copy()
+                end = point.copy()
+                start[axis] = left_root
+                end[axis] = right_root
+                residual = float(
+                    np.max(np.abs(self.signed_distance(np.stack((start, end)))))
+                )
+                maximum_residual = max(maximum_residual, residual)
+                span = right_root - left_root
+                if span > best_span:
+                    best_span = span
+                    best_start = start
+                    best_end = end
+        assert best_start is not None and best_end is not None
+        outer_size = float(np.max(upper - lower))
+        if not 0.0 < best_span <= outer_size:
+            raise RenderError("continuous size certificate interval is invalid")
+        return ShapeSizeCertificate(
+            outer_lower_m=tuple(map(float, lower)),
+            outer_upper_m=tuple(map(float, upper)),
+            lower_size_m=float(best_span),
+            upper_size_m=outer_size,
+            witness_start_m=tuple(map(float, best_start)),
+            witness_end_m=tuple(map(float, best_end)),
+            sobol_probes=probes,
+            interior_lines=int(interior.size),
+            maximum_surface_residual_m=maximum_residual,
+        )
 
     def _undeform(self, points: np.ndarray) -> np.ndarray:
         result = np.asarray(points, dtype=np.float64).copy()

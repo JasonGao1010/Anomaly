@@ -536,6 +536,28 @@ def test_continuous_primitive_bounds_match_an_analytic_rotated_ellipsoid() -> No
     np.testing.assert_allclose(upper, expected, atol=5.0e-6, rtol=0.0)
 
 
+def test_csg_continuous_size_certificate_encloses_analytic_lens() -> None:
+    shape = ShapeSpec(
+        ((1.0, 1.0, 1.0), (1.0, 1.0, 1.0)),
+        ((-0.5, 0.0, 0.0), (0.5, 0.0, 0.0)),
+        ((1.0, 1.0), (1.0, 1.0)),
+        (0.0, 0.0),
+        ("union", "intersection"),
+    )
+    standard = shape.continuous_size_certificate(
+        sobol_probes=4096, maximum_interior_lines=64
+    )
+    strict = shape.continuous_size_certificate(
+        sobol_probes=32768, maximum_interior_lines=256
+    )
+    exact_size = np.sqrt(3.0)
+    assert standard.lower_size_m <= exact_size <= standard.upper_size_m
+    assert strict.lower_size_m >= standard.lower_size_m
+    assert strict.outer_lower_m == standard.outer_lower_m
+    assert strict.outer_upper_m == standard.outer_upper_m
+    assert standard.maximum_surface_residual_m < 1.0e-8
+
+
 def test_mixed_training_world_pairs_support_distance_size_and_seed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
