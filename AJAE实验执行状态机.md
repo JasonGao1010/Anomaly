@@ -1761,11 +1761,21 @@ PASS → E18a 完整闭合并解锁 E18b。correctness FAIL → 修 schema-4 acc
 
 **当前状态**
 
-E18a-B-v2 已解锁并完成预注册；E18b 与 E19 在正式结果前继续锁定。
+E18a-B-v2 PASS；E18a 的连续尺寸资格与 schema-4 完整生成器效率链已经闭合，E18b 解锁，E19 继续锁定。
+
+**正式结果**
+
+- 两遍各 2,048 次生成调用全部在 64 个 proposal 内成功；接受 primitive count 1–5 分别为 254/490/441/440/423，参数、保守半径、$9\times9\times9$ SDF、resolution 31/41 有界/闭合/单连通检查均合格；
+- 单 primitive 的 E16-v3 bounds 复算与报告逐元素一致；多 primitive 的 E18a-A 连续下界及 E18a-D2-v2 紧致上界复算与报告逐元素一致。接受对象下界最小值为 0.202296 m、上界最大值为 2.998756 m，连续资格违反、报告不一致、非尺寸失败和 proposal 记账错误均为 0；
+- 共执行 3,020 个 proposal、拒绝 972 个，总体拒绝率为 32.1854%，严格低于冻结的 50%；proposal count 的 median/$Q_{0.90}$/$Q_{0.95}$/$Q_{0.99}$/maximum 为 1/3/3/5/8，通过冻结的 $Q_{0.99}\le8$ 与 maximum $\le64$；
+- 拒绝原因中，下界证据不足 36 次、紧致上界超限 287 次、其他构造或几何拒绝 649 次；默认路径及固定 count 2/3/4/5 的拒绝率分别为 28.84%/21.95%/31.91%/37.41%/45.30%，各组均无生成失败；
+- 两次完整运行逐元素一致，运行哈希均为 `5286485cc61145ae7f47ede0770e8f8dd005a0bb17b981e0119ba638efb1f77c`，摘要哈希为 `7357df5a9cd91e08afd6c11297423faac462844c791bd5e4416d7e5e14221a89`；产物 `runs/ajae/e18a_b_v2_schema4_generator.npz` 的 SHA-256 为 `0ae880bd87272c6ed53e8bdade9ee2d6b43195a547f5e5dbc33f1a0a7bfb2039`。
+
+科学结论限定为：**schema 4 在保持单 primitive 连续优化路径和全部 proposal 参数分布不变的条件下，使用已资格的紧致保守上界消除了 E18a-B-v1 的效率失败，并保证所有正式接受对象获得连续几何合法性证书。** 这尚不证明复杂 CSG/形变的射线求交正确；该问题由 E18b 独立审计。
 
 ## E18b｜CSG 与连续形变求交稳定性
 
-E18a 完整 PASS 前锁定。E18a-D1 已 PASS，E18a-D2-v1 已因替换域定义错误永久 FAIL，E18a-D2-v2 已解锁但尚未取得正式结果，因此 E18a-B-v2、E18b 与 E19 继续锁定。E18b 回答已经合法接收的 union、difference、intersection、非二次 exponent、bend、twist、taper 与低频表面形变是否支持稳定的 hit/miss、最近正交点、有限正距离、曲面残差、单位法向和独立高精度复现。具体压力样例与阈值必须在 E18a PASS 后、首次运行前冻结。
+E18a-D2-v2 与 E18a-B-v2 均已 PASS，E18b 解锁。E18b 回答已经合法接收的 union、difference、intersection、非二次 exponent、bend、twist、taper 与低频表面形变是否支持稳定的 hit/miss、最近正交点、有限正距离、曲面残差、单位法向和独立高精度复现。具体压力样例与阈值必须在首次运行前冻结。
 
 **状态转移**
 
