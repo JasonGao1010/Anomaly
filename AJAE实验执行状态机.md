@@ -1167,6 +1167,16 @@ E11-v3 PASS，解锁 E12。E11-v1/v2 的历史 FAIL、D4c-v1 的历史 FAIL 以�
 
 E12 PASS 的结论必须限定为“STU 发布接口是稳定的 single-published-return/empty-slot 接口”。在没有独立文档的情况下，不得把该结果写成“传感器没有多回波”或“发布点已被证实为原始 first return”。
 
+**E12-v1 正式结果**
+
+FAIL。失败原因是预注册条件把“XYZ 全零但 intensity 非零”判为歧义记录：train/206 的 2,654,561 个空 XYZ 槽和 train/201 的 11,084,693 个空 XYZ 槽全部触发该条件。正式结果永久保留，不改写为 PASS。
+
+其余冻结检查全部通过：1,127 个纳入文件均严格为 $128\times1024\times4$ float32；没有非有限 XYZI；每个 canonical ray 每帧只有一个固定记录槽，发布回波基数为 0 或 1；映射始终为同一双射；全部 XYZI 往返逐 bit 相同；发布记录只有 `(x,y,z,intensity)`，不存在 return index/count/order 或并行多回波数组；两次独立读取完全一致。摘要哈希为 `1bd58788bdca02c382062dbfcb8acd731afb6814558ca0f9f03a3aa2c61d838e`。
+
+失败后的只读诊断表明，空 XYZ 槽的 intensity 不是单一哨兵：206 中有 5,585 个不同 float32 值，范围 0.000857–1.633714；201 中有 5,710 个不同值，范围 0.000286–1.639429，且全部有限、没有零值。这说明 intensity 在 XYZ 被置零后仍保留数值，不能参与“return exists”的判定。
+
+该门槛与 E08 已冻结并在 E09–E11 一直使用的“仅以 XYZ 全零定义空槽”语义冲突，因此 E12-v1 只否定该错误的联合空值条件，尚未否定稳定单发布回波接口。若修订，必须版本化为 E12-v2，永久保留本次 FAIL，并只恢复 E08 的 XYZ-only occupancy 定义；其他检查和结论边界不得改变。E13 继续锁定。
+
 
 ## E13｜raw→ray→raw 点数往返
 
