@@ -475,14 +475,14 @@ def test_training_and_heldout_geometry_are_disjoint_and_bounded() -> None:
                 maximum_iterations=80, population_size=10
             )
             if training_shape.primitive_count == 1
-            else training_shape.local_bounds()
+            else training_shape.tight_continuous_outer_bounds()
         )
         assert 0.2 <= float(np.max(upper - lower)) <= 3.0
         report = training_shape.geometry_report()
         assert report["bounded"] and report["closed"] and report["components"] == 1
 
 
-def test_generator_schema3_preserves_single_continuous_acceptance() -> None:
+def test_generator_schema4_preserves_single_continuous_acceptance() -> None:
     protocol = load_protocol(PROTOCOL_PATH)
     historical = protocol.render["anomaly_proxies"][
         "continuous_size_acceptance_generator"
@@ -491,7 +491,7 @@ def test_generator_schema3_preserves_single_continuous_acceptance() -> None:
         "csg_continuous_acceptance_generator"
     ]
     assert historical["generator_schema"] == 2
-    assert PROCEDURAL_GENERATOR_SCHEMA == current["generator_schema"] == 3
+    assert PROCEDURAL_GENERATOR_SCHEMA == current["generator_schema"] == 4
 
     for seed, rejection_kind in (
         (501, "upper_certificate_rejections"),
@@ -503,7 +503,7 @@ def test_generator_schema3_preserves_single_continuous_acceptance() -> None:
         )
         assert shape.to_dict() == repeated_shape.to_dict()
         assert report == repeated_report
-        assert report.generator_schema == 3
+        assert report.generator_schema == 4
         assert report.size_definition == "continuous-deformed-surface-aabb"
         assert report.proposal_count > 1
         assert getattr(report, rejection_kind) >= 1
@@ -519,17 +519,18 @@ def test_generator_schema3_preserves_single_continuous_acceptance() -> None:
         assert report.accepted_size_upper_m == expected
 
 
-def test_generator_schema3_uses_csg_certificate_for_multi_primitive() -> None:
+def test_generator_schema4_uses_tight_csg_certificate_for_multi_primitive() -> None:
     shape, report = ShapeSpec.sample_with_report(0, primitive_count=2)
     certificate = shape.continuous_size_certificate(
         sobol_probes=4096, maximum_interior_lines=64
     )
-    assert report.generator_schema == 3
-    assert report.size_definition == "continuous-csg-certified-interval"
+    tight_lower, tight_upper = shape.tight_continuous_outer_bounds()
+    assert report.generator_schema == 4
+    assert report.size_definition == "continuous-csg-tight-certified-interval"
     assert report.accepted_size_lower_m == certificate.lower_size_m
-    assert report.accepted_size_upper_m == certificate.upper_size_m
-    assert report.outer_lower_m == certificate.outer_lower_m
-    assert report.outer_upper_m == certificate.outer_upper_m
+    assert report.accepted_size_upper_m == float(np.max(tight_upper - tight_lower))
+    np.testing.assert_array_equal(report.outer_lower_m, tight_lower)
+    np.testing.assert_array_equal(report.outer_upper_m, tight_upper)
     assert 0.2 <= report.accepted_size_lower_m
     assert report.accepted_size_upper_m <= 3.0
 

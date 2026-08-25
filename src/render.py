@@ -34,7 +34,7 @@ WORLD_FORMAT = "ajae-world-v2"
 CALIBRATION_FORMAT = "ajae-sensor-calibration-v4"
 DEVELOPMENT_FORMAT = "ajae-development-worlds-v2"
 DEVELOPMENT_PROTOCOL_SCHEMA = 30
-PROCEDURAL_GENERATOR_SCHEMA = 3
+PROCEDURAL_GENERATOR_SCHEMA = 4
 GATE1_EVIDENCE_KEYS = (
     "ray_slot_audit",
     "range_image_round_trip",
@@ -1256,7 +1256,7 @@ class ShapeSpec:
                 result.geometry_report(resolution=31)
                 result.geometry_report(resolution=41)
                 if count == 1:
-                    # Schema 3 preserves the E16-v3 qualified single path.
+                    # Schema 4 preserves the E16-v3 qualified single path.
                     lower, upper = result.continuous_bounds(
                         maximum_iterations=80,
                         population_size=10,
@@ -1271,11 +1271,13 @@ class ShapeSpec:
                         maximum_interior_lines=64,
                         safety_margin_m=1.0e-6,
                     )
-                    lower = np.asarray(certificate.outer_lower_m, dtype=np.float64)
-                    upper = np.asarray(certificate.outer_upper_m, dtype=np.float64)
+                    lower, upper = result.tight_continuous_outer_bounds(
+                        z_slabs=256,
+                        safety_margin_m=1.0e-6,
+                    )
                     size_lower = certificate.lower_size_m
-                    size_upper = certificate.upper_size_m
-                    size_definition = "continuous-csg-certified-interval"
+                    size_upper = float(np.max(upper - lower))
+                    size_definition = "continuous-csg-tight-certified-interval"
                 if size_upper > maximum:
                     upper_rejections += 1
                     continue
@@ -1309,7 +1311,7 @@ class ShapeSpec:
         primitive_count: int | None = None,
         size_m_range: tuple[float, float] = (0.2, 3.0),
     ) -> "ShapeSpec":
-        """Sample a reproducible connected shape under generator schema 3."""
+        """Sample a reproducible connected shape under generator schema 4."""
 
         shape, _ = cls.sample_with_report(
             seed,
