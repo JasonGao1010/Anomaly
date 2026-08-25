@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import logging
 import math
 from collections import OrderedDict
 from dataclasses import dataclass
@@ -43,6 +44,7 @@ LABEL_DTYPE = np.dtype("<u4")
 RIGID_ATOL = 1.0e-3
 IDENTITY_ATOL = 1.0e-9
 RAY_MAPPING_DOMAIN = 128 * 1024
+LOGGER = logging.getLogger(__name__)
 
 
 class SceneDataError(ValueError):
@@ -54,6 +56,70 @@ class LabelMode(str, Enum):
 
     REQUIRED = "required"
     FORBIDDEN = "forbidden"
+
+
+_SEALED_ACCESS_KEY = object()
+
+
+class _SealedSequenceAccess:
+    """Carry a validated method-freeze decision into the lowest data loader."""
+
+    __slots__ = ("condition", "partition", "protocol")
+
+    def __init__(
+        self,
+        protocol: AJAEProtocol,
+        partition: str,
+        condition: str,
+        *,
+        key: object,
+    ) -> None:
+        if key is not _SEALED_ACCESS_KEY:
+            raise SceneDataError("sealed sequence access must come from the evaluator")
+        if partition not in {"val", "test"}:
+            raise SceneDataError("only validation and test sequences are sealed")
+        self.protocol = protocol
+        self.partition = partition
+        self.condition = condition
+
+
+def _grant_sealed_sequence_access(
+    protocol: AJAEProtocol,
+    *,
+    partition: str,
+    condition: str,
+) -> _SealedSequenceAccess:
+    """Create a loader capability only after the evaluator validates method freeze."""
+
+    return _SealedSequenceAccess(
+        protocol,
+        partition,
+        condition,
+        key=_SEALED_ACCESS_KEY,
+    )
+
+
+def _require_sealed_sequence_access(
+    protocol: AJAEProtocol,
+    partition: str,
+    access: _SealedSequenceAccess | None,
+    *,
+    sequence_id: int,
+) -> None:
+    if partition in {"val", "test"} and (
+        not isinstance(access, _SealedSequenceAccess)
+        or access.protocol is not protocol
+        or access.partition != partition
+    ):
+        message = (
+            f"{partition} sequences are sealed until the evaluator validates method freeze"
+        )
+        LOGGER.warning(
+            "Refused sealed sequence access: partition=%s sequence=%s",
+            partition,
+            sequence_id,
+        )
+        raise SceneDataError(message)
 
 
 def _plain_int(name: str, value: int, *, minimum: int = 0) -> int:
@@ -741,12 +807,25 @@ def _indexed_files(directory: Path, suffix: str) -> dict[int, Path]:
     return indexed
 
 
-def locate_sequence(data_root: Path | str, partition: str, sequence_id: int) -> Path:
+def locate_sequence(
+    data_root: Path | str,
+    partition: str,
+    sequence_id: int,
+    *,
+    protocol: AJAEProtocol,
+    sealed_access: _SealedSequenceAccess | None = None,
+) -> Path:
     """Resolve one protocol sequence without searching alternative layouts."""
 
     if partition not in {"train", "val", "test"}:
         raise ValueError("partition must be train, val, or test")
     identifier = _plain_int("sequence_id", sequence_id)
+    _require_sealed_sequence_access(
+        protocol,
+        partition,
+        sealed_access,
+        sequence_id=identifier,
+    )
     path = Path(data_root).expanduser().resolve(strict=True) / partition / str(identifier)
     if not path.is_dir():
         raise FileNotFoundError(path)
@@ -763,6 +842,7 @@ class STUSequence:
         protocol: AJAEProtocol,
         spec: SequenceSpec,
         label_mode: LabelMode | str,
+        sealed_access: _SealedSequenceAccess | None = None,
     ) -> None:
         if not isinstance(protocol, AJAEProtocol):
             raise TypeError("protocol must be AJAEProtocol")
@@ -770,6 +850,12 @@ class STUSequence:
             raise TypeError("spec must be SequenceSpec")
         if protocol.sequence(spec.partition, spec.sequence_id) != spec:
             raise SceneDataError("sequence spec is not part of this protocol")
+        _require_sealed_sequence_access(
+            protocol,
+            spec.partition,
+            sealed_access,
+            sequence_id=spec.sequence_id,
+        )
         self.protocol = protocol
         self.sequence_dir = Path(sequence_dir).expanduser().resolve(strict=True)
         if not self.sequence_dir.is_dir():
@@ -836,13 +922,21 @@ class STUSequence:
         partition: str,
         sequence_id: int,
         label_mode: LabelMode | str,
+        sealed_access: _SealedSequenceAccess | None = None,
     ) -> "STUSequence":
         spec = protocol.sequence(partition, sequence_id)
         return cls(
-            locate_sequence(data_root, partition, sequence_id),
+            locate_sequence(
+                data_root,
+                partition,
+                sequence_id,
+                protocol=protocol,
+                sealed_access=sealed_access,
+            ),
             protocol=protocol,
             spec=spec,
             label_mode=label_mode,
+            sealed_access=sealed_access,
         )
 
     @property

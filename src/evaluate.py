@@ -2111,15 +2111,20 @@ def _predict_command(args: argparse.Namespace) -> dict[str, Any]:
     try:
         from .model import FrozenSTUPointEncoder
         from .protocol import load_protocol
-        from .scene import LabelMode, STUSequence
+        from .scene import LabelMode, STUSequence, _grant_sealed_sequence_access
     except ImportError:  # pragma: no cover - direct script execution
         from model import FrozenSTUPointEncoder
         from protocol import load_protocol
-        from scene import LabelMode, STUSequence
+        from scene import LabelMode, STUSequence, _grant_sealed_sequence_access
     protocol = load_protocol(args.protocol)
     condition = _condition(args.condition)
     method_freeze = _validate_method_freeze(
         args.method_freeze_record, protocol, condition
+    )
+    sealed_access = _grant_sealed_sequence_access(
+        protocol,
+        partition=args.partition,
+        condition=condition,
     )
     public_confirmation: Mapping[str, Any] | None = None
     if args.partition == "test":
@@ -2190,6 +2195,7 @@ def _predict_command(args: argparse.Namespace) -> dict[str, Any]:
             partition=args.partition,
             sequence_id=sequence_id,
             label_mode=LabelMode.FORBIDDEN,
+            sealed_access=sealed_access,
         )
         output = args.output / condition / str(sequence_id)
         predictions = inference.predict_sequence(sequence, output_dir=output)
@@ -2218,14 +2224,19 @@ def _predict_command(args: argparse.Namespace) -> dict[str, Any]:
 def _metrics_command(args: argparse.Namespace) -> dict[str, Any]:
     try:
         from .protocol import load_protocol
-        from .scene import LabelMode, STUSequence
+        from .scene import LabelMode, STUSequence, _grant_sealed_sequence_access
     except ImportError:  # pragma: no cover - direct script execution
         from protocol import load_protocol
-        from scene import LabelMode, STUSequence
+        from scene import LabelMode, STUSequence, _grant_sealed_sequence_access
     protocol = load_protocol(args.protocol)
     condition = _condition(args.condition)
     method_freeze = _validate_method_freeze(
         args.method_freeze_record, protocol, condition
+    )
+    sealed_access = _grant_sealed_sequence_access(
+        protocol,
+        partition="val",
+        condition=condition,
     )
     point = PointMetricAccumulator(protocol)
     threshold = float(method_freeze["object_score_threshold"])
@@ -2244,6 +2255,7 @@ def _metrics_command(args: argparse.Namespace) -> dict[str, Any]:
             partition="val",
             sequence_id=sequence_id,
             label_mode=LabelMode.REQUIRED,
+            sealed_access=sealed_access,
         )
         prediction_dir = args.predictions / condition / str(sequence_id)
         frame_ids = load_prediction_coverage(
@@ -2303,14 +2315,19 @@ def _metrics_command(args: argparse.Namespace) -> dict[str, Any]:
 def _instances_command(args: argparse.Namespace) -> dict[str, Any]:
     try:
         from .protocol import load_protocol
-        from .scene import LabelMode, STUSequence
+        from .scene import LabelMode, STUSequence, _grant_sealed_sequence_access
     except ImportError:  # pragma: no cover - direct script execution
         from protocol import load_protocol
-        from scene import LabelMode, STUSequence
+        from scene import LabelMode, STUSequence, _grant_sealed_sequence_access
     protocol = load_protocol(args.protocol)
     condition = _condition(args.condition)
     method_freeze = _validate_method_freeze(
         args.method_freeze_record, protocol, condition
+    )
+    sealed_access = _grant_sealed_sequence_access(
+        protocol,
+        partition=args.partition,
+        condition=condition,
     )
     if not math.isclose(
         float(args.threshold),
@@ -2355,6 +2372,7 @@ def _instances_command(args: argparse.Namespace) -> dict[str, Any]:
             partition=args.partition,
             sequence_id=sequence_id,
             label_mode=LabelMode.FORBIDDEN,
+            sealed_access=sealed_access,
         )
         destination = args.output / condition / str(sequence_id)
         prediction_dir = args.predictions / condition / str(sequence_id)

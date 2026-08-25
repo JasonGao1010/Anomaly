@@ -53,8 +53,10 @@ from src.render import (
     sample_training_anomaly_shape,
 )
 from src.scene import (
+    LabelMode,
     PointLabels,
     SceneDataError,
+    STUSequence,
     assemble_window,
     canonical_ray_mapping_digest,
     make_source_frame,
@@ -86,6 +88,23 @@ def _labels(semantic: np.ndarray) -> PointLabels:
         instance=np.zeros(values.shape, dtype=np.uint16),
         semantic_target=target,
     )
+
+
+def test_public_sequences_are_sealed_before_path_resolution(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    protocol = load_protocol(PROTOCOL_PATH)
+    with pytest.raises(SceneDataError, match="sealed until"):
+        STUSequence.open(
+            tmp_path / "does-not-exist",
+            protocol=protocol,
+            partition="val",
+            sequence_id=protocol.public_sequence_ids[0],
+            label_mode=LabelMode.REQUIRED,
+        )
+    assert "Refused sealed sequence access" in caplog.text
+    assert not (tmp_path / "does-not-exist").exists()
 
 
 def _organized_frame(frame_id: int, *, real_slot: int = 0) -> object:
