@@ -431,6 +431,21 @@
         "forbidden": ["seed-specific rejection", "changing the proposal parameter distribution", "shrinking the proposal size range after observing E16-v2b", "using resolution-31 or resolution-41 diameter for acceptance", "changing the continuous [0.2,3.0] metre interval"],
         "failure_tolerance": 0,
         "criteria_frozen_before_formal_run": true
+      },
+      "single_primitive_intersection_audit": {
+        "version": "E17",
+        "question": "Does the authoritative ShapeSpec.intersect default path recover the nearest positive analytic intersection and outward normal for basic single quadrics while rejecting analytic misses?",
+        "fixtures": ["sphere radius 0.1 m", "sphere radius 1.5 m", "ellipsoid half-axes (0.1,0.3,0.5) m at yaw 0.4 rad", "ellipsoid half-axes (0.3,0.7,1.5) m at yaw -0.8 rad"],
+        "fixture_constraints": "one centered union primitive, exponents (1,1), no twist/bend/taper/surface displacement",
+        "rays_per_fixture": {"outside_to_inside": 2048, "inside_to_outside": 512, "outward_analytic_miss": 1024},
+        "ray_construction": "deterministic Fibonacci directions; outside hit rays aim through points at normalized ellipsoid radius 0.95, inside rays start at normalized radius 0.4, and miss rays point radially outward; direction magnitudes vary deterministically and the analytic oracle normalizes them exactly as ShapeSpec.intersect does",
+        "tangent_scope": "no exact tangent ray is used; every registered hit passes through a strictly interior point and therefore has an unambiguous positive crossing",
+        "implementation_path": "ShapeSpec.intersect with its authoritative default steps=96",
+        "analytic_oracle": "closed-form quadratic roots of the rotated ellipsoid matrix; choose the nearest positive root for outside origins and the positive exit root for inside origins",
+        "pass_conditions": ["zero hit/miss classification mismatch", "every hit distance is finite and positive and every miss distance is +infinity", "maximum absolute distance error is below 1e-5 m", "maximum absolute implicit surface residual at returned hit points is below 1e-5 m", "every hit normal is finite, unit length, outward-facing, and within 0.01 degree of the analytic ellipsoid normal", "every miss normal is exactly zero", "two independent complete runs reproduce every distance, normal, validity mask, statistic, hash, and summary bitwise exactly"],
+        "failure_tolerance": 0,
+        "interpretation_limit": "E17 qualifies basic single-quadratic primitive intersection only. CSG, non-quadratic exponents, and twist/bend/taper/surface deformation remain E18.",
+        "criteria_frozen_before_formal_run": true
       }
     },
     "world_types": {"pure_normal": 0.2, "control_only": 0.2, "mixed": 0.4, "anomaly_only": 0.2},
