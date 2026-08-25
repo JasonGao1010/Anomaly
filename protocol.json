@@ -274,6 +274,20 @@
         "labels_read": false,
         "criteria_frozen_before_formal_run": true
       },
+      "published_return_cardinality_audit_v2": {
+        "version": "E12-v2",
+        "question": "Is the released STU interface a stable single-published-return/empty-slot canonical-ray interface when occupancy inherits the E08 XYZ-only definition?",
+        "data": ["train/206 frames 0 through 448", "train/201 frames 4 through 681"],
+        "canonical_mapping": "inherit E11-v3 c=(a-s_b) mod 1024 and its fixed bijective inverse",
+        "occupancy": "return exists iff XYZ is not exactly (0,0,0); intensity is payload and never participates in occupancy",
+        "empty_intensity_rule": "ignore for occupancy and preserve bitwise through round trip; report its finite-value distribution but do not require zero",
+        "published_return": "one finite (x,y,z,intensity) record with nonzero XYZ in its fixed canonical ray slot",
+        "inherited_checks": ["every included file has exactly 128x1024x4 float32 values", "one fixed record slot per canonical ray per frame", "published cardinality is 0 or 1", "no non-finite nonempty XYZI", "fixed bijective canonical mapping", "raw-to-ray-to-raw XYZI bitwise exact", "no released return index, return count, first/second/strongest flag, or parallel return array", "occupancy transitions remain attached to the same canonical ray", "two independent raw reads exactly match"],
+        "pass_definition": "Every canonical ray has one stable record slot containing either XYZ-zero empty payload or one finite published point; no observable multi-return container or dynamic reorder exists.",
+        "interpretation_limit": "PASS does not identify upstream first/strongest/last selection and does not prove the physical sensor emitted only one return. First-return remains a renderer modelling convention.",
+        "labels_read": false,
+        "criteria_frozen_before_formal_run": true
+      },
       "empty_ray_direction": "same-beam periodic interpolation, explicitly approximate without sensor metadata"
     },
     "normal_controls": {

@@ -1178,6 +1178,34 @@ FAIL。失败原因是预注册条件把“XYZ 全零但 intensity 非零”判�
 该门槛与 E08 已冻结并在 E09–E11 一直使用的“仅以 XYZ 全零定义空槽”语义冲突，因此 E12-v1 只否定该错误的联合空值条件，尚未否定稳定单发布回波接口。若修订，必须版本化为 E12-v2，永久保留本次 FAIL，并只恢复 E08 的 XYZ-only occupancy 定义；其他检查和结论边界不得改变。E13 继续锁定。
 
 
+## E12-v2｜XYZ-only occupancy 下的单发布回波接口审计
+
+**协议修订原因与唯一修改**
+
+E12-v1 的 FAIL 永久保留。E12-v2 恢复 E08 已冻结的唯一 occupancy 定义：
+
+$$
+\operatorname{return\ exists}\iff XYZ\ne(0,0,0).
+$$
+
+Intensity 始终只是 payload，不参与 occupancy；空 XYZ 槽的 intensity 不要求为零，但必须在 raw→canonical→raw 中逐 bit 保留。除此之外，E12-v1 的数据范围、canonical mapping、记录基数、格式审计、动态重排检查、往返要求和结论边界全部继承。
+
+**运行前冻结的 PASS 条件**
+
+1. train/206 帧 0–448 与 train/201 帧 4–681 的每个文件均严格为 $128\times1024\times4$ float32，每个 canonical ray 每帧恰有一个固定记录槽。
+2. XYZ 全零槽记为空；XYZ 非全零槽记为一个发布回波，其完整 XYZI 必须有限。每 ray 每帧发布回波基数只能为 0 或 1。
+3. E11-v3 canonical mapping 在所有帧保持同一双射；所有槽位的 XYZI 往返逐 bit 相同。空/有效占用变化只能发生在同一 canonical ray 的固定槽位。
+4. 发布数据与官方 loader 不存在 return index、return count、first/second/strongest 标志、并行 return array 或会动态改变 ray assignment 的机制。
+5. 两次独立原始读取必须逐元素复现 occupancy mask、每帧回波数、每 ray 观测次数、占用转换统计、往返哈希和摘要哈希。
+
+**状态转移**
+
+- PASS → **E13。**
+- FAIL → **E13 保持锁定，先处理发布层面的 return cardinality 或 reorder。**
+
+PASS 结论只能写为：**STU 发布数据形成稳定的 single-published-return/empty-slot canonical-ray interface。** 上游究竟选择 first、strongest、last 或预处理后的其他单回波仍未知；“first-return”只能作为 renderer 反事实近似的建模约定。
+
+
 ## E13｜raw→ray→raw 点数往返
 
 **目的 / 唯一问题**
