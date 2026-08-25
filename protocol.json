@@ -100,10 +100,21 @@
         "frozen_conclusion": "All observable azimuth-adjacent edges are continuous; wraparound is directly evidenced for 120/128 rows and unidentifiable from observed returns for 8/128 rows in train/206."
       },
       "phase_aligned_cross_frame_direction_stability_definition": {
-        "version": "E11",
+        "version": "E11-v1",
         "independent_from_azimuth_continuity": true,
         "checks_fixed_canonical_ray_physical_direction": true,
-        "criteria_frozen_before_formal_run": false
+        "phase_model": "one global azimuth phase scalar per frame, anchored at frame 0; no beam/column/slot/local-time offsets",
+        "reference_template": "one fixed unit direction per slot from deterministic alternating equal-weight phase/template estimation",
+        "phase_convergence_rad": 1e-12,
+        "maximum_phase_iterations": 100,
+        "minimum_observed_frames_per_qualified_slot": 2,
+        "q99_direction_error_deg_exclusive_maximum": 0.17578125,
+        "maximum_direction_error_deg_exclusive_maximum": 0.3515625,
+        "per_beam_q99_deg_exclusive_maximum": 0.17578125,
+        "per_column_q99_deg_exclusive_maximum": 0.17578125,
+        "per_frame_q99_deg_exclusive_maximum": 0.17578125,
+        "repeat_read_and_fit_exact_match": true,
+        "criteria_frozen_before_formal_run": true
       },
       "empty_ray_direction": "same-beam periodic interpolation, explicitly approximate without sensor metadata"
     },
