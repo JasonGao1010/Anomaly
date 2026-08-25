@@ -1400,13 +1400,15 @@ E15-v2 PASS，解锁 E16。E15-v1 的历史 FAIL 与 evidence-state specificatio
 
 保证异常代理基础几何不会产生 NaN/Inf 或无界形状。
 
-**建模 / 实施**
+**运行前冻结的建模 / 实施**
 
-大量采样 superquadric primitive，检查参数、implicit/SDF 值、bounding region。
+使用正式 `ShapeSpec.sample` 生成器和默认尺寸区间 $[0.2,3.0]$ m，对固定 seed 0–1023 共 1024 个样本分别指定 `primitive_count=1`。这一步只资格确认单个 superquadric 实体的数值有限性与有界性；射线求交留给 E17，多 primitive CSG 与各形变机制组合留给 E18。
+
+每个样本检查全部参数与保守包围半径有限；primitive 数严格为 1 且首操作为 `union`；在覆盖保守包围区域的 $9\times9\times9$ 固定 Cartesian 网格计算 implicit/SDF，全部值必须有限；以 resolution 31 重新生成几何报告，必须 `bounded=true`、`closed=true`、`components=1`，有限且有序的占用边界必须严格位于保守包围半径内，最大轴直径保持在生成器冻结的 $[0.2,3.0]$ m 区间。
 
 **PASS 条件**
 
-全部有限且有界；失败率在预先冻结的生成器容忍范围内。
+1024 个确定性 seed 全部成功返回合格实体，允许的生成失败或拒绝耗尽数为 0；两次完整运行必须逐元素复现参数摘要、几何统计和哈希。PASS 只说明单 primitive 输出有限、闭合、单连通且有界，不提前证明求交或 CSG/形变组合稳定。
 
 **FAIL 条件**
 

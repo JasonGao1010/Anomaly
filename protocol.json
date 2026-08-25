@@ -363,7 +363,20 @@
       "count_range": [0, 9], "primitive_count_range": [1, 5],
       "size_m_range": [0.2, 3.0],
       "training_mechanisms": ["superquadric", "CSG", "bend", "twist", "taper", "low_frequency_surface"],
-      "held_out_mechanism": "torus_SDF"
+      "held_out_mechanism": "torus_SDF",
+      "primitive_finite_bounded_audit": {
+        "version": "E16",
+        "question": "Does the deterministic training anomaly generator produce finite, closed, connected, bounded single-superquadric entities across a fixed broad seed audit?",
+        "seeds": [0, 1023],
+        "primitive_count": 1,
+        "size_m_range": [0.2, 3.0],
+        "geometry_report_resolution": 31,
+        "sdf_audit_grid": "9x9x9 Cartesian grid spanning each shape's conservative bound",
+        "pass_conditions": ["all 1024 deterministic seeds return a shape without rejection exhaustion", "every parameter and conservative bound radius is finite", "every sampled shape has exactly one primitive and its first operation is union", "every SDF audit value is finite", "every geometry report is bounded and closed with exactly one connected component", "reported occupied bounds are finite, ordered, and contained strictly inside the conservative bound", "the audited occupied maximum axis diameter remains in the generator's frozen [0.2,3.0] metre interval", "two independent complete runs reproduce every parameter digest, statistic, and summary exactly"],
+        "failure_tolerance": 0,
+        "interpretation_limit": "E16 qualifies numerical finiteness and bounded single-entity output only. Ray intersection is E17; multi-primitive CSG and deformation stability are E18.",
+        "criteria_frozen_before_formal_run": true
+      }
     },
     "world_types": {"pure_normal": 0.2, "control_only": 0.2, "mixed": 0.4, "anomaly_only": 0.2},
     "common_entity_rules": {
