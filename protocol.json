@@ -318,6 +318,19 @@
         "labels_read": false,
         "criteria_frozen_before_formal_run": true
       },
+      "multi_sequence_ray_qualification": {
+        "version": "E15-v1",
+        "question": "Does one unchanged canonical-ray topology, mapping, published-return interface, and calibrated geometry satisfy the applicable E08-E14 claims separately on normal train/206 and independent normal train/201?",
+        "data": ["train/206 frames 0 through 448", "train/201 frames 4 through 681"],
+        "unchanged_model": "E11-D4b even-frame geometry plus E11-v3 fixed c=(a-s_b) modulo 1024 mapping",
+        "per_sequence_topology_checks": ["every file is finite float32 128x1024x4", "all 128 raw beam rows exist and every frame/beam has at least one real return", "all actually observed immediate within-row column edges use one negative orientation and increments in the inherited [0.10,0.60] degree interval", "every observed wraparound edge satisfies the same interval; a never-observed wraparound is identified as unobservable only when at least one endpoint is structurally empty for the whole sequence", "observable-edge support is fully reported but is not confused with ray validity"],
+        "per_sequence_identity_and_geometry_checks": ["fixed mapping is bijective", "XYZ-only occupancy and 0-or-1 published-return cardinality hold", "raw-to-canonical-to-raw count, mask, and identity round trip is exact", "E14 scalar range and decoded-direction numerical limits hold", "E14 angular and normalized Cartesian projection limits hold"],
+        "evidence_binding": ["independently reread both raw sequences twice for topology, occupancy, mapping, and identity", "bind and re-evaluate the E14 per-sequence frozen summaries and artifact hash", "produce separate per-sequence verdicts before the combined verdict"],
+        "pass_definition": "Both sequences independently pass every applicable check with the same fixed model and mapping, and both complete runs reproduce exactly.",
+        "interpretation_limit": "PASS qualifies the canonical ray interface only for the allowed normal sequences 206 and 201. It does not access or qualify public anomaly validation or hidden test sequences and does not identify factory metadata.",
+        "labels_read": false,
+        "criteria_frozen_before_formal_run": true
+      },
       "empty_ray_direction": "the fixed E11-v3 self-calibrated Ouster-like ray direction; no return is interpolated or fabricated"
     },
     "normal_controls": {
