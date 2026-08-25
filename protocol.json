@@ -238,6 +238,7 @@
         "source_model": "the even-frame main model in runs/ajae/e11_d4b_calibration.npz",
         "source_model_sha256": "42791278e2a6b36d975bbe9dc957c6f303b8b424c5b97cf54e42380ad191f253",
         "source_cross_sequence_evidence": "runs/ajae/e11_d4c_v2_validation.npz",
+        "artifact_decoder_coordinate_convention": "the stored encoder gauge gamma is converted to Cartesian bearing by adding the fixed pi-radian Ouster encoder offset; this is a coordinate gauge only and adds no fitted parameter",
         "source_cross_sequence_evidence_sha256": "bdc85457de6add74f6e061ab7db43c8cb69919c0ac22f14fe812897bc3bf4fe8",
         "canonical_mapping": {
           "raw_to_ray": "raw slot (b,a) maps to r=(b,c), c=(a-s_b) mod 1024",
@@ -301,7 +302,23 @@
         "labels_read": false,
         "criteria_frozen_before_formal_run": true
       },
-      "empty_ray_direction": "same-beam periodic interpolation, explicitly approximate without sensor metadata"
+      "calibrated_geometry_round_trip": {
+        "version": "E14-v1",
+        "question": "Does encoding each observed STU point as a scalar distance on its fixed E11-v3 Ouster-like beam and decoding it on the same beam preserve numerical range/direction while keeping the calibrated projection error within the already frozen ray-grid resolution?",
+        "data": ["train/206 frames 0 through 448", "train/201 frames 4 through 681"],
+        "ray_model": "unchanged E11-D4b even-frame model and E11-v3 raw-slot/canonical-ray bijection; the D4b artifact encoder gauge uses a fixed pi-radian encoder-to-Cartesian bearing offset",
+        "encoding": "t=dot(u,X-o); official range d=t+sqrt(o_x^2+o_z^2); decoded point X_hat=o+t*u",
+        "occupancy": "inherit E12-v2 XYZ-only occupancy; empty rays remain empty and are not assigned a fabricated range",
+        "numerical_round_trip_limits": {"maximum_scalar_range_error_m": 1e-9, "maximum_decoded_direction_error_rad": 1e-6},
+        "calibrated_projection_limits": {"angular_q99_deg_exclusive_maximum": 0.17578125, "angular_maximum_deg_exclusive_maximum": 0.3515625, "normalized_cartesian_q99_exclusive_maximum": "sin(0.17578125 deg)", "normalized_cartesian_maximum_exclusive_maximum": "sin(0.3515625 deg)"},
+        "normalized_cartesian_error": "norm(X-X_hat)/norm(X-o); absolute Cartesian error in metres is fully reported but has no post-hoc fixed-metre threshold because the same angular ray error produces range-dependent displacement",
+        "additional_conditions": ["all observed t and official d are positive and finite", "decoded occupancy count equals raw occupancy count in every frame", "two independent complete runs reproduce masks, per-frame statistics, hashes, and summaries exactly"],
+        "forbidden": ["XYZ/norm(XYZ) as the physical ray", "per-frame or per-point fitting", "changing E11-v3 geometry", "fabricated return", "labels"],
+        "interpretation_limit": "PASS qualifies the calibrated projection and its numerical encode/decode path; it does not claim published XYZ lies exactly on a factory-metadata ray or that the self-calibrated parameters are factory metadata.",
+        "labels_read": false,
+        "criteria_frozen_before_formal_run": true
+      },
+      "empty_ray_direction": "the fixed E11-v3 self-calibrated Ouster-like ray direction; no return is interpolated or fabricated"
     },
     "normal_controls": {
       "source_sequence_id": 206,

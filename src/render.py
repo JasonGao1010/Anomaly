@@ -14,7 +14,6 @@ import os
 from collections import deque
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from itertools import chain
 from pathlib import Path
 from typing import Any, Callable, Literal, TypeAlias
 
@@ -30,7 +29,7 @@ except ImportError:  # Direct module execution and small isolated checks.
 LASER_BEAMS = 128
 GROUND_SEMANTIC_IDS = (40, 44, 48, 49, 60)
 WORLD_FORMAT = "ajae-world-v2"
-CALIBRATION_FORMAT = "ajae-sensor-calibration-v3"
+CALIBRATION_FORMAT = "ajae-sensor-calibration-v4"
 DEVELOPMENT_FORMAT = "ajae-development-worlds-v2"
 DEVELOPMENT_PROTOCOL_SCHEMA = 30
 GATE1_EVIDENCE_KEYS = (
@@ -1443,15 +1442,7 @@ class WorldSpec:
 
 @dataclass(frozen=True, slots=True)
 class RayGrid:
-    """OS1 beam-major topology plus frame-specific ray recovery.
-
-    STU stores ``slot = beam * columns + column``.  The native directions vary
-    measurably between frames, so only the relative topology and nominal sensor
-    pattern are frozen.  Observed directions are exact radial directions from
-    that frame.  Without OS1 metadata, an empty slot has no directly observed
-    direction; it is estimated by periodic interpolation of observed columns
-    on the same beam and must not be described as exact sensor calibration.
-    """
+    """Calibrated Ouster-like rays kept in released STU file-slot order."""
 
     directions_sensor: np.ndarray
     beam_elevation_rad: np.ndarray
@@ -1459,6 +1450,9 @@ class RayGrid:
     beam_count: int = LASER_BEAMS
     calibration_frame_ids: tuple[int, ...] = ()
     beam_azimuth_offset_rad: np.ndarray | None = None
+    origins_sensor: np.ndarray | None = None
+    canonical_ray_by_slot: np.ndarray | None = None
+    official_range_offset_m: float = 0.0
 
     def __post_init__(self) -> None:
         beams = _integer("beam_count", self.beam_count, minimum=1)
@@ -1481,6 +1475,29 @@ class RayGrid:
         )
         if offset.shape != (beams,):
             raise RenderError("beam_azimuth_offset_rad must be [beam_count]")
+        origins = (
+            np.zeros_like(directions)
+            if self.origins_sensor is None
+            else np.asarray(self.origins_sensor, dtype=np.float64)
+        )
+        mapping = (
+            np.arange(directions.shape[0], dtype=np.int32)
+            if self.canonical_ray_by_slot is None
+            else np.asarray(self.canonical_ray_by_slot)
+        )
+        if origins.shape != directions.shape or not np.isfinite(origins).all():
+            raise RenderError("origins_sensor must be finite [slot,3]")
+        if mapping.dtype != np.int32 or mapping.shape != (directions.shape[0],):
+            raise TypeError("canonical_ray_by_slot must be int32[slot]")
+        if np.unique(mapping).size != mapping.size or np.any(
+            (mapping < 0) | (mapping >= directions.shape[0])
+        ):
+            raise RenderError("canonical_ray_by_slot must be a complete permutation")
+        range_offset = _finite_scalar(
+            "official_range_offset_m", self.official_range_offset_m
+        )
+        if range_offset < 0.0:
+            raise RenderError("official_range_offset_m must be non-negative")
         if (
             not np.isfinite(directions).all()
             or not np.isfinite(elevation).all()
@@ -1501,6 +1518,9 @@ class RayGrid:
         object.__setattr__(self, "azimuth_rad", _freeze(azimuth))
         object.__setattr__(self, "calibration_frame_ids", frame_ids)
         object.__setattr__(self, "beam_azimuth_offset_rad", _freeze(offset))
+        object.__setattr__(self, "origins_sensor", _freeze(origins))
+        object.__setattr__(self, "canonical_ray_by_slot", _freeze(mapping))
+        object.__setattr__(self, "official_range_offset_m", range_offset)
 
     @property
     def slot_count(self) -> int:
@@ -1535,229 +1555,29 @@ class RayGrid:
             raise IndexError(slot)
         return divmod(slot, self.columns)
 
-    @classmethod
-    def calibrate(
-        cls,
-        frame_or_frames: SourceFrame | Iterable[SourceFrame],
-        *,
-        beam_count: int = LASER_BEAMS,
-        source_partition: str = "train",
-        source_sequence_id: int = 206,
-    ) -> "RayGrid":
-        """Calibrate the nominal beam-major pattern without averaging frame rays."""
-
-        frames: Iterable[SourceFrame]
-        if hasattr(frame_or_frames, "xyzi"):
-            frames = (frame_or_frames,)  # type: ignore[assignment]
-        else:
-            frames = frame_or_frames  # type: ignore[assignment]
-        iterator = iter(frames)
-        try:
-            first = next(iterator)
-        except StopIteration as error:
-            raise RenderError(
-                "ray-grid calibration requires at least one frame"
-            ) from error
-        beams = _integer("beam_count", beam_count, minimum=1)
-        expected_sequence = _integer("source_sequence_id", source_sequence_id)
-        if source_partition not in {"train", "fixture"}:
-            raise RenderError("ray-grid calibration source must be train or fixture")
-        if source_partition == "train" and expected_sequence != 206:
-            raise RenderError("formal ray-grid calibration must use normal train/206")
-        slot_count = int(first.xyzi.shape[0])
-        if slot_count == 0 or slot_count % beams:
-            raise RenderError("scan slots are not an organized beam grid")
-        columns = slot_count // beams
-        column_curves: list[np.ndarray] = []
-        beam_elevations: list[np.ndarray] = []
-        beam_offsets: list[np.ndarray] = []
-        frame_ids: list[int] = []
-        for frame in chain((first,), iterator):
-            if (
-                frame.partition != source_partition
-                or frame.sequence_id != expected_sequence
-            ):
-                raise RenderError("ray-grid calibration frame identity is inconsistent")
-            if int(frame.xyzi.shape[0]) != slot_count:
-                raise RenderError(
-                    "all calibration frames must have the same slot count"
-                )
-            xyz = np.asarray(frame.xyzi[:, :3], dtype=np.float64).reshape(
-                beams, columns, 3
-            )
-            ranges = np.linalg.norm(xyz, axis=2)
-            valid = ranges > EPSILON
-            azimuth = np.arctan2(xyz[..., 1], xyz[..., 0])
-            elevation = np.arctan2(xyz[..., 2], np.linalg.norm(xyz[..., :2], axis=2))
-            column_vector = np.where(valid, np.exp(1j * azimuth), 0.0).sum(axis=0)
-            known_columns = np.abs(column_vector) > EPSILON
-            if np.count_nonzero(known_columns) < 2:
-                raise RenderError("a calibration frame exposes fewer than two columns")
-            column_index = np.arange(columns)
-            column_curve = np.interp(
-                column_index,
-                column_index[known_columns],
-                np.unwrap(np.angle(column_vector[known_columns])),
-            )
-            median_step = float(np.median(np.diff(column_curve)))
-            expected_step = 2.0 * math.pi / columns
-            if not 0.5 * expected_step <= abs(median_step) <= 1.5 * expected_step:
-                raise RenderError(
-                    "scan does not follow the identified beam-major full-revolution layout"
-                )
-            offsets = np.full(beams, np.nan, dtype=np.float64)
-            elevations = np.full(beams, np.nan, dtype=np.float64)
-            for beam in range(beams):
-                selected = valid[beam]
-                if bool(selected.any()):
-                    elevations[beam] = float(np.median(elevation[beam, selected]))
-                    residual = np.angle(
-                        np.exp(1j * (azimuth[beam, selected] - column_curve[selected]))
-                    )
-                    offsets[beam] = float(np.median(residual))
-            column_curves.append(column_curve)
-            beam_elevations.append(elevations)
-            beam_offsets.append(offsets)
-            frame_ids.append(int(frame.frame_id))
-
-        reference = column_curves[0]
-        aligned_curves = []
-        for curve in column_curves:
-            phase = float(np.median(curve - reference))
-            aligned_curves.append(curve - phase)
-        column_azimuth = np.mean(np.stack(aligned_curves), axis=0)
-        elevation_values = np.nanmedian(np.stack(beam_elevations), axis=0)
-        offset_values = np.nanmedian(np.stack(beam_offsets), axis=0)
-        known_beams = np.isfinite(elevation_values) & np.isfinite(offset_values)
-        if np.count_nonzero(known_beams) < 2:
-            raise RenderError("calibration scans expose fewer than two beams")
-        beam_index = np.arange(beams)
-        beam_elevation = np.interp(
-            beam_index,
-            beam_index[known_beams],
-            elevation_values[known_beams],
-        )
-        beam_offset = np.interp(
-            beam_index,
-            beam_index[known_beams],
-            offset_values[known_beams],
-        )
-        beam_offset -= float(np.mean(beam_offset))
-        ray_azimuth = column_azimuth[None, :] + beam_offset[:, None]
-        cosine = np.cos(beam_elevation)[:, None]
-        nominal = np.stack(
-            (
-                cosine * np.cos(ray_azimuth),
-                cosine * np.sin(ray_azimuth),
-                np.broadcast_to(np.sin(beam_elevation)[:, None], (beams, columns)),
-            ),
-            axis=2,
-        ).reshape(slot_count, 3)
-        return cls(
-            directions_sensor=nominal,
-            beam_elevation_rad=beam_elevation,
-            azimuth_rad=column_azimuth,
-            beam_count=beams,
-            calibration_frame_ids=tuple(frame_ids),
-            beam_azimuth_offset_rad=beam_offset,
-        )
-
-    @staticmethod
-    def _periodic_interpolate(
-        known_index: np.ndarray,
-        known_values: np.ndarray,
-        columns: int,
-        *,
-        turn: float = 0.0,
-    ) -> np.ndarray:
-        index = np.asarray(known_index, dtype=np.float64)
-        values = np.asarray(known_values, dtype=np.float64)
-        extended_index = np.concatenate((index - columns, index, index + columns))
-        extended_values = np.concatenate((values - turn, values, values + turn))
-        return np.interp(np.arange(columns), extended_index, extended_values)
-
     def directions_for(
         self,
         frame: SourceFrame,
         *,
         observed_mask: np.ndarray | None = None,
     ) -> np.ndarray:
-        """Use exact observed rays and estimate only empty/withheld same-beam slots."""
+        """Return the fixed calibrated directions aligned to released file slots."""
 
         if int(frame.xyzi.shape[0]) != self.slot_count:
             raise RenderError("frame and ray grid have different slot counts")
-        xyz = np.asarray(frame.xyzi[:, :3], dtype=np.float64).reshape(
-            self.beam_count, self.columns, 3
-        )
-        ranges = np.linalg.norm(xyz, axis=2)
-        native = ranges > EPSILON
-        if observed_mask is None:
-            observed = native
-        else:
+        if observed_mask is not None:
             supplied = np.asarray(observed_mask)
             if supplied.dtype != np.bool_ or supplied.shape != (self.slot_count,):
                 raise RenderError("observed_mask must be bool[slot]")
-            observed = native & supplied.reshape(self.beam_count, self.columns)
-        raw_azimuth = np.arctan2(xyz[..., 1], xyz[..., 0])
-        raw_elevation = np.arctan2(xyz[..., 2], np.linalg.norm(xyz[..., :2], axis=2))
-        nominal_azimuth = (
-            self.azimuth_rad[None, :] + self.beam_azimuth_offset_rad[:, None]
-        )
-        if bool(observed.any()):
-            phase = float(
-                np.angle(
-                    np.mean(
-                        np.exp(1j * (raw_azimuth[observed] - nominal_azimuth[observed]))
-                    )
-                )
-            )
-        else:
-            raise RenderError("a frame exposes no ray direction")
-        predicted_azimuth = nominal_azimuth + phase
-        predicted_elevation = np.broadcast_to(
-            self.beam_elevation_rad[:, None],
-            (self.beam_count, self.columns),
-        ).copy()
-        slope = float(np.median(np.diff(np.unwrap(self.azimuth_rad))))
-        turn = math.copysign(2.0 * math.pi, slope if slope != 0.0 else -1.0)
-        for beam in range(self.beam_count):
-            known = np.flatnonzero(observed[beam])
-            if known.size >= 2:
-                azimuth = np.unwrap(raw_azimuth[beam, known])
-                predicted_azimuth[beam] = self._periodic_interpolate(
-                    known, azimuth, self.columns, turn=turn
-                )
-                predicted_elevation[beam] = self._periodic_interpolate(
-                    known,
-                    raw_elevation[beam, known],
-                    self.columns,
-                )
-            elif known.size == 1:
-                index = int(known[0])
-                row_phase = float(
-                    np.angle(
-                        np.exp(
-                            1j
-                            * (raw_azimuth[beam, index] - nominal_azimuth[beam, index])
-                        )
-                    )
-                )
-                predicted_azimuth[beam] = nominal_azimuth[beam] + row_phase
-                predicted_elevation[beam] = raw_elevation[beam, index]
-        cosine = np.cos(predicted_elevation)
-        directions = np.stack(
-            (
-                cosine * np.cos(predicted_azimuth),
-                cosine * np.sin(predicted_azimuth),
-                np.sin(predicted_elevation),
-            ),
-            axis=2,
-        )
-        raw_unit = np.zeros_like(xyz)
-        raw_unit[observed] = xyz[observed] / ranges[observed, None]
-        directions[observed] = raw_unit[observed]
-        directions /= np.linalg.norm(directions, axis=2, keepdims=True)
-        return _freeze(directions.reshape(self.slot_count, 3))
+        return self.directions_sensor
+
+    def origins_for(self, frame: SourceFrame) -> np.ndarray:
+        """Return calibrated beam origins aligned to released file slots."""
+
+        if int(frame.xyzi.shape[0]) != self.slot_count:
+            raise RenderError("frame and ray grid have different slot counts")
+        assert self.origins_sensor is not None
+        return self.origins_sensor
 
     def empty_slot_cross_validation(
         self,
@@ -1779,7 +1599,9 @@ class RayGrid:
         observed = native & ~hidden
         predicted = self.directions_for(frame, observed_mask=observed)
         xyz = np.asarray(frame.xyzi[:, :3], dtype=np.float64)
-        truth = xyz[hidden] / np.linalg.norm(xyz[hidden], axis=1, keepdims=True)
+        origins = self.origins_for(frame)
+        vectors = xyz[hidden] - origins[hidden]
+        truth = vectors / np.linalg.norm(vectors, axis=1, keepdims=True)
         angle = np.arccos(np.clip(np.sum(predicted[hidden] * truth, axis=1), -1.0, 1.0))
         ranges = np.linalg.norm(xyz[hidden], axis=1)
         evaluation = (ranges >= 2.5) & (ranges <= 50.0)
@@ -1801,15 +1623,27 @@ class RayGrid:
     def ranges(self, frame: SourceFrame) -> np.ndarray:
         if int(frame.xyzi.shape[0]) != self.slot_count:
             raise RenderError("frame and ray grid have different slot counts")
-        result = np.linalg.norm(np.asarray(frame.xyzi[:, :3], dtype=np.float64), axis=1)
+        xyz = np.asarray(frame.xyzi[:, :3], dtype=np.float64)
+        assert self.origins_sensor is not None
+        result = np.sum((xyz - self.origins_sensor) * self.directions_sensor, axis=1)
         result[np.asarray(frame.zero_slot_mask, dtype=np.bool_)] = 0.0
+        if np.any(result < 0.0):
+            raise RenderError("a published return lies behind its calibrated beam origin")
+        return _freeze(result)
+
+    def official_ranges(self, frame: SourceFrame) -> np.ndarray:
+        """Return Ouster-form ranges, including the frozen beam-origin offset."""
+
+        result = np.asarray(self.ranges(frame)).copy()
+        valid = ~np.asarray(frame.zero_slot_mask, dtype=np.bool_)
+        result[valid] += self.official_range_offset_m
         return _freeze(result)
 
     def range_image(self, frame: SourceFrame) -> np.ndarray:
         return _freeze(self.ranges(frame).reshape(self.beam_count, self.columns))
 
     def points_from_ranges(self, ranges: np.ndarray, frame: SourceFrame) -> np.ndarray:
-        """Back-project ranges with the required frame-specific ray directions."""
+        """Back-project along the fixed calibrated beam lines."""
 
         array = np.asarray(ranges, dtype=np.float64)
         if array.shape == (self.beam_count, self.columns):
@@ -1822,8 +1656,10 @@ class RayGrid:
             raise RenderError("ranges must be [slot] or [beam,column]")
         if not np.isfinite(flat).all() or np.any(flat < 0.0):
             raise RenderError("ranges must be finite and non-negative")
-        directions = self.directions_for(frame)
-        return _freeze((flat[:, None] * directions).reshape(output_shape))
+        assert self.origins_sensor is not None
+        points = self.origins_sensor + flat[:, None] * self.directions_sensor
+        points[flat == 0.0] = 0.0
+        return _freeze(points.reshape(output_shape))
 
     def round_trip(self, frame: SourceFrame) -> dict[str, float | int]:
         ranges = self.ranges(frame)
@@ -1832,7 +1668,14 @@ class RayGrid:
         xyz = np.asarray(frame.xyzi[:, :3], dtype=np.float64)
         valid = ~np.asarray(frame.zero_slot_mask, dtype=np.bool_)
         error = np.linalg.norm(recovered - xyz, axis=1)
-        raw_unit = xyz[valid] / np.linalg.norm(xyz[valid], axis=1, keepdims=True)
+        assert self.origins_sensor is not None
+        recovered_range = np.sum(
+            (recovered[valid] - self.origins_sensor[valid])
+            * self.directions_sensor[valid],
+            axis=1,
+        )
+        raw_vector = xyz[valid] - self.origins_sensor[valid]
+        raw_unit = raw_vector / np.linalg.norm(raw_vector, axis=1, keepdims=True)
         angle = np.arccos(
             np.clip(np.sum(raw_unit * directions[valid], axis=1), -1.0, 1.0)
         )
@@ -1843,10 +1686,7 @@ class RayGrid:
                 np.count_nonzero(np.linalg.norm(recovered, axis=1) > 0.0)
             ),
             "maximum_range_error_m": float(
-                np.max(
-                    np.abs(np.linalg.norm(recovered[valid], axis=1) - ranges[valid]),
-                    initial=0.0,
-                )
+                np.max(np.abs(recovered_range - ranges[valid]), initial=0.0)
             ),
             "maximum_direction_error_rad": float(np.max(angle, initial=0.0)),
             "maximum_point_error_m": float(np.max(error, initial=0.0)),
@@ -2085,6 +1925,9 @@ class RayGrid:
     def to_payload(self) -> dict[str, object]:
         return {
             "directions_sensor": self.directions_sensor.tolist(),
+            "origins_sensor": self.origins_sensor.tolist(),
+            "canonical_ray_by_slot": self.canonical_ray_by_slot.tolist(),
+            "official_range_offset_m": self.official_range_offset_m,
             "beam_elevation_rad": self.beam_elevation_rad.tolist(),
             "azimuth_rad": self.azimuth_rad.tolist(),
             "beam_count": self.beam_count,
@@ -2106,20 +1949,61 @@ class RayGrid:
             raise RenderError(f"invalid ray-grid payload: {error}") from error
 
 
-def calibrate_ray_grid(
-    frame_or_frames: SourceFrame | Iterable[SourceFrame],
-    *,
-    beam_count: int = LASER_BEAMS,
-    source_partition: str = "train",
-    source_sequence_id: int = 206,
-) -> RayGrid:
-    """Named calibration entry point used by training and tests."""
+def calibrated_ray_grid_from_e11(path: Path | str) -> RayGrid:
+    """Build the single authoritative ray grid from the frozen E11-D4b artifact."""
 
-    return RayGrid.calibrate(
-        frame_or_frames,
-        beam_count=beam_count,
-        source_partition=source_partition,
-        source_sequence_id=source_sequence_id,
+    artifact = np.load(Path(path).expanduser().resolve(strict=True), allow_pickle=False)
+    required = {"even_params", "even_local", "integer_shift", "passed"}
+    if not required.issubset(artifact.files) or not bool(artifact["passed"]):
+        raise RenderError("E11-D4b artifact is incomplete or did not pass")
+    parameters = np.asarray(artifact["even_params"], dtype=np.float64)
+    local = np.asarray(artifact["even_local"], dtype=np.float64)
+    shifts = np.asarray(artifact["integer_shift"])
+    if parameters.shape != (3,) or local.shape != (LASER_BEAMS, 3):
+        raise RenderError("E11-D4b artifact has invalid calibrated parameters")
+    if shifts.shape != (LASER_BEAMS,) or not np.issubdtype(shifts.dtype, np.integer):
+        raise RenderError("E11-D4b artifact has invalid row shifts")
+    gamma, origin_x, origin_z = map(float, parameters)
+    columns = 1024
+    raw_column = np.arange(columns, dtype=np.float64)[None, :]
+    shift = shifts.astype(np.float64)[:, None]
+    # The D4b artifact stores gamma in Ouster's encoder gauge; Cartesian bearing
+    # has the fixed pi offset used by the formal D4b/D4c/v3 evaluations.
+    eta = math.pi + gamma - 2.0 * math.pi * raw_column / columns + shift * (
+        2.0 * math.pi / columns
+    )
+    cosine = np.cos(eta)
+    sine = np.sin(eta)
+    directions = np.empty((LASER_BEAMS, columns, 3), dtype=np.float64)
+    directions[..., 0] = cosine * local[:, None, 0] - sine * local[:, None, 1]
+    directions[..., 1] = sine * local[:, None, 0] + cosine * local[:, None, 1]
+    directions[..., 2] = local[:, None, 2]
+    origins = np.stack(
+        (origin_x * cosine, origin_x * sine, np.full_like(cosine, origin_z)), axis=2
+    )
+    raw_to_column = (
+        np.arange(columns, dtype=np.int32)[None, :] - shifts.astype(np.int32)[:, None]
+    ) % columns
+    mapping = (
+        np.arange(LASER_BEAMS, dtype=np.int32)[:, None] * columns + raw_to_column
+    ).reshape(-1)
+    elevation = np.arcsin(np.clip(local[:, 2], -1.0, 1.0))
+    beam_offset = np.arctan2(local[:, 1], local[:, 0])
+    azimuth = (
+        math.pi
+        + gamma
+        - 2.0 * math.pi * np.arange(columns, dtype=np.float64) / columns
+    )
+    return RayGrid(
+        directions.reshape(-1, 3),
+        elevation,
+        azimuth,
+        beam_count=LASER_BEAMS,
+        calibration_frame_ids=tuple(range(449)),
+        beam_azimuth_offset_rad=beam_offset,
+        origins_sensor=origins.reshape(-1, 3),
+        canonical_ray_by_slot=mapping.astype(np.int32),
+        official_range_offset_m=math.hypot(origin_x, origin_z),
     )
 
 
@@ -2715,6 +2599,11 @@ def _accepted_object_hits(
     """Accept each object's returns independently before nearest-return competition."""
 
     count = directions_world.shape[0]
+    origins = np.asarray(origin_world, dtype=np.float64)
+    if origins.shape == (3,):
+        origins = np.broadcast_to(origins, directions_world.shape)
+    if origins.shape != directions_world.shape or not np.isfinite(origins).all():
+        raise RenderError("ray origins and directions must be aligned finite [slot,3]")
     best_distance = np.full(count, np.inf, dtype=np.float64)
     best_normal = np.zeros((count, 3), dtype=np.float64)
     best_object = np.full(count, -1, dtype=np.int32)
@@ -2725,7 +2614,7 @@ def _accepted_object_hits(
     for item in world.objects:
         translation = np.asarray(item.translation_world_m, dtype=np.float64)
         rotation = np.asarray(item.rotation_world_from_local, dtype=np.float64)
-        local_origin = (origin_world - translation) @ rotation
+        local_origin = (origins - translation) @ rotation
         local_direction = directions_world @ rotation
         distance, local_normal, valid = item.shape.intersect(
             local_origin, local_direction
@@ -2925,20 +2814,20 @@ def render_frame(
         )
     if int(source.xyzi.shape[0]) != ray_grid.slot_count:
         raise RenderError("source frame and ray grid have different slot counts")
-    rotation, origin_world = _pose(source)
+    rotation, lidar_origin_world = _pose(source)
     directions_sensor = ray_grid.directions_for(source)
     directions_world = directions_sensor @ rotation.T
+    origins_sensor = ray_grid.origins_for(source)
+    origins_world = origins_sensor @ rotation.T + lidar_origin_world
     competition = _accepted_object_hits(
-        origin_world,
+        origins_world,
         directions_world,
         world,
         ray_grid,
         sensor,
         int(source.frame_id),
     )
-    normal_range = np.linalg.norm(
-        np.asarray(source.xyzi[:, :3], dtype=np.float64), axis=1
-    )
+    normal_range = np.asarray(ray_grid.ranges(source)).copy()
     normal_range[np.asarray(source.zero_slot_mask, dtype=np.bool_)] = np.inf
     inserted = np.isfinite(competition.distance_m) & (
         competition.distance_m < normal_range - world.tie_tolerance_m
@@ -2956,11 +2845,13 @@ def render_frame(
     xyzi = np.asarray(source.xyzi, dtype=np.float32).copy()
     original_real = ~np.asarray(source.zero_slot_mask, dtype=np.bool_)
     xyzi[original_real, :3] = (
-        normal_range[original_real, None] * directions_sensor[original_real]
+        origins_sensor[original_real]
+        + normal_range[original_real, None] * directions_sensor[original_real]
     ).astype(np.float32)
     if slots.size:
         xyzi[slots, :3] = (
-            competition.distance_m[slots, None] * directions_sensor[slots]
+            origins_sensor[slots]
+            + competition.distance_m[slots, None] * directions_sensor[slots]
         ).astype(np.float32)
         incidence = np.arccos(
             np.clip(
@@ -3426,19 +3317,18 @@ def validate_world_visibility(
             raise RenderError(
                 "visibility frame and ray grid have different slot counts"
             )
-        rotation, origin = _pose(frame)
+        rotation, lidar_origin = _pose(frame)
         directions_world = ray_grid.directions_for(frame) @ rotation.T
+        origins_world = ray_grid.origins_for(frame) @ rotation.T + lidar_origin
         competition = _accepted_object_hits(
-            origin,
+            origins_world,
             directions_world,
             world,
             ray_grid,
             sensor,
             int(frame.frame_id),
         )
-        normal_range = np.linalg.norm(
-            np.asarray(frame.xyzi[:, :3], dtype=np.float64), axis=1
-        )
+        normal_range = np.asarray(ray_grid.ranges(frame)).copy()
         normal_range[np.asarray(frame.zero_slot_mask, dtype=np.bool_)] = np.inf
         visible = np.isfinite(competition.distance_m) & (
             competition.distance_m < normal_range - world.tie_tolerance_m
@@ -3780,12 +3670,13 @@ def five_frame_world_diagnostics(
     accepted = {item.object_id: 0 for item in world.objects}
     geometric = {item.object_id: 0 for item in world.objects}
     for frame in window:
-        rotation, origin = _pose(frame)
+        rotation, lidar_origin = _pose(frame)
         directions = ray_grid.directions_for(frame) @ rotation.T
+        origins = ray_grid.origins_for(frame) @ rotation.T + lidar_origin
         competition = _accepted_object_hits(
-            origin, directions, world, ray_grid, sensor, int(frame.frame_id)
+            origins, directions, world, ray_grid, sensor, int(frame.frame_id)
         )
-        native = np.linalg.norm(np.asarray(frame.xyzi[:, :3], dtype=np.float64), axis=1)
+        native = np.asarray(ray_grid.ranges(frame)).copy()
         native[np.asarray(frame.zero_slot_mask, dtype=np.bool_)] = np.inf
         won = np.isfinite(competition.distance_m) & (
             competition.distance_m < native - world.tie_tolerance_m

@@ -163,6 +163,32 @@ def _small_ray_fixture() -> tuple[object, RayGrid]:
     return frame, grid
 
 
+def test_ray_grid_round_trip_uses_calibrated_beam_origin() -> None:
+    directions = np.asarray(((1.0, 0.0, 0.0), (0.0, 1.0, 0.0)))
+    origins = np.asarray(((0.1, 0.0, 0.05), (0.0, 0.1, 0.05)))
+    grid = RayGrid(
+        directions,
+        np.zeros(1),
+        np.asarray((0.0, -np.pi / 2.0)),
+        beam_count=1,
+        origins_sensor=origins,
+    )
+    distances = np.asarray((5.0, 7.0))
+    xyzi = np.zeros((2, 4), dtype=np.float32)
+    xyzi[:, :3] = (origins + distances[:, None] * directions).astype(np.float32)
+    frame = make_source_frame(
+        0,
+        xyzi,
+        np.eye(4),
+        _labels(np.full(2, 10, dtype=np.uint16)),
+        partition="fixture",
+        sequence_id=99,
+    )
+    np.testing.assert_allclose(grid.ranges(frame), distances, atol=1.0e-7)
+    np.testing.assert_allclose(grid.points_from_ranges(distances, frame), xyzi[:, :3])
+    assert grid.round_trip(frame)["maximum_point_error_m"] < 1.0e-7
+
+
 def _development_evidence(ap: float, normal_q: float) -> DevelopmentEvidence:
     return DevelopmentEvidence(
         tuple(DevelopmentWorldMetrics(world_id, {"AP": ap}) for world_id in range(24)),
