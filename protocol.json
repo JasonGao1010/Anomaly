@@ -133,6 +133,26 @@
         "forbidden_followups": ["unconstrained permutation", "higher-capacity column relabelling", "free ray mapping fitted to E11 residuals"],
         "E12_locked": true
       },
+      "row_layout_phase_diagnostic": {
+        "version": "E11-D4a",
+        "question": "Determine whether train/206 has a deterministic fixed per-beam column-phase structure consistent with common-azimuth columns or with an Ouster-like row shift, without naming the shift as factory pixel_shift_by_row.",
+        "nominal_column_angle": "theta_a = -2*pi*a/1024, inheriting the E10-v3 scan orientation",
+        "frame_beam_phase": "equal-weight circular mean of atan2(y,x)-theta_a over real returns only",
+        "minimum_real_returns_per_frame_beam": 512,
+        "frame_common_phase": "equal-weight circular mean of all 128 finite frame-beam phases",
+        "relative_phase": "wrap(frame_beam_phase-frame_common_phase)",
+        "fixed_beam_phase": "equal-weight circular mean of the 449 relative phases for each beam",
+        "integer_shift": "nearest integer of fixed_beam_phase/(360/1024), represented relative to the circular row consensus; ties choose the smaller integer",
+        "stability_q99_deg_exclusive_maximum": 0.17578125,
+        "stability_maximum_deg_exclusive_maximum": 0.3515625,
+        "common_azimuth_column_rule": "stability passes and max_b(abs(wrap(fixed_beam_phase_b))) < 0.17578125 deg after the per-frame common-phase gauge",
+        "stable_nonconstant_row_phase_rule": "stability passes, the common-azimuth-column rule fails, and integer_shift is nonconstant across beams",
+        "allowed_outcomes": ["common_azimuth_column_consistent", "stable_nonconstant_row_phase_structure", "unstable_or_unidentifiable"],
+        "interpretation_limit": "A stable nonconstant row phase is jointly compatible with pixel_shift_by_row, beam azimuth offsets, beam-origin range effects, and deskew; D4a alone cannot identify factory metadata or change rho_f.",
+        "repeat_read_exact_match": true,
+        "cross_sequence_validation_reserved_for": "E11-D4c",
+        "criteria_frozen_before_formal_run": true
+      },
       "empty_ray_direction": "same-beam periodic interpolation, explicitly approximate without sensor metadata"
     },
     "normal_controls": {

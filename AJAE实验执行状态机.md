@@ -44,6 +44,9 @@ flowchart TB
     E11D1["E11-D1 STU 点坐标来源审计"]
     E11D2["E11-D2 整帧刚体变换可解释性"]
     E11D3["E11-D3 逐 column 时间/去畸变可解释性"]
+    E11D4A["E11-D4a staggered/destaggered 行相位诊断"]
+    E11D4B["E11-D4b Ouster 投影模型自标定"]
+    E11D4C["E11-D4c 跨序列内参验证"]
     E12["E12 多回波重排风险"]
     E13["E13 raw→ray→raw 点数往返"]
     E14["E14 raw→ray→raw 几何往返"]
@@ -57,6 +60,10 @@ flowchart TB
     E11D1 -. "已获得时间/元数据" .-> E11D3
     E11D2 -. "形成版本化物理解释" .-> E11
     E11D3 -. "形成版本化物理解释" .-> E11
+    E11D1 -. "公开语义不足，转入反演" .-> E11D4A
+    E11D4A --> E11D4B
+    E11D4B --> E11D4C
+    E11D4C -. "跨序列成立" .-> E11
     E12 --> E13
     E13 --> E14
     E14 --> E15
@@ -861,6 +868,38 @@ $$
 - 只有获得 per-point/per-column timestamp 与已使用的 deskew 轨迹/模型，或足以重建它们的原始 packet 和 Ouster metadata，才解锁 **E11-D3**。
 - 若发布证据不足，则 D2/D3 保持锁定，并将向数据作者索取生成语义/元数据作为唯一能改变判断的后续动作。
 - 禁止无约束 permutation、更高容量的 column shift 或根据 E11 残差拟合自由 ray mapping。E12 继续锁定。
+
+
+### E11-D1 后续协议修订
+
+E11-D1 的 `insufficient_released_evidence` 和审计事实原样保留。后续经用户批准，不再将联系作者视为唯一可改变判断的动作，新增基于 Ouster 官方投影方程的受约束反演分支：E11-D4a 只识别固定逐行列相位结构，E11-D4b 再将该结构与 beam angles、beam-origin transform 和 range 分解，E11-D4c 独立检查跨序列可转移性。该分支不使用无约束置换，不覆盖 E11-v1/v2 的历史 FAIL。
+
+
+## E11-D4a｜staggered/destaggered 逐行相位结构诊断
+
+**目的 / 唯一问题**
+
+判断 train/206 的 $128\times1024$ 排列是否存在跨 449 帧稳定的固定逐 beam 列相位结构，以及同一文件 column 更符合“跨 row 共同方位”还是“需要固定逐行位移才形成共同方位”。本实验不从数据中自由重排 ray，也不把估计相位直接命名为原厂 `pixel_shift_by_row`。
+
+**运行前冻结的估计量**
+
+1. 继承 E10-v3 的唯一负向扫描方向，令 $\theta_a=-2\pi a/1024$。对每个 frame/beam，只使用真实 XYZ 回波，计算 $\operatorname{atan2}(y,x)-\theta_a$ 的等权圆周均值 $\delta_{f,b}$；不跨空槽插值，每个 frame/beam 至少需 512 个真实回波。
+2. 每帧对 128 个有限 $\delta_{f,b}$ 取等权圆周均值 $g_f$，只扣除该帧全部 row 共有的坐标相位。定义 $q_{f,b}=\operatorname{wrap}(\delta_{f,b}-g_f)$，再对 449 帧取等权圆周均值得固定逐行相位 $q_b$。
+3. 以 $\Delta_a=360^\circ/1024$ 将 $q_b$ 分解为最近整数列位移 $s_b=\operatorname{round}(q_b/\Delta_a)$ 和列内余量 $\epsilon_b=q_b-s_b\Delta_a$；完全并列时取较小整数。该分解只是描述量，不修改 slot 或 $\rho_f$。
+
+**运行前冻结的判定**
+
+1. 所有 57,472 个 frame/beam 都必须满足支持条件并产生有限相位。
+2. 对稳定性残差 $v_{f,b}=|\operatorname{wrap}(q_{f,b}-q_b)|$，每个 beam 的 $Q_{0.99}(v)$ 必须全部小于既有半列尺度 $0.17578125^\circ$，全部最大值必须小于一列 $0.3515625^\circ$。这两个阈值继承网格几何，不根据 D4a 结果调整。
+3. 固定每帧公共相位为零点后，若稳定性通过且 $\max_b|\operatorname{wrap}(q_b)|<0.17578125^\circ$，记为 `common_azimuth_column_consistent`；若稳定性通过、前一条件不成立且 $s_b$ 非常数，记为 `stable_nonconstant_row_phase_structure`；否则记为 `unstable_or_unidentifiable`。
+4. `stable_nonconstant_row_phase_structure` 只说明数据存在与 Ouster 逐行 shift 相容的固定结构。`pixel_shift_by_row`、beam azimuth offset、beam-origin 的量程效应与 deskew 在 D4a 中仍混合，必须由 D4b 的官方投影方程分解。
+5. 两次独立读取必须逐元素复现 $\delta_{f,b}$、$g_f$、$q_{f,b}$、$q_b$、$s_b$、$\epsilon_b$、支持数、全部分位统计和摘要哈希。跨序列稳定性不在 D4a 中使用，保留给 D4c 作为独立验证。
+
+**状态转移**
+
+- `common_azimuth_column_consistent` 或 `stable_nonconstant_row_phase_structure` → **解锁 E11-D4b，但不改写 E11-v1/v2。**
+- `unstable_or_unidentifiable` → **D4b 保持锁定；不启用更自由的行置换。**
+- E12 在 D4a 的任何结果下都继续锁定。
 
 
 ## E12｜多回波重排风险
