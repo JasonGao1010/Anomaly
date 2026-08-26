@@ -1900,23 +1900,25 @@ E19 FAIL；如果后续修订连续连通性资格并重跑，本次永久记为
 
 E19-D1 先不修改 generator，只资格一个直接作用于连续 `signed_distance` 定义的三态判定器：`connected`、`disconnected`、`unresolved`。判定器不得读取 resolution 25/31/41/65 的历史组件数，也不得把盒中心或任一固定采样点的 inside/outside 当作整个空间单元的真值。
 
-**区间包围与分量区间**
+**保守不连通证书与解析连通证书**
 
 在 E18a-D2-v2 已资格的连续保守 AABB 内，将空间划分为嵌套 dyadic boxes。对每个 box 使用向外保守的区间算术完整传播 `_undeform`、superquadric implicit function、顺序 CSG 的 min/max/difference 和低频正弦位移，得到整个 box 上的连续隐式函数区间 $[F_L,F_U]$：$F_U<0$ 才是 `definitely_inside`，$F_L>0$ 才是 `definitely_outside`，其余为 `boundary_unresolved`。任何三角函数区间跨越极值时必须返回完整 $[-1,1]$，不能用端点近似。
 
-在 6 邻接 cubical complex 上分别计算：去掉 `definitely_outside` 后、且含有确定内部见证的 possible-domain 分量数 $C_{\min}$；以及 `definitely_inside` 分量数 $C_{\max}$。possible-domain 中不含任何确定内部盒的孤立区域记为 orphan unresolved，不得假定为空。该分量区间只在所有 possible 分量都有确定内部见证时有效。若 $C_{\min}\ge2$，确定外部盒已经形成不可穿越分隔，判为 `disconnected`；若 $C_{\min}=C_{\max}=1$ 且 orphan 数为 0，判为 `connected`；其余判为 `unresolved`。
+在 6 邻接 cubical complex 上计算去掉 `definitely_outside` 后、且含有确定内部见证的 possible-domain 分量数 $C_{\mathrm{sep}}$。若 $C_{\mathrm{sep}}\ge2$，确定外部盒已经形成不可穿越分隔，因而可保守判为 `disconnected`。possible-domain 中不含任何确定内部盒的孤立区域记为 orphan unresolved，不得假定为空。
 
-标准层固定为每轴 $2^6=64$ 个区间盒，严格层固定为每轴 $2^7=128$ 个嵌套区间盒；两层使用同一保守 AABB 边界，因此严格盒精确细分标准盒，不存在网格相位切换。正式结论只有在标准与严格层三态相同、严格层不存在新增 orphan，且分量区间没有变宽时才可识别；否则最终输出强制为 `unresolved`。这是有限尺度下的保守收敛资格，不声称对任意小于严格盒宽的未知几何特征作出结论。
+`connected` 不得由 possible-domain 与 `definitely_inside` 的体素分量数相等推出，因为有限不确定边界层仍可能隐藏额外小分量。它只允许由下列连续集合充分条件给出：单个连通 primitive 经连续双射形变；所有成员连通且有经真实内部点见证的连通交叠图的 union；非空凸 ellipsoid 集合的 intersection；严格包含于球内部的球形 cavity difference；以及满足径向导数严格为正的球形低频表面扰动。任一条件的代数不等式不能严格成立时不得容差放行，输出 `unresolved`。若解析 `connected` 证书与区间 `disconnected` 证书冲突，同样强制为 `unresolved` 并使实验 FAIL。
+
+标准层固定为每轴 $2^6=64$ 个区间盒，严格层固定为每轴 $2^7=128$ 个嵌套区间盒；两层使用同一保守 AABB 边界，因此严格盒精确细分标准盒，不存在网格相位切换。正式结论只有在标准与严格层三态相同、严格层不存在新增 orphan，且 $C_{\mathrm{sep}}$ 不下降时才可识别；否则最终输出强制为 `unresolved`。解析连通证书不随盒层级变化，但两层区间分类都必须与它无冲突。这是有限尺度下的保守资格：`disconnected` 只覆盖严格盒宽能够分隔的组件，`connected` 只覆盖列明的解析充分条件，其余几何不作猜测。
 
 **固定真值 fixture 与诊断对象**
 
-解析真值组固定 18 个连续几何：一个明显重叠的两球 union、三个表面间隙为 0.05/0.10/0.20 m 的分离两球 union，以及两个沿主轴严格分离的椭球 union；两条重叠深度为 0.05/0.10 m 的三球细桥链及对应末球分离链；两个重叠深度为 0.05/0.10 m 的窄双球 intersection；两个内部球 cavity difference；两个贯穿截面 cutter 形成分离 caps 的 difference；一个含非零 bend/twist/taper 的单 primitive；一个含低频表面形变的单 primitive。连续真值在运行前由球/椭球中心距离、集合包含或贯穿分隔关系解析给定，connected/disconnected 各 9 个。
+解析真值组固定 18 个连续几何：一个明显重叠的两球 union、三个表面间隙为 0.05/0.10/0.20 m 的分离两球 union，以及两个沿主轴严格分离的椭球 union；两条重叠深度为 0.05/0.10 m 的三球细桥链及对应末球分离链；两个重叠深度为 0.05/0.10 m 的窄双球 intersection；两个内部球 cavity difference；两个贯穿截面 cutter 形成分离 caps 的 difference；一个含非零 bend/twist/taper 的单 primitive；一个球形低频表面形变单 primitive，其扰动梯度范数上界严格小于球的径向隐式函数导数且中心保持在内部。连续真值在运行前由球/椭球中心距离、集合包含、贯穿分隔、连续双射或严格星形性解析给定，connected/disconnected 各 9 个。
 
-E19-v1 的 primitive count 5、seed 3/5/22 只作为无标签诊断对象；其结果可以是任一三态，但必须完整报告标准/严格 $C_{\min},C_{\max}$、orphan 数与严格盒宽，不参与 D1 PASS 分母，也不得用于调节层数或 fixture。
+E19-v1 的 primitive count 5、seed 3/5/22 只作为无标签诊断对象；其结果可以是任一三态，但必须完整报告标准/严格 $C_{\mathrm{sep}}$、确定内部组件数、orphan 数与严格盒宽，不参与 D1 PASS 分母，也不得用于调节层数或 fixture。
 
 **冻结 PASS 条件**
 
-18 个解析 fixture 的标准与严格输出必须全部可识别、逐项等于解析真值，错误和 `unresolved` 均为 0；严格层不得把标准层已由确定外部分隔的分量重新合并，不得新增 orphan，分量区间不得变宽。所有区间必须有限有序；另用每 fixture $2^{18}$ 个独立连续 probes 反证区间分类，`definitely_inside` 中不得出现 $F>0$ 点，`definitely_outside` 中不得出现 $F\le0$ 点。两次完整运行必须逐元素复现盒分类、分量统计、三态和哈希。
+18 个解析 fixture 的标准与严格输出必须全部可识别、逐项等于解析真值，错误和 `unresolved` 均为 0；每个 connected fixture 必须记录命中的解析充分条件，不能只靠盒组件数；严格层不得把标准层已由确定外部分隔的分量重新合并，也不得新增 orphan。所有区间必须有限有序；另用每 fixture $2^{18}$ 个独立连续 probes 反证区间分类，`definitely_inside` 中不得出现 $F>0$ 点，`definitely_outside` 中不得出现 $F\le0$ 点。两次完整运行必须逐元素复现盒分类、分量统计、三态、解析证书和哈希。
 
 PASS → 解锁 E19-v2 的 generator acceptance 修订；FAIL → 判定器不得接入 generator，E19-v2 与 E20 保持锁定，并根据区间保守性、收敛性或可识别性失败项重新设计。E19-v1 的历史 FAIL 永久保留。
 
