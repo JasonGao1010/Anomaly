@@ -2270,7 +2270,7 @@ E20a-D1 只回答：schema 6 的扁平、细长和明显不对称支持不足，
 
 对每个对象构造仅用于诊断、不得进入 generator/cache/training 的五个配对视图。S0 `base_core` 只保留第一个 primitive，取消 surface、bend、twist、taper；同时记录基础半轴排序后的内禀 $r_{21}^{base}$、$r_{31}^{base}$。S1 `centered_union_core` 保留全部实际 primitive 的尺度、指数和 yaw，但把全部 center 共置于原点并取消全部形变，用于观察 secondary primitive 尺度/形状在不含偏心生长时如何改变外包围盒。S2 `offset_union_core` 恢复实际 child center，仍取消全部形变。S3 `surface_union` 在 S2 上只恢复原有低频 surface amplitude/frequency/phase。S4 `final` 为 E20a 已测量的完整原对象，再恢复 bend/twist/taper。operation 始终为原来的 union；不得引入 difference、intersection、新形变或超出已实现参数域的假想数值。
 
-S0–S4 的三轴 span、$D,r_{21},r_{31}$ 继续使用 E20a 的同一连续 AABB 口径。S0 与 S1 在无 surface 且全部中心共置时具有中心对称性，其连续体积不对称性解析记为 0；S2 和 S3 使用与 E20a 相同的 Sobol 不对称性公式，正式计算取 $2^{13}$ 点，固定 seed 0–1023 的嵌套 $2^{15}$ 点严格子审计要求两层差不超过 0.03，最多允许 1% 即 10 个严格子审计对象 unresolved；S4 直接读取 E20a 已资格的描述量，不重新定义。
+S0–S4 的三轴 span、$D,r_{21},r_{31}$ 继续使用 E20a 的同一连续 AABB 口径。S0 与 S1 在无 surface 且全部中心共置时具有中心对称性，其连续体积不对称性解析记为 0；S2 和 S3 对全部 8,192 个对象使用与 E20a 相同的嵌套 $2^{13}/2^{15}$ Sobol 不对称性公式，两层差不得超过 0.03，每个阶段最多允许 1% 即 81 个对象 unresolved；S4 直接读取 E20a 已资格的描述量，不重新定义。
 
 **实际构造参数恢复**
 
@@ -2282,7 +2282,7 @@ S0–S4 的三轴 span、$D,r_{21},r_{31}$ 继续使用 E20a 的同一连续 AAB
 
 不对称性仍继承 E20a 的 $A\ge0.15$ 与 128 支持数。S1 的解析 $A=0$ 是共中心反事实基线；若 S2 仍低于 128，则正式归因为 `realized_offset_scale_union_insufficient_before_deformation`；若 S2 达到 128、但 S3 或 S4 首次降到 128 以下，则记录对应的 surface 或 global-deformation suppression；若 S2 低于 128而 S3/S4 恢复到至少 128，则记录对应形变阶段提供了缺失支持。secondary scale 最大值与最大 $f$ 分别和 S2 的 $A,r_{31}$ 计算 Spearman 秩相关，按 primitive count 2–5 分层并报告合并值；$|\rho|\ge0.20$ 只记为关联信号。若只有一个因素在至少 3/4 个 count 组达到该条件，记为该因素的较一致关联；二者都达到则记 joint association；二者都未达到则记 association-unresolved。该标签不得写成因果结论。
 
-D1 的 PASS 只要求：8,192 个对象身份全部恢复；parent/f 恢复无错误；全部阶段连续描述量有限；严格 Sobol 子审计满足上述收敛界；全部预定义归因统计可计算；两次 24 核完整运行逐元素复现阶段描述量、参数恢复、归因标签、对象哈希和摘要哈希。PASS 表示缺失支持得到可复核的阶段归因，不表示 schema 6 或任何 schema-7 候选已合格。若身份、连续测量或归因可识别性失败，D1 FAIL 并停止，不得据不可靠诊断设计 schema 7。
+D1 的 PASS 只要求：8,192 个对象身份全部恢复；parent/f 恢复无错误；全部阶段连续描述量有限；S2/S3 的完整嵌套 Sobol 审计分别满足上述收敛界；全部预定义归因统计可计算；两次 24 核完整运行逐元素复现阶段描述量、参数恢复、归因标签、对象哈希和摘要哈希。PASS 表示缺失支持得到可复核的阶段归因，不表示 schema 6 或任何 schema-7 候选已合格。若身份、连续测量或归因可识别性失败，D1 FAIL 并停止，不得据不可靠诊断设计 schema 7。
 
 **状态转移**
 

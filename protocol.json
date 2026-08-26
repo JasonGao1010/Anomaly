@@ -594,11 +594,10 @@
         "geometry_measurement": {
           "aabb_and_axis_ratios": "identical continuous-AABB definitions and flat/elongated thresholds from E20a at every S stage",
           "analytic_asymmetry": "S0 and S1 are centrally symmetric and have A=0",
-          "S2_S3_asymmetry_points": 8192,
-          "strict_subset_seeds": [0, 1023],
-          "strict_subset_points": 32768,
-          "strict_subset_maximum_difference": 0.03,
-          "strict_subset_maximum_unresolved": 10,
+          "S2_S3_standard_points": 8192,
+          "S2_S3_strict_points": 32768,
+          "S2_S3_maximum_difference": 0.03,
+          "S2_S3_maximum_unresolved_each": 81,
           "S4": "read the already qualified E20a descriptors"
         },
         "construction_recovery": {
@@ -618,7 +617,7 @@
           "association_signal": "abs(rho) >= 0.20; a factor is consistent only if it reaches the threshold in at least three of four count groups; both gives joint_association and neither gives association_unresolved",
           "causal_limit": "association labels are not causal claims"
         },
-        "pass_conditions": ["all 8192 E20a shape/report identities are recovered", "every child parent/axis/sign/f is uniquely recovered within 1e-12 m and the frozen f interval", "all stage descriptors are finite", "the strict Sobol subset has at most 10 unresolved objects under the frozen 0.03 difference", "all preregistered attribution statistics and labels are defined", "two independent complete 24-process runs reproduce all stages, recoveries, labels, hashes, and summaries elementwise exactly"],
+        "pass_conditions": ["all 8192 E20a shape/report identities are recovered", "every child parent/axis/sign/f is uniquely recovered within 1e-12 m and the frozen f interval", "all stage descriptors are finite", "S2 and S3 each have at most 81 unresolved objects under the complete nested 8192/32768-point and 0.03-difference rule", "all preregistered attribution statistics and labels are defined", "two independent complete 24-process runs reproduce all stages, recoveries, labels, hashes, and summaries elementwise exactly"],
         "interpretation_limit": "PASS qualifies only a reproducible attribution of the schema-6 support deficit. It does not qualify schema 6, modify the generator, or qualify a schema-7 candidate.",
         "forbidden": ["modifying the generator or proposal stream", "sampling replacement objects", "changing E20a thresholds", "introducing imagined parameter values", "treating Spearman association as causation", "using diagnostic counterfactual stages in training or caches"],
         "criteria_frozen_before_formal_run": true
