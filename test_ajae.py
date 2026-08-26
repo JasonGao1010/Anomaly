@@ -482,7 +482,7 @@ def test_training_and_heldout_geometry_are_disjoint_and_bounded() -> None:
         assert report["bounded"] and report["closed"] and report["components"] == 1
 
 
-def test_generator_schema4_preserves_single_continuous_acceptance() -> None:
+def test_generator_schema5_preserves_single_continuous_acceptance() -> None:
     protocol = load_protocol(PROTOCOL_PATH)
     historical = protocol.render["anomaly_proxies"][
         "continuous_size_acceptance_generator"
@@ -491,7 +491,7 @@ def test_generator_schema4_preserves_single_continuous_acceptance() -> None:
         "csg_continuous_acceptance_generator"
     ]
     assert historical["generator_schema"] == 2
-    assert PROCEDURAL_GENERATOR_SCHEMA == current["generator_schema"] == 4
+    assert PROCEDURAL_GENERATOR_SCHEMA == current["generator_schema"] == 5
 
     for seed, rejection_kind in (
         (501, "upper_certificate_rejections"),
@@ -503,7 +503,7 @@ def test_generator_schema4_preserves_single_continuous_acceptance() -> None:
         )
         assert shape.to_dict() == repeated_shape.to_dict()
         assert report == repeated_report
-        assert report.generator_schema == 4
+        assert report.generator_schema == 5
         assert report.size_definition == "continuous-deformed-surface-aabb"
         assert report.proposal_count > 1
         assert getattr(report, rejection_kind) >= 1
@@ -519,13 +519,13 @@ def test_generator_schema4_preserves_single_continuous_acceptance() -> None:
         assert report.accepted_size_upper_m == expected
 
 
-def test_generator_schema4_uses_tight_csg_certificate_for_multi_primitive() -> None:
+def test_generator_schema5_uses_tight_csg_certificate_for_multi_primitive() -> None:
     shape, report = ShapeSpec.sample_with_report(0, primitive_count=2)
     certificate = shape.continuous_size_certificate(
         sobol_probes=4096, maximum_interior_lines=64
     )
     tight_lower, tight_upper = shape.tight_continuous_outer_bounds()
-    assert report.generator_schema == 4
+    assert report.generator_schema == 5
     assert report.size_definition == "continuous-csg-tight-certified-interval"
     assert report.accepted_size_lower_m == certificate.lower_size_m
     assert report.accepted_size_upper_m == float(np.max(tight_upper - tight_lower))
@@ -541,7 +541,7 @@ def test_tight_continuous_outer_bound_is_conservative_and_no_looser() -> None:
         ((0.0, 0.0, 0.0), (0.3, 0.0, 0.1)),
         ((1.0, 0.8), (1.2, 1.1)),
         (0.35, -0.4),
-        ("union", "intersection"),
+        ("union", "union"),
         twist_rad_per_m=0.7,
         bend_per_m=(0.04, -0.03),
         taper_per_m=(0.08, -0.06),

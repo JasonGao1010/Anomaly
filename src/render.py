@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, Callable, Literal, TypeAlias
 
 import numpy as np
+from scipy import ndimage
 from scipy.optimize import brentq, differential_evolution
 from scipy.spatial import ConvexHull, QhullError, cKDTree
 from scipy.stats import qmc
@@ -34,7 +35,7 @@ WORLD_FORMAT = "ajae-world-v2"
 CALIBRATION_FORMAT = "ajae-sensor-calibration-v4"
 DEVELOPMENT_FORMAT = "ajae-development-worlds-v2"
 DEVELOPMENT_PROTOCOL_SCHEMA = 30
-PROCEDURAL_GENERATOR_SCHEMA = 4
+PROCEDURAL_GENERATOR_SCHEMA = 5
 GATE1_EVIDENCE_KEYS = (
     "ray_slot_audit",
     "range_image_round_trip",
@@ -172,6 +173,99 @@ def _component_count(mask: np.ndarray, *, stop_after: int = 2) -> int:
     return components
 
 
+def _interval_outward(
+    lower: np.ndarray, upper: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    return np.nextafter(lower, -np.inf), np.nextafter(upper, np.inf)
+
+
+def _interval_add(
+    a_lower: np.ndarray,
+    a_upper: np.ndarray,
+    b_lower: np.ndarray,
+    b_upper: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    return _interval_outward(a_lower + b_lower, a_upper + b_upper)
+
+
+def _interval_multiply(
+    a_lower: np.ndarray,
+    a_upper: np.ndarray,
+    b_lower: np.ndarray,
+    b_upper: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    values = np.stack(
+        (
+            a_lower * b_lower,
+            a_lower * b_upper,
+            a_upper * b_lower,
+            a_upper * b_upper,
+        )
+    )
+    return _interval_outward(np.min(values, axis=0), np.max(values, axis=0))
+
+
+def _interval_scale(
+    lower: np.ndarray, upper: np.ndarray, value: float
+) -> tuple[np.ndarray, np.ndarray]:
+    if value >= 0.0:
+        return _interval_outward(value * lower, value * upper)
+    return _interval_outward(value * upper, value * lower)
+
+
+def _interval_square(
+    lower: np.ndarray, upper: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    minimum = np.where(
+        (lower <= 0.0) & (upper >= 0.0),
+        0.0,
+        np.minimum(lower * lower, upper * upper),
+    )
+    return _interval_outward(
+        minimum, np.maximum(lower * lower, upper * upper)
+    )
+
+
+def _interval_absolute(
+    lower: np.ndarray, upper: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    minimum = np.where(
+        (lower <= 0.0) & (upper >= 0.0),
+        0.0,
+        np.minimum(np.abs(lower), np.abs(upper)),
+    )
+    return _interval_outward(minimum, np.maximum(np.abs(lower), np.abs(upper)))
+
+
+def _interval_power(
+    lower: np.ndarray, upper: np.ndarray, power: float
+) -> tuple[np.ndarray, np.ndarray]:
+    return _interval_outward(
+        np.power(np.maximum(lower, 0.0), power),
+        np.power(np.maximum(upper, 0.0), power),
+    )
+
+
+def _interval_trigonometric(
+    lower: np.ndarray, upper: np.ndarray, *, cosine: bool = False
+) -> tuple[np.ndarray, np.ndarray]:
+    function = np.cos if cosine else np.sin
+    result_lower = np.minimum(function(lower), function(upper))
+    result_upper = np.maximum(function(lower), function(upper))
+    wide = upper - lower >= 2.0 * math.pi
+    maximum_phase = 0.0 if cosine else 0.5 * math.pi
+    minimum_phase = math.pi if cosine else -0.5 * math.pi
+    contains_maximum = np.ceil(
+        (lower - maximum_phase) / (2.0 * math.pi)
+    ) <= np.floor((upper - maximum_phase) / (2.0 * math.pi))
+    contains_minimum = np.ceil(
+        (lower - minimum_phase) / (2.0 * math.pi)
+    ) <= np.floor((upper - minimum_phase) / (2.0 * math.pi))
+    result_upper = np.where(wide | contains_maximum, 1.0, result_upper)
+    result_lower = np.where(wide | contains_minimum, -1.0, result_lower)
+    return _interval_outward(result_lower, result_upper)
+
+
 @dataclass(frozen=True, slots=True)
 class ShapeGenerationReport:
     """Record deterministic proposal efficiency without changing shape identity."""
@@ -180,6 +274,8 @@ class ShapeGenerationReport:
     proposal_count: int
     lower_certificate_rejections: int
     upper_certificate_rejections: int
+    connectivity_disconnected_rejections: int
+    connectivity_unresolved_rejections: int
     other_rejections: int
     accepted_size_lower_m: float
     accepted_size_upper_m: float
@@ -204,6 +300,16 @@ class ShapeSizeCertificate:
 
 
 @dataclass(frozen=True, slots=True)
+class ShapeConnectivityCertificate:
+    """Conservative continuous connected/disconnected/unresolved evidence."""
+
+    state: Literal["connected", "disconnected", "unresolved"]
+    source: str
+    standard_stats: tuple[int, int, int]
+    strict_stats: tuple[int, int, int]
+
+
+@dataclass(frozen=True, slots=True)
 class ShapeSpec:
     """A closed CSG composition of deformed superquadric primitives."""
 
@@ -218,6 +324,9 @@ class ShapeSpec:
     surface_amplitude_m: float = 0.0
     surface_frequency_per_m: tuple[float, float, float] = (1.0, 1.0, 1.0)
     surface_phase_rad: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    _connectivity: ShapeConnectivityCertificate = field(
+        init=False, repr=False, compare=False
+    )
 
     def __post_init__(self) -> None:
         scales = _nested_values("primitive_scales_m", self.primitive_scales_m, 3)
@@ -277,6 +386,12 @@ class ShapeSpec:
             ("surface_amplitude_m", amplitude),
         ):
             object.__setattr__(self, name, value)
+        connectivity = self.continuous_connectivity_certificate()
+        object.__setattr__(self, "_connectivity", connectivity)
+        if connectivity.state == "disconnected":
+            raise RenderError("continuous CSG is certified disconnected")
+        if connectivity.state == "unresolved":
+            raise RenderError("continuous CSG connectivity is unresolved")
         self.geometry_report(resolution=25)
 
     @property
@@ -964,6 +1079,371 @@ class ShapeSpec:
             raise RenderError("shape evaluation produced NaN or Inf")
         return result
 
+    def _primitive_perturbed_value(
+        self, index: int, points_undeformed: np.ndarray
+    ) -> np.ndarray:
+        points = np.asarray(points_undeformed, dtype=np.float64)
+        primitive = self._primitive_distance(
+            points,
+            self.primitive_scales_m[index],
+            self.primitive_offsets_m[index],
+            self.primitive_exponents[index],
+            self.primitive_yaws_rad[index],
+        )
+        displacement = self.surface_amplitude_m * np.mean(
+            np.sin(
+                points * np.asarray(self.surface_frequency_per_m)
+                + np.asarray(self.surface_phase_rad)
+            ),
+            axis=-1,
+        )
+        return primitive - displacement
+
+    def _primitive_star_certificate(self, index: int) -> bool:
+        scale = self.primitive_scales_m[index]
+        lower = min(scale) / (math.sqrt(3.0) * max(scale)) - (
+            self.surface_amplitude_m
+            * float(np.linalg.norm(self.surface_frequency_per_m))
+            / 3.0
+        )
+        center = np.asarray(self.primitive_offsets_m[index])[None, :]
+        center_value = float(self._primitive_perturbed_value(index, center)[0])
+        return center_value < 0.0 and lower > 0.0
+
+    def _analytic_connectivity_source(self) -> str | None:
+        certified = [
+            self._primitive_star_certificate(index)
+            for index in range(self.primitive_count)
+        ]
+        if self.primitive_count == 1 and certified[0]:
+            return "strict_radial_star_shaped"
+        if all(operation == "union" for operation in self.operations) and all(
+            certified
+        ):
+            adjacency = np.eye(self.primitive_count, dtype=np.bool_)
+            weights = np.linspace(0.0, 1.0, 257)
+            for left in range(self.primitive_count):
+                for right in range(left + 1, self.primitive_count):
+                    start = np.asarray(self.primitive_offsets_m[left])
+                    end = np.asarray(self.primitive_offsets_m[right])
+                    points = start[None, :] + weights[:, None] * (
+                        end - start
+                    )[None, :]
+                    overlap = bool(
+                        np.any(
+                            (self._primitive_perturbed_value(left, points) < 0.0)
+                            & (
+                                self._primitive_perturbed_value(right, points)
+                                < 0.0
+                            )
+                        )
+                    )
+                    adjacency[left, right] = adjacency[right, left] = overlap
+            reached = {0}
+            while True:
+                expanded = reached | {
+                    target
+                    for source in reached
+                    for target in range(self.primitive_count)
+                    if adjacency[source, target]
+                }
+                if expanded == reached:
+                    break
+                reached = expanded
+            if len(reached) == self.primitive_count:
+                return "connected_union_graph"
+        if (
+            self.surface_amplitude_m == 0.0
+            and all(
+                operation in {"union", "intersection"}
+                for operation in self.operations
+            )
+            and all(
+                operation == "intersection" for operation in self.operations[1:]
+            )
+            and all(
+                vertical <= 2.0 and horizontal <= 2.0
+                for vertical, horizontal in self.primitive_exponents
+            )
+        ):
+            candidates = np.asarray(
+                (
+                    *self.primitive_offsets_m,
+                    tuple(np.mean(np.asarray(self.primitive_offsets_m), axis=0)),
+                )
+            )
+            if any(
+                all(
+                    self._primitive_perturbed_value(index, point[None, :])[0]
+                    < 0.0
+                    for index in range(self.primitive_count)
+                )
+                for point in candidates
+            ):
+                return "nonempty_convex_intersection"
+        if (
+            self.surface_amplitude_m == 0.0
+            and self.primitive_count == 2
+            and self.operations == ("union", "difference")
+            and all(
+                exponent == (1.0, 1.0)
+                for exponent in self.primitive_exponents
+            )
+            and all(
+                np.all(np.asarray(scale) == scale[0])
+                for scale in self.primitive_scales_m
+            )
+        ):
+            outer_radius = self.primitive_scales_m[0][0]
+            inner_radius = self.primitive_scales_m[1][0]
+            separation = float(
+                np.linalg.norm(
+                    np.asarray(self.primitive_offsets_m[0])
+                    - np.asarray(self.primitive_offsets_m[1])
+                )
+            )
+            if separation + inner_radius < outer_radius:
+                return "strictly_contained_spherical_cavity"
+        return None
+
+    def _implicit_interval(
+        self, lower: np.ndarray, upper: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray]:
+        x_lower, y_lower, z_lower = lower[:, 0], lower[:, 1], lower[:, 2]
+        x_upper, y_upper, z_upper = upper[:, 0], upper[:, 1], upper[:, 2]
+        z2_lower, z2_upper = _interval_square(z_lower, z_upper)
+        bend_x_lower, bend_x_upper = _interval_scale(
+            z2_lower, z2_upper, -self.bend_per_m[0]
+        )
+        bend_y_lower, bend_y_upper = _interval_scale(
+            z2_lower, z2_upper, -self.bend_per_m[1]
+        )
+        x_lower, x_upper = _interval_add(
+            x_lower, x_upper, bend_x_lower, bend_x_upper
+        )
+        y_lower, y_upper = _interval_add(
+            y_lower, y_upper, bend_y_lower, bend_y_upper
+        )
+        scale_z = max(item[2] for item in self.primitive_scales_m)
+        factor_x_lower, factor_x_upper = _interval_add(
+            np.ones_like(z_lower),
+            np.ones_like(z_upper),
+            *_interval_scale(
+                z_lower, z_upper, self.taper_per_m[0] / scale_z
+            ),
+        )
+        factor_y_lower, factor_y_upper = _interval_add(
+            np.ones_like(z_lower),
+            np.ones_like(z_upper),
+            *_interval_scale(
+                z_lower, z_upper, self.taper_per_m[1] / scale_z
+            ),
+        )
+        factor_x_lower = np.clip(factor_x_lower, 0.25, 4.0)
+        factor_x_upper = np.clip(factor_x_upper, 0.25, 4.0)
+        factor_y_lower = np.clip(factor_y_lower, 0.25, 4.0)
+        factor_y_upper = np.clip(factor_y_upper, 0.25, 4.0)
+        x_lower, x_upper = _interval_multiply(
+            x_lower, x_upper, 1.0 / factor_x_upper, 1.0 / factor_x_lower
+        )
+        y_lower, y_upper = _interval_multiply(
+            y_lower, y_upper, 1.0 / factor_y_upper, 1.0 / factor_y_lower
+        )
+        angle_lower, angle_upper = _interval_scale(
+            z_lower, z_upper, -self.twist_rad_per_m
+        )
+        cosine_lower, cosine_upper = _interval_trigonometric(
+            angle_lower, angle_upper, cosine=True
+        )
+        sine_lower, sine_upper = _interval_trigonometric(
+            angle_lower, angle_upper
+        )
+        cosine_x_lower, cosine_x_upper = _interval_multiply(
+            cosine_lower, cosine_upper, x_lower, x_upper
+        )
+        sine_y_lower, sine_y_upper = _interval_multiply(
+            sine_lower, sine_upper, y_lower, y_upper
+        )
+        sine_x_lower, sine_x_upper = _interval_multiply(
+            sine_lower, sine_upper, x_lower, x_upper
+        )
+        cosine_y_lower, cosine_y_upper = _interval_multiply(
+            cosine_lower, cosine_upper, y_lower, y_upper
+        )
+        ux_lower, ux_upper = _interval_add(
+            cosine_x_lower, cosine_x_upper, -sine_y_upper, -sine_y_lower
+        )
+        uy_lower, uy_upper = _interval_add(
+            sine_x_lower, sine_x_upper, cosine_y_lower, cosine_y_upper
+        )
+
+        result_lower: np.ndarray | None = None
+        result_upper: np.ndarray | None = None
+        for scale, offset, exponent, yaw, operation in zip(
+            self.primitive_scales_m,
+            self.primitive_offsets_m,
+            self.primitive_exponents,
+            self.primitive_yaws_rad,
+            self.operations,
+            strict=True,
+        ):
+            local_x_lower = ux_lower - offset[0]
+            local_x_upper = ux_upper - offset[0]
+            local_y_lower = uy_lower - offset[1]
+            local_y_upper = uy_upper - offset[1]
+            local_z_lower = z_lower - offset[2]
+            local_z_upper = z_upper - offset[2]
+            cosine, sine = math.cos(-yaw), math.sin(-yaw)
+            rotated_x_lower, rotated_x_upper = _interval_add(
+                *_interval_scale(local_x_lower, local_x_upper, cosine),
+                *_interval_scale(local_y_lower, local_y_upper, -sine),
+            )
+            rotated_y_lower, rotated_y_upper = _interval_add(
+                *_interval_scale(local_x_lower, local_x_upper, sine),
+                *_interval_scale(local_y_lower, local_y_upper, cosine),
+            )
+            axis_x_lower, axis_x_upper = _interval_absolute(
+                rotated_x_lower / scale[0], rotated_x_upper / scale[0]
+            )
+            axis_y_lower, axis_y_upper = _interval_absolute(
+                rotated_y_lower / scale[1], rotated_y_upper / scale[1]
+            )
+            axis_z_lower, axis_z_upper = _interval_absolute(
+                local_z_lower / scale[2], local_z_upper / scale[2]
+            )
+            vertical, horizontal = exponent
+            axis_x_lower, axis_x_upper = _interval_power(
+                axis_x_lower, axis_x_upper, 2.0 / horizontal
+            )
+            axis_y_lower, axis_y_upper = _interval_power(
+                axis_y_lower, axis_y_upper, 2.0 / horizontal
+            )
+            xy_lower, xy_upper = _interval_add(
+                axis_x_lower, axis_x_upper, axis_y_lower, axis_y_upper
+            )
+            xy_lower, xy_upper = _interval_power(
+                xy_lower, xy_upper, horizontal / vertical
+            )
+            axis_z_lower, axis_z_upper = _interval_power(
+                axis_z_lower, axis_z_upper, 2.0 / vertical
+            )
+            total_lower, total_upper = _interval_add(
+                xy_lower, xy_upper, axis_z_lower, axis_z_upper
+            )
+            primitive_lower, primitive_upper = _interval_power(
+                total_lower, total_upper, vertical / 2.0
+            )
+            primitive_lower, primitive_upper = _interval_outward(
+                (primitive_lower - 1.0) * min(scale),
+                (primitive_upper - 1.0) * min(scale),
+            )
+            if result_lower is None:
+                result_lower, result_upper = primitive_lower, primitive_upper
+            elif operation == "union":
+                result_lower, result_upper = _interval_outward(
+                    np.minimum(result_lower, primitive_lower),
+                    np.minimum(result_upper, primitive_upper),
+                )
+            elif operation == "difference":
+                result_lower, result_upper = _interval_outward(
+                    np.maximum(result_lower, -primitive_upper),
+                    np.maximum(result_upper, -primitive_lower),
+                )
+            else:
+                result_lower, result_upper = _interval_outward(
+                    np.maximum(result_lower, primitive_lower),
+                    np.maximum(result_upper, primitive_upper),
+                )
+        assert result_lower is not None and result_upper is not None
+        displacement_lower = np.zeros_like(result_lower)
+        displacement_upper = np.zeros_like(result_upper)
+        for coordinate_lower, coordinate_upper, frequency, phase in zip(
+            (ux_lower, uy_lower, z_lower),
+            (ux_upper, uy_upper, z_upper),
+            self.surface_frequency_per_m,
+            self.surface_phase_rad,
+            strict=True,
+        ):
+            phase_lower, phase_upper = _interval_outward(
+                coordinate_lower * frequency + phase,
+                coordinate_upper * frequency + phase,
+            )
+            sine_lower, sine_upper = _interval_trigonometric(
+                phase_lower, phase_upper
+            )
+            displacement_lower += sine_lower
+            displacement_upper += sine_upper
+        displacement_lower *= self.surface_amplitude_m / 3.0
+        displacement_upper *= self.surface_amplitude_m / 3.0
+        return _interval_outward(
+            result_lower - displacement_upper,
+            result_upper - displacement_lower,
+        )
+
+    def _interval_connectivity_stats(
+        self, cells: int
+    ) -> tuple[int, int, int]:
+        lower, upper = self._continuous_outer_bounds(safety_margin_m=1.0e-6)
+        edges = [
+            np.linspace(lower[axis], upper[axis], cells + 1)
+            for axis in range(3)
+        ]
+        state = np.empty((cells, cells, cells), dtype=np.int8)
+        total = cells**3
+        batch = 131_072
+        for start in range(0, total, batch):
+            flat = np.arange(start, min(start + batch, total), dtype=np.int64)
+            x = flat // (cells * cells)
+            y = (flat // cells) % cells
+            z = flat % cells
+            box_lower = np.column_stack(
+                (edges[0][x], edges[1][y], edges[2][z])
+            )
+            box_upper = np.column_stack(
+                (edges[0][x + 1], edges[1][y + 1], edges[2][z + 1])
+            )
+            value_lower, value_upper = self._implicit_interval(
+                box_lower, box_upper
+            )
+            current = np.zeros(len(flat), dtype=np.int8)
+            current[value_lower > 0.0] = -1
+            current[value_upper < 0.0] = 1
+            state.reshape(-1)[start : start + len(flat)] = current
+        structure = ndimage.generate_binary_structure(3, 1)
+        possible_labels, possible_count = ndimage.label(
+            state != -1, structure=structure
+        )
+        _, definite_count = ndimage.label(state == 1, structure=structure)
+        witnessed = np.unique(possible_labels[state == 1])
+        witnessed = witnessed[witnessed > 0]
+        return int(len(witnessed)), int(definite_count), int(
+            possible_count - len(witnessed)
+        )
+
+    def continuous_connectivity_certificate(
+        self,
+    ) -> ShapeConnectivityCertificate:
+        """Return only sufficient continuous topology evidence."""
+
+        source = self._analytic_connectivity_source()
+        if source is not None:
+            return ShapeConnectivityCertificate(
+                "connected", source, (1, 1, 0), (1, 1, 0)
+            )
+        standard = self._interval_connectivity_stats(64)
+        strict = self._interval_connectivity_stats(128)
+        if strict[0] >= 2 and strict[0] >= standard[0]:
+            return ShapeConnectivityCertificate(
+                "disconnected", "strict_interval_separation", standard, strict
+            )
+        return ShapeConnectivityCertificate(
+            "unresolved", "insufficient_continuous_evidence", standard, strict
+        )
+
+    @property
+    def connectivity_certificate(self) -> ShapeConnectivityCertificate:
+        return self._connectivity
+
     def geometry_report(self, *, resolution: int = 31) -> dict[str, float | int | bool]:
         """Numerically reject empty, open, or disconnected CSG results."""
 
@@ -985,9 +1465,9 @@ class ShapeSpec:
             raise RenderError(
                 "shape touches its conservative bound and is not verified closed"
             )
-        components = _component_count(inside)
-        if components != 1:
-            raise RenderError("CSG result is split into disconnected components")
+        if self._connectivity.state != "connected":
+            raise RenderError("shape lacks a continuous connectedness certificate")
+        components = 1
         surface = inside.copy()
         core = inside[1:-1, 1:-1, 1:-1]
         surrounded = (
@@ -1276,6 +1756,8 @@ class ShapeSpec:
         rng = np.random.default_rng(seed)
         lower_rejections = 0
         upper_rejections = 0
+        disconnected_rejections = 0
+        unresolved_rejections = 0
         other = 0
         for proposal_count in range(1, 65):
             count = (
@@ -1360,6 +1842,8 @@ class ShapeSpec:
                     proposal_count=proposal_count,
                     lower_certificate_rejections=lower_rejections,
                     upper_certificate_rejections=upper_rejections,
+                    connectivity_disconnected_rejections=disconnected_rejections,
+                    connectivity_unresolved_rejections=unresolved_rejections,
                     other_rejections=other,
                     accepted_size_lower_m=size_lower,
                     accepted_size_upper_m=size_upper,
@@ -1367,8 +1851,13 @@ class ShapeSpec:
                     outer_upper_m=tuple(map(float, upper)),
                     size_definition=size_definition,
                 )
-            except RenderError:
-                other += 1
+            except RenderError as error:
+                if str(error) == "continuous CSG is certified disconnected":
+                    disconnected_rejections += 1
+                elif str(error) == "continuous CSG connectivity is unresolved":
+                    unresolved_rejections += 1
+                else:
+                    other += 1
                 continue
         raise RenderError(
             "could not sample a connected shape within 64 deterministic attempts"
@@ -1382,7 +1871,7 @@ class ShapeSpec:
         primitive_count: int | None = None,
         size_m_range: tuple[float, float] = (0.2, 3.0),
     ) -> "ShapeSpec":
-        """Sample a reproducible connected shape under generator schema 4."""
+        """Sample a reproducible connected shape under generator schema 5."""
 
         shape, _ = cls.sample_with_report(
             seed,
