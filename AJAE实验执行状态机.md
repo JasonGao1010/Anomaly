@@ -1979,6 +1979,65 @@ E19-D1-v2 PASS，E19-v2 解锁；E20 继续锁定。
 
 科学结论限定为：**在冻结的解析集合类型与 64→128 嵌套区间资格范围内，判定器能够保守地区分已证明连通、已证明不连通和当前不可识别三种证据状态；允许 `unresolved→identified` 不会引入证据反转。** 该结论尚不等于 schema 4 generator 已经能够高效产生全部获得 connected 证明的对象，后者由 E19-v2 单独验证。
 
+### E19-D2｜一般扰动 superquadric 星形连通证书资格
+
+**唯一问题**
+
+E19-D2 不修改 generator 或 proposal distribution，只回答：一般轴比、一般 exponent、带非零低频表面扰动的单个 superquadric，能否通过严格的全方向径向单调性下界证明其对 primitive 中心保持星形；以及多个已取得该证书的 primitive 在纯 union 表达式中，能否通过真实内部交叠见证形成连通交叠图。difference、一般 intersection 与不满足严格不等式的 primitive 不在本节点扩展范围内，继续为 `unresolved`。
+
+**冻结解析证书**
+
+对 primitive $i$，令半轴为 $(a_i,b_i,c_i)$、$m_i=\min(a_i,b_i,c_i)$、$s_{i,\max}=\max(a_i,b_i,c_i)$，中心为 $o_i$。superquadric 的无量纲 gauge $H_i$ 对正尺度一次齐次，因此沿任意单位方向 $u$：
+
+$$
+G_i(o_i+t u)=m_i\bigl(tH_i(u)-1\bigr),
+\qquad
+H_i(u)\ge\frac{1}{\sqrt3\,s_{i,\max}}.
+$$
+
+低频表面位移固定沿用正式实现：
+
+$$
+h(x)=\frac{A}{3}\sum_{j=1}^{3}\sin(\omega_jx_j+\phi_j),
+\qquad
+\left|\frac{d}{dt}h(o_i+t u)\right|
+\le\frac{A}{3}\lVert\omega\rVert_2.
+$$
+
+由此冻结全方向导数下界：
+
+$$
+\delta_i=
+\frac{m_i}{\sqrt3\,s_{i,\max}}
+-\frac{A}{3}\lVert\omega\rVert_2.
+$$
+
+只有同时满足 $F_i(o_i)=G_i(o_i)-h(o_i)<0$ 与 $\delta_i>0$ 时，才为该 primitive 发放 `strict_radial_star_shaped` 证书；比较使用 float64 的严格 $<0$、$>0$，不使用容差放行。因为每条中心射线上的 $F_i$ 严格递增且最终趋于正无穷，内部沿该射线为从中心开始的单一区间，因此对象对 $o_i$ 星形并连通。正式 bend/twist/taper 的 forward map 在每个 $z$ 上由正 taper 因子、平面旋转与平移组成，且 $z$ 不变，是连续双射；它只在上述证书成立后应用并保持连通性。
+
+纯 union 只有在每个 constituent primitive 都取得星形证书后才进入交叠图。每对 primitive 固定检查其两个中心及中心连线上的 257 个等距点；只有某个有限点在两者各自的扰动 implicit 中均严格小于 0，才记录一条真实内部交叠边。交叠图连通才发放最终 `connected_union_graph` 证书。有限见证搜索可以漏掉真实交叠，但不得产生虚假交叠；未形成连通图一律 `unresolved`。
+
+**固定资格场景**
+
+解析正例固定 20 个：5 组预先固定的半轴/exponent，覆盖球、椭球、最大/最小半轴比超过 8 的强轴比以及 exponent 0.3–2.5；每组结合 4 套固定 frequency/phase/yaw 与非零扰动，扰动幅度在运行前取对应严格临界幅度的 0.5 倍并满足现有 $A\le0.25m_i$ 参数域。20 个对象分配非零 bend、twist、taper 组合，验证证书在全局连续双射前后保持。
+
+边界组固定为上述 5 组几何分别使用同一高频 $(12,15,18)$，幅度取理论临界值的 0.999、1.000、1.001 倍，共 15 个对象。0.999 组必须取得证书；1.000/1.001 组只要计算出的 float64 $\delta_i\le0$ 就必须拒发证书，不把“接近零”改成正数。边界对象仅资格证书发放规则，不声称没有证书的对象真实不连通。
+
+对每个解析正例固定使用 $2^{15}$ 个 Sobol 球面方向与从中心到 $2.5s_{i,\max}$ 的 17 个固定半径，独立计算实际径向导数并反查不得低于冻结理论下界。另以中心差分步长 $10^{-6}s_{i,\max}$ 在同一固定方向集合的前 $2^{12}$ 个方向和 17 个半径上反查解析导数，允许的纯数值差为 $10^{-6}$，不得据此放宽证书不等式。
+
+**schema 4 coverage 诊断**
+
+coverage 使用当前 schema 4 完全不变的首次 proposal 随机流，而不是只选最终接受对象：单 primitive 固定 seed 0–1023，共 1,024 个；multi-primitive 固定 primitive count 2/3/4/5、各 seed 0–255，共 1,024 个。只读重建每个 seed 的第一个候选，逐项报告单 primitive 星形证书率、全部 constituent primitive 证书率、pure-union proposal 数、其全部 constituent 已获证书数、交叠图连通数和最终 pure-union connected-certificate coverage。coverage 不进入 D2 PASS 门槛，也不得根据结果修改 fixture、公式或 proposal distribution。
+
+**冻结 PASS 条件**
+
+20 个解析正例必须全部取得星形证书、中心严格在内部，理论下界均严格为正；5 个 0.999 临界下方对象必须发证，所有实际计算为 $\delta_i\le0$ 的临界/上方对象必须拒发，证书发放规则错误数为 0。Sobol 解析径向导数低于理论下界的反例数和中心差分反例数均为 0；全局形变 forward/inverse 往返有限且最大误差不超过 $10^{-10}$ m。纯 union 手工连通/断开场景必须分别发放/拒发最终图证书，false connected certificate 为 0。两次完整运行必须逐元素复现所有场景、coverage 数组、证书、下界和哈希。
+
+PASS → E19-D2 证书可以作为 E19-v2 的 primitive-level connected 充分条件，再单独冻结 generator acceptance；FAIL → 不得接入 generator，E19-v2 与 E20 保持锁定并根据解析下界、边界发证或数值反例停止重设。D2 不因 coverage 偏低而 FAIL，也不允许据 coverage 事后修改 proposal distribution。
+
+**当前状态**
+
+E19-D1-v2 PASS；E19-D2 已完成预注册并解锁。E19-v2、E20 继续锁定。
+
 
 ## E20｜形状/尺度/轴比/材质解耦
 
