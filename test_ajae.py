@@ -482,16 +482,14 @@ def test_training_and_heldout_geometry_are_disjoint_and_bounded() -> None:
         assert report["bounded"] and report["closed"] and report["components"] == 1
 
 
-def test_generator_schema5_preserves_single_continuous_acceptance() -> None:
+def test_generator_schema6_preserves_single_continuous_acceptance() -> None:
     protocol = load_protocol(PROTOCOL_PATH)
     historical = protocol.render["anomaly_proxies"][
         "continuous_size_acceptance_generator"
     ]
-    current = protocol.render["anomaly_proxies"][
-        "csg_continuous_acceptance_generator"
-    ]
+    current = protocol.render["anomaly_proxies"]["constructively_connected_generator"]
     assert historical["generator_schema"] == 2
-    assert PROCEDURAL_GENERATOR_SCHEMA == current["generator_schema"] == 5
+    assert PROCEDURAL_GENERATOR_SCHEMA == current["generator_schema"] == 6
 
     for seed, rejection_kind in (
         (501, "upper_certificate_rejections"),
@@ -503,7 +501,7 @@ def test_generator_schema5_preserves_single_continuous_acceptance() -> None:
         )
         assert shape.to_dict() == repeated_shape.to_dict()
         assert report == repeated_report
-        assert report.generator_schema == 5
+        assert report.generator_schema == 6
         assert report.size_definition == "continuous-deformed-surface-aabb"
         assert report.proposal_count > 1
         assert getattr(report, rejection_kind) >= 1
@@ -519,20 +517,41 @@ def test_generator_schema5_preserves_single_continuous_acceptance() -> None:
         assert report.accepted_size_upper_m == expected
 
 
-def test_generator_schema5_uses_tight_csg_certificate_for_multi_primitive() -> None:
+def test_generator_schema6_uses_tight_union_certificate_for_multi_primitive() -> None:
     shape, report = ShapeSpec.sample_with_report(0, primitive_count=2)
     certificate = shape.continuous_size_certificate(
         sobol_probes=4096, maximum_interior_lines=64
     )
     tight_lower, tight_upper = shape.tight_continuous_outer_bounds()
-    assert report.generator_schema == 5
-    assert report.size_definition == "continuous-csg-tight-certified-interval"
+    assert report.generator_schema == 6
+    assert report.size_definition == "continuous-union-tight-certified-interval"
     assert report.accepted_size_lower_m == certificate.lower_size_m
     assert report.accepted_size_upper_m == float(np.max(tight_upper - tight_lower))
     np.testing.assert_array_equal(report.outer_lower_m, tight_lower)
     np.testing.assert_array_equal(report.outer_upper_m, tight_upper)
     assert 0.2 <= report.accepted_size_lower_m
     assert report.accepted_size_upper_m <= 3.0
+
+
+def test_generator_schema6_constructs_an_earlier_overlap_tree() -> None:
+    for primitive_count in range(2, 6):
+        for seed in range(8):
+            shape, report = ShapeSpec.sample_with_report(
+                seed, primitive_count=primitive_count
+            )
+            assert report.generator_schema == 6
+            assert shape.operations == ("union",) * primitive_count
+            assert shape.connectivity_certificate.source == "connected_union_graph"
+            assert all(
+                shape._primitive_star_certificate(index)
+                for index in range(primitive_count)
+            )
+            for index in range(1, primitive_count):
+                center = np.asarray(shape.primitive_offsets_m[index])[None, :]
+                assert any(
+                    shape._primitive_perturbed_value(parent, center)[0] < 0.0
+                    for parent in range(index)
+                )
 
 
 def test_tight_continuous_outer_bound_is_conservative_and_no_looser() -> None:

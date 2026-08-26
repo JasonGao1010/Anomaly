@@ -35,7 +35,7 @@ WORLD_FORMAT = "ajae-world-v2"
 CALIBRATION_FORMAT = "ajae-sensor-calibration-v4"
 DEVELOPMENT_FORMAT = "ajae-development-worlds-v2"
 DEVELOPMENT_PROTOCOL_SCHEMA = 30
-PROCEDURAL_GENERATOR_SCHEMA = 5
+PROCEDURAL_GENERATOR_SCHEMA = 6
 GATE1_EVIDENCE_KEYS = (
     "ray_slot_audit",
     "range_image_round_trip",
@@ -1773,21 +1773,32 @@ class ShapeSpec:
             yaws = [float(rng.uniform(-math.pi, math.pi))]
             operations = ["union"]
             for _primitive in range(1, count):
-                operation = str(
-                    rng.choice(
-                        ("union", "difference", "intersection"), p=(0.65, 0.2, 0.15)
-                    )
-                )
+                parent = int(rng.integers(0, _primitive))
+                axis = int(rng.integers(0, 3))
+                sign = -1.0 if int(rng.integers(0, 2)) == 0 else 1.0
+                fraction = float(rng.uniform(0.10, 0.50))
                 scale = base * rng.uniform(0.32, 0.78, size=3)
-                if operation == "difference":
-                    offset = base * rng.uniform(-0.35, 0.35, size=3)
+                direction = np.zeros(3, dtype=np.float64)
+                parent_yaw = yaws[parent]
+                if axis == 0:
+                    direction[:2] = (math.cos(parent_yaw), math.sin(parent_yaw))
+                elif axis == 1:
+                    direction[:2] = (-math.sin(parent_yaw), math.cos(parent_yaw))
                 else:
-                    offset = base * rng.uniform(-0.55, 0.55, size=3)
+                    direction[2] = 1.0
+                # The new center stays strictly inside its parent even under
+                # the maximum qualified surface displacement.
+                offset = np.asarray(offsets[parent]) + (
+                    sign
+                    * fraction
+                    * scales[parent][axis]
+                    * direction
+                )
                 scales.append(tuple(map(float, scale)))
                 offsets.append(tuple(map(float, offset)))
                 exponents.append(tuple(map(float, rng.uniform(0.5, 1.8, size=2))))
                 yaws.append(float(rng.uniform(-math.pi, math.pi)))
-                operations.append(operation)
+                operations.append("union")
             amplitude = float(rng.uniform(0.0, 0.08 * float(base.min())))
             try:
                 result = cls(
@@ -1811,7 +1822,7 @@ class ShapeSpec:
                 result.geometry_report(resolution=31)
                 result.geometry_report(resolution=41)
                 if count == 1:
-                    # Schema 4 preserves the E16-v3 qualified single path.
+                    # Preserve the E16-v3 qualified single-primitive path.
                     lower, upper = result.continuous_bounds(
                         maximum_iterations=80,
                         population_size=10,
@@ -1832,7 +1843,7 @@ class ShapeSpec:
                     )
                     size_lower = certificate.lower_size_m
                     size_upper = float(np.max(upper - lower))
-                    size_definition = "continuous-csg-tight-certified-interval"
+                    size_definition = "continuous-union-tight-certified-interval"
                 if size_upper > maximum:
                     upper_rejections += 1
                     continue
@@ -1873,7 +1884,7 @@ class ShapeSpec:
         primitive_count: int | None = None,
         size_m_range: tuple[float, float] = (0.2, 3.0),
     ) -> "ShapeSpec":
-        """Sample a reproducible connected shape under generator schema 5."""
+        """Sample a reproducible constructively connected schema-6 shape."""
 
         shape, _ = cls.sample_with_report(
             seed,
