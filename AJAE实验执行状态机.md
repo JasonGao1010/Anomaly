@@ -2194,7 +2194,25 @@ PASS 只说明 schema 6 能高效、确定地产生获得构造性连续单实�
 
 **当前状态**
 
-schema 5 已封存；E19-v2 FAIL 与 E19-D3-v2 PASS 永久保留。E19-v3 已预注册并解锁，E20 继续锁定。
+schema 5 已封存；E19-v2 FAIL 与 E19-D3-v2 PASS 永久保留。E19-v3 PASS，E20 解锁但尚未执行。
+
+**E19-v3 正式结果（2026-08-26）**
+
+E19-v3 按预注册协议使用 24 个 CPU 核执行两次完整独立审计，正式裁决为 **PASS**。2,048 次固定调用全部成功，共产生 2,460 个 proposal、接受 2,048 个、因尺寸拒绝 412 个；总体拒绝率为 16.747967479674797%，严格低于冻结的 50%。proposal count 的 median/$Q_{0.90}$/$Q_{0.95}$/$Q_{0.99}$/maximum（`method=higher`）为 1/2/2/3/5，满足 $Q_{0.99}\le8$ 和 maximum $\le64$。
+
+412 个拒绝逐项分解为连续尺寸下界不足 5 个、紧致上界超限 407 个、continuous-disconnected 0 个、continuous-unresolved 0 个、其他几何错误 0 个。默认训练路径和固定 primitive count 2/3/4/5 的拒绝率分别为 14.3096%/16.8831%/20.0000%/19.2429%/20.0000%，各组 $Q_{0.99}$ 分别为 3/3/4/3/3，最大 proposal count 分别为 4/5/4/5/3。
+
+全部 2,048 个 accepted objects 的 operation 均只有 `union`；206 个单 primitive 对象取得 `strict_radial_star_shaped`，1,842 个多 primitive 对象取得 `connected_union_graph`。每个 constituent 的星形证书错误数为 0；每个后续 primitive 均找到索引严格更小的真实内部 parent，树结构、有限性和正余量错误数均为 0，最小实际重叠余量为 0.03412405276314048 m。最终 primitive count 1/2/3/4/5 分别为 206/477/436/458/471，2,048 个规范参数载荷哈希全部唯一。
+
+参数与保守半径、固定 $9\times9\times9$ SDF、resolution 31/41 有界闭合报告、JSON round-trip、连续尺寸复算、generation report 和 proposal 记账错误数全部为 0。接受对象的连续尺寸下界最小值为 0.20032595178697435 m，上界最大值为 2.999446800658856 m，均位于冻结的 $[0.2,3.0]$ m 内。seed 0/501/688 的单 primitive 参数哈希与 schema 5 逐字节一致，确认新 multi-primitive 构造没有改变 E16-v3 单 primitive 随机流。
+
+两遍正式数组逐元素一致，运行哈希均为 `983f3946084ef5b6670afd070fa088d54553667559dbd6e3806fe702da6343db`，摘要哈希为 `11ca663dcfd4bfdce046c0b00934fe1ef1ef46a33b431c4447a63c49c0412bc4`。正式产物 `runs/ajae/e19_v3_schema6_constructive_union.npz` 的 SHA-256 为 `418d79a825ef51b3ec644a36b377f6bcb7c829c39e372806c35613a87f47a277`。独立复算逐项确认数组哈希、摘要哈希、全部门槛和 15 个跨组样本的形状哈希/proposal count。
+
+正式重跑前有一次无科学结果的执行中止：两遍计算完成后，汇总器错误地对字符串数组使用 `equal_nan=True`，触发 NumPy `TypeError`；该次未写产物、未形成裁决。修正仅按 dtype 选择逐元素比较方式，协议、生成器、样本和阈值均未变化，随后从头重跑两遍获得上述结果。
+
+完整测试为 32 passed / 3 failed。3 个失败均由同一已知陈旧输入触发：`dev.json` 仍保存 schema 4 的 arbitrary CSG 固定开发世界，其中一个历史对象在当前连续入口为 `unresolved`；该问题在 schema 5 阶段已经存在，并非 schema-6 生成器回归。主线改版后这些世界也已不再代表正式训练几何分布，不得手工迁移或伪装成合格；它们须在后续开发世界协议重新冻结后由权威生成源整体再生成。
+
+科学结论限定为：**schema 6 能以构造性严格内部重叠树、已资格的 constituent 星形证书和连续双射形变，高效且确定地产生连续单实体异常代理，同时继承原连续尺寸与数值资格。** 该 PASS 不回答形状族是否足够多样、复杂度是否与尺度/材质解耦、开发世界是否合格或异常代理是否能迁移到真实 OOD。E20 现已解锁，但其现有文字只有定性目标，没有可执行的统计量、样本范围和冻结阈值；在重新定义 E20 前停止。
 
 
 ## E20｜形状/尺度/轴比/材质解耦
