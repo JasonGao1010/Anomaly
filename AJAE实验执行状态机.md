@@ -2257,7 +2257,40 @@ E20a 按预注册协议使用 24 个 CPU 核执行两次完整独立审计，正
 
 **当前状态**
 
-E19-v3 PASS；E20a FAIL，永久保留。E20b 与 E21 继续锁定。下一步需要把几何采样分布版本化为新的 generator schema，使扁平、细长和明显不对称区域获得真实支持，同时重新确认 E19-v3 所代表的连续尺寸、构造性连通与效率资格；不得静默覆盖 schema 6。这会改变正式生成分布，因此按停止条件不在本节点直接修改。
+E19-v3 PASS；E20a FAIL，永久保留。E20a-D1 已获批准并解锁；schema 7 尚未设计，E20a-v2、E20b 与 E21 继续锁定。
+
+
+### E20a-D1｜形状支持缺失归因诊断
+
+**唯一问题与只读边界**
+
+E20a-D1 只回答：schema 6 的扁平、细长和明显不对称支持不足，分别主要发生在基础母体轴比、secondary primitive 相对尺度、child center 偏移范围，还是最终表面/全局形变阶段。输入严格限定为 E20a 的 seed 0–8191 和正式产物，不修改 `ShapeSpec.sample_with_report`、参数域、proposal 流、接受规则、E20a 区域边界或最低支持数。通过 seed 只读重放恢复同一对象时，shape hash 与 generation-report hash 必须逐一匹配 E20a；不得另采“类似对象”。
+
+**固定的五阶段几何分解**
+
+对每个对象构造仅用于诊断、不得进入 generator/cache/training 的五个配对视图。S0 `base_core` 只保留第一个 primitive，取消 surface、bend、twist、taper；同时记录基础半轴排序后的内禀 $r_{21}^{base}$、$r_{31}^{base}$。S1 `centered_union_core` 保留全部实际 primitive 的尺度、指数和 yaw，但把全部 center 共置于原点并取消全部形变，用于观察 secondary primitive 尺度/形状在不含偏心生长时如何改变外包围盒。S2 `offset_union_core` 恢复实际 child center，仍取消全部形变。S3 `surface_union` 在 S2 上只恢复原有低频 surface amplitude/frequency/phase。S4 `final` 为 E20a 已测量的完整原对象，再恢复 bend/twist/taper。operation 始终为原来的 union；不得引入 difference、intersection、新形变或超出已实现参数域的假想数值。
+
+S0–S4 的三轴 span、$D,r_{21},r_{31}$ 继续使用 E20a 的同一连续 AABB 口径。S0 与 S1 在无 surface 且全部中心共置时具有中心对称性，其连续体积不对称性解析记为 0；S2 和 S3 使用与 E20a 相同的 Sobol 不对称性公式，正式计算取 $2^{13}$ 点，固定 seed 0–1023 的嵌套 $2^{15}$ 点严格子审计要求两层差不超过 0.03，最多允许 1% 即 10 个严格子审计对象 unresolved；S4 直接读取 E20a 已资格的描述量，不重新定义。
+
+**实际构造参数恢复**
+
+对每个 child $i$，在全部更早 primitive、其 yaw 旋转后的三个局部主轴和正负方向中恢复唯一 parent/axis/sign/f，使实际 offset 满足 schema-6 构造式。最大向量残差必须不超过 $10^{-12}$ m，且 $0.10\le f<0.50$。secondary relative scale 固定记录为 child 三轴几何平均半尺度除以 base 三轴几何平均半尺度，并报告每个对象的均值和最大值；偏移固定报告 child 的 $f$ 均值和最大值。它们只用于分层关联，不改变任何几何。
+
+**冻结的归因统计与裁决规则**
+
+分别报告基础半轴内禀轴比 B 以及 S0–S4 连续 AABB 的 flat、elongated 支持数，报告 S0–S4 的 asymmetric 支持数，并报告相邻阶段 $\Delta r_{21}$、$\Delta r_{31}$、$\Delta A$ 的 median/$Q_{0.05}$/$Q_{0.95}$。扁平和细长仍逐字继承 E20a 的 $r_{21}/r_{31}$ 边界与 128 支持数。若 B 不足 128，记 `base_aspect_parameter_support_insufficient`；这说明原始母体参数支持不足，但不替代后续 union 的实际外形判断。对连续 AABB，若 S0 达到至少 128 而某个后续阶段首次降到 128 以下，则把该首次丢失阶段记为 support-removal stage；若 S0 不足 128，同时报告后续阶段是否曾独立恢复到 128；若各阶段始终不足，则另记 `continuous_shape_support_insufficient_throughout`，不得强行把后续联合效应归给单一阶段。
+
+不对称性仍继承 E20a 的 $A\ge0.15$ 与 128 支持数。S1 的解析 $A=0$ 是共中心反事实基线；若 S2 仍低于 128，则正式归因为 `realized_offset_scale_union_insufficient_before_deformation`；若 S2 达到 128、但 S3 或 S4 首次降到 128 以下，则记录对应的 surface 或 global-deformation suppression；若 S2 低于 128而 S3/S4 恢复到至少 128，则记录对应形变阶段提供了缺失支持。secondary scale 最大值与最大 $f$ 分别和 S2 的 $A,r_{31}$ 计算 Spearman 秩相关，按 primitive count 2–5 分层并报告合并值；$|\rho|\ge0.20$ 只记为关联信号。若只有一个因素在至少 3/4 个 count 组达到该条件，记为该因素的较一致关联；二者都达到则记 joint association；二者都未达到则记 association-unresolved。该标签不得写成因果结论。
+
+D1 的 PASS 只要求：8,192 个对象身份全部恢复；parent/f 恢复无错误；全部阶段连续描述量有限；严格 Sobol 子审计满足上述收敛界；全部预定义归因统计可计算；两次 24 核完整运行逐元素复现阶段描述量、参数恢复、归因标签、对象哈希和摘要哈希。PASS 表示缺失支持得到可复核的阶段归因，不表示 schema 6 或任何 schema-7 候选已合格。若身份、连续测量或归因可识别性失败，D1 FAIL 并停止，不得据不可靠诊断设计 schema 7。
+
+**状态转移**
+
+D1 PASS 后才允许根据已识别的限制机制预注册 schema 7；不得在 D1 内修改生成器。schema 7 必须继续禁用 difference/intersection、保持 primitive count 1–5 和 $[0.2,3.0]$ m，并在 E20a-v2 前完成 E19-v3-style 连续尺寸、构造性连通、求交、效率与确定性重资格。E20a-v2 原样继承 E20a 全部区域和支持阈值。
+
+**当前状态**
+
+E20a-D1 UNLOCKED；schema 7 NOT YET DESIGNED；E20a-v2、E20b、E21 LOCKED。
 
 
 ## E20b｜几何因素解耦资格
