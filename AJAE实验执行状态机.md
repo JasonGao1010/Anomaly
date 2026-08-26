@@ -2092,6 +2092,43 @@ E19-v2 已按冻结协议使用 24 个 CPU 核执行两次完整独立审计。�
 
 因此 E19-v2 的正式裁决为 **FAIL**。已验证事实是：schema 5 的连续连通接受规则在本次固定审计范围内能够确定性地产生全部获得 `connected` 充分证据的合法对象，且没有误放已识别的非连通或不可识别对象。失败仅发生在预注册生成效率条件，且 87.56%（3,842/4,388）的拒绝来自 `unresolved`，不能据此断言这些候选真实不连通。现有证据支持“当前 proposal distribution 与现有严格连续连通证书可覆盖的接受域失配”，但尚不能唯一判断应调整 difference/intersection 的操作概率、CSG 构造方式，还是继续扩大证书覆盖。按照冻结停止条件，不放宽 50% 或 $Q_{0.99}\le8$，不增加 64 次上限，不进入 E20；下一步需要先重新设计并预注册能够区分 proposal 分布问题与证书覆盖问题的实验。
 
+### E19-D3｜连续连通不可识别候选的归因诊断
+
+**唯一问题与固定样本**
+
+E19-D3 只回答：E19-v2 中全部 3,842 个 `continuous-unresolved` proposal 主要是真实不连通/接近不连通，还是实际连通但 E19-D1-v2 与 E19-D2 的正式证书覆盖不足。D3 不修改 schema 5、proposal distribution、CSG operation 概率、primitive placement、连续尺寸条件、64 次 proposal 上限或 E19-v2 的任何历史结果，E20 保持锁定。
+
+正式对象必须通过 E19-v2 的 2,048 个调用、相同 seed、固定 primitive-count 请求和 NumPy 随机流只读重放。重放须逐调用恢复 E19-v2 产物中的最终对象哈希、proposal count、五类拒绝计数和最终 primitive count，并恢复恰好 3,842 个 unresolved proposal。每个诊断对象记录审计组、seed、proposal occurrence、primitive count、完整 CSG operation sequence、规范化参数载荷哈希和原 `unresolved` 输出。任一身份或计数不一致均使 D3 无效，不得用重新采样的相似对象替代。
+
+**独立诊断器与证据等级**
+
+D3 只读取候选参数与连续隐式函数，不得调用 `continuous_connectivity_certificate`、`_analytic_connectivity_source`、`_implicit_interval`、D1 的 64/128 分类结果或 resolution 25/31/41 体素组件数。独立实现从候选参数重新传播 bend、taper、twist、各 superquadric、顺序 CSG 和低频扰动的向外区间；空间搜索采用自适应八叉细分，只细分隐式区间跨越零或内部见证图尚不能裁决的区域，不以单一固定 voxel resolution 作为真值。
+
+诊断器依次输出以下互斥证据等级：
+
+1. `strict_connected`：只允许来自独立构造的连续充分条件，包括共同核点下所有正集合的严格径向单调交集，或已获证连通宿主与严格正间隔 disjoint/strictly-contained difference cutter 的拓扑保持，再以真实内部重叠路径组合 sequential union；所有不等式必须有向外区间正余量。
+2. `strict_disconnected`：自适应 possible-inside 盒覆盖被已严格证明为对象外部的盒分成至少两个互不接触的区域，每个区域均含真实严格内部见证；只看到多个离散组件不够。
+3. `likely_connected`：没有取得前两类严格证书，但标准层与严格层的独立 Sobol 内部见证图均为单组件；每条图边须由递归线段细分确认连续 SDF 不大于 $-10^{-8}$，对最近潜在瓶颈做局部加密，严格层不得产生新的孤立内部见证或与标准层相反的证据。该等级只用于 D3 归因，不能作为 schema 5 的正式 connected certificate。
+4. `diagnostically_unresolved`：其余全部情形，包括严格层仍有多个未获外部隔离的见证组件、层间证据反转、内部覆盖不足或达到盒/路径预算。
+
+标准层冻结为 $2^{14}$ 个 Sobol 空间见证、每个见证 12 个近邻、线段最大步长 0.01 m、自适应区间最小盒宽 0.01 m；严格层为嵌套的 $2^{16}$ 个见证、16 个近邻、最大步长 0.005 m、最小盒宽 0.005 m。每个对象每层最多处理 250,000 个区间盒和 250,000 条候选路径边；达到预算只能输出 `diagnostically_unresolved`。Sobol 序列、候选顺序、近邻并列裁决和细分顺序均确定性固定。
+
+**诊断器资格与反例保护**
+
+正式归因前，诊断器先审计至少 24 个不读取 D1/D2 标签的解析构造：球、强轴比椭球、一般 exponent superquadric、严格相交与严格分离的双球、0.05 m 窄桥、0.05 m 窄间隙、内部空腔、贯穿切割、非空凸 intersection、空 intersection、pure union、difference、intersection 与混合顺序 CSG，并覆盖非零 bend/twist/taper 和低频扰动。解析真值相反误判必须为 0；`strict_connected` 与 `strict_disconnected` 必须各有至少 4 个资格场景；已知 connected 场景不得输出 `strict_disconnected`，已知 disconnected 场景不得输出 `strict_connected` 或 `likely_connected`；标准到严格层不得发生相反 identified 反转。另以每个 fixture 的 $2^{18}$ 个独立 probes 检查区间 enclosure，不得出现反例。资格失败则不运行 3,842 个正式对象并停止修改诊断器设计。
+
+**固定分层、汇总与分叉**
+
+正式结果分别报告 `pure_union`、`difference_only`、`intersection_only`、`difference_and_intersection`，并在 primitive count 2/3/4/5 内交叉分层；每层报告对象数、四种证据等级、盒/路径预算触发数和标准/严格层变化。由于 E19-D2 已覆盖纯 union，若重放仍出现 pure-union unresolved，必须单独列为身份或正式证书覆盖异常，不能并入其他 CSG 类型解释。
+
+D3 的方向性三类固定为：`connected_but_uncertified = strict_connected + likely_connected`，`strict_disconnected`，以及 `diagnostically_unresolved`。“主要”在运行前冻结为占全部 3,842 个对象严格超过 50%。若 `connected_but_uncertified` 严格过半，归因为证书覆盖不足，下一步只能另行资格 difference/intersection/混合 CSG 的严格充分条件，不修改 proposal distribution；若 `strict_disconnected` 严格过半，归因为 proposal distribution mismatch，下一步才可版本化修改 CSG operation/placement 构造；若两者均未过半，或 `diagnostically_unresolved` 不低于 50%，则诊断能力仍不足，保持 schema 5 与 E20 不变并停止。即使 `likely_connected` 使第一类过半，也只能决定研究方向，不能直接放行这些对象。
+
+两次完整 24 核运行必须逐元素复现 3,842 个对象身份、四级分类、标准/严格统计、预算状态和哈希。E19-D3 是归因诊断，不以某一方向为预期 PASS，也不得据此覆盖 E19-v2 的永久 FAIL。
+
+**当前状态**
+
+E19-v2 FAIL，永久保留；E19-D3 已完成预注册并解锁。schema 5 不变，E20 继续锁定。
+
 
 ## E20｜形状/尺度/轴比/材质解耦
 
