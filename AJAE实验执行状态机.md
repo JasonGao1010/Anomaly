@@ -2127,23 +2127,26 @@ D3 的方向性三类固定为：`connected_but_uncertified = strict_connected +
 
 **当前状态**
 
-E19-v2 FAIL，永久保留；E19-D3 PASS，归因方向为 `certificate_coverage`。schema 5 不变，E20 继续锁定。
+E19-v2 FAIL，永久保留；E19-D3-v1 FAIL，永久保留；E19-D3-v2 已完成重跑前修订并解锁。schema 5 不变，E20 继续锁定。
 
-**正式结果（2026-08-26）**
+**E19-D3-v1 执行结果与失效边界（2026-08-26）**
 
-E19-D3 已按冻结协议使用 24 个 CPU 核完成两次完整只读重放与独立诊断。诊断器的 24 个资格场景中，真值相反误判为 0，区间 enclosure 独立 probe 反例为 0，14 个场景取得 `strict_connected`、7 个场景取得 `strict_disconnected`；0.05 m 窄间隙获得严格不连通证书，混合 union/intersection 连通场景仅获得 `likely_connected`，没有冒充严格证书。资格条件全部成立。
+E19-D3-v1 正式裁决为 **FAIL — protocol implementation defect**。只读重放身份部分有效：E19-v2 的 2,048 个调用逐项复现最终对象哈希、proposal count、五类拒绝计数和 primitive count，身份错误为 0；每个调用恢复的 unresolved occurrence 数与父产物逐行一致，最终恰好恢复 3,842 个唯一对象，pure-union unresolved 为 0。两次执行也逐元素复现。
 
-父实验身份恢复完全通过：E19-v2 的 2,048 个调用均逐项复现最终对象哈希、proposal count、五类拒绝计数和 primitive count，身份错误为 0；每个调用恢复的 unresolved occurrence 数与父产物逐行一致，最终恰好恢复 3,842 个对象。全部 `(call index, proposal occurrence, payload hash)` 与 payload hash 均唯一；pure-union unresolved 为 0，没有发现 E19-D2 覆盖或重放异常。
+但诊断器未完整实现预注册证据：其一，严格不连通只细分候选分隔平面的二维区域，没有构造三维 possible-inside 自适应八叉覆盖；其二，`likely_connected` 图边只检查了最大步长约束下的离散 SDF 点，没有以向外区间上界证明相邻采样点之间整段位于 $F\le-10^{-8}$；其三，部分资格场景的严格内部重叠只使用浮点点值负余量，没有形成向外区间余量。因此资格统计与 3,579 个 `likely_connected` 分类均不满足冻结语义，不得用于 `certificate_coverage` 分叉，也不得进入论文证据或生成器接受规则。
 
-四级结果为：`strict_connected=0`、`likely_connected=3,579`、`strict_disconnected=0`、`diagnostically_unresolved=263`。因此 `connected_but_uncertified=3,579/3,842=93.15460697553357%`，严格超过预注册的 50% 多数线，固定分叉裁决为 **`certificate_coverage`**。这不是对 3,579 个对象的严格连通证明；它只表示标准层与严格层的独立内部见证图均稳定为单组件，且独立诊断未获得严格不连通证据。它足以决定下一项研究方向，但不得用于 schema 5 正式放行。
+E19-D3-v1 的探索性输出为 `likely_connected=3,579`、`diagnostically_unresolved=263`，运行哈希均为 `315ad92576b591a6fe503da16f6b34fcecf07781fea4a388ecfe8eff6b5bf2e4`，原摘要哈希为 `aa55e376a606922f483a8d22b5c7aa9f773b70b8872dc9a3efdca0096da605b4`。该输出必须保留在历史位置并明确标为失效探索，不得写成 E19-D3 PASS。
 
-263 个诊断未知对象可分解为：55 个严格层没有内部见证；89 个标准/严格层未共同收敛为一个组件；119 个严格层仍有多个见证组件并启动独立区间平面隔离，但没有一个取得严格外部隔离证书。没有对象触及 250,000 条路径边预算或 250,000 个区间盒预算，因此未知状态不是计算预算截断造成。
+**E19-D3-v2｜预注册语义一致的归因重跑**
 
-按 CSG 类型，difference-only 为 1,819 个，其中 1,772 个 likely connected（97.42%）；intersection-only 为 1,252 个，其中 1,163 个（92.89%）；difference+intersection 混合为 771 个，其中 644 个（83.53%）。按 primitive count，count 2/3/4/5 分别为 335/677/1,188/1,642 个，likely connected 分别为 327/645/1,105/1,502 个，即 97.61%/95.27%/93.01%/91.47%。复杂度增加时诊断未知比例上升，但每个层级仍以 likely connected 为绝对多数。
+v2 不修改 D3 已冻结的样本、四级分类、两层 Sobol 数量、近邻数、线段最大步长、最小区间盒宽、每对象预算、解析资格、50% 多数分叉或两次复现要求，只修正实现与预注册语义的不一致：
 
-两次完整运行逐元素一致，运行哈希均为 `315ad92576b591a6fe503da16f6b34fcecf07781fea4a388ecfe8eff6b5bf2e4`；摘要哈希为 `aa55e376a606922f483a8d22b5c7aa9f773b70b8872dc9a3efdca0096da605b4`。正式产物 `runs/ajae/e19_d3_unresolved_attribution.npz` 的 SHA-256 为 `d86f2ebae407cab597a1b4a938699d6cb4b83ca967f7d638a89334e2cff0d35d`。
+1. 每条 likely 图边必须把相邻离散步之间的线段包入轴对齐盒，并由独立向外区间计算得到 $F_{upper}\le-10^{-8}$；任何一个子段不能证明即不得连边。
+2. strict disconnected 必须从包含所有可能对象点的三维自适应八叉叶盒覆盖出发；只丢弃 $F_{lower}>0$ 的严格外部盒，按闭包接触保守连接剩余叶盒。只有至少两个互不连通的 possible-inside 覆盖分量各含严格内部见证时才发证。二维空平面可作为诊断线索，但不得单独决定严格分类。
+3. strict connected 的点或重叠见证必须使用独立区间在退化盒上得到严格负上界；单 primitive/凸 intersection/连续全局双射等解析条件仍须满足原连续充分条件。仅有浮点点值或采样路径不得发严格证书。
+4. 24 个资格场景重新从零运行；v1 的资格结果不能继承。只有 v2 资格全部满足后才允许再次诊断同一 3,842 个对象。
 
-E19-D3 的科学结论限定为：**E19-v2 的效率失败主要表现为当前严格证书无法覆盖在两个独立数值层级均呈单连通见证图的 difference/intersection 候选，而不是已获得证据的大量真实不连通。** 下一步不得修改 proposal distribution；只能先另行设计并资格 difference、intersection 和混合 sequential CSG 的严格连续连通充分条件。若新证书资格成功，才可形成后续 schema 5 接受审计修订；本次 D3 自身的 `likely_connected` 不得直接接入生成器。E19-v2 的历史 FAIL 保持不变，E20 继续锁定。
+v2 PASS/归因后才按原多数分叉决定扩展严格证书、修改 proposal distribution 或继续提高诊断能力。当前不得依据 v1 的 93.15% 探索比例作方向决策，schema 5 与 E20 均保持不变。
 
 
 ## E20｜形状/尺度/轴比/材质解耦
