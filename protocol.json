@@ -702,10 +702,10 @@
         }
       },
       "integrated_generator_schema7": {
-        "status": "IMPLEMENTED AND FROZEN; not yet qualified for formal training",
+        "status": "QUALIFIED by E18b-v4 and E19-v4; current formal generator",
         "generator_schema": 7,
         "supersedes_implementation_schema": 6,
-        "scientific_status": "E18b-v3 FAIL remains permanent, E18b-v4 PASS, and E19-v4 remains required before schema 7 is qualified",
+        "scientific_status": "E18b-v3 FAIL remains permanent; E18b-v4 PASS and E19-v4 PASS qualify schema 7 for the current formal generator domain; geometry coverage remains E20a-v2",
         "only_changes": ["replace the schema-6 base-axis sampler with the E20a-D2A four-family sampler", "replace embedded child-centre placement with the E20a-D2B construction-time shared-witness placement", "upgrade generator and cache identity from 6 to 7", "record shape family and authoritative overlap-tree evidence in ShapeGenerationReport"],
         "base_aspect": {
           "overall_half_scale": "unchanged U[minimum/2,maximum/2]; the longest intrinsic half-axis equals this draw",
@@ -740,14 +740,14 @@
           "nonstale_regression": "34 passed, 3 deselected",
           "excluded_historical_inputs": "the three existing dev.json qualification failures remain unchanged and are already recorded under the E19-v3/E57 boundary; stale evidence is not migrated"
         },
-        "scale_risk_deferred_to_E19_v4": "minimum half-axis rejection and integrated size/efficiency effects are not preemptively removed",
+        "scale_risk_resolved_by_E19_v4": "minimum-half-axis and integrated-size rejections occur but remain within the unchanged qualified efficiency limits",
         "visual_review_forbidden_before_E20a_v2_PASS": true,
         "criteria_frozen": true
       },
       "schema7_requalification_chain": {
-        "status": "schema 7 is IMPLEMENTED AND FROZEN; E18b-v3 FAIL remains permanent; E18b-v4 PASS; E19-v4 is UNLOCKED",
-        "formal_generator_before_qualification": 6,
-        "candidate_generator": 7,
+        "status": "schema 7 QUALIFIED; E18b-v3 FAIL remains permanent; E18b-v4 PASS; E19-v4 PASS; E20a-v2 UNLOCKED",
+        "historical_formal_generator_before_qualification": 6,
+        "qualified_generator": 7,
         "E18b-v3": {
           "status": "FAIL; permanent first formal result",
           "question": "Does the E18b-v2 qualified intersection implementation remain correct on the thin, elongated, and eccentric schema-7 candidate domain?",
@@ -884,7 +884,7 @@
           }
         },
         "E19-v4": {
-          "status": "EXECUTION FROZEN; first formal run not yet started",
+          "status": "PASS",
           "question": "Does the integrated schema-7 generator deterministically and efficiently produce valid one-through-five-primitive connected-union shapes under the unchanged continuous-size, connectivity, and proposal limits?",
           "generator_schema": 7,
           "calls": 2048,
@@ -909,9 +909,34 @@
           "runner_sha256": "7f452f4fd2b7ea1ea9fc86025a769f59d1e4d078ce59e91c1ead4b19bb5adfb6",
           "planned_artifact": "runs/ajae/e19_v4_schema7_generator.npz",
           "forbidden": ["modifying schema 7, its proposal stream, the intersection implementation, or any inherited threshold", "using voxel topology as the connectivity definition", "post-hoc replacement of an actual parent or witness", "running E20a-v2 or visualizing shapes before this experiment passes"],
-          "criteria_frozen_before_formal_run": true
+          "criteria_frozen_before_formal_run": true,
+          "formal_result": {
+            "date": "2026-08-27",
+            "protocol_commit": "048675c39198a33f091de45e5f7745e31b9bc6cf",
+            "passed": true,
+            "calls_accepted": 2048,
+            "total_proposals": 2810,
+            "rejections": 762,
+            "rejection_rate": 0.2711743772241993,
+            "proposal_count_median_q90_q95_q99_higher_maximum": [1, 2, 3, 4, 7],
+            "rejection_counts": {"too_small": 6, "tight_upper_too_large": 699, "primitive_half_scale_domain": 57, "constituent_star": 0, "shared_witness": 0, "overlap_tree": 0, "connectivity_disconnected": 0, "connectivity_unresolved": 0, "nonfinite": 0, "other": 0},
+            "correctness_failure_count": 0,
+            "accepted_primitive_counts_1_to_5": [245, 489, 435, 444, 435],
+            "accepted_family_counts_general_blocky_flat_elongated": [818, 368, 434, 428],
+            "continuous_size_lower_minimum_m": 0.20983809599022316,
+            "continuous_size_upper_maximum_m": 2.998239771240387,
+            "minimum_authoritative_witness_margin_m": 0.003434259447993994,
+            "unique_shape_hashes": 2048,
+            "connectivity_source_counts": {"strict_radial_star_shaped": 245, "connected_union_graph": 1803},
+            "independent_run_seconds": [202.0665953480002, 209.74226902100054],
+            "run_hashes": ["318306d79812b1ca1c1b5699bb07950bc1936deefd9b3717f745f67c74356898", "318306d79812b1ca1c1b5699bb07950bc1936deefd9b3717f745f67c74356898"],
+            "summary_hash": "7d5dac79650ab0b1401c2ac11859b469805d5f4ac2808d4eac887d7ac46146f9",
+            "artifact": "runs/ajae/e19_v4_schema7_generator.npz",
+            "artifact_bytes": 160631,
+            "artifact_sha256": "f9fc5a4cba4105df28064fddf3d87cd7a0d8207e7c660e2fbf8f74d03061c5a3"
+          }
         },
-        "E20a-v2": "inherit all E20a sample identities, descriptors, coverage regions, and minimum support thresholds without change"
+        "E20a-v2": {"status": "UNLOCKED", "rule": "inherit all E20a sample identities, descriptors, coverage regions, and minimum support thresholds without change"}
       },
       "schema7_blinded_geometry_review": {
         "version": "E20-V1",

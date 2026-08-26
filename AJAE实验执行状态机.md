@@ -2445,6 +2445,18 @@ E19-v4 继承 E19-v3 的 2,048 次调用、两遍复现和效率门槛：proposa
 
 若正确性与效率均 PASS，则 schema 7 正式取得生成资格并解锁 E20a-v2。若任一正确性条件 FAIL，立即停止。若正确性 PASS 但效率 FAIL，则停止并仅依据已保存的拒绝归因决定后续诊断；不得移动 3 m、64 proposal、四族轴比、偏心构造或既有效率门槛。冻结 `src/render.py` SHA-256 为 `ccdddb12b96104360deb245dabffcf8449c9e568c70dd7202cdc3e850b5413d9`，renderer/generator identity 为 `791ed731effe2b3b9c3b3d9c2af6959c7487c769eeaaff62c6feeeb647a611ee`，运行器 SHA-256 为 `7f452f4fd2b7ea1ea9fc86025a769f59d1e4d078ce59e91c1ead4b19bb5adfb6`，预定产物为 `runs/ajae/e19_v4_schema7_generator.npz`。E19-v4 现为 **EXECUTION FROZEN**；E20a-v2 与人工可视化继续锁定。
 
+**E19-v4 正式结果：PASS**
+
+E19-v4 在预注册提交 `048675c39198a33f091de45e5f7745e31b9bc6cf` 后按冻结顺序完成两遍 24 进程审计，两遍分别用时 202.0665953480002 s 和 209.74226902100054 s。2,048/2,048 次调用均在 64 proposal 内产生接受对象；共执行 2,810 个 proposal，其中接受 2,048、拒绝 762，总拒绝率为 0.2711743772241993。proposal count 的 median/$Q_{0.90}$/$Q_{0.95}$/$Q_{0.99}$（higher）/maximum 为 1/2/3/4/7，严格通过原冻结的 $<50\%$、$Q_{0.99}\le8$、maximum $\le64$ 三项效率条件。
+
+全部接受对象的连续尺寸、outer bound、constituent 星形证书、实际共同 witness、earlier-parent tree、连续连通来源、union-only 操作、有限参数、bound radius、固定 $9\times9\times9$ SDF、resolution 31/41 有界闭合报告、JSON/对象哈希往返、生成报告计数和 cache identity 均通过，正确性失败数为 0。245 个单 primitive 使用 `strict_radial_star_shaped`，1,803 个多 primitive 使用 `connected_union_graph`；2,048 个对象哈希全部唯一。接受对象连续 lower size 最小值为 0.20983809599022316 m，continuous upper size 最大值为 2.998239771240387 m。多 primitive 的最差权威共同内部 margin 为 0.003434259447993994 m，仍严格大于 0；该最小值是描述统计，不产生新门槛。
+
+762 次拒绝由 699 次 tight continuous upper bound 超过 3 m、6 次连续 lower size 小于 0.2 m，以及 57 次 primitive half-scale 不在权威实现的 $(0.02,5]$ m 域构成。后 57 次在冻结产物中原始聚合为 `other_geometry`，独立展开的消息全部精确为 `primitive half-scales must lie in (0.02, 5] metres`；不存在 constituent star、shared witness、overlap tree、continuous disconnected/unresolved、非有限值或其他未知拒绝。拒绝率随候选 primitive count 1–5 分别为 0.0160643/0.2176/0.277409/0.322137/0.359352，仍未触及整体效率 FAIL。该事实说明极端轴比与偏心多部件确实增加尺寸/域拒绝，但当前原 proposal distribution 仍能在冻结效率界内稳定生成合法对象，因此不需要修改采样分布。
+
+接受对象 primitive count 1–5 分别为 245/489/435/444/435；general/blocky/flat/elongated family 分别为 818/368/434/428。两遍逐元素哈希均为 `318306d79812b1ca1c1b5699bb07950bc1936deefd9b3717f745f67c74356898`，摘要哈希为 `7d5dac79650ab0b1401c2ac11859b469805d5f4ac2808d4eac887d7ac46146f9`。正式产物 `runs/ajae/e19_v4_schema7_generator.npz` 为 160,631 bytes，SHA-256 为 `f9fc5a4cba4105df28064fddf3d87cd7a0d8207e7c660e2fbf8f74d03061c5a3`；独立只读复核确认产物含 2,048 个调用、2,810 个 proposal event、全部正确性值为真、来源哈希与 cache identity 均与冻结值一致。
+
+E19-v4 PASS 资格确认的是 schema 7 在当前 2,048 次审计中的连续尺寸、构造性连通、数值合法性、确定性和生成效率。它不说明 flat/elongated/asymmetric 等最终几何区域已经达到 E20a 的覆盖要求，也不构成视觉质量证据。schema 7 现成为当前正式 generator，E20a-v2 解锁；E20-V1、E20b 与 E21 继续锁定，且在 E20a-v2 PASS 前仍禁止人工可视化。
+
 
 ### E20-V1｜盲法人工几何审查（LOCKED）
 
