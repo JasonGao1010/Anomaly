@@ -743,11 +743,11 @@
         "criteria_frozen": true
       },
       "schema7_requalification_chain": {
-        "status": "schema 7 is IMPLEMENTED AND FROZEN; E18b-v3 is UNLOCKED, E19-v4 remains LOCKED",
+        "status": "schema 7 is IMPLEMENTED AND FROZEN; E18b-v3 FAIL is permanent; E19-v4 remains LOCKED pending a versioned nearest-root fix and requalification",
         "formal_generator_before_qualification": 6,
         "candidate_generator": 7,
         "E18b-v3": {
-          "status": "EXECUTION FROZEN; ready for first formal run",
+          "status": "FAIL; permanent first formal result",
           "question": "Does the E18b-v2 qualified intersection implementation remain correct on the thin, elongated, and eccentric schema-7 candidate domain?",
           "objects": 96,
           "selection": {
@@ -794,7 +794,39 @@
             "artifact": "runs/ajae/e18b_v3_schema7_intersection.npz"
           },
           "forbidden": ["modifying schema 7", "substituting any selected seed", "expanding the seed range", "changing ray identities", "increasing tested steps", "deleting a failing ray or object", "visualizing objects before E20a-v2 PASS", "running E19-v4 before E18b-v3 PASS"],
-          "criteria_frozen_before_first_formal_run": true
+          "criteria_frozen_before_first_formal_run": true,
+          "formal_result": {
+            "date": "2026-08-27",
+            "passed": false,
+            "protocol_commit": "d081a88dd07b22b2477cc280e7942415e454c4df",
+            "objects": 96,
+            "total_rays": 24576,
+            "reference_qualified": true,
+            "reference_failures": 0,
+            "reference_unidentifiable": 0,
+            "reference_hits": 7347,
+            "reference_misses": 17229,
+            "minimum_per_object_reference_hits": 55,
+            "minimum_per_object_reference_misses": 152,
+            "hit_miss_disagreements": 0,
+            "nearest_hit_distance_failures": 2,
+            "differentiable_normal_angle_failures": 2,
+            "distance_error_median_q95_q99_maximum_m": [2.5258138025563426e-08, 8.79765455152892e-08, 1.1052797859179009e-07, 0.1478146181030362],
+            "surface_residual_median_q95_q99_maximum_m": [1.2610632603264615e-08, 5.955021342495892e-08, 8.978028502583737e-08, 1.5476118687734932e-07],
+            "maximum_normal_unit_error": 3.3306690738754696e-16,
+            "maximum_differentiable_normal_angle_deg": 50.66131476843063,
+            "outward_failures": 0,
+            "miss_contract_pass": true,
+            "failed_rays": [{"object": "elongated-seed-99", "ray_index": 36, "reference_root_m": 4.3844959571405315, "tested_root_m": 4.4852485680520235, "error_m": 0.10075261091149201, "first_chord_width_m": 0.006489475452047699, "coarse_spacing_m": 0.04275932923087434}, {"object": "eccentric_multi_primitive-seed-15", "ray_index": 68, "reference_root_m": 3.7124355859608693, "tested_root_m": 3.8602502040639055, "error_m": 0.1478146181030362, "first_chord_width_m": 0.02761501535529831, "coarse_spacing_m": 0.04082466504344694}],
+            "root_cause": "the E18b-v2 adaptive search is restricted to rays with no coarse hit; when a narrow first inside segment is missed but a later wide segment has a coarse hit, the earlier positive intervals are not refined and intersect returns the later surface",
+            "independent_run_seconds": [8.98214685899984, 9.461855233001188],
+            "run_hashes": ["0e608d4074f8b9f495b1a4e1e7cc3cb7ba5accc67235d460e04197ad625a929f", "0e608d4074f8b9f495b1a4e1e7cc3cb7ba5accc67235d460e04197ad625a929f"],
+            "summary_hash": "3fac245f379ae7946424085fbd7d0c0985db6f6ac36773958c9af80bddaf8810",
+            "artifact": "runs/ajae/e18b_v3_schema7_intersection.npz",
+            "artifact_bytes": 1594438,
+            "artifact_sha256": "be5ec66e825fc66aec0ddc2bb676d7e3e374f0e4a270d1ef4a6f8d81954c6d20",
+            "runner_sha256": "b478946d6d77ab0995ce2882db7e7e4cc506099f0140c1c4562a3d3c3f511867"
+          }
         },
         "E19-v4": {"calls": 2048, "independent_runs": 2, "inherits": ["continuous size", "constituent star certificate", "shared witness", "overlap tree", "JSON round-trip", "finite values", "generation report", "cache schema identity"], "efficiency": {"rejection_rate": "<0.50", "proposal_count_q99_method_higher": "<=8", "proposal_count_maximum": "<=64"}},
         "E20a-v2": "inherit all E20a sample identities, descriptors, coverage regions, and minimum support thresholds without change"

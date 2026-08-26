@@ -2383,7 +2383,7 @@ E20a-D2B 在权威提交 `c5898de` 下使用 24 个 CPU 进程执行两次完整
 D2B PASS 只资格偏心共同内部见证机制。D2A 与 D2B 两个局部零件现均合格，schema 7 集成与冻结现已解锁；本轮不实施 schema 7。E18b-v3 仍须等 schema 7 实装并冻结后才能执行，E19-v4、E20a-v2、E20-V1、E20b 和 E21 继续锁定。
 
 
-### schema 7 集成（IMPLEMENTED AND FROZEN）；E18b-v3（UNLOCKED）；E19-v4（LOCKED）
+### schema 7 集成（IMPLEMENTED AND FROZEN）；E18b-v3（FAIL）；E19-v4（LOCKED）
 
 D2A、D2B 均 PASS 后才允许冻结并直接修改正式 generator 为 schema 7。schema 7 继续限定 1–5 个强制共同见证的 union primitive，保持 $[0.2,3.0]$ m、既有连续形变以及 difference/intersection 禁用；schema identity 必须进入 generation report、manifest 和 cache identity。资格完成前，schema 6 仍是当前正式版本，schema 7 只能称为候选。
 
@@ -2393,7 +2393,7 @@ schema 7 已在不形成科学 PASS 的前提下完成集成并冻结。唯一�
 
 总体 half-scale、primitive count、secondary scale、root/secondary exponent、yaw、surface、bend/twist/taper、union-only、连续尺寸 $[0.2,3.0]$ m、连续尺寸证书、64 proposal 及 difference/intersection 禁用均保持不变。旧 schema-6 三轴因子和内嵌 fraction 的主流随机数仍按原位置消费但不再决定几何，使其后的未修改字段保留原主流抽样位置。D2A family/ratio/轴排列逐字段沿用已资格确认的 `SeedSequence([seed, stream_id])`，因此同一对象 seed 在 proposal 重试间保持内禀 family/ratio/轴角色；D2B $\tau_p/\tau_c$ 另按 seed、字段编号、proposal 和 child index 分离。低频表面扰动在共同见证构造前按原分布抽取，child translation 与其全局坐标 phase 通过单一标量根联合求解，禁止事后替换 parent 或 witness。
 
-该记录只说明权威代码、报告和 cache identity 已集成为一个冻结候选，不说明 schema 7 已通过求交、尺寸、效率、确定性或覆盖资格。极端轴比引起的最小半轴拒绝和与偏心生长耦合后的尺寸/效率风险不提前消除，留给 E19-v4 暴露。当前唯一解锁的科学实验变为 E18b-v3；E19-v4 及其后节点继续锁定，人工可视化仍禁止。
+该记录只说明权威代码、报告和 cache identity 已集成为一个冻结候选，不说明 schema 7 已通过求交、尺寸、效率、确定性或覆盖资格。极端轴比引起的最小半轴拒绝和与偏心生长耦合后的尺寸/效率风险不提前消除，留给 E19-v4 暴露。E18b-v3 已正式 FAIL；E19-v4 及其后节点继续锁定，人工可视化仍禁止。
 
 集成实现核验中，D2A 冻结流在 seed 0–4095 上重现 general/blocky/flat/elongated = 1,647/846/809/794。schema 7 定向测试为 5 passed、32 deselected；排除已明确过期 `dev.json` 证据的回归为 34 passed、3 deselected。`src/render.py` SHA-256 为 `53f7037ffd9f10135dd6bade1904d7c77b51e4b8481c174027c0e36be00ff377`，由 schema 7 与该源码哈希形成的 renderer/generator identity 为 `ea868183f1e982c8fa8e3fd959eced32d121e58f0b1daac8876f5409cc5a83d4`。原 E19-v3/E57 边界下的三项过期开发世界失败保持不变，未被迁移或冒充为当前证据。
 
@@ -2410,6 +2410,14 @@ E18b-v3 针对 schema 7 扩展的薄、长和偏心几何域审计求交：固�
 独立参考只调用连续 `signed_distance`：在保守球正向区间用 4,097/16,385 节点分别建立标准/严格参考，首个 outside-to-inside 变号区间用 `brentq(xtol=1e-12,rtol=1e-14)` 精化。两参考 hit/miss 必须完全一致，共同 hit 根差 $<5\times10^{-5}$ m；严格层无变号且最小 $|\mathrm{SDF}|\le10^{-7}$ m 标记 `reference_unidentifiable`，总比例必须 $<0.5\%$。每对象至少 16 reference hit 与 16 reference miss。当前全部裁决继承 E18b-v2：hit/miss 零不一致，最大距离误差 $\le10^{-4}$ m，surface residual $\le10^{-5}$ m，单位法向误差 $\le10^{-12}$，可微法向角 $\le0.1^\circ$，miss 必须返回 $+\infty$ 与零法向，全部 hit 必须外向，两次 24 进程完整运行逐元素一致。
 
 该冻结不修改 `render.py`、schema 7、被测 `steps`、对象或射线。正式结果前禁止替换 seed、扩大扫描范围、删除失败射线、执行 E19-v4 或可视化对象。E18b-v3 现为 **EXECUTION FROZEN**，可执行首次正式运行；E19-v4 仍锁定。
+
+**E18b-v3 正式结果：FAIL（永久保留）**
+
+在协议提交 `d081a88dd07b22b2477cc280e7942415e454c4df` 后，使用冻结运行器和 24 个 CPU 进程执行两次完整审计。96 个对象、24,576 条射线的对象/射线 identity 均与 execution freeze 一致。两遍分别用时 8.98214685899984 s 和 9.461855233001188 s，逐元素哈希均为 `0e608d4074f8b9f495b1a4e1e7cc3cb7ba5accc67235d460e04197ad625a929f`。标准/严格参考失败与 `reference_unidentifiable` 均为 0，可裁决 reference hit/miss 为 7,347/17,229，每对象最少为 55/152，参考资格 PASS。
+
+被测实现 hit/miss 分类不一致为 0，surface residual maximum 为 $1.547612\times10^{-7}$ m，法向单位长度最大误差为 $3.331\times10^{-16}$，miss 契约、外向性和两遍复现全部通过。但两条共同 hit 返回了错误的较晚交点：`elongated-seed-99/ray-36` 的参考/被测距离为 4.3844959571405315/4.4852485680520235 m，误差 0.10075261091149201 m；`eccentric_multi_primitive-seed-15/ray-68` 为 3.7124355859608693/3.8602502040639055 m，误差 0.1478146181030362 m。距离误差 median/$Q_{0.95}$/$Q_{0.99}$/maximum 为 $2.526\times10^{-8}$/$8.798\times10^{-8}$/$1.105\times10^{-7}$/0.1478146181030362 m，违反最大 $10^{-4}$ m 冻结界；两点的可微法向角也因对应不同表面而违反 $0.1^\circ$。因此 E18b-v3 正式裁决为 FAIL，E19-v4 继续锁定。
+
+独立高密度反查确认，两条射线的第一段真实内部弦宽仅为 0.006489475452047699 m 和 0.02761501535529831 m，对应 96 点粗网格间距为 0.04275932923087434 m 和 0.04082466504344694 m；同一射线后方又存在粗网格能观测的宽内部段。当前 E18b-v2 自适应搜索只对“粗网格整条射线没有 hit”的 ray 启动；一旦后方宽段已提供粗 hit，前方正值区间不再细分，最近窄交段因而被跳过。该 FAIL 定位的是 `ShapeSpec.intersect` 最近根搜索范围缺陷，不是 schema 7 尺寸、连通或生成分布失败。正式产物 `runs/ajae/e18b_v3_schema7_intersection.npz` 为 1,594,438 bytes，SHA-256 为 `be5ec66e825fc66aec0ddc2bb676d7e3e374f0e4a270d1ef4a6f8d81954c6d20`，摘要哈希为 `3fac245f379ae7946424085fbd7d0c0985db6f6ac36773958c9af80bddaf8810`。
 
 E19-v4 继承 E19-v3 的 2,048 次调用、两遍复现和效率门槛：proposal rejection rate $<50\%$、$Q_{0.99}$（higher）$\le8$、maximum $\le64$；另须逐项检查连续尺寸、constituent 星形证书、共同见证、overlap tree、JSON 往返、数值有限、生成报告和 cache schema identity。E18b-v3 与 E19-v4 都 PASS 后才解锁 E20a-v2；E20a-v2 原样继承 E20a 的 8,192 个对象、区域定义和最低支持数。
 
