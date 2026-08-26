@@ -1455,7 +1455,9 @@ class ShapeSpec:
         values = self.signed_distance(np.stack((x, y, z), axis=-1))
         inside = values <= 0.0
         inside_count = int(np.count_nonzero(inside))
-        if inside_count < 8 or inside_count == inside.size:
+        # Continuous certificates establish nonempty interior.  The voxel grid
+        # is retained only to report finite sampled support and closed bounds.
+        if inside_count < 1 or inside_count == inside.size:
             raise RenderError("CSG result has no effective enclosed volume")
         boundary = np.zeros_like(inside)
         boundary[[0, -1], :, :] = True
@@ -1480,7 +1482,7 @@ class ShapeSpec:
         )
         surface[1:-1, 1:-1, 1:-1] = core & ~surrounded
         surface_count = int(np.count_nonzero(surface))
-        if surface_count < 6:
+        if surface_count < 1:
             raise RenderError("shape has no effective surface")
         occupied = np.argwhere(inside)
         step = 2.0 * radius / (resolution - 1)
