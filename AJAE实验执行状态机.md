@@ -2164,6 +2164,38 @@ E19-D3-v2 正式裁决为 **PASS，归因方向为 certificate coverage 不足**
 
 E19-D3-v2 PASS；归因方向已确定为扩展 difference/intersection/混合 CSG 的严格连续连通充分条件。proposal distribution、schema 5 和 E19-v2 结果均保持不变。下一项实验需要在运行前重新设计并冻结可进入正式 generator 的廉价严格证书；这会改变资格方法，因此当前停止，E20 继续锁定。
 
+### E19-v3｜schema-6 构造性连通异常生成器资格
+
+**主线修订与历史边界**
+
+E19-D3-v2 已确认 schema 5 的主要效率瓶颈是 arbitrary difference/intersection/混合 CSG 的严格连通证书覆盖不足。继续扩展一般 CSG 证书不再是第一版 AJAE 的必要科学问题。经用户批准，schema 5 至此结束：E19-v2 的 correctness PASS / efficiency FAIL 和 E19-D3-v2 的归因 PASS 均永久保留，但不得继续作为正式训练生成器。未预注册、未运行的 E19-D4 类证书补丁分支取消，不记录 FAIL。
+
+schema 6 将正式训练几何族改为 $1$–$5$ 个一般 superquadric 的构造性连通 union，并保留已资格的 bend、twist、taper 与低频表面扰动。difference 和 intersection 从训练 proposal distribution 删除；`ShapeSpec` 对它们的通用表达、历史产物读取和 E18b 回归能力不删除。这个改动正式修订《AJAE新主线方案》2.3–2.4 节，不改变 AJAE 网络、STU、规范射线、renderer、normal-control、五帧输入、基线或后续门限。
+
+**冻结的构造性重叠规则**
+
+第一个 primitive 保持居中。对第 $i>0$ 个 primitive，从已有 $0,\ldots,i-1$ 中均匀抽取一个 parent，再均匀抽取 parent 的一个局部主轴和正负方向，抽取 $f\sim U[0.10,0.50)$，把新 primitive 中心放在 parent 中心沿该主轴距离 $f$ 倍 parent 对应半轴的位置；局部 $x/y$ 主轴按 parent yaw 旋转，$z$ 轴保持不变。新 primitive 的尺度仍为 base 各轴乘 $U[0.32,0.78)$，指数仍取 $U[0.5,1.8)$，yaw 仍取 $U[-\pi,\pi)$；第一个 primitive、总体尺寸、轴比、primitive count 及全部全局形变参数沿用原参数域。单 primitive 随机流必须与 schema 5 完全一致。
+
+设 parent 最小半轴为 $m_p$，低频扰动最大幅度为 $A$。当前冻结参数域给出 $A\le0.25m_p$，而新中心处 parent 的未扰动隐式值为 $-(1-f)m_p$；由于 $f<0.50$，加入最坏扰动后仍严格小于 $-0.25m_p<0$。新中心也是新 primitive 自身中心，其扰动隐式值同样严格为负。因此每次新增都获得一个解析保证的真实内部交叠见证，新节点连接到一个已有节点，最终 overlap graph 构造性连通。每个 constituent 仍必须通过 E19-D2 的 `strict_radial_star_shaped` 条件；bend/twist/taper 只使用 E19-D2 已验证的连续双射域，所以形变后连通性保持。
+
+**继承的资格与禁止项**
+
+单 primitive 尺寸继续逐项继承 E16-v3 的 `continuous_bounds`；multi-primitive union 继续使用 E18a-A 的真实边界弦下界和 E18a-D2-v2 的 256 层紧致保守上界，接受区间保持 $[0.2,3.0]$ m。E18b-v2 的权威 `ShapeSpec.intersect`、有界/闭合/有限检查、64 个 proposal 上限和 renderer/generator cache identity 均继承。禁止 seed 特判、改变尺寸范围、把离散 mesh 尺寸恢复为资格真值、把 `likely_connected` 当正式证书、添加未经资格的局部或多尺度形变，或在本节点用临时多样性分数替代 E20。
+
+**固定审计与 PASS 条件**
+
+正式审计完全继承 E19-v2 的 2,048 次调用：默认训练路径 seed 0–1023，以及固定 primitive count 2/3/4/5 各 seed 0–255。每个调用最多 64 个 proposal，并完整记录每个被拒绝 proposal 的尺寸上下界与其他几何原因。两次完整运行使用 24 个 CPU 进程并要求逐元素一致。
+
+全部 2,048 次调用必须成功；所有 proposal 和 accepted object 的 operation 必须只有 `union`，connectivity disconnected/unresolved rejection 必须均为 0。每个 accepted constituent 必须取得严格径向星形证书；每个 $i>0$ 的中心必须严格位于至少一个更早 primitive 内部，所形成的有向早期交叠边必须覆盖全部节点；最终证书必须为单 primitive 的 `strict_radial_star_shaped` 或多 primitive 的 `connected_union_graph`。参数、保守半径、固定 $9\times9\times9$ SDF、有界/闭合报告、JSON round-trip、连续尺寸证书和 generation report 错误数均须为 0。
+
+效率条件不因更换生成算法而移动，继续使用 E18a-B/E19-v2 运行前已冻结的：总体 proposal 拒绝率严格小于 50%，proposal count 的 $Q_{0.99}$（`method=higher`）不超过 8，maximum 不超过 64。报告各 primitive count 的提议数、拒绝原因、拒绝率和 proposal count 分位数。两次运行须复现全部对象参数、构造性见证、尺寸、报告、拒绝计数、哈希和摘要。
+
+PASS 只说明 schema 6 能高效、确定地产生获得构造性连续单实体证明且满足既有尺寸/数值条件的训练异常代理，随后解锁 E20；它不证明新几何族已经足够丰富、与尺度/材质解耦或能迁移到真实 OOD，这些问题仍由 E20 及后续门独立回答。FAIL 时保留结果：构造或正确性 FAIL 则修 schema-6 实现后版本化重跑；正确性 PASS 但原效率条件 FAIL，则停止并重新判断新的尺寸 proposal 是否需要调整，不得直接移动阈值。
+
+**当前状态**
+
+schema 5 已封存；E19-v2 FAIL 与 E19-D3-v2 PASS 永久保留。E19-v3 已预注册并解锁，E20 继续锁定。
+
 
 ## E20｜形状/尺度/轴比/材质解耦
 

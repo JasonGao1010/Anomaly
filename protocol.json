@@ -362,7 +362,7 @@
     "anomaly_proxies": {
       "count_range": [0, 9], "primitive_count_range": [1, 5],
       "size_m_range": [0.2, 3.0],
-      "training_mechanisms": ["superquadric", "CSG", "bend", "twist", "taper", "low_frequency_surface"],
+      "training_mechanisms": ["superquadric", "constructive_overlap_union", "bend", "twist", "taper", "low_frequency_surface"],
       "held_out_mechanism": "torus_SDF",
       "primitive_finite_bounded_audit": {
         "version": "E16-v1",
@@ -481,6 +481,37 @@
         "generator_identity": "schema 5 must enter the experiment manifest and renderer/generator cache identity together with the render.py source hash",
         "forbidden": ["seed-specific rejection", "changing the proposal parameter distribution", "shrinking the requested size range", "using resolution-31 or resolution-41 diameter for acceptance", "treating a conservative certificate rejection as proof that the actual geometry is invalid"],
         "failure_tolerance": 0,
+        "criteria_frozen_before_formal_run": true
+      },
+      "constructively_connected_generator": {
+        "version": "E19-v3",
+        "amends": "E19-v2 FAIL and E19-D3-v2 PASS remain permanent; schema 5 arbitrary CSG ends and schema 6 restricts the formal training generator to constructively overlapping unions",
+        "question": "Does generator schema 6 deterministically and efficiently generate one-through-five-primitive anomaly proxies whose connectedness follows from strict constituent star-shaped certificates, an explicit earlier-parent interior-overlap tree, and qualified global diffeomorphic deformation?",
+        "generator_schema": 6,
+        "superseded_generator_schema": 5,
+        "training_operations": ["union"],
+        "historical_shape_support": "ShapeSpec retains difference and intersection only for historical artifacts, regression fixtures, and non-training diagnostics",
+        "constructive_overlap": {
+          "parent": "uniform integer from existing primitive indices [0,i)",
+          "principal_axis": "uniform integer in [0,3), interpreted in the parent's yaw-rotated local frame",
+          "sign": "uniform from {-1,+1}",
+          "fraction": "uniform in [0.10,0.50)",
+          "new_center": "parent center plus sign*fraction*parent principal half-axis",
+          "strict_witness": "the new center must be strictly inside both the parent perturbed primitive and the new perturbed primitive",
+          "proof_bound": "surface amplitude A <= 0.25*parent minimum half-scale and fraction < 0.50 imply parent value < -0.25*minimum half-scale at the witness"
+        },
+        "unchanged_parameter_domains": ["primitive count 1 through 5", "base scale and axis-ratio sampling", "secondary scale multiplier U[0.32,0.78)", "first and secondary exponent ranges", "yaw ranges", "bend", "twist", "taper", "low-frequency surface amplitude/frequency/phase", "requested continuous size [0.2,3.0] m"],
+        "single_primitive_random_stream": "bitwise unchanged from schema 5",
+        "connectivity_acceptance": "every constituent has E19-D2 strict_radial_star_shaped evidence; every later center has a strict overlap edge to an earlier constituent; one primitive uses strict_radial_star_shaped and multiple primitives use connected_union_graph",
+        "single_primitive_size": "unchanged E16-v3 continuous_bounds",
+        "multi_primitive_size": "unchanged E18a-A boundary-chord lower bound plus E18a-D2-v2 256-slab tight conservative upper bound",
+        "candidate_limit_per_seed": 64,
+        "audit_groups": [{"name": "default-training-path", "primitive_count": "sampled 1 through 5", "seeds": [0,1023]}, {"name": "fixed-count-2", "primitive_count": 2, "seeds": [0,255]}, {"name": "fixed-count-3", "primitive_count": 3, "seeds": [0,255]}, {"name": "fixed-count-4", "primitive_count": 4, "seeds": [0,255]}, {"name": "fixed-count-5", "primitive_count": 5, "seeds": [0,255]}],
+        "pass_conditions": ["all 2048 audited calls return an accepted geometry within 64 proposals", "every proposal and accepted operation is union", "connectivity disconnected and unresolved rejection counts are both zero", "every accepted constituent has strict radial star-shaped evidence", "every later primitive center is strictly inside at least one earlier primitive and these earlier-overlap edges cover every node", "every accepted connectivity source is strict_radial_star_shaped or connected_union_graph", "all inherited size, finite parameter, conservative radius, 9x9x9 SDF, bounded, closed, JSON round-trip, report-accounting, and cache-identity checks pass", "two independent complete runs reproduce every parameter, witness, certificate, rejection statistic, hash, and summary bitwise exactly"],
+        "efficiency_pass_conditions": ["overall rejection rate per proposal is below 0.50", "99th percentile proposal count with method=higher is at most 8", "maximum proposal count is at most 64"],
+        "interpretation_limit": "PASS qualifies constructive connectedness, inherited continuous size, numerical validity, efficiency, and determinism only. Shape diversity and factorization remain E20; downstream synthetic and real-OOD utility remain later gates.",
+        "forbidden": ["seed-specific rejection", "difference or intersection in the formal training proposal stream", "changing the [0.2,3.0] metre interval", "using voxel diameter as continuous size", "accepting likely_connected as a formal certificate", "adding unqualified local or multiscale deformation", "moving inherited efficiency thresholds"],
+        "generator_identity": "schema 6 enters experiment manifests and renderer/generator cache identity together with the render.py source hash",
         "criteria_frozen_before_formal_run": true
       }
     },
