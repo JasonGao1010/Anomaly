@@ -2036,7 +2036,17 @@ PASS → E19-D2 证书可以作为 E19-v2 的 primitive-level connected 充分�
 
 **当前状态**
 
-E19-D1-v2 PASS；E19-D2 已完成预注册并解锁。E19-v2、E20 继续锁定。
+E19-D1-v2 PASS；E19-D2 PASS，E19-v2 解锁。E20 继续锁定。
+
+**正式结果**
+
+- 20 个一般轴比/exponent、非零低频扰动解析正例全部取得 `strict_radial_star_shaped` 证书，中心内部、严格正下界和证书发放失败数均为 0；15 个 0.999/临界/1.001 边界对象全部按冻结严格比较正确发证或拒发，边界发证错误数为 0；
+- 每个正例的 $2^{15}$ 个方向、17 个半径均未发现实际解析径向导数低于理论下界；中心差分反例数为 0，最大中心差分误差为 $1.1882\times10^{-9}$；
+- bend/twist/taper forward/inverse 最大往返误差为 $8.8818\times10^{-16}$ m，严格低于 $10^{-10}$ m；4 个纯 union 连通/断开手工场景的交叠图证书全部正确，false connected certificate 为 0；
+- schema 4 首次 proposal coverage 诊断中，单 primitive 为 1,024/1,024 获证；1,024 个 multi proposal 的 3,584/3,584 个 constituent primitive 均获证；其中 394 个 pure-union proposal 全部满足所有 constituent 获证且交叠图连通，最终 pure-union connected-certificate coverage 为 394/394。该 coverage 未进入 PASS 门槛，也未用于修改分布；
+- 两次完整 24 核运行逐元素一致，运行哈希均为 `170303efef5b83ea265a84e5665284c93e5ee9081644364b7414c91dc28f9aa4`，摘要哈希为 `eedffc9965947b30189ff09e4ad7895d94e7695f6d7d2cced4a4a29cbd62b9dc`；产物 `runs/ajae/e19_d2_star_connectivity.npz` 的 SHA-256 为 `718625fdd3ac566b7ba90ab9e8f08bbe410491b37387d7b2584c11ffdecd429f`。
+
+科学结论限定为：**在当前 schema 4 参数域内，一般扰动 superquadric 可以由严格径向下界证明为星形；多个已获证 primitive 的纯 union 可以由真实内部交叠图证明连通。** D2 不资格 difference 或一般 intersection，也不证明完整 generator 的拒绝率与效率；后者由 E19-v2 独立验证。
 
 
 ## E20｜形状/尺度/轴比/材质解耦
