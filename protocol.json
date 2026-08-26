@@ -593,6 +593,8 @@
         },
         "geometry_measurement": {
           "aabb_and_axis_ratios": "identical continuous-AABB definitions and flat/elongated thresholds from E20a at every S stage",
+          "single_primitive_counterfactual_solver": {"objective": "unchanged E16-v3 continuous surface AABB optimization", "maximum_iterations": 160, "population_size": 15, "safety_margin_m": 1e-6, "reason": "uniform convergence budget for D1 counterfactual stages; validated against 240/15 on all observed 80/10 failures and fixed controls before the formal rerun"},
+          "multi_primitive_counterfactual_solver": "unchanged fixed-256-slab tight conservative continuous outer AABB",
           "analytic_asymmetry": "S0 and S1 are centrally symmetric and have A=0",
           "S2_S3_standard_points": 8192,
           "S2_S3_strict_points": 32768,
