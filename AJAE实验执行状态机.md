@@ -2148,6 +2148,22 @@ v2 不修改 D3 已冻结的样本、四级分类、两层 Sobol 数量、近邻
 
 v2 PASS/归因后才按原多数分叉决定扩展严格证书、修改 proposal distribution 或继续提高诊断能力。当前不得依据 v1 的 93.15% 探索比例作方向决策，schema 5 与 E20 均保持不变。
 
+**E19-D3-v2 执行结果（2026-08-26）**
+
+E19-D3-v2 正式裁决为 **PASS，归因方向为 certificate coverage 不足**。诊断器先在 24 个独立解析构造上重新取得资格：真值相反误判为 0，$2^{18}$ 独立探针的区间包围反例为 0，12 个场景取得 `strict_connected` 证书，8 个场景取得 `strict_disconnected` 证书；其中 0.05 m 窄间隙场景在 175,153 个三维自适应区间盒内取得严格不连通证书，未触发 250,000 盒预算。
+
+对 E19-v2 的 2,048 个历史调用进行只读重放后，最终对象哈希、proposal count、五类拒绝计数、请求 primitive count 和 seed 的逐调用身份错误均为 0。每个调用恢复的 unresolved 数与父产物逐行一致，共恢复 3,842 个唯一的历史 proposal；没有 pure-union unresolved。正式四级分类为：`strict_connected=0`、`likely_connected=3,532`、`strict_disconnected=5`、`diagnostically_unresolved=305`。因此 `connected_but_uncertified=3,532/3,842=91.93128578865173%`，严格超过预注册的 50% 多数界；严格不连通为 0.1301405517959396%，诊断仍不可识别为 7.938573659552317%。95 个对象触发区间盒预算，全部保守保留为 `diagnostically_unresolved`，没有因预算耗尽获得 connected 或 disconnected 结论。
+
+按 CSG 操作分层，`difference_only` 为 1,782/1,819 likely connected、37 unresolved、0 strict disconnected；`intersection_only` 为 1,133/1,252 likely connected、118 unresolved、1 strict disconnected；`difference_and_intersection` 为 617/771 likely connected、150 unresolved、4 strict disconnected。按 primitive count 分层，count 2/3/4/5 的 likely-connected 数分别为 330/643/1,090/1,469，对应总数分别为 335/677/1,188/1,642；严格不连通只出现在 count 4 的 2 个和 count 5 的 3 个对象中。混合 difference/intersection 和较高 primitive count 的不可识别比例更高，但三个 CSG 分层均仍以 likely connected 为绝对多数。
+
+两次从头运行逐元素复现全部对象身份、分类、两层组件数、内部见证数、路径边数、区间盒数和预算标志；两次数组哈希均为 `8b1e17ce25d6ffc0595b177236c7fadfb6c86f3378f629de744fdef07bc18c4e`，摘要哈希为 `acf3dc628086813d151c81d33e90a6fbbcdf50b339059f8e8861d740a216e484`。正式产物为 `runs/ajae/e19_d3_v2_unresolved_attribution.npz`，文件 SHA-256 为 `5fd3182e34ff4e36bc9868787ffa6d381bb280065515acb44158430f368de115`。
+
+该结果排除了“多数 E19-v2 unresolved 已被严格证明为真实不连通”这一解释，并支持“difference/intersection/混合 CSG 的现有正式充分条件覆盖不足”作为生成效率失败的主因。这里的 3,532 个 `likely_connected` 仍只是独立双层连续路径诊断，不是正式连通充分证书，不得据此放行对象、回写 E19-v2、修改 50%/$Q_{0.99}\le8$ 效率标准或宣称 schema 5 已合格。E19-v2 的历史 FAIL 与 E19-D3-v1 的实现缺陷 FAIL 均永久保留。
+
+**当前状态**
+
+E19-D3-v2 PASS；归因方向已确定为扩展 difference/intersection/混合 CSG 的严格连续连通充分条件。proposal distribution、schema 5 和 E19-v2 结果均保持不变。下一项实验需要在运行前重新设计并冻结可进入正式 generator 的廉价严格证书；这会改变资格方法，因此当前停止，E20 继续锁定。
+
 
 ## E20｜形状/尺度/轴比/材质解耦
 
