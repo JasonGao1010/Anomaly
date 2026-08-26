@@ -11,6 +11,7 @@
 5. **任何会改变科学方法的修改都会使其下游实验失效。** 文中 FAIL 路径会明确指出需要回滚到哪个最早节点。
 6. **PASS 不等于“效果很好”。** 对机械/资格实验，PASS 只表示该局部事实已被验证；对 B1/B3/B4 等科学实验，PASS 才对应相应科学主张。
 7. **所有实验必须保存最小证据包：** command、resolved config、git commit、seed（若有）、输入数据 identity/hash、输出 artifact、日志、判定脚本与最终 PASS/FAIL。
+8. **人工可视化审查同样必须预注册。** 查看图像前必须冻结样本身份与抽样规则、相机与视角、物理尺度、光照、背景、点大小或色标、问题、审查者数量、盲法、随机化和裁决标准；禁止手工挑选案例。原始个人评分、随机化顺序与解盲密钥必须进入证据包。可视化不得覆盖自动实验的 FAIL；因可视化而修改方法后，被查看样本只属于开发证据。正式可视化不得读取 19 条公开真实异常或 51 条隐藏测试；201 只作为开发来源，19 仍须等方法完全冻结后一次性使用。
 
 ## 1. 实验执行架构图
 
@@ -74,7 +75,13 @@ flowchart TB
     E18A["E18a 多 primitive / CSG 连续尺寸资格"]
     E18B["E18b CSG 与连续形变求交稳定性"]
     E19["E19 单连通实体拒绝"]
-    E20A["E20a schema-6 几何覆盖"]
+    E20A["E20a schema-6 几何覆盖（历史 FAIL）"]
+    E20D2A["E20a-D2A 基础轴比采样器资格"]
+    E20D2B["E20a-D2B 偏心共同见证构造资格"]
+    E18BV3["E18b-v3 schema-7 新域求交资格"]
+    E19V4["E19-v4 schema-7 生成器资格"]
+    E20AV2["E20a-v2 schema-7 几何覆盖"]
+    E20V1["E20-V1 盲法人工几何审查"]
     E20B["E20b 几何因素解耦"]
     E21["E21 局部支撑平面估计"]
     E22["E22 悬空与埋地检查"]
@@ -82,18 +89,26 @@ flowchart TB
     E24["E24 插入实体相互碰撞"]
     E25["E25 正常控制语义放置"]
     E26["E26 完整世界规格确定性"]
+    E26V1["E26-V1 放置场景人工审查"]
     E16 --> E17
     E17 --> E18A
     E18A --> E18B
     E18B --> E19
     E19 --> E20A
-    E20A --> E20B
+    E20A -. "FAIL 后归因" .-> E20D2A
+    E20D2A --> E20D2B
+    E20D2B --> E18BV3
+    E18BV3 --> E19V4
+    E19V4 --> E20AV2
+    E20AV2 --> E20V1
+    E20V1 --> E20B
     E20B --> E21
     E21 --> E22
     E22 --> E23
     E23 --> E24
     E24 --> E25
     E25 --> E26
+    E26 --> E26V1
   end
   subgraph P3["Phase 3｜第一回波反事实渲染机械链"]
     E27["E27 normal-control 几何命中"]
@@ -127,6 +142,7 @@ flowchart TB
     E43["E43 连续帧可见点数变化"]
     E44["E44 遮挡率分布"]
     E45["E45 三方严格匹配审计集"]
+    E45V1["E45-V1 人眼来源指纹盲辨"]
     E46["E46 真实正常 vs 渲染正常来源分类"]
     E47["E47 来源指纹归因消融"]
     E48["E48 normal-control vs anomaly-proxy 难度分类"]
@@ -138,7 +154,8 @@ flowchart TB
     E42 --> E43
     E43 --> E44
     E44 --> E45
-    E45 --> E46
+    E45 --> E45V1
+    E45V1 --> E46
     E46 --> E47
     E47 --> E48
     E48 --> E49
@@ -223,9 +240,11 @@ flowchart TB
     E86["E86 真实重叠点身份与 m_p 覆盖"]
     E87["E87 B4 融合评估"]
     E88["E88 B4 vs B3"]
+    E88V1["E88-V1 模型输出可视化诊断"]
     E85 --> E86
     E86 --> E87
     E87 --> E88
+    E88 --> E88V1
   end
   subgraph P11["Phase 11｜机制、安全、对象尺度与因果消融"]
     E89["E89 实体内部得分方差"]
@@ -264,7 +283,7 @@ flowchart TB
   end
   E07 --> E08
   E15 --> E16
-  E26 --> E27
+  E26V1 --> E27
   E37 --> E38
   E49 --> E50
   E56 --> E57
@@ -272,7 +291,7 @@ flowchart TB
   E71 --> E72
   E77 --> E78
   E84 --> E85
-  E88 --> E89
+  E88V1 --> E89
   E94 --> E95
   E98 --> E99
   E46 -. "FAIL:定位来源指纹" .-> E47
@@ -2308,7 +2327,56 @@ E20a-D1 使用 24 个 CPU 进程对 E20a 的 seed 0–8191 做了两次完整独
 
 **当前状态**
 
-E19-v3 PASS；E20a FAIL 永久保留；E20a-D1 PASS。schema 7 设计现已解锁但尚未冻结；E20a-v2、E20b 与 E21 继续锁定。
+E19-v3 PASS；E20a FAIL 永久保留；E20a-D1 PASS。直接实现完整 schema 7 的权限撤回；先独立资格基础轴比采样和偏心共同见证构造。当前仅 E20a-D2A 解锁；E20a-D2B、schema 7、E18b-v3、E19-v4、E20a-v2、E20-V1、E20b 与 E21 均锁定。
+
+
+### E20a-D2A｜基础轴比采样器资格
+
+**目的 / 唯一问题**
+
+资格一个仅供 schema 7 候选使用的基础母体轴比采样机制：它能否不依赖 union、surface、bend、twist 或 taper，明确产生 general、blocky、flat 和 elongated 四类内禀形状，同时不把内部类别绑定到总体尺度、primitive count、exponent、deformation seed 或固定空间轴。
+
+**运行前冻结的采样定义**
+
+对 seed 0–4095 使用按字段分离的确定性 `SeedSequence([seed, stream_id])`。stream id 固定为：family=2001、ratio=2002、axis permutation=2003、overall scale=2004、primitive count=2005、exponent=2006、deformation seed=2007、yaw=2008。family 的区间概率固定为 general/blocky/flat/elongated = 0.40/0.20/0.20/0.20。排序半轴写作 $(1,r_{21},r_{31})$：
+
+- general：逐项抽取 schema 6 的普通相对轴因子 $U[0.65,1.25]$，排序后除以最大值；
+- blocky：$r_{31}\sim U[0.75,1]$，$r_{21}\sim U[r_{31},1]$；
+- flat：$r_{21}\sim U[0.75,1]$，$r_{31}\sim U[0.20,0.40]$；
+- elongated：$r_{21}\sim U[0.30,0.50]$，$r_{31}\sim U[0.15,\min(0.40,r_{21})]$。
+
+六种轴排列等概率抽取。exponent 独立抽取两项 $U[0.55,1.65]$；primitive count 独立均匀抽取 1–5；deformation seed 独立抽取 uint64；yaw 独立抽取 $U[-\pi,\pi]$。总体目标直径独立抽取 $U[0.2,3.0]$ m，但 D2A **只记录而不应用**：审计 primitive 的最长半轴固定为 1 m。这样 D2A 测量的是无量纲轴比采样，不让最小物理尺度、`ShapeSpec` 的半轴下限或最终尺寸接受规则混入该构念。总体尺度如何映射到极端轴比几何，必须在 schema 7 正式冻结时另行定义并由 E19-v4 验证。
+
+审计对象只含单 primitive、union operation、零 offset、零 surface/bend/twist/taper。内部 `shape_family` 只进入生成报告，不进入 AJAE 输入或监督标签。禁止修改 `render.py`、正式 generator、proposal stream 或 cache identity。
+
+**审计与 PASS 条件**
+
+两次完整运行各审计 4,096 个基础 primitive，并使用 24 个 CPU 进程。四族计数必须逐项等于上述冻结 family 流；所有参数有限且满足各自支持域；六种轴排列均来自冻结 permutation 流；全部对象必须由现有连续连通性判定器取得 `strict_radial_star_shaped` 证书。通过反事实更换 family stream 或 overall-scale stream，验证其他独立字段的随机值逐元素不变；相关性统计只能作诊断，不能替代结构性随机流隔离。禁止通过增大任何形变补偿轴比。两次运行的字段数组、证书、对象哈希、摘要哈希必须逐元素一致。
+
+PASS 只资格基础轴比采样器并解锁 E20a-D2B；它不生成多 primitive 对象、不说明最终 E20a 区域已经覆盖、不把 schema 7 变成正式 generator，也不改变当前已资格的 schema 6。
+
+
+### E20a-D2B｜偏心共同见证构造资格（LOCKED）
+
+D2B 只回答：child 能否向 parent 外部生长，同时由构造公式预先给出位于双方严格内部的共同见证。对 parent 局部主轴方向 $u$ 求唯一径向边界 $R_p(u)$，取 $w=o_p+\tau_pR_p(u)u$、$\tau_p\sim U[0.65,0.85)$；对 child 的 $-u$ 方向求 $R_c(-u)$，令 $o_c=w+\tau_cR_c(-u)u$、$\tau_c\sim U[0.55,0.80)$。每条生成边必须保存权威 $w$，且双方连续隐式值具有严格负余量；禁止生成后搜索一个碰巧交叠的点。
+
+D2B 将审计 4,096 个确定性 parent-child 构造和 512 棵 primitive count 2–5 的完整树，覆盖四族交叉、yaw、exponent 与现有低频扰动。PASS 要求全部见证有效、树覆盖所有节点、无非有限值/空交叠/断树且两次逐元素复现。child center 位于 parent 外部的比例只报告，不作为 PASS 门槛；最终不对称性仍由 E20a-v2 裁决。D2A PASS 前不得执行。
+
+
+### schema 7、E18b-v3 与 E19-v4（LOCKED）
+
+D2A、D2B 均 PASS 后才允许冻结并直接修改正式 generator 为 schema 7。schema 7 继续限定 1–5 个强制共同见证的 union primitive，保持 $[0.2,3.0]$ m、既有连续形变以及 difference/intersection 禁用；schema identity 必须进入 generation report、manifest 和 cache identity。资格完成前，schema 6 仍是当前正式版本，schema 7 只能称为候选。
+
+E18b-v3 针对 schema 7 扩展的薄、长和偏心几何域审计求交：固定 96 个对象（flat、elongated、明显不对称 multi-primitive、blocky 各 24），每个 256 条确定性射线；沿用 E18b-v2 的独立高精度参考和全部既有误差界，要求 hit/miss 零错误。它是新参数域的小型回归，不重做 arbitrary CSG 理论资格。
+
+E19-v4 继承 E19-v3 的 2,048 次调用、两遍复现和效率门槛：proposal rejection rate $<50\%$、$Q_{0.99}$（higher）$\le8$、maximum $\le64$；另须逐项检查连续尺寸、constituent 星形证书、共同见证、overlap tree、JSON 往返、数值有限、生成报告和 cache schema identity。E18b-v3 与 E19-v4 都 PASS 后才解锁 E20a-v2；E20a-v2 原样继承 E20a 的 8,192 个对象、区域定义和最低支持数。
+
+
+### E20-V1｜盲法人工几何审查（LOCKED）
+
+E20a-v2 PASS 后、E20b 前，从其 8,192 个对象按哈希确定性抽取 192 个：flat、elongated、blocky、asymmetric、指标边界附近、全分布均匀随机各 32；各组在可行时均衡 single/multi primitive。不得按外观挑 seed。每个对象使用相同物理尺度、相机、光照和背景展示正视、侧视、顶视及统一透视图，不显示 family、seed、指标或 PASS 区域。
+
+至少两名独立审查者回答：是否有尖刺/破面/截断/数值伪影，是否为完整单实体，最接近的形状族，是否明显近似正常 STU 类别，是否存在明显近重复。明显硬缺陷率须 $\le5\%$，完整单实体比例须 $\ge95\%$，四个目标层中至少 $70\%$ 获得与自动分层一致的多数判断，关键二元问题 Cohen's $\kappa\ge0.60$。若 $\kappa<0.60$，结果为 INCONCLUSIVE，修订说明后对同一固定样本重审，不直接判 generator FAIL。“像正常类别”和“近重复”只报告，分别留给 E48 和多样性讨论。E20-V1 不能覆盖 E20a-v2 的自动 FAIL。
 
 
 ## E20b｜几何因素解耦资格
@@ -2464,8 +2532,19 @@ E20b LOCKED until E20a PASS；E21 LOCKED until E20b PASS。
 
 **状态转移**
 
-- PASS → **E27**
+- PASS → **E26-V1**
 - FAIL → **修 world-spec/seed 管理后重跑 E26。**
+
+
+## E26-V1｜放置场景人工审查
+
+**目的 / 唯一问题**
+
+在进入射线渲染机械链前，用盲法检查已自动资格的放置结果是否仍有明显悬空、埋地、碰撞或两类实体不同的放置风格。
+
+**预注册范围与裁决**
+
+从 206 背景按冻结规则生成 160 个场景裁剪，normal-control 与 anomaly-proxy 各 80，并匹配支撑面、距离、尺寸和遮挡条件；不用 201、19 或 51。审查悬空、明显埋地、穿入已观测墙体/车辆/其他实体、朝向违背支撑面，以及两组放置风格差异。两组硬缺陷率分别须 $\le5\%$，总缺陷率差须 $\le10$ 个百分点。失败回到 E21–E25 中与缺陷直接对应的节点；PASS 才解锁 E27。具体样本 identity、相机、评分表与审查者必须在生成首张正式图前写入证据包。
 
 
 
@@ -2926,8 +3005,19 @@ proxy/control 可见点数完全分离。
 
 **状态转移**
 
-- PASS → **E46**
+- PASS → **E45-V1**
 - FAIL → **改进匹配策略后重跑 E45。**
+
+
+## E45-V1｜人眼来源指纹盲辨
+
+**目的 / 唯一问题**
+
+在机器来源分类前，检查人眼能否从严格匹配的局部点云中轻易识别真实正常与渲染 normal-control 的来源。
+
+**预注册范围与裁决**
+
+从 E45 的 201 匹配集构造 400 个双选任务，一侧为真实正常局部点云，另一侧为渲染 normal-control；左右随机且不显示来源、标签、seed 或统计量，视角、点大小和 intensity 色标一致。至少两名独立审查者；pooled 正确率须严格低于 $60\%$，任一审查者须不高于 $65\%$，同时报告 exact binomial 或 Wilson 区间。失败直接进入 E47；PASS 解锁 E46。该人工节点只补充证据，不能替代 E46，也不能据“人眼难分”推断机器不存在低层捷径。
 
 
 ## E46｜真实正常 vs 渲染正常来源分类
@@ -3976,8 +4066,19 @@ B4≤B3：不支持融合贡献，但不否定 B3 temporal claim。
 
 **状态转移**
 
-- PASS → **E89**
-- FAIL → **PASS→E89；FAIL→记录“fusion unsupported”，最终模型可保留 B3，仍进入 E89。**
+- PASS → **E88-V1**
+- FAIL → **记录“fusion unsupported”，最终模型可保留 B3，仍进入 E88-V1。**
+
+
+## E88-V1｜模型输出可视化诊断
+
+**目的 / 唯一问题**
+
+对预先固定的开发实体检查 B1/B3/B4 点分数面板是否身份正确、可用于观察碎片、边界外溢、moving-normal 高分和融合扩散；不以肉眼优劣代替 E89–E91 的定量裁决。
+
+**预注册范围与裁决**
+
+从 24 条 201 开发世界中按 E59/E60 已冻结的距离、遮挡、$N^{vis}$ 和 $V$ 分层预选 48 个实体，不得依据模型分数选案例。固定展示输入五帧、B1/B3/B4 点分数、moving-normal 区域及 proxy 周围正常背景。PASS 只要求面板完整、各模型输入与点身份一一对应、分层样本无误；不要求 B3 或 B4 肉眼优于 B1。该节点为非阻断的描述性诊断，完成后进入 E89；视觉现象只能形成待由 E89–E91 检验的解释。
 
 
 

@@ -626,9 +626,65 @@
         "forbidden": ["modifying the generator or proposal stream", "sampling replacement objects", "changing E20a thresholds", "introducing imagined parameter values", "treating Spearman association as causation", "using diagnostic counterfactual stages in training or caches"],
         "criteria_frozen_before_formal_run": true
       },
+      "schema7_base_aspect_sampler_qualification": {
+        "version": "E20a-D2A",
+        "status": "UNLOCKED",
+        "question": "Does a dimensionless four-family base-aspect sampler explicitly support general, blocky, flat, and elongated primitives without relying on union or deformation and without coupling the internal family to scale, primitive count, exponent, deformation seed, or a fixed Cartesian axis?",
+        "formal_generator_unchanged": true,
+        "render_py_modification_forbidden": true,
+        "sample": {"seeds": [0, 4095], "base_primitives": 4096, "independent_runs": 2, "cpu_processes": 24},
+        "keyed_streams": {"construction": "numpy SeedSequence([seed, stream_id]) followed by default_rng", "family": 2001, "ratio": 2002, "axis_permutation": 2003, "overall_scale": 2004, "primitive_count": 2005, "exponent": 2006, "deformation_seed": 2007, "yaw": 2008},
+        "families": {
+          "probability_intervals": {"general": "[0.00,0.40)", "blocky": "[0.40,0.60)", "flat": "[0.60,0.80)", "elongated": "[0.80,1.00)"},
+          "general": "draw three iid U[0.65,1.25] schema-6 ordinary relative-axis factors, sort descending, and divide by the maximum",
+          "blocky": "r31~U[0.75,1.00], r21~U[r31,1.00]",
+          "flat": "r21~U[0.75,1.00], r31~U[0.20,0.40]",
+          "elongated": "r21~U[0.30,0.50], r31~U[0.15,min(0.40,r21)]",
+          "ordered_intrinsic_axes": "(1,r21,r31)",
+          "internal_only": "shape_family enters the generation report only and is forbidden from AJAE inputs and supervision labels"
+        },
+        "independent_fields": {"axis_permutation": "uniform over the six permutations", "overall_target_diameter_m": "U[0.2,3.0], recorded but not applied in D2A", "primitive_count": "discrete uniform 1 through 5, recorded but not used", "exponent": "two iid U[0.55,1.65]", "deformation_seed": "independent uint64, recorded but not used", "yaw_rad": "U[-pi,pi]"},
+        "audit_geometry": "one primitive, union operation, zero offset, zero surface/bend/twist/taper, canonical longest half-axis 1 metre",
+        "scale_scope_limit": "D2A qualifies dimensionless aspect sampling only. The independently drawn overall target diameter is not applied, so minimum ShapeSpec half-axis constraints and schema-7 final size acceptance cannot contaminate the aspect-ratio construct; physical-scale mapping must be frozen with schema 7 and requalified by E19-v4.",
+        "independence_checks": ["keyed stream separation by construction", "changing the family stream leaves overall scale, primitive count, exponent, deformation seed, yaw, and permutation elementwise unchanged", "changing the overall-scale stream leaves family, ratios, primitive count, exponent, deformation seed, yaw, and permutation elementwise unchanged"],
+        "pass_conditions": ["family counts equal the frozen family stream exactly", "every value is finite", "every family member satisfies its frozen intrinsic support domain", "all six axis roles follow the frozen permutation stream", "every primitive receives strict_radial_star_shaped evidence from the qualified continuous certifier", "both runs reproduce all fields, certificates, object hashes, counts, and summary hashes elementwise exactly"],
+        "interpretation_limit": "PASS qualifies only the base-aspect sampler and unlocks E20a-D2B. It does not qualify multi-primitive generation, final E20a coverage, physical-scale representability, or schema 7 as a formal generator.",
+        "forbidden": ["modifying render.py or the formal generator", "creating multi-primitive objects", "using union or deformation to recover aspect support", "using shape_family as model input or supervision", "moving E20a final-region thresholds", "treating correlation alone as proof of stream independence"],
+        "criteria_frozen_before_formal_run": true
+      },
+      "schema7_shared_witness_qualification": {
+        "version": "E20a-D2B",
+        "status": "LOCKED until E20a-D2A PASS",
+        "question": "Can a child grow beyond its parent centre domain while an authoritative construction-time witness is strictly inside both continuous primitives?",
+        "construction": {"parent_witness": "w=o_p+tau_p*R_p(u)*u, tau_p~U[0.65,0.85)", "child_center": "o_c=w+tau_c*R_c(-u)*u, tau_c~U[0.55,0.80)", "proof": "w is strictly interior to both constituents", "tree_rule": "each child attaches to an earlier parent through its stored witness"},
+        "planned_audit": {"parent_child_edges": 4096, "complete_trees": 512, "primitive_counts": [2,3,4,5], "crosses": ["general", "blocky", "flat", "elongated"], "independent_runs": 2, "cpu_processes": 24},
+        "planned_pass_conditions": ["every edge stores its authoritative witness", "both continuous implicit values have strict negative margin", "the witness tree covers every node", "no nonfinite value, empty overlap, or broken tree", "two runs reproduce elementwise"],
+        "diagnostic_only": "the fraction of child centres outside the parent is reported but is not a PASS threshold",
+        "forbidden": ["post-hoc overlap-point search", "claiming final asymmetry improvement before E20a-v2"],
+        "criteria_frozen_before_formal_run": true
+      },
+      "schema7_requalification_chain": {
+        "status": "LOCKED until E20a-D2A and E20a-D2B PASS and schema 7 is frozen",
+        "formal_generator_before_qualification": 6,
+        "candidate_generator": 7,
+        "E18b-v3": {"objects": 96, "strata_each": {"flat": 24, "elongated": 24, "asymmetric_multi_primitive": 24, "blocky_control": 24}, "rays_per_object": 256, "reference_and_thresholds": "inherit E18b-v2 exactly", "hit_miss_errors_allowed": 0},
+        "E19-v4": {"calls": 2048, "independent_runs": 2, "inherits": ["continuous size", "constituent star certificate", "shared witness", "overlap tree", "JSON round-trip", "finite values", "generation report", "cache schema identity"], "efficiency": {"rejection_rate": "<0.50", "proposal_count_q99_method_higher": "<=8", "proposal_count_maximum": "<=64"}},
+        "E20a-v2": "inherit all E20a sample identities, descriptors, coverage regions, and minimum support thresholds without change"
+      },
+      "schema7_blinded_geometry_review": {
+        "version": "E20-V1",
+        "status": "LOCKED until E20a-v2 PASS",
+        "sample": {"source": "E20a-v2 8192 objects", "hash_deterministic_total": 192, "strata_each": {"flat": 32, "elongated": 32, "blocky": 32, "asymmetric": 32, "near_metric_boundary": 32, "uniform_full_distribution": 32}, "single_multi_balance": "approximately one half each when feasible"},
+        "display": ["front", "side", "top", "fixed perspective", "same physical scale", "same camera", "same lighting", "same background", "hide family seed metrics and PASS regions"],
+        "reviewers_minimum": 2,
+        "questions": ["hard spikes, broken surface, truncation, or numerical artifact", "complete single entity", "closest geometry family", "obvious resemblance to a normal STU class", "obvious near duplicate"],
+        "pass_conditions": {"hard_defect_rate": "<=0.05", "complete_entity_rate": ">=0.95", "target_stratum_majority_agreement": ">=0.70", "key_binary_cohen_kappa": ">=0.60"},
+        "low_agreement_rule": "kappa below 0.60 is INCONCLUSIVE; clarify instructions and re-review the same fixed sample rather than declaring generator FAIL",
+        "interpretation_limit": "normal-class resemblance and near duplication are reported only; E20-V1 cannot overwrite an automatic E20a-v2 FAIL"
+      },
       "schema6_geometry_factor_decoupling": {
         "version": "E20b",
-        "status": "LOCKED until E20a PASS",
+        "status": "LOCKED until E20a-v2 PASS and E20-V1 completes without FAIL",
         "question": "Do primitive count, continuous size, axis ratios, and deformation strength avoid near-deterministic low-capacity dependencies?",
         "planned_primary_evidence": ["conditional coverage within every primitive-count group", "cross-validated logistic regression and shallow decision-tree predictability"],
         "not_primary": "mutual information",
@@ -740,6 +796,47 @@
     "object_metrics": ["RecallQ", "SQ", "RQ", "UQ", "PQ", "TP", "FP", "FN"],
     "uncertainty_units": ["training_seed", "development_world", "real_anomaly_sequence"],
     "cost_reports": ["latency", "peak_memory", "throughput", "STU_cache_status", "temporal_input_budget"]
+  },
+  "visual_reviews": {
+    "global_discipline": {
+      "freeze_before_viewing": ["sample identities", "sampling rule", "camera and views", "physical scale", "lighting and background", "point size or colour scale", "questions", "reviewer count", "blinding", "randomization", "decision criteria"],
+      "hand_selection_forbidden": true,
+      "evidence": ["raw individual ratings", "randomized order", "unblinding key"],
+      "automatic_fail_cannot_be_overwritten": true,
+      "viewed_samples_become_development_evidence_after_method_change": true,
+      "forbidden_sources": ["public real-anomaly 19 before method freeze", "hidden-test 51 before Gate 4"],
+      "development_source": "train/201 where specified"
+    },
+    "E26-V1": {
+      "status": "LOCKED until E26 PASS",
+      "source": "train/206",
+      "crops": {"normal_control": 80, "anomaly_proxy": 80},
+      "matching": ["support surface", "distance", "size", "occlusion"],
+      "questions": ["floating", "buried", "intersection with observed structures or other entities", "orientation inconsistent with support", "different placement style between groups"],
+      "pass_conditions": {"hard_defect_rate_each_group": "<=0.05", "absolute_group_gap_percentage_points": "<=10"},
+      "failure_route": "return to the causally corresponding E21-E25 node"
+    },
+    "E45-V1": {
+      "status": "LOCKED until E45 PASS",
+      "source": "E45 train/201 matched set",
+      "forced_choice_tasks": 400,
+      "sides": ["real normal local point cloud", "rendered normal-control local point cloud"],
+      "reviewers_minimum": 2,
+      "blinding": ["random left-right position", "hide source, label, seed, and metrics", "identical view, point size, and intensity colour scale"],
+      "pass_conditions": {"pooled_accuracy": "<0.60", "each_reviewer_accuracy": "<=0.65"},
+      "interval": "exact binomial or Wilson",
+      "failure_route": "E47",
+      "interpretation_limit": "supplementary human evidence only; E46 remains the primary machine source-leakage test"
+    },
+    "E88-V1": {
+      "status": "LOCKED until E88 completes",
+      "source": "24 train/201 development worlds",
+      "entities": 48,
+      "selection": "preselected by frozen E59/E60 distance, occlusion, N_vis, and V strata; model-score selection forbidden",
+      "panels": ["five input frames", "B1 point scores", "B3 point scores", "B4 point scores", "moving-normal regions", "normal background around proxies"],
+      "pass_conditions": ["all fixed panels are complete", "point identity is correct", "stratum identity is correct"],
+      "interpretation_limit": "descriptive and non-blocking; no visual-superiority requirement, and E89-E91 remain authoritative"
+    }
   },
   "decision_gates": {
     "gate1": ["ray_slot_audit", "range_image_round_trip", "render_source_leakage", "beam_range_intensity"],
