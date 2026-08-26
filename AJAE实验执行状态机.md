@@ -2397,7 +2397,19 @@ schema 7 已在不形成科学 PASS 的前提下完成集成并冻结。唯一�
 
 集成实现核验中，D2A 冻结流在 seed 0–4095 上重现 general/blocky/flat/elongated = 1,647/846/809/794。schema 7 定向测试为 5 passed、32 deselected；排除已明确过期 `dev.json` 证据的回归为 34 passed、3 deselected。`src/render.py` SHA-256 为 `53f7037ffd9f10135dd6bade1904d7c77b51e4b8481c174027c0e36be00ff377`，由 schema 7 与该源码哈希形成的 renderer/generator identity 为 `ea868183f1e982c8fa8e3fd959eced32d121e58f0b1daac8876f5409cc5a83d4`。原 E19-v3/E57 边界下的三项过期开发世界失败保持不变，未被迁移或冒充为当前证据。
 
-E18b-v3 针对 schema 7 扩展的薄、长和偏心几何域审计求交：固定 96 个对象（flat、elongated、明显不对称 multi-primitive、blocky 各 24），每个 256 条确定性射线；沿用 E18b-v2 的独立高精度参考和全部既有误差界，要求 hit/miss 零错误。它是新参数域的小型回归，不重做 arbitrary CSG 理论资格。
+E18b-v3 针对 schema 7 扩展的薄、长和偏心几何域审计求交：固定 96 个对象（flat、elongated、偏心多部件压力层、blocky control 各 24），每个 256 条确定性射线；沿用 E18b-v2 的独立高精度参考和全部既有误差界，要求 hit/miss 零错误。它是新参数域的小型回归，不重做 arbitrary CSG 理论资格。
+
+**E18b-v3 运行协议冻结（2026-08-27，首次正式运行前）**
+
+对 seed 0–4095 依次调用冻结 schema 7 默认生成器，只按最终 accepted object 报告分层，一个 seed 最多进入一层。分类优先级固定为：偏心多部件的对应 primitive-count 名额尚未满时先收录，其后依次为 flat、elongated、blocky control。flat/elongated/blocky 直接使用已冻结 `shape_family`，各收录最早 24 个；偏心多部件层不发明不对称阈值，primitive count 2/3/4/5 各收录最早 6 个。扫描期间任一对象在 64 proposal 内生成失败，或 seed 4095 后任一层不足，都记 sampling qualification failure，不允许跳过、扩大范围或改层定义。
+
+四层按 flat、elongated、偏心 count 2/3/4/5、blocky control 的顺序排列，冻结 seed 依次为：`[19,23,34,35,39,43,46,48,50,51,54,66,67,70,74,89,90,91,94,95,96,97,100,106,37,60,61,64,65,69,73,76,78,79,80,88,92,98,99,105,124,137,143,147,148,149,150,154,12,21,24,36,38,41,1,6,9,15,16,18,4,10,13,22,44,59,0,2,3,5,7,17,14,28,31,32,47,83,84,87,93,102,103,113,115,116,118,126,127,138,145,151,152,179,182,187]`。对象 manifest SHA-256 为 `2f0a674caec51ac43566c0293b305526e6d421c8c2f0100bbbad8113c716781a`。
+
+每个对象的 256 条射线使用 `Sobol(d=7,scramble=True,bits=64,seed=1803000+object_index).random_base2(m=8)`。原点固定在 $2.25R$ 球面；前 128 条指向 `tight_continuous_outer_bounds(z_slabs=256,safety_margin_m=1e-6)` 中的 Sobol 目标，后 128 条使用独立 Sobol 球面方向，全部归一化。射线 identity SHA-256 为 `656a7a1c1d0d1ad0aad69c4e6e682f30ff16d8107fe5e75cc7ab050f231b1135`，完整 execution manifest SHA-256 为 `ac67451a6bf7a6028931c7e7086eac6254b9d7262bda9336ac746cca87ddb24e`，运行器 SHA-256 为 `b478946d6d77ab0995ce2882db7e7e4cc506099f0140c1c4562a3d3c3f511867`。
+
+独立参考只调用连续 `signed_distance`：在保守球正向区间用 4,097/16,385 节点分别建立标准/严格参考，首个 outside-to-inside 变号区间用 `brentq(xtol=1e-12,rtol=1e-14)` 精化。两参考 hit/miss 必须完全一致，共同 hit 根差 $<5\times10^{-5}$ m；严格层无变号且最小 $|\mathrm{SDF}|\le10^{-7}$ m 标记 `reference_unidentifiable`，总比例必须 $<0.5\%$。每对象至少 16 reference hit 与 16 reference miss。当前全部裁决继承 E18b-v2：hit/miss 零不一致，最大距离误差 $\le10^{-4}$ m，surface residual $\le10^{-5}$ m，单位法向误差 $\le10^{-12}$，可微法向角 $\le0.1^\circ$，miss 必须返回 $+\infty$ 与零法向，全部 hit 必须外向，两次 24 进程完整运行逐元素一致。
+
+该冻结不修改 `render.py`、schema 7、被测 `steps`、对象或射线。正式结果前禁止替换 seed、扩大扫描范围、删除失败射线、执行 E19-v4 或可视化对象。E18b-v3 现为 **EXECUTION FROZEN**，可执行首次正式运行；E19-v4 仍锁定。
 
 E19-v4 继承 E19-v3 的 2,048 次调用、两遍复现和效率门槛：proposal rejection rate $<50\%$、$Q_{0.99}$（higher）$\le8$、maximum $\le64$；另须逐项检查连续尺寸、constituent 星形证书、共同见证、overlap tree、JSON 往返、数值有限、生成报告和 cache schema identity。E18b-v3 与 E19-v4 都 PASS 后才解锁 E20a-v2；E20a-v2 原样继承 E20a 的 8,192 个对象、区域定义和最低支持数。
 
