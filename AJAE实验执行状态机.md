@@ -78,7 +78,7 @@ flowchart TB
     E20A["E20a schema-6 几何覆盖（历史 FAIL）"]
     E20D2A["E20a-D2A 基础轴比采样器资格"]
     E20D2B["E20a-D2B 偏心共同见证构造资格"]
-    E18BV3["E18b-v3 schema-7 新域求交资格"]
+    E18BV3["E18b-v4 schema-7 新域求交资格"]
     E19V4["E19-v4 schema-7 生成器资格"]
     E20AV2["E20a-v2 schema-7 几何覆盖"]
     E20V1["E20-V1 盲法人工几何审查"]
@@ -2383,7 +2383,7 @@ E20a-D2B 在权威提交 `c5898de` 下使用 24 个 CPU 进程执行两次完整
 D2B PASS 只资格偏心共同内部见证机制。D2A 与 D2B 两个局部零件现均合格，schema 7 集成与冻结现已解锁；本轮不实施 schema 7。E18b-v3 仍须等 schema 7 实装并冻结后才能执行，E19-v4、E20a-v2、E20-V1、E20b 和 E21 继续锁定。
 
 
-### schema 7 集成（IMPLEMENTED AND FROZEN）；E18b-v3（FAIL）；E19-v4（LOCKED）
+### schema 7 集成（IMPLEMENTED AND FROZEN）；E18b-v3（FAIL）；E18b-v4（PASS）；E19-v4（UNLOCKED）
 
 D2A、D2B 均 PASS 后才允许冻结并直接修改正式 generator 为 schema 7。schema 7 继续限定 1–5 个强制共同见证的 union primitive，保持 $[0.2,3.0]$ m、既有连续形变以及 difference/intersection 禁用；schema identity 必须进入 generation report、manifest 和 cache identity。资格完成前，schema 6 仍是当前正式版本，schema 7 只能称为候选。
 
@@ -2424,6 +2424,14 @@ E18b-v3 针对 schema 7 扩展的薄、长和偏心几何域审计求交：固�
 E18b-v3 FAIL 永久保留。v4 只修复被测求交器的最近根候选范围：对保守区间起点在对象外的每条射线，把现有 depth-8 正值区间自适应细分应用到“当前最佳粗 bracket 之前”的候选区间，并保留最早有明确 outside-to-inside 变号证据的 bracket。具体只将 `adaptive_rows = flatnonzero(~has_hit & ~starts_inside)` 扩展为所有 `~starts_inside` ray，并在初始候选加入 `interval_lo < bracket_lo[interval_ray]`。`steps=96`、$\min(v_l,v_h)\le4\,\mathrm{width}$ 接近性条件、depth 8、显式变号要求、18 次二分和法向实现全部不变。
 
 v4 原样继承 v3 的 96 个对象、24,576 条射线、对象/射线/execution manifest 哈希、独立参考、支持条件、误差界、两遍 24 进程复现和所有禁止事项；不允许替换失败射线、增加 `steps` 或修改 schema 7。正式运行前必须先用原两条失败射线做最近根回归，并确认对象/射线 manifest 不变。v4 运行器 SHA-256 为 `00c860c47c190c2aeb06103e661907889aa0fddb828de490886ac2be5e9fb455`，预定产物为 `runs/ajae/e18b_v4_schema7_intersection.npz`。E19-v4 在 v4 PASS 前继续锁定。
+
+**E18b-v4 正式结果：PASS**
+
+v4 在预注册提交 `20c02688db27840d983a5b8153868502807ecbb4` 后完成两处候选范围修复，实现提交为 `90a19f01fca562bc0400f531c4d969a2108deab8`。原两条失败射线的最近根定向回归通过；修复前后的 96 个对象、24,576 条射线、标准/严格参考、对象哈希和全部掩码逐元素一致；被测距离只在 v3 的全局索引 9764 与 14660 两处发生变化。
+
+两遍 24 进程正式运行分别用时 9.269418022000536 s 和 9.02336941700014 s，逐元素哈希均为 `c8c1cb44f560c4527684f8fb385126c40939a7b730a4b661916d6c60c92672ea`。参考失败、`reference_unidentifiable`、hit/miss 不一致、外向失败均为 0，参考 hit/miss 仍为 7,347/17,229，miss 契约通过。距离误差 median/$Q_{0.95}$/$Q_{0.99}$/maximum 为 $2.524\times10^{-8}$/$8.781\times10^{-8}$/$1.099\times10^{-7}$/$1.357\times10^{-7}$ m；surface residual maximum 为 $1.548\times10^{-7}$ m；最大单位法向误差为 $3.331\times10^{-16}$，最大可微法向角为 $0.005225^\circ$。全部冻结条件通过。定向回归为 7 passed、32 deselected；排除既有过期 `dev.json` 证据后的回归为 36 passed、3 deselected。
+
+正式产物 `runs/ajae/e18b_v4_schema7_intersection.npz` 为 1,594,431 bytes，SHA-256 为 `bcc638285bf96e293b8340a52e9d190c738944e7fc26921ada1855e891ad4718`，摘要哈希为 `d055c1ad4aa81bbc14c7df94d4f1b0e122782a35bae9c36f9279062638e36ec4`。E18b-v4 PASS 只说明 schema 7 新增薄、长和偏心几何域没有突破修复后求交器在当前冻结射线下的能力，不说明 schema 7 尺寸、效率或覆盖资格成立。E19-v4 现已解锁；E20a-v2 及人工可视化仍锁定。当前 `src/render.py` SHA-256 为 `ccdddb12b96104360deb245dabffcf8449c9e568c70dd7202cdc3e850b5413d9`，对应 renderer/generator cache identity 为 `791ed731effe2b3b9c3b3d9c2af6959c7487c769eeaaff62c6feeeb647a611ee`。
 
 E19-v4 继承 E19-v3 的 2,048 次调用、两遍复现和效率门槛：proposal rejection rate $<50\%$、$Q_{0.99}$（higher）$\le8$、maximum $\le64$；另须逐项检查连续尺寸、constituent 星形证书、共同见证、overlap tree、JSON 往返、数值有限、生成报告和 cache schema identity。E18b-v3 与 E19-v4 都 PASS 后才解锁 E20a-v2；E20a-v2 原样继承 E20a 的 8,192 个对象、区域定义和最低支持数。
 

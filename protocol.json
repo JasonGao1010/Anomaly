@@ -485,7 +485,7 @@
       },
       "constructively_connected_generator": {
         "version": "E19-v3",
-        "status": "QUALIFIED HISTORICAL schema 6; superseded in code by the frozen schema-7 candidate pending E18b-v3 and E19-v4",
+        "status": "QUALIFIED HISTORICAL schema 6; superseded in code by the frozen schema-7 candidate; E18b-v4 PASS and E19-v4 remains required",
         "amends": "E19-v2 FAIL and E19-D3-v2 PASS remain permanent; schema 5 arbitrary CSG ends and schema 6 restricts the formal training generator to constructively overlapping unions",
         "question": "Does generator schema 6 deterministically and efficiently generate one-through-five-primitive anomaly proxies whose connectedness follows from strict constituent star-shaped certificates, an explicit earlier-parent interior-overlap tree, and qualified global diffeomorphic deformation?",
         "generator_schema": 6,
@@ -705,7 +705,7 @@
         "status": "IMPLEMENTED AND FROZEN; not yet qualified for formal training",
         "generator_schema": 7,
         "supersedes_implementation_schema": 6,
-        "scientific_status": "E18b-v3 and E19-v4 remain required before schema 7 is qualified",
+        "scientific_status": "E18b-v3 FAIL remains permanent, E18b-v4 PASS, and E19-v4 remains required before schema 7 is qualified",
         "only_changes": ["replace the schema-6 base-axis sampler with the E20a-D2A four-family sampler", "replace embedded child-centre placement with the E20a-D2B construction-time shared-witness placement", "upgrade generator and cache identity from 6 to 7", "record shape family and authoritative overlap-tree evidence in ShapeGenerationReport"],
         "base_aspect": {
           "overall_half_scale": "unchanged U[minimum/2,maximum/2]; the longest intrinsic half-axis equals this draw",
@@ -731,8 +731,10 @@
         "cache_identity": "PROCEDURAL_GENERATOR_SCHEMA=7 together with the render.py source hash",
         "implementation_verification": {
           "date": "2026-08-27",
-          "render_source_sha256": "53f7037ffd9f10135dd6bade1904d7c77b51e4b8481c174027c0e36be00ff377",
-          "renderer_generator_identity_sha256": "ea868183f1e982c8fa8e3fd959eced32d121e58f0b1daac8876f5409cc5a83d4",
+          "integration_freeze_render_source_sha256": "53f7037ffd9f10135dd6bade1904d7c77b51e4b8481c174027c0e36be00ff377",
+          "integration_freeze_renderer_generator_identity_sha256": "ea868183f1e982c8fa8e3fd959eced32d121e58f0b1daac8876f5409cc5a83d4",
+          "current_render_source_sha256_after_E18b_v4": "ccdddb12b96104360deb245dabffcf8449c9e568c70dd7202cdc3e850b5413d9",
+          "current_renderer_generator_identity_sha256_after_E18b_v4": "791ed731effe2b3b9c3b3d9c2af6959c7487c769eeaaff62c6feeeb647a611ee",
           "qualified_D2A_family_counts_reproduced": [1647, 846, 809, 794],
           "targeted_tests": "5 passed, 32 deselected",
           "nonstale_regression": "34 passed, 3 deselected",
@@ -743,7 +745,7 @@
         "criteria_frozen": true
       },
       "schema7_requalification_chain": {
-        "status": "schema 7 is IMPLEMENTED AND FROZEN; E18b-v3 FAIL is permanent; E19-v4 remains LOCKED pending a versioned nearest-root fix and requalification",
+        "status": "schema 7 is IMPLEMENTED AND FROZEN; E18b-v3 FAIL remains permanent; E18b-v4 PASS; E19-v4 is UNLOCKED",
         "formal_generator_before_qualification": 6,
         "candidate_generator": 7,
         "E18b-v3": {
@@ -829,7 +831,7 @@
           }
         },
         "E18b-v4": {
-          "status": "EXECUTION FROZEN; implementation repair authorized, formal run locked until the exact repair and regression checks are committed",
+          "status": "PASS",
           "amends": "E18b-v3 FAIL remains permanent; only the tested nearest-root candidate scope is repaired",
           "diagnosed_failure": "a narrow first outside-inside-outside segment can be missed while a later wide segment supplies a coarse hit; E18b-v2 then suppresses adaptive search for the entire ray and returns the later root",
           "only_implementation_change": "for every ray whose conservative-interval start is outside, apply the existing depth-8 adaptive positive-interval search to candidate intervals strictly earlier than the current best coarse bracket; retain the earliest explicit outside-to-inside bracket",
@@ -846,7 +848,40 @@
             "artifact": "runs/ajae/e18b_v4_schema7_intersection.npz"
           },
           "failure_routing": "reference failure stops for reference repair; any qualified-reference tested failure keeps E19-v4 locked and requires a new user-approved design decision",
-          "criteria_frozen_before_implementation": true
+          "criteria_frozen_before_implementation": true,
+          "formal_result": {
+            "date": "2026-08-27",
+            "passed": true,
+            "preregistration_commit": "20c02688db27840d983a5b8153868502807ecbb4",
+            "implementation_commit": "90a19f01fca562bc0400f531c4d969a2108deab8",
+            "objects": 96,
+            "total_rays": 24576,
+            "object_ray_and_reference_arrays_identical_to_E18b_v3": true,
+            "tested_distance_elements_changed_from_E18b_v3": [9764, 14660],
+            "reference_qualified": true,
+            "reference_failures": 0,
+            "reference_unidentifiable": 0,
+            "reference_hits": 7347,
+            "reference_misses": 17229,
+            "minimum_per_object_reference_hits": 55,
+            "minimum_per_object_reference_misses": 152,
+            "hit_miss_disagreements": 0,
+            "distance_error_median_q95_q99_maximum_m": [2.5244800916368604e-08, 8.780915656814159e-08, 1.099249607428021e-07, 1.3566817269605735e-07],
+            "surface_residual_median_q95_q99_maximum_m": [1.2597452043973043e-08, 5.955021342495892e-08, 8.978028502583737e-08, 1.5476118687734932e-07],
+            "maximum_normal_unit_error": 3.3306690738754696e-16,
+            "normal_angle_median_q95_q99_maximum_deg": [1.9090959104164224e-06, 1.306022544728445e-05, 3.8149755823639167e-05, 0.005225037031028557],
+            "outward_failures": 0,
+            "miss_contract_pass": true,
+            "independent_run_seconds": [9.269418022000536, 9.02336941700014],
+            "run_hashes": ["c8c1cb44f560c4527684f8fb385126c40939a7b730a4b661916d6c60c92672ea", "c8c1cb44f560c4527684f8fb385126c40939a7b730a4b661916d6c60c92672ea"],
+            "summary_hash": "d055c1ad4aa81bbc14c7df94d4f1b0e122782a35bae9c36f9279062638e36ec4",
+            "artifact": "runs/ajae/e18b_v4_schema7_intersection.npz",
+            "artifact_bytes": 1594431,
+            "artifact_sha256": "bcc638285bf96e293b8340a52e9d190c738944e7fc26921ada1855e891ad4718",
+            "runner_sha256": "00c860c47c190c2aeb06103e661907889aa0fddb828de490886ac2be5e9fb455",
+            "focused_tests": "7 passed, 32 deselected",
+            "nonstale_regression": "36 passed, 3 deselected"
+          }
         },
         "E19-v4": {"calls": 2048, "independent_runs": 2, "inherits": ["continuous size", "constituent star certificate", "shared witness", "overlap tree", "JSON round-trip", "finite values", "generation report", "cache schema identity"], "efficiency": {"rejection_rate": "<0.50", "proposal_count_q99_method_higher": "<=8", "proposal_count_maximum": "<=64"}},
         "E20a-v2": "inherit all E20a sample identities, descriptors, coverage regions, and minimum support thresholds without change"
