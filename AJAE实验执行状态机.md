@@ -2370,8 +2370,20 @@ D2B 只回答：child 能否向 parent 外部生长，同时由构造公式预�
 
 D2B 将审计 4,096 个确定性 parent-child 构造和 512 棵 primitive count 2–5 的完整树，覆盖四族交叉、yaw、exponent 与现有低频扰动。PASS 要求全部见证有效、树覆盖所有节点、无非有限值/空交叠/断树且两次逐元素复现。child center 位于 parent 外部的比例只报告，不作为 PASS 门槛；最终不对称性仍由 E20a-v2 裁决。D2A PASS 前不得执行。
 
+**E20a-D2B 正式结果（2026-08-27）**
 
-### schema 7、E18b-v3 与 E19-v4（LOCKED）
+E20a-D2B 在权威提交 `c5898de` 下使用 24 个 CPU 进程执行两次完整审计，正式裁决为 **PASS**。每遍包含 4,096 条独立 parent-child 构造边和 512 棵完整生成树；primitive count 2–5 各 128 棵，共 1,280 条树边。16 种 parent/child family 组合各有 256 条独立边。两遍分别用时 1.3423615129995596 s 和 1.356556244998501 s，全部字段、实际 parent、生成顺序、witness、连续隐式值、证书、对象哈希和描述统计逐元素一致；数组哈希均为 `eb543a102a2680afb748a8d570207b81aee88bc76bb562042bafe0c818ebc430`，摘要哈希为 `a836e1d4e07d5bba36d0184607a5ad04d9ecd5562ef64c462712186a0327a1ef`。
+
+全部 5,376 条构造边的 parent 与 child 在各自权威 witness 上均满足连续隐式值严格小于 0；共同内部余量的 minimum/$Q_{0.01}$/median 为 0.023704686925583644/0.0321257642403067/0.0832795121702335 m。最差边是独立边 seed 2556（elongated parent、general child），parent/child 隐式值分别为 -0.023704686925583644 m 和 -0.18564851592997586 m；最差树边余量为 0.029041797002644396 m。共同见证公式最大残差为 $6.561418075534675\times10^{-14}$ m。全部 constituent 均保持严格径向星形证书，全部二元对象和完整树均取得 `connected_union_graph`，没有非有限值、空交叠或树断裂。独立只读复算确认每个实际 parent 都严格早于 child，所有 active witness 有限且对象哈希唯一；未用事后 parent 搜索替换权威生成历史。
+
+外向生长只作描述：4,096 条独立边中有 3,645 条（88.9892578125%）的 child center 位于 parent 连续几何外；完整树中为 1,104/1,280（86.25%）。按 primitive count 2/3/4/5 分层分别为 84/128、210/256、341/384、469/512。全部边的中心位移 minimum/median/$Q_{0.95}$/maximum 为 0.26598944695621557/1.084399255339794/1.4752347112451356/1.7130895112816735 m。上述比例和位移未转化为新 PASS 门槛，也未计算最终不对称覆盖。
+
+第一次命令调用完成几何计算后，在比较字符串哈希数组时因 NumPy 不支持对字符串使用 `equal_nan=True` 而终止；该调用未写出产物、未形成科学裁决。只修正字符串/浮点数组的复现比较分支后，按完全相同协议重新执行上述两遍。正式产物 `runs/ajae/e20a_d2b_shared_witness.npz` 为 728,625 bytes，SHA-256 为 `fa283a02acfe46568e92c4b75a91532c1514e2acec6ce583172f8ece303c36f8`。`src/render.py`、schema 6、总体尺度、child scale 分布和 deformation 均未修改。
+
+D2B PASS 只资格偏心共同内部见证机制。D2A 与 D2B 两个局部零件现均合格，schema 7 集成与冻结现已解锁；本轮不实施 schema 7。E18b-v3 仍须等 schema 7 实装并冻结后才能执行，E19-v4、E20a-v2、E20-V1、E20b 和 E21 继续锁定。
+
+
+### schema 7 集成（UNLOCKED）；E18b-v3 与 E19-v4（LOCKED）
 
 D2A、D2B 均 PASS 后才允许冻结并直接修改正式 generator 为 schema 7。schema 7 继续限定 1–5 个强制共同见证的 union primitive，保持 $[0.2,3.0]$ m、既有连续形变以及 difference/intersection 禁用；schema identity 必须进入 generation report、manifest 和 cache identity。资格完成前，schema 6 仍是当前正式版本，schema 7 只能称为候选。
 
