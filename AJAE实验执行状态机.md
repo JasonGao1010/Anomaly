@@ -1967,7 +1967,17 @@ PASS → 仅解锁 E19-v2 的 generator acceptance 设计；不得自动把 D1 �
 
 **当前状态**
 
-E19-D1-v2 已完成预注册并解锁；E19-v2、E20 继续锁定。
+E19-D1-v2 PASS，E19-v2 解锁；E20 继续锁定。
+
+**正式结果**
+
+- 18 个解析真值 fixture 全部得到正确且可识别的最终三态，真值相反误判与 `unresolved` 均为 0；9 个 connected fixture 全部具有已冻结的解析充分条件，9 个 disconnected fixture 全部具有严格层 $C_{\mathrm{sep}}\ge2$ 的区间分隔证书；
+- 双层转移为：`connected→connected` 9 个、`disconnected→disconnected` 7 个、`unresolved→disconnected` 2 个，其余六类转移均为 0。两个单向取得新证据的对象正是 E19-D1-v1 中的 0.05 m 两球间隙与三球末球间隙场景；coarse-to-strict 相反证据反转数为 0；
+- 区间 enclosure 独立 probe 反例、严格层新增 orphan、严格层 $C_{\mathrm{sep}}$ 下降、缺失 connected 解析证书和无效 disconnected 区间证书均为 0；
+- 三个无标签历史对象 seed 3/5/22 在标准层与严格层仍均为 `unresolved`，统计与 E19-D1-v1 完全一致。D1-v2 没有把未知对象改判为 connected；它们若进入 E19-v2 正式生成流，必须按 `unresolved` 拒绝并重采样；
+- 两次完整 24 核运行逐元素一致，运行哈希均为 `fb1f319300125587d54a29b59032abbf84779aae83b3d5990e411d42860863db`，摘要哈希为 `fdb807ddd507e57e739efcd4bc277561ea7592022ca93e64a70939392c25e77d`；产物 `runs/ajae/e19_d1_v2_interval_connectivity.npz` 的 SHA-256 为 `9e43ab3b42f4423f9eea882c73a6abdfbe430889801a6ea87110bcbfeaea5e79`。
+
+科学结论限定为：**在冻结的解析集合类型与 64→128 嵌套区间资格范围内，判定器能够保守地区分已证明连通、已证明不连通和当前不可识别三种证据状态；允许 `unresolved→identified` 不会引入证据反转。** 该结论尚不等于 schema 4 generator 已经能够高效产生全部获得 connected 证明的对象，后者由 E19-v2 单独验证。
 
 
 ## E20｜形状/尺度/轴比/材质解耦
