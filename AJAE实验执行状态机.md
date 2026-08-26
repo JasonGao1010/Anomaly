@@ -2078,7 +2078,19 @@ PASS → E19 连续单实体资格闭合并解锁 E20。correctness FAIL → 修
 
 **当前状态**
 
-E19-D2 PASS；E19-v2 已完成预注册并解锁。E20 继续锁定。
+E19-D2 PASS；E19-v2 FAIL，永久保留。E20 继续锁定。
+
+**正式结果（2026-08-26）**
+
+E19-v2 已按冻结协议使用 24 个 CPU 核执行两次完整独立审计。两次运行逐元素一致，运行哈希均为 `09453983db773653c9677d7b7d4231e7d827efdffabd2f191740493eb034ae14`；摘要哈希为 `6bb9462855af431a876d97f94c6ae6210c6d2412078168078ceb3dba63028bee`。正式产物为 `runs/ajae/e19_v2_schema5_connectivity.npz`，文件 SHA-256 为 `6821c2452d221fc0c3653c144bc71b6437d5644b00d5a599afc88b17d1eb4e38`。
+
+正确性条件全部通过：2,048 次正式生成均成功，最终接受对象全部获得连续 `connected` 证书，错误接受 `disconnected` 或 `unresolved` 对象为 0。证书来源为 `strict_radial_star_shaped` 421 个、`connected_union_graph` 1,627 个。9 个解析 connected 场景在直接构造与 round-trip 中全部成功，9 个解析 disconnected 场景在两条入口中全部由 `continuous CSG is certified disconnected` 拒绝；历史 schema 4 的 primitive-count 5 seed 3/5/22 三个对象均保持 `unresolved` 并由权威构造入口拒绝。尺寸证书、参数有限性、有效体积/闭合诊断、对象 round-trip、generation report 与 proposal 记账错误均为 0。接受对象连续尺寸区间的总体下界最小值为 0.2044669704064817 m，上界最大值为 2.998755884719177 m，均位于冻结的 [0.2, 3.0] m 接受域内。
+
+效率条件失败：2,048 个最终对象共经历 6,436 次 proposals，其中接受 2,048 次、拒绝 4,388 次，总拒绝率为 68.17899316345556%，未满足严格小于 50% 的冻结条件。proposal count 的 `[Q0.50,Q0.90,Q0.95,Q0.99,max]`（`method=higher`）为 `[2,6,10,17,42]`，其中 $Q_{0.99}=17>8$；maximum 42 仍满足不超过 64。拒绝原因严格分解为：continuous-unresolved 3,842 次、continuous-disconnected 162 次、尺寸下界 3 次、尺寸上界 380 次、其他几何诊断 1 次；分项之和等于 4,388。
+
+分组结果显示效率随 primitive count 明显恶化：默认训练路径拒绝率 56.01374570446735%，$Q_{0.99}=9$，maximum 13；固定 count 2 为 44.70842332613391%、6、7；固定 count 3 为 66.3157894736842%、12、14；固定 count 4 为 78.89530090684254%、19、27；固定 count 5 为 84.688995215311%、28、42。这里的分位数均使用预运行实现中冻结的 `higher` 方法。
+
+因此 E19-v2 的正式裁决为 **FAIL**。已验证事实是：schema 5 的连续连通接受规则在本次固定审计范围内能够确定性地产生全部获得 `connected` 充分证据的合法对象，且没有误放已识别的非连通或不可识别对象。失败仅发生在预注册生成效率条件，且 87.56%（3,842/4,388）的拒绝来自 `unresolved`，不能据此断言这些候选真实不连通。现有证据支持“当前 proposal distribution 与现有严格连续连通证书可覆盖的接受域失配”，但尚不能唯一判断应调整 difference/intersection 的操作概率、CSG 构造方式，还是继续扩大证书覆盖。按照冻结停止条件，不放宽 50% 或 $Q_{0.99}\le8$，不增加 64 次上限，不进入 E20；下一步需要先重新设计并预注册能够区分 proposal 分布问题与证书覆盖问题的实验。
 
 
 ## E20｜形状/尺度/轴比/材质解耦
