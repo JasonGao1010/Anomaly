@@ -1894,11 +1894,11 @@ E19 FAIL；如果后续修订连续连通性资格并重跑，本次永久记为
 
 当前已证实解析明显多组件能够被正式入口拒绝，但尚不能证明 schema 4 接受对象在连续几何意义下全部单连通。继续推进需要先设计一个与体素 resolution 无关或具有收敛/保守保证的连续连通性资格，并决定它如何进入 generator acceptance；这属于实验设计与生成器规则调整，因此在用户批准前停止，E20 保持锁定。
 
-### E19-D1｜连续隐式几何连通性判定器资格
+### E19-D1-v1｜连续隐式几何连通性判定器资格
 
 **唯一问题与三态输出**
 
-E19-D1 先不修改 generator，只资格一个直接作用于连续 `signed_distance` 定义的三态判定器：`connected`、`disconnected`、`unresolved`。判定器不得读取 resolution 25/31/41/65 的历史组件数，也不得把盒中心或任一固定采样点的 inside/outside 当作整个空间单元的真值。
+E19-D1-v1 先不修改 generator，只资格一个直接作用于连续 `signed_distance` 定义的三态判定器：`connected`、`disconnected`、`unresolved`。判定器不得读取 resolution 25/31/41/65 的历史组件数，也不得把盒中心或任一固定采样点的 inside/outside 当作整个空间单元的真值。
 
 **保守不连通证书与解析连通证书**
 
@@ -1924,7 +1924,7 @@ PASS → 解锁 E19-v2 的 generator acceptance 修订；FAIL → 判定器不�
 
 **当前状态**
 
-E19-D1 FAIL；若后续修订并重跑，本次永久记为 E19-D1-v1 FAIL。E19-v2、E20 继续锁定。
+E19-D1-v1 FAIL，永久保留。E19-D1-v2 已批准并解锁；E19-v2、E20 继续锁定。
 
 **正式结果**
 
@@ -1936,6 +1936,38 @@ E19-D1 FAIL；若后续修订并重跑，本次永久记为 E19-D1-v1 FAIL。E19
 - 两次完整 24 核运行逐元素一致，运行哈希均为 `dfdb1cc4ee4c7aca09c3d51f28973fde4769e66616613e64e5f6db3b15c06d65`，摘要哈希为 `31edb633475943bee780930039216c13ffaa1a4b535990e859f1948dccd9015d`；产物 `runs/ajae/e19_d1_interval_connectivity.npz` 的 SHA-256 为 `4b307abfd203e6d83e4cf5b9e745c5280a3348d8b051f4b820d95aa96cdf1a5f`。
 
 本次结果验证了区间算术没有在抽查点上漏包，并且严格层能够对 0.05 m 窄间隙给出数学上保守的不连通证书；失败项是预注册的“双层必须已经同态”资格条件。是否允许 `unresolved → identified` 的单向细化、以及需要怎样的额外确认才能采用严格层证书，会改变正式裁决规则，必须在重跑前另行修订。当前不得把判定器接入 generator，也不得推进 E19-v2 或 E20。
+
+### E19-D1-v2｜连续连通性证书的单向细化资格
+
+**唯一修订**
+
+E19-D1-v2 完整继承 E19-D1-v1 的 18 个解析真值 fixture、3 个无标签历史诊断对象、连续保守 AABB、向外区间传播、64/128 两个精确嵌套层、解析 `connected` 充分条件、区间 `disconnected` 充分条件、每 fixture $2^{18}$ 个独立 probes、24 核执行和两次完整复现。不得修改 fixture、几何参数、盒层级、解析证书、$C_{\mathrm{sep}}$ 定义、orphan 定义、proposal distribution 或 generator。
+
+唯一修改是双层最终裁决。允许粗层证据不足后由严格层取得新证据，但禁止已有证据反转：
+
+| 标准 64 层 | 严格 128 层 | 最终裁决 |
+|---|---|---|
+| `unresolved` | `connected` | `connected` |
+| `unresolved` | `disconnected` | `disconnected` |
+| `connected` | `connected` | `connected` |
+| `disconnected` | `disconnected` | `disconnected` |
+| `connected` | `disconnected` | FAIL / `unresolved` |
+| `disconnected` | `connected` | FAIL / `unresolved` |
+| 任意状态 | `unresolved` | `unresolved` |
+
+`connected` 仍只能来自 E19-D1-v1 已冻结的连续集合解析充分条件；128 层 possible-domain 只有一个组件不能构成连通证书。`disconnected` 仍必须由 $C_{\mathrm{sep}}\ge2$ 给出：分隔必须完全由 `definitely_outside` 盒组成，每个被裁决为分离实体的 possible-domain 组件必须包含 `definitely_inside` 见证。不得用盒中心、插值点或非保守距离近似产生分隔。
+
+**冻结 PASS 条件**
+
+18 个解析 fixture 最终必须全部可识别且逐项等于解析真值，真值相反误判和 `unresolved` 均为 0；coarse-to-strict 证据反转数必须为 0；严格层不得新增 orphan，$C_{\mathrm{sep}}$ 不得下降；所有 connected 对象必须记录解析充分条件，所有 disconnected 对象必须记录严格区间分隔证书。区间必须有限有序，每 fixture $2^{18}$ 个独立 probes 的 enclosure 反例数必须为 0；两次完整运行必须逐元素复现盒分类、分量统计、解析证书、最终三态和哈希。
+
+E19-D1-v1 的两个 0.05 m 场景不得从历史结果中改写为已通过；它们必须在 E19-D1-v2 的新运行中重新经历完整区间计算，并仅按上述单向规则裁决。三个无标签历史对象仍只作诊断，不进入 PASS 分母，也不得用于修改规则。
+
+PASS → 仅解锁 E19-v2 的 generator acceptance 设计；不得自动把 D1 的解析 fixture 资格外推成 schema 4 generator 已合格。FAIL → E19-v2 与 E20 保持锁定并停止，不增加 256 层或其他更高均匀分辨率补救。
+
+**当前状态**
+
+E19-D1-v2 已完成预注册并解锁；E19-v2、E20 继续锁定。
 
 
 ## E20｜形状/尺度/轴比/材质解耦
