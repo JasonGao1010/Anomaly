@@ -513,6 +513,74 @@
         "forbidden": ["seed-specific rejection", "difference or intersection in the formal training proposal stream", "changing the [0.2,3.0] metre interval", "using voxel diameter as continuous size", "accepting likely_connected as a formal certificate", "adding unqualified local or multiscale deformation", "moving inherited efficiency thresholds"],
         "generator_identity": "schema 6 enters experiment manifests and renderer/generator cache identity together with the render.py source hash",
         "criteria_frozen_before_formal_run": true
+      },
+      "schema6_geometry_coverage": {
+        "version": "E20a",
+        "amends": "The unexecuted original E20 is split before execution; geometry coverage is E20a, geometry-factor decoupling is E20b, placement independence is deferred until E21-E25 qualification, and material independence is deferred to the E35-E40 return/intensity chain.",
+        "question": "Does the qualified schema-6 generator cover preregistered scale, aspect-ratio, asymmetry, primitive-count, and deformation regions rather than producing only a narrow cluster of similar geometry?",
+        "generator_schema": 6,
+        "sample": {
+          "entrypoint": "ShapeSpec.sample_with_report(seed) with default primitive-count sampling and size_m_range=[0.2,3.0]",
+          "seeds": [0, 8191],
+          "accepted_shapes": 8192,
+          "independent_runs": 2,
+          "cpu_processes": 24,
+          "placement": "not executed",
+          "formal_material": "not assigned"
+        },
+        "continuous_descriptors": {
+          "aabb": "single primitive uses E16-v3 optimized continuous AABB; multiple primitives use the E18a-D2-v2 fixed-256-slab tight conservative continuous outer AABB",
+          "ordered_spans": "lambda1 >= lambda2 >= lambda3 > 0 are the sorted Cartesian AABB spans",
+          "size_m": "D=lambda1",
+          "axis_ratios": {"r21": "lambda2/lambda1", "r31": "lambda3/lambda1"},
+          "multi_primitive_limit": "D and axis ratios describe the qualified conservative continuous outer AABB, not exact volume or a minimum oriented bounding box",
+          "asymmetry": {
+            "points": "deterministic unscrambled 3D Sobol points mapped to the qualified continuous AABB; retain points with continuous SDF <= 0",
+            "standard_points": 8192,
+            "strict_points": 32768,
+            "minimum_standard_interior": 128,
+            "minimum_strict_interior": 512,
+            "centroid": "mean of retained interior points",
+            "formula": "A=max_j(abs(p_j-n_j)/(p_j+n_j)), where p_j=max(x_j-c_j) and n_j=max(c_j-x_j)",
+            "maximum_standard_strict_difference": 0.03,
+            "maximum_unresolved_count": 81,
+            "unresolved_membership": "excluded from the asymmetric coverage count"
+          },
+          "deformation_strength": "RMS of abs(twist)/0.65, abs(bend_x)/0.12, abs(bend_y)/0.12, abs(taper_x)/0.18, abs(taper_y)/0.18, and surface_amplitude/(0.08*minimum base scale)",
+          "union_spread": "maximum pairwise primitive-center distance divided by D for multiple primitives; zero for a single primitive"
+        },
+        "descriptor_fixtures": {
+          "cases": ["analytic centered sphere", "analytic centered ellipsoid", "fixed overlapping two-primitive union"],
+          "conditions": ["all descriptor values are finite and deterministic", "standard/strict asymmetry differs by at most 0.03", "sphere asymmetry is at most 0.02", "ellipsoid axis-ratio absolute error is at most 0.01"]
+        },
+        "coverage_regions": {
+          "small": "0.2 <= D < 1.1333333333333333 m",
+          "medium": "1.1333333333333333 <= D < 2.0666666666666664 m",
+          "large": "2.0666666666666664 <= D <= 3.0 m",
+          "blocky": "r31 >= 0.70",
+          "flat": "r21 >= 0.70 and r31 <= 0.45",
+          "elongated": "r21 <= 0.55 and r31 <= 0.45",
+          "asymmetric": "standard and strict A >= 0.15 and their absolute difference <= 0.03",
+          "single_primitive": "primitive_count == 1",
+          "multi_primitive": "primitive_count in [2,5]",
+          "weak_deformation": "S_def <= 0.45",
+          "strong_deformation": "S_def >= 0.65"
+        },
+        "coverage_pass_conditions": ["each of the 11 named coverage regions contains at least 128 shapes", "each exact primitive-count group 1,2,3,4,5 contains at least 512 shapes"],
+        "measurement_pass_conditions": ["all 8192 calls return an accepted shape", "all continuous AABB spans, D, axis ratios, deformation strengths, and union-spread values are finite and inside their defined domains", "asymmetry_unresolved count is at most 81", "all descriptor fixtures pass", "two independent complete runs reproduce shape parameters, generation reports, descriptors, region masks, statistics, shape hashes, and the summary hash elementwise exactly"],
+        "interpretation_limit": "PASS qualifies only coverage of the preregistered schema-6 geometry regions. It does not qualify factor decoupling, material, placement, rendered source invariance, or real-OOD utility.",
+        "forbidden": ["changing bins or support thresholds after observing histograms", "using resolution-31 or resolution-41 mesh diameter", "adding material or placement to enlarge geometry coverage", "seed-specific handling", "modifying schema 6 inside E20a"],
+        "criteria_frozen_before_formal_run": true
+      },
+      "schema6_geometry_factor_decoupling": {
+        "version": "E20b",
+        "status": "LOCKED until E20a PASS",
+        "question": "Do primitive count, continuous size, axis ratios, and deformation strength avoid near-deterministic low-capacity dependencies?",
+        "planned_primary_evidence": ["conditional coverage within every primitive-count group", "cross-validated logistic regression and shallow decision-tree predictability"],
+        "not_primary": "mutual information",
+        "not_yet_frozen": ["train/test split", "conditional cells", "model hyperparameters", "baselines", "near-deterministic numeric thresholds", "repetition rule"],
+        "deferred_out_of_scope": {"placement_independence": "after E21-E25 qualification", "material_independence": "E35-E40 return/intensity chain"},
+        "criteria_frozen_before_formal_run": false
       }
     },
     "world_types": {"pure_normal": 0.2, "control_only": 0.2, "mixed": 0.4, "anomaly_only": 0.2},
