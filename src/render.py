@@ -1650,7 +1650,7 @@ class ShapeSpec:
             # samples. Refine only nearby positive intervals; a hit still
             # requires an explicit sign change and is never inferred from
             # proximity alone.
-            adaptive_rows = np.flatnonzero(~has_hit & ~starts_inside)
+            adaptive_rows = np.flatnonzero(~starts_inside)
             if adaptive_rows.size:
                 interval_ray = np.repeat(adaptive_rows, steps - 1)
                 interval_lo = ray_t[adaptive_rows, :-1].reshape(-1)
@@ -1662,6 +1662,7 @@ class ShapeSpec:
                     (value_lo > 0.0)
                     & (value_hi > 0.0)
                     & (np.minimum(value_lo, value_hi) <= 4.0 * width)
+                    & (interval_lo < bracket_lo[interval_ray])
                 )
                 interval_ray = interval_ray[keep]
                 interval_lo = interval_lo[keep]

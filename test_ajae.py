@@ -621,6 +621,39 @@ def test_generator_schema7_records_the_authoritative_overlap_tree() -> None:
                 assert report.witness_child_margins_m[index - 1] == -child_value
 
 
+@pytest.mark.parametrize(
+    ("seed", "origin", "direction", "reference_root"),
+    (
+        (
+            99,
+            (0.7682490608623493, 0.5460731616297538, 4.583701428336049),
+            (-0.14755561851059673, -0.21011651960391545, -0.9664773083914038),
+            4.3844959571405315,
+        ),
+        (
+            15,
+            (-0.8973395825762842, -0.02533799707999456, -4.3863570066163655),
+            (0.26606760813298547, -0.067353110887987, 0.9615984538028869),
+            3.7124355859608693,
+        ),
+    ),
+)
+def test_intersection_refines_a_narrow_segment_before_a_later_coarse_hit(
+    seed: int,
+    origin: tuple[float, float, float],
+    direction: tuple[float, float, float],
+    reference_root: float,
+) -> None:
+    shape, _ = ShapeSpec.sample_with_report(seed)
+    distance, normal, hit = shape.intersect(
+        np.asarray(origin), np.asarray(direction)[None]
+    )
+    assert hit[0]
+    assert abs(distance[0] - reference_root) <= 1.0e-4
+    assert np.isfinite(normal[0]).all()
+    assert abs(np.linalg.norm(normal[0]) - 1.0) <= 1.0e-12
+
+
 def test_tight_continuous_outer_bound_is_conservative_and_no_looser() -> None:
     shape = ShapeSpec(
         ((1.0, 0.6, 0.8), (0.5, 0.4, 0.6)),
