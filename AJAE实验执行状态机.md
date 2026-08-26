@@ -2419,6 +2419,12 @@ E18b-v3 针对 schema 7 扩展的薄、长和偏心几何域审计求交：固�
 
 独立高密度反查确认，两条射线的第一段真实内部弦宽仅为 0.006489475452047699 m 和 0.02761501535529831 m，对应 96 点粗网格间距为 0.04275932923087434 m 和 0.04082466504344694 m；同一射线后方又存在粗网格能观测的宽内部段。当前 E18b-v2 自适应搜索只对“粗网格整条射线没有 hit”的 ray 启动；一旦后方宽段已提供粗 hit，前方正值区间不再细分，最近窄交段因而被跳过。该 FAIL 定位的是 `ShapeSpec.intersect` 最近根搜索范围缺陷，不是 schema 7 尺寸、连通或生成分布失败。正式产物 `runs/ajae/e18b_v3_schema7_intersection.npz` 为 1,594,438 bytes，SHA-256 为 `be5ec66e825fc66aec0ddc2bb676d7e3e374f0e4a270d1ef4a6f8d81954c6d20`，摘要哈希为 `3fac245f379ae7946424085fbd7d0c0985db6f6ac36773958c9af80bddaf8810`。
 
+**E18b-v4 修复与重资格预注册（EXECUTION FROZEN）**
+
+E18b-v3 FAIL 永久保留。v4 只修复被测求交器的最近根候选范围：对保守区间起点在对象外的每条射线，把现有 depth-8 正值区间自适应细分应用到“当前最佳粗 bracket 之前”的候选区间，并保留最早有明确 outside-to-inside 变号证据的 bracket。具体只将 `adaptive_rows = flatnonzero(~has_hit & ~starts_inside)` 扩展为所有 `~starts_inside` ray，并在初始候选加入 `interval_lo < bracket_lo[interval_ray]`。`steps=96`、$\min(v_l,v_h)\le4\,\mathrm{width}$ 接近性条件、depth 8、显式变号要求、18 次二分和法向实现全部不变。
+
+v4 原样继承 v3 的 96 个对象、24,576 条射线、对象/射线/execution manifest 哈希、独立参考、支持条件、误差界、两遍 24 进程复现和所有禁止事项；不允许替换失败射线、增加 `steps` 或修改 schema 7。正式运行前必须先用原两条失败射线做最近根回归，并确认对象/射线 manifest 不变。v4 运行器 SHA-256 为 `00c860c47c190c2aeb06103e661907889aa0fddb828de490886ac2be5e9fb455`，预定产物为 `runs/ajae/e18b_v4_schema7_intersection.npz`。E19-v4 在 v4 PASS 前继续锁定。
+
 E19-v4 继承 E19-v3 的 2,048 次调用、两遍复现和效率门槛：proposal rejection rate $<50\%$、$Q_{0.99}$（higher）$\le8$、maximum $\le64$；另须逐项检查连续尺寸、constituent 星形证书、共同见证、overlap tree、JSON 往返、数值有限、生成报告和 cache schema identity。E18b-v3 与 E19-v4 都 PASS 后才解锁 E20a-v2；E20a-v2 原样继承 E20a 的 8,192 个对象、区域定义和最低支持数。
 
 

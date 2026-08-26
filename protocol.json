@@ -828,6 +828,26 @@
             "runner_sha256": "b478946d6d77ab0995ce2882db7e7e4cc506099f0140c1c4562a3d3c3f511867"
           }
         },
+        "E18b-v4": {
+          "status": "EXECUTION FROZEN; implementation repair authorized, formal run locked until the exact repair and regression checks are committed",
+          "amends": "E18b-v3 FAIL remains permanent; only the tested nearest-root candidate scope is repaired",
+          "diagnosed_failure": "a narrow first outside-inside-outside segment can be missed while a later wide segment supplies a coarse hit; E18b-v2 then suppresses adaptive search for the entire ray and returns the later root",
+          "only_implementation_change": "for every ray whose conservative-interval start is outside, apply the existing depth-8 adaptive positive-interval search to candidate intervals strictly earlier than the current best coarse bracket; retain the earliest explicit outside-to-inside bracket",
+          "exact_code_boundary": {"replace": "adaptive_rows = flatnonzero(~has_hit & ~starts_inside)", "with": "adaptive_rows = flatnonzero(~starts_inside)", "additional_initial_filter": "interval_lo < bracket_lo[interval_ray]", "unchanged": ["steps=96", "positive-endpoint proximity rule min(value_lo,value_hi)<=4*width", "depth=8", "explicit sign change required", "18 bisection steps", "nearest positive bracket", "normal calculation"]},
+          "regression_requirements_before_formal_run": ["both E18b-v3 failed rays return their frozen strict-reference nearest roots within 1e-4 m", "existing focused intersection tests pass", "schema-7 generator identity and shape/ray manifests remain unchanged"],
+          "audit_inheritance": "all 96 objects, 24576 rays, selection order, object hashes, ray identities, independent reference, support rules, thresholds, two-run requirement, and forbidden actions inherit E18b-v3 byte-for-byte",
+          "pass_conditions": ["reference failures equal zero", "reference_unidentifiable fraction <0.005", "every object has at least 16 reference hits and 16 reference misses", "hit/miss mismatch count equals zero", "maximum nearest-hit distance error <=1e-4 m", "maximum hit SDF residual <=1e-5 m", "maximum normal unit error <=1e-12", "maximum differentiable normal angle <=0.1 degrees", "outward failures equal zero", "miss contract passes", "two complete 24-process runs are elementwise identical"],
+          "execution_freeze": {
+            "ordered_object_seeds": [19,23,34,35,39,43,46,48,50,51,54,66,67,70,74,89,90,91,94,95,96,97,100,106,37,60,61,64,65,69,73,76,78,79,80,88,92,98,99,105,124,137,143,147,148,149,150,154,12,21,24,36,38,41,1,6,9,15,16,18,4,10,13,22,44,59,0,2,3,5,7,17,14,28,31,32,47,83,84,87,93,102,103,113,115,116,118,126,127,138,145,151,152,179,182,187],
+            "object_manifest_sha256": "2f0a674caec51ac43566c0293b305526e6d421c8c2f0100bbbad8113c716781a",
+            "ray_identity_sha256": "656a7a1c1d0d1ad0aad69c4e6e682f30ff16d8107fe5e75cc7ab050f231b1135",
+            "execution_manifest_sha256": "ac67451a6bf7a6028931c7e7086eac6254b9d7262bda9336ac746cca87ddb24e",
+            "runner_sha256": "00c860c47c190c2aeb06103e661907889aa0fddb828de490886ac2be5e9fb455",
+            "artifact": "runs/ajae/e18b_v4_schema7_intersection.npz"
+          },
+          "failure_routing": "reference failure stops for reference repair; any qualified-reference tested failure keeps E19-v4 locked and requires a new user-approved design decision",
+          "criteria_frozen_before_implementation": true
+        },
         "E19-v4": {"calls": 2048, "independent_runs": 2, "inherits": ["continuous size", "constituent star certificate", "shared witness", "overlap tree", "JSON round-trip", "finite values", "generation report", "cache schema identity"], "efficiency": {"rejection_rate": "<0.50", "proposal_count_q99_method_higher": "<=8", "proposal_count_maximum": "<=64"}},
         "E20a-v2": "inherit all E20a sample identities, descriptors, coverage regions, and minimum support thresholds without change"
       },
