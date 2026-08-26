@@ -1924,7 +1924,18 @@ PASS → 解锁 E19-v2 的 generator acceptance 修订；FAIL → 判定器不�
 
 **当前状态**
 
-E19-D1 已完成预注册并解锁；E19-v2、E20 继续锁定。
+E19-D1 FAIL；若后续修订并重跑，本次永久记为 E19-D1-v1 FAIL。E19-v2、E20 继续锁定。
+
+**正式结果**
+
+- 18 个解析真值 fixture 中，16 个完成正确三态裁决；没有对象被裁决成相反真值，但两个冻结的 0.05 m 分隔对象最终为 `unresolved`，按 failure tolerance 0 判 E19-D1 FAIL；
+- `disconnected-sphere-gap-0.05` 与 `disconnected-three-sphere-gap-0.05` 在标准 64 层的统计均为 $C_{\mathrm{sep}}=1$、确定内部组件数 2、orphan 0，因而不能证明分隔；严格 128 层均变为 $C_{\mathrm{sep}}=2$、确定内部组件数 2、orphan 0，获得保守 `disconnected` 证书。由于冻结条件要求标准层与严格层三态相同，最终不能采用严格层结论；
+- 其余 7 个解析多组件对象在两层均为 `disconnected`；9 个解析单组件对象均命中预注册的连续集合充分条件，且两层区间分类未与解析证书冲突；
+- 每个解析 fixture 的 $2^{18}$ 个独立 probes 共未发现任何区间分类反例；严格层新增 orphan 数与 $C_{\mathrm{sep}}$ 下降数均为 0；
+- E19-v1 的三个无标签诊断对象 seed 3/5/22 在两层最终均为 `unresolved`，不参与 PASS 分母。其中严格层统计依次为 $(1,3,1)$、$(1,13,15)$、$(1,4,0)$；当前证据仍不足以把它们裁决为连续或不连续；
+- 两次完整 24 核运行逐元素一致，运行哈希均为 `dfdb1cc4ee4c7aca09c3d51f28973fde4769e66616613e64e5f6db3b15c06d65`，摘要哈希为 `31edb633475943bee780930039216c13ffaa1a4b535990e859f1948dccd9015d`；产物 `runs/ajae/e19_d1_interval_connectivity.npz` 的 SHA-256 为 `4b307abfd203e6d83e4cf5b9e745c5280a3348d8b051f4b820d95aa96cdf1a5f`。
+
+本次结果验证了区间算术没有在抽查点上漏包，并且严格层能够对 0.05 m 窄间隙给出数学上保守的不连通证书；失败项是预注册的“双层必须已经同态”资格条件。是否允许 `unresolved → identified` 的单向细化、以及需要怎样的额外确认才能采用严格层证书，会改变正式裁决规则，必须在重跑前另行修订。当前不得把判定器接入 generator，也不得推进 E19-v2 或 E20。
 
 
 ## E20｜形状/尺度/轴比/材质解耦
