@@ -2048,6 +2048,38 @@ E19-D1-v2 PASS；E19-D2 PASS，E19-v2 解锁。E20 继续锁定。
 
 科学结论限定为：**在当前 schema 4 参数域内，一般扰动 superquadric 可以由严格径向下界证明为星形；多个已获证 primitive 的纯 union 可以由真实内部交叠图证明连通。** D2 不资格 difference 或一般 intersection，也不证明完整 generator 的拒绝率与效率；后者由 E19-v2 独立验证。
 
+### E19-v2｜连续连通证书驱动的正式生成器接受
+
+**唯一问题与生成器版本**
+
+E19-v2 只回答：把 E19-D1-v2 与 E19-D2 已资格的三态连续连通判定接入完整 proposal 流后，正式 generator 能否稳定产生每个对象都获得 `connected` 证明的异常代理，并继续满足已经冻结的生成效率条件。proposal parameterization、随机流、primitive count/scale/axis ratio/exponent/CSG operation/形变分布、0.2–3.0 m 连续尺寸条件、每 seed 64 次上限和 schema 4 的尺寸证书全部不变。
+
+接受语义发生变化，因此 generator identity 从 schema 4 升为 schema 5，并进入 protocol、cache identity 与 generation report；这不表示 proposal 分布改变。候选只有在连续判定最终为 `connected` 时才继续尺寸资格；`disconnected` 与 `unresolved` 均拒绝并沿同一确定性随机流重采样，分别累计 `connectivity_disconnected_rejections` 与 `connectivity_unresolved_rejections`。
+
+**正式三态路径**
+
+每个 primitive 先使用 E19-D2 冻结的中心内部与严格径向下界；pure-union 候选再使用 257 点中心连线真实内部见证和连通交叠图。该路径获得证书即输出 `connected`。D1-v2 已冻结的非空凸 intersection、严格内含球形 cavity 和单 primitive 连续双射证书继续有效，但不得扩展到未资格的 difference/一般 intersection。
+
+未获得解析 connected 证书的候选必须执行 D1-v2 的同一 64→128 嵌套向外区间判定：严格层 $C_{\mathrm{sep}}\ge2$ 且每个分离区域有确定内部见证时输出 `disconnected`；否则输出 `unresolved`。允许 `unresolved→disconnected`，禁止 opposite identified 反转。不得为了节省生成时间把所有未获 connected 证书的对象统一记成 `unresolved`，也不得恢复 resolution 25/31/41 的体素组件数作为接受条件。
+
+正式构造、`from_dict` 和 generator 必须使用同一权威连续判定。`geometry_report` 的有界、闭合、有效体积和有限曲面检查继续保留，但 `components=1` 必须来自缓存的连续 connected 证书；离散网格只能作为诊断，不得再次拒绝一个已有连续 connected 证明的对象，也不得放行 unresolved 对象。
+
+**固定审计范围**
+
+完整生成流原样继承 E18a-B-v2：默认训练路径 seed 0–1023 共 1,024 次；固定 primitive count 2/3/4/5 各 seed 0–255，共 1,024 次，总计 2,048 次。每次最多 64 proposals。另回归 E19-D1-v2 的 18 个解析 fixture：9 个 connected 在直接构造与 JSON round-trip 两条入口均须成功并保持同一证书，9 个 disconnected 在两条入口均须由 continuous-disconnected 原因拒绝；历史 seed 3/5/22 的旧 schema 4 对象必须为 `unresolved` 并由两条入口拒绝，不能因 generator 重采样后产生新对象而覆盖该历史诊断。
+
+所有 2,048 个最终 accepted 对象必须逐项复算 connected 证书；单 primitive 的 E16-v3 连续优化 bounds、多 primitive 的 E18a-A 下界与 D2-v2 紧致上界、$[0.2,3.0]$ m 接受条件、参数有限性、有效体积、闭合性和 generation report 必须继续全部一致。报告 proposal count、尺寸上下界拒绝、continuous-disconnected 拒绝、continuous-unresolved 拒绝、其他几何拒绝、最终 primitive count 与 connected 证书类型。
+
+**冻结 PASS 条件**
+
+解析 connected/disconnected 与三个历史 unresolved 对象的两条构造入口错误数均为 0；2,048 次生成失败为 0，所有 accepted objects 的 continuous state 必须为 `connected`，错误接受 `disconnected`/`unresolved` 数为 0；尺寸证书、报告、对象 round-trip 与 proposal 记账错误均为 0。生成效率原样继承 E18a-B 首次运行前已冻结的条件：总体按 proposal 计拒绝率严格小于 50%，proposal count 的 $Q_{0.99}\le8$，maximum $\le64$。两次完整运行必须逐元素复现最终对象、证书类型、全部拒绝分类、proposal count 和哈希。
+
+PASS → E19 连续单实体资格闭合并解锁 E20。correctness FAIL → 修 continuous acceptance 实现后按原 E19-v2 判据重跑；correctness 全部成立但效率 FAIL → 永久保留 FAIL，停止并判断 proposal distribution 中 difference/intersection 比例或 CSG 构造方式是否与可证明连通域失配，不得放宽 50%/$Q_{0.99}\le8$ 或增加 64 次上限。
+
+**当前状态**
+
+E19-D2 PASS；E19-v2 已完成预注册并解锁。E20 继续锁定。
+
 
 ## E20｜形状/尺度/轴比/材质解耦
 
