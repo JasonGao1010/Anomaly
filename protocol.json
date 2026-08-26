@@ -485,6 +485,7 @@
       },
       "constructively_connected_generator": {
         "version": "E19-v3",
+        "status": "QUALIFIED HISTORICAL schema 6; superseded in code by the frozen schema-7 candidate pending E18b-v3 and E19-v4",
         "amends": "E19-v2 FAIL and E19-D3-v2 PASS remain permanent; schema 5 arbitrary CSG ends and schema 6 restricts the formal training generator to constructively overlapping unions",
         "question": "Does generator schema 6 deterministically and efficiently generate one-through-five-primitive anomaly proxies whose connectedness follows from strict constituent star-shaped certificates, an explicit earlier-parent interior-overlap tree, and qualified global diffeomorphic deformation?",
         "generator_schema": 6,
@@ -700,8 +701,49 @@
           "formal_generator_modified": false
         }
       },
+      "integrated_generator_schema7": {
+        "status": "IMPLEMENTED AND FROZEN; not yet qualified for formal training",
+        "generator_schema": 7,
+        "supersedes_implementation_schema": 6,
+        "scientific_status": "E18b-v3 and E19-v4 remain required before schema 7 is qualified",
+        "only_changes": ["replace the schema-6 base-axis sampler with the E20a-D2A four-family sampler", "replace embedded child-centre placement with the E20a-D2B construction-time shared-witness placement", "upgrade generator and cache identity from 6 to 7", "record shape family and authoritative overlap-tree evidence in ShapeGenerationReport"],
+        "base_aspect": {
+          "overall_half_scale": "unchanged U[minimum/2,maximum/2]; the longest intrinsic half-axis equals this draw",
+          "family_probabilities": {"general": 0.40, "blocky": 0.20, "flat": 0.20, "elongated": 0.20},
+          "family_stream": "the qualified D2A stream SeedSequence([seed,2001]); family is fixed for an object seed across proposal retries",
+          "ratio_stream": "the qualified D2A stream SeedSequence([seed,2002]); intrinsic ratios are fixed for an object seed across proposal retries",
+          "axis_permutation_stream": "the qualified D2A stream SeedSequence([seed,2003]); axis role is fixed for an object seed across proposal retries",
+          "support_domains": "identical to qualified E20a-D2A",
+          "retired_schema6_axis_draw": "the former three U[0.65,1.25] main-stream values are consumed but ignored so all later unchanged main-stream draws retain their positions"
+        },
+        "shared_witness": {
+          "actual_parent_axis_sign": "unchanged schema-6 main-stream draws and generation order",
+          "parent_tau_stream": "SeedSequence([seed,3001,proposal_count,child_index]), U[0.65,0.85)",
+          "child_tau_stream": "SeedSequence([seed,3002,proposal_count,child_index]), U[0.55,0.80)",
+          "retired_fraction_draw": "the former U[0.10,0.50) embedded-centre value is consumed but ignored so child scale, exponent, yaw, surface and global-deformation draws retain their positions",
+          "translation_phase_rule": "solve child translation and the global-coordinate low-frequency surface phase jointly by a deterministic scalar root",
+          "strict_rule": "both parent and child continuous implicit values at the authoritative undeformed witness are strictly negative",
+          "posthoc_parent_or_witness_search_forbidden": true
+        },
+        "unchanged": ["primitive count 1 through 5", "secondary per-axis scale multiplier U[0.32,0.78)", "root exponent U[0.55,1.65]", "secondary exponent U[0.5,1.8]", "yaw U[-pi,pi]", "surface amplitude/frequency/phase", "bend", "twist", "taper", "union-only formal operations", "continuous size interval [0.2,3.0] m", "single- and multi-primitive continuous size certificates", "64 proposals", "difference/intersection disabled in the formal training stream"],
+        "generation_report_fields": ["generator_schema", "shape_family", "child_parent_indices in actual generation order", "shared_witnesses_undeformed_m", "witness_parent_margins_m", "witness_child_margins_m", "all inherited proposal, rejection, continuous-size, and outer-bound fields"],
+        "model_interface_rule": "shape_family and construction evidence are forbidden from AJAE inputs and supervision labels",
+        "cache_identity": "PROCEDURAL_GENERATOR_SCHEMA=7 together with the render.py source hash",
+        "implementation_verification": {
+          "date": "2026-08-27",
+          "render_source_sha256": "53f7037ffd9f10135dd6bade1904d7c77b51e4b8481c174027c0e36be00ff377",
+          "renderer_generator_identity_sha256": "ea868183f1e982c8fa8e3fd959eced32d121e58f0b1daac8876f5409cc5a83d4",
+          "qualified_D2A_family_counts_reproduced": [1647, 846, 809, 794],
+          "targeted_tests": "5 passed, 32 deselected",
+          "nonstale_regression": "34 passed, 3 deselected",
+          "excluded_historical_inputs": "the three existing dev.json qualification failures remain unchanged and are already recorded under the E19-v3/E57 boundary; stale evidence is not migrated"
+        },
+        "scale_risk_deferred_to_E19_v4": "minimum half-axis rejection and integrated size/efficiency effects are not preemptively removed",
+        "visual_review_forbidden_before_E20a_v2_PASS": true,
+        "criteria_frozen": true
+      },
       "schema7_requalification_chain": {
-        "status": "schema 7 integration is UNLOCKED; E18b-v3 remains LOCKED until schema 7 is implemented and frozen",
+        "status": "schema 7 is IMPLEMENTED AND FROZEN; E18b-v3 is UNLOCKED, E19-v4 remains LOCKED",
         "formal_generator_before_qualification": 6,
         "candidate_generator": 7,
         "E18b-v3": {"objects": 96, "strata_each": {"flat": 24, "elongated": 24, "asymmetric_multi_primitive": 24, "blocky_control": 24}, "rays_per_object": 256, "reference_and_thresholds": "inherit E18b-v2 exactly", "hit_miss_errors_allowed": 0},

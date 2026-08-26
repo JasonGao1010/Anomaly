@@ -7,6 +7,7 @@ import hashlib
 import importlib.util
 import json
 import sys
+from collections import Counter
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -482,29 +483,29 @@ def test_training_and_heldout_geometry_are_disjoint_and_bounded() -> None:
         assert report["bounded"] and report["closed"] and report["components"] == 1
 
 
-def test_generator_schema6_preserves_single_continuous_acceptance() -> None:
+def test_generator_schema7_preserves_single_continuous_acceptance() -> None:
     protocol = load_protocol(PROTOCOL_PATH)
     historical = protocol.render["anomaly_proxies"][
         "continuous_size_acceptance_generator"
     ]
-    current = protocol.render["anomaly_proxies"]["constructively_connected_generator"]
+    current = protocol.render["anomaly_proxies"]["integrated_generator_schema7"]
     assert historical["generator_schema"] == 2
-    assert PROCEDURAL_GENERATOR_SCHEMA == current["generator_schema"] == 6
+    assert PROCEDURAL_GENERATOR_SCHEMA == current["generator_schema"] == 7
 
-    for seed, rejection_kind in (
-        (501, "upper_certificate_rejections"),
-        (688, "lower_certificate_rejections"),
-    ):
+    for seed in range(8):
         shape, report = ShapeSpec.sample_with_report(seed, primitive_count=1)
         repeated_shape, repeated_report = ShapeSpec.sample_with_report(
             seed, primitive_count=1
         )
         assert shape.to_dict() == repeated_shape.to_dict()
         assert report == repeated_report
-        assert report.generator_schema == 6
+        assert report.generator_schema == 7
+        assert report.shape_family in {"general", "blocky", "flat", "elongated"}
+        assert report.child_parent_indices == ()
+        assert report.shared_witnesses_undeformed_m == ()
+        assert report.witness_parent_margins_m == ()
+        assert report.witness_child_margins_m == ()
         assert report.size_definition == "continuous-deformed-surface-aabb"
-        assert report.proposal_count > 1
-        assert getattr(report, rejection_kind) >= 1
         assert 0.2 <= report.accepted_size_lower_m
         assert report.accepted_size_upper_m <= 3.0
         lower, upper = shape.continuous_bounds(
@@ -517,13 +518,74 @@ def test_generator_schema6_preserves_single_continuous_acceptance() -> None:
         assert report.accepted_size_upper_m == expected
 
 
-def test_generator_schema6_uses_tight_union_certificate_for_multi_primitive() -> None:
+def test_generator_schema7_base_families_keep_the_qualified_supports() -> None:
+    observed: Counter[str] = Counter()
+    for seed in range(4096):
+        scale, family = ShapeSpec._schema7_base_scale(seed, 1.0)
+        ordered = np.sort(np.asarray(scale))[::-1]
+        r21, r31 = ordered[1] / ordered[0], ordered[2] / ordered[0]
+        observed[family] += 1
+        if family == "blocky":
+            assert 0.75 <= r31 <= r21 <= 1.0
+        elif family == "flat":
+            assert 0.75 <= r21 <= 1.0 and 0.20 <= r31 <= 0.40
+        elif family == "elongated":
+            assert 0.30 <= r21 <= 0.50 and 0.15 <= r31 <= min(0.40, r21)
+        else:
+            assert 0.0 < r31 <= r21 <= 1.0
+    assert observed == {
+        "general": 1647,
+        "blocky": 846,
+        "flat": 809,
+        "elongated": 794,
+    }
+
+
+def test_generator_schema7_keeps_all_nonreplaced_schema6_draws() -> None:
+    seed, count = 0, 5
+    shape, report = ShapeSpec.sample_with_report(seed, primitive_count=count)
+    assert report.proposal_count == 1
+    rng = np.random.default_rng(seed)
+    half = float(rng.uniform(0.1, 1.5))
+    rng.uniform(0.65, 1.25, size=3)
+    base, _ = ShapeSpec._schema7_base_scale(seed, half)
+    expected_scales = [base]
+    expected_exponents = [tuple(rng.uniform(0.55, 1.65, 2))]
+    expected_yaws = [float(rng.uniform(-np.pi, np.pi))]
+    expected_parents = []
+    for child_index in range(1, count):
+        expected_parents.append(int(rng.integers(0, child_index)))
+        rng.integers(0, 3)
+        rng.integers(0, 2)
+        rng.uniform(0.10, 0.50)
+        expected_scales.append(tuple(np.asarray(base) * rng.uniform(0.32, 0.78, 3)))
+        expected_exponents.append(tuple(rng.uniform(0.5, 1.8, 2)))
+        expected_yaws.append(float(rng.uniform(-np.pi, np.pi)))
+    expected_amplitude = float(rng.uniform(0.0, 0.08 * min(base)))
+    expected_twist = float(rng.uniform(-0.65, 0.65))
+    expected_bend = tuple(rng.uniform(-0.12, 0.12, 2))
+    expected_taper = tuple(rng.uniform(-0.18, 0.18, 2))
+    expected_frequency = tuple(rng.uniform(0.6, 2.2, 3))
+    expected_phase = tuple(rng.uniform(-np.pi, np.pi, 3))
+    np.testing.assert_array_equal(shape.primitive_scales_m, expected_scales)
+    np.testing.assert_array_equal(shape.primitive_exponents, expected_exponents)
+    np.testing.assert_array_equal(shape.primitive_yaws_rad, expected_yaws)
+    assert report.child_parent_indices == tuple(expected_parents)
+    assert shape.surface_amplitude_m == expected_amplitude
+    assert shape.twist_rad_per_m == expected_twist
+    assert shape.bend_per_m == expected_bend
+    assert shape.taper_per_m == expected_taper
+    assert shape.surface_frequency_per_m == expected_frequency
+    assert shape.surface_phase_rad == expected_phase
+
+
+def test_generator_schema7_uses_tight_union_certificate_for_multi_primitive() -> None:
     shape, report = ShapeSpec.sample_with_report(0, primitive_count=2)
     certificate = shape.continuous_size_certificate(
         sobol_probes=4096, maximum_interior_lines=64
     )
     tight_lower, tight_upper = shape.tight_continuous_outer_bounds()
-    assert report.generator_schema == 6
+    assert report.generator_schema == 7
     assert report.size_definition == "continuous-union-tight-certified-interval"
     assert report.accepted_size_lower_m == certificate.lower_size_m
     assert report.accepted_size_upper_m == float(np.max(tight_upper - tight_lower))
@@ -533,25 +595,30 @@ def test_generator_schema6_uses_tight_union_certificate_for_multi_primitive() ->
     assert report.accepted_size_upper_m <= 3.0
 
 
-def test_generator_schema6_constructs_an_earlier_overlap_tree() -> None:
+def test_generator_schema7_records_the_authoritative_overlap_tree() -> None:
     for primitive_count in range(2, 6):
         for seed in range(8):
             shape, report = ShapeSpec.sample_with_report(
                 seed, primitive_count=primitive_count
             )
-            assert report.generator_schema == 6
+            assert report.generator_schema == 7
             assert shape.operations == ("union",) * primitive_count
             assert shape.connectivity_certificate.source == "connected_union_graph"
+            assert len(report.child_parent_indices) == primitive_count - 1
+            assert len(report.shared_witnesses_undeformed_m) == primitive_count - 1
             assert all(
                 shape._primitive_star_certificate(index)
                 for index in range(primitive_count)
             )
             for index in range(1, primitive_count):
-                center = np.asarray(shape.primitive_offsets_m[index])[None, :]
-                assert any(
-                    shape._primitive_perturbed_value(parent, center)[0] < 0.0
-                    for parent in range(index)
-                )
+                parent = report.child_parent_indices[index - 1]
+                assert 0 <= parent < index
+                witness = np.asarray(report.shared_witnesses_undeformed_m[index - 1])[None]
+                parent_value = float(shape._primitive_perturbed_value(parent, witness)[0])
+                child_value = float(shape._primitive_perturbed_value(index, witness)[0])
+                assert parent_value < 0.0 and child_value < 0.0
+                assert report.witness_parent_margins_m[index - 1] == -parent_value
+                assert report.witness_child_margins_m[index - 1] == -child_value
 
 
 def test_tight_continuous_outer_bound_is_conservative_and_no_looser() -> None:

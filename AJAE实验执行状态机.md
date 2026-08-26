@@ -2383,9 +2383,19 @@ E20a-D2B 在权威提交 `c5898de` 下使用 24 个 CPU 进程执行两次完整
 D2B PASS 只资格偏心共同内部见证机制。D2A 与 D2B 两个局部零件现均合格，schema 7 集成与冻结现已解锁；本轮不实施 schema 7。E18b-v3 仍须等 schema 7 实装并冻结后才能执行，E19-v4、E20a-v2、E20-V1、E20b 和 E21 继续锁定。
 
 
-### schema 7 集成（UNLOCKED）；E18b-v3 与 E19-v4（LOCKED）
+### schema 7 集成（IMPLEMENTED AND FROZEN）；E18b-v3（UNLOCKED）；E19-v4（LOCKED）
 
 D2A、D2B 均 PASS 后才允许冻结并直接修改正式 generator 为 schema 7。schema 7 继续限定 1–5 个强制共同见证的 union primitive，保持 $[0.2,3.0]$ m、既有连续形变以及 difference/intersection 禁用；schema identity 必须进入 generation report、manifest 和 cache identity。资格完成前，schema 6 仍是当前正式版本，schema 7 只能称为候选。
+
+**schema 7 集成冻结记录（2026-08-27）**
+
+schema 7 已在不形成科学 PASS 的前提下完成集成并冻结。唯一几何变化是：用 D2A 四族 base aspect sampler 替换旧轴比采样，用 D2B 构造时共同内部 witness 替换旧 child-center 内嵌规则；`PROCEDURAL_GENERATOR_SCHEMA` 升为 7。`ShapeGenerationReport` 新增 `shape_family`、实际生成顺序下的 `child_parent_indices`、`shared_witnesses_undeformed_m` 以及 parent/child witness margin。family 与构造证据禁止进入 AJAE 输入或监督标签。
+
+总体 half-scale、primitive count、secondary scale、root/secondary exponent、yaw、surface、bend/twist/taper、union-only、连续尺寸 $[0.2,3.0]$ m、连续尺寸证书、64 proposal 及 difference/intersection 禁用均保持不变。旧 schema-6 三轴因子和内嵌 fraction 的主流随机数仍按原位置消费但不再决定几何，使其后的未修改字段保留原主流抽样位置。D2A family/ratio/轴排列逐字段沿用已资格确认的 `SeedSequence([seed, stream_id])`，因此同一对象 seed 在 proposal 重试间保持内禀 family/ratio/轴角色；D2B $\tau_p/\tau_c$ 另按 seed、字段编号、proposal 和 child index 分离。低频表面扰动在共同见证构造前按原分布抽取，child translation 与其全局坐标 phase 通过单一标量根联合求解，禁止事后替换 parent 或 witness。
+
+该记录只说明权威代码、报告和 cache identity 已集成为一个冻结候选，不说明 schema 7 已通过求交、尺寸、效率、确定性或覆盖资格。极端轴比引起的最小半轴拒绝和与偏心生长耦合后的尺寸/效率风险不提前消除，留给 E19-v4 暴露。当前唯一解锁的科学实验变为 E18b-v3；E19-v4 及其后节点继续锁定，人工可视化仍禁止。
+
+集成实现核验中，D2A 冻结流在 seed 0–4095 上重现 general/blocky/flat/elongated = 1,647/846/809/794。schema 7 定向测试为 5 passed、32 deselected；排除已明确过期 `dev.json` 证据的回归为 34 passed、3 deselected。`src/render.py` SHA-256 为 `53f7037ffd9f10135dd6bade1904d7c77b51e4b8481c174027c0e36be00ff377`，由 schema 7 与该源码哈希形成的 renderer/generator identity 为 `ea868183f1e982c8fa8e3fd959eced32d121e58f0b1daac8876f5409cc5a83d4`。原 E19-v3/E57 边界下的三项过期开发世界失败保持不变，未被迁移或冒充为当前证据。
 
 E18b-v3 针对 schema 7 扩展的薄、长和偏心几何域审计求交：固定 96 个对象（flat、elongated、明显不对称 multi-primitive、blocky 各 24），每个 256 条确定性射线；沿用 E18b-v2 的独立高精度参考和全部既有误差界，要求 hit/miss 零错误。它是新参数域的小型回归，不重做 arbitrary CSG 理论资格。
 

@@ -35,7 +35,17 @@ WORLD_FORMAT = "ajae-world-v2"
 CALIBRATION_FORMAT = "ajae-sensor-calibration-v4"
 DEVELOPMENT_FORMAT = "ajae-development-worlds-v2"
 DEVELOPMENT_PROTOCOL_SCHEMA = 30
-PROCEDURAL_GENERATOR_SCHEMA = 6
+PROCEDURAL_GENERATOR_SCHEMA = 7
+SHAPE_FAMILIES = ("general", "blocky", "flat", "elongated")
+AXIS_PERMUTATIONS = (
+    (0, 1, 2), (0, 2, 1), (1, 0, 2),
+    (1, 2, 0), (2, 0, 1), (2, 1, 0),
+)
+SCHEMA7_FAMILY_STREAM = 2001
+SCHEMA7_RATIO_STREAM = 2002
+SCHEMA7_AXIS_STREAM = 2003
+SCHEMA7_PARENT_TAU_STREAM = 3001
+SCHEMA7_CHILD_TAU_STREAM = 3002
 GATE1_EVIDENCE_KEYS = (
     "ray_slot_audit",
     "range_image_round_trip",
@@ -282,6 +292,11 @@ class ShapeGenerationReport:
     outer_lower_m: tuple[float, float, float]
     outer_upper_m: tuple[float, float, float]
     size_definition: str
+    shape_family: str
+    child_parent_indices: tuple[int, ...]
+    shared_witnesses_undeformed_m: tuple[tuple[float, float, float], ...]
+    witness_parent_margins_m: tuple[float, ...]
+    witness_child_margins_m: tuple[float, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -1736,6 +1751,141 @@ class ShapeSpec:
             normal[kept] = gradient[finite_normal] / length[finite_normal, None]
         return _freeze(distance), _freeze(normal), _freeze(valid)
 
+    @staticmethod
+    def _schema7_rng(
+        seed: int, stream: int, *coordinates: int
+    ) -> np.random.Generator:
+        """Keep qualified schema-7 factors on structurally separate streams."""
+        return np.random.default_rng(
+            np.random.SeedSequence((seed, stream, *coordinates))
+        )
+
+    @classmethod
+    def _schema7_base_scale(
+        cls, seed: int, half: float
+    ) -> tuple[tuple[float, float, float], str]:
+        family_value = float(
+            cls._schema7_rng(seed, SCHEMA7_FAMILY_STREAM).random()
+        )
+        if family_value < 0.4:
+            family = 0
+        elif family_value < 0.6:
+            family = 1
+        elif family_value < 0.8:
+            family = 2
+        else:
+            family = 3
+        rng = cls._schema7_rng(seed, SCHEMA7_RATIO_STREAM)
+        if family == 0:
+            factors = np.sort(rng.uniform(0.65, 1.25, 3))[::-1]
+            r21, r31 = float(factors[1] / factors[0]), float(factors[2] / factors[0])
+        elif family == 1:
+            r31 = float(rng.uniform(0.75, 1.0))
+            r21 = float(rng.uniform(r31, 1.0))
+        elif family == 2:
+            r21, r31 = float(rng.uniform(0.75, 1.0)), float(rng.uniform(0.2, 0.4))
+        else:
+            r21 = float(rng.uniform(0.3, 0.5))
+            r31 = float(rng.uniform(0.15, min(0.4, r21)))
+        permutation = AXIS_PERMUTATIONS[
+            int(cls._schema7_rng(seed, SCHEMA7_AXIS_STREAM).integers(0, 6))
+        ]
+        ordered = np.asarray((half, half * r21, half * r31))
+        return tuple(float(value) for value in ordered[list(permutation)]), SHAPE_FAMILIES[family]
+
+    @classmethod
+    def _perturbed_primitive_value(
+        cls,
+        scale: tuple[float, float, float], center: np.ndarray,
+        exponent: tuple[float, float], yaw: float, point: np.ndarray,
+        amplitude: float, frequency: tuple[float, float, float],
+        phase: tuple[float, float, float],
+    ) -> float:
+        base = float(cls._primitive_distance(
+            point[None], scale, tuple(center), exponent, yaw
+        )[0])
+        displacement = amplitude * float(np.mean(
+            np.sin(point * np.asarray(frequency) + np.asarray(phase))
+        ))
+        return base - displacement
+
+    @classmethod
+    def _primitive_radial_radius(
+        cls,
+        scale: tuple[float, float, float], center: np.ndarray,
+        exponent: tuple[float, float], yaw: float, direction: np.ndarray,
+        amplitude: float, frequency: tuple[float, float, float],
+        phase: tuple[float, float, float],
+    ) -> float:
+        def implicit(distance: float) -> float:
+            return cls._perturbed_primitive_value(
+                scale, center, exponent, yaw, center + distance * direction,
+                amplitude, frequency, phase,
+            )
+
+        if implicit(0.0) >= 0.0:
+            raise RenderError("schema-7 primitive center is not strictly interior")
+        upper = 2.0 * float(np.linalg.norm(scale))
+        while implicit(upper) <= 0.0 and upper < 64.0:
+            upper *= 2.0
+        if implicit(upper) <= 0.0:
+            raise RenderError("schema-7 radial boundary was not bracketed")
+        return float(brentq(implicit, 0.0, upper, xtol=1e-13, rtol=1e-13))
+
+    @classmethod
+    def _shared_witness_placement(
+        cls,
+        parent_scale: tuple[float, float, float], parent_center: np.ndarray,
+        parent_exponent: tuple[float, float], parent_yaw: float,
+        child_scale: tuple[float, float, float], child_exponent: tuple[float, float],
+        child_yaw: float, direction: np.ndarray, tau_parent: float, tau_child: float,
+        amplitude: float, frequency: tuple[float, float, float],
+        phase: tuple[float, float, float],
+    ) -> tuple[np.ndarray, np.ndarray, float, float]:
+        """Construct one authoritative witness before global deformation."""
+        parent_radius = cls._primitive_radial_radius(
+            parent_scale, parent_center, parent_exponent, parent_yaw, direction,
+            amplitude, frequency, phase,
+        )
+        witness = parent_center + tau_parent * parent_radius * direction
+
+        # Translation changes the global-coordinate surface phase, so solve
+        # placement and the opposite-direction child boundary together.
+        def child_boundary(offset_distance: float) -> float:
+            child_center = witness + offset_distance * direction
+            boundary = witness - offset_distance * (1.0 / tau_child - 1.0) * direction
+            return cls._perturbed_primitive_value(
+                child_scale, child_center, child_exponent, child_yaw, boundary,
+                amplitude, frequency, phase,
+            )
+
+        upper = 2.0 * float(np.linalg.norm(child_scale))
+        while child_boundary(upper) <= 0.0 and upper < 64.0:
+            upper *= 2.0
+        if child_boundary(0.0) >= 0.0 or child_boundary(upper) <= 0.0:
+            raise RenderError("schema-7 child boundary was not bracketed")
+        offset_distance = float(brentq(
+            child_boundary, 0.0, upper, xtol=1e-13, rtol=1e-13
+        ))
+        child_center = witness + offset_distance * direction
+        child_radius = cls._primitive_radial_radius(
+            child_scale, child_center, child_exponent, child_yaw, -direction,
+            amplitude, frequency, phase,
+        )
+        if abs(offset_distance - tau_child * child_radius) > 1e-10:
+            raise RenderError("schema-7 shared-witness formula is inconsistent")
+        parent_margin = -cls._perturbed_primitive_value(
+            parent_scale, parent_center, parent_exponent, parent_yaw, witness,
+            amplitude, frequency, phase,
+        )
+        child_margin = -cls._perturbed_primitive_value(
+            child_scale, child_center, child_exponent, child_yaw, witness,
+            amplitude, frequency, phase,
+        )
+        if parent_margin <= 0.0 or child_margin <= 0.0:
+            raise RenderError("schema-7 shared witness is not strictly interior")
+        return child_center, witness, parent_margin, child_margin
+
     @classmethod
     def sample_with_report(
         cls,
@@ -1766,57 +1916,75 @@ class ShapeSpec:
                 int(rng.integers(1, 6)) if primitive_count is None else primitive_count
             )
             half = float(rng.uniform(minimum / 2.0, maximum / 2.0))
-            base = np.clip(half * rng.uniform(0.65, 1.25, size=3), 0.055, maximum / 2.0)
-            scales = [tuple(map(float, base))]
-            offsets = [(0.0, 0.0, 0.0)]
+            rng.uniform(0.65, 1.25, size=3)  # Retired schema-6 axis draw.
+            base, shape_family = cls._schema7_base_scale(seed, half)
+            base_array = np.asarray(base)
+            scales = [base]
             exponents = [tuple(map(float, rng.uniform(0.55, 1.65, size=2)))]
             yaws = [float(rng.uniform(-math.pi, math.pi))]
-            operations = ["union"]
-            for _primitive in range(1, count):
-                parent = int(rng.integers(0, _primitive))
+            child_events: list[tuple[int, int, float]] = []
+            for child_index in range(1, count):
+                parent = int(rng.integers(0, child_index))
                 axis = int(rng.integers(0, 3))
                 sign = -1.0 if int(rng.integers(0, 2)) == 0 else 1.0
-                fraction = float(rng.uniform(0.10, 0.50))
-                scale = base * rng.uniform(0.32, 0.78, size=3)
-                direction = np.zeros(3, dtype=np.float64)
-                parent_yaw = yaws[parent]
-                if axis == 0:
-                    direction[:2] = (math.cos(parent_yaw), math.sin(parent_yaw))
-                elif axis == 1:
-                    direction[:2] = (-math.sin(parent_yaw), math.cos(parent_yaw))
-                else:
-                    direction[2] = 1.0
-                # The new center stays strictly inside its parent even under
-                # the maximum qualified surface displacement.
-                offset = np.asarray(offsets[parent]) + (
-                    sign
-                    * fraction
-                    * scales[parent][axis]
-                    * direction
-                )
+                rng.uniform(0.10, 0.50)  # Retired embedded-center draw.
+                scale = base_array * rng.uniform(0.32, 0.78, size=3)
                 scales.append(tuple(map(float, scale)))
-                offsets.append(tuple(map(float, offset)))
                 exponents.append(tuple(map(float, rng.uniform(0.5, 1.8, size=2))))
                 yaws.append(float(rng.uniform(-math.pi, math.pi)))
-                operations.append("union")
-            amplitude = float(rng.uniform(0.0, 0.08 * float(base.min())))
+                child_events.append((parent, axis, sign))
+            amplitude = float(rng.uniform(0.0, 0.08 * min(base)))
+            twist = float(rng.uniform(-0.65, 0.65))
+            bend = tuple(map(float, rng.uniform(-0.12, 0.12, size=2)))
+            taper = tuple(map(float, rng.uniform(-0.18, 0.18, size=2)))
+            frequency = tuple(map(float, rng.uniform(0.6, 2.2, size=3)))
+            phase = tuple(map(float, rng.uniform(-math.pi, math.pi, size=3)))
             try:
+                offsets = [np.zeros(3)]
+                child_parents: list[int] = []
+                shared_witnesses: list[tuple[float, float, float]] = []
+                parent_margins: list[float] = []
+                child_margins: list[float] = []
+                for child_index, (parent, axis, sign) in enumerate(child_events, 1):
+                    direction = np.zeros(3)
+                    parent_yaw = yaws[parent]
+                    if axis == 0:
+                        direction[:2] = (math.cos(parent_yaw), math.sin(parent_yaw))
+                    elif axis == 1:
+                        direction[:2] = (-math.sin(parent_yaw), math.cos(parent_yaw))
+                    else:
+                        direction[2] = 1.0
+                    direction *= sign
+                    tau_parent = float(cls._schema7_rng(
+                        seed, SCHEMA7_PARENT_TAU_STREAM, proposal_count, child_index,
+                    ).uniform(0.65, 0.85))
+                    tau_child = float(cls._schema7_rng(
+                        seed, SCHEMA7_CHILD_TAU_STREAM, proposal_count, child_index,
+                    ).uniform(0.55, 0.80))
+                    offset, witness, parent_margin, child_margin = (
+                        cls._shared_witness_placement(
+                            scales[parent], offsets[parent], exponents[parent], yaws[parent],
+                            scales[child_index], exponents[child_index], yaws[child_index],
+                            direction, tau_parent, tau_child, amplitude, frequency, phase,
+                        )
+                    )
+                    offsets.append(offset)
+                    child_parents.append(parent)
+                    shared_witnesses.append(tuple(map(float, witness)))
+                    parent_margins.append(parent_margin)
+                    child_margins.append(child_margin)
                 result = cls(
                     primitive_scales_m=tuple(scales),
-                    primitive_offsets_m=tuple(offsets),
+                    primitive_offsets_m=tuple(tuple(map(float, item)) for item in offsets),
                     primitive_exponents=tuple(exponents),
                     primitive_yaws_rad=tuple(yaws),
-                    operations=tuple(operations),
-                    twist_rad_per_m=float(rng.uniform(-0.65, 0.65)),
-                    bend_per_m=tuple(map(float, rng.uniform(-0.12, 0.12, size=2))),
-                    taper_per_m=tuple(map(float, rng.uniform(-0.18, 0.18, size=2))),
+                    operations=("union",) * count,
+                    twist_rad_per_m=twist,
+                    bend_per_m=bend,
+                    taper_per_m=taper,
                     surface_amplitude_m=amplitude,
-                    surface_frequency_per_m=tuple(
-                        map(float, rng.uniform(0.6, 2.2, size=3))
-                    ),
-                    surface_phase_rad=tuple(
-                        map(float, rng.uniform(-math.pi, math.pi, size=3))
-                    ),
+                    surface_frequency_per_m=frequency,
+                    surface_phase_rad=phase,
                 )
                 # Require connectivity at both audit and placement resolutions.
                 result.geometry_report(resolution=31)
@@ -1863,6 +2031,11 @@ class ShapeSpec:
                     outer_lower_m=tuple(map(float, lower)),
                     outer_upper_m=tuple(map(float, upper)),
                     size_definition=size_definition,
+                    shape_family=shape_family,
+                    child_parent_indices=tuple(child_parents),
+                    shared_witnesses_undeformed_m=tuple(shared_witnesses),
+                    witness_parent_margins_m=tuple(parent_margins),
+                    witness_child_margins_m=tuple(child_margins),
                 )
             except RenderError as error:
                 if str(error) == "continuous CSG is certified disconnected":

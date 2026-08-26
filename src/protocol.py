@@ -319,6 +319,7 @@ class AJAEProtocol:
         self.development = self._document["development"]
         self.experiments = self._document["experiments"]
         self.evaluation_document = self._document["evaluation"]
+        self.visual_reviews = self._document["visual_reviews"]
         self.decision_gates = self._document["decision_gates"]
         self.status = self._document["status"]
 
@@ -469,7 +470,8 @@ class AJAEProtocol:
         expected = {
             "schema_version", "authority", "task", "data", "labels", "stu",
             "render", "window", "model", "training", "development",
-            "experiments", "evaluation", "decision_gates", "status",
+            "experiments", "evaluation", "visual_reviews", "decision_gates",
+            "status",
         }
         _exact_keys(source, expected, "protocol")
         if _integer(source["schema_version"], "schema_version") != SCHEMA_VERSION:
@@ -483,6 +485,14 @@ class AJAEProtocol:
         cls._validate_training(_mapping(source["training"], "training"))
         cls._validate_development(_mapping(source["development"], "development"))
         cls._validate_evaluation(_mapping(source["evaluation"], "evaluation"))
+        visual_reviews = _mapping(source["visual_reviews"], "visual_reviews")
+        _exact_keys(
+            visual_reviews,
+            {"global_discipline", "E26-V1", "E45-V1", "E88-V1"},
+            "visual_reviews",
+        )
+        for name in visual_reviews:
+            _mapping(visual_reviews[name], f"visual_reviews.{name}")
         experiments = _mapping(source["experiments"], "experiments")
         if set(experiments) != {item.value for item in ExperimentCondition}:
             raise ProtocolError("experiments must define exactly B0 through B5")
