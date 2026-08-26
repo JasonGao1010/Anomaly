@@ -883,7 +883,34 @@
             "nonstale_regression": "36 passed, 3 deselected"
           }
         },
-        "E19-v4": {"calls": 2048, "independent_runs": 2, "inherits": ["continuous size", "constituent star certificate", "shared witness", "overlap tree", "JSON round-trip", "finite values", "generation report", "cache schema identity"], "efficiency": {"rejection_rate": "<0.50", "proposal_count_q99_method_higher": "<=8", "proposal_count_maximum": "<=64"}},
+        "E19-v4": {
+          "status": "EXECUTION FROZEN; first formal run not yet started",
+          "question": "Does the integrated schema-7 generator deterministically and efficiently produce valid one-through-five-primitive connected-union shapes under the unchanged continuous-size, connectivity, and proposal limits?",
+          "generator_schema": 7,
+          "calls": 2048,
+          "audit_groups_in_order": [
+            {"name": "default-training-path", "primitive_count": "sampled 1 through 5", "seeds": [0, 1023], "calls": 1024},
+            {"name": "fixed-count-2", "primitive_count": 2, "seeds": [0, 255], "calls": 256},
+            {"name": "fixed-count-3", "primitive_count": 3, "seeds": [0, 255], "calls": 256},
+            {"name": "fixed-count-4", "primitive_count": 4, "seeds": [0, 255], "calls": 256},
+            {"name": "fixed-count-5", "primitive_count": 5, "seeds": [0, 255], "calls": 256}
+          ],
+          "independent_runs": 2,
+          "cpu_processes": 24,
+          "candidate_limit_per_call": 64,
+          "inherits": ["E16-v3 single-primitive continuous size", "E18a-A and E18a-D2-v2 multi-primitive continuous size", "E19-D2 constituent strict radial star certificate", "authoritative schema-7 shared witness", "actual earlier-parent overlap tree", "continuous connected state", "union-only operation stream", "resolution-31 and resolution-41 bounded/closed finite-volume reports", "fixed 9x9x9 finite SDF", "JSON and object-hash round-trip", "generation-report accounting", "renderer/generator cache schema identity"],
+          "correctness_pass_conditions": ["all 2048 calls accept within 64 proposals", "every accepted continuous size and outer bound exactly reproduce its generation report and remain within [0.2,3.0] m", "every constituent has strict_radial_star_shaped evidence", "every recorded shared witness is finite and strictly inside its actual parent and child with exactly reproduced margins", "the stored actual generation tree has one earlier parent for every child and covers every primitive", "single primitives use strict_radial_star_shaped and multi-primitives use connected_union_graph", "all accepted operations are union", "all parameters, bounds, fixed-grid SDF values, and geometry reports are finite, bounded, closed, and single-component under the continuous certificate", "JSON reconstruction reproduces the exact payload and object hash", "the report rejection totals equal the observed authoritative proposal events", "the active source and cache identities equal the frozen schema-7 identities", "two independent complete runs reproduce every call, proposal event, shape payload, certificate, statistic, hash, and summary elementwise"],
+          "efficiency": {"rejection_rate": "<0.50", "proposal_count_q99_method_higher": "<=8", "proposal_count_maximum": "<=64"},
+          "required_descriptive_output": ["total proposals, accepted count, rejection count and rejection rate", "proposal-count median, Q90, Q95, Q99 with method=higher, and maximum", "too-small and tight-upper-too-large rejection counts", "constituent-star, shared-witness, overlap-tree/connectivity, nonfinite/geometry, and residual-other rejection counts", "per-audit-group proposal and rejection statistics", "family by actual candidate primitive-count proposal, acceptance, rejection, and reason table", "minimum accepted authoritative witness margin"],
+          "proposal_attribution": "A read-only Python trace observes the existing sample_with_report control flow. It records the authoritative local candidate count and fixed shape_family when the existing lower/upper rejection counter or caught RenderError occurs. It neither modifies render.py nor duplicates, intercepts, suppresses, or replaces generator decisions. Attribution is descriptive and cannot alter PASS/FAIL.",
+          "failure_routing": {"correctness_and_efficiency_pass": "qualify schema 7 and unlock E20a-v2", "any_correctness_failure": "stop with E20a-v2 locked", "correctness_pass_efficiency_fail": "stop for rejection attribution without changing the 3 m limit, 64-proposal limit, family supports, eccentric construction, or inherited thresholds"},
+          "frozen_render_source_sha256": "ccdddb12b96104360deb245dabffcf8449c9e568c70dd7202cdc3e850b5413d9",
+          "frozen_renderer_generator_identity_sha256": "791ed731effe2b3b9c3b3d9c2af6959c7487c769eeaaff62c6feeeb647a611ee",
+          "runner_sha256": "7f452f4fd2b7ea1ea9fc86025a769f59d1e4d078ce59e91c1ead4b19bb5adfb6",
+          "planned_artifact": "runs/ajae/e19_v4_schema7_generator.npz",
+          "forbidden": ["modifying schema 7, its proposal stream, the intersection implementation, or any inherited threshold", "using voxel topology as the connectivity definition", "post-hoc replacement of an actual parent or witness", "running E20a-v2 or visualizing shapes before this experiment passes"],
+          "criteria_frozen_before_formal_run": true
+        },
         "E20a-v2": "inherit all E20a sample identities, descriptors, coverage regions, and minimum support thresholds without change"
       },
       "schema7_blinded_geometry_review": {

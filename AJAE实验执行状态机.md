@@ -2433,7 +2433,17 @@ v4 在预注册提交 `20c02688db27840d983a5b8153868502807ecbb4` 后完成两处
 
 正式产物 `runs/ajae/e18b_v4_schema7_intersection.npz` 为 1,594,431 bytes，SHA-256 为 `bcc638285bf96e293b8340a52e9d190c738944e7fc26921ada1855e891ad4718`，摘要哈希为 `d055c1ad4aa81bbc14c7df94d4f1b0e122782a35bae9c36f9279062638e36ec4`。E18b-v4 PASS 只说明 schema 7 新增薄、长和偏心几何域没有突破修复后求交器在当前冻结射线下的能力，不说明 schema 7 尺寸、效率或覆盖资格成立。E19-v4 现已解锁；E20a-v2 及人工可视化仍锁定。当前 `src/render.py` SHA-256 为 `ccdddb12b96104360deb245dabffcf8449c9e568c70dd7202cdc3e850b5413d9`，对应 renderer/generator cache identity 为 `791ed731effe2b3b9c3b3d9c2af6959c7487c769eeaaff62c6feeeb647a611ee`。
 
-E19-v4 继承 E19-v3 的 2,048 次调用、两遍复现和效率门槛：proposal rejection rate $<50\%$、$Q_{0.99}$（higher）$\le8$、maximum $\le64$；另须逐项检查连续尺寸、constituent 星形证书、共同见证、overlap tree、JSON 往返、数值有限、生成报告和 cache schema identity。E18b-v3 与 E19-v4 都 PASS 后才解锁 E20a-v2；E20a-v2 原样继承 E20a 的 8,192 个对象、区域定义和最低支持数。
+E19-v4 继承 E19-v3 的 2,048 次调用、两遍复现和效率门槛：proposal rejection rate $<50\%$、$Q_{0.99}$（higher）$\le8$、maximum $\le64$；另须逐项检查连续尺寸、constituent 星形证书、共同见证、overlap tree、JSON 往返、数值有限、生成报告和 cache schema identity。E18b-v4 与 E19-v4 都 PASS 后才解锁 E20a-v2；E20a-v2 原样继承 E20a 的 8,192 个对象、区域定义和最低支持数。
+
+**E19-v4 运行协议冻结（2026-08-27，首次正式运行前）**
+
+正式调用严格继承 E19-v3：默认训练路径调用 `ShapeSpec.sample_with_report(seed)` 的 seed 0–1023；固定 primitive count 2/3/4/5 分别调用 seed 0–255，共 2,048 次。完整审计独立执行两遍，每遍使用 24 个 CPU 进程；每次调用仍最多 64 个 proposal。效率 PASS 条件原样冻结为总 proposal rejection rate $<50\%$、proposal count 的 $Q_{0.99}$（`method=higher`）$\le8$、maximum $\le64$。
+
+每个接受对象重新计算并逐项核对：E16-v3 单 primitive 连续尺寸或 E18a-A+D2-v2 多 primitive 连续尺寸、每个 constituent 的严格径向星形证书、构造时保存的实际 parent 与共同内部 witness、完整 earlier-parent overlap tree、连续连通证书、union-only 操作、resolution 31/41 的有限体积与闭合边界报告、固定 $9\times9\times9$ SDF 有限性、JSON 与对象哈希往返、生成报告计数，以及 schema 7+当前 `render.py` 的 cache identity。共同见证必须在实际生成 parent 和 child 中严格为内部点，重算 margin 必须与报告逐值相同；禁止事后另找 parent 或 witness。
+
+正式产物必须保存总 proposal、接受数、拒绝率、proposal count 的 median/$Q_{0.90}$/$Q_{0.95}$/$Q_{0.99}$（higher）/maximum，以及 too-small、tight-upper-too-large、constituent/star、witness、tree/connectivity、nonfinite/geometry 等拒绝归因；另保存审计组统计、family×候选 primitive count 的 proposal/接受/拒绝表和最差接受 witness margin。这些均为预注册描述量，不新增 PASS 阈值。由于权威 `ShapeGenerationReport` 只聚合部分拒绝原因，运行器使用只读 Python trace 观察现有 `sample_with_report` 内真正发生的计数递增与已捕获 `RenderError`，记录当时的实际候选 count 和固定 family；它不修改、拦截或替换任何生成器决策，也不复制生成算法。
+
+若正确性与效率均 PASS，则 schema 7 正式取得生成资格并解锁 E20a-v2。若任一正确性条件 FAIL，立即停止。若正确性 PASS 但效率 FAIL，则停止并仅依据已保存的拒绝归因决定后续诊断；不得移动 3 m、64 proposal、四族轴比、偏心构造或既有效率门槛。冻结 `src/render.py` SHA-256 为 `ccdddb12b96104360deb245dabffcf8449c9e568c70dd7202cdc3e850b5413d9`，renderer/generator identity 为 `791ed731effe2b3b9c3b3d9c2af6959c7487c769eeaaff62c6feeeb647a611ee`，运行器 SHA-256 为 `7f452f4fd2b7ea1ea9fc86025a769f59d1e4d078ce59e91c1ead4b19bb5adfb6`，预定产物为 `runs/ajae/e19_v4_schema7_generator.npz`。E19-v4 现为 **EXECUTION FROZEN**；E20a-v2 与人工可视化继续锁定。
 
 
 ### E20-V1｜盲法人工几何审查（LOCKED）
