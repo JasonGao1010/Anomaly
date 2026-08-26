@@ -2327,7 +2327,7 @@ E20a-D1 使用 24 个 CPU 进程对 E20a 的 seed 0–8191 做了两次完整独
 
 **当前状态**
 
-E19-v3 PASS；E20a FAIL 永久保留；E20a-D1 PASS。直接实现完整 schema 7 的权限撤回；先独立资格基础轴比采样和偏心共同见证构造。当前仅 E20a-D2A 解锁；E20a-D2B、schema 7、E18b-v3、E19-v4、E20a-v2、E20-V1、E20b 与 E21 均锁定。
+E19-v3 PASS；E20a FAIL 永久保留；E20a-D1 PASS。直接实现完整 schema 7 的权限撤回；先独立资格基础轴比采样和偏心共同见证构造。D2A 运行前仅 E20a-D2A 解锁，E20a-D2B 及全部下游节点锁定；正式结果见本节末尾的状态更新。
 
 
 ### E20a-D2A｜基础轴比采样器资格
@@ -2355,8 +2355,16 @@ E19-v3 PASS；E20a FAIL 永久保留；E20a-D1 PASS。直接实现完整 schema 
 
 PASS 只资格基础轴比采样器并解锁 E20a-D2B；它不生成多 primitive 对象、不说明最终 E20a 区域已经覆盖、不把 schema 7 变成正式 generator，也不改变当前已资格的 schema 6。
 
+**E20a-D2A 正式结果（2026-08-27）**
 
-### E20a-D2B｜偏心共同见证构造资格（LOCKED）
+E20a-D2A 在预注册提交 `91be27a` 后，以 24 个 CPU 进程对 seed 0–4095 做了两次完整独立审计，正式裁决为 **PASS**。两遍分别用时 0.7630624800003716 s 和 0.6063500649997877 s；字段数组、连续连通证书、对象哈希、family/permutation 计数和随机流隔离结果逐元素一致，两遍数组哈希均为 `badbc50332863181598f1d8f9958644883c492da5ae597325d7d73409159e2b1`，摘要哈希为 `13681e35d6d4857da6e94ddf202dfa4b9f4a9bce9dcb6c75aa13d5f687660062`。正式产物 `runs/ajae/e20a_d2a_base_aspect_sampler.npz` 为 528,004 bytes，SHA-256 为 `0e92143709a15f633862b8ebff8aa0c00785abf45e6cd921db86839c1c39bbdb`。
+
+冻结 family 流得到 general/blocky/flat/elongated = 1,647/846/809/794，和审计输出逐项一致；六种轴排列计数为 686/693/667/678/678/694。全部 4,096 个对象参数有限并落在对应的内禀支持域，全部取得 `strict_radial_star_shaped` 证书。替换 family stream 后有 3,003 个 seed 的 family 改变，但总体尺度、primitive count、exponent、deformation seed、yaw 与 permutation 均逐元素不变；替换总体尺度 stream 后全部目标尺度改变，而 family、轴比及其余独立字段均不变。独立读取落盘产物复算了全部支持域、排序关系、证书和流隔离，未发现反例。`src/render.py` 相对预注册提交无差异，正式 schema-6 generator 未修改。
+
+该结果证实四族基础轴比采样机制本身满足冻结的支持、严格星形性、字段隔离和确定性要求；它尚未证实极端轴比在 $[0.2,3.0]$ m 物理尺寸映射下始终可表示，也未证实共同见证、多 primitive、求交、最终覆盖或生成效率。E20a-D2B 现已解锁；schema 7 及全部下游节点继续锁定。
+
+
+### E20a-D2B｜偏心共同见证构造资格（UNLOCKED）
 
 D2B 只回答：child 能否向 parent 外部生长，同时由构造公式预先给出位于双方严格内部的共同见证。对 parent 局部主轴方向 $u$ 求唯一径向边界 $R_p(u)$，取 $w=o_p+\tau_pR_p(u)u$、$\tau_p\sim U[0.65,0.85)$；对 child 的 $-u$ 方向求 $R_c(-u)$，令 $o_c=w+\tau_cR_c(-u)u$、$\tau_c\sim U[0.55,0.80)$。每条生成边必须保存权威 $w$，且双方连续隐式值具有严格负余量；禁止生成后搜索一个碰巧交叠的点。
 

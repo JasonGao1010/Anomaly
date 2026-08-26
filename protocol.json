@@ -628,7 +628,7 @@
       },
       "schema7_base_aspect_sampler_qualification": {
         "version": "E20a-D2A",
-        "status": "UNLOCKED",
+        "status": "PASS",
         "question": "Does a dimensionless four-family base-aspect sampler explicitly support general, blocky, flat, and elongated primitives without relying on union or deformation and without coupling the internal family to scale, primitive count, exponent, deformation seed, or a fixed Cartesian axis?",
         "formal_generator_unchanged": true,
         "render_py_modification_forbidden": true,
@@ -650,11 +650,26 @@
         "pass_conditions": ["family counts equal the frozen family stream exactly", "every value is finite", "every family member satisfies its frozen intrinsic support domain", "all six axis roles follow the frozen permutation stream", "every primitive receives strict_radial_star_shaped evidence from the qualified continuous certifier", "both runs reproduce all fields, certificates, object hashes, counts, and summary hashes elementwise exactly"],
         "interpretation_limit": "PASS qualifies only the base-aspect sampler and unlocks E20a-D2B. It does not qualify multi-primitive generation, final E20a coverage, physical-scale representability, or schema 7 as a formal generator.",
         "forbidden": ["modifying render.py or the formal generator", "creating multi-primitive objects", "using union or deformation to recover aspect support", "using shape_family as model input or supervision", "moving E20a final-region thresholds", "treating correlation alone as proof of stream independence"],
-        "criteria_frozen_before_formal_run": true
+        "criteria_frozen_before_formal_run": true,
+        "formal_result": {
+          "date": "2026-08-27",
+          "passed": true,
+          "family_counts_general_blocky_flat_elongated": [1647, 846, 809, 794],
+          "axis_permutation_counts": [686, 693, 667, 678, 678, 694],
+          "strict_radial_star_shaped_count": 4096,
+          "family_counterfactual_changed_count": 3003,
+          "run_hashes": ["badbc50332863181598f1d8f9958644883c492da5ae597325d7d73409159e2b1", "badbc50332863181598f1d8f9958644883c492da5ae597325d7d73409159e2b1"],
+          "summary_hash": "13681e35d6d4857da6e94ddf202dfa4b9f4a9bce9dcb6c75aa13d5f687660062",
+          "artifact": "runs/ajae/e20a_d2a_base_aspect_sampler.npz",
+          "artifact_sha256": "0e92143709a15f633862b8ebff8aa0c00785abf45e6cd921db86839c1c39bbdb",
+          "artifact_bytes": 528004,
+          "protocol_commit": "91be27a3fe6b62ea6a30e04bd0ae02df2a8bd57a",
+          "formal_generator_modified": false
+        }
       },
       "schema7_shared_witness_qualification": {
         "version": "E20a-D2B",
-        "status": "LOCKED until E20a-D2A PASS",
+        "status": "UNLOCKED",
         "question": "Can a child grow beyond its parent centre domain while an authoritative construction-time witness is strictly inside both continuous primitives?",
         "construction": {"parent_witness": "w=o_p+tau_p*R_p(u)*u, tau_p~U[0.65,0.85)", "child_center": "o_c=w+tau_c*R_c(-u)*u, tau_c~U[0.55,0.80)", "proof": "w is strictly interior to both constituents", "tree_rule": "each child attaches to an earlier parent through its stored witness"},
         "planned_audit": {"parent_child_edges": 4096, "complete_trees": 512, "primitive_counts": [2,3,4,5], "crosses": ["general", "blocky", "flat", "elongated"], "independent_runs": 2, "cpu_processes": 24},
