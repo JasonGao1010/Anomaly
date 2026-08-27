@@ -8743,8 +8743,11 @@ def run_e30_qualification(
         selected, key=lambda value: (selected[value].raw_semantic_id, value)
     )
     templates = tuple(selected[identity] for identity in identities)
+    reconstructed_identity = np.asarray(
+        [_normal_template_identity(template) for template in templates], dtype="S64"
+    )
     if len(templates) != 256 or not np.array_equal(
-        np.asarray(identities, dtype="S64"), e27_identity
+        reconstructed_identity, e27_identity
     ):
         raise RenderError("E30 fixtures differ from E27")
     _, sensor = load_sensor_calibration(calibration_path)
