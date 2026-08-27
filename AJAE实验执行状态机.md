@@ -3377,6 +3377,12 @@ real-normal、normal-control、anomaly-proxy各保存1,280个entity-frame groups
 
 本次同一权威渲染同时保存E40–E44直接需要的原始trace：逐实体帧geometry/accepted/visible counts与distance、逐返回beam/range/intensity，以及control/proxy逐beam/range的native-empty、geometry、accepted和final-new计数。后续节点只读取这些已冻结原始数组各自裁决，不重新执行相同几何和渲染，也不提前写入后续PASS结论。实现提交 `f09ea627b4203fe738c86761275c16e6786529c1`。首次启动因审计端对冻结mask原地执行距离筛选而触发只读数组异常，在生成科学结果前退出；修复提交 `9da9dcd19f3df276b6533c10389f5d7eb5154ade` 仅创建显式mask副本，不改变样本、渲染、随机流或判据。修复后 `src/render.py` SHA-256为 `8009cac53f0b62e127c72ff22aa35aeed957c0650f5e7743741db72d4a4e0e4b`，46项完整回归通过，用时97.87秒。正式命令不变。
 
+**E39 正式结果：PASS（E39关闭，E40解锁）**
+
+real-normal五个距离箱的opportunity为686,670、273,466、46,226、1,055、0，return为513,492、202,803、25,732、519、0，非零return entity-frame groups为447、833、268、15、0。normal-control对应opportunity为354,036、104,916、9,630、372、0，return为350,782、101,962、9,512、370、0，groups为511、684、236、26、0。anomaly-proxy对应opportunity为332,449、111,460、12,436、459、0，return为330,433、108,813、12,052、391、0，groups为493、637、228、23、0。
+
+前三来源的前四距离箱均有entity-frame观测，40–50米均为0并按冻结规则只报告。逐实体帧计数守恒错误0、非有限值0，两遍24进程逐元素一致，用时223.697474秒和224.626689秒。共享trace包含1,656,861条逐返回强度记录，科学数组哈希 `185f27c461943f6d8143f70bed6d6301f1d4753ae362cca06aed12ea999c3d52`；产物 `runs/ajae/e39_per_range_return.npz` 大小5,556,553字节，SHA-256为 `e404a63c32331221af02d17cc694398410c55bbf8f14798469dde7741ec63f58`。
+
 ## E40｜beam×range 强度审计
 
 报告条件 median、Q05/Q25/Q75/Q95、ECDF距离与 clipping fraction。PASS：所有生成强度有限且在206支持内，分箱身份与计数正确，两遍一致。分布偏差不在本节点直接判来源泄漏。PASS → E41。
