@@ -12,6 +12,7 @@ import json
 import hashlib
 import argparse
 import ast
+import gc
 import math
 import os
 import time
@@ -12527,9 +12528,12 @@ def run_e45a_v2_qualification(
     grid, sensor = load_sensor_calibration(calibration_path)
     frames = tuple(sequence.source_frame(frame_id) for frame_id in range(4, 682))
     obstacles = collect_observed_obstacle_index(frames, source_sequence_id=201)
+    trajectory_yaws = trajectory_yaw_by_frame(frames)
+    del frames
+    gc.collect()
     _initialize_gate1_candidate_generation(
         sequence, pool, obstacles, _load_e25_templates(e25_artifact_path),
-        grid, sensor, trajectory_yaw_by_frame(frames), (),
+        grid, sensor, trajectory_yaws, (),
     )
     global _E45A2_TARGET_UNITS, _E45A2_SUPPORT_ROWS
     _E45A2_TARGET_UNITS = targets
