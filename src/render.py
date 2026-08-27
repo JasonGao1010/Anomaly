@@ -11237,6 +11237,114 @@ def run_e42_qualification(
     return result
 
 
+def _e43_statistics(visible_returns: np.ndarray) -> dict[str, np.ndarray]:
+    """Summarize genuine adjacent-frame visibility changes for fixed entities."""
+    change = np.diff(visible_returns.astype(np.int64), axis=2)
+    previous = visible_returns[:, :, :-1].astype(np.float64)
+    relative = np.abs(change) / np.maximum(previous, 1.0)
+    visible_frames = np.count_nonzero(visible_returns > 0, axis=2).astype(np.int8)
+    v_count = np.zeros((3, 6), dtype=np.int64)
+    quantiles = np.zeros((3, 5), dtype=np.float64)
+    transitions = np.zeros((3, 2), dtype=np.int64)
+    for source_id in range(3):
+        v_count[source_id] = np.bincount(
+            visible_frames[:, source_id], minlength=6
+        )[:6]
+        quantiles[source_id] = np.quantile(
+            relative[:, source_id].ravel(), (0.05, 0.25, 0.5, 0.75, 0.95)
+        )
+        transitions[source_id, 0] = np.count_nonzero(
+            (visible_returns[:, source_id, :-1] == 0)
+            & (visible_returns[:, source_id, 1:] > 0)
+        )
+        transitions[source_id, 1] = np.count_nonzero(
+            (visible_returns[:, source_id, :-1] > 0)
+            & (visible_returns[:, source_id, 1:] == 0)
+        )
+    return {
+        "visible_returns": visible_returns,
+        "adjacent_nvis_change": change,
+        "adjacent_nvis_relative_change": relative,
+        "visible_frame_count_V": visible_frames,
+        "source_V_count": v_count,
+        "source_relative_change_quantiles": quantiles,
+        "source_appearance_disappearance": transitions,
+    }
+
+
+def run_e43_qualification(
+    e37_artifact_path: Path | str, e39_artifact_path: Path | str,
+    output_path: Path | str,
+) -> dict[str, object]:
+    """Qualify deterministic five-frame visibility and finite temporal changes."""
+    with np.load(
+        Path(e37_artifact_path).expanduser().resolve(strict=True), allow_pickle=False
+    ) as source:
+        e37 = json.loads(str(source["metadata_json"]))
+    with np.load(
+        Path(e39_artifact_path).expanduser().resolve(strict=True), allow_pickle=False
+    ) as trace:
+        e39 = json.loads(str(trace["metadata_json"]))
+        visible = np.asarray(trace["visible_returns"])
+    if e37.get("experiment") != "E37" or e37.get("passed") is not True:
+        raise RenderError("E43 requires the passed formal E37 window audit")
+    if e39.get("experiment") != "E39" or e39.get("passed") is not True:
+        raise RenderError("E43 requires the passed formal E39 shared trace")
+    started = time.monotonic()
+    runs = [_e43_statistics(visible) for _ in range(2)]
+    elapsed = time.monotonic() - started
+    reproduced = all(np.array_equal(runs[0][name], runs[1][name]) for name in runs[0])
+    first = runs[0]
+    field_errors = sum(int(value) for value in e37["field_digest_errors"].values())
+    window_identity_errors = int(
+        e37["duplicate_request_bit_errors"] + e37["identity_errors"]
+        + e37["render_call_errors"] + e37["cross_world_cache_errors"]
+        + e37["render_frame_window_parameters"] + e37["slot_uniform_window_reads"]
+        + field_errors
+    )
+    repeated_render_errors = int(not bool(e39.get("elementwise_reproduced")))
+    finite_errors = int(
+        np.count_nonzero(~np.isfinite(first["adjacent_nvis_relative_change"]))
+        + np.count_nonzero(~np.isfinite(first["source_relative_change_quantiles"]))
+    )
+    definition_errors = int(
+        np.count_nonzero(visible < 0)
+        + np.count_nonzero(
+            (first["visible_frame_count_V"] < 0)
+            | (first["visible_frame_count_V"] > 5)
+        )
+        + np.count_nonzero(first["source_V_count"].sum(axis=1) != visible.shape[0])
+    )
+    passed = (
+        window_identity_errors == 0 and repeated_render_errors == 0
+        and finite_errors == 0 and definition_errors == 0 and reproduced
+    )
+    result = {
+        "experiment": "E43", "passed": passed,
+        "relative_change_definition": "abs(N_t-N_tminus1)/max(N_tminus1,1)",
+        "source_V_count_for_V_0_to_5": first["source_V_count"].tolist(),
+        "source_relative_change_quantiles_Q05_Q25_Q50_Q75_Q95": (
+            first["source_relative_change_quantiles"].tolist()
+        ),
+        "source_appearance_disappearance": first["source_appearance_disappearance"].tolist(),
+        "window_identity_errors": window_identity_errors,
+        "repeated_render_errors": repeated_render_errors,
+        "finite_errors": finite_errors, "definition_errors": definition_errors,
+        "elementwise_reproduced": reproduced,
+        "two_run_total_seconds": elapsed,
+        "scientific_array_hash": _scientific_array_hash(first),
+    }
+    destination = Path(output_path).expanduser().resolve()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_suffix(destination.suffix + ".tmp.npz")
+    np.savez_compressed(
+        temporary, **first,
+        metadata_json=np.asarray(json.dumps(result, sort_keys=True, separators=(",", ":"))),
+    )
+    os.replace(temporary, destination)
+    return result
+
+
 def _render_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="AJAE authoritative renderer experiments")
     subcommands = parser.add_subparsers(dest="command", required=True)
@@ -11334,6 +11442,10 @@ def _render_parser() -> argparse.ArgumentParser:
     e42 = subcommands.add_parser("qualify-e42")
     e42.add_argument("--e39-artifact", type=Path, required=True)
     e42.add_argument("--output", type=Path, required=True)
+    e43 = subcommands.add_parser("qualify-e43")
+    e43.add_argument("--e37-artifact", type=Path, required=True)
+    e43.add_argument("--e39-artifact", type=Path, required=True)
+    e43.add_argument("--output", type=Path, required=True)
     return parser
 
 
@@ -11455,6 +11567,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0 if result["passed"] else 1
     if args.command == "qualify-e42":
         result = run_e42_qualification(args.e39_artifact, args.output)
+        print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        return 0 if result["passed"] else 1
+    if args.command == "qualify-e43":
+        result = run_e43_qualification(
+            args.e37_artifact, args.e39_artifact, args.output
+        )
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 0 if result["passed"] else 1
     raise AssertionError("unreachable renderer command")
