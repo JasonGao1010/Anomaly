@@ -2131,7 +2131,7 @@
       }
     },
     "renderer_mechanical_qualification": {
-      "status": "E27-E32 PASS; E28-v1 FAIL retained as protocol implementation defect; E33 design and execution frozen; E34-E37 locked",
+      "status": "E27-E33 PASS; E28-v1 FAIL retained as protocol implementation defect; E34 unlocked; E35-E37 locked",
       "layer_boundaries": {"E27-E28": "direct geometry outputs only", "E29": "return probability and deterministic acceptance decision only", "E30-E31": "accepted returns", "E32-E33": "nearest-return occlusion competition"},
       "E27": {
         "question": "Does the formal geometry path return the correct nearest convex-hull hit, outward finite normal and object ID for active normal-control templates when return rejection is disabled?",
@@ -2400,7 +2400,8 @@
         "implementation_commit": "c1f8d76544c45106b0844aae7110da82adfd64e1",
         "command": "python -m src.render qualify-e33 --output runs/ajae/e33_foreground_occlusion.npz",
         "artifact": "runs/ajae/e33_foreground_occlusion.npz",
-        "pass_conditions": ["native distance, semantic and instance retained", "inserted and occluded masks false", "internal object ID -1", "one final return", "two runs elementwise identical"]
+        "pass_conditions": ["native distance, semantic and instance retained", "inserted and occluded masks false", "internal object ID -1", "one final return", "two runs elementwise identical"],
+        "result": {"passed": true, "winner_sequence": ["native", "native", "native"], "foreground_distance_error": 0, "foreground_semantic_error": 0, "foreground_instance_error": 0, "inserted_mask_error": 0, "occlusion_error": 0, "object_id_error": 0, "single_return_error": 0, "elementwise_reproduced": true, "scientific_array_sha256": "19465f1339a311d025a975b808eb5a3a58d113f88a16b2b3adbdb7c455cab6cd", "artifact_bytes": 2299, "artifact_sha256": "2667f81a6a20b7c02cd3736fcd1d733314cfda827b592916cda29b94f5880b51"}
       }
     },
     "world_types": {"pure_normal": 0.2, "control_only": 0.2, "mixed": 0.4, "anomaly_only": 0.2},
