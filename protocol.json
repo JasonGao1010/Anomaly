@@ -2131,7 +2131,7 @@
       }
     },
     "renderer_mechanical_qualification": {
-      "status": "E27-E39 PASS; E28-v1 and E36-v1 FAIL retained; E40 unlocked",
+      "status": "E27-E39 PASS; E28-v1 and E36-v1 FAIL retained; E40 execution frozen",
       "layer_boundaries": {"E27-E28": "direct geometry outputs only", "E29": "return probability and deterministic acceptance decision only", "E30-E31": "accepted returns", "E32-E33": "nearest-return occlusion competition"},
       "E27": {
         "question": "Does the formal geometry path return the correct nearest convex-hull hit, outward finite normal and object ID for active normal-control templates when return rejection is disabled?",
@@ -2515,6 +2515,19 @@
         "pass_conditions": ["all values finite", "return count does not exceed opportunity", "each source has nonzero entity-frame return observations in each of the first four bins", "two 24-process runs elementwise identical"],
         "range_40_50_policy": "descriptive only",
         "result": {"passed": true, "source_range_opportunity": [[686670, 273466, 46226, 1055, 0], [354036, 104916, 9630, 372, 0], [332449, 111460, 12436, 459, 0]], "source_range_return_count": [[513492, 202803, 25732, 519, 0], [350782, 101962, 9512, 370, 0], [330433, 108813, 12052, 391, 0]], "source_range_entity_frame_groups": [[447, 833, 268, 15, 0], [511, 684, 236, 26, 0], [493, 637, 228, 23, 0]], "conservation_errors": 0, "finite_errors": 0, "first_four_coverage_errors": 0, "elementwise_reproduced": true, "run_seconds": [223.6974739760044, 224.6266890919942], "shared_trace_intensity_returns": 1656861, "scientific_array_sha256": "185f27c461943f6d8143f70bed6d6301f1d4753ae362cca06aed12ea999c3d52", "artifact_bytes": 5556553, "artifact_sha256": "e404a63c32331221af02d17cc694398410c55bbf8f14798469dde7741ec63f58", "claim_limit": "E39 establishes per-range accounting and first-four-bin coverage; all sources have zero 40--50 m groups in this 256-seed bank, which is descriptive under the frozen rule."}
+      },
+      "E40": {
+        "question": "Are beam-by-range conditional intensity records finite, correctly binned and within the frozen train/206 support for generated sources?",
+        "input_trace": "runs/ajae/e39_per_range_return.npz",
+        "statistics": ["count", "Q05", "Q25", "median", "Q75", "Q95", "pairwise ECDF distance", "lower/upper clipping fraction"],
+        "source_pairs": [["real-normal", "normal-control"], ["real-normal", "anomaly-proxy"], ["normal-control", "anomaly-proxy"]],
+        "empty_cell_policy": "finite zero values with explicit count and ECDF-valid masks",
+        "implementation_commit": "a8f5da83d847913baf14192af67a0bf733fc6158",
+        "render_source_sha256": "2b072872024ba8ccf900783a1f334cf1b45dc90b33d1d23a2c827b731f42d6b0",
+        "command": "python -m src.render qualify-e40 --e39-artifact runs/ajae/e39_per_range_return.npz --calibration runs/ajae/calibration.pt --output runs/ajae/e40_beam_range_intensity.npz",
+        "artifact": "runs/ajae/e40_beam_range_intensity.npz",
+        "pass_conditions": ["all generated intensity values finite", "all generated intensity values inside frozen train/206 support", "source/beam/range identities valid", "cell counts reproduce E39 source-range totals", "two complete statistic runs elementwise identical"],
+        "distribution_difference_policy": "descriptive only until E46"
       }
     },
     "world_types": {"pure_normal": 0.2, "control_only": 0.2, "mixed": 0.4, "anomaly_only": 0.2},
