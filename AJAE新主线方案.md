@@ -1820,7 +1820,7 @@ $$
 
 ---
 
-# 18. 当前状态（当前工作区：E28-v2 PASS）
+# 18. 当前状态（当前工作区：E29 PASS）
 
 截至当前工作区权威提交，已经完成：
 
@@ -1847,6 +1847,8 @@ E28-v1 已完成两遍24进程正式运行但未通过，历史FAIL保留并分�
 
 E28-v2 已完成两遍24进程正式运行并通过：完整继承v1的256个fixture、seed、射线、姿态、距离、独立reference和容差，只把裁决接口改为直接读取 `ShapeSpec.intersect`。target hit、65,280条反向miss和法向外向性错误均为0；最近距离、表面残差和法向单位长度最大误差分别为 $1.226\times10^{-7}$ m、$1.171\times10^{-7}$ m和 $3.331\times10^{-16}$，两遍数组逐元素一致。E28关闭，E29解锁。
 
+E29 已完成两遍24进程正式运行并通过：完整覆盖2,304个beam×range×incidence校准单元及55,296个固定身份决策；基础与材质调制概率、fallback、稳定身份均匀数和accepted mask相对独立reference的错误均为0，`p=0`、`p=1`及中间概率接受/拒绝分支全部覆盖，两遍数组逐元素一致。E29关闭，E30解锁。
+
 当前可成立的局部结论是：
 
 > **schema 7 能合法、确定且高效地产生覆盖冻结几何区域的合成异常代理；这些对象可以从 train/206 的合格支撑池采样，以冻结连续落地规则达到 99% 接触/埋地资格，并能由同一权威放置接口拒绝与 train/206 实际观测非地面回波发生超过 5 cm 深穿透的位置。**
@@ -1861,7 +1863,7 @@ E28-v2 已完成两遍24进程正式运行并通过：完整继承v1的256个fix
 当前执行节点为：
 
 $$
-\boxed{E26\ \text{PASS};\quad E27\ \text{PASS};\quad E28\text{-v1 FAIL retained};\quad E28\text{-v2 PASS};\quad E29\ \text{UNLOCKED}}
+\boxed{E27\ \text{PASS};\quad E28\text{-v1 FAIL retained};\quad E28\text{-v2 PASS};\quad E29\ \text{PASS};\quad E30\ \text{UNLOCKED}}
 $$
 
 E23与E24-v2已按冻结设计通过，当前顺序进入：
@@ -1870,7 +1872,7 @@ $$
 E23\rightarrow E24\rightarrow E25\rightarrow E26
 $$
 
-E27与E28已按冻结设计关闭；E28-v1 FAIL按实现缺陷保留，当前顺序进入E29。
+E27–E29已按冻结设计关闭；E28-v1 FAIL按实现缺陷保留，当前顺序进入E30。
 
 因此当前整体判断仍是：
 
