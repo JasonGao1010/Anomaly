@@ -6588,8 +6588,15 @@ def _e23_arrays(records: Sequence[Mapping[str, object]]) -> dict[str, np.ndarray
         "yaw_rad": values("yaw_rad", np.float64, math.nan),
         "proposal_count": values("proposal_count", np.int16, 0),
         "proposal_pool_indices": proposals,
-        "rejection_reasons_json": values(
-            "rejection_reasons", "U4096", ()
+        "rejection_reasons_json": np.asarray(
+            [
+                json.dumps(
+                    item.get("rejection_reasons", ()),
+                    separators=(",", ":"),
+                )
+                for item in records
+            ],
+            dtype="U4096",
         ),
         "support_pool_index": values("support_pool_index", np.int64, -1),
         "support_frame": values("support_frame", np.int32, -1),
