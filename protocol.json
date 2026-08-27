@@ -1285,9 +1285,9 @@
           "downstream_decision": "Retire the uncompleted E20-V1 gate and unlock E20b-lite. Schema 7 remains qualified by E19-v4 and E20a-v3, not by the descriptive visual observation."
         }
       },
-      "schema6_geometry_factor_decoupling": {
+      "schema7_geometry_factor_decoupling": {
         "version": "E20b-lite",
-        "status": "UNLOCKED; RUN PROTOCOL FROZEN BEFORE ANALYSIS",
+        "status": "PASS",
         "question": "Is there an almost deterministic low-capacity shortcut among primitive count, continuous size, axis-ratio region, and deformation strength? Ordinary correlation is allowed.",
         "source": {"artifact": "runs/ajae/e20a_v3_schema7_geometry_coverage.npz", "artifact_sha256": "1dda79688dc76020f19ae9a5e839856eb50e27db4cb8dd0e4b197e2310aa9ef4", "objects": 8192, "generator_schema": 7, "no_regeneration": true},
         "factor_labels": {
@@ -1318,7 +1318,32 @@
         "deferred_out_of_scope": {"placement_independence": "after E21-E25 qualification", "material_independence": "E35-E40 return/intensity chain"},
         "failure_routing": "FAIL only identifies an almost deterministic generator-factor shortcut or a missing conditional support cell; stop for a factor-specific design decision without modifying schema 7 automatically",
         "after_pass": "end Phase-2 geometry-distribution qualification and unlock E21",
-        "criteria_frozen_before_formal_run": true
+        "criteria_frozen_before_formal_run": true,
+        "formal_result": {
+          "date": "2026-08-27",
+          "protocol_commit": "3e64854",
+          "passed": true,
+          "objects": 8192,
+          "train_test_objects": [6092, 2100],
+          "minimum_conditional_cell": 92,
+          "shortcut_hits": [],
+          "heldout_balanced_accuracy": {
+            "primitive_count": {"logistic": 0.22143575344537264, "tree": 0.24267849597369046},
+            "size": {"logistic": 0.3694722874275405, "tree": 0.36706872613235614},
+            "axis_ratio": {"logistic": 0.3093857708974935, "tree": 0.3021972228975205},
+            "deformation": {"logistic": 0.3396987954486332, "tree": 0.33037007702587623}
+          },
+          "maximum_balanced_accuracy": 0.3694722874275405,
+          "reproducibility": "two complete in-process analyses reproduced the split, labels, predictions, confusion matrices, metrics and hashes elementwise",
+          "execution_incident": "the first invocation finished model calculations but stopped before writing an artifact because the reproducibility comparator applied numeric NaN handling to a string hash array; only that type comparison was corrected and the full analysis was rerun",
+          "runner_sha256_after_type_fix": "1abb1b2a7f3a40a0af575dd8e70361f9b090badc9273c900ecd1a93b1d4ab38e",
+          "array_hash": "6bb87cbcdf5cececdbf5fc63ffaedffc498622f8171d77aa75285f1b126a1a46",
+          "summary_hash": "69323de8e7f89114e2e1cb4b0ae358a500ad6dc9b2467c922f4c4dd4bd22e77d",
+          "artifact": "runs/ajae/e20b_lite_factor_shortcut.npz",
+          "artifact_bytes": 31697,
+          "artifact_sha256": "49c48093cc673fddc129a1d4049ac7e3297b9e8bf8414a1d4dbe8e921e2b810c",
+          "decision": "No near-deterministic low-capacity shortcut was detected among the audited geometry factors; end Phase-2 geometry-distribution qualification and unlock E21"
+        }
       }
     },
     "world_types": {"pure_normal": 0.2, "control_only": 0.2, "mixed": 0.4, "anomaly_only": 0.2},
