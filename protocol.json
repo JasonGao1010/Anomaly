@@ -1849,14 +1849,14 @@
           "design_authorities": ["AJAE新主线方案.md", "AJAE实验执行状态机.md"],
           "design_authority_sha256": {
             "main_plan": "d0a1eadbce381b3c35037b74d87cf7b6be3b53f414fc8d946f6122e2257efbbd",
-            "state_machine": "b535c801123abdc9f0ca4a385b9bda53afd70b5147a7510eed858524f5639668"
+            "state_machine": "753d737691f148686bcf14e13a3081b75168535a6167b07db8ad7efa7883f56b"
           },
           "implementation_identity": {
-            "commit": "3c59748d915f59ce9d38e56b48015ea436950bec",
-            "render_sha256": "66a13a2c8c5c33d6bf5891c3c2384a68adbc7125449f9230f26bab1eb7d544b8",
+            "commit": "aaf0967251bf4bd2fa6aae857123e3d6b612d1c7",
+            "render_sha256": "533f0d225c4ea68920fb411533e4ede6e2d618e00b3697c125866bb6e0ac04a0",
             "train_sha256": "eb30a33b97d7422671aad0fd87f0e3efd2626e4235c9db1bf91ef13566dca53d",
             "tests_sha256": "2f4cd11fa45abe9ef2cb14420ee2007bfc4322edb6fba3629b72fe5a18e18ae0",
-            "regression": "42 passed in 97.99 seconds",
+            "regression": "42 passed in 96.42 seconds",
             "old_dev_boundary": "dev.json remains schema-4/world-v2 historical data and is rejected; it is not migrated"
           },
           "common_pipeline": {
@@ -1906,13 +1906,21 @@
             }
           },
           "E24": {
-            "status": "DESIGN FROZEN; unlocked",
+            "status": "DESIGN AND EXECUTION FROZEN; formal run pending",
             "world_seeds": [2100000, 2100511],
             "entity_count": [2, 6],
+            "entity_count_stream": "numpy default_rng(SeedSequence([world_seed,2401])).integers(2,7)",
+            "shape_seed": "3000000 + (world_seed-2100000)*6 + entity_index",
+            "yaw": "numpy default_rng(SeedSequence([shape_seed,2402])).uniform(-pi,pi)",
+            "material_seed": "shape_seed+2403",
+            "support_namespace": "E24-support-v1",
+            "support_stream": "(world_seed-2100000)*6+entity_index",
             "surface_points_per_object": 8192,
             "sobol_probes_per_object": 8192,
             "penetration_m": 0.05,
-            "pass_conditions": ["fixture errors=0", "512/512 worlds built", "all final objects retain E22/E23", "final obvious pair penetration=0", "hard errors=0", "two runs elementwise identical"]
+            "pass_conditions": ["fixture errors=0", "512/512 worlds built", "all final objects retain E22/E23", "final obvious pair penetration=0", "hard errors=0", "two runs elementwise identical"],
+            "command": "python -m src.render qualify-e24 --data-root /home/jasongao/Data/STU --support-pool runs/ajae/e21_v4_support_pool.npz --output runs/ajae/e24_pair_collision.npz --processes 24",
+            "artifact": "runs/ajae/e24_pair_collision.npz"
           },
           "E25": {
             "status": "DESIGN FROZEN; locked until E24 PASS",

@@ -2923,6 +2923,8 @@ E23 PASS允许的结论限定为：**冻结的支撑池放置接口能够拒绝�
 - 每世界实体数按冻结流取 2–6；本节点只使用 anomaly-proxy，以免 normal-control 语义问题提前混入；
 - 每个实体先通过 E22 和 E23，再按 pair detector 与先前实体比较；只重采当前实体，前序实体不移动；每实体最多 128 次 proposal。
 
+执行流具体冻结为：实体数由 `default_rng(SeedSequence([world_seed,2401])).integers(2,7)` 生成；第 `entity_index` 个对象的shape seed为 `3000000+(world_seed-2100000)*6+entity_index`，yaw流为 `SeedSequence([shape_seed,2402])`，material seed为 `shape_seed+2403`。support命名空间为 `E24-support-v1`，stream为 `(world_seed-2100000)*6+entity_index`。两遍正式运行均使用24个进程，正式命令和产物路径分别冻结在 `protocol.json` 的E24字段中。
+
 **PASS 条件**
 
 - fixture 错误数为 0；
