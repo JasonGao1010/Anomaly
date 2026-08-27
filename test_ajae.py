@@ -797,6 +797,11 @@ def test_normal_template_surface_sampling_uses_a_convex_hull_interior() -> None:
     assert np.max(np.abs(template.signed_distance(points))) < 1.0e-10
 
 
+def test_placement_authority_audit_ignores_its_own_string_literals() -> None:
+    source = Path(render_module.__file__).read_text(encoding="utf-8")
+    assert render_module._placement_authority_errors(source) == 0
+
+
 @pytest.mark.parametrize("slope_deg", [0.0, 5.0, 10.0])
 def test_e21_support_plane_fixtures(slope_deg: float) -> None:
     coordinate = np.linspace(-1.25, 1.25, 51)
