@@ -8829,6 +8829,242 @@ def run_e30_qualification(
     return result
 
 
+_E31_SENSOR: SensorCalibration | None = None
+
+
+def _e31_worker(index: int) -> dict[str, np.ndarray]:
+    if len(_E28_SHAPES) != 256 or _E31_SENSOR is None:
+        raise RuntimeError("E31 fixtures are not initialized")
+    sensor = _E31_SENSOR
+    shape, report = _E28_SHAPES[index]
+    seed = 2_800_000 + index
+    beam_id, column_id = divmod(index, 2)
+    elevation = math.radians(-20.0 + 40.0 * beam_id / 127.0)
+    azimuth = math.pi * column_id + math.radians((index % 17) - 8)
+    target = np.asarray((
+        math.cos(elevation) * math.cos(azimuth),
+        math.cos(elevation) * math.sin(azimuth),
+        math.sin(elevation),
+    ))
+    target /= np.linalg.norm(target)
+    rotation = _e27_rotation(seed)
+    undeformed = (
+        np.asarray(report.shared_witnesses_undeformed_m[0])
+        if report.shared_witnesses_undeformed_m
+        else np.asarray(shape.primitive_offsets_m[0])
+    )
+    witness = _forward_deform(shape, undeformed[None, :])[0]
+    desired_distance = 2.5 + 47.5 * index / 255.0
+    translation = (
+        target * (desired_distance + 2.0 * shape.bound_radius_m)
+        - witness @ rotation.T
+    )
+    provisional = _sdf_first_entry(
+        shape, -translation @ rotation, target @ rotation, 16385
+    )
+    translation += target * (desired_distance - provisional)
+    distance, local_normal, valid = shape.intersect(
+        -translation @ rotation, (target @ rotation)[None, :]
+    )
+    geometry_error = int(not valid[0] or distance[0] <= 0.0)
+    world_normal = local_normal[0] @ rotation.T
+    incidence = math.acos(np.clip(abs(float(world_normal @ -target)), 0.0, 1.0))
+    material = MaterialSpec.sample(seed + 2802)
+    probability = float(sensor.return_chance(
+        np.asarray((beam_id,)), distance,
+        np.asarray((incidence,)), material.return_bias,
+    )[0])
+    range_bin = int(np.clip(
+        np.searchsorted(sensor.range_edges_m, distance[0], side="right") - 1,
+        0, sensor.range_edges_m.size - 2,
+    ))
+    incidence_bin = int(np.clip(
+        np.searchsorted(sensor.incidence_edges_rad, incidence, side="right") - 1,
+        0, sensor.incidence_edges_rad.size - 2,
+    ))
+    base = float(sensor.return_probability[beam_id, range_bin, incidence_bin])
+    clipped = float(np.clip(base, 1.0e-5, 1.0 - 1.0e-5))
+    reference_probability = 1.0 / (
+        1.0 + math.exp(-(math.log(clipped / (1.0 - clipped)) + 2.0 * material.return_bias))
+    )
+    replicas = np.arange(24, dtype=np.int64)
+    frame_ids = replicas * 256 + index
+    slots = np.full(24, index, dtype=np.int32)
+    object_ids = np.full(24, index + 1, dtype=np.int32)
+    world = WorldSpec(seed, 206, ())
+    uniform = np.asarray([
+        _slot_uniform(
+            world, int(frame_id), slots[replica : replica + 1],
+            object_ids[replica : replica + 1], channel=0,
+        )[0]
+        for replica, frame_id in enumerate(frame_ids)
+    ])
+    reference_uniform = np.asarray([
+        _e29_reference_uniform(
+            world.seed, world.source_sequence_id, int(frame_id),
+            slots[replica : replica + 1], object_ids[replica : replica + 1], 0,
+        )[0]
+        for replica, frame_id in enumerate(frame_ids)
+    ])
+    accepted = uniform < probability
+    reference_accepted = reference_uniform < reference_probability
+    points = np.full((24, 3), np.nan, dtype=np.float64)
+    points[accepted] = distance[0] * target
+    intensity = np.full(24, np.nan, dtype=np.float32)
+    accepted_ids = np.flatnonzero(accepted)
+    if accepted_ids.size:
+        intensity_uniform = np.asarray([
+            _slot_uniform(
+                world, int(frame_ids[replica]),
+                slots[replica : replica + 1], object_ids[replica : replica + 1],
+                channel=1,
+            )[0]
+            for replica in accepted_ids
+        ])
+        intensity[accepted] = sensor.sample_intensity(
+            np.full(accepted_ids.size, beam_id, dtype=np.int16),
+            np.full(accepted_ids.size, distance[0], dtype=np.float64),
+            np.full(accepted_ids.size, incidence, dtype=np.float64),
+            intensity_uniform, material,
+        )
+    semantic = np.zeros(24, dtype=np.uint16)
+    semantic[accepted] = np.uint16(2)
+    internal_object_id = np.full(24, -1, dtype=np.int32)
+    internal_object_id[accepted] = index + 1
+    return {
+        "fixture_index": np.full(24, index, dtype=np.int16),
+        "seed": np.full(24, seed, dtype=np.int64),
+        "frame_id": frame_ids,
+        "beam_id": np.full(24, beam_id, dtype=np.int16),
+        "column_id": np.full(24, column_id, dtype=np.int8),
+        "geometry_error": np.full(24, geometry_error, dtype=np.uint8),
+        "distance_m": np.full(24, distance[0], dtype=np.float64),
+        "probability": np.full(24, probability, dtype=np.float64),
+        "reference_probability": np.full(24, reference_probability, dtype=np.float64),
+        "uniform": uniform,
+        "reference_uniform": reference_uniform,
+        "accepted": accepted,
+        "reference_accepted": reference_accepted,
+        "point_world_m": points,
+        "intensity": intensity,
+        "semantic": semantic,
+        "internal_object_id": internal_object_id,
+    }
+
+
+def run_e31_qualification(
+    e28_artifact_path: Path | str,
+    calibration_path: Path | str,
+    output_path: Path | str,
+    *,
+    processes: int = 24,
+) -> dict[str, object]:
+    """Qualify anomaly-proxy accepted returns without native competition."""
+
+    if processes != 24:
+        raise RenderError("formal E31 requires exactly 24 worker processes")
+    with np.load(Path(e28_artifact_path).expanduser().resolve(strict=True), allow_pickle=False) as source:
+        metadata = json.loads(str(source["metadata_json"]))
+        if metadata.get("experiment") != "E28-v2" or metadata.get("passed") is not True:
+            raise RenderError("E31 requires the passed E28-v2 artifact")
+        expected_seed = source["seed"].copy()
+        expected_identity = source["shape_identity"].copy()
+    context = mp.get_context("fork")
+    with context.Pool(processes=processes) as workers:
+        fixtures = workers.map(
+            ShapeSpec.sample_with_report, range(2_800_000, 2_800_256)
+        )
+    identity = np.asarray([
+        hashlib.sha256(json.dumps(
+            shape.to_dict(), sort_keys=True, separators=(",", ":")
+        ).encode()).hexdigest()
+        for shape, _ in fixtures
+    ], dtype="S64")
+    if not np.array_equal(expected_seed, np.arange(2_800_000, 2_800_256)) or not np.array_equal(
+        identity, expected_identity
+    ):
+        raise RenderError("E31 fixtures differ from E28-v2")
+    _, sensor = load_sensor_calibration(calibration_path)
+    global _E28_SHAPES, _E31_SENSOR
+    _E28_SHAPES = tuple(fixtures)
+    _E31_SENSOR = sensor
+    runs: list[dict[str, np.ndarray]] = []
+    run_seconds: list[float] = []
+    for _ in range(2):
+        started = time.monotonic()
+        with context.Pool(processes=processes) as workers:
+            records = workers.map(_e31_worker, range(256))
+        runs.append({
+            name: np.concatenate([record[name] for record in records])
+            for name in records[0]
+        })
+        run_seconds.append(time.monotonic() - started)
+    first = runs[0]
+    reproduced = all(np.array_equal(
+        first[name], runs[1][name], equal_nan=True
+    ) for name in first)
+    accepted = first["accepted"]
+    rejected = ~accepted
+    geometry_errors = int(np.count_nonzero(first["geometry_error"]))
+    probability_errors = int(np.count_nonzero(
+        first["probability"] != first["reference_probability"]
+    ))
+    uniform_errors = int(np.count_nonzero(
+        first["uniform"] != first["reference_uniform"]
+    ))
+    mask_errors = int(np.count_nonzero(
+        accepted != first["reference_accepted"]
+    ))
+    accepted_payload_errors = int(np.count_nonzero(
+        ~np.isfinite(first["point_world_m"][accepted]).all(axis=1)
+        | ~np.isfinite(first["intensity"][accepted])
+        | (first["intensity"][accepted] < sensor.intensity_min)
+        | (first["intensity"][accepted] > sensor.intensity_max)
+        | (first["semantic"][accepted] != 2)
+        | (first["internal_object_id"][accepted]
+           != first["fixture_index"][accepted].astype(np.int32) + 1)
+    ))
+    rejected_payload_errors = int(np.count_nonzero(
+        np.isfinite(first["point_world_m"][rejected]).any(axis=1)
+        | np.isfinite(first["intensity"][rejected])
+        | (first["semantic"][rejected] != 0)
+        | (first["internal_object_id"][rejected] != -1)
+    ))
+    accepted_count = int(np.count_nonzero(accepted))
+    rejected_count = int(np.count_nonzero(rejected))
+    passed = (
+        geometry_errors == 0 and probability_errors == 0
+        and uniform_errors == 0 and mask_errors == 0
+        and accepted_payload_errors == 0 and rejected_payload_errors == 0
+        and accepted_count > 0 and rejected_count > 0 and reproduced
+    )
+    scientific_hash = _scientific_array_hash(first)
+    result = {
+        "experiment": "E31", "passed": passed,
+        "fixtures": 256, "identities_per_fixture": 24,
+        "decisions": int(accepted.size),
+        "geometry_errors": geometry_errors,
+        "probability_errors": probability_errors,
+        "uniform_errors": uniform_errors,
+        "accepted_mask_errors": mask_errors,
+        "accepted_payload_errors": accepted_payload_errors,
+        "rejected_payload_errors": rejected_payload_errors,
+        "accepted": accepted_count, "rejected": rejected_count,
+        "elementwise_reproduced": reproduced,
+        "run_seconds": run_seconds, "processes": processes,
+        "scientific_array_hash": scientific_hash,
+    }
+    destination = Path(output_path).expanduser().resolve()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_suffix(destination.suffix + ".tmp.npz")
+    np.savez_compressed(
+        temporary, **first,
+        metadata_json=np.asarray(json.dumps(result, sort_keys=True, separators=(",", ":"))),
+    )
+    os.replace(temporary, destination)
+    return result
+
+
 def _render_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="AJAE authoritative renderer experiments")
     subcommands = parser.add_subparsers(dest="command", required=True)
@@ -8875,6 +9111,11 @@ def _render_parser() -> argparse.ArgumentParser:
     e30.add_argument("--calibration", type=Path, required=True)
     e30.add_argument("--output", type=Path, required=True)
     e30.add_argument("--processes", type=int, default=24)
+    e31 = subcommands.add_parser("qualify-e31")
+    e31.add_argument("--e28-artifact", type=Path, required=True)
+    e31.add_argument("--calibration", type=Path, required=True)
+    e31.add_argument("--output", type=Path, required=True)
+    e31.add_argument("--processes", type=int, default=24)
     return parser
 
 
@@ -8928,6 +9169,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         result = run_e30_qualification(
             args.e25_artifact, args.e27_artifact, args.calibration,
             args.output, processes=args.processes,
+        )
+        print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        return 0 if result["passed"] else 1
+    if args.command == "qualify-e31":
+        result = run_e31_qualification(
+            args.e28_artifact, args.calibration, args.output,
+            processes=args.processes,
         )
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 0 if result["passed"] else 1
