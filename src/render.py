@@ -4803,14 +4803,23 @@ class ObservedObstacleIndex:
         return points[keep], self.identities[candidates[keep]]
 
 
-def collect_observed_obstacle_index(frames: Iterable[SourceFrame]) -> ObservedObstacleIndex:
-    """Index every nonzero, non-ground real return without spatial subsampling."""
+def collect_observed_obstacle_index(
+    frames: Iterable[SourceFrame], *, source_sequence_id: int = 206
+) -> ObservedObstacleIndex:
+    """Index every nonzero, non-ground return from one identified normal sequence."""
 
+    expected_sequence = _integer("source_sequence_id", source_sequence_id)
     point_chunks: list[np.ndarray] = []
     identity_chunks: list[np.ndarray] = []
     for frame in frames:
-        if frame.partition != "train" or frame.sequence_id != 206 or frame.labels is None:
-            raise PlacementError("observed obstacles must come from labelled train/206")
+        if (
+            frame.partition != "train"
+            or frame.sequence_id != expected_sequence
+            or frame.labels is None
+        ):
+            raise PlacementError(
+                "observed obstacles must come from one labelled normal train sequence"
+            )
         real = np.asarray(frame.real_slots, dtype=np.int64)
         semantic = np.asarray(frame.labels.semantic[real], dtype=np.uint16)
         selected = (semantic != 0) & ~np.isin(semantic, GROUND_SEMANTIC_IDS)
@@ -4822,7 +4831,7 @@ def collect_observed_obstacle_index(frames: Iterable[SourceFrame]) -> ObservedOb
             (np.uint64(frame.frame_id) << np.uint64(32)) | slots.astype(np.uint64)
         )
     if not point_chunks:
-        raise PlacementError("train/206 contains no observed obstacle returns")
+        raise PlacementError("normal train sequence contains no observed obstacle returns")
     return ObservedObstacleIndex(
         np.concatenate(point_chunks, axis=0), np.concatenate(identity_chunks, axis=0)
     )
@@ -9880,6 +9889,709 @@ def run_e37_qualification(
     return result
 
 
+_GATE1_SEQUENCE: object | None = None
+
+
+def _splitmix64(values: np.ndarray) -> np.ndarray:
+    """Apply the frozen unsigned SplitMix64 permutation elementwise."""
+    value = np.asarray(values, dtype=np.uint64) + np.uint64(0x9E3779B97F4A7C15)
+    value = (value ^ (value >> np.uint64(30))) * np.uint64(0xBF58476D1CE4E5B9)
+    value = (value ^ (value >> np.uint64(27))) * np.uint64(0x94D049BB133111EB)
+    return value ^ (value >> np.uint64(31))
+
+
+def _gate1_support_center(center_frame: int) -> dict[str, np.ndarray]:
+    sequence = _GATE1_SEQUENCE
+    if sequence is None:
+        raise RuntimeError("Gate 1 sequence is not initialized")
+    frames = tuple(sequence.source_frame(frame_id) for frame_id in range(center_frame - 2, center_frame + 3))
+    center = frames[2]
+    if center.labels is None:
+        raise RuntimeError("Gate 1 support qualification requires labels")
+    context_points: list[np.ndarray] = []
+    context_semantics: list[np.ndarray] = []
+    for frame in frames:
+        assert frame.labels is not None
+        real = ~np.asarray(frame.zero_slot_mask, dtype=np.bool_)
+        semantic = np.asarray(frame.labels.semantic)
+        ground = real & np.isin(semantic, SUPPORT_POOL_SEMANTICS)
+        rotation, translation = _pose(frame)
+        context_points.append(
+            np.asarray(frame.xyzi[ground, :3], dtype=np.float64) @ rotation.T + translation
+        )
+        context_semantics.append(semantic[ground])
+    points = np.concatenate(context_points)
+    semantics = np.concatenate(context_semantics)
+    center_real = ~np.asarray(center.zero_slot_mask, dtype=np.bool_)
+    selected = center_real & np.isin(center.labels.semantic, SUPPORT_POOL_SEMANTICS)
+    slots = np.flatnonzero(selected).astype(np.int32)
+    rotation, translation = _pose(center)
+    anchors = np.asarray(center.xyzi[slots, :3], dtype=np.float64) @ rotation.T + translation
+    ranges = np.linalg.norm(np.asarray(center.xyzi[slots, :3], dtype=np.float64), axis=1)
+    anchor_semantics = np.asarray(center.labels.semantic[slots], dtype=np.uint16)
+    cell_x = np.floor(anchors[:, 0] / 0.5).astype(np.int64)
+    cell_y = np.floor(anchors[:, 1] / 0.5).astype(np.int64)
+    packed = (np.uint64(center_frame) << np.uint64(32)) | slots.astype(np.uint64)
+    hashes = _splitmix64(packed ^ (anchor_semantics.astype(np.uint64) << np.uint64(48)))
+    order = np.lexsort((slots, hashes, cell_y, cell_x, anchor_semantics))
+    ordered_group = np.column_stack((anchor_semantics[order], cell_x[order], cell_y[order]))
+    keep = np.ones(order.size, dtype=np.bool_)
+    keep[1:] = np.any(ordered_group[1:] != ordered_group[:-1], axis=1)
+    retained = order[keep]
+    trees = {
+        semantic: cKDTree(points[semantics == semantic, :2], compact_nodes=True)
+        for semantic in SUPPORT_POOL_SEMANTICS
+    }
+    semantic_points = {
+        semantic: points[semantics == semantic] for semantic in SUPPORT_POOL_SEMANTICS
+    }
+    output: dict[str, list[object]] = {
+        "semantic": [], "frame": [], "slot": [], "range_m": [],
+        "selection_hash": [], "anchor_world": [], "normal": [], "offset": [],
+    }
+    for index in retained:
+        semantic = int(anchor_semantics[index])
+        radius = float(np.clip(ranges[index] / 20.0, 1.0, 3.0))
+        neighbours = trees[semantic].query_ball_point(anchors[index, :2], 1.25 * radius)
+        local = semantic_points[semantic][np.asarray(neighbours, dtype=np.int64)]
+        qualification = qualify_support_plane(local, anchors[index], radius_m=radius)
+        if not qualification.qualified:
+            continue
+        middle = qualification.estimates[1]
+        output["semantic"].append(semantic)
+        output["frame"].append(center_frame)
+        output["slot"].append(int(slots[index]))
+        output["range_m"].append(float(ranges[index]))
+        output["selection_hash"].append(int(hashes[index]))
+        output["anchor_world"].append(anchors[index])
+        output["normal"].append(middle.normal)
+        output["offset"].append(middle.offset)
+    count = len(output["frame"])
+    return {
+        "semantic": np.asarray(output["semantic"], dtype=np.uint16),
+        "frame": np.asarray(output["frame"], dtype=np.int32),
+        "slot": np.asarray(output["slot"], dtype=np.int32),
+        "range_m": np.asarray(output["range_m"], dtype=np.float64),
+        "selection_hash": np.asarray(output["selection_hash"], dtype=np.uint64),
+        "anchor_world": np.asarray(output["anchor_world"], dtype=np.float64).reshape(count, 3),
+        "normal": np.asarray(output["normal"], dtype=np.float64).reshape(count, 3),
+        "offset": np.asarray(output["offset"], dtype=np.float64),
+    }
+
+
+def build_gate1_support_pool(
+    sequence: object, output_path: Path | str, *, processes: int = 24
+) -> tuple[QualifiedSupportPool, dict[str, object]]:
+    """Apply the unchanged E21-v4 estimator to train/201 frames 4--681."""
+    if processes != 24:
+        raise RenderError("formal Gate 1 support-pool construction requires 24 processes")
+    global _GATE1_SEQUENCE
+    _GATE1_SEQUENCE = sequence
+    centers = tuple(range(6, 680))
+    started = time.monotonic()
+    with mp.get_context("fork").Pool(processes=processes) as workers:
+        records = workers.map(_gate1_support_center, centers, chunksize=1)
+    arrays = {
+        name: np.concatenate([record[name] for record in records])
+        for name in records[0]
+    }
+    count = int(arrays["frame"].size)
+    pool = QualifiedSupportPool(
+        np.arange(count, dtype=np.int64), arrays["semantic"], arrays["frame"],
+        arrays["slot"], arrays["range_m"], arrays["selection_hash"],
+        arrays["anchor_world"], arrays["normal"], arrays["offset"],
+    )
+    metadata = {
+        "experiment": "Gate1-201-support-pool", "passed": count > 0,
+        "source_sequence": "train/201", "source_frames": [4, 681],
+        "center_frames": [6, 679], "pool_size": count,
+        "semantic_counts": {
+            str(semantic): int(np.count_nonzero(arrays["semantic"] == semantic))
+            for semantic in SUPPORT_POOL_SEMANTICS
+        },
+        "covered_center_frames": int(np.unique(arrays["frame"]).size),
+        "processes": processes, "elapsed_seconds": time.monotonic() - started,
+        "scientific_array_hash": _scientific_array_hash(arrays),
+        "estimator": "E21-v4 unchanged three-scale trimmed-SVD",
+    }
+    destination = Path(output_path).expanduser().resolve()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_suffix(destination.suffix + ".tmp.npz")
+    np.savez_compressed(
+        temporary, **arrays,
+        metadata_json=np.asarray(json.dumps(metadata, sort_keys=True, separators=(",", ":"))),
+    )
+    os.replace(temporary, destination)
+    return pool, metadata
+
+
+def load_gate1_support_pool(path: Path | str) -> tuple[QualifiedSupportPool, dict[str, object]]:
+    source = Path(path).expanduser().resolve(strict=True)
+    with np.load(source, allow_pickle=False) as payload:
+        metadata = json.loads(str(payload["metadata_json"]))
+        if metadata.get("experiment") != "Gate1-201-support-pool" or metadata.get("passed") is not True:
+            raise PlacementError("Gate 1 support-pool artifact is not qualified")
+        arrays = {name: np.asarray(payload[name]) for name in (
+            "semantic", "frame", "slot", "range_m", "selection_hash",
+            "anchor_world", "normal", "offset",
+        )}
+    count = arrays["frame"].size
+    return QualifiedSupportPool(
+        np.arange(count, dtype=np.int64), arrays["semantic"], arrays["frame"],
+        arrays["slot"], arrays["range_m"], arrays["selection_hash"],
+        arrays["anchor_world"], arrays["normal"], arrays["offset"],
+    ), metadata
+
+
+def _gate1_real_candidates(
+    sequence: object, pool: QualifiedSupportPool
+) -> tuple[tuple[int, int, int, int], ...]:
+    """Select persistent real instances with an observable legal support semantic."""
+    active = frozenset((10, 18, 20, 30))
+    frame_keys: dict[int, set[tuple[int, int]]] = {}
+    for frame_id in range(4, 682):
+        frame = sequence.source_frame(frame_id)
+        assert frame.labels is not None
+        semantic = np.asarray(frame.labels.semantic)
+        instance = np.asarray(frame.labels.instance)
+        real = ~np.asarray(frame.zero_slot_mask, dtype=np.bool_)
+        range_m = np.linalg.norm(np.asarray(frame.xyzi[:, :3], dtype=np.float64), axis=1)
+        eligible = real & (range_m >= 2.5) & (range_m <= 50.0)
+        packed = semantic.astype(np.uint32) | (instance.astype(np.uint32) << np.uint32(16))
+        keys: set[tuple[int, int]] = set()
+        for value, count in zip(*np.unique(packed[eligible], return_counts=True), strict=True):
+            raw = int(value & np.uint32(0xFFFF))
+            identifier = int(value >> np.uint32(16))
+            if raw in active and identifier > 0 and int(count) >= 16:
+                keys.add((raw, identifier))
+        frame_keys[frame_id] = keys
+    candidates: list[tuple[bytes, tuple[int, int, int, int]]] = []
+    for center in range(6, 680):
+        persistent = set.intersection(*(frame_keys[frame] for frame in range(center - 2, center + 3)))
+        if not persistent:
+            continue
+        source = sequence.source_frame(center)
+        assert source.labels is not None
+        rotation, translation = _pose(source)
+        rows = np.flatnonzero(pool.frames == center)
+        if rows.size == 0:
+            continue
+        for semantic, instance in sorted(persistent):
+            mask = (
+                (source.labels.semantic == np.uint16(semantic))
+                & (source.labels.instance == np.uint16(instance))
+                & ~np.asarray(source.zero_slot_mask, dtype=np.bool_)
+            )
+            sensor_points = np.asarray(source.xyzi[mask, :3], dtype=np.float64)
+            ranges = np.linalg.norm(sensor_points, axis=1)
+            if sensor_points.shape[0] < 32 or not np.any((ranges >= 2.5) & (ranges <= 50.0)):
+                continue
+            world_points = sensor_points @ rotation.T + translation
+            lower = world_points[:, :2].min(axis=0) - 1.0
+            upper = world_points[:, :2].max(axis=0) + 1.0
+            allowed = normal_control_support_semantics(semantic)
+            legal = rows[
+                np.isin(pool.semantics[rows], tuple(allowed))
+                & np.all(pool.anchors_world_m[rows, :2] >= lower, axis=1)
+                & np.all(pool.anchors_world_m[rows, :2] <= upper, axis=1)
+            ]
+            if legal.size == 0:
+                continue
+            distance = np.linalg.norm(
+                pool.anchors_world_m[legal, :2]
+                - np.median(world_points[:, :2], axis=0),
+                axis=1,
+            )
+            row = int(legal[np.lexsort((pool.selection_hashes[legal], distance))[0]])
+            support_semantic = int(pool.semantics[row])
+            identity = f"201:{center}:{semantic}:{instance}".encode("ascii")
+            candidates.append((hashlib.sha256(identity).digest(), (center, semantic, instance, support_semantic)))
+    ordered = tuple(value for _, value in sorted(candidates, key=lambda item: item[0]))
+    if len(ordered) < 256:
+        raise PlacementError("train/201 has fewer than 256 persistent supported real instances")
+    return ordered
+
+
+_GATE1_POOL: QualifiedSupportPool | None = None
+_GATE1_OBSTACLES: ObservedObstacleIndex | None = None
+_GATE1_TEMPLATES: dict[int, tuple[NormalTemplateShape, ...]] = {}
+_GATE1_TRAJECTORY_YAW: dict[int, float] = {}
+_GATE1_REAL_CANDIDATES: tuple[tuple[int, int, int, int], ...] = ()
+_GATE1_RAY_GRID: RayGrid | None = None
+_GATE1_SENSOR: SensorCalibration | None = None
+
+
+def _gate1_template(seed: int, support_semantic: int) -> NormalTemplateShape:
+    if support_semantic == 48:
+        semantics = (30,)
+    elif support_semantic == 40:
+        semantics = tuple(sorted(_GATE1_TEMPLATES))
+    else:
+        raise PlacementError("normal-control support semantic is not active in E25")
+    available = tuple(
+        template for semantic in semantics for template in _GATE1_TEMPLATES.get(semantic, ())
+    )
+    if not available:
+        raise PlacementError("Gate 1 has no template for the required support semantic")
+    return available[int(np.random.default_rng(seed).integers(0, len(available)))]
+
+
+def _gate1_bank_worker(index: int) -> dict[str, object]:
+    pool, obstacles = _GATE1_POOL, _GATE1_OBSTACLES
+    sequence, grid, sensor = _GATE1_SEQUENCE, _GATE1_RAY_GRID, _GATE1_SENSOR
+    if (
+        pool is None or obstacles is None or sequence is None or grid is None or sensor is None
+        or not _GATE1_TEMPLATES or not _GATE1_REAL_CANDIDATES
+    ):
+        raise RuntimeError("Gate 1 candidate-bank fixtures are not initialized")
+    bank_seed = 3_800_000 + index
+    for attempt in range(48):
+        attempt_seed = bank_seed + 1_000_003 * attempt
+        real_index = int(
+            np.random.default_rng(np.random.SeedSequence([attempt_seed, 3801])).integers(
+                0, len(_GATE1_REAL_CANDIDATES)
+            )
+        )
+        center, real_semantic, real_instance, support_semantic = _GATE1_REAL_CANDIDATES[real_index]
+        rows = _identity_order(pool, (support_semantic,), "gate1-paired-world-v1", attempt_seed)
+        rows = rows[np.abs(pool.frames[rows] - center) <= 2]
+        if rows.size == 0:
+            continue
+        frames = tuple(sequence.source_frame(frame_id) for frame_id in range(center - 2, center + 3))
+        try:
+            template_seed = attempt_seed + 1
+            scale_seed = attempt_seed + 2
+            source_template = _gate1_template(template_seed, support_semantic)
+            scale = np.random.default_rng(
+                np.random.SeedSequence([scale_seed, 2501])
+            ).uniform(0.9, 1.1, size=3)
+            control_shape = _aligned_scaled_template(source_template, scale)
+            perturbation = float(
+                np.random.default_rng(np.random.SeedSequence([attempt_seed + 31, 2502])).uniform(
+                    -math.pi if control_shape.raw_semantic_id == 30 else -math.radians(15.0),
+                    math.pi if control_shape.raw_semantic_id == 30 else math.radians(15.0),
+                )
+            )
+
+            def control_yaw(patch: SupportPatch, offset: float = perturbation) -> float:
+                return float(_GATE1_TRAJECTORY_YAW[patch.frame_id]) + offset
+
+            control_material_seed = attempt_seed + 11
+            control, control_record = place_object(
+                control_shape, MaterialSpec.sample(control_material_seed), pool, obstacles,
+                object_id=1, label="normal-control", proposal_namespace="gate1-control-v1",
+                proposal_stream=attempt_seed, yaw_rad=perturbation,
+                material_seed=control_material_seed, yaw_seed=attempt_seed + 31,
+                template_identity=_normal_template_identity(source_template),
+                proposal_rows=rows, grounding_eligibility=qualify_grounding(control_shape),
+                yaw_for_support=control_yaw,
+            )
+            proxy_shape, proxy_report, proxy_grounding, shape_proposals, grounding_rejections = _grounding_qualified_shape(
+                attempt_seed + 3, stride=3072, maximum_proposals=64
+            )
+            proxy_material_seed = attempt_seed + 12
+            proxy_yaw_seed = attempt_seed + 32
+            proxy_yaw = float(np.random.default_rng(proxy_yaw_seed).uniform(-math.pi, math.pi))
+            proxy, proxy_record = place_object(
+                proxy_shape, MaterialSpec.sample(proxy_material_seed), pool, obstacles,
+                object_id=1, label="anomaly-proxy", proposal_namespace="gate1-proxy-v1",
+                proposal_stream=attempt_seed, yaw_rad=proxy_yaw,
+                material_seed=proxy_material_seed, yaw_seed=proxy_yaw_seed,
+                shape_seed=shape_proposals[-1], shape_generation_report=proxy_report,
+                proposal_rows=rows, grounding_eligibility=proxy_grounding,
+            )
+            control_world = WorldSpec(bank_seed, 201, (control,))
+            proxy_world = WorldSpec(bank_seed, 201, (proxy,))
+            validate_world_visibility(control_world, frames, grid, sensor)
+            validate_world_visibility(proxy_world, frames, grid, sensor)
+        except (RenderError, PlacementError):
+            continue
+        return {
+            "bank_seed": bank_seed, "attempt": attempt, "center_frame": center,
+            "real_semantic": real_semantic, "real_instance": real_instance,
+            "support_semantic": support_semantic,
+            "control_world_json": control_world.to_json(),
+            "proxy_world_json": proxy_world.to_json(),
+            "control_record_json": json.dumps(control_record.to_dict(), sort_keys=True, separators=(",", ":")),
+            "proxy_record_json": json.dumps(
+                replace(
+                    proxy_record, accepted_shape_proposal=len(shape_proposals) - 1,
+                    shape_proposal_seeds=shape_proposals,
+                    grounding_rejection_seeds=grounding_rejections,
+                ).to_dict(), sort_keys=True, separators=(",", ":"),
+            ),
+            "error": "",
+        }
+    return {
+        "bank_seed": bank_seed, "attempt": 48, "center_frame": -1,
+        "real_semantic": 0, "real_instance": 0, "support_semantic": 0,
+        "control_world_json": "", "proxy_world_json": "",
+        "control_record_json": "", "proxy_record_json": "",
+        "error": "placement_exhaustion",
+    }
+
+
+def build_gate1_candidate_bank(
+    sequence: object,
+    pool: QualifiedSupportPool,
+    obstacles: ObservedObstacleIndex,
+    templates: Sequence[NormalTemplateShape],
+    ray_grid: RayGrid,
+    sensor: SensorCalibration,
+    trajectory_yaws: Mapping[int, float],
+    output_path: Path | str,
+    *,
+    processes: int = 24,
+) -> dict[str, object]:
+    """Build the first frozen 256-seed independent three-source candidate bank."""
+    if processes != 24:
+        raise RenderError("formal Gate 1 candidate bank requires 24 processes")
+    by_semantic: dict[int, list[NormalTemplateShape]] = {}
+    for template in templates:
+        by_semantic.setdefault(template.raw_semantic_id, []).append(template)
+    global _GATE1_SEQUENCE, _GATE1_POOL, _GATE1_OBSTACLES, _GATE1_TEMPLATES
+    global _GATE1_TRAJECTORY_YAW, _GATE1_REAL_CANDIDATES, _GATE1_RAY_GRID, _GATE1_SENSOR
+    _GATE1_SEQUENCE = sequence
+    _GATE1_POOL = pool
+    _GATE1_OBSTACLES = obstacles
+    _GATE1_TEMPLATES = {key: tuple(value) for key, value in by_semantic.items()}
+    _GATE1_TRAJECTORY_YAW = dict(trajectory_yaws)
+    _GATE1_REAL_CANDIDATES = _gate1_real_candidates(sequence, pool)
+    _GATE1_RAY_GRID = ray_grid
+    _GATE1_SENSOR = sensor
+    started = time.monotonic()
+    with mp.get_context("fork").Pool(processes=processes) as workers:
+        records = workers.map(_gate1_bank_worker, range(256), chunksize=1)
+    errors = sum(bool(record["error"]) for record in records)
+    arrays = {
+        "bank_seed": np.asarray([record["bank_seed"] for record in records], dtype=np.int64),
+        "attempt": np.asarray([record["attempt"] for record in records], dtype=np.int16),
+        "center_frame": np.asarray([record["center_frame"] for record in records], dtype=np.int16),
+        "real_semantic": np.asarray([record["real_semantic"] for record in records], dtype=np.uint16),
+        "real_instance": np.asarray([record["real_instance"] for record in records], dtype=np.uint16),
+        "support_semantic": np.asarray([record["support_semantic"] for record in records], dtype=np.uint16),
+        "control_world_json": np.asarray([record["control_world_json"] for record in records]),
+        "proxy_world_json": np.asarray([record["proxy_world_json"] for record in records]),
+        "control_record_json": np.asarray([record["control_record_json"] for record in records]),
+        "proxy_record_json": np.asarray([record["proxy_record_json"] for record in records]),
+        "error": np.asarray([record["error"] for record in records]),
+    }
+    metadata = {
+        "experiment": "Gate1-candidate-bank-v1", "passed": errors == 0,
+        "capacity": 256, "completed": 256 - errors, "errors": errors,
+        "real_candidate_count": len(_GATE1_REAL_CANDIDATES),
+        "center_frame_count": int(np.unique(arrays["center_frame"][arrays["center_frame"] >= 0]).size),
+        "support_semantic_counts": {
+            str(semantic): int(np.count_nonzero(arrays["support_semantic"] == semantic))
+            for semantic in (40, 48)
+        },
+        "maximum_attempt": int(np.max(arrays["attempt"])),
+        "processes": processes, "elapsed_seconds": time.monotonic() - started,
+        "scientific_array_hash": _scientific_array_hash(arrays),
+    }
+    destination = Path(output_path).expanduser().resolve()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_suffix(destination.suffix + ".tmp.npz")
+    np.savez_compressed(
+        temporary, **arrays,
+        metadata_json=np.asarray(json.dumps(metadata, sort_keys=True, separators=(",", ":"))),
+    )
+    os.replace(temporary, destination)
+    return metadata
+
+
+_E38_BANK: tuple[tuple[int, int, int, int, int, WorldSpec, WorldSpec], ...] = ()
+
+
+def _gate1_object_geometry(
+    frame: SourceFrame, world: WorldSpec, item: ObjectSpec, ray_grid: RayGrid
+) -> tuple[np.ndarray, np.ndarray]:
+    rotation, lidar_origin = _pose(frame)
+    directions_world = ray_grid.directions_for(frame) @ rotation.T
+    origins_world = ray_grid.origins_for(frame) @ rotation.T + lidar_origin
+    object_rotation = np.asarray(item.rotation_world_from_local, dtype=np.float64)
+    translation = np.asarray(item.translation_world_m, dtype=np.float64)
+    local_origin = (origins_world - translation) @ object_rotation
+    local_direction = directions_world @ object_rotation
+    distance, _, valid = item.shape.intersect(local_origin, local_direction)
+    official_distance = np.asarray(distance) + ray_grid.official_range_offset_m
+    valid = np.asarray(valid) & (official_distance >= 2.5) & (official_distance <= 50.0)
+    return valid, official_distance
+
+
+def _gate1_real_geometry(
+    frame: SourceFrame, semantic: int, instance: int, ray_grid: RayGrid
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    assert frame.labels is not None
+    returned = (
+        (frame.labels.semantic == np.uint16(semantic))
+        & (frame.labels.instance == np.uint16(instance))
+        & ~np.asarray(frame.zero_slot_mask, dtype=np.bool_)
+    )
+    ranges = np.asarray(ray_grid.official_ranges(frame))
+    returned &= (ranges >= 2.5) & (ranges <= 50.0)
+    points = np.asarray(frame.xyzi[returned, :3], dtype=np.float64)
+    if points.shape[0] < 4:
+        raise RenderError("Gate 1 real instance has fewer than four in-range returns")
+    try:
+        hull = ConvexHull(points)
+    except QhullError as error:
+        raise RenderError("Gate 1 real instance hull is not volumetric") from error
+    equations = np.asarray(hull.equations, dtype=np.float64)
+    origins = ray_grid.origins_for(frame)
+    directions = ray_grid.directions_for(frame)
+    distance = np.full(ray_grid.slot_count, np.inf, dtype=np.float64)
+    valid = np.zeros(ray_grid.slot_count, dtype=np.bool_)
+    for start in range(0, ray_grid.slot_count, 4096):
+        stop = min(start + 4096, ray_grid.slot_count)
+        numerator = -(origins[start:stop] @ equations[:, :3].T + equations[:, 3])
+        denominator = directions[start:stop] @ equations[:, :3].T
+        parallel_outside = np.any(
+            (np.abs(denominator) <= EPSILON) & (numerator < 0.0), axis=1
+        )
+        lower_terms = np.full_like(denominator, -np.inf)
+        upper_terms = np.full_like(denominator, np.inf)
+        np.divide(numerator, denominator, out=lower_terms, where=denominator < -EPSILON)
+        np.divide(numerator, denominator, out=upper_terms, where=denominator > EPSILON)
+        enter = np.max(lower_terms, axis=1)
+        exit_distance = np.min(upper_terms, axis=1)
+        current = (
+            ~parallel_outside & (exit_distance >= np.maximum(enter, 0.0))
+            & (enter + ray_grid.official_range_offset_m >= 2.5)
+            & (enter + ray_grid.official_range_offset_m <= 50.0)
+        )
+        distance[start:stop] = enter + ray_grid.official_range_offset_m
+        valid[start:stop] = current
+    opportunity = valid | returned
+    distance = np.where(valid, distance, ranges)
+    return opportunity, returned, distance
+
+
+def _e38_worker(index: int) -> dict[str, np.ndarray]:
+    sequence, grid, sensor = _GATE1_SEQUENCE, _GATE1_RAY_GRID, _GATE1_SENSOR
+    if sequence is None or grid is None or sensor is None or len(_E38_BANK) != 256:
+        raise RuntimeError("E38 candidate bank is not initialized")
+    (
+        bank_seed, center, real_semantic, real_instance, support_semantic,
+        control_world, proxy_world,
+    ) = _E38_BANK[index]
+    opportunities = np.zeros((3, 5, grid.beam_count), dtype=np.int32)
+    returns = np.zeros_like(opportunities)
+    median_distance = np.zeros((3, 5), dtype=np.float64)
+    median_beam = np.zeros((3, 5), dtype=np.float64)
+    for frame_offset, frame_id in enumerate(range(center - 2, center + 3)):
+        frame = sequence.source_frame(frame_id)
+        real_opportunity, real_return, real_distance = _gate1_real_geometry(
+            frame, real_semantic, real_instance, grid
+        )
+        opportunities[0, frame_offset] = np.bincount(
+            grid.beam_ids[real_opportunity], minlength=grid.beam_count
+        )
+        returns[0, frame_offset] = np.bincount(
+            grid.beam_ids[real_return], minlength=grid.beam_count
+        )
+        median_distance[0, frame_offset] = float(np.median(real_distance[real_opportunity]))
+        median_beam[0, frame_offset] = float(np.median(grid.beam_ids[real_opportunity]))
+        for source_index, world in enumerate((control_world, proxy_world), start=1):
+            item = world.objects[0]
+            geometry, geometry_distance = _gate1_object_geometry(frame, world, item, grid)
+            rendered = render_frame(frame, world, grid, sensor)
+            returned = (
+                rendered.normal_control_mask if source_index == 1
+                else rendered.anomaly_proxy_mask
+            )
+            rendered_range = np.asarray(grid.ranges(rendered.source))
+            returned = np.asarray(returned) & (rendered_range >= 2.5) & (rendered_range <= 50.0)
+            opportunities[source_index, frame_offset] = np.bincount(
+                grid.beam_ids[geometry], minlength=grid.beam_count
+            )
+            returns[source_index, frame_offset] = np.bincount(
+                grid.beam_ids[returned], minlength=grid.beam_count
+            )
+            if bool(geometry.any()):
+                median_distance[source_index, frame_offset] = float(np.median(geometry_distance[geometry]))
+                median_beam[source_index, frame_offset] = float(np.median(grid.beam_ids[geometry]))
+            else:
+                rotation, origin_world = _pose(frame)
+                center_sensor = (
+                    np.asarray(item.translation_world_m, dtype=np.float64) - origin_world
+                ) @ rotation
+                center_distance = float(np.linalg.norm(center_sensor))
+                direction = center_sensor / center_distance
+                nearest = int(np.argmax(grid.directions_for(frame) @ direction))
+                median_distance[source_index, frame_offset] = center_distance
+                median_beam[source_index, frame_offset] = float(grid.beam_ids[nearest])
+    return {
+        "bank_seed": np.full((3, 5), bank_seed, dtype=np.int64),
+        "source": np.broadcast_to(np.arange(3, dtype=np.uint8)[:, None], (3, 5)).copy(),
+        "frame_id": np.broadcast_to(np.arange(center - 2, center + 3, dtype=np.int16), (3, 5)).copy(),
+        "support_semantic": np.full((3, 5), support_semantic, dtype=np.uint16),
+        "median_distance_m": median_distance,
+        "median_beam": median_beam,
+        "opportunity": opportunities,
+        "return_count": returns,
+    }
+
+
+def _e38_bootstrap(
+    opportunities: np.ndarray, returns: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    rng = np.random.default_rng(np.random.SeedSequence([3801, 2000]))
+    clusters = opportunities.shape[0]
+    weights = rng.multinomial(
+        clusters, np.full(clusters, 1.0 / clusters), size=2000
+    ).astype(np.float64)
+    denominator = weights @ opportunities
+    numerator = weights @ returns
+    rate = np.divide(numerator, denominator, out=np.zeros_like(numerator), where=denominator > 0)
+    return (
+        np.quantile(rate, 0.025, axis=0),
+        np.quantile(rate, 0.975, axis=0),
+    )
+
+
+def run_e38_qualification(
+    data_root: Path | str,
+    e25_artifact_path: Path | str,
+    calibration_path: Path | str,
+    support_pool_output: Path | str,
+    candidate_bank_output: Path | str,
+    output_path: Path | str,
+    *,
+    processes: int = 24,
+) -> dict[str, object]:
+    """Build the fixed Gate 1 bank and audit three-source per-beam return rates."""
+    if processes != 24:
+        raise RenderError("formal E38 requires exactly 24 processes")
+    try:
+        from .protocol import load_protocol
+        from .scene import LabelMode, STUSequence
+    except ImportError:
+        from protocol import load_protocol  # type: ignore[no-redef]
+        from scene import LabelMode, STUSequence  # type: ignore[no-redef]
+    protocol = load_protocol(Path(__file__).resolve().parents[1] / "protocol.json")
+    sequence = STUSequence.open(
+        data_root, protocol=protocol, partition="train", sequence_id=201,
+        label_mode=LabelMode.REQUIRED,
+    )
+    pool, pool_metadata = build_gate1_support_pool(
+        sequence, support_pool_output, processes=processes
+    )
+    frames = tuple(sequence.source_frame(frame_id) for frame_id in range(4, 682))
+    obstacles = collect_observed_obstacle_index(frames, source_sequence_id=201)
+    trajectory_yaws = trajectory_yaw_by_frame(frames)
+    with np.load(Path(e25_artifact_path).expanduser().resolve(strict=True), allow_pickle=False) as source:
+        metadata = json.loads(str(source["metadata_json"]))
+        if metadata.get("experiment") != "E25" or metadata.get("passed") is not True:
+            raise RenderError("E38 requires the passed E25 template artifact")
+        unique: dict[str, NormalTemplateShape] = {}
+        for identity, payload in zip(source["template_identity"], source["object_json"], strict=True):
+            key = identity.decode()
+            if key and key not in unique:
+                item = ObjectSpec.from_dict(json.loads(payload.decode()))
+                if not isinstance(item.shape, NormalTemplateShape):
+                    raise RenderError("E25 artifact contains a non-template control")
+                unique[key] = item.shape
+    templates = tuple(unique[key] for key in sorted(unique))
+    ray_grid, sensor = load_sensor_calibration(calibration_path)
+    bank_metadata = build_gate1_candidate_bank(
+        sequence, pool, obstacles, templates, ray_grid, sensor, trajectory_yaws,
+        candidate_bank_output, processes=processes,
+    )
+    if bank_metadata["passed"] is not True:
+        return {
+            "experiment": "E38", "passed": False,
+            "failure_classification": "candidate_bank_construction_failure",
+            "support_pool": pool_metadata, "candidate_bank": bank_metadata,
+        }
+    with np.load(Path(candidate_bank_output).expanduser().resolve(strict=True), allow_pickle=False) as source:
+        global _E38_BANK
+        _E38_BANK = tuple(
+            (
+                int(seed), int(center), int(semantic), int(instance), int(support),
+                WorldSpec.from_dict(json.loads(control.decode() if isinstance(control, bytes) else str(control))),
+                WorldSpec.from_dict(json.loads(proxy.decode() if isinstance(proxy, bytes) else str(proxy))),
+            )
+            for seed, center, semantic, instance, support, control, proxy in zip(
+                source["bank_seed"], source["center_frame"], source["real_semantic"],
+                source["real_instance"], source["support_semantic"], source["control_world_json"],
+                source["proxy_world_json"], strict=True,
+            )
+        )
+    global _GATE1_SEQUENCE, _GATE1_RAY_GRID, _GATE1_SENSOR
+    _GATE1_SEQUENCE = sequence
+    _GATE1_RAY_GRID = ray_grid
+    _GATE1_SENSOR = sensor
+    context = mp.get_context("fork")
+    runs: list[dict[str, np.ndarray]] = []
+    run_seconds: list[float] = []
+    for _ in range(2):
+        started = time.monotonic()
+        with context.Pool(processes=processes) as workers:
+            records = workers.map(_e38_worker, range(256), chunksize=1)
+        runs.append({
+            name: np.stack([record[name] for record in records])
+            for name in records[0]
+        })
+        run_seconds.append(time.monotonic() - started)
+    first = runs[0]
+    reproduced = all(np.array_equal(first[name], runs[1][name]) for name in first)
+    conservation_errors = int(np.count_nonzero(first["return_count"] > first["opportunity"]))
+    total_opportunity = first["opportunity"].sum(axis=(0, 2))
+    total_returns = first["return_count"].sum(axis=(0, 2))
+    rates = np.divide(
+        total_returns, total_opportunity, out=np.zeros_like(total_returns, dtype=np.float64),
+        where=total_opportunity > 0,
+    )
+    ci_low = np.zeros((3, ray_grid.beam_count), dtype=np.float64)
+    ci_high = np.zeros_like(ci_low)
+    for source_index in range(3):
+        groups_opportunity = first["opportunity"][:, source_index].reshape(-1, ray_grid.beam_count)
+        groups_return = first["return_count"][:, source_index].reshape(-1, ray_grid.beam_count)
+        ci_low[source_index], ci_high[source_index] = _e38_bootstrap(
+            groups_opportunity, groups_return
+        )
+    finite_errors = int(
+        np.count_nonzero(~np.isfinite(rates))
+        + np.count_nonzero(~np.isfinite(ci_low))
+        + np.count_nonzero(~np.isfinite(ci_high))
+        + np.count_nonzero(~np.isfinite(first["median_distance_m"]))
+        + np.count_nonzero(~np.isfinite(first["median_beam"]))
+    )
+    source_nonzero = [int(total_returns[index].sum()) for index in range(3)]
+    passed = (
+        conservation_errors == 0 and finite_errors == 0
+        and all(value > 0 for value in source_nonzero) and reproduced
+    )
+    scientific = {
+        **first, "beam_opportunity": total_opportunity,
+        "beam_return_count": total_returns, "beam_return_rate": rates,
+        "bootstrap_ci_low": ci_low, "bootstrap_ci_high": ci_high,
+    }
+    result = {
+        "experiment": "E38", "passed": passed, "bank_seeds": 256,
+        "entity_frame_groups_per_source": 1280,
+        "sources": ["real-normal", "normal-control", "anomaly-proxy"],
+        "total_opportunities": [int(total_opportunity[index].sum()) for index in range(3)],
+        "total_returns": source_nonzero, "conservation_errors": conservation_errors,
+        "finite_errors": finite_errors, "elementwise_reproduced": reproduced,
+        "bootstrap_clusters_per_source": 1280, "bootstrap_replicates": 2000,
+        "run_seconds": run_seconds, "processes": processes,
+        "support_pool_size": int(pool_metadata["pool_size"]),
+        "candidate_bank_completed": int(bank_metadata["completed"]),
+        "scientific_array_hash": _scientific_array_hash(scientific),
+    }
+    destination = Path(output_path).expanduser().resolve()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_suffix(destination.suffix + ".tmp.npz")
+    np.savez_compressed(
+        temporary, **scientific,
+        metadata_json=np.asarray(json.dumps(result, sort_keys=True, separators=(",", ":"))),
+    )
+    os.replace(temporary, destination)
+    return result
+
+
 def _render_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="AJAE authoritative renderer experiments")
     subcommands = parser.add_subparsers(dest="command", required=True)
@@ -9953,6 +10665,14 @@ def _render_parser() -> argparse.ArgumentParser:
     e37.add_argument("--calibration", type=Path, required=True)
     e37.add_argument("--output", type=Path, required=True)
     e37.add_argument("--processes", type=int, default=24)
+    e38 = subcommands.add_parser("qualify-e38")
+    e38.add_argument("--data-root", type=Path, required=True)
+    e38.add_argument("--e25-artifact", type=Path, required=True)
+    e38.add_argument("--calibration", type=Path, required=True)
+    e38.add_argument("--support-pool-output", type=Path, required=True)
+    e38.add_argument("--candidate-bank-output", type=Path, required=True)
+    e38.add_argument("--output", type=Path, required=True)
+    e38.add_argument("--processes", type=int, default=24)
     return parser
 
 
@@ -10043,6 +10763,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "qualify-e37":
         result = run_e37_qualification(
             args.e26_artifact, args.data_root, args.calibration, args.output,
+            processes=args.processes,
+        )
+        print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        return 0 if result["passed"] else 1
+    if args.command == "qualify-e38":
+        result = run_e38_qualification(
+            args.data_root, args.e25_artifact, args.calibration,
+            args.support_pool_output, args.candidate_bank_output, args.output,
             processes=args.processes,
         )
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
