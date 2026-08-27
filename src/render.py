@@ -36,7 +36,7 @@ except ImportError:  # Direct module execution and small isolated checks.
 LASER_BEAMS = 128
 GROUND_SEMANTIC_IDS = (40, 44, 48, 49, 60)
 WORLD_FORMAT = "ajae-world-v3"
-WORLD_REPORT_FORMAT = "ajae-world-generation-report-v1"
+WORLD_REPORT_FORMAT = "ajae-world-generation-report-v2"
 SUPPORT_POOL_FORMAT = "ajae-qualified-support-pool-v1"
 SUPPORT_POOL_SHA256 = (
     "0e6e7299157f5e9ced0716f6dd14881c66ba1bca0cc9c372550e56f426ea844d"
@@ -2969,6 +2969,9 @@ class PlacementRecord:
     accepted_shape_proposal: int = 0
     shape_proposal_seeds: tuple[int, ...] = ()
     grounding_rejection_seeds: tuple[int, ...] = ()
+    template_seed: int | None = None
+    scale_seed: int | None = None
+    pose_perturbation_rad: float | None = None
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -2992,6 +2995,9 @@ class PlacementRecord:
             "accepted_shape_proposal": self.accepted_shape_proposal,
             "shape_proposal_seeds": list(self.shape_proposal_seeds),
             "grounding_rejection_seeds": list(self.grounding_rejection_seeds),
+            "template_seed": self.template_seed,
+            "scale_seed": self.scale_seed,
+            "pose_perturbation_rad": self.pose_perturbation_rad,
         }
 
     @classmethod
@@ -3018,6 +3024,10 @@ class WorldGenerationReport:
     source_sequence_id: int
     world_type: str
     world_attempt: int
+    normal_count: int
+    anomaly_count: int
+    count_seed: int
+    label_order_seed: int
     placements: tuple[PlacementRecord, ...] = ()
 
     def to_dict(self) -> dict[str, object]:
@@ -3027,6 +3037,10 @@ class WorldGenerationReport:
             "source_sequence_id": self.source_sequence_id,
             "world_type": self.world_type,
             "world_attempt": self.world_attempt,
+            "normal_count": self.normal_count,
+            "anomaly_count": self.anomaly_count,
+            "count_seed": self.count_seed,
+            "label_order_seed": self.label_order_seed,
             "placements": [item.to_dict() for item in self.placements],
         }
 
@@ -3036,7 +3050,8 @@ class WorldGenerationReport:
             raise RenderError("WorldGenerationReport JSON has an unsupported format")
         if set(value) != {
             "format", "world_seed", "source_sequence_id", "world_type",
-            "world_attempt", "placements",
+            "world_attempt", "normal_count", "anomaly_count", "count_seed",
+            "label_order_seed", "placements",
         }:
             raise RenderError("WorldGenerationReport JSON fields are invalid")
         placements = value["placements"]
@@ -3047,6 +3062,10 @@ class WorldGenerationReport:
             source_sequence_id=value["source_sequence_id"],  # type: ignore[arg-type]
             world_type=str(value["world_type"]),
             world_attempt=value["world_attempt"],  # type: ignore[arg-type]
+            normal_count=value["normal_count"],  # type: ignore[arg-type]
+            anomaly_count=value["anomaly_count"],  # type: ignore[arg-type]
+            count_seed=value["count_seed"],  # type: ignore[arg-type]
+            label_order_seed=value["label_order_seed"],  # type: ignore[arg-type]
             placements=tuple(PlacementRecord.from_dict(item) for item in placements),  # type: ignore[arg-type]
         )
 
@@ -5520,6 +5539,7 @@ def sample_training_world(
     seed: int,
     *,
     maximum_attempts: int = 48,
+    trajectory_yaw_by_frame: Mapping[int, float] | None = None,
 ) -> tuple[WorldSpec, WorldGenerationReport]:
     """Build one immutable train/206 world through the sole qualified pipeline."""
 
@@ -5540,7 +5560,11 @@ def sample_training_world(
         raise RenderError("training entities require a 206 normal-template library")
     if normal_count == anomaly_count == 0:
         world = WorldSpec(world_seed, 206)
-        return world, WorldGenerationReport(world_seed, 206, world_type, 0)
+        return world, WorldGenerationReport(
+            world_seed, 206, world_type, 0, 0, 0, world_seed, world_seed
+        )
+    if normal_count and trajectory_yaw_by_frame is None:
+        raise RenderError("normal-control worlds require trajectory yaw by support frame")
 
     for attempt in range(maximum_attempts):
         attempt_seed = world_seed + 1_000_003 * attempt
@@ -5555,22 +5579,46 @@ def sample_training_world(
             rng.shuffle(labels)
             for entity_index, label in enumerate(labels):
                 entity_seed = attempt_seed + 10_007 * (entity_index + 1)
-                entity_rng = np.random.default_rng(entity_seed)
                 shape_seed: int | None = None
                 template_identity: str | None = None
+                template_seed: int | None = None
+                scale_seed: int | None = None
+                perturbation: float | None = None
+                yaw_for_support: Callable[[SupportPatch], float] | None = None
                 report: ShapeGenerationReport | None = None
                 grounding: GroundingEligibility | None = None
                 shape_proposals: tuple[int, ...] = ()
                 grounding_rejections: tuple[int, ...] = ()
                 if label == "normal-control":
-                    source = templates[int(entity_rng.integers(0, len(templates)))]
-                    target_scale = entity_rng.uniform(0.9, 1.1, size=3)
-                    shape: InsertShape = source.rescaled(
-                        tuple(target_scale / np.asarray(source.scale_xyz))
+                    template_seed = entity_seed + 1
+                    scale_seed = entity_seed + 2
+                    source = templates[int(
+                        np.random.default_rng(template_seed).integers(0, len(templates))
+                    )]
+                    target_scale = np.random.default_rng(
+                        np.random.SeedSequence([scale_seed, 2501])
+                    ).uniform(0.9, 1.1, size=3)
+                    shape = _aligned_scaled_template(source, target_scale)
+                    semantic = source.raw_semantic_id
+                    limit = (
+                        math.pi if semantic == 30
+                        else math.radians(30.0) if semantic in (11, 15, 31, 32)
+                        else math.radians(15.0)
                     )
-                    template_identity = hashlib.sha256(
-                        json.dumps(source.to_dict(), sort_keys=True, separators=(",", ":")).encode()
-                    ).hexdigest()
+                    perturbation = float(
+                        np.random.default_rng(
+                            np.random.SeedSequence([entity_seed + 31, 2502])
+                        ).uniform(-limit, limit)
+                    )
+                    template_identity = _normal_template_identity(source)
+
+                    def support_yaw(
+                        patch: SupportPatch, offset: float = perturbation
+                    ) -> float:
+                        assert trajectory_yaw_by_frame is not None
+                        return float(trajectory_yaw_by_frame[patch.frame_id]) + offset
+
+                    yaw_for_support = support_yaw
                 else:
                     (
                         shape, report, grounding, shape_proposals,
@@ -5581,7 +5629,10 @@ def sample_training_world(
                     shape_seed = shape_proposals[-1]
                 material_seed = entity_seed + 11
                 yaw_seed = entity_seed + 31
-                yaw = float(np.random.default_rng(yaw_seed).uniform(-math.pi, math.pi))
+                yaw = (
+                    float(perturbation) if perturbation is not None
+                    else float(np.random.default_rng(yaw_seed).uniform(-math.pi, math.pi))
+                )
                 item, record = place_object(
                     shape, MaterialSpec.sample(material_seed), support_pool, obstacles,
                     object_id=entity_index + 1, label=label,
@@ -5591,6 +5642,13 @@ def sample_training_world(
                     shape_seed=shape_seed, template_identity=template_identity,
                     shape_generation_report=report, existing_objects=objects,
                     grounding_eligibility=grounding,
+                    yaw_for_support=yaw_for_support,
+                )
+                record = replace(
+                    record,
+                    template_seed=template_seed,
+                    scale_seed=scale_seed,
+                    pose_perturbation_rad=perturbation,
                 )
                 if label == "anomaly-proxy":
                     record = replace(
@@ -5607,7 +5665,8 @@ def sample_training_world(
         except (RenderError, PlacementError):
             continue
         return world, WorldGenerationReport(
-            world_seed, 206, world_type, attempt, tuple(records)
+            world_seed, 206, world_type, attempt, normal_count, anomaly_count,
+            world_seed, attempt_seed, tuple(records)
         )
     raise PlacementError(
         f"training {world_type} world failed {maximum_attempts} deterministic attempts"
@@ -6414,170 +6473,6 @@ def save_development_worlds(
             temporary.unlink()
 
 
-def generate_fixed_development_worlds(
-    frames_201: Sequence[SourceFrame],
-    normal_template_library: Sequence[NormalTemplateShape],
-    ray_grid: RayGrid,
-    sensor: SensorCalibration,
-    in_generator_seeds: Sequence[int],
-    held_out_seeds: Sequence[int],
-    *,
-    maximum_attempts: int = 32,
-) -> tuple[DevelopmentWorldDefinition, ...]:
-    """Create 24 selectable mixed worlds and six torus-only diagnostic mechanisms."""
-
-    frames = frames_201
-    templates = tuple(normal_template_library)
-    in_seeds = tuple(
-        _integer(f"in_generator_seeds[{index}]", value)
-        for index, value in enumerate(in_generator_seeds)
-    )
-    held_seeds = tuple(
-        _integer(f"held_out_seeds[{index}]", value)
-        for index, value in enumerate(held_out_seeds)
-    )
-    if len(frames) != 678:
-        raise RenderError(
-            "development generation requires eligible train/201 frames 4 through 681"
-        )
-    first_frame = frames[0]
-    last_frame = frames[len(frames) - 1]
-    if (
-        first_frame.partition != "train"
-        or first_frame.sequence_id != 201
-        or first_frame.frame_id != 4
-        or last_frame.partition != "train"
-        or last_frame.sequence_id != 201
-        or last_frame.frame_id != 681
-        or first_frame.xyzi.shape[0] != ray_grid.slot_count
-        or last_frame.xyzi.shape[0] != ray_grid.slot_count
-    ):
-        raise RenderError("development backgrounds must be identified normal train/201")
-    if (
-        len(in_seeds) != 24
-        or len(held_seeds) != 6
-        or len(set(in_seeds + held_seeds)) != 30
-    ):
-        raise RenderError("development generation requires 24+6 unique seeds")
-    if not templates or any(
-        not isinstance(item, NormalTemplateShape) for item in templates
-    ):
-        raise RenderError(
-            "development generation requires a non-empty 206 template library"
-        )
-    if any(item.source_sequence_id != 206 for item in templates):
-        raise RenderError("development normal controls must originate from train/206")
-    if type(maximum_attempts) is not int or maximum_attempts < 1:
-        raise RenderError("maximum_attempts must be positive")
-    output: list[DevelopmentWorldDefinition] = []
-    for world_id, (seed, held_out) in enumerate(
-        [(value, False) for value in in_seeds] + [(value, True) for value in held_seeds]
-    ):
-        built: DevelopmentWorldDefinition | None = None
-        for attempt in range(maximum_attempts):
-            rng = np.random.default_rng(seed + 1_000_003 * attempt)
-            center_index = 2 + int(rng.integers(0, len(frames) - 4))
-            window = tuple(
-                frames[index] for index in range(center_index - 2, center_index + 3)
-            )
-            if any(
-                frame.partition != "train"
-                or frame.sequence_id != 201
-                or frame.frame_id != 4 + center_index - 2 + offset
-                or frame.xyzi.shape[0] != ray_grid.slot_count
-                for offset, frame in enumerate(window)
-            ):
-                raise RenderError(
-                    "selected development window is not canonical train/201"
-                )
-            context = collect_support_context(window, maximum_points_per_class=100_000)
-            template = templates[int(rng.integers(0, len(templates)))]
-            try:
-                target_scale = rng.uniform(0.9, 1.1, size=3)
-                scaled_template = template.rescaled(
-                    tuple(target_scale / np.asarray(template.scale_xyz))
-                )
-                control = place_object(
-                    scaled_template,
-                    MaterialSpec.sample(seed + attempt * 11 + 1),
-                    context.ground_world,
-                    context.obstacle_world,
-                    object_id=1,
-                    label="normal-control",
-                    seed=seed + attempt * 11 + 2,
-                    ground_semantic_ids=context.ground_semantic,
-                )
-                lower, upper = scaled_template.local_bounds()
-                control_size = float(np.max(upper - lower))
-                minimum_proxy_size = 0.4 if held_out else 0.2
-                target_size = float(np.clip(control_size, minimum_proxy_size, 3.0))
-                proxy_size_range = (
-                    max(minimum_proxy_size, 0.75 * target_size),
-                    min(3.0, 1.25 * target_size),
-                )
-                proxy_shape: InsertShape = (
-                    sample_held_out_anomaly_shape(
-                        seed + attempt * 11 + 3,
-                        size_m_range=proxy_size_range,
-                    )
-                    if held_out
-                    else sample_training_anomaly_shape(
-                        seed + attempt * 11 + 3,
-                        size_m_range=proxy_size_range,
-                    )
-                )
-                control_position = np.asarray(
-                    control.translation_world_m, dtype=np.float64
-                )
-                nearby = (
-                    np.linalg.norm(context.ground_world - control_position, axis=1)
-                    <= 4.0
-                )
-                if int(np.count_nonzero(nearby)) < 12:
-                    nearby = np.ones(context.ground_world.shape[0], dtype=np.bool_)
-                proxy = place_object(
-                    proxy_shape,
-                    MaterialSpec.sample(seed + attempt * 11 + 4),
-                    context.ground_world[nearby],
-                    context.obstacle_world,
-                    object_id=2,
-                    label="anomaly-proxy",
-                    seed=seed + attempt * 11 + 5,
-                    ground_semantic_ids=context.ground_semantic[nearby],
-                    existing_objects=(control,),
-                )
-                world = WorldSpec(seed, 201, (control, proxy))
-                diagnostics = five_frame_world_diagnostics(
-                    world, window, ray_grid, sensor
-                )
-                if any(int(item["Nvis"]) < 1 for item in diagnostics["objects"]):  # type: ignore[index]
-                    continue
-            except (RenderError, PlacementError):
-                continue
-            built = DevelopmentWorldDefinition(
-                world_id,
-                int(window[2].frame_id),
-                not held_out,
-                world,
-                diagnostics,
-            )
-            break
-        if built is None:
-            raise PlacementError(
-                f"development world {world_id} failed {maximum_attempts} deterministic attempts"
-            )
-        if held_out and any(
-            item.label == "anomaly-proxy"
-            and not isinstance(item.shape, HeldOutTorusShape)
-            for item in built.world.objects
-        ):
-            raise AssertionError(
-                "held-out development world used a training geometry mechanism"
-            )
-        output.append(built)
-    return tuple(output)
-
-
 _E23_SUPPORT_POOL: QualifiedSupportPool | None = None
 _E23_OBSTACLES: ObservedObstacleIndex | None = None
 _E23_PROPOSALS: tuple[np.ndarray, ...] = ()
@@ -7187,7 +7082,7 @@ def _aligned_scaled_template(
     )
 
 
-def _trajectory_yaw_by_frame(frames: Sequence[SourceFrame]) -> dict[int, float]:
+def trajectory_yaw_by_frame(frames: Sequence[SourceFrame]) -> dict[int, float]:
     ordered = tuple(sorted(frames, key=lambda frame: frame.frame_id))
     if len(ordered) < 2:
         raise PlacementError("trajectory tangent requires at least two source frames")
@@ -7438,7 +7333,7 @@ def run_e25_qualification(
     _E25_SUPPORT_POOL = pool
     _E25_OBSTACLES = obstacles
     _E25_TEMPLATES = by_semantic
-    _E25_TRAJECTORY_YAW = _trajectory_yaw_by_frame(frames)
+    _E25_TRAJECTORY_YAW = trajectory_yaw_by_frame(frames)
     runs: list[dict[str, np.ndarray]] = []
     run_seconds: list[float] = []
     context = mp.get_context("fork")
@@ -7492,6 +7387,326 @@ def run_e25_qualification(
     return metadata
 
 
+_E26_SUPPORT_POOL: QualifiedSupportPool | None = None
+_E26_OBSTACLES: ObservedObstacleIndex | None = None
+_E26_TEMPLATES: tuple[NormalTemplateShape, ...] = ()
+_E26_TRAJECTORY_YAW: dict[int, float] = {}
+_E26_RENDERER_IDENTITY = ""
+
+
+def _e26_request_identity(world_hash: str, frame_id: int) -> str:
+    payload = f"{world_hash}:{frame_id}:{_E26_RENDERER_IDENTITY}"
+    return hashlib.sha256(payload.encode("ascii")).hexdigest()
+
+
+def _e26_worker(index: int) -> dict[str, object]:
+    pool, obstacles = _E26_SUPPORT_POOL, _E26_OBSTACLES
+    if (
+        pool is None or obstacles is None or not _E26_TEMPLATES
+        or len(_E26_RENDERER_IDENTITY) != 64
+    ):
+        raise RuntimeError("E26 worker state is not initialized")
+    world_seed = 2_600_000 + index
+    world_type = WORLD_TYPES[index // 64]
+    try:
+        world, report = sample_training_world(
+            _E26_TEMPLATES, pool, obstacles, world_type, world_seed,
+            maximum_attempts=48,
+            trajectory_yaw_by_frame=_E26_TRAJECTORY_YAW,
+        )
+        world_json = world.to_json()
+        report_json = report.to_json()
+        round_trip = WorldSpec.from_dict(json.loads(world_json))
+        report_round_trip = WorldGenerationReport.from_dict(json.loads(report_json))
+        round_trip_errors = int(
+            round_trip.to_json() != world_json
+            or round_trip.identity != world.identity
+            or report_round_trip.to_json() != report_json
+        )
+        validation_errors = int(
+            world.seed != world_seed
+            or world.source_sequence_id != 206
+            or world.world_type != world_type
+            or report.world_seed != world_seed
+            or report.world_type != world_type
+            or report.normal_count != world.normal_control_count
+            or report.anomaly_count != world.anomaly_proxy_count
+            or len(report.placements) != len(world.objects)
+            or [item.object_id for item in world.objects]
+            != list(range(1, len(world.objects) + 1))
+        )
+        support_errors = 0
+        pose_errors = 0
+        material_errors = 0
+        for item, record in zip(world.objects, report.placements, strict=True):
+            row = int(np.searchsorted(pool.pool_indices, record.support_pool_index))
+            if (
+                row >= pool.pool_indices.size
+                or int(pool.pool_indices[row]) != record.support_pool_index
+            ):
+                support_errors += 1
+                continue
+            patch = pool.patch(row)
+            validation_errors += int(
+                record.object_id != item.object_id
+                or record.label != item.label
+                or not qualify_grounding(item.shape).passed
+                or observed_normal_collision(item, obstacles)[0]
+                or record.accepted_proposal + 1
+                != len(record.proposal_pool_indices)
+                or record.accepted_proposal != len(record.rejection_reasons)
+            )
+            material_errors += int(
+                item.material.to_dict()
+                != MaterialSpec.sample(record.material_seed).to_dict()
+            )
+            if item.label == "normal-control":
+                support_errors += int(
+                    record.support_semantic
+                    not in normal_control_support_semantics(item.shape.raw_semantic_id)
+                )
+                perturbation = record.pose_perturbation_rad
+                if perturbation is None:
+                    pose_errors += 1
+                else:
+                    expected = _ground_rotation(
+                        np.asarray(patch.normal_world),
+                        _E26_TRAJECTORY_YAW[patch.frame_id] + perturbation,
+                    )
+                    pose_errors += int(
+                        np.max(np.abs(
+                            expected - np.asarray(item.rotation_world_from_local)
+                        )) > 1.0e-10
+                    )
+                validation_errors += int(
+                    not isinstance(item.shape, NormalTemplateShape)
+                    or record.template_identity is None
+                    or record.template_seed is None
+                    or record.scale_seed is None
+                    or np.any(
+                        (np.asarray(item.shape.scale_xyz) < 0.9)
+                        | (np.asarray(item.shape.scale_xyz) > 1.1)
+                    )
+                )
+            else:
+                validation_errors += int(
+                    not isinstance(item.shape, ShapeSpec)
+                    or record.shape_seed is None
+                    or not record.shape_proposal_seeds
+                    or record.shape_proposal_seeds[-1] != record.shape_seed
+                    or len(record.grounding_rejection_seeds)
+                    != record.accepted_shape_proposal
+                )
+        pair_errors = sum(
+            int(obvious_pair_penetration(world.objects[left], world.objects[right])[0])
+            for left in range(len(world.objects))
+            for right in range(left + 1, len(world.objects))
+        )
+
+        before_traversal = world.to_json()
+        center = 2 + world_seed % 445
+        forward = tuple(range(center - 2, center + 3))
+        reverse = tuple(reversed(forward))
+        random_order = tuple(
+            np.random.default_rng(
+                np.random.SeedSequence([world_seed, 2601])
+            ).permutation(forward).tolist()
+        )
+        expected_requests = {
+            frame_id: _e26_request_identity(world.identity, frame_id)
+            for frame_id in forward
+        }
+
+        def traverse(order: Sequence[int], cache: dict[int, str]) -> dict[int, str]:
+            for frame_id in order:
+                cache.setdefault(
+                    int(frame_id), _e26_request_identity(world.identity, int(frame_id))
+                )
+            return dict(cache)
+
+        uncached = traverse(forward, {})
+        cached: dict[int, str] = {}
+        traverse(reverse, cached)
+        cached_result = traverse(random_order, cached)
+        cached.clear()
+        rebuilt = traverse(random_order, cached)
+        traversal_errors = int(
+            uncached != expected_requests
+            or cached_result != expected_requests
+            or rebuilt != expected_requests
+            or world.to_json() != before_traversal
+        )
+        return {
+            "hard_error": 0,
+            "error": "",
+            "world_seed": world_seed,
+            "world_type": world_type,
+            "normal_count": world.normal_control_count,
+            "anomaly_count": world.anomaly_proxy_count,
+            "entity_count": len(world.objects),
+            "world_attempt": report.world_attempt,
+            "world_hash": world.identity,
+            "world_json": world_json,
+            "report_json": report_json,
+            "round_trip_error": round_trip_errors,
+            "validation_error": validation_errors,
+            "support_error": support_errors,
+            "pose_error": pose_errors,
+            "material_error": material_errors,
+            "pair_error": pair_errors,
+            "traversal_error": traversal_errors,
+            "request_manifest_hash": hashlib.sha256(
+                json.dumps(
+                    expected_requests, sort_keys=True, separators=(",", ":")
+                ).encode()
+            ).hexdigest(),
+        }
+    except PlacementError as error:
+        return {
+            "hard_error": 0,
+            "placement_exhaustion": 1,
+            "error": f"PlacementError: {error}",
+            "world_seed": world_seed,
+            "world_type": world_type,
+        }
+    except Exception as error:
+        return {
+            "hard_error": 1,
+            "placement_exhaustion": 0,
+            "error": f"{type(error).__name__}: {error}",
+            "world_seed": world_seed,
+            "world_type": world_type,
+        }
+
+
+def _e26_arrays(records: Sequence[Mapping[str, object]]) -> dict[str, np.ndarray]:
+    def values(name: str, dtype: object, default: object) -> np.ndarray:
+        return np.asarray([item.get(name, default) for item in records], dtype=dtype)
+
+    return {
+        "world_seed": values("world_seed", np.int64, -1),
+        "world_type": values("world_type", "U16", ""),
+        "normal_count": values("normal_count", np.int8, 0),
+        "anomaly_count": values("anomaly_count", np.int8, 0),
+        "entity_count": values("entity_count", np.int8, 0),
+        "world_attempt": values("world_attempt", np.int8, -1),
+        "world_hash": values("world_hash", "S64", ""),
+        "world_json": np.asarray(
+            [str(item.get("world_json", "")).encode() for item in records]
+        ),
+        "report_json": np.asarray(
+            [str(item.get("report_json", "")).encode() for item in records]
+        ),
+        "request_manifest_hash": values("request_manifest_hash", "S64", ""),
+        "round_trip_error": values("round_trip_error", np.uint8, 0),
+        "validation_error": values("validation_error", np.uint8, 0),
+        "support_error": values("support_error", np.uint8, 0),
+        "pose_error": values("pose_error", np.uint8, 0),
+        "material_error": values("material_error", np.uint8, 0),
+        "pair_error": values("pair_error", np.uint8, 0),
+        "traversal_error": values("traversal_error", np.uint8, 0),
+        "hard_error_code": values("hard_error", np.uint8, 1),
+        "placement_exhaustion_code": values("placement_exhaustion", np.uint8, 0),
+        "error_message": values("error", "U512", ""),
+    }
+
+
+def run_e26_qualification(
+    data_root: Path | str,
+    support_pool_path: Path | str,
+    output_path: Path | str,
+    *,
+    processes: int = 24,
+) -> dict[str, object]:
+    """Run the frozen single-process and 24-process E26 world audit."""
+
+    if processes != 24:
+        raise PlacementError("formal E26 requires exactly 24 worker processes")
+    try:
+        from .protocol import load_protocol
+        from .scene import LabelMode, STUSequence
+    except ImportError:
+        from protocol import load_protocol  # type: ignore[no-redef]
+        from scene import LabelMode, STUSequence  # type: ignore[no-redef]
+    project_root = Path(__file__).resolve().parents[1]
+    protocol = load_protocol(project_root / "protocol.json")
+    sequence = STUSequence.open(
+        data_root, protocol=protocol, partition="train", sequence_id=206,
+        label_mode=LabelMode.REQUIRED,
+    )
+    frames = tuple(sequence.source_frame(frame_id) for frame_id in sequence.frame_ids)
+    templates = extract_normal_template_library(frames)
+    pool = load_qualified_support_pool(support_pool_path)
+    obstacles = collect_observed_obstacle_index(frames)
+    renderer_identity = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+    global _E26_SUPPORT_POOL, _E26_OBSTACLES, _E26_TEMPLATES
+    global _E26_TRAJECTORY_YAW, _E26_RENDERER_IDENTITY
+    _E26_SUPPORT_POOL = pool
+    _E26_OBSTACLES = obstacles
+    _E26_TEMPLATES = templates
+    _E26_TRAJECTORY_YAW = trajectory_yaw_by_frame(frames)
+    _E26_RENDERER_IDENTITY = renderer_identity
+
+    source = Path(__file__).read_text(encoding="utf-8")
+    authority_errors = int(
+        source.count("def place_object(") != 1
+        or source.count("_grounded_object(") != 2
+        or "def generate_fixed_development_worlds(" in source
+    )
+    runs: list[dict[str, np.ndarray]] = []
+    run_seconds: list[float] = []
+    started = time.monotonic()
+    runs.append(_e26_arrays([_e26_worker(index) for index in range(256)]))
+    run_seconds.append(time.monotonic() - started)
+    started = time.monotonic()
+    with mp.get_context("fork").Pool(processes=processes) as workers:
+        runs.append(_e26_arrays(workers.map(_e26_worker, range(256))))
+    run_seconds.append(time.monotonic() - started)
+    reproduced = all(
+        np.array_equal(runs[0][name], runs[1][name], equal_nan=True)
+        if np.issubdtype(runs[0][name].dtype, np.floating)
+        else np.array_equal(runs[0][name], runs[1][name])
+        for name in runs[0]
+    )
+    first = runs[0]
+    completed = int(np.count_nonzero(first["world_hash"] != b""))
+    type_errors = int(np.count_nonzero(
+        first["world_type"]
+        != np.repeat(np.asarray(WORLD_TYPES, dtype="U16"), 64)
+    ))
+    error_fields = (
+        "round_trip_error", "validation_error", "support_error", "pose_error",
+        "material_error", "pair_error", "traversal_error", "hard_error_code",
+        "placement_exhaustion_code",
+    )
+    errors = {name: int(np.sum(first[name])) for name in error_fields}
+    passed = (
+        completed == 256 and type_errors == 0 and authority_errors == 0
+        and all(value == 0 for value in errors.values()) and reproduced
+    )
+    scientific_hash = _scientific_array_hash(first)
+    metadata = {
+        "experiment": "E26", "passed": passed, "worlds": 256,
+        "completed": completed, "type_errors": type_errors,
+        "authority_errors": authority_errors, **errors,
+        "elementwise_reproduced": reproduced, "run_seconds": run_seconds,
+        "renderer_identity": renderer_identity,
+        "support_pool_sha256": SUPPORT_POOL_SHA256,
+        "scientific_array_hash": scientific_hash, "processes": processes,
+    }
+    destination = Path(output_path).expanduser().resolve()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_suffix(destination.suffix + ".tmp.npz")
+    np.savez_compressed(
+        temporary, **first,
+        metadata_json=np.asarray(
+            json.dumps(metadata, sort_keys=True, separators=(",", ":"))
+        ),
+    )
+    os.replace(temporary, destination)
+    return metadata
+
+
 def _render_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="AJAE authoritative renderer experiments")
     subcommands = parser.add_subparsers(dest="command", required=True)
@@ -7510,6 +7725,11 @@ def _render_parser() -> argparse.ArgumentParser:
     e25.add_argument("--support-pool", type=Path, required=True)
     e25.add_argument("--output", type=Path, required=True)
     e25.add_argument("--processes", type=int, default=24)
+    e26 = subcommands.add_parser("qualify-e26")
+    e26.add_argument("--data-root", type=Path, required=True)
+    e26.add_argument("--support-pool", type=Path, required=True)
+    e26.add_argument("--output", type=Path, required=True)
+    e26.add_argument("--processes", type=int, default=24)
     return parser
 
 
@@ -7529,6 +7749,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0 if result["passed"] else 1
     if args.command == "qualify-e25":
         result = run_e25_qualification(
+            args.data_root, args.support_pool, args.output, processes=args.processes
+        )
+        print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        return 0 if result["passed"] else 1
+    if args.command == "qualify-e26":
+        result = run_e26_qualification(
             args.data_root, args.support_pool, args.output, processes=args.processes
         )
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))

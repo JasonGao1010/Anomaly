@@ -723,10 +723,23 @@ def test_training_world_uses_only_the_qualified_placement_pipeline(
     )
     counts = [(1, 1)]
     monkeypatch.setattr(render_module, "_training_entity_counts", lambda *_: counts[0])
-    first, first_report = sample_training_world((template,), pool, obstacles, "mixed", 7)
-    repeated, repeated_report = sample_training_world((template,), pool, obstacles, "mixed", 7)
+    trajectory_yaws = {frame_id: 0.0 for frame_id in range(449)}
+    first, first_report = sample_training_world(
+        (template,), pool, obstacles, "mixed", 7,
+        trajectory_yaw_by_frame=trajectory_yaws,
+    )
+    repeated, repeated_report = sample_training_world(
+        (template,), pool, obstacles, "mixed", 7,
+        trajectory_yaw_by_frame=trajectory_yaws,
+    )
     assert first.to_dict() == repeated.to_dict()
     assert first_report.to_dict() == repeated_report.to_dict()
+    assert render_module.WorldGenerationReport.from_dict(
+        json.loads(first_report.to_json())
+    ).to_json() == first_report.to_json()
+    assert first_report.normal_count == 1
+    assert first_report.anomaly_count == 1
+    assert first_report.count_seed == 7
     assert first.world_type == "mixed"
     assert len(first_report.placements) == 2
     assert all(record.support_semantic == 40 for record in first_report.placements)

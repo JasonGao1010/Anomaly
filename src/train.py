@@ -1817,6 +1817,7 @@ def build_formal_training(
             load_sensor_calibration,
             render_frame as render_counterfactual_frame,
             sample_training_world,
+            trajectory_yaw_by_frame,
         )
         from .scene import (
             LabelMode,
@@ -1839,6 +1840,7 @@ def build_formal_training(
             load_sensor_calibration,
             render_frame as render_counterfactual_frame,
             sample_training_world,
+            trajectory_yaw_by_frame,
         )
         from scene import (  # type: ignore[no-redef]
             LabelMode,
@@ -1939,6 +1941,9 @@ def build_formal_training(
     obstacle_index = collect_observed_obstacle_index(
         sequence.source_frame(frame_id) for frame_id in sequence.frame_ids
     )
+    trajectory_yaws = trajectory_yaw_by_frame(
+        tuple(sequence.source_frame(frame_id) for frame_id in sequence.frame_ids)
+    )
 
     def world_factory(world_type: str, seed: int) -> object:
         if world_type not in WORLD_TYPES:
@@ -1947,6 +1952,7 @@ def build_formal_training(
             raise TrainingError("world factory seed must be a non-negative integer")
         world, report = sample_training_world(
             normal_templates, support_pool, obstacle_index, world_type, seed,
+            trajectory_yaw_by_frame=trajectory_yaws,
         )
         report_dir = run_root / "world_reports"
         report_dir.mkdir(parents=True, exist_ok=True)
