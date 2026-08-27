@@ -3285,6 +3285,10 @@ E31逐元素核对E28-v2 PASS产物的seed与shape identity并重建原256个sch
 
 完整枚举正式calibration的2,304个beam×range×incidence单元，每单元使用24个固定identity，共55,296次强度生成。identity $i$ 使用world seed与 `MaterialSpec.sample` seed 3,500,000+$i$、frame 2,000+$i$、object ID $i+1$、slot 0–2,303；正式channel 1 `_slot_uniform` 与 `SensorCalibration.sample_intensity` 对照独立64位mixer、material quantile扰动、条件表线性插值和冻结支持clipping。最大误差不超过 $10^{-6}$，全部finite且在支持内，两遍24进程逐元素一致；quantile边界clipping仅报告。实现提交 `0aea678d884e694391eeb0a94a89584c23104065`，`src/render.py` SHA-256为 `80720b70481408601a54fded5823de5865ec1152652dd83fc3af12d5467ee2d1`。正式命令为 `python -m src.render qualify-e35 --calibration runs/ajae/calibration.pt --output runs/ajae/e35_intensity.npz --processes 24`。
 
+**E35 正式结果：PASS（E35关闭，E36解锁）**
+
+55,296次正式强度与独立reference最大误差为0，identity uniform最大误差为0，未定义单元和冻结支持越界均为0，两遍逐元素一致；高端quantile clipping 80次、低端0次，总比例0.0014467592592592592。科学数组哈希 `cc8ffa84692ec01ce337e8e66d18e5c4dfabc836b8072699feb7dccca4a7efac`；产物 `runs/ajae/e35_intensity.npz` 大小2,048,622字节，SHA-256为 `25ffbbea26b7b1a211a0f098276350fbc4b8decabe9cf9b5e69ab2e9edc3acd2`。
+
 ## E36｜normal-control/proxy 共用渲染路径
 
 静态代码审计与运行 trace 同时检查：label 在几何、return、nearest competition、intensity、slot recovery 中不得参与分支，只在最终监督语义赋值时使用。对相同几何/material/pose、只改 label 的 paired fixture，传感器中间数组必须逐元素一致。
