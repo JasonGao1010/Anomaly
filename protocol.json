@@ -1676,7 +1676,7 @@
         },
         "ground_contact_qualification": {
           "version": "E22",
-          "status": "EXECUTION FROZEN",
+          "status": "FAIL; contact-band sample-count condition not met",
           "preregistration_date": "2026-08-27",
           "source_commit": "0f29d68",
           "source_commit_pushed_before_preregistration": true,
@@ -1726,7 +1726,38 @@
           "after_pass": "close floating/burial qualification and unlock E23 without E22-V1",
           "failure_route": "retain E22 FAIL and stop to repair the vertical alignment/contact rule before E23",
           "forbidden": ["mesh minimum vertices", "collision checks", "support-anchor replacement after placement", "threshold changes after results", "E22-V1", "running E23 before PASS"],
-          "criteria_frozen_before_formal_run": true
+          "criteria_frozen_before_formal_run": true,
+          "formal_result": {
+            "date": "2026-08-27",
+            "preregistration_commit": "62db28ff855b71fcbb62641a015e3b53147f6d2a",
+            "passed": false,
+            "placements": 1024,
+            "qualified": 942,
+            "failed": 82,
+            "qualified_fraction": 0.919921875,
+            "hard_errors": 0,
+            "failure_counts": {
+              "absolute_d_min_above_0.01_m": 3,
+              "buried_fraction_above_0.02": 0,
+              "contact_count_below_8": 80,
+              "d_min_only": 2,
+              "contact_count_only": 79,
+              "d_min_and_contact_count": 1
+            },
+            "absolute_d_min_m": {"median": 2.1953342810299148e-08, "q95": 8.405340487793716e-05, "q99": 0.001726470545666539, "maximum": 0.022102881976028055},
+            "buried_fraction": {"median": 0.0, "q95": 0.0, "q99": 0.0, "maximum": 0.00006103515625},
+            "contact_count": {"minimum": 0, "median": 142.0, "q95": 2584.7, "q99": 5460.799999999997, "maximum": 7399},
+            "surface_residual_maximum": 2.2485007388699067e-07,
+            "elementwise_reproduced": true,
+            "array_hash_both_runs": "4a9d5efaf348cd4e9eca34605715aed2717cd96b4b9068faedefc669a983fb3d",
+            "summary_hash_both_runs": "1d5af8e02ee364c706914946bf85df6fa9238407bdcef65b607136f47975b1a4",
+            "runner_sha256": "7ac4bd8cca886eacf621cc10841d5768c38e24845ff73007fd428584d7e0af75",
+            "artifact": "runs/ajae/e22_ground_contact.npz",
+            "artifact_bytes": 330855,
+            "artifact_sha256": "3a93c68e9e2bdf983f9696326cbac950fdb5be76939959dde8dff63ff9d1d6e1",
+            "conclusion": "E22 fails its frozen conjunction because only 942 placements qualify, below 1014. Substantial burial is not observed; most failures arise from the frozen minimum contact-band sample count.",
+            "claim_limit": "This result does not establish systematic physical floating or burial. It establishes that the current placement plus contact-audit protocol does not meet the preregistered qualification rate, so E23 remains locked."
+          }
         }
       }
     },
