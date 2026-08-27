@@ -9266,6 +9266,47 @@ def run_e33_qualification(output_path: Path | str) -> dict[str, object]:
     return result
 
 
+def _e34_run_once() -> dict[str, np.ndarray]:
+    half = 0.25
+    vertices = np.asarray([
+        (x, y, z) for x in (-half, half) for y in (-half, half) for z in (-half, half)
+    ], dtype=np.float64)
+    shape = NormalTemplateShape(vertices, np.empty((0, 3), dtype=np.int32), 206, 0, 10, 1, (0.0, 0.0, 0.0))
+    grid = RayGrid(np.asarray(((1.0, 0.0, 0.0),)), np.asarray((0.0,)), np.asarray((0.0,)), beam_count=1)
+    output = {name: [] for name in ("case", "occupancy_error", "semantic_error", "object_id_error", "mask_error", "intensity_payload_error")}
+    for case in range(3):
+        item = ObjectSpec(1, "normal-control", shape, MaterialSpec(0.5, 0.1, 0.0), (5.0 + half, 0.0, 0.0), ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0)))
+        objects = () if case == 2 else (item,)
+        sensor = SensorCalibration.constant(0.5, return_probability=1.0 if case == 0 else 0.0)
+        source = make_source_frame(case, np.asarray(((0.0, 0.0, 0.0, 17.0),), dtype=np.float32), np.eye(4, dtype=np.float64), None, partition="train", sequence_id=206)
+        rendered = render_frame(source, WorldSpec(3_400_000 + case, 206, objects), grid, sensor)
+        expected = case == 0
+        occupied = bool(np.linalg.norm(rendered.source.xyzi[0, :3]) > 0.0)
+        semantic = int(rendered.packed_labels[0] & np.uint32(0xFFFF))
+        output["case"].append(case)
+        output["occupancy_error"].append(int(occupied != expected))
+        output["semantic_error"].append(int(semantic != (10 if expected else 0)))
+        output["object_id_error"].append(int(int(rendered.object_id_internal[0]) != (1 if expected else -1)))
+        output["mask_error"].append(int(bool(rendered.inserted_mask[0]) != expected or bool(rendered.occluded_original_mask[0])))
+        output["intensity_payload_error"].append(int((not np.isfinite(rendered.source.xyzi[0, 3])) if expected else rendered.source.xyzi[0, 3] != np.float32(17.0)))
+    return {name: np.asarray(values, dtype=np.int8 if name == "case" else np.uint8) for name, values in output.items()}
+
+
+def run_e34_qualification(output_path: Path | str) -> dict[str, object]:
+    """Qualify new-return creation and rejection on empty native slots."""
+
+    started = time.monotonic(); runs = [_e34_run_once(), _e34_run_once()]; elapsed = time.monotonic() - started
+    reproduced = all(np.array_equal(runs[0][name], runs[1][name]) for name in runs[0])
+    first = runs[0]; names = tuple(name for name in first if name != "case")
+    errors = {name: int(np.sum(first[name])) for name in names}
+    passed = all(value == 0 for value in errors.values()) and reproduced
+    scientific_hash = _scientific_array_hash(first)
+    result = {"experiment": "E34", "passed": passed, "fixtures": 3, **errors, "elementwise_reproduced": reproduced, "run_seconds": [elapsed], "scientific_array_hash": scientific_hash}
+    destination = Path(output_path).expanduser().resolve(); destination.parent.mkdir(parents=True, exist_ok=True); temporary = destination.with_suffix(destination.suffix + ".tmp.npz")
+    np.savez_compressed(temporary, **first, metadata_json=np.asarray(json.dumps(result, sort_keys=True, separators=(",", ":"))))
+    os.replace(temporary, destination); return result
+
+
 def _render_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="AJAE authoritative renderer experiments")
     subcommands = parser.add_subparsers(dest="command", required=True)
@@ -9321,6 +9362,8 @@ def _render_parser() -> argparse.ArgumentParser:
     e32.add_argument("--output", type=Path, required=True)
     e33 = subcommands.add_parser("qualify-e33")
     e33.add_argument("--output", type=Path, required=True)
+    e34 = subcommands.add_parser("qualify-e34")
+    e34.add_argument("--output", type=Path, required=True)
     return parser
 
 
@@ -9390,6 +9433,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0 if result["passed"] else 1
     if args.command == "qualify-e33":
         result = run_e33_qualification(args.output)
+        print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        return 0 if result["passed"] else 1
+    if args.command == "qualify-e34":
+        result = run_e34_qualification(args.output)
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 0 if result["passed"] else 1
     raise AssertionError("unreachable renderer command")
