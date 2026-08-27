@@ -2479,6 +2479,18 @@ schema 7 已经使历史三个缺失区域获得充足的最终连续几何支�
 
 正式产物 `runs/ajae/e20a_v2_schema7_geometry_coverage.npz` 为 2,343,036 bytes，SHA-256 为 `addeb0983ee1f58d32dcba027e27dc02ee90994e135cf9564ecfe71b0798e14c`，摘要哈希为 `44c4a1f7f898168549fe7e40f33357fcc9e0e8415df6a39ffdb493e78a912d55`。独立只读复核重新计算了全部区域计数、unresolved 原因、数组/摘要/产物哈希并与正式记录一致。按预注册失败分支，E20-V1、E20b 和 E21 继续锁定；未查看任何对象图像，未修改 schema 7，现停止等待不对称性测量设计的用户裁决。
 
+**E20a-D3 运行协议冻结（2026-08-27，首次正式运行前）**
+
+E20a-D3 是纯测量诊断，不修改 schema 7、E20a-v2、81 个 unresolved 上限、0.03 层间差、0.15 不对称边界或任何 coverage 计数，也不能产生 E20a PASS。主样本固定为 E20a-v2 全部 130 个 unresolved，primitive count 1–5 分层为 1/22/18/41/48。control 从 resolved 对象中按完全相同的 count 配额抽取：只按 `SHA256('E20a-D3-control-v1|count|shape_hash')` 从小到大选择，不读取不对称性。unresolved/control seed 列表 SHA-256 分别为 `d2a493a69fc3bb3a48bafbb03a8ad80269115c1d67c7138e98dae245274744c8` 与 `26b612379290bf5ed4a59ad3411ea1d00d9f946a43a7c2fa5ad0b76a49696895`，260 对象有序 manifest SHA-256 为 `9dc76b5a76ec3e016e73f1d67958cbc5be0691c2603e65621f9895f3878dd8e4`。
+
+每个对象必须重建同一 shape/report hash，复用 E20a-v2 的同一 continuous AABB、`signed_distance<=0`、质心和 $A$ 公式，在同一无扰动三维 Sobol 序列的嵌套前缀 $2^{13},2^{15},2^{17},2^{19}$ 上保存 $A_{13},A_{15},A_{17},A_{19}$、内部点数以及三段绝对差。$A_{13}/A_{15}$ 与内部点数必须先逐元素复现 E20a-v2，才允许解释高预算结果；两遍使用 24 个 CPU 进程并逐元素复现。
+
+对象级 `high_budget_stable` 冻结为 $|A_{17}-A_{19}|\le0.01$，`clearly_contracted` 冻结为 $|A_{17}-A_{19}|\le0.5|A_{13}-A_{15}|$，二者同时成立才是 qualified convergence。若至少 104/130 个原 unresolved qualified convergence 且至少 124/130 controls high-budget stable，则支持原两层预算不足；若至少 26/130 原 unresolved 到高预算仍有差值 $>0.03$，或 controls high-budget stable 少于 117/130，则支持当前 estimator 到 $2^{19}$ 仍不合适。两项主规则同时成立或同时不成立记为 mixed/inconclusive。
+
+分类敏感性独立冻结：$A_{17}/A_{19}$ 跨越 0.15，或 $|A_{19}-0.15|\le|A_{17}-A_{19}|$，均记 classification-sensitive；至少 26/130 构成大量分类敏感。若高预算收敛规则成立但同时满足大量分类敏感，则归因为“高预算收敛但区域分类对测量误差敏感”，而不是简单宣布提高预算即可。所有对象都须报告 $A_{19}$ 到 0.15 的距离，但不得把 D3 的对象事后计入 E20a-v2 asymmetric coverage。
+
+运行器预检查时为确认低预算逐元素复现，曾各执行一次 unresolved seed 129 和 control seed 143；命令同时打印了它们的 $A_{17}/A_{19}$。此信息发生在协议提交前，现完整披露。样本、0.01/0.5/104/124/26/117 等规则未因此改变，两对象仍保留在此前已哈希冻结的完整 manifest 中。冻结运行器 SHA-256 为 `73476601856bc46f96ea420f7b158a0c62546272821785d11e75d792caf27d4a`，预定产物为 `runs/ajae/e20a_d3_asymmetry_convergence.npz`。E20a-v2 FAIL 永久保留；E20-V1、E20b、E21 继续锁定。
+
 
 ### E20-V1｜盲法人工几何审查（LOCKED）
 

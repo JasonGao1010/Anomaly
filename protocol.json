@@ -988,6 +988,42 @@
             "artifact_sha256": "addeb0983ee1f58d32dcba027e27dc02ee90994e135cf9564ecfe71b0798e14c",
             "decision": "E20a-v2 remains FAIL despite all coverage counts passing; E20-V1, E20b, and E21 remain locked; stop for user-approved measurement-design decision without viewing shapes or changing schema 7"
           }
+        },
+        "E20a-D3": {
+          "status": "EXECUTION FROZEN; first formal run not yet started",
+          "question": "Are the 130 E20a-v2 asymmetry-unresolved objects primarily caused by insufficient 2^13/2^15 sampling budgets, or does the uniform-AABB Sobol inside-rejection estimator remain unstable at 2^19?",
+          "diagnostic_only": "D3 does not modify schema 7, E20a-v2, the 0.03 layer tolerance, the unresolved limit 81, the asymmetric threshold 0.15, or any coverage count; it cannot produce an E20a PASS",
+          "parent_artifact": {"path": "runs/ajae/e20a_v2_schema7_geometry_coverage.npz", "sha256": "addeb0983ee1f58d32dcba027e27dc02ee90994e135cf9564ecfe71b0798e14c"},
+          "sample": {
+            "unresolved": "all 130 objects with E20a-v2 asymmetry_resolved=false",
+            "unresolved_primitive_counts_1_to_5": [1, 22, 18, 41, 48],
+            "unresolved_seed_list_sha256": "d2a493a69fc3bb3a48bafbb03a8ad80269115c1d67c7138e98dae245274744c8",
+            "controls": "130 E20a-v2 resolved objects exactly matched to unresolved primitive-count strata; within each stratum select the smallest SHA256('E20a-D3-control-v1|count|shape_hash'), without using any asymmetry value",
+            "control_primitive_counts_1_to_5": [1, 22, 18, 41, 48],
+            "control_seed_list_sha256": "26b612379290bf5ed4a59ad3411ea1d00d9f946a43a7c2fa5ad0b76a49696895",
+            "ordered_manifest": "all unresolved seeds ascending followed by all control seeds ascending",
+            "manifest_sha256": "9dc76b5a76ec3e016e73f1d67958cbc5be0691c2603e65621f9895f3878dd8e4",
+            "total_objects": 260,
+            "independent_runs": 2,
+            "cpu_processes": 24
+          },
+          "estimator": {"continuous_aabb": "reuse each E20a-v2 recorded qualified continuous AABB exactly", "membership": "unchanged continuous signed_distance <= 0", "centroid_and_A_formula": "unchanged E20a definition", "sobol": "one unscrambled 3D Sobol sequence, nested prefixes", "point_counts": [8192, 32768, 131072, 524288], "saved_values": ["A13", "A15", "A17", "A19", "inside count at every layer", "absolute delta 13-15, 15-17, and 17-19"]},
+          "identity_conditions": ["every regenerated shape and complete generation report hash matches E20a-v2", "every continuous AABB matches E20a-v2 elementwise", "A13, A15, and their interior counts match the E20a-v2 artifact exactly before higher-budget interpretation", "two complete runs reproduce every value and hash elementwise"],
+          "object_rules": {"high_budget_stable": "abs(A17-A19) <= 0.01", "clearly_contracted": "abs(A17-A19) <= 0.5*abs(A13-A15)", "qualified_convergence": "both high_budget_stable and clearly_contracted", "high_budget_drift": "abs(A17-A19) > 0.03", "robustly_asymmetric": "min(A17,A19) >= 0.15", "robustly_non_asymmetric": "max(A17,A19) < 0.15", "threshold_crossing": "A17 and A19 lie on opposite sides of 0.15", "classification_uncertainty": "abs(A19-0.15) <= abs(A17-A19)", "classification_sensitive": "threshold_crossing or classification_uncertainty"},
+          "cohort_attribution": {
+            "budget_support": "at least 104/130 original unresolved objects have qualified_convergence and at least 124/130 controls are high_budget_stable",
+            "estimator_unsuitable_support": "at least 26/130 original unresolved objects retain high_budget_drift or fewer than 117/130 controls are high_budget_stable",
+            "classification_sensitivity_support": "at least 26/130 original unresolved objects are classification_sensitive",
+            "decision": ["budget support only, without classification-sensitivity support -> original_two_layer_budget_insufficient", "budget support only with classification-sensitivity support -> high_budget_converges_but_classification_is_threshold_sensitive", "estimator-unsuitable support only -> uniform_aabb_sobol_estimator_not_converged_at_2pow19", "both or neither primary support rule -> mixed_or_inconclusive"]
+          },
+          "required_output": ["all four A values and three deltas per object", "interior counts", "delta quantiles separately for unresolved and controls", "A19 distance to 0.15", "robust-above, robust-below, threshold-crossing, and classification-uncertainty counts", "primitive-count-stratified summaries", "two-run identities and hashes"],
+          "preflight_disclosure": "Before the criteria commit, seed 129 unresolved and seed 143 control were executed once to verify exact A13/A15 and interior-count reproduction. Their A17/A19 values were incidentally printed. No sample, threshold, cohort count, or decision rule was changed in response; both remain in the already hash-frozen manifest.",
+          "interpretation_limit": "D3 attributes measurement behavior only. Even a clean budget-insufficiency result requires a separately approved versioned measurement protocol and full E20a rerun before coverage can PASS.",
+          "forbidden": ["changing schema 7 or regenerating replacement objects", "moving 81, 0.03, 0.15, 128, or any coverage region", "calling 2^19 truth", "counting unresolved objects as asymmetric in E20a-v2", "viewing shapes or running E20-V1/E20b/E21"],
+          "frozen_render_source_sha256": "ccdddb12b96104360deb245dabffcf8449c9e568c70dd7202cdc3e850b5413d9",
+          "runner_sha256": "73476601856bc46f96ea420f7b158a0c62546272821785d11e75d792caf27d4a",
+          "planned_artifact": "runs/ajae/e20a_d3_asymmetry_convergence.npz",
+          "criteria_frozen_before_formal_run": true
         }
       },
       "schema7_blinded_geometry_review": {
