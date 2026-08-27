@@ -2131,7 +2131,7 @@
       }
     },
     "renderer_mechanical_qualification": {
-      "status": "E27-E44 PASS; E28-v1, E36-v1, E45-v1 and E45-v2 FAIL retained; E45A FAIL insufficient_pairwise_common_support; E45B PASS; E46 locked and E48 pairwise prerequisite satisfied",
+      "status": "E27-E44 PASS; E28-v1, E36-v1, E45-v1, E45-v2 and E45A FAIL retained; E45B PASS; E45A-v2 audit-only targeted-control qualification frozen; E46 locked",
       "layer_boundaries": {"E27-E28": "direct geometry outputs only", "E29": "return probability and deterministic acceptance decision only", "E30-E31": "accepted returns", "E32-E33": "nearest-return occlusion competition"},
       "E27": {
         "question": "Does the formal geometry path return the correct nearest convex-hull hit, outward finite normal and object ID for active normal-control templates when return rejection is disabled?",
@@ -2664,6 +2664,36 @@
         "pass_conditions": ["at least 1024 non-reused pairs", "at least 100 left-side center frames", "each observable range bin from 2.5 through 40 m has at least one pair", "all exact strata and fixed calipers pass", "all five continuous-covariate standardized mean differences are at most 0.10", "two complete matching runs are elementwise identical"],
         "unlock": "E45B PASS is required before E48; E45A is not a prerequisite",
         "result": {"passed": true, "failure_classification": null, "capacity": 2048, "estimand_range_m": [2.5, 40.0], "range_40_50_status": "unobservable_for_real-vs-rendered-object matching in train/201", "legal_edges": 29156, "exact_strata_with_edges": 52, "matched_pairs": 3624, "center_frames": 357, "matched_range_count_2p5_to_40": [1133, 1877, 563, 51], "pairwise_smd": [0.03165198751824462, 0.026288392072093533, 0.006785710536574595, 0.01776602015279637, 0.016408636314751403], "maximum_pairwise_smd": 0.03165198751824462, "caliper_errors": 0, "duplicate_errors": 0, "elementwise_reproduced": true, "two_run_matching_seconds": 0.2025313660124084, "scientific_array_sha256": "859759030b829a1cf19504edcc54d8b24c20cae72f426a29141ab02cdf60fe08", "artifact_bytes": 13691873, "artifact_sha256": "f5b6074902f2396f3f5f36868e48b68312274bc29cf87b3a74b363131878c832", "decision_boundary": "The frozen normal-control versus anomaly-proxy matched-pair prerequisite for E48 is satisfied; this result does not adjudicate E48 classification."}
+      },
+      "E45A_v2": {
+        "question": "Can an audit-only targeted normal-control proposal bank cover the frozen real-normal observation domain without changing renderer or training-world generation?",
+        "status": "FROZEN; formal result pending",
+        "audit_only": true,
+        "formal_training_distribution_changed": false,
+        "preserved_components": ["E22 grounding", "E23 observed-normal collision", "E24 single-object pair-collision semantics", "E25 normal-template type, scale, support, and yaw rules", "authoritative renderer", "all E45 exact matches and calipers", "maximum-cardinality matching", "E46 models and thresholds"],
+        "forbidden_inputs": ["E46 classifier predictions", "E46 classifier scores", "real semantic class for template selection"],
+        "source_sequence": "train/201 only",
+        "real_target_source": "unique valid real-normal units in runs/ajae/e45_v2_units_2048.npz",
+        "unit_cache_sha256": "1f41bf1998876d3d888f39a5d45adceb5693f7c93bbd535c9cf734a74dae70c0",
+        "unit_cache_scientific_array_hash": "a3b63d11107edb1b1dce6c052e188a92879131fe20bec5568db10275c83a6160",
+        "target_units": 1822,
+        "target_center_frames": 321,
+        "target_range_count_2p5_to_40": [540, 892, 365, 25],
+        "support_proposal_filter": ["same qualified support semantic", "support frame within two frames of target unit frame", "same frozen range bin in target-frame sensor coordinates", "same 45-degree azimuth sector in target-frame sensor coordinates"],
+        "support_proposal_order": ["absolute support-anchor range difference from target median range", "frozen support selection hash"],
+        "proposal_stream": "for target index i and proposal p, seed = 4500000 + 128*i + p; each proposal uses one distinct ordered support row and independently frozen E25 template, scale, yaw, and material draws",
+        "proposal_ladder": [4, 8, 16, 32, 64],
+        "maximum_proposals_per_target": 64,
+        "incremental_execution": "each ladder step computes only proposal indices not computed at earlier steps; eligible controls and proposal status are retained",
+        "eligible_control_rule": "a legally placed and rendered control enters the matching graph only if support, range bin, and azimuth sector match exactly and all five original E45 calipers pass against its target real unit",
+        "matching": "complete legal-edge graph over all frozen real targets and all eligible targeted controls; deterministic maximum cardinality, then minimum summed squared caliper-normalized covariate difference; no reuse; hash tie break",
+        "pass_conditions": ["at least 1024 non-reused pairs", "at least 100 real-side center frames", "each observable range bin from 2.5 through 40 m has at least one pair", "all exact conditions and five original calipers pass", "all five continuous-covariate SMD values are at most 0.10", "two complete matching runs are elementwise identical", "zero hard errors"],
+        "implementation_commit": "eedfc68068b56344a933496de23c3b869097465c",
+        "render_source_sha256": "e0f5b23a8f1bc4003674a6b63648a1728620b2186f98428559bff03178609e4f",
+        "command": "python -m src.render qualify-e45a-v2 --data-root /home/jasongao/Data/STU --support-pool runs/ajae/gate1_201_support_pool.npz --e25-artifact runs/ajae/e25_normal_control.npz --calibration runs/ajae/calibration.pt --unit-cache runs/ajae/e45_v2_units_2048.npz --output runs/ajae/e45a_v2_targeted_pairs.npz --processes 24",
+        "artifact": "runs/ajae/e45a_v2_targeted_pairs.npz",
+        "candidate_cache_pattern": "runs/ajae/e45a_v2_targeted_controls_{proposal_limit}.npz",
+        "unlock": "E45A-v2 PASS unlocks E46; E45A-v2 FAIL keeps E46 locked and requires owner decision before changing formal normal-control generation"
       }
     },
     "world_types": {"pure_normal": 0.2, "control_only": 0.2, "mixed": 0.4, "anomaly_only": 0.2},

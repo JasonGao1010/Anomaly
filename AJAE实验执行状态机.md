@@ -3523,6 +3523,20 @@ PASS要求至少1,024对、左侧至少100个center frames、2.5–10/10–20/20
 
 五项连续协变量按range、median beam、$\log(1+N_{vis})$、$\hat O$、$\log(1+\text{local density})$顺序的SMD为[0.031652,0.026288,0.006786,0.017766,0.016409]，最大值0.031652。全部caliper错误0、两侧单位重复0，两遍匹配逐元素一致，两遍匹配总用时0.202531秒。科学数组哈希为 `859759030b829a1cf19504edcc54d8b24c20cae72f426a29141ab02cdf60fe08`；正式产物 `runs/ajae/e45b_control_proxy_pairs.npz` 大小13,691,873字节，SHA-256为 `f5b6074902f2396f3f5f36868e48b68312274bc29cf87b3a74b363131878c832`。E45B只建立E48所需的两两匹配集，不构成E48来源分类结果。
 
+### E45A-v2｜审计专用定向 normal-control 候选银行
+
+E45A-v2只服务Gate 1来源审计，不修改E26、正式训练世界生成器或normal-control训练分布。real目标固定为 `runs/ajae/e45_v2_units_2048.npz` 中1,822个去重后的有效real-normal单位，覆盖321个center frames；2.5–10、10–20、20–30和30–40米目标数为[540,892,365,25]。输入缓存SHA-256为 `1f41bf1998876d3d888f39a5d45adceb5693f7c93bbd535c9cf734a74dae70c0`，科学数组哈希为 `a3b63d11107edb1b1dce6c052e188a92879131fe20bec5568db10275c83a6160`。
+
+每个real单位的support proposal stream只使用冻结E45协变量构造：support semantic必须相同；支撑patch资格帧与目标unit frame相差不超过2；将patch世界坐标变换到目标帧sensor坐标后，冻结range bin与45度azimuth sector必须相同；合法patch先按anchor range与目标median range的绝对差排序，再以support selection hash裁决并列。不得读取real semantic类别选择模板，也不得读取E46分类结果、分数或特征归因。
+
+目标索引$i$的第$p$个proposal使用固定seed $4{,}500{,}000+128i+p$。每个proposal从排序流中使用一个不重复support row，并按E25原规则独立选择train/206 normal template、0.9–1.1三轴scale、类别姿态扰动和material；随后调用唯一 `place_object` 接口执行E22 grounding、E23已观测正常几何碰撞拒绝、单实体E24语义及E25类型/支撑/姿态规则，再由权威renderer渲染目标帧。物理规则、数值阈值和随机身份流均不得因匹配结果修改。
+
+只有渲染后与目标同时满足support semantic、range bin和azimuth sector精确相同，以及range差不超过2米、median beam差不超过4、$|\Delta\log(1+N_{vis})|\le0.25$、$|\Delta\hat O|\le0.10$、$|\Delta\log(1+\text{local density})|\le0.25$的control单位，才进入完整二分合法边图。匹配仍以最大基数为第一目标、归一化协变量平方差总和最小为第二目标，并保持无重复和hash并列裁决。
+
+proposal上限冻结为每目标64个，执行阶梯为4、8、16、32、64；每级只计算新增proposal后缀并保留先前结果，每级完成后运行两遍逐元素匹配，首次满足全部PASS条件即停止。PASS条件保持至少1,024对、至少100个real侧center frames、四个2.5–40米距离层均非空、全部caliper错误0、重复0、五项SMD均不超过0.10、两遍逐元素一致及硬错误0。达到64仍不满足即正式FAIL，E46继续锁定。
+
+实现提交 `eedfc68068b56344a933496de23c3b869097465c`，`src/render.py` SHA-256为 `e0f5b23a8f1bc4003674a6b63648a1728620b2186f98428559bff03178609e4f`；46项完整回归通过，用时102.15秒。先导中发现只读renderer mask被原地筛选的实现错误，修复为生成新布尔数组后同一身份硬错误归零；该先导未写正式产物，也不参与资格裁决。正式命令为 `python -m src.render qualify-e45a-v2 --data-root /home/jasongao/Data/STU --support-pool runs/ajae/gate1_201_support_pool.npz --e25-artifact runs/ajae/e25_normal_control.npz --calibration runs/ajae/calibration.pt --unit-cache runs/ajae/e45_v2_units_2048.npz --output runs/ajae/e45a_v2_targeted_pairs.npz --processes 24`。
+
 状态机在E49前拆为两条依赖：
 
 $$
