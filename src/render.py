@@ -12557,7 +12557,9 @@ def run_e45a_v2_qualification(
             for target in range(targets["source"].size)
         ]
         started = time.monotonic()
-        with mp.get_context("fork").Pool(processes=processes) as workers:
+        with mp.get_context("fork").Pool(
+            processes=processes, maxtasksperchild=8
+        ) as workers:
             suffix = workers.map(_e45a2_worker, tasks, chunksize=4)
         generation_seconds = time.monotonic() - started
         hard_errors = [result for result in suffix if int(result["status"]) == 7]
