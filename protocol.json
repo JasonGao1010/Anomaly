@@ -1347,7 +1347,7 @@
       },
       "support_plane_qualification": {
         "version": "E21",
-        "status": "EXECUTION FROZEN",
+        "status": "FAIL; preregistered anchor sample is impossible in train/206 because raw semantic 44 has zero real returns",
         "source_commit": "08fe85b8488ea2370ea9cb59d1f5ac8be4c7db4d",
         "source_commit_pushed_before_preregistration": true,
         "question": "Can the train/206 normal ground interface deterministically identify enough local patches whose fitted support planes have low residual and remain stable under a modest neighborhood-radius change for later object placement?",
@@ -1405,7 +1405,22 @@
         "after_pass": "unlock E22 only",
         "failure_route": "retain E21 FAIL and stop for a support-selection or plane-estimation design decision; do not reinterpret difficult rejected patches as estimator errors and do not run E22",
         "forbidden": ["train/201", "public or hidden anomaly sequences", "hand-picked flat anchors", "manual true normals", "RANSAC search", "cross-semantic neighbors", "forcing a plane when support is below 32", "changing thresholds after results", "running E22 before PASS"],
-        "criteria_frozen_before_formal_run": true
+        "criteria_frozen_before_formal_run": true,
+        "formal_result": {
+          "date": "2026-08-27",
+          "protocol_commit": "8625a39",
+          "implementation_commit": "ad7f26d",
+          "passed": false,
+          "stage_reached": "anchor eligibility and deterministic sample construction only; no support plane was fitted",
+          "train206_real_return_census_all_frames": {"road_40": 9120296, "parking_44": 0, "sidewalk_48": 822847, "other_ground_49": 43899, "other_ground_60": 0},
+          "train206_real_return_census_center_frames_2_to_446": {"road_40": 9017876, "parking_44": 0, "sidewalk_48": 813492, "other_ground_49": 43763, "other_ground_60": 0},
+          "center_frame_distance_tiers_near_middle_far": {"road_40": [8616445, 389582, 11849], "parking_44": [0, 0, 0], "sidewalk_48": [682777, 128483, 2232], "other_ground_49": [26361, 17255, 147]},
+          "center_frame_presence": {"road_40": 445, "parking_44": 0, "sidewalk_48": 445, "other_ground_49": 442},
+          "failure_classification": "sample-frame specification defect: the frozen 128-anchor parking quota cannot be drawn from the specified sole sequence",
+          "runner_sha256": "cf4ec695ad6b365987dbf7d156666c12b84c0c7d097e44767131659c808fbd4e",
+          "artifact": null,
+          "decision": "E21 remains FAIL and E22 stays locked; do not replace parking with another semantic or alter quotas without an explicit E21-v2 protocol amendment"
+        }
       }
     },
     "world_types": {"pure_normal": 0.2, "control_only": 0.2, "mixed": 0.4, "anomaly_only": 0.2},
