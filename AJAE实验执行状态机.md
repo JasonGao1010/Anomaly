@@ -3465,6 +3465,12 @@ PASS：规模、frame覆盖、range覆盖、caliper、SMD、无重复和复现�
 
 实现提交 `906d5d65912a72cf0125ce45e352d912060998f3`，`src/render.py` SHA-256为 `3979de15cc91d5dec2eb526ccb9a7eac067041536e4846289bda0cbc585c6916`；46项完整回归通过。正式命令为 `python -m src.render qualify-e45 --data-root /home/jasongao/Data/STU --support-pool runs/ajae/gate1_201_support_pool.npz --output runs/ajae/e45_matched_triplets.npz`。
 
+**E45 正式结果：FAIL（`scientific_candidate_domain_failure`；E46保持锁定）**
+
+完整冻结real-normal候选宇宙包含1,635个实体和8,175个entity-frame，五个距离箱的实际单元计数及三方triplet严格上界为[2,492,4,141,1,457,85,0]。冻结最低要求为[128,128,128,128,32]，因此30–40米短缺43个，40–50米短缺32个，必要覆盖错误为2。候选身份、支撑语义、距离有限性和每实体五帧计数错误均为0；两遍距离箱统计逐元素一致，用时172.017159秒。
+
+512、1,024和2,048容量银行都只能从上述完整real-normal宇宙抽取单元，不能把30–40米上界85提高到128，也不能从40–50米上界0产生任何真实单元。因此容量扩展、生成来源渲染和greedy triplet matching均未执行；本次FAIL不涉及caliper、SMD、来源分类或renderer数值差异的裁决。科学数组哈希 `444e31f9ef31219640f021000b4b07bf9680af1ba9e70db7bec65860bff58a7f`；产物 `runs/ajae/e45_matched_triplets.npz` 大小43,848字节，SHA-256为 `061f971615af7f7a2edcaf459e0cac4ec6628537dd476bb7324c4d5fadf38772`。继续推进需要重新决策E45的候选范围或冻结距离覆盖设计，E46不得启动。
+
 ## E45-V1｜人眼来源盲辨（可选、非阻断）
 
 可从E45固定triplets生成盲面板；没有两名独立人类时不裁决。结果不替代E46，也不阻断E46。

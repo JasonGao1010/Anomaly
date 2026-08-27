@@ -2131,7 +2131,7 @@
       }
     },
     "renderer_mechanical_qualification": {
-      "status": "E27-E44 PASS; E28-v1 and E36-v1 FAIL retained; E45 execution frozen",
+      "status": "E27-E44 PASS; E28-v1 and E36-v1 FAIL retained; E45 FAIL scientific_candidate_domain_failure; E46 locked",
       "layer_boundaries": {"E27-E28": "direct geometry outputs only", "E29": "return probability and deterministic acceptance decision only", "E30-E31": "accepted returns", "E32-E33": "nearest-return occlusion competition"},
       "E27": {
         "question": "Does the formal geometry path return the correct nearest convex-hull hit, outward finite normal and object ID for active normal-control templates when return rejection is disabled?",
@@ -2599,7 +2599,8 @@
         "command": "python -m src.render qualify-e45 --data-root /home/jasongao/Data/STU --support-pool runs/ajae/gate1_201_support_pool.npz --output runs/ajae/e45_matched_triplets.npz",
         "artifact": "runs/ajae/e45_matched_triplets.npz",
         "pass_conditions": ["complete real-normal universe meets every frozen range minimum as a necessary condition", "at least 1024 non-reused matched triplets", "at least 100 center frames", "all exact strata and fixed calipers pass", "all pairwise post-match standardized mean differences are at most 0.10", "two complete matching runs are identical"],
-        "false_pass_protection": "necessary-condition success alone cannot pass E45; it only permits full matching to run"
+        "false_pass_protection": "necessary-condition success alone cannot pass E45; it only permits full matching to run",
+        "result": {"passed": false, "failure_classification": "scientific_candidate_domain_failure", "support_pool_size": 1193969, "complete_real_candidate_entities": 1635, "complete_real_candidate_entity_frames": 8175, "real_candidate_range_count": [2492, 4141, 1457, 85, 0], "required_triplets_by_range": [128, 128, 128, 128, 32], "maximum_possible_triplets_by_range": [2492, 4141, 1457, 85, 0], "necessary_range_shortfall": [0, 0, 0, 43, 32], "necessary_coverage_errors": 2, "identity_errors": 0, "candidate_frame_errors": 0, "elementwise_reproduced": true, "elapsed_seconds": 172.01715891899948, "capacity_expansion_executed": false, "capacity_expansion_short_circuit": "The complete frozen real-normal universe has only 85 units at 30--40 m and zero at 40--50 m; every capacity-ladder bank is a subset sampled from this universe.", "triplet_matching_executed": false, "triplet_matching_skip_reason": "A necessary frozen range-coverage condition is impossible.", "scientific_array_sha256": "444e31f9ef31219640f021000b4b07bf9680af1ba9e70db7bec65860bff58a7f", "artifact_bytes": 43848, "artifact_sha256": "061f971615af7f7a2edcaf459e0cac4ec6628537dd476bb7324c4d5fadf38772", "decision_boundary": "E46 remains locked; changing the candidate domain or frozen range-coverage requirement requires owner decision."}
       }
     },
     "world_types": {"pure_normal": 0.2, "control_only": 0.2, "mixed": 0.4, "anomaly_only": 0.2},
