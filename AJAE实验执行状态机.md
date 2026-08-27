@@ -2529,25 +2529,41 @@ D4 在预注册提交 `90a47af558f5cd20044141739ca0c545f8e0587a` 后按冻结条
 
 正式产物 `runs/ajae/e20a_d4_asymmetry_protocol.npz` 为 39,951 bytes，SHA-256 为 `db76298bb04192d9d0c864ebc08ac47cdc970f9e1498f1c9d912067852325d96`。D4 FAIL 永久保留；$2^{17}/2^{19}$ 尚未取得正式测量协议资格，不能执行 E20a-v3。schema 7 保持 qualified 且不修改；E20-V1、E20b、E21 继续锁定。依照预注册失败分支，现在停止，等待对“绝对稳定已充分但逐级误差必须减半是否为合适资格构念”的实验设计裁决，且禁止机械升级为 $2^{21}/2^{23}$。
 
+**E20a-D4 后置协议修订与验证范围收缩（2026-08-27）**
+
+经课题负责人裁决，历史 E20a-D4 是首次且唯一一次尝试，后续叙述可标为 E20a-D4-v1，但原实验名、数据与 FAIL 不改写。其 failure classification 修订为 `qualification-specification defect`：D3 已在原 unresolved 与匹配 controls 上定位 $2^{13}/2^{15}$ 预算不足；D4 又在完全不重叠的 256 个独立对象上得到 256/256 的 $|A_{17}-A_{19}|\le0.03$、256/256 的 $|A_{19}-A_{21}|\le0.01$，且 20 个 primitive-count×family 分层全部通过两个绝对稳定界。唯一失败条件是额外要求总体及每个分层的误差必须精确至少减半。
+
+该减半条件衡量辅助数值误差的理想收缩率，不是 E20a 真正需要的“在冻结绝对容差内稳定划分 $A\ge0.15$ 覆盖区域”构念。因此取消 E20a-D4-v2，不把 D4 改成 PASS，也不继续派生收敛率资格链。后续只有可能影响异常代理可信性、renderer 来源泄漏、标签正确性、B1 相对 B0 的监督价值、B3 相对 B1/B2 的时间增益、moving-normal safety 或真实 OOD 迁移的问题才允许长期阻断主线；普通辅助描述量相关和理想小数收敛不再无限派生实验。
+
+**E20a-v3 运行协议冻结（2026-08-27，首次正式运行前）**
+
+E20a-v3 只把标准/严格不对称性预算从 E20a-v2 的 $2^{13}/2^{15}$ 改为 $2^{17}/2^{19}$。正式入口仍为未修改的 qualified schema 7 `ShapeSpec.sample_with_report(seed)`，两遍均从 seed 0–8191 完整重建 8,192 个 accepted objects，并使用 24 个 CPU 进程。不能只修算历史130个 unresolved，不执行 placement、不赋正式材质、不查看图像。
+
+连续 AABB、无扰动三维 Sobol 嵌套前缀、`signed_distance<=0`、体积质心、正负轴跨度公式、$D/r_{21}/r_{31}$、形变强度、union spread 和三个 fixture 全部不变。标准/严格内部点仍至少为 128/512，两层绝对差仍必须 $\le0.03$，明显不对称仍要求两层 $A\ge0.15$，unresolved 仍最多81。小/中/大、块状、扁平、细长、明显不对称、单/多 primitive、弱/强形变这11个区域仍各至少128；primitive count 1–5仍各至少512。`shape_family` 不能替代最终连续几何测量。$A_{21}$ 不进入 v3。
+
+两遍必须重新生成全部对象，shape/report hash 和连续 AABB 与 E20a-v2 精确相同，并重新计算全部描述量；所有科学数组和 fixture 必须逐元素复现，运行时间单独报告且不进入复现哈希。全部身份、fixture、数值域、复现、unresolved、11个区域和 primitive-count 条件同时通过才可判 E20a-v3 PASS。PASS 后 schema 7 geometry coverage 才正式合格，并只解锁一次性 E20-V1；FAIL 若仍源于大量数值 unresolved，则停止把 $A$ 自动发展成长期阻断支线，若真实 coverage 数不足才按缺失区域诊断 generator。
+
+提交前仅对 seed 0、4095、8191 重建并检查 shape/report identity 与非不对称性描述量，没有计算或打印 $A_{17}/A_{19}$。冻结 `src/render.py` SHA-256 为 `ccdddb12b96104360deb245dabffcf8449c9e568c70dd7202cdc3e850b5413d9`，运行器 SHA-256 为 `c5954ed51f9801a868f305eea2652b6cd7a67611d7a045c7bf578e5f64d59005`，预定产物为 `runs/ajae/e20a_v3_schema7_geometry_coverage.npz`。E20-V1、E20b-lite 与 E21 当前继续锁定。
+
 
 ### E20-V1｜盲法人工几何审查（LOCKED）
 
-未来有效的完整 E20a coverage 实验 PASS 后、E20b 前，从该次 8,192 个正式对象按哈希确定性抽取 192 个：flat、elongated、blocky、asymmetric、指标边界附近、全分布均匀随机各 32；各组在可行时均衡 single/multi primitive。当前 E20a-D4 FAIL，尚无合格的 E20a-v3 协议，因此本节点继续锁定。不得按外观挑 seed。每个对象使用相同物理尺度、相机、光照和背景展示正视、侧视、顶视及统一透视图，不显示 family、seed、指标或 PASS 区域。
+未来有效的完整 E20a coverage 实验 PASS 后、E20b-lite 前，从该次 8,192 个正式对象按哈希确定性抽取 192 个：flat、elongated、blocky、asymmetric、指标边界附近、全分布均匀随机各 32；各组在可行时均衡 single/multi primitive。当前等待 E20a-v3 正式结果，因此本节点继续锁定。不得按外观挑 seed。每个对象使用相同物理尺度、相机、光照和背景展示正视、侧视、顶视及统一透视图，不显示 family、seed、指标或 PASS 区域。
 
 至少两名独立审查者回答：是否有尖刺/破面/截断/数值伪影，是否为完整单实体，最接近的形状族，是否明显近似正常 STU 类别，是否存在明显近重复。明显硬缺陷率须 $\le5\%$，完整单实体比例须 $\ge95\%$，四个目标层中至少 $70\%$ 获得与自动分层一致的多数判断，关键二元问题 Cohen's $\kappa\ge0.60$。若 $\kappa<0.60$，结果为 INCONCLUSIVE，修订说明后对同一固定样本重审，不直接判 generator FAIL。“像正常类别”和“近重复”只报告，分别留给 E48 和多样性讨论。E20-V1 不能覆盖 E20a-v2 的自动 FAIL。
 
 
-## E20b｜几何因素解耦资格
+## E20b-lite｜生成因素近确定性捷径审计
 
 **唯一问题与锁定边界**
 
-E20b 将在 E20a PASS 后回答：primitive count、连续尺度、轴比和形变强度之间是否存在接近确定性的简单绑定。主检验限定为各 primitive-count 组的条件覆盖，以及预先限定的逻辑回归/浅层决策树交叉验证预测；不以复杂互信息估计作为主判据。
+E20b-lite 将在 E20a PASS 且 E20-V1 完成后回答：primitive count、连续尺度、轴比区域和形变强度之间是否存在接近确定性的简单捷径。只检查各 primitive-count 组是否仍具备小/中/大、块状/扁平/细长和弱/强形变的基本覆盖，并使用一个浅层决策树与一个逻辑回归检查是否能近乎完美地预测另一生成因素。普通相关、适度可预测性和描述性差异只记录，不要求统计独立，也不阻断主线；只有接近确定性的绑定才 FAIL。最小拆分、模型容量和“近乎完美”的数值门槛尚未冻结，因此当前不得执行。
 
 E20b 的训练/测试拆分、条件覆盖单元、低容量模型、基线、接近确定性的数值门槛和重复规则尚未冻结，因此当前不得执行。其判据必须在 E20a 结果不参与阈值选择的前提下另行预注册。材质与 placement independence 不属于 E20b，并继续分别后移到正式传感器链与放置链。
 
 **当前状态**
 
-E20b LOCKED until E20a PASS；E21 LOCKED until E20b PASS。
+E20b-lite LOCKED until E20a PASS and E20-V1 completes without FAIL；E21 LOCKED until E20b-lite PASS。
 
 
 ## E21｜局部支撑平面估计

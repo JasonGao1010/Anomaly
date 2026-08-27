@@ -1059,7 +1059,7 @@
           }
         },
         "E20a-D4": {
-          "status": "FAIL; absolute stability passed but preregistered contraction qualification failed",
+          "status": "FAIL permanent; historical first attempt also denoted E20a-D4-v1; qualification-specification defect; no D4-v2",
           "question": "Can 2^17/2^19 serve as the standard/strict schema-7 E20a asymmetry budgets when independently checked against a qualification-only 2^21 reference?",
           "role": "independent measurement-protocol qualification only; D4 cannot change E20a-v2, qualify geometry coverage, or modify schema 7",
           "parent_artifacts": {
@@ -1143,13 +1143,50 @@
             "artifact": "runs/ajae/e20a_d4_asymmetry_protocol.npz",
             "artifact_bytes": 39951,
             "artifact_sha256": "db76298bb04192d9d0c864ebc08ac47cdc970f9e1498f1c9d912067852325d96",
-            "decision": "retain D4 FAIL; do not qualify 2^17/2^19, do not run E20a-v3, do not change schema 7, and stop for a separately approved measurement-protocol redesign"
+            "decision": "retain D4 FAIL permanently; the subsequent owner amendment classifies the mandatory half-contraction rule as measuring an auxiliary convergence-rate construct rather than E20a classification stability"
+          },
+          "post_result_protocol_amendment": {
+            "approved": true,
+            "classification": "qualification-specification defect",
+            "historical_result_policy": "D4 remains FAIL and is never rewritten as PASS",
+            "scientific_basis": ["D3 independently attributed E20a-v2 failure to insufficient 2^13/2^15 budgets", "D4 used a disjoint 256-object qualification set", "256/256 passed abs(A17-A19)<=0.03", "256/256 passed abs(A19-A21)<=0.01", "all 20 primitive-count x family strata passed both absolute stability limits"],
+            "defective_condition": "requiring median and Q0.95 errors, and every stratum median error, to fall by at least exactly one half when the Sobol budget increases fourfold",
+            "reason": "the half-contraction rate is not the E20a construct; E20a needs stable A>=0.15 region classification under its frozen absolute 0.03 layer tolerance",
+            "route": "cancel D4-v2 and preregister a full E20a-v3 using A17/A19; D4 evidence supports the amendment but cannot itself qualify coverage"
           }
+        },
+        "E20a-v3": {
+          "status": "EXECUTION FROZEN",
+          "question": "Does qualified schema 7 cover all eleven preregistered continuous-geometry regions when asymmetry uses the independently supported 2^17/2^19 budgets?",
+          "scope_principle": "auxiliary descriptor ideal convergence no longer spawns an indefinite blocking branch; correctness, geometry credibility, leakage, supervision value, temporal gain, safety, and real-OOD transfer remain blocking scientific risks",
+          "sample": {"generator": "unchanged qualified schema 7 default ShapeSpec.sample_with_report(seed)", "seeds": "0-8191 inclusive", "accepted_objects": 8192, "independent_runs": 2, "cpu_processes": 24, "placement": false, "formal_material": false},
+          "only_protocol_change_from_E20a_v2": {"asymmetry_standard_points": 131072, "asymmetry_strict_points": 524288},
+          "unchanged_measurement": ["qualified continuous AABB", "uniform unscrambled 3D Sobol nested prefixes", "signed_distance<=0 membership", "interior volume centroid", "positive/negative Cartesian extent A formula", "continuous D/r21/r31", "deformation strength", "union spread", "sphere/ellipsoid/overlapping-union fixtures"],
+          "unchanged_numeric_conditions": {"standard_inside_minimum": 128, "strict_inside_minimum": 512, "absolute_standard_strict_difference_maximum": 0.03, "asymmetric_threshold_both_layers": 0.15, "asymmetry_unresolved_maximum": 81},
+          "unchanged_coverage_conditions": {
+            "regions_each_minimum_128": ["small", "medium", "large", "blocky", "flat", "elongated", "asymmetric", "single_primitive", "multi_primitive", "weak_deformation", "strong_deformation"],
+            "primitive_count_1_to_5_each_minimum": 512,
+            "region_definitions": "exactly the original E20a/E20a-v2 boundaries; shape_family cannot substitute for measured final geometry"
+          },
+          "identity_and_reproducibility": ["regenerate all 8192 objects in both runs", "shape/report hashes and continuous AABBs must match E20a-v2 exactly", "recompute all non-asymmetry descriptors and match the unchanged definitions", "two runs must reproduce every scientific array and fixture elementwise", "runtime is reported but excluded from reproducibility hashes"],
+          "pass": "all fixtures, domains, identities, reproducibility, unresolved<=81, all eleven region counts>=128, and all primitive-count groups>=512",
+          "failure_routes": {
+            "numerical_unresolved": "retain FAIL and stop using A as an automatic long-lived blocker until the scientific value of redesigning it is explicitly judged",
+            "flat_elongated_or_asymmetric_support": "retain FAIL and diagnose only the missing generator support region",
+            "correctness_identity_or_nonfinite": "retain FAIL and stop for implementation or scientific correction"
+          },
+          "after_pass": "schema 7 geometry coverage is qualified; perform the already frozen one-time E20-V1 blind visual sanity check, then end open-ended shape-metric development",
+          "forbidden": ["changing schema 7", "moving 0.03, 0.15, 81, 128, 512, or any region boundary", "using A21", "reusing only the prior 130 unresolved objects", "viewing shapes before PASS", "running E20-V1/E20b/E21 before this result"],
+          "preflight_disclosure": "Before the criteria commit, seeds 0,4095,8191 were regenerated only to verify shape/report identity and non-asymmetry descriptor reconstruction; A17/A19 were neither computed nor printed.",
+          "frozen_render_source_sha256": "ccdddb12b96104360deb245dabffcf8449c9e568c70dd7202cdc3e850b5413d9",
+          "runner_sha256": "c5954ed51f9801a868f305eea2652b6cd7a67611d7a045c7bf578e5f64d59005",
+          "planned_artifact": "runs/ajae/e20a_v3_schema7_geometry_coverage.npz",
+          "criteria_frozen_before_formal_run": true
         }
       },
       "schema7_blinded_geometry_review": {
         "version": "E20-V1",
-        "status": "LOCKED; E20a-D4 failed and no E20a-v3 measurement protocol is qualified",
+        "status": "LOCKED until E20a-v3 PASS",
         "sample": {"source": "the future passing full E20a qualification set", "hash_deterministic_total": 192, "strata_each": {"flat": 32, "elongated": 32, "blocky": 32, "asymmetric": 32, "near_metric_boundary": 32, "uniform_full_distribution": 32}, "single_multi_balance": "approximately one half each when feasible"},
         "display": ["front", "side", "top", "fixed perspective", "same physical scale", "same camera", "same lighting", "same background", "hide family seed metrics and PASS regions"],
         "reviewers_minimum": 2,
@@ -1159,12 +1196,13 @@
         "interpretation_limit": "normal-class resemblance and near duplication are reported only; E20-V1 cannot overwrite an automatic E20a-v2 FAIL"
       },
       "schema6_geometry_factor_decoupling": {
-        "version": "E20b",
+        "version": "E20b-lite",
         "status": "LOCKED; requires a valid E20a coverage PASS and E20-V1 completion without FAIL",
-        "question": "Do primitive count, continuous size, axis ratios, and deformation strength avoid near-deterministic low-capacity dependencies?",
-        "planned_primary_evidence": ["conditional coverage within every primitive-count group", "cross-validated logistic regression and shallow decision-tree predictability"],
+        "question": "Is there an almost deterministic low-capacity shortcut among primitive count, continuous size, axis-ratio region, and deformation strength? Ordinary correlation is allowed.",
+        "planned_primary_evidence": ["basic small/medium/large, blocky/flat/elongated, and weak/strong coverage within primitive-count groups", "one shallow decision tree and one logistic regression used only to detect near-perfect predictability"],
         "not_primary": "mutual information",
-        "not_yet_frozen": ["train/test split", "conditional cells", "model hyperparameters", "baselines", "near-deterministic numeric thresholds", "repetition rule"],
+        "not_yet_frozen": ["minimal split", "minimal model hyperparameters", "near-deterministic numeric threshold"],
+        "nonblocking_findings": ["ordinary correlation", "moderate predictability", "descriptive distribution differences"],
         "deferred_out_of_scope": {"placement_independence": "after E21-E25 qualification", "material_independence": "E35-E40 return/intensity chain"},
         "criteria_frozen_before_formal_run": false
       }
