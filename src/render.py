@@ -7812,6 +7812,8 @@ def run_e26_qualification(
 
 _E27_TEMPLATES: tuple[NormalTemplateShape, ...] = ()
 _E27_SENSOR = SensorCalibration.constant(1.0, return_probability=1.0)
+_E27_NVIS_UNITS: tuple[tuple[WorldSpec, int, SourceFrame], ...] = ()
+_E27_RAY_GRID: RayGrid | None = None
 
 
 def _e27_rotation(seed: int) -> np.ndarray:
@@ -7952,8 +7954,32 @@ def _e27_arrays(records: Sequence[Mapping[str, object]]) -> dict[str, np.ndarray
     }
 
 
+def _e27_nvis_worker(index: int) -> int:
+    if _E27_RAY_GRID is None or len(_E27_NVIS_UNITS) != 192:
+        raise RuntimeError("E27 real-placement visibility units are not initialized")
+    world, object_id, frame = _E27_NVIS_UNITS[index]
+    rotation, lidar_origin = _pose(frame)
+    directions_world = _E27_RAY_GRID.directions_for(frame) @ rotation.T
+    origins_world = _E27_RAY_GRID.origins_for(frame) @ rotation.T + lidar_origin
+    competition = _accepted_object_hits(
+        origins_world, directions_world, world, _E27_RAY_GRID,
+        _E27_SENSOR, int(frame.frame_id),
+    )
+    native = np.asarray(_E27_RAY_GRID.ranges(frame)).copy()
+    native[np.asarray(frame.zero_slot_mask, dtype=np.bool_)] = np.inf
+    visible = (
+        np.isfinite(competition.distance_m)
+        & (competition.distance_m < native - world.tie_tolerance_m)
+        & (competition.object_id == object_id)
+    )
+    return int(np.count_nonzero(visible))
+
+
 def run_e27_qualification(
     e25_artifact_path: Path | str,
+    e26_artifact_path: Path | str,
+    data_root: Path | str,
+    calibration_path: Path | str,
     output_path: Path | str,
     *,
     processes: int = 24,
@@ -7962,6 +7988,12 @@ def run_e27_qualification(
 
     if processes != 24:
         raise RenderError("formal E27 requires exactly 24 worker processes")
+    try:
+        from .protocol import load_protocol
+        from .scene import LabelMode, STUSequence
+    except ImportError:
+        from protocol import load_protocol  # type: ignore[no-redef]
+        from scene import LabelMode, STUSequence  # type: ignore[no-redef]
     with np.load(Path(e25_artifact_path).expanduser().resolve(strict=True), allow_pickle=False) as source:
         metadata = json.loads(str(source["metadata_json"]))
         if metadata.get("experiment") != "E25" or metadata.get("passed") is not True:
@@ -7999,6 +8031,46 @@ def run_e27_qualification(
             records = workers.map(_e27_worker, range(256))
         runs.append(_e27_arrays(records))
         run_seconds.append(time.monotonic() - started)
+    with np.load(Path(e26_artifact_path).expanduser().resolve(strict=True), allow_pickle=False) as source:
+        e26_metadata = json.loads(str(source["metadata_json"]))
+        if e26_metadata.get("experiment") != "E26" or e26_metadata.get("passed") is not True:
+            raise RenderError("E27 visibility description requires the passed E26 artifact")
+        units_json = [
+            (world_json.decode(), report_json.decode())
+            for world_json, report_json, count in zip(
+                source["world_json"], source["report_json"],
+                source["entity_count"], strict=True,
+            )
+            if int(count) > 0
+        ]
+    if len(units_json) != 192:
+        raise RenderError("E27 real-placement visibility sample changed")
+    project_root = Path(__file__).resolve().parents[1]
+    protocol = load_protocol(project_root / "protocol.json")
+    sequence = STUSequence.open(
+        data_root, protocol=protocol, partition="train", sequence_id=206,
+        label_mode=LabelMode.REQUIRED,
+    )
+    parsed_units = []
+    required_frames: set[int] = set()
+    for world_json, report_json in units_json:
+        world = WorldSpec.from_dict(json.loads(world_json))
+        report = WorldGenerationReport.from_dict(json.loads(report_json))
+        frame_id = report.placements[0].support_frame
+        parsed_units.append((world, world.objects[0].object_id, frame_id))
+        required_frames.add(frame_id)
+    frames = {
+        frame_id: sequence.source_frame(frame_id) for frame_id in required_frames
+    }
+    ray_grid, _ = load_sensor_calibration(calibration_path)
+    global _E27_NVIS_UNITS, _E27_RAY_GRID
+    _E27_NVIS_UNITS = tuple(
+        (world, object_id, frames[frame_id])
+        for world, object_id, frame_id in parsed_units
+    )
+    _E27_RAY_GRID = ray_grid
+    with context.Pool(processes=processes) as workers:
+        nvis = np.asarray(workers.map(_e27_nvis_worker, range(192)), dtype=np.int64)
     reproduced = all(
         np.array_equal(runs[0][name], runs[1][name], equal_nan=True)
         if np.issubdtype(runs[0][name].dtype, np.floating)
@@ -8022,6 +8094,14 @@ def run_e27_qualification(
         "maximum_distance_error_m": float(np.max(first["distance_error_m"])),
         "maximum_surface_residual_m": float(np.max(first["surface_residual_m"])),
         "maximum_normal_norm_error": float(np.max(first["normal_norm_error"])),
+        "descriptive_real_placement_nvis": {
+            "objects": 192,
+            "minimum": int(np.min(nvis)),
+            "median": float(np.median(nvis)),
+            "q95_higher": int(np.quantile(nvis, 0.95, method="higher")),
+            "maximum": int(np.max(nvis)),
+            "zero_count": int(np.count_nonzero(nvis == 0)),
+        },
         "elementwise_reproduced": reproduced, "run_seconds": run_seconds,
         "scientific_array_hash": scientific_hash, "processes": processes,
     }
@@ -8029,7 +8109,7 @@ def run_e27_qualification(
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = destination.with_suffix(destination.suffix + ".tmp.npz")
     np.savez_compressed(
-        temporary, **first,
+        temporary, **first, descriptive_real_placement_nvis=nvis,
         metadata_json=np.asarray(
             json.dumps(result, sort_keys=True, separators=(",", ":"))
         ),
@@ -8063,6 +8143,9 @@ def _render_parser() -> argparse.ArgumentParser:
     e26.add_argument("--processes", type=int, default=24)
     e27 = subcommands.add_parser("qualify-e27")
     e27.add_argument("--e25-artifact", type=Path, required=True)
+    e27.add_argument("--e26-artifact", type=Path, required=True)
+    e27.add_argument("--data-root", type=Path, required=True)
+    e27.add_argument("--calibration", type=Path, required=True)
     e27.add_argument("--output", type=Path, required=True)
     e27.add_argument("--processes", type=int, default=24)
     return parser
@@ -8096,7 +8179,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0 if result["passed"] else 1
     if args.command == "qualify-e27":
         result = run_e27_qualification(
-            args.e25_artifact, args.output, processes=args.processes
+            args.e25_artifact, args.e26_artifact, args.data_root,
+            args.calibration, args.output, processes=args.processes
         )
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 0 if result["passed"] else 1
