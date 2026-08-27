@@ -3107,7 +3107,7 @@ E26 PASS 后可按身份哈希生成固定场景面板，观察明显悬空、�
 
 ## Phase 3 统一冻结
 
-E27–E37 在 E27 首次正式运行前一次性冻结。它们只资格 renderer 的离散/物理语义，不使用分布相似性作主门；真实来源指纹统一留给 E45–E46。
+E27–E37 在 E27 首次正式运行前一次性冻结。它们只资格 renderer 的离散/物理语义，不使用分布相似性作主门；真实来源指纹统一留给 E45–E46。机械分层实验的裁决必须直接停在对应接口层：E27/E28只读取geometry输出，E29只读取return probability与确定性抽样，E30/E31才读取accepted return，E32/E33才读取nearest-return occlusion competition。下游随机机制或竞争结果不得作为上游资格的裁决输入。
 
 ## E27｜normal-control 几何命中
 
@@ -3153,13 +3153,23 @@ PASS：target hit/miss 零错误；最近距离有限为正；交点位于 hull 
 
 PASS：零 hit/miss、最近根、法向和 object-ID 错误；两遍一致。PASS → E29。
 
-**E28 正式结果：FAIL（E29保持锁定）**
+**E28-v1 正式结果：FAIL（protocol implementation defect；历史保留）**
 
-两遍24进程核心fixture用时分别为0.186233秒和0.195004秒，全部数组逐元素一致。固定256个fixture中有255个返回了有限正target hit；唯一失败项为fixture index 127、seed 2,800,127、general family、5 primitives、beam 63、column 1、目标表面距离26.15686274509804 m、shape identity `e40c51a4b501d8b3f1dd277488c6f4d422bcf764b1cfd9afab5d5172b3818a7b`。该fixture的严格内部witness裕量为0.10470550994737828 m，两套独立reference的首根差异为 $1.705\times10^{-13}$ m，但正式路径返回距离为无穷，因此同一个漏检同时记为1个hit错误、1个miss错误、1个法向错误和1个object ID错误。
+两遍24进程核心fixture用时分别为0.186233秒和0.195004秒，全部数组逐元素一致。固定256个fixture中有255个返回了有限的最终competition hit；唯一表面失败项为fixture index 127、seed 2,800,127、general family、5 primitives、beam 63、column 1、目标表面距离26.15686274509804 m、shape identity `e40c51a4b501d8b3f1dd277488c6f4d422bcf764b1cfd9afab5d5172b3818a7b`。该fixture的严格内部witness裕量为0.10470550994737828 m，两套独立reference的首根差异为 $1.705\times10^{-13}$ m。E28-v1 runner错误地调用 `_accepted_object_hits`，使geometry intersect之后继续经过return probability、随机接受和nearest competition，因此最终competition距离为无穷，并记为1个hit错误、1个miss错误、1个法向错误和1个object ID错误。
+
+定向诊断确认原始 `ShapeSpec.intersect` 对该fixture返回 `valid=True`、距离26.156862691941157 m、单位法向，255条反向miss ray的原始几何命中为0；相对独立reference的距离误差为 $5.316\times10^{-8}$ m。最终拒绝来自constant sensor fixture仍被 `return_chance` 裁剪并施加material bias：调制后概率为0.9999864437684041，固定槽位随机数为0.9999961987049697，故该正确几何命中未进入accepted return。该FAIL分类为 `protocol implementation defect`，不得改写为PASS，也不得解释为 `ShapeSpec.intersect` 科学失败。
 
 其余255个有限结果的最近距离最大绝对误差为 $1.226\times10^{-7}$ m，表面残差最大值为 $1.171\times10^{-7}$ m，法向单位长度最大误差为 $3.331\times10^{-16}$，均满足冻结数值容差。全部256个fixture的两套独立reference最大差异为 $3.766\times10^{-13}$ m。128个E26实际anomaly-proxy在各自接受support frame的描述性 $N_{vis}$ minimum/median/$Q_{0.95}$/maximum为1/82/921/2,265，零可见对象为0；该统计不参与E28裁决。
 
-科学数组哈希为 `26f0af96a77813126eddc61e8e311d60d443ddf9e55f2cf212378873e4c0ee5f`。正式产物 `runs/ajae/e28_anomaly_proxy_hits.npz` 大小28,118字节，SHA-256为 `5b1cb22f2a415645e53d0971e4cf8d6c81124b6958cc61fc8cc8ab7617c775f1`。E28 FAIL否定的是：**当前正式schema 7连续求交路径能够对全部冻结、由严格内部witness保证穿过实体的target ray稳定返回最近正交点。** E27的normal-control几何命中结论及E26以前的资格结果不受该结果改变。按冻结状态机，E29不得启动。
+科学数组哈希为 `26f0af96a77813126eddc61e8e311d60d443ddf9e55f2cf212378873e4c0ee5f`。正式产物 `runs/ajae/e28_anomaly_proxy_hits.npz` 大小28,118字节，SHA-256为 `5b1cb22f2a415645e53d0971e4cf8d6c81124b6958cc61fc8cc8ab7617c775f1`。E28-v1 FAIL只否定v1 runner对“关闭return rejection”的实现，不否定schema 7连续求交。E27、E26及更早资格结果不受该分类修正改变。
+
+### E28-v2｜纯几何接口回归
+
+E28-v2完整继承E28-v1的256个fixture、seed、shape identity、beam/column、target/miss方向、目标距离、姿态、严格内部witness、两套独立reference和全部数值容差。唯一修订是裁决路径直接调用 `ShapeSpec.intersect`，只读取其distance、normal和valid mask；禁止调用 `_accepted_object_hits`、`return_chance`、`_slot_uniform`、material modulation或nearest-return competition。单对象纯几何接口不产生object ID，因此v2裁决项为target hit、反向miss、最近正根、表面残差、法向单位长度与外向性。
+
+先定向回归seed 2,800,127，再完整运行256个fixture；两遍均使用24进程并要求科学数组逐元素一致。PASS要求hit、miss和法向外向性错误均为0，两套reference最大差异小于 $5\times10^{-5}$ m，最近距离最大误差不超过 $10^{-4}$ m，表面残差不超过 $10^{-6}$ m，法向单位长度误差不超过 $10^{-10}$。E28-v1历史产物不覆盖；v2正式产物固定为 `runs/ajae/e28_v2_anomaly_proxy_hits.npz`。
+
+实现提交为 `b4b5e0c28f08579429463098462584fc526f07d3`；`src/render.py`、`src/train.py`和`test_ajae.py` SHA-256分别为 `dfc8a2d155e39505e455c2cad543baa4895ab19cb813cbcf7dfe6011e37138f5`、`92a3f51f93e26bead6a1d9d92e37af2b5e4df092ffc9716852806b4b67be546b`、`960dc6b3b83a4e95e638a1f0358a3d20c8eb2b51300e5c737f2c49b4b0a3f8dd`；完整回归46项全部通过，用时100.12秒。正式命令为 `python -m src.render qualify-e28-v2 --e26-artifact runs/ajae/e26_world_builder.npz --data-root /home/jasongao/Data/STU --calibration runs/ajae/calibration.pt --output runs/ajae/e28_v2_anomaly_proxy_hits.npz --processes 24`。E28-v2 PASS后关闭E28并解锁E29；FAIL则E29保持锁定。
 
 ## E29｜return probability 与确定性抽样
 

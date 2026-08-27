@@ -2131,7 +2131,8 @@
       }
     },
     "renderer_mechanical_qualification": {
-      "status": "E27 PASS; E28 FAIL; E29-E37 locked",
+      "status": "E27 PASS; E28-v1 FAIL classified as protocol implementation defect; E28-v2 design and execution frozen; E29-E37 locked",
+      "layer_boundaries": {"E27-E28": "direct geometry outputs only", "E29": "return probability and deterministic acceptance decision only", "E30-E31": "accepted returns", "E32-E33": "nearest-return occlusion competition"},
       "E27": {
         "question": "Does the formal geometry path return the correct nearest convex-hull hit, outward finite normal and object ID for active normal-control templates when return rejection is disabled?",
         "fixtures": 256,
@@ -2175,7 +2176,7 @@
           "claim_limit": "E27 does not qualify anomaly-proxy intersection, return sampling, intensity or final native-return competition."
         }
       },
-      "E28": {
+      "E28-v1": {
         "question": "Does the formal schema-7 geometry path return the correct nearest positive hit, outward finite normal and object ID when return rejection is disabled?",
         "fixtures": 256,
         "fixture_seeds": "2800000 through 2800255 in order, without selection or top-up",
@@ -2214,9 +2215,27 @@
           "scientific_array_sha256": "26f0af96a77813126eddc61e8e311d60d443ddf9e55f2cf212378873e4c0ee5f",
           "artifact_bytes": 28118,
           "artifact_sha256": "5b1cb22f2a415645e53d0971e4cf8d6c81124b6958cc61fc8cc8ab7617c775f1",
-          "conclusion": "The current formal schema-7 continuous intersection path does not return a target hit for every frozen ray that is independently certified to pass through a strict interior witness.",
-          "claim_limit": "The failure is one anomaly-proxy fixture and does not invalidate E27 normal-control hits or E26 and earlier qualification results; E29 remains locked."
+          "failure_classification": "protocol implementation defect",
+          "diagnosed_raw_intersection": {"valid": true, "distance_m": 26.156862691941157, "distance_error_m": 5.3156881563154457e-8, "normal_norm": 1.0, "reverse_miss_geometric_hits": 0},
+          "diagnosed_acceptance": {"modulated_return_probability": 0.9999864437684041, "slot_uniform": 0.9999961987049697, "accepted": false},
+          "conclusion": "E28-v1 mixed return sampling and nearest competition into a geometry-only qualification; its formal FAIL is retained and is not a ShapeSpec.intersect scientific failure.",
+          "claim_limit": "The v1 result invalidates only the v1 audit-path implementation; E27 normal-control hits and E26 and earlier qualifications are unchanged."
         }
+      },
+      "E28-v2": {
+        "question": "Does ShapeSpec.intersect directly return the correct nearest positive hit and finite outward normal for every frozen schema-7 target ray, with all reverse rays missing?",
+        "inherits_fixtures_and_references_from": "E28-v1",
+        "fixtures": 256,
+        "fixture_seeds": "2800000 through 2800255 in order, without selection or top-up",
+        "audit_interface": "direct ShapeSpec.intersect distance, normal and valid mask",
+        "forbidden_in_adjudication": ["_accepted_object_hits", "return_chance", "_slot_uniform", "material modulation", "nearest-return competition"],
+        "directed_regression_seed": 2800127,
+        "tolerances": {"maximum_reference_disagreement_m_exclusive": 5e-5, "maximum_distance_error_m": 1e-4, "maximum_surface_residual_m": 1e-6, "maximum_normal_norm_error": 1e-10},
+        "descriptive_nvis": "unchanged non-gating description of the first anomaly-proxy in each of 128 E26 worlds containing anomaly-proxy",
+        "implementation_commit": "b4b5e0c28f08579429463098462584fc526f07d3",
+        "command": "python -m src.render qualify-e28-v2 --e26-artifact runs/ajae/e26_world_builder.npz --data-root /home/jasongao/Data/STU --calibration runs/ajae/calibration.pt --output runs/ajae/e28_v2_anomaly_proxy_hits.npz --processes 24",
+        "artifact": "runs/ajae/e28_v2_anomaly_proxy_hits.npz",
+        "pass_conditions": ["target hit errors=0", "reverse miss errors=0", "outward normal errors=0", "reference disagreement <5e-5 m", "distance error <=1e-4 m", "surface residual <=1e-6 m", "normal norm error <=1e-10", "two 24-process runs elementwise identical"]
       }
     },
     "world_types": {"pure_normal": 0.2, "control_only": 0.2, "mixed": 0.4, "anomaly_only": 0.2},

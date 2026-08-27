@@ -1820,7 +1820,7 @@ $$
 
 ---
 
-# 18. 当前状态（当前工作区：E28 FAIL）
+# 18. 当前状态（当前工作区：E28-v2执行冻结）
 
 截至当前工作区权威提交，已经完成：
 
@@ -1843,7 +1843,9 @@ E26 已完成两遍24进程正式运行并通过：四类固定world各64个，2
 
 E27 已完成两遍24进程正式运行并通过：256个真实normal-control凸包模板覆盖4个active类别、全部128束×2列槽位和2.5–50 m目标距离；target hit、解析miss、法向外向性和object ID错误均为0，最近距离、表面残差和法向单位长度误差均低于冻结容差。
 
-E28 已完成两遍24进程正式运行但未通过：固定256个schema 7 fixture中255个返回有限正target hit；唯一失败项为seed 2,800,127。该对象的严格内部witness裕量为0.10470550994737828 m，两套独立reference均找到首个正根且相差 $1.705\times10^{-13}$ m，但正式 `intersect` 返回无穷距离。同一漏检连带产生1个hit、miss、法向和object ID错误。两遍数组逐元素一致；其余255项的距离、表面残差和法向均满足冻结容差。E29保持锁定。
+E28-v1 已完成两遍24进程正式运行但未通过，历史FAIL保留并分类为 `protocol implementation defect`。v1 runner在几何求交后错误地继续执行return probability、随机接受和nearest competition；唯一表面失败项seed 2,800,127的原始 `ShapeSpec.intersect` 实际返回26.156862691941157 m，距离参考误差为 $5.316\times10^{-8}$ m。最终无穷距离来自固定随机数0.9999961987049697大于调制后回波概率0.9999864437684041，不是几何漏检。
+
+E28-v2 已冻结：完整继承v1的256个fixture、seed、射线、姿态、距离、独立reference和容差，只把裁决接口改为直接读取 `ShapeSpec.intersect`，禁止return sampling、material modulation和nearest competition进入裁决。定向回归seed 2,800,127及固定256样本单遍预检的hit、miss和法向错误均为0。E29在v2正式结果产生前保持锁定。
 
 当前可成立的局部结论是：
 
@@ -1859,7 +1861,7 @@ E28 已完成两遍24进程正式运行但未通过：固定256个schema 7 fixtu
 当前执行节点为：
 
 $$
-\boxed{E26\ \text{PASS};\quad E27\ \text{PASS};\quad E28\ \text{FAIL};\quad E29\ \text{LOCKED}}
+\boxed{E26\ \text{PASS};\quad E27\ \text{PASS};\quad E28\text{-v1 FAIL retained};\quad E28\text{-v2 FROZEN};\quad E29\ \text{LOCKED}}
 $$
 
 E23与E24-v2已按冻结设计通过，当前顺序进入：
@@ -1868,7 +1870,7 @@ $$
 E23\rightarrow E24\rightarrow E25\rightarrow E26
 $$
 
-E27已按冻结设计关闭；E28已按冻结设计执行并失败，状态机停在E28，E29未启动。
+E27已按冻结设计关闭；E28-v1 FAIL按实现缺陷保留，当前执行E28-v2，E29未启动。
 
 因此当前整体判断仍是：
 
