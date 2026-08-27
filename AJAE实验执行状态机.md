@@ -3171,6 +3171,14 @@ E28-v2完整继承E28-v1的256个fixture、seed、shape identity、beam/column�
 
 实现提交为 `b4b5e0c28f08579429463098462584fc526f07d3`；`src/render.py`、`src/train.py`和`test_ajae.py` SHA-256分别为 `dfc8a2d155e39505e455c2cad543baa4895ab19cb813cbcf7dfe6011e37138f5`、`92a3f51f93e26bead6a1d9d92e37af2b5e4df092ffc9716852806b4b67be546b`、`960dc6b3b83a4e95e638a1f0358a3d20c8eb2b51300e5c737f2c49b4b0a3f8dd`；完整回归46项全部通过，用时100.12秒。正式命令为 `python -m src.render qualify-e28-v2 --e26-artifact runs/ajae/e26_world_builder.npz --data-root /home/jasongao/Data/STU --calibration runs/ajae/calibration.pt --output runs/ajae/e28_v2_anomaly_proxy_hits.npz --processes 24`。E28-v2 PASS后关闭E28并解锁E29；FAIL则E29保持锁定。
 
+**E28-v2 正式结果：PASS（E28关闭，E29解锁）**
+
+两遍24进程核心fixture用时分别为0.170502秒和0.169823秒，全部科学数组逐元素一致。256个target hit错误、65,280条反向miss错误和法向外向性错误均为0；两套独立reference最大差异为 $3.766\times10^{-13}$ m，最近距离最大绝对误差为 $1.226\times10^{-7}$ m，表面残差最大值为 $1.171\times10^{-7}$ m，法向单位长度最大误差为 $3.331\times10^{-16}$。定向回归seed 2,800,127返回距离26.156862691941157 m，距离误差为 $5.316\times10^{-8}$ m，hit、miss和法向错误均为0。
+
+独立复算确认E28-v1与E28-v2的seed、shape family、primitive count、尺寸、shape identity、beam、column、目标距离、reference差异和witness裕量逐元素一致；v2未筛选或替换v1 fixture。描述性E26实际anomaly-proxy $N_{vis}$ 保持minimum/median/$Q_{0.95}$/maximum为1/82/921/2,265，零可见对象为0，该统计不参与v2裁决。
+
+科学数组哈希为 `b974d4fac1534c1964ea39c245e2b808993c726cb010bccb604cccca5a43d1da`。正式产物 `runs/ajae/e28_v2_anomaly_proxy_hits.npz` 大小27,953字节，SHA-256为 `796b46bfb4acdba348322c308eed63fc5d1a80542bd1a9067d12d27e45c2787c`。E28-v2 PASS允许的结论限定为：**正式 `ShapeSpec.intersect` 纯几何接口能够对全部256个冻结schema 7 target ray返回符合独立reference与冻结容差的最近正交点和有限外向法向，同时全部反向ray保持miss。** 该结果不检验return probability、随机接受、强度或nearest-return competition；它们继续由E29–E35分层检验。
+
 ## E29｜return probability 与确定性抽样
 
 对冻结 `SensorCalibration` 检查所有 beam×range×incidence 单元概率有限且位于 $[0,1]$；fallback 来源可追溯。使用固定几何 hit 和大量稳定 slot/object/frame identities，独立复算 `_slot_uniform` 与 `u<p` 决策。

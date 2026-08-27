@@ -2131,7 +2131,7 @@
       }
     },
     "renderer_mechanical_qualification": {
-      "status": "E27 PASS; E28-v1 FAIL classified as protocol implementation defect; E28-v2 design and execution frozen; E29-E37 locked",
+      "status": "E27 PASS; E28-v1 FAIL retained as protocol implementation defect; E28-v2 PASS; E28 closed; E29 unlocked; E30-E37 locked",
       "layer_boundaries": {"E27-E28": "direct geometry outputs only", "E29": "return probability and deterministic acceptance decision only", "E30-E31": "accepted returns", "E32-E33": "nearest-return occlusion competition"},
       "E27": {
         "question": "Does the formal geometry path return the correct nearest convex-hull hit, outward finite normal and object ID for active normal-control templates when return rejection is disabled?",
@@ -2235,7 +2235,27 @@
         "implementation_commit": "b4b5e0c28f08579429463098462584fc526f07d3",
         "command": "python -m src.render qualify-e28-v2 --e26-artifact runs/ajae/e26_world_builder.npz --data-root /home/jasongao/Data/STU --calibration runs/ajae/calibration.pt --output runs/ajae/e28_v2_anomaly_proxy_hits.npz --processes 24",
         "artifact": "runs/ajae/e28_v2_anomaly_proxy_hits.npz",
-        "pass_conditions": ["target hit errors=0", "reverse miss errors=0", "outward normal errors=0", "reference disagreement <5e-5 m", "distance error <=1e-4 m", "surface residual <=1e-6 m", "normal norm error <=1e-10", "two 24-process runs elementwise identical"]
+        "pass_conditions": ["target hit errors=0", "reverse miss errors=0", "outward normal errors=0", "reference disagreement <5e-5 m", "distance error <=1e-4 m", "surface residual <=1e-6 m", "normal norm error <=1e-10", "two 24-process runs elementwise identical"],
+        "result": {
+          "passed": true,
+          "hit_errors": 0,
+          "reverse_miss_errors": 0,
+          "outward_normal_errors": 0,
+          "maximum_reference_disagreement_m": 3.765876499528531e-13,
+          "maximum_distance_error_m": 1.225520183112394e-7,
+          "maximum_surface_residual_m": 1.1714484056662283e-7,
+          "maximum_normal_norm_error": 3.3306690738754696e-16,
+          "directed_regression": {"seed": 2800127, "measured_distance_m": 26.156862691941157, "distance_error_m": 5.3156881563154457e-8, "surface_residual_m": 3.976077244465209e-8, "normal_norm_error": 0.0, "hit_error": 0, "miss_error": 0, "outward_error": 0},
+          "v1_v2_fixture_identity_equal": true,
+          "elementwise_reproduced": true,
+          "run_seconds": [0.17050151899456978, 0.1698233019997133],
+          "descriptive_real_proxy_nvis": {"objects": 128, "minimum": 1, "median": 82.0, "q95_higher": 921, "maximum": 2265, "zero_count": 0},
+          "scientific_array_sha256": "b974d4fac1534c1964ea39c245e2b808993c726cb010bccb604cccca5a43d1da",
+          "artifact_bytes": 27953,
+          "artifact_sha256": "796b46bfb4acdba348322c308eed63fc5d1a80542bd1a9067d12d27e45c2787c",
+          "conclusion": "Direct ShapeSpec.intersect returns the independently referenced nearest positive geometry hit and finite outward normal for all 256 frozen schema-7 target rays, while all reverse rays miss.",
+          "claim_limit": "E28-v2 does not qualify return probability, stochastic acceptance, intensity or nearest-return competition; E29 is unlocked."
+        }
       }
     },
     "world_types": {"pure_normal": 0.2, "control_only": 0.2, "mixed": 0.4, "anomaly_only": 0.2},

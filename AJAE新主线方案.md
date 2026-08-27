@@ -1820,7 +1820,7 @@ $$
 
 ---
 
-# 18. 当前状态（当前工作区：E28-v2执行冻结）
+# 18. 当前状态（当前工作区：E28-v2 PASS）
 
 截至当前工作区权威提交，已经完成：
 
@@ -1845,7 +1845,7 @@ E27 已完成两遍24进程正式运行并通过：256个真实normal-control凸
 
 E28-v1 已完成两遍24进程正式运行但未通过，历史FAIL保留并分类为 `protocol implementation defect`。v1 runner在几何求交后错误地继续执行return probability、随机接受和nearest competition；唯一表面失败项seed 2,800,127的原始 `ShapeSpec.intersect` 实际返回26.156862691941157 m，距离参考误差为 $5.316\times10^{-8}$ m。最终无穷距离来自固定随机数0.9999961987049697大于调制后回波概率0.9999864437684041，不是几何漏检。
 
-E28-v2 已冻结：完整继承v1的256个fixture、seed、射线、姿态、距离、独立reference和容差，只把裁决接口改为直接读取 `ShapeSpec.intersect`，禁止return sampling、material modulation和nearest competition进入裁决。定向回归seed 2,800,127及固定256样本单遍预检的hit、miss和法向错误均为0。E29在v2正式结果产生前保持锁定。
+E28-v2 已完成两遍24进程正式运行并通过：完整继承v1的256个fixture、seed、射线、姿态、距离、独立reference和容差，只把裁决接口改为直接读取 `ShapeSpec.intersect`。target hit、65,280条反向miss和法向外向性错误均为0；最近距离、表面残差和法向单位长度最大误差分别为 $1.226\times10^{-7}$ m、$1.171\times10^{-7}$ m和 $3.331\times10^{-16}$，两遍数组逐元素一致。E28关闭，E29解锁。
 
 当前可成立的局部结论是：
 
@@ -1861,7 +1861,7 @@ E28-v2 已冻结：完整继承v1的256个fixture、seed、射线、姿态、距
 当前执行节点为：
 
 $$
-\boxed{E26\ \text{PASS};\quad E27\ \text{PASS};\quad E28\text{-v1 FAIL retained};\quad E28\text{-v2 FROZEN};\quad E29\ \text{LOCKED}}
+\boxed{E26\ \text{PASS};\quad E27\ \text{PASS};\quad E28\text{-v1 FAIL retained};\quad E28\text{-v2 PASS};\quad E29\ \text{UNLOCKED}}
 $$
 
 E23与E24-v2已按冻结设计通过，当前顺序进入：
@@ -1870,7 +1870,7 @@ $$
 E23\rightarrow E24\rightarrow E25\rightarrow E26
 $$
 
-E27已按冻结设计关闭；E28-v1 FAIL按实现缺陷保留，当前执行E28-v2，E29未启动。
+E27与E28已按冻结设计关闭；E28-v1 FAIL按实现缺陷保留，当前顺序进入E29。
 
 因此当前整体判断仍是：
 
