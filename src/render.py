@@ -9407,6 +9407,107 @@ def run_e36_qualification(output_path: Path | str) -> dict[str, object]:
     np.savez_compressed(temporary, metadata_json=np.asarray(json.dumps(result, sort_keys=True, separators=(",", ":")))); os.replace(temporary, destination); return result
 
 
+_E36_V2_SENSOR: SensorCalibration | None = None
+
+
+def _e36_v2_worker(task: tuple[int, str]) -> dict[str, np.ndarray]:
+    identity, virtual_label = task
+    if _E36_V2_SENSOR is None or virtual_label not in OBJECT_LABELS:
+        raise RuntimeError("E36-v2 fixture is not initialized")
+    sensor = _E36_V2_SENSOR
+    beam, range_bin, incidence_bin = np.indices(sensor.return_probability.shape, dtype=np.int64)
+    beam = beam.ravel(); range_bin = range_bin.ravel(); incidence_bin = incidence_bin.ravel()
+    distance = 0.5 * (sensor.range_edges_m[range_bin] + sensor.range_edges_m[range_bin + 1])
+    incidence = 0.5 * (sensor.incidence_edges_rad[incidence_bin] + sensor.incidence_edges_rad[incidence_bin + 1])
+    slots = np.arange(beam.size, dtype=np.int32); object_ids = np.full(beam.size, identity + 1, dtype=np.int32)
+    world = WorldSpec(3_600_000 + identity, 206, ())
+    frame_id = 3_000 + identity
+    material = MaterialSpec.sample(3_600_000 + identity)
+    probability = sensor.return_chance(beam, distance, incidence, material.return_bias)
+    return_uniform = _slot_uniform(world, frame_id, slots, object_ids, channel=0)
+    accepted = return_uniform < probability
+    intensity_uniform = _slot_uniform(world, frame_id, slots, object_ids, channel=1)
+    intensity = np.full(beam.size, np.nan, dtype=np.float32)
+    intensity[accepted] = sensor.sample_intensity(
+        beam[accepted], distance[accepted], incidence[accepted],
+        intensity_uniform[accepted], material,
+    )
+    mode = slots % 3
+    native_range = np.where(mode == 0, distance + 1.0, np.where(mode == 1, distance - 1.0, np.inf))
+    competition_input = np.where(accepted, distance, np.inf)
+    inserted = accepted & (distance < native_range - 1.0e-6)
+    final_distance = np.where(inserted, distance, native_range)
+    occupancy = np.isfinite(final_distance)
+    semantic = np.zeros(beam.size, dtype=np.uint16)
+    semantic[inserted] = np.uint16(10 if virtual_label == "normal-control" else 2)
+    normal_mask = inserted & (virtual_label == "normal-control")
+    anomaly_mask = inserted & (virtual_label == "anomaly-proxy")
+    return {
+        "identity": np.full(beam.size, identity, dtype=np.int16),
+        "beam": beam.astype(np.int16), "range_bin": range_bin.astype(np.int8),
+        "incidence_bin": incidence_bin.astype(np.int8), "distance_m": distance,
+        "incidence_rad": incidence, "material_bias": np.full(beam.size, material.return_bias),
+        "native_range_m": native_range, "return_probability": probability,
+        "return_uniform": return_uniform, "accepted": accepted,
+        "intensity_uniform": intensity_uniform, "sampled_intensity": intensity,
+        "competition_input_m": competition_input, "final_distance_m": final_distance,
+        "occupancy": occupancy, "inserted": inserted,
+        "semantic": semantic, "normal_control_mask": normal_mask,
+        "anomaly_proxy_mask": anomaly_mask,
+    }
+
+
+def _e36_static_label_audit() -> tuple[int, int, int]:
+    tree = ast.parse(Path(__file__).read_text(encoding="utf-8"))
+    sensor_names = {"_accepted_object_hits", "return_chance", "sample_intensity"}
+    sensor_label_reads = 0; render_label_reads = 0; render_pre_competition_reads = 0
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        reads = [child for child in ast.walk(node) if isinstance(child, ast.Attribute) and child.attr == "label"]
+        if node.name in sensor_names:
+            sensor_label_reads += len(reads)
+        if node.name == "render_frame":
+            render_label_reads = len(reads)
+            calls = [child.lineno for child in ast.walk(node) if isinstance(child, ast.Call) and isinstance(child.func, ast.Name) and child.func.id == "_accepted_object_hits"]
+            boundary = min(calls) if calls else 10**9
+            render_pre_competition_reads = sum(read.lineno < boundary for read in reads)
+    return sensor_label_reads, render_pre_competition_reads, render_label_reads
+
+
+def run_e36_v2_qualification(calibration_path: Path | str, output_path: Path | str, *, processes: int = 24) -> dict[str, object]:
+    """Qualify label independence below ObjectSpec at the sensor interface."""
+    if processes != 24:
+        raise RenderError("formal E36-v2 requires exactly 24 worker processes")
+    _, sensor = load_sensor_calibration(calibration_path)
+    global _E36_V2_SENSOR; _E36_V2_SENSOR = sensor
+    context = mp.get_context("fork"); run_seconds = []; paired_runs = []
+    labels = ("normal-control", "anomaly-proxy")
+    for _ in range(2):
+        started = time.monotonic()
+        with context.Pool(processes=processes) as workers:
+            records = workers.map(_e36_v2_worker, [(i, label) for label in labels for i in range(24)])
+        conditions = []
+        for label_index in range(2):
+            selected = records[label_index * 24 : (label_index + 1) * 24]
+            conditions.append({name: np.concatenate([record[name] for record in selected]) for name in selected[0]})
+        paired_runs.append(conditions); run_seconds.append(time.monotonic() - started)
+    allowed = {"semantic", "normal_control_mask", "anomaly_proxy_mask"}
+    intermediate = tuple(name for name in paired_runs[0][0] if name not in allowed)
+    paired_errors = {name: int(np.count_nonzero(~np.isclose(paired_runs[0][0][name], paired_runs[0][1][name], equal_nan=True))) if np.issubdtype(paired_runs[0][0][name].dtype, np.floating) else int(np.count_nonzero(paired_runs[0][0][name] != paired_runs[0][1][name])) for name in intermediate}
+    reproduced = all(np.array_equal(paired_runs[0][condition][name], paired_runs[1][condition][name], equal_nan=True) for condition in range(2) for name in paired_runs[0][condition])
+    normal, anomaly = paired_runs[0]
+    bookkeeping_errors = int(np.count_nonzero(normal["normal_control_mask"] != normal["inserted"])) + int(np.count_nonzero(normal["anomaly_proxy_mask"])) + int(np.count_nonzero(anomaly["anomaly_proxy_mask"] != anomaly["inserted"])) + int(np.count_nonzero(anomaly["normal_control_mask"])) + int(np.count_nonzero(normal["semantic"][normal["inserted"]] != 10)) + int(np.count_nonzero(anomaly["semantic"][anomaly["inserted"]] != 2))
+    sensor_reads, pre_competition_reads, render_reads = _e36_static_label_audit()
+    passed = all(value == 0 for value in paired_errors.values()) and bookkeeping_errors == 0 and sensor_reads == 0 and pre_competition_reads == 0 and reproduced
+    scientific = {f"normal_{name}": normal[name] for name in normal}
+    scientific.update({f"anomaly_{name}": anomaly[name] for name in allowed})
+    scientific_hash = _scientific_array_hash(scientific)
+    result = {"experiment": "E36-v2", "passed": passed, "sensor_inputs": int(normal["accepted"].size), "intermediate_array_errors": int(sum(paired_errors.values())), "intermediate_error_by_field": paired_errors, "bookkeeping_errors": bookkeeping_errors, "sensor_function_label_reads": sensor_reads, "render_pre_competition_label_reads": pre_competition_reads, "render_final_bookkeeping_label_reads": render_reads, "elementwise_reproduced": reproduced, "run_seconds": run_seconds, "processes": processes, "scientific_array_hash": scientific_hash}
+    destination = Path(output_path).expanduser().resolve(); destination.parent.mkdir(parents=True, exist_ok=True); temporary = destination.with_suffix(destination.suffix + ".tmp.npz")
+    np.savez_compressed(temporary, **scientific, metadata_json=np.asarray(json.dumps(result, sort_keys=True, separators=(",", ":")))); os.replace(temporary, destination); return result
+
+
 def _render_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="AJAE authoritative renderer experiments")
     subcommands = parser.add_subparsers(dest="command", required=True)
@@ -9470,6 +9571,10 @@ def _render_parser() -> argparse.ArgumentParser:
     e35.add_argument("--processes", type=int, default=24)
     e36 = subcommands.add_parser("qualify-e36")
     e36.add_argument("--output", type=Path, required=True)
+    e36v2 = subcommands.add_parser("qualify-e36-v2")
+    e36v2.add_argument("--calibration", type=Path, required=True)
+    e36v2.add_argument("--output", type=Path, required=True)
+    e36v2.add_argument("--processes", type=int, default=24)
     return parser
 
 
@@ -9551,6 +9656,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0 if result["passed"] else 1
     if args.command == "qualify-e36":
         result = run_e36_qualification(args.output)
+        print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        return 0 if result["passed"] else 1
+    if args.command == "qualify-e36-v2":
+        result = run_e36_v2_qualification(args.calibration, args.output, processes=args.processes)
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 0 if result["passed"] else 1
     raise AssertionError("unreachable renderer command")
