@@ -5349,6 +5349,7 @@ def place_object(
     proposal_rows: Sequence[int] | None = None,
     maximum_candidates: int = 128,
     grounding_eligibility: GroundingEligibility | None = None,
+    yaw_for_support: Callable[[SupportPatch], float] | None = None,
 ) -> tuple[ObjectSpec, PlacementRecord]:
     """The sole support-pool-only E22/E23/E24/E25 placement pipeline."""
 
@@ -5398,9 +5399,13 @@ def place_object(
     for proposal, row in enumerate(order[:maximum_candidates]):
         patch = support_pool.patch(int(row))
         proposal_pool_indices.append(patch.pool_index)
+        proposal_yaw = (
+            yaw_rad if yaw_for_support is None else yaw_for_support(patch)
+        )
+        proposal_yaw = _finite_scalar("proposal_yaw", proposal_yaw)
         proposed = _grounded_object(
             shape, material, patch, object_id=object_id, label=label_value,  # type: ignore[arg-type]
-            yaw_rad=yaw_rad, shape_generation_report=shape_generation_report,
+            yaw_rad=proposal_yaw, shape_generation_report=shape_generation_report,
         )
         collision, minimum_sdf, _ = observed_normal_collision(proposed, obstacles)
         proposal_minimum_sdf.append(minimum_sdf)
@@ -7133,6 +7138,354 @@ def run_e24_v2_qualification(
     return metadata
 
 
+_E25_SUPPORT_POOL: QualifiedSupportPool | None = None
+_E25_OBSTACLES: ObservedObstacleIndex | None = None
+_E25_TEMPLATES: dict[int, tuple[NormalTemplateShape, ...]] = {}
+_E25_TRAJECTORY_YAW: dict[int, float] = {}
+
+
+def _normal_template_identity(template: NormalTemplateShape) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            template.to_dict(), sort_keys=True, separators=(",", ":")
+        ).encode()
+    ).hexdigest()
+
+
+def _aligned_scaled_template(
+    template: NormalTemplateShape, scale_xyz: Sequence[float]
+) -> NormalTemplateShape:
+    points = np.asarray(template.vertices_m, dtype=np.float64)
+    covariance = np.cov(points[:, :2], rowvar=False, bias=True)
+    _, vectors = np.linalg.eigh(covariance)
+    principal = vectors[:, -1]
+    if principal[0] < 0.0 or (
+        abs(principal[0]) <= EPSILON and principal[1] < 0.0
+    ):
+        principal = -principal
+    angle = math.atan2(float(principal[1]), float(principal[0]))
+    cosine, sine = math.cos(angle), math.sin(angle)
+    alignment = np.asarray(((cosine, -sine), (sine, cosine)))
+    aligned = points.copy()
+    aligned[:, :2] = points[:, :2] @ alignment
+    scale = np.asarray(_tuple_values("scale_xyz", scale_xyz, 3))
+    return NormalTemplateShape(
+        aligned * scale,
+        template.faces,
+        template.source_sequence_id,
+        template.source_frame_id,
+        template.raw_semantic_id,
+        template.source_instance_id,
+        template.source_center_sensor_m,
+        tuple(map(float, scale)),
+    )
+
+
+def _trajectory_yaw_by_frame(frames: Sequence[SourceFrame]) -> dict[int, float]:
+    ordered = tuple(sorted(frames, key=lambda frame: frame.frame_id))
+    if len(ordered) < 2:
+        raise PlacementError("trajectory tangent requires at least two source frames")
+    positions = np.asarray([_pose(frame)[1] for frame in ordered])
+    result: dict[int, float] = {}
+    for index, frame in enumerate(ordered):
+        if index == 0:
+            tangent = positions[1] - positions[0]
+        elif index == len(ordered) - 1:
+            tangent = positions[-1] - positions[-2]
+        else:
+            tangent = positions[index + 1] - positions[index - 1]
+        horizontal = tangent[:2]
+        if np.linalg.norm(horizontal) <= EPSILON:
+            horizontal = _pose(frame)[0][:2, 0]
+        if np.linalg.norm(horizontal) <= EPSILON:
+            raise PlacementError("trajectory tangent and pose fallback are degenerate")
+        result[int(frame.frame_id)] = math.atan2(
+            float(horizontal[1]), float(horizontal[0])
+        )
+    return result
+
+
+def _e25_template(index: int) -> tuple[NormalTemplateShape, str]:
+    vehicle = tuple(
+        semantic for semantic in (10, 11, 15, 18, 20)
+        if semantic in _E25_TEMPLATES
+    )
+    person = tuple(
+        semantic for semantic in (30, 31, 32)
+        if semantic in _E25_TEMPLATES
+    )
+    groups = (vehicle, person)
+    semantics = groups[index % 2]
+    if not semantics:
+        raise PlacementError("E25 selected an inactive broad group")
+    group_index = index // 2
+    semantic = semantics[group_index % len(semantics)]
+    class_index = group_index // len(semantics)
+    templates = _E25_TEMPLATES[semantic]
+    template = templates[class_index % len(templates)]
+    return template, _normal_template_identity(template)
+
+
+def _e25_worker(index: int) -> dict[str, object]:
+    pool, obstacles = _E25_SUPPORT_POOL, _E25_OBSTACLES
+    if pool is None or obstacles is None or not _E25_TEMPLATES:
+        raise RuntimeError("E25 worker state is not initialized")
+    control_seed = 2_500_000 + index
+    try:
+        source, template_identity = _e25_template(index)
+        scale = np.random.default_rng(
+            np.random.SeedSequence([control_seed, 2501])
+        ).uniform(0.9, 1.1, size=3)
+        shape = _aligned_scaled_template(source, scale)
+        semantic = shape.raw_semantic_id
+        pose_rng = np.random.default_rng(
+            np.random.SeedSequence([control_seed, 2502])
+        )
+        limit = math.pi if semantic == 30 else math.radians(15.0)
+        perturbation = float(pose_rng.uniform(-limit, limit))
+        material_seed = control_seed + 2503
+
+        def yaw_for_support(patch: SupportPatch) -> float:
+            return _E25_TRAJECTORY_YAW[patch.frame_id] + perturbation
+
+        item, record = place_object(
+            shape, MaterialSpec.sample(material_seed), pool, obstacles,
+            object_id=index + 1, label="normal-control",
+            proposal_namespace="E25-support-v1", proposal_stream=index,
+            yaw_rad=perturbation, material_seed=material_seed,
+            yaw_seed=control_seed, template_identity=template_identity,
+            maximum_candidates=128, yaw_for_support=yaw_for_support,
+        )
+        support_row = int(np.searchsorted(pool.pool_indices, record.support_pool_index))
+        if (
+            support_row >= pool.pool_indices.size
+            or int(pool.pool_indices[support_row]) != record.support_pool_index
+        ):
+            raise PlacementError("accepted E25 support identity is absent")
+        patch = pool.patch(support_row)
+        expected_rotation = _ground_rotation(
+            np.asarray(patch.normal_world), yaw_for_support(patch)
+        )
+        semantic_violation = int(
+            record.support_semantic not in normal_control_support_semantics(semantic)
+        )
+        scale_error = int(np.any((scale < 0.9) | (scale > 1.1)))
+        pose_error = int(
+            np.max(np.abs(expected_rotation - np.asarray(item.rotation_world_from_local)))
+            > 1.0e-10
+        )
+        validation_error = int(
+            not qualify_grounding(item.shape).passed
+            or observed_normal_collision(item, obstacles)[0]
+            or record.accepted_proposal + 1 != len(record.proposal_pool_indices)
+            or record.accepted_proposal != len(record.rejection_reasons)
+            or record.template_identity != template_identity
+        )
+        fixture_error = 0
+        fixture_hash = ""
+        if index == 0:
+            proxy_shape, proxy_report, proxy_grounding, proxy_proposals, _ = (
+                _grounding_qualified_shape(
+                    5_000_000, stride=3072, maximum_proposals=64
+                )
+            )
+            proxy_seed = proxy_proposals[-1]
+            proxy_yaw = float(
+                np.random.default_rng(
+                    np.random.SeedSequence([proxy_seed, 2504])
+                ).uniform(-math.pi, math.pi)
+            )
+            proxy, proxy_record = place_object(
+                proxy_shape, MaterialSpec.sample(proxy_seed + 2505), pool, obstacles,
+                object_id=2, label="anomaly-proxy",
+                proposal_namespace="E25-mixed-fixture-v1", proposal_stream=0,
+                yaw_rad=proxy_yaw, material_seed=proxy_seed + 2505,
+                yaw_seed=proxy_seed, shape_seed=proxy_seed,
+                shape_generation_report=proxy_report, existing_objects=(item,),
+                grounding_eligibility=proxy_grounding, maximum_candidates=128,
+            )
+            fixture_error = int(
+                observed_normal_collision(proxy, obstacles)[0]
+                or obvious_pair_penetration(item, proxy)[0]
+            )
+            fixture_hash = hashlib.sha256(
+                json.dumps(
+                    item.to_dict(), sort_keys=True, separators=(",", ":")
+                ).encode()
+                + json.dumps(
+                    {"proxy": proxy.to_dict(), "record": proxy_record.to_dict()},
+                    sort_keys=True, separators=(",", ":"),
+                ).encode()
+            ).hexdigest()
+        return {
+            "hard_error": 0,
+            "error": "",
+            "control_seed": control_seed,
+            "semantic": semantic,
+            "template_identity": template_identity,
+            "scale": scale,
+            "pose_perturbation_rad": perturbation,
+            "support_semantic": record.support_semantic,
+            "support_pool_index": record.support_pool_index,
+            "support_proposal_count": record.accepted_proposal + 1,
+            "semantic_violation": semantic_violation,
+            "scale_error": scale_error,
+            "pose_error": pose_error,
+            "validation_error": validation_error,
+            "fixture_error": fixture_error,
+            "fixture_hash": fixture_hash,
+            "object_json": json.dumps(
+                item.to_dict(), sort_keys=True, separators=(",", ":")
+            ),
+            "placement_report_json": json.dumps(
+                record.to_dict(), sort_keys=True, separators=(",", ":")
+            ),
+        }
+    except PlacementError as error:
+        return {
+            "hard_error": 0,
+            "placement_exhaustion": 1,
+            "error": f"PlacementError: {error}",
+            "control_seed": control_seed,
+        }
+    except Exception as error:
+        return {
+            "hard_error": 1,
+            "placement_exhaustion": 0,
+            "error": f"{type(error).__name__}: {error}",
+            "control_seed": control_seed,
+        }
+
+
+def _e25_arrays(records: Sequence[Mapping[str, object]]) -> dict[str, np.ndarray]:
+    def values(name: str, dtype: object, default: object) -> np.ndarray:
+        return np.asarray([item.get(name, default) for item in records], dtype=dtype)
+    return {
+        "control_seed": values("control_seed", np.int64, -1),
+        "semantic": values("semantic", np.uint16, 0),
+        "template_identity": values("template_identity", "S64", ""),
+        "scale": np.asarray(
+            [item.get("scale", (math.nan,) * 3) for item in records], np.float64
+        ),
+        "pose_perturbation_rad": values("pose_perturbation_rad", np.float64, math.nan),
+        "support_semantic": values("support_semantic", np.uint16, 0),
+        "support_pool_index": values("support_pool_index", np.int64, -1),
+        "support_proposal_count": values("support_proposal_count", np.int16, 0),
+        "semantic_violation": values("semantic_violation", np.uint8, 1),
+        "scale_error": values("scale_error", np.uint8, 1),
+        "pose_error": values("pose_error", np.uint8, 1),
+        "validation_error": values("validation_error", np.uint8, 1),
+        "fixture_error": values("fixture_error", np.uint8, 0),
+        "fixture_hash": values("fixture_hash", "S64", ""),
+        "object_json": np.asarray(
+            [str(item.get("object_json", "")).encode() for item in records]
+        ),
+        "placement_report_json": np.asarray(
+            [str(item.get("placement_report_json", "")).encode() for item in records]
+        ),
+        "hard_error_code": values("hard_error", np.uint8, 1),
+        "placement_exhaustion_code": values("placement_exhaustion", np.uint8, 0),
+        "error_message": values("error", "U512", ""),
+    }
+
+
+def run_e25_qualification(
+    data_root: Path | str,
+    support_pool_path: Path | str,
+    output_path: Path | str,
+    *,
+    processes: int = 24,
+) -> dict[str, object]:
+    """Execute the frozen two-run E25 normal-control qualification."""
+
+    if processes != 24:
+        raise PlacementError("formal E25 requires exactly 24 worker processes")
+    try:
+        from .protocol import load_protocol
+        from .scene import LabelMode, STUSequence
+    except ImportError:
+        from protocol import load_protocol  # type: ignore[no-redef]
+        from scene import LabelMode, STUSequence  # type: ignore[no-redef]
+    project_root = Path(__file__).resolve().parents[1]
+    protocol = load_protocol(project_root / "protocol.json")
+    sequence = STUSequence.open(
+        data_root, protocol=protocol, partition="train", sequence_id=206,
+        label_mode=LabelMode.REQUIRED,
+    )
+    frames = tuple(sequence.source_frame(frame_id) for frame_id in sequence.frame_ids)
+    templates = extract_normal_template_library(frames)
+    by_semantic: dict[int, tuple[NormalTemplateShape, ...]] = {}
+    for semantic in sorted(NORMAL_TEMPLATE_SEMANTICS):
+        selected = tuple(
+            item for item in templates if item.raw_semantic_id == semantic
+        )
+        if selected:
+            by_semantic[semantic] = selected
+    counts = {semantic: len(items) for semantic, items in by_semantic.items()}
+    identities = [_normal_template_identity(item) for item in templates]
+    library_hash = hashlib.sha256("".join(identities).encode()).hexdigest()
+    if counts != {10: 64, 18: 64, 20: 64, 30: 64} or len(set(identities)) != 256:
+        raise PlacementError("E25 observable-template precheck changed")
+    pool = load_qualified_support_pool(support_pool_path)
+    obstacles = collect_observed_obstacle_index(frames)
+    global _E25_SUPPORT_POOL, _E25_OBSTACLES, _E25_TEMPLATES, _E25_TRAJECTORY_YAW
+    _E25_SUPPORT_POOL = pool
+    _E25_OBSTACLES = obstacles
+    _E25_TEMPLATES = by_semantic
+    _E25_TRAJECTORY_YAW = _trajectory_yaw_by_frame(frames)
+    runs: list[dict[str, np.ndarray]] = []
+    run_seconds: list[float] = []
+    context = mp.get_context("fork")
+    for _ in range(2):
+        started = time.monotonic()
+        with context.Pool(processes=processes) as workers:
+            records = workers.map(_e25_worker, range(1024))
+        run_seconds.append(time.monotonic() - started)
+        runs.append(_e25_arrays(records))
+    reproduced = all(
+        np.array_equal(runs[0][name], runs[1][name], equal_nan=True)
+        if np.issubdtype(runs[0][name].dtype, np.floating)
+        else np.array_equal(runs[0][name], runs[1][name])
+        for name in runs[0]
+    )
+    first = runs[0]
+    hard_errors = int(np.count_nonzero(first["hard_error_code"]))
+    placement_exhaustions = int(np.count_nonzero(first["placement_exhaustion_code"]))
+    completed = int(np.count_nonzero(first["template_identity"] != b""))
+    semantic_violations = int(np.sum(first["semantic_violation"]))
+    scale_errors = int(np.sum(first["scale_error"]))
+    pose_errors = int(np.sum(first["pose_error"]))
+    validation_errors = int(np.sum(first["validation_error"]))
+    fixture_errors = int(np.sum(first["fixture_error"]))
+    passed = (
+        library_hash == "de5dfd765ac7d4fe4bb4644c40ecafdd80cdc31a3d0b6fc4fccd8e84a9fd906b"
+        and completed == 1024 and hard_errors == 0 and placement_exhaustions == 0
+        and semantic_violations == 0 and scale_errors == 0 and pose_errors == 0
+        and validation_errors == 0 and fixture_errors == 0 and reproduced
+    )
+    scientific_hash = _scientific_array_hash(first)
+    metadata = {
+        "experiment": "E25", "passed": passed, "templates": len(templates),
+        "active_counts": counts, "library_sha256": library_hash,
+        "placements": 1024, "completed": completed,
+        "hard_errors": hard_errors, "placement_exhaustions": placement_exhaustions,
+        "semantic_violations": semantic_violations, "scale_errors": scale_errors,
+        "pose_errors": pose_errors, "validation_errors": validation_errors,
+        "fixture_errors": fixture_errors, "elementwise_reproduced": reproduced,
+        "scientific_array_hash": scientific_hash, "run_seconds": run_seconds,
+        "support_pool_sha256": SUPPORT_POOL_SHA256, "processes": processes,
+    }
+    destination = Path(output_path).expanduser().resolve()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_suffix(destination.suffix + ".tmp.npz")
+    np.savez_compressed(
+        temporary, **first,
+        metadata_json=np.asarray(json.dumps(metadata, sort_keys=True, separators=(",", ":"))),
+    )
+    os.replace(temporary, destination)
+    return metadata
+
+
 def _render_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="AJAE authoritative renderer experiments")
     subcommands = parser.add_subparsers(dest="command", required=True)
@@ -7146,6 +7499,11 @@ def _render_parser() -> argparse.ArgumentParser:
     e24.add_argument("--support-pool", type=Path, required=True)
     e24.add_argument("--output", type=Path, required=True)
     e24.add_argument("--processes", type=int, default=24)
+    e25 = subcommands.add_parser("qualify-e25")
+    e25.add_argument("--data-root", type=Path, required=True)
+    e25.add_argument("--support-pool", type=Path, required=True)
+    e25.add_argument("--output", type=Path, required=True)
+    e25.add_argument("--processes", type=int, default=24)
     return parser
 
 
@@ -7159,6 +7517,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0 if result["passed"] else 1
     if args.command == "qualify-e24-v2":
         result = run_e24_v2_qualification(
+            args.data_root, args.support_pool, args.output, processes=args.processes
+        )
+        print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        return 0 if result["passed"] else 1
+    if args.command == "qualify-e25":
+        result = run_e25_qualification(
             args.data_root, args.support_pool, args.output, processes=args.processes
         )
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
