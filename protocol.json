@@ -2131,7 +2131,7 @@
       }
     },
     "renderer_mechanical_qualification": {
-      "status": "E27 PASS; closed; E28 design and execution frozen; E29-E37 locked",
+      "status": "E27 PASS; E28 FAIL; E29-E37 locked",
       "E27": {
         "question": "Does the formal geometry path return the correct nearest convex-hull hit, outward finite normal and object ID for active normal-control templates when return rejection is disabled?",
         "fixtures": 256,
@@ -2195,7 +2195,28 @@
         "implementation_commit": "dea911899d9891d632d88de3394f17e7f2904ed0",
         "command": "python -m src.render qualify-e28 --e26-artifact runs/ajae/e26_world_builder.npz --data-root /home/jasongao/Data/STU --calibration runs/ajae/calibration.pt --output runs/ajae/e28_anomaly_proxy_hits.npz --processes 24",
         "artifact": "runs/ajae/e28_anomaly_proxy_hits.npz",
-        "pass_conditions": ["target hit errors=0", "analytic miss errors=0", "nearest positive-root errors=0", "object ID errors=0", "outward normal errors=0", "reference disagreement <5e-5 m", "distance error <=1e-4 m", "surface residual <=1e-6 m", "normal norm error <=1e-10", "two 24-process runs elementwise identical"]
+        "pass_conditions": ["target hit errors=0", "analytic miss errors=0", "nearest positive-root errors=0", "object ID errors=0", "outward normal errors=0", "reference disagreement <5e-5 m", "distance error <=1e-4 m", "surface residual <=1e-6 m", "normal norm error <=1e-10", "two 24-process runs elementwise identical"],
+        "result": {
+          "passed": false,
+          "hit_errors": 1,
+          "analytic_miss_errors": 1,
+          "outward_normal_errors": 1,
+          "object_id_errors": 1,
+          "single_failed_fixture": {"fixture_index": 127, "seed": 2800127, "shape_family": "general", "primitive_count": 5, "beam_id": 63, "column_id": 1, "desired_distance_m": 26.15686274509804, "measured_distance_m": "infinity", "shape_identity": "e40c51a4b501d8b3f1dd277488c6f4d422bcf764b1cfd9afab5d5172b3818a7b", "witness_margin_m": 0.10470550994737828, "reference_disagreement_m": 1.7053025658242404e-13},
+          "finite_fixture_count": 255,
+          "maximum_reference_disagreement_m": 3.765876499528531e-13,
+          "finite_maximum_distance_error_m": 1.225520183112394e-7,
+          "finite_maximum_surface_residual_m": 1.1714484056662283e-7,
+          "finite_maximum_normal_norm_error": 3.3306690738754696e-16,
+          "elementwise_reproduced": true,
+          "run_seconds": [0.18623332800052594, 0.19500404500286095],
+          "descriptive_real_proxy_nvis": {"objects": 128, "minimum": 1, "median": 82.0, "q95_higher": 921, "maximum": 2265, "zero_count": 0},
+          "scientific_array_sha256": "26f0af96a77813126eddc61e8e311d60d443ddf9e55f2cf212378873e4c0ee5f",
+          "artifact_bytes": 28118,
+          "artifact_sha256": "5b1cb22f2a415645e53d0971e4cf8d6c81124b6958cc61fc8cc8ab7617c775f1",
+          "conclusion": "The current formal schema-7 continuous intersection path does not return a target hit for every frozen ray that is independently certified to pass through a strict interior witness.",
+          "claim_limit": "The failure is one anomaly-proxy fixture and does not invalidate E27 normal-control hits or E26 and earlier qualification results; E29 remains locked."
+        }
       }
     },
     "world_types": {"pure_normal": 0.2, "control_only": 0.2, "mixed": 0.4, "anomaly_only": 0.2},

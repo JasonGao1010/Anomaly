@@ -3153,6 +3153,14 @@ PASS：target hit/miss 零错误；最近距离有限为正；交点位于 hull 
 
 PASS：零 hit/miss、最近根、法向和 object-ID 错误；两遍一致。PASS → E29。
 
+**E28 正式结果：FAIL（E29保持锁定）**
+
+两遍24进程核心fixture用时分别为0.186233秒和0.195004秒，全部数组逐元素一致。固定256个fixture中有255个返回了有限正target hit；唯一失败项为fixture index 127、seed 2,800,127、general family、5 primitives、beam 63、column 1、目标表面距离26.15686274509804 m、shape identity `e40c51a4b501d8b3f1dd277488c6f4d422bcf764b1cfd9afab5d5172b3818a7b`。该fixture的严格内部witness裕量为0.10470550994737828 m，两套独立reference的首根差异为 $1.705\times10^{-13}$ m，但正式路径返回距离为无穷，因此同一个漏检同时记为1个hit错误、1个miss错误、1个法向错误和1个object ID错误。
+
+其余255个有限结果的最近距离最大绝对误差为 $1.226\times10^{-7}$ m，表面残差最大值为 $1.171\times10^{-7}$ m，法向单位长度最大误差为 $3.331\times10^{-16}$，均满足冻结数值容差。全部256个fixture的两套独立reference最大差异为 $3.766\times10^{-13}$ m。128个E26实际anomaly-proxy在各自接受support frame的描述性 $N_{vis}$ minimum/median/$Q_{0.95}$/maximum为1/82/921/2,265，零可见对象为0；该统计不参与E28裁决。
+
+科学数组哈希为 `26f0af96a77813126eddc61e8e311d60d443ddf9e55f2cf212378873e4c0ee5f`。正式产物 `runs/ajae/e28_anomaly_proxy_hits.npz` 大小28,118字节，SHA-256为 `5b1cb22f2a415645e53d0971e4cf8d6c81124b6958cc61fc8cc8ab7617c775f1`。E28 FAIL否定的是：**当前正式schema 7连续求交路径能够对全部冻结、由严格内部witness保证穿过实体的target ray稳定返回最近正交点。** E27的normal-control几何命中结论及E26以前的资格结果不受该结果改变。按冻结状态机，E29不得启动。
+
 ## E29｜return probability 与确定性抽样
 
 对冻结 `SensorCalibration` 检查所有 beam×range×incidence 单元概率有限且位于 $[0,1]$；fallback 来源可追溯。使用固定几何 hit 和大量稳定 slot/object/frame identities，独立复算 `_slot_uniform` 与 `u<p` 决策。
