@@ -10720,9 +10720,10 @@ def _e39_worker(index: int) -> dict[str, np.ndarray]:
             geometry, accepted, distance, rendered = _gate1_single_object_trace(
                 frame, world, grid, sensor
             )
-            returned = np.asarray(
+            returned = np.array(
                 rendered.normal_control_mask if source_index == 1
-                else rendered.anomaly_proxy_mask
+                else rendered.anomaly_proxy_mask,
+                dtype=np.bool_, copy=True,
             )
             rendered_distance = np.asarray(grid.official_ranges(rendered.source))
             returned &= (rendered_distance >= 2.5) & (rendered_distance <= 50.0)
