@@ -7810,6 +7810,234 @@ def run_e26_qualification(
     return metadata
 
 
+_E27_TEMPLATES: tuple[NormalTemplateShape, ...] = ()
+_E27_SENSOR = SensorCalibration.constant(1.0, return_probability=1.0)
+
+
+def _e27_rotation(seed: int) -> np.ndarray:
+    rng = np.random.default_rng(np.random.SeedSequence([seed, 2701]))
+    yaw = float(rng.uniform(-math.pi, math.pi))
+    pitch, roll = rng.uniform(-math.radians(15.0), math.radians(15.0), size=2)
+    cy, sy = math.cos(yaw), math.sin(yaw)
+    cp, sp = math.cos(float(pitch)), math.sin(float(pitch))
+    cr, sr = math.cos(float(roll)), math.sin(float(roll))
+    rz = np.asarray(((cy, -sy, 0.0), (sy, cy, 0.0), (0.0, 0.0, 1.0)))
+    ry = np.asarray(((cp, 0.0, sp), (0.0, 1.0, 0.0), (-sp, 0.0, cp)))
+    rx = np.asarray(((1.0, 0.0, 0.0), (0.0, cr, -sr), (0.0, sr, cr)))
+    return rz @ ry @ rx
+
+
+def _convex_entry_distance(
+    shape: NormalTemplateShape, origin: np.ndarray, direction: np.ndarray
+) -> float:
+    numerator = -(origin @ shape.plane_normals.T + shape.plane_offsets)
+    denominator = direction @ shape.plane_normals.T
+    if np.any((np.abs(denominator) <= EPSILON) & (numerator < 0.0)):
+        return math.inf
+    lower = np.full(denominator.shape, -np.inf)
+    upper = np.full(denominator.shape, np.inf)
+    np.divide(numerator, denominator, out=lower, where=denominator < -EPSILON)
+    np.divide(numerator, denominator, out=upper, where=denominator > EPSILON)
+    entry, exit_distance = float(np.max(lower)), float(np.min(upper))
+    return entry if exit_distance >= max(entry, 0.0) and entry > 1.0e-5 else math.inf
+
+
+def _e27_worker(index: int) -> dict[str, object]:
+    if len(_E27_TEMPLATES) != 256:
+        raise RuntimeError("E27 template fixtures are not initialized")
+    seed = 2_700_000 + index
+    shape = _E27_TEMPLATES[index]
+    target_slot = index
+    beam_id, column_id = divmod(target_slot, 2)
+    elevation = math.radians(-20.0 + 40.0 * beam_id / 127.0)
+    azimuth = math.pi * column_id + math.radians((index % 17) - 8)
+    target = np.asarray((
+        math.cos(elevation) * math.cos(azimuth),
+        math.cos(elevation) * math.sin(azimuth),
+        math.sin(elevation),
+    ))
+    target /= np.linalg.norm(target)
+    directions = np.tile(-target, (256, 1))
+    directions[target_slot] = target
+    grid = RayGrid(
+        directions,
+        np.linspace(-math.radians(20.0), math.radians(20.0), 128),
+        np.asarray((0.0, math.pi)),
+        beam_count=128,
+    )
+    rotation = _e27_rotation(seed)
+    center = np.mean(shape.vertices_m, axis=0)
+    desired_distance = 2.5 + 47.5 * index / 255.0
+    translation = target * (desired_distance + shape.bound_radius_m) - center @ rotation.T
+    local_origin = -translation @ rotation
+    local_direction = target @ rotation
+    provisional = _convex_entry_distance(shape, local_origin, local_direction)
+    if not math.isfinite(provisional):
+        raise PlacementError("E27 reference failed to bracket the target hull")
+    translation += target * (desired_distance - provisional)
+    local_origin = -translation @ rotation
+    expected_distance = _convex_entry_distance(
+        shape, local_origin, local_direction
+    )
+    item = ObjectSpec(
+        index + 1, "normal-control", shape, MaterialSpec.sample(seed + 2702),
+        tuple(map(float, translation)),
+        tuple(tuple(map(float, row)) for row in rotation),
+    )
+    world = WorldSpec(seed, 206, (item,))
+    competition = _accepted_object_hits(
+        np.zeros((256, 3), dtype=np.float64), directions, world, grid,
+        _E27_SENSOR, frame_id=index,
+    )
+    measured = float(competition.distance_m[target_slot])
+    hit_error = int(not math.isfinite(measured) or measured <= 0.0)
+    miss_error = int(
+        np.count_nonzero(np.isfinite(competition.distance_m)) != 1
+    )
+    distance_error = (
+        math.inf if hit_error else abs(measured - expected_distance)
+    )
+    point_world = measured * target if not hit_error else np.zeros(3)
+    point_local = (point_world - translation) @ rotation
+    residual = (
+        math.inf if hit_error
+        else abs(float(shape.signed_distance(point_local[None, :])[0]))
+    )
+    normal = competition.normal_world[target_slot]
+    normal_error = (
+        math.inf if hit_error else abs(float(np.linalg.norm(normal)) - 1.0)
+    )
+    outward_error = int(hit_error or float(np.dot(normal, target)) >= 0.0)
+    object_id_error = int(
+        competition.object_id[target_slot] != index + 1
+        or np.any(np.delete(competition.object_id, target_slot) != -1)
+    )
+    return {
+        "seed": seed,
+        "semantic": shape.raw_semantic_id,
+        "template_identity": _normal_template_identity(shape),
+        "beam_id": beam_id,
+        "column_id": column_id,
+        "desired_distance_m": desired_distance,
+        "measured_distance_m": measured,
+        "distance_error_m": distance_error,
+        "surface_residual_m": residual,
+        "normal_norm_error": normal_error,
+        "hit_error": hit_error,
+        "miss_error": miss_error,
+        "outward_error": outward_error,
+        "object_id_error": object_id_error,
+    }
+
+
+def _e27_arrays(records: Sequence[Mapping[str, object]]) -> dict[str, np.ndarray]:
+    def values(name: str, dtype: object) -> np.ndarray:
+        return np.asarray([item[name] for item in records], dtype=dtype)
+
+    return {
+        "seed": values("seed", np.int64),
+        "semantic": values("semantic", np.uint16),
+        "template_identity": values("template_identity", "S64"),
+        "beam_id": values("beam_id", np.int16),
+        "column_id": values("column_id", np.int8),
+        "desired_distance_m": values("desired_distance_m", np.float64),
+        "measured_distance_m": values("measured_distance_m", np.float64),
+        "distance_error_m": values("distance_error_m", np.float64),
+        "surface_residual_m": values("surface_residual_m", np.float64),
+        "normal_norm_error": values("normal_norm_error", np.float64),
+        "hit_error": values("hit_error", np.uint8),
+        "miss_error": values("miss_error", np.uint8),
+        "outward_error": values("outward_error", np.uint8),
+        "object_id_error": values("object_id_error", np.uint8),
+    }
+
+
+def run_e27_qualification(
+    e25_artifact_path: Path | str,
+    output_path: Path | str,
+    *,
+    processes: int = 24,
+) -> dict[str, object]:
+    """Run the frozen return-probability-one normal-hull hit qualification."""
+
+    if processes != 24:
+        raise RenderError("formal E27 requires exactly 24 worker processes")
+    with np.load(Path(e25_artifact_path).expanduser().resolve(strict=True), allow_pickle=False) as source:
+        metadata = json.loads(str(source["metadata_json"]))
+        if metadata.get("experiment") != "E25" or metadata.get("passed") is not True:
+            raise RenderError("E27 requires the passed formal E25 artifact")
+        selected: dict[str, NormalTemplateShape] = {}
+        for identity_bytes, object_bytes in zip(
+            source["template_identity"], source["object_json"], strict=True
+        ):
+            identity = identity_bytes.decode()
+            if identity and identity not in selected:
+                item = ObjectSpec.from_dict(json.loads(object_bytes.decode()))
+                if not isinstance(item.shape, NormalTemplateShape):
+                    raise RenderError("E25 normal-control artifact contains a non-template")
+                selected[identity] = item.shape
+    templates = tuple(
+        selected[identity]
+        for identity in sorted(
+            selected, key=lambda value: (selected[value].raw_semantic_id, value)
+        )
+    )
+    counts = {
+        semantic: sum(item.raw_semantic_id == semantic for item in templates)
+        for semantic in (10, 18, 20, 30)
+    }
+    if len(templates) != 256 or counts != {10: 64, 18: 64, 20: 64, 30: 64}:
+        raise RenderError("E27 active template coverage changed")
+    global _E27_TEMPLATES
+    _E27_TEMPLATES = templates
+    runs: list[dict[str, np.ndarray]] = []
+    run_seconds: list[float] = []
+    context = mp.get_context("fork")
+    for _ in range(2):
+        started = time.monotonic()
+        with context.Pool(processes=processes) as workers:
+            records = workers.map(_e27_worker, range(256))
+        runs.append(_e27_arrays(records))
+        run_seconds.append(time.monotonic() - started)
+    reproduced = all(
+        np.array_equal(runs[0][name], runs[1][name], equal_nan=True)
+        if np.issubdtype(runs[0][name].dtype, np.floating)
+        else np.array_equal(runs[0][name], runs[1][name])
+        for name in runs[0]
+    )
+    first = runs[0]
+    error_names = ("hit_error", "miss_error", "outward_error", "object_id_error")
+    errors = {name: int(np.sum(first[name])) for name in error_names}
+    passed = (
+        all(value == 0 for value in errors.values())
+        and float(np.max(first["distance_error_m"])) <= 1.0e-8
+        and float(np.max(first["surface_residual_m"])) <= 1.0e-8
+        and float(np.max(first["normal_norm_error"])) <= 1.0e-10
+        and reproduced
+    )
+    scientific_hash = _scientific_array_hash(first)
+    result = {
+        "experiment": "E27", "passed": passed, "fixtures": 256,
+        "active_counts": counts, **errors,
+        "maximum_distance_error_m": float(np.max(first["distance_error_m"])),
+        "maximum_surface_residual_m": float(np.max(first["surface_residual_m"])),
+        "maximum_normal_norm_error": float(np.max(first["normal_norm_error"])),
+        "elementwise_reproduced": reproduced, "run_seconds": run_seconds,
+        "scientific_array_hash": scientific_hash, "processes": processes,
+    }
+    destination = Path(output_path).expanduser().resolve()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_suffix(destination.suffix + ".tmp.npz")
+    np.savez_compressed(
+        temporary, **first,
+        metadata_json=np.asarray(
+            json.dumps(result, sort_keys=True, separators=(",", ":"))
+        ),
+    )
+    os.replace(temporary, destination)
+    return result
+
+
 def _render_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="AJAE authoritative renderer experiments")
     subcommands = parser.add_subparsers(dest="command", required=True)
@@ -7833,6 +8061,10 @@ def _render_parser() -> argparse.ArgumentParser:
     e26.add_argument("--support-pool", type=Path, required=True)
     e26.add_argument("--output", type=Path, required=True)
     e26.add_argument("--processes", type=int, default=24)
+    e27 = subcommands.add_parser("qualify-e27")
+    e27.add_argument("--e25-artifact", type=Path, required=True)
+    e27.add_argument("--output", type=Path, required=True)
+    e27.add_argument("--processes", type=int, default=24)
     return parser
 
 
@@ -7859,6 +8091,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "qualify-e26":
         result = run_e26_qualification(
             args.data_root, args.support_pool, args.output, processes=args.processes
+        )
+        print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        return 0 if result["passed"] else 1
+    if args.command == "qualify-e27":
+        result = run_e27_qualification(
+            args.e25_artifact, args.output, processes=args.processes
         )
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 0 if result["passed"] else 1
