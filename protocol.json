@@ -1848,8 +1848,8 @@
           "status": "DESIGN AND EXECUTION FROZEN; E23 PASS; E24 FAIL retained; E24-v2 PASS; E25 PASS; E26 PASS; Phase 2 closed; E27 unlocked",
           "design_authorities": ["AJAE新主线方案.md", "AJAE实验执行状态机.md"],
           "design_authority_sha256": {
-            "main_plan": "a556db0bf95f748c4c58dc833cf157db578aa41aa25a96842a6c809dc59bb3a3",
-            "state_machine": "7ef59dd46cd046930e6ce2dd9c121a220eab0bff5ca342dcd405c1ad12e9ba47"
+            "main_plan": "b020984eb437b9f830b28266b2383222c2f71d9b29ce402da57d978e2460f933",
+            "state_machine": "3953661665e0686a1e62d2a7846e72c9769048e4e6f2cbaaf8ef5d3c13e9d7ee"
           },
           "implementation_identity": {
             "commit": "b0668bd8c96a8c8ea0b04145fda8e263bae8649b",
@@ -2131,7 +2131,7 @@
       }
     },
     "renderer_mechanical_qualification": {
-      "status": "E27 DESIGN AND EXECUTION FROZEN; formal run pending; E28-E37 locked",
+      "status": "E27 PASS; closed; E28 unlocked; E29-E37 locked",
       "E27": {
         "question": "Does the formal geometry path return the correct nearest convex-hull hit, outward finite normal and object ID for active normal-control templates when return rejection is disabled?",
         "fixtures": 256,
@@ -2153,7 +2153,27 @@
         "implementation_commit": "b0668bd8c96a8c8ea0b04145fda8e263bae8649b",
         "command": "python -m src.render qualify-e27 --e25-artifact runs/ajae/e25_normal_control.npz --e26-artifact runs/ajae/e26_world_builder.npz --data-root /home/jasongao/Data/STU --calibration runs/ajae/calibration.pt --output runs/ajae/e27_normal_control_hits.npz --processes 24",
         "artifact": "runs/ajae/e27_normal_control_hits.npz",
-        "pass_conditions": ["target hit errors=0", "analytic miss errors=0", "object ID errors=0", "outward normal errors=0", "distance and surface residual <=1e-8 m", "normal norm error <=1e-10", "two 24-process runs elementwise identical"]
+        "pass_conditions": ["target hit errors=0", "analytic miss errors=0", "object ID errors=0", "outward normal errors=0", "distance and surface residual <=1e-8 m", "normal norm error <=1e-10", "two 24-process runs elementwise identical"],
+        "result": {
+          "fixtures": 256,
+          "active_counts": {"10": 64, "18": 64, "20": 64, "30": 64},
+          "unique_templates": 256,
+          "hit_errors": 0,
+          "analytic_miss_errors": 0,
+          "outward_normal_errors": 0,
+          "object_id_errors": 0,
+          "maximum_distance_error_m": 2.1316282072803006e-14,
+          "maximum_surface_residual_m": 1.582067810090848e-14,
+          "maximum_normal_norm_error": 2.220446049250313e-16,
+          "elementwise_reproduced": true,
+          "run_seconds": [0.05855800899735186, 0.06217075099993963],
+          "descriptive_real_placement_nvis": {"objects": 192, "minimum": 1, "median": 103.0, "q95_higher": 1179, "maximum": 2143, "zero_count": 0},
+          "scientific_array_sha256": "cc684d8c30db7733f7b04c440a49b13be45a182c839e26d37070f9ec94105ccb",
+          "artifact_bytes": 17437,
+          "artifact_sha256": "7b11c16c14097ed87e349c41b2e4c9d314e854a1f550dbaa6247d901c7793929",
+          "conclusion": "With return rejection disabled, the formal normal-control geometry path returns the correct nearest positive hit, finite outward normal and object identity for all 256 active-class real convex-hull templates.",
+          "claim_limit": "E27 does not qualify anomaly-proxy intersection, return sampling, intensity or final native-return competition."
+        }
       }
     },
     "world_types": {"pure_normal": 0.2, "control_only": 0.2, "mixed": 0.4, "anomaly_only": 0.2},

@@ -3127,6 +3127,14 @@ E27–E37 在 E27 首次正式运行前一次性冻结。它们只资格 rendere
 
 PASS：target hit/miss 零错误；最近距离有限为正；交点位于 hull 表面、法向有限外向；object ID 正确；两遍逐元素一致。真实放置对象的 $N_{vis}$ 只报告，分布资格留给 E42。PASS → E28。
 
+**E27 正式结果：PASS（E27关闭，E28解锁）**
+
+两遍24进程核心fixture用时分别为0.058558秒和0.062171秒，全部数组逐元素一致。256个target hit错误、65,280个解析miss错误、法向外向性错误和object ID错误均为0；最近距离最大绝对误差为 $2.132\times10^{-14}$ m，凸包表面残差最大值为 $1.582\times10^{-14}$ m，法向单位长度最大误差为 $2.220\times10^{-16}$。科学数组哈希为 `cc684d8c30db7733f7b04c440a49b13be45a182c839e26d37070f9ec94105ccb`。
+
+独立复算确认seed、beam、column分别精确覆盖2,700,000–2,700,255、0–127和0–1；4个active类别各64个，256个template identity全部唯一；目标距离和实测最近距离均覆盖2.5–50 m。192个真实E26放置对象在各自接受support frame的描述性 $N_{vis}$ minimum/median/$Q_{0.95}$/maximum为1/103/1,179/2,143，零可见对象为0。该统计不参与E27裁决。
+
+正式产物 `runs/ajae/e27_normal_control_hits.npz` 大小17,437字节，SHA-256为 `7b11c16c14097ed87e349c41b2e4c9d314e854a1f550dbaa6247d901c7793929`。E27 PASS允许的结论限定为：**在return rejection关闭时，正式normal-control几何路径能对当前4个active类别的真实凸包模板返回正确的最近正交点、有限外向法向和对象身份。** 该结果不检验anomaly-proxy求交、概率抽样、强度或与native return的最终竞争；它们仍由E28–E35顺序检验。
+
 ## E28｜anomaly-proxy 几何命中
 
 与 E27 相同，固定256个 schema 7 fixture，覆盖 family、primitive count、尺寸与2.5–50 m。target ray 穿过已知严格内部 witness，另有 miss rays。
