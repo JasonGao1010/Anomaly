@@ -6881,9 +6881,26 @@ def _e24_worker(index: int) -> dict[str, object]:
             "world_json": world.to_json(),
             "placement_report_json": report_json,
         }
+    except PlacementError as error:
+        failure_stage = "placement_exhaustion"
+        if "shape" in locals():
+            strict_lower = shape.minimum_z_m(xy_resolution=65, z_steps=257)
+            standard_lower = shape.minimum_z_m(xy_resolution=33, z_steps=129)
+            if abs(strict_lower - standard_lower) > 0.01:
+                failure_stage = "E22_ground_contact_failure"
+        return {
+            "hard_error": 0,
+            "placement_exhaustion": 1,
+            "failure_stage": failure_stage,
+            "error": f"PlacementError: {error}",
+            "world_seed": world_seed,
+            "entity_count": entity_count,
+        }
     except Exception as error:
         return {
             "hard_error": 1,
+            "placement_exhaustion": 0,
+            "failure_stage": "hard_error",
             "error": f"{type(error).__name__}: {error}",
             "world_seed": world_seed,
             "entity_count": entity_count,
@@ -6898,8 +6915,8 @@ def _e24_arrays(records: Sequence[Mapping[str, object]]) -> dict[str, np.ndarray
         "entity_count": values("entity_count", np.int8, 0),
         "proposal_count": values("proposal_count", np.int16, 0),
         "pair_rejections": values("pair_rejections", np.int16, 0),
-        "validation_errors": values("validation_errors", np.int16, 1),
-        "final_pair_penetrations": values("final_pair_penetrations", np.int16, 1),
+        "validation_errors": values("validation_errors", np.int16, 0),
+        "final_pair_penetrations": values("final_pair_penetrations", np.int16, 0),
         "world_hash": values("world_hash", "S64", ""),
         "world_json": np.asarray(
             [str(item.get("world_json", "")).encode() for item in records]
@@ -6908,6 +6925,8 @@ def _e24_arrays(records: Sequence[Mapping[str, object]]) -> dict[str, np.ndarray
             [str(item.get("placement_report_json", "")).encode() for item in records]
         ),
         "hard_error_code": values("hard_error", np.uint8, 1),
+        "placement_exhaustion_code": values("placement_exhaustion", np.uint8, 0),
+        "failure_stage": values("failure_stage", "U64", ""),
         "error_message": values("error", "U512", ""),
     }
 
@@ -6960,11 +6979,15 @@ def run_e24_qualification(
     )
     first = runs[0]
     hard_errors = int(np.count_nonzero(first["hard_error_code"]))
+    placement_exhaustions = int(
+        np.count_nonzero(first["placement_exhaustion_code"])
+    )
     validation_errors = int(np.sum(first["validation_errors"]))
     final_pair_penetrations = int(np.sum(first["final_pair_penetrations"]))
     completed = int(np.count_nonzero(first["world_hash"] != b""))
     passed = (
         fixture_errors == 0 and completed == 512 and hard_errors == 0
+        and placement_exhaustions == 0
         and validation_errors == 0 and final_pair_penetrations == 0
         and reproduced
     )
@@ -6976,6 +6999,7 @@ def run_e24_qualification(
         "worlds": 512,
         "completed": completed,
         "hard_errors": hard_errors,
+        "placement_exhaustions": placement_exhaustions,
         "validation_errors": validation_errors,
         "final_pair_penetrations": final_pair_penetrations,
         "elementwise_reproduced": reproduced,
