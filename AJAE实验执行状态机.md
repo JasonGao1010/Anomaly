@@ -3007,7 +3007,7 @@ normal-control 是否来自真实 train/206 正常实例，并且只被放到基
 
 **执行预检与确定性流冻结**
 
-train/206全部449帧的正式预检得到256个模板：car=10、truck=18、other-vehicle=20、person=30各64个，均为active class；bicycle=11、motorcycle=15、bicyclist=31、motorcyclist=32为 `inactive_unobservable_class`。两个broad group均active，模板身份唯一数为256，按canonical模板JSON身份顺序形成的library hash为 `de5dfd765ac7d4fe4bb4644c40ecafdd80cdc31a3d0b6fc4fccd8e84a9fd906b`。
+train/206全部449帧的正式预检得到256个模板：car=10、truck=18、other-vehicle=20、person=30各64个，均为active class；bicycle=11、motorcycle=15、bicyclist=31、motorcyclist=32为 `inactive_unobservable_class`。两个broad group均active，模板身份唯一数为256；按类别升序及类内稳定实例身份哈希提取顺序拼接canonical模板JSON身份后，library hash为 `de5dfd765ac7d4fe4bb4644c40ecafdd80cdc31a3d0b6fc4fccd8e84a9fd906b`。
 
 control index $i\in[0,1023]$ 的control seed固定为 $2{,}500{,}000+i$。vehicle-like与person/rider-like broad group按$i$奇偶轮转；组内active semantic按升序轮转，再按模板身份哈希顺序循环。三轴缩放由 `SeedSequence([control_seed,2501])` 独立采样 $U[0.9,1.1]$；姿态扰动由 `SeedSequence([control_seed,2502])` 采样，car/truck/other-vehicle为$U[-15^\circ,15^\circ]$，person为$U[-\pi,\pi)$；material seed为 `control_seed+2503`。support命名空间为 `E25-support-v1`，stream为control index。
 

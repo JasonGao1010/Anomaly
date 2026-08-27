@@ -1849,14 +1849,14 @@
           "design_authorities": ["AJAE新主线方案.md", "AJAE实验执行状态机.md"],
           "design_authority_sha256": {
             "main_plan": "c32924054e324c289056ba561205407a4d4e4f9dbbec1ba44c3c18b2b8a07071",
-            "state_machine": "41b2468866527959f1023ef11bec92cf8dff4ef7281df1756fafaaa65911797e"
+            "state_machine": "fbf1a788e6a8ca47e46ee786d44d1e06e4fd7e45bbdbd3b8be35de55770c025c"
           },
           "implementation_identity": {
-            "commit": "e98e5d2aae93669c96c34cd4c9046171f3e747b6",
-            "render_sha256": "69f9be935de178004cee8da812ac2f1a5a4d90240af8b3692e25eaac349a5a29",
+            "commit": "78b3d13cb417012375f9192551a5579b14252220",
+            "render_sha256": "3f0402d35ac8fb780fa7089d50268ef9ed93a9b7d5ed8f61c8a1829f613b9c49",
             "train_sha256": "eb30a33b97d7422671aad0fd87f0e3efd2626e4235c9db1bf91ef13566dca53d",
-            "tests_sha256": "f886441efc726305d84a2331574916b920d056bba40d908918b8a732afd76d9a",
-            "regression": "43 passed in 99.10 seconds",
+            "tests_sha256": "adee25a357556e68c2227908d03989a0e812c712711adf67f9d3a871d8ab4936",
+            "regression": "44 passed in 100.58 seconds",
             "old_dev_boundary": "dev.json remains schema-4/world-v2 historical data and is rejected; it is not migrated"
           },
           "common_pipeline": {
@@ -1990,7 +1990,7 @@
             }
           },
           "E25": {
-            "status": "DESIGN FROZEN; observable-template precheck PASS; execution implementation pending",
+            "status": "DESIGN AND EXECUTION FROZEN; observable-template precheck PASS; formal run pending",
             "template_minimum_points": 32,
             "active_class_minimum_templates": 4,
             "active_template_total_minimum": 32,
@@ -2016,7 +2016,10 @@
             "trajectory_tangent": "central difference of adjacent lidar world positions for internal frames, one-sided at endpoints, projected to world xy; degenerate fallback is the frame world-x pose axis projected to xy",
             "template_axis": "deterministic xy PCA principal eigenvector with first nonzero dominant component made positive, pre-rotated to local +x",
             "mixed_fixture": "accepted control index 0 plus first E22-qualified proxy from shape seed stream 5000000+3072*q using E25-mixed-fixture-v1 support stream and the same E22/E23/E24 pair path",
-            "pass_conditions": ["active-class precheck passes", "semantic violations=0", "template, scale, pose and transform errors=0", "1024/1024 accepted within 128 proposals", "mixed fixture passes E24", "two runs elementwise identical"]
+            "pass_conditions": ["active-class precheck passes", "semantic violations=0", "template, scale, pose and transform errors=0", "1024/1024 accepted within 128 proposals", "mixed fixture passes E24", "two runs elementwise identical"],
+            "implementation_commit": "78b3d13cb417012375f9192551a5579b14252220",
+            "command": "python -m src.render qualify-e25 --data-root /home/jasongao/Data/STU --support-pool runs/ajae/e21_v4_support_pool.npz --output runs/ajae/e25_normal_control.npz --processes 24",
+            "artifact": "runs/ajae/e25_normal_control.npz"
           },
           "E26": {
             "status": "DESIGN FROZEN; locked until E25 PASS",
