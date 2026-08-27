@@ -12538,6 +12538,10 @@ def run_e45a_v2_qualification(
     global _E45A2_TARGET_UNITS, _E45A2_SUPPORT_ROWS
     _E45A2_TARGET_UNITS = targets
     _E45A2_SUPPORT_ROWS = _e45a2_support_streams(sequence, pool, targets, 64)
+    # Each targeted task reads one frame; retaining the training cache wastes RAM.
+    sequence._cache_frames = 1
+    sequence._frames.clear()
+    gc.collect()
     output = Path(output_path).expanduser().resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
     history: list[dict[str, object]] = []
