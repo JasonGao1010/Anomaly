@@ -1156,7 +1156,7 @@
           }
         },
         "E20a-v3": {
-          "status": "EXECUTION FROZEN",
+          "status": "PASS; schema 7 geometry coverage qualified",
           "question": "Does qualified schema 7 cover all eleven preregistered continuous-geometry regions when asymmetry uses the independently supported 2^17/2^19 budgets?",
           "scope_principle": "auxiliary descriptor ideal convergence no longer spawns an indefinite blocking branch; correctness, geometry credibility, leakage, supervision value, temporal gain, safety, and real-OOD transfer remain blocking scientific risks",
           "sample": {"generator": "unchanged qualified schema 7 default ShapeSpec.sample_with_report(seed)", "seeds": "0-8191 inclusive", "accepted_objects": 8192, "independent_runs": 2, "cpu_processes": 24, "placement": false, "formal_material": false},
@@ -1181,12 +1181,40 @@
           "frozen_render_source_sha256": "ccdddb12b96104360deb245dabffcf8449c9e568c70dd7202cdc3e850b5413d9",
           "runner_sha256": "c5954ed51f9801a868f305eea2652b6cd7a67611d7a045c7bf578e5f64d59005",
           "planned_artifact": "runs/ajae/e20a_v3_schema7_geometry_coverage.npz",
-          "criteria_frozen_before_formal_run": true
+          "criteria_frozen_before_formal_run": true,
+          "formal_result": {
+            "date": "2026-08-27",
+            "protocol_commit": "f4350d58d1ee2c910225f1436fd8101a43d83d19",
+            "passed": true,
+            "sample_count": 8192,
+            "full_regeneration_runs": 2,
+            "identity_and_unchanged_descriptor_exact_match_to_E20a_v2": true,
+            "fixtures_pass": true,
+            "numeric_domain_pass": true,
+            "reproducible": true,
+            "asymmetry_unresolved": 1,
+            "asymmetry_unresolved_maximum": 81,
+            "unresolved_seed_and_values": {"seed": 3081, "A17": 0.19992087103156353, "A19": 0.16823165641512156, "absolute_difference": 0.031689214616441974},
+            "unresolved_causes": {"standard_interior_below_128": 0, "strict_interior_below_512": 0, "nonfinite": 0, "absolute_standard_strict_difference_above_0.03": 1},
+            "minimum_standard_inside": 6372,
+            "minimum_strict_inside": 25365,
+            "asymmetry_difference_median_q95_q99_maximum": [0.001188198298830767, 0.006440462051511541, 0.010910114201940553, 0.031689214616441974],
+            "region_counts": {"small": 2545, "medium": 2903, "large": 2744, "blocky": 3475, "flat": 1030, "elongated": 722, "asymmetric": 2803, "single_primitive": 1985, "multi_primitive": 6207, "weak_deformation": 1220, "strong_deformation": 1893},
+            "primitive_counts_1_to_5": [1985, 1740, 1541, 1499, 1427],
+            "descriptor_ranges": {"diameter_m": [0.20253187522404575, 2.999849815614289], "r21": [0.1916887181251575, 0.9998535104706826], "r31": [0.11769986137627449, 0.9981032878804145], "asymmetry_strict": [0.0003571601071437595, 0.5737997806171424]},
+            "run_seconds": [525.2880537629972, 531.9286682789971],
+            "array_hashes": ["14d534505ba4f80405f7333ce1b84b79f8fbee740ef7220b7378750d9bdba1af", "14d534505ba4f80405f7333ce1b84b79f8fbee740ef7220b7378750d9bdba1af"],
+            "summary_hash": "a621214bbf650409b6b0f62c3d892edfc1b96d4f104d195d5ef857bcaf032c5d",
+            "artifact": "runs/ajae/e20a_v3_schema7_geometry_coverage.npz",
+            "artifact_bytes": 2400528,
+            "artifact_sha256": "1dda79688dc76020f19ae9a5e839856eb50e27db4cb8dd0e4b197e2310aa9ef4",
+            "decision": "schema 7 geometry coverage is qualified; end asymmetry-estimator development and unlock the one-time E20-V1 blind human visual sanity check"
+          }
         }
       },
       "schema7_blinded_geometry_review": {
         "version": "E20-V1",
-        "status": "LOCKED until E20a-v3 PASS",
+        "status": "UNLOCKED after E20a-v3 PASS; execution requires the frozen 192-object panels and at least two independent human reviewers",
         "sample": {"source": "the future passing full E20a qualification set", "hash_deterministic_total": 192, "strata_each": {"flat": 32, "elongated": 32, "blocky": 32, "asymmetric": 32, "near_metric_boundary": 32, "uniform_full_distribution": 32}, "single_multi_balance": "approximately one half each when feasible"},
         "display": ["front", "side", "top", "fixed perspective", "same physical scale", "same camera", "same lighting", "same background", "hide family seed metrics and PASS regions"],
         "reviewers_minimum": 2,

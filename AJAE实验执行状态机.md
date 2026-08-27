@@ -2545,6 +2545,18 @@ E20a-v3 只把标准/严格不对称性预算从 E20a-v2 的 $2^{13}/2^{15}$ 改
 
 提交前仅对 seed 0、4095、8191 重建并检查 shape/report identity 与非不对称性描述量，没有计算或打印 $A_{17}/A_{19}$。冻结 `src/render.py` SHA-256 为 `ccdddb12b96104360deb245dabffcf8449c9e568c70dd7202cdc3e850b5413d9`，运行器 SHA-256 为 `c5954ed51f9801a868f305eea2652b6cd7a67611d7a045c7bf578e5f64d59005`，预定产物为 `runs/ajae/e20a_v3_schema7_geometry_coverage.npz`。E20-V1、E20b-lite 与 E21 当前继续锁定。
 
+**E20a-v3 正式结果：PASS**
+
+E20a-v3 在预注册提交 `f4350d58d1ee2c910225f1436fd8101a43d83d19` 后按冻结协议完成两遍 24 进程正式运行，两遍分别用时 525.2880537629972 s 与 531.9286682789971 s。每遍都从默认 schema 7 入口完整重建 seed 0–8191 的 8,192 个 accepted objects；shape/report hash、连续 AABB 以及全部未修改的尺寸、轴比、形变强度、union spread 和非不对称区域数组与 E20a-v2 逐元素一致。三个 fixture、数值域和身份检查全部通过。
+
+新的 $2^{17}/2^{19}$ 测量下只有 1/8,192 个对象 unresolved，远低于冻结上限81。唯一对象为 seed 3081，$A_{17}=0.19992087103156353$、$A_{19}=0.16823165641512156$，绝对差 0.031689214616441974；不存在内部点不足或非有限值。标准/严格层最少内部点为 6,372/25,365。全体层差的 median/$Q_{0.95}$/$Q_{0.99}$/maximum 为 0.001188198298830767/0.006440462051511541/0.010910114201940553/0.031689214616441974。
+
+11 个最终连续几何区域全部超过128：small 2,545、medium 2,903、large 2,744、blocky 3,475、flat 1,030、elongated 722、asymmetric 2,803、single primitive 1,985、multi primitive 6,207、weak deformation 1,220、strong deformation 1,893。primitive count 1–5 为 1,985/1,740/1,541/1,499/1,427，全部超过512。因此 schema 7 geometry coverage 正式取得资格；该结论来自最终连续几何，不使用 `shape_family` 代替。
+
+两遍科学数组哈希完全相同，均为 `14d534505ba4f80405f7333ce1b84b79f8fbee740ef7220b7378750d9bdba1af`；摘要哈希为 `a621214bbf650409b6b0f62c3d892edfc1b96d4f104d195d5ef857bcaf032c5d`。正式产物 `runs/ajae/e20a_v3_schema7_geometry_coverage.npz` 为 2,400,528 bytes，SHA-256 为 `1dda79688dc76020f19ae9a5e839856eb50e27db4cb8dd0e4b197e2310aa9ef4`。独立只读复核重新确认了与 E20a-v2 的未修改数组一致性、唯一 unresolved、全部区域/primitive-count 计数、科学数组哈希、摘要哈希和产物哈希。
+
+E20a-v3 PASS 结束不对称性测量器支线，不再增加 D5 或其他收敛资格实验。E20-V1 现已解锁，E20b-lite 与 E21 仍锁定。E20-V1 需要冻结的192对象面板和至少两名相互独立的人类审查者；自动程序或同一审查者重复评分不能冒充两名独立人类。
+
 
 ### E20-V1｜盲法人工几何审查（LOCKED）
 
