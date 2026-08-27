@@ -3411,6 +3411,10 @@ normal-control与anomaly-proxy的“原生空槽机会→几何命中→回波�
 
 直接读取E39共享trace的256个候选、三来源和五帧，共每来源1,280个entity-frame；逐项保存geometry hits、accepted-before-occlusion、visible returns、距离、距离箱和冻结 $N_{vis}$ 层。$N_{vis}=0$ 单独计数，不错误并入四个正可见层；PASS要求非负、accepted不超过geometry、visible不超过accepted、距离与距离箱有效，并满足“零可见计数+四层计数=1,280”。normal-control与anomaly-proxy各须覆盖至少三个正可见层；以support semantic×range bin×$N_{vis}$ layer统计三来源共同非空层，至少一个共同层作为E45的初步非空匹配可行性，完整匹配仍由E45裁决。两遍统计必须逐元素一致。实现提交 `e1af043e434f8958b8d7e33b8d22a79ad200f4b9`，`src/render.py` SHA-256为 `9ffcbfd10ebb5f3faf93b68d96677dff6c53f86a1b4c304ec25343b7d4971c64`；46项完整回归通过。正式命令为 `python -m src.render qualify-e42 --e39-artifact runs/ajae/e39_per_range_return.npz --output runs/ajae/e42_nvis_feasibility.npz`。
 
+**E42 正式结果：PASS（E42关闭，E43解锁）**
+
+每来源1,280个entity-frame的定义与计数均守恒。real-normal四层计数为0、10、433、837，零可见0；normal-control为51、223、402、597，零可见7；anomaly-proxy为68、200、356、652，零可见4。两类生成来源均覆盖四个正可见层；support semantic×range bin×$N_{vis}$ layer中三来源共同非空层为12个。定义错误、计数错误、覆盖错误和初步匹配错误均为0，两遍逐元素一致，总用时0.001445秒。科学数组哈希 `8de2b629f5dd6d6ea1202f546826300c36cd68e5bd2ddf7f4772e859b1aac3d5`；产物 `runs/ajae/e42_nvis_feasibility.npz` 大小50,075字节，SHA-256为 `19da6a5c347768e7861c75bac2e62cc2dfe0ada7d4ff294306a5ecca797f791e`。完整匹配资格仍由E45裁决。
+
 ## E43｜连续帧可见点数变化
 
 同一静止实体逐帧结果必须由world/frame稳定身份决定。PASS：重复渲染零变化；不存在window导致的随机闪烁；$N_{vis}$变化率和V分层有限。真实几何导致的出现/消失只描述。PASS → E44。

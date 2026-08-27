@@ -1820,7 +1820,7 @@ $$
 
 ---
 
-# 18. 当前状态（当前工作区：E42执行冻结）
+# 18. 当前状态（当前工作区：E42 PASS）
 
 截至当前工作区权威提交，已经完成：
 
@@ -1883,7 +1883,7 @@ E40已正式通过：1,656,861条强度记录的身份、分箱、有限性与E3
 
 E41已正式通过：两类生成来源的空槽机会、几何命中、回波接受和最终新增关系链错误均为0，均实际覆盖最终新增与回波概率拒绝分支，两遍统计逐元素一致。E41关闭，E42解锁；来源间比例差异继续只作描述。
 
-E42已冻结并直接读取E39共享trace，逐entity-frame复算geometry、acceptance、visible、距离、距离箱和四个正可见层，同时单独保留零可见计数并检查三来源共同分层。实现已通过46项完整回归，正式结果尚未产生。
+E42已正式通过：每来源1,280个entity-frame的定义和计数守恒；normal-control与anomaly-proxy均覆盖四个正可见层，三来源共有12个共同非空的support semantic×range bin×$N_{vis}$层，两遍逐元素一致。E42关闭，E43解锁；完整匹配仍由E45裁决。
 
 当前可成立的局部结论是：
 
@@ -1899,7 +1899,7 @@ E42已冻结并直接读取E39共享trace，逐entity-frame复算geometry、acce
 当前执行节点为：
 
 $$
-\boxed{E41\ \text{PASS};\quad E42\ \text{FROZEN AND RUNNING};\quad E43\ \text{LOCKED}}
+\boxed{E41\ \text{PASS};\quad E42\ \text{PASS};\quad E43\ \text{UNLOCKED}}
 $$
 
 E23与E24-v2已按冻结设计通过，当前顺序进入：
@@ -1908,7 +1908,7 @@ $$
 E23\rightarrow E24\rightarrow E25\rightarrow E26
 $$
 
-E27–E41已关闭；E36-v1 FAIL按设计冲突保留，当前正在执行E42，E43尚未启动。
+E27–E42已关闭；E36-v1 FAIL按设计冲突保留，当前顺序进入E43。
 
 因此当前整体判断仍是：
 
