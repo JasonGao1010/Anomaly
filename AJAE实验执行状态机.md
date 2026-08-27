@@ -3359,6 +3359,14 @@ E38保存每个seed、来源和帧的128 beam opportunity与return count，以�
 
 实现提交为 `9a0347ca69f0baa1e416e64049f623858cf5e1e4`，真实支撑分配修订提交为 `deee0d1f38357b189e36d16449639e1b8013fa04`；最终 `src/render.py` SHA-256为 `100dbb22f2d307b8bfc32d0675b6c73d3efdde04b39ec57997b865707b9862a3`。46项完整回归通过，用时97.39秒。正式命令为 `python -m src.render qualify-e38 --data-root /home/jasongao/Data/STU --e25-artifact runs/ajae/e25_normal_control.npz --calibration runs/ajae/calibration.pt --support-pool-output runs/ajae/gate1_201_support_pool.npz --candidate-bank-output runs/ajae/gate1_candidate_bank_256.npz --output runs/ajae/e38_per_beam_return.npz --processes 24`。
 
+**E38 正式结果：PASS（E38关闭，E39解锁）**
+
+train/201支撑池包含1,193,969个合格区域，覆盖636个中心帧；语义40为612,018个、语义48为581,951个、语义49为0个。支撑池构建用时83.328154秒，科学数组哈希 `a5bd7007c508d4b411f84bcac7c26b418f93d46837d1da0774637bb15406f490`；产物大小84,256,915字节，SHA-256为 `fc3646fbc145cdc29d2cf203835a3e0018bacbc6eaf714e091d21f7b93bfaf50`。
+
+统一候选银行从1,635个持续五帧且具有合法支撑语义的真实正常候选中完成256/256个seed，覆盖183个不同中心帧；support semantic 40与48分别为174和82，全部在attempt 0完成，构建错误0。候选银行科学数组哈希 `af07e64a90d5a16782d5f2a26069ba741898bdbfd7cee59a315a04e9b76ba4bf`；产物大小1,090,511字节，SHA-256为 `16db45363c1b1f670bcca60ca253811ca63a224349a8e9c2f3dacde1a2239d11`。
+
+real-normal、normal-control、anomaly-proxy各保存1,280个entity-frame groups。三来源总opportunity分别为1,007,417、468,954和456,804，总return分别为742,546、462,626和451,689；return超过opportunity的计数为0，非有限率、区间或匹配字段为0，两遍24进程逐元素一致，用时225.181363秒和224.414734秒。科学数组哈希 `1fa5021b268078f386ce3393d77c219c111717c585b74d61542a34c7e94a875e`；产物 `runs/ajae/e38_per_beam_return.npz` 大小209,405字节，SHA-256为 `60bcffc4fb8c55cd9a2820795380621fb7162119714b95db5c485020653e7108`。来源间逐beam数值差异只作描述，未在E38裁决来源泄漏。
+
 ## E39｜per-range 回波率审计
 
 固定 bins $[2.5,10),[10,20),[20,30),[30,40),[40,50]$。PASS：三来源计数守恒、有限；每个来源在前四 bins均有entity-frame观测，40–50 m不足只报告；两遍一致。PASS → E40。

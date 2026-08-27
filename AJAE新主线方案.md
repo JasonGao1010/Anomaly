@@ -1820,7 +1820,7 @@ $$
 
 ---
 
-# 18. 当前状态（当前工作区：E38执行冻结）
+# 18. 当前状态（当前工作区：E38 PASS）
 
 截至当前工作区权威提交，已经完成：
 
@@ -1873,6 +1873,8 @@ E37已正式通过：128个固定世界的9类slot对齐输出在串行/24进程
 
 E38及其统一候选银行已经冻结：train/201帧4–681使用E21-v4同一支撑区域算法；首级候选银行使用256个paired seeds，每个seed分别生成独立正常对照世界与异常代理世界，并绑定同一真实正常实体五帧单位。E38保存三来源逐entity-frame、逐beam的opportunity、return count/rate和2,000次cluster bootstrap区间。实现通过46项完整回归，正式构建与统计尚未产生结果。
 
+E38已正式通过：201支撑池包含1,193,969个合格区域；256/256候选seed完成并覆盖183个中心帧。三来源各1,280个entity-frame groups的逐beam opportunity、return count/rate和cluster bootstrap区间全部有限且计数守恒，两遍24进程逐元素一致。E38关闭，E39解锁；逐beam来源差异没有在本节点转化为来源泄漏结论。
+
 当前可成立的局部结论是：
 
 > **schema 7 能合法、确定且高效地产生覆盖冻结几何区域的合成异常代理；这些对象可以从 train/206 的合格支撑池采样，以冻结连续落地规则达到 99% 接触/埋地资格，并能由同一权威放置接口拒绝与 train/206 实际观测非地面回波发生超过 5 cm 深穿透的位置。**
@@ -1887,7 +1889,7 @@ E38及其统一候选银行已经冻结：train/201帧4–681使用E21-v4同一�
 当前执行节点为：
 
 $$
-\boxed{E36\text{-v1 FAIL retained};\quad E37\ \text{PASS};\quad E38\ \text{FROZEN AND RUNNING};\quad E39\ \text{LOCKED}}
+\boxed{E36\text{-v1 FAIL retained};\quad E37\ \text{PASS};\quad E38\ \text{PASS};\quad E39\ \text{UNLOCKED}}
 $$
 
 E23与E24-v2已按冻结设计通过，当前顺序进入：
@@ -1896,7 +1898,7 @@ $$
 E23\rightarrow E24\rightarrow E25\rightarrow E26
 $$
 
-E27–E37已关闭；E36-v1 FAIL按设计冲突保留，当前正在执行E38，E39尚未启动。
+E27–E38已关闭；E36-v1 FAIL按设计冲突保留，当前顺序进入E39。
 
 因此当前整体判断仍是：
 

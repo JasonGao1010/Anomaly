@@ -2131,7 +2131,7 @@
       }
     },
     "renderer_mechanical_qualification": {
-      "status": "E27-E37 PASS; E28-v1 and E36-v1 FAIL retained; E38 execution frozen",
+      "status": "E27-E38 PASS; E28-v1 and E36-v1 FAIL retained; E39 unlocked",
       "layer_boundaries": {"E27-E28": "direct geometry outputs only", "E29": "return probability and deterministic acceptance decision only", "E30-E31": "accepted returns", "E32-E33": "nearest-return occlusion competition"},
       "E27": {
         "question": "Does the formal geometry path return the correct nearest convex-hull hit, outward finite normal and object ID for active normal-control templates when return rejection is disabled?",
@@ -2498,7 +2498,8 @@
         "command": "python -m src.render qualify-e38 --data-root /home/jasongao/Data/STU --e25-artifact runs/ajae/e25_normal_control.npz --calibration runs/ajae/calibration.pt --support-pool-output runs/ajae/gate1_201_support_pool.npz --candidate-bank-output runs/ajae/gate1_candidate_bank_256.npz --output runs/ajae/e38_per_beam_return.npz --processes 24",
         "artifact": "runs/ajae/e38_per_beam_return.npz",
         "pass_conditions": ["all rates, intervals and matching fields finite", "return counts do not exceed opportunities", "all three sources have nonzero returns", "two complete 24-process E38 runs are elementwise identical"],
-        "distribution_difference_policy": "descriptive only; source leakage is adjudicated at E46 after E45 matching"
+        "distribution_difference_policy": "descriptive only; source leakage is adjudicated at E46 after E45 matching",
+        "result": {"passed": true, "support_pool": {"pool_size": 1193969, "covered_center_frames": 636, "semantic_counts": {"40": 612018, "48": 581951, "49": 0}, "elapsed_seconds": 83.32815368099546, "scientific_array_sha256": "a5bd7007c508d4b411f84bcac7c26b418f93d46837d1da0774637bb15406f490", "artifact_bytes": 84256915, "artifact_sha256": "fc3646fbc145cdc29d2cf203835a3e0018bacbc6eaf714e091d21f7b93bfaf50"}, "candidate_bank": {"completed": 256, "errors": 0, "real_candidate_count": 1635, "center_frame_count": 183, "support_semantic_counts": {"40": 174, "48": 82}, "maximum_attempt": 0, "elapsed_seconds": 116.51954507900518, "scientific_array_sha256": "af07e64a90d5a16782d5f2a26069ba741898bdbfd7cee59a315a04e9b76ba4bf", "artifact_bytes": 1090511, "artifact_sha256": "16db45363c1b1f670bcca60ca253811ca63a224349a8e9c2f3dacde1a2239d11"}, "entity_frame_groups_per_source": 1280, "total_opportunities": [1007417, 468954, 456804], "total_returns": [742546, 462626, 451689], "conservation_errors": 0, "finite_errors": 0, "elementwise_reproduced": true, "run_seconds": [225.1813629649987, 224.414733868005], "scientific_array_sha256": "1fa5021b268078f386ce3393d77c219c111717c585b74d61542a34c7e94a875e", "artifact_bytes": 209405, "artifact_sha256": "60bcffc4fb8c55cd9a2820795380621fb7162119714b95db5c485020653e7108", "claim_limit": "E38 establishes finite conserved per-beam statistics and candidate coverage only; ordinary source differences remain descriptive until matched E46."}
       }
     },
     "world_types": {"pure_normal": 0.2, "control_only": 0.2, "mixed": 0.4, "anomaly_only": 0.2},
