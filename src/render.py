@@ -12265,6 +12265,389 @@ def run_e45b_qualification(
     )
 
 
+_E45A2_TARGET_UNITS: dict[str, np.ndarray] = {}
+_E45A2_SUPPORT_ROWS: tuple[np.ndarray, ...] = ()
+
+
+def _e45a2_real_targets(units: Mapping[str, np.ndarray]) -> dict[str, np.ndarray]:
+    """Freeze the unique valid real units already exposed by E45-v2."""
+    flat = {
+        name: np.asarray(value).reshape((-1,) + value.shape[2:])
+        for name, value in units.items()
+    }
+    covariates = _e45_covariates(flat)
+    valid = (
+        (flat["source"] == 0) & (flat["point_count"] > 0)
+        & (flat["range_bin"] >= 0) & (flat["range_bin"] < 4)
+        & (flat["azimuth_sector"] >= 0) & np.isfinite(covariates).all(axis=1)
+    )
+    candidates = np.flatnonzero(valid)
+    candidates = candidates[np.argsort(flat["unit_hash"][candidates], kind="stable")]
+    _, first = np.unique(flat["unit_hash"][candidates], return_index=True)
+    selected = candidates[np.sort(first)]
+    return {name: flat[name][selected] for name in _E45_UNIT_FIELDS}
+
+
+def _e45a2_support_streams(
+    sequence: object, pool: QualifiedSupportPool,
+    targets: Mapping[str, np.ndarray], maximum_proposals: int,
+) -> tuple[np.ndarray, ...]:
+    """Order audit placements by frozen target range, sector, and support."""
+    streams: list[np.ndarray] = []
+    frame_cache: dict[int, tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
+    for target in range(targets["source"].size):
+        frame_id = int(targets["frame_id"][target])
+        cached = frame_cache.get(frame_id)
+        if cached is None:
+            rows = np.flatnonzero(np.abs(pool.frames - frame_id) <= 2)
+            frame = sequence.source_frame(frame_id)
+            rotation, translation = _pose(frame)
+            sensor = (pool.anchors_world_m[rows] - translation) @ rotation
+            ranges = np.linalg.norm(sensor, axis=1)
+            sectors = (
+                np.floor(
+                    (np.arctan2(sensor[:, 1], sensor[:, 0]) % (2.0 * math.pi))
+                    / (math.pi / 4.0)
+                ).astype(np.int8) % 8
+            )
+            cached = rows, ranges, sectors
+            frame_cache[frame_id] = cached
+        rows, ranges, sectors = cached
+        eligible = (
+            (pool.semantics[rows] == targets["support_semantic"][target])
+            & (_gate1_range_bin(ranges) == targets["range_bin"][target])
+            & (sectors == targets["azimuth_sector"][target])
+        )
+        selected = rows[eligible]
+        distance_error = np.abs(
+            ranges[eligible] - float(targets["median_distance_m"][target])
+        )
+        order = np.lexsort((pool.selection_hashes[selected], distance_error))
+        streams.append(selected[order[:maximum_proposals]].astype(np.int64))
+    return tuple(streams)
+
+
+def _e45a2_worker(task: tuple[int, int]) -> dict[str, object]:
+    target, proposal = task
+    pool, obstacles = _GATE1_POOL, _GATE1_OBSTACLES
+    sequence, grid, sensor = _GATE1_SEQUENCE, _GATE1_RAY_GRID, _GATE1_SENSOR
+    if (
+        pool is None or obstacles is None or sequence is None or grid is None
+        or sensor is None or not _E45A2_TARGET_UNITS or not _E45A2_SUPPORT_ROWS
+    ):
+        raise RuntimeError("E45A-v2 targeted fixtures are not initialized")
+    if proposal >= _E45A2_SUPPORT_ROWS[target].size:
+        return {"target": target, "proposal": proposal, "status": 0}
+    row = int(_E45A2_SUPPORT_ROWS[target][proposal])
+    seed = 4_500_000 + 128 * target + proposal
+    try:
+        support_semantic = int(_E45A2_TARGET_UNITS["support_semantic"][target])
+        source_template = _gate1_template(seed + 1, support_semantic)
+        scale = np.random.default_rng(
+            np.random.SeedSequence([seed + 2, 2501])
+        ).uniform(0.9, 1.1, size=3)
+        shape = _aligned_scaled_template(source_template, scale)
+        limit = math.pi if shape.raw_semantic_id == 30 else math.radians(15.0)
+        perturbation = float(
+            np.random.default_rng(np.random.SeedSequence([seed + 3, 2502])).uniform(
+                -limit, limit
+            )
+        )
+
+        def yaw_for_support(patch: SupportPatch) -> float:
+            return float(_GATE1_TRAJECTORY_YAW[patch.frame_id]) + perturbation
+
+        material_seed = seed + 4
+        item, placement = place_object(
+            shape, MaterialSpec.sample(material_seed), pool, obstacles,
+            object_id=1, label="normal-control",
+            proposal_namespace="E45A-v2-targeted-control",
+            proposal_stream=seed, yaw_rad=perturbation,
+            material_seed=material_seed, yaw_seed=seed + 3,
+            template_identity=_normal_template_identity(source_template),
+            proposal_rows=(row,), maximum_candidates=1,
+            grounding_eligibility=qualify_grounding(shape),
+            yaw_for_support=yaw_for_support,
+        )
+        validation_error = int(
+            placement.support_semantic != support_semantic
+            or not qualify_grounding(item.shape).passed
+            or observed_normal_collision(item, obstacles)[0]
+            or placement.accepted_proposal != 0
+            or not isinstance(item.shape, NormalTemplateShape)
+        )
+        if validation_error:
+            return {
+                "target": target, "proposal": proposal, "status": 6,
+                "support_pool_index": placement.support_pool_index,
+            }
+        frame_id = int(_E45A2_TARGET_UNITS["frame_id"][target])
+        center_frame = int(_E45A2_TARGET_UNITS["center_frame"][target])
+        frame = sequence.source_frame(frame_id)
+        world = WorldSpec(seed, 201, (item,))
+        geometry, _, _, rendered = _gate1_single_object_trace(frame, world, grid, sensor)
+        returned = np.asarray(rendered.normal_control_mask, dtype=np.bool_)
+        official = np.asarray(grid.official_ranges(rendered.source))
+        returned = returned & (official >= 2.5) & (official <= 50.0)
+        unit = _e45_unit_record(
+            frame, grid, 1, seed, center_frame, 0, 0, support_semantic,
+            geometry, returned, rendered.source,
+        )
+        if int(unit["point_count"]) == 0:
+            return {
+                "target": target, "proposal": proposal, "status": 2,
+                "support_pool_index": placement.support_pool_index,
+            }
+        target_covariates = _e45_covariates({
+            name: np.asarray(_E45A2_TARGET_UNITS[name][target]).reshape(1)
+            for name in (
+                "median_distance_m", "median_beam", "Nvis", "O_hat", "local_density"
+            )
+        })[0]
+        control_covariates = _e45_covariates({
+            name: np.asarray(unit[name]).reshape(1)
+            for name in (
+                "median_distance_m", "median_beam", "Nvis", "O_hat", "local_density"
+            )
+        })[0]
+        exact = (
+            int(unit["support_semantic"]) == support_semantic
+            and int(unit["range_bin"]) == int(_E45A2_TARGET_UNITS["range_bin"][target])
+            and int(unit["azimuth_sector"])
+            == int(_E45A2_TARGET_UNITS["azimuth_sector"][target])
+        )
+        covariate_difference = np.abs(control_covariates - target_covariates)
+        if not exact:
+            status = 3
+        else:
+            caliper = np.asarray((2.0, 4.0, 0.25, 0.10, 0.25), dtype=np.float64)
+            status = 5 if np.all(covariate_difference <= caliper) else 4
+        return {
+            "target": target, "proposal": proposal, "status": status,
+            "support_pool_index": placement.support_pool_index,
+            "covariate_difference": covariate_difference,
+            "unit": unit if status == 5 else None,
+        }
+    except PlacementError:
+        return {"target": target, "proposal": proposal, "status": 1, "support_pool_index": row}
+    except Exception as error:
+        return {
+            "target": target, "proposal": proposal, "status": 7,
+            "support_pool_index": row,
+            "error": f"{type(error).__name__}: {error}",
+        }
+
+
+def _e45a2_candidate_cache(
+    results: Sequence[Mapping[str, object]], targets: int, proposal_limit: int,
+    output_path: Path, elapsed_seconds: float,
+) -> tuple[dict[str, np.ndarray], dict[str, object]]:
+    status = np.zeros((targets, proposal_limit), dtype=np.uint8)
+    support_index = np.full((targets, proposal_limit), -1, dtype=np.int64)
+    covariate_difference = np.full((targets, proposal_limit, 5), np.nan, dtype=np.float64)
+    eligible = [result for result in results if int(result["status"]) == 5]
+    for result in results:
+        target = int(result["target"])
+        proposal = int(result["proposal"])
+        status[target, proposal] = int(result["status"])
+        support_index[target, proposal] = int(result.get("support_pool_index", -1))
+        if "covariate_difference" in result:
+            covariate_difference[target, proposal] = result["covariate_difference"]
+    units = {
+        name: np.stack([result["unit"][name] for result in eligible])
+        if eligible else np.empty((0,) + np.asarray(_E45A2_TARGET_UNITS[name][0]).shape,
+                                  dtype=np.asarray(_E45A2_TARGET_UNITS[name]).dtype)
+        for name in _E45_UNIT_FIELDS
+    }
+    arrays = {
+        **units,
+        "eligible_target_index": np.asarray(
+            [result["target"] for result in eligible], dtype=np.int32
+        ),
+        "eligible_proposal_index": np.asarray(
+            [result["proposal"] for result in eligible], dtype=np.int16
+        ),
+        "proposal_status": status,
+        "proposal_support_pool_index": support_index,
+        "proposal_covariate_difference": covariate_difference,
+    }
+    status_count = np.bincount(status.reshape(-1), minlength=8).astype(np.int64)
+    metadata = {
+        "experiment": "E45A-v2-targeted-control-bank",
+        "passed": int(status_count[7]) == 0,
+        "target_units": targets,
+        "proposal_limit": proposal_limit,
+        "proposal_status_count_0_to_7": status_count.tolist(),
+        "eligible_controls": len(eligible),
+        "elapsed_seconds": elapsed_seconds,
+        "scientific_array_hash": _scientific_array_hash(arrays),
+    }
+    temporary = output_path.with_suffix(output_path.suffix + ".tmp.npz")
+    np.savez_compressed(
+        temporary, **arrays,
+        metadata_json=np.asarray(json.dumps(metadata, sort_keys=True, separators=(",", ":"))),
+    )
+    os.replace(temporary, output_path)
+    return arrays, metadata
+
+
+def run_e45a_v2_qualification(
+    data_root: Path | str, support_pool_path: Path | str,
+    e25_artifact_path: Path | str, calibration_path: Path | str,
+    unit_cache_path: Path | str, output_path: Path | str, *, processes: int = 24,
+) -> dict[str, object]:
+    """Build an audit-only targeted control bank and requalify E45A."""
+    if processes != 24:
+        raise RenderError("formal E45A-v2 requires exactly 24 worker processes")
+    try:
+        from .protocol import load_protocol
+        from .scene import LabelMode, STUSequence
+    except ImportError:
+        from protocol import load_protocol  # type: ignore[no-redef]
+        from scene import LabelMode, STUSequence  # type: ignore[no-redef]
+    cache_path = Path(unit_cache_path).expanduser().resolve(strict=True)
+    with np.load(cache_path, allow_pickle=False) as source:
+        cache_metadata = json.loads(str(source["metadata_json"]))
+        if (
+            cache_metadata.get("experiment") != "E45-v2-units"
+            or cache_metadata.get("passed") is not True
+            or int(cache_metadata.get("capacity", -1)) != 2048
+            or cache_metadata.get("scientific_array_hash")
+            != "a3b63d11107edb1b1dce6c052e188a92879131fe20bec5568db10275c83a6160"
+        ):
+            raise RenderError("E45A-v2 requires the frozen formal E45-v2 unit cache")
+        source_units = {name: np.asarray(source[name]) for name in _E45_UNIT_FIELDS}
+    targets = _e45a2_real_targets(source_units)
+    protocol = load_protocol(Path(__file__).resolve().parents[1] / "protocol.json")
+    sequence = STUSequence.open(
+        data_root, protocol=protocol, partition="train", sequence_id=201,
+        label_mode=LabelMode.REQUIRED,
+    )
+    pool, _ = load_gate1_support_pool(support_pool_path)
+    grid, sensor = load_sensor_calibration(calibration_path)
+    frames = tuple(sequence.source_frame(frame_id) for frame_id in range(4, 682))
+    obstacles = collect_observed_obstacle_index(frames, source_sequence_id=201)
+    _initialize_gate1_candidate_generation(
+        sequence, pool, obstacles, _load_e25_templates(e25_artifact_path),
+        grid, sensor, trajectory_yaw_by_frame(frames), (),
+    )
+    global _E45A2_TARGET_UNITS, _E45A2_SUPPORT_ROWS
+    _E45A2_TARGET_UNITS = targets
+    _E45A2_SUPPORT_ROWS = _e45a2_support_streams(sequence, pool, targets, 64)
+    output = Path(output_path).expanduser().resolve()
+    output.parent.mkdir(parents=True, exist_ok=True)
+    history: list[dict[str, object]] = []
+    all_results: list[dict[str, object]] = []
+    final_units: dict[str, np.ndarray] | None = None
+    final_match: dict[str, np.ndarray] | None = None
+    final_reproduced = False
+    previous = 0
+    for proposal_limit in (4, 8, 16, 32, 64):
+        tasks = [
+            (target, proposal)
+            for proposal in range(previous, proposal_limit)
+            for target in range(targets["source"].size)
+        ]
+        started = time.monotonic()
+        with mp.get_context("fork").Pool(processes=processes) as workers:
+            suffix = workers.map(_e45a2_worker, tasks, chunksize=4)
+        generation_seconds = time.monotonic() - started
+        hard_errors = [result for result in suffix if int(result["status"]) == 7]
+        if hard_errors:
+            raise RenderError(f"E45A-v2 hard errors: {hard_errors[:3]}")
+        all_results.extend(suffix)
+        candidate_path = output.parent / f"e45a_v2_targeted_controls_{proposal_limit}.npz"
+        candidate_arrays, candidate_metadata = _e45a2_candidate_cache(
+            all_results, int(targets["source"].size), proposal_limit,
+            candidate_path, generation_seconds,
+        )
+        control_units = {name: candidate_arrays[name] for name in _E45_UNIT_FIELDS}
+        combined = {
+            name: np.concatenate((targets[name], control_units[name]), axis=0)[None, ...]
+            for name in _E45_UNIT_FIELDS
+        }
+        matching_started = time.monotonic()
+        runs = [_e45_pair_match(combined, 0, 1) for _ in range(2)]
+        matching_seconds = time.monotonic() - matching_started
+        reproduced = all(
+            np.array_equal(runs[0][name], runs[1][name]) for name in runs[0]
+        )
+        match = runs[0]
+        matched_count = int(match["matched_flat_index"].shape[0])
+        center_frames = int(match["matched_center_frames"].size)
+        range_count = np.asarray(match["matched_range_count"])
+        maximum_smd = float(np.max(match["pairwise_smd"]))
+        passed = (
+            matched_count >= 1024 and center_frames >= 100
+            and bool(np.all(range_count > 0))
+            and int(match["caliper_errors"]) == 0
+            and int(match["duplicate_errors"]) == 0
+            and maximum_smd <= 0.10 and reproduced
+        )
+        history.append({
+            "proposal_limit": proposal_limit,
+            "eligible_controls": int(candidate_metadata["eligible_controls"]),
+            "proposal_status_count_0_to_7": candidate_metadata[
+                "proposal_status_count_0_to_7"
+            ],
+            "matched_pairs": matched_count,
+            "center_frames": center_frames,
+            "range_count_2p5_to_40": range_count.tolist(),
+            "maximum_pairwise_smd": maximum_smd,
+            "caliper_errors": int(match["caliper_errors"]),
+            "duplicate_errors": int(match["duplicate_errors"]),
+            "elementwise_reproduced": reproduced,
+            "generation_seconds": generation_seconds,
+            "two_run_matching_seconds": matching_seconds,
+            "passed": passed,
+        })
+        final_units, final_match, final_reproduced = combined, match, reproduced
+        if passed:
+            break
+        previous = proposal_limit
+    assert final_units is not None and final_match is not None
+    final = history[-1]
+    passed = bool(final["passed"])
+    scientific = _e45_selected_scientific(final_units, final_match)
+    result = {
+        "experiment": "E45A-v2", "passed": passed,
+        "failure_classification": None if passed else "targeted_control_common_support_failure",
+        "audit_only_targeted_bank": True,
+        "formal_training_distribution_changed": False,
+        "source_pair": ["real-normal", "normal-control"],
+        "target_units": int(targets["source"].size),
+        "target_center_frames": int(np.unique(targets["center_frame"]).size),
+        "target_range_count_2p5_to_40": np.bincount(
+            targets["range_bin"], minlength=4
+        )[:4].tolist(),
+        "proposal_ladder": [4, 8, 16, 32, 64],
+        "history": history,
+        "final_proposal_limit": int(final["proposal_limit"]),
+        "matched_pairs": int(final["matched_pairs"]),
+        "center_frames": int(final["center_frames"]),
+        "matched_range_count_2p5_to_40": final["range_count_2p5_to_40"],
+        "pairwise_smd": final_match["pairwise_smd"].tolist(),
+        "maximum_pairwise_smd": float(final["maximum_pairwise_smd"]),
+        "caliper_errors": int(final["caliper_errors"]),
+        "duplicate_errors": int(final["duplicate_errors"]),
+        "elementwise_reproduced": final_reproduced,
+        "unit_cache_sha256": _sha256_path(cache_path),
+        "unit_cache_scientific_array_hash": cache_metadata["scientific_array_hash"],
+        "scientific_array_hash": _scientific_array_hash(scientific),
+        "claim_limit": (
+            "E45A-v2 is an audit-only conditional matching bank. It does not estimate "
+            "the random-placement training distribution and does not change E26."
+        ),
+    }
+    temporary = output.with_suffix(output.suffix + ".tmp.npz")
+    np.savez_compressed(
+        temporary, **scientific,
+        metadata_json=np.asarray(json.dumps(result, sort_keys=True, separators=(",", ":"))),
+    )
+    os.replace(temporary, output)
+    return result
+
+
 def run_e45_v2_qualification(
     data_root: Path | str, support_pool_path: Path | str,
     e25_artifact_path: Path | str, calibration_path: Path | str,
@@ -12548,6 +12931,14 @@ def _render_parser() -> argparse.ArgumentParser:
     e45b = subcommands.add_parser("qualify-e45b")
     e45b.add_argument("--unit-cache", type=Path, required=True)
     e45b.add_argument("--output", type=Path, required=True)
+    e45a2 = subcommands.add_parser("qualify-e45a-v2")
+    e45a2.add_argument("--data-root", type=Path, required=True)
+    e45a2.add_argument("--support-pool", type=Path, required=True)
+    e45a2.add_argument("--e25-artifact", type=Path, required=True)
+    e45a2.add_argument("--calibration", type=Path, required=True)
+    e45a2.add_argument("--unit-cache", type=Path, required=True)
+    e45a2.add_argument("--output", type=Path, required=True)
+    e45a2.add_argument("--processes", type=int, default=24)
     return parser
 
 
@@ -12701,6 +13092,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0 if result["passed"] else 1
     if args.command == "qualify-e45b":
         result = run_e45b_qualification(args.unit_cache, args.output)
+        print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        return 0 if result["passed"] else 1
+    if args.command == "qualify-e45a-v2":
+        result = run_e45a_v2_qualification(
+            args.data_root, args.support_pool, args.e25_artifact,
+            args.calibration, args.unit_cache, args.output,
+            processes=args.processes,
+        )
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 0 if result["passed"] else 1
     raise AssertionError("unreachable renderer command")
