@@ -2131,7 +2131,7 @@
       }
     },
     "renderer_mechanical_qualification": {
-      "status": "E27 PASS; closed; E28 unlocked; E29-E37 locked",
+      "status": "E27 PASS; closed; E28 design and execution frozen; E29-E37 locked",
       "E27": {
         "question": "Does the formal geometry path return the correct nearest convex-hull hit, outward finite normal and object ID for active normal-control templates when return rejection is disabled?",
         "fixtures": 256,
@@ -2174,6 +2174,28 @@
           "conclusion": "With return rejection disabled, the formal normal-control geometry path returns the correct nearest positive hit, finite outward normal and object identity for all 256 active-class real convex-hull templates.",
           "claim_limit": "E27 does not qualify anomaly-proxy intersection, return sampling, intensity or final native-return competition."
         }
+      },
+      "E28": {
+        "question": "Does the formal schema-7 geometry path return the correct nearest positive hit, outward finite normal and object ID when return rejection is disabled?",
+        "fixtures": 256,
+        "fixture_seeds": "2800000 through 2800255 in order, without selection or top-up",
+        "family_counts": {"general": 95, "elongated": 62, "blocky": 50, "flat": 49},
+        "primitive_counts": {"1": 74, "2": 52, "3": 35, "4": 53, "5": 42},
+        "family_primitive_cross_cells_nonempty": 20,
+        "accepted_size_upper_range_m": [0.24818387696031585, 2.9978872129930567],
+        "target_slot": "fixture_index, covering all 128 beams x 2 columns",
+        "target_surface_distance_m": "2.5+47.5*fixture_index/255",
+        "pose_stream": "default_rng(SeedSequence([fixture_seed,2701])); yaw U[-pi,pi), pitch and roll U[-15deg,15deg]",
+        "interior_witness": "first shared undeformed witness when present, otherwise first primitive offset; formal forward deformation; signed-distance interior margin >1e-8 m",
+        "miss_rays": "the other 255 fixture slots use the exact direction opposite the target ray",
+        "sensor": "SensorCalibration.constant(intensity=1,return_probability=1)",
+        "independent_reference": "first outside-to-inside signed-distance root in the conservative bounding-sphere interval, bracketed independently at 4097 and 16385 nodes and solved by Brent; does not call ShapeSpec.intersect or _accepted_object_hits",
+        "tolerances": {"maximum_reference_disagreement_m_exclusive": 5e-5, "maximum_distance_error_m": 1e-4, "maximum_surface_residual_m": 1e-6, "maximum_normal_norm_error": 1e-10},
+        "descriptive_nvis": "first anomaly-proxy of each of 128 E26 worlds containing anomaly-proxy, at its accepted support frame; return probability 1; not a PASS gate",
+        "implementation_commit": "dea911899d9891d632d88de3394f17e7f2904ed0",
+        "command": "python -m src.render qualify-e28 --e26-artifact runs/ajae/e26_world_builder.npz --data-root /home/jasongao/Data/STU --calibration runs/ajae/calibration.pt --output runs/ajae/e28_anomaly_proxy_hits.npz --processes 24",
+        "artifact": "runs/ajae/e28_anomaly_proxy_hits.npz",
+        "pass_conditions": ["target hit errors=0", "analytic miss errors=0", "nearest positive-root errors=0", "object ID errors=0", "outward normal errors=0", "reference disagreement <5e-5 m", "distance error <=1e-4 m", "surface residual <=1e-6 m", "normal norm error <=1e-10", "two 24-process runs elementwise identical"]
       }
     },
     "world_types": {"pure_normal": 0.2, "control_only": 0.2, "mixed": 0.4, "anomaly_only": 0.2},

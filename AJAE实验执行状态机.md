@@ -3139,6 +3139,18 @@ PASS：target hit/miss 零错误；最近距离有限为正；交点位于 hull 
 
 与 E27 相同，固定256个 schema 7 fixture，覆盖 family、primitive count、尺寸与2.5–50 m。target ray 穿过已知严格内部 witness，另有 miss rays。
 
+**执行冻结**
+
+固定使用seed 2,800,000–2,800,255依次生成256个schema 7 fixture，不作筛选或补样。该固定流覆盖general/elongated/blocky/flat分别95/62/50/49个，primitive count 1–5分别74/52/35/53/42个，20个family×primitive-count交叉单元均非空，接受尺寸上界覆盖0.24818387696031585–2.9978872129930567 m。fixture index $i$ 的target slot为$i$，逐项覆盖128个beam与2个column；目标表面距离固定为 $2.5+47.5i/255$ m。beam elevation按-20°至20°线性覆盖，column基准azimuth为0或180°并叠加由index固定的-8°至8°循环偏移。
+
+每个shape的严格内部witness优先取生成报告中的第一个共享未变形witness；不存在共享witness时取第一个primitive offset。witness经过正式前向形变后必须具有大于 $10^{-8}$ m的负有符号距离裕量。对象姿态使用与E27相同的 `SeedSequence([fixture_seed,2701])` 流；对象先沿target ray置于冻结目标距离之外，再依据独立reference只沿同一ray平移，使参考首个进入表面的距离等于冻结目标距离。256-slot fixture中只有target slot朝向对象，其余255个slot均使用与target严格相反的单位方向。正式路径只调用 `_accepted_object_hits`，传感器固定为intensity 1、return probability 1。
+
+独立reference在shape保守包围球的正射线区间内分别使用4,097和16,385个固定节点寻找首个outside-to-inside括区，再以Brent方法求根；reference不调用 `ShapeSpec.intersect` 或 `_accepted_object_hits`。两套reference的最大差异必须小于 $5\times10^{-5}$ m；正式最近距离最大误差不超过 $10^{-4}$ m，表面残差不超过 $10^{-6}$ m，法向单位长度误差不超过 $10^{-10}$。hit、解析miss、法向外向性和object ID错误必须均为0，两遍24进程数组必须逐元素一致。
+
+描述性 $N_{vis}$ 固定使用E26中含anomaly-proxy的128个world，每个world只取object ID最小的第一个anomaly-proxy及其接受support frame，在正式ray grid上以return probability 1计算相对native return赢得最近距离竞争的slot数。该统计不参与E28 PASS，完整可见性分布资格仍留给E42。
+
+实现提交为 `dea911899d9891d632d88de3394f17e7f2904ed0`；`src/render.py`、`src/train.py`和`test_ajae.py` SHA-256分别为 `940fd6484b976b7b59c8b1c7bc8bea8dbd86e5aa27efa6eb5eb0024f57bd8e9b`、`92a3f51f93e26bead6a1d9d92e37af2b5e4df092ffc9716852806b4b67be546b`、`960dc6b3b83a4e95e638a1f0358a3d20c8eb2b51300e5c737f2c49b4b0a3f8dd`；完整回归46项全部通过，用时99.08秒。正式命令为 `python -m src.render qualify-e28 --e26-artifact runs/ajae/e26_world_builder.npz --data-root /home/jasongao/Data/STU --calibration runs/ajae/calibration.pt --output runs/ajae/e28_anomaly_proxy_hits.npz --processes 24`。
+
 PASS：零 hit/miss、最近根、法向和 object-ID 错误；两遍一致。PASS → E29。
 
 ## E29｜return probability 与确定性抽样
