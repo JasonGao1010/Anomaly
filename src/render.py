@@ -12498,8 +12498,8 @@ def run_e45a_v2_qualification(
     unit_cache_path: Path | str, output_path: Path | str, *, processes: int = 24,
 ) -> dict[str, object]:
     """Build an audit-only targeted control bank and requalify E45A."""
-    if processes != 24:
-        raise RenderError("formal E45A-v2 requires exactly 24 worker processes")
+    if type(processes) is not int or not 1 <= processes <= 24:
+        raise RenderError("formal E45A-v2 processes must lie in [1,24]")
     try:
         from .protocol import load_protocol
         from .scene import LabelMode, STUSequence
