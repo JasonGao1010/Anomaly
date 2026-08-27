@@ -3269,6 +3269,10 @@ E31逐元素核对E28-v2 PASS产物的seed与shape identity并重建原256个sch
 
 对原空 slot 分别构造 geometry hit+p=1、geometry hit+p=0、无 geometry hit。PASS：三类结果分别为新增 inserted return、保持空、保持空；空 slot 原 intensity payload 不参与 occupancy；零错误。PASS → E35。
 
+**执行冻结**
+
+固定三个单槽空native fixture，原XYZ均为0但intensity payload固定为17；三类分别为geometry hit+高端接受、geometry hit+低端拒绝、无geometry hit。完整调用正式 `render_frame`，期望occupancy依次为true/false/false；接受项semantic 10、internal object ID 1且强度有限，另外两项semantic 0、object ID -1并保留原空slot intensity payload，全部 `occluded_original_mask` 为false。两遍逐元素一致。实现提交 `01f5f2aa15dd298495064e0aa5e6bfd0968ff07d`，`src/render.py` SHA-256为 `a1ee3d9358d0da6a0c2388a580e7c86db3fabf6a4f93de80f2a5faf2ee8e3b07`。正式命令为 `python -m src.render qualify-e34 --output runs/ajae/e34_empty_rays.npz`。
+
 ## E35｜强度生成机械资格
 
 独立复算条件 quantile interpolation、material modulation、noise/hash 与 clipping。PASS：实现与 reference 最大误差不超过 $10^{-6}$；全部 finite 且位于206冻结支持；无未定义单元；边界 clipping fraction完整报告但不成为分布相似性门。PASS → E36。
