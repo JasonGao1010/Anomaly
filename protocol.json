@@ -2131,7 +2131,7 @@
       }
     },
     "renderer_mechanical_qualification": {
-      "status": "E27-E35 PASS; E28-v1 FAIL retained as protocol implementation defect; E36 design and execution frozen; E37 locked",
+      "status": "E27-E35 PASS; E28-v1 FAIL retained; E36 FAIL classified as protocol design conflict; E37 locked",
       "layer_boundaries": {"E27-E28": "direct geometry outputs only", "E29": "return probability and deterministic acceptance decision only", "E30-E31": "accepted returns", "E32-E33": "nearest-return occlusion competition"},
       "E27": {
         "question": "Does the formal geometry path return the correct nearest convex-hull hit, outward finite normal and object ID for active normal-control templates when return rejection is disabled?",
@@ -2434,7 +2434,19 @@
         "implementation_commit": "2404074c91660544b67d9b23ce6588e629b9f441",
         "command": "python -m src.render qualify-e36 --output runs/ajae/e36_shared_path.npz",
         "artifact": "runs/ajae/e36_shared_path.npz",
-        "pass_conditions": ["sensor intermediate label branches=0", "both paired objects construct successfully", "paired sensor intermediates elementwise identical", "final label assignment correct"]
+        "pass_conditions": ["sensor intermediate label branches=0", "both paired objects construct successfully", "paired sensor intermediates elementwise identical", "final label assignment correct"],
+        "result": {
+          "passed": false,
+          "failure_classification": "protocol design conflict",
+          "sensor_intermediate_label_branches": 0,
+          "paired_fixture_constructible": false,
+          "paired_fixture_construction_errors": ["anomaly-proxy objects cannot use normal instance templates", "normal-control objects require a 206 convex-hull template"],
+          "paired_trace_completed": false,
+          "artifact_bytes": 618,
+          "artifact_sha256": "d61e90062ba5f5500d8eac3ad8bbf6f9163c38acc61fc4b56b96900a59e137d9",
+          "conclusion": "The frozen label-only paired fixture conflicts with the authoritative shape-label invariants, so the required paired trace cannot be constructed.",
+          "claim_limit": "No label branch was observed in the audited sensor intermediate functions; E36 remains FAIL because its paired requirement is unexecutable and E37 stays locked."
+        }
       }
     },
     "world_types": {"pure_normal": 0.2, "control_only": 0.2, "mixed": 0.4, "anomaly_only": 0.2},

@@ -3299,6 +3299,12 @@ PASS：anomaly-only 或 control-only 传感器分支数0；paired trace 中间�
 
 静态审计 `_accepted_object_hits`、`SensorCalibration.return_chance` 与 `SensorCalibration.sample_intensity` 内对 `label` 属性或两类label常量的读取次数。运行配对构造分别尝试把同一个 `NormalTemplateShape` 仅改label为anomaly-proxy，以及把同一个schema 7 `ShapeSpec` 仅改label为normal-control；除label外material、pose与object ID保持一致。只有两种构造均通过后才执行paired trace；任一权威 `ObjectSpec` 合同拒绝即视为paired fixture不可构造并FAIL，不绕过dataclass验证。实现提交 `2404074c91660544b67d9b23ce6588e629b9f441`，`src/render.py` SHA-256为 `a628b8a0551c3d748c8182f50daf93d07d92f5a24b16b463d8fcbf4464257d52`。正式命令为 `python -m src.render qualify-e36 --output runs/ajae/e36_shared_path.npz`。
 
+**E36 正式结果：FAIL（protocol design conflict；E37保持锁定）**
+
+静态审计确认 `_accepted_object_hits`、`return_chance` 和 `sample_intensity` 中读取label属性或两类label常量的分支数为0。冻结paired fixture不可构造：将 `NormalTemplateShape` 仅改label为anomaly-proxy触发 `anomaly-proxy objects cannot use normal instance templates`；将schema 7 `ShapeSpec` 仅改label为normal-control触发 `normal-control objects require a 206 convex-hull template`。因此paired trace未执行，E36不能满足“相同geometry/material/pose只改label”的冻结PASS条件。
+
+失败分类为 `protocol design conflict`，不构成传感器中间函数已观测label分支错误，也不得改写为PASS。产物 `runs/ajae/e36_shared_path.npz` 大小618字节，SHA-256为 `d61e90062ba5f5500d8eac3ad8bbf6f9163c38acc61fc4b56b96900a59e137d9`。继续需要修改E36 paired-fixture定义或 `ObjectSpec` 的shape–label合同，属于实验设计决策；按状态机停止，E37不执行。
+
 ## E37｜world/frame 跨窗口一致性
 
 固定128个 E26 worlds，每个选择多个重叠五帧窗口；以正序、逆序、随机顺序、不同进程数、cached/uncached 请求共享帧。
