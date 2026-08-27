@@ -6727,6 +6727,276 @@ def run_e23_qualification(
     return metadata
 
 
+_E24_SUPPORT_POOL: QualifiedSupportPool | None = None
+_E24_OBSTACLES: ObservedObstacleIndex | None = None
+
+
+def _e24_fixture_errors() -> int:
+    material = MaterialSpec(0.5, 0.2)
+    identity = ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))
+    sphere = ShapeSpec(
+        ((0.5, 0.5, 0.5),), ((0.0, 0.0, 0.0),),
+        ((1.0, 1.0),), (0.0,), ("union",),
+    )
+    ellipsoid = ShapeSpec(
+        ((0.6, 0.4, 0.5),), ((0.0, 0.0, 0.0),),
+        ((1.0, 1.0),), (0.0,), ("union",),
+    )
+    schema7 = ShapeSpec(
+        ((0.5, 0.5, 0.5),), ((0.0, 0.0, 0.0),),
+        ((0.7, 1.4),), (0.0,), ("union",),
+    )
+    hull = NormalTemplateShape(
+        np.asarray(
+            [
+                (x, y, z)
+                for x in (-0.5, 0.5)
+                for y in (-0.5, 0.5)
+                for z in (-0.5, 0.5)
+            ],
+            dtype=np.float64,
+        ),
+        np.empty((0, 3), dtype=np.int32),
+        206, 0, 10, 1, (0.0, 0.0, 0.0),
+    )
+
+    def item(
+        shape: InsertShape,
+        identifier: int,
+        translation: tuple[float, float, float],
+    ) -> ObjectSpec:
+        label: ObjectLabel = (
+            "normal-control" if isinstance(shape, NormalTemplateShape)
+            else "anomaly-proxy"
+        )
+        return ObjectSpec(identifier, label, shape, material, translation, identity)
+
+    fixtures = (
+        (sphere, sphere, 0, 1.0),
+        (ellipsoid, ellipsoid, 1, 0.8),
+        (schema7, schema7, 0, 1.0),
+        (hull, schema7, 0, 1.0),
+    )
+    errors = 0
+    for left_shape, right_shape, axis, span in fixtures:
+        for overlap, expected in (
+            (-0.10, False), (0.0, False), (0.02, False),
+            (0.06, True), (0.15, True),
+        ):
+            translation = [0.0, 0.0, 0.0]
+            translation[axis] = span - overlap
+            measured, _ = obvious_pair_penetration(
+                item(left_shape, 1, (0.0, 0.0, 0.0)),
+                item(right_shape, 2, tuple(translation)),
+            )
+            if measured != expected:
+                errors += 1
+    return errors
+
+
+def _e24_worker(index: int) -> dict[str, object]:
+    pool, obstacles = _E24_SUPPORT_POOL, _E24_OBSTACLES
+    if pool is None or obstacles is None:
+        raise RuntimeError("E24 worker state is not initialized")
+    world_seed = 2_100_000 + index
+    entity_count = int(
+        np.random.default_rng(
+            np.random.SeedSequence([world_seed, 2401])
+        ).integers(2, 7)
+    )
+    try:
+        objects: list[ObjectSpec] = []
+        records: list[PlacementRecord] = []
+        for entity_index in range(entity_count):
+            shape_seed = 3_000_000 + index * 6 + entity_index
+            shape, report = ShapeSpec.sample_with_report(shape_seed)
+            material_seed = shape_seed + 2403
+            yaw_seed = shape_seed + 2402
+            yaw = float(
+                np.random.default_rng(
+                    np.random.SeedSequence([shape_seed, 2402])
+                ).uniform(-math.pi, math.pi)
+            )
+            proposed, record = place_object(
+                shape, MaterialSpec.sample(material_seed), pool, obstacles,
+                object_id=entity_index + 1, label="anomaly-proxy",
+                proposal_namespace="E24-support-v1",
+                proposal_stream=index * 6 + entity_index,
+                yaw_rad=yaw, material_seed=material_seed, yaw_seed=yaw_seed,
+                shape_seed=shape_seed, shape_generation_report=report,
+                existing_objects=objects, maximum_candidates=128,
+            )
+            objects.append(proposed)
+            records.append(record)
+        world = WorldSpec(world_seed, 206, tuple(objects))
+        validation_errors = 0
+        final_pair_penetrations = 0
+        for item_value, record in zip(world.objects, records, strict=True):
+            support_row = int(
+                np.searchsorted(pool.pool_indices, record.support_pool_index)
+            )
+            if (
+                support_row >= pool.pool_indices.size
+                or int(pool.pool_indices[support_row]) != record.support_pool_index
+            ):
+                raise PlacementError("accepted support identity is absent from the pool")
+            patch = pool.patch(support_row)
+            surface = _fibonacci_surface_points(item_value.shape, 16384)
+            rotation = np.asarray(item_value.rotation_world_from_local)
+            translation = np.asarray(item_value.translation_world_m)
+            normal = np.asarray(patch.normal_world)
+            plane_distance = (surface @ rotation.T + translation) @ normal + patch.offset
+            strict_lower = item_value.shape.minimum_z_m(xy_resolution=65, z_steps=257)
+            standard_lower = item_value.shape.minimum_z_m(xy_resolution=33, z_steps=129)
+            if (
+                abs(strict_lower - standard_lower) > 0.01
+                or float(np.mean(plane_distance < -0.02)) > 0.02
+                or observed_normal_collision(item_value, obstacles)[0]
+                or record.accepted_proposal + 1 != len(record.proposal_pool_indices)
+                or record.accepted_proposal != len(record.rejection_reasons)
+            ):
+                validation_errors += 1
+        for left in range(entity_count):
+            for right in range(left + 1, entity_count):
+                final_pair_penetrations += int(
+                    obvious_pair_penetration(world.objects[left], world.objects[right])[0]
+                )
+        report_json = json.dumps(
+            [record.to_dict() for record in records],
+            sort_keys=True, separators=(",", ":"),
+        )
+        return {
+            "hard_error": 0,
+            "error": "",
+            "world_seed": world_seed,
+            "entity_count": entity_count,
+            "proposal_count": sum(record.accepted_proposal + 1 for record in records),
+            "pair_rejections": sum(
+                reason == "obvious_pair_penetration"
+                for record in records for reason in record.rejection_reasons
+            ),
+            "validation_errors": validation_errors,
+            "final_pair_penetrations": final_pair_penetrations,
+            "world_hash": world.identity,
+            "world_json": world.to_json(),
+            "placement_report_json": report_json,
+        }
+    except Exception as error:
+        return {
+            "hard_error": 1,
+            "error": f"{type(error).__name__}: {error}",
+            "world_seed": world_seed,
+            "entity_count": entity_count,
+        }
+
+
+def _e24_arrays(records: Sequence[Mapping[str, object]]) -> dict[str, np.ndarray]:
+    def values(name: str, dtype: object, default: object) -> np.ndarray:
+        return np.asarray([item.get(name, default) for item in records], dtype=dtype)
+    return {
+        "world_seed": values("world_seed", np.int64, -1),
+        "entity_count": values("entity_count", np.int8, 0),
+        "proposal_count": values("proposal_count", np.int16, 0),
+        "pair_rejections": values("pair_rejections", np.int16, 0),
+        "validation_errors": values("validation_errors", np.int16, 1),
+        "final_pair_penetrations": values("final_pair_penetrations", np.int16, 1),
+        "world_hash": values("world_hash", "S64", ""),
+        "world_json": np.asarray(
+            [str(item.get("world_json", "")).encode() for item in records]
+        ),
+        "placement_report_json": np.asarray(
+            [str(item.get("placement_report_json", "")).encode() for item in records]
+        ),
+        "hard_error_code": values("hard_error", np.uint8, 1),
+        "error_message": values("error", "U512", ""),
+    }
+
+
+def run_e24_qualification(
+    data_root: Path | str,
+    support_pool_path: Path | str,
+    output_path: Path | str,
+    *,
+    processes: int = 24,
+) -> dict[str, object]:
+    """Execute the frozen two-run E24 multi-entity qualification."""
+
+    if processes != 24:
+        raise PlacementError("formal E24 requires exactly 24 worker processes")
+    try:
+        from .protocol import load_protocol
+        from .scene import LabelMode, STUSequence
+    except ImportError:
+        from protocol import load_protocol  # type: ignore[no-redef]
+        from scene import LabelMode, STUSequence  # type: ignore[no-redef]
+    project_root = Path(__file__).resolve().parents[1]
+    protocol = load_protocol(project_root / "protocol.json")
+    sequence = STUSequence.open(
+        data_root, protocol=protocol, partition="train", sequence_id=206,
+        label_mode=LabelMode.REQUIRED,
+    )
+    pool = load_qualified_support_pool(support_pool_path)
+    obstacles = collect_observed_obstacle_index(
+        sequence.source_frame(frame_id) for frame_id in sequence.frame_ids
+    )
+    global _E24_SUPPORT_POOL, _E24_OBSTACLES
+    _E24_SUPPORT_POOL = pool
+    _E24_OBSTACLES = obstacles
+    fixture_errors = _e24_fixture_errors()
+    runs: list[dict[str, np.ndarray]] = []
+    run_seconds: list[float] = []
+    context = mp.get_context("fork")
+    for _ in range(2):
+        started = time.monotonic()
+        with context.Pool(processes=processes) as workers:
+            records = workers.map(_e24_worker, range(512))
+        run_seconds.append(time.monotonic() - started)
+        runs.append(_e24_arrays(records))
+    reproduced = all(
+        np.array_equal(runs[0][name], runs[1][name], equal_nan=True)
+        if np.issubdtype(runs[0][name].dtype, np.floating)
+        else np.array_equal(runs[0][name], runs[1][name])
+        for name in runs[0]
+    )
+    first = runs[0]
+    hard_errors = int(np.count_nonzero(first["hard_error_code"]))
+    validation_errors = int(np.sum(first["validation_errors"]))
+    final_pair_penetrations = int(np.sum(first["final_pair_penetrations"]))
+    completed = int(np.count_nonzero(first["world_hash"] != b""))
+    passed = (
+        fixture_errors == 0 and completed == 512 and hard_errors == 0
+        and validation_errors == 0 and final_pair_penetrations == 0
+        and reproduced
+    )
+    scientific_hash = _scientific_array_hash(first)
+    metadata = {
+        "experiment": "E24",
+        "passed": passed,
+        "fixture_errors": fixture_errors,
+        "worlds": 512,
+        "completed": completed,
+        "hard_errors": hard_errors,
+        "validation_errors": validation_errors,
+        "final_pair_penetrations": final_pair_penetrations,
+        "elementwise_reproduced": reproduced,
+        "scientific_array_hash": scientific_hash,
+        "run_seconds": run_seconds,
+        "obstacle_points": int(obstacles.points_world_m.shape[0]),
+        "support_pool_sha256": SUPPORT_POOL_SHA256,
+        "world_seeds": [2_100_000, 2_100_511],
+        "processes": processes,
+    }
+    destination = Path(output_path).expanduser().resolve()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_suffix(destination.suffix + ".tmp.npz")
+    np.savez_compressed(
+        temporary, **first,
+        metadata_json=np.asarray(json.dumps(metadata, sort_keys=True, separators=(",", ":"))),
+    )
+    os.replace(temporary, destination)
+    return metadata
+
+
 def _render_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="AJAE authoritative renderer experiments")
     subcommands = parser.add_subparsers(dest="command", required=True)
@@ -6735,6 +7005,11 @@ def _render_parser() -> argparse.ArgumentParser:
     e23.add_argument("--support-pool", type=Path, required=True)
     e23.add_argument("--output", type=Path, required=True)
     e23.add_argument("--processes", type=int, default=24)
+    e24 = subcommands.add_parser("qualify-e24")
+    e24.add_argument("--data-root", type=Path, required=True)
+    e24.add_argument("--support-pool", type=Path, required=True)
+    e24.add_argument("--output", type=Path, required=True)
+    e24.add_argument("--processes", type=int, default=24)
     return parser
 
 
@@ -6742,6 +7017,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = _render_parser().parse_args(argv)
     if args.command == "qualify-e23":
         result = run_e23_qualification(
+            args.data_root, args.support_pool, args.output, processes=args.processes
+        )
+        print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        return 0 if result["passed"] else 1
+    if args.command == "qualify-e24":
+        result = run_e24_qualification(
             args.data_root, args.support_pool, args.output, processes=args.processes
         )
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
