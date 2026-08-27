@@ -2131,7 +2131,7 @@
       }
     },
     "renderer_mechanical_qualification": {
-      "status": "E27-E40 PASS; E28-v1 and E36-v1 FAIL retained; E41 unlocked",
+      "status": "E27-E40 PASS; E28-v1 and E36-v1 FAIL retained; E41 execution frozen",
       "layer_boundaries": {"E27-E28": "direct geometry outputs only", "E29": "return probability and deterministic acceptance decision only", "E30-E31": "accepted returns", "E32-E33": "nearest-return occlusion competition"},
       "E27": {
         "question": "Does the formal geometry path return the correct nearest convex-hull hit, outward finite normal and object ID for active normal-control templates when return rejection is disabled?",
@@ -2529,6 +2529,19 @@
         "pass_conditions": ["all generated intensity values finite", "all generated intensity values inside frozen train/206 support", "source/beam/range identities valid", "cell counts reproduce E39 source-range totals", "two complete statistic runs elementwise identical"],
         "distribution_difference_policy": "descriptive only until E46",
         "result": {"passed": true, "intensity_returns": 1656861, "source_counts": [742546, 462626, 451689], "nonempty_cells": [190, 173, 214], "count_errors": 0, "identity_errors": 0, "finite_errors": 0, "generated_support_errors": 0, "generated_clipping_count_low_high": [[0, 0], [0, 0]], "generated_clipping_fraction_low_high": [[0.0, 0.0], [0.0, 0.0]], "elementwise_reproduced": true, "two_run_total_seconds": 1.907127231999766, "scientific_array_sha256": "05c9248caeaa5de12320a6c0695e47e983221610eaae67daa82fe0c865ce22ab", "artifact_bytes": 22989, "artifact_sha256": "ac8cd9a2bfa2f0011c201f287d1a3908e401fe844f09bc12be8b755673dd8564", "claim_limit": "Conditional quantiles and ECDF distances are descriptive at E40; matched leakage adjudication remains E46."}
+      },
+      "E41": {
+        "question": "Is empty-to-valid accounting conserved for both generated labels, with actual final additions and probability rejections?",
+        "input_trace": "runs/ajae/e39_per_range_return.npz",
+        "source_order": ["normal-control", "anomaly-proxy"],
+        "chain_order": ["native empty opportunity", "geometry hit", "return accepted", "final new return"],
+        "implementation_commit": "df23bffed5d335e9a55e177a6980e01eb6b89ea9",
+        "render_source_sha256": "cd34392c2d7724e40e42f1667be7a257b6f68b60cbaf08d67afa8b04f11d7649",
+        "command": "python -m src.render qualify-e41 --e39-artifact runs/ajae/e39_per_range_return.npz --output runs/ajae/e41_empty_to_valid.npz",
+        "artifact": "runs/ajae/e41_empty_to_valid.npz",
+        "pass_conditions": ["geometry hits do not exceed native empty opportunities", "return acceptances do not exceed geometry hits", "final new returns do not exceed accepted returns", "all counts are nonnegative", "both labels contain at least one final new return and one probability rejection", "two complete statistic runs are elementwise identical"],
+        "post_acceptance_rejection_policy": "reported descriptively; no nonzero requirement because the frozen candidate fixtures contain one inserted object and native-empty slots have no native-return competition",
+        "distribution_difference_policy": "descriptive only until matching and E46"
       }
     },
     "world_types": {"pure_normal": 0.2, "control_only": 0.2, "mixed": 0.4, "anomaly_only": 0.2},

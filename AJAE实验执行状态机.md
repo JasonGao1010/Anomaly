@@ -3399,6 +3399,8 @@ real-normal五个距离箱的opportunity为686,670、273,466、46,226、1,055、
 
 报告control/proxy按beam/range的空槽机会、geometry hit、return接受和最终新增。PASS：关系链计数守恒，两个label均实际覆盖新增与拒绝分支，零非法新增，两遍一致。比例差异留给匹配/分类。PASS → E42。
 
+读取E39已通过的共享trace，按normal-control和anomaly-proxy分别复算空槽机会、几何命中、回波接受和最终新增，并保存逐beam×range计数。PASS要求逐实体、帧和beam的几何命中不超过原生空槽机会，逐beam×range的回波接受不超过几何命中，最终新增不超过回波接受；两类来源均须至少有一个最终新增和一个由回波概率产生的拒绝，所有计数非负，两遍统计逐元素一致。接受后未新增的计数作描述性报告，不增设非零要求；来源间比例差异留给E45/E46。实现提交 `df23bffed5d335e9a55e177a6980e01eb6b89ea9`，`src/render.py` SHA-256为 `cd34392c2d7724e40e42f1667be7a257b6f68b60cbaf08d67afa8b04f11d7649`；46项完整回归通过。正式命令为 `python -m src.render qualify-e41 --e39-artifact runs/ajae/e39_per_range_return.npz --output runs/ajae/e41_empty_to_valid.npz`。
+
 ## E42｜单实体 $N_{vis}$ 与匹配可行性
 
 按entity-frame保存geometry hits、accepted-before-occlusion、visible returns和距离。冻结 $N_{vis}$ 层为 $[1,8)$、$[8,32)$、$[32,128)$、$[128,+\infty)$。PASS：定义和计数守恒、control/proxy均覆盖至少三个层，候选银行能为E45提供非空匹配；两遍一致。不得以总体均值相近替代E45。PASS → E43。
