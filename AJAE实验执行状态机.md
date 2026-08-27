@@ -2457,6 +2457,16 @@ E19-v4 在预注册提交 `048675c39198a33f091de45e5f7745e31b9bc6cf` 后按冻�
 
 E19-v4 PASS 资格确认的是 schema 7 在当前 2,048 次审计中的连续尺寸、构造性连通、数值合法性、确定性和生成效率。它不说明 flat/elongated/asymmetric 等最终几何区域已经达到 E20a 的覆盖要求，也不构成视觉质量证据。schema 7 现成为当前正式 generator，E20a-v2 解锁；E20-V1、E20b 与 E21 继续锁定，且在 E20a-v2 PASS 前仍禁止人工可视化。
 
+**E20a-v2 运行协议冻结（2026-08-27，首次正式运行前）**
+
+E20a-v2 只把历史 E20a 的被测生成器从 schema 6 换成已由 E18b-v4 与 E19-v4 资格确认的 schema 7。正式样本仍为默认训练入口 `ShapeSpec.sample_with_report(seed)` 的 seed 0–8191，共 8,192 个最终 accepted objects；完整运行独立执行两遍，每遍使用 24 个 CPU 进程，不执行 placement、不赋正式材质。E20a 的连续 AABB、$D$、$r_{21}$、$r_{31}$、两层 Sobol 不对称性、形变强度、union spread、解析 fixture、数值域和复现规则全部原样继承。
+
+最终几何区域边界不变：小/中/大、近块状、扁平、细长、明显不对称、单 primitive、多 primitive、弱形变、强形变这 11 个区域各至少 128；primitive count 1–5 各至少 512。不对称性继续使用 8,192/32,768 个嵌套无扰动 Sobol 点，标准/严格内部点至少 128/512、两层差最多 0.03，unresolved 最多 81。`shape_family` 只是 schema 7 的内部采样标签，禁止用它代替最终连续几何的 flat、elongated、blocky 或 asymmetric 成员关系，也禁止进入 AJAE 输入或监督。
+
+恢复的历史 E20a 测量器已在运行前对旧正式产物中的球、椭球和固定重叠双 primitive fixture 做逐值复核，三者的连续 spans、轴比、标准/严格不对称性、内部点数及 PASS 字典完全一致。v2 运行器除 schema 断言、实验名称和输出名称外不改变历史测量逻辑。冻结 `src/render.py` SHA-256 为 `ccdddb12b96104360deb245dabffcf8449c9e568c70dd7202cdc3e850b5413d9`，renderer/generator identity 为 `791ed731effe2b3b9c3b3d9c2af6959c7487c769eeaaff62c6feeeb647a611ee`，运行器 SHA-256 为 `bebea0887c6d27fdbec4643007f64f7bd140b089799e7e63edcd3f100579447a`，预定产物为 `runs/ajae/e20a_v2_schema7_geometry_coverage.npz`。
+
+若全部区域与测量条件通过，则 E20a-v2 PASS，只解锁 E20-V1。若 flat/elongated 通过而 asymmetric 失败，停止并仅对不对称性做归因，不得修改轴比采样器；若 asymmetric 通过而 flat 或 elongated 失败，停止检查 union/物理尺度映射如何冲淡内禀轴比，不得修改偏心构造；若测量、正确性、其他区域或 primitive-count 支持失败，立即停止并保持全部下游锁定。运行前后均禁止改 schema 7、阈值、seed 或测量器，也禁止提前看图。E20a-v2 现为 **EXECUTION FROZEN**；E20-V1、E20b 与 E21 继续锁定。
+
 
 ### E20-V1｜盲法人工几何审查（LOCKED）
 

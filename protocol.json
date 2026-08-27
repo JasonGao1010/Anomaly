@@ -936,7 +936,29 @@
             "artifact_sha256": "f9fc5a4cba4105df28064fddf3d87cd7a0d8207e7c660e2fbf8f74d03061c5a3"
           }
         },
-        "E20a-v2": {"status": "UNLOCKED", "rule": "inherit all E20a sample identities, descriptors, coverage regions, and minimum support thresholds without change"}
+        "E20a-v2": {
+          "status": "EXECUTION FROZEN; first formal run not yet started",
+          "amends": "E20a FAIL remains permanent; v2 changes only the qualified generator from schema 6 to schema 7 and otherwise inherits the complete E20a measurement and coverage protocol",
+          "question": "Does the qualified schema-7 generator provide at least the preregistered support in all original final-geometry coverage regions, including the previously missing flat, elongated, and asymmetric regions?",
+          "generator_schema": 7,
+          "sample": {"entrypoint": "ShapeSpec.sample_with_report(seed) default training path", "seeds": [0, 8191], "accepted_shapes": 8192, "independent_runs": 2, "cpu_processes": 24, "placement": "not executed", "formal_material": "not assigned"},
+          "measurement": "inherit schema6_geometry_coverage.continuous_descriptors, descriptor_fixtures, region definitions, measurement conditions, and numerical domains without change",
+          "final_geometry_rule": "shape_family is an internal sampling label only; flat, elongated, blocky, and asymmetric membership is computed exclusively from the final accepted continuous geometry after union, surface perturbation, bend, twist, and taper",
+          "coverage_regions_minimum_128": ["small", "medium", "large", "blocky", "flat", "elongated", "asymmetric", "single_primitive", "multi_primitive", "weak_deformation", "strong_deformation"],
+          "primitive_count_minimum_512": [1, 2, 3, 4, 5],
+          "asymmetry": {"standard_sobol_points": 8192, "strict_sobol_points": 32768, "minimum_standard_interior": 128, "minimum_strict_interior": 512, "maximum_layer_difference": 0.03, "maximum_unresolved": 81},
+          "primary_repair_targets": {"historical_schema6_flat": 0, "historical_schema6_elongated": 0, "historical_schema6_asymmetric": 19, "required_each": 128},
+          "pass_conditions": ["all 8192 calls return a final accepted schema-7 shape", "all inherited descriptor fixtures pass exactly", "all continuous spans, D, r21, r31, asymmetry layers, deformation strength, and union spread satisfy the inherited finite numerical domains", "asymmetry unresolved count is at most 81", "every one of the 11 inherited final-geometry regions has support at least 128", "each exact primitive count 1 through 5 has support at least 512", "two independent complete 24-process runs reproduce shape parameters, complete generation-report hashes, all descriptors, masks, statistics, shape hashes, array hash, and summary basis elementwise"],
+          "failure_routing": {"all_conditions_pass": "E20a-v2 PASS and unlock E20-V1 only", "flat_and_elongated_pass_asymmetric_fail": "stop for asymmetric-only attribution; do not alter the aspect sampler", "asymmetric_pass_flat_or_elongated_fail": "stop to diagnose how union or physical-scale mapping suppresses intrinsic aspect support; do not alter eccentric construction", "measurement_or_correctness_fail": "stop with E20-V1, E20b, and E21 locked", "any_other_region_or_count_regression": "E20a-v2 FAIL and stop for region-specific attribution"},
+          "interpretation_limit": "PASS qualifies only final continuous-geometry coverage under the original E20a regions. It does not qualify visual quality, factor decoupling, placement, material, renderer-source invariance, or real-OOD utility.",
+          "forbidden": ["modifying schema 7, its proposal stream, or any E20a definition or support threshold", "using shape_family as region membership or model input", "using resolution-31 or resolution-41 mesh diameter", "viewing or rendering shapes before an E20a-v2 PASS", "running E20-V1, E20b, or E21 in this node"],
+          "historical_fixture_recovery": "the recovered E20a runner reproduces the sphere, ellipsoid, and fixed overlap-union fixture dictionaries exactly against the historical formal artifact before v2",
+          "frozen_render_source_sha256": "ccdddb12b96104360deb245dabffcf8449c9e568c70dd7202cdc3e850b5413d9",
+          "frozen_renderer_generator_identity_sha256": "791ed731effe2b3b9c3b3d9c2af6959c7487c769eeaaff62c6feeeb647a611ee",
+          "runner_sha256": "bebea0887c6d27fdbec4643007f64f7bd140b089799e7e63edcd3f100579447a",
+          "planned_artifact": "runs/ajae/e20a_v2_schema7_geometry_coverage.npz",
+          "criteria_frozen_before_formal_run": true
+        }
       },
       "schema7_blinded_geometry_review": {
         "version": "E20-V1",
