@@ -732,9 +732,17 @@ def test_training_world_uses_only_the_qualified_placement_pipeline(
     assert all(record.support_semantic == 40 for record in first_report.placements)
     assert all(record.accepted_proposal < 128 for record in first_report.placements)
     assert all(not record.rejection_reasons or set(record.rejection_reasons) <= {
-        "ground_contact_failure", "observed_normal_deep_penetration",
-        "obvious_pair_penetration",
+        "observed_normal_deep_penetration", "obvious_pair_penetration",
     } for record in first_report.placements)
+
+
+def test_shape_stream_rejects_e22_invalid_shape_before_support_sampling() -> None:
+    _, _, grounding, proposed, rejected = render_module._grounding_qualified_shape(
+        3_000_471, stride=3072, maximum_proposals=64
+    )
+    assert proposed == (3_000_471, 3_003_543)
+    assert rejected == (3_000_471,)
+    assert grounding.passed
 
 
 @pytest.mark.parametrize("slope_deg", [0.0, 5.0, 10.0])

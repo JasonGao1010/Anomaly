@@ -17,7 +17,7 @@ import time
 import multiprocessing as mp
 from collections import deque
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Literal, TypeAlias
 
@@ -2966,6 +2966,9 @@ class PlacementRecord:
     rejection_reasons: tuple[str, ...]
     proposal_minimum_obstacle_sdf_m: tuple[float, ...]
     minimum_obstacle_sdf_m: float
+    accepted_shape_proposal: int = 0
+    shape_proposal_seeds: tuple[int, ...] = ()
+    grounding_rejection_seeds: tuple[int, ...] = ()
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -2986,6 +2989,9 @@ class PlacementRecord:
                 self.proposal_minimum_obstacle_sdf_m
             ),
             "minimum_obstacle_sdf_m": self.minimum_obstacle_sdf_m,
+            "accepted_shape_proposal": self.accepted_shape_proposal,
+            "shape_proposal_seeds": list(self.shape_proposal_seeds),
+            "grounding_rejection_seeds": list(self.grounding_rejection_seeds),
         }
 
     @classmethod
@@ -2993,7 +2999,8 @@ class PlacementRecord:
         plain = dict(value)
         for name in (
             "proposal_pool_indices", "rejection_reasons",
-            "proposal_minimum_obstacle_sdf_m",
+            "proposal_minimum_obstacle_sdf_m", "shape_proposal_seeds",
+            "grounding_rejection_seeds",
         ):
             if name in plain:
                 plain[name] = tuple(plain[name])  # type: ignore[arg-type]
@@ -5259,6 +5266,68 @@ def obvious_pair_penetration(
     return False, minimum
 
 
+@dataclass(frozen=True, slots=True)
+class GroundingEligibility:
+    """Cache the support-invariant E22-v2 grounding qualification for one shape."""
+
+    shape: InsertShape
+    standard_lower_support_m: float
+    strict_lower_support_m: float
+    buried_fraction: float
+    surface_points_local_m: np.ndarray = field(repr=False, compare=False)
+
+    @property
+    def passed(self) -> bool:
+        return (
+            abs(self.strict_lower_support_m - self.standard_lower_support_m) <= 0.01
+            and self.buried_fraction <= 0.02
+        )
+
+
+def qualify_grounding(shape: InsertShape) -> GroundingEligibility:
+    """Evaluate the frozen E22-v2 conditions before support placement."""
+
+    strict = float(shape.minimum_z_m(xy_resolution=65, z_steps=257))
+    standard = float(shape.minimum_z_m(xy_resolution=33, z_steps=129))
+    surface = _fibonacci_surface_points(shape, 16384)
+    buried_fraction = float(np.mean(surface[:, 2] - standard < -0.02))
+    return GroundingEligibility(
+        shape, standard, strict, buried_fraction, _freeze(surface)
+    )
+
+
+def _grounding_qualified_shape(
+    first_seed: int,
+    *,
+    stride: int,
+    maximum_proposals: int = 64,
+) -> tuple[
+    ShapeSpec,
+    ShapeGenerationReport,
+    GroundingEligibility,
+    tuple[int, ...],
+    tuple[int, ...],
+]:
+    """Take the first E22-qualified shape from one deterministic seed stream."""
+
+    start = _integer("first_seed", first_seed)
+    step = _integer("stride", stride, minimum=1)
+    limit = _integer("maximum_proposals", maximum_proposals, minimum=1)
+    if limit > 64:
+        raise PlacementError("shape proposal limit must not exceed 64")
+    proposed: list[int] = []
+    rejected: list[int] = []
+    for proposal in range(limit):
+        shape_seed = start + step * proposal
+        shape, report = ShapeSpec.sample_with_report(shape_seed)
+        grounding = qualify_grounding(shape)
+        proposed.append(shape_seed)
+        if grounding.passed:
+            return shape, report, grounding, tuple(proposed), tuple(rejected)
+        rejected.append(shape_seed)
+    raise PlacementError("no E22-qualified shape in 64 deterministic proposals")
+
+
 def place_object(
     shape: InsertShape,
     material: MaterialSpec,
@@ -5279,6 +5348,7 @@ def place_object(
     allowed_support_semantics: Sequence[int] | None = None,
     proposal_rows: Sequence[int] | None = None,
     maximum_candidates: int = 128,
+    grounding_eligibility: GroundingEligibility | None = None,
 ) -> tuple[ObjectSpec, PlacementRecord]:
     """The sole support-pool-only E22/E23/E24/E25 placement pipeline."""
 
@@ -5314,9 +5384,14 @@ def place_object(
             raise PlacementError("proposal_rows contains an invalid support row")
         if not np.isin(support_pool.semantics[order], tuple(allowed)).all():
             raise PlacementError("proposal_rows violates the support semantic policy")
-    strict_lower_support = shape.minimum_z_m(xy_resolution=65, z_steps=257)
-    standard_lower_support = shape.minimum_z_m(xy_resolution=33, z_steps=129)
-    surface_points = _fibonacci_surface_points(shape, 16384)
+    grounding = (
+        qualify_grounding(shape)
+        if grounding_eligibility is None else grounding_eligibility
+    )
+    if not isinstance(grounding, GroundingEligibility) or grounding.shape is not shape:
+        raise PlacementError("grounding eligibility belongs to a different shape")
+    if not grounding.passed:
+        raise PlacementError("shape fails E22 grounding eligibility")
     rejections: list[str] = []
     proposal_pool_indices: list[int] = []
     proposal_minimum_sdf: list[float] = []
@@ -5327,17 +5402,6 @@ def place_object(
             shape, material, patch, object_id=object_id, label=label_value,  # type: ignore[arg-type]
             yaw_rad=yaw_rad, shape_generation_report=shape_generation_report,
         )
-        rotation = np.asarray(proposed.rotation_world_from_local, dtype=np.float64)
-        translation = np.asarray(proposed.translation_world_m, dtype=np.float64)
-        normal = np.asarray(patch.normal_world, dtype=np.float64)
-        plane_distance = (surface_points @ rotation.T + translation) @ normal + patch.offset
-        if (
-            abs(strict_lower_support - standard_lower_support) > 0.01
-            or float(np.mean(plane_distance < -0.02)) > 0.02
-        ):
-            rejections.append("ground_contact_failure")
-            proposal_minimum_sdf.append(math.nan)
-            continue
         collision, minimum_sdf, _ = observed_normal_collision(proposed, obstacles)
         proposal_minimum_sdf.append(minimum_sdf)
         if collision:
@@ -5357,6 +5421,7 @@ def place_object(
             proposal, patch.pool_index, patch.frame_id, patch.slot, patch.semantic,
             tuple(proposal_pool_indices), tuple(rejections),
             tuple(proposal_minimum_sdf), minimum_sdf,
+            0, () if shape_seed is None else (shape_seed,), (),
         )
     raise PlacementError("no qualified support passed E22/E23/E24 within 128 proposals")
 
@@ -5483,6 +5548,9 @@ def sample_training_world(
                 shape_seed: int | None = None
                 template_identity: str | None = None
                 report: ShapeGenerationReport | None = None
+                grounding: GroundingEligibility | None = None
+                shape_proposals: tuple[int, ...] = ()
+                grounding_rejections: tuple[int, ...] = ()
                 if label == "normal-control":
                     source = templates[int(entity_rng.integers(0, len(templates)))]
                     target_scale = entity_rng.uniform(0.9, 1.1, size=3)
@@ -5493,8 +5561,13 @@ def sample_training_world(
                         json.dumps(source.to_dict(), sort_keys=True, separators=(",", ":")).encode()
                     ).hexdigest()
                 else:
-                    shape_seed = entity_seed + 3
-                    shape, report = ShapeSpec.sample_with_report(shape_seed)
+                    (
+                        shape, report, grounding, shape_proposals,
+                        grounding_rejections,
+                    ) = _grounding_qualified_shape(
+                        entity_seed + 3, stride=3072, maximum_proposals=64
+                    )
+                    shape_seed = shape_proposals[-1]
                 material_seed = entity_seed + 11
                 yaw_seed = entity_seed + 31
                 yaw = float(np.random.default_rng(yaw_seed).uniform(-math.pi, math.pi))
@@ -5506,7 +5579,15 @@ def sample_training_world(
                     material_seed=material_seed, yaw_seed=yaw_seed,
                     shape_seed=shape_seed, template_identity=template_identity,
                     shape_generation_report=report, existing_objects=objects,
+                    grounding_eligibility=grounding,
                 )
+                if label == "anomaly-proxy":
+                    record = replace(
+                        record,
+                        accepted_shape_proposal=len(shape_proposals) - 1,
+                        shape_proposal_seeds=shape_proposals,
+                        grounding_rejection_seeds=grounding_rejections,
+                    )
                 objects.append(item)
                 records.append(record)
             world = WorldSpec(world_seed, 206, tuple(objects))
@@ -6794,7 +6875,7 @@ def _e24_fixture_errors() -> int:
     return errors
 
 
-def _e24_worker(index: int) -> dict[str, object]:
+def _e24_v2_worker(index: int) -> dict[str, object]:
     pool, obstacles = _E24_SUPPORT_POOL, _E24_OBSTACLES
     if pool is None or obstacles is None:
         raise RuntimeError("E24 worker state is not initialized")
@@ -6808,8 +6889,16 @@ def _e24_worker(index: int) -> dict[str, object]:
         objects: list[ObjectSpec] = []
         records: list[PlacementRecord] = []
         for entity_index in range(entity_count):
-            shape_seed = 3_000_000 + index * 6 + entity_index
-            shape, report = ShapeSpec.sample_with_report(shape_seed)
+            entity_slot = index * 6 + entity_index
+            (
+                shape, report, grounding, shape_proposals,
+                grounding_rejections,
+            ) = _grounding_qualified_shape(
+                3_000_000 + entity_slot,
+                stride=3072,
+                maximum_proposals=64,
+            )
+            shape_seed = shape_proposals[-1]
             material_seed = shape_seed + 2403
             yaw_seed = shape_seed + 2402
             yaw = float(
@@ -6821,10 +6910,17 @@ def _e24_worker(index: int) -> dict[str, object]:
                 shape, MaterialSpec.sample(material_seed), pool, obstacles,
                 object_id=entity_index + 1, label="anomaly-proxy",
                 proposal_namespace="E24-support-v1",
-                proposal_stream=index * 6 + entity_index,
+                proposal_stream=entity_slot,
                 yaw_rad=yaw, material_seed=material_seed, yaw_seed=yaw_seed,
                 shape_seed=shape_seed, shape_generation_report=report,
                 existing_objects=objects, maximum_candidates=128,
+                grounding_eligibility=grounding,
+            )
+            record = replace(
+                record,
+                accepted_shape_proposal=len(shape_proposals) - 1,
+                shape_proposal_seeds=shape_proposals,
+                grounding_rejection_seeds=grounding_rejections,
             )
             objects.append(proposed)
             records.append(record)
@@ -6840,20 +6936,17 @@ def _e24_worker(index: int) -> dict[str, object]:
                 or int(pool.pool_indices[support_row]) != record.support_pool_index
             ):
                 raise PlacementError("accepted support identity is absent from the pool")
-            patch = pool.patch(support_row)
-            surface = _fibonacci_surface_points(item_value.shape, 16384)
-            rotation = np.asarray(item_value.rotation_world_from_local)
-            translation = np.asarray(item_value.translation_world_m)
-            normal = np.asarray(patch.normal_world)
-            plane_distance = (surface @ rotation.T + translation) @ normal + patch.offset
-            strict_lower = item_value.shape.minimum_z_m(xy_resolution=65, z_steps=257)
-            standard_lower = item_value.shape.minimum_z_m(xy_resolution=33, z_steps=129)
+            grounding = qualify_grounding(item_value.shape)
             if (
-                abs(strict_lower - standard_lower) > 0.01
-                or float(np.mean(plane_distance < -0.02)) > 0.02
+                not grounding.passed
                 or observed_normal_collision(item_value, obstacles)[0]
                 or record.accepted_proposal + 1 != len(record.proposal_pool_indices)
                 or record.accepted_proposal != len(record.rejection_reasons)
+                or record.accepted_shape_proposal + 1
+                != len(record.shape_proposal_seeds)
+                or record.accepted_shape_proposal
+                != len(record.grounding_rejection_seeds)
+                or record.shape_proposal_seeds[-1] != record.shape_seed
             ):
                 validation_errors += 1
         for left in range(entity_count):
@@ -6870,7 +6963,15 @@ def _e24_worker(index: int) -> dict[str, object]:
             "error": "",
             "world_seed": world_seed,
             "entity_count": entity_count,
-            "proposal_count": sum(record.accepted_proposal + 1 for record in records),
+            "support_proposal_count": sum(
+                record.accepted_proposal + 1 for record in records
+            ),
+            "shape_proposal_count": sum(
+                len(record.shape_proposal_seeds) for record in records
+            ),
+            "grounding_rejections": sum(
+                len(record.grounding_rejection_seeds) for record in records
+            ),
             "pair_rejections": sum(
                 reason == "obvious_pair_penetration"
                 for record in records for reason in record.rejection_reasons
@@ -6882,16 +6983,17 @@ def _e24_worker(index: int) -> dict[str, object]:
             "placement_report_json": report_json,
         }
     except PlacementError as error:
-        failure_stage = "placement_exhaustion"
-        if "shape" in locals():
-            strict_lower = shape.minimum_z_m(xy_resolution=65, z_steps=257)
-            standard_lower = shape.minimum_z_m(xy_resolution=33, z_steps=129)
-            if abs(strict_lower - standard_lower) > 0.01:
-                failure_stage = "E22_ground_contact_failure"
+        shape_exhaustion = int(
+            "no E22-qualified shape" in str(error)
+        )
         return {
             "hard_error": 0,
-            "placement_exhaustion": 1,
-            "failure_stage": failure_stage,
+            "shape_exhaustion": shape_exhaustion,
+            "placement_exhaustion": 1 - shape_exhaustion,
+            "failure_stage": (
+                "shape_proposal_exhaustion" if shape_exhaustion
+                else "placement_proposal_exhaustion"
+            ),
             "error": f"PlacementError: {error}",
             "world_seed": world_seed,
             "entity_count": entity_count,
@@ -6899,6 +7001,7 @@ def _e24_worker(index: int) -> dict[str, object]:
     except Exception as error:
         return {
             "hard_error": 1,
+            "shape_exhaustion": 0,
             "placement_exhaustion": 0,
             "failure_stage": "hard_error",
             "error": f"{type(error).__name__}: {error}",
@@ -6907,13 +7010,15 @@ def _e24_worker(index: int) -> dict[str, object]:
         }
 
 
-def _e24_arrays(records: Sequence[Mapping[str, object]]) -> dict[str, np.ndarray]:
+def _e24_v2_arrays(records: Sequence[Mapping[str, object]]) -> dict[str, np.ndarray]:
     def values(name: str, dtype: object, default: object) -> np.ndarray:
         return np.asarray([item.get(name, default) for item in records], dtype=dtype)
     return {
         "world_seed": values("world_seed", np.int64, -1),
         "entity_count": values("entity_count", np.int8, 0),
-        "proposal_count": values("proposal_count", np.int16, 0),
+        "support_proposal_count": values("support_proposal_count", np.int16, 0),
+        "shape_proposal_count": values("shape_proposal_count", np.int16, 0),
+        "grounding_rejections": values("grounding_rejections", np.int16, 0),
         "pair_rejections": values("pair_rejections", np.int16, 0),
         "validation_errors": values("validation_errors", np.int16, 0),
         "final_pair_penetrations": values("final_pair_penetrations", np.int16, 0),
@@ -6925,23 +7030,24 @@ def _e24_arrays(records: Sequence[Mapping[str, object]]) -> dict[str, np.ndarray
             [str(item.get("placement_report_json", "")).encode() for item in records]
         ),
         "hard_error_code": values("hard_error", np.uint8, 1),
+        "shape_exhaustion_code": values("shape_exhaustion", np.uint8, 0),
         "placement_exhaustion_code": values("placement_exhaustion", np.uint8, 0),
         "failure_stage": values("failure_stage", "U64", ""),
         "error_message": values("error", "U512", ""),
     }
 
 
-def run_e24_qualification(
+def run_e24_v2_qualification(
     data_root: Path | str,
     support_pool_path: Path | str,
     output_path: Path | str,
     *,
     processes: int = 24,
 ) -> dict[str, object]:
-    """Execute the frozen two-run E24 multi-entity qualification."""
+    """Execute the frozen two-run E24-v2 multi-entity qualification."""
 
     if processes != 24:
-        raise PlacementError("formal E24 requires exactly 24 worker processes")
+        raise PlacementError("formal E24-v2 requires exactly 24 worker processes")
     try:
         from .protocol import load_protocol
         from .scene import LabelMode, STUSequence
@@ -6968,9 +7074,9 @@ def run_e24_qualification(
     for _ in range(2):
         started = time.monotonic()
         with context.Pool(processes=processes) as workers:
-            records = workers.map(_e24_worker, range(512))
+            records = workers.map(_e24_v2_worker, range(512))
         run_seconds.append(time.monotonic() - started)
-        runs.append(_e24_arrays(records))
+        runs.append(_e24_v2_arrays(records))
     reproduced = all(
         np.array_equal(runs[0][name], runs[1][name], equal_nan=True)
         if np.issubdtype(runs[0][name].dtype, np.floating)
@@ -6979,6 +7085,7 @@ def run_e24_qualification(
     )
     first = runs[0]
     hard_errors = int(np.count_nonzero(first["hard_error_code"]))
+    shape_exhaustions = int(np.count_nonzero(first["shape_exhaustion_code"]))
     placement_exhaustions = int(
         np.count_nonzero(first["placement_exhaustion_code"])
     )
@@ -6987,19 +7094,24 @@ def run_e24_qualification(
     completed = int(np.count_nonzero(first["world_hash"] != b""))
     passed = (
         fixture_errors == 0 and completed == 512 and hard_errors == 0
-        and placement_exhaustions == 0
+        and shape_exhaustions == 0 and placement_exhaustions == 0
         and validation_errors == 0 and final_pair_penetrations == 0
         and reproduced
     )
     scientific_hash = _scientific_array_hash(first)
     metadata = {
-        "experiment": "E24",
+        "experiment": "E24-v2",
         "passed": passed,
         "fixture_errors": fixture_errors,
         "worlds": 512,
         "completed": completed,
         "hard_errors": hard_errors,
+        "shape_exhaustions": shape_exhaustions,
         "placement_exhaustions": placement_exhaustions,
+        "shape_proposals": int(np.sum(first["shape_proposal_count"])),
+        "grounding_rejections": int(np.sum(first["grounding_rejections"])),
+        "support_proposals": int(np.sum(first["support_proposal_count"])),
+        "pair_rejections": int(np.sum(first["pair_rejections"])),
         "validation_errors": validation_errors,
         "final_pair_penetrations": final_pair_penetrations,
         "elementwise_reproduced": reproduced,
@@ -7029,7 +7141,7 @@ def _render_parser() -> argparse.ArgumentParser:
     e23.add_argument("--support-pool", type=Path, required=True)
     e23.add_argument("--output", type=Path, required=True)
     e23.add_argument("--processes", type=int, default=24)
-    e24 = subcommands.add_parser("qualify-e24")
+    e24 = subcommands.add_parser("qualify-e24-v2")
     e24.add_argument("--data-root", type=Path, required=True)
     e24.add_argument("--support-pool", type=Path, required=True)
     e24.add_argument("--output", type=Path, required=True)
@@ -7045,8 +7157,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 0 if result["passed"] else 1
-    if args.command == "qualify-e24":
-        result = run_e24_qualification(
+    if args.command == "qualify-e24-v2":
+        result = run_e24_v2_qualification(
             args.data_root, args.support_pool, args.output, processes=args.processes
         )
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
