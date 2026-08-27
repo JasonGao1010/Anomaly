@@ -1422,7 +1422,7 @@
           "decision": "E21 remains FAIL and E22 stays locked; do not replace parking with another semantic or alter quotas without an explicit E21-v2 protocol amendment"
         },
         "E21-v2": {
-          "status": "EXECUTION FROZEN",
+          "status": "FAIL; frozen support-density and qualification thresholds were not met",
           "preregistration_date": "2026-08-27",
           "source_commit": "283e984",
           "source_commit_pushed_before_preregistration": true,
@@ -1456,7 +1456,40 @@
           "after_pass": "unlock E22 only",
           "failure_route": "retain E21-v2 FAIL and stop for a design decision; do not run E22",
           "forbidden": ["train/201", "parking substitution beyond this frozen amendment", "public or hidden anomaly sequences", "hand-picked anchors", "threshold changes", "running E22 before PASS"],
-          "criteria_frozen_before_formal_run": true
+          "criteria_frozen_before_formal_run": true,
+          "formal_result": {
+            "date": "2026-08-27",
+            "protocol_commit": "dd98e3c",
+            "implementation_commit": "ad7f26d",
+            "passed": false,
+            "processes": 24,
+            "anchors": 512,
+            "qualified": 228,
+            "qualified_fraction": 0.4453125,
+            "by_semantic": {
+              "road": {"qualified": 130, "total": 256, "fraction": 0.5078125, "required": 192},
+              "sidewalk": {"qualified": 50, "total": 128, "fraction": 0.390625, "required": 96},
+              "other_ground": {"qualified": 48, "total": 128, "fraction": 0.375, "required": 96}
+            },
+            "by_distance_tier": {
+              "near": {"qualified": 157, "total": 172, "fraction": 0.9127906976744186},
+              "middle": {"qualified": 71, "total": 171, "fraction": 0.4152046783625731},
+              "far": {"qualified": 0, "total": 169, "fraction": 0.0}
+            },
+            "rejection_reasons": {"insufficient_support": 252, "residual_q95": 26, "residual_median": 4, "multiscale_normal": 2},
+            "accepted_patch_compliance": true,
+            "analytic_fixtures_passed": true,
+            "elementwise_reproduced": true,
+            "run_seconds": [32.305685047002044, 31.408441587998823],
+            "array_hash_both_runs": "0c9989b4291ce73bb6d518a694bba096e16806d941e7251deb5de52520194502",
+            "summary_hash_both_runs": "f6e47887bc0e5a377915d29455e9f666fd131fbb09a54cdaee760a2797eb13f8",
+            "runner_sha256": "306e28810d902661912bc98cfa9613bcf01af1828890d44fd427389d45cd770a",
+            "artifact": "runs/ajae/e21_v2_support_plane.npz",
+            "artifact_bytes": 1382102,
+            "artifact_sha256": "81fc46b44dbd7c9989a9d8321db69bcaeb3a53ee15c712fb24b251370207c988",
+            "failure_classification": "The frozen 0.75 m same-semantic minimum-support rule and distance-stratified sample do not provide enough usable support patches, especially in the far tier; this is a scientific qualification failure requiring a design decision, not a numerical crash or nondeterminism.",
+            "decision": "Retain E21-v2 FAIL permanently, stop the placement chain and keep E22 locked. Do not alter radii, minimum support, distance quotas or pass thresholds without a separately approved protocol revision."
+          }
         }
       }
     },
