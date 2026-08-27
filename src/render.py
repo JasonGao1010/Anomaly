@@ -8395,6 +8395,207 @@ def run_e28_v2_qualification(
     return result
 
 
+_E29_SENSOR: SensorCalibration | None = None
+
+
+def _e29_reference_uniform(
+    world_seed: int,
+    source_sequence_id: int,
+    frame_id: int,
+    slots: np.ndarray,
+    object_ids: np.ndarray,
+    channel: int,
+) -> np.ndarray:
+    """Independently reproduce the frozen 64-bit identity mixer."""
+
+    mask = (1 << 64) - 1
+    base = (
+        world_seed
+        ^ (source_sequence_id << 24)
+        ^ (frame_id << 40)
+        ^ (channel * 0xA24BAED4963EE407)
+    ) & mask
+    with np.errstate(over="ignore"):
+        value = np.asarray(slots, dtype=np.uint64) * np.uint64(0x9E3779B97F4A7C15)
+        value ^= np.asarray(object_ids, dtype=np.uint64) * np.uint64(
+            0xD1B54A32D192ED03
+        )
+        value ^= np.uint64(base)
+        value ^= value >> np.uint64(30)
+        value *= np.uint64(0xBF58476D1CE4E5B9)
+        value ^= value >> np.uint64(27)
+        value *= np.uint64(0x94D049BB133111EB)
+        value ^= value >> np.uint64(31)
+    return (value.astype(np.float64) + 0.5) / float(2**64)
+
+
+def _e29_worker(identity: int) -> dict[str, np.ndarray]:
+    if _E29_SENSOR is None:
+        raise RuntimeError("E29 sensor calibration is not initialized")
+    sensor = _E29_SENSOR
+    beam, range_bin, incidence_bin = np.indices(
+        sensor.return_probability.shape, dtype=np.int64
+    )
+    beam = beam.ravel()
+    range_bin = range_bin.ravel()
+    incidence_bin = incidence_bin.ravel()
+    ranges = 0.5 * (
+        sensor.range_edges_m[range_bin] + sensor.range_edges_m[range_bin + 1]
+    )
+    incidence = 0.5 * (
+        sensor.incidence_edges_rad[incidence_bin]
+        + sensor.incidence_edges_rad[incidence_bin + 1]
+    )
+    bias = MaterialSpec.sample(2_900_000 + identity).return_bias
+    probability = sensor.return_chance(beam, ranges, incidence, bias)
+    base = sensor.return_probability[beam, range_bin, incidence_bin]
+    clipped = np.clip(base, 1.0e-5, 1.0 - 1.0e-5)
+    reference_probability = 1.0 / (
+        1.0 + np.exp(-(np.log(clipped / (1.0 - clipped)) + 2.0 * bias))
+    )
+    slots = np.arange(base.size, dtype=np.int32)
+    object_ids = np.full(base.size, identity + 1, dtype=np.int32)
+    world = WorldSpec(2_900_000 + identity, 206, ())
+    frame_id = 1_000 + identity
+    uniform = _slot_uniform(
+        world, frame_id, slots, object_ids, channel=0
+    )
+    reference_uniform = _e29_reference_uniform(
+        world.seed, world.source_sequence_id, frame_id,
+        slots, object_ids, 0,
+    )
+    return {
+        "identity": np.full(base.size, identity, dtype=np.int16),
+        "beam": beam.astype(np.int16),
+        "range_bin": range_bin.astype(np.int8),
+        "incidence_bin": incidence_bin.astype(np.int8),
+        "material_bias": np.full(base.size, bias, dtype=np.float64),
+        "probability": probability,
+        "reference_probability": reference_probability,
+        "uniform": uniform,
+        "reference_uniform": reference_uniform,
+        "accepted": uniform < probability,
+        "reference_accepted": reference_uniform < reference_probability,
+    }
+
+
+def run_e29_qualification(
+    calibration_path: Path | str,
+    output_path: Path | str,
+    *,
+    processes: int = 24,
+) -> dict[str, object]:
+    """Qualify return probabilities and deterministic identity sampling."""
+
+    if processes != 24:
+        raise RenderError("formal E29 requires exactly 24 worker processes")
+    _, sensor = load_sensor_calibration(calibration_path)
+    global _E29_SENSOR
+    _E29_SENSOR = sensor
+    context = mp.get_context("fork")
+    runs: list[dict[str, np.ndarray]] = []
+    run_seconds: list[float] = []
+    for _ in range(2):
+        started = time.monotonic()
+        with context.Pool(processes=processes) as workers:
+            records = workers.map(_e29_worker, range(24))
+        names = tuple(records[0])
+        runs.append({
+            name: np.concatenate([record[name] for record in records])
+            for name in names
+        })
+        run_seconds.append(time.monotonic() - started)
+    first = runs[0]
+    reproduced = all(
+        np.array_equal(first[name], runs[1][name]) for name in first
+    )
+    base = sensor.return_probability
+    pooled_opportunities = sensor.opportunity_counts.sum(axis=0)
+    pooled_returns = sensor.return_counts.sum(axis=0)
+    reference_base = np.empty_like(base)
+    fallback = sensor.opportunity_counts < 64
+    for beam in range(base.shape[0]):
+        local = ~fallback[beam]
+        reference_base[beam, local] = (
+            sensor.return_counts[beam, local] + 0.5
+        ) / (sensor.opportunity_counts[beam, local] + 1.0)
+        reference_base[beam, ~local] = (
+            pooled_returns[~local] + 0.5
+        ) / (pooled_opportunities[~local] + 1.0)
+    provenance = dict(sensor.provenance)
+    fallback_traceable = (
+        np.array_equal(sensor.fallback_mask, fallback)
+        and provenance.get("return_estimator")
+        == "jeffreys_beta_smoothed_binomial_rate"
+        and provenance.get("return_low_count_fallback")
+        == "cross_beam_same_range_incidence_below_64_opportunities"
+    )
+    probability_domain_errors = int(np.count_nonzero(
+        ~np.isfinite(base) | (base < 0.0) | (base > 1.0)
+    ))
+    modulated_domain_errors = int(np.count_nonzero(
+        ~np.isfinite(first["probability"])
+        | (first["probability"] < 0.0)
+        | (first["probability"] > 1.0)
+    ))
+    maximum_base_error = float(np.max(np.abs(base - reference_base)))
+    maximum_probability_error = float(np.max(np.abs(
+        first["probability"] - first["reference_probability"]
+    )))
+    maximum_uniform_error = float(np.max(np.abs(
+        first["uniform"] - first["reference_uniform"]
+    )))
+    accepted_mask_errors = int(np.count_nonzero(
+        first["accepted"] != first["reference_accepted"]
+    ))
+    p0_errors = int(np.count_nonzero(first["uniform"] < 0.0))
+    p1_errors = int(np.count_nonzero(~(first["uniform"] < 1.0)))
+    accepted = int(np.count_nonzero(first["accepted"]))
+    rejected = int(first["accepted"].size - accepted)
+    passed = (
+        probability_domain_errors == 0
+        and modulated_domain_errors == 0
+        and maximum_base_error == 0.0
+        and maximum_probability_error == 0.0
+        and maximum_uniform_error == 0.0
+        and accepted_mask_errors == 0
+        and p0_errors == 0
+        and p1_errors == 0
+        and accepted > 0 and rejected > 0
+        and fallback_traceable and reproduced
+    )
+    scientific_hash = _scientific_array_hash(first)
+    result = {
+        "experiment": "E29", "passed": passed,
+        "calibration_cells": int(base.size),
+        "identity_trials_per_cell": 24,
+        "decisions": int(first["accepted"].size),
+        "probability_domain_errors": probability_domain_errors,
+        "modulated_domain_errors": modulated_domain_errors,
+        "maximum_base_probability_error": maximum_base_error,
+        "maximum_modulated_probability_error": maximum_probability_error,
+        "maximum_uniform_error": maximum_uniform_error,
+        "accepted_mask_errors": accepted_mask_errors,
+        "p0_errors": p0_errors, "p1_errors": p1_errors,
+        "intermediate_accepted": accepted,
+        "intermediate_rejected": rejected,
+        "fallback_cells": int(np.count_nonzero(sensor.fallback_mask)),
+        "fallback_traceable": fallback_traceable,
+        "elementwise_reproduced": reproduced,
+        "run_seconds": run_seconds, "processes": processes,
+        "scientific_array_hash": scientific_hash,
+    }
+    destination = Path(output_path).expanduser().resolve()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_suffix(destination.suffix + ".tmp.npz")
+    np.savez_compressed(
+        temporary, **first,
+        metadata_json=np.asarray(json.dumps(result, sort_keys=True, separators=(",", ":"))),
+    )
+    os.replace(temporary, destination)
+    return result
+
+
 def _render_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="AJAE authoritative renderer experiments")
     subcommands = parser.add_subparsers(dest="command", required=True)
@@ -8431,6 +8632,10 @@ def _render_parser() -> argparse.ArgumentParser:
     e28.add_argument("--calibration", type=Path, required=True)
     e28.add_argument("--output", type=Path, required=True)
     e28.add_argument("--processes", type=int, default=24)
+    e29 = subcommands.add_parser("qualify-e29")
+    e29.add_argument("--calibration", type=Path, required=True)
+    e29.add_argument("--output", type=Path, required=True)
+    e29.add_argument("--processes", type=int, default=24)
     return parser
 
 
@@ -8471,6 +8676,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         result = run_e28_v2_qualification(
             args.e26_artifact, args.data_root, args.calibration,
             args.output, processes=args.processes,
+        )
+        print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        return 0 if result["passed"] else 1
+    if args.command == "qualify-e29":
+        result = run_e29_qualification(
+            args.calibration, args.output, processes=args.processes,
         )
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 0 if result["passed"] else 1
