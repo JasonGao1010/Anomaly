@@ -9366,6 +9366,47 @@ def run_e35_qualification(calibration_path: Path | str, output_path: Path | str,
     np.savez_compressed(temporary, **first, metadata_json=np.asarray(json.dumps(result, sort_keys=True, separators=(",", ":")))); os.replace(temporary, destination); return result
 
 
+def run_e36_qualification(output_path: Path | str) -> dict[str, object]:
+    """Audit label-independent sensor stages and paired-fixture constructibility."""
+    tree = ast.parse(Path(__file__).read_text(encoding="utf-8"))
+    audited = {"_accepted_object_hits", "return_chance", "sample_intensity"}
+    label_branches = 0
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in audited:
+            label_branches += sum(
+                isinstance(child, ast.Attribute) and child.attr == "label"
+                or isinstance(child, ast.Constant) and child.value in OBJECT_LABELS
+                for child in ast.walk(node)
+            )
+    half = 0.25
+    vertices = np.asarray([(x, y, z) for x in (-half, half) for y in (-half, half) for z in (-half, half)], dtype=np.float64)
+    normal_shape = NormalTemplateShape(vertices, np.empty((0, 3), dtype=np.int32), 206, 0, 10, 1, (0.0, 0.0, 0.0))
+    proxy_shape, proxy_report = ShapeSpec.sample_with_report(3_600_000)
+    material = MaterialSpec(0.5, 0.1, 0.0); rotation = ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))
+    failures = []
+    try:
+        ObjectSpec(1, "anomaly-proxy", normal_shape, material, (5.0, 0.0, 0.0), rotation)
+    except RenderError as error:
+        failures.append(str(error))
+    try:
+        ObjectSpec(1, "normal-control", proxy_shape, material, (5.0, 0.0, 0.0), rotation, proxy_report)
+    except RenderError as error:
+        failures.append(str(error))
+    paired_trace_completed = len(failures) == 0
+    passed = label_branches == 0 and paired_trace_completed
+    result = {
+        "experiment": "E36", "passed": passed,
+        "audited_functions": sorted(audited),
+        "sensor_intermediate_label_branches": int(label_branches),
+        "paired_fixture_constructible": paired_trace_completed,
+        "paired_fixture_construction_errors": failures,
+        "paired_trace_completed": paired_trace_completed,
+        "failure_classification": None if passed else "protocol design conflict",
+    }
+    destination = Path(output_path).expanduser().resolve(); destination.parent.mkdir(parents=True, exist_ok=True); temporary = destination.with_suffix(destination.suffix + ".tmp.npz")
+    np.savez_compressed(temporary, metadata_json=np.asarray(json.dumps(result, sort_keys=True, separators=(",", ":")))); os.replace(temporary, destination); return result
+
+
 def _render_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="AJAE authoritative renderer experiments")
     subcommands = parser.add_subparsers(dest="command", required=True)
@@ -9427,6 +9468,8 @@ def _render_parser() -> argparse.ArgumentParser:
     e35.add_argument("--calibration", type=Path, required=True)
     e35.add_argument("--output", type=Path, required=True)
     e35.add_argument("--processes", type=int, default=24)
+    e36 = subcommands.add_parser("qualify-e36")
+    e36.add_argument("--output", type=Path, required=True)
     return parser
 
 
@@ -9504,6 +9547,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0 if result["passed"] else 1
     if args.command == "qualify-e35":
         result = run_e35_qualification(args.calibration, args.output, processes=args.processes)
+        print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        return 0 if result["passed"] else 1
+    if args.command == "qualify-e36":
+        result = run_e36_qualification(args.output)
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 0 if result["passed"] else 1
     raise AssertionError("unreachable renderer command")
