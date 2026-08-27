@@ -3435,6 +3435,8 @@ $$
 
 遮挡层冻结为 $[0,0.25)$、$[0.25,0.75)$、$[0.75,1]$。PASS：$O\in[0,1]$、计数守恒；control/proxy均覆盖三个层；候选银行可进入E45；两遍一致。PASS → E45。
 
+直接读取E39共享trace，按每个entity-frame的accepted-before-occlusion和visible returns计算冻结遮挡率。仅对accepted大于0的单元定义$O$并进入三个遮挡层；accepted等于0的单元以显式invalid mask单独保存，不为其伪造遮挡率。PASS要求所有有效$O$有限且位于$[0,1]$，visible不超过accepted，有效计数与三层计数守恒，normal-control和anomaly-proxy各自覆盖三个层。以support semantic×range bin×遮挡层统计三来源共同非空层，至少一个共同层作为E45的初步非空匹配可行性；完整caliper、SMD与规模仍由E45裁决。两遍统计必须逐元素一致。实现提交 `99be4df02ef96db388134cb2b2b8d1b08927d9ae`，`src/render.py` SHA-256为 `abc902fd460d3019b0fd557dcda63ae1a9887342fa6c84170b8213b612610180`；46项完整回归通过。正式命令为 `python -m src.render qualify-e44 --e39-artifact runs/ajae/e39_per_range_return.npz --output runs/ajae/e44_occlusion_feasibility.npz`。
+
 ## E45｜三方严格匹配审计集
 
 **单位与协变量**
