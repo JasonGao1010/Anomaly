@@ -3517,6 +3517,12 @@ E45B只服务E48，与E45A独立读取同一冻结2,048容量单位缓存。精�
 
 PASS要求至少1,024对、左侧至少100个center frames、2.5–10/10–20/20–30/30–40米四层均非空、caliper错误0、两侧单位重复0、五项连续协变量SMD均不超过0.10，并且两遍结果逐元素一致。E45B必须在E48前PASS，但不阻塞E45A通过后执行E46。实现与回归身份同E45A；正式命令为 `python -m src.render qualify-e45b --unit-cache runs/ajae/e45_v2_units_2048.npz --output runs/ajae/e45b_control_proxy_pairs.npz`。
 
+**E45B 正式结果：PASS（E48的两两匹配前置资格满足）**
+
+冻结2,048容量缓存的normal-control与anomaly-proxy完整合法图包含29,156条边，覆盖52个非空精确分层；确定性最大基数匹配得到3,624对、normal-control侧357个center frames，2.5–10、10–20、20–30和30–40米计数为[1,133,1,877,563,51]，全部满足冻结覆盖条件。
+
+五项连续协变量按range、median beam、$\log(1+N_{vis})$、$\hat O$、$\log(1+\text{local density})$顺序的SMD为[0.031652,0.026288,0.006786,0.017766,0.016409]，最大值0.031652。全部caliper错误0、两侧单位重复0，两遍匹配逐元素一致，两遍匹配总用时0.202531秒。科学数组哈希为 `859759030b829a1cf19504edcc54d8b24c20cae72f426a29141ab02cdf60fe08`；正式产物 `runs/ajae/e45b_control_proxy_pairs.npz` 大小13,691,873字节，SHA-256为 `f5b6074902f2396f3f5f36868e48b68312274bc29cf87b3a74b363131878c832`。E45B只建立E48所需的两两匹配集，不构成E48来源分类结果。
+
 状态机在E49前拆为两条依赖：
 
 $$
