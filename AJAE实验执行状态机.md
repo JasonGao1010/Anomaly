@@ -3311,6 +3311,10 @@ E36-v1 FAIL永久保留；不修改 `ObjectSpec`。v2完整枚举2,304个正式c
 
 静态审计重新计算 `_accepted_object_hits`、`return_chance`、`sample_intensity` 的label读取数，并检查 `render_frame` 在调用 `_accepted_object_hits` 前后的label读取位置。PASS要求三个传感器函数和competition前label读取均为0，末端label bookkeeping正确，两遍24进程逐元素一致。实现提交 `442c2a8cb7561df73b8d6cf5d669dd3981a1090f`，`src/render.py` SHA-256为 `88e5385c214232fb6f24855f77696cc61aaf1e6873ce475d7118574a90097922`；46项回归全部通过，用时99.64秒。正式命令为 `python -m src.render qualify-e36-v2 --calibration runs/ajae/calibration.pt --output runs/ajae/e36_v2_shared_path.npz --processes 24`。PASS后关闭E36并解锁E37。
 
+**E36-v2 正式结果：PASS（E36关闭，E37解锁）**
+
+55,296个固定输入的17类标签写入前中间数组差异均为0，final bookkeeping错误为0；三个传感器函数label读取数为0，`render_frame` competition前label读取数为0，末端bookkeeping label读取数为3。两遍24进程用时0.149848秒和0.149716秒，全部数组逐元素一致。科学数组哈希 `638ead3be7cf5de0a064e14e5ab14be5eb3caca3014241ab2459ef2bc0ace213`；产物 `runs/ajae/e36_v2_shared_path.npz` 大小1,309,291字节，SHA-256为 `de2cb9971caea1269d255d19b2d00c05860067c8a8533fde0f287e3369787a63`。E36-v2仅证明标签写入前传感器数值路径独立于外部标签；最终semantic和两类mask按定义不同。
+
 ## E37｜world/frame 跨窗口一致性
 
 固定128个 E26 worlds，每个选择多个重叠五帧窗口；以正序、逆序、随机顺序、不同进程数、cached/uncached 请求共享帧。
