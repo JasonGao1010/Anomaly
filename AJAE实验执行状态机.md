@@ -3535,11 +3535,11 @@ E45A-v2只服务Gate 1来源审计，不修改E26、正式训练世界生成器�
 
 proposal上限冻结为每目标64个，执行阶梯为4、8、16、32、64；每级只计算新增proposal后缀并保留先前结果，每级完成后运行两遍逐元素匹配，首次满足全部PASS条件即停止。PASS条件保持至少1,024对、至少100个real侧center frames、四个2.5–40米距离层均非空、全部caliper错误0、重复0、五项SMD均不超过0.10、两遍逐元素一致及硬错误0。达到64仍不满足即正式FAIL，E46继续锁定。
 
-实现提交为 `eedfc68068b56344a933496de23c3b869097465c`，执行内存修订为 `235112dd57fd85993772ac0b7c82cae3b216a3f5`、`cc1778f8b78411b2682e217e6199564afac0f8d6` 和 `2508b27c90a6aa1a6d0fdc0e9951f1e69d9f2c19`；最终 `src/render.py` SHA-256为 `cc2cdc86fc5fa0b68040b8726b92c5626f82fab3f885f48a55bf874d7c9a2d7b`。最终修订后46项完整回归通过，用时102.74秒。先导中发现只读renderer mask被原地筛选的实现错误，修复为生成新布尔数组后同一身份硬错误归零；该先导未写正式产物，也不参与资格裁决。
+实现提交为 `eedfc68068b56344a933496de23c3b869097465c`，执行内存修订为 `235112dd57fd85993772ac0b7c82cae3b216a3f5`、`cc1778f8b78411b2682e217e6199564afac0f8d6`、`2508b27c90a6aa1a6d0fdc0e9951f1e69d9f2c19` 和 `15b0aada3d670b752e04fe9a7bbdab3c89271f50`；最终 `src/render.py` SHA-256为 `c42950329ed02136bd182df61e0392249cb45aaeba3d6ede45e28c095f91703e`。最终修订后46项完整回归通过，用时100.73秒。先导中发现只读renderer mask被原地筛选的实现错误，修复为生成新布尔数组后同一身份硬错误归零；该先导未写正式产物，也不参与资格裁决。
 
 两次24进程和两次8进程正式启动均在第一阶完成和任何阶梯缓存写出前按资源安全规则停止，不构成实验FAIL。第一次因父进程保留678个完整source frames使可用内存降至1.4 GiB；释放该无用途元组后，第二次仍因24个worker各自加载7帧sequence cache而只剩188 MiB物理内存并使用约10 GiB交换。8进程先导与24进程先导的状态计数、完成渲染数、五项caliper违规数、差值中位数和Q95全部逐元素一致；但正式目标顺序使8个worker填满各自7帧缓存，第三次在可用内存降至787 MiB时停止。清空父进程cache并把worker缓存改为1帧后，第四次8进程仍因大型 `ObservedObstacleIndex` KD-tree碰撞查询产生约1.9 GiB/worker私有写时复制页，在可用内存降至739 MiB时停止。
 
-根据实测父进程约6.7 GiB和每活跃worker约1.9 GiB的增量，正式并发固定为4进程，预计保留约8–9 GiB物理内存安全余量。帧内容、障碍索引、轨迹yaw、target/proposal seed和科学计算均不变；进程数和缓存大小均不进入科学身份。正式命令为 `python -m src.render qualify-e45a-v2 --data-root /home/jasongao/Data/STU --support-pool runs/ajae/gate1_201_support_pool.npz --e25-artifact runs/ajae/e25_normal_control.npz --calibration runs/ajae/calibration.pt --unit-cache runs/ajae/e45_v2_units_2048.npz --output runs/ajae/e45a_v2_targeted_pairs.npz --processes 4`。
+4进程第五次未完成运行表明长寿命KD-tree worker的私有页会随任务继续累积：约3分钟后可用内存降至1.2 GiB、交换空间增至6.9 GiB，因此同样在无阶梯产物时停止。最终4进程池固定 `chunksize=4` 且每个worker最多处理8个map tasks，即32个proposal后回收并从同一父进程重新fork。相同48目标×4 proposal先导在实际发生worker轮换后仍与此前所有先导数组逐元素一致，运行中约保留12 GiB可用内存且交换空间不增长。帧内容、障碍索引、轨迹yaw、target/proposal seed和科学计算均不变；进程数、缓存大小和worker生命周期均不进入科学身份。正式命令为 `python -m src.render qualify-e45a-v2 --data-root /home/jasongao/Data/STU --support-pool runs/ajae/gate1_201_support_pool.npz --e25-artifact runs/ajae/e25_normal_control.npz --calibration runs/ajae/calibration.pt --unit-cache runs/ajae/e45_v2_units_2048.npz --output runs/ajae/e45a_v2_targeted_pairs.npz --processes 4`。
 
 状态机在E49前拆为两条依赖：
 
