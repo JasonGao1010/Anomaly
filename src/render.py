@@ -4541,56 +4541,164 @@ def normal_control_support_semantics(raw_semantic_id: int) -> frozenset[int]:
     raise RenderError("normal-control semantic has no support-surface policy")
 
 
-def fit_support_plane(
+@dataclass(frozen=True, slots=True)
+class SupportPlaneEstimate:
+    """One deterministic trimmed-SVD plane at a fixed neighborhood radius."""
+
+    radius_m: float
+    support_count: int
+    normal: np.ndarray
+    offset: float
+    anchor_height_m: float
+    median_residual_m: float
+    q95_residual_m: float
+    rms_residual_m: float
+
+
+@dataclass(frozen=True, slots=True)
+class SupportPlaneQualification:
+    """Three-scale support decision used by placement and E21."""
+
+    estimates: tuple[SupportPlaneEstimate, ...]
+    rejection_reason: str | None
+    normal_angle_deg: float
+    anchor_height_difference_m: float
+
+    @property
+    def qualified(self) -> bool:
+        return self.rejection_reason is None
+
+
+def _trimmed_support_plane(
+    local_points_world: np.ndarray,
+    anchor_world: np.ndarray,
+    radius_m: float,
+) -> SupportPlaneEstimate:
+    """Fit one plane after removing the fixed largest-residual ten percent."""
+
+    local = np.asarray(local_points_world, dtype=np.float64)
+    anchor = np.asarray(anchor_world, dtype=np.float64)
+    if local.ndim != 2 or local.shape[1] != 3 or local.shape[0] < 32:
+        raise PlacementError("insufficient_support")
+    try:
+        center = local.mean(axis=0)
+        covariance = (local - center).T @ (local - center) / float(local.shape[0])
+        eigenvalues, eigenvectors = np.linalg.eigh(covariance)
+    except np.linalg.LinAlgError as error:
+        raise PlacementError("degenerate_covariance") from error
+    if not np.isfinite(eigenvalues).all() or float(eigenvalues[-2]) <= 1.0e-12:
+        raise PlacementError("degenerate_covariance")
+    first_normal = eigenvectors[:, 0]
+    first_residual = np.abs((local - center) @ first_normal)
+    retain_count = int(math.ceil(0.90 * local.shape[0]))
+    retained = local[np.argsort(first_residual, kind="stable")[:retain_count]]
+    retained_center = retained.mean(axis=0)
+    try:
+        _, singular_values, vectors = np.linalg.svd(
+            retained - retained_center, full_matrices=False
+        )
+    except np.linalg.LinAlgError as error:
+        raise PlacementError("degenerate_covariance") from error
+    if (
+        singular_values.size < 2
+        or not np.isfinite(singular_values).all()
+        or float(np.square(singular_values[-2]) / retained.shape[0]) <= 1.0e-12
+    ):
+        raise PlacementError("degenerate_covariance")
+    normal = vectors[-1]
+    if normal[2] < 0.0:
+        normal = -normal
+    normal /= np.linalg.norm(normal)
+    offset = -float(np.dot(normal, retained_center))
+    if (
+        not np.isfinite(normal).all()
+        or not math.isfinite(offset)
+        or normal[2] <= np.finfo(np.float64).eps
+    ):
+        raise PlacementError("nonfinite_or_unsolved_plane")
+    height = -(
+        normal[0] * anchor[0] + normal[1] * anchor[1] + offset
+    ) / normal[2]
+    residual = np.abs(local @ normal + offset)
+    if not math.isfinite(float(height)) or not np.isfinite(residual).all():
+        raise PlacementError("nonfinite_or_unsolved_plane")
+    return SupportPlaneEstimate(
+        radius_m=float(radius_m),
+        support_count=int(local.shape[0]),
+        normal=_freeze(normal.astype(np.float64, copy=False)),
+        offset=offset,
+        anchor_height_m=float(height),
+        median_residual_m=float(np.median(residual)),
+        q95_residual_m=float(np.quantile(residual, 0.95)),
+        rms_residual_m=float(np.sqrt(np.mean(np.square(residual)))),
+    )
+
+
+def qualify_support_plane(
     ground_points_world: np.ndarray,
     anchor_world: np.ndarray,
     *,
-    radius_m: float = 2.0,
-    maximum_rms_m: float = 0.15,
-) -> tuple[np.ndarray, np.ndarray, float]:
-    """Fit a robust local support plane and orient its normal upward."""
+    radius_m: float = 1.0,
+) -> SupportPlaneQualification:
+    """Identify a low-residual support patch that is stable across three scales."""
 
     points = np.asarray(ground_points_world, dtype=np.float64)
     anchor = np.asarray(anchor_world, dtype=np.float64)
     radius = _finite_scalar("radius_m", radius_m)
-    maximum_rms = _finite_scalar("maximum_rms_m", maximum_rms_m)
     if points.ndim != 2 or points.shape[1] != 3 or not np.isfinite(points).all():
         raise PlacementError("ground_points_world must be finite [N,3]")
     if anchor.shape != (3,) or not np.isfinite(anchor).all():
         raise PlacementError("anchor_world must be finite [3]")
-    if radius <= 0.0 or maximum_rms <= 0.0:
-        raise PlacementError("support radius and residual bound must be positive")
-    selected = np.linalg.norm(points[:, :2] - anchor[:2], axis=1) <= radius
-    local = points[selected]
-    if local.shape[0] < 12:
-        raise PlacementError("candidate has fewer than 12 nearby ground samples")
-    center = np.median(local, axis=0)
-    _, _, vectors = np.linalg.svd(local - center, full_matrices=False)
-    normal = vectors[-1]
-    if normal[2] < 0.0:
-        normal = -normal
-    residual = np.abs((local - center) @ normal)
-    median = float(np.median(residual))
-    threshold = max(0.02, 3.0 * 1.4826 * float(np.median(np.abs(residual - median))))
-    inlier = residual <= threshold
-    if np.count_nonzero(inlier) >= 12:
-        local = local[inlier]
-        center = local.mean(axis=0)
-        _, _, vectors = np.linalg.svd(local - center, full_matrices=False)
-        normal = vectors[-1]
-        if normal[2] < 0.0:
-            normal = -normal
-    rms = float(np.sqrt(np.mean(np.square((local - center) @ normal))))
-    if normal[2] < 0.7 or rms > maximum_rms:
-        raise PlacementError("candidate support is too steep or non-planar")
-    # Use the fitted plane at the candidate xy, not the median point's height.
-    contact = anchor.copy()
-    contact[2] = (
-        center[2]
-        - (normal[0] * (contact[0] - center[0]) + normal[1] * (contact[1] - center[1]))
-        / normal[2]
+    if radius <= 0.0:
+        raise PlacementError("support radius must be positive")
+    estimates: list[SupportPlaneEstimate] = []
+    for scale in (0.75, 1.0, 1.25):
+        current_radius = scale * radius
+        selected = np.linalg.norm(points[:, :2] - anchor[:2], axis=1) <= current_radius
+        try:
+            estimates.append(_trimmed_support_plane(points[selected], anchor, current_radius))
+        except PlacementError as error:
+            reason = str(error)
+            if reason not in {
+                "insufficient_support",
+                "degenerate_covariance",
+                "nonfinite_or_unsolved_plane",
+            }:
+                raise
+            return SupportPlaneQualification(tuple(estimates), reason, math.nan, math.nan)
+    small, middle, large = estimates
+    cosine = float(np.clip(np.dot(small.normal, large.normal), -1.0, 1.0))
+    angle_deg = math.degrees(math.acos(cosine))
+    height_difference = abs(small.anchor_height_m - large.anchor_height_m)
+    reason = None
+    if middle.q95_residual_m > 0.08:
+        reason = "residual_q95"
+    elif middle.median_residual_m > 0.03:
+        reason = "residual_median"
+    elif angle_deg > 5.0:
+        reason = "multiscale_normal"
+    elif height_difference > 0.08:
+        reason = "multiscale_height"
+    return SupportPlaneQualification(
+        tuple(estimates), reason, float(angle_deg), float(height_difference)
     )
-    return _freeze(contact), _freeze(normal), rms
+
+
+def fit_support_plane(
+    ground_points_world: np.ndarray,
+    anchor_world: np.ndarray,
+    *,
+    radius_m: float = 1.0,
+) -> tuple[np.ndarray, np.ndarray, float]:
+    """Return the qualified central support plane used by object placement."""
+
+    qualification = qualify_support_plane(ground_points_world, anchor_world, radius_m=radius_m)
+    if not qualification.qualified:
+        raise PlacementError(str(qualification.rejection_reason))
+    middle = qualification.estimates[1]
+    contact = np.asarray(anchor_world, dtype=np.float64).copy()
+    contact[2] = middle.anchor_height_m
+    return _freeze(contact), middle.normal, middle.rms_residual_m
 
 
 def _ground_rotation(normal: np.ndarray, yaw: float) -> np.ndarray:
@@ -4619,7 +4727,7 @@ def place_object(
     ground_semantic_ids: np.ndarray | None = None,
     allowed_support_semantics: Sequence[int] | None = None,
     existing_objects: Sequence[ObjectSpec] = (),
-    support_radius_m: float = 2.0,
+    support_radius_m: float = 1.0,
     penetration_tolerance_m: float = 0.03,
     collision_margin_m: float = 0.05,
     maximum_candidates: int = 128,

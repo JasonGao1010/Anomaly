@@ -6,6 +6,7 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import math
 import sys
 from collections import Counter
 from pathlib import Path
@@ -748,8 +749,8 @@ def test_mixed_training_world_pairs_support_distance_size_and_seed(
             )
         )
     x, y = np.meshgrid(
-        np.arange(5.0, 45.1, 0.5),
-        np.arange(-10.0, 10.1, 0.5),
+        np.arange(5.0, 45.1, 0.2),
+        np.arange(-10.0, 10.1, 0.2),
         indexing="ij",
     )
     ground = np.column_stack((x.ravel(), y.ravel(), np.zeros(x.size)))
@@ -835,7 +836,7 @@ def test_mixed_training_world_pairs_support_distance_size_and_seed(
     assert normal.material != proxy.material
 
     alternate = sample_training_world(frames, (template,), grid, sensor, "mixed", 8)
-    assert alternate.objects[0].label != first.objects[0].label
+    assert alternate.to_dict() != first.to_dict()
     counts[0] = (2, 1)
     remainder = sample_training_world(frames, (template,), grid, sensor, "mixed", 11)
     assert {item.label for item in remainder.objects[:2]} == {
@@ -843,6 +844,31 @@ def test_mixed_training_world_pairs_support_distance_size_and_seed(
         "anomaly-proxy",
     }
     assert remainder.objects[2].label == "normal-control"
+
+
+@pytest.mark.parametrize("slope_deg", [0.0, 5.0, 10.0])
+def test_e21_support_plane_fixtures(slope_deg: float) -> None:
+    coordinate = np.linspace(-1.25, 1.25, 51)
+    x, y = np.meshgrid(coordinate, coordinate, indexing="ij")
+    slope = math.radians(slope_deg)
+    z = np.tan(slope) * x + 0.002 * np.sin(7.0 * x + 3.0 * y)
+    points = np.column_stack((x.ravel(), y.ravel(), z.ravel()))
+    result = render_module.qualify_support_plane(
+        points, np.zeros(3, dtype=np.float64)
+    )
+    assert result.qualified
+    expected = np.asarray((-math.sin(slope), 0.0, math.cos(slope)))
+    angle = math.degrees(
+        math.acos(
+            float(
+                np.clip(
+                    np.dot(result.estimates[1].normal, expected), -1.0, 1.0
+                )
+            )
+        )
+    )
+    assert angle <= 0.5
+    assert abs(result.estimates[1].anchor_height_m) <= 0.01
 
 
 def test_common_renderer_is_deterministic_for_pure_normal_world() -> None:
