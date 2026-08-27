@@ -1575,6 +1575,64 @@
             "failure_classification": "The distance-adaptive amendment removed most support-density failures and passed the overall 80-percent gate, but arbitrary sidewalk and other-ground returns still failed their frozen 75-percent class gates; random ground returns are not an adequate placement-candidate interface.",
             "decision": "Retain E21-v3 FAIL permanently. End random-ground-anchor qualification, do not tune the radius formula, keep E22 locked, and require an approved qualified-support-patch-pool placement design before continuing."
           }
+        },
+        "E21-v4": {
+          "status": "EXECUTION FROZEN",
+          "preregistration_date": "2026-08-27",
+          "source_commit": "dc22455",
+          "source_commit_pushed_before_preregistration": true,
+          "question": "Does train/206 contain a sufficiently large, semantically covered, temporally and spatially dispersed qualified support-patch pool for deterministic placement sampling?",
+          "construct_change": "E21-v4 does not qualify arbitrary-ground-return success and does not requalify the plane estimator; it qualifies the sufficiency of the set of patches that already satisfy the frozen estimator.",
+          "data": {
+            "partition_sequence": "train/206 only",
+            "center_frames": [2, 446],
+            "window_offsets": [-2, -1, 0, 1, 2],
+            "eligible_range_m": [0.0, 120.0],
+            "raw_semantics": {"road": 40, "sidewalk": 48, "other_ground": 49}
+          },
+          "candidate_thinning": {
+            "coordinate_system": "world XY",
+            "cell_size_m": 0.5,
+            "group": ["center_frame", "raw_semantic", "floor(world_x/0.5)", "floor(world_y/0.5)"],
+            "representative": "the real return with the smallest frozen semantic-namespace SplitMix64 hash of packed (frame,slot), breaking a hash collision by slot",
+            "rule": "every retained representative is evaluated; no visual, residual, distance-bin or post-result subsampling is allowed"
+          },
+          "frozen_plane_estimator": {
+            "central_radius_m": "R(d)=clip(d/20,1,3), using center-frame Euclidean sensor range d in metres",
+            "radii": ["0.75*R(d)", "R(d)", "1.25*R(d)"],
+            "minimum_same_semantic_real_points_each_radius": 32,
+            "fit": "inherit E21-v3 covariance fit, fixed largest-residual 10-percent trimming and SVD refit unchanged",
+            "median_residual_m_maximum": 0.03,
+            "q95_residual_m_maximum": 0.08,
+            "normal_difference_deg_maximum": 5.0,
+            "anchor_height_difference_m_maximum": 0.08,
+            "pool_entry": "a thinned representative enters the pool if and only if every frozen support, finiteness, residual and multiscale condition passes"
+          },
+          "pass_conditions": {
+            "pool_size_minimum": 2048,
+            "road_minimum": 1024,
+            "sidewalk_minimum": 256,
+            "other_ground_minimum": 128,
+            "covered_center_frames_minimum": 356,
+            "unique_world_xy_2m_cells_minimum": 512,
+            "distance_0_20m_minimum": 1024,
+            "distance_20_30m_minimum": 128,
+            "distance_30_50m_minimum": 32,
+            "accepted_patch_compliance": "every pool entry satisfies every frozen estimator condition",
+            "reproducibility": "two complete independent 24-process runs reproduce thinned candidate identities, qualification decisions, pool identities, plane values, summaries and scientific hashes elementwise; runtime is excluded"
+          },
+          "descriptive_only": [
+            "candidate and pool counts, rejection reasons and qualification fractions by semantic",
+            "pool frame coverage separately by semantic",
+            "pool counts in 0-10, 10-20, 20-30, 30-50 and 50-120 m",
+            "pool entries beyond 50 m",
+            "pool central-radius, residual, stability and 2 m spatial-cell distributions"
+          ],
+          "conclusion_limit": "PASS establishes a qualified support-patch pool on train/206 for placement sampling; it does not establish correct object-ground contact, which remains E22, or final rendered distance visibility.",
+          "after_pass": "freeze this pool interface, unlock E22 and end E21",
+          "failure_route": "retain E21-v4 FAIL and stop for a broader placement-design decision; do not tune the frozen plane estimator or silently sample around failed returns",
+          "forbidden": ["train/201", "changing the estimator", "distance-balanced quotas", "sampling only a subset of thinned candidates", "adding pass thresholds after results", "running E22 before PASS"],
+          "criteria_frozen_before_formal_run": true
         }
       }
     },
