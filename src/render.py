@@ -7664,6 +7664,34 @@ def _e26_arrays(records: Sequence[Mapping[str, object]]) -> dict[str, np.ndarray
     }
 
 
+def _e26_single_manifest_errors(records: Sequence[Mapping[str, object]]) -> int:
+    """Rebuild worker manifests serially without repeating geometry generation."""
+
+    errors = 0
+    for record in records:
+        if record.get("hard_error", 1) or record.get("placement_exhaustion", 0):
+            errors += 1
+            continue
+        world = WorldSpec.from_dict(json.loads(str(record["world_json"])))
+        report = WorldGenerationReport.from_dict(
+            json.loads(str(record["report_json"]))
+        )
+        center = 2 + world.seed % 445
+        requests = {
+            frame_id: _e26_request_identity(world.identity, frame_id)
+            for frame_id in range(center - 2, center + 3)
+        }
+        request_hash = hashlib.sha256(
+            json.dumps(requests, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        errors += int(
+            world.to_json() != record["world_json"]
+            or report.to_json() != record["report_json"]
+            or request_hash != record["request_manifest_hash"]
+        )
+    return errors
+
+
 def _placement_authority_errors(source: str) -> int:
     """Audit function structure without counting audit string literals."""
 
@@ -7725,11 +7753,14 @@ def run_e26_qualification(
     authority_errors = _placement_authority_errors(source)
     runs: list[dict[str, np.ndarray]] = []
     run_seconds: list[float] = []
+    single_manifest_errors = 0
     context = mp.get_context("fork")
-    for _ in range(2):
+    for run_index in range(2):
         started = time.monotonic()
         with context.Pool(processes=processes) as workers:
             records = workers.map(_e26_worker, range(256))
+        if run_index == 0:
+            single_manifest_errors = _e26_single_manifest_errors(records)
         runs.append(_e26_arrays(records))
         run_seconds.append(time.monotonic() - started)
     reproduced = all(
@@ -7752,13 +7783,15 @@ def run_e26_qualification(
     errors = {name: int(np.sum(first[name])) for name in error_fields}
     passed = (
         completed == 256 and type_errors == 0 and authority_errors == 0
+        and single_manifest_errors == 0
         and all(value == 0 for value in errors.values()) and reproduced
     )
     scientific_hash = _scientific_array_hash(first)
     metadata = {
         "experiment": "E26", "passed": passed, "worlds": 256,
         "completed": completed, "type_errors": type_errors,
-        "authority_errors": authority_errors, **errors,
+        "authority_errors": authority_errors,
+        "single_manifest_errors": single_manifest_errors, **errors,
         "elementwise_reproduced": reproduced, "run_seconds": run_seconds,
         "renderer_identity": renderer_identity,
         "support_pool_sha256": SUPPORT_POOL_SHA256,
