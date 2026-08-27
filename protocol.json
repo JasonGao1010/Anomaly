@@ -2131,7 +2131,7 @@
       }
     },
     "renderer_mechanical_qualification": {
-      "status": "E27-E37 PASS; E28-v1 and E36-v1 FAIL retained; E38 unlocked",
+      "status": "E27-E37 PASS; E28-v1 and E36-v1 FAIL retained; E38 execution frozen",
       "layer_boundaries": {"E27-E28": "direct geometry outputs only", "E29": "return probability and deterministic acceptance decision only", "E30-E31": "accepted returns", "E32-E33": "nearest-return occlusion competition"},
       "E27": {
         "question": "Does the formal geometry path return the correct nearest convex-hull hit, outward finite normal and object ID for active normal-control templates when return rejection is disabled?",
@@ -2483,6 +2483,22 @@
         "artifact": "runs/ajae/e37_world_frame_consistency.npz",
         "pass_conditions": ["all identity errors=0", "all qualified-field digest errors=0", "duplicate-request bit errors=0", "render-call accounting errors=0", "cross-world cache errors=0", "window identity reads=0"],
         "result": {"passed": true, "worlds": 128, "world_type_counts": {"pure_normal": 32, "control_only": 32, "mixed": 32, "anomaly_only": 32}, "unique_frames_per_world": 6, "frame_requests_per_world": 10, "identity_errors": 0, "field_digest_errors": {"xyzi": 0, "occupancy": 0, "packed_labels": 0, "normal_control_mask": 0, "anomaly_proxy_mask": 0, "inserted_mask": 0, "occluded_original_mask": 0, "unchanged_normal_mask": 0, "object_id_internal": 0}, "duplicate_request_bit_errors": 0, "render_calls": {"serial_cached_forward": 768, "parallel_uncached_forward": 1280, "parallel_cached_reverse": 768, "parallel_cached_random": 768}, "render_call_errors": 0, "cross_world_cache_errors": 0, "cross_world_factory_calls": 128, "render_frame_window_parameters": 0, "slot_uniform_window_reads": 0, "run_seconds": {"serial_cached_forward": 170.8439177310065, "parallel_uncached_forward": 92.47216535800544, "parallel_cached_reverse": 55.94150528500904, "parallel_cached_random": 56.06911600798776}, "renderer_generator_identity": "9ff61e81c133a844b107ff303da6471d9810384a90846b1eb67cb73dacf792f0", "scientific_array_sha256": "5df3d02f0d47697a785b3d43ea457765a5d4d48106b74a77c68f087919939fd0", "artifact_bytes": 149551, "artifact_sha256": "04e524a5428c9b906e9fefe253f7ec66533bd6cb3452ea6d9afdb830e1a94b34", "claim_limit": "E37 establishes renderer identity invariance only; Gate 1 source-distribution auditing begins at E38."}
+      },
+      "E38": {
+        "question": "Are per-beam opportunity, return count and return rate finite, conserved and populated for real-normal, normal-control and anomaly-proxy entity-frame units?",
+        "development_data": "train/201 frames 4 through 681; official 2.5--50 m domain",
+        "support_pool": {"algorithm": "E21-v4 unchanged", "center_frames": [6, 679], "artifact": "runs/ajae/gate1_201_support_pool.npz"},
+        "candidate_bank": {"capacity": 256, "seed_range": [3800000, 3800255], "worlds_per_seed": ["independent control-only", "independent anomaly-only"], "artifact": "runs/ajae/gate1_candidate_bank_256.npz", "capacity_ladder_if_E45_insufficient": [512, 1024, 2048]},
+        "real_unit": "one active train/201 instance persistent across five frames, with at least 16 in-range returns per frame and 32 in the center frame",
+        "real_support_semantic": "qualified patch inside horizontal hull expanded 0.5 m; if absent, nearest qualified patch within 1.0 m",
+        "opportunity": {"real-normal": "same-frame observed-point convex-hull first hits union observed instance slots", "normal-control": "continuous object geometry hits", "anomaly-proxy": "continuous object geometry hits"},
+        "cluster_bootstrap": {"cluster": "entity-frame", "replicates": 2000, "seed_sequence": [3801, 2000], "interval_percentiles": [2.5, 97.5]},
+        "implementation_commits": ["9a0347ca69f0baa1e416e64049f623858cf5e1e4", "deee0d1f38357b189e36d16449639e1b8013fa04"],
+        "render_source_sha256": "100dbb22f2d307b8bfc32d0675b6c73d3efdde04b39ec57997b865707b9862a3",
+        "command": "python -m src.render qualify-e38 --data-root /home/jasongao/Data/STU --e25-artifact runs/ajae/e25_normal_control.npz --calibration runs/ajae/calibration.pt --support-pool-output runs/ajae/gate1_201_support_pool.npz --candidate-bank-output runs/ajae/gate1_candidate_bank_256.npz --output runs/ajae/e38_per_beam_return.npz --processes 24",
+        "artifact": "runs/ajae/e38_per_beam_return.npz",
+        "pass_conditions": ["all rates, intervals and matching fields finite", "return counts do not exceed opportunities", "all three sources have nonzero returns", "two complete 24-process E38 runs are elementwise identical"],
+        "distribution_difference_policy": "descriptive only; source leakage is adjudicated at E46 after E45 matching"
       }
     },
     "world_types": {"pure_normal": 0.2, "control_only": 0.2, "mixed": 0.4, "anomaly_only": 0.2},

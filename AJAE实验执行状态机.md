@@ -3349,6 +3349,16 @@ E38–E44 的 PASS 表示统计有效、覆盖可用于 E45，不等于分布已
 
 计算三来源 per-beam opportunity、return count/rate和cluster bootstrap区间；保存每个entity-frame group。PASS：全部有限、计数守恒、real/control/proxy均有非零回波且关键匹配字段可计算、两遍一致。beam差异只描述。PASS → E39。
 
+### E38及统一候选银行正式执行冻结
+
+train/201支撑池读取帧4–681，以中心帧6–679和五帧对称窗口执行E21-v4完全相同的0.5米world-XY thinning、距离自适应三尺度trimmed-SVD估计及冻结残差/稳定性条件；所有合格区域进入 `runs/ajae/gate1_201_support_pool.npz`。201实际非地面回波全部进入E23同一连续SDF碰撞索引，不做空间抽样。正常对照模板只读取已通过的E25产物，语义支撑策略、0.9–1.1逐轴缩放、车辆/行人朝向策略、E22 grounding、E23 observed-normal collision和E24 placement proposal上限均保持不变。
+
+候选银行首级容量固定256个paired seeds `3800000–3800255`。真实正常实体必须属于201中实际可观测的10、18、20、30类，且同一实例在对应五帧的每帧2.5–50米内至少有16个回波、中心帧至少有32个回波。support semantic先取实体水平凸包外扩0.5米内的qualified patch；为空时取到凸包不超过1.0米的最近qualified patch。每个seed分别构造一个单正常对照世界和一个单异常代理世界，两者是独立counterfactual world，不参与彼此遮挡；支撑proposal限于实体中心五帧及同一support semantic。每个world最多48个固定attempt，每个placement仍最多128个proposal，schema 7每实体仍最多64个shape proposals；两类实体均须在五帧内至少产生1个最终可见回波。候选银行不读取任何来源分类或后续模型结果。
+
+E38保存每个seed、来源和帧的128 beam opportunity与return count，以及support semantic、median beam和median distance。real-normal opportunity使用该实例同帧2.5–50米实际点构造的连续凸包首交，并包含其实际回波槽；control/proxy opportunity使用各自正式连续geometry hit，return count使用正式renderer最终赢得slot的2.5–50米回波。cluster bootstrap以entity-frame为cluster，固定2,000次multinomial重采样和 `SeedSequence([3801,2000])`，报告每来源每beam的2.5%与97.5%分位区间。普通来源间差异只描述，不作为E38硬门。
+
+实现提交为 `9a0347ca69f0baa1e416e64049f623858cf5e1e4`，真实支撑分配修订提交为 `deee0d1f38357b189e36d16449639e1b8013fa04`；最终 `src/render.py` SHA-256为 `100dbb22f2d307b8bfc32d0675b6c73d3efdde04b39ec57997b865707b9862a3`。46项完整回归通过，用时97.39秒。正式命令为 `python -m src.render qualify-e38 --data-root /home/jasongao/Data/STU --e25-artifact runs/ajae/e25_normal_control.npz --calibration runs/ajae/calibration.pt --support-pool-output runs/ajae/gate1_201_support_pool.npz --candidate-bank-output runs/ajae/gate1_candidate_bank_256.npz --output runs/ajae/e38_per_beam_return.npz --processes 24`。
+
 ## E39｜per-range 回波率审计
 
 固定 bins $[2.5,10),[10,20),[20,30),[30,40),[40,50]$。PASS：三来源计数守恒、有限；每个来源在前四 bins均有entity-frame观测，40–50 m不足只报告；两遍一致。PASS → E40。
