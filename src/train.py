@@ -1812,6 +1812,8 @@ def build_formal_training(
         from .render import (
             PROCEDURAL_GENERATOR_SCHEMA,
             extract_normal_template_library,
+            collect_observed_obstacle_index,
+            load_qualified_support_pool,
             load_sensor_calibration,
             render_frame as render_counterfactual_frame,
             sample_training_world,
@@ -1832,6 +1834,8 @@ def build_formal_training(
         from render import (  # type: ignore[no-redef]
             PROCEDURAL_GENERATOR_SCHEMA,
             extract_normal_template_library,
+            collect_observed_obstacle_index,
+            load_qualified_support_pool,
             load_sensor_calibration,
             render_frame as render_counterfactual_frame,
             sample_training_world,
@@ -1928,27 +1932,26 @@ def build_formal_training(
             {"templates": [template.to_dict() for template in normal_templates]},
         ).encode("utf-8")
     ).hexdigest()
-    support_centers = tuple(sequence.spec.center_frames())
-    if not support_centers:
-        raise TrainingError("train/206 has no complete five-frame support window")
+    project_root = Path(getattr(protocol, "path")).parent
+    support_pool = load_qualified_support_pool(
+        project_root / "runs/ajae/e21_v4_support_pool.npz"
+    )
+    obstacle_index = collect_observed_obstacle_index(
+        sequence.source_frame(frame_id) for frame_id in sequence.frame_ids
+    )
 
     def world_factory(world_type: str, seed: int) -> object:
         if world_type not in WORLD_TYPES:
             raise TrainingError("world factory received an unknown world type")
         if type(seed) is not int or seed < 0:
             raise TrainingError("world factory seed must be a non-negative integer")
-        center = support_centers[seed % len(support_centers)]
-        support = tuple(
-            sequence.source_frame(center + offset) for offset in RELATIVE_TIMES
+        world, report = sample_training_world(
+            normal_templates, support_pool, obstacle_index, world_type, seed,
         )
-        return sample_training_world(
-            support,
-            normal_templates,
-            ray_grid,
-            sensor,
-            world_type,
-            seed,
-        )
+        report_dir = run_root / "world_reports"
+        report_dir.mkdir(parents=True, exist_ok=True)
+        _atomic_json(report_dir / f"{seed}.json", report.to_dict())
+        return world
 
     def render_training_frame(source: object, world: object) -> object:
         return render_counterfactual_frame(source, world, ray_grid, sensor)
@@ -1971,7 +1974,6 @@ def build_formal_training(
         )
 
     legal_centers = sequence.spec.legal_anchors(condition.frame_offsets)
-    project_root = Path(getattr(protocol, "path")).parent
     run_root = project_root / config.output_dir / condition.name
     stu_identity_payload = {
         "weights": stu_weight_identity(getattr(protocol, "checkpoint_path")(project_root)),

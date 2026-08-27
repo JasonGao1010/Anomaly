@@ -47,6 +47,8 @@ from src.render import (
     RayGrid,
     SensorCalibration,
     ShapeSpec,
+    QualifiedSupportPool,
+    ObservedObstacleIndex,
     SupportPoints,
     WorldSpec,
     load_sensor_calibration,
@@ -253,33 +255,10 @@ def test_protocol_contains_no_retired_training_route() -> None:
         assert retired not in text
 
 
-def test_real_development_worlds_are_fixed_but_unvalidated() -> None:
+def test_schema4_development_worlds_are_rejected_after_world_v3_freeze() -> None:
     protocol = load_protocol(PROTOCOL_PATH)
-    worlds = load_development_worlds(DEVELOPMENT_PATH, protocol=protocol)
-    all_worlds = (*worlds.in_generator, *worlds.generator_held_out)
-    assert [item.world_id for item in all_worlds] == list(range(30))
-    assert len(worlds.in_generator) == 24 and len(worlds.generator_held_out) == 6
-    assert not worlds.validated
-    assert not worlds.difficulty_coverage_valid
-    assert worlds.status == "definitions_only_unvalidated"
-    assert worlds.gate1["status"] == "pending_scientific_verdict"
-    legal = frozenset(protocol.development_sequence.center_frames())
-    assert all(item.center_frame in legal for item in all_worlds)
-    for item in worlds.in_generator:
-        world = WorldSpec.from_dict(item.world)
-        assert world.world_type == "mixed"
-        assert all(
-            isinstance(obj.shape, ShapeSpec)
-            for obj in world.objects
-            if obj.label == "anomaly-proxy"
-        )
-    for item in worlds.generator_held_out:
-        world = WorldSpec.from_dict(item.world)
-        assert all(
-            isinstance(obj.shape, HeldOutTorusShape)
-            for obj in world.objects
-            if obj.label == "anomaly-proxy"
-        )
+    with pytest.raises(ProtocolError, match="authoritative WorldSpec"):
+        load_development_worlds(DEVELOPMENT_PATH, protocol=protocol)
 
 
 def test_gate1_cannot_be_unlocked_by_editing_status_or_arbitrary_numbers(
@@ -294,21 +273,7 @@ def test_gate1_cannot_be_unlocked_by_editing_status_or_arbitrary_numbers(
     document["gate1"]["status"] = "passed_with_real_evidence"
     edited = tmp_path / "edited-dev.json"
     edited.write_text(json.dumps(document), encoding="utf-8")
-    worlds = load_development_worlds(edited, protocol=protocol)
-    assert not worlds.gate1_evidence_valid
-    assert not worlds.validated
-
-    document["gate1"]["evidence"] = {
-        name: {"x": 1}
-        for name in (
-            "ray_slot_audit",
-            "range_image_round_trip",
-            "render_source_leakage",
-            "beam_range_intensity",
-        )
-    }
-    edited.write_text(json.dumps(document), encoding="utf-8")
-    with pytest.raises(ProtocolError, match="input_identity"):
+    with pytest.raises(ProtocolError, match="authoritative WorldSpec"):
         load_development_worlds(edited, protocol=protocol)
 
 
@@ -725,39 +690,19 @@ def test_csg_continuous_size_certificate_encloses_analytic_lens() -> None:
     assert standard.maximum_surface_residual_m < 1.0e-8
 
 
-def test_mixed_training_world_pairs_support_distance_size_and_seed(
+def test_training_world_uses_only_the_qualified_placement_pipeline(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    elevation = np.linspace(-0.2, 0.2, 128)
-    directions = np.column_stack((np.cos(elevation), np.zeros(128), np.sin(elevation)))
-    grid = RayGrid(directions, elevation, np.asarray((0.0,)), beam_count=128)
-    frames = []
-    for frame_id in range(5):
-        xyzi = np.zeros((128, 4), dtype=np.float32)
-        xyzi[:, :3] = directions * 5.0
-        xyzi[:, 3] = 0.4
-        pose = np.eye(4, dtype=np.float64)
-        pose[0, 3] = 0.1 * frame_id
-        frames.append(
-            make_source_frame(
-                frame_id,
-                xyzi,
-                pose,
-                _labels(np.full(128, 10, dtype=np.uint16)),
-                partition="train",
-                sequence_id=206,
-            )
-        )
-    x, y = np.meshgrid(
-        np.arange(5.0, 45.1, 0.2),
-        np.arange(-10.0, 10.1, 0.2),
-        indexing="ij",
+    x, y = np.meshgrid(np.arange(20), np.arange(20), indexing="ij")
+    anchors = np.column_stack((4.0 * x.ravel(), 4.0 * y.ravel(), np.zeros(x.size)))
+    count = anchors.shape[0]
+    pool = QualifiedSupportPool(
+        np.arange(count), np.full(count, 40, np.uint16), np.arange(count) % 449,
+        np.arange(count), np.linalg.norm(anchors, axis=1), np.arange(count, dtype=np.uint64),
+        anchors, np.tile((0.0, 0.0, 1.0), (count, 1)), np.zeros(count),
     )
-    ground = np.column_stack((x.ravel(), y.ravel(), np.zeros(x.size)))
-    context = SupportPoints(
-        ground,
-        np.full(ground.shape[0], 40, dtype=np.uint16),
-        np.empty((0, 3)),
+    obstacles = ObservedObstacleIndex(
+        np.asarray(((1000.0, 1000.0, 1000.0),)), np.asarray((1,), np.uint64)
     )
     vertices = np.asarray(
         [
@@ -776,74 +721,20 @@ def test_mixed_training_world_pairs_support_distance_size_and_seed(
         1,
         (0.0, 0.0, 0.0),
     )
-    sensor = SensorCalibration.constant(0.4)
     counts = [(1, 1)]
-    placement_calls: list[tuple[str, tuple[int, ...], tuple[int, ...]]] = []
-    original_place = render_module.place_object
-
-    def record_place(*args: object, **kwargs: object) -> object:
-        semantic = np.asarray(kwargs["ground_semantic_ids"], dtype=np.uint16)
-        allowed = tuple(int(value) for value in kwargs["allowed_support_semantics"])
-        placement_calls.append(
-            (str(kwargs["label"]), tuple(map(int, np.unique(semantic))), allowed)
-        )
-        return original_place(*args, **kwargs)  # type: ignore[arg-type]
-
-    monkeypatch.setattr(render_module, "collect_support_context", lambda _: context)
     monkeypatch.setattr(render_module, "_training_entity_counts", lambda *_: counts[0])
-    monkeypatch.setattr(
-        render_module,
-        "validate_world_visibility",
-        lambda *args, **kwargs: {1: 10, 2: 10, 3: 10},
-    )
-    monkeypatch.setattr(render_module, "place_object", record_place)
-
-    first = sample_training_world(frames, (template,), grid, sensor, "mixed", 7)
-    first_calls = tuple(placement_calls)
-    placement_calls.clear()
-    repeated = sample_training_world(frames, (template,), grid, sensor, "mixed", 7)
+    first, first_report = sample_training_world((template,), pool, obstacles, "mixed", 7)
+    repeated, repeated_report = sample_training_world((template,), pool, obstacles, "mixed", 7)
     assert first.to_dict() == repeated.to_dict()
-    assert first_calls == tuple(placement_calls)
-    assert len(first_calls) == 2
-    assert {call[0] for call in first_calls} == {
-        "normal-control",
-        "anomaly-proxy",
-    }
-    assert {call[1] for call in first_calls} == {(40,)}
-    assert {call[2] for call in first_calls} == {(40,)}
-
-    normal = next(item for item in first.objects if item.label == "normal-control")
-    proxy = next(item for item in first.objects if item.label == "anomaly-proxy")
-    normal_position = np.asarray(normal.translation_world_m)
-    proxy_position = np.asarray(proxy.translation_world_m)
-    assert np.linalg.norm(normal_position[:2] - proxy_position[:2]) <= 6.25
-    origin = frames[2].lidar_pose[:3, 3]
-    normal_tier = np.searchsorted(
-        sensor.range_edges_m, np.linalg.norm(normal_position - origin), side="right"
-    )
-    proxy_tier = np.searchsorted(
-        sensor.range_edges_m, np.linalg.norm(proxy_position - origin), side="right"
-    )
-    assert normal_tier == proxy_tier
-    normal_extent = float(
-        np.max(normal.shape.local_bounds()[1] - normal.shape.local_bounds()[0])
-    )
-    proxy_extent = float(
-        np.max(proxy.shape.local_bounds()[1] - proxy.shape.local_bounds()[0])
-    )
-    target_extent = float(np.clip(normal_extent, 0.2, 3.0))
-    assert 0.85 * target_extent <= proxy_extent <= 1.15 * target_extent
-    assert normal.material != proxy.material
-
-    alternate = sample_training_world(frames, (template,), grid, sensor, "mixed", 8)
-    assert alternate.to_dict() != first.to_dict()
-    counts[0] = (2, 1)
-    remainder = sample_training_world(frames, (template,), grid, sensor, "mixed", 11)
-    assert {item.label for item in remainder.objects[:2]} == {
-        "normal-control",
-        "anomaly-proxy",
-    }
-    assert remainder.objects[2].label == "normal-control"
+    assert first_report.to_dict() == repeated_report.to_dict()
+    assert first.world_type == "mixed"
+    assert len(first_report.placements) == 2
+    assert all(record.support_semantic == 40 for record in first_report.placements)
+    assert all(record.accepted_proposal < 128 for record in first_report.placements)
+    assert all(not record.rejection_reasons or set(record.rejection_reasons) <= {
+        "ground_contact_failure", "observed_normal_deep_penetration",
+        "obvious_pair_penetration",
+    } for record in first_report.placements)
 
 
 @pytest.mark.parametrize("slope_deg", [0.0, 5.0, 10.0])
@@ -993,10 +884,8 @@ def test_world_budget_exhaustion_cannot_publish_a_completed_model(
 
 def test_formal_preflight_refuses_pending_evidence() -> None:
     protocol = load_protocol(PROTOCOL_PATH)
-    worlds = load_development_worlds(DEVELOPMENT_PATH, protocol=protocol)
-    document = json.loads(DEVELOPMENT_PATH.read_text(encoding="utf-8"))
-    with pytest.raises(TrainingError, match="not frozen and validated"):
-        validate_formal_preflight(protocol, worlds, document)
+    with pytest.raises(ProtocolError, match="authoritative WorldSpec"):
+        load_development_worlds(DEVELOPMENT_PATH, protocol=protocol)
 
 
 def test_probability_fusion_uses_canonical_ray_probabilities() -> None:
