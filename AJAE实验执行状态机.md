@@ -3026,6 +3026,20 @@ control index $i\in[0,1023]$ 的control seed固定为 $2{,}500{,}000+i$。vehicl
 
 本节点不要求人类判断“看起来像真实交通场景”。PASS → **E26**。
 
+**实现缺陷与修复记录**
+
+首次完整执行的两遍结果逐元素一致，但只有1,018/1,024个control完成；6个固定control在128次内全部报告 `PlacementError: deterministic surface ray missed the inserted geometry`。失败索引为28、174、412、558、796、942，对应control seed为2,500,028、2,500,174、2,500,412、2,500,558、2,500,796、2,500,942。已完成的1,018个control中，类别—支撑违规、缩放错误、姿态错误、最终E22/E23验证错误和多实体fixture错误均为0。
+
+该次失败归类为 `implementation_defect`，不形成E25科学裁决。确定性表面采样原实现把局部原点当作所有形状的内部点；上述6个真实实例凸包不包含局部原点，因此从原点中心外部球面射向原点的部分射线没有命中凸包。修复只对 `NormalTemplateShape` 使用凸包顶点均值作为严格内部射线汇聚点，并以该点到最远顶点的距离构造外部球面；schema 7形状路径保持不变。新增“局部原点位于凸包外”的回归后，完整测试为45项全部通过。无效产物 `runs/ajae/e25_normal_control.npz` 大小1,994,700字节、SHA-256为 `c254987a0bc05865048e412201065bf88759d3ef3a7bae93c14f8aa4387f6898`，已在同命令重跑前删除。
+
+**E25 正式结果：PASS（E25关闭，E26解锁）**
+
+修复后的冻结实现提交为 `963d8cb8bac037de6fd6c6a081ed7152535ab02e`。同一正式命令完成两遍24进程运行，两遍用时分别为97.082646秒和100.313903秒；全部保存数组逐元素一致。1,024/1,024个control均在128次支撑提议内完成，放置耗尽、硬错误、类别—支撑违规、缩放错误、姿态错误、最终E22/E23验证错误和多实体fixture错误均为0。科学数组哈希为 `a4437aeadd3c444145c84c4fa4cc71b801a29ea8d9e7454789f68114613aa7b5`。
+
+独立复算确认control seed精确覆盖2,500,000–2,501,023且无重复；接受类别数为person 512、car 171、truck 171、other-vehicle 170，每个active class实际使用64个唯一模板，总计256个唯一模板。road支撑972个、sidewalk支撑52个，全部vehicle-like对象只使用road，person只使用road或sidewalk。三轴缩放实际范围为0.90003458–1.09972148；vehicle-like姿态扰动最大绝对值为14.988022°，person范围为-179.184416°至179.577023°。每对象支撑提议次数minimum/median/mean/$Q_{0.95}$/maximum为1/1/1.315430/3/8，总计1,347次。control index 0的混合control/proxy fixture哈希为 `f260151c44d8891902bdb6b7b464aa96571897b0311e520e7c5c49f7e1422da9`。
+
+正式产物 `runs/ajae/e25_normal_control.npz` 大小2,002,631字节，SHA-256为 `b2d98a01b68b030fdd3bba348a933ef02733deb0bbebbaf845ab2b5b17b90bee`。E25 PASS允许的结论限定为：**当前从train/206实际可观察到的car、truck、other-vehicle和person凸包模板，可以按冻结类别—支撑策略、缩放与轨迹姿态规则，通过同一E22–E24权威放置路径确定性构造1,024个合法normal-control。** 本结果不对四个inactive类别形成放置资格结论，也不替代E26对完整不可变world-spec和缓存顺序不变性的检查。
+
 ## E26｜权威 world builder 与完整世界规格确定性
 
 **唯一问题**

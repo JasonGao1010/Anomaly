@@ -1845,11 +1845,11 @@
           }
         },
         "placement_world_builder_E23_E26": {
-          "status": "DESIGN AND EXECUTION FROZEN; E23 PASS; E24 FAIL retained; E24-v2 PASS; E25 unlocked",
+          "status": "DESIGN AND EXECUTION FROZEN; E23 PASS; E24 FAIL retained; E24-v2 PASS; E25 PASS; E26 unlocked",
           "design_authorities": ["AJAE新主线方案.md", "AJAE实验执行状态机.md"],
           "design_authority_sha256": {
-            "main_plan": "c32924054e324c289056ba561205407a4d4e4f9dbbec1ba44c3c18b2b8a07071",
-            "state_machine": "fbf1a788e6a8ca47e46ee786d44d1e06e4fd7e45bbdbd3b8be35de55770c025c"
+            "main_plan": "da5dfb1bcd8c46ad962af103f6b426b67066efd4ba170d2886034a5a0b09d27e",
+            "state_machine": "4cfa12d34d9cc79a4fdda163970fcde29133eeaf9549692bc88c0eb0c034e378"
           },
           "implementation_identity": {
             "commit": "963d8cb8bac037de6fd6c6a081ed7152535ab02e",
@@ -1990,7 +1990,7 @@
             }
           },
           "E25": {
-            "status": "DESIGN AND EXECUTION FROZEN; observable-template precheck PASS; formal run pending",
+            "status": "PASS; closed; E26 unlocked",
             "template_minimum_points": 32,
             "active_class_minimum_templates": 4,
             "active_template_total_minimum": 32,
@@ -2019,10 +2019,49 @@
             "pass_conditions": ["active-class precheck passes", "semantic violations=0", "template, scale, pose and transform errors=0", "1024/1024 accepted within 128 proposals", "mixed fixture passes E24", "two runs elementwise identical"],
             "implementation_commit": "963d8cb8bac037de6fd6c6a081ed7152535ab02e",
             "command": "python -m src.render qualify-e25 --data-root /home/jasongao/Data/STU --support-pool runs/ajae/e21_v4_support_pool.npz --output runs/ajae/e25_normal_control.npz --processes 24",
-            "artifact": "runs/ajae/e25_normal_control.npz"
+            "artifact": "runs/ajae/e25_normal_control.npz",
+            "implementation_defect_run": {
+              "classification": "implementation_defect; no E25 scientific verdict",
+              "completed": 1018,
+              "placement_exhaustions": 6,
+              "failed_control_indices": [28, 174, 412, 558, 796, 942],
+              "failed_control_seeds": [2500028, 2500174, 2500412, 2500558, 2500796, 2500942],
+              "error": "PlacementError: deterministic surface ray missed the inserted geometry",
+              "cause": "normal-template deterministic surface rays incorrectly assumed that local origin lies inside every real convex hull",
+              "invalid_artifact_bytes": 1994700,
+              "invalid_artifact_sha256": "c254987a0bc05865048e412201065bf88759d3ef3a7bae93c14f8aa4387f6898",
+              "invalid_artifact_removed_before_retry": true
+            },
+            "result": {
+              "templates": 256,
+              "active_counts": {"10": 64, "18": 64, "20": 64, "30": 64},
+              "placements_completed": 1024,
+              "semantic_counts": {"10": 171, "18": 171, "20": 170, "30": 512},
+              "unique_templates_used": 256,
+              "support_counts": {"40": 972, "48": 52},
+              "semantic_violations": 0,
+              "scale_errors": 0,
+              "pose_errors": 0,
+              "validation_errors": 0,
+              "fixture_errors": 0,
+              "hard_errors": 0,
+              "placement_exhaustions": 0,
+              "elementwise_reproduced": true,
+              "run_seconds": [97.08264571499603, 100.31390321800427],
+              "support_proposal_count": {"minimum": 1, "median": 1.0, "mean": 1.3154296875, "q95_higher": 3, "maximum": 8, "total": 1347},
+              "scale_observed_range": [0.9000345796102098, 1.0997214827046917],
+              "vehicle_maximum_absolute_pose_perturbation_deg": 14.988022438858916,
+              "person_pose_perturbation_deg_range": [-179.18441572407787, 179.57702313640425],
+              "mixed_fixture_hash": "f260151c44d8891902bdb6b7b464aa96571897b0311e520e7c5c49f7e1422da9",
+              "scientific_array_sha256": "a4437aeadd3c444145c84c4fa4cc71b801a29ea8d9e7454789f68114613aa7b5",
+              "artifact_bytes": 2002631,
+              "artifact_sha256": "b2d98a01b68b030fdd3bba348a933ef02733deb0bbebbaf845ab2b5b17b90bee",
+              "conclusion": "The actually observable train/206 car, truck, other-vehicle and person convex-hull templates deterministically produce all 1024 frozen legal normal controls under the frozen semantic-support, scale, pose and E22-E24 placement rules.",
+              "claim_limit": "E25 does not qualify the four inactive unobservable classes and does not establish E26 immutable world-spec or cache-order invariance."
+            }
           },
           "E26": {
-            "status": "DESIGN FROZEN; locked until E25 PASS",
+            "status": "DESIGN FROZEN; unlocked",
             "world_seeds": [2600000, 2600255],
             "world_type_quota_each": 64,
             "maximum_world_attempts": 48,
