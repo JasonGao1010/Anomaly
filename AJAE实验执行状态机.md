@@ -3375,7 +3375,7 @@ real-normal、normal-control、anomaly-proxy各保存1,280个entity-frame groups
 
 直接读取E38已冻结且通过的256-seed候选银行，不重建201支撑池或世界。每个seed、来源和五帧保存五个冻结range bins的geometry opportunity与最终return count；real-normal opportunity继续使用同帧实际点凸包首交并包含实际实例槽，control/proxy使用连续geometry hit，全部距离采用规范官方量程。PASS要求逐entity-frame return不超过opportunity，全部聚合率与逐实体帧匹配字段有限，三来源在前四bins分别至少有一个非零return entity-frame group，两遍24进程全部数组逐元素一致；40–50米覆盖只报告。
 
-本次同一权威渲染同时保存E40–E44直接需要的原始trace：逐实体帧geometry/accepted/visible counts与distance、逐返回beam/range/intensity，以及control/proxy逐beam/range的native-empty、geometry、accepted和final-new计数。后续节点只读取这些已冻结原始数组各自裁决，不重新执行相同几何和渲染，也不提前写入后续PASS结论。实现提交 `f09ea627b4203fe738c86761275c16e6786529c1`，`src/render.py` SHA-256为 `4383956d2fd2cfd287ff01d49ddbb83ff01500ce9b74f46772cfb757238eb02a`；46项完整回归通过，用时98.72秒。正式命令为 `python -m src.render qualify-e39 --data-root /home/jasongao/Data/STU --candidate-bank runs/ajae/gate1_candidate_bank_256.npz --calibration runs/ajae/calibration.pt --output runs/ajae/e39_per_range_return.npz --processes 24`。
+本次同一权威渲染同时保存E40–E44直接需要的原始trace：逐实体帧geometry/accepted/visible counts与distance、逐返回beam/range/intensity，以及control/proxy逐beam/range的native-empty、geometry、accepted和final-new计数。后续节点只读取这些已冻结原始数组各自裁决，不重新执行相同几何和渲染，也不提前写入后续PASS结论。实现提交 `f09ea627b4203fe738c86761275c16e6786529c1`。首次启动因审计端对冻结mask原地执行距离筛选而触发只读数组异常，在生成科学结果前退出；修复提交 `9da9dcd19f3df276b6533c10389f5d7eb5154ade` 仅创建显式mask副本，不改变样本、渲染、随机流或判据。修复后 `src/render.py` SHA-256为 `8009cac53f0b62e127c72ff22aa35aeed957c0650f5e7743741db72d4a4e0e4b`，46项完整回归通过，用时97.87秒。正式命令不变。
 
 ## E40｜beam×range 强度审计
 
