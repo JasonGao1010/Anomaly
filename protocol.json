@@ -1849,7 +1849,7 @@
           "design_authorities": ["AJAE新主线方案.md", "AJAE实验执行状态机.md"],
           "design_authority_sha256": {
             "main_plan": "c32924054e324c289056ba561205407a4d4e4f9dbbec1ba44c3c18b2b8a07071",
-            "state_machine": "c2d66bb9e809e64ed460bb46dd513707e9280d7f43c95d52c8509b3b4a36b950"
+            "state_machine": "41b2468866527959f1023ef11bec92cf8dff4ef7281df1756fafaaa65911797e"
           },
           "implementation_identity": {
             "commit": "e98e5d2aae93669c96c34cd4c9046171f3e747b6",
@@ -1990,14 +1990,32 @@
             }
           },
           "E25": {
-            "status": "DESIGN FROZEN; unlocked by E24-v2 PASS",
+            "status": "DESIGN FROZEN; observable-template precheck PASS; execution implementation pending",
             "template_minimum_points": 32,
             "active_class_minimum_templates": 4,
             "active_template_total_minimum": 32,
+            "precheck": {
+              "templates": 256,
+              "counts_by_semantic": {"10": 64, "18": 64, "20": 64, "30": 64},
+              "active_classes": [10, 18, 20, 30],
+              "inactive_unobservable_classes": [11, 15, 31, 32],
+              "unique_template_identities": 256,
+              "library_sha256": "de5dfd765ac7d4fe4bb4644c40ecafdd80cdc31a3d0b6fc4fccd8e84a9fd906b"
+            },
             "placements": 1024,
             "vehicle_support_semantics": [40],
             "person_rider_support_semantics": [40, 48],
             "scale_range": [0.9, 1.1],
+            "control_seed": "2500000+control_index",
+            "selection": "alternate active vehicle-like and person/rider-like broad groups by control-index parity; cycle sorted active semantics within each group and stable identity-hash templates within class",
+            "scale_stream": "numpy default_rng(SeedSequence([control_seed,2501])).uniform(0.9,1.1,size=3)",
+            "pose_stream": "numpy default_rng(SeedSequence([control_seed,2502])); active vehicle classes U[-15deg,15deg], person U[-pi,pi)",
+            "material_seed": "control_seed+2503",
+            "support_namespace": "E25-support-v1",
+            "support_stream": "control_index",
+            "trajectory_tangent": "central difference of adjacent lidar world positions for internal frames, one-sided at endpoints, projected to world xy; degenerate fallback is the frame world-x pose axis projected to xy",
+            "template_axis": "deterministic xy PCA principal eigenvector with first nonzero dominant component made positive, pre-rotated to local +x",
+            "mixed_fixture": "accepted control index 0 plus first E22-qualified proxy from shape seed stream 5000000+3072*q using E25-mixed-fixture-v1 support stream and the same E22/E23/E24 pair path",
             "pass_conditions": ["active-class precheck passes", "semantic violations=0", "template, scale, pose and transform errors=0", "1024/1024 accepted within 128 proposals", "mixed fixture passes E24", "two runs elementwise identical"]
           },
           "E26": {

@@ -3005,6 +3005,16 @@ normal-control 是否来自真实 train/206 正常实例，并且只被放到基
 
 1,024 个 control placements；按 active broad group 轮转、类内模板身份哈希抽取，可重复使用模板但 support/pose/material 流独立。每个对象最多 128 次 proposal，并依次执行 E22、E23；多实体 fixture 另执行 E24。
 
+**执行预检与确定性流冻结**
+
+train/206全部449帧的正式预检得到256个模板：car=10、truck=18、other-vehicle=20、person=30各64个，均为active class；bicycle=11、motorcycle=15、bicyclist=31、motorcyclist=32为 `inactive_unobservable_class`。两个broad group均active，模板身份唯一数为256，按canonical模板JSON身份顺序形成的library hash为 `de5dfd765ac7d4fe4bb4644c40ecafdd80cdc31a3d0b6fc4fccd8e84a9fd906b`。
+
+control index $i\in[0,1023]$ 的control seed固定为 $2{,}500{,}000+i$。vehicle-like与person/rider-like broad group按$i$奇偶轮转；组内active semantic按升序轮转，再按模板身份哈希顺序循环。三轴缩放由 `SeedSequence([control_seed,2501])` 独立采样 $U[0.9,1.1]$；姿态扰动由 `SeedSequence([control_seed,2502])` 采样，car/truck/other-vehicle为$U[-15^\circ,15^\circ]$，person为$U[-\pi,\pi)$；material seed为 `control_seed+2503`。support命名空间为 `E25-support-v1`，stream为control index。
+
+每个模板先在局部xy平面执行确定性PCA，最大特征值对应特征向量的首个非零主分量固定为正，并将该水平主轴预旋转到局部+x。每个support proposal的世界朝向使用该support所属源帧的ego-trajectory切向：内部帧用相邻前后帧LiDAR世界位置的中心差分，首尾帧用单边差分，投影到世界xy后单位化；退化时使用该帧位姿的世界+x轴投影。再叠加该control seed固定的姿态扰动。support变化只改变轨迹切向，不重采缩放、模板、材质或扰动。
+
+多实体fixture使用control index 0的接受对象与shape seed 5,000,000起、步长3,072的首个E22合格schema 7 proxy，proxy使用 `E25-mixed-fixture-v1` support流并以control为既有实体，要求最终E22/E23与E24 pair detector全部通过。正式命令、实现身份和产物路径在运行前写入 `protocol.json`。
+
 **PASS 条件**
 
 - active-class 预检满足；
