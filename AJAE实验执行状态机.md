@@ -3295,6 +3295,10 @@ E31逐元素核对E28-v2 PASS产物的seed与shape identity并重建原256个sch
 
 PASS：anomaly-only 或 control-only 传感器分支数0；paired trace 中间量零差异；标签赋值正确。PASS → E37。
 
+**执行冻结**
+
+静态审计 `_accepted_object_hits`、`SensorCalibration.return_chance` 与 `SensorCalibration.sample_intensity` 内对 `label` 属性或两类label常量的读取次数。运行配对构造分别尝试把同一个 `NormalTemplateShape` 仅改label为anomaly-proxy，以及把同一个schema 7 `ShapeSpec` 仅改label为normal-control；除label外material、pose与object ID保持一致。只有两种构造均通过后才执行paired trace；任一权威 `ObjectSpec` 合同拒绝即视为paired fixture不可构造并FAIL，不绕过dataclass验证。实现提交 `2404074c91660544b67d9b23ce6588e629b9f441`，`src/render.py` SHA-256为 `a628b8a0551c3d748c8182f50daf93d07d92f5a24b16b463d8fcbf4464257d52`。正式命令为 `python -m src.render qualify-e36 --output runs/ajae/e36_shared_path.npz`。
+
 ## E37｜world/frame 跨窗口一致性
 
 固定128个 E26 worlds，每个选择多个重叠五帧窗口；以正序、逆序、随机顺序、不同进程数、cached/uncached 请求共享帧。

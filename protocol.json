@@ -2131,7 +2131,7 @@
       }
     },
     "renderer_mechanical_qualification": {
-      "status": "E27-E35 PASS; E28-v1 FAIL retained as protocol implementation defect; E36 unlocked; E37 locked",
+      "status": "E27-E35 PASS; E28-v1 FAIL retained as protocol implementation defect; E36 design and execution frozen; E37 locked",
       "layer_boundaries": {"E27-E28": "direct geometry outputs only", "E29": "return probability and deterministic acceptance decision only", "E30-E31": "accepted returns", "E32-E33": "nearest-return occlusion competition"},
       "E27": {
         "question": "Does the formal geometry path return the correct nearest convex-hull hit, outward finite normal and object ID for active normal-control templates when return rejection is disabled?",
@@ -2425,6 +2425,16 @@
         "artifact": "runs/ajae/e35_intensity.npz",
         "pass_conditions": ["maximum intensity error <=1e-6", "uniform reference error=0", "all intensities finite", "all intensities within train/206 support", "no undefined cell", "two 24-process runs elementwise identical"],
         "result": {"passed": true, "maximum_intensity_error": 0.0, "maximum_uniform_error": 0.0, "undefined_cells": 0, "support_errors": 0, "quantile_low_clipped": 0, "quantile_high_clipped": 80, "quantile_clipping_fraction": 0.0014467592592592592, "elementwise_reproduced": true, "run_seconds": [0.12067044399736915, 0.12421703500149306], "scientific_array_sha256": "cc8ffa84692ec01ce337e8e66d18e5c4dfabc836b8072699feb7dccca4a7efac", "artifact_bytes": 2048622, "artifact_sha256": "25ffbbea26b7b1a211a0f098276350fbc4b8decabe9cf9b5e69ab2e9edc3acd2"}
+      },
+      "E36": {
+        "question": "Are all sensor intermediate stages label-independent, including a paired fixture that changes only label?",
+        "static_audit_functions": ["_accepted_object_hits", "return_chance", "sample_intensity"],
+        "paired_construction": ["same NormalTemplateShape relabelled anomaly-proxy", "same ShapeSpec relabelled normal-control"],
+        "construction_rule": "use authoritative ObjectSpec validation; no bypass",
+        "implementation_commit": "2404074c91660544b67d9b23ce6588e629b9f441",
+        "command": "python -m src.render qualify-e36 --output runs/ajae/e36_shared_path.npz",
+        "artifact": "runs/ajae/e36_shared_path.npz",
+        "pass_conditions": ["sensor intermediate label branches=0", "both paired objects construct successfully", "paired sensor intermediates elementwise identical", "final label assignment correct"]
       }
     },
     "world_types": {"pure_normal": 0.2, "control_only": 0.2, "mixed": 0.4, "anomaly_only": 0.2},
