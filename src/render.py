@@ -31,6 +31,8 @@ for _thread_variable in (
 import numpy as np
 from scipy import ndimage
 from scipy.optimize import brentq, differential_evolution
+from scipy.sparse import coo_matrix
+from scipy.sparse.csgraph import min_weight_full_bipartite_matching
 from scipy.spatial import ConvexHull, QhullError, cKDTree
 from scipy.stats import qmc
 
@@ -12018,6 +12020,251 @@ def _e45_selected_scientific(
     return {**match, **selected}
 
 
+def _e45_pair_smd(values: np.ndarray) -> np.ndarray:
+    left, right = values[:, 0], values[:, 1]
+    pooled = np.sqrt((left.var(axis=0, ddof=1) + right.var(axis=0, ddof=1)) / 2.0)
+    difference = np.abs(left.mean(axis=0) - right.mean(axis=0))
+    return np.divide(
+        difference, pooled, out=np.where(difference == 0.0, 0.0, np.inf),
+        where=pooled > 0.0,
+    )
+
+
+def _e45_hash_tie_cost(primary: np.ndarray, tie_hash: np.ndarray) -> np.ndarray:
+    """Order exactly equal edge costs by the frozen unit hashes."""
+    cost = np.asarray(primary, dtype=np.float64).copy()
+    order = np.lexsort((tie_hash, cost))
+    start = 0
+    while start < order.size:
+        stop = start + 1
+        value = cost[order[start]]
+        while stop < order.size and cost[order[stop]] == value:
+            stop += 1
+        adjusted = value
+        for position in order[start:stop]:
+            cost[position] = adjusted
+            adjusted = np.nextafter(adjusted, np.inf)
+        start = stop
+    return cost
+
+
+def _e45_pair_match(
+    units: Mapping[str, np.ndarray], left_source: int, right_source: int,
+) -> dict[str, np.ndarray]:
+    """Find the maximum legal pair set, then minimize normalized imbalance."""
+    flat = {
+        name: np.asarray(value).reshape((-1,) + value.shape[2:])
+        for name, value in units.items()
+    }
+    covariates = _e45_covariates(flat)
+    valid = (
+        (flat["point_count"] > 0) & (flat["range_bin"] >= 0)
+        & (flat["range_bin"] < 4) & (flat["azimuth_sector"] >= 0)
+        & np.isfinite(covariates).all(axis=1)
+    )
+    by_source: list[np.ndarray] = []
+    for source_id in (left_source, right_source):
+        candidates = np.flatnonzero(valid & (flat["source"] == source_id))
+        candidates = candidates[np.argsort(flat["unit_hash"][candidates], kind="stable")]
+        _, first = np.unique(flat["unit_hash"][candidates], return_index=True)
+        by_source.append(candidates[np.sort(first)])
+
+    caliper = np.asarray((2.0, 4.0, 0.25, 0.10, 0.25), dtype=np.float64)
+    matched: list[tuple[int, int]] = []
+    legal_edge_count = 0
+    strata_with_edges = 0
+    for support in (40, 48):
+        for range_bin in range(4):
+            for sector in range(8):
+                groups = [
+                    source[
+                        (flat["support_semantic"][source] == support)
+                        & (flat["range_bin"][source] == range_bin)
+                        & (flat["azimuth_sector"][source] == sector)
+                    ]
+                    for source in by_source
+                ]
+                left, right = groups
+                if left.size == 0 or right.size == 0:
+                    continue
+                right_tree = cKDTree(covariates[right] / caliper, compact_nodes=True)
+                neighbours = right_tree.query_ball_point(
+                    covariates[left] / caliper, r=1.0, p=np.inf, workers=1,
+                )
+                edge_left: list[int] = []
+                edge_right: list[int] = []
+                for left_local, possible in enumerate(neighbours):
+                    if not possible:
+                        continue
+                    possible_array = np.asarray(possible, dtype=np.int64)
+                    legal = possible_array[np.all(
+                        np.abs(covariates[right[possible_array]] - covariates[left[left_local]])
+                        <= caliper,
+                        axis=1,
+                    )]
+                    edge_left.extend([left_local] * legal.size)
+                    edge_right.extend(legal.tolist())
+                if not edge_left:
+                    continue
+                rows = np.asarray(edge_left, dtype=np.int64)
+                columns = np.asarray(edge_right, dtype=np.int64)
+                differences = (
+                    covariates[left[rows]] - covariates[right[columns]]
+                ) / caliper
+                primary = 1.0 + np.square(differences).sum(axis=1)
+                with np.errstate(over="ignore"):
+                    tie_hash = (
+                        flat["unit_hash"][left[rows]].astype(np.uint64)
+                        * np.uint64(0x9E3779B97F4A7C15)
+                        + flat["unit_hash"][right[columns]].astype(np.uint64)
+                    )
+                real_cost = _e45_hash_tie_cost(primary, tie_hash)
+                penalty = float((left.size + 1) * (float(real_cost.max()) + 1.0))
+                dummy_rows = np.arange(left.size, dtype=np.int64)
+                graph = coo_matrix(
+                    (
+                        np.concatenate((real_cost, np.full(left.size, penalty))),
+                        (
+                            np.concatenate((rows, dummy_rows)),
+                            np.concatenate((columns, right.size + dummy_rows)),
+                        ),
+                    ),
+                    shape=(left.size, right.size + left.size),
+                ).tocsr()
+                row_match, column_match = min_weight_full_bipartite_matching(graph)
+                real = column_match < right.size
+                pairs = np.column_stack((left[row_match[real]], right[column_match[real]]))
+                pairs = pairs[np.argsort(flat["unit_hash"][pairs[:, 0]], kind="stable")]
+                matched.extend((int(pair[0]), int(pair[1])) for pair in pairs)
+                legal_edge_count += rows.size
+                strata_with_edges += 1
+
+    matched_index = np.asarray(matched, dtype=np.int64).reshape(-1, 2)
+    matched_covariates = (
+        covariates[matched_index] if matched
+        else np.empty((0, 2, 5), dtype=np.float64)
+    )
+    smd = (
+        _e45_pair_smd(matched_covariates)
+        if len(matched) > 1 else np.full(5, np.inf)
+    )
+    range_count = (
+        np.bincount(flat["range_bin"][matched_index[:, 0]], minlength=4)[:4]
+        if matched else np.zeros(4, dtype=np.int64)
+    )
+    caliper_errors = int(np.count_nonzero(
+        np.abs(matched_covariates[:, 0] - matched_covariates[:, 1]) > caliper
+    )) if matched else 0
+    duplicate_errors = int(sum(
+        len(matched) - np.unique(flat["unit_hash"][matched_index[:, side]]).size
+        for side in range(2)
+    )) if matched else 0
+    return {
+        "matched_flat_index": matched_index,
+        "matched_covariates": matched_covariates,
+        "pairwise_smd": smd,
+        "matched_range_count": range_count.astype(np.int64),
+        "matched_center_frames": np.unique(
+            flat["center_frame"][matched_index[:, 0]]
+        ).astype(np.int16) if matched else np.empty(0, dtype=np.int16),
+        "legal_edge_count": np.asarray(legal_edge_count, dtype=np.int64),
+        "strata_with_edges": np.asarray(strata_with_edges, dtype=np.int64),
+        "caliper_errors": np.asarray(caliper_errors, dtype=np.int64),
+        "duplicate_errors": np.asarray(duplicate_errors, dtype=np.int64),
+    }
+
+
+def run_e45_pair_qualification(
+    unit_cache_path: Path | str, output_path: Path | str, *, experiment: str,
+    left_source: int, right_source: int,
+) -> dict[str, object]:
+    """Qualify one frozen pairwise common-support estimand."""
+    cache_path = Path(unit_cache_path).expanduser().resolve(strict=True)
+    with np.load(cache_path, allow_pickle=False) as source:
+        metadata = json.loads(str(source["metadata_json"]))
+        if (
+            metadata.get("experiment") != "E45-v2-units"
+            or metadata.get("passed") is not True
+            or int(metadata.get("capacity", -1)) != 2048
+        ):
+            raise RenderError(f"{experiment} requires the formal 2,048-capacity E45-v2 cache")
+        units = {name: np.asarray(source[name]) for name in _E45_UNIT_FIELDS}
+    started = time.monotonic()
+    runs = [_e45_pair_match(units, left_source, right_source) for _ in range(2)]
+    matching_seconds = time.monotonic() - started
+    reproduced = all(
+        np.array_equal(runs[0][name], runs[1][name]) for name in runs[0]
+    )
+    match = runs[0]
+    matched_count = int(match["matched_flat_index"].shape[0])
+    center_frames = int(match["matched_center_frames"].size)
+    range_count = np.asarray(match["matched_range_count"])
+    maximum_smd = float(np.max(match["pairwise_smd"]))
+    caliper_errors = int(match["caliper_errors"])
+    duplicate_errors = int(match["duplicate_errors"])
+    passed = (
+        matched_count >= 1024 and center_frames >= 100
+        and bool(np.all(range_count > 0)) and caliper_errors == 0
+        and duplicate_errors == 0 and maximum_smd <= 0.10 and reproduced
+    )
+    scientific = _e45_selected_scientific(units, match)
+    result = {
+        "experiment": experiment,
+        "passed": passed,
+        "failure_classification": None if passed else "insufficient_pairwise_common_support",
+        "source_pair": [left_source, right_source],
+        "unit_cache_sha256": _sha256_path(cache_path),
+        "unit_cache_scientific_array_hash": metadata["scientific_array_hash"],
+        "capacity": 2048,
+        "estimand_range_m": [2.5, 40.0],
+        "range_40_50_status": "unobservable_for_real-vs-rendered-object matching in train/201",
+        "matching_objective": "maximum_cardinality_then_minimum_sum_squared_normalized_covariate_difference",
+        "matched_pairs": matched_count,
+        "center_frames": center_frames,
+        "matched_range_count_2p5_to_40": range_count.tolist(),
+        "legal_edges": int(match["legal_edge_count"]),
+        "exact_strata_with_edges": int(match["strata_with_edges"]),
+        "pairwise_smd": match["pairwise_smd"].tolist(),
+        "maximum_pairwise_smd": maximum_smd,
+        "caliper_errors": caliper_errors,
+        "duplicate_errors": duplicate_errors,
+        "elementwise_reproduced": reproduced,
+        "two_run_matching_seconds": matching_seconds,
+        "scientific_array_hash": _scientific_array_hash(scientific),
+        "claim_limit": (
+            "The pairwise source audit is limited to train/201 real-object support "
+            "from 2.5 m through 40 m; 40--50 m has no direct real-object matching evidence."
+        ),
+    }
+    output = Path(output_path).expanduser().resolve()
+    output.parent.mkdir(parents=True, exist_ok=True)
+    temporary = output.with_suffix(output.suffix + ".tmp.npz")
+    np.savez_compressed(
+        temporary, **scientific,
+        metadata_json=np.asarray(json.dumps(result, sort_keys=True, separators=(",", ":"))),
+    )
+    os.replace(temporary, output)
+    return result
+
+
+def run_e45a_qualification(
+    unit_cache_path: Path | str, output_path: Path | str,
+) -> dict[str, object]:
+    return run_e45_pair_qualification(
+        unit_cache_path, output_path, experiment="E45A",
+        left_source=0, right_source=1,
+    )
+
+
+def run_e45b_qualification(
+    unit_cache_path: Path | str, output_path: Path | str,
+) -> dict[str, object]:
+    return run_e45_pair_qualification(
+        unit_cache_path, output_path, experiment="E45B",
+        left_source=1, right_source=2,
+    )
+
+
 def run_e45_v2_qualification(
     data_root: Path | str, support_pool_path: Path | str,
     e25_artifact_path: Path | str, calibration_path: Path | str,
@@ -12295,6 +12542,12 @@ def _render_parser() -> argparse.ArgumentParser:
     e45v2.add_argument("--e45-v1-artifact", type=Path, required=True)
     e45v2.add_argument("--output", type=Path, required=True)
     e45v2.add_argument("--processes", type=int, default=24)
+    e45a = subcommands.add_parser("qualify-e45a")
+    e45a.add_argument("--unit-cache", type=Path, required=True)
+    e45a.add_argument("--output", type=Path, required=True)
+    e45b = subcommands.add_parser("qualify-e45b")
+    e45b.add_argument("--unit-cache", type=Path, required=True)
+    e45b.add_argument("--output", type=Path, required=True)
     return parser
 
 
@@ -12440,6 +12693,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.calibration, args.candidate_bank_256, args.e45_v1_artifact,
             args.output, processes=args.processes,
         )
+        print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        return 0 if result["passed"] else 1
+    if args.command == "qualify-e45a":
+        result = run_e45a_qualification(args.unit_cache, args.output)
+        print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        return 0 if result["passed"] else 1
+    if args.command == "qualify-e45b":
+        result = run_e45b_qualification(args.unit_cache, args.output)
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 0 if result["passed"] else 1
     raise AssertionError("unreachable renderer command")
