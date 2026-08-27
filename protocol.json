@@ -1852,11 +1852,11 @@
             "state_machine": "00bd9c3fa5acb8cbe23ec17e751d02693423577c509a87bfe2d8447d8ec5df4b"
           },
           "implementation_identity": {
-            "commit": "8640f298e344d8965f3a5aa7b31851a0a37b1749",
-            "render_sha256": "cc90d9c49c86b8a985f8101bc1ca62f6f68bb478d5683c16f5d9d4787eae01ed",
+            "commit": "e98e5d2aae93669c96c34cd4c9046171f3e747b6",
+            "render_sha256": "69f9be935de178004cee8da812ac2f1a5a4d90240af8b3692e25eaac349a5a29",
             "train_sha256": "eb30a33b97d7422671aad0fd87f0e3efd2626e4235c9db1bf91ef13566dca53d",
-            "tests_sha256": "2f4cd11fa45abe9ef2cb14420ee2007bfc4322edb6fba3629b72fe5a18e18ae0",
-            "regression": "42 passed in 96.35 seconds",
+            "tests_sha256": "f886441efc726305d84a2331574916b920d056bba40d908918b8a732afd76d9a",
+            "regression": "43 passed in 99.10 seconds",
             "old_dev_boundary": "dev.json remains schema-4/world-v2 historical data and is rejected; it is not migrated"
           },
           "common_pipeline": {
@@ -1944,7 +1944,7 @@
             }
           },
           "E24_v2": {
-            "status": "DESIGN FROZEN; execution implementation pending",
+            "status": "DESIGN AND EXECUTION FROZEN; formal run pending",
             "revision_scope": "replace fixed per-entity shape identity with a fixed deterministic shape proposal stream; all world, support, grounding, observed-collision and pair-collision semantics remain unchanged",
             "world_seeds": [2100000, 2100511],
             "entity_count_stream": "numpy default_rng(SeedSequence([world_seed,2401])).integers(2,7)",
@@ -1962,7 +1962,10 @@
             "unchanged_thresholds": {"E22_minimum_support_difference_m": 0.01, "E22_burial_depth_m": 0.02, "E22_maximum_buried_fraction": 0.02, "E23_observed_penetration_m": 0.05, "E24_pair_penetration_m": 0.05},
             "pass_conditions": ["fixture errors=0", "512/512 original world identities built", "final E22 violations=0", "final E23 violations=0", "final obvious pair penetration=0", "hard errors=0", "no 64-shape or 128-placement exhaustion", "two complete 24-process runs elementwise identical"],
             "descriptive_only": ["shape grounding rejection rate", "pair rejection rate", "shape proposal counts", "support proposal counts"],
-            "downstream": "PASS directly unlocks the already frozen E25 design; FAIL keeps E25 locked"
+            "downstream": "PASS directly unlocks the already frozen E25 design; FAIL keeps E25 locked",
+            "implementation_commit": "e98e5d2aae93669c96c34cd4c9046171f3e747b6",
+            "command": "python -m src.render qualify-e24-v2 --data-root /home/jasongao/Data/STU --support-pool runs/ajae/e21_v4_support_pool.npz --output runs/ajae/e24_v2_pair_collision.npz --processes 24",
+            "artifact": "runs/ajae/e24_v2_pair_collision.npz"
           },
           "E25": {
             "status": "DESIGN FROZEN; locked until E24 PASS",
