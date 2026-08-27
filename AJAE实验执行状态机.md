@@ -3113,6 +3113,18 @@ E27–E37 在 E27 首次正式运行前一次性冻结。它们只资格 rendere
 
 使用 `SensorCalibration.constant(return_probability=1)` 隔离 return rejection。固定256个 ray-centred fixture，覆盖 active control classes、多个 beam/column、2.5–50 m 距离和姿态；每个 fixture 构造穿过凸包严格内部的 target rays 和解析 miss rays。
 
+**执行冻结**
+
+输入模板固定读取E25 PASS产物 `runs/ajae/e25_normal_control.npz`，按 `template_identity` 首次出现去重后，按 `(raw_semantic_id,template_identity)` 排序，得到car、truck、other-vehicle、person各64个，共256个fixture。fixture index $i$ 的seed为2,700,000+$i$，target slot为$i$，因此逐项覆盖128个beam与2个column。目标表面距离固定为 $2.5+47.5i/255$ m；beam elevation按-20°至20°线性覆盖，column基准azimuth为0或180°并叠加由index固定的-8°至8°循环偏移。
+
+对象yaw、pitch、roll由 `SeedSequence([fixture_seed,2701])` 固定，yaw覆盖 $[-\pi,\pi)$，pitch与roll覆盖±15°。对象先沿target ray置于目标距离之外，独立凸包平面reference计算最近进入距离后只沿同一ray平移，使参考表面距离等于冻结目标距离。256-slot fixture中只有target slot朝向对象，其余255个slot均使用与target严格相反的单位方向，构成解析正距离miss。正式路径只调用 `_accepted_object_hits`，传感器固定为intensity 1、return probability 1。
+
+独立reference直接使用 `NormalTemplateShape.plane_normals/plane_offsets` 的半空间slab进入/退出区间，不调用 `NormalTemplateShape.intersect` 或 `_accepted_object_hits`。PASS要求hit、miss、法向外向性与object ID错误均为0，最近距离最大误差和表面残差最大值均不超过 $10^{-8}$ m，法向单位长度最大误差不超过 $10^{-10}$，两遍24进程数组逐元素一致。
+
+描述性 `Nvis` 固定使用E26的192个非空world，每个world只取object ID最小的第一个真实放置实体及其接受support frame，在正式ray grid上以return probability 1计算相对native return赢得最近距离竞争的slot数。该192对象统计不参与E27 PASS，完整可见性分布资格仍留给E42。
+
+实现提交为 `b0668bd8c96a8c8ea0b04145fda8e263bae8649b`；`src/render.py`、`src/train.py`和`test_ajae.py` SHA-256分别为 `2ea6d333fbe7531913d925f0b292c6e8d5d22986aba93e527ffff5d2a2202188`、`92a3f51f93e26bead6a1d9d92e37af2b5e4df092ffc9716852806b4b67be546b`、`960dc6b3b83a4e95e638a1f0358a3d20c8eb2b51300e5c737f2c49b4b0a3f8dd`；完整回归46项全部通过，用时98.50秒。正式命令为 `python -m src.render qualify-e27 --e25-artifact runs/ajae/e25_normal_control.npz --e26-artifact runs/ajae/e26_world_builder.npz --data-root /home/jasongao/Data/STU --calibration runs/ajae/calibration.pt --output runs/ajae/e27_normal_control_hits.npz --processes 24`。
+
 PASS：target hit/miss 零错误；最近距离有限为正；交点位于 hull 表面、法向有限外向；object ID 正确；两遍逐元素一致。真实放置对象的 $N_{vis}$ 只报告，分布资格留给 E42。PASS → E28。
 
 ## E28｜anomaly-proxy 几何命中
