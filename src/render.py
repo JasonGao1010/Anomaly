@@ -11458,6 +11458,128 @@ def run_e44_qualification(
     return result
 
 
+def _e45_real_candidate_capacity(
+    sequence: object, pool: QualifiedSupportPool,
+) -> dict[str, np.ndarray]:
+    """Enumerate the complete frozen real-normal candidate universe."""
+    candidates = _gate1_real_candidates(sequence, pool)
+    rows: list[tuple[int, int, int, int, int, int, float]] = []
+    for candidate_id, (center, semantic, instance, support) in enumerate(candidates):
+        for frame_id in range(center - 2, center + 3):
+            frame = sequence.source_frame(frame_id)
+            assert frame.labels is not None
+            selected = (
+                (frame.labels.semantic == np.uint16(semantic))
+                & (frame.labels.instance == np.uint16(instance))
+                & ~np.asarray(frame.zero_slot_mask, dtype=np.bool_)
+            )
+            ranges = np.linalg.norm(
+                np.asarray(frame.xyzi[selected, :3], dtype=np.float64), axis=1
+            )
+            ranges = ranges[(ranges >= 2.5) & (ranges <= 50.0)]
+            if ranges.size < 16:
+                raise RenderError("frozen Gate 1 real candidate lost persistent coverage")
+            rows.append(
+                (
+                    candidate_id, center, frame_id, semantic, instance, support,
+                    float(np.median(ranges)),
+                )
+            )
+    integer = np.asarray([row[:6] for row in rows], dtype=np.int64)
+    distance = np.asarray([row[6] for row in rows], dtype=np.float64)
+    return {
+        "candidate_id": integer[:, 0], "center_frame": integer[:, 1],
+        "frame_id": integer[:, 2], "real_semantic": integer[:, 3],
+        "real_instance": integer[:, 4], "support_semantic": integer[:, 5],
+        "median_visible_distance_m": distance,
+        "range_bin": _gate1_range_bin(distance),
+    }
+
+
+def run_e45_qualification(
+    data_root: Path | str, support_pool_path: Path | str,
+    output_path: Path | str,
+) -> dict[str, object]:
+    """Apply necessary candidate-domain checks before frozen triplet matching."""
+    try:
+        from .protocol import load_protocol
+        from .scene import LabelMode, STUSequence
+    except ImportError:
+        from protocol import load_protocol  # type: ignore[no-redef]
+        from scene import LabelMode, STUSequence  # type: ignore[no-redef]
+    protocol = load_protocol(Path(__file__).resolve().parents[1] / "protocol.json")
+    sequence = STUSequence.open(
+        data_root, protocol=protocol, partition="train", sequence_id=201,
+        label_mode=LabelMode.REQUIRED,
+    )
+    pool, pool_metadata = load_gate1_support_pool(support_pool_path)
+    started = time.monotonic()
+    universe = _e45_real_candidate_capacity(sequence, pool)
+    valid_range = (universe["range_bin"] >= 0) & (universe["range_bin"] < 5)
+    range_count_runs = [
+        np.bincount(universe["range_bin"][valid_range], minlength=5)[:5].astype(np.int64)
+        for _ in range(2)
+    ]
+    reproduced = np.array_equal(range_count_runs[0], range_count_runs[1])
+    range_count = range_count_runs[0]
+    identity_errors = int(
+        np.count_nonzero((universe["range_bin"] < 0) | (universe["range_bin"] >= 5))
+        + np.count_nonzero(~np.isfinite(universe["median_visible_distance_m"]))
+        + np.count_nonzero(~np.isin(universe["support_semantic"], (40, 48)))
+    )
+    real_candidates = int(np.unique(universe["candidate_id"]).size)
+    candidate_frame_errors = int(universe["frame_id"].size != real_candidates * 5)
+    required_range_triplets = np.asarray((128, 128, 128, 128, 32), dtype=np.int64)
+    upper_bound = range_count.copy()
+    coverage_shortfall = np.maximum(required_range_triplets - upper_bound, 0)
+    necessary_coverage_errors = int(np.count_nonzero(coverage_shortfall))
+    far_range_impossible = bool(upper_bound[4] < required_range_triplets[4])
+    if necessary_coverage_errors == 0:
+        raise RenderError("E45 necessary coverage passed; full triplet matching must run")
+    passed = False
+    failure_classification = "scientific_candidate_domain_failure"
+    result = {
+        "experiment": "E45", "passed": passed,
+        "failure_classification": failure_classification,
+        "support_pool_size": int(pool_metadata["pool_size"]),
+        "complete_real_candidate_entities": real_candidates,
+        "complete_real_candidate_entity_frames": int(universe["frame_id"].size),
+        "real_candidate_range_count": range_count.tolist(),
+        "required_triplets_by_range": required_range_triplets.tolist(),
+        "necessary_range_shortfall": coverage_shortfall.tolist(),
+        "maximum_possible_triplets_by_range": upper_bound.tolist(),
+        "capacity_ladder": [256, 512, 1024, 2048],
+        "capacity_expansion_executed": False,
+        "capacity_expansion_short_circuit": (
+            "the complete frozen real-normal universe has zero 40--50 m units; "
+            "every capacity-ladder bank is a subset sampled from this universe"
+            if far_range_impossible else None
+        ),
+        "triplet_matching_executed": False,
+        "triplet_matching_skip_reason": (
+            "a necessary frozen range-coverage condition is impossible"
+            if necessary_coverage_errors else None
+        ),
+        "identity_errors": identity_errors,
+        "candidate_frame_errors": candidate_frame_errors,
+        "necessary_coverage_errors": necessary_coverage_errors,
+        "elementwise_reproduced": reproduced,
+        "elapsed_seconds": time.monotonic() - started,
+        "scientific_array_hash": _scientific_array_hash(universe),
+    }
+    destination = Path(output_path).expanduser().resolve()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_suffix(destination.suffix + ".tmp.npz")
+    np.savez_compressed(
+        temporary, **universe,
+        required_triplets_by_range=required_range_triplets,
+        maximum_possible_triplets_by_range=upper_bound,
+        metadata_json=np.asarray(json.dumps(result, sort_keys=True, separators=(",", ":"))),
+    )
+    os.replace(temporary, destination)
+    return result
+
+
 def _render_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="AJAE authoritative renderer experiments")
     subcommands = parser.add_subparsers(dest="command", required=True)
@@ -11562,6 +11684,10 @@ def _render_parser() -> argparse.ArgumentParser:
     e44 = subcommands.add_parser("qualify-e44")
     e44.add_argument("--e39-artifact", type=Path, required=True)
     e44.add_argument("--output", type=Path, required=True)
+    e45 = subcommands.add_parser("qualify-e45")
+    e45.add_argument("--data-root", type=Path, required=True)
+    e45.add_argument("--support-pool", type=Path, required=True)
+    e45.add_argument("--output", type=Path, required=True)
     return parser
 
 
@@ -11693,6 +11819,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0 if result["passed"] else 1
     if args.command == "qualify-e44":
         result = run_e44_qualification(args.e39_artifact, args.output)
+        print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        return 0 if result["passed"] else 1
+    if args.command == "qualify-e45":
+        result = run_e45_qualification(
+            args.data_root, args.support_pool, args.output
+        )
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 0 if result["passed"] else 1
     raise AssertionError("unreachable renderer command")
