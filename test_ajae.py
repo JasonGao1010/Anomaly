@@ -768,6 +768,22 @@ def test_normal_template_pca_axis_is_aligned_before_support_pose() -> None:
     assert abs(covariance[0, 1]) < 1.0e-10
 
 
+def test_normal_template_surface_sampling_uses_a_convex_hull_interior() -> None:
+    vertices = np.asarray([
+        (x_value, y_value, z_value)
+        for x_value in (2.0, 4.0)
+        for y_value in (-0.5, 0.5)
+        for z_value in (-0.5, 0.5)
+    ])
+    template = NormalTemplateShape(
+        vertices, np.empty((0, 3), dtype=np.int32),
+        206, 0, 10, 1, (0.0, 0.0, 0.0),
+    )
+    points = render_module._fibonacci_surface_points(template, 256)
+    assert points.shape == (256, 3)
+    assert np.max(np.abs(template.signed_distance(points))) < 1.0e-10
+
+
 @pytest.mark.parametrize("slope_deg", [0.0, 5.0, 10.0])
 def test_e21_support_plane_fixtures(slope_deg: float) -> None:
     coordinate = np.linspace(-1.25, 1.25, 51)

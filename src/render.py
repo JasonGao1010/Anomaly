@@ -5184,7 +5184,13 @@ def _fibonacci_surface_points(shape: InsertShape, count: int = 8192) -> np.ndarr
     angle = math.pi * (3.0 - math.sqrt(5.0)) * identifiers
     radial = np.sqrt(np.maximum(0.0, 1.0 - np.square(z)))
     direction = np.column_stack((radial * np.cos(angle), radial * np.sin(angle), z))
-    origins = 1.05 * shape.bound_radius_m * direction
+    if isinstance(shape, NormalTemplateShape):
+        center = np.mean(shape.vertices_m, axis=0)
+        radius = float(np.max(np.linalg.norm(shape.vertices_m - center, axis=1)))
+    else:
+        center = np.zeros(3, dtype=np.float64)
+        radius = shape.bound_radius_m
+    origins = center + 1.05 * radius * direction
     distance, _, valid = shape.intersect(origins, -direction)
     if not bool(np.all(valid)):
         raise PlacementError("deterministic surface ray missed the inserted geometry")
@@ -7371,10 +7377,10 @@ def _e25_arrays(records: Sequence[Mapping[str, object]]) -> dict[str, np.ndarray
         "support_semantic": values("support_semantic", np.uint16, 0),
         "support_pool_index": values("support_pool_index", np.int64, -1),
         "support_proposal_count": values("support_proposal_count", np.int16, 0),
-        "semantic_violation": values("semantic_violation", np.uint8, 1),
-        "scale_error": values("scale_error", np.uint8, 1),
-        "pose_error": values("pose_error", np.uint8, 1),
-        "validation_error": values("validation_error", np.uint8, 1),
+        "semantic_violation": values("semantic_violation", np.uint8, 0),
+        "scale_error": values("scale_error", np.uint8, 0),
+        "pose_error": values("pose_error", np.uint8, 0),
+        "validation_error": values("validation_error", np.uint8, 0),
         "fixture_error": values("fixture_error", np.uint8, 0),
         "fixture_hash": values("fixture_hash", "S64", ""),
         "object_json": np.asarray(
