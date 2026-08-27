@@ -3459,6 +3459,12 @@ real-normal、normal-control和anomaly-proxy的有效遮挡率单元分别为1,2
 
 PASS：规模、frame覆盖、range覆盖、caliper、SMD、无重复和复现全部通过。PASS → E46。
 
+### E45正式执行冻结
+
+匹配前先枚举train/201在E38冻结定义下的完整real-normal候选宇宙，而不是只读取256-seed子集；逐候选保存五帧实际回波的中位距离和冻结距离箱。由于任一三方triplet必须包含一个real-normal单元，完整real-normal宇宙在每个距离箱的计数是相应triplet数量的严格上界。先对照冻结最低覆盖[128,128,128,128,32]；若任一上界不足，E45直接分类为`scientific_candidate_domain_failure`，不执行不可能改变该上界的512/1024/2048子集扩展、生成来源渲染或greedy matching。只有全部必要上界满足时才允许进入容量阶梯与完整caliper/SMD裁决；不得把必要条件通过写成E45 PASS。
+
+实现提交 `906d5d65912a72cf0125ce45e352d912060998f3`，`src/render.py` SHA-256为 `3979de15cc91d5dec2eb526ccb9a7eac067041536e4846289bda0cbc585c6916`；46项完整回归通过。正式命令为 `python -m src.render qualify-e45 --data-root /home/jasongao/Data/STU --support-pool runs/ajae/gate1_201_support_pool.npz --output runs/ajae/e45_matched_triplets.npz`。
+
 ## E45-V1｜人眼来源盲辨（可选、非阻断）
 
 可从E45固定triplets生成盲面板；没有两名独立人类时不裁决。结果不替代E46，也不阻断E46。
