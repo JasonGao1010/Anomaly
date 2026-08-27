@@ -1852,11 +1852,11 @@
             "state_machine": "800d2fe7ed0494ca2ee6b30fd76c869b20fab638b7ae216a3f4045d291a4c05b"
           },
           "implementation_identity": {
-            "commit": "4924692790c1a214beb9cf305392e52986311f33",
-            "render_sha256": "fe342ae73e525a5ee7525173437fd0500cdd63f42b44443a610245bd8bc5b437",
+            "commit": "3c59748d915f59ce9d38e56b48015ea436950bec",
+            "render_sha256": "66a13a2c8c5c33d6bf5891c3c2384a68adbc7125449f9230f26bab1eb7d544b8",
             "train_sha256": "eb30a33b97d7422671aad0fd87f0e3efd2626e4235c9db1bf91ef13566dca53d",
             "tests_sha256": "2f4cd11fa45abe9ef2cb14420ee2007bfc4322edb6fba3629b72fe5a18e18ae0",
-            "regression": "42 passed in 99.57 seconds",
+            "regression": "42 passed in 97.99 seconds",
             "old_dev_boundary": "dev.json remains schema-4/world-v2 historical data and is rejected; it is not migrated"
           },
           "common_pipeline": {
