@@ -9183,6 +9183,89 @@ def run_e32_qualification(output_path: Path | str) -> dict[str, object]:
     return result
 
 
+def _e33_run_once() -> dict[str, np.ndarray]:
+    half = 0.25
+    vertices = np.asarray([
+        (x, y, z) for x in (-half, half) for y in (-half, half) for z in (-half, half)
+    ], dtype=np.float64)
+    shape = NormalTemplateShape(
+        vertices, np.empty((0, 3), dtype=np.int32), 206, 0, 10, 1,
+        (0.0, 0.0, 0.0),
+    )
+    grid = RayGrid(
+        np.asarray(((1.0, 0.0, 0.0),)), np.asarray((0.0,)),
+        np.asarray((0.0,)), beam_count=1,
+    )
+    sensor = SensorCalibration.constant(0.5, return_probability=1.0)
+    gaps = np.asarray((0.5e-6, 1.0e-6, 2.0e-6), dtype=np.float64)
+    output = {name: [] for name in (
+        "gap_m", "inserted_mask_error", "foreground_distance_error_m",
+        "foreground_semantic_error", "foreground_instance_error",
+        "object_id_error", "occlusion_error", "single_return_error",
+    )}
+    for case, gap in enumerate(gaps):
+        native_distance = 5.0
+        inserted_distance = native_distance + float(gap)
+        item = ObjectSpec(
+            1, "normal-control", shape, MaterialSpec(0.5, 0.1, 0.35),
+            (inserted_distance + half, 0.0, 0.0),
+            ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0)),
+        )
+        semantic = np.asarray((10,), dtype=np.uint16)
+        instance = np.asarray((7,), dtype=np.uint16)
+        packed = semantic.astype(np.uint32) | (instance.astype(np.uint32) << 16)
+        labels = PointLabels(
+            packed, semantic, instance,
+            np.asarray((NORMAL_SEMANTIC_TARGET[10],), dtype=np.uint8),
+        )
+        frame = make_source_frame(
+            case, np.asarray(((5.0, 0.0, 0.0, 0.25),), dtype=np.float32),
+            np.eye(4, dtype=np.float64), labels,
+            partition="train", sequence_id=206,
+        )
+        rendered = render_frame(
+            frame, WorldSpec(3_300_000 + case, 206, (item,)), grid, sensor
+        )
+        measured = float(np.linalg.norm(rendered.source.xyzi[0, :3]))
+        rendered_labels = rendered.source.labels
+        output["gap_m"].append(float(gap))
+        output["inserted_mask_error"].append(int(rendered.inserted_mask[0]))
+        output["foreground_distance_error_m"].append(abs(measured - native_distance))
+        output["foreground_semantic_error"].append(int(rendered_labels is None or int(rendered_labels.semantic[0]) != 10))
+        output["foreground_instance_error"].append(int(rendered_labels is None or int(rendered_labels.instance[0]) != 7))
+        output["object_id_error"].append(int(rendered.object_id_internal[0] != -1))
+        output["occlusion_error"].append(int(rendered.occluded_original_mask[0]))
+        output["single_return_error"].append(int(rendered.source.xyzi.shape[0] != 1))
+    dtypes = {name: np.float64 if name.endswith("_m") else np.uint8 for name in output}
+    return {name: np.asarray(values, dtype=dtypes[name]) for name, values in output.items()}
+
+
+def run_e33_qualification(output_path: Path | str) -> dict[str, object]:
+    """Qualify native-foreground occlusion of accepted inserted returns."""
+
+    started = time.monotonic()
+    runs = [_e33_run_once(), _e33_run_once()]
+    elapsed = time.monotonic() - started
+    reproduced = all(np.array_equal(runs[0][name], runs[1][name]) for name in runs[0])
+    first = runs[0]
+    error_names = tuple(name for name in first if name != "gap_m" and name != "foreground_distance_error_m")
+    errors = {name: int(np.sum(first[name])) for name in error_names}
+    passed = all(value == 0 for value in errors.values()) and float(np.max(first["foreground_distance_error_m"])) <= 1e-7 and reproduced
+    scientific_hash = _scientific_array_hash(first)
+    result = {
+        "experiment": "E33", "passed": passed, "fixtures": 3, **errors,
+        "maximum_foreground_distance_error_m": float(np.max(first["foreground_distance_error_m"])),
+        "elementwise_reproduced": reproduced, "run_seconds": [elapsed],
+        "scientific_array_hash": scientific_hash,
+    }
+    destination = Path(output_path).expanduser().resolve()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_suffix(destination.suffix + ".tmp.npz")
+    np.savez_compressed(temporary, **first, metadata_json=np.asarray(json.dumps(result, sort_keys=True, separators=(",", ":"))))
+    os.replace(temporary, destination)
+    return result
+
+
 def _render_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="AJAE authoritative renderer experiments")
     subcommands = parser.add_subparsers(dest="command", required=True)
@@ -9236,6 +9319,8 @@ def _render_parser() -> argparse.ArgumentParser:
     e31.add_argument("--processes", type=int, default=24)
     e32 = subcommands.add_parser("qualify-e32")
     e32.add_argument("--output", type=Path, required=True)
+    e33 = subcommands.add_parser("qualify-e33")
+    e33.add_argument("--output", type=Path, required=True)
     return parser
 
 
@@ -9301,6 +9386,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0 if result["passed"] else 1
     if args.command == "qualify-e32":
         result = run_e32_qualification(args.output)
+        print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        return 0 if result["passed"] else 1
+    if args.command == "qualify-e33":
+        result = run_e33_qualification(args.output)
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 0 if result["passed"] else 1
     raise AssertionError("unreachable renderer command")
