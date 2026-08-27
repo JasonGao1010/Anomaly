@@ -3535,7 +3535,7 @@ E45A-v2只服务Gate 1来源审计，不修改E26、正式训练世界生成器�
 
 proposal上限冻结为每目标64个，执行阶梯为4、8、16、32、64；每级只计算新增proposal后缀并保留先前结果，每级完成后运行两遍逐元素匹配，首次满足全部PASS条件即停止。PASS条件保持至少1,024对、至少100个real侧center frames、四个2.5–40米距离层均非空、全部caliper错误0、重复0、五项SMD均不超过0.10、两遍逐元素一致及硬错误0。达到64仍不满足即正式FAIL，E46继续锁定。
 
-实现提交 `eedfc68068b56344a933496de23c3b869097465c`，`src/render.py` SHA-256为 `e0f5b23a8f1bc4003674a6b63648a1728620b2186f98428559bff03178609e4f`；46项完整回归通过，用时102.15秒。先导中发现只读renderer mask被原地筛选的实现错误，修复为生成新布尔数组后同一身份硬错误归零；该先导未写正式产物，也不参与资格裁决。正式命令为 `python -m src.render qualify-e45a-v2 --data-root /home/jasongao/Data/STU --support-pool runs/ajae/gate1_201_support_pool.npz --e25-artifact runs/ajae/e25_normal_control.npz --calibration runs/ajae/calibration.pt --unit-cache runs/ajae/e45_v2_units_2048.npz --output runs/ajae/e45a_v2_targeted_pairs.npz --processes 24`。
+实现提交为 `eedfc68068b56344a933496de23c3b869097465c` 和执行内存修订 `235112dd57fd85993772ac0b7c82cae3b216a3f5`，最终 `src/render.py` SHA-256为 `c02ed830e21d8611b96de45eecd302c328f9ff93291ccfb9e161924a65d3c3fd`；修订后46项完整回归通过，用时101.38秒。先导中发现只读renderer mask被原地筛选的实现错误，修复为生成新布尔数组后同一身份硬错误归零；该先导未写正式产物，也不参与资格裁决。首次正式启动在第一阶完成前发现父进程无用途地保留678个完整source frames，导致24个fork worker运行时可用内存降至1.4 GiB；该次运行在未写任何阶梯缓存或正式结果时主动停止，不构成实验FAIL。内存修订只在障碍索引和轨迹yaw完成后、fork前释放原始frame tuple，保留同一障碍索引、轨迹yaw、sequence有界缓存、proposal身份和全部科学计算。正式命令为 `python -m src.render qualify-e45a-v2 --data-root /home/jasongao/Data/STU --support-pool runs/ajae/gate1_201_support_pool.npz --e25-artifact runs/ajae/e25_normal_control.npz --calibration runs/ajae/calibration.pt --unit-cache runs/ajae/e45_v2_units_2048.npz --output runs/ajae/e45a_v2_targeted_pairs.npz --processes 24`。
 
 状态机在E49前拆为两条依赖：
 
