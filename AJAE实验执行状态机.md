@@ -3321,6 +3321,14 @@ E36-v1 FAIL永久保留；不修改 `ObjectSpec`。v2完整枚举2,304个正式c
 
 PASS：同一 `(world_hash,frame_id,renderer_identity)` 的 XYZI、occupancy、packed labels、全部 masks、object IDs逐 bit一致；window identity不进入 return RNG；跨世界 cache误命中0。PASS → E38。
 
+### E37正式执行冻结
+
+从已通过的E26产物中，按 `pure_normal`、`control_only`、`mixed`、`anomaly_only` 顺序分别取world seed升序前32个，共128个固定世界。固定两个相邻中心帧100和101，对应窗口 `[98,99,100,101,102]` 与 `[99,100,101,102,103]`；每世界共10次请求、6个唯一frame identity。直接调用正式 `render_frame`、训练用 `FrameCache` 和 `FrameCacheKey`，不实现第二套缓存逻辑。
+
+四条执行路径冻结为：1进程正序cached、24进程正序uncached、24进程逆序cached、24进程按 `SeedSequence([world.seed,3701])` 随机顺序cached。比较字段为 `xyzi`、occupancy、`packed_labels`、`normal_control_mask`、`anomaly_proxy_mask`、`inserted_mask`、`occluded_original_mask`、`unchanged_normal_mask` 和 `object_id_internal`。同一路径内重复请求直接逐bit比较；跨执行路径按包含dtype、shape和完整连续数组字节的逐字段SHA-256比较。另以64对不同world、相同frame请求连续进入同一正式cache，要求每个不同world的factory恰好调用一次、各自第二次请求命中自身对象、跨world对象引用不相同。静态审计要求 `render_frame` 参数与 `_slot_uniform` 实现均不读取window identity。
+
+实现提交 `4b8b6927a9b6c80955b1ab92240b835060ac7f38`，`src/render.py` SHA-256为 `07e3ec793ce98704daee13b250453be4f844f916cb51520e0daefa080c71aaef`；46项完整回归全部通过，用时98.17秒。正式命令为 `python -m src.render qualify-e37 --e26-artifact runs/ajae/e26_world_builder.npz --data-root /home/jasongao/Data/STU --calibration runs/ajae/calibration.pt --output runs/ajae/e37_world_frame_consistency.npz --processes 24`。全部身份、字段摘要、重复请求逐bit、渲染次数、跨world cache与window静态审计错误均为0时PASS并解锁E38。
+
 # Phase 4｜Gate 1：传感器一致性、严格匹配与反作弊
 
 ## Phase 4 统一候选银行

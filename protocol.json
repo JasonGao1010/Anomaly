@@ -2462,6 +2462,26 @@
         "artifact": "runs/ajae/e36_v2_shared_path.npz",
         "pass_conditions": ["all pre-bookkeeping intermediate differences=0", "sensor function label reads=0", "render pre-competition label reads=0", "final bookkeeping correct", "two 24-process runs elementwise identical"],
         "result": {"passed": true, "sensor_inputs": 55296, "intermediate_array_errors": 0, "bookkeeping_errors": 0, "sensor_function_label_reads": 0, "render_pre_competition_label_reads": 0, "render_final_bookkeeping_label_reads": 3, "elementwise_reproduced": true, "run_seconds": [0.14984843900310807, 0.14971585899183992], "scientific_array_sha256": "638ead3be7cf5de0a064e14e5ab14be5eb3caca3014241ab2459ef2bc0ace213", "artifact_bytes": 1309291, "artifact_sha256": "de2cb9971caea1269d255d19b2d00c05860067c8a8533fde0f287e3369787a63", "claim_limit": "Only pre-bookkeeping sensor values are required to match; final semantic and class masks differ by definition. E37 is unlocked."}
+      },
+      "E37": {
+        "question": "Does one world/frame/renderer identity produce bit-identical slot-aligned output across overlapping windows, traversal orders, process counts and cache states?",
+        "input_e26_artifact": "runs/ajae/e26_world_builder.npz",
+        "world_selection": "first 32 world seeds in each of the four E26 world types",
+        "worlds": 128,
+        "window_centers": [100, 101],
+        "window_frame_ids": [[98, 99, 100, 101, 102], [99, 100, 101, 102, 103]],
+        "execution_modes": {"serial_cached_forward": 1, "parallel_uncached_forward": 24, "parallel_cached_reverse": 24, "parallel_cached_random": 24},
+        "random_request_stream": "default_rng(SeedSequence([world.seed,3701])).permutation(ten overlapping-window requests)",
+        "production_interfaces": ["render_frame", "train.FrameCache", "train.FrameCacheKey"],
+        "qualified_fields": ["xyzi", "occupancy", "packed_labels", "normal_control_mask", "anomaly_proxy_mask", "inserted_mask", "occluded_original_mask", "unchanged_normal_mask", "object_id_internal"],
+        "comparison": "duplicate requests are compared bitwise; execution modes compare SHA-256 over dtype, shape and all contiguous array bytes",
+        "cross_world_cache_audit": "64 pairs of different worlds request the same frame through one production cache; each world factory must run once and the second request must recover its own object",
+        "window_rng_audit": "render_frame parameters and _slot_uniform implementation must contain zero window-identity reads",
+        "implementation_commit": "4b8b6927a9b6c80955b1ab92240b835060ac7f38",
+        "render_source_sha256": "07e3ec793ce98704daee13b250453be4f844f916cb51520e0daefa080c71aaef",
+        "command": "python -m src.render qualify-e37 --e26-artifact runs/ajae/e26_world_builder.npz --data-root /home/jasongao/Data/STU --calibration runs/ajae/calibration.pt --output runs/ajae/e37_world_frame_consistency.npz --processes 24",
+        "artifact": "runs/ajae/e37_world_frame_consistency.npz",
+        "pass_conditions": ["all identity errors=0", "all qualified-field digest errors=0", "duplicate-request bit errors=0", "render-call accounting errors=0", "cross-world cache errors=0", "window identity reads=0"]
       }
     },
     "world_types": {"pure_normal": 0.2, "control_only": 0.2, "mixed": 0.4, "anomaly_only": 0.2},

@@ -1820,7 +1820,7 @@ $$
 
 ---
 
-# 18. 当前状态（当前工作区：E36-v2 PASS）
+# 18. 当前状态（当前工作区：E37执行冻结）
 
 截至当前工作区权威提交，已经完成：
 
@@ -1867,6 +1867,8 @@ E36-v2 已冻结且不修改 `ObjectSpec`：比较下移到几何后的传感器
 
 E36-v2 已完成两遍24进程正式运行并通过：55,296个固定输入的全部标签写入前传感器中间数组逐元素一致，传感器函数与competition前label读取均为0，唯一差异严格限于最终semantic和两类mask bookkeeping。E36关闭，E37解锁；E36-v1 FAIL继续保留。
 
+E37已按状态机冻结正式执行：从E26四类世界各固定32个，以中心帧100和101形成两个重叠五帧窗口；使用正式 `render_frame`、`FrameCache` 与 `FrameCacheKey` 比较串行/24进程、正序/逆序/随机顺序和cached/uncached结果，并单独审计跨world cache身份与window identity是否进入回波随机流。实现已经通过46项完整回归，正式资格结果尚未产生。
+
 当前可成立的局部结论是：
 
 > **schema 7 能合法、确定且高效地产生覆盖冻结几何区域的合成异常代理；这些对象可以从 train/206 的合格支撑池采样，以冻结连续落地规则达到 99% 接触/埋地资格，并能由同一权威放置接口拒绝与 train/206 实际观测非地面回波发生超过 5 cm 深穿透的位置。**
@@ -1881,7 +1883,7 @@ E36-v2 已完成两遍24进程正式运行并通过：55,296个固定输入的�
 当前执行节点为：
 
 $$
-\boxed{E35\ \text{PASS};\quad E36\text{-v1 FAIL retained};\quad E36\text{-v2 PASS};\quad E37\ \text{UNLOCKED}}
+\boxed{E36\text{-v1 FAIL retained};\quad E36\text{-v2 PASS};\quad E37\ \text{FROZEN AND RUNNING};\quad E38\ \text{LOCKED}}
 $$
 
 E23与E24-v2已按冻结设计通过，当前顺序进入：
@@ -1890,7 +1892,7 @@ $$
 E23\rightarrow E24\rightarrow E25\rightarrow E26
 $$
 
-E27–E36已关闭；E36-v1 FAIL按设计冲突保留，当前顺序进入E37。
+E27–E36已关闭；E36-v1 FAIL按设计冲突保留，当前正在执行E37，E38尚未启动。
 
 因此当前整体判断仍是：
 
