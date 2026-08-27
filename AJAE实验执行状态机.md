@@ -3437,6 +3437,10 @@ $$
 
 直接读取E39共享trace，按每个entity-frame的accepted-before-occlusion和visible returns计算冻结遮挡率。仅对accepted大于0的单元定义$O$并进入三个遮挡层；accepted等于0的单元以显式invalid mask单独保存，不为其伪造遮挡率。PASS要求所有有效$O$有限且位于$[0,1]$，visible不超过accepted，有效计数与三层计数守恒，normal-control和anomaly-proxy各自覆盖三个层。以support semantic×range bin×遮挡层统计三来源共同非空层，至少一个共同层作为E45的初步非空匹配可行性；完整caliper、SMD与规模仍由E45裁决。两遍统计必须逐元素一致。实现提交 `99be4df02ef96db388134cb2b2b8d1b08927d9ae`，`src/render.py` SHA-256为 `abc902fd460d3019b0fd557dcda63ae1a9887342fa6c84170b8213b612610180`；46项完整回归通过。正式命令为 `python -m src.render qualify-e44 --e39-artifact runs/ajae/e39_per_range_return.npz --output runs/ajae/e44_occlusion_feasibility.npz`。
 
+**E44 正式结果：PASS（E44关闭，E45解锁）**
+
+real-normal、normal-control和anomaly-proxy的有效遮挡率单元分别为1,280、1,280和1,276；未定义单元分别为0、0和4。三层计数分别为[731,549,0]、[1,245,26,9]和[1,238,36,2]，两类生成来源均覆盖三个冻结遮挡层。support semantic×range bin×遮挡层中三来源共同非空层为9个。定义错误、计数错误、覆盖错误和初步匹配错误均为0，两遍统计逐元素一致，总用时0.001055秒。科学数组哈希 `0c22adf65d7e4b819ca1df49479f019d6bb2ccde5256844092cfbc24c45f6a55`；产物 `runs/ajae/e44_occlusion_feasibility.npz` 大小52,651字节，SHA-256为 `93b955771c942bedc9537b161018a4fb6e820d7d0649627af3d418edce9ecbc9`。完整匹配资格仍由E45裁决。
+
 ## E45｜三方严格匹配审计集
 
 **单位与协变量**

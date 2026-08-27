@@ -2131,7 +2131,7 @@
       }
     },
     "renderer_mechanical_qualification": {
-      "status": "E27-E43 PASS; E28-v1 and E36-v1 FAIL retained; E44 execution frozen",
+      "status": "E27-E44 PASS; E28-v1 and E36-v1 FAIL retained; E45 unlocked",
       "layer_boundaries": {"E27-E28": "direct geometry outputs only", "E29": "return probability and deterministic acceptance decision only", "E30-E31": "accepted returns", "E32-E33": "nearest-return occlusion competition"},
       "E27": {
         "question": "Does the formal geometry path return the correct nearest convex-hull hit, outward finite normal and object ID for active normal-control templates when return rejection is disabled?",
@@ -2584,7 +2584,8 @@
         "command": "python -m src.render qualify-e44 --e39-artifact runs/ajae/e39_per_range_return.npz --output runs/ajae/e44_occlusion_feasibility.npz",
         "artifact": "runs/ajae/e44_occlusion_feasibility.npz",
         "pass_conditions": ["visible returns do not exceed accepted returns", "all defined O values are finite and inside [0,1]", "valid denominator counts equal the sum of the three layers", "normal-control and anomaly-proxy each cover all three occlusion layers", "at least one support-range-occlusion stratum contains all three sources", "two complete statistic runs are elementwise identical"],
-        "claim_limit": "E44 establishes preliminary occlusion-stratum support only; E45 alone adjudicates the complete frozen matching contract."
+        "claim_limit": "E44 establishes preliminary occlusion-stratum support only; E45 alone adjudicates the complete frozen matching contract.",
+        "result": {"passed": true, "source_valid_count": [1280, 1280, 1276], "source_undefined_count": [0, 0, 4], "source_layer_count": [[731, 549, 0], [1245, 26, 9], [1238, 36, 2]], "generated_layer_coverage": [3, 3], "shared_support_range_occlusion_strata": 9, "definition_errors": 0, "count_errors": 0, "coverage_errors": 0, "matching_errors": 0, "elementwise_reproduced": true, "two_run_total_seconds": 0.0010547969868639484, "scientific_array_sha256": "0c22adf65d7e4b819ca1df49479f019d6bb2ccde5256844092cfbc24c45f6a55", "artifact_bytes": 52651, "artifact_sha256": "93b955771c942bedc9537b161018a4fb6e820d7d0649627af3d418edce9ecbc9", "claim_limit": "Both generated sources cover all three frozen O layers and nine preliminary shared strata; complete frozen matching remains E45."}
       }
     },
     "world_types": {"pure_normal": 0.2, "control_only": 0.2, "mixed": 0.4, "anomaly_only": 0.2},

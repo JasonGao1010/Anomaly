@@ -1820,7 +1820,7 @@ $$
 
 ---
 
-# 18. 当前状态（当前工作区：E44执行冻结）
+# 18. 当前状态（当前工作区：E44 PASS）
 
 截至当前工作区权威提交，已经完成：
 
@@ -1887,7 +1887,7 @@ E42已正式通过：每来源1,280个entity-frame的定义和计数守恒；nor
 
 E43已正式通过：跨窗口身份和重复渲染错误均为0，三来源的相邻帧$N_{vis}$变化率、$V=0,\ldots,5$分层及计数全部有限且守恒，两遍统计逐元素一致。少量出现与消失按冻结规则只作真实帧几何变化描述。E43关闭，E44解锁。
 
-E44已冻结并直接读取E39共享trace，只对accepted-before-occlusion大于0的entity-frame计算遮挡率，按三个冻结层检查两类生成来源覆盖及三来源共同分层；零分母以显式无效掩码保留。实现已通过46项完整回归，正式结果尚未产生。
+E44已正式通过：normal-control与anomaly-proxy均覆盖三个冻结遮挡层，三来源共有9个共同非空的support semantic×range bin×遮挡层；4个零分母单元以显式无效掩码保留，其余定义和计数全部有效且守恒。E44关闭，E45解锁；完整匹配由E45裁决。
 
 当前可成立的局部结论是：
 
@@ -1903,7 +1903,7 @@ E44已冻结并直接读取E39共享trace，只对accepted-before-occlusion大�
 当前执行节点为：
 
 $$
-\boxed{E43\ \text{PASS};\quad E44\ \text{FROZEN AND RUNNING};\quad E45\ \text{LOCKED}}
+\boxed{E43\ \text{PASS};\quad E44\ \text{PASS};\quad E45\ \text{UNLOCKED}}
 $$
 
 E23与E24-v2已按冻结设计通过，当前顺序进入：
@@ -1912,7 +1912,7 @@ $$
 E23\rightarrow E24\rightarrow E25\rightarrow E26
 $$
 
-E27–E43已关闭；E36-v1 FAIL按设计冲突保留，当前正在执行E44，E45尚未启动。
+E27–E44已关闭；E36-v1 FAIL按设计冲突保留，当前顺序进入E45。
 
 因此当前整体判断仍是：
 
