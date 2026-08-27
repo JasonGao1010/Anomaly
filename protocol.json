@@ -1761,7 +1761,7 @@
         },
         "ground_contact_qualification_v2": {
           "version": "E22-v2",
-          "status": "EXECUTION FROZEN",
+          "status": "PASS; E22 closed and E23 unlocked",
           "preregistration_date": "2026-08-27",
           "source_commit": "fbe8c6a",
           "source_commit_pushed_before_preregistration": true,
@@ -1811,7 +1811,33 @@
           "after_pass": "close E22 and unlock E23 without further contact-sampling study",
           "failure_route": "retain E22-v2 FAIL and stop; if abs(d_min) dominates, repair the continuous support minimizer or transform; if buried_fraction dominates, reconsider planar support against real local ground geometry",
           "forbidden": ["rewriting E22-v1 as PASS", "changing schema 7", "changing 0.01 m, 0.02 m, 0.02 fraction or 1014/1024 thresholds", "using contact count as a qualification gate", "increasing surface sampling to recover contact counts", "reusing E22-v1 placement identities", "running E23 before PASS"],
-          "criteria_frozen_before_formal_run": true
+          "criteria_frozen_before_formal_run": true,
+          "formal_result": {
+            "date": "2026-08-27",
+            "preregistration_commit": "55b2bc4",
+            "passed": true,
+            "placements": 1024,
+            "qualified": 1021,
+            "failed": 3,
+            "qualified_fraction": 0.9970703125,
+            "hard_errors": 0,
+            "failure_counts": {"absolute_d_min_above_0.01_m": 3, "buried_fraction_above_0.02": 0, "both": 0},
+            "absolute_d_min_m": {"minimum": 5.598521646277277e-10, "q05": 1.9808667151011153e-09, "median": 2.0796951272217257e-08, "q95": 5.229733208806856e-05, "q99": 0.001507921915929292, "maximum": 0.03026090488637223},
+            "buried_fraction": {"minimum": 0.0, "q05": 0.0, "median": 0.0, "q95": 0.0, "q99": 0.0, "maximum": 0.00006103515625},
+            "contact_count_descriptive": {"minimum": 0, "q05": 4.0, "median": 155.5, "q95": 2797.2499999999977, "q99": 5370.77, "maximum": 7137, "below_historical_gate_8": 85},
+            "surface_residual_maximum": 2.2247907428309122e-07,
+            "failed_shape_seeds": [1000594, 1000728, 1000821],
+            "failed_d_min_m": [-0.0138320302527426, -0.023928268690927013, 0.03026090488637223],
+            "elementwise_reproduced": true,
+            "array_hash_both_runs": "2c77cda0a0b46eb41220da85743bdbe7f7a0f1b9ee646d48481e71733adf0180",
+            "summary_hash_both_runs": "5d33561ceb993b5d6d031d7b01a6aaab0274d603f10dff5ab41a921b27b89bb3",
+            "runner_sha256": "424cd89d6628ba4eff0fd3c50f0b7ffa6e3bd7be679e20dffb397a1bccef5276",
+            "artifact": "runs/ajae/e22_v2_ground_contact.npz",
+            "artifact_bytes": 337377,
+            "artifact_sha256": "67eb1f5f9d075e7a9b624d3b662185d9b1536196c32801c9396689b447d1ac8f",
+            "conclusion": "Independent E22-v2 placements meet the frozen continuous contact and substantial-burial qualification: 1021 of 1024 pass, no hard error occurs, and no placement exceeds the buried-fraction limit.",
+            "claim_limit": "PASS establishes contact against each selected qualified support plane under the frozen continuous support and surface-burial audit. It does not establish freedom from observed non-ground collision or inserted-entity collision, which remain E23 and E24."
+          }
         }
       }
     },
