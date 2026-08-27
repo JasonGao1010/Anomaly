@@ -3249,6 +3249,10 @@ E31逐元素核对E28-v2 PASS产物的seed与shape identity并重建原256个sch
 
 固定3个单槽 `sensor→inserted→native-background` fixture，sensor在原点、ray为+x、native range精确为float32 5 m、inserted为边长0.5 m的normal-control凸包，正式constant sensor接受其回波。`tie_tolerance_m=10^{-6}` m，native与inserted距离差固定为0.5、1和2倍tie；前两项由native胜出，2倍tie项由inserted胜出。完整调用正式 `render_frame`，检查最终单slot、距离、packed/raw标签、internal object ID、`inserted_mask`和 `occluded_original_mask`，两遍逐元素一致。实现提交 `a7fd304be9c662e5bc8ddb8971a5e6b466922dbb`，`src/render.py` SHA-256为 `ac97f885754ea5fd83957c273e2877aadab7b71cf62b9a511aee9948c95add1f`；46项回归全部通过，用时99.63秒。正式命令为 `python -m src.render qualify-e32 --output runs/ajae/e32_background_occlusion.npz`。
 
+**E32 正式结果：PASS（E32关闭，E33解锁）**
+
+三个fixture的winner依次为native、native、inserted，与冻结tie规则一致；mask、单回波、semantic、packed label和internal object ID错误均为0，最大距离误差为 $9.265\times10^{-8}$ m，两遍逐元素一致。科学数组哈希为 `fb767acb595c05d7a6985b7d7c1ccabaded973213dde1ea65b97a063d08786ab`。产物 `runs/ajae/e32_background_occlusion.npz` 大小3,258字节，SHA-256为 `cc1bcf07fd6473897b1712619d98d5983735c7b9d01d987deff94580449c03ce`。E32仅关闭inserted位于native背景之前的竞争边界；native前景遮挡inserted由E33检验。
+
 ## E33｜正常前景遮挡插入物
 
 构造 sensor→native-foreground→inserted。PASS：foreground 保留，后方 inserted 不产生最终点；标签、mask、object ID 和距离竞争零错误。PASS → E34。

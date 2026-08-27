@@ -2131,7 +2131,7 @@
       }
     },
     "renderer_mechanical_qualification": {
-      "status": "E27-E31 PASS; E28-v1 FAIL retained as protocol implementation defect; E32 design and execution frozen; E33-E37 locked",
+      "status": "E27-E32 PASS; E28-v1 FAIL retained as protocol implementation defect; E33 unlocked; E34-E37 locked",
       "layer_boundaries": {"E27-E28": "direct geometry outputs only", "E29": "return probability and deterministic acceptance decision only", "E30-E31": "accepted returns", "E32-E33": "nearest-return occlusion competition"},
       "E27": {
         "question": "Does the formal geometry path return the correct nearest convex-hull hit, outward finite normal and object ID for active normal-control templates when return rejection is disabled?",
@@ -2389,7 +2389,8 @@
         "implementation_commit": "a7fd304be9c662e5bc8ddb8971a5e6b466922dbb",
         "command": "python -m src.render qualify-e32 --output runs/ajae/e32_background_occlusion.npz",
         "artifact": "runs/ajae/e32_background_occlusion.npz",
-        "pass_conditions": ["expected inserted/native winner at all three boundaries", "occluded_original_mask matches inserted winner", "one final return per slot", "distance error <=1e-6 m", "semantic, packed label and internal object ID errors=0", "two runs elementwise identical"]
+        "pass_conditions": ["expected inserted/native winner at all three boundaries", "occluded_original_mask matches inserted winner", "one final return per slot", "distance error <=1e-6 m", "semantic, packed label and internal object ID errors=0", "two runs elementwise identical"],
+        "result": {"passed": true, "winner_sequence": ["native", "native", "inserted"], "mask_error": 0, "single_return_error": 0, "semantic_error": 0, "packed_error": 0, "object_id_error": 0, "maximum_distance_error_m": 9.265136746705593e-8, "elementwise_reproduced": true, "scientific_array_sha256": "fb767acb595c05d7a6985b7d7c1ccabaded973213dde1ea65b97a063d08786ab", "artifact_bytes": 3258, "artifact_sha256": "cc1bcf07fd6473897b1712619d98d5983735c7b9d01d987deff94580449c03ce", "claim_limit": "E32 does not qualify native foreground occlusion of inserted returns; E33 is unlocked."}
       }
     },
     "world_types": {"pure_normal": 0.2, "control_only": 0.2, "mixed": 0.4, "anomaly_only": 0.2},
