@@ -1344,6 +1344,68 @@
           "artifact_sha256": "49c48093cc673fddc129a1d4049ac7e3297b9e8bf8414a1d4dbe8e921e2b810c",
           "decision": "No near-deterministic low-capacity shortcut was detected among the audited geometry factors; end Phase-2 geometry-distribution qualification and unlock E21"
         }
+      },
+      "support_plane_qualification": {
+        "version": "E21",
+        "status": "EXECUTION FROZEN",
+        "source_commit": "08fe85b8488ea2370ea9cb59d1f5ac8be4c7db4d",
+        "source_commit_pushed_before_preregistration": true,
+        "question": "Can the train/206 normal ground interface deterministically identify enough local patches whose fitted support planes have low residual and remain stable under a modest neighborhood-radius change for later object placement?",
+        "scope_limit": "E21 does not recover or compare against a hand-labelled true ground normal and does not claim that an object is already correctly grounded; floating and burial are reserved for E22.",
+        "data": {
+          "partition_sequence": "train/206 only",
+          "center_frames": [2, 446],
+          "window_offsets": [-2, -1, 0, 1, 2],
+          "raw_semantics": {"road": 40, "parking": 44, "sidewalk": 48},
+          "anchors": {"total": 512, "road": 256, "parking": 128, "sidewalk": 128},
+          "distance_tiers_m": {"near": [0.0, 20.0], "middle": [20.0, 40.0], "far": [40.0, 120.0]},
+          "tier_quota_order_near_middle_far": {"road": [86, 85, 85], "parking": [43, 43, 42], "sidewalk": [43, 43, 42]},
+          "distance_definition": "Euclidean sensor-frame range of the real center-frame return; the upper endpoint is exclusive except 120 m is included in far",
+          "identity": ["center_frame", "file_slot"],
+          "selection": "within each semantic and distance tier, sort all eligible real center-frame returns by a frozen SplitMix64 hash of the semantic namespace and packed (frame,slot) identity, breaking collisions by frame then slot; take the tier quota without visual selection; if a tier lacks quota, fill only from remaining returns of the same semantic by a tier-neutral SplitMix64 identity order",
+          "neighborhood": "for each center-frame anchor, transform returns from its frozen five-frame window to world coordinates and retain only real returns with exactly the anchor raw semantic; select by horizontal world-XY radius; preserve (source_frame,file_slot) identity"
+        },
+        "plane_estimator": {
+          "radii_m": [0.75, 1.0, 1.25],
+          "minimum_points_each_radius": 32,
+          "first_fit": "mean-center the local world points and take the covariance eigenvector with the smallest eigenvalue",
+          "degeneracy": "reject when the second-largest covariance eigenvalue is <=1e-12 m^2, decomposition fails, or any parameter is non-finite",
+          "trim": "compute absolute point-to-first-plane residuals, retain exactly ceil(0.90*N) smallest residuals with stable neighborhood-identity order breaking equal residuals, then mean-center and refit by SVD",
+          "normal_orientation": "flip the refitted unit normal so n dot e_z > 0; reject if a finite anchor height cannot be solved",
+          "offset": "b=-n dot centroid of retained points",
+          "residual_evaluation": "evaluate absolute residuals of every original untrimmed 1.0 m neighborhood point against the final 1.0 m plane",
+          "anchor_height": "z=-(n_x*x_anchor+n_y*y_anchor+b)/n_z at the anchor world x/y"
+        },
+        "qualified_patch": {
+          "median_residual_m_maximum": 0.03,
+          "q95_residual_m_maximum": 0.08,
+          "normal_angle_0.75_vs_1.25_deg_maximum": 5.0,
+          "anchor_height_difference_0.75_vs_1.25_m_maximum": 0.08,
+          "rejection_labels": ["insufficient_support", "degenerate_covariance", "nonfinite_or_unsolved_plane", "residual_q95", "residual_median", "multiscale_normal", "multiscale_height"],
+          "rule": "any failed requirement makes the anchor unqualified_support_patch; this is a valid rejection, not an estimator failure"
+        },
+        "analytic_fixtures": {
+          "slopes_deg": [0.0, 5.0, 10.0],
+          "points": "51x51 XY grid over [-1.25,1.25]^2 with z=tan(slope)*x+0.002*sin(7*x+3*y)",
+          "anchor": [0.0, 0.0, 0.0],
+          "normal_angle_error_deg_maximum": 0.5,
+          "anchor_height_error_m_maximum": 0.01
+        },
+        "pass_conditions": {
+          "overall_qualified_minimum": 410,
+          "overall_fraction_minimum": 0.80,
+          "road_qualified_minimum": 192,
+          "parking_qualified_minimum": 96,
+          "sidewalk_qualified_minimum": 96,
+          "accepted_patch_compliance": "every accepted patch satisfies every residual and multiscale limit",
+          "fixtures": "all three analytic fixtures satisfy both frozen error limits",
+          "reproducibility": "two complete independent 24-process runs reproduce anchor identities, neighborhood identities at every radius, support counts, normals, offsets, residual statistics, multiscale statistics, decisions, rejection labels and scientific summary hash elementwise; runtime is excluded"
+        },
+        "required_reports": ["semantic and distance-tier anchor counts", "qualified counts and fractions overall/by semantic/by tier", "all rejection reasons", "support-count distributions at three radii", "accepted residual, normal-angle and height-difference distributions", "fixture errors", "identity, array, summary and artifact hashes"],
+        "after_pass": "unlock E22 only",
+        "failure_route": "retain E21 FAIL and stop for a support-selection or plane-estimation design decision; do not reinterpret difficult rejected patches as estimator errors and do not run E22",
+        "forbidden": ["train/201", "public or hidden anomaly sequences", "hand-picked flat anchors", "manual true normals", "RANSAC search", "cross-semantic neighbors", "forcing a plane when support is below 32", "changing thresholds after results", "running E22 before PASS"],
+        "criteria_frozen_before_formal_run": true
       }
     },
     "world_types": {"pure_normal": 0.2, "control_only": 0.2, "mixed": 0.4, "anomaly_only": 0.2},
