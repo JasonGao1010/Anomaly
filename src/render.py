@@ -7955,7 +7955,7 @@ def _e27_arrays(records: Sequence[Mapping[str, object]]) -> dict[str, np.ndarray
 
 
 def _e27_nvis_worker(index: int) -> int:
-    if _E27_RAY_GRID is None or len(_E27_NVIS_UNITS) != 192:
+    if _E27_RAY_GRID is None or not _E27_NVIS_UNITS:
         raise RuntimeError("E27 real-placement visibility units are not initialized")
     world, object_id, frame = _E27_NVIS_UNITS[index]
     rotation, lidar_origin = _pose(frame)
@@ -8118,6 +8118,301 @@ def run_e27_qualification(
     return result
 
 
+_E28_SHAPES: tuple[tuple[ShapeSpec, ShapeGenerationReport], ...] = ()
+
+
+def _sdf_first_entry(
+    shape: ShapeSpec,
+    origin: np.ndarray,
+    direction: np.ndarray,
+    nodes: int,
+) -> float:
+    radius = shape.bound_radius_m
+    projection = -float(np.dot(origin, direction))
+    discriminant = projection * projection - (
+        float(np.dot(origin, origin)) - radius * radius
+    )
+    if discriminant <= 0.0:
+        return math.inf
+    span = math.sqrt(discriminant)
+    lower = max(0.0, projection - span)
+    upper = projection + span
+    if upper <= lower:
+        return math.inf
+    distances = np.linspace(lower, upper, nodes, dtype=np.float64)
+    values = shape.signed_distance(origin + distances[:, None] * direction)
+    inside = values <= 0.0
+    entries = np.flatnonzero(inside[1:] & ~inside[:-1]) + 1
+    if not entries.size:
+        return math.inf
+    right = int(entries[0])
+    return float(brentq(
+        lambda distance: float(shape.signed_distance(
+            (origin + distance * direction)[None, :]
+        )[0]),
+        float(distances[right - 1]), float(distances[right]),
+        xtol=1.0e-12, rtol=1.0e-14,
+    ))
+
+
+def _e28_worker(index: int) -> dict[str, object]:
+    if len(_E28_SHAPES) != 256:
+        raise RuntimeError("E28 schema-7 fixtures are not initialized")
+    seed = 2_800_000 + index
+    shape, report = _E28_SHAPES[index]
+    target_slot = index
+    beam_id, column_id = divmod(target_slot, 2)
+    elevation = math.radians(-20.0 + 40.0 * beam_id / 127.0)
+    azimuth = math.pi * column_id + math.radians((index % 17) - 8)
+    target = np.asarray((
+        math.cos(elevation) * math.cos(azimuth),
+        math.cos(elevation) * math.sin(azimuth),
+        math.sin(elevation),
+    ))
+    target /= np.linalg.norm(target)
+    directions = np.tile(-target, (256, 1))
+    directions[target_slot] = target
+    grid = RayGrid(
+        directions,
+        np.linspace(-math.radians(20.0), math.radians(20.0), 128),
+        np.asarray((0.0, math.pi)),
+        beam_count=128,
+    )
+    rotation = _e27_rotation(seed)
+    undeformed = (
+        np.asarray(report.shared_witnesses_undeformed_m[0])
+        if report.shared_witnesses_undeformed_m
+        else np.asarray(shape.primitive_offsets_m[0])
+    )
+    witness = _forward_deform(shape, undeformed[None, :])[0]
+    witness_margin = -float(shape.signed_distance(witness[None, :])[0])
+    if not math.isfinite(witness_margin) or witness_margin <= 1.0e-8:
+        raise PlacementError("E28 target witness is not strictly interior")
+    desired_distance = 2.5 + 47.5 * index / 255.0
+    translation = (
+        target * (desired_distance + 2.0 * shape.bound_radius_m)
+        - witness @ rotation.T
+    )
+    local_origin = -translation @ rotation
+    local_direction = target @ rotation
+    reference_standard = _sdf_first_entry(
+        shape, local_origin, local_direction, 4097
+    )
+    reference_strict = _sdf_first_entry(
+        shape, local_origin, local_direction, 16385
+    )
+    if not math.isfinite(reference_standard) or not math.isfinite(reference_strict):
+        raise PlacementError("E28 reference failed to find the target entry")
+    reference_disagreement = abs(reference_standard - reference_strict)
+    translation += target * (desired_distance - reference_strict)
+    item = ObjectSpec(
+        index + 1, "anomaly-proxy", shape, MaterialSpec.sample(seed + 2802),
+        tuple(map(float, translation)),
+        tuple(tuple(map(float, row)) for row in rotation),
+        report,
+    )
+    world = WorldSpec(seed, 206, (item,))
+    competition = _accepted_object_hits(
+        np.zeros((256, 3), dtype=np.float64), directions, world, grid,
+        _E27_SENSOR, frame_id=index,
+    )
+    measured = float(competition.distance_m[target_slot])
+    hit_error = int(not math.isfinite(measured) or measured <= 0.0)
+    miss_error = int(np.count_nonzero(np.isfinite(competition.distance_m)) != 1)
+    distance_error = math.inf if hit_error else abs(measured - desired_distance)
+    point_world = measured * target if not hit_error else np.zeros(3)
+    point_local = (point_world - translation) @ rotation
+    residual = (
+        math.inf if hit_error
+        else abs(float(shape.signed_distance(point_local[None, :])[0]))
+    )
+    normal = competition.normal_world[target_slot]
+    normal_error = math.inf if hit_error else abs(float(np.linalg.norm(normal)) - 1.0)
+    outward_error = int(hit_error or float(np.dot(normal, target)) >= 0.0)
+    object_id_error = int(
+        competition.object_id[target_slot] != index + 1
+        or np.any(np.delete(competition.object_id, target_slot) != -1)
+    )
+    return {
+        "seed": seed,
+        "shape_family": report.shape_family,
+        "primitive_count": shape.primitive_count,
+        "size_lower_m": report.accepted_size_lower_m,
+        "size_upper_m": report.accepted_size_upper_m,
+        "shape_identity": hashlib.sha256(
+            json.dumps(shape.to_dict(), sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest(),
+        "beam_id": beam_id,
+        "column_id": column_id,
+        "desired_distance_m": desired_distance,
+        "measured_distance_m": measured,
+        "reference_disagreement_m": reference_disagreement,
+        "distance_error_m": distance_error,
+        "surface_residual_m": residual,
+        "normal_norm_error": normal_error,
+        "witness_margin": witness_margin,
+        "hit_error": hit_error,
+        "miss_error": miss_error,
+        "outward_error": outward_error,
+        "object_id_error": object_id_error,
+    }
+
+
+def _e28_arrays(records: Sequence[Mapping[str, object]]) -> dict[str, np.ndarray]:
+    def values(name: str, dtype: object) -> np.ndarray:
+        return np.asarray([item[name] for item in records], dtype=dtype)
+
+    return {
+        "seed": values("seed", np.int64),
+        "shape_family": values("shape_family", "U16"),
+        "primitive_count": values("primitive_count", np.int8),
+        "size_lower_m": values("size_lower_m", np.float64),
+        "size_upper_m": values("size_upper_m", np.float64),
+        "shape_identity": values("shape_identity", "S64"),
+        "beam_id": values("beam_id", np.int16),
+        "column_id": values("column_id", np.int8),
+        "desired_distance_m": values("desired_distance_m", np.float64),
+        "measured_distance_m": values("measured_distance_m", np.float64),
+        "reference_disagreement_m": values("reference_disagreement_m", np.float64),
+        "distance_error_m": values("distance_error_m", np.float64),
+        "surface_residual_m": values("surface_residual_m", np.float64),
+        "normal_norm_error": values("normal_norm_error", np.float64),
+        "witness_margin": values("witness_margin", np.float64),
+        "hit_error": values("hit_error", np.uint8),
+        "miss_error": values("miss_error", np.uint8),
+        "outward_error": values("outward_error", np.uint8),
+        "object_id_error": values("object_id_error", np.uint8),
+    }
+
+
+def run_e28_qualification(
+    e26_artifact_path: Path | str,
+    data_root: Path | str,
+    calibration_path: Path | str,
+    output_path: Path | str,
+    *,
+    processes: int = 24,
+) -> dict[str, object]:
+    """Run the frozen schema-7 continuous geometry hit qualification."""
+
+    if processes != 24:
+        raise RenderError("formal E28 requires exactly 24 worker processes")
+    try:
+        from .protocol import load_protocol
+        from .scene import LabelMode, STUSequence
+    except ImportError:
+        from protocol import load_protocol  # type: ignore[no-redef]
+        from scene import LabelMode, STUSequence  # type: ignore[no-redef]
+    context = mp.get_context("fork")
+    with context.Pool(processes=processes) as workers:
+        fixtures = workers.map(
+            ShapeSpec.sample_with_report, range(2_800_000, 2_800_256)
+        )
+    global _E28_SHAPES
+    _E28_SHAPES = tuple(fixtures)
+    runs: list[dict[str, np.ndarray]] = []
+    run_seconds: list[float] = []
+    for _ in range(2):
+        started = time.monotonic()
+        with context.Pool(processes=processes) as workers:
+            records = workers.map(_e28_worker, range(256))
+        runs.append(_e28_arrays(records))
+        run_seconds.append(time.monotonic() - started)
+
+    with np.load(Path(e26_artifact_path).expanduser().resolve(strict=True), allow_pickle=False) as source:
+        metadata = json.loads(str(source["metadata_json"]))
+        if metadata.get("experiment") != "E26" or metadata.get("passed") is not True:
+            raise RenderError("E28 visibility description requires the passed E26 artifact")
+        units_json = []
+        for world_bytes, report_bytes in zip(
+            source["world_json"], source["report_json"], strict=True
+        ):
+            world = WorldSpec.from_dict(json.loads(world_bytes.decode()))
+            if world.anomaly_proxy_count:
+                units_json.append((world, WorldGenerationReport.from_dict(
+                    json.loads(report_bytes.decode())
+                )))
+    if len(units_json) != 128:
+        raise RenderError("E28 real-proxy visibility sample changed")
+    project_root = Path(__file__).resolve().parents[1]
+    protocol = load_protocol(project_root / "protocol.json")
+    sequence = STUSequence.open(
+        data_root, protocol=protocol, partition="train", sequence_id=206,
+        label_mode=LabelMode.REQUIRED,
+    )
+    parsed_units = []
+    required_frames: set[int] = set()
+    for world, report in units_json:
+        item = next(value for value in world.objects if value.label == "anomaly-proxy")
+        placement = next(value for value in report.placements if value.object_id == item.object_id)
+        parsed_units.append((world, item.object_id, placement.support_frame))
+        required_frames.add(placement.support_frame)
+    frames = {frame_id: sequence.source_frame(frame_id) for frame_id in required_frames}
+    ray_grid, _ = load_sensor_calibration(calibration_path)
+    global _E27_NVIS_UNITS, _E27_RAY_GRID
+    _E27_NVIS_UNITS = tuple(
+        (world, object_id, frames[frame_id])
+        for world, object_id, frame_id in parsed_units
+    )
+    _E27_RAY_GRID = ray_grid
+    with context.Pool(processes=processes) as workers:
+        nvis = np.asarray(workers.map(_e27_nvis_worker, range(128)), dtype=np.int64)
+
+    reproduced = all(
+        np.array_equal(runs[0][name], runs[1][name], equal_nan=True)
+        if np.issubdtype(runs[0][name].dtype, np.floating)
+        else np.array_equal(runs[0][name], runs[1][name])
+        for name in runs[0]
+    )
+    first = runs[0]
+    error_names = ("hit_error", "miss_error", "outward_error", "object_id_error")
+    errors = {name: int(np.sum(first[name])) for name in error_names}
+    passed = (
+        all(value == 0 for value in errors.values())
+        and float(np.max(first["reference_disagreement_m"])) < 5.0e-5
+        and float(np.max(first["distance_error_m"])) <= 1.0e-4
+        and float(np.max(first["surface_residual_m"])) <= 1.0e-6
+        and float(np.max(first["normal_norm_error"])) <= 1.0e-10
+        and reproduced
+    )
+    family_counts = {
+        family: int(np.count_nonzero(first["shape_family"] == family))
+        for family in SHAPE_FAMILIES
+    }
+    primitive_counts = {
+        count: int(np.count_nonzero(first["primitive_count"] == count))
+        for count in range(1, 6)
+    }
+    scientific_hash = _scientific_array_hash(first)
+    result = {
+        "experiment": "E28", "passed": passed, "fixtures": 256,
+        "family_counts": family_counts, "primitive_counts": primitive_counts,
+        **errors,
+        "maximum_reference_disagreement_m": float(np.max(first["reference_disagreement_m"])),
+        "maximum_distance_error_m": float(np.max(first["distance_error_m"])),
+        "maximum_surface_residual_m": float(np.max(first["surface_residual_m"])),
+        "maximum_normal_norm_error": float(np.max(first["normal_norm_error"])),
+        "descriptive_real_proxy_nvis": {
+            "objects": 128, "minimum": int(np.min(nvis)),
+            "median": float(np.median(nvis)),
+            "q95_higher": int(np.quantile(nvis, 0.95, method="higher")),
+            "maximum": int(np.max(nvis)),
+            "zero_count": int(np.count_nonzero(nvis == 0)),
+        },
+        "elementwise_reproduced": reproduced, "run_seconds": run_seconds,
+        "scientific_array_hash": scientific_hash, "processes": processes,
+    }
+    destination = Path(output_path).expanduser().resolve()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_suffix(destination.suffix + ".tmp.npz")
+    np.savez_compressed(
+        temporary, **first, descriptive_real_proxy_nvis=nvis,
+        metadata_json=np.asarray(json.dumps(result, sort_keys=True, separators=(",", ":"))),
+    )
+    os.replace(temporary, destination)
+    return result
+
+
 def _render_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="AJAE authoritative renderer experiments")
     subcommands = parser.add_subparsers(dest="command", required=True)
@@ -8148,6 +8443,12 @@ def _render_parser() -> argparse.ArgumentParser:
     e27.add_argument("--calibration", type=Path, required=True)
     e27.add_argument("--output", type=Path, required=True)
     e27.add_argument("--processes", type=int, default=24)
+    e28 = subcommands.add_parser("qualify-e28")
+    e28.add_argument("--e26-artifact", type=Path, required=True)
+    e28.add_argument("--data-root", type=Path, required=True)
+    e28.add_argument("--calibration", type=Path, required=True)
+    e28.add_argument("--output", type=Path, required=True)
+    e28.add_argument("--processes", type=int, default=24)
     return parser
 
 
@@ -8181,6 +8482,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         result = run_e27_qualification(
             args.e25_artifact, args.e26_artifact, args.data_root,
             args.calibration, args.output, processes=args.processes
+        )
+        print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        return 0 if result["passed"] else 1
+    if args.command == "qualify-e28":
+        result = run_e28_qualification(
+            args.e26_artifact, args.data_root, args.calibration,
+            args.output, processes=args.processes,
         )
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 0 if result["passed"] else 1
