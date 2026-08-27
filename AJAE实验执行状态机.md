@@ -3281,6 +3281,10 @@ E31逐元素核对E28-v2 PASS产物的seed与shape identity并重建原256个sch
 
 独立复算条件 quantile interpolation、material modulation、noise/hash 与 clipping。PASS：实现与 reference 最大误差不超过 $10^{-6}$；全部 finite 且位于206冻结支持；无未定义单元；边界 clipping fraction完整报告但不成为分布相似性门。PASS → E36。
 
+**执行冻结**
+
+完整枚举正式calibration的2,304个beam×range×incidence单元，每单元使用24个固定identity，共55,296次强度生成。identity $i$ 使用world seed与 `MaterialSpec.sample` seed 3,500,000+$i$、frame 2,000+$i$、object ID $i+1$、slot 0–2,303；正式channel 1 `_slot_uniform` 与 `SensorCalibration.sample_intensity` 对照独立64位mixer、material quantile扰动、条件表线性插值和冻结支持clipping。最大误差不超过 $10^{-6}$，全部finite且在支持内，两遍24进程逐元素一致；quantile边界clipping仅报告。实现提交 `0aea678d884e694391eeb0a94a89584c23104065`，`src/render.py` SHA-256为 `80720b70481408601a54fded5823de5865ec1152652dd83fc3af12d5467ee2d1`。正式命令为 `python -m src.render qualify-e35 --calibration runs/ajae/calibration.pt --output runs/ajae/e35_intensity.npz --processes 24`。
+
 ## E36｜normal-control/proxy 共用渲染路径
 
 静态代码审计与运行 trace 同时检查：label 在几何、return、nearest competition、intensity、slot recovery 中不得参与分支，只在最终监督语义赋值时使用。对相同几何/material/pose、只改 label 的 paired fixture，传感器中间数组必须逐元素一致。
