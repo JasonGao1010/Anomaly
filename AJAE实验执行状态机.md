@@ -3207,6 +3207,14 @@ PASS：概率域错误0；实现与独立 reference 的 accepted mask 零差异�
 
 在 E27 fixture 上使用正式 return/intensity 流。PASS：有效回波 mask 与 E29 reference 零差异；接受点有限、标签为正常 control 语义、拒绝点不生成回波；至少一个接受和拒绝分支被覆盖；两遍一致。PASS → E31。
 
+**执行冻结**
+
+E30按E27 PASS产物的 `template_identity` 逐元素核对并重建原256个normal-control fixture；shape、seed 2,700,000–2,700,255、beam/column、目标距离、姿态和 `MaterialSpec.sample(seed+2702)` 均保持不变。每个fixture固定展开24个frame identities，frame ID为 $256r+i$，其中fixture index $i=0,\ldots,255$、replica $r=0,\ldots,23$；world seed、object ID和slot分别保持为2,700,000+$i$、$i+1$和$i$，共6,144次accepted-return裁决。几何交点、法向、正式概率和材质只计算一次并在24个身份间只读复用。
+
+正式accepted mask使用 `_slot_uniform(...,channel=0)<SensorCalibration.return_chance`；E29独立reference分别复算材质调制概率和64位identity uniform，再执行 `u<p`。接受项使用正式 `SensorCalibration.sample_intensity` 与独立channel 1 identity uniform生成强度，点坐标必须有限，强度必须有限并位于train/206冻结支持，语义必须等于原normal-control模板的raw semantic。拒绝项的点与强度固定保持NaN、语义保持0，表示没有生成回波载荷。该裁决不读取native range，不执行native/inserted nearest competition，也不裁决遮挡mask。
+
+实现提交为 `688618a2d5a0bd0792a33a5f1f48bab6f00f55a0`；`src/render.py`、`src/train.py`和`test_ajae.py` SHA-256分别为 `739860c039a0b46ac36c93af3eb16426dc565773293e01bb0e5199476c511843`、`92a3f51f93e26bead6a1d9d92e37af2b5e4df092ffc9716852806b4b67be546b`、`960dc6b3b83a4e95e638a1f0358a3d20c8eb2b51300e5c737f2c49b4b0a3f8dd`；完整回归46项全部通过，用时98.72秒。正式命令为 `python -m src.render qualify-e30 --e25-artifact runs/ajae/e25_normal_control.npz --e27-artifact runs/ajae/e27_normal_control_hits.npz --calibration runs/ajae/calibration.pt --output runs/ajae/e30_normal_returns.npz --processes 24`。
+
 ## E31｜anomaly-proxy 有效回波
 
 与 E30 同一代码路径。PASS：mask 零差异；有效点 finite、raw semantic 2、internal object ID 正确；接受/拒绝分支均覆盖；两遍一致。PASS → E32。
