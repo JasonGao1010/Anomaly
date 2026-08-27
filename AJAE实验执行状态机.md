@@ -3505,6 +3505,12 @@ PASS要求至少1,024对、左侧至少100个center frames、2.5–10/10–20/20
 
 实现提交 `9dc3b501152eccbf10ca8998355acbf6e355852d`，`src/render.py` SHA-256为 `966bd467385c6c7605d12c6d6710d64c5bd667ed69ad6970e3ef3884605a15b3`；小型可验证竞争图得到3/3最大匹配，caliper错误与重复错误均为0；46项完整回归通过，用时104.47秒。正式命令为 `python -m src.render qualify-e45a --unit-cache runs/ajae/e45_v2_units_2048.npz --output runs/ajae/e45a_real_control_pairs.npz`。
 
+**E45A 正式结果：FAIL（`insufficient_pairwise_common_support`；E46保持锁定）**
+
+冻结2,048容量缓存的real-normal与normal-control完整合法图包含778条边，覆盖15个非空精确分层；确定性最大基数匹配得到135对、real侧73个center frames，2.5–10、10–20、20–30和30–40米计数为[11,107,17,0]。匹配对数未达到1,024，center frame未达到100，30–40米层为空。
+
+五项连续协变量按range、median beam、$\log(1+N_{vis})$、$\hat O$、$\log(1+\text{local density})$顺序的SMD为[0.084724,0.141694,0.041913,1.000399,0.037650]，最大值1.000399。全部caliper错误0、两侧单位重复0，两遍匹配逐元素一致，两遍匹配总用时0.025716秒。科学数组哈希为 `b5cf376e3244d8ef2858471716f500bca9075733530482b6813dedb7ab7ce25d`；正式产物 `runs/ajae/e45a_real_control_pairs.npz` 大小565,274字节，SHA-256为 `1eecff9d3b7229aad58e5269037e1bceaa09438f2fd826474d0dd9239ac72766`。该结果没有执行来源分类，E46不得启动。
+
 ### E45B｜normal-control ↔ anomaly-proxy 最大匹配
 
 E45B只服务E48，与E45A独立读取同一冻结2,048容量单位缓存。精确分层、五项caliper、完整合法边、最大基数第一目标、归一化协变量平方差第二目标、hash并列裁决、无重复和两遍复现规则与E45A完全相同。
