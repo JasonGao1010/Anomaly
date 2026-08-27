@@ -3493,6 +3493,34 @@ real-normal候选定义、train/201唯一开发来源、三方对象构念和全
 
 正式产物 `runs/ajae/e45_v2_matched_triplets.npz` 大小381,986字节，SHA-256为 `54fda93b708e875200d6126692e0cd3a899fff7d355556598c8550c19156c832`。E45-v2已完整执行到冻结最大容量；FAIL直接说明当前三来源在保留全部固定匹配条件后没有足够共同支持，不构成renderer来源泄漏分类结果，E46不得启动。
 
+后续审查永久保留E45-v2正式FAIL，并将其设计层归因明确为三方审计设计失败：E46只比较real-normal与normal-control，E48只比较normal-control与anomaly-proxy，两个问题均不需要同时存在real/control/proxy三元组。E45-v2的58个triplets只代表确定性三方greedy找到的共同交集，不能作为任一两两可行图的最大匹配上界。
+
+### E45A｜real-normal ↔ normal-control 最大匹配
+
+E45A只服务E46。直接读取冻结的2,048容量单位缓存 `runs/ajae/e45_v2_units_2048.npz`；不重新渲染，不修改train/201唯一开发来源、real-normal定义、候选生成、对象放置、观测变量、精确匹配条件或五项caliper。正式域保持2.5–40米；40–50米继续标记为train/201真实对象匹配无直接证据。
+
+按qualified support semantic、冻结range bin和45度sensor-azimuth sector分层。每层构造满足全部五项caliper的完整二分合法边图。第一目标为最大化无重复匹配对数；在最大基数固定后，第二目标为最小化五项caliper归一化协变量平方差总和；完全相同的边代价由冻结单位hash排序。不得使用greedy结果代替最大匹配。
+
+PASS要求至少1,024对、左侧至少100个center frames、2.5–10/10–20/20–30/30–40米四层均非空、caliper错误0、两侧单位重复0、五项连续协变量SMD均不超过0.10，并且两遍结果逐元素一致。E45A PASS独立解锁E46，不等待E45B。
+
+实现提交 `9dc3b501152eccbf10ca8998355acbf6e355852d`，`src/render.py` SHA-256为 `966bd467385c6c7605d12c6d6710d64c5bd667ed69ad6970e3ef3884605a15b3`；小型可验证竞争图得到3/3最大匹配，caliper错误与重复错误均为0；46项完整回归通过，用时104.47秒。正式命令为 `python -m src.render qualify-e45a --unit-cache runs/ajae/e45_v2_units_2048.npz --output runs/ajae/e45a_real_control_pairs.npz`。
+
+### E45B｜normal-control ↔ anomaly-proxy 最大匹配
+
+E45B只服务E48，与E45A独立读取同一冻结2,048容量单位缓存。精确分层、五项caliper、完整合法边、最大基数第一目标、归一化协变量平方差第二目标、hash并列裁决、无重复和两遍复现规则与E45A完全相同。
+
+PASS要求至少1,024对、左侧至少100个center frames、2.5–10/10–20/20–30/30–40米四层均非空、caliper错误0、两侧单位重复0、五项连续协变量SMD均不超过0.10，并且两遍结果逐元素一致。E45B必须在E48前PASS，但不阻塞E45A通过后执行E46。实现与回归身份同E45A；正式命令为 `python -m src.render qualify-e45b --unit-cache runs/ajae/e45_v2_units_2048.npz --output runs/ajae/e45b_control_proxy_pairs.npz`。
+
+状态机在E49前拆为两条依赖：
+
+$$
+E45A\rightarrow E46,
+\qquad
+E45B\rightarrow E48,
+\qquad
+(E46,E48)\rightarrow E49.
+$$
+
 ## E45-V1｜人眼来源盲辨（可选、非阻断）
 
 可从E45固定triplets生成盲面板；没有两名独立人类时不裁决。结果不替代E46，也不阻断E46。

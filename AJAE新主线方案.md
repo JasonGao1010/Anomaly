@@ -1820,7 +1820,7 @@ $$
 
 ---
 
-# 18. 当前状态（当前工作区：E45-v2 FAIL）
+# 18. 当前状态（当前工作区：E45A/E45B 已冻结待执行）
 
 截至当前工作区权威提交，已经完成：
 
@@ -1893,6 +1893,8 @@ E45正式FAIL，分类为`scientific_candidate_domain_failure`。E38冻结定义
 
 E45-v1正式FAIL永久保留；后续设计归因修订为`qualification specification defect`。E45-v2在不改变真实对象候选、train/201来源和全部严格匹配条件的情况下完整运行至2,048容量，正式FAIL，分类为`insufficient_three_source_common_support`。最终只有58个triplets、34个real侧center frames，四个可观察距离层计数为[0,51,7,0]，最大pairwise SMD为1.509987；caliper错误、重复使用和复现错误均为0。E46保持锁定。
 
+E45-v2正式FAIL永久保留；后续设计层归因修订为三方审计设计失败。E46所需的real-normal与normal-control、E48所需的normal-control与anomaly-proxy现拆为E45A和E45B两个独立匹配集。两者完整复用2,048容量冻结单位缓存、train/201来源、real-normal定义、2.5–40米域、精确匹配条件和五项caliper；使用完整合法边上的确定性最大基数二分匹配，并在最大基数固定后最小化归一化协变量平方差。E45A PASS独立解锁E46；E45B必须在E48前PASS；两条路径在E49汇合。实现已通过46项完整回归，正式匹配结果尚未产生。
+
 当前可成立的局部结论是：
 
 > **schema 7 能合法、确定且高效地产生覆盖冻结几何区域的合成异常代理；这些对象可以从 train/206 的合格支撑池采样，以冻结连续落地规则达到 99% 接触/埋地资格，并能由同一权威放置接口拒绝与 train/206 实际观测非地面回波发生超过 5 cm 深穿透的位置。**
@@ -1907,7 +1909,7 @@ E45-v1正式FAIL永久保留；后续设计归因修订为`qualification specifi
 当前执行节点为：
 
 $$
-\boxed{E44\ \text{PASS};\quad E45\text{-v1}\ \text{FAIL RETAINED};\quad E45\text{-v2}\ \text{FAIL};\quad E46\ \text{LOCKED}}
+\boxed{E45\text{-v1/v2}\ \text{FAIL RETAINED};\quad E45A/E45B\ \text{FROZEN};\quad E46/E48\ \text{LOCKED}}
 $$
 
 E23与E24-v2已按冻结设计通过，当前顺序进入：
@@ -1916,7 +1918,7 @@ $$
 E23\rightarrow E24\rightarrow E25\rightarrow E26
 $$
 
-E27–E44已关闭；E36-v1和E45-v1 FAIL均保留。E45-v2已耗尽冻结2,048容量并因三来源共同支持不足FAIL，当前停止在需要重新决策匹配设计的位置，E46保持锁定。
+E27–E44已关闭；E36-v1、E45-v1和E45-v2 FAIL均保留。当前执行E45A与E45B两组独立最大匹配资格；E46由E45A裁决解锁，E48由E45B裁决解锁。
 
 因此当前整体判断仍是：
 
