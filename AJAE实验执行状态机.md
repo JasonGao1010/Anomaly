@@ -2671,6 +2671,14 @@ E21 在预注册提交 `8625a39` 和实现提交 `ad7f26d` 后开始首次正式
 
 因此 E21 的 FAIL 永久保留，failure classification 为 `sample-frame specification defect`：指定的唯一序列中没有任何 parking=44 真实回波，128个parking anchor 配额从数学上无法抽取。不允许静默改用 semantic 49、把 parking 配额分给 road/sidewalk，或把本次改写为 PASS。若修订样本类别和配额，下一次必须命名为 E21-v2。E22 继续锁定。
 
+**E21-v2 协议修订冻结（2026-08-27，正式重跑前）**
+
+E21-v1 的 FAIL 永久保留。E21-v2 只修正不可实现的采样类别：将 train/206 中不存在的 parking=44 替换为真实存在的 other-ground=49。固定512个锚点的新配额为 road 256、sidewalk 128、other-ground 128；近/中/远配额分别为 road 86/85/85、sidewalk 43/43/42、other-ground 43/43/42。该修订绑定已经推送到远端的提交 `283e984`。
+
+除类别名称、语义编号和对应配额外，E21-v1 的全部规则原样继承：只用 train/206 中心帧2–446与五帧窗口；距离分层、身份哈希抽样、同语义邻域、0.75/1.0/1.25 m 三尺度、每尺度至少32点、固定剔除残差最大的10%、平面拟合与退化规则、1.0 m 的 median residual 不大于0.03 m和 $Q_{0.95}$ 不大于0.08 m、双尺度法向差不大于 $5^\circ$、锚点高度差不大于0.08 m、三个解析坡面回归及两遍24进程逐元素复现均不变。
+
+E21-v2 PASS 要求总体至少410/512合格，且 road 至少192/256、sidewalk 至少96/128、other-ground 至少96/128；所有被接受的 patch 必须满足全部冻结界限。允许明确拒绝不稳定地面，但不允许接受不稳定平面。正式结论只能限定为：road、sidewalk 和 other-ground 上的局部支撑平面取得资格；parking 在 train/206 中不可观测，因此不声称验证 parking。E21-v2 PASS 后只解锁 E22；FAIL 则永久保留并停止调整设计，E22 继续锁定。
+
 
 ## E22｜悬空与埋地检查
 
