@@ -1845,11 +1845,11 @@
           }
         },
         "placement_world_builder_E23_E26": {
-          "status": "DESIGN AND EXECUTION FROZEN; E23 PASS; E24 FAIL retained; E24-v2 PASS; E25 PASS; E26 unlocked",
+          "status": "DESIGN AND EXECUTION FROZEN; E23 PASS; E24 FAIL retained; E24-v2 PASS; E25 PASS; E26 PASS; Phase 2 closed; E27 unlocked",
           "design_authorities": ["AJAE新主线方案.md", "AJAE实验执行状态机.md"],
           "design_authority_sha256": {
-            "main_plan": "da5dfb1bcd8c46ad962af103f6b426b67066efd4ba170d2886034a5a0b09d27e",
-            "state_machine": "f50da5c88bb2252a71a6140e68e71b86284a0b88eb817f1306a3928076794cd5"
+            "main_plan": "a556db0bf95f748c4c58dc833cf157db578aa41aa25a96842a6c809dc59bb3a3",
+            "state_machine": "cf801957714f653601c4ccf9da718a85b25699bbda4c9892ae6a4e5a9b43f11c"
           },
           "implementation_identity": {
             "commit": "c150d516328cb6f108ec30f571c6a41ec0f53f82",
@@ -2061,7 +2061,7 @@
             }
           },
           "E26": {
-            "status": "DESIGN AND EXECUTION FROZEN; formal run pending",
+            "status": "PASS; closed; Phase 2 closed; E27 unlocked",
             "world_seeds": [2600000, 2600255],
             "world_type_quota_each": 64,
             "maximum_world_attempts": 48,
@@ -2093,6 +2093,36 @@
               "invalid_artifact_bytes": 1004593,
               "invalid_artifact_sha256": "25daf1a0a995598f5d7f2a67f3c7686d3dd68cf93968873a280c9211ad1fcc70",
               "invalid_artifact_removed_before_retry": true
+            },
+            "result": {
+              "worlds_completed": 256,
+              "world_type_counts": {"pure_normal": 64, "control_only": 64, "mixed": 64, "anomaly_only": 64},
+              "unique_world_hashes": 256,
+              "entities": 605,
+              "normal_controls": 307,
+              "anomaly_proxies": 298,
+              "entities_by_nonempty_world_type": {"control_only": 159, "mixed": 281, "anomaly_only": 165},
+              "maximum_world_attempt": 0,
+              "type_errors": 0,
+              "round_trip_errors": 0,
+              "validation_errors": 0,
+              "support_errors": 0,
+              "pose_errors": 0,
+              "material_errors": 0,
+              "pair_errors": 0,
+              "traversal_errors": 0,
+              "single_manifest_errors": 0,
+              "authority_errors": 0,
+              "hard_errors": 0,
+              "placement_exhaustions": 0,
+              "elementwise_reproduced": true,
+              "run_seconds": [71.27937724698859, 75.8278285330016],
+              "renderer_identity": "51b1bd037cd3226155e6f8bb428421729326e1d4e6a8c83fb414aa9a63f37d30",
+              "scientific_array_sha256": "e18fb5180a8667f8da8f755495720fa897cbe647ce8a2258284242dfc349c342",
+              "artifact_bytes": 1018517,
+              "artifact_sha256": "d93b6e8434dd5de54fb60b4d1587dbd2c466eebab8c2b06ad1477ae1c8411457",
+              "conclusion": "The sole training world builder deterministically constructs all four frozen immutable world types while preserving E22-E25 and canonical world/report/request identities across traversal, cache state and process scheduling.",
+              "claim_limit": "E26 does not establish renderer return correctness; that begins at E27."
             },
             "pass_conditions": ["256/256 worlds built with correct type", "canonical JSON and world hash repeat exactly", "window traversal never changes WorldSpec", "frame request identity is order/cache invariant", "all nonempty entities retain E22-E25", "one authoritative placement path", "two runs elementwise identical"]
           },

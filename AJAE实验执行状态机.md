@@ -3091,6 +3091,14 @@ normal-control的template/scale/material/pose seed分别为entity seed+1、entit
 
 PASS → **E27**，Phase 2 自动关闭。
 
+**E26 正式结果：PASS（Phase 2关闭，E27解锁）**
+
+优化后的冻结命令完成两遍24进程正式运行，用时分别为71.279377秒和75.827829秒。256/256个固定world全部构造完成，pure-normal、control-only、mixed、anomaly-only各64个；world type错误、放置耗尽、硬错误、world/report往返错误、E22–E25验证错误、类别支撑错误、姿态错误、材质错误、最终实体对明显互穿、窗口遍历错误、单进程manifest重建错误和权威路径审计错误均为0。两遍全部保存数组逐元素一致，科学数组哈希为 `e18fb5180a8667f8da8f755495720fa897cbe647ce8a2258284242dfc349c342`。
+
+独立复算确认world seed精确覆盖2,600,000–2,600,255且无重复，256个world hash全部唯一。全部world共含605个实体，其中normal-control 307个、anomaly-proxy 298个；control-only、mixed、anomaly-only分别含159、281、165个实体。全部256个world均在第0次完整world attempt构造成功。256个请求manifest哈希全部唯一；从正式产物独立解析每个world JSON和report JSON后，规范JSON、world hash、normal/anomaly数量与保存值不一致数均为0。
+
+正式产物 `runs/ajae/e26_world_builder.npz` 大小1,018,517字节，SHA-256为 `d93b6e8434dd5de54fb60b4d1587dbd2c466eebab8c2b06ad1477ae1c8411457`。E26 PASS允许的结论限定为：**当前唯一训练world builder能够在冻结随机流和上限内确定性构造四类不可变world；规范world/report身份不受窗口遍历、缓存状态或进程并行方式影响，全部非空实体保持E22–E25资格。** E26不形成renderer回波正确性结论，该问题从E27开始顺序检验。
+
 ## E26-V1｜放置场景可视化（非阻断描述）
 
 E26 PASS 后可按身份哈希生成固定场景面板，观察明显悬空、埋地、穿墙或两类放置风格。没有两名独立人类时不得形成正式评分；无论是否执行，本节点都不阻断 E27。任何视觉发现若要修改 E21–E25，必须明确开启新的开发周期并使受影响下游失效。
