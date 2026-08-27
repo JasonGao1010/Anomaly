@@ -745,7 +745,7 @@
         "criteria_frozen": true
       },
       "schema7_requalification_chain": {
-        "status": "schema 7 QUALIFIED; E18b-v3 FAIL remains permanent; E18b-v4 PASS; E19-v4 PASS; E20a-v2 FAIL on inherited asymmetry measurement convergence; downstream locked",
+        "status": "schema 7 QUALIFIED; E18b-v3 FAIL permanent; E18b-v4 and E19-v4 PASS; E20a-v2 FAIL permanent; E20a-D3 PASS attributes failure to original two-layer asymmetry budget; downstream locked",
         "historical_formal_generator_before_qualification": 6,
         "qualified_generator": 7,
         "E18b-v3": {
@@ -990,7 +990,7 @@
           }
         },
         "E20a-D3": {
-          "status": "EXECUTION FROZEN; first formal run not yet started",
+          "status": "PASS; attribution resolved as original two-layer budget insufficient",
           "question": "Are the 130 E20a-v2 asymmetry-unresolved objects primarily caused by insufficient 2^13/2^15 sampling budgets, or does the uniform-AABB Sobol inside-rejection estimator remain unstable at 2^19?",
           "diagnostic_only": "D3 does not modify schema 7, E20a-v2, the 0.03 layer tolerance, the unresolved limit 81, the asymmetric threshold 0.15, or any coverage count; it cannot produce an E20a PASS",
           "parent_artifact": {"path": "runs/ajae/e20a_v2_schema7_geometry_coverage.npz", "sha256": "addeb0983ee1f58d32dcba027e27dc02ee90994e135cf9564ecfe71b0798e14c"},
@@ -1023,7 +1023,40 @@
           "frozen_render_source_sha256": "ccdddb12b96104360deb245dabffcf8449c9e568c70dd7202cdc3e850b5413d9",
           "runner_sha256": "73476601856bc46f96ea420f7b158a0c62546272821785d11e75d792caf27d4a",
           "planned_artifact": "runs/ajae/e20a_d3_asymmetry_convergence.npz",
-          "criteria_frozen_before_formal_run": true
+          "criteria_frozen_before_formal_run": true,
+          "formal_result": {
+            "date": "2026-08-27",
+            "protocol_commit": "cf94d66621b744636940670c7579f697747a5910",
+            "passed": true,
+            "attribution": "original_two_layer_budget_insufficient",
+            "sample_count": 260,
+            "unresolved_count": 130,
+            "control_count": 130,
+            "low_budget_exact_reproduction": true,
+            "unresolved_qualified_convergence": 113,
+            "unresolved_qualified_convergence_fraction": 0.8692307692307693,
+            "control_high_budget_stable": 127,
+            "control_high_budget_stable_fraction": 0.9769230769230769,
+            "unresolved_high_budget_difference_above_0.03": 0,
+            "unresolved_robust_above_0.15": 76,
+            "unresolved_robust_below_0.15": 50,
+            "unresolved_threshold_crossing_A17_A19": 4,
+            "unresolved_classification_sensitive_union": 4,
+            "budget_insufficiency_rule_satisfied": true,
+            "estimator_unsuitable_rule_satisfied": false,
+            "classification_sensitivity_rule_satisfied": false,
+            "unresolved_delta_medians_13_15_15_17_17_19": [0.0366955218036969, 0.005201450063311408, 0.0034466050223427476],
+            "control_delta_medians_13_15_15_17_17_19": [0.0052205184327779874, 0.0035481749732158945, 0.0015045674310770474],
+            "unresolved_delta_17_19_q95_q99_maximum": [0.014483024313515655, 0.02185112929000016, 0.022295823194576514],
+            "unresolved_A19_distance_to_0.15_median_q95_minimum": [0.0645994159575838, 0.18667222924075458, 0.0006550978752596082],
+            "run_seconds": [9.098420185997384, 9.120897729000717],
+            "array_hashes": ["0879719928f64e90a5a177121ce2c79005044d8780be72d779fc539d0f818dbb", "0879719928f64e90a5a177121ce2c79005044d8780be72d779fc539d0f818dbb"],
+            "summary_hash": "17e853c1bcde27996d88258c4b8b5f3d6864a0128c3d29cdf228d4ab3567a67a",
+            "artifact": "runs/ajae/e20a_d3_asymmetry_convergence.npz",
+            "artifact_bytes": 40885,
+            "artifact_sha256": "03c71a1648eb5fa7f42fa7e75c98445e3c824eb1c7078ea910326f58f4886007",
+            "decision": "retain E20a-v2 FAIL and schema 7 unchanged; do not unlock downstream; a separately approved versioned higher-budget asymmetry measurement qualification and full E20a rerun are required"
+          }
         }
       },
       "schema7_blinded_geometry_review": {
