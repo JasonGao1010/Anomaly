@@ -1845,11 +1845,11 @@
           }
         },
         "placement_world_builder_E23_E26": {
-          "status": "DESIGN AND EXECUTION FROZEN; E23 PASS; E24 FAIL; E24-v2 unlocked; E25 locked",
+          "status": "DESIGN AND EXECUTION FROZEN; E23 PASS; E24 FAIL retained; E24-v2 PASS; E25 unlocked",
           "design_authorities": ["AJAE新主线方案.md", "AJAE实验执行状态机.md"],
           "design_authority_sha256": {
-            "main_plan": "604c40e0094cced7791bd854635bbbc067e656dd08ce61e93966110dbccfd0c0",
-            "state_machine": "00bd9c3fa5acb8cbe23ec17e751d02693423577c509a87bfe2d8447d8ec5df4b"
+            "main_plan": "c32924054e324c289056ba561205407a4d4e4f9dbbec1ba44c3c18b2b8a07071",
+            "state_machine": "c2d66bb9e809e64ed460bb46dd513707e9280d7f43c95d52c8509b3b4a36b950"
           },
           "implementation_identity": {
             "commit": "e98e5d2aae93669c96c34cd4c9046171f3e747b6",
@@ -1944,7 +1944,7 @@
             }
           },
           "E24_v2": {
-            "status": "DESIGN AND EXECUTION FROZEN; formal run pending",
+            "status": "PASS; closed; E25 unlocked",
             "revision_scope": "replace fixed per-entity shape identity with a fixed deterministic shape proposal stream; all world, support, grounding, observed-collision and pair-collision semantics remain unchanged",
             "world_seeds": [2100000, 2100511],
             "entity_count_stream": "numpy default_rng(SeedSequence([world_seed,2401])).integers(2,7)",
@@ -1965,10 +1965,32 @@
             "downstream": "PASS directly unlocks the already frozen E25 design; FAIL keeps E25 locked",
             "implementation_commit": "e98e5d2aae93669c96c34cd4c9046171f3e747b6",
             "command": "python -m src.render qualify-e24-v2 --data-root /home/jasongao/Data/STU --support-pool runs/ajae/e21_v4_support_pool.npz --output runs/ajae/e24_v2_pair_collision.npz --processes 24",
-            "artifact": "runs/ajae/e24_v2_pair_collision.npz"
+            "artifact": "runs/ajae/e24_v2_pair_collision.npz",
+            "result": {
+              "worlds_completed": 512,
+              "entities": 2054,
+              "fixture_errors": 0,
+              "shape_proposals": 2062,
+              "grounding_rejections": 8,
+              "shape_exhaustions": 0,
+              "support_proposals": 2549,
+              "observed_collision_rejections": 487,
+              "pair_rejections": 8,
+              "placement_exhaustions": 0,
+              "validation_errors": 0,
+              "final_pair_penetrations": 0,
+              "hard_errors": 0,
+              "elementwise_reproduced": true,
+              "run_seconds": [637.5530614450108, 639.1251741190063],
+              "scientific_array_sha256": "c236e63f31605ae45b31f600891a721796b163d18376eb4c4f637dbf82df1c25",
+              "artifact_bytes": 1553237,
+              "artifact_sha256": "bc339b980a6d644212c761053e9e32e23ad96135ceb5651846691328954b058d",
+              "conclusion": "The frozen per-entity deterministic shape rejection/resampling contract builds all 512 original multi-entity worlds within the fixed 64-shape and 128-placement limits with zero final E22/E23 violation or obvious pair penetration.",
+              "claim_limit": "E24-v2 does not rewrite the historical E24 FAIL and does not establish E25 normal-control semantic validity."
+            }
           },
           "E25": {
-            "status": "DESIGN FROZEN; locked until E24 PASS",
+            "status": "DESIGN FROZEN; unlocked by E24-v2 PASS",
             "template_minimum_points": 32,
             "active_class_minimum_templates": 4,
             "active_template_total_minimum": 32,

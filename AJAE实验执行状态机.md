@@ -2966,6 +2966,18 @@ $q=0$精确保留E24原固定shape identity；步长3,072等于512个世界乘�
 
 E24-v2 PASS后直接解锁E25并沿既有冻结设计执行，不重新设计E25。E24-v2若仍FAIL，则当前完整multi-entity world generation的合法可采样域未达到冻结上限内512/512可构造要求，E25继续锁定。
 
+**E24-v2 正式结果：PASS（E24-v2 关闭，E25 解锁）**
+
+E24-v2在冻结提交 `44ee77b` 和实现提交 `e98e5d2` 后完成两遍24进程正式运行，两遍用时分别为637.553061秒和639.125174秒。512个原world identity全部构造完成，共含2,054个anomaly-proxy实体；固定fixture错误、shape proposal耗尽、placement proposal耗尽、硬错误、最终E22/E23 violation和最终明显实体对互穿均为0。两遍全部保存数组逐元素一致，科学数组哈希为 `c236e63f31605ae45b31f600891a721796b163d18376eb4c4f637dbf82df1c25`。
+
+正式shape流共消费2,062个shape proposals。8个历史E22-invalid seed均在进入support抽样前记为 `grounding_rejection`，随后同一实体槽的第2个shape proposal通过；其余2,046个实体均在第1个shape proposal通过。shape proposal count的minimum、median、mean、$Q_{0.95}$和maximum分别为1、1、1.003895、1和2，grounding rejection rate为8/2,062=0.387973%。没有针对8个seed的专门例外。
+
+2,054个实体共消费2,549个support proposals；每实体support proposal count的minimum、median、mean、$Q_{0.95}$和maximum分别为1、1、1.240993、2和7。拒绝原因包括487次 `observed_normal_deep_penetration` 和8次 `obvious_pair_penetration`；pair rejection占全部support proposals的0.313849%。这些统计只作描述，没有形成新增效率门槛。
+
+独立复算确认512个world seed唯一且覆盖2,100,000–2,100,511，全部canonical world JSON哈希、实体数和placement report长度匹配，shape与support proposal历史错误为0。正式产物 `runs/ajae/e24_v2_pair_collision.npz` 大小1,553,237字节，SHA-256为 `bc339b980a6d644212c761053e9e32e23ad96135ceb5651846691328954b058d`。
+
+E24-v2 PASS允许的结论限定为：**在保持E22、E23和pair detector不变的条件下，逐实体确定性shape rejection/resampling合同能够在64个shape与128个placement上限内构造全部512个冻结多实体世界，最终E22/E23 violation和明显实体对互穿均为0。** E24历史FAIL继续保留，其失败不归因于pair-collision detector。E24-v2至此关闭，E25按既有冻结设计直接解锁。
+
 ## E25｜normal-control 模板、支撑语义与姿态资格
 
 **唯一问题**
