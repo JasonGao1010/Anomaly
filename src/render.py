@@ -9307,6 +9307,65 @@ def run_e34_qualification(output_path: Path | str) -> dict[str, object]:
     os.replace(temporary, destination); return result
 
 
+_E35_SENSOR: SensorCalibration | None = None
+
+
+def _e35_worker(identity: int) -> dict[str, np.ndarray]:
+    if _E35_SENSOR is None:
+        raise RuntimeError("E35 calibration is not initialized")
+    sensor = _E35_SENSOR
+    beam, range_bin, incidence_bin = np.indices(sensor.return_probability.shape, dtype=np.int64)
+    beam = beam.ravel(); range_bin = range_bin.ravel(); incidence_bin = incidence_bin.ravel()
+    ranges = 0.5 * (sensor.range_edges_m[range_bin] + sensor.range_edges_m[range_bin + 1])
+    incidence = 0.5 * (sensor.incidence_edges_rad[incidence_bin] + sensor.incidence_edges_rad[incidence_bin + 1])
+    slots = np.arange(beam.size, dtype=np.int32); object_ids = np.full(beam.size, identity + 1, dtype=np.int32)
+    world = WorldSpec(3_500_000 + identity, 206, ())
+    uniform = _slot_uniform(world, 2_000 + identity, slots, object_ids, channel=1)
+    reference_uniform = _e29_reference_uniform(world.seed, 206, 2_000 + identity, slots, object_ids, 1)
+    material = MaterialSpec.sample(3_500_000 + identity)
+    intensity = sensor.sample_intensity(beam, ranges, incidence, uniform, material)
+    quantile_raw = material.intensity_quantile + material.roughness * (reference_uniform - 0.5)
+    quantile = np.clip(quantile_raw, 0.0, 1.0)
+    reference = np.asarray([
+        np.interp(quantile[i], sensor.quantile_levels, sensor.intensity_quantiles[int(beam[i]), int(range_bin[i]), int(incidence_bin[i])])
+        for i in range(beam.size)
+    ], dtype=np.float32)
+    np.clip(reference, sensor.intensity_min, sensor.intensity_max, out=reference)
+    return {
+        "identity": np.full(beam.size, identity, dtype=np.int16), "beam": beam.astype(np.int16),
+        "range_bin": range_bin.astype(np.int8), "incidence_bin": incidence_bin.astype(np.int8),
+        "uniform": uniform, "reference_uniform": reference_uniform,
+        "quantile_raw": quantile_raw, "quantile": quantile,
+        "intensity": intensity, "reference_intensity": reference,
+        "quantile_low_clipped": quantile_raw < 0.0, "quantile_high_clipped": quantile_raw > 1.0,
+    }
+
+
+def run_e35_qualification(calibration_path: Path | str, output_path: Path | str, *, processes: int = 24) -> dict[str, object]:
+    """Qualify conditional intensity generation against an independent reference."""
+    if processes != 24:
+        raise RenderError("formal E35 requires exactly 24 worker processes")
+    _, sensor = load_sensor_calibration(calibration_path)
+    global _E35_SENSOR; _E35_SENSOR = sensor
+    context = mp.get_context("fork"); runs = []; run_seconds = []
+    for _ in range(2):
+        started = time.monotonic()
+        with context.Pool(processes=processes) as workers: records = workers.map(_e35_worker, range(24))
+        runs.append({name: np.concatenate([record[name] for record in records]) for name in records[0]})
+        run_seconds.append(time.monotonic() - started)
+    first = runs[0]; reproduced = all(np.array_equal(first[name], runs[1][name]) for name in first)
+    maximum_error = float(np.max(np.abs(first["intensity"].astype(np.float64) - first["reference_intensity"].astype(np.float64))))
+    maximum_uniform_error = float(np.max(np.abs(first["uniform"] - first["reference_uniform"])))
+    undefined = int(np.count_nonzero(~np.isfinite(first["intensity"])))
+    support_errors = int(np.count_nonzero((first["intensity"] < sensor.intensity_min) | (first["intensity"] > sensor.intensity_max)))
+    low = int(np.count_nonzero(first["quantile_low_clipped"])); high = int(np.count_nonzero(first["quantile_high_clipped"])); total = int(first["intensity"].size)
+    passed = maximum_error <= 1e-6 and maximum_uniform_error == 0.0 and undefined == 0 and support_errors == 0 and reproduced
+    scientific_hash = _scientific_array_hash(first)
+    result = {"experiment": "E35", "passed": passed, "calibration_cells": int(sensor.return_probability.size), "identities_per_cell": 24, "samples": total, "maximum_intensity_error": maximum_error, "maximum_uniform_error": maximum_uniform_error, "undefined_cells": undefined, "support_errors": support_errors, "quantile_low_clipped": low, "quantile_high_clipped": high, "quantile_clipping_fraction": (low + high) / total, "elementwise_reproduced": reproduced, "run_seconds": run_seconds, "processes": processes, "scientific_array_hash": scientific_hash}
+    destination = Path(output_path).expanduser().resolve(); destination.parent.mkdir(parents=True, exist_ok=True); temporary = destination.with_suffix(destination.suffix + ".tmp.npz")
+    np.savez_compressed(temporary, **first, metadata_json=np.asarray(json.dumps(result, sort_keys=True, separators=(",", ":")))); os.replace(temporary, destination); return result
+
+
 def _render_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="AJAE authoritative renderer experiments")
     subcommands = parser.add_subparsers(dest="command", required=True)
@@ -9364,6 +9423,10 @@ def _render_parser() -> argparse.ArgumentParser:
     e33.add_argument("--output", type=Path, required=True)
     e34 = subcommands.add_parser("qualify-e34")
     e34.add_argument("--output", type=Path, required=True)
+    e35 = subcommands.add_parser("qualify-e35")
+    e35.add_argument("--calibration", type=Path, required=True)
+    e35.add_argument("--output", type=Path, required=True)
+    e35.add_argument("--processes", type=int, default=24)
     return parser
 
 
@@ -9437,6 +9500,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0 if result["passed"] else 1
     if args.command == "qualify-e34":
         result = run_e34_qualification(args.output)
+        print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        return 0 if result["passed"] else 1
+    if args.command == "qualify-e35":
+        result = run_e35_qualification(args.calibration, args.output, processes=args.processes)
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 0 if result["passed"] else 1
     raise AssertionError("unreachable renderer command")
