@@ -11654,16 +11654,18 @@ def _point_identity_order(frame_id: int, slots: np.ndarray, grid: RayGrid) -> np
     """Hash canonical frame/beam/column identities for fixed point subsampling."""
     beam = grid.beam_ids[slots].astype(np.uint64)
     column = grid.column_ids[slots].astype(np.uint64)
-    value = (
-        np.uint64(frame_id) * np.uint64(0x9E3779B185EBCA87)
-        ^ beam * np.uint64(0xC2B2AE3D27D4EB4F)
-        ^ column * np.uint64(0x165667B19E3779F9)
-    )
-    value ^= value >> np.uint64(30)
-    value *= np.uint64(0xBF58476D1CE4E5B9)
-    value ^= value >> np.uint64(27)
-    value *= np.uint64(0x94D049BB133111EB)
-    value ^= value >> np.uint64(31)
+    # SplitMix64 intentionally wraps modulo 2^64.
+    with np.errstate(over="ignore"):
+        value = (
+            np.uint64(frame_id) * np.uint64(0x9E3779B185EBCA87)
+            ^ beam * np.uint64(0xC2B2AE3D27D4EB4F)
+            ^ column * np.uint64(0x165667B19E3779F9)
+        )
+        value ^= value >> np.uint64(30)
+        value *= np.uint64(0xBF58476D1CE4E5B9)
+        value ^= value >> np.uint64(27)
+        value *= np.uint64(0x94D049BB133111EB)
+        value ^= value >> np.uint64(31)
     return np.argsort(value, kind="stable")
 
 
@@ -11978,7 +11980,7 @@ def _load_e45_bank_with_metadata(
 
 def _load_e45_unit_cache(
     path: Path, capacity: int, bank_hash: str,
-) -> dict[str, np.ndarray] | None:
+) -> tuple[dict[str, np.ndarray], float] | None:
     if not path.exists():
         return None
     with np.load(path, allow_pickle=False) as source:
@@ -11990,7 +11992,10 @@ def _load_e45_unit_cache(
             or metadata.get("bank_hash") != bank_hash
         ):
             return None
-        return {name: np.asarray(source[name]) for name in _E45_UNIT_FIELDS}
+        return (
+            {name: np.asarray(source[name]) for name in _E45_UNIT_FIELDS},
+            float(metadata.get("extraction_seconds", 0.0)),
+        )
 
 
 def _e45_selected_scientific(
@@ -12074,10 +12079,13 @@ def run_e45_v2_qualification(
         _GATE1_SEQUENCE, _GATE1_RAY_GRID, _GATE1_SENSOR = sequence, grid, sensor
         _E45_BANK = bank
         unit_path = output.parent / f"e45_v2_units_{capacity}.npz"
-        units = _load_e45_unit_cache(
+        cached_units = _load_e45_unit_cache(
             unit_path, capacity, str(bank_metadata["scientific_array_hash"])
         )
         extraction_seconds = 0.0
+        units = None if cached_units is None else cached_units[0]
+        if cached_units is not None:
+            extraction_seconds = cached_units[1]
         if units is None:
             started = time.monotonic()
             with mp.get_context("fork").Pool(processes=processes) as workers:
@@ -12123,7 +12131,10 @@ def run_e45_v2_qualification(
             "maximum_pairwise_smd": maximum_smd,
             "caliper_errors": caliper_errors, "duplicate_errors": duplicate_errors,
             "elementwise_reproduced": reproduced,
-            "bank_extension_seconds": float(bank_metadata.get("elapsed_seconds", 0.0)),
+            "bank_extension_seconds": (
+                0.0 if capacity == 256
+                else float(bank_metadata.get("elapsed_seconds", 0.0))
+            ),
             "unit_extraction_seconds": extraction_seconds,
             "two_run_matching_seconds": matching_seconds,
             "passed": passed,
