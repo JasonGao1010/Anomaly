@@ -1490,6 +1490,54 @@
             "failure_classification": "The frozen 0.75 m same-semantic minimum-support rule and distance-stratified sample do not provide enough usable support patches, especially in the far tier; this is a scientific qualification failure requiring a design decision, not a numerical crash or nondeterminism.",
             "decision": "Retain E21-v2 FAIL permanently, stop the placement chain and keep E22 locked. Do not alter radii, minimum support, distance quotas or pass thresholds without a separately approved protocol revision."
           }
+        },
+        "E21-v3": {
+          "status": "EXECUTION FROZEN",
+          "preregistration_date": "2026-08-27",
+          "source_commit": "2dc741f",
+          "source_commit_pushed_before_preregistration": true,
+          "question": "Without forcing equal near/middle/far representation, can distance-adaptive metric neighborhoods identify enough stable local support planes on train/206 ground returns for later placement?",
+          "amendment": [
+            "Remove near/middle/far sampling quotas; sample each semantic directly from all eligible center-frame returns by deterministic identity hash.",
+            "Replace the fixed 1.0 m central radius by R(d)=clip(d/20,1,3) m and use 0.75R, R and 1.25R, where d is the anchor Euclidean sensor-frame range."
+          ],
+          "data": {
+            "partition_sequence": "train/206 only",
+            "center_frames": [2, 446],
+            "window_offsets": [-2, -1, 0, 1, 2],
+            "eligible_range_m": [0.0, 120.0],
+            "raw_semantics": {"road": 40, "sidewalk": 48, "other_ground": 49},
+            "anchors": {"total": 512, "road": 256, "sidewalk": 128, "other_ground": 128},
+            "selection": "for each semantic, sort all eligible real center-frame returns by a frozen semantic-namespace SplitMix64 hash of packed (frame,slot), breaking collisions by frame then slot, and take the semantic quota; no distance tier affects selection",
+            "identity_and_neighborhood": "inherit E21-v2 unchanged: preserve (source_frame,file_slot), use only exact same-semantic real returns from the frozen five-frame window after world-coordinate transformation"
+          },
+          "adaptive_radius": {
+            "distance": "Euclidean sensor-frame range d of the selected center-frame return in metres",
+            "central_radius_m": "R(d)=clip(d/20,1,3)",
+            "scales": [0.75, 1.0, 1.25],
+            "radii_m": ["0.75*R(d)", "R(d)", "1.25*R(d)"],
+            "unchanged_at_or_below_20m": true
+          },
+          "plane_estimator": "inherit E21-v2 unchanged: at least 32 exact same-semantic points at every adaptive radius, deterministic covariance fit, fixed largest-residual 10% trimming and SVD refit",
+          "qualified_patch": "inherit E21-v2 unchanged: central-plane median residual <=0.03 m, Q0.95 <=0.08 m, small-vs-large normal angle <=5 degrees and anchor-height difference <=0.08 m",
+          "analytic_fixtures": "inherit the frozen 0/5/10-degree E21 fixtures and limits unchanged, evaluated with the 1.0 m reference central radius",
+          "pass_conditions": {
+            "overall_qualified_minimum": 410,
+            "overall_fraction_minimum": 0.80,
+            "road_qualified_minimum": 192,
+            "sidewalk_qualified_minimum": 96,
+            "other_ground_qualified_minimum": 96,
+            "accepted_patch_compliance": "every accepted patch satisfies every inherited support, residual and multiscale limit",
+            "fixtures": "all three analytic fixtures satisfy both frozen error limits",
+            "reproducibility": "two complete independent 24-process runs reproduce every anchor, adaptive radius, neighborhood identity, plane statistic, decision and scientific hash elementwise; runtime is excluded"
+          },
+          "descriptive_distance_bins_m": [[0.0, 10.0], [10.0, 20.0], [20.0, 30.0], [30.0, 40.0], [40.0, 50.0], [50.0, 120.0]],
+          "descriptive_only": ["anchor counts and qualified fractions in every distance bin", "central radius distribution and qualification versus distance"],
+          "conclusion_limit": "E21-v3 qualifies support-plane availability on the frozen randomly sampled ground-return interface; distance-bin summaries are descriptive and do not establish final rendered-return coverage.",
+          "after_pass": "freeze the support-plane estimator, unlock E22 and do not create E21-v4",
+          "failure_route": "retain E21-v3 FAIL permanently, stop random-ground-anchor qualification and redesign placement around a deterministic qualified-support-patch pool; do not tune the radius formula and do not run E22",
+          "forbidden": ["train/201", "distance-tier quotas", "distance-bin pass thresholds", "changing 32-point support", "changing residual or stability thresholds", "changing the 80/75-percent pass thresholds", "running E22 before PASS"],
+          "criteria_frozen_before_formal_run": true
         }
       }
     },
