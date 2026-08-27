@@ -2599,9 +2599,19 @@ E20b-lite 将在 E20a PASS 且 E20-V1 完成后回答：primitive count、连续
 
 E20b 的训练/测试拆分、条件覆盖单元、低容量模型、基线、接近确定性的数值门槛和重复规则尚未冻结，因此当前不得执行。其判据必须在 E20a 结果不参与阈值选择的前提下另行预注册。材质与 placement independence 不属于 E20b，并继续分别后移到正式传感器链与放置链。
 
+**E20b-lite 运行协议冻结（2026-08-27，分析前）**
+
+本节点直接读取 E20a-v3 已冻结的8,192个 schema 7 对象，不重新生成几何。四个目标分别是 primitive count 1–5、small/medium/large、blocky/flat/elongated/other 和 weak/middle/strong。在每个 primitive-count 组内，每个尺寸、轴比和形变类别至少需有16个对象，只用于排除某类完全缺失或支持极小。
+
+四个预测任务依次为：用直径、两个轴比和形变强度预测 primitive count；用 primitive count、轴比和形变强度预测尺寸类别；用 primitive count、直径和形变强度预测轴比类别；用 primitive count、直径和轴比预测形变类别。每个任务都禁止输入直接定义该标签的连续量或区域掩码，也禁止使用 `shape_family`、seed、哈希、proposal/rejection 计数、union spread、不对称性和人工审查信息。
+
+数据用带独立前缀的 SHA-256(shape hash) 确定性分为75% 训练和25% 测试，每个类别必须在两部分中都存在。低容量模型冻结为：连续量标准化、primitive count 作为输入时独热编码的 L2 逻辑回归（`C=1`、`class_weight=balanced`、`max_iter=5000`），以及 `max_depth=3`、`min_samples_leaf=64`、`class_weight=balanced`、`random_state=20260827` 的浅层决策树。
+
+只有某个任务的某个冻结模型同时达到测试集平衡准确率至少0.95且最低单类召回率至少0.90，才判定存在“接近确定性的简单捷径”并 FAIL。普通相关、适度可预测性和分布差异只报告。所有条件单元有至少16个对象、数值和标签有效、训练/测试类别齐全、无模型触发捷径条件且两遍分析逐元素一致，才能 PASS。PASS 后结束 Phase 2 几何分布资格链并解锁 E21。
+
 **当前状态**
 
-E20b-lite UNLOCKED：E20a-v3 已 PASS，原 E20-V1 未完成并经明示范围修订退役，不再作为下游门槛。E21 LOCKED until E20b-lite PASS。
+E20b-lite UNLOCKED / RUN PROTOCOL FROZEN：E20a-v3 已 PASS，原 E20-V1 未完成并经明示范围修订退役，不再作为下游门槛。E21 LOCKED until E20b-lite PASS。
 
 
 ## E21｜局部支撑平面估计

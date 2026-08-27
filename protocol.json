@@ -1287,14 +1287,38 @@
       },
       "schema6_geometry_factor_decoupling": {
         "version": "E20b-lite",
-        "status": "UNLOCKED; E20a-v3 PASS is valid and the uncompleted E20-V1 human gate was retired by explicit scope amendment",
+        "status": "UNLOCKED; RUN PROTOCOL FROZEN BEFORE ANALYSIS",
         "question": "Is there an almost deterministic low-capacity shortcut among primitive count, continuous size, axis-ratio region, and deformation strength? Ordinary correlation is allowed.",
-        "planned_primary_evidence": ["basic small/medium/large, blocky/flat/elongated, and weak/strong coverage within primitive-count groups", "one shallow decision tree and one logistic regression used only to detect near-perfect predictability"],
+        "source": {"artifact": "runs/ajae/e20a_v3_schema7_geometry_coverage.npz", "artifact_sha256": "1dda79688dc76020f19ae9a5e839856eb50e27db4cb8dd0e4b197e2310aa9ef4", "objects": 8192, "generator_schema": 7, "no_regeneration": true},
+        "factor_labels": {
+          "primitive_count": "exact integer 1 through 5",
+          "size": "the frozen mutually exclusive E20a-v3 small/medium/large masks",
+          "axis_ratio": "blocky, flat, elongated, or other from the frozen final continuous-geometry masks; overlap among the first three is forbidden",
+          "deformation": "weak, middle, or strong from the frozen E20a-v3 deformation thresholds"
+        },
+        "conditional_coverage": "within every primitive-count group, every size, axis-ratio, and deformation label must contain at least 16 objects; this only prevents an absent or negligible cell from being hidden by aggregate model scores",
+        "prediction_tasks": {
+          "primitive_count_from_geometry": ["diameter_m", "r21", "r31", "deformation_strength"],
+          "size_from_other_factors": ["primitive_count", "r21", "r31", "deformation_strength"],
+          "axis_ratio_from_other_factors": ["primitive_count", "diameter_m", "deformation_strength"],
+          "deformation_from_other_factors": ["primitive_count", "diameter_m", "r21", "r31"]
+        },
+        "leakage_exclusions": ["the continuous variable or masks that directly define the target label", "shape_family", "seed", "shape/report hash", "proposal and rejection counts", "union_spread because it structurally distinguishes single from multi primitive", "asymmetry and review information"],
+        "split": "deterministic 75/25 train/test assignment from a dedicated SHA-256 prefix plus shape_hash; the same split is used for both models and every class must occur in both partitions",
+        "models": {
+          "logistic_regression": "standardized continuous inputs, one-hot primitive count when used as a predictor, L2 penalty, C=1, class_weight=balanced, max_iter=5000",
+          "shallow_decision_tree": "max_depth=3, min_samples_leaf=64, class_weight=balanced, fixed random_state=20260827"
+        },
+        "near_deterministic_shortcut": "a task triggers FAIL when either frozen model simultaneously has held-out balanced accuracy >=0.95 and minimum per-class recall >=0.90",
+        "pass_conditions": ["all conditional coverage cells contain at least 16 objects", "all values and labels are finite and mutually valid", "every class occurs in train and test", "no task/model reaches the frozen near-deterministic shortcut rule", "two complete analyses reproduce assignments, predictions, metrics and summary hash elementwise"],
+        "required_reports": ["all conditional cell counts", "train/test counts", "majority baseline accuracy", "held-out accuracy, balanced accuracy, macro F1 and per-class recall for every task/model", "confusion matrices", "split, prediction and summary hashes"],
         "not_primary": "mutual information",
-        "not_yet_frozen": ["minimal split", "minimal model hyperparameters", "near-deterministic numeric threshold"],
+        "not_yet_frozen": [],
         "nonblocking_findings": ["ordinary correlation", "moderate predictability", "descriptive distribution differences"],
         "deferred_out_of_scope": {"placement_independence": "after E21-E25 qualification", "material_independence": "E35-E40 return/intensity chain"},
-        "criteria_frozen_before_formal_run": false
+        "failure_routing": "FAIL only identifies an almost deterministic generator-factor shortcut or a missing conditional support cell; stop for a factor-specific design decision without modifying schema 7 automatically",
+        "after_pass": "end Phase-2 geometry-distribution qualification and unlock E21",
+        "criteria_frozen_before_formal_run": true
       }
     },
     "world_types": {"pure_normal": 0.2, "control_only": 0.2, "mixed": 0.4, "anomaly_only": 0.2},
