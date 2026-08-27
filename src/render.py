@@ -10087,22 +10087,52 @@ def _gate1_real_candidates(
             if sensor_points.shape[0] < 32 or not np.any((ranges >= 2.5) & (ranges <= 50.0)):
                 continue
             world_points = sensor_points @ rotation.T + translation
-            lower = world_points[:, :2].min(axis=0) - 1.0
-            upper = world_points[:, :2].max(axis=0) + 1.0
+            try:
+                horizontal_hull = ConvexHull(world_points[:, :2])
+            except QhullError:
+                continue
+            polygon = world_points[np.asarray(horizontal_hull.vertices), :2]
             allowed = normal_control_support_semantics(semantic)
-            legal = rows[
-                np.isin(pool.semantics[rows], tuple(allowed))
-                & np.all(pool.anchors_world_m[rows, :2] >= lower, axis=1)
-                & np.all(pool.anchors_world_m[rows, :2] <= upper, axis=1)
-            ]
+            legal = rows[np.isin(pool.semantics[rows], tuple(allowed))]
             if legal.size == 0:
                 continue
-            distance = np.linalg.norm(
-                pool.anchors_world_m[legal, :2]
-                - np.median(world_points[:, :2], axis=0),
+            patch_xy = pool.anchors_world_m[legal, :2]
+            equations = np.asarray(horizontal_hull.equations, dtype=np.float64)
+            expanded_inside = np.all(
+                patch_xy @ equations[:, :2].T + equations[:, 2] <= 0.5,
                 axis=1,
             )
-            row = int(legal[np.lexsort((pool.selection_hashes[legal], distance))[0]])
+            if bool(expanded_inside.any()):
+                eligible_rows = legal[expanded_inside]
+                center_xy = np.mean(polygon, axis=0)
+                distance = np.linalg.norm(
+                    pool.anchors_world_m[eligible_rows, :2] - center_xy, axis=1
+                )
+            else:
+                starts = polygon
+                ends = np.roll(polygon, -1, axis=0)
+                edges = ends - starts
+                denominator = np.sum(np.square(edges), axis=1)
+                relative = patch_xy[:, None, :] - starts[None, :, :]
+                fraction = np.clip(
+                    np.sum(relative * edges[None, :, :], axis=2)
+                    / denominator[None, :],
+                    0.0, 1.0,
+                )
+                closest = starts[None, :, :] + fraction[:, :, None] * edges[None, :, :]
+                distance = np.min(
+                    np.linalg.norm(patch_xy[:, None, :] - closest, axis=2), axis=1
+                )
+                within = distance <= 1.0
+                if not bool(within.any()):
+                    continue
+                eligible_rows = legal[within]
+                distance = distance[within]
+            row = int(
+                eligible_rows[
+                    np.lexsort((pool.selection_hashes[eligible_rows], distance))[0]
+                ]
+            )
             support_semantic = int(pool.semantics[row])
             identity = f"201:{center}:{semantic}:{instance}".encode("ascii")
             candidates.append((hashlib.sha256(identity).digest(), (center, semantic, instance, support_semantic)))
