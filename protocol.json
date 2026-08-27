@@ -1214,14 +1214,43 @@
       },
       "schema7_blinded_geometry_review": {
         "version": "E20-V1",
-        "status": "UNLOCKED after E20a-v3 PASS; execution requires the frozen 192-object panels and at least two independent human reviewers",
-        "sample": {"source": "the future passing full E20a qualification set", "hash_deterministic_total": 192, "strata_each": {"flat": 32, "elongated": 32, "blocky": 32, "asymmetric": 32, "near_metric_boundary": 32, "uniform_full_distribution": 32}, "single_multi_balance": "approximately one half each when feasible"},
-        "display": ["front", "side", "top", "fixed perspective", "same physical scale", "same camera", "same lighting", "same background", "hide family seed metrics and PASS regions"],
+        "status": "MATERIAL GENERATION FROZEN; human scoring remains pending",
+        "sample": {
+          "source": "E20a-v3 8192-object formal artifact",
+          "hash_deterministic_total": 192,
+          "sequential_unique_strata": ["flat", "elongated", "blocky", "asymmetric", "near_metric_boundary", "uniform_full_distribution"],
+          "strata_each": 32,
+          "single_multi_rule": "take up to 16 single and 16 multi per stratum; when one class is unavailable, fill to 32 from the other class by separately prefixed hash",
+          "realized_single_multi": {"flat": [16,16], "elongated": [16,16], "blocky": [16,16], "asymmetric": [0,32], "near_metric_boundary": [16,16], "uniform_full_distribution": [16,16]},
+          "asymmetric_balance_limit": "the complete E20a-v3 population contains 0 single-primitive asymmetric objects and 2803 multi-primitive asymmetric objects; no replacement or hand selection is permitted",
+          "near_boundary_score": "minimum normalized absolute distance to the two size boundaries, r31=0.70, r21=0.70, r21=0.55, r31=0.45, A17=0.15, A19=0.15, deformation=0.45, or deformation=0.65; only asymmetry-resolved objects are eligible",
+          "selection_order": "stratum-specific prefixed SHA256 of shape hash; near-boundary sorts by boundary score then hash; final presentation order uses an independent prefixed SHA256",
+          "seed_list_sha256": "a8b742b21a3f44f97bfd58245f69749507ea6a9dd3581935c831b088a2a0eb1e",
+          "private_manifest_sha256": "51f161c827b312a5929d54d50f1d33d4277f34d6d0249a5132db85beda712501",
+          "public_manifest_sha256": "8864b9d6974b8712c1969d5b0993761823aa180e2ee3d37200966d2717282df6"
+        },
+        "display": {
+          "panel_layout": "2x2 without text: upper-left front, upper-right side, lower-left top, lower-right fixed perspective",
+          "surface_extraction": "continuous SDF zero level via marching cubes on a shape-AABB grid with 160 intervals along the largest padded span and at least 33 samples per axis; this mesh is review display only and never changes geometry qualification",
+          "physical_view": "center each qualified continuous AABB; all panels use fixed x/y/z limits [-1.6,1.6] m, equal aspect, white background, gray surface and one fixed light",
+          "cameras": ["front elev=0 azim=-90 orthographic", "side elev=0 azim=0 orthographic", "top elev=90 azim=-90 orthographic", "perspective elev=25 azim=-45 perspective"],
+          "image": "1200x1200 PNG; no seed, family, metric, stratum, PASS status, label, or text embedded"
+        },
         "reviewers_minimum": 2,
-        "questions": ["hard spikes, broken surface, truncation, or numerical artifact", "complete single entity", "closest geometry family", "obvious resemblance to a normal STU class", "obvious near duplicate"],
-        "pass_conditions": {"hard_defect_rate": "<=0.05", "complete_entity_rate": ">=0.95", "target_stratum_majority_agreement": ">=0.70", "key_binary_cohen_kappa": ">=0.60"},
-        "low_agreement_rule": "kappa below 0.60 is INCONCLUSIVE; clarify instructions and re-review the same fixed sample rather than declaring generator FAIL",
-        "interpretation_limit": "normal-class resemblance and near duplication are reported only; E20-V1 cannot overwrite an automatic E20a-v2 FAIL"
+        "review_independence": ["R1 and R2 score separately without discussion or viewing each other's files", "reviewers receive only the public manifest, panels, instructions, and their own rating CSV", "private key is withheld until both locked rating files are returned", "pseudonymous reviewer IDs only; no names or contact data"],
+        "questions": ["hard spikes, broken surface, truncation, or numerical artifact: binary", "complete single entity: binary", "closest geometry: blocky/flat/elongated/asymmetric/other", "obvious resemblance to a normal STU class: descriptive", "obvious near duplicate and counterpart panel ID: descriptive"],
+        "pass_conditions": {
+          "pooled_hard_defect_rate": "<=0.05 across all reviewer-object ratings",
+          "pooled_complete_entity_rate": ">=0.95 across all reviewer-object ratings",
+          "target_stratum_majority_agreement": ">=0.70 separately in each of flat, elongated, blocky, and asymmetric; with exactly two reviewers, both must choose the target label for an object to have a majority",
+          "cohen_kappa": ">=0.60 separately for hard-defect and complete-entity binary questions"
+        },
+        "constant_rating_exception": "if both reviewers give the same constant rating for a binary question, kappa is mathematically undefined from zero marginal variance; report undefined plus observed agreement=1.0 and accept this as perfect agreement rather than FAIL",
+        "low_agreement_rule": "any defined key-binary kappa below 0.60 is INCONCLUSIVE; clarify instructions and re-review the same fixed sample rather than declaring generator FAIL",
+        "hard_failure_scope": "only excessive hard defects, insufficient complete entities, or failed target-stratum visual recognition after acceptable reviewer agreement can FAIL and block; ordinary weirdness does not",
+        "interpretation_limit": "normal-class resemblance, near duplication, and small numbers of merely strange shapes are recorded only and cannot automatically modify schema 7; after one completed E20-V1 no new shape metric is added unless a preregistered hard failure occurs",
+        "human_study_handling": "internal minimal-risk technical review; voluntary participation, local pseudonymous rating files, no personal identifiers, no contact or sensitive data; institutional approval applicability remains the user's responsibility",
+        "materials": {"public_directory": "runs/ajae/e20_v1_blind", "private_key": "runs/ajae/e20_v1_private_key.csv", "runner_sha256": "5f9834b2c3ee66ff7a6ef8b8dd6e046174e62d990f297967d57cbdf720881c85", "frozen_render_source_sha256": "ccdddb12b96104360deb245dabffcf8449c9e568c70dd7202cdc3e850b5413d9", "criteria_frozen_before_rendering": true}
       },
       "schema6_geometry_factor_decoupling": {
         "version": "E20b-lite",
