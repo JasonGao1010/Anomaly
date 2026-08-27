@@ -3305,6 +3305,12 @@ PASS：anomaly-only 或 control-only 传感器分支数0；paired trace 中间�
 
 失败分类为 `protocol design conflict`，不构成传感器中间函数已观测label分支错误，也不得改写为PASS。产物 `runs/ajae/e36_shared_path.npz` 大小618字节，SHA-256为 `d61e90062ba5f5500d8eac3ad8bbf6f9163c38acc61fc4b56b96900a59e137d9`。继续需要修改E36 paired-fixture定义或 `ObjectSpec` 的shape–label合同，属于实验设计决策；按状态机停止，E37不执行。
 
+### E36-v2｜传感器接口层标签独立性
+
+E36-v1 FAIL永久保留；不修改 `ObjectSpec`。v2完整枚举2,304个正式calibration单元并使用24组固定world/frame/object/slot/material身份，共55,296个几何后传感器输入。normal-control与anomaly-proxy两个虚拟标签条件分别运行；label只由harness在所有传感器数值流程结束后写入semantic与两类mask，不作为任何被测函数参数。两条件的beam、slot、distance、incidence、material、native range、return probability、channel 0/1 uniform、accepted mask、sampled intensity、competition input、final distance、occupancy和inserted mask必须逐元素一致并以NaN同位相等；唯一允许差异为semantic、`normal_control_mask`与`anomaly_proxy_mask`。
+
+静态审计重新计算 `_accepted_object_hits`、`return_chance`、`sample_intensity` 的label读取数，并检查 `render_frame` 在调用 `_accepted_object_hits` 前后的label读取位置。PASS要求三个传感器函数和competition前label读取均为0，末端label bookkeeping正确，两遍24进程逐元素一致。实现提交 `442c2a8cb7561df73b8d6cf5d669dd3981a1090f`，`src/render.py` SHA-256为 `88e5385c214232fb6f24855f77696cc61aaf1e6873ce475d7118574a90097922`；46项回归全部通过，用时99.64秒。正式命令为 `python -m src.render qualify-e36-v2 --calibration runs/ajae/calibration.pt --output runs/ajae/e36_v2_shared_path.npz --processes 24`。PASS后关闭E36并解锁E37。
+
 ## E37｜world/frame 跨窗口一致性
 
 固定128个 E26 worlds，每个选择多个重叠五帧窗口；以正序、逆序、随机顺序、不同进程数、cached/uncached 请求共享帧。

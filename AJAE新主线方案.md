@@ -1820,7 +1820,7 @@ $$
 
 ---
 
-# 18. 当前状态（当前工作区：E36 FAIL）
+# 18. 当前状态（当前工作区：E36-v2执行冻结）
 
 截至当前工作区权威提交，已经完成：
 
@@ -1863,6 +1863,8 @@ E35 已完成两遍24进程正式运行并通过：55,296次强度生成与独�
 
 E36 已正式执行但未通过，分类为 `protocol design conflict`。三个传感器中间函数的静态label分支数为0；但冻结要求的“相同geometry/material/pose只改label”paired fixture与权威 `ObjectSpec` 合同冲突：normal-control必须使用 `NormalTemplateShape`，anomaly-proxy不得使用该类型，因此两个方向的仅label替换均被构造验证拒绝，paired trace无法执行。E37保持锁定。
 
+E36-v2 已冻结且不修改 `ObjectSpec`：比较下移到几何后的传感器接口层，两个虚拟标签不作为被测函数参数，只在全部传感器中间量完成后写入最终semantic与mask。固定55,296个输入将比较概率、随机流、接受、强度、竞争距离和occupancy，并重新审计生产调用路径。E36-v1 FAIL继续保留。
+
 当前可成立的局部结论是：
 
 > **schema 7 能合法、确定且高效地产生覆盖冻结几何区域的合成异常代理；这些对象可以从 train/206 的合格支撑池采样，以冻结连续落地规则达到 99% 接触/埋地资格，并能由同一权威放置接口拒绝与 train/206 实际观测非地面回波发生超过 5 cm 深穿透的位置。**
@@ -1877,7 +1879,7 @@ E36 已正式执行但未通过，分类为 `protocol design conflict`。三个�
 当前执行节点为：
 
 $$
-\boxed{E34\ \text{PASS};\quad E35\ \text{PASS};\quad E36\ \text{FAIL};\quad E37\ \text{LOCKED}}
+\boxed{E35\ \text{PASS};\quad E36\text{-v1 FAIL retained};\quad E36\text{-v2 FROZEN};\quad E37\ \text{LOCKED}}
 $$
 
 E23与E24-v2已按冻结设计通过，当前顺序进入：
@@ -1886,7 +1888,7 @@ $$
 E23\rightarrow E24\rightarrow E25\rightarrow E26
 $$
 
-E27–E35已按冻结设计关闭；E36因paired fixture与shape–label合同冲突而失败，状态机停在E36，E37未执行。
+E27–E35已关闭；E36-v1 FAIL按设计冲突保留，当前执行E36-v2，E37尚未启动。
 
 因此当前整体判断仍是：
 

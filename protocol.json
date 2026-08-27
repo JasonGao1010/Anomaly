@@ -2131,7 +2131,7 @@
       }
     },
     "renderer_mechanical_qualification": {
-      "status": "E27-E35 PASS; E28-v1 FAIL retained; E36 FAIL classified as protocol design conflict; E37 locked",
+      "status": "E27-E35 PASS; E28-v1 FAIL retained; E36-v1 FAIL retained as protocol design conflict; E36-v2 design and execution frozen; E37 locked",
       "layer_boundaries": {"E27-E28": "direct geometry outputs only", "E29": "return probability and deterministic acceptance decision only", "E30-E31": "accepted returns", "E32-E33": "nearest-return occlusion competition"},
       "E27": {
         "question": "Does the formal geometry path return the correct nearest convex-hull hit, outward finite normal and object ID for active normal-control templates when return rejection is disabled?",
@@ -2447,6 +2447,20 @@
           "conclusion": "The frozen label-only paired fixture conflicts with the authoritative shape-label invariants, so the required paired trace cannot be constructed.",
           "claim_limit": "No label branch was observed in the audited sensor intermediate functions; E36 remains FAIL because its paired requirement is unexecutable and E37 stays locked."
         }
+      },
+      "E36-v2": {
+        "question": "Are all post-geometry sensor values independent of an external virtual label before final semantic and mask bookkeeping?",
+        "sensor_inputs": 55296,
+        "layout": "2304 calibration cells x 24 fixed world/frame/object/slot/material identities",
+        "virtual_labels": ["normal-control", "anomaly-proxy"],
+        "label_parameter_policy": "label exists only in the harness and is not passed to tested sensor functions",
+        "compared_intermediates": ["geometry identity", "return probability", "return uniform", "accepted mask", "intensity uniform", "sampled intensity", "competition input", "final distance", "occupancy", "inserted mask"],
+        "allowed_differences": ["semantic", "normal_control_mask", "anomaly_proxy_mask"],
+        "static_audit": "sensor-function label reads and render_frame pre-competition label reads must be zero",
+        "implementation_commit": "442c2a8cb7561df73b8d6cf5d669dd3981a1090f",
+        "command": "python -m src.render qualify-e36-v2 --calibration runs/ajae/calibration.pt --output runs/ajae/e36_v2_shared_path.npz --processes 24",
+        "artifact": "runs/ajae/e36_v2_shared_path.npz",
+        "pass_conditions": ["all pre-bookkeeping intermediate differences=0", "sensor function label reads=0", "render pre-competition label reads=0", "final bookkeeping correct", "two 24-process runs elementwise identical"]
       }
     },
     "world_types": {"pure_normal": 0.2, "control_only": 0.2, "mixed": 0.4, "anomaly_only": 0.2},
