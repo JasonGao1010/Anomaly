@@ -2131,7 +2131,7 @@
       }
     },
     "renderer_mechanical_qualification": {
-      "status": "E27-E41 PASS; E28-v1 and E36-v1 FAIL retained; E42 unlocked",
+      "status": "E27-E41 PASS; E28-v1 and E36-v1 FAIL retained; E42 execution frozen",
       "layer_boundaries": {"E27-E28": "direct geometry outputs only", "E29": "return probability and deterministic acceptance decision only", "E30-E31": "accepted returns", "E32-E33": "nearest-return occlusion competition"},
       "E27": {
         "question": "Does the formal geometry path return the correct nearest convex-hull hit, outward finite normal and object ID for active normal-control templates when return rejection is disabled?",
@@ -2543,6 +2543,19 @@
         "post_acceptance_rejection_policy": "reported descriptively; no nonzero requirement because the frozen candidate fixtures contain one inserted object and native-empty slots have no native-return competition",
         "distribution_difference_policy": "descriptive only until matching and E46",
         "result": {"passed": true, "source_chain_total": [[24291803, 16037, 16011, 16011], [24291803, 25173, 25136, 25136]], "source_return_rejection": [26, 37], "source_post_acceptance_rejection": [0, 0], "chain_violation_count": [0, 0, 0, 0], "chain_errors": 0, "branch_coverage_errors": 0, "elementwise_reproduced": true, "two_run_total_seconds": 0.025614173006033525, "scientific_array_sha256": "71bbccc62da2254b553bfbaaf8f9864281b9242d956ca88c903e1f90a74f7c8f", "artifact_bytes": 5541, "artifact_sha256": "771e39129087324be9526b6286bd2d2c40194d8c20c6ec8fd0dceb8fdf340c3e", "claim_limit": "E41 establishes empty-slot chain conservation and branch coverage only; source-rate differences remain descriptive until matching and E46."}
+      },
+      "E42": {
+        "question": "Are entity-frame visible-return counts conserved in the frozen Nvis strata, and is preliminary three-source matching support nonempty?",
+        "input_trace": "runs/ajae/e39_per_range_return.npz",
+        "nvis_layers": [[1, 8], [8, 32], [32, 128], [128, "infinity"]],
+        "zero_visible_policy": "stored separately and included in total accounting; not assigned to a positive-Nvis layer",
+        "preliminary_matching_strata": ["qualified support semantic", "range bin", "Nvis layer"],
+        "implementation_commit": "e1af043e434f8958b8d7e33b8d22a79ad200f4b9",
+        "render_source_sha256": "9ffcbfd10ebb5f3faf93b68d96677dff6c53f86a1b4c304ec25343b7d4971c64",
+        "command": "python -m src.render qualify-e42 --e39-artifact runs/ajae/e39_per_range_return.npz --output runs/ajae/e42_nvis_feasibility.npz",
+        "artifact": "runs/ajae/e42_nvis_feasibility.npz",
+        "pass_conditions": ["geometry, acceptance and visibility counts are nonnegative and ordered", "distance and range-bin identities are finite and valid", "zero-visible plus four positive layers conserves every entity-frame", "normal-control and anomaly-proxy each cover at least three positive-Nvis layers", "at least one support-range-Nvis stratum contains all three sources", "two complete statistic runs are elementwise identical"],
+        "claim_limit": "E42 establishes preliminary stratum support only; E45 alone adjudicates the complete frozen matching contract."
       }
     },
     "world_types": {"pure_normal": 0.2, "control_only": 0.2, "mixed": 0.4, "anomaly_only": 0.2},
