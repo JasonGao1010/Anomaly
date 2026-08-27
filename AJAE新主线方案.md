@@ -1891,7 +1891,7 @@ E44已正式通过：normal-control与anomaly-proxy均覆盖三个冻结遮挡�
 
 E45正式FAIL，分类为`scientific_candidate_domain_failure`。E38冻结定义下完整train/201 real-normal候选宇宙包含1,635个实体和8,175个entity-frame，五个距离箱的严格上界为[2,492,4,141,1,457,85,0]；相对最低要求[128,128,128,128,32]，30–40米短缺43，40–50米短缺32。容量银行只是该完整宇宙的子集，不能修复必要覆盖，因此扩展银行、完整匹配与E46均未执行。
 
-E45-v1正式FAIL永久保留；后续设计归因修订为`qualification specification defect`。E45-v2不改变真实对象候选、train/201来源、匹配卡钳、总量、中心帧、SMD、无重复或复现要求，只删除不可实现的逐距离箱固定绝对配额，把正式匹配estimand限制为train/201真实正常对象可观察的2.5–40米共同支持域；40–50米明确无直接real-object matching证据。E45-v2实现已完成并通过46项完整回归，正式结果尚未产生。
+E45-v1正式FAIL永久保留；后续设计归因修订为`qualification specification defect`。E45-v2不改变真实对象候选、train/201来源、匹配卡钳、总量、中心帧、SMD、无重复或复现要求，只删除不可实现的逐距离箱固定绝对配额，把正式匹配estimand限制为train/201真实正常对象可观察的2.5–40米共同支持域；40–50米明确无直接real-object matching证据。E45-v2实现及预期uint64哈希回绕告警清理均已完成，修订前后46项完整回归通过；正式结果正在以已冻结银行和单元缓存复算。
 
 当前可成立的局部结论是：
 

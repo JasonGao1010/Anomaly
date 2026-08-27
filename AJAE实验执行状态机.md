@@ -3481,7 +3481,7 @@ real-normal候选定义、train/201唯一开发来源、三方对象构念和全
 
 总量仍须至少1,024个triplets，real侧至少覆盖100个不同center frames，四个可观察距离层均非空，全部caliper错误为0、重复使用为0，五个连续协变量的三组pairwise SMD均不超过0.10，两遍匹配逐元素一致。先运行256容量；不满足全部门槛时依次扩到512、1,024、2,048，只生成并渲染新增后缀，旧银行与已提取单元直接复用。达到2,048仍不满足即分类为`insufficient_three_source_common_support`并FAIL。
 
-实现提交 `185cb50e2a5e1db35d0123d0c31a1d2e35b14d76`，`src/render.py` SHA-256为 `4a5e3dcb3eb12704e5022f0d04fb6e0ab10fce3b5ce3619a8d0f1ada9c25660c`；46项完整回归通过。正式命令为 `python -m src.render qualify-e45-v2 --data-root /home/jasongao/Data/STU --support-pool runs/ajae/gate1_201_support_pool.npz --e25-artifact runs/ajae/e25_normal_control.npz --calibration runs/ajae/calibration.pt --candidate-bank-256 runs/ajae/gate1_candidate_bank_256.npz --e45-v1-artifact runs/ajae/e45_matched_triplets.npz --output runs/ajae/e45_v2_matched_triplets.npz --processes 24`。PASS后关闭E45并解锁E46；FAIL则E46保持锁定。
+实现提交 `185cb50e2a5e1db35d0123d0c31a1d2e35b14d76`；首次完整容量阶梯运行产生的预期uint64哈希回绕告警经提交 `07b39bc9075779cd27e44d6e25354cdf0d7e1bc9` 显式屏蔽，该提交不改变点身份顺序或任何科学数组，并保留缓存中的首次提取耗时。最终 `src/render.py` SHA-256为 `114fae5d83e0f4c91d54569f665d779f7f4a7fd9d5647a871344939751c1b1c0`；修订前后46项完整回归均通过。正式命令为 `python -m src.render qualify-e45-v2 --data-root /home/jasongao/Data/STU --support-pool runs/ajae/gate1_201_support_pool.npz --e25-artifact runs/ajae/e25_normal_control.npz --calibration runs/ajae/calibration.pt --candidate-bank-256 runs/ajae/gate1_candidate_bank_256.npz --e45-v1-artifact runs/ajae/e45_matched_triplets.npz --output runs/ajae/e45_v2_matched_triplets.npz --processes 24`。PASS后关闭E45并解锁E46；FAIL则E46保持锁定。
 
 ## E45-V1｜人眼来源盲辨（可选、非阻断）
 
