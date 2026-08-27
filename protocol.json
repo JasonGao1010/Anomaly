@@ -1577,7 +1577,7 @@
           }
         },
         "E21-v4": {
-          "status": "EXECUTION FROZEN",
+          "status": "PASS; qualified support-patch pool established and E22 unlocked",
           "preregistration_date": "2026-08-27",
           "source_commit": "dc22455",
           "source_commit_pushed_before_preregistration": true,
@@ -1632,7 +1632,47 @@
           "after_pass": "freeze this pool interface, unlock E22 and end E21",
           "failure_route": "retain E21-v4 FAIL and stop for a broader placement-design decision; do not tune the frozen plane estimator or silently sample around failed returns",
           "forbidden": ["train/201", "changing the estimator", "distance-balanced quotas", "sampling only a subset of thinned candidates", "adding pass thresholds after results", "running E22 before PASS"],
-          "criteria_frozen_before_formal_run": true
+          "criteria_frozen_before_formal_run": true,
+          "formal_result": {
+            "date": "2026-08-27",
+            "protocol_commit": "4db5fe7",
+            "implementation_commit": "ad7f26d",
+            "passed": true,
+            "processes": 24,
+            "thinned_candidates": 939667,
+            "pool_size": 772656,
+            "qualification_fraction": 0.8222657601043774,
+            "by_semantic": {
+              "road": {"candidates": 785214, "pool": 685074, "required": 1024, "qualification_fraction": 0.8724678877350633, "covered_frames": 445},
+              "sidewalk": {"candidates": 140181, "pool": 81878, "required": 256, "qualification_fraction": 0.5840877151682468, "covered_frames": 445},
+              "other_ground": {"candidates": 14272, "pool": 5704, "required": 128, "qualification_fraction": 0.39966367713004486, "covered_frames": 304}
+            },
+            "covered_center_frames": 445,
+            "covered_center_frames_required": 356,
+            "unique_world_xy_2m_cells": 1161,
+            "unique_world_xy_2m_cells_required": 512,
+            "by_distance": {
+              "0_10m": {"candidates": 215005, "pool": 206033},
+              "10_20m": {"candidates": 443175, "pool": 400918},
+              "20_30m": {"candidates": 212180, "pool": 142508, "required": 128},
+              "30_50m": {"candidates": 68014, "pool": 23040, "required": 32},
+              "50_120m": {"candidates": 1293, "pool": 157, "descriptive_only": true}
+            },
+            "distance_0_20m_pool": 606951,
+            "distance_0_20m_required": 1024,
+            "rejection_reasons": {"insufficient_support": 101847, "residual_q95": 49702, "residual_median": 7579, "multiscale_normal": 7883},
+            "accepted_patch_compliance": true,
+            "elementwise_reproduced": true,
+            "run_seconds": [50.06663676999597, 55.79012625800533],
+            "array_hash_both_runs": "c0154a8db9404de397375aca3ec8d257cccd2e8f0ac92c0447a8b303acb81774",
+            "summary_hash_both_runs": "b0ff651189649f212f3551c586d20d08023a4a15ec10704e260c774087846ac2",
+            "runner_sha256": "9bf398d8aa7be8073dee1d1b45caed5757b99b653939856437c1fae68320cc3f",
+            "artifact": "runs/ajae/e21_v4_support_pool.npz",
+            "artifact_bytes": 208686666,
+            "artifact_sha256": "0e6e7299157f5e9ced0716f6dd14881c66ba1bca0cc9c372550e56f426ea844d",
+            "conclusion": "train/206 provides a deterministic qualified support-patch pool that exceeds every frozen size, semantic, frame, spatial and distance-coverage requirement; E21 is closed and E22 is unlocked",
+            "claim_limit": "No claim is made yet about object floating, burial, collision or final rendered visibility."
+          }
         }
       }
     },
