@@ -745,7 +745,7 @@
         "criteria_frozen": true
       },
       "schema7_requalification_chain": {
-        "status": "schema 7 QUALIFIED; E18b-v3 FAIL remains permanent; E18b-v4 PASS; E19-v4 PASS; E20a-v2 UNLOCKED",
+        "status": "schema 7 QUALIFIED; E18b-v3 FAIL remains permanent; E18b-v4 PASS; E19-v4 PASS; E20a-v2 FAIL on inherited asymmetry measurement convergence; downstream locked",
         "historical_formal_generator_before_qualification": 6,
         "qualified_generator": 7,
         "E18b-v3": {
@@ -937,7 +937,7 @@
           }
         },
         "E20a-v2": {
-          "status": "EXECUTION FROZEN; first formal run not yet started",
+          "status": "FAIL; permanent first schema-7 coverage result",
           "amends": "E20a FAIL remains permanent; v2 changes only the qualified generator from schema 6 to schema 7 and otherwise inherits the complete E20a measurement and coverage protocol",
           "question": "Does the qualified schema-7 generator provide at least the preregistered support in all original final-geometry coverage regions, including the previously missing flat, elongated, and asymmetric regions?",
           "generator_schema": 7,
@@ -957,7 +957,37 @@
           "frozen_renderer_generator_identity_sha256": "791ed731effe2b3b9c3b3d9c2af6959c7487c769eeaaff62c6feeeb647a611ee",
           "runner_sha256": "bebea0887c6d27fdbec4643007f64f7bd140b089799e7e63edcd3f100579447a",
           "planned_artifact": "runs/ajae/e20a_v2_schema7_geometry_coverage.npz",
-          "criteria_frozen_before_formal_run": true
+          "criteria_frozen_before_formal_run": true,
+          "formal_result": {
+            "date": "2026-08-27",
+            "protocol_commit": "6a71bdb25c81b202bf87c1c3a1ec5a141ba2826c",
+            "passed": false,
+            "failure_class": "measurement qualification failure: asymmetry standard/strict layer convergence",
+            "calls_accepted": 8192,
+            "unique_shape_hashes": 8192,
+            "unique_generation_report_hashes": 8192,
+            "fixture_pass": true,
+            "numeric_domain_pass": true,
+            "coverage_region_pass": true,
+            "primitive_count_pass": true,
+            "asymmetry_unresolved": 130,
+            "asymmetry_unresolved_maximum": 81,
+            "unresolved_causes": {"standard_interior_below_128": 0, "strict_interior_below_512": 0, "nonfinite": 0, "absolute_standard_strict_difference_above_0.03": 130},
+            "unresolved_by_primitive_count_1_to_5": [1, 22, 18, 41, 48],
+            "minimum_standard_inside": 396,
+            "minimum_strict_inside": 1581,
+            "maximum_asymmetry_layer_difference": 0.10442312327211156,
+            "region_counts": {"small": 2545, "medium": 2903, "large": 2744, "blocky": 3475, "flat": 1030, "elongated": 722, "asymmetric": 2629, "single_primitive": 1985, "multi_primitive": 6207, "weak_deformation": 1220, "strong_deformation": 1893},
+            "primitive_counts_1_to_5": [1985, 1740, 1541, 1499, 1427],
+            "descriptor_ranges": {"diameter_m": [0.20253187522404575, 2.999849815614289], "r21": [0.1916887181251575, 0.9998535104706826], "r31": [0.11769986137627449, 0.9981032878804145], "asymmetry_strict": [0.0009670831082295796, 0.5692381747134455]},
+            "independent_run_seconds": [459.1272452330013, 467.32040848700126],
+            "array_hashes": ["44289d38d56e2ac64034cee83d1e68d70e13b156f72f2542082cbd951d55567c", "44289d38d56e2ac64034cee83d1e68d70e13b156f72f2542082cbd951d55567c"],
+            "summary_hash": "44c4a1f7f898168549fe7e40f33357fcc9e0e8415df6a39ffdb493e78a912d55",
+            "artifact": "runs/ajae/e20a_v2_schema7_geometry_coverage.npz",
+            "artifact_bytes": 2343036,
+            "artifact_sha256": "addeb0983ee1f58d32dcba027e27dc02ee90994e135cf9564ecfe71b0798e14c",
+            "decision": "E20a-v2 remains FAIL despite all coverage counts passing; E20-V1, E20b, and E21 remain locked; stop for user-approved measurement-design decision without viewing shapes or changing schema 7"
+          }
         }
       },
       "schema7_blinded_geometry_review": {
