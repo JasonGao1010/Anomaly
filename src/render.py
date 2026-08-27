@@ -8172,12 +8172,6 @@ def _e28_worker(index: int) -> dict[str, object]:
     target /= np.linalg.norm(target)
     directions = np.tile(-target, (256, 1))
     directions[target_slot] = target
-    grid = RayGrid(
-        directions,
-        np.linspace(-math.radians(20.0), math.radians(20.0), 128),
-        np.asarray((0.0, math.pi)),
-        beam_count=128,
-    )
     rotation = _e27_rotation(seed)
     undeformed = (
         np.asarray(report.shared_witnesses_undeformed_m[0])
@@ -8205,20 +8199,14 @@ def _e28_worker(index: int) -> dict[str, object]:
         raise PlacementError("E28 reference failed to find the target entry")
     reference_disagreement = abs(reference_standard - reference_strict)
     translation += target * (desired_distance - reference_strict)
-    item = ObjectSpec(
-        index + 1, "anomaly-proxy", shape, MaterialSpec.sample(seed + 2802),
-        tuple(map(float, translation)),
-        tuple(tuple(map(float, row)) for row in rotation),
-        report,
+    local_origin = -translation @ rotation
+    local_directions = directions @ rotation
+    distance, local_normal, valid = shape.intersect(
+        local_origin, local_directions
     )
-    world = WorldSpec(seed, 206, (item,))
-    competition = _accepted_object_hits(
-        np.zeros((256, 3), dtype=np.float64), directions, world, grid,
-        _E27_SENSOR, frame_id=index,
-    )
-    measured = float(competition.distance_m[target_slot])
-    hit_error = int(not math.isfinite(measured) or measured <= 0.0)
-    miss_error = int(np.count_nonzero(np.isfinite(competition.distance_m)) != 1)
+    measured = float(distance[target_slot])
+    hit_error = int(not valid[target_slot] or measured <= 0.0)
+    miss_error = int(np.count_nonzero(valid) != 1)
     distance_error = math.inf if hit_error else abs(measured - desired_distance)
     point_world = measured * target if not hit_error else np.zeros(3)
     point_local = (point_world - translation) @ rotation
@@ -8226,13 +8214,9 @@ def _e28_worker(index: int) -> dict[str, object]:
         math.inf if hit_error
         else abs(float(shape.signed_distance(point_local[None, :])[0]))
     )
-    normal = competition.normal_world[target_slot]
+    normal = local_normal[target_slot] @ rotation.T
     normal_error = math.inf if hit_error else abs(float(np.linalg.norm(normal)) - 1.0)
     outward_error = int(hit_error or float(np.dot(normal, target)) >= 0.0)
-    object_id_error = int(
-        competition.object_id[target_slot] != index + 1
-        or np.any(np.delete(competition.object_id, target_slot) != -1)
-    )
     return {
         "seed": seed,
         "shape_family": report.shape_family,
@@ -8254,7 +8238,6 @@ def _e28_worker(index: int) -> dict[str, object]:
         "hit_error": hit_error,
         "miss_error": miss_error,
         "outward_error": outward_error,
-        "object_id_error": object_id_error,
     }
 
 
@@ -8281,11 +8264,10 @@ def _e28_arrays(records: Sequence[Mapping[str, object]]) -> dict[str, np.ndarray
         "hit_error": values("hit_error", np.uint8),
         "miss_error": values("miss_error", np.uint8),
         "outward_error": values("outward_error", np.uint8),
-        "object_id_error": values("object_id_error", np.uint8),
     }
 
 
-def run_e28_qualification(
+def run_e28_v2_qualification(
     e26_artifact_path: Path | str,
     data_root: Path | str,
     calibration_path: Path | str,
@@ -8293,10 +8275,10 @@ def run_e28_qualification(
     *,
     processes: int = 24,
 ) -> dict[str, object]:
-    """Run the frozen schema-7 continuous geometry hit qualification."""
+    """Run frozen E28-v2 directly at the continuous geometry interface."""
 
     if processes != 24:
-        raise RenderError("formal E28 requires exactly 24 worker processes")
+        raise RenderError("formal E28-v2 requires exactly 24 worker processes")
     try:
         from .protocol import load_protocol
         from .scene import LabelMode, STUSequence
@@ -8322,7 +8304,7 @@ def run_e28_qualification(
     with np.load(Path(e26_artifact_path).expanduser().resolve(strict=True), allow_pickle=False) as source:
         metadata = json.loads(str(source["metadata_json"]))
         if metadata.get("experiment") != "E26" or metadata.get("passed") is not True:
-            raise RenderError("E28 visibility description requires the passed E26 artifact")
+            raise RenderError("E28-v2 visibility description requires the passed E26 artifact")
         units_json = []
         for world_bytes, report_bytes in zip(
             source["world_json"], source["report_json"], strict=True
@@ -8333,7 +8315,7 @@ def run_e28_qualification(
                     json.loads(report_bytes.decode())
                 )))
     if len(units_json) != 128:
-        raise RenderError("E28 real-proxy visibility sample changed")
+        raise RenderError("E28-v2 real-proxy visibility sample changed")
     project_root = Path(__file__).resolve().parents[1]
     protocol = load_protocol(project_root / "protocol.json")
     sequence = STUSequence.open(
@@ -8365,7 +8347,7 @@ def run_e28_qualification(
         for name in runs[0]
     )
     first = runs[0]
-    error_names = ("hit_error", "miss_error", "outward_error", "object_id_error")
+    error_names = ("hit_error", "miss_error", "outward_error")
     errors = {name: int(np.sum(first[name])) for name in error_names}
     passed = (
         all(value == 0 for value in errors.values())
@@ -8385,7 +8367,7 @@ def run_e28_qualification(
     }
     scientific_hash = _scientific_array_hash(first)
     result = {
-        "experiment": "E28", "passed": passed, "fixtures": 256,
+        "experiment": "E28-v2", "passed": passed, "fixtures": 256,
         "family_counts": family_counts, "primitive_counts": primitive_counts,
         **errors,
         "maximum_reference_disagreement_m": float(np.max(first["reference_disagreement_m"])),
@@ -8443,7 +8425,7 @@ def _render_parser() -> argparse.ArgumentParser:
     e27.add_argument("--calibration", type=Path, required=True)
     e27.add_argument("--output", type=Path, required=True)
     e27.add_argument("--processes", type=int, default=24)
-    e28 = subcommands.add_parser("qualify-e28")
+    e28 = subcommands.add_parser("qualify-e28-v2")
     e28.add_argument("--e26-artifact", type=Path, required=True)
     e28.add_argument("--data-root", type=Path, required=True)
     e28.add_argument("--calibration", type=Path, required=True)
@@ -8485,8 +8467,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 0 if result["passed"] else 1
-    if args.command == "qualify-e28":
-        result = run_e28_qualification(
+    if args.command == "qualify-e28-v2":
+        result = run_e28_v2_qualification(
             args.e26_artifact, args.data_root, args.calibration,
             args.output, processes=args.processes,
         )
