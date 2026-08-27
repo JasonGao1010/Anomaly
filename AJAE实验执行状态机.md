@@ -3483,6 +3483,16 @@ real-normal候选定义、train/201唯一开发来源、三方对象构念和全
 
 实现提交 `185cb50e2a5e1db35d0123d0c31a1d2e35b14d76`；首次完整容量阶梯运行产生的预期uint64哈希回绕告警经提交 `07b39bc9075779cd27e44d6e25354cdf0d7e1bc9` 显式屏蔽，该提交不改变点身份顺序或任何科学数组，并保留缓存中的首次提取耗时。最终 `src/render.py` SHA-256为 `114fae5d83e0f4c91d54569f665d779f7f4a7fd9d5647a871344939751c1b1c0`；修订前后46项完整回归均通过。正式命令为 `python -m src.render qualify-e45-v2 --data-root /home/jasongao/Data/STU --support-pool runs/ajae/gate1_201_support_pool.npz --e25-artifact runs/ajae/e25_normal_control.npz --calibration runs/ajae/calibration.pt --candidate-bank-256 runs/ajae/gate1_candidate_bank_256.npz --e45-v1-artifact runs/ajae/e45_matched_triplets.npz --output runs/ajae/e45_v2_matched_triplets.npz --processes 24`。PASS后关闭E45并解锁E46；FAIL则E46保持锁定。
 
+**E45-v2 正式结果：FAIL（`insufficient_three_source_common_support`；E46保持锁定）**
+
+容量256、512、1,024和2,048分别得到0、8、29和58个无重复triplets；real侧center frame覆盖分别为0、6、20和34。最终2.5–10、10–20、20–30和30–40米匹配数为0、51、7和0，因此总量58未达到1,024，center frame 34未达到100，四个可观察距离层中两个为空。40–50米仍按冻结边界标记为`unobservable_for_real-vs-rendered-object matching in train/201`，未进入裁决。
+
+所有容量的三方pairwise caliper错误均为0、三来源单位重复使用均为0、两遍确定性匹配逐元素一致。最终五个协变量按real-control、real-proxy、control-proxy顺序的SMD分别为[0.114163,0.161546,0.031675,1.427284,0.043823]、[0.102862,0.057257,0.037790,1.509987,0.011156]和[0.011866,0.225477,0.005551,0.093939,0.031910]；最大值1.509987，未满足全部SMD不超过0.10。
+
+新增银行后缀构建用时分别为121.000419、231.575323和457.678092秒；256、512、1,024和2,048容量的单元提取用时分别为226.888105、239.542920、458.382091和894.831929秒，后三级只计算新增后缀。告警清理后的缓存复跑未重新渲染，四级两遍匹配分别用时0.017803、0.035136、0.071578和0.133178秒，科学数组哈希保持 `f39521593a562c0de06faea94dcd5f68cb9df9d79571c07e2656ea8f69cd8428`。
+
+正式产物 `runs/ajae/e45_v2_matched_triplets.npz` 大小381,986字节，SHA-256为 `54fda93b708e875200d6126692e0cd3a899fff7d355556598c8550c19156c832`。E45-v2已完整执行到冻结最大容量；FAIL直接说明当前三来源在保留全部固定匹配条件后没有足够共同支持，不构成renderer来源泄漏分类结果，E46不得启动。
+
 ## E45-V1｜人眼来源盲辨（可选、非阻断）
 
 可从E45固定triplets生成盲面板；没有两名独立人类时不裁决。结果不替代E46，也不阻断E46。
