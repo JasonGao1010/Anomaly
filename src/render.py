@@ -11345,6 +11345,119 @@ def run_e43_qualification(
     return result
 
 
+def _e44_statistics(
+    support_semantic: np.ndarray, accepted_hits: np.ndarray,
+    visible_returns: np.ndarray, visible_distance_m: np.ndarray,
+) -> dict[str, np.ndarray]:
+    """Compute frozen occlusion strata only where the denominator exists."""
+    valid = accepted_hits > 0
+    occlusion = np.zeros(accepted_hits.shape, dtype=np.float64)
+    occlusion[valid] = 1.0 - visible_returns[valid] / accepted_hits[valid]
+    layer = np.full(accepted_hits.shape, -1, dtype=np.int8)
+    layer[valid & (occlusion >= 0.0) & (occlusion < 0.25)] = 0
+    layer[valid & (occlusion >= 0.25) & (occlusion < 0.75)] = 1
+    layer[valid & (occlusion >= 0.75) & (occlusion <= 1.0)] = 2
+    range_bin = _gate1_range_bin(visible_distance_m)
+    layer_count = np.zeros((3, 3), dtype=np.int64)
+    for source_id in range(3):
+        for layer_id in range(3):
+            layer_count[source_id, layer_id] = np.count_nonzero(
+                layer[:, source_id] == layer_id
+            )
+    shared_count = np.zeros((2, 5, 3, 3), dtype=np.int64)
+    for support_id, semantic in enumerate((40, 48)):
+        for range_id in range(5):
+            for layer_id in range(3):
+                for source_id in range(3):
+                    shared_count[support_id, range_id, layer_id, source_id] = np.count_nonzero(
+                        (support_semantic[:, source_id] == semantic)
+                        & (range_bin[:, source_id] == range_id)
+                        & (layer[:, source_id] == layer_id)
+                    )
+    return {
+        "accepted_hits": accepted_hits,
+        "visible_returns": visible_returns,
+        "visible_distance_m": visible_distance_m,
+        "occlusion_valid": valid,
+        "occlusion_rate": occlusion,
+        "occlusion_layer": layer,
+        "source_layer_count": layer_count,
+        "source_undefined_count": np.count_nonzero(~valid, axis=(0, 2)),
+        "shared_stratum_source_count": shared_count,
+        "shared_stratum_valid": np.all(shared_count > 0, axis=-1),
+    }
+
+
+def run_e44_qualification(
+    e39_artifact_path: Path | str, output_path: Path | str,
+) -> dict[str, object]:
+    """Qualify frozen occlusion rates and preliminary matching support."""
+    with np.load(
+        Path(e39_artifact_path).expanduser().resolve(strict=True), allow_pickle=False
+    ) as trace:
+        metadata = json.loads(str(trace["metadata_json"]))
+        if metadata.get("experiment") != "E39" or metadata.get("passed") is not True:
+            raise RenderError("E44 requires the passed formal E39 shared trace")
+        support = np.asarray(trace["support_semantic"])
+        accepted = np.asarray(trace["accepted_hits"])
+        visible = np.asarray(trace["visible_returns"])
+        distance = np.asarray(trace["visible_distance_m"])
+    started = time.monotonic()
+    runs = [_e44_statistics(support, accepted, visible, distance) for _ in range(2)]
+    elapsed = time.monotonic() - started
+    reproduced = all(np.array_equal(runs[0][name], runs[1][name]) for name in runs[0])
+    first = runs[0]
+    valid = first["occlusion_valid"]
+    definition_errors = int(
+        np.count_nonzero(accepted < 0)
+        + np.count_nonzero(visible < 0)
+        + np.count_nonzero(visible > accepted)
+        + np.count_nonzero(~np.isfinite(first["occlusion_rate"][valid]))
+        + np.count_nonzero(
+            (first["occlusion_rate"][valid] < 0.0)
+            | (first["occlusion_rate"][valid] > 1.0)
+        )
+        + np.count_nonzero(first["occlusion_layer"][valid] < 0)
+    )
+    valid_count = np.count_nonzero(valid, axis=(0, 2))
+    count_errors = int(np.count_nonzero(
+        first["source_layer_count"].sum(axis=1) != valid_count
+    ))
+    generated_layer_coverage = np.count_nonzero(
+        first["source_layer_count"][1:] > 0, axis=1
+    )
+    coverage_errors = int(np.count_nonzero(generated_layer_coverage < 3))
+    shared_strata = int(np.count_nonzero(first["shared_stratum_valid"]))
+    matching_errors = int(shared_strata == 0)
+    passed = (
+        definition_errors == 0 and count_errors == 0 and coverage_errors == 0
+        and matching_errors == 0 and reproduced
+    )
+    result = {
+        "experiment": "E44", "passed": passed,
+        "occlusion_layers": [[0.0, 0.25], [0.25, 0.75], [0.75, 1.0]],
+        "source_valid_count": valid_count.tolist(),
+        "source_undefined_count": first["source_undefined_count"].tolist(),
+        "source_layer_count": first["source_layer_count"].tolist(),
+        "generated_layer_coverage": generated_layer_coverage.tolist(),
+        "shared_support_range_occlusion_strata": shared_strata,
+        "definition_errors": definition_errors, "count_errors": count_errors,
+        "coverage_errors": coverage_errors, "matching_errors": matching_errors,
+        "elementwise_reproduced": reproduced,
+        "two_run_total_seconds": elapsed,
+        "scientific_array_hash": _scientific_array_hash(first),
+    }
+    destination = Path(output_path).expanduser().resolve()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_suffix(destination.suffix + ".tmp.npz")
+    np.savez_compressed(
+        temporary, **first,
+        metadata_json=np.asarray(json.dumps(result, sort_keys=True, separators=(",", ":"))),
+    )
+    os.replace(temporary, destination)
+    return result
+
+
 def _render_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="AJAE authoritative renderer experiments")
     subcommands = parser.add_subparsers(dest="command", required=True)
@@ -11446,6 +11559,9 @@ def _render_parser() -> argparse.ArgumentParser:
     e43.add_argument("--e37-artifact", type=Path, required=True)
     e43.add_argument("--e39-artifact", type=Path, required=True)
     e43.add_argument("--output", type=Path, required=True)
+    e44 = subcommands.add_parser("qualify-e44")
+    e44.add_argument("--e39-artifact", type=Path, required=True)
+    e44.add_argument("--output", type=Path, required=True)
     return parser
 
 
@@ -11573,6 +11689,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         result = run_e43_qualification(
             args.e37_artifact, args.e39_artifact, args.output
         )
+        print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        return 0 if result["passed"] else 1
+    if args.command == "qualify-e44":
+        result = run_e44_qualification(args.e39_artifact, args.output)
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 0 if result["passed"] else 1
     raise AssertionError("unreachable renderer command")
