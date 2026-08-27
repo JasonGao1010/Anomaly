@@ -3541,6 +3541,14 @@ proposal上限冻结为每目标64个，执行阶梯为4、8、16、32、64；�
 
 4进程第五次未完成运行表明长寿命KD-tree worker的私有页会随任务继续累积：约3分钟后可用内存降至1.2 GiB、交换空间增至6.9 GiB，因此同样在无阶梯产物时停止。最终4进程池固定 `chunksize=4` 且每个worker最多处理8个map tasks，即32个proposal后回收并从同一父进程重新fork。相同48目标×4 proposal先导在实际发生worker轮换后仍与此前所有先导数组逐元素一致，运行中约保留12 GiB可用内存且交换空间不增长。帧内容、障碍索引、轨迹yaw、target/proposal seed和科学计算均不变；进程数、缓存大小和worker生命周期均不进入科学身份。正式命令为 `python -m src.render qualify-e45a-v2 --data-root /home/jasongao/Data/STU --support-pool runs/ajae/gate1_201_support_pool.npz --e25-artifact runs/ajae/e25_normal_control.npz --calibration runs/ajae/calibration.pt --unit-cache runs/ajae/e45_v2_units_2048.npz --output runs/ajae/e45a_v2_targeted_pairs.npz --processes 4`。
 
+**E45A-v2 正式结果：FAIL（`targeted_control_common_support_failure`；E46保持锁定）**
+
+正式运行完整执行每目标4、8、16、32、64个proposal的冻结阶梯，并在64个proposal上限耗尽后裁决。各阶梯的合格control数依次为[13,36,83,170,325]，最大匹配数为[13,36,80,148,212]，real侧center frames为[12,30,45,75,90]，四个距离层计数依次为[0,9,4,0]、[0,18,18,0]、[0,45,35,0]、[1,92,55,0]和[1,139,72,0]。最终212对低于1,024对要求，90帧低于100帧要求，30–40米层为0；因此数量、帧覆盖和四层非空条件均未通过。
+
+最终五项SMD按range、median beam、$\log(1+N_{vis})$、$\hat O$、$\log(1+\text{local density})$顺序为[0.099364,0.159312,0.064798,0.882238,0.021068]，其中遮挡SMD为0.882238，最大值超过0.10。全部caliper错误0、两侧单位重复0、硬错误0，两遍匹配逐元素一致。64阶梯proposal状态0至7计数为[5779, 31355, 297, 3731, 75121, 325, 0, 0]；对应support耗尽、placement拒绝、不可见、精确分层不符、caliper不符、合格、验证错误和硬错误。
+
+科学数组哈希为 `00aed2338732f9a9233547cae52c1c3087df6cfb5294da664a73a7b33a0c6192`；正式产物 `runs/ajae/e45a_v2_targeted_pairs.npz` 大小756,236字节，SHA-256为 `290747b6c01ec9d2af152e8688f51cc9c966690cb5c165279265a51fc30e0405`。64候选缓存 `runs/ajae/e45a_v2_targeted_controls_64.npz` 大小2,978,909字节，SHA-256为 `0853358fa0c3a414cb39eeeef41fa15a5691dd641558ffa77030011b431ef32b`。正式运行墙钟时间2小时18分38秒，CPU利用率398%，最大常驻集9,611,168 KiB；运行期间复查可用内存约12–13 GiB，交换空间未增长。该结果只裁决审计专用定向银行在冻结上限内的共同支持资格，不修改E26、renderer或正式normal-control训练分布，也没有执行来源分类。按照冻结停止条件，E46继续锁定；修改正式normal-control生成需要新的用户决策。
+
 状态机在E49前拆为两条依赖：
 
 $$

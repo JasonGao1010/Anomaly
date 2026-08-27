@@ -2131,7 +2131,7 @@
       }
     },
     "renderer_mechanical_qualification": {
-      "status": "E27-E44 PASS; E28-v1, E36-v1, E45-v1, E45-v2 and E45A FAIL retained; E45B PASS; E45A-v2 audit-only targeted-control qualification frozen; E46 locked",
+      "status": "E27-E44 PASS; E28-v1, E36-v1, E45-v1, E45-v2, E45A and E45A-v2 FAIL retained; E45B PASS; E46 locked pending owner decision",
       "layer_boundaries": {"E27-E28": "direct geometry outputs only", "E29": "return probability and deterministic acceptance decision only", "E30-E31": "accepted returns", "E32-E33": "nearest-return occlusion competition"},
       "E27": {
         "question": "Does the formal geometry path return the correct nearest convex-hull hit, outward finite normal and object ID for active normal-control templates when return rejection is disabled?",
@@ -2667,7 +2667,7 @@
       },
       "E45A_v2": {
         "question": "Can an audit-only targeted normal-control proposal bank cover the frozen real-normal observation domain without changing renderer or training-world generation?",
-        "status": "FROZEN; formal result pending",
+        "status": "FAIL; E46 locked pending owner decision",
         "audit_only": true,
         "formal_training_distribution_changed": false,
         "preserved_components": ["E22 grounding", "E23 observed-normal collision", "E24 single-object pair-collision semantics", "E25 normal-template type, scale, support, and yaw rules", "authoritative renderer", "all E45 exact matches and calipers", "maximum-cardinality matching", "E46 models and thresholds"],
@@ -2697,7 +2697,40 @@
         "command": "python -m src.render qualify-e45a-v2 --data-root /home/jasongao/Data/STU --support-pool runs/ajae/gate1_201_support_pool.npz --e25-artifact runs/ajae/e25_normal_control.npz --calibration runs/ajae/calibration.pt --unit-cache runs/ajae/e45_v2_units_2048.npz --output runs/ajae/e45a_v2_targeted_pairs.npz --processes 4",
         "artifact": "runs/ajae/e45a_v2_targeted_pairs.npz",
         "candidate_cache_pattern": "runs/ajae/e45a_v2_targeted_controls_{proposal_limit}.npz",
-        "unlock": "E45A-v2 PASS unlocks E46; E45A-v2 FAIL keeps E46 locked and requires owner decision before changing formal normal-control generation"
+        "unlock": "E45A-v2 PASS unlocks E46; E45A-v2 FAIL keeps E46 locked and requires owner decision before changing formal normal-control generation",
+        "result": {
+          "passed": false,
+          "failure_classification": "targeted_control_common_support_failure",
+          "final_proposal_limit": 64,
+          "proposal_ladder": [4, 8, 16, 32, 64],
+          "target_units": 1822,
+          "target_center_frames": 321,
+          "target_range_count_2p5_to_40": [540, 892, 365, 25],
+          "history": [
+            {"proposal_limit": 4, "eligible_controls": 13, "matched_pairs": 13, "center_frames": 12, "range_count_2p5_to_40": [0, 9, 4, 0], "maximum_pairwise_smd": 0.37235532973818636, "generation_seconds": 501.98960957898817},
+            {"proposal_limit": 8, "eligible_controls": 36, "matched_pairs": 36, "center_frames": 30, "range_count_2p5_to_40": [0, 18, 18, 0], "maximum_pairwise_smd": 0.4555732890798229, "generation_seconds": 511.06487821500923},
+            {"proposal_limit": 16, "eligible_controls": 83, "matched_pairs": 80, "center_frames": 45, "range_count_2p5_to_40": [0, 45, 35, 0], "maximum_pairwise_smd": 0.5330821227268365, "generation_seconds": 1019.9230958370026},
+            {"proposal_limit": 32, "eligible_controls": 170, "matched_pairs": 148, "center_frames": 75, "range_count_2p5_to_40": [1, 92, 55, 0], "maximum_pairwise_smd": 0.6859956252648305, "generation_seconds": 2094.0155361880024},
+            {"proposal_limit": 64, "eligible_controls": 325, "matched_pairs": 212, "center_frames": 90, "range_count_2p5_to_40": [1, 139, 72, 0], "maximum_pairwise_smd": 0.8822375207223041, "generation_seconds": 4150.47772804799}
+          ],
+          "proposal_status_count_0_to_7_at_64": [5779, 31355, 297, 3731, 75121, 325, 0, 0],
+          "matched_pairs": 212,
+          "center_frames": 90,
+          "matched_range_count_2p5_to_40": [1, 139, 72, 0],
+          "pairwise_smd": [0.09936442245380332, 0.15931193440994593, 0.06479751132328442, 0.8822375207223041, 0.021068472502930806],
+          "maximum_pairwise_smd": 0.8822375207223041,
+          "caliper_errors": 0,
+          "duplicate_errors": 0,
+          "hard_errors": 0,
+          "elementwise_reproduced": true,
+          "scientific_array_sha256": "00aed2338732f9a9233547cae52c1c3087df6cfb5294da664a73a7b33a0c6192",
+          "artifact_bytes": 756236,
+          "artifact_sha256": "290747b6c01ec9d2af152e8688f51cc9c966690cb5c165279265a51fc30e0405",
+          "candidate_cache_sha256_by_limit": {"4": "a7edf07e31ce8296e04b9bd70e8b7401ec6fcacaa851ddaf4ddf551306394540", "8": "719e4980d2b585a9d4293b56908e16cefd2464f044b821ddcf4a7f3f9a6208b2", "16": "f9ce87d95af7b360768b5c70e9f18fa703f1c98711b4e052486fd745007cefe0", "32": "32431c8fb9ce09c4c6c0e36212db38d4718f98e0a188ab6a4749bd41626a1c79", "64": "0853358fa0c3a414cb39eeeef41fa15a5691dd641558ffa77030011b431ef32b"},
+          "wall_seconds": 8318,
+          "maximum_resident_kib": 9611168,
+          "decision_boundary": "The frozen audit-only targeted bank exhausted 64 proposals per real target and failed pair count, center-frame coverage, 30--40 m coverage, and SMD requirements. E46 remains locked; changing formal normal-control generation requires owner decision."
+        }
       }
     },
     "world_types": {"pure_normal": 0.2, "control_only": 0.2, "mixed": 0.4, "anomaly_only": 0.2},

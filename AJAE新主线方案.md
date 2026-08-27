@@ -1820,7 +1820,7 @@ $$
 
 ---
 
-# 18. 当前状态（当前工作区：E45A-v2 已冻结待执行）
+# 18. 当前状态（当前工作区：E45A-v2 正式 FAIL，E46 锁定）
 
 截至当前工作区权威提交，已经完成：
 
@@ -1895,7 +1895,7 @@ E45-v1正式FAIL永久保留；后续设计归因修订为`qualification specifi
 
 E45-v2正式FAIL永久保留；后续设计层归因修订为三方审计设计失败。E46所需的real-normal与normal-control、E48所需的normal-control与anomaly-proxy现拆为E45A和E45B两个独立匹配集。两者完整复用2,048容量冻结单位缓存、train/201来源、real-normal定义、2.5–40米域、精确匹配条件和五项caliper；使用完整合法边上的确定性最大基数二分匹配，并在最大基数固定后最小化归一化协变量平方差。E45A已正式FAIL：完整合法图778条边，最大匹配135对、73个real侧center frames、四个距离层计数[11,107,17,0]，最大SMD为1.000399；caliper错误、重复和复现错误均为0。E46保持锁定。E45B已正式PASS：完整合法图29,156条边，最大匹配3,624对、357个normal-control侧center frames、四个距离层计数[1,133,1,877,563,51]，最大SMD为0.031652；caliper错误、重复和复现错误均为0。E48的两两匹配前置资格满足，但E48分类尚未执行。
 
-E45A-v2已冻结为Gate 1审计专用定向control银行，不修改E26或正式训练世界生成器。它以当前缓存中1,822个去重real-normal单位为固定目标，只用冻结support、range、azimuth、beam、$N_{vis}$、遮挡和local density变量生成及拒绝control proposals；每个proposal仍通过E22–E25和正式renderer。proposal阶梯为每目标4、8、16、32、64，只计算新增后缀；每级使用原完整合法边最大匹配与原PASS条件。实现和回归已完成，正式结果尚未产生，E46继续锁定。
+E45A-v2作为Gate 1审计专用定向control银行完整执行至每目标64个proposal的冻结上限，正式FAIL，分类为`targeted_control_common_support_failure`。各阶梯合格control数为[13,36,83,170,325]，最大匹配数为[13,36,80,148,212]；最终只有212对、90个real侧center frames，四个距离层计数为[1,139,72,0]。五项SMD为[0.099364,0.159312,0.064798,0.882238,0.021068]，最大值为遮挡SMD 0.882238。caliper错误、重复使用、硬错误均为0，两遍匹配逐元素一致。该审计银行没有修改E26、renderer或正式normal-control训练分布，也没有使用E46分类器结果。正式产物科学数组哈希为 `00aed2338732f9a9233547cae52c1c3087df6cfb5294da664a73a7b33a0c6192`，文件大小756,236字节，SHA-256为 `290747b6c01ec9d2af152e8688f51cc9c966690cb5c165279265a51fc30e0405`。E46继续锁定；按冻结停止条件，修改正式normal-control生成需要新的用户决策。
 
 当前可成立的局部结论是：
 
@@ -1911,7 +1911,7 @@ E45A-v2已冻结为Gate 1审计专用定向control银行，不修改E26或正式
 当前执行节点为：
 
 $$
-\boxed{E45\text{-v1/v2},E45A\ \text{FAIL RETAINED};\quad E45B\ \text{PASS};\quad E45A\text{-v2}\ \text{FROZEN};\quad E46\ \text{LOCKED}}
+\boxed{E45\text{-v1/v2},E45A,E45A\text{-v2}\ \text{FAIL RETAINED};\quad E45B\ \text{PASS};\quad E46\ \text{LOCKED}}
 $$
 
 E23与E24-v2已按冻结设计通过，当前顺序进入：
@@ -1920,7 +1920,7 @@ $$
 E23\rightarrow E24\rightarrow E25\rightarrow E26
 $$
 
-E27–E44已关闭；E36-v1、E45-v1、E45-v2和E45A FAIL均保留。E45B已PASS并满足E48的两两匹配前置资格；当前执行E45A-v2审计专用定向control候选银行，E46保持锁定直至E45A-v2裁决。
+E27–E44已关闭；E36-v1、E45-v1、E45-v2、E45A和E45A-v2 FAIL均保留。E45B已PASS并满足E48的两两匹配前置资格；E45A-v2已耗尽冻结proposal上限并正式FAIL，E46保持锁定，后续修改正式normal-control生成需要新的用户决策。
 
 因此当前整体判断仍是：
 
