@@ -1820,7 +1820,7 @@ $$
 
 ---
 
-# 18. 当前状态（当前工作区：E24 FAIL）
+# 18. 当前状态（当前工作区：E24 FAIL；E24-v2 已冻结）
 
 截至当前远端权威提交，已经完成：
 
@@ -1832,6 +1832,8 @@ $$
 - E23–E26：统一的 support-pool-only placement/world-builder 权威接口与整段设计冻结。
 
 E24 已完成两遍正式运行但未通过：512 个固定世界中 504 个构造完成，8 个世界因固定对象不满足 E22 连续最低支撑差值条件而耗尽 128 次支撑提议。已完成世界的最终实体对明显深穿透为 0，但该子集结果不能满足 512/512 的 E24 门槛。
+
+E24-v2 保留 E24 的世界身份、实体数、全部碰撞规则和支撑提议，只把固定shape identity修订为固定确定性shape proposal stream。每个实体先拒绝不满足E22逐对象条件的shape，再将首个合格shape送入原E23与pair placement；每实体最多64个shape proposals，每个合格shape最多128个placement proposals。该修订不改变E24历史FAIL，也不把失败归因给pair-collision detector。
 
 当前可成立的局部结论是：
 
@@ -1850,16 +1852,16 @@ E24 已完成两遍正式运行但未通过：512 个固定世界中 504 个构�
 当前执行节点为：
 
 $$
-\boxed{E24\ \text{FAIL};\quad E25\ \text{LOCKED}}
+\boxed{E24\ \text{FAIL};\quad E24\text{-v2 UNLOCKED};\quad E25\ \text{LOCKED}}
 $$
 
-E23 已按冻结设计通过；E24 的正式失败使后续顺序停在：
+E23 已按冻结设计通过；E24 的正式失败已由E24-v2版本化修订，当前顺序停在：
 
 $$
 E23\rightarrow E24\rightarrow E25\rightarrow E26
 $$
 
-E24，E25 和 E26 均未解锁。
+E24-v2；E25 和 E26 均未解锁。E24-v2 PASS后直接进入既有E25，不重新设计E25。
 
 因此当前整体判断仍是：
 

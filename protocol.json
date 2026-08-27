@@ -1845,11 +1845,11 @@
           }
         },
         "placement_world_builder_E23_E26": {
-          "status": "DESIGN AND EXECUTION FROZEN; E23 PASS; E24 FAIL; E25 locked",
+          "status": "DESIGN AND EXECUTION FROZEN; E23 PASS; E24 FAIL; E24-v2 unlocked; E25 locked",
           "design_authorities": ["AJAE新主线方案.md", "AJAE实验执行状态机.md"],
           "design_authority_sha256": {
-            "main_plan": "979c18e4914e15b831ad8bb22394a405ec4d86217ae1e0c2af5deb626a0be33a",
-            "state_machine": "2787ddf35acb5041ff2a962d228c5fe83793671a94a4c1db9d3e15e1a4d9c4db"
+            "main_plan": "604c40e0094cced7791bd854635bbbc067e656dd08ce61e93966110dbccfd0c0",
+            "state_machine": "00bd9c3fa5acb8cbe23ec17e751d02693423577c509a87bfe2d8447d8ec5df4b"
           },
           "implementation_identity": {
             "commit": "8640f298e344d8965f3a5aa7b31851a0a37b1749",
@@ -1942,6 +1942,27 @@
               "conclusion": "The frozen E24 world stream fails because eight fixed shapes cannot retain E22 grounding qualification under support-only retries; 504 completed worlds have zero final obvious pair penetration.",
               "claim_limit": "The clean completed-world subset cannot satisfy or replace the frozen 512/512 E24 requirement."
             }
+          },
+          "E24_v2": {
+            "status": "DESIGN FROZEN; execution implementation pending",
+            "revision_scope": "replace fixed per-entity shape identity with a fixed deterministic shape proposal stream; all world, support, grounding, observed-collision and pair-collision semantics remain unchanged",
+            "world_seeds": [2100000, 2100511],
+            "entity_count_stream": "numpy default_rng(SeedSequence([world_seed,2401])).integers(2,7)",
+            "composition": "anomaly-proxy only, unchanged from E24",
+            "entity_slot": "(world_seed-2100000)*6+entity_index",
+            "shape_seed": "3000000+entity_slot+3072*shape_proposal_index",
+            "maximum_shape_proposals_per_entity": 64,
+            "grounding_rejection": "reject the shape before support sampling unless abs(minimum_z_m(65,257)-minimum_z_m(33,129))<=0.01 m and the fraction of 16384 deterministic Fibonacci surface points below the standard support plane by more than 0.02 m is <=0.02",
+            "accepted_shape_yaw": "numpy default_rng(SeedSequence([shape_seed,2402])).uniform(-pi,pi)",
+            "accepted_shape_material_seed": "shape_seed+2403",
+            "support_namespace": "E24-support-v1",
+            "support_stream": "entity_slot",
+            "maximum_support_proposals_per_eligible_shape": 128,
+            "placement_rejection_contract": "E23 or pair-collision rejection resamples only support placement for the current accepted shape; it never advances the shape stream",
+            "unchanged_thresholds": {"E22_minimum_support_difference_m": 0.01, "E22_burial_depth_m": 0.02, "E22_maximum_buried_fraction": 0.02, "E23_observed_penetration_m": 0.05, "E24_pair_penetration_m": 0.05},
+            "pass_conditions": ["fixture errors=0", "512/512 original world identities built", "final E22 violations=0", "final E23 violations=0", "final obvious pair penetration=0", "hard errors=0", "no 64-shape or 128-placement exhaustion", "two complete 24-process runs elementwise identical"],
+            "descriptive_only": ["shape grounding rejection rate", "pair rejection rate", "shape proposal counts", "support proposal counts"],
+            "downstream": "PASS directly unlocks the already frozen E25 design; FAIL keeps E25 locked"
           },
           "E25": {
             "status": "DESIGN FROZEN; locked until E24 PASS",

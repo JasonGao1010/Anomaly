@@ -2946,6 +2946,26 @@ E24 在提交 `8640f29` 修正“位置耗尽误记为硬错误”的记账根�
 
 正式产物 `runs/ajae/e24_pair_collision.npz` 大小1,524,959字节，SHA-256为 `53c515346e65d226407fe866871ac4bb91a17072b1a48157b9479690447495ce`。E24的正式裁决为FAIL：**当前固定shape流与“每个实体只重采支撑、不得修改几何”的统一接口不能构造全部512个世界；直接阻塞来自8个对象未保留E22连续落地资格，而不是E24 pair detector发现最终实体互穿。** E25继续锁定。
 
+**E24-v2｜逐实体确定性 shape proposal stream 修订（正式运行前冻结）**
+
+E24 的历史 FAIL 永久保留。该结果不解释为 pair-collision detector 失败：20个冻结夹具错误为0，504个完成世界的最终明显实体对互穿为0；整体失败只说明原协议把E22-v2的分布级99%资格错误升级成了固定shape逐样本必须通过的下游前提，却没有定义E22-invalid shape的拒绝与重采合同。
+
+E24-v2只修订抽样单位。512个world seed、每世界2–6个anomaly-proxy、实体数流、E21-v4 support pool、E22-v2、E23、pair detector、5 cm阈值和每个合格shape最多128个placement proposals全部保持不变。不修8个历史seed，不放宽E22的1 cm条件，不增加support proposal次数，也不允许E22-invalid shape跳过资格后进入E23或pair placement。
+
+对world index $w=world\_seed-2{,}100{,}000$ 和零起始entity index $e$，实体槽位固定为 $s=6w+e$。该实体第 $q\in\{0,\ldots,63\}$ 个shape proposal的seed冻结为：
+
+$$
+shape\_seed(q)=3{,}000{,}000+s+3{,}072q.
+$$
+
+$q=0$精确保留E24原固定shape identity；步长3,072等于512个世界乘每世界最多6个实体槽，保证64层proposal在冻结槽位域内互不重号。每个shape先独立执行与权威placement完全相同的E22 grounding eligibility：标准连续最低支撑为 `minimum_z_m(33,129)`，严格复核为 `minimum_z_m(65,257)`，要求两者差值绝对值不超过0.01 m；同一16,384个确定性Fibonacci表面点中，低于标准最低支撑平面超过0.02 m的比例不得超过0.02。不合格shape记为 `grounding_rejection`，不消费support proposal，沿同一shape流继续。
+
+首个通过E22 grounding eligibility的shape成为当前实体的固定几何；yaw仍由 `SeedSequence([shape_seed,2402])` 生成，material seed仍为 `shape_seed+2403`。随后使用原 `E24-support-v1` support流执行最多128次placement proposal，每次依次通过E22、E23和对全部已接受实体的pair detector。E23或pair拒绝只换当前实体的support placement，不换shape；128次耗尽即该世界失败。64个shape proposal均被E22拒绝时同样失败。
+
+正式运行仍为两遍24进程。PASS要求：20个冻结fixture错误为0；512/512个原world identity全部完成；最终E22/E23 violation为0；最终 `obvious_pair_penetration` 为0；shape身份、shape proposal历史、`grounding_rejection`、support proposal、placement与世界JSON在两遍间逐元素一致；硬错误为0；没有实体耗尽64个shape proposals或128个placement proposals。shape grounding rejection rate、pair rejection rate、shape/support proposal count按总体与世界实体数完整报告，但不增设上限以内的附加效率门槛。
+
+E24-v2 PASS后直接解锁E25并沿既有冻结设计执行，不重新设计E25。E24-v2若仍FAIL，则当前完整multi-entity world generation的合法可采样域未达到冻结上限内512/512可构造要求，E25继续锁定。
+
 ## E25｜normal-control 模板、支撑语义与姿态资格
 
 **唯一问题**
