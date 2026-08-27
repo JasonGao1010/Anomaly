@@ -3329,6 +3329,12 @@ PASS：同一 `(world_hash,frame_id,renderer_identity)` 的 XYZI、occupancy、p
 
 实现提交 `4b8b6927a9b6c80955b1ab92240b835060ac7f38`，`src/render.py` SHA-256为 `07e3ec793ce98704daee13b250453be4f844f916cb51520e0daefa080c71aaef`；46项完整回归全部通过，用时98.17秒。正式命令为 `python -m src.render qualify-e37 --e26-artifact runs/ajae/e26_world_builder.npz --data-root /home/jasongao/Data/STU --calibration runs/ajae/calibration.pt --output runs/ajae/e37_world_frame_consistency.npz --processes 24`。全部身份、字段摘要、重复请求逐bit、渲染次数、跨world cache与window静态审计错误均为0时PASS并解锁E38。
 
+**E37 正式结果：PASS（E37关闭，E38解锁）**
+
+128个固定E26世界按四类各32个完成。`xyzi`、occupancy、packed labels、五类正式mask和object IDs共9个字段在1进程正序cached、24进程正序uncached、24进程逆序cached和24进程随机顺序cached之间的字段摘要错误全部为0；同一路径重叠窗口重复请求逐bit错误为0，world/frame身份错误为0。四条路径实际渲染调用数分别为768、1280、768、768，与冻结计数完全一致；64对跨world cache审计的误命中为0，factory调用总数128。`render_frame` window参数读取数与 `_slot_uniform` window读取数均为0。
+
+四条路径用时分别为170.843918秒、92.472165秒、55.941505秒和56.069116秒。渲染器/生成器身份为 `9ff61e81c133a844b107ff303da6471d9810384a90846b1eb67cb73dacf792f0`，科学数组哈希为 `5df3d02f0d47697a785b3d43ea457765a5d4d48106b74a77c68f087919939fd0`。产物 `runs/ajae/e37_world_frame_consistency.npz` 大小149,551字节，SHA-256为 `04e524a5428c9b906e9fefe253f7ec66533bd6cb3452ea6d9afdb830e1a94b34`。E37只建立相同world/frame/renderer身份在重叠窗口、顺序、进程数与缓存状态之间的渲染一致性，不包含Gate 1三来源统计匹配结论。
+
 # Phase 4｜Gate 1：传感器一致性、严格匹配与反作弊
 
 ## Phase 4 统一候选银行

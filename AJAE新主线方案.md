@@ -1820,7 +1820,7 @@ $$
 
 ---
 
-# 18. 当前状态（当前工作区：E37执行冻结）
+# 18. 当前状态（当前工作区：E37 PASS）
 
 截至当前工作区权威提交，已经完成：
 
@@ -1869,6 +1869,8 @@ E36-v2 已完成两遍24进程正式运行并通过：55,296个固定输入的�
 
 E37已按状态机冻结正式执行：从E26四类世界各固定32个，以中心帧100和101形成两个重叠五帧窗口；使用正式 `render_frame`、`FrameCache` 与 `FrameCacheKey` 比较串行/24进程、正序/逆序/随机顺序和cached/uncached结果，并单独审计跨world cache身份与window identity是否进入回波随机流。实现已经通过46项完整回归，正式资格结果尚未产生。
 
+E37已正式通过：128个固定世界的9类slot对齐输出在串行/24进程、正序/逆序/随机顺序和cached/uncached路径之间零摘要差异；重复窗口请求逐bit错误0，跨world cache误命中0，window identity进入正式渲染与回波随机流的读取数0。E37关闭，E38解锁。
+
 当前可成立的局部结论是：
 
 > **schema 7 能合法、确定且高效地产生覆盖冻结几何区域的合成异常代理；这些对象可以从 train/206 的合格支撑池采样，以冻结连续落地规则达到 99% 接触/埋地资格，并能由同一权威放置接口拒绝与 train/206 实际观测非地面回波发生超过 5 cm 深穿透的位置。**
@@ -1883,7 +1885,7 @@ E37已按状态机冻结正式执行：从E26四类世界各固定32个，以中
 当前执行节点为：
 
 $$
-\boxed{E36\text{-v1 FAIL retained};\quad E36\text{-v2 PASS};\quad E37\ \text{FROZEN AND RUNNING};\quad E38\ \text{LOCKED}}
+\boxed{E36\text{-v1 FAIL retained};\quad E36\text{-v2 PASS};\quad E37\ \text{PASS};\quad E38\ \text{UNLOCKED}}
 $$
 
 E23与E24-v2已按冻结设计通过，当前顺序进入：
@@ -1892,7 +1894,7 @@ $$
 E23\rightarrow E24\rightarrow E25\rightarrow E26
 $$
 
-E27–E36已关闭；E36-v1 FAIL按设计冲突保留，当前正在执行E37，E38尚未启动。
+E27–E37已关闭；E36-v1 FAIL按设计冲突保留，当前顺序进入E38。
 
 因此当前整体判断仍是：
 
