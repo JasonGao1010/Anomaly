@@ -9065,6 +9065,124 @@ def run_e31_qualification(
     return result
 
 
+def _e32_run_once() -> dict[str, np.ndarray]:
+    half = 0.25
+    vertices = np.asarray([
+        (x, y, z)
+        for x in (-half, half)
+        for y in (-half, half)
+        for z in (-half, half)
+    ], dtype=np.float64)
+    shape = NormalTemplateShape(
+        vertices, np.empty((0, 3), dtype=np.int32), 206, 0, 10, 1,
+        (0.0, 0.0, 0.0),
+    )
+    grid = RayGrid(
+        np.asarray(((1.0, 0.0, 0.0),)), np.asarray((0.0,)),
+        np.asarray((0.0,)), beam_count=1,
+    )
+    sensor = SensorCalibration.constant(0.5, return_probability=1.0)
+    tie = 1.0e-6
+    gaps = np.asarray((0.5e-6, 1.0e-6, 2.0e-6), dtype=np.float64)
+    relation = np.asarray((-1, 0, 1), dtype=np.int8)
+    records: dict[str, list[object]] = {
+        name: [] for name in (
+            "relation", "gap_m", "inserted_distance_m", "native_distance_m",
+            "expected_inserted", "actual_inserted", "occluded_original",
+            "single_return_error", "distance_error_m", "semantic_error",
+            "object_id_error", "mask_error", "packed_error",
+        )
+    }
+    for case, gap in enumerate(gaps):
+        native_distance = float(np.float32(5.0))
+        inserted_distance = native_distance - float(gap)
+        item = ObjectSpec(
+            1, "normal-control", shape, MaterialSpec(0.5, 0.1, 0.35),
+            (inserted_distance + half, 0.0, 0.0),
+            ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0)),
+        )
+        world = WorldSpec(3_200_000 + case, 206, (item,))
+        semantic = np.asarray((10,), dtype=np.uint16)
+        instance = np.asarray((1,), dtype=np.uint16)
+        packed = semantic.astype(np.uint32) | (instance.astype(np.uint32) << 16)
+        labels = PointLabels(
+            packed, semantic, instance,
+            np.asarray((NORMAL_SEMANTIC_TARGET[10],), dtype=np.uint8),
+        )
+        frame = make_source_frame(
+            case, np.asarray(((native_distance, 0.0, 0.0, 0.25),), dtype=np.float32),
+            np.eye(4, dtype=np.float64), labels,
+            partition="train", sequence_id=206,
+        )
+        rendered = render_frame(frame, world, grid, sensor)
+        expected = inserted_distance < native_distance - tie
+        actual = bool(rendered.inserted_mask[0])
+        measured = float(np.linalg.norm(rendered.source.xyzi[0, :3]))
+        expected_distance = inserted_distance if expected else native_distance
+        expected_semantic = 10
+        expected_object = 1 if expected else -1
+        records["relation"].append(int(relation[case]))
+        records["gap_m"].append(float(gap))
+        records["inserted_distance_m"].append(inserted_distance)
+        records["native_distance_m"].append(native_distance)
+        records["expected_inserted"].append(expected)
+        records["actual_inserted"].append(actual)
+        records["occluded_original"].append(bool(rendered.occluded_original_mask[0]))
+        records["single_return_error"].append(int(rendered.source.xyzi.shape[0] != 1))
+        records["distance_error_m"].append(abs(measured - expected_distance))
+        records["semantic_error"].append(int(rendered.source.labels is None or int(rendered.source.labels.semantic[0]) != expected_semantic))
+        records["object_id_error"].append(int(int(rendered.object_id_internal[0]) != expected_object))
+        records["mask_error"].append(int(actual != expected or bool(rendered.occluded_original_mask[0]) != expected))
+        expected_packed = int(rendered.source.labels.packed[0]) if rendered.source.labels is not None else -1
+        records["packed_error"].append(int(expected_packed != int(rendered.packed_labels[0])))
+    dtypes = {
+        "relation": np.int8, "gap_m": np.float64,
+        "inserted_distance_m": np.float64, "native_distance_m": np.float64,
+        "expected_inserted": np.bool_, "actual_inserted": np.bool_,
+        "occluded_original": np.bool_, "single_return_error": np.uint8,
+        "distance_error_m": np.float64, "semantic_error": np.uint8,
+        "object_id_error": np.uint8, "mask_error": np.uint8,
+        "packed_error": np.uint8,
+    }
+    return {name: np.asarray(values, dtype=dtypes[name]) for name, values in records.items()}
+
+
+def run_e32_qualification(output_path: Path | str) -> dict[str, object]:
+    """Qualify inserted-front/native-background competition boundaries."""
+
+    started = time.monotonic()
+    runs = [_e32_run_once(), _e32_run_once()]
+    run_seconds = [time.monotonic() - started]
+    reproduced = all(np.array_equal(runs[0][name], runs[1][name]) for name in runs[0])
+    first = runs[0]
+    discrete = ("single_return_error", "semantic_error", "object_id_error", "mask_error", "packed_error")
+    errors = {name: int(np.sum(first[name])) for name in discrete}
+    passed = (
+        all(value == 0 for value in errors.values())
+        and float(np.max(first["distance_error_m"])) <= 1.0e-6
+        and np.array_equal(first["actual_inserted"], np.asarray((False, False, True)))
+        and reproduced
+    )
+    scientific_hash = _scientific_array_hash(first)
+    result = {
+        "experiment": "E32", "passed": passed, "fixtures": 3,
+        **errors,
+        "maximum_distance_error_m": float(np.max(first["distance_error_m"])),
+        "elementwise_reproduced": reproduced,
+        "run_seconds": run_seconds,
+        "scientific_array_hash": scientific_hash,
+    }
+    destination = Path(output_path).expanduser().resolve()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_suffix(destination.suffix + ".tmp.npz")
+    np.savez_compressed(
+        temporary, **first,
+        metadata_json=np.asarray(json.dumps(result, sort_keys=True, separators=(",", ":"))),
+    )
+    os.replace(temporary, destination)
+    return result
+
+
 def _render_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="AJAE authoritative renderer experiments")
     subcommands = parser.add_subparsers(dest="command", required=True)
@@ -9116,6 +9234,8 @@ def _render_parser() -> argparse.ArgumentParser:
     e31.add_argument("--calibration", type=Path, required=True)
     e31.add_argument("--output", type=Path, required=True)
     e31.add_argument("--processes", type=int, default=24)
+    e32 = subcommands.add_parser("qualify-e32")
+    e32.add_argument("--output", type=Path, required=True)
     return parser
 
 
@@ -9177,6 +9297,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.e28_artifact, args.calibration, args.output,
             processes=args.processes,
         )
+        print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        return 0 if result["passed"] else 1
+    if args.command == "qualify-e32":
+        result = run_e32_qualification(args.output)
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 0 if result["passed"] else 1
     raise AssertionError("unreachable renderer command")
