@@ -5822,8 +5822,8 @@ def low_level_return_features(
         raise RenderError("audit feature mask must be bool[slot]")
     selected &= ~np.asarray(frame.zero_slot_mask, dtype=np.bool_)
     slots = np.flatnonzero(selected)
-    if slots.size < 2:
-        raise RenderError("low-level audit requires at least two selected returns")
+    if slots.size < 1:
+        raise RenderError("low-level audit requires at least one selected return")
     if type(density_neighbors) is not int or density_neighbors < 1:
         raise RenderError("density_neighbors must be positive")
     valid = ~np.asarray(frame.zero_slot_mask, dtype=np.bool_)
@@ -10261,39 +10261,8 @@ def _gate1_bank_worker(index: int) -> dict[str, object]:
     }
 
 
-def build_gate1_candidate_bank(
-    sequence: object,
-    pool: QualifiedSupportPool,
-    obstacles: ObservedObstacleIndex,
-    templates: Sequence[NormalTemplateShape],
-    ray_grid: RayGrid,
-    sensor: SensorCalibration,
-    trajectory_yaws: Mapping[int, float],
-    output_path: Path | str,
-    *,
-    processes: int = 24,
-) -> dict[str, object]:
-    """Build the first frozen 256-seed independent three-source candidate bank."""
-    if processes != 24:
-        raise RenderError("formal Gate 1 candidate bank requires 24 processes")
-    by_semantic: dict[int, list[NormalTemplateShape]] = {}
-    for template in templates:
-        by_semantic.setdefault(template.raw_semantic_id, []).append(template)
-    global _GATE1_SEQUENCE, _GATE1_POOL, _GATE1_OBSTACLES, _GATE1_TEMPLATES
-    global _GATE1_TRAJECTORY_YAW, _GATE1_REAL_CANDIDATES, _GATE1_RAY_GRID, _GATE1_SENSOR
-    _GATE1_SEQUENCE = sequence
-    _GATE1_POOL = pool
-    _GATE1_OBSTACLES = obstacles
-    _GATE1_TEMPLATES = {key: tuple(value) for key, value in by_semantic.items()}
-    _GATE1_TRAJECTORY_YAW = dict(trajectory_yaws)
-    _GATE1_REAL_CANDIDATES = _gate1_real_candidates(sequence, pool)
-    _GATE1_RAY_GRID = ray_grid
-    _GATE1_SENSOR = sensor
-    started = time.monotonic()
-    with mp.get_context("fork").Pool(processes=processes) as workers:
-        records = workers.map(_gate1_bank_worker, range(256), chunksize=1)
-    errors = sum(bool(record["error"]) for record in records)
-    arrays = {
+def _gate1_bank_arrays(records: Sequence[Mapping[str, object]]) -> dict[str, np.ndarray]:
+    return {
         "bank_seed": np.asarray([record["bank_seed"] for record in records], dtype=np.int64),
         "attempt": np.asarray([record["attempt"] for record in records], dtype=np.int16),
         "center_frame": np.asarray([record["center_frame"] for record in records], dtype=np.int16),
@@ -10306,17 +10275,51 @@ def build_gate1_candidate_bank(
         "proxy_record_json": np.asarray([record["proxy_record_json"] for record in records]),
         "error": np.asarray([record["error"] for record in records]),
     }
+
+
+def _initialize_gate1_candidate_generation(
+    sequence: object, pool: QualifiedSupportPool, obstacles: ObservedObstacleIndex,
+    templates: Sequence[NormalTemplateShape], ray_grid: RayGrid,
+    sensor: SensorCalibration, trajectory_yaws: Mapping[int, float],
+    real_candidates: Sequence[tuple[int, int, int, int]] | None = None,
+) -> None:
+    by_semantic: dict[int, list[NormalTemplateShape]] = {}
+    for template in templates:
+        by_semantic.setdefault(template.raw_semantic_id, []).append(template)
+    global _GATE1_SEQUENCE, _GATE1_POOL, _GATE1_OBSTACLES, _GATE1_TEMPLATES
+    global _GATE1_TRAJECTORY_YAW, _GATE1_REAL_CANDIDATES, _GATE1_RAY_GRID, _GATE1_SENSOR
+    _GATE1_SEQUENCE = sequence
+    _GATE1_POOL = pool
+    _GATE1_OBSTACLES = obstacles
+    _GATE1_TEMPLATES = {key: tuple(value) for key, value in by_semantic.items()}
+    _GATE1_TRAJECTORY_YAW = dict(trajectory_yaws)
+    _GATE1_REAL_CANDIDATES = (
+        tuple(real_candidates) if real_candidates is not None
+        else _gate1_real_candidates(sequence, pool)
+    )
+    _GATE1_RAY_GRID = ray_grid
+    _GATE1_SENSOR = sensor
+
+
+def _write_gate1_candidate_bank(
+    arrays: Mapping[str, np.ndarray], output_path: Path | str,
+    *, processes: int, elapsed_seconds: float,
+) -> dict[str, object]:
+    errors = int(np.count_nonzero(arrays["error"] != ""))
+    capacity = int(arrays["bank_seed"].size)
     metadata = {
         "experiment": "Gate1-candidate-bank-v1", "passed": errors == 0,
-        "capacity": 256, "completed": 256 - errors, "errors": errors,
+        "capacity": capacity, "completed": capacity - errors, "errors": errors,
         "real_candidate_count": len(_GATE1_REAL_CANDIDATES),
-        "center_frame_count": int(np.unique(arrays["center_frame"][arrays["center_frame"] >= 0]).size),
+        "center_frame_count": int(np.unique(
+            arrays["center_frame"][arrays["center_frame"] >= 0]
+        ).size),
         "support_semantic_counts": {
             str(semantic): int(np.count_nonzero(arrays["support_semantic"] == semantic))
             for semantic in (40, 48)
         },
         "maximum_attempt": int(np.max(arrays["attempt"])),
-        "processes": processes, "elapsed_seconds": time.monotonic() - started,
+        "processes": processes, "elapsed_seconds": elapsed_seconds,
         "scientific_array_hash": _scientific_array_hash(arrays),
     }
     destination = Path(output_path).expanduser().resolve()
@@ -10328,6 +10331,70 @@ def build_gate1_candidate_bank(
     )
     os.replace(temporary, destination)
     return metadata
+
+
+def build_gate1_candidate_bank(
+    sequence: object,
+    pool: QualifiedSupportPool,
+    obstacles: ObservedObstacleIndex,
+    templates: Sequence[NormalTemplateShape],
+    ray_grid: RayGrid,
+    sensor: SensorCalibration,
+    trajectory_yaws: Mapping[int, float],
+    output_path: Path | str,
+    *,
+    processes: int = 24,
+    capacity: int = 256,
+) -> dict[str, object]:
+    """Build a frozen independent three-source candidate bank."""
+    if processes != 24:
+        raise RenderError("formal Gate 1 candidate bank requires 24 processes")
+    if capacity not in (256, 512, 1024, 2048):
+        raise RenderError("Gate 1 candidate-bank capacity is outside the frozen ladder")
+    _initialize_gate1_candidate_generation(
+        sequence, pool, obstacles, templates, ray_grid, sensor, trajectory_yaws
+    )
+    started = time.monotonic()
+    with mp.get_context("fork").Pool(processes=processes) as workers:
+        records = workers.map(_gate1_bank_worker, range(capacity), chunksize=1)
+    return _write_gate1_candidate_bank(
+        _gate1_bank_arrays(records), output_path, processes=processes,
+        elapsed_seconds=time.monotonic() - started,
+    )
+
+
+def extend_gate1_candidate_bank(
+    existing_path: Path | str, output_path: Path | str, target_capacity: int,
+    *, processes: int = 24,
+) -> dict[str, object]:
+    """Extend only the new suffix of an initialized frozen candidate bank."""
+    if processes != 24:
+        raise RenderError("formal Gate 1 candidate bank requires 24 processes")
+    if target_capacity not in (512, 1024, 2048):
+        raise RenderError("Gate 1 extension target is outside the frozen ladder")
+    with np.load(Path(existing_path).expanduser().resolve(strict=True), allow_pickle=False) as source:
+        metadata = json.loads(str(source["metadata_json"]))
+        if metadata.get("experiment") != "Gate1-candidate-bank-v1" or metadata.get("passed") is not True:
+            raise RenderError("candidate-bank extension requires a passed prior bank")
+        previous = {name: np.asarray(source[name]) for name in (
+            "bank_seed", "attempt", "center_frame", "real_semantic", "real_instance",
+            "support_semantic", "control_world_json", "proxy_world_json",
+            "control_record_json", "proxy_record_json", "error",
+        )}
+    start = int(previous["bank_seed"].size)
+    if start >= target_capacity:
+        raise RenderError("candidate-bank extension target must exceed the prior capacity")
+    started = time.monotonic()
+    with mp.get_context("fork").Pool(processes=processes) as workers:
+        records = workers.map(_gate1_bank_worker, range(start, target_capacity), chunksize=1)
+    suffix = _gate1_bank_arrays(records)
+    combined = {
+        name: np.concatenate((previous[name], suffix[name])) for name in previous
+    }
+    return _write_gate1_candidate_bank(
+        combined, output_path, processes=processes,
+        elapsed_seconds=time.monotonic() - started,
+    )
 
 
 _E38_BANK: tuple[tuple[int, int, int, int, int, WorldSpec, WorldSpec], ...] = ()
@@ -11580,6 +11647,526 @@ def run_e45_qualification(
     return result
 
 
+_E45_BANK: tuple[tuple[int, int, int, int, int, WorldSpec, WorldSpec], ...] = ()
+
+
+def _point_identity_order(frame_id: int, slots: np.ndarray, grid: RayGrid) -> np.ndarray:
+    """Hash canonical frame/beam/column identities for fixed point subsampling."""
+    beam = grid.beam_ids[slots].astype(np.uint64)
+    column = grid.column_ids[slots].astype(np.uint64)
+    value = (
+        np.uint64(frame_id) * np.uint64(0x9E3779B185EBCA87)
+        ^ beam * np.uint64(0xC2B2AE3D27D4EB4F)
+        ^ column * np.uint64(0x165667B19E3779F9)
+    )
+    value ^= value >> np.uint64(30)
+    value *= np.uint64(0xBF58476D1CE4E5B9)
+    value ^= value >> np.uint64(27)
+    value *= np.uint64(0x94D049BB133111EB)
+    value ^= value >> np.uint64(31)
+    return np.argsort(value, kind="stable")
+
+
+def _e45_unit_hash(
+    source_id: int, bank_seed: int, frame_id: int,
+    real_semantic: int, real_instance: int,
+) -> np.uint64:
+    identity = (
+        f"real:{frame_id}:{real_semantic}:{real_instance}"
+        if source_id == 0 else f"generated:{source_id}:{bank_seed}:{frame_id}"
+    )
+    return np.uint64(int.from_bytes(hashlib.sha256(identity.encode("ascii")).digest()[:8], "little"))
+
+
+def _e45_unit_record(
+    frame: SourceFrame, grid: RayGrid, source_id: int, bank_seed: int,
+    center_frame: int, real_semantic: int, real_instance: int,
+    support_semantic: int, geometry: np.ndarray, returned: np.ndarray,
+    rendered_frame: SourceFrame,
+) -> dict[str, np.ndarray]:
+    slots = np.flatnonzero(returned)
+    features = np.zeros((64, 7), dtype=np.float64)
+    point_count = min(int(slots.size), 64)
+    median_distance = 0.0
+    median_beam = 0.0
+    local_density = 0.0
+    azimuth_sector = -1
+    if slots.size:
+        all_features = np.asarray(
+            low_level_return_features(rendered_frame, grid, returned), dtype=np.float64
+        )
+        chosen = _point_identity_order(int(frame.frame_id), slots, grid)[:64]
+        features[:point_count] = all_features[chosen]
+        median_distance = float(np.median(grid.official_ranges(rendered_frame)[slots]))
+        median_beam = float(np.median(grid.beam_ids[slots]))
+        local_density = float(np.median(all_features[:, 6]))
+        angle = np.arctan2(all_features[:, 1], all_features[:, 0])
+        circular = math.atan2(float(np.sin(angle).sum()), float(np.cos(angle).sum()))
+        azimuth_sector = int(math.floor((circular % (2.0 * math.pi)) / (math.pi / 4.0))) % 8
+    geometry_count = int(np.count_nonzero(geometry))
+    occlusion = (
+        float(1.0 - slots.size / geometry_count) if geometry_count else 0.0
+    )
+    return {
+        "bank_seed": np.asarray(bank_seed, dtype=np.int64),
+        "source": np.asarray(source_id, dtype=np.uint8),
+        "center_frame": np.asarray(center_frame, dtype=np.int16),
+        "frame_id": np.asarray(frame.frame_id, dtype=np.int16),
+        "support_semantic": np.asarray(support_semantic, dtype=np.uint16),
+        "range_bin": np.asarray(
+            int(_gate1_range_bin(np.asarray([median_distance]))[0]) if slots.size else -1,
+            dtype=np.int8,
+        ),
+        "azimuth_sector": np.asarray(azimuth_sector, dtype=np.int8),
+        "median_distance_m": np.asarray(median_distance, dtype=np.float64),
+        "median_beam": np.asarray(median_beam, dtype=np.float64),
+        "Nvis": np.asarray(slots.size, dtype=np.int32),
+        "O_hat": np.asarray(occlusion, dtype=np.float64),
+        "local_density": np.asarray(local_density, dtype=np.float64),
+        "geometry_hits": np.asarray(geometry_count, dtype=np.int32),
+        "point_count": np.asarray(point_count, dtype=np.int16),
+        "point_features": features,
+        "unit_hash": np.asarray(
+            _e45_unit_hash(source_id, bank_seed, int(frame.frame_id), real_semantic, real_instance),
+            dtype=np.uint64,
+        ),
+    }
+
+
+def _e45_worker(index: int) -> dict[str, np.ndarray]:
+    sequence, grid, sensor = _GATE1_SEQUENCE, _GATE1_RAY_GRID, _GATE1_SENSOR
+    if sequence is None or grid is None or sensor is None or index >= len(_E45_BANK):
+        raise RuntimeError("E45 candidate fixtures are not initialized")
+    bank_seed, center, real_semantic, real_instance, support, control_world, proxy_world = _E45_BANK[index]
+    records: list[dict[str, np.ndarray]] = []
+    for frame_id in range(center - 2, center + 3):
+        frame = sequence.source_frame(frame_id)
+        real_geometry, real_return, _ = _gate1_real_geometry(
+            frame, real_semantic, real_instance, grid
+        )
+        records.append(_e45_unit_record(
+            frame, grid, 0, bank_seed, center, real_semantic, real_instance,
+            support, real_geometry, real_return, frame,
+        ))
+        for source_id, world in enumerate((control_world, proxy_world), start=1):
+            geometry, _, _, rendered = _gate1_single_object_trace(frame, world, grid, sensor)
+            returned = np.asarray(
+                rendered.normal_control_mask if source_id == 1 else rendered.anomaly_proxy_mask,
+                dtype=np.bool_,
+            )
+            official = np.asarray(grid.official_ranges(rendered.source))
+            returned = returned & (official >= 2.5) & (official <= 50.0)
+            records.append(_e45_unit_record(
+                frame, grid, source_id, bank_seed, center, real_semantic,
+                real_instance, support, geometry, returned, rendered.source,
+            ))
+    return {
+        name: np.stack([record[name] for record in records])
+        for name in records[0]
+    }
+
+
+_E45_UNIT_FIELDS = (
+    "bank_seed", "source", "center_frame", "frame_id", "support_semantic",
+    "range_bin", "azimuth_sector", "median_distance_m", "median_beam", "Nvis",
+    "O_hat", "local_density", "geometry_hits", "point_count", "point_features",
+    "unit_hash",
+)
+
+
+def _write_e45_units(
+    arrays: Mapping[str, np.ndarray], path: Path, bank_hash: str,
+    extraction_seconds: float,
+) -> None:
+    metadata = {
+        "experiment": "E45-v2-units", "passed": True,
+        "capacity": int(arrays["bank_seed"].shape[0]), "bank_hash": bank_hash,
+        "extraction_seconds": extraction_seconds,
+        "scientific_array_hash": _scientific_array_hash(arrays),
+    }
+    temporary = path.with_suffix(path.suffix + ".tmp.npz")
+    np.savez_compressed(
+        temporary, **arrays,
+        metadata_json=np.asarray(json.dumps(metadata, sort_keys=True, separators=(",", ":"))),
+    )
+    os.replace(temporary, path)
+
+
+def _e45_covariates(units: Mapping[str, np.ndarray]) -> np.ndarray:
+    return np.column_stack((
+        units["median_distance_m"], units["median_beam"],
+        np.log1p(units["Nvis"]), units["O_hat"],
+        np.log1p(units["local_density"]),
+    ))
+
+
+def _e45_smd(values: np.ndarray) -> np.ndarray:
+    output = np.zeros((3, 5), dtype=np.float64)
+    for pair_id, (left, right) in enumerate(((0, 1), (0, 2), (1, 2))):
+        left_values = values[:, left]
+        right_values = values[:, right]
+        pooled = np.sqrt((left_values.var(axis=0, ddof=1) + right_values.var(axis=0, ddof=1)) / 2.0)
+        difference = np.abs(left_values.mean(axis=0) - right_values.mean(axis=0))
+        output[pair_id] = np.divide(
+            difference, pooled, out=np.where(difference == 0.0, 0.0, np.inf),
+            where=pooled > 0.0,
+        )
+    return output
+
+
+def _e45_match(units: Mapping[str, np.ndarray]) -> dict[str, np.ndarray]:
+    flat = {name: np.asarray(value).reshape((-1,) + value.shape[2:]) for name, value in units.items()}
+    covariates = _e45_covariates(flat)
+    valid = (
+        (flat["point_count"] > 0) & (flat["range_bin"] >= 0)
+        & (flat["range_bin"] < 4) & (flat["azimuth_sector"] >= 0)
+        & np.isfinite(covariates).all(axis=1)
+    )
+    by_source: list[np.ndarray] = []
+    for source_id in range(3):
+        candidates = np.flatnonzero(valid & (flat["source"] == source_id))
+        order = np.argsort(flat["unit_hash"][candidates], kind="stable")
+        candidates = candidates[order]
+        _, first = np.unique(flat["unit_hash"][candidates], return_index=True)
+        by_source.append(candidates[np.sort(first)])
+    caliper = np.asarray((2.0, 4.0, 0.25, 0.10, 0.25), dtype=np.float64)
+    matched: list[tuple[int, int, int]] = []
+    for support in (40, 48):
+        for range_bin in range(4):
+            for sector in range(8):
+                groups = [
+                    source[
+                        (flat["support_semantic"][source] == support)
+                        & (flat["range_bin"][source] == range_bin)
+                        & (flat["azimuth_sector"][source] == sector)
+                    ]
+                    for source in by_source
+                ]
+                if any(group.size == 0 for group in groups):
+                    continue
+                used_control: set[int] = set()
+                used_proxy: set[int] = set()
+                real_order: list[tuple[int, int]] = []
+                for real in groups[0]:
+                    control_count = int(np.count_nonzero(
+                        np.all(np.abs(covariates[groups[1]] - covariates[real]) <= caliper, axis=1)
+                    ))
+                    proxy_count = int(np.count_nonzero(
+                        np.all(np.abs(covariates[groups[2]] - covariates[real]) <= caliper, axis=1)
+                    ))
+                    real_order.append((control_count * proxy_count, int(real)))
+                real_order.sort(key=lambda item: (item[0], int(flat["unit_hash"][item[1]])))
+                for possible_count, real in real_order:
+                    if possible_count == 0:
+                        continue
+                    control = np.asarray(
+                        [item for item in groups[1] if int(item) not in used_control],
+                        dtype=np.int64,
+                    )
+                    proxy = np.asarray(
+                        [item for item in groups[2] if int(item) not in used_proxy],
+                        dtype=np.int64,
+                    )
+                    control = control[np.all(np.abs(covariates[control] - covariates[real]) <= caliper, axis=1)]
+                    proxy = proxy[np.all(np.abs(covariates[proxy] - covariates[real]) <= caliper, axis=1)]
+                    if control.size == 0 or proxy.size == 0:
+                        continue
+                    best: tuple[float, int, int, int, int] | None = None
+                    for control_id in control:
+                        compatible = proxy[np.all(
+                            np.abs(covariates[proxy] - covariates[control_id]) <= caliper,
+                            axis=1,
+                        )]
+                        if compatible.size == 0:
+                            continue
+                        score = (
+                            np.square((covariates[compatible] - covariates[real]) / caliper).sum(axis=1)
+                            + np.square((covariates[compatible] - covariates[control_id]) / caliper).sum(axis=1)
+                            + float(np.square((covariates[control_id] - covariates[real]) / caliper).sum())
+                        )
+                        proxy_id = int(compatible[np.lexsort((
+                            flat["unit_hash"][compatible], score,
+                        ))[0]])
+                        candidate = (
+                            float(np.min(score)), int(flat["unit_hash"][control_id]),
+                            int(flat["unit_hash"][proxy_id]), int(control_id), proxy_id,
+                        )
+                        if best is None or candidate < best:
+                            best = candidate
+                    if best is None:
+                        continue
+                    control_id, proxy_id = best[3], best[4]
+                    matched.append((real, control_id, proxy_id))
+                    used_control.add(control_id)
+                    used_proxy.add(proxy_id)
+    matched_index = np.asarray(matched, dtype=np.int64).reshape(-1, 3)
+    matched_covariates = covariates[matched_index] if matched else np.empty((0, 3, 5))
+    smd = _e45_smd(matched_covariates) if len(matched) > 1 else np.full((3, 5), np.inf)
+    range_count = (
+        np.bincount(flat["range_bin"][matched_index[:, 0]], minlength=4)[:4]
+        if matched else np.zeros(4, dtype=np.int64)
+    )
+    caliper_errors = 0
+    if matched:
+        for left, right in ((0, 1), (0, 2), (1, 2)):
+            caliper_errors += int(np.count_nonzero(
+                np.abs(matched_covariates[:, left] - matched_covariates[:, right]) > caliper
+            ))
+    duplicate_errors = int(sum(
+        len(matched) - np.unique(flat["unit_hash"][matched_index[:, source]]).size
+        for source in range(3)
+    )) if matched else 0
+    return {
+        "matched_flat_index": matched_index,
+        "matched_covariates": matched_covariates,
+        "pairwise_smd": smd,
+        "matched_range_count": range_count.astype(np.int64),
+        "matched_center_frames": np.unique(
+            flat["center_frame"][matched_index[:, 0]]
+        ).astype(np.int16) if matched else np.empty(0, dtype=np.int16),
+        "caliper_errors": np.asarray(caliper_errors, dtype=np.int64),
+        "duplicate_errors": np.asarray(duplicate_errors, dtype=np.int64),
+    }
+
+
+def _load_e25_templates(path: Path | str) -> tuple[NormalTemplateShape, ...]:
+    with np.load(Path(path).expanduser().resolve(strict=True), allow_pickle=False) as source:
+        metadata = json.loads(str(source["metadata_json"]))
+        if metadata.get("experiment") != "E25" or metadata.get("passed") is not True:
+            raise RenderError("Gate 1 requires the passed E25 template artifact")
+        unique: dict[str, NormalTemplateShape] = {}
+        for identity, payload in zip(source["template_identity"], source["object_json"], strict=True):
+            key = identity.decode()
+            if key and key not in unique:
+                item = ObjectSpec.from_dict(json.loads(payload.decode()))
+                if not isinstance(item.shape, NormalTemplateShape):
+                    raise RenderError("E25 artifact contains a non-template control")
+                unique[key] = item.shape
+    return tuple(unique[key] for key in sorted(unique))
+
+
+def _e45_v1_real_candidates(path: Path | str) -> tuple[tuple[int, int, int, int], ...]:
+    with np.load(Path(path).expanduser().resolve(strict=True), allow_pickle=False) as source:
+        metadata = json.loads(str(source["metadata_json"]))
+        if metadata.get("experiment") != "E45":
+            raise RenderError("E45-v2 requires the formal E45-v1 candidate-universe artifact")
+        candidate = np.asarray(source["candidate_id"])
+        center = np.asarray(source["center_frame"])
+        semantic = np.asarray(source["real_semantic"])
+        instance = np.asarray(source["real_instance"])
+        support = np.asarray(source["support_semantic"])
+    rows: list[tuple[int, int, int, int]] = []
+    for identifier in np.unique(candidate):
+        selected = np.flatnonzero(candidate == identifier)
+        if selected.size != 5:
+            raise RenderError("E45-v1 candidate universe does not contain five frames per entity")
+        first = int(selected[0])
+        rows.append((
+            int(center[first]), int(semantic[first]), int(instance[first]), int(support[first])
+        ))
+    return tuple(rows)
+
+
+def _load_e45_bank_with_metadata(
+    path: Path | str,
+) -> tuple[tuple[tuple[int, int, int, int, int, WorldSpec, WorldSpec], ...], dict[str, object]]:
+    source_path = Path(path).expanduser().resolve(strict=True)
+    with np.load(source_path, allow_pickle=False) as source:
+        metadata = json.loads(str(source["metadata_json"]))
+    return _load_gate1_bank(source_path), metadata
+
+
+def _load_e45_unit_cache(
+    path: Path, capacity: int, bank_hash: str,
+) -> dict[str, np.ndarray] | None:
+    if not path.exists():
+        return None
+    with np.load(path, allow_pickle=False) as source:
+        metadata = json.loads(str(source["metadata_json"]))
+        if (
+            metadata.get("experiment") != "E45-v2-units"
+            or metadata.get("passed") is not True
+            or int(metadata.get("capacity", -1)) != capacity
+            or metadata.get("bank_hash") != bank_hash
+        ):
+            return None
+        return {name: np.asarray(source[name]) for name in _E45_UNIT_FIELDS}
+
+
+def _e45_selected_scientific(
+    units: Mapping[str, np.ndarray], match: Mapping[str, np.ndarray],
+) -> dict[str, np.ndarray]:
+    flat = {
+        name: np.asarray(value).reshape((-1,) + value.shape[2:])
+        for name, value in units.items()
+    }
+    index = match["matched_flat_index"]
+    selected = {
+        f"matched_{name}": flat[name][index]
+        for name in (
+            "bank_seed", "source", "center_frame", "frame_id", "support_semantic",
+            "range_bin", "azimuth_sector", "median_distance_m", "median_beam",
+            "Nvis", "O_hat", "local_density", "geometry_hits", "point_count",
+            "point_features", "unit_hash",
+        )
+    }
+    return {**match, **selected}
+
+
+def run_e45_v2_qualification(
+    data_root: Path | str, support_pool_path: Path | str,
+    e25_artifact_path: Path | str, calibration_path: Path | str,
+    candidate_bank_256_path: Path | str, e45_v1_artifact_path: Path | str,
+    output_path: Path | str, *, processes: int = 24,
+) -> dict[str, object]:
+    """Build and qualify strict triplets on the observable 2.5--40 m domain."""
+    if processes != 24:
+        raise RenderError("formal E45-v2 requires exactly 24 processes")
+    try:
+        from .protocol import load_protocol
+        from .scene import LabelMode, STUSequence
+    except ImportError:
+        from protocol import load_protocol  # type: ignore[no-redef]
+        from scene import LabelMode, STUSequence  # type: ignore[no-redef]
+    protocol = load_protocol(Path(__file__).resolve().parents[1] / "protocol.json")
+    sequence = STUSequence.open(
+        data_root, protocol=protocol, partition="train", sequence_id=201,
+        label_mode=LabelMode.REQUIRED,
+    )
+    pool, _ = load_gate1_support_pool(support_pool_path)
+    grid, sensor = load_sensor_calibration(calibration_path)
+    real_candidates = _e45_v1_real_candidates(e45_v1_artifact_path)
+    output = Path(output_path).expanduser().resolve()
+    output.parent.mkdir(parents=True, exist_ok=True)
+    capacities = (256, 512, 1024, 2048)
+    bank_path = Path(candidate_bank_256_path).expanduser().resolve(strict=True)
+    previous_units: dict[str, np.ndarray] | None = None
+    previous_capacity = 0
+    generator_initialized = False
+    history: list[dict[str, object]] = []
+    final_units: dict[str, np.ndarray] | None = None
+    final_match: dict[str, np.ndarray] | None = None
+    final_reproduced = False
+    for capacity in capacities:
+        if capacity > 256:
+            target = output.parent / f"gate1_candidate_bank_{capacity}.npz"
+            if target.exists():
+                _, existing_metadata = _load_e45_bank_with_metadata(target)
+                if existing_metadata.get("passed") is not True or int(existing_metadata.get("capacity", -1)) != capacity:
+                    raise RenderError("existing expanded Gate 1 bank is invalid")
+            else:
+                if not generator_initialized:
+                    frames = tuple(sequence.source_frame(frame_id) for frame_id in range(4, 682))
+                    obstacles = collect_observed_obstacle_index(frames, source_sequence_id=201)
+                    _initialize_gate1_candidate_generation(
+                        sequence, pool, obstacles, _load_e25_templates(e25_artifact_path),
+                        grid, sensor, trajectory_yaw_by_frame(frames), real_candidates,
+                    )
+                    generator_initialized = True
+                extend_gate1_candidate_bank(
+                    bank_path, target, capacity, processes=processes
+                )
+            bank_path = target
+        bank, bank_metadata = _load_e45_bank_with_metadata(bank_path)
+        if len(bank) != capacity or bank_metadata.get("passed") is not True:
+            raise RenderError("E45-v2 candidate bank has the wrong capacity or status")
+        global _GATE1_SEQUENCE, _GATE1_RAY_GRID, _GATE1_SENSOR, _E45_BANK
+        _GATE1_SEQUENCE, _GATE1_RAY_GRID, _GATE1_SENSOR = sequence, grid, sensor
+        _E45_BANK = bank
+        unit_path = output.parent / f"e45_v2_units_{capacity}.npz"
+        units = _load_e45_unit_cache(
+            unit_path, capacity, str(bank_metadata["scientific_array_hash"])
+        )
+        extraction_seconds = 0.0
+        if units is None:
+            started = time.monotonic()
+            with mp.get_context("fork").Pool(processes=processes) as workers:
+                records = workers.map(
+                    _e45_worker, range(previous_capacity, capacity), chunksize=1
+                )
+            suffix = {
+                name: np.stack([record[name] for record in records])
+                for name in _E45_UNIT_FIELDS
+            }
+            units = (
+                suffix if previous_units is None else {
+                    name: np.concatenate((previous_units[name], suffix[name]))
+                    for name in _E45_UNIT_FIELDS
+                }
+            )
+            extraction_seconds = time.monotonic() - started
+            _write_e45_units(
+                units, unit_path, str(bank_metadata["scientific_array_hash"]),
+                extraction_seconds,
+            )
+        matching_started = time.monotonic()
+        runs = [_e45_match(units) for _ in range(2)]
+        matching_seconds = time.monotonic() - matching_started
+        reproduced = all(
+            np.array_equal(runs[0][name], runs[1][name]) for name in runs[0]
+        )
+        match = runs[0]
+        matched_count = int(match["matched_flat_index"].shape[0])
+        center_frames = int(match["matched_center_frames"].size)
+        range_count = match["matched_range_count"]
+        maximum_smd = float(np.max(match["pairwise_smd"]))
+        caliper_errors = int(match["caliper_errors"])
+        duplicate_errors = int(match["duplicate_errors"])
+        passed = (
+            matched_count >= 1024 and center_frames >= 100
+            and bool(np.all(range_count > 0)) and caliper_errors == 0
+            and duplicate_errors == 0 and maximum_smd <= 0.10 and reproduced
+        )
+        history.append({
+            "capacity": capacity, "matched_triplets": matched_count,
+            "center_frames": center_frames, "range_count_2p5_to_40": range_count.tolist(),
+            "maximum_pairwise_smd": maximum_smd,
+            "caliper_errors": caliper_errors, "duplicate_errors": duplicate_errors,
+            "elementwise_reproduced": reproduced,
+            "bank_extension_seconds": float(bank_metadata.get("elapsed_seconds", 0.0)),
+            "unit_extraction_seconds": extraction_seconds,
+            "two_run_matching_seconds": matching_seconds,
+            "passed": passed,
+        })
+        final_units, final_match, final_reproduced = units, match, reproduced
+        if passed:
+            break
+        previous_units, previous_capacity = units, capacity
+    assert final_units is not None and final_match is not None
+    final = history[-1]
+    passed = bool(final["passed"])
+    scientific = _e45_selected_scientific(final_units, final_match)
+    result = {
+        "experiment": "E45-v2", "passed": passed,
+        "failure_classification": None if passed else "insufficient_three_source_common_support",
+        "estimand_range_m": [2.5, 40.0],
+        "range_40_50_status": "unobservable_for_real-vs-rendered-object matching in train/201",
+        "capacity_history": history,
+        "final_capacity": int(final["capacity"]),
+        "matched_triplets": int(final["matched_triplets"]),
+        "center_frames": int(final["center_frames"]),
+        "matched_range_count_2p5_to_40": final["range_count_2p5_to_40"],
+        "pairwise_smd": final_match["pairwise_smd"].tolist(),
+        "maximum_pairwise_smd": float(final["maximum_pairwise_smd"]),
+        "caliper_errors": int(final["caliper_errors"]),
+        "duplicate_errors": int(final["duplicate_errors"]),
+        "elementwise_reproduced": final_reproduced,
+        "scientific_array_hash": _scientific_array_hash(scientific),
+        "claim_limit": (
+            "Source-leakage adjudication is limited to strictly matched real-normal "
+            "object support in train/201 from 2.5 m through 40 m; 40--50 m has no "
+            "real-object matching evidence."
+        ),
+    }
+    temporary = output.with_suffix(output.suffix + ".tmp.npz")
+    np.savez_compressed(
+        temporary, **scientific,
+        metadata_json=np.asarray(json.dumps(result, sort_keys=True, separators=(",", ":"))),
+    )
+    os.replace(temporary, output)
+    return result
+
+
 def _render_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="AJAE authoritative renderer experiments")
     subcommands = parser.add_subparsers(dest="command", required=True)
@@ -11688,6 +12275,15 @@ def _render_parser() -> argparse.ArgumentParser:
     e45.add_argument("--data-root", type=Path, required=True)
     e45.add_argument("--support-pool", type=Path, required=True)
     e45.add_argument("--output", type=Path, required=True)
+    e45v2 = subcommands.add_parser("qualify-e45-v2")
+    e45v2.add_argument("--data-root", type=Path, required=True)
+    e45v2.add_argument("--support-pool", type=Path, required=True)
+    e45v2.add_argument("--e25-artifact", type=Path, required=True)
+    e45v2.add_argument("--calibration", type=Path, required=True)
+    e45v2.add_argument("--candidate-bank-256", type=Path, required=True)
+    e45v2.add_argument("--e45-v1-artifact", type=Path, required=True)
+    e45v2.add_argument("--output", type=Path, required=True)
+    e45v2.add_argument("--processes", type=int, default=24)
     return parser
 
 
@@ -11824,6 +12420,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "qualify-e45":
         result = run_e45_qualification(
             args.data_root, args.support_pool, args.output
+        )
+        print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        return 0 if result["passed"] else 1
+    if args.command == "qualify-e45-v2":
+        result = run_e45_v2_qualification(
+            args.data_root, args.support_pool, args.e25_artifact,
+            args.calibration, args.candidate_bank_256, args.e45_v1_artifact,
+            args.output, processes=args.processes,
         )
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 0 if result["passed"] else 1
