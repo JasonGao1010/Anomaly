@@ -11121,6 +11121,122 @@ def run_e41_qualification(
     return result
 
 
+def _e42_statistics(
+    support_semantic: np.ndarray, geometry_hits: np.ndarray,
+    accepted_hits: np.ndarray, visible_returns: np.ndarray,
+    visible_distance_m: np.ndarray,
+) -> dict[str, np.ndarray]:
+    """Assign the frozen positive-Nvis strata and audit their accounting."""
+    layer = np.full(visible_returns.shape, -1, dtype=np.int8)
+    layer[(visible_returns >= 1) & (visible_returns < 8)] = 0
+    layer[(visible_returns >= 8) & (visible_returns < 32)] = 1
+    layer[(visible_returns >= 32) & (visible_returns < 128)] = 2
+    layer[visible_returns >= 128] = 3
+    range_bin = _gate1_range_bin(visible_distance_m)
+    layer_count = np.zeros((3, 4), dtype=np.int64)
+    zero_count = np.zeros(3, dtype=np.int64)
+    for source_id in range(3):
+        zero_count[source_id] = np.count_nonzero(layer[:, source_id] < 0)
+        for layer_id in range(4):
+            layer_count[source_id, layer_id] = np.count_nonzero(
+                layer[:, source_id] == layer_id
+            )
+    shared_count = np.zeros((2, 5, 4, 3), dtype=np.int64)
+    for support_id, semantic in enumerate((40, 48)):
+        for range_id in range(5):
+            for layer_id in range(4):
+                for source_id in range(3):
+                    shared_count[support_id, range_id, layer_id, source_id] = np.count_nonzero(
+                        (support_semantic[:, source_id] == semantic)
+                        & (range_bin[:, source_id] == range_id)
+                        & (layer[:, source_id] == layer_id)
+                    )
+    return {
+        "geometry_hits": geometry_hits,
+        "accepted_hits": accepted_hits,
+        "visible_returns": visible_returns,
+        "visible_distance_m": visible_distance_m,
+        "range_bin": range_bin,
+        "nvis_layer": layer,
+        "source_layer_count": layer_count,
+        "source_zero_visible_count": zero_count,
+        "shared_stratum_source_count": shared_count,
+        "shared_stratum_valid": np.all(shared_count > 0, axis=-1),
+    }
+
+
+def run_e42_qualification(
+    e39_artifact_path: Path | str, output_path: Path | str,
+) -> dict[str, object]:
+    """Qualify entity-frame Nvis strata and preliminary matching support."""
+    with np.load(
+        Path(e39_artifact_path).expanduser().resolve(strict=True), allow_pickle=False
+    ) as trace:
+        metadata = json.loads(str(trace["metadata_json"]))
+        if metadata.get("experiment") != "E39" or metadata.get("passed") is not True:
+            raise RenderError("E42 requires the passed formal E39 shared trace")
+        support = np.asarray(trace["support_semantic"])
+        geometry = np.asarray(trace["geometry_hits"])
+        accepted = np.asarray(trace["accepted_hits"])
+        visible = np.asarray(trace["visible_returns"])
+        distance = np.asarray(trace["visible_distance_m"])
+    started = time.monotonic()
+    runs = [
+        _e42_statistics(support, geometry, accepted, visible, distance)
+        for _ in range(2)
+    ]
+    elapsed = time.monotonic() - started
+    reproduced = all(np.array_equal(runs[0][name], runs[1][name]) for name in runs[0])
+    first = runs[0]
+    definition_errors = int(
+        np.count_nonzero(geometry < 0)
+        + np.count_nonzero(accepted < 0)
+        + np.count_nonzero(visible < 0)
+        + np.count_nonzero(accepted > geometry)
+        + np.count_nonzero(visible > accepted)
+        + np.count_nonzero(~np.isfinite(distance))
+        + np.count_nonzero((first["range_bin"] < 0) | (first["range_bin"] >= 5))
+    )
+    group_count = visible.shape[0] * visible.shape[2]
+    count_errors = int(np.count_nonzero(
+        first["source_layer_count"].sum(axis=1)
+        + first["source_zero_visible_count"] != group_count
+    ))
+    generated_layer_coverage = np.count_nonzero(
+        first["source_layer_count"][1:] > 0, axis=1
+    )
+    coverage_errors = int(np.count_nonzero(generated_layer_coverage < 3))
+    shared_strata = int(np.count_nonzero(first["shared_stratum_valid"]))
+    matching_errors = int(shared_strata == 0)
+    passed = (
+        definition_errors == 0 and count_errors == 0 and coverage_errors == 0
+        and matching_errors == 0 and reproduced
+    )
+    result = {
+        "experiment": "E42", "passed": passed,
+        "nvis_layers": [[1, 8], [8, 32], [32, 128], [128, None]],
+        "entity_frame_groups_per_source": group_count,
+        "source_layer_count": first["source_layer_count"].tolist(),
+        "source_zero_visible_count": first["source_zero_visible_count"].tolist(),
+        "generated_layer_coverage": generated_layer_coverage.tolist(),
+        "shared_support_range_nvis_strata": shared_strata,
+        "definition_errors": definition_errors, "count_errors": count_errors,
+        "coverage_errors": coverage_errors, "matching_errors": matching_errors,
+        "elementwise_reproduced": reproduced,
+        "two_run_total_seconds": elapsed,
+        "scientific_array_hash": _scientific_array_hash(first),
+    }
+    destination = Path(output_path).expanduser().resolve()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_suffix(destination.suffix + ".tmp.npz")
+    np.savez_compressed(
+        temporary, **first,
+        metadata_json=np.asarray(json.dumps(result, sort_keys=True, separators=(",", ":"))),
+    )
+    os.replace(temporary, destination)
+    return result
+
+
 def _render_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="AJAE authoritative renderer experiments")
     subcommands = parser.add_subparsers(dest="command", required=True)
@@ -11215,6 +11331,9 @@ def _render_parser() -> argparse.ArgumentParser:
     e41 = subcommands.add_parser("qualify-e41")
     e41.add_argument("--e39-artifact", type=Path, required=True)
     e41.add_argument("--output", type=Path, required=True)
+    e42 = subcommands.add_parser("qualify-e42")
+    e42.add_argument("--e39-artifact", type=Path, required=True)
+    e42.add_argument("--output", type=Path, required=True)
     return parser
 
 
@@ -11332,6 +11451,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0 if result["passed"] else 1
     if args.command == "qualify-e41":
         result = run_e41_qualification(args.e39_artifact, args.output)
+        print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        return 0 if result["passed"] else 1
+    if args.command == "qualify-e42":
+        result = run_e42_qualification(args.e39_artifact, args.output)
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 0 if result["passed"] else 1
     raise AssertionError("unreachable renderer command")
