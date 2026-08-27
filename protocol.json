@@ -1845,11 +1845,19 @@
           }
         },
         "placement_world_builder_E23_E26": {
-          "status": "DESIGN FROZEN; implementation validation pending",
+          "status": "DESIGN AND EXECUTION FROZEN; E23 formal run pending",
           "design_authorities": ["AJAE新主线方案.md", "AJAE实验执行状态机.md"],
           "design_authority_sha256": {
             "main_plan": "f580463136dfa92a2bda048f6c36516a4086bdd44a9bdad3c0cf110646c5e458",
             "state_machine": "800d2fe7ed0494ca2ee6b30fd76c869b20fab638b7ae216a3f4045d291a4c05b"
+          },
+          "implementation_identity": {
+            "commit": "4924692790c1a214beb9cf305392e52986311f33",
+            "render_sha256": "fe342ae73e525a5ee7525173437fd0500cdd63f42b44443a610245bd8bc5b437",
+            "train_sha256": "eb30a33b97d7422671aad0fd87f0e3efd2626e4235c9db1bf91ef13566dca53d",
+            "tests_sha256": "2f4cd11fa45abe9ef2cb14420ee2007bfc4322edb6fba3629b72fe5a18e18ae0",
+            "regression": "42 passed in 99.57 seconds",
+            "old_dev_boundary": "dev.json remains schema-4/world-v2 historical data and is rejected; it is not migrated"
           },
           "common_pipeline": {
             "support_pool_only": true,
@@ -1865,7 +1873,7 @@
             "retired_formal_paths": ["arbitrary-ground-return placement", "bounding-sphere final pair collision", "schema-4 dev.json migration"]
           },
           "E23": {
-            "status": "DESIGN FROZEN; execution locked until implementation identity is recorded",
+            "status": "EXECUTION FROZEN; formal run pending",
             "objects": 1024,
             "support_quotas": {"road_40": 512, "sidewalk_48": 256, "other_ground_49": 256},
             "support_order": "within each semantic, sort qualified rows by SHA-256 of ASCII E23-support-v1, uint64 stream 0, uint32 frame and uint32 slot; object-local index j uses positions j+k*semantic_quota modulo pool size for k=0..127",
@@ -1875,6 +1883,7 @@
             "fixture_shapes": ["sphere", "ellipsoid", "schema7-domain flat", "schema7-domain elongated"],
             "fixture_offsets_m": [0.10, 0.02, -0.02, -0.06, -0.15],
             "pass_conditions": ["fixture errors=0", "1024/1024 accepted within 128 proposals", "accepted deep-penetration count=0", "hard errors=0", "two complete 24-process runs elementwise identical"],
+            "command": "python -m src.render qualify-e23 --data-root /home/jasongao/Data/STU --support-pool runs/ajae/e21_v4_support_pool.npz --output runs/ajae/e23_observed_collision.npz --processes 24",
             "artifact": "runs/ajae/e23_observed_collision.npz"
           },
           "E24": {
