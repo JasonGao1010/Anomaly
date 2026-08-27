@@ -3391,6 +3391,10 @@ real-normal五个距离箱的opportunity为686,670、273,466、46,226、1,055、
 
 读取已通过的E39共享trace，对real-normal、normal-control、anomaly-proxy的128 beam×5 range cells分别保存样本数和Q05/Q25/median/Q75/Q95；保存real-control、real-proxy、control-proxy三组两两最大ECDF距离及有效cell mask。normal-control与anomaly-proxy分别报告落在206冻结强度支持上下界的计数和比例。空cell以count/valid mask明确标识，数值数组保持有限；PASS只检查1,656,861条真实生成记录的有限性、生成来源支持范围、分箱身份、E39计数回算和两遍逐元素一致，普通条件分布差异留给E46。实现提交 `a8f5da83d847913baf14192af67a0bf733fc6158`，`src/render.py` SHA-256为 `2b072872024ba8ccf900783a1f334cf1b45dc90b33d1d23a2c827b731f42d6b0`；46项完整回归通过，用时99.41秒。正式命令为 `python -m src.render qualify-e40 --e39-artifact runs/ajae/e39_per_range_return.npz --calibration runs/ajae/calibration.pt --output runs/ajae/e40_beam_range_intensity.npz`。
 
+**E40 正式结果：PASS（E40关闭，E41解锁）**
+
+三来源强度记录数分别为742,546、462,626和451,689，非空beam×range cells分别为190、173和214。来源、beam与range身份错误0，按cell回算E39计数错误0，所有强度非有限值0，normal-control与anomaly-proxy的206冻结支持越界均为0；两类生成来源在支持下界和上界的clipping计数均为0。两遍统计逐元素一致，总用时1.907127秒。科学数组哈希 `05c9248caeaa5de12320a6c0695e47e983221610eaae67daa82fe0c865ce22ab`；产物 `runs/ajae/e40_beam_range_intensity.npz` 大小22,989字节，SHA-256为 `ac8cd9a2bfa2f0011c201f287d1a3908e401fe844f09bc12be8b755673dd8564`。条件分位数与ECDF差异只报告，不在E40裁决来源泄漏。
+
 ## E41｜empty→valid 审计
 
 报告control/proxy按beam/range的空槽机会、geometry hit、return接受和最终新增。PASS：关系链计数守恒，两个label均实际覆盖新增与拒绝分支，零非法新增，两遍一致。比例差异留给匹配/分类。PASS → E42。
