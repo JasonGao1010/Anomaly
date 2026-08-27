@@ -2131,7 +2131,7 @@
       }
     },
     "renderer_mechanical_qualification": {
-      "status": "E27-E44 PASS; E28-v1 and E36-v1 FAIL retained; E45 FAIL scientific_candidate_domain_failure; E46 locked",
+      "status": "E27-E44 PASS; E28-v1, E36-v1 and E45-v1 FAIL retained; E45-v2 execution frozen; E46 locked",
       "layer_boundaries": {"E27-E28": "direct geometry outputs only", "E29": "return probability and deterministic acceptance decision only", "E30-E31": "accepted returns", "E32-E33": "nearest-return occlusion competition"},
       "E27": {
         "question": "Does the formal geometry path return the correct nearest convex-hull hit, outward finite normal and object ID for active normal-control templates when return rejection is disabled?",
@@ -2600,7 +2600,27 @@
         "artifact": "runs/ajae/e45_matched_triplets.npz",
         "pass_conditions": ["complete real-normal universe meets every frozen range minimum as a necessary condition", "at least 1024 non-reused matched triplets", "at least 100 center frames", "all exact strata and fixed calipers pass", "all pairwise post-match standardized mean differences are at most 0.10", "two complete matching runs are identical"],
         "false_pass_protection": "necessary-condition success alone cannot pass E45; it only permits full matching to run",
-        "result": {"passed": false, "failure_classification": "scientific_candidate_domain_failure", "support_pool_size": 1193969, "complete_real_candidate_entities": 1635, "complete_real_candidate_entity_frames": 8175, "real_candidate_range_count": [2492, 4141, 1457, 85, 0], "required_triplets_by_range": [128, 128, 128, 128, 32], "maximum_possible_triplets_by_range": [2492, 4141, 1457, 85, 0], "necessary_range_shortfall": [0, 0, 0, 43, 32], "necessary_coverage_errors": 2, "identity_errors": 0, "candidate_frame_errors": 0, "elementwise_reproduced": true, "elapsed_seconds": 172.01715891899948, "capacity_expansion_executed": false, "capacity_expansion_short_circuit": "The complete frozen real-normal universe has only 85 units at 30--40 m and zero at 40--50 m; every capacity-ladder bank is a subset sampled from this universe.", "triplet_matching_executed": false, "triplet_matching_skip_reason": "A necessary frozen range-coverage condition is impossible.", "scientific_array_sha256": "444e31f9ef31219640f021000b4b07bf9680af1ba9e70db7bec65860bff58a7f", "artifact_bytes": 43848, "artifact_sha256": "061f971615af7f7a2edcaf459e0cac4ec6628537dd476bb7324c4d5fadf38772", "decision_boundary": "E46 remains locked; changing the candidate domain or frozen range-coverage requirement requires owner decision."}
+        "result": {"passed": false, "failure_classification": "scientific_candidate_domain_failure", "support_pool_size": 1193969, "complete_real_candidate_entities": 1635, "complete_real_candidate_entity_frames": 8175, "real_candidate_range_count": [2492, 4141, 1457, 85, 0], "required_triplets_by_range": [128, 128, 128, 128, 32], "maximum_possible_triplets_by_range": [2492, 4141, 1457, 85, 0], "necessary_range_shortfall": [0, 0, 0, 43, 32], "necessary_coverage_errors": 2, "identity_errors": 0, "candidate_frame_errors": 0, "elementwise_reproduced": true, "elapsed_seconds": 172.01715891899948, "capacity_expansion_executed": false, "capacity_expansion_short_circuit": "The complete frozen real-normal universe has only 85 units at 30--40 m and zero at 40--50 m; every capacity-ladder bank is a subset sampled from this universe.", "triplet_matching_executed": false, "triplet_matching_skip_reason": "A necessary frozen range-coverage condition is impossible.", "scientific_array_sha256": "444e31f9ef31219640f021000b4b07bf9680af1ba9e70db7bec65860bff58a7f", "artifact_bytes": 43848, "artifact_sha256": "061f971615af7f7a2edcaf459e0cac4ec6628537dd476bb7324c4d5fadf38772", "decision_boundary": "E46 remains locked; changing the candidate domain or frozen range-coverage requirement requires owner decision."},
+        "subsequent_review": {"design_classification": "qualification specification defect", "preserve_formal_fail": true, "finding": "Fixed absolute per-range quotas were incorrectly made necessary for source-leakage qualification even where train/201 contains no real-normal object support."}
+      },
+      "E45_v2": {
+        "question": "Can at least 1024 strictly balanced real-normal/control/proxy triplets be formed inside the actual train/201 real-object common-support domain?",
+        "estimand_range_m": [2.5, 40.0],
+        "range_40_50_status": "unobservable_for_real-vs-rendered-object matching in train/201",
+        "preserved_real_candidate_definition": true,
+        "source_sequence": "train/201 only",
+        "exact_match": ["qualified support semantic", "frozen range bin", "45-degree sensor-azimuth sector"],
+        "calipers": {"range_absolute_m": 2.0, "median_beam_absolute": 4.0, "log1p_Nvis_absolute": 0.25, "O_hat_absolute": 0.10, "log1p_local_density_absolute": 0.25},
+        "matching": "deterministic greedy; constrained real units first; unit-hash tie break; no source unit reuse",
+        "capacity_ladder": [256, 512, 1024, 2048],
+        "incremental_execution": "reuse prior banks and extracted units; generate and render only each new suffix",
+        "implementation_commit": "185cb50e2a5e1db35d0123d0c31a1d2e35b14d76",
+        "render_source_sha256": "4a5e3dcb3eb12704e5022f0d04fb6e0ab10fce3b5ce3619a8d0f1ada9c25660c",
+        "command": "python -m src.render qualify-e45-v2 --data-root /home/jasongao/Data/STU --support-pool runs/ajae/gate1_201_support_pool.npz --e25-artifact runs/ajae/e25_normal_control.npz --calibration runs/ajae/calibration.pt --candidate-bank-256 runs/ajae/gate1_candidate_bank_256.npz --e45-v1-artifact runs/ajae/e45_matched_triplets.npz --output runs/ajae/e45_v2_matched_triplets.npz --processes 24",
+        "artifact": "runs/ajae/e45_v2_matched_triplets.npz",
+        "pass_conditions": ["at least 1024 non-reused triplets", "at least 100 real-side center frames", "each observable range bin from 2.5 through 40 m has at least one triplet", "all exact strata and fixed pairwise calipers pass", "all three pairwise standardized mean differences for all five continuous covariates are at most 0.10", "two complete matching runs are elementwise identical"],
+        "failure_at_capacity_2048": "insufficient_three_source_common_support",
+        "claim_limit": "Any later E46 source-leakage conclusion is limited to strictly matched train/201 real-normal object support from 2.5 through 40 m; 40--50 m has no direct real-object matching evidence."
       }
     },
     "world_types": {"pure_normal": 0.2, "control_only": 0.2, "mixed": 0.4, "anomaly_only": 0.2},

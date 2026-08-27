@@ -3471,6 +3471,18 @@ PASS：规模、frame覆盖、range覆盖、caliper、SMD、无重复和复现�
 
 512、1,024和2,048容量银行都只能从上述完整real-normal宇宙抽取单元，不能把30–40米上界85提高到128，也不能从40–50米上界0产生任何真实单元。因此容量扩展、生成来源渲染和greedy triplet matching均未执行；本次FAIL不涉及caliper、SMD、来源分类或renderer数值差异的裁决。科学数组哈希 `444e31f9ef31219640f021000b4b07bf9680af1ba9e70db7bec65860bff58a7f`；产物 `runs/ajae/e45_matched_triplets.npz` 大小43,848字节，SHA-256为 `061f971615af7f7a2edcaf459e0cac4ec6628537dd476bb7324c4d5fadf38772`。继续推进需要重新决策E45的候选范围或冻结距离覆盖设计，E46不得启动。
 
+后续审查保留E45-v1的正式FAIL及原始`scientific_candidate_domain_failure`运行分类；设计层归因修订为`qualification specification defect`：错误在于把train/201每个预设距离箱的固定绝对数量当成来源泄漏资格的必要条件，不是匹配算法或renderer科学失败。
+
+### E45-v2｜实际共同支持域三方严格匹配
+
+real-normal候选定义、train/201唯一开发来源、三方对象构念和全部匹配条件保持不变。正式estimand限制为train/201真实正常对象实际可观察的2.5–40米域；40–50米标记为`unobservable_for_real-vs-rendered-object matching in train/201`，不进入PASS或FAIL距离覆盖裁决，也不得制造或跨序列补样本。删除每距离箱固定绝对配额；2.5–10、10–20、20–30和30–40米各须至少有一个正式匹配triplet。
+
+单位仍为entity-frame local patch。exact match仍为support semantic、冻结range bin和45度sensor-azimuth sector；三方两两caliper仍为range差不超过2米、median beam差不超过4、$|\Delta\log(1+N_{vis})|\le0.25$、$|\Delta\hat O|\le0.10$、$|\Delta\log(1+\text{local density})|\le0.25$。$\hat O$继续使用geometry hits与最终visible returns；local density直接复用权威`low_level_return_features`的8近邻球体密度并取单元中位数。每单元按规范frame/beam/column身份hash最多保存64点，供E46直接复用。确定性greedy优先处理可配候选更少的real单元，所有并列由单位hash裁决；三来源单位均不得重复使用。
+
+总量仍须至少1,024个triplets，real侧至少覆盖100个不同center frames，四个可观察距离层均非空，全部caliper错误为0、重复使用为0，五个连续协变量的三组pairwise SMD均不超过0.10，两遍匹配逐元素一致。先运行256容量；不满足全部门槛时依次扩到512、1,024、2,048，只生成并渲染新增后缀，旧银行与已提取单元直接复用。达到2,048仍不满足即分类为`insufficient_three_source_common_support`并FAIL。
+
+实现提交 `185cb50e2a5e1db35d0123d0c31a1d2e35b14d76`，`src/render.py` SHA-256为 `4a5e3dcb3eb12704e5022f0d04fb6e0ab10fce3b5ce3619a8d0f1ada9c25660c`；46项完整回归通过。正式命令为 `python -m src.render qualify-e45-v2 --data-root /home/jasongao/Data/STU --support-pool runs/ajae/gate1_201_support_pool.npz --e25-artifact runs/ajae/e25_normal_control.npz --calibration runs/ajae/calibration.pt --candidate-bank-256 runs/ajae/gate1_candidate_bank_256.npz --e45-v1-artifact runs/ajae/e45_matched_triplets.npz --output runs/ajae/e45_v2_matched_triplets.npz --processes 24`。PASS后关闭E45并解锁E46；FAIL则E46保持锁定。
+
 ## E45-V1｜人眼来源盲辨（可选、非阻断）
 
 可从E45固定triplets生成盲面板；没有两名独立人类时不裁决。结果不替代E46，也不阻断E46。

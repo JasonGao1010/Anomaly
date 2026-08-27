@@ -1820,7 +1820,7 @@ $$
 
 ---
 
-# 18. 当前状态（当前工作区：E45 FAIL）
+# 18. 当前状态（当前工作区：E45-v2执行冻结）
 
 截至当前工作区权威提交，已经完成：
 
@@ -1891,6 +1891,8 @@ E44已正式通过：normal-control与anomaly-proxy均覆盖三个冻结遮挡�
 
 E45正式FAIL，分类为`scientific_candidate_domain_failure`。E38冻结定义下完整train/201 real-normal候选宇宙包含1,635个实体和8,175个entity-frame，五个距离箱的严格上界为[2,492,4,141,1,457,85,0]；相对最低要求[128,128,128,128,32]，30–40米短缺43，40–50米短缺32。容量银行只是该完整宇宙的子集，不能修复必要覆盖，因此扩展银行、完整匹配与E46均未执行。
 
+E45-v1正式FAIL永久保留；后续设计归因修订为`qualification specification defect`。E45-v2不改变真实对象候选、train/201来源、匹配卡钳、总量、中心帧、SMD、无重复或复现要求，只删除不可实现的逐距离箱固定绝对配额，把正式匹配estimand限制为train/201真实正常对象可观察的2.5–40米共同支持域；40–50米明确无直接real-object matching证据。E45-v2实现已完成并通过46项完整回归，正式结果尚未产生。
+
 当前可成立的局部结论是：
 
 > **schema 7 能合法、确定且高效地产生覆盖冻结几何区域的合成异常代理；这些对象可以从 train/206 的合格支撑池采样，以冻结连续落地规则达到 99% 接触/埋地资格，并能由同一权威放置接口拒绝与 train/206 实际观测非地面回波发生超过 5 cm 深穿透的位置。**
@@ -1905,7 +1907,7 @@ E45正式FAIL，分类为`scientific_candidate_domain_failure`。E38冻结定义
 当前执行节点为：
 
 $$
-\boxed{E44\ \text{PASS};\quad E45\ \text{FAIL};\quad E46\ \text{LOCKED}}
+\boxed{E44\ \text{PASS};\quad E45\text{-v1}\ \text{FAIL RETAINED};\quad E45\text{-v2}\ \text{FROZEN AND RUNNING};\quad E46\ \text{LOCKED}}
 $$
 
 E23与E24-v2已按冻结设计通过，当前顺序进入：
@@ -1914,7 +1916,7 @@ $$
 E23\rightarrow E24\rightarrow E25\rightarrow E26
 $$
 
-E27–E44已关闭；E36-v1 FAIL按设计冲突保留。E45因完整真实候选域无法满足冻结距离覆盖而FAIL，当前停止于需要重新决策E45候选范围或距离覆盖设计的位置，E46保持锁定。
+E27–E44已关闭；E36-v1和E45-v1 FAIL均保留。当前正在执行E45-v2完整三方匹配，E46保持锁定。
 
 因此当前整体判断仍是：
 
