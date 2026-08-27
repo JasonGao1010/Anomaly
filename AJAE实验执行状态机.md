@@ -3257,6 +3257,10 @@ E31逐元素核对E28-v2 PASS产物的seed与shape identity并重建原256个sch
 
 构造 sensor→native-foreground→inserted。PASS：foreground 保留，后方 inserted 不产生最终点；标签、mask、object ID 和距离竞争零错误。PASS → E34。
 
+**执行冻结**
+
+固定3个与E32同构的单槽fixture，native前景range为5 m，accepted inserted分别位于native之后0.5、1和2倍 `tie_tolerance_m`。完整调用正式 `render_frame`；三项均必须保留native前景的距离、semantic 10、instance 7，`inserted_mask`与`occluded_original_mask`为false、internal object ID为-1且最终只有一个slot。两遍逐元素一致。实现提交 `c1f8d76544c45106b0844aae7110da82adfd64e1`，`src/render.py` SHA-256为 `2be3be0cbc4ce4968bf90fc75d7d383aa67b9770346b9295b2b0416ebe1a3fb3`；46项回归全部通过，用时99.71秒。正式命令为 `python -m src.render qualify-e33 --output runs/ajae/e33_foreground_occlusion.npz`。
+
 ## E34｜空射线新增与拒绝
 
 对原空 slot 分别构造 geometry hit+p=1、geometry hit+p=0、无 geometry hit。PASS：三类结果分别为新增 inserted return、保持空、保持空；空 slot 原 intensity payload 不参与 occupancy；零错误。PASS → E35。
