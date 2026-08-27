@@ -1214,7 +1214,7 @@
       },
       "schema7_blinded_geometry_review": {
         "version": "E20-V1",
-        "status": "MATERIAL GENERATION FROZEN; human scoring remains pending",
+        "status": "MATERIALS PREPARED; awaiting two independent human rating files; no E20-V1 verdict yet",
         "sample": {
           "source": "E20a-v3 8192-object formal artifact",
           "hash_deterministic_total": 192,
@@ -1250,7 +1250,32 @@
         "hard_failure_scope": "only excessive hard defects, insufficient complete entities, or failed target-stratum visual recognition after acceptable reviewer agreement can FAIL and block; ordinary weirdness does not",
         "interpretation_limit": "normal-class resemblance, near duplication, and small numbers of merely strange shapes are recorded only and cannot automatically modify schema 7; after one completed E20-V1 no new shape metric is added unless a preregistered hard failure occurs",
         "human_study_handling": "internal minimal-risk technical review; voluntary participation, local pseudonymous rating files, no personal identifiers, no contact or sensitive data; institutional approval applicability remains the user's responsibility",
-        "materials": {"public_directory": "runs/ajae/e20_v1_blind", "private_key": "runs/ajae/e20_v1_private_key.csv", "runner_sha256": "5f9834b2c3ee66ff7a6ef8b8dd6e046174e62d990f297967d57cbdf720881c85", "frozen_render_source_sha256": "ccdddb12b96104360deb245dabffcf8449c9e568c70dd7202cdc3e850b5413d9", "criteria_frozen_before_rendering": true}
+        "materials": {
+          "public_directory": "runs/ajae/e20_v1_blind",
+          "private_key": "runs/ajae/e20_v1_private_key.csv",
+          "runner_sha256": "5f9834b2c3ee66ff7a6ef8b8dd6e046174e62d990f297967d57cbdf720881c85",
+          "frozen_render_source_sha256": "ccdddb12b96104360deb245dabffcf8449c9e568c70dd7202cdc3e850b5413d9",
+          "criteria_frozen_before_rendering": true,
+          "formal_generation": {
+            "date": "2026-08-27",
+            "protocol_commit": "2bcffc77e840b9ac663e27aaf5577d590fb04fb5",
+            "panels": 192,
+            "panel_dimensions_px": [1200,1200],
+            "panel_total_bytes": 15112237,
+            "panel_minimum_maximum_bytes": [10799,283926],
+            "minimum_mesh_vertices_faces": [9467,18930],
+            "all_four_quadrants_nonempty": true,
+            "minimum_quadrant_nonwhite_fraction": 0.00023055555555555554,
+            "rating_rows_R1_R2": [192,192],
+            "render_records_sha256": "e71b445a66ccb8b7417d7c9a5a474c09784889f65fe4debff728836ad3862501",
+            "public_material_sha256_excluding_summary": "210d557418466e0f109fbfbd9d0db391f8afab3c62cffe2f4949414e1e97a74c",
+            "materials_summary_sha256": "df1d09cbbcacaa4278a81d9b950536dbfbd02e2dfd7910d1dc6ef140e59b8d02",
+            "private_key_sha256": "ab8e1d1ec4791e79eaf42c0105ba7f6a8b3db47c76b6117bf565e0feac697919",
+            "private_key_permissions": "0600",
+            "mechanical_verification": "all panel files, dimensions, nonempty quadrants, manifests, rating rows, public hash and private identities verified without visually inspecting or scoring any panel",
+            "verdict": "PENDING HUMAN RATINGS"
+          }
+        }
       },
       "schema6_geometry_factor_decoupling": {
         "version": "E20b-lite",
