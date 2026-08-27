@@ -3215,6 +3215,14 @@ E30按E27 PASS产物的 `template_identity` 逐元素核对并重建原256个nor
 
 实现提交为 `688618a2d5a0bd0792a33a5f1f48bab6f00f55a0`，输入身份审计修正提交为 `4527fcffa766183a82674c430fa8386cd544c879`；后者将E25选择键改为E27产物实际记录的 `_normal_template_identity` 后逐元素核对，不改变模板顺序或fixture。最终 `src/render.py`、`src/train.py`和`test_ajae.py` SHA-256分别为 `8b35a71a96fd58ff056e8e788f68eb4c6a7324f270f73b2035df6f06f0e7e46c`、`92a3f51f93e26bead6a1d9d92e37af2b5e4df092ffc9716852806b4b67be546b`、`960dc6b3b83a4e95e638a1f0358a3d20c8eb2b51300e5c737f2c49b4b0a3f8dd`；修正后完整回归46项全部通过，用时99.21秒。正式命令为 `python -m src.render qualify-e30 --e25-artifact runs/ajae/e25_normal_control.npz --e27-artifact runs/ajae/e27_normal_control_hits.npz --calibration runs/ajae/calibration.pt --output runs/ajae/e30_normal_returns.npz --processes 24`。
 
+**E30 正式结果：PASS（E30关闭，E31解锁）**
+
+首次正式命令在两遍实验开始前被输入身份审计拒绝，原因是审计直接比较E25选择键与E27产物中重新计算的 `_normal_template_identity`；该次没有生成实验产物。修正后256个重建身份与E27产物逐元素一致，随后执行正式两遍24进程运行，用时分别为0.122548秒和0.121699秒，全部科学数组逐元素一致。
+
+6,144次accepted-return裁决产生6,137个接受和7个拒绝。几何、材质调制概率reference、64位identity uniform reference、accepted mask、接受载荷和拒绝载荷错误均为0。接受强度范围为0.0020000000949949026–1.6214286088943481，接受语义精确覆盖10、18、20、30；全部拒绝项的点和强度保持NaN、语义保持0。
+
+科学数组哈希为 `4f86b6ae373a6db84da849131ab1c016afc642a50a3d40978abf8cec60a3f55c`。正式产物 `runs/ajae/e30_normal_returns.npz` 大小145,112字节，SHA-256为 `f6caf496b7c0e085d4c8f5191e04a69dda70949f31013dee3d9b07db95c2162f`。E30 PASS允许的结论限定为：**E27冻结normal-control几何命中经过正式return/intensity流后，其accepted mask与E29独立reference逐元素一致，接受项形成有限且语义正确的点和强度载荷，拒绝项不形成回波载荷。** E30不检验anomaly-proxy accepted return或native/inserted最近回波竞争；它们分别留给E31和E32–E33。
+
 ## E31｜anomaly-proxy 有效回波
 
 与 E30 同一代码路径。PASS：mask 零差异；有效点 finite、raw semantic 2、internal object ID 正确；接受/拒绝分支均覆盖；两遍一致。PASS → E32。
