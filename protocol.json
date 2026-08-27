@@ -1849,14 +1849,14 @@
           "design_authorities": ["AJAE新主线方案.md", "AJAE实验执行状态机.md"],
           "design_authority_sha256": {
             "main_plan": "da5dfb1bcd8c46ad962af103f6b426b67066efd4ba170d2886034a5a0b09d27e",
-            "state_machine": "eb544966bee3cfe40cbeb610de5a37f6ef378e73347ccbeb238efd57b07b8f8e"
+            "state_machine": "f50da5c88bb2252a71a6140e68e71b86284a0b88eb817f1306a3928076794cd5"
           },
           "implementation_identity": {
-            "commit": "bf6ce20c3a9ae416f501a9c4846a5061b3fa9dea",
-            "render_sha256": "946f192812e20d201a5d8a096138bf023a7730e720dd44fcd12ff1b51def648a",
+            "commit": "c150d516328cb6f108ec30f571c6a41ec0f53f82",
+            "render_sha256": "51b1bd037cd3226155e6f8bb428421729326e1d4e6a8c83fb414aa9a63f37d30",
             "train_sha256": "92a3f51f93e26bead6a1d9d92e37af2b5e4df092ffc9716852806b4b67be546b",
-            "tests_sha256": "490d1e1739f07803bae818f24c5b9f25ac19c11bebe9cbc7f0378c2d9d8f277b",
-            "regression": "45 passed in 99.32 seconds",
+            "tests_sha256": "960dc6b3b83a4e95e638a1f0358a3d20c8eb2b51300e5c737f2c49b4b0a3f8dd",
+            "regression": "46 passed in 99.01 seconds",
             "old_dev_boundary": "dev.json remains schema-4/world-v2 historical data and is rejected; it is not migrated"
           },
           "common_pipeline": {
@@ -2074,10 +2074,26 @@
             "window_center": "2+world_seed mod 445",
             "window_random_order": "default_rng(SeedSequence([world_seed,2601])).permutation(five consecutive frame ids)",
             "frame_request_identity": "SHA-256 of canonical world_hash:frame_id:renderer_identity ASCII tuple",
-            "manifest_runs": ["single process from generation start", "24 processes from generation start"],
-            "implementation_commit": "bf6ce20c3a9ae416f501a9c4846a5061b3fa9dea",
+            "manifest_runs": ["24 processes from generation start", "24 processes from generation start"],
+            "serial_manifest_audit": "reparse and rebuild canonical world/report/request manifests from first-run immutable records without repeating geometry generation",
+            "cpu_execution": "one numeric-library thread per worker; 24 worker processes; per-world local pair-witness cache",
+            "duplicate_computation_removed": "E26 validates saved E22 continuous eligibility values and E23 accepted minimum distance instead of regenerating surface points and obstacle queries; final pair validation remains",
+            "implementation_commit": "c150d516328cb6f108ec30f571c6a41ec0f53f82",
             "command": "python -m src.render qualify-e26 --data-root /home/jasongao/Data/STU --support-pool runs/ajae/e21_v4_support_pool.npz --output runs/ajae/e26_world_builder.npz --processes 24",
             "artifact": "runs/ajae/e26_world_builder.npz",
+            "implementation_defect_run": {
+              "classification": "implementation_defect; no E26 scientific verdict",
+              "completed": 256,
+              "all_non_authority_errors": 0,
+              "authority_errors": 1,
+              "cause": "source-string authority audit counted its own string literals",
+              "elementwise_reproduced": true,
+              "run_seconds": [887.1478031930019, 124.98727156000677],
+              "scientific_array_sha256": "dd2564ffb30ca730434d3e961e3cdd7117c3432720ea4eb43534a11c6dbfd210",
+              "invalid_artifact_bytes": 1004593,
+              "invalid_artifact_sha256": "25daf1a0a995598f5d7f2a67f3c7686d3dd68cf93968873a280c9211ad1fcc70",
+              "invalid_artifact_removed_before_retry": true
+            },
             "pass_conditions": ["256/256 worlds built with correct type", "canonical JSON and world hash repeat exactly", "window traversal never changes WorldSpec", "frame request identity is order/cache invariant", "all nonempty entities retain E22-E25", "one authoritative placement path", "two runs elementwise identical"]
           },
           "criteria_frozen_before_E23_formal_run": true

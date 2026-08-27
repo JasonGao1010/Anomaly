@@ -3073,9 +3073,11 @@ normal-control的template/scale/material/pose seed分别为entity seed+1、entit
 
 `WorldGenerationReport`升级为 `ajae-world-generation-report-v2`，除全部placement记录外显式保存normal/anomaly数量、count seed与label-order seed。历史 `generate_fixed_development_worlds` 使用已经失效的任意ground接口且没有调用者，已从正式源码删除；`sample_training_world`及其内部唯一一次 `place_object` 调用成为训练世界的唯一放置入口。
 
-每个world的窗口中心固定为 `2+world_seed mod 445`，审计连续5帧。随机遍历由 `SeedSequence([world_seed,2601])` 固定。帧请求身份由 `(world_hash,frame_id,renderer_identity)` 的规范字符串计算SHA-256；正序、逆序、随机序、空缓存、复用缓存和清空后重建必须得到相同frame-id到请求身份映射，且遍历前后world JSON逐字一致。第一次完整manifest使用单进程，第二次使用24进程，两次均从WorldSpec生成起点执行并要求全部保存数组逐元素一致。
+每个world的窗口中心固定为 `2+world_seed mod 445`，审计连续5帧。随机遍历由 `SeedSequence([world_seed,2601])` 固定。帧请求身份由 `(world_hash,frame_id,renderer_identity)` 的规范字符串计算SHA-256；正序、逆序、随机序、空缓存、复用缓存和清空后重建必须得到相同frame-id到请求身份映射，且遍历前后world JSON逐字一致。两次完整manifest均使用24进程从WorldSpec生成起点执行并要求全部保存数组逐元素一致；单进程审计只对已生成的规范world/report记录执行JSON、哈希和请求manifest重建，不再用单核重复计算全部几何。每个worker固定底层数值库为单线程，避免24个进程内部再次并行。实体对碰撞在一个world内按shape缓存确定性局部表面见证，位置变化只重新执行世界坐标变换；E26复核直接核对 `place_object` 已保存的E22连续资格量与E23最小距离，不重复生成同一批16,384点表面或重复查询同一接受位置的observed obstacle，最终实体对检查仍独立保留。
 
-正式实现提交为 `bf6ce20c3a9ae416f501a9c4846a5061b3fa9dea`；`src/render.py`、`src/train.py`和`test_ajae.py` SHA-256分别为 `946f192812e20d201a5d8a096138bf023a7730e720dd44fcd12ff1b51def648a`、`92a3f51f93e26bead6a1d9d92e37af2b5e4df092ffc9716852806b4b67be546b`、`490d1e1739f07803bae818f24c5b9f25ac19c11bebe9cbc7f0378c2d9d8f277b`；完整回归为45项全部通过，用时99.32秒。正式命令为 `python -m src.render qualify-e26 --data-root /home/jasongao/Data/STU --support-pool runs/ajae/e21_v4_support_pool.npz --output runs/ajae/e26_world_builder.npz --processes 24`。
+首次执行完成256/256个world，world type、往返、E22–E25验证、支撑语义、姿态、材质、最终实体对、遍历、硬错误和耗尽计数均为0，两遍逐元素一致；单进程与24进程用时分别为887.147803秒和124.987272秒，科学数组哈希为 `dd2564ffb30ca730434d3e961e3cdd7117c3432720ea4eb43534a11c6dbfd210`。但源码权威路径审计错误地用字符串计数，审计条件自身的字符串字面量被同时计入，产生唯一的 `authority_errors=1`。该结果归类为 `implementation_defect`，不形成E26科学裁决。无效产物大小1,004,593字节，SHA-256为 `25daf1a0a995598f5d7f2a67f3c7686d3dd68cf93968873a280c9211ad1fcc70`，修后重跑前删除。权威路径审计改为Python语法树上的函数定义与调用节点计数，并增加防止字符串自计数的回归。
+
+修后正式实现提交为 `c150d516328cb6f108ec30f571c6a41ec0f53f82`；`src/render.py`、`src/train.py`和`test_ajae.py` SHA-256分别为 `51b1bd037cd3226155e6f8bb428421729326e1d4e6a8c83fb414aa9a63f37d30`、`92a3f51f93e26bead6a1d9d92e37af2b5e4df092ffc9716852806b4b67be546b`、`960dc6b3b83a4e95e638a1f0358a3d20c8eb2b51300e5c737f2c49b4b0a3f8dd`；完整回归为46项全部通过，用时99.01秒。正式命令仍为 `python -m src.render qualify-e26 --data-root /home/jasongao/Data/STU --support-pool runs/ajae/e21_v4_support_pool.npz --output runs/ajae/e26_world_builder.npz --processes 24`。
 
 **PASS 条件**
 
