@@ -1214,7 +1214,7 @@
       },
       "schema7_blinded_geometry_review": {
         "version": "E20-V1",
-        "status": "MATERIALS PREPARED; awaiting two independent human rating files; no E20-V1 verdict yet",
+        "status": "RETIRED WITHOUT FORMAL VERDICT; descriptive visual sanity check completed by the project lead, but the preregistered two-reviewer rating protocol was not completed",
         "sample": {
           "source": "E20a-v3 8192-object formal artifact",
           "hash_deterministic_total": 192,
@@ -1275,11 +1275,19 @@
             "mechanical_verification": "all panel files, dimensions, nonempty quadrants, manifests, rating rows, public hash and private identities verified without visually inspecting or scoring any panel",
             "verdict": "PENDING HUMAN RATINGS"
           }
+        },
+        "post_material_scope_amendment": {
+          "date": "2026-08-27",
+          "historical_protocol_disposition": "The preregistered E20-V1 protocol is not rewritten as PASS. Both 192-row rating files remain blank, no second independent reviewer was used, no target-family ratings or Cohen kappa were obtained, and no formal E20-V1 verdict exists.",
+          "project_lead_observation": "The project lead visually inspected the prepared panels and reported that the objects merely look unusual and that no generation errors were observed.",
+          "scientific_scope_decision": "Human target-family classification is removed as a downstream gate because final continuous-geometry coverage was already qualified quantitatively by E20a-v3. The visual review is retained only as a descriptive check for obvious rendering or generation defects.",
+          "evidence_limit": "This observation does not establish an independently reviewed defect rate, complete-entity rate, target-family recognition rate, inter-reviewer agreement, normal-class resemblance rate, or duplicate rate.",
+          "downstream_decision": "Retire the uncompleted E20-V1 gate and unlock E20b-lite. Schema 7 remains qualified by E19-v4 and E20a-v3, not by the descriptive visual observation."
         }
       },
       "schema6_geometry_factor_decoupling": {
         "version": "E20b-lite",
-        "status": "LOCKED; requires a valid E20a coverage PASS and E20-V1 completion without FAIL",
+        "status": "UNLOCKED; E20a-v3 PASS is valid and the uncompleted E20-V1 human gate was retired by explicit scope amendment",
         "question": "Is there an almost deterministic low-capacity shortcut among primitive count, continuous size, axis-ratio region, and deformation strength? Ordinary correlation is allowed.",
         "planned_primary_evidence": ["basic small/medium/large, blocky/flat/elongated, and weak/strong coverage within primitive-count groups", "one shallow decision tree and one logistic regression used only to detect near-perfect predictability"],
         "not_primary": "mutual information",
