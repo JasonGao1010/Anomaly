@@ -1852,11 +1852,11 @@
             "state_machine": "753d737691f148686bcf14e13a3081b75168535a6167b07db8ad7efa7883f56b"
           },
           "implementation_identity": {
-            "commit": "aaf0967251bf4bd2fa6aae857123e3d6b612d1c7",
-            "render_sha256": "533f0d225c4ea68920fb411533e4ede6e2d618e00b3697c125866bb6e0ac04a0",
+            "commit": "8640f298e344d8965f3a5aa7b31851a0a37b1749",
+            "render_sha256": "cc90d9c49c86b8a985f8101bc1ca62f6f68bb478d5683c16f5d9d4787eae01ed",
             "train_sha256": "eb30a33b97d7422671aad0fd87f0e3efd2626e4235c9db1bf91ef13566dca53d",
             "tests_sha256": "2f4cd11fa45abe9ef2cb14420ee2007bfc4322edb6fba3629b72fe5a18e18ae0",
-            "regression": "42 passed in 96.42 seconds",
+            "regression": "42 passed in 96.35 seconds",
             "old_dev_boundary": "dev.json remains schema-4/world-v2 historical data and is rejected; it is not migrated"
           },
           "common_pipeline": {
@@ -1915,6 +1915,7 @@
             "material_seed": "shape_seed+2403",
             "support_namespace": "E24-support-v1",
             "support_stream": "(world_seed-2100000)*6+entity_index",
+            "failure_bookkeeping": "placement exhaustion after 128 proposals is separate from hard errors and does not create default final-pair or validation failures",
             "surface_points_per_object": 8192,
             "sobol_probes_per_object": 8192,
             "penetration_m": 0.05,
