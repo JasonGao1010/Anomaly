@@ -10622,6 +10622,284 @@ def run_e38_qualification(
     return result
 
 
+_GATE1_RANGE_EDGES = np.asarray((2.5, 10.0, 20.0, 30.0, 40.0, 50.0), dtype=np.float64)
+
+
+def _gate1_range_bin(distance_m: np.ndarray) -> np.ndarray:
+    distance = np.asarray(distance_m, dtype=np.float64)
+    bins = np.searchsorted(_GATE1_RANGE_EDGES, distance, side="right") - 1
+    bins[distance == 50.0] = 4
+    bins[(distance < 2.5) | (distance > 50.0)] = -1
+    return bins.astype(np.int8)
+
+
+def _gate1_single_object_trace(
+    frame: SourceFrame, world: WorldSpec, ray_grid: RayGrid, sensor: SensorCalibration
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, RenderedFrame]:
+    item = world.objects[0]
+    pose_rotation, lidar_origin = _pose(frame)
+    directions_world = ray_grid.directions_for(frame) @ pose_rotation.T
+    origins_world = ray_grid.origins_for(frame) @ pose_rotation.T + lidar_origin
+    object_rotation = np.asarray(item.rotation_world_from_local, dtype=np.float64)
+    translation = np.asarray(item.translation_world_m, dtype=np.float64)
+    local_origin = (origins_world - translation) @ object_rotation
+    local_direction = directions_world @ object_rotation
+    raw_distance, local_normal, geometry = item.shape.intersect(local_origin, local_direction)
+    normal_world = local_normal @ object_rotation.T
+    incidence = np.zeros(ray_grid.slot_count, dtype=np.float64)
+    incidence[geometry] = np.arccos(
+        np.clip(
+            np.abs(np.sum(normal_world[geometry] * -directions_world[geometry], axis=1)),
+            0.0, 1.0,
+        )
+    )
+    probability = np.zeros(ray_grid.slot_count, dtype=np.float64)
+    probability[geometry] = sensor.return_chance(
+        ray_grid.beam_ids[geometry], raw_distance[geometry], incidence[geometry],
+        item.material.return_bias,
+    )
+    uniform = _slot_uniform(
+        world, int(frame.frame_id), np.arange(ray_grid.slot_count, dtype=np.int32),
+        np.full(ray_grid.slot_count, item.object_id, dtype=np.int32), channel=0,
+    )
+    accepted = np.asarray(geometry) & (uniform < probability)
+    official_distance = np.asarray(raw_distance) + ray_grid.official_range_offset_m
+    in_range = (official_distance >= 2.5) & (official_distance <= 50.0)
+    rendered = render_frame(frame, world, ray_grid, sensor)
+    return np.asarray(geometry) & in_range, accepted & in_range, official_distance, rendered
+
+
+def _e39_worker(index: int) -> dict[str, np.ndarray]:
+    sequence, grid, sensor = _GATE1_SEQUENCE, _GATE1_RAY_GRID, _GATE1_SENSOR
+    if sequence is None or grid is None or sensor is None or len(_E38_BANK) != 256:
+        raise RuntimeError("E39 shared-trace fixtures are not initialized")
+    (
+        bank_seed, center, real_semantic, real_instance, support_semantic,
+        control_world, proxy_world,
+    ) = _E38_BANK[index]
+    range_opportunity = np.zeros((3, 5, 5), dtype=np.int32)
+    range_returns = np.zeros_like(range_opportunity)
+    geometry_hits = np.zeros((3, 5), dtype=np.int32)
+    accepted_hits = np.zeros_like(geometry_hits)
+    visible_returns = np.zeros_like(geometry_hits)
+    visible_distance_m = np.zeros((3, 5), dtype=np.float64)
+    empty_slots = np.zeros((2, 5, grid.beam_count), dtype=np.int32)
+    empty_geometry = np.zeros((2, 5, grid.beam_count, 5), dtype=np.int32)
+    empty_accepted = np.zeros_like(empty_geometry)
+    empty_final_new = np.zeros_like(empty_geometry)
+    intensity_source: list[np.ndarray] = []
+    intensity_frame: list[np.ndarray] = []
+    intensity_beam: list[np.ndarray] = []
+    intensity_range_bin: list[np.ndarray] = []
+    intensity_value: list[np.ndarray] = []
+    for frame_offset, frame_id in enumerate(range(center - 2, center + 3)):
+        frame = sequence.source_frame(frame_id)
+        real_geometry, real_return, real_distance = _gate1_real_geometry(
+            frame, real_semantic, real_instance, grid
+        )
+        real_bin = _gate1_range_bin(real_distance)
+        for range_bin in range(5):
+            range_opportunity[0, frame_offset, range_bin] = int(
+                np.count_nonzero(real_geometry & (real_bin == range_bin))
+            )
+            range_returns[0, frame_offset, range_bin] = int(
+                np.count_nonzero(real_return & (real_bin == range_bin))
+            )
+        geometry_hits[0, frame_offset] = int(np.count_nonzero(real_geometry))
+        accepted_hits[0, frame_offset] = geometry_hits[0, frame_offset]
+        visible_returns[0, frame_offset] = int(np.count_nonzero(real_return))
+        visible_distance_m[0, frame_offset] = float(np.median(real_distance[real_return]))
+        real_slots = np.flatnonzero(real_return)
+        intensity_source.append(np.zeros(real_slots.size, dtype=np.uint8))
+        intensity_frame.append(np.full(real_slots.size, frame_id, dtype=np.int16))
+        intensity_beam.append(grid.beam_ids[real_slots].astype(np.int16))
+        intensity_range_bin.append(real_bin[real_slots])
+        intensity_value.append(np.asarray(frame.xyzi[real_slots, 3], dtype=np.float32))
+        native_empty = np.asarray(frame.zero_slot_mask, dtype=np.bool_)
+        for source_index, world in enumerate((control_world, proxy_world), start=1):
+            geometry, accepted, distance, rendered = _gate1_single_object_trace(
+                frame, world, grid, sensor
+            )
+            returned = np.asarray(
+                rendered.normal_control_mask if source_index == 1
+                else rendered.anomaly_proxy_mask
+            )
+            rendered_distance = np.asarray(grid.official_ranges(rendered.source))
+            returned &= (rendered_distance >= 2.5) & (rendered_distance <= 50.0)
+            distance_bin = _gate1_range_bin(distance)
+            returned_bin = _gate1_range_bin(rendered_distance)
+            for range_bin in range(5):
+                range_opportunity[source_index, frame_offset, range_bin] = int(
+                    np.count_nonzero(geometry & (distance_bin == range_bin))
+                )
+                range_returns[source_index, frame_offset, range_bin] = int(
+                    np.count_nonzero(returned & (returned_bin == range_bin))
+                )
+            geometry_hits[source_index, frame_offset] = int(np.count_nonzero(geometry))
+            accepted_hits[source_index, frame_offset] = int(np.count_nonzero(accepted))
+            visible_returns[source_index, frame_offset] = int(np.count_nonzero(returned))
+            if bool(returned.any()):
+                visible_distance_m[source_index, frame_offset] = float(
+                    np.median(rendered_distance[returned])
+                )
+            elif bool(geometry.any()):
+                visible_distance_m[source_index, frame_offset] = float(
+                    np.median(distance[geometry])
+                )
+            else:
+                pose_rotation, lidar_origin = _pose(frame)
+                center_sensor = (
+                    np.asarray(world.objects[0].translation_world_m) - lidar_origin
+                ) @ pose_rotation
+                visible_distance_m[source_index, frame_offset] = float(
+                    np.linalg.norm(center_sensor) + grid.official_range_offset_m
+                )
+            label_index = source_index - 1
+            empty_slots[label_index, frame_offset] = np.bincount(
+                grid.beam_ids[native_empty], minlength=grid.beam_count
+            )
+            for range_bin in range(5):
+                selection = native_empty & (distance_bin == range_bin)
+                empty_geometry[label_index, frame_offset, :, range_bin] = np.bincount(
+                    grid.beam_ids[selection & geometry], minlength=grid.beam_count
+                )
+                empty_accepted[label_index, frame_offset, :, range_bin] = np.bincount(
+                    grid.beam_ids[selection & accepted], minlength=grid.beam_count
+                )
+                empty_final_new[label_index, frame_offset, :, range_bin] = np.bincount(
+                    grid.beam_ids[selection & returned], minlength=grid.beam_count
+                )
+            slots = np.flatnonzero(returned)
+            intensity_source.append(np.full(slots.size, source_index, dtype=np.uint8))
+            intensity_frame.append(np.full(slots.size, frame_id, dtype=np.int16))
+            intensity_beam.append(grid.beam_ids[slots].astype(np.int16))
+            intensity_range_bin.append(returned_bin[slots])
+            intensity_value.append(np.asarray(rendered.xyzi[slots, 3], dtype=np.float32))
+    return {
+        "bank_seed": np.full((3, 5), bank_seed, dtype=np.int64),
+        "source": np.broadcast_to(np.arange(3, dtype=np.uint8)[:, None], (3, 5)).copy(),
+        "frame_id": np.broadcast_to(np.arange(center - 2, center + 3, dtype=np.int16), (3, 5)).copy(),
+        "support_semantic": np.full((3, 5), support_semantic, dtype=np.uint16),
+        "range_opportunity": range_opportunity, "range_return_count": range_returns,
+        "geometry_hits": geometry_hits, "accepted_hits": accepted_hits,
+        "visible_returns": visible_returns, "visible_distance_m": visible_distance_m,
+        "empty_slots": empty_slots, "empty_geometry": empty_geometry,
+        "empty_accepted": empty_accepted, "empty_final_new": empty_final_new,
+        "intensity_source": np.concatenate(intensity_source),
+        "intensity_frame": np.concatenate(intensity_frame),
+        "intensity_beam": np.concatenate(intensity_beam),
+        "intensity_range_bin": np.concatenate(intensity_range_bin),
+        "intensity_value": np.concatenate(intensity_value),
+    }
+
+
+def _load_gate1_bank(path: Path | str) -> tuple[tuple[int, int, int, int, int, WorldSpec, WorldSpec], ...]:
+    with np.load(Path(path).expanduser().resolve(strict=True), allow_pickle=False) as source:
+        metadata = json.loads(str(source["metadata_json"]))
+        if metadata.get("experiment") != "Gate1-candidate-bank-v1" or metadata.get("passed") is not True:
+            raise RenderError("Gate 1 candidate bank is not qualified")
+        return tuple(
+            (
+                int(seed), int(center), int(semantic), int(instance), int(support),
+                WorldSpec.from_dict(json.loads(str(control))),
+                WorldSpec.from_dict(json.loads(str(proxy))),
+            )
+            for seed, center, semantic, instance, support, control, proxy in zip(
+                source["bank_seed"], source["center_frame"], source["real_semantic"],
+                source["real_instance"], source["support_semantic"],
+                source["control_world_json"], source["proxy_world_json"], strict=True,
+            )
+        )
+
+
+def run_e39_qualification(
+    data_root: Path | str, candidate_bank_path: Path | str,
+    calibration_path: Path | str, output_path: Path | str, *, processes: int = 24,
+) -> dict[str, object]:
+    """Generate the shared Gate 1 trace and qualify frozen per-range rates."""
+    if processes != 24:
+        raise RenderError("formal E39 requires exactly 24 processes")
+    try:
+        from .protocol import load_protocol
+        from .scene import LabelMode, STUSequence
+    except ImportError:
+        from protocol import load_protocol  # type: ignore[no-redef]
+        from scene import LabelMode, STUSequence  # type: ignore[no-redef]
+    protocol = load_protocol(Path(__file__).resolve().parents[1] / "protocol.json")
+    sequence = STUSequence.open(
+        data_root, protocol=protocol, partition="train", sequence_id=201,
+        label_mode=LabelMode.REQUIRED,
+    )
+    ray_grid, sensor = load_sensor_calibration(calibration_path)
+    global _GATE1_SEQUENCE, _GATE1_RAY_GRID, _GATE1_SENSOR, _E38_BANK
+    _GATE1_SEQUENCE = sequence
+    _GATE1_RAY_GRID = ray_grid
+    _GATE1_SENSOR = sensor
+    _E38_BANK = _load_gate1_bank(candidate_bank_path)
+    context = mp.get_context("fork")
+    fixed = {
+        "bank_seed", "source", "frame_id", "support_semantic", "range_opportunity",
+        "range_return_count", "geometry_hits", "accepted_hits", "visible_returns",
+        "visible_distance_m", "empty_slots", "empty_geometry", "empty_accepted",
+        "empty_final_new",
+    }
+    runs: list[dict[str, np.ndarray]] = []
+    run_seconds: list[float] = []
+    for _ in range(2):
+        started = time.monotonic()
+        with context.Pool(processes=processes) as workers:
+            records = workers.map(_e39_worker, range(256), chunksize=1)
+        runs.append({
+            name: (
+                np.stack([record[name] for record in records])
+                if name in fixed else np.concatenate([record[name] for record in records])
+            )
+            for name in records[0]
+        })
+        run_seconds.append(time.monotonic() - started)
+    first = runs[0]
+    reproduced = all(np.array_equal(first[name], runs[1][name]) for name in first)
+    opportunity = first["range_opportunity"].sum(axis=(0, 2))
+    returned = first["range_return_count"].sum(axis=(0, 2))
+    rate = np.divide(returned, opportunity, out=np.zeros_like(returned, dtype=np.float64), where=opportunity > 0)
+    conservation_errors = int(np.count_nonzero(first["range_return_count"] > first["range_opportunity"]))
+    observation_groups = np.count_nonzero(first["range_return_count"] > 0, axis=(0, 2))
+    finite_errors = int(
+        np.count_nonzero(~np.isfinite(rate))
+        + np.count_nonzero(~np.isfinite(first["visible_distance_m"]))
+    )
+    first_four_coverage_errors = int(np.count_nonzero(observation_groups[:, :4] == 0))
+    passed = conservation_errors == 0 and finite_errors == 0 and first_four_coverage_errors == 0 and reproduced
+    scientific = {
+        **first, "range_edges_m": _GATE1_RANGE_EDGES,
+        "source_range_opportunity": opportunity,
+        "source_range_return_count": returned,
+        "source_range_return_rate": rate,
+        "source_range_entity_frame_groups": observation_groups,
+    }
+    result = {
+        "experiment": "E39", "passed": passed, "bank_seeds": 256,
+        "entity_frame_groups_per_source": 1280,
+        "range_edges_m": _GATE1_RANGE_EDGES.tolist(),
+        "source_range_opportunity": opportunity.tolist(),
+        "source_range_return_count": returned.tolist(),
+        "source_range_entity_frame_groups": observation_groups.tolist(),
+        "conservation_errors": conservation_errors, "finite_errors": finite_errors,
+        "first_four_coverage_errors": first_four_coverage_errors,
+        "elementwise_reproduced": reproduced, "run_seconds": run_seconds,
+        "processes": processes, "scientific_array_hash": _scientific_array_hash(scientific),
+    }
+    destination = Path(output_path).expanduser().resolve()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_suffix(destination.suffix + ".tmp.npz")
+    np.savez_compressed(
+        temporary, **scientific,
+        metadata_json=np.asarray(json.dumps(result, sort_keys=True, separators=(",", ":"))),
+    )
+    os.replace(temporary, destination)
+    return result
+
+
 def _render_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="AJAE authoritative renderer experiments")
     subcommands = parser.add_subparsers(dest="command", required=True)
@@ -10703,6 +10981,12 @@ def _render_parser() -> argparse.ArgumentParser:
     e38.add_argument("--candidate-bank-output", type=Path, required=True)
     e38.add_argument("--output", type=Path, required=True)
     e38.add_argument("--processes", type=int, default=24)
+    e39 = subcommands.add_parser("qualify-e39")
+    e39.add_argument("--data-root", type=Path, required=True)
+    e39.add_argument("--candidate-bank", type=Path, required=True)
+    e39.add_argument("--calibration", type=Path, required=True)
+    e39.add_argument("--output", type=Path, required=True)
+    e39.add_argument("--processes", type=int, default=24)
     return parser
 
 
@@ -10801,6 +11085,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         result = run_e38_qualification(
             args.data_root, args.e25_artifact, args.calibration,
             args.support_pool_output, args.candidate_bank_output, args.output,
+            processes=args.processes,
+        )
+        print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        return 0 if result["passed"] else 1
+    if args.command == "qualify-e39":
+        result = run_e39_qualification(
+            args.data_root, args.candidate_bank, args.calibration, args.output,
             processes=args.processes,
         )
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
