@@ -2131,7 +2131,7 @@
       }
     },
     "renderer_mechanical_qualification": {
-      "status": "E27-E40 PASS; E28-v1 and E36-v1 FAIL retained; E41 execution frozen",
+      "status": "E27-E41 PASS; E28-v1 and E36-v1 FAIL retained; E42 unlocked",
       "layer_boundaries": {"E27-E28": "direct geometry outputs only", "E29": "return probability and deterministic acceptance decision only", "E30-E31": "accepted returns", "E32-E33": "nearest-return occlusion competition"},
       "E27": {
         "question": "Does the formal geometry path return the correct nearest convex-hull hit, outward finite normal and object ID for active normal-control templates when return rejection is disabled?",
@@ -2541,7 +2541,8 @@
         "artifact": "runs/ajae/e41_empty_to_valid.npz",
         "pass_conditions": ["geometry hits do not exceed native empty opportunities", "return acceptances do not exceed geometry hits", "final new returns do not exceed accepted returns", "all counts are nonnegative", "both labels contain at least one final new return and one probability rejection", "two complete statistic runs are elementwise identical"],
         "post_acceptance_rejection_policy": "reported descriptively; no nonzero requirement because the frozen candidate fixtures contain one inserted object and native-empty slots have no native-return competition",
-        "distribution_difference_policy": "descriptive only until matching and E46"
+        "distribution_difference_policy": "descriptive only until matching and E46",
+        "result": {"passed": true, "source_chain_total": [[24291803, 16037, 16011, 16011], [24291803, 25173, 25136, 25136]], "source_return_rejection": [26, 37], "source_post_acceptance_rejection": [0, 0], "chain_violation_count": [0, 0, 0, 0], "chain_errors": 0, "branch_coverage_errors": 0, "elementwise_reproduced": true, "two_run_total_seconds": 0.025614173006033525, "scientific_array_sha256": "71bbccc62da2254b553bfbaaf8f9864281b9242d956ca88c903e1f90a74f7c8f", "artifact_bytes": 5541, "artifact_sha256": "771e39129087324be9526b6286bd2d2c40194d8c20c6ec8fd0dceb8fdf340c3e", "claim_limit": "E41 establishes empty-slot chain conservation and branch coverage only; source-rate differences remain descriptive until matching and E46."}
       }
     },
     "world_types": {"pure_normal": 0.2, "control_only": 0.2, "mixed": 0.4, "anomaly_only": 0.2},
