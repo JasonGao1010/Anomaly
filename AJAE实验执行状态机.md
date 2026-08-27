@@ -3235,6 +3235,12 @@ E31逐元素核对E28-v2 PASS产物的seed与shape identity并重建原256个sch
 
 实现提交为 `b1543dd7a475097d4e1140a1333e095eec13c527`；`src/render.py`、`src/train.py`和`test_ajae.py` SHA-256分别为 `b25c388221996b1fec4c7461ce660cd07eae29e4d1ee4491c3dda25cd2dd1e65`、`92a3f51f93e26bead6a1d9d92e37af2b5e4df092ffc9716852806b4b67be546b`、`960dc6b3b83a4e95e638a1f0358a3d20c8eb2b51300e5c737f2c49b4b0a3f8dd`；完整回归46项全部通过，用时98.60秒。正式命令为 `python -m src.render qualify-e31 --e28-artifact runs/ajae/e28_v2_anomaly_proxy_hits.npz --calibration runs/ajae/calibration.pt --output runs/ajae/e31_proxy_returns.npz --processes 24`。
 
+**E31 正式结果：PASS（E31关闭，E32解锁）**
+
+两遍24进程运行用时分别为0.221930秒和0.240864秒，全部科学数组逐元素一致。6,144次accepted-return裁决产生6,137个接受和7个拒绝；几何、材质调制概率reference、64位identity uniform reference、accepted mask、接受载荷和拒绝载荷错误均为0。接受强度范围为0.0022857142612338066–1.6308571100234985，raw semantic全部为2，internal object ID全部等于fixture index加1；拒绝项点与强度均为NaN、semantic为0、internal object ID为-1。
+
+科学数组哈希为 `c5ce21593fc66c02a8b71c35becf29ff05178cf2dc1459eea3ce27ffd911228b`。正式产物 `runs/ajae/e31_proxy_returns.npz` 大小146,341字节，SHA-256为 `f7d9f3478644429e2d0393e2f63e6a17fe4b44dc285a8b76f0004f1b23f7e495`。E31 PASS允许的结论限定为：**E28-v2冻结anomaly-proxy几何命中经过与E30相同的正式return/intensity流后，其accepted mask与E29独立reference逐元素一致，接受项形成有限的semantic-2点、强度及正确internal object ID载荷，拒绝项不形成载荷。** native/inserted最近回波竞争仍由E32–E33检验。
+
 ## E32｜插入物遮挡背景
 
 构造 sensor→inserted→native-background 的定向 slot fixture，含小于、等于和大于 `tie_tolerance_m` 的边界。PASS：更近的有效 inserted return 替换 native；被替换原点进入 `occluded_original_mask`；最终每 slot 只有一个点；tie 按冻结 object/native 规则确定；零错误。PASS → E33。

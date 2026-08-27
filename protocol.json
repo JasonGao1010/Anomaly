@@ -2131,7 +2131,7 @@
       }
     },
     "renderer_mechanical_qualification": {
-      "status": "E27 PASS; E28-v1 FAIL retained as protocol implementation defect; E28-v2 PASS; E29 PASS; E30 PASS; E31 design and execution frozen; E32-E37 locked",
+      "status": "E27 PASS; E28-v1 FAIL retained as protocol implementation defect; E28-v2 PASS; E29 PASS; E30 PASS; E31 PASS; E32 unlocked; E33-E37 locked",
       "layer_boundaries": {"E27-E28": "direct geometry outputs only", "E29": "return probability and deterministic acceptance decision only", "E30-E31": "accepted returns", "E32-E33": "nearest-return occlusion competition"},
       "E27": {
         "question": "Does the formal geometry path return the correct nearest convex-hull hit, outward finite normal and object ID for active normal-control templates when return rejection is disabled?",
@@ -2356,7 +2356,28 @@
         "implementation_commit": "b1543dd7a475097d4e1140a1333e095eec13c527",
         "command": "python -m src.render qualify-e31 --e28-artifact runs/ajae/e28_v2_anomaly_proxy_hits.npz --calibration runs/ajae/calibration.pt --output runs/ajae/e31_proxy_returns.npz --processes 24",
         "artifact": "runs/ajae/e31_proxy_returns.npz",
-        "pass_conditions": ["geometry errors=0", "probability reference errors=0", "uniform reference errors=0", "accepted mask errors=0", "accepted payload errors=0", "rejected payload errors=0", "accepted and rejected branches both occur", "two 24-process runs elementwise identical"]
+        "pass_conditions": ["geometry errors=0", "probability reference errors=0", "uniform reference errors=0", "accepted mask errors=0", "accepted payload errors=0", "rejected payload errors=0", "accepted and rejected branches both occur", "two 24-process runs elementwise identical"],
+        "result": {
+          "passed": true,
+          "decisions": 6144,
+          "accepted": 6137,
+          "rejected": 7,
+          "geometry_errors": 0,
+          "probability_errors": 0,
+          "uniform_errors": 0,
+          "accepted_mask_errors": 0,
+          "accepted_payload_errors": 0,
+          "rejected_payload_errors": 0,
+          "accepted_intensity_range": [0.0022857142612338066, 1.6308571100234985],
+          "accepted_semantic": 2,
+          "elementwise_reproduced": true,
+          "run_seconds": [0.22192965100111905, 0.2408638569904724],
+          "scientific_array_sha256": "c5ce21593fc66c02a8b71c35becf29ff05178cf2dc1459eea3ce27ffd911228b",
+          "artifact_bytes": 146341,
+          "artifact_sha256": "f7d9f3478644429e2d0393e2f63e6a17fe4b44dc285a8b76f0004f1b23f7e495",
+          "conclusion": "E28-v2 anomaly-proxy hits follow the E29 accepted mask exactly and accepted hits produce finite semantic-2 payloads with correct internal object IDs while rejected hits produce no payload.",
+          "claim_limit": "E31 does not qualify native/inserted nearest-return competition; E32 is unlocked."
+        }
       }
     },
     "world_types": {"pure_normal": 0.2, "control_only": 0.2, "mixed": 0.4, "anomaly_only": 0.2},
