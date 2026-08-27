@@ -1820,7 +1820,7 @@ $$
 
 ---
 
-# 18. 当前状态（当前工作区：E33 PASS）
+# 18. 当前状态（当前工作区：E34 PASS）
 
 截至当前工作区权威提交，已经完成：
 
@@ -1857,6 +1857,8 @@ E32 已完成正式两遍运行并通过：小于tie和等于tie的fixture均保
 
 E33 已完成正式两遍运行并通过：三个native前景fixture均保留原前景，距离、标签、mask、对象身份和单回波错误均为0。E33关闭，E34解锁。
 
+E34 已完成正式两遍运行并通过：空slot的geometry接受、geometry拒绝和无geometry三类occupancy依次为true、false、false，原空slot intensity payload未制造占用，全部标签、身份和mask错误为0。E34关闭，E35解锁。
+
 当前可成立的局部结论是：
 
 > **schema 7 能合法、确定且高效地产生覆盖冻结几何区域的合成异常代理；这些对象可以从 train/206 的合格支撑池采样，以冻结连续落地规则达到 99% 接触/埋地资格，并能由同一权威放置接口拒绝与 train/206 实际观测非地面回波发生超过 5 cm 深穿透的位置。**
@@ -1871,7 +1873,7 @@ E33 已完成正式两遍运行并通过：三个native前景fixture均保留原
 当前执行节点为：
 
 $$
-\boxed{E31\ \text{PASS};\quad E32\ \text{PASS};\quad E33\ \text{PASS};\quad E34\ \text{UNLOCKED}}
+\boxed{E32\ \text{PASS};\quad E33\ \text{PASS};\quad E34\ \text{PASS};\quad E35\ \text{UNLOCKED}}
 $$
 
 E23与E24-v2已按冻结设计通过，当前顺序进入：
@@ -1880,7 +1882,7 @@ $$
 E23\rightarrow E24\rightarrow E25\rightarrow E26
 $$
 
-E27–E33已按冻结设计关闭；E28-v1 FAIL按实现缺陷保留，当前顺序进入E34。
+E27–E34已按冻结设计关闭；E28-v1 FAIL按实现缺陷保留，当前顺序进入E35。
 
 因此当前整体判断仍是：
 

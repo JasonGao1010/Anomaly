@@ -2131,7 +2131,7 @@
       }
     },
     "renderer_mechanical_qualification": {
-      "status": "E27-E33 PASS; E28-v1 FAIL retained as protocol implementation defect; E34 design and execution frozen; E35-E37 locked",
+      "status": "E27-E34 PASS; E28-v1 FAIL retained as protocol implementation defect; E35 unlocked; E36-E37 locked",
       "layer_boundaries": {"E27-E28": "direct geometry outputs only", "E29": "return probability and deterministic acceptance decision only", "E30-E31": "accepted returns", "E32-E33": "nearest-return occlusion competition"},
       "E27": {
         "question": "Does the formal geometry path return the correct nearest convex-hull hit, outward finite normal and object ID for active normal-control templates when return rejection is disabled?",
@@ -2411,7 +2411,8 @@
         "implementation_commit": "01f5f2aa15dd298495064e0aa5e6bfd0968ff07d",
         "command": "python -m src.render qualify-e34 --output runs/ajae/e34_empty_rays.npz",
         "artifact": "runs/ajae/e34_empty_rays.npz",
-        "pass_conditions": ["occupancy sequence true,false,false", "accepted semantic and object ID correct", "rejected and absent cases retain no return", "empty intensity payload does not create occupancy", "occluded_original_mask false", "two runs elementwise identical"]
+        "pass_conditions": ["occupancy sequence true,false,false", "accepted semantic and object ID correct", "rejected and absent cases retain no return", "empty intensity payload does not create occupancy", "occluded_original_mask false", "two runs elementwise identical"],
+        "result": {"passed": true, "occupancy_sequence": [true, false, false], "occupancy_error": 0, "semantic_error": 0, "object_id_error": 0, "mask_error": 0, "intensity_payload_error": 0, "elementwise_reproduced": true, "scientific_array_sha256": "ec122c01028bb41345f1cecfa5614758287919650783181e92aec81068edf5a6", "artifact_bytes": 1755, "artifact_sha256": "b680519671cd189cf6f3bf241c249b4374051c381de80e8fcded6d8574033512"}
       }
     },
     "world_types": {"pure_normal": 0.2, "control_only": 0.2, "mixed": 0.4, "anomaly_only": 0.2},
