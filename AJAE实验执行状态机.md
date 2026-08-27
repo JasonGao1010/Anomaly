@@ -3421,6 +3421,10 @@ normal-control与anomaly-proxy的“原生空槽机会→几何命中→回波�
 
 读取E37已通过的跨窗口一致性产物和E39已通过的五帧共享trace。重复渲染要求E39两遍完整24进程结果逐元素一致；window身份错误由E37的九个字段摘要、重复请求、world/frame身份、渲染调用、跨world cache、`render_frame` window参数和随机流window读取共同复核。对每个固定实体保存五帧$N_{vis}$、相邻帧差及变化率 $|N_t-N_{t-1}|/\max(N_{t-1},1)$；$V$定义为五帧中$N_{vis}>0$的帧数并按0–5完整计数。PASS要求所有计数和分层定义有效、变化率及分位数有限、两次统计逐元素一致；真实几何导致的出现和消失只报告。实现提交 `7dcd999a49b3312c4ca1030cff9b4e03d09b7cb4`，`src/render.py` SHA-256为 `06f9174a41246ba68e339b4e3f0cde706a5673300d3656291e04de646756b324`；46项完整回归通过。正式命令为 `python -m src.render qualify-e43 --e37-artifact runs/ajae/e37_world_frame_consistency.npz --e39-artifact runs/ajae/e39_per_range_return.npz --output runs/ajae/e43_temporal_visibility.npz`。
 
+**E43 正式结果：PASS（E43关闭，E44解锁）**
+
+window身份错误0，E39两遍重复渲染错误0。real-normal、normal-control、anomaly-proxy的$V=0,\ldots,5$计数分别为[0,0,0,0,0,256]、[0,1,0,1,1,253]和[0,0,0,0,4,252]；出现/消失转移分别为0/0、3/1和1/4。三来源相邻帧变化率Q05/Q25/Q50/Q75/Q95分别为[0.003245,0.025000,0.049613,0.077744,0.156250]、[0,0.026937,0.052065,0.080000,0.187007]和[0,0.023763,0.047666,0.078220,0.250000]。定义与有限性错误均为0，两遍统计逐元素一致，总用时0.000580秒。科学数组哈希 `3173ded49e86c671dcff0d481f93441c9477303a814092c1099b6eabc85d03ef`；产物 `runs/ajae/e43_temporal_visibility.npz` 大小26,415字节，SHA-256为 `61a1b6972db321b7539a29300d5e6b08a723fe22801e308ef6c339d285d811a9`。出现与消失未被解释为window随机闪烁。
+
 ## E44｜遮挡率与匹配可行性
 
 冻结：
