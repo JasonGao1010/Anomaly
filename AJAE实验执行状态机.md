@@ -3183,6 +3183,16 @@ E28-v2完整继承E28-v1的256个fixture、seed、shape identity、beam/column�
 
 对冻结 `SensorCalibration` 检查所有 beam×range×incidence 单元概率有限且位于 $[0,1]$；fallback 来源可追溯。使用固定几何 hit 和大量稳定 slot/object/frame identities，独立复算 `_slot_uniform` 与 `u<p` 决策。
 
+**执行冻结**
+
+输入固定为 `runs/ajae/calibration.pt`。完整枚举128个beam、6个range bin和3个incidence bin，共2,304个正式校准单元。独立从 `opportunity_counts`、`return_counts` 和跨beam同range-incidence pooled counts复算Jeffreys平滑概率；`fallback_mask` 必须逐元素等于 `opportunity_counts<64`，且provenance必须逐字包含 `jeffreys_beta_smoothed_binomial_rate` 与 `cross_beam_same_range_incidence_below_64_opportunities`。
+
+每个校准单元固定使用24组身份，共55,296次中间概率决策。identity $i=0,\ldots,23$ 使用world seed 2,900,000+$i$、source sequence 206、frame 1,000+$i$、object ID $i+1$、slot 0–2,303；material return bias固定取 `MaterialSpec.sample(2900000+i).return_bias`。正式概率调用 `SensorCalibration.return_chance`；独立reference从基础概率执行相同冻结clip、logit、$2\rho$偏置与sigmoid公式。正式均匀数调用 `_slot_uniform`；独立reference单独实现冻结64位identity mixer，不调用 `_slot_uniform`。正式与reference的概率、均匀数和accepted mask必须逐元素一致。
+
+边界分支在相同55,296个固定均匀数上直接检查 `u<0` 全拒绝和 `u<1` 全接受。正式中间概率必须至少出现一个接受和一个拒绝；经验接受率只报告，不设误差曲线门槛。两遍均使用24进程并要求全部科学数组逐元素一致。
+
+实现提交为 `ae7ef0dc23d6e3dc8467a5a72349ccf22102e377`；`src/render.py`、`src/train.py`和`test_ajae.py` SHA-256分别为 `cc83a7d1a05d808e899169f64022e6200be243700608da98b839bd8936f42c39`、`92a3f51f93e26bead6a1d9d92e37af2b5e4df092ffc9716852806b4b67be546b`、`960dc6b3b83a4e95e638a1f0358a3d20c8eb2b51300e5c737f2c49b4b0a3f8dd`；完整回归46项全部通过，用时99.33秒。正式命令为 `python -m src.render qualify-e29 --calibration runs/ajae/calibration.pt --output runs/ajae/e29_return_sampling.npz --processes 24`。
+
 PASS：概率域错误0；实现与独立 reference 的 accepted mask 零差异；$p=0$ 全拒绝、$p=1$ 全接受；中间概率同时出现接受和拒绝；重复和并行执行一致。经验接受率只描述，不要求理想随机误差曲线。PASS → E30。
 
 ## E30｜normal-control 有效回波

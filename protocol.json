@@ -2131,7 +2131,7 @@
       }
     },
     "renderer_mechanical_qualification": {
-      "status": "E27 PASS; E28-v1 FAIL retained as protocol implementation defect; E28-v2 PASS; E28 closed; E29 unlocked; E30-E37 locked",
+      "status": "E27 PASS; E28-v1 FAIL retained as protocol implementation defect; E28-v2 PASS; E28 closed; E29 design and execution frozen; E30-E37 locked",
       "layer_boundaries": {"E27-E28": "direct geometry outputs only", "E29": "return probability and deterministic acceptance decision only", "E30-E31": "accepted returns", "E32-E33": "nearest-return occlusion competition"},
       "E27": {
         "question": "Does the formal geometry path return the correct nearest convex-hull hit, outward finite normal and object ID for active normal-control templates when return rejection is disabled?",
@@ -2256,6 +2256,24 @@
           "conclusion": "Direct ShapeSpec.intersect returns the independently referenced nearest positive geometry hit and finite outward normal for all 256 frozen schema-7 target rays, while all reverse rays miss.",
           "claim_limit": "E28-v2 does not qualify return probability, stochastic acceptance, intensity or nearest-return competition; E29 is unlocked."
         }
+      },
+      "E29": {
+        "question": "Are all formal return probabilities valid and traceable, and does deterministic identity sampling exactly implement u<p across endpoint and intermediate branches?",
+        "input_calibration": "runs/ajae/calibration.pt",
+        "calibration_cells": 2304,
+        "cell_layout": "128 beams x 6 range bins x 3 incidence bins",
+        "identity_trials_per_cell": 24,
+        "decisions": 55296,
+        "identities": "identity i=0..23 uses world seed 2900000+i, source sequence 206, frame 1000+i, object ID i+1 and slots 0..2303",
+        "material_bias": "MaterialSpec.sample(2900000+i).return_bias",
+        "probability_reference": "independent Jeffreys base-rate reconstruction from counts and independent clip-logit-plus-2*bias sigmoid modulation",
+        "fallback_reference": "fallback_mask equals opportunity_counts<64 with exact estimator and cross-beam fallback provenance",
+        "uniform_reference": "independent frozen 64-bit identity mixer without calling _slot_uniform",
+        "endpoint_branches": "the same identities require u<0 all false and u<1 all true",
+        "implementation_commit": "ae7ef0dc23d6e3dc8467a5a72349ccf22102e377",
+        "command": "python -m src.render qualify-e29 --calibration runs/ajae/calibration.pt --output runs/ajae/e29_return_sampling.npz --processes 24",
+        "artifact": "runs/ajae/e29_return_sampling.npz",
+        "pass_conditions": ["base and modulated probability domain errors=0", "base and modulated probability reference errors=0", "uniform reference errors=0", "accepted mask errors=0", "p=0 errors=0", "p=1 errors=0", "intermediate probability has accepted and rejected decisions", "fallback source is traceable", "two 24-process runs elementwise identical"]
       }
     },
     "world_types": {"pure_normal": 0.2, "control_only": 0.2, "mixed": 0.4, "anomaly_only": 0.2},
