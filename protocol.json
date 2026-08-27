@@ -1675,7 +1675,7 @@
           }
         },
         "ground_contact_qualification": {
-          "version": "E22",
+          "version": "E22-v1",
           "status": "FAIL; contact-band sample-count condition not met",
           "preregistration_date": "2026-08-27",
           "source_commit": "0f29d68",
@@ -1758,6 +1758,60 @@
             "conclusion": "E22 fails its frozen conjunction because only 942 placements qualify, below 1014. Substantial burial is not observed; most failures arise from the frozen minimum contact-band sample count.",
             "claim_limit": "This result does not establish systematic physical floating or burial. It establishes that the current placement plus contact-audit protocol does not meet the preregistered qualification rate, so E23 remains locked."
           }
+        },
+        "ground_contact_qualification_v2": {
+          "version": "E22-v2",
+          "status": "EXECUTION FROZEN",
+          "preregistration_date": "2026-08-27",
+          "source_commit": "fbe8c6a",
+          "source_commit_pushed_before_preregistration": true,
+          "amendment_reason": "E22-v1 permanently failed because 80 placements violated the preregistered discrete contact-band sample-count gate. That count depends on finite directional surface sampling and does not directly define suspension or substantial burial. E22-v2 removes only that proxy from qualification while retaining it descriptively.",
+          "question": "After an independently sampled schema-7 object is aligned and translated onto an independently sampled E21-v4 qualified support plane, does the realized continuous geometry touch the plane within 1 cm without substantial surface burial?",
+          "sample": {
+            "placements": 1024,
+            "support_pool_artifact": "runs/ajae/e21_v4_support_pool.npz",
+            "support_pool_sha256": "0e6e7299157f5e9ced0716f6dd14881c66ba1bca0cc9c372550e56f426ea844d",
+            "support_quotas": {"road": 512, "sidewalk": 256, "other_ground": 256},
+            "support_selection": "within each semantic and qualified=true entries only, take the quota by SplitMix64 of packed (frame,slot) XOR the new frozen semantic namespace 0xE2220000+semantic_index, breaking collisions by frame then slot; do not inspect E22-v1 identities or placement outcomes",
+            "shape_seeds": "schema-7 default generator seeds 1000000 through 1001023, disjoint from E22-v1 seeds 0 through 1023; pair in ascending seed order with anchors ordered by semantic then support-selection hash",
+            "yaw": "one uniform value in [-pi,pi) from numpy SeedSequence([shape_seed,2202]); no shape- or support-dependent rejection"
+          },
+          "placement": {
+            "orientation": "unchanged from E22-v1: use the authoritative ground rotation to map local +z to the E21-v4 central-plane normal and then apply the frozen yaw",
+            "horizontal_location": "the selected support anchor world x/y",
+            "contact_point": "the E21-v4 central plane height evaluated at the selected anchor x/y",
+            "standard_continuous_lower_support": "unchanged ShapeSpec.minimum_z_m with xy_resolution=33 and z_steps=129",
+            "translation": "contact_world - h_min_standard * support_normal"
+          },
+          "independent_contact_audit": {
+            "strict_continuous_lower_support": "independently recompute ShapeSpec.minimum_z_m with xy_resolution=65 and z_steps=257 after placement",
+            "d_min_m": "strict continuous lower support transformed to world and evaluated by n_g dot x + b_g",
+            "d_min_absolute_maximum_m": 0.01,
+            "surface_points": 16384,
+            "surface_sampling": "unchanged deterministic Fibonacci unit directions and authoritative ShapeSpec.intersect default steps=96 from 1.05*bound_radius toward the local origin",
+            "buried_depth_m": 0.02,
+            "buried_fraction_maximum": 0.02,
+            "contact_band_absolute_m": 0.02,
+            "contact_count_role": "descriptive only; report the unchanged count but do not use it in PASS or FAIL"
+          },
+          "pass_conditions": {
+            "hard_errors_maximum": 0,
+            "hard_errors": ["shape generation failure", "non-finite shape, plane, yaw, transform, coordinate or metric", "standard or strict continuous lower-support failure", "surface-ray miss or invalid intersection", "invalid geometry after placement"],
+            "qualified_placements_minimum": 1014,
+            "failed_contact_placements_maximum": 10,
+            "placement_qualified": "simultaneously abs(d_min)<=0.01 m and buried_fraction<=0.02; contact_count is excluded",
+            "reproducibility": "two complete independent 24-process runs reproduce support identity, shape identity and payload hash, yaw, alignment transform, both lower-support values, d_min, surface metrics including descriptive contact count, verdicts and scientific hashes elementwise; runtime is excluded"
+          },
+          "descriptive_only": [
+            "contact-band sample count overall and by general/blocky/flat/elongated family, size and primitive count",
+            "coverage and failure rates by support semantic",
+            "E20a-v3-compatible shape family and support-distance summaries where defined for the new seed stream"
+          ],
+          "scope_limit": "E22-v2 checks only continuous contact and substantial burial against the selected support plane. It does not inspect walls, vehicles, other observed non-ground geometry or other inserted entities.",
+          "after_pass": "close E22 and unlock E23 without further contact-sampling study",
+          "failure_route": "retain E22-v2 FAIL and stop; if abs(d_min) dominates, repair the continuous support minimizer or transform; if buried_fraction dominates, reconsider planar support against real local ground geometry",
+          "forbidden": ["rewriting E22-v1 as PASS", "changing schema 7", "changing 0.01 m, 0.02 m, 0.02 fraction or 1014/1024 thresholds", "using contact count as a qualification gate", "increasing surface sampling to recover contact counts", "reusing E22-v1 placement identities", "running E23 before PASS"],
+          "criteria_frozen_before_formal_run": true
         }
       }
     },
