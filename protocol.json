@@ -1059,7 +1059,7 @@
           }
         },
         "E20a-D4": {
-          "status": "EXECUTION FROZEN",
+          "status": "FAIL; absolute stability passed but preregistered contraction qualification failed",
           "question": "Can 2^17/2^19 serve as the standard/strict schema-7 E20a asymmetry budgets when independently checked against a qualification-only 2^21 reference?",
           "role": "independent measurement-protocol qualification only; D4 cannot change E20a-v2, qualify geometry coverage, or modify schema 7",
           "parent_artifacts": {
@@ -1108,12 +1108,48 @@
           "frozen_render_source_sha256": "ccdddb12b96104360deb245dabffcf8449c9e568c70dd7202cdc3e850b5413d9",
           "runner_sha256": "dce6692ff74d1e95627c09a86d7325f7e17075bd4fc3c03338dd71194a2a421a",
           "planned_artifact": "runs/ajae/e20a_d4_asymmetry_protocol.npz",
-          "criteria_frozen_before_formal_run": true
+          "criteria_frozen_before_formal_run": true,
+          "formal_result": {
+            "date": "2026-08-27",
+            "protocol_commit": "90a47af558f5cd20044141739ca0c545f8e0587a",
+            "passed": false,
+            "identity_domain_fixture_and_support_pass": true,
+            "sample_count": 256,
+            "D3_overlap_count": 0,
+            "candidate_stable_abs_A17_A19_le_0.03": 256,
+            "reference_stable_abs_A19_A21_le_0.01": 256,
+            "minimum_inside_A17_A19_A21": [6372, 25365, 101396],
+            "delta_A17_A19_median_q95_maximum": [0.001030974722402822, 0.006290163161781121, 0.020283514059584756],
+            "delta_A19_A21_median_q95_maximum": [0.0007457821679207714, 0.0034847950511063333, 0.00973559699081561],
+            "contraction_ratios_median_q95": [0.72337580322302, 0.5540070998920765],
+            "overall_contraction_pass": false,
+            "all_20_strata_absolute_stability_pass": true,
+            "strata_failing_median_half_contraction": ["1:blocky", "1:general", "2:blocky", "2:general", "3:blocky", "3:elongated", "4:blocky", "4:elongated", "4:general", "5:blocky", "5:elongated", "5:flat", "5:general"],
+            "stratum_protection_pass": false,
+            "A19_A21_threshold_crossing_count": 2,
+            "A21_uncertainty_interval_contains_0.15_count": 4,
+            "fixtures": {
+              "sphere_A17_A19_A21": [0.002740113116721276, 0.0006491546289181734, 0.00012786189863862171],
+              "ellipsoid_A17_A19_A21": [0.0027401131167212388, 0.0006491546289181718, 0.00012763944733041574],
+              "overlap_union_A17_A19_A21": [0.06879904512737599, 0.06581070909174223, 0.06598696872109207],
+              "passed": true
+            },
+            "run_seconds": [19.030373799003428, 21.773450364999007],
+            "object_seconds_min_median_q95_q99_maximum": [0.7397071189989219, 1.4832344760034175, 3.3097024585003965, 4.216624377749025, 5.904196997995314],
+            "scientific_values_elementwise_reproduced": true,
+            "summary_hash": "be980585ad140ec923898cb6f397add807f1a4527e3b650a9dcb8f27c185d060",
+            "artifact_scientific_array_hash_excluding_runtime": "c175408588ffbbf31751f165d9f9d65fc0946638b58259738aa890972dc13120",
+            "runtime_hash_disclosure": "The runner's two printed all-array hashes differ because object_seconds was mistakenly included. The runner separately enforced exact equality for every scientific array and excluded only object_seconds; fixture dictionaries also matched exactly. This reporting defect does not cause or rescue the frozen FAIL.",
+            "artifact": "runs/ajae/e20a_d4_asymmetry_protocol.npz",
+            "artifact_bytes": 39951,
+            "artifact_sha256": "db76298bb04192d9d0c864ebc08ac47cdc970f9e1498f1c9d912067852325d96",
+            "decision": "retain D4 FAIL; do not qualify 2^17/2^19, do not run E20a-v3, do not change schema 7, and stop for a separately approved measurement-protocol redesign"
+          }
         }
       },
       "schema7_blinded_geometry_review": {
         "version": "E20-V1",
-        "status": "LOCKED until a valid E20a coverage experiment PASS; currently requires E20a-D4 PASS followed by E20a-v3 PASS",
+        "status": "LOCKED; E20a-D4 failed and no E20a-v3 measurement protocol is qualified",
         "sample": {"source": "the future passing full E20a qualification set", "hash_deterministic_total": 192, "strata_each": {"flat": 32, "elongated": 32, "blocky": 32, "asymmetric": 32, "near_metric_boundary": 32, "uniform_full_distribution": 32}, "single_multi_balance": "approximately one half each when feasible"},
         "display": ["front", "side", "top", "fixed perspective", "same physical scale", "same camera", "same lighting", "same background", "hide family seed metrics and PASS regions"],
         "reviewers_minimum": 2,
@@ -1124,7 +1160,7 @@
       },
       "schema6_geometry_factor_decoupling": {
         "version": "E20b",
-        "status": "LOCKED until a valid E20a coverage experiment PASS and E20-V1 completes without FAIL",
+        "status": "LOCKED; requires a valid E20a coverage PASS and E20-V1 completion without FAIL",
         "question": "Do primitive count, continuous size, axis ratios, and deformation strength avoid near-deterministic low-capacity dependencies?",
         "planned_primary_evidence": ["conditional coverage within every primitive-count group", "cross-validated logistic regression and shallow decision-tree predictability"],
         "not_primary": "mutual information",
