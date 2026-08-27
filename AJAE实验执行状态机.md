@@ -2757,6 +2757,18 @@ E21 至此正式结束。后续 world generator 的 placement 只能从该合格
 - PASS → **E23**
 - FAIL → **修 vertical alignment/contact rule 后重跑 E22。**
 
+**E22 运行协议冻结（2026-08-27，正式运行前）**
+
+固定1,024次放置，support anchor 只能来自 SHA-256 为 `0e6e7299157f5e9ced0716f6dd14881c66ba1bca0cc9c372550e56f426ea844d` 的 E21-v4 正式池中 `qualified=true` 的条目。road、sidewalk、other-ground 配额分别为512、256、256；各类别按冻结 E22 命名空间 SplitMix64 的 $(frame,slot)$ 身份哈希取最小者，不看放置结果。对象为 schema 7 默认生成器 seed 0–1023，按 seed 升序与按语义、锚点哈希排序的 support 条目配对；yaw 由 `SeedSequence([shape_seed,2201])` 独立采样 $[-\pi,\pi)$。
+
+对象局部 +z 轴通过权威 ground rotation 映射到支撑法向。支撑接触点取 E21-v4 中心平面在 anchor XY 的预测高度。正式放置最低支撑值使用 `ShapeSpec.minimum_z_m(xy_resolution=33,z_steps=129)` 对连续隐式曲面求根，平移为 $t=contact-h_{min}^{standard}n_g$；禁止使用 resolution 31/41 mesh 最低顶点。
+
+独立复核使用更严格的 `minimum_z_m(xy_resolution=65,z_steps=257)`，把严格连续最低支撑点变换到世界坐标后重新计算 $d_{min}=n_g^Tx+b_g$，要求 $|d_{min}|\le0.01$ m。另用16,384个确定性 Fibonacci 球面方向，从 $1.05\,r_{bound}$ 外部沿指向局部原点的方向调用权威 `ShapeSpec.intersect` 默认96步路径，取得连续隐式表面交点；深入平面超过0.02 m的比例须不大于0.02，且 $|n_g^Tx+b_g|\le0.02$ m的接触带点至少8个。
+
+形状生成失败、非有限几何/平面/yaw/变换/坐标/指标、标准或严格最低支撑求解失败、任一表面射线 miss 或无效交点、放置后几何非法均为硬错误，允许数为0。至少1,014/1,024次放置必须同时满足最低距离、埋地比例和接触点数三项，即接触资格失败最多10个。road/sidewalk/other-ground、primitive count 1–5、E20a-v3 小/中/大与最终 blocky/flat/elongated/other、shape family 和距离分层只报告，不新增均衡门槛。
+
+两遍独立24进程完整运行必须逐元素复现 support identity、shape identity与载荷哈希、yaw、旋转/平移、两套最低支撑值、$d_{min}$、埋地比例、接触点数、裁决和科学哈希。E22 只检查对象与自己的支撑平面；墙、车辆等已观测非地面结构留给 E23，其他插入实体留给 E24。PASS 后不增加 E22-V1，直接解锁 E23。
+
 
 ## E23｜已观测正常几何碰撞
 

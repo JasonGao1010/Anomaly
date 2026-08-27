@@ -1673,6 +1673,60 @@
             "conclusion": "train/206 provides a deterministic qualified support-patch pool that exceeds every frozen size, semantic, frame, spatial and distance-coverage requirement; E21 is closed and E22 is unlocked",
             "claim_limit": "No claim is made yet about object floating, burial, collision or final rendered visibility."
           }
+        },
+        "ground_contact_qualification": {
+          "version": "E22",
+          "status": "EXECUTION FROZEN",
+          "preregistration_date": "2026-08-27",
+          "source_commit": "0f29d68",
+          "source_commit_pushed_before_preregistration": true,
+          "question": "After a schema-7 object is aligned and translated onto an E21-v4 qualified support plane, does its realized geometry avoid suspension and substantial burial?",
+          "sample": {
+            "placements": 1024,
+            "support_pool_artifact": "runs/ajae/e21_v4_support_pool.npz",
+            "support_pool_sha256": "0e6e7299157f5e9ced0716f6dd14881c66ba1bca0cc9c372550e56f426ea844d",
+            "support_quotas": {"road": 512, "sidewalk": 256, "other_ground": 256},
+            "support_selection": "within each semantic and qualified=true entries only, take the quota by a frozen E22 semantic-namespace SplitMix64 hash of packed (frame,slot), breaking collisions by frame then slot; do not inspect placement outcomes",
+            "shape_seeds": "schema-7 default generator seeds 0 through 1023, paired in ascending seed order with anchors ordered by semantic then support-selection hash",
+            "yaw": "one uniform value in [-pi,pi) from numpy SeedSequence([shape_seed,2201]); no shape- or support-dependent rejection"
+          },
+          "placement": {
+            "orientation": "use the authoritative ground rotation to map local +z to the E21-v4 central-plane normal and then apply the frozen yaw",
+            "horizontal_location": "the selected support anchor world x/y",
+            "contact_point": "the E21-v4 central plane height evaluated at the selected anchor x/y",
+            "standard_continuous_lower_support": "ShapeSpec.minimum_z_m with xy_resolution=33 and z_steps=129; roots are solved on the continuous implicit surface and no mesh vertex is used",
+            "translation": "contact_world - h_min_standard * support_normal"
+          },
+          "independent_contact_audit": {
+            "strict_continuous_lower_support": "recompute ShapeSpec.minimum_z_m independently with xy_resolution=65 and z_steps=257",
+            "d_min_m": "strict continuous lower support transformed to world and evaluated by n_g dot x + b_g",
+            "d_min_absolute_maximum_m": 0.01,
+            "surface_points": 16384,
+            "surface_sampling": "deterministic Fibonacci unit directions; for each direction start at 1.05*ShapeSpec.bound_radius_m on the enclosing sphere and use authoritative ShapeSpec.intersect default steps=96 toward the local origin; every returned point is an implicit-surface intersection",
+            "buried_depth_m": 0.02,
+            "buried_fraction_maximum": 0.02,
+            "contact_band_absolute_m": 0.02,
+            "contact_count_minimum": 8
+          },
+          "pass_conditions": {
+            "hard_errors_maximum": 0,
+            "hard_errors": ["shape generation failure", "non-finite shape, plane, yaw, transform, coordinate or metric", "standard or strict continuous lower-support failure", "surface-ray miss or invalid intersection", "invalid geometry after placement"],
+            "qualified_placements_minimum": 1014,
+            "failed_contact_placements_maximum": 10,
+            "placement_qualified": "simultaneously abs(d_min)<=0.01 m, buried_fraction<=0.02 and contact_count>=8",
+            "reproducibility": "two complete independent 24-process runs reproduce support identity, shape identity and payload hash, yaw, alignment transform, both lower-support values, d_min, surface metrics, verdicts and scientific hashes elementwise; runtime is excluded"
+          },
+          "descriptive_only": [
+            "coverage and failure rates by support semantic",
+            "primitive count 1-5",
+            "E20a-v3 small/medium/large and final blocky/flat/elongated/other regions",
+            "shape family and support distance"
+          ],
+          "scope_limit": "E22 checks only object contact against its selected support plane. It does not inspect walls, vehicles, other observed non-ground geometry or other inserted entities; those remain E23 and E24.",
+          "after_pass": "close floating/burial qualification and unlock E23 without E22-V1",
+          "failure_route": "retain E22 FAIL and stop to repair the vertical alignment/contact rule before E23",
+          "forbidden": ["mesh minimum vertices", "collision checks", "support-anchor replacement after placement", "threshold changes after results", "E22-V1", "running E23 before PASS"],
+          "criteria_frozen_before_formal_run": true
         }
       }
     },
