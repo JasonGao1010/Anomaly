@@ -3537,7 +3537,9 @@ proposal上限冻结为每目标64个，执行阶梯为4、8、16、32、64；�
 
 实现提交为 `eedfc68068b56344a933496de23c3b869097465c`，执行内存修订为 `235112dd57fd85993772ac0b7c82cae3b216a3f5`、`cc1778f8b78411b2682e217e6199564afac0f8d6` 和 `2508b27c90a6aa1a6d0fdc0e9951f1e69d9f2c19`；最终 `src/render.py` SHA-256为 `cc2cdc86fc5fa0b68040b8726b92c5626f82fab3f885f48a55bf874d7c9a2d7b`。最终修订后46项完整回归通过，用时102.74秒。先导中发现只读renderer mask被原地筛选的实现错误，修复为生成新布尔数组后同一身份硬错误归零；该先导未写正式产物，也不参与资格裁决。
 
-两次24进程和一次8进程正式启动均在第一阶完成和任何阶梯缓存写出前按资源安全规则停止，不构成实验FAIL。第一次因父进程保留678个完整source frames使可用内存降至1.4 GiB；释放该无用途元组后，第二次仍因24个worker各自加载7帧sequence cache而只剩188 MiB物理内存并使用约10 GiB交换。8进程先导与24进程先导的状态计数、完成渲染数、五项caliper违规数、差值中位数和Q95全部逐元素一致；但正式目标顺序使8个worker也填满各自7帧缓存，第三次在可用内存降至787 MiB时停止。最终执行路径在fork前清空父进程sequence cache，并把每个worker的有界缓存从7帧改为当前任务唯一需要的1帧。帧内容、障碍索引、轨迹yaw、target/proposal seed和科学计算均不变。正式执行固定8进程；进程数和缓存大小均不进入科学身份。正式命令为 `python -m src.render qualify-e45a-v2 --data-root /home/jasongao/Data/STU --support-pool runs/ajae/gate1_201_support_pool.npz --e25-artifact runs/ajae/e25_normal_control.npz --calibration runs/ajae/calibration.pt --unit-cache runs/ajae/e45_v2_units_2048.npz --output runs/ajae/e45a_v2_targeted_pairs.npz --processes 8`。
+两次24进程和两次8进程正式启动均在第一阶完成和任何阶梯缓存写出前按资源安全规则停止，不构成实验FAIL。第一次因父进程保留678个完整source frames使可用内存降至1.4 GiB；释放该无用途元组后，第二次仍因24个worker各自加载7帧sequence cache而只剩188 MiB物理内存并使用约10 GiB交换。8进程先导与24进程先导的状态计数、完成渲染数、五项caliper违规数、差值中位数和Q95全部逐元素一致；但正式目标顺序使8个worker填满各自7帧缓存，第三次在可用内存降至787 MiB时停止。清空父进程cache并把worker缓存改为1帧后，第四次8进程仍因大型 `ObservedObstacleIndex` KD-tree碰撞查询产生约1.9 GiB/worker私有写时复制页，在可用内存降至739 MiB时停止。
+
+根据实测父进程约6.7 GiB和每活跃worker约1.9 GiB的增量，正式并发固定为4进程，预计保留约8–9 GiB物理内存安全余量。帧内容、障碍索引、轨迹yaw、target/proposal seed和科学计算均不变；进程数和缓存大小均不进入科学身份。正式命令为 `python -m src.render qualify-e45a-v2 --data-root /home/jasongao/Data/STU --support-pool runs/ajae/gate1_201_support_pool.npz --e25-artifact runs/ajae/e25_normal_control.npz --calibration runs/ajae/calibration.pt --unit-cache runs/ajae/e45_v2_units_2048.npz --output runs/ajae/e45a_v2_targeted_pairs.npz --processes 4`。
 
 状态机在E49前拆为两条依赖：
 
