@@ -1492,7 +1492,7 @@
           }
         },
         "E21-v3": {
-          "status": "EXECUTION FROZEN",
+          "status": "FAIL; overall rate passed but sidewalk and other-ground class minima failed",
           "preregistration_date": "2026-08-27",
           "source_commit": "2dc741f",
           "source_commit_pushed_before_preregistration": true,
@@ -1537,7 +1537,44 @@
           "after_pass": "freeze the support-plane estimator, unlock E22 and do not create E21-v4",
           "failure_route": "retain E21-v3 FAIL permanently, stop random-ground-anchor qualification and redesign placement around a deterministic qualified-support-patch pool; do not tune the radius formula and do not run E22",
           "forbidden": ["train/201", "distance-tier quotas", "distance-bin pass thresholds", "changing 32-point support", "changing residual or stability thresholds", "changing the 80/75-percent pass thresholds", "running E22 before PASS"],
-          "criteria_frozen_before_formal_run": true
+          "criteria_frozen_before_formal_run": true,
+          "formal_result": {
+            "date": "2026-08-27",
+            "protocol_commit": "1b8ab10",
+            "implementation_commit": "ad7f26d",
+            "passed": false,
+            "processes": 24,
+            "anchors": 512,
+            "qualified": 415,
+            "qualified_fraction": 0.810546875,
+            "by_semantic": {
+              "road": {"qualified": 249, "total": 256, "fraction": 0.97265625, "required": 192, "passed": true},
+              "sidewalk": {"qualified": 86, "total": 128, "fraction": 0.671875, "required": 96, "passed": false},
+              "other_ground": {"qualified": 80, "total": 128, "fraction": 0.625, "required": 96, "passed": false}
+            },
+            "by_distance_bin": {
+              "0_10m": {"qualified": 287, "total": 309, "fraction": 0.9288025889967637},
+              "10_20m": {"qualified": 96, "total": 115, "fraction": 0.8347826086956521},
+              "20_30m": {"qualified": 27, "total": 69, "fraction": 0.391304347826087},
+              "30_40m": {"qualified": 5, "total": 17, "fraction": 0.29411764705882354},
+              "40_50m": {"qualified": 0, "total": 2, "fraction": 0.0},
+              "50_120m": {"qualified": 0, "total": 0, "fraction": null}
+            },
+            "central_radius_m": {"minimum": 1.0, "median": 1.0, "q95": 1.4531372427431988, "q99": 1.742534767267066, "maximum": 2.4336215976933877},
+            "rejection_reasons": {"insufficient_support": 34, "residual_q95": 53, "residual_median": 5, "multiscale_normal": 5},
+            "accepted_patch_compliance": true,
+            "analytic_fixtures_passed": true,
+            "elementwise_reproduced": true,
+            "run_seconds": [26.803412156994455, 24.61142781200033],
+            "array_hash_both_runs": "b24e15cc4f19b4937411f4c46c47ff6543d51e78e887b65d10533ef45d5b9b23",
+            "summary_hash_both_runs": "3f44437cc1b7fd2a9bcda81a346a87338bf97fffdf6aea89ecbc46fc075c9009",
+            "runner_sha256": "e2828191d391762721d747b9e64602acaf4ad0361e6786506377eb77f2b911be",
+            "artifact": "runs/ajae/e21_v3_support_plane.npz",
+            "artifact_bytes": 3423768,
+            "artifact_sha256": "a9d80f9866c8df0f23d4866cbdb4c1375ac8dfab4c149001607dfcaae0838620",
+            "failure_classification": "The distance-adaptive amendment removed most support-density failures and passed the overall 80-percent gate, but arbitrary sidewalk and other-ground returns still failed their frozen 75-percent class gates; random ground returns are not an adequate placement-candidate interface.",
+            "decision": "Retain E21-v3 FAIL permanently. End random-ground-anchor qualification, do not tune the radius formula, keep E22 locked, and require an approved qualified-support-patch-pool placement design before continuing."
+          }
         }
       }
     },
