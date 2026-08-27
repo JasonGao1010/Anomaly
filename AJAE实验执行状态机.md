@@ -3213,7 +3213,7 @@ E30按E27 PASS产物的 `template_identity` 逐元素核对并重建原256个nor
 
 正式accepted mask使用 `_slot_uniform(...,channel=0)<SensorCalibration.return_chance`；E29独立reference分别复算材质调制概率和64位identity uniform，再执行 `u<p`。接受项使用正式 `SensorCalibration.sample_intensity` 与独立channel 1 identity uniform生成强度，点坐标必须有限，强度必须有限并位于train/206冻结支持，语义必须等于原normal-control模板的raw semantic。拒绝项的点与强度固定保持NaN、语义保持0，表示没有生成回波载荷。该裁决不读取native range，不执行native/inserted nearest competition，也不裁决遮挡mask。
 
-实现提交为 `688618a2d5a0bd0792a33a5f1f48bab6f00f55a0`；`src/render.py`、`src/train.py`和`test_ajae.py` SHA-256分别为 `739860c039a0b46ac36c93af3eb16426dc565773293e01bb0e5199476c511843`、`92a3f51f93e26bead6a1d9d92e37af2b5e4df092ffc9716852806b4b67be546b`、`960dc6b3b83a4e95e638a1f0358a3d20c8eb2b51300e5c737f2c49b4b0a3f8dd`；完整回归46项全部通过，用时98.72秒。正式命令为 `python -m src.render qualify-e30 --e25-artifact runs/ajae/e25_normal_control.npz --e27-artifact runs/ajae/e27_normal_control_hits.npz --calibration runs/ajae/calibration.pt --output runs/ajae/e30_normal_returns.npz --processes 24`。
+实现提交为 `688618a2d5a0bd0792a33a5f1f48bab6f00f55a0`，输入身份审计修正提交为 `4527fcffa766183a82674c430fa8386cd544c879`；后者将E25选择键改为E27产物实际记录的 `_normal_template_identity` 后逐元素核对，不改变模板顺序或fixture。最终 `src/render.py`、`src/train.py`和`test_ajae.py` SHA-256分别为 `8b35a71a96fd58ff056e8e788f68eb4c6a7324f270f73b2035df6f06f0e7e46c`、`92a3f51f93e26bead6a1d9d92e37af2b5e4df092ffc9716852806b4b67be546b`、`960dc6b3b83a4e95e638a1f0358a3d20c8eb2b51300e5c737f2c49b4b0a3f8dd`；修正后完整回归46项全部通过，用时99.21秒。正式命令为 `python -m src.render qualify-e30 --e25-artifact runs/ajae/e25_normal_control.npz --e27-artifact runs/ajae/e27_normal_control_hits.npz --calibration runs/ajae/calibration.pt --output runs/ajae/e30_normal_returns.npz --processes 24`。
 
 ## E31｜anomaly-proxy 有效回波
 

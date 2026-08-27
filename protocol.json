@@ -2314,6 +2314,7 @@
         "rejected_payload": "point and intensity remain NaN and semantic remains zero",
         "forbidden_in_adjudication": ["native range", "native/inserted nearest competition", "occlusion masks"],
         "implementation_commit": "688618a2d5a0bd0792a33a5f1f48bab6f00f55a0",
+        "identity_audit_fix_commit": "4527fcffa766183a82674c430fa8386cd544c879",
         "command": "python -m src.render qualify-e30 --e25-artifact runs/ajae/e25_normal_control.npz --e27-artifact runs/ajae/e27_normal_control_hits.npz --calibration runs/ajae/calibration.pt --output runs/ajae/e30_normal_returns.npz --processes 24",
         "artifact": "runs/ajae/e30_normal_returns.npz",
         "pass_conditions": ["geometry errors=0", "probability reference errors=0", "uniform reference errors=0", "accepted mask errors=0", "accepted payload errors=0", "rejected payload errors=0", "accepted and rejected branches both occur", "two 24-process runs elementwise identical"]
