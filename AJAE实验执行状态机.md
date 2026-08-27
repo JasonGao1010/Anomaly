@@ -3371,6 +3371,12 @@ real-normal、normal-control、anomaly-proxy各保存1,280个entity-frame groups
 
 固定 bins $[2.5,10),[10,20),[20,30),[30,40),[40,50]$。PASS：三来源计数守恒、有限；每个来源在前四 bins均有entity-frame观测，40–50 m不足只报告；两遍一致。PASS → E40。
 
+### E39正式执行冻结
+
+直接读取E38已冻结且通过的256-seed候选银行，不重建201支撑池或世界。每个seed、来源和五帧保存五个冻结range bins的geometry opportunity与最终return count；real-normal opportunity继续使用同帧实际点凸包首交并包含实际实例槽，control/proxy使用连续geometry hit，全部距离采用规范官方量程。PASS要求逐entity-frame return不超过opportunity，全部聚合率与逐实体帧匹配字段有限，三来源在前四bins分别至少有一个非零return entity-frame group，两遍24进程全部数组逐元素一致；40–50米覆盖只报告。
+
+本次同一权威渲染同时保存E40–E44直接需要的原始trace：逐实体帧geometry/accepted/visible counts与distance、逐返回beam/range/intensity，以及control/proxy逐beam/range的native-empty、geometry、accepted和final-new计数。后续节点只读取这些已冻结原始数组各自裁决，不重新执行相同几何和渲染，也不提前写入后续PASS结论。实现提交 `f09ea627b4203fe738c86761275c16e6786529c1`，`src/render.py` SHA-256为 `4383956d2fd2cfd287ff01d49ddbb83ff01500ce9b74f46772cfb757238eb02a`；46项完整回归通过，用时98.72秒。正式命令为 `python -m src.render qualify-e39 --data-root /home/jasongao/Data/STU --candidate-bank runs/ajae/gate1_candidate_bank_256.npz --calibration runs/ajae/calibration.pt --output runs/ajae/e39_per_range_return.npz --processes 24`。
+
 ## E40｜beam×range 强度审计
 
 报告条件 median、Q05/Q25/Q75/Q95、ECDF距离与 clipping fraction。PASS：所有生成强度有限且在206支持内，分箱身份与计数正确，两遍一致。分布偏差不在本节点直接判来源泄漏。PASS → E41。
