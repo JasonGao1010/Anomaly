@@ -1852,11 +1852,11 @@
             "state_machine": "fbf1a788e6a8ca47e46ee786d44d1e06e4fd7e45bbdbd3b8be35de55770c025c"
           },
           "implementation_identity": {
-            "commit": "78b3d13cb417012375f9192551a5579b14252220",
-            "render_sha256": "3f0402d35ac8fb780fa7089d50268ef9ed93a9b7d5ed8f61c8a1829f613b9c49",
+            "commit": "963d8cb8bac037de6fd6c6a081ed7152535ab02e",
+            "render_sha256": "010f3f8364a66d23bd0980897e4dc4d9febcc42e8c401cd78a291f326f948cb9",
             "train_sha256": "eb30a33b97d7422671aad0fd87f0e3efd2626e4235c9db1bf91ef13566dca53d",
-            "tests_sha256": "adee25a357556e68c2227908d03989a0e812c712711adf67f9d3a871d8ab4936",
-            "regression": "44 passed in 100.58 seconds",
+            "tests_sha256": "3054bdff70848b140417da31213d43daf8a13a8b8f0b804844e1f205013be1cd",
+            "regression": "45 passed in 99.24 seconds",
             "old_dev_boundary": "dev.json remains schema-4/world-v2 historical data and is rejected; it is not migrated"
           },
           "common_pipeline": {
@@ -2017,7 +2017,7 @@
             "template_axis": "deterministic xy PCA principal eigenvector with first nonzero dominant component made positive, pre-rotated to local +x",
             "mixed_fixture": "accepted control index 0 plus first E22-qualified proxy from shape seed stream 5000000+3072*q using E25-mixed-fixture-v1 support stream and the same E22/E23/E24 pair path",
             "pass_conditions": ["active-class precheck passes", "semantic violations=0", "template, scale, pose and transform errors=0", "1024/1024 accepted within 128 proposals", "mixed fixture passes E24", "two runs elementwise identical"],
-            "implementation_commit": "78b3d13cb417012375f9192551a5579b14252220",
+            "implementation_commit": "963d8cb8bac037de6fd6c6a081ed7152535ab02e",
             "command": "python -m src.render qualify-e25 --data-root /home/jasongao/Data/STU --support-pool runs/ajae/e21_v4_support_pool.npz --output runs/ajae/e25_normal_control.npz --processes 24",
             "artifact": "runs/ajae/e25_normal_control.npz"
           },
