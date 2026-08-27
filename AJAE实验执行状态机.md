@@ -1,5 +1,7 @@
 # AJAE 细粒度实验执行状态机
 
+> 优化基线：GitHub `JasonGao1010/Anomaly` 远端 `main`，提交 `44fd6d13798e826b2cac8371de26a7d17707dadc`（E22-v2 PASS）。本版保留 E00–E22 的全部历史记录，统一冻结 E23–E104 的未来设计；尚未写回仓库。
+
 > 依据：`AJAE新主线方案.md`。本文件把主线方案中的不可变约束、四个 Decision Gates、B0–B5 对照、正常运动安全、对象尺度诊断、开发纪律与一次性真实 OOD 验证，拆成可顺序执行的细粒度实验节点。
 
 ## 0. 使用规则
@@ -12,6 +14,14 @@
 6. **PASS 不等于“效果很好”。** 对机械/资格实验，PASS 只表示该局部事实已被验证；对 B1/B3/B4 等科学实验，PASS 才对应相应科学主张。
 7. **所有实验必须保存最小证据包：** command、resolved config、git commit、seed（若有）、输入数据 identity/hash、输出 artifact、日志、判定脚本与最终 PASS/FAIL。
 8. **人工可视化审查同样必须预注册。** 查看图像前必须冻结样本身份与抽样规则、相机与视角、物理尺度、光照、背景、点大小或色标、问题、审查者数量、盲法、随机化和裁决标准；禁止手工挑选案例。原始个人评分、随机化顺序与解盲密钥必须进入证据包。可视化不得覆盖自动实验的 FAIL；因可视化而修改方法后，被查看样本只属于开发证据。正式可视化不得读取 19 条公开真实异常或 51 条隐藏测试；201 只作为开发来源，19 仍须等方法完全冻结后一次性使用。
+9. **整段预设计、逐节点执行。** 每个阶段的全部后续节点必须在该阶段首个正式结果出现前一次性完成设计冻结；前置节点仍按顺序解锁正式执行，但不得再因“下一节点尚未设计”而中断。
+10. **设计冻结与执行冻结分离。** 设计冻结规定科学问题、样本规则、指标、阈值和失败分支；执行冻结只补 runner、源码、配置与输入产物身份。实现身份不得反向改动科学构念。
+11. **硬门只对应直接风险。** 数据泄漏、标签错误、物理/渲染语义、来源泄漏、B1>B0、B3>B1/B2、正常运动安全与真实 OOD 迁移可以阻断；普通相关、理想收敛速率、接触带采样点数、可视化印象和运行时分位数默认只报告。
+12. **预检不得偷看结果。** 阶段预检只允许检查数据身份、可观察支持、类型/schema、资源预算、代码路径和 manifest；不得计算将参与正式 PASS/FAIL 的新结果。预检发现可观察性不足时，只能启用本文件已冻结的分支。
+13. **FAIL 必须分类。** 统一使用 `implementation_defect`、`sample_or_observability_defect`、`qualification_specification_defect`、`scientific_failure` 或 `descriptive_deviation`。只有前三类需要版本化修订；最后一类不得派生阻断支线。
+14. **同一权威实现。** 新资格已经替代旧入口时，正式代码必须删除或停用旧入口，不允许训练世界继续使用一套、审计实验使用另一套。特别是 E23 前必须统一为 E21-v4 support-pool-only placement 和 E22-v2 grounding。
+15. **人工节点默认非阻断。** 除非人类判断本身是不可替代的核心构念且审查资源已真实存在，否则人工面板只作描述性诊断，不得阻塞自动证据链，也不得由 AI 角色冒充独立人类。
+
 
 ## 1. 实验执行架构图
 
@@ -41,7 +51,7 @@ flowchart TB
     E08["E08 槽位总数与空槽规律"]
     E09["E09-v2 128 beam row 身份恢复"]
     E10["E10-v3 可观察 azimuth 连续性与环绕可识别性"]
-    E11["E11-v2 逐帧 ray→slot 映射重建"]
+    E11["E11-v3 自标定规范物理射线身份"]
     E11D1["E11-D1 STU 点坐标来源审计"]
     E11D2["E11-D2 整帧刚体变换可解释性"]
     E11D3["E11-D3 逐 column 时间/去畸变可解释性"]
@@ -80,11 +90,11 @@ flowchart TB
     E20D2B["E20a-D2B 偏心共同见证构造资格"]
     E18BV3["E18b-v4 schema-7 新域求交资格"]
     E19V4["E19-v4 schema-7 生成器资格"]
-    E20AV2["E20a-v2 schema-7 几何覆盖"]
-    E20V1["E20-V1 盲法人工几何审查"]
-    E20B["E20b 几何因素解耦"]
-    E21["E21 局部支撑平面估计"]
-    E22["E22 悬空与埋地检查"]
+    E20AV2["E20a-v3 schema-7 几何覆盖 PASS"]
+    E20V1["E20-V1 已退役人工审查"]
+    E20B["E20b-lite 简单捷径审计"]
+    E21["E21-v4 合格支撑区域池 PASS"]
+    E22["E22-v2 连续落地与埋地 PASS"]
     E23["E23 已观测正常几何碰撞"]
     E24["E24 插入实体相互碰撞"]
     E25["E25 正常控制语义放置"]
@@ -100,15 +110,15 @@ flowchart TB
     E20D2B --> E18BV3
     E18BV3 --> E19V4
     E19V4 --> E20AV2
-    E20AV2 --> E20V1
-    E20V1 --> E20B
+    E20AV2 --> E20B
+    E20AV2 -. "已退役人审" .-> E20V1
     E20B --> E21
     E21 --> E22
     E22 --> E23
     E23 --> E24
     E24 --> E25
     E25 --> E26
-    E26 --> E26V1
+    E26 -. "非阻断描述" .-> E26V1
   end
   subgraph P3["Phase 3｜第一回波反事实渲染机械链"]
     E27["E27 normal-control 几何命中"]
@@ -154,10 +164,9 @@ flowchart TB
     E42 --> E43
     E43 --> E44
     E44 --> E45
-    E45 --> E45V1
-    E45V1 --> E46
-    E46 --> E47
-    E47 --> E48
+    E45 --> E46
+    E45 -. "可选非阻断人审" .-> E45V1
+    E46 --> E48
     E48 --> E49
   end
   subgraph P5["Phase 5｜冻结 STU 点接口与五帧坐标"]
@@ -242,9 +251,10 @@ flowchart TB
     E88["E88 B4 vs B3"]
     E88V1["E88-V1 模型输出可视化诊断"]
     E85 --> E86
+    E85 -. "B4 disabled" .-> E89
     E86 --> E87
     E87 --> E88
-    E88 --> E88V1
+    E88 -. "可选非阻断可视化" .-> E88V1
   end
   subgraph P11["Phase 11｜机制、安全、对象尺度与因果消融"]
     E89["E89 实体内部得分方差"]
@@ -283,7 +293,7 @@ flowchart TB
   end
   E07 --> E08
   E15 --> E16
-  E26V1 --> E27
+  E26 --> E27
   E37 --> E38
   E49 --> E50
   E56 --> E57
@@ -291,7 +301,7 @@ flowchart TB
   E71 --> E72
   E77 --> E78
   E84 --> E85
-  E88V1 --> E89
+  E88 --> E89
   E94 --> E95
   E98 --> E99
   E46 -. "FAIL:定位来源指纹" .-> E47
@@ -2810,2080 +2820,707 @@ E22-v2 在预注册提交 `55b2bc4` 后，使用新支撑位置命名空间、�
 E22-v2 PASS 允许的结论限定为：**schema 7 对象按连续最低支撑落到 E21-v4 合格平面后，在冻结的1 cm连续接触与2 cm/2%明显埋地审计下达到99%资格。** 该结果不说明对象已避开车辆、墙等已观测非地面几何，也不说明多个插入对象之间无碰撞；它们仍分别属于 E23 和 E24。E22 至此关闭，不再研究接触采样，E23 正式解锁。
 
 
-## E23｜已观测正常几何碰撞
+## Phase 2C｜E23–E26 统一 placement/world-builder 冻结
 
-**目的 / 唯一问题**
+E23–E26 的科学设计在 E23 首次正式结果出现前一次性冻结。四个节点仍按顺序执行，但 E23 PASS 后直接进入 E24，E24 PASS 后直接进入 E25，E25 PASS 后直接进入 E26；除非结果改变后续观测对象，否则不再暂停设计下一节点。
 
-防止插入实体与可观测非地面正常表面明显穿插。
+正式实现前必须先完成一次接口统一：
 
-**建模 / 实施**
+1. train/206 placement 只能从 E21-v4 正式 `qualified=true` support pool 采样；
+2. grounding 只能使用 E22-v2 已资格的连续最低支撑路径；
+3. AABB/包围球只作 broad phase，不得作为 E23/E24 最终碰撞真值；
+4. 旧 `place_object` 中“任意 ground 点随机搜索 + 包围球最终碰撞”的正式训练调用必须删除或改为调用同一权威 pipeline；
+5. `WorldSpec` 保存最终不可变实体；另保存 `WorldGenerationReport`，记录 support identity、所有随机流、proposal index 和拒绝原因；
+6. 这次 world-format 升级使旧 schema-4 `dev.json` 继续失效，E57 必须从权威生成源整体重建，禁止迁移旧对象。
 
-对候选实体与已观测非地面点/表面做碰撞近似，保存拒绝样例。
+该接口统一属于 E23–E26 的执行前置，不单独形成新的科学 PASS。
 
-**PASS 条件**
+## E23｜已观测正常几何碰撞拒绝资格
 
-超过容差的穿插被拒绝。
+**唯一问题**
 
-**FAIL 条件**
+候选实体是否会与 train/206 中实际观测到的非地面正常回波发生明确深穿透；权威 placement 是否能拒绝这些候选并稳定找到替代位置？
 
-明显穿插仍可通过。
+**冻结数据与对象**
 
-**状态转移**
+- support 只来自 E21-v4 正式池；road/sidewalk/other-ground 配额为 512/256/256；
+- 使用独立身份前缀 `E23-support-v1`，对象为 schema 7 seed 2,000,000–2,001,023，yaw 流为 `SeedSequence([shape_seed,2301])`；
+- 每个 support patch 对应一个静止世界位置；碰撞审计使用 train/206 全部帧 0–448 变换到世界坐标后的真实回波；
+- 排除 raw semantic 0 和 ground semantics 40/44/48/49/60；其余静态、运动和类别未知的实际观测正常回波均进入 obstacle set；
+- 只在对象紧致连续 AABB 外扩 0.05 m 的 broad phase 内计算 SDF。
 
-- PASS → **E24**
-- FAIL → **修 collision rule 后重跑 E23。**
+**直接碰撞定义**
 
+将 obstacle 点变换到对象局部坐标，计算连续 `signed_distance`。若任一点满足：
 
-## E24｜插入实体相互碰撞
+$$
+F_G(x)<-0.05\ \mathrm m,
+$$
 
-**目的 / 唯一问题**
+当前 placement 即为 `observed_normal_deep_penetration`，必须拒绝。一个点即可拒绝，因为误报只增加重采样，不会错误接受碰撞；不再使用“至少三个点”等噪声代理门槛。
 
-防止 normal-control/proxy 互相大面积穿插。
+**实现 fixture**
 
-**建模 / 实施**
+对球、椭球、schema-7 flat/elongated 各构造表面外 +0.10 m、+0.02 m、内部 -0.02 m、-0.06 m、-0.15 m 的解析点组。SDF 数值与阈值分类错误必须为 0；-0.06/-0.15 m 必须拒绝，+0.02/+0.10/-0.02 m 不得被 5 cm 规则错误标成深穿透。
 
-多实体世界中计算 pairwise overlap/距离，验证拒绝逻辑。
+**正式生成**
 
-**PASS 条件**
-
-明显互穿被拒绝。
-
-**FAIL 条件**
-
-互穿仍进入世界。
-
-**状态转移**
-
-- PASS → **E25**
-- FAIL → **修 pairwise placement 后重跑 E24。**
-
-
-## E25｜正常控制语义放置
-
-**目的 / 唯一问题**
-
-避免 normal-control 因不合理位置反而成为异常。
-
-**建模 / 实施**
-
-按类别检查 car/truck/person/bicycle 等模板的允许 surface 和姿态。
+每个对象按冻结 support 序列依次提议，E22-v2 grounding 后执行碰撞审计；失败则沿同一对象的冻结 proposal 流换下一个 support patch，最多 128 次。禁止修改对象几何来迁就位置。
 
 **PASS 条件**
 
-放置符合方案规定的基本正常语义。
+- fixture 错误数为 0；
+- 1,024/1,024 个对象均在 128 次内得到最终 placement；
+- 最终接受 placement 的 `F_G(x)<-0.05 m` obstacle 点数全部为 0；
+- 生成、变换、SDF、索引和 manifest 硬错误为 0；
+- 两遍 24 进程完整执行逐元素复现 support、shape、yaw、proposal、obstacle identities、最小 SDF、裁决和科学哈希。
 
-**FAIL 条件**
+proposal count 和碰撞拒绝率按 support semantic、距离、尺寸、family、primitive count 报告，但不另设效率门槛；只要 128 次内全部成功就说明训练接口可用。
 
-正常实体经常出现在明显不合理 surface/姿态。
+**FAIL 分支**
 
-**状态转移**
+- accepted placement 仍深穿透：`implementation_defect`，修权威碰撞路径后原样重跑；
+- 大量调用达到 128 次仍无合法位置：`scientific_failure`，说明当前静止全序列放置接口不可用，E24 保持锁定；
+- 不得放宽 5 cm 或改用隐藏表面重建救结果。
 
-- PASS → **E26**
-- FAIL → **修类别 placement constraints 后重跑 E25。**
+PASS → **E24**。
 
+## E24｜插入实体之间的明显互穿拒绝资格
 
-## E26｜完整世界规格确定性
+**唯一问题**
 
-**目的 / 唯一问题**
+顺序构造多实体世界时，后放实体能否避免与已接受实体发生明显体积互穿？
 
-落实“先确定完整反事实世界，再切窗口”。
+**冻结 pair detector**
 
-**建模 / 实施**
+1. 紧致 AABB 外扩 0.05 m 完全不相交时直接安全；
+2. broad phase 相交时，对两对象双向检查：
+   - schema 7 的 primitive centers、shared witnesses 与尺寸证书内部见证；
+   - 每个对象 8,192 个确定性连续表面点；
+   - 每个对象连续 AABB 内 8,192 个确定性 Sobol probes 中所有 $F<0$ 的真实内部点；
+   - normal-control hull 的全部顶点、三角面质心和同样数量的确定性表面点；
+3. 任一上述真实点在另一对象中满足 $F<-0.05$ m，即定义为 `obvious_pair_penetration` 并拒绝后放对象。
 
-固定 Ω={entities,geometry,position,material,seed}，重复序列级构造；比较 world spec hash 和实体参数。
+该检测器只声称排除明显互穿，不声称数学上证明任意微小交集为空。
+
+**资格 fixture**
+
+使用球—球、椭球—椭球、schema7—schema7、hull—schema7 的分离、相切、2 cm 浅重叠、6 cm 和15 cm 深重叠场景。分离/相切/2 cm 不得被 5 cm 规则错误拒绝；6/15 cm 场景必须双向或单向取得深穿透证据。错误数为 0。
+
+**正式世界样本**
+
+- world seed 2,100,000–2,100,511，共 512 个世界；
+- 每世界实体数按冻结流取 2–6；本节点只使用 anomaly-proxy，以免 normal-control 语义问题提前混入；
+- 每个实体先通过 E22 和 E23，再按 pair detector 与先前实体比较；只重采当前实体，前序实体不移动；每实体最多 128 次 proposal。
 
 **PASS 条件**
 
-同一 world spec 可完全复现；窗口生成不重新采样实体。
+- fixture 错误数为 0；
+- 512/512 个世界全部构造成功；
+- 所有最终对象继续满足 E22/E23；
+- 最终所有对象对的 `obvious_pair_penetration` 数为 0；
+- 非有限、对象身份冲突和重试记账错误为 0；
+- 两遍完整运行逐元素一致。
 
-**FAIL 条件**
+proposal 和 pair rejection 只作描述。PASS → **E25**。
 
-窗口级随机重采样或 world spec 不可复现。
+## E25｜normal-control 模板、支撑语义与姿态资格
 
-**状态转移**
+**唯一问题**
 
-- PASS → **E26-V1**
-- FAIL → **修 world-spec/seed 管理后重跑 E26。**
+normal-control 是否来自真实 train/206 正常实例，并且只被放到基本语义允许、已经通过 E22–E24 的位置？
 
+**模板可观察性预检与冻结分支**
 
-## E26-V1｜放置场景人工审查
+从 train/206 全部有实例 ID 的允许类别中确定性提取模板。模板至少有 32 个真实回波并形成有限非退化三维凸包。每类按身份哈希最多保留 64 个；至少 4 个合格模板的类别记为 `active_class`，不足者记为 `inactive_unobservable_class`，不伪造模板。
 
-**目的 / 唯一问题**
+正式 E25 要求 active classes 合计至少 32 个模板且至少有一个 active class。若某个 broad group 完全不可观察，只缩窄 E25 对 normal-control 类别的结论边界，不自动阻断；E45/E48 将继续检验这种实际可观察模板集合是否足以消除来源混杂并避免 proxy 任务近乎饱和。若总模板不足 32，记 `sample_or_observability_defect`，不得临时引入外部 CAD。
 
-在进入射线渲染机械链前，用盲法检查已自动资格的放置结果是否仍有明显悬空、埋地、碰撞或两类实体不同的放置风格。
+**语义策略**
 
-**预注册范围与裁决**
+- vehicle-like：10 car、11 bicycle、15 motorcycle、18 truck、20 other-vehicle，只允许 qualified road=40；
+- person/rider-like：30 person、31 bicyclist、32 motorcyclist，只允许 qualified road=40 或 sidewalk=48；
+- other-ground=49 不作为 normal-control 支撑面；
+- parking=44 在 train/206 中不可观察，不作当前资格主张。
 
-从 206 背景按冻结规则生成 160 个场景裁剪，normal-control 与 anomaly-proxy 各 80，并匹配支撑面、距离、尺寸和遮挡条件；不用 201、19 或 51。审查悬空、明显埋地、穿入已观测墙体/车辆/其他实体、朝向违背支撑面，以及两组放置风格差异。两组硬缺陷率分别须 $\le5\%$，总缺陷率差须 $\le10$ 个百分点。失败回到 E21–E25 中与缺陷直接对应的节点；PASS 才解锁 E27。具体样本 identity、相机、评分表与审查者必须在生成首张正式图前写入证据包。
+**姿态规则**
 
+模板局部水平主轴由确定性 PCA 给出。vehicle、bicycle、motorcycle 和 rider 类将该主轴对齐到 support frame 的 ego-trajectory 世界切向，再施加冻结的小扰动：vehicle/truck/other-vehicle 为 $U[-15^\circ,15^\circ]$，bicycle/motorcycle/rider 为 $U[-30^\circ,30^\circ]$；person 使用 $U[-\pi,\pi)$。PCA 近各向同性时仍使用轨迹切向，不另开结果依赖分支。所有对象的局部 $+z$ 继续对齐支撑法向。
 
+**正式样本**
+
+1,024 个 control placements；按 active broad group 轮转、类内模板身份哈希抽取，可重复使用模板但 support/pose/material 流独立。每个对象最多 128 次 proposal，并依次执行 E22、E23；多实体 fixture 另执行 E24。
+
+**PASS 条件**
+
+- active-class 预检满足；
+- accepted placement 中类别—support 违规数为 0；
+- template identity、缩放 $[0.9,1.1]$、姿态与变换错误数为 0；
+- 1,024/1,024 placements 均在 128 次内成功并通过 E22/E23；
+- 多实体 control/proxy fixture 通过 E24；
+- 两遍完整运行逐元素一致。
+
+本节点不要求人类判断“看起来像真实交通场景”。PASS → **E26**。
+
+## E26｜权威 world builder 与完整世界规格确定性
+
+**唯一问题**
+
+当前正式训练入口是否真正先生成不可变世界，再按任意顺序请求帧和窗口，而不会在 window/dataloader/cache 中重采实体？
+
+**权威接口**
+
+- `WorldSpec` 升级为新的唯一 world format，规范 JSON 排序；
+- 每个 `ObjectSpec` 保存最终 shape/template、material、translation、rotation 和 label；
+- `WorldGenerationReport` 保存 world type/count 随机流、support identity、shape/template/material/yaw seeds、placement proposal、E22/E23/E24/E25 裁决和拒绝计数；
+- `sample_training_world` 必须只调用 E21-v4→E22-v2→E23→E24→E25 这一条 pipeline；旧任意-ground 和包围球最终碰撞路径不得仍被正式入口引用。
+
+**固定审计**
+
+world seed 2,600,000–2,600,255，共 256 个世界，pure-normal/control-only/mixed/anomaly-only 各64。非空世界沿当前冻结数量分布取每类 1–9 个实体；每实体最多128次 placement proposal，每世界最多48次完整 world attempt。
+
+同一 seed 分别执行：
+
+1. 两次从零生成；
+2. JSON round-trip；
+3. 正序、逆序和随机窗口遍历；
+4. cached、uncached 与清空缓存后重建；
+5. 单进程与24进程 manifest 构造。
+
+**PASS 条件**
+
+- 256/256 world 均成功且 world type 正确；
+- world JSON、world hash、entity IDs/counts、几何/模板、support、pose、material 和 report 两次完全一致；
+- 任何窗口遍历都不改变 world spec；
+- 同一 `(world_hash, frame_id, renderer_identity)` 的帧请求 identity 一致；
+- 全部非空实体通过 E22–E25；
+- 正式代码引用审计确认没有第二套 placement/collision 权威路径；
+- 两遍完整运行逐元素一致。
+
+PASS → **E27**，Phase 2 自动关闭。
+
+## E26-V1｜放置场景可视化（非阻断描述）
+
+E26 PASS 后可按身份哈希生成固定场景面板，观察明显悬空、埋地、穿墙或两类放置风格。没有两名独立人类时不得形成正式评分；无论是否执行，本节点都不阻断 E27。任何视觉发现若要修改 E21–E25，必须明确开启新的开发周期并使受影响下游失效。
 
 # Phase 3｜第一回波反事实渲染机械链
 
+## Phase 3 统一冻结
+
+E27–E37 在 E27 首次正式运行前一次性冻结。它们只资格 renderer 的离散/物理语义，不使用分布相似性作主门；真实来源指纹统一留给 E45–E46。
+
 ## E27｜normal-control 几何命中
 
-**目的 / 唯一问题**
+使用 `SensorCalibration.constant(return_probability=1)` 隔离 return rejection。固定256个 ray-centred fixture，覆盖 active control classes、多个 beam/column、2.5–50 m 距离和姿态；每个 fixture 构造穿过凸包严格内部的 target rays 和解析 miss rays。
 
-确认正常控制在当前 ray grid 和 placement 下真的能被射线击中。
-
-**建模 / 实施**
-
-暂时只观察几何交点，不让随机 return rejection 混入；统计 d_insert<∞。
-
-**PASS 条件**
-
-不同距离/尺度下均有合理几何命中。
-
-**FAIL 条件**
-
-控制对象几乎无几何命中。
-
-**状态转移**
-
-- PASS → **E28**
-- FAIL → **回到 E21–E25 或模板几何修正，再重跑 E27。**
-
+PASS：target hit/miss 零错误；最近距离有限为正；交点位于 hull 表面、法向有限外向；object ID 正确；两遍逐元素一致。真实放置对象的 $N_{vis}$ 只报告，分布资格留给 E42。PASS → E28。
 
 ## E28｜anomaly-proxy 几何命中
 
-**目的 / 唯一问题**
+与 E27 相同，固定256个 schema 7 fixture，覆盖 family、primitive count、尺寸与2.5–50 m。target ray 穿过已知严格内部 witness，另有 miss rays。
 
-定位 proxy 无回波是否首先源于几何/放置。
+PASS：零 hit/miss、最近根、法向和 object-ID 错误；两遍一致。PASS → E29。
 
-**建模 / 实施**
+## E29｜return probability 与确定性抽样
 
-与 E27 相同，只看 anomaly proxy 的几何 hit。
+对冻结 `SensorCalibration` 检查所有 beam×range×incidence 单元概率有限且位于 $[0,1]$；fallback 来源可追溯。使用固定几何 hit 和大量稳定 slot/object/frame identities，独立复算 `_slot_uniform` 与 `u<p` 决策。
 
-**PASS 条件**
-
-不同形状/距离/尺度均产生合理 hit。
-
-**FAIL 条件**
-
-proxy 几何命中为零或极端稀少。
-
-**状态转移**
-
-- PASS → **E29**
-- FAIL → **回到 E16–E24 定位几何/放置问题，再重跑 E28。**
-
-
-## E29｜回波概率非退化
-
-**目的 / 唯一问题**
-
-确认 P(return|b,d,μ,ρ) 不会系统性把合法 inserted hit 全部拒绝。
-
-**建模 / 实施**
-
-对 E27/E28 的几何 hit 统计条件 return probability 分布，按 beam/range/incidence/material 分层。
-
-**PASS 条件**
-
-概率不是整体塌缩到 0/1，且与 206 校准支持一致。
-
-**FAIL 条件**
-
-某条件区间系统塌缩导致代理/控制无法返回。
-
-**状态转移**
-
-- PASS → **E30**
-- FAIL → **修 return calibration/material modulation 后重跑 E29。**
-
+PASS：概率域错误0；实现与独立 reference 的 accepted mask 零差异；$p=0$ 全拒绝、$p=1$ 全接受；中间概率同时出现接受和拒绝；重复和并行执行一致。经验接受率只描述，不要求理想随机误差曲线。PASS → E30。
 
 ## E30｜normal-control 有效回波
 
-**目的 / 唯一问题**
-
-验证正常控制通过完整 return model 后能产生真实可见点。
-
-**建模 / 实施**
-
-完整执行几何命中→return sampling→最近回波候选，统计有效 control returns。
-
-**PASS 条件**
-
-覆盖主要距离/遮挡条件且回波非退化。
-
-**FAIL 条件**
-
-control returns 为 0 或高度退化。
-
-**状态转移**
-
-- PASS → **E31**
-- FAIL → **依据 E27/E29 结果修相应环节后重跑 E30。**
-
+在 E27 fixture 上使用正式 return/intensity 流。PASS：有效回波 mask 与 E29 reference 零差异；接受点有限、标签为正常 control 语义、拒绝点不生成回波；至少一个接受和拒绝分支被覆盖；两遍一致。PASS → E31。
 
 ## E31｜anomaly-proxy 有效回波
 
-**目的 / 唯一问题**
-
-验证异常代理真正成为可监督 LiDAR 点。
-
-**建模 / 实施**
-
-完整执行与 normal-control 完全相同的回波流程，统计 proxy returns。
-
-**PASS 条件**
-
-proxy 在覆盖的尺度/距离条件下稳定产生非零有效回波。
-
-**FAIL 条件**
-
-proxy returns=0 或仅极少偶然回波。
-
-**状态转移**
-
-- PASS → **E32**
-- FAIL → **若 E28 PASS 而 E31 FAIL，回 E29；若 E28 FAIL，回 E28。**
-
+与 E30 同一代码路径。PASS：mask 零差异；有效点 finite、raw semantic 2、internal object ID 正确；接受/拒绝分支均覆盖；两遍一致。PASS → E32。
 
 ## E32｜插入物遮挡背景
 
-**目的 / 唯一问题**
-
-验证 inserted return 更近时替换原背景回波。
-
-**建模 / 实施**
-
-构造 sensor→inserted→background 的定向场景。
-
-**PASS 条件**
-
-inserted 有效回波胜出，原背景回波从新世界观测中消失。
-
-**FAIL 条件**
-
-背景仍保留或两者同时错误存在。
-
-**状态转移**
-
-- PASS → **E33**
-- FAIL → **修 nearest-return competition 后重跑 E32。**
-
+构造 sensor→inserted→native-background 的定向 slot fixture，含小于、等于和大于 `tie_tolerance_m` 的边界。PASS：更近的有效 inserted return 替换 native；被替换原点进入 `occluded_original_mask`；最终每 slot 只有一个点；tie 按冻结 object/native 规则确定；零错误。PASS → E33。
 
 ## E33｜正常前景遮挡插入物
 
-**目的 / 唯一问题**
-
-验证 original foreground 更近时 inserted object 被遮挡。
-
-**建模 / 实施**
-
-构造 sensor→normal foreground→inserted 的定向场景。
-
-**PASS 条件**
-
-前景保留，后方插入物不产生最终点。
-
-**FAIL 条件**
-
-后方 inserted 错误穿透前景。
-
-**状态转移**
-
-- PASS → **E34**
-- FAIL → **修遮挡/距离竞争后重跑 E33。**
-
+构造 sensor→native-foreground→inserted。PASS：foreground 保留，后方 inserted 不产生最终点；标签、mask、object ID 和距离竞争零错误。PASS → E34。
 
 ## E34｜空射线新增与拒绝
 
-**目的 / 唯一问题**
+对原空 slot 分别构造 geometry hit+p=1、geometry hit+p=0、无 geometry hit。PASS：三类结果分别为新增 inserted return、保持空、保持空；空 slot 原 intensity payload 不参与 occupancy；零错误。PASS → E35。
 
-验证空射线既能新增合法回波，也能在 return rejection 时保持空。
+## E35｜强度生成机械资格
 
-**建模 / 实施**
+独立复算条件 quantile interpolation、material modulation、noise/hash 与 clipping。PASS：实现与 reference 最大误差不超过 $10^{-6}$；全部 finite 且位于206冻结支持；无未定义单元；边界 clipping fraction完整报告但不成为分布相似性门。PASS → E36。
 
-分别构造 empty+valid inserted return 与 empty+geometry hit but rejected 两种场景。
+## E36｜normal-control/proxy 共用渲染路径
 
-**PASS 条件**
+静态代码审计与运行 trace 同时检查：label 在几何、return、nearest competition、intensity、slot recovery 中不得参与分支，只在最终监督语义赋值时使用。对相同几何/material/pose、只改 label 的 paired fixture，传感器中间数组必须逐元素一致。
 
-前者新增点，后者仍为空。
+PASS：anomaly-only 或 control-only 传感器分支数0；paired trace 中间量零差异；标签赋值正确。PASS → E37。
 
-**FAIL 条件**
+## E37｜world/frame 跨窗口一致性
 
-空射线逻辑与预期不符。
+固定128个 E26 worlds，每个选择多个重叠五帧窗口；以正序、逆序、随机顺序、不同进程数、cached/uncached 请求共享帧。
 
-**状态转移**
+PASS：同一 `(world_hash,frame_id,renderer_identity)` 的 XYZI、occupancy、packed labels、全部 masks、object IDs逐 bit一致；window identity不进入 return RNG；跨世界 cache误命中0。PASS → E38。
 
-- PASS → **E35**
-- FAIL → **修 empty-ray/return acceptance 后重跑 E34。**
+# Phase 4｜Gate 1：传感器一致性、严格匹配与反作弊
 
+## Phase 4 统一候选银行
 
-## E35｜强度支持范围
+在 E38 前冻结 train/201 帧4–681的 support-pool 算法和候选银行。先以256个 paired world seeds生成 real-normal/control/proxy entity-frame units；若 E45 的预定义覆盖不足，按容量阶梯512、1024、2048扩大，选择只读取匹配协变量，禁止读取 E46/E48 分类结果。达到2048仍不足则 E45 scientific FAIL，不得改 caliper。
 
-**目的 / 唯一问题**
+201 support pool 使用 E21-v4 同一算法和实际可观察 ground semantics；normal-control support policy保持 E25。所有 Gate 1 单元限定官方2.5–50 m。
 
-保证 synthetic intensity 落在 206 的实际支持内。
+E38–E44 的 PASS 表示统计有效、覆盖可用于 E45，不等于分布已经相同；普通差异统一交给 E46。
 
-**建模 / 实施**
+## E38｜per-beam 回波率审计
 
-对 control/proxy 的有效回波统计强度 min/max/quantiles，核对裁剪和噪声。
+计算三来源 per-beam opportunity、return count/rate和cluster bootstrap区间；保存每个entity-frame group。PASS：全部有限、计数守恒、real/control/proxy均有非零回波且关键匹配字段可计算、两遍一致。beam差异只描述。PASS → E39。
 
-**PASS 条件**
+## E39｜per-range 回波率审计
 
-无越界、NaN，且不是大面积卡死在边界。
+固定 bins $[2.5,10),[10,20),[20,30),[30,40),[40,50]$。PASS：三来源计数守恒、有限；每个来源在前四 bins均有entity-frame观测，40–50 m不足只报告；两遍一致。PASS → E40。
 
-**FAIL 条件**
+## E40｜beam×range 强度审计
 
-越界或严重边界饱和。
+报告条件 median、Q05/Q25/Q75/Q95、ECDF距离与 clipping fraction。PASS：所有生成强度有限且在206支持内，分箱身份与计数正确，两遍一致。分布偏差不在本节点直接判来源泄漏。PASS → E41。
 
-**状态转移**
+## E41｜empty→valid 审计
 
-- PASS → **E36**
-- FAIL → **修 intensity sampling/clipping 后重跑 E35。**
+报告control/proxy按beam/range的空槽机会、geometry hit、return接受和最终新增。PASS：关系链计数守恒，两个label均实际覆盖新增与拒绝分支，零非法新增，两遍一致。比例差异留给匹配/分类。PASS → E42。
 
+## E42｜单实体 $N_{vis}$ 与匹配可行性
 
-## E36｜normal/proxy 共用渲染路径
-
-**目的 / 唯一问题**
-
-确认标签不会触发不同 ray、遮挡、return、intensity 或 slot recovery 分支。
-
-**建模 / 实施**
-
-对代码路径和运行 trace 做差分审计，除 geometry/label 外其余传感器流程必须相同。
-
-**PASS 条件**
-
-不存在 anomaly-only 传感器处理。
-
-**FAIL 条件**
-
-存在标签专用噪声、稀疏化、强度或回波分支。
-
-**状态转移**
-
-- PASS → **E37**
-- FAIL → **合并到共享 renderer 后重跑 E36。**
-
-
-## E37｜重叠窗口共享帧一致性
-
-**目的 / 唯一问题**
-
-验证同一 world/frame 被不同五帧窗口请求时逐槽完全一致。
-
-**建模 / 实施**
-
-随机至少多个 world，每个取多个重叠窗口，对共享帧做 hash/逐槽比较。
-
-**PASS 条件**
-
-同一 world/frame 结果完全一致。
-
-**FAIL 条件**
-
-共享帧随窗口变化。
-
-**状态转移**
-
-- PASS → **E38**
-- FAIL → **修 world determinism/cache 后回 E26/E07，再重跑 E37。**
-
-
-
-# Phase 4｜Gate 1：传感器一致性与反作弊
-
-## E38｜per-beam 回波率一致性
-
-**目的 / 唯一问题**
-
-检验反事实渲染在 beam 条件下是否接近 206 的基本传感器统计。
-
-**建模 / 实施**
-
-分别统计 real normal、rendered normal-control、proxy 的 per-beam return rate；PASS 容差需首次正式运行前冻结。
-
-**PASS 条件**
-
-normal-control 与真实正常在冻结标准内；proxy 无传感器退化。
-
-**FAIL 条件**
-
-存在系统 beam 指纹。
-
-**状态转移**
-
-- PASS → **E39**
-- FAIL → **修 return calibration 后重跑 E38。**
-
-
-## E39｜per-range 回波率一致性
-
-**目的 / 唯一问题**
-
-检验距离条件下的回波率是否存在来源指纹。
-
-**建模 / 实施**
-
-按固定 range bins 比较三类来源。
-
-**PASS 条件**
-
-normal-control 与真实正常满足冻结标准；proxy 具合理覆盖。
-
-**FAIL 条件**
-
-某些 range bins 系统偏离。
-
-**状态转移**
-
-- PASS → **E40**
-- FAIL → **修 range-conditioned return model 后重跑 E39。**
-
-
-## E40｜beam×range 强度分布
-
-**目的 / 唯一问题**
-
-替代“只看均值”的不足，验证完整强度统计。
-
-**建模 / 实施**
-
-比较 median、quantiles、spread/ECDF 等条件分布，不仅报告 mean。
-
-**PASS 条件**
-
-rendered normal-control 与 real normal 在冻结标准内，proxy 也落在合理支持。
-
-**FAIL 条件**
-
-强度分布可明显暴露来源。
-
-**状态转移**
-
-- PASS → **E41**
-- FAIL → **修 intensity calibration/material modulation 后重跑 E40。**
-
-
-## E41｜empty→valid 比例
-
-**目的 / 唯一问题**
-
-确认插入导致的新回波比例不过度异常。
-
-**建模 / 实施**
-
-统计原空 ray 因 control/proxy 变有效的比例，按距离/beam 分层。
-
-**PASS 条件**
-
-比例在预先冻结的合理范围且 control/proxy 可比较。
-
-**FAIL 条件**
-
-新增回波率极端或标签强相关。
-
-**状态转移**
-
-- PASS → **E42**
-- FAIL → **修 placement/return 规则后重跑 E41。**
-
-
-## E42｜单实体可见点数分布
-
-**目的 / 唯一问题**
-
-防止标签被 N_vis 单独推断。
-
-**建模 / 实施**
-
-比较 control/proxy 的每帧可见点数，并与真实正常实例规模作参考。
-
-**PASS 条件**
-
-两类覆盖重叠且不形成标签决定性捷径。
-
-**FAIL 条件**
-
-proxy/control 可见点数完全分离。
-
-**状态转移**
-
-- PASS → **E43**
-- FAIL → **修尺度/距离/遮挡匹配后重跑 E42。**
-
+按entity-frame保存geometry hits、accepted-before-occlusion、visible returns和距离。冻结 $N_{vis}$ 层为 $[1,8)$、$[8,32)$、$[32,128)$、$[128,+\infty)$。PASS：定义和计数守恒、control/proxy均覆盖至少三个层，候选银行能为E45提供非空匹配；两遍一致。不得以总体均值相近替代E45。PASS → E43。
 
 ## E43｜连续帧可见点数变化
 
-**目的 / 唯一问题**
+同一静止实体逐帧结果必须由world/frame稳定身份决定。PASS：重复渲染零变化；不存在window导致的随机闪烁；$N_{vis}$变化率和V分层有限。真实几何导致的出现/消失只描述。PASS → E44。
 
-验证静止插入实体的时序观测变化符合 LiDAR 几何而非随机闪烁。
+## E44｜遮挡率与匹配可行性
 
-**建模 / 实施**
+冻结：
 
-对固定实体计算 consecutive-frame N_vis variation。
+$$
+O=1-\frac{\text{visible returns}}{\text{accepted returns before occlusion}}.
+$$
 
-**PASS 条件**
-
-变化率稳定、无无因跳变。
-
-**FAIL 条件**
-
-频繁随机出现/消失。
-
-**状态转移**
-
-- PASS → **E44**
-- FAIL → **修 deterministic return/world rendering 后重跑 E43。**
-
-
-## E44｜遮挡率分布
-
-**目的 / 唯一问题**
-
-避免 proxy 和 normal-control 的遮挡程度成为标签捷径。
-
-**建模 / 实施**
-
-比较两类 inserted entities 的 occlusion ratio 分布。
-
-**PASS 条件**
-
-分布具有充分重叠并满足冻结匹配标准。
-
-**FAIL 条件**
-
-遮挡分布高度可分。
-
-**状态转移**
-
-- PASS → **E45**
-- FAIL → **修 placement/matching 后重跑 E44。**
-
+遮挡层冻结为 $[0,0.25)$、$[0.25,0.75)$、$[0.75,1]$。PASS：$O\in[0,1]$、计数守恒；control/proxy均覆盖三个层；候选银行可进入E45；两遍一致。PASS → E45。
 
 ## E45｜三方严格匹配审计集
 
-**目的 / 唯一问题**
+**单位与协变量**
 
-在来源分类前先消除 distance、beam、surface、N_vis、occlusion 等显式混杂。
+单位为entity-frame local patch。real-normal 单元只来自201有实例ID的正常实体；其 support semantic 优先取实体水平凸包外扩0.5 m内的qualified support patch，若为空再取水平距离不超过1.0 m的最近patch，并必须符合E25同类语义策略，否则该实体不进入候选。real-normal 的遮挡代理 $\hat O$ 使用该实例同帧可见点构造的冻结凸包模板：关闭return rejection后计算潜在几何hits，再以实际实例回波数除以潜在hits；rendered control/proxy用完全相同的geometry-hit/visible-return定义。$\hat O$ 只作为匹配协变量，不冒充真实隐藏表面可见率。rendered control/proxy来自独立counterfactual worlds。构造至少1,024个无重复匹配triplets，至少覆盖100个不同center frames。
 
-**建模 / 实施**
+先 exact match：support semantic、range bin和45度sensor-azimuth sector；再固定caliper：
 
-构造 real normal / rendered normal-control / rendered anomaly-proxy 的匹配样本；匹配规则在查看 E46 结果前冻结。
+- range绝对差 $\le2$ m；
+- median beam差 $\le4$；
+- $|\Delta\log(1+N_{vis})|\le0.25$；
+- $|\Delta O|\le0.10$；
+- $|\Delta\log(1+\text{local density})|\le0.25$。
 
-**PASS 条件**
+用确定性greedy matching，tie由单位hash决定。匹配后上述连续协变量的三方pairwise standardized mean difference均须 $\le0.10$。2.5–10、10–20、20–30、30–40 m各至少128 triplets，40–50 m至少32；不足按候选银行阶梯扩大。
 
-三方样本满足预定匹配平衡标准。
+PASS：规模、frame覆盖、range覆盖、caliper、SMD、无重复和复现全部通过。PASS → E46。
 
-**FAIL 条件**
+## E45-V1｜人眼来源盲辨（可选、非阻断）
 
-匹配后仍有明显协变量失衡。
+可从E45固定triplets生成盲面板；没有两名独立人类时不裁决。结果不替代E46，也不阻断E46。
 
-**状态转移**
+## E46｜真实正常 vs rendered normal-control 来源分类
 
-- PASS → **E45-V1**
-- FAIL → **改进匹配策略后重跑 E45。**
+**模型与拆分**
 
+使用标准化L2逻辑回归和深度3、`min_samples_leaf=64`的决策树。输入仅sensor-frame $x,y,z$、intensity、beam、range和local density。每个entity-frame按点身份hash最多取64点，并给每个点权重 $1/n_{unit}$，使每个unit总权重相同；不得让大实体因点数多主导。5-fold按center frame分组，任何frame不得跨fold。报告ROC-AUC、balanced accuracy和每类recall，并以entity-frame为单位做2,000次bootstrap。
 
-## E45-V1｜人眼来源指纹盲辨
+**来源泄漏 FAIL 条件**
 
-**目的 / 唯一问题**
+任一冻结模型满足以下任一项，即认为存在稳定实用来源指纹：
 
-在机器来源分类前，检查人眼能否从严格匹配的局部点云中轻易识别真实正常与渲染 normal-control 的来源。
+$$
+\operatorname{LCB}_{95\%}(\mathrm{AUC})\ge0.65,
+$$
 
-**预注册范围与裁决**
+或
 
-从 E45 的 201 匹配集构造 400 个双选任务，一侧为真实正常局部点云，另一侧为渲染 normal-control；左右随机且不显示来源、标签、seed 或统计量，视角、点大小和 intensity 色标一致。至少两名独立审查者；pooled 正确率须严格低于 $60\%$，任一审查者须不高于 $65\%$，同时报告 exact binomial 或 Wilson 区间。失败直接进入 E47；PASS 解锁 E46。该人工节点只补充证据，不能替代 E46，也不能据“人眼难分”推断机器不存在低层捷径。
+$$
+\operatorname{LCB}_{95\%}(\mathrm{balanced\ accuracy})\ge0.65.
+$$
 
+否则E46 PASS。该标准不要求分类恰好随机，只排除低容量模型稳定达到明显可分水平。
 
-## E46｜真实正常 vs 渲染正常来源分类
+PASS → E48。FAIL → E47。
 
-**目的 / 唯一问题**
+## E47｜来源指纹归因与单一回修
 
-检验 renderer 是否留下低层来源指纹。
+对同一E45匹配集运行：coordinate-only、intensity-only、beam/range-only、density-only，以及逐一去除特征组。模型、fold和bootstrap不变。
 
-**建模 / 实施**
+归因以AUC相对全特征下降和单组LCB为准，输出唯一最早回修节点：E38/39 return calibration、E40 intensity、E41 empty-ray、E42/44 placement/matching或E35实现。若多组同时强泄漏，允许一次性修共享renderer，但修后必须从受影响最早节点顺序重跑至E46。不得训练AJAE。归因完成本身不算Gate1 PASS。
 
-训练低容量分类器，输入仅 x,y,z,intensity,beam,range,local density；按 frame/sequence 分组划分，避免泄漏。
+## E48｜normal-control vs proxy 低层难度
 
-**PASS 条件**
+在E45 matched control/proxy units上使用E46同模型与分组。
 
-分类器不再能“轻易接近饱和”区分来源；具体接受区间必须在本次正式运行前冻结。
+只有任一模型同时满足：
 
-**FAIL 条件**
+$$
+\operatorname{LCB}_{95\%}(\mathrm{AUC})\ge0.95
+$$
 
-仍表现出强来源可分性。
+且
 
-**状态转移**
+$$
+\operatorname{LCB}_{95\%}(\mathrm{balanced\ accuracy})\ge0.90
+$$
 
-- PASS → **E48**
-- FAIL → **进入 E47 做指纹归因；不得训练 AJAE。**
+才判任务近乎饱和并FAIL。否则PASS。这里不设置“必须可学”的下限；代理监督是否有用由B1测试。
 
-
-## E47｜来源指纹归因消融
-
-**目的 / 唯一问题**
-
-在 E46 FAIL 时定位究竟是哪一类低层特征泄漏。
-
-**建模 / 实施**
-
-分别运行 coordinate-only、intensity-only、beam/range-only、density-only 等低容量分类器。
-
-**PASS 条件**
-
-定位主要泄漏来源并形成单一修复目标。
-
-**FAIL 条件**
-
-无法定位或多源同时泄漏。
-
-**状态转移**
-
-- PASS → **E46**
-- FAIL → **修对应的 E38–E44 环节后重新 E45→E46。**
-
-
-## E48｜normal-control vs anomaly-proxy 难度分类
-
-**目的 / 唯一问题**
-
-判断 proxy 是否夸张到低容量单帧模型即可接近饱和。
-
-**建模 / 实施**
-
-在固定 201 synthetic worlds 上训练低容量单帧分类器，使用与 Gate1 规定一致的低层输入。
-
-**PASS 条件**
-
-proxy 具有可学几何差异，但不被极低级统计轻易近饱和分开；判据需预先冻结。
-
-**FAIL 条件**
-
-任务过易，时空模型贡献将不可识别。
-
-**状态转移**
-
-- PASS → **E49**
-- FAIL → **增加 near-normal-boundary/hard proxy 并回到 E20、E42–E48 重新验证。**
-
+PASS → E49。FAIL → 只允许重做hard proxy并使E20、E42–E48相关证据失效。
 
 ## E49｜Gate 1 正式裁决
 
-**目的 / 唯一问题**
-
-只在 E08–E48 通过后判断 renderer 是否有资格生成 AJAE 训练监督。
-
-**建模 / 实施**
-
-汇总 ray、机械正确性、sensor distribution、source leakage、proxy difficulty 的冻结产物。
-
-**PASS 条件**
-
-全部前置实验 PASS。
-
-**FAIL 条件**
-
-任一关键前置未过。
-
-**状态转移**
-
-- PASS → **E50**
-- FAIL → **回到最早 FAIL 节点；B0/B1 及之后实验保持锁定。**
-
-
+汇总E08–E48。PASS要求：规范射线、single-published-return、E23–E37机械语义、E45匹配、E46来源泄漏和E48难度全部通过；可选人工节点不参与合取。PASS → E50。任一关键FAIL回到最早节点，E50以后锁定。
 
 # Phase 5｜冻结 STU 点接口与五帧坐标
 
+## Phase 5 统一冻结
+
+E50–E56只验证官方STU接口和坐标语义，固定使用train/206与201各16个身份哈希帧，加解析fixture；不训练模型。
+
 ## E50｜128D STU 高层特征接口
 
-**目的 / 唯一问题**
-
-确认实际使用 all_features[-1]→point_features_head 的 128D 特征。
-
-**建模 / 实施**
-
-在真实帧 hook/记录官方路径与 shape。
-
-**PASS 条件**
-
-真实输出维度 128，来源层与主线一致。
-
-**FAIL 条件**
-
-取错层、维度错误或仅 toy tensor。
-
-**状态转移**
-
-- PASS → **E51**
-- FAIL → **修 STU adapter 后重跑 E50。**
-
+在32个真实帧hook官方`all_features[-1]→point_features_head`。PASS：每个非空帧输出`[V,128]` finite；官方source/checkpoint hash正确；eval且无grad；两遍一致。PASS → E51。
 
 ## E51｜稀疏体素→原始点逆映射
 
-**目的 / 唯一问题**
-
-确认 π_f(p) 能覆盖每个原始有效回波点。
-
-**建模 / 实施**
-
-在真实帧核对 inverse map 完整率、索引范围、重复体素情况。
-
-**PASS 条件**
-
-所有有效 raw points 都有合法体素映射。
-
-**FAIL 条件**
-
-存在 unmapped/错位点。
-
-**状态转移**
-
-- PASS → **E52**
-- FAIL → **修 inverse map 后重跑 E51。**
-
+PASS：全部有效raw returns均有范围内inverse row；恢复点数100%；无效slot不进入；独立重算量化坐标与inverse map零差异；两遍一致。PASS → E52。
 
 ## E52｜共享体素下的原始点身份
 
-**目的 / 唯一问题**
-
-验证多个 raw points 共享 STU voxel feature 时仍保留独立坐标、intensity、ray identity 和最终预测位置。
-
-**建模 / 实施**
-
-构造/查找真实 shared-voxel case 做逐点检查。
-
-**PASS 条件**
-
-共享 feature 不导致 raw point identity 合并。
-
-**FAIL 条件**
-
-原始点身份丢失。
-
-**状态转移**
-
-- PASS → **E53**
-- FAIL → **修 raw-point interface 后重跑 E52。**
-
+使用真实shared-voxel cases和合成反例。PASS：共享128D feature但每个raw point保留独立frame/ray、XYZ、intensity、label和最终logit位置；无身份合并；两遍一致。PASS → E53。
 
 ## E53｜官方 query assignment
 
-**目的 / 唯一问题**
+独立复算softmax class、sigmoid mask、最小index argmax $q^*$。PASS：query identity、19D evidence、assignment reliability和no-object索引零差异；tie fixture正确；两遍一致。PASS → E54。
 
-确认语义证据采用 softmax query class、sigmoid mask 和 q*(v) 最强官方分配逻辑。
+## E54｜19D证据与可靠性
 
-**建模 / 实施**
+逐体素和逐点独立复算。PASS：数值误差$\le10^{-7}$、广播和inverse map正确、finite/no-grad；两遍一致。PASS → E55。
 
-用真实 STU query/mask 输出复算 q*，检查 19 normal classes 和确定性 tie-break。
+## E55｜AJAE真实输入张量
 
-**PASS 条件**
-
-实现与公式一致，tie 可复现。
-
-**FAIL 条件**
-
-仍使用所有 query 未控制求和或分配不一致。
-
-**状态转移**
-
-- PASS → **E54**
-- FAIL → **修 assigned_stu_evidence 后重跑 E53。**
-
-
-## E54｜19D 语义证据与可靠性
-
-**目的 / 唯一问题**
-
-确认 e_normal、r_assign、r_noobj 的维度与数值定义正确。
-
-**建模 / 实施**
-
-逐体素/逐 raw point 对照手算或独立实现。
-
-**PASS 条件**
-
-19D evidence、assignment reliability、no-object probability 全部一致。
-
-**FAIL 条件**
-
-任一量定义/广播错误。
-
-**状态转移**
-
-- PASS → **E55**
-- FAIL → **修证据计算后重跑 E54。**
-
-
-## E55｜AJAE 真实输入张量
-
-**目的 / 唯一问题**
-
-确认每个 raw point 实际接收 128+19+1+1+1，再加中心坐标和 q 编码。
-
-**建模 / 实施**
-
-记录真实五帧输入 tensor schema、shape、字段统计，检查没有 query token/entropy/energy/MSP。
-
-**PASS 条件**
-
-字段与主线完全一致。
-
-**FAIL 条件**
-
-多/少输入字段或顺序/维度错误。
-
-**状态转移**
-
-- PASS → **E56**
-- FAIL → **修 input adapter 后重跑 E55。**
-
+基础点字段固定为128+19+1+1+1=150维，再独立加入中心坐标和$q$编码。PASS：真实五帧schema、顺序、dtype、point identity正确；无query token、entropy、energy、MSP、instance ID、moving label或generator family；两遍一致。PASS → E56。
 
 ## E56｜中心坐标对齐
 
-**目的 / 唯一问题**
+解析刚体fixture要求坐标误差$<10^{-9}$ m。真实五帧分别报告静态背景对齐前后最近邻残差，要求对齐后的median与Q95均严格改善；moving-normal点仍保留非零相对位移，不做实例级抹平。矩阵方向、frame IDs、finite和两遍复现必须通过。PASS → E57。
 
-确认 x^(t)=T_{S_t←W}T_{W←S_k}x 的方向正确，且 moving object 不被实例级对齐掉。
+# Phase 6｜固定201开发试验台、评价器与全部科学判据
 
-**建模 / 实施**
+## Phase 6 候选银行与一次选择
 
-先做方向可判别的 synthetic rigid transform，再在真实静态背景检查跨帧重合误差并观察 moving object 仍保留位移。
+E57–E63在E57前统一冻结。201世界只生成一次候选银行，容量阶梯128/256/512/1024；用预定义难度量做确定性greedy set-cover。不得逐节点手工替换世界，也不得读取模型分数。
 
-**PASS 条件**
+## E57｜24条 in-generator development worlds冻结
 
-中心帧近似恒等、静态背景对齐、运动目标保留相对运动。
+从201候选银行选择24条mixed worlds。每条world spec、generation report、五帧diagnostics和hash固定。候选银行达到1024仍无法满足E59/E60覆盖则E57 FAIL；不得临时移动bins。PASS → E58。
 
-**FAIL 条件**
+## E58｜6条 held-out诊断世界冻结
 
-矩阵方向错、静态背景不重合或运动被错误抹平。
+使用正式训练从不采样的held-out torus机制，确定性选择6条。代码层禁止其进入训练、checkpoint/threshold选择和PASS统计；只作诊断。身份和隔离检查零错误。PASS → E59。
 
-**状态转移**
+## E59｜开发世界 $N_{vis}/O/d$ 覆盖
 
-- PASS → **E57**
-- FAIL → **修 pose transform 后重跑 E56。**
+冻结边际bins：
 
+- $d$：$[2.5,10),[10,20),[20,30),[30,50]$ m；
+- $N_{vis}$：$[1,8),[8,32),[32,128),[128,+\infty)$；
+- $O$：$[0,0.25),[0.25,0.50),[0.50,0.75),[0.75,1]$。
 
+24条worlds中每个边际bin对control和proxy各至少32个entity-window records；单位身份唯一、指标有限。PASS → E60。
 
-# Phase 6｜固定 201 开发试验台与评价器
+## E60｜开发世界 $V=1..5$ 覆盖
 
-## E57｜24 条 in-generator 开发世界冻结
+control和proxy在每个$V=1,2,3,4,5$层各至少24个entity-window records；同一entity可在不同窗口出现，但world/entity/window identity必须保留，统计时不冒充独立对象。PASS → E61。
 
-**目的 / 唯一问题**
+## E61｜pure-normal与moving-normal安全集
 
-建立唯一用于模型/超参选择的 201 synthetic development worlds。
-
-**建模 / 实施**
-
-生成 world spec manifest、hash、seed、背景序列和实体规格；24 条都同时含 normal-control 与 proxy。
-
-**PASS 条件**
-
-24 条身份固定、可复现、进入版本控制。
-
-**FAIL 条件**
-
-数量、内容或身份仍会变化。
-
-**状态转移**
-
-- PASS → **E58**
-- FAIL → **重新定义并冻结后重跑 E57。**
-
-
-## E58｜6 条 held-out 诊断世界冻结
-
-**目的 / 唯一问题**
-
-建立只做机制诊断、绝不参与选择的 held-out worlds。
-
-**建模 / 实施**
-
-固定 6 条使用训练时完全未见的程序化机制，并在代码层阻止其进入 selection。
-
-**PASS 条件**
-
-held-out mechanism 与训练 generator 隔离，使用规则写入协议。
-
-**FAIL 条件**
-
-训练阶段可能采样到 held-out mechanism 或结果可参与选择。
-
-**状态转移**
-
-- PASS → **E59**
-- FAIL → **修 generator split/selection guard 后重跑 E58。**
-
-
-## E59｜开发世界 N_vis / O / d 覆盖
-
-**目的 / 唯一问题**
-
-保证 24 条世界覆盖可见点数、遮挡和距离难度，而不是单一简单条件。
-
-**建模 / 实施**
-
-按预先冻结 bins 统计三维覆盖；不足则只重新定义 201 synthetic worlds，不训练模型。
-
-**PASS 条件**
-
-各难度层达到冻结的最小覆盖标准。
-
-**FAIL 条件**
-
-某些关键层级缺失。
-
-**状态转移**
-
-- PASS → **E60**
-- FAIL → **补充/替换固定世界后重跑 E59。**
-
-
-## E60｜开发世界 V=1..5 覆盖
-
-**目的 / 唯一问题**
-
-保证后续能检验多帧可见证据与性能关系。
-
-**建模 / 实施**
-
-统计每个 entity 的 V；分别核对 V=1,2,3,4,5。
-
-**PASS 条件**
-
-五个层级均达到预先冻结的最小样本标准。
-
-**FAIL 条件**
-
-任一层级缺失或近乎空。
-
-**状态转移**
-
-- PASS → **E61**
-- FAIL → **重新放置/选择固定世界后重跑 E60。**
-
-
-## E61｜pure-normal 与 moving-normal 开发子集
-
-**目的 / 唯一问题**
-
-建立正常泛化与运动安全检查的固定数据。
-
-**建模 / 实施**
-
-冻结 pure-normal 201 和 moving car/person/bicycle 等 diagnostic subset；这些标签不进入模型输入。
-
-**PASS 条件**
-
-子集身份、定义和 hash 固定。
-
-**FAIL 条件**
-
-子集定义可变或 moving label 泄漏到训练输入。
-
-**状态转移**
-
-- PASS → **E62**
-- FAIL → **修 subset/loader 后重跑 E61。**
-
+pure-normal使用201帧4–681全部有效范围点；moving subset固定raw moving semantics 252–259，并保存static-normal匹配对照。标签只用于评价，不进入输入。身份、count、hash与访问隔离PASS。PASS → E62。
 
 ## E62｜自研 evaluator 与官方 evaluator 一致性
 
-**目的 / 唯一问题**
+使用解析prediction fixtures和一份固定真实prediction，同时运行自研/官方AP、AUROC、FPR95。过滤2.5–50 m、ignore和每帧异常点<5规则逐点一致；AP/AUROC/FPR95绝对差$\le10^{-10}$，有效点/帧计数完全一致。PASS → E63。
 
-确保 AP/AUROC/FPR95、2.5–50m、ignore、每帧异常点<5规则一致。
+## E63｜训练、选择、统计和安全规则一次冻结
 
-**建模 / 实施**
+以下内容在任何B0/B1结果前冻结，后续B1/B2/B3不得单独修改。
 
-对同一固定 prediction 文件同时跑自研和 STU 官方 evaluator，比较逐帧/pooled 结果。
+**训练预算**
 
-**PASS 条件**
+- seeds：0、1、2；
+- AdamW，learning rate $10^{-4}$，weight decay $10^{-4}$；
+- micro-batch 1，gradient accumulation 8；
+- 每seed最多40个完整206 worlds；每5个world评价一次；patience 4；
+- world type比例：pure-normal/control-only/mixed/anomaly-only = 0.20/0.20/0.40/0.20；
+- B1/B2/B3使用相同预算、201和selection rule。
 
-指标在冻结数值容差内一致。
+**checkpoint选择**
 
-**FAIL 条件**
+最大化24 worlds mean AP；差值$<0.001$视为并列，依次选择较低FPR95、较低pure-normal cross-fit FPR、较早checkpoint。held-out 6不得参与。
 
-定义、过滤或累计逻辑不一致。
+**统计**
 
-**状态转移**
+对seed与world做5,000次层级paired bootstrap。方向一致要求至少2/3 seed的mean AP差为正。
 
-- PASS → **E63**
-- FAIL → **修 evaluator 后重跑 E62。**
+**Gate 2 superiority**
 
+B1 vs B0同时要求：mean AP增益$\ge0.02$、bootstrap 95%下界$>0$、至少2/3 seed方向为正。
 
-## E63｜开发决策规则冻结
+**Gate 3 superiority**
 
-**目的 / 唯一问题**
+B3 vs B1和B3 vs B2分别要求：mean AP增益$\ge0.01$、95%下界$>0$、至少2/3 seed方向为正。
 
-防止看到 B1/B3 结果后再改 checkpoint、PASS 阈值或安全判据。
+**安全阈值**
 
-**建模 / 实施**
+在24 worlds做固定两折cross-fit：一折选择达到95% proxy TPR的点阈值，另一折评价FPR，再交换。相对比较模型在pure-normal、rendered normal-control、moving-normal和FPR95上的绝对恶化均不得超过0.03。
 
-在首次正式 B0/B1 前冻结：checkpoint selection、B1>B0 判定、normal safety 容忍、三 seed 稳定性规则；具体数值若主线未给出必须现在预注册。
+**B4额外贡献**
 
-**PASS 条件**
+B4 vs B3只有在mean AP增益$\ge0.005$、95%下界$>0$且全部安全恶化$\le0.03$时受支持；否则fusion unsupported，但B3可继续。
 
-规则已写入协议并 hash 固定。
+**Gate 4真实迁移**
 
-**FAIL 条件**
+最终模型相对B1的19-sequence mean AP增益$\ge0.01$、相对B0$\ge0.02$；两项sequence bootstrap下界均$>0$，至少12/19序列相对B1方向为正，安全恶化$\le0.03$。
 
-任一关键判据仍是 null/事后决定。
+PASS表示所有规则和config进入protocol并机器可加载。PASS → E64。
 
-**状态转移**
+# Phase 7｜AJAE模型机械单元资格
 
-- PASS → **E64**
-- FAIL → **补齐预注册判据后重跑 E63。**
-
-
-
-# Phase 7｜AJAE 模型机械单元资格
+E64–E71在首次执行前一次冻结，均为零容忍实现测试；不因模型效果修改。
 
 ## E64｜时间身份体素隔离
 
-**目的 / 唯一问题**
+构造相同XYZ、不同$q$及边界voxel样例，逐层检查key。PASS：L1–L3 key均含$q$；跨$q$无pool merge；同$q$正确合并；确定性。PASS → E65。
 
-验证 voxel key 含 q，不同时间位置不会在 pooling 时直接合并。
+## E65｜mean-max池化数值
 
-**建模 / 实施**
-
-构造相同 xyz、不同 q 的点并逐层检查 voxel identity。
-
-**PASS 条件**
-
-L1/L2/L3 均保持独立 temporal identity。
-
-**FAIL 条件**
-
-不同 q 被合并。
-
-**状态转移**
-
-- PASS → **E65**
-- FAIL → **修 voxel key 后重跑 E64。**
-
-
-## E65｜mean-max 池化数值
-
-**目的 / 唯一问题**
-
-验证每个体素确实同时使用 mean 与 max 并学习融合。
-
-**建模 / 实施**
-
-用可手算小样本核对 mean、max、concat、linear 输入。
-
-**PASS 条件**
-
-数值与定义一致。
-
-**FAIL 条件**
-
-退化为 mean-only/max-only 或聚合错误。
-
-**状态转移**
-
-- PASS → **E66**
-- FAIL → **修 VoxelPool 后重跑 E65。**
-
+手算含负值、重复值、单点voxel样例。PASS：mean/max/concat/linear输入逐元素一致，gradient finite；没有退化为单一路径。PASS → E66。
 
 ## E66｜按时间差分层邻域
 
-**目的 / 唯一问题**
+构造同帧邻居占满与跨帧稀疏反例。PASS：每个$\delta$独立radius/K，其他$\delta$不能抢位；radius外不补点；tie按point identity；空候选合法。PASS → E67。
 
-验证 δ∈{-2,-1,0,+1,+2} 各自独立 radius/K，不共同竞争 global K。
+## E67｜空跨帧分支与gate
 
-**建模 / 实施**
-
-构造同帧邻居很多、跨帧邻居稀少的反例；逐 δ 检查候选、radius cutoff、K 上限。
-
-**PASS 条件**
-
-无跨 δ 抢占、无远点补 K、空候选允许为空。
-
-**FAIL 条件**
-
-任一分支被其他时间点挤占或补远点。
-
-**状态转移**
-
-- PASS → **E67**
-- FAIL → **修 neighborhood builder 后重跑 E66。**
-
-
-## E67｜空跨帧分支与 gate
-
-**目的 / 唯一问题**
-
-验证空 temporal neighborhood 时 m=0 且 g=0。
-
-**建模 / 实施**
-
-构造无跨帧邻居样例，直接读取 message/gate/output。
-
-**PASS 条件**
-
-message=0、gate=0、输出 finite。
-
-**FAIL 条件**
-
-空分支仍产生非零跨帧贡献。
-
-**状态转移**
-
-- PASS → **E68**
-- FAIL → **修 gate/empty handling 后重跑 E67。**
-
+PASS：空邻域$message=0$、gate=0、无NaN；非空gate位于$[0,1]$；batch/单样例一致。PASS → E68。
 
 ## E68｜同帧残差生存路径
 
-**目的 / 唯一问题**
+关闭全部cross-frame branches，独立复算$h+F(m_0)$。PASS：same-frame message和residual仍存在，输出零差异；cross-frame梯度为0。PASS → E69。
 
-保证即使所有跨帧 gate 关闭，模型仍保留 same-frame evidence。
+## E69｜同帧3-NN上采样
 
-**建模 / 实施**
+其他$q$父点更近的fixture。PASS：只选same$q$；不足3点按冻结重复/可用规则；inverse-distance权重finite且和为1；数值零差异。PASS → E70。
 
-将所有 cross-frame branch 人工置空，比较 block 输出是否包含 δ=0 分支和 residual。
+## E70｜balanced BCE空类别安全
 
-**PASS 条件**
+纯负、纯正、混合和range/ignore过滤fixture。PASS：手算零差异、finite；混合各占1/2；评价的<5 anomaly规则不进入训练。PASS → E71。
 
-同帧路径始终存在且不受跨帧 gate 抑制。
+## E71｜概率融合公式
 
-**FAIL 条件**
-
-同帧信息被 gate 一起关闭。
-
-**状态转移**
-
-- PASS → **E69**
-- FAIL → **修 residual block 后重跑 E68。**
-
-
-## E69｜同帧 3-NN 上采样
-
-**目的 / 唯一问题**
-
-验证 decoder 只在同一 q 搜索三个父节点。
-
-**建模 / 实施**
-
-构造其他 q 的 coarse node 更近的反例，检查选中的 parent IDs 和 inverse-distance 权重。
-
-**PASS 条件**
-
-只选 same-frame parent，权重归一化且 finite。
-
-**FAIL 条件**
-
-跨 q parent 被选中或权重异常。
-
-**状态转移**
-
-- PASS → **E70**
-- FAIL → **修 decoder 后重跑 E69。**
-
-
-## E70｜平衡 BCE 空类别安全
-
-**目的 / 唯一问题**
-
-确认 zero-positive 与 zero-negative 窗口都能合法训练。
-
-**建模 / 实施**
-
-分别构造纯负、纯正、正负都有的 logits/labels，核对 balanced BCE 手算结果。
-
-**PASS 条件**
-
-三种情况 finite，正负都有时各占 1/2；<5 anomaly 不影响训练窗口。
-
-**FAIL 条件**
-
-NaN、权重错误或误用官方<5评价规则。
-
-**状态转移**
-
-- PASS → **E71**
-- FAIL → **修 loss 后重跑 E70。**
-
-
-## E71｜概率融合公式单元测试
-
-**目的 / 唯一问题**
-
-冻结 B4 使用 mean(sigmoid(logit)) 而不是 sigmoid(mean(logit))。
-
-**建模 / 实施**
-
-给定固定 logits 手工计算两种公式并与实现比较。
-
-**PASS 条件**
-
-实现严格等于概率等权平均，且无 q/center 权重。
-
-**FAIL 条件**
-
-平均了 logits 或存在隐含权重。
-
-**状态转移**
-
-- PASS → **E72**
-- FAIL → **修 fusion 后重跑 E71。**
-
-
+固定logits和重复point IDs。PASS：严格等于mean(sigmoid(logit))，不等于sigmoid(mean(logit))；无$q$/center权重；$1\le m_p\le5$；边界无padding。PASS → E72。
 
 # Phase 8｜Gate 2：异常代理监督是否有效
 
-## E72｜B0 冻结 STU 单帧参考
+## E72｜B0冻结STU单帧参考
 
-**目的 / 唯一问题**
+在24 worlds、pure-normal和moving set生成官方STU MaxLogit，官方evaluator复算；逐world/point身份、指标和hash完整。PASS → E73。
 
-建立不训练 AJAE 时的官方单帧基线。
+## E73｜B1单帧smoke train
 
-**建模 / 实施**
+固定一个pure-normal world和一个mixed world、最多200 optimizer steps，只验证：纯负与正负混合窗口均实际出现、loss/grad finite、STU参数/buffer/grad不变、checkpoint可保存恢复、同seed短程复现。smoke结果不得选超参。PASS → E74。
 
-在固定 201 开发域生成 B0 prediction，并由官方 evaluator 计算 AP/AUROC/FPR95；保存逐世界结果。
+## E74｜B1三独立训练种子
 
-**PASS 条件**
+按E63完整训练seeds 0/1/2，配置和预算完全一致。全部seed完成且selection唯一、STU hash不变、lineage完整即PASS。机械失败且协议未变只重跑无效seed。PASS → E75。
 
-产物可追溯、官方复算完成。
+## E75｜B1 vs B0代理监督效应
 
-**FAIL 条件**
+严格执行E63 Gate2 superiority。PASS → E76。FAIL为`scientific_failure`：当前proxy supervision不成立，停止五帧实验并回到Gate1/proxy设计的新研究周期；不得调B3救B1。
 
-预测/评价链不完整。
+## E76｜B1正常安全
 
-**状态转移**
+执行E63 cross-fit FPR95/pure-normal/control/moving-normal安全。全部恶化$\le0.03$才PASS。FAIL回到proxy/control/renderer设计，E78锁定。PASS → E77。
 
-- PASS → **E73**
-- FAIL → **修 B0/evaluator 后重跑 E72。**
+## E77｜Gate 2正式裁决
 
-
-## E73｜B1 单帧 smoke train
-
-**目的 / 唯一问题**
-
-在正式三 seed 前只验证单帧代理训练数值链可工作。
-
-**建模 / 实施**
-
-用很小且预先限定的 206 世界预算运行 B1；检查 loss、grad、标签计数、STU 冻结、无 NaN。
-
-**PASS 条件**
-
-训练数值稳定且只更新 AJAE 新参数。
-
-**FAIL 条件**
-
-训练崩溃、标签异常、STU 被更新。
-
-**状态转移**
-
-- PASS → **E74**
-- FAIL → **修对应训练机械问题后重跑 E73。**
-
-
-## E74｜B1 三独立训练种子
-
-**目的 / 唯一问题**
-
-获得代理监督单帧模型的正式开发结果。
-
-**建模 / 实施**
-
-按完全相同超参/selection rule、独立初始化与206世界流训练3 seed；使用同一固定201。
-
-**PASS 条件**
-
-三 seed 均完成、产物齐全、无协议偏差。
-
-**FAIL 条件**
-
-某 seed 异常终止或配置不一致。
-
-**状态转移**
-
-- PASS → **E75**
-- FAIL → **修机械问题后仅重跑无效 seed；若协议变更则全部重跑 E74。**
-
-
-## E75｜B1 vs B0 代理监督效应
-
-**目的 / 唯一问题**
-
-回答“代理监督本身是否在新背景有效”。
-
-**建模 / 实施**
-
-在24 fixed worlds 上做逐世界与三 seed 比较，主指标按 E63 预注册规则判断 B1>B0。
-
-**PASS 条件**
-
-满足预注册的 B1 优于 B0 条件。
-
-**FAIL 条件**
-
-不优于 B0 或提升不稳定。
-
-**状态转移**
-
-- PASS → **E76**
-- FAIL → **若 FAIL，进入 proxy/normal-control 重新设计，随后必须从 E38–E75 重新资格化；不得做 B2/B3。**
-
-
-## E76｜B1 正常安全
-
-**目的 / 唯一问题**
-
-确认 B1 的提升不是靠提高正常点整体分数。
-
-**建模 / 实施**
-
-在 pure-normal 201、rendered normal-control、moving-normal subset 上比较 B0/B1 的平均分与误报。
-
-**PASS 条件**
-
-不超过 E63 冻结的安全恶化界限。
-
-**FAIL 条件**
-
-正常误报明显恶化。
-
-**状态转移**
-
-- PASS → **E77**
-- FAIL → **若 FAIL，调整 proxy/control/容量并回 E38；不得进入五帧。**
-
-
-## E77｜Gate 2 正式裁决
-
-**目的 / 唯一问题**
-
-只在 E72–E76 都满足时宣称“异常代理监督有效”。
-
-**建模 / 实施**
-
-汇总三 seed、逐世界和正常安全结果。
-
-**PASS 条件**
-
-B1>B0 且 pure-normal/control/moving-normal 安全通过。
-
-**FAIL 条件**
-
-任一条件不满足。
-
-**状态转移**
-
-- PASS → **E78**
-- FAIL → **回到最早失败节点；五帧实验继续锁定。**
-
-
+E72–E76全部PASS才支持“异常代理监督在新背景有效”。PASS → E78。
 
 # Phase 9｜Gate 3：跨帧信息是否提供可识别增益
 
-## E78｜B2 无跨帧五帧对照
+## E78｜B2无跨帧五帧对照
 
-**目的 / 唯一问题**
+按E63三seed完整训练，结构与B3相同但所有$\delta\ne0$贡献在trace中严格为0，评价只取$q=0$。三seed完整和trace零误差即PASS。PASS → E79。
 
-隔离参数量、多尺度、共享结构带来的提升。
+## E79｜B3五帧smoke train
 
-**建模 / 实施**
+固定2个worlds、最多200 steps。检查五帧均监督、每$\delta$邻域/空分支、gate分布、显存和STU冻结。不得据smoke选超参。PASS → E80。
 
-使用与完整模型相同的五帧结构，屏蔽所有 δ≠0 边，五帧仍监督，评价只取 q=0；按3 seed正式训练。
+## E80｜B3三独立训练种子
 
-**PASS 条件**
-
-三 seed 完成且 cross-frame contribution 运行 trace 为零。
-
-**FAIL 条件**
-
-B2 退化成 B1、跨帧边未完全关闭或产物不完整。
-
-**状态转移**
-
-- PASS → **E79**
-- FAIL → **修 B2 条件后重跑 E78。**
-
-
-## E79｜B3 五帧 smoke train
-
-**目的 / 唯一问题**
-
-在大规模三 seed 前验证 centered five-frame 完整模型数值稳定。
-
-**建模 / 实施**
-
-小预算运行 cross-frame attention+gates，检查每个 δ 实际有邻居/空分支、gate 分布和显存。
-
-**PASS 条件**
-
-训练 finite，五帧全部监督，center 只作坐标规范。
-
-**FAIL 条件**
-
-数值崩溃、只监督中心帧或时间分支未被使用。
-
-**状态转移**
-
-- PASS → **E80**
-- FAIL → **修模型机械问题并回 E64–E79 对应节点。**
-
-
-## E80｜B3 三独立训练种子
-
-**目的 / 唯一问题**
-
-获得正式 centered five-frame 模型。
-
-**建模 / 实施**
-
-与 B1/B2 相同 201、selection rule；3 独立初始化/206世界流。
-
-**PASS 条件**
-
-三 seed 均完整可追溯。
-
-**FAIL 条件**
-
-配置不一致、某 seed 无效。
-
-**状态转移**
-
-- PASS → **E81**
-- FAIL → **修后按协议重跑受影响 seed；若规则变化则全部重跑 E80。**
-
+按E63同预算训练0/1/2，全部完整可追溯。PASS → E81。
 
 ## E81｜B3 vs B1
 
-**目的 / 唯一问题**
-
-回答五帧模型是否优于单帧代理模型。
-
-**建模 / 实施**
-
-按预注册规则做三 seed + 24 worlds 配对比较。
-
-**PASS 条件**
-
-稳定满足 B3>B1。
-
-**FAIL 条件**
-
-B3≤B1 或不稳定。
-
-**状态转移**
-
-- PASS → **E82**
-- FAIL → **Gate3 temporal claim 失败；定位 temporal design 后若修改模型，回 E64 并重跑 E78–E81。**
-
+执行E63的$\Delta AP\ge0.01$、CI和seed方向规则。FAIL表示五帧相对单帧主张不成立；若修改temporal design，回E64并重跑B2/B3。PASS → E82。
 
 ## E82｜B3 vs B2
 
-**目的 / 唯一问题**
-
-排除“只是模型更大/多尺度更强”的解释。
-
-**建模 / 实施**
-
-在完全相同开发域比较 B3 与 B2。
-
-**PASS 条件**
-
-稳定满足 B3>B2。
-
-**FAIL 条件**
-
-B3≤B2。
-
-**状态转移**
-
-- PASS → **E83**
-- FAIL → **cross-frame 主张失败；若修改 temporal mechanism，回 E64 并重跑 E78–E82。**
-
+执行同一规则。FAIL表示提升不能归因cross-frame evidence；回E64。PASS → E83。
 
 ## E83｜五帧正常运动安全
 
-**目的 / 唯一问题**
+执行E63在pure-normal、rendered normal-control、moving-normal及混合世界FPR95上的安全规则；B3相对B1的绝对恶化均不得超过0.03。异常边界shell专门留给E90，避免重复门槛。全部通过才PASS。FAIL只允许修改temporal neighborhood/gate并回E64。PASS → E84。
 
-确认 temporal improvement 不以 moving normal 误报为代价。
+## E84｜Gate 3正式裁决
 
-**建模 / 实施**
+E78–E83全部PASS才支持B3 temporal claim。PASS → E85。
 
-比较 B1/B3 在 moving-normal 平均分、FPR，以及 static-normal 差异。
+# Phase 10｜位置校准与可选B4融合
 
-**PASS 条件**
+## E85｜$q$位置分数与预定义校准分支
 
-不超过 E63 冻结的安全界限。
+先在24 worlds报告$q=-2..2$的AP、normal/proxy median score、Brier score和20个等频bin的ECE。AP只描述不同时间位置的信息量，不参与“分数尺度可比”裁决，因为温度缩放不改变排序。raw scores在每个固定两折验证方向中同时满足：最大pairwise normal median差$\le0.02$、proxy median差$\le0.05$、每个$q$的ECE$\le0.05$，才记`B4_ENABLED_RAW`。
 
-**FAIL 条件**
+若不满足，自动启用事前冻结的两折校准：在12 worlds上为每$q$拟合一个temperature $T_q\in[0.5,2.0]$最小化BCE，在另12验证，再交换。只有两个验证方向都满足同一尺度/ECE条件，才记`B4_ENABLED_CALIBRATED`；随后使用完全相同的有界目标在全部24 worlds上重拟合唯一最终 $T_q$，该全量拟合不再参与资格判断。仍不满足记`B4_DISABLED_POSITION_BIAS`。
 
-moving normal 明显恶化。
+三种结果都不否定B3。前两种 → E86；禁用结果直接跳到E89，B4不再执行且最终只能选B3。
 
-**状态转移**
+## E86｜真实重叠点身份与$m_p$
 
-- PASS → **E84**
-- FAIL → **只允许诊断/修改 temporal neighborhood/gate；修改后回 E64、E78–E83。**
+在完整201序列核对$p=(f,r)$跨窗口身份、$q(w)$和$m_p$。PASS：每个预测唯一映射，$1\le m_p\le5$，边界只用完整窗口，无padding/镜像/重复帧；两遍一致。PASS → E87。
 
+## E87｜B4融合评估
 
-## E84｜Gate 3 正式裁决
-
-**目的 / 唯一问题**
-
-决定是否支持 AJAE 的核心跨帧主张。
-
-**建模 / 实施**
-
-汇总 B1/B2/B3 三 seed、逐世界和安全性。
-
-**PASS 条件**
-
-B3>B1、B3>B2 且 moving-normal safety PASS。
-
-**FAIL 条件**
-
-任一条件失败。
-
-**状态转移**
-
-- PASS → **E85**
-- FAIL → **若 FAIL，不进入融合贡献主张；回到对应失败节点。**
-
-
-
-# Phase 10｜时间位置校准与 B4 融合
-
-## E85｜q 位置分数诊断
-
-**目的 / 唯一问题**
-
-检查 q=-2,-1,0,+1,+2 的打分尺度是否足以支持等权融合。
-
-**建模 / 实施**
-
-在固定201上分别报告每个 q 的 AP、正常均值、异常均值、分数分布；不使用 19。
-
-**PASS 条件**
-
-不同 q 不存在违反 E63 预注册标准的系统尺度偏置。
-
-**FAIL 条件**
-
-位置偏置明显。
-
-**状态转移**
-
-- PASS → **E86**
-- FAIL → **只在201上拟合/修正位置校准规则，冻结后重跑 E85。**
-
-
-## E86｜真实重叠点身份与 m_p 覆盖
-
-**目的 / 唯一问题**
-
-确认同一 p=(f,r) 能跨窗口正确聚合 1–5 个预测。
-
-**建模 / 实施**
-
-在真实 centered windows 上核对 PointId、q(w)、m_p 分布和序列边缘。
-
-**PASS 条件**
-
-身份一致，1≤m_p≤5，无 padding/镜像/重复帧。
-
-**FAIL 条件**
-
-点身份错配或 m_p 非法。
-
-**状态转移**
-
-- PASS → **E87**
-- FAIL → **修 point identity/window traversal 后回 E37/E71 并重跑 E86。**
-
-
-## E87｜B4 融合评估
-
-**目的 / 唯一问题**
-
-只测“同一 B3 checkpoint + 多窗口概率平均”的额外价值。
-
-**建模 / 实施**
-
-禁止重新训练 B4；复用 B3 checkpoint，执行 E71 冻结公式。
-
-**PASS 条件**
-
-B4 结果完整、可与 B3 一一配对。
-
-**FAIL 条件**
-
-B4 使用不同 checkpoint、不同模型或融合实现不一致。
-
-**状态转移**
-
-- PASS → **E88**
-- FAIL → **修融合路径后重跑 E87。**
-
+复用同一B3 checkpoint和E85选定的raw/calibrated概率，不重新训练。输出必须逐点等于E71公式并由官方evaluator读取。PASS → E88。
 
 ## E88｜B4 vs B3
 
-**目的 / 唯一问题**
+执行E63 B4规则。达到条件记`FUSION_SUPPORTED`；否则记`FUSION_UNSUPPORTED`。两种结果都继续E89；只有前者允许最终选择B4。
 
-判断 overlapping-window consensus 是否构成独立贡献。
+## E88-V1｜模型输出面板（可选、非阻断）
 
-**建模 / 实施**
+按E59/E60预选48个实体展示B1/B3/B4，不按分数挑选。只检查identity和面板完整，不构成效果裁决，不阻断E89。
 
-按预注册规则比较 B4 与 B3 的逐世界/三 seed结果。
+# Phase 11｜机制、安全、因果版本与成本
 
-**PASS 条件**
+## E89｜实体内部得分方差（描述）
 
-B4>B3：支持融合贡献。
+比较B1/B3/(B4)实体内部方差，按$N_{vis}$分层。结果无改善不算FAIL，不得把object ID输入模型。完成即进入E90。
 
-**FAIL 条件**
+## E90｜异常边界泄漏（硬安全）
 
-B4≤B3：不支持融合贡献，但不否定 B3 temporal claim。
+使用E83同样的0–0.5 m、0.5–1.0 m正常shell和cross-fit阈值。候选最终模型相对B1任一shell FPR恶化不得超过0.03；pure/moving/control安全也不得超E63界限。FAIL回E64并重新开发temporal model；PASS → E91。
 
-**状态转移**
+## E91｜$V=1..5$趋势（描述）
 
-- PASS → **E88-V1**
-- FAIL → **记录“fusion unsupported”，最终模型可保留 B3，仍进入 E88-V1。**
+报告各层AP/recall和置信区间，预注册Jonckheere或Spearman趋势只支持机制解释。无趋势只禁止“证据越多越好”的叙事，不影响主性能。完成 → E92。
 
+## E92｜B5因果窗口正确性
 
-## E88-V1｜模型输出可视化诊断
+逐window证明只访问$[t-4,t]$，模型位置仍映射到五个time IDs且只输出当前帧；任何future access为FAIL。PASS → E93。
 
-**目的 / 唯一问题**
+## E93｜B5因果性能
 
-对预先固定的开发实体检查 B1/B3/B4 点分数面板是否身份正确、可用于观察碎片、边界外溢、moving-normal 高分和融合扩散；不以肉眼优劣代替 E89–E91 的定量裁决。
-
-**预注册范围与裁决**
-
-从 24 条 201 开发世界中按 E59/E60 已冻结的距离、遮挡、$N^{vis}$ 和 $V$ 分层预选 48 个实体，不得依据模型分数选案例。固定展示输入五帧、B1/B3/B4 点分数、moving-normal 区域及 proxy 周围正常背景。PASS 只要求面板完整、各模型输入与点身份一一对应、分层样本无误；不要求 B3 或 B4 肉眼优于 B1。该节点为非阻断的描述性诊断，完成后进入 E89；视觉现象只能形成待由 E89–E91 检验的解释。
-
-
-
-# Phase 11｜机制、安全、对象尺度与因果消融
-
-## E89｜实体内部得分方差
-
-**目的 / 唯一问题**
-
-检验多帧/多尺度是否减少同一异常实体内部碎片化。
-
-**建模 / 实施**
-
-用 generator ID 仅作诊断，比较 B1/B3/(B4) 的 Var_{p∈O_m}(S_p)，按 N_vis 分层。
-
-**PASS 条件**
-
-若 B3/B4 更低，可支持“内部一致性改善”机制；否则只记录无该证据。
-
-**FAIL 条件**
-
-结果无改善不构成方法整体失败。
-
-**状态转移**
-
-- PASS → **E90**
-- FAIL → **无论结果进入 E90；禁止把 object ID 送入模型。**
-
-
-## E90｜异常边界泄漏
-
-**目的 / 唯一问题**
-
-检验多尺度聚合是否把异常高分扩散到道路或邻近正常对象。
-
-**建模 / 实施**
-
-分别测异常表面、邻近 road、邻近正常对象分数，比较 B1/B3/B4。
-
-**PASS 条件**
-
-背景泄漏不超过冻结安全标准；否则机制安全失败。
-
-**FAIL 条件**
-
-明显扩散到正常背景。
-
-**状态转移**
-
-- PASS → **E91**
-- FAIL → **若 FAIL，只能调整多尺度/邻域并回 E64、E78 起重新开发；若 PASS→E91。**
-
-
-## E91｜V=1..5 可见性趋势
-
-**目的 / 唯一问题**
-
-检验“多帧可见证据增加→性能改善”的机制解释。
-
-**建模 / 实施**
-
-在 E60 冻结的五个 V 层级分别报告性能并检验趋势。
-
-**PASS 条件**
-
-存在与预注册机制判据一致的改善趋势：可写时空共识解释。
-
-**FAIL 条件**
-
-无趋势：不得写“对象尺度时空共识”，但不自动否定主性能。
-
-**状态转移**
-
-- PASS → **E92**
-- FAIL → **无论结果进入 E92。**
-
-
-## E92｜B5 因果窗口正确性
-
-**目的 / 唯一问题**
-
-确认在线消融严格只使用 [t-4,t] 且只输出当前帧。
-
-**建模 / 实施**
-
-检查实际 frame IDs、q 编码、无 future-frame access、当前帧输出。
-
-**PASS 条件**
-
-无未来帧泄漏，配置独立于 B3。
-
-**FAIL 条件**
-
-访问未来帧或与 centered 模型混淆。
-
-**状态转移**
-
-- PASS → **E93**
-- FAIL → **修 causal loader 后重跑 E92。**
-
-
-## E93｜B5 因果性能
-
-**目的 / 唯一问题**
-
-量化去掉未来帧后的性能代价。
-
-**建模 / 实施**
-
-按固定201和同一 evaluator 训练/评价 B5，并与 B3/B4 比较。
-
-**PASS 条件**
-
-产物完整即可；本实验不设必须优于谁。
-
-**FAIL 条件**
-
-运行链不完整。
-
-**状态转移**
-
-- PASS → **E94**
-- FAIL → **修 B5 机械问题后重跑 E93。**
-
+按E63相同预算训练三seed并报告与B3/最终模型差异。无必须优于谁的门槛；产物完整、官方评价和安全报告齐全即PASS。PASS → E94。
 
 ## E94｜计算成本与输入公平性
 
-**目的 / 唯一问题**
+固定GPU、batch、cache、精度和预热，分别测B1/B2/B3/B4/B5：latency、VRAM、throughput、STU cache hit和端到端窗口延迟；至少100个窗口、三次重复。报告centered使用未来帧，B4的额外窗口计算与缓存条件。口径一致和复现完成即PASS。PASS → E95。
 
-为论文报告 B1/B3/B4/B5 的真实代价并明确额外时间输入。
+# Phase 12｜方法选择、阈值与冻结
 
-**建模 / 实施**
+## E95｜最终模型规则执行
 
-固定 GPU、batch、cache 条件，测 latency、VRAM、throughput、STU cache 命中；注明 B3/B4 使用未来帧。
+规则在E63/E85/E88已冻结：若`FUSION_SUPPORTED`且E90安全，最终模型=B4；否则最终模型=B3。checkpoint由E63规则唯一选择。held-out 6和19不得参与。唯一结果可机器重算即PASS。PASS → E96。
 
-**PASS 条件**
+## E96｜点阈值与DBSCAN冻结
 
-四条件均有可复现成本报告且比较口径明确。
+只用24 development worlds和pure/moving安全集，按world identity做4-fold cross-validation。固定搜索：
 
-**FAIL 条件**
+- point threshold $\tau\in\{0.05,0.06,\ldots,0.95\}$；
+- DBSCAN $\epsilon\in\{0.3,0.5,0.7,1.0\}$ m；
+- `min_samples` $\in\{3,5,8,12\}$。
 
-缺条件、设备/批次不一致或隐瞒未来帧输入。
-
-**状态转移**
-
-- PASS → **E95**
-- FAIL → **补齐成本测量后重跑 E94。**
-
-
-
-# Phase 12｜方法冻结
-
-## E95｜最终模型选择规则执行
-
-**目的 / 唯一问题**
-
-在不访问 19 的前提下，按预注册规则选择最终 B3 或 B4 以及 checkpoint。
-
-**建模 / 实施**
-
-只使用 201 development worlds；held-out 6 条不参与选择。
-
-**PASS 条件**
-
-选择结果由 E63 规则唯一决定。
-
-**FAIL 条件**
-
-需要人工看结果临时决定或使用 held-out/19 信息。
-
-**状态转移**
-
-- PASS → **E96**
-- FAIL → **修选择规则并回 E63；必要时重新相关开发实验。**
-
-
-## E96｜阈值与 DBSCAN 冻结
-
-**目的 / 唯一问题**
-
-只在 201 上固定点阈值 τ 与逐帧 3D DBSCAN 参数。
-
-**建模 / 实施**
-
-使用固定 selection procedure，不看 19。
-
-**PASS 条件**
-
-τ/DBSCAN 唯一确定并写入 freeze manifest。
-
-**FAIL 条件**
-
-参数仍待 19 结果后调整。
-
-**状态转移**
-
-- PASS → **E97**
-- FAIL → **重新在 201 完成开发并重跑 E96。**
-
+每个固定配置都在四个fold上完成“18 worlds选择域/6 worlds held-out评价”，最终以四个held-out fold的聚合mean object PQ和安全统计统一排序；不先选四个fold各自配置再投票。约束为aggregate pure-normal point FPR$\le1\%$、moving-normal FPR$\le2\%$，且任何单fold分别不超过1.5%/3%。若无配置满足，E96 scientific FAIL，不能打开19。并列依次选择较高held-out point AP、较低normal FPR、较高$\tau$、较小$\epsilon$、较大`min_samples`。获选唯一配置在全24上只复算并写入manifest，不再改。PASS → E97。
 
 ## E97｜AJAE Method Freeze Manifest v1
 
-**目的 / 唯一问题**
-
-在第一次访问 19 前冻结所有会影响结果的内容。
-
-**建模 / 实施**
-
-记录 generator、normal-control、renderer、STU interface、architecture、loss、hyperparams、checkpoint rule、final checkpoint、fusion/q-calibration、τ、DBSCAN、evaluator、代码/配置 hash。
-
-**PASS 条件**
-
-manifest 完整、可机器验证、只读保存。
-
-**FAIL 条件**
-
-存在未冻结字段。
-
-**状态转移**
-
-- PASS → **E98**
-- FAIL → **补齐字段后重跑 E97；此时仍禁止访问 19。**
-
+必须记录并hash：schema7、support pools、normal templates、placement/collision/world formats、ray/calibration、renderer、STU source/weights/interface、B0–B5 architecture/loss/training、final checkpoints、E85 calibration、B4 decision、$\tau$/DBSCAN、evaluator和全部数据/代码/config identities。任何字段为空即FAIL。PASS → E98。
 
 ## E98｜冻结完整性演练
 
-**目的 / 唯一问题**
+对generator、support pool、renderer、STU、model、checkpoint、calibration、threshold、DBSCAN、evaluator逐一篡改fixture，manifest必须拒绝；冻结前尝试访问19/51必须被guard记录并拒绝。全部反例拦截才PASS。PASS → E99。
 
-确认 freeze manifest 能阻止之后的模型/协议变化和 19 标签旁路。
+# Phase 13｜一次性真实OOD确认与隐藏测试
 
-**建模 / 实施**
+## E99｜19条真实OOD锁定推理
 
-模拟更改关键文件/参数和尝试访问 public19，验证 guard 拒绝。
+E97/E98有效后第一次解锁19。必须一次性对全部19序列、B0、B1和final AJAE生成prediction，不允许先看部分结果再停。checkpoint/config/hash与manifest零差异、官方格式完整即PASS。方法变化使确认完整性失效。
 
-**PASS 条件**
+## E100｜真实OOD官方点级指标
 
-任何影响结果的变化都会使 manifest invalid；19 只有 manifest valid 时可解锁。
+官方evaluator计算AP/AUROC/FPR95，报告pooled和逐sequence；过滤和预测身份与manifest一致。评价链正确即PASS，是否迁移由E103裁决。PASS → E101。
 
-**FAIL 条件**
+## E101｜真实OOD对象级指标
 
-guard 可绕过或 manifest 不敏感。
-
-**状态转移**
-
-- PASS → **E99**
-- FAIL → **修 freeze guard 后重跑 E98。**
-
-
-
-# Phase 13｜一次性真实 OOD 确认与最终测试
-
-## E99｜19 条真实 OOD 锁定推理
-
-**目的 / 唯一问题**
-
-第一次也是当前研究周期唯一一次打开公开真实异常确认集。
-
-**建模 / 实施**
-
-在 E97/E98 完全冻结后，一次性对全部 19 条序列生成预测；不得先看部分序列再停下调方法。
-
-**PASS 条件**
-
-19 条推理完整、checkpoint/config/hash 与 manifest 一致。
-
-**FAIL 条件**
-
-推理期间发生方法变化、只跑部分后调参或 lineage 不完整。
-
-**状态转移**
-
-- PASS → **E100**
-- FAIL → **若协议被破坏则确认集完整性失效；不得把后续结果称 untouched confirmation。**
-
-
-## E100｜真实 OOD 官方点级指标
-
-**目的 / 唯一问题**
-
-检验 proxy supervision 和 temporal model 是否迁移到真实 STU OOD。
-
-**建模 / 实施**
-
-由官方 evaluator 计算 AP/AUROC/FPR95，并逐序列报告 B0/B1/final AJAE。
-
-**PASS 条件**
-
-结果完整；是否支持迁移由 E103 统一裁决。
-
-**FAIL 条件**
-
-评价链错误或预测无法官方读取。
-
-**状态转移**
-
-- PASS → **E101**
-- FAIL → **只允许修 evaluator/I-O bug；若修复会改变模型/方法，则确认周期失效。**
-
-
-## E101｜真实 OOD 对象级指标
-
-**目的 / 唯一问题**
-
-评估融合分数经冻结 τ 和逐帧 DBSCAN 后的对象检测质量。
-
-**建模 / 实施**
-
-报告 RecallQ/SQ/RQ/UQ/PQ/TP/FP/FN；不跨帧 tracking。
-
-**PASS 条件**
-
-使用冻结参数、结果可复现。
-
-**FAIL 条件**
-
-阈值/DBSCAN 被事后修改或跨帧 tracking 介入。
-
-**状态转移**
-
-- PASS → **E102**
-- FAIL → **若只是 evaluator bug 可修后复算；若需改方法则确认周期结束。**
-
+用E96冻结$\tau$/DBSCAN逐帧计算RecallQ/SQ/RQ/UQ/PQ/TP/FP/FN，不跨帧tracking。参数零变化、结果可复现即PASS。PASS → E102。
 
 ## E102｜真实正常运动安全
 
-**目的 / 唯一问题**
+按冻结moving-normal定义，将E63/E96在201上已经冻结的阈值直接应用于19条序列，比较B0/B1/final的moving-normal FPR、FPR95和score tail；确认阶段不再重新cross-fit或校准。final相对B1/B0恶化完整报告。结果进入E103，不单独改方法。PASS（评价完成）→ E103。
 
-确认真实确认阶段没有以正常运动误报换取 OOD 提升。
+## E103｜Gate 4迁移裁决
 
-**建模 / 实施**
+严格执行E63冻结规则：final相对B1 mean AP$\ge0.01$、相对B0$\ge0.02$；两项19-sequence bootstrap LCB$>0$；至少12/19 sequence相对B1为正；正常安全恶化$\le0.03$。
 
-按冻结 moving-normal 定义报告 final AJAE 与 B0/B1 的安全差异。
+全部满足 → Gate4 PASS、E104解锁。任一不满足 → `scientific_failure`，当前研究周期停止；不得用同一19继续调方法。
 
-**PASS 条件**
+## E104｜51条隐藏测试最终提交
 
-满足冻结安全界限。
-
-**FAIL 条件**
-
-明显恶化。
-
-**状态转移**
-
-- PASS → **E103**
-- FAIL → **无论结果进入 E103 统一判定。**
-
-
-## E103｜Gate 4 迁移裁决
-
-**目的 / 唯一问题**
-
-最终回答“合成异常代理是否迁移到真实 OOD”。
-
-**建模 / 实施**
-
-结合 E100–E102，按冻结规则判断相对 B0/B1 的改善与 normal-motion safety。
-
-**PASS 条件**
-
-改善成立且安全通过：proxy→real OOD transfer supported。
-
-**FAIL 条件**
-
-未改善或安全失败：当前迁移假设失败，本研究周期停止。
-
-**状态转移**
-
-- PASS → **E104**
-- FAIL → **PASS→E104；FAIL→停止，禁止继续用同一 19 条调方法。**
-
-
-## E104｜51 条隐藏测试最终提交
-
-**目的 / 唯一问题**
-
-只在 Gate 4 PASS 后执行最终官方测试。
-
-**建模 / 实施**
-
-使用 E97 冻结的完全同一方法与 checkpoint 提交隐藏测试。
-
-**PASS 条件**
-
-完成官方提交并保存最终结果/提交信息。
-
-**FAIL 条件**
-
-任何想根据 hidden 结果再调方法的行为。
-
-**状态转移**
-
-- PASS → **AJAE 完成**
-- FAIL → **若需新研究周期，必须重新定义新的独立确认纪律。**
-
-
+只在Gate4 PASS后，用E97完全同一方法/checkpoint/parameters生成51条测试预测并完成官方提交。不得根据隐藏结果调参。提交identity和官方回执保存后，当前AJAE研究周期完成。
 
 # 3. 四个 Decision Gate 的最终形式
 
 ## Gate 1：renderer 是否有资格生成训练监督
 
-只有 **E08–E49** 全部按各自冻结规则通过，才允许把 renderer/generator 视为训练数据生成机制。失败时必须回到最早失败节点；任何 B0/B1/B3 的高分都不能反向证明 Gate 1 合格。
+E08–E49 的关键条件必须全部通过。E38–E44 的普通分布差异不单独失败；Gate1的实质裁决是机械语义正确、E45严格匹配成立、E46没有稳定低容量来源指纹、E48不近乎饱和。失败回到最早可解释节点；B1高分不能反向证明renderer可信。
 
 ## Gate 2：异常代理监督是否有效
 
-必须由 **B1 相对 B0 的固定 201 开发结果 + pure-normal / normal-control / moving-normal 安全**共同判定。失败说明 proxy supervision 本身不足，不能进入五帧主张。
+严格执行E63：B1相对B0达到至少0.02 mean AP增益、层级bootstrap下界大于0、至少2/3 seed方向一致，并通过pure-normal/control/moving安全。失败则proxy supervision主张不成立，不进入五帧。
 
 ## Gate 3：跨帧信息是否提供可识别增益
 
 必须同时满足：
 
 $$
-B3>B1
+B3>B1,
 $$
 
-以及
-
 $$
-B3>B2
+B3>B2,
 $$
 
-并通过正常运动点安全。只有这三者共同成立，才支持 AJAE 的核心 temporal claim。
+两项均达到E63的0.01实用增益、置信和seed方向条件，并通过运动/边界安全。B4只是可选附加贡献；B4 unsupported时可选择B3继续。
 
-## Gate 4：proxy 是否迁移到真实 OOD
+## Gate 4：proxy 是否迁移到真实OOD
 
-在 E97–E98 完全冻结后，只允许一次性打开 19 条公开真实异常。只有真实 OOD 相对 B0/B1 改善且正常运动安全通过，才支持：
-
-$$
-\text{synthetic anomaly proxy}\rightarrow\text{real OOD transfer}
-$$
-
-若 Gate 4 失败，当前研究周期停止；不能继续使用同一 19 条数据调方法并仍称其为 untouched confirmation set。
+E97–E98后一次性打开19。final相对B1/B0必须达到E63冻结的sequence-level增益、方向和安全条件。FAIL后当前研究周期停止；同一19不再是untouched confirmation。
 
 # 4. 关键不可变约束
-
-整个状态机执行期间，以下规则始终优先于任何单个实验：
 
 $$
 \boxed{\text{先确定完整反事实世界，再切五帧窗口}}
@@ -4894,11 +3531,15 @@ $$
 $$
 
 $$
+\boxed{\text{正式 placement 只从 qualified support pool 采样}}
+$$
+
+$$
 \boxed{\text{五帧共享参数并同等监督，中心帧只规定坐标系}}
 $$
 
 $$
-\boxed{\text{最终学习输出始终是原始 LiDAR 回波点级异常概率}}
+\boxed{\text{最终输出始终是原始 LiDAR 回波点级异常概率}}
 $$
 
 $$
@@ -4906,43 +3547,52 @@ $$
 $$
 
 $$
-\boxed{\text{centered five-frame 为离线主设置；causal five-frame 仅为在线消融}}
+\boxed{\text{centered five-frame 为离线主设置；causal five-frame 只作在线消融}}
 $$
 
 # 5. 执行记录模板
 
-每完成一个节点，建议在单独的实验记录文件中追加：
-
 ```text
 Experiment ID:
+Design-freeze commit/hash:
+Execution-freeze commit/hash:
 Date:
-Git commit:
-Protocol hash:
-Data identity:
-Seed:
-Command:
-Resolved config:
-Artifacts:
-Primary observation:
-PASS/FAIL:
-Reason:
-Unlocked next experiment:
-Invalidated downstream experiments:
+Git commit / clean state:
+Data identities:
+Input artifact hashes:
+Random namespaces / seeds:
+Command and resolved config:
+Resource and disk preflight:
+Artifacts and hashes:
+Primary construct:
+Primary result:
+PASS / FAIL / OUTCOME:
+Failure classification:
+Unlocked next node:
+Invalidated downstream evidence:
+Descriptive observations:
 Notes:
 ```
 
 # 6. 如何使用这份状态机推进 AJAE
 
-从 **E00** 开始。不要因为某个更后面的模块“代码已经写好了”就跳过前面的资格实验。任何实验失败时，只执行该节点规定的 FAIL 分支；修复后回到指定节点重新验证。这样每次失败都会把不确定性限制在一个很小的局部，而不是重新打开整个课题。
+1. 当前远端状态为 E22-v2 PASS，E23 unlocked。
+2. 先一次性实现和执行冻结 E23–E26 的统一权威 placement/world builder；然后顺序连续运行，不再逐节点重新设计。
+3. 每个后续Phase同样先完成整段设计冻结，再执行节点。
+4. preflight只查身份、支持、schema、接口和资源，不查正式结果。
+5. FAIL先按五类分类；`descriptive_deviation`直接记录继续，不能制造新硬门。
+6. 只有改变科学构念的修改才使相关下游失效；纯实现修复按同一设计版本化重跑。
+7. E49前不训练AJAE；E77前不训练五帧；E98前不访问19；Gate4 PASS前不使用51。
 
-理想主路径为：
+从当前节点开始的主执行链为：
 
 $$
-E00\rightarrow E01\rightarrow\cdots\rightarrow E49
+E23\rightarrow E24\rightarrow E25\rightarrow E26
+\rightarrow E27\rightarrow\cdots\rightarrow E49
 \rightarrow E50\rightarrow\cdots\rightarrow E77
 \rightarrow E78\rightarrow\cdots\rightarrow E84
 \rightarrow E85\rightarrow\cdots\rightarrow E98
-\rightarrow E99\rightarrow\cdots\rightarrow E104
+\rightarrow E99\rightarrow\cdots\rightarrow E104.
 $$
 
-最终 **E104** 完成，才表示当前定义下的 AJAE 从数据生成、模型、开发验证、机制诊断、真实 OOD 确认到隐藏测试全部闭环。
+E104完成，才表示当前定义下的AJAE从反事实世界、renderer、模型、开发证据、真实OOD确认到隐藏测试全部闭环。
