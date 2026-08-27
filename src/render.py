@@ -11029,6 +11029,98 @@ def run_e40_qualification(
     return result
 
 
+def _e41_statistics(
+    empty_slots: np.ndarray, empty_geometry: np.ndarray,
+    empty_accepted: np.ndarray, empty_final_new: np.ndarray,
+) -> dict[str, np.ndarray]:
+    """Audit the frozen empty-slot sensor chain without rerendering."""
+    geometry_by_beam = empty_geometry.sum(axis=-1)
+    totals = np.stack(
+        (
+            empty_slots.sum(axis=(0, 2, 3)),
+            empty_geometry.sum(axis=(0, 2, 3, 4)),
+            empty_accepted.sum(axis=(0, 2, 3, 4)),
+            empty_final_new.sum(axis=(0, 2, 3, 4)),
+        ),
+        axis=1,
+    ).astype(np.int64)
+    violations = np.asarray(
+        (
+            np.count_nonzero(geometry_by_beam > empty_slots),
+            np.count_nonzero(empty_accepted > empty_geometry),
+            np.count_nonzero(empty_final_new > empty_accepted),
+            np.count_nonzero(empty_slots < 0)
+            + np.count_nonzero(empty_geometry < 0)
+            + np.count_nonzero(empty_accepted < 0)
+            + np.count_nonzero(empty_final_new < 0),
+        ),
+        dtype=np.int64,
+    )
+    return {
+        "source_chain_total": totals,
+        "source_return_rejection": totals[:, 1] - totals[:, 2],
+        "source_post_acceptance_rejection": totals[:, 2] - totals[:, 3],
+        "chain_violation_count": violations,
+        "beam_range_geometry": empty_geometry.sum(axis=(0, 2)),
+        "beam_range_accepted": empty_accepted.sum(axis=(0, 2)),
+        "beam_range_final_new": empty_final_new.sum(axis=(0, 2)),
+        "beam_empty_opportunity": empty_slots.sum(axis=(0, 2)),
+    }
+
+
+def run_e41_qualification(
+    e39_artifact_path: Path | str, output_path: Path | str,
+) -> dict[str, object]:
+    """Qualify empty-to-valid accounting from the passed shared E39 trace."""
+    with np.load(
+        Path(e39_artifact_path).expanduser().resolve(strict=True), allow_pickle=False
+    ) as trace:
+        metadata = json.loads(str(trace["metadata_json"]))
+        if metadata.get("experiment") != "E39" or metadata.get("passed") is not True:
+            raise RenderError("E41 requires the passed formal E39 shared trace")
+        arrays = tuple(
+            np.asarray(trace[name])
+            for name in (
+                "empty_slots", "empty_geometry", "empty_accepted", "empty_final_new"
+            )
+        )
+    started = time.monotonic()
+    runs = [_e41_statistics(*arrays) for _ in range(2)]
+    elapsed = time.monotonic() - started
+    reproduced = all(np.array_equal(runs[0][name], runs[1][name]) for name in runs[0])
+    first = runs[0]
+    totals = first["source_chain_total"]
+    return_rejection = first["source_return_rejection"]
+    branch_coverage_errors = int(
+        np.count_nonzero(totals[:, 3] == 0) + np.count_nonzero(return_rejection == 0)
+    )
+    chain_errors = int(first["chain_violation_count"].sum())
+    passed = chain_errors == 0 and branch_coverage_errors == 0 and reproduced
+    result = {
+        "experiment": "E41", "passed": passed,
+        "source_order": ["normal-control", "anomaly-proxy"],
+        "chain_order": ["empty opportunity", "geometry hit", "return accepted", "final new"],
+        "source_chain_total": totals.tolist(),
+        "source_return_rejection": return_rejection.tolist(),
+        "source_post_acceptance_rejection": first["source_post_acceptance_rejection"].tolist(),
+        "chain_violation_count": first["chain_violation_count"].tolist(),
+        "chain_errors": chain_errors,
+        "branch_coverage_errors": branch_coverage_errors,
+        "elementwise_reproduced": reproduced,
+        "two_run_total_seconds": elapsed,
+        "scientific_array_hash": _scientific_array_hash(first),
+    }
+    destination = Path(output_path).expanduser().resolve()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_suffix(destination.suffix + ".tmp.npz")
+    np.savez_compressed(
+        temporary, **first,
+        metadata_json=np.asarray(json.dumps(result, sort_keys=True, separators=(",", ":"))),
+    )
+    os.replace(temporary, destination)
+    return result
+
+
 def _render_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="AJAE authoritative renderer experiments")
     subcommands = parser.add_subparsers(dest="command", required=True)
@@ -11120,6 +11212,9 @@ def _render_parser() -> argparse.ArgumentParser:
     e40.add_argument("--e39-artifact", type=Path, required=True)
     e40.add_argument("--calibration", type=Path, required=True)
     e40.add_argument("--output", type=Path, required=True)
+    e41 = subcommands.add_parser("qualify-e41")
+    e41.add_argument("--e39-artifact", type=Path, required=True)
+    e41.add_argument("--output", type=Path, required=True)
     return parser
 
 
@@ -11233,6 +11328,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         result = run_e40_qualification(
             args.e39_artifact, args.calibration, args.output,
         )
+        print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        return 0 if result["passed"] else 1
+    if args.command == "qualify-e41":
+        result = run_e41_qualification(args.e39_artifact, args.output)
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 0 if result["passed"] else 1
     raise AssertionError("unreachable renderer command")
