@@ -10901,6 +10901,134 @@ def run_e39_qualification(
     return result
 
 
+def _ecdf_distance(left: np.ndarray, right: np.ndarray) -> float:
+    if left.size == 0 or right.size == 0:
+        return 0.0
+    values = np.sort(np.concatenate((left, right)))
+    left_sorted = np.sort(left)
+    right_sorted = np.sort(right)
+    left_ecdf = np.searchsorted(left_sorted, values, side="right") / left_sorted.size
+    right_ecdf = np.searchsorted(right_sorted, values, side="right") / right_sorted.size
+    return float(np.max(np.abs(left_ecdf - right_ecdf)))
+
+
+def _e40_statistics(
+    source: np.ndarray, beam: np.ndarray, range_bin: np.ndarray, intensity: np.ndarray,
+    sensor: SensorCalibration,
+) -> dict[str, np.ndarray]:
+    shape = (3, 128, 5)
+    count = np.zeros(shape, dtype=np.int64)
+    quantiles = np.zeros(shape + (5,), dtype=np.float64)
+    ecdf = np.zeros((3, 128, 5), dtype=np.float64)
+    ecdf_valid = np.zeros((3, 128, 5), dtype=np.bool_)
+    clipping = np.zeros((2, 128, 5, 2), dtype=np.int64)
+    pairs = ((0, 1), (0, 2), (1, 2))
+    probabilities = (0.05, 0.25, 0.5, 0.75, 0.95)
+    for beam_id in range(128):
+        for distance_id in range(5):
+            values = []
+            for source_id in range(3):
+                selected = (
+                    (source == source_id) & (beam == beam_id)
+                    & (range_bin == distance_id)
+                )
+                current = np.asarray(intensity[selected], dtype=np.float64)
+                values.append(current)
+                count[source_id, beam_id, distance_id] = current.size
+                if current.size:
+                    quantiles[source_id, beam_id, distance_id] = np.quantile(
+                        current, probabilities
+                    )
+                if source_id > 0:
+                    clipping[source_id - 1, beam_id, distance_id, 0] = int(
+                        np.count_nonzero(current <= sensor.intensity_min)
+                    )
+                    clipping[source_id - 1, beam_id, distance_id, 1] = int(
+                        np.count_nonzero(current >= sensor.intensity_max)
+                    )
+            for pair_id, (left, right) in enumerate(pairs):
+                if values[left].size and values[right].size:
+                    ecdf_valid[pair_id, beam_id, distance_id] = True
+                    ecdf[pair_id, beam_id, distance_id] = _ecdf_distance(
+                        values[left], values[right]
+                    )
+    return {
+        "cell_count": count, "conditional_quantiles": quantiles,
+        "ecdf_distance": ecdf, "ecdf_valid": ecdf_valid,
+        "generated_clipping_count": clipping,
+    }
+
+
+def run_e40_qualification(
+    e39_artifact_path: Path | str, calibration_path: Path | str,
+    output_path: Path | str,
+) -> dict[str, object]:
+    """Audit beam-by-range conditional intensity from the shared E39 trace."""
+    with np.load(Path(e39_artifact_path).expanduser().resolve(strict=True), allow_pickle=False) as trace:
+        metadata = json.loads(str(trace["metadata_json"]))
+        if metadata.get("experiment") != "E39" or metadata.get("passed") is not True:
+            raise RenderError("E40 requires the passed formal E39 shared trace")
+        source = np.asarray(trace["intensity_source"])
+        beam = np.asarray(trace["intensity_beam"])
+        range_bin = np.asarray(trace["intensity_range_bin"])
+        intensity = np.asarray(trace["intensity_value"])
+        expected_range_count = np.asarray(trace["source_range_return_count"])
+    _, sensor = load_sensor_calibration(calibration_path)
+    started = time.monotonic()
+    runs = [
+        _e40_statistics(source, beam, range_bin, intensity, sensor)
+        for _ in range(2)
+    ]
+    elapsed = time.monotonic() - started
+    reproduced = all(np.array_equal(runs[0][name], runs[1][name]) for name in runs[0])
+    first = runs[0]
+    observed_range_count = first["cell_count"].sum(axis=1)
+    count_errors = int(np.count_nonzero(observed_range_count != expected_range_count))
+    identity_errors = int(
+        np.count_nonzero((source < 0) | (source > 2))
+        + np.count_nonzero((beam < 0) | (beam >= 128))
+        + np.count_nonzero((range_bin < 0) | (range_bin >= 5))
+    )
+    finite_errors = int(np.count_nonzero(~np.isfinite(intensity)))
+    generated = source > 0
+    support_errors = int(np.count_nonzero(
+        (intensity[generated] < sensor.intensity_min)
+        | (intensity[generated] > sensor.intensity_max)
+    ))
+    generated_count = [int(np.count_nonzero(source == value)) for value in (1, 2)]
+    clipping_count = first["generated_clipping_count"].sum(axis=(1, 2))
+    clipping_fraction = np.divide(
+        clipping_count, np.asarray(generated_count)[:, None],
+        out=np.zeros((2, 2), dtype=np.float64),
+        where=np.asarray(generated_count)[:, None] > 0,
+    )
+    passed = (
+        count_errors == 0 and identity_errors == 0 and finite_errors == 0
+        and support_errors == 0 and reproduced
+    )
+    scientific = {**first, "generated_clipping_fraction": clipping_fraction}
+    result = {
+        "experiment": "E40", "passed": passed, "intensity_returns": int(intensity.size),
+        "source_counts": [int(np.count_nonzero(source == value)) for value in range(3)],
+        "nonempty_cells": [int(np.count_nonzero(first["cell_count"][value])) for value in range(3)],
+        "count_errors": count_errors, "identity_errors": identity_errors,
+        "finite_errors": finite_errors, "generated_support_errors": support_errors,
+        "generated_clipping_count_low_high": clipping_count.tolist(),
+        "generated_clipping_fraction_low_high": clipping_fraction.tolist(),
+        "elementwise_reproduced": reproduced, "two_run_total_seconds": elapsed,
+        "scientific_array_hash": _scientific_array_hash(scientific),
+    }
+    destination = Path(output_path).expanduser().resolve()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_suffix(destination.suffix + ".tmp.npz")
+    np.savez_compressed(
+        temporary, **scientific,
+        metadata_json=np.asarray(json.dumps(result, sort_keys=True, separators=(",", ":"))),
+    )
+    os.replace(temporary, destination)
+    return result
+
+
 def _render_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="AJAE authoritative renderer experiments")
     subcommands = parser.add_subparsers(dest="command", required=True)
@@ -10988,6 +11116,10 @@ def _render_parser() -> argparse.ArgumentParser:
     e39.add_argument("--calibration", type=Path, required=True)
     e39.add_argument("--output", type=Path, required=True)
     e39.add_argument("--processes", type=int, default=24)
+    e40 = subcommands.add_parser("qualify-e40")
+    e40.add_argument("--e39-artifact", type=Path, required=True)
+    e40.add_argument("--calibration", type=Path, required=True)
+    e40.add_argument("--output", type=Path, required=True)
     return parser
 
 
@@ -11094,6 +11226,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         result = run_e39_qualification(
             args.data_root, args.candidate_bank, args.calibration, args.output,
             processes=args.processes,
+        )
+        print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        return 0 if result["passed"] else 1
+    if args.command == "qualify-e40":
+        result = run_e40_qualification(
+            args.e39_artifact, args.calibration, args.output,
         )
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 0 if result["passed"] else 1
