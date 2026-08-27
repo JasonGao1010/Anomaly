@@ -3227,6 +3227,14 @@ E30按E27 PASS产物的 `template_identity` 逐元素核对并重建原256个nor
 
 与 E30 同一代码路径。PASS：mask 零差异；有效点 finite、raw semantic 2、internal object ID 正确；接受/拒绝分支均覆盖；两遍一致。PASS → E32。
 
+**执行冻结**
+
+E31逐元素核对E28-v2 PASS产物的seed与shape identity并重建原256个schema 7 fixture；shape、seed 2,800,000–2,800,255、beam/column、目标距离、姿态和 `MaterialSpec.sample(seed+2802)` 均保持不变。与E30相同，每个fixture固定展开24个frame identities，frame ID为 $256r+i$，world seed、object ID和slot分别为2,800,000+$i$、$i+1$和$i$，共6,144次accepted-return裁决。几何交点、法向、正式概率和材质只计算一次并在24个身份间只读复用。
+
+正式accepted mask、E29独立reference、channel 1强度和拒绝无载荷规则与E30完全相同。接受项必须具有有限点和冻结支持内有限强度、raw semantic必须为2、internal object ID必须为$i+1$；拒绝项点与强度保持NaN、semantic保持0、internal object ID保持-1。E31不读取native range，不执行nearest competition或遮挡裁决。
+
+实现提交为 `b1543dd7a475097d4e1140a1333e095eec13c527`；`src/render.py`、`src/train.py`和`test_ajae.py` SHA-256分别为 `b25c388221996b1fec4c7461ce660cd07eae29e4d1ee4491c3dda25cd2dd1e65`、`92a3f51f93e26bead6a1d9d92e37af2b5e4df092ffc9716852806b4b67be546b`、`960dc6b3b83a4e95e638a1f0358a3d20c8eb2b51300e5c737f2c49b4b0a3f8dd`；完整回归46项全部通过，用时98.60秒。正式命令为 `python -m src.render qualify-e31 --e28-artifact runs/ajae/e28_v2_anomaly_proxy_hits.npz --calibration runs/ajae/calibration.pt --output runs/ajae/e31_proxy_returns.npz --processes 24`。
+
 ## E32｜插入物遮挡背景
 
 构造 sensor→inserted→native-background 的定向 slot fixture，含小于、等于和大于 `tie_tolerance_m` 的边界。PASS：更近的有效 inserted return 替换 native；被替换原点进入 `occluded_original_mask`；最终每 slot 只有一个点；tie 按冻结 object/native 规则确定；零错误。PASS → E33。
