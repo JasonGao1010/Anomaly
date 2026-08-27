@@ -9508,6 +9508,378 @@ def run_e36_v2_qualification(calibration_path: Path | str, output_path: Path | s
     np.savez_compressed(temporary, **scientific, metadata_json=np.asarray(json.dumps(result, sort_keys=True, separators=(",", ":")))); os.replace(temporary, destination); return result
 
 
+_E37_WORLDS: tuple[WorldSpec, ...] = ()
+_E37_FRAMES: dict[int, SourceFrame] = {}
+_E37_RAY_GRID: RayGrid | None = None
+_E37_SENSOR: SensorCalibration | None = None
+_E37_RENDERER_IDENTITY = ""
+_E37_SOURCE_IDENTITY = ""
+_E37_STU_IDENTITY = ""
+_E37_FRAME_CACHE: type | None = None
+_E37_FRAME_CACHE_KEY: type | None = None
+_E37_FRAME_IDS = tuple(range(98, 104))
+_E37_FORWARD_REQUESTS = tuple(range(98, 103)) + tuple(range(99, 104))
+
+
+def _e37_arrays(frame: RenderedFrame) -> dict[str, np.ndarray]:
+    """Expose every E37-qualified slot-aligned renderer output."""
+    return {
+        "xyzi": np.asarray(frame.xyzi),
+        "occupancy": ~np.asarray(frame.source.zero_slot_mask),
+        "packed_labels": np.asarray(frame.packed_labels),
+        "normal_control_mask": np.asarray(frame.normal_control_mask),
+        "anomaly_proxy_mask": np.asarray(frame.anomaly_proxy_mask),
+        "inserted_mask": np.asarray(frame.inserted_mask),
+        "occluded_original_mask": np.asarray(frame.occluded_original_mask),
+        "unchanged_normal_mask": np.asarray(frame.unchanged_normal_mask),
+        "object_id_internal": np.asarray(frame.object_id_internal),
+    }
+
+
+def _e37_array_digest(value: np.ndarray) -> str:
+    array = np.ascontiguousarray(value)
+    digest = hashlib.sha256()
+    digest.update(array.dtype.str.encode("ascii"))
+    digest.update(np.asarray(array.shape, dtype=np.int64).tobytes())
+    digest.update(array.view(np.uint8))
+    return digest.hexdigest()
+
+
+def _e37_frame_digests(frame: RenderedFrame) -> dict[str, str]:
+    return {name: _e37_array_digest(value) for name, value in _e37_arrays(frame).items()}
+
+
+def _e37_cache_key(world: WorldSpec, frame_id: int) -> object:
+    if _E37_FRAME_CACHE_KEY is None:
+        raise RuntimeError("E37 production cache key is not initialized")
+    frame_identity = hashlib.sha256(
+        f"{_E37_SOURCE_IDENTITY}:train:206:{frame_id}".encode("ascii")
+    ).hexdigest()
+    return _E37_FRAME_CACHE_KEY(
+        world.identity,
+        frame_identity,
+        _E37_RENDERER_IDENTITY,
+        _E37_STU_IDENTITY,
+    )
+
+
+def _e37_request_order(world: WorldSpec, mode: str) -> tuple[int, ...]:
+    if mode in {"serial_cached_forward", "parallel_uncached_forward"}:
+        return _E37_FORWARD_REQUESTS
+    if mode == "parallel_cached_reverse":
+        return tuple(reversed(_E37_FORWARD_REQUESTS))
+    if mode == "parallel_cached_random":
+        rng = np.random.default_rng(np.random.SeedSequence([world.seed, 3701]))
+        return tuple(np.asarray(_E37_FORWARD_REQUESTS)[rng.permutation(10)].tolist())
+    raise RuntimeError(f"unknown E37 execution mode {mode!r}")
+
+
+def _e37_worker(task: tuple[int, str]) -> dict[str, object]:
+    world_index, mode = task
+    if (
+        len(_E37_WORLDS) != 128
+        or set(_E37_FRAMES) != set(_E37_FRAME_IDS)
+        or _E37_RAY_GRID is None
+        or _E37_SENSOR is None
+        or _E37_FRAME_CACHE is None
+    ):
+        raise RuntimeError("E37 fixtures are not initialized")
+    world = _E37_WORLDS[world_index]
+    requests = _e37_request_order(world, mode)
+    cached = "uncached" not in mode
+    cache = _E37_FRAME_CACHE(7) if cached else None
+    first: dict[int, RenderedFrame] = {}
+    digests: dict[int, dict[str, str]] = {}
+    duplicate_bit_errors = 0
+    render_calls = 0
+
+    def produce(frame_id: int) -> RenderedFrame:
+        nonlocal render_calls
+        render_calls += 1
+        return render_frame(
+            _E37_FRAMES[frame_id], world, _E37_RAY_GRID, _E37_SENSOR
+        )
+
+    for frame_id in requests:
+        if cache is None:
+            rendered = produce(frame_id)
+        else:
+            rendered = cache.rendered_frame(
+                _e37_cache_key(world, frame_id),
+                lambda frame_id=frame_id: produce(frame_id),
+            )
+        if frame_id not in first:
+            first[frame_id] = rendered
+            digests[frame_id] = _e37_frame_digests(rendered)
+            continue
+        for name, value in _e37_arrays(rendered).items():
+            reference = _e37_arrays(first[frame_id])[name]
+            left = np.ascontiguousarray(value).view(np.uint8)
+            right = np.ascontiguousarray(reference).view(np.uint8)
+            duplicate_bit_errors += int(np.unpackbits(np.bitwise_xor(left, right)).sum())
+    if set(first) != set(_E37_FRAME_IDS):
+        raise RuntimeError("E37 request stream did not cover the six frozen frames")
+    return {
+        "world_index": world_index,
+        "world_hash": world.identity,
+        "world_type": world.world_type,
+        "mode": mode,
+        "render_calls": render_calls,
+        "duplicate_bit_errors": duplicate_bit_errors,
+        "digests": digests,
+    }
+
+
+def _e37_cross_world_worker(pair_index: int) -> dict[str, int]:
+    if _E37_FRAME_CACHE is None:
+        raise RuntimeError("E37 production frame cache is not initialized")
+    left_index = pair_index
+    right_index = pair_index + 64
+    left_world = _E37_WORLDS[left_index]
+    right_world = _E37_WORLDS[right_index]
+    frame_id = _E37_FRAME_IDS[pair_index % len(_E37_FRAME_IDS)]
+    cache = _E37_FRAME_CACHE(7)
+    calls = {left_index: 0, right_index: 0}
+
+    def request(index: int, world: WorldSpec) -> RenderedFrame:
+        def produce() -> RenderedFrame:
+            calls[index] += 1
+            assert _E37_RAY_GRID is not None and _E37_SENSOR is not None
+            return render_frame(
+                _E37_FRAMES[frame_id], world, _E37_RAY_GRID, _E37_SENSOR
+            )
+        return cache.rendered_frame(_e37_cache_key(world, frame_id), produce)
+
+    left_first = request(left_index, left_world)
+    right_first = request(right_index, right_world)
+    left_second = request(left_index, left_world)
+    right_second = request(right_index, right_world)
+    errors = int(calls[left_index] != 1 or calls[right_index] != 1)
+    errors += int(left_first is not left_second or right_first is not right_second)
+    errors += int(left_first is right_first)
+    return {"cache_miss_errors": errors, "factory_calls": sum(calls.values())}
+
+
+def _e37_static_window_audit() -> tuple[int, int]:
+    tree = ast.parse(Path(__file__).read_text(encoding="utf-8"))
+    render_parameters = -1
+    uniform_window_reads = 0
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if node.name == "render_frame":
+            names = [item.arg for item in node.args.args]
+            render_parameters = sum("window" in name for name in names)
+        elif node.name == "_slot_uniform":
+            uniform_window_reads += sum(
+                isinstance(child, ast.Name) and "window" in child.id
+                or isinstance(child, ast.Attribute) and "window" in child.attr
+                for child in ast.walk(node)
+            )
+    return render_parameters, uniform_window_reads
+
+
+def run_e37_qualification(
+    e26_artifact_path: Path | str,
+    data_root: Path | str,
+    calibration_path: Path | str,
+    output_path: Path | str,
+    *,
+    processes: int = 24,
+) -> dict[str, object]:
+    """Qualify world/frame identity across overlapping window request paths."""
+    if processes != 24:
+        raise RenderError("formal E37 requires exactly 24 worker processes")
+    try:
+        from .protocol import load_protocol
+        from .scene import LabelMode, STUSequence
+        from .train import FrameCache, FrameCacheKey
+    except ImportError:
+        from protocol import load_protocol  # type: ignore[no-redef]
+        from scene import LabelMode, STUSequence  # type: ignore[no-redef]
+        from train import FrameCache, FrameCacheKey  # type: ignore[no-redef]
+
+    with np.load(
+        Path(e26_artifact_path).expanduser().resolve(strict=True), allow_pickle=False
+    ) as source:
+        metadata = json.loads(str(source["metadata_json"]))
+        if metadata.get("experiment") != "E26" or metadata.get("passed") is not True:
+            raise RenderError("E37 requires the passed formal E26 artifact")
+        records = [
+            (str(world_type), int(seed), WorldSpec.from_dict(json.loads(payload.decode())))
+            for world_type, seed, payload in zip(
+                source["world_type"], source["world_seed"], source["world_json"],
+                strict=True,
+            )
+        ]
+    selected = tuple(
+        world
+        for world_type in WORLD_TYPES
+        for _, _, world in sorted(
+            (item for item in records if item[0] == world_type),
+            key=lambda item: item[1],
+        )[:32]
+    )
+    if len(selected) != 128 or {
+        world_type: sum(world.world_type == world_type for world in selected)
+        for world_type in WORLD_TYPES
+    } != {world_type: 32 for world_type in WORLD_TYPES}:
+        raise RenderError("E37 fixed E26 world coverage changed")
+
+    project_root = Path(__file__).resolve().parents[1]
+    protocol = load_protocol(project_root / "protocol.json")
+    sequence = STUSequence.open(
+        data_root, protocol=protocol, partition="train", sequence_id=206,
+        label_mode=LabelMode.REQUIRED,
+    )
+    frames = {frame_id: sequence.source_frame(frame_id) for frame_id in _E37_FRAME_IDS}
+    ray_grid, sensor = load_sensor_calibration(calibration_path)
+    render_source_sha256 = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+    renderer_payload = {
+        "generator_schema": PROCEDURAL_GENERATOR_SCHEMA,
+        "render_source_sha256": render_source_sha256,
+    }
+    renderer_identity = hashlib.sha256(
+        json.dumps(renderer_payload, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    source_digest = hashlib.sha256()
+    for frame_id in _E37_FRAME_IDS:
+        frame = frames[frame_id]
+        source_digest.update(np.asarray(frame.xyzi).tobytes())
+        source_digest.update(np.asarray(frame.lidar_pose).tobytes())
+        assert frame.labels is not None
+        source_digest.update(np.asarray(frame.labels.packed).tobytes())
+    source_identity = source_digest.hexdigest()
+    stu_identity = hashlib.sha256(
+        Path(calibration_path).expanduser().resolve(strict=True).read_bytes()
+    ).hexdigest()
+    global _E37_WORLDS, _E37_FRAMES, _E37_RAY_GRID, _E37_SENSOR
+    global _E37_RENDERER_IDENTITY, _E37_SOURCE_IDENTITY, _E37_STU_IDENTITY
+    global _E37_FRAME_CACHE, _E37_FRAME_CACHE_KEY
+    _E37_WORLDS = selected
+    _E37_FRAMES = frames
+    _E37_RAY_GRID = ray_grid
+    _E37_SENSOR = sensor
+    _E37_RENDERER_IDENTITY = renderer_identity
+    _E37_SOURCE_IDENTITY = source_identity
+    _E37_STU_IDENTITY = stu_identity
+    _E37_FRAME_CACHE = FrameCache
+    _E37_FRAME_CACHE_KEY = FrameCacheKey
+
+    context = mp.get_context("fork")
+    modes = (
+        ("serial_cached_forward", 1),
+        ("parallel_uncached_forward", processes),
+        ("parallel_cached_reverse", processes),
+        ("parallel_cached_random", processes),
+    )
+    executions: dict[str, list[dict[str, object]]] = {}
+    run_seconds: dict[str, float] = {}
+    for mode, worker_count in modes:
+        started = time.monotonic()
+        tasks = [(index, mode) for index in range(128)]
+        with context.Pool(processes=worker_count) as workers:
+            values = workers.map(_e37_worker, tasks)
+        executions[mode] = sorted(values, key=lambda item: int(item["world_index"]))
+        run_seconds[mode] = time.monotonic() - started
+    with context.Pool(processes=processes) as workers:
+        cross_world = workers.map(_e37_cross_world_worker, range(64))
+
+    reference = executions["serial_cached_forward"]
+    field_names = tuple(next(iter(reference))["digests"][_E37_FRAME_IDS[0]])
+    digest_errors = {name: 0 for name in field_names}
+    identity_errors = 0
+    for mode, values in executions.items():
+        for expected, actual in zip(reference, values, strict=True):
+            identity_errors += int(
+                expected["world_hash"] != actual["world_hash"]
+                or expected["world_type"] != actual["world_type"]
+            )
+            for frame_id in _E37_FRAME_IDS:
+                for name in field_names:
+                    digest_errors[name] += int(
+                        expected["digests"][frame_id][name]
+                        != actual["digests"][frame_id][name]
+                    )
+    duplicate_bit_errors = sum(
+        int(value["duplicate_bit_errors"])
+        for values in executions.values() for value in values
+    )
+    expected_calls = {
+        "serial_cached_forward": 128 * 6,
+        "parallel_uncached_forward": 128 * 10,
+        "parallel_cached_reverse": 128 * 6,
+        "parallel_cached_random": 128 * 6,
+    }
+    render_calls = {
+        mode: sum(int(value["render_calls"]) for value in values)
+        for mode, values in executions.items()
+    }
+    render_call_errors = sum(
+        render_calls[mode] != expected for mode, expected in expected_calls.items()
+    )
+    cross_world_cache_errors = sum(
+        int(value["cache_miss_errors"]) for value in cross_world
+    )
+    cross_world_factory_calls = sum(int(value["factory_calls"]) for value in cross_world)
+    render_window_parameters, uniform_window_reads = _e37_static_window_audit()
+    passed = (
+        identity_errors == 0
+        and all(value == 0 for value in digest_errors.values())
+        and duplicate_bit_errors == 0
+        and render_call_errors == 0
+        and cross_world_cache_errors == 0
+        and cross_world_factory_calls == 128
+        and render_window_parameters == 0
+        and uniform_window_reads == 0
+    )
+    world_hashes = np.asarray([world.identity for world in selected], dtype="S64")
+    output_digests = np.asarray(
+        [
+            reference[world_index]["digests"][frame_id][name]
+            for world_index in range(128)
+            for frame_id in _E37_FRAME_IDS
+            for name in field_names
+        ],
+        dtype="S64",
+    ).reshape(128, 6, len(field_names))
+    scientific = {
+        "world_hash": world_hashes,
+        "frame_id": np.asarray(_E37_FRAME_IDS, dtype=np.int16),
+        "field_name": np.asarray(field_names, dtype="U32"),
+        "output_sha256": output_digests,
+    }
+    result = {
+        "experiment": "E37", "passed": passed, "worlds": 128,
+        "world_type_counts": {world_type: 32 for world_type in WORLD_TYPES},
+        "window_centers": [100, 101], "window_frame_ids": [[98, 99, 100, 101, 102], [99, 100, 101, 102, 103]],
+        "unique_frames_per_world": 6, "frame_requests_per_world": 10,
+        "qualified_fields": list(field_names), "identity_errors": identity_errors,
+        "field_digest_errors": digest_errors,
+        "duplicate_request_bit_errors": duplicate_bit_errors,
+        "render_calls": render_calls, "expected_render_calls": expected_calls,
+        "render_call_errors": int(render_call_errors),
+        "cross_world_cache_errors": cross_world_cache_errors,
+        "cross_world_factory_calls": cross_world_factory_calls,
+        "render_frame_window_parameters": render_window_parameters,
+        "slot_uniform_window_reads": uniform_window_reads,
+        "execution_processes": {mode: count for mode, count in modes},
+        "run_seconds": run_seconds, "render_source_sha256": render_source_sha256,
+        "renderer_generator_identity": renderer_identity,
+        "source_identity": source_identity, "stu_identity": stu_identity,
+        "scientific_array_hash": _scientific_array_hash(scientific),
+    }
+    destination = Path(output_path).expanduser().resolve()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_suffix(destination.suffix + ".tmp.npz")
+    np.savez_compressed(
+        temporary, **scientific,
+        metadata_json=np.asarray(json.dumps(result, sort_keys=True, separators=(",", ":"))),
+    )
+    os.replace(temporary, destination)
+    return result
+
+
 def _render_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="AJAE authoritative renderer experiments")
     subcommands = parser.add_subparsers(dest="command", required=True)
@@ -9575,6 +9947,12 @@ def _render_parser() -> argparse.ArgumentParser:
     e36v2.add_argument("--calibration", type=Path, required=True)
     e36v2.add_argument("--output", type=Path, required=True)
     e36v2.add_argument("--processes", type=int, default=24)
+    e37 = subcommands.add_parser("qualify-e37")
+    e37.add_argument("--e26-artifact", type=Path, required=True)
+    e37.add_argument("--data-root", type=Path, required=True)
+    e37.add_argument("--calibration", type=Path, required=True)
+    e37.add_argument("--output", type=Path, required=True)
+    e37.add_argument("--processes", type=int, default=24)
     return parser
 
 
@@ -9660,6 +10038,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0 if result["passed"] else 1
     if args.command == "qualify-e36-v2":
         result = run_e36_v2_qualification(args.calibration, args.output, processes=args.processes)
+        print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        return 0 if result["passed"] else 1
+    if args.command == "qualify-e37":
+        result = run_e37_qualification(
+            args.e26_artifact, args.data_root, args.calibration, args.output,
+            processes=args.processes,
+        )
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 0 if result["passed"] else 1
     raise AssertionError("unreachable renderer command")
