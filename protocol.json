@@ -2131,7 +2131,7 @@
       }
     },
     "renderer_mechanical_qualification": {
-      "status": "E27-E42 PASS; E28-v1 and E36-v1 FAIL retained; E43 unlocked",
+      "status": "E27-E42 PASS; E28-v1 and E36-v1 FAIL retained; E43 execution frozen",
       "layer_boundaries": {"E27-E28": "direct geometry outputs only", "E29": "return probability and deterministic acceptance decision only", "E30-E31": "accepted returns", "E32-E33": "nearest-return occlusion competition"},
       "E27": {
         "question": "Does the formal geometry path return the correct nearest convex-hull hit, outward finite normal and object ID for active normal-control templates when return rejection is disabled?",
@@ -2557,6 +2557,19 @@
         "pass_conditions": ["geometry, acceptance and visibility counts are nonnegative and ordered", "distance and range-bin identities are finite and valid", "zero-visible plus four positive layers conserves every entity-frame", "normal-control and anomaly-proxy each cover at least three positive-Nvis layers", "at least one support-range-Nvis stratum contains all three sources", "two complete statistic runs are elementwise identical"],
         "claim_limit": "E42 establishes preliminary stratum support only; E45 alone adjudicates the complete frozen matching contract.",
         "result": {"passed": true, "entity_frame_groups_per_source": 1280, "source_layer_count": [[0, 10, 433, 837], [51, 223, 402, 597], [68, 200, 356, 652]], "source_zero_visible_count": [0, 7, 4], "generated_layer_coverage": [4, 4], "shared_support_range_nvis_strata": 12, "definition_errors": 0, "count_errors": 0, "coverage_errors": 0, "matching_errors": 0, "elementwise_reproduced": true, "two_run_total_seconds": 0.0014445129927480593, "scientific_array_sha256": "8de2b629f5dd6d6ea1202f546826300c36cd68e5bd2ddf7f4772e859b1aac3d5", "artifact_bytes": 50075, "artifact_sha256": "19da6a5c347768e7861c75bac2e62cc2dfe0ada7d4ff294306a5ecca797f791e", "claim_limit": "All generated sources cover four positive-Nvis layers and 12 preliminary shared strata; complete frozen matching remains E45."}
+      },
+      "E43": {
+        "question": "Are fixed-world five-frame visibility traces deterministic across repeated rendering and independent of window identity, with finite Nvis change and V statistics?",
+        "input_window_audit": "runs/ajae/e37_world_frame_consistency.npz",
+        "input_trace": "runs/ajae/e39_per_range_return.npz",
+        "relative_change": "abs(N_t-N_tminus1)/max(N_tminus1,1)",
+        "V": "number of frames in the five-frame trace with Nvis greater than zero",
+        "implementation_commit": "7dcd999a49b3312c4ca1030cff9b4e03d09b7cb4",
+        "render_source_sha256": "06f9174a41246ba68e339b4e3f0cde706a5673300d3656291e04de646756b324",
+        "command": "python -m src.render qualify-e43 --e37-artifact runs/ajae/e37_world_frame_consistency.npz --e39-artifact runs/ajae/e39_per_range_return.npz --output runs/ajae/e43_temporal_visibility.npz",
+        "artifact": "runs/ajae/e43_temporal_visibility.npz",
+        "pass_conditions": ["E37 window-identity and cross-path errors remain zero", "E39 repeated complete rendering is elementwise identical", "Nvis counts and V strata are valid and conserved", "all adjacent-frame relative changes and reported quantiles are finite", "two complete statistic runs are elementwise identical"],
+        "appearance_disappearance_policy": "reported descriptively because genuine source-frame geometry may move a fixed entity into or out of visibility"
       }
     },
     "world_types": {"pure_normal": 0.2, "control_only": 0.2, "mixed": 0.4, "anomaly_only": 0.2},
