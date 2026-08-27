@@ -1849,14 +1849,14 @@
           "design_authorities": ["AJAE新主线方案.md", "AJAE实验执行状态机.md"],
           "design_authority_sha256": {
             "main_plan": "da5dfb1bcd8c46ad962af103f6b426b67066efd4ba170d2886034a5a0b09d27e",
-            "state_machine": "4cfa12d34d9cc79a4fdda163970fcde29133eeaf9549692bc88c0eb0c034e378"
+            "state_machine": "eb544966bee3cfe40cbeb610de5a37f6ef378e73347ccbeb238efd57b07b8f8e"
           },
           "implementation_identity": {
-            "commit": "963d8cb8bac037de6fd6c6a081ed7152535ab02e",
-            "render_sha256": "010f3f8364a66d23bd0980897e4dc4d9febcc42e8c401cd78a291f326f948cb9",
-            "train_sha256": "eb30a33b97d7422671aad0fd87f0e3efd2626e4235c9db1bf91ef13566dca53d",
-            "tests_sha256": "3054bdff70848b140417da31213d43daf8a13a8b8f0b804844e1f205013be1cd",
-            "regression": "45 passed in 99.24 seconds",
+            "commit": "bf6ce20c3a9ae416f501a9c4846a5061b3fa9dea",
+            "render_sha256": "946f192812e20d201a5d8a096138bf023a7730e720dd44fcd12ff1b51def648a",
+            "train_sha256": "92a3f51f93e26bead6a1d9d92e37af2b5e4df092ffc9716852806b4b67be546b",
+            "tests_sha256": "490d1e1739f07803bae818f24c5b9f25ac19c11bebe9cbc7f0378c2d9d8f277b",
+            "regression": "45 passed in 99.32 seconds",
             "old_dev_boundary": "dev.json remains schema-4/world-v2 historical data and is rejected; it is not migrated"
           },
           "common_pipeline": {
@@ -1869,7 +1869,7 @@
             "pair_collision": "0.05 m-expanded AABB broad phase followed by bidirectional continuous witnesses; AABB and bounding spheres never decide acceptance",
             "maximum_support_proposals_per_entity": 128,
             "world_format": "ajae-world-v3",
-            "world_generation_report_format": "ajae-world-generation-report-v1",
+            "world_generation_report_format": "ajae-world-generation-report-v2",
             "retired_formal_paths": ["arbitrary-ground-return placement", "bounding-sphere final pair collision", "schema-4 dev.json migration"]
           },
           "E23": {
@@ -2061,10 +2061,23 @@
             }
           },
           "E26": {
-            "status": "DESIGN FROZEN; unlocked",
+            "status": "DESIGN AND EXECUTION FROZEN; formal run pending",
             "world_seeds": [2600000, 2600255],
             "world_type_quota_each": 64,
             "maximum_world_attempts": 48,
+            "world_type_assignment": "indices 0-63 pure_normal, 64-127 control_only, 128-191 mixed, 192-255 anomaly_only",
+            "world_attempt_seed": "world_seed+1000003*world_attempt",
+            "entity_seed": "attempt_seed+10007*(entity_index+1)",
+            "normal_streams": {"template_seed": "entity_seed+1", "scale_seed": "entity_seed+2 with SeedSequence([scale_seed,2501])", "material_seed": "entity_seed+11", "pose_seed": "entity_seed+31 with SeedSequence([pose_seed,2502])"},
+            "anomaly_shape_stream": "entity_seed+3+3072*q, q=0..63, first E22-qualified shape",
+            "support_namespace": "training-world-v1",
+            "window_center": "2+world_seed mod 445",
+            "window_random_order": "default_rng(SeedSequence([world_seed,2601])).permutation(five consecutive frame ids)",
+            "frame_request_identity": "SHA-256 of canonical world_hash:frame_id:renderer_identity ASCII tuple",
+            "manifest_runs": ["single process from generation start", "24 processes from generation start"],
+            "implementation_commit": "bf6ce20c3a9ae416f501a9c4846a5061b3fa9dea",
+            "command": "python -m src.render qualify-e26 --data-root /home/jasongao/Data/STU --support-pool runs/ajae/e21_v4_support_pool.npz --output runs/ajae/e26_world_builder.npz --processes 24",
+            "artifact": "runs/ajae/e26_world_builder.npz",
             "pass_conditions": ["256/256 worlds built with correct type", "canonical JSON and world hash repeat exactly", "window traversal never changes WorldSpec", "frame request identity is order/cache invariant", "all nonempty entities retain E22-E25", "one authoritative placement path", "two runs elementwise identical"]
           },
           "criteria_frozen_before_E23_formal_run": true

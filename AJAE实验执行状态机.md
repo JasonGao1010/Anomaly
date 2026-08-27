@@ -3065,6 +3065,18 @@ world seed 2,600,000–2,600,255，共 256 个世界，pure-normal/control-only/
 4. cached、uncached 与清空缓存后重建；
 5. 单进程与24进程 manifest 构造。
 
+**执行冻结**
+
+world index 0–255依次对应world seed 2,600,000–2,600,255；index 0–63、64–127、128–191、192–255分别固定为pure-normal、control-only、mixed、anomaly-only。实体数量继续由 `default_rng(world_seed)` 按冻结的1–9分布抽取；第 $a$ 次完整world attempt使用 `attempt_seed=world_seed+1,000,003a`，实体顺序由该随机流固定。第 $j$ 个实体的基础seed为 `attempt_seed+10,007(j+1)`。
+
+normal-control的template/scale/material/pose seed分别为entity seed+1、entity seed+2、entity seed+11、entity seed+31。模板只从E25已资格的256个train/206模板库中确定性抽取；缩放使用 `SeedSequence([scale_seed,2501])`；姿态扰动使用 `SeedSequence([pose_seed,2502])` 并沿用E25类别范围；每个support proposal的最终yaw继续由源帧轨迹切向加该固定扰动构成。anomaly-proxy从entity seed+3开始使用步长3,072、最多64次的E24-v2 shape proposal stream；shape通过E22后再进入最多128次的统一support placement。全部实体共享 `training-world-v1` 支撑命名空间并执行E22→E23→E24→E25；任一实体耗尽时才进入下一个完整world attempt，最多48次。
+
+`WorldGenerationReport`升级为 `ajae-world-generation-report-v2`，除全部placement记录外显式保存normal/anomaly数量、count seed与label-order seed。历史 `generate_fixed_development_worlds` 使用已经失效的任意ground接口且没有调用者，已从正式源码删除；`sample_training_world`及其内部唯一一次 `place_object` 调用成为训练世界的唯一放置入口。
+
+每个world的窗口中心固定为 `2+world_seed mod 445`，审计连续5帧。随机遍历由 `SeedSequence([world_seed,2601])` 固定。帧请求身份由 `(world_hash,frame_id,renderer_identity)` 的规范字符串计算SHA-256；正序、逆序、随机序、空缓存、复用缓存和清空后重建必须得到相同frame-id到请求身份映射，且遍历前后world JSON逐字一致。第一次完整manifest使用单进程，第二次使用24进程，两次均从WorldSpec生成起点执行并要求全部保存数组逐元素一致。
+
+正式实现提交为 `bf6ce20c3a9ae416f501a9c4846a5061b3fa9dea`；`src/render.py`、`src/train.py`和`test_ajae.py` SHA-256分别为 `946f192812e20d201a5d8a096138bf023a7730e720dd44fcd12ff1b51def648a`、`92a3f51f93e26bead6a1d9d92e37af2b5e4df092ffc9716852806b4b67be546b`、`490d1e1739f07803bae818f24c5b9f25ac19c11bebe9cbc7f0378c2d9d8f277b`；完整回归为45项全部通过，用时99.32秒。正式命令为 `python -m src.render qualify-e26 --data-root /home/jasongao/Data/STU --support-pool runs/ajae/e21_v4_support_pool.npz --output runs/ajae/e26_world_builder.npz --processes 24`。
+
 **PASS 条件**
 
 - 256/256 world 均成功且 world type 正确；
