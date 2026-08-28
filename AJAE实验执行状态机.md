@@ -1,304 +1,220 @@
-# AJAE 细粒度实验执行状态机
+# AJAE Fine-Grained Experiment Execution State Machine
 
-> 当前权威基线：本仓库`main`、本文件记录的全部历史证据、E25-new、E26-v2及E38-v2正式PASS。新版normal-control分布下的Phase 2已经关闭，E38-v2已经关闭，E39刷新解锁。旧提交`44fd6d13798e826b2cac8371de26a7d17707dadc`只保留为E22-v2时期的历史基线，不再代表当前工作区状态。
+> Current authoritative baseline: repository `main`; all historical evidence recorded in this document; and the formal PASS results of E25-new, E26-v2, and E38-v2. Phase 2 under the new normal-control distribution is closed, E38-v2 is closed, and the E39 refresh is unlocked. The old commit `44fd6d13798e826b2cac8371de26a7d17707dadc` is retained only as the historical baseline from the E22-v2 period and no longer represents the current workspace state.
 
-> 依据：`AJAE新主线方案.md`。本文件把主线方案中的不可变约束、四个 Decision Gates、B0–B5 对照、正常运动安全、对象尺度诊断、开发纪律与一次性真实 OOD 验证，拆成可顺序执行的细粒度实验节点。
+> Basis: [AJAE Mainline Plan](</home/jasongao/Study/AJAE/AJAE%E6%96%B0%E4%B8%BB%E7%BA%BF%E6%96%B9%E6%A1%88.md>). This document decomposes the mainline plan's immutable constraints, four Decision Gates, B0–B5 controls, normal-motion safety, object-scale diagnostics, development discipline, and one-time real-OOD validation into fine-grained experiment nodes that can be executed sequentially.
 
-## 0. 使用规则
+## 0. Operating Rules
 
-1. **一次只执行当前已解锁实验。** 后继实验只有在当前实验 PASS 后才能解锁，除非本节点明确给出 FAIL 分支。
-2. **一个实验只回答一个局部问题。** 不允许把失败解释成“整体 Gate 失败后再内部探索”；需要的诊断节点已经预先写在状态机中。
-3. **主线方案没有给出数值阈值的地方，不允许事后决定。** 这些阈值必须在该指标首次正式运行前，基于科学容忍度和数据规模写入协议并冻结。
-4. **19 条公开真实异常和 51 条隐藏测试严格后置。** E97–E98 完成前不得访问 19；Gate 4 通过前不得使用 51。
-5. **任何会改变科学方法的修改都会使其下游实验失效。** 文中 FAIL 路径会明确指出需要回滚到哪个最早节点。
-6. **PASS 不等于“效果很好”。** 对机械/资格实验，PASS 只表示该局部事实已被验证；对 B1/B3/B4 等科学实验，PASS 才对应相应科学主张。
-7. **所有实验必须保存最小证据包：** command、resolved config、git commit、seed（若有）、输入数据 identity/hash、输出 artifact、日志、判定脚本与最终 PASS/FAIL。
-8. **人工可视化审查同样必须预注册。** 查看图像前必须冻结样本身份与抽样规则、相机与视角、物理尺度、光照、背景、点大小或色标、问题、审查者数量、盲法、随机化和裁决标准；禁止手工挑选案例。原始个人评分、随机化顺序与解盲密钥必须进入证据包。可视化不得覆盖自动实验的 FAIL；因可视化而修改方法后，被查看样本只属于开发证据。正式可视化不得读取 19 条公开真实异常或 51 条隐藏测试；201 只作为开发来源，19 仍须等方法完全冻结后一次性使用。
-9. **整段预设计、逐节点执行。** 每个阶段的全部后续节点必须在该阶段首个正式结果出现前一次性完成设计冻结；前置节点仍按顺序解锁正式执行，但不得再因“下一节点尚未设计”而中断。
-10. **设计冻结与执行冻结分离。** 设计冻结规定科学问题、样本规则、指标、阈值和失败分支；执行冻结只补 runner、源码、配置与输入产物身份。实现身份不得反向改动科学构念。
-11. **硬门只对应直接风险。** 数据泄漏、标签错误、物理/渲染语义、来源泄漏、B1>B0、B3>B1/B2、正常运动安全与真实 OOD 迁移可以阻断；普通相关、理想收敛速率、接触带采样点数、可视化印象和运行时分位数默认只报告。
-12. **预检不得偷看结果。** 阶段预检只允许检查数据身份、可观察支持、类型/schema、资源预算、代码路径和 manifest；不得计算将参与正式 PASS/FAIL 的新结果。预检发现可观察性不足时，只能启用本文件已冻结的分支。
-13. **FAIL 必须分类。** 统一使用 `implementation_defect`、`sample_or_observability_defect`、`qualification_specification_defect`、`scientific_failure` 或 `descriptive_deviation`。只有前三类需要版本化修订；最后一类不得派生阻断支线。
-14. **同一权威实现。** 新资格已经替代旧入口时，正式代码必须删除或停用旧入口，不允许训练世界继续使用一套、审计实验使用另一套。特别是 E23 前必须统一为 E21-v4 support-pool-only placement 和 E22-v2 grounding。
-15. **人工节点默认非阻断。** 除非人类判断本身是不可替代的核心构念且审查资源已真实存在，否则人工面板只作描述性诊断，不得阻塞自动证据链，也不得由 AI 角色冒充独立人类。
+1. **Execute only the currently unlocked experiment.** A successor experiment is unlocked only after the current experiment passes, unless the current node explicitly defines a FAIL branch.
+2. **Each experiment answers exactly one local question.** A failure may not be reinterpreted as “the whole Gate failed, followed by internal exploration”; required diagnostic nodes are already specified in the state machine.
+3. **A numerical threshold absent from the mainline plan may not be chosen after results are observed.** It must be written into the protocol and frozen, based on scientific tolerance and data scale, before that metric is first run formally.
+4. **The 19 public real-anomaly sequences and 51 hidden-test sequences are strictly deferred.** The 19 may not be accessed before E97–E98 are complete; the 51 may not be used before Gate 4 passes.
+5. **Any modification that changes the scientific method invalidates its downstream experiments.** Each FAIL route specifies the earliest node to which execution must return.
+6. **PASS does not mean “the effect is strong.”** For mechanical or qualification experiments, PASS verifies only the stated local fact. For scientific experiments such as B1, B3, and B4, PASS supports the corresponding scientific claim.
+7. **Every experiment must preserve a minimum evidence package:** command, resolved configuration, Git commit, seed when applicable, input data identity/hash, output artifact, log, adjudication script, and final PASS/FAIL result.
+8. **Manual visual review must also be preregistered.** Before any image is viewed, freeze sample identities and sampling rules, camera and viewpoint, physical scale, lighting, background, point size or color scale, questions, number of reviewers, blinding, randomization, and adjudication criteria. Raw individual ratings, randomized order, and the unblinding key must enter the evidence package. Visualization may not override an automated FAIL. If visualization causes a method change, viewed samples become development evidence only. Formal visualization may not read the 19 public real anomalies or the 51 hidden-test sequences; train/201 is a development source only, and the 19 must still be used once only after the method is fully frozen.
+9. **Design the whole phase first, then execute node by node.** All later nodes in a phase must be design-frozen once before the first formal result in that phase appears. Prerequisite nodes still unlock formal execution sequentially, but execution may not pause merely because a later node has not yet been designed.
+10. **Separate design freeze from execution freeze.** The design freeze specifies the scientific question, sampling rules, metrics, thresholds, and failure branches. The execution freeze adds only the runner, source code, configuration, and input-artifact identities. Implementation identity may not change the scientific construct retroactively.
+11. **Hard gates correspond only to direct risks.** Data leakage, label error, physical or rendering semantics, source leakage, B1>B0, B3>B1/B2, normal-motion safety, and real-OOD transfer may block the line. Ordinary correlation, ideal convergence rate, contact-band sample count, visual impression, and runtime percentiles are descriptive by default.
+12. **Preflight may not inspect formal results.** A phase preflight may inspect only data identity, observable support, type/schema, resource budget, code path, and manifest. It may not compute a new result that will enter formal PASS/FAIL adjudication. If preflight finds inadequate observability, only a branch already frozen in this document may be used.
+13. **Every FAIL must be classified.** Use only `implementation_defect`, `sample_or_observability_defect`, `qualification_specification_defect`, `scientific_failure`, or `descriptive_deviation`. The first three require a versioned revision. `descriptive_deviation` may not create a blocking branch.
+14. **Maintain one authoritative implementation.** When a new qualification replaces an old entry point, formal code must delete or disable the old entry point. Training worlds and audit experiments may not use different implementations. In particular, before E23, placement must be unified on E21-v4 qualified-support-pool-only placement and E22-v2 grounding.
+15. **Human-review nodes are non-blocking by default.** Unless human judgment is itself an irreplaceable core construct and real review resources exist, human panels are descriptive diagnostics only. They may not block the automated evidence chain, and AI roles may not impersonate independent human reviewers.
 
+## 1. Experiment Execution Architecture
 
-## 1. 实验执行架构图
-
-下图中每个实验序号都是一个独立节点。实线为主 PASS 路径；虚线为关键 FAIL 回退路径。节点详情中的“FAIL→”比图中的虚线更精确，应以节点详情为最终准则。
-
+Each experiment number below is an independent node. Solid arrows denote the primary PASS path; dashed arrows denote important FAIL return paths. The `FAIL →` statement in the corresponding experiment record is more precise than the diagram and is authoritative.
 
 ```mermaid
 flowchart TB
-  subgraph P0["Phase 0｜协议、数据纪律与官方 STU 运行资格"]
-    E00["E00 工作区与协议快照冻结"]
-    E01["E01 公开 19 条真实异常访问保护"]
-    E02["E02 51 条隐藏测试访问保护"]
-    E03["E03 官方 STU 依赖导入"]
-    E04["E04 官方 STU checkpoint 实例化"]
-    E05["E05 STU 单真实帧前向"]
-    E06["E06 STU 冻结不变量"]
-    E07["E07 缓存身份与跨世界隔离"]
-    E00 --> E01
-    E01 --> E02
-    E02 --> E03
-    E03 --> E04
-    E04 --> E05
-    E05 --> E06
-    E06 --> E07
+  subgraph P0["Phase 0 | Protocol, data discipline, and official STU runtime qualification"]
+    E00["E00 Workspace and protocol snapshot freeze"]
+    E01["E01 Access protection for the 19 public real anomalies"]
+    E02["E02 Access protection for the 51 hidden tests"]
+    E03["E03 Official STU dependency import"]
+    E04["E04 Official STU checkpoint instantiation"]
+    E05["E05 STU forward pass on one real frame"]
+    E06["E06 STU freeze invariants"]
+    E07["E07 Cache identity and cross-world isolation"]
+    E00 --> E01 --> E02 --> E03 --> E04 --> E05 --> E06 --> E07
   end
-  subgraph P1["Phase 1｜规范 OS1-128 射线身份"]
-    E08["E08 槽位总数与空槽规律"]
-    E09["E09-v2 128 beam row 身份恢复"]
-    E10["E10-v3 可观察 azimuth 连续性与环绕可识别性"]
-    E11["E11-v3 自标定规范物理射线身份"]
-    E11D1["E11-D1 STU 点坐标来源审计"]
-    E11D2["E11-D2 整帧刚体变换可解释性"]
-    E11D3["E11-D3 逐 column 时间/去畸变可解释性"]
-    E11D4A["E11-D4a staggered/destaggered 行相位诊断"]
-    E11D4B["E11-D4b Ouster 投影模型自标定"]
-    E11D4C["E11-D4c 跨序列内参验证"]
-    E12["E12 多回波重排风险"]
-    E13["E13 raw→ray→raw 点数往返"]
-    E14["E14 raw→ray→raw 几何往返"]
-    E15["E15 多序列射线资格确认"]
-    E08 --> E09
-    E09 --> E10
-    E10 --> E11
-    E11 --> E12
-    E11 -. "FAIL 诊断" .-> E11D1
-    E11D1 -. "已识别整帧变换" .-> E11D2
-    E11D1 -. "已获得时间/元数据" .-> E11D3
-    E11D2 -. "形成版本化物理解释" .-> E11
-    E11D3 -. "形成版本化物理解释" .-> E11
-    E11D1 -. "公开语义不足，转入反演" .-> E11D4A
-    E11D4A --> E11D4B
-    E11D4B --> E11D4C
-    E11D4C -. "跨序列成立" .-> E11
-    E12 --> E13
-    E13 --> E14
-    E14 --> E15
+  subgraph P1["Phase 1 | Canonical OS1-128 ray identity"]
+    E08["E08 Slot count and empty-slot pattern"]
+    E09["E09-v2 Recovery of 128 beam-row identities"]
+    E10["E10-v3 Observable azimuth continuity and wrap identifiability"]
+    E11["E11-v3 Final qualification of self-calibrated canonical physical rays"]
+    E11D1["E11-D1 Audit of STU point-coordinate provenance"]
+    E11D2["E11-D2 Interpretability as a frame-wide rigid transform"]
+    E11D3["E11-D3 Interpretability by per-column timing or deskew"]
+    E11D4A["E11-D4a Staggered/destaggered row-phase diagnosis"]
+    E11D4B["E11-D4b Self-calibration of the Ouster projection model"]
+    E11D4C["E11-D4c Cross-sequence intrinsic validation"]
+    E12["E12 Multi-return reordering risk"]
+    E13["E13 Raw-to-ray-to-raw count round trip"]
+    E14["E14 Raw-to-ray-to-raw geometry round trip"]
+    E15["E15 Multi-sequence ray qualification"]
+    E08 --> E09 --> E10 --> E11 --> E12 --> E13 --> E14 --> E15
+    E11 -. "FAIL diagnosis" .-> E11D1
+    E11D1 -. "Frame-wide transform identified" .-> E11D2
+    E11D1 -. "Timing or metadata obtained" .-> E11D3
+    E11D2 -. "Versioned physical explanation obtained" .-> E11
+    E11D3 -. "Versioned physical explanation obtained" .-> E11
+    E11D1 -. "Public semantics insufficient; invert model" .-> E11D4A
+    E11D4A --> E11D4B --> E11D4C
+    E11D4C -. "Cross-sequence validity established" .-> E11
   end
-  subgraph P2["Phase 2｜程序化几何、正常控制与放置"]
-    E16["E16 primitive 数值有限与有界"]
-    E17["E17 单 primitive 射线求交"]
-    E18A["E18a 多 primitive / CSG 连续尺寸资格"]
-    E18B["E18b CSG 与连续形变求交稳定性"]
-    E19["E19 单连通实体拒绝"]
-    E20A["E20a schema-6 几何覆盖（历史 FAIL）"]
-    E20D2A["E20a-D2A 基础轴比采样器资格"]
-    E20D2B["E20a-D2B 偏心共同见证构造资格"]
-    E18BV3["E18b-v4 schema-7 新域求交资格"]
-    E19V4["E19-v4 schema-7 生成器资格"]
-    E20AV2["E20a-v3 schema-7 几何覆盖 PASS"]
-    E20V1["E20-V1 已退役人工审查"]
-    E20B["E20b-lite 简单捷径审计"]
-    E21["E21-v4 合格支撑区域池 PASS"]
-    E22["E22-v2 连续落地与埋地 PASS"]
-    E23["E23 已观测正常几何碰撞"]
-    E24["E24 插入实体相互碰撞"]
-    E25["E25-new 覆盖导向正常控制合法生成"]
-    E26["E26-v2 新control分布完整世界规格"]
-    E26V1["E26-V1 放置场景人工审查"]
-    E16 --> E17
-    E17 --> E18A
-    E18A --> E18B
-    E18B --> E19
-    E19 --> E20A
-    E20A -. "FAIL 后归因" .-> E20D2A
-    E20D2A --> E20D2B
-    E20D2B --> E18BV3
-    E18BV3 --> E19V4
-    E19V4 --> E20AV2
-    E20AV2 --> E20B
-    E20AV2 -. "已退役人审" .-> E20V1
-    E20B --> E21
-    E21 --> E22
-    E22 --> E23
-    E23 --> E24
-    E24 --> E25
-    E25 --> E26
-    E26 -. "非阻断描述" .-> E26V1
+  subgraph P2["Phase 2 | Procedural geometry, normal controls, and placement"]
+    E16["E16 Finite and bounded primitive geometry"]
+    E17["E17 Single-primitive ray intersection"]
+    E18A["E18a Continuous-size qualification for multi-primitive CSG"]
+    E18B["E18b CSG and continuous-deformation intersection stability"]
+    E19["E19 Rejection of disconnected entities"]
+    E20A["E20a Schema-6 geometry coverage: historical FAIL"]
+    E20D2A["E20a-D2A Base-axis-ratio sampler qualification"]
+    E20D2B["E20a-D2B Eccentric common-witness construction"]
+    E18BV3["E18b-v4 Schema-7 new-domain intersection qualification"]
+    E19V4["E19-v4 Schema-7 generator qualification"]
+    E20AV2["E20a-v3 Schema-7 geometry-coverage PASS"]
+    E20V1["E20-V1 Retired human review"]
+    E20B["E20b-lite Simple-shortcut audit"]
+    E21["E21-v4 Qualified support-region pool PASS"]
+    E22["E22-v2 Continuous grounding and burial PASS"]
+    E23["E23 Collision with observed normal geometry"]
+    E24["E24 Collision among inserted entities"]
+    E25["E25-new Coverage-oriented legal normal-control generation"]
+    E26["E26-v2 Complete world specification under the new control distribution"]
+    E26V1["E26-V1 Human review of placement scenes"]
+    E16 --> E17 --> E18A --> E18B --> E19 --> E20A
+    E20A -. "Post-FAIL attribution" .-> E20D2A
+    E20D2A --> E20D2B --> E18BV3 --> E19V4 --> E20AV2 --> E20B --> E21 --> E22 --> E23 --> E24 --> E25 --> E26
+    E20AV2 -. "Retired human review" .-> E20V1
+    E26 -. "Non-blocking description" .-> E26V1
   end
-  subgraph P3["Phase 3｜第一回波反事实渲染机械链"]
-    E27["E27 normal-control 几何命中"]
-    E28["E28 anomaly-proxy 几何命中"]
-    E29["E29 回波概率非退化"]
-    E30["E30 normal-control 有效回波"]
-    E31["E31 anomaly-proxy 有效回波"]
-    E32["E32 插入物遮挡背景"]
-    E33["E33 正常前景遮挡插入物"]
-    E34["E34 空射线新增与拒绝"]
-    E35["E35 强度支持范围"]
-    E36["E36 normal/proxy 共用渲染路径"]
-    E37["E37 重叠窗口共享帧一致性"]
-    E27 --> E28
-    E28 --> E29
-    E29 --> E30
-    E30 --> E31
-    E31 --> E32
-    E32 --> E33
-    E33 --> E34
-    E34 --> E35
-    E35 --> E36
-    E36 --> E37
+  subgraph P3["Phase 3 | Mechanical chain for first-return counterfactual rendering"]
+    E27["E27 Normal-control geometry hit"]
+    E28["E28 Anomaly-proxy geometry hit"]
+    E29["E29 Non-degenerate return probability"]
+    E30["E30 Valid normal-control return"]
+    E31["E31 Valid anomaly-proxy return"]
+    E32["E32 Inserted-object occlusion of background"]
+    E33["E33 Normal-foreground occlusion of inserted objects"]
+    E34["E34 New return and rejection on empty rays"]
+    E35["E35 Intensity support range"]
+    E36["E36 Shared rendering path for normal controls and proxies"]
+    E37["E37 Shared-frame consistency across overlapping windows"]
+    E27 --> E28 --> E29 --> E30 --> E31 --> E32 --> E33 --> E34 --> E35 --> E36 --> E37
   end
-  subgraph P4["Phase 4｜Gate 1：传感器一致性与反作弊"]
-    E38["E38 新control分布per-beam刷新"]
-    E39["E39 per-range 回波率一致性"]
-    E40["E40 beam×range 强度分布"]
-    E41["E41 empty→valid 比例"]
-    E42["E42 单实体可见点数分布"]
-    E43["E43 连续帧可见点数变化"]
-    E44["E44 遮挡率分布"]
-    E45A["E45A-new real-normal↔control匹配"]
-    E45B["E45B-v2 control↔proxy匹配"]
-    E45V1["E45-V1 人眼来源指纹盲辨"]
-    E46["E46 真实正常 vs 渲染正常来源分类"]
-    E47["E47 来源指纹归因消融"]
-    E48["E48 normal-control vs anomaly-proxy 难度分类"]
-    E49["E49 Gate 1 正式裁决"]
-    E38 --> E39
-    E39 --> E40
-    E40 --> E41
-    E41 --> E42
-    E42 --> E43
-    E43 --> E44
-    E44 --> E45A
-    E44 --> E45B
-    E45A --> E46
-    E45A -. "可选非阻断人审" .-> E45V1
-    E46 -. "FAIL归因" .-> E47
-    E45B --> E48
-    E46 --> E49
-    E48 --> E49
+  subgraph P4["Phase 4 | Gate 1: sensor consistency and anti-shortcut audit"]
+    E38["E38 Per-beam refresh under the new control distribution"]
+    E39["E39 Per-range return-rate consistency"]
+    E40["E40 Beam-by-range intensity distribution"]
+    E41["E41 Empty-to-valid proportion"]
+    E42["E42 Single-entity visible-point distribution"]
+    E43["E43 Change in visible-point count across consecutive frames"]
+    E44["E44 Occlusion-rate distribution"]
+    E45A["E45A-new Real-normal to control matching"]
+    E45B["E45B-v2 Control to proxy matching"]
+    E45V1["E45-V1 Human blind test of source fingerprints"]
+    E46["E46 Real-normal versus rendered-normal source classification"]
+    E47["E47 Source-fingerprint attribution ablation"]
+    E48["E48 Normal-control versus anomaly-proxy difficulty classification"]
+    E49["E49 Formal Gate 1 decision"]
+    E38 --> E39 --> E40 --> E41 --> E42 --> E43 --> E44
+    E44 --> E45A --> E46 --> E49
+    E44 --> E45B --> E48 --> E49
+    E45A -. "Optional non-blocking human review" .-> E45V1
+    E46 -. "FAIL attribution" .-> E47
   end
-  subgraph P5["Phase 5｜冻结 STU 点接口与五帧坐标"]
-    E50["E50 128D STU 高层特征接口"]
-    E51["E51 稀疏体素→原始点逆映射"]
-    E52["E52 共享体素下的原始点身份"]
-    E53["E53 官方 query assignment"]
-    E54["E54 19D 语义证据与可靠性"]
-    E55["E55 AJAE 真实输入张量"]
-    E56["E56 中心坐标对齐"]
-    E50 --> E51
-    E51 --> E52
-    E52 --> E53
-    E53 --> E54
-    E54 --> E55
-    E55 --> E56
+  subgraph P5["Phase 5 | Frozen STU point interface and five-frame coordinates"]
+    E50["E50 128D STU high-level feature interface"]
+    E51["E51 Sparse-voxel to raw-point inverse mapping"]
+    E52["E52 Raw-point identity under shared voxels"]
+    E53["E53 Official query assignment"]
+    E54["E54 19D semantic evidence and reliability"]
+    E55["E55 Actual AJAE input tensor"]
+    E56["E56 Center-coordinate alignment"]
+    E50 --> E51 --> E52 --> E53 --> E54 --> E55 --> E56
   end
-  subgraph P6["Phase 6｜固定 201 开发试验台与评价器"]
-    E57["E57 24 条 in-generator 开发世界冻结"]
-    E58["E58 6 条 held-out 诊断世界冻结"]
-    E59["E59 开发世界 N_vis / O / d 覆盖"]
-    E60["E60 开发世界 V=1..5 覆盖"]
-    E61["E61 pure-normal 与 moving-normal 开发子集"]
-    E62["E62 自研 evaluator 与官方 evaluator 一致性"]
-    E63["E63 开发决策规则冻结"]
-    E57 --> E58
-    E58 --> E59
-    E59 --> E60
-    E60 --> E61
-    E61 --> E62
-    E62 --> E63
+  subgraph P6["Phase 6 | Fixed train/201 development testbed and evaluator"]
+    E57["E57 Freeze 24 in-generator development worlds"]
+    E58["E58 Freeze six held-out diagnostic worlds"]
+    E59["E59 Development-world coverage of N_vis, O, and d"]
+    E60["E60 Development-world coverage of V=1..5"]
+    E61["E61 Pure-normal and moving-normal development subsets"]
+    E62["E62 Agreement between the custom and official evaluators"]
+    E63["E63 Freeze development decision rules"]
+    E57 --> E58 --> E59 --> E60 --> E61 --> E62 --> E63
   end
-  subgraph P7["Phase 7｜AJAE 模型机械单元资格"]
-    E64["E64 时间身份体素隔离"]
-    E65["E65 mean-max 池化数值"]
-    E66["E66 按时间差分层邻域"]
-    E67["E67 空跨帧分支与 gate"]
-    E68["E68 同帧残差生存路径"]
-    E69["E69 同帧 3-NN 上采样"]
-    E70["E70 平衡 BCE 空类别安全"]
-    E71["E71 概率融合公式单元测试"]
-    E64 --> E65
-    E65 --> E66
-    E66 --> E67
-    E67 --> E68
-    E68 --> E69
-    E69 --> E70
-    E70 --> E71
+  subgraph P7["Phase 7 | Mechanical unit qualification of the AJAE model"]
+    E64["E64 Temporal-identity voxel isolation"]
+    E65["E65 Numerical qualification of mean-max pooling"]
+    E66["E66 Time-difference-stratified neighborhoods"]
+    E67["E67 Empty cross-frame branch and gate"]
+    E68["E68 Same-frame residual survival path"]
+    E69["E69 Same-frame 3-NN upsampling"]
+    E70["E70 Empty-class safety of balanced BCE"]
+    E71["E71 Unit test of the probability-fusion formula"]
+    E64 --> E65 --> E66 --> E67 --> E68 --> E69 --> E70 --> E71
   end
-  subgraph P8["Phase 8｜Gate 2：异常代理监督是否有效"]
-    E72["E72 B0 冻结 STU 单帧参考"]
-    E73["E73 B1 单帧 smoke train"]
-    E74["E74 B1 三独立训练种子"]
-    E75["E75 B1 vs B0 代理监督效应"]
-    E76["E76 B1 正常安全"]
-    E77["E77 Gate 2 正式裁决"]
-    E72 --> E73
-    E73 --> E74
-    E74 --> E75
-    E75 --> E76
-    E76 --> E77
+  subgraph P8["Phase 8 | Gate 2: effectiveness of anomaly-proxy supervision"]
+    E72["E72 B0 frozen-STU single-frame reference"]
+    E73["E73 B1 single-frame smoke training"]
+    E74["E74 B1 with three independent training seeds"]
+    E75["E75 Proxy-supervision effect: B1 versus B0"]
+    E76["E76 B1 normal-safety audit"]
+    E77["E77 Formal Gate 2 decision"]
+    E72 --> E73 --> E74 --> E75 --> E76 --> E77
   end
-  subgraph P9["Phase 9｜Gate 3：跨帧信息是否提供可识别增益"]
-    E78["E78 B2 无跨帧五帧对照"]
-    E79["E79 B3 五帧 smoke train"]
-    E80["E80 B3 三独立训练种子"]
-    E81["E81 B3 vs B1"]
-    E82["E82 B3 vs B2"]
-    E83["E83 五帧正常运动安全"]
-    E84["E84 Gate 3 正式裁决"]
-    E78 --> E79
-    E79 --> E80
-    E80 --> E81
-    E81 --> E82
-    E82 --> E83
-    E83 --> E84
+  subgraph P9["Phase 9 | Gate 3: identifiable gain from cross-frame information"]
+    E78["E78 B2 five-frame control without cross-frame information"]
+    E79["E79 B3 five-frame smoke training"]
+    E80["E80 B3 with three independent training seeds"]
+    E81["E81 B3 versus B1"]
+    E82["E82 B3 versus B2"]
+    E83["E83 Normal-motion safety for the five-frame model"]
+    E84["E84 Formal Gate 3 decision"]
+    E78 --> E79 --> E80 --> E81 --> E82 --> E83 --> E84
   end
-  subgraph P10["Phase 10｜时间位置校准与 B4 融合"]
-    E85["E85 q 位置分数诊断"]
-    E86["E86 真实重叠点身份与 m_p 覆盖"]
-    E87["E87 B4 融合评估"]
-    E88["E88 B4 vs B3"]
-    E88V1["E88-V1 模型输出可视化诊断"]
-    E85 --> E86
+  subgraph P10["Phase 10 | Temporal-position calibration and B4 fusion"]
+    E85["E85 Diagnostic of position score q"]
+    E86["E86 True overlapping-point identity and m_p coverage"]
+    E87["E87 B4 fusion evaluation"]
+    E88["E88 B4 versus B3"]
+    E88V1["E88-V1 Visual diagnostic of model output"]
+    E85 --> E86 --> E87 --> E88
     E85 -. "B4 disabled" .-> E89
-    E86 --> E87
-    E87 --> E88
-    E88 -. "可选非阻断可视化" .-> E88V1
+    E88 -. "Optional non-blocking visualization" .-> E88V1
   end
-  subgraph P11["Phase 11｜机制、安全、对象尺度与因果消融"]
-    E89["E89 实体内部得分方差"]
-    E90["E90 异常边界泄漏"]
-    E91["E91 V=1..5 可见性趋势"]
-    E92["E92 B5 因果窗口正确性"]
-    E93["E93 B5 因果性能"]
-    E94["E94 计算成本与输入公平性"]
-    E89 --> E90
-    E90 --> E91
-    E91 --> E92
-    E92 --> E93
-    E93 --> E94
+  subgraph P11["Phase 11 | Mechanism, safety, object scale, and causal ablation"]
+    E89["E89 Within-entity score variance"]
+    E90["E90 Anomaly-boundary leakage"]
+    E91["E91 Visibility trend over V=1..5"]
+    E92["E92 Correctness of the B5 causal window"]
+    E93["E93 B5 causal performance"]
+    E94["E94 Computational cost and input fairness"]
+    E89 --> E90 --> E91 --> E92 --> E93 --> E94
   end
-  subgraph P12["Phase 12｜方法冻结"]
-    E95["E95 最终模型选择规则执行"]
-    E96["E96 阈值与 DBSCAN 冻结"]
+  subgraph P12["Phase 12 | Method freeze"]
+    E95["E95 Execute the final-model selection rule"]
+    E96["E96 Freeze threshold and DBSCAN"]
     E97["E97 AJAE Method Freeze Manifest v1"]
-    E98["E98 冻结完整性演练"]
-    E95 --> E96
-    E96 --> E97
-    E97 --> E98
+    E98["E98 Freeze-integrity drill"]
+    E95 --> E96 --> E97 --> E98
   end
-  subgraph P13["Phase 13｜一次性真实 OOD 确认与最终测试"]
-    E99["E99 19 条真实 OOD 锁定推理"]
-    E100["E100 真实 OOD 官方点级指标"]
-    E101["E101 真实 OOD 对象级指标"]
-    E102["E102 真实正常运动安全"]
-    E103["E103 Gate 4 迁移裁决"]
-    E104["E104 51 条隐藏测试最终提交"]
-    E99 --> E100
-    E100 --> E101
-    E101 --> E102
-    E102 --> E103
-    E103 --> E104
+  subgraph P13["Phase 13 | One-time real-OOD confirmation and final test"]
+    E99["E99 Locked inference on 19 real-OOD sequences"]
+    E100["E100 Official point-level metrics on real OOD"]
+    E101["E101 Object-level metrics on real OOD"]
+    E102["E102 Safety on real normal motion"]
+    E103["E103 Gate 4 transfer decision"]
+    E104["E104 Final submission on 51 hidden tests"]
+    E99 --> E100 --> E101 --> E102 --> E103 --> E104
   end
   E07 --> E08
   E15 --> E16
   E26 --> E38
-  E37 -. "E27–E37既有机械资格保留" .-> E38
+  E37 -. "Existing E27–E37 mechanical qualification retained" .-> E38
   E49 --> E50
   E56 --> E57
   E63 --> E64
@@ -308,4063 +224,4269 @@ flowchart TB
   E88 --> E89
   E94 --> E95
   E98 --> E99
-  E46 -. "FAIL:定位来源指纹" .-> E47
-  E47 -. "修复传感器因素" .-> E38
-  E48 -. "FAIL:重做 hard proxy" .-> E20A
-  E49 -. "Gate1 FAIL" .-> E08
-  E75 -. "Gate2 FAIL" .-> E38
-  E76 -. "安全 FAIL" .-> E38
-  E81 -. "B3≤B1" .-> E64
-  E82 -. "B3≤B2" .-> E64
-  E83 -. "运动安全 FAIL" .-> E64
-  E85 -. "q偏置" .-> E85
-  E90 -. "边界泄漏 FAIL" .-> E64
-  E98 -. "冻结完整性 FAIL" .-> E97
-  E103 -. "Gate4 FAIL:研究周期停止" .-> STOP["STOP 当前研究周期结束"]
+  E46 -. "FAIL: locate source fingerprint" .-> E47
+  E47 -. "Repair sensor factor" .-> E38
+  E48 -. "FAIL: redesign hard proxies" .-> E20A
+  E49 -. "Gate 1 FAIL" .-> E08
+  E75 -. "Gate 2 FAIL" .-> E38
+  E76 -. "Safety FAIL" .-> E38
+  E81 -. "B3 <= B1" .-> E64
+  E82 -. "B3 <= B2" .-> E64
+  E83 -. "Motion-safety FAIL" .-> E64
+  E85 -. "q-position bias" .-> E85
+  E90 -. "Boundary-leakage FAIL" .-> E64
+  E98 -. "Freeze-integrity FAIL" .-> E97
+  E103 -. "Gate 4 FAIL: stop research cycle" .-> STOP["STOP current research cycle"]
   E104 --> DONE["AJAE COMPLETE"]
 ```
 
-
-## 2. 总体阶段与科学主张对应
-
-- **Phase 0–4：Gate 1** —— 证明规范射线与第一回波反事实 renderer 足够可信，且不会留下明显来源捷径。
-- **Phase 5–7：训练接口资格** —— 证明冻结 STU 点接口、五帧坐标、开发世界、评价器和 AJAE 机械结构按方案工作。
-- **Phase 8：Gate 2** —— 证明 anomaly-proxy supervision 本身在新背景有效，即 B1 相对 B0 有增益且正常安全。
-- **Phase 9：Gate 3** —— 证明跨帧信息提供可识别增益，即 B3>B1 且 B3>B2，并通过 moving-normal safety。
-- **Phase 10–11：融合与机制** —— 判断 B4 是否有额外价值、时空共识机制是否有证据、因果版本代价如何。
-- **Phase 12：Method Freeze** —— 冻结所有会影响结果的内容。
-- **Phase 13：Gate 4 与隐藏测试** —— 一次性确认 proxy→real OOD transfer，之后才允许 51 hidden test。
-
-
-# Phase 0｜协议、数据纪律与官方 STU 运行资格
-
-## E00｜工作区与协议快照冻结
-
-**目的 / 唯一问题**
-
-建立后续所有实验的唯一可追溯起点。
-
-**建模 / 实施**
-
-记录 Git commit/branch/dirty state、protocol/dev 配置 hash、STU checkpoint hash、renderer/generator 版本、Python/PyTorch/CUDA 环境；生成实验注册表，不运行训练。
-
-**PASS 条件**
-
-所有后续实验都能唯一绑定同一快照，且关键协议文件进入版本控制。
-
-**FAIL 条件**
-
-仍有无法追溯的未提交核心文件、配置来源不明或产物无法绑定版本。
-
-**状态转移**
-
-- PASS → **E01**
-- FAIL → **整理并提交/冻结当前协议快照后重跑 E00。**
-
-
-## E01｜公开 19 条真实异常访问保护
-
-**目的 / 唯一问题**
-
-确保确认集在方法冻结前不会被任何旁路读取。
-
-**建模 / 实施**
-
-全仓库搜索 public/val/19 相关 loader；对所有读取标签/结果的入口加 freeze guard 或物理权限隔离；仅做访问保护测试，不读取确认标签。
-
-**PASS 条件**
-
-冻结前任何入口均不能读取 19 条标签/结果，且访问会被显式拒绝并记录。
-
-**FAIL 条件**
-
-存在绕过正式 evaluator 的标签读取路径。
-
-**状态转移**
-
-- PASS → **E02**
-- FAIL → **封闭旁路后重跑 E01。**
-
-
-## E02｜51 条隐藏测试访问保护
-
-**目的 / 唯一问题**
-
-保证最终测试在 Gate 4 之前不可被开发流程触碰。
-
-**建模 / 实施**
-
-检查 hidden/test/51 的 loader、路径、脚本和环境变量；建立只在最终提交阶段开放的保护。
-
-**PASS 条件**
-
-开发态无法读取或生成 51 条隐藏测试相关结果。
-
-**FAIL 条件**
-
-存在开发路径可访问 hidden test。
-
-**状态转移**
-
-- PASS → **E03**
-- FAIL → **封闭访问后重跑 E02。**
-
-
-## E03｜官方 STU 依赖导入
-
-**目的 / 唯一问题**
-
-确认工作区具备真实调用官方 STU 的最小环境。
-
-**建模 / 实施**
-
-只执行官方 STU import 链，验证 Hydra、OmegaConf、MinkowskiEngine、PyTorch3D 及官方模块版本兼容；不加载数据、不训练。
-
-**PASS 条件**
-
-官方模块完整导入，无缺失依赖或 ABI 冲突。
-
-**FAIL 条件**
-
-任一依赖缺失、版本不兼容或导入失败。
-
-**状态转移**
-
-- PASS → **E04**
-- FAIL → **只修环境/依赖，再重跑 E03。**
-
-
-## E04｜官方 STU checkpoint 实例化
-
-**目的 / 唯一问题**
-
-确认指定官方权重与当前代码接口兼容。
-
-**建模 / 实施**
-
-按主线指定的官方配置和 checkpoint 构造 STU，记录权重 hash 和缺失/多余 key。
-
-**PASS 条件**
-
-模型完整构造，权重加载符合官方预期，无未解释 key mismatch。
-
-**FAIL 条件**
-
-checkpoint/config/API 不兼容。
-
-**状态转移**
-
-- PASS → **E05**
-- FAIL → **修 checkpoint/config 绑定后重跑 E04。**
-
-
-## E05｜STU 单真实帧前向
-
-**目的 / 唯一问题**
-
-证明不是 toy tensor，而是真实 206 帧可以走通官方前向。
-
-**建模 / 实施**
-
-只取 206 的一个真实帧，运行官方 STU forward；检查所有关键输出 finite、shape 合法。
-
-**PASS 条件**
-
-真实帧前向成功，输出无 NaN/Inf。
-
-**FAIL 条件**
-
-真实输入无法前向或输出异常。
-
-**状态转移**
-
-- PASS → **E06**
-- FAIL → **修输入适配/官方接口后重跑 E05。**
-
-
-## E06｜STU 冻结不变量
-
-**目的 / 唯一问题**
-
-确认 STU 在 AJAE 中真正冻结，而不只是口头或 optimizer 排除。
-
-**建模 / 实施**
-
-构造一次非正式 smoke backward：检查 requires_grad=False、optimizer 参数与 STU 参数集合不相交、STU grad 为空；比较一次 optimizer step 前后 parameter 与 buffer hash，并保持 eval 模式。
-
-**PASS 条件**
-
-参数、buffer、梯度和模式状态全部不变。
-
-**FAIL 条件**
-
-任一 STU 参数可训练、产生梯度或状态发生变化。
-
-**状态转移**
-
-- PASS → **E07**
-- FAIL → **修冻结/eval/optimizer 构造后重跑 E06。**
-
-
-## E07｜缓存身份与跨世界隔离
-
-**目的 / 唯一问题**
-
-防止同一 frame_id 在不同反事实世界中错误复用渲染或 STU 特征。
-
-**建模 / 实施**
-
-将缓存身份至少绑定 world identity、frame identity、renderer/generator version、STU identity；构造两个 world 同 frame 的反例并比较 cached/uncached 输出。
-
-**PASS 条件**
-
-跨世界不会误命中；cached 与 uncached 逐点一致。
-
-**FAIL 条件**
-
-cache key 只含 frame_id、跨世界污染或缓存前后不一致。
-
-**状态转移**
-
-- PASS → **E08**
-- FAIL → **修复 cache identity 后重跑 E07。**
-
-
-
-# Phase 1｜规范 OS1-128 射线身份
-
-## E08｜槽位总数与空槽规律
-
-**目的 / 唯一问题**
-
-确认原始文件的 slot 结构是否稳定到足以继续物理射线审计。
-
-**建模 / 实施**
-
-跨多帧统计总 slot 数、有效 slot 数、空槽模式和异常帧。
-
-**PASS 条件**
-
-结构稳定或异常模式有明确可处理规则。
-
-**FAIL 条件**
-
-slot 结构无稳定规律。
-
-**状态转移**
-
-- PASS → **E09-v2**
-- FAIL → **先解析原始数据编码/slot 语义，再重跑 E08。**
-
-
-## E09-v1｜128 beam / elevation 恢复（历史失败，禁止改写）
-
-**目的 / 唯一问题**
-
-原协议同时要求恢复垂直 beam row 身份，并要求每个 row 的跨帧中位仰角近似不变。
-
-**建模 / 实施**
-
-在 train/206 的全部 449 帧上，将固定 131072 个槽位按 128 行、每行 1024 列解释，统计每行真实回波的仰角中位数。预注册条件包括每帧恰好 128 行、每行有回波、全局相邻行间隔至少为 $0.15^\circ$，以及每行相对参考值的跨帧中位仰角偏差不超过 $0.10^\circ$。
-
-**永久结果**
-
-**E09-v1: FAIL。** 128 行始终存在且均有真实回波，所有帧的行中位仰角严格保持顺序，没有 row crossing 或 permutation；最小同帧相邻行间隔为 $0.215376^\circ$。但是，跨帧行中位仰角最大偏差为 $0.348507^\circ$，超过预注册的 $0.10^\circ$ 条件。同槽方向残差的 0.99 分位数为 $0.611656^\circ$，最大值为 $1.703179^\circ$。
-
-该 FAIL 必须永久保留，不得因后续协议修订改写成 PASS。
-
-**缺陷判定**
-
-事后语义审查发现，$0.10^\circ$ 的跨帧行中位仰角条件测量的是物理方向不变性，而不是有序 beam row 身份能否恢复。它与 E11 的科学问题发生构念重叠，因此 E09-v1 被标记为 **specification defect**。该标记只说明原测量定义错误，不撤销原始 FAIL，也不把已观察结果用于放宽 E11。
-
-
-## E09 协议修订｜拆分 row identity 与 physical direction
-
-协议版本化修订如下：
-
-1. E09-v2 只验证 128 个有序 beam row 的拓扑和身份能否逐帧确定性恢复。
-2. E11 独立验证同一个规范 ray/slot 的单位物理方向是否跨帧稳定，以及能否安全建立 $\rho_f(r)$。
-3. E09-v1 的 $0.10^\circ$ 跨帧固定仰角条件从 E09-v2 删除；不允许将该删除解释为 E11 已通过。
-4. E09-v1 的全部输入、预注册判据、结果和 FAIL 结论继续保留为历史证据。
-
-
-## E09-v2｜128 beam row 身份恢复
-
-**目的 / 唯一问题**
-
-是否能在每一帧中稳定恢复同一套 128 个有序 beam row 身份？
-
-**观测对象**
-
-只检查 row topology / identity，不判断单个 ray 或整行的跨帧绝对物理方向是否稳定。
-
-**建模 / 实施**
-
-对 train/206 的全部 449 个审计帧使用固定、确定性的恢复规则：将 131072 个原始槽位解释为 128 个候选 row、每行 1024 个候选 column；空槽仍使用 E08 冻结的 XYZ 全零规则；在每帧内按各 row 有效回波的仰角中位数从高到低赋予 row ID 0–127。对同一输入从原始扫描文件独立执行两次，并比较完整 row-ID 数组及规范化摘要哈希。
-
-**重跑前冻结的 PASS 条件**
-
-1. 每个审计帧均恢复恰好 128 个 row，每个 row 恰好对应 1024 个候选槽位。
-2. 每个 row 在每个审计帧中至少有 512 个真实有效回波，即至少覆盖候选槽位的 50%；不得以空行或填充值构造 row。
-3. 每帧 128 个 row 的中位仰角严格递减，候选 row 的恢复排序在所有帧中均为同一个 0–127 恒等排列，不发生 row crossing 或 permutation。
-4. “相邻 row 不发生身份重叠到无法唯一排序”具体定义为：每帧任意相邻 row 的有效回波仰角中位数间隔均不小于 $0.10^\circ$。这等价于相邻中位位置各自保留 $\pm0.05^\circ$ 的非重叠排序带。$0.10^\circ$ 沿用 E09-v1 正式运行前已经存在的角度分辨容差，并基于 OS1-128 约 $0.35^\circ$ 的平均垂直行间距冻结，不依据 E09-v2 的新结果选择。
-5. 两次独立执行必须产生逐元素完全相同的 row-ID 数组、每帧排序、支持计数、相邻间隔摘要和规范化摘要哈希。
-6. 不要求 $|\tilde\theta_{b,f}-\tilde\theta_{b,\mathrm{ref}}|<0.10^\circ$，也不设置任何等价的跨帧固定物理仰角条件。
-
-**正式结果（协议修订提交后执行）**
-
-**E09-v2: PASS。** 449/449 帧均恢复 128 个 row，所有帧的候选 row 排序均为同一个 0–127 恒等排列，没有 crossing 或 permutation。每行每帧最少有 645 个真实有效回波；最小同帧相邻 row 中位仰角间隔为 $0.215376^\circ$。两次从原始文件独立执行得到完全相同的 row IDs、支持计数、中位数、相邻间隔、摘要和 SHA-256 `966baf6e2ea0cf86c9bbe9ee42834cfc8dbc228803188ea1ddd5e16d23b1161d`。
-
-该 PASS 只证实有序 beam row 身份可以稳定恢复。它不证实任何 row、column、slot 或规范 ray 的跨帧物理方向不变；该问题仍由 E11 独立裁决。
-
-**FAIL 条件**
-
-任一帧的 row 数或候选槽位数错误；任一 row 的真实回波支持低于冻结下限；发生 row crossing、permutation；任一同帧相邻 row 的中位仰角间隔低于 $0.10^\circ$；或重复执行不能精确复现 row IDs 与摘要。
-
-**状态转移**
-
-- PASS → **E10-v3**
-- FAIL → **停止解锁 E10，检查 row 恢复规则或原始槽位拓扑；任何新定义必须再次版本化修订并在重跑前冻结。**
-
-
-## E10-v1｜azimuth column 连续性（历史失败，禁止改写）
-
-**目的 / 唯一问题**
-
-验证方位角列可以形成稳定扫描序列。
-
-**建模 / 实施**
-
-对每个审计帧，将同一候选 column 中所有有效 row 的 XY 单位方向取圆周均值，得到 1024 个 column 方位代表值。分别检验文件列序的顺时针和逆时针假设，并以相邻代表值的模 $360^\circ$ 正向增量检查完整闭合周期。对同一输入从原始扫描文件独立执行两次。E10 只检查列拓扑、循环次序和可重复恢复，不要求第 $a$ 列在不同帧具有相同绝对方位相位；后者属于 E11。
-
-**正式运行前冻结的 PASS 条件**
-
-1. 每帧恰好恢复 1024 个 candidate columns，每列恰好包含 128 个候选 row。
-2. 每列每帧至少有 64 个真实有效回波，即 row 支持率至少为 50%，且圆周均值有限、非退化。
-3. 对每帧的两个方向假设，必须恰有一个方向使包含末列回到首列在内的全部 1024 个循环增量落在 $[0.10^\circ,0.60^\circ]$。OS1-128 的名义列步长为 $360^\circ/1024=0.3515625^\circ$；冻结区间排除重复列、逆序和接近漏掉整列的跳变，同时不要求逐列物理方向完全固定。
-4. 449 帧选择的循环方向必须一致，原始 candidate column 的循环排列均为同一 0–1023 次序，不发生列 permutation 或内部跳转；首尾连接只作为正常周期边界。
-5. 两次独立执行必须产生逐元素完全相同的列方向、支持计数、循环增量、排序摘要和规范化摘要哈希。
-6. 不比较各帧第 0 列或任意固定列的绝对方位角，也不以跨帧 azimuth phase 漂移判定 E10；这些量只在 E11 按其独立冻结的判据裁决。
-
-**正式结果**
-
-**E10-v1: FAIL。** 每列每帧最少只有 16 个真实回波，低于冻结下限 64；仅 46/449 帧存在唯一且全部循环增量均落入 $[0.10^\circ,0.60^\circ]$ 的方向；正式跨 row 圆周均值估计器共有 4040 个增量越界。两次独立执行结果完全一致，SHA-256 均为 `3fdb998866a8858b157555feb7673de598408afd132442de59bcce33600328ac`，因此失败不是非确定性造成的。
-
-失败后的定位诊断不改变判决：3331/4040 个越界发生在相邻两列支持均不少于 64 时，排除了“只有极稀疏列才失败”的解释；对同一 beam row 内 55682452 对相邻有效列进行检查时，全部步长落在 $[0.291824^\circ,0.406113^\circ]$，没有逆序或越界。这支持“跨 row 圆周均值混合了 beam 特定方位偏置，并随可见性组成变化产生伪跳变”的解释，但该诊断不能把 E10-v1 改写为 PASS。
-
-E10-v1 被标记为 **specification defect**：cross-row circular-mean estimator 混合了 beam-specific azimuth offset 与 visibility composition。该缺陷判定不撤销正式 FAIL，也不得以 E10-v2 的结果覆盖 E10-v1。
-
-**FAIL 条件**
-
-列数或支持不足；循环方向有歧义或跨帧翻转；任一循环增量超出冻结区间；发生列 permutation、内部跳转；或重复执行不能精确复现。
-
-**状态转移**
-
-- FAIL → **E10-v1 保持永久 FAIL；只能通过版本化协议修订进入 E10-v2。**
-
-
-## E10 协议修订｜删除跨 beam 聚合，改为 row 内相邻列
-
-协议版本化修订如下：
-
-1. E10-v2 逐一检查 E09-v2 已恢复的 128 个 beam row，只比较 $(b,a)\rightarrow(b,a+1)$，不再跨 beam 聚合方位角。
-2. 不增加 beam-offset 估计或校正层；E10-v2 直接审计原始 row 内相邻槽位的 XY 方位方向。
-3. E10-v1 的 `[0.10°,0.60°]` 步长区间、50% 支持原则、统一扫描方向和两次精确复现要求继续使用，不根据失败后观察到的 $[0.291824^\circ,0.406113^\circ]$ 收窄。
-4. 删除 E10-v1 的 `minimum_real_returns_per_column_frame >= 64` 和跨 row 圆周均值、圆周集中度、column composition 等统计量。该支持计数依赖已经否定的跨 row 观测对象，不适用于 E10-v2；删除不是阈值放宽，也不换成另一个跨 row 阈值。
-5. E11 继续独立检查固定 $(b,a)$ 的跨帧绝对物理方向、方位相位、deskew 和坐标变换，不因 E10-v2 而放宽。
-
-
-## E10-v2｜逐 beam row 的相邻 azimuth column 连续性（历史失败，禁止改写）
-
-**目的 / 唯一问题**
-
-对每一个已经由 E09-v2 稳定恢复的 beam row，azimuth column 是否形成确定、连续、同方向的扫描序列？
-
-**观测对象与实施**
-
-对 train/206 的全部 449 个审计帧和 128 个 row，直接计算同一 row 内真正相邻且两端均为真实回波的 $(b,a)\rightarrow(b,a+1)$ XY 圆周方位增量。若中间 column 为空，不得把后一个有效点与前一个有效点拼接成“一步”。$a=1023\rightarrow0$ 作为独立的 wrap-around 边计算。分别检验正向和反向假设；不估计、不校正 beam-specific azimuth offset。对全部原始扫描文件独立执行两次。
-
-**正式运行前冻结的 PASS 条件**
-
-1. 输入继承 E09-v2 的 128 个 row、每行 1024 个 candidate columns 和确定性 row IDs；每帧结构不得改变。
-2. 仅当相邻两个槽位均满足 E08 的真实回波规则时，该相邻边才进入方向与步长检验。每个 row/frame 至少必须观察到 512 条这样的真实相邻边，继承 E10-v1 的 50% 支持原则；不允许跨越空 column 补边。
-3. 对每个 row/frame 的全部已观察非环绕相邻边，正向和反向两个假设中必须恰有一个使所有圆周方位增量落在 E10-v1 已冻结的 $[0.10^\circ,0.60^\circ]$ 内。
-4. 所有 row 和所有帧选择的方向必须完全一致，不发生 row 间方向分裂或帧间翻转。
-5. 对每个 row，$1023\rightarrow0$ 的 wrap-around 边必须在 449 帧中至少有一次两端同时为真实回波；每一次实际观察到的 wrap-around 增量都必须与统一方向一致并落在 $[0.10^\circ,0.60^\circ]$ 内。环绕边单独统计，不混入内部边后再解释。
-6. 两次独立读取必须产生逐元素完全相同的有效边掩码、方向、增量、支持计数、wrap-around 统计、摘要和规范化摘要哈希。
-7. 不比较固定 $(b,a)$ 在不同帧的绝对方位角或三维单位方向，也不估计跨帧 azimuth phase；这些量只由 E11 的独立预注册判据裁决。
-
-**正式结果**
-
-**E10-v2: FAIL。** 57,472/57,472 个 row/frame 均得到唯一且相同的负向扫描方向；每个 row/frame 至少观察到 632 条真实内部相邻边，超过冻结下限 512；55,638,667 条内部相邻边全部落在 $[0.291824^\circ,0.406113^\circ]$，在继承的 $[0.10^\circ,0.60^\circ]$ 区间内零越界。实际观察到的 43,785 条环绕边也全部通过，范围为 $[0.342209^\circ,0.360947^\circ]$。两次独立读取完全一致，SHA-256 均为 `a573ccabf02eee71460f1c0452f408d53a14d0f392c5a30ff63610ffa385adb0`。
-
-唯一失败项是 8 个 row（119、120、122–127）在 449 帧中从未同时观察到 column 1023 与 0，未满足“每个 row 至少一次真实环绕边”的冻结条件。失败后端点审计显示，这 8 个 row 的至少一个环绕端点在全部帧中始终为空；因此数据没有反驳这些 row 的环绕连续性，但也无法提供协议要求的经验证证据。该不可观测性不改变 E10-v2 的正式 FAIL，E11 继续锁定。
-
-**FAIL 条件**
-
-任一 row/frame 的真实相邻边少于 512；任一已观察边的步长超出冻结区间；方向有歧义、row 间分裂或帧间翻转；任一 row 从未真实观察到环绕边或任一环绕边不连续；重复执行不能精确复现；或结构不再符合 E09-v2。
-
-**状态转移**
-
-- PASS → **E11**
-- FAIL → **E11 保持锁定；E10-v2 的 FAIL 必须原样保留，任何后续改变继续版本化。**
-
-
-## E10 第二次协议修订｜不可观测不等于不连续
-
-协议版本化修订如下：
-
-1. E10-v2 的 FAIL 永久保留；E10-v3 不覆盖“8/128 个 row 未满足逐 row 环绕实证覆盖”的历史事实。
-2. E10-v3 的科学问题限定为所有真实可观察相邻边是否连续，以及无法观察的环绕边能否被诚实标记为缺少证据。
-3. 删除 E10-v2 的 `minimum_observed_wraparound_edges_per_beam >= 1`。主线要求方位角列连续性，但不要求每个允许空槽的 beam row 必须直接产生一次环绕端点回波；没有观测的边不能被当作不连续，也不能被当作已经验证。
-4. E10-v2 已继承的 $[0.10^\circ,0.60^\circ]$、每个 row/frame 至少 512 条真实内部相邻边、唯一统一方向和两次精确复现条件继续原样使用。
-5. 不增加 beam-offset 校正，不插值或伪造环绕回波，不跨 beam 推断缺失环绕边。
-6. E11 仍独立验证固定 $(b,a)$ 的跨帧物理方向和方位相位；E10-v3 通过后只解锁 E11，不预判 E11。
-
-
-## E10-v3｜可观察 azimuth column 连续性与环绕可识别性
-
-**目的 / 唯一问题**
-
-对真实能够观测到的相邻 column，扫描序列是否连续；对无法观测的环绕边，能否明确识别为“缺少证据”而不是伪造证据？
-
-**观测对象与实施**
-
-保持 E10-v2 的逐 row 原始相邻边计算：只比较同一 row 中两个立即相邻且均为真实回波的槽位，不跨越空 column。内部边为 $a=0\ldots1022$，环绕边 $1023\rightarrow0$ 单独统计。对环绕边从未出现的 row，直接复核 column 1023 和 0 在全部 449 帧中的原始 XYZ 占用；不应用插值、校正、过滤替换或跨 row 估计。全部原始文件独立执行两次。
-
-**正式运行前冻结的 PASS 条件**
-
-1. 每个 row/frame 至少观察到 512 条两端均为真实回波的内部相邻边；所有已观察内部边的统一方向增量均落在既有 $[0.10^\circ,0.60^\circ]$ 内。
-2. 57,472 个 row/frame 各自必须有且仅有一个合法方向，且所有 row/frame 的方向完全一致。
-3. 所有实际观察到的 $1023\rightarrow0$ 环绕边必须与统一方向一致，增量均落在同一 $[0.10^\circ,0.60^\circ]$ 内。
-4. 对从未观察到环绕边的每个 row，必须从原始槽位证明 column 1023 或 0 至少一个端点在全部 449 帧中始终为空；同时确认所有扫描均为 128×1024、索引为原始相邻索引、唯一空槽规则仍为 XYZ 全零，且代码未额外过滤端点。否则 FAIL。
-5. 每个有至少一条真实环绕边的 row 记为 `wraparound_direction = directly_identified_from_observed_returns`；每个满足结构性端点空槽条件而没有环绕边的 row 记为 `wraparound_direction = unidentifiable_from_observed_returns`。不得把后者记为连续或不连续。
-6. 不允许插值回波、beam-offset 校正、跨 beam 替代或任何人为补环绕边来满足条件。
-7. 两次独立读取必须产生逐元素完全相同的内部/环绕有效边掩码、方向、增量、支持计数、端点占用、可识别性分类、摘要和规范化摘要哈希。
-8. PASS 结论必须逐字保留限定：**所有可观察的 azimuth 相邻边连续；120/128 row 的环绕边获得直接实证，8/128 row 的环绕边在 train/206 中不可识别。** 不得写成 128 个 row 的全部环绕边均已直接验证。
-9. 不比较固定 $(b,a)$ 在不同帧的绝对方位角或三维单位方向；该问题只由 E11 独立裁决。
-
-**正式结果**
-
-**E10-v3: PASS。** 55,638,667 条可观察内部相邻边和 43,785 条可观察环绕边均采用同一个负向扫描方向，在继承的 $[0.10^\circ,0.60^\circ]$ 内零越界；每个 row/frame 至少有 632 条内部真实相邻边。120 个 row 的环绕方向由真实回波直接识别；row 119、120、122–127 的至少一个原始环绕端点在全部 449 帧始终为空，因此这 8 个 row 被标记为 `wraparound_direction = unidentifiable_from_observed_returns`，没有无法由原始占用解释的缺失行。实验没有插值、beam-offset 校正、跨 beam 替代或额外端点过滤。两次独立读取完全一致，SHA-256 均为 `6945e938f0846f3acf0df31d455741d23fde0716306dff887bff3451ede48d61`。
-
-冻结限定结论为：**所有可观察的 azimuth 相邻边连续；120/128 row 的环绕边获得直接实证，8/128 row 的环绕边在 train/206 中不可识别。** 该结果只解锁 E11，不表示固定 $(b,a)$ 已经是跨帧稳定的物理射线。
-
-**FAIL 条件**
-
-任一已观察内部或环绕边越界；方向不唯一或不统一；内部真实相邻边支持不足；无环绕观测的 row 不能由原始端点结构性空槽解释；使用了补边、插值或校正；可识别性分类或两次执行不一致；或结论超过冻结限定。
-
-**状态转移**
-
-- PASS → **E11**
-- FAIL → **E11 保持锁定；E10-v3 的结果原样保留。**
-
-
-## E11-v1｜全局相位对齐后的 slot→ray 跨帧方向稳定性
-
-**目的 / 唯一问题**
-
-在扣除每帧唯一的整体扫描方位相位后，判断固定 slot / $(b,a)$ 是否仍代表同一条物理射线，从而能否安全使用固定 slot mapping；或是否必须逐帧建立 $\rho_f(r)$。
-
-**建模 / 实施**
-
-对 train/206 的全部 449 帧，使用 E08 的 XYZ 全零空槽规则和 E09-v2/E10-v3 的固定 $(b,a)$ 拓扑。每帧只允许拟合一个全局 azimuth phase $\phi_f$，不得为 beam、column、slot 或局部时间段单独拟合偏移。固定模板 $\hat r_{b,a}^{ref}$ 与 $\phi_f$ 通过确定性交替估计得到：以 $\phi_f=0$ 初始化；在固定 phase 时，将同一 slot 的全部已观察单位方向绕 z 轴对齐后求等权归一化均值作为唯一固定模板；在固定模板时，对该帧全部可观察 slot 的 azimuth 差取等权圆周均值，得到该帧唯一 phase；以 $\phi_0=0$ 消除全局旋转不定性。最大迭代 100 次，phase 最大圆周变化低于 $10^{-12}$ rad 才算收敛，最终重新计算一次模板。
-
-只对至少在两个帧中具有真实回波的 slot 计算跨帧残差；始终为空的 slot 明确排除。若存在仅观察一次的 slot，则其跨帧方向不可识别并使 E11-v1 FAIL，不能以零残差计入。对每个合格观测计算
-
-$$
-e_{f,b,a}=\arccos\!\left(\hat r_{f,b,a}^{aligned}\cdot\hat r_{b,a}^{ref}\right).
-$$
-
-正式报告总体 median、$Q_{0.95}$、$Q_{0.99}$、maximum，128 个 beam 各自的 $Q_{0.99}$，1024 个 column 各自的 $Q_{0.99}$，449 帧各自的 $Q_{0.99}$，以及全部 $\phi_f$。旧 `dev.json` 中只覆盖 17 帧且没有冻结结论的审计结果不作为 E11-v1 证据。
-
-**正式运行前冻结的 PASS 条件**
-
-1. 每帧只能产生一个有限的全局 $\phi_f$；交替估计须在 100 次内按 $10^{-12}$ rad 条件确定性收敛，不得使用 beam-specific、column-specific、slot-specific 或时间局部校正。
-2. 除 E08 已确认的始终空槽外，每个进入固定 mapping 资格判断的 slot 必须至少在两个帧中被真实观察；不得把单次观测的自拟合零残差作为跨帧证据。
-3. 总体残差满足
-   $$Q_{0.99}(e)<\frac{1}{2}\frac{360^\circ}{1024}=0.17578125^\circ.$$
-4. 总体硬尾部满足
-   $$\max(e)<\frac{360^\circ}{1024}=0.3515625^\circ.$$
-5. 为把“无明显 beam/column/time 系统漂移”变成预注册的数值条件，128 个 per-beam $Q_{0.99}$、1024 个 per-column $Q_{0.99}$ 和 449 个 per-frame $Q_{0.99}$ 必须分别全部低于 $0.17578125^\circ$。同时报告这些数组及其最大值和索引，不得只报告总体分位数。
-6. 全部进入统计的残差必须有限；有效样本掩码必须只由原始 XYZ 占用和“至少两帧可观察”规则决定。
-7. 两次独立读取和拟合必须产生逐元素完全相同的 $\phi_f$、固定模板、有效样本掩码、残差流哈希、全部总体/分组统计和规范化摘要哈希。
-8. E09-v1/E10 过程中已经看到的 $0.611656^\circ$ 与 $1.703179^\circ$ 不参与上述阈值选择，也不得在运行后修改半列/一列标准。
-
-**正式结果**
-
-**E11-v1: FAIL。** 每帧唯一全局 phase 的交替拟合在 4 次迭代收敛，最终 phase 变化为 $3.79\times10^{-14}$ rad；$\phi_f$ 仅位于 $[-0.0000313^\circ,0.0000896^\circ]$，说明整体扫描相位不是主要残差来源。56,196,761 个合格真实观测的方向残差为：median $0.078154^\circ$、$Q_{0.95}=0.302594^\circ$、$Q_{0.99}=0.533029^\circ$、maximum $1.641949^\circ$。总体 99% 分位超过冻结半列阈值 $0.17578125^\circ$，maximum 超过一列阈值 $0.3515625^\circ$。
-
-失败具有系统结构：128/128 个 beam、449/449 帧和 840/1024 个 column 的分组 $Q_{0.99}$ 达到或超过半列阈值；最坏 beam 为 63（$0.661791^\circ$），最坏 column 为 257（$0.718476^\circ$），最坏 frame 为 226（$0.793871^\circ$）。另有 6 个 slot 只在一个帧出现，不能取得跨帧固定射线资格。全部残差有限；独立复算与正式产物的 phase、固定模板、slot 计数、有效掩码及全部 beam/column/frame 分位数组逐元素一致。完整数组保存在 `runs/ajae/e11_v1_stats.npz`，SHA-256 为 `5b0f581ed2df72fd67b8d2a43a38f75df18457c83b29c6941d94c9a34ebd8f82`。
-
-科学结论限定为：**slot topology 稳定，但固定 slot / $(b,a)$ 不能在冻结的网格分辨尺度内安全视为固定 physical ray。** 该 FAIL 不否定 AJAE 主体；不得修改 AJAE 网络。E12 保持锁定，转入显式逐帧 $\rho_f(r)$ 的 beam/azimuth mapping 重建分支，并在预注册后以新版本重跑 E11。
-
-**FAIL 条件**
-
-任一 PASS 条件失败；或相位对齐后仍存在超过冻结半列尺度的总体、beam、column、frame 尾部结构；或存在超过一整列的单点残差。
-
-**状态转移**
-
-- PASS → **E12；固定 $(b,a)$ 的物理 ray identity 在冻结尺度内成立。**
-- FAIL → **禁止直接用 slot 作为固定 physical ray；不修改 AJAE 网络，显式建立逐帧 $\rho_f(r)$，再以版本化协议重跑 E11。**
-
-
-## E11-v2｜逐帧规范 ray→slot 映射重建
-
-**协议修订的原因与边界**
-
-E11-v1 的 FAIL 永久保留：128×1024 文件槽位拓扑稳定，但固定 slot / $(b,a)$ 不是稳定物理射线。E11-v2 不覆盖该失败，也不再检验固定 slot；它改为检验能否从每帧的真实回波和已验证拓扑中确定性地重建
-
-$$
-\rho_f:\mathcal R\rightarrow\mathcal S_f,
-\qquad r=(b,a),
-$$
-
-使规范 ray 与该帧的原始 slot 形成可逆一一对应，并在原 E11-v1 冻结的网格分辨率尺度内恢复固定规范射线的物理方向身份。该修订只影响 renderer 前端的射线索引，不修改 AJAE 网络。
-
-**运行前冻结的映射族**
-
-1. beam 身份 $b\in\{0,\ldots,127\}$ 原样继承 E09-v2 的确定性有序 row 恢复，不重新排列 beam，不用仰角漂移把回波换到相邻 row。
-2. column 身份继承 E10-v3 的单一负向扫描顺序和循环邻接关系。在保留全部 1024 个空/非空 slot 且不破坏循环次序的条件下，一帧一个 beam 的允许映射唯一限定为整数循环位移 $k_{f,b}\in\{0,\ldots,1023\}$：
-   $$
-   \operatorname{ray}_f(b,s)=\bigl(b,(s+k_{f,b})\bmod1024\bigr),
-   $$
-   $$
-   \rho_f(b,a)=b\cdot1024+(a-k_{f,b})\bmod1024.
-   $$
-   不允许逐点最近邻、非循环任意置换、插值伪造回波或两个 ray 占用同一 slot。
-3. 空 slot 仍参与完整双射。它只表示该帧的对应 ray 没有回波，不表示 ray 不存在；映射后的法向对照距离为 $+\infty$。
-4. 不使用现有 `calibration.pt` 中按固定文件列聚合的 `azimuth_rad` 作为映射真值。规范方向模板与全部 $k_{f,b}$ 由真实单位方向确定性交替估计：以按原始 row/column slot 等权归一化均值作为唯一初值；在 train/206 中从未观察的原始 slot 仅为建立有限方向模板而使用同 beam 周期插值，该插值不计为回波、不进入残差且不改变占用掩码；固定模板时，对每个 frame/beam 穷举 1024 个循环位移，选取使真实观测单位方向与模板点积之和最大的位移，并以最小整数解决完全相等的并列；固定位移时，将映射到同一规范 ray 的真实观测等权归一化均值更新为唯一固定模板。
-5. 每个 beam 以 frame 0 的位移为零规定循环坐标的自由度；这只等价滚动该 beam 的规范模板，不改变任何配对残差。最多迭代 100 次，仅当全部 $449\times128$ 个整数位移完全不变时才收敛。
-
-**运行前冻结的 PASS 条件**
-
-1. 在 100 次内收敛；全部 frame/beam 都产生一个 $[0,1023]$ 内的有限整数位移。
-2. 每帧的 $\rho_f$ 必须是 131072 个规范 ray 到 131072 个原始 slot 的完整双射；规范 ray 和原始 slot 均不得重复或遗失。
-3. 对每帧全部 slot 执行 `raw slot → (b,a) → rho_f(b,a) → raw slot`，必须逐元素恢复原 slot identity。对真实回波再按规范 ray 重排并反向恢复，有效点数、占用掩码、原始 XYZI、XYZ 和 range 必须逐元素完全一致；空 slot 不得产生伪回波。
-4. 往返检查只证明映射的双射和实现正确性，不单独证明物理方向正确。对至少在两帧中有真实回波的映射后规范 ray，继承 E11-v1 在观察正式结果前已冻结的方向尺度：总体 $Q_{0.99}(e)<0.17578125^\circ$，且 $\max(e)<0.3515625^\circ$。
-5. 128 个 per-beam $Q_{0.99}$、1024 个 per-column $Q_{0.99}$ 和 449 个 per-frame $Q_{0.99}$ 必须全部低于 $0.17578125^\circ$；所有进入统计的残差必须有限。仅观察一次的映射后规范 ray 不得用自拟合零残差取得跨帧资格。
-6. 两次从原始扫描独立读取和重建，必须产生逐元素相同的位移矩阵、规范模板、有效样本掩码、往返结果、残差流哈希、全部总体/分组统计和规范化摘要哈希。
-7. E11-v1 的 FAIL 和已观察残差只用于选择“逐帧映射”这个预留分支，不得用于改动第 4–5 条的半列/一列阈值。
-
-**正式结果**
-
-**E11-v2: FAIL。** 确定性交替重建在 2 次迭代内收敛，位移变化数为 $57472\rightarrow0$。最终 $449\times128=57472$ 个 frame/beam 的最优整数循环位移全部为 0；数据没有支持可用“逐 beam 整列重编号”修复的帧间列相位错位。
-
-映射的实现条件全部通过：每帧 131072 个规范 ray 与 slot 形成完整双射；全部 slot identity 往返精确恢复；有效点数、占用掩码、XYZI、XYZ 和 range 逐元素一致；没有为空 slot 伪造回波。独立重建逐元素复现位移矩阵、模板、观测次数、资格掩码与全部分组统计。
-
-但映射后的 56,196,761 个合格真实观测仍给出 median $0.078193^\circ$、$Q_{0.95}=0.302601^\circ$、$Q_{0.99}=0.533035^\circ$ 和 maximum $1.641971^\circ$。总体 99% 分位超过冻结半列阈值 $0.17578125^\circ$，最大值超过一列阈值 $0.3515625^\circ$。最坏 beam 63、column 257 和 frame 226 的 99% 分位分别为 $0.661910^\circ$、$0.718551^\circ$ 和 $0.793899^\circ$；仍有 6 个规范 ray 仅观察一次。完整产物为 `runs/ajae/e11_v2_mapping.npz`，SHA-256 为 `343b896b0035b861ce283b6292f8ad796fe3948c565901486ec2df63452c5156`。
-
-科学结论限定为：**E09-v2 的稳定 row 身份和 E10-v3 的可观测 column 次序，不足以通过完整且保序的循环 slot 映射，在 train/206 中恢复冻结尺度下的稳定规范物理射线身份。** 该 FAIL 不否定 AJAE 网络，但当前 renderer 射线身份前提未成立。任何后续路线需要新的可观测信息或明确修订的物理模型，例如传感器 packet 元数据或经验证的去畸变/坐标-时间模型；不得改用同一批方向残差拟合无约束置换。
-
-**状态转移**
-
-- PASS → **E12；后续 renderer 必须使用已验证的逐帧 $\rho_f(r)$，禁止回退到固定 slot 映射。**
-- FAIL → **E12 保持锁定；E11-v1 与 E11-v2 的 FAIL 均永久保留。仅靠 train/206 当前回波与有序拓扑不足以在冻结尺度内稳定重建规范物理射线身份，不修改 AJAE 网络。**
-
-
-## E11-D1｜STU 点坐标来源审计
-
-**目的 / 唯一问题**
-
-判定 STU 发布的 `.bin` 中 XYZ 究竟是原始 LiDAR/传感器坐标下的笛卡尔点、经过整帧刚体变换的点，还是经过逐 column/逐点运动补偿的点；同时判断直接将 $XYZ/\lVert XYZ\rVert$ 解释为物理 beam direction 是否忽略了 Ouster 的 beam-origin 偏移。
-
-**审计范围**
-
-1. STU 官方论文与补充材料中的采集、ROS、KISS-ICP、运动补偿和导出说明。
-2. STU 官方仓库当前主分支与完整 Git 历史，查找原始数据生成/导出代码、deskew/dewarp、时间戳和 Ouster 元数据处理。
-3. train/206 的 `calib.txt`、`poses.txt`、`.bin` 实际内容和全部发布文件类型，查找 per-point/per-column timestamp、PCAP、ROS bag、OSF 或 Ouster metadata JSON。
-4. STU 官方训练/预处理代码中 `poses.txt` 与 `calib.txt` 对点的实际作用，区分“读入时变到全局坐标”与“发布的 `.bin` 已被变换”。
-5. Ouster 官方 XYZLut 的方向项、beam-origin 偏移项、stagger/destagger 与逐 column 采样时间语义。
-
-**冻结判定纪律**
-
-1. 只有官方生成代码、官方元数据说明或能从发布文件直接验证的变换，才能将坐标来源判为已识别。
-2. 论文只说 KISS-ICP “包含运动补偿”，不足以单独推出发布 `.bin` 已保存 deskew 结果；必须分清补偿仅用于估计 pose，还是已写回点坐标。
-3. 不把文件采用 SemanticKITTI 目录/二进制封装格式当作坐标语义证据。
-4. 若官方发布证据无法在 `raw_lidar_or_sensor_cartesian`、`whole_frame_rigid_transformed`、`per_column_or_per_point_motion_compensated` 三者中唯一定位，D1 必须记为 `insufficient_released_evidence`，不使用 E11 残差猜测一个 PASS 答案。
-5. 单独记录 Ouster beam-origin 偏移是否使 $XYZ/\lVert XYZ\rVert$ 不等于物理激光方向；该几何问题与 deskew 是两个不同的候选解释。
-
-**正式审计结果**
-
-**E11-D1: INSUFFICIENT RELEASED EVIDENCE。** 审计绑定 STU 官方仓库当前 `main` 提交 `8f0f09c2ca4bf7b665e0ae5919b4092ddae140a2`、完整 19 个提交的 Git 历史、STU 论文与补充材料、本地官方 train 发布包和 Ouster 官方 SDK 几何文档。
-
-已验证事实如下。
-
-1. [STU 论文](https://arxiv.org/html/2505.02148) 确认采集使用 10 Hz OS1-128 和 ROS，后处理使用 KISS-ICP；文中明确说 KISS-ICP 包含 point-cloud motion compensation，随后将计算的 LiDAR pose 以 SemanticKITTI/KITTI 格式导出。但文章没有说 deskew 后的点坐标被写回发布 `.bin`，也没有说 motion compensation 仅在 odometry 内部使用。
-2. [STU 官方仓库](https://github.com/kumuji/stu_dataset) 只说数据“整体遵循 SemanticKITTI 格式”。当前主分支和全部 Git 历史均没有原始 ROS/Ouster→`.bin` 生成脚本，也没有 deskew、dewarp、packet、timestamp 或 Ouster metadata 导出逻辑。
-3. train 发布包只含 1131 个 `.bin`、1131 个 `.label` 和 4 个 `.txt`；没有 JSON、PCAP、ROS bag、MCAP、OSF、CSV 或 timestamp 文件。train/206 的 449 个 `.bin` 每个都是 2,097,152 bytes，即恰好 $128\times1024\times4$ 个 float32。官方 loader 只将四个字段解释为 `(x,y,z,intensity)`；官方无预处理 loader 反而额外创建全零 `time_array`，说明发布 `.bin` 本身不含逐点时间。
-4. train/206 的 `calib.txt` 中 `P0`–`P3` 和 `Tr` 全部为单位变换；`poses.txt` 含 449 个非平凡整帧位姿。官方 Mask4Former3D 预处理和无预处理 loader 都是先读取 `.bin`，再用 `poses.txt` 对 XYZ 施加整帧刚体变换。因此可以排除“发布 `.bin` 已被 `poses.txt` 再变到全局坐标”的解释；`poses.txt` 是下游变换，不是可用来逆转发布 XYZ 的已作用变换。
-5. [Ouster 官方 XYZLut 定义](https://static.ouster.dev/sdk-docs/0.16.0/cpp/api_cpp/function_xyzlut_8h_1a12c135dd9366e302be6c9e6047895090.html) 确认 Cartesian 投影同时使用单位 `direction` 和依赖 beam origin 到 LiDAR origin 距离的 `offset`。因此一般有 $XYZ=d\,\hat r+o$，而不是 $XYZ=d\,\hat r$；在 $o\ne0$ 时，$XYZ/\lVert XYZ\rVert$ 会随量程变化，不能直接当作物理 beam direction。[Ouster 官方数据布局文档](https://docs.ouster.com/sdk-docs/features/processing/using-the-api.html) 还确认 staggered 与 destaggered 布局需要 metadata 中的 `pixel_shift_by_row` 才能互相转换；逐 column/逐点的采样时间也没有保留在 STU 四字段 `.bin` 中。
-
-正式坐标来源分类为 `insufficient_released_evidence`：已知 `.bin` 是供下游再施加整帧 pose 的本地 Cartesian 点，但现有公开证据无法唯一区分它是未补偿的 LiDAR/sensor-frame Cartesian 输出，还是已经逐 column/逐点运动补偿后仍表达在某个本地帧的点。同时，E11-v1/v2 使用的 $XYZ/\lVert XYZ\rVert$ 已被确认不是 Ouster 物理 ray direction 的充分定义，因为其忽略 beam-origin offset；但 STU 没有发布准确的 OS1-128 metadata，目前不能据此构造经验证的校正射线。
-
-**状态转移**
-
-- 只有识别出已作用于发布 XYZ 且可从发布文件逆变换的整帧刚体变换，才解锁 **E11-D2**。
-- 只有获得 per-point/per-column timestamp 与已使用的 deskew 轨迹/模型，或足以重建它们的原始 packet 和 Ouster metadata，才解锁 **E11-D3**。
-- 若发布证据不足，则 D2/D3 保持锁定，并将向数据作者索取生成语义/元数据作为唯一能改变判断的后续动作。
-- 禁止无约束 permutation、更高容量的 column shift 或根据 E11 残差拟合自由 ray mapping。E12 继续锁定。
-
-
-### E11-D1 后续协议修订
-
-E11-D1 的 `insufficient_released_evidence` 和审计事实原样保留。后续经用户批准，不再将联系作者视为唯一可改变判断的动作，新增基于 Ouster 官方投影方程的受约束反演分支：E11-D4a 只识别固定逐行列相位结构，E11-D4b 再将该结构与 beam angles、beam-origin transform 和 range 分解，E11-D4c 独立检查跨序列可转移性。该分支不使用无约束置换，不覆盖 E11-v1/v2 的历史 FAIL。
-
-
-## E11-D4a｜staggered/destaggered 逐行相位结构诊断
-
-**目的 / 唯一问题**
-
-判断 train/206 的 $128\times1024$ 排列是否存在跨 449 帧稳定的固定逐 beam 列相位结构，以及同一文件 column 更符合“跨 row 共同方位”还是“需要固定逐行位移才形成共同方位”。本实验不从数据中自由重排 ray，也不把估计相位直接命名为原厂 `pixel_shift_by_row`。
-
-**运行前冻结的估计量**
-
-1. 继承 E10-v3 的唯一负向扫描方向，令 $\theta_a=-2\pi a/1024$。对每个 frame/beam，只使用真实 XYZ 回波，计算 $\operatorname{atan2}(y,x)-\theta_a$ 的等权圆周均值 $\delta_{f,b}$；不跨空槽插值，每个 frame/beam 至少需 512 个真实回波。
-2. 每帧对 128 个有限 $\delta_{f,b}$ 取等权圆周均值 $g_f$，只扣除该帧全部 row 共有的坐标相位。定义 $q_{f,b}=\operatorname{wrap}(\delta_{f,b}-g_f)$，再对 449 帧取等权圆周均值得固定逐行相位 $q_b$。
-3. 以 $\Delta_a=360^\circ/1024$ 将 $q_b$ 分解为最近整数列位移 $s_b=\operatorname{round}(q_b/\Delta_a)$ 和列内余量 $\epsilon_b=q_b-s_b\Delta_a$；完全并列时取较小整数。该分解只是描述量，不修改 slot 或 $\rho_f$。
-
-**运行前冻结的判定**
-
-1. 所有 57,472 个 frame/beam 都必须满足支持条件并产生有限相位。
-2. 对稳定性残差 $v_{f,b}=|\operatorname{wrap}(q_{f,b}-q_b)|$，每个 beam 的 $Q_{0.99}(v)$ 必须全部小于既有半列尺度 $0.17578125^\circ$，全部最大值必须小于一列 $0.3515625^\circ$。这两个阈值继承网格几何，不根据 D4a 结果调整。
-3. 固定每帧公共相位为零点后，若稳定性通过且 $\max_b|\operatorname{wrap}(q_b)|<0.17578125^\circ$，记为 `common_azimuth_column_consistent`；若稳定性通过、前一条件不成立且 $s_b$ 非常数，记为 `stable_nonconstant_row_phase_structure`；否则记为 `unstable_or_unidentifiable`。
-4. `stable_nonconstant_row_phase_structure` 只说明数据存在与 Ouster 逐行 shift 相容的固定结构。`pixel_shift_by_row`、beam azimuth offset、beam-origin 的量程效应与 deskew 在 D4a 中仍混合，必须由 D4b 的官方投影方程分解。
-5. 两次独立读取必须逐元素复现 $\delta_{f,b}$、$g_f$、$q_{f,b}$、$q_b$、$s_b$、$\epsilon_b$、支持数、全部分位统计和摘要哈希。跨序列稳定性不在 D4a 中使用，保留给 D4c 作为独立验证。
-
-**状态转移**
-
-- `common_azimuth_column_consistent` 或 `stable_nonconstant_row_phase_structure` → **解锁 E11-D4b，但不改写 E11-v1/v2。**
-- `unstable_or_unidentifiable` → **D4b 保持锁定；不启用更自由的行置换。**
-- E12 在 D4a 的任何结果下都继续锁定。
-
-**正式结果（train/206，449 帧）**
-
-`stable_nonconstant_row_phase_structure`，因此 E11-D4a PASS，解锁 E11-D4b；E11-v1/v2 的 FAIL 与 E11-D1 的证据不足结论均不变，E12 继续锁定。
-
-- 57,472/57,472 个 frame/beam 均达到支持条件，真实回波数范围为 645–1024；
-- 各 beam 的稳定性 $Q_{0.99}$ 范围为 $0.001198^\circ$–$0.007091^\circ$，全体样本最大稳定性残差为 $0.007311^\circ$，均远低于预注册的半列/一列界限；
-- 固定逐行相位范围为 $-4.240333^\circ$–$4.234426^\circ$，得到四个非恒定整数位移 $\{-12,-4,4,12\}$；每组恰含 32 行，并严格对应 $b\bmod4=\{0,1,2,3\}$；
-- 分解后的列内余量绝对值最大为 $0.068794^\circ$；
-- 两次独立原始读取逐元素一致，摘要哈希为 `5c5d93652ab5b56b7bac57bcf31ce9fce210d4056af71ef6b9133947e4035a19`。
-
-该结果证实发布排列中存在高度稳定的四组逐行相位结构，并与 Ouster 式固定逐行位移相容。它尚不能区分 `pixel_shift_by_row`、beam azimuth offset、beam-origin 量程效应或去畸变，也不能单独恢复原厂物理射线；这些问题转交 E11-D4b。
-
-
-## E11-D4b｜Ouster 投影模型自标定
-
-**目的 / 唯一问题**
-
-判断发布 XYZ 能否识别一套受 Ouster 官方投影方程约束的公共传感器内参，并使一组互不参与拟合的 train/206 帧落在同一组物理射线直线上。该实验估计传感器几何，不重新编号 slot，也不增加逐帧自由度。
-
-**运行前冻结的生成模型**
-
-令 D4a 得到的整数行位移 $s_b$ 固定不变，$Delta_a=2\pi/1024$，并定义
-
-$$
-\eta_{b,a}=\gamma-\frac{2\pi a}{1024}+s_b\Delta_a,
-\qquad
-o_{b,a}=(o_x\cos\eta_{b,a},\ o_x\sin\eta_{b,a},\ o_z),
-$$
-
-$$
-u_{b,a}=
-\left(
-\cos(\eta_{b,a}+\beta_b)\cos\alpha_b,
-\sin(\eta_{b,a}+\beta_b)\cos\alpha_b,
-\sin\alpha_b
-\right).
-$$
-
-这里 $\gamma$ 是唯一的全局列相位，$(o_x,o_z)$ 是 `beam_to_lidar_transform` 中与官方公式直接相关的二维 beam-origin 平移，$\alpha_b$ 与 $\beta_b$ 分别是 128 个 beam 的仰角和方位偏移。对每个真实点 $X$，量程不作为公共拟合参数保存，而按射线直线解析消去：
-
-$$
-t=u_{b,a}^{\mathsf T}(X-o_{b,a}),\qquad
-\hat X=o_{b,a}+t u_{b,a},\qquad
-d=t+\sqrt{o_x^2+o_z^2}.
-$$
-
-只允许以上 259 个公共参数。禁止逐帧相位、逐帧 beam 参数、逐 column 自由偏移、逐点变换和自由 permutation。
-
-**运行前冻结的拟合与数据分离**
-
-1. train/206 的偶数编号帧用于主拟合，奇数编号帧只用于主模型的留出验证；再反向用奇数帧独立拟合第二套模型，仅检查两套内参是否稳定。
-2. 全局参数 $(\gamma,o_x,o_z)$ 的稳健优化固定使用拟合帧中所有满足 $a\bmod16=0$ 的真实回波；Huber 损失作用于点到预测射线直线的正交 Cartesian 残差，转折尺度固定为 0.05 m。求解器固定为 SciPy `L-BFGS-B`，`maxiter=500`、`ftol=1e-12`、`gtol=1e-9`；四个固定起点均采用 D4a 公共相位共识，$(o_x,o_z)$ 依次为 $(0,0)$、$(0.05,0)$、$(0.05,0.05)$、$(0.05,-0.05)$ m，按最小目标值选择，目标值完全相等时按参数字典序选择。确定全局参数后，用拟合分割的全部真实回波重新估计 128 组 $\alpha_b,\beta_b$。
-3. $\gamma$ 只允许位于 D4a 全帧公共相位圆周共识的正负一列范围内；$o_x\in[0,0.2]$ m，$o_z\in[-0.2,0.2]$ m。D4a 的 $s_b$ 不再搜索或改变。
-4. 两个分割分别采用相同的固定多起点和确定性求解顺序。正式执行整体重复两次，必须逐元素复现参数、有效掩码、统计量和摘要哈希。
-
-**运行前冻结的 PASS 条件**
-
-1. 主模型在全部奇数帧真实回波上的角残差总体 $Q_{0.99}<0.17578125^\circ$，且全局最大值 $<0.3515625^\circ$；每个 beam 和每个 column 的留出 $Q_{0.99}$ 也必须分别全部小于 $0.17578125^\circ$。
-2. 奇数帧独立拟合模型与偶数帧模型的 beam-origin 二维欧氏差 $<0.01$ m；两套模型在完整 $128\times1024$ 网格上的物理方向差满足 $Q_{0.99}<0.17578125^\circ$ 且最大值 $<0.3515625^\circ$。
-3. 留出数据中按官方关系恢复的全部量程 $d$ 必须为正。
-4. 两次独立读取与拟合必须完全复现。
-
-Cartesian 正交残差的分布、总体/逐 beam/逐 column 角残差、拟合内参、边界命中情况和奇偶分割差异均必须报告，但不在看到结果后增加或移动阈值。
-
-**状态转移**
-
-- PASS → **只解锁 E11-D4c 跨序列验证；E12 仍锁定。**
-- FAIL → **保留 D4a 的固定行结构事实，但不得用更自由的逐帧或逐点模型救结果；转入数据驱动规范射线兜底方案的独立协议修订。**
-
-即使 D4b PASS，也只说明 train/206 内存在可转移到留出帧的 Ouster 形式自标定模型，不能声称参数等同于原厂 metadata；跨序列资格由 D4c 单独判断。
-
-**正式结果（train/206，奇偶帧严格分离）**
-
-E11-D4b PASS，解锁 E11-D4c；E12 继续锁定。
-
-- 偶数帧主拟合使用 28,159,594 个真实回波，其中全局稳健优化的预注册列子集含 1,759,401 点；奇数帧留出集含 28,037,173 个真实回波；
-- 留出角残差 median/$Q_{0.95}$/$Q_{0.99}$/maximum 分别为 $0.001913^\circ$、$0.008399^\circ$、$0.016540^\circ$、$0.055267^\circ$；最差 beam 和最差 column 的 $Q_{0.99}$ 分别为 $0.043730^\circ$、$0.044768^\circ$，全部通过冻结界限；
-- 留出 Cartesian 正交残差 median/$Q_{0.95}$/$Q_{0.99}$/maximum 分别为 0.000289/0.002395/0.004547/0.033336 m；恢复量程最小 1.071993 m，全部为正；
-- 偶数帧模型恢复 $(o_x,o_z)=(0.0166727,0.0381928)$ m，奇数帧独立模型为 $(0.0167226,0.0382022)$ m，二维差为 0.0000507 m；两套完整射线网格的方向差 $Q_{0.99}=0.000337^\circ$、maximum $=0.000345^\circ$；
-- 主模型恢复的 beam altitude 范围为 $-21.499963^\circ$–$20.810009^\circ$，去除 D4a 固定整数行位移后的 beam azimuth offset 范围为 $-0.071500^\circ$–$0.061394^\circ$；所有参数均未命中冻结边界；
-- 两次独立读取、拟合与留出评估逐元素一致，摘要哈希为 `6c02420a3208624a15eb5c64d50674ba36d7c0055903669486b088dbb1450224`。
-
-该结果在 train/206 内证实：D4a 固定行位移、beam-origin 偏移和每行 beam angles 共同构成一套高度稳定的 Ouster 形式射线模型；此前 E11-v1/v2 的失败不能继续解释为 slot topology 不稳定。由于原厂 metadata 未发布，参数仍应称为数据自标定内参，跨序列复用资格交由 D4c 判定。
-
-
-## E11-D4c-v1｜自标定内参跨序列验证
-
-**目的 / 唯一问题**
-
-判断仅由 train/206 恢复的 D4b 主模型能否在完全不适配的条件下解释独立正常开发序列 train/201 的物理射线。该实验检验内参的跨序列资格，不再估计任何模型参数。
-
-**运行前冻结的数据与模型**
-
-1. 唯一模型是 `runs/ajae/e11_d4b_calibration.npz` 中由 train/206 偶数帧拟合的主模型，文件 SHA-256 为 `42791278e2a6b36d975bbe9dc957c6f303b8b424c5b97cf54e42380ad191f253`。
-2. 验证数据固定为 train/201 的帧 4–681，共 678 帧。帧 0–3 继承 `protocol.json` 早已冻结的内部扫描与标签重复排除，不因 D4c 结果改变；目录核查确认纳入的 678 个 `.bin` 均严格为 $128\times1024\times4$ 个 float32。
-3. 禁止对 201 重新估计整序列相位、逐行位移、beam angles、beam-origin、逐帧参数或逐点变换。只按 D4b 官方模型计算点到既定射线的角残差、Cartesian 正交残差和恢复量程。
-4. 不读取 201 标签。正式评估从原始 `.bin` 独立执行两遍，必须逐元素复现有效掩码、全部分组统计和摘要哈希。
-
-**运行前冻结的 PASS 条件**
-
-1. 86,784 个 frame/beam 单元都必须至少有 512 个真实回波，且所有进入统计的值有限。
-2. 全部真实回波角残差总体 $Q_{0.99}<0.17578125^\circ$、maximum $<0.3515625^\circ$；128 个逐 beam、1024 个逐 column、678 个逐 frame 的 $Q_{0.99}$ 也必须分别全部小于 $0.17578125^\circ$。
-3. 按官方关系恢复的全部量程必须为正。
-4. 两次独立原始读取与评估必须完全复现。
-
-**状态转移**
-
-- PASS → **解锁 E11-v3，以已恢复的 Ouster 形式射线模型重新验证规范物理 ray identity；E12 仍锁定。**
-- FAIL → **D4b 只保留为 train/206 内部自标定结果，不得当作数据集公共内参；进入数据驱动规范射线兜底方案的独立协议修订。**
-
-D4c PASS 仍不把数据自标定参数命名为原厂 metadata；它只证明同一组受官方方程约束的几何参数在 206→201 的预注册正常序列转移中成立。
-
-**E11-D4c-v1 正式结果**
-
-FAIL。正式程序在首遍完整读取后按预注册顺序首先检查支持条件，并在 train/201 frame 4、beam 12 观察到 511 个真实回波，低于冻结的每个 frame/beam 至少 512 个回波条件，因此立即停止；没有继续计算或选择方向残差，也没有生成 D4c PASS 产物。
-
-失败后的只读范围诊断显示，纳入的 86,784 个 frame/beam 单元中有 2,371 个低于 512，涉及 183 帧和 30 个 beam；最小支持数为 388（frame 356、beam 0）。这些均是空回波造成的可见性差异，文件仍保持严格 $128\times1024$ 槽位拓扑。该诊断不能改写 D4c-v1 的 FAIL。
-
-当前只能断言 D4c-v1 的支持条件未满足；D4b 模型是否跨序列满足冻结的方向残差界限仍未被正式检验。由于“每个 frame/beam 至少 512 个真实回波”并非 Ouster 投影模型成立的必要条件，而且跨序列可见性本来可以变化，是否将该条件判为构念错误并版本化修订，必须在新运行前另行决定。E11-v3 与 E12 均继续锁定。
-
-
-## E11-D4c-v2｜实际观测回波上的零适配跨序列验证
-
-**协议修订原因**
-
-E11-D4c-v1 的 FAIL 永久保留。其每个 frame/beam 至少 512 个真实回波条件继承自 D4a 的行相位估计需求，却不对应 D4c 的跨序列 ray validity 构念。D4c-v2 只删除该错位资格门槛，不修改冻结模型、验证数据、方向阈值或复现要求。
-
-**唯一问题**
-
-仅由 train/206 恢复并冻结的 D4b 主模型，在不利用 train/201 重新拟合任何参数的条件下，是否能解释 train/201 中每一个实际存在的真实回波？
-
-**运行前冻结的数据与禁止项**
-
-1. 唯一模型仍是 `runs/ajae/e11_d4b_calibration.npz` 的 train/206 偶数帧主模型，SHA-256 仍为 `42791278e2a6b36d975bbe9dc957c6f303b8b424c5b97cf54e42380ad191f253`；验证数据仍为 train/201 帧 4–681。
-2. 禁止利用 201 重新拟合 global phase、row shift、beam altitude、beam azimuth offset、beam origin、逐帧参数或任何其他内参。
-3. 每个有限且 XYZ 非全零的真实回波都进入评估。不插值、不补点、不生成假回波，也不借用相邻 column；空槽没有方向残差。
-4. 不再设置每个 frame/beam 的最少回波数。支持数只用于界定证据覆盖，不改变单个真实回波是否符合冻结物理射线的定义。
-
-**运行前冻结的覆盖报告与不可观测规则**
-
-1. 完整报告 frame/beam 支持数的 minimum、median、$Q_{0.01}$、$Q_{0.05}$、$Q_{0.25}$、$Q_{0.75}$、$Q_{0.95}$、$Q_{0.99}$、maximum，以及低于历史 512 条件的单元数、涉及的 frame 数和 beam 数。
-2. 报告每个 canonical ray $(b,a)$ 在 678 帧中的观测次数分布和零观测 ray 数。
-3. 关键覆盖分组预先限定为 128 个 beam、1024 个 column 和 678 个 frame。任一完整分组零真实回波，记为系统性覆盖失败并 FAIL。
-4. 单个 canonical ray 在 678 帧中零观测时标记 `unobservable`，不计算伪残差、不把缺失写成零残差，也不单独导致 D4c-v2 FAIL；其逐 ray 资格留给 E11-v3。
-
-**运行前冻结的 PASS 条件**
-
-1. 所有实际观测残差均有限，按官方关系恢复的全部量程均为正。
-2. 总体角残差 $Q_{0.99}<0.17578125^\circ$，maximum $<0.3515625^\circ$。
-3. 所有可观测 beam、column、frame 的 $Q_{0.99}$ 分别全部小于 $0.17578125^\circ$；不存在零观测的关键覆盖分组。
-4. 两次独立原始读取必须逐元素复现有效掩码、支持数、覆盖分类、残差统计和摘要哈希。
-
-**状态转移**
-
-- PASS → **解锁 E11-v3；E12 仍锁定。**
-- FAIL → **D4b 只保留为 train/206 内部自标定结果，进入数据驱动规范射线兜底方案的独立协议修订。**
-
-D4c-v2 PASS 只支持“206 自标定的 Ouster-like 内参能够零适配迁移到 201 的实际观测回波”，不声称零观测 canonical ray 已被跨序列直接验证，也不声称参数等同于原厂 metadata。
-
-**正式结果（train/201 帧 4–681）**
-
-E11-D4c-v2 PASS，解锁 E11-v3；E12 继续锁定。E11-D4c-v1 的历史 FAIL 不变。
-
-- 冻结的 train/206 D4b 主模型零适配评估了 77,782,123 个真实回波；全部角残差与 Cartesian 正交残差有限，恢复量程最小为 0.910994 m，全部为正；
-- 角残差 median/$Q_{0.95}$/$Q_{0.99}$/maximum 分别为 $0.001860^\circ$、$0.006758^\circ$、$0.007872^\circ$、$0.064321^\circ$；
-- 最差 beam、column、frame 的 $Q_{0.99}$ 分别为 $0.043732^\circ$（beam 127）、$0.044764^\circ$（column 52）、$0.014995^\circ$（frame 620），均通过冻结的半列界限；128 个 beam、1024 个 column 和 678 个 frame 均有真实观测；
-- Cartesian 正交残差 median/$Q_{0.95}$/$Q_{0.99}$/maximum 分别为 0.000406/0.004479/0.007952/0.047042 m；
-- frame/beam 支持数 minimum/$Q_{0.01}$/$Q_{0.05}$/$Q_{0.25}$/median/$Q_{0.75}$/$Q_{0.95}$/$Q_{0.99}$/maximum 分别为 388/467/585/827/952/998/1023/1024/1024；历史 512 条件以下仍为 2,371 个单元，涉及 183 帧和 30 个 beam，但不影响实际回波的几何判定；
-- 131,072 个 canonical rays 中 130,699 个在 201 至少有一次真实回波，373 个为 `unobservable`。可观测 ray 的观测次数分布未被补点；零观测 ray 不获得残差资格，留给 E11-v3 处理；
-- 两次独立原始读取的有效掩码、逐元素残差、支持数、覆盖分类及全部统计一致；逐元素哈希为 `1dcfa913641f8547d8939a177438907f3d602020acad6760fddeb3c2f48c8b32`，摘要哈希为 `e88d843401690403386ea65728eb4006f18d0c7797994a73019447d819f3a936`。
-
-科学结论限定为：**仅由 train/206 自标定的同一套 Ouster-like 内参，在不使用 train/201 重新拟合任何参数的条件下，能够解释 train/201 的全部实际观测回波，并满足预注册的射线网格几何界限。** 这构成跨序列零适配证据，但不是原厂 metadata 身份证明，也不直接验证 373 个零观测 canonical rays。
-
-
-## E11-v3｜自标定规范物理射线身份终审
-
-**目的 / 唯一问题**
-
-在不再使用 $XYZ/\lVert XYZ\rVert$ 的条件下，将 D4a 的固定逐行位移和 D4b/D4c 验证过的 Ouster-like 内参组合为规范射线网格，最终判断 $r=(b,c)$ 是否具有确定、可逆并满足网格分辨尺度的物理 ray identity。
-
-**运行前冻结的规范身份与映射**
-
-对发布 raw slot $(b,a)$，固定
-
-$$
-c=(a-s_b)\bmod1024,
-\qquad
-r=(b,c),
-$$
-
-其逆映射为
-
-$$
-\rho_f(b,c)=\operatorname{raw\ slot}\left(b,(c+s_b)\bmod1024\right).
-$$
-
-$s_b$ 只取 D4a 已冻结的四组位移；$\rho_f$ 在所有 frame 中相同，不允许逐帧重新估计。规范 encoder angle 为 $\eta_c=\gamma-2\pi c/1024$，beam origin 和单位方向完全使用 D4b 偶数帧主模型。空 ray 身份仍存在，但没有回波时正常量程为 $+\infty$。
-
-**运行前冻结的数据与验证**
-
-1. 使用 train/206 帧 0–448 和 train/201 帧 4–681；不读取标签。D4b 模型及 D4a 位移均完全冻结，禁止按 sequence/frame/point 重新拟合相位、方向、原点或映射。
-2. 每帧全部 $128\times1024$ raw slots 执行 `raw slot → (b,c) → rho_f(b,c) → raw slot`。映射必须为双射；往返后的 XYZ 和 intensity 必须逐 bit 相同，空槽不得被补成回波。
-3. 对每个实际回波，以规范 ray 的 beam origin 为起点计算角残差、Cartesian 正交残差和恢复量程。train/206 与 train/201 分别独立报告总体及逐 beam、逐 canonical column、逐 frame 统计。
-4. 每个 beam、canonical column 和纳入 frame 必须至少有一个真实回波。单个 $(b,c)$ 在某一 sequence 中零观测时标记为 `model_defined_but_unobservable`，不计算伪残差；报告每序列和合并数据的 ray 覆盖。
-
-**运行前冻结的 PASS 条件**
-
-1. 两个 sequence 各自的总体角残差均满足 $Q_{0.99}<0.17578125^\circ$、maximum $<0.3515625^\circ$。
-2. 两个 sequence 中所有可观测 beam、canonical column、frame 的 $Q_{0.99}$ 均小于 $0.17578125^\circ$；不存在零观测的关键覆盖分组。
-3. 所有实际观测残差有限，恢复量程全部为正。
-4. 全槽映射双射，全部 raw 数据往返逐 bit 相同；两次独立原始读取和完整终审逐元素一致。
-
-**状态转移**
-
-- PASS → **E12；后续 renderer 使用该自标定规范射线网格和固定 $\rho_f$。**
-- FAIL → **E12 保持锁定；不得回退到 $XYZ/\lVert XYZ\rVert$ 或用逐点自由映射救结果。**
-
-E11-v3 PASS 支持的结论是“STU 发布数据可自标定出跨 206/201 稳定的 Ouster-like 规范物理射线身份”，不是“恢复了未经发布的原厂 metadata”。个别序列内零观测的 ray 仅由共享模型定义，其直接数据覆盖边界必须保留。
-
-**正式结果**
-
-E11-v3 PASS，解锁 E12。E11-v1/v2 的历史 FAIL、D4c-v1 的历史 FAIL 以及各自失效构念均永久保留。
-
-- 固定映射 $c=(a-s_b)\bmod1024$ 与逆映射 $a=(c+s_b)\bmod1024$ 在全部 128 行上构成完整双射；206 的 449 帧和 201 的 678 帧全部 raw XYZI 经 `raw→ray→raw` 往返逐 bit 相同；
-- train/206 共评估 56,196,767 个真实回波，角残差 median/$Q_{0.95}$/$Q_{0.99}$/maximum 为 $0.001913^\circ$/$0.008386^\circ$/$0.016528^\circ$/$0.055267^\circ$；最差 beam/canonical column/frame 的 $Q_{0.99}$ 为 $0.043732^\circ$/$0.045165^\circ$/$0.025624^\circ$；
-- train/201 共评估 77,782,123 个真实回波，角残差 median/$Q_{0.95}$/$Q_{0.99}$/maximum 为 $0.001860^\circ$/$0.006758^\circ$/$0.007872^\circ$/$0.064321^\circ$；最差 beam/canonical column/frame 的 $Q_{0.99}$ 为 $0.043732^\circ$/$0.045165^\circ$/$0.014995^\circ$；
-- 两个 sequence 的所有残差有限、全部恢复量程为正，且 128 个 beam、1024 个 canonical columns 和所有纳入 frame 均有真实覆盖；
-- 206 有 383 个、201 有 373 个单独 canonical rays 零观测；合并两序列后仍有 367 个 `model_defined_but_unobservable` rays。这些 ray 由共享传感器模型定义，但不声称获得直接回波验证；
-- 两次完整终审逐元素一致，摘要哈希为 `29dc63eec1b7647f38aff658e4ac373c88e86da201089aec4925d83fb1674740`。
-
-最终科学结论为：**文件槽位本身的归一化 XYZ 方向不是稳定物理 ray，但通过固定逐行 destagger 映射、beam-origin 与 128 组 beam angles 自标定后，可得到在 train/206 与独立 train/201 上稳定、可逆且满足冻结网格尺度的规范物理射线身份。** 后续 renderer 必须使用该几何模型，不得回退到 $XYZ/\lVert XYZ\rVert$。
-
-
-## E12｜多回波重排风险
-
-**目的 / 唯一问题**
-
-判断 STU 发布接口是否为每个经 E11-v3 校准的 canonical ray 提供恰好一个固定记录槽，该槽在一帧中只能表示“无发布回波”或“一个发布回波”，并排除发布层面的多回波维度或动态 ray reassignment。
-
-本实验不证明真实 OS1-128 物理上只能产生一个回波，也不从四字段 `.bin` 猜测上游选择的是 first、second 还是 strongest return。
-
-**运行前冻结的数据与对象**
-
-1. 使用 train/206 帧 0–448 与 train/201 帧 4–681，不读取标签；canonical mapping 完全继承 E11-v3 的 $c=(a-s_b)\bmod1024$ 和固定双射逆映射。
-2. 每个发布 `.bin` 必须严格包含 $128\times1024\times4$ 个 float32，四字段固定解释为 `(x,y,z,intensity)`。一个 raw slot 经双射映射到且只映射到一个 canonical ray。
-3. `x=y=z=0` 是唯一空记录；空 XYZ 若带非零 intensity 记为无效。XYZ 非全零的记录是一个发布回波，XYZ 与 intensity 必须全部有限。
-4. 继承 E11-D1 对发布文件和官方 loader 的来源审计，重新确认发布接口中没有 return index、return count、first/second/strongest 标志或并行多回波数组。没有这些字段只能证明发布层没有可观测的多回波维度，不能识别上游 selection policy。
-5. 对每帧全部槽位执行 raw→canonical→raw，XYZ 与 intensity 必须逐 bit 一致。逐帧空/有效占用变化必须保持在同一 canonical ray 槽位，不得通过改变映射解释。
-6. 从原始文件独立执行两遍，逐元素复现有效掩码、每帧回波数、每 ray 观测次数、占用转换统计、往返哈希和摘要哈希。
-
-**运行前冻结的 PASS 条件**
-
-1. 所有纳入文件结构正确，不存在非有限记录或“空 XYZ + 非零 intensity”的歧义记录。
-2. 每帧每 canonical ray 恰有一个固定发布记录槽，因此基数只能为 0 或 1；映射在所有帧中保持同一双射，全部 XYZI 往返逐 bit 相同。
-3. 发布数据和官方 loader 不存在第二条并行 return、return-order 字段或会将一个 canonical ray 动态分配到多个槽位的机制。
-4. 两次独立读取与审计完全复现。
-
-任一文件出现额外/缺失记录、一个 canonical ray 对应多个发布记录、动态 mapping、非有限/歧义记录或可观察但未处理的 return-order 机制即 FAIL。
-
-**状态转移**
-
-- PASS → **E13**
-- FAIL → **先处理 multi-return identity，再重跑 E12。**
-
-E12 PASS 的结论必须限定为“STU 发布接口是稳定的 single-published-return/empty-slot 接口”。在没有独立文档的情况下，不得把该结果写成“传感器没有多回波”或“发布点已被证实为原始 first return”。
-
-**E12-v1 正式结果**
-
-FAIL。失败原因是预注册条件把“XYZ 全零但 intensity 非零”判为歧义记录：train/206 的 2,654,561 个空 XYZ 槽和 train/201 的 11,084,693 个空 XYZ 槽全部触发该条件。正式结果永久保留，不改写为 PASS。
-
-其余冻结检查全部通过：1,127 个纳入文件均严格为 $128\times1024\times4$ float32；没有非有限 XYZI；每个 canonical ray 每帧只有一个固定记录槽，发布回波基数为 0 或 1；映射始终为同一双射；全部 XYZI 往返逐 bit 相同；发布记录只有 `(x,y,z,intensity)`，不存在 return index/count/order 或并行多回波数组；两次独立读取完全一致。摘要哈希为 `1bd58788bdca02c382062dbfcb8acd731afb6814558ca0f9f03a3aa2c61d838e`。
-
-失败后的只读诊断表明，空 XYZ 槽的 intensity 不是单一哨兵：206 中有 5,585 个不同 float32 值，范围 0.000857–1.633714；201 中有 5,710 个不同值，范围 0.000286–1.639429，且全部有限、没有零值。这说明 intensity 在 XYZ 被置零后仍保留数值，不能参与“return exists”的判定。
-
-该门槛与 E08 已冻结并在 E09–E11 一直使用的“仅以 XYZ 全零定义空槽”语义冲突，因此 E12-v1 只否定该错误的联合空值条件，尚未否定稳定单发布回波接口。若修订，必须版本化为 E12-v2，永久保留本次 FAIL，并只恢复 E08 的 XYZ-only occupancy 定义；其他检查和结论边界不得改变。E13 继续锁定。
-
-
-## E12-v2｜XYZ-only occupancy 下的单发布回波接口审计
-
-**协议修订原因与唯一修改**
-
-E12-v1 的 FAIL 永久保留。E12-v2 恢复 E08 已冻结的唯一 occupancy 定义：
-
-$$
-\operatorname{return\ exists}\iff XYZ\ne(0,0,0).
-$$
-
-Intensity 始终只是 payload，不参与 occupancy；空 XYZ 槽的 intensity 不要求为零，但必须在 raw→canonical→raw 中逐 bit 保留。除此之外，E12-v1 的数据范围、canonical mapping、记录基数、格式审计、动态重排检查、往返要求和结论边界全部继承。
-
-**运行前冻结的 PASS 条件**
-
-1. train/206 帧 0–448 与 train/201 帧 4–681 的每个文件均严格为 $128\times1024\times4$ float32，每个 canonical ray 每帧恰有一个固定记录槽。
-2. XYZ 全零槽记为空；XYZ 非全零槽记为一个发布回波，其完整 XYZI 必须有限。每 ray 每帧发布回波基数只能为 0 或 1。
-3. E11-v3 canonical mapping 在所有帧保持同一双射；所有槽位的 XYZI 往返逐 bit 相同。空/有效占用变化只能发生在同一 canonical ray 的固定槽位。
-4. 发布数据与官方 loader 不存在 return index、return count、first/second/strongest 标志、并行 return array 或会动态改变 ray assignment 的机制。
-5. 两次独立原始读取必须逐元素复现 occupancy mask、每帧回波数、每 ray 观测次数、占用转换统计、往返哈希和摘要哈希。
-
-**状态转移**
-
-- PASS → **E13。**
-- FAIL → **E13 保持锁定，先处理发布层面的 return cardinality 或 reorder。**
-
-PASS 结论只能写为：**STU 发布数据形成稳定的 single-published-return/empty-slot canonical-ray interface。** 上游究竟选择 first、strongest、last 或预处理后的其他单回波仍未知；“first-return”只能作为 renderer 反事实近似的建模约定。
-
-**正式结果**
-
-E12-v2 PASS，解锁 E13。E12-v1 的历史 FAIL 与 specification defect 记录永久保留。
-
-- train/206 的 449 帧包含 58,851,328 个固定记录槽，其中 56,196,767 个发布回波、2,654,561 个空 XYZ 槽；train/201 的 678 帧包含 88,866,816 个固定记录槽，其中 77,782,123 个发布回波、11,084,693 个空 XYZ 槽；
-- 1,127 个文件全部严格为 $128\times1024\times4$ float32；每个 canonical ray 每帧恰有一个固定记录槽，发布回波基数为 0 或 1；
-- 所有 XYZ 非全零记录的 XYZI 均有限；发布接口只有 `(x,y,z,intensity)`，没有 return index/count/order、first/second/strongest 标志或并行 return array；
-- E11-v3 mapping 在所有帧保持同一双射，全部槽位 XYZI 往返逐 bit 相同。206 的空→有效/有效→空转换数为 598,025/597,885，201 为 1,924,721/1,904,673；这些占用变化始终保留同一 canonical ray 身份；
-- 空 XYZ 槽的 intensity 均作为 payload 原样保留，不参与 occupancy；两次完整读取的 occupancy、计数、转换、往返和哈希逐元素一致；
-- 摘要哈希为 `55332b8109db6ab1238c53a95538389d96569e84fd516461ca7cdd413f93e8f6`。
-
-科学结论限定为：**STU 发布数据形成稳定的 single-published-return/empty-slot canonical-ray interface。** 该结果排除了发布层面的多回波容器与动态 ray reorder，但不能识别上游采用 first、strongest、last 或其他预处理后的单回波选择策略。
-
-
-## E13｜raw→ray→raw 点数往返
-
-**目的 / 唯一问题**
-
-验证规范射线网格不会增删原始有效回波。
-
-**E13 运行前冻结的建模 / 实施**
-
-数据范围为 train/206 帧 0–448 与 train/201 帧 4–681。规范映射原样继承 E11-v3：原始槽 $(b,a)$ 映射到 $c=(a-s_b)\bmod1024$，逆映射为 $a=(c+s_b)\bmod1024$，不重新拟合。回波占用原样继承 E12-v2，只由 XYZ 是否全零决定，intensity 仅为载荷。
-
-逐帧执行：原始有效槽 → 唯一 canonical ray → 逆映射原始槽。E13 只比较计数、占用掩码和 slot/ray 身份，不使用几何最近邻，不插值或生成回波，不读取标签。
-
-**E13 PASS 条件**
-
-1. 每帧原始、canonical 与恢复后的有效回波数严格相等；
-2. 恢复后的占用掩码与原始掩码逐 bit 相同；
-3. 每个有效原始槽恰好映射到一个范围内的 canonical ray，同帧不重复；
-4. 逆映射逐元素恢复每个有效原始槽身份，不丢点、不重复、不冲突；
-5. 两次完整独立读取逐元素复现每帧计数、掩码、身份、哈希和摘要。
-
-PASS 只建立回波计数与 slot/ray 身份保持；range、方向和 xyz 的保真度仍由 E14 判断。
-
-**正式结果**
-
-E13 PASS，解锁 E14。
-
-- train/206 的 449 帧、56,196,767 个有效回波与 train/201 的 678 帧、77,782,123 个有效回波全部进入审计；
-- 每帧原始、canonical 与逆映射恢复的有效回波数完全一致，计数不一致帧均为 0；
-- 恢复占用掩码与原始占用掩码逐 bit 相同，两个序列的掩码不一致槽均为 0；
-- 133,978,890 个有效回波的原始槽身份全部逐元素恢复，身份不一致和同帧 canonical ray 重复均为 0；
-- 两次独立完整读取的数组与标量完全一致，摘要哈希为 `21d80a127ab8aa60406b7cb5a50f03f092e588e177d41abbba89057c2e242cbf`。
-
-科学结论限定为：**E11-v3 双射在两个允许序列上不增删发布回波，并精确保留占用与 slot/ray 身份。** 本实验不评价 range、方向或 xyz 的几何保真度。
-
-**FAIL 条件**
-
-存在丢点、重复点或身份冲突。
-
-**状态转移**
-
-- PASS → **E14**
-- FAIL → **修映射后重跑 E13。**
-
-
-## E14｜raw→ray→raw 几何往返
-
-**目的 / 唯一问题**
-
-验证 range 与方向在规范化往返中不失真。
-
-**E14 运行前冻结的建模 / 实施**
-
-数据范围仍为 train/206 帧 0–448 与 train/201 帧 4–681，不读取标签。唯一射线模型为 E11-D4b 偶数帧主模型及 E11-v3 固定双射，不重新拟合任何参数。D4b 产物中的 encoder gauge 转成 Cartesian bearing 时固定增加 Ouster encoder 的 $\pi$ 相位；这是坐标约定，不增加自由参数，也不改变既有物理射线。
-
-对每个真实回波 $X$ 及其固定 beam origin $o$、单位方向 $u$，编码与解码为
-
-$$
-t=u^{\mathsf T}(X-o),\qquad
-d=t+\sqrt{o_x^2+o_z^2},\qquad
-\hat X=o+tu.
-$$
-
-这里 $t$ 是从 beam origin 出发用于几何求交的射线距离，$d$ 是 Ouster 形式量程。空 ray 继续为空，不分配伪量程。
-
-**E14 运行前冻结的 PASS 条件**
-
-1. 所有真实回波的 $t$ 与 $d$ 均为正且有限；每帧解码后的有效回波数与原始数严格相等；
-2. 从 $\hat X$ 重新编码得到的标量距离最大误差小于 $10^{-9}$ m，解码方向相对固定 $u$ 的最大数值误差小于 $10^{-6}$ rad；
-3. 原始点相对固定物理射线的角残差沿用 E11 已冻结界限：总体 $Q_{0.99}<0.17578125^\circ$，最大值 $<0.3515625^\circ$；
-4. 规范化 Cartesian 误差 $\lVert X-\hat X\rVert/\lVert X-o\rVert$ 的总体 $Q_{0.99}<\sin(0.17578125^\circ)$，最大值 $<\sin(0.3515625^\circ)$；绝对 xyz 误差的 median、95%、99% 和 maximum 必须完整报告，但不事后增加固定米制阈值，因为同一角误差产生的横向位移随量程变化；
-5. 两次独立完整运行必须逐元素复现占用掩码、逐帧统计、哈希和摘要。
-
-禁止重新使用 $XYZ/\lVert XYZ\rVert$ 作为物理射线，禁止逐帧/逐点拟合、改变 E11-v3 几何、生成回波或读取标签。
-
-**正式结果**
-
-E14 PASS，解锁 E15。
-
-- train/206 与 train/201 分别审计 56,196,767 和 77,782,123 个真实回波，全部射线距离与 Ouster 形式量程为正且有限，每帧回波数零差错；
-- 标量距离往返最大误差分别为 $8.53\times10^{-14}$ m 与 $1.14\times10^{-13}$ m，解码方向最大数值误差均为 $3.33\times10^{-8}$ rad；
-- 206 的角残差 median/$Q_{0.95}$/$Q_{0.99}$/maximum 为 $0.001959^\circ/0.008409^\circ/0.016546^\circ/0.055604^\circ$；201 为 $0.001855^\circ/0.006773^\circ/0.008026^\circ/0.064663^\circ$；
-- 规范化 Cartesian 误差的 99% 分位/最大值在 206 为 0.0002888/0.0009705，在 201 为 0.0001401/0.0011286，均低于冻结界限；
-- 绝对 xyz 误差 median/$Q_{0.95}$/$Q_{0.99}$/maximum 在 206 为 0.000290/0.002398/0.004566/0.034693 m，在 201 为 0.000407/0.004481/0.007954/0.045975 m；
-- 两次完整独立运行逐元素一致，摘要哈希为 `d924513af01c741f75d2c15d4b0488fb93b63625040f90ee24edf1294c631717`。
-
-科学结论限定为：**E11-v3 固定 Ouster-like 射线几何能够在两个允许序列上稳定完成标量距离编码与物理射线解码，数值往返误差可忽略，发布点到规范射线的投影误差满足既有网格分辨率界限。** 这不等同于恢复原厂 metadata，也不声称发布 XYZ 精确位于原厂射线上。
-
-**FAIL 条件**
-
-range/方向/坐标有系统偏差。
-
-**状态转移**
-
-- PASS → **E15**
-- FAIL → **修 ray calibration/round-trip 后重跑 E14。**
-
-
-## E15｜多序列射线资格确认
-
-**目的 / 唯一问题**
-
-确认 E08–E14 不是只在单条序列偶然成立。
-
-**E15-v1 运行前冻结的建模 / 实施**
-
-只使用允许的正常序列 train/206 帧 0–448 与独立正常开发序列 train/201 帧 4–681；不读取 public validation、hidden test 或任何标签。两个序列必须使用完全相同的 E11-D4b 偶数帧几何与 E11-v3 固定 $c=(a-s_b)\bmod1024$ 映射，分别先判定，再形成联合结论。
-
-对两个序列分别重新读取原始扫描两遍，检查：文件均为有限 float32 $128\times1024\times4$；128 个原始 beam row 均存在且每个 frame/beam 至少有一个真实回波；所有实际观察到的同 row 内部相邻边采用同一负向扫描方向且增量落在继承的 $[0.10^\circ,0.60^\circ]$；所有实际观察到的环绕边满足相同标准，从未观察到的环绕边只有在至少一个端点整序列结构性为空时才能记为不可观测。可观察边支持数完整报告，但不把可见性多少重新定义为 ray validity。
-
-同时重新核对固定映射双射性、XYZ-only occupancy、0/1 发布回波基数及点数/掩码/身份精确往返；E14 的每序列数值与几何结果按产物哈希绑定并重新套用冻结界限，不重新拟合或改变阈值。
-
-**E15-v1 PASS 条件**
-
-206 与 201 必须分别通过全部适用检查，使用同一固定模型与映射，且两次完整运行逐元素一致。PASS 只将规范射线接口资格限定到这两个允许的正常序列；不外推到公开异常验证或隐藏测试序列，也不声称恢复原厂 metadata。
-
-**E15-v1 正式结果**
-
-FAIL，E16 保持锁定。
-
-- train/206 单独通过：449 帧的 55,638,667 条内部相邻边与 43,785 条实际环绕边全部采用负向扫描，增量分别落在 $[-0.406102^\circ,-0.291832^\circ]$ 与 $[-0.360949^\circ,-0.342215^\circ]$，零越界；8 个从未观察到环绕边的 beam 均有整序列始终为空的端点；
-- train/201 的 76,323,285 条内部相邻边和 55,374 条实际环绕边也全部采用同一负向扫描，增量分别落在 $[-0.406456^\circ,-0.294689^\circ]$ 与 $[-0.364217^\circ,-0.340650^\circ]$，零越界；
-- 但 train/201 的 beam 125 在 678 帧中，column 1023 与 column 0 各自仅出现 1 次，且从未在同一帧共同出现。该环绕边没有直接观测，但两个端点都不是“整序列结构性为空”，不满足 E15-v1 预注册的不可观测分类条件；
-- 两个序列的布局、有限性、128 行覆盖、固定映射双射、回波计数与身份往返以及绑定的 E14 数值/几何界限均通过；两次完整读取逐元素一致，摘要哈希为 `79251da83264d676a2074f876bb2914ce01e627163b81cccd04e0098279e3921`。
-
-本次 FAIL 不表示观察到了方位不连续；它表示 **E15-v1 无法把 201/beam 125 的“两个端点分别可见但从不共现”归入已冻结的任何合法证据类别**。若要继续，必须先决定是否修订为“从未共现的真实相邻端点同样记为不可从发布回波识别”，并版本化为 E15-v2；不得改写本次 FAIL。当前按用户停止条件不自动修订，E16 继续锁定。
-
-## E15-v2｜三态环绕证据下的多序列射线资格确认
-
-**协议修订原因与唯一修改**
-
-E15-v1 的 FAIL 永久保留。E15-v2 只补充“两个端点分别可观测但从不共现”的合法证据状态；数据范围、固定射线模型、内部相邻边定义、$[0.10^\circ,0.60^\circ]$ 角度标准、负向扫描方向、双射、E13/E14 条件和完整复现要求全部不变。
-
-**运行前冻结的 wraparound 三态分类**
-
-1. `observed_continuous`：两个端点至少在一帧共同出现，且所有实际观察到的环绕增量均采用统一负向方向并落在冻结区间；
-2. `observed_discontinuous`：两个端点至少在一帧共同出现，但任一实际环绕增量违反方向或冻结区间；出现一次即直接 FAIL；
-3. `unidentifiable_from_observed_returns`：整个审计序列中两个端点从未共同成为真实回波。该状态同时包括“至少一个端点整序列结构性为空”和“两个端点分别出现过但从不共现”。
-
-每条不可识别环绕边必须记录 beam ID、column 1023 与 column 0 各自的观测帧数、共同观测帧数，以及 `structurally_empty_endpoint` 或 `separately_observed_never_coobserved` 原因子类。不得补点、插值、借用其他 beam 或声称该边已经验证连续。
-
-**运行前冻结的整体 PASS 条件**
-
-206/201 的有限 $128\times1024\times4$ 布局、128 行覆盖、固定 mapping 双射、XYZ-only occupancy、0/1 发布回波基数、E13 计数/掩码/身份往返、E14 数值与几何界限必须继续全部通过；所有实际观察到的内部相邻边和环绕边必须连续，不得存在 `observed_discontinuous`；所有不可识别边必须逐项如实报告；两次完整运行必须逐元素复现全部数组、分类、哈希和摘要。
-
-PASS 结论只能写为：**规范射线身份、内部 azimuth 邻接关系及所有可观察环绕边在 train/206 与独立 train/201 上稳定；未发生端点共现的少数环绕边仅由模型定义，未获得直接观测验证。** 不得写成两个序列都直接验证了 128 行的全部环绕边。
-
-**状态转移**
-
-- PASS → **E16。**
-- FAIL → **E16 保持锁定，按实际失败构念处理。**
-
-**正式结果**
-
-E15-v2 PASS，解锁 E16。E15-v1 的历史 FAIL 与 evidence-state specification defect 永久保留。
-
-- train/206 的 55,638,667 条实际内部相邻边和 43,785 条实际环绕边全部连续，120 个 beam 为 `observed_continuous`、0 个为 `observed_discontinuous`、8 个为 `unidentifiable_from_observed_returns`；8 个不可识别项均由结构性空端点导致；
-- train/201 的 76,323,285 条实际内部相邻边和 55,374 条实际环绕边全部连续，同样为 120/0/8；其中 7 个不可识别项由结构性空端点导致，beam 125 为 `separately_observed_never_coobserved`，其 column 1023/column 0/共同观测帧数为 1/1/0；
-- 两个序列的布局、有限性、逐 frame/beam 回波覆盖、固定 mapping 双射、回波计数与身份往返以及 E14 数值/几何界限均通过；重复运行的数组、分类、哈希和摘要逐元素一致；
-- 摘要哈希为 `e39cddd13cee1d0247042f4e4fbec6c01cc41edaa0e7527a12e8b7255cdaf34d`。
-
-科学结论限定为：**规范射线身份、内部 azimuth 邻接关系及所有可观察环绕边在 train/206 与独立 train/201 上稳定；每个序列各有 8 条未发生端点共现的环绕边仅由固定射线模型定义，未获得直接观测验证。** 不得声称两个序列都直接验证了 128 行的全部环绕边。
-
-**FAIL 条件**
-
-某些序列不满足统一规则。
-
-**状态转移**
-
-- PASS → **E16**
-- FAIL → **回到对应失败的 E08–E14 修复后重新做 E15。**
-
-
-
-# Phase 2｜程序化几何、正常控制与放置
-
-## E16｜primitive 数值有限与有界
-
-**目的 / 唯一问题**
-
-保证异常代理基础几何不会产生 NaN/Inf 或无界形状。
-
-**运行前冻结的建模 / 实施**
-
-使用正式 `ShapeSpec.sample` 生成器和默认尺寸区间 $[0.2,3.0]$ m，对固定 seed 0–1023 共 1024 个样本分别指定 `primitive_count=1`。这一步只资格确认单个 superquadric 实体的数值有限性与有界性；射线求交留给 E17，多 primitive CSG 与各形变机制组合留给 E18。
-
-每个样本检查全部参数与保守包围半径有限；primitive 数严格为 1 且首操作为 `union`；在覆盖保守包围区域的 $9\times9\times9$ 固定 Cartesian 网格计算 implicit/SDF，全部值必须有限；以 resolution 31 重新生成几何报告，必须 `bounded=true`、`closed=true`、`components=1`，有限且有序的占用边界必须严格位于保守包围半径内，最大轴直径保持在生成器冻结的 $[0.2,3.0]$ m 区间。
-
-**PASS 条件**
-
-1024 个确定性 seed 全部成功返回合格实体，允许的生成失败或拒绝耗尽数为 0；两次完整运行必须逐元素复现参数摘要、几何统计和哈希。PASS 只说明单 primitive 输出有限、闭合、单连通且有界，不提前证明求交或 CSG/形变组合稳定。
-
-**E16-v1 正式结果**
-
-FAIL，E17 保持锁定。
-
-- 1,024 个固定 seed 全部成功生成，没有拒绝耗尽；全部参数、保守包围半径和 $9\times9\times9$ 网格 SDF 有限，resolution 31 报告的闭合性、有界性和单连通性全部通过；
-- 21 个样本违反预注册的“resolution 31 报告最大轴直径不超过 3.0 m”，失败 seed 为 5、120、153、176、271、276、336、444、449、498、559、639、649、728、802、821、919、938、943、972、987；报告最大直径为 3.186417 m；
-- 两次完整执行逐元素一致，摘要哈希为 `2c22cdfb05d26d770a0a09e4e1dddc6b66360268048b5398fb7f216e893d789e`。
-
-失败后的只读诊断确认：这 21 个样本在 E16-v1 使用的 resolution 31、带一个网格步长外扩的报告中直径为 3.003255–3.186417 m；同一确定性样本在生成器实际用于接收/拒绝的 resolution 41 报告中为 2.627848–2.987266 m，全部不超过 3.0 m。因此当前 FAIL 至少包含一个已确认的测量定义不一致：生成器与 E16-v1 用不同离散分辨率定义“尺寸合格”。
-
-本次结果不得改写为 PASS。继续前必须决定统一采用哪一个权威尺寸定义与分辨率，或者是否收紧生成器使不同离散报告都不超过 3.0 m，并预注册 E16-v2。该选择会改变实验测量或生成分布，属于设计调整；当前按用户停止条件不自动修订，E17 继续锁定。
-
-## E16-v2a｜连续几何尺寸测量器资格
-
-**协议修订原因与唯一问题**
-
-E16-v1 的 FAIL 永久保留。固定 resolution 的体素占用边界会因网格步长和外扩规则改变，不再作为真实几何尺寸。E16-v2a 只回答：新的连续几何尺寸测量器是否正确、有限、收敛且确定；它不提前判断 1,024 个正式生成样本是否满足尺寸范围，E16-v2b 继续锁定。
-
-当前生成器中的“尺寸”冻结为连续单 primitive 经 twist、bend、taper 和低频表面扰动后的 axis-aligned bounding box 最大轴向跨度：
-
-$$
-D_{\mathrm{continuous}}=\max_{j\in\{x,y,z\}}(u_j-l_j).
-$$
-
-测量器沿每个未形变球面方向解析求解连续 implicit surface 的最外层根，将表面点按生成器公式正向施加形变，再对六个有符号 Cartesian 坐标执行确定性连续全局优化；最终边界统一向外增加 $10^{-6}$ m 数值余量。该接口不接受 mesh/voxel resolution，resolution 31、41 或其他离散报告均不参与尺寸值。
-
-**运行前冻结的资格样例与 PASS 条件**
-
-1. 解析样例为半径 0.5 m 球体、半轴 $(0.3,0.7,1.1)$ m 的轴对齐椭球，以及同一椭球绕 z 轴旋转 0.4 rad；六个边界坐标与闭式真值的绝对误差必须小于 $5\times10^{-6}$ m；
-2. 含正式形变的固定单 primitive seed 为 0、5、276、559、639、987。标准优化预算为 80 次迭代、population size 10，严格预算为 160/15；两者任一边界坐标最大差必须小于 $10^{-4}$ m；
-3. 每个形变样例独立评估 16,384 个确定性球面方向上的连续表面点，所有点必须位于严格边界加 $2\times10^{-6}$ m 容差内；所有边界必须有限且有序；
-4. 在同一对象上调用 resolution 31 与 41 的旧几何报告前后，连续测量器输出必须逐元素不变；两次完整资格运行必须 bitwise 一致。
-
-PASS → 解锁 E16-v2b，以该测量器审计原 1,024 个固定样本。FAIL → E16-v2b 与 E17 保持锁定，先修正尺寸测量器；不得据此修改生成分布。
-
-**首次测量器实现的资格结果**
-
-FAIL。解析球/椭球样例最大坐标误差为 $1.0\times10^{-6}$ m，六个形变样例的独立连续表面点均位于严格边界内，resolution 31/41 报告调用前后边界零变化，两次运行 bitwise 一致；但标准预算在 seed 276 漏掉了 x 轴正向全局极值，与严格预算相差 0.004351 m，超过冻结的 $10^{-4}$ m 收敛界限。摘要哈希为 `253412a49269d5e54f4adfe2c354f2a9798f93050bfe1f71e3a3a6a90ff93993`。
-
-该失败否定的是首个连续优化器实现，不改变 E16-v2a 的解析样例、预算、容差或 PASS 条件。根因是随机式初始种群在固定标准预算下未可靠覆盖一个窄极值区域。实现修复在同一 `differential_evolution` 预算内增加 2,048 个确定性 Fibonacci 球面探针，只用其组成固定初始种群；探针不产生尺寸结果，最终边界仍由连续根求解与连续优化给出。首次 FAIL 产物永久保留，修后必须按原条件重新执行完整资格实验。
-
-**修后正式结果**
-
-E16-v2a PASS，解锁 E16-v2b；E17 继续锁定。首次测量器实现的 FAIL 产物永久保留。
-
-- 三个解析样例的最大边界坐标误差为 $1.0\times10^{-6}$ m，小于冻结的 $5\times10^{-6}$ m；
-- 六个形变样例的标准/严格预算最大坐标差为 $1.495\times10^{-11}$ m，小于 $10^{-4}$ m；
-- 98,304 个独立连续表面点全部位于严格边界内，最大越界为 0；resolution 31/41 报告调用前后连续边界最大变化为 0；
-- 所有边界有限且有序，两次完整运行 bitwise 一致，摘要哈希为 `f62684bb90f083d57f719c5fb730e3eff6c9f1c31163c82572c2dd4327d84ee0`。
-
-该 PASS 只资格确认连续尺寸测量器。固定 seed 639 的连续尺寸为 3.004505 m，已经提示 E16-v2b 可能发现真实生成器越界，但该数值在 E16-v2a 中只是测量器形变样例结果，不能提前替代对 1,024 个正式样本的完整裁决。
-
-## E16-v2b｜连续尺寸下的单 primitive 正式资格
-
-**唯一问题与运行前冻结条件**
-
-使用完全不变的 `ShapeSpec.sample(seed, primitive_count=1, size_m_range=(0.2,3.0))`，重新审计 seed 0–1023。尺寸只使用 E16-v2a 已资格确认的 `continuous_bounds(maximum_iterations=80, population_size=10)`，定义为连续形变 implicit surface 的最大 AABB 轴向跨度；不再读取 resolution 31/41 的报告直径作为尺寸。
-
-每个样本仍须成功生成，全部参数、保守半径与 $9\times9\times9$ 包围网格 SDF 有限，resolution 31 几何报告只检查 `bounded=true`、`closed=true`、`components=1`，连续边界必须有限且有序。全部 1,024 个连续尺寸必须位于当前生成器已冻结的闭区间 $[0.2,3.0]$ m，允许失败数为 0。两次完整运行必须 bitwise 复现生成参数、连续边界、尺寸、分类、哈希和摘要。
-
-禁止修改生成参数、缩放失败样本、恢复离散报告直径或看到结果后移动 $[0.2,3.0]$ m。PASS → E17；FAIL → E17 保持锁定，明确记录真实连续尺寸越界，再决定如何修生成器并版本化重跑，不影响 E16-v2a 测量器资格。
-
-**正式结果**
-
-E16-v2b FAIL，E17 保持锁定。E16-v2a 的连续尺寸测量器资格不受影响。
-
-- 1,024 个固定 seed 全部成功生成；参数、保守包围半径和 $9\times9\times9$ 网格 SDF 全部有限，resolution 31 的有界、闭合、单连通检查全部通过，连续边界也全部有限且有序；
-- 3 个样本违反冻结的连续尺寸闭区间：seed 501 为 3.014584 m，seed 639 为 3.004505 m，均超过 3.0 m；seed 688 为 0.191660 m，低于 0.2 m；其余 1,021 个样本通过；
-- 生成器用于接收样本的 resolution 41 离散尺寸分别为 2.980474、2.987266 和 0.204449 m，说明当前离散接收条件确实会接收连续几何意义下越过上下界的对象；
-- 1,024 个连续尺寸的最小值/中位数/最大值为 0.191660/1.533600/3.014584 m；两次完整运行逐元素一致，运行哈希均为 `4e49dd05a6bba07039ae706515c6ee7aebfbcc725eccdbf64b8380a545d70bed`，摘要哈希为 `91078a6c49286586f5b5ffba6a153c9f230c91497752a9eca03bcba454b03348`。
-
-这次 FAIL 测到的是生成器与已资格确认的连续尺寸定义之间的真实不一致，不再是 E16-v1 的分辨率相关测量缺陷。继续需要改变生成器的接收/拒绝规则或参数采样，使其按连续尺寸满足 $[0.2,3.0]$ m，并预注册后重跑；这属于实验设计调整，当前停止，不自动修改生成分布。
-
-**FAIL 条件**
-
-存在生成失败、非有限值、无界/非闭合/非单连通、无效连续边界，或任一连续尺寸落在 $[0.2,3.0]$ m 之外。
-
-**状态转移**
-
-- PASS → **E17**
-- FAIL → **修 primitive 参数化后重跑 E16。**
-
-## E16-v3｜连续尺寸接收的单 primitive 生成器
-
-**协议修订原因与唯一问题**
-
-E16-v2b 的 FAIL 永久保留。它已经确认旧生成器使用 resolution 41 离散尺寸接收候选，会接受连续几何意义下越过 $[0.2,3.0]$ m 上下界的对象。E16-v3 只修改单 primitive 候选的最终接收条件，不改变参数提议分布、尺寸目标区间或任何失败 seed。
-
-旧实现记为隐式 generator schema 1，新实现显式记为 generator schema 2。每个候选按原确定性随机流完成参数采样、连续几何构造和既有几何检查后，使用 E16-v2a 已资格确认的 `continuous_bounds(maximum_iterations=80, population_size=10)` 计算连续形变曲面的轴对齐包围盒最大轴向跨度。只有
-
-$$
-0.2\le D_{\mathrm{continuous}}\le3.0\ \mathrm{m}
-$$
-
-时才接受；过小或过大的候选沿同一 seed 的随机流继续提议，最多仍为 64 次。resolution 41 离散边界可以用于诊断或后续数值辅助，但不得参与单 primitive 接收裁决。禁止 seed 特判、修改提议参数分布、事后缩窄提议范围或移动连续尺寸区间。
-
-该 schema 版本必须进入实验登记，并与 `render.py` 源码哈希共同组成训练缓存中的 renderer/generator identity，使修改前后的世界缓存不能混用。E16-v3 只资格确认 `primitive_count=1`；E16-v2a 尚未资格确认多 primitive CSG 的连续尺寸，因此默认多 primitive 路径不得在本节点被错误宣称合格，继续留给 E18。
-
-**运行前冻结的正式审计**
-
-仍对 seed 0–1023 生成 1,024 个最终接受对象。每个对象必须在 64 次内成功生成，参数、保守半径和 $9\times9\times9$ 网格 SDF 有限，resolution 31 报告只检查有界、闭合、单连通，连续边界有限且有序，连续尺寸全部位于闭区间 $[0.2,3.0]$ m，尺寸失败容忍数为 0。两次完整独立生成必须逐元素复现参数、连续边界、尺寸、接收分类、提议统计、哈希和摘要。
-
-必须额外报告每个 seed 的 proposal count、总提议数与拒绝率、too-small/too-large/其他构造或几何拒绝数及最大 proposal count。这些效率量不改变 E16-v3 的 correctness 判定；若合法对象都能产生但拒绝极端严重，应另行预注册采样效率实验，不得在本节点同步改变提议分布。
-
-**正式结果**
-
-E16-v3 PASS，解锁 E17。E16-v1 与 E16-v2b 的历史 FAIL 均永久保留。
-
-- schema 2 对 1,024 个固定 seed 全部在 64 次内生成并接受合法单 primitive；参数、保守包围半径、$9\times9\times9$ 网格 SDF、resolution 31 有界/闭合/单连通检查及连续边界全部通过；
-- 接受对象的连续尺寸最小值/中位数/最大值为 0.207511/1.603649/2.998929 m，尺寸越界数为 0；
-- 共执行 1,121 次提议，拒绝 97 次，按提议计拒绝率为 8.65299%；其中 too-small 3 次、too-large 94 次、其他构造或几何拒绝 0 次；936/79/9 个 seed 分别使用 1/2/3 次提议，最大 proposal count 为 3；
-- 两次完整独立运行逐元素一致，运行哈希均为 `cfee4448d8528bef74430e907e75b16acd8b2b255468d4e0d7ddbd35a7a28dc9`，摘要哈希为 `51991c5dd0dcfaf54fe04caa5bdc3199ab44ecf4d3c2c2dccd10bc38c1945034`。
-
-科学结论限定为：**generator schema 2 的单 primitive 路径能够以已资格确认的连续尺寸作为最终接收条件，确定性地产生有限、有界、闭合、单连通且尺寸位于 $[0.2,3.0]$ m 的对象。** 该结果不资格确认多 primitive CSG；后者仍留给 E18。
-
-**状态转移**
-
-- PASS → **E17。**
-- 仍接受非法连续尺寸 → 修复 schema-2 acceptance 实现后按原 E16-v3 协议重跑。
-- 64 次提议耗尽或拒绝极端严重 → E17 保持锁定，另行决定是否修订提议分布。
-
-
-## E17｜单 primitive 射线求交
-
-**目的 / 唯一问题**
-
-权威 `ShapeSpec.intersect` 默认路径能否对基础单二次曲面恢复最近正交点与外向法向，并正确拒绝解析 miss。
-
-**运行前冻结的建模 / 实施**
-
-固定四个解析 fixture：半径 0.1 m 与 1.5 m 的球；半轴 $(0.1,0.3,0.5)$ m、yaw 0.4 rad 的椭球；半轴 $(0.3,0.7,1.5)$ m、yaw -0.8 rad 的椭球。它们均为单个居中 `union` primitive，exponents 为 $(1,1)$，不含 twist、bend、taper 或表面扰动。E17 只测试 `ShapeSpec.intersect` 的权威默认 `steps=96`，不以另一个高采样实现代替正式路径。
-
-每个 fixture 使用确定性 Fibonacci 方向构造 2,048 条外部命中射线、512 条内部向外射线和 1,024 条径向向外 miss，共 3,584 条；四个 fixture 合计 14,336 条。外部命中射线穿过归一化椭球半径 0.95 的严格内部点，内部射线起点位于归一化半径 0.4，因而不包含精确切线或交点歧义。射线方向长度按确定性因子变化，解析 oracle 与被测实现均先归一化方向。
-
-真值由旋转椭球矩阵的二次方程闭式求根得到：外部起点取最近正根，内部起点取正向退出根；解析法向为命中点处二次型梯度归一化结果。
-
-**PASS 条件**
-
-命中/未命中分类零差错；所有命中距离有限且为正，所有 miss 距离为 $+\infty$；最大距离绝对误差小于 $10^{-5}$ m；返回点的最大 implicit surface 绝对残差小于 $10^{-5}$ m；命中法向全部有限、单位化、朝外，且与解析法向最大夹角小于 $0.01^\circ$；miss 法向严格为零。两次完整运行必须逐元素复现距离、法向、valid mask、统计、哈希和摘要。
-
-**FAIL 条件**
-
-任一分类错误、非有限/非正命中距离、距离或曲面残差超界、法向无效/朝内/角误差超界，或独立运行不一致。
-
-E17 的结论只覆盖基础单二次 primitive；非二次 exponent、CSG 以及 twist/bend/taper/表面扰动留给 E18，不得由 E17 外推。
-
-**正式结果**
-
-E17 PASS，解锁 E18。
-
-- 四个解析 fixture 共审计 14,336 条射线，其中 10,240 条解析命中、4,096 条解析 miss；命中/未命中分类零差错，命中距离全部有限且为正，miss 距离全部为 $+\infty$；
-- 最大距离绝对误差为 $1.180\times10^{-7}$ m，最大 implicit surface 绝对残差为 $1.174\times10^{-7}$ m；
-- 最大法向夹角误差为 $3.257\times10^{-5}$ 度，最大单位长度误差为 $2.220\times10^{-16}$；所有命中法向有限且朝外，所有 miss 法向严格为零；
-- 两次完整运行逐元素一致，运行哈希均为 `3cb11e6585a9757edbde76ccdfad2c7b40565b823a926fc7aa33060fb0a2c7e1`，摘要哈希为 `b4bbfea528c2293da6887171092c0c0d280ed301456f5c3a8b0a551df61f1066`。
-
-科学结论限定为：**默认 `ShapeSpec.intersect` 对无形变的单球/旋转椭球能够稳定恢复解析最近正交点和外向法向，并正确拒绝解析 miss。** E18 仍须独立验证非二次 exponent、CSG 与连续形变。
-
-**状态转移**
-
-- PASS → **E18**
-- FAIL → **修 intersection 后重跑 E17。**
-
-
-## E18a｜多 primitive / CSG 连续尺寸资格
-
-**拆分原因与唯一问题**
-
-原 E18 尚未运行，不记录 FAIL。E16-v3 已要求单 primitive 按连续几何尺寸接收，但多 primitive 仍使用 resolution 41 离散边界；因此先增加 E18a，回答组合后的最终几何能否获得不依赖 mesh resolution 的连续保守尺寸资格，并据此统一生成器接收规则。E18a 分为测量器资格 E18a-A 和 schema-3 生成器资格 E18a-B；这两个名称表示顺序层，不是失败后的协议版本。
-
-### E18a-A｜组合几何连续尺寸证书资格
-
-对任意最终 CSG 几何，尺寸证书冻结为
-
-$$
-L\le D_{\mathrm{continuous}}\le U,
-$$
-
-其中 $U$ 是解析保守外包围盒的最大轴跨度，$L$ 是由真实连续边界点构成的最大轴向截线长度。只有后续对象满足 $L\ge0.2$ m 且 $U\le3.0$ m，才能在不精确知道真实极值的情况下严格推出其连续尺寸合法。
-
-外包围首先按最大表面扰动幅度扩张每个 primitive 的连续 level set AABB，再依照顺序 CSG 传播：union 取包络、difference 保留左侧当前边界、intersection 取边界交集；随后解析传播全局 twist、taper 与 bend，并统一向外增加 $10^{-6}$ m 余量。内证据在该外包围中使用确定性嵌套 Sobol 点寻找经连续 SDF 验证的内部点，再从每个内部点沿三个 Cartesian 轴向两侧连续求根；任意得到的边界弦都是实际几何中的尺寸下界，不会因没有找到全局极值而产生假 PASS。
-
-标准搜索固定为 4,096 个 Sobol probes、最多 64 条内部截线；严格搜索为 32,768/256。解析 fixture 为：两个中心位于 $x=\pm0.5$ 的半径 1 球的 union、相同两球的 intersection，以及半径 1 球减去中心位于 $x=0.2$ 的内部半径 0.35 球。含形变固定样例为 seed/primitive count 0/2、1/3、2/4、3/5。每个样例另用 131,072 个独立连续点做外包围反证搜索。
-
-**E18a-A PASS 条件**
-
-所有边界和 witness 有限有序；解析真值 AABB 在 $2\times10^{-6}$ m 容差内完全位于外包围中，解析真实最大轴尺寸均落在 $[L,U]$，且解析样例 $U-L<0.35$ m；所有截线端点的连续 SDF 绝对残差小于 $10^{-8}$ m；嵌套严格搜索的 $L$ 不小于标准搜索，标准/严格 $U$ 必须完全相同；独立检查不得发现真实 inside 点位于外包围之外；调用 resolution 31/41 几何报告前后证书逐元素不变；两次完整运行 bitwise 一致。
-
-**E18a-A 正式结果**
-
-PASS，解锁 E18a-B；E18b 与 E19 继续锁定。
-
-- 三个解析 fixture 的真实 AABB 均完整位于保守外包围内，外包围违反量为 0；真实最大轴尺寸全部位于标准 $[L,U]$ 区间，最大标准证书宽度为 0.267951 m，小于冻结的 0.35 m；
-- 三个解析与四个含形变生成样例的严格下界均不小于对应标准下界，标准/严格外包围逐元素相同；所有截线端点最大连续 SDF 残差为 $5.085\times10^{-14}$ m；
-- 7 个样例的 917,504 个独立外包围反证 probes 中共有 28,649 个真实 inside 点，没有发现 inside 点落在解析外包围之外；resolution 31/41 调用前后证书逐元素不变；
-- 两次完整运行 bitwise 一致，运行哈希均为 `ed8148bc9cab329cc082d37f9728f399bd2266926d409b0488f4076d032811c7`，摘要哈希为 `88f65ea36bcc042f14f8be0cbb40ba0332744ac26a52714a9793c47c9192535b`。
-
-科学结论限定为：**该证书能为单连通多 primitive / CSG 最终几何提供 mesh-resolution-independent 的连续尺寸下界与保守上界；若 $L\ge0.2$ 且 $U\le3.0$，则真实连续最大轴尺寸必定位于冻结范围。** 测量器 PASS 尚未改变生成器；schema 3 接收由 E18a-B 独立验证。
-
-PASS → 解锁 E18a-B。FAIL → 先修组合几何证书，不得接入 generator。
-
-### E18a-B｜schema-3 完整生成器连续尺寸接收
-
-E18a-A 已 PASS，E18a-B 解锁。生成器升为 schema 3，但只修改多 primitive 最终接收条件：单 primitive 继续使用 E16-v3 的合格连续尺寸；多 primitive 使用 E18a-A 标准证书，只有 $L\ge d_{\min}$ 且 $U\le d_{\max}$ 才接受。参数提议分布、每 seed 64 次上限和请求尺寸区间均不变。证书拒绝只表示当前候选没有获得充分的连续合法性证明，不得写成其真实几何必然越界。
-
-正式审计共 2,048 次生成调用：默认训练路径 seed 0–1023，以及 primitive count 2、3、4、5 各自 seed 0–255。全部调用必须在 64 次内返回；接受对象的参数、保守半径、$9\times9\times9$ 网格 SDF 有限，resolution 31 只检查有界/闭合/单连通；重新计算合格连续尺寸或证书必须与生成报告逐元素一致。所有单 primitive 连续尺寸须位于请求区间，所有多 primitive 须满足证书 $L\ge d_{\min}$、$U\le d_{\max}$。两次完整运行必须逐元素一致。
-
-效率条件在运行前独立冻结为：总体按 proposal 计拒绝率小于 50%，proposal count 的 99% 分位不超过 8，最大不超过 64。完整报告各组总提议/拒绝率、下界证据不足拒绝数、上界保守超限拒绝数、其他构造或几何拒绝数及 proposal count 分位数。禁止 seed 特判、修改提议分布、缩窄请求尺寸区间或恢复 resolution 31/41 尺寸接收。
-
-PASS → 解锁 E18b。正确性 FAIL → 修 schema-3 acceptance 后按原判据重跑；仅效率 FAIL → E18b 保持锁定，另行决定是否修订 proposal parameterization。
-
-**E18a-B 正式结果**
-
-FAIL，原因仅为预注册效率条件未满足；E18b 与 E19 保持锁定。schema-3 correctness 证据保留，但不得据此改写整体为 PASS。
-
-- 2,048 次生成调用全部在 64 次内成功，最终接受 primitive count 1–5 分别为 379/460/409/411/389；全部参数、SDF、resolution 31/41 非尺寸拓扑检查通过，生成报告与重新计算的连续尺寸/证书逐元素一致；
-- 接受对象的尺寸下界最小值为 0.202296 m，保守上界最大值为 2.997668 m，连续证书违反数、非尺寸失败数、报告不一致数与 proposal 记账错误数均为 0；
-- 共执行 4,970 次 proposal、拒绝 2,922 次，总体拒绝率为 58.7928%，超过冻结的 50%；proposal count 的 median/$Q_{0.90}$/$Q_{0.95}$/$Q_{0.99}$/maximum 为 2/5/6/9/18，其中 $Q_{0.99}=9$ 超过冻结的 8；
-- 拒绝原因中，下界证据不足 56 次、保守上界无法证明不超过请求上限 1,802 次、其他既有构造或几何检查拒绝 1,064 次；固定 count 2/3/4/5 的拒绝率随复杂度上升为 57.62%/61.39%/65.41%/68.97%；
-- 两次完整运行 bitwise 一致，运行哈希均为 `6d98f725c4d1c5867e1a4f5bc9ec0ff893a38abc70d7709b00271f1c3e796c59`，摘要哈希为 `1a62ab9b9dc2f4beda72743a8b5feb4ab3b471daadff29c496bf842c060fb80b`。
-
-该 FAIL 不表示 schema 3 接受了非法对象。当前证据只能确定**原保守上界触发了大量拒绝**，尚不能区分候选真实连续尺寸超限与证书松弛；因此不得直接修改提议分布或放宽 50%/8 的历史标准。E18a-D1 先独立归因，E18b 与 E19 继续锁定。
-
-### E18a-D1｜上界拒绝归因诊断
-
-**唯一问题与固定样本**
-
-E18a-D1 只回答 E18a-B 中 1,802 个 $U>3$ m 的拒绝候选究竟主要是真实连续尺寸超限，还是原证书上界过松。正式样本严格限定为 E18a-B 的 2,048 个审计调用中、在最终接受候选之前实际发生的全部上界拒绝提议；通过相同 seed、primitive-count 请求与随机流只读重放，并要求每个调用的最终对象哈希、proposal count、三类拒绝计数以及总计 4,970/2,922/56/1,802/1,064 与 E18a-B 产物完全一致。诊断不得改变 generator、proposal distribution、3 m 上限、原连续证书或原效率门槛。
-
-**独立高精度尺寸区间**
-
-每个拒绝候选形成数值区间
-
-$$
-[\underline D_{\mathrm{HP}},\overline D_{\mathrm{HP}}].
-$$
-
-独立估计器不得调用 `continuous_size_certificate`、`_continuous_outer_bounds`、`continuous_bounds` 或 resolution 31/41 mesh 报告。下界由独立确定性 Sobol 内部见证点及从这些点启动的连续约束极值优化给出；只有 SDF 有限且不大于 $10^{-9}$ 的实际内部/边界点才能形成下界。上界从独立球形搜索域开始，对输出坐标盒做三维自适应区间分支定界：先用区间算术逆传播 bend、taper 与 twist，再传播解析 superquadric 隐式函数、顺序 CSG 的 min/max/difference 以及低频表面位移；隐式函数区间下界大于零的盒被严格排除，其余盒按当前目标轴的可能极值优先细分。该方法保留三维坐标相关性，不读取原证书的 bounds 数值。
-
-标准计算冻结为 $2^{14}$ 个 Sobol probes、每个轴向极值最多 8 个约束优化起点和 0.004 m 的分支定界终止宽度；严格计算冻结为嵌套的 $2^{16}$ probes、每个轴最多 24 个起点和 0.001 m 的终止宽度。约束优化使用 SLSQP，`ftol=1e-12`、`maxiter=500`；失败或不可行结果只能丢弃，不能用于缩小区间。每个轴向单侧极值最多检查 250,000 个区间盒，达到上限仍未收敛则该对象标记为 `estimator_unresolved`，不得归入真实超限或证书松弛。最终使用严格区间归因。
-
-估计器先在半径 0.1/1.5 m 球、yaw 0.4 的半轴 $(0.1,0.3,0.5)$ m 椭球、两个半径 1 m 且中心位于 $x=\pm0.5$ m 球的 union/intersection、半径 1 m 球减去内部半径 0.35 m 球，以及带非零 twist 的球上资格。全部解析真实最大轴尺寸必须位于标准与严格区间；严格下界不得小于标准下界，严格上界不得大于标准上界；严格解析区间最大宽度须小于 0.01 m。每个 fixture 再用 $2^{18}$ 个独立连续 probes 检查，不得发现真实 inside 点超出严格外包围。两次完整 D1 必须逐元素复现样本身份、区间、分类、统计和哈希。
-
-**冻结分类与分叉**
-
-- `true_oversize`：$\underline D_{\mathrm{HP}}>3$ m；真实内部见证已经足以推出超限。
-- `certificate_looseness`：$\overline D_{\mathrm{HP}}\le3$ m；独立保守上界足以推出候选合格，而原证书仍拒绝。
-- `boundary_unresolved`：其余跨越 3 m 的区间，以及达到区间盒上限的 `estimator_unresolved`；不得强行归入前两类。
-
-“主要”在运行前冻结为占全部 1,802 个上界拒绝对象严格超过 50%。若 `true_oversize` 严格过半，下一步只修 proposal parameterization/scale allocation，形成 schema 4 与 E18a-B-v2；若 `certificate_looseness` 严格过半，下一步只改进并重新资格连续上界，不改变异常代理提议分布；若两类都未过半，则报告三类比例并停止，先解决未决区间或确定单一优先修改对象。D1 是归因诊断，不以任一方向为预期 PASS，也不得据此改写 E18a-B 的历史 FAIL。
-
-**E18a-D1 正式结果**
-
-PASS，诊断问题得到明确裁决；E18a-B 的历史效率 FAIL 保持不变，E18b 与 E19 继续锁定。
-
-- 七个解析 fixture 的真实连续尺寸全部位于标准与严格高精度区间；严格解析区间最大宽度为 0.001463 m，小于冻结的 0.01 m，$7\times2^{18}$ 个独立 probes 没有发现真实 inside 点超出严格外包围；
-- 只读重放逐调用恢复 E18a-B 的 2,048 个最终对象、4,970 次 proposal、2,922 次拒绝以及 56/1,802/1,064 三类拒绝计数，最终对象哈希、proposal count 和拒绝计数均与父产物完全一致；
-- 1,802 个上界拒绝候选中，`true_oversize` 为 232 个（12.87%），`certificate_looseness` 为 1,502 个（83.35%），`boundary_unresolved` 为 68 个（3.77%）；其中 66 个未决对象触及 250,000 盒上限，未被强行分类；
-- 证书松弛在默认路径和固定 primitive count 2/3/4/5 中分别为 574/704、232/288、229/269、230/261、237/280，因而不是单一审计组造成；
-- 两次完整运行逐元素一致，运行哈希均为 `a5f4fe7be9bf8b5c5fd22487a1e2737a1e1ec1629b36419bea223dd2bfa295c2`，摘要哈希为 `8d6acead5918abd06387525f44f0c2d2a5cde993021a3a327f7bf6fbceebe29f`；产物为 `runs/ajae/e18a_d1_upper_attribution.npz`，SHA-256 为 `e0eb4f82bd4a7233ffacd3a2e32d42d82b7686219b0c8483e6c8f222c7652685`。
-
-冻结的多数分叉因此选择 **`continuous_upper_bound`**：当前效率失败主要由原连续上界松弛造成，不得修改 proposal distribution，也不得放宽历史 50%/$Q_{0.99}\le8$ 标准。下一步必须先设计、实现并独立资格一个更紧但仍保守的正式连续上界，再按版本化协议重跑 E18a-B；在该设计获批前停止。
-
-### E18a-D2｜紧致保守连续上界资格
-
-**唯一问题与候选定义**
-
-E18a-D2 只回答一个准备进入正式 generator 的廉价连续上界，能否在保持严格保守的前提下显著减少 E18a-D1 已确认的证书松弛。D2 不修改 generator、proposal distribution、0.2–3.0 m 尺寸范围、原 E18a-B 效率门槛或历史结果。
-
-候选以固定 256 个 $z$ 薄层传播连续几何外包围。每个 primitive 先按最大表面位移对应的隐式 level set 解析扩张；在每个薄层内，根据该层离 primitive 中心的最小 $|z|$ 计算 superquadric 横截面的解析支撑矩形，再依顺序 CSG 传播：union 取包络、difference 保留左集合、intersection 取矩形交。随后在同一薄层内用区间算术联合传播 twist 的正余弦范围、taper 的正缩放范围和 bend 的 $z^2$ 范围，最后合并全部薄层。正式候选 AABB 取该薄层 AABB 与旧保守 AABB 的集合交；两个 AABB 都包含真实连续几何，因此其交仍是保守外包围，且逐轴不会比旧上界更松。候选尺寸上界为该交 AABB 的最大轴跨度。
-
-算法固定为 256 层，时间复杂度 $O(256P)$、内存复杂度 $O(256)$，其中 $P\le5$；禁止使用 Sobol、SLSQP、differential evolution、D1 三维分支定界、mesh/voxel resolution 或依数据自适应增加层数。D2 只资格该候选，不把它接入 schema 3。
-
-**固定样本与 PASS 条件**
-
-解析资格沿用 D1 的七个 fixture；每个解析真实最大轴尺寸必须不大于新上界，且用 $2^{18}$ 个独立连续 probes 不得发现真实 inside 点位于候选 AABB 外。历史资格严格重放 E18a-B 的同一 1,802 个上界拒绝对象，并要求调用索引、对象哈希和旧 $U$ 与 D1 产物逐元素一致。
-
-对全部 1,802 个对象，必须满足 $U_{\mathrm{new}}\le U_{\mathrm{old}}$，并且 D1 的严格真实内部见证下界不得超过 $U_{\mathrm{new}}$；任一 $\underline D_{\mathrm{HP}}>U_{\mathrm{new}}$ 即为确定的保守性反例并直接 FAIL。D1 已确认的 232 个 `true_oversize` 对象中，不允许任何对象出现 $U_{\mathrm{new}}\le3$ m。
-
-有效性门槛冻结为：1,502 个 `certificate_looseness` 对象中，至少 75%（即至少 1,127 个）满足 $U_{\mathrm{new}}\le3$ m；同时完整报告 $U_{\mathrm{old}}-U_{\mathrm{new}}$、$U_{\mathrm{old}}-\underline D_{\mathrm{HP}}$ 与 $U_{\mathrm{new}}-\underline D_{\mathrm{HP}}$ 的 median/$Q_{0.90}$/$Q_{0.99}$/maximum，不根据结果改门槛。
-
-成本在当前冻结机器上对 1,802 个对象逐个单线程计时；候选上界单次中位时间必须小于 5 ms、$Q_{0.99}$ 小于 20 ms。计时只用于成本资格，不进入确定性哈希。两次完整几何计算必须逐元素复现候选 AABB、$U_{\mathrm{new}}$、对象身份、分类、统计与运行哈希。
-
-PASS → 冻结并实施 E18a-B-v2：generator schema 4 只用新上界替换旧上界，proposal distribution 与历史效率门槛原样保留。FAIL → 不得接入 generator；根据失败项重新设计保守上界。E18a-B-v2、E18b 与 E19 当前均锁定。
-
-**E18a-D2 正式结果**
-
-FAIL；候选不得接入 generator，E18a-B-v2、E18b 与 E19 继续锁定。如果后续修订审计范围，本次结果永久记为 E18a-D2-v1 FAIL。
-
-- 七个解析 fixture 的真实尺寸均不超过候选上界，$7\times2^{18}$ 个独立 probes 没有发现 inside 点位于候选 AABB 外；1,802 个历史对象中没有出现 $\underline D_{\mathrm{HP}}>U_{\mathrm{new}}$ 的确定保守性反例，232 个 `true_oversize` 对象的误放行数为 0；
-- 1,502 个 `certificate_looseness` 对象中有 1,302 个满足 $U_{\mathrm{new}}\le3$ m，恢复率为 86.68%，超过冻结的 75%；候选单线程耗时 median/$Q_{0.99}$/maximum 为 0.253/0.438/0.834 ms，低于冻结的 5/20 ms；
-- 唯一失败条件是“全部 1,802 个对象 $U_{\mathrm{new}}\le U_{\mathrm{old}}$”：共有 19 个对象违反，最大差值为 0.819920 m；两次完整运行逐元素一致，运行哈希均为 `ec6834db4804008b9876cb935924843768dc5430d414700734aabaf187696523`，摘要哈希为 `3921ecf6c16720af52a5fad336f79278d59566ed0b37403a164a0997b55da09a`；产物 `runs/ajae/e18a_d2_tight_upper_bound.npz` 的 SHA-256 为 `559c06109b90b48a2adad3788bd90effef81dcacddb7d1f028216c69dde3e2db`；
-- 事后身份诊断确认这 19 个对象全部为默认混合路径中的单 primitive。单 primitive 的历史 $U_{\mathrm{old}}$ 来自 E16-v3 的全局连续优化，而多 primitive 的历史 $U_{\mathrm{old}}$ 来自 E18a-A 解析证书；D2 首版把准备替换多 primitive 证书的廉价候选错误地同时要求优于单 primitive 全局优化，因而混合了两种不同替换范围。
-
-本次 FAIL 不能通过事后删除 19 个对象改写。若修订为 E18a-D2-v2，必须在运行前明确冻结：单 primitive 原样继承 E16-v3 路径且不属于新上界替换域；D2-v2 只在实际将被 schema 4 替换的多 primitive 历史上界域内重新计算保守性、相对紧致性和松弛恢复率。该协议修订需先获批准。
-
-### E18a-D2-v2｜多 primitive 紧致保守连续上界资格
-
-**修订原因与替换域**
-
-E18a-D2-v1 永久保留 FAIL，原因为 `replacement-scope specification defect`：首版错误地把 E16-v3 单 primitive 连续优化上界和准备替换多 primitive / CSG 解析证书的候选上界放入同一个相对紧致性条件。D2-v2 不改写首版结果，只修订历史对象的比较域。
-
-正式替换域冻结为 E18a-D1 的 1,802 个历史上界拒绝对象中所有 `primitive_count > 1` 的对象。单 primitive 对象完全不进入历史相对紧致性、真实超限误放、松弛恢复率和运行成本的计算域；其生成与尺寸资格继续原样使用 E16-v3 的连续优化上界。对象是否属于替换域只由只读重放得到的 `primitive_count` 决定，不按 D2-v1 的候选结果、是否通过或上界差值筛选。重放必须逐元素恢复 D1 的调用索引、proposal occurrence、对象哈希及旧上界；正式运行同时报告替换域对象数及其中 D1 三类归因的固定分母。
-
-候选公式、256 个固定 $z$ 薄层、$O(256P)$ 时间和 $O(256)$ 内存、七个解析 fixture、每 fixture $2^{18}$ 个独立连续 probes，以及禁用全局搜索、mesh/voxel 和自适应增层的约束全部继承 D2-v1。七个 fixture 只用于候选本身的独立保守性反证，不属于历史替换域或恢复率分母。
-
-**冻结 PASS 条件**
-
-在全部多 primitive 替换域内必须同时满足：$U_{\mathrm{new}}\le U_{\mathrm{old}}$；D1 的严格真实内部见证下界不超过 $U_{\mathrm{new}}$，确定保守性反例数为 0；D1 已分类为 `true_oversize` 的对象中，$U_{\mathrm{new}}\le3$ m 的误放数为 0；D1 已分类为 `certificate_looseness` 的对象中，至少 75% 满足 $U_{\mathrm{new}}\le3$ m。75% 门槛原样继承，不根据 D2-v1 已观察到的 86.68% 调整；对应最小恢复数只由只读重放得到的多 primitive 松弛分母乘以 75% 后向上取整。
-
-七个解析 fixture 的真实尺寸必须不超过候选上界，全部独立真实 inside probes 必须位于候选 AABB 内。成本在冻结机器上仅对多 primitive 替换域逐对象单线程计时，中位数必须小于 5 ms、$Q_{0.99}$ 必须小于 20 ms。完整报告与 D2-v1 相同的旧上界、新上界及高精度下界之间的松弛分位数。两次完整几何计算必须逐元素复现替换域身份、候选 AABB、上界、分类、统计和运行哈希。
-
-D2-v2 仍不修改 generator、proposal distribution、0.2–3.0 m 范围或 E18a-B 的 50%/$Q_{0.99}\le8$ 效率条件，也不把候选接入任何生成路径。PASS 后才解锁 E18a-B-v2；FAIL 则候选继续禁止接入，并根据实际失败项停止或重新设计。
-
-**当前状态**
-
-E18a-D2-v2 PASS，紧致保守上界获得进入多 primitive / CSG 生成路径的资格；E18a-B-v2 解锁，E18b 与 E19 继续锁定。
-
-**正式结果**
-
-- 只读重放逐元素恢复全部 1,802 个 E18a-D1 历史上界拒绝对象；其中 19 个单 primitive 对象按冻结规则排除，正式多 primitive 替换域为 1,783 个对象，包含 214 个 `true_oversize`、1,502 个 `certificate_looseness` 和 67 个 `boundary_unresolved`；
-- 多 primitive 域内 $U_{\mathrm{new}}>U_{\mathrm{old}}$ 的对象数为 0，$\underline D_{\mathrm{HP}}>U_{\mathrm{new}}$ 的确定保守性反例数为 0，214 个真实超限对象的误放数为 0；七个解析 fixture 的真实尺寸违反数和 $7\times2^{18}$ 个独立 probes 的候选 AABB containment 违反数均为 0；
-- 1,502 个证书松弛对象中有 1,302 个被新证书恢复，恢复率为 86.6844%，超过原样冻结的 75%（至少 1,127 个）；
-- $U_{\mathrm{old}}-U_{\mathrm{new}}$ 的 median/$Q_{0.90}$/$Q_{0.99}$/maximum 为 1.993895/2.918876/3.692532/4.210985 m；$U_{\mathrm{new}}-\underline D_{\mathrm{HP}}$ 对应为 0.292516/0.625705/1.013985/1.413670 m；
-- 单线程成本 median/$Q_{0.99}$/maximum 为 0.251/0.336/0.709 ms，低于冻结的 5/20 ms；两次完整运行逐元素一致，运行哈希均为 `fe28b0ccb4705103094df62b582daedde3fb55a24f299f1bc78707d6e81b4458`，摘要哈希为 `ae2c11473f90393ee2d8224aba7dff5dfa5ec022c3baa8a8d7625859611b08be`；产物 `runs/ajae/e18a_d2_v2_tight_upper_bound.npz` 的 SHA-256 为 `60cb44fbfac7afc4327b1b9086b880f93abb784d3508c41f3930e587c1b649f1`。
-
-该 PASS 只资格确认候选上界在 multi-primitive / CSG 替换域内严格保守、相对旧解析证书更紧且成本受控；尚未证明 schema 4 完整生成器满足历史效率条件。下一步必须先冻结 E18a-B-v2，再只修改多 primitive acceptance 并执行完整生成器审计。
-
-### E18a-B-v2｜schema-4 完整生成器连续尺寸接收
-
-**修订范围与唯一问题**
-
-E18a-B-v1 永久保留 FAIL，其 correctness 证据有效，但历史效率条件未满足。E18a-B-v2 只回答：在提议分布完全不变的前提下，把 D2-v2 已资格的新上界只接入多 primitive / CSG 路径后，完整 generator 是否同时满足连续几何正确性、确定性和原冻结效率条件。
-
-generator identity 升为 schema 4。单 primitive 接收路径逐项继承 E16-v3，不调用紧致薄层上界，仍以合格的 `continuous_bounds` 连续优化结果同时作为尺寸下界和上界。多 primitive 仍用 E18a-A 标准证书的真实连续边界弦作为尺寸下界 $L$，但用 E18a-D2-v2 的 256 层紧致保守 AABB 最大轴跨度作为上界 $U_{\mathrm{tight}}$；只有 $L\ge d_{\min}$ 且 $U_{\mathrm{tight}}\le d_{\max}$ 才接受。生成报告的 outer bounds 与 upper size 必须来自紧致保守 AABB，lower size 与 witness 资格仍来自原标准证书。旧解析 AABB 可作为紧致上界内部的保守交集输入，但不得再单独决定 multi-primitive acceptance。
-
-除这一替换外，seed 到随机流、primitive-count 抽样、尺度/轴比/CSG 操作/形变参数分布、请求尺寸区间、连通性检查、每次最多 64 个 proposal 和拒绝顺序全部保持 schema 3 不变；禁止 seed 特判、缩窄尺寸范围或调整 proposal parameterization。
-
-**固定审计与 PASS 条件**
-
-完整审计原样继承 E18a-B-v1 的 2,048 次调用：默认训练路径 seed 0–1023，以及 primitive count 2、3、4、5 各 seed 0–255。两次独立完整生成必须逐元素一致。
-
-全部调用必须在 64 次内成功；接受对象的参数、保守半径、$9\times9\times9$ SDF 必须有限，resolution 31/41 只用于有界、闭合、单连通和分辨率不改变连续资格的检查。单 primitive 报告须与重新计算的 E16-v3 连续优化 bounds 逐元素一致；多 primitive 报告的 lower size 须与重新计算的 E18a-A witness lower 一致，outer bounds 和 upper size 须与重新计算的 D2-v2 紧致上界逐元素一致，并满足 $L\ge0.2$ m、$U_{\mathrm{tight}}\le3.0$ m。报告 schema、proposal count、三类拒绝计数和最终对象哈希必须正确。
-
-效率条件全部原样继承首次运行前的冻结值：总体按 proposal 计拒绝率严格小于 50%，proposal count 的 $Q_{0.99}\le8$，maximum $\le64$。完整报告总体与各审计组提议数、拒绝率、下界证据不足、紧致上界超限、其他构造/几何拒绝数，以及 proposal count 的 median/$Q_{0.90}$/$Q_{0.95}$/$Q_{0.99}$/maximum。不得根据 E18a-D2-v2 的恢复率重新调整任何条件。
-
-PASS → E18a 完整闭合并解锁 E18b。correctness FAIL → 修 schema-4 acceptance 实现后按原判据重跑；correctness 全部成立但效率仍 FAIL → 不改写结果，停止并重新判断 proposal distribution 是否成为主要瓶颈。
-
-**当前状态**
-
-E18a-B-v2 PASS；E18a 的连续尺寸资格与 schema-4 完整生成器效率链已经闭合，E18b 解锁，E19 继续锁定。
-
-**正式结果**
-
-- 两遍各 2,048 次生成调用全部在 64 个 proposal 内成功；接受 primitive count 1–5 分别为 254/490/441/440/423，参数、保守半径、$9\times9\times9$ SDF、resolution 31/41 有界/闭合/单连通检查均合格；
-- 单 primitive 的 E16-v3 bounds 复算与报告逐元素一致；多 primitive 的 E18a-A 连续下界及 E18a-D2-v2 紧致上界复算与报告逐元素一致。接受对象下界最小值为 0.202296 m、上界最大值为 2.998756 m，连续资格违反、报告不一致、非尺寸失败和 proposal 记账错误均为 0；
-- 共执行 3,020 个 proposal、拒绝 972 个，总体拒绝率为 32.1854%，严格低于冻结的 50%；proposal count 的 median/$Q_{0.90}$/$Q_{0.95}$/$Q_{0.99}$/maximum 为 1/3/3/5/8，通过冻结的 $Q_{0.99}\le8$ 与 maximum $\le64$；
-- 拒绝原因中，下界证据不足 36 次、紧致上界超限 287 次、其他构造或几何拒绝 649 次；默认路径及固定 count 2/3/4/5 的拒绝率分别为 28.84%/21.95%/31.91%/37.41%/45.30%，各组均无生成失败；
-- 两次完整运行逐元素一致，运行哈希均为 `5286485cc61145ae7f47ede0770e8f8dd005a0bb17b981e0119ba638efb1f77c`，摘要哈希为 `7357df5a9cd91e08afd6c11297423faac462844c791bd5e4416d7e5e14221a89`；产物 `runs/ajae/e18a_b_v2_schema4_generator.npz` 的 SHA-256 为 `0ae880bd87272c6ed53e8bdade9ee2d6b43195a547f5e5dbc33f1a0a7bfb2039`。
-
-科学结论限定为：**schema 4 在保持单 primitive 连续优化路径和全部 proposal 参数分布不变的条件下，使用已资格的紧致保守上界消除了 E18a-B-v1 的效率失败，并保证所有正式接受对象获得连续几何合法性证书。** 这尚不证明复杂 CSG/形变的射线求交正确；该问题由 E18b 独立审计。
-
-## E18b｜CSG 与连续形变求交稳定性
-
-**唯一问题**
-
-E18a-D2-v2 与 E18a-B-v2 均已 PASS，E18b 解锁。E18b 只回答：对已获得连续尺寸资格的 union、difference、intersection、非二次 exponent、bend、twist、taper 与低频表面形变，当前 `ShapeSpec.intersect` 是否稳定返回与独立参考一致的最近正交点、hit/miss 和外向单位法向。E18b 不再修改尺寸证书、generator 或 proposal distribution。
-
-**固定几何与射线**
-
-解析组固定为三个无形变球体 CSG：中心位于 $x=\pm0.5$ m 的两个半径 1 m 球的 union、相同两球的 intersection、半径 1 m 外球减去中心位于 $x=0.2$ m 的半径 0.35 m 内球。其最近正交点由独立的解析 ray-sphere 区间布尔运算给出，不调用被测 SDF 扫描器。
-
-机制组固定为六个手工几何：非二次 exponent CSG、单独 bend、单独 twist、单独 taper、单独低频表面形变，以及同时包含三种 CSG 操作和全部连续形变的组合对象。压力组固定为 schema 4 下 primitive count 2、3、4、5 各 seed 0–15 的 64 个正式接受对象；不得根据求交结果替换 seed。最终必须报告每种 CSG operation 和每种形变机制的实际覆盖数。
-
-每个解析/机制 fixture 使用 2,048 条确定性射线，每个压力对象使用 256 条。射线原点位于对象保守球外，半数方向指向由冻结 Sobol 点生成的紧致 AABB 内目标，半数为冻结 Sobol 球面方向，用于同时覆盖 hit 与 miss；方向统一归一化。被测实现固定使用正式默认 `steps=96`，不得根据对象或结果增加采样步数。
-
-**独立高精度参考**
-
-除三个解析组外，参考求交器只调用连续 `signed_distance`，但不调用 `intersect`、`_sampled_sdf_intersection` 或其中的 96-step/bisection 实现。它在解析保守球的正向 ray interval 上分别使用 4,097 与 16,385 个等距节点寻找第一次 outside-to-inside 符号变化，再用 SciPy `brentq(xtol=10^{-12}, rtol=10^{-14})` 求最近正根。严格参考必须与标准参考 hit/miss 完全一致，且共同 hit 的距离差小于 $5\times10^{-5}$ m；否则参考资格 FAIL，不能据此裁决被测实现。严格参考无符号变化但最小绝对 SDF 不超过 $10^{-7}$ m 的测度零 grazing ray 标记为 `reference_unidentifiable`，不裁决 hit/miss，但其比例必须低于 0.5% 并逐 fixture 报告。
-
-参考法向使用严格交点两侧 $\delta=10^{-6}\max(1,R)$ m 的独立中心差分；再用 $2\delta$ 复算。两者夹角不超过 $0.05^\circ$ 才作为可微参考法向；不稳定点标记为 CSG seam/non-differentiable，只检查被测法向有限、单位长度且局部朝向满足 $\operatorname{SDF}(p+\epsilon n)>\operatorname{SDF}(p-\epsilon n)$，不强制与任一分支梯度对齐。所有分类和排除规则在读取被测结果前应用。
-
-**冻结 PASS 条件**
-
-参考资格必须先 PASS。对全部可裁决射线，被测 hit/miss 与解析或严格参考零不一致；共同 hit 必须返回有限正距离，最近距离绝对误差不超过 $10^{-4}$ m，交点连续 SDF 绝对残差不超过 $10^{-5}$ m；共同 miss 距离必须严格为 $+\infty$ 且法向为零。全部 hit 法向必须有限，单位长度误差不超过 $10^{-12}$，并满足外向性；在可微参考点法向夹角不超过 $0.1^\circ$。每个 fixture 和每个压力对象都必须至少包含 16 个参考 hit 与 16 个参考 miss，防止单一分类形成空洞审计。
-
-完整报告总射线数、可裁决/不可识别数、hit/miss 数、分类错误、距离误差 median/$Q_{0.95}$/$Q_{0.99}$/maximum、surface residual、法向误差、非可微点数及逐机制 failure rate。两次完整运行必须逐元素复现射线、参考根、被测输出、掩码、统计和哈希。
-
-PASS → 解锁 E19。FAIL → 永久保留首次结果；如果是参考资格失败，先修独立参考实验设计；如果参考合格但被测实现失败，修 `ShapeSpec.intersect` 后按版本化实验重跑，不得通过增加被测 `steps` 或删除失败机制改写结果。
-
-**当前状态**
-
-E18b FAIL；如果后续修复求交实现并重跑，本次永久记为 E18b-v1 FAIL。E19 继续锁定。
-
-**正式结果**
-
-- 73 个对象共审计 34,816 条射线；独立参考的标准/严格分类零不一致、参考失败数和不可识别 grazing ray 数均为 0，每个对象均至少具有 16 个参考 hit 与 16 个参考 miss，参考资格 PASS；
-- 当前 `ShapeSpec.intersect(steps=96)` 出现 9 条 hit/miss 分类错误，全部是参考 hit 被测实现报告 miss：解析双球 intersection 2 条、低频表面形变 fixture 1 条，以及固定压力对象 count/seed 2/4、2/9、3/5、3/9、4/3、4/7 各 1 条；因此违反冻结的零分类错误条件，E18b 整体 FAIL；
-- 对其余共同 hit，距离绝对误差 median/$Q_{0.95}$/$Q_{0.99}$/maximum 为 $2.893\times10^{-8}$/$8.269\times10^{-8}$/$1.000\times10^{-7}$/$1.389\times10^{-7}$ m，surface residual 对应为 $1.592\times10^{-8}$/$6.159\times10^{-8}$/$8.192\times10^{-8}$/$1.329\times10^{-7}$ m；最大单位长度误差为 $3.331\times10^{-16}$，最大可微法向角误差为 $0.074943^\circ$，miss 契约和全部外向性检查通过；
-- 两次完整运行逐元素一致，运行哈希均为 `57c2b7538e8fa02dbe7b9b787063502268240f26fdd7e245b5becde5a92f4b3f`，摘要哈希为 `2ca1531b6e9b31732c0860540e2f6e328d54924f6b1befaae6a0d4a374ceafee`；产物 `runs/ajae/e18b_intersection_stability.npz` 的 SHA-256 为 `02ef60988e656d5474e21494cacee151c3ad1bcbce2501c48ee054ad65d906a3`。
-
-已验证事实是参考求交器合格且当前固定 96 点扫描会漏掉少量真实交段；这不是通过放宽 failure rate 可以处理的问题。下一步只允许诊断 9 条失败射线的真实内部弦宽与采样间距，并设计能够发现窄区间的自适应括区间实现；不得简单提高 `steps`、删除失败对象或改写 E18b PASS 条件。
-
-### E18b-v2｜自适应窄区间括根后的求交稳定性
-
-**历史失败与实现修订**
-
-E18b-v1 永久保留 FAIL。对 9 条漏检射线的独立诊断显示，真实内部弦宽为 0.003886–0.055447 m，而原 96 点网格间距为 0.009017–0.071524 m；内部弦仅占对应一步的 10.10%–77.52%，所有粗网格样本因此都可能留在对象外侧。该证据把失败定位为固定均匀网格无法发现窄 outside-inside-outside 区间，不改变独立参考或科学判据。
-
-被测实现保留 `steps=96` 作为粗网格和已有显式符号变化路径。只对粗网格未找到 hit、起点位于对象外，且区间两端 SDF 均为正的候选区间启动确定性自适应括根：若端点最小 SDF 不超过区间长度的 4 倍，则计算中点；中点进入对象时记录 outside-to-inside bracket，中点仍在外部时对子区间应用相同条件。递归深度固定为 8，不按对象或结果调整；所有候选区间按原始 ray distance 顺序处理，最终只保留最近正 bracket，再沿用原 18 次二分细化。该修订没有增加全局均匀 `steps`，只在连续函数接近可能过零的局部区间求证，且没有符号变化就不得伪造 hit。
-
-**正式审计与 PASS 条件**
-
-E18b-v2 完整继承 E18b-v1 的 73 个对象、34,816 条射线、解析/高精度参考、标准/严格参考收敛条件、grazing 规则、每对象 hit/miss 支持要求及全部误差界限；不得删除首次失败射线或增加 `steps`。仍要求零 hit/miss 不一致、最大距离误差 $\le10^{-4}$ m、最大 surface residual $\le10^{-5}$ m、最大单位长度误差 $\le10^{-12}$、可微法向角误差 $\le0.1^\circ$、miss 契约与外向性全部通过，并要求两次完整运行逐元素一致。
-
-PASS → 解锁 E19。FAIL → 永久保留 v2 结果；若参考仍合格但存在分类错误，则停止并重新判断当前 SDF 是否支持可证明的保守括根，而不得继续增加递归深度或松弛 failure rate。
-
-**当前状态**
-
-E18b-v2 PASS，E19 解锁。
-
-**正式结果**
-
-- 完整继承的 73 个对象、34,816 条射线与独立参考全部成功执行；参考失败、不可识别 grazing ray 和每对象支持不足均为 0，参考 hit/miss 分别为 12,706/22,110；
-- 被测实现与参考 hit/miss 分类零不一致，E18b-v1 的 9 条漏检全部恢复；共同 hit 的距离绝对误差 median/$Q_{0.95}$/$Q_{0.99}$/maximum 为 $2.893\times10^{-8}$/$8.268\times10^{-8}$/$1.000\times10^{-7}$/$1.389\times10^{-7}$ m，surface residual 对应为 $1.592\times10^{-8}$/$6.159\times10^{-8}$/$8.191\times10^{-8}$/$1.329\times10^{-7}$ m；
-- 最大单位长度误差为 $3.331\times10^{-16}$，最大可微参考法向夹角为 $0.074943^\circ$；一个非可微 CSG seam 按冻结规则只检查有限、单位长度与外向性并通过。miss 契约、外向性和全部机制逐项 failure rate 均通过；
-- 两次完整运行逐元素一致，运行哈希均为 `7f9eda581aa78b21091e50917ad3cebd3abfdcdd2b6f4b3659076709e06bd125`，摘要哈希为 `bf3a94268e9a8ad1b87a7af0156b73b3141eaa514539648c565c97a339b338ff`；产物 `runs/ajae/e18b_v2_intersection_stability.npz` 的 SHA-256 为 `e4294d51db05e1a4c1967bf8c7fcde5287a456b3cef48c330f01366e34095c53`。
-
-科学结论限定为：**在冻结的解析、单机制、组合机制与 schema-4 压力对象范围内，自适应局部括根后的 `ShapeSpec.intersect` 能稳定返回独立参考一致的最近正交点、hit/miss 和外向单位法向。** 该结论不声称任意未审计参数域都不存在更窄交段。
-
-**状态转移**
-
-- E18a-A PASS → **E18a-B**
-- E18a-B PASS → **E18b**
-- E18a-B 仅效率 FAIL 且归因未知 → **E18a-D1**
-- E18a-D1 证书松弛过半 → **E18a-D2**
-- E18a-D2-v2 PASS → **E18a-B-v2**
-- E18b PASS → **E19**
-- 任一层 FAIL → 修复对应测量、生成或求交构念；若需改变机制集合或提议分布，停止并重新修订协议。
-
-
-## E19｜单连通实体拒绝
-
-**唯一问题**
-
-对连续几何真值已知的多组件和单组件 CSG，正式 `ShapeSpec` 构造、反序列化和 generator 验证路径能否稳定拒绝前者且不误拒后者，从而保证一个正式异常代理实体不会包含多个互不相连物体。
-
-**固定解析 fixture**
-
-两球 union 使用解析中心距离判定连续真值。严格分离组固定半径 0.2/0.5/1.0 m，各使用绝对表面间隙 0.02/0.05/0.10/0.20 m，共 12 个多组件对象；重叠组使用相同半径与重叠深度，共 12 个单组件对象。另固定：两个“球减去贯穿 $xy$ 截面的薄扁椭球”对象，解析上形成上下两个分离 cap；两个“球减去完全位于内部的小球”对象，形成带内腔但仍单连通的实体；一条三球 union 链分别构造全部相邻重叠的单组件版本和末球断开的多组件版本。总计 15 个解析多组件与 15 个解析单组件 fixture。
-
-对每个多组件 fixture，分别通过直接构造和 `ShapeSpec.from_dict` 等价载荷进入正式校验；两条入口都必须在对象可用于 renderer 前抛出 `RenderError`，且原因为 `split into disconnected components`，不能靠尺寸、空体积或非有限参数等无关错误偶然拒绝。反序列化载荷由同一解析参数直接构造，不先创建一个已通过的 `ShapeSpec`。
-
-对每个单组件 fixture，直接构造与 JSON round-trip 都必须成功，参数逐元素一致；`geometry_report` 在 resolution 25/31/41/65 下均须报告 bounded、closed、components=1。另用 schema 4 的 primitive count 2/3/4/5 各 seed 0–31，共 128 个正式接受对象检查同样四个分辨率，防止修复只对手工 fixture 有效。不得根据结果替换 fixture 或 seed。
-
-**PASS 条件**
-
-15 个解析多组件在直接构造与反序列化两条路径全部因 disconnected-components 条件被拒绝；15 个解析单组件与 128 个 schema-4 接受对象均不被误拒，四个分辨率全部报告单组件；全部输出和错误分类有限、确定，两次完整运行逐元素一致。failure tolerance 为 0。
-
-**FAIL 条件**
-
-任一解析多组件进入正式 `ShapeSpec`，任一入口只因无关条件拒绝而没有验证连通性，或任一合法单组件被误拒，均为 FAIL。若 FAIL，需要先区分体素连通性分辨率不足与构造入口遗漏；不得删除小间隙 fixture 或把误拒/误放率改成非零。
-
-**状态转移**
-
-- PASS → **E20**
-- FAIL → **修 connected-component validation 后重跑 E19。**
-
-**当前状态**
-
-E19 FAIL；如果后续修订连续连通性资格并重跑，本次永久记为 E19-v1 FAIL。E20 继续锁定。
-
-**正式结果**
-
-- 15 个解析多组件 fixture 在直接构造与 `ShapeSpec.from_dict` 两条入口共 30 次全部被拒绝，误放数为 0，且全部准确触发 `CSG result is split into disconnected components`，无尺寸、空体积或参数错误等错误拒绝原因；
-- 15 个解析单组件 fixture 在两条入口均零误拒，四个冻结分辨率下报告均合格；
-- 128 个 schema-4 正式接受对象中，primitive count 5 的 seed 3、5、22 在 resolution 65 连通性复核中被判为多组件，导致 3 个对象的报告和 JSON round-trip 各一次失败，共 6 个冻结违反；因此 E19 整体 FAIL；
-- 两次完整运行逐元素一致，运行哈希均为 `d6811084c57eb4969685175dc545fb3548a95f6615b641a180451c998e9c2a2a`，摘要哈希为 `0c1b5458de8c3c57489e3c9a961a6e335a1b4ef6d9d9de50f8b084a4a51c03f3`；产物 `runs/ajae/e19_connectivity_rejection.npz` 的 SHA-256 为 `b369a485d35544c2da398cd39d4f9845b533779a45e467855aeb389772e24c30`。
-
-只读分辨率诊断显示三者在 resolution 25/31/41 均为 1 个体素组件，在 51/65 变为 2–3 个；seed 3 在 81 回到 1、97/129 为 2，seed 22 在 81/97 为 2、129 回到 1，seed 5 则在 51/65/81/97/129 为 3/3/3/4/8。该非单调结果说明当前体素组件数同时受真实窄连接与网格采样相位影响，不能把任一更高 resolution 事后指定为连续真值。
-
-当前已证实解析明显多组件能够被正式入口拒绝，但尚不能证明 schema 4 接受对象在连续几何意义下全部单连通。继续推进需要先设计一个与体素 resolution 无关或具有收敛/保守保证的连续连通性资格，并决定它如何进入 generator acceptance；这属于实验设计与生成器规则调整，因此在用户批准前停止，E20 保持锁定。
-
-### E19-D1-v1｜连续隐式几何连通性判定器资格
-
-**唯一问题与三态输出**
-
-E19-D1-v1 先不修改 generator，只资格一个直接作用于连续 `signed_distance` 定义的三态判定器：`connected`、`disconnected`、`unresolved`。判定器不得读取 resolution 25/31/41/65 的历史组件数，也不得把盒中心或任一固定采样点的 inside/outside 当作整个空间单元的真值。
-
-**保守不连通证书与解析连通证书**
-
-在 E18a-D2-v2 已资格的连续保守 AABB 内，将空间划分为嵌套 dyadic boxes。对每个 box 使用向外保守的区间算术完整传播 `_undeform`、superquadric implicit function、顺序 CSG 的 min/max/difference 和低频正弦位移，得到整个 box 上的连续隐式函数区间 $[F_L,F_U]$：$F_U<0$ 才是 `definitely_inside`，$F_L>0$ 才是 `definitely_outside`，其余为 `boundary_unresolved`。任何三角函数区间跨越极值时必须返回完整 $[-1,1]$，不能用端点近似。
-
-在 6 邻接 cubical complex 上计算去掉 `definitely_outside` 后、且含有确定内部见证的 possible-domain 分量数 $C_{\mathrm{sep}}$。若 $C_{\mathrm{sep}}\ge2$，确定外部盒已经形成不可穿越分隔，因而可保守判为 `disconnected`。possible-domain 中不含任何确定内部盒的孤立区域记为 orphan unresolved，不得假定为空。
-
-`connected` 不得由 possible-domain 与 `definitely_inside` 的体素分量数相等推出，因为有限不确定边界层仍可能隐藏额外小分量。它只允许由下列连续集合充分条件给出：单个连通 primitive 经连续双射形变；所有成员连通且有经真实内部点见证的连通交叠图的 union；非空凸 ellipsoid 集合的 intersection；严格包含于球内部的球形 cavity difference；以及满足径向导数严格为正的球形低频表面扰动。任一条件的代数不等式不能严格成立时不得容差放行，输出 `unresolved`。若解析 `connected` 证书与区间 `disconnected` 证书冲突，同样强制为 `unresolved` 并使实验 FAIL。
-
-标准层固定为每轴 $2^6=64$ 个区间盒，严格层固定为每轴 $2^7=128$ 个嵌套区间盒；两层使用同一保守 AABB 边界，因此严格盒精确细分标准盒，不存在网格相位切换。正式结论只有在标准与严格层三态相同、严格层不存在新增 orphan，且 $C_{\mathrm{sep}}$ 不下降时才可识别；否则最终输出强制为 `unresolved`。解析连通证书不随盒层级变化，但两层区间分类都必须与它无冲突。这是有限尺度下的保守资格：`disconnected` 只覆盖严格盒宽能够分隔的组件，`connected` 只覆盖列明的解析充分条件，其余几何不作猜测。
-
-**固定真值 fixture 与诊断对象**
-
-解析真值组固定 18 个连续几何：一个明显重叠的两球 union、三个表面间隙为 0.05/0.10/0.20 m 的分离两球 union，以及两个沿主轴严格分离的椭球 union；两条重叠深度为 0.05/0.10 m 的三球细桥链及对应末球分离链；两个重叠深度为 0.05/0.10 m 的窄双球 intersection；两个内部球 cavity difference；两个贯穿截面 cutter 形成分离 caps 的 difference；一个含非零 bend/twist/taper 的单 primitive；一个球形低频表面形变单 primitive，其扰动梯度范数上界严格小于球的径向隐式函数导数且中心保持在内部。连续真值在运行前由球/椭球中心距离、集合包含、贯穿分隔、连续双射或严格星形性解析给定，connected/disconnected 各 9 个。
-
-E19-v1 的 primitive count 5、seed 3/5/22 只作为无标签诊断对象；其结果可以是任一三态，但必须完整报告标准/严格 $C_{\mathrm{sep}}$、确定内部组件数、orphan 数与严格盒宽，不参与 D1 PASS 分母，也不得用于调节层数或 fixture。
-
-**冻结 PASS 条件**
-
-18 个解析 fixture 的标准与严格输出必须全部可识别、逐项等于解析真值，错误和 `unresolved` 均为 0；每个 connected fixture 必须记录命中的解析充分条件，不能只靠盒组件数；严格层不得把标准层已由确定外部分隔的分量重新合并，也不得新增 orphan。所有区间必须有限有序；另用每 fixture $2^{18}$ 个独立连续 probes 反证区间分类，`definitely_inside` 中不得出现 $F>0$ 点，`definitely_outside` 中不得出现 $F\le0$ 点。两次完整运行必须逐元素复现盒分类、分量统计、三态、解析证书和哈希。
-
-PASS → 解锁 E19-v2 的 generator acceptance 修订；FAIL → 判定器不得接入 generator，E19-v2 与 E20 保持锁定，并根据区间保守性、收敛性或可识别性失败项重新设计。E19-v1 的历史 FAIL 永久保留。
-
-**当前状态**
-
-E19-D1-v1 FAIL，永久保留。E19-D1-v2 已批准并解锁；E19-v2、E20 继续锁定。
-
-**正式结果**
-
-- 18 个解析真值 fixture 中，16 个完成正确三态裁决；没有对象被裁决成相反真值，但两个冻结的 0.05 m 分隔对象最终为 `unresolved`，按 failure tolerance 0 判 E19-D1 FAIL；
-- `disconnected-sphere-gap-0.05` 与 `disconnected-three-sphere-gap-0.05` 在标准 64 层的统计均为 $C_{\mathrm{sep}}=1$、确定内部组件数 2、orphan 0，因而不能证明分隔；严格 128 层均变为 $C_{\mathrm{sep}}=2$、确定内部组件数 2、orphan 0，获得保守 `disconnected` 证书。由于冻结条件要求标准层与严格层三态相同，最终不能采用严格层结论；
-- 其余 7 个解析多组件对象在两层均为 `disconnected`；9 个解析单组件对象均命中预注册的连续集合充分条件，且两层区间分类未与解析证书冲突；
-- 每个解析 fixture 的 $2^{18}$ 个独立 probes 共未发现任何区间分类反例；严格层新增 orphan 数与 $C_{\mathrm{sep}}$ 下降数均为 0；
-- E19-v1 的三个无标签诊断对象 seed 3/5/22 在两层最终均为 `unresolved`，不参与 PASS 分母。其中严格层统计依次为 $(1,3,1)$、$(1,13,15)$、$(1,4,0)$；当前证据仍不足以把它们裁决为连续或不连续；
-- 两次完整 24 核运行逐元素一致，运行哈希均为 `dfdb1cc4ee4c7aca09c3d51f28973fde4769e66616613e64e5f6db3b15c06d65`，摘要哈希为 `31edb633475943bee780930039216c13ffaa1a4b535990e859f1948dccd9015d`；产物 `runs/ajae/e19_d1_interval_connectivity.npz` 的 SHA-256 为 `4b307abfd203e6d83e4cf5b9e745c5280a3348d8b051f4b820d95aa96cdf1a5f`。
-
-本次结果验证了区间算术没有在抽查点上漏包，并且严格层能够对 0.05 m 窄间隙给出数学上保守的不连通证书；失败项是预注册的“双层必须已经同态”资格条件。是否允许 `unresolved → identified` 的单向细化、以及需要怎样的额外确认才能采用严格层证书，会改变正式裁决规则，必须在重跑前另行修订。当前不得把判定器接入 generator，也不得推进 E19-v2 或 E20。
-
-### E19-D1-v2｜连续连通性证书的单向细化资格
-
-**唯一修订**
-
-E19-D1-v2 完整继承 E19-D1-v1 的 18 个解析真值 fixture、3 个无标签历史诊断对象、连续保守 AABB、向外区间传播、64/128 两个精确嵌套层、解析 `connected` 充分条件、区间 `disconnected` 充分条件、每 fixture $2^{18}$ 个独立 probes、24 核执行和两次完整复现。不得修改 fixture、几何参数、盒层级、解析证书、$C_{\mathrm{sep}}$ 定义、orphan 定义、proposal distribution 或 generator。
-
-唯一修改是双层最终裁决。允许粗层证据不足后由严格层取得新证据，但禁止已有证据反转：
-
-| 标准 64 层 | 严格 128 层 | 最终裁决 |
-|---|---|---|
-| `unresolved` | `connected` | `connected` |
-| `unresolved` | `disconnected` | `disconnected` |
-| `connected` | `connected` | `connected` |
-| `disconnected` | `disconnected` | `disconnected` |
-| `connected` | `disconnected` | FAIL / `unresolved` |
-| `disconnected` | `connected` | FAIL / `unresolved` |
-| 任意状态 | `unresolved` | `unresolved` |
-
-`connected` 仍只能来自 E19-D1-v1 已冻结的连续集合解析充分条件；128 层 possible-domain 只有一个组件不能构成连通证书。`disconnected` 仍必须由 $C_{\mathrm{sep}}\ge2$ 给出：分隔必须完全由 `definitely_outside` 盒组成，每个被裁决为分离实体的 possible-domain 组件必须包含 `definitely_inside` 见证。不得用盒中心、插值点或非保守距离近似产生分隔。
-
-**冻结 PASS 条件**
-
-18 个解析 fixture 最终必须全部可识别且逐项等于解析真值，真值相反误判和 `unresolved` 均为 0；coarse-to-strict 证据反转数必须为 0；严格层不得新增 orphan，$C_{\mathrm{sep}}$ 不得下降；所有 connected 对象必须记录解析充分条件，所有 disconnected 对象必须记录严格区间分隔证书。区间必须有限有序，每 fixture $2^{18}$ 个独立 probes 的 enclosure 反例数必须为 0；两次完整运行必须逐元素复现盒分类、分量统计、解析证书、最终三态和哈希。
-
-E19-D1-v1 的两个 0.05 m 场景不得从历史结果中改写为已通过；它们必须在 E19-D1-v2 的新运行中重新经历完整区间计算，并仅按上述单向规则裁决。三个无标签历史对象仍只作诊断，不进入 PASS 分母，也不得用于修改规则。
-
-PASS → 仅解锁 E19-v2 的 generator acceptance 设计；不得自动把 D1 的解析 fixture 资格外推成 schema 4 generator 已合格。FAIL → E19-v2 与 E20 保持锁定并停止，不增加 256 层或其他更高均匀分辨率补救。
-
-**当前状态**
-
-E19-D1-v2 PASS，E19-v2 解锁；E20 继续锁定。
-
-**正式结果**
-
-- 18 个解析真值 fixture 全部得到正确且可识别的最终三态，真值相反误判与 `unresolved` 均为 0；9 个 connected fixture 全部具有已冻结的解析充分条件，9 个 disconnected fixture 全部具有严格层 $C_{\mathrm{sep}}\ge2$ 的区间分隔证书；
-- 双层转移为：`connected→connected` 9 个、`disconnected→disconnected` 7 个、`unresolved→disconnected` 2 个，其余六类转移均为 0。两个单向取得新证据的对象正是 E19-D1-v1 中的 0.05 m 两球间隙与三球末球间隙场景；coarse-to-strict 相反证据反转数为 0；
-- 区间 enclosure 独立 probe 反例、严格层新增 orphan、严格层 $C_{\mathrm{sep}}$ 下降、缺失 connected 解析证书和无效 disconnected 区间证书均为 0；
-- 三个无标签历史对象 seed 3/5/22 在标准层与严格层仍均为 `unresolved`，统计与 E19-D1-v1 完全一致。D1-v2 没有把未知对象改判为 connected；它们若进入 E19-v2 正式生成流，必须按 `unresolved` 拒绝并重采样；
-- 两次完整 24 核运行逐元素一致，运行哈希均为 `fb1f319300125587d54a29b59032abbf84779aae83b3d5990e411d42860863db`，摘要哈希为 `fdb807ddd507e57e739efcd4bc277561ea7592022ca93e64a70939392c25e77d`；产物 `runs/ajae/e19_d1_v2_interval_connectivity.npz` 的 SHA-256 为 `9e43ab3b42f4423f9eea882c73a6abdfbe430889801a6ea87110bcbfeaea5e79`。
-
-科学结论限定为：**在冻结的解析集合类型与 64→128 嵌套区间资格范围内，判定器能够保守地区分已证明连通、已证明不连通和当前不可识别三种证据状态；允许 `unresolved→identified` 不会引入证据反转。** 该结论尚不等于 schema 4 generator 已经能够高效产生全部获得 connected 证明的对象，后者由 E19-v2 单独验证。
-
-### E19-D2｜一般扰动 superquadric 星形连通证书资格
-
-**唯一问题**
-
-E19-D2 不修改 generator 或 proposal distribution，只回答：一般轴比、一般 exponent、带非零低频表面扰动的单个 superquadric，能否通过严格的全方向径向单调性下界证明其对 primitive 中心保持星形；以及多个已取得该证书的 primitive 在纯 union 表达式中，能否通过真实内部交叠见证形成连通交叠图。difference、一般 intersection 与不满足严格不等式的 primitive 不在本节点扩展范围内，继续为 `unresolved`。
-
-**冻结解析证书**
-
-对 primitive $i$，令半轴为 $(a_i,b_i,c_i)$、$m_i=\min(a_i,b_i,c_i)$、$s_{i,\max}=\max(a_i,b_i,c_i)$，中心为 $o_i$。superquadric 的无量纲 gauge $H_i$ 对正尺度一次齐次，因此沿任意单位方向 $u$：
-
-$$
-G_i(o_i+t u)=m_i\bigl(tH_i(u)-1\bigr),
-\qquad
-H_i(u)\ge\frac{1}{\sqrt3\,s_{i,\max}}.
-$$
-
-低频表面位移固定沿用正式实现：
-
-$$
-h(x)=\frac{A}{3}\sum_{j=1}^{3}\sin(\omega_jx_j+\phi_j),
-\qquad
-\left|\frac{d}{dt}h(o_i+t u)\right|
-\le\frac{A}{3}\lVert\omega\rVert_2.
-$$
-
-由此冻结全方向导数下界：
-
-$$
-\delta_i=
-\frac{m_i}{\sqrt3\,s_{i,\max}}
--\frac{A}{3}\lVert\omega\rVert_2.
-$$
-
-只有同时满足 $F_i(o_i)=G_i(o_i)-h(o_i)<0$ 与 $\delta_i>0$ 时，才为该 primitive 发放 `strict_radial_star_shaped` 证书；比较使用 float64 的严格 $<0$、$>0$，不使用容差放行。因为每条中心射线上的 $F_i$ 严格递增且最终趋于正无穷，内部沿该射线为从中心开始的单一区间，因此对象对 $o_i$ 星形并连通。正式 bend/twist/taper 的 forward map 在每个 $z$ 上由正 taper 因子、平面旋转与平移组成，且 $z$ 不变，是连续双射；它只在上述证书成立后应用并保持连通性。
-
-纯 union 只有在每个 constituent primitive 都取得星形证书后才进入交叠图。每对 primitive 固定检查其两个中心及中心连线上的 257 个等距点；只有某个有限点在两者各自的扰动 implicit 中均严格小于 0，才记录一条真实内部交叠边。交叠图连通才发放最终 `connected_union_graph` 证书。有限见证搜索可以漏掉真实交叠，但不得产生虚假交叠；未形成连通图一律 `unresolved`。
-
-**固定资格场景**
-
-解析正例固定 20 个：5 组预先固定的半轴/exponent，覆盖球、椭球、最大/最小半轴比超过 8 的强轴比以及 exponent 0.3–2.5；每组结合 4 套固定 frequency/phase/yaw 与非零扰动，扰动幅度在运行前取对应严格临界幅度的 0.5 倍并满足现有 $A\le0.25m_i$ 参数域。20 个对象分配非零 bend、twist、taper 组合，验证证书在全局连续双射前后保持。
-
-边界组固定为上述 5 组几何分别使用同一高频 $(12,15,18)$，幅度取理论临界值的 0.999、1.000、1.001 倍，共 15 个对象。0.999 组必须取得证书；1.000/1.001 组只要计算出的 float64 $\delta_i\le0$ 就必须拒发证书，不把“接近零”改成正数。边界对象仅资格证书发放规则，不声称没有证书的对象真实不连通。
-
-对每个解析正例固定使用 $2^{15}$ 个 Sobol 球面方向与从中心到 $2.5s_{i,\max}$ 的 17 个固定半径，独立计算实际径向导数并反查不得低于冻结理论下界。另以中心差分步长 $10^{-6}s_{i,\max}$ 在同一固定方向集合的前 $2^{12}$ 个方向和 17 个半径上反查解析导数，允许的纯数值差为 $10^{-6}$，不得据此放宽证书不等式。
-
-**schema 4 coverage 诊断**
-
-coverage 使用当前 schema 4 完全不变的首次 proposal 随机流，而不是只选最终接受对象：单 primitive 固定 seed 0–1023，共 1,024 个；multi-primitive 固定 primitive count 2/3/4/5、各 seed 0–255，共 1,024 个。只读重建每个 seed 的第一个候选，逐项报告单 primitive 星形证书率、全部 constituent primitive 证书率、pure-union proposal 数、其全部 constituent 已获证书数、交叠图连通数和最终 pure-union connected-certificate coverage。coverage 不进入 D2 PASS 门槛，也不得根据结果修改 fixture、公式或 proposal distribution。
-
-**冻结 PASS 条件**
-
-20 个解析正例必须全部取得星形证书、中心严格在内部，理论下界均严格为正；5 个 0.999 临界下方对象必须发证，所有实际计算为 $\delta_i\le0$ 的临界/上方对象必须拒发，证书发放规则错误数为 0。Sobol 解析径向导数低于理论下界的反例数和中心差分反例数均为 0；全局形变 forward/inverse 往返有限且最大误差不超过 $10^{-10}$ m。纯 union 手工连通/断开场景必须分别发放/拒发最终图证书，false connected certificate 为 0。两次完整运行必须逐元素复现所有场景、coverage 数组、证书、下界和哈希。
-
-PASS → E19-D2 证书可以作为 E19-v2 的 primitive-level connected 充分条件，再单独冻结 generator acceptance；FAIL → 不得接入 generator，E19-v2 与 E20 保持锁定并根据解析下界、边界发证或数值反例停止重设。D2 不因 coverage 偏低而 FAIL，也不允许据 coverage 事后修改 proposal distribution。
-
-**当前状态**
-
-E19-D1-v2 PASS；E19-D2 PASS，E19-v2 解锁。E20 继续锁定。
-
-**正式结果**
-
-- 20 个一般轴比/exponent、非零低频扰动解析正例全部取得 `strict_radial_star_shaped` 证书，中心内部、严格正下界和证书发放失败数均为 0；15 个 0.999/临界/1.001 边界对象全部按冻结严格比较正确发证或拒发，边界发证错误数为 0；
-- 每个正例的 $2^{15}$ 个方向、17 个半径均未发现实际解析径向导数低于理论下界；中心差分反例数为 0，最大中心差分误差为 $1.1882\times10^{-9}$；
-- bend/twist/taper forward/inverse 最大往返误差为 $8.8818\times10^{-16}$ m，严格低于 $10^{-10}$ m；4 个纯 union 连通/断开手工场景的交叠图证书全部正确，false connected certificate 为 0；
-- schema 4 首次 proposal coverage 诊断中，单 primitive 为 1,024/1,024 获证；1,024 个 multi proposal 的 3,584/3,584 个 constituent primitive 均获证；其中 394 个 pure-union proposal 全部满足所有 constituent 获证且交叠图连通，最终 pure-union connected-certificate coverage 为 394/394。该 coverage 未进入 PASS 门槛，也未用于修改分布；
-- 两次完整 24 核运行逐元素一致，运行哈希均为 `170303efef5b83ea265a84e5665284c93e5ee9081644364b7414c91dc28f9aa4`，摘要哈希为 `eedffc9965947b30189ff09e4ad7895d94e7695f6d7d2cced4a4a29cbd62b9dc`；产物 `runs/ajae/e19_d2_star_connectivity.npz` 的 SHA-256 为 `718625fdd3ac566b7ba90ab9e8f08bbe410491b37387d7b2584c11ffdecd429f`。
-
-科学结论限定为：**在当前 schema 4 参数域内，一般扰动 superquadric 可以由严格径向下界证明为星形；多个已获证 primitive 的纯 union 可以由真实内部交叠图证明连通。** D2 不资格 difference 或一般 intersection，也不证明完整 generator 的拒绝率与效率；后者由 E19-v2 独立验证。
-
-### E19-v2｜连续连通证书驱动的正式生成器接受
-
-**唯一问题与生成器版本**
-
-E19-v2 只回答：把 E19-D1-v2 与 E19-D2 已资格的三态连续连通判定接入完整 proposal 流后，正式 generator 能否稳定产生每个对象都获得 `connected` 证明的异常代理，并继续满足已经冻结的生成效率条件。proposal parameterization、随机流、primitive count/scale/axis ratio/exponent/CSG operation/形变分布、0.2–3.0 m 连续尺寸条件、每 seed 64 次上限和 schema 4 的尺寸证书全部不变。
-
-接受语义发生变化，因此 generator identity 从 schema 4 升为 schema 5，并进入 protocol、cache identity 与 generation report；这不表示 proposal 分布改变。候选只有在连续判定最终为 `connected` 时才继续尺寸资格；`disconnected` 与 `unresolved` 均拒绝并沿同一确定性随机流重采样，分别累计 `connectivity_disconnected_rejections` 与 `connectivity_unresolved_rejections`。
-
-**正式三态路径**
-
-每个 primitive 先使用 E19-D2 冻结的中心内部与严格径向下界；pure-union 候选再使用 257 点中心连线真实内部见证和连通交叠图。该路径获得证书即输出 `connected`。D1-v2 已冻结的非空凸 intersection、严格内含球形 cavity 和单 primitive 连续双射证书继续有效，但不得扩展到未资格的 difference/一般 intersection。
-
-未获得解析 connected 证书的候选必须执行 D1-v2 的同一 64→128 嵌套向外区间判定：严格层 $C_{\mathrm{sep}}\ge2$ 且每个分离区域有确定内部见证时输出 `disconnected`；否则输出 `unresolved`。允许 `unresolved→disconnected`，禁止 opposite identified 反转。不得为了节省生成时间把所有未获 connected 证书的对象统一记成 `unresolved`，也不得恢复 resolution 25/31/41 的体素组件数作为接受条件。
-
-正式构造、`from_dict` 和 generator 必须使用同一权威连续判定。`geometry_report` 的有界、闭合、有效体积和有限曲面检查继续保留，但 `components=1` 必须来自缓存的连续 connected 证书；离散网格只能作为诊断，不得再次拒绝一个已有连续 connected 证明的对象，也不得放行 unresolved 对象。
-
-**固定审计范围**
-
-完整生成流原样继承 E18a-B-v2：默认训练路径 seed 0–1023 共 1,024 次；固定 primitive count 2/3/4/5 各 seed 0–255，共 1,024 次，总计 2,048 次。每次最多 64 proposals。另回归 E19-D1-v2 的 18 个解析 fixture：9 个 connected 在直接构造与 JSON round-trip 两条入口均须成功并保持同一证书，9 个 disconnected 在两条入口均须由 continuous-disconnected 原因拒绝；历史 seed 3/5/22 的旧 schema 4 对象必须为 `unresolved` 并由两条入口拒绝，不能因 generator 重采样后产生新对象而覆盖该历史诊断。
-
-所有 2,048 个最终 accepted 对象必须逐项复算 connected 证书；单 primitive 的 E16-v3 连续优化 bounds、多 primitive 的 E18a-A 下界与 D2-v2 紧致上界、$[0.2,3.0]$ m 接受条件、参数有限性、有效体积、闭合性和 generation report 必须继续全部一致。报告 proposal count、尺寸上下界拒绝、continuous-disconnected 拒绝、continuous-unresolved 拒绝、其他几何拒绝、最终 primitive count 与 connected 证书类型。
-
-**冻结 PASS 条件**
-
-解析 connected/disconnected 与三个历史 unresolved 对象的两条构造入口错误数均为 0；2,048 次生成失败为 0，所有 accepted objects 的 continuous state 必须为 `connected`，错误接受 `disconnected`/`unresolved` 数为 0；尺寸证书、报告、对象 round-trip 与 proposal 记账错误均为 0。生成效率原样继承 E18a-B 首次运行前已冻结的条件：总体按 proposal 计拒绝率严格小于 50%，proposal count 的 $Q_{0.99}\le8$，maximum $\le64$。两次完整运行必须逐元素复现最终对象、证书类型、全部拒绝分类、proposal count 和哈希。
-
-PASS → E19 连续单实体资格闭合并解锁 E20。correctness FAIL → 修 continuous acceptance 实现后按原 E19-v2 判据重跑；correctness 全部成立但效率 FAIL → 永久保留 FAIL，停止并判断 proposal distribution 中 difference/intersection 比例或 CSG 构造方式是否与可证明连通域失配，不得放宽 50%/$Q_{0.99}\le8$ 或增加 64 次上限。
-
-**当前状态**
-
-E19-D2 PASS；E19-v2 FAIL，永久保留。E20 继续锁定。
-
-**正式结果（2026-08-26）**
-
-E19-v2 已按冻结协议使用 24 个 CPU 核执行两次完整独立审计。两次运行逐元素一致，运行哈希均为 `09453983db773653c9677d7b7d4231e7d827efdffabd2f191740493eb034ae14`；摘要哈希为 `6bb9462855af431a876d97f94c6ae6210c6d2412078168078ceb3dba63028bee`。正式产物为 `runs/ajae/e19_v2_schema5_connectivity.npz`，文件 SHA-256 为 `6821c2452d221fc0c3653c144bc71b6437d5644b00d5a599afc88b17d1eb4e38`。
-
-正确性条件全部通过：2,048 次正式生成均成功，最终接受对象全部获得连续 `connected` 证书，错误接受 `disconnected` 或 `unresolved` 对象为 0。证书来源为 `strict_radial_star_shaped` 421 个、`connected_union_graph` 1,627 个。9 个解析 connected 场景在直接构造与 round-trip 中全部成功，9 个解析 disconnected 场景在两条入口中全部由 `continuous CSG is certified disconnected` 拒绝；历史 schema 4 的 primitive-count 5 seed 3/5/22 三个对象均保持 `unresolved` 并由权威构造入口拒绝。尺寸证书、参数有限性、有效体积/闭合诊断、对象 round-trip、generation report 与 proposal 记账错误均为 0。接受对象连续尺寸区间的总体下界最小值为 0.2044669704064817 m，上界最大值为 2.998755884719177 m，均位于冻结的 [0.2, 3.0] m 接受域内。
-
-效率条件失败：2,048 个最终对象共经历 6,436 次 proposals，其中接受 2,048 次、拒绝 4,388 次，总拒绝率为 68.17899316345556%，未满足严格小于 50% 的冻结条件。proposal count 的 `[Q0.50,Q0.90,Q0.95,Q0.99,max]`（`method=higher`）为 `[2,6,10,17,42]`，其中 $Q_{0.99}=17>8$；maximum 42 仍满足不超过 64。拒绝原因严格分解为：continuous-unresolved 3,842 次、continuous-disconnected 162 次、尺寸下界 3 次、尺寸上界 380 次、其他几何诊断 1 次；分项之和等于 4,388。
-
-分组结果显示效率随 primitive count 明显恶化：默认训练路径拒绝率 56.01374570446735%，$Q_{0.99}=9$，maximum 13；固定 count 2 为 44.70842332613391%、6、7；固定 count 3 为 66.3157894736842%、12、14；固定 count 4 为 78.89530090684254%、19、27；固定 count 5 为 84.688995215311%、28、42。这里的分位数均使用预运行实现中冻结的 `higher` 方法。
-
-因此 E19-v2 的正式裁决为 **FAIL**。已验证事实是：schema 5 的连续连通接受规则在本次固定审计范围内能够确定性地产生全部获得 `connected` 充分证据的合法对象，且没有误放已识别的非连通或不可识别对象。失败仅发生在预注册生成效率条件，且 87.56%（3,842/4,388）的拒绝来自 `unresolved`，不能据此断言这些候选真实不连通。现有证据支持“当前 proposal distribution 与现有严格连续连通证书可覆盖的接受域失配”，但尚不能唯一判断应调整 difference/intersection 的操作概率、CSG 构造方式，还是继续扩大证书覆盖。按照冻结停止条件，不放宽 50% 或 $Q_{0.99}\le8$，不增加 64 次上限，不进入 E20；下一步需要先重新设计并预注册能够区分 proposal 分布问题与证书覆盖问题的实验。
-
-### E19-D3｜连续连通不可识别候选的归因诊断
-
-**唯一问题与固定样本**
-
-E19-D3 只回答：E19-v2 中全部 3,842 个 `continuous-unresolved` proposal 主要是真实不连通/接近不连通，还是实际连通但 E19-D1-v2 与 E19-D2 的正式证书覆盖不足。D3 不修改 schema 5、proposal distribution、CSG operation 概率、primitive placement、连续尺寸条件、64 次 proposal 上限或 E19-v2 的任何历史结果，E20 保持锁定。
-
-正式对象必须通过 E19-v2 的 2,048 个调用、相同 seed、固定 primitive-count 请求和 NumPy 随机流只读重放。重放须逐调用恢复 E19-v2 产物中的最终对象哈希、proposal count、五类拒绝计数和最终 primitive count，并恢复恰好 3,842 个 unresolved proposal。每个诊断对象记录审计组、seed、proposal occurrence、primitive count、完整 CSG operation sequence、规范化参数载荷哈希和原 `unresolved` 输出。任一身份或计数不一致均使 D3 无效，不得用重新采样的相似对象替代。
-
-**独立诊断器与证据等级**
-
-D3 只读取候选参数与连续隐式函数，不得调用 `continuous_connectivity_certificate`、`_analytic_connectivity_source`、`_implicit_interval`、D1 的 64/128 分类结果或 resolution 25/31/41 体素组件数。独立实现从候选参数重新传播 bend、taper、twist、各 superquadric、顺序 CSG 和低频扰动的向外区间；空间搜索采用自适应八叉细分，只细分隐式区间跨越零或内部见证图尚不能裁决的区域，不以单一固定 voxel resolution 作为真值。
-
-诊断器依次输出以下互斥证据等级：
-
-1. `strict_connected`：只允许来自独立构造的连续充分条件，包括共同核点下所有正集合的严格径向单调交集，或已获证连通宿主与严格正间隔 disjoint/strictly-contained difference cutter 的拓扑保持，再以真实内部重叠路径组合 sequential union；所有不等式必须有向外区间正余量。
-2. `strict_disconnected`：自适应 possible-inside 盒覆盖被已严格证明为对象外部的盒分成至少两个互不接触的区域，每个区域均含真实严格内部见证；只看到多个离散组件不够。
-3. `likely_connected`：没有取得前两类严格证书，但标准层与严格层的独立 Sobol 内部见证图均为单组件；每条图边须由递归线段细分确认连续 SDF 不大于 $-10^{-8}$，对最近潜在瓶颈做局部加密，严格层不得产生新的孤立内部见证或与标准层相反的证据。该等级只用于 D3 归因，不能作为 schema 5 的正式 connected certificate。
-4. `diagnostically_unresolved`：其余全部情形，包括严格层仍有多个未获外部隔离的见证组件、层间证据反转、内部覆盖不足或达到盒/路径预算。
-
-标准层冻结为 $2^{14}$ 个 Sobol 空间见证、每个见证 12 个近邻、线段最大步长 0.01 m、自适应区间最小盒宽 0.01 m；严格层为嵌套的 $2^{16}$ 个见证、16 个近邻、最大步长 0.005 m、最小盒宽 0.005 m。每个对象每层最多处理 250,000 个区间盒和 250,000 条候选路径边；达到预算只能输出 `diagnostically_unresolved`。Sobol 序列、候选顺序、近邻并列裁决和细分顺序均确定性固定。
-
-**诊断器资格与反例保护**
-
-正式归因前，诊断器先审计至少 24 个不读取 D1/D2 标签的解析构造：球、强轴比椭球、一般 exponent superquadric、严格相交与严格分离的双球、0.05 m 窄桥、0.05 m 窄间隙、内部空腔、贯穿切割、非空凸 intersection、空 intersection、pure union、difference、intersection 与混合顺序 CSG，并覆盖非零 bend/twist/taper 和低频扰动。解析真值相反误判必须为 0；`strict_connected` 与 `strict_disconnected` 必须各有至少 4 个资格场景；已知 connected 场景不得输出 `strict_disconnected`，已知 disconnected 场景不得输出 `strict_connected` 或 `likely_connected`；标准到严格层不得发生相反 identified 反转。另以每个 fixture 的 $2^{18}$ 个独立 probes 检查区间 enclosure，不得出现反例。资格失败则不运行 3,842 个正式对象并停止修改诊断器设计。
-
-**固定分层、汇总与分叉**
-
-正式结果分别报告 `pure_union`、`difference_only`、`intersection_only`、`difference_and_intersection`，并在 primitive count 2/3/4/5 内交叉分层；每层报告对象数、四种证据等级、盒/路径预算触发数和标准/严格层变化。由于 E19-D2 已覆盖纯 union，若重放仍出现 pure-union unresolved，必须单独列为身份或正式证书覆盖异常，不能并入其他 CSG 类型解释。
-
-D3 的方向性三类固定为：`connected_but_uncertified = strict_connected + likely_connected`，`strict_disconnected`，以及 `diagnostically_unresolved`。“主要”在运行前冻结为占全部 3,842 个对象严格超过 50%。若 `connected_but_uncertified` 严格过半，归因为证书覆盖不足，下一步只能另行资格 difference/intersection/混合 CSG 的严格充分条件，不修改 proposal distribution；若 `strict_disconnected` 严格过半，归因为 proposal distribution mismatch，下一步才可版本化修改 CSG operation/placement 构造；若两者均未过半，或 `diagnostically_unresolved` 不低于 50%，则诊断能力仍不足，保持 schema 5 与 E20 不变并停止。即使 `likely_connected` 使第一类过半，也只能决定研究方向，不能直接放行这些对象。
-
-两次完整 24 核运行必须逐元素复现 3,842 个对象身份、四级分类、标准/严格统计、预算状态和哈希。E19-D3 是归因诊断，不以某一方向为预期 PASS，也不得据此覆盖 E19-v2 的永久 FAIL。
-
-**当前状态**
-
-E19-v2 FAIL，永久保留；E19-D3-v1 FAIL，永久保留；E19-D3-v2 已完成重跑前修订并解锁。schema 5 不变，E20 继续锁定。
-
-**E19-D3-v1 执行结果与失效边界（2026-08-26）**
-
-E19-D3-v1 正式裁决为 **FAIL — protocol implementation defect**。只读重放身份部分有效：E19-v2 的 2,048 个调用逐项复现最终对象哈希、proposal count、五类拒绝计数和 primitive count，身份错误为 0；每个调用恢复的 unresolved occurrence 数与父产物逐行一致，最终恰好恢复 3,842 个唯一对象，pure-union unresolved 为 0。两次执行也逐元素复现。
-
-但诊断器未完整实现预注册证据：其一，严格不连通只细分候选分隔平面的二维区域，没有构造三维 possible-inside 自适应八叉覆盖；其二，`likely_connected` 图边只检查了最大步长约束下的离散 SDF 点，没有以向外区间上界证明相邻采样点之间整段位于 $F\le-10^{-8}$；其三，部分资格场景的严格内部重叠只使用浮点点值负余量，没有形成向外区间余量。因此资格统计与 3,579 个 `likely_connected` 分类均不满足冻结语义，不得用于 `certificate_coverage` 分叉，也不得进入论文证据或生成器接受规则。
-
-E19-D3-v1 的探索性输出为 `likely_connected=3,579`、`diagnostically_unresolved=263`，运行哈希均为 `315ad92576b591a6fe503da16f6b34fcecf07781fea4a388ecfe8eff6b5bf2e4`，原摘要哈希为 `aa55e376a606922f483a8d22b5c7aa9f773b70b8872dc9a3efdca0096da605b4`。该输出必须保留在历史位置并明确标为失效探索，不得写成 E19-D3 PASS。
-
-**E19-D3-v2｜预注册语义一致的归因重跑**
-
-v2 不修改 D3 已冻结的样本、四级分类、两层 Sobol 数量、近邻数、线段最大步长、最小区间盒宽、每对象预算、解析资格、50% 多数分叉或两次复现要求，只修正实现与预注册语义的不一致：
-
-1. 每条 likely 图边必须把相邻离散步之间的线段包入轴对齐盒，并由独立向外区间计算得到 $F_{upper}\le-10^{-8}$；任何一个子段不能证明即不得连边。
-2. strict disconnected 必须从包含所有可能对象点的三维自适应八叉叶盒覆盖出发；只丢弃 $F_{lower}>0$ 的严格外部盒，按闭包接触保守连接剩余叶盒。只有至少两个互不连通的 possible-inside 覆盖分量各含严格内部见证时才发证。二维空平面可作为诊断线索，但不得单独决定严格分类。
-3. strict connected 的点或重叠见证必须使用独立区间在退化盒上得到严格负上界；单 primitive/凸 intersection/连续全局双射等解析条件仍须满足原连续充分条件。仅有浮点点值或采样路径不得发严格证书。
-4. 24 个资格场景重新从零运行；v1 的资格结果不能继承。只有 v2 资格全部满足后才允许再次诊断同一 3,842 个对象。
-
-v2 PASS/归因后才按原多数分叉决定扩展严格证书、修改 proposal distribution 或继续提高诊断能力。当前不得依据 v1 的 93.15% 探索比例作方向决策，schema 5 与 E20 均保持不变。
-
-**E19-D3-v2 执行结果（2026-08-26）**
-
-E19-D3-v2 正式裁决为 **PASS，归因方向为 certificate coverage 不足**。诊断器先在 24 个独立解析构造上重新取得资格：真值相反误判为 0，$2^{18}$ 独立探针的区间包围反例为 0，12 个场景取得 `strict_connected` 证书，8 个场景取得 `strict_disconnected` 证书；其中 0.05 m 窄间隙场景在 175,153 个三维自适应区间盒内取得严格不连通证书，未触发 250,000 盒预算。
-
-对 E19-v2 的 2,048 个历史调用进行只读重放后，最终对象哈希、proposal count、五类拒绝计数、请求 primitive count 和 seed 的逐调用身份错误均为 0。每个调用恢复的 unresolved 数与父产物逐行一致，共恢复 3,842 个唯一的历史 proposal；没有 pure-union unresolved。正式四级分类为：`strict_connected=0`、`likely_connected=3,532`、`strict_disconnected=5`、`diagnostically_unresolved=305`。因此 `connected_but_uncertified=3,532/3,842=91.93128578865173%`，严格超过预注册的 50% 多数界；严格不连通为 0.1301405517959396%，诊断仍不可识别为 7.938573659552317%。95 个对象触发区间盒预算，全部保守保留为 `diagnostically_unresolved`，没有因预算耗尽获得 connected 或 disconnected 结论。
-
-按 CSG 操作分层，`difference_only` 为 1,782/1,819 likely connected、37 unresolved、0 strict disconnected；`intersection_only` 为 1,133/1,252 likely connected、118 unresolved、1 strict disconnected；`difference_and_intersection` 为 617/771 likely connected、150 unresolved、4 strict disconnected。按 primitive count 分层，count 2/3/4/5 的 likely-connected 数分别为 330/643/1,090/1,469，对应总数分别为 335/677/1,188/1,642；严格不连通只出现在 count 4 的 2 个和 count 5 的 3 个对象中。混合 difference/intersection 和较高 primitive count 的不可识别比例更高，但三个 CSG 分层均仍以 likely connected 为绝对多数。
-
-两次从头运行逐元素复现全部对象身份、分类、两层组件数、内部见证数、路径边数、区间盒数和预算标志；两次数组哈希均为 `8b1e17ce25d6ffc0595b177236c7fadfb6c86f3378f629de744fdef07bc18c4e`，摘要哈希为 `acf3dc628086813d151c81d33e90a6fbbcdf50b339059f8e8861d740a216e484`。正式产物为 `runs/ajae/e19_d3_v2_unresolved_attribution.npz`，文件 SHA-256 为 `5fd3182e34ff4e36bc9868787ffa6d381bb280065515acb44158430f368de115`。
-
-该结果排除了“多数 E19-v2 unresolved 已被严格证明为真实不连通”这一解释，并支持“difference/intersection/混合 CSG 的现有正式充分条件覆盖不足”作为生成效率失败的主因。这里的 3,532 个 `likely_connected` 仍只是独立双层连续路径诊断，不是正式连通充分证书，不得据此放行对象、回写 E19-v2、修改 50%/$Q_{0.99}\le8$ 效率标准或宣称 schema 5 已合格。E19-v2 的历史 FAIL 与 E19-D3-v1 的实现缺陷 FAIL 均永久保留。
-
-**当前状态**
-
-E19-D3-v2 PASS；归因方向已确定为扩展 difference/intersection/混合 CSG 的严格连续连通充分条件。proposal distribution、schema 5 和 E19-v2 结果均保持不变。下一项实验需要在运行前重新设计并冻结可进入正式 generator 的廉价严格证书；这会改变资格方法，因此当前停止，E20 继续锁定。
-
-### E19-v3｜schema-6 构造性连通异常生成器资格
-
-**主线修订与历史边界**
-
-E19-D3-v2 已确认 schema 5 的主要效率瓶颈是 arbitrary difference/intersection/混合 CSG 的严格连通证书覆盖不足。继续扩展一般 CSG 证书不再是第一版 AJAE 的必要科学问题。经用户批准，schema 5 至此结束：E19-v2 的 correctness PASS / efficiency FAIL 和 E19-D3-v2 的归因 PASS 均永久保留，但不得继续作为正式训练生成器。未预注册、未运行的 E19-D4 类证书补丁分支取消，不记录 FAIL。
-
-schema 6 将正式训练几何族改为 $1$–$5$ 个一般 superquadric 的构造性连通 union，并保留已资格的 bend、twist、taper 与低频表面扰动。difference 和 intersection 从训练 proposal distribution 删除；`ShapeSpec` 对它们的通用表达、历史产物读取和 E18b 回归能力不删除。这个改动正式修订《AJAE新主线方案》2.3–2.4 节，不改变 AJAE 网络、STU、规范射线、renderer、normal-control、五帧输入、基线或后续门限。
-
-**冻结的构造性重叠规则**
-
-第一个 primitive 保持居中。对第 $i>0$ 个 primitive，从已有 $0,\ldots,i-1$ 中均匀抽取一个 parent，再均匀抽取 parent 的一个局部主轴和正负方向，抽取 $f\sim U[0.10,0.50)$，把新 primitive 中心放在 parent 中心沿该主轴距离 $f$ 倍 parent 对应半轴的位置；局部 $x/y$ 主轴按 parent yaw 旋转，$z$ 轴保持不变。新 primitive 的尺度仍为 base 各轴乘 $U[0.32,0.78)$，指数仍取 $U[0.5,1.8)$，yaw 仍取 $U[-\pi,\pi)$；第一个 primitive、总体尺寸、轴比、primitive count 及全部全局形变参数沿用原参数域。单 primitive 随机流必须与 schema 5 完全一致。
-
-设 parent 最小半轴为 $m_p$，低频扰动最大幅度为 $A$。当前冻结参数域给出 $A\le0.25m_p$，而新中心处 parent 的未扰动隐式值为 $-(1-f)m_p$；由于 $f<0.50$，加入最坏扰动后仍严格小于 $-0.25m_p<0$。新中心也是新 primitive 自身中心，其扰动隐式值同样严格为负。因此每次新增都获得一个解析保证的真实内部交叠见证，新节点连接到一个已有节点，最终 overlap graph 构造性连通。每个 constituent 仍必须通过 E19-D2 的 `strict_radial_star_shaped` 条件；bend/twist/taper 只使用 E19-D2 已验证的连续双射域，所以形变后连通性保持。
-
-**继承的资格与禁止项**
-
-单 primitive 尺寸继续逐项继承 E16-v3 的 `continuous_bounds`；multi-primitive union 继续使用 E18a-A 的真实边界弦下界和 E18a-D2-v2 的 256 层紧致保守上界，接受区间保持 $[0.2,3.0]$ m。E18b-v2 的权威 `ShapeSpec.intersect`、有界/闭合/有限检查、64 个 proposal 上限和 renderer/generator cache identity 均继承。禁止 seed 特判、改变尺寸范围、把离散 mesh 尺寸恢复为资格真值、把 `likely_connected` 当正式证书、添加未经资格的局部或多尺度形变，或在本节点用临时多样性分数替代 E20。
-
-**固定审计与 PASS 条件**
-
-正式审计完全继承 E19-v2 的 2,048 次调用：默认训练路径 seed 0–1023，以及固定 primitive count 2/3/4/5 各 seed 0–255。每个调用最多 64 个 proposal，并完整记录每个被拒绝 proposal 的尺寸上下界与其他几何原因。两次完整运行使用 24 个 CPU 进程并要求逐元素一致。
-
-全部 2,048 次调用必须成功；所有 proposal 和 accepted object 的 operation 必须只有 `union`，connectivity disconnected/unresolved rejection 必须均为 0。每个 accepted constituent 必须取得严格径向星形证书；每个 $i>0$ 的中心必须严格位于至少一个更早 primitive 内部，所形成的有向早期交叠边必须覆盖全部节点；最终证书必须为单 primitive 的 `strict_radial_star_shaped` 或多 primitive 的 `connected_union_graph`。参数、保守半径、固定 $9\times9\times9$ SDF、有界/闭合报告、JSON round-trip、连续尺寸证书和 generation report 错误数均须为 0。
-
-效率条件不因更换生成算法而移动，继续使用 E18a-B/E19-v2 运行前已冻结的：总体 proposal 拒绝率严格小于 50%，proposal count 的 $Q_{0.99}$（`method=higher`）不超过 8，maximum 不超过 64。报告各 primitive count 的提议数、拒绝原因、拒绝率和 proposal count 分位数。两次运行须复现全部对象参数、构造性见证、尺寸、报告、拒绝计数、哈希和摘要。
-
-PASS 只说明 schema 6 能高效、确定地产生获得构造性连续单实体证明且满足既有尺寸/数值条件的训练异常代理，随后解锁 E20；它不证明新几何族已经足够丰富、与尺度/材质解耦或能迁移到真实 OOD，这些问题仍由 E20 及后续门独立回答。FAIL 时保留结果：构造或正确性 FAIL 则修 schema-6 实现后版本化重跑；正确性 PASS 但原效率条件 FAIL，则停止并重新判断新的尺寸 proposal 是否需要调整，不得直接移动阈值。
-
-**当前状态**
-
-schema 5 已封存；E19-v2 FAIL 与 E19-D3-v2 PASS 永久保留。E19-v3 PASS，E20 解锁但尚未执行。
-
-**E19-v3 正式结果（2026-08-26）**
-
-E19-v3 按预注册协议使用 24 个 CPU 核执行两次完整独立审计，正式裁决为 **PASS**。2,048 次固定调用全部成功，共产生 2,460 个 proposal、接受 2,048 个、因尺寸拒绝 412 个；总体拒绝率为 16.747967479674797%，严格低于冻结的 50%。proposal count 的 median/$Q_{0.90}$/$Q_{0.95}$/$Q_{0.99}$/maximum（`method=higher`）为 1/2/2/3/5，满足 $Q_{0.99}\le8$ 和 maximum $\le64$。
-
-412 个拒绝逐项分解为连续尺寸下界不足 5 个、紧致上界超限 407 个、continuous-disconnected 0 个、continuous-unresolved 0 个、其他几何错误 0 个。默认训练路径和固定 primitive count 2/3/4/5 的拒绝率分别为 14.3096%/16.8831%/20.0000%/19.2429%/20.0000%，各组 $Q_{0.99}$ 分别为 3/3/4/3/3，最大 proposal count 分别为 4/5/4/5/3。
-
-全部 2,048 个 accepted objects 的 operation 均只有 `union`；206 个单 primitive 对象取得 `strict_radial_star_shaped`，1,842 个多 primitive 对象取得 `connected_union_graph`。每个 constituent 的星形证书错误数为 0；每个后续 primitive 均找到索引严格更小的真实内部 parent，树结构、有限性和正余量错误数均为 0，最小实际重叠余量为 0.03412405276314048 m。最终 primitive count 1/2/3/4/5 分别为 206/477/436/458/471，2,048 个规范参数载荷哈希全部唯一。
-
-参数与保守半径、固定 $9\times9\times9$ SDF、resolution 31/41 有界闭合报告、JSON round-trip、连续尺寸复算、generation report 和 proposal 记账错误数全部为 0。接受对象的连续尺寸下界最小值为 0.20032595178697435 m，上界最大值为 2.999446800658856 m，均位于冻结的 $[0.2,3.0]$ m 内。seed 0/501/688 的单 primitive 参数哈希与 schema 5 逐字节一致，确认新 multi-primitive 构造没有改变 E16-v3 单 primitive 随机流。
-
-两遍正式数组逐元素一致，运行哈希均为 `983f3946084ef5b6670afd070fa088d54553667559dbd6e3806fe702da6343db`，摘要哈希为 `11ca663dcfd4bfdce046c0b00934fe1ef1ef46a33b431c4447a63c49c0412bc4`。正式产物 `runs/ajae/e19_v3_schema6_constructive_union.npz` 的 SHA-256 为 `418d79a825ef51b3ec644a36b377f6bcb7c829c39e372806c35613a87f47a277`。独立复算逐项确认数组哈希、摘要哈希、全部门槛和 15 个跨组样本的形状哈希/proposal count。
-
-正式重跑前有一次无科学结果的执行中止：两遍计算完成后，汇总器错误地对字符串数组使用 `equal_nan=True`，触发 NumPy `TypeError`；该次未写产物、未形成裁决。修正仅按 dtype 选择逐元素比较方式，协议、生成器、样本和阈值均未变化，随后从头重跑两遍获得上述结果。
-
-完整测试为 32 passed / 3 failed。3 个失败均由同一已知陈旧输入触发：`dev.json` 仍保存 schema 4 的 arbitrary CSG 固定开发世界，其中一个历史对象在当前连续入口为 `unresolved`；该问题在 schema 5 阶段已经存在，并非 schema-6 生成器回归。主线改版后这些世界也已不再代表正式训练几何分布，不得手工迁移或伪装成合格；它们须在后续开发世界协议重新冻结后由权威生成源整体再生成。
-
-科学结论限定为：**schema 6 能以构造性严格内部重叠树、已资格的 constituent 星形证书和连续双射形变，高效且确定地产生连续单实体异常代理，同时继承原连续尺寸与数值资格。** 该 PASS 不回答形状族是否足够多样、复杂度是否与尺度/材质解耦、开发世界是否合格或异常代理是否能迁移到真实 OOD。E20 现已解锁，但其现有文字只有定性目标，没有可执行的统计量、样本范围和冻结阈值；在重新定义 E20 前停止。
-
-
-## E20a｜schema-6 几何覆盖资格
-
-**协议重构与唯一问题**
-
-原 E20 尚未运行，因此不记录 FAIL，也不增加版本后缀。经运行前审查，原定义混合了几何覆盖、几何因素解耦、材质解耦和放置解耦四个尚未同时具备权威输入的问题。现将可立即验证的几何问题拆为 E20a 和 E20b。材质与几何的最终解耦后移至 E35–E40 的正式回波/强度链；放置与几何的解耦后移至 E21–E25 完成放置系统资格后。后移表示尚未验证，不得记为 PASS。
-
-E20a 只回答：schema 6 在满足连续尺寸、构造性连通和生成效率的前提下，能否实际覆盖预先定义的小/中/大、近块状、扁平、细长、明显不对称、单/多 primitive 以及弱/强形变区域，而不是只生成一小簇相似对象。
-
-**固定样本与几何描述量**
-
-使用正式 schema-6 默认训练入口 `ShapeSpec.sample_with_report(seed)`，固定 seed 0–8191，得到 8,192 个最终 accepted shape。不得固定 primitive count、改变 proposal 流、加入场景、执行 placement 或赋正式材质。两次完整运行均使用 24 个 CPU 进程。
-
-每个对象记录 primitive count、连续尺寸与三轴 span、轴比、不对称性、形变强度和 union spread。单 primitive 使用 E16-v3 的连续优化 AABB；multi-primitive 使用 E18a-D2-v2 的 256 层紧致保守连续外 AABB。令三个 span 降序为 $\lambda_1\ge\lambda_2\ge\lambda_3>0$，本节点的连续尺寸描述量固定为 $D=\lambda_1$，轴比为 $r_{21}=\lambda_2/\lambda_1$ 与 $r_{31}=\lambda_3/\lambda_1$。对 multi-primitive，$D$ 与轴比描述的是已资格的保守连续外包围盒，不冒充精确体积或精确最小包围盒。
-
-不对称性使用确定性、未打乱的三维 Sobol 点在该连续 AABB 内估计。标准层取前 $2^{13}$ 点，严格层取前 $2^{15}$ 点；只保留连续 SDF 不大于 0 的真实内部点。以内部点体积质心 $c$ 为基准，对每个坐标轴计算正、负跨度 $p_j=\max(x_j-c_j)$、$n_j=\max(c_j-x_j)$，再取 $A=\max_j |p_j-n_j|/(p_j+n_j)$。标准层内部点不得少于 128，严格层不得少于 512；两层 $A$ 差不得超过 0.03。最多允许 1% 即 81 个对象因该数值收敛条件标记为 `asymmetry_unresolved`，它们不得计入明显不对称覆盖数。解析球、椭球以及固定重叠双 primitive fixture 必须先确认有限、确定、标准/严格层差不超过 0.03；球的不对称性不得超过 0.02，椭球轴比绝对误差不得超过 0.01。
-
-形变强度不从输出外观反拟合，而直接由已冻结参数域无量纲化。六个分量固定为 $|twist|/0.65$、$|bend_x|/0.12$、$|bend_y|/0.12$、$|taper_x|/0.18$、$|taper_y|/0.18$ 和 $surface\_amplitude/(0.08\min(base\ scale))$，总强度 $S_{def}$ 为六分量平方均值的平方根。multi-primitive 的 union spread 固定为所有 primitive center 最大两两距离除以 $D$；单 primitive 记为 0。所有量必须有限且无量纲量位于其定义域。
-
-**运行前冻结的覆盖区域与 PASS 条件**
-
-尺度区间直接把冻结支持域 $[0.2,3.0]$ m 等宽三分：小型 $[0.2,1.1333333333333333)$，中型 $[1.1333333333333333,2.0666666666666664)$，大型 $[2.0666666666666664,3.0]$。近块状固定为 $r_{31}\ge0.70$；扁平固定为 $r_{21}\ge0.70$ 且 $r_{31}\le0.45$；细长固定为 $r_{21}\le0.55$ 且 $r_{31}\le0.45$；明显不对称要求标准层与严格层均有 $A\ge0.15$ 且满足上述收敛条件。弱形变固定为 $S_{def}\le0.45$，强形变固定为 $S_{def}\ge0.65$。单 primitive 为 count=1，多 primitive 为 count 2–5。
-
-小、中、大、近块状、扁平、细长、明显不对称、单 primitive、多 primitive、弱形变、强形变这 11 个区域各至少包含 128 个对象；primitive count 1、2、3、4、5 每组各至少包含 512 个对象。阈值 128 表示总样本的 1.5625%，用于排除只靠极少边缘样本形成的名义覆盖；512 表示总样本的 6.25%，用于排除某个正式复杂度层几乎缺失。区域可以重叠，不要求构成穷尽分区。
-
-8,192 个对象必须全部成功生成；尺寸/AABB/轴比/形变/union spread 必须全部有限且满足定义域；不对称性 unresolved 不得超过 81；两次完整运行必须逐元素复现对象参数、generation report、全部描述量、区域成员掩码、统计量、对象哈希和摘要哈希。不得根据直方图改分箱、把连续 AABB 换成 resolution 31/41 mesh、用材质或 placement 扩充几何覆盖、对 seed 特判或在本节点修改 schema 6。
-
-PASS 只说明 schema 6 覆盖上述预注册几何区域，随后解锁 E20b；不说明因素已经解耦，也不说明材质、放置、渲染来源或真实 OOD 有效。任一关键区域支持不足则 E20a FAIL，并按不足区域重新判断 schema-6 采样分布；不得在看完结果后移动区域边界或最低支持数。
-
-**E20a 正式结果（2026-08-26）**
-
-E20a 按预注册协议使用 24 个 CPU 核执行两次完整独立审计，正式裁决为 **FAIL**。两遍均从正式 schema-6 默认入口独立生成 seed 0–8191 的 8,192 个 accepted shape；对象参数、generation report、连续描述量、区域掩码与统计数组逐元素一致，两遍数组哈希均为 `1f5b4c29f3a8ade492413df552d62522e690008d00692cef4ca687351775ddaa`。摘要哈希为 `ff6bcd88037d836722e95175b7a739266567e47825d8a4b38e38c883a053bf3f`，正式产物 `runs/ajae/e20a_schema6_geometry_coverage.npz` 的 SHA-256 为 `78053948ea5d9ca36b19f687a61ba38a25ecaee2c09f0c4adebbffed60bb0f07`。
-
-生成与描述量资格本身成立。8,192 个调用全部成功，8,192 个 shape hash 全部唯一；primitive count 1/2/3/4/5 分别为 1,717/1,670/1,553/1,649/1,603，均超过冻结的 512。连续尺寸最小/中位数/最大值为 0.20945478034703036/1.6254688480595059/2.999958258919219 m；$r_{21}$ 范围为 0.4849446337030581–0.99999459358603，$r_{31}$ 范围为 0.4740544227215081–0.9977686607571975。全部尺寸、AABB、轴比、形变强度和 union spread 有限且位于定义域。标准层/严格层内部点最少分别为 1,340/5,390；不对称性两层不收敛对象为 50，低于允许的 81。解析球、椭球和固定重叠双 primitive fixture 全部通过；球严格层不对称性为 0.0017955358091529018，椭球轴比误差小于 0.01。
-
-通过最低支持数的覆盖区域为：小型 2,678、中型 2,812、大型 2,702、近块状 6,124、单 primitive 1,717、多 primitive 6,475、弱形变 1,245、强形变 1,861。失败区域为：扁平 0、细长 0、明显不对称 19，均低于冻结的 128。扁平和细长不是阈值附近的偶然少样本：全部 8,192 个对象的最小 $r_{31}$ 仍为 0.4740544227215081，高于两个区域共同要求的 0.45。明显不对称的严格层 $A$ 中位数/$Q_{0.95}$/$Q_{0.99}$/最大值为 0.02695424214928638/0.07989006402129747/0.12727210537819528/0.2674070465861041；按 primitive count 1/2/3/4/5 的合格不对称对象数为 0/1/5/7/6，说明不足横跨全部复杂度层，而不是单一 count 组缺样本。
-
-该结果证实 schema 6 的尺寸、primitive count、近块状和形变强度覆盖充足，也否定了“现有 schema 6 已覆盖预注册扁平、细长和明显不对称区域”的主张。基于当前参数域的合理推断是：基础轴比采样、次级 primitive 尺度和严格内部放置共同使连续外包围盒偏近块状，而当前局部起伏和构造性 union 产生的全局不对称性不足；这一机制尚未通过独立诊断唯一归因，不能直接据此选择具体修改。
-
-**当前状态**
-
-E19-v3 PASS；E20a FAIL，永久保留。E20a-D1 已获批准并解锁；schema 7 尚未设计，E20a-v2、E20b 与 E21 继续锁定。
-
-
-### E20a-D1｜形状支持缺失归因诊断
-
-**唯一问题与只读边界**
-
-E20a-D1 只回答：schema 6 的扁平、细长和明显不对称支持不足，分别主要发生在基础母体轴比、secondary primitive 相对尺度、child center 偏移范围，还是最终表面/全局形变阶段。输入严格限定为 E20a 的 seed 0–8191 和正式产物，不修改 `ShapeSpec.sample_with_report`、参数域、proposal 流、接受规则、E20a 区域边界或最低支持数。通过 seed 只读重放恢复同一对象时，shape hash 与 generation-report hash 必须逐一匹配 E20a；不得另采“类似对象”。
-
-**固定的五阶段几何分解**
-
-对每个对象构造仅用于诊断、不得进入 generator/cache/training 的五个配对视图。S0 `base_core` 只保留第一个 primitive，取消 surface、bend、twist、taper；同时记录基础半轴排序后的内禀 $r_{21}^{base}$、$r_{31}^{base}$。S1 `centered_union_core` 保留全部实际 primitive 的尺度、指数和 yaw，但把全部 center 共置于原点并取消全部形变，用于观察 secondary primitive 尺度/形状在不含偏心生长时如何改变外包围盒。S2 `offset_union_core` 恢复实际 child center，仍取消全部形变。S3 `surface_union` 在 S2 上只恢复原有低频 surface amplitude/frequency/phase。S4 `final` 为 E20a 已测量的完整原对象，再恢复 bend/twist/taper。operation 始终为原来的 union；不得引入 difference、intersection、新形变或超出已实现参数域的假想数值。
-
-S0–S4 的三轴 span、$D,r_{21},r_{31}$ 继续使用 E20a 的同一连续 AABB 口径。D1 新构造的单 primitive 反事实阶段保持 E16-v3 的连续表面优化目标、固定优化 seed 和 $10^{-6}$ m safety margin，但把统一数值预算冻结为 `maximum_iterations=160`、`population_size=15`；multi-primitive 阶段继续使用 256 层紧致保守连续外 AABB。S0 与 S1 在无 surface 且全部中心共置时具有中心对称性，其连续体积不对称性解析记为 0；S2 和 S3 对全部 8,192 个对象使用与 E20a 相同的嵌套 $2^{13}/2^{15}$ Sobol 不对称性公式，两层差不得超过 0.03，每个阶段最多允许 1% 即 81 个对象 unresolved；S4 直接读取 E20a 已资格的描述量，不重新定义。
-
-**实际构造参数恢复**
-
-对每个 child $i$，通过同一 seed 的权威 schema-6 随机流事件记录恢复生成时实际抽取的 parent/axis/sign；不得从可能存在多解的最终 offset 中任意挑选 parent。随后依据实际 parent 的 yaw 旋转局部主轴和半轴长度，从最终 offset 复算 $f$ 并验证构造式。最大向量残差必须不超过 $10^{-12}$ m，且 $0.10\le f<0.50$。同时报告最终几何中满足同一构造式的可行更早 parent 数量，用于区分“真实生成历史”与“事后存在的其他交叠见证”，但后者不替代真实记录。secondary relative scale 固定记录为 child 三轴几何平均半尺度除以 base 三轴几何平均半尺度，并报告每个对象的均值和最大值；偏移固定报告 child 的 $f$ 均值和最大值。它们只用于分层关联，不改变任何几何。
-
-**冻结的归因统计与裁决规则**
-
-分别报告基础半轴内禀轴比 B 以及 S0–S4 连续 AABB 的 flat、elongated 支持数，报告 S0–S4 的 asymmetric 支持数，并报告相邻阶段 $\Delta r_{21}$、$\Delta r_{31}$、$\Delta A$ 的 median/$Q_{0.05}$/$Q_{0.95}$。扁平和细长仍逐字继承 E20a 的 $r_{21}/r_{31}$ 边界与 128 支持数。若 B 不足 128，记 `base_aspect_parameter_support_insufficient`；这说明原始母体参数支持不足，但不替代后续 union 的实际外形判断。对连续 AABB，若 S0 达到至少 128 而某个后续阶段首次降到 128 以下，则把该首次丢失阶段记为 support-removal stage；若 S0 不足 128，同时报告后续阶段是否曾独立恢复到 128；若各阶段始终不足，则另记 `continuous_shape_support_insufficient_throughout`，不得强行把后续联合效应归给单一阶段。
-
-不对称性仍继承 E20a 的 $A\ge0.15$ 与 128 支持数。S1 的解析 $A=0$ 是共中心反事实基线；若 S2 仍低于 128，则正式归因为 `realized_offset_scale_union_insufficient_before_deformation`；若 S2 达到 128、但 S3 或 S4 首次降到 128 以下，则记录对应的 surface 或 global-deformation suppression；若 S2 低于 128而 S3/S4 恢复到至少 128，则记录对应形变阶段提供了缺失支持。secondary scale 最大值与最大 $f$ 分别和 S2 的 $A,r_{31}$ 计算 Spearman 秩相关，按 primitive count 2–5 分层并报告合并值；$|\rho|\ge0.20$ 只记为关联信号。若只有一个因素在至少 3/4 个 count 组达到该条件，记为该因素的较一致关联；二者都达到则记 joint association；二者都未达到则记 association-unresolved。该标签不得写成因果结论。
-
-D1 的 PASS 只要求：8,192 个对象身份全部恢复；权威随机流中的实际 parent/axis/sign 记录与最终几何的 $f$/构造式验证无错误；全部阶段连续描述量有限；S2/S3 的完整嵌套 Sobol 审计分别满足上述收敛界；全部预定义归因统计可计算；两次 24 核完整运行逐元素复现阶段描述量、参数恢复、归因标签、对象哈希和摘要哈希。PASS 表示缺失支持得到可复核的阶段归因，不表示 schema 6 或任何 schema-7 候选已合格。若身份、连续测量或归因可识别性失败，D1 FAIL 并停止，不得据不可靠诊断设计 schema 7。
-
-正式结果形成前曾有一次执行中止：原实现错误要求最终 offset 对 parent/axis/sign 具有唯一几何逆解；某个 child 同时对两个更早 primitive 满足 z 向构造式，触发异常。该次在首个进度点之前停止，没有写产物、没有形成阶段统计或科学裁决。上述随机流事件记录修正只恢复真实生成历史，不改变对象、区域、支持数、描述量或归因门槛；修正提交后须从头运行两遍。
-
-修正 parent trace 后的第一次完整启动又在第一遍 1,664/8,192 个完成项时中止，仍未写产物或形成归因统计。原因是 D1 反事实单 primitive 的原 80/10 连续边界预算在 seed 1713/S0、1744/S3 和 2802/S0 等案例未报告收敛。独立技术扫描确认问题是统一求解预算，不是边界为空、SDF 非有限或连通性错误。三个失败案例在 160/15 全部收敛，并与 240/15 的六个边界坐标逐元素一致；固定对照 seed 0、1 的 S0 也一致。120/10 虽收敛，但 seed 2802 与 240/15 最大相差 0.00011369444690001451 m，因此不采用。160/15 在正式重跑前统一冻结，不做 seed 特判；两遍必须从头计算。
-
-**状态转移**
-
-D1 PASS 后才允许根据已识别的限制机制预注册 schema 7；不得在 D1 内修改生成器。schema 7 必须继续禁用 difference/intersection、保持 primitive count 1–5 和 $[0.2,3.0]$ m，并在 E20a-v2 前完成 E19-v3-style 连续尺寸、构造性连通、求交、效率与确定性重资格。E20a-v2 原样继承 E20a 全部区域和支持阈值。
-
-**E20a-D1 正式结果（2026-08-26–27）**
-
-E20a-D1 使用 24 个 CPU 进程对 E20a 的 seed 0–8191 做了两次完整独立只读重放，正式裁决为 **PASS**。两遍分别用时 2,618.524842419 s 和 2,651.760578932 s；阶段描述量、实际 parent/axis/sign 事件、复算 $f$、其他可行见证计数、归因统计和标签逐元素一致，两遍数组哈希均为 `d5bad92bbdb9580ad2812617aa2e2383db037a7e332a85da0662f319d93ca651`。摘要哈希为 `8e407e76f4cd7d7cc3d274dd0429de9f64e007ca4427b54052897dde02a514ec`，正式产物 `runs/ajae/e20a_d1_shape_support_attribution.npz` 的 SHA-256 为 `3e2868b692b3360eae3f26069ea8207e14f8781f2ceb87504dfceb02814f863b`。
-
-8,192 个 shape/report hash 全部与 E20a 原产物逐元素一致；S4 的 $D,r_{21},r_{31}$、标准/严格层不对称性和 resolved mask 也全部逐元素等于 E20a。16,135 个 child 的实际生成事件均成功恢复，构造式最大残差为 $1.5700924586837752\times10^{-16}$ m，实际 $f$ 范围为 0.10002010072361932–0.4999619459012056。605 个 child 在最终几何上同时存在多个满足构造式的更早见证，最多 4 个，确认“实际生成 parent”必须来自随机流历史而不能由最终 offset 任意逆选。S2/S3 的不对称性 unresolved 分别为 25/61，均低于冻结上限 81；全部阶段量有限。
-
-扁平和细长的阶段归因完全一致：基础半轴内禀 B、基础母体 S0、共中心多 primitive S1、恢复实际偏移 S2、恢复表面扰动 S3、完整形变 S4 的支持数始终都是 0。S0→S1 的 $r_{21},r_{31}$ 中位变化均为 0，5%–95% 变化只在约 $10^{-12}$ 的连续优化数值尺度，说明当前 secondary primitive 在共中心状态下没有扩展基础母体的连续 AABB。S1→S2 的 $r_{31}$ 中位变化仍为 0，5%–95% 为 -0.035957190568819–0.04776774074298002；S2→S3 为 -0.00807492231981386–0.010528439846455384；S3→S4 为 -0.05691554253458974–0.08502705655384948。没有任何阶段把 flat 或 elongated 支持恢复到 128，正式标签为 `base_aspect_parameter_support_insufficient` 与 `continuous_shape_support_insufficient_throughout`。
-
-不对称性在 S0/S1 解析为 0；实际偏移 union S2 产生 25 个 $A\ge0.15$ 对象，表面扰动 S3 后为 19，完整全局形变 S4 仍为 19，均未达到 128。S1→S2 的严格层 $A$ 中位变化为 0.007273474223817444，95% 分位为 0.07651218082976416；S2→S3 中位变化仅 $3.430248554839874\times10^{-5}$，S3→S4 中位变化为 0.011817119186540378。surface 与全局形变没有恢复缺失支持，正式阶段标签为 `realized_offset_scale_union_insufficient_before_deformation`。
-
-按 primitive count 2/3/4/5 分层，最大 $f$ 与 S2 不对称性的 Spearman $\rho$ 分别为 0.2829201577074608/0.3501703300380288/0.28834973668815306/0.2367234954312719，四组都超过预注册的 $|\rho|\ge0.20$，得到 `offset_fraction_association`。最大 secondary relative scale 与 S2 不对称性的对应值为 0.18938851865894077/0.21342968768802373/0.18309699317621153/0.14900089292331054，仅一组越线，不构成跨复杂度层一致关联。两项参数与 S2 $r_{31}$ 的各组相关绝对值均不超过 0.0383，得到 `association_unresolved`。这些是分层关联证据，不是改变 $f$ 就必然产生不对称性的因果证明。
-
-该诊断支持两个有边界的 schema-7 设计方向。第一，扁平/细长缺失首先来自 base aspect-ratio 参数支持本身，必须直接扩展母体轴比域，不能期待现有 union、surface 或全局形变自动补回。第二，不对称性不足已经发生在形变前的 realized offset/scale union；在两个现有机制中，偏移比例与 $A$ 的关联跨 count 组一致，而 secondary scale 没有一致关联，因此优先研究“保持严格内部交叠见证但允许 child 向外偏心生长”比单独放大 child 更有证据依据。D1 没有资格任何新 $f$ 范围、overlap-witness 构造或 base-axis 数值域，具体 schema 7 仍必须在运行前独立冻结，并重新验证连续尺寸、构造性连通、求交与效率。
-
-**当前状态**
-
-E19-v3 PASS；E20a FAIL 永久保留；E20a-D1 PASS。直接实现完整 schema 7 的权限撤回；先独立资格基础轴比采样和偏心共同见证构造。D2A 运行前仅 E20a-D2A 解锁，E20a-D2B 及全部下游节点锁定；正式结果见本节末尾的状态更新。
-
-
-### E20a-D2A｜基础轴比采样器资格
-
-**目的 / 唯一问题**
-
-资格一个仅供 schema 7 候选使用的基础母体轴比采样机制：它能否不依赖 union、surface、bend、twist 或 taper，明确产生 general、blocky、flat 和 elongated 四类内禀形状，同时不把内部类别绑定到总体尺度、primitive count、exponent、deformation seed 或固定空间轴。
-
-**运行前冻结的采样定义**
-
-对 seed 0–4095 使用按字段分离的确定性 `SeedSequence([seed, stream_id])`。stream id 固定为：family=2001、ratio=2002、axis permutation=2003、overall scale=2004、primitive count=2005、exponent=2006、deformation seed=2007、yaw=2008。family 的区间概率固定为 general/blocky/flat/elongated = 0.40/0.20/0.20/0.20。排序半轴写作 $(1,r_{21},r_{31})$：
-
-- general：逐项抽取 schema 6 的普通相对轴因子 $U[0.65,1.25]$，排序后除以最大值；
-- blocky：$r_{31}\sim U[0.75,1]$，$r_{21}\sim U[r_{31},1]$；
-- flat：$r_{21}\sim U[0.75,1]$，$r_{31}\sim U[0.20,0.40]$；
-- elongated：$r_{21}\sim U[0.30,0.50]$，$r_{31}\sim U[0.15,\min(0.40,r_{21})]$。
-
-六种轴排列等概率抽取。exponent 独立抽取两项 $U[0.55,1.65]$；primitive count 独立均匀抽取 1–5；deformation seed 独立抽取 uint64；yaw 独立抽取 $U[-\pi,\pi]$。总体目标直径独立抽取 $U[0.2,3.0]$ m，但 D2A **只记录而不应用**：审计 primitive 的最长半轴固定为 1 m。这样 D2A 测量的是无量纲轴比采样，不让最小物理尺度、`ShapeSpec` 的半轴下限或最终尺寸接受规则混入该构念。总体尺度如何映射到极端轴比几何，必须在 schema 7 正式冻结时另行定义并由 E19-v4 验证。
-
-审计对象只含单 primitive、union operation、零 offset、零 surface/bend/twist/taper。内部 `shape_family` 只进入生成报告，不进入 AJAE 输入或监督标签。禁止修改 `render.py`、正式 generator、proposal stream 或 cache identity。
-
-**审计与 PASS 条件**
-
-两次完整运行各审计 4,096 个基础 primitive，并使用 24 个 CPU 进程。四族计数必须逐项等于上述冻结 family 流；所有参数有限且满足各自支持域；六种轴排列均来自冻结 permutation 流；全部对象必须由现有连续连通性判定器取得 `strict_radial_star_shaped` 证书。通过反事实更换 family stream 或 overall-scale stream，验证其他独立字段的随机值逐元素不变；相关性统计只能作诊断，不能替代结构性随机流隔离。禁止通过增大任何形变补偿轴比。两次运行的字段数组、证书、对象哈希、摘要哈希必须逐元素一致。
-
-PASS 只资格基础轴比采样器并解锁 E20a-D2B；它不生成多 primitive 对象、不说明最终 E20a 区域已经覆盖、不把 schema 7 变成正式 generator，也不改变当前已资格的 schema 6。
-
-**E20a-D2A 正式结果（2026-08-27）**
-
-E20a-D2A 在预注册提交 `91be27a` 后，以 24 个 CPU 进程对 seed 0–4095 做了两次完整独立审计，正式裁决为 **PASS**。两遍分别用时 0.7630624800003716 s 和 0.6063500649997877 s；字段数组、连续连通证书、对象哈希、family/permutation 计数和随机流隔离结果逐元素一致，两遍数组哈希均为 `badbc50332863181598f1d8f9958644883c492da5ae597325d7d73409159e2b1`，摘要哈希为 `13681e35d6d4857da6e94ddf202dfa4b9f4a9bce9dcb6c75aa13d5f687660062`。正式产物 `runs/ajae/e20a_d2a_base_aspect_sampler.npz` 为 528,004 bytes，SHA-256 为 `0e92143709a15f633862b8ebff8aa0c00785abf45e6cd921db86839c1c39bbdb`。
-
-冻结 family 流得到 general/blocky/flat/elongated = 1,647/846/809/794，和审计输出逐项一致；六种轴排列计数为 686/693/667/678/678/694。全部 4,096 个对象参数有限并落在对应的内禀支持域，全部取得 `strict_radial_star_shaped` 证书。替换 family stream 后有 3,003 个 seed 的 family 改变，但总体尺度、primitive count、exponent、deformation seed、yaw 与 permutation 均逐元素不变；替换总体尺度 stream 后全部目标尺度改变，而 family、轴比及其余独立字段均不变。独立读取落盘产物复算了全部支持域、排序关系、证书和流隔离，未发现反例。`src/render.py` 相对预注册提交无差异，正式 schema-6 generator 未修改。
-
-该结果证实四族基础轴比采样机制本身满足冻结的支持、严格星形性、字段隔离和确定性要求；它尚未证实极端轴比在 $[0.2,3.0]$ m 物理尺寸映射下始终可表示，也未证实共同见证、多 primitive、求交、最终覆盖或生成效率。E20a-D2B 现已解锁；schema 7 及全部下游节点继续锁定。
-
-
-### E20a-D2B｜偏心共同见证构造资格（PASS）
-
-D2B 只回答：child 能否向 parent 外部生长，同时由构造公式预先给出位于双方严格内部的共同见证。对 parent 局部主轴方向 $u$ 求唯一径向边界 $R_p(u)$，取 $w=o_p+\tau_pR_p(u)u$、$\tau_p\sim U[0.65,0.85)$；对 child 的 $-u$ 方向求 $R_c(-u)$，令 $o_c=w+\tau_cR_c(-u)u$、$\tau_c\sim U[0.55,0.80)$。每条生成边必须保存权威 $w$，且双方连续隐式值具有严格负余量；禁止生成后搜索一个碰巧交叠的点。
-
-D2B 将审计 4,096 个确定性 parent-child 构造和 512 棵 primitive count 2–5 的完整树，覆盖四族交叉、yaw、exponent 与现有低频扰动。PASS 要求全部见证有效、树覆盖所有节点、无非有限值/空交叠/断树且两次逐元素复现。child center 位于 parent 外部的比例只报告，不作为 PASS 门槛；最终不对称性仍由 E20a-v2 裁决。D2A PASS 前不得执行。
-
-**E20a-D2B 正式结果（2026-08-27）**
-
-E20a-D2B 在权威提交 `c5898de` 下使用 24 个 CPU 进程执行两次完整审计，正式裁决为 **PASS**。每遍包含 4,096 条独立 parent-child 构造边和 512 棵完整生成树；primitive count 2–5 各 128 棵，共 1,280 条树边。16 种 parent/child family 组合各有 256 条独立边。两遍分别用时 1.3423615129995596 s 和 1.356556244998501 s，全部字段、实际 parent、生成顺序、witness、连续隐式值、证书、对象哈希和描述统计逐元素一致；数组哈希均为 `eb543a102a2680afb748a8d570207b81aee88bc76bb562042bafe0c818ebc430`，摘要哈希为 `a836e1d4e07d5bba36d0184607a5ad04d9ecd5562ef64c462712186a0327a1ef`。
-
-全部 5,376 条构造边的 parent 与 child 在各自权威 witness 上均满足连续隐式值严格小于 0；共同内部余量的 minimum/$Q_{0.01}$/median 为 0.023704686925583644/0.0321257642403067/0.0832795121702335 m。最差边是独立边 seed 2556（elongated parent、general child），parent/child 隐式值分别为 -0.023704686925583644 m 和 -0.18564851592997586 m；最差树边余量为 0.029041797002644396 m。共同见证公式最大残差为 $6.561418075534675\times10^{-14}$ m。全部 constituent 均保持严格径向星形证书，全部二元对象和完整树均取得 `connected_union_graph`，没有非有限值、空交叠或树断裂。独立只读复算确认每个实际 parent 都严格早于 child，所有 active witness 有限且对象哈希唯一；未用事后 parent 搜索替换权威生成历史。
-
-外向生长只作描述：4,096 条独立边中有 3,645 条（88.9892578125%）的 child center 位于 parent 连续几何外；完整树中为 1,104/1,280（86.25%）。按 primitive count 2/3/4/5 分层分别为 84/128、210/256、341/384、469/512。全部边的中心位移 minimum/median/$Q_{0.95}$/maximum 为 0.26598944695621557/1.084399255339794/1.4752347112451356/1.7130895112816735 m。上述比例和位移未转化为新 PASS 门槛，也未计算最终不对称覆盖。
-
-第一次命令调用完成几何计算后，在比较字符串哈希数组时因 NumPy 不支持对字符串使用 `equal_nan=True` 而终止；该调用未写出产物、未形成科学裁决。只修正字符串/浮点数组的复现比较分支后，按完全相同协议重新执行上述两遍。正式产物 `runs/ajae/e20a_d2b_shared_witness.npz` 为 728,625 bytes，SHA-256 为 `fa283a02acfe46568e92c4b75a91532c1514e2acec6ce583172f8ece303c36f8`。`src/render.py`、schema 6、总体尺度、child scale 分布和 deformation 均未修改。
-
-D2B PASS 只资格偏心共同内部见证机制。D2A 与 D2B 两个局部零件现均合格，schema 7 集成与冻结现已解锁；本轮不实施 schema 7。E18b-v3 仍须等 schema 7 实装并冻结后才能执行，E19-v4、E20a-v2、E20-V1、E20b 和 E21 继续锁定。
-
-
-### schema 7 集成（IMPLEMENTED AND FROZEN）；E18b-v3（FAIL）；E18b-v4（PASS）；E19-v4（UNLOCKED）
-
-D2A、D2B 均 PASS 后才允许冻结并直接修改正式 generator 为 schema 7。schema 7 继续限定 1–5 个强制共同见证的 union primitive，保持 $[0.2,3.0]$ m、既有连续形变以及 difference/intersection 禁用；schema identity 必须进入 generation report、manifest 和 cache identity。资格完成前，schema 6 仍是当前正式版本，schema 7 只能称为候选。
-
-**schema 7 集成冻结记录（2026-08-27）**
-
-schema 7 已在不形成科学 PASS 的前提下完成集成并冻结。唯一几何变化是：用 D2A 四族 base aspect sampler 替换旧轴比采样，用 D2B 构造时共同内部 witness 替换旧 child-center 内嵌规则；`PROCEDURAL_GENERATOR_SCHEMA` 升为 7。`ShapeGenerationReport` 新增 `shape_family`、实际生成顺序下的 `child_parent_indices`、`shared_witnesses_undeformed_m` 以及 parent/child witness margin。family 与构造证据禁止进入 AJAE 输入或监督标签。
-
-总体 half-scale、primitive count、secondary scale、root/secondary exponent、yaw、surface、bend/twist/taper、union-only、连续尺寸 $[0.2,3.0]$ m、连续尺寸证书、64 proposal 及 difference/intersection 禁用均保持不变。旧 schema-6 三轴因子和内嵌 fraction 的主流随机数仍按原位置消费但不再决定几何，使其后的未修改字段保留原主流抽样位置。D2A family/ratio/轴排列逐字段沿用已资格确认的 `SeedSequence([seed, stream_id])`，因此同一对象 seed 在 proposal 重试间保持内禀 family/ratio/轴角色；D2B $\tau_p/\tau_c$ 另按 seed、字段编号、proposal 和 child index 分离。低频表面扰动在共同见证构造前按原分布抽取，child translation 与其全局坐标 phase 通过单一标量根联合求解，禁止事后替换 parent 或 witness。
-
-该记录只说明权威代码、报告和 cache identity 已集成为一个冻结候选，不说明 schema 7 已通过求交、尺寸、效率、确定性或覆盖资格。极端轴比引起的最小半轴拒绝和与偏心生长耦合后的尺寸/效率风险不提前消除，留给 E19-v4 暴露。E18b-v3 已正式 FAIL；E19-v4 及其后节点继续锁定，人工可视化仍禁止。
-
-集成实现核验中，D2A 冻结流在 seed 0–4095 上重现 general/blocky/flat/elongated = 1,647/846/809/794。schema 7 定向测试为 5 passed、32 deselected；排除已明确过期 `dev.json` 证据的回归为 34 passed、3 deselected。`src/render.py` SHA-256 为 `53f7037ffd9f10135dd6bade1904d7c77b51e4b8481c174027c0e36be00ff377`，由 schema 7 与该源码哈希形成的 renderer/generator identity 为 `ea868183f1e982c8fa8e3fd959eced32d121e58f0b1daac8876f5409cc5a83d4`。原 E19-v3/E57 边界下的三项过期开发世界失败保持不变，未被迁移或冒充为当前证据。
-
-E18b-v3 针对 schema 7 扩展的薄、长和偏心几何域审计求交：固定 96 个对象（flat、elongated、偏心多部件压力层、blocky control 各 24），每个 256 条确定性射线；沿用 E18b-v2 的独立高精度参考和全部既有误差界，要求 hit/miss 零错误。它是新参数域的小型回归，不重做 arbitrary CSG 理论资格。
-
-**E18b-v3 运行协议冻结（2026-08-27，首次正式运行前）**
-
-对 seed 0–4095 依次调用冻结 schema 7 默认生成器，只按最终 accepted object 报告分层，一个 seed 最多进入一层。分类优先级固定为：偏心多部件的对应 primitive-count 名额尚未满时先收录，其后依次为 flat、elongated、blocky control。flat/elongated/blocky 直接使用已冻结 `shape_family`，各收录最早 24 个；偏心多部件层不发明不对称阈值，primitive count 2/3/4/5 各收录最早 6 个。扫描期间任一对象在 64 proposal 内生成失败，或 seed 4095 后任一层不足，都记 sampling qualification failure，不允许跳过、扩大范围或改层定义。
-
-四层按 flat、elongated、偏心 count 2/3/4/5、blocky control 的顺序排列，冻结 seed 依次为：`[19,23,34,35,39,43,46,48,50,51,54,66,67,70,74,89,90,91,94,95,96,97,100,106,37,60,61,64,65,69,73,76,78,79,80,88,92,98,99,105,124,137,143,147,148,149,150,154,12,21,24,36,38,41,1,6,9,15,16,18,4,10,13,22,44,59,0,2,3,5,7,17,14,28,31,32,47,83,84,87,93,102,103,113,115,116,118,126,127,138,145,151,152,179,182,187]`。对象 manifest SHA-256 为 `2f0a674caec51ac43566c0293b305526e6d421c8c2f0100bbbad8113c716781a`。
-
-每个对象的 256 条射线使用 `Sobol(d=7,scramble=True,bits=64,seed=1803000+object_index).random_base2(m=8)`。原点固定在 $2.25R$ 球面；前 128 条指向 `tight_continuous_outer_bounds(z_slabs=256,safety_margin_m=1e-6)` 中的 Sobol 目标，后 128 条使用独立 Sobol 球面方向，全部归一化。射线 identity SHA-256 为 `656a7a1c1d0d1ad0aad69c4e6e682f30ff16d8107fe5e75cc7ab050f231b1135`，完整 execution manifest SHA-256 为 `ac67451a6bf7a6028931c7e7086eac6254b9d7262bda9336ac746cca87ddb24e`，运行器 SHA-256 为 `b478946d6d77ab0995ce2882db7e7e4cc506099f0140c1c4562a3d3c3f511867`。
-
-独立参考只调用连续 `signed_distance`：在保守球正向区间用 4,097/16,385 节点分别建立标准/严格参考，首个 outside-to-inside 变号区间用 `brentq(xtol=1e-12,rtol=1e-14)` 精化。两参考 hit/miss 必须完全一致，共同 hit 根差 $<5\times10^{-5}$ m；严格层无变号且最小 $|\mathrm{SDF}|\le10^{-7}$ m 标记 `reference_unidentifiable`，总比例必须 $<0.5\%$。每对象至少 16 reference hit 与 16 reference miss。当前全部裁决继承 E18b-v2：hit/miss 零不一致，最大距离误差 $\le10^{-4}$ m，surface residual $\le10^{-5}$ m，单位法向误差 $\le10^{-12}$，可微法向角 $\le0.1^\circ$，miss 必须返回 $+\infty$ 与零法向，全部 hit 必须外向，两次 24 进程完整运行逐元素一致。
-
-该冻结不修改 `render.py`、schema 7、被测 `steps`、对象或射线。正式结果前禁止替换 seed、扩大扫描范围、删除失败射线、执行 E19-v4 或可视化对象。E18b-v3 现为 **EXECUTION FROZEN**，可执行首次正式运行；E19-v4 仍锁定。
-
-**E18b-v3 正式结果：FAIL（永久保留）**
-
-在协议提交 `d081a88dd07b22b2477cc280e7942415e454c4df` 后，使用冻结运行器和 24 个 CPU 进程执行两次完整审计。96 个对象、24,576 条射线的对象/射线 identity 均与 execution freeze 一致。两遍分别用时 8.98214685899984 s 和 9.461855233001188 s，逐元素哈希均为 `0e608d4074f8b9f495b1a4e1e7cc3cb7ba5accc67235d460e04197ad625a929f`。标准/严格参考失败与 `reference_unidentifiable` 均为 0，可裁决 reference hit/miss 为 7,347/17,229，每对象最少为 55/152，参考资格 PASS。
-
-被测实现 hit/miss 分类不一致为 0，surface residual maximum 为 $1.547612\times10^{-7}$ m，法向单位长度最大误差为 $3.331\times10^{-16}$，miss 契约、外向性和两遍复现全部通过。但两条共同 hit 返回了错误的较晚交点：`elongated-seed-99/ray-36` 的参考/被测距离为 4.3844959571405315/4.4852485680520235 m，误差 0.10075261091149201 m；`eccentric_multi_primitive-seed-15/ray-68` 为 3.7124355859608693/3.8602502040639055 m，误差 0.1478146181030362 m。距离误差 median/$Q_{0.95}$/$Q_{0.99}$/maximum 为 $2.526\times10^{-8}$/$8.798\times10^{-8}$/$1.105\times10^{-7}$/0.1478146181030362 m，违反最大 $10^{-4}$ m 冻结界；两点的可微法向角也因对应不同表面而违反 $0.1^\circ$。因此 E18b-v3 正式裁决为 FAIL，E19-v4 继续锁定。
-
-独立高密度反查确认，两条射线的第一段真实内部弦宽仅为 0.006489475452047699 m 和 0.02761501535529831 m，对应 96 点粗网格间距为 0.04275932923087434 m 和 0.04082466504344694 m；同一射线后方又存在粗网格能观测的宽内部段。当前 E18b-v2 自适应搜索只对“粗网格整条射线没有 hit”的 ray 启动；一旦后方宽段已提供粗 hit，前方正值区间不再细分，最近窄交段因而被跳过。该 FAIL 定位的是 `ShapeSpec.intersect` 最近根搜索范围缺陷，不是 schema 7 尺寸、连通或生成分布失败。正式产物 `runs/ajae/e18b_v3_schema7_intersection.npz` 为 1,594,438 bytes，SHA-256 为 `be5ec66e825fc66aec0ddc2bb676d7e3e374f0e4a270d1ef4a6f8d81954c6d20`，摘要哈希为 `3fac245f379ae7946424085fbd7d0c0985db6f6ac36773958c9af80bddaf8810`。
-
-**E18b-v4 修复与重资格预注册（EXECUTION FROZEN）**
-
-E18b-v3 FAIL 永久保留。v4 只修复被测求交器的最近根候选范围：对保守区间起点在对象外的每条射线，把现有 depth-8 正值区间自适应细分应用到“当前最佳粗 bracket 之前”的候选区间，并保留最早有明确 outside-to-inside 变号证据的 bracket。具体只将 `adaptive_rows = flatnonzero(~has_hit & ~starts_inside)` 扩展为所有 `~starts_inside` ray，并在初始候选加入 `interval_lo < bracket_lo[interval_ray]`。`steps=96`、$\min(v_l,v_h)\le4\,\mathrm{width}$ 接近性条件、depth 8、显式变号要求、18 次二分和法向实现全部不变。
-
-v4 原样继承 v3 的 96 个对象、24,576 条射线、对象/射线/execution manifest 哈希、独立参考、支持条件、误差界、两遍 24 进程复现和所有禁止事项；不允许替换失败射线、增加 `steps` 或修改 schema 7。正式运行前必须先用原两条失败射线做最近根回归，并确认对象/射线 manifest 不变。v4 运行器 SHA-256 为 `00c860c47c190c2aeb06103e661907889aa0fddb828de490886ac2be5e9fb455`，预定产物为 `runs/ajae/e18b_v4_schema7_intersection.npz`。E19-v4 在 v4 PASS 前继续锁定。
-
-**E18b-v4 正式结果：PASS**
-
-v4 在预注册提交 `20c02688db27840d983a5b8153868502807ecbb4` 后完成两处候选范围修复，实现提交为 `90a19f01fca562bc0400f531c4d969a2108deab8`。原两条失败射线的最近根定向回归通过；修复前后的 96 个对象、24,576 条射线、标准/严格参考、对象哈希和全部掩码逐元素一致；被测距离只在 v3 的全局索引 9764 与 14660 两处发生变化。
-
-两遍 24 进程正式运行分别用时 9.269418022000536 s 和 9.02336941700014 s，逐元素哈希均为 `c8c1cb44f560c4527684f8fb385126c40939a7b730a4b661916d6c60c92672ea`。参考失败、`reference_unidentifiable`、hit/miss 不一致、外向失败均为 0，参考 hit/miss 仍为 7,347/17,229，miss 契约通过。距离误差 median/$Q_{0.95}$/$Q_{0.99}$/maximum 为 $2.524\times10^{-8}$/$8.781\times10^{-8}$/$1.099\times10^{-7}$/$1.357\times10^{-7}$ m；surface residual maximum 为 $1.548\times10^{-7}$ m；最大单位法向误差为 $3.331\times10^{-16}$，最大可微法向角为 $0.005225^\circ$。全部冻结条件通过。定向回归为 7 passed、32 deselected；排除既有过期 `dev.json` 证据后的回归为 36 passed、3 deselected。
-
-正式产物 `runs/ajae/e18b_v4_schema7_intersection.npz` 为 1,594,431 bytes，SHA-256 为 `bcc638285bf96e293b8340a52e9d190c738944e7fc26921ada1855e891ad4718`，摘要哈希为 `d055c1ad4aa81bbc14c7df94d4f1b0e122782a35bae9c36f9279062638e36ec4`。E18b-v4 PASS 只说明 schema 7 新增薄、长和偏心几何域没有突破修复后求交器在当前冻结射线下的能力，不说明 schema 7 尺寸、效率或覆盖资格成立。E19-v4 现已解锁；E20a-v2 及人工可视化仍锁定。当前 `src/render.py` SHA-256 为 `ccdddb12b96104360deb245dabffcf8449c9e568c70dd7202cdc3e850b5413d9`，对应 renderer/generator cache identity 为 `791ed731effe2b3b9c3b3d9c2af6959c7487c769eeaaff62c6feeeb647a611ee`。
-
-E19-v4 继承 E19-v3 的 2,048 次调用、两遍复现和效率门槛：proposal rejection rate $<50\%$、$Q_{0.99}$（higher）$\le8$、maximum $\le64$；另须逐项检查连续尺寸、constituent 星形证书、共同见证、overlap tree、JSON 往返、数值有限、生成报告和 cache schema identity。E18b-v4 与 E19-v4 都 PASS 后才解锁 E20a-v2；E20a-v2 原样继承 E20a 的 8,192 个对象、区域定义和最低支持数。
-
-**E19-v4 运行协议冻结（2026-08-27，首次正式运行前）**
-
-正式调用严格继承 E19-v3：默认训练路径调用 `ShapeSpec.sample_with_report(seed)` 的 seed 0–1023；固定 primitive count 2/3/4/5 分别调用 seed 0–255，共 2,048 次。完整审计独立执行两遍，每遍使用 24 个 CPU 进程；每次调用仍最多 64 个 proposal。效率 PASS 条件原样冻结为总 proposal rejection rate $<50\%$、proposal count 的 $Q_{0.99}$（`method=higher`）$\le8$、maximum $\le64$。
-
-每个接受对象重新计算并逐项核对：E16-v3 单 primitive 连续尺寸或 E18a-A+D2-v2 多 primitive 连续尺寸、每个 constituent 的严格径向星形证书、构造时保存的实际 parent 与共同内部 witness、完整 earlier-parent overlap tree、连续连通证书、union-only 操作、resolution 31/41 的有限体积与闭合边界报告、固定 $9\times9\times9$ SDF 有限性、JSON 与对象哈希往返、生成报告计数，以及 schema 7+当前 `render.py` 的 cache identity。共同见证必须在实际生成 parent 和 child 中严格为内部点，重算 margin 必须与报告逐值相同；禁止事后另找 parent 或 witness。
-
-正式产物必须保存总 proposal、接受数、拒绝率、proposal count 的 median/$Q_{0.90}$/$Q_{0.95}$/$Q_{0.99}$（higher）/maximum，以及 too-small、tight-upper-too-large、constituent/star、witness、tree/connectivity、nonfinite/geometry 等拒绝归因；另保存审计组统计、family×候选 primitive count 的 proposal/接受/拒绝表和最差接受 witness margin。这些均为预注册描述量，不新增 PASS 阈值。由于权威 `ShapeGenerationReport` 只聚合部分拒绝原因，运行器使用只读 Python trace 观察现有 `sample_with_report` 内真正发生的计数递增与已捕获 `RenderError`，记录当时的实际候选 count 和固定 family；它不修改、拦截或替换任何生成器决策，也不复制生成算法。
-
-若正确性与效率均 PASS，则 schema 7 正式取得生成资格并解锁 E20a-v2。若任一正确性条件 FAIL，立即停止。若正确性 PASS 但效率 FAIL，则停止并仅依据已保存的拒绝归因决定后续诊断；不得移动 3 m、64 proposal、四族轴比、偏心构造或既有效率门槛。冻结 `src/render.py` SHA-256 为 `ccdddb12b96104360deb245dabffcf8449c9e568c70dd7202cdc3e850b5413d9`，renderer/generator identity 为 `791ed731effe2b3b9c3b3d9c2af6959c7487c769eeaaff62c6feeeb647a611ee`，运行器 SHA-256 为 `7f452f4fd2b7ea1ea9fc86025a769f59d1e4d078ce59e91c1ead4b19bb5adfb6`，预定产物为 `runs/ajae/e19_v4_schema7_generator.npz`。E19-v4 现为 **EXECUTION FROZEN**；E20a-v2 与人工可视化继续锁定。
-
-**E19-v4 正式结果：PASS**
-
-E19-v4 在预注册提交 `048675c39198a33f091de45e5f7745e31b9bc6cf` 后按冻结顺序完成两遍 24 进程审计，两遍分别用时 202.0665953480002 s 和 209.74226902100054 s。2,048/2,048 次调用均在 64 proposal 内产生接受对象；共执行 2,810 个 proposal，其中接受 2,048、拒绝 762，总拒绝率为 0.2711743772241993。proposal count 的 median/$Q_{0.90}$/$Q_{0.95}$/$Q_{0.99}$（higher）/maximum 为 1/2/3/4/7，严格通过原冻结的 $<50\%$、$Q_{0.99}\le8$、maximum $\le64$ 三项效率条件。
-
-全部接受对象的连续尺寸、outer bound、constituent 星形证书、实际共同 witness、earlier-parent tree、连续连通来源、union-only 操作、有限参数、bound radius、固定 $9\times9\times9$ SDF、resolution 31/41 有界闭合报告、JSON/对象哈希往返、生成报告计数和 cache identity 均通过，正确性失败数为 0。245 个单 primitive 使用 `strict_radial_star_shaped`，1,803 个多 primitive 使用 `connected_union_graph`；2,048 个对象哈希全部唯一。接受对象连续 lower size 最小值为 0.20983809599022316 m，continuous upper size 最大值为 2.998239771240387 m。多 primitive 的最差权威共同内部 margin 为 0.003434259447993994 m，仍严格大于 0；该最小值是描述统计，不产生新门槛。
-
-762 次拒绝由 699 次 tight continuous upper bound 超过 3 m、6 次连续 lower size 小于 0.2 m，以及 57 次 primitive half-scale 不在权威实现的 $(0.02,5]$ m 域构成。后 57 次在冻结产物中原始聚合为 `other_geometry`，独立展开的消息全部精确为 `primitive half-scales must lie in (0.02, 5] metres`；不存在 constituent star、shared witness、overlap tree、continuous disconnected/unresolved、非有限值或其他未知拒绝。拒绝率随候选 primitive count 1–5 分别为 0.0160643/0.2176/0.277409/0.322137/0.359352，仍未触及整体效率 FAIL。该事实说明极端轴比与偏心多部件确实增加尺寸/域拒绝，但当前原 proposal distribution 仍能在冻结效率界内稳定生成合法对象，因此不需要修改采样分布。
-
-接受对象 primitive count 1–5 分别为 245/489/435/444/435；general/blocky/flat/elongated family 分别为 818/368/434/428。两遍逐元素哈希均为 `318306d79812b1ca1c1b5699bb07950bc1936deefd9b3717f745f67c74356898`，摘要哈希为 `7d5dac79650ab0b1401c2ac11859b469805d5f4ac2808d4eac887d7ac46146f9`。正式产物 `runs/ajae/e19_v4_schema7_generator.npz` 为 160,631 bytes，SHA-256 为 `f9fc5a4cba4105df28064fddf3d87cd7a0d8207e7c660e2fbf8f74d03061c5a3`；独立只读复核确认产物含 2,048 个调用、2,810 个 proposal event、全部正确性值为真、来源哈希与 cache identity 均与冻结值一致。
-
-E19-v4 PASS 资格确认的是 schema 7 在当前 2,048 次审计中的连续尺寸、构造性连通、数值合法性、确定性和生成效率。它不说明 flat/elongated/asymmetric 等最终几何区域已经达到 E20a 的覆盖要求，也不构成视觉质量证据。schema 7 现成为当前正式 generator，E20a-v2 解锁；E20-V1、E20b 与 E21 继续锁定，且在 E20a-v2 PASS 前仍禁止人工可视化。
-
-**E20a-v2 运行协议冻结（2026-08-27，首次正式运行前）**
-
-E20a-v2 只把历史 E20a 的被测生成器从 schema 6 换成已由 E18b-v4 与 E19-v4 资格确认的 schema 7。正式样本仍为默认训练入口 `ShapeSpec.sample_with_report(seed)` 的 seed 0–8191，共 8,192 个最终 accepted objects；完整运行独立执行两遍，每遍使用 24 个 CPU 进程，不执行 placement、不赋正式材质。E20a 的连续 AABB、$D$、$r_{21}$、$r_{31}$、两层 Sobol 不对称性、形变强度、union spread、解析 fixture、数值域和复现规则全部原样继承。
-
-最终几何区域边界不变：小/中/大、近块状、扁平、细长、明显不对称、单 primitive、多 primitive、弱形变、强形变这 11 个区域各至少 128；primitive count 1–5 各至少 512。不对称性继续使用 8,192/32,768 个嵌套无扰动 Sobol 点，标准/严格内部点至少 128/512、两层差最多 0.03，unresolved 最多 81。`shape_family` 只是 schema 7 的内部采样标签，禁止用它代替最终连续几何的 flat、elongated、blocky 或 asymmetric 成员关系，也禁止进入 AJAE 输入或监督。
-
-恢复的历史 E20a 测量器已在运行前对旧正式产物中的球、椭球和固定重叠双 primitive fixture 做逐值复核，三者的连续 spans、轴比、标准/严格不对称性、内部点数及 PASS 字典完全一致。v2 运行器除 schema 断言、实验名称和输出名称外不改变历史测量逻辑。冻结 `src/render.py` SHA-256 为 `ccdddb12b96104360deb245dabffcf8449c9e568c70dd7202cdc3e850b5413d9`，renderer/generator identity 为 `791ed731effe2b3b9c3b3d9c2af6959c7487c769eeaaff62c6feeeb647a611ee`，运行器 SHA-256 为 `bebea0887c6d27fdbec4643007f64f7bd140b089799e7e63edcd3f100579447a`，预定产物为 `runs/ajae/e20a_v2_schema7_geometry_coverage.npz`。
-
-若全部区域与测量条件通过，则 E20a-v2 PASS，只解锁 E20-V1。若 flat/elongated 通过而 asymmetric 失败，停止并仅对不对称性做归因，不得修改轴比采样器；若 asymmetric 通过而 flat 或 elongated 失败，停止检查 union/物理尺度映射如何冲淡内禀轴比，不得修改偏心构造；若测量、正确性、其他区域或 primitive-count 支持失败，立即停止并保持全部下游锁定。运行前后均禁止改 schema 7、阈值、seed 或测量器，也禁止提前看图。E20a-v2 现为 **EXECUTION FROZEN**；E20-V1、E20b 与 E21 继续锁定。
-
-**E20a-v2 正式结果：FAIL（永久保留）**
-
-E20a-v2 在预注册提交 `6a71bdb25c81b202bf87c1c3a1ec5a141ba2826c` 后完成两遍 24 进程正式运行，两遍分别用时 459.1272452330013 s 和 467.32040848700126 s。schema 7 默认入口对 seed 0–8191 的 8,192 次调用全部成功，8,192 个 shape hash 与 8,192 个 generation-report hash 均唯一；两遍全部数组哈希均为 `44289d38d56e2ac64034cee83d1e68d70e13b156f72f2542082cbd951d55567c`，参数、报告、描述量、区域掩码与统计逐元素复现。解析球、椭球和固定 overlap-union fixture 全部通过，连续描述量数值域通过。
-
-schema 7 已经使历史三个缺失区域获得充足的最终连续几何支持：flat 1,030、elongated 722、asymmetric 2,629，均超过冻结的 128。其他区域也没有退化：small/medium/large 为 2,545/2,903/2,744，blocky 3,475，single/multi primitive 1,985/6,207，weak/strong deformation 1,220/1,893。primitive count 1–5 为 1,985/1,740/1,541/1,499/1,427，均超过 512。$D$ 范围为 0.20253187522404575–2.999849815614289 m，$r_{21}$ 为 0.1916887181251575–0.9998535104706826，$r_{31}$ 为 0.11769986137627449–0.9981032878804145。上述区域全部由最终连续几何测量得到，没有用 `shape_family` 标签代替。
-
-正式 FAIL 来自继承的不对称性测量资格条件。标准/严格层内部点最少分别为 396/1,581，均高于 128/512；所有不对称性统计有限。因此 130 个 unresolved 全部且仅因为 $|A_{8192}-A_{32768}|>0.03$，超过允许的 unresolved 上限 81。差值的 median/$Q_{0.95}$/$Q_{0.99}$/maximum 为 0.0052208797344841795/0.020969218311738175/0.03509860789256189/0.10442312327211156；按 primitive count 1–5 的 unresolved 数为 1/22/18/41/48。该结果说明失败不是空对象、内部支持不足、非有限值或生成错误，而是新偏心复杂几何下原两层 Sobol 质心/极值不对称估计器的冻结收敛条件未满足。
-
-覆盖区域计数全部通过不能覆盖测量资格 FAIL，因此 E20a-v2 不得改写为 PASS，也不能据此宣称 schema 7 的最终覆盖已经正式合格。当前证据只支持一个有边界的事实：在已解决的 8,062 个对象上，且按当前估计器产生的区域掩码，三个历史缺失区域获得了大量候选支持；完整 8,192 对象 coverage qualification 仍未成立。此 FAIL 不撤销 E19-v4 对 schema 7 正确生成、连续尺寸、构造性连通、数值稳定、确定性和效率的资格。
-
-正式产物 `runs/ajae/e20a_v2_schema7_geometry_coverage.npz` 为 2,343,036 bytes，SHA-256 为 `addeb0983ee1f58d32dcba027e27dc02ee90994e135cf9564ecfe71b0798e14c`，摘要哈希为 `44c4a1f7f898168549fe7e40f33357fcc9e0e8415df6a39ffdb493e78a912d55`。独立只读复核重新计算了全部区域计数、unresolved 原因、数组/摘要/产物哈希并与正式记录一致。按预注册失败分支，E20-V1、E20b 和 E21 继续锁定；未查看任何对象图像，未修改 schema 7，现停止等待不对称性测量设计的用户裁决。
-
-**E20a-D3 运行协议冻结（2026-08-27，首次正式运行前）**
-
-E20a-D3 是纯测量诊断，不修改 schema 7、E20a-v2、81 个 unresolved 上限、0.03 层间差、0.15 不对称边界或任何 coverage 计数，也不能产生 E20a PASS。主样本固定为 E20a-v2 全部 130 个 unresolved，primitive count 1–5 分层为 1/22/18/41/48。control 从 resolved 对象中按完全相同的 count 配额抽取：只按 `SHA256('E20a-D3-control-v1|count|shape_hash')` 从小到大选择，不读取不对称性。unresolved/control seed 列表 SHA-256 分别为 `d2a493a69fc3bb3a48bafbb03a8ad80269115c1d67c7138e98dae245274744c8` 与 `26b612379290bf5ed4a59ad3411ea1d00d9f946a43a7c2fa5ad0b76a49696895`，260 对象有序 manifest SHA-256 为 `9dc76b5a76ec3e016e73f1d67958cbc5be0691c2603e65621f9895f3878dd8e4`。
-
-每个对象必须重建同一 shape/report hash，复用 E20a-v2 的同一 continuous AABB、`signed_distance<=0`、质心和 $A$ 公式，在同一无扰动三维 Sobol 序列的嵌套前缀 $2^{13},2^{15},2^{17},2^{19}$ 上保存 $A_{13},A_{15},A_{17},A_{19}$、内部点数以及三段绝对差。$A_{13}/A_{15}$ 与内部点数必须先逐元素复现 E20a-v2，才允许解释高预算结果；两遍使用 24 个 CPU 进程并逐元素复现。
-
-对象级 `high_budget_stable` 冻结为 $|A_{17}-A_{19}|\le0.01$，`clearly_contracted` 冻结为 $|A_{17}-A_{19}|\le0.5|A_{13}-A_{15}|$，二者同时成立才是 qualified convergence。若至少 104/130 个原 unresolved qualified convergence 且至少 124/130 controls high-budget stable，则支持原两层预算不足；若至少 26/130 原 unresolved 到高预算仍有差值 $>0.03$，或 controls high-budget stable 少于 117/130，则支持当前 estimator 到 $2^{19}$ 仍不合适。两项主规则同时成立或同时不成立记为 mixed/inconclusive。
-
-分类敏感性独立冻结：$A_{17}/A_{19}$ 跨越 0.15，或 $|A_{19}-0.15|\le|A_{17}-A_{19}|$，均记 classification-sensitive；至少 26/130 构成大量分类敏感。若高预算收敛规则成立但同时满足大量分类敏感，则归因为“高预算收敛但区域分类对测量误差敏感”，而不是简单宣布提高预算即可。所有对象都须报告 $A_{19}$ 到 0.15 的距离，但不得把 D3 的对象事后计入 E20a-v2 asymmetric coverage。
-
-运行器预检查时为确认低预算逐元素复现，曾各执行一次 unresolved seed 129 和 control seed 143；命令同时打印了它们的 $A_{17}/A_{19}$。此信息发生在协议提交前，现完整披露。样本、0.01/0.5/104/124/26/117 等规则未因此改变，两对象仍保留在此前已哈希冻结的完整 manifest 中。冻结运行器 SHA-256 为 `73476601856bc46f96ea420f7b158a0c62546272821785d11e75d792caf27d4a`，预定产物为 `runs/ajae/e20a_d3_asymmetry_convergence.npz`。E20a-v2 FAIL 永久保留；E20-V1、E20b、E21 继续锁定。
-
-**E20a-D3 正式结果：PASS；归因为原两层采样预算不足**
-
-D3 在预注册提交 `cf94d66621b744636940670c7579f697747a5910` 后使用 24 个 CPU 进程完成两遍 260 对象诊断，两遍分别用时 9.098420185997384 s 和 9.120897729000717 s。全部 shape/report hash、continuous AABB、$A_{13}/A_{15}$ 和对应内部点数逐元素复现 E20a-v2；两遍全部数组哈希均为 `0879719928f64e90a5a177121ce2c79005044d8780be72d779fc539d0f818dbb`。
-
-130 个原 unresolved 中有 113 个（86.9231%）同时满足 $|A_{17}-A_{19}|\le0.01$ 和相对 $|A_{13}-A_{15}|$ 至少缩小一半，超过冻结的 104；130 个匹配 controls 中有 127 个（97.6923%）满足高预算稳定，超过冻结的 124。原 unresolved 没有任何对象在 $A_{17}/A_{19}$ 间仍漂移超过 0.03，远低于 estimator-unsuitable 规则的 26；controls 稳定数也没有触发不足 117 的规则。因此预算不足支持成立，estimator 到 $2^{19}$ 仍不适合的支持不成立。
-
-原 unresolved 的 $|A_{13}-A_{15}|$、$|A_{15}-A_{17}|$、$|A_{17}-A_{19}|$ 中位数依次为 0.0366955218036969、0.005201450063311408、0.0034466050223427476；最后一段的 $Q_{0.95}/Q_{0.99}$/maximum 为 0.014483024313515655/0.02185112929000016/0.022295823194576514。controls 三段中位数为 0.0052205184327779874/0.0035481749732158945/0.0015045674310770474。该收缩模式支持：E20a-v2 的 8,192/32,768 两层预算对 schema-7 偏心复杂几何不足，而不是 uniform-AABB Sobol 估计器在 524,288 点仍普遍漂移。
-
-分类敏感性也不是主要阻塞。原 unresolved 中 76 个在 $A_{17}/A_{19}$ 两层均稳定高于等于 0.15，50 个均稳定低于 0.15，只有 4 个跨越阈值；按冻结的不确定区间规则合并后仍仅 4 个 classification-sensitive，低于“大量敏感”的 26。$A_{19}$ 到 0.15 的距离 minimum/median/$Q_{0.95}$ 为 0.0006550978752596082/0.0645994159575838/0.18667222924075458。D3 不能把上述 76 个对象补计入 E20a-v2，也不能用 $A_{19}$ 冒充真值。
-
-正式产物 `runs/ajae/e20a_d3_asymmetry_convergence.npz` 为 40,885 bytes，SHA-256 为 `03c71a1648eb5fa7f42fa7e75c98445e3c824eb1c7078ea910326f58f4886007`，摘要哈希为 `17e853c1bcde27996d88258c4b8b5f3d6864a0128c3d29cdf228d4ab3567a67a`。独立只读复核确认低预算值、内部点数、对象/报告身份、全部归因计数及数组/摘要/产物哈希一致。
-
-D3 PASS 只完成测量失败归因：现有证据不支持修改 schema 7，也不支持放宽 81、0.03、0.15 或覆盖门槛。E20a-v2 FAIL 永久保留，E20-V1、E20b、E21 继续锁定。下一步若继续，必须先单独批准并资格一个版本化的高预算不对称性正式测量协议，再对完整 8,192 对象重新执行 E20a；不得直接把本诊断改写成 coverage PASS。
-
-**E20a-D4 高预算不对称性测量协议资格冻结（2026-08-27，首次正式运行前）**
-
-E20a-D4 只回答：在与 E20a 完全相同的连续 AABB、无扰动三维 Sobol、`signed_distance<=0`、体积质心和正负轴跨度公式下，$2^{17}/2^{19}$ 能否升格为 schema-7 后续正式覆盖实验的标准/严格预算。额外的 $2^{21}$ 只作为本节点的独立资格参考，不是真值，也不得进入未来 E20a-v3。D4 不修改 schema 7，不覆盖 E20a-v2 FAIL，不产生 coverage PASS。
-
-资格集从 E20a-v2 的 seed 0–8191 中排除 D3 使用的全部 260 个对象后确定性抽取 256 个；选择过程禁止读取任何不对称性或 D3 收敛值。先按 primitive count 1–5 与 general/blocky/flat/elongated 形成 20 个单元，每单元固定 12–13 个；单元内再按 E20a 原小/中/大尺度区间与预先固定的 union-spread 区间 `single`、$[0,1/3)$、$[1/3,2/3)$、$[2/3,+\infty)$ 轮转抽取，并以带独立前缀的 SHA-256 裁决顺序。最终小/中/大为 83/83/90，spread 四组为 51/56/94/55；seed 列表哈希为 `dc56238fe4b3a41b9463e2b03f8d94fa85f25023d033614213845f99daaa6bd0`，含分层与 shape hash 的清单哈希为 `406462d90d2472f22b565bf18ff5a46d727d14746342494f701737b9121b589d`。另保留 E20a 原球、椭球和重叠双 primitive fixture。
-
-所有对象保存 $A_{17},A_{19},A_{21}$、内部点数、两段绝对差、身份与单对象成本。全部 shape/report hash 和连续 AABB 必须逐元素复现 E20a-v2；三层最少内部点固定为 128/512/512，全部值必须有限。三个 fixture 必须有限、确定，球的三层 $A\le0.02$，且每个 fixture 均满足 $|A_{17}-A_{19}|\le0.03$、$|A_{19}-A_{21}|\le0.01$。
-
-总体资格条件在运行前冻结为：至少 244/256 个对象满足 $|A_{17}-A_{19}|\le0.03$；至少 244/256 满足 $|A_{19}-A_{21}|\le0.01$；后一段差值的 median 和 $Q_{0.95}$ 均不超过前一段对应统计量的一半。为防总体结果掩盖局部失稳，每个 primitive-count×family 单元还必须分别有至少 90% 对象通过两项稳定界，且本单元后一段差值中位数不超过前一段的一半。两次 24 进程完整运行必须逐元素复现。$A=0.15$ 附近比例、跨界数、各层内部点数、尺度/spread 分层和成本均报告，但不事后增加 PASS 门槛。
-
-D4 PASS 后只允许另行预注册 E20a-v3：标准/严格预算改为 $2^{17}/2^{19}$，再从 seed 0–8191 完整生成并测量全部 8,192 个对象；除预算外继承 E20a-v2 的 11 个区域、每区 128、每个 primitive count 512、$A\ge0.15$、层差 0.03 和 unresolved 最多 81。D4 FAIL 时禁止机械升级到 $2^{21}/2^{23}$，必须停止重新设计测量器。当前只在提交前执行了不计算、不打印 $A_{17}/A_{19}/A_{21}$ 的 manifest-only 路径。冻结 `src/render.py` SHA-256 为 `ccdddb12b96104360deb245dabffcf8449c9e568c70dd7202cdc3e850b5413d9`，运行器 SHA-256 为 `dce6692ff74d1e95627c09a86d7325f7e17075bd4fc3c03338dd71194a2a421a`，预定产物为 `runs/ajae/e20a_d4_asymmetry_protocol.npz`。E20a-v3、E20-V1、E20b 与 E21 继续锁定。
-
-**E20a-D4 正式结果：FAIL**
-
-D4 在预注册提交 `90a47af558f5cd20044141739ca0c545f8e0587a` 后按冻结条件运行。资格集与 D3 的 260 个对象交集为 0，256 个对象身份唯一；shape/report hash 和连续 AABB 全部精确复现 E20a-v2。两遍 24 进程运行分别用时 19.030373799003428 s 与 21.773450364999007 s。三层最少内部点为 6,372/25,365/101,396，全部不对称性有限；球、椭球与重叠双 primitive fixture 均通过。
-
-候选预算的绝对稳定性证据很强：256/256 个对象满足 $|A_{17}-A_{19}|\le0.03$，且 256/256 满足 $|A_{19}-A_{21}|\le0.01$。两段差值的 median/$Q_{0.95}$/maximum 分别为 0.001030974722402822/0.006290163161781121/0.020283514059584756 与 0.0007457821679207714/0.0034847950511063333/0.00973559699081561。20 个 primitive-count×family 单元也全部达到两项绝对稳定比例要求，没有 elongated-count5 等局部族出现超过 0.01 的高预算漂移。$A_{19}/A_{21}$ 只在 2 个对象上跨越 0.15，按误差区间计入阈值不确定的对象为 4 个。
-
-正式 FAIL 完全来自运行前额外冻结的“至少减半”收缩条件。总体 median 收缩比为 0.72337580322302，$Q_{0.95}$ 收缩比为 0.5540070998920765，二者都高于 0.5；20 个分层中有 13 个的后一段差值中位数没有减半。因此总体收缩与分层保护均 FAIL。该裁决不能被 256/256 的绝对稳定性结果覆盖，也不能事后删除或放宽减半条件。
-
-两遍运行器逐元素比较了 seed、primitive count、family、shape/report hash、三层 $A$ 和内部点数，并在任一差异时抛错；三个 fixture 字典也完全一致。输出中的两个全数组哈希分别为 `b361392b0ca00e03dc5d4295012ffabd0419842e00ff1cb047424a4e5feda818` 与 `422c12208376f3b037a0259397a5b10169ecbad836600f63b99e23e1ff5a5570`，其差异来自运行器错误地把本来允许变化的 `object_seconds` 纳入哈希；科学数组本身已由独立分支逐元素确认相同。正式产物中排除运行成本后的科学数组哈希为 `c175408588ffbbf31751f165d9f9d65fc0946638b58259738aa890972dc13120`，摘要哈希为 `be980585ad140ec923898cb6f397add807f1a4527e3b650a9dcb8f27c185d060`。该哈希报告缺陷不造成此次 FAIL，也不能挽救 FAIL。
-
-正式产物 `runs/ajae/e20a_d4_asymmetry_protocol.npz` 为 39,951 bytes，SHA-256 为 `db76298bb04192d9d0c864ebc08ac47cdc970f9e1498f1c9d912067852325d96`。D4 FAIL 永久保留；$2^{17}/2^{19}$ 尚未取得正式测量协议资格，不能执行 E20a-v3。schema 7 保持 qualified 且不修改；E20-V1、E20b、E21 继续锁定。依照预注册失败分支，现在停止，等待对“绝对稳定已充分但逐级误差必须减半是否为合适资格构念”的实验设计裁决，且禁止机械升级为 $2^{21}/2^{23}$。
-
-**E20a-D4 后置协议修订与验证范围收缩（2026-08-27）**
-
-经课题负责人裁决，历史 E20a-D4 是首次且唯一一次尝试，后续叙述可标为 E20a-D4-v1，但原实验名、数据与 FAIL 不改写。其 failure classification 修订为 `qualification-specification defect`：D3 已在原 unresolved 与匹配 controls 上定位 $2^{13}/2^{15}$ 预算不足；D4 又在完全不重叠的 256 个独立对象上得到 256/256 的 $|A_{17}-A_{19}|\le0.03$、256/256 的 $|A_{19}-A_{21}|\le0.01$，且 20 个 primitive-count×family 分层全部通过两个绝对稳定界。唯一失败条件是额外要求总体及每个分层的误差必须精确至少减半。
-
-该减半条件衡量辅助数值误差的理想收缩率，不是 E20a 真正需要的“在冻结绝对容差内稳定划分 $A\ge0.15$ 覆盖区域”构念。因此取消 E20a-D4-v2，不把 D4 改成 PASS，也不继续派生收敛率资格链。后续只有可能影响异常代理可信性、renderer 来源泄漏、标签正确性、B1 相对 B0 的监督价值、B3 相对 B1/B2 的时间增益、moving-normal safety 或真实 OOD 迁移的问题才允许长期阻断主线；普通辅助描述量相关和理想小数收敛不再无限派生实验。
-
-**E20a-v3 运行协议冻结（2026-08-27，首次正式运行前）**
-
-E20a-v3 只把标准/严格不对称性预算从 E20a-v2 的 $2^{13}/2^{15}$ 改为 $2^{17}/2^{19}$。正式入口仍为未修改的 qualified schema 7 `ShapeSpec.sample_with_report(seed)`，两遍均从 seed 0–8191 完整重建 8,192 个 accepted objects，并使用 24 个 CPU 进程。不能只修算历史130个 unresolved，不执行 placement、不赋正式材质、不查看图像。
-
-连续 AABB、无扰动三维 Sobol 嵌套前缀、`signed_distance<=0`、体积质心、正负轴跨度公式、$D/r_{21}/r_{31}$、形变强度、union spread 和三个 fixture 全部不变。标准/严格内部点仍至少为 128/512，两层绝对差仍必须 $\le0.03$，明显不对称仍要求两层 $A\ge0.15$，unresolved 仍最多81。小/中/大、块状、扁平、细长、明显不对称、单/多 primitive、弱/强形变这11个区域仍各至少128；primitive count 1–5仍各至少512。`shape_family` 不能替代最终连续几何测量。$A_{21}$ 不进入 v3。
-
-两遍必须重新生成全部对象，shape/report hash 和连续 AABB 与 E20a-v2 精确相同，并重新计算全部描述量；所有科学数组和 fixture 必须逐元素复现，运行时间单独报告且不进入复现哈希。全部身份、fixture、数值域、复现、unresolved、11个区域和 primitive-count 条件同时通过才可判 E20a-v3 PASS。PASS 后 schema 7 geometry coverage 才正式合格，并只解锁一次性 E20-V1；FAIL 若仍源于大量数值 unresolved，则停止把 $A$ 自动发展成长期阻断支线，若真实 coverage 数不足才按缺失区域诊断 generator。
-
-提交前仅对 seed 0、4095、8191 重建并检查 shape/report identity 与非不对称性描述量，没有计算或打印 $A_{17}/A_{19}$。冻结 `src/render.py` SHA-256 为 `ccdddb12b96104360deb245dabffcf8449c9e568c70dd7202cdc3e850b5413d9`，运行器 SHA-256 为 `c5954ed51f9801a868f305eea2652b6cd7a67611d7a045c7bf578e5f64d59005`，预定产物为 `runs/ajae/e20a_v3_schema7_geometry_coverage.npz`。E20-V1、E20b-lite 与 E21 当前继续锁定。
-
-**E20a-v3 正式结果：PASS**
-
-E20a-v3 在预注册提交 `f4350d58d1ee2c910225f1436fd8101a43d83d19` 后按冻结协议完成两遍 24 进程正式运行，两遍分别用时 525.2880537629972 s 与 531.9286682789971 s。每遍都从默认 schema 7 入口完整重建 seed 0–8191 的 8,192 个 accepted objects；shape/report hash、连续 AABB 以及全部未修改的尺寸、轴比、形变强度、union spread 和非不对称区域数组与 E20a-v2 逐元素一致。三个 fixture、数值域和身份检查全部通过。
-
-新的 $2^{17}/2^{19}$ 测量下只有 1/8,192 个对象 unresolved，远低于冻结上限81。唯一对象为 seed 3081，$A_{17}=0.19992087103156353$、$A_{19}=0.16823165641512156$，绝对差 0.031689214616441974；不存在内部点不足或非有限值。标准/严格层最少内部点为 6,372/25,365。全体层差的 median/$Q_{0.95}$/$Q_{0.99}$/maximum 为 0.001188198298830767/0.006440462051511541/0.010910114201940553/0.031689214616441974。
-
-11 个最终连续几何区域全部超过128：small 2,545、medium 2,903、large 2,744、blocky 3,475、flat 1,030、elongated 722、asymmetric 2,803、single primitive 1,985、multi primitive 6,207、weak deformation 1,220、strong deformation 1,893。primitive count 1–5 为 1,985/1,740/1,541/1,499/1,427，全部超过512。因此 schema 7 geometry coverage 正式取得资格；该结论来自最终连续几何，不使用 `shape_family` 代替。
-
-两遍科学数组哈希完全相同，均为 `14d534505ba4f80405f7333ce1b84b79f8fbee740ef7220b7378750d9bdba1af`；摘要哈希为 `a621214bbf650409b6b0f62c3d892edfc1b96d4f104d195d5ef857bcaf032c5d`。正式产物 `runs/ajae/e20a_v3_schema7_geometry_coverage.npz` 为 2,400,528 bytes，SHA-256 为 `1dda79688dc76020f19ae9a5e839856eb50e27db4cb8dd0e4b197e2310aa9ef4`。独立只读复核重新确认了与 E20a-v2 的未修改数组一致性、唯一 unresolved、全部区域/primitive-count 计数、科学数组哈希、摘要哈希和产物哈希。
-
-E20a-v3 PASS 结束不对称性测量器支线，不再增加 D5 或其他收敛资格实验。E20-V1 现已解锁，E20b-lite 与 E21 仍锁定。E20-V1 需要冻结的192对象面板和至少两名相互独立的人类审查者；自动程序或同一审查者重复评分不能冒充两名独立人类。
-
-
-### E20-V1｜盲法人工几何审查（未完成正式协议，已退役）
-
-未来有效的完整 E20a coverage 实验 PASS 后、E20b-lite 前，从该次 8,192 个正式对象按哈希确定性抽取 192 个：flat、elongated、blocky、asymmetric、指标边界附近、全分布均匀随机各 32；各组在可行时均衡 single/multi primitive。当前等待 E20a-v3 正式结果，因此本节点继续锁定。不得按外观挑 seed。每个对象使用相同物理尺度、相机、光照和背景展示正视、侧视、顶视及统一透视图，不显示 family、seed、指标或 PASS 区域。
-
-至少两名独立审查者回答：是否有尖刺/破面/截断/数值伪影，是否为完整单实体，最接近的形状族，是否明显近似正常 STU 类别，是否存在明显近重复。明显硬缺陷率须 $\le5\%$，完整单实体比例须 $\ge95\%$，四个目标层中至少 $70\%$ 获得与自动分层一致的多数判断，关键二元问题 Cohen's $\kappa\ge0.60$。若 $\kappa<0.60$，结果为 INCONCLUSIVE，修订说明后对同一固定样本重审，不直接判 generator FAIL。“像正常类别”和“近重复”只报告，分别留给 E48 和多样性讨论。E20-V1 不能覆盖 E20a-v2 的自动 FAIL。
-
-**E20-V1 盲审材料运行协议冻结（2026-08-27，生成任何正式面板前）**
-
-样本固定来自 E20a-v3 正式产物，依次从 flat、elongated、blocky、asymmetric、指标边界附近和全分布均匀组各取32个，组间不得重复。每组先按与组名隔离的 SHA-256 顺序各取最多16个 single 与16个 multi；某类不足时只从同组剩余候选按另一前缀哈希补足。指标边界分数固定为对象到两条尺度边界、$r_{31}=0.70$、$r_{21}=0.70$、$r_{21}=0.55$、$r_{31}=0.45$、$A_{17}=0.15$、$A_{19}=0.15$、形变强度0.45/0.65的最小规范化绝对距离，只允许 asymmetry-resolved 对象。最终展示顺序另用独立前缀哈希随机化。
-
-冻结结果为六组各32、共192个唯一对象。flat、elongated、blocky、near-boundary、uniform 均为16 single/16 multi；asymmetric 为0 single/32 multi，因为 E20a-v3 完整总体本身为0个 single-asymmetric 与2,803个 multi-asymmetric，不允许换顺序或手选制造平衡。seed 列表、私有清单和公开盲清单 SHA-256 分别为 `a8b742b21a3f44f97bfd58245f69749507ea6a9dd3581935c831b088a2a0eb1e`、`51f161c827b312a5929d54d50f1d33d4277f34d6d0249a5132db85beda712501`、`8864b9d6974b8712c1969d5b0993761823aa180e2ee3d37200966d2717282df6`。
-
-每个对象只为审查显示构造连续 SDF 零水平面 mesh：在扩张后的对象连续 AABB 上，最大 span 固定160个区间、每轴至少33点；该 mesh 不回写几何资格。对象按连续 AABB 中心居中，四视图固定为左上 front（elev 0/azim -90/正交）、右上 side（0/0/正交）、左下 top（90/-90/正交）、右下 perspective（25/-45/透视）。全部使用相同 $[-1.6,1.6]$ m 三轴显示范围、等比例、白底、灰色表面、固定光照和1200×1200 PNG；图内不出现文字、seed、family、指标、stratum 或 PASS 状态。
-
-R1/R2 只能获得公开清单、面板、说明和各自评分表，必须独立评分且不得查看私有 key 或对方答案。硬缺陷率与完整实体率按全部 reviewer-object ratings 汇总，分别要求 $\le5\%$、$\ge95\%$；flat/elongated/blocky/asymmetric 四组各自至少70%的对象须取得与目标层一致的多数判断，恰有两名审查者时必须两人都选择目标标签才构成多数。hard-defect 与 complete-entity 两个二元问题分别要求 Cohen's $\kappa\ge0.60$；若两人给出完全相同的常量评分导致 $\kappa$ 因边际方差为零而未定义，则同时报告未定义和 observed agreement=1.0，并按完全一致处理。defined $\kappa<0.60$ 仍为 INCONCLUSIVE。
-
-“像正常 STU 类别”“明显近重复”和少量只是长得怪的对象只作描述，不能自动修改 schema 7。只有硬缺陷、完整实体、目标层识别或审查一致性触发既有门槛才阻断。评分只用 R1/R2 化名，本地保存，不收集姓名、联系方式或敏感信息；是否需要机构伦理审批仍由用户依据所在机构规则确认。冻结材料目录为 `runs/ajae/e20_v1_blind`，私有解盲表为 `runs/ajae/e20_v1_private_key.csv`，运行器 SHA-256 为 `5f9834b2c3ee66ff7a6ef8b8dd6e046174e62d990f297967d57cbdf720881c85`。当前尚未生成或查看正式面板。
-
-**E20-V1 盲审材料生成结果：完成；等待人类评分，尚无实验裁决**
-
-在协议提交 `2bcffc77e840b9ac663e27aaf5577d590fb04fb5` 后使用24个进程生成全部192张正式面板。每张均为1200×1200 PNG，面板总计15,112,237 bytes，单张范围10,799–283,926 bytes；最小显示 mesh 仍有9,467个顶点和18,930个三角面。程序只做机械检查，没有打开或解释图像：192张均存在，尺寸一致，四象限均有非白渲染像素，最小象限非白比例为0.00023055555555555554。少数小对象在固定3.2 m视野中占比很小属于统一物理尺度的预期结果，未据此改动显示规则。
-
-公开目录 `runs/ajae/e20_v1_blind` 含192张面板、公开盲清单、R1/R2各192行的空白评分表、审查说明和材料摘要。渲染记录哈希为 `e71b445a66ccb8b7417d7c9a5a474c09784889f65fe4debff728836ad3862501`，不含后写摘要的公开材料哈希为 `210d557418466e0f109fbfbd9d0db391f8afab3c62cffe2f4949414e1e97a74c`，摘要文件 SHA-256 为 `df1d09cbbcacaa4278a81d9b950536dbfbd02e2dfd7910d1dc6ef140e59b8d02`。私有 key 位于 `runs/ajae/e20_v1_private_key.csv`，SHA-256 为 `ab8e1d1ec4791e79eaf42c0105ba7f6a8b3db47c76b6117bf565e0feac697919`，权限为0600。
-
-当前 E20-V1 状态为 `MATERIALS PREPARED / PENDING HUMAN RATINGS`，不是 PASS。必须由至少两名独立人类分别完成 R1/R2，锁定两份原始评分后才允许解盲和计算硬缺陷率、完整实体率、四个目标层一致率及 Cohen's $\kappa$。E20b-lite 与 E21 继续锁定。
-
-**E20-V1 材料生成后范围修订（2026-08-27）**
-
-课题负责人已查看全部冻结面板，并报告“物体只是长得奇怪，没有生成错误”。这项记录仅构成一次描述性肉眼健全性检查；原 E20-V1 要求的两名独立审查者、逐对象评分、人眼类别判断和 Cohen's $\kappa$ 均未完成。R1/R2 各 192 行评分表保持空白，不得根据总体口头结论伪造逐项评分。因此 E20-V1 没有 PASS，也不得报告缺陷率、完整率、类别识别率或审查者一致性。
-
-经范围修订，人眼类别判断不再作为后续门槛：最终连续几何的扁平、细长、块状和不对称覆盖已由 E20a-v3 按 8,192 个对象的冻结定量定义取得资格，人眼重复分类不再消除新的核心科学不确定性。原 E20-V1 因未完成而退役，不记 PASS/FAIL；课题负责人的观察仅支持“未肉眼发现明显生成错误”，不支持更强人工审查主张。schema 7 的资格仍来自 E19-v4 与 E20a-v3。E20b-lite 现已解锁，E21 继续锁定至 E20b-lite PASS。
-
-
-## E20b-lite｜生成因素近确定性捷径审计
-
-**唯一问题与锁定边界**
-
-E20b-lite 将在 E20a PASS 且 E20-V1 完成后回答：primitive count、连续尺度、轴比区域和形变强度之间是否存在接近确定性的简单捷径。只检查各 primitive-count 组是否仍具备小/中/大、块状/扁平/细长和弱/强形变的基本覆盖，并使用一个浅层决策树与一个逻辑回归检查是否能近乎完美地预测另一生成因素。普通相关、适度可预测性和描述性差异只记录，不要求统计独立，也不阻断主线；只有接近确定性的绑定才 FAIL。最小拆分、模型容量和“近乎完美”的数值门槛尚未冻结，因此当前不得执行。
-
-E20b 的训练/测试拆分、条件覆盖单元、低容量模型、基线、接近确定性的数值门槛和重复规则尚未冻结，因此当前不得执行。其判据必须在 E20a 结果不参与阈值选择的前提下另行预注册。材质与 placement independence 不属于 E20b，并继续分别后移到正式传感器链与放置链。
-
-**E20b-lite 运行协议冻结（2026-08-27，分析前）**
-
-本节点直接读取 E20a-v3 已冻结的8,192个 schema 7 对象，不重新生成几何。四个目标分别是 primitive count 1–5、small/medium/large、blocky/flat/elongated/other 和 weak/middle/strong。在每个 primitive-count 组内，每个尺寸、轴比和形变类别至少需有16个对象，只用于排除某类完全缺失或支持极小。
-
-四个预测任务依次为：用直径、两个轴比和形变强度预测 primitive count；用 primitive count、轴比和形变强度预测尺寸类别；用 primitive count、直径和形变强度预测轴比类别；用 primitive count、直径和轴比预测形变类别。每个任务都禁止输入直接定义该标签的连续量或区域掩码，也禁止使用 `shape_family`、seed、哈希、proposal/rejection 计数、union spread、不对称性和人工审查信息。
-
-数据用带独立前缀的 SHA-256(shape hash) 确定性分为75% 训练和25% 测试，每个类别必须在两部分中都存在。低容量模型冻结为：连续量标准化、primitive count 作为输入时独热编码的 L2 逻辑回归（`C=1`、`class_weight=balanced`、`max_iter=5000`），以及 `max_depth=3`、`min_samples_leaf=64`、`class_weight=balanced`、`random_state=20260827` 的浅层决策树。
-
-只有某个任务的某个冻结模型同时达到测试集平衡准确率至少0.95且最低单类召回率至少0.90，才判定存在“接近确定性的简单捷径”并 FAIL。普通相关、适度可预测性和分布差异只报告。所有条件单元有至少16个对象、数值和标签有效、训练/测试类别齐全、无模型触发捷径条件且两遍分析逐元素一致，才能 PASS。PASS 后结束 Phase 2 几何分布资格链并解锁 E21。
-
-**当前状态**
-
-E20b-lite UNLOCKED / RUN PROTOCOL FROZEN：E20a-v3 已 PASS，原 E20-V1 未完成并经明示范围修订退役，不再作为下游门槛。E21 LOCKED until E20b-lite PASS。
-
-**E20b-lite 正式结果：PASS**
-
-E20b-lite 在预注册提交 `3e64854` 后直接读取 E20a-v3 的 8,192 个对象，没有重新生成或替换形状。由形状哈希确定性得到6,092个训练对象和2,100个测试对象，所有目标类别在两部分都有观测。primitive count×尺寸、primitive count×轴比和 primitive count×形变的55个条件单元中，最小支持数为92，高于冻结门槛16；因此没有用总体结果掩盖空缺或极小条件组。
-
-八个“四个预测任务×两个低容量模型”组合全部未触发“平衡准确率至少0.95且最低单类召回率至少0.90”的捷径规则。逻辑回归/浅层决策树的测试集平衡准确率分别为：primitive count 0.2214/0.2427，尺寸类别0.3695/0.3671，轴比类别0.3094/0.3022，形变类别0.3397/0.3304。最高值仅0.3695，与0.95门槛相距很大。这支持：在当前冻结低容量模型下，没有某个简单几何因素组合几乎决定另一生成因素。该结论不表示各因素统计独立，也不排除高容量模型学到更复杂关系。
-
-首次调用在两遍结果比较时，错把数值数组的 `NaN` 比较选项用到字符串哈希数组，程序因类型错误在写正式产物前终止。只修正了这一比较实现后完整重跑；数据、特征、拆分、模型和门槛均未改动。正式运行内的两遍分析对拆分、标签、预测、混淆矩阵、指标和哈希逐元素一致。科学数组哈希为 `6bb87cbcdf5cececdbf5fc63ffaedffc498622f8171d77aa75285f1b126a1a46`，摘要哈希为 `69323de8e7f89114e2e1cb4b0ae358a500ad6dc9b2467c922f4c4dd4bd22e77d`。正式产物 `runs/ajae/e20b_lite_factor_shortcut.npz` 为31,697 bytes，SHA-256 为 `49c48093cc673fddc129a1d4049ac7e3297b9e8bf8414a1d4dbe8e921e2b810c`。
-
-E20b-lite PASS 结束 Phase 2 几何分布资格链。当前已验证 schema 7 能合法、有效率、确定地生成具有冻结几何覆盖的异常代理，且未检出审计范围内的接近确定性简单因素捷径。E21 现已解锁。
-
-
-## E21｜局部支撑平面估计
-
-**目的 / 唯一问题**
-
-确保插入对象建立在可信的地面几何上。
-
-**建模 / 实施**
-
-在 road/parking/sidewalk 等正常地面区域估计 Π_g=(n_g,b_g)，对人工可验证区域检查法向、残差。
-
-**PASS 条件**
-
-法向与平面残差满足冻结标准。
-
-**FAIL 条件**
-
-支撑面估计不稳或方向错误。
-
-**状态转移**
-
-- PASS → **E22**
-- FAIL → **修 plane fitting/候选区域后重跑 E21。**
-
-**E21 运行协议冻结（2026-08-27，正式运行前）**
-
-E21 只资格“局部支撑平面是否稳定到足以供后续物体落地使用”，不构造或比较人工真值法向，也不判定物体已经没有悬空或埋地。后一问题仍属于 E22。E21 数据只来自 train/206，并绑定已推送的源提交 `08fe85b8488ea2370ea9cb59d1f5ac8be4c7db4d`；不读 train/201、真实异常验证或隐藏测试数据。
-
-候选锚点仅使用中心帧 2–446 的真实回波，原始语义限定为 road=40、parking=44、sidewalk=48。固定抽取512个：road 256、parking 128、sidewalk 128。按锚点在中心帧传感器坐标的欧氏距离分为 near $[0,20)$ m、middle $[20,40)$ m和 far $[40,120]$ m；road 三层配额为86/85/85，parking 与 sidewalk 均为43/43/42。每层按固定 SplitMix64 的语义命名空间与 $(frame,slot)$ 身份哈希排序，碰撞时依次按 frame、slot 裁决，不看外观或平整度。某距离层不足时，只能从同语义其他剩余点按另一固定身份哈希补齐。
-
-每个锚点只在对应的五帧 $[-2,-1,0,1,2]$ 窗口中收集与锚点原始语义完全相同的真实回波，用 `poses.txt` 变到世界坐标后按水平 XY 距离取0.75/1.0/1.25 m 邻域，保留 $(source\_frame,file\_slot)$ 身份。三个尺度均至少32点；否则该锚点为 `insufficient_support`。
-
-每个尺度先对均值中心化点的协方差取最小特征值对应特征向量；第二大特征值不大于 $10^{-12}\ \mathrm{m^2}$、分解失败或参数非有限均记退化。计算首次点到平面绝对残差，精确保留 $\lceil0.9N\rceil$ 个最小残差点，残差相等时由冻结邻域身份顺序裁决，再次均值中心化并用 SVD 拟合。单位法向统一使 $n_g^\top e_z>0$，$b_g=-n_g^\top\bar x$。不能在锚点水平位置解出有限高度时拒绝。
-
-1.0 m 最终平面在该尺度全部未剔除点上的绝对残差 median 须不大于0.03 m，$Q_{0.95}$ 须不大于0.08 m。0.75 m 与1.25 m 法向夹角须不大于 $5^\circ$，两平面在锚点 XY 的预测高度差须不大于0.08 m。任一条件失败都把锚点记为 `unqualified_support_patch`，这是对路缘、台阶或复杂地面的合法拒绝，不是 plane estimator failure；任何已接受 patch 都必须100% 满足全部界限。
-
-三个解析回归场景为0°/5°/10°坡面：在 $[-1.25,1.25]^2$ 的51×51 XY 网格上使用 $z=\tan(\alpha)x+0.002\sin(7x+3y)$，锚点为原点。法向角误差须不大于0.5°，锚点高度误差须不大于0.01 m；它们只防实现错误，不派生 E21-D1。
-
-E21 PASS 要求512个锚点中至少410个合格（总体比例至少80%），road 至少192/256、parking 至少96/128、sidewalk 至少96/128，三个解析回归全部通过。两遍独立24进程完整运行必须对锚点、各尺度邻域身份、支持数、法向、$b_g$、残差、多尺度稳定性、接受/拒绝、拒绝原因和科学摘要哈希逐元素一致，运行时间不进哈希。PASS 后只解锁 E22。
-
-**E21 首次正式结果：FAIL（样本定义不可实现，尚未拟合平面）**
-
-E21 在预注册提交 `8625a39` 和实现提交 `ad7f26d` 后开始首次正式执行。程序在构造冻结512个 anchor 清单时发现 parking 候选池为空，按协议拒绝以其他语义补位并终止。终止发生在任何支撑平面拟合之前，没有 E21 实验产物，不存在可解释的残差、稳定性或合格率结果。
-
-独立只读标签普查确认：train/206 全449帧的真实回波中，road=40 有9,120,296个，parking=44 为0，sidewalk=48 有822,847个，other-ground=49 有43,899个，semantic 60 为0。冻结中心帧2–446中，road/parking/sidewalk/49 分别为9,017,876/0/813,492/43,763，出现于445/0/445/442帧。近/中/远距离计数为road 8,616,445/389,582/11,849，parking 0/0/0，sidewalk 682,777/128,483/2,232，semantic 49 为26,361/17,255/147。
-
-因此 E21 的 FAIL 永久保留，failure classification 为 `sample-frame specification defect`：指定的唯一序列中没有任何 parking=44 真实回波，128个parking anchor 配额从数学上无法抽取。不允许静默改用 semantic 49、把 parking 配额分给 road/sidewalk，或把本次改写为 PASS。若修订样本类别和配额，下一次必须命名为 E21-v2。E22 继续锁定。
-
-**E21-v2 协议修订冻结（2026-08-27，正式重跑前）**
-
-E21-v1 的 FAIL 永久保留。E21-v2 只修正不可实现的采样类别：将 train/206 中不存在的 parking=44 替换为真实存在的 other-ground=49。固定512个锚点的新配额为 road 256、sidewalk 128、other-ground 128；近/中/远配额分别为 road 86/85/85、sidewalk 43/43/42、other-ground 43/43/42。该修订绑定已经推送到远端的提交 `283e984`。
-
-除类别名称、语义编号和对应配额外，E21-v1 的全部规则原样继承：只用 train/206 中心帧2–446与五帧窗口；距离分层、身份哈希抽样、同语义邻域、0.75/1.0/1.25 m 三尺度、每尺度至少32点、固定剔除残差最大的10%、平面拟合与退化规则、1.0 m 的 median residual 不大于0.03 m和 $Q_{0.95}$ 不大于0.08 m、双尺度法向差不大于 $5^\circ$、锚点高度差不大于0.08 m、三个解析坡面回归及两遍24进程逐元素复现均不变。
-
-E21-v2 PASS 要求总体至少410/512合格，且 road 至少192/256、sidewalk 至少96/128、other-ground 至少96/128；所有被接受的 patch 必须满足全部冻结界限。允许明确拒绝不稳定地面，但不允许接受不稳定平面。正式结论只能限定为：road、sidewalk 和 other-ground 上的局部支撑平面取得资格；parking 在 train/206 中不可观测，因此不声称验证 parking。E21-v2 PASS 后只解锁 E22；FAIL 则永久保留并停止调整设计，E22 继续锁定。
-
-**E21-v2 正式结果：FAIL（支撑密度与冻结抽样不匹配）**
-
-E21-v2 在预注册提交 `dd98e3c` 后，用24个进程完成两遍独立正式运行。两遍均有228/512个锚点合格，合格率44.53125%，未达到410/512和80%的总体门槛。分类结果为 road 130/256、sidewalk 50/128、other-ground 48/128，均未达到各自192、96、96的最低数量。距离分层结果为 near 157/172、middle 71/171、far 0/169；远距离层没有锚点取得资格。
-
-284个拒绝中，252个是 `insufficient_support`，即0.75 m邻域没有冻结要求的32个同语义真实回波；其余为 $Q_{0.95}$ 残差超限26个、median残差超限4个、多尺度法向差超限2个。所有228个被接受平面均100%满足残差和多尺度稳定界限，0°/5°/10°三个解析回归均通过。因此结果否定的是“当前距离分层抽样和固定局部支持规则能在 train/206 提供至少80%合格位置”，而不是平面拟合器的数值正确性。
-
-两遍科学数组逐元素一致，数组哈希均为 `0c9989b4291ce73bb6d518a694bba096e16806d941e7251deb5de52520194502`，科学摘要哈希均为 `f6e47887bc0e5a377915d29455e9f666fd131fbb09a54cdaee760a2797eb13f8`。正式产物为 `runs/ajae/e21_v2_support_plane.npz`，大小1,382,102字节，SHA-256 为 `81fc46b44dbd7c9989a9d8321db69bcaeb3a53ee15c712fb24b251370207c988`。
-
-E21-v2 的 FAIL 永久保留。当前需要重新决定距离分层、局部半径或最低支持数如何对应真实 LiDAR 点密度；在获得新的协议修订前不得移动现有门槛或继续 E22。E22 保持锁定。
-
-**E21-v3 协议修订冻结（2026-08-27，正式重跑前）**
-
-E21-v2 的 FAIL 永久保留。E21-v3 最后一次审计“随机 ground anchor 能否直接取得合格支撑面”，只修订两个已定位的构念错配。第一，road 256、sidewalk 128、other-ground 128的类别配额不变，但取消 near/middle/far 强制配额；每个类别从 train/206 中心帧2–446、传感器距离0–120 m的全部真实候选回波中，按冻结的语义命名空间 SplitMix64 身份哈希直接抽取。第二，锚点传感器距离为 $d$ 时，中心半径改为
-
-$$R(d)=\operatorname{clip}\left(\frac{d}{20},1,3\right)\ \mathrm m,$$
-
-三个实际邻域为 $0.75R(d)$、$R(d)$ 和 $1.25R(d)$。20 m以内仍使用0.75/1.0/1.25 m；距离增加后按角采样导致的空间稀疏性扩大邻域，中心半径最大为3.0 m。
-
-每尺度至少32个同语义真实回波、固定剔除最大残差10%、协方差初拟合与 SVD 重拟合、中心平面 median residual 不大于0.03 m、$Q_{0.95}$ 不大于0.08 m、小/大尺度法向差不大于 $5^\circ$、锚点高度差不大于0.08 m、三个解析坡面回归、两遍24进程逐元素复现均原样继承。总体仍至少410/512，road、sidewalk、other-ground 仍分别至少192/256、96/128、96/128；不降低任何质量或通过门槛。
-
-0–10、10–20、20–30、30–40、40–50、50–120 m各距离箱的样本数、$R(d)$ 和合格率必须完整报告，但只作为描述统计，不构成新的 PASS 条件。E21-v3 PASS 后冻结支撑面估计器并立即解锁 E22，不新增 E21-v4。若仍 FAIL，则永久结束“随机地面锚点资格”路线，下一步只能版本化改为先确定性建立 qualified support-patch pool，再从池中采样 placement；不得继续微调半径公式，E22 保持锁定。
-
-**E21-v3 正式结果：FAIL（总体通过，但分类覆盖未通过）**
-
-E21-v3 在预注册提交 `1b8ab10` 后，以24个进程完成两遍独立正式运行。两遍均有415/512个锚点合格，合格率81.0546875%，已经达到总体410/512和80%的门槛；但 road、sidewalk、other-ground 分别为249/256、86/128、80/128，只有 road 达到分类门槛，sidewalk 与 other-ground 均未达到96/128。因此 E21-v3 按冻结的合取裁决正式 FAIL，不能用总体通过覆盖分类失败。
-
-距离描述统计为：0–10 m 287/309、10–20 m 96/115、20–30 m 27/69、30–40 m 5/17、40–50 m 0/2；冻结身份哈希样本没有抽到50–120 m锚点。中心半径最小值和中位数均为1.0 m，$Q_{0.95}=1.4531$ m，$Q_{0.99}=1.7425$ m，最大2.4336 m。自适应半径将 E21-v2 的 `insufficient_support` 从252个降到34个，说明固定米制邻域造成的主要密度错配已经被修正；剩余拒绝为残差 $Q_{0.95}$ 超限53个、median残差超限5个、多尺度法向超限5个和支持不足34个。
-
-所有415个接受平面都满足32点、残差与多尺度稳定性界限，三个解析坡面回归全部通过。两遍科学数组逐元素一致，数组哈希均为 `b24e15cc4f19b4937411f4c46c47ff6543d51e78e887b65d10533ef45d5b9b23`，科学摘要哈希均为 `3f44437cc1b7fd2a9bcda81a346a87338bf97fffdf6aea89ecbc46fc075c9009`。正式产物 `runs/ajae/e21_v3_support_plane.npz` 大小3,423,768字节，SHA-256 为 `a9d80f9866c8df0f23d4866cbdb4c1375ac8dfab4c149001607dfcaae0838620`。
-
-E21-v3 的 FAIL 永久保留。“随机抽任意 ground return，再要求其成为合法 placement anchor”的路线到此终止，不再调整半径公式。下一步若获批准，只能重新定义为先确定性建立 qualified support-patch pool，再从池中采样 placement，并资格该池的规模、类别、帧覆盖和空间/距离分散性。E22 继续锁定。
-
-**E21-v4｜合格支撑区域池协议冻结（2026-08-27，正式运行前）**
-
-E21-v3 的 FAIL 和随机地面锚点路线的终止永久保留。E21-v4 不再资格任意地面回波的成功率，也不重新资格平面估计器；唯一问题是 train/206 是否存在规模、类别、帧覆盖、空间分散和距离覆盖均足以供 world generator 采样的合格支撑区域池。
-
-候选来自 train/206 中心帧2–446、传感器距离0–120 m内 road=40、sidewalk=48、other-ground=49的全部真实回波。先在世界坐标 XY 使用0.5 m×0.5 m网格稀疏化：每个 center frame × raw semantic × cell 只保留一个按冻结语义命名空间 SplitMix64 的 $(frame,slot)$ 身份哈希最小者，哈希碰撞时按 slot 裁决。全部代表候选必须执行资格判断，不得看残差、距离或结果再抽子集。
-
-平面估计器完全继承 E21-v3：$R(d)=\operatorname{clip}(d/20,1,3)$ m，三个尺度为 $0.75R/R/1.25R$，每尺度至少32个同语义真实回波，固定剔除最大残差10%，中心平面 median residual 不大于0.03 m、$Q_{0.95}$ 不大于0.08 m，小/大尺度法向差不大于 $5^\circ$、锚点高度差不大于0.08 m。只有全部条件都通过的代表候选才进入正式 $\mathcal P_{support}$。
-
-E21-v4 PASS 必须同时满足：池总量至少2048；road 至少1024、sidewalk 至少256、other-ground 至少128；至少覆盖356个允许中心帧；池在世界坐标2 m×2 m网格中至少占据512个不同 cell；0–20 m至少1024个、20–30 m至少128个、30–50 m至少32个。50–120 m只报告，不设门槛。两遍独立24进程运行必须对稀疏候选身份、资格裁决、正式池身份、平面量、摘要与科学哈希逐元素一致。
-
-E21-v4 PASS 只说明 train/206 中存在可供放置采样的合格支撑区域池，不说明物体已经没有悬空或埋地，也不说明最终远距离回波充分；前者属于 E22，后者属于后续渲染与匹配审计。PASS 后冻结池接口、结束 E21 并立即解锁 E22。FAIL 则永久保留并停止，不能继续调平面估计器或围绕失败回波补点。
-
-**E21-v4 正式结果：PASS（E21 结束，E22 解锁）**
-
-E21-v4 在预注册提交 `4db5fe7` 后，以24个进程对全部445个允许中心帧完成两遍独立运行。每遍均从939,667个0.5 m网格代表候选中得到772,656个合格支撑区域，池资格率82.2266%。类别池规模为 road 685,074、sidewalk 81,878、other-ground 5,704，分别远高于冻结的1,024、256、128；合格区域覆盖全部445个中心帧，超过356帧门槛，并覆盖1,161个不同的世界坐标2 m网格，超过512个门槛。
-
-距离池规模为0–10 m 206,033、10–20 m 400,918、20–30 m 142,508、30–50 m 23,040、50–120 m 157。0–20 m合计606,951，超过1,024；20–30 m和30–50 m也分别超过128和32。50 m以上仅作描述，没有参与裁决。所有772,656个池条目均满足冻结的32点、残差和多尺度稳定性条件。
-
-两遍候选身份、资格裁决、池身份和平面数组逐元素一致，数组哈希均为 `c0154a8db9404de397375aca3ec8d257cccd2e8f0ac92c0447a8b303acb81774`，科学摘要哈希均为 `b0ff651189649f212f3551c586d20d08023a4a15ec10704e260c774087846ac2`。正式池产物 `runs/ajae/e21_v4_support_pool.npz` 大小208,686,666字节，SHA-256 为 `0e6e7299157f5e9ced0716f6dd14881c66ba1bca0cc9c372550e56f426ea844d`。
-
-E21 至此正式结束。后续 world generator 的 placement 只能从该合格池接口确定性采样，不再从任意 ground return 起步。E21-v4 PASS 不代表物体已经正确落地；E22 现已解锁，负责检验 schema 7 物体放置后是否悬空或埋地。
-
-
-## E22｜悬空与埋地检查
-
-**目的 / 唯一问题**
-
-保证对象与支撑面接触合理。
-
-**建模 / 实施**
-
-随机放置实体，测量最低点/接触带相对支撑面的距离与穿透比例。
-
-**PASS 条件**
-
-无明显悬空和大面积埋地。
-
-**FAIL 条件**
-
-存在系统悬空或穿透。
-
-**状态转移**
-
-- PASS → **E23**
-- FAIL → **修 vertical alignment/contact rule 后重跑 E22。**
-
-**E22 运行协议冻结（2026-08-27，正式运行前）**
-
-固定1,024次放置，support anchor 只能来自 SHA-256 为 `0e6e7299157f5e9ced0716f6dd14881c66ba1bca0cc9c372550e56f426ea844d` 的 E21-v4 正式池中 `qualified=true` 的条目。road、sidewalk、other-ground 配额分别为512、256、256；各类别按冻结 E22 命名空间 SplitMix64 的 $(frame,slot)$ 身份哈希取最小者，不看放置结果。对象为 schema 7 默认生成器 seed 0–1023，按 seed 升序与按语义、锚点哈希排序的 support 条目配对；yaw 由 `SeedSequence([shape_seed,2201])` 独立采样 $[-\pi,\pi)$。
-
-对象局部 +z 轴通过权威 ground rotation 映射到支撑法向。支撑接触点取 E21-v4 中心平面在 anchor XY 的预测高度。正式放置最低支撑值使用 `ShapeSpec.minimum_z_m(xy_resolution=33,z_steps=129)` 对连续隐式曲面求根，平移为 $t=contact-h_{min}^{standard}n_g$；禁止使用 resolution 31/41 mesh 最低顶点。
-
-独立复核使用更严格的 `minimum_z_m(xy_resolution=65,z_steps=257)`，把严格连续最低支撑点变换到世界坐标后重新计算 $d_{min}=n_g^Tx+b_g$，要求 $|d_{min}|\le0.01$ m。另用16,384个确定性 Fibonacci 球面方向，从 $1.05\,r_{bound}$ 外部沿指向局部原点的方向调用权威 `ShapeSpec.intersect` 默认96步路径，取得连续隐式表面交点；深入平面超过0.02 m的比例须不大于0.02，且 $|n_g^Tx+b_g|\le0.02$ m的接触带点至少8个。
-
-形状生成失败、非有限几何/平面/yaw/变换/坐标/指标、标准或严格最低支撑求解失败、任一表面射线 miss 或无效交点、放置后几何非法均为硬错误，允许数为0。至少1,014/1,024次放置必须同时满足最低距离、埋地比例和接触点数三项，即接触资格失败最多10个。road/sidewalk/other-ground、primitive count 1–5、E20a-v3 小/中/大与最终 blocky/flat/elongated/other、shape family 和距离分层只报告，不新增均衡门槛。
-
-两遍独立24进程完整运行必须逐元素复现 support identity、shape identity与载荷哈希、yaw、旋转/平移、两套最低支撑值、$d_{min}$、埋地比例、接触点数、裁决和科学哈希。E22 只检查对象与自己的支撑平面；墙、车辆等已观测非地面结构留给 E23，其他插入实体留给 E24。PASS 后不增加 E22-V1，直接解锁 E23。
-
-**E22 正式结果：FAIL（接触带表面点数条件未通过）**
-
-E22 在预注册提交 `62db28f` 后，使用24个进程完成两遍独立正式运行。两遍均为942/1,024次放置同时满足三项接触条件，合格率91.9921875%，低于冻结的1,014/1,024和99%门槛；因此按合取裁决正式 FAIL。形状生成、支撑求解、变换、表面求交和放置后几何评估的硬错误均为0。
-
-82个不合格放置的条件归因为：79个仅因±2 cm接触带内的固定表面点少于8个，2个仅因标准与严格最低支撑复核后 $|d_{min}|>0.01$ m，1个同时违反这两项。共有80个放置的接触带点数低于8，3个放置的 $|d_{min}|$ 超过1 cm，没有任何放置违反埋地比例不大于2%的条件。
-
-$|d_{min}|$ 的 median、$Q_{0.95}$、$Q_{0.99}$和 maximum 分别为 $2.20\times10^{-8}$ m、$8.41\times10^{-5}$ m、0.001726 m和0.022103 m。明显深于支撑平面2 cm的表面比例的 median、$Q_{0.95}$和$Q_{0.99}$均为0，maximum仅为 $6.10\times10^{-5}$。接触带点数的 minimum、median、$Q_{0.95}$和 maximum 分别为0、142、2,584.7和7,399。表面求交点的最大隐式几何残差为 $2.25\times10^{-7}$，没有表面求交失效。
-
-失败并非集中在某一支撑语义：road、sidewalk、other-ground 分别失45/512、18/256、19/256。但表面接触点不足在 flat 和 elongated 形状族中更常见，分别为27/214和28/192；general和 blocky 为16/414和9/204。这些只是事后描述证据，不作为新门槛或将任何对象重分类。
-
-两遍全部科学数组逐元素一致，数组哈希均为 `4a9d5efaf348cd4e9eca34605715aed2717cd96b4b9068faedefc669a983fb3d`，科学摘要哈希均为 `1d5af8e02ee364c706914946bf85df6fa9238407bdcef65b607136f47975b1a4`。正式产物 `runs/ajae/e22_ground_contact.npz` 大小330,855字节，SHA-256 为 `3a93c68e9e2bdf983f9696326cbac950fdb5be76939959dde8dff63ff9d1d6e1`。
-
-科学结论必须限定为：**冻结的 E22-v1 放置与接触审计协议没有达到99%合格率，其中主要阻塞是固定表面方向采样下的最小接触带点数。** 数据没有显示大面积埋地，也不支持将全82个失败笼统解释为系统性物理悬空或埋地。E22-v1 的 FAIL 永久保留；在获得用户批准的协议修订前，不修改接触点门槛、表面采样器或最低支撑求解器，E23 继续锁定。
-
-**E22-v2｜连续落地与埋地资格协议冻结（2026-08-27，正式运行前）**
-
-E22-v1 的 FAIL 永久保留，不重写为 PASS。E22-v2 只删除“±2 cm接触带中至少8个离散表面点”这一不直接定义悬空或大面积埋地的代理门槛。连续最低高度、埋地深度、埋地比例、总体合格率和全部硬错误条件原样保留。
-
-新实验固定1,024次独立放置。支撑位置仍只来自 E21-v4 正式池，road、sidewalk、other-ground 分别取512、256、256个，但改用新的 `0xE2220000+semantic_index` SplitMix64 命名空间对 $(frame,slot)$ 排序。形状改用与 E22-v1 不重叠的 schema 7 seed 1,000,000–1,001,023，yaw 由 `SeedSequence([shape_seed,2202])` 采样。不得根据 E22-v1 的对象身份或结果选样。
-
-放置完全继承 E22-v1：局部 +z 对齐支撑法向，水平位置固定在支撑锚点，标准连续最低支撑用 `minimum_z_m(33,129)` 得到平移。放置完成后再用 `minimum_z_m(65,257)` 独立严格复核，要求 $|d_{min}|\le0.01$ m。仍用16,384个确定性 Fibonacci 方向和权威连续求交点统计表面埋地，深入支撑平面超过0.02 m的比例必须不大于0.02。
-
-±2 cm接触带点数继续使用完全相同的16,384个表面点计算，并报告总体的 minimum、median、$Q_{0.05}$、$Q_{0.95}$，以及 general/blocky/flat/elongated、尺寸和 primitive count 分层；它只是描述统计，不再参与任何 PASS/FAIL 裁决。不改成4点或2点，不改接触带宽度，不增加表面采样密度。
-
-形状生成、非有限量、变换、标准或严格连续最低支撑、表面求交或放置后几何的任何硬错误必须为0。单次放置当且仅当 $|d_{min}|\le0.01$ m 且埋地比例不大于0.02时合格；总体仍至少需1,014/1,024合格，失败最多10个。两遍独立24进程运行必须对支撑与形状身份、yaw、变换、两套最低支撑、$d_{min}$、埋地比例、描述性接触点数、裁决和科学哈希逐元素一致。
-
-E22-v2 PASS 后立即关闭 E22 并解锁 E23，不再研究接触采样。若 FAIL，则只根据冻结的两个物理条件归因：$|d_{min}|$ 失败主导时检查连续最低支撑求解或变换，埋地比例失败主导时重新考虑平面与局部真实地面的差异；E23 仍保持锁定。
-
-**E22-v2 正式结果：PASS（E22 关闭，E23 解锁）**
-
-E22-v2 在预注册提交 `55b2bc4` 后，使用新支撑位置命名空间、与 E22-v1 不重叠的形状 seed 1,000,000–1,001,023和24个进程完成两遍独立正式运行。两遍均有1,021/1,024次放置同时满足 $|d_{min}|\le0.01$ m 与埋地比例不大于0.02，合格率99.70703125%，高于冻结的1,014/1,024门槛。形状生成、支撑求解、变换、表面求交和放置后几何评估的硬错误均为0。
-
-3个不合格对象均只因严格独立复核后 $|d_{min}|>0.01$ m，形状 seed 为1,000,594、1,000,728、1,000,821，$d_{min}$ 分别为-0.013832 m、-0.023928 m和+0.030261 m。没有任何放置违反明显埋地比例条件。$|d_{min}|$ 的 median、$Q_{0.95}$、$Q_{0.99}$和 maximum 分别为 $2.08\times10^{-8}$ m、$5.23\times10^{-5}$ m、0.001508 m和0.030261 m。埋地比例的 median、$Q_{0.95}$和$Q_{0.99}$均为0，maximum 仅为 $6.10\times10^{-5}$。
-
-退出裁决的接触带点数仍完整计算：minimum、$Q_{0.05}$、median、$Q_{0.95}$和 maximum 分别为0、4、155.5、2,797.25和7,137；若沿用历史“至少8点”条件，仍会有85个对象不足。该数字没有参与 E22-v2 裁决，也不能用来重写 E22-v1 的历史 FAIL。表面交点的最大隐式几何残差为 $2.22\times10^{-7}$。
-
-两遍全部科学数组逐元素一致，数组哈希均为 `2c77cda0a0b46eb41220da85743bdbe7f7a0f1b9ee646d48481e71733adf0180`，科学摘要哈希均为 `5d33561ceb993b5d6d031d7b01a6aaab0274d603f10dff5ab41a921b27b89bb3`。正式产物 `runs/ajae/e22_v2_ground_contact.npz` 大小337,377字节，SHA-256 为 `67eb1f5f9d075e7a9b624d3b662185d9b1536196c32801c9396689b447d1ac8f`。
-
-E22-v2 PASS 允许的结论限定为：**schema 7 对象按连续最低支撑落到 E21-v4 合格平面后，在冻结的1 cm连续接触与2 cm/2%明显埋地审计下达到99%资格。** 该结果不说明对象已避开车辆、墙等已观测非地面几何，也不说明多个插入对象之间无碰撞；它们仍分别属于 E23 和 E24。E22 至此关闭，不再研究接触采样，E23 正式解锁。
-
-
-## Phase 2C｜历史原版 E23–E26 统一 placement/world-builder 冻结
-
-以下一次性冻结说明只适用于当时的原版E23–E26。后续E24-v2、E25-v2、E25-v3、E25-new和E26-v2均由新证据与课题负责人决策单独版本化，不能被这一历史冻结覆盖。原版四个节点按顺序执行，E23 PASS后进入E24，E24 PASS后进入E25，E25 PASS后进入E26。
-
-正式实现前必须先完成一次接口统一：
-
-1. train/206 placement 只能从 E21-v4 正式 `qualified=true` support pool 采样；
-2. grounding 只能使用 E22-v2 已资格的连续最低支撑路径；
-3. AABB/包围球只作 broad phase，不得作为 E23/E24 最终碰撞真值；
-4. 旧 `place_object` 中“任意 ground 点随机搜索 + 包围球最终碰撞”的正式训练调用必须删除或改为调用同一权威 pipeline；
-5. `WorldSpec` 保存最终不可变实体；另保存 `WorldGenerationReport`，记录 support identity、所有随机流、proposal index 和拒绝原因；
-6. 这次 world-format 升级使旧 schema-4 `dev.json` 继续失效，E57 必须从权威生成源整体重建，禁止迁移旧对象。
-
-该接口统一属于 E23–E26 的执行前置，不单独形成新的科学 PASS。
-
-## E23｜已观测正常几何碰撞拒绝资格
-
-**唯一问题**
-
-候选实体是否会与 train/206 中实际观测到的非地面正常回波发生明确深穿透；权威 placement 是否能拒绝这些候选并稳定找到替代位置？
-
-**冻结数据与对象**
-
-- support 只来自 E21-v4 正式池；road/sidewalk/other-ground 配额为 512/256/256；
-- 使用独立身份前缀 `E23-support-v1`，对象为 schema 7 seed 2,000,000–2,001,023，yaw 流为 `SeedSequence([shape_seed,2301])`；
-- 每个 support patch 对应一个静止世界位置；碰撞审计使用 train/206 全部帧 0–448 变换到世界坐标后的真实回波；
-- 排除 raw semantic 0 和 ground semantics 40/44/48/49/60；其余静态、运动和类别未知的实际观测正常回波均进入 obstacle set；
-- 只在对象紧致连续 AABB 外扩 0.05 m 的 broad phase 内计算 SDF。
-
-**直接碰撞定义**
-
-将 obstacle 点变换到对象局部坐标，计算连续 `signed_distance`。若任一点满足：
-
-$$
-F_G(x)<-0.05\ \mathrm m,
-$$
-
-当前 placement 即为 `observed_normal_deep_penetration`，必须拒绝。一个点即可拒绝，因为误报只增加重采样，不会错误接受碰撞；不再使用“至少三个点”等噪声代理门槛。
-
-**实现 fixture**
-
-对球、椭球、schema-7 flat/elongated 各构造表面外 +0.10 m、+0.02 m、内部 -0.02 m、-0.06 m、-0.15 m 的解析点组。SDF 数值与阈值分类错误必须为 0；-0.06/-0.15 m 必须拒绝，+0.02/+0.10/-0.02 m 不得被 5 cm 规则错误标成深穿透。
-
-**正式生成**
-
-每个对象按冻结 support 序列依次提议，E22-v2 grounding 后执行碰撞审计；失败则沿同一对象的冻结 proposal 流换下一个 support patch，最多 128 次。禁止修改对象几何来迁就位置。
-
-**PASS 条件**
-
-- fixture 错误数为 0；
-- 1,024/1,024 个对象均在 128 次内得到最终 placement；
-- 最终接受 placement 的 `F_G(x)<-0.05 m` obstacle 点数全部为 0；
-- 生成、变换、SDF、索引和 manifest 硬错误为 0；
-- 两遍 24 进程完整执行逐元素复现 support、shape、yaw、proposal、obstacle identities、最小 SDF、裁决和科学哈希。
-
-proposal count 和碰撞拒绝率按 support semantic、距离、尺寸、family、primitive count 报告，但不另设效率门槛；只要 128 次内全部成功就说明训练接口可用。
-
-**FAIL 分支**
-
-- accepted placement 仍深穿透：`implementation_defect`，修权威碰撞路径后原样重跑；
-- 大量调用达到 128 次仍无合法位置：`scientific_failure`，说明当前静止全序列放置接口不可用，E24 保持锁定；
-- 不得放宽 5 cm 或改用隐藏表面重建救结果。
-
-PASS → **E24**。
-
-**E23 正式结果：PASS（E23 关闭，E24 解锁）**
-
-E23 使用提交 `3c59748` 对应的权威放置实现、E21-v4 正式支撑池和 train/206 全部帧0–448的44,774,648个实际非地面回波完成两遍24进程正式运行。两遍用时分别为167.945488秒和171.687548秒，1,024/1,024个对象均在128次提议内得到最终放置；固定夹具错误、生成与变换硬错误、最终接受位置的明显深穿透均为0。两遍全部保存数组逐元素一致，科学数组哈希为 `2f4f74fa6db0964b92e7728941e90e1288b6a85d56db56990eb33f3908349320`。
-
-最终对象严格保持road、sidewalk、other-ground为512/256/256。提议次数minimum、median、mean、$Q_{0.95}$和maximum分别为1、1、1.6845703125、4和37；701次被拒提议全部属于 `observed_normal_deep_penetration`。按支撑语义统计，road、sidewalk、other-ground的平均提议次数分别为1.199219、1.554688和2.785156，至少重试一次的比例分别为15.625%、32.421875%和44.53125%。这些提议和拒绝统计只作描述，不构成新增门槛。
-
-独立落盘复算确认形状seed为2,000,000–2,001,023且1,024个身份互异，最终最小障碍SDF没有任何值低于-0.05 m，最终接受碰撞数和非空错误记录均为0。正式产物 `runs/ajae/e23_observed_collision.npz` 大小2,145,213字节，SHA-256为 `bddf2b3dc8dddee3eded3f4129413c2576c8a6c03e8ba6ed74773fe9dd8a094a`。
-
-E23 PASS允许的结论限定为：**冻结的支撑池放置接口能够拒绝与train/206实际观测非地面回波发生超过5 cm深穿透的候选，并在128次内为全部1,024个schema 7对象找到可接受位置。** 该结果不说明多个插入实体之间已经无明显互穿；该问题仍由E24检验。E23至此关闭，E24正式解锁。
-
-## E24｜插入实体之间的明显互穿拒绝资格
-
-**唯一问题**
-
-顺序构造多实体世界时，后放实体能否避免与已接受实体发生明显体积互穿？
-
-**冻结 pair detector**
-
-1. 紧致 AABB 外扩 0.05 m 完全不相交时直接安全；
-2. broad phase 相交时，对两对象双向检查：
-   - schema 7 的 primitive centers、shared witnesses 与尺寸证书内部见证；
-   - 每个对象 8,192 个确定性连续表面点；
-   - 每个对象连续 AABB 内 8,192 个确定性 Sobol probes 中所有 $F<0$ 的真实内部点；
-   - normal-control hull 的全部顶点、三角面质心和同样数量的确定性表面点；
-3. 任一上述真实点在另一对象中满足 $F<-0.05$ m，即定义为 `obvious_pair_penetration` 并拒绝后放对象。
-
-该检测器只声称排除明显互穿，不声称数学上证明任意微小交集为空。
-
-**资格 fixture**
-
-使用球—球、椭球—椭球、schema7—schema7、hull—schema7 的分离、相切、2 cm 浅重叠、6 cm 和15 cm 深重叠场景。分离/相切/2 cm 不得被 5 cm 规则错误拒绝；6/15 cm 场景必须双向或单向取得深穿透证据。错误数为 0。
-
-**正式世界样本**
-
-- world seed 2,100,000–2,100,511，共 512 个世界；
-- 每世界实体数按冻结流取 2–6；本节点只使用 anomaly-proxy，以免 normal-control 语义问题提前混入；
-- 每个实体先通过 E22 和 E23，再按 pair detector 与先前实体比较；只重采当前实体，前序实体不移动；每实体最多 128 次 proposal。
-
-执行流具体冻结为：实体数由 `default_rng(SeedSequence([world_seed,2401])).integers(2,7)` 生成；第 `entity_index` 个对象的shape seed为 `3000000+(world_seed-2100000)*6+entity_index`，yaw流为 `SeedSequence([shape_seed,2402])`，material seed为 `shape_seed+2403`。support命名空间为 `E24-support-v1`，stream为 `(world_seed-2100000)*6+entity_index`。两遍正式运行均使用24个进程，正式命令和产物路径分别冻结在 `protocol.json` 的E24字段中。
-
-**PASS 条件**
-
-- fixture 错误数为 0；
-- 512/512 个世界全部构造成功；
-- 所有最终对象继续满足 E22/E23；
-- 最终所有对象对的 `obvious_pair_penetration` 数为 0；
-- 非有限、对象身份冲突和重试记账错误为 0；
-- 两遍完整运行逐元素一致。
-
-proposal 和 pair rejection 只作描述。PASS → **E25**。
-
-**E24 正式结果：FAIL（E25 保持锁定）**
-
-E24 在提交 `8640f29` 修正“位置耗尽误记为硬错误”的记账根因后，按冻结对象、支撑、5 cm阈值和24进程配置完成两遍正式运行。两遍用时分别为640.950329秒和643.296815秒，全部保存数组逐元素一致，科学数组哈希为 `54fee2b11c47e1eb1a1a0b2dd0f4bbb3974ddaff0604195eb208877956c79146`。20个冻结夹具的分类错误为0，生成、变换、索引和记账硬错误为0。
-
-512个固定世界中有504个构造完成，8个世界在某个实体的128次支撑提议全部耗尽后未完成，未达到512/512的冻结门槛。失败world seed为2,100,078、2,100,143、2,100,144、2,100,306、2,100,372、2,100,373、2,100,421和2,100,467。归因复放关闭E24成对判定后，8个世界仍在相同条件下失败；进一步逐对象复算确认它们分别包含shape seed 3,000,471、3,000,861、3,000,864、3,001,836、3,002,233、3,002,240、3,002,528和3,002,803，其E22严格与标准连续最低支撑差值绝对值分别为0.026810、0.025941、0.010355、0.013374、0.042941、0.031238、0.025357和0.028660 m，均超过冻结的0.01 m条件。该差值只由对象几何和两套最低支撑求解决定，不随支撑位置变化，因此128次重采支撑不能使这些对象通过E22。
-
-504个已完成世界的E22/E23复核错误为0，最终实体对 `obvious_pair_penetration` 数为0；构造过程中共有7次候选因明显实体对互穿被拒。完成世界的总提议次数minimum、median、mean、$Q_{0.95}$和maximum分别为2、5、4.966270、9和16。这些只描述已完成子集，不能覆盖8个未完成世界或将E24改写为PASS。
-
-正式产物 `runs/ajae/e24_pair_collision.npz` 大小1,524,959字节，SHA-256为 `53c515346e65d226407fe866871ac4bb91a17072b1a48157b9479690447495ce`。E24的正式裁决为FAIL：**当前固定shape流与“每个实体只重采支撑、不得修改几何”的统一接口不能构造全部512个世界；直接阻塞来自8个对象未保留E22连续落地资格，而不是E24 pair detector发现最终实体互穿。** E25继续锁定。
-
-**E24-v2｜逐实体确定性 shape proposal stream 修订（正式运行前冻结）**
-
-E24 的历史 FAIL 永久保留。该结果不解释为 pair-collision detector 失败：20个冻结夹具错误为0，504个完成世界的最终明显实体对互穿为0；整体失败只说明原协议把E22-v2的分布级99%资格错误升级成了固定shape逐样本必须通过的下游前提，却没有定义E22-invalid shape的拒绝与重采合同。
-
-E24-v2只修订抽样单位。512个world seed、每世界2–6个anomaly-proxy、实体数流、E21-v4 support pool、E22-v2、E23、pair detector、5 cm阈值和每个合格shape最多128个placement proposals全部保持不变。不修8个历史seed，不放宽E22的1 cm条件，不增加support proposal次数，也不允许E22-invalid shape跳过资格后进入E23或pair placement。
-
-对world index $w=world\_seed-2{,}100{,}000$ 和零起始entity index $e$，实体槽位固定为 $s=6w+e$。该实体第 $q\in\{0,\ldots,63\}$ 个shape proposal的seed冻结为：
-
-$$
-shape\_seed(q)=3{,}000{,}000+s+3{,}072q.
-$$
-
-$q=0$精确保留E24原固定shape identity；步长3,072等于512个世界乘每世界最多6个实体槽，保证64层proposal在冻结槽位域内互不重号。每个shape先独立执行与权威placement完全相同的E22 grounding eligibility：标准连续最低支撑为 `minimum_z_m(33,129)`，严格复核为 `minimum_z_m(65,257)`，要求两者差值绝对值不超过0.01 m；同一16,384个确定性Fibonacci表面点中，低于标准最低支撑平面超过0.02 m的比例不得超过0.02。不合格shape记为 `grounding_rejection`，不消费support proposal，沿同一shape流继续。
-
-首个通过E22 grounding eligibility的shape成为当前实体的固定几何；yaw仍由 `SeedSequence([shape_seed,2402])` 生成，material seed仍为 `shape_seed+2403`。随后使用原 `E24-support-v1` support流执行最多128次placement proposal，每次依次通过E22、E23和对全部已接受实体的pair detector。E23或pair拒绝只换当前实体的support placement，不换shape；128次耗尽即该世界失败。64个shape proposal均被E22拒绝时同样失败。
-
-正式运行仍为两遍24进程。PASS要求：20个冻结fixture错误为0；512/512个原world identity全部完成；最终E22/E23 violation为0；最终 `obvious_pair_penetration` 为0；shape身份、shape proposal历史、`grounding_rejection`、support proposal、placement与世界JSON在两遍间逐元素一致；硬错误为0；没有实体耗尽64个shape proposals或128个placement proposals。shape grounding rejection rate、pair rejection rate、shape/support proposal count按总体与世界实体数完整报告，但不增设上限以内的附加效率门槛。
-
-E24-v2 PASS后直接解锁E25并沿既有冻结设计执行，不重新设计E25。E24-v2若仍FAIL，则当前完整multi-entity world generation的合法可采样域未达到冻结上限内512/512可构造要求，E25继续锁定。
-
-**E24-v2 正式结果：PASS（E24-v2 关闭，E25 解锁）**
-
-E24-v2在冻结提交 `44ee77b` 和实现提交 `e98e5d2` 后完成两遍24进程正式运行，两遍用时分别为637.553061秒和639.125174秒。512个原world identity全部构造完成，共含2,054个anomaly-proxy实体；固定fixture错误、shape proposal耗尽、placement proposal耗尽、硬错误、最终E22/E23 violation和最终明显实体对互穿均为0。两遍全部保存数组逐元素一致，科学数组哈希为 `c236e63f31605ae45b31f600891a721796b163d18376eb4c4f637dbf82df1c25`。
-
-正式shape流共消费2,062个shape proposals。8个历史E22-invalid seed均在进入support抽样前记为 `grounding_rejection`，随后同一实体槽的第2个shape proposal通过；其余2,046个实体均在第1个shape proposal通过。shape proposal count的minimum、median、mean、$Q_{0.95}$和maximum分别为1、1、1.003895、1和2，grounding rejection rate为8/2,062=0.387973%。没有针对8个seed的专门例外。
-
-2,054个实体共消费2,549个support proposals；每实体support proposal count的minimum、median、mean、$Q_{0.95}$和maximum分别为1、1、1.240993、2和7。拒绝原因包括487次 `observed_normal_deep_penetration` 和8次 `obvious_pair_penetration`；pair rejection占全部support proposals的0.313849%。这些统计只作描述，没有形成新增效率门槛。
-
-独立复算确认512个world seed唯一且覆盖2,100,000–2,100,511，全部canonical world JSON哈希、实体数和placement report长度匹配，shape与support proposal历史错误为0。正式产物 `runs/ajae/e24_v2_pair_collision.npz` 大小1,553,237字节，SHA-256为 `bc339b980a6d644212c761053e9e32e23ad96135ceb5651846691328954b058d`。
-
-E24-v2 PASS允许的结论限定为：**在保持E22、E23和pair detector不变的条件下，逐实体确定性shape rejection/resampling合同能够在64个shape与128个placement上限内构造全部512个冻结多实体世界，最终E22/E23 violation和明显实体对互穿均为0。** E24历史FAIL继续保留，其失败不归因于pair-collision detector。E24-v2至此关闭，E25按既有冻结设计直接解锁。
-
-## 历史 E25｜旧随机放置normal-control的模板、支撑语义与姿态资格
-
-**当前适用边界：以下PASS只适用于旧随机放置control分布，不能替代E25-new。**
-
-**唯一问题**
-
-normal-control 是否来自真实 train/206 正常实例，并且只被放到基本语义允许、已经通过 E22–E24 的位置？
-
-**模板可观察性预检与冻结分支**
-
-从 train/206 全部有实例 ID 的允许类别中确定性提取模板。模板至少有 32 个真实回波并形成有限非退化三维凸包。每类按身份哈希最多保留 64 个；至少 4 个合格模板的类别记为 `active_class`，不足者记为 `inactive_unobservable_class`，不伪造模板。
-
-正式 E25 要求 active classes 合计至少 32 个模板且至少有一个 active class。若某个 broad group 完全不可观察，只缩窄 E25 对 normal-control 类别的结论边界，不自动阻断；E45/E48 将继续检验这种实际可观察模板集合是否足以消除来源混杂并避免 proxy 任务近乎饱和。若总模板不足 32，记 `sample_or_observability_defect`，不得临时引入外部 CAD。
-
-**语义策略**
-
-- vehicle-like：10 car、11 bicycle、15 motorcycle、18 truck、20 other-vehicle，只允许 qualified road=40；
-- person/rider-like：30 person、31 bicyclist、32 motorcyclist，只允许 qualified road=40 或 sidewalk=48；
-- other-ground=49 不作为 normal-control 支撑面；
-- parking=44 在 train/206 中不可观察，不作当前资格主张。
-
-**姿态规则**
-
-模板局部水平主轴由确定性 PCA 给出。vehicle、bicycle、motorcycle 和 rider 类将该主轴对齐到 support frame 的 ego-trajectory 世界切向，再施加冻结的小扰动：vehicle/truck/other-vehicle 为 $U[-15^\circ,15^\circ]$，bicycle/motorcycle/rider 为 $U[-30^\circ,30^\circ]$；person 使用 $U[-\pi,\pi)$。PCA 近各向同性时仍使用轨迹切向，不另开结果依赖分支。所有对象的局部 $+z$ 继续对齐支撑法向。
-
-**正式样本**
-
-1,024 个 control placements；按 active broad group 轮转、类内模板身份哈希抽取，可重复使用模板但 support/pose/material 流独立。每个对象最多 128 次 proposal，并依次执行 E22、E23；多实体 fixture 另执行 E24。
-
-**执行预检与确定性流冻结**
-
-train/206全部449帧的正式预检得到256个模板：car=10、truck=18、other-vehicle=20、person=30各64个，均为active class；bicycle=11、motorcycle=15、bicyclist=31、motorcyclist=32为 `inactive_unobservable_class`。两个broad group均active，模板身份唯一数为256；按类别升序及类内稳定实例身份哈希提取顺序拼接canonical模板JSON身份后，library hash为 `de5dfd765ac7d4fe4bb4644c40ecafdd80cdc31a3d0b6fc4fccd8e84a9fd906b`。
-
-control index $i\in[0,1023]$ 的control seed固定为 $2{,}500{,}000+i$。vehicle-like与person/rider-like broad group按$i$奇偶轮转；组内active semantic按升序轮转，再按模板身份哈希顺序循环。三轴缩放由 `SeedSequence([control_seed,2501])` 独立采样 $U[0.9,1.1]$；姿态扰动由 `SeedSequence([control_seed,2502])` 采样，car/truck/other-vehicle为$U[-15^\circ,15^\circ]$，person为$U[-\pi,\pi)$；material seed为 `control_seed+2503`。support命名空间为 `E25-support-v1`，stream为control index。
-
-每个模板先在局部xy平面执行确定性PCA，最大特征值对应特征向量的首个非零主分量固定为正，并将该水平主轴预旋转到局部+x。每个support proposal的世界朝向使用该support所属源帧的ego-trajectory切向：内部帧用相邻前后帧LiDAR世界位置的中心差分，首尾帧用单边差分，投影到世界xy后单位化；退化时使用该帧位姿的世界+x轴投影。再叠加该control seed固定的姿态扰动。support变化只改变轨迹切向，不重采缩放、模板、材质或扰动。
-
-多实体fixture使用control index 0的接受对象与shape seed 5,000,000起、步长3,072的首个E22合格schema 7 proxy，proxy使用 `E25-mixed-fixture-v1` support流并以control为既有实体，要求最终E22/E23与E24 pair detector全部通过。正式命令、实现身份和产物路径在运行前写入 `protocol.json`。
-
-**PASS 条件**
-
-- active-class 预检满足；
-- accepted placement 中类别—support 违规数为 0；
-- template identity、缩放 $[0.9,1.1]$、姿态与变换错误数为 0；
-- 1,024/1,024 placements 均在 128 次内成功并通过 E22/E23；
-- 多实体 control/proxy fixture 通过 E24；
-- 两遍完整运行逐元素一致。
-
-本节点不要求人类判断“看起来像真实交通场景”。PASS → **E26**。
-
-**实现缺陷与修复记录**
-
-首次完整执行的两遍结果逐元素一致，但只有1,018/1,024个control完成；6个固定control在128次内全部报告 `PlacementError: deterministic surface ray missed the inserted geometry`。失败索引为28、174、412、558、796、942，对应control seed为2,500,028、2,500,174、2,500,412、2,500,558、2,500,796、2,500,942。已完成的1,018个control中，类别—支撑违规、缩放错误、姿态错误、最终E22/E23验证错误和多实体fixture错误均为0。
-
-该次失败归类为 `implementation_defect`，不形成E25科学裁决。确定性表面采样原实现把局部原点当作所有形状的内部点；上述6个真实实例凸包不包含局部原点，因此从原点中心外部球面射向原点的部分射线没有命中凸包。修复只对 `NormalTemplateShape` 使用凸包顶点均值作为严格内部射线汇聚点，并以该点到最远顶点的距离构造外部球面；schema 7形状路径保持不变。新增“局部原点位于凸包外”的回归后，完整测试为45项全部通过。无效产物 `runs/ajae/e25_normal_control.npz` 大小1,994,700字节、SHA-256为 `c254987a0bc05865048e412201065bf88759d3ef3a7bae93c14f8aa4387f6898`，已在同命令重跑前删除。
-
-**历史 E25 正式结果：PASS（仅旧normal-control分布）**
-
-修复后的冻结实现提交为 `963d8cb8bac037de6fd6c6a081ed7152535ab02e`。同一正式命令完成两遍24进程运行，两遍用时分别为97.082646秒和100.313903秒；全部保存数组逐元素一致。1,024/1,024个control均在128次支撑提议内完成，放置耗尽、硬错误、类别—支撑违规、缩放错误、姿态错误、最终E22/E23验证错误和多实体fixture错误均为0。科学数组哈希为 `a4437aeadd3c444145c84c4fa4cc71b801a29ea8d9e7454789f68114613aa7b5`。
-
-独立复算确认control seed精确覆盖2,500,000–2,501,023且无重复；接受类别数为person 512、car 171、truck 171、other-vehicle 170，每个active class实际使用64个唯一模板，总计256个唯一模板。road支撑972个、sidewalk支撑52个，全部vehicle-like对象只使用road，person只使用road或sidewalk。三轴缩放实际范围为0.90003458–1.09972148；vehicle-like姿态扰动最大绝对值为14.988022°，person范围为-179.184416°至179.577023°。每对象支撑提议次数minimum/median/mean/$Q_{0.95}$/maximum为1/1/1.315430/3/8，总计1,347次。control index 0的混合control/proxy fixture哈希为 `f260151c44d8891902bdb6b7b464aa96571897b0311e520e7c5c49f7e1422da9`。
-
-正式产物 `runs/ajae/e25_normal_control.npz` 大小2,002,631字节，SHA-256为 `b2d98a01b68b030fdd3bba348a933ef02733deb0bbebbaf845ab2b5b17b90bee`。E25 PASS允许的结论限定为：**当前从train/206实际可观察到的car、truck、other-vehicle和person凸包模板，可以按冻结类别—支撑策略、缩放与轨迹姿态规则，通过同一E22–E24权威放置路径确定性构造1,024个合法normal-control。** 本结果不对四个inactive类别形成放置资格结论，也不替代E26对完整不可变world-spec和缓存顺序不变性的检查。
-
-## E25-v2｜train/206 真实正常观测引导的 normal-control 位置生成
-
-E25 的历史 PASS 保留；E45A 与 E45A-v2 的正式 FAIL 也永久保留。E25-v2只修改 normal-control 的支撑位置选择，不修改256个train/206真实模板、生产模板身份流、三轴缩放$U[0.9,1.1]$、类别语义、轨迹对齐姿态、E22、E23、E24、renderer、回波概率、强度或schema 7 proxy。train/201继续只用于后续独立检查；E25-v2目标库和位置接受过程禁止读取train/201与E46分类结果。
-
-train/206目标单位冻结为：car=10、truck=18、other-vehicle=20或person=30的真实实例—帧观测；官方距离位于2.5–50米；至少16个真实回波；能够形成有限三维凸包机会；并能绑定到类别允许语义中的最近E21-v4合格支撑。全量预检得到4,827个目标单位，覆盖448帧和49个真实实例；五个距离层计数为[866,2115,1149,580,117]，遮挡$[0,0.25)$、$[0.25,0.75)$、$[0.75,1]$三层计数为[1182,3389,256]。目标库从原始train/206提取一次。
-
-每个control fixture先固定原模板、缩放、姿态扰动和材质。目标proposal只从同raw semantic且存在合法支撑流的206目标中提出；同一模板来源实例优先，其后按与模板来源帧的绝对距离和冻结unit hash排序，每对象最多128个目标proposal。每个目标的支撑位置只取目标帧$pm2$内、support semantic完全相同、距离层完全相同、45度方位区完全相同的E21-v4合格支撑。位置顺序依次使用train/206原始帧8近邻体密度误差、相对参考支撑的世界xy距离、距离误差、方位误差和冻结support hash；每目标最多128个位置proposal。
-
-每个位置仍完整通过权威 `place_object` 的E22与E23；多实体世界继续由E24处理。合法位置在正式sensor与原始回波最近距离竞争下计算距离、median beam、$N_{vis}$、遮挡和局部密度。接受对象必须能在相同raw semantic、support semantic、距离层和45度方位区中匹配至少一个train/206真实正常观测，并同时满足E45A原五项caliper：距离差不超过2米、median beam差不超过4、$|\Delta\log(1+N_{vis})|\le0.25$、遮挡差不超过0.10、$|\Delta\log(1+\mathrm{density})|\le0.25$。不得根据201或E46结果选择对象。
-
-执行优化不改变候选或裁决。材质与E22资格按模板只计算一次；同一模板的support-row放置、同一帧与support-row的传感器结果、目标协变量、精确分层、目标帧射线和身份随机数按完整确定性输入缓存。模板包围球和对象局部包围盒只保守排除绝对不可能命中或深穿透的射线与障碍点。凸包深穿透逐平面块淘汰已被证明位于对象外的点；存在深穿透时保留集合仍包含全局最小SDF，不存在深穿透时继续使用原完整SDF计算精确最小值。前四项已失败的候选不展开完整slot竞争数组；可能通过的紧凑精确trace直接进入原renderer的slot恢复、强度、标签与packing路径，并完成五项E45-unit权威复核。16对象扩大覆盖诊断在128×128固定上限内16/16完成，提议数为[620,2817,10018,33,3695,5009,112,3713,663,2911,12798,13,1192,251,11789,3886]；该诊断只证明当前固定域存在，不作为正式资格结果。
-
-正式E25-v2使用256个fixture，按semantic与模板库顺序让每个冻结模板恰好出现一次；control seed为2,500,000加fixture index。目标提取一次并固定使用4进程；control正式运行一次并固定使用12进程、数值库单线程，每个worker最多处理16个对象后回收。任务按冻结最大proposal数与模板凸包平面数的乘积从高到低调度，使确定性长尾优先开始；保存前恢复原fixture顺序。16进程旧实现曾使同类长尾对象从单进程约6.5分钟延长到至少38.8分钟；8进程旧实现运行75分钟仍未完成且没有生成control产物；优化后按旧两遍规则启动的运行也由用户在形成control产物前终止，以上终止均不形成正式裁决。优化前后对模板0、1、2的完整科学数组哈希均为`7cdb90db8fec53f920c509bb010badbc784c6f867ea7d1944230094111572fe0`；单进程墙钟由100.27秒降至16.45秒。12模板并发检查在4、8、12进程下科学哈希均为`dcb1fe1f8b37c06e655c96a2933f3a4773ea802ea1860c397d7d4750a3665927`；该集合受单个长尾支配，三者墙钟均约153秒。PASS要求：256/256完成且256个模板身份唯一；目标与位置均不耗尽；硬错误、E22/E23错误、精确分层错误和五项caliper错误均为0；接受目标覆盖至少100帧、至少32个真实实例、五个距离层和三个遮挡层。根据用户2026-08-28的决定，正式资格只执行一次，不再形成两遍逐元素复现结论。正式命令为 `python -m src.render qualify-e25-v2 --data-root /home/jasongao/Data/STU --support-pool runs/ajae/e21_v4_support_pool.npz --calibration runs/ajae/calibration.pt --target-output runs/ajae/e25_v2_real_targets.npz --output runs/ajae/e25_v2_normal_control.npz --processes 12`。
-
-E25-v2 PASS后才把同一位置选择函数接入唯一生产 `sample_training_world` 并执行E26-v2；E25-v2 FAIL则保留全部历史结果，E26-v2和E46继续锁定并等待新的设计决策。
-
-**E25-v2 正式结果：FAIL（目标—支撑关联资格定义缺陷；正式 FAIL 保留）**
-
-E25-v2按提交`3acd7b0`规定的单次正式执行完成。目标库提取成功，包含4,827个train/206真实实例—帧单位、448个帧和49个真实实例；control运行墙钟为1,597.157847秒。256个冻结fixture完成254个，硬错误为0，两个未完成对象均耗尽128个目标proposal。失败fixture为169和173，control seed分别为2,500,169和2,500,173，均属于other-vehicle；模板身份分别为`be7c3c90fd4bfd0cf50dd3fc15ca513bc2b43aa45cb819680dfebd3eb769ee38`和`04985717493a2eab40aa4697c3806416486714185617dec49ffeda6770c2185b`。两者各实际评估15,539个支撑候选；放置/条件拒绝分别为10,286/5,253和10,456/5,083。car、truck、other-vehicle、person的完成数分别为64/64、64/64、62/64、64/64。因此直接耗尽集中于other-vehicle类别内两个极端搜索尾部；本结果不支持全类别普遍不可生成，也不支持整个other-vehicle类别不可生成。
-
-仅对254个真正接受的control复算后，中心帧为117，真实实例为27，五个距离层为[5,203,41,5,0]，三个遮挡层为[88,164,2]。因此除254/256完成和2次耗尽外，真实实例少于32且40–50米层为空也独立违反冻结PASS条件。40–50米目标库虽有117个单位，但只有8个具有非空支撑流，且正式搜索实际执行到该层的目标proposal为0；本次不能解释为“远距离候选已经尝试但不可生成”。正式元数据中的距离层[5,203,43,5,0]、遮挡层[88,166,2]和118个帧混入了两个耗尽记录的最后尝试目标；`support_proposals=998,588`也把先前每个目标机械估作128个支撑，真实候选守恒复算为816,594。以上为报告字段缺陷，不改变FAIL，因为裁决同时要求256/256完成、耗尽为0和256个唯一模板。
-
-正式结束后的独立只读审核发现更早的目标库语义缺陷。逐一从train/206原始实例回波重建世界坐标二维凸包，并与`reference_support_pool_index`对应的E21-v4支撑锚点计算精确欧氏距离：4,827个目标中2,556个位于凸包内，2,962个位于凸包内或0.5米内，1,865个超过0.5米，占38.6368%；超过1/2/5/10米的目标分别为1,618/1,242/542/248个，最大26.110105米。person的234个目标全部超过0.5米；40–50米层117个目标中111个超过0.5米。在254个已完成control实际引用的目标中，106个参考支撑超过0.5米，最大14.428549米。独立重现4,827个支撑行选择与正式产物逐项一致，排除了文件损坏、行号误读、语义违规或帧范围违规。
-
-根因位于`_real_instance_support_row`：现有“近邻”判断使用各凸包半空间距离均不超过0.5米，急角处有16个目标被该代理错误接受；更主要的是，当没有候选满足该条件时，函数会从帧±2且类别允许的全部支撑中选择最近者，但没有精确二维凸包距离上限。该参考支撑随后同时决定目标的support semantic和后续support proposal的环境距离排序，因此远距离绑定已经改变E25-v2被测输入，不是无害的记录字段。
-
-E25-v2正式FAIL及产物永久保留，正式runner分类`observation_conditioned_control_generation_failure`也保留；后续审查将科学归因限定为：**目标—支撑关联资格定义缺陷使目标库语义不合格，当前运行不能裁决“真实正常观测引导的normal-control构念是否可行”。** 正式实现执行了已写协议中的无上限最近支撑回退，因此不是实现偏离冻结协议。不得扩大到256×256 proposal、放宽五项caliper、使用train/201目标或只改常数重跑。任何后续目标库修订必须先由课题负责人冻结精确支撑关联定义并版本化；E26-v2、E46和E48继续锁定。旧E45B PASS只适用于旧normal-control分布；任何新版正式control分布都必须重新执行E45B-v2后才能解锁E48。
-
-正式目标产物`runs/ajae/e25_v2_real_targets.npz`大小9,067,765字节，SHA-256为`957860c8b45a6dcc1a35e0815a7c7fcc045ed488d4089155ddda948e8f31d4d4`。正式control产物`runs/ajae/e25_v2_normal_control.npz`大小582,952字节，SHA-256为`7f5b5ec8e18f833d8ccaba58da5a9c037dfcfb73c9bf820003320781f2f8a020`，科学数组哈希为`5af6724f22e680007f5b0c8ededb7e748082e51728dcd41978dddf82db6e7229`。本次单次执行不形成两遍逐元素复现结论。
-
-E25-v2结束后已经修正两项报告实现缺陷，但不回写、不覆盖上述正式FAIL产物和历史元数据。覆盖统计现在只使用`template_identity`非空、`placement_exhaustion_code=0`且`hard_error_code=0`的真正完成control；每个fixture的`support_proposal_count`现在按实际评估候选守恒记为`placement_rejections + condition_rejections + accepted_count`，其中完成fixture的`accepted_count=1`，耗尽fixture为0。用保留产物独立复算得到254个完成control、117帧、27个真实实例、距离层[5,203,41,5,0]、遮挡层[88,164,2]和816,594个实际支撑候选，与前述审查记录完全一致。
-
-## E25-v3｜真实物体位置的局部支撑平面相容性
-
-E25-v2正式FAIL永久保留。后续设计层归因冻结为`qualification specification defect`，不解释为normal-control构念失败。E25-v3第一版曾把目标—支撑关联定义为有限的尺寸感知锚点距离门：类别允许的支撑语义不变；目标帧优先，其后按$f-1,f+1,f-2,f+2$扩展；支撑锚点到目标帧真实实例世界XY凸包使用真实二维欧氏距离。
-
-第一版候选形式为
-
-$$
-d_{\mathrm{support}}\leq\max(0.5\ \mathrm m,\alpha D_{xy}),
-$$
-
-该公式从未冻结为正式资格定义，$D_{xy}$与$\alpha$也从未获得正式数值。以下只读诊断是这条历史候选路线的证据，不是当前E25-v3协议。
-
-**E25-v3支撑可观察性只读诊断：完成；不形成PASS/FAIL**
-
-诊断命令为`python -m src.render diagnose-e25-v3-support --data-root /home/jasongao/Data/STU --support-pool runs/ajae/e21_v4_support_pool.npz --target-bank runs/ajae/e25_v2_real_targets.npz --output runs/ajae/e25_v3_support_observability.npz --processes 24`。运行用时3.415568秒，没有构造或渲染control，没有读取train/201，没有计算或修改E45A caliper。保留的E25-v2目标库只提供4,827个真实目标身份和真实观测协变量；旧`support_semantic`与`reference_support_pool_index`完全未被读取。每个目标均重新读取train/206目标帧实例点，恢复世界坐标XY凸包，并在帧偏移$[0,-1,+1,-2,+2]$中按原类别语义分别计算最近E21-v4支撑。
-
-五个偏移中分别有[4,782,4,775,4,790,4,764,4,799]个目标存在类别合法支撑；五帧并集对4,827/4,827个保留目标均非空。绝对最近支撑位于五个偏移的目标数分别为[2,682,486,442,570,647]；该统计只描述绝对最近位置，不替代未来“同帧合格即优先”的顺序裁决。全体目标绝对最近二维距离的minimum/median/$Q_{0.75}$/$Q_{0.90}$/$Q_{0.95}$/$Q_{0.99}$/maximum分别为0/0/2.114124/5.550483/10.245840/17.295375/26.110105米。统一0.5米门只保留2,962个目标，其中car、truck、other-vehicle、person分别为2,568/3,888、304/571、90/134和0/234。
-
-按类别的最近距离与可见回波XY凸包直径事实如下：
-
-| 类别 | 目标数 | 最近距离 minimum / median / Q75 / Q90 / Q95 / maximum（米） | XY凸包直径 median / Q95 / maximum（米） |
-|---|---:|---:|---:|
-| car=10 | 3,888 | 0 / 0 / 1.792260 / 5.346072 / 11.554986 / 26.110105 | 3.744733 / 4.778113 / 5.284350 |
-| truck=18 | 571 | 0 / 0.112710 / 4.214586 / 7.159506 / 8.715753 / 12.744537 | 4.708992 / 5.599589 / 7.139261 |
-| other-vehicle=20 | 134 | 0 / 0 / 1.297384 / 3.592466 / 3.756260 / 3.888472 | 2.541836 / 2.780045 / 2.803515 |
-| person=30 | 234 | 1.197818 / 1.581225 / 1.981663 / 4.420657 / 4.593703 / 11.937300 | 0.530211 / 0.721785 / 1.230407 |
-
-诊断同时保存三种尚未裁决的可见XY尺寸定义：凸包直径、轴对齐包围框对角线、轴对齐最长跨度。若只把候选公式中的$D_{xy}$代入“可见XY凸包直径”，使每个目标在五帧并集中至少存在一个合法支撑所需的最小$\alpha$分布为：car的median/$Q_{0.75}$/$Q_{0.90}$/$Q_{0.95}$/maximum为0/0.396616/1.800254/3.621911/16.375843；truck为0/1.010811/2.427439/3.050425/4.293221；other-vehicle为0/0.371362/1.901823/2.156307/3.510672；person为2.350944/2.805216/5.381332/6.142926/9.295541，person的minimum为1.047630。以上是对候选公式的描述性反算，不是正式$D_{xy}$或$\alpha$选择结果。
-
-4,827个保留目标在阈值过滤前仍覆盖四个active类别、五个距离层[866,2115,1149,580,117]和三个遮挡层[1182,3389,256]。分类别距离层计数为car [735,1721,824,534,74]、truck [64,148,273,43,43]、other-vehicle [67,44,23,0,0]、person [0,202,29,3,0]；这说明“各维度总体非空”不等于每个类别与每个距离层的笛卡尔积均非空。最终尺寸公式尚未冻结，因此尚不能给出E25-v3语义合格目标库在四类、五个距离层和三个遮挡层上的过滤后覆盖结论。
-
-诊断产物`runs/ajae/e25_v3_support_observability.npz`大小574,508字节，SHA-256为`3d68b829f644540d6ca0392b6dac6b2a907c153b2f6b646c3c783ed9d4f40014`，科学数组哈希为`fcf62d86f7be1e90392135c37e3d3dd6e6d3d3db5e792aee48cdd0b29cd51947`。产物逐目标保存五个偏移的候选数、最近距离、支撑行和支撑语义，以及三种尺寸和对应最小$\alpha$反算值。守恒复核确认4,827个目标恰好各出现一次、24,135个目标—偏移单元中23,910个存在支撑、所有已选支撑的帧偏移和类别语义合法、全局最近距离逐项等于五偏移最小值、三组最小$\alpha$逐项满足候选公式。
-
-上述诊断后，课题负责人正式放弃$D_{xy}+\alpha$距离门，不再选择或研究$D_{xy}$与$\alpha$。理由限定为：支撑锚点是实际可见地面回波的位置，不等同于真实物体脚下的地面；物体自身遮挡可以使可信地面patch的锚点离物体凸包达到1–2米，锚点距离不能直接裁决支撑平面是否可信。
-
-**E25-v3支撑平面相容性只读诊断协议冻结（正式运行前）**
-
-诊断仍只使用上述4,827个train/206真实目标身份以及SHA-256为`0e6e7299157f5e9ced0716f6dd14881c66ba1bca0cc9c372550e56f426ea844d`的E21-v4正式支撑池，不构造或渲染control，不读取train/201，不计算E45A caliper或E46结果。旧目标库的`support_semantic`与`reference_support_pool_index`禁止进入新裁决。
-
-候选patch必须已经是E21-v4的`qualified=true`条目，因此其三尺度支持数、中心平面median residual不大于0.03米、$Q_{0.95}$ residual不大于0.08米、小/大尺度法向差不大于$5^\circ$、锚点高度差不大于0.08米、有限单位法向与正$z$分量全部原样继承并在加载时复核。类别允许语义保持不变：car、truck和other-vehicle只允许road=40；person允许road=40或sidewalk=48。
-
-每个目标严格按帧偏移$[0,-1,+1,-2,+2]$搜索。在同一帧偏移内，先按支撑锚点到目标帧真实实例闭合XY凸包的精确二维欧氏距离排序，再按E21-v4冻结`selection_hash`打破并列。距离只用于确定性顺序和结果描述，不设任何距离门。对每个候选，把E21-v4的小尺度和大尺度平面分别延伸到目标XY凸包；由于两平面预测高度差在凸多边形上是仿射函数，在全部凸包顶点取最大绝对差即可覆盖整个足迹。候选必须满足：
-
-1. 足迹上小/大尺度预测地面高度最大差不超过E21冻结的0.08米；
-2. 目标帧真实可见物体点中，位于中央支撑平面下方超过0.02米的比例不超过E22-v2冻结的0.02。
-
-第一个同时满足两项的候选成为该目标的相容支撑平面；同帧存在相容平面时不得查看后续帧。若五个偏移没有类别合法patch，拒绝原因为`no_semantically_legal_patch`；存在patch但没有任何候选满足足迹外推稳定性时为`no_projection_stable_patch`；至少有稳定外推候选但全部明显切入真实可见物体时为`visible_geometry_incompatible`。
-
-锚点到物体凸包距离、锚点距离除以E21中心半径、平面坡度、最低可见点相对中央平面的有符号高度、可见物体沿法向的高度范围，以及“最低可见间隙是否大于整个可见高度范围”全部只作描述，不参与接受。这里不新增最低可见间隙上限，因为现有协议没有能够区分脚底/车底自遮挡和错误低平面的冻结数值界限。
-
-诊断必须报告四个类别各自保留与拒绝数量、五个距离层保留数量、三个遮挡层保留数量、三类拒绝原因、所选帧偏移与支撑语义、实际评估候选数、锚点距离和上述平面/可见物体关系量。它不形成E25-v3生成资格PASS/FAIL；只有结果仍覆盖四个active类别、五个总体距离层与三个总体遮挡层后，才具备提交给课题负责人决定是否冻结目标库的事实前提。当前仍不运行生成器，E26-v2、E46和E48继续锁定。
-
-正式只读命令冻结为`python -m src.render diagnose-e25-v3-plane --data-root /home/jasongao/Data/STU --support-pool runs/ajae/e21_v4_support_pool.npz --target-bank runs/ajae/e25_v2_real_targets.npz --output runs/ajae/e25_v3_plane_compatibility.npz --processes 24`。
-
-**E25-v3支撑平面相容性只读诊断：完成；不形成PASS/FAIL**
-
-运行前协议与实现以提交`5b1b0f4`推送到远端后，正式命令使用24进程执行一次，数值库各限单线程，用时3.293789秒。4,827个固定目标中4,825个在上述两项相容性条件下找到候选，2个被拒绝；两者均为car、20–30米、中遮挡目标，分别来自frame 232/instance 64和frame 231/instance 64，拒绝原因均为`visible_geometry_incompatible`。分类别保留为car 3,886/3,888、truck 571/571、other-vehicle 134/134、person 234/234；五个总体距离层保留数为[866,2115,1147,580,117]，三个总体遮挡层保留数为[1182,3387,256]。所选帧偏移$[0,-1,+1,-2,+2]$的计数为[4768,13,17,9,18]；road=40与sidewalk=48分别被选4,797和28次。
-
-五个偏移合计存在39,681,306个类别合法候选，确定性前缀实际评估121,360个。记账严格守恒为55,892个足迹外推稳定性拒绝、60,643个可见几何埋入拒绝和4,825个接受。全部接受项的足迹小/大尺度最大预测高度差不超过0.08米，可见点明显位于中央平面下方的比例不超过0.02；全部所选支撑的来源帧、类别语义和保存行号逐项合法。
-
-描述量同时表明，这两项条件没有把“附近且可信”完整操作化。4,825个接受项中，锚点到目标XY凸包距离超过1/2/5/10/20/50米的数量分别为1,904/1,644/1,042/461/47/3，最大67.849019米；总体median/$Q_{0.90}$/$Q_{0.95}$/$Q_{0.99}$为0.110440/9.680502/15.059216/19.858754米。person的234个目标虽全部满足两项条件，但锚点距离minimum/median/$Q_{0.95}$/maximum为1.235701/3.378346/6.309326/20.628190米。另有341个接受项的最低可见点到预测平面的正间隙大于该物体全部可见点沿平面法向的高度范围，其中car/truck/other-vehicle/person分别为179/22/13/127个；最大最低可见点正间隙为5.282527米。
-
-因此，本次诊断只确认了“两尺度平面在目标足迹上的预测高度一致且平面没有明显切入多数可见物体点”。它不能把这4,825项解释为4,825张可信的物体脚下局部支撑平面，因为协议未对局部空间有效域或过大正间隙给出裁决，而正式结果确实接受了10–67.8米外的patch和最低可见点高于预测平面5.28米的实例。四类、五个总体距离层和三个总体遮挡层虽仍非空，但这一必要覆盖事实不足以冻结E25-v3目标库。当前目标库未重建，normal-control生成器未运行，train/201未读取，E26-v2、E46和E48继续锁定；E25-v3停在需要重新确定“可信局部支撑平面”操作定义的设计决策点。
-
-产物`runs/ajae/e25_v3_plane_compatibility.npz`大小770,483字节，SHA-256为`3aa2d81c54232be1b5c59ee85081b27fcb8236fd693cd6fc5f623051cb47fda3`，科学数组哈希为`4d19afc193c623e50fd675585ea3be230063640f18e162895d0aeb96b3c15a71`。独立复核确认目标身份唯一且完整、五偏移候选数与E21-v4池逐项一致、接受行的帧偏移与类别语义正确、两项数值界限逐项满足、拒绝哨兵与三类错误码一致、候选评估守恒、保存科学数组哈希与元数据一致。
-
-**E25-v3可信局部支撑定义：课题负责人最终冻结；只读目标资格尚未运行**
-
-前述无局部范围诊断永久保留，不改写为PASS。课题负责人据此最终冻结：一张E21-v4 patch只能在它已经验证过的最大局部范围内作为真实目标的支撑证据。对patch中心半径
-
-$$
-R(d)=\operatorname{clip}(d/20,1,3)\ \mathrm m,
-$$
-
-其锚点到目标帧真实实例闭合世界XY凸包的精确二维欧氏距离必须满足
-
-$$
-d(\text{support anchor},\text{object footprint})\leq1.25R(d).
-$$
-
-这里的$1.25$直接等于E21-v4三尺度估计器已经使用的最大尺度，不根据E25-v3输出、person保留数、生成结果或E45A/E46结果选择。不得再引入$D_{xy}$、$\alpha$、统一3米/5米门或其他经验距离阈值。
-
-目标仍严格按帧偏移$[0,-1,+1,-2,+2]$搜索类别合法的E21-v4 patch；同一偏移内按精确锚点—凸包距离和E21冻结`selection_hash`排序。候选必须依次满足：类别语义合法；精确距离不超过该patch的$1.25R(d)$；目标足迹上E21小/大尺度预测高度最大差不超过0.08米；目标可见点中低于中央平面超过0.02米的比例不超过0.02。第一个满足全部条件的patch成为目标的唯一可信局部支撑。同帧存在接受项时不得查看后续偏移。
-
-只读资格继续使用原4,827个train/206目标身份和真实观测协变量，禁止使用旧`support_semantic`与`reference_support_pool_index`，不重建或渲染control，不读取train/201。拒绝原因固定为`no_semantically_legal_patch`、`outside_e21_local_validity`、`no_projection_stable_patch`和`visible_geometry_incompatible`。
-
-资格必须报告car、truck、other-vehicle和person各自保留数，五个距离层、三个遮挡层、唯一真实实例数和唯一帧数。PASS的必要覆盖条件直接继承E25-v2：四个active类别均非空；五个距离层均非空；三个遮挡层均非空；至少100个帧和至少32个真实实例。除此以外不增加目标数量或效率门。PASS后冻结该定义并重建E25-v3 target bank；FAIL则表明现有E21-v4可观测局部地面不能为冻结目标域提供所需覆盖，不扩大$1.25R(d)$。
-
-正式命令冻结为`python -m src.render qualify-e25-v3-targets --data-root /home/jasongao/Data/STU --support-pool runs/ajae/e21_v4_support_pool.npz --target-bank runs/ajae/e25_v2_real_targets.npz --output runs/ajae/e25_v3_target_qualification.npz --processes 24`。正式执行一次，24个进程、每进程数值库单线程；GPU不参与。当前目标库尚未重建，normal-control生成器尚未运行，E26-v2、E46和E48继续锁定。
-
-**E25-v3可信局部支撑目标资格：PASS**
-
-运行前实现与协议提交`84c3655`已经推送。正式24进程只读资格用时3.571991秒，4,827个固定目标保留3,267个、拒绝1,560个。拒绝分解为：没有类别合法patch 0，五帧内没有任何patch进入其自身$1.25R(d)$局部有效范围1,509，没有局部候选满足外推稳定性14，存在稳定局部候选但均明显切入可见物体37。全部4,690次局部候选相容性评估严格守恒为922次外推稳定性拒绝、501次可见几何拒绝和3,267次接受。
-
-保留目标覆盖423帧和37个真实语义—实例身份；car、truck、other-vehicle和person分别保留2,830/3,888、333/571、100/134和4/234。五个总体距离层为[861,1532,552,302,20]，三个总体遮挡层为[787,2363,117]，四类、五层和三层均非空，帧数不低于100且实例数不低于32，因此满足运行前唯一覆盖PASS条件。
-
-分类别可观察边界同时保留：car覆盖423帧、31个实例，距离层[730,1408,397,275,20]、遮挡层[676,2037,117]；truck覆盖268帧、4个实例，距离层[64,87,155,27,0]、遮挡层[85,248,0]；other-vehicle覆盖100帧、1个实例，距离层[67,33,0,0,0]、遮挡层[22,78,0]；person覆盖4帧、1个实例，距离层[0,4,0,0,0]、遮挡层[4,0,0]。该PASS只裁决总体目标库具备后续冻结覆盖，不形成“每个类别均覆盖五距离层或三遮挡层”的主张。
-
-接受项锚点—凸包距离maximum为2.288462米，距离除以E21中心半径的maximum为1.247676，距离到$1.25R(d)$边界的最小正余量为0.002324米；全部接受项逐项满足局部范围、0.08米外推稳定和0.02/0.02可见切入条件。所选帧偏移$[0,-1,+1,-2,+2]$计数为[3020,101,58,49,39]。所选支撑全部为road=40；没有sidewalk=48进入最终接受项，这是正式过滤结果，不修改类别允许语义。
-
-产物`runs/ajae/e25_v3_target_qualification.npz`大小654,276字节，SHA-256为`cb3a5749951b813d72e7ea7de1b7377398f867c5a3d6dab3e9af346f7afa4b7c`，科学数组哈希为`d77d2da9a3d648f31941219edc61f26f19e3cec601290e36b54eabc58554d7f5`。独立复核确认4,827个身份完整唯一、五偏移类别候选数与E21-v4逐项一致、所选行的帧与语义合法、$R(d)$和$1.25R(d)$逐项满足、三条件与拒绝哨兵正确、候选记账和科学哈希一致。
-
-根据预先冻结的PASS路线，E25-v3可信局部支撑定义至此关闭，不再扩大或调整。下一步只把这3,267个接受身份及其唯一所选E21-v4支撑写入E25-v3 target bank，然后以未改变的模板、随机流、E22–E24、renderer和E45A五项caliper重新运行normal-control资格。此时尚未形成新的normal-control结果。
-
-**E25-v3目标库重建与normal-control资格：运行前冻结**
-
-目标库重建只执行一次确定性筛选，不重新读取或重新提取train/206实例。输入固定为SHA-256为`957860c8b45a6dcc1a35e0815a7c7fcc045ed488d4089155ddda948e8f31d4d4`的历史目标库和SHA-256为`cb3a5749951b813d72e7ea7de1b7377398f867c5a3d6dab3e9af346f7afa4b7c`的E25-v3资格产物。按源目标库原顺序保留`compatible=true`的行；`frame_id`、真实类别/实例、距离、beam、可见回波、遮挡、局部密度、点特征和单位身份全部逐元素继承。旧`support_semantic`和`reference_support_pool_index`被资格产物的`selected_support_semantic`与`selected_support_row`直接替换，不允许再次寻找近邻或重新排序目标。
-
-构建时必须复算两个输入的科学数组哈希，检查资格产物绑定的源文件SHA-256，并要求`frame_id`、`real_semantic`、`real_instance`、`range_bin`、`O_hat`、`Nvis`和`unit_hash`七组数组逐元素对应；`compatible`必须等于`rejection_code==0`，接受/拒绝支撑行的哨兵和类别语义必须合法。构建结果必须精确包含3,267行、423帧、37个真实语义—实例身份，类别计数[2830,333,100,4]、距离层[861,1532,552,302,20]、遮挡层[787,2363,117]。命令冻结为`python -m src.render build-e25-v3-target-bank --source-target-bank runs/ajae/e25_v2_real_targets.npz --target-qualification runs/ajae/e25_v3_target_qualification.npz --output runs/ajae/e25_v3_real_targets.npz`。
-
-正式normal-control仍使用256个fixture，使256个冻结train/206模板按原类别与库顺序各出现一次；control seed仍为2,500,000–2,500,255。每个fixture最多128个目标proposal，每个目标最多128个支撑proposal。模板、三轴缩放$U[0.9,1.1]$、姿态、材质、目标与支撑排序公式、E22、E23、E24、renderer、回波概率、强度、E45A精确分层与五项caliper、schema 7 proxy全部不变；唯一改变是可用目标及其环境参考支撑来自E25-v3目标库。旧无上限最近邻目标提取路径从当前正式源码删除，runner禁止在运行时重建目标库。
-
-正式资格固定使用12个fork进程、每个数值库单线程、既有最坏成本优先调度和shape/frame/placement/sensor缓存，只执行一次，不形成两遍复现结论。PASS要求256/256完成、256个模板身份唯一、硬错误与目标/支撑耗尽均为0、精确分层和五项caliper错误均为0；接受对象至少覆盖100帧、32个真实语义—实例身份、五个总体距离层和三个总体遮挡层。命令冻结为`python -m src.render qualify-e25-v3-normal-control --data-root /home/jasongao/Data/STU --support-pool runs/ajae/e21_v4_support_pool.npz --calibration runs/ajae/calibration.pt --target-bank runs/ajae/e25_v3_real_targets.npz --output runs/ajae/e25_v3_normal_control.npz --processes 12`。FAIL时保留结果并停在E25-v3等待新的课题负责人决策，不修改$1.25R(d)$、128×128上限或caliper；PASS后才修改唯一生产normal-control选择器并进入E26-v2及受control分布影响的后续重跑。
-
-**E25-v3目标库重建：PASS**
-
-运行前提交`be0a8f7`推送后执行冻结构建命令。产物精确包含3,267个目标、423帧和37个真实语义—实例身份；类别、距离层和遮挡层分别为[2830,333,100,4]、[861,1532,552,302,20]和[787,2363,117]，支撑语义全部为road=40。科学数组哈希为`16d75e67995bd216e3f802a6a32a19b0faecc9bfa841c6a680b01f13f6a8cf44`，与运行前独立复算的预期值完全一致。
-
-独立复核确认3,267行保持源库顺序；除`support_semantic`和`reference_support_pool_index`外的17个字段均与源库`compatible=true`子集逐元素一致；两个支撑字段分别与资格产物所选语义和行逐元素一致。全部参考行位于E21-v4合格池范围内，支撑语义、类别规则与帧偏移错误均为0；偏移$[0,-1,+1,-2,+2]$计数仍为[3020,101,58,49,39]。正式目标库`runs/ajae/e25_v3_real_targets.npz`大小6,800,894字节，SHA-256为`0ae2f4926f1cb8a71b04af3d43d3d1d9feb17bb36fed821bab42b531cae3a360`。目标库重建关闭；下一步直接执行已冻结的E25-v3 normal-control资格。
-
-**E25-v3 normal-control资格：FAIL；状态机停止**
-
-正式运行基于已推送提交`a97a6c7`，其中生成实现冻结于`be0a8f7`。命令严格使用12个fork工作进程，所有数值库各限单线程，只执行一次；没有自动重试或第二遍复现。运行用时1,698.701733秒。256个固定fixture中208个完成、48个在冻结的128个目标proposal与每目标128个支撑proposal上限内耗尽；硬错误为0，完成对象的精确分层与五项caliper错误为0。失败分类按运行前冻结名称记录为`local_support_conditioned_control_generation_failure`。
-
-按冻结模板类别分解如下。`support proposals`是实际评估数，逐类严格等于放置拒绝、条件拒绝与成功接受数之和。
-
-| 模板类别 | 完成/总数 | 耗尽 | target proposals | support proposals | placement rejections | condition rejections |
-|---|---:|---:|---:|---:|---:|---:|
-| car=10 | 64/64 | 0 | 791 | 80,404 | 57,599 | 22,741 |
-| truck=18 | 63/64 | 1 | 3,334 | 315,046 | 230,009 | 84,974 |
-| other-vehicle=20 | 62/64 | 2 | 3,453 | 402,006 | 318,166 | 83,778 |
-| person=30 | 19/64 | 45 | 199 | 23,914 | 3,176 | 20,719 |
-| 合计 | 208/256 | 48 | 7,777 | 821,370 | 608,950 | 212,212 |
-
-person目标资格的已知数据边界在正式生成中直接显现：E25-v3目标库只保留4个person目标，且全部位于10–20米与低遮挡层；四个目标均具有非空支撑流。45个失败person fixture各完整遍历4个目标和共512个支撑proposal后耗尽，19个成功person fixture均在第一个目标proposal内接受。另一个耗尽为fixture 68、seed 2,500,068的truck模板，遍历128个目标和10,670个支撑proposal；其余两个为fixture 169与173、seed 2,500,169与2,500,173的other-vehicle模板，各遍历该类全部100个目标和11,964个支撑proposal。失败行的`target_*`字段只保存最后尝试目标，不能把该字段所在距离或遮挡层解释为全部搜索成本的来源。
-
-48个耗尽fixture共实际评估57,638个支撑proposal，分解为27,870次放置拒绝和29,768次条件拒绝，逐fixture均与冻结支撑流长度一致。40–50米空层的执行边界另行重建：E25-v3目标库中的20个远距目标全部为car，其中只有6个具有非空支撑流，六个流合计9个支撑候选；它们在64个car模板确定性目标序列中的最好名次分别为167、210、211、230、245和297，全部位于前128个目标的冻结搜索前缀之后。因此正式运行没有访问任何40–50米目标，也没有对该层执行任何放置或传感器条件裁决；零接受不能改写为“远距候选已经尝试但被拒绝”。
-
-这48个fixture实际访问508个目标proposal；按目标距离层为[134,285,89,0,0]，按目标遮挡层为[261,247,0]。相应57,638个支撑proposal按其提议目标距离层分解为[15480,35166,6992,0,0]，按遮挡层分解为[32892,24746,0]。这些是对真实执行搜索前缀的分层，不是失败行最终保存的单个`target_*`字段分层。
-
-条件违反计数允许同一候选同时违反多个caliper，因此只能分别描述，不能相加成互斥归因。45个失败person fixture的20,015次条件拒绝中，`log(1+Nvis)`违反累计19,100次；只有10个失败模板曾在至少一个候选上单独达到该caliper，只有6个曾通过前四项预检并进入局部密度比较，其余39个没有进入最后一项比较。失败person候选的零有效回波计数为0。truck与两个other-vehicle耗尽项的五个逐维最好值也可能来自不同候选，不能据此拼成一个联合可接受候选。产物没有保存27,870次`PlacementError`的内部拒绝类型，所以不能再把放置拒绝细分为落地、观测碰撞或其他放置原因。
-
-208个接受对象覆盖90个中心帧和26个真实语义—实例身份，五个总体距离层计数为[7,163,27,11,0]，三个总体遮挡层计数为[37,169,2]。因此正式FAIL同时触发：未完成256/256、存在48个耗尽、完整模板身份只有208个、中心帧少于100、真实身份少于32、40–50米层为空。硬错误为0、完成对象的caliper错误为0且三个遮挡层均非空，这些局部条件成立，但不能覆盖任何一个已触发的整体FAIL条件。
-
-独立复核确认：`control_seed`逐元素严格等于2,500,000–2,500,255；256行目标身份字段均与E25-v3目标库中保存的`target_index`一致；208个成功行均有可解析且规范往返一致的`normal-control`对象和放置记录，48个失败行均为`hard_error_code=0`与`placement_exhaustion_code=1`；成功行逐行满足`support_proposal_count=placement_rejections+condition_rejections+1`，失败行逐行满足二者之和；元数据中的完成数、耗尽数、帧数、实例数、分层计数和全部proposal总数均复算一致。208个完成对象的模板身份、缩放、姿态、材质、对象编号、支撑身份、E22数值、旋转和平移均独立复现；使用train/206真实观测障碍重算E23，深穿透为0，最小障碍距离与保存值逐项一致。科学数组哈希为`b8d04778024e2c6b858b1361c395b2763a1e0b5655ab777c08578b798c81ed12`。
-
-完成行的`target_index`语义是渲染后按五项caliper选出的匹配目标，不一定是产生当前placement支撑流的提议目标；208个完成对象中两者相同8个、不同200个。独立重建确认全部208个接受支撑均属于其真实提议目标的冻结支撑流。因此不能用保存的匹配目标帧直接检查placement相对提议目标的帧偏移。
-
-正式产物`runs/ajae/e25_v3_normal_control.npz`大小524,004字节，SHA-256为`e31766c22ded4dcdf312540847944cb70a124c80b36af799f350734b0fb7aa98`。E25-v3目标资格PASS和目标库重建PASS继续保留，但它们只建立目标库的总体可观察覆盖与字段正确性，不能改写本次normal-control生成资格FAIL。本次证据也不能单独推出renderer失败、E21-v4支撑资格失败、person全类几何不可放或normal-control整体构念不可行；没有第二遍正式运行证据。按运行前冻结的FAIL路线，$1.25R(d)$目标规则、128×128 proposal上限和E45A caliper均未修改；E26-v2、依赖新版control分布的E38–E45A、E45B-v2、E46和E48保持锁定，当前停在E25-v3等待课题负责人新决策。
-
-## E25-new｜覆盖导向的合法 normal-control 生成资格
-
-**状态：正式PASS；E26-v2已解锁并冻结。E25-v2与E25-v3 FAIL永久保留。**
-
-**唯一问题**
-
-在不把真实正常对象的五维观测匹配条件塞入生成器的前提下，现有256个train/206规范正常模板能否各生成一个满足E21–E24、传感器可见且落入预先指定官方距离层的normal-control？
-
-**职责边界**
-
-E25-new只裁决“正常对照是否合法、可见并覆盖完整官方距离域”。它不读取真实目标，不在生成时执行E45A的距离、beam、可见点数、遮挡或局部密度caliper，也不裁决真实正常对象与合成正常对象是否具有共同支持。E45A-new裁决共同支持，E46裁决严格匹配条件下来源是否仍可区分。train/201、E45A结果和E46分类器输出均禁止进入E25-new。
-
-**固定模板与距离身份**
-
-规范模板仍由`extract_normal_template_library`从train/206提取，并保持当前规范顺序：car、truck、other-vehicle和person各64个，共256个。fixture index $i=0,\ldots,255$与模板索引一一对应；每个模板恰好使用一次，不替换难生成模板，不重复模板补数。control seed固定为$2{,}500{,}000+i$。
-
-每个fixture的距离层在运行前固定为
-
-$$
-b_i=i\bmod5,
-$$
-
-五个距离层依次为$[2.5,10)$、$[10,20)$、$[20,30)$、$[30,40)$和$[40,50]$米，总分配数严格为$[52,51,51,51,51]$。按规范类别顺序产生的描述性类别×距离分配为：car $[13,13,13,13,12]$、truck $[13,13,13,12,13]$、other-vehicle $[13,13,12,13,13]$、person $[13,12,13,13,13]$；这些是索引循环的确定结果，不另设类别×距离最低数量门。
-
-最终距离身份只由权威renderer输出中该对象全部可见`normal_control_mask`回波的official range中位数裁决。支撑锚点距离只用于缩小候选位置搜索，不能替代渲染后的距离身份。若固定proposal流内无法得到至少一个可见回波且最终中位距离属于$b_i$的合法对象，该fixture记为指定距离层耗尽并直接FAIL；不得退到其他距离层。
-
-**唯一生成路径**
-
-类别—支撑规则不变：car、truck和other-vehicle只允许road=40，person允许road=40或sidewalk=48。每个fixture只从类别合法且支撑锚点位于指定距离层的E21-v4合格行中选候选。令`namespace_u64`为`SHA-256("E25-new-support-v1")`前8字节的小端整数，`salt=namespace_u64 XOR uint64(i+1)*uint64(0xD1B54A32D192ED03)`，候选键为`splitmix64(selection_hash XOR salt)`；按`(key,pool_index)`从小到大选出最多128行。锚点分层只提高搜索效率；最终仍以渲染回波复核。
-
-缩放、姿态和材质流继承最近的正式E25-v3实现：缩放使用`default_rng(SeedSequence([control_seed+2,2501])).uniform(0.9,1.1,size=3)`；车辆类姿态扰动为$[-15^\circ,15^\circ]$、person为$[-\pi,\pi)$，使用`SeedSequence([control_seed,2502])`；材质seed为`control_seed+2503`。每个候选只调用唯一`place_object`路径执行E21支撑身份、E22 grounding、E23已观测正常几何碰撞和存在其他实体时的E24实体对碰撞。E25-new的256个fixture本身均为单实体；多实体生产资格在E26-v2继续完整裁决。
-
-合法placement随后进入未改变的传感器与最近回波流程：正式`return_chance`、固定身份均匀随机数、原生回波竞争和`render_frame`打包。无可见normal-control回波或最终距离层不符时，只拒绝当前placement并沿同一冻结支撑流继续；模板、缩放、姿态、材质和指定距离层均不重采。
-
-**等价加速与完整复核**
-
-正式运行固定使用24个fork进程，每个进程的BLAS与数值库限单线程。类别语义与锚点距离层预先分区，128项确定性最小键使用向量化选择。每个placement先根据对象包围球和已校准beam origin的最大偏移构造保守角域；该角域只能形成可能命中射线的严格超集，不能排除可能命中的射线。回波随机数只为实际候选slot计算。每个最终接受候选都必须再由完整131,072射线的正式回波竞争和`render_frame`独立重算；最终距离、可见回波、对象身份和描述统计以该完整结果为准。逐worker只缓存有限数量的不可变帧射线变换，不持久化大型中间数组。
-
-**PASS条件**
-
-- 256/256个fixture全部完成，256个规范模板身份各出现一次；
-- 每个fixture最终渲染回波中位official range严格落入预先指定层，总计数为$[52,51,51,51,51]$；
-- 每个fixture至少有一个可见normal-control回波；
-- 所有接受支撑均属于E21-v4合格池，类别—支撑语义错误为0；
-- E22 grounding、E23已观测正常碰撞、缩放、姿态、材质和renderer合同错误均为0；
-- 存在多实体时仍调用E24；E25-new单实体fixture不另设重复E24科学门；
-- hard error与指定距离层耗尽均为0；proposal记账不另设科学硬门，任何记账不守恒均归入hard error并分类为协议实现缺陷。
-
-八个$45^\circ$方位扇区的总体与分类别计数、最大扇区计数和占比，三个遮挡层$[0,0.25)$、$[0.25,0.75)$、$[0.75,1]$，可见回波数以及各类拒绝数只作描述，不参与PASS/FAIL。不设置真实目标、median beam、$N_{vis}$、遮挡、局部密度caliper，不设置方位或遮挡最低数量。距离循环是用于构造反作弊正常对照的覆盖导向采样，不是对真实正常场景距离分布的估计。
-
-正式资格只执行一次，不自动重试，不形成两遍逐元素复现结论。冻结命令为`python -m src.render qualify-e25-new-normal-control --data-root /home/jasongao/Data/STU --support-pool runs/ajae/e21_v4_support_pool.npz --calibration runs/ajae/calibration.pt --output runs/ajae/e25_new_normal_control.npz --processes 24`。
-
-**正式结果：PASS**
-
-唯一一次正式运行在实现冻结提交`e9ee028f48ca43d5191e37373a23722cfeabec66`上完成，墙钟时间27.831488263秒。256/256个fixture全部完成，尝试模板身份和完成模板身份均为256个且各出现一次；car、truck、other-vehicle和person各64个。预分配距离层与最终渲染回波中位official range层均严格为$[52,51,51,51,51]$，逐fixture距离层错误为0；分类别距离计数分别为car $[13,13,13,13,12]$、truck $[13,13,13,12,13]$、other-vehicle $[13,13,12,13,13]$和person $[13,12,13,13,13]$。
-
-全部fixture均至少产生一个可见normal-control回波。可见回波数最小值、中位数、均值、95%分位数和最大值分别为1、53、269.41015625、1472和4927。八个方位扇区总体计数为$[36,43,15,40,52,9,10,51]$，最大扇区52项，占0.203125；三个遮挡层总体计数为$[204,50,2]$，没有未定义项。这些量只作描述，没有参与PASS裁决。
-
-实际评估408个支撑proposal，严格分解为256次接受、119次物理放置拒绝、0次无可见回波拒绝和33次最终距离层拒绝。指定距离层耗尽、hard error、proposal记账错误、支撑身份错误、类别—支撑语义错误、缩放错误、姿态错误、E22 grounding错误、E23碰撞错误、材质错误、最终距离错误和可见性错误均为0；E25-new为单实体fixture，因此没有额外多实体E24事件。
-
-正式产物为`runs/ajae/e25_new_normal_control.npz`，大小580,668字节，SHA-256为`30fc7d1ecd60d005cb18c60ac81b1c7335e2121fcd3f1da5f440b5387a747b19`，科学数组哈希为`4625b8e01be6ba73d41af96e56a530d361c7ecfe5cd9f5c89a0daec64d9fa31a`。E21-v4支撑池输入SHA-256为`0e6e7299157f5e9ced0716f6dd14881c66ba1bca0cc9c372550e56f426ea844d`，传感器标定输入SHA-256为`b532b7e04d9025233b2768b8fb36287e477f62f20a3ff685a62f4a4a29bfefe0`。
-
-结束后的独立只读复核没有重新运行实验或重采对象。复核逐项确认256个fixture、seed、模板身份、指定层和实际层；重新解析并规范往返全部`ObjectSpec`与`PlacementRecord`；用冻结种子复现材质；从E21-v4池核对支撑行、帧、语义和类别合法性；对全部256个shape重算E22连续grounding量；重算遮挡层、方位统计、proposal守恒和科学数组哈希。所有比较均一致，接受记录中E23最小障碍SDF低于$-0.05$米的数量为0。该复核只验证已保存正式产物，不构成第二遍正式运行。
-
-E25-new由此只建立：256个规范正常模板能够各生成一个E21–E23合法、传感器可见、并按预定索引覆盖五个官方距离层的normal-control。它没有建立真实正常距离分布、real/control共同支持或来源不可区分性；这些问题仍分别由E45A-new和E46裁决。
-
-PASS后立即把该选择器接入唯一生产world builder，执行E26-v2；随后刷新E38–E44中依赖control分布的证据，执行E45A-new与E45B-v2。E45A-new PASS解锁E46，E45B-v2必须在E48前PASS。FAIL时永久保留该次结果并停下等待课题负责人决策，不修改模板、距离分配、proposal上限、renderer或下游匹配条件。
-
-## E26-v2｜新版 normal-control 分布下的唯一生产 world builder
-
-**状态：正式PASS；新版normal-control分布下的Phase 2关闭，E38刷新已解锁。**
-
-E26-v2只回答：E25-new的覆盖导向normal-control选择器接入唯一`sample_training_world`后，能否在既有冻结世界身份和有限上限内构造完整、不可变且全部实体合法的多实体训练世界。它不重新裁决E27–E37的几何与传感器机械公式，也不加入E45A的真实目标、median beam、$N_{vis}$、遮挡或局部密度匹配门。
-
-世界身份完整继承历史E26：world seed固定为2,600,000–2,600,255，index 0–63、64–127、128–191和192–255分别为pure-normal、control-only、mixed和anomaly-only，各64个。实体数量继续由`_training_entity_counts(world_type,world_seed)`冻结；第$a$次完整world attempt使用`world_seed+1,000,003a`，最多48次，第$j$个实体seed为`attempt_seed+10,007(j+1)`，标签顺序沿同一attempt随机流。48次是单个世界生成器内部的有限proposal合同，不是正式实验自动重跑。
-
-anomaly-proxy路径完全不变：shape seed为`entity_seed+3+3072q`，最多64个shape proposal，先通过E22再进入既有最多128个支撑proposal，并继续执行E23与E24。normal-control保留旧生产随机身份：template、scale、material和pose seed分别为`entity_seed+1`、`entity_seed+2`、`entity_seed+11`和`entity_seed+31`；模板RNG只调用一次并有放回抽取规范256模板。若抽中规范模板索引$i$，该次生产control的指定距离层固定为$i\bmod5$，直接复用E25-new对应模板索引的合法语义、指定锚点距离层、固定哈希键和最多128项支撑流，不新增随机数，不允许换模板或换距离层。
-
-每个normal-control候选仍只调用唯一`place_object`，先执行E21支撑身份、E22 grounding、E23已观测正常碰撞和相对当前已有实体的E24 pair collision。随后在候选自身的支撑帧中，以正式`world_seed`、实际`object_id`和当前部分世界执行相同传感器概率、随机身份、最近回波竞争与`render_frame`。候选必须至少产生一个由自身object ID赢得的normal-control回波，并使这些最终float32打包回波的中位official range落入$i\bmod5$；失败只拒绝当前支撑proposal。
-
-全部实体完成后，对最终完整世界中的每个normal-control再次在其自身支撑帧复核相同条件。后放实体若遮挡已有control并使可见回波为0或中位距离换层，本次完整world attempt失败并按冻结seed从头进入下一attempt；不得在同一attempt内移动旧实体、只替换后继实体或回退到其他距离层。`RenderError`、帧身份错误、紧凑与完整renderer不一致及其他接口错误不得作为正常attempt失败吞掉，必须上浮为hard error。
-
-等价加速只改变执行结构：E25-new支撑流按规范模板索引预计算并只读复用；正式slot ID显式传入同一`_accepted_object_hits`以在保守候选角域内执行紧凑多实体竞争；任何拟接受候选仍由完整131,072-slot `render_frame`复核；帧射线变换缓存有界；同一最终world/frame/object复核结果只按完整world identity缓存；24个fork worker各使用一个数值库线程，并按预期实体数从高到低调度后恢复规范world顺序。GPU不参与。
-
-E26-v2继续检查历史E26中的world/report规范JSON、world hash、对象编号与数量、支撑语义、缩放、姿态、材质、最终pair collision、五帧正序/逆序/冻结随机遍历、cache前后request identity、单进程manifest重建和AST唯一权威placement路径。输入先强制核对E25-new的四类各64个规范模板、顺序库哈希以及冻结传感器标定哈希、206来源和frame/slot身份。资格runner从world seed与成功attempt序号独立复算数量、标签shuffle、逐实体seed、control模板/缩放/材质/姿态流和proxy shape/材质/姿态流；逐对象重新核对E21 patch记录、E22 grounding、E23 observed-normal collision和最终E24 pair collision。逐control另要求`proposal_pool_indices`是E25-new对应模板支撑流的精确前缀，最终完整世界的可见回波数至少1，实际距离层等于模板索引指定层。生产世界按冻结模板随机流有放回抽取，因此总体五层计数只报告，不设置$[52,51,51,51,51]$配额或类别×距离额外门。
-
-PASS要求256/256世界完成且四类身份正确；全部上述错误、hard error和48-attempt耗尽均为0。正式资格只执行一次，不自动重试，不形成两遍逐元素复现结论；只保留单次产物的规范往返、遍历/cache不变性、manifest复算和独立只读产物复核。正式命令冻结为`python -m src.render qualify-e26-v2 --data-root /home/jasongao/Data/STU --support-pool runs/ajae/e21_v4_support_pool.npz --calibration runs/ajae/calibration.pt --output runs/ajae/e26_v2_world_builder.npz --processes 24`。若仅48-attempt耗尽而实现错误为0，则分类为完整多实体合法可采样域失败并停止；任何实现审计错误分类为`protocol_implementation_defect`。
-
-实现后的真实train/206冒烟执行使用world seed 2,600,128的mixed世界，未写产物，不计入正式结果。该世界在attempt 0完成，包含2个normal-control和1个anomaly-proxy；两项control的指定与最终距离层计数均为$[1,0,0,1,0]$，可见性、距离身份、支撑流、随机流、hard error和耗尽均为0。
-
-**E26-v2正式结果：PASS。** 正式实现冻结于提交`38079213a0801bf3a279414a8b120bfd24e1cd1b`，唯一一次正式运行使用上述冻结命令、24个fork进程和每进程一个数值库线程，GPU未参与，墙钟时间为187.63917079399107秒。256/256个world全部完成；world seed精确覆盖2,600,000–2,600,255，pure-normal、control-only、mixed和anomaly-only各64个。254个world在attempt 0完成，world seed 2,600,139在attempt 1完成，world seed 2,600,066在attempt 2完成；48-attempt耗尽为0。
-
-全部world共含605个实体，其中307个normal-control、298个anomaly-proxy。control-only包含159个control；mixed包含148个control和133个proxy；anomaly-only包含165个proxy。307个control的指定距离层与最终可见回波中位official range层逐对象一致，总计数均为$[52,72,55,71,57]$；每个control至少有一个最终可见回波。$N_{vis}$最小值为1、中位数为45、均值为287.09771986970685、最大值为5,577。五层总体数量和$N_{vis}$只作描述，不构成均匀配额或真实正常距离分布结论。
-
-`type_errors`、`authority_errors`、`single_manifest_errors`、规范往返、验证、world随机流、支撑、姿态、材质、grounding、observed-normal collision、control可见性、control距离、control支撑流、control随机流、proxy随机流、pair collision、遍历、hard error和placement exhaustion全部为0，非空错误消息数量为0。605条接受placement之前共实际评估841个支撑proposal，其中236次拒绝分解为199次已观测正常几何深穿透、30次最终距离层不符、3次无可见control回波和4次明显实体间穿透；298个proxy共使用298个shape proposal，grounding rejection为0。
-
-正式产物`runs/ajae/e26_v2_world_builder.npz`大小1,033,953字节，SHA-256为`2653f705d2e890d99cda732a7a00387b5621cd05abb9c4681c7a9f284c34363c`，31个科学数组的规范哈希为`5766cda5820eb3281c0f9e13c64d2746ffdc120ce4543f32fa6c2c71cf1d4f97`。`src/render.py`身份为`1c96e2c44f97c9ba5c9702be1201bf68910ade90e3ccd9cf8341a4d017cd3551`；规范模板库、E21-v4支撑池和传感器标定SHA-256分别为`de5dfd765ac7d4fe4bb4644c40ecafdd80cdc31a3d0b6fc4fccd8e84a9fd906b`、`0e6e7299157f5e9ced0716f6dd14881c66ba1bca0cc9c372550e56f426ea844d`和`b532b7e04d9025233b2768b8fb36287e477f62f20a3ff685a62f4a4a29bfefe0`。
-
-结束后的独立只读复核没有重采world，也不构成第二遍正式运行。复核重算31个科学数组哈希、全部world/report规范JSON、world hash、request manifest、seed/type/count/placement绑定、307条control observation和proposal守恒，所有比较错误均为0。对192–255号64个anomaly-only世界另与历史E26正式产物逐项比较：64个world JSON、64个report JSON、64个world hash、165个proxy对象与placement、165条shape proposal及200个支撑proposal索引全部完全相同；request manifest因当前renderer源码身份变化而不同，world/report生成内容未变。
-
-正式运行期间24个worker均参与计算。内存峰值阶段物理可用内存约0.38 GiB，swap最高使用约3.7 GiB，未发生OOM、hard error或持续内存压力；运行结束后物理可用内存恢复到约19 GiB。该资源观测不参与科学PASS/FAIL。
-
-E26-v2 PASS只建立：E25-new选择器接入唯一生产world builder后，在冻结随机流、48次完整world attempt和256个world身份内，可以构造全部E21–E24合法、不可变、control最终可见且距离身份正确的完整世界。它不建立real/control共同支持、来源不可区分性或2.5–50米真实正常分布结论。新版normal-control分布下的Phase 2由此关闭；E27–E37机械资格继续保留，下一节点E38-v2现已冻结待正式运行。
-
-## 历史 E26｜旧normal-control分布下的权威 world builder 与完整世界规格确定性
-
-**当前适用边界：以下PASS永久保留为旧normal-control分布的历史证据，不能资格E25-new后的正式生产world builder。当前正式生产world builder已由上述E26-v2 PASS独立资格，新版normal-control分布下的Phase 2已经关闭。**
-
-**唯一问题**
-
-当前正式训练入口是否真正先生成不可变世界，再按任意顺序请求帧和窗口，而不会在 window/dataloader/cache 中重采实体？
-
-**权威接口**
-
-- `WorldSpec` 升级为新的唯一 world format，规范 JSON 排序；
-- 每个 `ObjectSpec` 保存最终 shape/template、material、translation、rotation 和 label；
-- `WorldGenerationReport` 保存 world type/count 随机流、support identity、shape/template/material/yaw seeds、placement proposal、E22/E23/E24/E25 裁决和拒绝计数；
-- `sample_training_world` 必须只调用 E21-v4→E22-v2→E23→E24→E25 这一条 pipeline；旧任意-ground 和包围球最终碰撞路径不得仍被正式入口引用。
-
-**固定审计**
-
-world seed 2,600,000–2,600,255，共 256 个世界，pure-normal/control-only/mixed/anomaly-only 各64。非空世界沿当前冻结数量分布取每类 1–9 个实体；每实体最多128次 placement proposal，每世界最多48次完整 world attempt。
-
-同一 seed 分别执行：
-
-1. 两次从零生成；
-2. JSON round-trip；
-3. 正序、逆序和随机窗口遍历；
-4. cached、uncached 与清空缓存后重建；
-5. 单进程与24进程 manifest 构造。
-
-**执行冻结**
-
-world index 0–255依次对应world seed 2,600,000–2,600,255；index 0–63、64–127、128–191、192–255分别固定为pure-normal、control-only、mixed、anomaly-only。实体数量继续由 `default_rng(world_seed)` 按冻结的1–9分布抽取；第 $a$ 次完整world attempt使用 `attempt_seed=world_seed+1,000,003a`，实体顺序由该随机流固定。第 $j$ 个实体的基础seed为 `attempt_seed+10,007(j+1)`。
-
-normal-control的template/scale/material/pose seed分别为entity seed+1、entity seed+2、entity seed+11、entity seed+31。模板只从E25已资格的256个train/206模板库中确定性抽取；缩放使用 `SeedSequence([scale_seed,2501])`；姿态扰动使用 `SeedSequence([pose_seed,2502])` 并沿用E25类别范围；每个support proposal的最终yaw继续由源帧轨迹切向加该固定扰动构成。anomaly-proxy从entity seed+3开始使用步长3,072、最多64次的E24-v2 shape proposal stream；shape通过E22后再进入最多128次的统一support placement。全部实体共享 `training-world-v1` 支撑命名空间并执行E22→E23→E24→E25；任一实体耗尽时才进入下一个完整world attempt，最多48次。
-
-`WorldGenerationReport`升级为 `ajae-world-generation-report-v2`，除全部placement记录外显式保存normal/anomaly数量、count seed与label-order seed。历史 `generate_fixed_development_worlds` 使用已经失效的任意ground接口且没有调用者，已从正式源码删除；`sample_training_world`及其内部唯一一次 `place_object` 调用成为训练世界的唯一放置入口。
-
-每个world的窗口中心固定为 `2+world_seed mod 445`，审计连续5帧。随机遍历由 `SeedSequence([world_seed,2601])` 固定。帧请求身份由 `(world_hash,frame_id,renderer_identity)` 的规范字符串计算SHA-256；正序、逆序、随机序、空缓存、复用缓存和清空后重建必须得到相同frame-id到请求身份映射，且遍历前后world JSON逐字一致。两次完整manifest均使用24进程从WorldSpec生成起点执行并要求全部保存数组逐元素一致；单进程审计只对已生成的规范world/report记录执行JSON、哈希和请求manifest重建，不再用单核重复计算全部几何。每个worker固定底层数值库为单线程，避免24个进程内部再次并行。实体对碰撞在一个world内按shape缓存确定性局部表面见证，位置变化只重新执行世界坐标变换；E26复核直接核对 `place_object` 已保存的E22连续资格量与E23最小距离，不重复生成同一批16,384点表面或重复查询同一接受位置的observed obstacle，最终实体对检查仍独立保留。
-
-首次执行完成256/256个world，world type、往返、E22–E25验证、支撑语义、姿态、材质、最终实体对、遍历、硬错误和耗尽计数均为0，两遍逐元素一致；单进程与24进程用时分别为887.147803秒和124.987272秒，科学数组哈希为 `dd2564ffb30ca730434d3e961e3cdd7117c3432720ea4eb43534a11c6dbfd210`。但源码权威路径审计错误地用字符串计数，审计条件自身的字符串字面量被同时计入，产生唯一的 `authority_errors=1`。该结果归类为 `implementation_defect`，不形成E26科学裁决。无效产物大小1,004,593字节，SHA-256为 `25daf1a0a995598f5d7f2a67f3c7686d3dd68cf93968873a280c9211ad1fcc70`，修后重跑前删除。权威路径审计改为Python语法树上的函数定义与调用节点计数，并增加防止字符串自计数的回归。
-
-修后正式实现提交为 `c150d516328cb6f108ec30f571c6a41ec0f53f82`；`src/render.py`、`src/train.py`和`test_ajae.py` SHA-256分别为 `51b1bd037cd3226155e6f8bb428421729326e1d4e6a8c83fb414aa9a63f37d30`、`92a3f51f93e26bead6a1d9d92e37af2b5e4df092ffc9716852806b4b67be546b`、`960dc6b3b83a4e95e638a1f0358a3d20c8eb2b51300e5c737f2c49b4b0a3f8dd`；完整回归为46项全部通过，用时99.01秒。正式命令仍为 `python -m src.render qualify-e26 --data-root /home/jasongao/Data/STU --support-pool runs/ajae/e21_v4_support_pool.npz --output runs/ajae/e26_world_builder.npz --processes 24`。
-
-**PASS 条件**
-
-- 256/256 world 均成功且 world type 正确；
-- world JSON、world hash、entity IDs/counts、几何/模板、support、pose、material 和 report 两次完全一致；
-- 任何窗口遍历都不改变 world spec；
-- 同一 `(world_hash, frame_id, renderer_identity)` 的帧请求 identity 一致；
-- 全部非空实体通过 E22–E25；
-- 正式代码引用审计确认没有第二套 placement/collision 权威路径；
-- 两遍完整运行逐元素一致。
-
-历史PASS曾解锁 **E27** 并关闭旧分布下的Phase 2；当前新版路线不据此跳过E26-v2。
-
-**历史 E26 正式结果：PASS（仅旧normal-control分布）**
-
-优化后的冻结命令完成两遍24进程正式运行，用时分别为71.279377秒和75.827829秒。256/256个固定world全部构造完成，pure-normal、control-only、mixed、anomaly-only各64个；world type错误、放置耗尽、硬错误、world/report往返错误、E22–E25验证错误、类别支撑错误、姿态错误、材质错误、最终实体对明显互穿、窗口遍历错误、单进程manifest重建错误和权威路径审计错误均为0。两遍全部保存数组逐元素一致，科学数组哈希为 `e18fb5180a8667f8da8f755495720fa897cbe647ce8a2258284242dfc349c342`。
-
-独立复算确认world seed精确覆盖2,600,000–2,600,255且无重复，256个world hash全部唯一。全部world共含605个实体，其中normal-control 307个、anomaly-proxy 298个；control-only、mixed、anomaly-only分别含159、281、165个实体。全部256个world均在第0次完整world attempt构造成功。256个请求manifest哈希全部唯一；从正式产物独立解析每个world JSON和report JSON后，规范JSON、world hash、normal/anomaly数量与保存值不一致数均为0。
-
-正式产物 `runs/ajae/e26_world_builder.npz` 大小1,018,517字节，SHA-256为 `d93b6e8434dd5de54fb60b4d1587dbd2c466eebab8c2b06ad1477ae1c8411457`。E26 PASS允许的结论限定为：**当前唯一训练world builder能够在冻结随机流和上限内确定性构造四类不可变world；规范world/report身份不受窗口遍历、缓存状态或进程并行方式影响，全部非空实体保持E22–E25资格。** E26不形成renderer回波正确性结论，该问题从E27开始顺序检验。
-
-## E26-V1｜放置场景可视化（非阻断描述）
-
-E26 PASS 后可按身份哈希生成固定场景面板，观察明显悬空、埋地、穿墙或两类放置风格。没有两名独立人类时不得形成正式评分；无论是否执行，本节点都不阻断 E27。任何视觉发现若要修改 E21–E25，必须明确开启新的开发周期并使受影响下游失效。
-
-# Phase 3｜第一回波反事实渲染机械链
-
-## Phase 3 统一冻结
-
-E27–E37 在 E27 首次正式运行前一次性冻结。它们只资格 renderer 的离散/物理语义，不使用分布相似性作主门；真实来源指纹统一留给 E45–E46。机械分层实验的裁决必须直接停在对应接口层：E27/E28只读取geometry输出，E29只读取return probability与确定性抽样，E30/E31才读取accepted return，E32/E33才读取nearest-return occlusion competition。下游随机机制或竞争结果不得作为上游资格的裁决输入。
-
-## E27｜normal-control 几何命中
-
-使用 `SensorCalibration.constant(return_probability=1)` 隔离 return rejection。固定256个 ray-centred fixture，覆盖 active control classes、多个 beam/column、2.5–50 m 距离和姿态；每个 fixture 构造穿过凸包严格内部的 target rays 和解析 miss rays。
-
-**执行冻结**
-
-输入模板固定读取E25 PASS产物 `runs/ajae/e25_normal_control.npz`，按 `template_identity` 首次出现去重后，按 `(raw_semantic_id,template_identity)` 排序，得到car、truck、other-vehicle、person各64个，共256个fixture。fixture index $i$ 的seed为2,700,000+$i$，target slot为$i$，因此逐项覆盖128个beam与2个column。目标表面距离固定为 $2.5+47.5i/255$ m；beam elevation按-20°至20°线性覆盖，column基准azimuth为0或180°并叠加由index固定的-8°至8°循环偏移。
-
-对象yaw、pitch、roll由 `SeedSequence([fixture_seed,2701])` 固定，yaw覆盖 $[-\pi,\pi)$，pitch与roll覆盖±15°。对象先沿target ray置于目标距离之外，独立凸包平面reference计算最近进入距离后只沿同一ray平移，使参考表面距离等于冻结目标距离。256-slot fixture中只有target slot朝向对象，其余255个slot均使用与target严格相反的单位方向，构成解析正距离miss。正式路径只调用 `_accepted_object_hits`，传感器固定为intensity 1、return probability 1。
-
-独立reference直接使用 `NormalTemplateShape.plane_normals/plane_offsets` 的半空间slab进入/退出区间，不调用 `NormalTemplateShape.intersect` 或 `_accepted_object_hits`。PASS要求hit、miss、法向外向性与object ID错误均为0，最近距离最大误差和表面残差最大值均不超过 $10^{-8}$ m，法向单位长度最大误差不超过 $10^{-10}$，两遍24进程数组逐元素一致。
-
-描述性 `Nvis` 固定使用E26的192个非空world，每个world只取object ID最小的第一个真实放置实体及其接受support frame，在正式ray grid上以return probability 1计算相对native return赢得最近距离竞争的slot数。该192对象统计不参与E27 PASS，完整可见性分布资格仍留给E42。
-
-实现提交为 `b0668bd8c96a8c8ea0b04145fda8e263bae8649b`；`src/render.py`、`src/train.py`和`test_ajae.py` SHA-256分别为 `2ea6d333fbe7531913d925f0b292c6e8d5d22986aba93e527ffff5d2a2202188`、`92a3f51f93e26bead6a1d9d92e37af2b5e4df092ffc9716852806b4b67be546b`、`960dc6b3b83a4e95e638a1f0358a3d20c8eb2b51300e5c737f2c49b4b0a3f8dd`；完整回归46项全部通过，用时98.50秒。正式命令为 `python -m src.render qualify-e27 --e25-artifact runs/ajae/e25_normal_control.npz --e26-artifact runs/ajae/e26_world_builder.npz --data-root /home/jasongao/Data/STU --calibration runs/ajae/calibration.pt --output runs/ajae/e27_normal_control_hits.npz --processes 24`。
-
-PASS：target hit/miss 零错误；最近距离有限为正；交点位于 hull 表面、法向有限外向；object ID 正确；两遍逐元素一致。真实放置对象的 $N_{vis}$ 只报告，分布资格留给 E42。PASS → E28。
-
-**E27 正式结果：PASS（E27关闭，E28解锁）**
-
-两遍24进程核心fixture用时分别为0.058558秒和0.062171秒，全部数组逐元素一致。256个target hit错误、65,280个解析miss错误、法向外向性错误和object ID错误均为0；最近距离最大绝对误差为 $2.132\times10^{-14}$ m，凸包表面残差最大值为 $1.582\times10^{-14}$ m，法向单位长度最大误差为 $2.220\times10^{-16}$。科学数组哈希为 `cc684d8c30db7733f7b04c440a49b13be45a182c839e26d37070f9ec94105ccb`。
-
-独立复算确认seed、beam、column分别精确覆盖2,700,000–2,700,255、0–127和0–1；4个active类别各64个，256个template identity全部唯一；目标距离和实测最近距离均覆盖2.5–50 m。192个真实E26放置对象在各自接受support frame的描述性 $N_{vis}$ minimum/median/$Q_{0.95}$/maximum为1/103/1,179/2,143，零可见对象为0。该统计不参与E27裁决。
-
-正式产物 `runs/ajae/e27_normal_control_hits.npz` 大小17,437字节，SHA-256为 `7b11c16c14097ed87e349c41b2e4c9d314e854a1f550dbaa6247d901c7793929`。E27 PASS允许的结论限定为：**在return rejection关闭时，正式normal-control几何路径能对当前4个active类别的真实凸包模板返回正确的最近正交点、有限外向法向和对象身份。** 该结果不检验anomaly-proxy求交、概率抽样、强度或与native return的最终竞争；它们仍由E28–E35顺序检验。
-
-## E28｜anomaly-proxy 几何命中
-
-与 E27 相同，固定256个 schema 7 fixture，覆盖 family、primitive count、尺寸与2.5–50 m。target ray 穿过已知严格内部 witness，另有 miss rays。
-
-**执行冻结**
-
-固定使用seed 2,800,000–2,800,255依次生成256个schema 7 fixture，不作筛选或补样。该固定流覆盖general/elongated/blocky/flat分别95/62/50/49个，primitive count 1–5分别74/52/35/53/42个，20个family×primitive-count交叉单元均非空，接受尺寸上界覆盖0.24818387696031585–2.9978872129930567 m。fixture index $i$ 的target slot为$i$，逐项覆盖128个beam与2个column；目标表面距离固定为 $2.5+47.5i/255$ m。beam elevation按-20°至20°线性覆盖，column基准azimuth为0或180°并叠加由index固定的-8°至8°循环偏移。
-
-每个shape的严格内部witness优先取生成报告中的第一个共享未变形witness；不存在共享witness时取第一个primitive offset。witness经过正式前向形变后必须具有大于 $10^{-8}$ m的负有符号距离裕量。对象姿态使用与E27相同的 `SeedSequence([fixture_seed,2701])` 流；对象先沿target ray置于冻结目标距离之外，再依据独立reference只沿同一ray平移，使参考首个进入表面的距离等于冻结目标距离。256-slot fixture中只有target slot朝向对象，其余255个slot均使用与target严格相反的单位方向。正式路径只调用 `_accepted_object_hits`，传感器固定为intensity 1、return probability 1。
-
-独立reference在shape保守包围球的正射线区间内分别使用4,097和16,385个固定节点寻找首个outside-to-inside括区，再以Brent方法求根；reference不调用 `ShapeSpec.intersect` 或 `_accepted_object_hits`。两套reference的最大差异必须小于 $5\times10^{-5}$ m；正式最近距离最大误差不超过 $10^{-4}$ m，表面残差不超过 $10^{-6}$ m，法向单位长度误差不超过 $10^{-10}$。hit、解析miss、法向外向性和object ID错误必须均为0，两遍24进程数组必须逐元素一致。
-
-描述性 $N_{vis}$ 固定使用E26中含anomaly-proxy的128个world，每个world只取object ID最小的第一个anomaly-proxy及其接受support frame，在正式ray grid上以return probability 1计算相对native return赢得最近距离竞争的slot数。该统计不参与E28 PASS，完整可见性分布资格仍留给E42。
-
-实现提交为 `dea911899d9891d632d88de3394f17e7f2904ed0`；`src/render.py`、`src/train.py`和`test_ajae.py` SHA-256分别为 `940fd6484b976b7b59c8b1c7bc8bea8dbd86e5aa27efa6eb5eb0024f57bd8e9b`、`92a3f51f93e26bead6a1d9d92e37af2b5e4df092ffc9716852806b4b67be546b`、`960dc6b3b83a4e95e638a1f0358a3d20c8eb2b51300e5c737f2c49b4b0a3f8dd`；完整回归46项全部通过，用时99.08秒。正式命令为 `python -m src.render qualify-e28 --e26-artifact runs/ajae/e26_world_builder.npz --data-root /home/jasongao/Data/STU --calibration runs/ajae/calibration.pt --output runs/ajae/e28_anomaly_proxy_hits.npz --processes 24`。
-
-PASS：零 hit/miss、最近根、法向和 object-ID 错误；两遍一致。PASS → E29。
-
-**E28-v1 正式结果：FAIL（protocol implementation defect；历史保留）**
-
-两遍24进程核心fixture用时分别为0.186233秒和0.195004秒，全部数组逐元素一致。固定256个fixture中有255个返回了有限的最终competition hit；唯一表面失败项为fixture index 127、seed 2,800,127、general family、5 primitives、beam 63、column 1、目标表面距离26.15686274509804 m、shape identity `e40c51a4b501d8b3f1dd277488c6f4d422bcf764b1cfd9afab5d5172b3818a7b`。该fixture的严格内部witness裕量为0.10470550994737828 m，两套独立reference的首根差异为 $1.705\times10^{-13}$ m。E28-v1 runner错误地调用 `_accepted_object_hits`，使geometry intersect之后继续经过return probability、随机接受和nearest competition，因此最终competition距离为无穷，并记为1个hit错误、1个miss错误、1个法向错误和1个object ID错误。
-
-定向诊断确认原始 `ShapeSpec.intersect` 对该fixture返回 `valid=True`、距离26.156862691941157 m、单位法向，255条反向miss ray的原始几何命中为0；相对独立reference的距离误差为 $5.316\times10^{-8}$ m。最终拒绝来自constant sensor fixture仍被 `return_chance` 裁剪并施加material bias：调制后概率为0.9999864437684041，固定槽位随机数为0.9999961987049697，故该正确几何命中未进入accepted return。该FAIL分类为 `protocol implementation defect`，不得改写为PASS，也不得解释为 `ShapeSpec.intersect` 科学失败。
-
-其余255个有限结果的最近距离最大绝对误差为 $1.226\times10^{-7}$ m，表面残差最大值为 $1.171\times10^{-7}$ m，法向单位长度最大误差为 $3.331\times10^{-16}$，均满足冻结数值容差。全部256个fixture的两套独立reference最大差异为 $3.766\times10^{-13}$ m。128个E26实际anomaly-proxy在各自接受support frame的描述性 $N_{vis}$ minimum/median/$Q_{0.95}$/maximum为1/82/921/2,265，零可见对象为0；该统计不参与E28裁决。
-
-科学数组哈希为 `26f0af96a77813126eddc61e8e311d60d443ddf9e55f2cf212378873e4c0ee5f`。正式产物 `runs/ajae/e28_anomaly_proxy_hits.npz` 大小28,118字节，SHA-256为 `5b1cb22f2a415645e53d0971e4cf8d6c81124b6958cc61fc8cc8ab7617c775f1`。E28-v1 FAIL只否定v1 runner对“关闭return rejection”的实现，不否定schema 7连续求交。E27、E26及更早资格结果不受该分类修正改变。
-
-### E28-v2｜纯几何接口回归
-
-E28-v2完整继承E28-v1的256个fixture、seed、shape identity、beam/column、target/miss方向、目标距离、姿态、严格内部witness、两套独立reference和全部数值容差。唯一修订是裁决路径直接调用 `ShapeSpec.intersect`，只读取其distance、normal和valid mask；禁止调用 `_accepted_object_hits`、`return_chance`、`_slot_uniform`、material modulation或nearest-return competition。单对象纯几何接口不产生object ID，因此v2裁决项为target hit、反向miss、最近正根、表面残差、法向单位长度与外向性。
-
-先定向回归seed 2,800,127，再完整运行256个fixture；两遍均使用24进程并要求科学数组逐元素一致。PASS要求hit、miss和法向外向性错误均为0，两套reference最大差异小于 $5\times10^{-5}$ m，最近距离最大误差不超过 $10^{-4}$ m，表面残差不超过 $10^{-6}$ m，法向单位长度误差不超过 $10^{-10}$。E28-v1历史产物不覆盖；v2正式产物固定为 `runs/ajae/e28_v2_anomaly_proxy_hits.npz`。
-
-实现提交为 `b4b5e0c28f08579429463098462584fc526f07d3`；`src/render.py`、`src/train.py`和`test_ajae.py` SHA-256分别为 `dfc8a2d155e39505e455c2cad543baa4895ab19cb813cbcf7dfe6011e37138f5`、`92a3f51f93e26bead6a1d9d92e37af2b5e4df092ffc9716852806b4b67be546b`、`960dc6b3b83a4e95e638a1f0358a3d20c8eb2b51300e5c737f2c49b4b0a3f8dd`；完整回归46项全部通过，用时100.12秒。正式命令为 `python -m src.render qualify-e28-v2 --e26-artifact runs/ajae/e26_world_builder.npz --data-root /home/jasongao/Data/STU --calibration runs/ajae/calibration.pt --output runs/ajae/e28_v2_anomaly_proxy_hits.npz --processes 24`。E28-v2 PASS后关闭E28并解锁E29；FAIL则E29保持锁定。
-
-**E28-v2 正式结果：PASS（E28关闭，E29解锁）**
-
-两遍24进程核心fixture用时分别为0.170502秒和0.169823秒，全部科学数组逐元素一致。256个target hit错误、65,280条反向miss错误和法向外向性错误均为0；两套独立reference最大差异为 $3.766\times10^{-13}$ m，最近距离最大绝对误差为 $1.226\times10^{-7}$ m，表面残差最大值为 $1.171\times10^{-7}$ m，法向单位长度最大误差为 $3.331\times10^{-16}$。定向回归seed 2,800,127返回距离26.156862691941157 m，距离误差为 $5.316\times10^{-8}$ m，hit、miss和法向错误均为0。
-
-独立复算确认E28-v1与E28-v2的seed、shape family、primitive count、尺寸、shape identity、beam、column、目标距离、reference差异和witness裕量逐元素一致；v2未筛选或替换v1 fixture。描述性E26实际anomaly-proxy $N_{vis}$ 保持minimum/median/$Q_{0.95}$/maximum为1/82/921/2,265，零可见对象为0，该统计不参与v2裁决。
-
-科学数组哈希为 `b974d4fac1534c1964ea39c245e2b808993c726cb010bccb604cccca5a43d1da`。正式产物 `runs/ajae/e28_v2_anomaly_proxy_hits.npz` 大小27,953字节，SHA-256为 `796b46bfb4acdba348322c308eed63fc5d1a80542bd1a9067d12d27e45c2787c`。E28-v2 PASS允许的结论限定为：**正式 `ShapeSpec.intersect` 纯几何接口能够对全部256个冻结schema 7 target ray返回符合独立reference与冻结容差的最近正交点和有限外向法向，同时全部反向ray保持miss。** 该结果不检验return probability、随机接受、强度或nearest-return competition；它们继续由E29–E35分层检验。
-
-## E29｜return probability 与确定性抽样
-
-对冻结 `SensorCalibration` 检查所有 beam×range×incidence 单元概率有限且位于 $[0,1]$；fallback 来源可追溯。使用固定几何 hit 和大量稳定 slot/object/frame identities，独立复算 `_slot_uniform` 与 `u<p` 决策。
-
-**执行冻结**
-
-输入固定为 `runs/ajae/calibration.pt`。完整枚举128个beam、6个range bin和3个incidence bin，共2,304个正式校准单元。独立从 `opportunity_counts`、`return_counts` 和跨beam同range-incidence pooled counts复算Jeffreys平滑概率；`fallback_mask` 必须逐元素等于 `opportunity_counts<64`，且provenance必须逐字包含 `jeffreys_beta_smoothed_binomial_rate` 与 `cross_beam_same_range_incidence_below_64_opportunities`。
-
-每个校准单元固定使用24组身份，共55,296次中间概率决策。identity $i=0,\ldots,23$ 使用world seed 2,900,000+$i$、source sequence 206、frame 1,000+$i$、object ID $i+1$、slot 0–2,303；material return bias固定取 `MaterialSpec.sample(2900000+i).return_bias`。正式概率调用 `SensorCalibration.return_chance`；独立reference从基础概率执行相同冻结clip、logit、$2\rho$偏置与sigmoid公式。正式均匀数调用 `_slot_uniform`；独立reference单独实现冻结64位identity mixer，不调用 `_slot_uniform`。正式与reference的概率、均匀数和accepted mask必须逐元素一致。
-
-边界分支在相同55,296个固定均匀数上直接检查 `u<0` 全拒绝和 `u<1` 全接受。正式中间概率必须至少出现一个接受和一个拒绝；经验接受率只报告，不设误差曲线门槛。两遍均使用24进程并要求全部科学数组逐元素一致。
-
-实现提交为 `ae7ef0dc23d6e3dc8467a5a72349ccf22102e377`；`src/render.py`、`src/train.py`和`test_ajae.py` SHA-256分别为 `cc83a7d1a05d808e899169f64022e6200be243700608da98b839bd8936f42c39`、`92a3f51f93e26bead6a1d9d92e37af2b5e4df092ffc9716852806b4b67be546b`、`960dc6b3b83a4e95e638a1f0358a3d20c8eb2b51300e5c737f2c49b4b0a3f8dd`；完整回归46项全部通过，用时99.33秒。正式命令为 `python -m src.render qualify-e29 --calibration runs/ajae/calibration.pt --output runs/ajae/e29_return_sampling.npz --processes 24`。
-
-PASS：概率域错误0；实现与独立 reference 的 accepted mask 零差异；$p=0$ 全拒绝、$p=1$ 全接受；中间概率同时出现接受和拒绝；重复和并行执行一致。经验接受率只描述，不要求理想随机误差曲线。PASS → E30。
-
-**E29 正式结果：PASS（E29关闭，E30解锁）**
-
-两遍24进程运行用时分别为0.101434秒和0.103730秒，全部科学数组逐元素一致。2,304个基础概率单元与55,296个材质调制概率的有限性及 $[0,1]$ 域错误均为0；独立Jeffreys基础概率、独立材质调制概率和独立64位identity mixer相对正式实现的最大误差均为0，accepted mask差异为0。734个fallback单元逐元素满足 `opportunity_counts<64`，估计器与跨beam回退provenance逐字一致。
-
-在相同55,296个固定身份上，$p=0$ 全拒绝和 $p=1$ 全接受的错误均为0；正式中间概率产生55,162个接受和134个拒绝。正式调制概率范围为0.9245455430073359–0.9999805912145614，固定均匀数范围为 $3.459\times10^{-7}$–0.9999807361554899。经验接受数量只作分支覆盖描述，不作为随机误差曲线门槛。
-
-科学数组哈希为 `156bbe7af1a8021421ddf6d8876be9c21899b38ba30f59555d4126f9238ded44`。正式产物 `runs/ajae/e29_return_sampling.npz` 大小1,366,912字节，SHA-256为 `5aea7bb44c1d30dedd957f869c8765cede5f1e8dd543e4fa483184a5c47428c5`。E29 PASS允许的结论限定为：**冻结正式校准的基础概率、材质调制概率、fallback来源、稳定身份均匀数和 `u<p` 接受决定与独立reference逐元素一致，并覆盖必拒绝、必接受及中间概率两种结果。** E29不检验accepted return的点、标签或强度载荷；它们从E30开始检验。
-
-## E30｜normal-control 有效回波
-
-在 E27 fixture 上使用正式 return/intensity 流。PASS：有效回波 mask 与 E29 reference 零差异；接受点有限、标签为正常 control 语义、拒绝点不生成回波；至少一个接受和拒绝分支被覆盖；两遍一致。PASS → E31。
-
-**执行冻结**
-
-E30按E27 PASS产物的 `template_identity` 逐元素核对并重建原256个normal-control fixture；shape、seed 2,700,000–2,700,255、beam/column、目标距离、姿态和 `MaterialSpec.sample(seed+2702)` 均保持不变。每个fixture固定展开24个frame identities，frame ID为 $256r+i$，其中fixture index $i=0,\ldots,255$、replica $r=0,\ldots,23$；world seed、object ID和slot分别保持为2,700,000+$i$、$i+1$和$i$，共6,144次accepted-return裁决。几何交点、法向、正式概率和材质只计算一次并在24个身份间只读复用。
-
-正式accepted mask使用 `_slot_uniform(...,channel=0)<SensorCalibration.return_chance`；E29独立reference分别复算材质调制概率和64位identity uniform，再执行 `u<p`。接受项使用正式 `SensorCalibration.sample_intensity` 与独立channel 1 identity uniform生成强度，点坐标必须有限，强度必须有限并位于train/206冻结支持，语义必须等于原normal-control模板的raw semantic。拒绝项的点与强度固定保持NaN、语义保持0，表示没有生成回波载荷。该裁决不读取native range，不执行native/inserted nearest competition，也不裁决遮挡mask。
-
-实现提交为 `688618a2d5a0bd0792a33a5f1f48bab6f00f55a0`，输入身份审计修正提交为 `4527fcffa766183a82674c430fa8386cd544c879`；后者将E25选择键改为E27产物实际记录的 `_normal_template_identity` 后逐元素核对，不改变模板顺序或fixture。最终 `src/render.py`、`src/train.py`和`test_ajae.py` SHA-256分别为 `8b35a71a96fd58ff056e8e788f68eb4c6a7324f270f73b2035df6f06f0e7e46c`、`92a3f51f93e26bead6a1d9d92e37af2b5e4df092ffc9716852806b4b67be546b`、`960dc6b3b83a4e95e638a1f0358a3d20c8eb2b51300e5c737f2c49b4b0a3f8dd`；修正后完整回归46项全部通过，用时99.21秒。正式命令为 `python -m src.render qualify-e30 --e25-artifact runs/ajae/e25_normal_control.npz --e27-artifact runs/ajae/e27_normal_control_hits.npz --calibration runs/ajae/calibration.pt --output runs/ajae/e30_normal_returns.npz --processes 24`。
-
-**E30 正式结果：PASS（E30关闭，E31解锁）**
-
-首次正式命令在两遍实验开始前被输入身份审计拒绝，原因是审计直接比较E25选择键与E27产物中重新计算的 `_normal_template_identity`；该次没有生成实验产物。修正后256个重建身份与E27产物逐元素一致，随后执行正式两遍24进程运行，用时分别为0.122548秒和0.121699秒，全部科学数组逐元素一致。
-
-6,144次accepted-return裁决产生6,137个接受和7个拒绝。几何、材质调制概率reference、64位identity uniform reference、accepted mask、接受载荷和拒绝载荷错误均为0。接受强度范围为0.0020000000949949026–1.6214286088943481，接受语义精确覆盖10、18、20、30；全部拒绝项的点和强度保持NaN、语义保持0。
-
-科学数组哈希为 `4f86b6ae373a6db84da849131ab1c016afc642a50a3d40978abf8cec60a3f55c`。正式产物 `runs/ajae/e30_normal_returns.npz` 大小145,112字节，SHA-256为 `f6caf496b7c0e085d4c8f5191e04a69dda70949f31013dee3d9b07db95c2162f`。E30 PASS允许的结论限定为：**E27冻结normal-control几何命中经过正式return/intensity流后，其accepted mask与E29独立reference逐元素一致，接受项形成有限且语义正确的点和强度载荷，拒绝项不形成回波载荷。** E30不检验anomaly-proxy accepted return或native/inserted最近回波竞争；它们分别留给E31和E32–E33。
-
-## E31｜anomaly-proxy 有效回波
-
-与 E30 同一代码路径。PASS：mask 零差异；有效点 finite、raw semantic 2、internal object ID 正确；接受/拒绝分支均覆盖；两遍一致。PASS → E32。
-
-**执行冻结**
-
-E31逐元素核对E28-v2 PASS产物的seed与shape identity并重建原256个schema 7 fixture；shape、seed 2,800,000–2,800,255、beam/column、目标距离、姿态和 `MaterialSpec.sample(seed+2802)` 均保持不变。与E30相同，每个fixture固定展开24个frame identities，frame ID为 $256r+i$，world seed、object ID和slot分别为2,800,000+$i$、$i+1$和$i$，共6,144次accepted-return裁决。几何交点、法向、正式概率和材质只计算一次并在24个身份间只读复用。
-
-正式accepted mask、E29独立reference、channel 1强度和拒绝无载荷规则与E30完全相同。接受项必须具有有限点和冻结支持内有限强度、raw semantic必须为2、internal object ID必须为$i+1$；拒绝项点与强度保持NaN、semantic保持0、internal object ID保持-1。E31不读取native range，不执行nearest competition或遮挡裁决。
-
-实现提交为 `b1543dd7a475097d4e1140a1333e095eec13c527`；`src/render.py`、`src/train.py`和`test_ajae.py` SHA-256分别为 `b25c388221996b1fec4c7461ce660cd07eae29e4d1ee4491c3dda25cd2dd1e65`、`92a3f51f93e26bead6a1d9d92e37af2b5e4df092ffc9716852806b4b67be546b`、`960dc6b3b83a4e95e638a1f0358a3d20c8eb2b51300e5c737f2c49b4b0a3f8dd`；完整回归46项全部通过，用时98.60秒。正式命令为 `python -m src.render qualify-e31 --e28-artifact runs/ajae/e28_v2_anomaly_proxy_hits.npz --calibration runs/ajae/calibration.pt --output runs/ajae/e31_proxy_returns.npz --processes 24`。
-
-**E31 正式结果：PASS（E31关闭，E32解锁）**
-
-两遍24进程运行用时分别为0.221930秒和0.240864秒，全部科学数组逐元素一致。6,144次accepted-return裁决产生6,137个接受和7个拒绝；几何、材质调制概率reference、64位identity uniform reference、accepted mask、接受载荷和拒绝载荷错误均为0。接受强度范围为0.0022857142612338066–1.6308571100234985，raw semantic全部为2，internal object ID全部等于fixture index加1；拒绝项点与强度均为NaN、semantic为0、internal object ID为-1。
-
-科学数组哈希为 `c5ce21593fc66c02a8b71c35becf29ff05178cf2dc1459eea3ce27ffd911228b`。正式产物 `runs/ajae/e31_proxy_returns.npz` 大小146,341字节，SHA-256为 `f7d9f3478644429e2d0393e2f63e6a17fe4b44dc285a8b76f0004f1b23f7e495`。E31 PASS允许的结论限定为：**E28-v2冻结anomaly-proxy几何命中经过与E30相同的正式return/intensity流后，其accepted mask与E29独立reference逐元素一致，接受项形成有限的semantic-2点、强度及正确internal object ID载荷，拒绝项不形成载荷。** native/inserted最近回波竞争仍由E32–E33检验。
-
-## E32｜插入物遮挡背景
-
-构造 sensor→inserted→native-background 的定向 slot fixture，含小于、等于和大于 `tie_tolerance_m` 的边界。PASS：更近的有效 inserted return 替换 native；被替换原点进入 `occluded_original_mask`；最终每 slot 只有一个点；tie 按冻结 object/native 规则确定；零错误。PASS → E33。
-
-**执行冻结**
-
-固定3个单槽 `sensor→inserted→native-background` fixture，sensor在原点、ray为+x、native range精确为float32 5 m、inserted为边长0.5 m的normal-control凸包，正式constant sensor接受其回波。`tie_tolerance_m=10^{-6}` m，native与inserted距离差固定为0.5、1和2倍tie；前两项由native胜出，2倍tie项由inserted胜出。完整调用正式 `render_frame`，检查最终单slot、距离、packed/raw标签、internal object ID、`inserted_mask`和 `occluded_original_mask`，两遍逐元素一致。实现提交 `a7fd304be9c662e5bc8ddb8971a5e6b466922dbb`，`src/render.py` SHA-256为 `ac97f885754ea5fd83957c273e2877aadab7b71cf62b9a511aee9948c95add1f`；46项回归全部通过，用时99.63秒。正式命令为 `python -m src.render qualify-e32 --output runs/ajae/e32_background_occlusion.npz`。
-
-**E32 正式结果：PASS（E32关闭，E33解锁）**
-
-三个fixture的winner依次为native、native、inserted，与冻结tie规则一致；mask、单回波、semantic、packed label和internal object ID错误均为0，最大距离误差为 $9.265\times10^{-8}$ m，两遍逐元素一致。科学数组哈希为 `fb767acb595c05d7a6985b7d7c1ccabaded973213dde1ea65b97a063d08786ab`。产物 `runs/ajae/e32_background_occlusion.npz` 大小3,258字节，SHA-256为 `cc1bcf07fd6473897b1712619d98d5983735c7b9d01d987deff94580449c03ce`。E32仅关闭inserted位于native背景之前的竞争边界；native前景遮挡inserted由E33检验。
-
-## E33｜正常前景遮挡插入物
-
-构造 sensor→native-foreground→inserted。PASS：foreground 保留，后方 inserted 不产生最终点；标签、mask、object ID 和距离竞争零错误。PASS → E34。
-
-**执行冻结**
-
-固定3个与E32同构的单槽fixture，native前景range为5 m，accepted inserted分别位于native之后0.5、1和2倍 `tie_tolerance_m`。完整调用正式 `render_frame`；三项均必须保留native前景的距离、semantic 10、instance 7，`inserted_mask`与`occluded_original_mask`为false、internal object ID为-1且最终只有一个slot。两遍逐元素一致。实现提交 `c1f8d76544c45106b0844aae7110da82adfd64e1`，`src/render.py` SHA-256为 `2be3be0cbc4ce4968bf90fc75d7d383aa67b9770346b9295b2b0416ebe1a3fb3`；46项回归全部通过，用时99.71秒。正式命令为 `python -m src.render qualify-e33 --output runs/ajae/e33_foreground_occlusion.npz`。
-
-**E33 正式结果：PASS（E33关闭，E34解锁）**
-
-三个fixture均保留native前景；距离、semantic、instance、inserted mask、occlusion mask、internal object ID和单回波错误均为0，两遍逐元素一致。科学数组哈希 `19465f1339a311d025a975b808eb5a3a58d113f88a16b2b3adbdb7c455cab6cd`；产物 `runs/ajae/e33_foreground_occlusion.npz` 大小2,299字节，SHA-256为 `2667f81a6a20b7c02cd3736fcd1d733314cfda827b592916cda29b94f5880b51`。
-
-## E34｜空射线新增与拒绝
-
-对原空 slot 分别构造 geometry hit+p=1、geometry hit+p=0、无 geometry hit。PASS：三类结果分别为新增 inserted return、保持空、保持空；空 slot 原 intensity payload 不参与 occupancy；零错误。PASS → E35。
-
-**执行冻结**
-
-固定三个单槽空native fixture，原XYZ均为0但intensity payload固定为17；三类分别为geometry hit+高端接受、geometry hit+低端拒绝、无geometry hit。完整调用正式 `render_frame`，期望occupancy依次为true/false/false；接受项semantic 10、internal object ID 1且强度有限，另外两项semantic 0、object ID -1并保留原空slot intensity payload，全部 `occluded_original_mask` 为false。两遍逐元素一致。实现提交 `01f5f2aa15dd298495064e0aa5e6bfd0968ff07d`，`src/render.py` SHA-256为 `a1ee3d9358d0da6a0c2388a580e7c86db3fabf6a4f93de80f2a5faf2ee8e3b07`。正式命令为 `python -m src.render qualify-e34 --output runs/ajae/e34_empty_rays.npz`。
-
-**E34 正式结果：PASS（E34关闭，E35解锁）**
-
-三类occupancy依次为true、false、false；occupancy、semantic、internal object ID、mask和空slot intensity payload错误均为0，两遍逐元素一致。科学数组哈希 `ec122c01028bb41345f1cecfa5614758287919650783181e92aec81068edf5a6`；产物 `runs/ajae/e34_empty_rays.npz` 大小1,755字节，SHA-256为 `b680519671cd189cf6f3bf241c249b4374051c381de80e8fcded6d8574033512`。
-
-## E35｜强度生成机械资格
-
-独立复算条件 quantile interpolation、material modulation、noise/hash 与 clipping。PASS：实现与 reference 最大误差不超过 $10^{-6}$；全部 finite 且位于206冻结支持；无未定义单元；边界 clipping fraction完整报告但不成为分布相似性门。PASS → E36。
-
-**执行冻结**
-
-完整枚举正式calibration的2,304个beam×range×incidence单元，每单元使用24个固定identity，共55,296次强度生成。identity $i$ 使用world seed与 `MaterialSpec.sample` seed 3,500,000+$i$、frame 2,000+$i$、object ID $i+1$、slot 0–2,303；正式channel 1 `_slot_uniform` 与 `SensorCalibration.sample_intensity` 对照独立64位mixer、material quantile扰动、条件表线性插值和冻结支持clipping。最大误差不超过 $10^{-6}$，全部finite且在支持内，两遍24进程逐元素一致；quantile边界clipping仅报告。实现提交 `0aea678d884e694391eeb0a94a89584c23104065`，`src/render.py` SHA-256为 `80720b70481408601a54fded5823de5865ec1152652dd83fc3af12d5467ee2d1`。正式命令为 `python -m src.render qualify-e35 --calibration runs/ajae/calibration.pt --output runs/ajae/e35_intensity.npz --processes 24`。
-
-**E35 正式结果：PASS（E35关闭，E36解锁）**
-
-55,296次正式强度与独立reference最大误差为0，identity uniform最大误差为0，未定义单元和冻结支持越界均为0，两遍逐元素一致；高端quantile clipping 80次、低端0次，总比例0.0014467592592592592。科学数组哈希 `cc8ffa84692ec01ce337e8e66d18e5c4dfabc836b8072699feb7dccca4a7efac`；产物 `runs/ajae/e35_intensity.npz` 大小2,048,622字节，SHA-256为 `25ffbbea26b7b1a211a0f098276350fbc4b8decabe9cf9b5e69ab2e9edc3acd2`。
-
-## E36｜normal-control/proxy 共用渲染路径
-
-静态代码审计与运行 trace 同时检查：label 在几何、return、nearest competition、intensity、slot recovery 中不得参与分支，只在最终监督语义赋值时使用。对相同几何/material/pose、只改 label 的 paired fixture，传感器中间数组必须逐元素一致。
-
-PASS：anomaly-only 或 control-only 传感器分支数0；paired trace 中间量零差异；标签赋值正确。PASS → E37。
-
-**执行冻结**
-
-静态审计 `_accepted_object_hits`、`SensorCalibration.return_chance` 与 `SensorCalibration.sample_intensity` 内对 `label` 属性或两类label常量的读取次数。运行配对构造分别尝试把同一个 `NormalTemplateShape` 仅改label为anomaly-proxy，以及把同一个schema 7 `ShapeSpec` 仅改label为normal-control；除label外material、pose与object ID保持一致。只有两种构造均通过后才执行paired trace；任一权威 `ObjectSpec` 合同拒绝即视为paired fixture不可构造并FAIL，不绕过dataclass验证。实现提交 `2404074c91660544b67d9b23ce6588e629b9f441`，`src/render.py` SHA-256为 `a628b8a0551c3d748c8182f50daf93d07d92f5a24b16b463d8fcbf4464257d52`。正式命令为 `python -m src.render qualify-e36 --output runs/ajae/e36_shared_path.npz`。
-
-**E36 正式结果：FAIL（protocol design conflict；E37保持锁定）**
-
-静态审计确认 `_accepted_object_hits`、`return_chance` 和 `sample_intensity` 中读取label属性或两类label常量的分支数为0。冻结paired fixture不可构造：将 `NormalTemplateShape` 仅改label为anomaly-proxy触发 `anomaly-proxy objects cannot use normal instance templates`；将schema 7 `ShapeSpec` 仅改label为normal-control触发 `normal-control objects require a 206 convex-hull template`。因此paired trace未执行，E36不能满足“相同geometry/material/pose只改label”的冻结PASS条件。
-
-失败分类为 `protocol design conflict`，不构成传感器中间函数已观测label分支错误，也不得改写为PASS。产物 `runs/ajae/e36_shared_path.npz` 大小618字节，SHA-256为 `d61e90062ba5f5500d8eac3ad8bbf6f9163c38acc61fc4b56b96900a59e137d9`。继续需要修改E36 paired-fixture定义或 `ObjectSpec` 的shape–label合同，属于实验设计决策；按状态机停止，E37不执行。
-
-### E36-v2｜传感器接口层标签独立性
-
-E36-v1 FAIL永久保留；不修改 `ObjectSpec`。v2完整枚举2,304个正式calibration单元并使用24组固定world/frame/object/slot/material身份，共55,296个几何后传感器输入。normal-control与anomaly-proxy两个虚拟标签条件分别运行；label只由harness在所有传感器数值流程结束后写入semantic与两类mask，不作为任何被测函数参数。两条件的beam、slot、distance、incidence、material、native range、return probability、channel 0/1 uniform、accepted mask、sampled intensity、competition input、final distance、occupancy和inserted mask必须逐元素一致并以NaN同位相等；唯一允许差异为semantic、`normal_control_mask`与`anomaly_proxy_mask`。
-
-静态审计重新计算 `_accepted_object_hits`、`return_chance`、`sample_intensity` 的label读取数，并检查 `render_frame` 在调用 `_accepted_object_hits` 前后的label读取位置。PASS要求三个传感器函数和competition前label读取均为0，末端label bookkeeping正确，两遍24进程逐元素一致。实现提交 `442c2a8cb7561df73b8d6cf5d669dd3981a1090f`，`src/render.py` SHA-256为 `88e5385c214232fb6f24855f77696cc61aaf1e6873ce475d7118574a90097922`；46项回归全部通过，用时99.64秒。正式命令为 `python -m src.render qualify-e36-v2 --calibration runs/ajae/calibration.pt --output runs/ajae/e36_v2_shared_path.npz --processes 24`。PASS后关闭E36并解锁E37。
-
-**E36-v2 正式结果：PASS（E36关闭，E37解锁）**
-
-55,296个固定输入的17类标签写入前中间数组差异均为0，final bookkeeping错误为0；三个传感器函数label读取数为0，`render_frame` competition前label读取数为0，末端bookkeeping label读取数为3。两遍24进程用时0.149848秒和0.149716秒，全部数组逐元素一致。科学数组哈希 `638ead3be7cf5de0a064e14e5ab14be5eb3caca3014241ab2459ef2bc0ace213`；产物 `runs/ajae/e36_v2_shared_path.npz` 大小1,309,291字节，SHA-256为 `de2cb9971caea1269d255d19b2d00c05860067c8a8533fde0f287e3369787a63`。E36-v2仅证明标签写入前传感器数值路径独立于外部标签；最终semantic和两类mask按定义不同。
-
-## E37｜world/frame 跨窗口一致性
-
-固定128个 E26 worlds，每个选择多个重叠五帧窗口；以正序、逆序、随机顺序、不同进程数、cached/uncached 请求共享帧。
-
-PASS：同一 `(world_hash,frame_id,renderer_identity)` 的 XYZI、occupancy、packed labels、全部 masks、object IDs逐 bit一致；window identity不进入 return RNG；跨世界 cache误命中0。PASS → E38。
-
-### E37正式执行冻结
-
-从已通过的E26产物中，按 `pure_normal`、`control_only`、`mixed`、`anomaly_only` 顺序分别取world seed升序前32个，共128个固定世界。固定两个相邻中心帧100和101，对应窗口 `[98,99,100,101,102]` 与 `[99,100,101,102,103]`；每世界共10次请求、6个唯一frame identity。直接调用正式 `render_frame`、训练用 `FrameCache` 和 `FrameCacheKey`，不实现第二套缓存逻辑。
-
-四条执行路径冻结为：1进程正序cached、24进程正序uncached、24进程逆序cached、24进程按 `SeedSequence([world.seed,3701])` 随机顺序cached。比较字段为 `xyzi`、occupancy、`packed_labels`、`normal_control_mask`、`anomaly_proxy_mask`、`inserted_mask`、`occluded_original_mask`、`unchanged_normal_mask` 和 `object_id_internal`。同一路径内重复请求直接逐bit比较；跨执行路径按包含dtype、shape和完整连续数组字节的逐字段SHA-256比较。另以64对不同world、相同frame请求连续进入同一正式cache，要求每个不同world的factory恰好调用一次、各自第二次请求命中自身对象、跨world对象引用不相同。静态审计要求 `render_frame` 参数与 `_slot_uniform` 实现均不读取window identity。
-
-实现提交 `4b8b6927a9b6c80955b1ab92240b835060ac7f38`，`src/render.py` SHA-256为 `07e3ec793ce98704daee13b250453be4f844f916cb51520e0daefa080c71aaef`；46项完整回归全部通过，用时98.17秒。正式命令为 `python -m src.render qualify-e37 --e26-artifact runs/ajae/e26_world_builder.npz --data-root /home/jasongao/Data/STU --calibration runs/ajae/calibration.pt --output runs/ajae/e37_world_frame_consistency.npz --processes 24`。全部身份、字段摘要、重复请求逐bit、渲染次数、跨world cache与window静态审计错误均为0时PASS并解锁E38。
-
-**E37 正式结果：PASS（E37关闭，E38解锁）**
-
-128个固定E26世界按四类各32个完成。`xyzi`、occupancy、packed labels、五类正式mask和object IDs共9个字段在1进程正序cached、24进程正序uncached、24进程逆序cached和24进程随机顺序cached之间的字段摘要错误全部为0；同一路径重叠窗口重复请求逐bit错误为0，world/frame身份错误为0。四条路径实际渲染调用数分别为768、1280、768、768，与冻结计数完全一致；64对跨world cache审计的误命中为0，factory调用总数128。`render_frame` window参数读取数与 `_slot_uniform` window读取数均为0。
-
-四条路径用时分别为170.843918秒、92.472165秒、55.941505秒和56.069116秒。渲染器/生成器身份为 `9ff61e81c133a844b107ff303da6471d9810384a90846b1eb67cb73dacf792f0`，科学数组哈希为 `5df3d02f0d47697a785b3d43ea457765a5d4d48106b74a77c68f087919939fd0`。产物 `runs/ajae/e37_world_frame_consistency.npz` 大小149,551字节，SHA-256为 `04e524a5428c9b906e9fefe253f7ec66533bd6cb3452ea6d9afdb830e1a94b34`。E37只建立相同world/frame/renderer身份在重叠窗口、顺序、进程数与缓存状态之间的渲染一致性，不包含Gate 1三来源统计匹配结论。
-
-# Phase 4｜Gate 1：传感器一致性、严格匹配与反作弊
-
-## Phase 4 当前候选银行分工
-
-在 E38-v2 前冻结 train/201 帧4–681的 support-pool 算法和新版候选银行。E38-v2的real-normal/control/proxy三来源共享候选银行固定为恰好256个paired world seeds，不存在统一三方容量阶梯。后续若E45A-new或E45B-v2的预定义两两匹配覆盖不足，只能分别使用各自独立的两两审计银行，按512→1024→2048扩容；候选选择只读取冻结匹配协变量，禁止读取E46或E48输出。对应的独立两两银行达到2048仍不足时，按E45A-new或E45B-v2的FAIL路由停止，不得改caliper。
-
-201 support pool 使用 E21-v4 同一算法和实际可观察 ground semantics；normal-control support policy保持 E25-new。所有 Gate 1 单元限定官方2.5–50 m。
-
-E38-v2–E44刷新的 PASS 表示统计有效、覆盖可用于 E45A-new 与 E45B-v2，不等于分布已经相同；普通差异统一交给 E46 和 E48。
-
-## E38｜per-beam 回波率审计
-
-计算三来源 per-beam opportunity、return count/rate和cluster bootstrap区间；保存每个entity-frame group。PASS：全部有限、计数守恒、real/control/proxy均有非零回波且关键匹配字段可计算。beam差异只描述。PASS → E39刷新。
-
-### E38-v2｜E25-new分布下的统一候选银行与单次共享渲染
-
-E38-v2精确复用已存在的train/201 E21-v4支撑池`runs/ajae/gate1_201_support_pool.npz`，不重建支撑池。读取前必须核对其SHA-256为`fc3646fbc145cdc29d2cf203835a3e0018bacbc6eaf714e091d21f7b93bfaf50`，并核对train/201帧4–681、中心帧6–679与E21-v4算法身份。201实际非地面回波仍全部进入E23连续SDF碰撞索引，不做空间抽样。
-
-normal-control模板不从任何已缩放的E25对象反向恢复。runner从train/206流式重提取256个未缩放规范模板，核对四类各64个、规范顺序及模板库SHA-256 `de5dfd765ac7d4fe4bb4644c40ecafdd80cdc31a3d0b6fc4fccd8e84a9fd906b`；同时核对E25-new正式产物`runs/ajae/e25_new_normal_control.npz`的SHA-256为`30fc7d1ecd60d005cb18c60ac81b1c7335e2121fcd3f1da5f440b5387a747b19`。E25-new产物只用于身份证明，不作为已缩放shape源。
-
-候选银行继承原256个paired seeds `3800000–3800255`、原real-normal单元选择、原最多48个world attempts和共享五帧身份。第$a$个attempt继续使用`attempt_seed=bank_seed+1,000,003a`；规范模板索引由`default_rng(attempt_seed+1).integers(0,256)`的唯一一次有放回抽样产生，指定距离层固定为该索引对5取模。不增加额外模板抽样，不换模板或距离层。
-
-对当前attempt的模板索引与指定距离层，runner先在完整201支撑池上按E25-new的类别合法语义、距离层与冻结键生成全局top-128支撑流，随后只保留support frame位于real center±2的原顺序子序列。过滤后不重排、不从全局第129项以后补齐。normal-control与anomaly-proxy复用这一支撑行序列，但分别构造独立world，不参与彼此遮挡。
-
-normal-control沿用冻结缩放、姿态和材质流，并通过唯一`place_object`路径执行E21支撑身份、E22连续grounding和E23已观测正常几何碰撞。接受前必须使用完整正式`render_frame`复核至少一个最终可见normal-control回波，且这些回波的中位official range落在模板索引预定义的距离层。anomaly-proxy的schema 7 shape、最多64个shape proposals、E21–E23、材质、姿态、回波和可见性规则保持原E38合同不变。
-
-新版候选银行必须显式保存real-normal、normal-control与anomaly-proxy各自的support semantic，并保存control的canonical template index、assigned range bin、final observed range bin、最终可见回波数、attempt/world/frame/object随机身份和支撑流前缀。产物schema版本固定为`gate1-candidate-bank-v2`；runner必须拒绝旧v1候选银行，不得把旧control、proxy或real trace拼接到v2。
-
-E38-v2仍以entity-frame为cluster，使用固定2,000次multinomial bootstrap、`SeedSequence([3801,2000])`及2.5%/97.5%分位区间。三来源opportunity、return count/rate、关键匹配字段、有限性、守恒性和非零回波PASS判据保持不变；来源间数值差异只报告。同一次权威渲染同时保存E39–E44需要的逐实体帧geometry/accepted/visible counts与distance、逐回波beam/range/intensity，以及两类生成来源逐beam/range的native-empty、geometry、accepted和final-new计数。E39刷新只读该共享trace并独立裁决，不重新渲染。
-
-E38-v2固定使用24个进程、每进程一个数值库线程，只执行一次正式运行，不自动重试，不产生两遍逐元素复现结论。命令冻结为`python -m src.render qualify-e38-v2 --data-root /home/jasongao/Data/STU --e25-new-artifact runs/ajae/e25_new_normal_control.npz --support-pool runs/ajae/gate1_201_support_pool.npz --calibration runs/ajae/calibration.pt --candidate-bank-output runs/ajae/gate1_candidate_bank_v2_256.npz --output runs/ajae/e38_v2_per_beam_return.npz --processes 24`。该命令的正式执行已经完成，结果如下。
-
-**E38-v2正式结果：PASS（E38关闭，E39刷新解锁）**
-
-新版候选银行完成256/256个paired seeds，错误、合同错误和seed身份错误均为0，覆盖172个中心帧和164个有放回抽中的规范模板；control指定与最终距离层计数均为[60,56,56,58,26]，最少最终可见回波数为1，最大使用attempt为5。real-normal、normal-control、anomaly-proxy的support semantic 40/48计数分别为167/89、215/41和214/42。候选构建用时52.242514秒，科学数组哈希为`91e00c3b874572aff4267ad04982fb7909e0eb2766f3ad15ede1e2fe55506b26`；产物大小1,192,842字节，SHA-256为`a2c80614d1eea91de6a969a48e3627d9e604b6927fe08aa91bf5173d133e31d4`。
-
-三来源各保存1,280个entity-frame groups。real-normal、normal-control、anomaly-proxy总opportunity分别为826,836、391,049和299,242，总return分别为598,736、385,263和295,250；计数守恒错误、共享trace合同错误和非有限错误均为0。单次24进程共享trace运行用时44.695235秒，按所有者决定未执行第二遍复现；科学数组哈希为`30bc585de77e730570a942356d127858153350ac672bc6d39887b84381b770b1`。产物`runs/ajae/e38_v2_per_beam_return.npz`大小14,675,308字节，SHA-256为`914b185ae31d5509fa286208c26bb4271460d289a02ec398eaee715b7eeb7c9a`。renderer身份为`be33efba9b32f4ed00132d79ed26311d2769206d13756ce6c7b47c933f4a9ccf`。E38-v2只建立新版三来源逐beam统计有限、守恒、均有非零回波及共享trace内部一致，不裁决来源泄漏。
-
-### 历史 E38及统一候选银行正式执行冻结
-
-**当前适用边界：本节随后记载的旧E38–E44及E45A/E45B结果使用旧normal-control分布，只作为历史证据保留。E25-new后的E38–E44刷新已经PASS；E45A-new已在2,048容量正式FAIL，当前停止等待新决策，E45B-v2尚未执行。**
-
-train/201支撑池读取帧4–681，以中心帧6–679和五帧对称窗口执行E21-v4完全相同的0.5米world-XY thinning、距离自适应三尺度trimmed-SVD估计及冻结残差/稳定性条件；所有合格区域进入 `runs/ajae/gate1_201_support_pool.npz`。201实际非地面回波全部进入E23同一连续SDF碰撞索引，不做空间抽样。正常对照模板只读取已通过的E25产物，语义支撑策略、0.9–1.1逐轴缩放、车辆/行人朝向策略、E22 grounding、E23 observed-normal collision和E24 placement proposal上限均保持不变。
-
-候选银行首级容量固定256个paired seeds `3800000–3800255`。真实正常实体必须属于201中实际可观测的10、18、20、30类，且同一实例在对应五帧的每帧2.5–50米内至少有16个回波、中心帧至少有32个回波。support semantic先取实体水平凸包外扩0.5米内的qualified patch；为空时取到凸包不超过1.0米的最近qualified patch。每个seed分别构造一个单正常对照世界和一个单异常代理世界，两者是独立counterfactual world，不参与彼此遮挡；支撑proposal限于实体中心五帧及同一support semantic。每个world最多48个固定attempt，每个placement仍最多128个proposal，schema 7每实体仍最多64个shape proposals；两类实体均须在五帧内至少产生1个最终可见回波。候选银行不读取任何来源分类或后续模型结果。
-
-E38保存每个seed、来源和帧的128 beam opportunity与return count，以及support semantic、median beam和median distance。real-normal opportunity使用该实例同帧2.5–50米实际点构造的连续凸包首交，并包含其实际回波槽；control/proxy opportunity使用各自正式连续geometry hit，return count使用正式renderer最终赢得slot的2.5–50米回波。cluster bootstrap以entity-frame为cluster，固定2,000次multinomial重采样和 `SeedSequence([3801,2000])`，报告每来源每beam的2.5%与97.5%分位区间。普通来源间差异只描述，不作为E38硬门。
-
-实现提交为 `9a0347ca69f0baa1e416e64049f623858cf5e1e4`，真实支撑分配修订提交为 `deee0d1f38357b189e36d16449639e1b8013fa04`；最终 `src/render.py` SHA-256为 `100dbb22f2d307b8bfc32d0675b6c73d3efdde04b39ec57997b865707b9862a3`。46项完整回归通过，用时97.39秒。正式命令为 `python -m src.render qualify-e38 --data-root /home/jasongao/Data/STU --e25-artifact runs/ajae/e25_normal_control.npz --calibration runs/ajae/calibration.pt --support-pool-output runs/ajae/gate1_201_support_pool.npz --candidate-bank-output runs/ajae/gate1_candidate_bank_256.npz --output runs/ajae/e38_per_beam_return.npz --processes 24`。
-
-**历史 E38 正式结果：PASS（仅旧normal-control分布；当前待刷新）**
-
-train/201支撑池包含1,193,969个合格区域，覆盖636个中心帧；语义40为612,018个、语义48为581,951个、语义49为0个。支撑池构建用时83.328154秒，科学数组哈希 `a5bd7007c508d4b411f84bcac7c26b418f93d46837d1da0774637bb15406f490`；产物大小84,256,915字节，SHA-256为 `fc3646fbc145cdc29d2cf203835a3e0018bacbc6eaf714e091d21f7b93bfaf50`。
-
-统一候选银行从1,635个持续五帧且具有合法支撑语义的真实正常候选中完成256/256个seed，覆盖183个不同中心帧；support semantic 40与48分别为174和82，全部在attempt 0完成，构建错误0。候选银行科学数组哈希 `af07e64a90d5a16782d5f2a26069ba741898bdbfd7cee59a315a04e9b76ba4bf`；产物大小1,090,511字节，SHA-256为 `16db45363c1b1f670bcca60ca253811ca63a224349a8e9c2f3dacde1a2239d11`。
-
-real-normal、normal-control、anomaly-proxy各保存1,280个entity-frame groups。三来源总opportunity分别为1,007,417、468,954和456,804，总return分别为742,546、462,626和451,689；return超过opportunity的计数为0，非有限率、区间或匹配字段为0，两遍24进程逐元素一致，用时225.181363秒和224.414734秒。科学数组哈希 `1fa5021b268078f386ce3393d77c219c111717c585b74d61542a34c7e94a875e`；产物 `runs/ajae/e38_per_beam_return.npz` 大小209,405字节，SHA-256为 `60bcffc4fb8c55cd9a2820795380621fb7162119714b95db5c485020653e7108`。来源间逐beam数值差异只作描述，未在E38裁决来源泄漏。
-
-## E39｜per-range 回波率审计
-
-固定 bins $[2.5,10),[10,20),[20,30),[30,40),[40,50]$。PASS：三来源计数守恒、有限；每个来源在前四 bins均有entity-frame观测，40–50 m不足只报告。PASS → E40。
-
-### E39-v2刷新执行冻结
-
-E39-v2已经由E38-v2 PASS解锁，只读取SHA-256固定为`914b185ae31d5509fa286208c26bb4271460d289a02ec398eaee715b7eeb7c9a`的`runs/ajae/e38_v2_per_beam_return.npz`完整共享trace。runner核对E38-v2的PASS、科学数组哈希与共享trace身份后，直接聚合冻结五个距离层的opportunity、return count/rate和非零return entity-frame groups；不读取STU数据、不重建支撑池或候选world、不重新计算几何或renderer。E39-v2只正式执行一次，不做第二遍复现。正式命令固定为`python -m src.render qualify-e39-v2 --e38-artifact runs/ajae/e38_v2_per_beam_return.npz --output runs/ajae/e39_v2_per_range_return.npz`。PASS条件保持计数守恒、全部聚合率与逐实体帧可见距离有限、三来源前四距离层各至少一个非零return entity-frame group；40–50米只报告。
-
-**E39-v2正式结果：PASS（E39关闭，E40刷新解锁）**
-
-real-normal五个距离层的opportunity为[473229,304955,45929,2723,0]，return为[347890,221916,27328,1602,0]，非零return entity-frame groups为[339,854,280,36,0]。normal-control对应值分别为[296881,55717,21628,13313,3510]、[295036,54159,21233,11764,3071]和[316,353,335,320,127]；anomaly-proxy对应值分别为[224627,52213,12187,7453,2762]、[223662,50527,11977,6728,2356]和[307,307,286,300,119]。三来源前四层覆盖错误、计数守恒错误和非有限错误均为0；real-normal在40–50米为0，按冻结规则只报告。只读聚合用时0.000295秒，未执行第二遍复现。科学数组哈希为`348670e8aa9a8677f600aea55b825723d57d3246b64b3c83dc49bc3c64c29a1a`；产物大小14,676,288字节，SHA-256为`e7cea1574638db2f7e41799fe3855519ea57a47e9f6adc04f1a5a37e8aa526e0`。
-
-下述E39执行冻结和正式结果属于旧v1候选银行的历史记录。
-
-### E39正式执行冻结
-
-直接读取E38已冻结且通过的256-seed候选银行，不重建201支撑池或世界。每个seed、来源和五帧保存五个冻结range bins的geometry opportunity与最终return count；real-normal opportunity继续使用同帧实际点凸包首交并包含实际实例槽，control/proxy使用连续geometry hit，全部距离采用规范官方量程。PASS要求逐entity-frame return不超过opportunity，全部聚合率与逐实体帧匹配字段有限，三来源在前四bins分别至少有一个非零return entity-frame group，两遍24进程全部数组逐元素一致；40–50米覆盖只报告。
-
-本次同一权威渲染同时保存E40–E44直接需要的原始trace：逐实体帧geometry/accepted/visible counts与distance、逐返回beam/range/intensity，以及control/proxy逐beam/range的native-empty、geometry、accepted和final-new计数。后续节点只读取这些已冻结原始数组各自裁决，不重新执行相同几何和渲染，也不提前写入后续PASS结论。实现提交 `f09ea627b4203fe738c86761275c16e6786529c1`。首次启动因审计端对冻结mask原地执行距离筛选而触发只读数组异常，在生成科学结果前退出；修复提交 `9da9dcd19f3df276b6533c10389f5d7eb5154ade` 仅创建显式mask副本，不改变样本、渲染、随机流或判据。修复后 `src/render.py` SHA-256为 `8009cac53f0b62e127c72ff22aa35aeed957c0650f5e7743741db72d4a4e0e4b`，46项完整回归通过，用时97.87秒。正式命令不变。
-
-**历史 E39 正式结果：PASS（仅旧normal-control分布；当前待刷新）**
-
-real-normal五个距离箱的opportunity为686,670、273,466、46,226、1,055、0，return为513,492、202,803、25,732、519、0，非零return entity-frame groups为447、833、268、15、0。normal-control对应opportunity为354,036、104,916、9,630、372、0，return为350,782、101,962、9,512、370、0，groups为511、684、236、26、0。anomaly-proxy对应opportunity为332,449、111,460、12,436、459、0，return为330,433、108,813、12,052、391、0，groups为493、637、228、23、0。
-
-前三来源的前四距离箱均有entity-frame观测，40–50米均为0并按冻结规则只报告。逐实体帧计数守恒错误0、非有限值0，两遍24进程逐元素一致，用时223.697474秒和224.626689秒。共享trace包含1,656,861条逐返回强度记录，科学数组哈希 `185f27c461943f6d8143f70bed6d6301f1d4753ae362cca06aed12ea999c3d52`；产物 `runs/ajae/e39_per_range_return.npz` 大小5,556,553字节，SHA-256为 `e404a63c32331221af02d17cc694398410c55bbf8f14798469dde7741ec63f58`。
-
-## E40｜beam×range 强度审计
-
-报告条件 median、Q05/Q25/Q75/Q95、ECDF距离与 clipping fraction。PASS：所有生成强度有限且在206支持内，分箱身份与计数正确。分布偏差不在本节点直接判来源泄漏。PASS → E41。
-
-### E40-v2刷新执行冻结
-
-E40-v2只读取SHA-256固定为`e7cea1574638db2f7e41799fe3855519ea57a47e9f6adc04f1a5a37e8aa526e0`的E39-v2共享trace和冻结传感器标定。逐回波先按source、beam与range bin一次稳定分组，再在每个组内计算冻结五个分位数、三组两两ECDF距离及生成来源上下界clipping；该分组实现与历史逐cell布尔筛选使用相同回波、分组键和公式，只删除重复全数组扫描。E40-v2只运行一次。正式命令固定为`python -m src.render qualify-e40-v2 --e39-artifact runs/ajae/e39_v2_per_range_return.npz --calibration runs/ajae/calibration.pt --output runs/ajae/e40_v2_beam_range_intensity.npz`。
-
-**E40-v2正式结果：PASS（E40关闭，E41刷新解锁）**
-
-正式核对1,279,249条逐回波强度，real-normal、normal-control和anomaly-proxy记录数分别为598,736、385,263和295,250，非空beam×range单元分别为193、195和239。来源/beam/range身份错误、E39-v2计数回算错误、非有限错误和生成来源强度支持越界均为0；normal-control与anomaly-proxy在冻结强度上下界的clipping计数均为[0,0]。单次统计用时0.142458秒，科学数组哈希为`240d204151f6bc9b913997a4809bcef45598384403907b3a9aedf7a17a681349`；产物大小24,588字节，SHA-256为`e197a309e20003411e760c3236316f2ca763947029bbbef52813fcb214ee6dc5`。条件分位数和ECDF距离只作描述，不在E40裁决来源泄漏。
-
-**执行冻结**
-
-读取已通过的E39共享trace，对real-normal、normal-control、anomaly-proxy的128 beam×5 range cells分别保存样本数和Q05/Q25/median/Q75/Q95；保存real-control、real-proxy、control-proxy三组两两最大ECDF距离及有效cell mask。normal-control与anomaly-proxy分别报告落在206冻结强度支持上下界的计数和比例。空cell以count/valid mask明确标识，数值数组保持有限；PASS只检查1,656,861条真实生成记录的有限性、生成来源支持范围、分箱身份、E39计数回算和两遍逐元素一致，普通条件分布差异留给E46。实现提交 `a8f5da83d847913baf14192af67a0bf733fc6158`，`src/render.py` SHA-256为 `2b072872024ba8ccf900783a1f334cf1b45dc90b33d1d23a2c827b731f42d6b0`；46项完整回归通过，用时99.41秒。正式命令为 `python -m src.render qualify-e40 --e39-artifact runs/ajae/e39_per_range_return.npz --calibration runs/ajae/calibration.pt --output runs/ajae/e40_beam_range_intensity.npz`。
-
-**历史 E40 正式结果：PASS（仅旧normal-control分布；当前待刷新）**
-
-三来源强度记录数分别为742,546、462,626和451,689，非空beam×range cells分别为190、173和214。来源、beam与range身份错误0，按cell回算E39计数错误0，所有强度非有限值0，normal-control与anomaly-proxy的206冻结支持越界均为0；两类生成来源在支持下界和上界的clipping计数均为0。两遍统计逐元素一致，总用时1.907127秒。科学数组哈希 `05c9248caeaa5de12320a6c0695e47e983221610eaae67daa82fe0c865ce22ab`；产物 `runs/ajae/e40_beam_range_intensity.npz` 大小22,989字节，SHA-256为 `ac8cd9a2bfa2f0011c201f287d1a3908e401fe844f09bc12be8b755673dd8564`。条件分位数与ECDF差异只报告，不在E40裁决来源泄漏。
-
-## E41｜empty→valid 审计
-
-报告control/proxy按beam/range的空槽机会、geometry hit、return接受和最终新增。PASS：关系链计数守恒，两个label均实际覆盖新增与拒绝分支，零非法新增。比例差异留给匹配/分类。PASS → E42。
-
-### E41-v2刷新执行冻结
-
-E41-v2只读取SHA-256固定为`e7cea1574638db2f7e41799fe3855519ea57a47e9f6adc04f1a5a37e8aa526e0`的E39-v2共享trace，直接复算normal-control与anomaly-proxy的native-empty、geometry、accepted和final-new整数关系链，不重新渲染。冻结关系、分支覆盖和PASS条件不变，只按所有者决定取消第二遍重复统计。正式命令为`python -m src.render qualify-e41-v2 --e39-artifact runs/ajae/e39_v2_per_range_return.npz --output runs/ajae/e41_v2_empty_to_valid.npz`。
-
-**E41-v2正式结果：PASS（E41关闭，E42刷新解锁）**
-
-normal-control与anomaly-proxy的空槽机会、几何命中、回波接受和最终新增总计分别为[25409785,20193,20147,20147]和[25409785,19291,19253,19253]；回波概率拒绝分别为46和38，接受后拒绝均为0。四类关系链违规、总链错误和分支覆盖错误均为0。单次统计用时0.017559秒，科学数组哈希为`a43887141dd8fb02dfe0a5291926acfba99a1e2d70487b5015f25faa7e2c5fd0`；产物大小5,952字节，SHA-256为`ac72fb803300c603fe081ec150da0f1e8cabefc778f14f6bb4e015becd71115c`。
-
-读取E39已通过的共享trace，按normal-control和anomaly-proxy分别复算空槽机会、几何命中、回波接受和最终新增，并保存逐beam×range计数。PASS要求逐实体、帧和beam的几何命中不超过原生空槽机会，逐beam×range的回波接受不超过几何命中，最终新增不超过回波接受；两类来源均须至少有一个最终新增和一个由回波概率产生的拒绝，所有计数非负，两遍统计逐元素一致。接受后未新增的计数作描述性报告，不增设非零要求；来源间比例差异留给E45/E46。实现提交 `df23bffed5d335e9a55e177a6980e01eb6b89ea9`，`src/render.py` SHA-256为 `cd34392c2d7724e40e42f1667be7a257b6f68b60cbaf08d67afa8b04f11d7649`；46项完整回归通过。正式命令为 `python -m src.render qualify-e41 --e39-artifact runs/ajae/e39_per_range_return.npz --output runs/ajae/e41_empty_to_valid.npz`。
-
-**历史 E41 正式结果：PASS（仅旧normal-control分布；当前待刷新）**
-
-normal-control与anomaly-proxy的“原生空槽机会→几何命中→回波接受→最终新增”总计分别为24,291,803→16,037→16,011→16,011和24,291,803→25,173→25,136→25,136。几何超过空槽、接受超过几何、最终新增超过接受以及负计数四类错误均为0；两类来源的回波概率拒绝分别为26和37，最终新增均非零。接受后未新增均为0，符合当前单插入对象和原生空槽条件；两遍统计逐元素一致，总用时0.025614秒。科学数组哈希 `71bbccc62da2254b553bfbaaf8f9864281b9242d956ca88c903e1f90a74f7c8f`；产物 `runs/ajae/e41_empty_to_valid.npz` 大小5,541字节，SHA-256为 `771e39129087324be9526b6286bd2d2c40194d8c20c6ec8fd0dceb8fdf340c3e`。来源间比例差异未在E41裁决。
-
-## E42｜单实体 $N_{vis}$ 与匹配可行性
-
-按entity-frame保存geometry hits、accepted-before-occlusion、visible returns和距离。冻结 $N_{vis}$ 层为 $[1,8)$、$[8,32)$、$[32,128)$、$[128,+\infty)$。PASS：定义和计数守恒、control/proxy均覆盖至少三个层，候选银行能为E45提供非空匹配。不得以总体均值相近替代E45。PASS → E43。
-
-### E42-v2刷新执行冻结
-
-E42-v2只读取SHA-256固定为`e7cea1574638db2f7e41799fe3855519ea57a47e9f6adc04f1a5a37e8aa526e0`的E39-v2共享trace，沿用历史冻结的四个正可见层、五个距离层、两种support semantic和全部计数/覆盖判据；不重新渲染，只执行一次统计。正式命令为`python -m src.render qualify-e42-v2 --e39-artifact runs/ajae/e39_v2_per_range_return.npz --output runs/ajae/e42_v2_nvis_strata.npz`。
-
-**E42-v2正式结果：PASS（E42关闭，E43刷新解锁）**
-
-三来源四个正可见层计数分别为[0,16,513,751]、[142,224,472,439]和[207,277,388,383]，零可见实体帧组分别为0、3和25。normal-control与anomaly-proxy均覆盖全部四层，三来源共有14个support semantic×range bin×$N_{vis}$共同非空层；定义、计数、覆盖和初步匹配可行性错误均为0。单次统计用时0.000793秒，科学数组哈希为`149786c043dbbd438d9d5681aca42f4fc411d9190ffc066b963ded05ccad281f`；产物大小48,440字节，SHA-256为`af9dd78d1011fa566b5128a33584a8b23796b5f3d23252ca8a7b1823d95b9e84`。完整共同支持仍由E45A-new与E45B-v2裁决。
-
-直接读取E39共享trace的256个候选、三来源和五帧，共每来源1,280个entity-frame；逐项保存geometry hits、accepted-before-occlusion、visible returns、距离、距离箱和冻结 $N_{vis}$ 层。$N_{vis}=0$ 单独计数，不错误并入四个正可见层；PASS要求非负、accepted不超过geometry、visible不超过accepted、距离与距离箱有效，并满足“零可见计数+四层计数=1,280”。normal-control与anomaly-proxy各须覆盖至少三个正可见层；以support semantic×range bin×$N_{vis}$ layer统计三来源共同非空层，至少一个共同层作为E45的初步非空匹配可行性，完整匹配仍由E45裁决。两遍统计必须逐元素一致。实现提交 `e1af043e434f8958b8d7e33b8d22a79ad200f4b9`，`src/render.py` SHA-256为 `9ffcbfd10ebb5f3faf93b68d96677dff6c53f86a1b4c304ec25343b7d4971c64`；46项完整回归通过。正式命令为 `python -m src.render qualify-e42 --e39-artifact runs/ajae/e39_per_range_return.npz --output runs/ajae/e42_nvis_feasibility.npz`。
-
-**历史 E42 正式结果：PASS（仅旧normal-control分布；当前待刷新）**
-
-每来源1,280个entity-frame的定义与计数均守恒。real-normal四层计数为0、10、433、837，零可见0；normal-control为51、223、402、597，零可见7；anomaly-proxy为68、200、356、652，零可见4。两类生成来源均覆盖四个正可见层；support semantic×range bin×$N_{vis}$ layer中三来源共同非空层为12个。定义错误、计数错误、覆盖错误和初步匹配错误均为0，两遍逐元素一致，总用时0.001445秒。科学数组哈希 `8de2b629f5dd6d6ea1202f546826300c36cd68e5bd2ddf7f4772e859b1aac3d5`；产物 `runs/ajae/e42_nvis_feasibility.npz` 大小50,075字节，SHA-256为 `19da6a5c347768e7861c75bac2e62cc2dfe0ada7d4ff294306a5ecca797f791e`。完整匹配资格仍由E45裁决。
-
-## E43｜连续帧可见点数变化
-
-同一静止实体逐帧结果必须由world/frame稳定身份决定。PASS：重复渲染零变化；不存在window导致的随机闪烁；$N_{vis}$变化率和V分层有限。真实几何导致的出现/消失只描述。PASS → E44。
-
-### E43-v2刷新执行冻结
-
-E43-v2精确读取已通过且SHA-256为`04e524a5428c9b906e9fefe253f7ec66533bd6cb3452ea6d9afdb830e1a94b34`的E37窗口身份审计，以及SHA-256为`e7cea1574638db2f7e41799fe3855519ea57a47e9f6adc04f1a5a37e8aa526e0`的E39-v2共享trace。重复请求和window身份资格继续由E37有效证据提供；E43-v2只对新版五帧visible-return trace执行一次$N_{vis}$变化、V分层和出现/消失统计，不重新渲染、不要求E39-v2第二遍。正式命令为`python -m src.render qualify-e43-v2 --e37-artifact runs/ajae/e37_world_frame_consistency.npz --e39-artifact runs/ajae/e39_v2_per_range_return.npz --output runs/ajae/e43_v2_temporal_visibility.npz`。
-
-**E43-v2正式结果：PASS（E43关闭，E44刷新解锁）**
-
-window身份错误和重复请求错误均为0，变化率有限性错误和定义错误均为0。real-normal、normal-control与anomaly-proxy的$V=0,\ldots,5$计数分别为[0,0,0,0,0,256]、[0,0,1,0,0,255]和[0,0,3,4,8,241]；出现/消失分别为0/0、1/0和10/10。三来源相邻变化率Q05/Q25/Q50/Q75/Q95分别为[0.002512,0.024390,0.050243,0.084567,0.169492]、[0,0.019324,0.051474,0.092379,0.333333]和[0,0.022727,0.055883,0.115385,0.5]。单次统计用时0.000526秒，科学数组哈希为`e8f2fc993b95333db5cf2d79b2429bcccac0c9b0338610c3f9ac335c69bb580e`；产物大小24,152字节，SHA-256为`59d2e834b5b31770349faac591beb22067d87d4dbe1796b67ce857cb2aaf77a3`。
-
-读取E37已通过的跨窗口一致性产物和E39已通过的五帧共享trace。重复渲染要求E39两遍完整24进程结果逐元素一致；window身份错误由E37的九个字段摘要、重复请求、world/frame身份、渲染调用、跨world cache、`render_frame` window参数和随机流window读取共同复核。对每个固定实体保存五帧$N_{vis}$、相邻帧差及变化率 $|N_t-N_{t-1}|/\max(N_{t-1},1)$；$V$定义为五帧中$N_{vis}>0$的帧数并按0–5完整计数。PASS要求所有计数和分层定义有效、变化率及分位数有限、两次统计逐元素一致；真实几何导致的出现和消失只报告。实现提交 `7dcd999a49b3312c4ca1030cff9b4e03d09b7cb4`，`src/render.py` SHA-256为 `06f9174a41246ba68e339b4e3f0cde706a5673300d3656291e04de646756b324`；46项完整回归通过。正式命令为 `python -m src.render qualify-e43 --e37-artifact runs/ajae/e37_world_frame_consistency.npz --e39-artifact runs/ajae/e39_per_range_return.npz --output runs/ajae/e43_temporal_visibility.npz`。
-
-**历史 E43 正式结果：PASS（仅旧normal-control分布；当前待刷新）**
-
-window身份错误0，E39两遍重复渲染错误0。real-normal、normal-control、anomaly-proxy的$V=0,\ldots,5$计数分别为[0,0,0,0,0,256]、[0,1,0,1,1,253]和[0,0,0,0,4,252]；出现/消失转移分别为0/0、3/1和1/4。三来源相邻帧变化率Q05/Q25/Q50/Q75/Q95分别为[0.003245,0.025000,0.049613,0.077744,0.156250]、[0,0.026937,0.052065,0.080000,0.187007]和[0,0.023763,0.047666,0.078220,0.250000]。定义与有限性错误均为0，两遍统计逐元素一致，总用时0.000580秒。科学数组哈希 `3173ded49e86c671dcff0d481f93441c9477303a814092c1099b6eabc85d03ef`；产物 `runs/ajae/e43_temporal_visibility.npz` 大小26,415字节，SHA-256为 `61a1b6972db321b7539a29300d5e6b08a723fe22801e308ef6c339d285d811a9`。出现与消失未被解释为window随机闪烁。
-
-## E44｜遮挡率与匹配可行性
-
-冻结：
-
-$$
-O=1-\frac{\text{visible returns}}{\text{accepted returns before occlusion}}.
-$$
-
-遮挡层冻结为 $[0,0.25)$、$[0.25,0.75)$、$[0.75,1]$。PASS：$O\in[0,1]$、计数守恒；control/proxy均覆盖三个层；候选银行可进入E45。PASS → E45。
-
-### E44-v2刷新执行冻结
-
-E44-v2只读取SHA-256固定为`e7cea1574638db2f7e41799fe3855519ea57a47e9f6adc04f1a5a37e8aa526e0`的E39-v2共享trace，沿用冻结遮挡定义、三层边界、零分母显式无效策略、support×range×遮挡共同非空层和全部计数/覆盖判据；不重新渲染，只执行一次统计。正式命令为`python -m src.render qualify-e44-v2 --e39-artifact runs/ajae/e39_v2_per_range_return.npz --output runs/ajae/e44_v2_occlusion_strata.npz`。
-
-**E44-v2正式结果：PASS（E44关闭，E45A-new与E45B-v2解锁）**
-
-real-normal、normal-control和anomaly-proxy有效遮挡单元分别为1280、1280和1263，零分母无效单元分别为0、0和17；三层计数分别为[699,581,0]、[1215,48,17]和[1192,55,16]。两类生成来源均覆盖全部三层，三来源共有12个support semantic×range bin×遮挡层共同非空层；定义、计数、覆盖和初步匹配错误均为0。单次统计用时0.000673秒，科学数组哈希为`cc874669d7e61732e894f1c9993fa97ac10a2a649f6111465ad34d618c1c4e03`；产物大小51,084字节，SHA-256为`49880d3b48024a20fe1c2a3155424daf29e8690407dd56437b894097ce464695`。完整两两共同支持由E45A-new和E45B-v2分别裁决。
-
-### E45A-new正式结果：FAIL（`insufficient_pairwise_common_support`；停止等待新决策）
-
-E45A-new使用train/201、新版E25-new normal-control、原五项caliper、完整合法边和确定性最大基数匹配。独立银行冻结seed基址为4,500,000，按512→1,024→2,048容量阶梯执行；每级只生成和提取新增后缀，24进程、每进程数值库单线程，匹配只正式运行一次。正式实现提交为`a5f9c0f`；首次命令因共享worker残留`[0,255]`旧索引硬边界而在索引256计算前退出，没有形成科学结果。该协议实现缺陷经提交`b681f65`修复为共享银行上限256、两两银行上限2,048，随后从头完成正式运行；样本、seed、几何、renderer、匹配变量、caliper和PASS/FAIL门槛均未改变。
-
-容量512、1,024和2,048分别形成38、91和315条合法边，最大匹配分别为14、30和63对；real侧中心帧覆盖分别为8、14和29，四个2.5–40米距离层计数分别为[0,11,3,0]、[0,22,8,0]和[1,46,16,0]。最终匹配数63未达到1,024，中心帧29未达到100，30–40米层为0。全部容量的caliper错误和两侧单位重复使用均为0。最终五项SMD按range、median beam、$\log(1+N_{vis})$、$\hat O$、$\log(1+\text{local density})$顺序为[0.083301,0.024199,0.007985,1.778776,0.044545]，最大值为遮挡SMD 1.778776，未满足全部不超过0.10。
-
-三级候选银行生成用时分别为106.209574、113.853599和210.333981秒；新增单位提取用时分别为101.231597、103.881816和193.933527秒；单次最大匹配用时分别为0.009267、0.006666和0.011696秒。最终科学数组哈希为`6fa5f901574f5a621633d60bda50037fcb261a136caa4e2f1ae0beada02d1426`。正式产物`runs/ajae/e45a_new_real_control_pairs.npz`大小271,518字节，SHA-256为`acad2f28c4f2cb47314206671bbfebbdc89004a81cd1c403fc33af15c5dfda21`；2,048银行与单位缓存分别为9,206,668和53,608,043字节，SHA-256分别为`da73006666597175358bd62dbcbbbda30cedf7d4a6cd8c01ec774c70d978a4a3`和`92fe629be31a7b5a5eb97bd1ee6a7d402d69fc507b1fbd23e925a19cab1be6cf`。
-
-该结果裁决新版real-normal↔normal-control在冻结审计条件下共同支持不足，没有执行E46来源分类，也没有裁决renderer本身失败。E46保持锁定。按状态机停止条件，E45B-v2尚未启动；当前停在E45A-new正式FAIL，等待课题负责人重新决策，不得自动扩容、重试、放宽caliper或修改生成分布。
-
-直接读取E39共享trace，按每个entity-frame的accepted-before-occlusion和visible returns计算冻结遮挡率。仅对accepted大于0的单元定义$O$并进入三个遮挡层；accepted等于0的单元以显式invalid mask单独保存，不为其伪造遮挡率。PASS要求所有有效$O$有限且位于$[0,1]$，visible不超过accepted，有效计数与三层计数守恒，normal-control和anomaly-proxy各自覆盖三个层。以support semantic×range bin×遮挡层统计三来源共同非空层，至少一个共同层作为E45的初步非空匹配可行性；完整caliper、SMD与规模仍由E45裁决。两遍统计必须逐元素一致。实现提交 `99be4df02ef96db388134cb2b2b8d1b08927d9ae`，`src/render.py` SHA-256为 `abc902fd460d3019b0fd557dcda63ae1a9887342fa6c84170b8213b612610180`；46项完整回归通过。正式命令为 `python -m src.render qualify-e44 --e39-artifact runs/ajae/e39_per_range_return.npz --output runs/ajae/e44_occlusion_feasibility.npz`。
-
-**历史 E44 正式结果：PASS（仅旧normal-control分布；当前待刷新）**
-
-real-normal、normal-control和anomaly-proxy的有效遮挡率单元分别为1,280、1,280和1,276；未定义单元分别为0、0和4。三层计数分别为[731,549,0]、[1,245,26,9]和[1,238,36,2]，两类生成来源均覆盖三个冻结遮挡层。support semantic×range bin×遮挡层中三来源共同非空层为9个。定义错误、计数错误、覆盖错误和初步匹配错误均为0，两遍统计逐元素一致，总用时0.001055秒。科学数组哈希 `0c22adf65d7e4b819ca1df49479f019d6bb2ccde5256844092cfbc24c45f6a55`；产物 `runs/ajae/e44_occlusion_feasibility.npz` 大小52,651字节，SHA-256为 `93b955771c942bedc9537b161018a4fb6e820d7d0649627af3d418edce9ecbc9`。完整匹配资格仍由E45裁决。
-
-## E45｜三方严格匹配审计集
-
-**单位与协变量**
-
-单位为entity-frame local patch。real-normal 单元只来自201有实例ID的正常实体；其 support semantic 优先取实体水平凸包外扩0.5 m内的qualified support patch，若为空再取水平距离不超过1.0 m的最近patch，并必须符合E25同类语义策略，否则该实体不进入候选。real-normal 的遮挡代理 $\hat O$ 使用该实例同帧可见点构造的冻结凸包模板：关闭return rejection后计算潜在几何hits，再以实际实例回波数除以潜在hits；rendered control/proxy用完全相同的geometry-hit/visible-return定义。$\hat O$ 只作为匹配协变量，不冒充真实隐藏表面可见率。rendered control/proxy来自独立counterfactual worlds。构造至少1,024个无重复匹配triplets，至少覆盖100个不同center frames。
-
-先 exact match：support semantic、range bin和45度sensor-azimuth sector；再固定caliper：
-
-- range绝对差 $\le2$ m；
-- median beam差 $\le4$；
-- $|\Delta\log(1+N_{vis})|\le0.25$；
-- $|\Delta O|\le0.10$；
-- $|\Delta\log(1+\text{local density})|\le0.25$。
-
-用确定性greedy matching，tie由单位hash决定。匹配后上述连续协变量的三方pairwise standardized mean difference均须 $\le0.10$。2.5–10、10–20、20–30、30–40 m各至少128 triplets，40–50 m至少32；不足按候选银行阶梯扩大。
-
-PASS：规模、frame覆盖、range覆盖、caliper、SMD、无重复和复现全部通过。PASS → E46。
-
-### E45正式执行冻结
-
-匹配前先枚举train/201在E38冻结定义下的完整real-normal候选宇宙，而不是只读取256-seed子集；逐候选保存五帧实际回波的中位距离和冻结距离箱。由于任一三方triplet必须包含一个real-normal单元，完整real-normal宇宙在每个距离箱的计数是相应triplet数量的严格上界。先对照冻结最低覆盖[128,128,128,128,32]；若任一上界不足，E45直接分类为`scientific_candidate_domain_failure`，不执行不可能改变该上界的512/1024/2048子集扩展、生成来源渲染或greedy matching。只有全部必要上界满足时才允许进入容量阶梯与完整caliper/SMD裁决；不得把必要条件通过写成E45 PASS。
-
-实现提交 `906d5d65912a72cf0125ce45e352d912060998f3`，`src/render.py` SHA-256为 `3979de15cc91d5dec2eb526ccb9a7eac067041536e4846289bda0cbc585c6916`；46项完整回归通过。正式命令为 `python -m src.render qualify-e45 --data-root /home/jasongao/Data/STU --support-pool runs/ajae/gate1_201_support_pool.npz --output runs/ajae/e45_matched_triplets.npz`。
-
-**E45 正式结果：FAIL（`scientific_candidate_domain_failure`；E46保持锁定）**
-
-完整冻结real-normal候选宇宙包含1,635个实体和8,175个entity-frame，五个距离箱的实际单元计数及三方triplet严格上界为[2,492,4,141,1,457,85,0]。冻结最低要求为[128,128,128,128,32]，因此30–40米短缺43个，40–50米短缺32个，必要覆盖错误为2。候选身份、支撑语义、距离有限性和每实体五帧计数错误均为0；两遍距离箱统计逐元素一致，用时172.017159秒。
-
-512、1,024和2,048容量银行都只能从上述完整real-normal宇宙抽取单元，不能把30–40米上界85提高到128，也不能从40–50米上界0产生任何真实单元。因此容量扩展、生成来源渲染和greedy triplet matching均未执行；本次FAIL不涉及caliper、SMD、来源分类或renderer数值差异的裁决。科学数组哈希 `444e31f9ef31219640f021000b4b07bf9680af1ba9e70db7bec65860bff58a7f`；产物 `runs/ajae/e45_matched_triplets.npz` 大小43,848字节，SHA-256为 `061f971615af7f7a2edcaf459e0cac4ec6628537dd476bb7324c4d5fadf38772`。继续推进需要重新决策E45的候选范围或冻结距离覆盖设计，E46不得启动。
-
-后续审查保留E45-v1的正式FAIL及原始`scientific_candidate_domain_failure`运行分类；设计层归因修订为`qualification specification defect`：错误在于把train/201每个预设距离箱的固定绝对数量当成来源泄漏资格的必要条件，不是匹配算法或renderer科学失败。
-
-### E45-v2｜实际共同支持域三方严格匹配
-
-real-normal候选定义、train/201唯一开发来源、三方对象构念和全部匹配条件保持不变。正式estimand限制为train/201真实正常对象实际可观察的2.5–40米域；40–50米标记为`unobservable_for_real-vs-rendered-object matching in train/201`，不进入PASS或FAIL距离覆盖裁决，也不得制造或跨序列补样本。删除每距离箱固定绝对配额；2.5–10、10–20、20–30和30–40米各须至少有一个正式匹配triplet。
-
-单位仍为entity-frame local patch。exact match仍为support semantic、冻结range bin和45度sensor-azimuth sector；三方两两caliper仍为range差不超过2米、median beam差不超过4、$|\Delta\log(1+N_{vis})|\le0.25$、$|\Delta\hat O|\le0.10$、$|\Delta\log(1+\text{local density})|\le0.25$。$\hat O$继续使用geometry hits与最终visible returns；local density直接复用权威`low_level_return_features`的8近邻球体密度并取单元中位数。每单元按规范frame/beam/column身份hash最多保存64点，供E46直接复用。确定性greedy优先处理可配候选更少的real单元，所有并列由单位hash裁决；三来源单位均不得重复使用。
-
-总量仍须至少1,024个triplets，real侧至少覆盖100个不同center frames，四个可观察距离层均非空，全部caliper错误为0、重复使用为0，五个连续协变量的三组pairwise SMD均不超过0.10，两遍匹配逐元素一致。先运行256容量；不满足全部门槛时依次扩到512、1,024、2,048，只生成并渲染新增后缀，旧银行与已提取单元直接复用。达到2,048仍不满足即分类为`insufficient_three_source_common_support`并FAIL。
-
-实现提交 `185cb50e2a5e1db35d0123d0c31a1d2e35b14d76`；首次完整容量阶梯运行产生的预期uint64哈希回绕告警经提交 `07b39bc9075779cd27e44d6e25354cdf0d7e1bc9` 显式屏蔽，该提交不改变点身份顺序或任何科学数组，并保留缓存中的首次提取耗时。最终 `src/render.py` SHA-256为 `114fae5d83e0f4c91d54569f665d779f7f4a7fd9d5647a871344939751c1b1c0`；修订前后46项完整回归均通过。正式命令为 `python -m src.render qualify-e45-v2 --data-root /home/jasongao/Data/STU --support-pool runs/ajae/gate1_201_support_pool.npz --e25-artifact runs/ajae/e25_normal_control.npz --calibration runs/ajae/calibration.pt --candidate-bank-256 runs/ajae/gate1_candidate_bank_256.npz --e45-v1-artifact runs/ajae/e45_matched_triplets.npz --output runs/ajae/e45_v2_matched_triplets.npz --processes 24`。PASS后关闭E45并解锁E46；FAIL则E46保持锁定。
-
-**E45-v2 正式结果：FAIL（`insufficient_three_source_common_support`；E46保持锁定）**
-
-容量256、512、1,024和2,048分别得到0、8、29和58个无重复triplets；real侧center frame覆盖分别为0、6、20和34。最终2.5–10、10–20、20–30和30–40米匹配数为0、51、7和0，因此总量58未达到1,024，center frame 34未达到100，四个可观察距离层中两个为空。40–50米仍按冻结边界标记为`unobservable_for_real-vs-rendered-object matching in train/201`，未进入裁决。
-
-所有容量的三方pairwise caliper错误均为0、三来源单位重复使用均为0、两遍确定性匹配逐元素一致。最终五个协变量按real-control、real-proxy、control-proxy顺序的SMD分别为[0.114163,0.161546,0.031675,1.427284,0.043823]、[0.102862,0.057257,0.037790,1.509987,0.011156]和[0.011866,0.225477,0.005551,0.093939,0.031910]；最大值1.509987，未满足全部SMD不超过0.10。
-
-新增银行后缀构建用时分别为121.000419、231.575323和457.678092秒；256、512、1,024和2,048容量的单元提取用时分别为226.888105、239.542920、458.382091和894.831929秒，后三级只计算新增后缀。告警清理后的缓存复跑未重新渲染，四级两遍匹配分别用时0.017803、0.035136、0.071578和0.133178秒，科学数组哈希保持 `f39521593a562c0de06faea94dcd5f68cb9df9d79571c07e2656ea8f69cd8428`。
-
-正式产物 `runs/ajae/e45_v2_matched_triplets.npz` 大小381,986字节，SHA-256为 `54fda93b708e875200d6126692e0cd3a899fff7d355556598c8550c19156c832`。E45-v2已完整执行到冻结最大容量；FAIL直接说明当前三来源在保留全部固定匹配条件后没有足够共同支持，不构成renderer来源泄漏分类结果，E46不得启动。
-
-后续审查永久保留E45-v2正式FAIL，并将其设计层归因明确为三方审计设计失败：E46只比较real-normal与normal-control，E48只比较normal-control与anomaly-proxy，两个问题均不需要同时存在real/control/proxy三元组。E45-v2的58个triplets只代表确定性三方greedy找到的共同交集，不能作为任一两两可行图的最大匹配上界。
-
-### E45A｜real-normal ↔ normal-control 最大匹配
-
-E45A只服务E46。直接读取冻结的2,048容量单位缓存 `runs/ajae/e45_v2_units_2048.npz`；不重新渲染，不修改train/201唯一开发来源、real-normal定义、候选生成、对象放置、观测变量、精确匹配条件或五项caliper。正式域保持2.5–40米；40–50米继续标记为train/201真实对象匹配无直接证据。
-
-按qualified support semantic、冻结range bin和45度sensor-azimuth sector分层。每层构造满足全部五项caliper的完整二分合法边图。第一目标为最大化无重复匹配对数；在最大基数固定后，第二目标为最小化五项caliper归一化协变量平方差总和；完全相同的边代价由冻结单位hash排序。不得使用greedy结果代替最大匹配。
-
-PASS要求至少1,024对、左侧至少100个center frames、2.5–10/10–20/20–30/30–40米四层均非空、caliper错误0、两侧单位重复0、五项连续协变量SMD均不超过0.10，并且两遍结果逐元素一致。E45A PASS独立解锁E46，不等待E45B。
-
-实现提交 `9dc3b501152eccbf10ca8998355acbf6e355852d`，`src/render.py` SHA-256为 `966bd467385c6c7605d12c6d6710d64c5bd667ed69ad6970e3ef3884605a15b3`；小型可验证竞争图得到3/3最大匹配，caliper错误与重复错误均为0；46项完整回归通过，用时104.47秒。正式命令为 `python -m src.render qualify-e45a --unit-cache runs/ajae/e45_v2_units_2048.npz --output runs/ajae/e45a_real_control_pairs.npz`。
-
-**E45A 正式结果：FAIL（`insufficient_pairwise_common_support`；E46保持锁定）**
-
-冻结2,048容量缓存的real-normal与normal-control完整合法图包含778条边，覆盖15个非空精确分层；确定性最大基数匹配得到135对、real侧73个center frames，2.5–10、10–20、20–30和30–40米计数为[11,107,17,0]。匹配对数未达到1,024，center frame未达到100，30–40米层为空。
-
-五项连续协变量按range、median beam、$\log(1+N_{vis})$、$\hat O$、$\log(1+\text{local density})$顺序的SMD为[0.084724,0.141694,0.041913,1.000399,0.037650]，最大值1.000399。全部caliper错误0、两侧单位重复0，两遍匹配逐元素一致，两遍匹配总用时0.025716秒。科学数组哈希为 `b5cf376e3244d8ef2858471716f500bca9075733530482b6813dedb7ab7ce25d`；正式产物 `runs/ajae/e45a_real_control_pairs.npz` 大小565,274字节，SHA-256为 `1eecff9d3b7229aad58e5269037e1bceaa09438f2fd826474d0dd9239ac72766`。该结果没有执行来源分类，E46不得启动。
-
-### E45B｜normal-control ↔ anomaly-proxy 最大匹配
-
-E45B只服务E48，与E45A独立读取同一冻结2,048容量单位缓存。精确分层、五项caliper、完整合法边、最大基数第一目标、归一化协变量平方差第二目标、hash并列裁决、无重复和两遍复现规则与E45A完全相同。
-
-PASS要求至少1,024对、左侧至少100个center frames、2.5–10/10–20/20–30/30–40米四层均非空、caliper错误0、两侧单位重复0、五项连续协变量SMD均不超过0.10，并且两遍结果逐元素一致。E45B必须在E48前PASS，但不阻塞E45A通过后执行E46。实现与回归身份同E45A；正式命令为 `python -m src.render qualify-e45b --unit-cache runs/ajae/e45_v2_units_2048.npz --output runs/ajae/e45b_control_proxy_pairs.npz`。
-
-**历史 E45B 正式结果：PASS（仅旧normal-control分布；当前E48前置资格失效，待E45B-v2）**
-
-冻结2,048容量缓存的normal-control与anomaly-proxy完整合法图包含29,156条边，覆盖52个非空精确分层；确定性最大基数匹配得到3,624对、normal-control侧357个center frames，2.5–10、10–20、20–30和30–40米计数为[1,133,1,877,563,51]，全部满足冻结覆盖条件。
-
-五项连续协变量按range、median beam、$\log(1+N_{vis})$、$\hat O$、$\log(1+\text{local density})$顺序的SMD为[0.031652,0.026288,0.006786,0.017766,0.016409]，最大值0.031652。全部caliper错误0、两侧单位重复0，两遍匹配逐元素一致，两遍匹配总用时0.202531秒。科学数组哈希为 `859759030b829a1cf19504edcc54d8b24c20cae72f426a29141ab02cdf60fe08`；正式产物 `runs/ajae/e45b_control_proxy_pairs.npz` 大小13,691,873字节，SHA-256为 `f5b6074902f2396f3f5f36868e48b68312274bc29cf87b3a74b363131878c832`。E45B只建立E48所需的两两匹配集，不构成E48来源分类结果。
-
-### E45A-v2｜审计专用定向 normal-control 候选银行
-
-E45A-v2只服务Gate 1来源审计，不修改E26、正式训练世界生成器或normal-control训练分布。real目标固定为 `runs/ajae/e45_v2_units_2048.npz` 中1,822个去重后的有效real-normal单位，覆盖321个center frames；2.5–10、10–20、20–30和30–40米目标数为[540,892,365,25]。输入缓存SHA-256为 `1f41bf1998876d3d888f39a5d45adceb5693f7c93bbd535c9cf734a74dae70c0`，科学数组哈希为 `a3b63d11107edb1b1dce6c052e188a92879131fe20bec5568db10275c83a6160`。
-
-每个real单位的support proposal stream只使用冻结E45协变量构造：support semantic必须相同；支撑patch资格帧与目标unit frame相差不超过2；将patch世界坐标变换到目标帧sensor坐标后，冻结range bin与45度azimuth sector必须相同；合法patch先按anchor range与目标median range的绝对差排序，再以support selection hash裁决并列。不得读取real semantic类别选择模板，也不得读取E46分类结果、分数或特征归因。
-
-目标索引$i$的第$p$个proposal使用固定seed $4{,}500{,}000+128i+p$。每个proposal从排序流中使用一个不重复support row，并按E25原规则独立选择train/206 normal template、0.9–1.1三轴scale、类别姿态扰动和material；随后调用唯一 `place_object` 接口执行E22 grounding、E23已观测正常几何碰撞拒绝、单实体E24语义及E25类型/支撑/姿态规则，再由权威renderer渲染目标帧。物理规则、数值阈值和随机身份流均不得因匹配结果修改。
-
-只有渲染后与目标同时满足support semantic、range bin和azimuth sector精确相同，以及range差不超过2米、median beam差不超过4、$|\Delta\log(1+N_{vis})|\le0.25$、$|\Delta\hat O|\le0.10$、$|\Delta\log(1+\text{local density})|\le0.25$的control单位，才进入完整二分合法边图。匹配仍以最大基数为第一目标、归一化协变量平方差总和最小为第二目标，并保持无重复和hash并列裁决。
-
-proposal上限冻结为每目标64个，执行阶梯为4、8、16、32、64；每级只计算新增proposal后缀并保留先前结果，每级完成后运行两遍逐元素匹配，首次满足全部PASS条件即停止。PASS条件保持至少1,024对、至少100个real侧center frames、四个2.5–40米距离层均非空、全部caliper错误0、重复0、五项SMD均不超过0.10、两遍逐元素一致及硬错误0。达到64仍不满足即正式FAIL，E46继续锁定。
-
-实现提交为 `eedfc68068b56344a933496de23c3b869097465c`，执行内存修订为 `235112dd57fd85993772ac0b7c82cae3b216a3f5`、`cc1778f8b78411b2682e217e6199564afac0f8d6`、`2508b27c90a6aa1a6d0fdc0e9951f1e69d9f2c19` 和 `15b0aada3d670b752e04fe9a7bbdab3c89271f50`；最终 `src/render.py` SHA-256为 `c42950329ed02136bd182df61e0392249cb45aaeba3d6ede45e28c095f91703e`。最终修订后46项完整回归通过，用时100.73秒。先导中发现只读renderer mask被原地筛选的实现错误，修复为生成新布尔数组后同一身份硬错误归零；该先导未写正式产物，也不参与资格裁决。
-
-两次24进程和两次8进程正式启动均在第一阶完成和任何阶梯缓存写出前按资源安全规则停止，不构成实验FAIL。第一次因父进程保留678个完整source frames使可用内存降至1.4 GiB；释放该无用途元组后，第二次仍因24个worker各自加载7帧sequence cache而只剩188 MiB物理内存并使用约10 GiB交换。8进程先导与24进程先导的状态计数、完成渲染数、五项caliper违规数、差值中位数和Q95全部逐元素一致；但正式目标顺序使8个worker填满各自7帧缓存，第三次在可用内存降至787 MiB时停止。清空父进程cache并把worker缓存改为1帧后，第四次8进程仍因大型 `ObservedObstacleIndex` KD-tree碰撞查询产生约1.9 GiB/worker私有写时复制页，在可用内存降至739 MiB时停止。
-
-4进程第五次未完成运行表明长寿命KD-tree worker的私有页会随任务继续累积：约3分钟后可用内存降至1.2 GiB、交换空间增至6.9 GiB，因此同样在无阶梯产物时停止。最终4进程池固定 `chunksize=4` 且每个worker最多处理8个map tasks，即32个proposal后回收并从同一父进程重新fork。相同48目标×4 proposal先导在实际发生worker轮换后仍与此前所有先导数组逐元素一致，运行中约保留12 GiB可用内存且交换空间不增长。帧内容、障碍索引、轨迹yaw、target/proposal seed和科学计算均不变；进程数、缓存大小和worker生命周期均不进入科学身份。正式命令为 `python -m src.render qualify-e45a-v2 --data-root /home/jasongao/Data/STU --support-pool runs/ajae/gate1_201_support_pool.npz --e25-artifact runs/ajae/e25_normal_control.npz --calibration runs/ajae/calibration.pt --unit-cache runs/ajae/e45_v2_units_2048.npz --output runs/ajae/e45a_v2_targeted_pairs.npz --processes 4`。
-
-**E45A-v2 正式结果：FAIL（`targeted_control_common_support_failure`；E46保持锁定）**
-
-正式运行完整执行每目标4、8、16、32、64个proposal的冻结阶梯，并在64个proposal上限耗尽后裁决。各阶梯的合格control数依次为[13,36,83,170,325]，最大匹配数为[13,36,80,148,212]，real侧center frames为[12,30,45,75,90]，四个距离层计数依次为[0,9,4,0]、[0,18,18,0]、[0,45,35,0]、[1,92,55,0]和[1,139,72,0]。最终212对低于1,024对要求，90帧低于100帧要求，30–40米层为0；因此数量、帧覆盖和四层非空条件均未通过。
-
-最终五项SMD按range、median beam、$\log(1+N_{vis})$、$\hat O$、$\log(1+\text{local density})$顺序为[0.099364,0.159312,0.064798,0.882238,0.021068]，其中遮挡SMD为0.882238，最大值超过0.10。全部caliper错误0、两侧单位重复0、硬错误0，两遍匹配逐元素一致。64阶梯proposal状态0至7计数为[5779, 31355, 297, 3731, 75121, 325, 0, 0]；对应support耗尽、placement拒绝、不可见、精确分层不符、caliper不符、合格、验证错误和硬错误。
-
-科学数组哈希为 `00aed2338732f9a9233547cae52c1c3087df6cfb5294da664a73a7b33a0c6192`；正式产物 `runs/ajae/e45a_v2_targeted_pairs.npz` 大小756,236字节，SHA-256为 `290747b6c01ec9d2af152e8688f51cc9c966690cb5c165279265a51fc30e0405`。64候选缓存 `runs/ajae/e45a_v2_targeted_controls_64.npz` 大小2,978,909字节，SHA-256为 `0853358fa0c3a414cb39eeeef41fa15a5691dd641558ffa77030011b431ef32b`。正式运行墙钟时间2小时18分38秒，CPU利用率398%，最大常驻集9,611,168 KiB；运行期间复查可用内存约12–13 GiB，交换空间未增长。该结果只裁决审计专用定向银行在冻结上限内的共同支持资格，不修改E26、renderer或正式normal-control训练分布，也没有执行来源分类。其历史停止条件要求新的用户决策；该决策现已由E25-new合同取代。E46仍锁定，但当前解锁前置改为E45A-new PASS。
-
-状态机在E49前拆为两条依赖：
-
-$$
-E45A\rightarrow E46,
-\qquad
-E45B\rightarrow E48,
-\qquad
-(E46,E48)\rightarrow E49.
-$$
-
-## E45-V1｜人眼来源盲辨（可选、非阻断）
-
-可从E45固定triplets生成盲面板；没有两名独立人类时不裁决。结果不替代E46，也不阻断E46。
-
-## E46｜真实正常 vs rendered normal-control 来源分类
-
-**模型与拆分**
-
-使用标准化L2逻辑回归和深度3、`min_samples_leaf=64`的决策树。输入仅sensor-frame $x,y,z$、intensity、beam、range和local density。每个entity-frame按点身份hash最多取64点，并给每个点权重 $1/n_{unit}$，使每个unit总权重相同；不得让大实体因点数多主导。5-fold按center frame分组，任何frame不得跨fold。报告ROC-AUC、balanced accuracy和每类recall，并以entity-frame为单位做2,000次bootstrap。
-
-**来源泄漏 FAIL 条件**
-
-任一冻结模型满足以下任一项，即认为存在稳定实用来源指纹：
-
-$$
-\operatorname{LCB}_{95\%}(\mathrm{AUC})\ge0.65,
-$$
-
-或
-
-$$
-\operatorname{LCB}_{95\%}(\mathrm{balanced\ accuracy})\ge0.65.
-$$
-
-否则E46 PASS。该标准不要求分类恰好随机，只排除低容量模型稳定达到明显可分水平。
-
-PASS → E48。FAIL → E47。
-
-## E47｜来源指纹归因与单一回修
-
-对同一E45匹配集运行：coordinate-only、intensity-only、beam/range-only、density-only，以及逐一去除特征组。模型、fold和bootstrap不变。
-
-归因以AUC相对全特征下降和单组LCB为准，输出唯一最早回修节点：E38/39 return calibration、E40 intensity、E41 empty-ray、E42/44 placement/matching或E35实现。若多组同时强泄漏，允许一次性修共享renderer，但修后必须从受影响最早节点顺序重跑至E46。不得训练AJAE。归因完成本身不算Gate1 PASS。
-
-## E48｜normal-control vs proxy 低层难度
-
-在E45 matched control/proxy units上使用E46同模型与分组。
-
-只有任一模型同时满足：
-
-$$
-\operatorname{LCB}_{95\%}(\mathrm{AUC})\ge0.95
-$$
-
-且
-
-$$
-\operatorname{LCB}_{95\%}(\mathrm{balanced\ accuracy})\ge0.90
-$$
-
-才判任务近乎饱和并FAIL。否则PASS。这里不设置“必须可学”的下限；代理监督是否有用由B1测试。
-
-PASS → E49。FAIL → 只允许重做hard proxy并使E20、E42–E48相关证据失效。
-
-## E49｜Gate 1 正式裁决
-
-汇总E08–E48。PASS要求：规范射线、single-published-return、E23–E37机械语义、E45匹配、E46来源泄漏和E48难度全部通过；可选人工节点不参与合取。PASS → E50。任一关键FAIL回到最早节点，E50以后锁定。
-
-# Phase 5｜冻结 STU 点接口与五帧坐标
-
-## Phase 5 统一冻结
-
-E50–E56只验证官方STU接口和坐标语义，固定使用train/206与201各16个身份哈希帧，加解析fixture；不训练模型。
-
-## E50｜128D STU 高层特征接口
-
-在32个真实帧hook官方`all_features[-1]→point_features_head`。PASS：每个非空帧输出`[V,128]` finite；官方source/checkpoint hash正确；eval且无grad；两遍一致。PASS → E51。
-
-## E51｜稀疏体素→原始点逆映射
-
-PASS：全部有效raw returns均有范围内inverse row；恢复点数100%；无效slot不进入；独立重算量化坐标与inverse map零差异；两遍一致。PASS → E52。
-
-## E52｜共享体素下的原始点身份
-
-使用真实shared-voxel cases和合成反例。PASS：共享128D feature但每个raw point保留独立frame/ray、XYZ、intensity、label和最终logit位置；无身份合并；两遍一致。PASS → E53。
-
-## E53｜官方 query assignment
-
-独立复算softmax class、sigmoid mask、最小index argmax $q^*$。PASS：query identity、19D evidence、assignment reliability和no-object索引零差异；tie fixture正确；两遍一致。PASS → E54。
-
-## E54｜19D证据与可靠性
-
-逐体素和逐点独立复算。PASS：数值误差$\le10^{-7}$、广播和inverse map正确、finite/no-grad；两遍一致。PASS → E55。
-
-## E55｜AJAE真实输入张量
-
-基础点字段固定为128+19+1+1+1=150维，再独立加入中心坐标和$q$编码。PASS：真实五帧schema、顺序、dtype、point identity正确；无query token、entropy、energy、MSP、instance ID、moving label或generator family；两遍一致。PASS → E56。
-
-## E56｜中心坐标对齐
-
-解析刚体fixture要求坐标误差$<10^{-9}$ m。真实五帧分别报告静态背景对齐前后最近邻残差，要求对齐后的median与Q95均严格改善；moving-normal点仍保留非零相对位移，不做实例级抹平。矩阵方向、frame IDs、finite和两遍复现必须通过。PASS → E57。
-
-# Phase 6｜固定201开发试验台、评价器与全部科学判据
-
-## Phase 6 候选银行与一次选择
-
-E57–E63在E57前统一冻结。201世界只生成一次候选银行，容量阶梯128/256/512/1024；用预定义难度量做确定性greedy set-cover。不得逐节点手工替换世界，也不得读取模型分数。
-
-## E57｜24条 in-generator development worlds冻结
-
-从201候选银行选择24条mixed worlds。每条world spec、generation report、五帧diagnostics和hash固定。候选银行达到1024仍无法满足E59/E60覆盖则E57 FAIL；不得临时移动bins。PASS → E58。
-
-## E58｜6条 held-out诊断世界冻结
-
-使用正式训练从不采样的held-out torus机制，确定性选择6条。代码层禁止其进入训练、checkpoint/threshold选择和PASS统计；只作诊断。身份和隔离检查零错误。PASS → E59。
-
-## E59｜开发世界 $N_{vis}/O/d$ 覆盖
-
-冻结边际bins：
-
-- $d$：$[2.5,10),[10,20),[20,30),[30,50]$ m；
-- $N_{vis}$：$[1,8),[8,32),[32,128),[128,+\infty)$；
-- $O$：$[0,0.25),[0.25,0.50),[0.50,0.75),[0.75,1]$。
-
-24条worlds中每个边际bin对control和proxy各至少32个entity-window records；单位身份唯一、指标有限。PASS → E60。
-
-## E60｜开发世界 $V=1..5$ 覆盖
-
-control和proxy在每个$V=1,2,3,4,5$层各至少24个entity-window records；同一entity可在不同窗口出现，但world/entity/window identity必须保留，统计时不冒充独立对象。PASS → E61。
-
-## E61｜pure-normal与moving-normal安全集
-
-pure-normal使用201帧4–681全部有效范围点；moving subset固定raw moving semantics 252–259，并保存static-normal匹配对照。标签只用于评价，不进入输入。身份、count、hash与访问隔离PASS。PASS → E62。
-
-## E62｜自研 evaluator 与官方 evaluator 一致性
-
-使用解析prediction fixtures和一份固定真实prediction，同时运行自研/官方AP、AUROC、FPR95。过滤2.5–50 m、ignore和每帧异常点<5规则逐点一致；AP/AUROC/FPR95绝对差$\le10^{-10}$，有效点/帧计数完全一致。PASS → E63。
-
-## E63｜训练、选择、统计和安全规则一次冻结
-
-以下内容在任何B0/B1结果前冻结，后续B1/B2/B3不得单独修改。
-
-**训练预算**
-
-- seeds：0、1、2；
-- AdamW，learning rate $10^{-4}$，weight decay $10^{-4}$；
-- micro-batch 1，gradient accumulation 8；
-- 每seed最多40个完整206 worlds；每5个world评价一次；patience 4；
-- world type比例：pure-normal/control-only/mixed/anomaly-only = 0.20/0.20/0.40/0.20；
-- B1/B2/B3使用相同预算、201和selection rule。
-
-**checkpoint选择**
-
-最大化24 worlds mean AP；差值$<0.001$视为并列，依次选择较低FPR95、较低pure-normal cross-fit FPR、较早checkpoint。held-out 6不得参与。
-
-**统计**
-
-对seed与world做5,000次层级paired bootstrap。方向一致要求至少2/3 seed的mean AP差为正。
-
-**Gate 2 superiority**
-
-B1 vs B0同时要求：mean AP增益$\ge0.02$、bootstrap 95%下界$>0$、至少2/3 seed方向为正。
-
-**Gate 3 superiority**
-
-B3 vs B1和B3 vs B2分别要求：mean AP增益$\ge0.01$、95%下界$>0$、至少2/3 seed方向为正。
-
-**安全阈值**
-
-在24 worlds做固定两折cross-fit：一折选择达到95% proxy TPR的点阈值，另一折评价FPR，再交换。相对比较模型在pure-normal、rendered normal-control、moving-normal和FPR95上的绝对恶化均不得超过0.03。
-
-**B4额外贡献**
-
-B4 vs B3只有在mean AP增益$\ge0.005$、95%下界$>0$且全部安全恶化$\le0.03$时受支持；否则fusion unsupported，但B3可继续。
-
-**Gate 4真实迁移**
-
-最终模型相对B1的19-sequence mean AP增益$\ge0.01$、相对B0$\ge0.02$；两项sequence bootstrap下界均$>0$，至少12/19序列相对B1方向为正，安全恶化$\le0.03$。
-
-PASS表示所有规则和config进入protocol并机器可加载。PASS → E64。
-
-# Phase 7｜AJAE模型机械单元资格
-
-E64–E71在首次执行前一次冻结，均为零容忍实现测试；不因模型效果修改。
-
-## E64｜时间身份体素隔离
-
-构造相同XYZ、不同$q$及边界voxel样例，逐层检查key。PASS：L1–L3 key均含$q$；跨$q$无pool merge；同$q$正确合并；确定性。PASS → E65。
-
-## E65｜mean-max池化数值
-
-手算含负值、重复值、单点voxel样例。PASS：mean/max/concat/linear输入逐元素一致，gradient finite；没有退化为单一路径。PASS → E66。
-
-## E66｜按时间差分层邻域
-
-构造同帧邻居占满与跨帧稀疏反例。PASS：每个$\delta$独立radius/K，其他$\delta$不能抢位；radius外不补点；tie按point identity；空候选合法。PASS → E67。
-
-## E67｜空跨帧分支与gate
-
-PASS：空邻域$message=0$、gate=0、无NaN；非空gate位于$[0,1]$；batch/单样例一致。PASS → E68。
-
-## E68｜同帧残差生存路径
-
-关闭全部cross-frame branches，独立复算$h+F(m_0)$。PASS：same-frame message和residual仍存在，输出零差异；cross-frame梯度为0。PASS → E69。
-
-## E69｜同帧3-NN上采样
-
-其他$q$父点更近的fixture。PASS：只选same$q$；不足3点按冻结重复/可用规则；inverse-distance权重finite且和为1；数值零差异。PASS → E70。
-
-## E70｜balanced BCE空类别安全
-
-纯负、纯正、混合和range/ignore过滤fixture。PASS：手算零差异、finite；混合各占1/2；评价的<5 anomaly规则不进入训练。PASS → E71。
-
-## E71｜概率融合公式
-
-固定logits和重复point IDs。PASS：严格等于mean(sigmoid(logit))，不等于sigmoid(mean(logit))；无$q$/center权重；$1\le m_p\le5$；边界无padding。PASS → E72。
-
-# Phase 8｜Gate 2：异常代理监督是否有效
-
-## E72｜B0冻结STU单帧参考
-
-在24 worlds、pure-normal和moving set生成官方STU MaxLogit，官方evaluator复算；逐world/point身份、指标和hash完整。PASS → E73。
-
-## E73｜B1单帧smoke train
-
-固定一个pure-normal world和一个mixed world、最多200 optimizer steps，只验证：纯负与正负混合窗口均实际出现、loss/grad finite、STU参数/buffer/grad不变、checkpoint可保存恢复、同seed短程复现。smoke结果不得选超参。PASS → E74。
-
-## E74｜B1三独立训练种子
-
-按E63完整训练seeds 0/1/2，配置和预算完全一致。全部seed完成且selection唯一、STU hash不变、lineage完整即PASS。机械失败且协议未变只重跑无效seed。PASS → E75。
-
-## E75｜B1 vs B0代理监督效应
-
-严格执行E63 Gate2 superiority。PASS → E76。FAIL为`scientific_failure`：当前proxy supervision不成立，停止五帧实验并回到Gate1/proxy设计的新研究周期；不得调B3救B1。
-
-## E76｜B1正常安全
-
-执行E63 cross-fit FPR95/pure-normal/control/moving-normal安全。全部恶化$\le0.03$才PASS。FAIL回到proxy/control/renderer设计，E78锁定。PASS → E77。
-
-## E77｜Gate 2正式裁决
-
-E72–E76全部PASS才支持“异常代理监督在新背景有效”。PASS → E78。
-
-# Phase 9｜Gate 3：跨帧信息是否提供可识别增益
-
-## E78｜B2无跨帧五帧对照
-
-按E63三seed完整训练，结构与B3相同但所有$\delta\ne0$贡献在trace中严格为0，评价只取$q=0$。三seed完整和trace零误差即PASS。PASS → E79。
-
-## E79｜B3五帧smoke train
-
-固定2个worlds、最多200 steps。检查五帧均监督、每$\delta$邻域/空分支、gate分布、显存和STU冻结。不得据smoke选超参。PASS → E80。
-
-## E80｜B3三独立训练种子
-
-按E63同预算训练0/1/2，全部完整可追溯。PASS → E81。
-
-## E81｜B3 vs B1
-
-执行E63的$\Delta AP\ge0.01$、CI和seed方向规则。FAIL表示五帧相对单帧主张不成立；若修改temporal design，回E64并重跑B2/B3。PASS → E82。
-
-## E82｜B3 vs B2
-
-执行同一规则。FAIL表示提升不能归因cross-frame evidence；回E64。PASS → E83。
-
-## E83｜五帧正常运动安全
-
-执行E63在pure-normal、rendered normal-control、moving-normal及混合世界FPR95上的安全规则；B3相对B1的绝对恶化均不得超过0.03。异常边界shell专门留给E90，避免重复门槛。全部通过才PASS。FAIL只允许修改temporal neighborhood/gate并回E64。PASS → E84。
-
-## E84｜Gate 3正式裁决
-
-E78–E83全部PASS才支持B3 temporal claim。PASS → E85。
-
-# Phase 10｜位置校准与可选B4融合
-
-## E85｜$q$位置分数与预定义校准分支
-
-先在24 worlds报告$q=-2..2$的AP、normal/proxy median score、Brier score和20个等频bin的ECE。AP只描述不同时间位置的信息量，不参与“分数尺度可比”裁决，因为温度缩放不改变排序。raw scores在每个固定两折验证方向中同时满足：最大pairwise normal median差$\le0.02$、proxy median差$\le0.05$、每个$q$的ECE$\le0.05$，才记`B4_ENABLED_RAW`。
-
-若不满足，自动启用事前冻结的两折校准：在12 worlds上为每$q$拟合一个temperature $T_q\in[0.5,2.0]$最小化BCE，在另12验证，再交换。只有两个验证方向都满足同一尺度/ECE条件，才记`B4_ENABLED_CALIBRATED`；随后使用完全相同的有界目标在全部24 worlds上重拟合唯一最终 $T_q$，该全量拟合不再参与资格判断。仍不满足记`B4_DISABLED_POSITION_BIAS`。
-
-三种结果都不否定B3。前两种 → E86；禁用结果直接跳到E89，B4不再执行且最终只能选B3。
-
-## E86｜真实重叠点身份与$m_p$
-
-在完整201序列核对$p=(f,r)$跨窗口身份、$q(w)$和$m_p$。PASS：每个预测唯一映射，$1\le m_p\le5$，边界只用完整窗口，无padding/镜像/重复帧；两遍一致。PASS → E87。
-
-## E87｜B4融合评估
-
-复用同一B3 checkpoint和E85选定的raw/calibrated概率，不重新训练。输出必须逐点等于E71公式并由官方evaluator读取。PASS → E88。
-
-## E88｜B4 vs B3
-
-执行E63 B4规则。达到条件记`FUSION_SUPPORTED`；否则记`FUSION_UNSUPPORTED`。两种结果都继续E89；只有前者允许最终选择B4。
-
-## E88-V1｜模型输出面板（可选、非阻断）
-
-按E59/E60预选48个实体展示B1/B3/B4，不按分数挑选。只检查identity和面板完整，不构成效果裁决，不阻断E89。
-
-# Phase 11｜机制、安全、因果版本与成本
-
-## E89｜实体内部得分方差（描述）
-
-比较B1/B3/(B4)实体内部方差，按$N_{vis}$分层。结果无改善不算FAIL，不得把object ID输入模型。完成即进入E90。
-
-## E90｜异常边界泄漏（硬安全）
-
-使用E83同样的0–0.5 m、0.5–1.0 m正常shell和cross-fit阈值。候选最终模型相对B1任一shell FPR恶化不得超过0.03；pure/moving/control安全也不得超E63界限。FAIL回E64并重新开发temporal model；PASS → E91。
-
-## E91｜$V=1..5$趋势（描述）
-
-报告各层AP/recall和置信区间，预注册Jonckheere或Spearman趋势只支持机制解释。无趋势只禁止“证据越多越好”的叙事，不影响主性能。完成 → E92。
-
-## E92｜B5因果窗口正确性
-
-逐window证明只访问$[t-4,t]$，模型位置仍映射到五个time IDs且只输出当前帧；任何future access为FAIL。PASS → E93。
-
-## E93｜B5因果性能
-
-按E63相同预算训练三seed并报告与B3/最终模型差异。无必须优于谁的门槛；产物完整、官方评价和安全报告齐全即PASS。PASS → E94。
-
-## E94｜计算成本与输入公平性
-
-固定GPU、batch、cache、精度和预热，分别测B1/B2/B3/B4/B5：latency、VRAM、throughput、STU cache hit和端到端窗口延迟；至少100个窗口、三次重复。报告centered使用未来帧，B4的额外窗口计算与缓存条件。口径一致和复现完成即PASS。PASS → E95。
-
-# Phase 12｜方法选择、阈值与冻结
-
-## E95｜最终模型规则执行
-
-规则在E63/E85/E88已冻结：若`FUSION_SUPPORTED`且E90安全，最终模型=B4；否则最终模型=B3。checkpoint由E63规则唯一选择。held-out 6和19不得参与。唯一结果可机器重算即PASS。PASS → E96。
-
-## E96｜点阈值与DBSCAN冻结
-
-只用24 development worlds和pure/moving安全集，按world identity做4-fold cross-validation。固定搜索：
-
-- point threshold $\tau\in\{0.05,0.06,\ldots,0.95\}$；
-- DBSCAN $\epsilon\in\{0.3,0.5,0.7,1.0\}$ m；
-- `min_samples` $\in\{3,5,8,12\}$。
-
-每个固定配置都在四个fold上完成“18 worlds选择域/6 worlds held-out评价”，最终以四个held-out fold的聚合mean object PQ和安全统计统一排序；不先选四个fold各自配置再投票。约束为aggregate pure-normal point FPR$\le1\%$、moving-normal FPR$\le2\%$，且任何单fold分别不超过1.5%/3%。若无配置满足，E96 scientific FAIL，不能打开19。并列依次选择较高held-out point AP、较低normal FPR、较高$\tau$、较小$\epsilon$、较大`min_samples`。获选唯一配置在全24上只复算并写入manifest，不再改。PASS → E97。
-
-## E97｜AJAE Method Freeze Manifest v1
-
-必须记录并hash：schema7、support pools、normal templates、placement/collision/world formats、ray/calibration、renderer、STU source/weights/interface、B0–B5 architecture/loss/training、final checkpoints、E85 calibration、B4 decision、$\tau$/DBSCAN、evaluator和全部数据/代码/config identities。任何字段为空即FAIL。PASS → E98。
-
-## E98｜冻结完整性演练
-
-对generator、support pool、renderer、STU、model、checkpoint、calibration、threshold、DBSCAN、evaluator逐一篡改fixture，manifest必须拒绝；冻结前尝试访问19/51必须被guard记录并拒绝。全部反例拦截才PASS。PASS → E99。
-
-# Phase 13｜一次性真实OOD确认与隐藏测试
-
-## E99｜19条真实OOD锁定推理
-
-E97/E98有效后第一次解锁19。必须一次性对全部19序列、B0、B1和final AJAE生成prediction，不允许先看部分结果再停。checkpoint/config/hash与manifest零差异、官方格式完整即PASS。方法变化使确认完整性失效。
-
-## E100｜真实OOD官方点级指标
-
-官方evaluator计算AP/AUROC/FPR95，报告pooled和逐sequence；过滤和预测身份与manifest一致。评价链正确即PASS，是否迁移由E103裁决。PASS → E101。
-
-## E101｜真实OOD对象级指标
-
-用E96冻结$\tau$/DBSCAN逐帧计算RecallQ/SQ/RQ/UQ/PQ/TP/FP/FN，不跨帧tracking。参数零变化、结果可复现即PASS。PASS → E102。
-
-## E102｜真实正常运动安全
-
-按冻结moving-normal定义，将E63/E96在201上已经冻结的阈值直接应用于19条序列，比较B0/B1/final的moving-normal FPR、FPR95和score tail；确认阶段不再重新cross-fit或校准。final相对B1/B0恶化完整报告。结果进入E103，不单独改方法。PASS（评价完成）→ E103。
-
-## E103｜Gate 4迁移裁决
-
-严格执行E63冻结规则：final相对B1 mean AP$\ge0.01$、相对B0$\ge0.02$；两项19-sequence bootstrap LCB$>0$；至少12/19 sequence相对B1为正；正常安全恶化$\le0.03$。
-
-全部满足 → Gate4 PASS、E104解锁。任一不满足 → `scientific_failure`，当前研究周期停止；不得用同一19继续调方法。
-
-## E104｜51条隐藏测试最终提交
-
-只在Gate4 PASS后，用E97完全同一方法/checkpoint/parameters生成51条测试预测并完成官方提交。不得根据隐藏结果调参。提交identity和官方回执保存后，当前AJAE研究周期完成。
-
-# 3. 四个 Decision Gate 的最终形式
-
-## Gate 1：renderer 是否有资格生成训练监督
-
-E08–E49 的关键条件必须全部通过。E38–E44 的普通分布差异不单独失败；Gate1的实质裁决是机械语义正确、E45严格匹配成立、E46没有稳定低容量来源指纹、E48不近乎饱和。失败回到最早可解释节点；B1高分不能反向证明renderer可信。
-
-## Gate 2：异常代理监督是否有效
-
-严格执行E63：B1相对B0达到至少0.02 mean AP增益、层级bootstrap下界大于0、至少2/3 seed方向一致，并通过pure-normal/control/moving安全。失败则proxy supervision主张不成立，不进入五帧。
-
-## Gate 3：跨帧信息是否提供可识别增益
-
-必须同时满足：
-
-$$
-B3>B1,
-$$
-
-$$
-B3>B2,
-$$
-
-两项均达到E63的0.01实用增益、置信和seed方向条件，并通过运动/边界安全。B4只是可选附加贡献；B4 unsupported时可选择B3继续。
-
-## Gate 4：proxy 是否迁移到真实OOD
-
-E97–E98后一次性打开19。final相对B1/B0必须达到E63冻结的sequence-level增益、方向和安全条件。FAIL后当前研究周期停止；同一19不再是untouched confirmation。
-
-# 4. 关键不可变约束
-
-$$
-\boxed{\text{先确定完整反事实世界，再切五帧窗口}}
-$$
-
-$$
-\boxed{\text{normal-control 与 anomaly-proxy 共用同一传感器重渲染流程}}
-$$
-
-$$
-\boxed{\text{正式 placement 只从 qualified support pool 采样}}
-$$
-
-$$
-\boxed{\text{五帧共享参数并同等监督，中心帧只规定坐标系}}
-$$
-
-$$
-\boxed{\text{最终输出始终是原始 LiDAR 回波点级异常概率}}
-$$
-
-$$
-\boxed{\text{STU 全程冻结；206 只更新 AJAE 新增参数}}
-$$
-
-$$
-\boxed{\text{centered five-frame 为离线主设置；causal five-frame 只作在线消融}}
-$$
-
-# 5. 执行记录模板
+## 2. Phase-to-Claim Mapping
+
+- **Phases 0–4: Gate 1.** Establish that the canonical rays and first-return counterfactual renderer are sufficiently trustworthy and do not leave an obvious source shortcut.
+- **Phases 5–7: training-interface qualification.** Establish that the frozen STU point interface, five-frame coordinates, development worlds, evaluator, and AJAE mechanical structure operate as designed.
+- **Phase 8: Gate 2.** Establish that anomaly-proxy supervision itself is effective on new backgrounds: B1 improves over B0 while preserving normal safety.
+- **Phase 9: Gate 3.** Establish that cross-frame information provides identifiable gain: B3>B1 and B3>B2, with moving-normal safety.
+- **Phases 10–11: fusion and mechanism.** Determine whether B4 has incremental value, whether the spatiotemporal-consensus mechanism has supporting evidence, and the cost of the causal variant.
+- **Phase 12: Method Freeze.** Freeze everything that can affect results.
+- **Phase 13: Gate 4 and hidden test.** Confirm proxy-to-real-OOD transfer once, and only then permit use of the 51 hidden tests.
+
+# Phase 0 | Protocol, Data Discipline, and Official STU Runtime Qualification
+
+## E00 | Workspace and Protocol Snapshot Freeze
+
+Experiment ID: E00
+Design-freeze commit/hash: Not recorded.
+Execution-freeze commit/hash: Not recorded.
+Date: Not recorded.
+Git commit / clean state: The experiment must record Git commit, branch, and dirty state; no completed record is present.
+Data identities: Not applicable; no training is run.
+Input artifact hashes: The protocol/development configuration hash and STU checkpoint hash must be recorded; no completed record is present.
+Random namespaces / seeds: Not applicable.
+Command and resolved config: The resolved environment and experiment registry must be recorded; no command is recorded.
+Resource and disk preflight: Python, PyTorch, and CUDA environment identities must be recorded; no completed preflight is present.
+Artifacts and hashes: The experiment registry and version-controlled protocol files are required; no artifact identity is recorded.
+Primary construct: Establish the unique traceable starting point for every later experiment.
+Primary result: No formal execution result is recorded.
+PASS / FAIL / OUTCOME: OUTCOME — design recorded; execution status not recorded.
+Failure classification: Not applicable unless execution fails.
+Unlocked next node: Conditional on PASS, E01.
+Invalidated downstream evidence: If the snapshot is not traceable, all later experiments lack a valid common origin.
+Descriptive observations: None specified.
+Notes: Record the Git commit/branch/dirty state, protocol and development-configuration hashes, STU checkpoint hash, renderer/generator versions, and Python/PyTorch/CUDA environment, then generate the experiment registry without training. PASS requires every later experiment to bind uniquely to this snapshot and all critical protocol files to be version-controlled. FAIL applies if an untraceable uncommitted core file remains, a configuration source is unknown, or an artifact cannot be bound to a version. On FAIL, organize, commit, and freeze the current protocol snapshot, then rerun E00.
+
+## E01 | Access Protection for the 19 Public Real Anomalies
+
+Experiment ID: E01
+Design-freeze commit/hash: Not recorded.
+Execution-freeze commit/hash: Not recorded.
+Date: Not recorded.
+Git commit / clean state: Not recorded.
+Data identities: The public/validation set of 19 real-anomaly sequences; labels and results must remain unread before method freeze.
+Input artifact hashes: Not recorded.
+Random namespaces / seeds: Not applicable.
+Command and resolved config: Not recorded.
+Resource and disk preflight: Not applicable.
+Artifacts and hashes: Freeze-guard or physical-permission records are required; no artifact identity is recorded.
+Primary construct: Ensure that no side path can read the confirmation set before method freeze.
+Primary result: No formal execution result is recorded.
+PASS / FAIL / OUTCOME: OUTCOME — design recorded; execution status not recorded.
+Failure classification: Not applicable unless execution fails.
+Unlocked next node: Conditional on PASS, E02.
+Invalidated downstream evidence: Any bypass that exposes labels or results invalidates the untouched-confirmation status.
+Descriptive observations: None specified.
+Notes: Search the full repository for loaders related to public/validation/19. Add a freeze guard or physical permission isolation to every label/result entry point. Test access protection only; do not read confirmation labels. PASS requires every entry point to reject and log access before freeze. FAIL applies if any path can read labels outside the official evaluator. On FAIL, close the bypass and rerun E01.
+
+## E02 | Access Protection for the 51 Hidden Tests
+
+Experiment ID: E02
+Design-freeze commit/hash: Not recorded.
+Execution-freeze commit/hash: Not recorded.
+Date: Not recorded.
+Git commit / clean state: Not recorded.
+Data identities: The hidden/test set of 51 sequences.
+Input artifact hashes: Not recorded.
+Random namespaces / seeds: Not applicable.
+Command and resolved config: Not recorded.
+Resource and disk preflight: Not applicable.
+Artifacts and hashes: Final-submission-only protection is required; no artifact identity is recorded.
+Primary construct: Ensure that development cannot touch the final hidden test before Gate 4.
+Primary result: No formal execution result is recorded.
+PASS / FAIL / OUTCOME: OUTCOME — design recorded; execution status not recorded.
+Failure classification: Not applicable unless execution fails.
+Unlocked next node: Conditional on PASS, E03.
+Invalidated downstream evidence: Any development-time access invalidates hidden-test isolation.
+Descriptive observations: None specified.
+Notes: Inspect loaders, paths, scripts, and environment variables for hidden/test/51 and establish protection that opens only at final submission. PASS requires development mode to be unable to read or generate results related to the 51 hidden tests. FAIL applies if a development path can access the hidden test. On FAIL, close access and rerun E02.
+
+## E03 | Official STU Dependency Import
+
+Experiment ID: E03
+Design-freeze commit/hash: Not recorded.
+Execution-freeze commit/hash: Not recorded.
+Date: Not recorded.
+Git commit / clean state: Not recorded.
+Data identities: No data are loaded.
+Input artifact hashes: Official STU module and dependency versions must be identified; no hashes are recorded.
+Random namespaces / seeds: Not applicable.
+Command and resolved config: Import the official STU dependency chain only; exact command is not recorded.
+Resource and disk preflight: Verify compatibility of Hydra, OmegaConf, MinkowskiEngine, PyTorch3D, and PyTorch; no completed preflight is recorded.
+Artifacts and hashes: Import log required; no artifact identity is recorded.
+Primary construct: Verify that the workspace has the minimum environment required to call the official STU implementation.
+Primary result: No formal execution result is recorded.
+PASS / FAIL / OUTCOME: OUTCOME — design recorded; execution status not recorded.
+Failure classification: Not applicable unless execution fails.
+Unlocked next node: Conditional on PASS, E04.
+Invalidated downstream evidence: Missing dependencies, incompatible versions, or ABI conflicts block all official STU execution.
+Descriptive observations: None specified.
+Notes: Do not load data or train. PASS requires the complete official module chain to import without a missing dependency or ABI conflict. FAIL applies to any missing dependency, version incompatibility, or import failure. On FAIL, repair only the environment or dependency and rerun E03.
+
+## E04 | Official STU Checkpoint Instantiation
+
+Experiment ID: E04
+Design-freeze commit/hash: Not recorded.
+Execution-freeze commit/hash: Not recorded.
+Date: Not recorded.
+Git commit / clean state: Not recorded.
+Data identities: No dataset sample is used.
+Input artifact hashes: The official configuration and checkpoint hash must be recorded; no completed identity is present.
+Random namespaces / seeds: Not applicable.
+Command and resolved config: Construct STU using the official configuration and checkpoint specified by the mainline; exact command is not recorded.
+Resource and disk preflight: Not recorded.
+Artifacts and hashes: Weight-loading log, including missing and unexpected keys, required; no artifact identity is recorded.
+Primary construct: Verify compatibility between the designated official weights and the current code interface.
+Primary result: No formal execution result is recorded.
+PASS / FAIL / OUTCOME: OUTCOME — design recorded; execution status not recorded.
+Failure classification: Not applicable unless execution fails.
+Unlocked next node: Conditional on PASS, E05.
+Invalidated downstream evidence: An incompatible checkpoint, configuration, or API blocks official STU inference.
+Descriptive observations: Missing and unexpected state-dictionary keys must be reported.
+Notes: PASS requires complete model construction and weight loading that agrees with official expectations, with no unexplained key mismatch. FAIL applies to checkpoint/configuration/API incompatibility. On FAIL, repair checkpoint/configuration binding and rerun E04.
+
+## E05 | STU Forward Pass on One Real Frame
+
+Experiment ID: E05
+Design-freeze commit/hash: Not recorded.
+Execution-freeze commit/hash: Not recorded.
+Date: Not recorded.
+Git commit / clean state: Not recorded.
+Data identities: One real frame from train/206.
+Input artifact hashes: Official STU configuration and checkpoint identities inherited from E04; exact hashes are not recorded here.
+Random namespaces / seeds: Not applicable.
+Command and resolved config: Run the official STU forward path on one real train/206 frame; exact command is not recorded.
+Resource and disk preflight: Not recorded.
+Artifacts and hashes: Key-output tensors and execution log required; no artifact identities are recorded.
+Primary construct: Demonstrate that actual train/206 data, rather than a toy tensor, can traverse the official forward path.
+Primary result: No formal execution result is recorded.
+PASS / FAIL / OUTCOME: OUTCOME — design recorded; execution status not recorded.
+Failure classification: Not applicable unless execution fails.
+Unlocked next node: Conditional on PASS, E06.
+Invalidated downstream evidence: A failed real-input forward pass blocks all later STU-interface claims.
+Descriptive observations: All key output shapes and finite-value checks must be reported.
+Notes: PASS requires a successful real-frame forward pass with no NaN or Inf and legal output shapes. FAIL applies if real input cannot run or output is abnormal. On FAIL, repair input adaptation or the official interface and rerun E05.
+
+## E06 | STU Freeze Invariants
+
+Experiment ID: E06
+Design-freeze commit/hash: Not recorded.
+Execution-freeze commit/hash: Not recorded.
+Date: Not recorded.
+Git commit / clean state: Not recorded.
+Data identities: Informal smoke-backward fixture; no dataset identity is specified.
+Input artifact hashes: STU identity inherited from E04; no exact hash is recorded here.
+Random namespaces / seeds: Not recorded.
+Command and resolved config: Perform one informal smoke backward pass and one optimizer step; exact command is not recorded.
+Resource and disk preflight: Not recorded.
+Artifacts and hashes: Parameter and buffer hashes before and after the optimizer step are required; no completed artifact is recorded.
+Primary construct: Verify that STU is actually frozen in AJAE, rather than merely described as frozen or omitted from the optimizer.
+Primary result: No formal execution result is recorded.
+PASS / FAIL / OUTCOME: OUTCOME — design recorded; execution status not recorded.
+Failure classification: Not applicable unless execution fails.
+Unlocked next node: Conditional on PASS, E07.
+Invalidated downstream evidence: Any trainable STU parameter, nonempty STU gradient, changed parameter/buffer, or mode change invalidates the frozen-backbone contract.
+Descriptive observations: Report `requires_grad`, optimizer/STU parameter-set overlap, gradients, parameter hashes, buffer hashes, and evaluation mode.
+Notes: Set `requires_grad=False`; require the optimizer parameter set to be disjoint from the STU parameter set; require empty STU gradients; compare parameter and buffer hashes before and after one optimizer step; and keep evaluation mode. PASS requires parameters, buffers, gradients, and mode state all to remain unchanged. On FAIL, repair freezing, evaluation mode, or optimizer construction and rerun E06.
+
+## E07 | Cache Identity and Cross-World Isolation
+
+Experiment ID: E07
+Design-freeze commit/hash: Not recorded.
+Execution-freeze commit/hash: Not recorded.
+Date: Not recorded.
+Git commit / clean state: Not recorded.
+Data identities: Two counterfactual worlds sharing the same `frame_id`.
+Input artifact hashes: Cache identity must include world identity, frame identity, renderer/generator version, and STU identity; exact hashes are not recorded.
+Random namespaces / seeds: Not recorded.
+Command and resolved config: Compare cached and uncached outputs for the two-world same-frame counterexample; exact command is not recorded.
+Resource and disk preflight: Not recorded.
+Artifacts and hashes: Cache-hit/miss trace and pointwise output comparison required; no completed artifact identity is recorded.
+Primary construct: Prevent incorrect reuse of rendering or STU features for the same `frame_id` in different counterfactual worlds.
+Primary result: No formal execution result is recorded.
+PASS / FAIL / OUTCOME: OUTCOME — design recorded; execution status not recorded.
+Failure classification: Not applicable unless execution fails.
+Unlocked next node: Conditional on PASS, E08.
+Invalidated downstream evidence: A cache key containing only `frame_id`, cross-world contamination, or cached/uncached disagreement invalidates downstream world-specific evidence.
+Descriptive observations: Report cache identities, hit/miss behavior, and pointwise equality.
+Notes: PASS requires no erroneous cross-world hit and pointwise equality between cached and uncached outputs. On FAIL, repair cache identity and rerun E07.
+
+# Phase 1 | Canonical OS1-128 Ray Identity
+
+## E08 | Slot Count and Empty-Slot Pattern
+
+Experiment ID: E08
+Design-freeze commit/hash: Not recorded.
+Execution-freeze commit/hash: Not recorded.
+Date: Not recorded.
+Git commit / clean state: Not recorded.
+Data identities: Multiple raw frames; exact frame identities are not recorded in this node.
+Input artifact hashes: Not recorded.
+Random namespaces / seeds: Not applicable.
+Command and resolved config: Count total slots, valid slots, empty-slot patterns, and abnormal frames across multiple frames; exact command is not recorded.
+Resource and disk preflight: Not recorded.
+Artifacts and hashes: Not recorded.
+Primary construct: Determine whether the raw-file slot structure is stable enough to support a physical-ray audit.
+Primary result: No formal execution result is recorded in this node.
+PASS / FAIL / OUTCOME: OUTCOME — design recorded; execution status not recorded.
+Failure classification: Not applicable unless execution fails.
+Unlocked next node: Conditional on PASS, E09-v2.
+Invalidated downstream evidence: An irregular slot structure blocks physical-ray reconstruction.
+Descriptive observations: Total-slot count, valid-slot count, empty-slot pattern, and abnormal-frame pattern.
+Notes: PASS requires either a stable structure or an explicit rule for handling every abnormal pattern. FAIL applies when the slot structure has no stable rule. On FAIL, parse the raw encoding and slot semantics before rerunning E08.
+
+## E09-v1 | Recovery of 128 Beams and Elevations — Historical FAIL, Never Rewrite
+
+Experiment ID: E09-v1
+Design-freeze commit/hash: Not recorded.
+Execution-freeze commit/hash: Not recorded.
+Date: Not recorded.
+Git commit / clean state: Not recorded.
+Data identities: All 449 frames of train/206; 131,072 fixed slots interpreted as 128 rows by 1,024 columns.
+Input artifact hashes: Not recorded.
+Random namespaces / seeds: Not applicable.
+Command and resolved config: For every row in every frame, compute the median elevation of real returns; exact command is not recorded.
+Resource and disk preflight: Not recorded.
+Artifacts and hashes: Not recorded.
+Primary construct: The original protocol jointly tested recovery of vertical beam-row identity and approximate cross-frame invariance of each row's median elevation. Preregistered conditions were exactly 128 rows per frame, a real return in every row, global adjacent-row separation of at least $0.15^\circ$, and cross-frame deviation of each row's median elevation from its reference no greater than $0.10^\circ$.
+Primary result: All 128 rows existed and had real returns in every frame; row medians remained strictly ordered, with no crossing or permutation; minimum within-frame adjacent-row separation was $0.215376^\circ$. Maximum cross-frame row-median deviation was $0.348507^\circ$, exceeding $0.10^\circ$. The 0.99 quantile and maximum of same-slot directional residuals were $0.611656^\circ$ and $1.703179^\circ$.
+PASS / FAIL / OUTCOME: FAIL — permanent historical result.
+Failure classification: `qualification_specification_defect` in the later unified taxonomy; the source describes it as a specification defect.
+Unlocked next node: No direct successor. A versioned protocol revision leads to E09-v2.
+Invalidated downstream evidence: The FAIL may never be rewritten as PASS. The later defect classification does not cancel the original FAIL and may not use observed results to relax E11.
+Descriptive observations: The stable ordering supports recoverable row topology despite failure of the physical-direction-invariance condition.
+Notes: Post hoc semantic review established that the $0.10^\circ$ cross-frame row-median condition measured invariance of physical direction rather than recoverability of ordered beam-row identity. It therefore overlapped E11's construct. All E09-v1 inputs, preregistered criteria, results, and the FAIL remain historical evidence.
+
+## E09 Protocol Revision | Separate Row Identity from Physical Direction
+
+Experiment ID: E09 protocol revision
+Design-freeze commit/hash: Not recorded.
+Execution-freeze commit/hash: Not applicable; this is a protocol revision.
+Date: Not recorded.
+Git commit / clean state: Not recorded.
+Data identities: Inherits E09-v1 and train/206.
+Input artifact hashes: Not recorded.
+Random namespaces / seeds: Not applicable.
+Command and resolved config: Not applicable.
+Resource and disk preflight: Not applicable.
+Artifacts and hashes: Versioned protocol record; exact identity is not recorded.
+Primary construct: E09-v2 tests only whether the topology and identity of 128 ordered beam rows can be recovered deterministically in every frame. E11 independently tests cross-frame stability of the unit physical direction of a canonical ray/slot and whether $\rho_f(r)$ can be constructed safely.
+Primary result: The $0.10^\circ$ fixed cross-frame elevation condition from E09-v1 was removed from E09-v2.
+PASS / FAIL / OUTCOME: OUTCOME — protocol revised.
+Failure classification: `qualification_specification_defect` for the superseded E09-v1 construct; E09-v1 itself remains FAIL.
+Unlocked next node: E09-v2.
+Invalidated downstream evidence: Removing the E09-v1 condition may not be interpreted as evidence that E11 passed.
+Descriptive observations: None beyond the retained E09-v1 evidence.
+Notes: E09-v1's complete input, preregistered adjudication, results, and FAIL conclusion remain unchanged as historical evidence.
+
+## E09-v2 | Recovery of 128 Beam-Row Identities
+
+Experiment ID: E09-v2
+Design-freeze commit/hash: Not recorded.
+Execution-freeze commit/hash: Not recorded.
+Date: Not recorded.
+Git commit / clean state: Executed after the protocol-revision commit; exact commit is not recorded.
+Data identities: All 449 audited frames of train/206; 131,072 raw slots per frame; 128 candidate rows; 1,024 candidate columns per row.
+Input artifact hashes: Not recorded.
+Random namespaces / seeds: None; recovery is fixed and deterministic.
+Command and resolved config: Apply the E08 all-zero-XYZ empty-slot rule; assign row IDs 0–127 in descending order of the median elevation of valid returns; read and process every raw scan independently twice.
+Resource and disk preflight: Not recorded.
+Artifacts and hashes: Canonical summary SHA-256 `966baf6e2ea0cf86c9bbe9ee42834cfc8dbc228803188ea1ddd5e16d23b1161d`.
+Primary construct: Test only row topology and identity, not cross-frame invariance of an individual ray or a whole row's absolute physical direction. Frozen PASS conditions required exactly 128 rows and 1,024 candidate slots per row; at least 512 real returns per row per frame; strictly decreasing median elevation; the same identity permutation 0–127 in every frame; no crossing; every within-frame adjacent-row median gap at least $0.10^\circ$, preserving non-overlapping $\pm0.05^\circ$ ordering bands; and exact two-run reproduction. The $0.10^\circ$ tolerance predated E09-v2 and was based on the OS1-128 mean vertical spacing of about $0.35^\circ$, not selected from new E09-v2 results. No cross-frame fixed-elevation condition or equivalent was allowed.
+Primary result: PASS. All 449/449 frames recovered 128 rows. Every candidate-row ordering was the same identity permutation 0–127, with no crossing or permutation. The minimum real-return support was 645 per row per frame. The minimum within-frame adjacent-row median-elevation gap was $0.215376^\circ$. Both independent raw-file executions produced identical row IDs, support counts, medians, adjacent gaps, summaries, and SHA-256.
+PASS / FAIL / OUTCOME: PASS.
+Failure classification: Not applicable.
+Unlocked next node: E10-v3 according to the final state transition recorded in this node.
+Invalidated downstream evidence: This PASS does not establish cross-frame invariance of the physical direction of any row, column, slot, or canonical ray; E11 remains the independent adjudicator.
+Descriptive observations: Minimum support 645; minimum adjacent gap $0.215376^\circ$.
+Notes: FAIL would apply to an incorrect row count or candidate-slot count, support below the frozen minimum, row crossing or permutation, an adjacent median gap below $0.10^\circ$, or failure of exact reproduction. On FAIL, stop unlocking E10 and inspect the row-recovery rule or raw-slot topology. Any new definition must be versioned and frozen before rerun.
+
+## E10-v1 | Azimuth-Column Continuity — Historical FAIL, Never Rewrite
+
+Experiment ID: E10-v1
+Design-freeze commit/hash: Not recorded.
+Execution-freeze commit/hash: Not recorded.
+Date: Not recorded.
+Git commit / clean state: Not recorded.
+Data identities: All 449 audited raw train/206 frames; 1,024 candidate columns; 128 candidate rows per column.
+Input artifact hashes: Not recorded.
+Random namespaces / seeds: None; execution was deterministic and repeated twice.
+Command and resolved config: For every frame, take the circular mean of the XY unit directions of all valid rows in each candidate column to obtain 1,024 representative azimuths. Test clockwise and counterclockwise hypotheses through a complete cycle, including last-column-to-first-column closure.
+Resource and disk preflight: Not recorded.
+Artifacts and hashes: Both independent executions produced SHA-256 `3fdb998866a8858b157555feb7673de598408afd132442de59bcce33600328ac`.
+Primary construct: Test column topology, cyclic order, and repeatable recovery without requiring any fixed column to have the same absolute cross-frame azimuth phase. Frozen PASS conditions required exactly 1,024 columns and 128 candidate rows per column; at least 64 real returns per column per frame; a finite non-degenerate circular mean; exactly one direction hypothesis with all 1,024 cyclic increments in $[0.10^\circ,0.60^\circ]$; one common direction and identity ordering 0–1023 over all 449 frames; no permutation or internal jump; exact two-run reproduction; and no cross-frame absolute-phase comparison. The nominal OS1-128 column step is $360^\circ/1024=0.3515625^\circ$.
+Primary result: FAIL. Minimum support was only 16 real returns per column per frame, below 64. Only 46/449 frames had a unique direction for which every cyclic increment lay in $[0.10^\circ,0.60^\circ]$. The formal cross-row circular-mean estimator produced 4,040 out-of-range increments. Both runs were identical, excluding nondeterminism.
+PASS / FAIL / OUTCOME: FAIL — permanent historical result.
+Failure classification: `qualification_specification_defect`; the cross-row circular-mean estimator mixed beam-specific azimuth offsets with visibility composition.
+Unlocked next node: Only a versioned protocol revision could enter E10-v2.
+Invalidated downstream evidence: E10-v2 may not overwrite E10-v1. A later diagnostic cannot convert the formal FAIL into PASS.
+Descriptive observations: 3,331/4,040 out-of-range increments occurred even when both adjacent columns had at least 64 returns, excluding an explanation restricted to extremely sparse columns. Within the same beam row, all 55,682,452 pairs of adjacent valid columns had steps in $[0.291824^\circ,0.406113^\circ]$, with no reversal or out-of-range step. This supports the beam-offset/visibility-composition explanation but does not change the verdict.
+Notes: FAIL conditions were insufficient column count or support, ambiguous direction or cross-frame direction flips, any cyclic increment outside the frozen interval, column permutation or internal jump, or failure of exact reproduction. E10-v1 remains permanently FAIL.
+
+## E10 Protocol Revision | Remove Cross-Beam Aggregation and Compare Adjacent Columns Within Each Row
+
+Experiment ID: E10 protocol revision 1
+Design-freeze commit/hash: Not recorded.
+Execution-freeze commit/hash: Not applicable.
+Date: Not recorded.
+Git commit / clean state: Not recorded.
+Data identities: Inherits E09-v2 row identities and E10-v1 train/206 inputs.
+Input artifact hashes: Not recorded.
+Random namespaces / seeds: Not applicable.
+Command and resolved config: Not applicable.
+Resource and disk preflight: Not applicable.
+Artifacts and hashes: Versioned protocol record; exact identity is not recorded.
+Primary construct: E10-v2 inspects each of the 128 rows recovered by E09-v2 and compares only $(b,a)\rightarrow(b,a+1)$ within that row. It directly audits raw neighboring-slot XY azimuths, without estimating or correcting beam offsets.
+Primary result: The E10-v1 interval $[0.10^\circ,0.60^\circ]$, 50% support principle, common scan direction, and exact two-run reproduction were retained unchanged. The interval was not narrowed to the post-FAIL observed range $[0.291824^\circ,0.406113^\circ]$. `minimum_real_returns_per_column_frame >= 64`, the cross-row circular mean, circular concentration, and column-composition statistics were removed because their observation unit had been rejected; this was not a threshold relaxation and was not replaced by another cross-row threshold.
+PASS / FAIL / OUTCOME: OUTCOME — protocol revised.
+Failure classification: Addresses the E10-v1 `qualification_specification_defect`.
+Unlocked next node: E10-v2.
+Invalidated downstream evidence: E11 still independently tests the cross-frame physical direction and azimuth phase of fixed $(b,a)$, deskew, and coordinate transforms; E10-v2 may not relax E11.
+Descriptive observations: None beyond the retained E10-v1 evidence.
+Notes: All listed retained and deleted conditions are part of the frozen revision.
+
+## E10-v2 | Adjacent Azimuth-Column Continuity Within Each Beam Row — Historical FAIL, Never Rewrite
+
+Experiment ID: E10-v2
+Design-freeze commit/hash: Not recorded.
+Execution-freeze commit/hash: Not recorded.
+Date: Not recorded.
+Git commit / clean state: Not recorded.
+Data identities: All 449 train/206 frames; 128 E09-v2 rows per frame; 1,024 candidate columns per row; 57,472 row/frame units.
+Input artifact hashes: Not recorded.
+Random namespaces / seeds: None; every raw scan was read independently twice.
+Command and resolved config: Compute the circular XY-azimuth increment for each truly adjacent pair $(b,a)\rightarrow(b,a+1)$ whose endpoints are both real returns. Never bridge an empty intermediate column. Evaluate $a=1023\rightarrow0$ separately as wrap-around. Test forward and reverse hypotheses with no beam-specific offset estimation or correction.
+Resource and disk preflight: Not recorded.
+Artifacts and hashes: Both runs produced SHA-256 `a573ccabf02eee71460f1c0452f408d53a14d0f392c5a30ff63610ffa385adb0`.
+Primary construct: Test whether each recovered beam row forms a deterministic, continuous, single-direction azimuth scan. Frozen PASS conditions required the E09-v2 128-by-1,024 structure; at least 512 real adjacent internal edges per row/frame, inheriting the 50% principle; exactly one direction per row/frame with every observed non-wrap increment in $[0.10^\circ,0.60^\circ]$; a single common direction over all rows and frames; at least one observed real wrap-around edge per row over 449 frames; every observed wrap edge in the same interval and direction; exact two-run reproduction; and no cross-frame absolute-angle or phase test.
+Primary result: FAIL. All 57,472 row/frame units selected the same unique negative scan direction. Minimum real internal-edge support was 632, above 512. All 55,638,667 internal edges lay in $[0.291824^\circ,0.406113^\circ]$, with zero violation of $[0.10^\circ,0.60^\circ]$. All 43,785 observed wrap edges passed, spanning $[0.342209^\circ,0.360947^\circ]$. Both runs were identical. The sole failed condition was that eight rows — 119, 120, and 122–127 — never had columns 1023 and 0 simultaneously observed in any of 449 frames.
+PASS / FAIL / OUTCOME: FAIL — permanent historical result.
+Failure classification: `sample_or_observability_defect` under the later unified taxonomy; the source records insufficient direct wrap-around observability rather than observed discontinuity.
+Unlocked next node: E11 remained locked; only another versioned E10 revision was permitted.
+Invalidated downstream evidence: E10-v2's FAIL must remain unchanged. The data did not refute wrap continuity for the eight rows, but did not provide the direct evidence required by the frozen protocol.
+Descriptive observations: Endpoint audit found that at least one wrap endpoint in each of the eight rows was empty in every frame.
+Notes: FAIL also would have applied to fewer than 512 real adjacent edges in any row/frame, any observed step outside the interval, ambiguous or split directions, a discontinuous wrap edge, reproduction failure, or violation of E09-v2 structure.
+
+## E10 Second Protocol Revision | Unobservable Does Not Mean Discontinuous
+
+Experiment ID: E10 protocol revision 2
+Design-freeze commit/hash: Not recorded.
+Execution-freeze commit/hash: Not applicable.
+Date: Not recorded.
+Git commit / clean state: Not recorded.
+Data identities: Inherits E10-v2 train/206 inputs and endpoint occupancy.
+Input artifact hashes: Not recorded.
+Random namespaces / seeds: Not applicable.
+Command and resolved config: Not applicable.
+Resource and disk preflight: Not applicable.
+Artifacts and hashes: Versioned protocol record; exact identity is not recorded.
+Primary construct: E10-v3 asks whether every truly observable adjacent edge is continuous and whether an unobserved wrap edge can be labeled honestly as lacking evidence.
+Primary result: E10-v2 remains permanently FAIL, including the fact that 8/128 rows lacked direct per-row wrap evidence. `minimum_observed_wraparound_edges_per_beam >= 1` was deleted. The unchanged conditions were $[0.10^\circ,0.60^\circ]$, at least 512 real internal adjacent edges per row/frame, one unique common direction, and exact two-run reproduction. No beam-offset correction, interpolation, fabricated wrap return, or cross-beam inference was added.
+PASS / FAIL / OUTCOME: OUTCOME — protocol revised.
+Failure classification: Addresses sample observability without treating missing evidence as a discontinuity.
+Unlocked next node: E10-v3.
+Invalidated downstream evidence: E10-v3 can unlock E11 only; it may not prejudge E11's fixed-$(b,a)$ physical-direction or azimuth-phase result.
+Descriptive observations: An unobserved edge is neither classified as continuous nor discontinuous.
+Notes: The mainline requires continuity of azimuth columns but does not require every beam row that permits empty slots to produce a direct return at both wrap endpoints.
+
+## E10-v3 | Observable Azimuth-Column Continuity and Wrap Identifiability
+
+Experiment ID: E10-v3
+Design-freeze commit/hash: Not recorded.
+Execution-freeze commit/hash: Not recorded.
+Date: Not recorded.
+Git commit / clean state: Not recorded.
+Data identities: All 449 raw train/206 frames; 128 rows by 1,024 columns; 57,472 row/frame units.
+Input artifact hashes: Not recorded.
+Random namespaces / seeds: None; all raw files were read independently twice.
+Command and resolved config: Retain E10-v2 within-row immediate-neighbor computation. Internal edges are $a=0\ldots1022$; wrap edges are $1023\rightarrow0$ and are counted separately. For rows without a wrap observation, inspect raw XYZ occupancy at columns 1023 and 0 over all 449 frames. Do not interpolate, correct, replace by filtering, or estimate across rows.
+Resource and disk preflight: Not recorded.
+Artifacts and hashes: Both executions produced SHA-256 `6945e938f0846f3acf0df31d455741d23fde0716306dff887bff3451ede48d61`.
+Primary construct: Frozen PASS conditions required at least 512 real internal adjacent edges per row/frame; every observed internal edge in $[0.10^\circ,0.60^\circ]$ under one direction; exactly one legal direction for each of 57,472 row/frame units and the same direction globally; every observed wrap edge in the same interval and direction; structural proof for every never-observed wrap row that column 1023 or 0 was always empty in all 449 frames; confirmation of the unmodified 128-by-1,024 raw adjacency and sole all-zero-XYZ empty-slot rule; explicit labels `directly_identified_from_observed_returns` or `unidentifiable_from_observed_returns`; no fabricated edge; exact two-run reproduction; and the exact qualified conclusion recorded below. Cross-frame physical direction remained outside the construct.
+Primary result: PASS. All 55,638,667 observable internal edges and all 43,785 observable wrap edges used the same negative direction, with zero violation of $[0.10^\circ,0.60^\circ]$. Minimum internal-edge support was 632 per row/frame. Wrap direction was directly identified for 120 rows, each recorded as `wraparound_direction = directly_identified_from_observed_returns`. At least one raw wrap endpoint was empty in every frame for rows 119, 120, and 122–127, so those eight were labeled `wraparound_direction = unidentifiable_from_observed_returns`. No unexplained missing row, interpolation, beam-offset correction, cross-beam substitution, or extra endpoint filtering occurred.
+PASS / FAIL / OUTCOME: PASS.
+Failure classification: Not applicable.
+Unlocked next node: E11.
+Invalidated downstream evidence: This PASS does not establish that fixed $(b,a)$ is a cross-frame-stable physical ray.
+Descriptive observations: Frozen qualified conclusion: **All observable adjacent azimuth edges are continuous; wrap edges have direct evidence for 120/128 rows, while wrap edges for 8/128 rows are unidentifiable in train/206.** It must not be rewritten as direct validation of wrap continuity for all 128 rows.
+Notes: FAIL would apply to any observed internal or wrap edge outside the interval, a non-unique or inconsistent direction, insufficient internal support, a never-observed wrap row not explained by raw structural emptiness, use of interpolation or correction, inconsistent identifiability labels, failed reproduction, or a conclusion exceeding the frozen qualification.
+
+## E11-v1 | Cross-Frame Slot-to-Ray Direction Stability after Global Phase Alignment
+
+Experiment ID: E11-v1
+Design-freeze commit/hash: Not recorded.
+Execution-freeze commit/hash: Not recorded.
+Date: Not recorded.
+Git commit / clean state: Not recorded.
+Data identities: All 449 train/206 frames; E08 all-zero-XYZ occupancy; fixed $(b,a)$ topology from E09-v2 and E10-v3; 56,196,761 qualified real observations.
+Input artifact hashes: The old `dev.json` audit covered only 17 frames and had no frozen conclusion, so it was excluded from E11-v1 evidence.
+Random namespaces / seeds: None; fitting was deterministic and independently repeated.
+Command and resolved config: Fit exactly one global azimuth phase $\phi_f$ per frame, with no beam-, column-, slot-, or local-time offset. Initialize $\phi_f=0$. With phase fixed, compute the equally weighted normalized mean of all aligned observed unit directions for each slot as the unique template. With the template fixed, compute the equally weighted circular mean of all observable slot azimuth differences in the frame as its sole phase. Fix $\phi_0=0$. Allow at most 100 iterations; require maximum circular phase change below $10^{-12}$ rad; then recompute the final template.
+Resource and disk preflight: Not recorded.
+Artifacts and hashes: `runs/ajae/e11_v1_stats.npz`, SHA-256 `5b0f581ed2df72fd67b8d2a43a38f75df18457c83b29c6941d94c9a34ebd8f82`.
+Primary construct: After removing the unique frame-wide scan phase, decide whether fixed slot/$(b,a)$ still represents the same physical ray and fixed slot mapping is safe, or per-frame $\rho_f(r)$ is required. Residuals were $e_{f,b,a}=\arccos(\hat r_{f,b,a}^{aligned}\cdot\hat r_{b,a}^{ref})$. Only slots observed in at least two frames entered cross-frame residuals; always-empty slots were excluded and once-observed slots could not contribute a self-fit zero. Frozen thresholds were overall $Q_{0.99}<0.17578125^\circ$, overall maximum $<0.3515625^\circ$, and every one of the 128 per-beam, 1,024 per-column, and 449 per-frame $Q_{0.99}$ values below $0.17578125^\circ$. All residuals had to be finite, masks occupancy-derived, and both executions exactly identical. Previously observed $0.611656^\circ$ and $1.703179^\circ$ values could not influence thresholds.
+Primary result: FAIL. Alternating fitting converged in four iterations, with final phase change $3.79\times10^{-14}$ rad. $\phi_f$ lay only in $[-0.0000313^\circ,0.0000896^\circ]$, showing global scan phase was not the main residual source. Residual median was $0.078154^\circ$, $Q_{0.95}=0.302594^\circ$, $Q_{0.99}=0.533029^\circ$, and maximum $1.641949^\circ$. The 99th percentile exceeded the half-column threshold and the maximum exceeded one column.
+PASS / FAIL / OUTCOME: FAIL.
+Failure classification: `scientific_failure` of the fixed-slot physical-ray premise at the frozen resolution; it does not reject AJAE as a whole.
+Unlocked next node: E12 remained locked. Enter the explicit per-frame $\rho_f(r)$ beam/azimuth reconstruction branch and rerun E11 under a preregistered new version.
+Invalidated downstream evidence: A fixed slot may not be used directly as a fixed physical ray. The AJAE network itself must not be modified in response.
+Descriptive observations: All residuals were finite. 128/128 beams, 449/449 frames, and 840/1,024 columns had grouped $Q_{0.99}$ at or above $0.17578125^\circ$. Worst beam 63 was $0.661791^\circ$; worst column 257 was $0.718476^\circ$; worst frame 226 was $0.793871^\circ$. Six slots were observed in only one frame. Independent recomputation exactly reproduced phase, templates, slot counts, masks, and every grouped quantile array.
+Notes: Qualified conclusion: **Slot topology is stable, but fixed slot/$(b,a)$ cannot safely be treated as a fixed physical ray at the frozen grid-resolution scale.** Fixing $\phi_0=0$ removed the global-rotation indeterminacy. PASS would have unlocked E12 and established fixed-$(b,a)$ physical-ray identity at the frozen scale. Any slot observed in only one frame independently made E11-v1 FAIL because its cross-frame direction was unidentifiable; it could not be counted as a zero residual. Any failure of a PASS condition, structured half-column tails, or a residual exceeding one full column was a FAIL.
+
+## E11-v2 | Per-Frame Canonical-Ray-to-Slot Mapping Reconstruction
+
+Experiment ID: E11-v2
+Design-freeze commit/hash: Not recorded.
+Execution-freeze commit/hash: Not recorded.
+Date: Not recorded.
+Git commit / clean state: Not recorded.
+Data identities: All 449 train/206 frames; 128 beams; 1,024 columns; 131,072 canonical rays and raw slots per frame; 57,472 frame/beam shifts; 56,196,761 qualified observations.
+Input artifact hashes: Existing `calibration.pt` fixed-file-column `azimuth_rad` was explicitly not used as mapping truth.
+Random namespaces / seeds: None; alternating reconstruction, exhaustive shift search, and tie-breaking were deterministic and independently repeated.
+Command and resolved config: Preserve E09-v2 beam identity and E10-v3's negative cyclic order. Permit only one integer cyclic shift $k_{f,b}\in\{0,\ldots,1023\}$ per frame/beam: $\operatorname{ray}_f(b,s)=(b,(s+k_{f,b})\bmod1024)$ and $\rho_f(b,a)=b\cdot1024+(a-k_{f,b})\bmod1024$. Keep empty slots in the complete bijection with normal-control distance $+\infty$. Initialize the direction template by equal-weight normalized raw row/column means; use same-beam periodic interpolation only to make never-observed raw-slot template directions finite, never as returns or residuals. With template fixed, exhaust all 1,024 shifts and maximize summed dot product over real observations, breaking exact ties by the smallest integer. With shifts fixed, update each template by the normalized equal-weight mean of real observations mapped to it. Set frame-0 shift to zero for each beam. Converge only when all $449\times128$ integer shifts remain unchanged, within 100 iterations. For every frame and every slot, the required identity round trip was `raw slot → (b,a) → rho_f(b,a) → raw slot`; for actual returns, count, occupancy, raw XYZI, XYZ, and range also had to be recovered elementwise, and empty slots could not create pseudo-returns.
+Resource and disk preflight: Not recorded.
+Artifacts and hashes: `runs/ajae/e11_v2_mapping.npz`, SHA-256 `343b896b0035b861ce283b6292f8ad796fe3948c565901486ec2df63452c5156`.
+Primary construct: Test whether a deterministic, complete, order-preserving per-frame bijection $\rho_f:\mathcal R\rightarrow\mathcal S_f$ can restore stable physical direction for canonical rays at the thresholds frozen before E11-v1 results. No nearest-neighbor remapping, arbitrary non-cyclic permutation, interpolated return, or shared-slot collision was permitted. PASS required finite shifts and convergence within 100 iterations; a complete 131,072-to-131,072 bijection; exact raw-slot round trip; exact recovery of real-return count, occupancy, raw XYZI, XYZ, and range; no fabricated empty-slot return; overall $Q_{0.99}<0.17578125^\circ$ and maximum $<0.3515625^\circ$; all per-beam, per-column, and per-frame $Q_{0.99}<0.17578125^\circ$; finite residuals; exclusion of once-observed rays from cross-frame qualification; and exact two-run reproduction. Round-trip correctness alone could not establish physical correctness.
+Primary result: FAIL. Alternating reconstruction converged in two iterations with shift-change counts $57,472\rightarrow0$. Every one of the $449\times128=57,472$ optimal integer cyclic shifts was zero; the data did not support a per-beam whole-column reindexing repair. All implementation conditions passed: every frame had a complete bijection, all slot identities round-tripped exactly, valid-point count, occupancy, XYZI, XYZ, and range were elementwise identical, and no empty slot gained a fabricated return. Independent reconstruction exactly reproduced shifts, templates, observation counts, eligibility masks, and grouped statistics. Directional residuals remained median $0.078193^\circ$, $Q_{0.95}=0.302601^\circ$, $Q_{0.99}=0.533035^\circ$, and maximum $1.641971^\circ$.
+PASS / FAIL / OUTCOME: FAIL.
+Failure classification: `scientific_failure` for the frozen mapping family; current return observations and ordered topology were insufficient to establish canonical physical-ray identity at the frozen scale.
+Unlocked next node: E12 remained locked. E11-v1 and E11-v2 remain permanent FAIL results.
+Invalidated downstream evidence: A renderer may not claim qualified ray identity from fixed slots or this per-beam cyclic-shift mapping. The AJAE network itself was not invalidated and must not be changed. Any next route requires new observable information or an explicitly revised physical model, such as sensor-packet metadata or a validated deskew/coordinate-time model; unconstrained permutation fitted to the same residuals is prohibited.
+Descriptive observations: Worst beam 63, column 257, and frame 226 had $Q_{0.99}$ values $0.661910^\circ$, $0.718551^\circ$, and $0.793899^\circ$. Six canonical rays remained observed only once.
+Notes: Frozen qualified conclusion: **Stable E09-v2 row identity and E10-v3 observable column order are insufficient to recover stable canonical physical-ray identity in train/206 at the frozen scale through a complete order-preserving cyclic slot mapping.** Setting each beam's frame-0 shift to zero only rolls that beam's canonical template and does not change any pairing residual. E11-v1's FAIL and residuals were used only to select the already reserved per-frame-mapping branch; they did not change half-column or one-column thresholds.
+
+## E11-D1 | Audit of STU Point-Coordinate Provenance
+
+Experiment ID: E11-D1
+Design-freeze commit/hash: Not recorded.
+Execution-freeze commit/hash: STU official repository `main` commit `8f0f09c2ca4bf7b665e0ae5919b4092ddae140a2` and its complete 19-commit Git history were frozen as audited external evidence; the AJAE execution-freeze identity is not recorded.
+Date: Not recorded.
+Git commit / clean state: The audited STU repository state was `8f0f09c2ca4bf7b665e0ae5919b4092ddae140a2`; the AJAE worktree state is not recorded.
+Data identities: STU paper and supplementary material; the STU official repository and full Git history; the local official train release, including all 1,131 `.bin`, 1,131 `.label`, and four `.txt` files; train/206 `calib.txt`, `poses.txt`, and all 449 `.bin` files; STU official training and preprocessing loaders; and Ouster official XYZLut and data-layout documentation.
+Input artifact hashes: No local input SHA-256 values were recorded. The external repository commit is recorded above.
+Random namespaces / seeds: None; this was a deterministic, read-only provenance audit.
+Command and resolved config: Inspect the paper's acquisition, ROS, KISS-ICP, motion-compensation, and export statements; search the current STU repository and its entire history for raw ROS/Ouster-to-`.bin` generation, deskew/dewarp, timestamps, packets, and Ouster metadata; inspect release file types and contents for per-point/per-column timestamps, PCAP, ROS bag, MCAP, OSF, CSV, or metadata JSON; trace the actual use of `poses.txt` and `calib.txt` in official loaders; and compare the released geometry with Ouster's official direction, beam-origin offset, stagger/destagger, and column-timing semantics. Only official generation code, official metadata, or a transformation directly verifiable from released files could identify provenance. SemanticKITTI packaging alone was not evidence of coordinate semantics. A paper statement that KISS-ICP “includes motion compensation” could not establish whether deskewed coordinates were written back to `.bin`.
+Resource and disk preflight: Not applicable; the audit was read-only and used already available evidence.
+Artifacts and hashes: [STU paper](https://arxiv.org/html/2505.02148); [STU official repository](https://github.com/kumuji/stu_dataset); [Ouster XYZLut definition](https://static.ouster.dev/sdk-docs/0.16.0/cpp/api_cpp/function_xyzlut_8h_1a12c135dd9366e302be6c9e6047895090.html); [Ouster data-layout documentation](https://docs.ouster.com/sdk-docs/features/processing/using-the-api.html). No separate local result artifact or hash was recorded.
+Primary construct: Determine whether XYZ in the released STU `.bin` files is raw LiDAR/sensor-frame Cartesian geometry, geometry subjected to a whole-frame rigid transform, or geometry subjected to per-column/per-point motion compensation. Separately determine whether interpreting $XYZ/\lVert XYZ\rVert$ as a physical beam direction omits Ouster's beam-origin offset. If public evidence could not uniquely select `raw_lidar_or_sensor_cartesian`, `whole_frame_rigid_transformed`, or `per_column_or_per_point_motion_compensated`, the required outcome was `insufficient_released_evidence`; E11 residuals could not be used to guess a PASS answer. The beam-origin issue and deskew provenance were treated as distinct candidate explanations.
+Primary result: `INSUFFICIENT RELEASED EVIDENCE`. The paper establishes 10 Hz OS1-128 acquisition through ROS, KISS-ICP postprocessing, KISS-ICP point-cloud motion compensation, and export of computed LiDAR poses in SemanticKITTI/KITTI format, but does not say whether deskewed coordinates were written into the released `.bin` files or used only inside odometry. The repository says only that the data generally follows SemanticKITTI format and contains no raw ROS/Ouster-to-`.bin` exporter or deskew, dewarp, packet, timestamp, or Ouster-metadata export logic anywhere in its current branch or full history. The train release contains no JSON, PCAP, ROS bag, MCAP, OSF, CSV, or timestamp files. Every train/206 `.bin` is 2,097,152 bytes, exactly $128\times1024\times4$ float32 values. The official loader interprets the fields only as `(x,y,z,intensity)`, while the official no-preprocessing loader creates a separate all-zero `time_array`, confirming that per-point time is absent from `.bin`. In train/206, `P0`–`P3` and `Tr` in `calib.txt` are identity transforms, while `poses.txt` contains 449 nontrivial whole-frame poses. Both official loaders read `.bin` first and then apply `poses.txt`, excluding the interpretation that the released XYZ was already transformed to global coordinates by those poses. Ouster XYZLut uses both unit `direction` and a beam-origin-dependent `offset`, so in general $XYZ=d\,\hat r+o$, not $XYZ=d\,\hat r$; when $o\ne0$, $XYZ/\lVert XYZ\rVert$ varies with range and is not itself the physical beam direction. Staggered/destaggered conversion requires metadata `pixel_shift_by_row`, and STU's four-field `.bin` preserves no column/point sampling time.
+PASS / FAIL / OUTCOME: OUTCOME — `insufficient_released_evidence`.
+Failure classification: `insufficient_released_evidence` under this diagnostic's frozen provenance taxonomy.
+Unlocked next node: Under the original transition, E11-D2 could unlock only if a whole-frame rigid transform already applied to released XYZ was identified and invertible from released files. E11-D3 could unlock only if per-point/per-column timestamps and the applied deskew trajectory/model, or raw packets plus Ouster metadata sufficient to reconstruct them, became available. Neither condition was met. The immediately frozen next action was to request generation semantics or metadata from the data authors. A later explicit protocol revision added E11-D4a without altering this outcome.
+Invalidated downstream evidence: E12 remained locked. The released evidence did not justify treating D4b-style parameters as factory metadata, treating $XYZ/\lVert XYZ\rVert$ as a sufficient physical-ray definition, or fitting an unconstrained permutation, a higher-capacity column shift, or a free ray mapping to E11 residuals.
+Descriptive observations: The released `.bin` is local Cartesian data to which downstream code subsequently applies a whole-frame pose. Public evidence cannot distinguish uncorrected LiDAR/sensor-frame Cartesian output from per-column/per-point motion-compensated points still expressed in a local frame. The missing factory OS1-128 metadata also prevents constructing a metadata-verified corrected ray at this node.
+Notes: This record preserves the original evidence boundary. The two official paths were specifically the Mask4Former3D preprocessing loader and the no-preprocessing loader; both read `.bin` before applying `poses.txt`. It does not infer deskew status from residuals, file format, or the mere presence of KISS-ICP motion compensation.
+
+## E11-D1 Protocol Revision | Constrained Ouster-Model Inversion Branch
+
+Experiment ID: E11-D1 protocol revision
+Design-freeze commit/hash: Not recorded.
+Execution-freeze commit/hash: Not applicable; this record revised the protocol before execution of the new branch.
+Date: Not recorded.
+Git commit / clean state: Not recorded.
+Data identities: Inherits all E11-D1 evidence; the new branch uses train/206 and later train/201 under their node-specific freezes.
+Input artifact hashes: Not recorded.
+Random namespaces / seeds: Not applicable.
+Command and resolved config: Add a constrained inversion branch based on Ouster's official projection equations. E11-D4a may identify only a fixed per-row column-phase structure; E11-D4b may decompose that structure into beam angles, beam-origin transform, and range; E11-D4c must test transfer to an independent sequence. Unconstrained permutation remains prohibited.
+Resource and disk preflight: Not applicable.
+Artifacts and hashes: Versioned protocol record; exact identity is not recorded.
+Primary construct: Determine whether a physically constrained Ouster-form model can recover observable canonical-ray geometry despite insufficient released provenance metadata.
+Primary result: E11-D1's `insufficient_released_evidence` outcome and every audit fact were retained unchanged. With explicit user approval, contacting the authors ceased to be the sole action capable of changing the execution route, and the E11-D4a → E11-D4b → E11-D4c constrained inversion branch was added.
+PASS / FAIL / OUTCOME: OUTCOME — protocol revised.
+Failure classification: Not applicable; the revision does not reclassify E11-D1.
+Unlocked next node: E11-D4a.
+Invalidated downstream evidence: None of E11-v1, E11-v2, or E11-D1 was rewritten. E12 remained locked until completion of the new branch and E11-v3.
+Descriptive observations: The revision introduced no unconstrained slot or ray permutation.
+Notes: The physical-provenance question and the constrained self-calibration question remain distinct.
+
+## E11-D4a | Staggered/Destaggered Per-Row Phase-Structure Diagnosis
+
+Experiment ID: E11-D4a
+Design-freeze commit/hash: Not recorded.
+Execution-freeze commit/hash: Not recorded.
+Date: Not recorded.
+Git commit / clean state: Not recorded.
+Data identities: All 449 train/206 frames arranged as $128\times1024$ slots; only real XYZ returns were used.
+Input artifact hashes: Not recorded.
+Random namespaces / seeds: None; estimation and both reads were deterministic.
+Command and resolved config: Inherit E10-v3's unique negative scan direction and set $\theta_a=-2\pi a/1024$. For each frame/beam, compute the equally weighted circular mean $\delta_{f,b}$ of $\operatorname{atan2}(y,x)-\theta_a$ using only real XYZ returns, with no interpolation across empty slots and at least 512 returns per frame/beam. Compute each frame's equally weighted common circular phase $g_f$ across 128 finite rows, define $q_{f,b}=\operatorname{wrap}(\delta_{f,b}-g_f)$, and take the equally weighted circular mean across 449 frames as fixed row phase $q_b$. With $\Delta_a=360^\circ/1024$, decompose $q_b$ into nearest integer shift $s_b=\operatorname{round}(q_b/\Delta_a)$ and sub-column remainder $\epsilon_b=q_b-s_b\Delta_a$, breaking an exact tie toward the smaller integer. This decomposition is descriptive and does not modify a slot or $\rho_f$.
+Resource and disk preflight: Not recorded.
+Artifacts and hashes: Two independent raw reads produced summary hash `5c5d93652ab5b56b7bac57bcf31ce9fce210d4056af71ef6b9133947e4035a19`.
+Primary construct: Test whether the released $128\times1024$ arrangement contains a fixed per-beam column-phase structure stable across 449 frames and whether a common file column represents common azimuth across rows or needs a fixed row shift. All 57,472 frame/beam units had to meet support and yield finite phase. For $v_{f,b}=|\operatorname{wrap}(q_{f,b}-q_b)|$, every beam's $Q_{0.99}$ had to be below $0.17578125^\circ$ and every maximum below $0.3515625^\circ$. If stable and $\max_b|\operatorname{wrap}(q_b)|<0.17578125^\circ$, classify `common_azimuth_column_consistent`; if stable, that condition failed, and $s_b$ was nonconstant, classify `stable_nonconstant_row_phase_structure`; otherwise classify `unstable_or_unidentifiable`. Both reads had to reproduce every $\delta_{f,b}$, $g_f$, $q_{f,b}$, $q_b$, $s_b$, $\epsilon_b$, support count, quantile, and hash. Cross-sequence behavior was reserved for E11-D4c.
+Primary result: `stable_nonconstant_row_phase_structure`. All 57,472/57,472 frame/beam units met support, with 645–1,024 real returns. Per-beam stability $Q_{0.99}$ ranged from $0.001198^\circ$ to $0.007091^\circ$, and the maximum stability residual over all samples was $0.007311^\circ$, all far below the preregistered half-column and one-column limits. Fixed row phase ranged from $-4.240333^\circ$ to $4.234426^\circ$. The decomposition yielded four nonconstant shifts $\{-12,-4,4,12\}$, exactly 32 rows each and exactly aligned with $b\bmod4=\{0,1,2,3\}$. Maximum absolute sub-column remainder was $0.068794^\circ$. Independent raw reads were elementwise identical.
+PASS / FAIL / OUTCOME: PASS.
+Failure classification: Not applicable.
+Unlocked next node: E11-D4b. E12 remained locked.
+Invalidated downstream evidence: E11-v1 and E11-v2 remained historical FAIL results, and E11-D1 remained `insufficient_released_evidence`. D4a alone could not recover factory physical rays or identify `pixel_shift_by_row`.
+Descriptive observations: The released ordering contains a highly stable four-group row-phase structure compatible with an Ouster-style fixed per-row shift. In D4a, `pixel_shift_by_row`, beam azimuth offset, range dependence from beam origin, and deskew remained confounded.
+Notes: A `common_azimuth_column_consistent` or `stable_nonconstant_row_phase_structure` outcome unlocked E11-D4b without rewriting prior results. An `unstable_or_unidentifiable` outcome would have kept D4b locked and would not have permitted a freer row permutation.
+
+## E11-D4b | Self-Calibration of the Ouster Projection Model
+
+Experiment ID: E11-D4b
+Design-freeze commit/hash: Not recorded.
+Execution-freeze commit/hash: Not recorded.
+Date: Not recorded.
+Git commit / clean state: Not recorded.
+Data identities: train/206 frames 0–448. Even-numbered frames were the primary fitting split and odd-numbered frames were held out; the split was then reversed for an independent intrinsic-stability comparison. D4a's fixed row shifts $s_b$ were inherited without further search.
+Input artifact hashes: Not recorded.
+Random namespaces / seeds: None. Four fixed optimizer starts and deterministic lexicographic tie-breaking were used; the entire fit and evaluation were independently repeated twice.
+Command and resolved config: With $\Delta_a=2\pi/1024$, use only the 259 shared parameters $\gamma$, $o_x$, $o_z$, and 128 pairs $\alpha_b,\beta_b$, with $\eta_{b,a}=\gamma-2\pi a/1024+s_b\Delta_a$, $o_{b,a}=(o_x\cos\eta_{b,a},o_x\sin\eta_{b,a},o_z)$, and $u_{b,a}=(\cos(\eta_{b,a}+\beta_b)\cos\alpha_b,\sin(\eta_{b,a}+\beta_b)\cos\alpha_b,\sin\alpha_b)$. Here $\gamma$ was the sole global column phase, $(o_x,o_z)$ was the two-dimensional beam-origin translation directly associated with the official `beam_to_lidar_transform`, and $\alpha_b,\beta_b$ were the 128 beam-elevation and azimuth-offset pairs. For each real point $X$, analytically eliminate range by $t=u_{b,a}^{\mathsf T}(X-o_{b,a})$, $\hat X=o_{b,a}+t u_{b,a}$, and $d=t+\sqrt{o_x^2+o_z^2}$. Prohibit frame-specific phase or beam parameters, free per-column offsets, point-specific transforms, and free permutations. Optimize $(\gamma,o_x,o_z)$ on all real fitting returns with $a\bmod16=0$, using Huber loss on orthogonal Cartesian line residuals with scale 0.05 m and SciPy `L-BFGS-B` with `maxiter=500`, `ftol=1e-12`, and `gtol=1e-9`. Four starts share D4a's common-phase consensus and use $(o_x,o_z)=(0,0),(0.05,0),(0.05,0.05),(0.05,-0.05)$ m. Select minimum objective, breaking exact ties lexicographically. Then estimate all 128 $\alpha_b,\beta_b$ pairs from all real returns in the fitting split. Constrain $\gamma$ within one column of D4a's all-frame common circular phase, $o_x\in[0,0.2]$ m, and $o_z\in[-0.2,0.2]$ m.
+Resource and disk preflight: Not recorded.
+Artifacts and hashes: Summary hash `6c02420a3208624a15eb5c64d50674ba36d7c0055903669486b088dbb1450224`. The resulting main-model artifact later used by D4c was `runs/ajae/e11_d4b_calibration.npz`, SHA-256 `42791278e2a6b36d975bbe9dc957c6f303b8b424c5b97cf54e42380ad191f253`.
+Primary construct: Determine whether released XYZ identifies shared intrinsics constrained by Ouster's official projection equation and whether those intrinsics place held-out train/206 frames on the same physical rays without slot renumbering or frame-specific freedom. PASS required the main model's odd-frame angular residual to have overall $Q_{0.99}<0.17578125^\circ$ and global maximum $<0.3515625^\circ$, with every beam and every column $Q_{0.99}<0.17578125^\circ$; the odd-fit and even-fit beam-origin vectors to differ by less than 0.01 m; the two full $128\times1024$ direction grids to differ with $Q_{0.99}<0.17578125^\circ$ and maximum $<0.3515625^\circ$; all recovered held-out ranges to be positive; and exact two-run reproduction. Cartesian residuals, all grouped angular residuals, intrinsic values, bound hits, and split differences had to be reported without post-result thresholds.
+Primary result: PASS. The even-frame fit used 28,159,594 real returns, including 1,759,401 points in the preregistered column subset for global robust optimization; the odd-frame holdout contained 28,037,173 real returns. Holdout angular residual median/$Q_{0.95}$/$Q_{0.99}$/maximum was $0.001913^\circ$/$0.008399^\circ$/$0.016540^\circ$/$0.055267^\circ$. Worst-beam and worst-column $Q_{0.99}$ values were $0.043730^\circ$ and $0.044768^\circ$. Holdout orthogonal Cartesian residual median/$Q_{0.95}$/$Q_{0.99}$/maximum was 0.000289/0.002395/0.004547/0.033336 m. Minimum recovered range was 1.071993 m and all were positive. The even-frame model recovered $(o_x,o_z)=(0.0166727,0.0381928)$ m; the independent odd-frame model recovered $(0.0167226,0.0382022)$ m, a 0.0000507 m Euclidean difference. Their complete-grid direction difference had $Q_{0.99}=0.000337^\circ$ and maximum $0.000345^\circ$. Main-model beam altitude ranged from $-21.499963^\circ$ to $20.810009^\circ$, and residual beam azimuth offset after removing D4a's integer shifts ranged from $-0.071500^\circ$ to $0.061394^\circ$. No parameter hit a frozen bound. Both executions were elementwise identical.
+PASS / FAIL / OUTCOME: PASS.
+Failure classification: Not applicable.
+Unlocked next node: E11-D4c only. E12 remained locked.
+Invalidated downstream evidence: The result prevented E11-v1/v2 from being interpreted as unstable slot topology. It did not identify factory metadata or establish cross-sequence validity.
+Descriptive observations: D4a's row shifts, the beam-origin offset, and per-row beam angles jointly formed a highly stable Ouster-form ray model within train/206.
+Notes: A D4b FAIL would have retained D4a's fixed-row-structure fact, prohibited freer frame- or point-specific rescue models, and required a separately revised data-driven canonical-ray fallback. Even this PASS establishes only a train/206 self-calibrated Ouster-form model; E11-D4c owns transfer qualification.
+
+## E11-D4c-v1 | Cross-Sequence Validation of Self-Calibrated Intrinsics
+
+Experiment ID: E11-D4c-v1
+Design-freeze commit/hash: Not recorded.
+Execution-freeze commit/hash: Not recorded.
+Date: Not recorded.
+Git commit / clean state: Not recorded.
+Data identities: The sole model was the train/206 even-frame main model in `runs/ajae/e11_d4b_calibration.npz`. Validation used train/201 frames 4–681, totaling 678 frames. Frames 0–3 remained excluded under the already frozen internal-scan and duplicate-label exclusions in `protocol.json`. All 678 included `.bin` files were verified to contain exactly $128\times1024\times4$ float32 values.
+Input artifact hashes: `runs/ajae/e11_d4b_calibration.npz`, SHA-256 `42791278e2a6b36d975bbe9dc957c6f303b8b424c5b97cf54e42380ad191f253`.
+Random namespaces / seeds: None. No train/201 parameter was fitted, and the planned evaluation required two independent raw reads.
+Command and resolved config: Apply the frozen D4b official-form model to train/201 without estimating a sequence phase, row shift, beam angle, beam origin, frame-specific parameter, or point transform. Do not read 201 labels. Compute point-to-fixed-ray angular residual, orthogonal Cartesian residual, and recovered range only after the preregistered support check. The frozen support condition required every one of 86,784 frame/beam units to contain at least 512 real returns. Other PASS conditions required all evaluated values finite; overall angular $Q_{0.99}<0.17578125^\circ$ and maximum $<0.3515625^\circ$; every one of 128 beam, 1,024 column, and 678 frame $Q_{0.99}$ values below $0.17578125^\circ$; all recovered ranges positive; and complete reproduction across two raw reads.
+Resource and disk preflight: Not recorded.
+Artifacts and hashes: No D4c PASS artifact was created because execution stopped at the first failed preregistered support check.
+Primary construct: Test whether intrinsics recovered only from train/206 explain physical rays in the independent normal development sequence train/201 with zero adaptation. A PASS would establish cross-sequence qualification of the constrained geometry but still would not identify the parameters as factory metadata.
+Primary result: FAIL. On the first complete read, the runner checked support first in preregistered order and found only 511 real returns at train/201 frame 4, beam 12, below the required 512. Execution stopped immediately. No directional residual was computed or selected, and no PASS artifact was produced. A read-only post-failure scope diagnosis found 2,371 of 86,784 frame/beam units below 512, spanning 183 frames and 30 beams; minimum support was 388 at frame 356, beam 0. The files retained strict $128\times1024$ slot topology, and the shortfall arose from empty returns.
+PASS / FAIL / OUTCOME: FAIL.
+Failure classification: `qualification_specification_defect`. The formal record initially established only a failed support condition. Subsequent review identified a construct mismatch because the D4a phase-estimation support threshold was not necessary for D4c ray-validity testing; this became the basis for the versioned D4c-v2 qualification revision.
+Unlocked next node: None. E11-v3 and E12 remained locked pending an explicit pre-run decision and versioned protocol.
+Invalidated downstream evidence: D4b could be retained only as an internal train/206 self-calibration result. D4c-v1 provided no formal evidence about whether the frozen directional-residual limits transfer across sequences, because those residuals were never evaluated.
+Descriptive observations: The post-failure counts are scope diagnostics only and cannot rewrite the formal FAIL. Cross-sequence variation in visibility can change return counts without changing ray geometry.
+Notes: The only valid conclusion at this version is that D4c-v1's support condition was not met. Whether D4b satisfied the frozen directional limits on train/201 remained unknown until D4c-v2.
+
+## E11-D4c-v2 | Zero-Adaptation Cross-Sequence Validation on Actually Observed Returns
+
+Experiment ID: E11-D4c-v2
+Design-freeze commit/hash: Not recorded.
+Execution-freeze commit/hash: Not recorded.
+Date: Not recorded.
+Git commit / clean state: Not recorded.
+Data identities: The unchanged train/206 even-frame D4b main model and train/201 frames 4–681, totaling 678 frames and 86,784 frame/beam units.
+Input artifact hashes: `runs/ajae/e11_d4b_calibration.npz`, SHA-256 `42791278e2a6b36d975bbe9dc957c6f303b8b424c5b97cf54e42380ad191f253`.
+Random namespaces / seeds: None. Two independent raw reads and evaluations were required.
+Command and resolved config: Preserve D4c-v1's frozen model, validation frames, angular limits, and reproduction conditions. Delete only the mismatched requirement that every frame/beam contain at least 512 returns. Evaluate every finite, non-all-zero XYZ return. Do not interpolate, add points, fabricate returns, borrow adjacent columns, read labels, or fit train/201 global phase, row shift, beam altitude, beam azimuth offset, beam origin, frame-specific parameter, or any other intrinsic. Empty slots have no directional residual. Report frame/beam support minimum, median, $Q_{0.01}$, $Q_{0.05}$, $Q_{0.25}$, $Q_{0.75}$, $Q_{0.95}$, $Q_{0.99}$, maximum, and counts below the historical 512 threshold; report each canonical ray's count over 678 frames and the number of zero-observation rays. The key coverage groups remain 128 beams, 1,024 columns, and 678 frames; any zero-observation full group is a systematic coverage FAIL. A zero-observation individual $(b,a)$ ray is labeled `unobservable`, receives no pseudo-residual, does not alone fail D4c-v2, and is deferred to E11-v3.
+Resource and disk preflight: Not recorded.
+Artifacts and hashes: Elementwise hash `1dcfa913641f8547d8939a177438907f3d602020acad6760fddeb3c2f48c8b32`; summary hash `e88d843401690403386ea65728eb4006f18d0c7797994a73019447d819f3a936`.
+Primary construct: Ask whether the same Ouster-like intrinsics self-calibrated only on train/206 explain every actually observed train/201 return with zero adaptation. PASS required all observed residuals finite; every recovered range positive; overall angular $Q_{0.99}<0.17578125^\circ$ and maximum $<0.3515625^\circ$; every observable beam, column, and frame $Q_{0.99}<0.17578125^\circ$; no zero-observation key group; and elementwise reproduction of masks, supports, coverage classes, residuals, statistics, and hashes.
+Primary result: PASS. The frozen model evaluated 77,782,123 train/201 returns with zero adaptation. All angular and orthogonal Cartesian residuals were finite; minimum recovered range was 0.910994 m and all ranges were positive. Angular residual median/$Q_{0.95}$/$Q_{0.99}$/maximum was $0.001860^\circ$/$0.006758^\circ$/$0.007872^\circ$/$0.064321^\circ$. Worst beam, column, and frame $Q_{0.99}$ values were $0.043732^\circ$ at beam 127, $0.044764^\circ$ at column 52, and $0.014995^\circ$ at frame 620. All 128 beams, 1,024 columns, and 678 frames had observations. Cartesian residual median/$Q_{0.95}$/$Q_{0.99}$/maximum was 0.000406/0.004479/0.007952/0.047042 m. Frame/beam support minimum/$Q_{0.01}$/$Q_{0.05}$/$Q_{0.25}$/median/$Q_{0.75}$/$Q_{0.95}$/$Q_{0.99}$/maximum was 388/467/585/827/952/998/1023/1024/1024. The historical below-512 count remained 2,371 units across 183 frames and 30 beams but did not affect geometry adjudication. Of 131,072 canonical rays, 130,699 had at least one train/201 return and 373 were `unobservable`; no points were added. Both evaluations were elementwise identical.
+PASS / FAIL / OUTCOME: PASS.
+Failure classification: E11-D4c-v1 remains a permanent FAIL caused by a qualification-construct mismatch; D4c-v2 itself has no failure classification.
+Unlocked next node: E11-v3. E12 remained locked until E11-v3.
+Invalidated downstream evidence: D4c-v1 was not rewritten as PASS. The result does not establish direct cross-sequence evidence for 373 zero-observation canonical rays and does not identify self-calibrated parameters as factory metadata.
+Descriptive observations: Frozen scientific conclusion: **The same Ouster-like intrinsics self-calibrated only from train/206 explain every actually observed train/201 return without fitting any train/201 parameter and satisfy the preregistered ray-grid geometric limits.** This is zero-adaptation cross-sequence evidence, not factory-metadata identity evidence.
+Notes: A D4c-v2 FAIL would have restricted D4b to train/206 and triggered a separately revised data-driven canonical-ray fallback. D4c-v1's historical FAIL remains unchanged.
+
+## E11-v3 | Final Qualification of Self-Calibrated Canonical Physical-Ray Identity
+
+Experiment ID: E11-v3
+Design-freeze commit/hash: Not recorded.
+Execution-freeze commit/hash: Not recorded.
+Date: Not recorded.
+Git commit / clean state: Not recorded.
+Data identities: train/206 frames 0–448 and train/201 frames 4–681, without labels; all $128\times1024$ raw slots in every included frame; D4a fixed row shifts and the D4b even-frame main model frozen without sequence-, frame-, or point-specific refitting.
+Input artifact hashes: Inherits `runs/ajae/e11_d4b_calibration.npz`, SHA-256 `42791278e2a6b36d975bbe9dc957c6f303b8b424c5b97cf54e42380ad191f253`, and the D4a result summarized by hash `5c5d93652ab5b56b7bac57bcf31ce9fce210d4056af71ef6b9133947e4035a19`.
+Random namespaces / seeds: None. Two complete independent raw reads and final audits were required.
+Command and resolved config: For released raw slot $(b,a)$, define $c=(a-s_b)\bmod1024$ and canonical identity $r=(b,c)$, with inverse $\rho_f(b,c)=\operatorname{raw\ slot}(b,(c+s_b)\bmod1024)$. Use only D4a's four frozen shift groups; the mapping is identical across frames. Set canonical encoder angle $\eta_c=\gamma-2\pi c/1024$, and use the D4b even-frame main model for beam origin and unit direction. An empty ray retains identity and normal range $+\infty$. For every frame, execute `raw slot → (b,c) → rho_f(b,c) → raw slot`; require a bijection and bit-identical round-trip XYZ and intensity with no fabricated return. For every actual return, calculate angular residual, orthogonal Cartesian residual, and recovered range from the canonical ray's beam origin. Report train/206 and train/201 separately at overall, beam, canonical-column, and frame levels. Every beam, canonical column, and included frame must contain at least one return. A $(b,c)$ with no return in one sequence is `model_defined_but_unobservable` and receives no pseudo-residual.
+Resource and disk preflight: Not recorded.
+Artifacts and hashes: Both complete audits produced summary hash `29dc63eec1b7647f38aff658e4ac373c88e86da201089aec4925d83fb1674740`.
+Primary construct: Without using $XYZ/\lVert XYZ\rVert$, combine D4a's fixed destagger mapping with the Ouster-like intrinsics validated by D4b/D4c to decide whether $r=(b,c)$ has deterministic, invertible physical-ray identity at the frozen grid resolution. Each sequence independently had to meet overall angular $Q_{0.99}<0.17578125^\circ$ and maximum $<0.3515625^\circ$; every observable beam, canonical column, and frame $Q_{0.99}<0.17578125^\circ$; all observed residuals finite; all recovered ranges positive; full-slot bijection; bit-identical raw round trip; and exact two-run reproduction.
+Primary result: PASS. The mappings $c=(a-s_b)\bmod1024$ and $a=(c+s_b)\bmod1024$ formed complete bijections on all 128 rows. All raw XYZI in 449 train/206 frames and 678 train/201 frames round-tripped bit-identically through `raw→ray→raw`. Train/206 evaluated 56,196,767 actual returns; angular residual median/$Q_{0.95}$/$Q_{0.99}$/maximum was $0.001913^\circ$/$0.008386^\circ$/$0.016528^\circ$/$0.055267^\circ$, with worst beam/canonical-column/frame $Q_{0.99}$ of $0.043732^\circ$/$0.045165^\circ$/$0.025624^\circ$. Train/201 evaluated 77,782,123 returns; the corresponding values were $0.001860^\circ$/$0.006758^\circ$/$0.007872^\circ$/$0.064321^\circ$, with worst beam/canonical-column/frame $Q_{0.99}$ of $0.043732^\circ$/$0.045165^\circ$/$0.014995^\circ$. All residuals were finite, all recovered ranges positive, and all 128 beams, 1,024 canonical columns, and included frames had real coverage. Train/206 had 383 zero-observation individual rays and train/201 had 373; 367 combined rays remained `model_defined_but_unobservable`. These share the sensor-model definition but do not claim direct return validation. Both audits were elementwise identical.
+PASS / FAIL / OUTCOME: PASS.
+Failure classification: Not applicable.
+Unlocked next node: E12. All later renderers must use this self-calibrated canonical-ray grid and fixed $\rho_f$.
+Invalidated downstream evidence: Later renderers may not revert to $XYZ/\lVert XYZ\rVert$ or use a free pointwise mapping. E11-v1/v2 and D4c-v1 remain permanent historical FAIL results for their respective invalid constructs.
+Descriptive observations: Final scientific conclusion: **Normalized XYZ directions of file slots are not stable physical rays, but a fixed per-row destagger mapping plus self-calibrated beam origin and 128 beam-angle pairs yields canonical physical-ray identities that are stable across train/206 and independent train/201, reversible, and within the frozen grid-scale limits.** The parameters are not claimed to reproduce unreleased factory metadata.
+Notes: An E11-v3 FAIL would have kept E12 locked and prohibited returning to normalized XYZ or rescuing the result with a free per-point mapping. The direct-data boundary for individually unobserved rays remains explicit.
+
+## E12-v1 | Multi-Return Reordering Risk
+
+Experiment ID: E12-v1
+Design-freeze commit/hash: Not recorded.
+Execution-freeze commit/hash: Not recorded.
+Date: Not recorded.
+Git commit / clean state: Not recorded.
+Data identities: train/206 frames 0–448 and train/201 frames 4–681, without labels; 1,127 released `.bin` files; E11-v3's canonical mapping $c=(a-s_b)\bmod1024$ and fixed inverse bijection.
+Input artifact hashes: Not recorded.
+Random namespaces / seeds: None. The complete raw-file audit was independently executed twice.
+Command and resolved config: Require every `.bin` to contain exactly $128\times1024\times4$ float32 fields interpreted as `(x,y,z,intensity)`, with exactly one raw slot mapped to each canonical ray. The v1 occupancy rule treated `x=y=z=0` as the sole empty record and classified an empty XYZ record carrying nonzero intensity as invalid ambiguity. A nonempty XYZ record represented one published return and all XYZI values had to be finite. Reconfirm from the E11-D1 provenance audit and official loader that no return index, return count, first/second/strongest marker, or parallel return array exists. Execute full-slot raw→canonical→raw and require bit-identical XYZ and intensity; occupancy change over frames must remain attached to the same canonical-ray slot. Reproduce masks, frame counts, per-ray observation counts, occupancy transitions, round-trip hashes, and summary hash twice.
+Resource and disk preflight: Not recorded.
+Artifacts and hashes: Summary hash `1bd58788bdca02c382062dbfcb8acd731afb6814558ca0f9f03a3aa2c61d838e`.
+Primary construct: Determine whether the released STU interface provides exactly one fixed record slot per E11-v3 canonical ray, with cardinality limited to “no published return” or “one published return,” and excludes an observable published multi-return dimension or dynamic ray reassignment. This experiment does not claim that the physical OS1-128 can generate only one return and cannot infer whether upstream selected first, second, strongest, last, or another processed return from a four-field `.bin`.
+Primary result: FAIL. All 2,654,561 empty-XYZ slots in train/206 and all 11,084,693 empty-XYZ slots in train/201 carried nonzero intensity and therefore violated the preregistered joint-empty-record condition. All other frozen checks passed: all 1,127 files had exactly $128\times1024\times4$ float32 fields; no XYZI value was nonfinite; each canonical ray had one fixed record slot per frame and published-return cardinality 0 or 1; the same bijection applied to all frames; every XYZI slot round-tripped bit-identically; only `(x,y,z,intensity)` was published; no return index/count/order or parallel multi-return array existed; and both reads were identical. A read-only post-failure diagnosis found that empty-XYZ intensity was not a single sentinel: train/206 contained 5,585 distinct float32 values from 0.000857 to 1.633714, and train/201 contained 5,710 from 0.000286 to 1.639429; all were finite and none was zero. Intensity therefore remains payload after XYZ is zeroed and cannot determine whether a return exists.
+PASS / FAIL / OUTCOME: FAIL.
+Failure classification: `qualification_specification_defect`; the joint XYZ-plus-intensity empty-record condition contradicted the XYZ-only occupancy semantics already frozen in E08 and used throughout E09–E11.
+Unlocked next node: None. E13 remained locked. A versioned E12-v2 could restore only E08's XYZ-only occupancy definition while retaining every other check and conclusion boundary.
+Invalidated downstream evidence: E12-v1 does not reject a stable single-published-return interface. It rejects only the erroneous requirement that empty XYZ imply zero intensity. It may not be rewritten as PASS.
+Descriptive observations: The interface still had one stable slot per canonical ray, cardinality 0 or 1, no observable second-return container, and no dynamic ray mapping. These passing subchecks were insufficient to override the formal FAIL.
+Notes: A valid eventual PASS conclusion must remain limited to a “stable single-published-return/empty-slot interface.” It may not be stated as “the sensor has no multiple returns” or “the released point is proven to be the raw first return.”
+
+## E12-v2 | Audit of the Single-Published-Return Interface under XYZ-Only Occupancy
+
+Experiment ID: E12-v2
+Design-freeze commit/hash: Not recorded.
+Execution-freeze commit/hash: Not recorded.
+Date: Not recorded.
+Git commit / clean state: Not recorded.
+Data identities: train/206 frames 0–448 and train/201 frames 4–681; all 1,127 released scan files; the unchanged E11-v3 canonical mapping and inverse.
+Input artifact hashes: Not recorded.
+Random namespaces / seeds: None. Two independent complete raw reads and audits were required.
+Command and resolved config: Restore E08's sole occupancy definition, $\operatorname{return\ exists}\iff XYZ\ne(0,0,0)$. Intensity is always payload and never enters occupancy; intensity in an empty-XYZ slot need not be zero but must survive raw→canonical→raw bit-identically. Inherit every other E12-v1 data, mapping, record-cardinality, format, dynamic-reordering, round-trip, and conclusion-boundary condition. Each file must be $128\times1024\times4$ float32; every canonical ray must have exactly one fixed slot per frame; nonempty-XYZ records must contain finite XYZI; per-ray cardinality is 0 or 1; the mapping must remain one fixed bijection; occupancy changes stay at the same canonical identity; no return index/count/order, first/second/strongest flag, parallel array, or dynamic assignment mechanism may exist; and both reads must reproduce masks, counts, transitions, round trips, and hashes elementwise.
+Resource and disk preflight: Not recorded.
+Artifacts and hashes: Summary hash `55332b8109db6ab1238c53a95538389d96569e84fd516461ca7cdd413f93e8f6`.
+Primary construct: Test whether STU's released data forms a stable single-published-return/empty-slot canonical-ray interface under the already authoritative XYZ-only occupancy definition.
+Primary result: PASS. Train/206's 449 frames contained 58,851,328 fixed slots: 56,196,767 published returns and 2,654,561 empty-XYZ slots. Train/201's 678 frames contained 88,866,816 fixed slots: 77,782,123 published returns and 11,084,693 empty-XYZ slots. All 1,127 files had exactly $128\times1024\times4$ float32 values; every canonical ray had exactly one fixed record slot per frame and cardinality 0 or 1; all nonempty-XYZ XYZI records were finite; and the interface contained only `(x,y,z,intensity)`, with no return index/count/order, first/second/strongest flag, or parallel return array. E11-v3's mapping remained the same bijection in every frame and all XYZI values round-tripped bit-identically. Empty→valid/valid→empty transitions were 598,025/597,885 in train/206 and 1,924,721/1,904,673 in train/201, always retaining canonical-ray identity. Empty-XYZ intensity was preserved as payload and did not enter occupancy. Both audits were elementwise identical.
+PASS / FAIL / OUTCOME: PASS.
+Failure classification: Not applicable. E12-v1's historical FAIL remains a `qualification_specification_defect`.
+Unlocked next node: E13.
+Invalidated downstream evidence: E12-v1 was not rewritten. No downstream result may claim the physical sensor lacks multiple-return capability or that the upstream selected return is known to be first, strongest, last, or any other specific policy.
+Descriptive observations: Frozen scientific conclusion: **STU's released data forms a stable single-published-return/empty-slot canonical-ray interface.** The result excludes a published multi-return container and dynamic ray reorder but cannot identify the upstream single-return selection policy.
+Notes: “First return” remains a renderer counterfactual modeling convention unless independent documentation establishes it.
+
+## E13 | Raw-to-Ray-to-Raw Return-Count Round Trip
+
+Experiment ID: E13
+Design-freeze commit/hash: Not recorded.
+Execution-freeze commit/hash: Not recorded.
+Date: Not recorded.
+Git commit / clean state: Not recorded.
+Data identities: train/206 frames 0–448 and train/201 frames 4–681; 56,196,767 and 77,782,123 valid returns, respectively; E11-v3's fixed mapping and E12-v2's XYZ-only occupancy.
+Input artifact hashes: Not recorded.
+Random namespaces / seeds: None. Two complete independent reads were required.
+Command and resolved config: Map each valid raw slot $(b,a)$ to its unique canonical column $c=(a-s_b)\bmod1024$, then apply the inverse $a=(c+s_b)\bmod1024$. Do not refit. Compare only counts, occupancy masks, and slot/ray identities. Do not use geometric nearest neighbors, interpolate, create returns, or read labels.
+Resource and disk preflight: Not recorded.
+Artifacts and hashes: Summary hash `21d80a127ab8aa60406b7cb5a50f03f092e588e177d41abbba89057c2e242cbf`.
+Primary construct: Verify that the canonical-ray grid neither adds nor removes original valid returns. PASS required exact equality of raw, canonical, and restored valid-return counts in every frame; bit-identical restored occupancy; exactly one in-range canonical identity per valid raw slot without within-frame duplication; elementwise restoration of every valid raw slot with no loss, duplication, or conflict; and exact reproduction of frame counts, masks, identities, hashes, and summary across two reads. This node does not test range, direction, or XYZ fidelity.
+Primary result: PASS. All 449 train/206 frames with 56,196,767 valid returns and all 678 train/201 frames with 77,782,123 valid returns entered the audit. Raw, canonical, and restored counts matched in every frame, with zero mismatched frame in either sequence. Restored occupancy was bit-identical to raw occupancy, with zero mismatched slot. All 133,978,890 valid-return raw-slot identities were restored elementwise, with zero identity mismatch and zero duplicated within-frame canonical ray. Both complete reads produced identical arrays and scalars.
+PASS / FAIL / OUTCOME: PASS.
+Failure classification: Not applicable.
+Unlocked next node: E14.
+Invalidated downstream evidence: None. A failure would have required repairing the mapping and rerunning E13 before E14.
+Descriptive observations: Scientific conclusion: **The E11-v3 bijection adds or removes no published return in either allowed sequence and exactly preserves occupancy and slot/ray identity.**
+Notes: This PASS establishes count and identity preservation only; E14 owns range, direction, and XYZ fidelity.
+
+## E14 | Raw-to-Ray-to-Raw Geometry Round Trip
+
+Experiment ID: E14
+Design-freeze commit/hash: Not recorded.
+Execution-freeze commit/hash: Not recorded.
+Date: Not recorded.
+Git commit / clean state: Not recorded.
+Data identities: train/206 frames 0–448 and train/201 frames 4–681, without labels; 56,196,767 and 77,782,123 real returns, respectively; the E11-D4b even-frame main model and E11-v3 fixed bijection.
+Input artifact hashes: Inherits `runs/ajae/e11_d4b_calibration.npz`, SHA-256 `42791278e2a6b36d975bbe9dc957c6f303b8b424c5b97cf54e42380ad191f253`.
+Random namespaces / seeds: None. Two independent complete executions were required.
+Command and resolved config: Do not refit any parameter. Convert the D4b artifact's encoder gauge to Cartesian bearing by adding Ouster encoder phase $\pi$; this is a coordinate convention, adds no degree of freedom, and does not alter the qualified physical ray. For each real point $X$, fixed beam origin $o$, and unit direction $u$, encode and decode by $t=u^{\mathsf T}(X-o)$, $d=t+\sqrt{o_x^2+o_z^2}$, and $\hat X=o+tu$. Here $t$ is ray distance from the beam origin for geometric intersection and $d$ is Ouster-form range. Empty rays remain empty and receive no pseudo-range. Do not reuse $XYZ/\lVert XYZ\rVert$, fit by frame or point, alter E11-v3 geometry, generate a return, or read labels.
+Resource and disk preflight: Not recorded.
+Artifacts and hashes: Summary hash `d924513af01c741f75d2c15d4b0488fb93b63625040f90ee24edf1294c631717`.
+Primary construct: Verify that scalar range and physical direction do not become distorted in canonical encode/decode. PASS required every real return's $t$ and $d$ positive and finite; decoded count equal to raw count in every frame; maximum scalar re-encoding error below $10^{-9}$ m; maximum decoded-direction numerical error below $10^{-6}$ rad; inherited angular residual overall $Q_{0.99}<0.17578125^\circ$ and maximum $<0.3515625^\circ$; normalized Cartesian error $\lVert X-\hat X\rVert/\lVert X-o\rVert$ overall $Q_{0.99}<\sin(0.17578125^\circ)$ and maximum $<\sin(0.3515625^\circ)$; full reporting of absolute XYZ median, 95th percentile, 99th percentile, and maximum without inventing a post-result meter threshold; and elementwise two-run reproduction.
+Primary result: PASS. All ray distances and Ouster-form ranges were positive and finite and every frame had zero return-count error. Maximum scalar round-trip error was $8.53\times10^{-14}$ m in train/206 and $1.14\times10^{-13}$ m in train/201; maximum decoded-direction numerical error was $3.33\times10^{-8}$ rad in both. Train/206 angular median/$Q_{0.95}$/$Q_{0.99}$/maximum was $0.001959^\circ$/$0.008409^\circ$/$0.016546^\circ$/$0.055604^\circ$; train/201 was $0.001855^\circ$/$0.006773^\circ$/$0.008026^\circ$/$0.064663^\circ$. Normalized Cartesian $Q_{0.99}$/maximum was 0.0002888/0.0009705 in train/206 and 0.0001401/0.0011286 in train/201, all below the frozen limits. Absolute XYZ median/$Q_{0.95}$/$Q_{0.99}$/maximum was 0.000290/0.002398/0.004566/0.034693 m in train/206 and 0.000407/0.004481/0.007954/0.045975 m in train/201. Both runs were elementwise identical.
+PASS / FAIL / OUTCOME: PASS.
+Failure classification: Not applicable.
+Unlocked next node: E15.
+Invalidated downstream evidence: None. A systematic range, direction, or coordinate bias would have required repairing ray calibration or round-trip semantics and rerunning E14.
+Descriptive observations: Scientific conclusion: **E11-v3's fixed Ouster-like ray geometry performs stable scalar-distance encoding and physical-ray decoding in both allowed sequences; numerical round-trip error is negligible and the projection of released points onto canonical rays satisfies the existing grid-resolution limits.**
+Notes: This result neither recovers factory metadata nor claims that released XYZ lies exactly on a factory ray. No fixed post-result metre threshold was added for absolute XYZ error because the lateral displacement produced by the same angular error varies with range.
+
+## E15-v1 | Multi-Sequence Ray Qualification
+
+Experiment ID: E15-v1
+Design-freeze commit/hash: Not recorded.
+Execution-freeze commit/hash: Not recorded.
+Date: Not recorded.
+Git commit / clean state: Not recorded.
+Data identities: Only normal sequences train/206 frames 0–448 and independent normal development train/201 frames 4–681. Public validation, hidden test, and all labels were excluded. Both sequences used the identical E11-D4b even-frame geometry and E11-v3 mapping $c=(a-s_b)\bmod1024$.
+Input artifact hashes: Bound E14 evidence by its summary hash `d924513af01c741f75d2c15d4b0488fb93b63625040f90ee24edf1294c631717`.
+Random namespaces / seeds: None. Both sequences were each reread and audited twice.
+Command and resolved config: For each sequence separately, verify finite float32 $128\times1024\times4$ files; all 128 raw beam rows; at least one real return per frame/beam; one common negative scan direction for every actually observed internal same-row adjacent edge; increments within inherited $[0.10^\circ,0.60^\circ]$; the same rule for every observed wrap edge; and classification of a never-observed wrap edge as unobservable only when at least one endpoint was structurally empty throughout the sequence. Report observable-edge support without redefining visibility as ray validity. Recheck fixed-mapping bijection, XYZ-only occupancy, published cardinality 0/1, exact count/mask/identity round trip, and the E14 numerical and geometric limits from the bound artifact. Do not refit or change thresholds.
+Resource and disk preflight: Not recorded.
+Artifacts and hashes: Summary hash `79251da83264d676a2074f876bb2914ce01e627163b81cccd04e0098279e3921`.
+Primary construct: Confirm that E08–E14 are not accidental properties of one sequence. Both 206 and 201 had to pass every applicable condition with the same model and mapping and reproduce elementwise. A PASS would qualify the canonical-ray interface only for these two allowed normal sequences, not public anomalies, hidden test sequences, or factory metadata.
+Primary result: FAIL. Train/206 passed independently: all 55,638,667 internal adjacent edges and 43,785 observed wrap edges used the negative direction, with increments in $[-0.406102^\circ,-0.291832^\circ]$ and $[-0.360949^\circ,-0.342215^\circ]$ and zero violation; all eight never-observed wrap beams had an endpoint structurally empty throughout the sequence. In train/201, all 76,323,285 internal edges and 55,374 observed wrap edges also used the same negative direction, with increments in $[-0.406456^\circ,-0.294689^\circ]$ and $[-0.364217^\circ,-0.340650^\circ]$ and zero violation. However, for train/201 beam 125, column 1023 and column 0 were each observed in only one of 678 frames and never in the same frame. The wrap edge had no direct observation, but neither endpoint was structurally empty over the entire sequence, so it fit no preregistered legal evidence class. Both sequences otherwise passed layout, finiteness, 128-row coverage, fixed-mapping bijection, count and identity round trip, and bound E14 limits; both complete reads were elementwise identical.
+PASS / FAIL / OUTCOME: FAIL.
+Failure classification: `qualification_specification_defect`, specifically an incomplete evidence-state definition for adjacent endpoints that are each observable but never co-observed. The run observed no azimuth discontinuity.
+Unlocked next node: None. E16 remained locked. A versioned E15-v2 could add “separately observed but never co-observed” as an unidentifiable state; this result could not be rewritten.
+Invalidated downstream evidence: E15-v1 did not qualify both sequences and therefore could not unlock Phase 2. It also did not invalidate the independently passing geometry, mapping, and observed-continuity checks.
+Descriptive observations: The failure means that train/201 beam 125 could not be assigned to any frozen evidence category, not that a discontinuity was observed.
+Notes: Under the then-current user stop condition, revision was not automatic. It required a separate versioned decision while E16 remained locked.
+
+## E15-v2 | Multi-Sequence Ray Qualification with Three-State Wraparound Evidence
+
+Experiment ID: E15-v2
+Design-freeze commit/hash: Not recorded.
+Execution-freeze commit/hash: Not recorded.
+Date: Not recorded.
+Git commit / clean state: Not recorded.
+Data identities: The same train/206 frames 0–448 and train/201 frames 4–681, with the same fixed ray model, mapping, and exclusions as E15-v1.
+Input artifact hashes: Inherits the E14 summary hash `d924513af01c741f75d2c15d4b0488fb93b63625040f90ee24edf1294c631717`.
+Random namespaces / seeds: None. Two complete executions were required.
+Command and resolved config: Preserve every E15-v1 condition except add a complete three-state wraparound classification. `observed_continuous` means both endpoints co-occurred in at least one frame and every actual wrap increment used the common negative direction and frozen interval. `observed_discontinuous` means endpoints co-occurred but any increment violated direction or interval; a single occurrence is an immediate FAIL. `unidentifiable_from_observed_returns` means the two endpoints never co-occurred anywhere in the audited sequence, covering both a structurally empty endpoint and endpoints observed separately but never together. For every unidentifiable wrap, record beam ID, observation-frame counts for columns 1023 and 0, joint count, and reason `structurally_empty_endpoint` or `separately_observed_never_coobserved`. Do not add points, interpolate, borrow another beam, or claim verified continuity. Continue to require finite layouts, 128-row coverage, fixed bijection, XYZ-only occupancy, cardinality 0/1, E13 round trips, E14 limits, continuous observed internal/wrap edges, no `observed_discontinuous`, full reporting, and elementwise reproduction.
+Resource and disk preflight: Not recorded.
+Artifacts and hashes: Summary hash `e39cddd13cee1d0247042f4e4fbec6c01cc41edaa0e7527a12e8b7255cdaf34d`.
+Primary construct: Qualify canonical-ray identity, internal azimuth adjacency, and every observable wrap edge across both allowed normal sequences while representing never-co-observed wrap endpoints honestly as unidentifiable rather than discontinuous or continuous.
+Primary result: PASS. In train/206, all 55,638,667 observed internal edges and 43,785 observed wrap edges were continuous; 120 beams were `observed_continuous`, zero were `observed_discontinuous`, and eight were `unidentifiable_from_observed_returns`, all because of structurally empty endpoints. In train/201, all 76,323,285 internal edges and 55,374 observed wrap edges were continuous, again yielding 120/0/8. Seven unidentifiable items had structurally empty endpoints. Beam 125 was `separately_observed_never_coobserved`, with column-1023/column-0/joint observation-frame counts 1/1/0. Both sequences passed layout, finiteness, per-frame/beam return coverage, fixed-mapping bijection, return-count and identity round trips, and E14 numerical/geometric limits. Repeated arrays, classes, hashes, and summaries were elementwise identical.
+PASS / FAIL / OUTCOME: PASS.
+Failure classification: Not applicable. E15-v1 remains a permanent evidence-state `qualification_specification_defect`.
+Unlocked next node: E16.
+Invalidated downstream evidence: E15-v1 was not rewritten. The PASS may not be described as direct observation of all 128 wrap edges in either sequence.
+Descriptive observations: Frozen scientific conclusion: **Canonical-ray identity, internal azimuth adjacency, and all observable wrap edges are stable in train/206 and independent train/201; each sequence has eight wrap edges whose endpoints never co-occurred, so those edges are model-defined and lack direct observational validation.**
+Notes: A FAIL would have kept E16 locked and required returning to the specific failed E08–E14 construct. This PASS qualifies only the two allowed normal sequences and does not recover factory metadata.
+
+# Phase 2 | Procedural Geometry, Normal Controls, and Placement
+
+## E16-v1 | Finite and Bounded Primitive Geometry
+
+Experiment ID: E16-v1
+Design-freeze commit/hash: Not recorded.
+Execution-freeze commit/hash: Not recorded.
+Date: Not recorded.
+Git commit / clean state: Not recorded.
+Data identities: 1,024 deterministic `ShapeSpec.sample` calls at seeds 0–1,023, each with `primitive_count=1` and default size range $[0.2,3.0]$ m.
+Input artifact hashes: Not recorded.
+Random namespaces / seeds: Seeds 0–1,023; complete execution repeated twice.
+Command and resolved config: Require one primitive whose first operation is `union`; finite parameters and conservative radius; finite implicit/SDF values on a fixed $9\times9\times9$ Cartesian grid covering the conservative bound; and a resolution-31 geometry report with `bounded=true`, `closed=true`, `components=1`, finite ordered occupied bounds strictly inside the conservative radius, and maximum axis diameter in $[0.2,3.0]$ m. E16-v1 qualifies only single-superquadric numerical finiteness and boundedness; E17 owns intersection and E18 owns multi-primitive CSG and deformation combinations.
+Resource and disk preflight: Not recorded.
+Artifacts and hashes: Summary hash `2c22cdfb05d26d770a0a09e4e1dddc6b66360268048b5398fb7f216e893d789e`.
+Primary construct: Require all 1,024 deterministic seeds to produce valid entities with zero allowed generation failure or proposal exhaustion and exact reproduction of parameter summaries, geometry statistics, and hashes. A PASS would establish only finite, closed, connected, bounded single-primitive output, not intersection or CSG/deformation stability.
+Primary result: FAIL. All 1,024 seeds generated without exhaustion; every parameter, conservative radius, and grid SDF was finite; and all resolution-31 closed, bounded, and single-component checks passed. However, 21 samples exceeded the preregistered resolution-31 reported maximum diameter of 3.0 m: seeds 5, 120, 153, 176, 271, 276, 336, 444, 449, 498, 559, 639, 649, 728, 802, 821, 919, 938, 943, 972, and 987. Maximum reported diameter was 3.186417 m. Both executions were elementwise identical. A read-only diagnosis found that these 21 samples measured 3.003255–3.186417 m in the resolution-31 report with one-grid-step outward expansion, while the generator's resolution-41 acceptance report measured 2.627848–2.987266 m for the same deterministic samples, all at or below 3.0 m.
+PASS / FAIL / OUTCOME: FAIL.
+Failure classification: `qualification_specification_defect` caused by inconsistent resolution-dependent size definitions between generator acceptance and E16-v1 measurement.
+Unlocked next node: None. E17 remained locked pending a preregistered authoritative size definition and E16 revision.
+Invalidated downstream evidence: The result cannot be rewritten as PASS. It does not invalidate the passing numerical-finiteness, closure, boundedness, or single-component subchecks.
+Descriptive observations: The observed failure contained a confirmed measurement-definition inconsistency. Choosing one authoritative size definition, changing resolution, or tightening generator acceptance would change measurement or generation distribution and therefore required design revision.
+Notes: The exact 21 seeds were not special-cased. The user stop condition prevented an automatic design change at this node.
+
+## E16-v2a Initial Implementation | Qualification of a Continuous Geometry-Size Meter
+
+Experiment ID: E16-v2a initial implementation
+Design-freeze commit/hash: Not recorded.
+Execution-freeze commit/hash: Not recorded.
+Date: Not recorded.
+Git commit / clean state: Not recorded.
+Data identities: Analytic fixtures: a radius-0.5 m sphere; an axis-aligned ellipsoid with semiaxes $(0.3,0.7,1.1)$ m; the same ellipsoid rotated by 0.4 rad around z. Deformed single-primitive fixtures: seeds 0, 5, 276, 559, 639, and 987.
+Input artifact hashes: Not recorded.
+Random namespaces / seeds: Fixed seeds listed above; two bitwise-reproduction runs.
+Command and resolved config: Define generator size as the largest axis span of the axis-aligned bounding box of the continuous single-primitive implicit surface after twist, bend, taper, and low-frequency surface perturbation: $D_{\mathrm{continuous}}=\max_{j\in\{x,y,z\}}(u_j-l_j)$. Analytically solve the outermost continuous implicit-surface root along every undeformed spherical direction, apply the generator's forward deformation, and deterministically optimize all six signed Cartesian coordinates; add a uniform outward numerical margin of $10^{-6}$ m. Accept no mesh/voxel resolution. Analytic-coordinate error must be below $5\times10^{-6}$ m. Compare standard differential-evolution budget 80 iterations/population 10 with strict 160/15 and require every coordinate difference below $10^{-4}$ m. For each deformed fixture, evaluate 16,384 deterministic spherical surface directions and require all points inside strict bounds plus $2\times10^{-6}$ m. Bounds must remain finite, ordered, unchanged by calls to legacy resolution-31/41 reports, and bitwise reproducible.
+Resource and disk preflight: Not recorded.
+Artifacts and hashes: Summary hash `253412a49269d5e54f4adfe2c354f2a9798f93050bfe1f71e3a3a6a90ff93993`.
+Primary construct: Qualify the continuous size meter itself for correctness, finiteness, convergence, resolution independence, and determinism before applying it to the 1,024 formal generator samples.
+Primary result: FAIL. Maximum analytic coordinate error was $1.0\times10^{-6}$ m; every independent continuous surface point was inside the strict bounds; resolution-31/41 calls changed no bound; and both runs were bitwise identical. The sole failure was seed 276, where the standard budget missed the positive-x global extremum and differed from the strict budget by 0.004351 m, exceeding $10^{-4}$ m. The root cause was inadequate coverage of a narrow extremal region by the random-style initial population under the fixed standard budget.
+PASS / FAIL / OUTCOME: FAIL.
+Failure classification: `implementation_defect` in the first continuous optimizer implementation.
+Unlocked next node: None. E16-v2b and E17 remained locked.
+Invalidated downstream evidence: The failure did not change analytic fixtures, budgets, tolerances, PASS conditions, or the proposed continuous-size construct. The artifact remains a permanent historical FAIL.
+Descriptive observations: The repaired implementation retained the same differential-evolution budget but added 2,048 deterministic Fibonacci-sphere probes solely to construct a fixed initial population. Probes did not themselves produce the size; final bounds still came from continuous root solving and continuous optimization.
+Notes: Full requalification under the unchanged conditions was required after the implementation repair.
+
+## E16-v2a | Qualification of the Repaired Continuous Geometry-Size Meter
+
+Experiment ID: E16-v2a
+Design-freeze commit/hash: Unchanged from the initial E16-v2a design; exact identity not recorded.
+Execution-freeze commit/hash: Not recorded.
+Date: Not recorded.
+Git commit / clean state: Not recorded.
+Data identities: The same three analytic fixtures and six deformed seeds 0, 5, 276, 559, 639, and 987 used by the initial implementation.
+Input artifact hashes: Not recorded.
+Random namespaces / seeds: Same fixed seeds; two complete bitwise-reproduction runs.
+Command and resolved config: Use the unchanged continuous-size definition, root solver, standard 80/10 and strict 160/15 optimization budgets, analytic and convergence tolerances, 16,384 surface directions per deformed fixture, resolution-independence check, and bitwise reproduction requirements. The implementation repair adds 2,048 deterministic Fibonacci-sphere probes only as the fixed initial population inside the same `differential_evolution` budgets.
+Resource and disk preflight: Not recorded.
+Artifacts and hashes: Summary hash `f62684bb90f083d57f719c5fb730e3eff6c9f1c31163c82572c2dd4327d84ee0`.
+Primary construct: Requalify the continuous size meter after repairing only its initial-population coverage.
+Primary result: PASS. Maximum analytic-bound coordinate error across the three analytic fixtures was $1.0\times10^{-6}$ m, below $5\times10^{-6}$ m. Maximum standard-versus-strict coordinate difference across the six deformed fixtures was $1.495\times10^{-11}$ m, below $10^{-4}$ m. All 98,304 independent surface points lay inside strict bounds, with maximum exceedance 0. Resolution-31/41 report calls changed continuous bounds by 0. All bounds were finite and ordered, and both complete executions were bitwise identical.
+PASS / FAIL / OUTCOME: PASS.
+Failure classification: Not applicable. The initial implementation remains a permanent `implementation_defect` FAIL.
+Unlocked next node: E16-v2b. E17 remained locked.
+Invalidated downstream evidence: None. This result qualifies only the measurement procedure and does not adjudicate the generator's 1,024 formal samples.
+Descriptive observations: Fixture seed 639 measured 3.004505 m continuously, suggesting that E16-v2b might identify a generator-bound violation. At E16-v2a this value was only a meter fixture result and could not substitute for full adjudication.
+Notes: Fixed-resolution voxel occupancy bounds no longer define real geometry size.
+
+## E16-v2b | Formal Single-Primitive Qualification under Continuous Size
+
+Experiment ID: E16-v2b
+Design-freeze commit/hash: Not recorded.
+Execution-freeze commit/hash: Not recorded.
+Date: Not recorded.
+Git commit / clean state: Not recorded.
+Data identities: Unchanged `ShapeSpec.sample(seed, primitive_count=1, size_m_range=(0.2,3.0))` for seeds 0–1,023.
+Input artifact hashes: Inherits the E16-v2a meter summarized by `f62684bb90f083d57f719c5fb730e3eff6c9f1c31163c82572c2dd4327d84ee0`.
+Random namespaces / seeds: Seeds 0–1,023; two bitwise-reproduction runs.
+Command and resolved config: Use only qualified `continuous_bounds(maximum_iterations=80, population_size=10)` to define size as the maximum AABB span of the continuously deformed implicit surface. Do not read resolution-31/41 report diameter as size. Require successful generation, finite parameters/conservative radius/$9\times9\times9$ SDF, resolution-31 `bounded=true`, `closed=true`, `components=1`, finite ordered continuous bounds, and every continuous size in closed interval $[0.2,3.0]$ m with zero tolerated failure. Do not modify parameters, rescale failures, restore discrete diameter, or move the interval after observing results.
+Resource and disk preflight: Not recorded.
+Artifacts and hashes: Run hash `4e49dd05a6bba07039ae706515c6ee7aebfbcc725eccdbf64b8380a545d70bed`; summary hash `91078a6c49286586f5b5ffba6a153c9f230c91497752a9eca03bcba454b03348`.
+Primary construct: Decide whether the unchanged single-primitive generator actually satisfies its frozen $[0.2,3.0]$ m range under the qualified continuous-size definition.
+Primary result: FAIL. All 1,024 seeds generated successfully and passed finite-parameter, conservative-radius, grid-SDF, resolution-31 bounded/closed/single-component, and continuous-bound checks. Three samples violated the interval: seed 501 measured 3.014584 m; seed 639 measured 3.004505 m; and seed 688 measured 0.191660 m. The other 1,021 passed. Their resolution-41 acceptance diameters were 2.980474, 2.987266, and 0.204449 m, showing that the old discrete acceptance admitted continuously oversized and undersized geometry. Continuous-size minimum/median/maximum was 0.191660/1.533600/3.014584 m. Both runs were elementwise identical.
+PASS / FAIL / OUTCOME: FAIL.
+Failure classification: `scientific_failure` of the old generator's size-acceptance contract under the already qualified continuous construct, distinct from E16-v1's measurement defect.
+Unlocked next node: None. E17 remained locked pending a versioned generator acceptance revision.
+Invalidated downstream evidence: E16-v2a's meter qualification remains valid. This result cannot be rescued by special-casing seeds, reverting to discrete report diameter, rescaling observed failures, or shifting $[0.2,3.0]$ m.
+Descriptive observations: Across 1,024 samples, continuous size ranged from 0.191660 to 3.014584 m with median 1.533600 m.
+Notes: Any generation failure, nonfinite value, unbounded, nonclosed or disconnected geometry, invalid continuous bound, or size outside the interval was a FAIL. Continuing required changing generator acceptance or parameter sampling and preregistering a new version.
+
+## E16-v3 | Single-Primitive Generator with Continuous-Size Acceptance
+
+Experiment ID: E16-v3
+Design-freeze commit/hash: Not recorded.
+Execution-freeze commit/hash: Not recorded.
+Date: Not recorded.
+Git commit / clean state: Not recorded.
+Data identities: Seeds 0–1,023; one final accepted object per seed; `primitive_count=1`; generator schema 2. The previous implicit implementation is identified as generator schema 1.
+Input artifact hashes: Inherits the E16-v2a continuous meter and its summary hash `f62684bb90f083d57f719c5fb730e3eff6c9f1c31163c82572c2dd4327d84ee0`.
+Random namespaces / seeds: Seeds 0–1,023 with the unchanged deterministic proposal stream and at most 64 proposals per seed; two complete independent generations.
+Command and resolved config: Change only final single-primitive acceptance. After each candidate follows the original deterministic parameter sampling, continuous construction, and existing geometry checks, compute `continuous_bounds(maximum_iterations=80, population_size=10)` and accept only when $0.2\le D_{\mathrm{continuous}}\le3.0$ m. An undersized or oversized proposal continues along the same seed stream, with maximum 64. Resolution-41 bounds may be diagnostic but cannot adjudicate acceptance. Prohibit seed-specific treatment, proposal-distribution changes, post hoc range narrowing, or interval movement. Require finite parameters, conservative radius, grid SDF, resolution-31 bounded/closed/single-component report, finite ordered continuous bounds, and zero accepted size violation. Record schema, proposal count, total proposals and rejection rate, too-small, too-large, other construction/geometry rejections, and maximum count. Efficiency is descriptive at this node unless exhaustion or extreme rejection requires a separately preregistered experiment. Generator schema and the `render.py` source hash must jointly enter the renderer/generator identity in training caches so schema-1 and schema-2 worlds cannot mix.
+Resource and disk preflight: Not recorded.
+Artifacts and hashes: Run hash `cfee4448d8528bef74430e907e75b16acd8b2b255468d4e0d7ddbd35a7a28dc9`; summary hash `51991c5dd0dcfaf54fe04caa5bdc3199ab44ecf4d3c2c2dccd10bc38c1945034`.
+Primary construct: Determine whether schema 2 uses the qualified continuous size as its final acceptance condition and deterministically produces finite, bounded, closed, connected single-primitive geometry within $[0.2,3.0]$ m without changing the proposal distribution.
+Primary result: PASS. All 1,024 seeds produced a legal accepted single primitive within 64 proposals. Every parameter, conservative radius, grid SDF, resolution-31 bounded/closed/single-component check, and continuous bound passed. Accepted continuous-size minimum/median/maximum was 0.207511/1.603649/2.998929 m, with zero violation. There were 1,121 total proposals and 97 rejections, a proposal-weighted rejection rate of 8.65299%: three too small, 94 too large, and zero other construction/geometry rejection. Proposal counts were 1/2/3 for 936/79/9 seeds, with maximum 3. Both complete runs were elementwise identical.
+PASS / FAIL / OUTCOME: PASS.
+Failure classification: Not applicable. E16-v1 and E16-v2b remain permanent historical FAIL results.
+Unlocked next node: E17.
+Invalidated downstream evidence: Schema 1 caches may not be mixed with schema 2. This node does not qualify multi-primitive CSG, because E16-v2a had not qualified a multi-primitive continuous-size procedure; that remains E18's responsibility.
+Descriptive observations: Scientific conclusion: **The schema-2 single-primitive path uses the qualified continuous-size criterion and deterministically produces finite, bounded, closed, connected objects in $[0.2,3.0]$ m.**
+Notes: If illegal continuous sizes remained, the implementation would be repaired and E16-v3 rerun unchanged. Exhaustion or extreme rejection would have kept E17 locked and required a separate decision about proposal sampling.
+
+## E17 | Single-Primitive Ray Intersection
+
+Experiment ID: E17
+Design-freeze commit/hash: Not recorded.
+Execution-freeze commit/hash: Not recorded.
+Date: Not recorded.
+Git commit / clean state: Not recorded.
+Data identities: Four analytic fixtures: spheres of radius 0.1 m and 1.5 m; a yaw-0.4 rad ellipsoid with semiaxes $(0.1,0.3,0.5)$ m; and a yaw-$-0.8$ rad ellipsoid with semiaxes $(0.3,0.7,1.5)$ m. Each is one centered `union` primitive with exponents $(1,1)$ and no twist, bend, taper, or surface perturbation.
+Input artifact hashes: Not recorded.
+Random namespaces / seeds: Deterministic Fibonacci directions; two complete executions.
+Command and resolved config: Test authoritative `ShapeSpec.intersect` on its default `steps=96`, not a substitute high-sampling implementation. For each fixture construct 2,048 external hit rays, 512 inside-to-outside rays, and 1,024 radial outward misses, totaling 3,584 per fixture and 14,336 overall. External rays pass through a strict interior point at normalized ellipsoid radius 0.95; internal origins lie at normalized radius 0.4, excluding exact tangency and root ambiguity. Deterministically vary ray-direction norm; both oracle and implementation normalize it. Obtain analytic truth from the closed-form quadratic roots of the rotated-ellipsoid matrix, selecting nearest positive root for an external origin and positive exit root for an internal origin. Normalize the quadratic-form gradient as analytic outward normal.
+Resource and disk preflight: Not recorded.
+Artifacts and hashes: Run hash `3cb11e6585a9757edbde76ccdfad2c7b40565b823a926fc7aa33060fb0a2c7e1`; summary hash `b4bbfea528c2293da6887171092c0c0d280ed301456f5c3a8b0a551df61f1066`.
+Primary construct: Determine whether default authoritative intersection recovers the nearest positive intersection and outward normal for basic single quadrics and rejects analytic misses. PASS required zero hit/miss error; every hit distance finite and positive; every miss distance $+\infty$; maximum distance error below $10^{-5}$ m; maximum absolute implicit-surface residual below $10^{-5}$ m; finite unit outward hit normals with maximum analytic angular error below $0.01^\circ$; exactly zero miss normals; and exact reproduction of distances, normals, masks, statistics, and hashes.
+Primary result: PASS. Across 14,336 rays, 10,240 analytic hits and 4,096 analytic misses had zero classification error. Every hit distance was finite and positive and every miss was $+\infty$. Maximum absolute distance error was $1.180\times10^{-7}$ m; maximum absolute implicit residual was $1.174\times10^{-7}$ m. Maximum normal angular error was $3.257\times10^{-5}$ degrees and maximum unit-length error was $2.220\times10^{-16}$. All hit normals were finite and outward; all miss normals were exactly zero. Both complete executions were elementwise identical.
+PASS / FAIL / OUTCOME: PASS.
+Failure classification: Not applicable.
+Unlocked next node: E18.
+Invalidated downstream evidence: None. A classification, distance, surface, normal, or reproduction failure would have required repairing intersection and rerunning E17.
+Descriptive observations: Scientific conclusion: **Default `ShapeSpec.intersect` stably recovers analytic nearest positive intersections and outward normals for undeformed single spheres and rotated ellipsoids and correctly rejects analytic misses.**
+Notes: This qualification covers only basic single quadrics. Nonquadratic exponents, CSG, and twist/bend/taper/surface perturbation remain for E18.
+
+## E18a-A | Qualification of a Continuous-Size Certificate for Composite Geometry
+
+Experiment ID: E18a-A
+Design-freeze commit/hash: Not recorded.
+Execution-freeze commit/hash: Not recorded.
+Date: Not recorded.
+Git commit / clean state: Not recorded.
+Data identities: Three analytic fixtures: union and intersection of radius-1 spheres centered at $x=\pm0.5$, and a radius-1 sphere minus an internal radius-0.35 sphere centered at $x=0.2$. Four deformed generated fixtures: seed/primitive-count 0/2, 1/3, 2/4, and 3/5.
+Input artifact hashes: Not recorded.
+Random namespaces / seeds: The four fixed generated seeds; deterministic nested Sobol probes; two bitwise-identical complete runs.
+Command and resolved config: Define the certificate $L\le D_{\mathrm{continuous}}\le U$, where $U$ is the largest axis span of an analytic conservative outer AABB and $L$ is the largest axis-aligned chord between actual continuous boundary points. A later object can prove legal continuous size only with $L\ge0.2$ m and $U\le3.0$ m. Expand each primitive's continuous level-set AABB by maximum surface-perturbation amplitude; propagate sequential CSG by envelope for union, current-left bound for difference, and box intersection for intersection; propagate global twist, taper, and bend analytically; add $10^{-6}$ m outward margin. Inside the outer bound, use deterministic nested Sobol points to find continuous-SDF-verified interior witnesses and solve continuous roots in both directions along all three Cartesian axes. Standard search uses 4,096 probes and at most 64 interior chords; strict search uses 32,768 and 256. Each fixture also receives 131,072 independent continuous points for outer-bound counterexample search.
+Resource and disk preflight: Not recorded.
+Artifacts and hashes: Run hash `ed8148bc9cab329cc082d37f9728f399bd2266926d409b0488f4076d032811c7`; summary hash `88f65ea36bcc042f14f8be0cbb40ba0332744ac26a52714a9793c47c9192535b`.
+Primary construct: Qualify a mesh-resolution-independent conservative continuous-size certificate for final connected multi-primitive/CSG geometry. PASS required finite ordered bounds and witnesses; analytic true AABBs entirely inside outer bounds within $2\times10^{-6}$ m; analytic maximum size inside $[L,U]$; analytic $U-L<0.35$ m; chord-endpoint absolute SDF residual below $10^{-8}$ m; strict nested-search $L$ no smaller than standard $L$ and identical standard/strict $U$; no independent inside point outside the outer bound; no change after resolution-31/41 report calls; and bitwise two-run reproduction.
+Primary result: PASS. All three analytic true AABBs lay inside the conservative bound with zero violation; all analytic true maximum sizes were in standard $[L,U]$, with maximum standard certificate width 0.267951 m. Strict lower bounds were no smaller than standard for all seven fixtures, and standard/strict outer bounds were elementwise identical. Maximum chord-endpoint absolute continuous-SDF residual was $5.085\times10^{-14}$ m. Across 917,504 independent probes, 28,649 were true inside points and none lay outside the analytic outer bound. Resolution-31/41 calls changed no certificate. Both runs were bitwise identical.
+PASS / FAIL / OUTCOME: PASS.
+Failure classification: Not applicable.
+Unlocked next node: E18a-B. E18b and E19 remained locked.
+Invalidated downstream evidence: The meter PASS did not alter generator acceptance and did not qualify ray intersection.
+Descriptive observations: Scientific conclusion: **The certificate supplies a mesh-resolution-independent continuous-size lower bound and conservative upper bound for connected multi-primitive/CSG final geometry; $L\ge0.2$ and $U\le3.0$ rigorously imply that true continuous maximum-axis size is within the frozen interval.**
+Notes: E18 had not previously run, so splitting off E18a created no historical E18 FAIL. E18a-A and E18a-B are sequential layers, not failure-version suffixes.
+
+## E18a-B-v1 | Schema-3 Full-Generator Continuous-Size Acceptance
+
+Experiment ID: E18a-B-v1
+Design-freeze commit/hash: Not recorded.
+Execution-freeze commit/hash: Not recorded.
+Date: Not recorded.
+Git commit / clean state: Not recorded.
+Data identities: 2,048 generation calls: default training path seeds 0–1,023 and fixed primitive counts 2, 3, 4, and 5 with seeds 0–255 each. Generator schema 3.
+Input artifact hashes: Inherits E16-v3 for single primitives and E18a-A for multi-primitive certificates; no separate input SHA-256 is recorded.
+Random namespaces / seeds: Frozen seed ranges above; unchanged deterministic streams; 64 proposals maximum per call; two complete executions.
+Command and resolved config: Change only multi-primitive final acceptance. Single primitives continue using E16-v3 qualified continuous size. Multi-primitive candidates use the E18a-A standard certificate and are accepted only if $L\ge d_{\min}$ and $U\le d_{\max}$. Keep proposal distributions, 64-proposal limit, requested size interval, and existing construction checks unchanged. A certificate rejection means insufficient proof, not necessarily true geometric violation. Require all calls to finish within 64; finite parameters, conservative radii, and $9\times9\times9$ SDF; resolution-31 topology only for bounded/closed/connected status; elementwise agreement between recomputed continuous size/certificate and report; legal single-primitive size and multi-primitive certificate; and exact two-run reproduction. Freeze efficiency independently before execution: proposal-weighted rejection rate below 50%, proposal-count $Q_{0.99}\le8$, maximum $\le64$. Report group totals/rates, insufficient-lower-witness, conservative-upper-limit, and other rejection counts, plus proposal-count quantiles. Prohibit seed exceptions, distribution changes, narrowed requested range, or restoration of resolution-31/41 size acceptance.
+Resource and disk preflight: Not recorded.
+Artifacts and hashes: Run hash `6d98f725c4d1c5867e1a4f5bc9ec0ff893a38abc70d7709b00271f1c3e796c59`; summary hash `1a62ab9b9dc2f4beda72743a8b5feb4ab3b471daadff29c496bf842c060fb80b`.
+Primary construct: Determine whether schema 3 both accepts only continuously certified final geometry and meets the preregistered generation-efficiency contract without changing proposal semantics.
+Primary result: FAIL solely on efficiency. All 2,048 calls finished within 64. Accepted primitive-count frequencies 1–5 were 379/460/409/411/389. All parameter, SDF, resolution-31/41 non-size topology checks passed, and reports matched recomputed continuous sizes/certificates elementwise. Minimum accepted lower bound was 0.202296 m and maximum accepted conservative upper bound 2.997668 m; certificate violations, non-size failures, report mismatches, and proposal-accounting errors were all zero. However, 4,970 proposals produced 2,922 rejections, a 58.7928% rate above 50%. Proposal-count median/$Q_{0.90}$/$Q_{0.95}$/$Q_{0.99}$/maximum was 2/5/6/9/18, and $Q_{0.99}=9$ exceeded 8. Rejections were 56 insufficient lower evidence, 1,802 conservative upper bounds unable to prove the requested maximum, and 1,064 existing construction/geometry rejections. Fixed-count 2/3/4/5 rejection rates rose with complexity: 57.62%/61.39%/65.41%/68.97%. Both runs were bitwise identical.
+PASS / FAIL / OUTCOME: FAIL.
+Failure classification: `scientific_failure` of the preregistered schema-3 efficiency qualification; all correctness evidence passed and remains valid.
+Unlocked next node: E18a-D1 attribution diagnosis. E18b and E19 remained locked.
+Invalidated downstream evidence: The overall result cannot be rewritten as PASS from correctness alone. The data establish many old-upper-bound rejections but do not distinguish true oversize from certificate looseness, so proposal sampling may not yet be changed and the historical 50%/$Q_{0.99}\le8$ limits may not be relaxed.
+Descriptive observations: Schema 3 accepted no demonstrated illegal object. The main observed bottleneck was 1,802 upper-bound rejections.
+Notes: A correctness failure would have required repairing schema-3 acceptance under the same criteria. An efficiency-only failure required separate attribution before choosing what to revise.
+
+## E18a-D1 | Attribution of Upper-Bound Rejections
+
+Experiment ID: E18a-D1
+Design-freeze commit/hash: Not recorded.
+Execution-freeze commit/hash: Not recorded.
+Date: Not recorded.
+Git commit / clean state: Not recorded.
+Data identities: Exactly the 1,802 proposals rejected for $U>3$ m before final acceptance across E18a-B-v1's 2,048 calls, recovered by read-only replay of identical seeds, requested primitive counts, and random streams. Seven analytic estimator fixtures: radius-0.1/1.5 spheres; yaw-0.4 ellipsoid with semiaxes $(0.1,0.3,0.5)$ m; union and intersection of radius-1 spheres centered at $x=\pm0.5$; radius-1 sphere minus an internal radius-0.35 sphere; and a sphere with nonzero twist.
+Input artifact hashes: Parent E18a-B-v1 run and summary hashes `6d98f725c4d1c5867e1a4f5bc9ec0ff893a38abc70d7709b00271f1c3e796c59` and `1a62ab9b9dc2f4beda72743a8b5feb4ab3b471daadff29c496bf842c060fb80b`.
+Random namespaces / seeds: Exact parent deterministic streams; independent deterministic Sobol probes; two full D1 reproductions.
+Command and resolved config: Require replay to reproduce every final object hash, proposal count, rejection category, and totals 4,970/2,922/56/1,802/1,064. Do not alter generator, proposal distribution, 3 m limit, original certificate, or efficiency thresholds. For each rejected candidate build an independent interval $[\underline D_{\mathrm{HP}},\overline D_{\mathrm{HP}}]$ without calling `continuous_size_certificate`, `_continuous_outer_bounds`, `continuous_bounds`, or resolution-31/41 reports. Construct the lower bound only from finite SDF $\le10^{-9}$ actual inside/boundary points found by deterministic Sobol witnesses and continuous constrained-extremum optimization. Construct the upper bound by three-dimensional adaptive interval branch-and-bound from an independent spherical search domain: interval-invert bend, taper, and twist; propagate analytic superquadric implicit intervals, sequential CSG min/max/difference, and low-frequency surface displacement; exclude only boxes with implicit lower bound above zero; prioritize boxes by possible extremum along the current axis. Standard settings: $2^{14}$ Sobol probes, at most 8 optimization starts per axial extremum, 0.004 m termination width. Strict: nested $2^{16}$, 24 starts, 0.001 m. SLSQP uses `ftol=1e-12`, `maxiter=500`; discard failed/infeasible outputs rather than shrinking intervals. Limit each one-sided axis extremum to 250,000 boxes; unresolved items become `estimator_unresolved`. Qualify on analytic fixtures: true size inside both intervals, strict lower no smaller and strict upper no larger, strict maximum interval width below 0.01 m, and no inside point outside the strict bound among $2^{18}$ independent probes per fixture.
+Resource and disk preflight: Not recorded.
+Artifacts and hashes: `runs/ajae/e18a_d1_upper_attribution.npz`, SHA-256 `e0eb4f82bd4a7233ffacd3a2e32d42d82b7686219b0c8483e6c8f222c7652685`; run hash `a5f4fe7be9bf8b5c5fd22487a1e2737a1e1ec1629b36419bea223dd2bfa295c2`; summary hash `8d6acead5918abd06387525f44f0c2d2a5cde993021a3a327f7bf6fbceebe29f`.
+Primary construct: Attribute each strict interval as `true_oversize` when $\underline D_{\mathrm{HP}}>3$ m, `certificate_looseness` when $\overline D_{\mathrm{HP}}\le3$ m, or `boundary_unresolved` otherwise, including estimator box-limit exhaustion. “Main cause” was frozen as strictly more than 50% of all 1,802 candidates. A `true_oversize` majority would allow only proposal-parameter/scale-allocation revision; a `certificate_looseness` majority would allow only improvement and requalification of the continuous upper bound without changing proposal distribution; otherwise stop to resolve ambiguity or choose one priority. This is an attribution diagnosis, not a directionally expected PASS, and cannot rewrite E18a-B-v1.
+Primary result: PASS with a decisive `certificate_looseness` majority. All seven analytic true sizes fell inside standard and strict intervals; maximum strict analytic interval width was 0.001463 m, and $7\times2^{18}$ independent probes found no inside point outside strict bounds. Replay exactly restored all 2,048 final objects and parent totals. Of 1,802 rejected candidates, 232 (12.87%) were `true_oversize`, 1,502 (83.35%) `certificate_looseness`, and 68 (3.77%) `boundary_unresolved`; 66 unresolved objects hit the 250,000-box cap and were not forced into another class. Looseness counts over total upper-bound rejections for default and fixed counts 2/3/4/5 were 574/704, 232/288, 229/269, 230/261, and 237/280, so the issue was not isolated to one audit group. Both complete executions were elementwise identical.
+PASS / FAIL / OUTCOME: PASS — attribution question resolved.
+Failure classification: Not applicable. E18a-B-v1's efficiency FAIL remains unchanged.
+Unlocked next node: A separately designed and independently qualified tighter but conservative official continuous upper bound, later E18a-D2. E18b and E19 remained locked.
+Invalidated downstream evidence: The majority branch selected `continuous_upper_bound`; proposal distribution could not be modified and the historical 50%/$Q_{0.99}\le8$ conditions could not be relaxed.
+Descriptive observations: Certificate looseness occurred across every audit group. Only 12.87% of upper-bound rejections had an independent lower witness proving true oversize.
+Notes: The strict majority decision was frozen before execution. Work had to stop for design approval before implementing a revised bound and rerunning E18a-B under a versioned protocol.
+
+## E18a-D2-v1 | Qualification of a Tight Conservative Continuous Upper Bound
+
+Experiment ID: E18a-D2-v1
+Design-freeze commit/hash: Not recorded.
+Execution-freeze commit/hash: Not recorded.
+Date: Not recorded.
+Git commit / clean state: Not recorded.
+Data identities: The seven E18a-D1 analytic fixtures and the same 1,802 historical upper-bound-rejected candidates from E18a-B-v1.
+Input artifact hashes: Inherits `runs/ajae/e18a_d1_upper_attribution.npz`, SHA-256 `e0eb4f82bd4a7233ffacd3a2e32d42d82b7686219b0c8483e6c8f222c7652685`.
+Random namespaces / seeds: Exact historical replay identities; deterministic geometry; two complete geometry computations. Timing was excluded from deterministic hashes.
+Command and resolved config: Construct a cheap candidate outer bound using 256 fixed thin z layers. Expand each primitive's analytic continuous level-set bound by maximum surface displacement. In each layer, use its minimum $|z|$ relative to primitive center to compute an analytic superquadric cross-section support rectangle; propagate sequential CSG by envelope for union, left-set preservation for difference, and rectangle intersection for intersection; jointly interval-propagate twist sine/cosine, positive taper scale, and bend $z^2$ within the same layer; merge all layers. Intersect this layered AABB with the old conservative AABB, since both contain true geometry, and define candidate size by its maximum axis span. Fix 256 layers, time $O(256P)$ and memory $O(256)$ for $P\le5$. Prohibit Sobol, SLSQP, differential evolution, D1 3-D branch-and-bound, mesh/voxel resolution, and data-adaptive layer increases. Do not connect the candidate to schema 3.
+Resource and disk preflight: On the frozen machine, time each of 1,802 objects single-threaded. Require median below 5 ms and $Q_{0.99}$ below 20 ms.
+Artifacts and hashes: `runs/ajae/e18a_d2_tight_upper_bound.npz`, SHA-256 `559c06109b90b48a2adad3788bd90effef81dcacddb7d1f028216c69dde3e2db`; run hash `ec6834db4804008b9876cb935924843768dc5430d414700734aabaf187696523`; summary hash `3921ecf6c16720af52a5fad336f79278d59566ed0b37403a164a0997b55da09a`.
+Primary construct: Determine whether the candidate is conservative, meaningfully tighter, and cheap on all 1,802 historical rejected objects. Analytic true size must not exceed the candidate and $7\times2^{18}$ independent probes must stay inside its AABB. Replay identities, hashes, and old $U$ must match D1. For every object require $U_{\mathrm{new}}\le U_{\mathrm{old}}$ and $\underline D_{\mathrm{HP}}\le U_{\mathrm{new}}$; any lower-bound counterexample is immediate FAIL. None of 232 `true_oversize` objects may obtain $U_{\mathrm{new}}\le3$ m. At least 75%, namely 1,127 of 1,502 `certificate_looseness` objects, must obtain $U_{\mathrm{new}}\le3$ m. Report median/$Q_{0.90}$/$Q_{0.99}$/maximum of $U_{\mathrm{old}}-U_{\mathrm{new}}$, $U_{\mathrm{old}}-\underline D_{\mathrm{HP}}$, and $U_{\mathrm{new}}-\underline D_{\mathrm{HP}}$. Reproduce all geometry elementwise twice.
+Primary result: FAIL. All seven analytic sizes were below the candidate; no independent inside probe escaped the candidate; no historical object had $\underline D_{\mathrm{HP}}>U_{\mathrm{new}}$; and none of 232 true-oversize objects was falsely admitted. The candidate recovered 1,302/1,502 certificate-looseness objects, 86.68%, exceeding 75%. Single-thread median/$Q_{0.99}$/maximum was 0.253/0.438/0.834 ms, below 5/20 ms. The sole failed condition was universal $U_{\mathrm{new}}\le U_{\mathrm{old}}$: 19 objects violated it, with maximum excess 0.819920 m. Both runs were elementwise identical. A post-result identity diagnosis found all 19 were single primitives from the default mixed path. Their historical $U_{\mathrm{old}}$ came from E16-v3 global continuous optimization, whereas multi-primitive $U_{\mathrm{old}}$ came from E18a-A's analytic certificate; v1 incorrectly required a cheap replacement intended for multi-primitive certificates to dominate a different single-primitive optimizer.
+PASS / FAIL / OUTCOME: FAIL.
+Failure classification: `replacement-scope specification defect`.
+Unlocked next node: None. The candidate could not enter the generator; E18a-B-v2, E18b, and E19 remained locked pending an approved E18a-D2-v2 scope revision.
+Invalidated downstream evidence: The 19 objects could not be removed post hoc to convert this run to PASS. Generator, proposal distribution, size interval, historical efficiency threshold, and results remained unchanged.
+Descriptive observations: Candidate conservatism, recovery rate, and runtime passed; only the mixed replacement-domain comparison failed.
+Notes: A valid v2 had to freeze single primitives as outside the replacement domain, leave them on E16-v3, and evaluate the candidate only on the multi-primitive historical domain that schema 4 would actually replace.
+
+## E18a-D2-v2 | Qualification of the Tight Conservative Upper Bound for Multi-Primitive Geometry
+
+Experiment ID: E18a-D2-v2
+Design-freeze commit/hash: Not recorded.
+Execution-freeze commit/hash: Not recorded.
+Date: Not recorded.
+Git commit / clean state: Not recorded.
+Data identities: All E18a-D1 historical upper-bound rejections with read-only-replayed `primitive_count > 1`; seven unchanged analytic fixtures. Of 1,802 historical objects, 19 single primitives were excluded by the preregistered replacement definition and 1,783 multi-primitive objects formed the formal domain.
+Input artifact hashes: Inherits D1 artifact SHA-256 `e0eb4f82bd4a7233ffacd3a2e32d42d82b7686219b0c8483e6c8f222c7652685` and the unchanged D2-v1 candidate formula.
+Random namespaces / seeds: Exact historical replay; deterministic fixed 256-layer computation; two complete runs.
+Command and resolved config: Determine domain membership solely from replayed `primitive_count`, never D2-v1 result, pass status, or upper-bound difference. Reproduce D1 call index, proposal occurrence, object hash, and old bound elementwise. Leave all single primitives entirely on E16-v3 and outside historical relative-tightness, false-admission, looseness-recovery, and timing denominators. Inherit the 256-layer formula, $O(256P)$ time, $O(256)$ memory, analytic fixtures, $2^{18}$ independent probes per fixture, and prohibitions on global search, mesh/voxel methods, and adaptive layering. In the entire multi-primitive domain require $U_{\mathrm{new}}\le U_{\mathrm{old}}$, $\underline D_{\mathrm{HP}}\le U_{\mathrm{new}}$, zero false admission among D1 `true_oversize`, and at least 75% recovery among D1 `certificate_looseness`. The 75% condition is unchanged despite D2-v1's observed 86.68%; its count threshold is the replayed multi-primitive denominator times 75%, rounded up. Require analytic containment, median runtime below 5 ms, $Q_{0.99}$ below 20 ms, full looseness quantiles, and exact two-run reproduction. Do not modify the generator or connect the candidate before PASS.
+Resource and disk preflight: Single-thread timing on the frozen machine for the 1,783-object replacement domain.
+Artifacts and hashes: `runs/ajae/e18a_d2_v2_tight_upper_bound.npz`, SHA-256 `60cb44fbfac7afc4327b1b9086b880f93abb784d3508c41f3930e587c1b649f1`; run hash `fe28b0ccb4705103094df62b582daedde3fb55a24f299f1bc78707d6e81b4458`; summary hash `ae2c11473f90393ee2d8224aba7dff5dfa5ec022c3baa8a8d7625859611b08be`.
+Primary construct: Requalify the candidate strictly on the multi-primitive/CSG replacement domain it would enter, preserving all scientific and efficiency thresholds.
+Primary result: PASS. Replay restored all 1,802 D1 objects. The formal 1,783-object multi-primitive domain contained 214 `true_oversize`, 1,502 `certificate_looseness`, and 67 `boundary_unresolved`. No object had $U_{\mathrm{new}}>U_{\mathrm{old}}$ or $\underline D_{\mathrm{HP}}>U_{\mathrm{new}}$; none of the 214 true-oversize objects was falsely admitted. Analytic true-size violations and candidate-AABB containment violations among $7\times2^{18}$ probes were both zero. The new certificate recovered 1,302/1,502 looseness objects, 86.6844%, above 75% and the required 1,127. $U_{\mathrm{old}}-U_{\mathrm{new}}$ median/$Q_{0.90}$/$Q_{0.99}$/maximum was 1.993895/2.918876/3.692532/4.210985 m; $U_{\mathrm{new}}-\underline D_{\mathrm{HP}}$ was 0.292516/0.625705/1.013985/1.413670 m. Single-thread median/$Q_{0.99}$/maximum was 0.251/0.336/0.709 ms. Both runs were elementwise identical.
+PASS / FAIL / OUTCOME: PASS.
+Failure classification: Not applicable. E18a-D2-v1 remains a permanent `replacement-scope specification defect` FAIL.
+Unlocked next node: E18a-B-v2. E18b and E19 remained locked.
+Invalidated downstream evidence: The PASS qualifies only the multi-primitive/CSG replacement domain. It does not replace E16-v3's single-primitive continuous optimizer and does not itself prove full schema-4 generator efficiency.
+Descriptive observations: The candidate was conservative, no looser than the old analytic certificate in its actual domain, recovered 86.6844% of independently established looseness cases, and stayed far below cost limits.
+Notes: Generator, proposal distribution, $[0.2,3.0]$ m interval, and E18a-B's 50%/$Q_{0.99}\le8$ efficiency requirements remained untouched.
+
+## E18a-B-v2 | Schema-4 Full-Generator Continuous-Size Acceptance
+
+Experiment ID: E18a-B-v2
+Design-freeze commit/hash: Not recorded.
+Execution-freeze commit/hash: Not recorded.
+Date: Not recorded.
+Git commit / clean state: Not recorded.
+Data identities: The same 2,048 calls as E18a-B-v1: default training seeds 0–1,023 and fixed primitive counts 2–5 with seeds 0–255 each. Generator schema 4.
+Input artifact hashes: Inherits E16-v3 single-primitive bounds, E18a-A lower witnesses, and E18a-D2-v2 artifact SHA-256 `60cb44fbfac7afc4327b1b9086b880f93abb784d3508c41f3930e587c1b649f1`.
+Random namespaces / seeds: Exact unchanged schema-3 seed streams, proposal limits, and rejection order; two independent complete generations.
+Command and resolved config: Change only multi-primitive/CSG upper-bound acceptance. Single primitives retain E16-v3 `continuous_bounds` as both lower and upper bound and do not call the layered candidate. Multi-primitives retain E18a-A's actual continuous boundary-chord lower $L$ but use the D2-v2 256-layer conservative AABB maximum span $U_{\mathrm{tight}}$; accept only $L\ge d_{\min}$ and $U_{\mathrm{tight}}\le d_{\max}$. Reports must take outer bounds and upper size from the tight AABB, and lower size/witness from the original standard certificate. The old analytic AABB may enter the tight bound's conservative intersection but cannot independently adjudicate acceptance. Preserve seed mapping, primitive-count sampling, scale/axis-ratio/CSG/deformation distributions, requested interval, connectedness checks, 64-proposal maximum, and rejection order. Require all calls to finish; finite parameters/radii/grid SDF; resolution-31/41 only for bounded/closed/connected and resolution-independence checks; exact report-to-recomputation agreement; $L\ge0.2$ and $U_{\mathrm{tight}}\le3.0$; correct schema, proposal accounting, rejection counts, and final hashes. Retain original efficiency limits: rejection rate strictly below 50%, proposal-count $Q_{0.99}\le8$, maximum $\le64$, with complete group and reason reporting.
+Resource and disk preflight: Not recorded.
+Artifacts and hashes: `runs/ajae/e18a_b_v2_schema4_generator.npz`, SHA-256 `0ae880bd87272c6ed53e8bdade9ee2d6b43195a547f5e5dbc33f1a0a7bfb2039`; run hash `5286485cc61145ae7f47ede0770e8f8dd005a0bb17b981e0119ba638efb1f77c`; summary hash `7357df5a9cd91e08afd6c11297423faac462844c791bd5e4416d7e5e14221a89`.
+Primary construct: Determine whether schema 4, with no proposal-distribution change, simultaneously satisfies continuous-geometry correctness, determinism, and the originally frozen efficiency contract.
+Primary result: PASS. Both runs completed all 2,048 calls within 64 proposals. Accepted primitive-count frequencies 1–5 were 254/490/441/440/423. All finite-parameter, conservative-radius, grid-SDF, and resolution-31/41 bounded/closed/connected checks passed. Recomputed E16-v3 single-primitive bounds matched reports elementwise; recomputed E18a-A lower and D2-v2 tight upper bounds for multi-primitives matched reports elementwise. Minimum accepted lower bound was 0.202296 m and maximum upper bound 2.998756 m; continuous-qualification violations, report mismatches, non-size failures, and proposal-accounting errors were all zero. There were 3,020 proposals and 972 rejections, rate 32.1854%, strictly below 50%. Proposal-count median/$Q_{0.90}$/$Q_{0.95}$/$Q_{0.99}$/maximum was 1/3/3/5/8, passing $Q_{0.99}\le8$ and maximum $\le64$. Rejections were 36 insufficient lower evidence, 287 tight-upper-limit, and 649 other construction/geometry. Rejection rates for default and fixed counts 2/3/4/5 were 28.84%/21.95%/31.91%/37.41%/45.30%, with zero failed generation in every group. Both complete runs were elementwise identical.
+PASS / FAIL / OUTCOME: PASS.
+Failure classification: Not applicable. E18a-B-v1 remains a permanent efficiency FAIL with valid correctness evidence.
+Unlocked next node: E18b. E19 remained locked.
+Invalidated downstream evidence: Schema 3 is superseded for formal generation. This PASS does not establish complex CSG/deformation intersection correctness.
+Descriptive observations: Scientific conclusion: **With all proposal parameter distributions and the single-primitive continuous-optimization path unchanged, schema 4's qualified tight conservative multi-primitive upper bound resolves E18a-B-v1's efficiency failure while giving every accepted formal object a valid continuous-size certificate.**
+Notes: A correctness failure would have required repairing schema-4 acceptance under unchanged criteria. An efficiency-only failure would have stopped the line for a new judgment about proposal sampling.
+
+## E18b-v1 | CSG and Continuous-Deformation Intersection Stability
+
+Experiment ID: E18b-v1
+Design-freeze commit/hash: Not recorded.
+Execution-freeze commit/hash: Not recorded.
+Date: Not recorded.
+Git commit / clean state: Not recorded.
+Data identities: Three analytic undeformed sphere-CSG fixtures: union and intersection of radius-1 spheres centered at $x=\pm0.5$ m, and a radius-1 outer sphere minus a radius-0.35 inner sphere centered at $x=0.2$ m. Six manual mechanism fixtures: nonquadratic-exponent CSG, bend only, twist only, taper only, low-frequency surface deformation only, and one object containing all three CSG operations plus all continuous deformations. Stress fixtures: 64 accepted schema-4 objects, primitive counts 2–5 and seeds 0–15 each. Total 73 objects.
+Input artifact hashes: Inherits qualified E18a-D2-v2 and E18a-B-v2 geometry generation.
+Random namespaces / seeds: Frozen seeds and deterministic Sobol ray construction; two complete executions.
+Command and resolved config: Use 2,048 deterministic rays per analytic/mechanism fixture and 256 per stress object, totaling 34,816. Place origins outside the conservative sphere; direct half toward frozen Sobol targets inside the tight AABB and half along frozen Sobol sphere directions; normalize all directions. Test production `ShapeSpec.intersect(steps=96)` without object- or result-specific step changes. For analytic fixtures, derive the nearest positive root by independent analytic ray-sphere interval Boolean operations. For all others, an independent reference may call continuous `signed_distance` but not `intersect`, `_sampled_sdf_intersection`, or its scan/bisection implementation. On the analytic positive ray interval, standard and strict references use 4,097 and 16,385 equally spaced nodes to find the first outside-to-inside sign change, then SciPy `brentq(xtol=10^{-12}, rtol=10^{-14})`. Reference hit/miss must agree and shared-hit distance difference be below $5\times10^{-5}$ m. Strict no-sign-change rays with minimum absolute SDF $\le10^{-7}$ m are `reference_unidentifiable`; their fraction must be below 0.5% and reported per fixture. Reference normals use central differences at $\delta=10^{-6}\max(1,R)$ m and $2\delta$; require their angle $\le0.05^\circ$ for differentiability. At seams/non-differentiable points, test only finite unit normal and local outward condition $\operatorname{SDF}(p+\epsilon n)>\operatorname{SDF}(p-\epsilon n)$. Apply classifications before reading tested outputs.
+Resource and disk preflight: Not recorded.
+Artifacts and hashes: `runs/ajae/e18b_intersection_stability.npz`, SHA-256 `02ef60988e656d5474e21494cacee151c3ad1bcbce2501c48ee054ad65d906a3`; run hash `57c2b7538e8fa02dbe7b9b787063502268240f26fdd7e245b5becde5a92f4b3f`; summary hash `2ca1531b6e9b31732c0860540e2f6e328d54924f6b1befaae6a0d4a374ceafee`.
+Primary construct: Determine whether production intersection returns the independent-reference nearest positive point, hit/miss class, and outward unit normal for continuously size-qualified union, difference, intersection, nonquadratic exponent, bend, twist, taper, surface deformation, and combinations. Reference qualification must pass first. On all adjudicable rays require zero classification mismatch; finite positive shared-hit distance with error $\le10^{-4}$ m; absolute continuous-SDF surface residual $\le10^{-5}$ m; strict $+\infty$ distance and zero normal on a shared miss; all hit normals finite, unit error $\le10^{-12}$, outward; differentiable-point angle $\le0.1^\circ$; at least 16 reference hits and 16 misses per object; full per-mechanism reporting; and exact two-run reproduction.
+Primary result: FAIL. The independent reference qualified: standard/strict classification mismatch, reference failure, and unidentifiable grazing count were all zero; every object had at least 16 reference hits and misses. Production intersection missed nine true hits: two on the analytic two-sphere intersection; one on the low-frequency deformation fixture; and one each on stress count/seed 2/4, 2/9, 3/5, 3/9, 4/3, and 4/7. For all remaining shared hits, absolute distance median/$Q_{0.95}$/$Q_{0.99}$/maximum was $2.893\times10^{-8}$/$8.269\times10^{-8}$/$1.000\times10^{-7}$/$1.389\times10^{-7}$ m; surface residual was $1.592\times10^{-8}$/$6.159\times10^{-8}$/$8.192\times10^{-8}$/$1.329\times10^{-7}$ m. Maximum unit-normal error was $3.331\times10^{-16}$ and maximum differentiable normal-angle error $0.074943^\circ$; miss and outward contracts passed. Both runs were elementwise identical.
+PASS / FAIL / OUTCOME: FAIL.
+Failure classification: `implementation_defect` in fixed 96-point scanning: it missed narrow genuine inside intervals despite a qualified reference.
+Unlocked next node: A versioned adaptive narrow-interval bracketing implementation and full E18b rerun. E19 remained locked.
+Invalidated downstream evidence: The nine misses cannot be handled by a nonzero failure rate, simply increasing tested `steps`, deleting fixtures, or changing PASS conditions. E18a's size certificate and generator qualifications remain valid.
+Descriptive observations: Read-only diagnosis measured true inside-chord widths 0.003886–0.055447 m versus original 96-grid spacing 0.009017–0.071524 m, only 10.10%–77.52% of one step, so all coarse samples could remain outside.
+Notes: Only the nine failed rays' chord width and sampling interval could be diagnosed before designing a local adaptive bracketing repair.
+
+## E18b-v2 | Intersection Stability after Adaptive Narrow-Interval Bracketing
+
+Experiment ID: E18b-v2
+Design-freeze commit/hash: Not recorded.
+Execution-freeze commit/hash: Not recorded.
+Date: Not recorded.
+Git commit / clean state: Not recorded.
+Data identities: Exactly the same 73 objects and 34,816 rays as E18b-v1, including every originally failed ray.
+Input artifact hashes: Inherits the E18b-v1 reference and fixture identities; no separate input SHA-256 is recorded.
+Random namespaces / seeds: Unchanged frozen deterministic rays and objects; two complete executions.
+Command and resolved config: Keep `steps=96` as the coarse grid and retain the existing explicit sign-change path. Only when no coarse hit is found, the origin is outside, and both interval endpoints have positive SDF, launch deterministic local adaptive bracketing. If the smaller endpoint SDF is at most four times interval length, evaluate the midpoint. If the midpoint is inside, record an outside-to-inside bracket; if still outside, apply the same condition recursively to subintervals. Fix depth at 8 without object/result tuning. Process candidates in original ray-distance order, retain only the nearest positive bracket, and use the existing 18 bisection refinements. Do not increase global uniform steps and never fabricate a hit without a sign change. Inherit every v1 reference, convergence, grazing, per-object support, classification, distance, surface, normal, miss, outward, reporting, and reproduction condition.
+Resource and disk preflight: Not recorded.
+Artifacts and hashes: `runs/ajae/e18b_v2_intersection_stability.npz`, SHA-256 `e4294d51db05e1a4c1967bf8c7fcde5287a456b3cef48c330f01366e34095c53`; run hash `7f9eda581aa78b21091e50917ad3cebd3abfdcdd2b6f4b3659076709e06bd125`; summary hash `bf3a94268e9a8ad1b87a7af0156b73b3141eaa514539648c565c97a339b338ff`.
+Primary construct: Reevaluate production intersection after a local bracketing repair under the unchanged scientific fixtures and zero-error requirements. If the qualified reference still found a classification error, stop rather than increasing recursion depth or relaxing failure rate.
+Primary result: PASS. All references completed with zero failure, zero unidentifiable grazing ray, and zero inadequate per-object support; reference hit/miss totals were 12,706/22,110. Production had zero hit/miss mismatch and recovered all nine v1 misses. Shared-hit distance median/$Q_{0.95}$/$Q_{0.99}$/maximum was $2.893\times10^{-8}$/$8.268\times10^{-8}$/$1.000\times10^{-7}$/$1.389\times10^{-7}$ m; surface residual was $1.592\times10^{-8}$/$6.159\times10^{-8}$/$8.191\times10^{-8}$/$1.329\times10^{-7}$ m. Maximum unit-length error was $3.331\times10^{-16}$ and maximum differentiable-reference normal angle $0.074943^\circ$. One non-differentiable CSG seam passed the frozen finite/unit/outward checks. Miss contract, outwardness, and every mechanism-level failure rate passed. Both runs were elementwise identical.
+PASS / FAIL / OUTCOME: PASS.
+Failure classification: Not applicable. E18b-v1 remains a permanent intersection `implementation_defect` FAIL.
+Unlocked next node: E19.
+Invalidated downstream evidence: None. The result does not claim that no still-narrower segment exists anywhere in an unaudited parameter domain.
+Descriptive observations: Scientific conclusion: **Across the frozen analytic, single-mechanism, combined-mechanism, and schema-4 stress domain, `ShapeSpec.intersect` with adaptive local bracketing stably matches independent nearest positive intersections, hit/miss classifications, and outward unit normals.**
+Notes: E18a-A PASS unlocked E18a-B; E18a-B's unexplained efficiency FAIL led to D1; D1's looseness majority led to D2; D2-v2 PASS led to B-v2; B-v2 PASS led to E18b; and this E18b PASS unlocked E19. A failure at any layer required repair of that measurement, generation, or intersection construct; changing mechanism sets or proposal distributions required protocol revision.
+
+## E19-v1 | Rejection of Disconnected Entities
+
+Experiment ID: E19-v1
+Design-freeze commit/hash: Not recorded.
+Execution-freeze commit/hash: Not recorded.
+Date: Not recorded.
+Git commit / clean state: Not recorded.
+Data identities: Fifteen analytic multi-component and fifteen analytic single-component fixtures. Two-sphere unions used radii 0.2/0.5/1.0 m and surface gaps or overlaps 0.02/0.05/0.10/0.20 m, totaling 12 in each class. Additional fixtures: two spheres cut by a thin flat ellipsoid through the $xy$ cross-section to form separated caps; two spheres minus wholly internal small spheres to form connected cavities; and connected versus last-sphere-disconnected three-sphere union chains. Stress objects: 128 accepted schema-4 objects, primitive counts 2–5 and seeds 0–31 each.
+Input artifact hashes: Not recorded.
+Random namespaces / seeds: Fixed analytic fixtures and stress seeds; two complete deterministic runs.
+Command and resolved config: Enter each analytic multi-component fixture both through direct construction and an equivalent `ShapeSpec.from_dict` payload constructed directly from analytic parameters. Both must raise `RenderError` with reason `split into disconnected components` before renderer use, not an unrelated size, empty-volume, or nonfinite error. Every analytic connected fixture must pass direct construction and JSON round trip with identical parameters; `geometry_report` at resolutions 25/31/41/65 must report bounded, closed, and `components=1`. Apply the same four reports to 128 formal schema-4 objects. Do not replace fixtures or seeds. Require zero false admission/rejection and elementwise two-run reproduction.
+Resource and disk preflight: Not recorded.
+Artifacts and hashes: `runs/ajae/e19_connectivity_rejection.npz`, SHA-256 `b369a485d35544c2da398cd39d4f9845b533779a45e467855aeb389772e24c30`; run hash `d6811084c57eb4969685175dc545fb3548a95f6615b641a180451c998e9c2a2a`; summary hash `0c1b5458de8c3c57489e3c9a961a6e335a1b4ef6d9d9de50f8b084a4a51c03f3`.
+Primary construct: Determine whether formal construction, deserialization, and generator validation reject continuously known multi-component CSG and retain known single-component CSG, ensuring one anomaly-proxy entity cannot contain multiple disconnected objects.
+Primary result: FAIL. All 30 direct/deserialization entries for the 15 analytic disconnected fixtures were rejected with exact message `CSG result is split into disconnected components`, with zero accidental unrelated rejection. All 15 analytic connected fixtures passed both paths and all four resolutions. Among 128 schema-4 accepted objects, primitive-count-5 seeds 3, 5, and 22 were classified as multi-component at resolution 65, causing one report and one JSON-round-trip failure per object, six frozen violations total. Both runs were elementwise identical. A read-only resolution diagnosis found all three had one voxel component at 25/31/41 and 2–3 at 51/65. Seed 3 returned to one at 81 then two at 97/129; seed 22 had two at 81/97 then one at 129; seed 5 had 3/3/3/4/8 at 51/65/81/97/129.
+PASS / FAIL / OUTCOME: FAIL.
+Failure classification: `qualification_specification_defect`; nonmonotone voxel component count mixed possible narrow continuous connections with sampling phase and could not define continuous truth at any post hoc higher resolution.
+Unlocked next node: A resolution-independent or convergent/conservative continuous-connectivity qualification. E20 remained locked.
+Invalidated downstream evidence: The run proves that obvious analytic multi-components are rejected, but cannot establish that every schema-4 accepted object is continuously connected. No resolution may be chosen post hoc as truth, and small-gap fixtures or zero-tolerance requirements may not be removed.
+Descriptive observations: The three stress objects' component counts varied nonmonotonically with resolution; all remained scientifically unresolved rather than proved disconnected.
+Notes: Continuing required both a continuous-connectivity qualifier and an explicit decision about how it enters generator acceptance.
+
+## E19-D1-v1 | Qualification of a Continuous Implicit-Geometry Connectivity Classifier
+
+Experiment ID: E19-D1-v1
+Design-freeze commit/hash: Not recorded.
+Execution-freeze commit/hash: Not recorded.
+Date: Not recorded.
+Git commit / clean state: Not recorded.
+Data identities: Eighteen analytic-truth continuous geometries, nine connected and nine disconnected: an obviously overlapping two-sphere union; separated two-sphere unions with 0.05/0.10/0.20 m gaps; two axis-separated ellipsoid unions; connected three-sphere narrow-bridge chains with 0.05/0.10 m overlaps and corresponding last-sphere-separated chains; two narrow two-sphere intersections with 0.05/0.10 m overlap; two internal spherical cavity differences; two cross-section cutters producing separated caps; one single primitive with nonzero bend/twist/taper; and one spherical low-frequency deformation whose perturbation-gradient bound is strictly below the radial implicit derivative and whose center stays inside. Unlabeled diagnostics: E19-v1 count-5 seeds 3, 5, and 22.
+Input artifact hashes: Inherits E18a-D2-v2's conservative continuous AABB; no separate input SHA-256 is recorded.
+Random namespaces / seeds: Fixed fixtures; $2^{18}$ independent continuous probes per analytic fixture; two complete 24-core runs.
+Command and resolved config: Do not alter the generator. Produce `connected`, `disconnected`, or `unresolved` directly from continuous `signed_distance`, without reading historical voxel counts or treating any sampled center as a whole-cell truth. Partition the conservative AABB into nested dyadic boxes and outwardly interval-propagate `_undeform`, superquadric implicit functions, sequential CSG min/max/difference, and low-frequency sine displacement to obtain $[F_L,F_U]$. Only $F_U<0$ is `definitely_inside`, $F_L>0$ is `definitely_outside`; otherwise `boundary_unresolved`. Trigonometric intervals spanning extrema must return full $[-1,1]$. On the 6-neighbor cubical complex after removing definite-outside boxes, compute possible-domain component count $C_{\mathrm{sep}}$ among components containing definite-inside witnesses. $C_{\mathrm{sep}}\ge2$ is a conservative disconnected certificate. Possible-domain regions without an inside box are orphan unresolved. Connected may come only from listed continuous sufficient conditions: continuously bijectively deformed connected primitive; union of connected members with a real-inside witnessed connected overlap graph; nonempty intersection of convex ellipsoids; a spherical cavity strictly inside a sphere; or spherical low-frequency deformation with strictly positive radial derivative. No tolerance may rescue a failed inequality. Conflict between analytic connected and interval disconnected becomes unresolved and fails. Standard resolution is $2^6=64$ boxes per axis and strict $2^7=128$ on the same AABB boundaries. v1 identifies only if both layers have the same state, strict adds no orphan, and $C_{\mathrm{sep}}$ does not decrease. Require exact analytic truth, zero unresolved/error, certificate logging, finite ordered intervals, no independent enclosure counterexample, and exact reproduction.
+Resource and disk preflight: Two full 24-core executions; no disk preflight recorded.
+Artifacts and hashes: `runs/ajae/e19_d1_interval_connectivity.npz`, SHA-256 `4b307abfd203e6d83e4cf5b9e745c5280a3348d8b051f4b820d95aa96cdf1a5f`; run hash `dfdb1cc4ee4c7aca09c3d51f28973fde4769e66616613e64e5f6db3b15c06d65`; summary hash `31edb633475943bee780930039216c13ffaa1a4b535990e859f1948dccd9015d`.
+Primary construct: Qualify a conservative three-state continuous-connectivity classifier at two exact nested finite scales, with disconnected decisions only from certified exterior separation and connected decisions only from analytic sufficient conditions.
+Primary result: FAIL. Sixteen of 18 analytic fixtures were correctly identified and none was assigned the opposite truth, but the two 0.05 m separated fixtures ended `unresolved`, violating zero tolerance. `disconnected-sphere-gap-0.05` and `disconnected-three-sphere-gap-0.05` both had standard-layer $C_{\mathrm{sep}}=1$, two definite-inside components, and zero orphan, so separation was not proved. At strict layer both had $C_{\mathrm{sep}}=2$, two definite-inside components, zero orphan, and a conservative disconnected certificate, but v1 required identical layer states. The other seven disconnected fixtures were disconnected at both layers; all nine connected fixtures hit preregistered continuous sufficient conditions without interval conflict. Across $18\times2^{18}$ probes there was no interval enclosure counterexample, no new strict orphan, and no $C_{\mathrm{sep}}$ decrease. Unlabeled seeds 3/5/22 remained `unresolved` at both layers; strict statistics were respectively $(1,3,1)$, $(1,13,15)$, and $(1,4,0)$ for $C_{\mathrm{sep}}$, definite-inside components, and orphans. Both 24-core runs were elementwise identical.
+PASS / FAIL / OUTCOME: FAIL.
+Failure classification: `qualification_specification_defect` in the preregistered requirement that coarse and strict layers already have the same identified state, despite conservative one-way acquisition of new evidence at the nested strict layer.
+Unlocked next node: E19-D1-v2 was approved. E19-v2 and E20 remained locked.
+Invalidated downstream evidence: The classifier could not enter the generator. The strict-layer certificates did not retroactively make the two v1 cases PASS. Seeds 3/5/22 remained unresolved.
+Descriptive observations: Interval arithmetic showed no sampled enclosure defect, and the strict layer conservatively separated the two narrow-gap cases. Whether `unresolved→identified` refinement was admissible required a new adjudication rule.
+Notes: Increasing to 256 or another uniform resolution was prohibited as a rescue.
+
+## E19-D1-v2 | Qualification of One-Way Refinement for Continuous Connectivity Certificates
+
+Experiment ID: E19-D1-v2
+Design-freeze commit/hash: Not recorded.
+Execution-freeze commit/hash: Not recorded.
+Date: Not recorded.
+Git commit / clean state: Not recorded.
+Data identities: The unchanged 18 analytic-truth fixtures and three unlabeled historical diagnostic objects from E19-D1-v1.
+Input artifact hashes: Inherits the same continuous AABB and interval implementation as E19-D1-v1.
+Random namespaces / seeds: The same deterministic boxes and $2^{18}$ independent probes per fixture; two complete 24-core executions.
+Command and resolved config: Preserve all v1 fixtures, geometry, outward interval propagation, exact nested 64/128 layers, analytic connected conditions, interval disconnected conditions, $C_{\mathrm{sep}}$, orphan definition, generator/proposal distribution, and reproduction requirements. Change only final two-layer adjudication: standard `unresolved` may refine to strict `connected` or `disconnected`; identical identified states remain identified; `connected→disconnected` or `disconnected→connected` is FAIL and forced unresolved; any strict `unresolved` yields unresolved. Connected remains available only from v1's analytic continuous sufficient conditions; one possible-domain component cannot prove it. Disconnected still requires $C_{\mathrm{sep}}\ge2$, separation composed entirely of definite-outside boxes, and a definite-inside witness in every separated possible-domain component. Box centers, interpolation, and nonconservative distances cannot certify. Require all 18 final states identified and correct, zero opposite truth or unresolved; zero coarse-to-strict contradiction; no new strict orphan or decreasing $C_{\mathrm{sep}}$; valid analytic/interval certificates; finite ordered intervals; zero independent enclosure counterexample; and exact two-run reproduction. The two historical 0.05 m cases must be recomputed from scratch, not inherited as PASS.
+Resource and disk preflight: Two complete 24-core executions; no disk preflight recorded.
+Artifacts and hashes: `runs/ajae/e19_d1_v2_interval_connectivity.npz`, SHA-256 `9e43ab3b42f4423f9eea882c73a6abdfbe430889801a6ea87110bcbfeaea5e79`; run hash `fb1f319300125587d54a29b59032abbf84779aae83b3d5990e411d42860863db`; summary hash `fdb807ddd507e57e739efcd4bc277561ea7592022ca93e64a70939392c25e77d`.
+Primary construct: Determine whether allowing only one-way acquisition of conservative evidence from an exact nested refinement preserves truth and avoids evidence reversal.
+Primary result: PASS. All 18 analytic fixtures received correct identified states, with zero opposite truth and zero unresolved. All nine connected fixtures had frozen analytic sufficient conditions; all nine disconnected fixtures had strict $C_{\mathrm{sep}}\ge2$ interval separation certificates. Transitions were nine `connected→connected`, seven `disconnected→disconnected`, and two `unresolved→disconnected`; all other six transition classes were zero. The two refined cases were the v1 0.05 m two-sphere and three-sphere-last-gap fixtures. There was zero coarse-to-strict opposite-evidence reversal, independent-probe interval counterexample, new strict orphan, strict $C_{\mathrm{sep}}$ decrease, missing analytic connected certificate, or invalid interval disconnected certificate. Unlabeled seeds 3/5/22 remained `unresolved` at both layers with v1-identical statistics and would have to be rejected and resampled in a generator. Both complete 24-core runs were elementwise identical.
+PASS / FAIL / OUTCOME: PASS.
+Failure classification: Not applicable. E19-D1-v1 remains a permanent zero-tolerance qualification FAIL.
+Unlocked next node: Only design of E19-v2 generator acceptance. E20 remained locked.
+Invalidated downstream evidence: The result does not automatically qualify the schema-4 generator or relabel its unknown objects as connected.
+Descriptive observations: Scientific conclusion: **Within the frozen analytic set types and 64→128 nested interval qualification, the classifier conservatively separates proved connected, proved disconnected, and currently unidentified states, and allowing `unresolved→identified` introduces no evidence reversal.**
+Notes: A FAIL would have stopped the line without adding a 256-layer uniform rescue.
+
+## E19-D2 | Qualification of a Star-Shaped Connectivity Certificate for General Perturbed Superquadrics
+
+Experiment ID: E19-D2
+Design-freeze commit/hash: Not recorded.
+Execution-freeze commit/hash: Not recorded.
+Date: Not recorded.
+Git commit / clean state: Not recorded.
+Data identities: Twenty positive analytic fixtures formed from five fixed semiaxis/exponent sets spanning spheres, ellipsoids, maximum/minimum axis ratio above 8, and exponent 0.3–2.5, each paired with four fixed nonzero frequency/phase/yaw perturbations and nonzero bend/twist/taper combinations. Their perturbation amplitude was fixed before execution at 0.5 times the corresponding strict critical amplitude and satisfied the existing $A\le0.25m_i$ parameter domain. Fifteen boundary fixtures: the five geometries with frequency $(12,15,18)$ and amplitude 0.999, 1.000, or 1.001 times theoretical critical amplitude. Hand-built connected/disconnected pure-union graph cases. Read-only coverage: first schema-4 proposal for single-primitive seeds 0–1,023 and fixed counts 2–5, seeds 0–255 each.
+Input artifact hashes: Not recorded.
+Random namespaces / seeds: Fixed fixtures; $2^{15}$ Sobol sphere directions and 17 fixed radii from the center to $2.5s_{i,\max}$ per positive; centered finite-difference check with step $10^{-6}s_{i,\max}$ on the first $2^{12}$ directions and the same 17 radii; complete run twice on 24 cores.
+Command and resolved config: For primitive $i$ with semiaxes $(a_i,b_i,c_i)$, $m_i=\min(a_i,b_i,c_i)$, $s_{i,\max}=\max(a_i,b_i,c_i)$, center $o_i$, and positively homogeneous dimensionless superquadric gauge $H_i$, use $G_i(o_i+t u)=m_i(tH_i(u)-1)$ and $H_i(u)\ge1/(\sqrt3\,s_{i,\max})$. For production low-frequency displacement $h(x)=A/3\sum_{j=1}^{3}\sin(\omega_jx_j+\phi_j)$ with $|d h(o_i+t u)/dt|\le A/3\lVert\omega\rVert_2$, define $\delta_i=m_i/(\sqrt3\,s_{i,\max})-A/3\lVert\omega\rVert_2$. Issue `strict_radial_star_shaped` only if both $F_i(o_i)=G_i(o_i)-h(o_i)<0$ and $\delta_i>0$ under strict float64 comparisons with no tolerance. Strict radial increase gives a single inside interval from the center and hence connectedness. Apply production bend/twist/taper only afterward in the already established continuous-bijection domain. For a pure union, require every constituent's star certificate. Check each pair's two centers and 257 equally spaced center-line points; add an overlap edge only if a finite point is strictly inside both perturbed implicits. Issue `connected_union_graph` only if the graph is connected. Missing finite witnesses may cause unresolved but cannot create false connectivity. Difference, general intersection, and non-strict primitives remain unresolved.
+Resource and disk preflight: Two complete 24-core runs; no disk preflight recorded.
+Artifacts and hashes: `runs/ajae/e19_d2_star_connectivity.npz`, SHA-256 `718625fdd3ac566b7ba90ab9e8f08bbe410491b37387d7b2584c11ffdecd429f`; run hash `170303efef5b83ea265a84e5665284c93e5ee9081644364b7414c91dc28f9aa4`; summary hash `eedffc9965947b30189ff09e4ad7895d94e7695f6d7d2cced4a4a29cbd62b9dc`.
+Primary construct: Prove general perturbed superquadrics star-shaped about their centers by a strict all-direction radial derivative lower bound and prove pure-union connectedness by a real-interior witnessed overlap graph. Positive fixtures must all certify. Among boundary fixtures, all 0.999 cases must certify and every actual $\delta_i\le0$ critical/above case must not. Actual analytic radial derivative and centered finite differences may not contradict the bound; numeric derivative allowance is $10^{-6}$ and cannot relax certificate inequalities. Forward/inverse global-deformation round trip must be finite with maximum error $\le10^{-10}$ m. Hand-built union graph cases must be classified correctly with zero false connected certificate. Two runs must reproduce all fixtures, coverage, certificates, bounds, and hashes. Schema-4 coverage is descriptive only and cannot fail D2 or tune the design.
+Primary result: PASS. All 20 positive general-axis/exponent nonzero-perturbation fixtures obtained `strict_radial_star_shaped`, with centers strictly inside and positive lower bounds. All 15 boundary cases correctly issued or withheld certificates under strict comparison, with zero rule error. No analytic radial derivative over $2^{15}\times17$ checks fell below its theoretical lower bound; centered-difference counterexamples were zero and maximum centered-difference error $1.1882\times10^{-9}$. Bend/twist/taper maximum forward/inverse error was $8.8818\times10^{-16}$ m, below $10^{-10}$ m. Four hand-built connected/disconnected pure-union scenarios were correct with zero false connected certificate. In descriptive first-proposal coverage, 1,024/1,024 single primitives and all 3,584 constituent primitives in 1,024 multi-primitive proposals certified. All 394 pure-union proposals had every constituent certified and a connected overlap graph, yielding 394/394 final pure-union coverage. Both 24-core runs were elementwise identical.
+PASS / FAIL / OUTCOME: PASS.
+Failure classification: Not applicable.
+Unlocked next node: E19-v2 generator-acceptance design. E20 remained locked.
+Invalidated downstream evidence: This node does not qualify difference or general intersection and does not establish full-generator rejection rate or efficiency. Low coverage could not have failed D2 or authorized proposal-distribution changes.
+Descriptive observations: Scientific conclusion: **Within the schema-4 parameter domain, strict radial lower bounds certify general perturbed superquadrics as star-shaped, and a real-inside overlap graph certifies connected pure unions of certified primitives.**
+Notes: The proof uses that $F_i$ is strictly increasing on every ray from the center and ultimately tends to positive infinity, so the interior on that ray is a single interval beginning at the center. Withholding a certificate from a boundary fixture does not claim that the object is truly disconnected. E19-D1-v2 and E19-D2 jointly unlocked E19-v2, but neither alone qualified the production generator.
+
+## E19-v2 | Production Generator Acceptance Driven by Continuous Connectivity Certificates
+
+Experiment ID: E19-v2
+Design-freeze commit/hash: Not recorded.
+Execution-freeze commit/hash: Not recorded.
+Date: 2026-08-26
+Git commit / clean state: Not recorded.
+Data identities: 2,048 generation calls inherited from E18a-B-v2: default training path seeds 0–1,023 and fixed primitive counts 2–5 with seeds 0–255 each. Regression fixtures: E19-D1-v2's nine analytic connected and nine analytic disconnected objects, plus historical schema-4 count-5 seeds 3, 5, and 22. Generator schema 5.
+Input artifact hashes: Inherits E19-D1-v2 and E19-D2 artifacts with SHA-256 `9e43ab3b42f4423f9eea882c73a6abdfbe430889801a6ea87110bcbfeaea5e79` and `718625fdd3ac566b7ba90ab9e8f08bbe410491b37387d7b2584c11ffdecd429f`.
+Random namespaces / seeds: Frozen schema-4 proposal streams and at most 64 proposals per call; two complete 24-core runs.
+Command and resolved config: Keep proposal parameterization, random stream, primitive count/scale/axis ratio/exponent/CSG/deformation distributions, $[0.2,3.0]$ m continuous-size condition, 64-proposal limit, and schema-4 size certificates unchanged. Upgrade identity to schema 5 because acceptance changes. Accept only final continuous state `connected`; reject and resample `disconnected` and `unresolved` on the same stream while separately counting `connectivity_disconnected_rejections` and `connectivity_unresolved_rejections`. First apply E19-D2 center-inside/radial certificate per primitive and 257-point real-inside overlap graph for pure unions. Retain only D1-v2-qualified nonempty convex intersection, strictly contained spherical cavity, and single-primitive continuous-bijection analytic certificates; do not extend to unqualified difference/general intersection. Candidates without analytic connected proof must run the same nested outward interval 64→128 classifier: strict $C_{\mathrm{sep}}\ge2$ with inside witnesses gives disconnected, otherwise unresolved. Do not collapse all uncertified cases to unresolved or restore voxel component counts. Formal construction, `from_dict`, and generator use one authoritative continuous classifier. `geometry_report` retains bounded, closed, valid-volume, and finite-surface checks, but `components=1` comes from cached continuous connected evidence. Recompute every accepted certificate and size report. Preserve original efficiency limits: rejection rate strictly below 50%, proposal-count $Q_{0.99}\le8$, maximum $\le64$.
+Resource and disk preflight: Two complete 24-core executions; no disk preflight recorded.
+Artifacts and hashes: `runs/ajae/e19_v2_schema5_connectivity.npz`, SHA-256 `6821c2452d221fc0c3653c144bc71b6437d5644b00d5a599afc88b17d1eb4e38`; run hash `09453983db773653c9677d7b7d4231e7d827efdffabd2f191740493eb034ae14`; summary hash `6bb9462855af431a876d97f94c6ae6210c6d2412078168078ceb3dba63028bee`.
+Primary construct: Determine whether the full schema-5 proposal stream can deterministically generate only anomaly proxies with formal continuous `connected` proof while retaining the already frozen efficiency contract and every previous size/numerical requirement.
+Primary result: FAIL on efficiency only. All correctness conditions passed. All 2,048 calls succeeded and every accepted object had a continuous connected certificate, with zero accepted disconnected/unresolved. Certificates were 421 `strict_radial_star_shaped` and 1,627 `connected_union_graph`. All nine analytic connected fixtures passed direct and round-trip construction; all nine disconnected fixtures were rejected through both entries with `continuous CSG is certified disconnected`; historical seeds 3/5/22 remained unresolved and were rejected through both authoritative entries. Size certificates, finite parameters, valid-volume/closure diagnostics, round trips, reports, and proposal accounting had zero error. Accepted lower-bound minimum was 0.2044669704064817 m and upper-bound maximum 2.998755884719177 m. But 6,436 proposals yielded 2,048 accepts and 4,388 rejections, rate 68.17899316345556%, above 50%. Proposal-count `[Q0.50,Q0.90,Q0.95,Q0.99,max]` with `method=higher` was `[2,6,10,17,42]`; $Q_{0.99}=17>8$, although maximum 42 remained below 64. Rejections were 3,842 continuous-unresolved, 162 continuous-disconnected, 3 lower-size, 380 upper-size, and 1 other geometry, exactly summing to 4,388. Default and fixed-count 2/3/4/5 rejection rates were 56.01374570446735%/44.70842332613391%/66.3157894736842%/78.89530090684254%/84.688995215311%, with $Q_{0.99}$ 9/6/12/19/28 and maxima 13/7/14/27/42. Both runs were elementwise identical.
+PASS / FAIL / OUTCOME: FAIL.
+Failure classification: `scientific_failure` of schema-5 generation efficiency under the unchanged formal acceptance domain; correctness passed.
+Unlocked next node: E19-D3 attribution diagnosis. E20 remained locked.
+Invalidated downstream evidence: Schema 5 could not be declared qualified and the line could not relax 50%, $Q_{0.99}\le8$, or the 64-proposal cap. The 3,842 unresolved cases, 87.56% of all rejections, could not be described as truly disconnected.
+Descriptive observations: The evidence supports a mismatch between the proposal distribution and the part of continuous connected geometry covered by existing strict certificates, but does not uniquely decide whether to change difference/intersection probability, CSG construction, or certificate coverage.
+Notes: The next experiment had to distinguish proposal-distribution failure from certificate-coverage failure before any revision.
+
+## E19-D3-v1 | Attribution of Continuously Unidentified Candidates
+
+Experiment ID: E19-D3-v1
+Design-freeze commit/hash: Not recorded.
+Execution-freeze commit/hash: Not recorded.
+Date: 2026-08-26
+Git commit / clean state: Not recorded.
+Data identities: Exactly 3,842 `continuous-unresolved` proposals recovered by read-only replay of E19-v2's 2,048 calls, identical seeds, fixed-count requests, and NumPy streams. Each identity includes audit group, seed, proposal occurrence, primitive count, full CSG operation sequence, canonical payload hash, and original unresolved output. At least 24 independent analytic qualification constructions spanning spheres, high-axis-ratio ellipsoids, general-exponent superquadrics, strict overlap/separation, 0.05 m bridge/gap, internal cavity, through-cut, nonempty/empty intersection, pure union, difference, intersection, mixed sequential CSG, and nonzero deformation/perturbation.
+Input artifact hashes: Parent `runs/ajae/e19_v2_schema5_connectivity.npz`, SHA-256 `6821c2452d221fc0c3653c144bc71b6437d5644b00d5a599afc88b17d1eb4e38`.
+Random namespaces / seeds: Exact parent replay; deterministic Sobol and tie/order rules; two complete 24-core executions.
+Command and resolved config: Do not alter schema 5, proposal distribution, CSG probabilities, placement, size conditions, 64 limit, or E19-v2. The independent diagnostic may read only candidate parameters and continuous implicit functions, not `continuous_connectivity_certificate`, `_analytic_connectivity_source`, `_implicit_interval`, D1 64/128 labels, or voxel components. Independently outward-propagate bend/taper/twist, primitives, sequential CSG, and perturbation; use adaptive octree refinement only where intervals cross zero or witness graphs remain undecided. Emit mutually exclusive `strict_connected`, `strict_disconnected`, `likely_connected`, or `diagnostically_unresolved`. Strict connected comes only from independent continuous sufficient conditions with outward interval-positive margins; strict disconnected requires at least two separated possible-inside cover regions, each with a strict inside witness and separated by proved outside boxes; multiple discrete components alone are insufficient. Likely connected requires single-component standard and strict Sobol inside-witness graphs, recursive line subdivision proving continuous SDF $\le-10^{-8}$ on each edge, bottleneck refinement, no new strict orphan, and no opposite evidence; it is diagnostic only. Everything else or any budget hit is unresolved. Standard uses $2^{14}$ witnesses, 12 neighbors, 0.01 m max line step and min interval-box width; strict uses nested $2^{16}$, 16 neighbors, 0.005 m. Per object/layer caps are 250,000 interval boxes and 250,000 candidate path edges. Freeze qualification truth-error zero, at least four strict examples of each direction, no connected→strict-disconnected or disconnected→strict/likely-connected, no identified reversal, and zero interval counterexample among $2^{18}$ probes per fixture. Do not run formal objects if qualification fails.
+Resource and disk preflight: Two complete 24-core runs; no disk preflight recorded.
+Artifacts and hashes: Run hash `315ad92576b591a6fe503da16f6b34fcecf07781fea4a388ecfe8eff6b5bf2e4`; original summary hash `aa55e376a606922f483a8d22b5c7aa9f773b70b8872dc9a3efdca0096da605b4`. This output is retained only as invalid historical exploration.
+Primary construct: Attribute the 3,842 unresolved candidates into `connected_but_uncertified = strict_connected + likely_connected`, `strict_disconnected`, or `diagnostically_unresolved`. “Majority” means strictly above 50%. Connected-but-uncertified majority selects expansion of strict difference/intersection/mixed-CSG certificate coverage without distribution change; strict-disconnected majority allows a versioned operation/placement revision; neither majority or unresolved at least 50% means diagnostic insufficiency. Likely connected can select research direction but never admit an object. Report `pure_union`, `difference_only`, `intersection_only`, and `difference_and_intersection`, crossed with counts 2–5; pure-union unresolved is an identity/certificate anomaly. Reproduce every identity, class, two-layer statistic, budget flag, and hash twice. D3 cannot rewrite E19-v2.
+Primary result: FAIL — protocol implementation defect. Identity replay was valid: all 2,048 call-level final hashes, proposal counts, five rejection categories, primitive counts, and per-call unresolved occurrence counts matched the parent; exactly 3,842 unique proposals were restored; pure-union unresolved was zero; and both executions reproduced. However, strict-disconnected searched only a two-dimensional candidate separating plane instead of a three-dimensional possible-inside adaptive octree cover; likely-connected edges checked discrete SDF samples at the maximum-step constraint but did not prove each intervening segment box had outward interval upper bound $F\le-10^{-8}$; and some qualification overlap witnesses used floating negative point margins rather than outward interval margins. Therefore qualification statistics and all 3,579 `likely_connected` classifications failed the frozen semantics. Exploratory output was `likely_connected=3,579`, `diagnostically_unresolved=263`.
+PASS / FAIL / OUTCOME: FAIL.
+Failure classification: `protocol implementation defect`.
+Unlocked next node: E19-D3-v2 after an implementation-only revision; schema 5 remained unchanged and E20 locked.
+Invalidated downstream evidence: The 3,579 classifications and 93.15% exploratory proportion cannot choose `certificate_coverage`, enter a paper, alter generator acceptance, or support any scientific direction. The output is permanently labeled invalid exploration, not E19-D3 PASS.
+Descriptive observations: Replay identity and deterministic reproduction were valid subresults; diagnostic evidence semantics were not.
+Notes: The frozen independent `strict_connected` sufficient-condition families were: a strictly radially monotone intersection of all positive sets about a common kernel point; topology-preserving difference between an already certified connected host and a cutter that was disjoint or strictly contained with positive separation; and sequential unions composed through true-interior overlap paths. Every inequality required an outward-interval positive margin. v2 had to preserve samples, classes, Sobol counts, neighbors, steps, box widths, budgets, analytic qualification, 50% branching, and reproduction while correcting implementation to match them.
+
+## E19-D3-v2 | Attribution Rerun Consistent with Preregistered Semantics
+
+Experiment ID: E19-D3-v2
+Design-freeze commit/hash: Unchanged from E19-D3-v1; exact identity not recorded.
+Execution-freeze commit/hash: Not recorded.
+Date: 2026-08-26
+Git commit / clean state: Not recorded.
+Data identities: The same 24 qualification constructions and exactly the same 3,842 historical unresolved proposals from E19-v2.
+Input artifact hashes: Parent E19-v2 artifact SHA-256 `6821c2452d221fc0c3653c144bc71b6437d5644b00d5a599afc88b17d1eb4e38`.
+Random namespaces / seeds: Exact v1 frozen replay and deterministic diagnostic streams; two full reruns from scratch.
+Command and resolved config: Preserve every v1 sample, class, two-level Sobol count, neighbor count, maximum line step, minimum interval-box width, per-object budget, analytic qualification, 50% majority branch, and reproduction condition. Correct implementation only. For each likely-graph edge, cover every interval between adjacent discrete steps by an axis-aligned box and require an independent outward interval upper bound $F_{\mathrm{upper}}\le-10^{-8}$; omit the edge if any subsegment cannot prove it. Strict disconnected must start from a three-dimensional adaptive octree leaf cover containing every possible object point, discard only boxes with $F_{\mathrm{lower}}>0$, and conservatively connect remaining leaf closures; certify only if at least two disconnected possible-inside cover components each contain a strict inside witness. A 2-D empty plane is diagnostic only. Strict-connected point/overlap witnesses must have an independent strict negative interval upper bound on a degenerate box, and all original analytic sufficient conditions remain required; floating point values or sampled paths cannot certify. Re-run all 24 qualification scenes from scratch; v1 qualification cannot be inherited. Only after qualification may the same 3,842 objects be diagnosed. Qualification failure had to skip all 3,842 formal objects and stop further modification of the diagnostic design.
+Resource and disk preflight: Two full executions; the recorded source states complete reproducibility but does not add a disk preflight.
+Artifacts and hashes: `runs/ajae/e19_d3_v2_unresolved_attribution.npz`, SHA-256 `5fd3182e34ff4e36bc9868787ffa6d381bb280065515acb44158430f368de115`; array hash `8b1e17ce25d6ffc0595b177236c7fadfb6c86f3378f629de744fdef07bc18c4e`; summary hash `acf3dc628086813d151c81d33e90a6fbbcdf50b339059f8e8861d740a216e484`.
+Primary construct: Re-run the unchanged attribution question with the diagnostic implementation matching its preregistered continuous-evidence semantics. Formal branching still uses a strict majority of all 3,842 objects; likely connected remains diagnostic and cannot become a production certificate.
+Primary result: PASS, selecting insufficient certificate coverage. Qualification on 24 independent analytic constructions had zero truth-opposite error and zero interval-enclosure counterexample among $2^{18}$ independent probes. Twelve scenes obtained `strict_connected` and eight `strict_disconnected`; the 0.05 m narrow-gap scene obtained a strict disconnected certificate after 175,153 three-dimensional adaptive boxes without hitting the 250,000 cap. Read-only replay then had zero call-level identity error for final hashes, proposal counts, five rejection counts, requested count, and seed; per-call unresolved counts matched, exactly 3,842 unique proposals were restored, and pure-union unresolved remained zero. Formal four-level counts were `strict_connected=0`, `likely_connected=3,532`, `strict_disconnected=5`, and `diagnostically_unresolved=305`. Thus `connected_but_uncertified=3,532/3,842=91.93128578865173%`, strictly above 50%; strict disconnected was 0.1301405517959396% and diagnostic unresolved 7.938573659552317%. Ninety-five objects hit the interval-box budget and all remained unresolved. By CSG class: `difference_only` had 1,782/1,819 likely, 37 unresolved, 0 strict disconnected; `intersection_only` 1,133/1,252 likely, 118 unresolved, 1 strict disconnected; `difference_and_intersection` 617/771 likely, 150 unresolved, 4 strict disconnected. By primitive count 2/3/4/5, likely counts were 330/643/1,090/1,469 of totals 335/677/1,188/1,642; strict disconnected occurred only twice at count 4 and three times at count 5. Both from-scratch runs reproduced all identities, classes, two-layer component counts, inside witnesses, path-edge counts, interval-box counts, and budget flags elementwise.
+PASS / FAIL / OUTCOME: PASS — attribution direction `certificate coverage`.
+Failure classification: Not applicable. E19-v2 and E19-D3-v1 remain permanent FAIL results.
+Unlocked next node: A newly designed and frozen cheap strict connectivity certificate for difference/intersection/mixed CSG. E20 remained locked at this point.
+Invalidated downstream evidence: The result rules out the interpretation that a majority of E19-v2 unresolved proposals had been strictly proved disconnected. It does not admit any of 3,532 likely-connected proposals, rewrite E19-v2, change 50%/$Q_{0.99}\le8$, or qualify schema 5.
+Descriptive observations: Existing formal sufficient conditions, especially for difference/intersection/mixed CSG, lacked coverage. Mixed CSG and higher primitive counts had more unresolved cases, but every CSG stratum still had an absolute majority of likely-connected diagnostics.
+Notes: Proposal distribution and schema 5 remained unchanged. Because extending formal certificates would change qualification methodology, the state machine stopped for a design decision before E20.
+
+## E19-v3 | Qualification of the Schema-6 Constructively Connected Anomaly Generator
+
+Experiment ID: E19-v3
+Design-freeze commit/hash: Not recorded.
+Execution-freeze commit/hash: Not recorded.
+Date: 2026-08-26
+Git commit / clean state: Not recorded.
+Data identities: The same 2,048 calls as E19-v2: default training seeds 0–1,023 and fixed primitive counts 2–5 with seeds 0–255 each. Generator schema 6. Single-primitive hashes for seeds 0, 501, and 688 were compared with schema 5.
+Input artifact hashes: Inherits E16-v3 single-primitive bounds, E18a-A lower bounds, E18a-D2-v2 tight upper bounds, E18b-v2 authoritative intersection, and E19-D2 constituent star certificates.
+Random namespaces / seeds: Frozen audit seeds; 64 proposals maximum; two independent 24-core runs. Single-primitive random streams had to remain byte-identical to schema 5.
+Command and resolved config: Retire schema 5 from formal training after its correctness-PASS/efficiency-FAIL and D3-v2 attribution. Replace the training geometry family by constructive unions of 1–5 general superquadrics while retaining qualified bend, twist, taper, and low-frequency perturbation. Remove difference and intersection from the training proposal distribution but retain their generic `ShapeSpec` representation, historical artifact loading, and E18b regression capability. The first primitive remains centered. For each $i>0$, uniformly choose a parent from earlier primitives, uniformly choose one local principal axis and sign, sample $f\sim U[0.10,0.50)$, and place the new center at $f$ times the parent's corresponding semiaxis along that axis; rotate local x/y by parent yaw and leave z unchanged. New primitive scale remains base axes times $U[0.32,0.78)$; exponents remain $U[0.5,1.8)$; yaw remains $U[-\pi,\pi)$. Retain first-primitive, global size, axis-ratio, primitive-count, and deformation domains. Since perturbation amplitude $A\le0.25m_p$ and $f<0.50$, the parent implicit at the child center remains below $-0.25m_p<0$ in the worst case, and the child center is strictly inside the child; each addition has an analytic real-inside overlap edge to an earlier node. Require every constituent to pass `strict_radial_star_shaped` and use only E19-D2 continuous-bijection deformation domains. Retain $[0.2,3.0]$ m size and all previous finite/bounded/closed, JSON, report, intersection, proposal, and cache-identity contracts. Prohibit seed exceptions, size changes, discrete-mesh truth, treating likely connected as formal, unqualified local/multiscale deformation, or substituting a temporary diversity score for E20.
+Resource and disk preflight: Two complete 24-core formal audits. No disk preflight is recorded.
+Artifacts and hashes: `runs/ajae/e19_v3_schema6_constructive_union.npz`, SHA-256 `418d79a825ef51b3ec644a36b377f6bcb7c829c39e372806c35613a87f47a277`; run hash `983f3946084ef5b6670afd070fa088d54553667559dbd6e3806fe702da6343db`; summary hash `11ca663dcfd4bfdce046c0b00934fe1ef1ef46a33b431c4447a63c49c0412bc4`.
+Primary construct: Determine whether schema 6 efficiently and deterministically produces continuously single-entity anomaly proxies through a constructive strict-inside overlap tree while retaining all established numerical and size qualifications. All 2,048 calls must succeed. Every proposal and accepted operation must be only `union`; connectivity disconnected/unresolved rejections must be zero. Every constituent must have a strict radial star certificate; every later center must lie strictly inside at least one earlier primitive; directed earlier-overlap edges must cover all nodes; final certificate must be `strict_radial_star_shaped` or `connected_union_graph`. All parameter, radius, grid-SDF, bounded/closed, JSON, continuous-size, and report errors must be zero. Preserve efficiency limits: rejection rate below 50%, proposal-count $Q_{0.99}$ with `method=higher` $\le8$, maximum $\le64$, and exact two-run reproduction.
+Primary result: PASS. All 2,048 calls succeeded. There were 2,460 proposals, 2,048 accepts, and 412 size rejections, rate 16.747967479674797%, below 50%. Proposal-count median/$Q_{0.90}$/$Q_{0.95}$/$Q_{0.99}$/maximum was 1/2/2/3/5. Rejections were 5 lower-size, 407 upper-size, zero continuous-disconnected, zero continuous-unresolved, and zero other geometry. Default/fixed-count 2/3/4/5 rates were 14.3096%/16.8831%/20.0000%/19.2429%/20.0000%, with group $Q_{0.99}$ 3/3/4/3/3 and maxima 4/5/4/5/3. Every accepted object used only union. Certificates were 206 single-primitive `strict_radial_star_shaped` and 1,842 multi-primitive `connected_union_graph`. Constituent certificate, earlier-parent, tree, finiteness, and positive-margin errors were zero; minimum actual overlap margin was 0.03412405276314048 m. Final primitive counts 1–5 were 206/477/436/458/471, and all 2,048 canonical payload hashes were unique. All parameter/radius/grid-SDF/resolution-31/41 bounded-closed/JSON/size-recomputation/report/accounting errors were zero. Accepted lower minimum was 0.20032595178697435 m and upper maximum 2.999446800658856 m. Single-primitive parameter hashes for seeds 0/501/688 were byte-identical to schema 5. Both formal arrays were elementwise identical; independent recomputation confirmed hashes, thresholds, and 15 cross-group samples.
+PASS / FAIL / OUTCOME: PASS.
+Failure classification: Not applicable. One pre-result execution ended after both calculations because the aggregator applied `equal_nan=True` to string arrays and NumPy raised `TypeError`; it wrote no artifact and made no scientific adjudication. The repair selected elementwise comparison by dtype only and the entire protocol was rerun unchanged.
+Unlocked next node: E20. E20 still required an executable statistical definition before running.
+Invalidated downstream evidence: Schema 5 is retired from formal training. E19-v2's correctness-PASS/efficiency-FAIL and E19-D3-v2's attribution PASS remain permanent. A never-preregistered E19-D4 certificate-patch branch was canceled without recording a FAIL. Old schema-4 arbitrary-CSG development worlds are stale and cannot be manually migrated or presented as qualified; they must be regenerated from the authoritative source after the development-world protocol is frozen.
+Descriptive observations: Full tests were 32 passed / 3 failed. All three failures came from the same known stale `dev.json` containing a schema-4 arbitrary-CSG fixed development world; one historical object was unresolved at the current continuous entry. This pre-existed schema 6 and is not a schema-6 generator regression. Scientific conclusion: **Schema 6 uses a constructive strict-interior overlap tree, qualified constituent star certificates, and continuous bijective deformation to efficiently and deterministically produce continuously single-entity anomaly proxies while inheriting continuous-size and numerical qualifications.**
+Notes: This PASS does not establish geometric diversity, independence from scale/material, development-world qualification, or real-OOD transfer. Those remain E20 and later gates. The mainline change formally revises Sections 2.3–2.4 of the authoritative mainline-plan document cited above without changing AJAE, STU, canonical rays, renderer, normal controls, five-frame inputs, baselines, or later thresholds.
+
+## E20a-v1 | Schema-6 Geometry-Coverage Qualification
+
+Experiment ID: E20a-v1
+Design-freeze commit/hash: Not recorded.
+Execution-freeze commit/hash: Not recorded.
+Date: 2026-08-26
+Git commit / clean state: Not recorded.
+Data identities: 8,192 accepted shapes from formal schema-6 default entry `ShapeSpec.sample_with_report(seed)` at seeds 0–8,191; no fixed primitive count, scene, placement, or formal material.
+Input artifact hashes: Inherits the schema-6 generator qualified by E19-v3.
+Random namespaces / seeds: Seeds 0–8,191; two independent full 24-process runs.
+Command and resolved config: Record primitive count, continuous size and three spans, axis ratios, asymmetry, deformation strength, and union spread. For one primitive use E16-v3 continuous optimized AABB; for multiple use E18a-D2-v2's 256-layer tight conservative continuous outer AABB. Sort spans $\lambda_1\ge\lambda_2\ge\lambda_3>0$, define $D=\lambda_1$, $r_{21}=\lambda_2/\lambda_1$, $r_{31}=\lambda_3/\lambda_1$; multi-primitive quantities describe the qualified conservative AABB, not exact volume or minimum box. Estimate asymmetry with deterministic unshuffled 3-D Sobol points in that AABB: standard $2^{13}$ and strict $2^{15}$, retaining continuous SDF $\le0$ points; use inside-point centroid $c$, positive/negative spans $p_j,n_j$, and $A=\max_j|p_j-n_j|/(p_j+n_j)$. Require at least 128/512 inside points, layer difference $\le0.03$, and at most 81 `asymmetry_unresolved`; unresolved cannot count as asymmetric. Qualify sphere, ellipsoid, and overlapping-two-primitive fixtures first; sphere asymmetry $\le0.02$, ellipsoid axis-ratio error $\le0.01$. Define deformation strength as the RMS of $|twist|/0.65$, $|bend_x|/0.12$, $|bend_y|/0.12$, $|taper_x|/0.18$, $|taper_y|/0.18$, and $surface\_amplitude/(0.08\min(base\ scale))$. Define multi-primitive spread as maximum center distance divided by $D$, zero for one primitive.
+Resource and disk preflight: Two full 24-process runs; no disk preflight recorded.
+Artifacts and hashes: `runs/ajae/e20a_schema6_geometry_coverage.npz`, SHA-256 `78053948ea5d9ca36b19f687a61ba38a25ecaee2c09f0c4adebbffed60bb0f07`; array hash `1f5b4c29f3a8ade492413df552d62522e690008d00692cef4ca687351775ddaa`; summary hash `ff6bcd88037d836722e95175b7a739266567e47825d8a4b38e38c883a053bf3f`.
+Primary construct: Test whether schema 6 covers preregistered geometry regions while retaining continuous-size, constructive-connectivity, and efficiency qualification. Size bins are small $[0.2,1.1333333333333333)$, medium $[1.1333333333333333,2.0666666666666664)$, large $[2.0666666666666664,3.0]$. Blocky requires $r_{31}\ge0.70$; flat $r_{21}\ge0.70$ and $r_{31}\le0.45$; elongated $r_{21}\le0.55$ and $r_{31}\le0.45$; asymmetric requires both layers $A\ge0.15$ and convergence; weak deformation $S_{def}\le0.45$; strong $S_{def}\ge0.65$; one primitive count=1, multi count 2–5. Each of 11 regions must contain at least 128, and each count 1–5 at least 512. The 128 threshold is 1.5625% of the total sample and excludes nominal coverage supported only by a tiny fringe; 512 is 6.25% and excludes a nearly absent formal complexity level. Regions may overlap and need not form an exhaustive partition. Require all generation and numerical domains valid, at most 81 unresolved, and exact reproduction. Do not move bins, use mesh size, add material/placement, special-case seeds, or modify schema 6 after results.
+Primary result: FAIL. All 8,192 calls succeeded and all shape hashes were unique. Counts 1–5 were 1,717/1,670/1,553/1,649/1,603, all above 512. Continuous size min/median/max was 0.20945478034703036/1.6254688480595059/2.999958258919219 m; $r_{21}$ ranged 0.4849446337030581–0.99999459358603 and $r_{31}$ 0.4740544227215081–0.9977686607571975. All descriptors were finite and in domain. Minimum standard/strict inside counts were 1,340/5,390; 50 asymmetry estimates were unresolved, below 81. Fixtures passed; strict sphere asymmetry was 0.0017955358091529018 and ellipsoid axis-ratio error below 0.01. Passing regions were small 2,678, medium 2,812, large 2,702, blocky 6,124, single 1,717, multi 6,475, weak deformation 1,245, and strong 1,861. Failing regions were flat 0, elongated 0, and asymmetric 19, all below 128. Minimum $r_{31}=0.4740544227215081$ remained above 0.45. Strict asymmetry median/$Q_{0.95}$/$Q_{0.99}$/maximum was 0.02695424214928638/0.07989006402129747/0.12727210537819528/0.2674070465861041. Qualified asymmetric counts by primitive count 1–5 were 0/1/5/7/6. Both runs were elementwise identical.
+PASS / FAIL / OUTCOME: FAIL.
+Failure classification: `scientific_failure` of schema-6 preregistered geometry coverage.
+Unlocked next node: E20a-D1 read-only attribution. Schema 7 was not yet designed; E20a-v2, E20b, and E21 remained locked.
+Invalidated downstream evidence: The run rejects the claim that schema 6 covers the frozen flat, elongated, and asymmetric regions. It does not invalidate size, count, blocky, or deformation coverage. Thresholds and support counts cannot move post hoc.
+Descriptive observations: A bounded inference was that base aspect sampling, secondary scale, and strict-inside placement jointly favored blocky outer boxes, while local perturbation and constructive unions gave weak global asymmetry. The run did not uniquely attribute mechanism and could not select a concrete modification.
+Notes: Original E20 had not run and thus has no FAIL. For the frozen asymmetry measure, the positive and negative spans were explicitly $p_j=\max(x_j-c_j)$ and $n_j=\max(c_j-x_j)$. Pre-run review split the immediately observable geometry questions into E20a and E20b. Geometry-factor, material, and placement decoupling were not declared PASS; material moved to E35–E40 and placement until E21–E25 qualification.
+
+## E20a-D1 | Attribution of Missing Shape Support
+
+Experiment ID: E20a-D1
+Design-freeze commit/hash: Not recorded.
+Execution-freeze commit/hash: Not recorded.
+Date: 2026-08-26–27
+Git commit / clean state: Not recorded.
+Data identities: Exact E20a-v1 seeds 0–8,191 and formal artifact, recovered by read-only schema-6 replay. Five paired diagnostic views per object: S0 `base_core`, first primitive only and no surface/bend/twist/taper; S1 `centered_union_core`, all actual primitive scales/exponents/yaws but all centers at origin and no deformations; S2 `offset_union_core`, actual child centers restored, still no deformations; S3 `surface_union`, actual low-frequency surface restored; S4 `final`, the original complete E20a-v1 object.
+Input artifact hashes: Parent `runs/ajae/e20a_schema6_geometry_coverage.npz`, SHA-256 `78053948ea5d9ca36b19f687a61ba38a25ecaee2c09f0c4adebbffed60bb0f07`.
+Random namespaces / seeds: Exact authoritative schema-6 event streams for every seed; two complete independent 24-process replays.
+Command and resolved config: Do not modify `ShapeSpec.sample_with_report`, generator domain, proposal stream, acceptance, E20a region, or support threshold. Every replayed shape/report hash must match. At S0 record intrinsic sorted base ratios. Use E20a's continuous-AABB $D,r_{21},r_{31}$ at every stage. For diagnostic single-primitive counterfactuals retain E16-v3 continuous optimization, fixed optimizer seed, and $10^{-6}$ safety margin but uniformly use `maximum_iterations=160` and `population_size=15`; multi-primitives retain the 256-layer tight bound. S0/S1 asymmetry is analytically zero by central symmetry. For all S2/S3 objects apply E20a's nested $2^{13}/2^{15}$ asymmetry with difference $\le0.03$ and at most 81 unresolved per stage; S4 reads qualified E20a values. Recover actual parent/axis/sign from authoritative stream events, not ambiguous final offsets; recompute $f$ through parent yaw and axis length and require vector residual $\le10^{-12}$ m and $0.10\le f<0.50$. Report alternative feasible earlier parents but never substitute them. Define secondary relative scale as child geometric-mean semiaxis divided by base geometric-mean semiaxis; report per-object mean/max and child-$f$ mean/max.
+Resource and disk preflight: Two runs took 2,618.524842419 s and 2,651.760578932 s on 24 processes. No disk preflight is recorded.
+Artifacts and hashes: `runs/ajae/e20a_d1_shape_support_attribution.npz`, SHA-256 `3e2868b692b3360eae3f26069ea8207e14f8781f2ceb87504dfceb02814f863b`; array hash `d5bad92bbdb9580ad2812617aa2e2383db037a7e332a85da0662f319d93ca651`; summary hash `8e407e76f4cd7d7cc3d274dd0429de9f64e007ca4427b54052897dde02a514ec`.
+Primary construct: Attribute flat/elongated/asymmetric loss across S0–S4. Report base intrinsic ratios and each stage's support and adjacent-stage median/$Q_{0.05}$/$Q_{0.95}$ changes. Inherit the original region definitions and threshold 128. If base intrinsic support is below 128 label `base_aspect_parameter_support_insufficient`. If S0 has support then the first later stage below 128 is the removal stage; if S0 lacks it, report any later recovery; if all stages lack it label `continuous_shape_support_insufficient_throughout`. For asymmetry, S1=0 is baseline; S2 below 128 gives `realized_offset_scale_union_insufficient_before_deformation`; later first loss or recovery identifies surface/global suppression/support. Within counts 2–5, Spearman-correlate maximum secondary scale and maximum $f$ with S2 $A,r_{31}$. $|\rho|\ge0.20$ is association only; exactly one factor in at least 3/4 groups is consistent, both is joint, neither unresolved. No association is causal. PASS requires complete identity/event/formula recovery, finite stage descriptors, converged S2/S3 audits, computable frozen statistics, and exact reproduction; it means attribution only, not schema qualification.
+Primary result: PASS. All 8,192 shape/report hashes and every S4 descriptor/mask matched E20a-v1. All 16,135 child events were recovered; maximum construction residual was $1.5700924586837752\times10^{-16}$ m and actual $f$ ranged 0.10002010072361932–0.4999619459012056. Six hundred five children had multiple geometrically feasible earlier witnesses, maximum four, confirming that actual parent identity must come from stream history. S2/S3 unresolved counts were 25/61, both below 81, and all stage values were finite. Base intrinsic B and S0–S4 flat and elongated support were all zero. S0→S1 median changes in $r_{21},r_{31}$ were zero, with 5%–95% only about $10^{-12}$. S1→S2 $r_{31}$ median remained zero and 5%–95% was -0.035957190568819–0.04776774074298002; S2→S3 was -0.00807492231981386–0.010528439846455384; S3→S4 was -0.05691554253458974–0.08502705655384948. Labels were `base_aspect_parameter_support_insufficient` and `continuous_shape_support_insufficient_throughout`. Asymmetry S0/S1 was zero; S2/S3/S4 qualifying counts were 25/19/19, never 128. S1→S2 strict-$A$ median change was 0.007273474223817444 and $Q_{0.95}$ 0.07651218082976416; S2→S3 median $3.430248554839874\times10^{-5}$; S3→S4 median 0.011817119186540378. Label was `realized_offset_scale_union_insufficient_before_deformation`. Maximum-$f$ versus S2 asymmetry Spearman by count 2/3/4/5 was 0.2829201577074608/0.3501703300380288/0.28834973668815306/0.2367234954312719, yielding `offset_fraction_association`. Secondary-scale values were 0.18938851865894077/0.21342968768802373/0.18309699317621153/0.14900089292331054, only one above 0.20 and not consistent. Both factors versus S2 $r_{31}$ had absolute correlations at most 0.0383 and label `association_unresolved`. Both runs were elementwise identical.
+PASS / FAIL / OUTCOME: PASS.
+Failure classification: Not applicable. Two pre-result aborted runs created no artifact or adjudication: first, an erroneous unique inverse-parent requirement failed because one child fit two earlier z-axis constructions; authoritative event tracing repaired identity only. Second, the original 80/10 counterfactual optimizer stopped at item 1,664/8,192 after nonconvergence at seeds including 1713/S0, 1744/S3, and 2802/S0. Those were finite/nonempty/connected; all converged at 160/15 and matched 240/15 in all six coordinates, whereas 120/10 differed by 0.00011369444690001451 m for seed 2802. Uniform 160/15 was frozen before restarting, with no seed exception.
+Unlocked next node: Separate qualification of base-aspect sampling E20a-D2A only. E20a-D2B and all downstream nodes remained locked until D2A.
+Invalidated downstream evidence: Direct authority to implement a complete schema 7 was withdrawn. D1 qualifies no new $f$ range, overlap construction, or base-axis numeric domain and cannot change the generator itself.
+Descriptive observations: Missing flat/elongated support originates at the base aspect-ratio domain and is never recovered. Asymmetry remains insufficient before deformation; offset fraction has consistent cross-count association with S2 asymmetry, whereas secondary relative scale does not. This supports studying expanded base-axis ratios and outward-eccentric growth with a strict overlap witness, but does not causally prove either modification.
+Notes: Any schema 7 must retain union-only operations, primitive counts 1–5, and $[0.2,3.0]$ m; before E20a-v2 it must requalify continuous size, constructive connectivity, intersection, efficiency, and determinism in an E19-v3-style audit.
+
+## E20a-D2A | Qualification of the Base Aspect-Ratio Sampler
+
+Experiment ID: E20a-D2A
+Design-freeze commit/hash: Preregistered commit `91be27a`.
+Execution-freeze commit/hash: `91be27a`.
+Date: 2026-08-27
+Git commit / clean state: `src/render.py` was unchanged relative to the preregistered commit; formal schema 6 was not modified.
+Data identities: 4,096 single-primitive audit objects at seeds 0–4,095, constructed only for a schema-7 candidate and containing one union primitive, zero offset, and zero surface/bend/twist/taper.
+Input artifact hashes: Not recorded.
+Random namespaces / seeds: Field-separated `SeedSequence([seed, stream_id])` with stream IDs family=2001, ratio=2002, axis permutation=2003, overall scale=2004, primitive count=2005, exponent=2006, deformation seed=2007, yaw=2008. Two complete 24-process runs.
+Command and resolved config: Sample family probabilities general/blocky/flat/elongated = 0.40/0.20/0.20/0.20. For sorted semiaxes $(1,r_{21},r_{31})$: general samples each schema-6 ordinary relative factor $U[0.65,1.25]$, then sorts and divides by the maximum; blocky samples $r_{31}\sim U[0.75,1]$ and $r_{21}\sim U[r_{31},1]$; flat samples $r_{21}\sim U[0.75,1]$, $r_{31}\sim U[0.20,0.40]$; elongated samples $r_{21}\sim U[0.30,0.50]$, $r_{31}\sim U[0.15,\min(0.40,r_{21})]$. Sample all six axis permutations equally. Independently sample two exponents $U[0.55,1.65]$, primitive count uniformly 1–5, uint64 deformation seed, yaw $U[-\pi,\pi]$, and target overall diameter $U[0.2,3.0]$ m. Record but do not apply target diameter; fix longest audit semiaxis to 1 m so the construct is dimensionless aspect sampling, uncontaminated by physical lower bounds or final acceptance. Store internal `shape_family` only in the generation report, never AJAE inputs or labels. Do not modify production generator, proposal stream, cache identity, or `render.py`.
+Resource and disk preflight: Two 24-process runs took 0.7630624800003716 s and 0.6063500649997877 s.
+Artifacts and hashes: `runs/ajae/e20a_d2a_base_aspect_sampler.npz`, 528,004 bytes, SHA-256 `0e92143709a15f633862b8ebff8aa0c00785abf45e6cd921db86839c1c39bbdb`; array hash `badbc50332863181598f1d8f9958644883c492da5ae597325d7d73409159e2b1`; summary hash `13681e35d6d4857da6e94ddf202dfa4b9f4a9bce9dcb6c75aa13d5f687660062`.
+Primary construct: Qualify explicit intrinsic general/blocky/flat/elongated support without relying on union or deformation and without binding family to overall scale, primitive count, exponent, deformation seed, yaw, or a fixed spatial axis. Counts must match the frozen family stream; all parameters must be finite and inside support; permutations must match their stream; every object must certify `strict_radial_star_shaped`. Counterfactually replace family or scale streams and require every other field's random values unchanged. Correlation is diagnostic and cannot replace structural stream isolation. Both runs must reproduce fields, certificates, hashes, and summaries.
+Primary result: PASS. Frozen family counts general/blocky/flat/elongated were 1,647/846/809/794 and exactly matched output. Six permutation counts were 686/693/667/678/678/694. All 4,096 objects were finite, in family support, and `strict_radial_star_shaped`. Replacing the family stream changed family for 3,003 seeds while scale, count, exponent, deformation seed, yaw, and permutation remained elementwise unchanged. Replacing the scale stream changed every target scale while family, ratios, and all other independent fields remained unchanged. Both runs were elementwise identical and independent artifact recomputation found no support, order, certificate, or isolation counterexample.
+PASS / FAIL / OUTCOME: PASS.
+Failure classification: Not applicable.
+Unlocked next node: E20a-D2B. Schema 7 and all downstream nodes remained locked.
+Invalidated downstream evidence: This result does not generate multi-primitive objects, prove physical mapping of extreme ratios within $[0.2,3.0]$ m, establish a shared witness, intersection, final coverage, or generation efficiency, and does not replace schema 6.
+Descriptive observations: The four-family base sampler itself satisfies intrinsic support, strict star-shapedness, field isolation, axis-permutation coverage, and determinism.
+Notes: Mapping dimensionless aspect ratios to final physical size had to be frozen during schema-7 integration and verified by E19-v4.
+
+## E20a-D2B | Qualification of an Eccentric Shared-Interior-Witness Construction
+
+Experiment ID: E20a-D2B
+Design-freeze commit/hash: Not recorded.
+Execution-freeze commit/hash: Authoritative commit `c5898de`.
+Date: 2026-08-27
+Git commit / clean state: `src/render.py`, schema 6, overall scale, child-scale distribution, and deformation were unchanged.
+Data identities: 4,096 deterministic independent parent-child constructions and 512 complete trees, with primitive counts 2–5 and 128 trees each, totaling 1,280 tree edges. All 16 parent/child family combinations had 256 independent edges. The audit covered all four-family crossings, yaw, exponent, and the existing low-frequency perturbation.
+Input artifact hashes: Inherits the E20a-D2A qualified family sampler.
+Random namespaces / seeds: Frozen parent/child and tree streams; two complete 24-process audits.
+Command and resolved config: For a parent local principal-axis direction $u$, solve its unique radial boundary $R_p(u)$ and set $w=o_p+\tau_pR_p(u)u$ with $\tau_p\sim U[0.65,0.85)$. Solve child radial boundary $R_c(-u)$ and set $o_c=w+\tau_cR_c(-u)u$ with $\tau_c\sim U[0.55,0.80)$. Every generation edge must store authoritative $w$, and both continuous implicit values at it must have strict negative margin. Do not search post-generation for an accidental overlap. Require valid witnesses, full tree coverage, no nonfinite value, empty overlap, or disconnected tree, and exact two-run reproduction. Report but do not gate the fraction of child centers outside parents; defer final asymmetry to E20a-v2.
+Resource and disk preflight: Two 24-process runs took 1.3423615129995596 s and 1.356556244998501 s.
+Artifacts and hashes: `runs/ajae/e20a_d2b_shared_witness.npz`, 728,625 bytes, SHA-256 `fa283a02acfe46568e92c4b75a91532c1514e2acec6ce583172f8ece303c36f8`; array hash `eb543a102a2680afb748a8d570207b81aee88bc76bb562042bafe0c818ebc430`; summary hash `a836e1d4e07d5bba36d0184607a5ad04d9ecd5562ef64c462712186a0327a1ef`.
+Primary construct: Determine whether a child can grow outward beyond its parent while a constructive formula supplies a point strictly inside both, preserving a connected-union tree without post hoc witness search.
+Primary result: PASS. All 5,376 edges had strictly negative parent and child implicit values at the authoritative witness. Shared-interior margin minimum/$Q_{0.01}$/median was 0.023704686925583644/0.0321257642403067/0.0832795121702335 m. Worst edge was independent seed 2556, elongated parent/general child, with parent/child values -0.023704686925583644/-0.18564851592997586 m; worst tree-edge margin was 0.029041797002644396 m. Maximum shared-witness formula residual was $6.561418075534675\times10^{-14}$ m. Every constituent retained strict radial star certification; every binary object and complete tree obtained `connected_union_graph`; no nonfinite value, empty overlap, or broken tree occurred. Independent recomputation confirmed actual parent precedes child, active witnesses are finite, object hashes unique, and no post hoc parent replaced stream history. Descriptively, 3,645/4,096 independent child centers, 88.9892578125%, and 1,104/1,280 tree centers, 86.25%, lay outside parent geometry. Counts by primitive count 2/3/4/5 were 84/128, 210/256, 341/384, and 469/512. Center displacement min/median/$Q_{0.95}$/maximum was 0.26598944695621557/1.084399255339794/1.4752347112451356/1.7130895112816735 m. Both formal runs were elementwise identical.
+PASS / FAIL / OUTCOME: PASS.
+Failure classification: Not applicable. An initial command completed geometry but terminated before artifact writing/adjudication because NumPy does not permit `equal_nan=True` on string hash arrays. Only dtype-specific reproduction comparison was corrected, then both runs were repeated unchanged.
+Unlocked next node: Schema-7 integration and freeze. E18b-v3 remained locked until implementation; E19-v4, E20a-v2, E20-V1, E20b, and E21 remained locked.
+Invalidated downstream evidence: D2B qualifies only the eccentric shared-interior-witness mechanism. Outside-center fractions and displacement are descriptive and were not converted into gates; final asymmetry remained untested.
+Descriptive observations: Most children grew with centers outside parent geometry while retaining a constructive strict shared-interior witness and connected graph.
+Notes: D2A and D2B qualified two local components only. This run did not implement schema 7.
+
+## Schema 7 Integration | Implemented and Frozen Candidate
+
+Experiment ID: Schema 7 integration freeze
+Design-freeze commit/hash: Not recorded.
+Execution-freeze commit/hash: Not applicable; this is an implementation/design freeze rather than a scientific qualification result.
+Date: 2026-08-27
+Git commit / clean state: Not recorded.
+Data identities: The schema-7 production generator candidate; D2A seed 0–4,095 stream-regression set; targeted schema tests; regressions excluding explicitly stale `dev.json` evidence.
+Input artifact hashes: D2A and D2B qualified artifacts, SHA-256 `0e92143709a15f633862b8ebff8aa0c00785abf45e6cd921db86839c1c39bbdb` and `fa283a02acfe46568e92c4b75a91532c1514e2acec6ce583172f8ece303c36f8`.
+Random namespaces / seeds: Preserve legacy main-stream consumption positions for retired schema-6 axis factors and embedded fractions so later unchanged fields retain their original positions. Use qualified field-separated D2A streams for family/ratio/permutation, invariant across proposal retry for one object seed. Separate D2B $\tau_p/\tau_c$ by seed, field number, proposal, and child index.
+Command and resolved config: Upgrade `PROCEDURAL_GENERATOR_SCHEMA` to 7. Replace only old aspect-ratio sampling with D2A's four-family sampler and old child-center embedding with D2B's constructive shared-interior witness. Keep 1–5 union-only primitives with forced witness, $[0.2,3.0]$ m, existing continuous deformation, and difference/intersection disabled. Add `shape_family`, actual-generation-order `child_parent_indices`, `shared_witnesses_undeformed_m`, and parent/child witness margin to `ShapeGenerationReport`; forbid family and construction evidence from AJAE inputs or labels. Preserve overall half-scale, primitive count, secondary scale, root/secondary exponent, yaw, surface, bend/twist/taper, continuous size/certificates, and 64 proposals. Draw surface perturbation before witness construction and solve child translation jointly with global-coordinate phase through one scalar root; no post hoc parent or witness replacement. Include schema identity in generation report, manifest, and cache identity.
+Resource and disk preflight: Not recorded.
+Artifacts and hashes: `src/render.py` SHA-256 `53f7037ffd9f10135dd6bade1904d7c77b51e4b8481c174027c0e36be00ff377`; candidate renderer/generator identity `ea868183f1e982c8fa8e3fd959eced32d121e58f0b1daac8876f5409cc5a83d4`.
+Primary construct: Integrate the two locally qualified components into one authoritative, versioned candidate without claiming that their composition has passed intersection, size, efficiency, determinism, or coverage.
+Primary result: Implemented and frozen without scientific PASS. D2A streams reproduced family counts 1,647/846/809/794 on seeds 0–4,095. Targeted schema-7 tests were 5 passed, 32 deselected; regressions excluding stale `dev.json` evidence were 34 passed, 3 deselected. The three stale development-world failures under the E19-v3/E57 boundary remained unchanged and were neither migrated nor represented as current evidence.
+PASS / FAIL / OUTCOME: OUTCOME — schema-7 candidate implemented and frozen; not yet qualified.
+Failure classification: Not applicable.
+Unlocked next node: E18b-v3 intersection regression over the new flat, elongated, and eccentric domain.
+Invalidated downstream evidence: Schema 6 remained the formal generator until qualification. E19-v4 and all later nodes stayed locked; no visualization was allowed. Extreme-aspect minimum-half-scale and size/efficiency risks were deliberately left for E19-v4.
+Descriptive observations: The only geometry changes were the D2A base-aspect family and D2B shared-witness construction.
+Notes: Candidate implementation identity alone is not a scientific result.
+
+## E18b-v3 | Schema-7 New-Domain Intersection Regression
+
+Experiment ID: E18b-v3
+Design-freeze commit/hash: Protocol commit `d081a88dd07b22b2477cc280e7942415e454c4df`.
+Execution-freeze commit/hash: `d081a88dd07b22b2477cc280e7942415e454c4df`.
+Date: 2026-08-27
+Git commit / clean state: Frozen `src/render.py` was unchanged during the run.
+Data identities: Ninety-six schema-7 objects, 24 each from flat, elongated, eccentric multi-primitive stress, and blocky control. Scan seeds 0–4,095 in order; each accepted object enters at most one stratum. Priority is any still-unfilled eccentric primitive-count quota, then flat, elongated, blocky. Take earliest 24 for each family and earliest six for eccentric counts 2–5. Frozen ordered seeds: `[19,23,34,35,39,43,46,48,50,51,54,66,67,70,74,89,90,91,94,95,96,97,100,106,37,60,61,64,65,69,73,76,78,79,80,88,92,98,99,105,124,137,143,147,148,149,150,154,12,21,24,36,38,41,1,6,9,15,16,18,4,10,13,22,44,59,0,2,3,5,7,17,14,28,31,32,47,83,84,87,93,102,103,113,115,116,118,126,127,138,145,151,152,179,182,187]`.
+Input artifact hashes: Object manifest SHA-256 `2f0a674caec51ac43566c0293b305526e6d421c8c2f0100bbbad8113c716781a`; ray-identity SHA-256 `656a7a1c1d0d1ad0aad69c4e6e682f30ff16d8107fe5e75cc7ab050f231b1135`; complete execution manifest SHA-256 `ac67451a6bf7a6028931c7e7086eac6254b9d7262bda9336ac746cca87ddb24e`.
+Random namespaces / seeds: For object index, `Sobol(d=7,scramble=True,bits=64,seed=1803000+object_index).random_base2(m=8)` creates 256 rays. Two complete 24-process runs.
+Command and resolved config: Origin at $2.25R$ sphere. First 128 rays target Sobol points in `tight_continuous_outer_bounds(z_slabs=256,safety_margin_m=1e-6)`; last 128 use independent Sobol sphere directions; normalize all. Independent references call only continuous `signed_distance` on the conservative positive interval with 4,097/16,385 nodes and `brentq(xtol=1e-12,rtol=1e-14)`. References must agree in class and shared-hit root within $5\times10^{-5}$ m; strict no-change with min $|\mathrm{SDF}|\le10^{-7}$ is unidentifiable, total below 0.5%. Require at least 16 reference hits/misses per object. Inherit E18b-v2 zero class mismatch, max distance $\le10^{-4}$ m, surface residual $\le10^{-5}$ m, unit-normal error $\le10^{-12}$, differentiable normal angle $\le0.1^\circ$, miss $+\infty$/zero normal, outward hits, and exact reproduction. Do not alter production `steps`, objects, rays, generator, or visualize. During the ordered seed 0–4,095 scan, any schema-7 generation failure within 64 proposals, or any still-unfilled stratum after seed 4,095, was a `sampling qualification failure`; no failed seed could be skipped and neither the scan range nor any stratum definition could be changed.
+Resource and disk preflight: Two 24-process runs took 8.98214685899984 s and 9.461855233001188 s.
+Artifacts and hashes: Runner SHA-256 `b478946d6d77ab0995ce2882db7e7e4cc506099f0140c1c4562a3d3c3f511867`; `runs/ajae/e18b_v3_schema7_intersection.npz`, 1,594,438 bytes, SHA-256 `be5ec66e825fc66aec0ddc2bb676d7e3e374f0e4a270d1ef4a6f8d81954c6d20`; elementwise hash `0e608d4074f8b9f495b1a4e1e7cc3cb7ba5accc67235d460e04197ad625a929f`; summary hash `3fac245f379ae7946424085fbd7d0c0985db6f6ac36773958c9af80bddaf8810`.
+Primary construct: Test production nearest-root intersection on the new thin, elongated, eccentric schema-7 domain, as a focused parameter-domain regression rather than a repeat of arbitrary-CSG theory.
+Primary result: FAIL. Object/ray identities matched the freeze. Reference failures and unidentifiable rays were zero; qualified reference hit/miss was 7,347/17,229 with per-object minima 55/152. Production class mismatch was zero; maximum surface residual $1.547612\times10^{-7}$ m; maximum unit-normal error $3.331\times10^{-16}$; miss, outward, and reproduction checks passed. But two shared hits returned later rather than nearest roots. `elongated-seed-99/ray-36`: reference/production 4.3844959571405315/4.4852485680520235 m, error 0.10075261091149201 m. `eccentric_multi_primitive-seed-15/ray-68`: 3.7124355859608693/3.8602502040639055 m, error 0.1478146181030362 m. Overall distance median/$Q_{0.95}$/$Q_{0.99}$/maximum was $2.526\times10^{-8}$/$8.798\times10^{-8}$/$1.105\times10^{-7}$/0.1478146181030362 m; both normals also referenced different surfaces and exceeded $0.1^\circ$. Dense diagnosis found first inside chords 0.006489475452047699 and 0.02761501535529831 m versus coarse intervals 0.04275932923087434 and 0.04082466504344694 m, followed by a wider observable inside interval. E18b-v2 adapted only rays with no coarse hit; a later coarse bracket therefore prevented subdivision before it.
+PASS / FAIL / OUTCOME: FAIL.
+Failure classification: `implementation_defect` in nearest-root candidate search scope, not schema-7 size, connectivity, or distribution.
+Unlocked next node: E18b-v4 versioned repair. E19-v4 remained locked.
+Invalidated downstream evidence: The result is permanent and may not be repaired by replacing seeds, expanding the scan, deleting rays, increasing `steps`, or visualizing.
+Descriptive observations: Only two rays failed, both because a narrow earlier segment preceded a wide later segment; hit/miss class itself remained correct.
+Notes: Formal regression did not repeat arbitrary-CSG theoretical qualification.
+
+## E18b-v4 | Schema-7 Intersection Requalification after Nearest-Root Candidate-Scope Repair
+
+Experiment ID: E18b-v4
+Design-freeze commit/hash: Protocol commit `20c02688db27840d983a5b8153868502807ecbb4`.
+Execution-freeze commit/hash: Implementation commit `90a19f01fca562bc0400f531c4d969a2108deab8`.
+Date: 2026-08-27
+Git commit / clean state: `src/render.py` SHA-256 `ccdddb12b96104360deb245dabffcf8449c9e568c70dd7202cdc3e850b5413d9` after the repair.
+Data identities: Exactly E18b-v3's 96 objects and 24,576 rays, unchanged manifests and independent references; targeted regression includes the two v3 failures.
+Input artifact hashes: Inherits v3 object/ray/execution hashes `2f0a674caec51ac43566c0293b305526e6d421c8c2f0100bbbad8113c716781a`, `656a7a1c1d0d1ad0aad69c4e6e682f30ff16d8107fe5e75cc7ab050f231b1135`, and `ac67451a6bf7a6028931c7e7086eac6254b9d7262bda9336ac746cca87ddb24e`.
+Random namespaces / seeds: Unchanged v3 rays; two complete 24-process runs.
+Command and resolved config: Repair only nearest-root candidate scope. For every ray whose conservative-interval origin is outside, apply existing depth-8 positive-interval subdivision to all candidate intervals before the current best coarse bracket and retain the earliest explicit outside-to-inside sign-change bracket. Concretely expand `adaptive_rows = flatnonzero(~has_hit & ~starts_inside)` to all `~starts_inside` rays and add initial-candidate constraint `interval_lo < bracket_lo[interval_ray]`. Keep `steps=96`, $\min(v_l,v_h)\le4\,\mathrm{width}$, depth 8, explicit sign change, 18 bisections, and normal implementation unchanged. First require targeted nearest-root regression and unchanged manifests; then inherit every v3 criterion.
+Resource and disk preflight: Two 24-process formal runs took 9.269418022000536 s and 9.02336941700014 s.
+Artifacts and hashes: Runner SHA-256 `00c860c47c190c2aeb06103e661907889aa0fddb828de490886ac2be5e9fb455`; `runs/ajae/e18b_v4_schema7_intersection.npz`, 1,594,431 bytes, SHA-256 `bcc638285bf96e293b8340a52e9d190c738944e7fc26921ada1855e891ad4718`; elementwise hash `c8c1cb44f560c4527684f8fb385126c40939a7b730a4b661916d6c60c92672ea`; summary hash `d055c1ad4aa81bbc14c7df94d4f1b0e122782a35bae9c36f9279062638e36ec4`; renderer/generator cache identity `791ed731effe2b3b9c3b3d9c2af6959c7487c769eeaaff62c6feeeb647a611ee`.
+Primary construct: Requalify the identical schema-7 intersection domain after expanding only the intervals searched before an already found coarse hit.
+Primary result: PASS. Targeted nearest-root regression passed. All 96 objects, 24,576 rays, references, object hashes, and masks remained elementwise identical; production distance changed only at global v3 indices 9,764 and 14,660. Reference failure, unidentifiable, class mismatch, and outward failures were zero; hit/miss remained 7,347/17,229 and miss contract passed. Distance median/$Q_{0.95}$/$Q_{0.99}$/maximum was $2.524\times10^{-8}$/$8.781\times10^{-8}$/$1.099\times10^{-7}$/$1.357\times10^{-7}$ m; maximum surface residual $1.548\times10^{-7}$ m; maximum unit-normal error $3.331\times10^{-16}$; maximum differentiable normal angle $0.005225^\circ$. All frozen conditions passed. Targeted regression was 7 passed/32 deselected; regression excluding stale `dev.json` evidence was 36 passed/3 deselected. Both runs were elementwise identical.
+PASS / FAIL / OUTCOME: PASS.
+Failure classification: Not applicable. E18b-v3 remains a permanent nearest-root `implementation_defect` FAIL.
+Unlocked next node: E19-v4. E20a-v2 and visualization remained locked.
+Invalidated downstream evidence: None. This does not establish schema-7 size, efficiency, or coverage.
+Descriptive observations: The repair affected exactly the two known distances and left every scientific identity and reference unchanged.
+Notes: The PASS only says the added schema-7 thin, elongated, and eccentric domain did not exceed the repaired intersect routine on the frozen rays.
+
+## E19-v4 | Schema-7 Generator Qualification
+
+Experiment ID: E19-v4
+Design-freeze commit/hash: Preregistered commit `048675c39198a33f091de45e5f7745e31b9bc6cf`.
+Execution-freeze commit/hash: `048675c39198a33f091de45e5f7745e31b9bc6cf`.
+Date: 2026-08-27
+Git commit / clean state: `src/render.py` SHA-256 `ccdddb12b96104360deb245dabffcf8449c9e568c70dd7202cdc3e850b5413d9`; renderer/generator identity `791ed731effe2b3b9c3b3d9c2af6959c7487c769eeaaff62c6feeeb647a611ee`.
+Data identities: E19-v3's 2,048 calls: default `ShapeSpec.sample_with_report(seed)` seeds 0–1,023 and fixed counts 2–5, seeds 0–255 each; at most 64 proposals per call.
+Input artifact hashes: Inherits qualified E18b-v4 intersection and schema-7 integration.
+Random namespaces / seeds: Frozen schema-7 proposal streams; two independent complete 24-process audits.
+Command and resolved config: Recompute and compare single-primitive E16-v3 size or multi-primitive E18a-A+D2-v2 size, every constituent star certificate, stored actual parent and shared-interior witness, full earlier-parent overlap tree, continuous-connectivity source, union-only operations, resolution-31/41 finite-volume and closed-boundary report, fixed $9\times9\times9$ finite SDF, JSON/object-hash round trip, report counts, and schema-7 source cache identity. The witness must be strictly inside actual parent and child and recomputed margin must match report; no post hoc parent/witness. Preserve efficiency gates: total rejection rate below 50%, proposal-count $Q_{0.99}$ with `method=higher` $\le8$, maximum $\le64$. Save totals, accept counts, rate, median/$Q_{0.90}$/$Q_{0.95}$/$Q_{0.99}$/maximum, detailed rejection reasons, audit-group statistics, family-by-candidate-count event table, and worst accepted witness margin as preregistered descriptions only. Because the report aggregates some reasons, use a read-only Python trace of actual counter increments and caught `RenderError` within existing `sample_with_report`; do not modify or reproduce generator decisions.
+Resource and disk preflight: Two 24-process runs took 202.0665953480002 s and 209.74226902100054 s.
+Artifacts and hashes: Runner SHA-256 `7f452f4fd2b7ea1ea9fc86025a769f59d1e4d078ce59e91c1ead4b19bb5adfb6`; `runs/ajae/e19_v4_schema7_generator.npz`, 160,631 bytes, SHA-256 `f9fc5a4cba4105df28064fddf3d87cd7a0d8207e7c660e2fbf8f74d03061c5a3`; elementwise hash `318306d79812b1ca1c1b5699bb07950bc1936deefd9b3717f745f67c74356898`; summary hash `7d5dac79650ab0b1401c2ac11859b469805d5f4ac2808d4eac887d7ac46146f9`.
+Primary construct: Determine whether integrated schema 7 satisfies continuous size, constructive connectivity, numeric validity, determinism, and the unchanged generation-efficiency limits across the full 2,048-call audit.
+Primary result: PASS. All 2,048 calls accepted within 64. There were 2,810 proposals, 2,048 accepts, and 762 rejections, rate 0.2711743772241993. Proposal-count median/$Q_{0.90}$/$Q_{0.95}$/$Q_{0.99}$/maximum was 1/2/3/4/7, passing all efficiency gates. Every correctness check passed. Certificates were 245 `strict_radial_star_shaped` and 1,803 `connected_union_graph`; all 2,048 hashes were unique. Accepted lower-size minimum was 0.20983809599022316 m and upper maximum 2.998239771240387 m. Worst authoritative shared-interior margin among multi-primitives was 0.003434259447993994 m, strictly positive and descriptive only. Rejections were 699 tight-upper above 3 m, 6 lower-size below 0.2 m, and 57 half-scales outside production $(0.02,5]$ m. The 57 were originally aggregated as `other_geometry`, all exactly message `primitive half-scales must lie in (0.02, 5] metres`; there were zero constituent-star, witness, tree, continuous-disconnected/unresolved, nonfinite, or unknown rejection. Rejection rates by candidate count 1–5 were 0.0160643/0.2176/0.277409/0.322137/0.359352. Accepted counts 1–5 were 245/489/435/444/435; family counts general/blocky/flat/elongated were 818/368/434/428. Both runs were elementwise identical and independent read-only audit confirmed event count, correctness, source hashes, and cache identity.
+PASS / FAIL / OUTCOME: PASS.
+Failure classification: Not applicable.
+Unlocked next node: E20a-v2. E20-V1, E20b, and E21 remained locked pending coverage.
+Invalidated downstream evidence: Schema 7 became the formal generator. This result does not establish flat/elongated/asymmetric final-geometry support or visual quality.
+Descriptive observations: Extreme aspect ratios and eccentric multi-part growth increased size/domain rejections, but the unchanged proposal distribution still generated valid objects well inside frozen efficiency limits.
+Notes: A correctness failure would have stopped immediately. A correctness-PASS/efficiency-FAIL would have preserved thresholds and used saved attribution for a new diagnosis rather than changing 3 m, 64 proposals, family ranges, or witness construction.
+
+## E20a-v2 | Schema-7 Geometry-Coverage Qualification under the Original Asymmetry Meter
+
+Experiment ID: E20a-v2
+Design-freeze commit/hash: Preregistered commit `6a71bdb25c81b202bf87c1c3a1ec5a141ba2826c`.
+Execution-freeze commit/hash: `6a71bdb25c81b202bf87c1c3a1ec5a141ba2826c`.
+Date: 2026-08-27
+Git commit / clean state: `src/render.py` SHA-256 `ccdddb12b96104360deb245dabffcf8449c9e568c70dd7202cdc3e850b5413d9`; renderer/generator identity `791ed731effe2b3b9c3b3d9c2af6959c7487c769eeaaff62c6feeeb647a611ee`.
+Data identities: Formal schema-7 default seeds 0–8,191, totaling 8,192 accepted objects; no placement or formal material. Same analytic sphere, ellipsoid, and overlap-union fixtures as E20a-v1.
+Input artifact hashes: Inherits qualified schema 7 from E18b-v4 and E19-v4.
+Random namespaces / seeds: Seeds 0–8,191; two independent full 24-process runs.
+Command and resolved config: Change only the tested generator from schema 6 to qualified schema 7. Inherit the original continuous AABB, $D,r_{21},r_{31}$, nested Sobol asymmetry, deformation strength, union spread, fixtures, domains, reproduction, all 11 region definitions, support 128 per region, and 512 per primitive count. Asymmetry remains $2^{13}/2^{15}=8,192/32,768$ points, inside minimum 128/512, interlayer difference $\le0.03$, unresolved $\le81$. `shape_family` cannot substitute for measured final geometry or enter AJAE inputs/labels. Before execution, restore the historical meter and reproduce fixture spans, ratios, asymmetry, point counts, and PASS dictionaries exactly. Runner differs only in schema assertion, experiment name, and output name. If flat/elongated pass but asymmetric fails, diagnose only asymmetry; if asymmetric passes but flat/elongated fail, diagnose scale/union dilution; any measurement/correctness/other-region/count failure stops all downstream work. Do not change generator, thresholds, seeds, meter, or view images.
+Resource and disk preflight: Two 24-process formal runs took 459.1272452330013 s and 467.32040848700126 s.
+Artifacts and hashes: Runner SHA-256 `bebea0887c6d27fdbec4643007f64f7bd140b089799e7e63edcd3f100579447a`; `runs/ajae/e20a_v2_schema7_geometry_coverage.npz`, 2,343,036 bytes, SHA-256 `addeb0983ee1f58d32dcba027e27dc02ee90994e135cf9564ecfe71b0798e14c`; array hash `44289d38d56e2ac64034cee83d1e68d70e13b156f72f2542082cbd951d55567c`; summary hash `44c4a1f7f898168549fe7e40f33357fcc9e0e8415df6a39ffdb493e78a912d55`.
+Primary construct: Re-run the unchanged geometry-coverage construct on schema 7 and require both coverage and the inherited asymmetry-measurement qualification.
+Primary result: FAIL. All 8,192 calls succeeded, all shape and report hashes were unique, both runs reproduced every parameter/report/descriptor/mask/statistic, and fixtures/domains passed. Measured final-geometry support passed every region: flat 1,030, elongated 722, asymmetric 2,629, small/medium/large 2,545/2,903/2,744, blocky 3,475, single/multi 1,985/6,207, weak/strong deformation 1,220/1,893; counts 1–5 were 1,985/1,740/1,541/1,499/1,427. $D$ ranged 0.20253187522404575–2.999849815614289 m, $r_{21}$ 0.1916887181251575–0.9998535104706826, $r_{31}$ 0.11769986137627449–0.9981032878804145. No family label substituted for measurement. The sole failure was asymmetry convergence: minimum inside counts 396/1,581 exceeded 128/512 and all values were finite, but 130 objects had $|A_{8192}-A_{32768}|>0.03$, above allowed 81. Difference median/$Q_{0.95}$/$Q_{0.99}$/maximum was 0.0052208797344841795/0.020969218311738175/0.03509860789256189/0.10442312327211156; unresolved counts by primitive count were 1/22/18/41/48. The failure was neither empty volume, insufficient inside points, nonfinite value, nor generation error.
+PASS / FAIL / OUTCOME: FAIL.
+Failure classification: `qualification_specification_defect` in the original two-budget asymmetry measurement for new eccentric complex geometry; schema-7 generation itself remains qualified by E19-v4.
+Unlocked next node: E20a-D3 measurement diagnosis. E20-V1, E20b, and E21 remained locked.
+Invalidated downstream evidence: Passing region counts cannot override the measurement FAIL or establish full 8,192-object coverage qualification. Only 8,062 resolved objects support a bounded observation of abundant candidate support. E20a-v2 remains permanent and does not revoke E19-v4.
+Descriptive observations: All 130 unresolved cases were caused solely by interlayer difference; larger primitive counts contributed more cases.
+Notes: No image was viewed and schema 7 was not modified while awaiting a user decision on measurement design.
+
+## E20a-D3 | Diagnosis of Asymmetry-Estimator Convergence
+
+Experiment ID: E20a-D3
+Design-freeze commit/hash: Preregistered commit `cf94d66621b744636940670c7579f697747a5910`.
+Execution-freeze commit/hash: `cf94d66621b744636940670c7579f697747a5910`.
+Date: 2026-08-27
+Git commit / clean state: Schema 7 and E20a-v2 remained unchanged.
+Data identities: All 130 E20a-v2 unresolved objects, stratified by primitive count 1–5 as 1/22/18/41/48, plus 130 resolved controls with identical count quotas selected solely by ascending `SHA256('E20a-D3-control-v1|count|shape_hash')` without reading asymmetry. Unresolved/control seed-list SHA-256 values `d2a493a69fc3bb3a48bafbb03a8ad80269115c1d67c7138e98dae245274744c8` and `26b612379290bf5ed4a59ad3411ea1d00d9f946a43a7c2fa5ad0b76a49696895`; ordered 260-object manifest SHA-256 `9dc76b5a76ec3e016e73f1d67958cbc5be0691c2603e65621f9895f3878dd8e4`.
+Input artifact hashes: Parent E20a-v2 artifact SHA-256 `addeb0983ee1f58d32dcba027e27dc02ee90994e135cf9564ecfe71b0798e14c`.
+Random namespaces / seeds: Same unshuffled 3-D Sobol nested sequence; two complete 24-process runs.
+Command and resolved config: Pure measurement diagnosis only. Do not modify schema 7, E20a-v2, unresolved cap 81, interlayer 0.03, asymmetry threshold 0.15, or coverage counts; D3 cannot yield coverage PASS. Reconstruct identical shape/report/AABB and use same `signed_distance<=0`, centroid, and $A$ formula at nested prefixes $2^{13},2^{15},2^{17},2^{19}$, saving $A_{13},A_{15},A_{17},A_{19}$, inside counts, and three differences. First require exact reproduction of parent low-budget values/counts. Define `high_budget_stable` by $|A_{17}-A_{19}|\le0.01$ and `clearly_contracted` by $|A_{17}-A_{19}|\le0.5|A_{13}-A_{15}|$; both give qualified convergence. At least 104/130 unresolved qualified and 124/130 controls stable supports low original budget. At least 26/130 unresolved still above 0.03, or fewer than 117/130 stable controls, supports estimator inadequacy at $2^{19}$. Both or neither is mixed/inconclusive. Classification-sensitive means $A_{17},A_{19}$ straddle 0.15 or $|A_{19}-0.15|\le|A_{17}-A_{19}|$; at least 26/130 is substantial. Always report distance to 0.15; never add D3 objects to E20a-v2 counts.
+Resource and disk preflight: Two 24-process runs took 9.098420185997384 s and 9.120897729000717 s.
+Artifacts and hashes: Runner SHA-256 `73476601856bc46f96ea420f7b158a0c62546272821785d11e75d792caf27d4a`; `runs/ajae/e20a_d3_asymmetry_convergence.npz`, 40,885 bytes, SHA-256 `03c71a1648eb5fa7f42fa7e75c98445e3c824eb1c7078ea910326f58f4886007`; array hash `0879719928f64e90a5a177121ce2c79005044d8780be72d779fc539d0f818dbb`; summary hash `17e853c1bcde27996d88258c4b8b5f3d6864a0128c3d29cdf228d4ab3567a67a`.
+Primary construct: Decide whether E20a-v2 failed because $2^{13}/2^{15}$ was insufficient or because the uniform-AABB Sobol estimator remained unsuitable by $2^{19}$, while separately measuring classification sensitivity.
+Primary result: PASS with attribution to insufficient original sampling budget. All identities, AABBs, $A_{13}/A_{15}$, and low-budget counts reproduced. Among unresolved objects, 113/130 (86.9231%) met both stability and contraction, above 104; 127/130 controls (97.6923%) were high-budget stable, above 124. Zero unresolved object remained above 0.03, below 26, and control stability did not fall below 117. Thus low-budget support held and high-budget-unsuitable support did not. Unresolved median differences for 13→15, 15→17, 17→19 were 0.0366955218036969/0.005201450063311408/0.0034466050223427476; final $Q_{0.95}$/$Q_{0.99}$/maximum was 0.014483024313515655/0.02185112929000016/0.022295823194576514. Control medians were 0.0052205184327779874/0.0035481749732158945/0.0015045674310770474. Classification sensitivity was small: 76 stayed at or above 0.15, 50 below, four crossed, and four were sensitive under the uncertainty rule, below 26. Distance from $A_{19}$ to 0.15 minimum/median/$Q_{0.95}$ was 0.0006550978752596082/0.0645994159575838/0.18667222924075458. Both runs were elementwise identical.
+PASS / FAIL / OUTCOME: PASS — diagnosis attributed failure to the original two-layer sampling budget.
+Failure classification: Not applicable. Before protocol commit, one unresolved seed 129 and one control seed 143 were run to verify low-budget reproduction and the command also printed their $A_{17}/A_{19}$. This was disclosed; the already hashed manifest and all numeric decision rules remained unchanged.
+Unlocked next node: A separately approved and qualified versioned high-budget asymmetry protocol, E20a-D4. E20-V1, E20b, and E21 remained locked.
+Invalidated downstream evidence: D3 cannot add 76 objects to E20a-v2, use $A_{19}$ as truth, modify schema 7, or relax any coverage/meter threshold. E20a-v2 remains permanent.
+Descriptive observations: The convergence pattern supports inadequacy of 8,192/32,768 points for eccentric schema-7 geometry, not general drift of the estimator at 524,288 points.
+Notes: Continuing required full measurement-protocol qualification and then a full 8,192-object E20a rerun, not patching only 130 historical objects.
+
+## E20a-D4-v1 | Qualification of a High-Budget Asymmetry Measurement Protocol
+
+Experiment ID: E20a-D4-v1
+Design-freeze commit/hash: Preregistered commit `90a47af558f5cd20044141739ca0c545f8e0587a`.
+Execution-freeze commit/hash: `90a47af558f5cd20044141739ca0c545f8e0587a`.
+Date: 2026-08-27
+Git commit / clean state: `src/render.py` SHA-256 `ccdddb12b96104360deb245dabffcf8449c9e568c70dd7202cdc3e850b5413d9`; schema 7 unchanged.
+Data identities: A deterministic 256-object qualification set from E20a-v2 seeds 0–8,191 excluding all 260 D3 objects and selected without asymmetry/D3 values. Stratify by primitive count 1–5 and family into 20 cells, 12–13 per cell; within cells rotate across original size bins and union-spread bins `single`, $[0,1/3)$, $[1/3,2/3)$, $[2/3,+\infty)$ with prefixed SHA-256 order. Final small/medium/large counts 83/83/90 and spread counts 51/56/94/55. Seed-list hash `dc56238fe4b3a41b9463e2b03f8d94fa85f25023d033614213845f99daaa6bd0`; stratified shape manifest hash `406462d90d2472f22b565bf18ff5a46d727d14746342494f701737b9121b589d`; original three fixtures retained.
+Input artifact hashes: Parent E20a-v2 SHA-256 `addeb0983ee1f58d32dcba027e27dc02ee90994e135cf9564ecfe71b0798e14c`.
+Random namespaces / seeds: Same unshuffled Sobol prefixes $2^{17},2^{19},2^{21}$; two 24-process runs. Before submission only a manifest-only path ran, printing none of the three asymmetry values.
+Command and resolved config: Keep E20a AABB, Sobol, `signed_distance<=0`, volume centroid, and axis-span formula. Ask whether $2^{17}/2^{19}$ can become standard/strict; $2^{21}$ is qualification reference only, not truth and never enters E20a-v3. Save all three values/counts/differences/identities/costs. Reproduce shape/report/AABB. Minimum inside counts 128/512/512; all finite. Fixtures finite/deterministic, sphere $A\le0.02$ at all layers, each fixture difference $17→19\le0.03$, $19→21\le0.01$. Require at least 244/256 meeting each absolute bound; overall median and $Q_{0.95}$ of second difference no more than half the first; every count×family cell at least 90% passing both and its second-difference median no more than half its first. Report classification sensitivity, point counts, size/spread strata, and cost without extra gates. D4 PASS would permit a separately preregistered full E20a-v3; FAIL prohibits mechanical $2^{21}/2^{23}$ escalation.
+Resource and disk preflight: Two 24-process runs took 19.030373799003428 s and 21.773450364999007 s.
+Artifacts and hashes: Runner SHA-256 `dce6692ff74d1e95627c09a86d7325f7e17075bd4fc3c03338dd71194a2a421a`; `runs/ajae/e20a_d4_asymmetry_protocol.npz`, 39,951 bytes, SHA-256 `db76298bb04192d9d0c864ebc08ac47cdc970f9e1498f1c9d912067852325d96`; scientific-array hash excluding cost `c175408588ffbbf31751f165d9f9d65fc0946638b58259738aa890972dc13120`; summary hash `be980585ad140ec923898cb6f397add807f1a4527e3b650a9dcb8f27c185d060`. Raw full-array hashes were `b361392b0ca00e03dc5d4295012ffabd0419842e00ff1cb047424a4e5feda818` and `422c12208376f3b037a0259397a5b10169ecbad836600f63b99e23e1ff5a5570`, differing only because allowed `object_seconds` was mistakenly hashed.
+Primary construct: Qualify both absolute stability and an additional ideal at-least-halving convergence-rate condition for the proposed high-budget meter before using it formally.
+Primary result: FAIL solely on the preregistered halving condition. Set identity was unique and disjoint from D3; all shape/report/AABBs reproduced. Minimum inside counts were 6,372/25,365/101,396; all values finite and fixtures passed. Absolute stability was 256/256 for $|A_{17}-A_{19}|\le0.03$ and 256/256 for $|A_{19}-A_{21}|\le0.01$. Difference median/$Q_{0.95}$/maximum was 0.001030974722402822/0.006290163161781121/0.020283514059584756 then 0.0007457821679207714/0.0034847950511063333/0.00973559699081561. Every one of 20 cells passed both absolute proportions. Only two objects crossed 0.15 between $A_{19}/A_{21}$; four were uncertainty-sensitive. But median contraction ratio was 0.72337580322302 and $Q_{0.95}$ ratio 0.5540070998920765, both above 0.5; 13/20 cells' second-difference median did not halve. The differing raw hashes were entirely a reporting implementation defect from including runtime; independent comparison proved scientific arrays identical. This defect neither caused nor rescued the FAIL.
+PASS / FAIL / OUTCOME: FAIL.
+Failure classification: `qualification_specification_defect`, assigned by the later principal-investigator adjudication. The at-least-halving condition measured an ideal convergence rate rather than E20a's actual construct of stable $A\ge0.15$ classification under frozen absolute tolerances.
+Unlocked next node: After explicit post-result protocol adjudication, E20a-v3 was permitted directly; E20a-D4-v2 was canceled.
+Invalidated downstream evidence: D4-v1 remains the only D4 attempt and permanent FAIL; it is not rewritten as PASS. $2^{17}/2^{19}$ did not receive a separate D4 PASS. No mechanical $2^{21}/2^{23}$ chain was allowed.
+Descriptive observations: Independent absolute-stability evidence was uniformly strong across all 256 objects and 20 strata; only the ideal rate condition failed.
+Notes: Future long-term blocking was restricted to anomaly-proxy credibility, renderer source leakage, label correctness, B1 versus B0 supervision value, B3 versus B1/B2 temporal gain, moving-normal safety, or real-OOD transfer, not ordinary auxiliary-metric correlation or ideal decimal convergence.
+
+## E20a-D4 Post-Result Protocol Adjudication | Validation-Scope Reduction
+
+Experiment ID: E20a-D4 post-result protocol adjudication
+Design-freeze commit/hash: Not recorded.
+Execution-freeze commit/hash: Not applicable.
+Date: 2026-08-27
+Git commit / clean state: Not recorded.
+Data identities: E20a-D3 and the nonoverlapping E20a-D4-v1 256-object qualification set.
+Input artifact hashes: D3 artifact SHA-256 `03c71a1648eb5fa7f42fa7e75c98445e3c824eb1c7078ea910326f58f4886007`; D4 artifact SHA-256 `db76298bb04192d9d0c864ebc08ac47cdc970f9e1498f1c9d912067852325d96`.
+Random namespaces / seeds: Not applicable.
+Command and resolved config: Reclassify the sole D4 failure as a qualification-specification defect because D3 established original budget insufficiency and D4 showed universal absolute stability across an independent set and every stratum. Remove the ideal exact-halving condition from the long-term blocking chain, cancel D4-v2, and permit E20a-v3 with $2^{17}/2^{19}$ while retaining all original absolute coverage/meter limits. Do not rewrite D4-v1 data or result.
+Resource and disk preflight: Not applicable.
+Artifacts and hashes: Versioned protocol decision; exact artifact identity not recorded.
+Primary construct: Align validation scope with the actual scientific construct—stable region classification under absolute tolerance—without erasing the formally failed overstrict experiment.
+Primary result: The principal investigator ruled that D4-v1 remains FAIL, but its unique failure criterion does not eliminate a core scientific uncertainty and must not generate an endless convergence-rate chain. E20a-D4-v2 was canceled and no additional convergence experiment was added.
+PASS / FAIL / OUTCOME: OUTCOME — protocol scope revised.
+Failure classification: D4-v1 classified `qualification-specification defect`.
+Unlocked next node: E20a-v3 full 8,192-object rerun.
+Invalidated downstream evidence: None of D4-v1's observations was lost or rewritten. Its FAIL cannot be cited as a high-budget-meter PASS; E20a-v3 must itself satisfy every retained absolute requirement.
+Descriptive observations: D3 and D4 used disjoint samples and together showed budget insufficiency plus absolute stability; the ideal halving rate alone was removed from future qualification.
+Notes: This revision implements the standing principle that auxiliary numerical convergence rates do not become indefinite mainline blockers when the frozen absolute scientific classification is stable.
+
+## E20a-v3 | Schema-7 Geometry-Coverage Qualification with the High-Budget Asymmetry Meter
+
+Experiment ID: E20a-v3
+Design-freeze commit/hash: Preregistered commit `f4350d58d1ee2c910225f1436fd8101a43d83d19`.
+Execution-freeze commit/hash: `f4350d58d1ee2c910225f1436fd8101a43d83d19`.
+Date: 2026-08-27
+Git commit / clean state: `src/render.py` SHA-256 `ccdddb12b96104360deb245dabffcf8449c9e568c70dd7202cdc3e850b5413d9`; qualified schema 7 unchanged.
+Data identities: Full formal schema-7 default seeds 0–8,191, rebuilt from scratch in each run. Before submission, only seeds 0, 4,095, and 8,191 were rebuilt to check shape/report identity and non-asymmetry descriptors; no $A_{17}/A_{19}$ was computed or printed.
+Input artifact hashes: Inherits E20a-v2 artifact SHA-256 `addeb0983ee1f58d32dcba027e27dc02ee90994e135cf9564ecfe71b0798e14c` for unchanged identity comparisons.
+Random namespaces / seeds: Seeds 0–8,191; same unshuffled nested Sobol sequence, now $2^{17}/2^{19}$; two complete 24-process runs.
+Command and resolved config: Change only standard/strict asymmetry budgets from $2^{13}/2^{15}$ to $2^{17}/2^{19}$. Do not patch only the old 130 unresolved objects; fully regenerate all 8,192. Do no placement, formal material, or image viewing. Preserve continuous AABB, `signed_distance<=0`, volume centroid, positive/negative spans, $D/r_{21}/r_{31}$, deformation strength, union spread, and fixtures. Minimum inside points remain 128/512; interlayer difference $\le0.03$; asymmetry requires both layers $A\ge0.15$; unresolved $\le81$. All 11 regions retain support 128 and counts 1–5 support 512. `shape_family` cannot substitute for measurement and $A_{21}$ does not enter. Require exact shape/report/AABB identity with E20a-v2, all descriptors recomputed, identical scientific arrays/fixtures across runs, and exclude runtime from hashes. A remaining measurement-unresolved failure stops an indefinite $A$ branch; a true coverage shortfall may diagnose the generator.
+Resource and disk preflight: Two 24-process runs took 525.2880537629972 s and 531.9286682789971 s.
+Artifacts and hashes: Runner SHA-256 `c5954ed51f9801a868f305eea2652b6cd7a67611d7a045c7bf578e5f64d59005`; `runs/ajae/e20a_v3_schema7_geometry_coverage.npz`, 2,400,528 bytes, SHA-256 `1dda79688dc76020f19ae9a5e839856eb50e27db4cb8dd0e4b197e2310aa9ef4`; scientific-array hash `14d534505ba4f80405f7333ce1b84b79f8fbee740ef7220b7378750d9bdba1af`; summary hash `a621214bbf650409b6b0f62c3d892edfc1b96d4f104d195d5ef857bcaf032c5d`.
+Primary construct: Fully qualify schema-7 final continuous-geometry coverage under the retained absolute asymmetry-measurement contract using the approved higher budget.
+Primary result: PASS. Every identity, unchanged descriptor, and fixture matched E20a-v2. Only 1/8,192 object was unresolved, below 81: seed 3081 with $A_{17}=0.19992087103156353$, $A_{19}=0.16823165641512156$, difference 0.031689214616441974; there was no inside-count or nonfinite problem. Minimum standard/strict inside counts were 6,372/25,365. Interlayer-difference median/$Q_{0.95}$/$Q_{0.99}$/maximum was 0.001188198298830767/0.006440462051511541/0.010910114201940553/0.031689214616441974. All 11 measured final-geometry regions exceeded 128: small 2,545, medium 2,903, large 2,744, blocky 3,475, flat 1,030, elongated 722, asymmetric 2,803, single 1,985, multi 6,207, weak deformation 1,220, strong deformation 1,893. Counts 1–5 were 1,985/1,740/1,541/1,499/1,427, all above 512. No family label substituted. Both scientific arrays were identical and independent read-only audit reconfirmed all counts and hashes.
+PASS / FAIL / OUTCOME: PASS.
+Failure classification: Not applicable. E20a-v1, E20a-v2, and E20a-D4-v1 remain permanent historical FAIL results.
+Unlocked next node: One-time E20-V1 human-review node under its then-current design. E20b-lite and E21 remained locked until the later E20-V1 scope revision.
+Invalidated downstream evidence: None. This PASS ends the asymmetry-meter branch; no D5 or further convergence qualification is permitted.
+Descriptive observations: Scientific conclusion: **Schema 7 has qualified support in every preregistered final continuous-geometry region and primitive-count stratum under the retained absolute measurement rules.**
+Notes: E20-V1 required a frozen 192-object panel and at least two genuinely independent human reviewers; an automated agent or repeated rating by one person could not impersonate two reviewers.
+
+## E20-V1 | Retired Blinded Human Geometry Review
+
+Experiment ID: E20-V1
+Design-freeze commit/hash: Material-generation protocol commit `2bcffc77e840b9ac663e27aaf5577d590fb04fb5`.
+Execution-freeze commit/hash: `2bcffc77e840b9ac663e27aaf5577d590fb04fb5` for panel generation; the required human-rating execution was never completed.
+Date: 2026-08-27
+Git commit / clean state: Not recorded.
+Data identities: 192 unique objects drawn from the E20a-v3 artifact: 32 each from flat, elongated, blocky, asymmetric, near-metric-boundary, and uniform-full-distribution strata, with no cross-stratum duplicate. Each stratum first selected up to 16 single and 16 multi using stratum-isolated SHA-256 order; shortages were filled only from that stratum using another prefix. Flat/elongated/blocky/near-boundary/uniform were 16/16; asymmetric was 0 single/32 multi because the full E20a-v3 population contained zero single-asymmetric and 2,803 multi-asymmetric. Final display order used an independent prefix hash.
+Input artifact hashes: Seed list SHA-256 `a8b742b21a3f44f97bfd58245f69749507ea6a9dd3581935c831b088a2a0eb1e`; private manifest SHA-256 `51f161c827b312a5929d54d50f1d33d4277f34d6d0249a5132db85beda712501`; public blind manifest SHA-256 `8864b9d6974b8712c1969d5b0993761823aa180e2ee3d37200966d2717282df6`.
+Random namespaces / seeds: Deterministic prefixed SHA-256 selection and independent display-order hash. No seed was chosen visually.
+Command and resolved config: Near-boundary score is minimum normalized absolute distance to two size boundaries, $r_{31}=0.70$, $r_{21}=0.70$, $r_{21}=0.55$, $r_{31}=0.45$, $A_{17}=0.15$, $A_{19}=0.15$, and deformation 0.45/0.65, only for asymmetry-resolved objects. For display only, mesh the continuous SDF zero level set in expanded continuous AABB, with 160 intervals on maximum span and at least 33 points/axis; this cannot update geometry qualification. Center by AABB. Four 1,200×1,200 PNG views: front elev 0/azim -90 orthographic, side 0/0 orthographic, top 90/-90 orthographic, perspective 25/-45; common $[-1.6,1.6]$ m axes, equal scale, white background, gray surface, fixed lighting, no text/seed/family/metric/stratum/PASS. R1/R2 receive only public manifest, panels, instructions, and separate sheets and must rate independently without private key or each other's answers. Ask hard defect, complete single entity, nearest family, obvious normal STU resemblance, and obvious near-duplicate. Aggregate hard-defect $\le5\%$, complete $\ge95\%$; each of four target strata at least 70% majority aligned, with two reviewers requiring both; Cohen's $\kappa\ge0.60$ separately for hard defect and completeness. If identical constant ratings make kappa undefined, report undefined and observed agreement 1.0 and treat as perfect agreement. Defined $\kappa<0.60$ is INCONCLUSIVE. Resemblance/duplicate are descriptive. Save only R1/R2 aliases; institutional ethics requirement remains for the user to determine.
+Resource and disk preflight: Panel generation used 24 processes. No disk preflight recorded.
+Artifacts and hashes: Public directory `runs/ajae/e20_v1_blind`; private key `runs/ajae/e20_v1_private_key.csv`, SHA-256 `ab8e1d1ec4791e79eaf42c0105ba7f6a8b3db47c76b6117bf565e0feac697919`, permission 0600; runner SHA-256 `5f9834b2c3ee66ff7a6ef8b8dd6e046174e62d990f297967d57cbdf720881c85`; render-record hash `e71b445a66ccb8b7417d7c9a5a474c09784889f65fe4debff728836ad3862501`; public-material hash excluding later summary `210d557418466e0f109fbfbd9d0db391f8afab3c62cffe2f4949414e1e97a74c`; summary SHA-256 `df1d09cbbcacaa4278a81d9b950536dbfbd02e2dfd7910d1dc6ef140e59b8d02`.
+Primary construct: Originally intended to provide a blinded two-human check of visible hard artifacts, completeness as one entity, and recognizability of four target geometric strata. It could not override automated E20a failure.
+Primary result: OUTCOME — materials prepared, required formal review not completed, node later retired. All 192 PNGs were generated, total 15,112,237 bytes, individual 10,799–283,926 bytes; minimum mesh had 9,467 vertices and 18,930 triangles. Mechanical checks only, without opening/interpreting images, confirmed all files, uniform dimensions, nonwhite rendering in all quadrants, minimum quadrant nonwhite fraction 0.00023055555555555554. The public directory contains panels, blind manifest, two empty 192-row rating sheets, instructions, and summary. The principal investigator later viewed all frozen panels and reported that objects looked strange but showed no generation errors. This is one descriptive visual sanity check only. Two independent raters, per-object ratings, family judgment, and kappa were never completed; R1/R2 sheets remain blank and no rates or agreement may be fabricated.
+PASS / FAIL / OUTCOME: OUTCOME — `MATERIALS PREPARED / PENDING HUMAN RATINGS`, then retired without PASS or FAIL.
+Failure classification: Not applicable; retirement was an explicit scope revision, not a failed human experiment.
+Unlocked next node: After scope revision, E20b-lite. E21 remained locked until E20b-lite PASS.
+Invalidated downstream evidence: E20-V1 may not be reported as PASS and may not report hard-defect, completeness, recognition, or inter-rater rates. The principal investigator's global observation supports only “no obvious generation error was noticed visually.”
+Descriptive observations: Small objects occupied little of the common 3.2 m field as expected from uniform physical scale; this did not change display rules. Human reclassification no longer removed a core uncertainty because E20a-v3 already qualified the four target regions quantitatively over 8,192 final continuous geometries.
+Notes: Schema-7 qualification remains E19-v4 plus E20a-v3. If a defined Cohen's $\kappa<0.60$, the outcome was INCONCLUSIVE, the instructions had to be revised, and the same fixed sample had to be rerated; this could not directly fail the generator. “Looks like a normal category” was assigned to E48, while “near duplicate” was assigned to the diversity discussion; both were descriptive here. No personal names, contacts, or sensitive information were collected.
+
+## E20b-lite | Audit of Near-Deterministic Shortcuts among Generation Factors
+
+Experiment ID: E20b-lite
+Design-freeze commit/hash: Preregistered commit `3e64854`.
+Execution-freeze commit/hash: `3e64854`.
+Date: 2026-08-27
+Git commit / clean state: Not recorded.
+Data identities: Directly read all 8,192 frozen E20a-v3 schema-7 objects; geometry was not regenerated or replaced. Deterministic split produced 6,092 train and 2,100 test objects.
+Input artifact hashes: Parent E20a-v3 artifact SHA-256 `1dda79688dc76020f19ae9a5e839856eb50e27db4cb8dd0e4b197e2310aa9ef4`.
+Random namespaces / seeds: 75%/25% split by independently prefixed SHA-256 of shape hash; decision tree `random_state=20260827`. Complete analysis repeated twice.
+Command and resolved config: The node was initially non-executable because its split, conditional cells, models, baselines, numerical thresholds, and repetition rule had not yet been frozen. The final criteria below were preregistered without using E20a results to choose thresholds. Targets: primitive count 1–5; size small/medium/large; aspect category blocky/flat/elongated/other; deformation weak/middle/strong. Within each primitive count, require at least 16 in every size, aspect, and deformation category. Four prediction tasks: predict count from diameter, two ratios, and deformation; size from count, ratios, deformation; aspect from count, diameter, deformation; deformation from count, diameter, ratios. Exclude any continuous variable or mask directly defining the target, plus `shape_family`, seed, hash, proposal/rejection counts, union spread, asymmetry, and human-review information. Require every target class in train/test. Models: standardized continuous variables and one-hot count when used, L2 logistic regression with `C=1`, `class_weight=balanced`, `max_iter=5000`; shallow tree `max_depth=3`, `min_samples_leaf=64`, `class_weight=balanced`, `random_state=20260827`. Only a frozen model/task with both test balanced accuracy $\ge0.95$ and minimum class recall $\ge0.90$ is a near-deterministic shortcut FAIL. Ordinary correlation, moderate predictability, and distribution difference are descriptive.
+Resource and disk preflight: Not recorded.
+Artifacts and hashes: `runs/ajae/e20b_lite_factor_shortcut.npz`, 31,697 bytes, SHA-256 `49c48093cc673fddc129a1d4049ac7e3297b9e8bf8414a1d4dbe8e921e2b810c`; scientific-array hash `6bb87cbcdf5cececdbf5fc63ffaedffc498622f8171d77aa75285f1b126a1a46`; summary hash `69323de8e7f89114e2e1cb4b0ae358a500ad6dc9b2467c922f4c4dd4bd22e77d`.
+Primary construct: Check whether primitive count, continuous scale, aspect region, and deformation strength contain a nearly deterministic low-capacity shortcut for predicting another generation factor, without requiring statistical independence.
+Primary result: PASS. Every target class appeared in train/test. Across 55 primitive-count×size/aspect/deformation conditional cells, minimum support was 92, above 16. None of eight task/model combinations triggered the joint shortcut rule. Logistic/tree balanced accuracies were: primitive count 0.2214/0.2427, size 0.3695/0.3671, aspect 0.3094/0.3022, deformation 0.3397/0.3304. Highest was 0.3695, far below 0.95. Both formal analyses reproduced split, labels, predictions, confusion matrices, metrics, and hashes elementwise.
+PASS / FAIL / OUTCOME: PASS.
+Failure classification: Not applicable. The first invocation terminated before writing an artifact because the reproduction comparison applied numeric `NaN` handling to string hash arrays. Only the comparison implementation was corrected and the full unchanged analysis rerun.
+Unlocked next node: E21. Phase 2 geometry-distribution qualification chain closed.
+Invalidated downstream evidence: None. The result does not assert statistical independence or rule out more complex relationships learnable by a high-capacity model.
+Descriptive observations: Under the frozen low-capacity audits, no simple combination of generation factors nearly determined another factor.
+Notes: Material/geometry and placement/geometry independence remain assigned to the formal sensor and placement chains, not E20b-lite.
+
+## E21-v1 | Local Support-Plane Estimation
+
+Experiment ID: E21-v1
+Design-freeze commit/hash: Source-bound commit `08fe85b8488ea2370ea9cb59d1f5ac8be4c7db4d`.
+Execution-freeze commit/hash: Preregistered commit `8625a39`; implementation commit `ad7f26d`.
+Date: 2026-08-27
+Git commit / clean state: Source commit had been pushed; clean state not otherwise recorded.
+Data identities: train/206 only, center frames 2–446. Planned 512 real-return anchors: road=40 256, parking=44 128, sidewalk=48 128; planned near/middle/far quotas road 86/85/85 and parking/sidewalk 43/43/42. No train/201, real-anomaly validation, or hidden test.
+Input artifact hashes: Not recorded.
+Random namespaces / seeds: Semantic-specific frozen SplitMix64 identity hashes over `(frame,slot)`, with frame/slot tie-break and separate within-semantic fallback hash. Planned two complete 24-process runs.
+Command and resolved config: Qualify whether local planes are stable enough for later placement, not ground truth normals or suspension/burial. Select anchors by sensor Euclidean range near $[0,20)$, middle $[20,40)$, far $[40,120]$ m without appearance/flatness. For each anchor collect same-semantic real returns only in the five-frame window $[-2,-1,0,1,2]$, transform by `poses.txt` to world coordinates, and take horizontal-XY radii 0.75/1.0/1.25 m, retaining source frame/slot. Require 32 points each or `insufficient_support`. At each scale, take minimum-eigenvector of centered covariance; second-largest eigenvalue $\le10^{-12}\,\mathrm{m^2}$, decomposition failure, or nonfinite is degenerate. Compute first plane residual, retain exactly $\lceil0.9N\rceil$ smallest with frozen identity tie-break, recenter and refit by SVD. Orient $n_g^\top e_z>0$ and $b_g=-n_g^\top\bar x$; reject if height at anchor XY is nonfinite. Center-scale residual median $\le0.03$ m and $Q_{0.95}\le0.08$ m; small/large normal angle $\le5^\circ$ and predicted anchor-height difference $\le0.08$ m. Failed anchors are legal `unqualified_support_patch`, but every accepted patch satisfies all. Analytic 0°/5°/10° slopes use a 51×51 grid over $[-1.25,1.25]^2$ with $z=\tan(\alpha)x+0.002\sin(7x+3y)$ and origin anchor; normal error $\le0.5^\circ$, height error $\le0.01$ m. PASS planned overall 410/512, road 192, parking 96, sidewalk 96 and exact reproduction.
+Resource and disk preflight: Execution terminated during sample construction before plane fitting; no resource or disk preflight recorded.
+Artifacts and hashes: No E21 experiment artifact was created.
+Primary construct: Determine whether the frozen semantic/range-stratified anchor sample exists and whether its local support planes achieve frozen stability rates.
+Primary result: FAIL before fitting. Parking candidate pool was empty, so the runner correctly refused substitution and stopped while creating the 512-anchor list. Read-only census over all 449 train/206 frames found road 9,120,296 returns, parking 0, sidewalk 822,847, other-ground=49 43,899, semantic 60 zero. In center frames 2–446 counts were 9,017,876/0/813,492/43,763 over 445/0/445/442 frames. Near/middle/far counts were road 8,616,445/389,582/11,849; parking 0/0/0; sidewalk 682,777/128,483/2,232; semantic 49 26,361/17,255/147.
+PASS / FAIL / OUTCOME: FAIL.
+Failure classification: `sample-frame specification defect`; 128 parking anchors were mathematically impossible in the sole allowed sequence.
+Unlocked next node: Versioned E21-v2 sampling revision only. E22 remained locked.
+Invalidated downstream evidence: No residual, stability, or qualification-rate result exists. Parking may not be silently replaced by semantic 49, quotas redistributed, or this result rewritten.
+Descriptive observations: The released train/206 labels contain no parking=44 return.
+Notes: E21 owns support-plane stability only; E22 owns suspension/burial. The three analytic slope fixtures guarded only against implementation error and did not create an E21-D1 branch.
+
+## E21-v2 | Local Support Planes after Replacing the Unobservable Semantic
+
+Experiment ID: E21-v2
+Design-freeze commit/hash: Protocol-bound remote commit `283e984`.
+Execution-freeze commit/hash: Preregistered commit `dd98e3c`.
+Date: 2026-08-27
+Git commit / clean state: Revision had been pushed; clean state not otherwise recorded.
+Data identities: train/206 center frames 2–446; road 256, sidewalk 128, other-ground=49 128; near/middle/far quotas road 86/85/85, sidewalk and other-ground 43/43/42.
+Input artifact hashes: Not recorded.
+Random namespaces / seeds: Same v1 identity hash and two complete 24-process runs.
+Command and resolved config: Change only parking=44 to observable other-ground=49 and corresponding quota labels. Inherit every v1 five-frame, range, hashing, same-semantic, 0.75/1/1.25 m, 32-point, 10% trim, covariance/SVD, residual, stability, analytic-regression, and reproduction condition. PASS requires at least 410/512 overall, road 192/256, sidewalk 96/128, other-ground 96/128; every accepted patch must satisfy all. Conclusion can cover only road, sidewalk, other-ground; parking remains unobservable.
+Resource and disk preflight: Two 24-process runs; no disk preflight recorded.
+Artifacts and hashes: `runs/ajae/e21_v2_support_plane.npz`, 1,382,102 bytes, SHA-256 `81fc46b44dbd7c9989a9d8321db69bcaeb3a53ee15c712fb24b251370207c988`; array hash `0c9989b4291ce73bb6d518a694bba096e16806d941e7251deb5de52520194502`; summary hash `f6e47887bc0e5a377915d29455e9f666fd131fbb09a54cdaee760a2797eb13f8`.
+Primary construct: Test the unchanged fixed-radius plane qualifier on an implementable semantic sample.
+Primary result: FAIL. Both runs qualified 228/512, 44.53125%, below 410/512 and 80%. Road/sidewalk/other-ground were 130/256, 50/128, 48/128, all below 192/96/96. Near/middle/far were 157/172, 71/171, 0/169. Of 284 rejections, 252 were `insufficient_support` at 0.75 m, 26 center $Q_{0.95}$ residual, 4 median residual, and 2 cross-scale normal. Every accepted plane satisfied all quality limits and all three analytic slopes passed. Both runs were elementwise identical.
+PASS / FAIL / OUTCOME: FAIL.
+Failure classification: `qualification_specification_defect` from mismatch between frozen fixed local support/range stratification and actual LiDAR density; the numerical plane fitter itself passed analytic and accepted-patch checks.
+Unlocked next node: E21-v3 versioned radius/sampling revision. E22 remained locked.
+Invalidated downstream evidence: Parking remains unvalidated. The result cannot move existing thresholds or be described as a plane-fitting numerical failure.
+Descriptive observations: Insufficient same-semantic support dominated, and no far anchor qualified.
+Notes: A new protocol had to determine how range strata, neighborhood radius, and point-count support correspond to observed density.
+
+## E21-v3 | Adaptive-Radius Random-Ground-Anchor Qualification
+
+Experiment ID: E21-v3
+Design-freeze commit/hash: Not recorded.
+Execution-freeze commit/hash: Preregistered commit `1b8ab10`.
+Date: 2026-08-27
+Git commit / clean state: Not recorded.
+Data identities: train/206 center frames 2–446, all real road/sidewalk/other-ground candidates in sensor range 0–120 m; direct frozen identity-hash samples of 256/128/128 without forced range quotas.
+Input artifact hashes: Not recorded.
+Random namespaces / seeds: Frozen semantic SplitMix64 identity hashes; two complete 24-process runs.
+Command and resolved config: Make the last test of whether a randomly sampled ground return can directly qualify. Remove forced near/middle/far quotas. For anchor sensor range $d$, set center radius $R(d)=\operatorname{clip}(d/20,1,3)$ m and three radii $0.75R,R,1.25R$. Within 20 m this is 0.75/1/1.25 m; with range it expands to maximum 3 m. Retain 32 same-semantic points per scale, 10% trim, covariance/SVD, median $\le0.03$, $Q_{0.95}\le0.08$, normal $\le5^\circ$, height $\le0.08$, analytic regressions, exact reproduction, and the same overall/category thresholds. Report but do not gate bins 0–10, 10–20, 20–30, 30–40, 40–50, 50–120 m and radius distribution. PASS closes E21 and unlocks E22. FAIL permanently ends random-anchor qualification and permits only a deterministic qualified support-patch pool; do not tune the formula again.
+Resource and disk preflight: Two 24-process runs; no disk preflight recorded.
+Artifacts and hashes: `runs/ajae/e21_v3_support_plane.npz`, 3,423,768 bytes, SHA-256 `a9d80f9866c8df0f23d4866cbdb4c1375ac8dfab4c149001607dfcaae0838620`; array hash `b24e15cc4f19b4937411f4c46c47ff6543d51e78e887b65d10533ef45d5b9b23`; summary hash `3f44437cc1b7fd2a9bcda81a346a87338bf97fffdf6aea89ecbc46fc075c9009`.
+Primary construct: Determine whether adaptive physical neighborhoods make random ground returns qualify at both overall and semantic coverage requirements.
+Primary result: FAIL despite overall PASS. Both runs qualified 415/512, 81.0546875%, meeting 410/512 and 80%. But road/sidewalk/other-ground were 249/256, 86/128, 80/128; only road met 192/96/96. Descriptive range qualification was 287/309, 96/115, 27/69, 5/17, 0/2 for 0–10 through 40–50; no 50–120 anchor was sampled. Radius min/median 1.0 m, $Q_{0.95}=1.4531$, $Q_{0.99}=1.7425$, max 2.4336. Insufficient support fell from 252 to 34; remaining rejection reasons were 53 $Q_{0.95}$ residual, 5 median, 5 normal, 34 support. Every 415 accepted plane and all analytic regressions passed. Both runs were elementwise identical.
+PASS / FAIL / OUTCOME: FAIL.
+Failure classification: `qualification_specification_defect` of using arbitrary ground returns as placement anchors with required semantic coverage; overall success cannot override semantic failure.
+Unlocked next node: Only E21-v4 qualified support-patch-pool design after approval. E22 remained locked.
+Invalidated downstream evidence: The random-anchor route ended permanently; the radius formula cannot be tuned further.
+Descriptive observations: Adaptive radius corrected most density mismatch, but sidewalk and other-ground category coverage remained below threshold.
+Notes: The next design had to qualify pool scale, categories, frames, spatial dispersion, and range rather than an arbitrary-anchor success rate.
+
+## E21-v4 | Qualified Support-Patch Pool
+
+Experiment ID: E21-v4
+Design-freeze commit/hash: Not recorded.
+Execution-freeze commit/hash: Preregistered commit `4db5fe7`.
+Date: 2026-08-27
+Git commit / clean state: Not recorded.
+Data identities: Every real road=40, sidewalk=48, and other-ground=49 return in train/206 center frames 2–446 and sensor range 0–120 m, thinned in world XY to one representative per center-frame × raw-semantic × 0.5 m × 0.5 m cell by minimum frozen semantic SplitMix64 `(frame,slot)` hash and slot tie-break. All representatives were evaluated.
+Input artifact hashes: Not recorded.
+Random namespaces / seeds: Frozen semantic identity hashes; two complete 24-process runs.
+Command and resolved config: Do not requalify arbitrary-anchor success or the plane estimator. Apply E21-v3 unchanged: $R(d)=\operatorname{clip}(d/20,1,3)$ m, radii $0.75R/R/1.25R$, at least 32 same-semantic returns each, 10% residual trim, center median $\le0.03$ m, $Q_{0.95}\le0.08$ m, normal difference $\le5^\circ$, anchor-height difference $\le0.08$ m. Only representatives passing all enter $\mathcal P_{support}$. PASS simultaneously requires pool total $\ge2,048$; road $\ge1,024$, sidewalk $\ge256$, other-ground $\ge128$; at least 356 center frames; at least 512 distinct world 2 m × 2 m cells; range 0–20 m $\ge1,024$, 20–30 $\ge128$, 30–50 $\ge32$; 50–120 descriptive. Require exact candidate/pool/plane reproduction.
+Resource and disk preflight: Two 24-process runs over all 445 allowed frames; no disk preflight recorded.
+Artifacts and hashes: `runs/ajae/e21_v4_support_pool.npz`, 208,686,666 bytes, SHA-256 `0e6e7299157f5e9ced0716f6dd14881c66ba1bca0cc9c372550e56f426ea844d`; array hash `c0154a8db9404de397375aca3ec8d257cccd2e8f0ac92c0447a8b303acb81774`; summary hash `b0ff651189649f212f3551c586d20d08023a4a15ec10704e260c774087846ac2`.
+Primary construct: Determine whether train/206 contains a qualified support-patch pool with enough scale, semantic coverage, frames, spatial dispersion, and range for deterministic world-generator sampling.
+Primary result: PASS. From 939,667 0.5 m-cell representatives, 772,656 qualified, rate 82.2266%. Counts were road 685,074, sidewalk 81,878, other-ground 5,704. All 445 center frames were covered and the pool occupied 1,161 world 2 m cells. Range counts were 0–10 206,033, 10–20 400,918, 20–30 142,508, 30–50 23,040, 50–120 157. Thus 0–20 total 606,951, and all frozen limits were far exceeded. Every pool entry satisfied point, residual, and multiscale stability conditions. Both runs were elementwise identical.
+PASS / FAIL / OUTCOME: PASS.
+Failure classification: Not applicable. E21-v1/v2/v3 remain permanent historical FAIL results.
+Unlocked next node: E22; E21 closed.
+Invalidated downstream evidence: Future placements may sample only through this qualified-pool interface, never arbitrary ground returns. The PASS does not prove grounded objects or sufficient far-range visible returns.
+Descriptive observations: The qualified pool is large but has only 157 entries beyond 50 m; that range was explicitly descriptive.
+Notes: E22 owns suspension and burial; later rendering/matching owns far-return evidence.
+
+## E22-v1 | Suspension and Burial Check
+
+Experiment ID: E22-v1
+Design-freeze commit/hash: Not recorded.
+Execution-freeze commit/hash: Preregistered commit `62db28f`.
+Date: 2026-08-27
+Git commit / clean state: Not recorded.
+Data identities: 1,024 placements. Supports are qualified E21-v4 entries from artifact SHA-256 `0e6e7299157f5e9ced0716f6dd14881c66ba1bca0cc9c372550e56f426ea844d`, quotas road/sidewalk/other-ground 512/256/256 by smallest frozen E22 semantic SplitMix64 `(frame,slot)` hashes. Shapes are schema-7 default seeds 0–1,023 paired in order with sorted supports.
+Input artifact hashes: E21-v4 support pool SHA-256 `0e6e7299157f5e9ced0716f6dd14881c66ba1bca0cc9c372550e56f426ea844d`.
+Random namespaces / seeds: Shape seeds 0–1,023; yaw from `SeedSequence([shape_seed,2201])` in $[-\pi,\pi)$; 16,384 deterministic Fibonacci surface directions; two full 24-process runs.
+Command and resolved config: Map local +z to support normal by authoritative ground rotation. Contact is center plane at anchor XY. Compute standard continuous minimum with `ShapeSpec.minimum_z_m(xy_resolution=33,z_steps=129)` and translate by $t=contact-h_{min}^{standard}n_g$; do not use mesh vertices. Independently recompute with `minimum_z_m(xy_resolution=65,z_steps=257)`, transform strict lowest point to world, and require $|d_{min}=n_g^Tx+b_g|\le0.01$ m. From outside $1.05r_{bound}$, intersect 16,384 rays toward local origin using production default 96-step path. Require fraction deeper than plane by 0.02 m $\le0.02$ and at least eight surface points within $|n_g^Tx+b_g|\le0.02$ m. Any generation/nonfinite/plane/yaw/transform/minimum/intersection/post-placement geometry error is a hard error, zero allowed. At least 1,014/1,024 must meet all three. Report semantic/count/size/aspect/family/range strata without new balance gates. Reproduce every identity, transform, metric, decision, and hash. E22 tested only each object against its own support plane; observed non-ground structures belonged to E23 and other inserted entities to E24. Under the frozen PASS branch, no E22-V1 would be added and E23 would unlock directly.
+Resource and disk preflight: Two full 24-process runs; no disk preflight recorded.
+Artifacts and hashes: `runs/ajae/e22_ground_contact.npz`, 330,855 bytes, SHA-256 `3a93c68e9e2bdf983f9696326cbac950fdb5be76939959dde8dff63ff9d1d6e1`; array hash `4a9d5efaf348cd4e9eca34605715aed2717cd96b4b9068faedefc669a983fb3d`; summary hash `1d5af8e02ee364c706914946bf85df6fa9238407bdcef65b607136f47975b1a4`.
+Primary construct: Determine whether continuous placement yields reasonable ground contact under 1 cm lowest-point, 2 cm/2% burial, and an additional discrete contact-band proxy, with 99% qualification.
+Primary result: FAIL. Only 942/1,024 met all three, 91.9921875%, below 1,014. Hard errors were zero. Among 82 failures, 79 failed only the at-least-eight contact-band points, two only $|d_{min}|$, one both. Thus 80 had fewer than eight points, three exceeded 1 cm, none exceeded burial fraction. $|d_{min}|$ median/$Q_{0.95}$/$Q_{0.99}$/maximum was $2.20\times10^{-8}$ m/$8.41\times10^{-5}$ m/0.001726 m/0.022103 m. Burial median/$Q_{0.95}$/$Q_{0.99}$ was zero and maximum $6.10\times10^{-5}$. Contact count minimum/median/$Q_{0.95}$/maximum was 0/142/2,584.7/7,399. Maximum surface implicit residual $2.25\times10^{-7}$. Semantic failures were 45/512, 18/256, 19/256. By family, flat/elongated/general/blocky insufficient-contact counts were 27/214, 28/192, 16/414, 9/204; descriptive only. Both runs were elementwise identical.
+PASS / FAIL / OUTCOME: FAIL.
+Failure classification: `qualification_specification_defect`; the at-least-eight discrete contact-band proxy did not directly define suspension or large-area burial and dominated failure.
+Unlocked next node: Approved E22-v2 revision only. E23 remained locked.
+Invalidated downstream evidence: The FAIL remains permanent. Data show no large-area burial and do not support calling all 82 cases systematic suspension/burial. Contact threshold, sampling, and minimum solver remained unchanged until revision.
+Descriptive observations: Fixed surface-direction sampling undersampled contact bands especially for flat and elongated families.
+Notes: Scientific conclusion is limited to failure of the frozen v1 placement-and-contact audit at 99%.
+
+## E22-v2 | Continuous Grounding and Burial Qualification
+
+Experiment ID: E22-v2
+Design-freeze commit/hash: Not recorded.
+Execution-freeze commit/hash: Preregistered commit `55b2bc4`.
+Date: 2026-08-27
+Git commit / clean state: Not recorded.
+Data identities: 1,024 new independent placements. Supports use E21-v4 quotas 512/256/256 but new SplitMix64 namespaces `0xE2220000+semantic_index`. Shapes use nonoverlapping schema-7 seeds 1,000,000–1,001,023.
+Input artifact hashes: Same E21-v4 pool SHA-256 `0e6e7299157f5e9ced0716f6dd14881c66ba1bca0cc9c372550e56f426ea844d`.
+Random namespaces / seeds: New support namespaces above; yaw `SeedSequence([shape_seed,2202])`; same 16,384 Fibonacci surface directions; two full 24-process runs.
+Command and resolved config: Delete only the proxy requirement of eight points in ±2 cm. Retain placement, `minimum_z_m(33,129)` translation, independent `minimum_z_m(65,257)`, $|d_{min}|\le0.01$ m, 16,384 production intersections, and burial fraction $\le0.02$ below 0.02 m. Continue to compute identical contact-band count and report total minimum/median/$Q_{0.05}$/$Q_{0.95}$ and family/size/count strata, but never adjudicate on it; do not replace it by 4/2 points, change band width, or increase sampling. Hard errors remain zero. A placement passes iff the two physical conditions pass; require 1,014/1,024 and exact reproduction.
+Resource and disk preflight: Two complete 24-process runs; no disk preflight recorded.
+Artifacts and hashes: `runs/ajae/e22_v2_ground_contact.npz`, 337,377 bytes, SHA-256 `67eb1f5f9d075e7a9b624d3b662185d9b1536196c32801c9396689b447d1ac8f`; array hash `2c77cda0a0b46eb41220da85743bdbe7f7a0f1b9ee646d48481e71733adf0180`; summary hash `5d33561ceb993b5d6d031d7b01a6aaab0274d603f10dff5ab41a921b27b89bb3`.
+Primary construct: Qualify continuous ground contact and conspicuous burial using only the two direct physical conditions, on a sample independent of v1.
+Primary result: PASS. Both runs had 1,021/1,024 passing, 99.70703125%, above 1,014. Hard errors were zero. The three failures only exceeded $|d_{min}|$: seeds 1,000,594, 1,000,728, 1,000,821 with -0.013832, -0.023928, +0.030261 m. No placement failed burial. $|d_{min}|$ median/$Q_{0.95}$/$Q_{0.99}$/maximum was $2.08\times10^{-8}$ m/$5.23\times10^{-5}$ m/0.001508 m/0.030261 m. Burial median/$Q_{0.95}$/$Q_{0.99}$ was zero, maximum $6.10\times10^{-5}$. Descriptive contact-count minimum/$Q_{0.05}$/median/$Q_{0.95}$/maximum was 0/4/155.5/2,797.25/7,137; 85 would fail the retired eight-point rule. Maximum surface residual $2.22\times10^{-7}$. Both runs were elementwise identical.
+PASS / FAIL / OUTCOME: PASS.
+Failure classification: Not applicable. E22-v1 remains a permanent proxy-gate FAIL.
+Unlocked next node: E23; E22 closed.
+Invalidated downstream evidence: None. Contact counts cannot rewrite E22-v1 or enter v2 adjudication.
+Descriptive observations: Scientific conclusion: **After continuous-minimum placement on E21-v4 qualified planes, schema-7 objects attain 99% qualification under the frozen 1 cm continuous-contact and 2 cm/2% conspicuous-burial audit.**
+Notes: This does not establish clearance from observed walls/vehicles or other inserted entities; E23 and E24 own those questions.
+
+## Phase 2C Legacy E23–E26 Unified Placement/World-Builder Freeze
+
+Experiment ID: Phase 2C legacy E23–E26 interface freeze
+Design-freeze commit/hash: Not recorded.
+Execution-freeze commit/hash: Not applicable; implementation prerequisite for the original E23–E26 only.
+Date: Not recorded.
+Git commit / clean state: Not recorded.
+Data identities: Original E23–E26 production placement/world-builder path.
+Input artifact hashes: E21-v4 and E22-v2 qualified inputs.
+Random namespaces / seeds: Defined in each original node.
+Command and resolved config: Before implementation, unify placement so train/206 uses only E21-v4 `qualified=true` support entries and E22-v2 continuous grounding. AABB/sphere is broad phase only, never E23/E24 final collision truth. Delete or redirect old formal `place_object` calls using arbitrary ground search and sphere-final collision. `WorldSpec` stores final immutable entities; `WorldGenerationReport` stores support identity, all streams, proposal index, and rejection reason. World-format upgrade leaves old schema-4 `dev.json` invalid; E57 must regenerate from authoritative source and cannot migrate objects.
+Resource and disk preflight: Not applicable.
+Artifacts and hashes: Interface freeze only; no independent scientific artifact.
+Primary construct: Establish one authoritative production path before sequential E23 → E24 → E25 → E26 qualification.
+Primary result: The interface prerequisite was frozen. It is not a separate scientific PASS.
+PASS / FAIL / OUTCOME: OUTCOME — legacy execution interface frozen.
+Failure classification: Not applicable.
+Unlocked next node: Original E23.
+Invalidated downstream evidence: This one-time freeze does not override later E24-v2, E25-v2, E25-v3, E25-new, or E26-v2, each versioned from new evidence and principal-investigator decisions.
+Descriptive observations: None.
+Notes: Original nodes executed sequentially; later revisions supersede only their stated scope.
+
+## E23 | Qualification of Rejection for Collision with Observed Normal Geometry
+
+Experiment ID: E23
+Design-freeze commit/hash: Not recorded.
+Execution-freeze commit/hash: Authoritative placement commit `3c59748`.
+Date: Not recorded.
+Git commit / clean state: Not recorded.
+Data identities: 1,024 placements. Qualified E21-v4 supports, road/sidewalk/other-ground quotas 512/256/256 under identity prefix `E23-support-v1`; schema-7 shape seeds 2,000,000–2,001,023. Obstacles are all 44,774,648 real non-ground returns from train/206 frames 0–448 in world coordinates, excluding raw semantic 0 and ground 40/44/48/49/60.
+Input artifact hashes: E21-v4 support pool SHA-256 `0e6e7299157f5e9ced0716f6dd14881c66ba1bca0cc9c372550e56f426ea844d`.
+Random namespaces / seeds: Yaw `SeedSequence([shape_seed,2301])`; frozen support stream; at most 128 placements per object; two complete 24-process runs.
+Command and resolved config: In tight continuous AABB expanded 0.05 m, transform obstacle points to object-local coordinates and evaluate continuous `signed_distance`. Reject immediately as `observed_normal_deep_penetration` if any $F_G(x)<-0.05$ m; one point is enough because a false positive only resamples. Fixtures for sphere, ellipsoid, schema-7 flat and elongated use surface offsets +0.10,+0.02,-0.02,-0.06,-0.15 m. SDF/class error zero; -0.06/-0.15 reject, others not. Each shape follows frozen support proposals, E22-v2 grounding, then collision; rejection changes support only, never shape. Require fixtures zero error, 1,024/1,024 within 128, zero final deep point, zero hard error, exact support/shape/yaw/proposal/obstacle/minimum-SDF/decision/hash reproduction. Report proposals/rejections by strata without an additional efficiency gate.
+Resource and disk preflight: Two 24-process runs took 167.945488 s and 171.687548 s.
+Artifacts and hashes: `runs/ajae/e23_observed_collision.npz`, 2,145,213 bytes, SHA-256 `bddf2b3dc8dddee3eded3f4129413c2576c8a6c03e8ba6ed74773fe9dd8a094a`; scientific-array hash `2f4f74fa6db0964b92e7728941e90e1288b6a85d56db56990eb33f3908349320`.
+Primary construct: Test whether authoritative placement rejects candidates with clear deeper-than-5-cm penetration into actually observed non-ground normal returns and finds alternatives deterministically.
+Primary result: PASS. All 1,024 shapes placed within 128; fixture, generation, transform, hard, and final penetration errors were zero. Quotas stayed 512/256/256. Proposal count minimum/median/mean/$Q_{0.95}$/maximum was 1/1/1.6845703125/4/37. All 701 rejected proposals were deep penetration. Road/sidewalk/other-ground mean counts were 1.199219/1.554688/2.785156 and retry fractions 15.625%/32.421875%/44.53125%, descriptive only. Shape identities were unique and exact range; no accepted minimum obstacle SDF was below -0.05 m. Both runs were elementwise identical.
+PASS / FAIL / OUTCOME: PASS.
+Failure classification: Not applicable.
+Unlocked next node: E24; E23 closed.
+Invalidated downstream evidence: None. It does not establish absence of collision among inserted entities.
+Descriptive observations: Scientific conclusion: **The frozen support-pool placement interface rejects candidates penetrating observed train/206 non-ground returns by more than 5 cm and finds an acceptable placement for every frozen schema-7 object within 128 proposals.**
+Notes: An accepted collision would be `implementation_defect`; widespread exhaustion would be `scientific_failure`. The threshold could not be relaxed or rescued by hidden-surface reconstruction.
+
+## E24-v1 | Qualification of Obvious Pair-Penetration Rejection
+
+Experiment ID: E24-v1
+Design-freeze commit/hash: Not recorded.
+Execution-freeze commit/hash: Accounting-fix commit `8640f29`.
+Date: Not recorded.
+Git commit / clean state: Not recorded.
+Data identities: 512 world seeds 2,100,000–2,100,511, each 2–6 anomaly proxies only. Count stream `default_rng(SeedSequence([world_seed,2401])).integers(2,7)`. Entity shape seed `3000000+(world_seed-2100000)*6+entity_index`; yaw `SeedSequence([shape_seed,2402])`; material seed `shape_seed+2403`; support namespace `E24-support-v1` and stream `(world_seed-2100000)*6+entity_index`.
+Input artifact hashes: Not recorded.
+Random namespaces / seeds: Above frozen streams; 128 support proposals per entity; two 24-process runs.
+Command and resolved config: Pair detector declares broad-phase safe if tight AABBs expanded 0.05 m do not intersect. Otherwise inspect both directions using schema-7 primitive centers, shared witnesses, size-certificate inside witnesses, 8,192 deterministic continuous surface points, all actual inside points among 8,192 Sobol AABB probes, and for normal-control hulls all vertices, triangle centroids, and equal-count deterministic surface points. Any real point with other-object $F<-0.05$ m is `obvious_pair_penetration` and rejects the later object. It excludes obvious, not arbitrary infinitesimal, overlap. Fixtures include sphere/sphere, ellipsoid/ellipsoid, schema7/schema7, hull/schema7 at separated, tangent, 2 cm shallow, 6 cm and 15 cm deep states; separated/tangent/2 cm not rejected, 6/15 cm must evidence penetration. Sequentially ground via E22, reject observed geometry via E23, then compare pair; resample only current entity, never prior ones or geometry. The formal command and artifact path were frozen in the E24 fields of `protocol.json` before both 24-process runs. Require fixture zero, 512/512 worlds, final E22/E23, zero final pair penetration, zero nonfinite/identity/accounting error, exact reproduction.
+Resource and disk preflight: Two 24-process runs took 640.950329 s and 643.296815 s.
+Artifacts and hashes: `runs/ajae/e24_pair_collision.npz`, 1,524,959 bytes, SHA-256 `53c515346e65d226407fe866871ac4bb91a17072b1a48157b9479690447495ce`; scientific-array hash `54fee2b11c47e1eb1a1a0b2dd0f4bbb3974ddaff0604195eb208877956c79146`.
+Primary construct: Determine whether sequential multi-entity generation avoids obvious volumetric interpenetration while retaining E22/E23 legality.
+Primary result: FAIL. Fixtures, generation/transform/index/accounting hard errors were zero. Only 504/512 worlds completed. Exhausted seeds were 2,100,078, 2,100,143, 2,100,144, 2,100,306, 2,100,372, 2,100,373, 2,100,421, 2,100,467. Disabling pair rejection reproduced the same failures. Their shapes 3,000,471, 3,000,861, 3,000,864, 3,001,836, 3,002,233, 3,002,240, 3,002,528, 3,002,803 had E22 strict-versus-standard minimum differences 0.026810/0.025941/0.010355/0.013374/0.042941/0.031238/0.025357/0.028660 m, all above 0.01 and independent of support. All 504 completed worlds had zero E22/E23 errors and zero final pair penetration; seven candidate proposals were rejected for pair penetration. Completed-world total proposal minimum/median/mean/$Q_{0.95}$/maximum was 2/5/4.966270/9/16, descriptive only. Both runs were elementwise identical.
+PASS / FAIL / OUTCOME: FAIL.
+Failure classification: `qualification_specification_defect`; the original fixed-shape sample silently upgraded E22-v2's distribution-level 99% qualification into a per-fixed-shape invariant without a shape rejection/resampling contract. The pair detector did not fail.
+Unlocked next node: E24-v2. E25 remained locked.
+Invalidated downstream evidence: The 504-world subset cannot override eight incomplete worlds. Do not repair eight seeds, relax E22's 1 cm, increase support proposals, or attribute the result to pair collision.
+Descriptive observations: Original collision accounting was corrected before this run so placement exhaustion was not mislabeled as a hard error.
+Notes: The direct blocker was eight intrinsically E22-ineligible shapes, not final pair intersection.
+
+## E24-v2 | Deterministic Per-Entity Shape-Proposal Streams
+
+Experiment ID: E24-v2
+Design-freeze commit/hash: Frozen commit `44ee77b`.
+Execution-freeze commit/hash: Implementation commit `e98e5d2`.
+Date: Not recorded.
+Git commit / clean state: Not recorded.
+Data identities: Same 512 world identities, entity-count streams, 2–6 anomaly proxies, supports, E22-v2, E23, pair detector, and 5 cm rule as v1; 2,054 accepted entities total.
+Input artifact hashes: Not recorded.
+Random namespaces / seeds: For world index $w=world\_seed-2{,}100{,}000$, entity $e$, slot $s=6w+e$, shape proposal $q\in\{0,\ldots,63\}$ uses $shape\_seed(q)=3{,}000{,}000+s+3{,}072q$. $q=0$ preserves original identity; stride 3,072 is 512×6. Yaw/material remain `SeedSequence([shape_seed,2402])` and `shape_seed+2403`; unchanged `E24-support-v1`; 128 placements per eligible shape; two 24-process runs.
+Command and resolved config: Before any support proposal, independently test shape grounding eligibility exactly as authoritative placement: `minimum_z_m(33,129)` versus `minimum_z_m(65,257)` difference $\le0.01$ m and burial fraction among the same 16,384 Fibonacci surface points below standard minimum by more than 0.02 m $\le0.02$. Record ineligible shape as `grounding_rejection`, consume no support, and continue the same shape stream. Fix the first eligible shape, then run unchanged support placements through E22, E23, and pair detector; E23/pair rejection changes support only. Fail on 64-shape or 128-placement exhaustion. Require 20 fixtures zero; all worlds; final E22/E23/pair zero; exact identities, histories, JSON, reproduction; hard error zero. Report efficiency without added gates.
+Resource and disk preflight: Two 24-process runs took 637.553061 s and 639.125174 s.
+Artifacts and hashes: `runs/ajae/e24_v2_pair_collision.npz`, 1,553,237 bytes, SHA-256 `bc339b980a6d644212c761053e9e32e23ad96135ceb5651846691328954b058d`; scientific-array hash `c236e63f31605ae45b31f600891a721796b163d18376eb4c4f637dbf82df1c25`.
+Primary construct: Test complete multi-entity sampling after making upstream distribution-level eligibility explicit through deterministic shape rejection/resampling, without changing collision or grounding semantics.
+Primary result: PASS. All 512 worlds and 2,054 proxies completed. Fixture, shape exhaustion, placement exhaustion, hard, final E22/E23, and final pair errors were zero. Shape stream consumed 2,062 proposals. The eight historical seeds became `grounding_rejection` before support and their second proposals passed; all other 2,046 entities passed first. Shape-count min/median/mean/$Q_{0.95}$/max was 1/1/1.003895/1/2; grounding rejection 8/2,062=0.387973%, without exceptions. Entities consumed 2,549 support proposals; per-entity min/median/mean/$Q_{0.95}$/max 1/1/1.240993/2/7. Rejections were 487 observed-normal deep penetration and 8 pair penetration; pair rate 0.313849% of support proposals. All world seeds 2,100,000–2,100,511, canonical JSONs, entity/report lengths, and histories independently matched. Both runs were elementwise identical.
+PASS / FAIL / OUTCOME: PASS.
+Failure classification: Not applicable. E24-v1 remains permanent and is not a pair-detector failure.
+Unlocked next node: E25 under its already frozen design; no E25 redesign at this transition.
+Invalidated downstream evidence: None. A v2 FAIL would have established inadequate legal full-world sampling support under 64/128 caps.
+Descriptive observations: Scientific conclusion: **With unchanged E22, E23, and pair detector, deterministic per-entity shape rejection/resampling constructs all frozen worlds within fixed shape/placement caps with zero final violation.**
+Notes: This formalizes that a downstream generator requiring per-sample legality must explicitly resample when its upstream qualification is distribution-level.
+
+## Historical E25 | Template, Support-Semantic, and Pose Qualification for the Old Random-Placement Normal-Control Distribution
+
+Experiment ID: Historical E25
+Design-freeze commit/hash: Original design-freeze commit not recorded. Canonical template-library hash `de5dfd765ac7d4fe4bb4644c40ecafdd80cdc31a3d0b6fc4fccd8e84a9fd906b`.
+Execution-freeze commit/hash: Repaired frozen implementation commit `963d8cb8bac037de6fd6c6a081ed7152535ab02e`.
+Date: Not recorded.
+Git commit / clean state: Commit recorded above; clean state not recorded.
+Data identities: Deterministically extracted templates from every train/206 instance-ID observation in the allowed classes. A template required at least 32 real returns and a finite nondegenerate 3D convex hull. Retain at most 64 per class by identity hash. Classes with at least four templates were `active_class`; smaller classes were `inactive_unobservable_class` and received no fabricated templates. Formal preflight over all 449 train/206 frames produced 256 templates: car=10, truck=18, other-vehicle=20, and person=30 each had 64 and were active; bicycle=11, motorcycle=15, bicyclist=31, and motorcyclist=32 were `inactive_unobservable_class`. Both broad groups were active and all 256 template identities were unique. Formal sample: 1,024 control placements, rotating across active broad groups and using hashed identities within class; templates could repeat while support, pose, and material streams remained independent. The mixed fixture used accepted control index 0 plus the first E22-eligible schema-7 proxy from shape seed 5,000,000 with stride 3,072.
+Input artifact hashes: Canonical template-library hash `de5dfd765ac7d4fe4bb4644c40ecafdd80cdc31a3d0b6fc4fccd8e84a9fd906b`.
+Random namespaces / seeds: Control index $i\in[0,1023]$ used control seed $2{,}500{,}000+i$. Vehicle-like and person/rider-like broad groups alternated by parity of $i$; active semantics rotated in ascending order within group and templates cycled in identity-hash order. Axis scales used `SeedSequence([control_seed,2501])` and $U[0.9,1.1]$ independently; pose perturbation used `SeedSequence([control_seed,2502])`, with $U[-15^\circ,15^\circ]$ for car/truck/other-vehicle and $U[-\pi,\pi)$ for person; material seed was `control_seed+2503`. Support namespace was `E25-support-v1` with stream equal to control index. The mixed proxy used support stream `E25-mixed-fixture-v1`.
+Command and resolved config: Scientific question: whether normal-controls came from real train/206 normal instances and were placed only at basically semantically allowed locations already passing E22–E24. Active-class preflight required at least 32 templates in total and at least one active class. An entirely unobservable broad group narrowed only the E25 class claim; fewer than 32 total templates would be `sample_or_observability_defect` without external CAD. Support semantics: vehicle-like classes 10 car, 11 bicycle, 15 motorcycle, 18 truck, and 20 other-vehicle could use only qualified road=40; person/rider-like classes 30 person, 31 bicyclist, and 32 motorcyclist could use qualified road=40 or sidewalk=48; other-ground=49 was excluded; parking=44 was unobservable in train/206 and outside the claim. A deterministic local-XY PCA supplied the horizontal template axis: the first nonzero principal component of the largest eigenvector was made positive, and the axis was pre-rotated to local +x. Vehicle, bicycle, motorcycle, and rider axes aligned to the support source frame's ego-trajectory world tangent plus the frozen perturbation. Vehicle, truck, and other-vehicle used $U[-15^\circ,15^\circ]$; bicycle, motorcycle, and rider used $U[-30^\circ,30^\circ]$; person used $U[-\pi,\pi)$. For internal frames the tangent was the centered difference of neighboring LiDAR world positions, with one-sided differences at endpoints, projected and normalized in world XY; degeneracy fell back to the frame pose's world +x projection. Near-isotropic PCA still used the trajectory tangent. Local +z aligned to the support normal. A support change changed only trajectory tangent and did not resample scale, template, material, or perturbation. Each object had at most 128 proposals and ran E22 then E23; multi-entity fixtures additionally ran E24. The mixed fixture used the control as the existing entity and required final E22/E23 plus the E24 pair detector. Formal command, implementation identity, and artifact path were written to `protocol.json` before execution. PASS required active-class preflight; zero class–support, identity, scale, pose, transform, E22, E23, and mixed-fixture errors; 1,024/1,024 placements within 128; the mixed control/proxy fixture passing E24; and two elementwise-identical complete runs. Human judgment that a placement “looked like a real traffic scene” was not required.
+Resource and disk preflight: Final formal command ran twice with 24 processes, taking 97.082646 s and 100.313903 s. No disk preflight was recorded.
+Artifacts and hashes: Preliminary invalid artifact `runs/ajae/e25_normal_control.npz`, 1,994,700 bytes, SHA-256 `c254987a0bc05865048e412201065bf88759d3ef3a7bae93c14f8aa4387f6898`, was deleted before rerunning the same command. Final `runs/ajae/e25_normal_control.npz`, 2,002,631 bytes, SHA-256 `b2d98a01b68b030fdd3bba348a933ef02733deb0bbebbaf845ab2b5b17b90bee`; scientific-array hash `a4437aeadd3c444145c84c4fa4cc71b801a29ea8d9e7454789f68114613aa7b5`; mixed control/proxy fixture hash `f260151c44d8891902bdb6b7b464aa96571897b0311e520e7c5c49f7e1422da9`.
+Primary construct: Legality and deterministic constructibility of normal-controls under the old random-placement distribution, using real observable train/206 normal templates, frozen support semantics, scale, trajectory-oriented pose, and the E22–E24 placement path.
+Primary result: PASS for the old distribution. The first two elementwise-identical runs completed only 1,018/1,024 controls; six fixed controls exhausted all 128 proposals with `PlacementError: deterministic surface ray missed the inserted geometry`: indices 28, 174, 412, 558, 796, 942 and seeds 2,500,028, 2,500,174, 2,500,412, 2,500,558, 2,500,796, 2,500,942. Across the 1,018 completed controls, class–support, scale, pose, final E22/E23, and mixed-fixture errors were zero. This was an `implementation_defect`, not an E25 scientific ruling: deterministic surface sampling had incorrectly treated local origin as an interior point for every shape, while these six real-instance hulls excluded it, so some rays from an exterior sphere toward origin missed the hull. The repair used the convex-hull vertex mean as the strictly interior convergence point for `NormalTemplateShape` only and set the exterior sphere by its farthest-vertex distance; the schema-7 path was unchanged. A regression with local origin outside the hull was added and all 45 tests passed. After repair, all 1,024/1,024 controls completed within 128; exhaustion, hard, class–support, scale, pose, final E22/E23, and mixed-fixture errors were zero, and the two final runs were elementwise identical. Independent recomputation found seeds exactly 2,500,000–2,501,023 without duplicates; accepted counts person 512, car 171, truck 171, other-vehicle 170; every active class used all 64 unique templates, 256 total. Supports were road 972 and sidewalk 52; every vehicle-like object used road and every person used road or sidewalk. Actual scale range was 0.90003458–1.09972148; maximum absolute vehicle-like perturbation was 14.988022°, and person perturbations ranged from -179.184416° to 179.577023°. Per-object support proposals minimum/median/mean/$Q_{0.95}$/maximum were 1/1/1.315430/3/8, total 1,347.
+PASS / FAIL / OUTCOME: PASS — historical evidence restricted to the old normal-control distribution.
+Failure classification: Final result: not applicable. Preliminary incomplete run: `implementation_defect`, repaired without changing schema-7 geometry or the scientific protocol.
+Unlocked next node: Historical E26; the result originally unlocked the old-distribution world-builder qualification.
+Invalidated downstream evidence: This PASS cannot replace E25-new and does not qualify the current coverage-oriented normal-control distribution. It makes no placement claim for the four inactive classes and cannot replace E26's complete immutable-world and cache-order checks.
+Descriptive observations: Under the frozen old distribution, the actually observable car, truck, other-vehicle, and person convex-hull templates from train/206 could deterministically construct 1,024 legal normal-controls through the same E22–E24 authoritative placement path.
+Notes: This record is permanently historical. Its applicability boundary is the old random-placement control distribution only. If an entire broad group was unobservable, E45 and E48 retained responsibility for testing whether the actually observable template set was sufficient to remove source confounding and avoid near-saturation of the proxy task.
+
+## E25-v2 | Normal-Control Placement Guided by Real-Normal Observations from train/206
+
+Experiment ID: E25-v2
+Design-freeze commit/hash: Commit `3acd7b0`.
+Execution-freeze commit/hash: Commit `3acd7b0`.
+Date: The one-run decision was made 2026-08-28; formal run date otherwise not recorded.
+Git commit / clean state: Commit recorded above; clean state not recorded.
+Data identities: Historical E25 PASS and the formal E45A and E45A-v2 FAILs remain permanent. E25-v2 changed only normal-control support-location selection. It retained all 256 real train/206 templates, production template identity streams, independent axis scales $U[0.9,1.1]$, class semantics, trajectory-aligned pose, E22, E23, E24, renderer, return probability, intensity, and schema-7 proxy. train/201 remained reserved for independent downstream checking and was forbidden from target-bank construction and acceptance. A train/206 target unit was a real instance–frame observation with semantic car=10, truck=18, other-vehicle=20, or person=30; official range 2.5–50 m; at least 16 real returns; an opportunity to form a finite 3D hull; and binding to the nearest E21-v4 qualified support of an allowed semantic. Full preflight yielded 4,827 units over 448 frames and 49 real instances, with distance-bin counts [866,2115,1149,580,117] and occlusion-bin counts [1182,3389,256] for $[0,0.25)$, $[0.25,0.75)$, and $[0.75,1]$. The target bank was extracted once from raw train/206. Formal control sample: 256 fixtures, exactly one occurrence of every frozen template in semantic/library order, control seed $2{,}500{,}000+$ fixture index.
+Input artifact hashes: E21-v4 qualified support pool was the authoritative support source; its hash was not restated in this section. Sensor calibration path `runs/ajae/calibration.pt`; input hash not restated. No train/201 or E46 output was an input.
+Random namespaces / seeds: Control seeds 2,500,000–2,500,255. For each fixture, template, scale, pose perturbation, and material were fixed before target proposals. Targets came only from the same raw semantic with a nonempty legal support stream. The template source instance came first, then targets sorted by absolute frame distance from the template source and frozen unit hash, with at most 128 targets. Within a target, support rows came from target frame ±2, exact support semantic, exact distance bin, and exact 45° azimuth sector; order was original-frame 8-neighbor volumetric-density error, world-XY distance from reference support, range error, azimuth error, and frozen support hash, with at most 128 placements.
+Command and resolved config: Every location went through authoritative `place_object` for E22 and E23; multi-entity worlds still used E24. Under formal sensor/native-return nearest-distance competition, each legal location produced range, median beam, $N_{vis}$, occlusion, and local density. Acceptance required a train/206 real-normal observation with identical raw semantic, support semantic, distance bin, and 45° sector plus all original E45A calipers: distance difference $\le2$ m; median-beam difference $\le4$; $|\Delta\log(1+N_{vis})|\le0.25$; occlusion difference $\le0.10$; $|\Delta\log(1+\mathrm{density})|\le0.25$. Object choice could not use 201 or E46 results. Scientifically equivalent execution optimization cached material and E22 eligibility per template; support-row placement per template; sensor result per frame/support row; target covariates; exact stratification; target-frame rays; and identity random values under complete deterministic inputs. Bounding spheres and local object boxes only conservatively excluded rays or obstacle points that could not hit or deeply penetrate. Hull penetration used half-space block elimination only for points proven outside; if penetration existed, the retained set still contained the global minimum SDF, and absent penetration retained exact full-SDF computation. Candidates failing the first four conditions did not expand full slot-competition arrays; candidates that might pass entered the original renderer slot-recovery, intensity, label, and packing path through a compact exact trace, followed by authoritative five-variable E45-unit rechecking. A 16-object expanded-coverage diagnostic completed 16/16 within the fixed 128×128 bounds with proposal counts [620,2817,10018,33,3695,5009,112,3713,663,2911,12798,13,1192,251,11789,3886]; it proved only existence in that fixed domain and was not the formal qualification. Target extraction was fixed at four processes. Formal control execution used 12 processes, numerical libraries single-threaded, and worker recycling after at most 16 objects. Tasks were scheduled from highest to lowest frozen maximum-proposal-count × template-hull-plane count, then restored to fixture order. PASS required 256/256 completed, 256 unique templates, no target or location exhaustion, zero hard/E22/E23/exact-stratification/five-caliper errors, and accepted targets spanning at least 100 frames, 32 real instances, all five distance bins, and all three occlusion bins. By the user's 2026-08-28 decision, formal qualification ran once and made no two-run elementwise-reproduction claim. Command: `python -m src.render qualify-e25-v2 --data-root /home/jasongao/Data/STU --support-pool runs/ajae/e21_v4_support_pool.npz --calibration runs/ajae/calibration.pt --target-output runs/ajae/e25_v2_real_targets.npz --output runs/ajae/e25_v2_normal_control.npz --processes 12`.
+Resource and disk preflight: A legacy 16-process implementation made the same-class long tail take at least 38.8 minutes versus about 6.5 minutes in one process. An 8-process legacy run remained incomplete after 75 minutes and produced no control artifact. A later run started under the old two-run rule was also terminated by the user before producing a control artifact; none was a formal ruling. Before/after optimization, templates 0, 1, and 2 had identical complete scientific-array hash `7cdb90db8fec53f920c509bb010badbc784c6f867ea7d1944230094111572fe0`, while one-process wall time fell from 100.27 s to 16.45 s. A 12-template concurrency check at 4, 8, and 12 processes had scientific hash `dcb1fe1f8b37c06e655c96a2933f3a4773ea802ea1860c397d7d4750a3665927` in all cases; the set was dominated by one long tail and took about 153 s at each setting. The single formal control run took 1,597.157847 s. Disk preflight not recorded.
+Artifacts and hashes: Formal target artifact `runs/ajae/e25_v2_real_targets.npz`, 9,067,765 bytes, SHA-256 `957860c8b45a6dcc1a35e0815a7c7fcc045ed488d4089155ddda948e8f31d4d4`. Formal control artifact `runs/ajae/e25_v2_normal_control.npz`, 582,952 bytes, SHA-256 `7f5b5ec8e18f833d8ccaba58da5a9c037dfcfb73c9bf820003320781f2f8a020`; scientific-array hash `5af6724f22e680007f5b0c8ededb7e748082e51728dcd41978dddf82db6e7229`.
+Primary construct: Whether a train/206 real-normal-observation-conditioned placement generator could produce every frozen normal-control while satisfying the unchanged strict E45A observation calipers, without using train/201 or classifier outcomes.
+Primary result: FAIL. Target extraction succeeded with the 4,827 units, 448 frames, and 49 real instances above. Of 256 fixtures, 254 completed and two exhausted 128 target proposals with zero hard errors. Failed fixtures 169 and 173, seeds 2,500,169 and 2,500,173, were other-vehicle templates `be7c3c90fd4bfd0cf50dd3fc15ca513bc2b43aa45cb819680dfebd3eb769ee38` and `04985717493a2eab40aa4697c3806416486714185617dec49ffeda6770c2185b`. Each actually evaluated 15,539 supports; placement/condition rejections were 10,286/5,253 and 10,456/5,083. Completion by class was car 64/64, truck 64/64, other-vehicle 62/64, person 64/64, so direct exhaustion was confined to two extreme other-vehicle tails and did not establish general class-wide infeasibility. Recomputed on only the 254 truly accepted controls, coverage was 117 center frames, 27 real instances, distance bins [5,203,41,5,0], and occlusion bins [88,164,2]. Thus 254/256, two exhaustions, fewer than 32 real instances, and an empty 40–50 m bin independently violated PASS. Although the bank contained 117 targets at 40–50 m, only eight had nonempty support streams and the formal search evaluated zero targets in that bin; the run cannot be described as having tried and rejected far candidates. The formal metadata's distance [5,203,43,5,0], occlusion [88,166,2], and 118-frame counts incorrectly included the two exhausted records' last attempted targets. `support_proposals=998,588` also mechanically counted a theoretical 128 supports per earlier target; conserved actual evaluated candidates were 816,594. These reporting defects did not change FAIL. Post-run read-only audit exposed an earlier target-bank semantic defect: exact Euclidean distance from each E21-v4 reference support anchor to the reconstructed train/206 instance world-XY convex hull put 2,556/4,827 inside, 2,962 inside or within 0.5 m, and 1,865 beyond 0.5 m (38.6368%); counts beyond 1/2/5/10 m were 1,618/1,242/542/248, maximum 26.110105 m. All 234 person targets exceeded 0.5 m; 111/117 targets at 40–50 m exceeded it. Among the 254 accepted controls, 106 referenced supports beyond 0.5 m, maximum 14.428549 m. Independent reproduction matched all 4,827 selected support rows and ruled out file corruption, row misreading, semantic violation, or frame-range violation. Root cause was `_real_instance_support_row`: its “near” test used every convex-hull half-space distance $\le0.5$ m, wrongly accepting 16 acute-corner cases, and more importantly fell back without a true 2D convex-hull distance bound to the nearest allowed support in frames ±2. That reference then set both support semantic and the later environmental distance ordering, so distant binding changed the tested input. The implementation followed its written unlimited-nearest-support fallback and did not deviate from the frozen protocol. Afterward, two reporting defects were corrected without rewriting the formal FAIL artifact: coverage now requires nonempty `template_identity`, `placement_exhaustion_code=0`, and `hard_error_code=0`; per-fixture `support_proposal_count` now equals actual `placement_rejections + condition_rejections + accepted_count`, with accepted count 1 for completion and 0 for exhaustion. Independent recomputation from retained output exactly recovered 254 controls, 117 frames, 27 instances, distance [5,203,41,5,0], occlusion [88,164,2], and 816,594 supports.
+PASS / FAIL / OUTCOME: FAIL — permanent formal result; current scientific attribution is that the target–support association qualification definition made the target bank semantically invalid, so this run cannot adjudicate feasibility of observation-conditioned normal-control generation.
+Failure classification: Formal runner classification `observation_conditioned_control_generation_failure` is retained. Later design-level review classifies the cause as a `qualification specification defect`, not a renderer or normal-control construct failure. The two metadata/accounting discrepancies are reporting implementation defects.
+Unlocked next node: Only a versioned target–support association definition chosen by the principal investigator. E26-v2, E46, and E48 remained locked.
+Invalidated downstream evidence: Do not expand to 256×256 proposals, relax the five calipers, use train/201 targets, or rerun after changing only a constant. The historical E45B PASS applies only to the old control distribution; any new formal control distribution must run E45B-v2 before E48. This run carries no two-run reproduction evidence.
+Descriptive observations: The exhaustion itself was localized to two other-vehicle fixtures, while the independent semantic audit showed widespread distant target–support binding, especially all person targets and most 40–50 m targets.
+Notes: Under the frozen hypothetical PASS branch, only an E25-v2 PASS would have allowed the same location-selection function to be integrated into the sole production `sample_training_world` before executing E26-v2. The post-run semantic audit resolved each E21-v4 support anchor through the artifact field `reference_support_pool_index`. A future target-bank revision had to freeze an exact support-association definition before execution. The formal FAIL artifact and its original metadata remain unchanged. In the corrected reporting implementation, `support_proposal_count=placement_rejections+condition_rejections+accepted_count`, with `accepted_count=1` for a completed fixture and 0 for an exhausted fixture.
+
+## E25-v3-D1 | Read-Only Support-Observability Diagnostic for the Abandoned Size-Aware Distance Rule
+
+Experiment ID: E25-v3-D1
+Design-freeze commit/hash: Not recorded; this was a diagnostic of a candidate rule, never a frozen E25-v3 qualification definition.
+Execution-freeze commit/hash: Not recorded.
+Date: Not recorded.
+Git commit / clean state: Not recorded.
+Data identities: The 4,827 real train/206 target identities retained in the E25-v2 target bank. The bank supplied only identities and real observation covariates; its old `support_semantic` and `reference_support_pool_index` were not read. For every target, the target-frame train/206 instance points were reread, their world-XY convex hull reconstructed, and nearest E21-v4 support recomputed independently in frame offsets $[0,-1,+1,-2,+2]$ under the original class-semantic rules. No controls were constructed or rendered, train/201 was not read, and no E45A caliper was calculated or modified.
+Input artifact hashes: E25-v2 target bank `runs/ajae/e25_v2_real_targets.npz`, SHA-256 `957860c8b45a6dcc1a35e0815a7c7fcc045ed488d4089155ddda948e8f31d4d4`; E21-v4 support pool path `runs/ajae/e21_v4_support_pool.npz`.
+Random namespaces / seeds: None beyond the frozen E21-v4 support identities and deterministic offset/search order.
+Command and resolved config: Historical candidate definition kept legal support semantics, preferred the target frame then $f-1,f+1,f-2,f+2$, and used true 2D Euclidean distance from support anchor to the target-frame instance world-XY hull. Its unfinalized form was $d_{support}\le\max(0.5\,\mathrm m,\alpha D_{xy})$. Neither $D_{xy}$ nor $\alpha$ was ever formally fixed. Diagnostic command: `python -m src.render diagnose-e25-v3-support --data-root /home/jasongao/Data/STU --support-pool runs/ajae/e21_v4_support_pool.npz --target-bank runs/ajae/e25_v2_real_targets.npz --output runs/ajae/e25_v3_support_observability.npz --processes 24`. It stored three unadjudicated visible-XY size definitions: hull diameter, axis-aligned-box diagonal, and maximum axis-aligned span. It also descriptively inverted the candidate formula to compute the minimum $\alpha$ needed per target when $D_{xy}$ was visible-XY hull diameter.
+Resource and disk preflight: 24 processes; wall time 3.415568 s. No control generation, rendering, or disk preflight was recorded.
+Artifacts and hashes: `runs/ajae/e25_v3_support_observability.npz`, 574,508 bytes, SHA-256 `3d68b829f644540d6ca0392b6dac6b2a907c153b2f6b646c3c783ed9d4f40014`; scientific-array hash `fcf62d86f7be1e90392135c37e3d3dd6e6d3d3db5e792aee48cdd0b29cd51947`. Per target it stores candidate count, nearest distance, support row, and support semantic for all five offsets, three size definitions, and corresponding inverted minimum-$\alpha$ values.
+Primary construct: Read-only observability of the nearest legal E21-v4 support as a function of target class and visible instance size, before selecting any physical distance rule.
+Primary result: OUTCOME. Legal supports existed for [4,782,4,775,4,790,4,764,4,799] targets at the five offsets, and the union was nonempty for all 4,827. The absolute nearest was at offsets [0,-1,+1,-2,+2] for [2,682,486,442,570,647] targets; this described absolute proximity and did not replace future same-frame-first adjudication. Overall nearest-distance minimum/median/$Q_{0.75}$/$Q_{0.90}$/$Q_{0.95}$/$Q_{0.99}$/maximum was 0/0/2.114124/5.550483/10.245840/17.295375/26.110105 m. A uniform 0.5 m gate retained 2,962 targets: car 2,568/3,888, truck 304/571, other-vehicle 90/134, person 0/234. By class, nearest-distance minimum/median/$Q_{0.75}$/$Q_{0.90}$/$Q_{0.95}$/maximum and visible-XY hull-diameter median/$Q_{0.95}$/maximum were: car, 0/0/1.792260/5.346072/11.554986/26.110105 m and 3.744733/4.778113/5.284350 m; truck, 0/0.112710/4.214586/7.159506/8.715753/12.744537 m and 4.708992/5.599589/7.139261 m; other-vehicle, 0/0/1.297384/3.592466/3.756260/3.888472 m and 2.541836/2.780045/2.803515 m; person, 1.197818/1.581225/1.981663/4.420657/4.593703/11.937300 m and 0.530211/0.721785/1.230407 m. Inverted minimum-$\alpha$ median/$Q_{0.75}$/$Q_{0.90}$/$Q_{0.95}$/maximum was car 0/0.396616/1.800254/3.621911/16.375843; truck 0/1.010811/2.427439/3.050425/4.293221; other-vehicle 0/0.371362/1.901823/2.156307/3.510672; person 2.350944/2.805216/5.381332/6.142926/9.295541, with person minimum 1.047630. Before thresholding, the bank still covered four active classes, distance bins [866,2115,1149,580,117], and occlusion bins [1182,3389,256]. Class×distance counts were car [735,1721,824,534,74], truck [64,148,273,43,43], other-vehicle [67,44,23,0,0], person [0,202,29,3,0], showing that nonempty marginal dimensions did not imply a nonempty Cartesian product. Conservation checks found each target exactly once; 23,910/24,135 target–offset cells had support; all selected offsets and semantics were legal; every global nearest distance equaled the minimum across offsets; and every inverted $\alpha$ satisfied the candidate formula.
+PASS / FAIL / OUTCOME: OUTCOME — completed read-only diagnostic; no PASS/FAIL ruling.
+Failure classification: Not applicable. The $D_{xy}+\alpha$ route was subsequently abandoned by principal-investigator decision before becoming a formal qualification.
+Unlocked next node: E25-v3 support-plane compatibility diagnostic.
+Invalidated downstream evidence: No filtered E25-v3 target-bank coverage conclusion was available because neither the size definition nor $\alpha$ had been frozen. The diagnostic did not qualify generation.
+Descriptive observations: A visible ground-return anchor is not the same as ground directly beneath a real object; self-occlusion can place a credible patch anchor 1–2 m from the visible hull. Person data made a size-multiplier rule physically uninformative.
+Notes: After this diagnostic, the principal investigator formally abandoned the $D_{xy}+\alpha$ distance gate and prohibited further selection or study of $D_{xy}$ and $\alpha$.
+
+## E25-v3-D2 | Read-Only Support-Plane Compatibility without a Local-Validity Radius
+
+Experiment ID: E25-v3-D2
+Design-freeze commit/hash: Protocol and implementation commit `5b1b0f4`, pushed before execution.
+Execution-freeze commit/hash: `5b1b0f4`.
+Date: Not recorded.
+Git commit / clean state: Commit was pushed before the run; clean state not otherwise recorded.
+Data identities: The same 4,827 train/206 target identities and observation covariates, plus the formal E21-v4 qualified support pool. No control was generated or rendered; train/201, E45A calipers, and E46 outputs were not read. Old target-bank `support_semantic` and `reference_support_pool_index` fields were forbidden from adjudication.
+Input artifact hashes: E21-v4 support pool SHA-256 `0e6e7299157f5e9ced0716f6dd14881c66ba1bca0cc9c372550e56f426ea844d`; E25-v2 target bank SHA-256 `957860c8b45a6dcc1a35e0815a7c7fcc045ed488d4089155ddda948e8f31d4d4`.
+Random namespaces / seeds: None beyond deterministic frame order, E21-v4 `selection_hash`, and frozen input identities.
+Command and resolved config: Every candidate had to be an E21-v4 `qualified=true` entry, so its three-scale support counts, center-plane median residual $\le0.03$ m, $Q_{0.95}$ residual $\le0.08$ m, small/large normal difference $\le5^\circ$, anchor-height difference $\le0.08$ m, finite unit normal, and positive z component were inherited and rechecked. Legal semantics were road=40 only for car/truck/other-vehicle, and road=40 or sidewalk=48 for person. Targets were searched in offsets $[0,-1,+1,-2,+2]$; within an offset candidates were sorted by exact 2D Euclidean anchor-to-closed-hull distance then frozen E21 `selection_hash`. Distance determined order and description only, with no gate. Small- and large-scale planes were extrapolated over the target XY hull; because their height difference is affine on a convex polygon, maximum absolute difference over vertices covered the footprint. A candidate required maximum small/large height difference $\le0.08$ m and at most 0.02 of visible target-frame object points lying more than 0.02 m below the central plane. The first passing candidate was selected, and a passing same-frame candidate prevented later-frame inspection. Rejection codes were `no_semantically_legal_patch`, `no_projection_stable_patch`, and `visible_geometry_incompatible`. Anchor distance, distance divided by E21 center radius, slope, signed height of the lowest visible point, visible height range along the normal, and whether lowest-visible clearance exceeded the complete visible height range were descriptive only. No new lowest-clearance limit was introduced because no frozen value separated foot/underbody self-occlusion from a wrongly low plane. Required reporting covered every class, five distance bins, three occlusion bins, rejection reasons, chosen offset and semantic, evaluated-candidate count, and all descriptive relations. It was not an E25-v3 generation PASS/FAIL; only retention of all four active classes, five marginal distance bins, and three marginal occlusion bins would make the facts eligible for a principal-investigator target-bank decision. Command: `python -m src.render diagnose-e25-v3-plane --data-root /home/jasongao/Data/STU --support-pool runs/ajae/e21_v4_support_pool.npz --target-bank runs/ajae/e25_v2_real_targets.npz --output runs/ajae/e25_v3_plane_compatibility.npz --processes 24`.
+Resource and disk preflight: One 24-process run, numerical libraries single-threaded, wall time 3.293789 s. Disk preflight not recorded.
+Artifacts and hashes: `runs/ajae/e25_v3_plane_compatibility.npz`, 770,483 bytes, SHA-256 `3aa2d81c54232be1b5c59ee85081b27fcb8236fd693cd6fc5f623051cb47fda3`; scientific-array hash `4d19afc193c623e50fd675585ea3be230063640f18e162895d0aeb96b3c15a71`.
+Primary construct: Whether an E21-v4 plane could extrapolate stably to a real object's footprint without visibly cutting through the observed object, before defining the plane's finite local-validity domain.
+Primary result: OUTCOME. Of 4,827 targets, 4,825 found a candidate and two car targets were rejected, both at 20–30 m with middle occlusion: frame 232/instance 64 and frame 231/instance 64, both `visible_geometry_incompatible`. Retention was car 3,886/3,888, truck 571/571, other-vehicle 134/134, person 234/234; distance bins [866,2115,1147,580,117]; occlusion bins [1182,3387,256]. Chosen offsets [0,-1,+1,-2,+2] counted [4768,13,17,9,18]; road and sidewalk were selected 4,797 and 28 times. Across offsets there were 39,681,306 semantically legal candidates, of which the deterministic prefix evaluated 121,360, conserved exactly as 55,892 footprint-extrapolation-stability rejections, 60,643 visible-geometry rejections, and 4,825 acceptances. Every acceptance met 0.08 m and 0.02/0.02. However, anchor distance exceeded 1/2/5/10/20/50 m for 1,904/1,644/1,042/461/47/3 acceptances, maximum 67.849019 m; overall median/$Q_{0.90}$/$Q_{0.95}$/$Q_{0.99}$ was 0.110440/9.680502/15.059216/19.858754 m. For person, minimum/median/$Q_{0.95}$/maximum was 1.235701/3.378346/6.309326/20.628190 m. In 341 acceptances, lowest-visible positive clearance exceeded the object's entire visible normal-direction height range: car/truck/other-vehicle/person 179/22/13/127; maximum lowest-visible clearance was 5.282527 m. Independent checks confirmed unique complete targets, per-offset candidate counts against E21-v4, legal selected offsets/semantics, both numerical conditions, rejection sentinels/codes, conservation, and metadata hash.
+PASS / FAIL / OUTCOME: OUTCOME — completed read-only diagnostic; no PASS/FAIL qualification.
+Failure classification: Not applicable. The diagnostic demonstrated that the two conditions alone did not fully operationalize “nearby and credible.”
+Unlocked next node: Principal-investigator decision on a finite local-validity definition; no generator execution.
+Invalidated downstream evidence: The 4,825 candidates cannot be called credible local ground beneath the object. Marginal coverage alone was insufficient to freeze the target bank. E26-v2, E46, and E48 remained locked.
+Descriptive observations: Stable extrapolation and lack of majority penetration can accept patches 10–67.8 m away and objects whose lowest visible point is 5.28 m above the extrapolated plane.
+Notes: The target bank was not rebuilt and the normal-control generator was not run at this stage. The condition that no more than 0.02 of visible object points could lie more than 0.02 m below the center plane inherited its frozen source from E22-v2.
+
+## E25-v3-Q1 | Read-Only Trusted-Local-Support Target Qualification
+
+Experiment ID: E25-v3-Q1
+Design-freeze commit/hash: Final principal-investigator freeze; implementation/protocol commit `84c3655` pushed before execution.
+Execution-freeze commit/hash: `84c3655`.
+Date: Not recorded.
+Git commit / clean state: Commit was pushed before execution; clean state not otherwise recorded.
+Data identities: The original 4,827 train/206 target identities and real observation covariates; the formal E21-v4 support pool. Old `support_semantic` and `reference_support_pool_index` were forbidden. No control was constructed or rendered and train/201 was not read.
+Input artifact hashes: E21-v4 support pool SHA-256 `0e6e7299157f5e9ced0716f6dd14881c66ba1bca0cc9c372550e56f426ea844d`; historical target bank SHA-256 `957860c8b45a6dcc1a35e0815a7c7fcc045ed488d4089155ddda948e8f31d4d4`.
+Random namespaces / seeds: None beyond deterministic frame-offset order $[0,-1,+1,-2,+2]$, exact distance ordering, and E21 frozen `selection_hash` tie-breaks.
+Command and resolved config: Final trusted-local-support definition: for patch center radius $R(d)=\operatorname{clip}(d/20,1,3)$ m, exact 2D Euclidean distance from support anchor to the target-frame instance's closed world-XY hull had to satisfy $d(\mathrm{support\ anchor},\mathrm{object\ footprint})\le1.25R(d)$. The factor 1.25 exactly inherited E21-v4's largest validated scale and was not selected from E25-v3 output, person retention, generation, E45A, or E46. $D_{xy}$, $\alpha$, uniform 3/5 m gates, and other empirical thresholds were prohibited. Search used offsets $[0,-1,+1,-2,+2]$; within each, exact anchor–hull distance then E21 `selection_hash`. Candidates sequentially required legal class semantic; local-range bound; maximum small/large-scale predicted-height difference over the footprint $\le0.08$ m; and fraction of visible target points more than 0.02 m below central plane $\le0.02$. First fully passing patch was unique; a same-frame acceptance stopped later offsets. Rejection codes: `no_semantically_legal_patch`, `outside_e21_local_validity`, `no_projection_stable_patch`, `visible_geometry_incompatible`. Required reports: retention by four classes, five distance bins, three occlusion bins, unique real instances, and frames. The only PASS coverage conditions were every active class nonempty, every marginal distance and occlusion bin nonempty, at least 100 frames, and at least 32 real instances. No additional target-count or efficiency gate. FAIL would establish insufficient observable E21-v4 local ground for the frozen target domain and could not enlarge $1.25R(d)$. Command: `python -m src.render qualify-e25-v3-targets --data-root /home/jasongao/Data/STU --support-pool runs/ajae/e21_v4_support_pool.npz --target-bank runs/ajae/e25_v2_real_targets.npz --output runs/ajae/e25_v3_target_qualification.npz --processes 24`.
+Resource and disk preflight: One 24-process run, one numerical-library thread per process, no GPU; wall time 3.571991 s. Disk preflight not recorded.
+Artifacts and hashes: `runs/ajae/e25_v3_target_qualification.npz`, 654,276 bytes, SHA-256 `cb3a5749951b813d72e7ea7de1b7377398f867c5a3d6dab3e9af346f7afa4b7c`; scientific-array hash `d77d2da9a3d648f31941219edc61f26f19e3cec601290e36b54eabc58554d7f5`.
+Primary construct: Whether the E21-v4 finite local-validity domain plus stable extrapolation and nonpenetration supplies a semantically qualified train/206 target bank with the frozen marginal coverage.
+Primary result: PASS. Retained 3,267/4,827 and rejected 1,560. Rejections: 0 with no legal semantic patch; 1,509 with no patch in its own $1.25R(d)$ domain across five frames; 14 with no locally stable extrapolation; 37 with stable local candidates all visibly incompatible. All 4,690 local-candidate compatibility evaluations conserved as 922 extrapolation-stability rejections, 501 visible-geometry rejections, and 3,267 acceptances. Retained targets covered 423 frames and 37 unique semantic–instance identities. Class retention was car 2,830/3,888, truck 333/571, other-vehicle 100/134, person 4/234. Distance bins were [861,1532,552,302,20] and occlusion bins [787,2363,117], so all four classes and all marginal bins were nonempty, frames exceeded 100, and identities exceeded 32. Class-specific observability remained: car 423 frames/31 instances, distance [730,1408,397,275,20], occlusion [676,2037,117]; truck 268/4, distance [64,87,155,27,0], occlusion [85,248,0]; other-vehicle 100/1, distance [67,33,0,0,0], occlusion [22,78,0]; person 4/1, distance [0,4,0,0,0], occlusion [4,0,0]. Thus PASS did not claim every class covered every distance or occlusion bin. Accepted maximum anchor–hull distance was 2.288462 m; maximum distance/center-radius was 1.247676; minimum positive margin to $1.25R(d)$ was 0.002324 m. Every acceptance satisfied the range, 0.08 m, and 0.02/0.02 limits. Chosen offsets counted [3020,101,58,49,39]. Every selected support was road=40; no sidewalk=48 acceptance occurred, which did not change allowed semantics. Independent audit confirmed complete unique identities, per-offset counts, legal rows/semantics, exact $R(d)$ and $1.25R(d)$ checks, all conditions and sentinels, conservation, and scientific hash.
+PASS / FAIL / OUTCOME: PASS — read-only target qualification.
+Failure classification: Not applicable. Historical E25-v2 FAIL and the no-range E25-v3 diagnostic remain permanent.
+Unlocked next node: Deterministic E25-v3 target-bank rebuild, followed by the already frozen E25-v3 normal-control qualification.
+Invalidated downstream evidence: This PASS established only marginal target-bank observability and field correctness; it did not qualify normal-control generation, a class×distance Cartesian product, or source indistinguishability.
+Descriptive observations: The finite E21 validity domain reduced person support to four targets from one instance and four frames; this was retained as the measured class-specific observability boundary.
+Notes: The trusted-local-support definition closed here and could no longer be enlarged or adjusted. Its visible-point-below-plane condition inherited the E22-v2 threshold pair: proportion $\le0.02$ below the center plane by more than 0.02 m.
+
+## E25-v3-Q2 | Deterministic Target-Bank Rebuild
+
+Experiment ID: E25-v3-Q2
+Design-freeze commit/hash: Run-preparation commit `be0a8f7`.
+Execution-freeze commit/hash: `be0a8f7`, pushed before execution.
+Date: Not recorded.
+Git commit / clean state: Commit was pushed; clean state not otherwise recorded.
+Data identities: Exactly the `compatible=true` rows from the historical 4,827-row E25-v2 target bank, retained in original source order. No train/206 instance was reread or re-extracted. `frame_id`, real class/instance, range, beam, visible-return count, occlusion, local density, point features, and unit identity were inherited elementwise. Only old `support_semantic` and `reference_support_pool_index` were replaced directly by qualification output `selected_support_semantic` and `selected_support_row`.
+Input artifact hashes: Historical target bank SHA-256 `957860c8b45a6dcc1a35e0815a7c7fcc045ed488d4089155ddda948e8f31d4d4`; E25-v3 qualification SHA-256 `cb3a5749951b813d72e7ea7de1b7377398f867c5a3d6dab3e9af346f7afa4b7c`.
+Random namespaces / seeds: None; deterministic filtering in original-row order.
+Command and resolved config: Recompute scientific-array hashes for both inputs; verify the qualification artifact's source-file SHA-256 binding; require elementwise correspondence for `frame_id`, `real_semantic`, `real_instance`, `range_bin`, `O_hat`, `Nvis`, and `unit_hash`; require `compatible == (rejection_code==0)` and legal selected/rejected support sentinels and semantics. Output had to contain exactly 3,267 rows, 423 frames, 37 semantic–instance identities, class [2830,333,100,4], distance [861,1532,552,302,20], and occlusion [787,2363,117]. No nearest-support search or target reordering was allowed. Command: `python -m src.render build-e25-v3-target-bank --source-target-bank runs/ajae/e25_v2_real_targets.npz --target-qualification runs/ajae/e25_v3_target_qualification.npz --output runs/ajae/e25_v3_real_targets.npz`.
+Resource and disk preflight: Deterministic filtering run; wall time and disk preflight not recorded.
+Artifacts and hashes: `runs/ajae/e25_v3_real_targets.npz`, 6,800,894 bytes, SHA-256 `0ae2f4926f1cb8a71b04af3d43d3d1d9feb17bb36fed821bab42b531cae3a360`; scientific-array hash `16d75e67995bd216e3f802a6a32a19b0faecc9bfa841c6a680b01f13f6a8cf44`.
+Primary construct: Correct, deterministic materialization of the qualified E25-v3 target subset without re-extraction or semantic reassociation.
+Primary result: PASS. Output contained exactly 3,267 targets, 423 frames, and 37 semantic–instance identities; class, distance, and occlusion counts were [2830,333,100,4], [861,1532,552,302,20], and [787,2363,117]; every support semantic was road=40. The scientific hash exactly matched the independent pre-run expectation. Independent audit confirmed original order; 17 fields other than the two support fields matched the source `compatible=true` subset elementwise; both support fields matched selected qualification output; every reference row was in the E21-v4 qualified pool; semantic, class-rule, and frame-offset errors were zero; offset counts remained [3020,101,58,49,39].
+PASS / FAIL / OUTCOME: PASS.
+Failure classification: Not applicable.
+Unlocked next node: Frozen E25-v3 normal-control qualification.
+Invalidated downstream evidence: None. This build PASS alone did not qualify generation or any downstream renderer/source-leakage claim.
+Descriptive observations: The rebuilt target bank inherited the severe person observability limit of four units and contained no accepted sidewalk support.
+Notes: The old unlimited-nearest-neighbor target extraction path was removed from current formal source, and the formal runner was prohibited from rebuilding the bank at run time.
+
+## E25-v3-Q3 | Normal-Control Qualification under Trusted-Local-Support Conditioning
+
+Experiment ID: E25-v3-Q3
+Design-freeze commit/hash: Generation implementation commit `be0a8f7`.
+Execution-freeze commit/hash: Formal-run commit `a97a6c7`; generation implementation frozen at `be0a8f7`.
+Date: Not recorded.
+Git commit / clean state: Commits were pushed before execution; clean state not otherwise recorded.
+Data identities: 256 fixtures, each frozen train/206 template appearing once in original class/library order; control seeds 2,500,000–2,500,255. Candidate targets were exclusively the 3,267-row E25-v3 bank. Each fixture had at most 128 target proposals, each target at most 128 support proposals.
+Input artifact hashes: E25-v3 target bank `runs/ajae/e25_v3_real_targets.npz`, SHA-256 `0ae2f4926f1cb8a71b04af3d43d3d1d9feb17bb36fed821bab42b531cae3a360`; E21-v4 support pool path `runs/ajae/e21_v4_support_pool.npz`; calibration path `runs/ajae/calibration.pt`.
+Random namespaces / seeds: Control seeds above. Template identity, independent axis scaling $U[0.9,1.1]$, pose, material, target/support ordering, schema-7 proxy, and all original streams were unchanged from E25-v2 except that available targets and environmental support references came from the rebuilt E25-v3 bank.
+Command and resolved config: Retained the same 256 templates, 128×128 limits, scale, pose, material, target/support ordering formulas, E22, E23, E24, renderer, return probability, intensity, E45A exact stratification and five calipers, and schema-7 proxy. Used 12 fork processes, one numerical-library thread each, existing worst-cost-first scheduling, and shape/frame/placement/sensor caches. Ran once, with no automatic retry and no second reproduction run. PASS required 256/256 complete; 256 unique template identities; zero hard errors, target exhaustion, support exhaustion, exact-stratification errors, and five-caliper errors; and accepted controls covering at least 100 frames, 32 real semantic–instance identities, all five marginal distance bins, and all three marginal occlusion bins. FAIL had to preserve the result and stop at E25-v3 without changing $1.25R(d)$, 128×128 limits, or calipers. Command: `python -m src.render qualify-e25-v3-normal-control --data-root /home/jasongao/Data/STU --support-pool runs/ajae/e21_v4_support_pool.npz --calibration runs/ajae/calibration.pt --target-bank runs/ajae/e25_v3_real_targets.npz --output runs/ajae/e25_v3_normal_control.npz --processes 12`.
+Resource and disk preflight: One 12-process fork run with numerical libraries single-threaded; wall time 1,698.701733 s. No GPU. Disk preflight not recorded.
+Artifacts and hashes: `runs/ajae/e25_v3_normal_control.npz`, 524,004 bytes, SHA-256 `e31766c22ded4dcdf312540847944cb70a124c80b36af799f350734b0fb7aa98`; scientific-array hash `b8d04778024e2c6b858b1361c395b2763a1e0b5655ab777c08578b798c81ed12`.
+Primary construct: Whether the unchanged five-caliper observation-conditioned generator could construct every normal-control from the E25-v3 trusted-local-support target bank within the fixed 128×128 proposal domain.
+Primary result: FAIL. Completed 208/256; 48 exhausted within fixed limits; hard errors were zero, and every completed object had zero exact-stratification and five-caliper errors. Frozen failure label was `local_support_conditioned_control_generation_failure`. By template class: car completed 64/64, exhaustion 0, target proposals 791, support proposals 80,404, placement rejections 57,599, condition rejections 22,741; truck 63/64, 1, 3,334, 315,046, 230,009, 84,974; other-vehicle 62/64, 2, 3,453, 402,006, 318,166, 83,778; person 19/64, 45, 199, 23,914, 3,176, 20,719; total 208/256, 48, 7,777, 821,370, 608,950, 212,212. Support counts conserved as placement rejection + condition rejection + acceptance. All four person targets were at 10–20 m with low occlusion and had nonempty support streams. Each of 45 failed person fixtures traversed all four targets and 512 supports; all 19 successful person fixtures accepted within their first target. Truck fixture 68/seed 2,500,068 traversed 128 targets and 10,670 supports; other-vehicle fixtures 169 and 173/seeds 2,500,169 and 2,500,173 each traversed all 100 class targets and 11,964 supports. Failure-row `target_*` fields store only the last target and do not summarize all search cost. The 48 exhausted fixtures evaluated 57,638 supports, exactly 27,870 placement and 29,768 condition rejections. All 20 far targets were car; only six had nonempty support streams, totaling nine supports. Their best deterministic ranks among the 64 car sequences were 167, 210, 211, 230, 245, 297, all beyond the 128-target prefix. Thus no 40–50 m target was accessed and no far placement or sensor condition was adjudicated; zero far acceptances do not mean far candidates were tried and rejected. Failed fixtures accessed 508 targets across distance [134,285,89,0,0] and occlusion [261,247,0]. Their 57,638 supports divided by target distance [15480,35166,6992,0,0] and occlusion [32892,24746,0]. Caliper violation counts were nonexclusive. Among 20,015 condition rejections for failed person fixtures, `log(1+Nvis)` was violated 19,100 times; only 10 failed templates ever individually met that caliper on any candidate, only six passed the first four prechecks and reached density comparison, and the other 39 never reached the fifth. Zero-return count among failed person candidates was zero. Best per-dimension values for truck and the two other-vehicle exhaustions could come from different candidates and could not be assembled into one acceptable joint candidate. The artifact did not preserve the internal types of 27,870 `PlacementError` rejections, so they cannot be further partitioned into grounding, observed collision, or another placement cause. The 208 accepted controls covered 90 frames, 26 real semantic–instance identities, distance [7,163,27,11,0], and occlusion [37,169,2]. FAIL independently triggered on fewer than 256 completions, 48 exhaustions, only 208 completed identities, fewer than 100 frames, fewer than 32 identities, and an empty far bin. Zero hard/caliper errors on completed items and nonempty three occlusion bins did not override any global failure. Independent audit confirmed seeds exactly 2,500,000–2,500,255; all target identities against saved `target_index`; 208 parseable canonical-round-trip `normal-control` objects and records; 48 rows with `hard_error_code=0` and `placement_exhaustion_code=1`; per-row proposal conservation; all metadata totals; and for completed controls, template identity, scale, pose, material, object ID, support identity, E22 values, rotation, translation, and E23 against real train/206 observed obstacles, with no deep penetration and exact saved minimum distance. Saved `target_index` on a completed row is the post-render five-caliper match, not necessarily the target whose support stream generated the placement: they matched for 8 controls and differed for 200. Independent reconstruction confirmed all 208 accepted supports belonged to their actual proposed-target frozen stream, so saved matched-target frame cannot validate proposal-frame offset.
+PASS / FAIL / OUTCOME: FAIL — permanent; state machine stopped at E25-v3 at that time.
+Failure classification: `local_support_conditioned_control_generation_failure` under the frozen runner. It did not alone establish renderer failure, E21-v4 failure, all-person geometric unplaceability, or failure of the entire normal-control construct.
+Unlocked next node: None until a new principal-investigator decision. E26-v2, control-dependent E38–E45A, E45B-v2, E46, and E48 remained locked.
+Invalidated downstream evidence: E25-v3 target qualification PASS and bank rebuild PASS remain valid only for target observability and field correctness; they cannot rewrite this generation FAIL. No second-run reproduction claim exists. The $1.25R(d)$ rule, 128×128 bounds, and E45A calipers were not changed after failure.
+Descriptive observations: The dominant person difficulty was matching visible-return count against only four surviving person targets. The official far bin was never reached because all nonempty far target streams occurred after the fixed 128-target prefix.
+Notes: The result led to a principal-investigator decision to stop requiring every generated control to satisfy all five E45A calipers and to restore generator/audit separation. `support proposals` denotes the number of candidates actually evaluated. Independent audit confirmed `control_seed` elementwise equal to 2,500,000–2,500,255; completed rows satisfied `support_proposal_count=placement_rejections+condition_rejections+1`, while exhausted rows satisfied the sum of the two rejection counts.
+
+## E25-new | Coverage-Oriented Legal Normal-Control Generation Qualification
+
+Experiment ID: E25-new
+Design-freeze commit/hash: Final principal-investigator contract; separate design-freeze commit not recorded.
+Execution-freeze commit/hash: `e9ee028f48ca43d5191e37373a23722cfeabec66`.
+Date: Not recorded.
+Git commit / clean state: Implementation-freeze commit recorded above; clean state not recorded.
+Data identities: The canonical `extract_normal_template_library` from train/206 in unchanged order: 64 car, 64 truck, 64 other-vehicle, and 64 person templates, 256 total. Fixture index $i=0,\ldots,255$ mapped one-to-one to template index; every template was used exactly once, with no replacement of difficult templates and no repetition to fill counts. Control seed was $2{,}500{,}000+i$. Neither real target banks, train/201, E45A results, nor E46 classifier outputs were read.
+Input artifact hashes: E21-v4 support pool SHA-256 `0e6e7299157f5e9ced0716f6dd14881c66ba1bca0cc9c372550e56f426ea844d`; sensor calibration SHA-256 `b532b7e04d9025233b2768b8fb36287e477f62f20a3ff685a62f4a4a29bfefe0`.
+Random namespaces / seeds: Assigned distance bin $b_i=i\bmod5$ over $[2.5,10)$, $[10,20)$, $[20,30)$, $[30,40)$, and $[40,50]$ m, yielding total [52,51,51,51,51]. Canonical class×distance outcomes were car [13,13,13,13,12], truck [13,13,13,12,13], other-vehicle [13,13,12,13,13], person [13,12,13,13,13]; these were index-cycle consequences, not extra gates. Support candidates were semantically legal E21-v4 rows whose anchor was in the assigned bin. Let `namespace_u64` be the little-endian integer of the first eight bytes of `SHA-256("E25-new-support-v1")`; `salt=namespace_u64 XOR uint64(i+1)*uint64(0xD1B54A32D192ED03)` and candidate key `splitmix64(selection_hash XOR salt)`. Sort `(key,pool_index)` and retain at most 128. Scaling inherited `default_rng(SeedSequence([control_seed+2,2501])).uniform(0.9,1.1,size=3)`; pose used `SeedSequence([control_seed,2502])`, vehicle classes $[-15^\circ,15^\circ]$ and person $[-\pi,\pi)$; material seed was `control_seed+2503`.
+Command and resolved config: Sole question: whether every canonical template could produce one E21–E24-legal, sensor-visible normal-control in its preassigned official distance bin without inserting the five real-normal observation calipers into generation. E25-new adjudicated legality, visibility, and complete official-range coverage only. Car/truck/other-vehicle used road=40; person used road=40 or sidewalk=48. Anchor bin narrowed search but final identity was the median official range of every visible `normal_control_mask` return in authoritative renderer output. Failure to find a legal candidate with at least one visible return and correct final bin within the frozen stream was assigned-bin exhaustion and could not fall back to another bin. Every support called sole `place_object` for E21 support identity, E22 grounding, E23 observed-normal collision, and E24 pair collision if other entities existed; the 256 formal fixtures were single-entity. A legal placement then ran unchanged `return_chance`, frozen identity uniform, native-return competition, and `render_frame` packing. A zero-visible or wrong-bin placement alone was rejected; template, scale, pose, material, and assigned bin were not resampled. Formal execution used 24 fork processes and one BLAS/numerical-library thread per process. Semantic/bin partitioning and vectorized smallest-128 key selection were allowed. A conservative angular domain derived from object sphere and calibrated beam-origin maximum offset could only be a strict superset of potentially hitting rays. Random values were computed only for candidate slots. Every accepted candidate was independently recomputed by full 131,072-ray formal competition and `render_frame`; final range, visibility, identity, and descriptions came from the full result. Worker ray-transform cache remained bounded. PASS required 256/256; every template once; exact final bin [52,51,51,51,51] per fixture; at least one visible control return each; legal qualified support; zero class–support, E22, E23, scale, pose, material, renderer, hard, assigned-bin-exhaustion, and accounting errors. E24 remained required in multi-entity use but the single-entity fixture added no duplicate E24 gate. Proposal efficiency was not a scientific gate. Eight 45° azimuth sectors by total/class, maximum sector count/fraction, three occlusion bins, $N_{vis}$, and rejection types were descriptive only. There was no real target, median-beam, $N_{vis}$, occlusion, or density caliper; no azimuth/occlusion minimum; no class×distance minimum beyond deterministic allocation. Formal run occurred once without automatic retry or two-run reproduction. Command: `python -m src.render qualify-e25-new-normal-control --data-root /home/jasongao/Data/STU --support-pool runs/ajae/e21_v4_support_pool.npz --calibration runs/ajae/calibration.pt --output runs/ajae/e25_new_normal_control.npz --processes 24`.
+Resource and disk preflight: One 24-process fork run, numerical libraries single-threaded; wall time 27.831488263 s. No disk preflight recorded.
+Artifacts and hashes: `runs/ajae/e25_new_normal_control.npz`, 580,668 bytes, SHA-256 `30fc7d1ecd60d005cb18c60ac81b1c7335e2121fcd3f1da5f440b5387a747b19`; scientific-array hash `4625b8e01be6ba73d41af96e56a530d361c7ecfe5cd9f5c89a0daec64d9fa31a`.
+Primary construct: Legal, visible, coverage-oriented normal-control generation across the complete official 2.5–50 m range, with generator duties separated from downstream common-support matching and source classification.
+Primary result: PASS. All 256 fixtures completed; attempted and completed template identities were 256 unique, each once; all four classes counted 64. Assigned and final-render median-range bins both exactly equaled [52,51,51,51,51], with zero per-fixture bin error and class×distance counts exactly as frozen. Every fixture had at least one visible return. $N_{vis}$ minimum/median/mean/$Q_{0.95}$/maximum was 1/53/269.41015625/1472/4927. Eight azimuth counts were [36,43,15,40,52,9,10,51], maximum 52 and fraction 0.203125. Occlusion counts were [204,50,2], with no undefined item; these were descriptive. Exactly 408 support proposals were evaluated and conserved as 256 acceptance, 119 physical-placement rejection, 0 no-visible-return rejection, and 33 final-bin rejection. Assigned-bin exhaustion, hard, accounting, support-identity, class–support, scale, pose, E22, E23, material, final-distance, and visibility errors were zero. There was no separate multi-entity E24 event because fixtures were single-entity. Independent read-only audit did not rerun or resample: it checked all fixture seeds/templates/bins; parsed and canonically round-tripped all `ObjectSpec` and `PlacementRecord`; reproduced material; checked E21-v4 support rows, frames, semantics, and class rules; recomputed E22 continuous grounding for all 256 shapes; recomputed occlusion, azimuth, proposal conservation, and scientific hash. Everything matched and no accepted E23 minimum-obstacle SDF was below -0.05 m.
+PASS / FAIL / OUTCOME: PASS.
+Failure classification: Not applicable. E25-v2 and E25-v3 generation FAILs remain permanent.
+Unlocked next node: E26-v2; after it, refresh the control-dependent E38–E44 evidence, run E45A-new and E45B-v2; E45A-new PASS unlocks E46 and E45B-v2 must PASS before E48.
+Invalidated downstream evidence: The old control-distribution E45B PASS became inapplicable and had to be rerun as E45B-v2. E25-new does not establish a real-normal range distribution, real/control common support, or source indistinguishability.
+Descriptive observations: The range cycle is coverage-oriented anti-shortcut sampling, not an estimate of natural real-normal distance frequencies.
+Notes: E25 now owns legal, visible, broad-coverage controls; E45A owns which real/control samples are comparable; E46 owns whether source remains distinguishable under matching. These duties must not be merged again. Under the frozen FAIL branch, the result had to remain permanent and execution had to stop for a principal-investigator decision; templates, distance allocation, proposal cap, renderer, and downstream matching conditions could not be changed.
+
+## E26-v2 | Sole Production World Builder under the New Normal-Control Distribution
+
+Experiment ID: E26-v2
+Design-freeze commit/hash: Design frozen after E25-new PASS; separate design commit not recorded.
+Execution-freeze commit/hash: `38079213a0801bf3a279414a8b120bfd24e1cd1b`.
+Date: Not recorded.
+Git commit / clean state: Implementation-freeze commit recorded above; clean state not recorded.
+Data identities: Historical E26 world identities unchanged: seeds 2,600,000–2,600,255. Indices 0–63, 64–127, 128–191, and 192–255 were respectively pure-normal, control-only, mixed, and anomaly-only, 64 each. Entity count remained `_training_entity_counts(world_type,world_seed)`. Across final worlds there were 605 entities: 307 normal-controls and 298 anomaly proxies; control-only had 159 controls, mixed had 148 controls and 133 proxies, anomaly-only had 165 proxies.
+Input artifact hashes: Canonical template-library SHA-256 `de5dfd765ac7d4fe4bb4644c40ecafdd80cdc31a3d0b6fc4fccd8e84a9fd906b`; E21-v4 support pool SHA-256 `0e6e7299157f5e9ced0716f6dd14881c66ba1bca0cc9c372550e56f426ea844d`; sensor calibration SHA-256 `b532b7e04d9025233b2768b8fb36287e477f62f20a3ff685a62f4a4a29bfefe0`; `src/render.py` SHA-256 `1c96e2c44f97c9ba5c9702be1201bf68910ade90e3ccd9cf8341a4d017cd3551`.
+Random namespaces / seeds: Complete world attempt $a$ used `world_seed+1,000,003a`, at most 48 attempts; entity $j$ used `attempt_seed+10,007(j+1)`, with label order on the same attempt stream. For a proxy, shape seed was `entity_seed+3+3072q`, at most 64 shape proposals; eligible shapes had at most 128 supports. Normal-control template, scale, material, and pose seeds were `entity_seed+1`, `entity_seed+2`, `entity_seed+11`, and `entity_seed+31`. Template RNG was called once with replacement over canonical 256 templates. If it selected template index $i$, required distance bin was $i\bmod5$, and E25-new's corresponding legal semantics, anchor-bin filter, deterministic hashed support order, and 128-support stream were reused without any new random draw or template/bin substitution.
+Command and resolved config: Sole question: after inserting E25-new selection into `sample_training_world`, could immutable, fully legal multi-entity worlds be built for all frozen identities within finite limits? It did not read E45A targets/calipers and did not requalify E27–E37 mechanical formulas. Proxies retained the unchanged E22-before-support shape eligibility, E23, and E24 path. Every control support used sole `place_object` for E21 identity, E22, E23, and E24 against existing entities. In the candidate's support frame it then ran the same sensor probability, identity random draw, nearest-return competition, and `render_frame` using formal world seed, actual object ID, and current partial world. At least one final float32 packed control return had to win for that object and its median official range had to be in $i\bmod5$; failure rejected only current support. After all entities, every control was rechecked in the complete world at its own support frame. If a later entity hid an earlier control or shifted its median bin, the complete attempt failed and the next frozen attempt started from scratch; old entities could not move, only the later entity could not be replaced in-place, and no bin fallback was allowed. `RenderError`, frame error, compact/full-render mismatch, and interface errors surfaced as hard errors, not normal attempt failures. Equivalent acceleration precomputed immutable E25-new support streams; explicitly passed formal slot IDs into `_accepted_object_hits` for conservative compact multi-entity competition; still fully rechecked every acceptance with all 131,072 slots; bounded ray caches; cached a final world/frame/object recheck only by complete world identity; used 24 fork workers, one numerical thread each, scheduled higher expected entity counts first, and restored canonical order. No GPU. Audits retained historical E26 world/report canonical JSON, world hash, IDs/counts, semantics, scale, pose, material, pair collision, forward/reverse/frozen-random five-frame traversal, cache request identity, one-process manifest reconstruction, and AST uniqueness of the authoritative placement path. Inputs were checked for four template classes ×64, canonical order/library hash, calibration hash, train/206 origin, and frame/slot identities. The runner independently recomputed counts, label shuffle, entity seeds, every control/proxy random stream, E21 patch, E22, E23, and final E24. Each control's `proposal_pool_indices` had to be the exact prefix of the E25-new template stream and final visibility/bin had to pass. Because production sampled templates with replacement, final bin totals were descriptive rather than fixed [52,51,51,51,51]. PASS required 256/256, correct four world types, zero audit/hard/48-attempt-exhaustion errors. One formal run only, no automatic retry or two-run reproduction. Command: `python -m src.render qualify-e26-v2 --data-root /home/jasongao/Data/STU --support-pool runs/ajae/e21_v4_support_pool.npz --calibration runs/ajae/calibration.pt --output runs/ajae/e26_v2_world_builder.npz --processes 24`. A preformal real-train/206 smoke test on seed 2,600,128 wrote no artifact and was not evidence: mixed attempt 0 completed with two controls and one proxy, control assigned/final bins [1,0,0,1,0], and zero visibility, distance, support-stream, random-stream, hard, and exhaustion errors.
+Resource and disk preflight: One formal 24-fork-process run, one numerical-library thread each, no GPU; wall time 187.63917079399107 s. All 24 workers computed. At peak, physical available memory was about 0.38 GiB and swap use about 3.7 GiB; no OOM, hard error, or sustained pressure occurred. Available memory recovered to about 19 GiB afterward. This was descriptive and did not affect PASS. Disk preflight not recorded.
+Artifacts and hashes: `runs/ajae/e26_v2_world_builder.npz`, 1,033,953 bytes, SHA-256 `2653f705d2e890d99cda732a7a00387b5621cd05abb9c4681c7a9f284c34363c`; canonical hash of 31 scientific arrays `5766cda5820eb3281c0f9e13c64d2746ffdc120ce4543f32fa6c2c71cf1d4f97`.
+Primary construct: Deterministic, immutable, fully legal complete-world generation under the new coverage-oriented normal-control distribution through the sole production builder.
+Primary result: PASS. All 256 worlds completed with exact seeds and 64 of each type. 254 completed on attempt 0; seed 2,600,139 on attempt 1; seed 2,600,066 on attempt 2; zero 48-attempt exhaustion. Every one of 307 controls had at least one visible return and assigned bin equal to final median-return bin; totals were [52,72,55,71,57]. Control $N_{vis}$ minimum/median/mean/maximum was 1/45/287.09771986970685/5,577; descriptive only. `type_errors`, `authority_errors`, `single_manifest_errors`, canonical round-trip, validation, world-stream, support, pose, material, grounding, observed collision, control visibility, control distance, control support stream, control random stream, proxy random stream, pair collision, traversal, hard error, and placement exhaustion were all zero; nonempty error messages were zero. Before 605 accepted placements, 841 supports were evaluated and 236 rejected: 199 observed-normal deep penetration, 30 wrong final bin, three zero-visible control returns, four obvious pair penetrations. All 298 proxies used one shape proposal each; grounding rejections zero. Independent read-only audit did not resample or constitute a second run: it recomputed 31-array hash, all canonical world/report JSONs, world hashes, request manifest, seed/type/count/placement bindings, 307 control observations, and proposal conservation, with zero differences. For anomaly-only worlds 192–255, comparison with historical E26 found all 64 world JSONs, 64 report JSONs, 64 world hashes, 165 proxy objects/placements, 165 shape proposals, and 200 support indices exactly identical. Request manifests differed only because renderer source identity changed; world/report generation content did not.
+PASS / FAIL / OUTCOME: PASS.
+Failure classification: Not applicable. A run with only 48-attempt exhaustion and zero implementation error would have been complete multi-entity legal-sampling-domain failure; any implementation-audit error would be `protocol_implementation_defect`.
+Unlocked next node: E38-v2 formal refresh. Phase 2 under the new normal-control distribution closed. E27–E37 mechanical qualifications remained valid.
+Invalidated downstream evidence: Control-distribution-dependent E38–E45A and E45B evidence required refresh. This PASS does not establish real/control common support, source indistinguishability, or the real-normal 2.5–50 m distribution.
+Descriptive observations: Under the frozen streams and 48 complete-world-attempt limit, the sole production builder generated every E21–E24-legal immutable world with visible, bin-correct controls.
+Notes: The 48 attempts are an internal finite world-proposal contract, not automatic reruns of the formal experiment. Each normal-control sensor evaluation used the formal `world_seed` and actual `object_id`.
+
+## Historical E26 | Authoritative World Builder and Complete-World Determinism under the Old Control Distribution
+
+Experiment ID: Historical E26
+Design-freeze commit/hash: Original design freeze not recorded.
+Execution-freeze commit/hash: Repaired formal implementation `c150d516328cb6f108ec30f571c6a41ec0f53f82`.
+Date: Not recorded.
+Git commit / clean state: Commit recorded above; clean state not otherwise recorded.
+Data identities: World seeds 2,600,000–2,600,255. Indices 0–63, 64–127, 128–191, and 192–255 were pure-normal, control-only, mixed, and anomaly-only. Nonempty worlds used the frozen 1–9 entity count distribution. Every entity had at most 128 placement proposals and every world at most 48 complete attempts. Final old-distribution worlds contained 605 entities: 307 normal-controls and 298 proxies; control-only, mixed, and anomaly-only had 159, 281, and 165 entities.
+Input artifact hashes: Frozen library contained the 256 E25-qualified train/206 templates. Final source hashes: `src/render.py` `51b1bd037cd3226155e6f8bb428421729326e1d4e6a8c83fb414aa9a63f37d30`; `src/train.py` `92a3f51f93e26bead6a1d9d92e37af2b5e4df092ffc9716852806b4b67be546b`; `test_ajae.py` `960dc6b3b83a4e95e638a1f0358a3d20c8eb2b51300e5c737f2c49b4b0a3f8dd`.
+Random namespaces / seeds: Entity count used `default_rng(world_seed)` under the frozen 1–9 distribution. Attempt $a$ used `attempt_seed=world_seed+1,000,003a`; entity order was frozen by that stream. Entity $j$ base seed was `attempt_seed+10,007(j+1)`. Control template/scale/material/pose seeds were entity seed +1/+2/+11/+31; scale used `SeedSequence([scale_seed,2501])`; pose used `SeedSequence([pose_seed,2502])` with E25 class ranges; support yaw was source-frame trajectory tangent plus the frozen perturbation. The proxy shape-proposal stream was inherited from E24-v2: proposals began at entity seed +3, stride 3,072, up to 64. All entities shared `training-world-v1`. Window center was `2+world_seed mod 445`; random traversal used `SeedSequence([world_seed,2601])`.
+Command and resolved config: Sole question: whether the formal training entry first created immutable worlds and then served frames/windows in any order without resampling in window, dataloader, or cache. `WorldSpec` was the sole upgraded canonical-JSON world format; each `ObjectSpec` stored final shape/template, material, translation, rotation, and label. `WorldGenerationReport` stored world type/count streams, support identity, shape/template/material/yaw seeds, placement proposal, E22/E23/E24/E25 decisions, and rejection counts, and was upgraded to `ajae-world-generation-report-v2` with explicit normal/anomaly counts, count seed, and label-order seed. `sample_training_world` could use only E21-v4→E22-v2→E23→E24→E25; old arbitrary-ground and bounding-sphere-final collision paths could not be referenced. The uncalled historical `generate_fixed_development_worlds`, which used invalid arbitrary ground, was removed; `sample_training_world` and its sole internal `place_object` call became the only training placement entry. Controls sampled canonical templates deterministically with scale/pose/material streams above; proxies passed E22 shape eligibility before a maximum 128 shared support placements. Any entity exhaustion restarted the complete world, up to 48. For each seed audit: two from-scratch generations; JSON round trip; forward, reverse, and random window traversal; cached, uncached, and rebuilt-after-clear; single-process and 24-process manifest construction. Frame-request identity was SHA-256 of canonical `(world_hash,frame_id,renderer_identity)`. Traversal could not change world JSON, and all cache modes/orders had to map frame ID to the same request identity. Two full manifests began from `WorldSpec` generation with 24 processes and required all saved arrays elementwise identical. The single-process audit only reconstructed JSON/hash/request manifests from saved world/report records, not all geometry. Numerical libraries were one-threaded per worker. Within a world, deterministic local pair-collision witnesses were cached by shape; only world transformation changed with placement. E26 audit checked saved E22 and E23 values rather than regenerating the same 16,384 surface points and repeated observed-obstacle query, while independently retaining final pair checks. The first completed execution had 256/256, zero type/round-trip/E22–E25/semantic/pose/material/pair/traversal/hard/exhaustion errors, elementwise two-run identity, one-process/24-process time 887.147803/124.987272 s, and scientific hash `dd2564ffb30ca730434d3e961e3cdd7117c3432720ea4eb43534a11c6dbfd210`, but a string-count authority audit counted its own literal and yielded `authority_errors=1`. This was `implementation_defect`, not scientific adjudication. Audit was repaired to count Python AST definitions/calls, with a regression against self-counting; all 46 regressions passed in 99.01 s. Formal command: `python -m src.render qualify-e26 --data-root /home/jasongao/Data/STU --support-pool runs/ajae/e21_v4_support_pool.npz --output runs/ajae/e26_world_builder.npz --processes 24`. PASS required all 256 and correct types; identical world JSON/hash/IDs/counts/geometry/template/support/pose/material/report across two runs; traversal-invariant specs and request identities; all nonempty entities passing E22–E25; no second authoritative placement/collision path; and two-run elementwise identity.
+Resource and disk preflight: Preliminary single-process and 24-process times 887.147803 s and 124.987272 s. Final two formal 24-process runs took 71.279377 s and 75.827829 s. Numerical libraries were single-threaded per worker. Disk preflight not recorded.
+Artifacts and hashes: Invalid preliminary artifact was 1,004,593 bytes, SHA-256 `25daf1a0a995598f5d7f2a67f3c7686d3dd68cf93968873a280c9211ad1fcc70`, and was deleted before repaired rerun. Final `runs/ajae/e26_world_builder.npz`, 1,018,517 bytes, SHA-256 `d93b6e8434dd5de54fb60b4d1587dbd2c466eebab8c2b06ad1477ae1c8411457`; scientific-array hash `e18fb5180a8667f8da8f755495720fa897cbe647ce8a2258284242dfc349c342`.
+Primary construct: Immutability and deterministic identity of complete worlds, reports, and frame requests under generation, traversal order, caching, and process parallelism for the old normal-control distribution.
+Primary result: PASS for the old distribution. All 256 worlds completed, 64 per type, all on complete attempt 0. Type, exhaustion, hard, world/report round-trip, E22–E25, class–support, pose, material, final pair, traversal, single-process manifest reconstruction, and AST authority errors were zero. Two runs were elementwise identical. Independent recomputation confirmed exact unique seed coverage and 256 unique world hashes. All 256 request-manifest hashes were unique. Parsing every world/report JSON found zero canonical JSON, world-hash, or normal/anomaly-count mismatches.
+PASS / FAIL / OUTCOME: PASS — historical evidence restricted to the old normal-control distribution.
+Failure classification: Final result not applicable. Preliminary run: `implementation_defect` in the static authority audit; no E26 scientific ruling was taken from it.
+Unlocked next node: Historically E27 and closure of old-distribution Phase 2. The current route does not use this result to skip E26-v2.
+Invalidated downstream evidence: It cannot qualify the E25-new production builder; E26-v2 independently did so. It makes no renderer-return correctness claim.
+Descriptive observations: Under the old distribution, the sole builder deterministically constructed four immutable world types and request identities were invariant to traversal, cache state, and process implementation.
+Notes: Historical applicability is explicitly limited to the old normal-control distribution.
+
+## E26-V1 | Placement-Scene Visualization
+
+Experiment ID: E26-V1
+Design-freeze commit/hash: Not applicable; optional nonblocking descriptive visualization after historical E26 PASS.
+Execution-freeze commit/hash: Not recorded; execution not required and not recorded.
+Date: Not recorded.
+Git commit / clean state: Not applicable.
+Data identities: A fixed scene panel selected by identity hash from E26 worlds, if executed.
+Input artifact hashes: Historical E26 artifact SHA-256 `d93b6e8434dd5de54fb60b4d1587dbd2c466eebab8c2b06ad1477ae1c8411457`.
+Random namespaces / seeds: Identity-hash scene selection; exact namespace not recorded.
+Command and resolved config: Inspect obvious floating, burial, wall penetration, and differences between the two placement styles. Without two independent human reviewers, no formal score could be produced. Any visual finding used to modify E21–E25 would have to open an explicit new development cycle and invalidate affected downstream evidence.
+Resource and disk preflight: Not recorded.
+Artifacts and hashes: No formal artifact recorded.
+Primary construct: Nonblocking descriptive visualization of placed scenes.
+Primary result: No formal execution or score recorded.
+PASS / FAIL / OUTCOME: OUTCOME — optional and nonblocking.
+Failure classification: Not applicable.
+Unlocked next node: E27 regardless of whether E26-V1 was executed.
+Invalidated downstream evidence: None unless a visual finding formally opened a new development cycle.
+Descriptive observations: Not recorded.
+Notes: This node never blocked E27.
+
+# Phase 3 | First-Return Counterfactual Rendering Mechanics
+
+## Phase 3 Interface-Layer Freeze
+
+Experiment ID: Phase 3 interface-layer freeze
+Design-freeze commit/hash: Frozen once before the first formal E27 run; commit not separately recorded.
+Execution-freeze commit/hash: Not applicable; shared protocol prerequisite.
+Date: Not recorded.
+Git commit / clean state: Not recorded.
+Data identities: E27–E37 formal fixtures as defined by their individual records.
+Input artifact hashes: Defined per node.
+Random namespaces / seeds: Defined per node.
+Command and resolved config: E27–E37 qualify discrete and physical renderer semantics, not distribution similarity. Real source fingerprints are assigned to E45–E46. Each mechanical layer must adjudicate directly at its own interface: E27/E28 read only geometry output; E29 reads only return probability and deterministic sampling; E30/E31 read accepted returns; E32/E33 read nearest-return occlusion competition. A downstream random mechanism or competition result cannot adjudicate an upstream layer.
+Resource and disk preflight: Not applicable.
+Artifacts and hashes: Shared protocol freeze; no independent artifact.
+Primary construct: Prevent downstream mechanisms from contaminating upstream mechanical qualifications.
+Primary result: Interface-layer responsibilities were frozen before execution.
+PASS / FAIL / OUTCOME: OUTCOME — shared Phase 3 protocol freeze.
+Failure classification: Not applicable.
+Unlocked next node: E27.
+Invalidated downstream evidence: Any runner that crosses its assigned interface cannot qualify that node and must be versioned as a protocol implementation defect.
+Descriptive observations: None.
+Notes: Distribution matching remains outside Phase 3.
+
+## E27 | Normal-Control Geometry Hit Qualification
+
+Experiment ID: E27
+Design-freeze commit/hash: Not separately recorded.
+Execution-freeze commit/hash: Implementation commit `b0668bd8c96a8c8ea0b04145fda8e263bae8649b`.
+Date: Not recorded.
+Git commit / clean state: Commit recorded above; clean state not recorded.
+Data identities: Deduplicate the historical E25 PASS artifact by first occurrence of `template_identity`, sort by `(raw_semantic_id,template_identity)`, and obtain 256 fixtures: 64 each car, truck, other-vehicle, and person. Fixture index $i$ used seed $2{,}700{,}000+i$ and target slot $i$, covering all 128 beams and both columns. Target surface distance was $2.5+47.5i/255$ m; beam elevation linearly covered -20° to 20°; column base azimuth was 0° or 180° plus an index-fixed -8° to 8° cyclic offset. Descriptive visibility used the 192 nonempty historical E26 worlds, taking only the lowest-object-ID real placed entity and its accepted support frame.
+Input artifact hashes: Historical E25 artifact `runs/ajae/e25_normal_control.npz`; historical E26 artifact `runs/ajae/e26_world_builder.npz`; sensor calibration `runs/ajae/calibration.pt`. Source SHA-256: `src/render.py` `2ea6d333fbe7531913d925f0b292c6e8d5d22986aba93e527ffff5d2a2202188`; `src/train.py` `92a3f51f93e26bead6a1d9d92e37af2b5e4df092ffc9716852806b4b67be546b`; `test_ajae.py` `960dc6b3b83a4e95e638a1f0358a3d20c8eb2b51300e5c737f2c49b4b0a3f8dd`.
+Random namespaces / seeds: Pose yaw/pitch/roll from `SeedSequence([fixture_seed,2701])`: yaw across $[-\pi,\pi)$ and pitch/roll within ±15°. Formal sensor was `SensorCalibration.constant(return_probability=1)` with intensity 1. Descriptive visibility also used return probability 1.
+Command and resolved config: Each object was placed beyond the target distance on the target ray, then translated only along that ray after an independent convex-hull plane reference found its nearest entry, so reference surface distance equaled the frozen target. In a 256-slot fixture, only target slot pointed at the object; the other 255 used the exact opposite unit direction and were analytic positive-distance misses. Formal path called only `_accepted_object_hits`. Independent reference directly slab-intersected `NormalTemplateShape.plane_normals/plane_offsets` and did not call `NormalTemplateShape.intersect` or `_accepted_object_hits`. PASS required zero target-hit, miss, outward-normal, and object-ID errors; finite positive nearest distance; maximum distance and surface residual $\le10^{-8}$ m; maximum unit-normal error $\le10^{-10}$; and two 24-process runs elementwise identical. Descriptive $N_{vis}$ counted slots in which the entity beat native returns on the formal grid and did not affect PASS; E42 owns full visibility distribution. All 46 regressions passed in 98.50 s. Command: `python -m src.render qualify-e27 --e25-artifact runs/ajae/e25_normal_control.npz --e26-artifact runs/ajae/e26_world_builder.npz --data-root /home/jasongao/Data/STU --calibration runs/ajae/calibration.pt --output runs/ajae/e27_normal_control_hits.npz --processes 24`.
+Resource and disk preflight: Two 24-process core-fixture runs took 0.058558 s and 0.062171 s. Disk preflight not recorded.
+Artifacts and hashes: `runs/ajae/e27_normal_control_hits.npz`, 17,437 bytes, SHA-256 `7b11c16c14097ed87e349c41b2e4c9d314e854a1f550dbaa6247d901c7793929`; scientific-array hash `cc684d8c30db7733f7b04c440a49b13be45a182c839e26d37070f9ec94105ccb`.
+Primary construct: Correct nearest positive geometry intersection, outward normal, and object identity for observable normal-control hull templates when return rejection is disabled.
+Primary result: PASS. Across 256 target rays and 65,280 analytic miss rays, target-hit, miss, outward-normal, and object-ID errors were zero. Maximum nearest-distance absolute error was $2.132\times10^{-14}$ m, hull surface residual $1.582\times10^{-14}$ m, and unit-normal error $2.220\times10^{-16}$. Both runs were elementwise identical. Independent checks confirmed exact seed 2,700,000–2,700,255, beam 0–127, column 0–1, four classes ×64, 256 unique identities, and both target/reference distances spanning 2.5–50 m. Descriptive visibility over 192 placed objects had minimum/median/$Q_{0.95}$/maximum 1/103/1,179/2,143 and zero invisible objects.
+PASS / FAIL / OUTCOME: PASS.
+Failure classification: Not applicable.
+Unlocked next node: E28; E27 closed.
+Invalidated downstream evidence: None. It does not qualify proxy intersection, probability sampling, intensity, or final competition with native returns.
+Descriptive observations: With rejection disabled, formal normal-control geometry returned the reference nearest positive hit, finite outward normal, and identity for all active template fixtures.
+Notes: The descriptive historical-E26 $N_{vis}$ sample did not enter adjudication.
+
+## E28-v1 | Anomaly-Proxy Geometry Hit Qualification through the Incorrect Accepted-Return Runner
+
+Experiment ID: E28-v1
+Design-freeze commit/hash: Not separately recorded.
+Execution-freeze commit/hash: Implementation commit `dea911899d9891d632d88de3394f17e7f2904ed0`.
+Date: Not recorded.
+Git commit / clean state: Commit recorded above; clean state not recorded.
+Data identities: Schema-7 seeds 2,800,000–2,800,255 in order, with no filtering or replacement. Families general/elongated/blocky/flat counted 95/62/50/49; primitive counts 1–5 counted 74/52/35/53/42; all 20 family×primitive-count cells were nonempty; accepted size upper bounds spanned 0.24818387696031585–2.9978872129930567 m. Fixture $i$ used target slot $i$, covering 128 beams ×2 columns; target surface distance $2.5+47.5i/255$ m; beam elevation -20° to 20°; column base azimuth 0° or 180° with -8° to 8° cyclic offset. Descriptive visibility used 128 historical E26 worlds containing proxies, taking only the lowest-object-ID proxy and its accepted support frame.
+Input artifact hashes: Historical E26 artifact `runs/ajae/e26_world_builder.npz`; calibration `runs/ajae/calibration.pt`. Source SHA-256: `src/render.py` `940fd6484b976b7b59c8b1c7bc8bea8dbd86e5aa27efa6eb5eb0024f57bd8e9b`; `src/train.py` `92a3f51f93e26bead6a1d9d92e37af2b5e4df092ffc9716852806b4b67be546b`; `test_ajae.py` `960dc6b3b83a4e95e638a1f0358a3d20c8eb2b51300e5c737f2c49b4b0a3f8dd`.
+Random namespaces / seeds: Shape seeds above. Strict interior witness was first shared undeformed witness from generation report, else first primitive offset; after formal forward deformation it had to have signed-distance margin below $-10^{-8}$ m. Pose reused `SeedSequence([fixture_seed,2701])`. Formal sensor was intended as intensity 1 and return probability 1.
+Command and resolved config: Place shape beyond target along ray, then translate only along ray so independent reference's first entry equals target distance. Only target slot pointed at object; 255 used exact reverse directions. Independent references sampled 4,097 and 16,385 fixed nodes in the positive-ray interval of the conservative bounding sphere, bracketed first outside-to-inside transition, and solved with Brent; neither called `ShapeSpec.intersect` nor `_accepted_object_hits`. Reference difference had to be $<5\times10^{-5}$ m; formal distance error $\le10^{-4}$ m; surface residual $\le10^{-6}$ m; normal length error $\le10^{-10}$; zero hit, analytic-miss, outward-normal, and object-ID errors; two 24-process runs elementwise identical. The runner incorrectly called `_accepted_object_hits`, crossing geometry into probability, random acceptance, and nearest competition. All 46 regressions passed in 99.08 s. Command: `python -m src.render qualify-e28 --e26-artifact runs/ajae/e26_world_builder.npz --data-root /home/jasongao/Data/STU --calibration runs/ajae/calibration.pt --output runs/ajae/e28_anomaly_proxy_hits.npz --processes 24`.
+Resource and disk preflight: Two 24-process core runs took 0.186233 s and 0.195004 s. Disk preflight not recorded.
+Artifacts and hashes: `runs/ajae/e28_anomaly_proxy_hits.npz`, 28,118 bytes, SHA-256 `5b1cb22f2a415645e53d0971e4cf8d6c81124b6958cc61fc8cc8ab7617c775f1`; scientific-array hash `26f0af96a77813126eddc61e8e311d60d443ddf9e55f2cf212378873e4c0ee5f`.
+Primary construct: Intended proxy pure-geometry hit qualification, but the implemented runner adjudicated accepted-return competition.
+Primary result: FAIL. Both runs were elementwise identical. 255/256 fixtures produced finite final-competition hits. The sole apparent failure was index 127, seed 2,800,127, general family, five primitives, beam 63, column 1, target 26.15686274509804 m, identity `e40c51a4b501d8b3f1dd277488c6f4d422bcf764b1cfd9afab5d5172b3818a7b`. Strict-witness margin was 0.10470550994737828 m and independent reference roots differed by $1.705\times10^{-13}$ m. The runner reported infinity and one hit, miss, normal, and object-ID error only because it continued beyond intersection. Directed diagnosis found raw `ShapeSpec.intersect` `valid=True`, distance 26.156862691941157 m, unit normal, and zero raw geometry hits on 255 reverse rays; error from reference $5.316\times10^{-8}$ m. Constant sensor was still clipped and material-biased: probability 0.9999864437684041, frozen slot uniform 0.9999961987049697, hence the correct hit was rejected. The other 255 finite results had maximum distance error $1.226\times10^{-7}$ m, residual $1.171\times10^{-7}$ m, and normal error $3.331\times10^{-16}$; all within tolerance. All 256 reference pairs differed by at most $3.766\times10^{-13}$ m. Descriptive proxy $N_{vis}$ over 128 placed worlds was minimum/median/$Q_{0.95}$/maximum 1/82/921/2,265 with zero invisible objects.
+PASS / FAIL / OUTCOME: FAIL — permanent historical result.
+Failure classification: `protocol implementation defect`; not a scientific failure of `ShapeSpec.intersect`.
+Unlocked next node: E28-v2 pure-geometry interface regression. E29 remained locked.
+Invalidated downstream evidence: E28-v1 cannot be rewritten as PASS. It invalidated only its runner's claim that return rejection was disabled; E27, E26, and earlier qualifications were unchanged. No intersection algorithm, adaptive search, step count, schema 7, material distribution, or return calibration could be changed in response.
+Descriptive observations: The only apparent miss was a legitimate probabilistic return rejection after a geometrically correct first intersection.
+Notes: This failure established the Phase 3 rule that a mechanical experiment must stop at its assigned interface.
+
+## E28-v2 | Pure-Geometry Anomaly-Proxy Intersection Regression
+
+Experiment ID: E28-v2
+Design-freeze commit/hash: Versioned from E28-v1 with only the adjudication path changed.
+Execution-freeze commit/hash: Implementation commit `b4b5e0c28f08579429463098462584fc526f07d3`.
+Date: Not recorded.
+Git commit / clean state: Commit recorded above; clean state not recorded.
+Data identities: Exactly the same 256 E28-v1 fixtures, seeds, shapes, identities, beams, columns, target/reverse directions, distances, poses, strict interior witnesses, and both independent references. No fixture was filtered or replaced.
+Input artifact hashes: Historical E26 artifact `runs/ajae/e26_world_builder.npz`; calibration `runs/ajae/calibration.pt`. Source SHA-256: `src/render.py` `dfc8a2d155e39505e455c2cad543baa4895ab19cb813cbcf7dfe6011e37138f5`; `src/train.py` `92a3f51f93e26bead6a1d9d92e37af2b5e4df092ffc9716852806b4b67be546b`; `test_ajae.py` `960dc6b3b83a4e95e638a1f0358a3d20c8eb2b51300e5c737f2c49b4b0a3f8dd`.
+Random namespaces / seeds: Exactly E28-v1, including seeds 2,800,000–2,800,255 and pose stream.
+Command and resolved config: The only revision was to call `ShapeSpec.intersect` directly and read only distance, normal, and valid mask. `_accepted_object_hits`, `return_chance`, `_slot_uniform`, material modulation, and nearest-return competition were prohibited. A single-object geometry interface has no object-ID output, so adjudication covered target hit, reverse miss, nearest positive root, surface residual, normal unit length, and outwardness. First run directed regression on seed 2,800,127, then all 256; two 24-process runs had to be elementwise identical. Zero hit/miss/outward errors; reference difference $<5\times10^{-5}$ m; distance error $\le10^{-4}$ m; residual $\le10^{-6}$ m; normal-length error $\le10^{-10}$. E28-v1 artifact was not overwritten. All 46 regressions passed in 100.12 s. Command: `python -m src.render qualify-e28-v2 --e26-artifact runs/ajae/e26_world_builder.npz --data-root /home/jasongao/Data/STU --calibration runs/ajae/calibration.pt --output runs/ajae/e28_v2_anomaly_proxy_hits.npz --processes 24`.
+Resource and disk preflight: Two 24-process core runs took 0.170502 s and 0.169823 s. Disk preflight not recorded.
+Artifacts and hashes: `runs/ajae/e28_v2_anomaly_proxy_hits.npz`, 27,953 bytes, SHA-256 `796b46bfb4acdba348322c308eed63fc5d1a80542bd1a9067d12d27e45c2787c`; scientific-array hash `b974d4fac1534c1964ea39c245e2b808993c726cb010bccb604cccca5a43d1da`.
+Primary construct: Pure continuous schema-7 geometry intersection at the authoritative interface.
+Primary result: PASS. Across 256 targets and 65,280 reverse misses, hit, miss, and outward-normal errors were zero. Maximum independent-reference difference was $3.766\times10^{-13}$ m; maximum distance error $1.226\times10^{-7}$ m; maximum surface residual $1.171\times10^{-7}$ m; maximum normal-length error $3.331\times10^{-16}$. Seed 2,800,127 returned 26.156862691941157 m with error $5.316\times10^{-8}$ m and zero hit/miss/normal errors. Both runs were elementwise identical. Independent recomputation showed v1/v2 seeds, family, primitive count, size, identity, beam, column, target distance, reference difference, and witness margin were elementwise identical. Descriptive historical-E26 proxy $N_{vis}$ remained 1/82/921/2,265 minimum/median/$Q_{0.95}$/maximum, zero invisible, and did not adjudicate v2.
+PASS / FAIL / OUTCOME: PASS.
+Failure classification: Not applicable. E28-v1 remains a permanent protocol implementation FAIL.
+Unlocked next node: E29; E28 closed.
+Invalidated downstream evidence: None. Return probability, random acceptance, intensity, and nearest competition remained unqualified until E29–E35.
+Descriptive observations: Formal `ShapeSpec.intersect` matched both independent references and returned finite outward normals for every frozen schema-7 target.
+Notes: No production geometry code changed, so E18b-v4 did not require rerun. Under the frozen failure branch, E28-v2 FAIL would have kept E29 locked.
+
+## E29 | Return Probability and Deterministic Sampling
+
+Experiment ID: E29
+Design-freeze commit/hash: Not separately recorded.
+Execution-freeze commit/hash: Implementation commit `ae7ef0dc23d6e3dc8467a5a72349ccf22102e377`.
+Date: Not recorded.
+Git commit / clean state: Commit recorded above; clean state not recorded.
+Data identities: Complete calibration grid of 128 beams ×6 range bins ×3 incidence bins =2,304 cells. Each cell used 24 identity replicas, 55,296 intermediate-probability decisions total. Replica $i=0,\ldots,23$ used world seed $2{,}900{,}000+i$, source sequence 206, frame $1{,}000+i$, object ID $i+1$, and slots 0–2,303.
+Input artifact hashes: `runs/ajae/calibration.pt`; source SHA-256: `src/render.py` `cc83a7d1a05d808e899169f64022e6200be243700608da98b839bd8936f42c39`; `src/train.py` `92a3f51f93e26bead6a1d9d92e37af2b5e4df092ffc9716852806b4b67be546b`; `test_ajae.py` `960dc6b3b83a4e95e638a1f0358a3d20c8eb2b51300e5c737f2c49b4b0a3f8dd`.
+Random namespaces / seeds: Identity values above. Material return bias was `MaterialSpec.sample(2900000+i).return_bias`. Formal uniform used `_slot_uniform`; independent reference separately implemented the frozen 64-bit identity mixer without calling it.
+Command and resolved config: Inspect the frozen `SensorCalibration` over every beam×range×incidence cell. Independently recompute Jeffreys-smoothed probability from `opportunity_counts`, `return_counts`, and cross-beam same-range/incidence pooled counts. `fallback_mask` had to equal `opportunity_counts<64` elementwise, and provenance had to literally contain `jeffreys_beta_smoothed_binomial_rate` and `cross_beam_same_range_incidence_below_64_opportunities`. Formal probability used `SensorCalibration.return_chance`; reference applied identical frozen clipping, logit, $2\rho$ bias, and sigmoid. Formal/reference probability, uniform, and `u<p` accepted mask had to match elementwise. On the same 55,296 uniforms, `u<0` had to reject all and `u<1` accept all. Intermediate probability had to produce at least one acceptance and rejection. Empirical acceptance rate was descriptive, without a random-error-curve gate. Two 24-process runs and all arrays elementwise identical. All 46 regressions passed in 99.33 s. Command: `python -m src.render qualify-e29 --calibration runs/ajae/calibration.pt --output runs/ajae/e29_return_sampling.npz --processes 24`.
+Resource and disk preflight: Two 24-process runs took 0.101434 s and 0.103730 s. Disk preflight not recorded.
+Artifacts and hashes: `runs/ajae/e29_return_sampling.npz`, 1,366,912 bytes, SHA-256 `5aea7bb44c1d30dedd957f869c8765cede5f1e8dd543e4fa483184a5c47428c5`; scientific-array hash `156bbe7af1a8021421ddf6d8876be9c21899b38ba30f59555d4126f9238ded44`.
+Primary construct: Correct calibration probability, fallback provenance, material modulation, stable identity uniform, and deterministic Bernoulli acceptance.
+Primary result: PASS. Finite/[0,1] errors were zero for 2,304 base cells and 55,296 material-modulated probabilities. Maximum errors against independent Jeffreys base probability, material-modulated probability, and 64-bit mixer were all zero; accepted-mask differences zero. All 734 fallback cells exactly satisfied `opportunity_counts<64`, and estimator/fallback provenance matched literally. On fixed identities, $p=0$ rejected all and $p=1$ accepted all with zero errors. Intermediate formal probabilities accepted 55,162 and rejected 134. Modulated probability range was 0.9245455430073359–0.9999805912145614; uniform range $3.459\times10^{-7}$–0.9999807361554899. Both runs were elementwise identical.
+PASS / FAIL / OUTCOME: PASS.
+Failure classification: Not applicable.
+Unlocked next node: E30; E29 closed.
+Invalidated downstream evidence: None. It did not qualify accepted-return point, label, or intensity payload.
+Descriptive observations: The high empirical acceptance count only documented branch coverage and was not judged against an ideal random error curve.
+Notes: E30 and E31 own accepted payloads.
+
+## E30 | Normal-Control Accepted Returns
+
+Experiment ID: E30
+Design-freeze commit/hash: Not separately recorded.
+Execution-freeze commit/hash: Implementation `688618a2d5a0bd0792a33a5f1f48bab6f00f55a0`; input-identity audit correction `4527fcffa766183a82674c430fa8386cd544c879`.
+Date: Not recorded.
+Git commit / clean state: Corrected commit recorded above; clean state not recorded.
+Data identities: Rebuild the original 256 normal-control fixtures after elementwise checking E27 `template_identity`. Shape, seeds 2,700,000–2,700,255, beam/column, target distance, pose, and `MaterialSpec.sample(seed+2702)` were unchanged. Every fixture expanded to 24 frame identities: frame ID $256r+i$ for fixture $i=0,\ldots,255$ and replica $r=0,\ldots,23$; world seed $2{,}700{,}000+i$, object ID $i+1$, slot $i$. Total 6,144 accepted-return decisions. Geometry, normal, probability, and material were computed once per fixture and shared read-only across identities.
+Input artifact hashes: Historical E25 artifact `runs/ajae/e25_normal_control.npz`; E27 artifact `runs/ajae/e27_normal_control_hits.npz`; calibration `runs/ajae/calibration.pt`. Final source SHA-256: `src/render.py` `8b35a71a96fd58ff056e8e788f68eb4c6a7324f270f73b2035df6f06f0e7e46c`; `src/train.py` `92a3f51f93e26bead6a1d9d92e37af2b5e4df092ffc9716852806b4b67be546b`; `test_ajae.py` `960dc6b3b83a4e95e638a1f0358a3d20c8eb2b51300e5c737f2c49b4b0a3f8dd`.
+Random namespaces / seeds: Formal accepted mask `_slot_uniform(...,channel=0)<SensorCalibration.return_chance`; independent E29 reference recomputed material probability and 64-bit uniform. Accepted intensity used formal `SensorCalibration.sample_intensity` with independently computed channel-1 identity uniform.
+Command and resolved config: Accepted point coordinates had to be finite, intensity finite and within frozen train/206 support, and semantic equal to the source normal-control template raw semantic. A rejection had to retain NaN point/intensity and semantic 0, representing no payload. Native range, native/inserted nearest competition, and occlusion mask were not read. PASS required accepted mask identical to E29 reference, zero payload error, both accept/reject branches, and two elementwise-identical 24-process runs. The first command was stopped before either run because the input audit directly compared E25 selection keys with E27's recomputed `_normal_template_identity`; no artifact was written. Correction changed the E25 selection key to the exact recorded E27 identity and checked elementwise, without changing template order or fixtures. All 46 corrected regressions passed in 99.21 s. Command: `python -m src.render qualify-e30 --e25-artifact runs/ajae/e25_normal_control.npz --e27-artifact runs/ajae/e27_normal_control_hits.npz --calibration runs/ajae/calibration.pt --output runs/ajae/e30_normal_returns.npz --processes 24`.
+Resource and disk preflight: Corrected two 24-process runs took 0.122548 s and 0.121699 s. Disk preflight not recorded.
+Artifacts and hashes: `runs/ajae/e30_normal_returns.npz`, 145,112 bytes, SHA-256 `f6caf496b7c0e085d4c8f5191e04a69dda70949f31013dee3d9b07db95c2162f`; scientific-array hash `4f86b6ae373a6db84da849131ab1c016afc642a50a3d40978abf8cec60a3f55c`. The rejected pre-audit invocation produced no artifact.
+Primary construct: Correct accepted-return mask and point/intensity/semantic payload for normal-control geometry hits, isolated before nearest-return competition.
+Primary result: PASS. Corrected reconstruction matched all 256 E27 identities. Among 6,144 decisions, 6,137 accepted and seven rejected. Geometry, independent material-probability reference, independent 64-bit uniform, accepted mask, accepted payload, and rejected payload errors were zero. Accepted intensity ranged 0.0020000000949949026–1.6214286088943481; accepted semantics were exactly 10, 18, 20, and 30. Every rejection retained NaN point/intensity and semantic 0. Both runs were elementwise identical.
+PASS / FAIL / OUTCOME: PASS.
+Failure classification: Final result not applicable. The initial pre-execution input-identity audit mismatch was an implementation audit defect and produced no experiment result.
+Unlocked next node: E31; E30 closed.
+Invalidated downstream evidence: None. Anomaly-proxy accepted payload and native/inserted nearest competition remained unqualified.
+Descriptive observations: The frozen normal-control geometry hits became finite, class-correct payloads exactly when the independent E29 decision accepted them.
+Notes: Native-range competition is assigned to E32–E33.
+
+## E31 | Anomaly-Proxy Accepted Returns
+
+Experiment ID: E31
+Design-freeze commit/hash: Not separately recorded.
+Execution-freeze commit/hash: Implementation commit `b1543dd7a475097d4e1140a1333e095eec13c527`.
+Date: Not recorded.
+Git commit / clean state: Commit recorded above; clean state not recorded.
+Data identities: Rebuilt exactly the 256 schema-7 E28-v2 fixtures after elementwise checking seed and shape identity. Shape, seeds 2,800,000–2,800,255, beam/column, target distance, pose, and `MaterialSpec.sample(seed+2802)` were unchanged. Each fixture had 24 frame identities: frame ID $256r+i$, world seed $2{,}800{,}000+i$, object ID $i+1$, slot $i$, totaling 6,144 decisions. Geometry, normal, probability, and material were computed once and reused read-only across replicas.
+Input artifact hashes: E28-v2 `runs/ajae/e28_v2_anomaly_proxy_hits.npz`; calibration `runs/ajae/calibration.pt`. Source SHA-256: `src/render.py` `b25c388221996b1fec4c7461ce660cd07eae29e4d1ee4491c3dda25cd2dd1e65`; `src/train.py` `92a3f51f93e26bead6a1d9d92e37af2b5e4df092ffc9716852806b4b67be546b`; `test_ajae.py` `960dc6b3b83a4e95e638a1f0358a3d20c8eb2b51300e5c737f2c49b4b0a3f8dd`.
+Random namespaces / seeds: Identical accepted-mask, independent E29 reference, channel-1 intensity, and rejected-payload rules to E30.
+Command and resolved config: Accepted point and intensity had to be finite and intensity within frozen support; raw semantic had to be 2 and internal object ID $i+1$. Rejected point/intensity remained NaN, semantic 0, object ID -1. Native range, nearest competition, and occlusion were not read. PASS required zero mask/payload errors, both branches, and two elementwise-identical 24-process runs. All 46 regressions passed in 98.60 s. Command: `python -m src.render qualify-e31 --e28-artifact runs/ajae/e28_v2_anomaly_proxy_hits.npz --calibration runs/ajae/calibration.pt --output runs/ajae/e31_proxy_returns.npz --processes 24`.
+Resource and disk preflight: Two 24-process runs took 0.221930 s and 0.240864 s. Disk preflight not recorded.
+Artifacts and hashes: `runs/ajae/e31_proxy_returns.npz`, 146,341 bytes, SHA-256 `f7d9f3478644429e2d0393e2f63e6a17fe4b44dc285a8b76f0004f1b23f7e495`; scientific-array hash `c5ce21593fc66c02a8b71c35becf29ff05178cf2dc1459eea3ce27ffd911228b`.
+Primary construct: Correct accepted-return mask and point/intensity/semantic/object payload for proxy geometry hits before nearest competition.
+Primary result: PASS. Of 6,144 decisions, 6,137 accepted and seven rejected. Geometry, material-probability reference, 64-bit identity-uniform reference, accepted mask, accepted payload, and rejected payload errors were zero. Accepted intensity ranged 0.0022857142612338066–1.6308571100234985; every accepted semantic was 2 and internal object ID fixture index +1. Rejected point/intensity were NaN, semantic 0, object ID -1. Both runs were elementwise identical.
+PASS / FAIL / OUTCOME: PASS.
+Failure classification: Not applicable.
+Unlocked next node: E32; E31 closed.
+Invalidated downstream evidence: None. Native/inserted nearest competition remained unqualified.
+Descriptive observations: Proxy accepted payload followed the same E29/E30 mechanics with correct proxy semantic and internal identity.
+Notes: E32–E33 own nearest-return competition.
+
+## E32 | Inserted Return Occludes Native Background
+
+Experiment ID: E32
+Design-freeze commit/hash: Not separately recorded.
+Execution-freeze commit/hash: Implementation commit `a7fd304be9c662e5bc8ddb8971a5e6b466922dbb`.
+Date: Not recorded.
+Git commit / clean state: Commit recorded above; clean state not recorded.
+Data identities: Three fixed one-slot `sensor→inserted→native-background` fixtures. Sensor at origin, ray +x, native float32 range exactly 5 m, inserted object a 0.5 m normal-control convex hull with guaranteed return.
+Input artifact hashes: `src/render.py` SHA-256 `ac97f885754ea5fd83957c273e2877aadab7b71cf62b9a511aee9948c95add1f`.
+Random namespaces / seeds: Constant sensor acceptance; no stochastic branch relevant.
+Command and resolved config: `tie_tolerance_m=10^{-6}` m. Native/inserted range differences were 0.5, 1, and 2 times the tie tolerance. Frozen rule: native wins first two and inserted wins the third. Full `render_frame` checked one final slot, distance, packed/raw labels, internal ID, `inserted_mask`, and `occluded_original_mask`, with two elementwise-identical runs. All 46 regressions passed in 99.63 s. Command: `python -m src.render qualify-e32 --output runs/ajae/e32_background_occlusion.npz`.
+Resource and disk preflight: Runtime and disk preflight not recorded.
+Artifacts and hashes: `runs/ajae/e32_background_occlusion.npz`, 3,258 bytes, SHA-256 `cc1bcf07fd6473897b1712619d98d5983735c7b9d01d987deff94580449c03ce`; scientific-array hash `fb767acb595c05d7a6985b7d7c1ccabaded973213dde1ea65b97a063d08786ab`.
+Primary construct: Correct nearest-return replacement and native-background occlusion at the frozen tie boundary.
+Primary result: PASS. Winners were native, native, inserted, exactly frozen. Mask, single-return, semantic, packed-label, and internal-ID errors were zero; maximum distance error $9.265\times10^{-8}$ m; two runs elementwise identical.
+PASS / FAIL / OUTCOME: PASS.
+Failure classification: Not applicable.
+Unlocked next node: E33; E32 closed.
+Invalidated downstream evidence: None. It closed only inserted-before-native-background competition; E33 owned native foreground before inserted.
+Descriptive observations: None beyond the exact three boundary outcomes.
+Notes: Tie behavior is part of the authoritative renderer contract.
+
+## E33 | Native Foreground Occludes Inserted Return
+
+Experiment ID: E33
+Design-freeze commit/hash: Not separately recorded.
+Execution-freeze commit/hash: Implementation commit `c1f8d76544c45106b0844aae7110da82adfd64e1`.
+Date: Not recorded.
+Git commit / clean state: Commit recorded above; clean state not recorded.
+Data identities: Three one-slot fixtures isomorphic to E32. Native foreground range 5 m; accepted inserted return lay behind native by 0.5, 1, and 2 times `tie_tolerance_m`.
+Input artifact hashes: `src/render.py` SHA-256 `2be3be0cbc4ce4968bf90fc75d7d383aa67b9770346b9295b2b0416ebe1a3fb3`.
+Random namespaces / seeds: Constant accepted inserted return; no stochastic branch relevant.
+Command and resolved config: Full `render_frame`; all fixtures had to keep native range, semantic 10, instance 7; `inserted_mask=false`, `occluded_original_mask=false`, internal object ID -1, exactly one final slot; two elementwise-identical runs. All 46 regressions passed in 99.71 s. Command: `python -m src.render qualify-e33 --output runs/ajae/e33_foreground_occlusion.npz`.
+Resource and disk preflight: Runtime and disk preflight not recorded.
+Artifacts and hashes: `runs/ajae/e33_foreground_occlusion.npz`, 2,299 bytes, SHA-256 `2667f81a6a20b7c02cd3736fcd1d733314cfda827b592916cda29b94f5880b51`; scientific-array hash `19465f1339a311d025a975b808eb5a3a58d113f88a16b2b3adbdb7c455cab6cd`.
+Primary construct: Correct preservation of a nearer native foreground when an accepted inserted return is behind it.
+Primary result: PASS. All three kept native foreground; distance, semantic, instance, inserted mask, occlusion mask, internal ID, and one-return errors were zero; two runs elementwise identical.
+PASS / FAIL / OUTCOME: PASS.
+Failure classification: Not applicable.
+Unlocked next node: E34; E33 closed.
+Invalidated downstream evidence: None.
+Descriptive observations: None beyond the exact three boundary outcomes.
+Notes: E32 and E33 together close both directed nearest-competition cases.
+
+## E34 | New Returns and Rejections on Empty Rays
+
+Experiment ID: E34
+Design-freeze commit/hash: Not separately recorded.
+Execution-freeze commit/hash: Implementation commit `01f5f2aa15dd298495064e0aa5e6bfd0968ff07d`.
+Date: Not recorded.
+Git commit / clean state: Commit recorded above; clean state not recorded.
+Data identities: Three fixed one-slot empty-native fixtures; original XYZ all zero and intensity payload fixed at 17. Cases: geometry hit plus high-end acceptance, geometry hit plus low-end rejection, and no geometry hit.
+Input artifact hashes: `src/render.py` SHA-256 `a1ee3d9358d0da6a0c2388a580e7c86db3fabf6a4f93de80f2a5faf2ee8e3b07`.
+Random namespaces / seeds: Frozen high-end acceptance and low-end rejection fixtures; exact seeds not recorded.
+Command and resolved config: Full `render_frame`. Expected occupancy true/false/false. Accepted item semantic 10, internal object ID 1, finite intensity. Other two semantic 0, object ID -1, and original empty-slot intensity payload retained. Every `occluded_original_mask` false. Empty-slot intensity could not determine occupancy. Two elementwise-identical runs. Command: `python -m src.render qualify-e34 --output runs/ajae/e34_empty_rays.npz`.
+Resource and disk preflight: Runtime and disk preflight not recorded.
+Artifacts and hashes: `runs/ajae/e34_empty_rays.npz`, 1,755 bytes, SHA-256 `b680519671cd189cf6f3bf241c249b4374051c381de80e8fcded6d8574033512`; scientific-array hash `ec122c01028bb41345f1cecfa5614758287919650783181e92aec81068edf5a6`.
+Primary construct: Correct occupancy and payload behavior when insertion targets an originally empty ray.
+Primary result: PASS. Occupancy was true/false/false; occupancy, semantic, internal-ID, mask, and empty-slot intensity-payload errors were zero; two runs elementwise identical.
+PASS / FAIL / OUTCOME: PASS.
+Failure classification: Not applicable.
+Unlocked next node: E35; E34 closed.
+Invalidated downstream evidence: None.
+Descriptive observations: A nonzero intensity payload in an empty native slot did not create occupancy.
+Notes: None.
+
+## E35 | Mechanical Intensity Qualification
+
+Experiment ID: E35
+Design-freeze commit/hash: Not separately recorded.
+Execution-freeze commit/hash: Implementation commit `0aea678d884e694391eeb0a94a89584c23104065`.
+Date: Not recorded.
+Git commit / clean state: Commit recorded above; clean state not recorded.
+Data identities: Full 2,304 beam×range×incidence calibration cells, 24 frozen identities per cell, 55,296 intensity draws. Identity $i$ used world seed and `MaterialSpec.sample` seed $3{,}500{,}000+i$, frame $2{,}000+i$, object ID $i+1$, and slots 0–2,303.
+Input artifact hashes: Calibration `runs/ajae/calibration.pt`; `src/render.py` SHA-256 `80720b70481408601a54fded5823de5865ec1152652dd83fc3af12d5467ee2d1`.
+Random namespaces / seeds: Formal channel-1 `_slot_uniform`; independent frozen 64-bit identity mixer.
+Command and resolved config: Compare `SensorCalibration.sample_intensity` with independently recomputed identity uniform, material quantile perturbation, conditional-table linear interpolation, and frozen-support clipping. Maximum error $\le10^{-6}$; every value finite and inside train/206 frozen support; no undefined cells; two 24-process runs elementwise identical. Quantile-boundary clipping fraction was reported but not a distribution-similarity gate. Command: `python -m src.render qualify-e35 --calibration runs/ajae/calibration.pt --output runs/ajae/e35_intensity.npz --processes 24`.
+Resource and disk preflight: Two 24-process runs; exact wall times and disk preflight not recorded.
+Artifacts and hashes: `runs/ajae/e35_intensity.npz`, 2,048,622 bytes, SHA-256 `25ffbbea26b7b1a211a0f098276350fbc4b8decabe9cf9b5e69ab2e9edc3acd2`; scientific-array hash `cc8ffa84692ec01ce337e8e66d18e5c4dfabc836b8072699feb7dccca4a7efac`.
+Primary construct: Exact mechanical implementation of conditional quantile interpolation, material modulation, deterministic noise/identity hashing, and clipping for intensity.
+Primary result: PASS. Maximum error against independent reference and maximum identity-uniform error were both zero; undefined cells and frozen-support violations were zero; two runs elementwise identical. High-end quantile clipping occurred 80 times, low-end zero, total fraction 0.0014467592592592592.
+PASS / FAIL / OUTCOME: PASS.
+Failure classification: Not applicable.
+Unlocked next node: E36; E35 closed.
+Invalidated downstream evidence: None. Clipping frequency did not adjudicate source-distribution similarity.
+Descriptive observations: High-end clipping was 80/55,296; this was descriptive only.
+Notes: Gate 1 owns distribution-level source comparisons.
+
+## E36-v1 | Shared Rendering Path through an Invalid Same-Shape/Different-Label Fixture
+
+Experiment ID: E36-v1
+Design-freeze commit/hash: Not separately recorded.
+Execution-freeze commit/hash: Implementation commit `2404074c91660544b67d9b23ce6588e629b9f441`.
+Date: Not recorded.
+Git commit / clean state: Commit recorded above; clean state not recorded.
+Data identities: Two attempted paired fixtures: one `NormalTemplateShape` relabeled only as anomaly-proxy, and one schema-7 `ShapeSpec` relabeled only as normal-control; material, pose, and object ID otherwise identical.
+Input artifact hashes: `src/render.py` SHA-256 `a628b8a0551c3d748c8182f50daf93d07d92f5a24b16b463d8fcbf4464257d52`.
+Random namespaces / seeds: Not applicable because paired runtime traces could not be constructed.
+Command and resolved config: Static audit counted reads of `label` or either label constant in `_accepted_object_hits`, `SensorCalibration.return_chance`, and `SensorCalibration.sample_intensity`. Runtime trace was to compare identical geometry/material/pose while changing only label, with every sensor intermediate elementwise identical and only final supervision assignment different. Both authoritative `ObjectSpec` constructions had to pass before tracing; rejection by the dataclass contract was a fixture-construction FAIL and could not be bypassed. Command: `python -m src.render qualify-e36 --output runs/ajae/e36_shared_path.npz`.
+Resource and disk preflight: Runtime and disk preflight not recorded.
+Artifacts and hashes: `runs/ajae/e36_shared_path.npz`, 618 bytes, SHA-256 `d61e90062ba5f5500d8eac3ad8bbf6f9163c38acc61fc4b56b96900a59e137d9`.
+Primary construct: Whether normal-control and anomaly-proxy use a label-independent sensor path, tested by an originally specified same-shape/different-label `ObjectSpec` pair.
+Primary result: FAIL. Static audit found zero label-property or label-constant branches in all three sensor functions. But neither frozen paired fixture could be constructed: relabeling `NormalTemplateShape` raised `anomaly-proxy objects cannot use normal instance templates`; relabeling schema-7 shape raised `normal-control objects require a 206 convex-hull template`. No paired trace ran, so the frozen same-geometry/material/pose-only-label condition was not met.
+PASS / FAIL / OUTCOME: FAIL — permanent historical result.
+Failure classification: `protocol design conflict`; not an observed label branch in the sensor functions.
+Unlocked next node: E36-v2 versioned sensor-interface design. E37 remained locked.
+Invalidated downstream evidence: E36-v1 cannot be rewritten as PASS. It did not justify changing the valid `ObjectSpec` shape–label contract.
+Descriptive observations: Static evidence showed zero label reads in the three key sensor functions, but the runtime construct contradicted the formal type contract.
+Notes: The correct test point is after geometry intersection and before final label bookkeeping.
+
+## E36-v2 | Label Independence at the Sensor Interface
+
+Experiment ID: E36-v2
+Design-freeze commit/hash: Versioned after E36-v1; no `ObjectSpec` contract change.
+Execution-freeze commit/hash: Implementation commit `442c2a8cb7561df73b8d6cf5d669dd3981a1090f`.
+Date: Not recorded.
+Git commit / clean state: Commit recorded above; clean state not recorded.
+Data identities: All 2,304 formal calibration cells ×24 frozen world/frame/object/slot/material identities =55,296 identical post-geometry sensor inputs. Two virtual conditions, `normal-control` and `anomaly-proxy`, were attached by the harness only after all sensor numeric processing.
+Input artifact hashes: Calibration `runs/ajae/calibration.pt`; `src/render.py` SHA-256 `88e5385c214232fb6f24855f77696cc61aaf1e6873ce475d7118574a90097922`.
+Random namespaces / seeds: Same fixed identities in both virtual conditions; exact identity schedule inherited E29-style enumeration.
+Command and resolved config: Label was not an argument to any tested function. Beam, slot, distance, incidence, material, native range, return probability, channel-0/1 uniform, accepted mask, sampled intensity, competition input, final distance, occupancy, and inserted mask had to be elementwise identical with colocated NaNs. Only semantic, `normal_control_mask`, and `anomaly_proxy_mask` could differ. Static audit recomputed label reads in `_accepted_object_hits`, `return_chance`, and `sample_intensity`, and checked label-read locations before and after `_accepted_object_hits` in `render_frame`. PASS required zero reads in the three sensor functions and before competition, correct final bookkeeping, and two elementwise-identical 24-process runs. All 46 regressions passed in 99.64 s. Command: `python -m src.render qualify-e36-v2 --calibration runs/ajae/calibration.pt --output runs/ajae/e36_v2_shared_path.npz --processes 24`.
+Resource and disk preflight: Two 24-process runs took 0.149848 s and 0.149716 s. Disk preflight not recorded.
+Artifacts and hashes: `runs/ajae/e36_v2_shared_path.npz`, 1,309,291 bytes, SHA-256 `de2cb9971caea1269d255d19b2d00c05860067c8a8533fde0f287e3369787a63`; scientific-array hash `638ead3be7cf5de0a064e14e5ab14be5eb3caca3014241ab2459ef2bc0ace213`.
+Primary construct: Label independence of every pre-bookkeeping sensor intermediate and nearest-competition result.
+Primary result: PASS. Differences across all 17 pre-label intermediate-array classes were zero; final bookkeeping errors zero. Label reads were zero in all three sensor functions and before competition in `render_frame`; final bookkeeping had three label reads. Both runs were elementwise identical.
+PASS / FAIL / OUTCOME: PASS.
+Failure classification: Not applicable. E36-v1 remains a permanent protocol-design FAIL.
+Unlocked next node: E37; E36 closed.
+Invalidated downstream evidence: None. Final semantic and the two source masks are intentionally different and were not required to match.
+Descriptive observations: The formal sensor numeric path is identical under the two external virtual labels until final bookkeeping.
+Notes: This record does not claim the two legal shape distributions are geometrically identical.
+
+## E37 | World/Frame Consistency across Overlapping Windows
+
+Experiment ID: E37
+Design-freeze commit/hash: Not separately recorded.
+Execution-freeze commit/hash: Implementation commit `4b8b6927a9b6c80955b1ab92240b835060ac7f38`.
+Date: Not recorded.
+Git commit / clean state: Commit recorded above; clean state not recorded.
+Data identities: From the historical E26 artifact, the first 32 world seeds in ascending order for each of `pure_normal`, `control_only`, `mixed`, and `anomaly_only`, 128 worlds total. Adjacent centers 100 and 101 yielded windows `[98,99,100,101,102]` and `[99,100,101,102,103]`, ten requests and six unique frame identities per world.
+Input artifact hashes: Historical E26 artifact `runs/ajae/e26_world_builder.npz`; calibration `runs/ajae/calibration.pt`; `src/render.py` SHA-256 `07e3ec793ce98704daee13b250453be4f844f916cb51520e0daefa080c71aaef`. Renderer/generator identity observed in result `9ff61e81c133a844b107ff303da6471d9810384a90846b1eb67cb73dacf792f0`.
+Random namespaces / seeds: Random-order path used `SeedSequence([world.seed,3701])`.
+Command and resolved config: Directly call formal `render_frame`, training `FrameCache`, and `FrameCacheKey`; no second cache implementation. Four paths: one-process forward cached; 24-process forward uncached; 24-process reverse cached; 24-process frozen-random cached. Compare `xyzi`, occupancy, `packed_labels`, `normal_control_mask`, `anomaly_proxy_mask`, `inserted_mask`, `occluded_original_mask`, `unchanged_normal_mask`, and `object_id_internal`. Repeated requests within a path were compared bitwise; cross-path comparison used per-field SHA-256 including dtype, shape, and complete contiguous bytes. Separately feed 64 pairs of different worlds at the same frame through one formal cache; each different-world factory must run once, second request must hit its own object, and object references must differ across worlds. Static audit required neither `render_frame` parameters nor `_slot_uniform` to read window identity. PASS required zero identity, digest, repeated-bit, render-count, cross-world-cache, and window-static-audit errors. All 46 regressions passed in 98.17 s. Command: `python -m src.render qualify-e37 --e26-artifact runs/ajae/e26_world_builder.npz --data-root /home/jasongao/Data/STU --calibration runs/ajae/calibration.pt --output runs/ajae/e37_world_frame_consistency.npz --processes 24`.
+Resource and disk preflight: Path times: one-process forward cached 170.843918 s; 24-process forward uncached 92.472165 s; 24-process reverse cached 55.941505 s; 24-process random cached 56.069116 s. Disk preflight not recorded.
+Artifacts and hashes: `runs/ajae/e37_world_frame_consistency.npz`, 149,551 bytes, SHA-256 `04e524a5428c9b906e9fefe253f7ec66533bd6cb3452ea6d9afdb830e1a94b34`; scientific-array hash `5df3d02f0d47697a785b3d43ea457765a5d4d48106b74a77c68f087919939fd0`.
+Primary construct: Bitwise stability of a frame under the same `(world_hash, frame_id, renderer_identity)` across overlapping windows, request order, process count, and cache state.
+Primary result: PASS. All nine field digests matched across all four paths; repeated overlapping-window requests were bitwise identical; world/frame identity errors zero. Actual render calls were 768, 1,280, 768, 768, exactly expected. Across 64 world pairs, cache mis-hits were zero and factory calls totaled 128. `render_frame` window-parameter reads and `_slot_uniform` window reads were zero.
+PASS / FAIL / OUTCOME: PASS.
+Failure classification: Not applicable.
+Unlocked next node: E38; E37 closed.
+Invalidated downstream evidence: None. It contains no Gate 1 three-source statistical-matching conclusion.
+Descriptive observations: Identical world/frame/renderer identities rendered identically irrespective of overlapping-window context, order, parallelism, or cache state.
+Notes: Phase 3 mechanical chain closed.
+
+# Phase 4 | Gate 1: Sensor Consistency, Strict Matching, and Anti-Shortcut Audit
+
+## Phase 4 Candidate-Bank Responsibility Freeze
+
+Experiment ID: Phase 4 candidate-bank responsibility freeze
+Design-freeze commit/hash: Frozen before E38-v2; separate commit not recorded.
+Execution-freeze commit/hash: Not applicable; shared protocol prerequisite.
+Date: Not recorded.
+Git commit / clean state: Not recorded.
+Data identities: train/201 frames 4–681, center frames 6–679; all Gate 1 units restricted to official range 2.5–50 m. E38-v2 shared bank: exactly 256 paired world seeds. Any later pair-specific E45A-new or E45B-v2 bank followed its own 512→1,024→2,048 capacity ladder.
+Input artifact hashes: train/201 support pool was to use the E21-v4 algorithm and observable ground semantics; exact artifact hash recorded in E38-v2.
+Random namespaces / seeds: Defined in E38-v2 and each pair-specific bank.
+Command and resolved config: There is no unified three-way capacity ladder. E38-v2 uses exactly 256 shared real-normal/control/proxy seeds. If E45A-new or E45B-v2 lacks predefined pairwise coverage, only its independent pairwise audit bank may expand 512→1,024→2,048. Candidate selection may read only frozen matching covariates and is forbidden from reading E46/E48 output. If a pairwise 2,048 bank remains insufficient, follow that node's FAIL route without changing calipers. The 201 support pool uses E21-v4's same algorithm and actually observable ground semantics; control support policy remains E25-new. A refreshed E38-v2–E44 PASS means statistics are valid and coverage can feed matching, not that source distributions are equal. Ordinary differences are adjudicated by E46/E48.
+Resource and disk preflight: Not applicable.
+Artifacts and hashes: Shared protocol freeze only.
+Primary construct: Separate shared renderer-statistics evidence from pair-specific common-support matching and downstream source classifiers.
+Primary result: Candidate-bank responsibilities and capacity escalation were frozen.
+PASS / FAIL / OUTCOME: OUTCOME — shared Gate 1 protocol freeze.
+Failure classification: Not applicable.
+Unlocked next node: E38-v2.
+Invalidated downstream evidence: Old-distribution E38–E45 evidence cannot qualify the E25-new control distribution. Pair-specific capacity failure cannot be repaired by relaxing calipers.
+Descriptive observations: None.
+Notes: The 256 shared bank and pairwise expansion banks answer different questions and cannot be merged.
+
+## E38-v2 | Per-Beam Return Audit with the New Shared Candidate Bank
+
+Experiment ID: E38-v2
+Design-freeze commit/hash: Frozen after E26-v2; separate design commit not recorded.
+Execution-freeze commit/hash: Renderer identity `be33efba9b32f4ed00132d79ed26311d2769206d13756ce6c7b47c933f4a9ccf`; source commit not stated in this record.
+Date: Not recorded.
+Git commit / clean state: Not recorded.
+Data identities: Reuse the existing train/201 E21-v4 support pool, frames 4–681 and centers 6–679. All actual 201 nonground returns entered the E23 continuous-SDF collision index without spatial subsampling. Stream-reextract all 256 unscaled canonical templates from train/206, four classes ×64, in canonical order; E25-new output was identity evidence only and never a source of already-scaled shapes. Candidate bank retained exactly paired seeds 3,800,000–3,800,255, original real-normal selection, shared five-frame identity, and at most 48 world attempts. Each seed produced separate control and proxy worlds that never occluded one another. Each source saved 1,280 entity-frame groups.
+Input artifact hashes: train/201 support pool `runs/ajae/gate1_201_support_pool.npz`, SHA-256 `fc3646fbc145cdc29d2cf203835a3e0018bacbc6eaf714e091d21f7b93bfaf50`; canonical template-library SHA-256 `de5dfd765ac7d4fe4bb4644c40ecafdd80cdc31a3d0b6fc4fccd8e84a9fd906b`; E25-new identity artifact `runs/ajae/e25_new_normal_control.npz`, SHA-256 `30fc7d1ecd60d005cb18c60ac81b1c7335e2121fcd3f1da5f440b5387a747b19`; calibration `runs/ajae/calibration.pt`.
+Random namespaces / seeds: Attempt $a$ used `attempt_seed=bank_seed+1,000,003a`. Canonical control template index came from the sole with-replacement call `default_rng(attempt_seed+1).integers(0,256)`, with assigned bin index mod 5; no additional template draw or bin/template replacement. E25-new scale, pose, and material streams were retained. Proxy retained original E38 schema-7, maximum 64 shape proposals, E21–E23, material, pose, return, and visibility streams. Cluster bootstrap: 2,000 multinomial resamples, `SeedSequence([3801,2000])`.
+Command and resolved config: For the current template/bin, build E25-new's global top-128 support stream over the complete 201 pool using legal class semantics, assigned bin, and frozen key; then retain, in original order, only rows whose support frame lies within real center ±2. Do not reorder and do not replenish from global rank 129 onward. Control and proxy use that same row sequence in independent worlds. A control candidate used sole `place_object` for E21 identity, E22 continuous grounding, and E23 observed-normal collision, then full `render_frame`; it required at least one final visible control return and median official range in the template's assigned bin. Proxy contract remained unchanged. Save each source's support semantic; control canonical template index, assigned/final bin, final visible count, attempt/world/frame/object identities, and support-stream prefix. Schema was `gate1-candidate-bank-v2`; reject v1 and prohibit mixing v1 real/control/proxy traces into v2. E38 used entity-frame clusters and reported per-beam opportunity, return count/rate, 2.5%/97.5% bootstrap intervals, support semantic, median beam, and median distance. PASS required all finite, count-conserved, nonzero returns for all sources, and computable key matching fields; source differences descriptive only. One authoritative render simultaneously saved E39–E44 geometry/accepted/visible counts and distance, per-return beam/range/intensity, and control/proxy native-empty/geometry/accepted/final-new counts by beam/range. E39 refresh had to read this trace without rendering again. One formal 24-process run, one numerical thread each, no automatic retry or two-run claim. Command: `python -m src.render qualify-e38-v2 --data-root /home/jasongao/Data/STU --e25-new-artifact runs/ajae/e25_new_normal_control.npz --support-pool runs/ajae/gate1_201_support_pool.npz --calibration runs/ajae/calibration.pt --candidate-bank-output runs/ajae/gate1_candidate_bank_v2_256.npz --output runs/ajae/e38_v2_per_beam_return.npz --processes 24`.
+Resource and disk preflight: Candidate construction took 52.242514 s; shared 24-process trace took 44.695235 s. Numerical libraries single-threaded. No second run. Disk preflight not recorded.
+Artifacts and hashes: Candidate bank `runs/ajae/gate1_candidate_bank_v2_256.npz`, 1,192,842 bytes, SHA-256 `a2c80614d1eea91de6a969a48e3627d9e604b6927fe08aa91bf5173d133e31d4`, scientific-array hash `91e00c3b874572aff4267ad04982fb7909e0eb2766f3ad15ede1e2fe55506b26`. Per-beam/shared trace `runs/ajae/e38_v2_per_beam_return.npz`, 14,675,308 bytes, SHA-256 `914b185ae31d5509fa286208c26bb4271460d289a02ec398eaee715b7eeb7c9a`, scientific-array hash `30bc585de77e730570a942356d127858153350ac672bc6d39887b84381b770b1`.
+Primary construct: Finite, conserved, nonempty per-beam opportunity/return statistics and a coherent shared trace for all three sources under the E25-new control distribution.
+Primary result: PASS. Candidate bank completed all 256 paired seeds with zero general, contract, and seed-identity errors; covered 172 centers and 164 with-replacement canonical templates. Control assigned/final bin counts both [60,56,56,58,26]; minimum final visible count 1; maximum attempt 5. Real/control/proxy support semantic 40/48 counts were 167/89, 215/41, 214/42. Each source stored 1,280 groups. Real/control/proxy total opportunities were 826,836/391,049/299,242; total returns 598,736/385,263/295,250. Conservation, shared-trace contract, and nonfinite errors were zero.
+PASS / FAIL / OUTCOME: PASS.
+Failure classification: Not applicable.
+Unlocked next node: E39-v2 refresh; E38 closed under the new distribution.
+Invalidated downstream evidence: None. The result does not adjudicate source leakage or distribution equality.
+Descriptive observations: The new shared bank provided nonzero returns from all sources and internally consistent downstream trace arrays.
+Notes: The owner explicitly removed a second reproduction run; the artifact's internal identities and conservation remain the formal evidence.
+
+## Historical E38 | Per-Beam Return Audit under the Old Normal-Control Distribution
+
+Experiment ID: Historical E38
+Design-freeze commit/hash: Original Gate 1 design; separate design commit not recorded.
+Execution-freeze commit/hash: Implementation `9a0347ca69f0baa1e416e64049f623858cf5e1e4`; real-support assignment revision `deee0d1f38357b189e36d16449639e1b8013fa04`.
+Date: Not recorded.
+Git commit / clean state: Commits recorded above; clean state not recorded.
+Data identities: train/201 frames 4–681, center frames 6–679, five-frame windows. Candidate capacity exactly seeds 3,800,000–3,800,255. Real-normal classes 10/18/20/30; same instance had at least 16 returns within 2.5–50 m in every window frame and at least 32 in center. Support semantic first came from a qualified patch within a 0.5 m-expanded horizontal hull, else nearest qualified patch at distance $\le1.0$ m. Each seed produced an independent single-control and single-proxy counterfactual world; they never occluded each other. Supports limited to entity's five center frames and identical semantic. At most 48 attempts/world, 128 placements, and 64 proxy shapes. At least one final visible return in five frames for both insertions. No classifier output was read.
+Input artifact hashes: Old E25 artifact `runs/ajae/e25_normal_control.npz`; final `src/render.py` SHA-256 `100dbb22f2d307b8bfc32d0675b6c73d3efdde04b39ec57997b865707b9862a3`.
+Random namespaces / seeds: Paired seeds above. Entity-frame cluster bootstrap used 2,000 multinomial resamples and `SeedSequence([3801,2000])`.
+Command and resolved config: Build 201 support pool using E21-v4's exact 0.5 m world-XY thinning, range-adaptive three-scale trimmed-SVD estimator, and frozen residual/stability criteria; actual 201 nonground returns all entered E23 SDF collision index without sampling. Controls retained old E25 semantics, 0.9–1.1 axis scaling, vehicle/person pose, E22, E23, and E24 bounds. E38 saved per-seed/source/frame opportunity and returns by 128 beams plus support semantic, median beam, and median distance. Real opportunity used first continuous intersection of the same-frame actual-point hull plus its actual return slots; inserted opportunity used formal continuous geometry hits, and return count used final winning 2.5–50 m renderer slots. Ordinary source differences were descriptive. Two 24-process runs had to be elementwise identical. All 46 regressions passed in 97.39 s. Command: `python -m src.render qualify-e38 --data-root /home/jasongao/Data/STU --e25-artifact runs/ajae/e25_normal_control.npz --calibration runs/ajae/calibration.pt --support-pool-output runs/ajae/gate1_201_support_pool.npz --candidate-bank-output runs/ajae/gate1_candidate_bank_256.npz --output runs/ajae/e38_per_beam_return.npz --processes 24`.
+Resource and disk preflight: Support-pool construction 83.328154 s; two 24-process E38 runs 225.181363 s and 224.414734 s. Disk preflight not recorded.
+Artifacts and hashes: 201 support pool `runs/ajae/gate1_201_support_pool.npz`, 84,256,915 bytes, SHA-256 `fc3646fbc145cdc29d2cf203835a3e0018bacbc6eaf714e091d21f7b93bfaf50`, scientific hash `a5bd7007c508d4b411f84bcac7c26b418f93d46837d1da0774637bb15406f490`. Candidate bank `runs/ajae/gate1_candidate_bank_256.npz`, 1,090,511 bytes, SHA-256 `16db45363c1b1f670bcca60ca253811ca63a224349a8e9c2f3dacde1a2239d11`, scientific hash `af07e64a90d5a16782d5f2a26069ba741898bdbfd7cee59a315a04e9b76ba4bf`. E38 output `runs/ajae/e38_per_beam_return.npz`, 209,405 bytes, SHA-256 `60bcffc4fb8c55cd9a2820795380621fb7162119714b95db5c485020653e7108`, scientific hash `1fa5021b268078f386ce3393d77c219c111717c585b74d61542a34c7e94a875e`.
+Primary construct: Old-distribution per-beam return-statistic validity and shared real/control/proxy candidate observability.
+Primary result: PASS for the old distribution. The 201 support pool had 1,193,969 qualified regions across 636 centers: semantic 40 612,018, semantic 48 581,951, semantic 49 zero. From 1,635 persistent real-normal candidates with legal support, all 256 bank seeds completed on attempt 0, covered 183 centers, support semantic 40/48 174/82, errors zero. Each source had 1,280 entity-frame groups. Real/control/proxy opportunities totaled 1,007,417/468,954/456,804; returns 742,546/462,626/451,689. Return-over-opportunity, nonfinite rate/interval/matching-field errors were zero; two runs elementwise identical.
+PASS / FAIL / OUTCOME: PASS — historical evidence restricted to the old normal-control distribution.
+Failure classification: Not applicable.
+Unlocked next node: Historical E39. Under the current route, E38-v2 independently refreshed and closed E38.
+Invalidated downstream evidence: Cannot qualify E25-new controls. All following historical E39–E44 and E45A/E45B records share this old-distribution boundary.
+Descriptive observations: Per-beam source differences were reported only and did not adjudicate leakage.
+Notes: The old evidence is retained solely as history and cannot be spliced into v2 traces.
+
+## E39-v2 | Per-Range Return Audit Refresh
+
+Experiment ID: E39-v2
+Design-freeze commit/hash: Inherited unchanged E39 range/count criteria after E38-v2 PASS.
+Execution-freeze commit/hash: Not separately recorded.
+Date: Not recorded.
+Git commit / clean state: Not recorded.
+Data identities: Entire E38-v2 shared trace; frozen range bins $[2.5,10)$, $[10,20)$, $[20,30)$, $[30,40)$, $[40,50]$ m.
+Input artifact hashes: `runs/ajae/e38_v2_per_beam_return.npz`, SHA-256 `914b185ae31d5509fa286208c26bb4271460d289a02ec398eaee715b7eeb7c9a`; its PASS, scientific hash, and shared-trace identity had to be verified.
+Random namespaces / seeds: None; deterministic read-only aggregation.
+Command and resolved config: Directly aggregate opportunity, return count/rate, and nonzero-return entity-frame groups by five bins. Do not read STU, rebuild support/candidate worlds, recompute geometry, or rerender. PASS required count conservation, finite aggregate rates and per-entity-frame visible distances, and at least one nonzero-return group for every source in the first four bins; 40–50 m was descriptive only. One run, no second reproduction. Command: `python -m src.render qualify-e39-v2 --e38-artifact runs/ajae/e38_v2_per_beam_return.npz --output runs/ajae/e39_v2_per_range_return.npz`.
+Resource and disk preflight: Read-only aggregation took 0.000295 s. Disk preflight not recorded.
+Artifacts and hashes: `runs/ajae/e39_v2_per_range_return.npz`, 14,676,288 bytes, SHA-256 `e7cea1574638db2f7e41799fe3855519ea57a47e9f6adc04f1a5a37e8aa526e0`; scientific-array hash `348670e8aa9a8677f600aea55b825723d57d3246b64b3c83dc49bc3c64c29a1a`.
+Primary construct: Valid per-range opportunity/return aggregation and coverage under the refreshed shared trace.
+Primary result: PASS. Real-normal opportunities [473229,304955,45929,2723,0], returns [347890,221916,27328,1602,0], nonzero groups [339,854,280,36,0]. Normal-control [296881,55717,21628,13313,3510], [295036,54159,21233,11764,3071], [316,353,335,320,127]. Proxy [224627,52213,12187,7453,2762], [223662,50527,11977,6728,2356], [307,307,286,300,119]. First-four-bin coverage, conservation, and nonfinite errors were zero. Real-normal 40–50 m was zero and only reported.
+PASS / FAIL / OUTCOME: PASS.
+Failure classification: Not applicable.
+Unlocked next node: E40-v2; E39 closed under the new distribution.
+Invalidated downstream evidence: None. The absent real-normal far bin does not become PASS or FAIL and cannot support a 2.5–50 m real/control matching claim.
+Descriptive observations: Generated sources had far-bin observations while real-normal had none in this bank.
+Notes: The artifact carries the shared raw trace forward without rerendering.
+
+## Historical E39 | Per-Range Return Audit under the Old Candidate Bank
+
+Experiment ID: Historical E39
+Design-freeze commit/hash: Original E39 design.
+Execution-freeze commit/hash: Implementation `f09ea627b4203fe738c86761275c16e6786529c1`; read-only-mask repair `9da9dcd19f3df276b6533c10389f5d7eb5154ade`.
+Date: Not recorded.
+Git commit / clean state: Commits recorded above; clean state not recorded.
+Data identities: Passed old 256-seed E38 bank; three sources ×five frames ×five frozen range bins. Same opportunity definitions as historical E38.
+Input artifact hashes: Historical E38 bank/output; repaired `src/render.py` SHA-256 `8009cac53f0b62e127c72ff22aa35aeed957c0650f5e7743741db72d4a4e0e4b`.
+Random namespaces / seeds: Inherited old bank identities; no new scientific random stream.
+Command and resolved config: Read the frozen bank, not rebuild 201 supports/worlds. Save geometry opportunity and final return by range for every seed/source/frame. Require per-entity-frame return $\le$ opportunity, finite rates/matching fields, all sources with at least one nonzero-return group in first four bins, and two elementwise-identical 24-process runs; far bin descriptive. The same authoritative render saved raw E40–E44 traces but did not predeclare their outcomes. First invocation exited before scientific output because audit code in-place range-filtered a read-only frozen mask. Repair made an explicit mask copy only; samples, rendering, random streams, and criteria were unchanged. All 46 regressions passed in 97.87 s. Formal command otherwise unchanged from its implementation.
+Resource and disk preflight: Two repaired 24-process runs took 223.697474 s and 224.626689 s. Disk preflight not recorded.
+Artifacts and hashes: `runs/ajae/e39_per_range_return.npz`, 5,556,553 bytes, SHA-256 `e404a63c32331221af02d17cc694398410c55bbf8f14798469dde7741ec63f58`; scientific-array hash `185f27c461943f6d8143f70bed6d6301f1d4753ae362cca06aed12ea999c3d52`; shared trace contained 1,656,861 per-return intensity records.
+Primary construct: Old-distribution per-range count validity and first-four-bin observability.
+Primary result: PASS for the old distribution. Real opportunities 686,670/273,466/46,226/1,055/0, returns 513,492/202,803/25,732/519/0, groups 447/833/268/15/0. Control opportunities 354,036/104,916/9,630/372/0, returns 350,782/101,962/9,512/370/0, groups 511/684/236/26/0. Proxy opportunities 332,449/111,460/12,436/459/0, returns 330,433/108,813/12,052/391/0, groups 493/637/228/23/0. First four bins had groups for all sources; far was zero for all and descriptive. Conservation/nonfinite errors zero; two runs elementwise identical.
+PASS / FAIL / OUTCOME: PASS — historical old-distribution evidence.
+Failure classification: Final result not applicable. Initial pre-output exception was an audit implementation defect fixed without scientific change.
+Unlocked next node: Historical E40; current path uses E40-v2.
+Invalidated downstream evidence: Cannot qualify E25-new controls.
+Descriptive observations: No source had 40–50 m support in the old bank.
+Notes: The shared trace was the sole input for historical E40–E44, avoiding repeated rendering. It contained per-entity-frame geometry/accepted/visible counts and distance; per-return beam/range/intensity; and, for control/proxy, per-beam×range native-empty, geometry, accepted, and final-new counts.
+
+## E40-v2 | Beam×Range Intensity Audit Refresh
+
+Experiment ID: E40-v2
+Design-freeze commit/hash: Inherited historical E40 quantiles, ECDF, clipping, and PASS criteria.
+Execution-freeze commit/hash: Not separately recorded.
+Date: Not recorded.
+Git commit / clean state: Not recorded.
+Data identities: All 1,279,249 per-return intensity records from the E39-v2 shared trace: real-normal 598,736, control 385,263, proxy 295,250.
+Input artifact hashes: E39-v2 `runs/ajae/e39_v2_per_range_return.npz`, SHA-256 `e7cea1574638db2f7e41799fe3855519ea57a47e9f6adc04f1a5a37e8aa526e0`; frozen sensor calibration.
+Random namespaces / seeds: None; deterministic read-only grouping.
+Command and resolved config: Stable-group each return once by source, beam, and range bin; within each group compute Q05/Q25/median/Q75/Q95, three pairwise ECDF distances, and generated-source lower/upper clipping. This is mathematically identical to historical per-cell Boolean scanning but removes repeated full-array passes. PASS checks only finite generated intensities inside train/206 support, correct source/beam/range identities and counts. Distribution differences are descriptive. One run. Command: `python -m src.render qualify-e40-v2 --e39-artifact runs/ajae/e39_v2_per_range_return.npz --calibration runs/ajae/calibration.pt --output runs/ajae/e40_v2_beam_range_intensity.npz`.
+Resource and disk preflight: One statistics run took 0.142458 s. Disk preflight not recorded.
+Artifacts and hashes: `runs/ajae/e40_v2_beam_range_intensity.npz`, 24,588 bytes, SHA-256 `e197a309e20003411e760c3236316f2ca763947029bbbef52813fcb214ee6dc5`; scientific-array hash `240d204151f6bc9b913997a4809bcef45598384403907b3a9aedf7a17a681349`.
+Primary construct: Valid conditional intensity summaries and clipping accounting under the refreshed trace.
+Primary result: PASS. Nonempty beam×range cells were real/control/proxy 193/195/239. Source/beam/range identity, E39-v2 count reconstruction, nonfinite, and generated-support-bound errors were zero. Control and proxy lower/upper clipping were both [0,0].
+PASS / FAIL / OUTCOME: PASS.
+Failure classification: Not applicable.
+Unlocked next node: E41-v2; E40 closed under the new distribution.
+Invalidated downstream evidence: None. Quantiles and ECDF distances did not adjudicate leakage.
+Descriptive observations: Conditional quantiles and pairwise ECDF differences were reported only.
+Notes: Grouping optimization changed scan structure, not samples, keys, or formulas.
+
+## Historical E40 | Beam×Range Intensity Audit under the Old Trace
+
+Experiment ID: Historical E40
+Design-freeze commit/hash: Original E40 design.
+Execution-freeze commit/hash: Implementation commit `a8f5da83d847913baf14192af67a0bf733fc6158`.
+Date: Not recorded.
+Git commit / clean state: Commit recorded above; clean state not recorded.
+Data identities: All 1,656,861 intensity records from the passed historical E39 trace: real 742,546, control 462,626, proxy 451,689; 128 beams ×5 range cells per source.
+Input artifact hashes: Historical E39 `runs/ajae/e39_per_range_return.npz`; calibration `runs/ajae/calibration.pt`; `src/render.py` SHA-256 `2b072872024ba8ccf900783a1f334cf1b45dc90b33d1d23a2c827b731f42d6b0`.
+Random namespaces / seeds: None; deterministic read-only summary.
+Command and resolved config: Save sample count and Q05/Q25/median/Q75/Q95 per cell; three pairwise maximum ECDF distances and valid-cell masks; control/proxy counts/fractions below/above frozen 206 intensity support. Empty cells used count/valid mask and finite numeric arrays. PASS checked complete record finiteness, generated support, identity/binning, E39 count reconstruction, and two elementwise-identical statistics passes. Ordinary conditional differences remained for E46. All 46 regressions passed in 99.41 s. Command: `python -m src.render qualify-e40 --e39-artifact runs/ajae/e39_per_range_return.npz --calibration runs/ajae/calibration.pt --output runs/ajae/e40_beam_range_intensity.npz`.
+Resource and disk preflight: Two statistics passes totaled 1.907127 s. Disk preflight not recorded.
+Artifacts and hashes: `runs/ajae/e40_beam_range_intensity.npz`, 22,989 bytes, SHA-256 `ac8cd9a2bfa2f0011c201f287d1a3908e401fe844f09bc12be8b755673dd8564`; scientific-array hash `05c9248caeaa5de12320a6c0695e47e983221610eaae67daa82fe0c865ce22ab`.
+Primary construct: Old-distribution validity of beam×range conditional intensity summaries.
+Primary result: PASS for the old distribution. Nonempty cells real/control/proxy 190/173/214. Source, beam, range, E39 count, nonfinite, and generated-support errors were zero. Control/proxy lower and upper clipping counts all zero. Two passes elementwise identical.
+PASS / FAIL / OUTCOME: PASS — historical old-distribution evidence.
+Failure classification: Not applicable.
+Unlocked next node: Historical E41; current path uses E41-v2.
+Invalidated downstream evidence: Cannot qualify the E25-new control distribution or source equality.
+Descriptive observations: Conditional quantile and ECDF differences were descriptive.
+Notes: None.
+
+## E41-v2 | Empty-to-Valid Return-Chain Audit Refresh
+
+Experiment ID: E41-v2
+Design-freeze commit/hash: Historical E41 relation and branch criteria unchanged.
+Execution-freeze commit/hash: Not separately recorded.
+Date: Not recorded.
+Git commit / clean state: Not recorded.
+Data identities: Refreshed E39-v2 shared trace for normal-control and proxy.
+Input artifact hashes: `runs/ajae/e39_v2_per_range_return.npz`, SHA-256 `e7cea1574638db2f7e41799fe3855519ea57a47e9f6adc04f1a5a37e8aa526e0`.
+Random namespaces / seeds: None; deterministic read-only recount.
+Command and resolved config: Recompute integer chains native-empty→geometry→accepted→final-new by source and beam×range without rerendering. Require nonnegative counts; geometry $\le$ native-empty; accepted $\le$ geometry; final-new $\le$ accepted; at least one final-new and at least one probability rejection for each label. Accepted-but-not-new was descriptive with no nonzero requirement. Source rate differences remained for E45/E46. One pass by owner decision. Command: `python -m src.render qualify-e41-v2 --e39-artifact runs/ajae/e39_v2_per_range_return.npz --output runs/ajae/e41_v2_empty_to_valid.npz`.
+Resource and disk preflight: One pass took 0.017559 s. Disk preflight not recorded.
+Artifacts and hashes: `runs/ajae/e41_v2_empty_to_valid.npz`, 5,952 bytes, SHA-256 `ac72fb803300c603fe081ec150da0f1e8cabefc778f14f6bb4e015becd71115c`; scientific-array hash `a43887141dd8fb02dfe0a5291926acfba99a1e2d70487b5015f25faa7e2c5fd0`.
+Primary construct: Conservation and branch coverage of new returns on native-empty slots under the refreshed trace.
+Primary result: PASS. Control native-empty/geometry/accepted/final-new [25409785,20193,20147,20147]; proxy [25409785,19291,19253,19253]. Probability rejections were 46 and 38; post-acceptance rejections both zero. All four relation violations, total-chain errors, and branch-coverage errors were zero.
+PASS / FAIL / OUTCOME: PASS.
+Failure classification: Not applicable.
+Unlocked next node: E42-v2; E41 closed under the new distribution.
+Invalidated downstream evidence: None. Source rate differences were not adjudicated here.
+Descriptive observations: Every accepted hit on an originally empty slot became a final new return in these single-insert worlds.
+Notes: No second statistics pass was executed.
+
+## Historical E41 | Empty-to-Valid Return-Chain Audit under the Old Trace
+
+Experiment ID: Historical E41
+Design-freeze commit/hash: Original E41 design.
+Execution-freeze commit/hash: Implementation commit `df23bffed5d335e9a55e177a6980e01eb6b89ea9`.
+Date: Not recorded.
+Git commit / clean state: Commit recorded above; clean state not recorded.
+Data identities: Historical E39 shared trace for old-distribution controls and proxies.
+Input artifact hashes: Historical E39 artifact `runs/ajae/e39_per_range_return.npz`; `src/render.py` SHA-256 `cd34392c2d7724e40e42f1667be7a257b6f68b60cbaf08d67afa8b04f11d7649`.
+Random namespaces / seeds: None; read-only recount.
+Command and resolved config: Same per-entity/frame/beam and beam×range conservation and branch rules as E41-v2, with two elementwise-identical passes. All 46 regressions passed. Command: `python -m src.render qualify-e41 --e39-artifact runs/ajae/e39_per_range_return.npz --output runs/ajae/e41_empty_to_valid.npz`.
+Resource and disk preflight: Two passes totaled 0.025614 s. Disk preflight not recorded.
+Artifacts and hashes: `runs/ajae/e41_empty_to_valid.npz`, 5,541 bytes, SHA-256 `771e39129087324be9526b6286bd2d2c40194d8c20c6ec8fd0dceb8fdf340c3e`; scientific-array hash `71bbccc62da2254b553bfbaaf8f9864281b9242d956ca88c903e1f90a74f7c8f`.
+Primary construct: Old-distribution empty-to-valid chain conservation and branch coverage.
+Primary result: PASS for the old distribution. Control chain 24,291,803→16,037→16,011→16,011; proxy 24,291,803→25,173→25,136→25,136. Geometry-over-empty, accepted-over-geometry, final-over-accepted, and negative-count errors zero. Probability rejections 26/37; final-new nonzero for both; accepted-not-new zero. Two passes elementwise identical.
+PASS / FAIL / OUTCOME: PASS — historical old-distribution evidence.
+Failure classification: Not applicable.
+Unlocked next node: Historical E42; current route uses E42-v2.
+Invalidated downstream evidence: Cannot qualify E25-new controls.
+Descriptive observations: Source-rate differences were not adjudicated.
+Notes: None.
+
+## E42-v2 | Single-Entity $N_{vis}$ and Matching-Feasibility Refresh
+
+Experiment ID: E42-v2
+Design-freeze commit/hash: Historical four positive-visibility strata and all count/coverage criteria unchanged.
+Execution-freeze commit/hash: Not separately recorded.
+Date: Not recorded.
+Git commit / clean state: Not recorded.
+Data identities: Refreshed E39-v2 trace, three sources ×1,280 entity-frame groups. Positive $N_{vis}$ strata $[1,8)$, $[8,32)$, $[32,128)$, $[128,+\infty)$; zero visibility counted separately. Five distance bins and two support semantics.
+Input artifact hashes: `runs/ajae/e39_v2_per_range_return.npz`, SHA-256 `e7cea1574638db2f7e41799fe3855519ea57a47e9f6adc04f1a5a37e8aa526e0`.
+Random namespaces / seeds: None; deterministic read-only statistics.
+Command and resolved config: Save geometry, accepted-before-occlusion, visible returns, distance, distance bin, and $N_{vis}$ layer. Require nonnegative counts, accepted $\le$ geometry, visible $\le$ accepted, valid distance/bin, and zero-visible + four positive layers =1,280 per source. Control and proxy each had to cover at least three positive layers. Count common nonempty support-semantic×range-bin×$N_{vis}$ cells across all three sources; at least one was preliminary matching feasibility, while E45 owns complete matching. One pass, no rerender. Command: `python -m src.render qualify-e42-v2 --e39-artifact runs/ajae/e39_v2_per_range_return.npz --output runs/ajae/e42_v2_nvis_strata.npz`.
+Resource and disk preflight: One pass took 0.000793 s. Disk preflight not recorded.
+Artifacts and hashes: `runs/ajae/e42_v2_nvis_strata.npz`, 48,440 bytes, SHA-256 `af9dd78d1011fa566b5128a33584a8b23796b5f3d23252ca8a7b1823d95b9e84`; scientific-array hash `149786c043dbbd438d9d5681aca42f4fc411d9190ffc066b963ded05ccad281f`.
+Primary construct: Correct $N_{vis}$ stratification and preliminary common nonempty matching cells under the refreshed bank.
+Primary result: PASS. Positive-layer counts real [0,16,513,751], control [142,224,472,439], proxy [207,277,388,383]; zero-visible counts 0/3/25. Both generated sources covered all four positive layers. There were 14 jointly nonempty support-semantic×range×$N_{vis}$ cells. Definition, conservation, coverage, and preliminary-feasibility errors were zero.
+PASS / FAIL / OUTCOME: PASS.
+Failure classification: Not applicable.
+Unlocked next node: E43-v2; E42 closed under the new distribution.
+Invalidated downstream evidence: None. It cannot replace full E45A-new or E45B-v2 common-support matching.
+Descriptive observations: Real-normal had no entity-frame group in the lowest positive $N_{vis}$ layer, while both generated sources did.
+Notes: Overall means cannot substitute for strict matching.
+
+## Historical E42 | Single-Entity $N_{vis}$ and Matching Feasibility under the Old Trace
+
+Experiment ID: Historical E42
+Design-freeze commit/hash: Original E42 design.
+Execution-freeze commit/hash: Implementation commit `e1af043e434f8958b8d7e33b8d22a79ad200f4b9`.
+Date: Not recorded.
+Git commit / clean state: Commit recorded above; clean state not recorded.
+Data identities: Historical E39 shared trace, 256 candidates ×three sources ×five frames =1,280 groups per source; same four positive layers and zero-visible category.
+Input artifact hashes: Historical E39 `runs/ajae/e39_per_range_return.npz`; `src/render.py` SHA-256 `9ffcbfd10ebb5f3faf93b68d96677dff6c53f86a1b4c304ec25343b7d4971c64`.
+Random namespaces / seeds: None; deterministic read-only statistics.
+Command and resolved config: Same conservation, visibility, positive-layer coverage, and joint-cell feasibility rules as v2; two elementwise-identical statistics passes. All 46 regressions passed. Command: `python -m src.render qualify-e42 --e39-artifact runs/ajae/e39_per_range_return.npz --output runs/ajae/e42_nvis_feasibility.npz`.
+Resource and disk preflight: Two passes totaled 0.001445 s. Disk preflight not recorded.
+Artifacts and hashes: `runs/ajae/e42_nvis_feasibility.npz`, 50,075 bytes, SHA-256 `19da6a5c347768e7861c75bac2e62cc2dfe0ada7d4ff294306a5ecca797f791e`; scientific-array hash `8de2b629f5dd6d6ea1202f546826300c36cd68e5bd2ddf7f4772e859b1aac3d5`.
+Primary construct: Old-distribution $N_{vis}$ definition, count conservation, and preliminary common-cell feasibility.
+Primary result: PASS for the old distribution. Positive layers real [0,10,433,837], control [51,223,402,597], proxy [68,200,356,652]; zero-visible 0/7/4. Both generated sources covered all four positive layers; 12 jointly nonempty support-semantic×range×$N_{vis}$ cells; all errors zero; two passes elementwise identical.
+PASS / FAIL / OUTCOME: PASS — historical old-distribution evidence.
+Failure classification: Not applicable.
+Unlocked next node: Historical E43; current route uses E43-v2.
+Invalidated downstream evidence: Cannot qualify E25-new controls or full matching.
+Descriptive observations: Real-normal again had no lowest-positive-layer observation.
+Notes: None.
+
+## E43-v2 | Temporal Visibility Refresh
+
+Experiment ID: E43-v2
+Design-freeze commit/hash: Inherited historical five-frame $N_{vis}$, variation-rate, and $V$ definitions.
+Execution-freeze commit/hash: Not separately recorded.
+Date: Not recorded.
+Git commit / clean state: Not recorded.
+Data identities: Passed E37 window-identity evidence and refreshed E39-v2 five-frame visible-return trace.
+Input artifact hashes: E37 `runs/ajae/e37_world_frame_consistency.npz`, SHA-256 `04e524a5428c9b906e9fefe253f7ec66533bd6cb3452ea6d9afdb830e1a94b34`; E39-v2 SHA-256 `e7cea1574638db2f7e41799fe3855519ea57a47e9f6adc04f1a5a37e8aa526e0`.
+Random namespaces / seeds: No new randomness. E37 provides repeated-request/window identity evidence.
+Command and resolved config: Do not rerender or require a second E39-v2 run. For every fixed entity save five-frame $N_{vis}$, adjacent difference, variation $|N_t-N_{t-1}|/\max(N_{t-1},1)$, and $V=$ number of frames with $N_{vis}>0$, binned 0–5. Require valid counts/definitions and finite rates/quantiles. Real geometry appearances/disappearances descriptive. One pass. Command: `python -m src.render qualify-e43-v2 --e37-artifact runs/ajae/e37_world_frame_consistency.npz --e39-artifact runs/ajae/e39_v2_per_range_return.npz --output runs/ajae/e43_v2_temporal_visibility.npz`.
+Resource and disk preflight: One pass took 0.000526 s. Disk preflight not recorded.
+Artifacts and hashes: `runs/ajae/e43_v2_temporal_visibility.npz`, 24,152 bytes, SHA-256 `59d2e834b5b31770349faac591beb22067d87d4dbe1796b67ce857cb2aaf77a3`; scientific-array hash `e8f2fc993b95333db5cf2d79b2429bcccac0c9b0338610c3f9ac335c69bb580e`.
+Primary construct: Stable identity-driven five-frame visibility behavior and finite temporal-variation summaries under the refreshed bank.
+Primary result: PASS. Window identity and repeated-request errors zero; rate-finiteness and definition errors zero. $V=0,\ldots,5$ counts were real [0,0,0,0,0,256], control [0,0,1,0,0,255], proxy [0,0,3,4,8,241]. Appearance/disappearance counts were 0/0, 1/0, 10/10. Adjacent-rate Q05/Q25/Q50/Q75/Q95: real [0.002512,0.024390,0.050243,0.084567,0.169492], control [0,0.019324,0.051474,0.092379,0.333333], proxy [0,0.022727,0.055883,0.115385,0.5].
+PASS / FAIL / OUTCOME: PASS.
+Failure classification: Not applicable.
+Unlocked next node: E44-v2; E43 closed under the new distribution.
+Invalidated downstream evidence: None.
+Descriptive observations: Observed appearance/disappearance was attributed only as real geometry behavior, not window-dependent random flicker.
+Notes: E37 remains the authority for repeated-render bitwise identity.
+
+## Historical E43 | Temporal Visibility under the Old Trace
+
+Experiment ID: Historical E43
+Design-freeze commit/hash: Original E43 design.
+Execution-freeze commit/hash: Implementation commit `7dcd999a49b3312c4ca1030cff9b4e03d09b7cb4`.
+Date: Not recorded.
+Git commit / clean state: Commit recorded above; clean state not recorded.
+Data identities: Passed E37 cross-window artifact and passed historical E39 five-frame trace.
+Input artifact hashes: E37 `runs/ajae/e37_world_frame_consistency.npz`; historical E39 `runs/ajae/e39_per_range_return.npz`; `src/render.py` SHA-256 `06f9174a41246ba68e339b4e3f0cde706a5673300d3656291e04de646756b324`.
+Random namespaces / seeds: No new random stream.
+Command and resolved config: Repeated-render criterion used E39's two full 24-process results; window identity used all nine E37 fields, repeat, identity, call-count, cross-world-cache, render-frame parameter, and RNG-read audits. Compute the same five-frame $N_{vis}$, adjacent variation rate, and $V=0$–5 counts. Require valid finite definitions and two elementwise-identical statistics passes; appearances/disappearances descriptive. All 46 regressions passed. Command: `python -m src.render qualify-e43 --e37-artifact runs/ajae/e37_world_frame_consistency.npz --e39-artifact runs/ajae/e39_per_range_return.npz --output runs/ajae/e43_temporal_visibility.npz`.
+Resource and disk preflight: Two passes totaled 0.000580 s. Disk preflight not recorded.
+Artifacts and hashes: `runs/ajae/e43_temporal_visibility.npz`, 26,415 bytes, SHA-256 `61a1b6972db321b7539a29300d5e6b08a723fe22801e308ef6c339d285d811a9`; scientific-array hash `3173ded49e86c671dcff0d481f93441c9477303a814092c1099b6eabc85d03ef`.
+Primary construct: Old-distribution temporal visibility validity without window-driven RNG flicker.
+Primary result: PASS for the old distribution. Window-identity and repeated-render errors zero. $V$ counts real [0,0,0,0,0,256], control [0,1,0,1,1,253], proxy [0,0,0,0,4,252]. Appearance/disappearance 0/0, 3/1, 1/4. Rate quantiles real [0.003245,0.025000,0.049613,0.077744,0.156250], control [0,0.026937,0.052065,0.080000,0.187007], proxy [0,0.023763,0.047666,0.078220,0.250000]. Definition/finiteness errors zero; two passes identical.
+PASS / FAIL / OUTCOME: PASS — historical old-distribution evidence.
+Failure classification: Not applicable.
+Unlocked next node: Historical E44; current route uses E44-v2.
+Invalidated downstream evidence: Cannot qualify E25-new controls.
+Descriptive observations: Appearance/disappearance was not interpreted as window-random flicker.
+Notes: None.
+
+## E44-v2 | Occlusion-Rate and Matching-Feasibility Refresh
+
+Experiment ID: E44-v2
+Design-freeze commit/hash: Frozen definition $O=1-\mathrm{visible}/\mathrm{accepted\ before\ occlusion}$, layers $[0,0.25)$, $[0.25,0.75)$, $[0.75,1]$, and historical criteria unchanged.
+Execution-freeze commit/hash: Not separately recorded.
+Date: Not recorded.
+Git commit / clean state: Not recorded.
+Data identities: Refreshed E39-v2 shared entity-frame trace.
+Input artifact hashes: `runs/ajae/e39_v2_per_range_return.npz`, SHA-256 `e7cea1574638db2f7e41799fe3855519ea57a47e9f6adc04f1a5a37e8aa526e0`.
+Random namespaces / seeds: None; deterministic read-only calculation.
+Command and resolved config: Define $O$ only where accepted-before-occlusion $>0$. Save zero-denominator units with explicit invalid mask, never fabricate a rate. Require finite valid $O\in[0,1]$, visible $\le$ accepted, conservation between valid count and three layers, and both generated sources covering all layers. Count jointly nonempty support-semantic×range×occlusion cells for preliminary matching feasibility; E45 owns complete pairwise support. One pass, no rerender. Command: `python -m src.render qualify-e44-v2 --e39-artifact runs/ajae/e39_v2_per_range_return.npz --output runs/ajae/e44_v2_occlusion_strata.npz`.
+Resource and disk preflight: One pass took 0.000673 s. Disk preflight not recorded.
+Artifacts and hashes: `runs/ajae/e44_v2_occlusion_strata.npz`, 51,084 bytes, SHA-256 `49880d3b48024a20fe1c2a3155424daf29e8690407dd56437b894097ce464695`; scientific-array hash `cc874669d7e61732e894f1c9993fa97ac10a2a649f6111465ad34d618c1c4e03`.
+Primary construct: Valid occlusion-rate definition, conservation, coverage, and preliminary common cells under the new trace.
+Primary result: PASS. Valid/invalid units were real 1,280/0, control 1,280/0, proxy 1,263/17. Layer counts real [699,581,0], control [1215,48,17], proxy [1192,55,16]. Both generated sources covered all layers; all three sources had 12 jointly nonempty support-semantic×range×occlusion cells. Definition, count, coverage, and preliminary-matching errors zero.
+PASS / FAIL / OUTCOME: PASS.
+Failure classification: Not applicable.
+Unlocked next node: E45A-new and E45B-v2; E44 closed under the new distribution.
+Invalidated downstream evidence: None. Full pairwise common support remained unqualified.
+Descriptive observations: Real-normal had no high-occlusion unit in this bank, while generated sources did.
+Notes: A jointly nonempty coarse cell does not imply that all five strict calipers admit sufficient pairs.
+
+## Historical E44 | Occlusion-Rate and Matching Feasibility under the Old Trace
+
+Experiment ID: Historical E44
+Design-freeze commit/hash: Original E44 design.
+Execution-freeze commit/hash: Implementation commit `99be4df02ef96db388134cb2b2b8d1b08927d9ae`.
+Date: Not recorded.
+Git commit / clean state: Commit recorded above; clean state not recorded.
+Data identities: Historical E39 shared trace.
+Input artifact hashes: Historical E39 artifact `runs/ajae/e39_per_range_return.npz`; `src/render.py` SHA-256 `abc902fd460d3019b0fd557dcda63ae1a9887342fa6c84170b8213b612610180`.
+Random namespaces / seeds: None.
+Command and resolved config: Same $O$, invalid-denominator, three-layer, conservation, generated-source coverage, and joint-cell preliminary-feasibility rules as v2; two elementwise-identical passes. All 46 regressions passed. Command: `python -m src.render qualify-e44 --e39-artifact runs/ajae/e39_per_range_return.npz --output runs/ajae/e44_occlusion_feasibility.npz`.
+Resource and disk preflight: Two passes totaled 0.001055 s. Disk preflight not recorded.
+Artifacts and hashes: `runs/ajae/e44_occlusion_feasibility.npz`, 52,651 bytes, SHA-256 `93b955771c942bedc9537b161018a4fb6e820d7d0649627af3d418edce9ecbc9`; scientific-array hash `0c22adf65d7e4b819ca1df49479f019d6bb2ccde5256844092cfbc24c45f6a55`.
+Primary construct: Old-distribution occlusion definition, conservation, and preliminary matching feasibility.
+Primary result: PASS for the old distribution. Valid/invalid units real 1,280/0, control 1,280/0, proxy 1,276/4. Layers real [731,549,0], control [1,245,26,9], proxy [1,238,36,2]. Both generated sources covered all layers; nine jointly nonempty support-semantic×range×occlusion cells. All errors zero; two passes identical.
+PASS / FAIL / OUTCOME: PASS — historical old-distribution evidence.
+Failure classification: Not applicable.
+Unlocked next node: Historical E45; current route separately uses E45A-new and E45B-v2.
+Invalidated downstream evidence: Cannot qualify E25-new controls or full matching.
+Descriptive observations: Real-normal lacked the high-occlusion layer in this old bank.
+Notes: None.
+
+## E45A-new | Real-Normal ↔ E25-new Normal-Control Maximum Matching
+
+Experiment ID: E45A-new
+Design-freeze commit/hash: Pairwise Gate 1 design frozen after E44-v2; implementation commit `a5f9c0f`.
+Execution-freeze commit/hash: Shared-bank-bound repair commit `b681f65`.
+Date: Not recorded.
+Git commit / clean state: Commits recorded above; clean state not recorded.
+Data identities: train/201 real-normal units and E25-new normal-control units. Independent audit-bank seed base 4,500,000; capacities 512→1,024→2,048. Each level generated and extracted only the new suffix. Matching domain 2.5–40 m, with 40–50 m outside direct real-object evidence.
+Input artifact hashes: E25-new artifact SHA-256 `30fc7d1ecd60d005cb18c60ac81b1c7335e2121fcd3f1da5f440b5387a747b19`; train/201 support pool SHA-256 `fc3646fbc145cdc29d2cf203835a3e0018bacbc6eaf714e091d21f7b93bfaf50`.
+Random namespaces / seeds: Bank base 4,500,000 and deterministic suffix identities. Frozen hash tie-breaks in maximum-cardinality matching.
+Command and resolved config: Use the original five calipers, complete legal edges, and deterministic maximum-cardinality matching. Exact strata remained qualified support semantic, frozen range bin, and 45° sensor-azimuth sector. Pair calipers remained range $\le2$ m, median beam $\le4$, $|\Delta\log(1+N_{vis})|\le0.25$, $|\Delta\hat O|\le0.10$, and $|\Delta\log(1+\mathrm{local\ density})|\le0.25$. Primary objective maximum nonrepeated pairs; secondary objective minimum normalized squared covariate difference, with frozen hash ties. PASS required at least 1,024 pairs; at least 100 real-side center frames; nonempty 2.5–10, 10–20, 20–30, 30–40 m bins; zero caliper errors and repeated units; every five-variable SMD $\le0.10$. Banks used 24 processes, numerical libraries single-threaded. Matching ran formally once. The first command exited before index 256 and before scientific output because a shared worker retained the old `[0,255]` shared-bank bound. Repair separated shared-bank maximum 256 from pairwise-bank maximum 2,048, then reran from scratch without changing samples, seeds, geometry, renderer, matching variables/calipers, or thresholds.
+Resource and disk preflight: Bank-generation times at 512/1,024/2,048 were 106.209574/113.853599/210.333981 s; added-unit extraction 101.231597/103.881816/193.933527 s; maximum-matching 0.009267/0.006666/0.011696 s. 24 processes, one numerical thread each. Disk preflight not recorded.
+Artifacts and hashes: `runs/ajae/e45a_new_real_control_pairs.npz`, 271,518 bytes, SHA-256 `acad2f28c4f2cb47314206671bbfebbdc89004a81cd1c403fc33af15c5dfda21`; final scientific-array hash `6fa5f901574f5a621633d60bda50037fcb261a136caa4e2f1ae0beada02d1426`. Capacity-2,048 bank 9,206,668 bytes, SHA-256 `da73006666597175358bd62dbcbbbda30cedf7d4a6cd8c01ec774c70d978a4a3`; unit cache 53,608,043 bytes, SHA-256 `92fe629be31a7b5a5eb97bd1ee6a7d402d69fc507b1fbd23e925a19cab1be6cf`.
+Primary construct: Whether real-normal and E25-new rendered controls have sufficient pairwise common support under the frozen strict audit conditions.
+Primary result: FAIL. Capacities 512/1,024/2,048 produced 38/91/315 legal edges, maximum matches 14/30/63, and real-center coverage 8/14/29. Distance counts were [0,11,3,0], [0,22,8,0], [1,46,16,0]. Final 63 <1,024, 29 frames <100, and 30–40 m empty. Caliper and duplicate errors were zero at every capacity. Final SMDs in range, median beam, $\log(1+N_{vis})$, $\hat O$, $\log(1+\mathrm{local\ density})$ order were [0.083301,0.024199,0.007985,1.778776,0.044545]; maximum occlusion SMD 1.778776 exceeded 0.10.
+PASS / FAIL / OUTCOME: FAIL — current stopping node.
+Failure classification: `insufficient_pairwise_common_support`. The pre-result `[0,255]` issue was a repaired `protocol implementation defect` and produced no scientific result.
+Unlocked next node: None. E46 remains locked. E45B-v2 was not started.
+Invalidated downstream evidence: No source classifier was executed and renderer failure was not adjudicated. Per the frozen stop rule, do not automatically expand, retry, relax calipers, or modify generation distribution.
+Descriptive observations: Occlusion was the dominant matched-sample imbalance; match size, frame coverage, and far observable-bin coverage also failed.
+Notes: Current state stops at this formal FAIL awaiting a new principal-investigator decision.
+
+## E45-v1 | Historical Three-Source Strict-Matching Audit with Fixed Distance Quotas
+
+Experiment ID: E45-v1
+Design-freeze commit/hash: Original E45 design; implementation commit `906d5d65912a72cf0125ce45e352d912060998f3`.
+Execution-freeze commit/hash: `906d5d65912a72cf0125ce45e352d912060998f3`.
+Date: Not recorded.
+Git commit / clean state: Commit recorded above; clean state not recorded.
+Data identities: Unit: entity-frame local patch. Real-normal units only from train/201 normal entities with instance IDs. Support semantic: qualified patch within horizontal hull expanded 0.5 m, else nearest qualified patch at horizontal distance $\le1.0$ m and legal under E25 class semantics. Real occlusion proxy $\hat O$ used a frozen hull from the same-frame visible real points: potential geometry hits with return rejection disabled, then actual instance returns divided by potential hits. Rendered control/proxy used identical geometry-hit/visible definitions and independent counterfactual worlds. Goal: at least 1,024 unique triplets and 100 center frames.
+Input artifact hashes: train/201 support pool `runs/ajae/gate1_201_support_pool.npz`; `src/render.py` SHA-256 `3979de15cc91d5dec2eb526ccb9a7eac067041536e4846289bda0cbc585c6916`.
+Random namespaces / seeds: Deterministic greedy matching with unit-hash tie-break. Candidate-bank capacity ladder 512/1,024/2,048 would run only if necessary real-domain upper bounds allowed the frozen quotas.
+Command and resolved config: Exact match on support semantic, range bin, and 45° sensor-azimuth sector. Pairwise calipers: range difference $\le2$ m, median beam $\le4$, $|\Delta\log(1+N_{vis})|\le0.25$, $|\Delta O|\le0.10$, $|\Delta\log(1+\mathrm{local\ density})|\le0.25$. Deterministic greedy, no unit reuse. All three pairwise SMDs for continuous covariates had to be $\le0.10$. Frozen distance quotas were at least 128 triplets in each 2.5–10/10–20/20–30/30–40 m bin and 32 in 40–50 m. Before matching, enumerate the complete real-normal universe under the E38 definition and save five-frame median distance/bin. Because every triplet needs a real unit, each real-bin count is a strict upper bound. If any upper bound fell below [128,128,128,128,32], classify `scientific_candidate_domain_failure` and skip capacity expansion, generated-source rendering, and greedy matching; passing this necessary check alone could not be called PASS. All 46 regressions passed. Command: `python -m src.render qualify-e45 --data-root /home/jasongao/Data/STU --support-pool runs/ajae/gate1_201_support_pool.npz --output runs/ajae/e45_matched_triplets.npz`.
+Resource and disk preflight: Two identical real-bin statistics passes; total wall time 172.017159 s. Disk preflight not recorded.
+Artifacts and hashes: `runs/ajae/e45_matched_triplets.npz`, 43,848 bytes, SHA-256 `061f971615af7f7a2edcaf459e0cac4ec6628537dd476bb7324c4d5fadf38772`; scientific-array hash `444e31f9ef31219640f021000b4b07bf9680af1ba9e70db7bec65860bff58a7f`.
+Primary construct: Feasibility of the original fixed per-distance absolute quota for a three-source strict-matching audit.
+Primary result: FAIL. Complete frozen real-normal universe contained 1,635 entities and 8,175 entity-frames; bin counts and strict triplet upper bounds [2,492,4,141,1,457,85,0]. Against [128,128,128,128,32], 30–40 m lacked 43 and 40–50 m lacked 32, two necessary-coverage errors. Identity, support-semantic, finite-distance, and five-frames-per-entity errors were zero; two bin counts identical. Capacity expansion, generated rendering, and matching did not execute because they could not raise the real upper bounds. Thus no caliper, SMD, source classifier, or renderer-difference ruling exists.
+PASS / FAIL / OUTCOME: FAIL — permanent historical result.
+Failure classification: Formal runtime `scientific_candidate_domain_failure` is retained. Later design-level attribution: `qualification specification defect`, because fixed absolute counts in every train/201 distance bin were incorrectly made necessary for a leakage audit; not a matcher or renderer failure.
+Unlocked next node: E45-v2 versioned common-support-domain design. E46 remained locked.
+Invalidated downstream evidence: No result from 512/1,024/2,048 banks or triplet matching exists. The far-bin absence cannot be manufactured or filled from another sequence.
+Descriptive observations: The real-normal universe itself had zero 40–50 m object units and only 85 at 30–40 m.
+Notes: The occlusion estimate is a matching proxy, not true hidden-surface visibility.
+
+## E45-v2 | Historical Three-Source Strict Matching on the Observable Common-Support Domain
+
+Experiment ID: E45-v2
+Design-freeze commit/hash: Implementation commit `185cb50e2a5e1db35d0123d0c31a1d2e35b14d76`.
+Execution-freeze commit/hash: Expected-uint64-overflow warning suppression `07b39bc9075779cd27e44d6e25354cdf0d7e1bc9`, with no scientific-array change.
+Date: Not recorded.
+Git commit / clean state: Commits recorded above; clean state not recorded.
+Data identities: Unchanged train/201-only real-normal definition and three-source constructs. Formal estimand restricted to real-normal observable 2.5–40 m. The 40–50 m bin was labeled `unobservable_for_real-vs-rendered-object matching in train/201`, excluded from PASS/FAIL coverage, and could not be fabricated or filled across sequences. Capacity 256 then 512/1,024/2,048, computing only new suffix units and reusing old bank/extractions.
+Input artifact hashes: Support pool `runs/ajae/gate1_201_support_pool.npz`; old E25 artifact `runs/ajae/e25_normal_control.npz`; calibration `runs/ajae/calibration.pt`; old 256 bank `runs/ajae/gate1_candidate_bank_256.npz`; E45-v1 `runs/ajae/e45_matched_triplets.npz`. Final `src/render.py` SHA-256 `114fae5d83e0f4c91d54569f665d779f7f4a7fd9d5647a871344939751c1b1c0`.
+Random namespaces / seeds: Deterministic greedy prioritized real units with fewer feasible partners; all ties by unit hash. Each unit sampled at most 64 points by canonical frame/beam/column identity hash for direct E46 reuse.
+Command and resolved config: Remove fixed absolute distance quotas only. Require at least one triplet in each observable bin. Exact match remained support semantic, frozen range bin, and 45° sector; all pairwise calipers unchanged: range ≤2 m, median beam ≤4, absolute difference in log(1+Nvis) ≤0.25, absolute occlusion-proxy difference ≤0.10, and absolute difference in log(1+local density) ≤0.25. Occlusion proxy retained geometry-hit/final-visible definition; local density was authoritative `low_level_return_features` 8-neighbor spherical density, unit median. No source reuse. PASS required at least 1,024 triplets, at least 100 real center frames, four nonempty observable bins, zero caliper/duplicate errors, all three pairwise SMDs for five covariates ≤0.10, and two elementwise-identical matches. If 2,048 failed, classify `insufficient_three_source_common_support`. A predicted uint64 hash overflow warning was explicitly suppressed after the first complete ladder; point order and all scientific arrays were unchanged, and cached original extraction time remained. All 46 regressions passed before/after. Command: `python -m src.render qualify-e45-v2 --data-root /home/jasongao/Data/STU --support-pool runs/ajae/gate1_201_support_pool.npz --e25-artifact runs/ajae/e25_normal_control.npz --calibration runs/ajae/calibration.pt --candidate-bank-256 runs/ajae/gate1_candidate_bank_256.npz --e45-v1-artifact runs/ajae/e45_matched_triplets.npz --output runs/ajae/e45_v2_matched_triplets.npz --processes 24`.
+Resource and disk preflight: New-bank suffix construction 121.000419/231.575323/457.678092 s for 512/1,024/2,048. Unit extraction 226.888105/239.542920/458.382091/894.831929 s at 256/512/1,024/2,048, with later levels only new suffixes. Cached warning-cleanup rerun did not rerender; two match passes per level took 0.017803/0.035136/0.071578/0.133178 s. Disk preflight not recorded.
+Artifacts and hashes: `runs/ajae/e45_v2_matched_triplets.npz`, 381,986 bytes, SHA-256 `54fda93b708e875200d6126692e0cd3a899fff7d355556598c8550c19156c832`; scientific-array hash `f39521593a562c0de06faea94dcd5f68cb9df9d79571c07e2656ea8f69cd8428`.
+Primary construct: Three-way strict common support within the train/201 observable 2.5–40 m domain, under a deterministic greedy triplet algorithm.
+Primary result: FAIL. Capacities 256/512/1,024/2,048 yielded 0/8/29/58 unique triplets and real-center coverage 0/6/20/34. Final distance counts [0,51,7,0], so 58 <1,024, 34 frames <100, and two observable bins empty. The far bin remained explicitly unobservable and outside adjudication. All pairwise caliper and reuse errors were zero at every capacity; both deterministic match passes identical. Final SMD vectors (range, median beam, log(1+Nvis), occlusion proxy, log(1+density)) were real-control [0.114163,0.161546,0.031675,1.427284,0.043823], real-proxy [0.102862,0.057257,0.037790,1.509987,0.011156], control-proxy [0.011866,0.225477,0.005551,0.093939,0.031910]; maximum 1.509987.
+PASS / FAIL / OUTCOME: FAIL — permanent historical result.
+Failure classification: Formal `insufficient_three_source_common_support`. Later design-level attribution: failure of the three-way audit design, because E46 needs real↔control while E48 needs control↔proxy, not the same three-way triplet.
+Unlocked next node: Separate E45A and E45B maximum-matching audits. E46 remained locked pending E45A.
+Invalidated downstream evidence: The 58 deterministic greedy triplets are not an upper bound on either pairwise graph's maximum matching and do not establish renderer leakage.
+Descriptive observations: Occlusion imbalance dominated real/control and real/proxy SMD; control/proxy occlusion SMD was much smaller.
+Notes: All existing calipers were retained; failure was not repaired by relaxing them.
+
+## E45A | Historical Real-Normal ↔ Normal-Control Maximum Matching
+
+Experiment ID: E45A
+Design-freeze commit/hash: Pairwise split implementation commit `9dc3b501152eccbf10ca8998355acbf6e355852d`.
+Execution-freeze commit/hash: `9dc3b501152eccbf10ca8998355acbf6e355852d`.
+Date: Not recorded.
+Git commit / clean state: Commit recorded above; clean state not recorded.
+Data identities: Real-normal and old-distribution normal-control units from frozen capacity-2,048 cache `runs/ajae/e45_v2_units_2048.npz`; train/201-only 2.5–40 m domain, 40–50 m explicitly without direct evidence.
+Input artifact hashes: Unit-cache SHA-256 not restated here; `src/render.py` SHA-256 `966bd467385c6c7605d12c6d6710d64c5bd667ed69ad6970e3ef3884605a15b3`.
+Random namespaces / seeds: Frozen unit-hash tie-break after exact edge cost; no rerender or new random sample.
+Command and resolved config: Do not change source, real definition, candidate generation, placement, covariates, exact match, or calipers. Stratify by qualified support semantic, frozen range bin, and 45° sector. Build every legal bipartite edge satisfying the five calipers. Primary objective maximum cardinality without reuse; secondary objective minimize sum of squared caliper-normalized covariate differences; exact edge-cost ties by unit hash. Greedy could not substitute. PASS: ≥1,024 pairs; ≥100 left-side centers; all four observable bins nonempty; zero caliper/reuse errors; five SMDs ≤0.10; two elementwise-identical matches. A small verifiable graph returned maximum 3/3 with zero errors; all 46 regressions passed in 104.47 s. Command: `python -m src.render qualify-e45a --unit-cache runs/ajae/e45_v2_units_2048.npz --output runs/ajae/e45a_real_control_pairs.npz`.
+Resource and disk preflight: Two matching passes totaled 0.025716 s. Disk preflight not recorded.
+Artifacts and hashes: `runs/ajae/e45a_real_control_pairs.npz`, 565,274 bytes, SHA-256 `1eecff9d3b7229aad58e5269037e1bceaa09438f2fd826474d0dd9239ac72766`; scientific-array hash `b5cf376e3244d8ef2858471716f500bca9075733530482b6813dedb7ab7ce25d`.
+Primary construct: Maximum pairwise common support between real-normal and old-distribution normal-control, independently of proxy.
+Primary result: FAIL. Full legal graph contained 778 edges over 15 nonempty exact strata. Maximum match 135 pairs, real-side 73 centers, distance counts [11,107,17,0]. These missed 1,024 pairs, 100 frames, and 30–40 m coverage. SMDs in range/median beam/log(1+Nvis)/occlusion proxy/log(1+density) order [0.084724,0.141694,0.041913,1.000399,0.037650], maximum 1.000399. Caliper/reuse errors zero; two matches identical.
+PASS / FAIL / OUTCOME: FAIL — permanent historical old-distribution result.
+Failure classification: `insufficient_pairwise_common_support`.
+Unlocked next node: Later E45A-v2 targeted audit-bank design. E46 remained locked.
+Invalidated downstream evidence: No source classifier was executed. Maximum matching ruled out greedy as the explanation for the small pair count, but did not adjudicate renderer failure.
+Descriptive observations: Occlusion SMD 1.000399 dominated the other covariates; only 778 legal edges existed.
+Notes: This record applies only to the old normal-control distribution.
+
+## Historical E45B | Normal-Control ↔ Anomaly-Proxy Maximum Matching
+
+Experiment ID: Historical E45B
+Design-freeze commit/hash: Same pairwise split implementation as E45A, commit `9dc3b501152eccbf10ca8998355acbf6e355852d`.
+Execution-freeze commit/hash: `9dc3b501152eccbf10ca8998355acbf6e355852d`.
+Date: Not recorded.
+Git commit / clean state: Commit recorded above; clean state not recorded.
+Data identities: Old-distribution normal-control and anomaly-proxy units from `runs/ajae/e45_v2_units_2048.npz`, 2.5–40 m domain.
+Input artifact hashes: Same cache/source identities as E45A.
+Random namespaces / seeds: Same frozen hash tie-break as E45A.
+Command and resolved config: Same exact strata, five calipers, complete legal edges, maximum-cardinality first objective, normalized-square-imbalance second objective, hash ties, no reuse, and two-run reproduction as E45A. PASS: ≥1,024 pairs; ≥100 control-side centers; four nonempty observable bins; zero errors; all five SMDs ≤0.10. E45B was required before E48 but did not block E46 after an E45A PASS. Command: `python -m src.render qualify-e45b --unit-cache runs/ajae/e45_v2_units_2048.npz --output runs/ajae/e45b_control_proxy_pairs.npz`.
+Resource and disk preflight: Two matching passes totaled 0.202531 s. Disk preflight not recorded.
+Artifacts and hashes: `runs/ajae/e45b_control_proxy_pairs.npz`, 13,691,873 bytes, SHA-256 `f5b6074902f2396f3f5f36868e48b68312274bc29cf87b3a74b363131878c832`; scientific-array hash `859759030b829a1cf19504edcc54d8b24c20cae72f426a29141ab02cdf60fe08`.
+Primary construct: Pairwise common support between old-distribution controls and proxies, independently of real-normal.
+Primary result: PASS for the old distribution. Legal graph had 29,156 edges across 52 nonempty exact strata. Maximum match 3,624 pairs, control-side 357 centers, distance [1,133,1,877,563,51]. SMDs [0.031652,0.026288,0.006786,0.017766,0.016409], maximum 0.031652. Caliper/reuse errors zero; two runs identical.
+PASS / FAIL / OUTCOME: PASS — historical evidence only.
+Failure classification: Not applicable.
+Unlocked next node: Historically E48 prerequisite was satisfied, independently of E45A. Under E25-new, this qualification is invalid and E45B-v2 is required.
+Invalidated downstream evidence: It does not constitute E48 source-classification evidence and cannot qualify the new control distribution.
+Descriptive observations: Old control/proxy generation conditions were well aligned under the frozen covariates.
+Notes: Current E45B-v2 has not executed because the state machine stopped at E45A-new FAIL.
+
+## E45A-v2 | Historical Audit-Only Targeted Normal-Control Candidate Bank
+
+Experiment ID: E45A-v2
+Design-freeze commit/hash: Implementation `eedfc68068b56344a933496de23c3b869097465c`.
+Execution-freeze commit/hash: Memory/execution revisions `235112dd57fd85993772ac0b7c82cae3b216a3f5`, `cc1778f8b78411b2682e217e6199564afac0f8d6`, `2508b27c90a6aa1a6d0fdc0e9951f1e69d9f2c19`, `15b0aada3d670b752e04fe9a7bbdab3c89271f50`.
+Date: Not recorded.
+Git commit / clean state: Commits recorded above; clean state not recorded.
+Data identities: Audit-only bank; no E26, production training-world, or old normal-control training-distribution change. Real targets were 1,822 deduplicated valid units from `runs/ajae/e45_v2_units_2048.npz`, 321 centers; distance counts [540,892,365,25]. Each target had up to 64 control proposals in levels 4/8/16/32/64, computing only new suffixes.
+Input artifact hashes: Unit cache SHA-256 `1f41bf1998876d3d888f39a5d45adceb5693f7c93bbd535c9cf734a74dae70c0`, scientific hash `a3b63d11107edb1b1dce6c052e188a92879131fe20bec5568db10275c83a6160`; support pool `runs/ajae/gate1_201_support_pool.npz`; old E25 artifact `runs/ajae/e25_normal_control.npz`; calibration `runs/ajae/calibration.pt`; final `src/render.py` SHA-256 `c42950329ed02136bd182df61e0392249cb45aaeba3d6ede45e28c095f91703e`.
+Random namespaces / seeds: Target index $i$, proposal $p$ seed $4{,}500{,}000+128i+p$. Support stream used only frozen E45 covariates: identical support semantic; patch frame within target frame ±2; after transforming patch world coordinates to target sensor coordinates, identical range bin and 45° sector; sort by absolute anchor-range minus target-median-range difference, ties by support selection hash. Real semantic could not choose a template, and E46 output/score/attribution was forbidden. Each proposal independently selected a train/206 normal template, 0.9–1.1 axis scale, class pose perturbation, and material under old E25 rules.
+Command and resolved config: Each proposal used one unrepeated sorted support, sole `place_object` for E22 grounding, E23 observed collision, single-entity E24 semantics, and E25 type/support/pose rules, then authoritative rendering of the target frame. No physical threshold or identity stream could depend on matching. A control entered the complete bipartite graph only if support semantic, range bin, and azimuth sector matched and all five original calipers passed. Matching maximized cardinality then minimized normalized squared covariate difference, with no reuse/hash ties. At every proposal level run matching twice; stop at first full PASS. PASS remained ≥1,024 pairs, ≥100 real centers, four nonempty bins, zero caliper/reuse/hard errors, five SMDs ≤0.10, and elementwise match reproduction. At 64 without PASS: formal FAIL, E46 locked. A pilot found an in-place read-only renderer mask mutation; using a new Boolean array removed the hard error without changing identity, and no formal artifact was written. Final regressions: 46 passed in 100.73 s. Multiple resource-safe non-result attempts occurred before any level cache: first 24-process run retained 678 full source frames in parent, available memory 1.4 GiB; after releasing them, second 24-process run left 188 MiB and used about 10 GiB swap because each worker loaded seven frames. An 8-process pilot matched 24-process status, completed-render counts, each caliper violation, difference median, and Q95 elementwise; the third formal start still reached only 787 MiB available due seven-frame caches. After parent-cache clear and one-frame worker cache, fourth 8-process start still reached 739 MiB because large `ObservedObstacleIndex` KD-tree queries caused about 1.9 GiB/worker copy-on-write pages. A fifth four-process start showed long-lived KD-tree private pages accumulating: after ~3 min available 1.2 GiB, swap 6.9 GiB. All were stopped without level artifacts and did not count as FAIL. Final four-process pool used `chunksize=4` and recycled after eight map tasks, i.e. 32 proposals, reforking from the same parent. A 48-target×4-proposal pilot after actual recycling matched every prior pilot array, retained about 12 GiB available, and did not grow swap. Frame content, obstacle index, trajectory yaw, target/proposal seeds, and science were unchanged; process/cache/lifetime were not scientific identities. Formal command: `python -m src.render qualify-e45a-v2 --data-root /home/jasongao/Data/STU --support-pool runs/ajae/gate1_201_support_pool.npz --e25-artifact runs/ajae/e25_normal_control.npz --calibration runs/ajae/calibration.pt --unit-cache runs/ajae/e45_v2_units_2048.npz --output runs/ajae/e45a_v2_targeted_pairs.npz --processes 4`.
+Resource and disk preflight: Final formal wall time 2 h 18 min 38 s; CPU utilization 398%; maximum resident set 9,611,168 KiB. Available memory stayed about 12–13 GiB and swap did not grow. Earlier safely stopped attempts and memory observations are fully listed in the resolved config. Disk preflight not recorded.
+Artifacts and hashes: `runs/ajae/e45a_v2_targeted_pairs.npz`, 756,236 bytes, SHA-256 `290747b6c01ec9d2af152e8688f51cc9c966690cb5c165279265a51fc30e0405`; 64-proposal cache `runs/ajae/e45a_v2_targeted_controls_64.npz`, 2,978,909 bytes, SHA-256 `0853358fa0c3a414cb39eeeef41fa15a5691dd641558ffa77030011b431ef32b`; scientific-array hash `00aed2338732f9a9233547cae52c1c3087df6cfb5294da664a73a7b33a0c6192`.
+Primary construct: Whether audit-only control proposals targeted solely on frozen matching covariates could create sufficient real/control common support without altering production generation.
+Primary result: FAIL. Qualified controls at proposal levels 4/8/16/32/64 were [13,36,83,170,325]; maximum matches [13,36,80,148,212]; real centers [12,30,45,75,90]; distance counts [0,9,4,0], [0,18,18,0], [0,45,35,0], [1,92,55,0], [1,139,72,0]. Final 212 <1,024, 90 <100, and 30–40 m empty. Final SMDs [0.099364,0.159312,0.064798,0.882238,0.021068], with occlusion 0.882238 >0.10. Caliper, duplicate, and hard errors zero; two matches identical. At level 64, proposal-status codes 0–7 counted [5779,31355,297,3731,75121,325,0,0], respectively support exhaustion, placement rejection, invisible, exact-stratum mismatch, caliper mismatch, qualified, validation error, hard error.
+PASS / FAIL / OUTCOME: FAIL — permanent historical audit-only result.
+Failure classification: `targeted_control_common_support_failure`.
+Unlocked next node: At the time, none without a new user decision. That historical decision was later replaced by the E25-new contract; current E46 prerequisite is E45A-new PASS.
+Invalidated downstream evidence: It did not change E26, renderer, or production control distribution and did not run a source classifier. It cannot qualify the current E25-new distribution.
+Descriptive observations: Even 64 targeted proposals per real unit yielded only 212 pairs; occlusion remained the largest imbalance.
+Notes: State-machine dependency split was E45A → E46, E45B → E48, and (E46,E48) → E49.
+
+## E45B-v2 | Pending E25-new Normal-Control ↔ Anomaly-Proxy Pairwise Matching
+
+Experiment ID: E45B-v2
+Design-freeze commit/hash: Pair-specific Gate 1 responsibility frozen after E44-v2; full execution freeze not yet recorded.
+Execution-freeze commit/hash: Not yet frozen or executed.
+Date: Not executed.
+Git commit / clean state: Not applicable.
+Data identities: E25-new normal-control and anomaly-proxy units from a pair-specific train/201 audit bank. Capacity ladder, if needed: 512→1,024→2,048; only new suffixes at each level.
+Input artifact hashes: E25-new and E38-v2–E44-v2 prerequisites; exact E45B-v2 bank/output hashes do not exist.
+Random namespaces / seeds: To be frozen under the pair-specific bank; no execution identities exist.
+Command and resolved config: Candidate selection may use only frozen matching covariates, never E48 output. Retain E45B exact strata, five calipers, complete legal edges, deterministic maximum-cardinality first objective, normalized-covariate-imbalance second objective, no reuse, and hash ties. If capacity 2,048 remains insufficient, stop without changing calipers. This node must PASS before E48. It need not wait for E46, but current state-machine execution stopped before it began.
+Resource and disk preflight: Not executed.
+Artifacts and hashes: None.
+Primary construct: Pairwise common support between E25-new controls and proxies for E48.
+Primary result: Not executed because E45A-new formally failed and the state machine stopped.
+PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
+Failure classification: Not applicable.
+Unlocked next node: E48 only after PASS.
+Invalidated downstream evidence: Historical E45B PASS is invalid for the new control distribution.
+Descriptive observations: None.
+Notes: The current stop does not constitute E45B-v2 FAIL.
+
+## E45-V1 | Optional Blinded Human Source Discrimination
+
+Experiment ID: E45-V1
+Design-freeze commit/hash: Optional nonblocking design; commit not recorded.
+Execution-freeze commit/hash: Not executed.
+Date: Not executed.
+Git commit / clean state: Not applicable.
+Data identities: Blinded panels generated from fixed E45 matched units, if a valid matched set exists.
+Input artifact hashes: None for a completed execution.
+Random namespaces / seeds: Fixed panel identities would inherit E45; not executed.
+Command and resolved config: Without two independent human reviewers, do not adjudicate. This result cannot replace E46 and cannot block E46.
+Resource and disk preflight: Not executed.
+Artifacts and hashes: None.
+Primary construct: Optional human ability to identify source from matched local patches.
+Primary result: No formal adjudication recorded.
+PASS / FAIL / OUTCOME: OUTCOME — optional, nonblocking, not executed.
+Failure classification: Not applicable.
+Unlocked next node: None; E46 depends on E45A, not this node.
+Invalidated downstream evidence: None.
+Descriptive observations: None.
+Notes: Two independent reviewers are required for any formal score.
+
+## E46 | Real-Normal versus Rendered Normal-Control Source Classification
+
+Experiment ID: E46
+Design-freeze commit/hash: Frozen before Gate 1 matching; commit not recorded.
+Execution-freeze commit/hash: Not executed; locked by E45A-new FAIL.
+Date: Not executed.
+Git commit / clean state: Not applicable.
+Data identities: E45A-matched real-normal and rendered normal-control units; no current qualifying matched set exists.
+Input artifact hashes: None for execution.
+Random namespaces / seeds: Five folds grouped by center frame; entity-frame bootstrap 2,000 times. Exact seeds not restated here.
+Command and resolved config: Models: standardized L2 logistic regression and decision tree depth 3 with `min_samples_leaf=64`. Inputs only sensor-frame x/y/z, intensity, beam, range, and local density. Take at most 64 points per entity-frame by point-identity hash; point weight $1/n_{unit}$ so each unit has equal total weight. Five-fold split grouped by center frame; no frame crosses folds. Report ROC-AUC, balanced accuracy, and recall per class, with 2,000 entity-frame bootstrap resamples. Source-leakage FAIL if either frozen model has 95% lower confidence bound AUC ≥0.65 or 95% lower confidence bound balanced accuracy ≥0.65; otherwise PASS. The rule does not demand exactly random classification, only excludes stable practical low-capacity separation.
+Resource and disk preflight: Not executed.
+Artifacts and hashes: None.
+Primary construct: Stable practical low-level source fingerprint between strictly matched real-normal and rendered normal-control.
+Primary result: Not executed because E45A-new failed common-support qualification.
+PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
+Failure classification: Not applicable.
+Unlocked next node: PASS would unlock E48; FAIL would unlock E47.
+Invalidated downstream evidence: E49 and all post-Gate-1 nodes remain locked.
+Descriptive observations: None.
+Notes: A classifier must not be run on an unqualified matched set.
+
+## E47 | Source-Fingerprint Attribution and Single Repair
+
+Experiment ID: E47
+Design-freeze commit/hash: Conditional design frozen; commit not recorded.
+Execution-freeze commit/hash: Not executed.
+Date: Not executed.
+Git commit / clean state: Not applicable.
+Data identities: The same E45 matched set as a failed E46, if that condition occurs.
+Input artifact hashes: None.
+Random namespaces / seeds: Same models, folds, and bootstrap as E46.
+Command and resolved config: Run coordinate-only, intensity-only, beam/range-only, density-only, and leave-one-feature-group-out variants. Attribute by AUC decrease relative to full features and single-group lower confidence bounds. Output exactly one earliest repair node: E38/39 return calibration, E40 intensity, E41 empty-ray, E42/44 placement/matching, or E35 implementation. If several groups leak strongly, one shared-renderer repair is allowed, followed by sequential rerun from the earliest affected node through E46. Do not train AJAE. Attribution completion itself is not Gate 1 PASS.
+Resource and disk preflight: Not executed.
+Artifacts and hashes: None.
+Primary construct: Identify the earliest mechanism responsible for an E46 source fingerprint.
+Primary result: Not executed because E46 has not run.
+PASS / FAIL / OUTCOME: OUTCOME — LOCKED / CONDITIONAL.
+Failure classification: Not applicable.
+Unlocked next node: A single versioned repair route if E46 FAILs.
+Invalidated downstream evidence: A repair invalidates every affected node from the earliest attribution through E46.
+Descriptive observations: None.
+Notes: This node cannot itself qualify Gate 1.
+
+## E48 | Normal-Control versus Proxy Low-Level Difficulty
+
+Experiment ID: E48
+Design-freeze commit/hash: Frozen Gate 1 design; commit not recorded.
+Execution-freeze commit/hash: Not executed; E45B-v2 prerequisite absent.
+Date: Not executed.
+Git commit / clean state: Not applicable.
+Data identities: E45B-v2 matched control/proxy units; no current qualifying new-distribution set exists.
+Input artifact hashes: None.
+Random namespaces / seeds: Same model and grouping scheme as E46.
+Command and resolved config: Use E46's frozen models and grouped evaluation. FAIL for near-saturation only if any model simultaneously has 95% lower confidence bound AUC ≥0.95 and 95% lower confidence bound balanced accuracy ≥0.90; otherwise PASS. There is no minimum learnability threshold; usefulness of proxy supervision is tested by B1.
+Resource and disk preflight: Not executed.
+Artifacts and hashes: None.
+Primary construct: Whether low-level control/proxy classification is nearly saturated under strict matching.
+Primary result: Not executed.
+PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
+Failure classification: Not applicable.
+Unlocked next node: PASS contributes to E49; FAIL permits only redesign of hard proxy and invalidates relevant E20 and E42–E48 evidence.
+Invalidated downstream evidence: E49 remains locked.
+Descriptive observations: None.
+Notes: Historical E45B does not satisfy the new-distribution prerequisite.
+
+## E49 | Formal Gate 1 Adjudication
+
+Experiment ID: E49
+Design-freeze commit/hash: Gate conjunction frozen; commit not recorded.
+Execution-freeze commit/hash: Not executed.
+Date: Not executed.
+Git commit / clean state: Not applicable.
+Data identities: Valid E08–E48 evidence under one compatible current route.
+Input artifact hashes: No complete current evidence set exists.
+Random namespaces / seeds: Inherited from prerequisites.
+Command and resolved config: PASS requires canonical rays, single-published-return semantics, E23–E37 mechanics, E45 matching, E46 leakage audit, and E48 difficulty all to PASS. Optional human nodes are excluded from the conjunction. Any key FAIL returns to the earliest failed node and locks E50 onward.
+Resource and disk preflight: Not executed.
+Artifacts and hashes: None.
+Primary construct: Conjunctive Gate 1 validity before STU feature-interface and modeling phases.
+Primary result: Not executed because E45A-new failed and E46/E45B-v2/E48 remain locked.
+PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
+Failure classification: Not applicable.
+Unlocked next node: E50 only after PASS.
+Invalidated downstream evidence: E50 onward remains locked.
+Descriptive observations: None.
+Notes: Current formal stop is upstream at E45A-new.
+
+# Phase 5 | Frozen STU Point Interface and Five-Frame Coordinates
+
+## Phase 5 Unified Freeze
+
+Experiment ID: Phase 5 unified freeze
+Design-freeze commit/hash: Frozen protocol; commit not recorded.
+Execution-freeze commit/hash: Not executed.
+Date: Not executed.
+Git commit / clean state: Not applicable.
+Data identities: Sixteen identity-hash frames each from train/206 and train/201, plus analytic fixtures.
+Input artifact hashes: To be frozen before E50.
+Random namespaces / seeds: Identity-hash frame selection; exact namespace not recorded.
+Command and resolved config: E50–E56 validate only the official STU interface and coordinate semantics; no model training.
+Resource and disk preflight: Not executed.
+Artifacts and hashes: None.
+Primary construct: Shared Phase 5 scope and data freeze.
+Primary result: Not executed because Gate 1 is not closed.
+PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
+Failure classification: Not applicable.
+Unlocked next node: E50 after E49 PASS.
+Invalidated downstream evidence: E50–E56 remain locked.
+Descriptive observations: None.
+Notes: No model training belongs to Phase 5.
+
+## E50 | 128D STU High-Level Feature Interface
+
+Experiment ID: E50
+Design-freeze commit/hash: Frozen design; commit not recorded.
+Execution-freeze commit/hash: Not executed.
+Date: Not executed.
+Git commit / clean state: Not applicable.
+Data identities: 32 real frames from the Phase 5 freeze.
+Input artifact hashes: Official STU source and checkpoint hashes to be verified at execution.
+Random namespaces / seeds: Frozen frame identities.
+Command and resolved config: Hook official `all_features[-1]→point_features_head`. Every nonempty frame must output finite `[V,128]`; official source/checkpoint hashes correct; evaluation mode with no gradients; two identical runs.
+Resource and disk preflight: Not executed.
+Artifacts and hashes: None.
+Primary construct: Correct official 128-dimensional high-level point-feature interface.
+Primary result: Not executed.
+PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
+Failure classification: Not applicable.
+Unlocked next node: E51 after PASS.
+Invalidated downstream evidence: E51 onward remains locked.
+Descriptive observations: None.
+Notes: None.
+
+## E51 | Sparse-Voxel to Raw-Point Inverse Mapping
+
+Experiment ID: E51
+Design-freeze commit/hash: Frozen design; commit not recorded.
+Execution-freeze commit/hash: Not executed.
+Date: Not executed.
+Git commit / clean state: Not applicable.
+Data identities: Phase 5 real frames and analytic mapping fixtures.
+Input artifact hashes: E50 output required; none exists.
+Random namespaces / seeds: Frozen identities.
+Command and resolved config: Every valid raw return must have an in-range inverse row; recover 100% of valid points; invalid slots excluded; independently recomputed quantized coordinates and inverse map must have zero differences; two identical runs.
+Resource and disk preflight: Not executed.
+Artifacts and hashes: None.
+Primary construct: Exact inverse mapping from sparse voxels to every valid raw return.
+Primary result: Not executed.
+PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
+Failure classification: Not applicable.
+Unlocked next node: E52 after PASS.
+Invalidated downstream evidence: E52 onward remains locked.
+Descriptive observations: None.
+Notes: None.
+
+## E52 | Raw-Point Identity under Shared Voxels
+
+Experiment ID: E52
+Design-freeze commit/hash: Frozen design; commit not recorded.
+Execution-freeze commit/hash: Not executed.
+Date: Not executed.
+Git commit / clean state: Not applicable.
+Data identities: Real shared-voxel cases and synthetic counterexamples.
+Input artifact hashes: E51 output required; none exists.
+Random namespaces / seeds: Frozen fixture identities.
+Command and resolved config: Points may share one 128D feature, but every raw point must retain its own frame/ray, XYZ, intensity, label, and final-logit location. No identity merging; two identical runs.
+Resource and disk preflight: Not executed.
+Artifacts and hashes: None.
+Primary construct: Preservation of individual raw-return identity despite shared sparse-voxel features.
+Primary result: Not executed.
+PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
+Failure classification: Not applicable.
+Unlocked next node: E53 after PASS.
+Invalidated downstream evidence: E53 onward remains locked.
+Descriptive observations: None.
+Notes: Synthetic cases are implementation counterexamples, not scientific data.
+
+## E53 | Official Query Assignment
+
+Experiment ID: E53
+Design-freeze commit/hash: Frozen design; commit not recorded.
+Execution-freeze commit/hash: Not executed.
+Date: Not executed.
+Git commit / clean state: Not applicable.
+Data identities: Phase 5 official STU outputs plus a tie fixture.
+Input artifact hashes: E52 output required; none exists.
+Random namespaces / seeds: Frozen identities.
+Command and resolved config: Independently recompute softmax class, sigmoid mask, and smallest-index argmax q*. Require zero differences in query identity, 19D evidence, assignment reliability, and no-object index; tie fixture correct; two identical runs.
+Resource and disk preflight: Not executed.
+Artifacts and hashes: None.
+Primary construct: Exact reproduction of official point-to-query assignment and evidence identity.
+Primary result: Not executed.
+PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
+Failure classification: Not applicable.
+Unlocked next node: E54 after PASS.
+Invalidated downstream evidence: E54 onward remains locked.
+Descriptive observations: None.
+Notes: Smallest index is the frozen tie rule.
+
+## E54 | 19D Evidence and Reliability
+
+Experiment ID: E54
+Design-freeze commit/hash: Frozen design; commit not recorded.
+Execution-freeze commit/hash: Not executed.
+Date: Not executed.
+Git commit / clean state: Not applicable.
+Data identities: Phase 5 voxel- and point-level STU outputs.
+Input artifact hashes: E53 output required; none exists.
+Random namespaces / seeds: Frozen identities.
+Command and resolved config: Independently recompute evidence and reliability at voxel and point levels. Numerical error ≤1e-7; correct broadcasting/inverse mapping; finite and no-gradient; two identical runs.
+Resource and disk preflight: Not executed.
+Artifacts and hashes: None.
+Primary construct: Numerically exact 19-dimensional evidence and reliability construction.
+Primary result: Not executed.
+PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
+Failure classification: Not applicable.
+Unlocked next node: E55 after PASS.
+Invalidated downstream evidence: E55 onward remains locked.
+Descriptive observations: None.
+Notes: None.
+
+## E55 | Actual AJAE Input Tensor
+
+Experiment ID: E55
+Design-freeze commit/hash: Frozen design; commit not recorded.
+Execution-freeze commit/hash: Not executed.
+Date: Not executed.
+Git commit / clean state: Not applicable.
+Data identities: Real five-frame point tensors from Phase 5.
+Input artifact hashes: E54 output required; none exists.
+Random namespaces / seeds: Frozen point identities and frame order.
+Command and resolved config: Base fields exactly 128+19+1+1+1=150 dimensions, then independently add centered coordinates and q encoding. Require correct real five-frame schema, order, dtype, and point identity. Explicitly prohibit query token, entropy, energy, MSP, instance ID, moving label, and generator family. Two identical runs.
+Resource and disk preflight: Not executed.
+Artifacts and hashes: None.
+Primary construct: Correct, leakage-free actual model input tensor.
+Primary result: Not executed.
+PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
+Failure classification: Not applicable.
+Unlocked next node: E56 after PASS.
+Invalidated downstream evidence: E56 onward remains locked.
+Descriptive observations: None.
+Notes: The prohibited fields must not enter the model input.
+
+## E56 | Center-Coordinate Alignment
+
+Experiment ID: E56
+Design-freeze commit/hash: Frozen design; commit not recorded.
+Execution-freeze commit/hash: Not executed.
+Date: Not executed.
+Git commit / clean state: Not applicable.
+Data identities: Analytic rigid-transform fixtures and real five-frame static/moving-normal points.
+Input artifact hashes: E55 output required; none exists.
+Random namespaces / seeds: Frozen frame IDs.
+Command and resolved config: Analytic rigid fixture coordinate error <1e-9 m. On real five-frame static background, report nearest-neighbor residual before/after and require aligned median and Q95 both strictly improve. Moving-normal points must retain nonzero relative motion; no instance-level erasure. Matrix direction, frame IDs, finite values, and two-run reproduction all required.
+Resource and disk preflight: Not executed.
+Artifacts and hashes: None.
+Primary construct: Correct transformation of all five frames into center coordinates while retaining genuine object motion.
+Primary result: Not executed.
+PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
+Failure classification: Not applicable.
+Unlocked next node: E57 after PASS.
+Invalidated downstream evidence: Phase 6 onward remains locked.
+Descriptive observations: None.
+Notes: Alignment must improve static background without flattening moving objects.
+
+# Phase 6 | Frozen 201 Development Testbed, Evaluator, and Scientific Criteria
+
+## Phase 6 Candidate-Bank and One-Time Selection Freeze
+
+Experiment ID: Phase 6 candidate-bank and selection freeze
+Design-freeze commit/hash: Frozen before E57; commit not recorded.
+Execution-freeze commit/hash: Not executed.
+Date: Not executed.
+Git commit / clean state: Not applicable.
+Data identities: train/201 candidate worlds, capacity ladder 128/256/512/1,024.
+Input artifact hashes: None yet.
+Random namespaces / seeds: Deterministic predefined-difficulty greedy set cover.
+Command and resolved config: E57–E63 are frozen together before E57. Generate the 201 candidate bank only once. Select by predefined difficulty measures and deterministic greedy set cover. Never manually replace worlds per node and never read model scores.
+Resource and disk preflight: Not executed.
+Artifacts and hashes: None.
+Primary construct: One immutable, model-independent development-world selection process.
+Primary result: Not executed.
+PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
+Failure classification: Not applicable.
+Unlocked next node: E57 after Phase 5 PASS.
+Invalidated downstream evidence: E57 onward remains locked.
+Descriptive observations: None.
+Notes: Candidate expansion is an a priori capacity ladder, not post-result world replacement.
+
+## E57 | Freeze 24 In-Generator Development Worlds
+
+Experiment ID: E57
+Design-freeze commit/hash: Frozen design; commit not recorded.
+Execution-freeze commit/hash: Not executed.
+Date: Not executed.
+Git commit / clean state: Not applicable.
+Data identities: Twenty-four mixed worlds selected from the train/201 candidate bank.
+Input artifact hashes: None.
+Random namespaces / seeds: Frozen candidate-bank and deterministic set-cover identities.
+Command and resolved config: Freeze each world spec, generation report, five-frame diagnostics, and hash. If a capacity-1,024 bank cannot meet E59/E60 coverage, E57 FAILs; bins cannot be moved ad hoc.
+Resource and disk preflight: Not executed.
+Artifacts and hashes: None.
+Primary construct: Immutable in-generator development world set with preregistered coverage capability.
+Primary result: Not executed.
+PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
+Failure classification: Not applicable.
+Unlocked next node: E58 after PASS.
+Invalidated downstream evidence: E58 onward remains locked.
+Descriptive observations: None.
+Notes: World identity and diagnostics must be fixed once.
+
+## E58 | Freeze Six Held-Out Diagnostic Worlds
+
+Experiment ID: E58
+Design-freeze commit/hash: Frozen design; commit not recorded.
+Execution-freeze commit/hash: Not executed.
+Date: Not executed.
+Git commit / clean state: Not applicable.
+Data identities: Six deterministically selected worlds from the held-out torus mechanism never sampled by formal training.
+Input artifact hashes: E57 candidate bank required; none exists.
+Random namespaces / seeds: Frozen held-out torus identities.
+Command and resolved config: Code must prevent these worlds from training, checkpoint/threshold selection, and PASS statistics. They are diagnostic only. Identity and isolation errors must be zero.
+Resource and disk preflight: Not executed.
+Artifacts and hashes: None.
+Primary construct: Strict isolation of held-out diagnostic worlds.
+Primary result: Not executed.
+PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
+Failure classification: Not applicable.
+Unlocked next node: E59 after PASS.
+Invalidated downstream evidence: E59 onward remains locked.
+Descriptive observations: None.
+Notes: Held-out diagnostics cannot influence any selection or formal test.
+
+## E59 | Development-World $N_{vis}$/Occlusion/Distance Coverage
+
+Experiment ID: E59
+Design-freeze commit/hash: Frozen marginal bins and counts; commit not recorded.
+Execution-freeze commit/hash: Not executed.
+Date: Not executed.
+Git commit / clean state: Not applicable.
+Data identities: Entity-window records from the 24 E57 worlds, separately for controls and proxies.
+Input artifact hashes: E57 artifact required; none exists.
+Random namespaces / seeds: Inherited frozen world identities.
+Command and resolved config: Distance bins [2.5,10), [10,20), [20,30), [30,50] m; $N_{vis}$ bins [1,8), [8,32), [32,128), [128,+∞); occlusion bins [0,0.25), [0.25,0.50), [0.50,0.75), [0.75,1]. In 24 worlds, every marginal bin must have at least 32 entity-window records for control and at least 32 for proxy; identities unique and metrics finite.
+Resource and disk preflight: Not executed.
+Artifacts and hashes: None.
+Primary construct: Marginal development coverage across distance, visible count, and occlusion for both generated labels.
+Primary result: Not executed.
+PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
+Failure classification: Not applicable.
+Unlocked next node: E60 after PASS.
+Invalidated downstream evidence: E60 onward remains locked.
+Descriptive observations: None.
+Notes: These are marginal, not Cartesian-product, coverage requirements.
+
+## E60 | Development-World $V=1..5$ Coverage
+
+Experiment ID: E60
+Design-freeze commit/hash: Frozen design; commit not recorded.
+Execution-freeze commit/hash: Not executed.
+Date: Not executed.
+Git commit / clean state: Not applicable.
+Data identities: Control and proxy entity-window records from E57 worlds.
+Input artifact hashes: E59 PASS required; none exists.
+Random namespaces / seeds: Inherited frozen identities.
+Command and resolved config: For each $V=1,2,3,4,5$, controls and proxies each need at least 24 entity-window records. The same entity may appear in different windows, but world/entity/window identity must be retained and must not be counted as independent objects in statistics.
+Resource and disk preflight: Not executed.
+Artifacts and hashes: None.
+Primary construct: Development coverage over number of visible frames without identity pseudoreplication.
+Primary result: Not executed.
+PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
+Failure classification: Not applicable.
+Unlocked next node: E61 after PASS.
+Invalidated downstream evidence: E61 onward remains locked.
+Descriptive observations: None.
+Notes: Repeated-window observations retain shared entity identity.
+
+## E61 | Pure-Normal and Moving-Normal Safety Sets
+
+Experiment ID: E61
+Design-freeze commit/hash: Frozen design; commit not recorded.
+Execution-freeze commit/hash: Not executed.
+Date: Not executed.
+Git commit / clean state: Not applicable.
+Data identities: Pure-normal: every valid-range point in train/201 frames 4–681. Moving subset: raw moving semantics 252–259, plus saved static-normal matched controls.
+Input artifact hashes: None.
+Random namespaces / seeds: Frozen identity and matching rules.
+Command and resolved config: Labels are evaluation-only and forbidden from model inputs. Identity, count, hash, and access-isolation checks must PASS.
+Resource and disk preflight: Not executed.
+Artifacts and hashes: None.
+Primary construct: Leakage-free pure-normal and moving-normal safety evaluation sets.
+Primary result: Not executed.
+PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
+Failure classification: Not applicable.
+Unlocked next node: E62 after PASS.
+Invalidated downstream evidence: E62 onward remains locked.
+Descriptive observations: None.
+Notes: Moving labels are never model features.
+
+## E62 | Custom Evaluator versus Official Evaluator
+
+Experiment ID: E62
+Design-freeze commit/hash: Frozen design; commit not recorded.
+Execution-freeze commit/hash: Not executed.
+Date: Not executed.
+Git commit / clean state: Not applicable.
+Data identities: Analytic prediction fixtures and one fixed real prediction.
+Input artifact hashes: Official evaluator identity to be frozen; none recorded.
+Random namespaces / seeds: Fixed prediction identities.
+Command and resolved config: Run custom and official AP, AUROC, and FPR95. Filtering of 2.5–50 m, ignore labels, and fewer-than-five-anomaly-points-per-frame rule must be pointwise identical. Absolute metric differences ≤1e-10; valid point/frame counts exactly identical.
+Resource and disk preflight: Not executed.
+Artifacts and hashes: None.
+Primary construct: Numerical and sample-selection equivalence of the custom evaluator to the official evaluator.
+Primary result: Not executed.
+PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
+Failure classification: Not applicable.
+Unlocked next node: E63 after PASS.
+Invalidated downstream evidence: Training comparisons remain locked.
+Descriptive observations: None.
+Notes: Filtering equivalence is part of the construct, not merely metric arithmetic.
+
+## E63 | One-Time Freeze of Training, Selection, Statistics, and Safety Rules
+
+Experiment ID: E63
+Design-freeze commit/hash: Rules frozen before any B0/B1 result; commit not recorded.
+Execution-freeze commit/hash: Not executed.
+Date: Not executed.
+Git commit / clean state: Not applicable.
+Data identities: B0/B1/B2/B3 development and safety sets from E57–E62; B4 and final 19-sequence rules included prospectively.
+Input artifact hashes: Machine-loadable protocol/config artifact to be produced; none exists.
+Random namespaces / seeds: Training seeds 0, 1, 2. Hierarchical paired bootstrap 5,000 times over seed and world. Fixed two-fold safety cross-fit.
+Command and resolved config: Training: AdamW, learning rate 1e-4, weight decay 1e-4, micro-batch 1, gradient accumulation 8; per seed at most 40 complete 206 worlds; evaluate every 5 worlds; patience 4; world-type proportions pure-normal/control-only/mixed/anomaly-only =0.20/0.20/0.40/0.20. B1/B2/B3 share budget, 201, and selection rule. Checkpoint: maximize mean AP across 24 worlds; differences <0.001 are ties, then lower FPR95, lower pure-normal cross-fit FPR, earlier checkpoint. Six held-out worlds forbidden. Statistics: 5,000 hierarchical paired bootstrap; direction consistency means at least 2/3 seed mean-AP differences positive. Gate 2 B1 vs B0 requires mean AP gain ≥0.02, 95% bootstrap lower bound >0, and ≥2/3 positive seeds. Gate 3 B3 vs B1 and B3 vs B2 each require gain ≥0.01, lower bound >0, ≥2/3 positive seeds. Safety: fixed two-fold cross-fit on 24 worlds; one fold selects point threshold for 95% proxy TPR, the other evaluates FPR, then swap. Relative model comparison may worsen pure-normal, rendered-control, moving-normal, and FPR95 by at most 0.03 absolute each. B4 vs B3 contribution supported only if gain ≥0.005, lower bound >0, all safety worsening ≤0.03; otherwise fusion unsupported while B3 may continue. Gate 4 real transfer: final model vs B1 19-sequence mean AP gain ≥0.01, vs B0 ≥0.02; both sequence-bootstrap lower bounds >0; at least 12/19 sequences positive vs B1; safety worsening ≤0.03. B1/B2/B3 cannot separately alter these rules after results. PASS means all rules/config are recorded in protocol and machine-loadable.
+Resource and disk preflight: Not executed.
+Artifacts and hashes: None.
+Primary construct: Complete preregistration of all training budgets, checkpoint selection, superiority, bootstrap, and safety criteria.
+Primary result: Not executed.
+PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
+Failure classification: Not applicable.
+Unlocked next node: E64 after PASS.
+Invalidated downstream evidence: All model-mechanics and training gates remain locked.
+Descriptive observations: None.
+Notes: No criterion may be moved separately for B1, B2, or B3 after outcomes are known.
+
+# Phase 7 | AJAE Model Mechanical Unit Qualification
+
+## Phase 7 Unified Freeze
+
+Experiment ID: Phase 7 unified freeze
+Design-freeze commit/hash: E64–E71 frozen together before first execution; commit not recorded.
+Execution-freeze commit/hash: Not executed.
+Date: Not executed.
+Git commit / clean state: Not applicable.
+Data identities: Analytic and boundary fixtures defined per node.
+Input artifact hashes: None.
+Random namespaces / seeds: Frozen per-fixture identities; exact values not recorded.
+Command and resolved config: E64–E71 are zero-tolerance implementation tests and cannot be modified in response to model performance.
+Resource and disk preflight: Not executed.
+Artifacts and hashes: None.
+Primary construct: Shared mechanical-test freeze for AJAE architecture.
+Primary result: Not executed.
+PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
+Failure classification: Not applicable.
+Unlocked next node: E64 after E63 PASS.
+Invalidated downstream evidence: E64 onward remains locked.
+Descriptive observations: None.
+Notes: Model effect sizes cannot change mechanical semantics.
+
+## E64 | Temporal-Identity Voxel Isolation
+
+Experiment ID: E64
+Design-freeze commit/hash: Frozen design; commit not recorded.
+Execution-freeze commit/hash: Not executed.
+Date: Not executed.
+Git commit / clean state: Not applicable.
+Data identities: Same-XYZ/different-q and voxel-boundary fixtures.
+Input artifact hashes: None.
+Random namespaces / seeds: Fixed fixtures.
+Command and resolved config: Inspect keys at L1–L3. Every key includes q; no pooling merge across q; correct merge within q; deterministic.
+Resource and disk preflight: Not executed.
+Artifacts and hashes: None.
+Primary construct: Preservation of temporal identity through hierarchical voxel pooling.
+Primary result: Not executed.
+PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
+Failure classification: Not applicable.
+Unlocked next node: E65 after PASS.
+Invalidated downstream evidence: E65 onward remains locked.
+Descriptive observations: None.
+Notes: None.
+
+## E65 | Mean–Max Pooling Numerics
+
+Experiment ID: E65
+Design-freeze commit/hash: Frozen design; commit not recorded.
+Execution-freeze commit/hash: Not executed.
+Date: Not executed.
+Git commit / clean state: Not applicable.
+Data identities: Hand-calculable negative, repeated, and single-point voxel fixtures.
+Input artifact hashes: None.
+Random namespaces / seeds: Fixed fixtures.
+Command and resolved config: Mean, max, concatenation, and linear-layer input must match hand calculation elementwise; gradients finite; neither branch may degenerate away.
+Resource and disk preflight: Not executed.
+Artifacts and hashes: None.
+Primary construct: Correct dual-path mean–max voxel pooling.
+Primary result: Not executed.
+PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
+Failure classification: Not applicable.
+Unlocked next node: E66 after PASS.
+Invalidated downstream evidence: E66 onward remains locked.
+Descriptive observations: None.
+Notes: None.
+
+## E66 | Neighborhood Stratification by Temporal Offset
+
+Experiment ID: E66
+Design-freeze commit/hash: Frozen design; commit not recorded.
+Execution-freeze commit/hash: Not executed.
+Date: Not executed.
+Git commit / clean state: Not applicable.
+Data identities: Fixtures with saturated same-frame neighbors and sparse cross-frame neighbors.
+Input artifact hashes: None.
+Random namespaces / seeds: Point-identity tie-breaks.
+Command and resolved config: Every temporal offset δ has independent radius/K selection; another δ cannot occupy its quota; points outside radius are never used as filler; ties by point identity; empty candidate sets legal.
+Resource and disk preflight: Not executed.
+Artifacts and hashes: None.
+Primary construct: Independent neighborhood selection for each temporal offset.
+Primary result: Not executed.
+PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
+Failure classification: Not applicable.
+Unlocked next node: E67 after PASS.
+Invalidated downstream evidence: E67 onward remains locked.
+Descriptive observations: None.
+Notes: None.
+
+## E67 | Empty Cross-Frame Branch and Gate
+
+Experiment ID: E67
+Design-freeze commit/hash: Frozen design; commit not recorded.
+Execution-freeze commit/hash: Not executed.
+Date: Not executed.
+Git commit / clean state: Not applicable.
+Data identities: Empty- and nonempty-neighborhood fixtures, in batch and single form.
+Input artifact hashes: None.
+Random namespaces / seeds: Fixed fixtures.
+Command and resolved config: Empty neighborhood must produce `message=0`, gate 0, no NaN. Nonempty gate in [0,1]. Batch and individual outputs identical.
+Resource and disk preflight: Not executed.
+Artifacts and hashes: None.
+Primary construct: Numerically safe gating when a temporal branch has no neighbors.
+Primary result: Not executed.
+PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
+Failure classification: Not applicable.
+Unlocked next node: E68 after PASS.
+Invalidated downstream evidence: E68 onward remains locked.
+Descriptive observations: None.
+Notes: None.
+
+## E68 | Same-Frame Residual Survival Path
+
+Experiment ID: E68
+Design-freeze commit/hash: Frozen design; commit not recorded.
+Execution-freeze commit/hash: Not executed.
+Date: Not executed.
+Git commit / clean state: Not applicable.
+Data identities: Fixture with every cross-frame branch disabled.
+Input artifact hashes: None.
+Random namespaces / seeds: Fixed fixture.
+Command and resolved config: Independently recompute h+F(m0). Same-frame message and residual must remain, output difference zero, cross-frame gradients zero.
+Resource and disk preflight: Not executed.
+Artifacts and hashes: None.
+Primary construct: Survival of the same-frame representation when cross-frame information is absent.
+Primary result: Not executed.
+PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
+Failure classification: Not applicable.
+Unlocked next node: E69 after PASS.
+Invalidated downstream evidence: E69 onward remains locked.
+Descriptive observations: None.
+Notes: None.
+
+## E69 | Same-Frame 3-NN Upsampling
+
+Experiment ID: E69
+Design-freeze commit/hash: Frozen design; commit not recorded.
+Execution-freeze commit/hash: Not executed.
+Date: Not executed.
+Git commit / clean state: Not applicable.
+Data identities: Fixture where a parent point from another q is geometrically closer.
+Input artifact hashes: None.
+Random namespaces / seeds: Frozen point identities.
+Command and resolved config: Select only parents with the same q. With fewer than three, use the frozen repeat/available rule. Inverse-distance weights finite and sum to 1; numerical output difference zero.
+Resource and disk preflight: Not executed.
+Artifacts and hashes: None.
+Primary construct: Temporally isolated same-frame nearest-neighbor upsampling.
+Primary result: Not executed.
+PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
+Failure classification: Not applicable.
+Unlocked next node: E70 after PASS.
+Invalidated downstream evidence: E70 onward remains locked.
+Descriptive observations: None.
+Notes: None.
+
+## E70 | Balanced BCE Empty-Class Safety
+
+Experiment ID: E70
+Design-freeze commit/hash: Frozen design; commit not recorded.
+Execution-freeze commit/hash: Not executed.
+Date: Not executed.
+Git commit / clean state: Not applicable.
+Data identities: All-negative, all-positive, mixed, and range/ignore-filtered fixtures.
+Input artifact hashes: None.
+Random namespaces / seeds: Fixed fixtures.
+Command and resolved config: Match hand calculation exactly and remain finite. In mixed batches each class contributes one half. The evaluation rule excluding frames with fewer than five anomaly points cannot enter training.
+Resource and disk preflight: Not executed.
+Artifacts and hashes: None.
+Primary construct: Numerically safe, semantically correct balanced binary cross-entropy when a class is absent.
+Primary result: Not executed.
+PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
+Failure classification: Not applicable.
+Unlocked next node: E71 after PASS.
+Invalidated downstream evidence: E71 onward remains locked.
+Descriptive observations: None.
+Notes: None.
+
+## E71 | Probability-Fusion Formula
+
+Experiment ID: E71
+Design-freeze commit/hash: Frozen design; commit not recorded.
+Execution-freeze commit/hash: Not executed.
+Date: Not executed.
+Git commit / clean state: Not applicable.
+Data identities: Fixed logits and repeated point-ID fixtures.
+Input artifact hashes: None.
+Random namespaces / seeds: Fixed identities.
+Command and resolved config: Output must equal mean(sigmoid(logit)) exactly and must not equal sigmoid(mean(logit)) in the distinguishing fixture. No q/center weighting. Multiplicity 1≤m_p≤5; no boundary padding.
+Resource and disk preflight: Not executed.
+Artifacts and hashes: None.
+Primary construct: Correct per-point probability fusion across available frames.
+Primary result: Not executed.
+PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
+Failure classification: Not applicable.
+Unlocked next node: E72 after PASS.
+Invalidated downstream evidence: Phase 8 remains locked.
+Descriptive observations: None.
+Notes: Fusion is the arithmetic mean of probabilities, not logits.
+
+# Phase 8 | Gate 2: Is Anomaly-Proxy Supervision Effective?
+
+## E72 | Freeze the B0 STU Single-Frame Reference
+
+Experiment ID: E72
+Design-freeze commit/hash: Frozen design; commit not recorded.
+Execution-freeze commit/hash: Not executed.
+Date: Not executed.
+Git commit / clean state: Not applicable.
+Data identities: E57's 24 worlds plus pure-normal and moving-normal sets.
+Input artifact hashes: Official STU and evaluator identities to be frozen.
+Random namespaces / seeds: Frozen world/point identities.
+Command and resolved config: Generate official STU MaxLogit on all sets and independently recompute with official evaluator. Preserve complete per-world/per-point identity, metrics, and hashes.
+Resource and disk preflight: Not executed.
+Artifacts and hashes: None.
+Primary construct: Immutable official single-frame baseline B0.
+Primary result: Not executed.
+PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
+Failure classification: Not applicable.
+Unlocked next node: E73 after PASS.
+Invalidated downstream evidence: E73 onward remains locked.
+Descriptive observations: None.
+Notes: None.
+
+## E73 | B1 Single-Frame Smoke Training
+
+Experiment ID: E73
+Design-freeze commit/hash: Frozen design; commit not recorded.
+Execution-freeze commit/hash: Not executed.
+Date: Not executed.
+Git commit / clean state: Not applicable.
+Data identities: One fixed pure-normal world and one fixed mixed world; at most 200 optimizer steps.
+Input artifact hashes: E72 and frozen STU required.
+Random namespaces / seeds: One frozen smoke seed; exact value not recorded.
+Command and resolved config: Verify that both pure-negative and mixed positive/negative windows actually occur; loss/gradients finite; STU parameters, buffers, and gradients unchanged; checkpoint save/restore works; same-seed short run reproduces. Smoke results cannot select hyperparameters.
+Resource and disk preflight: Not executed.
+Artifacts and hashes: None.
+Primary construct: Mechanical trainability and frozen-STU isolation of B1.
+Primary result: Not executed.
+PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
+Failure classification: Not applicable.
+Unlocked next node: E74 after PASS.
+Invalidated downstream evidence: E74 onward remains locked.
+Descriptive observations: None.
+Notes: Smoke performance is not scientific evidence or a tuning signal.
+
+## E74 | B1 Three Independent Training Seeds
+
+Experiment ID: E74
+Design-freeze commit/hash: E63 budget and selection rules.
+Execution-freeze commit/hash: Not executed.
+Date: Not executed.
+Git commit / clean state: Not applicable.
+Data identities: Training seeds 0, 1, 2 under identical data/config/budget.
+Input artifact hashes: E63 protocol and E73 implementation required.
+Random namespaces / seeds: 0, 1, 2.
+Command and resolved config: Complete all seeds with identical configuration and budget. PASS requires all complete, unique checkpoint selection, unchanged STU hash, and complete lineage. If a purely mechanical failure occurs with unchanged protocol, rerun only the invalid seed.
+Resource and disk preflight: Not executed.
+Artifacts and hashes: None.
+Primary construct: Complete, comparable B1 training replications under the preregistered budget.
+Primary result: Not executed.
+PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
+Failure classification: Not applicable.
+Unlocked next node: E75 after PASS.
+Invalidated downstream evidence: E75 onward remains locked.
+Descriptive observations: None.
+Notes: Scientific underperformance is not an invalid-seed mechanical failure.
+
+## E75 | B1 versus B0 Proxy-Supervision Effect
+
+Experiment ID: E75
+Design-freeze commit/hash: E63 Gate 2 superiority criteria.
+Execution-freeze commit/hash: Not executed.
+Date: Not executed.
+Git commit / clean state: Not applicable.
+Data identities: Paired B1/B0 results across E57 worlds and seeds.
+Input artifact hashes: E72 and E74 outputs required.
+Random namespaces / seeds: E63 hierarchical paired bootstrap, 5,000 resamples.
+Command and resolved config: Apply E63 Gate 2 exactly: mean AP gain ≥0.02, 95% bootstrap lower bound >0, and positive mean-AP difference in at least 2/3 seeds.
+Resource and disk preflight: Not executed.
+Artifacts and hashes: None.
+Primary construct: Whether anomaly-proxy supervision adds meaningful single-frame anomaly-detection value over official STU MaxLogit.
+Primary result: Not executed.
+PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
+Failure classification: A formal FAIL would be `scientific_failure`.
+Unlocked next node: E76 after PASS. FAIL stops five-frame experiments and opens a new Gate 1/proxy-design research cycle; B3 cannot rescue B1.
+Invalidated downstream evidence: E76 onward remains locked on FAIL.
+Descriptive observations: None.
+Notes: No threshold tuning is allowed after observing B1/B0 results.
+
+## E76 | B1 Normal-Safety Qualification
+
+Experiment ID: E76
+Design-freeze commit/hash: E63 cross-fit safety criteria.
+Execution-freeze commit/hash: Not executed.
+Date: Not executed.
+Git commit / clean state: Not applicable.
+Data identities: Pure-normal, rendered normal-control, moving-normal, and FPR95 safety sets.
+Input artifact hashes: E74/E75 outputs and E61 sets required.
+Random namespaces / seeds: Fixed two-fold cross-fit from E63.
+Command and resolved config: Execute E63 safety thresholding and require every absolute worsening relative to the comparator to be ≤0.03.
+Resource and disk preflight: Not executed.
+Artifacts and hashes: None.
+Primary construct: B1 safety on normal and moving-normal data at frozen proxy-TPR operating points.
+Primary result: Not executed.
+PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
+Failure classification: Not applicable until execution.
+Unlocked next node: E77 after PASS. FAIL returns to proxy/control/renderer design and locks E78.
+Invalidated downstream evidence: E77 and later phases remain locked on FAIL.
+Descriptive observations: None.
+Notes: All four safety comparisons are conjunctive.
+
+## E77 | Formal Gate 2 Adjudication
+
+Experiment ID: E77
+Design-freeze commit/hash: Frozen conjunction E72–E76.
+Execution-freeze commit/hash: Not executed.
+Date: Not executed.
+Git commit / clean state: Not applicable.
+Data identities: Valid E72–E76 evidence.
+Input artifact hashes: None; prerequisites incomplete.
+Random namespaces / seeds: Inherited.
+Command and resolved config: Only if E72, E73, E74, E75, and E76 all PASS may the study claim that anomaly-proxy supervision is effective in a new background.
+Resource and disk preflight: Not executed.
+Artifacts and hashes: None.
+Primary construct: Conjunctive Gate 2 evidence for useful and safe anomaly-proxy supervision.
+Primary result: Not executed.
+PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
+Failure classification: Not applicable.
+Unlocked next node: E78 after PASS.
+Invalidated downstream evidence: Phase 9 remains locked.
+Descriptive observations: None.
+Notes: Gate 2 cannot be passed by a subset of its nodes.
+
+# Phase 9 | Gate 3: Does Cross-Frame Information Provide Identifiable Gain?
+
+## E78 | B2 Five-Frame Control without Cross-Frame Information
+
+Experiment ID: E78
+Design-freeze commit/hash: E63 budget and Phase 7 mechanics.
+Execution-freeze commit/hash: Not executed.
+Date: Not executed.
+Git commit / clean state: Not applicable.
+Data identities: Three training seeds under the same five-frame structure as B3.
+Input artifact hashes: Gate 2 and E63 prerequisites required.
+Random namespaces / seeds: 0, 1, 2.
+Command and resolved config: Train under full E63 budget. Architecture identical to B3, but every contribution with temporal offset δ≠0 must be exactly zero in trace, and evaluation uses q=0 only. PASS requires all seeds complete and zero trace errors.
+Resource and disk preflight: Not executed.
+Artifacts and hashes: None.
+Primary construct: Five-frame architectural control with no cross-frame evidence.
+Primary result: Not executed.
+PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
+Failure classification: Not applicable.
+Unlocked next node: E79 after PASS.
+Invalidated downstream evidence: E79 onward remains locked.
+Descriptive observations: None.
+Notes: B2 isolates architecture/window effects from cross-frame information.
+
+## E79 | B3 Five-Frame Smoke Training
+
+Experiment ID: E79
+Design-freeze commit/hash: Frozen design; commit not recorded.
+Execution-freeze commit/hash: Not executed.
+Date: Not executed.
+Git commit / clean state: Not applicable.
+Data identities: Two fixed worlds, at most 200 optimizer steps.
+Input artifact hashes: E78 and model mechanics required.
+Random namespaces / seeds: Frozen smoke identity.
+Command and resolved config: Check supervision on all five frames, each temporal-offset neighborhood and empty branch, gate distribution, GPU memory, and frozen STU. Smoke cannot select hyperparameters.
+Resource and disk preflight: Not executed.
+Artifacts and hashes: None.
+Primary construct: Mechanical trainability of full five-frame B3.
+Primary result: Not executed.
+PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
+Failure classification: Not applicable.
+Unlocked next node: E80 after PASS.
+Invalidated downstream evidence: E80 onward remains locked.
+Descriptive observations: None.
+Notes: Smoke outcomes are not model-selection evidence.
+
+## E80 | B3 Three Independent Training Seeds
+
+Experiment ID: E80
+Design-freeze commit/hash: E63 budget and selection rules.
+Execution-freeze commit/hash: Not executed.
+Date: Not executed.
+Git commit / clean state: Not applicable.
+Data identities: Seeds 0, 1, 2 under identical B3 training.
+Input artifact hashes: E79 PASS required.
+Random namespaces / seeds: 0, 1, 2.
+Command and resolved config: Train with the same E63 budget; every run must complete and retain full lineage.
+Resource and disk preflight: Not executed.
+Artifacts and hashes: None.
+Primary construct: Complete comparable B3 replications.
+Primary result: Not executed.
+PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
+Failure classification: Not applicable.
+Unlocked next node: E81 after PASS.
+Invalidated downstream evidence: E81 onward remains locked.
+Descriptive observations: None.
+Notes: None.
+
+## E81 | B3 versus B1
+
+Experiment ID: E81
+Design-freeze commit/hash: E63 Gate 3 rule.
+Execution-freeze commit/hash: Not executed.
+Date: Not executed.
+Git commit / clean state: Not applicable.
+Data identities: Paired B3 and B1 seed/world results.
+Input artifact hashes: E74 and E80 outputs required.
+Random namespaces / seeds: E63 5,000 hierarchical paired bootstrap resamples.
+Command and resolved config: Require mean AP gain ≥0.01, 95% bootstrap lower bound >0, and positive seed direction in at least 2/3 seeds.
+Resource and disk preflight: Not executed.
+Artifacts and hashes: None.
+Primary construct: Practical five-frame gain relative to the single-frame learned B1 model.
+Primary result: Not executed.
+PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
+Failure classification: A FAIL means the five-frame-over-single-frame claim is unsupported.
+Unlocked next node: E82 after PASS. If temporal design changes after FAIL, return to E64 and rerun B2/B3.
+Invalidated downstream evidence: E82 onward remains locked on FAIL.
+Descriptive observations: None.
+Notes: None.
+
+## E82 | B3 versus B2
+
+Experiment ID: E82
+Design-freeze commit/hash: Same E63 Gate 3 rule as E81.
+Execution-freeze commit/hash: Not executed.
+Date: Not executed.
+Git commit / clean state: Not applicable.
+Data identities: Paired B3 and B2 seed/world results.
+Input artifact hashes: E78 and E80 outputs required.
+Random namespaces / seeds: E63 5,000 hierarchical paired bootstrap resamples.
+Command and resolved config: Require mean AP gain ≥0.01, 95% bootstrap lower bound >0, and positive seed direction in at least 2/3 seeds.
+Resource and disk preflight: Not executed.
+Artifacts and hashes: None.
+Primary construct: Whether gain is specifically attributable to cross-frame evidence rather than a five-frame architecture/control effect.
+Primary result: Not executed.
+PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
+Failure classification: A FAIL means cross-frame attribution is unsupported.
+Unlocked next node: E83 after PASS; FAIL returns to E64.
+Invalidated downstream evidence: E83 onward remains locked on FAIL.
+Descriptive observations: None.
+Notes: Both E81 and E82 must pass.
+
+## E83 | Five-Frame Normal-Motion Safety
+
+Experiment ID: E83
+Design-freeze commit/hash: E63 safety criteria.
+Execution-freeze commit/hash: Not executed.
+Date: Not executed.
+Git commit / clean state: Not applicable.
+Data identities: Pure-normal, rendered normal-control, moving-normal, and mixed-world FPR95 sets.
+Input artifact hashes: B1/B3 and safety sets required.
+Random namespaces / seeds: E63 fixed two-fold cross-fit.
+Command and resolved config: B3 versus B1 absolute worsening must be ≤0.03 on all four safety measures. Anomaly-boundary shells are reserved for E90 and not duplicated here. FAIL permits only temporal-neighborhood/gate modification and return to E64.
+Resource and disk preflight: Not executed.
+Artifacts and hashes: None.
+Primary construct: Safety of cross-frame modeling on normal and moving-normal points.
+Primary result: Not executed.
+PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
+Failure classification: Not applicable until execution.
+Unlocked next node: E84 after PASS.
+Invalidated downstream evidence: E84 onward remains locked on FAIL.
+Descriptive observations: None.
+Notes: Boundary safety is deliberately not duplicated.
+
+## E84 | Formal Gate 3 Adjudication
+
+Experiment ID: E84
+Design-freeze commit/hash: Frozen conjunction E78–E83.
+Execution-freeze commit/hash: Not executed.
+Date: Not executed.
+Git commit / clean state: Not applicable.
+Data identities: Valid E78–E83 evidence.
+Input artifact hashes: None; prerequisites incomplete.
+Random namespaces / seeds: Inherited.
+Command and resolved config: Only if every E78–E83 node PASS may B3's temporal claim be supported.
+Resource and disk preflight: Not executed.
+Artifacts and hashes: None.
+Primary construct: Conjunctive evidence that cross-frame information yields identifiable, safe gain.
+Primary result: Not executed.
+PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
+Failure classification: Not applicable.
+Unlocked next node: E85 after PASS.
+Invalidated downstream evidence: Phase 10 onward remains locked.
+Descriptive observations: None.
+Notes: B3 must beat both B1 and B2 and pass safety.
+
+# Phase 10 | Positional Calibration and Optional B4 Fusion
+
+## E85 | Position-q Score Audit and Predefined Calibration Branch
+
+Experiment ID: E85
+Design-freeze commit/hash: Raw/calibrated/disabled branch frozen prospectively; commit not recorded.
+Execution-freeze commit/hash: Not executed.
+Date: Not executed.
+Git commit / clean state: Not applicable.
+Data identities: q=-2,-1,0,1,2 outputs on the 24 development worlds.
+Input artifact hashes: B3 checkpoint and E57 worlds required.
+Random namespaces / seeds: Fixed two-fold 12-world calibration/validation split; exact identities to inherit E63 worlds.
+Command and resolved config: Report per-q AP, normal/proxy median score, Brier score, and ECE over 20 equal-frequency bins. AP describes time-position information and does not adjudicate score-scale comparability because temperature scaling preserves ranking. If raw scores in both fixed two-fold validation directions simultaneously have maximum pairwise normal-median difference ≤0.02, proxy-median difference ≤0.05, and each q ECE ≤0.05, outcome `B4_ENABLED_RAW`. Otherwise fit one temperature T_q in [0.5,2.0] per q on 12 worlds by BCE minimization, validate on other 12, swap. If both validation directions satisfy the same scale/ECE rules, outcome `B4_ENABLED_CALIBRATED`, then refit the unique final T_q on all 24 with the identical bounded objective; full-data fit does not adjudicate qualification. Otherwise `B4_DISABLED_POSITION_BIAS`. None invalidates B3. Enabled outcomes go E86; disabled jumps to E89, B4 never runs and final choice can only be B3.
+Resource and disk preflight: Not executed.
+Artifacts and hashes: None.
+Primary construct: Cross-position score-scale comparability for optional probability fusion, with a preregistered bounded calibration fallback.
+Primary result: Not executed.
+PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
+Failure classification: Not applicable; all three named outcomes are valid branch outcomes.
+Unlocked next node: `B4_ENABLED_RAW` or `B4_ENABLED_CALIBRATED` → E86; `B4_DISABLED_POSITION_BIAS` → E89.
+Invalidated downstream evidence: A disabled branch prevents B4 execution/selection but does not invalidate B3.
+Descriptive observations: Per-q AP is descriptive only.
+Notes: Full-24-world temperature fitting occurs only after cross-fit qualification.
+
+## E86 | Real Overlapping-Point Identity and Multiplicity m_p
+
+Experiment ID: E86
+Design-freeze commit/hash: Frozen design; commit not recorded.
+Execution-freeze commit/hash: Not executed.
+Date: Not executed.
+Git commit / clean state: Not applicable.
+Data identities: Complete train/201 overlapping-window predictions.
+Input artifact hashes: E85 enabled branch required.
+Random namespaces / seeds: Frozen point/window identities.
+Command and resolved config: Check p=(f,r), q(w), and m_p. Every prediction maps uniquely; 1≤m_p≤5; boundaries use only complete windows; no padding, mirroring, or repeated frames; two identical runs.
+Resource and disk preflight: Not executed.
+Artifacts and hashes: None.
+Primary construct: Correct identity and multiplicity of the same real return across overlapping five-frame windows.
+Primary result: Not executed.
+PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
+Failure classification: Not applicable.
+Unlocked next node: E87 after PASS.
+Invalidated downstream evidence: E87/E88 remain locked.
+Descriptive observations: None.
+Notes: Only complete windows contribute at sequence boundaries.
+
+## E87 | B4 Fusion Evaluation
+
+Experiment ID: E87
+Design-freeze commit/hash: E71 formula and E85 branch.
+Execution-freeze commit/hash: Not executed.
+Date: Not executed.
+Git commit / clean state: Not applicable.
+Data identities: The same B3 checkpoint predictions, with E85-selected raw or calibrated probabilities.
+Input artifact hashes: B3 checkpoint, E85 calibration, and E86 identities required.
+Random namespaces / seeds: No retraining or new model randomness.
+Command and resolved config: Reuse exactly the B3 checkpoint and selected probabilities; no retraining. Output must equal E71 pointwise and be read by official evaluator.
+Resource and disk preflight: Not executed.
+Artifacts and hashes: None.
+Primary construct: Correct evaluation of optional overlapping-window probability fusion.
+Primary result: Not executed.
+PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
+Failure classification: Not applicable.
+Unlocked next node: E88 after PASS.
+Invalidated downstream evidence: E88 remains locked.
+Descriptive observations: None.
+Notes: B4 is an evaluation transformation of B3, not a separately trained model.
+
+## E88 | B4 versus B3
+
+Experiment ID: E88
+Design-freeze commit/hash: E63 B4 contribution rule.
+Execution-freeze commit/hash: Not executed.
+Date: Not executed.
+Git commit / clean state: Not applicable.
+Data identities: Paired B4 and B3 development results.
+Input artifact hashes: E87 output required.
+Random namespaces / seeds: E63 paired bootstrap.
+Command and resolved config: Mark `FUSION_SUPPORTED` only if mean AP gain ≥0.005, 95% lower bound >0, and every safety worsening ≤0.03; otherwise `FUSION_UNSUPPORTED`. Both outcomes continue E89; only supported permits final B4 selection.
+Resource and disk preflight: Not executed.
+Artifacts and hashes: None.
+Primary construct: Incremental utility and safety of probability fusion over B3.
+Primary result: Not executed.
+PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
+Failure classification: Not applicable; supported/unsupported are predefined outcomes.
+Unlocked next node: E89 in either outcome.
+Invalidated downstream evidence: `FUSION_UNSUPPORTED` forbids final B4 selection but leaves B3 valid.
+Descriptive observations: None.
+Notes: No result-dependent retraining is allowed.
+
+## E88-V1 | Optional Model-Output Panel
+
+Experiment ID: E88-V1
+Design-freeze commit/hash: Optional nonblocking panel design.
+Execution-freeze commit/hash: Not executed.
+Date: Not executed.
+Git commit / clean state: Not applicable.
+Data identities: Forty-eight entities preselected by E59/E60, not by score; B1/B3/B4 outputs where available.
+Input artifact hashes: E88 prerequisites required.
+Random namespaces / seeds: Frozen entity selection.
+Command and resolved config: Check only identity and panel completeness. It does not adjudicate performance and cannot block E89.
+Resource and disk preflight: Not executed.
+Artifacts and hashes: None.
+Primary construct: Nonblocking qualitative display of frozen model outputs.
+Primary result: Not executed.
+PASS / FAIL / OUTCOME: OUTCOME — OPTIONAL / NOT EXECUTED.
+Failure classification: Not applicable.
+Unlocked next node: E89 regardless.
+Invalidated downstream evidence: None.
+Descriptive observations: None.
+Notes: Entities cannot be selected by observed model score.
+
+# Phase 11 | Mechanism, Safety, Causal Variant, and Cost
+
+## E89 | Within-Entity Score Variance
+
+Experiment ID: E89
+Design-freeze commit/hash: Descriptive design; commit not recorded.
+Execution-freeze commit/hash: Not executed.
+Date: Not executed.
+Git commit / clean state: Not applicable.
+Data identities: B1, B3, and B4 if available, stratified by $N_{vis}$.
+Input artifact hashes: Prior model outputs required.
+Random namespaces / seeds: Inherited.
+Command and resolved config: Compare within-entity score variance. No improvement is not FAIL. Object ID must never enter the model.
+Resource and disk preflight: Not executed.
+Artifacts and hashes: None.
+Primary construct: Descriptive within-object score coherence across models.
+Primary result: Not executed.
+PASS / FAIL / OUTCOME: OUTCOME — LOCKED / DESCRIPTIVE.
+Failure classification: Not applicable.
+Unlocked next node: E90 after completion.
+Invalidated downstream evidence: None.
+Descriptive observations: None.
+Notes: Object identity is evaluation metadata only.
+
+## E90 | Hard Safety Audit for Anomaly-Boundary Leakage
+
+Experiment ID: E90
+Design-freeze commit/hash: E83 shell definition and E63 safety limits.
+Execution-freeze commit/hash: Not executed.
+Date: Not executed.
+Git commit / clean state: Not applicable.
+Data identities: Normal shells 0–0.5 m and 0.5–1.0 m around anomalies, plus pure/moving/control safety sets.
+Input artifact hashes: Candidate final model and B1 outputs required.
+Random namespaces / seeds: Same cross-fit thresholding as E83/E63.
+Command and resolved config: Candidate final model versus B1 must not worsen FPR by more than 0.03 on either shell. Pure/moving/control safety must also remain within E63 limits. FAIL returns to E64 for temporal-model redevelopment.
+Resource and disk preflight: Not executed.
+Artifacts and hashes: None.
+Primary construct: Prevent temporal evidence from leaking anomaly scores into nearby normal points.
+Primary result: Not executed.
+PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
+Failure classification: Not applicable until execution.
+Unlocked next node: E91 after PASS.
+Invalidated downstream evidence: E91 onward remains locked on FAIL; temporal redevelopment invalidates E64 onward as affected.
+Descriptive observations: None.
+Notes: This is a hard safety gate.
+
+## E91 | Trend over $V=1..5$
+
+Experiment ID: E91
+Design-freeze commit/hash: Descriptive trend design; commit not recorded.
+Execution-freeze commit/hash: Not executed.
+Date: Not executed.
+Git commit / clean state: Not applicable.
+Data identities: Records stratified by number of visible frames V=1–5.
+Input artifact hashes: E90 PASS and model outputs required.
+Random namespaces / seeds: Preregistered Jonckheere or Spearman trend; exact test choice as frozen in implementation.
+Command and resolved config: Report AP, recall, and confidence intervals per V. Trend supports only mechanism interpretation. No trend forbids the narrative “more evidence is better” but does not alter main performance.
+Resource and disk preflight: Not executed.
+Artifacts and hashes: None.
+Primary construct: Descriptive relationship between available temporal evidence and performance.
+Primary result: Not executed.
+PASS / FAIL / OUTCOME: OUTCOME — LOCKED / DESCRIPTIVE.
+Failure classification: Not applicable.
+Unlocked next node: E92 after completion.
+Invalidated downstream evidence: None; only mechanism language may be restricted.
+Descriptive observations: None.
+Notes: Trend is not a performance gate.
+
+## E92 | B5 Causal-Window Correctness
+
+Experiment ID: E92
+Design-freeze commit/hash: Frozen causal-window design; commit not recorded.
+Execution-freeze commit/hash: Not executed.
+Date: Not executed.
+Git commit / clean state: Not applicable.
+Data identities: Every B5 inference window and five temporal IDs.
+Input artifact hashes: Final architecture mechanics required.
+Random namespaces / seeds: Frozen window identities.
+Command and resolved config: Prove each window accesses only [t-4,t], model positions still map to five time IDs, and output is current frame only. Any future access is FAIL.
+Resource and disk preflight: Not executed.
+Artifacts and hashes: None.
+Primary construct: Strict causal data access and output semantics for B5.
+Primary result: Not executed.
+PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
+Failure classification: Not applicable until execution.
+Unlocked next node: E93 after PASS.
+Invalidated downstream evidence: E93 onward remains locked on FAIL.
+Descriptive observations: None.
+Notes: Causal five-frame is an online ablation, not the centered offline primary setting.
+
+## E93 | B5 Causal Performance
+
+Experiment ID: E93
+Design-freeze commit/hash: E63 budget and evaluation rules.
+Execution-freeze commit/hash: Not executed.
+Date: Not executed.
+Git commit / clean state: Not applicable.
+Data identities: Three B5 training seeds and comparisons with B3/final model.
+Input artifact hashes: E92 PASS and E63 protocol required.
+Random namespaces / seeds: 0, 1, 2.
+Command and resolved config: Train with the same E63 budget and report differences from B3/final. No requirement to outperform either. PASS requires complete artifacts, official evaluation, and safety report.
+Resource and disk preflight: Not executed.
+Artifacts and hashes: None.
+Primary construct: Complete descriptive performance and safety of the online causal variant.
+Primary result: Not executed.
+PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
+Failure classification: Not applicable until execution.
+Unlocked next node: E94 after PASS.
+Invalidated downstream evidence: E94 remains locked.
+Descriptive observations: None.
+Notes: Lack of superiority is not failure.
+
+## E94 | Compute Cost and Input Fairness
+
+Experiment ID: E94
+Design-freeze commit/hash: Frozen benchmarking design; commit not recorded.
+Execution-freeze commit/hash: Not executed.
+Date: Not executed.
+Git commit / clean state: Not applicable.
+Data identities: At least 100 windows for each B1/B2/B3/B4/B5, three repetitions.
+Input artifact hashes: All model/checkpoint identities required.
+Random namespaces / seeds: Fixed benchmark windows and repetitions.
+Command and resolved config: Fix GPU, batch, cache, precision, and warmup. Measure latency, VRAM, throughput, STU cache hit, and end-to-end window delay. Report centered future-frame use and B4's extra overlapping-window computation and cache assumptions. PASS requires consistent measurement definition and completed reproduction.
+Resource and disk preflight: Not executed.
+Artifacts and hashes: None.
+Primary construct: Fair, reproducible compute-cost comparison across all model variants.
+Primary result: Not executed.
+PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
+Failure classification: Not applicable.
+Unlocked next node: E95 after PASS.
+Invalidated downstream evidence: Phase 12 remains locked.
+Descriptive observations: None.
+Notes: Input/context differences must be reported with cost.
+
+# Phase 12 | Method Selection, Thresholds, and Freeze
+
+## E95 | Execute the Final-Model Rule
+
+Experiment ID: E95
+Design-freeze commit/hash: Rule frozen in E63/E85/E88.
+Execution-freeze commit/hash: Not executed.
+Date: Not executed.
+Git commit / clean state: Not applicable.
+Data identities: B3 and, if eligible, B4 development/safety outcomes.
+Input artifact hashes: E63, E85, E88, and E90 evidence required.
+Random namespaces / seeds: No new randomness.
+Command and resolved config: If `FUSION_SUPPORTED` and E90 safety PASS, final model=B4; otherwise final model=B3. Checkpoint uniquely selected by E63. Held-out six worlds and 19 OOD sequences cannot participate. The unique result must be machine-recomputable.
+Resource and disk preflight: Not executed.
+Artifacts and hashes: None.
+Primary construct: Deterministic final-model selection without post hoc discretion.
+Primary result: Not executed.
+PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
+Failure classification: Not applicable.
+Unlocked next node: E96 after PASS.
+Invalidated downstream evidence: E96 onward remains locked.
+Descriptive observations: None.
+Notes: The rule, not observed preference, chooses B3 or B4.
+
+## E96 | Freeze Point Threshold and DBSCAN
+
+Experiment ID: E96
+Design-freeze commit/hash: Search and tie rules frozen; commit not recorded.
+Execution-freeze commit/hash: Not executed.
+Date: Not executed.
+Git commit / clean state: Not applicable.
+Data identities: Only 24 development worlds plus pure/moving safety sets; four folds by world identity.
+Input artifact hashes: E95 final checkpoint and evaluator required.
+Random namespaces / seeds: Fixed four-fold world split.
+Command and resolved config: Search point threshold τ in {0.05,0.06,…,0.95}; DBSCAN epsilon in {0.3,0.5,0.7,1.0} m; `min_samples` in {3,5,8,12}. Every fixed configuration runs all four folds with 18-world selection domain and six-world held-out evaluation. Rank configurations once by aggregate mean object PQ and safety over the four held-out folds; never choose one configuration per fold then vote. Constraints: aggregate pure-normal point FPR ≤1%, moving-normal FPR ≤2%; every single fold ≤1.5% and ≤3%. If none satisfies, scientific FAIL and 19 remains locked. Ties: higher held-out point AP, lower normal FPR, higher τ, smaller epsilon, larger `min_samples`. Recompute the unique selected configuration on all 24 only to write manifest, never alter it.
+Resource and disk preflight: Not executed.
+Artifacts and hashes: None.
+Primary construct: Leakage-free selection of a unique point threshold and object clustering configuration under safety constraints.
+Primary result: Not executed.
+PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
+Failure classification: A no-feasible-configuration result is `scientific_failure`.
+Unlocked next node: E97 after PASS.
+Invalidated downstream evidence: 19-sequence confirmation remains locked on FAIL.
+Descriptive observations: None.
+Notes: Cross-validation ranks fixed configurations globally across held-out folds.
+
+## E97 | AJAE Method Freeze Manifest v1
+
+Experiment ID: E97
+Design-freeze commit/hash: Manifest schema frozen; commit not recorded.
+Execution-freeze commit/hash: Not executed.
+Date: Not executed.
+Git commit / clean state: Not applicable.
+Data identities: Complete current method and artifact graph.
+Input artifact hashes: All listed components required.
+Random namespaces / seeds: All upstream identities must be recorded.
+Command and resolved config: Record and hash schema 7; support pools; normal templates; placement/collision/world formats; ray/calibration; renderer; STU source/weights/interface; B0–B5 architecture/loss/training; final checkpoints; E85 calibration; B4 decision; τ/DBSCAN; evaluator; and every data/code/config identity. Any empty field FAILs.
+Resource and disk preflight: Not executed.
+Artifacts and hashes: None.
+Primary construct: Complete immutable identity manifest for the final AJAE method.
+Primary result: Not executed.
+PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
+Failure classification: Not applicable until execution.
+Unlocked next node: E98 after PASS.
+Invalidated downstream evidence: OOD confirmation remains locked.
+Descriptive observations: None.
+Notes: Every required identity must be nonempty and hash-bound.
+
+## E98 | Freeze-Integrity Rehearsal
+
+Experiment ID: E98
+Design-freeze commit/hash: Tamper-fixture design frozen; commit not recorded.
+Execution-freeze commit/hash: Not executed.
+Date: Not executed.
+Git commit / clean state: Not applicable.
+Data identities: Tampered generator, support pool, renderer, STU, model, checkpoint, calibration, threshold, DBSCAN, and evaluator fixtures; guarded access attempts to 19/51.
+Input artifact hashes: E97 manifest required.
+Random namespaces / seeds: Fixed tamper fixtures.
+Command and resolved config: Manifest must reject every altered component. Before freeze, attempted access to 19 or 51 must be logged and rejected. PASS only if every counterexample is blocked.
+Resource and disk preflight: Not executed.
+Artifacts and hashes: None.
+Primary construct: Enforceability of the method freeze and data-access guards.
+Primary result: Not executed.
+PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
+Failure classification: Not applicable until execution.
+Unlocked next node: E99 after PASS.
+Invalidated downstream evidence: OOD and hidden-test execution remain locked.
+Descriptive observations: None.
+Notes: This rehearsal precedes first access to the 19 OOD sequences.
+
+# Phase 13 | One-Time Real-OOD Confirmation and Hidden Test
+
+## E99 | Locked Inference on 19 Real-OOD Sequences
+
+Experiment ID: E99
+Design-freeze commit/hash: E97/E98 method freeze.
+Execution-freeze commit/hash: Not executed.
+Date: Not executed.
+Git commit / clean state: Not applicable.
+Data identities: All 19 real-OOD sequences, B0, B1, and final AJAE, opened for the first time only after valid E97/E98.
+Input artifact hashes: Complete E97 manifest required.
+Random namespaces / seeds: Frozen inference identities.
+Command and resolved config: Generate predictions for every sequence and all three methods in one execution; do not inspect a subset and stop. Check checkpoint/config/hash exact equality with manifest and complete official format. Any method change invalidates confirmation integrity.
+Resource and disk preflight: Not executed.
+Artifacts and hashes: None.
+Primary construct: One-time untouched real-OOD inference under the fully frozen method.
+Primary result: Not executed.
+PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
+Failure classification: Not applicable.
+Unlocked next node: E100 after PASS.
+Invalidated downstream evidence: E100 onward remains locked; any method change invalidates E99.
+Descriptive observations: None.
+Notes: Partial-result peeking is prohibited.
+
+## E100 | Official Point-Level Metrics on Real OOD
+
+Experiment ID: E100
+Design-freeze commit/hash: Official evaluator and manifest freeze.
+Execution-freeze commit/hash: Not executed.
+Date: Not executed.
+Git commit / clean state: Not applicable.
+Data identities: All E99 predictions and 19 sequences.
+Input artifact hashes: E99 outputs and E97 evaluator identity required.
+Random namespaces / seeds: None beyond frozen evaluation identities.
+Command and resolved config: Official evaluator computes AP, AUROC, FPR95; report pooled and per-sequence. Filters and prediction identities must match manifest. PASS here means evaluation-chain correctness; transfer is adjudicated by E103.
+Resource and disk preflight: Not executed.
+Artifacts and hashes: None.
+Primary construct: Correct official point-level real-OOD evaluation.
+Primary result: Not executed.
+PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
+Failure classification: Not applicable.
+Unlocked next node: E101 after PASS.
+Invalidated downstream evidence: E101 onward remains locked.
+Descriptive observations: None.
+Notes: Metric magnitude alone does not decide this mechanical node.
+
+## E101 | Real-OOD Object-Level Metrics
+
+Experiment ID: E101
+Design-freeze commit/hash: E96 τ/DBSCAN freeze.
+Execution-freeze commit/hash: Not executed.
+Date: Not executed.
+Git commit / clean state: Not applicable.
+Data identities: E99 predictions, clustered independently per frame.
+Input artifact hashes: E96 configuration and E99 predictions required.
+Random namespaces / seeds: No new parameter selection.
+Command and resolved config: Use frozen τ/DBSCAN to compute RecallQ, SQ, RQ, UQ, PQ, TP, FP, FN per frame. No cross-frame tracking. Parameters unchanged and results reproducible.
+Resource and disk preflight: Not executed.
+Artifacts and hashes: None.
+Primary construct: Reproducible object-level real-OOD performance under frozen postprocessing.
+Primary result: Not executed.
+PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
+Failure classification: Not applicable.
+Unlocked next node: E102 after PASS.
+Invalidated downstream evidence: E102 onward remains locked.
+Descriptive observations: None.
+Notes: Tracking is outside this metric definition.
+
+## E102 | Real Normal-Motion Safety
+
+Experiment ID: E102
+Design-freeze commit/hash: E63/E96 safety definitions and thresholds.
+Execution-freeze commit/hash: Not executed.
+Date: Not executed.
+Git commit / clean state: Not applicable.
+Data identities: Frozen moving-normal definition applied to all 19 sequences; B0, B1, final predictions.
+Input artifact hashes: E99 predictions and development-frozen thresholds required.
+Random namespaces / seeds: No new cross-fit or calibration.
+Command and resolved config: Apply the thresholds already frozen on 201 directly to 19. Compare moving-normal FPR, FPR95, and score tail for B0/B1/final; report final worsening versus both. Do not re-cross-fit or recalibrate in confirmation. The result enters E103 and cannot independently modify the method.
+Resource and disk preflight: Not executed.
+Artifacts and hashes: None.
+Primary construct: Real-OOD normal-motion safety at untouched frozen operating points.
+Primary result: Not executed.
+PASS / FAIL / OUTCOME: OUTCOME — LOCKED / EVALUATION NOT EXECUTED.
+Failure classification: Not applicable at this node; E103 adjudicates.
+Unlocked next node: E103 after evaluation completion.
+Invalidated downstream evidence: None independently; E103 uses the result.
+Descriptive observations: None.
+Notes: Confirmation data cannot redefine thresholds.
+
+## E103 | Gate 4 Transfer Adjudication
+
+Experiment ID: E103
+Design-freeze commit/hash: E63 Gate 4 rule.
+Execution-freeze commit/hash: Not executed.
+Date: Not executed.
+Git commit / clean state: Not applicable.
+Data identities: Nineteen-sequence paired final/B1/B0 metrics and safety results.
+Input artifact hashes: E100–E102 outputs required.
+Random namespaces / seeds: Frozen 19-sequence bootstrap.
+Command and resolved config: Require final vs B1 mean AP gain ≥0.01; final vs B0 ≥0.02; both 19-sequence bootstrap lower confidence bounds >0; at least 12/19 sequences positive relative to B1; normal-safety worsening ≤0.03. All must hold.
+Resource and disk preflight: Not executed.
+Artifacts and hashes: None.
+Primary construct: Whether proxy-trained AJAE transfers to real OOD with preregistered effect, consistency, and safety.
+Primary result: Not executed.
+PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
+Failure classification: Any unmet condition is `scientific_failure` and stops the current research cycle.
+Unlocked next node: E104 only after Gate 4 PASS.
+Invalidated downstream evidence: On FAIL, the same 19 sequences cannot be reused to tune the method as untouched confirmation.
+Descriptive observations: None.
+Notes: No post-confirmation method adjustment is permitted within the same cycle.
+
+## E104 | Final Submission on 51 Hidden-Test Sequences
+
+Experiment ID: E104
+Design-freeze commit/hash: E97 frozen method and Gate 4 prerequisite.
+Execution-freeze commit/hash: Not executed.
+Date: Not executed.
+Git commit / clean state: Not applicable.
+Data identities: All 51 hidden-test sequences.
+Input artifact hashes: E97 manifest and Gate 4 PASS required.
+Random namespaces / seeds: Frozen inference identities.
+Command and resolved config: Only after Gate 4 PASS, generate official predictions with exactly the E97 method/checkpoint/parameters and submit. Hidden results cannot tune any parameter. Save submission identity and official receipt.
+Resource and disk preflight: Not executed.
+Artifacts and hashes: None.
+Primary construct: Final untouched hidden-test execution and official submission.
+Primary result: Not executed.
+PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
+Failure classification: Not applicable.
+Unlocked next node: None; completion closes the current AJAE research cycle.
+Invalidated downstream evidence: Any hidden-result-driven adjustment would invalidate the submission freeze.
+Descriptive observations: None.
+Notes: Only E104 completion closes the full chain from counterfactual world through hidden test.
+
+# 3. Final Form of the Four Decision Gates
+
+## Gate 1 | Is the Renderer Qualified to Generate Training Supervision?
+
+Every critical condition in E08–E49 must pass. Ordinary distribution differences in E38–E44 do not independently fail the gate. Gate 1 substantively requires correct mechanical semantics, valid E45 strict matching, no stable low-capacity source fingerprint in E46, and no near-saturation in E48. Failure returns to the earliest explanatory node. High B1 performance cannot retroactively prove the renderer credible.
+
+## Gate 2 | Is Anomaly-Proxy Supervision Effective?
+
+Apply E63 exactly: B1 versus B0 must achieve at least 0.02 mean-AP gain, hierarchical-bootstrap lower bound above zero, positive direction in at least 2/3 seeds, and pure-normal/control/moving safety. Failure means the proxy-supervision claim is unsupported and five-frame modeling does not begin.
+
+## Gate 3 | Does Cross-Frame Information Provide Identifiable Gain?
+
+Both B3>B1 and B3>B2 must meet E63's 0.01 practical gain, confidence, and seed-direction criteria and pass motion/boundary safety. B4 is optional additional contribution; if B4 is unsupported, B3 may still continue.
+
+## Gate 4 | Does the Proxy Method Transfer to Real OOD?
+
+Open the 19 sequences once after E97–E98. Final versus B1/B0 must meet E63's sequence-level gain, direction, and safety conditions. After FAIL, the current cycle stops and the same 19 are no longer untouched confirmation data.
+
+# 4. Critical Invariants
+
+1. Determine the complete counterfactual world before slicing five-frame windows.
+2. Normal-control and anomaly-proxy use the same sensor rerendering process.
+3. Formal placement samples only from a qualified support pool.
+4. All five frames share parameters and receive equal supervision; the center frame specifies only the coordinate system.
+5. Final output is always a per-original-LiDAR-return anomaly probability.
+6. STU remains frozen throughout; train/206 updates only newly added AJAE parameters.
+7. Centered five-frame inference is the offline primary setting; causal five-frame inference is only an online ablation.
+
+# 5. Execution Record Template
 
 ```text
 Experiment ID:
@@ -4388,30 +4510,18 @@ Descriptive observations:
 Notes:
 ```
 
-# 6. 如何使用这份状态机推进 AJAE
+# 6. How to Advance AJAE with This State Machine
 
-1. 当前权威状态为E25-new PASS、E26-v2 PASS；新版normal-control分布下的Phase 2已经关闭。
-2. 历史E23–旧E26及其后E27–E37机械资格均保留；当前刷新依赖新版control分布的E38–E44。
-3. 每个后续Phase同样先完成整段设计冻结，再执行节点。
-4. preflight只查身份、支持、schema、接口和资源，不查正式结果。
-5. FAIL先按五类分类；`descriptive_deviation`直接记录继续，不能制造新硬门。
-6. 只有改变科学构念的修改才使相关下游失效；纯实现修复按同一设计版本化重跑。
-7. E49前不训练AJAE；E77前不训练五帧；E98前不访问19；Gate4 PASS前不使用51。
+1. The authoritative status is E25-new PASS and E26-v2 PASS; Phase 2 under the new normal-control distribution is closed.
+2. Historical E23 through old E26 and their subsequent E27–E37 mechanical qualifications remain. The current work is to refresh E38–E44 that depend on the new control distribution.
+3. Every later phase first completes its whole-phase design freeze, then executes its nodes.
+4. Preflight checks only identity, support, schema, interface, and resources; it does not inspect formal outcomes.
+5. Classify FAIL using the five frozen categories. A `descriptive_deviation` is recorded and execution continues; it cannot create a new hard gate.
+6. Only a change to the scientific construct invalidates affected downstream evidence. A pure implementation repair reruns a versioned node under the same design.
+7. Do not train AJAE before E49, train a five-frame model before E77, access the 19 sequences before E98, or use the 51 hidden sequences before Gate 4 PASS.
 
-从当前节点开始的主执行链为：
+The main chain from the current route is:
 
-$$
-E38\rightarrow\cdots\rightarrow E44
-\rightarrow
-\begin{cases}
-E45A\text{-new}\rightarrow E46,\\
-E45B\text{-v2}\rightarrow E48
-\end{cases}
-\rightarrow E49
-\rightarrow E50\rightarrow\cdots\rightarrow E77
-\rightarrow E78\rightarrow\cdots\rightarrow E84
-\rightarrow E85\rightarrow\cdots\rightarrow E98
-\rightarrow E99\rightarrow\cdots\rightarrow E104.
-$$
+E38 → … → E44 → {E45A-new → E46; E45B-v2 → E48} → E49 → E50 → … → E77 → E78 → … → E84 → E85 → … → E98 → E99 → … → E104.
 
-E104完成，才表示当前定义下的AJAE从反事实世界、renderer、模型、开发证据、真实OOD确认到隐藏测试全部闭环。
+Only completion of E104 means that AJAE, under the current definition, has closed the complete chain from counterfactual worlds and renderer through model, development evidence, real-OOD confirmation, and hidden testing.
