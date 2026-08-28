@@ -2148,7 +2148,7 @@
             "downstream": "PASS permits replacing the sole production normal-control position selector and then running E26-v2; FAIL keeps E26-v2 and E46 locked and requires owner decision"
           },
           "E25-v3": {
-            "status": "D_xy plus alpha route abandoned; final E25-v3 local-support target qualification PASS; E25-v3 target bank built and validated; revised normal-control qualification next",
+            "status": "D_xy plus alpha route abandoned; final E25-v3 local-support target qualification PASS and target bank validated; formal E25-v3 normal-control qualification FAIL; stopped for owner decision",
             "historical_results_retained": ["E25 PASS", "E25-v2 FAIL"],
             "failure_classification_inherited": "E25-v2 is a qualification specification defect and does not adjudicate the normal-control construct",
             "unchanged_support_semantics": {"vehicle_like": [40], "person_rider_like": [40, 48]},
@@ -2336,7 +2336,7 @@
               "independent_validation": "all 3267 rows preserve source order; every non-support field equals the compatible source subset elementwise; both support fields equal the qualification selection; support rows are in range and match E21-v4 semantics and frozen frame offsets; all aggregate counts and the scientific hash reproduce exactly"
             },
             "normal_control_qualification": {
-              "status": "frozen; target bank built; formal run next",
+              "status": "FAIL; retained; state-machine progression stopped for owner decision",
               "input_target_bank": "runs/ajae/e25_v3_real_targets.npz",
               "output": "runs/ajae/e25_v3_normal_control.npz",
               "fixtures": 256,
@@ -2353,10 +2353,58 @@
               "gpu_used": false,
               "command": "python -m src.render qualify-e25-v3-normal-control --data-root /home/jasongao/Data/STU --support-pool runs/ajae/e21_v4_support_pool.npz --calibration runs/ajae/calibration.pt --target-bank runs/ajae/e25_v3_real_targets.npz --output runs/ajae/e25_v3_normal_control.npz --processes 12",
               "pass_route": "replace the sole production normal-control selector, execute E26-v2 and rerun distribution-dependent E38-E45A plus E45B-v2 before E46/E48",
-              "failure_route": "retain the formal FAIL and stop at E25-v3 for a new owner decision without changing the target rule, proposal limits or calipers"
+              "failure_route": "retain the formal FAIL and stop at E25-v3 for a new owner decision without changing the target rule, proposal limits or calipers",
+              "implementation_commit": "be0a8f7",
+              "pre_run_commit": "a97a6c7",
+              "passed": false,
+              "failure_classification": "local_support_conditioned_control_generation_failure",
+              "run_seconds": 1698.7017331460083,
+              "result": {
+                "completed": 208,
+                "placement_exhaustions": 48,
+                "hard_errors": 0,
+                "condition_errors": 0,
+                "unique_completed_templates": 208,
+                "accepted_center_frames": 90,
+                "accepted_real_instances": 26,
+                "accepted_range_count": [7, 163, 27, 11, 0],
+                "accepted_occlusion_layer_count": [37, 169, 2],
+                "target_proposals": 7777,
+                "support_proposals": 821370,
+                "placement_rejections": 608950,
+                "condition_rejections": 212212,
+                "completion_by_template_semantic": {
+                  "car_10": {"completed": 64, "fixtures": 64, "exhausted": 0},
+                  "truck_18": {"completed": 63, "fixtures": 64, "exhausted": 1},
+                  "other_vehicle_20": {"completed": 62, "fixtures": 64, "exhausted": 2},
+                  "person_30": {"completed": 19, "fixtures": 64, "exhausted": 45}
+                },
+                "exhausted_fixture_support_accounting": {"support_proposals": 57638, "placement_rejections": 27870, "condition_rejections": 29768},
+                "exhausted_fixture_proposal_strata": {"target_proposals": 508, "target_range_count": [134, 285, 89, 0, 0], "target_occlusion_layer_count": [261, 247, 0], "support_proposals_by_target_range": [15480, 35166, 6992, 0, 0], "support_proposals_by_target_occlusion": [32892, 24746, 0]},
+                "exhausted_condition_violation_counts_nonexclusive": {
+                  "truck_18": {"condition_rejections": 4693, "distance": 2869, "median_beam": 1699, "log1p_Nvis": 1906, "occlusion": 1690, "local_density": 28},
+                  "other_vehicle_20": {"condition_rejections": 5060, "distance": 2549, "median_beam": 3286, "log1p_Nvis": 3698, "occlusion": 3604, "local_density": 1},
+                  "person_30": {"condition_rejections": 20015, "distance": 2348, "median_beam": 2618, "log1p_Nvis": 19100, "occlusion": 1653, "local_density": 394}
+                },
+                "placement_rejection_subtypes_available": false,
+                "range_40_50_access": {"target_bank_units": 20, "target_bank_semantic": "car_10 only", "support_proposable_units": 6, "support_rows": 9, "best_deterministic_target_ranks": [167, 210, 211, 230, 245, 297], "formal_target_proposals": 0, "formal_support_proposals": 0},
+                "failed_pass_conditions": ["256 of 256 controls complete", "256 unique template identities", "zero target or support exhaustion", "accepted controls cover at least 100 frames and 32 real semantic-instance identities", "all five aggregate range bins are nonempty"],
+                "satisfied_pass_conditions": ["zero hard errors", "zero exact-stratum or five-caliper errors among completed controls", "all three aggregate occlusion layers are nonempty"]
+              },
+              "artifact": {
+                "path": "runs/ajae/e25_v3_normal_control.npz",
+                "bytes": 524004,
+                "sha256": "e31766c22ded4dcdf312540847944cb70a124c80b36af799f350734b0fb7aa98",
+                "scientific_array_sha256": "b8d04778024e2c6b858b1361c395b2763a1e0b5655ab777c08578b798c81ed12"
+              },
+              "independent_validation": "all 256 control seeds are complete and ordered; the scientific-array hash reproduces exactly; all 208 completed rows and 48 exhaustion rows conserve support proposals elementwise; metadata totals, target-bank identities and accepted condition limits reproduce exactly; every failure has hard_error_code zero and placement_exhaustion_code one; all completed template, scale, pose, material, object, placement, E22 and E23 records independently reproduce, with zero E23 deep penetration",
+              "saved_target_index_role": "For completed rows this is the renderer-covariate matched target, not necessarily the target whose support stream produced the placement. They are equal for 8 of 208 completed controls; all 208 accepted supports were separately verified against the actual proposal-target stream.",
+              "observed_boundary": "The retained target bank contains only four person targets in one range and occlusion stratum. All 64 person fixtures could propose exactly those four targets; 45 exhausted all 512 resulting support proposals. The 40-50 m bank contains 20 car targets, but only six have a nonempty support stream and their best deterministic ranks are all beyond the frozen first-128 target prefix; the formal run evaluated zero 40-50 m target or support proposals.",
+              "conclusion_boundary": "This formal FAIL does not by itself establish renderer failure, E21-v4 support failure, person-wide geometric unplaceability or failure of the entire normal-control construct. No second formal repetition was executed.",
+              "automatic_retry": false
             },
-            "next_required_state": "execute the frozen E25-v3 normal-control qualification",
-            "downstream": "E26-v2, E46 and E48 remain locked"
+            "next_required_state": "owner decision required at E25-v3 after the retained formal FAIL",
+            "downstream": "E26-v2, distribution-dependent E38-E45A, E45B-v2, E46 and E48 remain locked"
           },
           "E26": {
             "status": "PASS; closed; Phase 2 closed; E27 unlocked",
@@ -2429,7 +2477,7 @@
       }
     },
     "renderer_mechanical_qualification": {
-      "status": "E25-v2 FAIL retained; E25-v3 local-support target qualification PASS and target-bank rebuild next; E27-E44 PASS; E28-v1, E36-v1, E45-v1, E45-v2, E45A and E45A-v2 FAIL retained; old-distribution E45B PASS is historical for any revised control distribution; E26-v2, E46 and E48 locked",
+      "status": "E25-v2 FAIL retained; E25-v3 local-support target qualification and target-bank build PASS; formal E25-v3 normal-control qualification FAIL and stopped for owner decision; E27-E44 PASS; E28-v1, E36-v1, E45-v1, E45-v2, E45A and E45A-v2 FAIL retained; old-distribution E45B PASS is historical for any revised control distribution; E26-v2, distribution-dependent E38-E45A, E45B-v2, E46 and E48 locked",
       "layer_boundaries": {"E27-E28": "direct geometry outputs only", "E29": "return probability and deterministic acceptance decision only", "E30-E31": "accepted returns", "E32-E33": "nearest-return occlusion competition"},
       "E27": {
         "question": "Does the formal geometry path return the correct nearest convex-hull hit, outward finite normal and object ID for active normal-control templates when return rejection is disabled?",

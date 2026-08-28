@@ -1820,7 +1820,7 @@ $$
 
 ---
 
-# 18. 当前状态（当前工作区：E25-v3目标资格PASS，目标库与control待运行）
+# 18. 当前状态（当前工作区：E25-v3 normal-control正式FAIL，等待课题负责人决策）
 
 截至当前工作区权威提交，已经完成：
 
@@ -1917,6 +1917,12 @@ E45A-v2作为Gate 1审计专用定向control银行完整执行至每目标64个p
 
 E25-v3目标库已在运行前提交`be0a8f7`下完成确定性重建并通过独立复核。新库按原顺序保留3,267个`compatible=true`身份，17个非支撑字段全部逐元素继承；两个支撑字段与资格产物逐元素一致，E21-v4行范围、语义、类别规则和帧偏移错误均为0。产物`runs/ajae/e25_v3_real_targets.npz`大小6,800,894字节，SHA-256为`0ae2f4926f1cb8a71b04af3d43d3d1d9feb17bb36fed821bab42b531cae3a360`，科学数组哈希为`16d75e67995bd216e3f802a6a32a19b0faecc9bfa841c6a680b01f13f6a8cf44`。正式normal-control继续使用原256个模板、seed 2,500,000–2,500,255、128×128提议上限、缩放/姿态/材质流、E22–E24、renderer和E45A五项caliper；runner只读取冻结目标库，不再包含旧无上限最近邻提取路径。下一步执行一次12进程正式资格。
 
+E25-v3 normal-control正式资格随后在提交`a97a6c7`上执行一次并FAIL，分类为`local_support_conditioned_control_generation_failure`。256个固定fixture完成208个、耗尽48个，硬错误与完成对象的条件错误均为0；按模板类别分别完成car 64/64、truck 63/64、other-vehicle 62/64、person 19/64。48个耗尽中45个属于person；E25-v3目标库只保留4个person目标，且全部属于10–20米、低遮挡层，每个失败person fixture完整评估这4个目标对应的512个支撑proposal后仍未接受。
+
+208个接受对象只覆盖90个中心帧、26个真实语义—实例身份，五个距离层为[7,163,27,11,0]，三个遮挡层为[37,169,2]。因此256/256完成、零耗尽、256模板、至少100帧、至少32个真实身份及五距离层非空均未达到；40–50米没有接受对象。该层20个目标中只有6个具有非空支撑流，且其确定性目标名次全部落在冻结的前128项目标前缀之后，所以正式运行没有实际尝试远距放置。821,370次实际支撑proposal严格分解为608,950次放置拒绝、212,212次条件拒绝和208次接受。正式产物`runs/ajae/e25_v3_normal_control.npz`大小524,004字节，SHA-256为`e31766c22ded4dcdf312540847944cb70a124c80b36af799f350734b0fb7aa98`，科学数组哈希为`b8d04778024e2c6b858b1361c395b2763a1e0b5655ab777c08578b798c81ed12`；独立复算与元数据一致。
+
+E25-v3目标资格PASS与目标库PASS继续成立，但不能代替normal-control生成资格。本次FAIL不能单独推出renderer失败、E21-v4支撑资格失败、person全类几何不可放或normal-control整体构念不可行；当前只有一次正式运行证据。按照运行前冻结的FAIL路线，没有自动重试，没有改变$1.25R(d)$、128×128上限或E45A caliper，也没有进入E26-v2或train/201审计。状态机现停在E25-v3等待课题负责人决策。
+
 当前可成立的局部结论是：
 
 > **schema 7 能合法、确定且高效地产生覆盖冻结几何区域的合成异常代理；这些对象可以从 train/206 的合格支撑池采样，以冻结连续落地规则达到 99% 接触/埋地资格，并能由同一权威放置接口拒绝与 train/206 实际观测非地面回波发生超过 5 cm 深穿透的位置。**
@@ -1931,7 +1937,7 @@ E25-v3目标库已在运行前提交`be0a8f7`下完成确定性重建并通过�
 当前执行节点为：
 
 $$
-\boxed{E25\text{-v2 FAIL RETAINED};\quad E25\text{-v3 TARGET BANK PASS};\quad CONTROL\ RUN\ NEXT}
+\boxed{E25\text{-v2 FAIL RETAINED};\quad E25\text{-v3 TARGET BANK PASS};\quad E25\text{-v3 CONTROL FAIL}}
 $$
 
 E23与E24-v2已按冻结设计通过，当前顺序进入：
@@ -1940,12 +1946,12 @@ $$
 E23\rightarrow E24\rightarrow E25\rightarrow E26
 $$
 
-E27–E44已关闭；E36-v1、E45-v1、E45-v2、E45A、E45A-v2和E25-v2 FAIL均保留。旧E45B已PASS，但只资格旧normal-control分布；任何新版正式control分布必须重新执行E45B-v2。$D_{xy}+\alpha$路线已经终止；E25-v3可信局部支撑目标资格与3,267行目标库重建已经PASS，定义不再调整。当前下一项是E25-v3 normal-control正式资格，E26-v2、E46和E48保持锁定。
+E27–E44已关闭；E36-v1、E45-v1、E45-v2、E45A、E45A-v2、E25-v2和E25-v3 normal-control FAIL均保留。旧E45B已PASS，但只资格旧normal-control分布；任何新版正式control分布必须重新执行E45B-v2。$D_{xy}+\alpha$路线已经终止；E25-v3可信局部支撑目标资格与3,267行目标库重建已经PASS，定义不再调整。当前没有自动进入下一实验；E26-v2、依赖新版control分布的E38–E45A、E45B-v2、E46和E48保持锁定。
 
 因此当前整体判断仍是：
 
 $$
-\boxed{\text{主线定义完整，Phase 2 接近闭合，科学路线有条件继续}}
+\boxed{\text{E25-v3正式生成资格未通过，状态机停在课题负责人决策点}}
 $$
 
 不能写成“AJAE 方法已经验证”或“剩余只需训练”。
