@@ -3773,6 +3773,10 @@ E42-v2只读取SHA-256固定为`e7cea1574638db2f7e41799fe3855519ea57a47e9f6adc04
 
 同一静止实体逐帧结果必须由world/frame稳定身份决定。PASS：重复渲染零变化；不存在window导致的随机闪烁；$N_{vis}$变化率和V分层有限。真实几何导致的出现/消失只描述。PASS → E44。
 
+### E43-v2刷新执行冻结
+
+E43-v2精确读取已通过且SHA-256为`04e524a5428c9b906e9fefe253f7ec66533bd6cb3452ea6d9afdb830e1a94b34`的E37窗口身份审计，以及SHA-256为`e7cea1574638db2f7e41799fe3855519ea57a47e9f6adc04f1a5a37e8aa526e0`的E39-v2共享trace。重复请求和window身份资格继续由E37有效证据提供；E43-v2只对新版五帧visible-return trace执行一次$N_{vis}$变化、V分层和出现/消失统计，不重新渲染、不要求E39-v2第二遍。正式命令为`python -m src.render qualify-e43-v2 --e37-artifact runs/ajae/e37_world_frame_consistency.npz --e39-artifact runs/ajae/e39_v2_per_range_return.npz --output runs/ajae/e43_v2_temporal_visibility.npz`。
+
 读取E37已通过的跨窗口一致性产物和E39已通过的五帧共享trace。重复渲染要求E39两遍完整24进程结果逐元素一致；window身份错误由E37的九个字段摘要、重复请求、world/frame身份、渲染调用、跨world cache、`render_frame` window参数和随机流window读取共同复核。对每个固定实体保存五帧$N_{vis}$、相邻帧差及变化率 $|N_t-N_{t-1}|/\max(N_{t-1},1)$；$V$定义为五帧中$N_{vis}>0$的帧数并按0–5完整计数。PASS要求所有计数和分层定义有效、变化率及分位数有限、两次统计逐元素一致；真实几何导致的出现和消失只报告。实现提交 `7dcd999a49b3312c4ca1030cff9b4e03d09b7cb4`，`src/render.py` SHA-256为 `06f9174a41246ba68e339b4e3f0cde706a5673300d3656291e04de646756b324`；46项完整回归通过。正式命令为 `python -m src.render qualify-e43 --e37-artifact runs/ajae/e37_world_frame_consistency.npz --e39-artifact runs/ajae/e39_per_range_return.npz --output runs/ajae/e43_temporal_visibility.npz`。
 
 **历史 E43 正式结果：PASS（仅旧normal-control分布；当前待刷新）**

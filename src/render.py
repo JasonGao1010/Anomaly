@@ -66,6 +66,9 @@ FROZEN_E38_V2_ARTIFACT_SHA256 = (
 FROZEN_E39_V2_ARTIFACT_SHA256 = (
     "e7cea1574638db2f7e41799fe3855519ea57a47e9f6adc04f1a5a37e8aa526e0"
 )
+FROZEN_E37_ARTIFACT_SHA256 = (
+    "04e524a5428c9b906e9fefe253f7ec66533bd6cb3452ea6d9afdb830e1a94b34"
+)
 SUPPORT_POOL_SEMANTICS = (40, 48, 49)
 CALIBRATION_FORMAT = "ajae-sensor-calibration-v4"
 DEVELOPMENT_FORMAT = "ajae-development-worlds-v2"
@@ -15482,24 +15485,24 @@ def run_e43_qualification(
     output_path: Path | str,
 ) -> dict[str, object]:
     """Qualify deterministic five-frame visibility and finite temporal changes."""
-    with np.load(
-        Path(e37_artifact_path).expanduser().resolve(strict=True), allow_pickle=False
-    ) as source:
+    e37_path = Path(e37_artifact_path).expanduser().resolve(strict=True)
+    e39_path = Path(e39_artifact_path).expanduser().resolve(strict=True)
+    if _sha256_path(e37_path) != FROZEN_E37_ARTIFACT_SHA256:
+        raise RenderError("E43-v2 E37 window-audit identity changed")
+    if _sha256_path(e39_path) != FROZEN_E39_V2_ARTIFACT_SHA256:
+        raise RenderError("E43-v2 E39-v2 shared trace identity changed")
+    with np.load(e37_path, allow_pickle=False) as source:
         e37 = json.loads(str(source["metadata_json"]))
-    with np.load(
-        Path(e39_artifact_path).expanduser().resolve(strict=True), allow_pickle=False
-    ) as trace:
+    with np.load(e39_path, allow_pickle=False) as trace:
         e39 = json.loads(str(trace["metadata_json"]))
         visible = np.asarray(trace["visible_returns"])
     if e37.get("experiment") != "E37" or e37.get("passed") is not True:
         raise RenderError("E43 requires the passed formal E37 window audit")
-    if e39.get("experiment") != "E39" or e39.get("passed") is not True:
-        raise RenderError("E43 requires the passed formal E39 shared trace")
+    if e39.get("experiment") != "E39-v2" or e39.get("passed") is not True:
+        raise RenderError("E43-v2 requires the passed formal E39-v2 shared trace")
     started = time.monotonic()
-    runs = [_e43_statistics(visible) for _ in range(2)]
+    first = _e43_statistics(visible)
     elapsed = time.monotonic() - started
-    reproduced = all(np.array_equal(runs[0][name], runs[1][name]) for name in runs[0])
-    first = runs[0]
     field_errors = sum(int(value) for value in e37["field_digest_errors"].values())
     window_identity_errors = int(
         e37["duplicate_request_bit_errors"] + e37["identity_errors"]
@@ -15507,7 +15510,7 @@ def run_e43_qualification(
         + e37["render_frame_window_parameters"] + e37["slot_uniform_window_reads"]
         + field_errors
     )
-    repeated_render_errors = int(not bool(e39.get("elementwise_reproduced")))
+    repeated_render_errors = int(e37["duplicate_request_bit_errors"])
     finite_errors = int(
         np.count_nonzero(~np.isfinite(first["adjacent_nvis_relative_change"]))
         + np.count_nonzero(~np.isfinite(first["source_relative_change_quantiles"]))
@@ -15522,10 +15525,10 @@ def run_e43_qualification(
     )
     passed = (
         window_identity_errors == 0 and repeated_render_errors == 0
-        and finite_errors == 0 and definition_errors == 0 and reproduced
+        and finite_errors == 0 and definition_errors == 0
     )
     result = {
-        "experiment": "E43", "passed": passed,
+        "experiment": "E43-v2", "passed": passed,
         "relative_change_definition": "abs(N_t-N_tminus1)/max(N_tminus1,1)",
         "source_V_count_for_V_0_to_5": first["source_V_count"].tolist(),
         "source_relative_change_quantiles_Q05_Q25_Q50_Q75_Q95": (
@@ -15535,8 +15538,11 @@ def run_e43_qualification(
         "window_identity_errors": window_identity_errors,
         "repeated_render_errors": repeated_render_errors,
         "finite_errors": finite_errors, "definition_errors": definition_errors,
-        "elementwise_reproduced": reproduced,
-        "two_run_total_seconds": elapsed,
+        "formal_repetitions": 1, "elementwise_reproduced": None,
+        "reproducibility_check": "not_run_by_owner_decision",
+        "input_e37_sha256": FROZEN_E37_ARTIFACT_SHA256,
+        "input_e39_v2_sha256": FROZEN_E39_V2_ARTIFACT_SHA256,
+        "run_seconds": [elapsed],
         "scientific_array_hash": _scientific_array_hash(first),
     }
     destination = Path(output_path).expanduser().resolve()
@@ -17063,7 +17069,7 @@ def _render_parser() -> argparse.ArgumentParser:
     e42 = subcommands.add_parser("qualify-e42-v2")
     e42.add_argument("--e39-artifact", type=Path, required=True)
     e42.add_argument("--output", type=Path, required=True)
-    e43 = subcommands.add_parser("qualify-e43")
+    e43 = subcommands.add_parser("qualify-e43-v2")
     e43.add_argument("--e37-artifact", type=Path, required=True)
     e43.add_argument("--e39-artifact", type=Path, required=True)
     e43.add_argument("--output", type=Path, required=True)
@@ -17253,7 +17259,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         result = run_e42_qualification(args.e39_artifact, args.output)
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 0 if result["passed"] else 1
-    if args.command == "qualify-e43":
+    if args.command == "qualify-e43-v2":
         result = run_e43_qualification(
             args.e37_artifact, args.e39_artifact, args.output
         )

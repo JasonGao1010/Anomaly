@@ -3122,7 +3122,14 @@
         "result": {"passed": true, "entity_frame_groups_per_source": 1280, "source_layer_count": [[0, 10, 433, 837], [51, 223, 402, 597], [68, 200, 356, 652]], "source_zero_visible_count": [0, 7, 4], "generated_layer_coverage": [4, 4], "shared_support_range_nvis_strata": 12, "definition_errors": 0, "count_errors": 0, "coverage_errors": 0, "matching_errors": 0, "elementwise_reproduced": true, "two_run_total_seconds": 0.0014445129927480593, "scientific_array_sha256": "8de2b629f5dd6d6ea1202f546826300c36cd68e5bd2ddf7f4772e859b1aac3d5", "artifact_bytes": 50075, "artifact_sha256": "19da6a5c347768e7861c75bac2e62cc2dfe0ada7d4ff294306a5ecca797f791e", "claim_limit": "All generated sources cover four positive-Nvis layers and 12 preliminary shared strata; complete frozen matching remains E45."}
       },
       "E43": {
-        "current_validity": "historical PASS for the old normal-control distribution; E25-new makes this control-dependent node invalid until refreshed",
+        "current_validity": "E43-v2 refresh frozen and unlocked by E42-v2 PASS; historical E43 PASS remains valid only for the old control distribution",
+        "refresh_input_window_audit": "runs/ajae/e37_world_frame_consistency.npz",
+        "refresh_input_window_audit_sha256": "04e524a5428c9b906e9fefe253f7ec66533bd6cb3452ea6d9afdb830e1a94b34",
+        "refresh_input_trace": "runs/ajae/e39_v2_per_range_return.npz",
+        "refresh_input_trace_sha256": "e7cea1574638db2f7e41799fe3855519ea57a47e9f6adc04f1a5a37e8aa526e0",
+        "refresh_command": "python -m src.render qualify-e43-v2 --e37-artifact runs/ajae/e37_world_frame_consistency.npz --e39-artifact runs/ajae/e39_v2_per_range_return.npz --output runs/ajae/e43_v2_temporal_visibility.npz",
+        "refresh_artifact": "runs/ajae/e43_v2_temporal_visibility.npz",
+        "refresh_formal_repetitions": 1,
         "question": "Are fixed-world five-frame visibility traces deterministic across repeated rendering and independent of window identity, with finite Nvis change and V statistics?",
         "input_window_audit": "runs/ajae/e37_world_frame_consistency.npz",
         "input_trace": "runs/ajae/e39_per_range_return.npz",
