@@ -13358,6 +13358,7 @@ def run_e37_qualification(
 
 _GATE1_SEQUENCE: object | None = None
 _GATE1_BANK_SEED_BASE = 3_800_000
+_GATE1_BANK_CAPACITY_LIMIT = 256
 
 
 def _splitmix64(values: np.ndarray) -> np.ndarray:
@@ -13743,8 +13744,8 @@ def _gate1_bank_worker(index: int) -> dict[str, object]:
         or len(_GATE1_TEMPLATE_IDENTITIES) != 256 or not _GATE1_REAL_CANDIDATES
     ):
         raise RuntimeError("Gate 1 candidate-bank fixtures are not initialized")
-    if not 0 <= index < 256:
-        raise RuntimeError("Gate 1 v2 bank index must lie in [0,255]")
+    if not 0 <= index < _GATE1_BANK_CAPACITY_LIMIT:
+        raise RuntimeError("Gate 1 bank index exceeds its frozen capacity")
     bank_seed = _GATE1_BANK_SEED_BASE + index
     for attempt in range(48):
         attempt_seed = bank_seed + 1_000_003 * attempt
@@ -14064,6 +14065,9 @@ def build_gate1_candidate_bank(
         raise RenderError("formal Gate 1 candidate bank requires 24 processes")
     if capacity != 256:
         raise RenderError("Gate 1 v2 candidate bank has exactly 256 paired seeds")
+    global _GATE1_BANK_SEED_BASE, _GATE1_BANK_CAPACITY_LIMIT
+    _GATE1_BANK_SEED_BASE = 3_800_000
+    _GATE1_BANK_CAPACITY_LIMIT = 256
     _initialize_gate1_candidate_generation(
         sequence, control_context, obstacles, templates, real_candidates
     )
@@ -16494,8 +16498,9 @@ def run_e45_pair_v2_qualification(
     _initialize_gate1_candidate_generation(
         sequence, context, obstacles, templates, real_candidates,
     )
-    global _GATE1_BANK_SEED_BASE, _E45_BANK
+    global _GATE1_BANK_SEED_BASE, _GATE1_BANK_CAPACITY_LIMIT, _E45_BANK
     _GATE1_BANK_SEED_BASE = 4_500_000 if experiment == "E45A-new" else 4_600_000
+    _GATE1_BANK_CAPACITY_LIMIT = 2048
     left_source, right_source = ((0, 1) if experiment == "E45A-new" else (1, 2))
     output = Path(output_path).expanduser().resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
