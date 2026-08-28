@@ -27,7 +27,7 @@ for _thread_variable in (
     "OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS",
     "NUMEXPR_NUM_THREADS",
 ):
-    os.environ.setdefault(_thread_variable, "1")
+    os.environ[_thread_variable] = "1"
 
 import numpy as np
 from scipy import ndimage
@@ -53,6 +53,12 @@ SUPPORT_POOL_SHA256 = (
 )
 FROZEN_SENSOR_CALIBRATION_SHA256 = (
     "b532b7e04d9025233b2768b8fb36287e477f62f20a3ff685a62f4a4a29bfefe0"
+)
+FROZEN_E25_NEW_ARTIFACT_SHA256 = (
+    "30fc7d1ecd60d005cb18c60ac81b1c7335e2121fcd3f1da5f440b5387a747b19"
+)
+FROZEN_GATE1_SUPPORT_POOL_SHA256 = (
+    "fc3646fbc145cdc29d2cf203835a3e0018bacbc6eaf714e091d21f7b93bfaf50"
 )
 SUPPORT_POOL_SEMANTICS = (40, 48, 49)
 CALIBRATION_FORMAT = "ajae-sensor-calibration-v4"
@@ -2687,6 +2693,14 @@ def extract_normal_template_library(
             selected = (semantic == raw) & (instance == identifier)
             if int(np.count_nonzero(selected)) < minimum_points:
                 continue
+            identity = f"206:{frame.frame_id}:{raw}:{identifier}".encode("ascii")
+            identity_hash = hashlib.sha256(identity).digest()
+            retained = candidates[raw]
+            if (
+                len(retained) >= maximum_templates_per_class
+                and identity_hash >= max(retained, key=lambda item: item[0])[0]
+            ):
+                continue
             try:
                 template = NormalTemplateShape.from_source_frame(
                     frame,
@@ -2695,8 +2709,9 @@ def extract_normal_template_library(
                 )
             except RenderError:
                 continue
-            identity = f"206:{frame.frame_id}:{raw}:{identifier}".encode("ascii")
-            candidates[raw].append((hashlib.sha256(identity).digest(), template))
+            retained.append((identity_hash, template))
+            if len(retained) > maximum_templates_per_class:
+                retained.remove(max(retained, key=lambda item: item[0]))
     result: list[NormalTemplateShape] = []
     for semantic in sorted(candidates):
         ordered = sorted(candidates[semantic], key=lambda item: item[0])
@@ -4482,6 +4497,24 @@ class RenderedFrame:
         return self.source.real_slots
 
 
+def _frame_trace_context(
+    source: SourceFrame, ray_grid: RayGrid,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Build the immutable ray/native-return state shared by one frame render."""
+
+    rotation, lidar_origin_world = _pose(source)
+    directions_sensor = ray_grid.directions_for(source)
+    directions_world = directions_sensor @ rotation.T
+    origins_sensor = ray_grid.origins_for(source)
+    origins_world = origins_sensor @ rotation.T + lidar_origin_world
+    native_range = np.asarray(ray_grid.ranges(source)).copy()
+    native_range[np.asarray(source.zero_slot_mask, dtype=np.bool_)] = np.inf
+    return (
+        directions_sensor, directions_world, origins_sensor,
+        origins_world, native_range,
+    )
+
+
 def render_frame(
     source: SourceFrame,
     world: WorldSpec,
@@ -4509,19 +4542,13 @@ def render_frame(
         )
     if int(source.xyzi.shape[0]) != ray_grid.slot_count:
         raise RenderError("source frame and ray grid have different slot counts")
-    if _trace_context is None:
-        rotation, lidar_origin_world = _pose(source)
-        directions_sensor = ray_grid.directions_for(source)
-        directions_world = directions_sensor @ rotation.T
-        origins_sensor = ray_grid.origins_for(source)
-        origins_world = origins_sensor @ rotation.T + lidar_origin_world
-        normal_range = np.asarray(ray_grid.ranges(source)).copy()
-        normal_range[np.asarray(source.zero_slot_mask, dtype=np.bool_)] = np.inf
-    else:
-        (
-            directions_sensor, directions_world, origins_sensor,
-            origins_world, normal_range,
-        ) = _trace_context
+    (
+        directions_sensor, directions_world, origins_sensor,
+        origins_world, normal_range,
+    ) = (
+        _frame_trace_context(source, ray_grid)
+        if _trace_context is None else _trace_context
+    )
     competition = (
         _accepted_object_hits(
             origins_world,
@@ -5203,9 +5230,12 @@ def _shape_outer_bounds(shape: InsertShape) -> tuple[np.ndarray, np.ndarray]:
 
 
 def _world_aabb(
-    shape: InsertShape, rotation: np.ndarray, translation: np.ndarray, margin_m: float
+    shape: InsertShape, rotation: np.ndarray, translation: np.ndarray, margin_m: float,
+    *, local_bounds: tuple[np.ndarray, np.ndarray] | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
-    lower, upper = _shape_outer_bounds(shape)
+    lower, upper = (
+        _shape_outer_bounds(shape) if local_bounds is None else local_bounds
+    )
     corners = np.asarray(
         [
             (x, y, z)
@@ -5228,6 +5258,7 @@ def _grounded_object(
     label: ObjectLabel,
     yaw_rad: float,
     shape_generation_report: ShapeGenerationReport | None,
+    lower_support_m: float | None = None,
 ) -> ObjectSpec:
     normal = np.asarray(patch.normal_world, dtype=np.float64)
     anchor = np.asarray(patch.anchor_world_m, dtype=np.float64)
@@ -5236,7 +5267,12 @@ def _grounded_object(
         normal[0] * contact[0] + normal[1] * contact[1] + patch.offset
     ) / normal[2]
     rotation = _ground_rotation(normal, yaw_rad)
-    lower_support = shape.minimum_z_m(xy_resolution=33, z_steps=129)
+    lower_support = (
+        shape.minimum_z_m(xy_resolution=33, z_steps=129)
+        if lower_support_m is None else _finite_scalar(
+            "lower_support_m", lower_support_m
+        )
+    )
     translation = contact - normal * lower_support
     return ObjectSpec(
         object_id=object_id,
@@ -5254,13 +5290,17 @@ def observed_normal_collision(
     obstacles: ObservedObstacleIndex,
     *,
     penetration_m: float = 0.05,
+    local_bounds: tuple[np.ndarray, np.ndarray] | None = None,
 ) -> tuple[bool, float, np.ndarray]:
     """Reject iff an actually observed return lies more than 5 cm inside."""
 
     threshold = _finite_scalar("penetration_m", penetration_m)
     rotation = np.asarray(proposed.rotation_world_from_local, dtype=np.float64)
     translation = np.asarray(proposed.translation_world_m, dtype=np.float64)
-    lower, upper = _world_aabb(proposed.shape, rotation, translation, threshold)
+    lower, upper = _world_aabb(
+        proposed.shape, rotation, translation, threshold,
+        local_bounds=local_bounds,
+    )
     points, identities = obstacles.within_aabb(lower, upper)
     if points.size == 0:
         return False, math.inf, identities
@@ -5543,6 +5583,7 @@ def place_object(
     proposal_pool_indices: list[int] = []
     proposal_minimum_sdf: list[float] = []
     pair_witness_cache: dict[int, np.ndarray] = {}
+    local_bounds = _shape_outer_bounds(shape)
     for proposal, row in enumerate(order[:maximum_candidates]):
         patch = support_pool.patch(int(row))
         proposal_pool_indices.append(patch.pool_index)
@@ -5553,8 +5594,11 @@ def place_object(
         proposed = _grounded_object(
             shape, material, patch, object_id=object_id, label=label_value,  # type: ignore[arg-type]
             yaw_rad=proposal_yaw, shape_generation_report=shape_generation_report,
+            lower_support_m=grounding.standard_lower_support_m,
         )
-        collision, minimum_sdf, _ = observed_normal_collision(proposed, obstacles)
+        collision, minimum_sdf, _ = observed_normal_collision(
+            proposed, obstacles, local_bounds=local_bounds
+        )
         proposal_minimum_sdf.append(minimum_sdf)
         if collision:
             rejections.append("observed_normal_deep_penetration")
@@ -7345,13 +7389,15 @@ def _aligned_scaled_template(
     )
 
 
-def trajectory_yaw_by_frame(frames: Sequence[SourceFrame]) -> dict[int, float]:
-    ordered = tuple(sorted(frames, key=lambda frame: frame.frame_id))
+def _trajectory_yaw_by_pose(
+    pose_by_frame: Mapping[int, np.ndarray],
+) -> dict[int, float]:
+    ordered = tuple(sorted((int(key), np.asarray(value)) for key, value in pose_by_frame.items()))
     if len(ordered) < 2:
         raise PlacementError("trajectory tangent requires at least two source frames")
-    positions = np.asarray([_pose(frame)[1] for frame in ordered])
+    positions = np.asarray([pose[:3, 3] for _, pose in ordered])
     result: dict[int, float] = {}
-    for index, frame in enumerate(ordered):
+    for index, (frame_id, pose) in enumerate(ordered):
         if index == 0:
             tangent = positions[1] - positions[0]
         elif index == len(ordered) - 1:
@@ -7360,13 +7406,20 @@ def trajectory_yaw_by_frame(frames: Sequence[SourceFrame]) -> dict[int, float]:
             tangent = positions[index + 1] - positions[index - 1]
         horizontal = tangent[:2]
         if np.linalg.norm(horizontal) <= EPSILON:
-            horizontal = _pose(frame)[0][:2, 0]
+            horizontal = pose[:2, 0]
         if np.linalg.norm(horizontal) <= EPSILON:
             raise PlacementError("trajectory tangent and pose fallback are degenerate")
-        result[int(frame.frame_id)] = math.atan2(
+        result[frame_id] = math.atan2(
             float(horizontal[1]), float(horizontal[0])
         )
     return result
+
+
+def trajectory_yaw_by_frame(frames: Sequence[SourceFrame]) -> dict[int, float]:
+    return _trajectory_yaw_by_pose({
+        int(frame.frame_id): np.asarray(frame.lidar_pose, dtype=np.float64)
+        for frame in frames
+    })
 
 
 def _e25_template(index: int) -> tuple[NormalTemplateShape, str]:
@@ -9421,10 +9474,17 @@ class CoverageControlContext:
     observation_cache: dict[
         tuple[str, int, int, int], _E25NewObservation
     ] = field(default_factory=dict)
+    frame_loader: Callable[[int], SourceFrame] | None = None
+    available_frame_ids: frozenset[int] | None = None
+    source_sequence_id_override: int | None = None
 
     @property
     def source_sequence_id(self) -> int:
-        return next(iter(self.frames_by_id.values())).sequence_id
+        if self.frames_by_id:
+            return next(iter(self.frames_by_id.values())).sequence_id
+        if self.source_sequence_id_override is None:
+            raise RenderError("coverage-control source sequence is unavailable")
+        return self.source_sequence_id_override
 
 
 def build_coverage_control_context(
@@ -9432,20 +9492,42 @@ def build_coverage_control_context(
     support_pool: QualifiedSupportPool,
     ray_grid: RayGrid,
     sensor: SensorCalibration,
+    *,
+    frame_loader: Callable[[int], SourceFrame] | None = None,
+    frame_ids: Sequence[int] | None = None,
+    source_sequence_id: int | None = None,
+    trajectory_yaws: Mapping[int, float] | None = None,
 ) -> CoverageControlContext:
-    """Bind the sole E25-new control selector to one source sequence."""
+    """Bind the sole selector to resident or bounded on-demand source frames."""
 
     source_frames = tuple(frames)
-    if not source_frames:
-        raise RenderError("coverage-control context requires source frames")
     frames_by_id = {int(frame.frame_id): frame for frame in source_frames}
-    if len(frames_by_id) != len(source_frames):
-        raise RenderError("coverage-control frame IDs must be unique")
-    sequence_ids = {int(frame.sequence_id) for frame in source_frames}
-    if len(sequence_ids) != 1:
-        raise RenderError("coverage-control frames must use one source sequence")
-    if any(int(frame.xyzi.shape[0]) != ray_grid.slot_count for frame in source_frames):
-        raise RenderError("coverage-control frame and ray-grid slots differ")
+    if source_frames:
+        if len(frames_by_id) != len(source_frames):
+            raise RenderError("coverage-control frame IDs must be unique")
+        sequence_ids = {int(frame.sequence_id) for frame in source_frames}
+        if len(sequence_ids) != 1:
+            raise RenderError("coverage-control frames must use one source sequence")
+        resolved_sequence_id = next(iter(sequence_ids))
+        resolved_frame_ids = frozenset(frames_by_id)
+        resolved_yaws = trajectory_yaw_by_frame(source_frames)
+        if any(int(frame.xyzi.shape[0]) != ray_grid.slot_count for frame in source_frames):
+            raise RenderError("coverage-control frame and ray-grid slots differ")
+    else:
+        if frame_loader is None or frame_ids is None or source_sequence_id is None:
+            raise RenderError(
+                "streaming coverage-control context requires loader, frame IDs and sequence"
+            )
+        ordered_ids = tuple(map(int, frame_ids))
+        if not ordered_ids or len(set(ordered_ids)) != len(ordered_ids):
+            raise RenderError("streaming coverage-control frame IDs are invalid")
+        resolved_sequence_id = _integer(
+            "source_sequence_id", source_sequence_id
+        )
+        resolved_frame_ids = frozenset(ordered_ids)
+        if trajectory_yaws is None or set(trajectory_yaws) != set(ordered_ids):
+            raise RenderError("streaming coverage-control trajectory yaw is incomplete")
+        resolved_yaws = {int(key): float(value) for key, value in trajectory_yaws.items()}
     if not isinstance(support_pool, QualifiedSupportPool):
         raise TypeError("coverage-control context requires a qualified support pool")
     support_range_bin = _gate1_range_bin(support_pool.ranges_m)
@@ -9473,10 +9555,13 @@ def build_coverage_control_context(
         support_pool,
         ray_grid,
         sensor,
-        trajectory_yaw_by_frame(source_frames),
+        resolved_yaws,
         support_rows,
         cKDTree(unit_sensor_directions, compact_nodes=True),
         float(np.max(np.linalg.norm(ray_grid.origins_sensor, axis=1))),
+        frame_loader=frame_loader,
+        available_frame_ids=resolved_frame_ids,
+        source_sequence_id_override=resolved_sequence_id,
     )
 
 
@@ -9489,12 +9574,21 @@ def _e25_new_frame_context(
     grid = context.ray_grid
     cached = context.frame_cache.pop(frame_id, None)
     if cached is None:
-        try:
-            frame = context.frames_by_id[frame_id]
-        except KeyError as error:
-            raise RenderError(
-                "coverage-control support frame is unavailable"
-            ) from error
+        frame = context.frames_by_id.get(frame_id)
+        if frame is None:
+            if (
+                context.frame_loader is None
+                or context.available_frame_ids is None
+                or frame_id not in context.available_frame_ids
+            ):
+                raise RenderError("coverage-control support frame is unavailable")
+            frame = context.frame_loader(frame_id)
+        if (
+            frame.sequence_id != context.source_sequence_id
+            or int(frame.frame_id) != frame_id
+            or int(frame.xyzi.shape[0]) != grid.slot_count
+        ):
+            raise RenderError("coverage-control loaded frame identity changed")
         pose_rotation, lidar_origin = _pose(frame)
         directions_sensor = grid.directions_for(frame)
         directions_world = directions_sensor @ pose_rotation.T
@@ -9583,25 +9677,36 @@ def _coverage_control_observation(
         candidate_world,
         grid,
         sensor,
+        trace_context=frame_context.trace,
         candidate_slots_hint=_e25_new_conservative_ray_slots(
             context, item, pose_rotation, lidar_origin_world
         ),
     )
     candidate_slots = trace.candidate_slots
     trace_context = frame_context.trace
-    compact_competition = _accepted_object_hits(
-        trace_context[3][candidate_slots],
-        trace_context[1][candidate_slots],
-        world,
-        grid,
-        sensor,
-        patch.frame_id,
-        slot_ids=candidate_slots,
-    )
+    singleton = len(objects) == 1 and objects[0].object_id == item.object_id
+    if singleton:
+        _, full_competition = _expand_single_object_trace(
+            trace, item, grid.slot_count
+        )
+        compact_distance = full_competition.distance_m[candidate_slots]
+        compact_object_id = full_competition.object_id[candidate_slots]
+    else:
+        compact_competition = _accepted_object_hits(
+            trace_context[3][candidate_slots],
+            trace_context[1][candidate_slots],
+            world,
+            grid,
+            sensor,
+            patch.frame_id,
+            slot_ids=candidate_slots,
+        )
+        compact_distance = compact_competition.distance_m
+        compact_object_id = compact_competition.object_id
     visible = (
-        compact_competition.object_id == item.object_id
+        compact_object_id == item.object_id
     ) & (
-        compact_competition.distance_m
+        compact_distance
         < trace.native_range_m - world.tie_tolerance_m
     )
     visible_slots = candidate_slots[visible]
@@ -9610,7 +9715,7 @@ def _coverage_control_observation(
     # projection so a range-bin edge is decided exactly as in the renderer.
     packed_visible_xyz = (
         origins_sensor[visible_slots]
-        + compact_competition.distance_m[visible, None]
+        + compact_distance[visible, None]
         * directions_sensor[visible_slots]
     ).astype(np.float32)
     official_visible = np.sum(
@@ -9667,14 +9772,15 @@ def _coverage_control_observation(
     if visible_count == 0 or range_bin != assigned_range_bin:
         return preliminary
 
-    full_competition = _accepted_object_hits(
-        trace_context[3],
-        trace_context[1],
-        world,
-        grid,
-        sensor,
-        patch.frame_id,
-    )
+    if not singleton:
+        full_competition = _accepted_object_hits(
+            trace_context[3],
+            trace_context[1],
+            world,
+            grid,
+            sensor,
+            patch.frame_id,
+        )
     rendered = render_frame(
         frame,
         world,
@@ -13379,15 +13485,30 @@ def build_gate1_support_pool(
 
 def load_gate1_support_pool(path: Path | str) -> tuple[QualifiedSupportPool, dict[str, object]]:
     source = Path(path).expanduser().resolve(strict=True)
+    if _sha256_path(source) != FROZEN_GATE1_SUPPORT_POOL_SHA256:
+        raise PlacementError("Gate 1 support-pool artifact identity changed")
     with np.load(source, allow_pickle=False) as payload:
         metadata = json.loads(str(payload["metadata_json"]))
-        if metadata.get("experiment") != "Gate1-201-support-pool" or metadata.get("passed") is not True:
+        if (
+            metadata.get("experiment") != "Gate1-201-support-pool"
+            or metadata.get("passed") is not True
+            or metadata.get("source_frames") != [4, 681]
+            or metadata.get("center_frames") != [6, 679]
+            or metadata.get("estimator")
+            != "E21-v4 unchanged three-scale trimmed-SVD"
+        ):
             raise PlacementError("Gate 1 support-pool artifact is not qualified")
         arrays = {name: np.asarray(payload[name]) for name in (
             "semantic", "frame", "slot", "range_m", "selection_hash",
             "anchor_world", "normal", "offset",
         )}
     count = arrays["frame"].size
+    if (
+        int(metadata.get("pool_size", -1)) != count
+        or metadata.get("scientific_array_hash")
+        != _scientific_array_hash(arrays)
+    ):
+        raise PlacementError("Gate 1 support-pool contents changed")
     return QualifiedSupportPool(
         np.arange(count, dtype=np.int64), arrays["semantic"], arrays["frame"],
         arrays["slot"], arrays["range_m"], arrays["selection_hash"],
@@ -13395,37 +13516,90 @@ def load_gate1_support_pool(path: Path | str) -> tuple[QualifiedSupportPool, dic
     ), metadata
 
 
-def _gate1_real_candidates(
-    sequence: object, pool: QualifiedSupportPool
-) -> tuple[tuple[int, int, int, int], ...]:
-    """Select persistent real instances with an observable legal support semantic."""
+def _gate1_frame_keys_and_obstacles(
+    sequence: object, *, build_obstacles: bool,
+) -> tuple[dict[int, set[tuple[int, int]]], ObservedObstacleIndex | None]:
+    """Read train/201 once for persistent-instance keys and optional obstacles."""
+
     active = frozenset((10, 18, 20, 30))
     frame_keys: dict[int, set[tuple[int, int]]] = {}
+    point_chunks: list[np.ndarray] = []
+    identity_chunks: list[np.ndarray] = []
     for frame_id in range(4, 682):
         frame = sequence.source_frame(frame_id)
-        assert frame.labels is not None
+        if frame.partition != "train" or frame.sequence_id != 201 or frame.labels is None:
+            raise PlacementError("Gate 1 frames must be labelled train/201 data")
         semantic = np.asarray(frame.labels.semantic)
         instance = np.asarray(frame.labels.instance)
         real = ~np.asarray(frame.zero_slot_mask, dtype=np.bool_)
         range_m = np.linalg.norm(np.asarray(frame.xyzi[:, :3], dtype=np.float64), axis=1)
         eligible = real & (range_m >= 2.5) & (range_m <= 50.0)
-        packed = semantic.astype(np.uint32) | (instance.astype(np.uint32) << np.uint32(16))
+        packed = semantic.astype(np.uint32) | (
+            instance.astype(np.uint32) << np.uint32(16)
+        )
         keys: set[tuple[int, int]] = set()
-        for value, count in zip(*np.unique(packed[eligible], return_counts=True), strict=True):
+        for value, count in zip(
+            *np.unique(packed[eligible], return_counts=True), strict=True
+        ):
             raw = int(value & np.uint32(0xFFFF))
             identifier = int(value >> np.uint32(16))
             if raw in active and identifier > 0 and int(count) >= 16:
                 keys.add((raw, identifier))
         frame_keys[frame_id] = keys
+        if build_obstacles:
+            slots = np.flatnonzero(
+                real & (semantic != 0) & ~np.isin(semantic, GROUND_SEMANTIC_IDS)
+            )
+            rotation, translation = _pose(frame)
+            sensor = np.asarray(frame.xyzi[slots, :3], dtype=np.float64)
+            point_chunks.append(sensor @ rotation.T + translation)
+            identity_chunks.append(
+                (np.uint64(frame_id) << np.uint64(32))
+                | slots.astype(np.uint64)
+            )
+    obstacles = None
+    if build_obstacles:
+        obstacles = ObservedObstacleIndex(
+            np.concatenate(point_chunks, axis=0),
+            np.concatenate(identity_chunks, axis=0),
+        )
+    return frame_keys, obstacles
+
+
+def _gate1_real_candidates(
+    sequence: object, pool: QualifiedSupportPool,
+    *, frame_keys: Mapping[int, set[tuple[int, int]]] | None = None,
+) -> tuple[tuple[int, int, int, int], ...]:
+    """Select persistent real instances with an observable legal support semantic."""
+    resolved_keys = (
+        _gate1_frame_keys_and_obstacles(sequence, build_obstacles=False)[0]
+        if frame_keys is None else frame_keys
+    )
+    if set(resolved_keys) != set(range(4, 682)):
+        raise PlacementError("Gate 1 real-instance frame keys are incomplete")
+    pool_frames = np.asarray(pool.frames)
+    frame_order = (
+        None
+        if bool(np.all(pool_frames[1:] >= pool_frames[:-1]))
+        else np.argsort(pool_frames, kind="stable")
+    )
+    ordered_frames = pool_frames if frame_order is None else pool_frames[frame_order]
     candidates: list[tuple[bytes, tuple[int, int, int, int]]] = []
     for center in range(6, 680):
-        persistent = set.intersection(*(frame_keys[frame] for frame in range(center - 2, center + 3)))
+        persistent = set.intersection(*(
+            resolved_keys[frame] for frame in range(center - 2, center + 3)
+        ))
         if not persistent:
             continue
         source = sequence.source_frame(center)
         assert source.labels is not None
         rotation, translation = _pose(source)
-        rows = np.flatnonzero(pool.frames == center)
+        lower = int(np.searchsorted(ordered_frames, center, side="left"))
+        upper = int(np.searchsorted(ordered_frames, center, side="right"))
+        rows = (
+            np.arange(lower, upper, dtype=np.int64)
+            if frame_order is None else frame_order[lower:upper]
+        )
         if rows.size == 0:
             continue
         for semantic, instance in sorted(persistent):
@@ -13496,36 +13670,71 @@ def _gate1_real_candidates(
 
 _GATE1_POOL: QualifiedSupportPool | None = None
 _GATE1_OBSTACLES: ObservedObstacleIndex | None = None
-_GATE1_TEMPLATES: dict[int, tuple[NormalTemplateShape, ...]] = {}
-_GATE1_TRAJECTORY_YAW: dict[int, float] = {}
+_GATE1_TEMPLATES: tuple[NormalTemplateShape, ...] = ()
+_GATE1_TEMPLATE_IDENTITIES: tuple[str, ...] = ()
+_GATE1_CONTROL_CONTEXT: CoverageControlContext | None = None
 _GATE1_REAL_CANDIDATES: tuple[tuple[int, int, int, int], ...] = ()
 _GATE1_RAY_GRID: RayGrid | None = None
 _GATE1_SENSOR: SensorCalibration | None = None
+_GATE1_RENDERER_IDENTITY = ""
 
 
-def _gate1_template(seed: int, support_semantic: int) -> NormalTemplateShape:
-    if support_semantic == 48:
-        semantics = (30,)
-    elif support_semantic == 40:
-        semantics = tuple(sorted(_GATE1_TEMPLATES))
-    else:
-        raise PlacementError("normal-control support semantic is not active in E25")
-    available = tuple(
-        template for semantic in semantics for template in _GATE1_TEMPLATES.get(semantic, ())
+def _gate1_control_rows(
+    context: CoverageControlContext,
+    template_index: int,
+    semantic: int,
+    assigned_range_bin: int,
+    center_frame: int,
+) -> np.ndarray:
+    """Keep the frozen global stream order inside the paired five-frame unit."""
+
+    rows = _coverage_control_support_stream(
+        context, template_index, semantic, assigned_range_bin
     )
-    if not available:
-        raise PlacementError("Gate 1 has no template for the required support semantic")
-    return available[int(np.random.default_rng(seed).integers(0, len(available)))]
+    return rows[np.abs(context.support_pool.frames[rows] - center_frame) <= 2]
+
+
+def _gate1_control_template_assignment(attempt_seed: int) -> tuple[int, int]:
+    """Draw one canonical template and derive its immutable range-bin identity."""
+
+    template_index = int(
+        np.random.default_rng(_integer("attempt_seed", attempt_seed) + 1).integers(
+            0, 256
+        )
+    )
+    return template_index, _e25_new_assigned_range_bin(template_index)
+
+
+def _gate1_observation_dict(
+    observation: _E25NewObservation,
+) -> dict[str, int | float]:
+    return {
+        "frame_id": observation.frame_id,
+        "visible_returns": observation.visible_returns,
+        "visible_in_range_returns": observation.visible_in_range_returns,
+        "accepted_in_range_returns": observation.accepted_in_range_returns,
+        "geometry_in_range_hits": observation.geometry_in_range_hits,
+        "median_official_range_m": observation.median_official_range_m,
+        "median_beam": observation.median_beam,
+        "range_bin": observation.range_bin,
+        "azimuth_sector": observation.azimuth_sector,
+        "occlusion": observation.occlusion,
+    }
 
 
 def _gate1_bank_worker(index: int) -> dict[str, object]:
-    pool, obstacles = _GATE1_POOL, _GATE1_OBSTACLES
+    pool, obstacles, control_context = (
+        _GATE1_POOL, _GATE1_OBSTACLES, _GATE1_CONTROL_CONTEXT
+    )
     sequence, grid, sensor = _GATE1_SEQUENCE, _GATE1_RAY_GRID, _GATE1_SENSOR
     if (
         pool is None or obstacles is None or sequence is None or grid is None or sensor is None
-        or not _GATE1_TEMPLATES or not _GATE1_REAL_CANDIDATES
+        or control_context is None or len(_GATE1_TEMPLATES) != 256
+        or len(_GATE1_TEMPLATE_IDENTITIES) != 256 or not _GATE1_REAL_CANDIDATES
     ):
         raise RuntimeError("Gate 1 candidate-bank fixtures are not initialized")
+    if not 0 <= index < 256:
+        raise RuntimeError("Gate 1 v2 bank index must lie in [0,255]")
     bank_seed = 3_800_000 + index
     for attempt in range(48):
         attempt_seed = bank_seed + 1_000_003 * attempt
@@ -13534,20 +13743,30 @@ def _gate1_bank_worker(index: int) -> dict[str, object]:
                 0, len(_GATE1_REAL_CANDIDATES)
             )
         )
-        center, real_semantic, real_instance, support_semantic = _GATE1_REAL_CANDIDATES[real_index]
-        rows = _identity_order(pool, (support_semantic,), "gate1-paired-world-v1", attempt_seed)
-        rows = rows[np.abs(pool.frames[rows] - center) <= 2]
-        if rows.size == 0:
-            continue
-        frames = tuple(sequence.source_frame(frame_id) for frame_id in range(center - 2, center + 3))
+        center, real_semantic, real_instance, real_support_semantic = (
+            _GATE1_REAL_CANDIDATES[real_index]
+        )
         try:
             template_seed = attempt_seed + 1
             scale_seed = attempt_seed + 2
-            source_template = _gate1_template(template_seed, support_semantic)
+            template_index, assigned_range_bin = (
+                _gate1_control_template_assignment(attempt_seed)
+            )
+            source_template = _GATE1_TEMPLATES[template_index]
+            rows = _gate1_control_rows(
+                control_context,
+                template_index,
+                int(source_template.raw_semantic_id),
+                assigned_range_bin,
+                center,
+            )
+            if rows.size == 0:
+                continue
             scale = np.random.default_rng(
                 np.random.SeedSequence([scale_seed, 2501])
             ).uniform(0.9, 1.1, size=3)
             control_shape = _aligned_scaled_template(source_template, scale)
+            grounding = qualify_grounding(control_shape)
             perturbation = float(
                 np.random.default_rng(np.random.SeedSequence([attempt_seed + 31, 2502])).uniform(
                     -math.pi if control_shape.raw_semantic_id == 30 else -math.radians(15.0),
@@ -13556,18 +13775,45 @@ def _gate1_bank_worker(index: int) -> dict[str, object]:
             )
 
             def control_yaw(patch: SupportPatch, offset: float = perturbation) -> float:
-                return float(_GATE1_TRAJECTORY_YAW[patch.frame_id]) + offset
+                return float(control_context.trajectory_yaw_by_frame[patch.frame_id]) + offset
+
+            observations: dict[int, _E25NewObservation] = {}
+
+            def reject_control(
+                proposed: ObjectSpec, patch: SupportPatch,
+            ) -> str | None:
+                observation = _coverage_control_observation(
+                    control_context,
+                    proposed,
+                    patch,
+                    bank_seed,
+                    assigned_range_bin,
+                    (proposed,),
+                )
+                observations[patch.pool_index] = observation
+                if observation.visible_returns < 1:
+                    return "no_visible_normal_control_return"
+                if observation.range_bin != assigned_range_bin:
+                    return "assigned_visible_range_bin_mismatch"
+                return None
 
             control_material_seed = attempt_seed + 11
             control, control_record = place_object(
                 control_shape, MaterialSpec.sample(control_material_seed), pool, obstacles,
-                object_id=1, label="normal-control", proposal_namespace="gate1-control-v1",
-                proposal_stream=attempt_seed, yaw_rad=perturbation,
+                object_id=1, label="normal-control", proposal_namespace="E25-new-support-v1",
+                proposal_stream=template_index, yaw_rad=perturbation,
                 material_seed=control_material_seed, yaw_seed=attempt_seed + 31,
-                template_identity=_normal_template_identity(source_template),
-                proposal_rows=rows, grounding_eligibility=qualify_grounding(control_shape),
-                yaw_for_support=control_yaw,
+                template_identity=_GATE1_TEMPLATE_IDENTITIES[template_index],
+                proposal_rows=rows, grounding_eligibility=grounding,
+                yaw_for_support=control_yaw, post_placement_rejection=reject_control,
             )
+            control_record = replace(
+                control_record,
+                template_seed=template_seed,
+                scale_seed=scale_seed,
+                pose_perturbation_rad=perturbation,
+            )
+            control_observation = observations[control_record.support_pool_index]
             proxy_shape, proxy_report, proxy_grounding, shape_proposals, grounding_rejections = _grounding_qualified_shape(
                 attempt_seed + 3, stride=3072, maximum_proposals=64
             )
@@ -13576,7 +13822,7 @@ def _gate1_bank_worker(index: int) -> dict[str, object]:
             proxy_yaw = float(np.random.default_rng(proxy_yaw_seed).uniform(-math.pi, math.pi))
             proxy, proxy_record = place_object(
                 proxy_shape, MaterialSpec.sample(proxy_material_seed), pool, obstacles,
-                object_id=1, label="anomaly-proxy", proposal_namespace="gate1-proxy-v1",
+                object_id=1, label="anomaly-proxy", proposal_namespace="gate1-proxy-v2",
                 proposal_stream=attempt_seed, yaw_rad=proxy_yaw,
                 material_seed=proxy_material_seed, yaw_seed=proxy_yaw_seed,
                 shape_seed=shape_proposals[-1], shape_generation_report=proxy_report,
@@ -13584,14 +13830,49 @@ def _gate1_bank_worker(index: int) -> dict[str, object]:
             )
             control_world = WorldSpec(bank_seed, 201, (control,))
             proxy_world = WorldSpec(bank_seed, 201, (proxy,))
-            validate_world_visibility(control_world, frames, grid, sensor)
-            validate_world_visibility(proxy_world, frames, grid, sensor)
-        except (RenderError, PlacementError):
+            # The accepted control already won a final renderer slot in its
+            # support frame, which lies inside this five-frame unit. Check the
+            # proxy lazily and stop at its first final visible return.
+            proxy_visible = False
+            for frame_id in range(center - 2, center + 3):
+                frame = sequence.source_frame(frame_id)
+                _, _, _, rendered = _gate1_single_object_trace(
+                    frame, proxy_world, grid, sensor
+                )
+                if bool(np.asarray(rendered.anomaly_proxy_mask).any()):
+                    proxy_visible = True
+                    break
+            if not proxy_visible:
+                raise PlacementError(
+                    "anomaly-proxy has no final visible return in its five-frame unit"
+                )
+        except PlacementExhaustion:
             continue
+        except PlacementError as error:
+            if str(error) in {
+                "no E22-qualified shape in 64 deterministic proposals",
+                "shape fails E22 grounding eligibility",
+                "anomaly-proxy has no final visible return in its five-frame unit",
+            }:
+                continue
+            raise
         return {
             "bank_seed": bank_seed, "attempt": attempt, "center_frame": center,
             "real_semantic": real_semantic, "real_instance": real_instance,
-            "support_semantic": support_semantic,
+            "real_support_semantic": real_support_semantic,
+            "control_support_semantic": control_record.support_semantic,
+            "proxy_support_semantic": proxy_record.support_semantic,
+            "control_support_frame": control_record.support_frame,
+            "proxy_support_frame": proxy_record.support_frame,
+            "control_template_index": template_index,
+            "control_template_identity": _GATE1_TEMPLATE_IDENTITIES[template_index],
+            "control_assigned_range_bin": assigned_range_bin,
+            "control_final_range_bin": control_observation.range_bin,
+            "control_visible_returns": control_observation.visible_returns,
+            "control_observation_json": json.dumps(
+                _gate1_observation_dict(control_observation),
+                sort_keys=True, separators=(",", ":"),
+            ),
             "control_world_json": control_world.to_json(),
             "proxy_world_json": proxy_world.to_json(),
             "control_record_json": json.dumps(control_record.to_dict(), sort_keys=True, separators=(",", ":")),
@@ -13606,7 +13887,13 @@ def _gate1_bank_worker(index: int) -> dict[str, object]:
         }
     return {
         "bank_seed": bank_seed, "attempt": 48, "center_frame": -1,
-        "real_semantic": 0, "real_instance": 0, "support_semantic": 0,
+        "real_semantic": 0, "real_instance": 0,
+        "real_support_semantic": 0, "control_support_semantic": 0,
+        "proxy_support_semantic": 0, "control_support_frame": -1,
+        "proxy_support_frame": -1, "control_template_index": -1,
+        "control_template_identity": "", "control_assigned_range_bin": -1,
+        "control_final_range_bin": -1, "control_visible_returns": 0,
+        "control_observation_json": "",
         "control_world_json": "", "proxy_world_json": "",
         "control_record_json": "", "proxy_record_json": "",
         "error": "placement_exhaustion",
@@ -13620,7 +13907,17 @@ def _gate1_bank_arrays(records: Sequence[Mapping[str, object]]) -> dict[str, np.
         "center_frame": np.asarray([record["center_frame"] for record in records], dtype=np.int16),
         "real_semantic": np.asarray([record["real_semantic"] for record in records], dtype=np.uint16),
         "real_instance": np.asarray([record["real_instance"] for record in records], dtype=np.uint16),
-        "support_semantic": np.asarray([record["support_semantic"] for record in records], dtype=np.uint16),
+        "real_support_semantic": np.asarray([record["real_support_semantic"] for record in records], dtype=np.uint16),
+        "control_support_semantic": np.asarray([record["control_support_semantic"] for record in records], dtype=np.uint16),
+        "proxy_support_semantic": np.asarray([record["proxy_support_semantic"] for record in records], dtype=np.uint16),
+        "control_support_frame": np.asarray([record["control_support_frame"] for record in records], dtype=np.int16),
+        "proxy_support_frame": np.asarray([record["proxy_support_frame"] for record in records], dtype=np.int16),
+        "control_template_index": np.asarray([record["control_template_index"] for record in records], dtype=np.int16),
+        "control_template_identity": np.asarray([record["control_template_identity"] for record in records]),
+        "control_assigned_range_bin": np.asarray([record["control_assigned_range_bin"] for record in records], dtype=np.int8),
+        "control_final_range_bin": np.asarray([record["control_final_range_bin"] for record in records], dtype=np.int8),
+        "control_visible_returns": np.asarray([record["control_visible_returns"] for record in records], dtype=np.int32),
+        "control_observation_json": np.asarray([record["control_observation_json"] for record in records]),
         "control_world_json": np.asarray([record["control_world_json"] for record in records]),
         "proxy_world_json": np.asarray([record["proxy_world_json"] for record in records]),
         "control_record_json": np.asarray([record["control_record_json"] for record in records]),
@@ -13630,46 +13927,99 @@ def _gate1_bank_arrays(records: Sequence[Mapping[str, object]]) -> dict[str, np.
 
 
 def _initialize_gate1_candidate_generation(
-    sequence: object, pool: QualifiedSupportPool, obstacles: ObservedObstacleIndex,
-    templates: Sequence[NormalTemplateShape], ray_grid: RayGrid,
-    sensor: SensorCalibration, trajectory_yaws: Mapping[int, float],
+    sequence: object, control_context: CoverageControlContext,
+    obstacles: ObservedObstacleIndex, templates: Sequence[NormalTemplateShape],
     real_candidates: Sequence[tuple[int, int, int, int]] | None = None,
 ) -> None:
-    by_semantic: dict[int, list[NormalTemplateShape]] = {}
-    for template in templates:
-        by_semantic.setdefault(template.raw_semantic_id, []).append(template)
+    template_tuple = tuple(templates)
+    identities, _, _ = canonical_normal_template_library_identity(template_tuple)
+    if control_context.source_sequence_id != 201:
+        raise RenderError("Gate 1 control context must be bound to train/201")
+    precompute_coverage_control_support_streams(control_context, template_tuple)
     global _GATE1_SEQUENCE, _GATE1_POOL, _GATE1_OBSTACLES, _GATE1_TEMPLATES
-    global _GATE1_TRAJECTORY_YAW, _GATE1_REAL_CANDIDATES, _GATE1_RAY_GRID, _GATE1_SENSOR
+    global _GATE1_TEMPLATE_IDENTITIES, _GATE1_CONTROL_CONTEXT
+    global _GATE1_REAL_CANDIDATES, _GATE1_RAY_GRID, _GATE1_SENSOR
     _GATE1_SEQUENCE = sequence
-    _GATE1_POOL = pool
+    _GATE1_POOL = control_context.support_pool
     _GATE1_OBSTACLES = obstacles
-    _GATE1_TEMPLATES = {key: tuple(value) for key, value in by_semantic.items()}
-    _GATE1_TRAJECTORY_YAW = dict(trajectory_yaws)
+    _GATE1_TEMPLATES = template_tuple
+    _GATE1_TEMPLATE_IDENTITIES = identities
+    _GATE1_CONTROL_CONTEXT = control_context
     _GATE1_REAL_CANDIDATES = (
         tuple(real_candidates) if real_candidates is not None
-        else _gate1_real_candidates(sequence, pool)
+        else _gate1_real_candidates(sequence, control_context.support_pool)
     )
-    _GATE1_RAY_GRID = ray_grid
-    _GATE1_SENSOR = sensor
+    _GATE1_RAY_GRID = control_context.ray_grid
+    _GATE1_SENSOR = control_context.sensor
 
 
 def _write_gate1_candidate_bank(
     arrays: Mapping[str, np.ndarray], output_path: Path | str,
-    *, processes: int, elapsed_seconds: float,
+    *, processes: int, elapsed_seconds: float, support_pool_sha256: str,
+    calibration_sha256: str, normal_template_library_sha256: str,
 ) -> dict[str, object]:
     errors = int(np.count_nonzero(arrays["error"] != ""))
     capacity = int(arrays["bank_seed"].size)
+    completed = arrays["error"] == ""
+    contract_errors = int(
+        np.count_nonzero(
+            completed & (
+                (arrays["control_template_index"] < 0)
+                | (arrays["control_template_index"] >= 256)
+                | (arrays["control_assigned_range_bin"] != arrays["control_template_index"] % 5)
+                | (arrays["control_final_range_bin"] != arrays["control_assigned_range_bin"])
+                | (arrays["control_visible_returns"] < 1)
+                | (np.abs(arrays["control_support_frame"] - arrays["center_frame"]) > 2)
+                | (np.abs(arrays["proxy_support_frame"] - arrays["center_frame"]) > 2)
+            )
+        )
+    )
+    seed_identity_errors = int(not np.array_equal(
+        arrays["bank_seed"], np.arange(3_800_000, 3_800_000 + capacity)
+    ))
     metadata = {
-        "experiment": "Gate1-candidate-bank-v1", "passed": errors == 0,
+        "experiment": "Gate1-candidate-bank-v2",
+        "schema": "gate1-candidate-bank-v2",
+        "passed": (
+            capacity == 256 and errors == 0
+            and contract_errors == 0 and seed_identity_errors == 0
+        ),
         "capacity": capacity, "completed": capacity - errors, "errors": errors,
+        "contract_errors": contract_errors,
+        "seed_identity_errors": seed_identity_errors,
+        "source_sequence": "train/201", "paired_seed_range": [3800000, 3800255],
         "real_candidate_count": len(_GATE1_REAL_CANDIDATES),
         "center_frame_count": int(np.unique(
             arrays["center_frame"][arrays["center_frame"] >= 0]
         ).size),
         "support_semantic_counts": {
-            str(semantic): int(np.count_nonzero(arrays["support_semantic"] == semantic))
-            for semantic in (40, 48)
+            source_name: {
+                str(semantic): int(np.count_nonzero(arrays[field] == semantic))
+                for semantic in (40, 48)
+            }
+            for source_name, field in (
+                ("real-normal", "real_support_semantic"),
+                ("normal-control", "control_support_semantic"),
+                ("anomaly-proxy", "proxy_support_semantic"),
+            )
         },
+        "control_template_unique_count": int(np.unique(
+            arrays["control_template_index"][completed]
+        ).size),
+        "control_assigned_range_count": np.bincount(
+            arrays["control_assigned_range_bin"][completed], minlength=5
+        )[:5].tolist(),
+        "control_final_range_count": np.bincount(
+            arrays["control_final_range_bin"][completed], minlength=5
+        )[:5].tolist(),
+        "control_visible_returns_minimum": (
+            int(np.min(arrays["control_visible_returns"][completed]))
+            if bool(np.any(completed)) else None
+        ),
+        "normal_template_library_sha256": normal_template_library_sha256,
+        "support_pool_sha256": support_pool_sha256,
+        "calibration_sha256": calibration_sha256,
+        "renderer_identity": _GATE1_RENDERER_IDENTITY,
         "maximum_attempt": int(np.max(arrays["attempt"])),
         "processes": processes, "elapsed_seconds": elapsed_seconds,
         "scientific_array_hash": _scientific_array_hash(arrays),
@@ -13687,24 +14037,25 @@ def _write_gate1_candidate_bank(
 
 def build_gate1_candidate_bank(
     sequence: object,
-    pool: QualifiedSupportPool,
+    control_context: CoverageControlContext,
     obstacles: ObservedObstacleIndex,
     templates: Sequence[NormalTemplateShape],
-    ray_grid: RayGrid,
-    sensor: SensorCalibration,
-    trajectory_yaws: Mapping[int, float],
     output_path: Path | str,
     *,
     processes: int = 24,
     capacity: int = 256,
+    support_pool_sha256: str,
+    calibration_sha256: str,
+    normal_template_library_sha256: str,
+    real_candidates: Sequence[tuple[int, int, int, int]] | None = None,
 ) -> dict[str, object]:
     """Build a frozen independent three-source candidate bank."""
     if processes != 24:
         raise RenderError("formal Gate 1 candidate bank requires 24 processes")
-    if capacity not in (256, 512, 1024, 2048):
-        raise RenderError("Gate 1 candidate-bank capacity is outside the frozen ladder")
+    if capacity != 256:
+        raise RenderError("Gate 1 v2 candidate bank has exactly 256 paired seeds")
     _initialize_gate1_candidate_generation(
-        sequence, pool, obstacles, templates, ray_grid, sensor, trajectory_yaws
+        sequence, control_context, obstacles, templates, real_candidates
     )
     started = time.monotonic()
     with mp.get_context("fork").Pool(processes=processes) as workers:
@@ -13712,6 +14063,9 @@ def build_gate1_candidate_bank(
     return _write_gate1_candidate_bank(
         _gate1_bank_arrays(records), output_path, processes=processes,
         elapsed_seconds=time.monotonic() - started,
+        support_pool_sha256=support_pool_sha256,
+        calibration_sha256=calibration_sha256,
+        normal_template_library_sha256=normal_template_library_sha256,
     )
 
 
@@ -13719,37 +14073,30 @@ def extend_gate1_candidate_bank(
     existing_path: Path | str, output_path: Path | str, target_capacity: int,
     *, processes: int = 24,
 ) -> dict[str, object]:
-    """Extend only the new suffix of an initialized frozen candidate bank."""
-    if processes != 24:
-        raise RenderError("formal Gate 1 candidate bank requires 24 processes")
-    if target_capacity not in (512, 1024, 2048):
-        raise RenderError("Gate 1 extension target is outside the frozen ladder")
-    with np.load(Path(existing_path).expanduser().resolve(strict=True), allow_pickle=False) as source:
-        metadata = json.loads(str(source["metadata_json"]))
-        if metadata.get("experiment") != "Gate1-candidate-bank-v1" or metadata.get("passed") is not True:
-            raise RenderError("candidate-bank extension requires a passed prior bank")
-        previous = {name: np.asarray(source[name]) for name in (
-            "bank_seed", "attempt", "center_frame", "real_semantic", "real_instance",
-            "support_semantic", "control_world_json", "proxy_world_json",
-            "control_record_json", "proxy_record_json", "error",
-        )}
-    start = int(previous["bank_seed"].size)
-    if start >= target_capacity:
-        raise RenderError("candidate-bank extension target must exceed the prior capacity")
-    started = time.monotonic()
-    with mp.get_context("fork").Pool(processes=processes) as workers:
-        records = workers.map(_gate1_bank_worker, range(start, target_capacity), chunksize=1)
-    suffix = _gate1_bank_arrays(records)
-    combined = {
-        name: np.concatenate((previous[name], suffix[name])) for name in previous
-    }
-    return _write_gate1_candidate_bank(
-        combined, output_path, processes=processes,
-        elapsed_seconds=time.monotonic() - started,
+    del existing_path, output_path, target_capacity, processes
+    raise RenderError(
+        "Gate 1 v2 has no three-source capacity ladder; E45A-new and E45B-v2 use separate banks"
     )
 
 
-_E38_BANK: tuple[tuple[int, int, int, int, int, WorldSpec, WorldSpec], ...] = ()
+@dataclass(frozen=True, slots=True)
+class _Gate1BankUnit:
+    bank_seed: int
+    center_frame: int
+    real_semantic: int
+    real_instance: int
+    real_support_semantic: int
+    control_support_semantic: int
+    proxy_support_semantic: int
+    control_template_index: int
+    control_assigned_range_bin: int
+    control_final_range_bin: int
+    control_visible_returns: int
+    control_world: WorldSpec
+    proxy_world: WorldSpec
+
+
+_E38_BANK: tuple[_Gate1BankUnit, ...] = ()
 
 
 def _gate1_object_geometry(
@@ -13769,7 +14116,10 @@ def _gate1_object_geometry(
 
 
 def _gate1_real_geometry(
-    frame: SourceFrame, semantic: int, instance: int, ray_grid: RayGrid
+    frame: SourceFrame, semantic: int, instance: int, ray_grid: RayGrid,
+    trace_context: tuple[
+        np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray
+    ] | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     assert frame.labels is not None
     returned = (
@@ -13777,7 +14127,11 @@ def _gate1_real_geometry(
         & (frame.labels.instance == np.uint16(instance))
         & ~np.asarray(frame.zero_slot_mask, dtype=np.bool_)
     )
-    ranges = np.asarray(ray_grid.official_ranges(frame))
+    if trace_context is None:
+        ranges = np.asarray(ray_grid.official_ranges(frame))
+    else:
+        ranges = np.asarray(trace_context[4]).copy()
+        ranges[np.isfinite(ranges)] += ray_grid.official_range_offset_m
     returned &= (ranges >= 2.5) & (ranges <= 50.0)
     points = np.asarray(frame.xyzi[returned, :3], dtype=np.float64)
     if points.shape[0] < 4:
@@ -13787,14 +14141,34 @@ def _gate1_real_geometry(
     except QhullError as error:
         raise RenderError("Gate 1 real instance hull is not volumetric") from error
     equations = np.asarray(hull.equations, dtype=np.float64)
-    origins = ray_grid.origins_for(frame)
-    directions = ray_grid.directions_for(frame)
+    if trace_context is None:
+        origins = ray_grid.origins_for(frame)
+        directions = ray_grid.directions_for(frame)
+    else:
+        directions, _, origins, _, _ = trace_context
     distance = np.full(ray_grid.slot_count, np.inf, dtype=np.float64)
     valid = np.zeros(ray_grid.slot_count, dtype=np.bool_)
-    for start in range(0, ray_grid.slot_count, 4096):
-        stop = min(start + 4096, ray_grid.slot_count)
-        numerator = -(origins[start:stop] @ equations[:, :3].T + equations[:, 3])
-        denominator = directions[start:stop] @ equations[:, :3].T
+    # A finite sphere enclosing all observed instance points is a conservative
+    # broad phase for their convex hull; excluded rays cannot enter that hull.
+    lower = points.min(axis=0)
+    upper = points.max(axis=0)
+    center = 0.5 * (lower + upper)
+    radius = float(np.max(np.linalg.norm(points - center, axis=1))) + 1.0e-6
+    unit_direction = directions / np.linalg.norm(
+        directions, axis=1, keepdims=True
+    )
+    relative_origin = origins - center
+    closest_parameter = np.maximum(
+        -np.sum(relative_origin * unit_direction, axis=1), 0.0
+    )
+    closest = relative_origin + closest_parameter[:, None] * unit_direction
+    broad_phase = np.linalg.norm(closest, axis=1) <= radius
+    broad_phase |= returned
+    candidate_slots = np.flatnonzero(broad_phase)
+    for start in range(0, candidate_slots.size, 4096):
+        selected = candidate_slots[start:start + 4096]
+        numerator = -(origins[selected] @ equations[:, :3].T + equations[:, 3])
+        denominator = directions[selected] @ equations[:, :3].T
         parallel_outside = np.any(
             (np.abs(denominator) <= EPSILON) & (numerator < 0.0), axis=1
         )
@@ -13809,77 +14183,14 @@ def _gate1_real_geometry(
             & (enter + ray_grid.official_range_offset_m >= 2.5)
             & (enter + ray_grid.official_range_offset_m <= 50.0)
         )
-        distance[start:stop] = enter + ray_grid.official_range_offset_m
-        valid[start:stop] = current
+        distance[selected] = enter + ray_grid.official_range_offset_m
+        valid[selected] = current
     opportunity = valid | returned
     distance = np.where(valid, distance, ranges)
+    # Observed instance slots are authoritative members of the opportunity
+    # union and retain their measured official return distance.
+    distance[returned] = ranges[returned]
     return opportunity, returned, distance
-
-
-def _e38_worker(index: int) -> dict[str, np.ndarray]:
-    sequence, grid, sensor = _GATE1_SEQUENCE, _GATE1_RAY_GRID, _GATE1_SENSOR
-    if sequence is None or grid is None or sensor is None or len(_E38_BANK) != 256:
-        raise RuntimeError("E38 candidate bank is not initialized")
-    (
-        bank_seed, center, real_semantic, real_instance, support_semantic,
-        control_world, proxy_world,
-    ) = _E38_BANK[index]
-    opportunities = np.zeros((3, 5, grid.beam_count), dtype=np.int32)
-    returns = np.zeros_like(opportunities)
-    median_distance = np.zeros((3, 5), dtype=np.float64)
-    median_beam = np.zeros((3, 5), dtype=np.float64)
-    for frame_offset, frame_id in enumerate(range(center - 2, center + 3)):
-        frame = sequence.source_frame(frame_id)
-        real_opportunity, real_return, real_distance = _gate1_real_geometry(
-            frame, real_semantic, real_instance, grid
-        )
-        opportunities[0, frame_offset] = np.bincount(
-            grid.beam_ids[real_opportunity], minlength=grid.beam_count
-        )
-        returns[0, frame_offset] = np.bincount(
-            grid.beam_ids[real_return], minlength=grid.beam_count
-        )
-        median_distance[0, frame_offset] = float(np.median(real_distance[real_opportunity]))
-        median_beam[0, frame_offset] = float(np.median(grid.beam_ids[real_opportunity]))
-        for source_index, world in enumerate((control_world, proxy_world), start=1):
-            item = world.objects[0]
-            geometry, geometry_distance = _gate1_object_geometry(frame, world, item, grid)
-            rendered = render_frame(frame, world, grid, sensor)
-            returned = (
-                rendered.normal_control_mask if source_index == 1
-                else rendered.anomaly_proxy_mask
-            )
-            rendered_range = np.asarray(grid.ranges(rendered.source))
-            returned = np.asarray(returned) & (rendered_range >= 2.5) & (rendered_range <= 50.0)
-            opportunities[source_index, frame_offset] = np.bincount(
-                grid.beam_ids[geometry], minlength=grid.beam_count
-            )
-            returns[source_index, frame_offset] = np.bincount(
-                grid.beam_ids[returned], minlength=grid.beam_count
-            )
-            if bool(geometry.any()):
-                median_distance[source_index, frame_offset] = float(np.median(geometry_distance[geometry]))
-                median_beam[source_index, frame_offset] = float(np.median(grid.beam_ids[geometry]))
-            else:
-                rotation, origin_world = _pose(frame)
-                center_sensor = (
-                    np.asarray(item.translation_world_m, dtype=np.float64) - origin_world
-                ) @ rotation
-                center_distance = float(np.linalg.norm(center_sensor))
-                direction = center_sensor / center_distance
-                nearest = int(np.argmax(grid.directions_for(frame) @ direction))
-                median_distance[source_index, frame_offset] = center_distance
-                median_beam[source_index, frame_offset] = float(grid.beam_ids[nearest])
-    return {
-        "bank_seed": np.full((3, 5), bank_seed, dtype=np.int64),
-        "source": np.broadcast_to(np.arange(3, dtype=np.uint8)[:, None], (3, 5)).copy(),
-        "frame_id": np.broadcast_to(np.arange(center - 2, center + 3, dtype=np.int16), (3, 5)).copy(),
-        "support_semantic": np.full((3, 5), support_semantic, dtype=np.uint16),
-        "median_distance_m": median_distance,
-        "median_beam": median_beam,
-        "opportunity": opportunities,
-        "return_count": returns,
-    }
 
 
 def _e38_bootstrap(
@@ -13899,17 +14210,119 @@ def _e38_bootstrap(
     )
 
 
-def run_e38_qualification(
+def _e38_trace_contract_errors(
+    trace: Mapping[str, np.ndarray], ray_grid: RayGrid,
+    units: Sequence[_Gate1BankUnit],
+) -> int:
+    """Cross-check every shared E38--E44 count and per-return identity."""
+
+    beam_count = ray_grid.beam_count
+    expected_shapes = {
+        "bank_seed": (256, 3, 5), "source": (256, 3, 5),
+        "frame_id": (256, 3, 5), "support_semantic": (256, 3, 5),
+        "opportunity": (256, 3, 5, beam_count),
+        "return_count": (256, 3, 5, beam_count),
+        "median_distance_m": (256, 3, 5), "median_beam": (256, 3, 5),
+        "range_opportunity": (256, 3, 5, 5),
+        "range_return_count": (256, 3, 5, 5),
+        "geometry_hits": (256, 3, 5), "accepted_hits": (256, 3, 5),
+        "visible_returns": (256, 3, 5), "visible_distance_m": (256, 3, 5),
+        "empty_slots": (256, 2, 5, beam_count),
+        "empty_geometry": (256, 2, 5, beam_count, 5),
+        "empty_accepted": (256, 2, 5, beam_count, 5),
+        "empty_final_new": (256, 2, 5, beam_count, 5),
+    }
+    if len(units) != 256 or any(
+        name not in trace or np.asarray(trace[name]).shape != shape
+        for name, shape in expected_shapes.items()
+    ):
+        return 1
+    per_return_names = (
+        "intensity_source", "intensity_bank_seed", "intensity_frame",
+        "intensity_slot", "intensity_beam", "intensity_official_range_m",
+        "intensity_range_bin", "intensity_value",
+    )
+    if any(name not in trace or np.asarray(trace[name]).ndim != 1 for name in per_return_names):
+        return 1
+    return_count = int(np.asarray(trace[per_return_names[0]]).size)
+    if any(np.asarray(trace[name]).size != return_count for name in per_return_names):
+        return 1
+    errors = 0
+    errors += int(np.count_nonzero(
+        np.sum(trace["opportunity"], axis=-1) != trace["geometry_hits"]
+    ))
+    errors += int(np.count_nonzero(
+        np.sum(trace["return_count"], axis=-1) != trace["visible_returns"]
+    ))
+    errors += int(np.count_nonzero(
+        np.sum(trace["range_opportunity"], axis=-1) != trace["geometry_hits"]
+    ))
+    errors += int(np.count_nonzero(
+        np.sum(trace["range_return_count"], axis=-1) != trace["visible_returns"]
+    ))
+    errors += int(np.count_nonzero(trace["accepted_hits"] > trace["geometry_hits"]))
+    errors += int(np.count_nonzero(trace["visible_returns"] > trace["accepted_hits"]))
+    errors += int(np.count_nonzero(trace["empty_final_new"] > trace["empty_accepted"]))
+    errors += int(np.count_nonzero(trace["empty_accepted"] > trace["empty_geometry"]))
+    errors += int(np.count_nonzero(
+        np.sum(trace["empty_geometry"], axis=-1) > trace["empty_slots"]
+    ))
+    expected_seed = np.broadcast_to(
+        np.asarray([unit.bank_seed for unit in units], dtype=np.int64)[:, None, None],
+        (256, 3, 5),
+    )
+    expected_source = np.broadcast_to(
+        np.arange(3, dtype=np.uint8)[None, :, None], (256, 3, 5)
+    )
+    expected_frame = np.asarray([
+        np.broadcast_to(
+            np.arange(unit.center_frame - 2, unit.center_frame + 3)[None, :],
+            (3, 5),
+        )
+        for unit in units
+    ])
+    errors += int(np.count_nonzero(trace["bank_seed"] != expected_seed))
+    errors += int(np.count_nonzero(trace["source"] != expected_source))
+    errors += int(np.count_nonzero(trace["frame_id"] != expected_frame))
+    errors += int(np.count_nonzero(~np.isin(trace["support_semantic"], (40, 48))))
+    if return_count:
+        source = np.asarray(trace["intensity_source"])
+        seed = np.asarray(trace["intensity_bank_seed"])
+        frame = np.asarray(trace["intensity_frame"])
+        slot = np.asarray(trace["intensity_slot"])
+        beam = np.asarray(trace["intensity_beam"])
+        official_range = np.asarray(trace["intensity_official_range_m"])
+        range_bin = np.asarray(trace["intensity_range_bin"])
+        errors += int(np.count_nonzero((source < 0) | (source > 2)))
+        errors += int(np.count_nonzero((seed < 3_800_000) | (seed > 3_800_255)))
+        errors += int(np.count_nonzero((frame < 4) | (frame > 681)))
+        errors += int(np.count_nonzero((slot < 0) | (slot >= ray_grid.slot_count)))
+        errors += int(np.count_nonzero(beam != slot // ray_grid.columns))
+        errors += int(np.count_nonzero(
+            ~np.isfinite(official_range)
+            | (official_range < 2.5) | (official_range > 50.0)
+        ))
+        errors += int(np.count_nonzero(
+            range_bin != _gate1_range_bin(official_range)
+        ))
+        observed_by_source = np.bincount(source, minlength=3)[:3]
+        errors += int(np.count_nonzero(
+            observed_by_source != np.sum(trace["visible_returns"], axis=(0, 2))
+        ))
+    return errors
+
+
+def run_e38_v2_qualification(
     data_root: Path | str,
-    e25_artifact_path: Path | str,
+    e25_new_artifact_path: Path | str,
     calibration_path: Path | str,
-    support_pool_output: Path | str,
+    support_pool_path: Path | str,
     candidate_bank_output: Path | str,
     output_path: Path | str,
     *,
     processes: int = 24,
 ) -> dict[str, object]:
-    """Build the fixed Gate 1 bank and audit three-source per-beam return rates."""
+    """Build E25-new Gate 1 units and save one shared E38--E44 trace."""
     if processes != 24:
         raise RenderError("formal E38 requires exactly 24 processes")
     try:
@@ -13918,76 +14331,165 @@ def run_e38_qualification(
     except ImportError:
         from protocol import load_protocol  # type: ignore[no-redef]
         from scene import LabelMode, STUSequence  # type: ignore[no-redef]
-    protocol = load_protocol(Path(__file__).resolve().parents[1] / "protocol.json")
+    project_root = Path(__file__).resolve().parents[1]
+    protocol = load_protocol(project_root / "protocol.json")
+    e25_new_path = Path(e25_new_artifact_path).expanduser().resolve(strict=True)
+    if _sha256_path(e25_new_path) != FROZEN_E25_NEW_ARTIFACT_SHA256:
+        raise RenderError("E38-v2 E25-new artifact identity changed")
+    sequence_206 = STUSequence.open(
+        data_root, protocol=protocol, partition="train", sequence_id=206,
+        label_mode=LabelMode.REQUIRED,
+    )
+    templates = extract_normal_template_library(
+        sequence_206.source_frame(frame_id) for frame_id in sequence_206.frame_ids
+    )
+    template_identities, template_counts, template_library_hash = (
+        canonical_normal_template_library_identity(templates)
+    )
+    with np.load(e25_new_path, allow_pickle=False) as source:
+        e25_new_metadata = json.loads(str(source["metadata_json"]))
+        e25_fixture = np.asarray(source["fixture_index"])
+        e25_identity = tuple(
+            value.decode() if isinstance(value, bytes) else str(value)
+            for value in source["template_identity"]
+        )
+        e25_assigned = np.asarray(source["assigned_range_bin"])
+    if (
+        e25_new_metadata.get("experiment") != "E25-new-normal-control"
+        or e25_new_metadata.get("passed") is not True
+        or tuple(e25_fixture.tolist()) != tuple(range(256))
+        or e25_identity != template_identities
+        or not np.array_equal(e25_assigned, np.arange(256) % 5)
+    ):
+        raise RenderError("E38-v2 E25-new template contract changed")
+    del sequence_206
+    gc.collect()
+
     sequence = STUSequence.open(
         data_root, protocol=protocol, partition="train", sequence_id=201,
         label_mode=LabelMode.REQUIRED,
     )
-    pool, pool_metadata = build_gate1_support_pool(
-        sequence, support_pool_output, processes=processes
+    support_path = Path(support_pool_path).expanduser().resolve(strict=True)
+    pool, pool_metadata = load_gate1_support_pool(support_path)
+    calibration_resolved = Path(calibration_path).expanduser().resolve(strict=True)
+    calibration_hash = _sha256_path(calibration_resolved)
+    if calibration_hash != FROZEN_SENSOR_CALIBRATION_SHA256:
+        raise RenderError("E38-v2 sensor calibration identity changed")
+    ray_grid, sensor = load_sensor_calibration(calibration_resolved)
+    frame_ids = tuple(range(4, 682))
+    trajectory_yaws = _trajectory_yaw_by_pose({
+        frame_id: sequence.lidar_pose(frame_id) for frame_id in frame_ids
+    })
+    frame_keys, obstacles = _gate1_frame_keys_and_obstacles(
+        sequence, build_obstacles=True,
     )
-    frames = tuple(sequence.source_frame(frame_id) for frame_id in range(4, 682))
-    obstacles = collect_observed_obstacle_index(frames, source_sequence_id=201)
-    trajectory_yaws = trajectory_yaw_by_frame(frames)
-    with np.load(Path(e25_artifact_path).expanduser().resolve(strict=True), allow_pickle=False) as source:
-        metadata = json.loads(str(source["metadata_json"]))
-        if metadata.get("experiment") != "E25" or metadata.get("passed") is not True:
-            raise RenderError("E38 requires the passed E25 template artifact")
-        unique: dict[str, NormalTemplateShape] = {}
-        for identity, payload in zip(source["template_identity"], source["object_json"], strict=True):
-            key = identity.decode()
-            if key and key not in unique:
-                item = ObjectSpec.from_dict(json.loads(payload.decode()))
-                if not isinstance(item.shape, NormalTemplateShape):
-                    raise RenderError("E25 artifact contains a non-template control")
-                unique[key] = item.shape
-    templates = tuple(unique[key] for key in sorted(unique))
-    ray_grid, sensor = load_sensor_calibration(calibration_path)
+    assert obstacles is not None
+    real_candidates = _gate1_real_candidates(
+        sequence, pool, frame_keys=frame_keys
+    )
+    control_context = build_coverage_control_context(
+        (), pool, ray_grid, sensor,
+        frame_loader=sequence.source_frame,
+        frame_ids=frame_ids,
+        source_sequence_id=201,
+        trajectory_yaws=trajectory_yaws,
+    )
+    renderer_identity = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+    global _GATE1_RENDERER_IDENTITY
+    _GATE1_RENDERER_IDENTITY = renderer_identity
     bank_metadata = build_gate1_candidate_bank(
-        sequence, pool, obstacles, templates, ray_grid, sensor, trajectory_yaws,
-        candidate_bank_output, processes=processes,
+        sequence, control_context, obstacles, templates, candidate_bank_output,
+        processes=processes,
+        support_pool_sha256=FROZEN_GATE1_SUPPORT_POOL_SHA256,
+        calibration_sha256=calibration_hash,
+        normal_template_library_sha256=template_library_hash,
+        real_candidates=real_candidates,
     )
     if bank_metadata["passed"] is not True:
-        return {
-            "experiment": "E38", "passed": False,
+        result = {
+            "experiment": "E38-v2", "passed": False,
             "failure_classification": "candidate_bank_construction_failure",
             "support_pool": pool_metadata, "candidate_bank": bank_metadata,
+            "formal_repetitions": 1,
+            "elementwise_reproduced": None,
+            "reproducibility_check": "not_run_by_owner_decision",
         }
-    with np.load(Path(candidate_bank_output).expanduser().resolve(strict=True), allow_pickle=False) as source:
-        global _E38_BANK
-        _E38_BANK = tuple(
-            (
-                int(seed), int(center), int(semantic), int(instance), int(support),
-                WorldSpec.from_dict(json.loads(control.decode() if isinstance(control, bytes) else str(control))),
-                WorldSpec.from_dict(json.loads(proxy.decode() if isinstance(proxy, bytes) else str(proxy))),
-            )
-            for seed, center, semantic, instance, support, control, proxy in zip(
-                source["bank_seed"], source["center_frame"], source["real_semantic"],
-                source["real_instance"], source["support_semantic"], source["control_world_json"],
-                source["proxy_world_json"], strict=True,
-            )
+        destination = Path(output_path).expanduser().resolve()
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        temporary = destination.with_suffix(destination.suffix + ".tmp.npz")
+        np.savez_compressed(
+            temporary,
+            metadata_json=np.asarray(
+                json.dumps(result, sort_keys=True, separators=(",", ":"))
+            ),
         )
+        os.replace(temporary, destination)
+        return result
+    global _E38_BANK
+    _E38_BANK = _load_gate1_bank(candidate_bank_output)
     global _GATE1_SEQUENCE, _GATE1_RAY_GRID, _GATE1_SENSOR
     _GATE1_SEQUENCE = sequence
     _GATE1_RAY_GRID = ray_grid
     _GATE1_SENSOR = sensor
-    context = mp.get_context("fork")
-    runs: list[dict[str, np.ndarray]] = []
-    run_seconds: list[float] = []
-    for _ in range(2):
-        started = time.monotonic()
-        with context.Pool(processes=processes) as workers:
-            records = workers.map(_e38_worker, range(256), chunksize=1)
-        runs.append({
-            name: np.stack([record[name] for record in records])
-            for name in records[0]
-        })
-        run_seconds.append(time.monotonic() - started)
-    first = runs[0]
-    reproduced = all(np.array_equal(first[name], runs[1][name]) for name in first)
-    conservation_errors = int(np.count_nonzero(first["return_count"] > first["opportunity"]))
-    total_opportunity = first["opportunity"].sum(axis=(0, 2))
-    total_returns = first["return_count"].sum(axis=(0, 2))
+    # Candidate generation state is not used by the shared render trace. Drop
+    # the large obstacle index and support context before the second fork pool.
+    global _GATE1_POOL, _GATE1_OBSTACLES, _GATE1_TEMPLATES
+    global _GATE1_TEMPLATE_IDENTITIES, _GATE1_CONTROL_CONTEXT
+    global _GATE1_REAL_CANDIDATES
+    _GATE1_POOL = None
+    _GATE1_OBSTACLES = None
+    _GATE1_TEMPLATES = ()
+    _GATE1_TEMPLATE_IDENTITIES = ()
+    _GATE1_CONTROL_CONTEXT = None
+    _GATE1_REAL_CANDIDATES = ()
+    del pool, obstacles, templates, control_context, frame_keys, real_candidates
+    gc.collect()
+    fixed = {
+        "bank_seed", "source", "frame_id", "support_semantic",
+        "opportunity", "return_count", "median_distance_m", "median_beam",
+        "range_opportunity", "range_return_count", "geometry_hits",
+        "accepted_hits", "visible_returns", "visible_distance_m", "empty_slots",
+        "empty_geometry", "empty_accepted", "empty_final_new",
+    }
+    work_order = tuple(sorted(
+        range(256),
+        key=lambda index: (
+            -sum(
+                int(item.shape.plane_normals.shape[0])
+                if isinstance(item.shape, NormalTemplateShape)
+                else len(item.shape.nodes)
+                for item in (
+                    _E38_BANK[index].control_world.objects[0],
+                    _E38_BANK[index].proxy_world.objects[0],
+                )
+            ),
+            index,
+        ),
+    ))
+    started = time.monotonic()
+    with mp.get_context("fork").Pool(processes=processes) as workers:
+        scheduled = workers.map(_e39_worker, work_order, chunksize=1)
+    trace_seconds = time.monotonic() - started
+    by_index = {
+        int(record["bank_seed"][0, 0]) - 3_800_000: record
+        for record in scheduled
+    }
+    records = [by_index[index] for index in range(256)]
+    trace = {
+        name: (
+            np.stack([record[name] for record in records])
+            if name in fixed else np.concatenate([record[name] for record in records])
+        )
+        for name in records[0]
+    }
+    conservation_errors = int(np.count_nonzero(
+        trace["return_count"] > trace["opportunity"]
+    ))
+    trace_contract_errors = _e38_trace_contract_errors(
+        trace, ray_grid, _E38_BANK
+    )
+    total_opportunity = trace["opportunity"].sum(axis=(0, 2))
+    total_returns = trace["return_count"].sum(axis=(0, 2))
     rates = np.divide(
         total_returns, total_opportunity, out=np.zeros_like(total_returns, dtype=np.float64),
         where=total_opportunity > 0,
@@ -13995,8 +14497,8 @@ def run_e38_qualification(
     ci_low = np.zeros((3, ray_grid.beam_count), dtype=np.float64)
     ci_high = np.zeros_like(ci_low)
     for source_index in range(3):
-        groups_opportunity = first["opportunity"][:, source_index].reshape(-1, ray_grid.beam_count)
-        groups_return = first["return_count"][:, source_index].reshape(-1, ray_grid.beam_count)
+        groups_opportunity = trace["opportunity"][:, source_index].reshape(-1, ray_grid.beam_count)
+        groups_return = trace["return_count"][:, source_index].reshape(-1, ray_grid.beam_count)
         ci_low[source_index], ci_high[source_index] = _e38_bootstrap(
             groups_opportunity, groups_return
         )
@@ -14004,30 +14506,51 @@ def run_e38_qualification(
         np.count_nonzero(~np.isfinite(rates))
         + np.count_nonzero(~np.isfinite(ci_low))
         + np.count_nonzero(~np.isfinite(ci_high))
-        + np.count_nonzero(~np.isfinite(first["median_distance_m"]))
-        + np.count_nonzero(~np.isfinite(first["median_beam"]))
+        + np.count_nonzero(~np.isfinite(trace["median_distance_m"]))
+        + np.count_nonzero(~np.isfinite(trace["median_beam"]))
+        + np.count_nonzero(~np.isfinite(trace["visible_distance_m"]))
+        + np.count_nonzero(~np.isfinite(trace["intensity_official_range_m"]))
+        + np.count_nonzero(~np.isfinite(trace["intensity_value"]))
     )
     source_nonzero = [int(total_returns[index].sum()) for index in range(3)]
     passed = (
-        conservation_errors == 0 and finite_errors == 0
-        and all(value > 0 for value in source_nonzero) and reproduced
+        conservation_errors == 0 and trace_contract_errors == 0
+        and finite_errors == 0
+        and all(value > 0 for value in source_nonzero)
     )
     scientific = {
-        **first, "beam_opportunity": total_opportunity,
+        **trace, "beam_opportunity": total_opportunity,
         "beam_return_count": total_returns, "beam_return_rate": rates,
         "bootstrap_ci_low": ci_low, "bootstrap_ci_high": ci_high,
     }
     result = {
-        "experiment": "E38", "passed": passed, "bank_seeds": 256,
+        "experiment": "E38-v2", "passed": passed, "bank_seeds": 256,
+        "failure_classification": None if passed else "per_beam_qualification_failure",
         "entity_frame_groups_per_source": 1280,
         "sources": ["real-normal", "normal-control", "anomaly-proxy"],
         "total_opportunities": [int(total_opportunity[index].sum()) for index in range(3)],
         "total_returns": source_nonzero, "conservation_errors": conservation_errors,
-        "finite_errors": finite_errors, "elementwise_reproduced": reproduced,
+        "trace_contract_errors": trace_contract_errors,
+        "finite_errors": finite_errors,
+        "formal_repetitions": 1,
+        "elementwise_reproduced": None,
+        "reproducibility_check": "not_run_by_owner_decision",
         "bootstrap_clusters_per_source": 1280, "bootstrap_replicates": 2000,
-        "run_seconds": run_seconds, "processes": processes,
+        "run_seconds": [trace_seconds], "processes": processes,
+        "numeric_library_threads_per_process": 1, "gpu_used": False,
         "support_pool_size": int(pool_metadata["pool_size"]),
+        "support_pool_reused": True,
+        "support_pool_sha256": FROZEN_GATE1_SUPPORT_POOL_SHA256,
         "candidate_bank_completed": int(bank_metadata["completed"]),
+        "candidate_bank_sha256": _sha256_path(
+            Path(candidate_bank_output).expanduser().resolve(strict=True)
+        ),
+        "e25_new_artifact_sha256": FROZEN_E25_NEW_ARTIFACT_SHA256,
+        "normal_template_counts": template_counts,
+        "normal_template_library_sha256": template_library_hash,
+        "calibration_sha256": calibration_hash,
+        "renderer_identity": renderer_identity,
+        "shared_trace_for_E39_E44": True,
         "scientific_array_hash": _scientific_array_hash(scientific),
     }
     destination = Path(output_path).expanduser().resolve()
@@ -14053,49 +14576,59 @@ def _gate1_range_bin(distance_m: np.ndarray) -> np.ndarray:
 
 
 def _gate1_single_object_trace(
-    frame: SourceFrame, world: WorldSpec, ray_grid: RayGrid, sensor: SensorCalibration
+    frame: SourceFrame, world: WorldSpec, ray_grid: RayGrid,
+    sensor: SensorCalibration,
+    trace_context: tuple[
+        np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray
+    ] | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, RenderedFrame]:
     item = world.objects[0]
-    pose_rotation, lidar_origin = _pose(frame)
-    directions_world = ray_grid.directions_for(frame) @ pose_rotation.T
-    origins_world = ray_grid.origins_for(frame) @ pose_rotation.T + lidar_origin
-    object_rotation = np.asarray(item.rotation_world_from_local, dtype=np.float64)
-    translation = np.asarray(item.translation_world_m, dtype=np.float64)
-    local_origin = (origins_world - translation) @ object_rotation
-    local_direction = directions_world @ object_rotation
-    raw_distance, local_normal, geometry = item.shape.intersect(local_origin, local_direction)
-    normal_world = local_normal @ object_rotation.T
-    incidence = np.zeros(ray_grid.slot_count, dtype=np.float64)
-    incidence[geometry] = np.arccos(
-        np.clip(
-            np.abs(np.sum(normal_world[geometry] * -directions_world[geometry], axis=1)),
-            0.0, 1.0,
-        )
+    shared = (
+        _frame_trace_context(frame, ray_grid)
+        if trace_context is None else trace_context
     )
-    probability = np.zeros(ray_grid.slot_count, dtype=np.float64)
-    probability[geometry] = sensor.return_chance(
-        ray_grid.beam_ids[geometry], raw_distance[geometry], incidence[geometry],
-        item.material.return_bias,
+    _, _, compact = _single_object_sensor_precheck(
+        frame, world, ray_grid, sensor, trace_context=shared,
     )
-    uniform = _slot_uniform(
-        world, int(frame.frame_id), np.arange(ray_grid.slot_count, dtype=np.int32),
-        np.full(ray_grid.slot_count, item.object_id, dtype=np.int32), channel=0,
+    geometry, competition = _expand_single_object_trace(
+        compact, item, ray_grid.slot_count
     )
-    accepted = np.asarray(geometry) & (uniform < probability)
-    official_distance = np.asarray(raw_distance) + ray_grid.official_range_offset_m
-    in_range = (official_distance >= 2.5) & (official_distance <= 50.0)
-    rendered = render_frame(frame, world, ray_grid, sensor)
-    return np.asarray(geometry) & in_range, accepted & in_range, official_distance, rendered
+    accepted = np.zeros(ray_grid.slot_count, dtype=np.bool_)
+    accepted[compact.candidate_slots] = compact.accepted & compact.in_range
+    official_distance = np.full(ray_grid.slot_count, np.inf, dtype=np.float64)
+    official_distance[compact.candidate_slots] = (
+        compact.distance_m + ray_grid.official_range_offset_m
+    )
+    rendered = render_frame(
+        frame, world, ray_grid, sensor,
+        _trace_context=shared, _competition=competition,
+    )
+    return geometry, accepted, official_distance, rendered
 
 
 def _e39_worker(index: int) -> dict[str, np.ndarray]:
     sequence, grid, sensor = _GATE1_SEQUENCE, _GATE1_RAY_GRID, _GATE1_SENSOR
     if sequence is None or grid is None or sensor is None or len(_E38_BANK) != 256:
         raise RuntimeError("E39 shared-trace fixtures are not initialized")
-    (
-        bank_seed, center, real_semantic, real_instance, support_semantic,
-        control_world, proxy_world,
-    ) = _E38_BANK[index]
+    unit = _E38_BANK[index]
+    bank_seed = unit.bank_seed
+    center = unit.center_frame
+    real_semantic = unit.real_semantic
+    real_instance = unit.real_instance
+    control_world = unit.control_world
+    proxy_world = unit.proxy_world
+    source_support_semantic = np.asarray(
+        (
+            unit.real_support_semantic,
+            unit.control_support_semantic,
+            unit.proxy_support_semantic,
+        ),
+        dtype=np.uint16,
+    )
+    beam_opportunity = np.zeros((3, 5, grid.beam_count), dtype=np.int32)
+    beam_returns = np.zeros_like(beam_opportunity)
+    median_distance_m = np.zeros((3, 5), dtype=np.float64)
+    median_beam = np.zeros((3, 5), dtype=np.float64)
     range_opportunity = np.zeros((3, 5, 5), dtype=np.int32)
     range_returns = np.zeros_like(range_opportunity)
     geometry_hits = np.zeros((3, 5), dtype=np.int32)
@@ -14107,16 +14640,32 @@ def _e39_worker(index: int) -> dict[str, np.ndarray]:
     empty_accepted = np.zeros_like(empty_geometry)
     empty_final_new = np.zeros_like(empty_geometry)
     intensity_source: list[np.ndarray] = []
+    intensity_bank_seed: list[np.ndarray] = []
     intensity_frame: list[np.ndarray] = []
+    intensity_slot: list[np.ndarray] = []
     intensity_beam: list[np.ndarray] = []
+    intensity_official_range_m: list[np.ndarray] = []
     intensity_range_bin: list[np.ndarray] = []
     intensity_value: list[np.ndarray] = []
     for frame_offset, frame_id in enumerate(range(center - 2, center + 3)):
         frame = sequence.source_frame(frame_id)
+        trace_context = _frame_trace_context(frame, grid)
         real_geometry, real_return, real_distance = _gate1_real_geometry(
-            frame, real_semantic, real_instance, grid
+            frame, real_semantic, real_instance, grid, trace_context
         )
         real_bin = _gate1_range_bin(real_distance)
+        beam_opportunity[0, frame_offset] = np.bincount(
+            grid.beam_ids[real_geometry], minlength=grid.beam_count
+        )
+        beam_returns[0, frame_offset] = np.bincount(
+            grid.beam_ids[real_return], minlength=grid.beam_count
+        )
+        median_distance_m[0, frame_offset] = float(
+            np.median(real_distance[real_geometry])
+        )
+        median_beam[0, frame_offset] = float(
+            np.median(grid.beam_ids[real_geometry])
+        )
         for range_bin in range(5):
             range_opportunity[0, frame_offset, range_bin] = int(
                 np.count_nonzero(real_geometry & (real_bin == range_bin))
@@ -14129,15 +14678,21 @@ def _e39_worker(index: int) -> dict[str, np.ndarray]:
         visible_returns[0, frame_offset] = int(np.count_nonzero(real_return))
         visible_distance_m[0, frame_offset] = float(np.median(real_distance[real_return]))
         real_slots = np.flatnonzero(real_return)
+        real_return_distance = np.asarray(grid.official_ranges(frame))[real_slots]
         intensity_source.append(np.zeros(real_slots.size, dtype=np.uint8))
+        intensity_bank_seed.append(
+            np.full(real_slots.size, bank_seed, dtype=np.int64)
+        )
         intensity_frame.append(np.full(real_slots.size, frame_id, dtype=np.int16))
+        intensity_slot.append(real_slots.astype(np.int32))
         intensity_beam.append(grid.beam_ids[real_slots].astype(np.int16))
-        intensity_range_bin.append(real_bin[real_slots])
+        intensity_official_range_m.append(real_return_distance.astype(np.float64))
+        intensity_range_bin.append(_gate1_range_bin(real_return_distance))
         intensity_value.append(np.asarray(frame.xyzi[real_slots, 3], dtype=np.float32))
         native_empty = np.asarray(frame.zero_slot_mask, dtype=np.bool_)
         for source_index, world in enumerate((control_world, proxy_world), start=1):
             geometry, accepted, distance, rendered = _gate1_single_object_trace(
-                frame, world, grid, sensor
+                frame, world, grid, sensor, trace_context
             )
             returned = np.array(
                 rendered.normal_control_mask if source_index == 1
@@ -14148,6 +14703,33 @@ def _e39_worker(index: int) -> dict[str, np.ndarray]:
             returned &= (rendered_distance >= 2.5) & (rendered_distance <= 50.0)
             distance_bin = _gate1_range_bin(distance)
             returned_bin = _gate1_range_bin(rendered_distance)
+            beam_opportunity[source_index, frame_offset] = np.bincount(
+                grid.beam_ids[geometry], minlength=grid.beam_count
+            )
+            beam_returns[source_index, frame_offset] = np.bincount(
+                grid.beam_ids[returned], minlength=grid.beam_count
+            )
+            if bool(geometry.any()):
+                median_distance_m[source_index, frame_offset] = float(
+                    np.median(distance[geometry])
+                )
+                median_beam[source_index, frame_offset] = float(
+                    np.median(grid.beam_ids[geometry])
+                )
+            else:
+                pose_rotation, lidar_origin = _pose(frame)
+                center_sensor = (
+                    np.asarray(world.objects[0].translation_world_m) - lidar_origin
+                ) @ pose_rotation
+                center_distance = float(np.linalg.norm(center_sensor))
+                direction = center_sensor / center_distance
+                nearest = int(np.argmax(grid.directions_for(frame) @ direction))
+                median_distance_m[source_index, frame_offset] = (
+                    center_distance + grid.official_range_offset_m
+                )
+                median_beam[source_index, frame_offset] = float(
+                    grid.beam_ids[nearest]
+                )
             for range_bin in range(5):
                 range_opportunity[source_index, frame_offset, range_bin] = int(
                     np.count_nonzero(geometry & (distance_bin == range_bin))
@@ -14191,45 +14773,253 @@ def _e39_worker(index: int) -> dict[str, np.ndarray]:
                 )
             slots = np.flatnonzero(returned)
             intensity_source.append(np.full(slots.size, source_index, dtype=np.uint8))
+            intensity_bank_seed.append(
+                np.full(slots.size, bank_seed, dtype=np.int64)
+            )
             intensity_frame.append(np.full(slots.size, frame_id, dtype=np.int16))
+            intensity_slot.append(slots.astype(np.int32))
             intensity_beam.append(grid.beam_ids[slots].astype(np.int16))
+            intensity_official_range_m.append(
+                rendered_distance[slots].astype(np.float64)
+            )
             intensity_range_bin.append(returned_bin[slots])
             intensity_value.append(np.asarray(rendered.xyzi[slots, 3], dtype=np.float32))
     return {
         "bank_seed": np.full((3, 5), bank_seed, dtype=np.int64),
         "source": np.broadcast_to(np.arange(3, dtype=np.uint8)[:, None], (3, 5)).copy(),
         "frame_id": np.broadcast_to(np.arange(center - 2, center + 3, dtype=np.int16), (3, 5)).copy(),
-        "support_semantic": np.full((3, 5), support_semantic, dtype=np.uint16),
+        "support_semantic": np.broadcast_to(
+            source_support_semantic[:, None], (3, 5)
+        ).copy(),
+        "opportunity": beam_opportunity,
+        "return_count": beam_returns,
+        "median_distance_m": median_distance_m,
+        "median_beam": median_beam,
         "range_opportunity": range_opportunity, "range_return_count": range_returns,
         "geometry_hits": geometry_hits, "accepted_hits": accepted_hits,
         "visible_returns": visible_returns, "visible_distance_m": visible_distance_m,
         "empty_slots": empty_slots, "empty_geometry": empty_geometry,
         "empty_accepted": empty_accepted, "empty_final_new": empty_final_new,
         "intensity_source": np.concatenate(intensity_source),
+        "intensity_bank_seed": np.concatenate(intensity_bank_seed),
         "intensity_frame": np.concatenate(intensity_frame),
+        "intensity_slot": np.concatenate(intensity_slot),
         "intensity_beam": np.concatenate(intensity_beam),
+        "intensity_official_range_m": np.concatenate(
+            intensity_official_range_m
+        ),
         "intensity_range_bin": np.concatenate(intensity_range_bin),
         "intensity_value": np.concatenate(intensity_value),
     }
 
 
-def _load_gate1_bank(path: Path | str) -> tuple[tuple[int, int, int, int, int, WorldSpec, WorldSpec], ...]:
-    with np.load(Path(path).expanduser().resolve(strict=True), allow_pickle=False) as source:
+def _load_gate1_bank(path: Path | str) -> tuple[_Gate1BankUnit, ...]:
+    source_path = Path(path).expanduser().resolve(strict=True)
+    with np.load(source_path, allow_pickle=False) as source:
         metadata = json.loads(str(source["metadata_json"]))
-        if metadata.get("experiment") != "Gate1-candidate-bank-v1" or metadata.get("passed") is not True:
+        if (
+            metadata.get("experiment") != "Gate1-candidate-bank-v2"
+            or metadata.get("schema") != "gate1-candidate-bank-v2"
+            or metadata.get("passed") is not True
+            or metadata.get("normal_template_library_sha256")
+            != CANONICAL_NORMAL_TEMPLATE_LIBRARY_SHA256
+            or metadata.get("support_pool_sha256")
+            != FROZEN_GATE1_SUPPORT_POOL_SHA256
+            or metadata.get("calibration_sha256")
+            != FROZEN_SENSOR_CALIBRATION_SHA256
+            or int(metadata.get("capacity", -1)) != 256
+            or metadata.get("scientific_array_hash") is None
+            or (
+                _GATE1_RENDERER_IDENTITY
+                and metadata.get("renderer_identity") != _GATE1_RENDERER_IDENTITY
+            )
+        ):
             raise RenderError("Gate 1 candidate bank is not qualified")
-        return tuple(
-            (
-                int(seed), int(center), int(semantic), int(instance), int(support),
-                WorldSpec.from_dict(json.loads(str(control))),
-                WorldSpec.from_dict(json.loads(str(proxy))),
-            )
-            for seed, center, semantic, instance, support, control, proxy in zip(
-                source["bank_seed"], source["center_frame"], source["real_semantic"],
-                source["real_instance"], source["support_semantic"],
-                source["control_world_json"], source["proxy_world_json"], strict=True,
-            )
+        required = (
+            "bank_seed", "attempt", "center_frame", "real_semantic",
+            "real_instance", "real_support_semantic",
+            "control_support_semantic", "proxy_support_semantic",
+            "control_support_frame", "proxy_support_frame",
+            "control_template_index", "control_template_identity",
+            "control_assigned_range_bin", "control_final_range_bin",
+            "control_visible_returns", "control_observation_json",
+            "control_world_json", "proxy_world_json",
+            "control_record_json", "proxy_record_json", "error",
         )
+        try:
+            arrays = {name: np.asarray(source[name]) for name in required}
+        except KeyError as error:
+            raise RenderError(
+                f"Gate 1 candidate bank is missing {error.args[0]}"
+            ) from error
+    if any(value.shape != (256,) for value in arrays.values()):
+        raise RenderError("Gate 1 candidate bank arrays must each contain 256 units")
+    if _scientific_array_hash(arrays) != metadata["scientific_array_hash"]:
+        raise RenderError("Gate 1 candidate bank scientific arrays changed")
+    if bool(np.any(arrays["error"] != "")):
+        raise RenderError("Gate 1 candidate bank contains an incomplete unit")
+    units: list[_Gate1BankUnit] = []
+    for row in range(256):
+        seed = int(arrays["bank_seed"][row])
+        attempt = int(arrays["attempt"][row])
+        center = int(arrays["center_frame"][row])
+        real_semantic = int(arrays["real_semantic"][row])
+        real_instance = int(arrays["real_instance"][row])
+        real_support = int(arrays["real_support_semantic"][row])
+        control_support = int(arrays["control_support_semantic"][row])
+        proxy_support = int(arrays["proxy_support_semantic"][row])
+        control_support_frame = int(arrays["control_support_frame"][row])
+        proxy_support_frame = int(arrays["proxy_support_frame"][row])
+        template_index = int(arrays["control_template_index"][row])
+        template_identity = str(arrays["control_template_identity"][row])
+        assigned_bin = int(arrays["control_assigned_range_bin"][row])
+        final_bin = int(arrays["control_final_range_bin"][row])
+        visible_returns = int(arrays["control_visible_returns"][row])
+        try:
+            observation = json.loads(str(arrays["control_observation_json"][row]))
+            control_world = WorldSpec.from_dict(
+                json.loads(str(arrays["control_world_json"][row]))
+            )
+            proxy_world = WorldSpec.from_dict(
+                json.loads(str(arrays["proxy_world_json"][row]))
+            )
+            control_record = PlacementRecord.from_dict(
+                json.loads(str(arrays["control_record_json"][row]))
+            )
+            proxy_record = PlacementRecord.from_dict(
+                json.loads(str(arrays["proxy_record_json"][row]))
+            )
+        except (json.JSONDecodeError, TypeError, RenderError) as error:
+            raise RenderError(
+                f"Gate 1 candidate bank unit {row} cannot be decoded"
+            ) from error
+        attempt_seed = seed + 1_000_003 * attempt
+        expected_template_index, expected_assigned_bin = (
+            _gate1_control_template_assignment(attempt_seed)
+        )
+        expected_real: tuple[int, int, int, int] | None = None
+        if _GATE1_REAL_CANDIDATES:
+            real_index = int(np.random.default_rng(
+                np.random.SeedSequence([attempt_seed, 3801])
+            ).integers(0, len(_GATE1_REAL_CANDIDATES)))
+            expected_real = _GATE1_REAL_CANDIDATES[real_index]
+        expected_pool_prefix: np.ndarray | None = None
+        if (
+            _GATE1_CONTROL_CONTEXT is not None
+            and len(_GATE1_TEMPLATES) == 256
+            and 0 <= template_index < 256
+            and 0 <= assigned_bin < 5
+        ):
+            frozen_rows = _gate1_control_rows(
+                _GATE1_CONTROL_CONTEXT,
+                template_index,
+                int(_GATE1_TEMPLATES[template_index].raw_semantic_id),
+                assigned_bin,
+                center,
+            )
+            expected_pool_prefix = _GATE1_CONTROL_CONTEXT.support_pool.pool_indices[
+                frozen_rows
+            ]
+        shared_prefix = min(
+            len(control_record.proposal_pool_indices),
+            len(proxy_record.proposal_pool_indices),
+        )
+        if (
+            seed != 3_800_000 + row
+            or not 0 <= attempt < 48
+            or not 6 <= center <= 679
+            or real_semantic not in {10, 18, 20, 30}
+            or real_instance <= 0
+            or real_support not in {40, 48}
+            or control_support not in {40, 48}
+            or proxy_support not in {40, 48}
+            or abs(control_support_frame - center) > 2
+            or abs(proxy_support_frame - center) > 2
+            or not 0 <= template_index < 256
+            or template_index != expected_template_index
+            or len(template_identity) != 64
+            or assigned_bin != template_index % 5
+            or assigned_bin != expected_assigned_bin
+            or final_bin != assigned_bin
+            or visible_returns < 1
+            or not isinstance(observation, Mapping)
+            or int(observation.get("frame_id", -1)) != control_support_frame
+            or int(observation.get("visible_returns", -1)) != visible_returns
+            or int(observation.get("range_bin", -1)) != final_bin
+            or control_world.seed != seed
+            or proxy_world.seed != seed
+            or control_world.source_sequence_id != 201
+            or proxy_world.source_sequence_id != 201
+            or len(control_world.objects) != 1
+            or len(proxy_world.objects) != 1
+            or control_world.objects[0].object_id != 1
+            or proxy_world.objects[0].object_id != 1
+            or control_world.objects[0].label != "normal-control"
+            or proxy_world.objects[0].label != "anomaly-proxy"
+            or not isinstance(control_world.objects[0].shape, NormalTemplateShape)
+            or not isinstance(proxy_world.objects[0].shape, ShapeSpec)
+            or control_record.object_id != 1
+            or proxy_record.object_id != 1
+            or control_record.label != "normal-control"
+            or proxy_record.label != "anomaly-proxy"
+            or control_record.template_identity != template_identity
+            or control_record.template_seed != attempt_seed + 1
+            or control_record.scale_seed != attempt_seed + 2
+            or control_record.material_seed != attempt_seed + 11
+            or control_record.yaw_seed != attempt_seed + 31
+            or proxy_record.material_seed != attempt_seed + 12
+            or proxy_record.yaw_seed != attempt_seed + 32
+            or control_record.support_frame != control_support_frame
+            or proxy_record.support_frame != proxy_support_frame
+            or control_record.support_semantic != control_support
+            or proxy_record.support_semantic != proxy_support
+            or control_record.accepted_proposal + 1
+            != len(control_record.proposal_pool_indices)
+            or proxy_record.accepted_proposal + 1
+            != len(proxy_record.proposal_pool_indices)
+            or control_record.proposal_pool_indices[:shared_prefix]
+            != proxy_record.proposal_pool_indices[:shared_prefix]
+            or (
+                expected_real is not None
+                and (center, real_semantic, real_instance, real_support)
+                != expected_real
+            )
+            or (
+                expected_pool_prefix is not None
+                and (
+                    len(control_record.proposal_pool_indices)
+                    > expected_pool_prefix.size
+                    or len(proxy_record.proposal_pool_indices)
+                    > expected_pool_prefix.size
+                    or control_record.proposal_pool_indices
+                    != tuple(map(
+                        int,
+                        expected_pool_prefix[
+                            :len(control_record.proposal_pool_indices)
+                        ],
+                    ))
+                    or proxy_record.proposal_pool_indices
+                    != tuple(map(
+                        int,
+                        expected_pool_prefix[
+                            :len(proxy_record.proposal_pool_indices)
+                        ],
+                    ))
+                )
+            )
+            or (
+                len(_GATE1_TEMPLATE_IDENTITIES) == 256
+                and template_identity != _GATE1_TEMPLATE_IDENTITIES[template_index]
+            )
+        ):
+            raise RenderError(f"Gate 1 candidate bank unit {row} changed identity")
+        units.append(_Gate1BankUnit(
+            seed, center, real_semantic, real_instance,
+            real_support, control_support, proxy_support,
+            template_index, assigned_bin, final_bin, visible_returns,
+            control_world, proxy_world,
+        ))
+    return tuple(units)
 
 
 def run_e39_qualification(
@@ -16256,11 +17046,11 @@ def _render_parser() -> argparse.ArgumentParser:
     e37.add_argument("--calibration", type=Path, required=True)
     e37.add_argument("--output", type=Path, required=True)
     e37.add_argument("--processes", type=int, default=24)
-    e38 = subcommands.add_parser("qualify-e38")
+    e38 = subcommands.add_parser("qualify-e38-v2")
     e38.add_argument("--data-root", type=Path, required=True)
-    e38.add_argument("--e25-artifact", type=Path, required=True)
+    e38.add_argument("--e25-new-artifact", type=Path, required=True)
     e38.add_argument("--calibration", type=Path, required=True)
-    e38.add_argument("--support-pool-output", type=Path, required=True)
+    e38.add_argument("--support-pool", type=Path, required=True)
     e38.add_argument("--candidate-bank-output", type=Path, required=True)
     e38.add_argument("--output", type=Path, required=True)
     e38.add_argument("--processes", type=int, default=24)
@@ -16442,10 +17232,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 0 if result["passed"] else 1
-    if args.command == "qualify-e38":
-        result = run_e38_qualification(
-            args.data_root, args.e25_artifact, args.calibration,
-            args.support_pool_output, args.candidate_bank_output, args.output,
+    if args.command == "qualify-e38-v2":
+        result = run_e38_v2_qualification(
+            args.data_root, args.e25_new_artifact, args.calibration,
+            args.support_pool, args.candidate_bank_output, args.output,
             processes=args.processes,
         )
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))

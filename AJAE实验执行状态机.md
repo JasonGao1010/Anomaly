@@ -1,6 +1,6 @@
 # AJAE 细粒度实验执行状态机
 
-> 当前权威基线：本仓库`main`、本文件记录的全部历史证据、E25-new正式PASS及E26-v2正式PASS。新版normal-control分布下的Phase 2已经关闭，当前进入E38–E44刷新。旧提交`44fd6d13798e826b2cac8371de26a7d17707dadc`只保留为E22-v2时期的历史基线，不再代表当前工作区状态。
+> 当前权威基线：本仓库`main`、本文件记录的全部历史证据、E25-new正式PASS及E26-v2正式PASS。新版normal-control分布下的Phase 2已经关闭，E38-v2已在正式运行前冻结。旧提交`44fd6d13798e826b2cac8371de26a7d17707dadc`只保留为E22-v2时期的历史基线，不再代表当前工作区状态。
 
 > 依据：`AJAE新主线方案.md`。本文件把主线方案中的不可变约束、四个 Decision Gates、B0–B5 对照、正常运动安全、对象尺度诊断、开发纪律与一次性真实 OOD 验证，拆成可顺序执行的细粒度实验节点。
 
@@ -3330,7 +3330,7 @@ PASS要求256/256世界完成且四类身份正确；全部上述错误、hard e
 
 正式运行期间24个worker均参与计算。内存峰值阶段物理可用内存约0.38 GiB，swap最高使用约3.7 GiB，未发生OOM、hard error或持续内存压力；运行结束后物理可用内存恢复到约19 GiB。该资源观测不参与科学PASS/FAIL。
 
-E26-v2 PASS只建立：E25-new选择器接入唯一生产world builder后，在冻结随机流、48次完整world attempt和256个world身份内，可以构造全部E21–E24合法、不可变、control最终可见且距离身份正确的完整世界。它不建立real/control共同支持、来源不可区分性或2.5–50米真实正常分布结论。新版normal-control分布下的Phase 2由此关闭；E27–E37机械资格继续保留，下一节点为E38–E44刷新。
+E26-v2 PASS只建立：E25-new选择器接入唯一生产world builder后，在冻结随机流、48次完整world attempt和256个world身份内，可以构造全部E21–E24合法、不可变、control最终可见且距离身份正确的完整世界。它不建立real/control共同支持、来源不可区分性或2.5–50米真实正常分布结论。新版normal-control分布下的Phase 2由此关闭；E27–E37机械资格继续保留，下一节点E38-v2现已冻结待正式运行。
 
 ## 历史 E26｜旧normal-control分布下的权威 world builder 与完整世界规格确定性
 
@@ -3631,17 +3631,35 @@ PASS：同一 `(world_hash,frame_id,renderer_identity)` 的 XYZI、occupancy、p
 
 # Phase 4｜Gate 1：传感器一致性、严格匹配与反作弊
 
-## Phase 4 统一候选银行
+## Phase 4 当前候选银行分工
 
-在 E38 前冻结 train/201 帧4–681的 support-pool 算法和候选银行。先以256个 paired world seeds生成 real-normal/control/proxy entity-frame units；若 E45 的预定义覆盖不足，按容量阶梯512、1024、2048扩大，选择只读取匹配协变量，禁止读取 E46/E48 分类结果。达到2048仍不足则 E45 scientific FAIL，不得改 caliper。
+在 E38-v2 前冻结 train/201 帧4–681的 support-pool 算法和新版候选银行。E38-v2的real-normal/control/proxy三来源共享候选银行固定为恰好256个paired world seeds，不存在统一三方容量阶梯。后续若E45A-new或E45B-v2的预定义两两匹配覆盖不足，只能分别使用各自独立的两两审计银行，按512→1024→2048扩容；候选选择只读取冻结匹配协变量，禁止读取E46或E48输出。对应的独立两两银行达到2048仍不足时，按E45A-new或E45B-v2的FAIL路由停止，不得改caliper。
 
-201 support pool 使用 E21-v4 同一算法和实际可观察 ground semantics；normal-control support policy保持 E25。所有 Gate 1 单元限定官方2.5–50 m。
+201 support pool 使用 E21-v4 同一算法和实际可观察 ground semantics；normal-control support policy保持 E25-new。所有 Gate 1 单元限定官方2.5–50 m。
 
-E38–E44 的 PASS 表示统计有效、覆盖可用于 E45，不等于分布已经相同；普通差异统一交给 E46。
+E38-v2–E44刷新的 PASS 表示统计有效、覆盖可用于 E45A-new 与 E45B-v2，不等于分布已经相同；普通差异统一交给 E46 和 E48。
 
 ## E38｜per-beam 回波率审计
 
-计算三来源 per-beam opportunity、return count/rate和cluster bootstrap区间；保存每个entity-frame group。PASS：全部有限、计数守恒、real/control/proxy均有非零回波且关键匹配字段可计算、两遍一致。beam差异只描述。PASS → E39。
+计算三来源 per-beam opportunity、return count/rate和cluster bootstrap区间；保存每个entity-frame group。PASS：全部有限、计数守恒、real/control/proxy均有非零回波且关键匹配字段可计算。beam差异只描述。PASS → E39刷新。
+
+### E38-v2｜E25-new分布下的统一候选银行与单次共享渲染
+
+E38-v2精确复用已存在的train/201 E21-v4支撑池`runs/ajae/gate1_201_support_pool.npz`，不重建支撑池。读取前必须核对其SHA-256为`fc3646fbc145cdc29d2cf203835a3e0018bacbc6eaf714e091d21f7b93bfaf50`，并核对train/201帧4–681、中心帧6–679与E21-v4算法身份。201实际非地面回波仍全部进入E23连续SDF碰撞索引，不做空间抽样。
+
+normal-control模板不从任何已缩放的E25对象反向恢复。runner从train/206流式重提取256个未缩放规范模板，核对四类各64个、规范顺序及模板库SHA-256 `de5dfd765ac7d4fe4bb4644c40ecafdd80cdc31a3d0b6fc4fccd8e84a9fd906b`；同时核对E25-new正式产物`runs/ajae/e25_new_normal_control.npz`的SHA-256为`30fc7d1ecd60d005cb18c60ac81b1c7335e2121fcd3f1da5f440b5387a747b19`。E25-new产物只用于身份证明，不作为已缩放shape源。
+
+候选银行继承原256个paired seeds `3800000–3800255`、原real-normal单元选择、原最多48个world attempts和共享五帧身份。第$a$个attempt继续使用`attempt_seed=bank_seed+1,000,003a`；规范模板索引由`default_rng(attempt_seed+1).integers(0,256)`的唯一一次有放回抽样产生，指定距离层固定为该索引对5取模。不增加额外模板抽样，不换模板或距离层。
+
+对当前attempt的模板索引与指定距离层，runner先在完整201支撑池上按E25-new的类别合法语义、距离层与冻结键生成全局top-128支撑流，随后只保留support frame位于real center±2的原顺序子序列。过滤后不重排、不从全局第129项以后补齐。normal-control与anomaly-proxy复用这一支撑行序列，但分别构造独立world，不参与彼此遮挡。
+
+normal-control沿用冻结缩放、姿态和材质流，并通过唯一`place_object`路径执行E21支撑身份、E22连续grounding和E23已观测正常几何碰撞。接受前必须使用完整正式`render_frame`复核至少一个最终可见normal-control回波，且这些回波的中位official range落在模板索引预定义的距离层。anomaly-proxy的schema 7 shape、最多64个shape proposals、E21–E23、材质、姿态、回波和可见性规则保持原E38合同不变。
+
+新版候选银行必须显式保存real-normal、normal-control与anomaly-proxy各自的support semantic，并保存control的canonical template index、assigned range bin、final observed range bin、最终可见回波数、attempt/world/frame/object随机身份和支撑流前缀。产物schema版本固定为`gate1-candidate-bank-v2`；runner必须拒绝旧v1候选银行，不得把旧control、proxy或real trace拼接到v2。
+
+E38-v2仍以entity-frame为cluster，使用固定2,000次multinomial bootstrap、`SeedSequence([3801,2000])`及2.5%/97.5%分位区间。三来源opportunity、return count/rate、关键匹配字段、有限性、守恒性和非零回波PASS判据保持不变；来源间数值差异只报告。同一次权威渲染同时保存E39–E44需要的逐实体帧geometry/accepted/visible counts与distance、逐回波beam/range/intensity，以及两类生成来源逐beam/range的native-empty、geometry、accepted和final-new计数。E39刷新只读该共享trace并独立裁决，不重新渲染。
+
+E38-v2固定使用24个进程、每进程一个数值库线程，只执行一次正式运行，不自动重试，不产生两遍逐元素复现结论。命令冻结为`python -m src.render qualify-e38-v2 --data-root /home/jasongao/Data/STU --e25-new-artifact runs/ajae/e25_new_normal_control.npz --support-pool runs/ajae/gate1_201_support_pool.npz --calibration runs/ajae/calibration.pt --candidate-bank-output runs/ajae/gate1_candidate_bank_v2_256.npz --output runs/ajae/e38_v2_per_beam_return.npz --processes 24`。当前状态为执行合同已冻结、尚未运行；不得填写PASS、FAIL或任何正式结果数字。
 
 ### 历史 E38及统一候选银行正式执行冻结
 
@@ -3666,6 +3684,8 @@ real-normal、normal-control、anomaly-proxy各保存1,280个entity-frame groups
 ## E39｜per-range 回波率审计
 
 固定 bins $[2.5,10),[10,20),[20,30),[30,40),[40,50]$。PASS：三来源计数守恒、有限；每个来源在前四 bins均有entity-frame观测，40–50 m不足只报告；两遍一致。PASS → E40。
+
+当前E39刷新仅在E38-v2 PASS后解锁，并直接读取`runs/ajae/e38_v2_per_beam_return.npz`中的完整共享trace；不重建201支撑池、候选world或任何几何与renderer结果。下述E39执行冻结和正式结果属于旧v1候选银行的历史记录。
 
 ### E39正式执行冻结
 

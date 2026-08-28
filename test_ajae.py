@@ -813,6 +813,201 @@ def test_e25_new_contract_has_one_fixed_template_range_assignment() -> None:
         "--output", "e26-v2.npz",
     ])
     assert e26.processes == 24
+    e38 = render_module._render_parser().parse_args([
+        "qualify-e38-v2",
+        "--data-root", "/data",
+        "--e25-new-artifact", "e25-new.npz",
+        "--support-pool", "support-201.npz",
+        "--calibration", "calibration.pt",
+        "--candidate-bank-output", "gate1-v2.npz",
+        "--output", "e38-v2.npz",
+    ])
+    assert e38.processes == 24
+    assert e38.e25_new_artifact == Path("e25-new.npz")
+    assert e38.support_pool == Path("support-201.npz")
+
+
+def test_gate1_v2_template_draw_and_five_frame_filter_are_frozen(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for attempt_seed in (3_800_000, 4_800_003, 51_800_141):
+        expected = int(
+            np.random.default_rng(attempt_seed + 1).integers(0, 256)
+        )
+        assert render_module._gate1_control_template_assignment(
+            attempt_seed
+        ) == (expected, expected % 5)
+
+    frames = np.asarray((4, 8, 9, 10, 12, 13), dtype=np.int16)
+    context = SimpleNamespace(
+        support_pool=SimpleNamespace(frames=frames)
+    )
+    global_stream = np.asarray((5, 2, 4, 1, 3, 0), dtype=np.int64)
+    monkeypatch.setattr(
+        render_module,
+        "_coverage_control_support_stream",
+        lambda *_: global_stream,
+    )
+    selected = render_module._gate1_control_rows(context, 7, 10, 2, 10)
+    np.testing.assert_array_equal(selected, np.asarray((2, 4, 1, 3)))
+
+
+def test_streaming_control_context_loads_only_requested_frames() -> None:
+    fixture, grid = _small_ray_fixture()
+    frames = {
+        frame_id: make_source_frame(
+            frame_id,
+            fixture.xyzi,
+            fixture.lidar_pose,
+            fixture.labels,
+            partition="train",
+            sequence_id=201,
+        )
+        for frame_id in (0, 1)
+    }
+    pool = QualifiedSupportPool(
+        np.asarray((0, 1)), np.asarray((40, 40), dtype=np.uint16),
+        np.asarray((0, 1)), np.asarray((0, 1)), np.asarray((4.0, 4.0)),
+        np.asarray((0, 1), dtype=np.uint64),
+        np.asarray(((4.0, 0.0, 0.0), (4.0, 0.0, 0.0))),
+        np.asarray(((0.0, 0.0, 1.0), (0.0, 0.0, 1.0))), np.zeros(2),
+    )
+    requested: list[int] = []
+
+    def load(frame_id: int) -> object:
+        requested.append(frame_id)
+        return frames[frame_id]
+
+    context = render_module.build_coverage_control_context(
+        (), pool, grid, SensorCalibration.constant(1.0),
+        frame_loader=load, frame_ids=(0, 1), source_sequence_id=201,
+        trajectory_yaws={0: 0.0, 1: 0.0},
+    )
+    assert context.frames_by_id == {}
+    first = render_module._e25_new_frame_context(context, 0)
+    repeated = render_module._e25_new_frame_context(context, 0)
+    assert first is repeated
+    assert requested == [0]
+    assert context.frames_by_id == {}
+    wrong = render_module.build_coverage_control_context(
+        (), pool, grid, SensorCalibration.constant(1.0),
+        frame_loader=lambda _: frames[1], frame_ids=(0, 1),
+        source_sequence_id=201, trajectory_yaws={0: 0.0, 1: 0.0},
+    )
+    with pytest.raises(render_module.RenderError, match="identity changed"):
+        render_module._e25_new_frame_context(wrong, 0)
+
+
+def test_gate1_v2_loader_rejects_historical_bank_schema(tmp_path: Path) -> None:
+    artifact = tmp_path / "historical-gate1.npz"
+    np.savez_compressed(
+        artifact,
+        metadata_json=np.asarray(json.dumps({
+            "experiment": "Gate1-candidate-bank-v1",
+            "passed": True,
+            "capacity": 256,
+        })),
+    )
+    with pytest.raises(render_module.RenderError, match="not qualified"):
+        render_module._load_gate1_bank(artifact)
+
+
+def test_gate1_trace_uses_the_official_range_offset() -> None:
+    columns = 8
+    azimuth = np.arange(columns, dtype=np.float64) * (-2.0 * np.pi / columns)
+    directions = np.stack(
+        (np.cos(azimuth), np.sin(azimuth), np.zeros(columns)), axis=1
+    )
+    grid = RayGrid(
+        directions, np.zeros(1), azimuth, beam_count=1,
+        official_range_offset_m=0.2,
+    )
+    xyzi = np.zeros((columns, 4), dtype=np.float32)
+    frame = make_source_frame(
+        8, xyzi, np.eye(4), _labels(np.zeros(columns, dtype=np.uint16)),
+        partition="train", sequence_id=201,
+    )
+    vertices = np.asarray([
+        (x_value, y_value, z_value)
+        for x_value in (-0.1, 0.1)
+        for y_value in (-0.2, 0.2)
+        for z_value in (-0.2, 0.2)
+    ])
+    shape = NormalTemplateShape(
+        vertices, np.empty((0, 3), dtype=np.int32),
+        206, 0, 10, 1, (0.0, 0.0, 0.0),
+    )
+    item = render_module.ObjectSpec(
+        1, "normal-control", shape, render_module.MaterialSpec(0.5, 0.2),
+        (9.93, 0.0, 0.0),
+        ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0)),
+    )
+    world = WorldSpec(3_800_000, 201, (item,))
+    geometry, accepted, distance, rendered = (
+        render_module._gate1_single_object_trace(
+            frame, world, grid, SensorCalibration.constant(1.0)
+        )
+    )
+    returned = np.asarray(rendered.normal_control_mask)
+    assert geometry[0] and accepted[0] and returned[0]
+    assert distance[0] == pytest.approx(10.03, abs=1.0e-10)
+    assert render_module._gate1_range_bin(distance)[0] == 1
+    rendered_range = np.asarray(grid.official_ranges(rendered.source))[returned]
+    assert rendered_range[0] == pytest.approx(10.03, abs=1.0e-6)
+
+
+def test_e38_shared_trace_contract_cross_checks_all_count_views() -> None:
+    _, grid = _small_ray_fixture()
+    units = tuple(
+        SimpleNamespace(bank_seed=3_800_000 + index, center_frame=10)
+        for index in range(256)
+    )
+    seeds = np.broadcast_to(
+        np.arange(3_800_000, 3_800_256, dtype=np.int64)[:, None, None],
+        (256, 3, 5),
+    ).copy()
+    sources = np.broadcast_to(
+        np.arange(3, dtype=np.uint8)[None, :, None], (256, 3, 5)
+    ).copy()
+    frames = np.broadcast_to(
+        np.arange(8, 13, dtype=np.int16)[None, None, :], (256, 3, 5)
+    ).copy()
+    trace = {
+        "bank_seed": seeds, "source": sources, "frame_id": frames,
+        "support_semantic": np.full((256, 3, 5), 40, dtype=np.uint16),
+        "opportunity": np.zeros((256, 3, 5, 1), dtype=np.int32),
+        "return_count": np.zeros((256, 3, 5, 1), dtype=np.int32),
+        "median_distance_m": np.zeros((256, 3, 5)),
+        "median_beam": np.zeros((256, 3, 5)),
+        "range_opportunity": np.zeros((256, 3, 5, 5), dtype=np.int32),
+        "range_return_count": np.zeros((256, 3, 5, 5), dtype=np.int32),
+        "geometry_hits": np.zeros((256, 3, 5), dtype=np.int32),
+        "accepted_hits": np.zeros((256, 3, 5), dtype=np.int32),
+        "visible_returns": np.zeros((256, 3, 5), dtype=np.int32),
+        "visible_distance_m": np.zeros((256, 3, 5)),
+        "empty_slots": np.zeros((256, 2, 5, 1), dtype=np.int32),
+        "empty_geometry": np.zeros((256, 2, 5, 1, 5), dtype=np.int32),
+        "empty_accepted": np.zeros((256, 2, 5, 1, 5), dtype=np.int32),
+        "empty_final_new": np.zeros((256, 2, 5, 1, 5), dtype=np.int32),
+        "intensity_source": np.asarray((1,), dtype=np.uint8),
+        "intensity_bank_seed": np.asarray((3_800_000,), dtype=np.int64),
+        "intensity_frame": np.asarray((8,), dtype=np.int16),
+        "intensity_slot": np.asarray((0,), dtype=np.int32),
+        "intensity_beam": np.asarray((0,), dtype=np.int16),
+        "intensity_official_range_m": np.asarray((5.0,)),
+        "intensity_range_bin": np.asarray((0,), dtype=np.int8),
+        "intensity_value": np.asarray((0.5,), dtype=np.float32),
+    }
+    trace["opportunity"][0, 1, 0, 0] = 1
+    trace["return_count"][0, 1, 0, 0] = 1
+    trace["range_opportunity"][0, 1, 0, 0] = 1
+    trace["range_return_count"][0, 1, 0, 0] = 1
+    trace["geometry_hits"][0, 1, 0] = 1
+    trace["accepted_hits"][0, 1, 0] = 1
+    trace["visible_returns"][0, 1, 0] = 1
+    assert render_module._e38_trace_contract_errors(trace, grid, units) == 0
+    trace["range_return_count"][0, 1, 0, 0] = 0
+    assert render_module._e38_trace_contract_errors(trace, grid, units) > 0
 
 
 def test_e26_manifest_audit_does_not_reclassify_finite_sampling_exhaustion() -> None:

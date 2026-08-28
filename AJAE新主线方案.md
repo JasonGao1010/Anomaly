@@ -1,6 +1,6 @@
 # AJAE 主线方案
 
-> 当前权威基线：本仓库`main`、本文记录的全部历史证据、E25-new正式PASS及E26-v2正式PASS。新版normal-control分布下的Phase 2已经关闭，当前进入E38–E44刷新。旧提交`44fd6d13798e826b2cac8371de26a7d17707dadc`只保留为E22-v2时期的历史基线，不再代表当前工作区状态。
+> 当前权威基线：本仓库`main`、本文记录的全部历史证据、E25-new正式PASS及E26-v2正式PASS。新版normal-control分布下的Phase 2已经关闭，E38-v2已在正式运行前冻结。旧提交`44fd6d13798e826b2cac8371de26a7d17707dadc`只保留为E22-v2时期的历史基线，不再代表当前工作区状态。
 
 ---
 
@@ -1820,7 +1820,7 @@ $$
 
 ---
 
-# 18. 当前状态（当前工作区：E25-new与E26-v2正式PASS，当前刷新E38–E44）
+# 18. 当前状态（当前工作区：E25-new与E26-v2正式PASS，E38-v2冻结待运行）
 
 截至当前工作区权威提交，已经完成：
 
@@ -1873,9 +1873,17 @@ E37已正式通过：128个固定世界的9类slot对齐输出在串行/24进程
 
 以下E38–E44、E45A和E45B结果均使用旧normal-control分布，只作为历史证据保留。E25-new现已形成新版正式control分布，这些control依赖结论已经失效，必须按当前路线刷新E38–E44并执行E45A-new和E45B-v2；旧E45B PASS不再满足当前E48前置资格。
 
-E38及其统一候选银行已经冻结：train/201帧4–681使用E21-v4同一支撑区域算法；首级候选银行使用256个paired seeds，每个seed分别生成独立正常对照世界与异常代理世界，并绑定同一真实正常实体五帧单位。E38保存三来源逐entity-frame、逐beam的opportunity、return count/rate和2,000次cluster bootstrap区间。实现通过46项完整回归，正式构建与统计尚未产生结果。
+E38-v2已冻结为新版control分布下的统一Gate 1候选银行与单次共享渲染。train/201帧4–681的既有E21-v4支撑池不重建，但读取前必须精确核对SHA-256 `fc3646fbc145cdc29d2cf203835a3e0018bacbc6eaf714e091d21f7b93bfaf50`与帧、算法身份。runner从train/206流式重提取四类各64个、共256个未缩放规范模板，核对模板库SHA-256 `de5dfd765ac7d4fe4bb4644c40ecafdd80cdc31a3d0b6fc4fccd8e84a9fd906b`，并核对E25-new正式产物`runs/ajae/e25_new_normal_control.npz`的SHA-256 `30fc7d1ecd60d005cb18c60ac81b1c7335e2121fcd3f1da5f440b5387a747b19`。该E25-new产物只用于身份核对，不作为已缩放模板源。
 
-E38已正式通过：201支撑池包含1,193,969个合格区域；256/256候选seed完成并覆盖183个中心帧。三来源各1,280个entity-frame groups的逐beam opportunity、return count/rate和cluster bootstrap区间全部有限且计数守恒，两遍24进程逐元素一致。E38关闭，E39解锁；逐beam来源差异没有在本节点转化为来源泄漏结论。
+E38-v2完整继承256个paired seeds `3800000–3800255`、real-normal单位选择、共享五帧身份、每world最多48个确定attempt与既有`attempt_seed=bank_seed+1,000,003a`。这个三来源共享候选银行固定为恰好256个单位，不设统一三方容量阶梯。每个attempt只调用一次`default_rng(attempt_seed+1).integers(0,256)`有放回抽取规范模板索引i，该control的指定距离层固定为i对5取模。runner先对完整201支撑池生成该模板与距离层的E25-new全局top-128流，再只保留support frame在real center±2内的原顺序子序列；不重排，不用全局第129项之后的行补齐。control与proxy复用该行序列，但各自位于独立反事实world。
+
+normal-control继续执行E21支撑身份、E22连续grounding和E23已观测正常几何碰撞；只有完整正式renderer复核得到至少一个最终可见control回波，且其中位official range属于预分配距离层时才能接受。anomaly-proxy的schema 7、shape proposal、放置、材质、姿态和渲染规则保持不变。新候选银行保存三来源各自的support semantic，以及control模板索引、指定与最终距离层、最终观测和完整随机身份。新schema为`gate1-candidate-bank-v2`，旧v1候选银行必须拒绝，不得混用旧trace。
+
+E38-v2的逐beam opportunity、return count/rate、entity-frame聚类、2,000次multinomial bootstrap、`SeedSequence([3801,2000])`、2.5%/97.5%区间与有限、守恒、三来源非零回波PASS判据均不变。单次权威渲染同时保存E39–E44需要的完整原始trace；E39及后续节点只读共享trace各自裁决，不重新计算几何或渲染。E38-v2使用24个进程、每进程数值库单线程，只正式运行一次，不自动重试。新候选银行与E38产物分别为`runs/ajae/gate1_candidate_bank_v2_256.npz`与`runs/ajae/e38_v2_per_beam_return.npz`；当前只有冻结合同，尚无正式结果。若后续两两共同支持不足，E45A-new与E45B-v2只能各自使用独立审计银行按512→1024→2048扩容；候选选择只读取冻结匹配协变量，不读取E46或E48输出。
+
+历史E38-v1及其统一候选银行当时冻结为：train/201帧4–681使用E21-v4同一支撑区域算法；首级候选银行使用256个paired seeds，每个seed分别生成独立正常对照世界与异常代理世界，并绑定同一真实正常实体五帧单位。E38-v1保存三来源逐entity-frame、逐beam的opportunity、return count/rate和2,000次cluster bootstrap区间。
+
+历史E38-v1已正式通过：201支撑池包含1,193,969个合格区域；256/256候选seed完成并覆盖183个中心帧。三来源各1,280个entity-frame groups的逐beam opportunity、return count/rate和cluster bootstrap区间全部有限且计数守恒，两遍24进程逐元素一致。该PASS只适用于旧normal-control分布；逐beam来源差异没有在本节点转化为来源泄漏结论。
 
 E39已冻结并直接复用E38候选银行。正式渲染将保存五个距离箱的三来源opportunity与return count，并同时生成E40–E44复用的逐实体帧原始trace；这只消除重复几何计算，不合并各实验的独立裁决。实现已通过46项完整回归，E39正式结果尚未产生。
 
@@ -1949,7 +1957,7 @@ E26-v2已经在冻结实现提交`38079213a0801bf3a279414a8b120bfd24e1cd1b`上�
 
 正式产物`runs/ajae/e26_v2_world_builder.npz`大小1,033,953字节，SHA-256为`2653f705d2e890d99cda732a7a00387b5621cd05abb9c4681c7a9f284c34363c`，科学数组哈希为`5766cda5820eb3281c0f9e13c64d2746ffdc120ce4543f32fa6c2c71cf1d4f97`。独立只读复核重算科学哈希、world/report规范JSON、world hash、request manifest、control observation和proposal守恒，所有比较错误均为0；它没有重采world，不构成第二遍正式运行。当前64个anomaly-only世界与历史E26产物的world/report、165个proxy对象、shape proposal和支撑proposal内容逐项完全相同，只有绑定当前renderer源码身份的request manifest发生预期变化。
 
-因此E26-v2只建立新版选择器接入唯一生产world builder后的完整世界可采样性、实体合法性、不可变身份及control最终可见/距离身份；它不建立real/control共同支持、来源不可区分性或真实正常距离分布。新版normal-control分布下的Phase 2由此关闭，E27–E37机械资格继续保留，当前进入E38–E44刷新。
+因此E26-v2只建立新版选择器接入唯一生产world builder后的完整世界可采样性、实体合法性、不可变身份及control最终可见/距离身份；它不建立real/control共同支持、来源不可区分性或真实正常距离分布。新版normal-control分布下的Phase 2由此关闭，E27–E37机械资格继续保留；E38-v2现已冻结待正式运行。
 
 这里的距离循环是用于构造反作弊正常对照的覆盖导向采样，不是对真实正常场景距离分布的估计。每个45度方位扇区的总体与分类别计数、最大扇区计数和占比，以及遮挡层与$N_{vis}$分布均只作描述。
 
@@ -1969,22 +1977,22 @@ E26-v2已经在冻结实现提交`38079213a0801bf3a279414a8b120bfd24e1cd1b`上�
 当前执行节点为：
 
 $$
-\boxed{E25\text{-v2/v3 FAIL RETAINED};\quad E25\text{-new PASS};\quad E26\text{-v2 PASS}}
+\boxed{E25\text{-new PASS};\quad E26\text{-v2 PASS};\quad E38\text{-v2 FROZEN}}
 $$
 
 E23与E24-v2已按冻结设计通过，当前顺序为：
 
 $$
-\text{E38--E44 control-side refresh}\rightarrow
+E38\text{-v2}\rightarrow\text{E39--E44 control-side refresh}\rightarrow
 \{E45A\text{-new},E45B\text{-v2}\}
 $$
 
-E27–E37的纯机械资格继续保留；E36-v1、E45-v1、E45-v2、E45A、E45A-v2、E25-v2和E25-v3 normal-control FAIL均保留。旧E45B已PASS，但只资格旧normal-control分布；新版正式control分布必须重新执行E45B-v2。$D_{xy}+\alpha$路线和E25-v3逐对象五维条件复制路线均已终止。E25-new与E26-v2已经PASS，当前依次进入依赖新版control分布的E38–E44刷新、E45A-new与E45B-v2。E46和E48继续锁定。
+E27–E37的纯机械资格继续保留；E36-v1、E45-v1、E45-v2、E45A、E45A-v2、E25-v2和E25-v3 normal-control FAIL均保留。旧E45B已PASS，但只资格旧normal-control分布；新版正式control分布必须重新执行E45B-v2。$D_{xy}+\alpha$路线和E25-v3逐对象五维条件复制路线均已终止。E25-new与E26-v2已经PASS，E38-v2已冻结待正式运行；其后依次为E39–E44刷新、E45A-new与E45B-v2。E46和E48继续锁定。
 
 因此当前整体判断仍是：
 
 $$
-\boxed{\text{E26-v2正式PASS；当前刷新E38--E44}}
+\boxed{\text{E38-v2执行合同已冻结；当前待正式运行}}
 $$
 
 不能写成“AJAE 方法已经验证”或“剩余只需训练”。
