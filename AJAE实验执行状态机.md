@@ -3689,9 +3689,13 @@ real-normal、normal-control、anomaly-proxy各保存1,280个entity-frame groups
 
 ## E39｜per-range 回波率审计
 
-固定 bins $[2.5,10),[10,20),[20,30),[30,40),[40,50]$。PASS：三来源计数守恒、有限；每个来源在前四 bins均有entity-frame观测，40–50 m不足只报告；两遍一致。PASS → E40。
+固定 bins $[2.5,10),[10,20),[20,30),[30,40),[40,50]$。PASS：三来源计数守恒、有限；每个来源在前四 bins均有entity-frame观测，40–50 m不足只报告。PASS → E40。
 
-当前E39刷新仅在E38-v2 PASS后解锁，并直接读取`runs/ajae/e38_v2_per_beam_return.npz`中的完整共享trace；不重建201支撑池、候选world或任何几何与renderer结果。下述E39执行冻结和正式结果属于旧v1候选银行的历史记录。
+### E39-v2刷新执行冻结
+
+E39-v2已经由E38-v2 PASS解锁，只读取SHA-256固定为`914b185ae31d5509fa286208c26bb4271460d289a02ec398eaee715b7eeb7c9a`的`runs/ajae/e38_v2_per_beam_return.npz`完整共享trace。runner核对E38-v2的PASS、科学数组哈希与共享trace身份后，直接聚合冻结五个距离层的opportunity、return count/rate和非零return entity-frame groups；不读取STU数据、不重建支撑池或候选world、不重新计算几何或renderer。E39-v2只正式执行一次，不做第二遍复现。正式命令固定为`python -m src.render qualify-e39-v2 --e38-artifact runs/ajae/e38_v2_per_beam_return.npz --output runs/ajae/e39_v2_per_range_return.npz`。PASS条件保持计数守恒、全部聚合率与逐实体帧可见距离有限、三来源前四距离层各至少一个非零return entity-frame group；40–50米只报告。
+
+下述E39执行冻结和正式结果属于旧v1候选银行的历史记录。
 
 ### E39正式执行冻结
 

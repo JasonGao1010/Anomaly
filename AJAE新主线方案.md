@@ -1887,7 +1887,7 @@ E38-v2已经正式PASS。新版候选银行完成256/256个paired seeds，错误
 
 历史E38-v1已正式通过：201支撑池包含1,193,969个合格区域；256/256候选seed完成并覆盖183个中心帧。三来源各1,280个entity-frame groups的逐beam opportunity、return count/rate和cluster bootstrap区间全部有限且计数守恒，两遍24进程逐元素一致。该PASS只适用于旧normal-control分布；逐beam来源差异没有在本节点转化为来源泄漏结论。
 
-E39已冻结并直接复用E38候选银行。正式渲染将保存五个距离箱的三来源opportunity与return count，并同时生成E40–E44复用的逐实体帧原始trace；这只消除重复几何计算，不合并各实验的独立裁决。实现已通过46项完整回归，E39正式结果尚未产生。
+E39-v2刷新已冻结并由E38-v2 PASS解锁。它只读取SHA-256为`914b185ae31d5509fa286208c26bb4271460d289a02ec398eaee715b7eeb7c9a`的E38-v2共享trace，直接聚合五个距离箱的三来源opportunity、return count/rate和非零return entity-frame groups，不重新读取STU数据、构造世界、计算几何或渲染。正式命令为`python -m src.render qualify-e39-v2 --e38-artifact runs/ajae/e38_v2_per_beam_return.npz --output runs/ajae/e39_v2_per_range_return.npz`；只运行一次，不声明第二遍复现。
 
 E39已正式通过：三来源在2.5–10、10–20、20–30和30–40米均有非零return entity-frame覆盖，逐实体帧计数守恒错误0、非有限值0，两遍逐元素一致；三来源在40–50米均无观测，按冻结规则仅报告。共享trace已保存1,656,861条逐返回强度及E40–E44所需计数。E39关闭，E40解锁。
 

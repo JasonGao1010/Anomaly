@@ -60,6 +60,9 @@ FROZEN_E25_NEW_ARTIFACT_SHA256 = (
 FROZEN_GATE1_SUPPORT_POOL_SHA256 = (
     "fc3646fbc145cdc29d2cf203835a3e0018bacbc6eaf714e091d21f7b93bfaf50"
 )
+FROZEN_E38_V2_ARTIFACT_SHA256 = (
+    "914b185ae31d5509fa286208c26bb4271460d289a02ec398eaee715b7eeb7c9a"
+)
 SUPPORT_POOL_SEMANTICS = (40, 48, 49)
 CALIBRATION_FORMAT = "ajae-sensor-calibration-v4"
 DEVELOPMENT_FORMAT = "ajae-development-worlds-v2"
@@ -15023,72 +15026,55 @@ def _load_gate1_bank(path: Path | str) -> tuple[_Gate1BankUnit, ...]:
 
 
 def run_e39_qualification(
-    data_root: Path | str, candidate_bank_path: Path | str,
-    calibration_path: Path | str, output_path: Path | str, *, processes: int = 24,
+    e38_artifact_path: Path | str, output_path: Path | str,
 ) -> dict[str, object]:
-    """Generate the shared Gate 1 trace and qualify frozen per-range rates."""
-    if processes != 24:
-        raise RenderError("formal E39 requires exactly 24 processes")
-    try:
-        from .protocol import load_protocol
-        from .scene import LabelMode, STUSequence
-    except ImportError:
-        from protocol import load_protocol  # type: ignore[no-redef]
-        from scene import LabelMode, STUSequence  # type: ignore[no-redef]
-    protocol = load_protocol(Path(__file__).resolve().parents[1] / "protocol.json")
-    sequence = STUSequence.open(
-        data_root, protocol=protocol, partition="train", sequence_id=201,
-        label_mode=LabelMode.REQUIRED,
-    )
-    ray_grid, sensor = load_sensor_calibration(calibration_path)
-    global _GATE1_SEQUENCE, _GATE1_RAY_GRID, _GATE1_SENSOR, _E38_BANK
-    _GATE1_SEQUENCE = sequence
-    _GATE1_RAY_GRID = ray_grid
-    _GATE1_SENSOR = sensor
-    _E38_BANK = _load_gate1_bank(candidate_bank_path)
-    context = mp.get_context("fork")
-    fixed = {
-        "bank_seed", "source", "frame_id", "support_semantic", "range_opportunity",
-        "range_return_count", "geometry_hits", "accepted_hits", "visible_returns",
-        "visible_distance_m", "empty_slots", "empty_geometry", "empty_accepted",
-        "empty_final_new",
-    }
-    runs: list[dict[str, np.ndarray]] = []
-    run_seconds: list[float] = []
-    for _ in range(2):
-        started = time.monotonic()
-        with context.Pool(processes=processes) as workers:
-            records = workers.map(_e39_worker, range(256), chunksize=1)
-        runs.append({
-            name: (
-                np.stack([record[name] for record in records])
-                if name in fixed else np.concatenate([record[name] for record in records])
-            )
-            for name in records[0]
-        })
-        run_seconds.append(time.monotonic() - started)
-    first = runs[0]
-    reproduced = all(np.array_equal(first[name], runs[1][name]) for name in first)
-    opportunity = first["range_opportunity"].sum(axis=(0, 2))
-    returned = first["range_return_count"].sum(axis=(0, 2))
+    """Qualify per-range rates by reading the frozen E38-v2 shared trace."""
+
+    source = Path(e38_artifact_path).expanduser().resolve(strict=True)
+    if _sha256_path(source) != FROZEN_E38_V2_ARTIFACT_SHA256:
+        raise RenderError("E39-v2 E38-v2 shared trace identity changed")
+    with np.load(source, allow_pickle=False) as payload:
+        metadata = json.loads(str(payload["metadata_json"]))
+        trace = {
+            name: np.asarray(payload[name])
+            for name in payload.files if name != "metadata_json"
+        }
+    if (
+        metadata.get("experiment") != "E38-v2"
+        or metadata.get("passed") is not True
+        or metadata.get("scientific_array_hash") != _scientific_array_hash(trace)
+        or metadata.get("shared_trace_for_E39_E44") is not True
+    ):
+        raise RenderError("E39-v2 requires the qualified E38-v2 shared trace")
+    started = time.monotonic()
+    opportunity = trace["range_opportunity"].sum(axis=(0, 2))
+    returned = trace["range_return_count"].sum(axis=(0, 2))
     rate = np.divide(returned, opportunity, out=np.zeros_like(returned, dtype=np.float64), where=opportunity > 0)
-    conservation_errors = int(np.count_nonzero(first["range_return_count"] > first["range_opportunity"]))
-    observation_groups = np.count_nonzero(first["range_return_count"] > 0, axis=(0, 2))
+    conservation_errors = int(np.count_nonzero(
+        trace["range_return_count"] > trace["range_opportunity"]
+    ))
+    observation_groups = np.count_nonzero(
+        trace["range_return_count"] > 0, axis=(0, 2)
+    )
     finite_errors = int(
         np.count_nonzero(~np.isfinite(rate))
-        + np.count_nonzero(~np.isfinite(first["visible_distance_m"]))
+        + np.count_nonzero(~np.isfinite(trace["visible_distance_m"]))
     )
     first_four_coverage_errors = int(np.count_nonzero(observation_groups[:, :4] == 0))
-    passed = conservation_errors == 0 and finite_errors == 0 and first_four_coverage_errors == 0 and reproduced
+    passed = (
+        conservation_errors == 0
+        and finite_errors == 0
+        and first_four_coverage_errors == 0
+    )
     scientific = {
-        **first, "range_edges_m": _GATE1_RANGE_EDGES,
+        **trace, "range_edges_m": _GATE1_RANGE_EDGES,
         "source_range_opportunity": opportunity,
         "source_range_return_count": returned,
         "source_range_return_rate": rate,
         "source_range_entity_frame_groups": observation_groups,
     }
     result = {
-        "experiment": "E39", "passed": passed, "bank_seeds": 256,
+        "experiment": "E39-v2", "passed": passed, "bank_seeds": 256,
         "entity_frame_groups_per_source": 1280,
         "range_edges_m": _GATE1_RANGE_EDGES.tolist(),
         "source_range_opportunity": opportunity.tolist(),
@@ -15096,8 +15082,11 @@ def run_e39_qualification(
         "source_range_entity_frame_groups": observation_groups.tolist(),
         "conservation_errors": conservation_errors, "finite_errors": finite_errors,
         "first_four_coverage_errors": first_four_coverage_errors,
-        "elementwise_reproduced": reproduced, "run_seconds": run_seconds,
-        "processes": processes, "scientific_array_hash": _scientific_array_hash(scientific),
+        "formal_repetitions": 1, "elementwise_reproduced": None,
+        "reproducibility_check": "not_run_by_owner_decision",
+        "input_e38_v2_sha256": FROZEN_E38_V2_ARTIFACT_SHA256,
+        "run_seconds": [time.monotonic() - started],
+        "scientific_array_hash": _scientific_array_hash(scientific),
     }
     destination = Path(output_path).expanduser().resolve()
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -17054,12 +17043,9 @@ def _render_parser() -> argparse.ArgumentParser:
     e38.add_argument("--candidate-bank-output", type=Path, required=True)
     e38.add_argument("--output", type=Path, required=True)
     e38.add_argument("--processes", type=int, default=24)
-    e39 = subcommands.add_parser("qualify-e39")
-    e39.add_argument("--data-root", type=Path, required=True)
-    e39.add_argument("--candidate-bank", type=Path, required=True)
-    e39.add_argument("--calibration", type=Path, required=True)
+    e39 = subcommands.add_parser("qualify-e39-v2")
+    e39.add_argument("--e38-artifact", type=Path, required=True)
     e39.add_argument("--output", type=Path, required=True)
-    e39.add_argument("--processes", type=int, default=24)
     e40 = subcommands.add_parser("qualify-e40")
     e40.add_argument("--e39-artifact", type=Path, required=True)
     e40.add_argument("--calibration", type=Path, required=True)
@@ -17240,10 +17226,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 0 if result["passed"] else 1
-    if args.command == "qualify-e39":
+    if args.command == "qualify-e39-v2":
         result = run_e39_qualification(
-            args.data_root, args.candidate_bank, args.calibration, args.output,
-            processes=args.processes,
+            args.e38_artifact, args.output,
         )
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 0 if result["passed"] else 1
