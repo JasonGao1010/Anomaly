@@ -1909,6 +1909,8 @@ E43-v2已经正式PASS。window身份、重复请求、变化率有限性和定�
 
 E44-v2刷新已冻结。它只读取E39-v2共享trace，沿用既有遮挡率定义、三层边界、零分母无效策略及support×range×遮挡共同支持判据，不重新渲染；正式命令为`python -m src.render qualify-e44-v2 --e39-artifact runs/ajae/e39_v2_per_range_return.npz --output runs/ajae/e44_v2_occlusion_strata.npz`，只运行一次。
 
+E44-v2已经正式PASS。normal-control与anomaly-proxy均覆盖全部三个遮挡层，三来源共有12个support semantic×range bin×遮挡共同非空层；定义、计数、覆盖和初步匹配错误均为0，17个proxy零分母单元按冻结规则显式保留为无效。单次统计用时0.000673秒，科学数组哈希为`cc874669d7e61732e894f1c9993fa97ac10a2a649f6111465ad34d618c1c4e03`，产物SHA-256为`49880d3b48024a20fe1c2a3155424daf29e8690407dd56437b894097ce464695`。E44关闭，E45A-new与E45B-v2解锁。
+
 E39已正式通过：三来源在2.5–10、10–20、20–30和30–40米均有非零return entity-frame覆盖，逐实体帧计数守恒错误0、非有限值0，两遍逐元素一致；三来源在40–50米均无观测，按冻结规则仅报告。共享trace已保存1,656,861条逐返回强度及E40–E44所需计数。E39关闭，E40解锁。
 
 E40已正式通过：1,656,861条强度记录的身份、分箱、有限性与E39计数回算错误均为0；两类生成来源的206冻结支持越界和上下界clipping均为0，两遍统计逐元素一致。E40关闭，E41解锁；条件分布差异继续只作描述。
