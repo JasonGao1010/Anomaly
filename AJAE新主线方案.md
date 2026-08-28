@@ -1915,7 +1915,7 @@ E45A-v2作为Gate 1审计专用定向control银行完整执行至每目标64个p
 
 接受项的最大锚点—凸包距离为2.288462米，最大距离/中心半径为1.247676，逐项满足$1.25R(d)$。person只保留4/234，40–50米总体只保留20/117；该分布边界不改变运行前总体覆盖PASS，但限制后续主张，不能写成每个类别都覆盖完整距离和遮挡范围。E25-v3可信局部支撑定义已经关闭，当前进入3,267目标的正式target bank重建与normal-control重跑。
 
-E25-v3目标库与normal-control资格实现已经按上述唯一规则冻结，尚未正式运行。目标库只按原顺序保留3,267个`compatible=true`身份，所有真实观测字段逐元素继承；旧参考支撑行由资格产物的唯一所选E21-v4行替换。正式normal-control继续使用原256个模板、seed 2,500,000–2,500,255、128×128提议上限、缩放/姿态/材质流、E22–E24、renderer和E45A五项caliper；runner只读取冻结目标库，不再包含旧无上限最近邻提取路径。目标库构建完成后才执行一次12进程正式资格。
+E25-v3目标库已在运行前提交`be0a8f7`下完成确定性重建并通过独立复核。新库按原顺序保留3,267个`compatible=true`身份，17个非支撑字段全部逐元素继承；两个支撑字段与资格产物逐元素一致，E21-v4行范围、语义、类别规则和帧偏移错误均为0。产物`runs/ajae/e25_v3_real_targets.npz`大小6,800,894字节，SHA-256为`0ae2f4926f1cb8a71b04af3d43d3d1d9feb17bb36fed821bab42b531cae3a360`，科学数组哈希为`16d75e67995bd216e3f802a6a32a19b0faecc9bfa841c6a680b01f13f6a8cf44`。正式normal-control继续使用原256个模板、seed 2,500,000–2,500,255、128×128提议上限、缩放/姿态/材质流、E22–E24、renderer和E45A五项caliper；runner只读取冻结目标库，不再包含旧无上限最近邻提取路径。下一步执行一次12进程正式资格。
 
 当前可成立的局部结论是：
 
@@ -1931,7 +1931,7 @@ E25-v3目标库与normal-control资格实现已经按上述唯一规则冻结，
 当前执行节点为：
 
 $$
-\boxed{E25\text{-v2 FAIL RETAINED};\quad E25\text{-v3 TARGET QUALIFICATION PASS};\quad TARGET\ BANK/CONTROL\ RUNS\ NEXT}
+\boxed{E25\text{-v2 FAIL RETAINED};\quad E25\text{-v3 TARGET BANK PASS};\quad CONTROL\ RUN\ NEXT}
 $$
 
 E23与E24-v2已按冻结设计通过，当前顺序进入：
@@ -1940,7 +1940,7 @@ $$
 E23\rightarrow E24\rightarrow E25\rightarrow E26
 $$
 
-E27–E44已关闭；E36-v1、E45-v1、E45-v2、E45A、E45A-v2和E25-v2 FAIL均保留。旧E45B已PASS，但只资格旧normal-control分布；任何新版正式control分布必须重新执行E45B-v2。$D_{xy}+\alpha$路线已经终止；E25-v3可信局部支撑目标资格已经PASS，定义不再调整。当前开始重建3,267目标的E25-v3 target bank，normal-control尚未重跑，E26-v2、E46和E48保持锁定。
+E27–E44已关闭；E36-v1、E45-v1、E45-v2、E45A、E45A-v2和E25-v2 FAIL均保留。旧E45B已PASS，但只资格旧normal-control分布；任何新版正式control分布必须重新执行E45B-v2。$D_{xy}+\alpha$路线已经终止；E25-v3可信局部支撑目标资格与3,267行目标库重建已经PASS，定义不再调整。当前下一项是E25-v3 normal-control正式资格，E26-v2、E46和E48保持锁定。
 
 因此当前整体判断仍是：
 

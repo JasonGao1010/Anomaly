@@ -2148,7 +2148,7 @@
             "downstream": "PASS permits replacing the sole production normal-control position selector and then running E26-v2; FAIL keeps E26-v2 and E46 locked and requires owner decision"
           },
           "E25-v3": {
-            "status": "D_xy plus alpha route abandoned; final E25-v3 local-support target qualification PASS; target-bank rebuild and revised normal-control qualification frozen but not run",
+            "status": "D_xy plus alpha route abandoned; final E25-v3 local-support target qualification PASS; E25-v3 target bank built and validated; revised normal-control qualification next",
             "historical_results_retained": ["E25 PASS", "E25-v2 FAIL"],
             "failure_classification_inherited": "E25-v2 is a qualification specification defect and does not adjudicate the normal-control construct",
             "unchanged_support_semantics": {"vehicle_like": [40], "person_rider_like": [40, 48]},
@@ -2319,7 +2319,7 @@
               "claim_limit": "PASS is aggregate over the retained target bank. Person retains only 4 targets in one range and occlusion stratum; truck and other-vehicle have additional empty class-specific strata. No per-class full-range or full-occlusion claim is permitted."
             },
             "target_bank_build": {
-              "status": "frozen; not run",
+              "status": "PASS; built and independently validated",
               "source_target_bank": "runs/ajae/e25_v2_real_targets.npz",
               "source_target_bank_role": "identity and real-observation fields only; old support_semantic and reference_support_pool_index are discarded",
               "target_qualification": "runs/ajae/e25_v3_target_qualification.npz",
@@ -2329,10 +2329,14 @@
               "integrity": "verify both internal scientific hashes, qualification-to-source SHA binding, seven aligned identity/covariate arrays, compatible equals rejection_code zero, sentinels and legal support semantics",
               "pass_conditions": ["3267 target rows", "423 frames", "37 real semantic-instance identities", "class counts 2830/333/100/4", "range counts 861/1532/552/302/20", "occlusion counts 787/2363/117", "all inherited non-support fields remain elementwise identical"],
               "formal_repetitions": 1,
-              "command": "python -m src.render build-e25-v3-target-bank --source-target-bank runs/ajae/e25_v2_real_targets.npz --target-qualification runs/ajae/e25_v3_target_qualification.npz --output runs/ajae/e25_v3_real_targets.npz"
+              "command": "python -m src.render build-e25-v3-target-bank --source-target-bank runs/ajae/e25_v2_real_targets.npz --target-qualification runs/ajae/e25_v3_target_qualification.npz --output runs/ajae/e25_v3_real_targets.npz",
+              "pre_run_commit": "be0a8f7",
+              "result": {"target_units": 3267, "center_frames": 423, "real_instances": 37, "class_count": {"car_10": 2830, "truck_18": 333, "other_vehicle_20": 100, "person_30": 4}, "range_count": [861, 1532, 552, 302, 20], "occlusion_layer_count": [787, 2363, 117], "support_semantic_count": {"road_40": 3267, "sidewalk_48": 0}},
+              "artifact": {"path": "runs/ajae/e25_v3_real_targets.npz", "bytes": 6800894, "sha256": "0ae2f4926f1cb8a71b04af3d43d3d1d9feb17bb36fed821bab42b531cae3a360", "scientific_array_sha256": "16d75e67995bd216e3f802a6a32a19b0faecc9bfa841c6a680b01f13f6a8cf44"},
+              "independent_validation": "all 3267 rows preserve source order; every non-support field equals the compatible source subset elementwise; both support fields equal the qualification selection; support rows are in range and match E21-v4 semantics and frozen frame offsets; all aggregate counts and the scientific hash reproduce exactly"
             },
             "normal_control_qualification": {
-              "status": "frozen; target bank not yet built; not run",
+              "status": "frozen; target bank built; formal run next",
               "input_target_bank": "runs/ajae/e25_v3_real_targets.npz",
               "output": "runs/ajae/e25_v3_normal_control.npz",
               "fixtures": 256,
@@ -2351,7 +2355,7 @@
               "pass_route": "replace the sole production normal-control selector, execute E26-v2 and rerun distribution-dependent E38-E45A plus E45B-v2 before E46/E48",
               "failure_route": "retain the formal FAIL and stop at E25-v3 for a new owner decision without changing the target rule, proposal limits or calipers"
             },
-            "next_required_state": "build and validate the frozen E25-v3 target bank, then execute the frozen E25-v3 normal-control qualification",
+            "next_required_state": "execute the frozen E25-v3 normal-control qualification",
             "downstream": "E26-v2, E46 and E48 remain locked"
           },
           "E26": {

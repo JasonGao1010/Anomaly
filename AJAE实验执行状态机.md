@@ -3186,6 +3186,12 @@ $$
 
 正式资格固定使用12个fork进程、每个数值库单线程、既有最坏成本优先调度和shape/frame/placement/sensor缓存，只执行一次，不形成两遍复现结论。PASS要求256/256完成、256个模板身份唯一、硬错误与目标/支撑耗尽均为0、精确分层和五项caliper错误均为0；接受对象至少覆盖100帧、32个真实语义—实例身份、五个总体距离层和三个总体遮挡层。命令冻结为`python -m src.render qualify-e25-v3-normal-control --data-root /home/jasongao/Data/STU --support-pool runs/ajae/e21_v4_support_pool.npz --calibration runs/ajae/calibration.pt --target-bank runs/ajae/e25_v3_real_targets.npz --output runs/ajae/e25_v3_normal_control.npz --processes 12`。FAIL时保留结果并停在E25-v3等待新的课题负责人决策，不修改$1.25R(d)$、128×128上限或caliper；PASS后才修改唯一生产normal-control选择器并进入E26-v2及受control分布影响的后续重跑。
 
+**E25-v3目标库重建：PASS**
+
+运行前提交`be0a8f7`推送后执行冻结构建命令。产物精确包含3,267个目标、423帧和37个真实语义—实例身份；类别、距离层和遮挡层分别为[2830,333,100,4]、[861,1532,552,302,20]和[787,2363,117]，支撑语义全部为road=40。科学数组哈希为`16d75e67995bd216e3f802a6a32a19b0faecc9bfa841c6a680b01f13f6a8cf44`，与运行前独立复算的预期值完全一致。
+
+独立复核确认3,267行保持源库顺序；除`support_semantic`和`reference_support_pool_index`外的17个字段均与源库`compatible=true`子集逐元素一致；两个支撑字段分别与资格产物所选语义和行逐元素一致。全部参考行位于E21-v4合格池范围内，支撑语义、类别规则与帧偏移错误均为0；偏移$[0,-1,+1,-2,+2]$计数仍为[3020,101,58,49,39]。正式目标库`runs/ajae/e25_v3_real_targets.npz`大小6,800,894字节，SHA-256为`0ae2f4926f1cb8a71b04af3d43d3d1d9feb17bb36fed821bab42b531cae3a360`。目标库重建关闭；下一步直接执行已冻结的E25-v3 normal-control资格。
+
 ## E26｜权威 world builder 与完整世界规格确定性
 
 **唯一问题**
