@@ -3715,7 +3715,11 @@ real-normal五个距离箱的opportunity为686,670、273,466、46,226、1,055、
 
 ## E40｜beam×range 强度审计
 
-报告条件 median、Q05/Q25/Q75/Q95、ECDF距离与 clipping fraction。PASS：所有生成强度有限且在206支持内，分箱身份与计数正确，两遍一致。分布偏差不在本节点直接判来源泄漏。PASS → E41。
+报告条件 median、Q05/Q25/Q75/Q95、ECDF距离与 clipping fraction。PASS：所有生成强度有限且在206支持内，分箱身份与计数正确。分布偏差不在本节点直接判来源泄漏。PASS → E41。
+
+### E40-v2刷新执行冻结
+
+E40-v2只读取SHA-256固定为`e7cea1574638db2f7e41799fe3855519ea57a47e9f6adc04f1a5a37e8aa526e0`的E39-v2共享trace和冻结传感器标定。逐回波先按source、beam与range bin一次稳定分组，再在每个组内计算冻结五个分位数、三组两两ECDF距离及生成来源上下界clipping；该分组实现与历史逐cell布尔筛选使用相同回波、分组键和公式，只删除重复全数组扫描。E40-v2只运行一次。正式命令固定为`python -m src.render qualify-e40-v2 --e39-artifact runs/ajae/e39_v2_per_range_return.npz --calibration runs/ajae/calibration.pt --output runs/ajae/e40_v2_beam_range_intensity.npz`。
 
 **执行冻结**
 

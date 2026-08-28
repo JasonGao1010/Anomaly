@@ -63,6 +63,9 @@ FROZEN_GATE1_SUPPORT_POOL_SHA256 = (
 FROZEN_E38_V2_ARTIFACT_SHA256 = (
     "914b185ae31d5509fa286208c26bb4271460d289a02ec398eaee715b7eeb7c9a"
 )
+FROZEN_E39_V2_ARTIFACT_SHA256 = (
+    "e7cea1574638db2f7e41799fe3855519ea57a47e9f6adc04f1a5a37e8aa526e0"
+)
 SUPPORT_POOL_SEMANTICS = (40, 48, 49)
 CALIBRATION_FORMAT = "ajae-sensor-calibration-v4"
 DEVELOPMENT_FORMAT = "ajae-development-worlds-v2"
@@ -15115,7 +15118,12 @@ def _e40_statistics(
     sensor: SensorCalibration,
 ) -> dict[str, np.ndarray]:
     shape = (3, 128, 5)
-    count = np.zeros(shape, dtype=np.int64)
+    cell_key = (source.astype(np.int64) * 128 + beam) * 5 + range_bin
+    order = np.argsort(cell_key, kind="stable")
+    ordered_intensity = np.asarray(intensity[order], dtype=np.float64)
+    flat_count = np.bincount(cell_key, minlength=3 * 128 * 5)
+    count = flat_count.reshape(shape).astype(np.int64)
+    offsets = np.concatenate((np.asarray((0,), dtype=np.int64), np.cumsum(flat_count)))
     quantiles = np.zeros(shape + (5,), dtype=np.float64)
     ecdf = np.zeros((3, 128, 5), dtype=np.float64)
     ecdf_valid = np.zeros((3, 128, 5), dtype=np.bool_)
@@ -15126,13 +15134,9 @@ def _e40_statistics(
         for distance_id in range(5):
             values = []
             for source_id in range(3):
-                selected = (
-                    (source == source_id) & (beam == beam_id)
-                    & (range_bin == distance_id)
-                )
-                current = np.asarray(intensity[selected], dtype=np.float64)
+                key = (source_id * 128 + beam_id) * 5 + distance_id
+                current = ordered_intensity[offsets[key]:offsets[key + 1]]
                 values.append(current)
-                count[source_id, beam_id, distance_id] = current.size
                 if current.size:
                     quantiles[source_id, beam_id, distance_id] = np.quantile(
                         current, probabilities
@@ -15162,24 +15166,25 @@ def run_e40_qualification(
     output_path: Path | str,
 ) -> dict[str, object]:
     """Audit beam-by-range conditional intensity from the shared E39 trace."""
-    with np.load(Path(e39_artifact_path).expanduser().resolve(strict=True), allow_pickle=False) as trace:
+    source_path = Path(e39_artifact_path).expanduser().resolve(strict=True)
+    if _sha256_path(source_path) != FROZEN_E39_V2_ARTIFACT_SHA256:
+        raise RenderError("E40-v2 E39-v2 shared trace identity changed")
+    with np.load(source_path, allow_pickle=False) as trace:
         metadata = json.loads(str(trace["metadata_json"]))
-        if metadata.get("experiment") != "E39" or metadata.get("passed") is not True:
-            raise RenderError("E40 requires the passed formal E39 shared trace")
+        if metadata.get("experiment") != "E39-v2" or metadata.get("passed") is not True:
+            raise RenderError("E40-v2 requires the passed formal E39-v2 shared trace")
         source = np.asarray(trace["intensity_source"])
         beam = np.asarray(trace["intensity_beam"])
         range_bin = np.asarray(trace["intensity_range_bin"])
         intensity = np.asarray(trace["intensity_value"])
         expected_range_count = np.asarray(trace["source_range_return_count"])
-    _, sensor = load_sensor_calibration(calibration_path)
+    calibration = Path(calibration_path).expanduser().resolve(strict=True)
+    if _sha256_path(calibration) != FROZEN_SENSOR_CALIBRATION_SHA256:
+        raise RenderError("E40-v2 sensor calibration identity changed")
+    _, sensor = load_sensor_calibration(calibration)
     started = time.monotonic()
-    runs = [
-        _e40_statistics(source, beam, range_bin, intensity, sensor)
-        for _ in range(2)
-    ]
+    first = _e40_statistics(source, beam, range_bin, intensity, sensor)
     elapsed = time.monotonic() - started
-    reproduced = all(np.array_equal(runs[0][name], runs[1][name]) for name in runs[0])
-    first = runs[0]
     observed_range_count = first["cell_count"].sum(axis=1)
     count_errors = int(np.count_nonzero(observed_range_count != expected_range_count))
     identity_errors = int(
@@ -15202,18 +15207,21 @@ def run_e40_qualification(
     )
     passed = (
         count_errors == 0 and identity_errors == 0 and finite_errors == 0
-        and support_errors == 0 and reproduced
+        and support_errors == 0
     )
     scientific = {**first, "generated_clipping_fraction": clipping_fraction}
     result = {
-        "experiment": "E40", "passed": passed, "intensity_returns": int(intensity.size),
+        "experiment": "E40-v2", "passed": passed, "intensity_returns": int(intensity.size),
         "source_counts": [int(np.count_nonzero(source == value)) for value in range(3)],
         "nonempty_cells": [int(np.count_nonzero(first["cell_count"][value])) for value in range(3)],
         "count_errors": count_errors, "identity_errors": identity_errors,
         "finite_errors": finite_errors, "generated_support_errors": support_errors,
         "generated_clipping_count_low_high": clipping_count.tolist(),
         "generated_clipping_fraction_low_high": clipping_fraction.tolist(),
-        "elementwise_reproduced": reproduced, "two_run_total_seconds": elapsed,
+        "formal_repetitions": 1, "elementwise_reproduced": None,
+        "reproducibility_check": "not_run_by_owner_decision",
+        "input_e39_v2_sha256": FROZEN_E39_V2_ARTIFACT_SHA256,
+        "run_seconds": [elapsed],
         "scientific_array_hash": _scientific_array_hash(scientific),
     }
     destination = Path(output_path).expanduser().resolve()
@@ -17046,7 +17054,7 @@ def _render_parser() -> argparse.ArgumentParser:
     e39 = subcommands.add_parser("qualify-e39-v2")
     e39.add_argument("--e38-artifact", type=Path, required=True)
     e39.add_argument("--output", type=Path, required=True)
-    e40 = subcommands.add_parser("qualify-e40")
+    e40 = subcommands.add_parser("qualify-e40-v2")
     e40.add_argument("--e39-artifact", type=Path, required=True)
     e40.add_argument("--calibration", type=Path, required=True)
     e40.add_argument("--output", type=Path, required=True)
@@ -17232,7 +17240,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 0 if result["passed"] else 1
-    if args.command == "qualify-e40":
+    if args.command == "qualify-e40-v2":
         result = run_e40_qualification(
             args.e39_artifact, args.calibration, args.output,
         )
