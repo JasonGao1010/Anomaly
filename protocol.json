@@ -3122,7 +3122,7 @@
         "result": {"passed": true, "entity_frame_groups_per_source": 1280, "source_layer_count": [[0, 10, 433, 837], [51, 223, 402, 597], [68, 200, 356, 652]], "source_zero_visible_count": [0, 7, 4], "generated_layer_coverage": [4, 4], "shared_support_range_nvis_strata": 12, "definition_errors": 0, "count_errors": 0, "coverage_errors": 0, "matching_errors": 0, "elementwise_reproduced": true, "two_run_total_seconds": 0.0014445129927480593, "scientific_array_sha256": "8de2b629f5dd6d6ea1202f546826300c36cd68e5bd2ddf7f4772e859b1aac3d5", "artifact_bytes": 50075, "artifact_sha256": "19da6a5c347768e7861c75bac2e62cc2dfe0ada7d4ff294306a5ecca797f791e", "claim_limit": "All generated sources cover four positive-Nvis layers and 12 preliminary shared strata; complete frozen matching remains E45."}
       },
       "E43": {
-        "current_validity": "E43-v2 refresh frozen and unlocked by E42-v2 PASS; historical E43 PASS remains valid only for the old control distribution",
+        "current_validity": "E43-v2 PASS; E43 closed and E44 refresh unlocked; historical E43 PASS remains valid only for the old control distribution",
         "refresh_input_window_audit": "runs/ajae/e37_world_frame_consistency.npz",
         "refresh_input_window_audit_sha256": "04e524a5428c9b906e9fefe253f7ec66533bd6cb3452ea6d9afdb830e1a94b34",
         "refresh_input_trace": "runs/ajae/e39_v2_per_range_return.npz",
@@ -3130,6 +3130,7 @@
         "refresh_command": "python -m src.render qualify-e43-v2 --e37-artifact runs/ajae/e37_world_frame_consistency.npz --e39-artifact runs/ajae/e39_v2_per_range_return.npz --output runs/ajae/e43_v2_temporal_visibility.npz",
         "refresh_artifact": "runs/ajae/e43_v2_temporal_visibility.npz",
         "refresh_formal_repetitions": 1,
+        "refresh_result": {"passed": true, "source_V_count_for_V_0_to_5": [[0, 0, 0, 0, 0, 256], [0, 0, 1, 0, 0, 255], [0, 0, 3, 4, 8, 241]], "source_appearance_disappearance": [[0, 0], [1, 0], [10, 10]], "source_relative_change_quantiles_Q05_Q25_Q50_Q75_Q95": [[0.0025116407674987667, 0.024390243902439025, 0.05024302211002978, 0.08456672236810694, 0.1694915254237288], [0.0, 0.01932382133995037, 0.05147413045572791, 0.09237891737891737, 0.3333333333333333], [0.0, 0.022727272727272728, 0.055883271452860955, 0.11538461538461539, 0.5]], "window_identity_errors": 0, "repeated_render_errors": 0, "finite_errors": 0, "definition_errors": 0, "formal_repetitions": 1, "elementwise_reproduced": null, "run_seconds": [0.0005255090072751045], "scientific_array_sha256": "e8f2fc993b95333db5cf2d79b2429bcccac0c9b0338610c3f9ac335c69bb580e", "artifact_bytes": 24152, "artifact_sha256": "59d2e834b5b31770349faac591beb22067d87d4dbe1796b67ce857cb2aaf77a3", "claim_limit": "E43-v2 establishes finite temporal visibility descriptors under the retained E37 window-identity qualification; geometry-driven appearances and disappearances remain descriptive."},
         "question": "Are fixed-world five-frame visibility traces deterministic across repeated rendering and independent of window identity, with finite Nvis change and V statistics?",
         "input_window_audit": "runs/ajae/e37_world_frame_consistency.npz",
         "input_trace": "runs/ajae/e39_per_range_return.npz",

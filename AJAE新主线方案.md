@@ -1905,6 +1905,8 @@ E42-v2已经正式PASS。normal-control与anomaly-proxy均覆盖全部四个正�
 
 E43-v2刷新已冻结。它复用已通过的E37窗口身份与重复请求证据，只读取E39-v2新版五帧visible-return trace计算一次$N_{vis}$变化、V分层和出现/消失统计；不重新渲染，也不要求E39-v2第二遍。正式命令为`python -m src.render qualify-e43-v2 --e37-artifact runs/ajae/e37_world_frame_consistency.npz --e39-artifact runs/ajae/e39_v2_per_range_return.npz --output runs/ajae/e43_v2_temporal_visibility.npz`。
 
+E43-v2已经正式PASS。window身份、重复请求、变化率有限性和定义错误均为0；三来源五帧可见计数、相邻变化率及出现/消失均已完整保存，出现和消失只作真实帧几何变化描述。单次统计用时0.000526秒，科学数组哈希为`e8f2fc993b95333db5cf2d79b2429bcccac0c9b0338610c3f9ac335c69bb580e`，产物SHA-256为`59d2e834b5b31770349faac591beb22067d87d4dbe1796b67ce857cb2aaf77a3`。E43关闭，E44刷新解锁。
+
 E39已正式通过：三来源在2.5–10、10–20、20–30和30–40米均有非零return entity-frame覆盖，逐实体帧计数守恒错误0、非有限值0，两遍逐元素一致；三来源在40–50米均无观测，按冻结规则仅报告。共享trace已保存1,656,861条逐返回强度及E40–E44所需计数。E39关闭，E40解锁。
 
 E40已正式通过：1,656,861条强度记录的身份、分箱、有限性与E39计数回算错误均为0；两类生成来源的206冻结支持越界和上下界clipping均为0，两遍统计逐元素一致。E40关闭，E41解锁；条件分布差异继续只作描述。

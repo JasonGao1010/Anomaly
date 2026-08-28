@@ -3777,6 +3777,10 @@ E42-v2只读取SHA-256固定为`e7cea1574638db2f7e41799fe3855519ea57a47e9f6adc04
 
 E43-v2精确读取已通过且SHA-256为`04e524a5428c9b906e9fefe253f7ec66533bd6cb3452ea6d9afdb830e1a94b34`的E37窗口身份审计，以及SHA-256为`e7cea1574638db2f7e41799fe3855519ea57a47e9f6adc04f1a5a37e8aa526e0`的E39-v2共享trace。重复请求和window身份资格继续由E37有效证据提供；E43-v2只对新版五帧visible-return trace执行一次$N_{vis}$变化、V分层和出现/消失统计，不重新渲染、不要求E39-v2第二遍。正式命令为`python -m src.render qualify-e43-v2 --e37-artifact runs/ajae/e37_world_frame_consistency.npz --e39-artifact runs/ajae/e39_v2_per_range_return.npz --output runs/ajae/e43_v2_temporal_visibility.npz`。
 
+**E43-v2正式结果：PASS（E43关闭，E44刷新解锁）**
+
+window身份错误和重复请求错误均为0，变化率有限性错误和定义错误均为0。real-normal、normal-control与anomaly-proxy的$V=0,\ldots,5$计数分别为[0,0,0,0,0,256]、[0,0,1,0,0,255]和[0,0,3,4,8,241]；出现/消失分别为0/0、1/0和10/10。三来源相邻变化率Q05/Q25/Q50/Q75/Q95分别为[0.002512,0.024390,0.050243,0.084567,0.169492]、[0,0.019324,0.051474,0.092379,0.333333]和[0,0.022727,0.055883,0.115385,0.5]。单次统计用时0.000526秒，科学数组哈希为`e8f2fc993b95333db5cf2d79b2429bcccac0c9b0338610c3f9ac335c69bb580e`；产物大小24,152字节，SHA-256为`59d2e834b5b31770349faac591beb22067d87d4dbe1796b67ce857cb2aaf77a3`。
+
 读取E37已通过的跨窗口一致性产物和E39已通过的五帧共享trace。重复渲染要求E39两遍完整24进程结果逐元素一致；window身份错误由E37的九个字段摘要、重复请求、world/frame身份、渲染调用、跨world cache、`render_frame` window参数和随机流window读取共同复核。对每个固定实体保存五帧$N_{vis}$、相邻帧差及变化率 $|N_t-N_{t-1}|/\max(N_{t-1},1)$；$V$定义为五帧中$N_{vis}>0$的帧数并按0–5完整计数。PASS要求所有计数和分层定义有效、变化率及分位数有限、两次统计逐元素一致；真实几何导致的出现和消失只报告。实现提交 `7dcd999a49b3312c4ca1030cff9b4e03d09b7cb4`，`src/render.py` SHA-256为 `06f9174a41246ba68e339b4e3f0cde706a5673300d3656291e04de646756b324`；46项完整回归通过。正式命令为 `python -m src.render qualify-e43 --e37-artifact runs/ajae/e37_world_frame_consistency.npz --e39-artifact runs/ajae/e39_per_range_return.npz --output runs/ajae/e43_temporal_visibility.npz`。
 
 **历史 E43 正式结果：PASS（仅旧normal-control分布；当前待刷新）**
