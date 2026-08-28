@@ -1897,6 +1897,8 @@ E40-v2已经正式PASS。1,279,249条强度记录的身份、E39-v2计数回算�
 
 E41-v2刷新已冻结。它只读取E39-v2共享trace中的两类生成来源native-empty、geometry、accepted和final-new整数计数，直接审计关系链与必要分支覆盖，不重新渲染；正式命令为`python -m src.render qualify-e41-v2 --e39-artifact runs/ajae/e39_v2_per_range_return.npz --output runs/ajae/e41_v2_empty_to_valid.npz`，只运行一次。
 
+E41-v2已经正式PASS。两类生成来源的空槽机会、几何命中、回波接受和最终新增关系链违规均为0，normal-control与anomaly-proxy分别实际覆盖46和38个回波概率拒绝，最终新增均非零。单次统计用时0.017559秒，科学数组哈希为`a43887141dd8fb02dfe0a5291926acfba99a1e2d70487b5015f25faa7e2c5fd0`，产物SHA-256为`ac72fb803300c603fe081ec150da0f1e8cabefc778f14f6bb4e015becd71115c`。E41关闭，E42刷新解锁。
+
 E39已正式通过：三来源在2.5–10、10–20、20–30和30–40米均有非零return entity-frame覆盖，逐实体帧计数守恒错误0、非有限值0，两遍逐元素一致；三来源在40–50米均无观测，按冻结规则仅报告。共享trace已保存1,656,861条逐返回强度及E40–E44所需计数。E39关闭，E40解锁。
 
 E40已正式通过：1,656,861条强度记录的身份、分箱、有限性与E39计数回算错误均为0；两类生成来源的206冻结支持越界和上下界clipping均为0，两遍统计逐元素一致。E40关闭，E41解锁；条件分布差异继续只作描述。

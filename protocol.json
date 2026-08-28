@@ -3080,12 +3080,13 @@
         "result": {"passed": true, "intensity_returns": 1656861, "source_counts": [742546, 462626, 451689], "nonempty_cells": [190, 173, 214], "count_errors": 0, "identity_errors": 0, "finite_errors": 0, "generated_support_errors": 0, "generated_clipping_count_low_high": [[0, 0], [0, 0]], "generated_clipping_fraction_low_high": [[0.0, 0.0], [0.0, 0.0]], "elementwise_reproduced": true, "two_run_total_seconds": 1.907127231999766, "scientific_array_sha256": "05c9248caeaa5de12320a6c0695e47e983221610eaae67daa82fe0c865ce22ab", "artifact_bytes": 22989, "artifact_sha256": "ac8cd9a2bfa2f0011c201f287d1a3908e401fe844f09bc12be8b755673dd8564", "claim_limit": "Conditional quantiles and ECDF distances are descriptive at E40; matched leakage adjudication remains E46."}
       },
       "E41": {
-        "current_validity": "E41-v2 refresh frozen and unlocked by E40-v2 PASS; historical E41 PASS remains valid only for the old control distribution",
+        "current_validity": "E41-v2 PASS; E41 closed and E42 refresh unlocked; historical E41 PASS remains valid only for the old control distribution",
         "refresh_input": "runs/ajae/e39_v2_per_range_return.npz",
         "refresh_input_sha256": "e7cea1574638db2f7e41799fe3855519ea57a47e9f6adc04f1a5a37e8aa526e0",
         "refresh_command": "python -m src.render qualify-e41-v2 --e39-artifact runs/ajae/e39_v2_per_range_return.npz --output runs/ajae/e41_v2_empty_to_valid.npz",
         "refresh_artifact": "runs/ajae/e41_v2_empty_to_valid.npz",
         "refresh_formal_repetitions": 1,
+        "refresh_result": {"passed": true, "source_chain_total": [[25409785, 20193, 20147, 20147], [25409785, 19291, 19253, 19253]], "source_return_rejection": [46, 38], "source_post_acceptance_rejection": [0, 0], "chain_violation_count": [0, 0, 0, 0], "chain_errors": 0, "branch_coverage_errors": 0, "formal_repetitions": 1, "elementwise_reproduced": null, "run_seconds": [0.01755946400226094], "scientific_array_sha256": "a43887141dd8fb02dfe0a5291926acfba99a1e2d70487b5015f25faa7e2c5fd0", "artifact_bytes": 5952, "artifact_sha256": "ac72fb803300c603fe081ec150da0f1e8cabefc778f14f6bb4e015becd71115c", "claim_limit": "E41-v2 establishes empty-slot chain conservation and required branch coverage for the new control distribution only."},
         "question": "Is empty-to-valid accounting conserved for both generated labels, with actual final additions and probability rejections?",
         "input_trace": "runs/ajae/e39_per_range_return.npz",
         "source_order": ["normal-control", "anomaly-proxy"],

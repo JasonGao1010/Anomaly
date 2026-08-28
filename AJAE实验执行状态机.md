@@ -3741,6 +3741,10 @@ E40-v2只读取SHA-256固定为`e7cea1574638db2f7e41799fe3855519ea57a47e9f6adc04
 
 E41-v2只读取SHA-256固定为`e7cea1574638db2f7e41799fe3855519ea57a47e9f6adc04f1a5a37e8aa526e0`的E39-v2共享trace，直接复算normal-control与anomaly-proxy的native-empty、geometry、accepted和final-new整数关系链，不重新渲染。冻结关系、分支覆盖和PASS条件不变，只按所有者决定取消第二遍重复统计。正式命令为`python -m src.render qualify-e41-v2 --e39-artifact runs/ajae/e39_v2_per_range_return.npz --output runs/ajae/e41_v2_empty_to_valid.npz`。
 
+**E41-v2正式结果：PASS（E41关闭，E42刷新解锁）**
+
+normal-control与anomaly-proxy的空槽机会、几何命中、回波接受和最终新增总计分别为[25409785,20193,20147,20147]和[25409785,19291,19253,19253]；回波概率拒绝分别为46和38，接受后拒绝均为0。四类关系链违规、总链错误和分支覆盖错误均为0。单次统计用时0.017559秒，科学数组哈希为`a43887141dd8fb02dfe0a5291926acfba99a1e2d70487b5015f25faa7e2c5fd0`；产物大小5,952字节，SHA-256为`ac72fb803300c603fe081ec150da0f1e8cabefc778f14f6bb4e015becd71115c`。
+
 读取E39已通过的共享trace，按normal-control和anomaly-proxy分别复算空槽机会、几何命中、回波接受和最终新增，并保存逐beam×range计数。PASS要求逐实体、帧和beam的几何命中不超过原生空槽机会，逐beam×range的回波接受不超过几何命中，最终新增不超过回波接受；两类来源均须至少有一个最终新增和一个由回波概率产生的拒绝，所有计数非负，两遍统计逐元素一致。接受后未新增的计数作描述性报告，不增设非零要求；来源间比例差异留给E45/E46。实现提交 `df23bffed5d335e9a55e177a6980e01eb6b89ea9`，`src/render.py` SHA-256为 `cd34392c2d7724e40e42f1667be7a257b6f68b60cbaf08d67afa8b04f11d7649`；46项完整回归通过。正式命令为 `python -m src.render qualify-e41 --e39-artifact runs/ajae/e39_per_range_return.npz --output runs/ajae/e41_empty_to_valid.npz`。
 
 **历史 E41 正式结果：PASS（仅旧normal-control分布；当前待刷新）**
