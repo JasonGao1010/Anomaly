@@ -3695,6 +3695,10 @@ real-normal、normal-control、anomaly-proxy各保存1,280个entity-frame groups
 
 E39-v2已经由E38-v2 PASS解锁，只读取SHA-256固定为`914b185ae31d5509fa286208c26bb4271460d289a02ec398eaee715b7eeb7c9a`的`runs/ajae/e38_v2_per_beam_return.npz`完整共享trace。runner核对E38-v2的PASS、科学数组哈希与共享trace身份后，直接聚合冻结五个距离层的opportunity、return count/rate和非零return entity-frame groups；不读取STU数据、不重建支撑池或候选world、不重新计算几何或renderer。E39-v2只正式执行一次，不做第二遍复现。正式命令固定为`python -m src.render qualify-e39-v2 --e38-artifact runs/ajae/e38_v2_per_beam_return.npz --output runs/ajae/e39_v2_per_range_return.npz`。PASS条件保持计数守恒、全部聚合率与逐实体帧可见距离有限、三来源前四距离层各至少一个非零return entity-frame group；40–50米只报告。
 
+**E39-v2正式结果：PASS（E39关闭，E40刷新解锁）**
+
+real-normal五个距离层的opportunity为[473229,304955,45929,2723,0]，return为[347890,221916,27328,1602,0]，非零return entity-frame groups为[339,854,280,36,0]。normal-control对应值分别为[296881,55717,21628,13313,3510]、[295036,54159,21233,11764,3071]和[316,353,335,320,127]；anomaly-proxy对应值分别为[224627,52213,12187,7453,2762]、[223662,50527,11977,6728,2356]和[307,307,286,300,119]。三来源前四层覆盖错误、计数守恒错误和非有限错误均为0；real-normal在40–50米为0，按冻结规则只报告。只读聚合用时0.000295秒，未执行第二遍复现。科学数组哈希为`348670e8aa9a8677f600aea55b825723d57d3246b64b3c83dc49bc3c64c29a1a`；产物大小14,676,288字节，SHA-256为`e7cea1574638db2f7e41799fe3855519ea57a47e9f6adc04f1a5a37e8aa526e0`。
+
 下述E39执行冻结和正式结果属于旧v1候选银行的历史记录。
 
 ### E39正式执行冻结

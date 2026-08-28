@@ -1889,6 +1889,8 @@ E38-v2已经正式PASS。新版候选银行完成256/256个paired seeds，错误
 
 E39-v2刷新已冻结并由E38-v2 PASS解锁。它只读取SHA-256为`914b185ae31d5509fa286208c26bb4271460d289a02ec398eaee715b7eeb7c9a`的E38-v2共享trace，直接聚合五个距离箱的三来源opportunity、return count/rate和非零return entity-frame groups，不重新读取STU数据、构造世界、计算几何或渲染。正式命令为`python -m src.render qualify-e39-v2 --e38-artifact runs/ajae/e38_v2_per_beam_return.npz --output runs/ajae/e39_v2_per_range_return.npz`；只运行一次，不声明第二遍复现。
 
+E39-v2已经正式PASS。三来源前四距离层均有非零return entity-frame group，覆盖错误、计数守恒错误和非有限错误均为0；real-normal在40–50米仍无观测，normal-control与anomaly-proxy在该层分别有127和119个非零组，均按冻结规则只报告。只读聚合用时0.000295秒，科学数组哈希为`348670e8aa9a8677f600aea55b825723d57d3246b64b3c83dc49bc3c64c29a1a`，产物SHA-256为`e7cea1574638db2f7e41799fe3855519ea57a47e9f6adc04f1a5a37e8aa526e0`。E39关闭，E40刷新解锁。
+
 E39已正式通过：三来源在2.5–10、10–20、20–30和30–40米均有非零return entity-frame覆盖，逐实体帧计数守恒错误0、非有限值0，两遍逐元素一致；三来源在40–50米均无观测，按冻结规则仅报告。共享trace已保存1,656,861条逐返回强度及E40–E44所需计数。E39关闭，E40解锁。
 
 E40已正式通过：1,656,861条强度记录的身份、分箱、有限性与E39计数回算错误均为0；两类生成来源的206冻结支持越界和上下界clipping均为0，两遍统计逐元素一致。E40关闭，E41解锁；条件分布差异继续只作描述。
