@@ -758,6 +758,128 @@ def test_shape_stream_rejects_e22_invalid_shape_before_support_sampling() -> Non
     assert grounding.passed
 
 
+def test_e25_new_contract_has_one_fixed_template_range_assignment() -> None:
+    assigned = np.asarray([
+        render_module._e25_new_assigned_range_bin(index)
+        for index in range(256)
+    ])
+    np.testing.assert_array_equal(
+        np.bincount(assigned, minlength=5), np.asarray((52, 51, 51, 51, 51))
+    )
+    arguments = render_module._render_parser().parse_args([
+        "qualify-e25-new-normal-control",
+        "--data-root", "/data",
+        "--support-pool", "support.npz",
+        "--calibration", "calibration.pt",
+        "--output", "e25-new.npz",
+    ])
+    assert arguments.processes == 24
+
+
+def test_placement_postcheck_rejects_only_the_current_support_proposal() -> None:
+    vertices = np.asarray([
+        (x_value, y_value, z_value)
+        for x_value in (-1.0, 1.0)
+        for y_value in (-0.5, 0.5)
+        for z_value in (-0.5, 0.5)
+    ])
+    template = NormalTemplateShape(
+        vertices, np.empty((0, 3), dtype=np.int32),
+        206, 0, 10, 1, (0.0, 0.0, 0.0),
+    )
+    pool = QualifiedSupportPool(
+        np.asarray((0, 1)), np.asarray((40, 40), dtype=np.uint16),
+        np.asarray((0, 1)), np.asarray((0, 1)), np.asarray((5.0, 6.0)),
+        np.asarray((0, 1), dtype=np.uint64),
+        np.asarray(((5.0, 0.0, 0.0), (6.0, 0.0, 0.0))),
+        np.asarray(((0.0, 0.0, 1.0), (0.0, 0.0, 1.0))),
+        np.zeros(2),
+    )
+    obstacles = ObservedObstacleIndex(
+        np.asarray(((1000.0, 1000.0, 1000.0),)), np.asarray((1,), np.uint64)
+    )
+    checked: list[int] = []
+
+    def postcheck(_: object, patch: object) -> str | None:
+        checked.append(patch.pool_index)
+        return "fixture_sensor_rejection" if len(checked) == 1 else None
+
+    _, record = render_module.place_object(
+        template,
+        render_module.MaterialSpec(0.5, 0.2),
+        pool,
+        obstacles,
+        object_id=1,
+        label="normal-control",
+        proposal_namespace="fixture",
+        proposal_stream=0,
+        yaw_rad=0.0,
+        material_seed=1,
+        yaw_seed=2,
+        template_identity="fixture",
+        proposal_rows=(0, 1),
+        post_placement_rejection=postcheck,
+    )
+    assert checked == [0, 1]
+    assert record.accepted_proposal == 1
+    assert record.rejection_reasons == ("fixture_sensor_rejection",)
+
+
+def test_e25_new_sparse_trace_is_rechecked_by_the_complete_renderer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture_frame, grid = _small_ray_fixture()
+    frame = make_source_frame(
+        0,
+        fixture_frame.xyzi,
+        fixture_frame.lidar_pose,
+        fixture_frame.labels,
+        partition="train",
+        sequence_id=206,
+    )
+    vertices = np.asarray([
+        (x_value, y_value, z_value)
+        for x_value in (-1.0, 1.0)
+        for y_value in (-0.5, 0.5)
+        for z_value in (-0.5, 0.5)
+    ])
+    template = NormalTemplateShape(
+        vertices, np.empty((0, 3), dtype=np.int32),
+        206, 0, 10, 1, (0.0, 0.0, 0.0),
+    )
+    item = render_module.ObjectSpec(
+        1,
+        "normal-control",
+        template,
+        render_module.MaterialSpec(0.5, 0.2),
+        (4.0, 0.0, 0.0),
+        ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0)),
+    )
+    sensor = SensorCalibration.constant(0.5)
+    directions = grid.directions_sensor / np.linalg.norm(
+        grid.directions_sensor, axis=1, keepdims=True
+    )
+    monkeypatch.setattr(render_module, "_E25_NEW_FRAMES", (frame,))
+    monkeypatch.setattr(render_module, "_E25_NEW_RAY_GRID", grid)
+    monkeypatch.setattr(render_module, "_E25_NEW_SENSOR", sensor)
+    monkeypatch.setattr(
+        render_module,
+        "_E25_NEW_SENSOR_DIRECTION_TREE",
+        render_module.cKDTree(directions),
+    )
+    monkeypatch.setattr(
+        render_module, "_E25_NEW_MAXIMUM_RAY_ORIGIN_OFFSET_M", 0.0
+    )
+    monkeypatch.setattr(render_module, "_E25_NEW_FRAME_CACHE", {})
+    patch = render_module.SupportPatch(
+        0, 40, 0, 0, 4.0, 0,
+        (4.0, 0.0, 0.0), (0.0, 0.0, 1.0), 0.0,
+    )
+    observation = render_module._e25_new_observation(item, patch, 2_500_000, 0)
+    assert observation.visible_returns >= 1
+    assert observation.range_bin == 0
+
+
 def test_normal_template_pca_axis_is_aligned_before_support_pose() -> None:
     angle = math.radians(37.0)
     vertices = np.asarray([

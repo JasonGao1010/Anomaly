@@ -1845,13 +1845,14 @@
           }
         },
         "placement_world_builder_E23_E26": {
-          "status": "DESIGN AND EXECUTION FROZEN; E23 PASS; E24 FAIL retained; E24-v2 PASS; E25 PASS; E26 PASS; Phase 2 closed; E27 unlocked",
+          "status": "E23 PASS; E24 FAIL retained; E24-v2 PASS; old E25/E26 PASS retained; E25-v2 and E25-v3 FAIL retained; E25-new coverage-oriented contract frozen before its single formal run",
           "design_authorities": ["AJAE新主线方案.md", "AJAE实验执行状态机.md"],
           "design_authority_sha256": {
-            "main_plan": "b020984eb437b9f830b28266b2383222c2f71d9b29ce402da57d978e2460f933",
-            "state_machine": "3953661665e0686a1e62d2a7846e72c9769048e4e6f2cbaaf8ef5d3c13e9d7ee"
+            "main_plan": "632349d400052cbb06c41a4c40c90394bc15865586086a928049895e437847b9",
+            "state_machine": "eda685553b264afcf3e7b2d4395fbcb1c20c00e5aefdc0579cf99a681dac30ab"
           },
-          "implementation_identity": {
+          "historical_E23_through_old_E26_implementation_identity": {
+            "scope": "historical E23 through old E26 only; it is not the E25-new implementation identity",
             "commit": "b0668bd8c96a8c8ea0b04145fda8e263bae8649b",
             "render_sha256": "2ea6d333fbe7531913d925f0b292c6e8d5d22986aba93e527ffff5d2a2202188",
             "train_sha256": "92a3f51f93e26bead6a1d9d92e37af2b5e4df092ffc9716852806b4b67be546b",
@@ -1990,7 +1991,7 @@
             }
           },
           "E25": {
-            "status": "PASS; closed; E26 unlocked",
+            "status": "HISTORICAL PASS for the old random-placement normal-control distribution; it does not qualify E25-new or current E26-v2",
             "template_minimum_points": 32,
             "active_class_minimum_templates": 4,
             "active_template_total_minimum": 32,
@@ -2061,7 +2062,7 @@
             }
           },
           "E25-v2": {
-            "status": "FAIL; retained; target-support association audit found a qualification specification defect; E26-v2 and E46 locked pending owner decision",
+            "status": "HISTORICAL FAIL retained; target-support association audit found a qualification specification defect; its owner-decision stop was superseded by E25-new",
             "purpose": "Qualify formal observation-conditioned normal-control support-position selection using train/206 real-normal observations only",
             "historical_results_retained": ["E25 PASS", "E45A FAIL", "E45A-v2 FAIL"],
             "unchanged_components": ["256 train/206 normal templates", "template identity selection in production", "scale U[0.9,1.1]", "class semantics", "trajectory-aligned pose rule", "E22 grounding", "E23 observed-normal collision", "E24 pair collision", "renderer", "return probability", "intensity", "schema-7 anomaly-proxy"],
@@ -2145,10 +2146,10 @@
               "actual_support_proposal_accounting": "placement_rejections + condition_rejections + one accepted candidate for a completed fixture",
               "retained_artifact_recalculation": {"completed": 254, "accepted_center_frames": 117, "accepted_real_instances": 27, "accepted_range_count": [5, 203, 41, 5, 0], "accepted_occlusion_layer_count": [88, 164, 2], "actual_support_candidates": 816594}
             },
-            "downstream": "PASS permits replacing the sole production normal-control position selector and then running E26-v2; FAIL keeps E26-v2 and E46 locked and requires owner decision"
+            "downstream": "historical branch only; E25-new is now the active prerequisite for E26-v2, while E46 remains locked until E45A-new PASS"
           },
           "E25-v3": {
-            "status": "D_xy plus alpha route abandoned; final E25-v3 local-support target qualification PASS and target bank validated; formal E25-v3 normal-control qualification FAIL; stopped for owner decision",
+            "status": "HISTORICAL: D_xy plus alpha route abandoned; target qualification PASS and target bank validated; formal normal-control qualification FAIL; its owner-decision stop was superseded by E25-new",
             "historical_results_retained": ["E25 PASS", "E25-v2 FAIL"],
             "failure_classification_inherited": "E25-v2 is a qualification specification defect and does not adjudicate the normal-control construct",
             "unchanged_support_semantics": {"vehicle_like": [40], "person_rider_like": [40, 48]},
@@ -2403,11 +2404,60 @@
               "conclusion_boundary": "This formal FAIL does not by itself establish renderer failure, E21-v4 support failure, person-wide geometric unplaceability or failure of the entire normal-control construct. No second formal repetition was executed.",
               "automatic_retry": false
             },
-            "next_required_state": "owner decision required at E25-v3 after the retained formal FAIL",
-            "downstream": "E26-v2, distribution-dependent E38-E45A, E45B-v2, E46 and E48 remain locked"
+            "next_required_state": "superseded as the active route by the owner-frozen E25-new coverage-oriented contract; the formal FAIL remains permanent evidence",
+            "downstream": "historical E25-v3 does not unlock E26-v2, E46 or E48"
+          },
+          "E25-new": {
+            "status": "FROZEN BEFORE FORMAL RUN; active normal-control qualification",
+            "purpose": "qualify a legal, visible and coverage-oriented normal-control candidate generator without importing E45A common-support matching into generation",
+            "historical_results_retained": ["E25 PASS for the old random-placement distribution", "E25-v2 FAIL", "E25-v3 normal-control FAIL", "E45A FAIL", "E45A-v2 FAIL", "E45B PASS for the old control distribution"],
+            "responsibility_boundary": {
+              "E25-new": "generate legal normal controls with deterministic coverage across the complete official distance domain",
+              "E45A-new": "identify the real-normal and rendered-control subset with strict common support",
+              "E46": "adjudicate renderer source leakage on that matched subset"
+            },
+            "source_data": "train/206 normal templates, E21-v4 qualified support pool, train/206 observed obstacles and the frozen train/206 sensor calibration only",
+            "forbidden_inputs": ["train/201 results", "real-normal target identities", "E45A covariates or matching outcome", "E46 classifier output"],
+            "fixtures": 256,
+            "canonical_template_order": "the existing canonical train/206 template order from extract_normal_template_library; car 64, truck 64, other-vehicle 64 and person 64; every template is used exactly once and is never replaced or repeated",
+            "control_seed": "2500000+fixture_index for fixture_index 0 through 255",
+            "assigned_range_bin": "fixture_index mod 5 over [2.5,10), [10,20), [20,30), [30,40), [40,50] m",
+            "assigned_range_count": [52, 51, 51, 51, 51],
+            "class_assigned_range_count_by_canonical_order": {
+              "car_10": [13, 13, 13, 13, 12],
+              "truck_18": [13, 13, 13, 12, 13],
+              "other_vehicle_20": [13, 13, 12, 13, 13],
+              "person_30": [13, 12, 13, 13, 13]
+            },
+            "range_identity": "the median official range of every final visible normal-control return in the authoritative rendered frame; the E21 support-anchor range is proposal search information only",
+            "range_exhaustion": "a fixture that cannot produce a legal visible control in its assigned range bin within the frozen finite proposal stream fails; it cannot move to another bin",
+            "support_policy": {"car_10": [40], "truck_18": [40], "other_vehicle_20": [40], "person_30": [40, 48]},
+            "support_proposal_stream": "within the assigned anchor range bin and legal support semantics, namespace_u64 is the little-endian integer encoded by the first 8 bytes of SHA-256('E25-new-support-v1'); salt=namespace_u64 XOR uint64(fixture_index+1)*uint64(0xD1B54A32D192ED03); key=splitmix64(E21-v4 selection_hash XOR salt); select the lowest 128 by (key,pool_index). This only narrows proposal search and does not decide final range identity",
+            "maximum_support_proposals_per_fixture": 128,
+            "unchanged_random_streams": {
+              "scale": "default_rng(SeedSequence([control_seed+2,2501])).uniform(0.9,1.1,size=3)",
+              "pose": "default_rng(SeedSequence([control_seed,2502])); car/truck/other-vehicle use U[-15 degrees,15 degrees], person uses U[-pi,pi)",
+              "material_seed": "control_seed+2503"
+            },
+            "placement_path": "the sole place_object path applies E21 support identity, E22 grounding, E23 observed-normal collision and E24 pair collision when existing entities are present; the E25-new fixtures themselves contain one control each",
+            "sensor_path": "after a legal placement, apply the unchanged calibrated return probability, deterministic uniform, native-return nearest competition and final render_frame packing; reject only the current placement if there is no visible normal-control return or the final rendered median official range is not the assigned bin",
+            "performance_equivalence": "support rows are prepartitioned and selected with vectorized deterministic keys; a conservative bounding-sphere angular query computes a strict superset of candidate rays; random uniforms are computed only for candidate slots; every accepted candidate is independently recomputed by the complete all-ray accepted-return competition and authoritative render_frame before adjudication",
+            "pass_conditions": ["256 of 256 fixtures complete", "all 256 canonical template identities appear exactly once", "final rendered range counts equal [52,51,51,51,51] and every fixture equals its preassigned bin", "every fixture has at least one visible normal-control return", "all supports are E21-v4-qualified and class-semantically legal", "E22 grounding errors=0", "E23 observed-normal collision errors=0", "E24 pair errors=0 whenever a multi-entity downstream world is evaluated", "scale, pose, material and renderer contract errors=0", "hard errors=0", "assigned-bin placement exhaustion=0"],
+            "proposal_accounting_policy": "proposal conservation is an implementation audit, not an additional scientific gate; any nonconservation is folded into hard error and classified as a protocol implementation defect",
+            "descriptive_only": ["eight 45-degree azimuth-sector counts overall and by class, plus maximum-sector count and share overall and by class", "occlusion counts in [0,0.25), [0.25,0.75), [0.75,1] overall and by class", "visible-return count distribution", "physical, no-visible and range-bin rejection counts", "support proposal counts"],
+            "explicit_non_gates": ["real target identity", "median-beam caliper", "visible-return-count caliper", "occlusion caliper", "local-density caliper", "class-by-range minimum beyond the deterministic assignment", "azimuth-sector minimum", "occlusion-layer minimum"],
+            "formal_repetitions": 1,
+            "automatic_retry": false,
+            "cpu_execution": "exactly 24 forked workers and one numeric-library thread per process; bounded per-worker immutable frame/ray caches; deterministic worst-case-first scheduling with restoration to canonical fixture order",
+            "gpu_used": false,
+            "command": "python -m src.render qualify-e25-new-normal-control --data-root /home/jasongao/Data/STU --support-pool runs/ajae/e21_v4_support_pool.npz --calibration runs/ajae/calibration.pt --output runs/ajae/e25_new_normal_control.npz --processes 24",
+            "artifact": "runs/ajae/e25_new_normal_control.npz",
+            "pass_route": "replace the sole production normal-control selector, execute E26-v2, refresh the control-dependent parts of E38-E44, then execute E45A-new and E45B-v2; E45A-new PASS unlocks E46 and E45B-v2 PASS is required before E48",
+            "failure_route": "retain the single formal FAIL and stop for owner decision without changing templates, assigned bins, proposal limit, renderer or downstream matching criteria",
+            "claim_limit": "The index-cycle distance allocation is coverage-oriented sampling for anti-shortcut normal controls, not an estimate of the real-normal scene distance distribution. E25-new does not establish real/control common support or source indistinguishability."
           },
           "E26": {
-            "status": "PASS; closed; Phase 2 closed; E27 unlocked",
+            "status": "HISTORICAL PASS for the old normal-control distribution only; current E26-v2 has not run and current Phase 2 is not closed by this result",
             "world_seeds": [2600000, 2600255],
             "world_type_quota_each": 64,
             "maximum_world_attempts": 48,
@@ -2472,12 +2522,12 @@
             },
             "pass_conditions": ["256/256 worlds built with correct type", "canonical JSON and world hash repeat exactly", "window traversal never changes WorldSpec", "frame request identity is order/cache invariant", "all nonempty entities retain E22-E25", "one authoritative placement path", "two runs elementwise identical"]
           },
-          "criteria_frozen_before_E23_formal_run": true
+          "historical_E23_through_old_E26_criteria_frozen_before_E23_formal_run": true
         }
       }
     },
     "renderer_mechanical_qualification": {
-      "status": "E25-v2 FAIL retained; E25-v3 local-support target qualification and target-bank build PASS; formal E25-v3 normal-control qualification FAIL and stopped for owner decision; E27-E44 PASS; E28-v1, E36-v1, E45-v1, E45-v2, E45A and E45A-v2 FAIL retained; old-distribution E45B PASS is historical for any revised control distribution; E26-v2, distribution-dependent E38-E45A, E45B-v2, E46 and E48 locked",
+      "status": "E25-v2 and E25-v3 normal-control FAIL retained; E25-new coverage-oriented contract frozen before formal execution; E27-E37 mechanical qualifications retained; E38-E45A and E45B are distribution-dependent and require refresh after E25-new and E26-v2; E46 and E48 remain locked",
       "layer_boundaries": {"E27-E28": "direct geometry outputs only", "E29": "return probability and deterministic acceptance decision only", "E30-E31": "accepted returns", "E32-E33": "nearest-return occlusion competition"},
       "E27": {
         "question": "Does the formal geometry path return the correct nearest convex-hull hit, outward finite normal and object ID for active normal-control templates when return rejection is disabled?",
@@ -2831,6 +2881,7 @@
         "result": {"passed": true, "worlds": 128, "world_type_counts": {"pure_normal": 32, "control_only": 32, "mixed": 32, "anomaly_only": 32}, "unique_frames_per_world": 6, "frame_requests_per_world": 10, "identity_errors": 0, "field_digest_errors": {"xyzi": 0, "occupancy": 0, "packed_labels": 0, "normal_control_mask": 0, "anomaly_proxy_mask": 0, "inserted_mask": 0, "occluded_original_mask": 0, "unchanged_normal_mask": 0, "object_id_internal": 0}, "duplicate_request_bit_errors": 0, "render_calls": {"serial_cached_forward": 768, "parallel_uncached_forward": 1280, "parallel_cached_reverse": 768, "parallel_cached_random": 768}, "render_call_errors": 0, "cross_world_cache_errors": 0, "cross_world_factory_calls": 128, "render_frame_window_parameters": 0, "slot_uniform_window_reads": 0, "run_seconds": {"serial_cached_forward": 170.8439177310065, "parallel_uncached_forward": 92.47216535800544, "parallel_cached_reverse": 55.94150528500904, "parallel_cached_random": 56.06911600798776}, "renderer_generator_identity": "9ff61e81c133a844b107ff303da6471d9810384a90846b1eb67cb73dacf792f0", "scientific_array_sha256": "5df3d02f0d47697a785b3d43ea457765a5d4d48106b74a77c68f087919939fd0", "artifact_bytes": 149551, "artifact_sha256": "04e524a5428c9b906e9fefe253f7ec66533bd6cb3452ea6d9afdb830e1a94b34", "claim_limit": "E37 establishes renderer identity invariance only; Gate 1 source-distribution auditing begins at E38."}
       },
       "E38": {
+        "current_validity": "historical PASS for the old normal-control distribution; E25-new makes this control-dependent node invalid until refreshed",
         "question": "Are per-beam opportunity, return count and return rate finite, conserved and populated for real-normal, normal-control and anomaly-proxy entity-frame units?",
         "development_data": "train/201 frames 4 through 681; official 2.5--50 m domain",
         "support_pool": {"algorithm": "E21-v4 unchanged", "center_frames": [6, 679], "artifact": "runs/ajae/gate1_201_support_pool.npz"},
@@ -2848,6 +2899,7 @@
         "result": {"passed": true, "support_pool": {"pool_size": 1193969, "covered_center_frames": 636, "semantic_counts": {"40": 612018, "48": 581951, "49": 0}, "elapsed_seconds": 83.32815368099546, "scientific_array_sha256": "a5bd7007c508d4b411f84bcac7c26b418f93d46837d1da0774637bb15406f490", "artifact_bytes": 84256915, "artifact_sha256": "fc3646fbc145cdc29d2cf203835a3e0018bacbc6eaf714e091d21f7b93bfaf50"}, "candidate_bank": {"completed": 256, "errors": 0, "real_candidate_count": 1635, "center_frame_count": 183, "support_semantic_counts": {"40": 174, "48": 82}, "maximum_attempt": 0, "elapsed_seconds": 116.51954507900518, "scientific_array_sha256": "af07e64a90d5a16782d5f2a26069ba741898bdbfd7cee59a315a04e9b76ba4bf", "artifact_bytes": 1090511, "artifact_sha256": "16db45363c1b1f670bcca60ca253811ca63a224349a8e9c2f3dacde1a2239d11"}, "entity_frame_groups_per_source": 1280, "total_opportunities": [1007417, 468954, 456804], "total_returns": [742546, 462626, 451689], "conservation_errors": 0, "finite_errors": 0, "elementwise_reproduced": true, "run_seconds": [225.1813629649987, 224.414733868005], "scientific_array_sha256": "1fa5021b268078f386ce3393d77c219c111717c585b74d61542a34c7e94a875e", "artifact_bytes": 209405, "artifact_sha256": "60bcffc4fb8c55cd9a2820795380621fb7162119714b95db5c485020653e7108", "claim_limit": "E38 establishes finite conserved per-beam statistics and candidate coverage only; ordinary source differences remain descriptive until matched E46."}
       },
       "E39": {
+        "current_validity": "historical PASS for the old normal-control distribution; E25-new makes this control-dependent node invalid until refreshed",
         "question": "Are per-range opportunity, return count and return rate finite, conserved and covered for all three sources?",
         "input_candidate_bank": "runs/ajae/gate1_candidate_bank_256.npz",
         "range_bins_m": [[2.5, 10.0], [10.0, 20.0], [20.0, 30.0], [30.0, 40.0], [40.0, 50.0]],
@@ -2863,6 +2915,7 @@
         "result": {"passed": true, "source_range_opportunity": [[686670, 273466, 46226, 1055, 0], [354036, 104916, 9630, 372, 0], [332449, 111460, 12436, 459, 0]], "source_range_return_count": [[513492, 202803, 25732, 519, 0], [350782, 101962, 9512, 370, 0], [330433, 108813, 12052, 391, 0]], "source_range_entity_frame_groups": [[447, 833, 268, 15, 0], [511, 684, 236, 26, 0], [493, 637, 228, 23, 0]], "conservation_errors": 0, "finite_errors": 0, "first_four_coverage_errors": 0, "elementwise_reproduced": true, "run_seconds": [223.6974739760044, 224.6266890919942], "shared_trace_intensity_returns": 1656861, "scientific_array_sha256": "185f27c461943f6d8143f70bed6d6301f1d4753ae362cca06aed12ea999c3d52", "artifact_bytes": 5556553, "artifact_sha256": "e404a63c32331221af02d17cc694398410c55bbf8f14798469dde7741ec63f58", "claim_limit": "E39 establishes per-range accounting and first-four-bin coverage; all sources have zero 40--50 m groups in this 256-seed bank, which is descriptive under the frozen rule."}
       },
       "E40": {
+        "current_validity": "historical PASS for the old normal-control distribution; E25-new makes this control-dependent node invalid until refreshed",
         "question": "Are beam-by-range conditional intensity records finite, correctly binned and within the frozen train/206 support for generated sources?",
         "input_trace": "runs/ajae/e39_per_range_return.npz",
         "statistics": ["count", "Q05", "Q25", "median", "Q75", "Q95", "pairwise ECDF distance", "lower/upper clipping fraction"],
@@ -2877,6 +2930,7 @@
         "result": {"passed": true, "intensity_returns": 1656861, "source_counts": [742546, 462626, 451689], "nonempty_cells": [190, 173, 214], "count_errors": 0, "identity_errors": 0, "finite_errors": 0, "generated_support_errors": 0, "generated_clipping_count_low_high": [[0, 0], [0, 0]], "generated_clipping_fraction_low_high": [[0.0, 0.0], [0.0, 0.0]], "elementwise_reproduced": true, "two_run_total_seconds": 1.907127231999766, "scientific_array_sha256": "05c9248caeaa5de12320a6c0695e47e983221610eaae67daa82fe0c865ce22ab", "artifact_bytes": 22989, "artifact_sha256": "ac8cd9a2bfa2f0011c201f287d1a3908e401fe844f09bc12be8b755673dd8564", "claim_limit": "Conditional quantiles and ECDF distances are descriptive at E40; matched leakage adjudication remains E46."}
       },
       "E41": {
+        "current_validity": "historical PASS for the old normal-control distribution; E25-new makes this control-dependent node invalid until refreshed",
         "question": "Is empty-to-valid accounting conserved for both generated labels, with actual final additions and probability rejections?",
         "input_trace": "runs/ajae/e39_per_range_return.npz",
         "source_order": ["normal-control", "anomaly-proxy"],
@@ -2891,6 +2945,7 @@
         "result": {"passed": true, "source_chain_total": [[24291803, 16037, 16011, 16011], [24291803, 25173, 25136, 25136]], "source_return_rejection": [26, 37], "source_post_acceptance_rejection": [0, 0], "chain_violation_count": [0, 0, 0, 0], "chain_errors": 0, "branch_coverage_errors": 0, "elementwise_reproduced": true, "two_run_total_seconds": 0.025614173006033525, "scientific_array_sha256": "71bbccc62da2254b553bfbaaf8f9864281b9242d956ca88c903e1f90a74f7c8f", "artifact_bytes": 5541, "artifact_sha256": "771e39129087324be9526b6286bd2d2c40194d8c20c6ec8fd0dceb8fdf340c3e", "claim_limit": "E41 establishes empty-slot chain conservation and branch coverage only; source-rate differences remain descriptive until matching and E46."}
       },
       "E42": {
+        "current_validity": "historical PASS for the old normal-control distribution; E25-new makes this control-dependent node invalid until refreshed",
         "question": "Are entity-frame visible-return counts conserved in the frozen Nvis strata, and is preliminary three-source matching support nonempty?",
         "input_trace": "runs/ajae/e39_per_range_return.npz",
         "nvis_layers": [[1, 8], [8, 32], [32, 128], [128, "infinity"]],
@@ -2905,6 +2960,7 @@
         "result": {"passed": true, "entity_frame_groups_per_source": 1280, "source_layer_count": [[0, 10, 433, 837], [51, 223, 402, 597], [68, 200, 356, 652]], "source_zero_visible_count": [0, 7, 4], "generated_layer_coverage": [4, 4], "shared_support_range_nvis_strata": 12, "definition_errors": 0, "count_errors": 0, "coverage_errors": 0, "matching_errors": 0, "elementwise_reproduced": true, "two_run_total_seconds": 0.0014445129927480593, "scientific_array_sha256": "8de2b629f5dd6d6ea1202f546826300c36cd68e5bd2ddf7f4772e859b1aac3d5", "artifact_bytes": 50075, "artifact_sha256": "19da6a5c347768e7861c75bac2e62cc2dfe0ada7d4ff294306a5ecca797f791e", "claim_limit": "All generated sources cover four positive-Nvis layers and 12 preliminary shared strata; complete frozen matching remains E45."}
       },
       "E43": {
+        "current_validity": "historical PASS for the old normal-control distribution; E25-new makes this control-dependent node invalid until refreshed",
         "question": "Are fixed-world five-frame visibility traces deterministic across repeated rendering and independent of window identity, with finite Nvis change and V statistics?",
         "input_window_audit": "runs/ajae/e37_world_frame_consistency.npz",
         "input_trace": "runs/ajae/e39_per_range_return.npz",
@@ -2919,6 +2975,7 @@
         "result": {"passed": true, "source_V_count_for_V_0_to_5": [[0, 0, 0, 0, 0, 256], [0, 1, 0, 1, 1, 253], [0, 0, 0, 0, 4, 252]], "source_appearance_disappearance": [[0, 0], [3, 1], [1, 4]], "source_relative_change_quantiles_Q05_Q25_Q50_Q75_Q95": [[0.0032445706733762853, 0.025, 0.04961342265941463, 0.07774390243902439, 0.15625], [0.0, 0.02693693693693694, 0.05206483555998119, 0.08, 0.1870065789473681], [0.0, 0.023762654668166478, 0.0476663826564423, 0.07821991822429906, 0.25]], "window_identity_errors": 0, "repeated_render_errors": 0, "finite_errors": 0, "definition_errors": 0, "elementwise_reproduced": true, "two_run_total_seconds": 0.0005795360048068687, "scientific_array_sha256": "3173ded49e86c671dcff0d481f93441c9477303a814092c1099b6eabc85d03ef", "artifact_bytes": 26415, "artifact_sha256": "61a1b6972db321b7539a29300d5e6b08a723fe22801e308ef6c339d285d811a9", "claim_limit": "E43 establishes deterministic window-independent traces and finite temporal descriptors; genuine geometry-driven appearance and disappearance remain descriptive."}
       },
       "E44": {
+        "current_validity": "historical PASS for the old normal-control distribution; E25-new makes this control-dependent node invalid until refreshed",
         "question": "Are frozen entity-frame occlusion rates valid and conserved, do both generated labels cover all three strata, and is preliminary three-source matching support nonempty?",
         "input_trace": "runs/ajae/e39_per_range_return.npz",
         "definition": "O=1-visible_returns/accepted_returns_before_occlusion",
@@ -2972,6 +3029,7 @@
         "subsequent_review": {"design_classification": "three-way audit design failure", "preserve_formal_fail": true, "finding": "E46 and E48 require different pairwise common-support sets; neither scientific question requires a simultaneous real/control/proxy triplet."}
       },
       "E45A": {
+        "current_validity": "historical FAIL for the old normal-control distribution; E45A-new must be rebuilt after E25-new and the control-side refresh",
         "question": "Can real-normal and normal-control support at least 1024 non-reused strictly matched pairs for E46?",
         "status": "FAIL; E46 locked",
         "source_pair": ["real-normal", "normal-control"],
@@ -2992,8 +3050,9 @@
         "result": {"passed": false, "failure_classification": "insufficient_pairwise_common_support", "capacity": 2048, "estimand_range_m": [2.5, 40.0], "range_40_50_status": "unobservable_for_real-vs-rendered-object matching in train/201", "legal_edges": 778, "exact_strata_with_edges": 15, "matched_pairs": 135, "center_frames": 73, "matched_range_count_2p5_to_40": [11, 107, 17, 0], "pairwise_smd": [0.08472369392930036, 0.1416936489548965, 0.041912701793768686, 1.00039918597199, 0.03765025981014738], "maximum_pairwise_smd": 1.00039918597199, "caliper_errors": 0, "duplicate_errors": 0, "elementwise_reproduced": true, "two_run_matching_seconds": 0.025716442003613338, "scientific_array_sha256": "b5cf376e3244d8ef2858471716f500bca9075733530482b6813dedb7ab7ce25d", "artifact_bytes": 565274, "artifact_sha256": "1eecff9d3b7229aad58e5269037e1bceaa09438f2fd826474d0dd9239ac72766", "decision_boundary": "E46 remains locked because the frozen maximum pairwise match fails pair count, center-frame coverage, 30--40 m coverage, and SMD requirements."}
       },
       "E45B": {
+        "current_validity": "historical PASS for the old normal-control distribution; its E48 prerequisite is invalid until E45B-v2 passes on the E25-new distribution",
         "question": "Can normal-control and anomaly-proxy support at least 1024 non-reused strictly matched pairs for E48?",
-        "status": "PASS; pairwise prerequisite for E48 satisfied",
+        "status": "HISTORICAL PASS for the old normal-control distribution; current E48 prerequisite not satisfied",
         "source_pair": ["normal-control", "anomaly-proxy"],
         "source_sequence": "train/201 only",
         "unit_cache": "runs/ajae/e45_v2_units_2048.npz",
@@ -3013,7 +3072,7 @@
       },
       "E45A_v2": {
         "question": "Can an audit-only targeted normal-control proposal bank cover the frozen real-normal observation domain without changing renderer or training-world generation?",
-        "status": "FAIL; E46 locked pending owner decision",
+        "status": "HISTORICAL FAIL; its owner-decision stop was superseded by E25-new; E46 remains locked until E45A-new PASS",
         "audit_only": true,
         "formal_training_distribution_changed": false,
         "preserved_components": ["E22 grounding", "E23 observed-normal collision", "E24 single-object pair-collision semantics", "E25 normal-template type, scale, support, and yaw rules", "authoritative renderer", "all E45 exact matches and calipers", "maximum-cardinality matching", "E46 models and thresholds"],
@@ -3043,7 +3102,7 @@
         "command": "python -m src.render qualify-e45a-v2 --data-root /home/jasongao/Data/STU --support-pool runs/ajae/gate1_201_support_pool.npz --e25-artifact runs/ajae/e25_normal_control.npz --calibration runs/ajae/calibration.pt --unit-cache runs/ajae/e45_v2_units_2048.npz --output runs/ajae/e45a_v2_targeted_pairs.npz --processes 4",
         "artifact": "runs/ajae/e45a_v2_targeted_pairs.npz",
         "candidate_cache_pattern": "runs/ajae/e45a_v2_targeted_controls_{proposal_limit}.npz",
-        "unlock": "E45A-v2 PASS unlocks E46; E45A-v2 FAIL keeps E46 locked and requires owner decision before changing formal normal-control generation",
+        "unlock": "historical branch: E45A-v2 did not unlock E46; the later E25-new decision makes E45A-new PASS the current E46 prerequisite",
         "result": {
           "passed": false,
           "failure_classification": "targeted_control_common_support_failure",
@@ -3075,7 +3134,7 @@
           "candidate_cache_sha256_by_limit": {"4": "a7edf07e31ce8296e04b9bd70e8b7401ec6fcacaa851ddaf4ddf551306394540", "8": "719e4980d2b585a9d4293b56908e16cefd2464f044b821ddcf4a7f3f9a6208b2", "16": "f9ce87d95af7b360768b5c70e9f18fa703f1c98711b4e052486fd745007cefe0", "32": "32431c8fb9ce09c4c6c0e36212db38d4718f98e0a188ab6a4749bd41626a1c79", "64": "0853358fa0c3a414cb39eeeef41fa15a5691dd641558ffa77030011b431ef32b"},
           "wall_seconds": 8318,
           "maximum_resident_kib": 9611168,
-          "decision_boundary": "The frozen audit-only targeted bank exhausted 64 proposals per real target and failed pair count, center-frame coverage, 30--40 m coverage, and SMD requirements. E46 remains locked; changing formal normal-control generation requires owner decision."
+          "decision_boundary": "The frozen audit-only targeted bank exhausted 64 proposals per real target and failed pair count, center-frame coverage, 30--40 m coverage, and SMD requirements. The required owner decision was later supplied by E25-new; E46 remains locked until E45A-new PASS."
         }
       }
     },
@@ -3194,7 +3253,7 @@
       "development_source": "train/201 where specified"
     },
     "E26-V1": {
-      "status": "LOCKED until E26 PASS",
+      "status": "HISTORICAL nonblocking review definition for old E26; not active for E25-new/E26-v2",
       "source": "train/206",
       "crops": {"normal_control": 80, "anomaly_proxy": 80},
       "matching": ["support surface", "distance", "size", "occlusion"],

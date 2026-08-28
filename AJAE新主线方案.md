@@ -1,6 +1,6 @@
 # AJAE 主线方案
 
-> 优化基线：GitHub `JasonGao1010/Anomaly` 远端 `main`，提交 `44fd6d13798e826b2cac8371de26a7d17707dadc`（E22-v2 PASS）。本版保留全部历史科学结论，重构 E23–E104 的协议设计与推进纪律；尚未写回仓库。
+> 当前权威基线：本仓库`main`、本文记录的全部历史证据及当前冻结的E25-new合同。旧提交`44fd6d13798e826b2cac8371de26a7d17707dadc`只保留为E22-v2时期的历史基线，不再代表当前工作区状态。
 
 ---
 
@@ -429,7 +429,7 @@ normal-control 与 anomaly-proxy 在候选池阶段应尽量共享或匹配：
 - 遮挡程度；
 - 材质量化层。
 
-最终是否达到可比较性不由生成规则口头保证，而由 E42–E46 的严格匹配和来源分类审计裁决。
+这里的“候选池阶段”专指E45A/E45B审计候选与匹配，不是E25-new的生成接受条件。E25-new只负责合法生成和预先指定的距离覆盖；可见点数、遮挡和局部密度等共同支持条件全部留在审计阶段。最终是否达到可比较性不由生成规则口头保证，而由 E42–E46 的严格匹配和来源分类审计裁决。
 
 
 ---
@@ -1820,7 +1820,7 @@ $$
 
 ---
 
-# 18. 当前状态（当前工作区：E25-v3 normal-control正式FAIL，等待课题负责人决策）
+# 18. 当前状态（当前工作区：E25-new覆盖导向合同已冻结，正式运行待执行）
 
 截至当前工作区权威提交，已经完成：
 
@@ -1829,7 +1829,7 @@ $$
 - E21-v4：train/206 qualified support-patch pool；
 - E22-v2：连续落地与明显埋地资格；
 - E23：已观测非地面正常几何的明显深穿透拒绝资格；
-- E23–E26：统一的 support-pool-only placement/world-builder 权威接口与整段设计冻结。
+- 历史 E23–旧 E26：统一的 support-pool-only placement/world-builder 接口证据；其中旧 E25、旧 E26只适用于已经失效的旧normal-control分布。
 
 E24 已完成两遍正式运行但未通过：512 个固定世界中 504 个构造完成，8 个世界因固定对象不满足 E22 连续最低支撑差值条件而耗尽 128 次支撑提议。已完成世界的最终实体对明显深穿透为 0，但该子集结果不能满足 512/512 的 E24 门槛。
 
@@ -1837,9 +1837,9 @@ E24-v2 保留 E24 的世界身份、实体数、全部碰撞规则和支撑提�
 
 E24-v2 已按该合同完成两遍正式运行并通过：512/512个原世界全部构造完成，8个E22-invalid shape在support抽样前被拒绝，最终E22/E23 violation、明显实体对互穿、硬错误和两类耗尽均为0。E24历史FAIL继续保留。
 
-E25 已完成两遍修后正式运行并通过：train/206实际可观察模板为car、truck、other-vehicle和person各64个；1,024/1,024个normal-control全部完成，类别—支撑违规、缩放错误、姿态错误、E22/E23验证错误、多实体fixture错误、硬错误和放置耗尽均为0。首次运行中6个模板因确定性表面射线错误地假定局部原点位于凸包内部而耗尽提议，该事件已归类为实现缺陷；修复只改变普通模板的表面采样射线内部点，没有改变E25科学判据。
+历史 E25 已在旧随机放置control分布下完成两遍修后正式运行并通过：train/206实际可观察模板为car、truck、other-vehicle和person各64个；1,024/1,024个normal-control全部完成，类别—支撑违规、缩放错误、姿态错误、E22/E23验证错误、多实体fixture错误、硬错误和放置耗尽均为0。首次运行中6个模板因确定性表面射线错误地假定局部原点位于凸包内部而耗尽提议，该事件已归类为实现缺陷；修复只改变普通模板的表面采样射线内部点，没有改变E25科学判据。该结果不能替代E25-new。
 
-E26 已完成两遍24进程正式运行并通过：四类固定world各64个，256/256个world全部构造完成；world/report规范往返、E22–E25验证、类别支撑、姿态、材质、最终实体对、窗口遍历、缓存请求身份、单进程manifest重建、权威路径审计、硬错误和耗尽计数均为0，两遍逐元素一致。Phase 2至此关闭。
+历史 E26 已在旧normal-control分布下完成两遍24进程正式运行并通过：四类固定world各64个，256/256个world全部构造完成；world/report规范往返、E22–E25验证、类别支撑、姿态、材质、最终实体对、窗口遍历、缓存请求身份、单进程manifest重建、权威路径审计、硬错误和耗尽计数均为0，两遍逐元素一致。该结果永久保留，但不能资格E25-new后的正式生产world builder；当前Phase 2必须由E26-v2重新关闭。
 
 E27 已完成两遍24进程正式运行并通过：256个真实normal-control凸包模板覆盖4个active类别、全部128束×2列槽位和2.5–50 m目标距离；target hit、解析miss、法向外向性和object ID错误均为0，最近距离、表面残差和法向单位长度误差均低于冻结容差。
 
@@ -1871,6 +1871,8 @@ E37已按状态机冻结正式执行：从E26四类世界各固定32个，以中
 
 E37已正式通过：128个固定世界的9类slot对齐输出在串行/24进程、正序/逆序/随机顺序和cached/uncached路径之间零摘要差异；重复窗口请求逐bit错误0，跨world cache误命中0，window identity进入正式渲染与回波随机流的读取数0。E37关闭，E38解锁。
 
+以下E38–E44、E45A和E45B结果均使用旧normal-control分布，只作为历史证据保留。E25-new一旦形成新版正式control分布，这些control依赖结论即失效，必须按当前路线刷新E38–E44并执行E45A-new和E45B-v2；旧E45B PASS不再满足当前E48前置资格。
+
 E38及其统一候选银行已经冻结：train/201帧4–681使用E21-v4同一支撑区域算法；首级候选银行使用256个paired seeds，每个seed分别生成独立正常对照世界与异常代理世界，并绑定同一真实正常实体五帧单位。E38保存三来源逐entity-frame、逐beam的opportunity、return count/rate和2,000次cluster bootstrap区间。实现通过46项完整回归，正式构建与统计尚未产生结果。
 
 E38已正式通过：201支撑池包含1,193,969个合格区域；256/256候选seed完成并覆盖183个中心帧。三来源各1,280个entity-frame groups的逐beam opportunity、return count/rate和cluster bootstrap区间全部有限且计数守恒，两遍24进程逐元素一致。E38关闭，E39解锁；逐beam来源差异没有在本节点转化为来源泄漏结论。
@@ -1893,9 +1895,9 @@ E45正式FAIL，分类为`scientific_candidate_domain_failure`。E38冻结定义
 
 E45-v1正式FAIL永久保留；后续设计归因修订为`qualification specification defect`。E45-v2在不改变真实对象候选、train/201来源和全部严格匹配条件的情况下完整运行至2,048容量，正式FAIL，分类为`insufficient_three_source_common_support`。最终只有58个triplets、34个real侧center frames，四个可观察距离层计数为[0,51,7,0]，最大pairwise SMD为1.509987；caliper错误、重复使用和复现错误均为0。E46保持锁定。
 
-E45-v2正式FAIL永久保留；后续设计层归因修订为三方审计设计失败。E46所需的real-normal与normal-control、E48所需的normal-control与anomaly-proxy现拆为E45A和E45B两个独立匹配集。两者完整复用2,048容量冻结单位缓存、train/201来源、real-normal定义、2.5–40米域、精确匹配条件和五项caliper；使用完整合法边上的确定性最大基数二分匹配，并在最大基数固定后最小化归一化协变量平方差。E45A已正式FAIL：完整合法图778条边，最大匹配135对、73个real侧center frames、四个距离层计数[11,107,17,0]，最大SMD为1.000399；caliper错误、重复和复现错误均为0。E46保持锁定。E45B已正式PASS：完整合法图29,156条边，最大匹配3,624对、357个normal-control侧center frames、四个距离层计数[1,133,1,877,563,51]，最大SMD为0.031652；caliper错误、重复和复现错误均为0。E48的两两匹配前置资格满足，但E48分类尚未执行。
+E45-v2正式FAIL永久保留；后续设计层归因修订为三方审计设计失败。E46所需的real-normal与normal-control、E48所需的normal-control与anomaly-proxy现拆为E45A和E45B两个独立匹配集。两者完整复用2,048容量冻结单位缓存、train/201来源、real-normal定义、2.5–40米域、精确匹配条件和五项caliper；使用完整合法边上的确定性最大基数二分匹配，并在最大基数固定后最小化归一化协变量平方差。历史E45A正式FAIL：完整合法图778条边，最大匹配135对、73个real侧center frames、四个距离层计数[11,107,17,0]，最大SMD为1.000399；caliper错误、重复和复现错误均为0。E46保持锁定。历史E45B正式PASS：完整合法图29,156条边，最大匹配3,624对、357个normal-control侧center frames、四个距离层计数[1,133,1,877,563,51]，最大SMD为0.031652；caliper错误、重复和复现错误均为0。该前置资格只适用于旧control分布，当前E48仍锁定并等待E45B-v2。
 
-E45A-v2作为Gate 1审计专用定向control银行完整执行至每目标64个proposal的冻结上限，正式FAIL，分类为`targeted_control_common_support_failure`。各阶梯合格control数为[13,36,83,170,325]，最大匹配数为[13,36,80,148,212]；最终只有212对、90个real侧center frames，四个距离层计数为[1,139,72,0]。五项SMD为[0.099364,0.159312,0.064798,0.882238,0.021068]，最大值为遮挡SMD 0.882238。caliper错误、重复使用、硬错误均为0，两遍匹配逐元素一致。该审计银行没有修改E26、renderer或正式normal-control训练分布，也没有使用E46分类器结果。正式产物科学数组哈希为 `00aed2338732f9a9233547cae52c1c3087df6cfb5294da664a73a7b33a0c6192`，文件大小756,236字节，SHA-256为 `290747b6c01ec9d2af152e8688f51cc9c966690cb5c165279265a51fc30e0405`。E46继续锁定；按冻结停止条件，修改正式normal-control生成需要新的用户决策。
+E45A-v2作为Gate 1审计专用定向control银行完整执行至每目标64个proposal的冻结上限，正式FAIL，分类为`targeted_control_common_support_failure`。各阶梯合格control数为[13,36,83,170,325]，最大匹配数为[13,36,80,148,212]；最终只有212对、90个real侧center frames，四个距离层计数为[1,139,72,0]。五项SMD为[0.099364,0.159312,0.064798,0.882238,0.021068]，最大值为遮挡SMD 0.882238。caliper错误、重复使用、硬错误均为0，两遍匹配逐元素一致。该审计银行没有修改E26、renderer或正式normal-control训练分布，也没有使用E46分类器结果。正式产物科学数组哈希为 `00aed2338732f9a9233547cae52c1c3087df6cfb5294da664a73a7b33a0c6192`，文件大小756,236字节，SHA-256为 `290747b6c01ec9d2af152e8688f51cc9c966690cb5c165279265a51fc30e0405`。其历史停止条件要求新的用户决策；该决策现已由E25-new合同取代。E46仍锁定，当前前置条件为E45A-new PASS。
 
 用户已据此授权修改正式normal-control位置生成。E25-v2按train/206真实正常观测引导的位置proposal与拒绝采样完成单次正式执行并FAIL：254/256完成，两个other-vehicle模板耗尽128个目标proposal；接受目标只覆盖27个真实实例且40–50米层为0。正式产物永久保留。结束后的独立只读审核进一步确认，4,827个目标中1,865个参考支撑距真实实例二维凸包超过0.5米，最大26.110105米；person的234个目标全部超过0.5米，40–50米层117个目标中111个超过0.5米。该缺陷来自`_real_instance_support_row`在没有近邻支撑时执行无最大距离限制的最近支撑回退，并已传播到106/254个完成control所引用的环境目标。因目标的support semantic和后续support proposal顺序受错误参考支撑影响，当前E25-v2不能裁决正式normal-control构念是否可行。256个真实模板、缩放、类别、姿态、材质、传感器与schema 7 proxy均未改变；旧E25、E26和E45B结果仍只对旧control分布有效。E26-v2、E46和E48保持锁定，后续目标库精确支撑关联定义等待新的课题负责人决策。
 
@@ -1923,6 +1925,14 @@ E25-v3 normal-control正式资格随后在提交`a97a6c7`上执行一次并FAIL�
 
 E25-v3目标资格PASS与目标库PASS继续成立，但不能代替normal-control生成资格。本次FAIL不能单独推出renderer失败、E21-v4支撑资格失败、person全类几何不可放或normal-control整体构念不可行；当前只有一次正式运行证据。按照运行前冻结的FAIL路线，没有自动重试，没有改变$1.25R(d)$、128×128上限或E45A caliper，也没有进入E26-v2或train/201审计。状态机现停在E25-v3等待课题负责人决策。
 
+课题负责人现已作出新决策并结束E25-v3的真实目标逐对象条件复制路线。E25-v2与E25-v3 normal-control FAIL永久保留；E25-new恢复生成器与审计的职责分离。E25-new只要求256个规范train/206模板各生成一个合法且可见的正常对照，并通过固定索引循环覆盖官方五个距离层；E45A的median beam、可见回波数、遮挡和局部密度caliper全部移回train/201审计阶段，不再作为生成接受条件。
+
+E25-new的fixture index $i=0,\ldots,255$与规范模板索引一一对应，指定距离层为$i\bmod5$，总配额固定为$[52,51,51,51,51]$。最终距离身份只使用`render_frame`后全部可见normal-control回波的official range中位数。模板不得替换或重复，指定层不得回退；每fixture最多128个支撑proposal。类别支撑语义、0.9–1.1缩放、类别姿态、材质、E21–E24、传感器概率、强度与renderer保持不变。train/201、真实目标、E45A匹配结果和E46输出均不进入生成。
+
+E25-new的唯一硬门是256/256完成、模板身份唯一、每项最终距离层正确、至少一个可见回波、E21–E24及类别语义合法、缩放/姿态/材质/renderer合同正确、hard error与指定距离层耗尽为0。方位角、遮挡层和$N_{vis}$只报告，不设置最低数量。正式运行固定24进程、每进程数值库单线程，只执行一次且不自动重试。运行前权威命令为`python -m src.render qualify-e25-new-normal-control --data-root /home/jasongao/Data/STU --support-pool runs/ajae/e21_v4_support_pool.npz --calibration runs/ajae/calibration.pt --output runs/ajae/e25_new_normal_control.npz --processes 24`。
+
+这里的距离循环是用于构造反作弊正常对照的覆盖导向采样，不是对真实正常场景距离分布的估计。每个45度方位扇区的总体与分类别计数、最大扇区计数和占比，以及遮挡层与$N_{vis}$分布均只作描述。
+
 当前可成立的局部结论是：
 
 > **schema 7 能合法、确定且高效地产生覆盖冻结几何区域的合成异常代理；这些对象可以从 train/206 的合格支撑池采样，以冻结连续落地规则达到 99% 接触/埋地资格，并能由同一权威放置接口拒绝与 train/206 实际观测非地面回波发生超过 5 cm 深穿透的位置。**
@@ -1937,21 +1947,23 @@ E25-v3目标资格PASS与目标库PASS继续成立，但不能代替normal-contr
 当前执行节点为：
 
 $$
-\boxed{E25\text{-v2 FAIL RETAINED};\quad E25\text{-v3 TARGET BANK PASS};\quad E25\text{-v3 CONTROL FAIL}}
+\boxed{E25\text{-v2/v3 FAIL RETAINED};\quad E25\text{-new FROZEN BEFORE FORMAL RUN}}
 $$
 
-E23与E24-v2已按冻结设计通过，当前顺序进入：
+E23与E24-v2已按冻结设计通过，当前顺序为：
 
 $$
-E23\rightarrow E24\rightarrow E25\rightarrow E26
+E25\text{-new}\rightarrow E26\text{-v2}\rightarrow
+\text{E38--E44 control-side refresh}\rightarrow
+\{E45A\text{-new},E45B\text{-v2}\}
 $$
 
-E27–E44已关闭；E36-v1、E45-v1、E45-v2、E45A、E45A-v2、E25-v2和E25-v3 normal-control FAIL均保留。旧E45B已PASS，但只资格旧normal-control分布；任何新版正式control分布必须重新执行E45B-v2。$D_{xy}+\alpha$路线已经终止；E25-v3可信局部支撑目标资格与3,267行目标库重建已经PASS，定义不再调整。当前没有自动进入下一实验；E26-v2、依赖新版control分布的E38–E45A、E45B-v2、E46和E48保持锁定。
+E27–E37的纯机械资格继续保留；E36-v1、E45-v1、E45-v2、E45A、E45A-v2、E25-v2和E25-v3 normal-control FAIL均保留。旧E45B已PASS，但只资格旧normal-control分布；新版正式control分布必须重新执行E45B-v2。$D_{xy}+\alpha$路线和E25-v3逐对象五维条件复制路线均已终止。当前先执行E25-new；PASS后依次进入E26-v2、依赖新版control分布的E38–E44刷新、E45A-new与E45B-v2。E46和E48继续锁定。
 
 因此当前整体判断仍是：
 
 $$
-\boxed{\text{E25-v3正式生成资格未通过，状态机停在课题负责人决策点}}
+\boxed{\text{E25-new合同已冻结，等待唯一一次正式资格结果}}
 $$
 
 不能写成“AJAE 方法已经验证”或“剩余只需训练”。

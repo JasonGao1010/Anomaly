@@ -1,6 +1,6 @@
 # AJAE 细粒度实验执行状态机
 
-> 优化基线：GitHub `JasonGao1010/Anomaly` 远端 `main`，提交 `44fd6d13798e826b2cac8371de26a7d17707dadc`（E22-v2 PASS）。本版保留 E00–E22 的全部历史记录，统一冻结 E23–E104 的未来设计；尚未写回仓库。
+> 当前权威基线：本仓库`main`、本文件记录的全部历史证据及当前冻结的E25-new合同。旧提交`44fd6d13798e826b2cac8371de26a7d17707dadc`只保留为E22-v2时期的历史基线，不再代表当前工作区状态。
 
 > 依据：`AJAE新主线方案.md`。本文件把主线方案中的不可变约束、四个 Decision Gates、B0–B5 对照、正常运动安全、对象尺度诊断、开发纪律与一次性真实 OOD 验证，拆成可顺序执行的细粒度实验节点。
 
@@ -97,8 +97,8 @@ flowchart TB
     E22["E22-v2 连续落地与埋地 PASS"]
     E23["E23 已观测正常几何碰撞"]
     E24["E24 插入实体相互碰撞"]
-    E25["E25 正常控制语义放置"]
-    E26["E26 完整世界规格确定性"]
+    E25["E25-new 覆盖导向正常控制合法生成"]
+    E26["E26-v2 新control分布完整世界规格"]
     E26V1["E26-V1 放置场景人工审查"]
     E16 --> E17
     E17 --> E18A
@@ -144,14 +144,15 @@ flowchart TB
     E36 --> E37
   end
   subgraph P4["Phase 4｜Gate 1：传感器一致性与反作弊"]
-    E38["E38 per-beam 回波率一致性"]
+    E38["E38 新control分布per-beam刷新"]
     E39["E39 per-range 回波率一致性"]
     E40["E40 beam×range 强度分布"]
     E41["E41 empty→valid 比例"]
     E42["E42 单实体可见点数分布"]
     E43["E43 连续帧可见点数变化"]
     E44["E44 遮挡率分布"]
-    E45["E45 三方严格匹配审计集"]
+    E45A["E45A-new real-normal↔control匹配"]
+    E45B["E45B-v2 control↔proxy匹配"]
     E45V1["E45-V1 人眼来源指纹盲辨"]
     E46["E46 真实正常 vs 渲染正常来源分类"]
     E47["E47 来源指纹归因消融"]
@@ -163,10 +164,13 @@ flowchart TB
     E41 --> E42
     E42 --> E43
     E43 --> E44
-    E44 --> E45
-    E45 --> E46
-    E45 -. "可选非阻断人审" .-> E45V1
-    E46 --> E48
+    E44 --> E45A
+    E44 --> E45B
+    E45A --> E46
+    E45A -. "可选非阻断人审" .-> E45V1
+    E46 -. "FAIL归因" .-> E47
+    E45B --> E48
+    E46 --> E49
     E48 --> E49
   end
   subgraph P5["Phase 5｜冻结 STU 点接口与五帧坐标"]
@@ -293,8 +297,8 @@ flowchart TB
   end
   E07 --> E08
   E15 --> E16
-  E26 --> E27
-  E37 --> E38
+  E26 --> E38
+  E37 -. "E27–E37既有机械资格保留" .-> E38
   E49 --> E50
   E56 --> E57
   E63 --> E64
@@ -2978,7 +2982,9 @@ E24-v2在冻结提交 `44ee77b` 和实现提交 `e98e5d2` 后完成两遍24进�
 
 E24-v2 PASS允许的结论限定为：**在保持E22、E23和pair detector不变的条件下，逐实体确定性shape rejection/resampling合同能够在64个shape与128个placement上限内构造全部512个冻结多实体世界，最终E22/E23 violation和明显实体对互穿均为0。** E24历史FAIL继续保留，其失败不归因于pair-collision detector。E24-v2至此关闭，E25按既有冻结设计直接解锁。
 
-## E25｜normal-control 模板、支撑语义与姿态资格
+## 历史 E25｜旧随机放置normal-control的模板、支撑语义与姿态资格
+
+**当前适用边界：以下PASS只适用于旧随机放置control分布，不能替代E25-new。**
 
 **唯一问题**
 
@@ -3032,7 +3038,7 @@ control index $i\in[0,1023]$ 的control seed固定为 $2{,}500{,}000+i$。vehicl
 
 该次失败归类为 `implementation_defect`，不形成E25科学裁决。确定性表面采样原实现把局部原点当作所有形状的内部点；上述6个真实实例凸包不包含局部原点，因此从原点中心外部球面射向原点的部分射线没有命中凸包。修复只对 `NormalTemplateShape` 使用凸包顶点均值作为严格内部射线汇聚点，并以该点到最远顶点的距离构造外部球面；schema 7形状路径保持不变。新增“局部原点位于凸包外”的回归后，完整测试为45项全部通过。无效产物 `runs/ajae/e25_normal_control.npz` 大小1,994,700字节、SHA-256为 `c254987a0bc05865048e412201065bf88759d3ef3a7bae93c14f8aa4387f6898`，已在同命令重跑前删除。
 
-**E25 正式结果：PASS（E25关闭，E26解锁）**
+**历史 E25 正式结果：PASS（仅旧normal-control分布）**
 
 修复后的冻结实现提交为 `963d8cb8bac037de6fd6c6a081ed7152535ab02e`。同一正式命令完成两遍24进程运行，两遍用时分别为97.082646秒和100.313903秒；全部保存数组逐元素一致。1,024/1,024个control均在128次支撑提议内完成，放置耗尽、硬错误、类别—支撑违规、缩放错误、姿态错误、最终E22/E23验证错误和多实体fixture错误均为0。科学数组哈希为 `a4437aeadd3c444145c84c4fa4cc71b801a29ea8d9e7454789f68114613aa7b5`。
 
@@ -3222,7 +3228,63 @@ person目标资格的已知数据边界在正式生成中直接显现：E25-v3�
 
 正式产物`runs/ajae/e25_v3_normal_control.npz`大小524,004字节，SHA-256为`e31766c22ded4dcdf312540847944cb70a124c80b36af799f350734b0fb7aa98`。E25-v3目标资格PASS和目标库重建PASS继续保留，但它们只建立目标库的总体可观察覆盖与字段正确性，不能改写本次normal-control生成资格FAIL。本次证据也不能单独推出renderer失败、E21-v4支撑资格失败、person全类几何不可放或normal-control整体构念不可行；没有第二遍正式运行证据。按运行前冻结的FAIL路线，$1.25R(d)$目标规则、128×128 proposal上限和E45A caliper均未修改；E26-v2、依赖新版control分布的E38–E45A、E45B-v2、E46和E48保持锁定，当前停在E25-v3等待课题负责人新决策。
 
-## E26｜权威 world builder 与完整世界规格确定性
+## E25-new｜覆盖导向的合法 normal-control 生成资格
+
+**状态：课题负责人已冻结合同；正式运行尚未执行。E25-v2与E25-v3 FAIL永久保留。**
+
+**唯一问题**
+
+在不把真实正常对象的五维观测匹配条件塞入生成器的前提下，现有256个train/206规范正常模板能否各生成一个满足E21–E24、传感器可见且落入预先指定官方距离层的normal-control？
+
+**职责边界**
+
+E25-new只裁决“正常对照是否合法、可见并覆盖完整官方距离域”。它不读取真实目标，不在生成时执行E45A的距离、beam、可见点数、遮挡或局部密度caliper，也不裁决真实正常对象与合成正常对象是否具有共同支持。E45A-new裁决共同支持，E46裁决严格匹配条件下来源是否仍可区分。train/201、E45A结果和E46分类器输出均禁止进入E25-new。
+
+**固定模板与距离身份**
+
+规范模板仍由`extract_normal_template_library`从train/206提取，并保持当前规范顺序：car、truck、other-vehicle和person各64个，共256个。fixture index $i=0,\ldots,255$与模板索引一一对应；每个模板恰好使用一次，不替换难生成模板，不重复模板补数。control seed固定为$2{,}500{,}000+i$。
+
+每个fixture的距离层在运行前固定为
+
+$$
+b_i=i\bmod5,
+$$
+
+五个距离层依次为$[2.5,10)$、$[10,20)$、$[20,30)$、$[30,40)$和$[40,50]$米，总分配数严格为$[52,51,51,51,51]$。按规范类别顺序产生的描述性类别×距离分配为：car $[13,13,13,13,12]$、truck $[13,13,13,12,13]$、other-vehicle $[13,13,12,13,13]$、person $[13,12,13,13,13]$；这些是索引循环的确定结果，不另设类别×距离最低数量门。
+
+最终距离身份只由权威renderer输出中该对象全部可见`normal_control_mask`回波的official range中位数裁决。支撑锚点距离只用于缩小候选位置搜索，不能替代渲染后的距离身份。若固定proposal流内无法得到至少一个可见回波且最终中位距离属于$b_i$的合法对象，该fixture记为指定距离层耗尽并直接FAIL；不得退到其他距离层。
+
+**唯一生成路径**
+
+类别—支撑规则不变：car、truck和other-vehicle只允许road=40，person允许road=40或sidewalk=48。每个fixture只从类别合法且支撑锚点位于指定距离层的E21-v4合格行中选候选。令`namespace_u64`为`SHA-256("E25-new-support-v1")`前8字节的小端整数，`salt=namespace_u64 XOR uint64(i+1)*uint64(0xD1B54A32D192ED03)`，候选键为`splitmix64(selection_hash XOR salt)`；按`(key,pool_index)`从小到大选出最多128行。锚点分层只提高搜索效率；最终仍以渲染回波复核。
+
+缩放、姿态和材质流继承最近的正式E25-v3实现：缩放使用`default_rng(SeedSequence([control_seed+2,2501])).uniform(0.9,1.1,size=3)`；车辆类姿态扰动为$[-15^\circ,15^\circ]$、person为$[-\pi,\pi)$，使用`SeedSequence([control_seed,2502])`；材质seed为`control_seed+2503`。每个候选只调用唯一`place_object`路径执行E21支撑身份、E22 grounding、E23已观测正常几何碰撞和存在其他实体时的E24实体对碰撞。E25-new的256个fixture本身均为单实体；多实体生产资格在E26-v2继续完整裁决。
+
+合法placement随后进入未改变的传感器与最近回波流程：正式`return_chance`、固定身份均匀随机数、原生回波竞争和`render_frame`打包。无可见normal-control回波或最终距离层不符时，只拒绝当前placement并沿同一冻结支撑流继续；模板、缩放、姿态、材质和指定距离层均不重采。
+
+**等价加速与完整复核**
+
+正式运行固定使用24个fork进程，每个进程的BLAS与数值库限单线程。类别语义与锚点距离层预先分区，128项确定性最小键使用向量化选择。每个placement先根据对象包围球和已校准beam origin的最大偏移构造保守角域；该角域只能形成可能命中射线的严格超集，不能排除可能命中的射线。回波随机数只为实际候选slot计算。每个最终接受候选都必须再由完整131,072射线的正式回波竞争和`render_frame`独立重算；最终距离、可见回波、对象身份和描述统计以该完整结果为准。逐worker只缓存有限数量的不可变帧射线变换，不持久化大型中间数组。
+
+**PASS条件**
+
+- 256/256个fixture全部完成，256个规范模板身份各出现一次；
+- 每个fixture最终渲染回波中位official range严格落入预先指定层，总计数为$[52,51,51,51,51]$；
+- 每个fixture至少有一个可见normal-control回波；
+- 所有接受支撑均属于E21-v4合格池，类别—支撑语义错误为0；
+- E22 grounding、E23已观测正常碰撞、缩放、姿态、材质和renderer合同错误均为0；
+- 存在多实体时仍调用E24；E25-new单实体fixture不另设重复E24科学门；
+- hard error与指定距离层耗尽均为0；proposal记账不另设科学硬门，任何记账不守恒均归入hard error并分类为协议实现缺陷。
+
+八个$45^\circ$方位扇区的总体与分类别计数、最大扇区计数和占比，三个遮挡层$[0,0.25)$、$[0.25,0.75)$、$[0.75,1]$，可见回波数以及各类拒绝数只作描述，不参与PASS/FAIL。不设置真实目标、median beam、$N_{vis}$、遮挡、局部密度caliper，不设置方位或遮挡最低数量。距离循环是用于构造反作弊正常对照的覆盖导向采样，不是对真实正常场景距离分布的估计。
+
+正式资格只执行一次，不自动重试，不形成两遍逐元素复现结论。冻结命令为`python -m src.render qualify-e25-new-normal-control --data-root /home/jasongao/Data/STU --support-pool runs/ajae/e21_v4_support_pool.npz --calibration runs/ajae/calibration.pt --output runs/ajae/e25_new_normal_control.npz --processes 24`。
+
+PASS后立即把该选择器接入唯一生产world builder，执行E26-v2；随后刷新E38–E44中依赖control分布的证据，执行E45A-new与E45B-v2。E45A-new PASS解锁E46，E45B-v2必须在E48前PASS。FAIL时永久保留该次结果并停下等待课题负责人决策，不修改模板、距离分配、proposal上限、renderer或下游匹配条件。
+
+## 历史 E26｜旧normal-control分布下的权威 world builder 与完整世界规格确定性
+
+**当前适用边界：以下PASS永久保留为旧normal-control分布的历史证据，不能资格E25-new后的正式生产world builder。E25-new PASS后必须执行E26-v2，当前Phase 2尚未由新版control分布关闭。**
 
 **唯一问题**
 
@@ -3271,9 +3333,9 @@ normal-control的template/scale/material/pose seed分别为entity seed+1、entit
 - 正式代码引用审计确认没有第二套 placement/collision 权威路径；
 - 两遍完整运行逐元素一致。
 
-PASS → **E27**，Phase 2 自动关闭。
+历史PASS曾解锁 **E27** 并关闭旧分布下的Phase 2；当前新版路线不据此跳过E26-v2。
 
-**E26 正式结果：PASS（Phase 2关闭，E27解锁）**
+**历史 E26 正式结果：PASS（仅旧normal-control分布）**
 
 优化后的冻结命令完成两遍24进程正式运行，用时分别为71.279377秒和75.827829秒。256/256个固定world全部构造完成，pure-normal、control-only、mixed、anomaly-only各64个；world type错误、放置耗尽、硬错误、world/report往返错误、E22–E25验证错误、类别支撑错误、姿态错误、材质错误、最终实体对明显互穿、窗口遍历错误、单进程manifest重建错误和权威路径审计错误均为0。两遍全部保存数组逐元素一致，科学数组哈希为 `e18fb5180a8667f8da8f755495720fa897cbe647ce8a2258284242dfc349c342`。
 
@@ -3531,7 +3593,9 @@ E38–E44 的 PASS 表示统计有效、覆盖可用于 E45，不等于分布已
 
 计算三来源 per-beam opportunity、return count/rate和cluster bootstrap区间；保存每个entity-frame group。PASS：全部有限、计数守恒、real/control/proxy均有非零回波且关键匹配字段可计算、两遍一致。beam差异只描述。PASS → E39。
 
-### E38及统一候选银行正式执行冻结
+### 历史 E38及统一候选银行正式执行冻结
+
+**当前适用边界：E38–E44及E45A/E45B以下结果均使用旧normal-control分布。它们作为历史证据保留，但对E25-new后的control分布失效；当前必须刷新E38–E44、执行E45A-new和E45B-v2。**
 
 train/201支撑池读取帧4–681，以中心帧6–679和五帧对称窗口执行E21-v4完全相同的0.5米world-XY thinning、距离自适应三尺度trimmed-SVD估计及冻结残差/稳定性条件；所有合格区域进入 `runs/ajae/gate1_201_support_pool.npz`。201实际非地面回波全部进入E23同一连续SDF碰撞索引，不做空间抽样。正常对照模板只读取已通过的E25产物，语义支撑策略、0.9–1.1逐轴缩放、车辆/行人朝向策略、E22 grounding、E23 observed-normal collision和E24 placement proposal上限均保持不变。
 
@@ -3541,7 +3605,7 @@ E38保存每个seed、来源和帧的128 beam opportunity与return count，以�
 
 实现提交为 `9a0347ca69f0baa1e416e64049f623858cf5e1e4`，真实支撑分配修订提交为 `deee0d1f38357b189e36d16449639e1b8013fa04`；最终 `src/render.py` SHA-256为 `100dbb22f2d307b8bfc32d0675b6c73d3efdde04b39ec57997b865707b9862a3`。46项完整回归通过，用时97.39秒。正式命令为 `python -m src.render qualify-e38 --data-root /home/jasongao/Data/STU --e25-artifact runs/ajae/e25_normal_control.npz --calibration runs/ajae/calibration.pt --support-pool-output runs/ajae/gate1_201_support_pool.npz --candidate-bank-output runs/ajae/gate1_candidate_bank_256.npz --output runs/ajae/e38_per_beam_return.npz --processes 24`。
 
-**E38 正式结果：PASS（E38关闭，E39解锁）**
+**历史 E38 正式结果：PASS（仅旧normal-control分布；当前待刷新）**
 
 train/201支撑池包含1,193,969个合格区域，覆盖636个中心帧；语义40为612,018个、语义48为581,951个、语义49为0个。支撑池构建用时83.328154秒，科学数组哈希 `a5bd7007c508d4b411f84bcac7c26b418f93d46837d1da0774637bb15406f490`；产物大小84,256,915字节，SHA-256为 `fc3646fbc145cdc29d2cf203835a3e0018bacbc6eaf714e091d21f7b93bfaf50`。
 
@@ -3559,7 +3623,7 @@ real-normal、normal-control、anomaly-proxy各保存1,280个entity-frame groups
 
 本次同一权威渲染同时保存E40–E44直接需要的原始trace：逐实体帧geometry/accepted/visible counts与distance、逐返回beam/range/intensity，以及control/proxy逐beam/range的native-empty、geometry、accepted和final-new计数。后续节点只读取这些已冻结原始数组各自裁决，不重新执行相同几何和渲染，也不提前写入后续PASS结论。实现提交 `f09ea627b4203fe738c86761275c16e6786529c1`。首次启动因审计端对冻结mask原地执行距离筛选而触发只读数组异常，在生成科学结果前退出；修复提交 `9da9dcd19f3df276b6533c10389f5d7eb5154ade` 仅创建显式mask副本，不改变样本、渲染、随机流或判据。修复后 `src/render.py` SHA-256为 `8009cac53f0b62e127c72ff22aa35aeed957c0650f5e7743741db72d4a4e0e4b`，46项完整回归通过，用时97.87秒。正式命令不变。
 
-**E39 正式结果：PASS（E39关闭，E40解锁）**
+**历史 E39 正式结果：PASS（仅旧normal-control分布；当前待刷新）**
 
 real-normal五个距离箱的opportunity为686,670、273,466、46,226、1,055、0，return为513,492、202,803、25,732、519、0，非零return entity-frame groups为447、833、268、15、0。normal-control对应opportunity为354,036、104,916、9,630、372、0，return为350,782、101,962、9,512、370、0，groups为511、684、236、26、0。anomaly-proxy对应opportunity为332,449、111,460、12,436、459、0，return为330,433、108,813、12,052、391、0，groups为493、637、228、23、0。
 
@@ -3573,7 +3637,7 @@ real-normal五个距离箱的opportunity为686,670、273,466、46,226、1,055、
 
 读取已通过的E39共享trace，对real-normal、normal-control、anomaly-proxy的128 beam×5 range cells分别保存样本数和Q05/Q25/median/Q75/Q95；保存real-control、real-proxy、control-proxy三组两两最大ECDF距离及有效cell mask。normal-control与anomaly-proxy分别报告落在206冻结强度支持上下界的计数和比例。空cell以count/valid mask明确标识，数值数组保持有限；PASS只检查1,656,861条真实生成记录的有限性、生成来源支持范围、分箱身份、E39计数回算和两遍逐元素一致，普通条件分布差异留给E46。实现提交 `a8f5da83d847913baf14192af67a0bf733fc6158`，`src/render.py` SHA-256为 `2b072872024ba8ccf900783a1f334cf1b45dc90b33d1d23a2c827b731f42d6b0`；46项完整回归通过，用时99.41秒。正式命令为 `python -m src.render qualify-e40 --e39-artifact runs/ajae/e39_per_range_return.npz --calibration runs/ajae/calibration.pt --output runs/ajae/e40_beam_range_intensity.npz`。
 
-**E40 正式结果：PASS（E40关闭，E41解锁）**
+**历史 E40 正式结果：PASS（仅旧normal-control分布；当前待刷新）**
 
 三来源强度记录数分别为742,546、462,626和451,689，非空beam×range cells分别为190、173和214。来源、beam与range身份错误0，按cell回算E39计数错误0，所有强度非有限值0，normal-control与anomaly-proxy的206冻结支持越界均为0；两类生成来源在支持下界和上界的clipping计数均为0。两遍统计逐元素一致，总用时1.907127秒。科学数组哈希 `05c9248caeaa5de12320a6c0695e47e983221610eaae67daa82fe0c865ce22ab`；产物 `runs/ajae/e40_beam_range_intensity.npz` 大小22,989字节，SHA-256为 `ac8cd9a2bfa2f0011c201f287d1a3908e401fe844f09bc12be8b755673dd8564`。条件分位数与ECDF差异只报告，不在E40裁决来源泄漏。
 
@@ -3583,7 +3647,7 @@ real-normal五个距离箱的opportunity为686,670、273,466、46,226、1,055、
 
 读取E39已通过的共享trace，按normal-control和anomaly-proxy分别复算空槽机会、几何命中、回波接受和最终新增，并保存逐beam×range计数。PASS要求逐实体、帧和beam的几何命中不超过原生空槽机会，逐beam×range的回波接受不超过几何命中，最终新增不超过回波接受；两类来源均须至少有一个最终新增和一个由回波概率产生的拒绝，所有计数非负，两遍统计逐元素一致。接受后未新增的计数作描述性报告，不增设非零要求；来源间比例差异留给E45/E46。实现提交 `df23bffed5d335e9a55e177a6980e01eb6b89ea9`，`src/render.py` SHA-256为 `cd34392c2d7724e40e42f1667be7a257b6f68b60cbaf08d67afa8b04f11d7649`；46项完整回归通过。正式命令为 `python -m src.render qualify-e41 --e39-artifact runs/ajae/e39_per_range_return.npz --output runs/ajae/e41_empty_to_valid.npz`。
 
-**E41 正式结果：PASS（E41关闭，E42解锁）**
+**历史 E41 正式结果：PASS（仅旧normal-control分布；当前待刷新）**
 
 normal-control与anomaly-proxy的“原生空槽机会→几何命中→回波接受→最终新增”总计分别为24,291,803→16,037→16,011→16,011和24,291,803→25,173→25,136→25,136。几何超过空槽、接受超过几何、最终新增超过接受以及负计数四类错误均为0；两类来源的回波概率拒绝分别为26和37，最终新增均非零。接受后未新增均为0，符合当前单插入对象和原生空槽条件；两遍统计逐元素一致，总用时0.025614秒。科学数组哈希 `71bbccc62da2254b553bfbaaf8f9864281b9242d956ca88c903e1f90a74f7c8f`；产物 `runs/ajae/e41_empty_to_valid.npz` 大小5,541字节，SHA-256为 `771e39129087324be9526b6286bd2d2c40194d8c20c6ec8fd0dceb8fdf340c3e`。来源间比例差异未在E41裁决。
 
@@ -3593,7 +3657,7 @@ normal-control与anomaly-proxy的“原生空槽机会→几何命中→回波�
 
 直接读取E39共享trace的256个候选、三来源和五帧，共每来源1,280个entity-frame；逐项保存geometry hits、accepted-before-occlusion、visible returns、距离、距离箱和冻结 $N_{vis}$ 层。$N_{vis}=0$ 单独计数，不错误并入四个正可见层；PASS要求非负、accepted不超过geometry、visible不超过accepted、距离与距离箱有效，并满足“零可见计数+四层计数=1,280”。normal-control与anomaly-proxy各须覆盖至少三个正可见层；以support semantic×range bin×$N_{vis}$ layer统计三来源共同非空层，至少一个共同层作为E45的初步非空匹配可行性，完整匹配仍由E45裁决。两遍统计必须逐元素一致。实现提交 `e1af043e434f8958b8d7e33b8d22a79ad200f4b9`，`src/render.py` SHA-256为 `9ffcbfd10ebb5f3faf93b68d96677dff6c53f86a1b4c304ec25343b7d4971c64`；46项完整回归通过。正式命令为 `python -m src.render qualify-e42 --e39-artifact runs/ajae/e39_per_range_return.npz --output runs/ajae/e42_nvis_feasibility.npz`。
 
-**E42 正式结果：PASS（E42关闭，E43解锁）**
+**历史 E42 正式结果：PASS（仅旧normal-control分布；当前待刷新）**
 
 每来源1,280个entity-frame的定义与计数均守恒。real-normal四层计数为0、10、433、837，零可见0；normal-control为51、223、402、597，零可见7；anomaly-proxy为68、200、356、652，零可见4。两类生成来源均覆盖四个正可见层；support semantic×range bin×$N_{vis}$ layer中三来源共同非空层为12个。定义错误、计数错误、覆盖错误和初步匹配错误均为0，两遍逐元素一致，总用时0.001445秒。科学数组哈希 `8de2b629f5dd6d6ea1202f546826300c36cd68e5bd2ddf7f4772e859b1aac3d5`；产物 `runs/ajae/e42_nvis_feasibility.npz` 大小50,075字节，SHA-256为 `19da6a5c347768e7861c75bac2e62cc2dfe0ada7d4ff294306a5ecca797f791e`。完整匹配资格仍由E45裁决。
 
@@ -3603,7 +3667,7 @@ normal-control与anomaly-proxy的“原生空槽机会→几何命中→回波�
 
 读取E37已通过的跨窗口一致性产物和E39已通过的五帧共享trace。重复渲染要求E39两遍完整24进程结果逐元素一致；window身份错误由E37的九个字段摘要、重复请求、world/frame身份、渲染调用、跨world cache、`render_frame` window参数和随机流window读取共同复核。对每个固定实体保存五帧$N_{vis}$、相邻帧差及变化率 $|N_t-N_{t-1}|/\max(N_{t-1},1)$；$V$定义为五帧中$N_{vis}>0$的帧数并按0–5完整计数。PASS要求所有计数和分层定义有效、变化率及分位数有限、两次统计逐元素一致；真实几何导致的出现和消失只报告。实现提交 `7dcd999a49b3312c4ca1030cff9b4e03d09b7cb4`，`src/render.py` SHA-256为 `06f9174a41246ba68e339b4e3f0cde706a5673300d3656291e04de646756b324`；46项完整回归通过。正式命令为 `python -m src.render qualify-e43 --e37-artifact runs/ajae/e37_world_frame_consistency.npz --e39-artifact runs/ajae/e39_per_range_return.npz --output runs/ajae/e43_temporal_visibility.npz`。
 
-**E43 正式结果：PASS（E43关闭，E44解锁）**
+**历史 E43 正式结果：PASS（仅旧normal-control分布；当前待刷新）**
 
 window身份错误0，E39两遍重复渲染错误0。real-normal、normal-control、anomaly-proxy的$V=0,\ldots,5$计数分别为[0,0,0,0,0,256]、[0,1,0,1,1,253]和[0,0,0,0,4,252]；出现/消失转移分别为0/0、3/1和1/4。三来源相邻帧变化率Q05/Q25/Q50/Q75/Q95分别为[0.003245,0.025000,0.049613,0.077744,0.156250]、[0,0.026937,0.052065,0.080000,0.187007]和[0,0.023763,0.047666,0.078220,0.250000]。定义与有限性错误均为0，两遍统计逐元素一致，总用时0.000580秒。科学数组哈希 `3173ded49e86c671dcff0d481f93441c9477303a814092c1099b6eabc85d03ef`；产物 `runs/ajae/e43_temporal_visibility.npz` 大小26,415字节，SHA-256为 `61a1b6972db321b7539a29300d5e6b08a723fe22801e308ef6c339d285d811a9`。出现与消失未被解释为window随机闪烁。
 
@@ -3619,7 +3683,7 @@ $$
 
 直接读取E39共享trace，按每个entity-frame的accepted-before-occlusion和visible returns计算冻结遮挡率。仅对accepted大于0的单元定义$O$并进入三个遮挡层；accepted等于0的单元以显式invalid mask单独保存，不为其伪造遮挡率。PASS要求所有有效$O$有限且位于$[0,1]$，visible不超过accepted，有效计数与三层计数守恒，normal-control和anomaly-proxy各自覆盖三个层。以support semantic×range bin×遮挡层统计三来源共同非空层，至少一个共同层作为E45的初步非空匹配可行性；完整caliper、SMD与规模仍由E45裁决。两遍统计必须逐元素一致。实现提交 `99be4df02ef96db388134cb2b2b8d1b08927d9ae`，`src/render.py` SHA-256为 `abc902fd460d3019b0fd557dcda63ae1a9887342fa6c84170b8213b612610180`；46项完整回归通过。正式命令为 `python -m src.render qualify-e44 --e39-artifact runs/ajae/e39_per_range_return.npz --output runs/ajae/e44_occlusion_feasibility.npz`。
 
-**E44 正式结果：PASS（E44关闭，E45解锁）**
+**历史 E44 正式结果：PASS（仅旧normal-control分布；当前待刷新）**
 
 real-normal、normal-control和anomaly-proxy的有效遮挡率单元分别为1,280、1,280和1,276；未定义单元分别为0、0和4。三层计数分别为[731,549,0]、[1,245,26,9]和[1,238,36,2]，两类生成来源均覆盖三个冻结遮挡层。support semantic×range bin×遮挡层中三来源共同非空层为9个。定义错误、计数错误、覆盖错误和初步匹配错误均为0，两遍统计逐元素一致，总用时0.001055秒。科学数组哈希 `0c22adf65d7e4b819ca1df49479f019d6bb2ccde5256844092cfbc24c45f6a55`；产物 `runs/ajae/e44_occlusion_feasibility.npz` 大小52,651字节，SHA-256为 `93b955771c942bedc9537b161018a4fb6e820d7d0649627af3d418edce9ecbc9`。完整匹配资格仍由E45裁决。
 
@@ -3699,7 +3763,7 @@ E45B只服务E48，与E45A独立读取同一冻结2,048容量单位缓存。精�
 
 PASS要求至少1,024对、左侧至少100个center frames、2.5–10/10–20/20–30/30–40米四层均非空、caliper错误0、两侧单位重复0、五项连续协变量SMD均不超过0.10，并且两遍结果逐元素一致。E45B必须在E48前PASS，但不阻塞E45A通过后执行E46。实现与回归身份同E45A；正式命令为 `python -m src.render qualify-e45b --unit-cache runs/ajae/e45_v2_units_2048.npz --output runs/ajae/e45b_control_proxy_pairs.npz`。
 
-**E45B 正式结果：PASS（E48的两两匹配前置资格满足）**
+**历史 E45B 正式结果：PASS（仅旧normal-control分布；当前E48前置资格失效，待E45B-v2）**
 
 冻结2,048容量缓存的normal-control与anomaly-proxy完整合法图包含29,156条边，覆盖52个非空精确分层；确定性最大基数匹配得到3,624对、normal-control侧357个center frames，2.5–10、10–20、20–30和30–40米计数为[1,133,1,877,563,51]，全部满足冻结覆盖条件。
 
@@ -3729,7 +3793,7 @@ proposal上限冻结为每目标64个，执行阶梯为4、8、16、32、64；�
 
 最终五项SMD按range、median beam、$\log(1+N_{vis})$、$\hat O$、$\log(1+\text{local density})$顺序为[0.099364,0.159312,0.064798,0.882238,0.021068]，其中遮挡SMD为0.882238，最大值超过0.10。全部caliper错误0、两侧单位重复0、硬错误0，两遍匹配逐元素一致。64阶梯proposal状态0至7计数为[5779, 31355, 297, 3731, 75121, 325, 0, 0]；对应support耗尽、placement拒绝、不可见、精确分层不符、caliper不符、合格、验证错误和硬错误。
 
-科学数组哈希为 `00aed2338732f9a9233547cae52c1c3087df6cfb5294da664a73a7b33a0c6192`；正式产物 `runs/ajae/e45a_v2_targeted_pairs.npz` 大小756,236字节，SHA-256为 `290747b6c01ec9d2af152e8688f51cc9c966690cb5c165279265a51fc30e0405`。64候选缓存 `runs/ajae/e45a_v2_targeted_controls_64.npz` 大小2,978,909字节，SHA-256为 `0853358fa0c3a414cb39eeeef41fa15a5691dd641558ffa77030011b431ef32b`。正式运行墙钟时间2小时18分38秒，CPU利用率398%，最大常驻集9,611,168 KiB；运行期间复查可用内存约12–13 GiB，交换空间未增长。该结果只裁决审计专用定向银行在冻结上限内的共同支持资格，不修改E26、renderer或正式normal-control训练分布，也没有执行来源分类。按照冻结停止条件，E46继续锁定；修改正式normal-control生成需要新的用户决策。
+科学数组哈希为 `00aed2338732f9a9233547cae52c1c3087df6cfb5294da664a73a7b33a0c6192`；正式产物 `runs/ajae/e45a_v2_targeted_pairs.npz` 大小756,236字节，SHA-256为 `290747b6c01ec9d2af152e8688f51cc9c966690cb5c165279265a51fc30e0405`。64候选缓存 `runs/ajae/e45a_v2_targeted_controls_64.npz` 大小2,978,909字节，SHA-256为 `0853358fa0c3a414cb39eeeef41fa15a5691dd641558ffa77030011b431ef32b`。正式运行墙钟时间2小时18分38秒，CPU利用率398%，最大常驻集9,611,168 KiB；运行期间复查可用内存约12–13 GiB，交换空间未增长。该结果只裁决审计专用定向银行在冻结上限内的共同支持资格，不修改E26、renderer或正式normal-control训练分布，也没有执行来源分类。其历史停止条件要求新的用户决策；该决策现已由E25-new合同取代。E46仍锁定，但当前解锁前置改为E45A-new PASS。
 
 状态机在E49前拆为两条依赖：
 
