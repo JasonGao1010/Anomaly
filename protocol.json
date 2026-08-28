@@ -2148,14 +2148,23 @@
             "downstream": "PASS permits replacing the sole production normal-control position selector and then running E26-v2; FAIL keeps E26-v2 and E46 locked and requires owner decision"
           },
           "E25-v3": {
-            "status": "D_xy plus alpha distance gate abandoned; support-plane compatibility read-only diagnostic complete without PASS/FAIL; accepted remote planes show that the current two conditions are insufficient to freeze a credible local-support target bank; generation not run",
+            "status": "D_xy plus alpha route abandoned; final E25-v3 local-support rule frozen as E21-v4 maximum verified radius plus the inherited projection and visible-geometry conditions; read-only target qualification pending; generation not run",
             "historical_results_retained": ["E25 PASS", "E25-v2 FAIL"],
             "failure_classification_inherited": "E25-v2 is a qualification specification defect and does not adjudicate the normal-control construct",
             "unchanged_support_semantics": {"vehicle_like": [40], "person_rider_like": [40, 48]},
             "frame_search_order": [0, -1, 1, -2, 2],
-            "association_order": "first frame offset containing a compatible plane; within one offset sort by exact anchor-to-target-frame closed-XY-hull distance then E21-v4 selection hash",
-            "anchor_distance_role": "deterministic candidate ordering and descriptive reporting only; no distance threshold",
-            "prohibited_associations": ["per-half-space 0.5 m proxy", "D_xy plus alpha distance gate", "distance-threshold tuning", "old E25-v2 reference support", "train/201 information"],
+            "association_order": "first frame offset containing a fully qualified local plane; within one offset sort by exact anchor-to-target-frame closed-XY-hull distance then E21-v4 selection hash",
+            "anchor_distance_role": "qualification and deterministic ordering: exact closed-hull distance must be <=1.25 times that patch's saved E21-v4 central radius R(d)",
+            "prohibited_associations": ["per-half-space 0.5 m proxy", "D_xy plus alpha distance gate", "empirical fixed-distance tuning", "old E25-v2 reference support", "train/201 information"],
+            "final_local_support_rule": {
+              "radius": "R(d)=clip(d/20,1,3) m, exactly the saved E21-v4 central_radius_m and revalidated from the saved E21-v4 support range",
+              "maximum_verified_local_range": "1.25*R(d), exactly the largest E21-v4 estimator scale",
+              "locality_condition": "exact 2D Euclidean distance from support anchor to the target-frame closed world-XY object hull <=1.25*R(d)",
+              "projection_condition": "maximum absolute small-vs-large predicted ground-height difference over every target XY-hull vertex <=0.08 m",
+              "visible_geometry_condition": "fraction of target-frame observed object returns below the central plane by more than 0.02 m <=0.02",
+              "additional_distance_or_gap_thresholds": null,
+              "selection_prohibitions": ["E25-v3 retained counts", "normal-control generation outcome", "E45A outcome", "E46 output", "train/201 information"]
+            },
             "abandoned_distance_candidate": "d_support <= max(0.5 m, alpha * D_xy); never frozen as a qualification rule",
             "abandoned_distance_diagnostic_command": "python -m src.render diagnose-e25-v3-support --data-root /home/jasongao/Data/STU --support-pool runs/ajae/e21_v4_support_pool.npz --target-bank runs/ajae/e25_v2_real_targets.npz --output runs/ajae/e25_v3_support_observability.npz --processes 24",
             "abandoned_distance_diagnostic_scope": {
@@ -2258,7 +2267,25 @@
               "independent_validation": "all 4827 identities unique and complete; five-offset candidate counts exactly reproduced from E21-v4; selected rows match frame offsets and legal semantics; every accepted row satisfies both numerical limits; rejection sentinels and codes are consistent; candidate accounting and scientific hash reproduce exactly",
               "interpretation": "The two inherited conditions identify multiscale-consistent planes that do not visibly cut most object returns, but they do not enforce a local spatial validity domain or reject an excessively low plane. The accepted 10-67.8 m anchors and up-to-5.28 m minimum visible gaps prevent interpreting all 4825 retained rows as credible local support planes."
             },
-            "next_required_state": "owner decision is required to operationalize credible local support-plane validity; the target bank, control generator and downstream experiments remain unchanged",
+            "target_qualification": {
+              "status": "frozen before execution",
+              "input_targets": "the retained 4827 train/206 E25-v2 target identities and real-observation covariates; old support_semantic and reference_support_pool_index fields are forbidden",
+              "input_support_pool": "frozen E21-v4 qualified support pool",
+              "generator_executed": false,
+              "train_201_accessed": false,
+              "frame_search_order": [0, -1, 1, -2, 2],
+              "rejection_codes": ["no_semantically_legal_patch", "outside_e21_local_validity", "no_projection_stable_patch", "visible_geometry_incompatible"],
+              "pass_conditions": ["all four active classes remain nonempty", "all five train/206 range bins remain nonempty", "all three occlusion layers remain nonempty", "at least 100 unique target frames remain", "at least 32 unique real semantic-instance identities remain"],
+              "extra_target_count_or_efficiency_gate": null,
+              "formal_repetitions": 1,
+              "processes": 24,
+              "numeric_library_threads_per_process": 1,
+              "gpu_used": false,
+              "command": "python -m src.render qualify-e25-v3-targets --data-root /home/jasongao/Data/STU --support-pool runs/ajae/e21_v4_support_pool.npz --target-bank runs/ajae/e25_v2_real_targets.npz --output runs/ajae/e25_v3_target_qualification.npz --processes 24",
+              "pass_route": "freeze this target-support definition, rebuild the E25-v3 target bank, then run the revised formal normal-control qualification",
+              "failure_route": "retain the 1.25*R(d) rule unchanged and record missing target coverage as the observable-local-ground boundary"
+            },
+            "next_required_state": "run the frozen read-only E25-v3 target qualification; the target bank, control generator and downstream experiments remain unchanged until PASS",
             "downstream": "E26-v2, E46 and E48 remain locked"
           },
           "E26": {
@@ -2332,7 +2359,7 @@
       }
     },
     "renderer_mechanical_qualification": {
-      "status": "E25-v2 FAIL retained with target-support association qualification specification defect; E27-E44 PASS; E28-v1, E36-v1, E45-v1, E45-v2, E45A and E45A-v2 FAIL retained; old-distribution E45B PASS is historical for any revised control distribution; E26-v2, E46 and E48 locked",
+      "status": "E25-v2 FAIL retained; final E25-v3 local-support rule frozen and read-only target qualification pending; E27-E44 PASS; E28-v1, E36-v1, E45-v1, E45-v2, E45A and E45A-v2 FAIL retained; old-distribution E45B PASS is historical for any revised control distribution; E26-v2, E46 and E48 locked",
       "layer_boundaries": {"E27-E28": "direct geometry outputs only", "E29": "return probability and deterministic acceptance decision only", "E30-E31": "accepted returns", "E32-E33": "nearest-return occlusion competition"},
       "E27": {
         "question": "Does the formal geometry path return the correct nearest convex-hull hit, outward finite normal and object ID for active normal-control templates when return rejection is disabled?",

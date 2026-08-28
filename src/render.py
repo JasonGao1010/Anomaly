@@ -7614,17 +7614,17 @@ def _xy_hull_distance(
     return np.where(inside, 0.0, boundary_distance)
 
 
-def _e25v3_support_diagnostic_frame(
+def _e25v3_support_filter_frame(
     task: tuple[int, np.ndarray],
 ) -> dict[str, np.ndarray]:
-    """Find the nearest E21 plane compatible with each observed real object."""
+    """Find an E21 plane within its verified local range for each real object."""
     frame_id, target_indices = task
     sequence, pool = _E25V2_SEQUENCE, _E25V2_SUPPORT_POOL
     if (
         sequence is None or pool is None or not _E25V3_TARGETS
         or _E25V3_PLANE_NORMALS.shape[0] != pool.frames.size
     ):
-        raise RuntimeError("E25-v3 plane diagnostic is not initialized")
+        raise RuntimeError("E25-v3 target qualification is not initialized")
     frame = sequence.source_frame(frame_id)
     assert frame.labels is not None
     rotation, translation = _pose(frame)
@@ -7632,7 +7632,9 @@ def _e25v3_support_diagnostic_frame(
     candidate_count = np.zeros(
         (count, len(_E25V3_FRAME_OFFSETS)), dtype=np.int32
     )
+    local_candidate_count = np.zeros_like(candidate_count)
     nearest_distance = np.full_like(candidate_count, np.inf, dtype=np.float64)
+    nearest_local_distance = np.full_like(candidate_count, np.inf, dtype=np.float64)
     compatible = np.zeros(count, dtype=np.bool_)
     rejection_code = np.ones(count, dtype=np.uint8)
     evaluated = np.zeros(count, dtype=np.int32)
@@ -7688,7 +7690,22 @@ def _e25v3_support_diagnostic_frame(
             )
             order = np.lexsort((pool.selection_hashes[rows], distance))
             nearest_distance[output_index, offset_index] = distance[order[0]]
-            ordered_candidates.append((offset, rows[order], distance[order]))
+            ordered_rows = rows[order]
+            ordered_distance = distance[order]
+            local = (
+                ordered_distance
+                <= 1.25 * _E25V3_PLANE_RADIUS[ordered_rows]
+            )
+            local_candidate_count[output_index, offset_index] = int(
+                np.count_nonzero(local)
+            )
+            if bool(local.any()):
+                nearest_local_distance[output_index, offset_index] = float(
+                    ordered_distance[local][0]
+                )
+            ordered_candidates.append(
+                (offset, ordered_rows[local], ordered_distance[local])
+            )
         for offset, ordered_rows, ordered_distance in ordered_candidates:
             for start in range(0, ordered_rows.size, 64):
                 stop = min(start + 64, ordered_rows.size)
@@ -7758,16 +7775,21 @@ def _e25v3_support_diagnostic_frame(
             if compatible[output_index]:
                 break
         if not compatible[output_index]:
+            available = int(candidate_count[output_index].sum())
+            local_available = int(local_candidate_count[output_index].sum())
             rejection_code[output_index] = (
-                1 if int(candidate_count[output_index].sum()) == 0
-                else 2 if burial_rejections[output_index] == 0
-                else 3
+                1 if available == 0
+                else 2 if local_available == 0
+                else 3 if burial_rejections[output_index] == 0
+                else 4
             )
     return {
         "target_index": target_indices.astype(np.int64),
         "observed_point_count": observed_points,
         "support_candidate_count_by_offset": candidate_count,
+        "local_support_candidate_count_by_offset": local_candidate_count,
         "nearest_support_distance_m_by_offset": nearest_distance,
+        "nearest_local_support_distance_m_by_offset": nearest_local_distance,
         "compatible": compatible,
         "rejection_code": rejection_code,
         "evaluated_support_candidates": evaluated,
@@ -7809,13 +7831,13 @@ def _finite_quantiles(values: np.ndarray) -> dict[str, object]:
     }
 
 
-def run_e25_v3_plane_diagnostic(
+def run_e25_v3_target_qualification(
     data_root: Path | str, support_pool_path: Path | str,
     target_bank_path: Path | str, output_path: Path | str, *, processes: int = 24,
 ) -> dict[str, object]:
-    """Audit E21-plane compatibility at real train/206 object locations."""
+    """Qualify real targets against the finite E21-v4 local plane domain."""
     if not 1 <= processes <= 24:
-        raise PlacementError("E25-v3 plane diagnostic processes must be in [1,24]")
+        raise PlacementError("E25-v3 target qualification processes must be in [1,24]")
     try:
         from .protocol import load_protocol
         from .scene import LabelMode, STUSequence
@@ -7888,6 +7910,10 @@ def run_e25_v3_plane_diagnostic(
         or not np.isfinite(plane_normals).all()
         or not np.isfinite(plane_offsets).all()
         or not np.isfinite(plane_radius).all()
+        or not np.allclose(
+            plane_radius, np.clip(pool.ranges_m / 20.0, 1.0, 3.0),
+            atol=1.0e-12, rtol=1.0e-12,
+        )
         or np.any(plane_normals[:, :, 2] <= 0.0)
         or not np.allclose(
             np.linalg.norm(plane_normals, axis=2), 1.0,
@@ -7943,19 +7969,19 @@ def run_e25_v3_plane_diagnostic(
     ]
     started = time.monotonic()
     if processes == 1:
-        chunks = [_e25v3_support_diagnostic_frame(task) for task in tasks]
+        chunks = [_e25v3_support_filter_frame(task) for task in tasks]
     else:
         with mp.get_context("fork").Pool(
             processes=processes, maxtasksperchild=24
         ) as workers:
             chunks = workers.map(
-                _e25v3_support_diagnostic_frame, tasks, chunksize=1
+                _e25v3_support_filter_frame, tasks, chunksize=1
             )
     diagnostic_names = tuple(name for name in chunks[0] if name != "target_index")
     target_index = np.concatenate([chunk["target_index"] for chunk in chunks])
     order = np.argsort(target_index, kind="stable")
     if not np.array_equal(target_index[order], np.arange(count, dtype=np.int64)):
-        raise PlacementError("E25-v3 diagnostic did not cover every target exactly once")
+        raise PlacementError("E25-v3 qualification did not cover every target exactly once")
     diagnostic = {
         name: np.ascontiguousarray(
             np.concatenate([chunk[name] for chunk in chunks], axis=0)[order]
@@ -8016,24 +8042,47 @@ def run_e25_v3_plane_diagnostic(
     accepted_gap_ratio = scientific["lower_gap_over_visible_extent"][compatible]
     rejection_names = (
         "accepted", "no_semantically_legal_patch",
-        "no_projection_stable_patch", "visible_geometry_incompatible",
+        "outside_e21_local_validity", "no_projection_stable_patch",
+        "visible_geometry_incompatible",
     )
     rejection_count = np.bincount(
         scientific["rejection_code"], minlength=len(rejection_names)
     )
+    retained_range = np.bincount(
+        scientific["range_bin"][compatible], minlength=5
+    )[:5]
+    retained_occlusion = np.bincount(
+        scientific["occlusion_layer"][compatible], minlength=3
+    )[:3]
+    retained_frames = int(np.unique(scientific["frame_id"][compatible]).size)
+    retained_instances = int(np.unique(np.column_stack((
+        scientific["real_semantic"][compatible],
+        scientific["real_instance"][compatible],
+    )), axis=0).shape[0])
+    retained_classes = {
+        int(value) for value in scientific["real_semantic"][compatible]
+    }
+    required_classes = {10, 18, 20, 30}
+    passed = (
+        retained_classes == required_classes
+        and bool(np.all(retained_range > 0))
+        and bool(np.all(retained_occlusion > 0))
+        and retained_frames >= 100
+        and retained_instances >= 32
+    )
     result: dict[str, object] = {
-        "experiment": "E25-v3-support-plane-compatibility-diagnostic",
-        "status": "diagnostic_complete",
-        "passed": None,
+        "experiment": "E25-v3-target-support-qualification",
+        "status": "qualification_complete",
+        "passed": passed,
         "source_sequence": "train/206",
         "target_units": count,
         "frame_offsets_in_search_order": list(_E25V3_FRAME_OFFSETS),
         "candidate_order": "first frame offset, then exact anchor-to-closed-XY-hull distance, then E21-v4 selection hash",
         "compatibility_rule": {
             "source_patch": "E21-v4 qualified=true only; all original residual, normal and multiscale limits revalidated",
+            "local_validity": "exact anchor-to-target-frame closed-XY-hull distance <=1.25*R(d), where the saved E21-v4 central_radius_m is R(d)=clip(d/20,1,3) m",
             "extrapolation_stability": "maximum absolute small-vs-large predicted ground-height difference over all target-frame XY-hull vertices <=0.08 m",
             "visible_geometry": "fraction of target-frame observed object returns more than 0.02 m below the central plane <=0.02",
-            "anchor_distance_gate": None,
             "lower_visible_gap_upper_gate": None,
         },
         "legal_support_semantics_unchanged": True,
@@ -8043,6 +8092,13 @@ def run_e25_v3_plane_diagnostic(
         "calipers_evaluated_or_changed": False,
         "Dxy_alpha_route_abandoned": True,
         "target_bank_input_role": "identity and real-observation covariates only; retained E25-v2 support bindings ignored",
+        "coverage_requirements": {
+            "active_classes": [10, 18, 20, 30],
+            "all_five_range_bins_nonempty": True,
+            "all_three_occlusion_layers_nonempty": True,
+            "minimum_center_frames": 100,
+            "minimum_real_instances": 32,
+        },
         "retained": int(np.count_nonzero(compatible)),
         "rejected": int(np.count_nonzero(~compatible)),
         "rejection_count": {
@@ -8050,12 +8106,10 @@ def run_e25_v3_plane_diagnostic(
             for name, value in zip(rejection_names, rejection_count, strict=True)
         },
         "class_summary": class_summary,
-        "retained_range_count": np.bincount(
-            scientific["range_bin"][compatible], minlength=5
-        )[:5].tolist(),
-        "retained_occlusion_layer_count": np.bincount(
-            scientific["occlusion_layer"][compatible], minlength=3
-        ).tolist(),
+        "retained_center_frames": retained_frames,
+        "retained_real_instances": retained_instances,
+        "retained_range_count": retained_range.tolist(),
+        "retained_occlusion_layer_count": retained_occlusion.tolist(),
         "selected_frame_offset_count": [
             int(np.count_nonzero(
                 compatible & (scientific["selected_frame_offset"] == offset)
@@ -8072,6 +8126,9 @@ def run_e25_v3_plane_diagnostic(
         "support_candidates_available": int(np.sum(
             scientific["support_candidate_count_by_offset"], dtype=np.int64
         )),
+        "local_support_candidates_available": int(np.sum(
+            scientific["local_support_candidate_count_by_offset"], dtype=np.int64
+        )),
         "support_candidates_evaluated": int(np.sum(
             scientific["evaluated_support_candidates"], dtype=np.int64
         )),
@@ -8082,12 +8139,13 @@ def run_e25_v3_plane_diagnostic(
             scientific["visible_burial_rejections"], dtype=np.int64
         )),
         "selected_anchor_distance_m": _finite_quantiles(accepted_distance),
-        "selected_anchor_distance_count_gt_5m": int(np.count_nonzero(
-            accepted_distance > 5.0
-        )),
-        "selected_anchor_distance_count_gt_10m": int(np.count_nonzero(
-            accepted_distance > 10.0
-        )),
+        "selected_anchor_distance_over_central_radius": _finite_quantiles(
+            scientific["anchor_distance_over_central_radius"][compatible]
+        ),
+        "selected_local_validity_margin_m": _finite_quantiles(
+            1.25 * scientific["selected_central_radius_m"][compatible]
+            - accepted_distance
+        ),
         "projection_height_difference_m": _finite_quantiles(
             scientific["projection_height_difference_m"][compatible]
         ),
@@ -8108,7 +8166,7 @@ def run_e25_v3_plane_diagnostic(
         "target_bank_sha256": _sha256_path(target_path),
         "support_pool_sha256": _sha256_path(support_path),
         "scientific_array_hash": _scientific_array_hash(scientific),
-        "claim_limit": "The diagnostic rejects obvious multiscale extrapolation instability and visible-object plane cutting; it does not recover an unobserved tyre or foot contact point.",
+        "claim_limit": "PASS establishes only that the retained train/206 real targets have a legal E21-v4 patch inside its already-verified local radius, stable projected height, and no substantial cutting of visible object returns; it does not recover an unobserved tyre or foot contact point.",
     }
     destination = Path(output_path).expanduser().resolve()
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -14427,7 +14485,7 @@ def _render_parser() -> argparse.ArgumentParser:
     e25v2.add_argument("--target-output", type=Path, required=True)
     e25v2.add_argument("--output", type=Path, required=True)
     e25v2.add_argument("--processes", type=int, default=12)
-    e25v3 = subcommands.add_parser("diagnose-e25-v3-plane")
+    e25v3 = subcommands.add_parser("qualify-e25-v3-targets")
     e25v3.add_argument("--data-root", type=Path, required=True)
     e25v3.add_argument("--support-pool", type=Path, required=True)
     e25v3.add_argument("--target-bank", type=Path, required=True)
@@ -14576,13 +14634,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 0 if result["passed"] else 1
-    if args.command == "diagnose-e25-v3-plane":
-        result = run_e25_v3_plane_diagnostic(
+    if args.command == "qualify-e25-v3-targets":
+        result = run_e25_v3_target_qualification(
             args.data_root, args.support_pool, args.target_bank,
             args.output, processes=args.processes,
         )
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
-        return 0
+        return 0 if result["passed"] else 1
     if args.command == "qualify-e26":
         result = run_e26_qualification(
             args.data_root, args.support_pool, args.output, processes=args.processes

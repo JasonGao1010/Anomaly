@@ -3138,6 +3138,30 @@ $$
 
 产物`runs/ajae/e25_v3_plane_compatibility.npz`大小770,483字节，SHA-256为`3aa2d81c54232be1b5c59ee85081b27fcb8236fd693cd6fc5f623051cb47fda3`，科学数组哈希为`4d19afc193c623e50fd675585ea3be230063640f18e162895d0aeb96b3c15a71`。独立复核确认目标身份唯一且完整、五偏移候选数与E21-v4池逐项一致、接受行的帧偏移与类别语义正确、两项数值界限逐项满足、拒绝哨兵与三类错误码一致、候选评估守恒、保存科学数组哈希与元数据一致。
 
+**E25-v3可信局部支撑定义：课题负责人最终冻结；只读目标资格尚未运行**
+
+前述无局部范围诊断永久保留，不改写为PASS。课题负责人据此最终冻结：一张E21-v4 patch只能在它已经验证过的最大局部范围内作为真实目标的支撑证据。对patch中心半径
+
+$$
+R(d)=\operatorname{clip}(d/20,1,3)\ \mathrm m,
+$$
+
+其锚点到目标帧真实实例闭合世界XY凸包的精确二维欧氏距离必须满足
+
+$$
+d(\text{support anchor},\text{object footprint})\leq1.25R(d).
+$$
+
+这里的$1.25$直接等于E21-v4三尺度估计器已经使用的最大尺度，不根据E25-v3输出、person保留数、生成结果或E45A/E46结果选择。不得再引入$D_{xy}$、$\alpha$、统一3米/5米门或其他经验距离阈值。
+
+目标仍严格按帧偏移$[0,-1,+1,-2,+2]$搜索类别合法的E21-v4 patch；同一偏移内按精确锚点—凸包距离和E21冻结`selection_hash`排序。候选必须依次满足：类别语义合法；精确距离不超过该patch的$1.25R(d)$；目标足迹上E21小/大尺度预测高度最大差不超过0.08米；目标可见点中低于中央平面超过0.02米的比例不超过0.02。第一个满足全部条件的patch成为目标的唯一可信局部支撑。同帧存在接受项时不得查看后续偏移。
+
+只读资格继续使用原4,827个train/206目标身份和真实观测协变量，禁止使用旧`support_semantic`与`reference_support_pool_index`，不重建或渲染control，不读取train/201。拒绝原因固定为`no_semantically_legal_patch`、`outside_e21_local_validity`、`no_projection_stable_patch`和`visible_geometry_incompatible`。
+
+资格必须报告car、truck、other-vehicle和person各自保留数，五个距离层、三个遮挡层、唯一真实实例数和唯一帧数。PASS的必要覆盖条件直接继承E25-v2：四个active类别均非空；五个距离层均非空；三个遮挡层均非空；至少100个帧和至少32个真实实例。除此以外不增加目标数量或效率门。PASS后冻结该定义并重建E25-v3 target bank；FAIL则表明现有E21-v4可观测局部地面不能为冻结目标域提供所需覆盖，不扩大$1.25R(d)$。
+
+正式命令冻结为`python -m src.render qualify-e25-v3-targets --data-root /home/jasongao/Data/STU --support-pool runs/ajae/e21_v4_support_pool.npz --target-bank runs/ajae/e25_v2_real_targets.npz --output runs/ajae/e25_v3_target_qualification.npz --processes 24`。正式执行一次，24个进程、每进程数值库单线程；GPU不参与。当前目标库尚未重建，normal-control生成器尚未运行，E26-v2、E46和E48继续锁定。
+
 ## E26｜权威 world builder 与完整世界规格确定性
 
 **唯一问题**
