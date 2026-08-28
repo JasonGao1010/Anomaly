@@ -13357,6 +13357,7 @@ def run_e37_qualification(
 
 
 _GATE1_SEQUENCE: object | None = None
+_GATE1_BANK_SEED_BASE = 3_800_000
 
 
 def _splitmix64(values: np.ndarray) -> np.ndarray:
@@ -13744,7 +13745,7 @@ def _gate1_bank_worker(index: int) -> dict[str, object]:
         raise RuntimeError("Gate 1 candidate-bank fixtures are not initialized")
     if not 0 <= index < 256:
         raise RuntimeError("Gate 1 v2 bank index must lie in [0,255]")
-    bank_seed = 3_800_000 + index
+    bank_seed = _GATE1_BANK_SEED_BASE + index
     for attempt in range(48):
         attempt_seed = bank_seed + 1_000_003 * attempt
         real_index = int(
@@ -15792,7 +15793,9 @@ def run_e45_qualification(
     return result
 
 
-_E45_BANK: tuple[tuple[int, int, int, int, int, WorldSpec, WorldSpec], ...] = ()
+_E45_BANK: tuple[
+    tuple[int, int, int, int, int, WorldSpec, WorldSpec] | _Gate1BankUnit, ...
+] = ()
 
 
 def _point_identity_order(frame_id: int, slots: np.ndarray, grid: RayGrid) -> np.ndarray:
@@ -15884,7 +15887,25 @@ def _e45_worker(index: int) -> dict[str, np.ndarray]:
     sequence, grid, sensor = _GATE1_SEQUENCE, _GATE1_RAY_GRID, _GATE1_SENSOR
     if sequence is None or grid is None or sensor is None or index >= len(_E45_BANK):
         raise RuntimeError("E45 candidate fixtures are not initialized")
-    bank_seed, center, real_semantic, real_instance, support, control_world, proxy_world = _E45_BANK[index]
+    unit = _E45_BANK[index]
+    if isinstance(unit, _Gate1BankUnit):
+        bank_seed = unit.bank_seed
+        center = unit.center_frame
+        real_semantic = unit.real_semantic
+        real_instance = unit.real_instance
+        source_support = (
+            unit.real_support_semantic,
+            unit.control_support_semantic,
+            unit.proxy_support_semantic,
+        )
+        control_world = unit.control_world
+        proxy_world = unit.proxy_world
+    else:
+        (
+            bank_seed, center, real_semantic, real_instance, support,
+            control_world, proxy_world,
+        ) = unit
+        source_support = (support, support, support)
     records: list[dict[str, np.ndarray]] = []
     for frame_id in range(center - 2, center + 3):
         frame = sequence.source_frame(frame_id)
@@ -15893,7 +15914,7 @@ def _e45_worker(index: int) -> dict[str, np.ndarray]:
         )
         records.append(_e45_unit_record(
             frame, grid, 0, bank_seed, center, real_semantic, real_instance,
-            support, real_geometry, real_return, frame,
+            source_support[0], real_geometry, real_return, frame,
         ))
         for source_id, world in enumerate((control_world, proxy_world), start=1):
             geometry, _, _, rendered = _gate1_single_object_trace(frame, world, grid, sensor)
@@ -15905,7 +15926,8 @@ def _e45_worker(index: int) -> dict[str, np.ndarray]:
             returned = returned & (official >= 2.5) & (official <= 50.0)
             records.append(_e45_unit_record(
                 frame, grid, source_id, bank_seed, center, real_semantic,
-                real_instance, support, geometry, returned, rendered.source,
+                real_instance, source_support[source_id], geometry, returned,
+                rendered.source,
             ))
     return {
         name: np.stack([record[name] for record in records])
@@ -16398,6 +16420,194 @@ def run_e45b_qualification(
         unit_cache_path, output_path, experiment="E45B",
         left_source=1, right_source=2,
     )
+
+
+def _e45_v2_unit_from_record(record: Mapping[str, object]) -> _Gate1BankUnit:
+    """Decode a freshly generated pair-bank record without rerunning placement."""
+    return _Gate1BankUnit(
+        int(record["bank_seed"]), int(record["center_frame"]),
+        int(record["real_semantic"]), int(record["real_instance"]),
+        int(record["real_support_semantic"]),
+        int(record["control_support_semantic"]),
+        int(record["proxy_support_semantic"]),
+        int(record["control_template_index"]),
+        int(record["control_assigned_range_bin"]),
+        int(record["control_final_range_bin"]),
+        int(record["control_visible_returns"]),
+        WorldSpec.from_dict(json.loads(str(record["control_world_json"]))),
+        WorldSpec.from_dict(json.loads(str(record["proxy_world_json"]))),
+    )
+
+
+def run_e45_pair_v2_qualification(
+    data_root: Path | str, e25_new_artifact_path: Path | str,
+    calibration_path: Path | str, support_pool_path: Path | str,
+    output_path: Path | str, *, experiment: str, processes: int = 24,
+) -> dict[str, object]:
+    """Build one independent pair bank and stop at the first passing capacity."""
+    if experiment not in {"E45A-new", "E45B-v2"} or processes != 24:
+        raise RenderError("formal E45 pair qualification requires a known pair and 24 processes")
+    try:
+        from .protocol import load_protocol
+        from .scene import LabelMode, STUSequence
+    except ImportError:
+        from protocol import load_protocol  # type: ignore[no-redef]
+        from scene import LabelMode, STUSequence  # type: ignore[no-redef]
+    project_root = Path(__file__).resolve().parents[1]
+    protocol = load_protocol(project_root / "protocol.json")
+    e25_path = Path(e25_new_artifact_path).expanduser().resolve(strict=True)
+    if _sha256_path(e25_path) != FROZEN_E25_NEW_ARTIFACT_SHA256:
+        raise RenderError("E45 pair bank E25-new artifact identity changed")
+    sequence_206 = STUSequence.open(
+        data_root, protocol=protocol, partition="train", sequence_id=206,
+        label_mode=LabelMode.REQUIRED,
+    )
+    templates = extract_normal_template_library(
+        sequence_206.source_frame(frame_id) for frame_id in sequence_206.frame_ids
+    )
+    _, _, template_hash = canonical_normal_template_library_identity(templates)
+    del sequence_206
+    gc.collect()
+    sequence = STUSequence.open(
+        data_root, protocol=protocol, partition="train", sequence_id=201,
+        label_mode=LabelMode.REQUIRED,
+    )
+    pool, _ = load_gate1_support_pool(support_pool_path)
+    calibration = Path(calibration_path).expanduser().resolve(strict=True)
+    if _sha256_path(calibration) != FROZEN_SENSOR_CALIBRATION_SHA256:
+        raise RenderError("E45 pair bank calibration identity changed")
+    grid, sensor = load_sensor_calibration(calibration)
+    frame_ids = tuple(range(4, 682))
+    trajectory_yaws = _trajectory_yaw_by_pose({
+        frame_id: sequence.lidar_pose(frame_id) for frame_id in frame_ids
+    })
+    frame_keys, obstacles = _gate1_frame_keys_and_obstacles(
+        sequence, build_obstacles=True,
+    )
+    assert obstacles is not None
+    real_candidates = _gate1_real_candidates(sequence, pool, frame_keys=frame_keys)
+    context = build_coverage_control_context(
+        (), pool, grid, sensor, frame_loader=sequence.source_frame,
+        frame_ids=frame_ids, source_sequence_id=201,
+        trajectory_yaws=trajectory_yaws,
+    )
+    _initialize_gate1_candidate_generation(
+        sequence, context, obstacles, templates, real_candidates,
+    )
+    global _GATE1_BANK_SEED_BASE, _E45_BANK
+    _GATE1_BANK_SEED_BASE = 4_500_000 if experiment == "E45A-new" else 4_600_000
+    left_source, right_source = ((0, 1) if experiment == "E45A-new" else (1, 2))
+    output = Path(output_path).expanduser().resolve()
+    output.parent.mkdir(parents=True, exist_ok=True)
+    records: list[dict[str, object]] = []
+    units: dict[str, np.ndarray] | None = None
+    history: list[dict[str, object]] = []
+    final_match: dict[str, np.ndarray] | None = None
+    for previous, capacity in zip((0, 512, 1024), (512, 1024, 2048)):
+        bank_started = time.monotonic()
+        with mp.get_context("fork").Pool(processes=processes) as workers:
+            suffix_records = workers.map(
+                _gate1_bank_worker, range(previous, capacity), chunksize=1
+            )
+        bank_seconds = time.monotonic() - bank_started
+        records.extend(suffix_records)
+        bank_arrays = _gate1_bank_arrays(records)
+        bank_errors = int(np.count_nonzero(bank_arrays["error"] != ""))
+        if bank_errors:
+            raise RenderError(f"{experiment} pair bank exhausted {bank_errors} units")
+        bank_hash = _scientific_array_hash(bank_arrays)
+        bank_path = output.parent / f"{experiment.lower()}_bank_{capacity}.npz"
+        bank_metadata = {
+            "experiment": f"{experiment}-pair-bank", "passed": True,
+            "capacity": capacity, "seed_base": _GATE1_BANK_SEED_BASE,
+            "processes": processes, "elapsed_seconds": bank_seconds,
+            "scientific_array_hash": bank_hash,
+            "support_pool_sha256": FROZEN_GATE1_SUPPORT_POOL_SHA256,
+            "calibration_sha256": FROZEN_SENSOR_CALIBRATION_SHA256,
+            "normal_template_library_sha256": template_hash,
+        }
+        temporary = bank_path.with_suffix(bank_path.suffix + ".tmp.npz")
+        np.savez_compressed(
+            temporary, **bank_arrays,
+            metadata_json=np.asarray(json.dumps(
+                bank_metadata, sort_keys=True, separators=(",", ":")
+            )),
+        )
+        os.replace(temporary, bank_path)
+        _E45_BANK = tuple(_e45_v2_unit_from_record(row) for row in suffix_records)
+        extraction_started = time.monotonic()
+        with mp.get_context("fork").Pool(processes=processes) as workers:
+            extracted = workers.map(
+                _e45_worker, range(len(suffix_records)), chunksize=1
+            )
+        extraction_seconds = time.monotonic() - extraction_started
+        suffix = {
+            name: np.stack([record[name] for record in extracted])
+            for name in _E45_UNIT_FIELDS
+        }
+        units = suffix if units is None else {
+            name: np.concatenate((units[name], suffix[name]))
+            for name in _E45_UNIT_FIELDS
+        }
+        unit_path = output.parent / f"{experiment.lower()}_units_{capacity}.npz"
+        _write_e45_units(units, unit_path, bank_hash, extraction_seconds)
+        matching_started = time.monotonic()
+        match = _e45_pair_match(units, left_source, right_source)
+        matching_seconds = time.monotonic() - matching_started
+        matched_count = int(match["matched_flat_index"].shape[0])
+        center_frames = int(match["matched_center_frames"].size)
+        range_count = np.asarray(match["matched_range_count"])
+        maximum_smd = float(np.max(match["pairwise_smd"]))
+        passed = (
+            matched_count >= 1024 and center_frames >= 100
+            and bool(np.all(range_count > 0))
+            and int(match["caliper_errors"]) == 0
+            and int(match["duplicate_errors"]) == 0 and maximum_smd <= 0.10
+        )
+        history.append({
+            "capacity": capacity, "matched_pairs": matched_count,
+            "center_frames": center_frames, "range_count": range_count.tolist(),
+            "legal_edges": int(match["legal_edge_count"]),
+            "pairwise_smd": match["pairwise_smd"].tolist(),
+            "maximum_pairwise_smd": maximum_smd,
+            "caliper_errors": int(match["caliper_errors"]),
+            "duplicate_errors": int(match["duplicate_errors"]),
+            "bank_seconds": bank_seconds,
+            "unit_extraction_seconds": extraction_seconds,
+            "matching_seconds": matching_seconds, "passed": passed,
+        })
+        final_match = match
+        if passed:
+            break
+    assert units is not None and final_match is not None
+    scientific = _e45_selected_scientific(units, final_match)
+    result = {
+        "experiment": experiment, "passed": bool(history[-1]["passed"]),
+        "failure_classification": (
+            None if history[-1]["passed"] else "insufficient_pairwise_common_support"
+        ),
+        "capacity_ladder": history, "final_capacity": history[-1]["capacity"],
+        "matched_pairs": history[-1]["matched_pairs"],
+        "center_frames": history[-1]["center_frames"],
+        "matched_range_count_2p5_to_40": history[-1]["range_count"],
+        "pairwise_smd": history[-1]["pairwise_smd"],
+        "maximum_pairwise_smd": history[-1]["maximum_pairwise_smd"],
+        "caliper_errors": history[-1]["caliper_errors"],
+        "duplicate_errors": history[-1]["duplicate_errors"],
+        "formal_repetitions": 1, "elementwise_reproduced": None,
+        "reproducibility_check": "not_run_by_owner_decision",
+        "seed_base": _GATE1_BANK_SEED_BASE,
+        "scientific_array_hash": _scientific_array_hash(scientific),
+    }
+    temporary = output.with_suffix(output.suffix + ".tmp.npz")
+    np.savez_compressed(
+        temporary, **scientific,
+        metadata_json=np.asarray(json.dumps(
+            result, sort_keys=True, separators=(",", ":")
+        )),
+    )
+    os.replace(temporary, output)
+    return result
 
 
 _E45A2_TARGET_UNITS: dict[str, np.ndarray] = {}
@@ -17096,6 +17306,14 @@ def _render_parser() -> argparse.ArgumentParser:
     e45b = subcommands.add_parser("qualify-e45b")
     e45b.add_argument("--unit-cache", type=Path, required=True)
     e45b.add_argument("--output", type=Path, required=True)
+    for command in ("qualify-e45a-new", "qualify-e45b-v2"):
+        pair = subcommands.add_parser(command)
+        pair.add_argument("--data-root", type=Path, required=True)
+        pair.add_argument("--e25-new-artifact", type=Path, required=True)
+        pair.add_argument("--calibration", type=Path, required=True)
+        pair.add_argument("--support-pool", type=Path, required=True)
+        pair.add_argument("--output", type=Path, required=True)
+        pair.add_argument("--processes", type=int, default=24)
     e45a2 = subcommands.add_parser("qualify-e45a-v2")
     e45a2.add_argument("--data-root", type=Path, required=True)
     e45a2.add_argument("--support-pool", type=Path, required=True)
@@ -17290,6 +17508,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0 if result["passed"] else 1
     if args.command == "qualify-e45b":
         result = run_e45b_qualification(args.unit_cache, args.output)
+        print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        return 0 if result["passed"] else 1
+    if args.command in {"qualify-e45a-new", "qualify-e45b-v2"}:
+        result = run_e45_pair_v2_qualification(
+            args.data_root, args.e25_new_artifact, args.calibration,
+            args.support_pool, args.output,
+            experiment=("E45A-new" if args.command.endswith("a-new") else "E45B-v2"),
+            processes=args.processes,
+        )
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 0 if result["passed"] else 1
     if args.command == "qualify-e45a-v2":
