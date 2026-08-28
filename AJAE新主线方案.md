@@ -1897,6 +1897,8 @@ E45-v2正式FAIL永久保留；后续设计层归因修订为三方审计设计�
 
 E45A-v2作为Gate 1审计专用定向control银行完整执行至每目标64个proposal的冻结上限，正式FAIL，分类为`targeted_control_common_support_failure`。各阶梯合格control数为[13,36,83,170,325]，最大匹配数为[13,36,80,148,212]；最终只有212对、90个real侧center frames，四个距离层计数为[1,139,72,0]。五项SMD为[0.099364,0.159312,0.064798,0.882238,0.021068]，最大值为遮挡SMD 0.882238。caliper错误、重复使用、硬错误均为0，两遍匹配逐元素一致。该审计银行没有修改E26、renderer或正式normal-control训练分布，也没有使用E46分类器结果。正式产物科学数组哈希为 `00aed2338732f9a9233547cae52c1c3087df6cfb5294da664a73a7b33a0c6192`，文件大小756,236字节，SHA-256为 `290747b6c01ec9d2af152e8688f51cc9c966690cb5c165279265a51fc30e0405`。E46继续锁定；按冻结停止条件，修改正式normal-control生成需要新的用户决策。
 
+用户已据此授权修改正式normal-control位置生成。E25-v2现已冻结为train/206真实正常观测引导的位置proposal与拒绝采样：只使用206目标的类别、合格支撑语义、距离、方位、可见点数、遮挡和局部密度；全部候选继续通过E22–E24与原renderer；201和E46输出禁止进入生成。256个真实模板、缩放、类别、姿态、材质、传感器与schema 7 proxy均不变。扩大覆盖诊断已经在128个目标×128个位置的固定上限内完成16/16个冻结对象，四类语义均有完成对象；该诊断只用于冻结可执行域，不替代正式两遍资格。当前节点为E25-v2正式运行前，E26-v2与E46均保持锁定。
+
 当前可成立的局部结论是：
 
 > **schema 7 能合法、确定且高效地产生覆盖冻结几何区域的合成异常代理；这些对象可以从 train/206 的合格支撑池采样，以冻结连续落地规则达到 99% 接触/埋地资格，并能由同一权威放置接口拒绝与 train/206 实际观测非地面回波发生超过 5 cm 深穿透的位置。**
@@ -1911,7 +1913,7 @@ E45A-v2作为Gate 1审计专用定向control银行完整执行至每目标64个p
 当前执行节点为：
 
 $$
-\boxed{E45\text{-v1/v2},E45A,E45A\text{-v2}\ \text{FAIL RETAINED};\quad E45B\ \text{PASS};\quad E46\ \text{LOCKED}}
+\boxed{E25\text{-v2 FROZEN};\quad E45\text{-v1/v2},E45A,E45A\text{-v2}\ \text{FAIL RETAINED};\quad E45B\ \text{PASS};\quad E46\ \text{LOCKED}}
 $$
 
 E23与E24-v2已按冻结设计通过，当前顺序进入：
@@ -1920,7 +1922,7 @@ $$
 E23\rightarrow E24\rightarrow E25\rightarrow E26
 $$
 
-E27–E44已关闭；E36-v1、E45-v1、E45-v2、E45A和E45A-v2 FAIL均保留。E45B已PASS并满足E48的两两匹配前置资格；E45A-v2已耗尽冻结proposal上限并正式FAIL，E46保持锁定，后续修改正式normal-control生成需要新的用户决策。
+E27–E44已关闭；E36-v1、E45-v1、E45-v2、E45A和E45A-v2 FAIL均保留。E45B已PASS并满足E48的两两匹配前置资格；E45A-v2已耗尽冻结proposal上限并正式FAIL。正式normal-control位置生成的修订决策已经取得，E25-v2协议和实现已冻结，当前等待正式两遍资格；E26-v2与E46在E25-v2裁决前保持锁定。
 
 因此当前整体判断仍是：
 

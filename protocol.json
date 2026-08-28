@@ -2060,6 +2060,32 @@
               "claim_limit": "E25 does not qualify the four inactive unobservable classes and does not establish E26 immutable world-spec or cache-order invariance."
             }
           },
+          "E25-v2": {
+            "status": "FROZEN; formal execution pending; E26-v2 and E46 locked",
+            "purpose": "Qualify formal observation-conditioned normal-control support-position selection using train/206 real-normal observations only",
+            "historical_results_retained": ["E25 PASS", "E45A FAIL", "E45A-v2 FAIL"],
+            "unchanged_components": ["256 train/206 normal templates", "template identity selection in production", "scale U[0.9,1.1]", "class semantics", "trajectory-aligned pose rule", "E22 grounding", "E23 observed-normal collision", "E24 pair collision", "renderer", "return probability", "intensity", "schema-7 anomaly-proxy"],
+            "target_source": "train/206 labelled real-normal observations only; train/201 and E46 outputs are prohibited",
+            "target_unit_definition": "active-class real instance-frame with at least 16 in-range returns, finite convex-hull opportunity, and a nearest legal qualified support association",
+            "target_bank_observed_preflight": {"units": 4827, "frames": 448, "real_instances": 49, "range_counts_2p5_to_50m": [866, 2115, 1149, 580, 117], "occlusion_layer_counts": [1182, 3389, 256]},
+            "exact_strata": ["raw semantic", "qualified support semantic", "2.5-10/10-20/20-30/30-40/40-50 m range bin", "45-degree azimuth sector"],
+            "continuous_calipers": {"distance_m": 2.0, "median_beam": 4.0, "abs_delta_log1p_Nvis": 0.25, "abs_delta_occlusion": 0.1, "abs_delta_log1p_local_density": 0.25},
+            "target_proposal_order": "same raw class with a nonempty legal support stream; same source instance first, then absolute source-frame distance, then frozen unit hash",
+            "maximum_target_proposals_per_control": 128,
+            "support_proposal_domain": "qualified support rows within target frame +/-2, exact support semantic/range bin/azimuth sector",
+            "support_proposal_order": "nearest frozen train/206 density support, then reference-environment XY distance, range error, azimuth error and support selection hash",
+            "maximum_support_proposals_per_target": 128,
+            "candidate_acceptance": "candidate passes E22/E23 and, after the unchanged sensor and native-return competition path, matches at least one train/206 real-normal observation of the same raw class in the exact stratum under all five unchanged E45A calipers",
+            "efficiency_equivalence": "conservative template bounding-sphere ray prefilter and cached material/E22/target strata may reject only candidates that the unchanged full calculation would reject; every accepted candidate receives a final complete renderer and E45-unit recheck",
+            "fixtures": "256 controls, one per frozen template in semantic/library order; control_seed=2500000+fixture_index",
+            "formal_repetitions": 2,
+            "cpu_execution": "target extraction uses 4 workers; control placement uses 16 workers; numeric libraries use one thread; each control worker is recycled after two tasks",
+            "pass_conditions": ["target bank extracted twice elementwise identically", "256/256 controls complete", "all 256 unique frozen templates used exactly once", "hard errors=0", "target/support proposal exhaustion=0", "E22/E23 violations=0", "exact-stratum or five-caliper violations=0", "at least 100 accepted target frames", "at least 32 accepted real instances", "all five train/206-observable range bins nonempty", "all three occlusion layers nonempty", "two control runs elementwise identical"],
+            "command": "python -m src.render qualify-e25-v2 --data-root /home/jasongao/Data/STU --support-pool runs/ajae/e21_v4_support_pool.npz --calibration runs/ajae/calibration.pt --target-output runs/ajae/e25_v2_real_targets.npz --output runs/ajae/e25_v2_normal_control.npz --processes 16",
+            "target_artifact": "runs/ajae/e25_v2_real_targets.npz",
+            "artifact": "runs/ajae/e25_v2_normal_control.npz",
+            "downstream": "PASS permits replacing the sole production normal-control position selector and then running E26-v2; FAIL keeps E26-v2 and E46 locked and requires owner decision"
+          },
           "E26": {
             "status": "PASS; closed; Phase 2 closed; E27 unlocked",
             "world_seeds": [2600000, 2600255],
@@ -2131,7 +2157,7 @@
       }
     },
     "renderer_mechanical_qualification": {
-      "status": "E27-E44 PASS; E28-v1, E36-v1, E45-v1, E45-v2, E45A and E45A-v2 FAIL retained; E45B PASS; E46 locked pending owner decision",
+      "status": "E25-v2 frozen and pending formal execution; E27-E44 PASS; E28-v1, E36-v1, E45-v1, E45-v2, E45A and E45A-v2 FAIL retained; E45B PASS; E26-v2 and E46 locked",
       "layer_boundaries": {"E27-E28": "direct geometry outputs only", "E29": "return probability and deterministic acceptance decision only", "E30-E31": "accepted returns", "E32-E33": "nearest-return occlusion competition"},
       "E27": {
         "question": "Does the formal geometry path return the correct nearest convex-hull hit, outward finite normal and object ID for active normal-control templates when return rejection is disabled?",

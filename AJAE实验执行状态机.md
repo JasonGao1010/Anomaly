@@ -3040,6 +3040,22 @@ control index $i\in[0,1023]$ 的control seed固定为 $2{,}500{,}000+i$。vehicl
 
 正式产物 `runs/ajae/e25_normal_control.npz` 大小2,002,631字节，SHA-256为 `b2d98a01b68b030fdd3bba348a933ef02733deb0bbebbaf845ab2b5b17b90bee`。E25 PASS允许的结论限定为：**当前从train/206实际可观察到的car、truck、other-vehicle和person凸包模板，可以按冻结类别—支撑策略、缩放与轨迹姿态规则，通过同一E22–E24权威放置路径确定性构造1,024个合法normal-control。** 本结果不对四个inactive类别形成放置资格结论，也不替代E26对完整不可变world-spec和缓存顺序不变性的检查。
 
+## E25-v2｜train/206 真实正常观测引导的 normal-control 位置生成
+
+E25 的历史 PASS 保留；E45A 与 E45A-v2 的正式 FAIL 也永久保留。E25-v2只修改 normal-control 的支撑位置选择，不修改256个train/206真实模板、生产模板身份流、三轴缩放$U[0.9,1.1]$、类别语义、轨迹对齐姿态、E22、E23、E24、renderer、回波概率、强度或schema 7 proxy。train/201继续只用于后续独立检查；E25-v2目标库和位置接受过程禁止读取train/201与E46分类结果。
+
+train/206目标单位冻结为：car=10、truck=18、other-vehicle=20或person=30的真实实例—帧观测；官方距离位于2.5–50米；至少16个真实回波；能够形成有限三维凸包机会；并能绑定到类别允许语义中的最近E21-v4合格支撑。全量预检得到4,827个目标单位，覆盖448帧和49个真实实例；五个距离层计数为[866,2115,1149,580,117]，遮挡$[0,0.25)$、$[0.25,0.75)$、$[0.75,1]$三层计数为[1182,3389,256]。目标库必须从原始train/206独立提取两遍并逐元素一致。
+
+每个control fixture先固定原模板、缩放、姿态扰动和材质。目标proposal只从同raw semantic且存在合法支撑流的206目标中提出；同一模板来源实例优先，其后按与模板来源帧的绝对距离和冻结unit hash排序，每对象最多128个目标proposal。每个目标的支撑位置只取目标帧$pm2$内、support semantic完全相同、距离层完全相同、45度方位区完全相同的E21-v4合格支撑。位置顺序依次使用train/206原始帧8近邻体密度误差、相对参考支撑的世界xy距离、距离误差、方位误差和冻结support hash；每目标最多128个位置proposal。
+
+每个位置仍完整通过权威 `place_object` 的E22与E23；多实体世界继续由E24处理。合法位置在正式sensor与原始回波最近距离竞争下计算距离、median beam、$N_{vis}$、遮挡和局部密度。接受对象必须能在相同raw semantic、support semantic、距离层和45度方位区中匹配至少一个train/206真实正常观测，并同时满足E45A原五项caliper：距离差不超过2米、median beam差不超过4、$|\Delta\log(1+N_{vis})|\le0.25$、遮挡差不超过0.10、$|\Delta\log(1+\mathrm{density})|\le0.25$。不得根据201或E46结果选择对象。
+
+执行优化不改变候选或裁决。材质、E22资格、目标协变量和精确分层按对象或目标库缓存；模板包围球只保守排除绝对不可能命中对象的射线。前四项已失败的候选不重复构造完整帧；所有可能通过的候选仍执行原完整renderer和五项权威复核。16对象扩大覆盖诊断在128×128固定上限内16/16完成，提议数为[620,2817,10018,33,3695,5009,112,3713,663,2911,12798,13,1192,251,11789,3886]；该诊断只证明当前固定域存在，不作为正式资格结果。
+
+正式E25-v2使用256个fixture，按semantic与模板库顺序让每个冻结模板恰好出现一次；control seed为2,500,000加fixture index。目标提取两遍固定4进程；control正式运行两遍固定16进程、数值库单线程，每个worker最多处理2个对象后回收。PASS要求：256/256完成且256个模板身份唯一；目标与位置均不耗尽；硬错误、E22/E23错误、精确分层错误和五项caliper错误均为0；接受目标覆盖至少100帧、至少32个真实实例、五个距离层和三个遮挡层；两遍全部保存数组逐元素一致。正式命令为 `python -m src.render qualify-e25-v2 --data-root /home/jasongao/Data/STU --support-pool runs/ajae/e21_v4_support_pool.npz --calibration runs/ajae/calibration.pt --target-output runs/ajae/e25_v2_real_targets.npz --output runs/ajae/e25_v2_normal_control.npz --processes 16`。
+
+E25-v2 PASS后才把同一位置选择函数接入唯一生产 `sample_training_world` 并执行E26-v2；E25-v2 FAIL则保留全部历史结果，E26-v2和E46继续锁定并等待新的设计决策。
+
 ## E26｜权威 world builder 与完整世界规格确定性
 
 **唯一问题**

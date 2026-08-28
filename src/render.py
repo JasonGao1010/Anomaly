@@ -7439,6 +7439,818 @@ def run_e25_qualification(
     return metadata
 
 
+_E25V2_SEQUENCE: object | None = None
+_E25V2_SUPPORT_POOL: QualifiedSupportPool | None = None
+_E25V2_OBSTACLES: ObservedObstacleIndex | None = None
+_E25V2_TEMPLATES: dict[int, tuple[NormalTemplateShape, ...]] = {}
+_E25V2_TRAJECTORY_YAW: dict[int, float] = {}
+_E25V2_RAY_GRID: RayGrid | None = None
+_E25V2_SENSOR: SensorCalibration | None = None
+_E25V2_TARGETS: dict[str, np.ndarray] = {}
+_E25V2_SUPPORT_ROWS: tuple[np.ndarray, ...] = ()
+_E25V2_TARGET_COVARIATES = np.empty((0, 5), dtype=np.float64)
+_E25V2_TARGET_LOOKUP: dict[tuple[int, int, int, int], np.ndarray] = {}
+_E25V2_SUPPORT_PROPOSABLE = np.empty(0, dtype=np.bool_)
+
+
+def _real_instance_support_row(
+    frame: SourceFrame, pool: QualifiedSupportPool,
+    semantic: int, instance: int,
+) -> int | None:
+    """Bind one observed instance to its nearest legal qualified support patch."""
+    assert frame.labels is not None
+    rows = np.flatnonzero(np.abs(pool.frames - frame.frame_id) <= 2)
+    rows = rows[np.isin(
+        pool.semantics[rows], tuple(normal_control_support_semantics(semantic))
+    )]
+    if rows.size == 0:
+        return None
+    selected = (
+        (frame.labels.semantic == np.uint16(semantic))
+        & (frame.labels.instance == np.uint16(instance))
+        & ~np.asarray(frame.zero_slot_mask, dtype=np.bool_)
+    )
+    sensor_points = np.asarray(frame.xyzi[selected, :3], dtype=np.float64)
+    if sensor_points.shape[0] < 4:
+        return None
+    rotation, translation = _pose(frame)
+    world_points = sensor_points @ rotation.T + translation
+    try:
+        hull = ConvexHull(world_points[:, :2])
+    except QhullError:
+        return None
+    patch_xy = pool.anchors_world_m[rows, :2]
+    equations = np.asarray(hull.equations, dtype=np.float64)
+    inside = np.all(
+        patch_xy @ equations[:, :2].T + equations[:, 2] <= 0.5, axis=1
+    )
+    if bool(inside.any()):
+        eligible = rows[inside]
+        distance = np.linalg.norm(
+            pool.anchors_world_m[eligible, :2] - np.mean(world_points[:, :2], axis=0),
+            axis=1,
+        )
+    else:
+        polygon = world_points[np.asarray(hull.vertices), :2]
+        starts, ends = polygon, np.roll(polygon, -1, axis=0)
+        edges = ends - starts
+        denominator = np.sum(np.square(edges), axis=1)
+        relative = patch_xy[:, None, :] - starts[None, :, :]
+        fraction = np.clip(
+            np.divide(
+                np.sum(relative * edges[None, :, :], axis=2),
+                denominator[None, :],
+                out=np.zeros((rows.size, edges.shape[0]), dtype=np.float64),
+                where=denominator[None, :] > 0.0,
+            ),
+            0.0, 1.0,
+        )
+        closest = starts[None, :, :] + fraction[:, :, None] * edges[None, :, :]
+        all_distance = np.min(
+            np.linalg.norm(patch_xy[:, None, :] - closest, axis=2), axis=1
+        )
+        eligible, distance = rows, all_distance
+    return int(eligible[np.lexsort((pool.selection_hashes[eligible], distance))[0]])
+
+
+def _e25v2_target_frame(frame_id: int) -> dict[str, np.ndarray]:
+    sequence, pool, grid = _E25V2_SEQUENCE, _E25V2_SUPPORT_POOL, _E25V2_RAY_GRID
+    if sequence is None or pool is None or grid is None:
+        raise RuntimeError("E25-v2 target extraction is not initialized")
+    frame = sequence.source_frame(frame_id)
+    assert frame.labels is not None
+    real = ~np.asarray(frame.zero_slot_mask, dtype=np.bool_)
+    semantic = np.asarray(frame.labels.semantic)
+    instance = np.asarray(frame.labels.instance)
+    official = np.asarray(grid.official_ranges(frame))
+    eligible_range = real & (official >= 2.5) & (official <= 50.0)
+    packed = semantic.astype(np.uint32) | (instance.astype(np.uint32) << np.uint32(16))
+    records: list[dict[str, np.ndarray]] = []
+    active = frozenset(_E25V2_TEMPLATES)
+    for value, count in zip(
+        *np.unique(packed[eligible_range], return_counts=True), strict=True
+    ):
+        raw = int(value & np.uint32(0xFFFF))
+        identifier = int(value >> np.uint32(16))
+        if raw not in active or identifier == 0 or int(count) < 16:
+            continue
+        support_row = _real_instance_support_row(frame, pool, raw, identifier)
+        if support_row is None:
+            continue
+        try:
+            geometry, returned, _ = _gate1_real_geometry(
+                frame, raw, identifier, grid
+            )
+            unit = _e45_unit_record(
+                frame, grid, 0, 0, frame_id, raw, identifier,
+                int(pool.semantics[support_row]), geometry, returned, frame,
+            )
+        except RenderError:
+            continue
+        if (
+            int(unit["point_count"]) < 1
+            or int(unit["range_bin"]) < 0
+            or not 0.0 <= float(unit["O_hat"]) <= 1.0
+        ):
+            continue
+        unit.update({
+            "real_semantic": np.asarray(raw, dtype=np.uint16),
+            "real_instance": np.asarray(identifier, dtype=np.uint16),
+            "reference_support_pool_index": np.asarray(support_row, dtype=np.int64),
+        })
+        records.append(unit)
+    fields = _E45_UNIT_FIELDS + (
+        "real_semantic", "real_instance", "reference_support_pool_index",
+    )
+    if not records:
+        return {name: np.empty(0, dtype=np.float64) for name in fields}
+    return {name: np.stack([record[name] for record in records]) for name in fields}
+
+
+def _e25v2_target_bank(
+    sequence: object, pool: QualifiedSupportPool, grid: RayGrid,
+    templates: Mapping[int, tuple[NormalTemplateShape, ...]], *, processes: int,
+) -> dict[str, np.ndarray]:
+    global _E25V2_SEQUENCE, _E25V2_SUPPORT_POOL, _E25V2_RAY_GRID, _E25V2_TEMPLATES
+    _E25V2_SEQUENCE, _E25V2_SUPPORT_POOL, _E25V2_RAY_GRID = sequence, pool, grid
+    _E25V2_TEMPLATES = dict(templates)
+    frame_ids = tuple(map(int, sequence.frame_ids))
+    with mp.get_context("fork").Pool(
+        processes=processes, maxtasksperchild=16
+    ) as workers:
+        frame_records = workers.map(_e25v2_target_frame, frame_ids, chunksize=1)
+    fields = _E45_UNIT_FIELDS + (
+        "real_semantic", "real_instance", "reference_support_pool_index",
+    )
+    nonempty = [record for record in frame_records if record["real_semantic"].size]
+    if not nonempty:
+        raise PlacementError("train/206 has no qualified real-normal observation targets")
+    arrays = {name: np.concatenate([record[name] for record in nonempty]) for name in fields}
+    order = np.argsort(arrays["unit_hash"], kind="stable")
+    return {name: np.ascontiguousarray(value[order]) for name, value in arrays.items()}
+
+
+def _e25v2_support_streams(
+    sequence: object, pool: QualifiedSupportPool,
+    targets: Mapping[str, np.ndarray], maximum_proposals: int = 128,
+) -> tuple[np.ndarray, ...]:
+    """Order legal supports around the reference object's observed environment."""
+    cache: dict[
+        int, tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]
+    ] = {}
+    streams: list[np.ndarray] = []
+    for target in range(targets["frame_id"].size):
+        frame_id = int(targets["frame_id"][target])
+        if frame_id not in cache:
+            rows = np.flatnonzero(np.abs(pool.frames - frame_id) <= 2)
+            frame = sequence.source_frame(frame_id)
+            rotation, translation = _pose(frame)
+            sensor = (pool.anchors_world_m[rows] - translation) @ rotation
+            ranges = np.linalg.norm(sensor, axis=1)
+            angles = np.arctan2(sensor[:, 1], sensor[:, 0]) % (2.0 * math.pi)
+            sectors = (
+                np.floor(angles / (math.pi / 4.0)).astype(np.int8) % 8
+            )
+            valid = ~np.asarray(frame.zero_slot_mask, dtype=np.bool_)
+            native_points = np.asarray(frame.xyzi[valid, :3], dtype=np.float64)
+            neighbours = min(9, native_points.shape[0])
+            distance, _ = cKDTree(native_points).query(
+                sensor, k=neighbours, workers=1
+            )
+            radius = distance[:, -1] if distance.ndim == 2 else distance
+            density = max(neighbours - 1, 1) / (
+                (4.0 / 3.0) * math.pi * np.maximum(radius, 1.0e-3) ** 3
+            )
+            cache[frame_id] = rows, ranges, angles, sectors, density
+        rows, ranges, angles, sectors, density = cache[frame_id]
+        eligible = (
+            (pool.semantics[rows] == targets["support_semantic"][target])
+            & (_gate1_range_bin(ranges) == targets["range_bin"][target])
+            & (sectors == targets["azimuth_sector"][target])
+        )
+        selected = rows[eligible]
+        reference_row = int(targets["reference_support_pool_index"][target])
+        environment_distance = np.linalg.norm(
+            pool.anchors_world_m[selected, :2]
+            - pool.anchors_world_m[reference_row, :2], axis=1,
+        )
+        range_error = np.abs(
+            ranges[eligible] - float(targets["median_distance_m"][target])
+        )
+        density_targets = np.sort(np.log1p(targets["local_density"][
+            (targets["real_semantic"] == targets["real_semantic"][target])
+            & (targets["support_semantic"] == targets["support_semantic"][target])
+            & (targets["range_bin"] == targets["range_bin"][target])
+            & (targets["azimuth_sector"] == targets["azimuth_sector"][target])
+        ]))
+        proposal_density = np.log1p(density[eligible])
+        insertion = np.searchsorted(density_targets, proposal_density)
+        lower = density_targets[np.maximum(insertion - 1, 0)]
+        upper = density_targets[np.minimum(insertion, density_targets.size - 1)]
+        density_error = np.minimum(
+            np.abs(proposal_density - lower), np.abs(proposal_density - upper)
+        )
+        target_angle = (
+            (float(targets["azimuth_sector"][target]) + 0.5) * math.pi / 4.0
+        )
+        angle_error = np.abs(
+            (angles[eligible] - target_angle + math.pi) % (2.0 * math.pi) - math.pi
+        )
+        order = np.lexsort(
+            (
+                pool.selection_hashes[selected], angle_error, range_error,
+                environment_distance, density_error,
+            )
+        )
+        streams.append(selected[order[:maximum_proposals]].astype(np.int64))
+    return tuple(streams)
+
+
+def _initialize_e25v2_target_index(
+    targets: Mapping[str, np.ndarray], support_rows: tuple[np.ndarray, ...]
+) -> None:
+    """Cache immutable target strata and covariates for all worker proposals."""
+    global _E25V2_TARGET_COVARIATES, _E25V2_TARGET_LOOKUP
+    global _E25V2_SUPPORT_PROPOSABLE
+    _E25V2_TARGET_COVARIATES = _e45_covariates(targets)
+    _E25V2_SUPPORT_PROPOSABLE = np.asarray(
+        [rows.size > 0 for rows in support_rows], dtype=np.bool_
+    )
+    lookup: dict[tuple[int, int, int, int], list[int]] = {}
+    for index in range(targets["frame_id"].size):
+        key = (
+            int(targets["real_semantic"][index]),
+            int(targets["support_semantic"][index]),
+            int(targets["range_bin"][index]),
+            int(targets["azimuth_sector"][index]),
+        )
+        lookup.setdefault(key, []).append(index)
+    _E25V2_TARGET_LOOKUP = {
+        key: np.asarray(rows, dtype=np.int64) for key, rows in lookup.items()
+    }
+
+
+def _e25v2_sensor_precheck(
+    frame: SourceFrame, world: WorldSpec, ray_grid: RayGrid,
+    sensor: SensorCalibration,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Compute exact pre-packing covariates without repeating a full render."""
+    item = world.objects[0]
+    pose_rotation, lidar_origin = _pose(frame)
+    directions_sensor = ray_grid.directions_for(frame)
+    directions_world = directions_sensor @ pose_rotation.T
+    origins_world = ray_grid.origins_for(frame) @ pose_rotation.T + lidar_origin
+    object_rotation = np.asarray(item.rotation_world_from_local, dtype=np.float64)
+    translation = np.asarray(item.translation_world_m, dtype=np.float64)
+    local_origin = (origins_world - translation) @ object_rotation
+    local_direction = directions_world @ object_rotation
+    direction_length = np.linalg.norm(local_direction, axis=1)
+    unit_direction = local_direction / direction_length[:, None]
+    closest_parameter = np.maximum(
+        -np.sum(local_origin * unit_direction, axis=1), 0.0
+    )
+    closest = local_origin + closest_parameter[:, None] * unit_direction
+    broad_phase = np.linalg.norm(closest, axis=1) <= item.shape.bound_radius_m
+    distance = np.full(ray_grid.slot_count, np.inf, dtype=np.float64)
+    local_normal = np.zeros((ray_grid.slot_count, 3), dtype=np.float64)
+    valid = np.zeros(ray_grid.slot_count, dtype=np.bool_)
+    candidate_slots = np.flatnonzero(broad_phase)
+    if candidate_slots.size:
+        candidate_distance, candidate_normal, candidate_valid = item.shape.intersect(
+            local_origin[candidate_slots], local_direction[candidate_slots]
+        )
+        distance[candidate_slots] = candidate_distance
+        local_normal[candidate_slots] = candidate_normal
+        valid[candidate_slots] = candidate_valid
+    official_distance = np.asarray(distance) + ray_grid.official_range_offset_m
+    geometry = np.asarray(valid) & (official_distance >= 2.5) & (official_distance <= 50.0)
+    normal_world = local_normal @ object_rotation.T
+    incidence = np.zeros(ray_grid.slot_count, dtype=np.float64)
+    incidence[geometry] = np.arccos(np.clip(np.abs(np.sum(
+        normal_world[geometry] * -directions_world[geometry], axis=1
+    )), 0.0, 1.0))
+    chance = np.zeros(ray_grid.slot_count, dtype=np.float64)
+    chance[geometry] = sensor.return_chance(
+        ray_grid.beam_ids[geometry], distance[geometry], incidence[geometry],
+        item.material.return_bias,
+    )
+    slots = np.arange(ray_grid.slot_count, dtype=np.int32)
+    accepted = geometry & (_slot_uniform(
+        world, int(frame.frame_id), slots,
+        np.full(ray_grid.slot_count, item.object_id, dtype=np.int32), channel=0,
+    ) < chance)
+    native_range = np.asarray(ray_grid.ranges(frame)).copy()
+    native_range[np.asarray(frame.zero_slot_mask, dtype=np.bool_)] = np.inf
+    visible = accepted & (distance < native_range - world.tie_tolerance_m)
+    returned_slots = np.flatnonzero(visible)
+    if returned_slots.size == 0:
+        return np.asarray((-1, -1, -1), dtype=np.int16), np.asarray(
+            (0.0, 0.0, 0.0, 0.0), dtype=np.float64
+        )
+    angle = np.arctan2(
+        directions_sensor[returned_slots, 1], directions_sensor[returned_slots, 0]
+    )
+    circular = math.atan2(float(np.sin(angle).sum()), float(np.cos(angle).sum()))
+    exact = np.asarray((
+        int(_gate1_range_bin(np.asarray([
+            np.median(official_distance[returned_slots])
+        ]))[0]),
+        int(math.floor((circular % (2.0 * math.pi)) / (math.pi / 4.0))) % 8,
+        int(returned_slots.size),
+    ), dtype=np.int16)
+    covariates = np.asarray((
+        float(np.median(official_distance[returned_slots])),
+        float(np.median(ray_grid.beam_ids[returned_slots])),
+        float(np.log1p(returned_slots.size)),
+        float(1.0 - returned_slots.size / max(int(np.count_nonzero(geometry)), 1)),
+    ), dtype=np.float64)
+    return exact, covariates
+
+
+def _e25v2_target_attempt(
+    index: int, source: NormalTemplateShape, template_identity: str,
+    shape: NormalTemplateShape, scale: np.ndarray, perturbation: float,
+    material_seed: int, target: int,
+) -> dict[str, object]:
+    sequence, pool, obstacles = (
+        _E25V2_SEQUENCE, _E25V2_SUPPORT_POOL, _E25V2_OBSTACLES
+    )
+    grid, sensor = _E25V2_RAY_GRID, _E25V2_SENSOR
+    if (
+        sequence is None or pool is None or obstacles is None
+        or grid is None or sensor is None or not _E25V2_TARGETS
+        or not _E25V2_SUPPORT_ROWS or not _E25V2_TEMPLATES
+    ):
+        raise RuntimeError("E25-v2 worker state is not initialized")
+    control_seed = 2_500_000 + index
+    semantic = int(source.raw_semantic_id)
+    frame_id = int(_E25V2_TARGETS["frame_id"][target])
+    frame = sequence.source_frame(frame_id)
+    condition_rejections = 0
+    placement_rejections = 0
+    last_difference = np.full(5, np.nan, dtype=np.float64)
+    violation_counts = np.zeros(5, dtype=np.int16)
+    exact_mismatch_counts = np.zeros(3, dtype=np.int16)
+    best_scaled_difference = np.full(5, np.inf, dtype=np.float64)
+    calipers = np.asarray((2.0, 4.0, 0.25, 0.10, 0.25))
+    material = MaterialSpec.sample(material_seed)
+    grounding = qualify_grounding(shape)
+
+    def yaw_for_support(patch: SupportPatch) -> float:
+        return _E25V2_TRAJECTORY_YAW[patch.frame_id] + perturbation
+
+    for proposal, row in enumerate(_E25V2_SUPPORT_ROWS[target][:128]):
+        try:
+            item, record = place_object(
+                shape, material, pool, obstacles,
+                object_id=index + 1, label="normal-control",
+                proposal_namespace="E25-v2-observation-conditioned",
+                proposal_stream=control_seed, yaw_rad=perturbation,
+                material_seed=material_seed, yaw_seed=control_seed,
+                template_identity=_normal_template_identity(source),
+                proposal_rows=(int(row),), maximum_candidates=1,
+                grounding_eligibility=grounding,
+                yaw_for_support=yaw_for_support,
+            )
+        except PlacementError:
+            placement_rejections += 1
+            continue
+        world = WorldSpec(control_seed, 206, (item,))
+        precheck_exact, precheck_covariates = _e25v2_sensor_precheck(
+            frame, world, grid, sensor
+        )
+        comparable = _E25V2_TARGET_LOOKUP.get(
+            (semantic, record.support_semantic,
+             int(precheck_exact[0]), int(precheck_exact[1])),
+            np.empty(0, dtype=np.int64),
+        )
+        comparable_covariates = _E25V2_TARGET_COVARIATES[comparable]
+        precheck_differences = np.abs(
+            comparable_covariates[:, :4] - precheck_covariates
+        )
+        precheck_pass = np.all(precheck_differences <= calipers[:4], axis=1)
+        precheck_difference = (
+            np.min(precheck_differences, axis=0)
+            if comparable.size else np.full(4, np.inf, dtype=np.float64)
+        )
+        exact_mismatch_counts += np.asarray((
+            precheck_exact[2] < 1,
+            not bool(np.any(_E25V2_TARGETS["range_bin"][comparable]
+                            == precheck_exact[0])),
+            comparable.size == 0,
+        ), dtype=np.int16)
+        violation_counts[:4] += (precheck_difference > calipers[:4]).astype(np.int16)
+        best_scaled_difference[:4] = np.minimum(
+            best_scaled_difference[:4], precheck_difference / calipers[:4]
+        )
+        if (
+            precheck_exact[2] < 1
+            or not bool(precheck_pass.any())
+        ):
+            condition_rejections += 1
+            continue
+        geometry, _, _, rendered = _gate1_single_object_trace(
+            frame, world, grid, sensor
+        )
+        returned = np.asarray(rendered.normal_control_mask, dtype=np.bool_)
+        official = np.asarray(grid.official_ranges(rendered.source))
+        returned = returned & (official >= 2.5) & (official <= 50.0)
+        unit = _e45_unit_record(
+            frame, grid, 1, control_seed, frame_id, semantic,
+            int(_E25V2_TARGETS["real_instance"][target]),
+            int(_E25V2_TARGETS["support_semantic"][target]),
+            geometry, returned, rendered.source,
+        )
+        control_covariates = _e45_covariates({
+            name: np.asarray(unit[name]).reshape(1)
+            for name in (
+                "median_distance_m", "median_beam", "Nvis", "O_hat", "local_density"
+            )
+        })[0]
+        feasible_targets = comparable[precheck_pass]
+        feasible_covariates = comparable_covariates[precheck_pass]
+        feasible_differences = np.abs(feasible_covariates - control_covariates)
+        fully_matched = np.all(feasible_differences <= calipers, axis=1)
+        if bool(fully_matched.any()):
+            candidates = np.flatnonzero(fully_matched)
+            cost = np.sum(
+                np.square(feasible_differences[candidates] / calipers), axis=1
+            )
+            selected = candidates[np.lexsort((
+                _E25V2_TARGETS["unit_hash"][feasible_targets[candidates]], cost
+            ))[0]]
+            matched_target = int(feasible_targets[selected])
+            last_difference = feasible_differences[selected]
+        else:
+            matched_target = target
+            last_difference = np.min(feasible_differences, axis=0)
+        best_scaled_difference[4] = min(
+            best_scaled_difference[4], last_difference[4] / calipers[4]
+        )
+        exact = bool(fully_matched.any()) and (
+            int(unit["point_count"]) > 0
+            and int(unit["support_semantic"])
+            == int(_E25V2_TARGETS["support_semantic"][target])
+            and int(unit["range_bin"])
+            == int(_E25V2_TARGETS["range_bin"][matched_target])
+            and int(unit["azimuth_sector"])
+            == int(_E25V2_TARGETS["azimuth_sector"][matched_target])
+        )
+        violation_counts[4] += np.int16(last_difference[4] > calipers[4])
+        if not exact or not np.all(last_difference <= calipers):
+            condition_rejections += 1
+            continue
+        return {
+            "hard_error": 0, "placement_exhaustion": 0,
+            "control_seed": control_seed, "target_index": matched_target,
+            "target_frame": int(_E25V2_TARGETS["frame_id"][matched_target]),
+            "target_semantic": semantic,
+            "target_instance": int(_E25V2_TARGETS["real_instance"][matched_target]),
+            "target_unit_hash": int(_E25V2_TARGETS["unit_hash"][matched_target]),
+            "target_range_bin": int(_E25V2_TARGETS["range_bin"][matched_target]),
+            "target_occlusion": float(_E25V2_TARGETS["O_hat"][matched_target]),
+            "control_occlusion": float(unit["O_hat"]),
+            "condition_difference": last_difference,
+            "support_proposal_count": proposal + 1,
+            "placement_rejections": placement_rejections,
+            "condition_rejections": condition_rejections,
+            "violation_counts": violation_counts,
+            "exact_mismatch_counts": exact_mismatch_counts,
+            "best_scaled_difference": best_scaled_difference,
+            "template_identity": template_identity,
+            "scale": scale, "pose_perturbation_rad": perturbation,
+            "support_semantic": record.support_semantic,
+            "support_pool_index": record.support_pool_index,
+            "object_json": json.dumps(item.to_dict(), sort_keys=True, separators=(",", ":")),
+            "placement_report_json": json.dumps(record.to_dict(), sort_keys=True, separators=(",", ":")),
+        }
+    return {
+        "hard_error": 0, "placement_exhaustion": 1,
+        "control_seed": control_seed, "target_index": target,
+        "target_frame": frame_id, "target_semantic": semantic,
+        "target_instance": int(_E25V2_TARGETS["real_instance"][target]),
+        "target_unit_hash": int(_E25V2_TARGETS["unit_hash"][target]),
+        "target_range_bin": int(_E25V2_TARGETS["range_bin"][target]),
+        "target_occlusion": float(_E25V2_TARGETS["O_hat"][target]),
+        "condition_difference": last_difference,
+        "violation_counts": violation_counts,
+        "exact_mismatch_counts": exact_mismatch_counts,
+        "best_scaled_difference": best_scaled_difference,
+        "support_proposal_count": min(128, len(_E25V2_SUPPORT_ROWS[target])),
+        "placement_rejections": placement_rejections,
+        "condition_rejections": condition_rejections,
+    }
+
+
+def _e25v2_worker(index: int) -> dict[str, object]:
+    if not _E25V2_TARGETS or not _E25V2_SUPPORT_ROWS or not _E25V2_TEMPLATES:
+        raise RuntimeError("E25-v2 worker state is not initialized")
+    control_seed = 2_500_000 + index
+    templates = tuple(
+        template for semantic in sorted(_E25V2_TEMPLATES)
+        for template in _E25V2_TEMPLATES[semantic]
+    )
+    if len(templates) != 256 or not 0 <= index < len(templates):
+        raise PlacementError("E25-v2 requires one fixture per frozen template")
+    source = templates[index]
+    template_identity = _normal_template_identity(source)
+    semantic = int(source.raw_semantic_id)
+    scale = np.random.default_rng(
+        np.random.SeedSequence([control_seed + 2, 2501])
+    ).uniform(0.9, 1.1, size=3)
+    shape = _aligned_scaled_template(source, scale)
+    limit = math.pi if semantic == 30 else math.radians(15.0)
+    perturbation = float(np.random.default_rng(
+        np.random.SeedSequence([control_seed, 2502])
+    ).uniform(-limit, limit))
+    material_seed = control_seed + 2503
+    eligible = np.flatnonzero(
+        (_E25V2_TARGETS["real_semantic"] == semantic)
+        & _E25V2_SUPPORT_PROPOSABLE
+    )
+    if eligible.size == 0:
+        raise PlacementError(
+            "E25-v2 has no support-proposable train/206 target for template semantic"
+        )
+    order = np.lexsort((
+        _E25V2_TARGETS["unit_hash"][eligible],
+        np.abs(
+            _E25V2_TARGETS["frame_id"][eligible].astype(np.int64)
+            - source.source_frame_id
+        ),
+        _E25V2_TARGETS["real_instance"][eligible] != source.source_instance_id,
+    ))
+    aggregate_placement = 0
+    aggregate_condition = 0
+    aggregate_violation = np.zeros(5, dtype=np.int32)
+    aggregate_exact = np.zeros(3, dtype=np.int32)
+    aggregate_best = np.full(5, np.inf, dtype=np.float64)
+    last: dict[str, object] | None = None
+    for target_proposal, target in enumerate(eligible[order[:128]]):
+        attempt = _e25v2_target_attempt(
+            index, source, template_identity, shape, scale, perturbation,
+            material_seed, int(target),
+        )
+        aggregate_placement += int(attempt["placement_rejections"])
+        aggregate_condition += int(attempt["condition_rejections"])
+        aggregate_violation += np.asarray(attempt["violation_counts"])
+        aggregate_exact += np.asarray(attempt["exact_mismatch_counts"])
+        aggregate_best = np.minimum(
+            aggregate_best, np.asarray(attempt["best_scaled_difference"])
+        )
+        last = attempt
+        if int(attempt["placement_exhaustion"]) == 0:
+            attempt.update({
+                "target_proposal_count": target_proposal + 1,
+                "support_proposal_count": (
+                    128 * target_proposal + int(attempt["support_proposal_count"])
+                ),
+                "placement_rejections": aggregate_placement,
+                "condition_rejections": aggregate_condition,
+                "violation_counts": aggregate_violation,
+                "exact_mismatch_counts": aggregate_exact,
+                "best_scaled_difference": aggregate_best,
+            })
+            return attempt
+    assert last is not None
+    last.update({
+        "target_proposal_count": min(128, eligible.size),
+        "support_proposal_count": sum(
+            min(128, _E25V2_SUPPORT_ROWS[int(target)].size)
+            for target in eligible[order[:128]]
+        ),
+        "placement_rejections": aggregate_placement,
+        "condition_rejections": aggregate_condition,
+        "violation_counts": aggregate_violation,
+        "exact_mismatch_counts": aggregate_exact,
+        "best_scaled_difference": aggregate_best,
+    })
+    return last
+
+
+def _e25v2_arrays(records: Sequence[Mapping[str, object]]) -> dict[str, np.ndarray]:
+    def values(name: str, dtype: object, default: object) -> np.ndarray:
+        return np.asarray([item.get(name, default) for item in records], dtype=dtype)
+    return {
+        "control_seed": values("control_seed", np.int64, -1),
+        "target_index": values("target_index", np.int32, -1),
+        "target_frame": values("target_frame", np.int16, -1),
+        "target_semantic": values("target_semantic", np.uint16, 0),
+        "target_instance": values("target_instance", np.uint16, 0),
+        "target_unit_hash": values("target_unit_hash", np.uint64, 0),
+        "target_range_bin": values("target_range_bin", np.int8, -1),
+        "target_occlusion": values("target_occlusion", np.float64, np.nan),
+        "control_occlusion": values("control_occlusion", np.float64, np.nan),
+        "condition_difference": np.asarray([
+            item.get("condition_difference", (np.nan,) * 5) for item in records
+        ], dtype=np.float64),
+        "violation_counts": np.asarray([
+            item.get("violation_counts", (0,) * 5) for item in records
+        ], dtype=np.int16),
+        "exact_mismatch_counts": np.asarray([
+            item.get("exact_mismatch_counts", (0,) * 3) for item in records
+        ], dtype=np.int16),
+        "best_scaled_difference": np.asarray([
+            item.get("best_scaled_difference", (np.inf,) * 5) for item in records
+        ], dtype=np.float64),
+        "support_proposal_count": values("support_proposal_count", np.int16, 0),
+        "target_proposal_count": values("target_proposal_count", np.int16, 0),
+        "placement_rejections": values("placement_rejections", np.int16, 0),
+        "condition_rejections": values("condition_rejections", np.int16, 0),
+        "template_identity": values("template_identity", "S64", ""),
+        "scale": np.asarray([item.get("scale", (np.nan,) * 3) for item in records]),
+        "pose_perturbation_rad": values("pose_perturbation_rad", np.float64, np.nan),
+        "support_semantic": values("support_semantic", np.uint16, 0),
+        "support_pool_index": values("support_pool_index", np.int64, -1),
+        "object_json": np.asarray([str(item.get("object_json", "")).encode() for item in records]),
+        "placement_report_json": np.asarray([
+            str(item.get("placement_report_json", "")).encode() for item in records
+        ]),
+        "hard_error_code": values("hard_error", np.uint8, 1),
+        "placement_exhaustion_code": values("placement_exhaustion", np.uint8, 0),
+    }
+
+
+def run_e25_v2_qualification(
+    data_root: Path | str, support_pool_path: Path | str,
+    calibration_path: Path | str, target_output_path: Path | str,
+    output_path: Path | str, *, processes: int = 16,
+) -> dict[str, object]:
+    """Qualify the train/206 observation-conditioned formal control placer."""
+    if processes != 16:
+        raise PlacementError("formal E25-v2 requires exactly 16 control workers")
+    try:
+        from .protocol import load_protocol
+        from .scene import LabelMode, STUSequence
+    except ImportError:
+        from protocol import load_protocol  # type: ignore[no-redef]
+        from scene import LabelMode, STUSequence  # type: ignore[no-redef]
+    protocol = load_protocol(Path(__file__).resolve().parents[1] / "protocol.json")
+    sequence = STUSequence.open(
+        data_root, protocol=protocol, partition="train", sequence_id=206,
+        label_mode=LabelMode.REQUIRED,
+    )
+    templates = extract_normal_template_library(
+        sequence.source_frame(frame_id) for frame_id in sequence.frame_ids
+    )
+    by_semantic = {
+        semantic: tuple(item for item in templates if item.raw_semantic_id == semantic)
+        for semantic in sorted({item.raw_semantic_id for item in templates})
+    }
+    pool = load_qualified_support_pool(support_pool_path)
+    grid, sensor = load_sensor_calibration(calibration_path)
+    target_runs = []
+    for _ in range(2):
+        sequence._frames.clear()
+        gc.collect()
+        target_runs.append(
+            _e25v2_target_bank(
+                sequence, pool, grid, by_semantic, processes=4
+            )
+        )
+    target_reproduced = all(
+        np.array_equal(target_runs[0][name], target_runs[1][name])
+        for name in target_runs[0]
+    )
+    targets = target_runs[0]
+    target_path = Path(target_output_path).expanduser().resolve()
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    target_metadata = {
+        "experiment": "E25-v2-real-normal-target-bank", "passed": target_reproduced,
+        "source_sequence": "train/206", "target_units": int(targets["frame_id"].size),
+        "center_frames": int(np.unique(targets["frame_id"]).size),
+        "real_instances": int(np.unique(np.column_stack((
+            targets["real_semantic"], targets["real_instance"]
+        )), axis=0).shape[0]),
+        "range_count": np.bincount(targets["range_bin"], minlength=5)[:5].tolist(),
+        "occlusion_layer_count": np.bincount(np.searchsorted(
+            np.asarray((0.25, 0.75)), targets["O_hat"], side="right"
+        ), minlength=3).tolist(),
+        "elementwise_reproduced": target_reproduced,
+        "scientific_array_hash": _scientific_array_hash(targets),
+    }
+    temporary = target_path.with_suffix(target_path.suffix + ".tmp.npz")
+    np.savez_compressed(
+        temporary, **targets,
+        metadata_json=np.asarray(json.dumps(target_metadata, sort_keys=True, separators=(",", ":"))),
+    )
+    os.replace(temporary, target_path)
+    sequence._frames.clear()
+    gc.collect()
+    obstacles = collect_observed_obstacle_index(
+        sequence.source_frame(frame_id) for frame_id in sequence.frame_ids
+    )
+    frame_ids = tuple(map(int, sequence.frame_ids))
+    positions = np.asarray([
+        _pose(sequence.source_frame(frame_id))[1] for frame_id in frame_ids
+    ])
+    fallback_axes = np.asarray([
+        _pose(sequence.source_frame(frame_id))[0][:2, 0] for frame_id in frame_ids
+    ])
+    trajectory_yaws: dict[int, float] = {}
+    for index, frame_id in enumerate(frame_ids):
+        if index == 0:
+            tangent = positions[1] - positions[0]
+        elif index == len(frame_ids) - 1:
+            tangent = positions[-1] - positions[-2]
+        else:
+            tangent = positions[index + 1] - positions[index - 1]
+        horizontal = tangent[:2]
+        if np.linalg.norm(horizontal) <= EPSILON:
+            horizontal = fallback_axes[index]
+        if np.linalg.norm(horizontal) <= EPSILON:
+            raise PlacementError("trajectory tangent and pose fallback are degenerate")
+        trajectory_yaws[frame_id] = math.atan2(
+            float(horizontal[1]), float(horizontal[0])
+        )
+    global _E25_TEMPLATES, _E25V2_OBSTACLES, _E25V2_TRAJECTORY_YAW, _E25V2_SENSOR
+    global _E25V2_TARGETS, _E25V2_SUPPORT_ROWS
+    _E25V2_OBSTACLES = obstacles
+    _E25_TEMPLATES = by_semantic
+    _E25V2_TRAJECTORY_YAW = trajectory_yaws
+    _E25V2_SENSOR = sensor
+    _E25V2_TARGETS = targets
+    _E25V2_SUPPORT_ROWS = _e25v2_support_streams(sequence, pool, targets)
+    _initialize_e25v2_target_index(targets, _E25V2_SUPPORT_ROWS)
+    sequence._cache_frames = 1
+    sequence._frames.clear()
+    gc.collect()
+    runs: list[dict[str, np.ndarray]] = []
+    run_seconds: list[float] = []
+    for _ in range(2):
+        started = time.monotonic()
+        with mp.get_context("fork").Pool(
+            processes=processes, maxtasksperchild=2
+        ) as workers:
+            records = workers.map(_e25v2_worker, range(256), chunksize=1)
+        run_seconds.append(time.monotonic() - started)
+        runs.append(_e25v2_arrays(records))
+    reproduced = all(
+        np.array_equal(runs[0][name], runs[1][name], equal_nan=True)
+        if np.issubdtype(runs[0][name].dtype, np.floating)
+        else np.array_equal(runs[0][name], runs[1][name])
+        for name in runs[0]
+    )
+    first = runs[0]
+    completed_mask = first["template_identity"] != b""
+    completed = int(np.count_nonzero(completed_mask))
+    selected_range = np.bincount(first["target_range_bin"], minlength=5)[:5]
+    selected_occlusion = np.bincount(np.searchsorted(
+        np.asarray((0.25, 0.75)), first["target_occlusion"], side="right"
+    ), minlength=3)
+    selected_instances = int(np.unique(np.column_stack((
+        first["target_semantic"], first["target_instance"]
+    )), axis=0).shape[0])
+    center_frames = int(np.unique(first["target_frame"]).size)
+    hard_errors = int(np.sum(first["hard_error_code"]))
+    exhaustions = int(np.sum(first["placement_exhaustion_code"]))
+    condition_errors = int(np.count_nonzero(
+        np.any(first["condition_difference"][completed_mask]
+               > np.asarray((2.0, 4.0, 0.25, 0.10, 0.25)), axis=1)
+    ))
+    unique_templates = int(np.unique(
+        first["template_identity"][completed_mask]
+    ).size)
+    passed = (
+        target_reproduced and completed == 256 and hard_errors == 0
+        and exhaustions == 0 and condition_errors == 0 and reproduced
+        and unique_templates == 256
+        and center_frames >= 100 and selected_instances >= 32
+        and bool(np.all(selected_range > 0)) and bool(np.all(selected_occlusion > 0))
+    )
+    result = {
+        "experiment": "E25-v2", "passed": passed,
+        "failure_classification": None if passed else "observation_conditioned_control_generation_failure",
+        "templates": len(templates), "target_bank": target_metadata,
+        "placements": 256, "completed": completed,
+        "hard_errors": hard_errors, "placement_exhaustions": exhaustions,
+        "condition_errors": condition_errors, "center_frames": center_frames,
+        "selected_real_instances": selected_instances,
+        "selected_range_count": selected_range.tolist(),
+        "selected_occlusion_layer_count": selected_occlusion.tolist(),
+        "target_proposals": int(np.sum(first["target_proposal_count"])),
+        "support_proposals": int(np.sum(first["support_proposal_count"])),
+        "placement_rejections": int(np.sum(first["placement_rejections"])),
+        "condition_rejections": int(np.sum(first["condition_rejections"])),
+        "unique_templates": unique_templates,
+        "elementwise_reproduced": reproduced,
+        "run_seconds": run_seconds,
+        "scientific_array_hash": _scientific_array_hash(first),
+        "target_bank_sha256": _sha256_path(target_path),
+        "formal_training_distribution_changed": True,
+        "changed_component": "normal-control support-position selection only",
+    }
+    destination = Path(output_path).expanduser().resolve()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_suffix(destination.suffix + ".tmp.npz")
+    np.savez_compressed(
+        temporary, **first,
+        metadata_json=np.asarray(json.dumps(result, sort_keys=True, separators=(",", ":"))),
+    )
+    os.replace(temporary, destination)
+    return result
+
+
 _E26_SUPPORT_POOL: QualifiedSupportPool | None = None
 _E26_OBSTACLES: ObservedObstacleIndex | None = None
 _E26_TEMPLATES: tuple[NormalTemplateShape, ...] = ()
@@ -12836,6 +13648,13 @@ def _render_parser() -> argparse.ArgumentParser:
     e25.add_argument("--support-pool", type=Path, required=True)
     e25.add_argument("--output", type=Path, required=True)
     e25.add_argument("--processes", type=int, default=24)
+    e25v2 = subcommands.add_parser("qualify-e25-v2")
+    e25v2.add_argument("--data-root", type=Path, required=True)
+    e25v2.add_argument("--support-pool", type=Path, required=True)
+    e25v2.add_argument("--calibration", type=Path, required=True)
+    e25v2.add_argument("--target-output", type=Path, required=True)
+    e25v2.add_argument("--output", type=Path, required=True)
+    e25v2.add_argument("--processes", type=int, default=16)
     e26 = subcommands.add_parser("qualify-e26")
     e26.add_argument("--data-root", type=Path, required=True)
     e26.add_argument("--support-pool", type=Path, required=True)
@@ -12969,6 +13788,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "qualify-e25":
         result = run_e25_qualification(
             args.data_root, args.support_pool, args.output, processes=args.processes
+        )
+        print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        return 0 if result["passed"] else 1
+    if args.command == "qualify-e25-v2":
+        result = run_e25_v2_qualification(
+            args.data_root, args.support_pool, args.calibration,
+            args.target_output, args.output, processes=args.processes,
         )
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 0 if result["passed"] else 1
