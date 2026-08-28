@@ -3669,7 +3669,7 @@ E38-v2固定使用24个进程、每进程一个数值库线程，只执行一次
 
 ### 历史 E38及统一候选银行正式执行冻结
 
-**当前适用边界：E38–E44及E45A/E45B以下结果均使用旧normal-control分布。它们作为历史证据保留，但对E25-new后的control分布失效；当前必须刷新E38–E44、执行E45A-new和E45B-v2。**
+**当前适用边界：本节随后记载的旧E38–E44及E45A/E45B结果使用旧normal-control分布，只作为历史证据保留。E25-new后的E38–E44刷新已经PASS；E45A-new已在2,048容量正式FAIL，当前停止等待新决策，E45B-v2尚未执行。**
 
 train/201支撑池读取帧4–681，以中心帧6–679和五帧对称窗口执行E21-v4完全相同的0.5米world-XY thinning、距离自适应三尺度trimmed-SVD估计及冻结残差/稳定性条件；所有合格区域进入 `runs/ajae/gate1_201_support_pool.npz`。201实际非地面回波全部进入E23同一连续SDF碰撞索引，不做空间抽样。正常对照模板只读取已通过的E25产物，语义支撑策略、0.9–1.1逐轴缩放、车辆/行人朝向策略、E22 grounding、E23 observed-normal collision和E24 placement proposal上限均保持不变。
 
@@ -3804,6 +3804,16 @@ E44-v2只读取SHA-256固定为`e7cea1574638db2f7e41799fe3855519ea57a47e9f6adc04
 **E44-v2正式结果：PASS（E44关闭，E45A-new与E45B-v2解锁）**
 
 real-normal、normal-control和anomaly-proxy有效遮挡单元分别为1280、1280和1263，零分母无效单元分别为0、0和17；三层计数分别为[699,581,0]、[1215,48,17]和[1192,55,16]。两类生成来源均覆盖全部三层，三来源共有12个support semantic×range bin×遮挡层共同非空层；定义、计数、覆盖和初步匹配错误均为0。单次统计用时0.000673秒，科学数组哈希为`cc874669d7e61732e894f1c9993fa97ac10a2a649f6111465ad34d618c1c4e03`；产物大小51,084字节，SHA-256为`49880d3b48024a20fe1c2a3155424daf29e8690407dd56437b894097ce464695`。完整两两共同支持由E45A-new和E45B-v2分别裁决。
+
+### E45A-new正式结果：FAIL（`insufficient_pairwise_common_support`；停止等待新决策）
+
+E45A-new使用train/201、新版E25-new normal-control、原五项caliper、完整合法边和确定性最大基数匹配。独立银行冻结seed基址为4,500,000，按512→1,024→2,048容量阶梯执行；每级只生成和提取新增后缀，24进程、每进程数值库单线程，匹配只正式运行一次。正式实现提交为`a5f9c0f`；首次命令因共享worker残留`[0,255]`旧索引硬边界而在索引256计算前退出，没有形成科学结果。该协议实现缺陷经提交`b681f65`修复为共享银行上限256、两两银行上限2,048，随后从头完成正式运行；样本、seed、几何、renderer、匹配变量、caliper和PASS/FAIL门槛均未改变。
+
+容量512、1,024和2,048分别形成38、91和315条合法边，最大匹配分别为14、30和63对；real侧中心帧覆盖分别为8、14和29，四个2.5–40米距离层计数分别为[0,11,3,0]、[0,22,8,0]和[1,46,16,0]。最终匹配数63未达到1,024，中心帧29未达到100，30–40米层为0。全部容量的caliper错误和两侧单位重复使用均为0。最终五项SMD按range、median beam、$\log(1+N_{vis})$、$\hat O$、$\log(1+\text{local density})$顺序为[0.083301,0.024199,0.007985,1.778776,0.044545]，最大值为遮挡SMD 1.778776，未满足全部不超过0.10。
+
+三级候选银行生成用时分别为106.209574、113.853599和210.333981秒；新增单位提取用时分别为101.231597、103.881816和193.933527秒；单次最大匹配用时分别为0.009267、0.006666和0.011696秒。最终科学数组哈希为`6fa5f901574f5a621633d60bda50037fcb261a136caa4e2f1ae0beada02d1426`。正式产物`runs/ajae/e45a_new_real_control_pairs.npz`大小271,518字节，SHA-256为`acad2f28c4f2cb47314206671bbfebbdc89004a81cd1c403fc33af15c5dfda21`；2,048银行与单位缓存分别为9,206,668和53,608,043字节，SHA-256分别为`da73006666597175358bd62dbcbbbda30cedf7d4a6cd8c01ec774c70d978a4a3`和`92fe629be31a7b5a5eb97bd1ee6a7d402d69fc507b1fbd23e925a19cab1be6cf`。
+
+该结果裁决新版real-normal↔normal-control在冻结审计条件下共同支持不足，没有执行E46来源分类，也没有裁决renderer本身失败。E46保持锁定。按状态机停止条件，E45B-v2尚未启动；当前停在E45A-new正式FAIL，等待课题负责人重新决策，不得自动扩容、重试、放宽caliper或修改生成分布。
 
 直接读取E39共享trace，按每个entity-frame的accepted-before-occlusion和visible returns计算冻结遮挡率。仅对accepted大于0的单元定义$O$并进入三个遮挡层；accepted等于0的单元以显式invalid mask单独保存，不为其伪造遮挡率。PASS要求所有有效$O$有限且位于$[0,1]$，visible不超过accepted，有效计数与三层计数守恒，normal-control和anomaly-proxy各自覆盖三个层。以support semantic×range bin×遮挡层统计三来源共同非空层，至少一个共同层作为E45的初步非空匹配可行性；完整caliper、SMD与规模仍由E45裁决。两遍统计必须逐元素一致。实现提交 `99be4df02ef96db388134cb2b2b8d1b08927d9ae`，`src/render.py` SHA-256为 `abc902fd460d3019b0fd557dcda63ae1a9887342fa6c84170b8213b612610180`；46项完整回归通过。正式命令为 `python -m src.render qualify-e44 --e39-artifact runs/ajae/e39_per_range_return.npz --output runs/ajae/e44_occlusion_feasibility.npz`。
 
