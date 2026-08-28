@@ -7693,13 +7693,19 @@ def _initialize_e25v2_target_index(
 def _e25v2_sensor_precheck(
     frame: SourceFrame, world: WorldSpec, ray_grid: RayGrid,
     sensor: SensorCalibration,
+    trace_context: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray] | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Compute exact pre-packing covariates without repeating a full render."""
     item = world.objects[0]
-    pose_rotation, lidar_origin = _pose(frame)
-    directions_sensor = ray_grid.directions_for(frame)
-    directions_world = directions_sensor @ pose_rotation.T
-    origins_world = ray_grid.origins_for(frame) @ pose_rotation.T + lidar_origin
+    if trace_context is None:
+        pose_rotation, lidar_origin = _pose(frame)
+        directions_sensor = ray_grid.directions_for(frame)
+        directions_world = directions_sensor @ pose_rotation.T
+        origins_world = ray_grid.origins_for(frame) @ pose_rotation.T + lidar_origin
+        native_range = np.asarray(ray_grid.ranges(frame)).copy()
+        native_range[np.asarray(frame.zero_slot_mask, dtype=np.bool_)] = np.inf
+    else:
+        directions_sensor, directions_world, origins_world, native_range = trace_context
     object_rotation = np.asarray(item.rotation_world_from_local, dtype=np.float64)
     translation = np.asarray(item.translation_world_m, dtype=np.float64)
     local_origin = (origins_world - translation) @ object_rotation
@@ -7739,8 +7745,6 @@ def _e25v2_sensor_precheck(
         world, int(frame.frame_id), slots,
         np.full(ray_grid.slot_count, item.object_id, dtype=np.int32), channel=0,
     ) < chance)
-    native_range = np.asarray(ray_grid.ranges(frame)).copy()
-    native_range[np.asarray(frame.zero_slot_mask, dtype=np.bool_)] = np.inf
     visible = accepted & (distance < native_range - world.tie_tolerance_m)
     returned_slots = np.flatnonzero(visible)
     if returned_slots.size == 0:
@@ -7786,6 +7790,15 @@ def _e25v2_target_attempt(
     semantic = int(source.raw_semantic_id)
     frame_id = int(_E25V2_TARGETS["frame_id"][target])
     frame = sequence.source_frame(frame_id)
+    pose_rotation, lidar_origin = _pose(frame)
+    directions_sensor = grid.directions_for(frame)
+    directions_world = directions_sensor @ pose_rotation.T
+    origins_world = grid.origins_for(frame) @ pose_rotation.T + lidar_origin
+    native_range = np.asarray(grid.ranges(frame)).copy()
+    native_range[np.asarray(frame.zero_slot_mask, dtype=np.bool_)] = np.inf
+    trace_context = (
+        directions_sensor, directions_world, origins_world, native_range
+    )
     condition_rejections = 0
     placement_rejections = 0
     last_difference = np.full(5, np.nan, dtype=np.float64)
@@ -7817,7 +7830,7 @@ def _e25v2_target_attempt(
             continue
         world = WorldSpec(control_seed, 206, (item,))
         precheck_exact, precheck_covariates = _e25v2_sensor_precheck(
-            frame, world, grid, sensor
+            frame, world, grid, sensor, trace_context
         )
         comparable = _E25V2_TARGET_LOOKUP.get(
             (semantic, record.support_semantic,
@@ -8074,11 +8087,11 @@ def _e25v2_arrays(records: Sequence[Mapping[str, object]]) -> dict[str, np.ndarr
 def run_e25_v2_qualification(
     data_root: Path | str, support_pool_path: Path | str,
     calibration_path: Path | str, target_output_path: Path | str,
-    output_path: Path | str, *, processes: int = 16,
+    output_path: Path | str, *, processes: int = 8,
 ) -> dict[str, object]:
     """Qualify the train/206 observation-conditioned formal control placer."""
-    if processes != 16:
-        raise PlacementError("formal E25-v2 requires exactly 16 control workers")
+    if processes != 8:
+        raise PlacementError("formal E25-v2 requires exactly 8 control workers")
     try:
         from .protocol import load_protocol
         from .scene import LabelMode, STUSequence
@@ -13654,7 +13667,7 @@ def _render_parser() -> argparse.ArgumentParser:
     e25v2.add_argument("--calibration", type=Path, required=True)
     e25v2.add_argument("--target-output", type=Path, required=True)
     e25v2.add_argument("--output", type=Path, required=True)
-    e25v2.add_argument("--processes", type=int, default=16)
+    e25v2.add_argument("--processes", type=int, default=8)
     e26 = subcommands.add_parser("qualify-e26")
     e26.add_argument("--data-root", type=Path, required=True)
     e26.add_argument("--support-pool", type=Path, required=True)

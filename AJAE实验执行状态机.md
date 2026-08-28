@@ -3052,7 +3052,7 @@ train/206目标单位冻结为：car=10、truck=18、other-vehicle=20或person=3
 
 执行优化不改变候选或裁决。材质、E22资格、目标协变量和精确分层按对象或目标库缓存；模板包围球只保守排除绝对不可能命中对象的射线。前四项已失败的候选不重复构造完整帧；所有可能通过的候选仍执行原完整renderer和五项权威复核。16对象扩大覆盖诊断在128×128固定上限内16/16完成，提议数为[620,2817,10018,33,3695,5009,112,3713,663,2911,12798,13,1192,251,11789,3886]；该诊断只证明当前固定域存在，不作为正式资格结果。
 
-正式E25-v2使用256个fixture，按semantic与模板库顺序让每个冻结模板恰好出现一次；control seed为2,500,000加fixture index。目标提取两遍固定4进程；control正式运行两遍固定16进程、数值库单线程，每个worker最多处理2个对象后回收。PASS要求：256/256完成且256个模板身份唯一；目标与位置均不耗尽；硬错误、E22/E23错误、精确分层错误和五项caliper错误均为0；接受目标覆盖至少100帧、至少32个真实实例、五个距离层和三个遮挡层；两遍全部保存数组逐元素一致。正式命令为 `python -m src.render qualify-e25-v2 --data-root /home/jasongao/Data/STU --support-pool runs/ajae/e21_v4_support_pool.npz --calibration runs/ajae/calibration.pt --target-output runs/ajae/e25_v2_real_targets.npz --output runs/ajae/e25_v2_normal_control.npz --processes 16`。
+正式E25-v2使用256个fixture，按semantic与模板库顺序让每个冻结模板恰好出现一次；control seed为2,500,000加fixture index。目标提取两遍固定4进程；control正式运行两遍固定8进程、数值库单线程，每个worker最多处理2个对象后回收。正式启动后的执行诊断确认16个并发worker使同类长尾对象从单进程约6.5分钟延长到至少38.8分钟，属于内存带宽吞吐退化；该次未完成运行在生成control产物前终止，不形成正式裁决。目标帧的规范射线方向、世界原点和原始距离现按目标缓存，候选、随机流和最终复核不变。PASS要求：256/256完成且256个模板身份唯一；目标与位置均不耗尽；硬错误、E22/E23错误、精确分层错误和五项caliper错误均为0；接受目标覆盖至少100帧、至少32个真实实例、五个距离层和三个遮挡层；两遍全部保存数组逐元素一致。正式命令为 `python -m src.render qualify-e25-v2 --data-root /home/jasongao/Data/STU --support-pool runs/ajae/e21_v4_support_pool.npz --calibration runs/ajae/calibration.pt --target-output runs/ajae/e25_v2_real_targets.npz --output runs/ajae/e25_v2_normal_control.npz --processes 8`。
 
 E25-v2 PASS后才把同一位置选择函数接入唯一生产 `sample_training_world` 并执行E26-v2；E25-v2 FAIL则保留全部历史结果，E26-v2和E46继续锁定并等待新的设计决策。
 
