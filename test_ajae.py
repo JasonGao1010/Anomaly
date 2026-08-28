@@ -723,14 +723,42 @@ def test_training_world_uses_only_the_qualified_placement_pipeline(
     )
     counts = [(1, 1)]
     monkeypatch.setattr(render_module, "_training_entity_counts", lambda *_: counts[0])
-    trajectory_yaws = {frame_id: 0.0 for frame_id in range(449)}
+    fixture_frame, grid = _small_ray_fixture()
+    frames = tuple(make_source_frame(
+        frame_id,
+        fixture_frame.xyzi,
+        fixture_frame.lidar_pose,
+        fixture_frame.labels,
+        partition="train",
+        sequence_id=206,
+    ) for frame_id in range(449))
+    context = render_module.build_coverage_control_context(
+        frames, pool, grid, SensorCalibration.constant(1.0)
+    )
+    observed_worlds: list[tuple[int, tuple[int, ...]]] = []
+
+    def passing_observation(
+        _: object, item: object, patch: object, world_seed: int,
+        assigned_range_bin: int, world_objects: object,
+    ) -> object:
+        observed_worlds.append((
+            world_seed, tuple(value.object_id for value in world_objects)
+        ))
+        return render_module._E25NewObservation(
+            patch.frame_id, 1, 1, 1, 1, 5.0, 0.0,
+            assigned_range_bin, 0, 0.0,
+        )
+
+    monkeypatch.setattr(
+        render_module, "_coverage_control_observation", passing_observation
+    )
     first, first_report = sample_training_world(
         (template,), pool, obstacles, "mixed", 7,
-        trajectory_yaw_by_frame=trajectory_yaws,
+        control_context=context,
     )
     repeated, repeated_report = sample_training_world(
         (template,), pool, obstacles, "mixed", 7,
-        trajectory_yaw_by_frame=trajectory_yaws,
+        control_context=context,
     )
     assert first.to_dict() == repeated.to_dict()
     assert first_report.to_dict() == repeated_report.to_dict()
@@ -747,6 +775,9 @@ def test_training_world_uses_only_the_qualified_placement_pipeline(
     assert all(not record.rejection_reasons or set(record.rejection_reasons) <= {
         "observed_normal_deep_penetration", "obvious_pair_penetration",
     } for record in first_report.placements)
+    assert observed_worlds
+    assert all(world_seed == 7 for world_seed, _ in observed_worlds)
+    assert any(len(object_ids) == 2 for _, object_ids in observed_worlds)
 
 
 def test_shape_stream_rejects_e22_invalid_shape_before_support_sampling() -> None:
@@ -774,6 +805,19 @@ def test_e25_new_contract_has_one_fixed_template_range_assignment() -> None:
         "--output", "e25-new.npz",
     ])
     assert arguments.processes == 24
+    e26 = render_module._render_parser().parse_args([
+        "qualify-e26-v2",
+        "--data-root", "/data",
+        "--support-pool", "support.npz",
+        "--calibration", "calibration.pt",
+        "--output", "e26-v2.npz",
+    ])
+    assert e26.processes == 24
+
+
+def test_e26_manifest_audit_does_not_reclassify_finite_sampling_exhaustion() -> None:
+    records = ({"hard_error": 0, "placement_exhaustion": 1},)
+    assert render_module._e26_single_manifest_errors(records) == 0
 
 
 def test_placement_postcheck_rejects_only_the_current_support_proposal() -> None:
@@ -856,21 +900,30 @@ def test_e25_new_sparse_trace_is_rechecked_by_the_complete_renderer(
         ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0)),
     )
     sensor = SensorCalibration.constant(0.5)
-    directions = grid.directions_sensor / np.linalg.norm(
-        grid.directions_sensor, axis=1, keepdims=True
+    pool = QualifiedSupportPool(
+        np.asarray((0,)), np.asarray((40,), dtype=np.uint16),
+        np.asarray((0,)), np.asarray((0,)), np.asarray((4.0,)),
+        np.asarray((0,), dtype=np.uint64),
+        np.asarray(((4.0, 0.0, 0.0),)),
+        np.asarray(((0.0, 0.0, 1.0),)), np.zeros(1),
     )
-    monkeypatch.setattr(render_module, "_E25_NEW_FRAMES", (frame,))
-    monkeypatch.setattr(render_module, "_E25_NEW_RAY_GRID", grid)
-    monkeypatch.setattr(render_module, "_E25_NEW_SENSOR", sensor)
-    monkeypatch.setattr(
-        render_module,
-        "_E25_NEW_SENSOR_DIRECTION_TREE",
-        render_module.cKDTree(directions),
+    context = render_module.build_coverage_control_context(
+        (
+            frame,
+            make_source_frame(
+                1,
+                fixture_frame.xyzi,
+                fixture_frame.lidar_pose,
+                fixture_frame.labels,
+                partition="train",
+                sequence_id=206,
+            ),
+        ),
+        pool,
+        grid,
+        sensor,
     )
-    monkeypatch.setattr(
-        render_module, "_E25_NEW_MAXIMUM_RAY_ORIGIN_OFFSET_M", 0.0
-    )
-    monkeypatch.setattr(render_module, "_E25_NEW_FRAME_CACHE", {})
+    monkeypatch.setattr(render_module, "_E25_NEW_CONTROL_CONTEXT", context)
     patch = render_module.SupportPatch(
         0, 40, 0, 0, 4.0, 0,
         (4.0, 0.0, 0.0), (0.0, 0.0, 1.0), 0.0,

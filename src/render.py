@@ -51,6 +51,9 @@ SUPPORT_POOL_FORMAT = "ajae-qualified-support-pool-v1"
 SUPPORT_POOL_SHA256 = (
     "0e6e7299157f5e9ced0716f6dd14881c66ba1bca0cc9c372550e56f426ea844d"
 )
+FROZEN_SENSOR_CALIBRATION_SHA256 = (
+    "b532b7e04d9025233b2768b8fb36287e477f62f20a3ff685a62f4a4a29bfefe0"
+)
 SUPPORT_POOL_SEMANTICS = (40, 48, 49)
 CALIBRATION_FORMAT = "ajae-sensor-calibration-v4"
 DEVELOPMENT_FORMAT = "ajae-development-worlds-v2"
@@ -4269,6 +4272,8 @@ def _accepted_object_hits(
     ray_grid: RayGrid,
     sensor: SensorCalibration,
     frame_id: int,
+    *,
+    slot_ids: np.ndarray | None = None,
 ) -> _ObjectCompetition:
     """Accept each object's returns independently before nearest-return competition."""
 
@@ -4283,8 +4288,19 @@ def _accepted_object_hits(
     best_object = np.full(count, -1, dtype=np.int32)
     geometric_hits: dict[int, int] = {}
     accepted_hits: dict[int, int] = {}
-    slots = np.arange(count, dtype=np.int32)
-    beam_ids = ray_grid.beam_ids
+    if slot_ids is None:
+        if count != ray_grid.slot_count:
+            raise RenderError("compact object competition requires original slot IDs")
+        slots = np.arange(count, dtype=np.int32)
+    else:
+        slots = np.asarray(slot_ids, dtype=np.int32)
+        if (
+            slots.shape != (count,)
+            or np.any((slots < 0) | (slots >= ray_grid.slot_count))
+            or np.unique(slots).size != count
+        ):
+            raise RenderError("object competition slot IDs are invalid")
+    beam_ids = ray_grid.beam_ids[slots]
     for item in world.objects:
         translation = np.asarray(item.translation_world_m, dtype=np.float64)
         rotation = np.asarray(item.rotation_world_from_local, dtype=np.float64)
@@ -5663,8 +5679,8 @@ def sample_training_world(
     world_type: WorldType,
     seed: int,
     *,
+    control_context: CoverageControlContext,
     maximum_attempts: int = 48,
-    trajectory_yaw_by_frame: Mapping[int, float] | None = None,
 ) -> tuple[WorldSpec, WorldGenerationReport]:
     """Build one immutable train/206 world through the sole qualified pipeline."""
 
@@ -5674,6 +5690,14 @@ def sample_training_world(
         obstacles, ObservedObstacleIndex
     ):
         raise TypeError("training world requires the qualified pool and obstacle index")
+    if (
+        not isinstance(control_context, CoverageControlContext)
+        or control_context.support_pool is not support_pool
+        or control_context.source_sequence_id != 206
+    ):
+        raise TypeError(
+            "training world requires the bound train/206 coverage-control context"
+        )
     if type(maximum_attempts) is not int or maximum_attempts < 1:
         raise RenderError("maximum_attempts must be positive")
     normal_count, anomaly_count = _training_entity_counts(world_type, world_seed)
@@ -5688,8 +5712,12 @@ def sample_training_world(
         return world, WorldGenerationReport(
             world_seed, 206, world_type, 0, 0, 0, world_seed, world_seed
         )
-    if normal_count and trajectory_yaw_by_frame is None:
-        raise RenderError("normal-control worlds require trajectory yaw by support frame")
+    template_index_by_identity = {
+        _normal_template_identity(item): index
+        for index, item in enumerate(templates)
+    }
+    if len(template_index_by_identity) != len(templates):
+        raise RenderError("training normal-template identities must be unique")
 
     for attempt in range(maximum_attempts):
         attempt_seed = world_seed + 1_000_003 * attempt
@@ -5706,6 +5734,7 @@ def sample_training_world(
                 entity_seed = attempt_seed + 10_007 * (entity_index + 1)
                 shape_seed: int | None = None
                 template_identity: str | None = None
+                template_index: int | None = None
                 template_seed: int | None = None
                 scale_seed: int | None = None
                 perturbation: float | None = None
@@ -5714,16 +5743,23 @@ def sample_training_world(
                 grounding: GroundingEligibility | None = None
                 shape_proposals: tuple[int, ...] = ()
                 grounding_rejections: tuple[int, ...] = ()
+                proposal_rows: np.ndarray | None = None
+                post_placement_rejection: (
+                    Callable[[ObjectSpec, SupportPatch], str | None] | None
+                ) = None
                 if label == "normal-control":
                     template_seed = entity_seed + 1
                     scale_seed = entity_seed + 2
-                    source = templates[int(
+                    template_index = int(
                         np.random.default_rng(template_seed).integers(0, len(templates))
-                    )]
+                    )
+                    source = templates[template_index]
+                    assigned_range_bin = _e25_new_assigned_range_bin(template_index)
                     target_scale = np.random.default_rng(
                         np.random.SeedSequence([scale_seed, 2501])
                     ).uniform(0.9, 1.1, size=3)
                     shape = _aligned_scaled_template(source, target_scale)
+                    grounding = qualify_grounding(shape)
                     semantic = source.raw_semantic_id
                     limit = (
                         math.pi if semantic == 30
@@ -5736,14 +5772,46 @@ def sample_training_world(
                         ).uniform(-limit, limit)
                     )
                     template_identity = _normal_template_identity(source)
+                    proposal_rows = _coverage_control_support_stream(
+                        control_context,
+                        template_index,
+                        semantic,
+                        assigned_range_bin,
+                    )
+                    if proposal_rows.size == 0:
+                        raise PlacementError(
+                            "assigned range bin has no semantically legal E21 support"
+                        )
 
                     def support_yaw(
                         patch: SupportPatch, offset: float = perturbation
                     ) -> float:
-                        assert trajectory_yaw_by_frame is not None
-                        return float(trajectory_yaw_by_frame[patch.frame_id]) + offset
+                        return float(
+                            control_context.trajectory_yaw_by_frame[patch.frame_id]
+                        ) + offset
 
                     yaw_for_support = support_yaw
+
+                    def reject_control(
+                        proposed: ObjectSpec,
+                        patch: SupportPatch,
+                        target_bin: int = assigned_range_bin,
+                    ) -> str | None:
+                        observation = _coverage_control_observation(
+                            control_context,
+                            proposed,
+                            patch,
+                            world_seed,
+                            target_bin,
+                            (*objects, proposed),
+                        )
+                        if observation.visible_returns < 1:
+                            return "no_visible_normal_control_return"
+                        if observation.range_bin != target_bin:
+                            return "assigned_visible_range_bin_mismatch"
+                        return None
+
+                    post_placement_rejection = reject_control
                 else:
                     (
                         shape, report, grounding, shape_proposals,
@@ -5761,13 +5829,22 @@ def sample_training_world(
                 item, record = place_object(
                     shape, MaterialSpec.sample(material_seed), support_pool, obstacles,
                     object_id=entity_index + 1, label=label,
-                    proposal_namespace="training-world-v1",
-                    proposal_stream=entity_seed, yaw_rad=yaw,
+                    proposal_namespace=(
+                        "E25-new-support-v1"
+                        if label == "normal-control" else "training-world-v1"
+                    ),
+                    proposal_stream=(
+                        template_index
+                        if template_index is not None else entity_seed
+                    ),
+                    yaw_rad=yaw,
                     material_seed=material_seed, yaw_seed=yaw_seed,
                     shape_seed=shape_seed, template_identity=template_identity,
                     shape_generation_report=report, existing_objects=objects,
+                    proposal_rows=proposal_rows,
                     grounding_eligibility=grounding,
                     yaw_for_support=yaw_for_support,
+                    post_placement_rejection=post_placement_rejection,
                 )
                 record = replace(
                     record,
@@ -5787,7 +5864,39 @@ def sample_training_world(
             world = WorldSpec(world_seed, 206, tuple(objects))
             if world.world_type != world_type:
                 raise AssertionError("training sampler produced the wrong world type")
-        except (RenderError, PlacementError):
+            for item, record in zip(world.objects, records, strict=True):
+                if item.label != "normal-control":
+                    continue
+                assert record.template_identity is not None
+                template_index = template_index_by_identity[record.template_identity]
+                assigned_range_bin = _e25_new_assigned_range_bin(template_index)
+                support_row = int(np.searchsorted(
+                    support_pool.pool_indices, record.support_pool_index
+                ))
+                if (
+                    support_row >= support_pool.pool_indices.size
+                    or int(support_pool.pool_indices[support_row])
+                    != record.support_pool_index
+                ):
+                    raise RenderError(
+                        "training control references an unknown support row"
+                    )
+                observation = _coverage_control_observation(
+                    control_context,
+                    item,
+                    support_pool.patch(support_row),
+                    world_seed,
+                    assigned_range_bin,
+                    world.objects,
+                )
+                if (
+                    observation.visible_returns < 1
+                    or observation.range_bin != assigned_range_bin
+                ):
+                    raise PlacementError(
+                        "complete world invalidated a coverage-control observation"
+                    )
+        except PlacementError:
             continue
         return world, WorldGenerationReport(
             world_seed, 206, world_type, attempt, normal_count, anomaly_count,
@@ -7178,6 +7287,35 @@ def _normal_template_identity(template: NormalTemplateShape) -> str:
     ).hexdigest()
 
 
+CANONICAL_NORMAL_TEMPLATE_LIBRARY_SHA256 = (
+    "de5dfd765ac7d4fe4bb4644c40ecafdd80cdc31a3d0b6fc4fccd8e84a9fd906b"
+)
+
+
+def canonical_normal_template_library_identity(
+    normal_template_library: Sequence[NormalTemplateShape],
+) -> tuple[tuple[str, ...], dict[int, int], str]:
+    """Require the exact ordered train/206 library qualified by E25-new."""
+
+    templates = tuple(normal_template_library)
+    if any(not isinstance(item, NormalTemplateShape) for item in templates):
+        raise PlacementError("canonical normal-template library has invalid values")
+    identities = tuple(_normal_template_identity(item) for item in templates)
+    counts = {
+        semantic: sum(item.raw_semantic_id == semantic for item in templates)
+        for semantic in (10, 18, 20, 30)
+    }
+    library_hash = hashlib.sha256("".join(identities).encode()).hexdigest()
+    if (
+        len(templates) != 256
+        or counts != {10: 64, 18: 64, 20: 64, 30: 64}
+        or len(set(identities)) != 256
+        or library_hash != CANONICAL_NORMAL_TEMPLATE_LIBRARY_SHA256
+    ):
+        raise PlacementError("canonical train/206 normal-template library changed")
+    return identities, counts, library_hash
+
+
 def _aligned_scaled_template(
     template: NormalTemplateShape, scale_xyz: Sequence[float]
 ) -> NormalTemplateShape:
@@ -7440,6 +7578,9 @@ def run_e25_qualification(
     )
     frames = tuple(sequence.source_frame(frame_id) for frame_id in sequence.frame_ids)
     templates = extract_normal_template_library(frames)
+    identities, counts, library_hash = canonical_normal_template_library_identity(
+        templates
+    )
     by_semantic: dict[int, tuple[NormalTemplateShape, ...]] = {}
     for semantic in sorted(NORMAL_TEMPLATE_SEMANTICS):
         selected = tuple(
@@ -7447,11 +7588,6 @@ def run_e25_qualification(
         )
         if selected:
             by_semantic[semantic] = selected
-    counts = {semantic: len(items) for semantic, items in by_semantic.items()}
-    identities = [_normal_template_identity(item) for item in templates]
-    library_hash = hashlib.sha256("".join(identities).encode()).hexdigest()
-    if counts != {10: 64, 18: 64, 20: 64, 30: 64} or len(set(identities)) != 256:
-        raise PlacementError("E25 observable-template precheck changed")
     pool = load_qualified_support_pool(support_pool_path)
     obstacles = collect_observed_obstacle_index(frames)
     global _E25_SUPPORT_POOL, _E25_OBSTACLES, _E25_TEMPLATES, _E25_TRAJECTORY_YAW
@@ -7484,8 +7620,7 @@ def run_e25_qualification(
     validation_errors = int(np.sum(first["validation_error"]))
     fixture_errors = int(np.sum(first["fixture_error"]))
     passed = (
-        library_hash == "de5dfd765ac7d4fe4bb4644c40ecafdd80cdc31a3d0b6fc4fccd8e84a9fd906b"
-        and completed == 1024 and hard_errors == 0 and placement_exhaustions == 0
+        completed == 1024 and hard_errors == 0 and placement_exhaustions == 0
         and semantic_violations == 0 and scale_errors == 0 and pose_errors == 0
         and validation_errors == 0 and fixture_errors == 0 and reproduced
     )
@@ -9230,16 +9365,9 @@ def run_e25_v3_normal_control_qualification(
     return result
 
 
-_E25_NEW_FRAMES: tuple[SourceFrame, ...] = ()
-_E25_NEW_SUPPORT_POOL: QualifiedSupportPool | None = None
 _E25_NEW_OBSTACLES: ObservedObstacleIndex | None = None
 _E25_NEW_TEMPLATES: tuple[NormalTemplateShape, ...] = ()
-_E25_NEW_TRAJECTORY_YAW: dict[int, float] = {}
-_E25_NEW_RAY_GRID: RayGrid | None = None
-_E25_NEW_SENSOR: SensorCalibration | None = None
-_E25_NEW_SUPPORT_ROWS: dict[tuple[int, int], np.ndarray] = {}
-_E25_NEW_SENSOR_DIRECTION_TREE: cKDTree | None = None
-_E25_NEW_MAXIMUM_RAY_ORIGIN_OFFSET_M = 0.0
+_E25_NEW_CONTROL_CONTEXT: CoverageControlContext | None = None
 _E25_NEW_NAMESPACE = int.from_bytes(
     hashlib.sha256(b"E25-new-support-v1").digest()[:8], "little"
 )
@@ -9274,20 +9402,99 @@ class _E25NewFrameContext:
     trace: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]
 
 
-_E25_NEW_FRAME_CACHE: dict[int, _E25NewFrameContext] = {}
+@dataclass(slots=True)
+class CoverageControlContext:
+    """Immutable production inputs plus bounded worker-local acceleration caches."""
+
+    frames_by_id: dict[int, SourceFrame]
+    support_pool: QualifiedSupportPool
+    ray_grid: RayGrid
+    sensor: SensorCalibration
+    trajectory_yaw_by_frame: dict[int, float]
+    support_rows: dict[tuple[int, int], np.ndarray]
+    sensor_direction_tree: cKDTree
+    maximum_ray_origin_offset_m: float
+    frame_cache: dict[int, _E25NewFrameContext] = field(default_factory=dict)
+    support_stream_cache: dict[tuple[int, int], np.ndarray] = field(
+        default_factory=dict
+    )
+    observation_cache: dict[
+        tuple[str, int, int, int], _E25NewObservation
+    ] = field(default_factory=dict)
+
+    @property
+    def source_sequence_id(self) -> int:
+        return next(iter(self.frames_by_id.values())).sequence_id
+
+
+def build_coverage_control_context(
+    frames: Sequence[SourceFrame],
+    support_pool: QualifiedSupportPool,
+    ray_grid: RayGrid,
+    sensor: SensorCalibration,
+) -> CoverageControlContext:
+    """Bind the sole E25-new control selector to one source sequence."""
+
+    source_frames = tuple(frames)
+    if not source_frames:
+        raise RenderError("coverage-control context requires source frames")
+    frames_by_id = {int(frame.frame_id): frame for frame in source_frames}
+    if len(frames_by_id) != len(source_frames):
+        raise RenderError("coverage-control frame IDs must be unique")
+    sequence_ids = {int(frame.sequence_id) for frame in source_frames}
+    if len(sequence_ids) != 1:
+        raise RenderError("coverage-control frames must use one source sequence")
+    if any(int(frame.xyzi.shape[0]) != ray_grid.slot_count for frame in source_frames):
+        raise RenderError("coverage-control frame and ray-grid slots differ")
+    if not isinstance(support_pool, QualifiedSupportPool):
+        raise TypeError("coverage-control context requires a qualified support pool")
+    support_range_bin = _gate1_range_bin(support_pool.ranges_m)
+    support_rows = {
+        (semantic, range_bin): np.ascontiguousarray(
+            np.flatnonzero(
+                np.isin(
+                    support_pool.semantics,
+                    tuple(normal_control_support_semantics(semantic)),
+                )
+                & (support_range_bin == range_bin)
+            ),
+            dtype=np.int64,
+        )
+        for semantic in (10, 18, 20, 30)
+        for range_bin in range(5)
+    }
+    unit_sensor_directions = ray_grid.directions_sensor / np.linalg.norm(
+        ray_grid.directions_sensor, axis=1, keepdims=True
+    )
+    if ray_grid.origins_sensor is None:
+        raise RenderError("coverage-control ray origins are unavailable")
+    return CoverageControlContext(
+        frames_by_id,
+        support_pool,
+        ray_grid,
+        sensor,
+        trajectory_yaw_by_frame(source_frames),
+        support_rows,
+        cKDTree(unit_sensor_directions, compact_nodes=True),
+        float(np.max(np.linalg.norm(ray_grid.origins_sensor, axis=1))),
+    )
 
 
 def _e25_new_frame_context(
+    context: CoverageControlContext,
     frame_id: int,
 ) -> _E25NewFrameContext:
     """Cache only the immutable ray transforms needed by one worker."""
 
-    grid = _E25_NEW_RAY_GRID
-    if grid is None or not _E25_NEW_FRAMES:
-        raise RuntimeError("E25-new frame context is not initialized")
-    cached = _E25_NEW_FRAME_CACHE.pop(frame_id, None)
+    grid = context.ray_grid
+    cached = context.frame_cache.pop(frame_id, None)
     if cached is None:
-        frame = _E25_NEW_FRAMES[frame_id]
+        try:
+            frame = context.frames_by_id[frame_id]
+        except KeyError as error:
+            raise RenderError(
+                "coverage-control support frame is unavailable"
+            ) from error
         pose_rotation, lidar_origin = _pose(frame)
         directions_sensor = grid.directions_for(frame)
         directions_world = directions_sensor @ pose_rotation.T
@@ -9305,22 +9512,21 @@ def _e25_new_frame_context(
                 native_range,
             ),
         )
-    _E25_NEW_FRAME_CACHE[frame_id] = cached
-    while len(_E25_NEW_FRAME_CACHE) > 4:
-        _E25_NEW_FRAME_CACHE.pop(next(iter(_E25_NEW_FRAME_CACHE)))
+    context.frame_cache[frame_id] = cached
+    while len(context.frame_cache) > 4:
+        context.frame_cache.pop(next(iter(context.frame_cache)))
     return cached
 
 
 def _e25_new_conservative_ray_slots(
+    context: CoverageControlContext,
     item: ObjectSpec,
     pose_rotation: np.ndarray,
     lidar_origin_world: np.ndarray,
 ) -> np.ndarray:
     """Return a proven superset of rays that can meet the bounding sphere."""
 
-    tree = _E25_NEW_SENSOR_DIRECTION_TREE
-    if tree is None:
-        raise RuntimeError("E25-new sensor direction tree is not initialized")
+    tree = context.sensor_direction_tree
     center_world = (
         np.asarray(item.translation_world_m, dtype=np.float64)
         - lidar_origin_world
@@ -9331,14 +9537,11 @@ def _e25_new_conservative_ray_slots(
     # line-to-centre distance by at most this origin-offset norm.
     radius = (
         item.shape.bound_radius_m
-        + _E25_NEW_MAXIMUM_RAY_ORIGIN_OFFSET_M
+        + context.maximum_ray_origin_offset_m
         + 1.0e-6
     )
     if distance <= radius:
-        grid = _E25_NEW_RAY_GRID
-        if grid is None:
-            raise RuntimeError("E25-new ray grid is not initialized")
-        return np.arange(grid.slot_count, dtype=np.int32)
+        return np.arange(context.ray_grid.slot_count, dtype=np.int32)
     angle = math.asin(min(radius / distance, 1.0))
     chord = 2.0 * math.sin(0.5 * angle) + 1.0e-12
     slots = tree.query_ball_point(
@@ -9347,41 +9550,68 @@ def _e25_new_conservative_ray_slots(
     return np.asarray(sorted(slots), dtype=np.int32)
 
 
-def _e25_new_observation(
+def _coverage_control_observation(
+    context: CoverageControlContext,
     item: ObjectSpec,
     patch: SupportPatch,
-    control_seed: int,
+    world_seed: int,
     assigned_range_bin: int,
+    world_objects: Sequence[ObjectSpec],
 ) -> _E25NewObservation:
-    """Use exact sensor competition, then fully render the accepted candidate."""
+    """Adjudicate one control in its actual partial or complete world."""
 
-    grid, sensor = _E25_NEW_RAY_GRID, _E25_NEW_SENSOR
-    if grid is None or sensor is None:
-        raise RuntimeError("E25-new sensor state is not initialized")
-    frame = _E25_NEW_FRAMES[patch.frame_id]
+    grid, sensor = context.ray_grid, context.sensor
+    frame_context = _e25_new_frame_context(context, patch.frame_id)
+    frame = frame_context.frame
     pose_rotation, lidar_origin_world = _pose(frame)
-    world = WorldSpec(control_seed, 206, (item,))
+    objects = tuple(world_objects)
+    if sum(other.object_id == item.object_id for other in objects) != 1:
+        raise RenderError("coverage-control world must contain the candidate once")
+    world = WorldSpec(world_seed, context.source_sequence_id, objects)
+    cache_key = (
+        world.identity, patch.frame_id, item.object_id, assigned_range_bin
+    )
+    cached = context.observation_cache.pop(cache_key, None)
+    if cached is not None:
+        context.observation_cache[cache_key] = cached
+        return cached
+    candidate_world = WorldSpec(
+        world_seed, context.source_sequence_id, (item,)
+    )
     _, _, trace = _single_object_sensor_precheck(
         frame,
-        world,
+        candidate_world,
         grid,
         sensor,
         candidate_slots_hint=_e25_new_conservative_ray_slots(
-            item, pose_rotation, lidar_origin_world
+            context, item, pose_rotation, lidar_origin_world
         ),
     )
-    visible = trace.accepted & (
-        trace.distance_m
+    candidate_slots = trace.candidate_slots
+    trace_context = frame_context.trace
+    compact_competition = _accepted_object_hits(
+        trace_context[3][candidate_slots],
+        trace_context[1][candidate_slots],
+        world,
+        grid,
+        sensor,
+        patch.frame_id,
+        slot_ids=candidate_slots,
+    )
+    visible = (
+        compact_competition.object_id == item.object_id
+    ) & (
+        compact_competition.distance_m
         < trace.native_range_m - world.tie_tolerance_m
     )
-    visible_slots = trace.candidate_slots[visible]
-    directions_sensor = grid.directions_for(frame)
-    origins_sensor = grid.origins_for(frame)
+    visible_slots = candidate_slots[visible]
+    directions_sensor, origins_sensor = trace_context[0], trace_context[2]
     # Reproduce render_frame's float32 XYZ packing before the official range
     # projection so a range-bin edge is decided exactly as in the renderer.
     packed_visible_xyz = (
         origins_sensor[visible_slots]
-        + trace.distance_m[visible, None] * directions_sensor[visible_slots]
+        + compact_competition.distance_m[visible, None]
+        * directions_sensor[visible_slots]
     ).astype(np.float32)
     official_visible = np.sum(
         (
@@ -9437,8 +9667,6 @@ def _e25_new_observation(
     if visible_count == 0 or range_bin != assigned_range_bin:
         return preliminary
 
-    context = _e25_new_frame_context(patch.frame_id)
-    trace_context = context.trace
     full_competition = _accepted_object_hits(
         trace_context[3],
         trace_context[1],
@@ -9455,7 +9683,10 @@ def _e25_new_observation(
         _trace_context=trace_context,
         _competition=full_competition,
     )
-    returned = np.asarray(rendered.normal_control_mask, dtype=np.bool_)
+    returned = (
+        np.asarray(rendered.normal_control_mask, dtype=np.bool_)
+        & (np.asarray(rendered.object_id_internal) == item.object_id)
+    )
     slots = np.flatnonzero(returned)
     rendered_xyz = np.asarray(rendered.source.xyzi[slots, :3], dtype=np.float64)
     official = np.sum(
@@ -9469,14 +9700,7 @@ def _e25_new_observation(
     )
     visible_in_range_mask = (official >= 2.5) & (official <= 50.0)
     final_visible_in_range = int(np.count_nonzero(visible_in_range_mask))
-    full_accepted = np.isfinite(full_competition.distance_m)
-    full_accepted_official = (
-        full_competition.distance_m[full_accepted]
-        + grid.official_range_offset_m
-    )
-    final_accepted_in_range = int(np.count_nonzero(
-        (full_accepted_official >= 2.5) & (full_accepted_official <= 50.0)
-    ))
+    final_accepted_in_range = accepted_in_range
     final_occlusion = (
         float(1.0 - final_visible_in_range / final_accepted_in_range)
         if final_accepted_in_range else math.nan
@@ -9528,21 +9752,54 @@ def _e25_new_observation(
         or full_competition.accepted_hits[item.object_id]
         != int(np.count_nonzero(trace.accepted))
     ):
-        raise RenderError("E25-new compact trace and final renderer disagree")
+        raise RenderError(
+            "coverage-control compact competition and final renderer disagree"
+        )
+    context.observation_cache[cache_key] = final
+    while len(context.observation_cache) > 128:
+        context.observation_cache.pop(next(iter(context.observation_cache)))
     return final
 
 
-def _e25_new_support_stream(
+def _e25_new_observation(
+    item: ObjectSpec,
+    patch: SupportPatch,
+    control_seed: int,
+    assigned_range_bin: int,
+) -> _E25NewObservation:
+    """Run the frozen single-fixture E25-new observation through production code."""
+
+    context = _E25_NEW_CONTROL_CONTEXT
+    if context is None:
+        raise RuntimeError("E25-new control context is not initialized")
+    return _coverage_control_observation(
+        context,
+        item,
+        patch,
+        control_seed,
+        assigned_range_bin,
+        (item,),
+    )
+
+
+def _coverage_control_support_stream(
+    context: CoverageControlContext,
     fixture_index: int,
     semantic: int,
     assigned_range_bin: int,
 ) -> np.ndarray:
     """Select the deterministic top-128 E21 rows without result-based ordering."""
 
-    pool = _E25_NEW_SUPPORT_POOL
-    if pool is None:
-        raise RuntimeError("E25-new support pool is not initialized")
-    rows = _E25_NEW_SUPPORT_ROWS.get(
+    if assigned_range_bin != _e25_new_assigned_range_bin(fixture_index):
+        raise PlacementError(
+            "coverage-control range bin differs from its canonical template index"
+        )
+    cache_key = (fixture_index, semantic)
+    cached = context.support_stream_cache.get(cache_key)
+    if cached is not None:
+        return cached
+    pool = context.support_pool
+    rows = context.support_rows.get(
         (semantic, assigned_range_bin), np.empty(0, dtype=np.int64)
     )
     if rows.size == 0:
@@ -9559,19 +9816,50 @@ def _e25_new_support_stream(
         if limit < rows.size else np.arange(rows.size)
     )
     order = np.lexsort((pool.pool_indices[rows[selected]], keys[selected]))
-    return np.ascontiguousarray(rows[selected[order]], dtype=np.int64)
+    result = _freeze(np.ascontiguousarray(rows[selected[order]], dtype=np.int64))
+    context.support_stream_cache[cache_key] = result
+    return result
+
+
+def precompute_coverage_control_support_streams(
+    context: CoverageControlContext,
+    normal_template_library: Sequence[NormalTemplateShape],
+) -> None:
+    """Populate all 256 frozen E25-new streams before worker forking."""
+
+    templates = tuple(normal_template_library)
+    canonical_normal_template_library_identity(templates)
+    for index, template in enumerate(templates):
+        _coverage_control_support_stream(
+            context,
+            index,
+            int(template.raw_semantic_id),
+            _e25_new_assigned_range_bin(index),
+        )
+
+
+def _e25_new_support_stream(
+    fixture_index: int,
+    semantic: int,
+    assigned_range_bin: int,
+) -> np.ndarray:
+    context = _E25_NEW_CONTROL_CONTEXT
+    if context is None:
+        raise RuntimeError("E25-new control context is not initialized")
+    return _coverage_control_support_stream(
+        context, fixture_index, semantic, assigned_range_bin
+    )
 
 
 def _e25_new_worker(index: int) -> dict[str, object]:
-    pool, obstacles = _E25_NEW_SUPPORT_POOL, _E25_NEW_OBSTACLES
+    context, obstacles = _E25_NEW_CONTROL_CONTEXT, _E25_NEW_OBSTACLES
     if (
-        pool is None
+        context is None
         or obstacles is None
         or len(_E25_NEW_TEMPLATES) != 256
-        or _E25_NEW_RAY_GRID is None
-        or _E25_NEW_SENSOR is None
     ):
         raise RuntimeError("E25-new worker state is not initialized")
+    pool = context.support_pool
     control_seed = 2_500_000 + index
     assigned_range_bin = _e25_new_assigned_range_bin(index)
     source = _E25_NEW_TEMPLATES[index]
@@ -9602,7 +9890,7 @@ def _e25_new_worker(index: int) -> dict[str, object]:
             )
 
         def yaw_for_support(patch: SupportPatch) -> float:
-            return _E25_NEW_TRAJECTORY_YAW[patch.frame_id] + perturbation
+            return context.trajectory_yaw_by_frame[patch.frame_id] + perturbation
 
         def reject_after_placement(
             proposed: ObjectSpec, patch: SupportPatch
@@ -9918,60 +10206,22 @@ def run_e25_new_qualification(
         sequence.source_frame(frame_id) for frame_id in sequence.frame_ids
     )
     templates = extract_normal_template_library(frames)
-    identities = tuple(_normal_template_identity(item) for item in templates)
-    counts = {
-        semantic: sum(item.raw_semantic_id == semantic for item in templates)
-        for semantic in (10, 18, 20, 30)
-    }
-    library_hash = hashlib.sha256("".join(identities).encode()).hexdigest()
-    if (
-        len(templates) != 256
-        or counts != {10: 64, 18: 64, 20: 64, 30: 64}
-        or len(set(identities)) != 256
-        or library_hash
-        != "de5dfd765ac7d4fe4bb4644c40ecafdd80cdc31a3d0b6fc4fccd8e84a9fd906b"
-    ):
-        raise PlacementError("E25-new canonical template precheck changed")
+    _, counts, library_hash = canonical_normal_template_library_identity(templates)
     pool = load_qualified_support_pool(support_pool_path)
-    grid, sensor = load_sensor_calibration(calibration_path)
+    calibration_path_resolved = Path(calibration_path).expanduser().resolve(strict=True)
+    if _sha256_path(calibration_path_resolved) != FROZEN_SENSOR_CALIBRATION_SHA256:
+        raise PlacementError("E25-new sensor calibration identity changed")
+    grid, sensor = load_sensor_calibration(calibration_path_resolved)
     obstacles = collect_observed_obstacle_index(frames)
-    trajectory_yaws = trajectory_yaw_by_frame(frames)
-    support_range_bin = _gate1_range_bin(pool.ranges_m)
-    support_rows = {
-        (semantic, range_bin): np.ascontiguousarray(np.flatnonzero(
-            np.isin(
-                pool.semantics,
-                tuple(normal_control_support_semantics(semantic)),
-            )
-            & (support_range_bin == range_bin)
-        ), dtype=np.int64)
-        for semantic in (10, 18, 20, 30)
-        for range_bin in range(5)
-    }
-    global _E25_NEW_FRAMES, _E25_NEW_SUPPORT_POOL, _E25_NEW_OBSTACLES
-    global _E25_NEW_TEMPLATES, _E25_NEW_TRAJECTORY_YAW
-    global _E25_NEW_RAY_GRID, _E25_NEW_SENSOR, _E25_NEW_SUPPORT_ROWS
-    global _E25_NEW_SENSOR_DIRECTION_TREE
-    global _E25_NEW_MAXIMUM_RAY_ORIGIN_OFFSET_M, _E25_NEW_FRAME_CACHE
-    _E25_NEW_FRAMES = frames
-    _E25_NEW_SUPPORT_POOL = pool
+    control_context = build_coverage_control_context(
+        frames, pool, grid, sensor
+    )
+    precompute_coverage_control_support_streams(control_context, templates)
+    global _E25_NEW_CONTROL_CONTEXT, _E25_NEW_OBSTACLES
+    global _E25_NEW_TEMPLATES
+    _E25_NEW_CONTROL_CONTEXT = control_context
     _E25_NEW_OBSTACLES = obstacles
     _E25_NEW_TEMPLATES = templates
-    _E25_NEW_TRAJECTORY_YAW = trajectory_yaws
-    _E25_NEW_RAY_GRID = grid
-    _E25_NEW_SENSOR = sensor
-    _E25_NEW_SUPPORT_ROWS = support_rows
-    unit_sensor_directions = grid.directions_sensor / np.linalg.norm(
-        grid.directions_sensor, axis=1, keepdims=True
-    )
-    _E25_NEW_SENSOR_DIRECTION_TREE = cKDTree(
-        unit_sensor_directions, compact_nodes=True
-    )
-    assert grid.origins_sensor is not None
-    _E25_NEW_MAXIMUM_RAY_ORIGIN_OFFSET_M = float(
-        np.max(np.linalg.norm(grid.origins_sensor, axis=1))
-    )
-    _E25_NEW_FRAME_CACHE = {}
 
     work_order = tuple(sorted(
         range(256),
@@ -10228,6 +10478,8 @@ def run_e25_new_qualification(
 _E26_SUPPORT_POOL: QualifiedSupportPool | None = None
 _E26_OBSTACLES: ObservedObstacleIndex | None = None
 _E26_TEMPLATES: tuple[NormalTemplateShape, ...] = ()
+_E26_TEMPLATE_INDEX: dict[str, int] = {}
+_E26_CONTROL_CONTEXT: CoverageControlContext | None = None
 _E26_TRAJECTORY_YAW: dict[int, float] = {}
 _E26_RENDERER_IDENTITY = ""
 
@@ -10238,9 +10490,14 @@ def _e26_request_identity(world_hash: str, frame_id: int) -> str:
 
 
 def _e26_worker(index: int) -> dict[str, object]:
-    pool, obstacles = _E26_SUPPORT_POOL, _E26_OBSTACLES
+    pool, obstacles, control_context = (
+        _E26_SUPPORT_POOL,
+        _E26_OBSTACLES,
+        _E26_CONTROL_CONTEXT,
+    )
     if (
         pool is None or obstacles is None or not _E26_TEMPLATES
+        or control_context is None or len(_E26_TEMPLATE_INDEX) != 256
         or len(_E26_RENDERER_IDENTITY) != 64
     ):
         raise RuntimeError("E26 worker state is not initialized")
@@ -10249,8 +10506,8 @@ def _e26_worker(index: int) -> dict[str, object]:
     try:
         world, report = sample_training_world(
             _E26_TEMPLATES, pool, obstacles, world_type, world_seed,
+            control_context=control_context,
             maximum_attempts=48,
-            trajectory_yaw_by_frame=_E26_TRAJECTORY_YAW,
         )
         world_json = world.to_json()
         report_json = report.to_json()
@@ -10273,10 +10530,58 @@ def _e26_worker(index: int) -> dict[str, object]:
             or [item.object_id for item in world.objects]
             != list(range(1, len(world.objects) + 1))
         )
+        expected_normal_count, expected_anomaly_count = _training_entity_counts(
+            world_type, world_seed
+        )
+        expected_attempt_seed = world_seed + 1_000_003 * report.world_attempt
+        expected_labels: list[ObjectLabel] = (
+            ["normal-control"] * expected_normal_count
+            + ["anomaly-proxy"] * expected_anomaly_count
+        )
+        np.random.default_rng(expected_attempt_seed).shuffle(expected_labels)
+        world_random_stream_errors = int(
+            report.count_seed != world_seed
+            or report.label_order_seed != expected_attempt_seed
+            or report.normal_count != expected_normal_count
+            or report.anomaly_count != expected_anomaly_count
+            or [item.label for item in world.objects] != expected_labels
+        )
         support_errors = 0
         pose_errors = 0
         material_errors = 0
+        grounding_errors = 0
+        collision_errors = 0
+        control_visibility_errors = 0
+        control_range_errors = 0
+        control_support_stream_errors = 0
+        control_random_stream_errors = 0
+        anomaly_random_stream_errors = 0
+        assigned_range_count = np.zeros(5, dtype=np.int16)
+        final_range_count = np.zeros(5, dtype=np.int16)
+        control_observations: list[dict[str, object]] = []
+
+        def expected_grounded_transform(
+            shape: InsertShape, patch: SupportPatch, yaw_rad: float
+        ) -> tuple[np.ndarray, np.ndarray]:
+            """Independently reconstruct the frozen support transform."""
+
+            normal = np.asarray(patch.normal_world, dtype=np.float64)
+            contact = np.asarray(patch.anchor_world_m, dtype=np.float64).copy()
+            contact[2] = -(
+                normal[0] * contact[0]
+                + normal[1] * contact[1]
+                + patch.offset
+            ) / normal[2]
+            rotation = _ground_rotation(normal, yaw_rad)
+            translation = contact - normal * shape.minimum_z_m(
+                xy_resolution=33, z_steps=129
+            )
+            return rotation, translation
+
         for item, record in zip(world.objects, report.placements, strict=True):
+            expected_entity_seed = (
+                expected_attempt_seed + 10_007 * item.object_id
+            )
             row = int(np.searchsorted(pool.pool_indices, record.support_pool_index))
             if (
                 row >= pool.pool_indices.size
@@ -10285,64 +10590,208 @@ def _e26_worker(index: int) -> dict[str, object]:
                 support_errors += 1
                 continue
             patch = pool.patch(row)
+            grounding = qualify_grounding(item.shape)
+            collision, minimum_sdf, _ = observed_normal_collision(item, obstacles)
             validation_errors += int(
                 record.object_id != item.object_id
                 or record.label != item.label
-                or not np.isfinite((
-                    record.grounding_standard_lower_support_m,
-                    record.grounding_strict_lower_support_m,
-                    record.grounding_buried_fraction,
-                )).all()
-                or abs(
-                    record.grounding_strict_lower_support_m
-                    - record.grounding_standard_lower_support_m
-                ) > 0.01
-                or record.grounding_buried_fraction > 0.02
-                or record.minimum_obstacle_sdf_m < -0.05
                 or record.accepted_proposal + 1
                 != len(record.proposal_pool_indices)
                 or record.accepted_proposal != len(record.rejection_reasons)
+                or len(record.proposal_pool_indices)
+                != len(record.proposal_minimum_obstacle_sdf_m)
             )
+            support_errors += int(
+                record.support_frame != patch.frame_id
+                or record.support_slot != patch.slot
+                or record.support_semantic != patch.semantic
+            )
+            grounding_errors += int(
+                not grounding.passed
+                or record.grounding_standard_lower_support_m
+                != grounding.standard_lower_support_m
+                or record.grounding_strict_lower_support_m
+                != grounding.strict_lower_support_m
+                or record.grounding_buried_fraction != grounding.buried_fraction
+            )
+            collision_errors += int(
+                collision
+                or not np.isclose(
+                    record.minimum_obstacle_sdf_m,
+                    minimum_sdf,
+                    equal_nan=True,
+                )
+            )
+            expected_material_seed = expected_entity_seed + 11
             material_errors += int(
-                item.material.to_dict()
-                != MaterialSpec.sample(record.material_seed).to_dict()
+                record.material_seed != expected_material_seed
+                or item.material.to_dict()
+                != MaterialSpec.sample(expected_material_seed).to_dict()
             )
             if item.label == "normal-control":
+                expected_template_seed = expected_entity_seed + 1
+                expected_scale_seed = expected_entity_seed + 2
+                expected_yaw_seed = expected_entity_seed + 31
+                expected_template_index = int(
+                    np.random.default_rng(expected_template_seed).integers(
+                        0, len(_E26_TEMPLATES)
+                    )
+                )
+                expected_source = _E26_TEMPLATES[expected_template_index]
+                expected_identity = _normal_template_identity(expected_source)
+                expected_scale = np.random.default_rng(
+                    np.random.SeedSequence([expected_scale_seed, 2501])
+                ).uniform(0.9, 1.1, size=3)
+                expected_shape = _aligned_scaled_template(
+                    expected_source, expected_scale
+                )
+                semantic = int(expected_source.raw_semantic_id)
+                perturbation_limit = (
+                    math.pi if semantic == 30
+                    else math.radians(30.0) if semantic in (11, 15, 31, 32)
+                    else math.radians(15.0)
+                )
+                expected_perturbation = float(np.random.default_rng(
+                    np.random.SeedSequence([expected_yaw_seed, 2502])
+                ).uniform(-perturbation_limit, perturbation_limit))
+                expected_yaw = (
+                    _E26_TRAJECTORY_YAW[patch.frame_id]
+                    + expected_perturbation
+                )
+                expected_rotation, expected_translation = expected_grounded_transform(
+                    expected_shape,
+                    patch,
+                    expected_yaw,
+                )
                 support_errors += int(
                     record.support_semantic
-                    not in normal_control_support_semantics(item.shape.raw_semantic_id)
+                    not in normal_control_support_semantics(semantic)
                 )
-                perturbation = record.pose_perturbation_rad
-                if perturbation is None:
-                    pose_errors += 1
-                else:
-                    expected = _ground_rotation(
-                        np.asarray(patch.normal_world),
-                        _E26_TRAJECTORY_YAW[patch.frame_id] + perturbation,
-                    )
-                    pose_errors += int(
-                        np.max(np.abs(
-                            expected - np.asarray(item.rotation_world_from_local)
-                        )) > 1.0e-10
-                    )
+                pose_errors += int(
+                    record.pose_perturbation_rad != expected_perturbation
+                    or np.max(np.abs(
+                        expected_rotation
+                        - np.asarray(item.rotation_world_from_local)
+                    )) > 1.0e-10
+                    or np.max(np.abs(
+                        expected_translation
+                        - np.asarray(item.translation_world_m)
+                    )) > 1.0e-10
+                )
                 validation_errors += int(
                     not isinstance(item.shape, NormalTemplateShape)
-                    or record.template_identity is None
-                    or record.template_seed is None
-                    or record.scale_seed is None
                     or np.any(
                         (np.asarray(item.shape.scale_xyz) < 0.9)
                         | (np.asarray(item.shape.scale_xyz) > 1.1)
                     )
                 )
+                control_random_stream_errors += int(
+                    record.template_seed != expected_template_seed
+                    or record.scale_seed != expected_scale_seed
+                    or record.material_seed != expected_material_seed
+                    or record.yaw_seed != expected_yaw_seed
+                    or record.template_identity != expected_identity
+                    or _E26_TEMPLATE_INDEX.get(record.template_identity or "", -1)
+                    != expected_template_index
+                    or item.shape.to_dict() != expected_shape.to_dict()
+                )
+                assigned_bin = _e25_new_assigned_range_bin(
+                    expected_template_index
+                )
+                assigned_range_count[assigned_bin] += 1
+                expected_rows = _coverage_control_support_stream(
+                    control_context,
+                    expected_template_index,
+                    semantic,
+                    assigned_bin,
+                )
+                expected_pool_indices = pool.pool_indices[
+                    expected_rows[:len(record.proposal_pool_indices)]
+                ]
+                control_support_stream_errors += int(
+                    not np.array_equal(
+                        expected_pool_indices,
+                        np.asarray(record.proposal_pool_indices, dtype=np.uint64),
+                    )
+                )
+                observation = _coverage_control_observation(
+                    control_context,
+                    item,
+                    patch,
+                    world_seed,
+                    assigned_bin,
+                    world.objects,
+                )
+                control_visibility_errors += int(
+                    observation.visible_returns < 1
+                )
+                control_range_errors += int(
+                    observation.range_bin != assigned_bin
+                )
+                if 0 <= observation.range_bin < 5:
+                    final_range_count[observation.range_bin] += 1
+                control_observations.append({
+                    "object_id": item.object_id,
+                    "template_index": expected_template_index,
+                    "support_frame": patch.frame_id,
+                    "assigned_range_bin": assigned_bin,
+                    "final_range_bin": observation.range_bin,
+                    "visible_returns": observation.visible_returns,
+                    "median_official_range_m": observation.median_official_range_m,
+                })
             else:
-                validation_errors += int(
+                expected_yaw_seed = expected_entity_seed + 31
+                shape_proposal_count = len(record.shape_proposal_seeds)
+                expected_shape_seeds = tuple(
+                    expected_entity_seed + 3 + 3072 * proposal
+                    for proposal in range(shape_proposal_count)
+                )
+                if not 1 <= shape_proposal_count <= 64:
+                    anomaly_random_stream_errors += 1
+                    continue
+                expected_shape_seed = expected_shape_seeds[-1]
+                expected_shape, expected_shape_report = ShapeSpec.sample_with_report(
+                    expected_shape_seed
+                )
+                expected_yaw = float(
+                    np.random.default_rng(expected_yaw_seed).uniform(
+                        -math.pi, math.pi
+                    )
+                )
+                expected_rotation, expected_translation = expected_grounded_transform(
+                    expected_shape,
+                    patch,
+                    expected_yaw,
+                )
+                rejected_shape_error = any(
+                    qualify_grounding(ShapeSpec.sample(seed)).passed
+                    for seed in expected_shape_seeds[:-1]
+                )
+                anomaly_random_stream_errors += int(
                     not isinstance(item.shape, ShapeSpec)
-                    or record.shape_seed is None
-                    or not record.shape_proposal_seeds
-                    or record.shape_proposal_seeds[-1] != record.shape_seed
-                    or len(record.grounding_rejection_seeds)
-                    != record.accepted_shape_proposal
+                    or record.shape_seed != expected_shape_seed
+                    or record.shape_proposal_seeds != expected_shape_seeds
+                    or record.accepted_shape_proposal
+                    != shape_proposal_count - 1
+                    or record.grounding_rejection_seeds
+                    != expected_shape_seeds[:-1]
+                    or record.material_seed != expected_material_seed
+                    or record.yaw_seed != expected_yaw_seed
+                    or item.shape.to_dict() != expected_shape.to_dict()
+                    or item.shape_generation_report is None
+                    or item.shape_generation_report.to_dict()
+                    != expected_shape_report.to_dict()
+                    or rejected_shape_error
+                )
+                pose_errors += int(
+                    np.max(np.abs(
+                        expected_rotation
+                        - np.asarray(item.rotation_world_from_local)
+                    )) > 1.0e-10
+                    or np.max(np.abs(
+                        expected_translation
+                        - np.asarray(item.translation_world_m)
+                    )) > 1.0e-10
                 )
         final_witness_cache: dict[int, np.ndarray] = {}
         pair_errors = sum(
@@ -10401,9 +10850,22 @@ def _e26_worker(index: int) -> dict[str, object]:
             "report_json": report_json,
             "round_trip_error": round_trip_errors,
             "validation_error": validation_errors,
+            "world_random_stream_error": world_random_stream_errors,
             "support_error": support_errors,
             "pose_error": pose_errors,
             "material_error": material_errors,
+            "grounding_error": grounding_errors,
+            "collision_error": collision_errors,
+            "control_visibility_error": control_visibility_errors,
+            "control_range_error": control_range_errors,
+            "control_support_stream_error": control_support_stream_errors,
+            "control_random_stream_error": control_random_stream_errors,
+            "anomaly_random_stream_error": anomaly_random_stream_errors,
+            "assigned_range_count": assigned_range_count.tolist(),
+            "final_range_count": final_range_count.tolist(),
+            "control_observation_json": json.dumps(
+                control_observations, sort_keys=True, separators=(",", ":")
+            ),
             "pair_error": pair_errors,
             "traversal_error": traversal_errors,
             "request_manifest_hash": hashlib.sha256(
@@ -10448,12 +10910,42 @@ def _e26_arrays(records: Sequence[Mapping[str, object]]) -> dict[str, np.ndarray
         "report_json": np.asarray(
             [str(item.get("report_json", "")).encode() for item in records]
         ),
+        "control_observation_json": np.asarray([
+            str(item.get("control_observation_json", "")).encode()
+            for item in records
+        ]),
+        "assigned_range_count": np.asarray([
+            item.get("assigned_range_count", (0, 0, 0, 0, 0))
+            for item in records
+        ], dtype=np.int16),
+        "final_range_count": np.asarray([
+            item.get("final_range_count", (0, 0, 0, 0, 0))
+            for item in records
+        ], dtype=np.int16),
         "request_manifest_hash": values("request_manifest_hash", "S64", ""),
         "round_trip_error": values("round_trip_error", np.uint8, 0),
         "validation_error": values("validation_error", np.uint8, 0),
+        "world_random_stream_error": values(
+            "world_random_stream_error", np.uint8, 0
+        ),
         "support_error": values("support_error", np.uint8, 0),
         "pose_error": values("pose_error", np.uint8, 0),
         "material_error": values("material_error", np.uint8, 0),
+        "grounding_error": values("grounding_error", np.uint8, 0),
+        "collision_error": values("collision_error", np.uint8, 0),
+        "control_visibility_error": values(
+            "control_visibility_error", np.uint8, 0
+        ),
+        "control_range_error": values("control_range_error", np.uint8, 0),
+        "control_support_stream_error": values(
+            "control_support_stream_error", np.uint8, 0
+        ),
+        "control_random_stream_error": values(
+            "control_random_stream_error", np.uint8, 0
+        ),
+        "anomaly_random_stream_error": values(
+            "anomaly_random_stream_error", np.uint8, 0
+        ),
         "pair_error": values("pair_error", np.uint8, 0),
         "traversal_error": values("traversal_error", np.uint8, 0),
         "hard_error_code": values("hard_error", np.uint8, 1),
@@ -10468,7 +10960,6 @@ def _e26_single_manifest_errors(records: Sequence[Mapping[str, object]]) -> int:
     errors = 0
     for record in records:
         if record.get("hard_error", 1) or record.get("placement_exhaustion", 0):
-            errors += 1
             continue
         world = WorldSpec.from_dict(json.loads(str(record["world_json"])))
         report = WorldGenerationReport.from_dict(
@@ -10511,17 +11002,18 @@ def _placement_authority_errors(source: str) -> int:
     )
 
 
-def run_e26_qualification(
+def run_e26_v2_qualification(
     data_root: Path | str,
     support_pool_path: Path | str,
+    calibration_path: Path | str,
     output_path: Path | str,
     *,
     processes: int = 24,
 ) -> dict[str, object]:
-    """Run two frozen 24-process E26 world manifests from generation start."""
+    """Run the single frozen E26-v2 production-world qualification."""
 
     if processes != 24:
-        raise PlacementError("formal E26 requires exactly 24 worker processes")
+        raise PlacementError("formal E26-v2 requires exactly 24 worker processes")
     try:
         from .protocol import load_protocol
         from .scene import LabelMode, STUSequence
@@ -10536,64 +11028,135 @@ def run_e26_qualification(
     )
     frames = tuple(sequence.source_frame(frame_id) for frame_id in sequence.frame_ids)
     templates = extract_normal_template_library(frames)
+    template_identities, template_counts, template_library_hash = (
+        canonical_normal_template_library_identity(templates)
+    )
     pool = load_qualified_support_pool(support_pool_path)
+    calibration_path_resolved = Path(calibration_path).expanduser().resolve(strict=True)
+    calibration_hash = _sha256_path(calibration_path_resolved)
+    if calibration_hash != FROZEN_SENSOR_CALIBRATION_SHA256:
+        raise PlacementError("E26-v2 sensor calibration identity changed")
+    grid, sensor = load_sensor_calibration(calibration_path_resolved)
+    if (
+        sensor.source_sequence_id != 206
+        or grid.calibration_frame_ids != sequence.frame_ids
+        or any(frame.slot_count != grid.slot_count for frame in frames)
+    ):
+        raise PlacementError("E26-v2 sensor calibration provenance changed")
     obstacles = collect_observed_obstacle_index(frames)
+    control_context = build_coverage_control_context(
+        frames, pool, grid, sensor
+    )
+    precompute_coverage_control_support_streams(control_context, templates)
     renderer_identity = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
     global _E26_SUPPORT_POOL, _E26_OBSTACLES, _E26_TEMPLATES
+    global _E26_TEMPLATE_INDEX, _E26_CONTROL_CONTEXT
     global _E26_TRAJECTORY_YAW, _E26_RENDERER_IDENTITY
     _E26_SUPPORT_POOL = pool
     _E26_OBSTACLES = obstacles
     _E26_TEMPLATES = templates
-    _E26_TRAJECTORY_YAW = trajectory_yaw_by_frame(frames)
+    _E26_TEMPLATE_INDEX = {
+        identity: index for index, identity in enumerate(template_identities)
+    }
+    _E26_CONTROL_CONTEXT = control_context
+    _E26_TRAJECTORY_YAW = control_context.trajectory_yaw_by_frame
     _E26_RENDERER_IDENTITY = renderer_identity
 
     source = Path(__file__).read_text(encoding="utf-8")
     authority_errors = _placement_authority_errors(source)
-    runs: list[dict[str, np.ndarray]] = []
-    run_seconds: list[float] = []
-    single_manifest_errors = 0
-    context = mp.get_context("fork")
-    for run_index in range(2):
-        started = time.monotonic()
-        with context.Pool(processes=processes) as workers:
-            records = workers.map(_e26_worker, range(256))
-        if run_index == 0:
-            single_manifest_errors = _e26_single_manifest_errors(records)
-        runs.append(_e26_arrays(records))
-        run_seconds.append(time.monotonic() - started)
-    reproduced = all(
-        np.array_equal(runs[0][name], runs[1][name], equal_nan=True)
-        if np.issubdtype(runs[0][name].dtype, np.floating)
-        else np.array_equal(runs[0][name], runs[1][name])
-        for name in runs[0]
-    )
-    first = runs[0]
+    work_order = tuple(sorted(
+        range(256),
+        key=lambda index: (
+            -sum(_training_entity_counts(
+                WORLD_TYPES[index // 64], 2_600_000 + index
+            )),
+            index,
+        ),
+    ))
+    started = time.monotonic()
+    with mp.get_context("fork").Pool(processes=processes) as workers:
+        scheduled = workers.map(_e26_worker, work_order, chunksize=1)
+    by_seed = {int(item["world_seed"]): item for item in scheduled}
+    records = [by_seed[2_600_000 + index] for index in range(256)]
+    run_seconds = time.monotonic() - started
+    single_manifest_errors = _e26_single_manifest_errors(records)
+    first = _e26_arrays(records)
     completed = int(np.count_nonzero(first["world_hash"] != b""))
     type_errors = int(np.count_nonzero(
         first["world_type"]
         != np.repeat(np.asarray(WORLD_TYPES, dtype="U16"), 64)
     ))
     error_fields = (
-        "round_trip_error", "validation_error", "support_error", "pose_error",
-        "material_error", "pair_error", "traversal_error", "hard_error_code",
+        "round_trip_error", "validation_error", "world_random_stream_error",
+        "support_error", "pose_error", "material_error", "grounding_error",
+        "collision_error", "control_visibility_error", "control_range_error",
+        "control_support_stream_error", "control_random_stream_error",
+        "anomaly_random_stream_error",
+        "pair_error", "traversal_error", "hard_error_code",
         "placement_exhaustion_code",
     )
     errors = {name: int(np.sum(first[name])) for name in error_fields}
     passed = (
         completed == 256 and type_errors == 0 and authority_errors == 0
         and single_manifest_errors == 0
-        and all(value == 0 for value in errors.values()) and reproduced
+        and all(value == 0 for value in errors.values())
     )
     scientific_hash = _scientific_array_hash(first)
+    assigned_range_count = np.sum(first["assigned_range_count"], axis=0)
+    final_range_count = np.sum(first["final_range_count"], axis=0)
+    observations = [
+        observation
+        for payload in first["control_observation_json"]
+        if payload
+        for observation in json.loads(payload.decode())
+    ]
+    nvis = np.asarray(
+        [observation["visible_returns"] for observation in observations],
+        dtype=np.int64,
+    )
+    implementation_errors = (
+        authority_errors + single_manifest_errors + type_errors
+        + sum(
+            value for name, value in errors.items()
+            if name != "placement_exhaustion_code"
+        )
+    )
     metadata = {
-        "experiment": "E26", "passed": passed, "worlds": 256,
+        "experiment": "E26-v2", "passed": passed,
+        "failure_classification": (
+            None if passed else (
+                "protocol_implementation_defect"
+                if implementation_errors else "multi_entity_world_sampling_failure"
+            )
+        ),
+        "worlds": 256,
         "completed": completed, "type_errors": type_errors,
         "authority_errors": authority_errors,
         "single_manifest_errors": single_manifest_errors, **errors,
-        "elementwise_reproduced": reproduced, "run_seconds": run_seconds,
+        "formal_repetitions": 1,
+        "elementwise_reproduced": None,
+        "reproducibility_check": "not_run_by_owner_decision",
+        "run_seconds": [run_seconds],
+        "normal_controls": int(np.sum(first["normal_count"])),
+        "anomaly_proxies": int(np.sum(first["anomaly_count"])),
+        "assigned_range_count": assigned_range_count.tolist(),
+        "final_range_count": final_range_count.tolist(),
+        "Nvis": {
+            "minimum": int(np.min(nvis)) if nvis.size else None,
+            "median": float(np.median(nvis)) if nvis.size else None,
+            "mean": float(np.mean(nvis)) if nvis.size else None,
+            "maximum": int(np.max(nvis)) if nvis.size else None,
+        },
         "renderer_identity": renderer_identity,
-        "support_pool_sha256": SUPPORT_POOL_SHA256,
+        "normal_template_counts": template_counts,
+        "normal_template_library_sha256": template_library_hash,
+        "support_pool_sha256": _sha256_path(
+            Path(support_pool_path).expanduser().resolve(strict=True)
+        ),
+        "calibration_sha256": calibration_hash,
         "scientific_array_hash": scientific_hash, "processes": processes,
+        "numeric_library_threads_per_process": 1,
+        "gpu_used": False,
     }
     destination = Path(output_path).expanduser().resolve()
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -15637,9 +16200,10 @@ def _render_parser() -> argparse.ArgumentParser:
     e25_new.add_argument("--calibration", type=Path, required=True)
     e25_new.add_argument("--output", type=Path, required=True)
     e25_new.add_argument("--processes", type=int, default=24)
-    e26 = subcommands.add_parser("qualify-e26")
+    e26 = subcommands.add_parser("qualify-e26-v2")
     e26.add_argument("--data-root", type=Path, required=True)
     e26.add_argument("--support-pool", type=Path, required=True)
+    e26.add_argument("--calibration", type=Path, required=True)
     e26.add_argument("--output", type=Path, required=True)
     e26.add_argument("--processes", type=int, default=24)
     e27 = subcommands.add_parser("qualify-e27")
@@ -15803,9 +16367,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 0 if result["passed"] else 1
-    if args.command == "qualify-e26":
-        result = run_e26_qualification(
-            args.data_root, args.support_pool, args.output, processes=args.processes
+    if args.command == "qualify-e26-v2":
+        result = run_e26_v2_qualification(
+            args.data_root,
+            args.support_pool,
+            args.calibration,
+            args.output,
+            processes=args.processes,
         )
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 0 if result["passed"] else 1

@@ -1,6 +1,6 @@
 # AJAE 细粒度实验执行状态机
 
-> 当前权威基线：本仓库`main`、本文件记录的全部历史证据及当前冻结的E25-new合同。旧提交`44fd6d13798e826b2cac8371de26a7d17707dadc`只保留为E22-v2时期的历史基线，不再代表当前工作区状态。
+> 当前权威基线：本仓库`main`、本文件记录的全部历史证据、E25-new正式PASS及当前冻结的E26-v2合同。旧提交`44fd6d13798e826b2cac8371de26a7d17707dadc`只保留为E22-v2时期的历史基线，不再代表当前工作区状态。
 
 > 依据：`AJAE新主线方案.md`。本文件把主线方案中的不可变约束、四个 Decision Gates、B0–B5 对照、正常运动安全、对象尺度诊断、开发纪律与一次性真实 OOD 验证，拆成可顺序执行的细粒度实验节点。
 
@@ -2824,9 +2824,9 @@ E22-v2 在预注册提交 `55b2bc4` 后，使用新支撑位置命名空间、�
 E22-v2 PASS 允许的结论限定为：**schema 7 对象按连续最低支撑落到 E21-v4 合格平面后，在冻结的1 cm连续接触与2 cm/2%明显埋地审计下达到99%资格。** 该结果不说明对象已避开车辆、墙等已观测非地面几何，也不说明多个插入对象之间无碰撞；它们仍分别属于 E23 和 E24。E22 至此关闭，不再研究接触采样，E23 正式解锁。
 
 
-## Phase 2C｜E23–E26 统一 placement/world-builder 冻结
+## Phase 2C｜历史原版 E23–E26 统一 placement/world-builder 冻结
 
-E23–E26 的科学设计在 E23 首次正式结果出现前一次性冻结。四个节点仍按顺序执行，但 E23 PASS 后直接进入 E24，E24 PASS 后直接进入 E25，E25 PASS 后直接进入 E26；除非结果改变后续观测对象，否则不再暂停设计下一节点。
+以下一次性冻结说明只适用于当时的原版E23–E26。后续E24-v2、E25-v2、E25-v3、E25-new和E26-v2均由新证据与课题负责人决策单独版本化，不能被这一历史冻结覆盖。原版四个节点按顺序执行，E23 PASS后进入E24，E24 PASS后进入E25，E25 PASS后进入E26。
 
 正式实现前必须先完成一次接口统一：
 
@@ -3230,7 +3230,7 @@ person目标资格的已知数据边界在正式生成中直接显现：E25-v3�
 
 ## E25-new｜覆盖导向的合法 normal-control 生成资格
 
-**状态：正式PASS；E26-v2已解锁。E25-v2与E25-v3 FAIL永久保留。**
+**状态：正式PASS；E26-v2已解锁并冻结。E25-v2与E25-v3 FAIL永久保留。**
 
 **唯一问题**
 
@@ -3295,6 +3295,28 @@ $$
 E25-new由此只建立：256个规范正常模板能够各生成一个E21–E23合法、传感器可见、并按预定索引覆盖五个官方距离层的normal-control。它没有建立真实正常距离分布、real/control共同支持或来源不可区分性；这些问题仍分别由E45A-new和E46裁决。
 
 PASS后立即把该选择器接入唯一生产world builder，执行E26-v2；随后刷新E38–E44中依赖control分布的证据，执行E45A-new与E45B-v2。E45A-new PASS解锁E46，E45B-v2必须在E48前PASS。FAIL时永久保留该次结果并停下等待课题负责人决策，不修改模板、距离分配、proposal上限、renderer或下游匹配条件。
+
+## E26-v2｜新版 normal-control 分布下的唯一生产 world builder
+
+**状态：合同已冻结，实现完成真实单world冒烟复核；唯一一次正式运行待执行。**
+
+E26-v2只回答：E25-new的覆盖导向normal-control选择器接入唯一`sample_training_world`后，能否在既有冻结世界身份和有限上限内构造完整、不可变且全部实体合法的多实体训练世界。它不重新裁决E27–E37的几何与传感器机械公式，也不加入E45A的真实目标、median beam、$N_{vis}$、遮挡或局部密度匹配门。
+
+世界身份完整继承历史E26：world seed固定为2,600,000–2,600,255，index 0–63、64–127、128–191和192–255分别为pure-normal、control-only、mixed和anomaly-only，各64个。实体数量继续由`_training_entity_counts(world_type,world_seed)`冻结；第$a$次完整world attempt使用`world_seed+1,000,003a`，最多48次，第$j$个实体seed为`attempt_seed+10,007(j+1)`，标签顺序沿同一attempt随机流。48次是单个世界生成器内部的有限proposal合同，不是正式实验自动重跑。
+
+anomaly-proxy路径完全不变：shape seed为`entity_seed+3+3072q`，最多64个shape proposal，先通过E22再进入既有最多128个支撑proposal，并继续执行E23与E24。normal-control保留旧生产随机身份：template、scale、material和pose seed分别为`entity_seed+1`、`entity_seed+2`、`entity_seed+11`和`entity_seed+31`；模板RNG只调用一次并有放回抽取规范256模板。若抽中规范模板索引$i$，该次生产control的指定距离层固定为$i\bmod5$，直接复用E25-new对应模板索引的合法语义、指定锚点距离层、固定哈希键和最多128项支撑流，不新增随机数，不允许换模板或换距离层。
+
+每个normal-control候选仍只调用唯一`place_object`，先执行E21支撑身份、E22 grounding、E23已观测正常碰撞和相对当前已有实体的E24 pair collision。随后在候选自身的支撑帧中，以正式`world_seed`、实际`object_id`和当前部分世界执行相同传感器概率、随机身份、最近回波竞争与`render_frame`。候选必须至少产生一个由自身object ID赢得的normal-control回波，并使这些最终float32打包回波的中位official range落入$i\bmod5$；失败只拒绝当前支撑proposal。
+
+全部实体完成后，对最终完整世界中的每个normal-control再次在其自身支撑帧复核相同条件。后放实体若遮挡已有control并使可见回波为0或中位距离换层，本次完整world attempt失败并按冻结seed从头进入下一attempt；不得在同一attempt内移动旧实体、只替换后继实体或回退到其他距离层。`RenderError`、帧身份错误、紧凑与完整renderer不一致及其他接口错误不得作为正常attempt失败吞掉，必须上浮为hard error。
+
+等价加速只改变执行结构：E25-new支撑流按规范模板索引预计算并只读复用；正式slot ID显式传入同一`_accepted_object_hits`以在保守候选角域内执行紧凑多实体竞争；任何拟接受候选仍由完整131,072-slot `render_frame`复核；帧射线变换缓存有界；同一最终world/frame/object复核结果只按完整world identity缓存；24个fork worker各使用一个数值库线程，并按预期实体数从高到低调度后恢复规范world顺序。GPU不参与。
+
+E26-v2继续检查历史E26中的world/report规范JSON、world hash、对象编号与数量、支撑语义、缩放、姿态、材质、最终pair collision、五帧正序/逆序/冻结随机遍历、cache前后request identity、单进程manifest重建和AST唯一权威placement路径。输入先强制核对E25-new的四类各64个规范模板、顺序库哈希以及冻结传感器标定哈希、206来源和frame/slot身份。资格runner从world seed与成功attempt序号独立复算数量、标签shuffle、逐实体seed、control模板/缩放/材质/姿态流和proxy shape/材质/姿态流；逐对象重新核对E21 patch记录、E22 grounding、E23 observed-normal collision和最终E24 pair collision。逐control另要求`proposal_pool_indices`是E25-new对应模板支撑流的精确前缀，最终完整世界的可见回波数至少1，实际距离层等于模板索引指定层。生产世界按冻结模板随机流有放回抽取，因此总体五层计数只报告，不设置$[52,51,51,51,51]$配额或类别×距离额外门。
+
+PASS要求256/256世界完成且四类身份正确；全部上述错误、hard error和48-attempt耗尽均为0。正式资格只执行一次，不自动重试，不形成两遍逐元素复现结论；只保留单次产物的规范往返、遍历/cache不变性、manifest复算和独立只读产物复核。正式命令冻结为`python -m src.render qualify-e26-v2 --data-root /home/jasongao/Data/STU --support-pool runs/ajae/e21_v4_support_pool.npz --calibration runs/ajae/calibration.pt --output runs/ajae/e26_v2_world_builder.npz --processes 24`。若仅48-attempt耗尽而实现错误为0，则分类为完整多实体合法可采样域失败并停止；任何实现审计错误分类为`protocol_implementation_defect`。
+
+实现后的真实train/206冒烟执行使用world seed 2,600,128的mixed世界，未写产物，不计入正式结果。该世界在attempt 0完成，包含2个normal-control和1个anomaly-proxy；两项control的指定与最终距离层计数均为$[1,0,0,1,0]$，可见性、距离身份、支撑流、随机流、hard error和耗尽均为0。
 
 ## 历史 E26｜旧normal-control分布下的权威 world builder 与完整世界规格确定性
 
@@ -4270,8 +4292,8 @@ Notes:
 
 # 6. 如何使用这份状态机推进 AJAE
 
-1. 当前远端状态为 E22-v2 PASS，E23 unlocked。
-2. 先一次性实现和执行冻结 E23–E26 的统一权威 placement/world builder；然后顺序连续运行，不再逐节点重新设计。
+1. 当前权威状态为E25-new PASS，E26-v2合同已冻结并等待唯一一次正式运行。
+2. 历史E23–旧E26及其后E27–E37机械资格均保留；当前先执行E26-v2，再刷新依赖新版control分布的E38–E44。
 3. 每个后续Phase同样先完成整段设计冻结，再执行节点。
 4. preflight只查身份、支持、schema、接口和资源，不查正式结果。
 5. FAIL先按五类分类；`descriptive_deviation`直接记录继续，不能制造新硬门。
@@ -4281,8 +4303,13 @@ Notes:
 从当前节点开始的主执行链为：
 
 $$
-E23\rightarrow E24\rightarrow E25\rightarrow E26
-\rightarrow E27\rightarrow\cdots\rightarrow E49
+E26\text{-v2}\rightarrow E38\rightarrow\cdots\rightarrow E44
+\rightarrow
+\begin{cases}
+E45A\text{-new}\rightarrow E46,\\
+E45B\text{-v2}\rightarrow E48
+\end{cases}
+\rightarrow E49
 \rightarrow E50\rightarrow\cdots\rightarrow E77
 \rightarrow E78\rightarrow\cdots\rightarrow E84
 \rightarrow E85\rightarrow\cdots\rightarrow E98

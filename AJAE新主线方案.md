@@ -1,6 +1,6 @@
 # AJAE 主线方案
 
-> 当前权威基线：本仓库`main`、本文记录的全部历史证据及当前冻结的E25-new合同。旧提交`44fd6d13798e826b2cac8371de26a7d17707dadc`只保留为E22-v2时期的历史基线，不再代表当前工作区状态。
+> 当前权威基线：本仓库`main`、本文记录的全部历史证据、E25-new正式PASS及当前冻结的E26-v2合同。旧提交`44fd6d13798e826b2cac8371de26a7d17707dadc`只保留为E22-v2时期的历史基线，不再代表当前工作区状态。
 
 ---
 
@@ -384,16 +384,16 @@ train/206 中：
 
 ### 2.5.5 身份与证据记录
 
-`WorldSpec` 保存最终不可变世界；独立 `WorldGenerationReport` 至少保存：
+`WorldSpec`保存最终不可变世界；独立`WorldGenerationReport`保存最终成功world attempt的身份及其中每个已接收实体的支撑proposal记录，包括：
 
 - support-patch identity；
 - shape/template identity；
 - material、yaw 和随机流身份；
 - placement proposal index；
 - ground、observed-normal 与 pair-collision 裁决；
-- 所有拒绝原因。
+- 该成功attempt内、各已接收实体在最终接受前经历的全部支撑proposal拒绝原因。
 
-这些字段只用于复现和诊断，不进入 AJAE 输入。
+此前未完成world attempt不会进入这个最终报告；正式资格另以`world_attempt`报告成功前使用的attempt序号。上述字段只用于复现和诊断，不进入AJAE输入。
 
 ## 2.6 每条世界的实体组成与生成顺序
 
@@ -412,7 +412,7 @@ $$
 
 以 $1$ 至 $3$ 个为主，少量世界包含更多异常。normal-control 数量 $M_N$ 采用同一非退化数量域。
 
-完整世界先固定所有实体，再进行任何逐帧渲染。实体生成顺序、support pool 采样、几何、模板、材质、位姿、碰撞重试与对象 ID 均由独立随机流决定。后继实体失败时只能重采后继实体，不能移动或重写已接受实体。
+完整世界先固定所有实体，再进行任何逐帧渲染。实体生成顺序、support pool采样、几何、模板、材质、位姿、碰撞重试与对象ID均由独立随机流决定。在同一个world attempt内，某个实体的候选失败只推进该实体的冻结支撑proposal流，不移动或重写此前已接受实体；若该实体耗尽固定proposal上限，或者全部实体完成后的最终完整世界复核失效，则该world attempt整体失败，并按冻结attempt seed进入下一次完整尝试。
 
 同一个背景区域在不同世界中可以：
 
@@ -1820,7 +1820,7 @@ $$
 
 ---
 
-# 18. 当前状态（当前工作区：E25-new正式PASS，E26-v2已解锁）
+# 18. 当前状态（当前工作区：E25-new正式PASS，E26-v2合同已冻结）
 
 截至当前工作区权威提交，已经完成：
 
@@ -1935,6 +1935,14 @@ E25-new已经在冻结实现提交`e9ee028f48ca43d5191e37373a23722cfeabec66`上�
 
 描述性八方位计数为$[36,43,15,40,52,9,10,51]$，三个遮挡层计数为$[204,50,2]$。正式产物`runs/ajae/e25_new_normal_control.npz`大小580,668字节，SHA-256为`30fc7d1ecd60d005cb18c60ac81b1c7335e2121fcd3f1da5f440b5387a747b19`，科学数组哈希为`4625b8e01be6ba73d41af96e56a530d361c7ecfe5cd9f5c89a0daec64d9fa31a`。结束后的独立只读复核逐项重算fixture身份、模板唯一性、距离层、支撑池身份、对象和放置记录规范往返、材质、E22连续grounding、E23深穿透、遮挡、方位、proposal守恒和科学哈希，全部一致；该复核没有重采对象，不形成第二遍正式运行结论。
 
+E26-v2现已冻结为E25-new选择器的唯一生产接入资格。它完整继承历史E26的256个world seeds、四类world各64个、1–9实体数量流、48次完整world attempt、entity seed、标签顺序、schema 7 shape流、E21–E24、不可变`WorldSpec`、规范world/report/request身份和窗口/cache审计。normal-control仍按既有`template_seed=entity_seed+1`有放回抽取规范模板，不额外消费随机数；抽中模板索引$i$后，指定距离层固定为$i\bmod5$，支撑proposal直接复用E25-new对应模板的合法语义、指定锚点层和固定128项流。缩放、材质和姿态seed继续为`entity_seed+2`、`entity_seed+11`和`entity_seed+31`。
+
+每个control先在当前部分世界的自身支撑帧使用正式world seed和实际object ID执行传感器接受、最近回波竞争与完整renderer复核；全部实体完成后，再在最终完整世界的同一支撑帧复核至少一个自身可见回波和中位official range层。后放实体使已有control失去资格时，整个确定性world attempt失败并进入既有下一attempt，不移动旧实体、不换模板或距离层。总体五层数量只报告，不设置均匀配额；真实目标和E45A五项caliper不进入E26-v2。
+
+生产与资格runner都只调用修改后的唯一`sample_training_world`。实现先核对E25-new规范模板库和冻结传感器标定身份，在fork前预计算全部E25-new支撑流，以原始slot ID在保守角域中调用同一多实体回波竞争，并对任何接受候选保留完整131,072-slot renderer复核；传感器或接口`RenderError`直接形成hard error，不再被当作正常world attempt耗尽。资格runner从world seed与成功attempt序号独立复算数量、标签顺序、逐实体seed及两类对象的随机流，并逐对象复算E21记录、E22 grounding、E23 collision和最终E24 pair。真实train/206冒烟世界2,600,128在attempt 0完成，包含2个control和1个proxy，两项control的指定与最终层均为$[1,0,0,1,0]$，当时已有的control审计错误与hard error均为0；该冒烟不写产物、不计入正式资格，新增的完整独立审计仍以正式运行为准。
+
+E26-v2正式运行固定24个fork worker、每个数值库单线程，只执行一次且不自动重试。命令为`python -m src.render qualify-e26-v2 --data-root /home/jasongao/Data/STU --support-pool runs/ajae/e21_v4_support_pool.npz --calibration runs/ajae/calibration.pt --output runs/ajae/e26_v2_world_builder.npz --processes 24`。PASS要求256/256世界完成，四类身份正确，全部E21–E24、control可见性与距离身份、支撑流和随机流复核、规范往返、pair、遍历、manifest、权威路径、hard error和耗尽计数均为0。
+
 这里的距离循环是用于构造反作弊正常对照的覆盖导向采样，不是对真实正常场景距离分布的估计。每个45度方位扇区的总体与分类别计数、最大扇区计数和占比，以及遮挡层与$N_{vis}$分布均只作描述。
 
 当前可成立的局部结论是：
@@ -1951,7 +1959,7 @@ E25-new已经在冻结实现提交`e9ee028f48ca43d5191e37373a23722cfeabec66`上�
 当前执行节点为：
 
 $$
-\boxed{E25\text{-v2/v3 FAIL RETAINED};\quad E25\text{-new PASS};\quad E26\text{-v2 UNLOCKED}}
+\boxed{E25\text{-v2/v3 FAIL RETAINED};\quad E25\text{-new PASS};\quad E26\text{-v2 FROZEN BEFORE FORMAL RUN}}
 $$
 
 E23与E24-v2已按冻结设计通过，当前顺序为：

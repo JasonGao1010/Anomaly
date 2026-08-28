@@ -1845,11 +1845,11 @@
           }
         },
         "placement_world_builder_E23_E26": {
-          "status": "E23 PASS; E24 FAIL retained; E24-v2 PASS; old E25/E26 PASS retained; E25-v2 and E25-v3 FAIL retained; E25-new PASS; E26-v2 unlocked",
+          "status": "E23 PASS; E24 FAIL retained; E24-v2 PASS; old E25/E26 PASS retained; E25-v2 and E25-v3 FAIL retained; E25-new PASS; E26-v2 frozen before its single formal run",
           "design_authorities": ["AJAE新主线方案.md", "AJAE实验执行状态机.md"],
           "design_authority_sha256": {
-            "main_plan": "ecb2710fb997ff338b82b1b4a21e18d1300818e0a47dd63dc381233c4205fe79",
-            "state_machine": "844e6470292e476da66b67b2100a6db0a703856663ef9a6fe2d749821e3b5e3e"
+            "main_plan": "af0c30ee69bd5bc4e264b0f96deb1a0ed37feb8f523a2b78ec7ad35d72dded59",
+            "state_machine": "7f2c99b4bc94f618a0df5f4c35ecac18bd8c72f4cc828b0fbb00eb890a650443"
           },
           "historical_E23_through_old_E26_implementation_identity": {
             "scope": "historical E23 through old E26 only; it is not the E25-new implementation identity",
@@ -2491,6 +2491,58 @@
             "failure_route": "retain the single formal FAIL and stop for owner decision without changing templates, assigned bins, proposal limit, renderer or downstream matching criteria",
             "claim_limit": "The index-cycle distance allocation is coverage-oriented sampling for anti-shortcut normal controls, not an estimate of the real-normal scene distance distribution. E25-new does not establish real/control common support or source indistinguishability."
           },
+          "E26-v2": {
+            "status": "FROZEN BEFORE FORMAL RUN; active production-world qualification",
+            "purpose": "qualify the sole production world builder after direct integration of the E25-new coverage-oriented normal-control selector",
+            "frozen_inputs": {
+              "normal_template_counts": {"10": 64, "18": 64, "20": 64, "30": 64},
+              "normal_template_library_sha256": "de5dfd765ac7d4fe4bb4644c40ecafdd80cdc31a3d0b6fc4fccd8e84a9fd906b",
+              "support_pool_sha256": "0e6e7299157f5e9ced0716f6dd14881c66ba1bca0cc9c372550e56f426ea844d",
+              "sensor_calibration_sha256": "b532b7e04d9025233b2768b8fb36287e477f62f20a3ff685a62f4a4a29bfefe0",
+              "sensor_provenance": "train/206 and the exact 449 calibration frame IDs and 131072 file slots"
+            },
+            "inherited_world_identity": {
+              "world_seeds": [2600000, 2600255],
+              "world_type_quota_each": 64,
+              "world_type_assignment": "indices 0-63 pure_normal, 64-127 control_only, 128-191 mixed and 192-255 anomaly_only",
+              "entity_count_stream": "unchanged _training_entity_counts(world_type,world_seed) draw over 1-9 entities for nonempty labels",
+              "maximum_world_attempts": 48,
+              "world_attempt_seed": "world_seed+1000003*world_attempt",
+              "entity_seed": "attempt_seed+10007*(entity_index+1)",
+              "label_order": "unchanged shuffle from the attempt RNG",
+              "internal_attempt_boundary": "48 world attempts are the frozen finite generator proposal domain, not automatic repetition of the formal experiment"
+            },
+            "normal_control_stream": {
+              "template_selection": "retain the single existing default_rng(entity_seed+1).integers(0,256) draw with replacement; no additional RNG call",
+              "assigned_range_bin": "selected canonical template index mod 5",
+              "support_stream": "the exact E25-new legal-semantic, assigned-anchor-bin and lowest-128 hash stream for that canonical template index; no template or bin fallback",
+              "scale_seed": "entity_seed+2 with SeedSequence([scale_seed,2501])",
+              "material_seed": "entity_seed+11",
+              "pose_seed": "entity_seed+31 with SeedSequence([pose_seed,2502])",
+              "partial_world_adjudication": "after E21-E24, use the support frame, actual world_seed, actual object_id, current partial world, calibrated return acceptance, nearest competition and complete renderer; require at least one return won by this object and median packed official range in its assigned bin",
+              "complete_world_adjudication": "after all entities are placed, repeat the same object-specific check in the final complete world at each control's support frame",
+              "later_occlusion_rule": "if a later entity invalidates an existing control, reject the complete world attempt and use the next frozen attempt; never move an accepted old entity or change its template/range bin"
+            },
+            "anomaly_proxy_stream": "unchanged entity_seed+3+3072*q shape proposal stream for q=0..63, first E22-qualified shape, followed by the unchanged maximum 128 E21-E24 placement proposals",
+            "unchanged": ["E21 support identity", "E22 continuous grounding", "E23 observed-normal collision", "E24 pair collision", "return probability", "intensity", "nearest-return semantics", "WorldSpec and WorldGenerationReport formats", "world/count/label/anomaly random identities", "five-frame request identity and cache invariance"],
+            "forbidden_generation_inputs": ["train/201", "real-normal target identity", "median-beam caliper", "Nvis caliper", "occlusion caliper", "local-density caliper", "E45A matching outcome", "E46 classifier output"],
+            "aggregate_range_policy": "production templates are sampled with replacement from the frozen stream; aggregate and class range counts are descriptive only and have no [52,51,51,51,51] or class-by-range quota",
+            "audits": ["canonical world/report JSON and world hash", "independent reconstruction of count, successful-attempt, label shuffle and per-entity random identities", "exact E21 patch-record identity", "independent E22 grounding and E23 observed-normal collision recomputation", "final E24 pair collision", "legal support semantics", "independent scale/pose/material reconstruction for both labels", "template seed and canonical template index", "exact E25-new support-stream prefix", "object-specific final visibility and assigned range identity", "forward/reverse/frozen-random five-frame traversal", "cache/request identity", "serial manifest reconstruction for completed worlds", "AST sole-placement authority"],
+            "pass_conditions": ["256 of 256 worlds complete with 64 of each frozen world type", "every control has at least one final complete-world visible return in its assigned template-index range bin", "all E21-E24, support, scale, pose, material, support-stream, random-stream, pair, canonical round-trip, traversal, manifest and authority errors equal zero", "hard errors equal zero", "48-attempt world exhaustion equals zero"],
+            "formal_repetitions": 1,
+            "automatic_retry": false,
+            "reproducibility_check": "not run by owner decision; canonical round trips, traversal/cache invariance, serial manifest reconstruction and an independent read-only artifact validation remain required",
+            "report_scope": "WorldGenerationReport records the final successful world attempt and all support-proposal rejections before each accepted entity within that attempt; prior failed world attempts are represented only by the final world_attempt index",
+            "cpu_execution": "24 fork workers, one numeric-library thread per process, expected-cost scheduling restored to canonical world order, read-only precomputed support streams, bounded frame caches and complete renderer confirmation",
+            "gpu_used": false,
+            "implementation_error_policy": "RenderError and all identity, compact/full-renderer or implementation-audit errors surface as hard errors and cannot be consumed as ordinary world attempts",
+            "failure_classification": {"implementation_errors_nonzero": "protocol_implementation_defect", "only_finite_world_attempt_exhaustion_nonzero": "multi_entity_world_sampling_failure"},
+            "command": "python -m src.render qualify-e26-v2 --data-root /home/jasongao/Data/STU --support-pool runs/ajae/e21_v4_support_pool.npz --calibration runs/ajae/calibration.pt --output runs/ajae/e26_v2_world_builder.npz --processes 24",
+            "artifact": "runs/ajae/e26_v2_world_builder.npz",
+            "smoke_execution": {"formal_evidence": false, "artifact_written": false, "world_seed": 2600128, "world_type": "mixed", "world_attempt": 0, "normal_controls": 2, "anomaly_proxies": 1, "assigned_range_count": [1, 0, 0, 1, 0], "final_range_count": [1, 0, 0, 1, 0], "control_visibility_errors": 0, "control_range_errors": 0, "control_support_stream_errors": 0, "control_random_stream_errors": 0, "hard_errors": 0, "placement_exhaustions": 0},
+            "pass_route": "close current Phase 2, retain E27-E37 mechanical qualifications, refresh E38-E44 on the new control distribution, then execute E45A-new and E45B-v2",
+            "failure_route": "retain the single formal result and stop for owner decision without changing E25-new, the 48-attempt bound, renderer or downstream matching criteria"
+          },
           "E26": {
             "status": "HISTORICAL PASS for the old normal-control distribution only; current E26-v2 has not run and current Phase 2 is not closed by this result",
             "world_seeds": [2600000, 2600255],
@@ -2562,7 +2614,7 @@
       }
     },
     "renderer_mechanical_qualification": {
-      "status": "E25-v2 and E25-v3 normal-control FAIL retained; E25-new PASS and E26-v2 unlocked; E27-E37 mechanical qualifications retained; E38-E45A and E45B are distribution-dependent and require refresh after E26-v2; E46 and E48 remain locked",
+      "status": "E25-v2 and E25-v3 normal-control FAIL retained; E25-new PASS and E26-v2 frozen before its single formal run; E27-E37 mechanical qualifications retained; E38-E45A and E45B are distribution-dependent and require refresh after E26-v2; E46 and E48 remain locked",
       "layer_boundaries": {"E27-E28": "direct geometry outputs only", "E29": "return probability and deterministic acceptance decision only", "E30-E31": "accepted returns", "E32-E33": "nearest-return occlusion competition"},
       "E27": {
         "question": "Does the formal geometry path return the correct nearest convex-hull hit, outward finite normal and object ID for active normal-control templates when return rejection is disabled?",

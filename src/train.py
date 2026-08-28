@@ -11,7 +11,7 @@ import os
 import random
 import weakref
 from collections import OrderedDict
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from fractions import Fraction
 from pathlib import Path
@@ -1811,13 +1811,16 @@ def build_formal_training(
         )
         from .render import (
             PROCEDURAL_GENERATOR_SCHEMA,
+            FROZEN_SENSOR_CALIBRATION_SHA256,
+            build_coverage_control_context,
+            canonical_normal_template_library_identity,
             extract_normal_template_library,
             collect_observed_obstacle_index,
             load_qualified_support_pool,
             load_sensor_calibration,
+            precompute_coverage_control_support_streams,
             render_frame as render_counterfactual_frame,
             sample_training_world,
-            trajectory_yaw_by_frame,
         )
         from .scene import (
             LabelMode,
@@ -1834,13 +1837,16 @@ def build_formal_training(
         )
         from render import (  # type: ignore[no-redef]
             PROCEDURAL_GENERATOR_SCHEMA,
+            FROZEN_SENSOR_CALIBRATION_SHA256,
+            build_coverage_control_context,
+            canonical_normal_template_library_identity,
             extract_normal_template_library,
             collect_observed_obstacle_index,
             load_qualified_support_pool,
             load_sensor_calibration,
+            precompute_coverage_control_support_streams,
             render_frame as render_counterfactual_frame,
             sample_training_world,
-            trajectory_yaw_by_frame,
         )
         from scene import (  # type: ignore[no-redef]
             LabelMode,
@@ -1859,6 +1865,8 @@ def build_formal_training(
     calibration_path = getattr(protocol, "sensor_calibration_path")()
     ray_grid, sensor = load_sensor_calibration(calibration_path)
     calibration_sha256 = _sha256_file(calibration_path)
+    if calibration_sha256 != FROZEN_SENSOR_CALIBRATION_SHA256:
+        raise TrainingError("formal sensor calibration identity changed")
     render = getattr(protocol, "render", None)
     ray_spec = render.get("ray_grid") if isinstance(render, Mapping) else None
     required_provenance = {
@@ -1911,20 +1919,17 @@ def build_formal_training(
             training_source_digest.update(array.tobytes(order="C"))
         digested_frames.add(frame_id)
 
-    def template_frames() -> Iterator[object]:
-        for frame_id in sequence.frame_ids:
-            frame = sequence.source_frame(frame_id)
-            if frame.slot_count != ray_grid.slot_count:
-                raise TrainingError(
-                    "train/206 frame does not match the canonical ray grid"
-                )
-            digest_training_frame(frame)
-            yield frame
-
-    normal_templates = extract_normal_template_library(template_frames())
-    for frame_id in sequence.frame_ids:
-        if frame_id not in digested_frames:
-            digest_training_frame(sequence.source_frame(frame_id))
+    training_frames = tuple(
+        sequence.source_frame(frame_id) for frame_id in sequence.frame_ids
+    )
+    for frame in training_frames:
+        if frame.slot_count != ray_grid.slot_count:
+            raise TrainingError(
+                "train/206 frame does not match the canonical ray grid"
+            )
+        digest_training_frame(frame)
+    normal_templates = extract_normal_template_library(training_frames)
+    canonical_normal_template_library_identity(normal_templates)
     if digested_frames != set(sequence.frame_ids):
         raise TrainingError("train/206 content identity is incomplete")
     training_source_sha256 = training_source_digest.hexdigest()
@@ -1938,11 +1943,12 @@ def build_formal_training(
     support_pool = load_qualified_support_pool(
         project_root / "runs/ajae/e21_v4_support_pool.npz"
     )
-    obstacle_index = collect_observed_obstacle_index(
-        sequence.source_frame(frame_id) for frame_id in sequence.frame_ids
+    obstacle_index = collect_observed_obstacle_index(training_frames)
+    control_context = build_coverage_control_context(
+        training_frames, support_pool, ray_grid, sensor
     )
-    trajectory_yaws = trajectory_yaw_by_frame(
-        tuple(sequence.source_frame(frame_id) for frame_id in sequence.frame_ids)
+    precompute_coverage_control_support_streams(
+        control_context, normal_templates
     )
 
     def world_factory(world_type: str, seed: int) -> object:
@@ -1952,7 +1958,7 @@ def build_formal_training(
             raise TrainingError("world factory seed must be a non-negative integer")
         world, report = sample_training_world(
             normal_templates, support_pool, obstacle_index, world_type, seed,
-            trajectory_yaw_by_frame=trajectory_yaws,
+            control_context=control_context,
         )
         report_dir = run_root / "world_reports"
         report_dir.mkdir(parents=True, exist_ok=True)
