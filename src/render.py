@@ -7508,6 +7508,15 @@ _E25V3_SUPPORT_ROWS: dict[tuple[int, tuple[int, ...]], np.ndarray] = {}
 _E25V3_PLANE_NORMALS = np.empty((0, 3, 3), dtype=np.float64)
 _E25V3_PLANE_OFFSETS = np.empty((0, 3), dtype=np.float64)
 _E25V3_PLANE_RADIUS = np.empty(0, dtype=np.float64)
+_E45_UNIT_FIELDS = (
+    "bank_seed", "source", "center_frame", "frame_id", "support_semantic",
+    "range_bin", "azimuth_sector", "median_distance_m", "median_beam", "Nvis",
+    "O_hat", "local_density", "geometry_hits", "point_count", "point_features",
+    "unit_hash",
+)
+_E25_REAL_TARGET_FIELDS = _E45_UNIT_FIELDS + (
+    "real_semantic", "real_instance", "reference_support_pool_index",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -7520,66 +7529,6 @@ class _E25V2SensorTrace:
     valid: np.ndarray
     in_range: np.ndarray
     accepted: np.ndarray
-
-
-def _real_instance_support_row(
-    frame: SourceFrame, pool: QualifiedSupportPool,
-    semantic: int, instance: int,
-) -> int | None:
-    """Bind one observed instance to its nearest legal qualified support patch."""
-    assert frame.labels is not None
-    rows = np.flatnonzero(np.abs(pool.frames - frame.frame_id) <= 2)
-    rows = rows[np.isin(
-        pool.semantics[rows], tuple(normal_control_support_semantics(semantic))
-    )]
-    if rows.size == 0:
-        return None
-    selected = (
-        (frame.labels.semantic == np.uint16(semantic))
-        & (frame.labels.instance == np.uint16(instance))
-        & ~np.asarray(frame.zero_slot_mask, dtype=np.bool_)
-    )
-    sensor_points = np.asarray(frame.xyzi[selected, :3], dtype=np.float64)
-    if sensor_points.shape[0] < 4:
-        return None
-    rotation, translation = _pose(frame)
-    world_points = sensor_points @ rotation.T + translation
-    try:
-        hull = ConvexHull(world_points[:, :2])
-    except QhullError:
-        return None
-    patch_xy = pool.anchors_world_m[rows, :2]
-    equations = np.asarray(hull.equations, dtype=np.float64)
-    inside = np.all(
-        patch_xy @ equations[:, :2].T + equations[:, 2] <= 0.5, axis=1
-    )
-    if bool(inside.any()):
-        eligible = rows[inside]
-        distance = np.linalg.norm(
-            pool.anchors_world_m[eligible, :2] - np.mean(world_points[:, :2], axis=0),
-            axis=1,
-        )
-    else:
-        polygon = world_points[np.asarray(hull.vertices), :2]
-        starts, ends = polygon, np.roll(polygon, -1, axis=0)
-        edges = ends - starts
-        denominator = np.sum(np.square(edges), axis=1)
-        relative = patch_xy[:, None, :] - starts[None, :, :]
-        fraction = np.clip(
-            np.divide(
-                np.sum(relative * edges[None, :, :], axis=2),
-                denominator[None, :],
-                out=np.zeros((rows.size, edges.shape[0]), dtype=np.float64),
-                where=denominator[None, :] > 0.0,
-            ),
-            0.0, 1.0,
-        )
-        closest = starts[None, :, :] + fraction[:, :, None] * edges[None, :, :]
-        all_distance = np.min(
-            np.linalg.norm(patch_xy[:, None, :] - closest, axis=2), axis=1
-        )
-        eligible, distance = rows, all_distance
-    return int(eligible[np.lexsort((pool.selection_hashes[eligible], distance))[0]])
 
 
 def _xy_hull_distance(
@@ -8179,81 +8128,188 @@ def run_e25_v3_target_qualification(
     return result
 
 
-def _e25v2_target_frame(frame_id: int) -> dict[str, np.ndarray]:
-    sequence, pool, grid = _E25V2_SEQUENCE, _E25V2_SUPPORT_POOL, _E25V2_RAY_GRID
-    if sequence is None or pool is None or grid is None:
-        raise RuntimeError("E25-v2 target extraction is not initialized")
-    frame = sequence.source_frame(frame_id)
-    assert frame.labels is not None
-    real = ~np.asarray(frame.zero_slot_mask, dtype=np.bool_)
-    semantic = np.asarray(frame.labels.semantic)
-    instance = np.asarray(frame.labels.instance)
-    official = np.asarray(grid.official_ranges(frame))
-    eligible_range = real & (official >= 2.5) & (official <= 50.0)
-    packed = semantic.astype(np.uint32) | (instance.astype(np.uint32) << np.uint32(16))
-    records: list[dict[str, np.ndarray]] = []
-    active = frozenset(_E25V2_TEMPLATES)
-    for value, count in zip(
-        *np.unique(packed[eligible_range], return_counts=True), strict=True
+def _load_e25_real_target_bank(
+    path: Path | str, expected_experiment: str,
+) -> tuple[Path, dict[str, np.ndarray], dict[str, object]]:
+    """Load one immutable real-target bank and verify its scientific payload."""
+    target_path = Path(path).expanduser().resolve(strict=True)
+    required = set(_E25_REAL_TARGET_FIELDS) | {"metadata_json"}
+    with np.load(target_path, allow_pickle=False) as payload:
+        if not required.issubset(payload.files):
+            raise PlacementError("E25 real-target bank is missing required arrays")
+        metadata = json.loads(str(payload["metadata_json"].item()))
+        targets = {
+            name: np.ascontiguousarray(np.asarray(payload[name]))
+            for name in _E25_REAL_TARGET_FIELDS
+        }
+    count = int(targets["frame_id"].size)
+    if (
+        metadata.get("experiment") != expected_experiment
+        or metadata.get("source_sequence") != "train/206"
+        or not bool(metadata.get("passed"))
+        or count < 1
+        or any(value.shape[0] != count for value in targets.values())
+        or int(metadata.get("target_units", -1)) != count
+        or np.unique(targets["unit_hash"]).size != count
+        or metadata.get("scientific_array_hash") != _scientific_array_hash(targets)
     ):
-        raw = int(value & np.uint32(0xFFFF))
-        identifier = int(value >> np.uint32(16))
-        if raw not in active or identifier == 0 or int(count) < 16:
-            continue
-        support_row = _real_instance_support_row(frame, pool, raw, identifier)
-        if support_row is None:
-            continue
-        try:
-            geometry, returned, _ = _gate1_real_geometry(
-                frame, raw, identifier, grid
-            )
-            unit = _e45_unit_record(
-                frame, grid, 0, 0, frame_id, raw, identifier,
-                int(pool.semantics[support_row]), geometry, returned, frame,
-            )
-        except RenderError:
-            continue
-        if (
-            int(unit["point_count"]) < 1
-            or int(unit["range_bin"]) < 0
-            or not 0.0 <= float(unit["O_hat"]) <= 1.0
-        ):
-            continue
-        unit.update({
-            "real_semantic": np.asarray(raw, dtype=np.uint16),
-            "real_instance": np.asarray(identifier, dtype=np.uint16),
-            "reference_support_pool_index": np.asarray(support_row, dtype=np.int64),
-        })
-        records.append(unit)
-    fields = _E45_UNIT_FIELDS + (
-        "real_semantic", "real_instance", "reference_support_pool_index",
-    )
-    if not records:
-        return {name: np.empty(0, dtype=np.float64) for name in fields}
-    return {name: np.stack([record[name] for record in records]) for name in fields}
+        raise PlacementError("E25 real-target bank failed identity or hash validation")
+    return target_path, targets, metadata
 
 
-def _e25v2_target_bank(
-    sequence: object, pool: QualifiedSupportPool, grid: RayGrid,
-    templates: Mapping[int, tuple[NormalTemplateShape, ...]], *, processes: int,
-) -> dict[str, np.ndarray]:
-    global _E25V2_SEQUENCE, _E25V2_SUPPORT_POOL, _E25V2_RAY_GRID, _E25V2_TEMPLATES
-    _E25V2_SEQUENCE, _E25V2_SUPPORT_POOL, _E25V2_RAY_GRID = sequence, pool, grid
-    _E25V2_TEMPLATES = dict(templates)
-    frame_ids = tuple(map(int, sequence.frame_ids))
-    with mp.get_context("fork").Pool(
-        processes=processes, maxtasksperchild=16
-    ) as workers:
-        frame_records = workers.map(_e25v2_target_frame, frame_ids, chunksize=1)
-    fields = _E45_UNIT_FIELDS + (
-        "real_semantic", "real_instance", "reference_support_pool_index",
+def build_e25_v3_target_bank(
+    source_target_bank_path: Path | str,
+    target_qualification_path: Path | str,
+    output_path: Path | str,
+) -> dict[str, object]:
+    """Materialize only E25-v3-qualified identities with their selected support."""
+    source_path, source, source_metadata = _load_e25_real_target_bank(
+        source_target_bank_path, "E25-v2-real-normal-target-bank"
     )
-    nonempty = [record for record in frame_records if record["real_semantic"].size]
-    if not nonempty:
-        raise PlacementError("train/206 has no qualified real-normal observation targets")
-    arrays = {name: np.concatenate([record[name] for record in nonempty]) for name in fields}
-    order = np.argsort(arrays["unit_hash"], kind="stable")
-    return {name: np.ascontiguousarray(value[order]) for name, value in arrays.items()}
+    qualification_path = Path(target_qualification_path).expanduser().resolve(
+        strict=True
+    )
+    identity_fields = {
+        "frame_id": "frame_id", "real_semantic": "real_semantic",
+        "real_instance": "real_instance", "range_bin": "range_bin",
+        "O_hat": "occlusion", "Nvis": "visible_return_count",
+        "unit_hash": "unit_hash",
+    }
+    required = set(identity_fields.values()) | {
+        "compatible", "rejection_code", "selected_support_row",
+        "selected_support_semantic",
+        "metadata_json",
+    }
+    with np.load(qualification_path, allow_pickle=False) as payload:
+        if not required.issubset(payload.files):
+            raise PlacementError("E25-v3 qualification is missing required arrays")
+        qualification_metadata = json.loads(str(payload["metadata_json"].item()))
+        qualification_arrays = {
+            name: np.ascontiguousarray(np.asarray(payload[name]))
+            for name in payload.files if name != "metadata_json"
+        }
+    count = int(source["frame_id"].size)
+    if (
+        qualification_metadata.get("experiment")
+        != "E25-v3-target-support-qualification"
+        or not bool(qualification_metadata.get("passed"))
+        or qualification_metadata.get("target_bank_sha256")
+        != _sha256_path(source_path)
+        or qualification_metadata.get("scientific_array_hash")
+        != _scientific_array_hash(qualification_arrays)
+        or any(
+            qualification_arrays[qualification_name].shape[0] != count
+            or not np.array_equal(
+                source[source_name], qualification_arrays[qualification_name]
+            )
+            for source_name, qualification_name in identity_fields.items()
+        )
+    ):
+        raise PlacementError("E25-v3 qualification does not match its source bank")
+    compatible = np.asarray(qualification_arrays["compatible"], dtype=np.bool_)
+    selected_rows = np.asarray(
+        qualification_arrays["selected_support_row"], dtype=np.int64
+    )
+    selected_semantics = np.asarray(
+        qualification_arrays["selected_support_semantic"], dtype=np.uint16
+    )
+    legal_semantics = np.asarray([
+        int(selected_semantics[index]) in normal_control_support_semantics(
+            int(source["real_semantic"][index])
+        )
+        for index in np.flatnonzero(compatible)
+    ], dtype=np.bool_)
+    if (
+        int(np.count_nonzero(compatible))
+        != int(qualification_metadata.get("retained", -1))
+        or not np.array_equal(
+            compatible, qualification_arrays["rejection_code"] == 0
+        )
+        or np.any(selected_rows[compatible] < 0)
+        or np.any(selected_semantics[compatible] == 0)
+        or not bool(np.all(legal_semantics))
+        or np.any(selected_rows[~compatible] != -1)
+        or np.any(selected_semantics[~compatible] != 0)
+    ):
+        raise PlacementError("E25-v3 qualification selection sentinels are invalid")
+    targets = {
+        name: np.ascontiguousarray(values[compatible])
+        for name, values in source.items()
+    }
+    # Old E25-v2 support bindings are deliberately replaced, not repaired in place.
+    targets["support_semantic"] = np.ascontiguousarray(
+        selected_semantics[compatible]
+    )
+    targets["reference_support_pool_index"] = np.ascontiguousarray(
+        selected_rows[compatible]
+    )
+    target_count = int(targets["frame_id"].size)
+    center_frames = int(np.unique(targets["frame_id"]).size)
+    real_instances = int(np.unique(np.column_stack((
+        targets["real_semantic"], targets["real_instance"]
+    )), axis=0).shape[0])
+    range_count = np.bincount(targets["range_bin"], minlength=5)[:5]
+    occlusion_count = np.bincount(np.searchsorted(
+        np.asarray((0.25, 0.75)), targets["O_hat"], side="right"
+    ), minlength=3)[:3]
+    class_count = {
+        str(int(semantic)): int(np.count_nonzero(
+            targets["real_semantic"] == semantic
+        ))
+        for semantic in np.unique(targets["real_semantic"])
+    }
+    passed = (
+        target_count == int(qualification_metadata["retained"])
+        and set(map(int, np.unique(targets["real_semantic"]))) == {10, 18, 20, 30}
+        and bool(np.all(range_count > 0)) and bool(np.all(occlusion_count > 0))
+        and center_frames >= 100 and real_instances >= 32
+    )
+    result: dict[str, object] = {
+        "experiment": "E25-v3-real-normal-target-bank",
+        "passed": passed,
+        "source_sequence": "train/206",
+        "target_units": target_count,
+        "center_frames": center_frames,
+        "real_instances": real_instances,
+        "class_count": class_count,
+        "range_count": range_count.tolist(),
+        "occlusion_layer_count": occlusion_count.tolist(),
+        "support_semantic_count": {
+            str(semantic): int(np.count_nonzero(
+                targets["support_semantic"] == semantic
+            ))
+            for semantic in (40, 48)
+        },
+        "support_binding": "selected E25-v3 E21-v4 local-compatible support row",
+        "real_observation_numeric_covariates_changed": False,
+        "support_semantic_replaced": True,
+        "old_e25_v2_support_bindings_used": False,
+        "formal_repetitions": 1,
+        "elementwise_reproduced": None,
+        "reproducibility_check": "not_run_by_owner_decision",
+        "source_target_bank_sha256": _sha256_path(source_path),
+        "source_target_bank_scientific_array_hash": source_metadata[
+            "scientific_array_hash"
+        ],
+        "target_qualification_sha256": _sha256_path(qualification_path),
+        "target_qualification_scientific_array_hash": qualification_metadata[
+            "scientific_array_hash"
+        ],
+        "support_pool_sha256": qualification_metadata["support_pool_sha256"],
+        "scientific_array_hash": _scientific_array_hash(targets),
+        "claim_limit": "The bank contains only train/206 real-observation targets with a selected E21-v4 patch inside its verified local domain; it does not assert per-class full range or occlusion coverage.",
+    }
+    if not passed:
+        raise PlacementError("E25-v3 target-bank build lost frozen aggregate coverage")
+    destination = Path(output_path).expanduser().resolve()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_suffix(destination.suffix + ".tmp.npz")
+    np.savez_compressed(
+        temporary, **targets,
+        metadata_json=np.asarray(json.dumps(result, sort_keys=True, separators=(",", ":"))),
+    )
+    os.replace(temporary, destination)
+    return result
 
 
 def _e25v2_support_streams(
@@ -8908,14 +8964,14 @@ def _e25v2_work_order() -> tuple[int, ...]:
     return tuple(sorted(range(len(templates)), key=lambda i: (-costs[i], i)))
 
 
-def run_e25_v2_qualification(
+def run_e25_v3_normal_control_qualification(
     data_root: Path | str, support_pool_path: Path | str,
-    calibration_path: Path | str, target_output_path: Path | str,
+    calibration_path: Path | str, target_bank_path: Path | str,
     output_path: Path | str, *, processes: int = 12,
 ) -> dict[str, object]:
-    """Qualify the train/206 observation-conditioned formal control placer."""
+    """Qualify formal controls conditioned on the E25-v3 train/206 target bank."""
     if processes != 12:
-        raise PlacementError("formal E25-v2 requires exactly 12 control workers")
+        raise PlacementError("formal E25-v3 requires exactly 12 control workers")
     try:
         from .protocol import load_protocol
         from .scene import LabelMode, STUSequence
@@ -8936,33 +8992,34 @@ def run_e25_v2_qualification(
     }
     pool = load_qualified_support_pool(support_pool_path)
     grid, sensor = load_sensor_calibration(calibration_path)
-    targets = _e25v2_target_bank(
-        sequence, pool, grid, by_semantic, processes=4
+    target_path, targets, target_metadata = _load_e25_real_target_bank(
+        target_bank_path, "E25-v3-real-normal-target-bank"
     )
-    target_path = Path(target_output_path).expanduser().resolve()
-    target_path.parent.mkdir(parents=True, exist_ok=True)
-    target_metadata = {
-        "experiment": "E25-v2-real-normal-target-bank", "passed": True,
-        "source_sequence": "train/206", "target_units": int(targets["frame_id"].size),
-        "center_frames": int(np.unique(targets["frame_id"]).size),
-        "real_instances": int(np.unique(np.column_stack((
-            targets["real_semantic"], targets["real_instance"]
-        )), axis=0).shape[0]),
-        "range_count": np.bincount(targets["range_bin"], minlength=5)[:5].tolist(),
-        "occlusion_layer_count": np.bincount(np.searchsorted(
-            np.asarray((0.25, 0.75)), targets["O_hat"], side="right"
-        ), minlength=3).tolist(),
-        "formal_repetitions": 1,
-        "elementwise_reproduced": None,
-        "reproducibility_check": "not_run_by_owner_decision",
-        "scientific_array_hash": _scientific_array_hash(targets),
-    }
-    temporary = target_path.with_suffix(target_path.suffix + ".tmp.npz")
-    np.savez_compressed(
-        temporary, **targets,
-        metadata_json=np.asarray(json.dumps(target_metadata, sort_keys=True, separators=(",", ":"))),
+    support_path = Path(support_pool_path).expanduser().resolve(strict=True)
+    reference_rows = np.asarray(
+        targets["reference_support_pool_index"], dtype=np.int64
     )
-    os.replace(temporary, target_path)
+    if (
+        target_metadata.get("support_pool_sha256") != _sha256_path(support_path)
+        or np.any(reference_rows < 0)
+        or np.any(reference_rows >= pool.frames.size)
+    ):
+        raise PlacementError("E25-v3 target support bindings do not match E21-v4")
+    frame_offsets = pool.frames[reference_rows] - targets["frame_id"]
+    if (
+        not np.array_equal(
+            pool.semantics[reference_rows], targets["support_semantic"]
+        )
+        or not bool(np.all(np.isin(frame_offsets, _E25V3_FRAME_OFFSETS)))
+        or any(
+            int(targets["support_semantic"][index])
+            not in normal_control_support_semantics(
+                int(targets["real_semantic"][index])
+            )
+            for index in range(targets["frame_id"].size)
+        )
+    ):
+        raise PlacementError("E25-v3 target support bindings do not match E21-v4")
     sequence._frames.clear()
     gc.collect()
     obstacles = collect_observed_obstacle_index(
@@ -8991,8 +9048,14 @@ def run_e25_v2_qualification(
         trajectory_yaws[frame_id] = math.atan2(
             float(horizontal[1]), float(horizontal[0])
         )
-    global _E25_TEMPLATES, _E25V2_OBSTACLES, _E25V2_TRAJECTORY_YAW, _E25V2_SENSOR
-    global _E25V2_TARGETS, _E25V2_SUPPORT_ROWS
+    global _E25_TEMPLATES, _E25V2_SEQUENCE, _E25V2_SUPPORT_POOL
+    global _E25V2_RAY_GRID, _E25V2_TEMPLATES, _E25V2_OBSTACLES
+    global _E25V2_TRAJECTORY_YAW, _E25V2_SENSOR, _E25V2_TARGETS
+    global _E25V2_SUPPORT_ROWS
+    _E25V2_SEQUENCE = sequence
+    _E25V2_SUPPORT_POOL = pool
+    _E25V2_RAY_GRID = grid
+    _E25V2_TEMPLATES = by_semantic
     _E25V2_OBSTACLES = obstacles
     _E25_TEMPLATES = by_semantic
     _E25V2_TRAJECTORY_YAW = trajectory_yaws
@@ -9047,8 +9110,8 @@ def run_e25_v2_qualification(
         and bool(np.all(selected_range > 0)) and bool(np.all(selected_occlusion > 0))
     )
     result = {
-        "experiment": "E25-v2", "passed": passed,
-        "failure_classification": None if passed else "observation_conditioned_control_generation_failure",
+        "experiment": "E25-v3-normal-control", "passed": passed,
+        "failure_classification": None if passed else "local_support_conditioned_control_generation_failure",
         "templates": len(templates), "target_bank": target_metadata,
         "placements": 256, "completed": completed,
         "hard_errors": hard_errors, "placement_exhaustions": exhaustions,
@@ -9067,8 +9130,21 @@ def run_e25_v2_qualification(
         "run_seconds": run_seconds,
         "scientific_array_hash": _scientific_array_hash(first),
         "target_bank_sha256": _sha256_path(target_path),
+        "support_pool_sha256": _sha256_path(support_path),
+        "target_qualification_sha256": target_metadata[
+            "target_qualification_sha256"
+        ],
         "formal_training_distribution_changed": True,
-        "changed_component": "normal-control support-position selection only",
+        "changed_component": "normal-control target and support-position selection only",
+        "unchanged_components": [
+            "256 real train/206 normal templates", "0.9-1.1 scale stream",
+            "class semantics and pose stream", "material stream",
+            "E22 grounding", "E23 observed collision", "E24 pair collision",
+            "renderer", "return probability", "intensity",
+            "E45A covariates and calipers", "schema 7 anomaly-proxy",
+        ],
+        "target_support_contract": "E25-v3 E21-v4 local validity plus projected stability plus visible-geometry compatibility",
+        "claim_limit": "Qualification applies to the retained train/206 aggregate target domain; person has only four retained targets in one range and occlusion stratum.",
     }
     destination = Path(output_path).expanduser().resolve()
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -13413,14 +13489,6 @@ def _e45_worker(index: int) -> dict[str, np.ndarray]:
     }
 
 
-_E45_UNIT_FIELDS = (
-    "bank_seed", "source", "center_frame", "frame_id", "support_semantic",
-    "range_bin", "azimuth_sector", "median_distance_m", "median_beam", "Nvis",
-    "O_hat", "local_density", "geometry_hits", "point_count", "point_features",
-    "unit_hash",
-)
-
-
 def _write_e45_units(
     arrays: Mapping[str, np.ndarray], path: Path, bank_hash: str,
     extraction_seconds: float,
@@ -14478,19 +14546,23 @@ def _render_parser() -> argparse.ArgumentParser:
     e25.add_argument("--support-pool", type=Path, required=True)
     e25.add_argument("--output", type=Path, required=True)
     e25.add_argument("--processes", type=int, default=24)
-    e25v2 = subcommands.add_parser("qualify-e25-v2")
-    e25v2.add_argument("--data-root", type=Path, required=True)
-    e25v2.add_argument("--support-pool", type=Path, required=True)
-    e25v2.add_argument("--calibration", type=Path, required=True)
-    e25v2.add_argument("--target-output", type=Path, required=True)
-    e25v2.add_argument("--output", type=Path, required=True)
-    e25v2.add_argument("--processes", type=int, default=12)
     e25v3 = subcommands.add_parser("qualify-e25-v3-targets")
     e25v3.add_argument("--data-root", type=Path, required=True)
     e25v3.add_argument("--support-pool", type=Path, required=True)
     e25v3.add_argument("--target-bank", type=Path, required=True)
     e25v3.add_argument("--output", type=Path, required=True)
     e25v3.add_argument("--processes", type=int, default=24)
+    e25v3_bank = subcommands.add_parser("build-e25-v3-target-bank")
+    e25v3_bank.add_argument("--source-target-bank", type=Path, required=True)
+    e25v3_bank.add_argument("--target-qualification", type=Path, required=True)
+    e25v3_bank.add_argument("--output", type=Path, required=True)
+    e25v3_control = subcommands.add_parser("qualify-e25-v3-normal-control")
+    e25v3_control.add_argument("--data-root", type=Path, required=True)
+    e25v3_control.add_argument("--support-pool", type=Path, required=True)
+    e25v3_control.add_argument("--calibration", type=Path, required=True)
+    e25v3_control.add_argument("--target-bank", type=Path, required=True)
+    e25v3_control.add_argument("--output", type=Path, required=True)
+    e25v3_control.add_argument("--processes", type=int, default=12)
     e26 = subcommands.add_parser("qualify-e26")
     e26.add_argument("--data-root", type=Path, required=True)
     e26.add_argument("--support-pool", type=Path, required=True)
@@ -14627,17 +14699,23 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 0 if result["passed"] else 1
-    if args.command == "qualify-e25-v2":
-        result = run_e25_v2_qualification(
-            args.data_root, args.support_pool, args.calibration,
-            args.target_output, args.output, processes=args.processes,
-        )
-        print(json.dumps(result, ensure_ascii=False, sort_keys=True))
-        return 0 if result["passed"] else 1
     if args.command == "qualify-e25-v3-targets":
         result = run_e25_v3_target_qualification(
             args.data_root, args.support_pool, args.target_bank,
             args.output, processes=args.processes,
+        )
+        print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        return 0 if result["passed"] else 1
+    if args.command == "build-e25-v3-target-bank":
+        result = build_e25_v3_target_bank(
+            args.source_target_bank, args.target_qualification, args.output,
+        )
+        print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        return 0 if result["passed"] else 1
+    if args.command == "qualify-e25-v3-normal-control":
+        result = run_e25_v3_normal_control_qualification(
+            args.data_root, args.support_pool, args.calibration,
+            args.target_bank, args.output, processes=args.processes,
         )
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 0 if result["passed"] else 1

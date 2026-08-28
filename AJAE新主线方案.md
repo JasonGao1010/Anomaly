@@ -1820,7 +1820,7 @@ $$
 
 ---
 
-# 18. 当前状态（当前工作区：E45A-v2 正式 FAIL，E46 锁定）
+# 18. 当前状态（当前工作区：E25-v3目标资格PASS，目标库与control待运行）
 
 截至当前工作区权威提交，已经完成：
 
@@ -1915,6 +1915,8 @@ E45A-v2作为Gate 1审计专用定向control银行完整执行至每目标64个p
 
 接受项的最大锚点—凸包距离为2.288462米，最大距离/中心半径为1.247676，逐项满足$1.25R(d)$。person只保留4/234，40–50米总体只保留20/117；该分布边界不改变运行前总体覆盖PASS，但限制后续主张，不能写成每个类别都覆盖完整距离和遮挡范围。E25-v3可信局部支撑定义已经关闭，当前进入3,267目标的正式target bank重建与normal-control重跑。
 
+E25-v3目标库与normal-control资格实现已经按上述唯一规则冻结，尚未正式运行。目标库只按原顺序保留3,267个`compatible=true`身份，所有真实观测字段逐元素继承；旧参考支撑行由资格产物的唯一所选E21-v4行替换。正式normal-control继续使用原256个模板、seed 2,500,000–2,500,255、128×128提议上限、缩放/姿态/材质流、E22–E24、renderer和E45A五项caliper；runner只读取冻结目标库，不再包含旧无上限最近邻提取路径。目标库构建完成后才执行一次12进程正式资格。
+
 当前可成立的局部结论是：
 
 > **schema 7 能合法、确定且高效地产生覆盖冻结几何区域的合成异常代理；这些对象可以从 train/206 的合格支撑池采样，以冻结连续落地规则达到 99% 接触/埋地资格，并能由同一权威放置接口拒绝与 train/206 实际观测非地面回波发生超过 5 cm 深穿透的位置。**
@@ -1929,7 +1931,7 @@ E45A-v2作为Gate 1审计专用定向control银行完整执行至每目标64个p
 当前执行节点为：
 
 $$
-\boxed{E25\text{-v2 FAIL RETAINED};\quad E25\text{-v3 LOCAL TARGET QUALIFICATION PASS};\quad TARGET\ BANK\ REBUILD\ NEXT}
+\boxed{E25\text{-v2 FAIL RETAINED};\quad E25\text{-v3 TARGET QUALIFICATION PASS};\quad TARGET\ BANK/CONTROL\ RUNS\ NEXT}
 $$
 
 E23与E24-v2已按冻结设计通过，当前顺序进入：

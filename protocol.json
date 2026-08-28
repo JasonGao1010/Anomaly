@@ -2148,7 +2148,7 @@
             "downstream": "PASS permits replacing the sole production normal-control position selector and then running E26-v2; FAIL keeps E26-v2 and E46 locked and requires owner decision"
           },
           "E25-v3": {
-            "status": "D_xy plus alpha route abandoned; final E25-v3 local-support target qualification PASS; target-bank rebuild is next; revised normal-control generation not run",
+            "status": "D_xy plus alpha route abandoned; final E25-v3 local-support target qualification PASS; target-bank rebuild and revised normal-control qualification frozen but not run",
             "historical_results_retained": ["E25 PASS", "E25-v2 FAIL"],
             "failure_classification_inherited": "E25-v2 is a qualification specification defect and does not adjudicate the normal-control construct",
             "unchanged_support_semantics": {"vehicle_like": [40], "person_rider_like": [40, 48]},
@@ -2318,7 +2318,40 @@
               "independent_validation": "all 4827 identities complete and unique; five-offset legal candidate counts independently reproduced; selected frame and semantics valid; every accepted row satisfies exact distance<=1.25R(d), projected height<=0.08 m and visible burial<=0.02; rejection sentinels, accounting and scientific hash reproduce exactly",
               "claim_limit": "PASS is aggregate over the retained target bank. Person retains only 4 targets in one range and occlusion stratum; truck and other-vehicle have additional empty class-specific strata. No per-class full-range or full-occlusion claim is permitted."
             },
-            "next_required_state": "rebuild the E25-v3 target bank from the 3267 accepted identities and their selected support rows, then run revised formal normal-control qualification without changing templates, streams, placement, renderer or E45A calipers",
+            "target_bank_build": {
+              "status": "frozen; not run",
+              "source_target_bank": "runs/ajae/e25_v2_real_targets.npz",
+              "source_target_bank_role": "identity and real-observation fields only; old support_semantic and reference_support_pool_index are discarded",
+              "target_qualification": "runs/ajae/e25_v3_target_qualification.npz",
+              "output": "runs/ajae/e25_v3_real_targets.npz",
+              "row_selection": "preserve source order and retain exactly compatible=true rows",
+              "field_rule": "copy every real-observation field elementwise, replace support_semantic by selected_support_semantic and reference_support_pool_index by selected_support_row",
+              "integrity": "verify both internal scientific hashes, qualification-to-source SHA binding, seven aligned identity/covariate arrays, compatible equals rejection_code zero, sentinels and legal support semantics",
+              "pass_conditions": ["3267 target rows", "423 frames", "37 real semantic-instance identities", "class counts 2830/333/100/4", "range counts 861/1532/552/302/20", "occlusion counts 787/2363/117", "all inherited non-support fields remain elementwise identical"],
+              "formal_repetitions": 1,
+              "command": "python -m src.render build-e25-v3-target-bank --source-target-bank runs/ajae/e25_v2_real_targets.npz --target-qualification runs/ajae/e25_v3_target_qualification.npz --output runs/ajae/e25_v3_real_targets.npz"
+            },
+            "normal_control_qualification": {
+              "status": "frozen; target bank not yet built; not run",
+              "input_target_bank": "runs/ajae/e25_v3_real_targets.npz",
+              "output": "runs/ajae/e25_v3_normal_control.npz",
+              "fixtures": 256,
+              "fixture_identity": "one fixture for each frozen train/206 normal template in the unchanged semantic and library order",
+              "control_seeds": [2500000, 2500255],
+              "target_proposals_per_fixture_maximum": 128,
+              "support_proposals_per_target_maximum": 128,
+              "unchanged": ["256 real train/206 templates", "0.9-1.1 scale stream", "pose and material streams", "target and support proposal ordering", "E22 grounding", "E23 observed collision", "E24 pair collision", "renderer", "return probability", "intensity", "E45A exact strata and five calipers", "schema 7 anomaly-proxy"],
+              "changed": "the eligible train/206 target identities and their reference support rows are exactly the qualified E25-v3 bank",
+              "pass_conditions": ["256 of 256 controls complete", "256 unique template identities", "zero hard errors", "zero target or support exhaustion", "zero exact-stratum or five-caliper errors", "accepted controls cover at least 100 frames and 32 real semantic-instance identities", "all five aggregate range bins and all three aggregate occlusion layers are nonempty"],
+              "formal_repetitions": 1,
+              "reproducibility_check": "not run by owner decision",
+              "cpu_execution": "12 forked worker processes, one numeric-library thread per process, deterministic worst-case-first work scheduling and existing shape/frame/placement/sensor caches",
+              "gpu_used": false,
+              "command": "python -m src.render qualify-e25-v3-normal-control --data-root /home/jasongao/Data/STU --support-pool runs/ajae/e21_v4_support_pool.npz --calibration runs/ajae/calibration.pt --target-bank runs/ajae/e25_v3_real_targets.npz --output runs/ajae/e25_v3_normal_control.npz --processes 12",
+              "pass_route": "replace the sole production normal-control selector, execute E26-v2 and rerun distribution-dependent E38-E45A plus E45B-v2 before E46/E48",
+              "failure_route": "retain the formal FAIL and stop at E25-v3 for a new owner decision without changing the target rule, proposal limits or calipers"
+            },
+            "next_required_state": "build and validate the frozen E25-v3 target bank, then execute the frozen E25-v3 normal-control qualification",
             "downstream": "E26-v2, E46 and E48 remain locked"
           },
           "E26": {

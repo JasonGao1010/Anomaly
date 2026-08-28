@@ -3176,6 +3176,16 @@ $$
 
 根据预先冻结的PASS路线，E25-v3可信局部支撑定义至此关闭，不再扩大或调整。下一步只把这3,267个接受身份及其唯一所选E21-v4支撑写入E25-v3 target bank，然后以未改变的模板、随机流、E22–E24、renderer和E45A五项caliper重新运行normal-control资格。此时尚未形成新的normal-control结果。
 
+**E25-v3目标库重建与normal-control资格：运行前冻结**
+
+目标库重建只执行一次确定性筛选，不重新读取或重新提取train/206实例。输入固定为SHA-256为`957860c8b45a6dcc1a35e0815a7c7fcc045ed488d4089155ddda948e8f31d4d4`的历史目标库和SHA-256为`cb3a5749951b813d72e7ea7de1b7377398f867c5a3d6dab3e9af346f7afa4b7c`的E25-v3资格产物。按源目标库原顺序保留`compatible=true`的行；`frame_id`、真实类别/实例、距离、beam、可见回波、遮挡、局部密度、点特征和单位身份全部逐元素继承。旧`support_semantic`和`reference_support_pool_index`被资格产物的`selected_support_semantic`与`selected_support_row`直接替换，不允许再次寻找近邻或重新排序目标。
+
+构建时必须复算两个输入的科学数组哈希，检查资格产物绑定的源文件SHA-256，并要求`frame_id`、`real_semantic`、`real_instance`、`range_bin`、`O_hat`、`Nvis`和`unit_hash`七组数组逐元素对应；`compatible`必须等于`rejection_code==0`，接受/拒绝支撑行的哨兵和类别语义必须合法。构建结果必须精确包含3,267行、423帧、37个真实语义—实例身份，类别计数[2830,333,100,4]、距离层[861,1532,552,302,20]、遮挡层[787,2363,117]。命令冻结为`python -m src.render build-e25-v3-target-bank --source-target-bank runs/ajae/e25_v2_real_targets.npz --target-qualification runs/ajae/e25_v3_target_qualification.npz --output runs/ajae/e25_v3_real_targets.npz`。
+
+正式normal-control仍使用256个fixture，使256个冻结train/206模板按原类别与库顺序各出现一次；control seed仍为2,500,000–2,500,255。每个fixture最多128个目标proposal，每个目标最多128个支撑proposal。模板、三轴缩放$U[0.9,1.1]$、姿态、材质、目标与支撑排序公式、E22、E23、E24、renderer、回波概率、强度、E45A精确分层与五项caliper、schema 7 proxy全部不变；唯一改变是可用目标及其环境参考支撑来自E25-v3目标库。旧无上限最近邻目标提取路径从当前正式源码删除，runner禁止在运行时重建目标库。
+
+正式资格固定使用12个fork进程、每个数值库单线程、既有最坏成本优先调度和shape/frame/placement/sensor缓存，只执行一次，不形成两遍复现结论。PASS要求256/256完成、256个模板身份唯一、硬错误与目标/支撑耗尽均为0、精确分层和五项caliper错误均为0；接受对象至少覆盖100帧、32个真实语义—实例身份、五个总体距离层和三个总体遮挡层。命令冻结为`python -m src.render qualify-e25-v3-normal-control --data-root /home/jasongao/Data/STU --support-pool runs/ajae/e21_v4_support_pool.npz --calibration runs/ajae/calibration.pt --target-bank runs/ajae/e25_v3_real_targets.npz --output runs/ajae/e25_v3_normal_control.npz --processes 12`。FAIL时保留结果并停在E25-v3等待新的课题负责人决策，不修改$1.25R(d)$、128×128上限或caliper；PASS后才修改唯一生产normal-control选择器并进入E26-v2及受control分布影响的后续重跑。
+
 ## E26｜权威 world builder 与完整世界规格确定性
 
 **唯一问题**
