@@ -1911,6 +1911,10 @@ E45A-v2作为Gate 1审计专用定向control银行完整执行至每目标64个p
 
 下一项正式工作已经限定为对原4,827个train/206目标执行一次只读资格，不运行生成器或读取train/201。覆盖PASS条件直接继承E25-v2：四个active类别、五个距离层和三个遮挡层均非空，保留目标至少覆盖100帧和32个真实实例。PASS后才重建E25-v3目标库并重跑normal-control；FAIL时保留$1.25R(d)$不变，并把缺失覆盖记录为现有E21-v4可观测局部地面的数据边界。
 
+正式只读资格已经在运行前提交`84c3655`下完成并PASS。4,827个目标保留3,267个，覆盖423帧和37个真实实例；四类计数为car 2,830、truck 333、other-vehicle 100、person 4，五个总体距离层为[861,1532,552,302,20]，三个总体遮挡层为[787,2363,117]。1,560个拒绝目标中1,509个没有任何patch落入其自身E21局部有效范围，14个没有外推稳定的局部patch，37个稳定局部patch均明显切入可见物体。
+
+接受项的最大锚点—凸包距离为2.288462米，最大距离/中心半径为1.247676，逐项满足$1.25R(d)$。person只保留4/234，40–50米总体只保留20/117；该分布边界不改变运行前总体覆盖PASS，但限制后续主张，不能写成每个类别都覆盖完整距离和遮挡范围。E25-v3可信局部支撑定义已经关闭，当前进入3,267目标的正式target bank重建与normal-control重跑。
+
 当前可成立的局部结论是：
 
 > **schema 7 能合法、确定且高效地产生覆盖冻结几何区域的合成异常代理；这些对象可以从 train/206 的合格支撑池采样，以冻结连续落地规则达到 99% 接触/埋地资格，并能由同一权威放置接口拒绝与 train/206 实际观测非地面回波发生超过 5 cm 深穿透的位置。**
@@ -1925,7 +1929,7 @@ E45A-v2作为Gate 1审计专用定向control银行完整执行至每目标64个p
 当前执行节点为：
 
 $$
-\boxed{E25\text{-v2 FAIL RETAINED};\quad E25\text{-v3 LOCAL SUPPORT RULE FROZEN};\quad READ\text{-}ONLY\ TARGET\ QUALIFICATION\ PENDING}
+\boxed{E25\text{-v2 FAIL RETAINED};\quad E25\text{-v3 LOCAL TARGET QUALIFICATION PASS};\quad TARGET\ BANK\ REBUILD\ NEXT}
 $$
 
 E23与E24-v2已按冻结设计通过，当前顺序进入：
@@ -1934,7 +1938,7 @@ $$
 E23\rightarrow E24\rightarrow E25\rightarrow E26
 $$
 
-E27–E44已关闭；E36-v1、E45-v1、E45-v2、E45A、E45A-v2和E25-v2 FAIL均保留。旧E45B已PASS，但只资格旧normal-control分布；任何新版正式control分布必须重新执行E45B-v2。$D_{xy}+\alpha$路线已经终止；E25-v3可信局部支撑已经固定为E21-v4的$1.25R(d)$局部有效范围、外推稳定和不明显切入真实物体三项条件。当前等待4,827目标只读资格结果，目标库与生成器尚未改动，E26-v2、E46和E48保持锁定。
+E27–E44已关闭；E36-v1、E45-v1、E45-v2、E45A、E45A-v2和E25-v2 FAIL均保留。旧E45B已PASS，但只资格旧normal-control分布；任何新版正式control分布必须重新执行E45B-v2。$D_{xy}+\alpha$路线已经终止；E25-v3可信局部支撑目标资格已经PASS，定义不再调整。当前开始重建3,267目标的E25-v3 target bank，normal-control尚未重跑，E26-v2、E46和E48保持锁定。
 
 因此当前整体判断仍是：
 

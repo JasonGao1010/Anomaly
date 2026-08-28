@@ -2148,7 +2148,7 @@
             "downstream": "PASS permits replacing the sole production normal-control position selector and then running E26-v2; FAIL keeps E26-v2 and E46 locked and requires owner decision"
           },
           "E25-v3": {
-            "status": "D_xy plus alpha route abandoned; final E25-v3 local-support rule frozen as E21-v4 maximum verified radius plus the inherited projection and visible-geometry conditions; read-only target qualification pending; generation not run",
+            "status": "D_xy plus alpha route abandoned; final E25-v3 local-support target qualification PASS; target-bank rebuild is next; revised normal-control generation not run",
             "historical_results_retained": ["E25 PASS", "E25-v2 FAIL"],
             "failure_classification_inherited": "E25-v2 is a qualification specification defect and does not adjudicate the normal-control construct",
             "unchanged_support_semantics": {"vehicle_like": [40], "person_rider_like": [40, 48]},
@@ -2268,7 +2268,7 @@
               "interpretation": "The two inherited conditions identify multiscale-consistent planes that do not visibly cut most object returns, but they do not enforce a local spatial validity domain or reject an excessively low plane. The accepted 10-67.8 m anchors and up-to-5.28 m minimum visible gaps prevent interpreting all 4825 retained rows as credible local support planes."
             },
             "target_qualification": {
-              "status": "frozen before execution",
+              "status": "PASS; closed; target-bank rebuild unlocked",
               "input_targets": "the retained 4827 train/206 E25-v2 target identities and real-observation covariates; old support_semantic and reference_support_pool_index fields are forbidden",
               "input_support_pool": "frozen E21-v4 qualified support pool",
               "generator_executed": false,
@@ -2283,9 +2283,42 @@
               "gpu_used": false,
               "command": "python -m src.render qualify-e25-v3-targets --data-root /home/jasongao/Data/STU --support-pool runs/ajae/e21_v4_support_pool.npz --target-bank runs/ajae/e25_v2_real_targets.npz --output runs/ajae/e25_v3_target_qualification.npz --processes 24",
               "pass_route": "freeze this target-support definition, rebuild the E25-v3 target bank, then run the revised formal normal-control qualification",
-              "failure_route": "retain the 1.25*R(d) rule unchanged and record missing target coverage as the observable-local-ground boundary"
+              "failure_route": "retain the 1.25*R(d) rule unchanged and record missing target coverage as the observable-local-ground boundary",
+              "pre_run_commit": "84c3655",
+              "run_seconds": 3.571990763011854,
+              "passed": true,
+              "result": {
+                "input_targets": 4827,
+                "retained": 3267,
+                "rejected": 1560,
+                "rejection_count": {"no_semantically_legal_patch": 0, "outside_e21_local_validity": 1509, "no_projection_stable_patch": 14, "visible_geometry_incompatible": 37},
+                "retained_center_frames": 423,
+                "retained_real_instances": 37,
+                "retained_by_class": {"car_10": 2830, "truck_18": 333, "other_vehicle_20": 100, "person_30": 4},
+                "retained_range_count": [861, 1532, 552, 302, 20],
+                "retained_occlusion_layer_count": [787, 2363, 117],
+                "selected_frame_offset_count": [3020, 101, 58, 49, 39],
+                "selected_support_semantic_count": {"road_40": 3267, "sidewalk_48": 0},
+                "local_support_candidates_available": 254751,
+                "compatibility_candidates_evaluated": 4690,
+                "projection_stability_rejections": 922,
+                "visible_geometry_rejections": 501,
+                "accepted_candidates": 3267,
+                "maximum_anchor_distance_m": 2.2884622404571897,
+                "maximum_anchor_distance_over_central_radius": 1.2476763793181185,
+                "minimum_local_validity_margin_m": 0.002323620681881522,
+                "class_observable_boundary": {
+                  "car_10": {"frames": 423, "instances": 31, "range_count": [730, 1408, 397, 275, 20], "occlusion_count": [676, 2037, 117]},
+                  "truck_18": {"frames": 268, "instances": 4, "range_count": [64, 87, 155, 27, 0], "occlusion_count": [85, 248, 0]},
+                  "other_vehicle_20": {"frames": 100, "instances": 1, "range_count": [67, 33, 0, 0, 0], "occlusion_count": [22, 78, 0]},
+                  "person_30": {"frames": 4, "instances": 1, "range_count": [0, 4, 0, 0, 0], "occlusion_count": [4, 0, 0]}
+                }
+              },
+              "artifact": {"path": "runs/ajae/e25_v3_target_qualification.npz", "bytes": 654276, "sha256": "cb3a5749951b813d72e7ea7de1b7377398f867c5a3d6dab3e9af346f7afa4b7c", "scientific_array_sha256": "d77d2da9a3d648f31941219edc61f26f19e3cec601290e36b54eabc58554d7f5"},
+              "independent_validation": "all 4827 identities complete and unique; five-offset legal candidate counts independently reproduced; selected frame and semantics valid; every accepted row satisfies exact distance<=1.25R(d), projected height<=0.08 m and visible burial<=0.02; rejection sentinels, accounting and scientific hash reproduce exactly",
+              "claim_limit": "PASS is aggregate over the retained target bank. Person retains only 4 targets in one range and occlusion stratum; truck and other-vehicle have additional empty class-specific strata. No per-class full-range or full-occlusion claim is permitted."
             },
-            "next_required_state": "run the frozen read-only E25-v3 target qualification; the target bank, control generator and downstream experiments remain unchanged until PASS",
+            "next_required_state": "rebuild the E25-v3 target bank from the 3267 accepted identities and their selected support rows, then run revised formal normal-control qualification without changing templates, streams, placement, renderer or E45A calipers",
             "downstream": "E26-v2, E46 and E48 remain locked"
           },
           "E26": {
@@ -2359,7 +2392,7 @@
       }
     },
     "renderer_mechanical_qualification": {
-      "status": "E25-v2 FAIL retained; final E25-v3 local-support rule frozen and read-only target qualification pending; E27-E44 PASS; E28-v1, E36-v1, E45-v1, E45-v2, E45A and E45A-v2 FAIL retained; old-distribution E45B PASS is historical for any revised control distribution; E26-v2, E46 and E48 locked",
+      "status": "E25-v2 FAIL retained; E25-v3 local-support target qualification PASS and target-bank rebuild next; E27-E44 PASS; E28-v1, E36-v1, E45-v1, E45-v2, E45A and E45A-v2 FAIL retained; old-distribution E45B PASS is historical for any revised control distribution; E26-v2, E46 and E48 locked",
       "layer_boundaries": {"E27-E28": "direct geometry outputs only", "E29": "return probability and deterministic acceptance decision only", "E30-E31": "accepted returns", "E32-E33": "nearest-return occlusion competition"},
       "E27": {
         "question": "Does the formal geometry path return the correct nearest convex-hull hit, outward finite normal and object ID for active normal-control templates when return rejection is disabled?",
