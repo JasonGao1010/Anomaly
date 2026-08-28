@@ -1,6 +1,6 @@
 # AJAE 细粒度实验执行状态机
 
-> 当前权威基线：本仓库`main`、本文件记录的全部历史证据、E25-new正式PASS及E26-v2正式PASS。新版normal-control分布下的Phase 2已经关闭，E38-v2已在正式运行前冻结。旧提交`44fd6d13798e826b2cac8371de26a7d17707dadc`只保留为E22-v2时期的历史基线，不再代表当前工作区状态。
+> 当前权威基线：本仓库`main`、本文件记录的全部历史证据、E25-new、E26-v2及E38-v2正式PASS。新版normal-control分布下的Phase 2已经关闭，E38-v2已经关闭，E39刷新解锁。旧提交`44fd6d13798e826b2cac8371de26a7d17707dadc`只保留为E22-v2时期的历史基线，不再代表当前工作区状态。
 
 > 依据：`AJAE新主线方案.md`。本文件把主线方案中的不可变约束、四个 Decision Gates、B0–B5 对照、正常运动安全、对象尺度诊断、开发纪律与一次性真实 OOD 验证，拆成可顺序执行的细粒度实验节点。
 
@@ -3659,7 +3659,13 @@ normal-control沿用冻结缩放、姿态和材质流，并通过唯一`place_ob
 
 E38-v2仍以entity-frame为cluster，使用固定2,000次multinomial bootstrap、`SeedSequence([3801,2000])`及2.5%/97.5%分位区间。三来源opportunity、return count/rate、关键匹配字段、有限性、守恒性和非零回波PASS判据保持不变；来源间数值差异只报告。同一次权威渲染同时保存E39–E44需要的逐实体帧geometry/accepted/visible counts与distance、逐回波beam/range/intensity，以及两类生成来源逐beam/range的native-empty、geometry、accepted和final-new计数。E39刷新只读该共享trace并独立裁决，不重新渲染。
 
-E38-v2固定使用24个进程、每进程一个数值库线程，只执行一次正式运行，不自动重试，不产生两遍逐元素复现结论。命令冻结为`python -m src.render qualify-e38-v2 --data-root /home/jasongao/Data/STU --e25-new-artifact runs/ajae/e25_new_normal_control.npz --support-pool runs/ajae/gate1_201_support_pool.npz --calibration runs/ajae/calibration.pt --candidate-bank-output runs/ajae/gate1_candidate_bank_v2_256.npz --output runs/ajae/e38_v2_per_beam_return.npz --processes 24`。当前状态为执行合同已冻结、尚未运行；不得填写PASS、FAIL或任何正式结果数字。
+E38-v2固定使用24个进程、每进程一个数值库线程，只执行一次正式运行，不自动重试，不产生两遍逐元素复现结论。命令冻结为`python -m src.render qualify-e38-v2 --data-root /home/jasongao/Data/STU --e25-new-artifact runs/ajae/e25_new_normal_control.npz --support-pool runs/ajae/gate1_201_support_pool.npz --calibration runs/ajae/calibration.pt --candidate-bank-output runs/ajae/gate1_candidate_bank_v2_256.npz --output runs/ajae/e38_v2_per_beam_return.npz --processes 24`。该命令的正式执行已经完成，结果如下。
+
+**E38-v2正式结果：PASS（E38关闭，E39刷新解锁）**
+
+新版候选银行完成256/256个paired seeds，错误、合同错误和seed身份错误均为0，覆盖172个中心帧和164个有放回抽中的规范模板；control指定与最终距离层计数均为[60,56,56,58,26]，最少最终可见回波数为1，最大使用attempt为5。real-normal、normal-control、anomaly-proxy的support semantic 40/48计数分别为167/89、215/41和214/42。候选构建用时52.242514秒，科学数组哈希为`91e00c3b874572aff4267ad04982fb7909e0eb2766f3ad15ede1e2fe55506b26`；产物大小1,192,842字节，SHA-256为`a2c80614d1eea91de6a969a48e3627d9e604b6927fe08aa91bf5173d133e31d4`。
+
+三来源各保存1,280个entity-frame groups。real-normal、normal-control、anomaly-proxy总opportunity分别为826,836、391,049和299,242，总return分别为598,736、385,263和295,250；计数守恒错误、共享trace合同错误和非有限错误均为0。单次24进程共享trace运行用时44.695235秒，按所有者决定未执行第二遍复现；科学数组哈希为`30bc585de77e730570a942356d127858153350ac672bc6d39887b84381b770b1`。产物`runs/ajae/e38_v2_per_beam_return.npz`大小14,675,308字节，SHA-256为`914b185ae31d5509fa286208c26bb4271460d289a02ec398eaee715b7eeb7c9a`。renderer身份为`be33efba9b32f4ed00132d79ed26311d2769206d13756ce6c7b47c933f4a9ccf`。E38-v2只建立新版三来源逐beam统计有限、守恒、均有非零回波及共享trace内部一致，不裁决来源泄漏。
 
 ### 历史 E38及统一候选银行正式执行冻结
 

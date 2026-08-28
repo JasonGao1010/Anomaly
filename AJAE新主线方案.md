@@ -1,6 +1,6 @@
 # AJAE 主线方案
 
-> 当前权威基线：本仓库`main`、本文记录的全部历史证据、E25-new正式PASS及E26-v2正式PASS。新版normal-control分布下的Phase 2已经关闭，E38-v2已在正式运行前冻结。旧提交`44fd6d13798e826b2cac8371de26a7d17707dadc`只保留为E22-v2时期的历史基线，不再代表当前工作区状态。
+> 当前权威基线：本仓库`main`、本文记录的全部历史证据、E25-new、E26-v2及E38-v2正式PASS。新版normal-control分布下的Phase 2已经关闭，E38-v2已经关闭，E39刷新解锁。旧提交`44fd6d13798e826b2cac8371de26a7d17707dadc`只保留为E22-v2时期的历史基线，不再代表当前工作区状态。
 
 ---
 
@@ -1820,7 +1820,7 @@ $$
 
 ---
 
-# 18. 当前状态（当前工作区：E25-new与E26-v2正式PASS，E38-v2冻结待运行）
+# 18. 当前状态（当前工作区：E25-new、E26-v2与E38-v2正式PASS，E39刷新解锁）
 
 截至当前工作区权威提交，已经完成：
 
@@ -1879,7 +1879,9 @@ E38-v2完整继承256个paired seeds `3800000–3800255`、real-normal单位选�
 
 normal-control继续执行E21支撑身份、E22连续grounding和E23已观测正常几何碰撞；只有完整正式renderer复核得到至少一个最终可见control回波，且其中位official range属于预分配距离层时才能接受。anomaly-proxy的schema 7、shape proposal、放置、材质、姿态和渲染规则保持不变。新候选银行保存三来源各自的support semantic，以及control模板索引、指定与最终距离层、最终观测和完整随机身份。新schema为`gate1-candidate-bank-v2`，旧v1候选银行必须拒绝，不得混用旧trace。
 
-E38-v2的逐beam opportunity、return count/rate、entity-frame聚类、2,000次multinomial bootstrap、`SeedSequence([3801,2000])`、2.5%/97.5%区间与有限、守恒、三来源非零回波PASS判据均不变。单次权威渲染同时保存E39–E44需要的完整原始trace；E39及后续节点只读共享trace各自裁决，不重新计算几何或渲染。E38-v2使用24个进程、每进程数值库单线程，只正式运行一次，不自动重试。新候选银行与E38产物分别为`runs/ajae/gate1_candidate_bank_v2_256.npz`与`runs/ajae/e38_v2_per_beam_return.npz`；当前只有冻结合同，尚无正式结果。若后续两两共同支持不足，E45A-new与E45B-v2只能各自使用独立审计银行按512→1024→2048扩容；候选选择只读取冻结匹配协变量，不读取E46或E48输出。
+E38-v2的逐beam opportunity、return count/rate、entity-frame聚类、2,000次multinomial bootstrap、`SeedSequence([3801,2000])`、2.5%/97.5%区间与有限、守恒、三来源非零回波PASS判据均不变。单次权威渲染同时保存E39–E44需要的完整原始trace；E39及后续节点只读共享trace各自裁决，不重新计算几何或渲染。E38-v2使用24个进程、每进程数值库单线程，只正式运行一次，不自动重试。新候选银行与E38产物分别为`runs/ajae/gate1_candidate_bank_v2_256.npz`与`runs/ajae/e38_v2_per_beam_return.npz`。若后续两两共同支持不足，E45A-new与E45B-v2只能各自使用独立审计银行按512→1024→2048扩容；候选选择只读取冻结匹配协变量，不读取E46或E48输出。
+
+E38-v2已经正式PASS。新版候选银行完成256/256个paired seeds，错误、合同错误与seed身份错误均为0；三来源各1,280个entity-frame groups，总opportunity分别为826,836、391,049和299,242，总return分别为598,736、385,263和295,250。计数守恒错误、共享trace合同错误和非有限错误均为0。候选银行与共享trace分别用时52.242514秒和44.695235秒；共享trace科学数组哈希为`30bc585de77e730570a942356d127858153350ac672bc6d39887b84381b770b1`，正式产物SHA-256为`914b185ae31d5509fa286208c26bb4271460d289a02ec398eaee715b7eeb7c9a`。按所有者决定只运行一遍，不声明逐元素复现。E38关闭，E39刷新解锁；来源泄漏仍未在E38裁决。
 
 历史E38-v1及其统一候选银行当时冻结为：train/201帧4–681使用E21-v4同一支撑区域算法；首级候选银行使用256个paired seeds，每个seed分别生成独立正常对照世界与异常代理世界，并绑定同一真实正常实体五帧单位。E38-v1保存三来源逐entity-frame、逐beam的opportunity、return count/rate和2,000次cluster bootstrap区间。
 
@@ -1987,12 +1989,12 @@ E38\text{-v2}\rightarrow\text{E39--E44 control-side refresh}\rightarrow
 \{E45A\text{-new},E45B\text{-v2}\}
 $$
 
-E27–E37的纯机械资格继续保留；E36-v1、E45-v1、E45-v2、E45A、E45A-v2、E25-v2和E25-v3 normal-control FAIL均保留。旧E45B已PASS，但只资格旧normal-control分布；新版正式control分布必须重新执行E45B-v2。$D_{xy}+\alpha$路线和E25-v3逐对象五维条件复制路线均已终止。E25-new与E26-v2已经PASS，E38-v2已冻结待正式运行；其后依次为E39–E44刷新、E45A-new与E45B-v2。E46和E48继续锁定。
+E27–E37的纯机械资格继续保留；E36-v1、E45-v1、E45-v2、E45A、E45A-v2、E25-v2和E25-v3 normal-control FAIL均保留。旧E45B已PASS，但只资格旧normal-control分布；新版正式control分布必须重新执行E45B-v2。$D_{xy}+\alpha$路线和E25-v3逐对象五维条件复制路线均已终止。E25-new、E26-v2与E38-v2已经PASS；当前依次执行E39–E44刷新、E45A-new与E45B-v2。E46和E48继续锁定。
 
 因此当前整体判断仍是：
 
 $$
-\boxed{\text{E38-v2执行合同已冻结；当前待正式运行}}
+\boxed{\text{E38-v2正式PASS；E39刷新解锁}}
 $$
 
 不能写成“AJAE 方法已经验证”或“剩余只需训练”。
