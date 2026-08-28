@@ -15376,25 +15376,21 @@ def run_e42_qualification(
     e39_artifact_path: Path | str, output_path: Path | str,
 ) -> dict[str, object]:
     """Qualify entity-frame Nvis strata and preliminary matching support."""
-    with np.load(
-        Path(e39_artifact_path).expanduser().resolve(strict=True), allow_pickle=False
-    ) as trace:
+    source_path = Path(e39_artifact_path).expanduser().resolve(strict=True)
+    if _sha256_path(source_path) != FROZEN_E39_V2_ARTIFACT_SHA256:
+        raise RenderError("E42-v2 E39-v2 shared trace identity changed")
+    with np.load(source_path, allow_pickle=False) as trace:
         metadata = json.loads(str(trace["metadata_json"]))
-        if metadata.get("experiment") != "E39" or metadata.get("passed") is not True:
-            raise RenderError("E42 requires the passed formal E39 shared trace")
+        if metadata.get("experiment") != "E39-v2" or metadata.get("passed") is not True:
+            raise RenderError("E42-v2 requires the passed formal E39-v2 shared trace")
         support = np.asarray(trace["support_semantic"])
         geometry = np.asarray(trace["geometry_hits"])
         accepted = np.asarray(trace["accepted_hits"])
         visible = np.asarray(trace["visible_returns"])
         distance = np.asarray(trace["visible_distance_m"])
     started = time.monotonic()
-    runs = [
-        _e42_statistics(support, geometry, accepted, visible, distance)
-        for _ in range(2)
-    ]
+    first = _e42_statistics(support, geometry, accepted, visible, distance)
     elapsed = time.monotonic() - started
-    reproduced = all(np.array_equal(runs[0][name], runs[1][name]) for name in runs[0])
-    first = runs[0]
     definition_errors = int(
         np.count_nonzero(geometry < 0)
         + np.count_nonzero(accepted < 0)
@@ -15417,10 +15413,10 @@ def run_e42_qualification(
     matching_errors = int(shared_strata == 0)
     passed = (
         definition_errors == 0 and count_errors == 0 and coverage_errors == 0
-        and matching_errors == 0 and reproduced
+        and matching_errors == 0
     )
     result = {
-        "experiment": "E42", "passed": passed,
+        "experiment": "E42-v2", "passed": passed,
         "nvis_layers": [[1, 8], [8, 32], [32, 128], [128, None]],
         "entity_frame_groups_per_source": group_count,
         "source_layer_count": first["source_layer_count"].tolist(),
@@ -15429,8 +15425,10 @@ def run_e42_qualification(
         "shared_support_range_nvis_strata": shared_strata,
         "definition_errors": definition_errors, "count_errors": count_errors,
         "coverage_errors": coverage_errors, "matching_errors": matching_errors,
-        "elementwise_reproduced": reproduced,
-        "two_run_total_seconds": elapsed,
+        "formal_repetitions": 1, "elementwise_reproduced": None,
+        "reproducibility_check": "not_run_by_owner_decision",
+        "input_e39_v2_sha256": FROZEN_E39_V2_ARTIFACT_SHA256,
+        "run_seconds": [elapsed],
         "scientific_array_hash": _scientific_array_hash(first),
     }
     destination = Path(output_path).expanduser().resolve()
@@ -17062,7 +17060,7 @@ def _render_parser() -> argparse.ArgumentParser:
     e41 = subcommands.add_parser("qualify-e41-v2")
     e41.add_argument("--e39-artifact", type=Path, required=True)
     e41.add_argument("--output", type=Path, required=True)
-    e42 = subcommands.add_parser("qualify-e42")
+    e42 = subcommands.add_parser("qualify-e42-v2")
     e42.add_argument("--e39-artifact", type=Path, required=True)
     e42.add_argument("--output", type=Path, required=True)
     e43 = subcommands.add_parser("qualify-e43")
@@ -17251,7 +17249,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         result = run_e41_qualification(args.e39_artifact, args.output)
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 0 if result["passed"] else 1
-    if args.command == "qualify-e42":
+    if args.command == "qualify-e42-v2":
         result = run_e42_qualification(args.e39_artifact, args.output)
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 0 if result["passed"] else 1

@@ -3101,7 +3101,12 @@
         "result": {"passed": true, "source_chain_total": [[24291803, 16037, 16011, 16011], [24291803, 25173, 25136, 25136]], "source_return_rejection": [26, 37], "source_post_acceptance_rejection": [0, 0], "chain_violation_count": [0, 0, 0, 0], "chain_errors": 0, "branch_coverage_errors": 0, "elementwise_reproduced": true, "two_run_total_seconds": 0.025614173006033525, "scientific_array_sha256": "71bbccc62da2254b553bfbaaf8f9864281b9242d956ca88c903e1f90a74f7c8f", "artifact_bytes": 5541, "artifact_sha256": "771e39129087324be9526b6286bd2d2c40194d8c20c6ec8fd0dceb8fdf340c3e", "claim_limit": "E41 establishes empty-slot chain conservation and branch coverage only; source-rate differences remain descriptive until matching and E46."}
       },
       "E42": {
-        "current_validity": "historical PASS for the old normal-control distribution; E25-new makes this control-dependent node invalid until refreshed",
+        "current_validity": "E42-v2 refresh frozen and unlocked by E41-v2 PASS; historical E42 PASS remains valid only for the old control distribution",
+        "refresh_input": "runs/ajae/e39_v2_per_range_return.npz",
+        "refresh_input_sha256": "e7cea1574638db2f7e41799fe3855519ea57a47e9f6adc04f1a5a37e8aa526e0",
+        "refresh_command": "python -m src.render qualify-e42-v2 --e39-artifact runs/ajae/e39_v2_per_range_return.npz --output runs/ajae/e42_v2_nvis_strata.npz",
+        "refresh_artifact": "runs/ajae/e42_v2_nvis_strata.npz",
+        "refresh_formal_repetitions": 1,
         "question": "Are entity-frame visible-return counts conserved in the frozen Nvis strata, and is preliminary three-source matching support nonempty?",
         "input_trace": "runs/ajae/e39_per_range_return.npz",
         "nvis_layers": [[1, 8], [8, 32], [32, 128], [128, "infinity"]],

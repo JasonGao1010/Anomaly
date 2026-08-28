@@ -3753,7 +3753,11 @@ normal-control与anomaly-proxy的“原生空槽机会→几何命中→回波�
 
 ## E42｜单实体 $N_{vis}$ 与匹配可行性
 
-按entity-frame保存geometry hits、accepted-before-occlusion、visible returns和距离。冻结 $N_{vis}$ 层为 $[1,8)$、$[8,32)$、$[32,128)$、$[128,+\infty)$。PASS：定义和计数守恒、control/proxy均覆盖至少三个层，候选银行能为E45提供非空匹配；两遍一致。不得以总体均值相近替代E45。PASS → E43。
+按entity-frame保存geometry hits、accepted-before-occlusion、visible returns和距离。冻结 $N_{vis}$ 层为 $[1,8)$、$[8,32)$、$[32,128)$、$[128,+\infty)$。PASS：定义和计数守恒、control/proxy均覆盖至少三个层，候选银行能为E45提供非空匹配。不得以总体均值相近替代E45。PASS → E43。
+
+### E42-v2刷新执行冻结
+
+E42-v2只读取SHA-256固定为`e7cea1574638db2f7e41799fe3855519ea57a47e9f6adc04f1a5a37e8aa526e0`的E39-v2共享trace，沿用历史冻结的四个正可见层、五个距离层、两种support semantic和全部计数/覆盖判据；不重新渲染，只执行一次统计。正式命令为`python -m src.render qualify-e42-v2 --e39-artifact runs/ajae/e39_v2_per_range_return.npz --output runs/ajae/e42_v2_nvis_strata.npz`。
 
 直接读取E39共享trace的256个候选、三来源和五帧，共每来源1,280个entity-frame；逐项保存geometry hits、accepted-before-occlusion、visible returns、距离、距离箱和冻结 $N_{vis}$ 层。$N_{vis}=0$ 单独计数，不错误并入四个正可见层；PASS要求非负、accepted不超过geometry、visible不超过accepted、距离与距离箱有效，并满足“零可见计数+四层计数=1,280”。normal-control与anomaly-proxy各须覆盖至少三个正可见层；以support semantic×range bin×$N_{vis}$ layer统计三来源共同非空层，至少一个共同层作为E45的初步非空匹配可行性，完整匹配仍由E45裁决。两遍统计必须逐元素一致。实现提交 `e1af043e434f8958b8d7e33b8d22a79ad200f4b9`，`src/render.py` SHA-256为 `9ffcbfd10ebb5f3faf93b68d96677dff6c53f86a1b4c304ec25343b7d4971c64`；46项完整回归通过。正式命令为 `python -m src.render qualify-e42 --e39-artifact runs/ajae/e39_per_range_return.npz --output runs/ajae/e42_nvis_feasibility.npz`。
 
