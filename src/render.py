@@ -14457,7 +14457,7 @@ def run_e38_v2_qualification(
             -sum(
                 int(item.shape.plane_normals.shape[0])
                 if isinstance(item.shape, NormalTemplateShape)
-                else len(item.shape.nodes)
+                else item.shape.primitive_count
                 for item in (
                     _E38_BANK[index].control_world.objects[0],
                     _E38_BANK[index].proxy_world.objects[0],
