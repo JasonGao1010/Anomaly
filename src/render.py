@@ -15278,12 +15278,13 @@ def run_e41_qualification(
     e39_artifact_path: Path | str, output_path: Path | str,
 ) -> dict[str, object]:
     """Qualify empty-to-valid accounting from the passed shared E39 trace."""
-    with np.load(
-        Path(e39_artifact_path).expanduser().resolve(strict=True), allow_pickle=False
-    ) as trace:
+    source_path = Path(e39_artifact_path).expanduser().resolve(strict=True)
+    if _sha256_path(source_path) != FROZEN_E39_V2_ARTIFACT_SHA256:
+        raise RenderError("E41-v2 E39-v2 shared trace identity changed")
+    with np.load(source_path, allow_pickle=False) as trace:
         metadata = json.loads(str(trace["metadata_json"]))
-        if metadata.get("experiment") != "E39" or metadata.get("passed") is not True:
-            raise RenderError("E41 requires the passed formal E39 shared trace")
+        if metadata.get("experiment") != "E39-v2" or metadata.get("passed") is not True:
+            raise RenderError("E41-v2 requires the passed formal E39-v2 shared trace")
         arrays = tuple(
             np.asarray(trace[name])
             for name in (
@@ -15291,19 +15292,17 @@ def run_e41_qualification(
             )
         )
     started = time.monotonic()
-    runs = [_e41_statistics(*arrays) for _ in range(2)]
+    first = _e41_statistics(*arrays)
     elapsed = time.monotonic() - started
-    reproduced = all(np.array_equal(runs[0][name], runs[1][name]) for name in runs[0])
-    first = runs[0]
     totals = first["source_chain_total"]
     return_rejection = first["source_return_rejection"]
     branch_coverage_errors = int(
         np.count_nonzero(totals[:, 3] == 0) + np.count_nonzero(return_rejection == 0)
     )
     chain_errors = int(first["chain_violation_count"].sum())
-    passed = chain_errors == 0 and branch_coverage_errors == 0 and reproduced
+    passed = chain_errors == 0 and branch_coverage_errors == 0
     result = {
-        "experiment": "E41", "passed": passed,
+        "experiment": "E41-v2", "passed": passed,
         "source_order": ["normal-control", "anomaly-proxy"],
         "chain_order": ["empty opportunity", "geometry hit", "return accepted", "final new"],
         "source_chain_total": totals.tolist(),
@@ -15312,8 +15311,10 @@ def run_e41_qualification(
         "chain_violation_count": first["chain_violation_count"].tolist(),
         "chain_errors": chain_errors,
         "branch_coverage_errors": branch_coverage_errors,
-        "elementwise_reproduced": reproduced,
-        "two_run_total_seconds": elapsed,
+        "formal_repetitions": 1, "elementwise_reproduced": None,
+        "reproducibility_check": "not_run_by_owner_decision",
+        "input_e39_v2_sha256": FROZEN_E39_V2_ARTIFACT_SHA256,
+        "run_seconds": [elapsed],
         "scientific_array_hash": _scientific_array_hash(first),
     }
     destination = Path(output_path).expanduser().resolve()
@@ -17058,7 +17059,7 @@ def _render_parser() -> argparse.ArgumentParser:
     e40.add_argument("--e39-artifact", type=Path, required=True)
     e40.add_argument("--calibration", type=Path, required=True)
     e40.add_argument("--output", type=Path, required=True)
-    e41 = subcommands.add_parser("qualify-e41")
+    e41 = subcommands.add_parser("qualify-e41-v2")
     e41.add_argument("--e39-artifact", type=Path, required=True)
     e41.add_argument("--output", type=Path, required=True)
     e42 = subcommands.add_parser("qualify-e42")
@@ -17246,7 +17247,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 0 if result["passed"] else 1
-    if args.command == "qualify-e41":
+    if args.command == "qualify-e41-v2":
         result = run_e41_qualification(args.e39_artifact, args.output)
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 0 if result["passed"] else 1
