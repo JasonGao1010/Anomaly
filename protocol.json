@@ -2148,19 +2148,17 @@
             "downstream": "PASS permits replacing the sole production normal-control position selector and then running E26-v2; FAIL keeps E26-v2 and E46 locked and requires owner decision"
           },
           "E25-v3": {
-            "status": "versioned; exact finite association structure fixed; read-only observability diagnostic complete; D_xy and alpha not frozen; generation not run",
+            "status": "D_xy plus alpha distance gate abandoned; support-plane compatibility read-only diagnostic frozen before execution; generation not run",
             "historical_results_retained": ["E25 PASS", "E25-v2 FAIL"],
             "failure_classification_inherited": "E25-v2 is a qualification specification defect and does not adjudicate the normal-control construct",
             "unchanged_support_semantics": {"vehicle_like": [40], "person_rider_like": [40, 48]},
             "frame_search_order": [0, -1, 1, -2, 2],
-            "association_order": "accept the first frame offset in the fixed order containing at least one semantically legal support within the final physical distance bound",
-            "distance_geometry": "true 2D Euclidean distance from an E21-v4 support anchor to the closed world-XY convex hull of the real instance in its target frame; inside distance is zero",
-            "prohibited_associations": ["per-half-space 0.5 m proxy", "unbounded nearest-support fallback", "distance to a non-target-frame instance hull"],
-            "candidate_distance_formula_only": "d_support <= max(0.5 m, alpha * D_xy)",
-            "pending_owner_freeze": ["one physical definition of D_xy", "one alpha fixed before target-bank reconstruction"],
-            "threshold_selection_prohibitions": ["256/256 generation outcome", "E45A matched-pair outcome", "E46 classifier output", "train/201 information"],
-            "diagnostic_command": "python -m src.render diagnose-e25-v3-support --data-root /home/jasongao/Data/STU --support-pool runs/ajae/e21_v4_support_pool.npz --target-bank runs/ajae/e25_v2_real_targets.npz --output runs/ajae/e25_v3_support_observability.npz --processes 24",
-            "diagnostic_scope": {
+            "association_order": "first frame offset containing a compatible plane; within one offset sort by exact anchor-to-target-frame closed-XY-hull distance then E21-v4 selection hash",
+            "anchor_distance_role": "deterministic candidate ordering and descriptive reporting only; no distance threshold",
+            "prohibited_associations": ["per-half-space 0.5 m proxy", "D_xy plus alpha distance gate", "distance-threshold tuning", "old E25-v2 reference support", "train/201 information"],
+            "abandoned_distance_candidate": "d_support <= max(0.5 m, alpha * D_xy); never frozen as a qualification rule",
+            "abandoned_distance_diagnostic_command": "python -m src.render diagnose-e25-v3-support --data-root /home/jasongao/Data/STU --support-pool runs/ajae/e21_v4_support_pool.npz --target-bank runs/ajae/e25_v2_real_targets.npz --output runs/ajae/e25_v3_support_observability.npz --processes 24",
+            "abandoned_distance_diagnostic_scope": {
               "source": "train/206 only",
               "retained_target_identities": 4827,
               "old_support_semantic_used": false,
@@ -2170,7 +2168,7 @@
               "calipers_evaluated_or_changed": false,
               "formal_pass_fail_adjudication": false
             },
-            "diagnostic_result": {
+            "abandoned_distance_diagnostic_result": {
               "run_seconds": 3.4155680099793244,
               "support_available_by_frame_offset": [4782, 4775, 4790, 4764, 4799],
               "any_allowed_frame_support_available": 4827,
@@ -2201,12 +2199,33 @@
               "occlusion_layer_counts": [1182, 3389, 256],
               "class_range_counts": {"car_10": [735, 1721, 824, 534, 74], "truck_18": [64, 148, 273, 43, 43], "other_vehicle_20": [67, 44, 23, 0, 0], "person_30": [0, 202, 29, 3, 0]}
             },
-            "candidate_Dxy_arrays_saved": ["observed_xy_hull_diameter_m", "observed_xy_aabb_diagonal_m", "observed_xy_longest_span_m"],
-            "artifact": "runs/ajae/e25_v3_support_observability.npz",
-            "artifact_bytes": 574508,
-            "artifact_sha256": "3d68b829f644540d6ca0392b6dac6b2a907c153b2f6b646c3c783ed9d4f40014",
-            "scientific_array_sha256": "fcf62d86f7be1e90392135c37e3d3dd6e6d3d3db5e792aee48cdd0b29cd51947",
-            "next_required_state": "owner freezes D_xy and alpha; then rebuild the train/206 semantic target bank and inspect four active classes, five aggregate range bins, and three aggregate occlusion layers before any control generation",
+            "abandoned_distance_candidate_arrays": ["observed_xy_hull_diameter_m", "observed_xy_aabb_diagonal_m", "observed_xy_longest_span_m"],
+            "abandoned_distance_diagnostic_artifact": {
+              "path": "runs/ajae/e25_v3_support_observability.npz",
+              "bytes": 574508,
+              "sha256": "3d68b829f644540d6ca0392b6dac6b2a907c153b2f6b646c3c783ed9d4f40014",
+              "scientific_array_sha256": "fcf62d86f7be1e90392135c37e3d3dd6e6d3d3db5e792aee48cdd0b29cd51947"
+            },
+            "support_plane_compatibility_diagnostic": {
+              "status": "frozen before execution",
+              "source": "train/206 retained 4827 real target identities and E21-v4 qualified support pool only",
+              "generator_executed": false,
+              "train_201_accessed": false,
+              "old_support_bindings_used": false,
+              "frame_search_order": [0, -1, 1, -2, 2],
+              "candidate_order_within_frame": "exact 2D Euclidean anchor-to-target-frame closed-XY-hull distance, then frozen E21-v4 selection hash",
+              "inherited_patch_qualification": {"central_median_residual_m_maximum": 0.03, "central_q95_residual_m_maximum": 0.08, "small_large_normal_angle_deg_maximum": 5.0, "anchor_height_difference_m_maximum": 0.08, "finite_unit_upward_normals": true},
+              "compatibility_conditions": {
+                "projected_multiscale_height": "maximum absolute small-vs-large predicted ground-height difference over every target XY convex-hull vertex <=0.08 m",
+                "visible_object_burial": "fraction of target-frame observed object returns below the central plane by more than 0.02 m <=0.02"
+              },
+              "descriptive_not_gated": ["anchor-to-hull distance", "anchor distance divided by E21 central radius", "plane slope", "minimum observed signed height", "visible normal-direction height extent", "minimum signed height divided by visible extent", "minimum-gap-exceeds-visible-extent flag"],
+              "rejection_codes": ["no_semantically_legal_patch", "no_projection_stable_patch", "visible_geometry_incompatible"],
+              "formal_pass_fail_adjudication": false,
+              "required_reports": ["retained and rejected by four active classes", "retained in five aggregate range bins", "retained in three aggregate occlusion layers", "rejection codes", "selected frame offsets and support semantics", "actual candidate evaluations", "descriptive anchor and visible-height relations"],
+              "command": "python -m src.render diagnose-e25-v3-plane --data-root /home/jasongao/Data/STU --support-pool runs/ajae/e21_v4_support_pool.npz --target-bank runs/ajae/e25_v2_real_targets.npz --output runs/ajae/e25_v3_plane_compatibility.npz --processes 24"
+            },
+            "next_required_state": "run the frozen read-only plane diagnostic; only if all four active classes, five aggregate range bins and three aggregate occlusion layers remain represented may the owner decide whether to freeze the E25-v3 target bank",
             "downstream": "E26-v2, E46 and E48 remain locked"
           },
           "E26": {

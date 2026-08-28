@@ -7505,6 +7505,9 @@ _E25V2_CACHE_LIMIT = 8
 _E25V3_FRAME_OFFSETS = (0, -1, 1, -2, 2)
 _E25V3_TARGETS: dict[str, np.ndarray] = {}
 _E25V3_SUPPORT_ROWS: dict[tuple[int, tuple[int, ...]], np.ndarray] = {}
+_E25V3_PLANE_NORMALS = np.empty((0, 3, 3), dtype=np.float64)
+_E25V3_PLANE_OFFSETS = np.empty((0, 3), dtype=np.float64)
+_E25V3_PLANE_RADIUS = np.empty(0, dtype=np.float64)
 
 
 @dataclass(frozen=True, slots=True)
@@ -7614,32 +7617,40 @@ def _xy_hull_distance(
 def _e25v3_support_diagnostic_frame(
     task: tuple[int, np.ndarray],
 ) -> dict[str, np.ndarray]:
-    """Measure legal-support observability without running control generation."""
+    """Find the nearest E21 plane compatible with each observed real object."""
     frame_id, target_indices = task
     sequence, pool = _E25V2_SEQUENCE, _E25V2_SUPPORT_POOL
-    if sequence is None or pool is None or not _E25V3_TARGETS:
-        raise RuntimeError("E25-v3 support diagnostic is not initialized")
+    if (
+        sequence is None or pool is None or not _E25V3_TARGETS
+        or _E25V3_PLANE_NORMALS.shape[0] != pool.frames.size
+    ):
+        raise RuntimeError("E25-v3 plane diagnostic is not initialized")
     frame = sequence.source_frame(frame_id)
     assert frame.labels is not None
     rotation, translation = _pose(frame)
     count = target_indices.size
-    nearest_distance = np.full(
-        (count, len(_E25V3_FRAME_OFFSETS)), np.inf, dtype=np.float64
-    )
-    nearest_row = np.full(
-        (count, len(_E25V3_FRAME_OFFSETS)), -1, dtype=np.int64
-    )
-    nearest_semantic = np.zeros(
-        (count, len(_E25V3_FRAME_OFFSETS)), dtype=np.uint16
-    )
     candidate_count = np.zeros(
         (count, len(_E25V3_FRAME_OFFSETS)), dtype=np.int32
     )
-    hull_diameter = np.empty(count, dtype=np.float64)
-    aabb_diagonal = np.empty(count, dtype=np.float64)
-    longest_span = np.empty(count, dtype=np.float64)
-    span_xy = np.empty((count, 2), dtype=np.float64)
-    hull_area = np.empty(count, dtype=np.float64)
+    nearest_distance = np.full_like(candidate_count, np.inf, dtype=np.float64)
+    compatible = np.zeros(count, dtype=np.bool_)
+    rejection_code = np.ones(count, dtype=np.uint8)
+    evaluated = np.zeros(count, dtype=np.int32)
+    projection_rejections = np.zeros(count, dtype=np.int32)
+    burial_rejections = np.zeros(count, dtype=np.int32)
+    selected_row = np.full(count, -1, dtype=np.int64)
+    selected_offset = np.full(count, 127, dtype=np.int8)
+    selected_semantic = np.zeros(count, dtype=np.uint16)
+    selected_anchor_distance = np.full(count, np.nan, dtype=np.float64)
+    selected_radius = np.full(count, np.nan, dtype=np.float64)
+    selected_normal = np.full((count, 3), np.nan, dtype=np.float64)
+    selected_offset_value = np.full(count, np.nan, dtype=np.float64)
+    projection_height_difference = np.full(count, np.nan, dtype=np.float64)
+    buried_fraction = np.full(count, np.nan, dtype=np.float64)
+    signed_height_summary = np.full((count, 6), np.nan, dtype=np.float64)
+    lower_gap_over_visible_extent = np.full(count, np.nan, dtype=np.float64)
+    anchor_distance_over_radius = np.full(count, np.nan, dtype=np.float64)
+    plane_slope_deg = np.full(count, np.nan, dtype=np.float64)
     observed_points = np.empty(count, dtype=np.int32)
     for output_index, target_index in enumerate(target_indices):
         semantic = int(_E25V3_TARGETS["real_semantic"][target_index])
@@ -7652,65 +7663,129 @@ def _e25v3_support_diagnostic_frame(
         sensor_points = np.asarray(frame.xyzi[selected, :3], dtype=np.float64)
         if sensor_points.shape[0] < 4:
             raise RenderError("E25-v3 target has fewer than four observed points")
-        world_xy = (sensor_points @ rotation.T + translation)[:, :2]
+        world_points = sensor_points @ rotation.T + translation
         try:
-            hull = ConvexHull(world_xy)
+            hull = ConvexHull(world_points[:, :2])
         except QhullError as error:
             raise RenderError("E25-v3 target has a degenerate XY hull") from error
-        polygon = world_xy[np.asarray(hull.vertices), :]
-        difference = polygon[:, None, :] - polygon[None, :, :]
-        diameter = math.sqrt(float(np.max(np.sum(np.square(difference), axis=2))))
-        spans = np.max(polygon, axis=0) - np.min(polygon, axis=0)
-        if diameter <= 0.0 or not np.isfinite(diameter):
-            raise RenderError("E25-v3 observed XY footprint is degenerate")
-        hull_diameter[output_index] = diameter
-        aabb_diagonal[output_index] = float(np.linalg.norm(spans))
-        longest_span[output_index] = float(np.max(spans))
-        span_xy[output_index] = spans
-        hull_area[output_index] = float(hull.volume)
+        polygon = world_points[np.asarray(hull.vertices), :2]
+        equations = np.asarray(hull.equations, dtype=np.float64)
         observed_points[output_index] = sensor_points.shape[0]
         policy = tuple(sorted(normal_control_support_semantics(semantic)))
+        ordered_candidates: list[tuple[int, np.ndarray, np.ndarray]] = []
         for offset_index, offset in enumerate(_E25V3_FRAME_OFFSETS):
             rows = _E25V3_SUPPORT_ROWS.get(
                 (frame_id + offset, policy), np.empty(0, dtype=np.int64)
             )
             candidate_count[output_index, offset_index] = rows.size
             if rows.size == 0:
+                ordered_candidates.append(
+                    (offset, np.empty(0, dtype=np.int64), np.empty(0))
+                )
                 continue
             distance = _xy_hull_distance(
-                pool.anchors_world_m[rows, :2], polygon,
-                np.asarray(hull.equations, dtype=np.float64),
+                pool.anchors_world_m[rows, :2], polygon, equations,
             )
-            selected_row = int(
-                np.lexsort((pool.selection_hashes[rows], distance))[0]
+            order = np.lexsort((pool.selection_hashes[rows], distance))
+            nearest_distance[output_index, offset_index] = distance[order[0]]
+            ordered_candidates.append((offset, rows[order], distance[order]))
+        for offset, ordered_rows, ordered_distance in ordered_candidates:
+            for start in range(0, ordered_rows.size, 64):
+                stop = min(start + 64, ordered_rows.size)
+                batch_rows = ordered_rows[start:stop]
+                normals = _E25V3_PLANE_NORMALS[batch_rows]
+                offsets = _E25V3_PLANE_OFFSETS[batch_rows]
+                small_height = -(
+                    polygon @ normals[:, 0, :2].T + offsets[:, 0]
+                ) / normals[:, 0, 2]
+                large_height = -(
+                    polygon @ normals[:, 2, :2].T + offsets[:, 2]
+                ) / normals[:, 2, 2]
+                height_difference = np.max(
+                    np.abs(small_height - large_height), axis=0
+                )
+                stable = height_difference <= 0.08
+                signed = (
+                    world_points @ normals[:, 1, :].T + offsets[:, 1]
+                )
+                fraction = np.mean(signed < -0.02, axis=0)
+                accepted = stable & (fraction <= 0.02)
+                if bool(accepted.any()):
+                    local = int(np.flatnonzero(accepted)[0])
+                    prefix = local + 1
+                    evaluated[output_index] += prefix
+                    projection_rejections[output_index] += int(
+                        np.count_nonzero(~stable[:prefix])
+                    )
+                    burial_rejections[output_index] += int(
+                        np.count_nonzero(stable[:prefix] & (fraction[:prefix] > 0.02))
+                    )
+                    row = int(batch_rows[local])
+                    current = signed[:, local]
+                    quantiles = np.quantile(current, (0.0, 0.02, 0.05, 0.5, 1.0))
+                    visible_extent = float(quantiles[-1] - quantiles[0])
+                    compatible[output_index] = True
+                    rejection_code[output_index] = 0
+                    selected_row[output_index] = row
+                    selected_offset[output_index] = offset
+                    selected_semantic[output_index] = pool.semantics[row]
+                    selected_anchor_distance[output_index] = ordered_distance[start + local]
+                    selected_radius[output_index] = _E25V3_PLANE_RADIUS[row]
+                    selected_normal[output_index] = normals[local, 1]
+                    selected_offset_value[output_index] = offsets[local, 1]
+                    projection_height_difference[output_index] = height_difference[local]
+                    buried_fraction[output_index] = fraction[local]
+                    signed_height_summary[output_index] = (
+                        quantiles[0], quantiles[1], quantiles[2], quantiles[3],
+                        quantiles[4], visible_extent,
+                    )
+                    lower_gap_over_visible_extent[output_index] = (
+                        quantiles[0] / visible_extent
+                        if visible_extent > EPSILON else np.inf
+                    )
+                    anchor_distance_over_radius[output_index] = (
+                        ordered_distance[start + local] / _E25V3_PLANE_RADIUS[row]
+                    )
+                    plane_slope_deg[output_index] = math.degrees(
+                        math.acos(float(np.clip(normals[local, 1, 2], -1.0, 1.0)))
+                    )
+                    break
+                evaluated[output_index] += batch_rows.size
+                projection_rejections[output_index] += int(np.count_nonzero(~stable))
+                burial_rejections[output_index] += int(
+                    np.count_nonzero(stable & (fraction > 0.02))
+                )
+            if compatible[output_index]:
+                break
+        if not compatible[output_index]:
+            rejection_code[output_index] = (
+                1 if int(candidate_count[output_index].sum()) == 0
+                else 2 if burial_rejections[output_index] == 0
+                else 3
             )
-            row = int(rows[selected_row])
-            nearest_distance[output_index, offset_index] = distance[selected_row]
-            nearest_row[output_index, offset_index] = row
-            nearest_semantic[output_index, offset_index] = pool.semantics[row]
-    nearest_any = np.min(nearest_distance, axis=1)
     return {
         "target_index": target_indices.astype(np.int64),
         "observed_point_count": observed_points,
-        "observed_xy_span_m": span_xy,
-        "observed_xy_longest_span_m": longest_span,
-        "observed_xy_aabb_diagonal_m": aabb_diagonal,
-        "observed_xy_hull_diameter_m": hull_diameter,
-        "observed_xy_hull_area_m2": hull_area,
         "support_candidate_count_by_offset": candidate_count,
         "nearest_support_distance_m_by_offset": nearest_distance,
-        "nearest_support_row_by_offset": nearest_row,
-        "nearest_support_semantic_by_offset": nearest_semantic,
-        "nearest_support_distance_m": nearest_any,
-        "minimum_alpha_hull_diameter": np.maximum(
-            nearest_any - 0.5, 0.0
-        ) / hull_diameter,
-        "minimum_alpha_aabb_diagonal": np.maximum(
-            nearest_any - 0.5, 0.0
-        ) / aabb_diagonal,
-        "minimum_alpha_longest_span": np.maximum(
-            nearest_any - 0.5, 0.0
-        ) / longest_span,
+        "compatible": compatible,
+        "rejection_code": rejection_code,
+        "evaluated_support_candidates": evaluated,
+        "projection_stability_rejections": projection_rejections,
+        "visible_burial_rejections": burial_rejections,
+        "selected_support_row": selected_row,
+        "selected_frame_offset": selected_offset,
+        "selected_support_semantic": selected_semantic,
+        "selected_anchor_distance_m": selected_anchor_distance,
+        "selected_central_radius_m": selected_radius,
+        "selected_plane_normal": selected_normal,
+        "selected_plane_offset": selected_offset_value,
+        "projection_height_difference_m": projection_height_difference,
+        "visible_buried_fraction": buried_fraction,
+        "signed_height_summary_m": signed_height_summary,
+        "lower_gap_over_visible_extent": lower_gap_over_visible_extent,
+        "anchor_distance_over_central_radius": anchor_distance_over_radius,
+        "plane_slope_deg": plane_slope_deg,
     }
 
 
@@ -7734,13 +7809,13 @@ def _finite_quantiles(values: np.ndarray) -> dict[str, object]:
     }
 
 
-def run_e25_v3_support_diagnostic(
+def run_e25_v3_plane_diagnostic(
     data_root: Path | str, support_pool_path: Path | str,
     target_bank_path: Path | str, output_path: Path | str, *, processes: int = 24,
 ) -> dict[str, object]:
-    """Audit finite exact support association on train/206 without generation."""
+    """Audit E21-plane compatibility at real train/206 object locations."""
     if not 1 <= processes <= 24:
-        raise PlacementError("E25-v3 support diagnostic processes must be in [1,24]")
+        raise PlacementError("E25-v3 plane diagnostic processes must be in [1,24]")
     try:
         from .protocol import load_protocol
         from .scene import LabelMode, STUSequence
@@ -7776,6 +7851,54 @@ def run_e25_v3_support_diagnostic(
         label_mode=LabelMode.REQUIRED,
     )
     pool = load_qualified_support_pool(support_pool_path)
+    support_path = Path(support_pool_path).expanduser().resolve(strict=True)
+    with np.load(support_path, allow_pickle=False) as payload:
+        required_plane_fields = {
+            "qualified", "normals", "offsets", "central_radius_m",
+            "median_residual_m", "q95_residual_m", "normal_angle_deg",
+            "height_difference_m",
+        }
+        if not required_plane_fields.issubset(payload.files):
+            raise PlacementError("E25-v3 support pool lacks multiscale plane arrays")
+        raw_rows = np.asarray(pool.pool_indices, dtype=np.int64)
+        qualified = np.asarray(payload["qualified"], dtype=np.bool_)
+        if not bool(np.all(qualified[raw_rows])):
+            raise PlacementError("E25-v3 plane arrays include an unqualified patch")
+        plane_normals = np.asarray(payload["normals"], dtype=np.float64)[raw_rows]
+        plane_offsets = np.asarray(payload["offsets"], dtype=np.float64)[raw_rows]
+        plane_radius = np.asarray(
+            payload["central_radius_m"], dtype=np.float64
+        )[raw_rows]
+        median_residual = np.asarray(
+            payload["median_residual_m"], dtype=np.float64
+        )[raw_rows, 1]
+        q95_residual = np.asarray(
+            payload["q95_residual_m"], dtype=np.float64
+        )[raw_rows, 1]
+        normal_angle = np.asarray(
+            payload["normal_angle_deg"], dtype=np.float64
+        )[raw_rows]
+        height_difference = np.asarray(
+            payload["height_difference_m"], dtype=np.float64
+        )[raw_rows]
+    if (
+        plane_normals.shape != (pool.frames.size, 3, 3)
+        or plane_offsets.shape != (pool.frames.size, 3)
+        or plane_radius.shape != (pool.frames.size,)
+        or not np.isfinite(plane_normals).all()
+        or not np.isfinite(plane_offsets).all()
+        or not np.isfinite(plane_radius).all()
+        or np.any(plane_normals[:, :, 2] <= 0.0)
+        or not np.allclose(
+            np.linalg.norm(plane_normals, axis=2), 1.0,
+            atol=1.0e-7, rtol=1.0e-7,
+        )
+        or np.any(median_residual > 0.03)
+        or np.any(q95_residual > 0.08)
+        or np.any(normal_angle > 5.0)
+        or np.any(height_difference > 0.08)
+    ):
+        raise PlacementError("E25-v3 support pool violates E21-v4 qualification")
     policies = {
         tuple(sorted(normal_control_support_semantics(int(semantic))))
         for semantic in np.unique(targets["real_semantic"])
@@ -7808,8 +7931,12 @@ def run_e25_v3_support_diagnostic(
                 if parts else np.empty(0, dtype=np.int64)
             )
     global _E25V2_SEQUENCE, _E25V2_SUPPORT_POOL, _E25V3_TARGETS, _E25V3_SUPPORT_ROWS
+    global _E25V3_PLANE_NORMALS, _E25V3_PLANE_OFFSETS, _E25V3_PLANE_RADIUS
     _E25V2_SEQUENCE, _E25V2_SUPPORT_POOL = sequence, pool
     _E25V3_TARGETS, _E25V3_SUPPORT_ROWS = targets, support_rows
+    _E25V3_PLANE_NORMALS = np.ascontiguousarray(plane_normals)
+    _E25V3_PLANE_OFFSETS = np.ascontiguousarray(plane_offsets)
+    _E25V3_PLANE_RADIUS = np.ascontiguousarray(plane_radius)
     tasks = [
         (int(frame_id), np.flatnonzero(targets["frame_id"] == frame_id))
         for frame_id in np.unique(targets["frame_id"])
@@ -7848,88 +7975,140 @@ def run_e25_v3_support_diagnostic(
         "unit_hash": np.ascontiguousarray(targets["unit_hash"]),
         **diagnostic,
     }
-    distance = scientific["nearest_support_distance_m"]
+    compatible = scientific["compatible"]
     class_names = {
         10: "car_10", 18: "truck_18", 20: "other_vehicle_20", 30: "person_30"
     }
     class_summary: dict[str, object] = {}
     for semantic in np.unique(scientific["real_semantic"]):
         mask = scientific["real_semantic"] == semantic
+        accepted = mask & compatible
         class_summary[class_names.get(int(semantic), str(int(semantic)))] = {
             "targets": int(np.count_nonzero(mask)),
-            "same_frame_support_available": int(np.count_nonzero(
-                np.isfinite(scientific["nearest_support_distance_m_by_offset"][mask, 0])
+            "retained": int(np.count_nonzero(accepted)),
+            "rejected": int(np.count_nonzero(mask & ~compatible)),
+            "retained_range_count": np.bincount(
+                scientific["range_bin"][accepted], minlength=5
+            )[:5].tolist(),
+            "retained_occlusion_layer_count": np.bincount(
+                scientific["occlusion_layer"][accepted], minlength=3
+            ).tolist(),
+            "selected_anchor_distance_m": _finite_quantiles(
+                scientific["selected_anchor_distance_m"][accepted]
+            ),
+            "projection_height_difference_m": _finite_quantiles(
+                scientific["projection_height_difference_m"][accepted]
+            ),
+            "visible_buried_fraction": _finite_quantiles(
+                scientific["visible_buried_fraction"][accepted]
+            ),
+            "minimum_visible_signed_height_m": _finite_quantiles(
+                scientific["signed_height_summary_m"][accepted, 0]
+            ),
+            "lower_gap_over_visible_extent": _finite_quantiles(
+                scientific["lower_gap_over_visible_extent"][accepted]
+            ),
+            "lower_gap_exceeds_visible_extent": int(np.count_nonzero(
+                scientific["lower_gap_over_visible_extent"][accepted] > 1.0
             )),
-            "any_allowed_frame_support_available": int(np.count_nonzero(
-                np.isfinite(distance[mask])
-            )),
-            "nearest_distance_m": _finite_quantiles(distance[mask]),
-            "observed_xy_hull_diameter_m": _finite_quantiles(
-                scientific["observed_xy_hull_diameter_m"][mask]
-            ),
-            "observed_xy_aabb_diagonal_m": _finite_quantiles(
-                scientific["observed_xy_aabb_diagonal_m"][mask]
-            ),
-            "observed_xy_longest_span_m": _finite_quantiles(
-                scientific["observed_xy_longest_span_m"][mask]
-            ),
-            "minimum_alpha_hull_diameter": _finite_quantiles(
-                scientific["minimum_alpha_hull_diameter"][mask]
-            ),
-            "minimum_alpha_aabb_diagonal": _finite_quantiles(
-                scientific["minimum_alpha_aabb_diagonal"][mask]
-            ),
-            "minimum_alpha_longest_span": _finite_quantiles(
-                scientific["minimum_alpha_longest_span"][mask]
-            ),
         }
-    offset_distance = scientific["nearest_support_distance_m_by_offset"]
+    accepted_distance = scientific["selected_anchor_distance_m"][compatible]
+    accepted_gap_ratio = scientific["lower_gap_over_visible_extent"][compatible]
+    rejection_names = (
+        "accepted", "no_semantically_legal_patch",
+        "no_projection_stable_patch", "visible_geometry_incompatible",
+    )
+    rejection_count = np.bincount(
+        scientific["rejection_code"], minlength=len(rejection_names)
+    )
     result: dict[str, object] = {
-        "experiment": "E25-v3-support-observability-diagnostic",
+        "experiment": "E25-v3-support-plane-compatibility-diagnostic",
         "status": "diagnostic_complete",
         "passed": None,
         "source_sequence": "train/206",
         "target_units": count,
         "frame_offsets_in_search_order": list(_E25V3_FRAME_OFFSETS),
-        "distance_definition": "exact 2D Euclidean distance from support anchor to closed target-frame observed-return XY convex hull",
+        "candidate_order": "first frame offset, then exact anchor-to-closed-XY-hull distance, then E21-v4 selection hash",
+        "compatibility_rule": {
+            "source_patch": "E21-v4 qualified=true only; all original residual, normal and multiscale limits revalidated",
+            "extrapolation_stability": "maximum absolute small-vs-large predicted ground-height difference over all target-frame XY-hull vertices <=0.08 m",
+            "visible_geometry": "fraction of target-frame observed object returns more than 0.02 m below the central plane <=0.02",
+            "anchor_distance_gate": None,
+            "lower_visible_gap_upper_gate": None,
+        },
         "legal_support_semantics_unchanged": True,
         "old_reference_support_fields_used": False,
         "generator_executed": False,
         "train_201_accessed": False,
         "calipers_evaluated_or_changed": False,
-        "distance_rule_frozen": False,
-        "alpha_frozen": False,
-        "candidate_formula_only": "d_support <= max(0.5 m, alpha * D_xy)",
-        "candidate_Dxy_definitions_reported": [
-            "observed-return XY convex-hull diameter",
-            "observed-return XY axis-aligned bounding-box diagonal",
-            "observed-return XY longest axis-aligned span",
-        ],
+        "Dxy_alpha_route_abandoned": True,
         "target_bank_input_role": "identity and real-observation covariates only; retained E25-v2 support bindings ignored",
-        "support_available_by_offset": [
-            int(np.count_nonzero(np.isfinite(offset_distance[:, index])))
-            for index in range(offset_distance.shape[1])
-        ],
-        "any_allowed_frame_support_available": int(np.count_nonzero(np.isfinite(distance))),
-        "inside_or_within_0p5m": int(np.count_nonzero(distance <= 0.5)),
-        "nearest_distance_m": _finite_quantiles(distance),
+        "retained": int(np.count_nonzero(compatible)),
+        "rejected": int(np.count_nonzero(~compatible)),
+        "rejection_count": {
+            name: int(value)
+            for name, value in zip(rejection_names, rejection_count, strict=True)
+        },
         "class_summary": class_summary,
-        "range_count": np.bincount(scientific["range_bin"], minlength=5)[:5].tolist(),
-        "range_with_finite_support_count": np.bincount(
-            scientific["range_bin"][np.isfinite(distance)], minlength=5
+        "retained_range_count": np.bincount(
+            scientific["range_bin"][compatible], minlength=5
         )[:5].tolist(),
-        "occlusion_layer_count": np.bincount(
-            scientific["occlusion_layer"], minlength=3
+        "retained_occlusion_layer_count": np.bincount(
+            scientific["occlusion_layer"][compatible], minlength=3
         ).tolist(),
-        "occlusion_layer_with_finite_support_count": np.bincount(
-            scientific["occlusion_layer"][np.isfinite(distance)], minlength=3
-        ).tolist(),
+        "selected_frame_offset_count": [
+            int(np.count_nonzero(
+                compatible & (scientific["selected_frame_offset"] == offset)
+            ))
+            for offset in _E25V3_FRAME_OFFSETS
+        ],
+        "selected_support_semantic_count": {
+            str(semantic): int(np.count_nonzero(
+                compatible
+                & (scientific["selected_support_semantic"] == semantic)
+            ))
+            for semantic in (40, 48)
+        },
+        "support_candidates_available": int(np.sum(
+            scientific["support_candidate_count_by_offset"], dtype=np.int64
+        )),
+        "support_candidates_evaluated": int(np.sum(
+            scientific["evaluated_support_candidates"], dtype=np.int64
+        )),
+        "projection_stability_rejections": int(np.sum(
+            scientific["projection_stability_rejections"], dtype=np.int64
+        )),
+        "visible_burial_rejections": int(np.sum(
+            scientific["visible_burial_rejections"], dtype=np.int64
+        )),
+        "selected_anchor_distance_m": _finite_quantiles(accepted_distance),
+        "selected_anchor_distance_count_gt_5m": int(np.count_nonzero(
+            accepted_distance > 5.0
+        )),
+        "selected_anchor_distance_count_gt_10m": int(np.count_nonzero(
+            accepted_distance > 10.0
+        )),
+        "projection_height_difference_m": _finite_quantiles(
+            scientific["projection_height_difference_m"][compatible]
+        ),
+        "visible_buried_fraction": _finite_quantiles(
+            scientific["visible_buried_fraction"][compatible]
+        ),
+        "minimum_visible_signed_height_m": _finite_quantiles(
+            scientific["signed_height_summary_m"][compatible, 0]
+        ),
+        "lower_gap_over_visible_extent": _finite_quantiles(accepted_gap_ratio),
+        "lower_gap_exceeds_visible_extent": int(np.count_nonzero(
+            accepted_gap_ratio > 1.0
+        )),
+        "plane_slope_deg": _finite_quantiles(
+            scientific["plane_slope_deg"][compatible]
+        ),
         "run_seconds": float(time.monotonic() - started),
         "target_bank_sha256": _sha256_path(target_path),
-        "support_pool_sha256": _sha256_path(
-            Path(support_pool_path).expanduser().resolve(strict=True)
-        ),
+        "support_pool_sha256": _sha256_path(support_path),
         "scientific_array_hash": _scientific_array_hash(scientific),
+        "claim_limit": "The diagnostic rejects obvious multiscale extrapolation instability and visible-object plane cutting; it does not recover an unobserved tyre or foot contact point.",
     }
     destination = Path(output_path).expanduser().resolve()
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -14248,7 +14427,7 @@ def _render_parser() -> argparse.ArgumentParser:
     e25v2.add_argument("--target-output", type=Path, required=True)
     e25v2.add_argument("--output", type=Path, required=True)
     e25v2.add_argument("--processes", type=int, default=12)
-    e25v3 = subcommands.add_parser("diagnose-e25-v3-support")
+    e25v3 = subcommands.add_parser("diagnose-e25-v3-plane")
     e25v3.add_argument("--data-root", type=Path, required=True)
     e25v3.add_argument("--support-pool", type=Path, required=True)
     e25v3.add_argument("--target-bank", type=Path, required=True)
@@ -14397,8 +14576,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 0 if result["passed"] else 1
-    if args.command == "diagnose-e25-v3-support":
-        result = run_e25_v3_support_diagnostic(
+    if args.command == "diagnose-e25-v3-plane":
+        result = run_e25_v3_plane_diagnostic(
             args.data_root, args.support_pool, args.target_bank,
             args.output, processes=args.processes,
         )
