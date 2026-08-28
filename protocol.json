@@ -2139,7 +2139,75 @@
               "interpretation": "The two direct exhaustions are other-vehicle template-tail events, not evidence of an all-class or whole-class failure. The target bank is semantically unqualified because distant support bindings affect support strata and support proposal order; therefore this run cannot adjudicate the scientific viability of observation-conditioned normal controls.",
               "decision_boundary": "Do not expand proposal limits, relax calipers, use train/201 targets, or rerun by changing constants. A versioned target-bank rule with an owner-frozen exact support-association definition is required before deciding whether E25-v2 should be repeated."
             },
+            "reporting_implementation_correction": {
+              "historical_artifact_rewritten": false,
+              "completed_coverage_mask": "template_identity nonempty AND placement_exhaustion_code=0 AND hard_error_code=0",
+              "actual_support_proposal_accounting": "placement_rejections + condition_rejections + one accepted candidate for a completed fixture",
+              "retained_artifact_recalculation": {"completed": 254, "accepted_center_frames": 117, "accepted_real_instances": 27, "accepted_range_count": [5, 203, 41, 5, 0], "accepted_occlusion_layer_count": [88, 164, 2], "actual_support_candidates": 816594}
+            },
             "downstream": "PASS permits replacing the sole production normal-control position selector and then running E26-v2; FAIL keeps E26-v2 and E46 locked and requires owner decision"
+          },
+          "E25-v3": {
+            "status": "versioned; exact finite association structure fixed; read-only observability diagnostic complete; D_xy and alpha not frozen; generation not run",
+            "historical_results_retained": ["E25 PASS", "E25-v2 FAIL"],
+            "failure_classification_inherited": "E25-v2 is a qualification specification defect and does not adjudicate the normal-control construct",
+            "unchanged_support_semantics": {"vehicle_like": [40], "person_rider_like": [40, 48]},
+            "frame_search_order": [0, -1, 1, -2, 2],
+            "association_order": "accept the first frame offset in the fixed order containing at least one semantically legal support within the final physical distance bound",
+            "distance_geometry": "true 2D Euclidean distance from an E21-v4 support anchor to the closed world-XY convex hull of the real instance in its target frame; inside distance is zero",
+            "prohibited_associations": ["per-half-space 0.5 m proxy", "unbounded nearest-support fallback", "distance to a non-target-frame instance hull"],
+            "candidate_distance_formula_only": "d_support <= max(0.5 m, alpha * D_xy)",
+            "pending_owner_freeze": ["one physical definition of D_xy", "one alpha fixed before target-bank reconstruction"],
+            "threshold_selection_prohibitions": ["256/256 generation outcome", "E45A matched-pair outcome", "E46 classifier output", "train/201 information"],
+            "diagnostic_command": "python -m src.render diagnose-e25-v3-support --data-root /home/jasongao/Data/STU --support-pool runs/ajae/e21_v4_support_pool.npz --target-bank runs/ajae/e25_v2_real_targets.npz --output runs/ajae/e25_v3_support_observability.npz --processes 24",
+            "diagnostic_scope": {
+              "source": "train/206 only",
+              "retained_target_identities": 4827,
+              "old_support_semantic_used": false,
+              "old_reference_support_pool_index_used": false,
+              "generator_executed": false,
+              "train_201_accessed": false,
+              "calipers_evaluated_or_changed": false,
+              "formal_pass_fail_adjudication": false
+            },
+            "diagnostic_result": {
+              "run_seconds": 3.4155680099793244,
+              "support_available_by_frame_offset": [4782, 4775, 4790, 4764, 4799],
+              "any_allowed_frame_support_available": 4827,
+              "absolute_nearest_frame_offset_count": [2682, 486, 442, 570, 647],
+              "inside_or_within_0p5m": 2962,
+              "nearest_distance_m": {"minimum": 0.0, "median": 0.0, "q75": 2.1141239161801755, "q90": 5.55048267126134, "q95": 10.245840113367578, "q99": 17.29537512462931, "maximum": 26.11010459935386},
+              "class_counts": {"car_10": 3888, "truck_18": 571, "other_vehicle_20": 134, "person_30": 234},
+              "class_within_0p5m": {"car_10": 2568, "truck_18": 304, "other_vehicle_20": 90, "person_30": 0},
+              "class_nearest_distance_m": {
+                "car_10": {"minimum": 0.0, "median": 0.0, "q75": 1.7922603812250046, "q90": 5.346072112341622, "q95": 11.554986478336106, "maximum": 26.11010459935386},
+                "truck_18": {"minimum": 0.0, "median": 0.11271017930087096, "q75": 4.214585535836328, "q90": 7.159505545133798, "q95": 8.715752586447378, "maximum": 12.744536616668393},
+                "other_vehicle_20": {"minimum": 0.0, "median": 0.0, "q75": 1.2973839967430387, "q90": 3.5924664177882306, "q95": 3.756260408683648, "maximum": 3.8884720702875986},
+                "person_30": {"minimum": 1.1978176499622661, "median": 1.5812246111409225, "q75": 1.9816631252968584, "q90": 4.420656925956824, "q95": 4.593702583759975, "maximum": 11.937299716119252}
+              },
+              "observed_xy_hull_diameter_m": {
+                "car_10": {"median": 3.7447329418803283, "q95": 4.778112897717463, "maximum": 5.284350405329657},
+                "truck_18": {"median": 4.708991545906803, "q95": 5.599589376699054, "maximum": 7.139260718786955},
+                "other_vehicle_20": {"median": 2.5418361450576645, "q95": 2.780044914886765, "maximum": 2.8035153788962375},
+                "person_30": {"median": 0.530211411868619, "q95": 0.7217847646888851, "maximum": 1.2304071038856967}
+              },
+              "minimum_alpha_if_Dxy_is_observed_xy_hull_diameter": {
+                "car_10": {"minimum": 0.0, "median": 0.0, "q75": 0.39661606946313344, "q90": 1.8002539300367475, "q95": 3.6219108562328954, "maximum": 16.375843484313563},
+                "truck_18": {"minimum": 0.0, "median": 0.0, "q75": 1.0108110139363364, "q90": 2.427438659683668, "q95": 3.050425361929034, "maximum": 4.2932213172024},
+                "other_vehicle_20": {"minimum": 0.0, "median": 0.0, "q75": 0.37136205457793064, "q90": 1.9018227506138756, "q95": 2.156307348642563, "maximum": 3.5106718621844752},
+                "person_30": {"minimum": 1.0476296352466876, "median": 2.3509439119209596, "q75": 2.805216242483772, "q90": 5.381331657157282, "q95": 6.142925921661472, "maximum": 9.295541028655961}
+              },
+              "range_counts": [866, 2115, 1149, 580, 117],
+              "occlusion_layer_counts": [1182, 3389, 256],
+              "class_range_counts": {"car_10": [735, 1721, 824, 534, 74], "truck_18": [64, 148, 273, 43, 43], "other_vehicle_20": [67, 44, 23, 0, 0], "person_30": [0, 202, 29, 3, 0]}
+            },
+            "candidate_Dxy_arrays_saved": ["observed_xy_hull_diameter_m", "observed_xy_aabb_diagonal_m", "observed_xy_longest_span_m"],
+            "artifact": "runs/ajae/e25_v3_support_observability.npz",
+            "artifact_bytes": 574508,
+            "artifact_sha256": "3d68b829f644540d6ca0392b6dac6b2a907c153b2f6b646c3c783ed9d4f40014",
+            "scientific_array_sha256": "fcf62d86f7be1e90392135c37e3d3dd6e6d3d3db5e792aee48cdd0b29cd51947",
+            "next_required_state": "owner freezes D_xy and alpha; then rebuild the train/206 semantic target bank and inspect four active classes, five aggregate range bins, and three aggregate occlusion layers before any control generation",
+            "downstream": "E26-v2, E46 and E48 remain locked"
           },
           "E26": {
             "status": "PASS; closed; Phase 2 closed; E27 unlocked",

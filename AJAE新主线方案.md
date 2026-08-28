@@ -1899,6 +1899,8 @@ E45A-v2作为Gate 1审计专用定向control银行完整执行至每目标64个p
 
 用户已据此授权修改正式normal-control位置生成。E25-v2按train/206真实正常观测引导的位置proposal与拒绝采样完成单次正式执行并FAIL：254/256完成，两个other-vehicle模板耗尽128个目标proposal；接受目标只覆盖27个真实实例且40–50米层为0。正式产物永久保留。结束后的独立只读审核进一步确认，4,827个目标中1,865个参考支撑距真实实例二维凸包超过0.5米，最大26.110105米；person的234个目标全部超过0.5米，40–50米层117个目标中111个超过0.5米。该缺陷来自`_real_instance_support_row`在没有近邻支撑时执行无最大距离限制的最近支撑回退，并已传播到106/254个完成control所引用的环境目标。因目标的support semantic和后续support proposal顺序受错误参考支撑影响，当前E25-v2不能裁决正式normal-control构念是否可行。256个真实模板、缩放、类别、姿态、材质、传感器与schema 7 proxy均未改变；旧E25、E26和E45B结果仍只对旧control分布有效。E26-v2、E46和E48保持锁定，后续目标库精确支撑关联定义等待新的课题负责人决策。
 
+课题负责人随后版本化E25-v3：类别合法支撑语义保持不变；目标帧优先，其后严格按$f-1,f+1,f-2,f+2$扩展；所有候选使用支撑锚点到目标帧真实实例世界XY凸包的二维欧氏距离；禁止半空间0.5米代理与无上限最近邻回退。最终距离边界采用有限的尺寸感知形式，但唯一$D_{xy}$定义和$\alpha$尚未冻结。为此完成了一次纯只读train/206诊断，没有运行生成器、读取train/201或改变caliper。4,827个保留目标在五帧并集中均有合法语义支撑；统一0.5米只覆盖2,962个，分类别为car 2,568/3,888、truck 304/571、other-vehicle 90/134、person 0/234。person最近距离minimum/median/$Q_{0.95}$/maximum为1.197818/1.581225/4.593703/11.937300米，其可见XY凸包直径median/$Q_{0.95}$/maximum为0.530211/0.721785/1.230407米。全体最近距离$Q_{0.75}$/$Q_{0.90}$/$Q_{0.95}$/$Q_{0.99}$/maximum为2.114124/5.550483/10.245840/17.295375/26.110105米。诊断同时逐目标保存凸包直径、轴对齐包围框对角线和最长跨度，以及三者代入候选公式时的最小$\alpha$，但没有选择其中任何一种。产物为`runs/ajae/e25_v3_support_observability.npz`，大小574,508字节，SHA-256为`3d68b829f644540d6ca0392b6dac6b2a907c153b2f6b646c3c783ed9d4f40014`，科学数组哈希为`fcf62d86f7be1e90392135c37e3d3dd6e6d3d3db5e792aee48cdd0b29cd51947`。
+
 当前可成立的局部结论是：
 
 > **schema 7 能合法、确定且高效地产生覆盖冻结几何区域的合成异常代理；这些对象可以从 train/206 的合格支撑池采样，以冻结连续落地规则达到 99% 接触/埋地资格，并能由同一权威放置接口拒绝与 train/206 实际观测非地面回波发生超过 5 cm 深穿透的位置。**
@@ -1913,7 +1915,7 @@ E45A-v2作为Gate 1审计专用定向control银行完整执行至每目标64个p
 当前执行节点为：
 
 $$
-\boxed{E25\text{-v2 FAIL RETAINED};\quad \text{TARGET-SUPPORT ASSOCIATION DECISION REQUIRED};\quad E26\text{-v2},E46,E48\ \text{LOCKED}}
+\boxed{E25\text{-v2 FAIL RETAINED};\quad E25\text{-v3 READ-ONLY DIAGNOSTIC COMPLETE};\quad D_{xy},\alpha\ \text{NOT FROZEN}}
 $$
 
 E23与E24-v2已按冻结设计通过，当前顺序进入：
@@ -1922,7 +1924,7 @@ $$
 E23\rightarrow E24\rightarrow E25\rightarrow E26
 $$
 
-E27–E44已关闭；E36-v1、E45-v1、E45-v2、E45A、E45A-v2和E25-v2 FAIL均保留。旧E45B已PASS，但只资格旧normal-control分布；任何新版正式control分布必须重新执行E45B-v2。E25-v2目标—支撑关联审核已确认大规模远距离错误绑定，当前等待课题负责人冻结新的精确关联定义；E26-v2、E46和E48保持锁定。
+E27–E44已关闭；E36-v1、E45-v1、E45-v2、E45A、E45A-v2和E25-v2 FAIL均保留。旧E45B已PASS，但只资格旧normal-control分布；任何新版正式control分布必须重新执行E45B-v2。E25-v3的精确欧氏距离、同帧优先和有限扩帧结构已经确定；只读诊断已经完成，当前等待课题负责人冻结唯一$D_{xy}$定义和$\alpha$。在此之前不重建目标库或运行生成器，E26-v2、E46和E48保持锁定。
 
 因此当前整体判断仍是：
 

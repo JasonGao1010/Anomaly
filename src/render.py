@@ -7502,6 +7502,9 @@ _E25V2_FRAME_CACHE: dict[
 ] = {}
 _E25V2_UNIFORM_CACHE: dict[tuple[int, int, int], np.ndarray] = {}
 _E25V2_CACHE_LIMIT = 8
+_E25V3_FRAME_OFFSETS = (0, -1, 1, -2, 2)
+_E25V3_TARGETS: dict[str, np.ndarray] = {}
+_E25V3_SUPPORT_ROWS: dict[tuple[int, tuple[int, ...]], np.ndarray] = {}
 
 
 @dataclass(frozen=True, slots=True)
@@ -7574,6 +7577,369 @@ def _real_instance_support_row(
         )
         eligible, distance = rows, all_distance
     return int(eligible[np.lexsort((pool.selection_hashes[eligible], distance))[0]])
+
+
+def _xy_hull_distance(
+    points_xy: np.ndarray, polygon_xy: np.ndarray, equations: np.ndarray,
+) -> np.ndarray:
+    """Return the exact Euclidean distance from points to a closed XY hull."""
+    points = np.asarray(points_xy, dtype=np.float64)
+    polygon = np.asarray(polygon_xy, dtype=np.float64)
+    if points.shape[0] == 0:
+        return np.empty(0, dtype=np.float64)
+    inside = np.all(
+        points @ equations[:, :2].T + equations[:, 2] <= EPSILON, axis=1
+    )
+    starts = polygon
+    edges = np.roll(polygon, -1, axis=0) - starts
+    denominator = np.sum(np.square(edges), axis=1)
+    relative = points[:, None, :] - starts[None, :, :]
+    fraction = np.clip(
+        np.divide(
+            np.sum(relative * edges[None, :, :], axis=2),
+            denominator[None, :],
+            out=np.zeros((points.shape[0], edges.shape[0]), dtype=np.float64),
+            where=denominator[None, :] > 0.0,
+        ),
+        0.0,
+        1.0,
+    )
+    closest = starts[None, :, :] + fraction[:, :, None] * edges[None, :, :]
+    boundary_distance = np.min(
+        np.linalg.norm(points[:, None, :] - closest, axis=2), axis=1
+    )
+    return np.where(inside, 0.0, boundary_distance)
+
+
+def _e25v3_support_diagnostic_frame(
+    task: tuple[int, np.ndarray],
+) -> dict[str, np.ndarray]:
+    """Measure legal-support observability without running control generation."""
+    frame_id, target_indices = task
+    sequence, pool = _E25V2_SEQUENCE, _E25V2_SUPPORT_POOL
+    if sequence is None or pool is None or not _E25V3_TARGETS:
+        raise RuntimeError("E25-v3 support diagnostic is not initialized")
+    frame = sequence.source_frame(frame_id)
+    assert frame.labels is not None
+    rotation, translation = _pose(frame)
+    count = target_indices.size
+    nearest_distance = np.full(
+        (count, len(_E25V3_FRAME_OFFSETS)), np.inf, dtype=np.float64
+    )
+    nearest_row = np.full(
+        (count, len(_E25V3_FRAME_OFFSETS)), -1, dtype=np.int64
+    )
+    nearest_semantic = np.zeros(
+        (count, len(_E25V3_FRAME_OFFSETS)), dtype=np.uint16
+    )
+    candidate_count = np.zeros(
+        (count, len(_E25V3_FRAME_OFFSETS)), dtype=np.int32
+    )
+    hull_diameter = np.empty(count, dtype=np.float64)
+    aabb_diagonal = np.empty(count, dtype=np.float64)
+    longest_span = np.empty(count, dtype=np.float64)
+    span_xy = np.empty((count, 2), dtype=np.float64)
+    hull_area = np.empty(count, dtype=np.float64)
+    observed_points = np.empty(count, dtype=np.int32)
+    for output_index, target_index in enumerate(target_indices):
+        semantic = int(_E25V3_TARGETS["real_semantic"][target_index])
+        instance = int(_E25V3_TARGETS["real_instance"][target_index])
+        selected = (
+            (frame.labels.semantic == np.uint16(semantic))
+            & (frame.labels.instance == np.uint16(instance))
+            & ~np.asarray(frame.zero_slot_mask, dtype=np.bool_)
+        )
+        sensor_points = np.asarray(frame.xyzi[selected, :3], dtype=np.float64)
+        if sensor_points.shape[0] < 4:
+            raise RenderError("E25-v3 target has fewer than four observed points")
+        world_xy = (sensor_points @ rotation.T + translation)[:, :2]
+        try:
+            hull = ConvexHull(world_xy)
+        except QhullError as error:
+            raise RenderError("E25-v3 target has a degenerate XY hull") from error
+        polygon = world_xy[np.asarray(hull.vertices), :]
+        difference = polygon[:, None, :] - polygon[None, :, :]
+        diameter = math.sqrt(float(np.max(np.sum(np.square(difference), axis=2))))
+        spans = np.max(polygon, axis=0) - np.min(polygon, axis=0)
+        if diameter <= 0.0 or not np.isfinite(diameter):
+            raise RenderError("E25-v3 observed XY footprint is degenerate")
+        hull_diameter[output_index] = diameter
+        aabb_diagonal[output_index] = float(np.linalg.norm(spans))
+        longest_span[output_index] = float(np.max(spans))
+        span_xy[output_index] = spans
+        hull_area[output_index] = float(hull.volume)
+        observed_points[output_index] = sensor_points.shape[0]
+        policy = tuple(sorted(normal_control_support_semantics(semantic)))
+        for offset_index, offset in enumerate(_E25V3_FRAME_OFFSETS):
+            rows = _E25V3_SUPPORT_ROWS.get(
+                (frame_id + offset, policy), np.empty(0, dtype=np.int64)
+            )
+            candidate_count[output_index, offset_index] = rows.size
+            if rows.size == 0:
+                continue
+            distance = _xy_hull_distance(
+                pool.anchors_world_m[rows, :2], polygon,
+                np.asarray(hull.equations, dtype=np.float64),
+            )
+            selected_row = int(
+                np.lexsort((pool.selection_hashes[rows], distance))[0]
+            )
+            row = int(rows[selected_row])
+            nearest_distance[output_index, offset_index] = distance[selected_row]
+            nearest_row[output_index, offset_index] = row
+            nearest_semantic[output_index, offset_index] = pool.semantics[row]
+    nearest_any = np.min(nearest_distance, axis=1)
+    return {
+        "target_index": target_indices.astype(np.int64),
+        "observed_point_count": observed_points,
+        "observed_xy_span_m": span_xy,
+        "observed_xy_longest_span_m": longest_span,
+        "observed_xy_aabb_diagonal_m": aabb_diagonal,
+        "observed_xy_hull_diameter_m": hull_diameter,
+        "observed_xy_hull_area_m2": hull_area,
+        "support_candidate_count_by_offset": candidate_count,
+        "nearest_support_distance_m_by_offset": nearest_distance,
+        "nearest_support_row_by_offset": nearest_row,
+        "nearest_support_semantic_by_offset": nearest_semantic,
+        "nearest_support_distance_m": nearest_any,
+        "minimum_alpha_hull_diameter": np.maximum(
+            nearest_any - 0.5, 0.0
+        ) / hull_diameter,
+        "minimum_alpha_aabb_diagonal": np.maximum(
+            nearest_any - 0.5, 0.0
+        ) / aabb_diagonal,
+        "minimum_alpha_longest_span": np.maximum(
+            nearest_any - 0.5, 0.0
+        ) / longest_span,
+    }
+
+
+def _finite_quantiles(values: np.ndarray) -> dict[str, object]:
+    finite = np.asarray(values, dtype=np.float64)
+    finite = finite[np.isfinite(finite)]
+    if finite.size == 0:
+        return {"finite": 0, "nonfinite": int(np.asarray(values).size)}
+    probabilities = np.asarray(
+        (0.0, 0.05, 0.25, 0.5, 0.75, 0.9, 0.95, 0.99, 1.0)
+    )
+    quantiles = np.quantile(finite, probabilities)
+    names = (
+        "minimum", "q05", "q25", "median", "q75", "q90", "q95", "q99",
+        "maximum",
+    )
+    return {
+        "finite": int(finite.size),
+        "nonfinite": int(np.asarray(values).size - finite.size),
+        **{name: float(value) for name, value in zip(names, quantiles, strict=True)},
+    }
+
+
+def run_e25_v3_support_diagnostic(
+    data_root: Path | str, support_pool_path: Path | str,
+    target_bank_path: Path | str, output_path: Path | str, *, processes: int = 24,
+) -> dict[str, object]:
+    """Audit finite exact support association on train/206 without generation."""
+    if not 1 <= processes <= 24:
+        raise PlacementError("E25-v3 support diagnostic processes must be in [1,24]")
+    try:
+        from .protocol import load_protocol
+        from .scene import LabelMode, STUSequence
+    except ImportError:
+        from protocol import load_protocol  # type: ignore[no-redef]
+        from scene import LabelMode, STUSequence  # type: ignore[no-redef]
+    target_path = Path(target_bank_path).expanduser().resolve(strict=True)
+    required = {
+        "frame_id", "real_semantic", "real_instance", "range_bin", "O_hat",
+        "Nvis", "unit_hash", "metadata_json",
+    }
+    with np.load(target_path, allow_pickle=False) as payload:
+        if not required.issubset(payload.files):
+            raise PlacementError("E25-v3 input target bank is missing required arrays")
+        target_metadata = json.loads(str(payload["metadata_json"].item()))
+        if (
+            target_metadata.get("experiment") != "E25-v2-real-normal-target-bank"
+            or target_metadata.get("source_sequence") != "train/206"
+        ):
+            raise PlacementError("E25-v3 diagnostic requires the retained train/206 bank")
+        targets = {
+            name: np.asarray(payload[name]).copy()
+            for name in required if name != "metadata_json"
+        }
+    count = int(targets["frame_id"].size)
+    if count < 1 or any(value.shape[0] != count for value in targets.values()):
+        raise PlacementError("E25-v3 target arrays are not aligned")
+    if np.unique(targets["unit_hash"]).size != count:
+        raise PlacementError("E25-v3 target identities are not unique")
+    protocol = load_protocol(Path(__file__).resolve().parents[1] / "protocol.json")
+    sequence = STUSequence.open(
+        data_root, protocol=protocol, partition="train", sequence_id=206,
+        label_mode=LabelMode.REQUIRED,
+    )
+    pool = load_qualified_support_pool(support_pool_path)
+    policies = {
+        tuple(sorted(normal_control_support_semantics(int(semantic))))
+        for semantic in np.unique(targets["real_semantic"])
+    }
+    relevant_frames = {
+        int(frame) + offset
+        for frame in np.unique(targets["frame_id"])
+        for offset in _E25V3_FRAME_OFFSETS
+    }
+    by_frame_semantic: dict[tuple[int, int], np.ndarray] = {}
+    for support_semantic in sorted({item for policy in policies for item in policy}):
+        rows = np.flatnonzero(pool.semantics == support_semantic)
+        order = np.argsort(pool.frames[rows], kind="stable")
+        rows = rows[order]
+        frames = pool.frames[rows]
+        unique_frames, starts = np.unique(frames, return_index=True)
+        stops = np.r_[starts[1:], rows.size]
+        for frame_id, start, stop in zip(unique_frames, starts, stops, strict=True):
+            if int(frame_id) in relevant_frames:
+                by_frame_semantic[(int(frame_id), support_semantic)] = rows[start:stop]
+    support_rows: dict[tuple[int, tuple[int, ...]], np.ndarray] = {}
+    for frame_id in relevant_frames:
+        for policy in policies:
+            parts = [
+                by_frame_semantic[(frame_id, semantic)]
+                for semantic in policy if (frame_id, semantic) in by_frame_semantic
+            ]
+            support_rows[(frame_id, policy)] = (
+                np.concatenate(parts).astype(np.int64)
+                if parts else np.empty(0, dtype=np.int64)
+            )
+    global _E25V2_SEQUENCE, _E25V2_SUPPORT_POOL, _E25V3_TARGETS, _E25V3_SUPPORT_ROWS
+    _E25V2_SEQUENCE, _E25V2_SUPPORT_POOL = sequence, pool
+    _E25V3_TARGETS, _E25V3_SUPPORT_ROWS = targets, support_rows
+    tasks = [
+        (int(frame_id), np.flatnonzero(targets["frame_id"] == frame_id))
+        for frame_id in np.unique(targets["frame_id"])
+    ]
+    started = time.monotonic()
+    if processes == 1:
+        chunks = [_e25v3_support_diagnostic_frame(task) for task in tasks]
+    else:
+        with mp.get_context("fork").Pool(
+            processes=processes, maxtasksperchild=24
+        ) as workers:
+            chunks = workers.map(
+                _e25v3_support_diagnostic_frame, tasks, chunksize=1
+            )
+    diagnostic_names = tuple(name for name in chunks[0] if name != "target_index")
+    target_index = np.concatenate([chunk["target_index"] for chunk in chunks])
+    order = np.argsort(target_index, kind="stable")
+    if not np.array_equal(target_index[order], np.arange(count, dtype=np.int64)):
+        raise PlacementError("E25-v3 diagnostic did not cover every target exactly once")
+    diagnostic = {
+        name: np.ascontiguousarray(
+            np.concatenate([chunk[name] for chunk in chunks], axis=0)[order]
+        )
+        for name in diagnostic_names
+    }
+    scientific = {
+        "frame_id": np.ascontiguousarray(targets["frame_id"]),
+        "real_semantic": np.ascontiguousarray(targets["real_semantic"]),
+        "real_instance": np.ascontiguousarray(targets["real_instance"]),
+        "range_bin": np.ascontiguousarray(targets["range_bin"]),
+        "occlusion": np.ascontiguousarray(targets["O_hat"]),
+        "occlusion_layer": np.searchsorted(
+            np.asarray((0.25, 0.75)), targets["O_hat"], side="right"
+        ).astype(np.uint8),
+        "visible_return_count": np.ascontiguousarray(targets["Nvis"]),
+        "unit_hash": np.ascontiguousarray(targets["unit_hash"]),
+        **diagnostic,
+    }
+    distance = scientific["nearest_support_distance_m"]
+    class_names = {
+        10: "car_10", 18: "truck_18", 20: "other_vehicle_20", 30: "person_30"
+    }
+    class_summary: dict[str, object] = {}
+    for semantic in np.unique(scientific["real_semantic"]):
+        mask = scientific["real_semantic"] == semantic
+        class_summary[class_names.get(int(semantic), str(int(semantic)))] = {
+            "targets": int(np.count_nonzero(mask)),
+            "same_frame_support_available": int(np.count_nonzero(
+                np.isfinite(scientific["nearest_support_distance_m_by_offset"][mask, 0])
+            )),
+            "any_allowed_frame_support_available": int(np.count_nonzero(
+                np.isfinite(distance[mask])
+            )),
+            "nearest_distance_m": _finite_quantiles(distance[mask]),
+            "observed_xy_hull_diameter_m": _finite_quantiles(
+                scientific["observed_xy_hull_diameter_m"][mask]
+            ),
+            "observed_xy_aabb_diagonal_m": _finite_quantiles(
+                scientific["observed_xy_aabb_diagonal_m"][mask]
+            ),
+            "observed_xy_longest_span_m": _finite_quantiles(
+                scientific["observed_xy_longest_span_m"][mask]
+            ),
+            "minimum_alpha_hull_diameter": _finite_quantiles(
+                scientific["minimum_alpha_hull_diameter"][mask]
+            ),
+            "minimum_alpha_aabb_diagonal": _finite_quantiles(
+                scientific["minimum_alpha_aabb_diagonal"][mask]
+            ),
+            "minimum_alpha_longest_span": _finite_quantiles(
+                scientific["minimum_alpha_longest_span"][mask]
+            ),
+        }
+    offset_distance = scientific["nearest_support_distance_m_by_offset"]
+    result: dict[str, object] = {
+        "experiment": "E25-v3-support-observability-diagnostic",
+        "status": "diagnostic_complete",
+        "passed": None,
+        "source_sequence": "train/206",
+        "target_units": count,
+        "frame_offsets_in_search_order": list(_E25V3_FRAME_OFFSETS),
+        "distance_definition": "exact 2D Euclidean distance from support anchor to closed target-frame observed-return XY convex hull",
+        "legal_support_semantics_unchanged": True,
+        "old_reference_support_fields_used": False,
+        "generator_executed": False,
+        "train_201_accessed": False,
+        "calipers_evaluated_or_changed": False,
+        "distance_rule_frozen": False,
+        "alpha_frozen": False,
+        "candidate_formula_only": "d_support <= max(0.5 m, alpha * D_xy)",
+        "candidate_Dxy_definitions_reported": [
+            "observed-return XY convex-hull diameter",
+            "observed-return XY axis-aligned bounding-box diagonal",
+            "observed-return XY longest axis-aligned span",
+        ],
+        "target_bank_input_role": "identity and real-observation covariates only; retained E25-v2 support bindings ignored",
+        "support_available_by_offset": [
+            int(np.count_nonzero(np.isfinite(offset_distance[:, index])))
+            for index in range(offset_distance.shape[1])
+        ],
+        "any_allowed_frame_support_available": int(np.count_nonzero(np.isfinite(distance))),
+        "inside_or_within_0p5m": int(np.count_nonzero(distance <= 0.5)),
+        "nearest_distance_m": _finite_quantiles(distance),
+        "class_summary": class_summary,
+        "range_count": np.bincount(scientific["range_bin"], minlength=5)[:5].tolist(),
+        "range_with_finite_support_count": np.bincount(
+            scientific["range_bin"][np.isfinite(distance)], minlength=5
+        )[:5].tolist(),
+        "occlusion_layer_count": np.bincount(
+            scientific["occlusion_layer"], minlength=3
+        ).tolist(),
+        "occlusion_layer_with_finite_support_count": np.bincount(
+            scientific["occlusion_layer"][np.isfinite(distance)], minlength=3
+        ).tolist(),
+        "run_seconds": float(time.monotonic() - started),
+        "target_bank_sha256": _sha256_path(target_path),
+        "support_pool_sha256": _sha256_path(
+            Path(support_pool_path).expanduser().resolve(strict=True)
+        ),
+        "scientific_array_hash": _scientific_array_hash(scientific),
+    }
+    destination = Path(output_path).expanduser().resolve()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_suffix(destination.suffix + ".tmp.npz")
+    np.savez_compressed(
+        temporary, **scientific,
+        metadata_json=np.asarray(json.dumps(result, sort_keys=True, separators=(",", ":"))),
+    )
+    os.replace(temporary, destination)
+    return result
 
 
 def _e25v2_target_frame(frame_id: int) -> dict[str, np.ndarray]:
@@ -8210,7 +8576,7 @@ def _e25v2_worker(index: int) -> dict[str, object]:
             attempt.update({
                 "target_proposal_count": target_proposal + 1,
                 "support_proposal_count": (
-                    128 * target_proposal + int(attempt["support_proposal_count"])
+                    aggregate_placement + aggregate_condition + 1
                 ),
                 "placement_rejections": aggregate_placement,
                 "condition_rejections": aggregate_condition,
@@ -8222,10 +8588,7 @@ def _e25v2_worker(index: int) -> dict[str, object]:
     assert last is not None
     last.update({
         "target_proposal_count": min(128, eligible.size),
-        "support_proposal_count": sum(
-            min(128, _E25V2_SUPPORT_ROWS[int(target)].size)
-            for target in eligible[order[:128]]
-        ),
+        "support_proposal_count": aggregate_placement + aggregate_condition,
         "placement_rejections": aggregate_placement,
         "condition_rejections": aggregate_condition,
         "violation_counts": aggregate_violation,
@@ -8413,16 +8776,23 @@ def run_e25_v2_qualification(
     records = [by_index[index] for index in range(256)]
     run_seconds = [time.monotonic() - started]
     first = _e25v2_arrays(records)
-    completed_mask = first["template_identity"] != b""
+    completed_mask = (
+        (first["template_identity"] != b"")
+        & (first["placement_exhaustion_code"] == 0)
+        & (first["hard_error_code"] == 0)
+    )
     completed = int(np.count_nonzero(completed_mask))
-    selected_range = np.bincount(first["target_range_bin"], minlength=5)[:5]
+    selected_range = np.bincount(
+        first["target_range_bin"][completed_mask], minlength=5
+    )[:5]
     selected_occlusion = np.bincount(np.searchsorted(
-        np.asarray((0.25, 0.75)), first["target_occlusion"], side="right"
+        np.asarray((0.25, 0.75)), first["target_occlusion"][completed_mask], side="right"
     ), minlength=3)
     selected_instances = int(np.unique(np.column_stack((
-        first["target_semantic"], first["target_instance"]
+        first["target_semantic"][completed_mask],
+        first["target_instance"][completed_mask],
     )), axis=0).shape[0])
-    center_frames = int(np.unique(first["target_frame"]).size)
+    center_frames = int(np.unique(first["target_frame"][completed_mask]).size)
     hard_errors = int(np.sum(first["hard_error_code"]))
     exhaustions = int(np.sum(first["placement_exhaustion_code"]))
     condition_errors = int(np.count_nonzero(
@@ -13878,6 +14248,12 @@ def _render_parser() -> argparse.ArgumentParser:
     e25v2.add_argument("--target-output", type=Path, required=True)
     e25v2.add_argument("--output", type=Path, required=True)
     e25v2.add_argument("--processes", type=int, default=12)
+    e25v3 = subcommands.add_parser("diagnose-e25-v3-support")
+    e25v3.add_argument("--data-root", type=Path, required=True)
+    e25v3.add_argument("--support-pool", type=Path, required=True)
+    e25v3.add_argument("--target-bank", type=Path, required=True)
+    e25v3.add_argument("--output", type=Path, required=True)
+    e25v3.add_argument("--processes", type=int, default=24)
     e26 = subcommands.add_parser("qualify-e26")
     e26.add_argument("--data-root", type=Path, required=True)
     e26.add_argument("--support-pool", type=Path, required=True)
@@ -14021,6 +14397,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 0 if result["passed"] else 1
+    if args.command == "diagnose-e25-v3-support":
+        result = run_e25_v3_support_diagnostic(
+            args.data_root, args.support_pool, args.target_bank,
+            args.output, processes=args.processes,
+        )
+        print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        return 0
     if args.command == "qualify-e26":
         result = run_e26_qualification(
             args.data_root, args.support_pool, args.output, processes=args.processes

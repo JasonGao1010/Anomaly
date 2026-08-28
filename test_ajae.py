@@ -802,6 +802,19 @@ def test_placement_authority_audit_ignores_its_own_string_literals() -> None:
     assert render_module._placement_authority_errors(source) == 0
 
 
+def test_xy_hull_distance_uses_closed_polygon_euclidean_distance() -> None:
+    polygon = np.asarray(((0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)))
+    equations = np.asarray(
+        ((0.0, -1.0, 0.0), (1.0, 0.0, -1.0),
+         (0.0, 1.0, -1.0), (-1.0, 0.0, 0.0))
+    )
+    points = np.asarray(((0.5, 0.5), (1.3, 0.4), (-0.3, -0.4)))
+    assert np.allclose(
+        render_module._xy_hull_distance(points, polygon, equations),
+        np.asarray((0.0, 0.3, 0.5)),
+    )
+
+
 @pytest.mark.parametrize("slope_deg", [0.0, 5.0, 10.0])
 def test_e21_support_plane_fixtures(slope_deg: float) -> None:
     coordinate = np.linspace(-1.25, 1.25, 51)
