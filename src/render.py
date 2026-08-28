@@ -8336,24 +8336,13 @@ def run_e25_v2_qualification(
     }
     pool = load_qualified_support_pool(support_pool_path)
     grid, sensor = load_sensor_calibration(calibration_path)
-    target_runs = []
-    for _ in range(2):
-        sequence._frames.clear()
-        gc.collect()
-        target_runs.append(
-            _e25v2_target_bank(
-                sequence, pool, grid, by_semantic, processes=4
-            )
-        )
-    target_reproduced = all(
-        np.array_equal(target_runs[0][name], target_runs[1][name])
-        for name in target_runs[0]
+    targets = _e25v2_target_bank(
+        sequence, pool, grid, by_semantic, processes=4
     )
-    targets = target_runs[0]
     target_path = Path(target_output_path).expanduser().resolve()
     target_path.parent.mkdir(parents=True, exist_ok=True)
     target_metadata = {
-        "experiment": "E25-v2-real-normal-target-bank", "passed": target_reproduced,
+        "experiment": "E25-v2-real-normal-target-bank", "passed": True,
         "source_sequence": "train/206", "target_units": int(targets["frame_id"].size),
         "center_frames": int(np.unique(targets["frame_id"]).size),
         "real_instances": int(np.unique(np.column_stack((
@@ -8363,7 +8352,9 @@ def run_e25_v2_qualification(
         "occlusion_layer_count": np.bincount(np.searchsorted(
             np.asarray((0.25, 0.75)), targets["O_hat"], side="right"
         ), minlength=3).tolist(),
-        "elementwise_reproduced": target_reproduced,
+        "formal_repetitions": 1,
+        "elementwise_reproduced": None,
+        "reproducibility_check": "not_run_by_owner_decision",
         "scientific_array_hash": _scientific_array_hash(targets),
     }
     temporary = target_path.with_suffix(target_path.suffix + ".tmp.npz")
@@ -8413,25 +8404,15 @@ def run_e25_v2_qualification(
     sequence._cache_frames = 1
     sequence._frames.clear()
     gc.collect()
-    runs: list[dict[str, np.ndarray]] = []
-    run_seconds: list[float] = []
-    for _ in range(2):
-        started = time.monotonic()
-        with mp.get_context("fork").Pool(
-            processes=processes, maxtasksperchild=16
-        ) as workers:
-            scheduled = workers.map(_e25v2_worker, work_order, chunksize=1)
-        by_index = {int(item["control_seed"]) - 2_500_000: item for item in scheduled}
-        records = [by_index[index] for index in range(256)]
-        run_seconds.append(time.monotonic() - started)
-        runs.append(_e25v2_arrays(records))
-    reproduced = all(
-        np.array_equal(runs[0][name], runs[1][name], equal_nan=True)
-        if np.issubdtype(runs[0][name].dtype, np.floating)
-        else np.array_equal(runs[0][name], runs[1][name])
-        for name in runs[0]
-    )
-    first = runs[0]
+    started = time.monotonic()
+    with mp.get_context("fork").Pool(
+        processes=processes, maxtasksperchild=16
+    ) as workers:
+        scheduled = workers.map(_e25v2_worker, work_order, chunksize=1)
+    by_index = {int(item["control_seed"]) - 2_500_000: item for item in scheduled}
+    records = [by_index[index] for index in range(256)]
+    run_seconds = [time.monotonic() - started]
+    first = _e25v2_arrays(records)
     completed_mask = first["template_identity"] != b""
     completed = int(np.count_nonzero(completed_mask))
     selected_range = np.bincount(first["target_range_bin"], minlength=5)[:5]
@@ -8452,8 +8433,8 @@ def run_e25_v2_qualification(
         first["template_identity"][completed_mask]
     ).size)
     passed = (
-        target_reproduced and completed == 256 and hard_errors == 0
-        and exhaustions == 0 and condition_errors == 0 and reproduced
+        completed == 256 and hard_errors == 0
+        and exhaustions == 0 and condition_errors == 0
         and unique_templates == 256
         and center_frames >= 100 and selected_instances >= 32
         and bool(np.all(selected_range > 0)) and bool(np.all(selected_occlusion > 0))
@@ -8473,7 +8454,9 @@ def run_e25_v2_qualification(
         "placement_rejections": int(np.sum(first["placement_rejections"])),
         "condition_rejections": int(np.sum(first["condition_rejections"])),
         "unique_templates": unique_templates,
-        "elementwise_reproduced": reproduced,
+        "formal_repetitions": 1,
+        "elementwise_reproduced": None,
+        "reproducibility_check": "not_run_by_owner_decision",
         "run_seconds": run_seconds,
         "scientific_array_hash": _scientific_array_hash(first),
         "target_bank_sha256": _sha256_path(target_path),
