@@ -2148,7 +2148,7 @@
             "downstream": "PASS permits replacing the sole production normal-control position selector and then running E26-v2; FAIL keeps E26-v2 and E46 locked and requires owner decision"
           },
           "E25-v3": {
-            "status": "D_xy plus alpha distance gate abandoned; support-plane compatibility read-only diagnostic frozen before execution; generation not run",
+            "status": "D_xy plus alpha distance gate abandoned; support-plane compatibility read-only diagnostic complete without PASS/FAIL; accepted remote planes show that the current two conditions are insufficient to freeze a credible local-support target bank; generation not run",
             "historical_results_retained": ["E25 PASS", "E25-v2 FAIL"],
             "failure_classification_inherited": "E25-v2 is a qualification specification defect and does not adjudicate the normal-control construct",
             "unchanged_support_semantics": {"vehicle_like": [40], "person_rider_like": [40, 48]},
@@ -2207,7 +2207,7 @@
               "scientific_array_sha256": "fcf62d86f7be1e90392135c37e3d3dd6e6d3d3db5e792aee48cdd0b29cd51947"
             },
             "support_plane_compatibility_diagnostic": {
-              "status": "frozen before execution",
+              "status": "diagnostic complete; no PASS/FAIL adjudication; target bank not frozen",
               "source": "train/206 retained 4827 real target identities and E21-v4 qualified support pool only",
               "generator_executed": false,
               "train_201_accessed": false,
@@ -2223,9 +2223,42 @@
               "rejection_codes": ["no_semantically_legal_patch", "no_projection_stable_patch", "visible_geometry_incompatible"],
               "formal_pass_fail_adjudication": false,
               "required_reports": ["retained and rejected by four active classes", "retained in five aggregate range bins", "retained in three aggregate occlusion layers", "rejection codes", "selected frame offsets and support semantics", "actual candidate evaluations", "descriptive anchor and visible-height relations"],
-              "command": "python -m src.render diagnose-e25-v3-plane --data-root /home/jasongao/Data/STU --support-pool runs/ajae/e21_v4_support_pool.npz --target-bank runs/ajae/e25_v2_real_targets.npz --output runs/ajae/e25_v3_plane_compatibility.npz --processes 24"
+              "command": "python -m src.render diagnose-e25-v3-plane --data-root /home/jasongao/Data/STU --support-pool runs/ajae/e21_v4_support_pool.npz --target-bank runs/ajae/e25_v2_real_targets.npz --output runs/ajae/e25_v3_plane_compatibility.npz --processes 24",
+              "pre_run_commit": "5b1b0f4",
+              "run_seconds": 3.2937888279848266,
+              "result": {
+                "targets": 4827,
+                "retained": 4825,
+                "rejected": 2,
+                "rejection_count": {"no_semantically_legal_patch": 0, "no_projection_stable_patch": 0, "visible_geometry_incompatible": 2},
+                "retained_by_class": {"car_10": 3886, "truck_18": 571, "other_vehicle_20": 134, "person_30": 234},
+                "rejected_by_class": {"car_10": 2, "truck_18": 0, "other_vehicle_20": 0, "person_30": 0},
+                "retained_range_count": [866, 2115, 1147, 580, 117],
+                "retained_occlusion_layer_count": [1182, 3387, 256],
+                "selected_frame_offset_count": [4768, 13, 17, 9, 18],
+                "selected_support_semantic_count": {"road_40": 4797, "sidewalk_48": 28},
+                "support_candidates_in_all_five_offsets": 39681306,
+                "support_candidates_evaluated": 121360,
+                "projection_stability_rejections": 55892,
+                "visible_geometry_rejections": 60643,
+                "accepted_candidate_count": 4825,
+                "candidate_accounting_conserved": true,
+                "selected_anchor_distance_m": {"minimum": 0.0, "median": 0.11043975065801635, "q90": 9.680501705774926, "q95": 15.05921558639101, "q99": 19.85875358557713, "maximum": 67.84901906012334},
+                "selected_anchor_distance_threshold_counts": {"gt_1m": 1904, "gt_2m": 1644, "gt_5m": 1042, "gt_10m": 461, "gt_20m": 47, "gt_50m": 3},
+                "person_selected_anchor_distance_m": {"minimum": 1.235701017155715, "median": 3.378345764719607, "q95": 6.309326140244505, "maximum": 20.62818957056747},
+                "minimum_gap_exceeds_visible_extent": {"all": 341, "car_10": 179, "truck_18": 22, "other_vehicle_20": 13, "person_30": 127},
+                "maximum_minimum_visible_signed_height_m": 5.2825267339111805
+              },
+              "artifact": {
+                "path": "runs/ajae/e25_v3_plane_compatibility.npz",
+                "bytes": 770483,
+                "sha256": "3aa2d81c54232be1b5c59ee85081b27fcb8236fd693cd6fc5f623051cb47fda3",
+                "scientific_array_sha256": "4d19afc193c623e50fd675585ea3be230063640f18e162895d0aeb96b3c15a71"
+              },
+              "independent_validation": "all 4827 identities unique and complete; five-offset candidate counts exactly reproduced from E21-v4; selected rows match frame offsets and legal semantics; every accepted row satisfies both numerical limits; rejection sentinels and codes are consistent; candidate accounting and scientific hash reproduce exactly",
+              "interpretation": "The two inherited conditions identify multiscale-consistent planes that do not visibly cut most object returns, but they do not enforce a local spatial validity domain or reject an excessively low plane. The accepted 10-67.8 m anchors and up-to-5.28 m minimum visible gaps prevent interpreting all 4825 retained rows as credible local support planes."
             },
-            "next_required_state": "run the frozen read-only plane diagnostic; only if all four active classes, five aggregate range bins and three aggregate occlusion layers remain represented may the owner decide whether to freeze the E25-v3 target bank",
+            "next_required_state": "owner decision is required to operationalize credible local support-plane validity; the target bank, control generator and downstream experiments remain unchanged",
             "downstream": "E26-v2, E46 and E48 remain locked"
           },
           "E26": {
