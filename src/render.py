@@ -15603,21 +15603,20 @@ def run_e44_qualification(
     e39_artifact_path: Path | str, output_path: Path | str,
 ) -> dict[str, object]:
     """Qualify frozen occlusion rates and preliminary matching support."""
-    with np.load(
-        Path(e39_artifact_path).expanduser().resolve(strict=True), allow_pickle=False
-    ) as trace:
+    source_path = Path(e39_artifact_path).expanduser().resolve(strict=True)
+    if _sha256_path(source_path) != FROZEN_E39_V2_ARTIFACT_SHA256:
+        raise RenderError("E44-v2 E39-v2 shared trace identity changed")
+    with np.load(source_path, allow_pickle=False) as trace:
         metadata = json.loads(str(trace["metadata_json"]))
-        if metadata.get("experiment") != "E39" or metadata.get("passed") is not True:
-            raise RenderError("E44 requires the passed formal E39 shared trace")
+        if metadata.get("experiment") != "E39-v2" or metadata.get("passed") is not True:
+            raise RenderError("E44-v2 requires the passed formal E39-v2 shared trace")
         support = np.asarray(trace["support_semantic"])
         accepted = np.asarray(trace["accepted_hits"])
         visible = np.asarray(trace["visible_returns"])
         distance = np.asarray(trace["visible_distance_m"])
     started = time.monotonic()
-    runs = [_e44_statistics(support, accepted, visible, distance) for _ in range(2)]
+    first = _e44_statistics(support, accepted, visible, distance)
     elapsed = time.monotonic() - started
-    reproduced = all(np.array_equal(runs[0][name], runs[1][name]) for name in runs[0])
-    first = runs[0]
     valid = first["occlusion_valid"]
     definition_errors = int(
         np.count_nonzero(accepted < 0)
@@ -15642,10 +15641,10 @@ def run_e44_qualification(
     matching_errors = int(shared_strata == 0)
     passed = (
         definition_errors == 0 and count_errors == 0 and coverage_errors == 0
-        and matching_errors == 0 and reproduced
+        and matching_errors == 0
     )
     result = {
-        "experiment": "E44", "passed": passed,
+        "experiment": "E44-v2", "passed": passed,
         "occlusion_layers": [[0.0, 0.25], [0.25, 0.75], [0.75, 1.0]],
         "source_valid_count": valid_count.tolist(),
         "source_undefined_count": first["source_undefined_count"].tolist(),
@@ -15654,8 +15653,10 @@ def run_e44_qualification(
         "shared_support_range_occlusion_strata": shared_strata,
         "definition_errors": definition_errors, "count_errors": count_errors,
         "coverage_errors": coverage_errors, "matching_errors": matching_errors,
-        "elementwise_reproduced": reproduced,
-        "two_run_total_seconds": elapsed,
+        "formal_repetitions": 1, "elementwise_reproduced": None,
+        "reproducibility_check": "not_run_by_owner_decision",
+        "input_e39_v2_sha256": FROZEN_E39_V2_ARTIFACT_SHA256,
+        "run_seconds": [elapsed],
         "scientific_array_hash": _scientific_array_hash(first),
     }
     destination = Path(output_path).expanduser().resolve()
@@ -17073,7 +17074,7 @@ def _render_parser() -> argparse.ArgumentParser:
     e43.add_argument("--e37-artifact", type=Path, required=True)
     e43.add_argument("--e39-artifact", type=Path, required=True)
     e43.add_argument("--output", type=Path, required=True)
-    e44 = subcommands.add_parser("qualify-e44")
+    e44 = subcommands.add_parser("qualify-e44-v2")
     e44.add_argument("--e39-artifact", type=Path, required=True)
     e44.add_argument("--output", type=Path, required=True)
     e45 = subcommands.add_parser("qualify-e45")
@@ -17265,7 +17266,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 0 if result["passed"] else 1
-    if args.command == "qualify-e44":
+    if args.command == "qualify-e44-v2":
         result = run_e44_qualification(args.e39_artifact, args.output)
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 0 if result["passed"] else 1
