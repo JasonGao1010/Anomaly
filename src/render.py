@@ -4454,6 +4454,11 @@ def render_frame(
     world: WorldSpec,
     ray_grid: RayGrid,
     sensor: SensorCalibration,
+    *,
+    _trace_context: tuple[
+        np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray
+    ] | None = None,
+    _competition: _ObjectCompetition | None = None,
 ) -> RenderedFrame:
     """Deterministically render one frame of a fixed complete virtual world."""
 
@@ -4471,21 +4476,30 @@ def render_frame(
         )
     if int(source.xyzi.shape[0]) != ray_grid.slot_count:
         raise RenderError("source frame and ray grid have different slot counts")
-    rotation, lidar_origin_world = _pose(source)
-    directions_sensor = ray_grid.directions_for(source)
-    directions_world = directions_sensor @ rotation.T
-    origins_sensor = ray_grid.origins_for(source)
-    origins_world = origins_sensor @ rotation.T + lidar_origin_world
-    competition = _accepted_object_hits(
-        origins_world,
-        directions_world,
-        world,
-        ray_grid,
-        sensor,
-        int(source.frame_id),
+    if _trace_context is None:
+        rotation, lidar_origin_world = _pose(source)
+        directions_sensor = ray_grid.directions_for(source)
+        directions_world = directions_sensor @ rotation.T
+        origins_sensor = ray_grid.origins_for(source)
+        origins_world = origins_sensor @ rotation.T + lidar_origin_world
+        normal_range = np.asarray(ray_grid.ranges(source)).copy()
+        normal_range[np.asarray(source.zero_slot_mask, dtype=np.bool_)] = np.inf
+    else:
+        (
+            directions_sensor, directions_world, origins_sensor,
+            origins_world, normal_range,
+        ) = _trace_context
+    competition = (
+        _accepted_object_hits(
+            origins_world,
+            directions_world,
+            world,
+            ray_grid,
+            sensor,
+            int(source.frame_id),
+        )
+        if _competition is None else _competition
     )
-    normal_range = np.asarray(ray_grid.ranges(source)).copy()
-    normal_range[np.asarray(source.zero_slot_mask, dtype=np.bool_)] = np.inf
     inserted = np.isfinite(competition.distance_m) & (
         competition.distance_m < normal_range - world.tie_tolerance_m
     )
@@ -5218,6 +5232,34 @@ def observed_normal_collision(
     if points.size == 0:
         return False, math.inf, identities
     local = (points - translation) @ rotation
+    if isinstance(proposed.shape, NormalTemplateShape):
+        # A point is deeply inside only if every hull half-space is below the
+        # threshold. Eliminated points cannot contain the global minimum once
+        # any deep point survives, so later planes only evaluate survivors.
+        local_lower, local_upper = proposed.shape.local_bounds()
+        candidates = np.flatnonzero(np.all(
+            (local >= local_lower) & (local <= local_upper), axis=1
+        ))
+        maximum = np.full(local.shape[0], -np.inf, dtype=np.float64)
+        normals = proposed.shape.plane_normals
+        offsets = proposed.shape.plane_offsets
+        for start in range(0, normals.shape[0], 16):
+            stop = min(start + 16, normals.shape[0])
+            values = (
+                local[candidates] @ normals[start:stop].T
+                + offsets[start:stop]
+            )
+            candidate_maximum = np.maximum(
+                maximum[candidates], np.max(values, axis=1)
+            )
+            keep = candidate_maximum < -threshold
+            maximum[candidates] = candidate_maximum
+            candidates = candidates[keep]
+            if candidates.size == 0:
+                break
+        if candidates.size:
+            minimum = float(np.min(maximum[candidates]))
+            return True, minimum, identities
     distance = proposed.shape.signed_distance(local)
     minimum = float(np.min(distance))
     deep = distance < -threshold
@@ -7451,6 +7493,27 @@ _E25V2_SUPPORT_ROWS: tuple[np.ndarray, ...] = ()
 _E25V2_TARGET_COVARIATES = np.empty((0, 5), dtype=np.float64)
 _E25V2_TARGET_LOOKUP: dict[tuple[int, int, int, int], np.ndarray] = {}
 _E25V2_SUPPORT_PROPOSABLE = np.empty(0, dtype=np.bool_)
+_E25V2_FRAME_CACHE: dict[
+    int,
+    tuple[
+        SourceFrame,
+        tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray],
+    ],
+] = {}
+_E25V2_UNIFORM_CACHE: dict[tuple[int, int, int], np.ndarray] = {}
+_E25V2_CACHE_LIMIT = 8
+
+
+@dataclass(frozen=True, slots=True)
+class _E25V2SensorTrace:
+    """Compact exact object trace expanded to file slots only after precheck."""
+
+    candidate_slots: np.ndarray
+    distance_m: np.ndarray
+    normal_world: np.ndarray
+    valid: np.ndarray
+    in_range: np.ndarray
+    accepted: np.ndarray
 
 
 def _real_instance_support_row(
@@ -7690,91 +7753,184 @@ def _initialize_e25v2_target_index(
     }
 
 
+def _e25v2_frame_context(
+    frame_id: int, control_seed: int, object_id: int,
+) -> tuple[
+    SourceFrame,
+    tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray],
+    np.ndarray,
+]:
+    """Reuse immutable frame rays and identity uniforms within one worker."""
+    sequence, grid = _E25V2_SEQUENCE, _E25V2_RAY_GRID
+    if sequence is None or grid is None:
+        raise RuntimeError("E25-v2 frame context is not initialized")
+    cached = _E25V2_FRAME_CACHE.pop(frame_id, None)
+    if cached is None:
+        frame = sequence.source_frame(frame_id)
+        pose_rotation, lidar_origin = _pose(frame)
+        directions_sensor = grid.directions_for(frame)
+        directions_world = directions_sensor @ pose_rotation.T
+        origins_sensor = grid.origins_for(frame)
+        origins_world = origins_sensor @ pose_rotation.T + lidar_origin
+        native_range = np.asarray(grid.ranges(frame)).copy()
+        native_range[np.asarray(frame.zero_slot_mask, dtype=np.bool_)] = np.inf
+        trace_context = (
+            directions_sensor, directions_world, origins_sensor,
+            origins_world, native_range,
+        )
+        cached = frame, trace_context
+    _E25V2_FRAME_CACHE[frame_id] = cached
+    while len(_E25V2_FRAME_CACHE) > _E25V2_CACHE_LIMIT:
+        _E25V2_FRAME_CACHE.pop(next(iter(_E25V2_FRAME_CACHE)))
+    uniform_key = control_seed, frame_id, object_id
+    uniform = _E25V2_UNIFORM_CACHE.pop(uniform_key, None)
+    if uniform is None:
+        slots = np.arange(grid.slot_count, dtype=np.int32)
+        uniform = _slot_uniform(
+            WorldSpec(control_seed, 206), frame_id, slots,
+            np.full(grid.slot_count, object_id, dtype=np.int32), channel=0,
+        )
+    _E25V2_UNIFORM_CACHE[uniform_key] = uniform
+    while len(_E25V2_UNIFORM_CACHE) > _E25V2_CACHE_LIMIT:
+        _E25V2_UNIFORM_CACHE.pop(next(iter(_E25V2_UNIFORM_CACHE)))
+    return cached[0], cached[1], uniform
+
+
 def _e25v2_sensor_precheck(
     frame: SourceFrame, world: WorldSpec, ray_grid: RayGrid,
     sensor: SensorCalibration,
-    trace_context: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray] | None = None,
-) -> tuple[np.ndarray, np.ndarray]:
+    trace_context: tuple[
+        np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray
+    ] | None = None,
+    uniform: np.ndarray | None = None,
+) -> tuple[np.ndarray, np.ndarray, _E25V2SensorTrace]:
     """Compute exact pre-packing covariates without repeating a full render."""
     item = world.objects[0]
     if trace_context is None:
         pose_rotation, lidar_origin = _pose(frame)
         directions_sensor = ray_grid.directions_for(frame)
         directions_world = directions_sensor @ pose_rotation.T
-        origins_world = ray_grid.origins_for(frame) @ pose_rotation.T + lidar_origin
+        origins_sensor = ray_grid.origins_for(frame)
+        origins_world = origins_sensor @ pose_rotation.T + lidar_origin
         native_range = np.asarray(ray_grid.ranges(frame)).copy()
         native_range[np.asarray(frame.zero_slot_mask, dtype=np.bool_)] = np.inf
     else:
-        directions_sensor, directions_world, origins_world, native_range = trace_context
+        (
+            directions_sensor, directions_world, origins_sensor,
+            origins_world, native_range,
+        ) = trace_context
     object_rotation = np.asarray(item.rotation_world_from_local, dtype=np.float64)
     translation = np.asarray(item.translation_world_m, dtype=np.float64)
-    local_origin = (origins_world - translation) @ object_rotation
-    local_direction = directions_world @ object_rotation
-    direction_length = np.linalg.norm(local_direction, axis=1)
-    unit_direction = local_direction / direction_length[:, None]
-    closest_parameter = np.maximum(
-        -np.sum(local_origin * unit_direction, axis=1), 0.0
+    relative_origin = origins_world - translation
+    unit_world_direction = directions_world / np.linalg.norm(
+        directions_world, axis=1, keepdims=True
     )
-    closest = local_origin + closest_parameter[:, None] * unit_direction
-    broad_phase = np.linalg.norm(closest, axis=1) <= item.shape.bound_radius_m
-    distance = np.full(ray_grid.slot_count, np.inf, dtype=np.float64)
-    local_normal = np.zeros((ray_grid.slot_count, 3), dtype=np.float64)
-    valid = np.zeros(ray_grid.slot_count, dtype=np.bool_)
+    closest_parameter = np.maximum(
+        -np.sum(relative_origin * unit_world_direction, axis=1), 0.0
+    )
+    closest = relative_origin + closest_parameter[:, None] * unit_world_direction
+    # World-space distance is rotation invariant; the margin keeps this a strict
+    # superset of the previous local-space broad phase under float64 roundoff.
+    broad_phase = (
+        np.linalg.norm(closest, axis=1) <= item.shape.bound_radius_m + 1.0e-6
+    )
     candidate_slots = np.flatnonzero(broad_phase)
     if candidate_slots.size:
-        candidate_distance, candidate_normal, candidate_valid = item.shape.intersect(
-            local_origin[candidate_slots], local_direction[candidate_slots]
+        local_origin = relative_origin[candidate_slots] @ object_rotation
+        local_direction = directions_world[candidate_slots] @ object_rotation
+        distance, local_normal, valid = item.shape.intersect(
+            local_origin, local_direction
         )
-        distance[candidate_slots] = candidate_distance
-        local_normal[candidate_slots] = candidate_normal
-        valid[candidate_slots] = candidate_valid
-    official_distance = np.asarray(distance) + ray_grid.official_range_offset_m
-    geometry = np.asarray(valid) & (official_distance >= 2.5) & (official_distance <= 50.0)
+    else:
+        distance = np.empty(0, dtype=np.float64)
+        local_normal = np.empty((0, 3), dtype=np.float64)
+        valid = np.empty(0, dtype=np.bool_)
+    official_distance = distance + ray_grid.official_range_offset_m
+    in_range = (official_distance >= 2.5) & (official_distance <= 50.0)
+    geometry = np.asarray(valid) & in_range
     normal_world = local_normal @ object_rotation.T
-    incidence = np.zeros(ray_grid.slot_count, dtype=np.float64)
-    incidence[geometry] = np.arccos(np.clip(np.abs(np.sum(
-        normal_world[geometry] * -directions_world[geometry], axis=1
+    incidence = np.zeros(candidate_slots.size, dtype=np.float64)
+    incidence[valid] = np.arccos(np.clip(np.abs(np.sum(
+        normal_world[valid] * -directions_world[candidate_slots[valid]], axis=1
     )), 0.0, 1.0))
-    chance = np.zeros(ray_grid.slot_count, dtype=np.float64)
-    chance[geometry] = sensor.return_chance(
-        ray_grid.beam_ids[geometry], distance[geometry], incidence[geometry],
+    chance = np.zeros(candidate_slots.size, dtype=np.float64)
+    beam_ids = ray_grid.beam_ids
+    chance[valid] = sensor.return_chance(
+        beam_ids[candidate_slots[valid]], distance[valid], incidence[valid],
         item.material.return_bias,
     )
-    slots = np.arange(ray_grid.slot_count, dtype=np.int32)
-    accepted = geometry & (_slot_uniform(
-        world, int(frame.frame_id), slots,
-        np.full(ray_grid.slot_count, item.object_id, dtype=np.int32), channel=0,
-    ) < chance)
-    visible = accepted & (distance < native_range - world.tie_tolerance_m)
-    returned_slots = np.flatnonzero(visible)
-    if returned_slots.size == 0:
-        return np.asarray((-1, -1, -1), dtype=np.int16), np.asarray(
-            (0.0, 0.0, 0.0, 0.0), dtype=np.float64
+    if uniform is None:
+        slots = np.arange(ray_grid.slot_count, dtype=np.int32)
+        uniform = _slot_uniform(
+            world, int(frame.frame_id), slots,
+            np.full(ray_grid.slot_count, item.object_id, dtype=np.int32), channel=0,
         )
-    angle = np.arctan2(
-        directions_sensor[returned_slots, 1], directions_sensor[returned_slots, 0]
+    accepted_raw = valid & (uniform[candidate_slots] < chance)
+    accepted = accepted_raw & in_range
+    visible = accepted & (
+        distance < native_range[candidate_slots] - world.tie_tolerance_m
     )
-    circular = math.atan2(float(np.sin(angle).sum()), float(np.cos(angle).sum()))
-    exact = np.asarray((
-        int(_gate1_range_bin(np.asarray([
-            np.median(official_distance[returned_slots])
-        ]))[0]),
-        int(math.floor((circular % (2.0 * math.pi)) / (math.pi / 4.0))) % 8,
-        int(returned_slots.size),
-    ), dtype=np.int16)
-    covariates = np.asarray((
-        float(np.median(official_distance[returned_slots])),
-        float(np.median(ray_grid.beam_ids[returned_slots])),
-        float(np.log1p(returned_slots.size)),
-        float(1.0 - returned_slots.size / max(int(np.count_nonzero(geometry)), 1)),
-    ), dtype=np.float64)
-    return exact, covariates
+    returned_slots = candidate_slots[visible]
+    if returned_slots.size == 0:
+        exact = np.asarray((-1, -1, -1), dtype=np.int16)
+        covariates = np.asarray((0.0, 0.0, 0.0, 0.0), dtype=np.float64)
+    else:
+        angle = np.arctan2(
+            directions_sensor[returned_slots, 1], directions_sensor[returned_slots, 0]
+        )
+        circular = math.atan2(float(np.sin(angle).sum()), float(np.cos(angle).sum()))
+        exact = np.asarray((
+            int(_gate1_range_bin(np.asarray([
+                np.median(official_distance[visible])
+            ]))[0]),
+            int(math.floor((circular % (2.0 * math.pi)) / (math.pi / 4.0))) % 8,
+            int(returned_slots.size),
+        ), dtype=np.int16)
+        covariates = np.asarray((
+            float(np.median(official_distance[visible])),
+            float(np.median(beam_ids[returned_slots])),
+            float(np.log1p(returned_slots.size)),
+            float(1.0 - returned_slots.size / max(int(np.count_nonzero(geometry)), 1)),
+        ), dtype=np.float64)
+    trace = _E25V2SensorTrace(
+        _freeze(candidate_slots), _freeze(distance), _freeze(normal_world),
+        _freeze(valid), _freeze(in_range), _freeze(accepted_raw),
+    )
+    return exact, covariates, trace
+
+
+def _e25v2_expand_trace(
+    trace: _E25V2SensorTrace, item: ObjectSpec, slot_count: int,
+) -> tuple[np.ndarray, _ObjectCompetition]:
+    """Expand one compact exact trace only for a final full renderer check."""
+    geometry = np.zeros(slot_count, dtype=np.bool_)
+    geometry[trace.candidate_slots] = trace.valid & trace.in_range
+    accepted_slots = trace.candidate_slots[trace.accepted]
+    competition_distance = np.full(slot_count, np.inf, dtype=np.float64)
+    competition_normal = np.zeros((slot_count, 3), dtype=np.float64)
+    competition_object = np.full(slot_count, -1, dtype=np.int32)
+    competition_distance[accepted_slots] = trace.distance_m[trace.accepted]
+    competition_normal[accepted_slots] = trace.normal_world[trace.accepted]
+    competition_object[accepted_slots] = item.object_id
+    competition = _ObjectCompetition(
+        _freeze(competition_distance), _freeze(competition_normal),
+        _freeze(competition_object),
+        {item.object_id: int(np.count_nonzero(trace.valid))},
+        {item.object_id: int(np.count_nonzero(trace.accepted))},
+    )
+    return geometry, competition
 
 
 def _e25v2_target_attempt(
     index: int, source: NormalTemplateShape, template_identity: str,
     shape: NormalTemplateShape, scale: np.ndarray, perturbation: float,
-    material_seed: int, target: int,
+    material_seed: int, material: MaterialSpec,
+    grounding: GroundingEligibility, target: int,
+    placement_cache: dict[int, tuple[ObjectSpec, PlacementRecord] | None],
+    sensor_cache: dict[
+        tuple[int, int],
+        tuple[np.ndarray, np.ndarray, np.ndarray | None, tuple[int, int, int] | None],
+    ],
 ) -> dict[str, object]:
     sequence, pool, obstacles = (
         _E25V2_SEQUENCE, _E25V2_SUPPORT_POOL, _E25V2_OBSTACLES
@@ -7789,15 +7945,8 @@ def _e25v2_target_attempt(
     control_seed = 2_500_000 + index
     semantic = int(source.raw_semantic_id)
     frame_id = int(_E25V2_TARGETS["frame_id"][target])
-    frame = sequence.source_frame(frame_id)
-    pose_rotation, lidar_origin = _pose(frame)
-    directions_sensor = grid.directions_for(frame)
-    directions_world = directions_sensor @ pose_rotation.T
-    origins_world = grid.origins_for(frame) @ pose_rotation.T + lidar_origin
-    native_range = np.asarray(grid.ranges(frame)).copy()
-    native_range[np.asarray(frame.zero_slot_mask, dtype=np.bool_)] = np.inf
-    trace_context = (
-        directions_sensor, directions_world, origins_world, native_range
+    frame, trace_context, uniform = _e25v2_frame_context(
+        frame_id, control_seed, index + 1
     )
     condition_rejections = 0
     placement_rejections = 0
@@ -7806,32 +7955,49 @@ def _e25v2_target_attempt(
     exact_mismatch_counts = np.zeros(3, dtype=np.int16)
     best_scaled_difference = np.full(5, np.inf, dtype=np.float64)
     calipers = np.asarray((2.0, 4.0, 0.25, 0.10, 0.25))
-    material = MaterialSpec.sample(material_seed)
-    grounding = qualify_grounding(shape)
-
     def yaw_for_support(patch: SupportPatch) -> float:
         return _E25V2_TRAJECTORY_YAW[patch.frame_id] + perturbation
 
     for proposal, row in enumerate(_E25V2_SUPPORT_ROWS[target][:128]):
-        try:
-            item, record = place_object(
-                shape, material, pool, obstacles,
-                object_id=index + 1, label="normal-control",
-                proposal_namespace="E25-v2-observation-conditioned",
-                proposal_stream=control_seed, yaw_rad=perturbation,
-                material_seed=material_seed, yaw_seed=control_seed,
-                template_identity=_normal_template_identity(source),
-                proposal_rows=(int(row),), maximum_candidates=1,
-                grounding_eligibility=grounding,
-                yaw_for_support=yaw_for_support,
-            )
-        except PlacementError:
+        support_row = int(row)
+        if support_row not in placement_cache:
+            try:
+                placement_cache[support_row] = place_object(
+                    shape, material, pool, obstacles,
+                    object_id=index + 1, label="normal-control",
+                    proposal_namespace="E25-v2-observation-conditioned",
+                    proposal_stream=control_seed, yaw_rad=perturbation,
+                    material_seed=material_seed, yaw_seed=control_seed,
+                    template_identity=template_identity,
+                    proposal_rows=(support_row,), maximum_candidates=1,
+                    grounding_eligibility=grounding,
+                    yaw_for_support=yaw_for_support,
+                )
+            except PlacementError:
+                placement_cache[support_row] = None
+        placement = placement_cache[support_row]
+        if placement is None:
             placement_rejections += 1
             continue
+        item, record = placement
         world = WorldSpec(control_seed, 206, (item,))
-        precheck_exact, precheck_covariates = _e25v2_sensor_precheck(
-            frame, world, grid, sensor, trace_context
-        )
+        sensor_key = frame_id, support_row
+        sensor_value = sensor_cache.get(sensor_key)
+        trace: _E25V2SensorTrace | None = None
+        if sensor_value is None:
+            (
+                precheck_exact, precheck_covariates,
+                trace,
+            ) = _e25v2_sensor_precheck(
+                frame, world, grid, sensor, trace_context, uniform
+            )
+            control_covariates = None
+            control_summary = None
+        else:
+            (
+                precheck_exact, precheck_covariates,
+                control_covariates, control_summary,
+            ) = sensor_value
         comparable = _E25V2_TARGET_LOOKUP.get(
             (semantic, record.support_semantic,
              int(precheck_exact[0]), int(precheck_exact[1])),
@@ -7860,26 +8026,45 @@ def _e25v2_target_attempt(
             precheck_exact[2] < 1
             or not bool(precheck_pass.any())
         ):
+            if sensor_value is None:
+                sensor_cache[sensor_key] = (
+                    precheck_exact, precheck_covariates, None, None
+                )
             condition_rejections += 1
             continue
-        geometry, _, _, rendered = _gate1_single_object_trace(
-            frame, world, grid, sensor
-        )
-        returned = np.asarray(rendered.normal_control_mask, dtype=np.bool_)
-        official = np.asarray(grid.official_ranges(rendered.source))
-        returned = returned & (official >= 2.5) & (official <= 50.0)
-        unit = _e45_unit_record(
-            frame, grid, 1, control_seed, frame_id, semantic,
-            int(_E25V2_TARGETS["real_instance"][target]),
-            int(_E25V2_TARGETS["support_semantic"][target]),
-            geometry, returned, rendered.source,
-        )
-        control_covariates = _e45_covariates({
-            name: np.asarray(unit[name]).reshape(1)
-            for name in (
-                "median_distance_m", "median_beam", "Nvis", "O_hat", "local_density"
+        if control_covariates is None or control_summary is None:
+            assert trace is not None
+            precheck_geometry, competition = _e25v2_expand_trace(
+                trace, item, grid.slot_count
             )
-        })[0]
+            rendered = render_frame(
+                frame, world, grid, sensor,
+                _trace_context=trace_context, _competition=competition,
+            )
+            returned = np.asarray(rendered.normal_control_mask, dtype=np.bool_)
+            official = np.asarray(grid.official_ranges(rendered.source))
+            returned = returned & (official >= 2.5) & (official <= 50.0)
+            unit = _e45_unit_record(
+                frame, grid, 1, control_seed, frame_id, semantic,
+                int(_E25V2_TARGETS["real_instance"][target]),
+                int(_E25V2_TARGETS["support_semantic"][target]),
+                precheck_geometry, returned, rendered.source,
+            )
+            control_covariates = _e45_covariates({
+                name: np.asarray(unit[name]).reshape(1)
+                for name in (
+                    "median_distance_m", "median_beam", "Nvis", "O_hat",
+                    "local_density",
+                )
+            })[0]
+            control_summary = (
+                int(unit["point_count"]), int(unit["support_semantic"]),
+                int(unit["range_bin"]), int(unit["azimuth_sector"]),
+            )
+            sensor_cache[sensor_key] = (
+                precheck_exact, precheck_covariates,
+                control_covariates, control_summary,
+            )
         feasible_targets = comparable[precheck_pass]
         feasible_covariates = comparable_covariates[precheck_pass]
         feasible_differences = np.abs(feasible_covariates - control_covariates)
@@ -7900,13 +8085,14 @@ def _e25v2_target_attempt(
         best_scaled_difference[4] = min(
             best_scaled_difference[4], last_difference[4] / calipers[4]
         )
+        point_count, unit_support, unit_range, unit_sector = control_summary
         exact = bool(fully_matched.any()) and (
-            int(unit["point_count"]) > 0
-            and int(unit["support_semantic"])
+            point_count > 0
+            and unit_support
             == int(_E25V2_TARGETS["support_semantic"][target])
-            and int(unit["range_bin"])
+            and unit_range
             == int(_E25V2_TARGETS["range_bin"][matched_target])
-            and int(unit["azimuth_sector"])
+            and unit_sector
             == int(_E25V2_TARGETS["azimuth_sector"][matched_target])
         )
         violation_counts[4] += np.int16(last_difference[4] > calipers[4])
@@ -7922,7 +8108,7 @@ def _e25v2_target_attempt(
             "target_unit_hash": int(_E25V2_TARGETS["unit_hash"][matched_target]),
             "target_range_bin": int(_E25V2_TARGETS["range_bin"][matched_target]),
             "target_occlusion": float(_E25V2_TARGETS["O_hat"][matched_target]),
-            "control_occlusion": float(unit["O_hat"]),
+            "control_occlusion": float(control_covariates[3]),
             "condition_difference": last_difference,
             "support_proposal_count": proposal + 1,
             "placement_rejections": placement_rejections,
@@ -7977,6 +8163,13 @@ def _e25v2_worker(index: int) -> dict[str, object]:
         np.random.SeedSequence([control_seed, 2502])
     ).uniform(-limit, limit))
     material_seed = control_seed + 2503
+    material = MaterialSpec.sample(material_seed)
+    grounding = qualify_grounding(shape)
+    placement_cache: dict[int, tuple[ObjectSpec, PlacementRecord] | None] = {}
+    sensor_cache: dict[
+        tuple[int, int],
+        tuple[np.ndarray, np.ndarray, np.ndarray | None, tuple[int, int, int] | None],
+    ] = {}
     eligible = np.flatnonzero(
         (_E25V2_TARGETS["real_semantic"] == semantic)
         & _E25V2_SUPPORT_PROPOSABLE
@@ -8002,7 +8195,8 @@ def _e25v2_worker(index: int) -> dict[str, object]:
     for target_proposal, target in enumerate(eligible[order[:128]]):
         attempt = _e25v2_target_attempt(
             index, source, template_identity, shape, scale, perturbation,
-            material_seed, int(target),
+            material_seed, material, grounding, int(target),
+            placement_cache, sensor_cache,
         )
         aggregate_placement += int(attempt["placement_rejections"])
         aggregate_condition += int(attempt["condition_rejections"])
@@ -8084,14 +8278,44 @@ def _e25v2_arrays(records: Sequence[Mapping[str, object]]) -> dict[str, np.ndarr
     }
 
 
+def _e25v2_work_order() -> tuple[int, ...]:
+    """Start worst-case templates first so deterministic long tails overlap."""
+    templates = tuple(
+        template for semantic in sorted(_E25V2_TEMPLATES)
+        for template in _E25V2_TEMPLATES[semantic]
+    )
+    costs: list[int] = []
+    for index, source in enumerate(templates):
+        semantic = int(source.raw_semantic_id)
+        eligible = np.flatnonzero(
+            (_E25V2_TARGETS["real_semantic"] == semantic)
+            & _E25V2_SUPPORT_PROPOSABLE
+        )
+        order = np.lexsort((
+            _E25V2_TARGETS["unit_hash"][eligible],
+            np.abs(
+                _E25V2_TARGETS["frame_id"][eligible].astype(np.int64)
+                - source.source_frame_id
+            ),
+            _E25V2_TARGETS["real_instance"][eligible]
+            != source.source_instance_id,
+        ))
+        proposals = sum(
+            min(128, _E25V2_SUPPORT_ROWS[int(target)].size)
+            for target in eligible[order[:128]]
+        )
+        costs.append(proposals * int(source.plane_normals.shape[0]))
+    return tuple(sorted(range(len(templates)), key=lambda i: (-costs[i], i)))
+
+
 def run_e25_v2_qualification(
     data_root: Path | str, support_pool_path: Path | str,
     calibration_path: Path | str, target_output_path: Path | str,
-    output_path: Path | str, *, processes: int = 8,
+    output_path: Path | str, *, processes: int = 12,
 ) -> dict[str, object]:
     """Qualify the train/206 observation-conditioned formal control placer."""
-    if processes != 8:
-        raise PlacementError("formal E25-v2 requires exactly 8 control workers")
+    if processes != 12:
+        raise PlacementError("formal E25-v2 requires exactly 12 control workers")
     try:
         from .protocol import load_protocol
         from .scene import LabelMode, STUSequence
@@ -8185,6 +8409,7 @@ def run_e25_v2_qualification(
     _E25V2_TARGETS = targets
     _E25V2_SUPPORT_ROWS = _e25v2_support_streams(sequence, pool, targets)
     _initialize_e25v2_target_index(targets, _E25V2_SUPPORT_ROWS)
+    work_order = _e25v2_work_order()
     sequence._cache_frames = 1
     sequence._frames.clear()
     gc.collect()
@@ -8193,9 +8418,11 @@ def run_e25_v2_qualification(
     for _ in range(2):
         started = time.monotonic()
         with mp.get_context("fork").Pool(
-            processes=processes, maxtasksperchild=2
+            processes=processes, maxtasksperchild=16
         ) as workers:
-            records = workers.map(_e25v2_worker, range(256), chunksize=1)
+            scheduled = workers.map(_e25v2_worker, work_order, chunksize=1)
+        by_index = {int(item["control_seed"]) - 2_500_000: item for item in scheduled}
+        records = [by_index[index] for index in range(256)]
         run_seconds.append(time.monotonic() - started)
         runs.append(_e25v2_arrays(records))
     reproduced = all(
@@ -13667,7 +13894,7 @@ def _render_parser() -> argparse.ArgumentParser:
     e25v2.add_argument("--calibration", type=Path, required=True)
     e25v2.add_argument("--target-output", type=Path, required=True)
     e25v2.add_argument("--output", type=Path, required=True)
-    e25v2.add_argument("--processes", type=int, default=8)
+    e25v2.add_argument("--processes", type=int, default=12)
     e26 = subcommands.add_parser("qualify-e26")
     e26.add_argument("--data-root", type=Path, required=True)
     e26.add_argument("--support-pool", type=Path, required=True)
