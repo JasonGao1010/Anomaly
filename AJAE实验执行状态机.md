@@ -3230,7 +3230,7 @@ person目标资格的已知数据边界在正式生成中直接显现：E25-v3�
 
 ## E25-new｜覆盖导向的合法 normal-control 生成资格
 
-**状态：课题负责人已冻结合同；正式运行尚未执行。E25-v2与E25-v3 FAIL永久保留。**
+**状态：正式PASS；E26-v2已解锁。E25-v2与E25-v3 FAIL永久保留。**
 
 **唯一问题**
 
@@ -3280,11 +3280,25 @@ $$
 
 正式资格只执行一次，不自动重试，不形成两遍逐元素复现结论。冻结命令为`python -m src.render qualify-e25-new-normal-control --data-root /home/jasongao/Data/STU --support-pool runs/ajae/e21_v4_support_pool.npz --calibration runs/ajae/calibration.pt --output runs/ajae/e25_new_normal_control.npz --processes 24`。
 
+**正式结果：PASS**
+
+唯一一次正式运行在实现冻结提交`e9ee028f48ca43d5191e37373a23722cfeabec66`上完成，墙钟时间27.831488263秒。256/256个fixture全部完成，尝试模板身份和完成模板身份均为256个且各出现一次；car、truck、other-vehicle和person各64个。预分配距离层与最终渲染回波中位official range层均严格为$[52,51,51,51,51]$，逐fixture距离层错误为0；分类别距离计数分别为car $[13,13,13,13,12]$、truck $[13,13,13,12,13]$、other-vehicle $[13,13,12,13,13]$和person $[13,12,13,13,13]$。
+
+全部fixture均至少产生一个可见normal-control回波。可见回波数最小值、中位数、均值、95%分位数和最大值分别为1、53、269.41015625、1472和4927。八个方位扇区总体计数为$[36,43,15,40,52,9,10,51]$，最大扇区52项，占0.203125；三个遮挡层总体计数为$[204,50,2]$，没有未定义项。这些量只作描述，没有参与PASS裁决。
+
+实际评估408个支撑proposal，严格分解为256次接受、119次物理放置拒绝、0次无可见回波拒绝和33次最终距离层拒绝。指定距离层耗尽、hard error、proposal记账错误、支撑身份错误、类别—支撑语义错误、缩放错误、姿态错误、E22 grounding错误、E23碰撞错误、材质错误、最终距离错误和可见性错误均为0；E25-new为单实体fixture，因此没有额外多实体E24事件。
+
+正式产物为`runs/ajae/e25_new_normal_control.npz`，大小580,668字节，SHA-256为`30fc7d1ecd60d005cb18c60ac81b1c7335e2121fcd3f1da5f440b5387a747b19`，科学数组哈希为`4625b8e01be6ba73d41af96e56a530d361c7ecfe5cd9f5c89a0daec64d9fa31a`。E21-v4支撑池输入SHA-256为`0e6e7299157f5e9ced0716f6dd14881c66ba1bca0cc9c372550e56f426ea844d`，传感器标定输入SHA-256为`b532b7e04d9025233b2768b8fb36287e477f62f20a3ff685a62f4a4a29bfefe0`。
+
+结束后的独立只读复核没有重新运行实验或重采对象。复核逐项确认256个fixture、seed、模板身份、指定层和实际层；重新解析并规范往返全部`ObjectSpec`与`PlacementRecord`；用冻结种子复现材质；从E21-v4池核对支撑行、帧、语义和类别合法性；对全部256个shape重算E22连续grounding量；重算遮挡层、方位统计、proposal守恒和科学数组哈希。所有比较均一致，接受记录中E23最小障碍SDF低于$-0.05$米的数量为0。该复核只验证已保存正式产物，不构成第二遍正式运行。
+
+E25-new由此只建立：256个规范正常模板能够各生成一个E21–E23合法、传感器可见、并按预定索引覆盖五个官方距离层的normal-control。它没有建立真实正常距离分布、real/control共同支持或来源不可区分性；这些问题仍分别由E45A-new和E46裁决。
+
 PASS后立即把该选择器接入唯一生产world builder，执行E26-v2；随后刷新E38–E44中依赖control分布的证据，执行E45A-new与E45B-v2。E45A-new PASS解锁E46，E45B-v2必须在E48前PASS。FAIL时永久保留该次结果并停下等待课题负责人决策，不修改模板、距离分配、proposal上限、renderer或下游匹配条件。
 
 ## 历史 E26｜旧normal-control分布下的权威 world builder 与完整世界规格确定性
 
-**当前适用边界：以下PASS永久保留为旧normal-control分布的历史证据，不能资格E25-new后的正式生产world builder。E25-new PASS后必须执行E26-v2，当前Phase 2尚未由新版control分布关闭。**
+**当前适用边界：以下PASS永久保留为旧normal-control分布的历史证据，不能资格E25-new后的正式生产world builder。E25-new现已PASS；当前必须执行E26-v2，Phase 2尚未由新版control分布关闭。**
 
 **唯一问题**
 

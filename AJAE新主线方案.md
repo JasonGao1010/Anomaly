@@ -1820,7 +1820,7 @@ $$
 
 ---
 
-# 18. 当前状态（当前工作区：E25-new覆盖导向合同已冻结，正式运行待执行）
+# 18. 当前状态（当前工作区：E25-new正式PASS，E26-v2已解锁）
 
 截至当前工作区权威提交，已经完成：
 
@@ -1871,7 +1871,7 @@ E37已按状态机冻结正式执行：从E26四类世界各固定32个，以中
 
 E37已正式通过：128个固定世界的9类slot对齐输出在串行/24进程、正序/逆序/随机顺序和cached/uncached路径之间零摘要差异；重复窗口请求逐bit错误0，跨world cache误命中0，window identity进入正式渲染与回波随机流的读取数0。E37关闭，E38解锁。
 
-以下E38–E44、E45A和E45B结果均使用旧normal-control分布，只作为历史证据保留。E25-new一旦形成新版正式control分布，这些control依赖结论即失效，必须按当前路线刷新E38–E44并执行E45A-new和E45B-v2；旧E45B PASS不再满足当前E48前置资格。
+以下E38–E44、E45A和E45B结果均使用旧normal-control分布，只作为历史证据保留。E25-new现已形成新版正式control分布，这些control依赖结论已经失效，必须按当前路线刷新E38–E44并执行E45A-new和E45B-v2；旧E45B PASS不再满足当前E48前置资格。
 
 E38及其统一候选银行已经冻结：train/201帧4–681使用E21-v4同一支撑区域算法；首级候选银行使用256个paired seeds，每个seed分别生成独立正常对照世界与异常代理世界，并绑定同一真实正常实体五帧单位。E38保存三来源逐entity-frame、逐beam的opportunity、return count/rate和2,000次cluster bootstrap区间。实现通过46项完整回归，正式构建与统计尚未产生结果。
 
@@ -1923,13 +1923,17 @@ E25-v3 normal-control正式资格随后在提交`a97a6c7`上执行一次并FAIL�
 
 208个接受对象只覆盖90个中心帧、26个真实语义—实例身份，五个距离层为[7,163,27,11,0]，三个遮挡层为[37,169,2]。因此256/256完成、零耗尽、256模板、至少100帧、至少32个真实身份及五距离层非空均未达到；40–50米没有接受对象。该层20个目标中只有6个具有非空支撑流，且其确定性目标名次全部落在冻结的前128项目标前缀之后，所以正式运行没有实际尝试远距放置。821,370次实际支撑proposal严格分解为608,950次放置拒绝、212,212次条件拒绝和208次接受。正式产物`runs/ajae/e25_v3_normal_control.npz`大小524,004字节，SHA-256为`e31766c22ded4dcdf312540847944cb70a124c80b36af799f350734b0fb7aa98`，科学数组哈希为`b8d04778024e2c6b858b1361c395b2763a1e0b5655ab777c08578b798c81ed12`；独立复算与元数据一致。
 
-E25-v3目标资格PASS与目标库PASS继续成立，但不能代替normal-control生成资格。本次FAIL不能单独推出renderer失败、E21-v4支撑资格失败、person全类几何不可放或normal-control整体构念不可行；当前只有一次正式运行证据。按照运行前冻结的FAIL路线，没有自动重试，没有改变$1.25R(d)$、128×128上限或E45A caliper，也没有进入E26-v2或train/201审计。状态机现停在E25-v3等待课题负责人决策。
+E25-v3目标资格PASS与目标库PASS继续成立，但不能代替normal-control生成资格。本次FAIL不能单独推出renderer失败、E21-v4支撑资格失败、person全类几何不可放或normal-control整体构念不可行；当前只有一次正式运行证据。按照运行前冻结的FAIL路线，没有自动重试，没有改变$1.25R(d)$、128×128上限或E45A caliper，也没有进入E26-v2或train/201审计。该历史分支当时停在E25-v3等待课题负责人决策；后续决策已由下文E25-new合同给出。
 
 课题负责人现已作出新决策并结束E25-v3的真实目标逐对象条件复制路线。E25-v2与E25-v3 normal-control FAIL永久保留；E25-new恢复生成器与审计的职责分离。E25-new只要求256个规范train/206模板各生成一个合法且可见的正常对照，并通过固定索引循环覆盖官方五个距离层；E45A的median beam、可见回波数、遮挡和局部密度caliper全部移回train/201审计阶段，不再作为生成接受条件。
 
 E25-new的fixture index $i=0,\ldots,255$与规范模板索引一一对应，指定距离层为$i\bmod5$，总配额固定为$[52,51,51,51,51]$。最终距离身份只使用`render_frame`后全部可见normal-control回波的official range中位数。模板不得替换或重复，指定层不得回退；每fixture最多128个支撑proposal。类别支撑语义、0.9–1.1缩放、类别姿态、材质、E21–E24、传感器概率、强度与renderer保持不变。train/201、真实目标、E45A匹配结果和E46输出均不进入生成。
 
 E25-new的唯一硬门是256/256完成、模板身份唯一、每项最终距离层正确、至少一个可见回波、E21–E24及类别语义合法、缩放/姿态/材质/renderer合同正确、hard error与指定距离层耗尽为0。方位角、遮挡层和$N_{vis}$只报告，不设置最低数量。正式运行固定24进程、每进程数值库单线程，只执行一次且不自动重试。运行前权威命令为`python -m src.render qualify-e25-new-normal-control --data-root /home/jasongao/Data/STU --support-pool runs/ajae/e21_v4_support_pool.npz --calibration runs/ajae/calibration.pt --output runs/ajae/e25_new_normal_control.npz --processes 24`。
+
+E25-new已经在冻结实现提交`e9ee028f48ca43d5191e37373a23722cfeabec66`上完成唯一一次正式运行并PASS，墙钟时间27.831488263秒。256/256个fixture全部成功，256个规范模板各使用一次，四个类别各64个；预分配距离层和最终可见回波中位official range层均严格为$[52,51,51,51,51]$。全部对象至少有一个可见回波，$N_{vis}$的最小值、中位数、均值、95%分位数和最大值为1、53、269.41015625、1472和4927。408个实际支撑proposal严格分解为256次接受、119次物理放置拒绝、0次无可见回波拒绝和33次距离层拒绝；支撑、类别语义、缩放、姿态、E22、E23、材质、renderer、最终距离、可见性、proposal记账、hard error和耗尽错误均为0。
+
+描述性八方位计数为$[36,43,15,40,52,9,10,51]$，三个遮挡层计数为$[204,50,2]$。正式产物`runs/ajae/e25_new_normal_control.npz`大小580,668字节，SHA-256为`30fc7d1ecd60d005cb18c60ac81b1c7335e2121fcd3f1da5f440b5387a747b19`，科学数组哈希为`4625b8e01be6ba73d41af96e56a530d361c7ecfe5cd9f5c89a0daec64d9fa31a`。结束后的独立只读复核逐项重算fixture身份、模板唯一性、距离层、支撑池身份、对象和放置记录规范往返、材质、E22连续grounding、E23深穿透、遮挡、方位、proposal守恒和科学哈希，全部一致；该复核没有重采对象，不形成第二遍正式运行结论。
 
 这里的距离循环是用于构造反作弊正常对照的覆盖导向采样，不是对真实正常场景距离分布的估计。每个45度方位扇区的总体与分类别计数、最大扇区计数和占比，以及遮挡层与$N_{vis}$分布均只作描述。
 
@@ -1947,7 +1951,7 @@ E25-new的唯一硬门是256/256完成、模板身份唯一、每项最终距离
 当前执行节点为：
 
 $$
-\boxed{E25\text{-v2/v3 FAIL RETAINED};\quad E25\text{-new FROZEN BEFORE FORMAL RUN}}
+\boxed{E25\text{-v2/v3 FAIL RETAINED};\quad E25\text{-new PASS};\quad E26\text{-v2 UNLOCKED}}
 $$
 
 E23与E24-v2已按冻结设计通过，当前顺序为：
@@ -1958,12 +1962,12 @@ E25\text{-new}\rightarrow E26\text{-v2}\rightarrow
 \{E45A\text{-new},E45B\text{-v2}\}
 $$
 
-E27–E37的纯机械资格继续保留；E36-v1、E45-v1、E45-v2、E45A、E45A-v2、E25-v2和E25-v3 normal-control FAIL均保留。旧E45B已PASS，但只资格旧normal-control分布；新版正式control分布必须重新执行E45B-v2。$D_{xy}+\alpha$路线和E25-v3逐对象五维条件复制路线均已终止。当前先执行E25-new；PASS后依次进入E26-v2、依赖新版control分布的E38–E44刷新、E45A-new与E45B-v2。E46和E48继续锁定。
+E27–E37的纯机械资格继续保留；E36-v1、E45-v1、E45-v2、E45A、E45A-v2、E25-v2和E25-v3 normal-control FAIL均保留。旧E45B已PASS，但只资格旧normal-control分布；新版正式control分布必须重新执行E45B-v2。$D_{xy}+\alpha$路线和E25-v3逐对象五维条件复制路线均已终止。E25-new已经PASS，当前依次进入E26-v2、依赖新版control分布的E38–E44刷新、E45A-new与E45B-v2。E46和E48继续锁定。
 
 因此当前整体判断仍是：
 
 $$
-\boxed{\text{E25-new合同已冻结，等待唯一一次正式资格结果}}
+\boxed{\text{E25-new正式PASS；当前执行E26-v2}}
 $$
 
 不能写成“AJAE 方法已经验证”或“剩余只需训练”。

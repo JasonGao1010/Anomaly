@@ -1845,11 +1845,11 @@
           }
         },
         "placement_world_builder_E23_E26": {
-          "status": "E23 PASS; E24 FAIL retained; E24-v2 PASS; old E25/E26 PASS retained; E25-v2 and E25-v3 FAIL retained; E25-new coverage-oriented contract frozen before its single formal run",
+          "status": "E23 PASS; E24 FAIL retained; E24-v2 PASS; old E25/E26 PASS retained; E25-v2 and E25-v3 FAIL retained; E25-new PASS; E26-v2 unlocked",
           "design_authorities": ["AJAE新主线方案.md", "AJAE实验执行状态机.md"],
           "design_authority_sha256": {
-            "main_plan": "632349d400052cbb06c41a4c40c90394bc15865586086a928049895e437847b9",
-            "state_machine": "eda685553b264afcf3e7b2d4395fbcb1c20c00e5aefdc0579cf99a681dac30ab"
+            "main_plan": "ecb2710fb997ff338b82b1b4a21e18d1300818e0a47dd63dc381233c4205fe79",
+            "state_machine": "844e6470292e476da66b67b2100a6db0a703856663ef9a6fe2d749821e3b5e3e"
           },
           "historical_E23_through_old_E26_implementation_identity": {
             "scope": "historical E23 through old E26 only; it is not the E25-new implementation identity",
@@ -2408,7 +2408,7 @@
             "downstream": "historical E25-v3 does not unlock E26-v2, E46 or E48"
           },
           "E25-new": {
-            "status": "FROZEN BEFORE FORMAL RUN; active normal-control qualification",
+            "status": "PASS; closed; E26-v2 unlocked",
             "purpose": "qualify a legal, visible and coverage-oriented normal-control candidate generator without importing E45A common-support matching into generation",
             "historical_results_retained": ["E25 PASS for the old random-placement distribution", "E25-v2 FAIL", "E25-v3 normal-control FAIL", "E45A FAIL", "E45A-v2 FAIL", "E45B PASS for the old control distribution"],
             "responsibility_boundary": {
@@ -2452,6 +2452,41 @@
             "gpu_used": false,
             "command": "python -m src.render qualify-e25-new-normal-control --data-root /home/jasongao/Data/STU --support-pool runs/ajae/e21_v4_support_pool.npz --calibration runs/ajae/calibration.pt --output runs/ajae/e25_new_normal_control.npz --processes 24",
             "artifact": "runs/ajae/e25_new_normal_control.npz",
+            "implementation_commit_before_formal_run": "e9ee028f48ca43d5191e37373a23722cfeabec66",
+            "result": {
+              "passed": true,
+              "failure_classification": null,
+              "run_seconds": 27.831488263007486,
+              "fixtures": 256,
+              "completed": 256,
+              "attempted_unique_templates": 256,
+              "completed_unique_templates": 256,
+              "class_count": {"car_10": 64, "truck_18": 64, "other_vehicle_20": 64, "person_30": 64},
+              "assigned_range_count": [52, 51, 51, 51, 51],
+              "accepted_range_count": [52, 51, 51, 51, 51],
+              "class_range_count": {"car_10": [13, 13, 13, 13, 12], "truck_18": [13, 13, 13, 12, 13], "other_vehicle_20": [13, 13, 12, 13, 13], "person_30": [13, 12, 13, 13, 13]},
+              "azimuth_sector_count": [36, 43, 15, 40, 52, 9, 10, 51],
+              "azimuth_maximum_sector_count": 52,
+              "azimuth_maximum_sector_share": 0.203125,
+              "class_azimuth_sector_count": {"car_10": [7, 16, 1, 8, 12, 2, 4, 14], "truck_18": [8, 13, 4, 12, 12, 3, 3, 9], "other_vehicle_20": [12, 7, 6, 8, 9, 2, 0, 20], "person_30": [9, 7, 4, 12, 19, 2, 3, 8]},
+              "occlusion_layer_count": [204, 50, 2],
+              "class_occlusion_layer_count": {"car_10": [51, 12, 1], "truck_18": [46, 18, 0], "other_vehicle_20": [51, 13, 0], "person_30": [56, 7, 1]},
+              "visible_return_count_summary": {"minimum": 1, "median": 53.0, "mean": 269.41015625, "q95": 1472.0, "maximum": 4927},
+              "support_proposals": 408,
+              "accepted_proposals": 256,
+              "physical_rejections": 119,
+              "no_visible_rejections": 0,
+              "range_bin_rejections": 33,
+              "placement_exhaustions": 0,
+              "hard_errors": 0,
+              "all_scientific_and_contract_error_counts": 0,
+              "support_pool_sha256": "0e6e7299157f5e9ced0716f6dd14881c66ba1bca0cc9c372550e56f426ea844d",
+              "calibration_sha256": "b532b7e04d9025233b2768b8fb36287e477f62f20a3ff685a62f4a4a29bfefe0",
+              "scientific_array_sha256": "4625b8e01be6ba73d41af96e56a530d361c7ecfe5cd9f5c89a0daec64d9fa31a",
+              "artifact_bytes": 580668,
+              "artifact_sha256": "30fc7d1ecd60d005cb18c60ac81b1c7335e2121fcd3f1da5f440b5387a747b19",
+              "independent_read_only_validation": "passed: all 256 identities, seeds, assigned and final range bins, template uniqueness, object/report canonical round trips, E21 support identities, legal support semantics, material streams, E22 continuous grounding values, E23 deep-penetration boundary, occlusion/azimuth summaries, proposal conservation and scientific-array hash were independently recomputed from the saved artifact without regenerating objects or executing a second formal run"
+            },
             "pass_route": "replace the sole production normal-control selector, execute E26-v2, refresh the control-dependent parts of E38-E44, then execute E45A-new and E45B-v2; E45A-new PASS unlocks E46 and E45B-v2 PASS is required before E48",
             "failure_route": "retain the single formal FAIL and stop for owner decision without changing templates, assigned bins, proposal limit, renderer or downstream matching criteria",
             "claim_limit": "The index-cycle distance allocation is coverage-oriented sampling for anti-shortcut normal controls, not an estimate of the real-normal scene distance distribution. E25-new does not establish real/control common support or source indistinguishability."
@@ -2527,7 +2562,7 @@
       }
     },
     "renderer_mechanical_qualification": {
-      "status": "E25-v2 and E25-v3 normal-control FAIL retained; E25-new coverage-oriented contract frozen before formal execution; E27-E37 mechanical qualifications retained; E38-E45A and E45B are distribution-dependent and require refresh after E25-new and E26-v2; E46 and E48 remain locked",
+      "status": "E25-v2 and E25-v3 normal-control FAIL retained; E25-new PASS and E26-v2 unlocked; E27-E37 mechanical qualifications retained; E38-E45A and E45B are distribution-dependent and require refresh after E26-v2; E46 and E48 remain locked",
       "layer_boundaries": {"E27-E28": "direct geometry outputs only", "E29": "return probability and deterministic acceptance decision only", "E30-E31": "accepted returns", "E32-E33": "nearest-return occlusion competition"},
       "E27": {
         "question": "Does the formal geometry path return the correct nearest convex-hull hit, outward finite normal and object ID for active normal-control templates when return rejection is disabled?",
