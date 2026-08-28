@@ -1845,11 +1845,11 @@
           }
         },
         "placement_world_builder_E23_E26": {
-          "status": "E23 PASS; E24 FAIL retained; E24-v2 PASS; old E25/E26 PASS retained; E25-v2 and E25-v3 FAIL retained; E25-new PASS; E26-v2 frozen before its single formal run",
+          "status": "E23 PASS; E24 FAIL retained; E24-v2 PASS; old E25/E26 PASS retained; E25-v2 and E25-v3 FAIL retained; E25-new PASS; E26-v2 PASS; current Phase 2 closed; E38-E44 refresh next",
           "design_authorities": ["AJAE新主线方案.md", "AJAE实验执行状态机.md"],
           "design_authority_sha256": {
-            "main_plan": "af0c30ee69bd5bc4e264b0f96deb1a0ed37feb8f523a2b78ec7ad35d72dded59",
-            "state_machine": "7f2c99b4bc94f618a0df5f4c35ecac18bd8c72f4cc828b0fbb00eb890a650443"
+            "main_plan": "4db7447848f11b2b604cc9066854af83d46500c700a92ee4fa322df9bfeb2795",
+            "state_machine": "71dc7a5b23445e23441ee73aa342b745faabb2f298445ef8b65263e9e5d6a6e5"
           },
           "historical_E23_through_old_E26_implementation_identity": {
             "scope": "historical E23 through old E26 only; it is not the E25-new implementation identity",
@@ -2492,7 +2492,7 @@
             "claim_limit": "The index-cycle distance allocation is coverage-oriented sampling for anti-shortcut normal controls, not an estimate of the real-normal scene distance distribution. E25-new does not establish real/control common support or source indistinguishability."
           },
           "E26-v2": {
-            "status": "FROZEN BEFORE FORMAL RUN; active production-world qualification",
+            "status": "PASS; closed; current Phase 2 closed and E38-E44 refresh unlocked",
             "purpose": "qualify the sole production world builder after direct integration of the E25-new coverage-oriented normal-control selector",
             "frozen_inputs": {
               "normal_template_counts": {"10": 64, "18": 64, "20": 64, "30": 64},
@@ -2540,11 +2540,51 @@
             "command": "python -m src.render qualify-e26-v2 --data-root /home/jasongao/Data/STU --support-pool runs/ajae/e21_v4_support_pool.npz --calibration runs/ajae/calibration.pt --output runs/ajae/e26_v2_world_builder.npz --processes 24",
             "artifact": "runs/ajae/e26_v2_world_builder.npz",
             "smoke_execution": {"formal_evidence": false, "artifact_written": false, "world_seed": 2600128, "world_type": "mixed", "world_attempt": 0, "normal_controls": 2, "anomaly_proxies": 1, "assigned_range_count": [1, 0, 0, 1, 0], "final_range_count": [1, 0, 0, 1, 0], "control_visibility_errors": 0, "control_range_errors": 0, "control_support_stream_errors": 0, "control_random_stream_errors": 0, "hard_errors": 0, "placement_exhaustions": 0},
+            "implementation_commit": "38079213a0801bf3a279414a8b120bfd24e1cd1b",
+            "result": {
+              "passed": true,
+              "failure_classification": null,
+              "formal_repetitions": 1,
+              "elementwise_reproduced": null,
+              "reproducibility_check": "not_run_by_owner_decision",
+              "processes": 24,
+              "numeric_library_threads_per_process": 1,
+              "gpu_used": false,
+              "run_seconds": [187.63917079399107],
+              "worlds": 256,
+              "completed": 256,
+              "world_seed_range": [2600000, 2600255],
+              "world_type_counts": {"pure_normal": 64, "control_only": 64, "mixed": 64, "anomaly_only": 64},
+              "world_attempt_counts": {"0": 254, "1": 1, "2": 1},
+              "maximum_successful_world_attempt": 2,
+              "entities": 605,
+              "normal_controls": 307,
+              "anomaly_proxies": 298,
+              "entity_counts_by_world_type": {"pure_normal": 0, "control_only_normal": 159, "mixed_normal": 148, "mixed_anomaly": 133, "anomaly_only_anomaly": 165},
+              "assigned_range_count": [52, 72, 55, 71, 57],
+              "final_range_count": [52, 72, 55, 71, 57],
+              "visible_return_count_summary": {"count": 307, "sum": 88139, "minimum": 1, "median": 45.0, "mean": 287.09771986970685, "maximum": 5577},
+              "support_proposals": 841,
+              "accepted_placements": 605,
+              "support_rejections": 236,
+              "support_rejection_reasons": {"observed_normal_deep_penetration": 199, "assigned_visible_range_bin_mismatch": 30, "no_visible_normal_control_return": 3, "obvious_pair_penetration": 4},
+              "anomaly_shape_proposals": 298,
+              "anomaly_grounding_rejections": 0,
+              "error_counts": {"type_errors": 0, "authority_errors": 0, "single_manifest_errors": 0, "round_trip_error": 0, "validation_error": 0, "world_random_stream_error": 0, "support_error": 0, "pose_error": 0, "material_error": 0, "grounding_error": 0, "collision_error": 0, "control_visibility_error": 0, "control_range_error": 0, "control_support_stream_error": 0, "control_random_stream_error": 0, "anomaly_random_stream_error": 0, "pair_error": 0, "traversal_error": 0, "hard_error_code": 0, "placement_exhaustion_code": 0, "nonempty_error_message": 0},
+              "renderer_identity": "1c96e2c44f97c9ba5c9702be1201bf68910ade90e3ccd9cf8341a4d017cd3551",
+              "scientific_array_sha256": "5766cda5820eb3281c0f9e13c64d2746ffdc120ce4543f32fa6c2c71cf1d4f97",
+              "artifact_bytes": 1033953,
+              "artifact_sha256": "2653f705d2e890d99cda732a7a00387b5621cd05abb9c4681c7a9f284c34363c",
+              "independent_read_only_validation": "passed: all 31 scientific arrays, canonical world/report JSON, world hash, request manifest, seed/type/count/placement bindings, 307 control observations and proposal conservation were independently recomputed from the saved artifact without regenerating worlds or executing a second formal run",
+              "historical_anomaly_only_equivalence": "all 64 anomaly-only world JSON, report JSON and world hashes, all 165 proxy objects and placements, all 165 shape-proposal records and all 200 support-proposal indices exactly equal the historical E26 artifact; request manifests differ because current renderer source identity changed",
+              "resource_observation": "all 24 workers participated; minimum observed available physical memory was approximately 0.38 GiB and peak swap use approximately 3.7 GiB; no OOM or hard error occurred and available physical memory returned to approximately 19 GiB after completion",
+              "claim_limit": "PASS establishes complete immutable E21-E24-legal production-world construction with final control visibility and assigned-range identity in the frozen 256-world and 48-attempt domain. It does not establish real/control common support, source indistinguishability or a real-normal 2.5-50 m distribution."
+            },
             "pass_route": "close current Phase 2, retain E27-E37 mechanical qualifications, refresh E38-E44 on the new control distribution, then execute E45A-new and E45B-v2",
             "failure_route": "retain the single formal result and stop for owner decision without changing E25-new, the 48-attempt bound, renderer or downstream matching criteria"
           },
           "E26": {
-            "status": "HISTORICAL PASS for the old normal-control distribution only; current E26-v2 has not run and current Phase 2 is not closed by this result",
+            "status": "HISTORICAL PASS for the old normal-control distribution only; current production world builder is independently qualified by E26-v2 PASS",
             "world_seeds": [2600000, 2600255],
             "world_type_quota_each": 64,
             "maximum_world_attempts": 48,
@@ -2614,7 +2654,7 @@
       }
     },
     "renderer_mechanical_qualification": {
-      "status": "E25-v2 and E25-v3 normal-control FAIL retained; E25-new PASS and E26-v2 frozen before its single formal run; E27-E37 mechanical qualifications retained; E38-E45A and E45B are distribution-dependent and require refresh after E26-v2; E46 and E48 remain locked",
+      "status": "E25-v2 and E25-v3 normal-control FAIL retained; E25-new PASS and E26-v2 PASS; current Phase 2 closed; E27-E37 mechanical qualifications retained; E38-E45A and E45B are distribution-dependent and now require refresh on the qualified new control distribution; E46 and E48 remain locked",
       "layer_boundaries": {"E27-E28": "direct geometry outputs only", "E29": "return probability and deterministic acceptance decision only", "E30-E31": "accepted returns", "E32-E33": "nearest-return occlusion competition"},
       "E27": {
         "question": "Does the formal geometry path return the correct nearest convex-hull hit, outward finite normal and object ID for active normal-control templates when return rejection is disabled?",

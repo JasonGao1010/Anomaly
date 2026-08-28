@@ -1,6 +1,6 @@
 # AJAE 主线方案
 
-> 当前权威基线：本仓库`main`、本文记录的全部历史证据、E25-new正式PASS及当前冻结的E26-v2合同。旧提交`44fd6d13798e826b2cac8371de26a7d17707dadc`只保留为E22-v2时期的历史基线，不再代表当前工作区状态。
+> 当前权威基线：本仓库`main`、本文记录的全部历史证据、E25-new正式PASS及E26-v2正式PASS。新版normal-control分布下的Phase 2已经关闭，当前进入E38–E44刷新。旧提交`44fd6d13798e826b2cac8371de26a7d17707dadc`只保留为E22-v2时期的历史基线，不再代表当前工作区状态。
 
 ---
 
@@ -1820,7 +1820,7 @@ $$
 
 ---
 
-# 18. 当前状态（当前工作区：E25-new正式PASS，E26-v2合同已冻结）
+# 18. 当前状态（当前工作区：E25-new与E26-v2正式PASS，当前刷新E38–E44）
 
 截至当前工作区权威提交，已经完成：
 
@@ -1943,11 +1943,21 @@ E26-v2现已冻结为E25-new选择器的唯一生产接入资格。它完整继�
 
 E26-v2正式运行固定24个fork worker、每个数值库单线程，只执行一次且不自动重试。命令为`python -m src.render qualify-e26-v2 --data-root /home/jasongao/Data/STU --support-pool runs/ajae/e21_v4_support_pool.npz --calibration runs/ajae/calibration.pt --output runs/ajae/e26_v2_world_builder.npz --processes 24`。PASS要求256/256世界完成，四类身份正确，全部E21–E24、control可见性与距离身份、支撑流和随机流复核、规范往返、pair、遍历、manifest、权威路径、hard error和耗尽计数均为0。
 
+E26-v2已经在冻结实现提交`38079213a0801bf3a279414a8b120bfd24e1cd1b`上完成唯一一次正式运行并PASS。24个fork worker各使用一个数值库线程，GPU未参与，墙钟时间为187.63917079399107秒。256/256个world全部完成，world seed精确覆盖2,600,000–2,600,255，pure-normal、control-only、mixed和anomaly-only各64个；254个world在attempt 0完成，seed 2,600,139与2,600,066分别在attempt 1和2完成，48-attempt耗尽为0。
+
+全部world共含605个实体，其中normal-control 307个、anomaly-proxy 298个。307个control的指定与最终距离层逐项相同，总计数均为$[52,72,55,71,57]$，每个control至少有一个最终可见回波；$N_{vis}$最小值1、中位数45、均值287.09771986970685、最大值5,577。全部E21–E24、control可见性与距离、两类随机流、支撑流、规范往返、pair、遍历、manifest、权威路径、hard error和耗尽错误均为0。
+
+正式产物`runs/ajae/e26_v2_world_builder.npz`大小1,033,953字节，SHA-256为`2653f705d2e890d99cda732a7a00387b5621cd05abb9c4681c7a9f284c34363c`，科学数组哈希为`5766cda5820eb3281c0f9e13c64d2746ffdc120ce4543f32fa6c2c71cf1d4f97`。独立只读复核重算科学哈希、world/report规范JSON、world hash、request manifest、control observation和proposal守恒，所有比较错误均为0；它没有重采world，不构成第二遍正式运行。当前64个anomaly-only世界与历史E26产物的world/report、165个proxy对象、shape proposal和支撑proposal内容逐项完全相同，只有绑定当前renderer源码身份的request manifest发生预期变化。
+
+因此E26-v2只建立新版选择器接入唯一生产world builder后的完整世界可采样性、实体合法性、不可变身份及control最终可见/距离身份；它不建立real/control共同支持、来源不可区分性或真实正常距离分布。新版normal-control分布下的Phase 2由此关闭，E27–E37机械资格继续保留，当前进入E38–E44刷新。
+
 这里的距离循环是用于构造反作弊正常对照的覆盖导向采样，不是对真实正常场景距离分布的估计。每个45度方位扇区的总体与分类别计数、最大扇区计数和占比，以及遮挡层与$N_{vis}$分布均只作描述。
 
 当前可成立的局部结论是：
 
 > **schema 7 能合法、确定且高效地产生覆盖冻结几何区域的合成异常代理；这些对象可以从 train/206 的合格支撑池采样，以冻结连续落地规则达到 99% 接触/埋地资格，并能由同一权威放置接口拒绝与 train/206 实际观测非地面回波发生超过 5 cm 深穿透的位置。**
+
+> **E25-new的覆盖导向normal-control选择器已经接入唯一生产world builder；在冻结的256个world身份和48次完整world attempt上，E26-v2完成256/256个world，全部E21–E24、control最终可见性、距离身份、随机流、规范身份和有限耗尽检查均通过。**
 
 当前尚未成立：
 
@@ -1959,23 +1969,22 @@ E26-v2正式运行固定24个fork worker、每个数值库单线程，只执行�
 当前执行节点为：
 
 $$
-\boxed{E25\text{-v2/v3 FAIL RETAINED};\quad E25\text{-new PASS};\quad E26\text{-v2 FROZEN BEFORE FORMAL RUN}}
+\boxed{E25\text{-v2/v3 FAIL RETAINED};\quad E25\text{-new PASS};\quad E26\text{-v2 PASS}}
 $$
 
 E23与E24-v2已按冻结设计通过，当前顺序为：
 
 $$
-E25\text{-new}\rightarrow E26\text{-v2}\rightarrow
 \text{E38--E44 control-side refresh}\rightarrow
 \{E45A\text{-new},E45B\text{-v2}\}
 $$
 
-E27–E37的纯机械资格继续保留；E36-v1、E45-v1、E45-v2、E45A、E45A-v2、E25-v2和E25-v3 normal-control FAIL均保留。旧E45B已PASS，但只资格旧normal-control分布；新版正式control分布必须重新执行E45B-v2。$D_{xy}+\alpha$路线和E25-v3逐对象五维条件复制路线均已终止。E25-new已经PASS，当前依次进入E26-v2、依赖新版control分布的E38–E44刷新、E45A-new与E45B-v2。E46和E48继续锁定。
+E27–E37的纯机械资格继续保留；E36-v1、E45-v1、E45-v2、E45A、E45A-v2、E25-v2和E25-v3 normal-control FAIL均保留。旧E45B已PASS，但只资格旧normal-control分布；新版正式control分布必须重新执行E45B-v2。$D_{xy}+\alpha$路线和E25-v3逐对象五维条件复制路线均已终止。E25-new与E26-v2已经PASS，当前依次进入依赖新版control分布的E38–E44刷新、E45A-new与E45B-v2。E46和E48继续锁定。
 
 因此当前整体判断仍是：
 
 $$
-\boxed{\text{E25-new正式PASS；当前执行E26-v2}}
+\boxed{\text{E26-v2正式PASS；当前刷新E38--E44}}
 $$
 
 不能写成“AJAE 方法已经验证”或“剩余只需训练”。

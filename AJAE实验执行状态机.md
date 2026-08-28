@@ -1,6 +1,6 @@
 # AJAE 细粒度实验执行状态机
 
-> 当前权威基线：本仓库`main`、本文件记录的全部历史证据、E25-new正式PASS及当前冻结的E26-v2合同。旧提交`44fd6d13798e826b2cac8371de26a7d17707dadc`只保留为E22-v2时期的历史基线，不再代表当前工作区状态。
+> 当前权威基线：本仓库`main`、本文件记录的全部历史证据、E25-new正式PASS及E26-v2正式PASS。新版normal-control分布下的Phase 2已经关闭，当前进入E38–E44刷新。旧提交`44fd6d13798e826b2cac8371de26a7d17707dadc`只保留为E22-v2时期的历史基线，不再代表当前工作区状态。
 
 > 依据：`AJAE新主线方案.md`。本文件把主线方案中的不可变约束、四个 Decision Gates、B0–B5 对照、正常运动安全、对象尺度诊断、开发纪律与一次性真实 OOD 验证，拆成可顺序执行的细粒度实验节点。
 
@@ -3298,7 +3298,7 @@ PASS后立即把该选择器接入唯一生产world builder，执行E26-v2；随
 
 ## E26-v2｜新版 normal-control 分布下的唯一生产 world builder
 
-**状态：合同已冻结，实现完成真实单world冒烟复核；唯一一次正式运行待执行。**
+**状态：正式PASS；新版normal-control分布下的Phase 2关闭，E38刷新已解锁。**
 
 E26-v2只回答：E25-new的覆盖导向normal-control选择器接入唯一`sample_training_world`后，能否在既有冻结世界身份和有限上限内构造完整、不可变且全部实体合法的多实体训练世界。它不重新裁决E27–E37的几何与传感器机械公式，也不加入E45A的真实目标、median beam、$N_{vis}$、遮挡或局部密度匹配门。
 
@@ -3318,9 +3318,23 @@ PASS要求256/256世界完成且四类身份正确；全部上述错误、hard e
 
 实现后的真实train/206冒烟执行使用world seed 2,600,128的mixed世界，未写产物，不计入正式结果。该世界在attempt 0完成，包含2个normal-control和1个anomaly-proxy；两项control的指定与最终距离层计数均为$[1,0,0,1,0]$，可见性、距离身份、支撑流、随机流、hard error和耗尽均为0。
 
+**E26-v2正式结果：PASS。** 正式实现冻结于提交`38079213a0801bf3a279414a8b120bfd24e1cd1b`，唯一一次正式运行使用上述冻结命令、24个fork进程和每进程一个数值库线程，GPU未参与，墙钟时间为187.63917079399107秒。256/256个world全部完成；world seed精确覆盖2,600,000–2,600,255，pure-normal、control-only、mixed和anomaly-only各64个。254个world在attempt 0完成，world seed 2,600,139在attempt 1完成，world seed 2,600,066在attempt 2完成；48-attempt耗尽为0。
+
+全部world共含605个实体，其中307个normal-control、298个anomaly-proxy。control-only包含159个control；mixed包含148个control和133个proxy；anomaly-only包含165个proxy。307个control的指定距离层与最终可见回波中位official range层逐对象一致，总计数均为$[52,72,55,71,57]$；每个control至少有一个最终可见回波。$N_{vis}$最小值为1、中位数为45、均值为287.09771986970685、最大值为5,577。五层总体数量和$N_{vis}$只作描述，不构成均匀配额或真实正常距离分布结论。
+
+`type_errors`、`authority_errors`、`single_manifest_errors`、规范往返、验证、world随机流、支撑、姿态、材质、grounding、observed-normal collision、control可见性、control距离、control支撑流、control随机流、proxy随机流、pair collision、遍历、hard error和placement exhaustion全部为0，非空错误消息数量为0。605条接受placement之前共实际评估841个支撑proposal，其中236次拒绝分解为199次已观测正常几何深穿透、30次最终距离层不符、3次无可见control回波和4次明显实体间穿透；298个proxy共使用298个shape proposal，grounding rejection为0。
+
+正式产物`runs/ajae/e26_v2_world_builder.npz`大小1,033,953字节，SHA-256为`2653f705d2e890d99cda732a7a00387b5621cd05abb9c4681c7a9f284c34363c`，31个科学数组的规范哈希为`5766cda5820eb3281c0f9e13c64d2746ffdc120ce4543f32fa6c2c71cf1d4f97`。`src/render.py`身份为`1c96e2c44f97c9ba5c9702be1201bf68910ade90e3ccd9cf8341a4d017cd3551`；规范模板库、E21-v4支撑池和传感器标定SHA-256分别为`de5dfd765ac7d4fe4bb4644c40ecafdd80cdc31a3d0b6fc4fccd8e84a9fd906b`、`0e6e7299157f5e9ced0716f6dd14881c66ba1bca0cc9c372550e56f426ea844d`和`b532b7e04d9025233b2768b8fb36287e477f62f20a3ff685a62f4a4a29bfefe0`。
+
+结束后的独立只读复核没有重采world，也不构成第二遍正式运行。复核重算31个科学数组哈希、全部world/report规范JSON、world hash、request manifest、seed/type/count/placement绑定、307条control observation和proposal守恒，所有比较错误均为0。对192–255号64个anomaly-only世界另与历史E26正式产物逐项比较：64个world JSON、64个report JSON、64个world hash、165个proxy对象与placement、165条shape proposal及200个支撑proposal索引全部完全相同；request manifest因当前renderer源码身份变化而不同，world/report生成内容未变。
+
+正式运行期间24个worker均参与计算。内存峰值阶段物理可用内存约0.38 GiB，swap最高使用约3.7 GiB，未发生OOM、hard error或持续内存压力；运行结束后物理可用内存恢复到约19 GiB。该资源观测不参与科学PASS/FAIL。
+
+E26-v2 PASS只建立：E25-new选择器接入唯一生产world builder后，在冻结随机流、48次完整world attempt和256个world身份内，可以构造全部E21–E24合法、不可变、control最终可见且距离身份正确的完整世界。它不建立real/control共同支持、来源不可区分性或2.5–50米真实正常分布结论。新版normal-control分布下的Phase 2由此关闭；E27–E37机械资格继续保留，下一节点为E38–E44刷新。
+
 ## 历史 E26｜旧normal-control分布下的权威 world builder 与完整世界规格确定性
 
-**当前适用边界：以下PASS永久保留为旧normal-control分布的历史证据，不能资格E25-new后的正式生产world builder。E25-new现已PASS；当前必须执行E26-v2，Phase 2尚未由新版control分布关闭。**
+**当前适用边界：以下PASS永久保留为旧normal-control分布的历史证据，不能资格E25-new后的正式生产world builder。当前正式生产world builder已由上述E26-v2 PASS独立资格，新版normal-control分布下的Phase 2已经关闭。**
 
 **唯一问题**
 
@@ -4292,8 +4306,8 @@ Notes:
 
 # 6. 如何使用这份状态机推进 AJAE
 
-1. 当前权威状态为E25-new PASS，E26-v2合同已冻结并等待唯一一次正式运行。
-2. 历史E23–旧E26及其后E27–E37机械资格均保留；当前先执行E26-v2，再刷新依赖新版control分布的E38–E44。
+1. 当前权威状态为E25-new PASS、E26-v2 PASS；新版normal-control分布下的Phase 2已经关闭。
+2. 历史E23–旧E26及其后E27–E37机械资格均保留；当前刷新依赖新版control分布的E38–E44。
 3. 每个后续Phase同样先完成整段设计冻结，再执行节点。
 4. preflight只查身份、支持、schema、接口和资源，不查正式结果。
 5. FAIL先按五类分类；`descriptive_deviation`直接记录继续，不能制造新硬门。
@@ -4303,7 +4317,7 @@ Notes:
 从当前节点开始的主执行链为：
 
 $$
-E26\text{-v2}\rightarrow E38\rightarrow\cdots\rightarrow E44
+E38\rightarrow\cdots\rightarrow E44
 \rightarrow
 \begin{cases}
 E45A\text{-new}\rightarrow E46,\\
