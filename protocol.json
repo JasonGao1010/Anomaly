@@ -2061,7 +2061,7 @@
             }
           },
           "E25-v2": {
-            "status": "FROZEN; formal execution pending; E26-v2 and E46 locked",
+            "status": "FAIL; retained; target-support association audit found a qualification specification defect; E26-v2 and E46 locked pending owner decision",
             "purpose": "Qualify formal observation-conditioned normal-control support-position selection using train/206 real-normal observations only",
             "historical_results_retained": ["E25 PASS", "E45A FAIL", "E45A-v2 FAIL"],
             "unchanged_components": ["256 train/206 normal templates", "template identity selection in production", "scale U[0.9,1.1]", "class semantics", "trajectory-aligned pose rule", "E22 grounding", "E23 observed-normal collision", "E24 pair collision", "renderer", "return probability", "intensity", "schema-7 anomaly-proxy"],
@@ -2085,6 +2085,60 @@
             "command": "python -m src.render qualify-e25-v2 --data-root /home/jasongao/Data/STU --support-pool runs/ajae/e21_v4_support_pool.npz --calibration runs/ajae/calibration.pt --target-output runs/ajae/e25_v2_real_targets.npz --output runs/ajae/e25_v2_normal_control.npz --processes 12",
             "target_artifact": "runs/ajae/e25_v2_real_targets.npz",
             "artifact": "runs/ajae/e25_v2_normal_control.npz",
+            "result": {
+              "passed": false,
+              "formal_runner_classification": "observation_conditioned_control_generation_failure",
+              "post_run_classification": "target-support association qualification specification defect; formal FAIL retained; the normal-control construct itself is not scientifically adjudicated",
+              "formal_repetitions": 1,
+              "elementwise_reproduced": null,
+              "run_seconds": [1597.1578472580004],
+              "completed": 254,
+              "placements": 256,
+              "hard_errors": 0,
+              "placement_exhaustions": 2,
+              "unique_templates": 254,
+              "accepted_center_frames": 117,
+              "accepted_real_instances": 27,
+              "accepted_range_count": [5, 203, 41, 5, 0],
+              "accepted_occlusion_layer_count": [88, 164, 2],
+              "accepted_semantic_count": {"car_10": 64, "truck_18": 64, "other_vehicle_20": 62, "person_30": 64},
+              "failed_fixtures": [
+                {"fixture_index": 169, "control_seed": 2500169, "template_identity": "be7c3c90fd4bfd0cf50dd3fc15ca513bc2b43aa45cb819680dfebd3eb769ee38", "source_frame": 317, "source_instance": 2, "raw_semantic": 20, "target_proposals": 128, "actual_support_candidates": 15539, "placement_rejections": 10286, "condition_rejections": 5253},
+                {"fixture_index": 173, "control_seed": 2500173, "template_identity": "04985717493a2eab40aa4697c3806416486714185617dec49ffeda6770c2185b", "source_frame": 301, "source_instance": 2, "raw_semantic": 20, "target_proposals": 128, "actual_support_candidates": 15539, "placement_rejections": 10456, "condition_rejections": 5083}
+              ],
+              "actual_target_proposals": 7992,
+              "actual_support_candidates": 816594,
+              "actual_rejections": 816340,
+              "formal_metadata_support_proposals": 998588,
+              "scientific_array_sha256": "5af6724f22e680007f5b0c8ededb7e748082e51728dcd41978dddf82db6e7229",
+              "artifact_bytes": 582952,
+              "artifact_sha256": "7f5b5ec8e18f833d8ccaba58da5a9c037dfcfb73c9bf820003320781f2f8a020",
+              "target_artifact_bytes": 9067765,
+              "target_artifact_sha256": "957860c8b45a6dcc1a35e0815a7c7fcc045ed488d4089155ddda948e8f31d4d4"
+            },
+            "post_run_audit": {
+              "accepted_mask_required_for_coverage": "template_identity is nonempty AND placement_exhaustion_code=0 AND hard_error_code=0",
+              "formal_metadata_reporting_defect": "selected range, occlusion and frame summaries included the final attempted target from each exhausted fixture; support_proposals assumed 128 supports for every preceding target",
+              "metadata_values_not_for_scientific_use": {"selected_range_count": [5, 203, 43, 5, 0], "selected_occlusion_layer_count": [88, 166, 2], "center_frames": 118, "support_proposals": 998588},
+              "target_support_binding": {
+                "targets": 4827,
+                "strictly_inside_convex_hull": 2556,
+                "inside_or_exact_euclidean_distance_le_0p5m": 2962,
+                "exact_distance_gt_0p5m": 1865,
+                "exact_distance_gt_0p5_fraction": 0.38636834472757406,
+                "maximum_distance_m": 26.11010459935386,
+                "person_targets_gt_0p5m": 234,
+                "person_targets_total": 234,
+                "range_40_50_targets_gt_0p5m": 111,
+                "range_40_50_targets_total": 117,
+                "completed_control_target_references_gt_0p5m": 106,
+                "completed_control_target_references_total": 254,
+                "cause": "when no candidate satisfies the half-space tolerance, _real_instance_support_row chooses the globally nearest legal support without a maximum exact polygon-distance bound; the half-space proxy also misclassifies 16 acute-corner cases"
+              },
+              "range_40_50_search": {"target_units": 117, "support_proposable_units": 8, "executed_target_proposals": 0, "accepted_controls": 0},
+              "interpretation": "The two direct exhaustions are other-vehicle template-tail events, not evidence of an all-class or whole-class failure. The target bank is semantically unqualified because distant support bindings affect support strata and support proposal order; therefore this run cannot adjudicate the scientific viability of observation-conditioned normal controls.",
+              "decision_boundary": "Do not expand proposal limits, relax calipers, use train/201 targets, or rerun by changing constants. A versioned target-bank rule with an owner-frozen exact support-association definition is required before deciding whether E25-v2 should be repeated."
+            },
             "downstream": "PASS permits replacing the sole production normal-control position selector and then running E26-v2; FAIL keeps E26-v2 and E46 locked and requires owner decision"
           },
           "E26": {
@@ -2158,7 +2212,7 @@
       }
     },
     "renderer_mechanical_qualification": {
-      "status": "E25-v2 frozen and pending formal execution; E27-E44 PASS; E28-v1, E36-v1, E45-v1, E45-v2, E45A and E45A-v2 FAIL retained; E45B PASS; E26-v2 and E46 locked",
+      "status": "E25-v2 FAIL retained with target-support association qualification specification defect; E27-E44 PASS; E28-v1, E36-v1, E45-v1, E45-v2, E45A and E45A-v2 FAIL retained; old-distribution E45B PASS is historical for any revised control distribution; E26-v2, E46 and E48 locked",
       "layer_boundaries": {"E27-E28": "direct geometry outputs only", "E29": "return probability and deterministic acceptance decision only", "E30-E31": "accepted returns", "E32-E33": "nearest-return occlusion competition"},
       "E27": {
         "question": "Does the formal geometry path return the correct nearest convex-hull hit, outward finite normal and object ID for active normal-control templates when return rejection is disabled?",
