@@ -3122,18 +3122,18 @@ Notes: This node cannot qualify or fail Gate 1.
 ## E48 | Normal-Control versus Proxy Low-Level Difficulty
 
 Experiment ID: E48
-Design-freeze commit/hash: Frozen Gate 1 design; commit not recorded.
-Execution-freeze commit/hash: Not yet frozen; E45B-v2 prerequisite is now satisfied.
-Date: Not executed.
-Git commit / clean state: Not applicable.
+Design-freeze commit/hash: Original near-saturation construct and thresholds retained. Pre-result E48-split revision approved on 2026-08-29 after the E45B-v2 identity graph showed that pair co-location plus global center-frame grouping would create one 1,334-pair connected component. Revision implementation source SHA-256 `40303bc3accc7997e234c71dd3a92baccb62e2fb6dee222cd88c37c317e23438`.
+Execution-freeze commit/hash: This versioned split record, implementation and matching `protocol.json` object are committed before the single formal run; resolved commit is recorded with the result.
+Date: 2026-08-29 split revision and execution freeze; formal result pending.
+Git commit / clean state: Pre-revision workspace was clean at `308437330df2285457953e26993b7d67da785a0f`; formal execution must start from the clean split-revision commit.
 Data identities: Current E45B-v2 matched control/proxy units from `runs/ajae/e45b_v2_control_proxy_pairs.npz`.
 Input artifact hashes: E45B-v2 artifact SHA-256 `19ecbc843cc5325e3f12497c50e5855388f0f5caa581179f6fd6639613a8ecfd`; scientific hash `735df664e6ea2f54cac7f3d0c9a9778b17f035259cf716686063f30b5c31eaca`.
-Random namespaces / seeds: Same model and grouping scheme as E46.
-Command and resolved config: Use E46's frozen models and grouped evaluation. FAIL for near-saturation only if any model simultaneously has 95% lower confidence bound AUC ≥0.95 and 95% lower confidence bound balanced accuracy ≥0.90; otherwise PASS. There is no minimum learnability threshold; usefulness of proxy supervision is tested by B1.
-Resource and disk preflight: Not executed.
+Random namespaces / seeds: Center-frame fold namespace is exactly ASCII `E48-center-v1:{frame_id}`; fold is the little-endian integer encoded by the first eight SHA-256 bytes modulo 5. This namespace is selected once and cannot be searched or changed after model results. Matched-pair cluster bootstrap uses exactly 2,000 multinomial resamples with `SeedSequence([4800,2000])`; each draw samples 369 pair identities with replacement and carries both control/proxy units together. Logistic random state is 4800 and tree random state is 4801.
+Command and resolved config: For fold $k$, pair $i$ is test iff both center-frame hashes equal $k$; it is train iff neither hash equals $k$; otherwise it is excluded. Frozen counts are test [61,46,91,74,97], train [913,1004,800,861,832], excluded [373,297,456,412,418], with 294 unique center frames and exactly 369 unique OOF pairs. Every train/test center-frame intersection must be empty, no pair may split, and each test pair contributes one control and one proxy unit. Use only saved sensor-frame `[x,y,z,intensity,beam,range,local density]`; retain at most the already identity-hashed 64 points per entity-frame and set each entity-frame's total point weight to one. Models are standardized L2 logistic regression (`C=1`, `lbfgs`, intercept, tolerance $10^{-4}$, maximum 5,000 iterations) and a raw-feature Gini tree (`max_depth=3`, `min_samples_leaf=64`); neither uses class reweighting because every training pair contributes one unit per label. Pooled OOF metrics are weighted point-level ROC-AUC, balanced accuracy and both recalls. The 2.5th and 97.5th bootstrap percentiles form the 95% interval. FAIL only if any one model simultaneously has AUC lower bound ≥0.95 and balanced-accuracy lower bound ≥0.90; otherwise PASS. No STU feature, ID, generator/report field, matching covariate outside the seven inputs, feature ablation or attribution is allowed. Command: `python -m src.render qualify-e48 --e45b-v2-artifact runs/ajae/e45b_v2_control_proxy_pairs.npz --output runs/ajae/e48_low_level_shortcut.npz`.
+Resource and disk preflight: Checked immediately before the freeze commit on 2026-08-29: 24 online CPU cores, 23 GiB RAM with 21 GiB available, 16 GiB swap with 14 GiB free, and no competing experiment process. The available RTX 5080 Laptop GPU is not used because both frozen estimators are CPU implementations. Windows E: has 95,096,451,072 bytes remaining of 484,950,659,072 bytes; the existing E45B-v2 artifact is 4,785,665 bytes and E48 is expected to write far below 1 GiB, so the larger 5% safety reserve is preserved.
 Artifacts and hashes: None.
 Primary construct: Whether low-level control/proxy classification is nearly saturated under strict matching.
-Primary result: Not executed.
+Primary result: Not executed. Only identity-only fold counts were computed before freeze; no formal-input model fit, score, metric, bootstrap interval, feature ablation or attribution has been run.
 PASS / FAIL / OUTCOME: OUTCOME — CURRENT FORMAL NODE / NOT EXECUTED.
 Failure classification: Not applicable.
 Unlocked next node: PASS unlocks E49 directly; FAIL permits only redesign of the label-correlated proxy path and invalidates relevant E20 and E42–E48 evidence.

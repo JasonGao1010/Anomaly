@@ -16912,6 +16912,305 @@ def run_e45_pair_v2_qualification(
     return result
 
 
+FROZEN_E45B_V2_ARTIFACT_SHA256 = (
+    "19ecbc843cc5325e3f12497c50e5855388f0f5caa581179f6fd6639613a8ecfd"
+)
+E48_FOLD_NAMESPACE = "E48-center-v1"
+E48_BOOTSTRAP_SEED = (4800, 2000)
+
+
+def _e48_center_fold(frame_id: int) -> int:
+    """Assign one center frame without reading features or labels."""
+    digest = hashlib.sha256(
+        f"{E48_FOLD_NAMESPACE}:{frame_id}".encode("ascii")
+    ).digest()
+    return int.from_bytes(digest[:8], "little") % 5
+
+
+def _e48_fold_plan(center_frame: np.ndarray) -> dict[str, np.ndarray]:
+    """Keep matched pairs intact and embargo every test center from training."""
+    centers = np.asarray(center_frame, dtype=np.int64)
+    if centers.ndim != 2 or centers.shape[1] != 2:
+        raise RenderError("E48 center-frame identity must be pair x source")
+    frames = np.unique(centers)
+    frame_fold = np.asarray(
+        [_e48_center_fold(int(frame)) for frame in frames], dtype=np.int8
+    )
+    lookup = {int(frame): int(fold) for frame, fold in zip(frames, frame_fold, strict=True)}
+    pair_fold = np.asarray(
+        [[lookup[int(left)], lookup[int(right)]] for left, right in centers],
+        dtype=np.int8,
+    )
+    test = np.zeros((5, centers.shape[0]), dtype=np.bool_)
+    train = np.zeros_like(test)
+    excluded = np.zeros_like(test)
+    for fold in range(5):
+        test[fold] = (pair_fold[:, 0] == fold) & (pair_fold[:, 1] == fold)
+        train[fold] = (pair_fold[:, 0] != fold) & (pair_fold[:, 1] != fold)
+        excluded[fold] = ~(test[fold] | train[fold])
+    return {
+        "unique_center_frame": frames.astype(np.int16),
+        "center_frame_fold": frame_fold,
+        "pair_center_frame_fold": pair_fold,
+        "fold_test_pair": test,
+        "fold_train_pair": train,
+        "fold_excluded_pair": excluded,
+    }
+
+
+def _e48_points(
+    features: np.ndarray, point_count: np.ndarray, pair_index: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Flatten selected pairs while giving every entity-frame total weight one."""
+    rows: list[np.ndarray] = []
+    labels: list[np.ndarray] = []
+    pairs: list[np.ndarray] = []
+    weights: list[np.ndarray] = []
+    for local_pair, pair in enumerate(np.asarray(pair_index, dtype=np.int64)):
+        for source in range(2):
+            count = int(point_count[pair, source])
+            if count < 1 or count > 64:
+                raise RenderError("E48 unit point count is outside 1..64")
+            values = np.asarray(features[pair, source, :count], dtype=np.float64)
+            if values.shape != (count, 7) or not np.isfinite(values).all():
+                raise RenderError("E48 low-level point features are invalid")
+            rows.append(values)
+            labels.append(np.full(count, source, dtype=np.uint8))
+            pairs.append(np.full(count, local_pair, dtype=np.int64))
+            weights.append(np.full(count, 1.0 / count, dtype=np.float64))
+    return (
+        np.concatenate(rows), np.concatenate(labels),
+        np.concatenate(pairs), np.concatenate(weights),
+    )
+
+
+def _e48_metrics(
+    labels: np.ndarray, scores: np.ndarray, predictions: np.ndarray,
+    weights: np.ndarray,
+) -> np.ndarray:
+    """Return weighted AUC, balanced accuracy, and both class recalls."""
+    from sklearn.metrics import roc_auc_score
+
+    recall = np.asarray([
+        np.sum(weights[(labels == source) & (predictions == source)])
+        / np.sum(weights[labels == source])
+        for source in (0, 1)
+    ], dtype=np.float64)
+    return np.asarray((
+        float(roc_auc_score(labels, scores, sample_weight=weights)),
+        float(recall.mean()), float(recall[0]), float(recall[1]),
+    ))
+
+
+def _e48_pair_bootstrap(
+    labels: np.ndarray, scores: np.ndarray, predictions: np.ndarray,
+    point_pair: np.ndarray, base_weight: np.ndarray, pair_count: int,
+) -> np.ndarray:
+    """Resample matched pair identities and carry both entity-frame units together."""
+    rng = np.random.default_rng(np.random.SeedSequence(E48_BOOTSTRAP_SEED))
+    output = np.empty((2000, 4), dtype=np.float64)
+    probability = np.full(pair_count, 1.0 / pair_count, dtype=np.float64)
+    for replicate in range(2000):
+        multiplicity = rng.multinomial(pair_count, probability)
+        weights = base_weight * multiplicity[point_pair]
+        output[replicate] = _e48_metrics(labels, scores, predictions, weights)
+    return output
+
+
+def run_e48_qualification(
+    e45b_v2_artifact_path: Path | str, output_path: Path | str,
+) -> dict[str, object]:
+    """Audit near-saturated rendered label prediction with two low-capacity models."""
+    from sklearn.exceptions import ConvergenceWarning
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.preprocessing import StandardScaler
+    from sklearn.tree import DecisionTreeClassifier
+
+    source_path = Path(e45b_v2_artifact_path).expanduser().resolve(strict=True)
+    if _sha256_path(source_path) != FROZEN_E45B_V2_ARTIFACT_SHA256:
+        raise RenderError("E48 requires the frozen E45B-v2 artifact")
+    with np.load(source_path, allow_pickle=False) as source:
+        metadata = json.loads(str(source["metadata_json"]))
+        scientific = {
+            name: np.asarray(source[name])
+            for name in source.files if name != "metadata_json"
+        }
+    if (
+        metadata.get("experiment") != "E45B-v2"
+        or metadata.get("passed") is not True
+        or metadata.get("scientific_array_hash") != _scientific_array_hash(scientific)
+    ):
+        raise RenderError("E48 input metadata or scientific arrays changed")
+    source_id = np.asarray(scientific["matched_source"])
+    expected_source = np.tile(
+        np.asarray((1, 2), dtype=np.uint8), (source_id.shape[0], 1)
+    )
+    if source_id.shape != (1347, 2) or not np.array_equal(source_id, expected_source):
+        raise RenderError("E48 requires 1,347 ordered control/proxy pairs")
+    point_count = np.asarray(scientific["matched_point_count"], dtype=np.int16)
+    point_features = np.asarray(scientific["matched_point_features"], dtype=np.float64)
+    if point_features.shape != (1347, 2, 64, 7) or point_count.shape != (1347, 2):
+        raise RenderError("E48 point-feature contract changed")
+
+    plan = _e48_fold_plan(scientific["matched_center_frame"])
+    test_count = plan["fold_test_pair"].sum(axis=1)
+    train_count = plan["fold_train_pair"].sum(axis=1)
+    excluded_count = plan["fold_excluded_pair"].sum(axis=1)
+    if (
+        plan["unique_center_frame"].size != 294
+        or not np.array_equal(test_count, (61, 46, 91, 74, 97))
+        or not np.array_equal(train_count, (913, 1004, 800, 861, 832))
+        or not np.array_equal(excluded_count, (373, 297, 456, 412, 418))
+        or int(test_count.sum()) != 369
+        or np.any(plan["fold_test_pair"].sum(axis=0) > 1)
+    ):
+        raise RenderError("E48 frozen fold identity changed")
+    centers = np.asarray(scientific["matched_center_frame"], dtype=np.int64)
+    for fold in range(5):
+        train_pairs = np.flatnonzero(plan["fold_train_pair"][fold])
+        test_pairs = np.flatnonzero(plan["fold_test_pair"][fold])
+        if np.intersect1d(centers[train_pairs], centers[test_pairs]).size:
+            raise RenderError("E48 center frame crosses train and test")
+
+    model_names = ("l2_logistic_regression", "depth3_decision_tree")
+    oof_score = np.full((2, 1347, 2, 64), np.nan, dtype=np.float64)
+    oof_prediction = np.full((2, 1347, 2, 64), 255, dtype=np.uint8)
+    model_iterations = np.zeros((2, 5), dtype=np.int64)
+    started = time.monotonic()
+    for fold in range(5):
+        train_pairs = np.flatnonzero(plan["fold_train_pair"][fold])
+        test_pairs = np.flatnonzero(plan["fold_test_pair"][fold])
+        train_x, train_y, _, train_weight = _e48_points(
+            point_features, point_count, train_pairs
+        )
+        test_x, test_y, _, _ = _e48_points(point_features, point_count, test_pairs)
+        scaler = StandardScaler().fit(train_x, sample_weight=train_weight)
+        train_scaled = scaler.transform(train_x)
+        test_scaled = scaler.transform(test_x)
+        logistic = LogisticRegression(
+            penalty="l2", C=1.0, solver="lbfgs", fit_intercept=True,
+            tol=1.0e-4, max_iter=5000, class_weight=None, random_state=4800,
+        )
+        tree = DecisionTreeClassifier(
+            criterion="gini", splitter="best", max_depth=3,
+            min_samples_leaf=64, class_weight=None, random_state=4801,
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", ConvergenceWarning)
+            logistic.fit(train_scaled, train_y, sample_weight=train_weight)
+        tree.fit(train_x, train_y, sample_weight=train_weight)
+        models = ((logistic, test_scaled), (tree, test_x))
+        model_iterations[0, fold] = int(logistic.n_iter_[0])
+        model_iterations[1, fold] = int(tree.tree_.node_count)
+        offset = 0
+        for pair in test_pairs:
+            pair_points = int(point_count[pair].sum())
+            pair_slice = slice(offset, offset + pair_points)
+            for model_id, (model, values) in enumerate(models):
+                score = model.predict_proba(values[pair_slice])[:, 1]
+                prediction = (score >= 0.5).astype(np.uint8)
+                local = 0
+                for source_index in range(2):
+                    count = int(point_count[pair, source_index])
+                    oof_score[model_id, pair, source_index, :count] = score[local:local + count]
+                    oof_prediction[model_id, pair, source_index, :count] = prediction[local:local + count]
+                    local += count
+            offset += pair_points
+        if offset != test_x.shape[0]:
+            raise RenderError("E48 test prediction packing changed")
+    elapsed = time.monotonic() - started
+
+    oof_pair_index = np.flatnonzero(plan["fold_test_pair"].any(axis=0))
+    if oof_pair_index.size != 369:
+        raise RenderError("E48 OOF pair count changed")
+    metric = np.empty((2, 4), dtype=np.float64)
+    bootstrap = np.empty((2, 2000, 4), dtype=np.float64)
+    for model_id in range(2):
+        labels_parts: list[np.ndarray] = []
+        score_parts: list[np.ndarray] = []
+        prediction_parts: list[np.ndarray] = []
+        pair_parts: list[np.ndarray] = []
+        weight_parts: list[np.ndarray] = []
+        for local_pair, pair in enumerate(oof_pair_index):
+            for source_index in range(2):
+                count = int(point_count[pair, source_index])
+                labels_parts.append(np.full(count, source_index, dtype=np.uint8))
+                score_parts.append(oof_score[model_id, pair, source_index, :count])
+                prediction_parts.append(oof_prediction[model_id, pair, source_index, :count])
+                pair_parts.append(np.full(count, local_pair, dtype=np.int64))
+                weight_parts.append(np.full(count, 1.0 / count, dtype=np.float64))
+        labels = np.concatenate(labels_parts)
+        scores = np.concatenate(score_parts)
+        predictions = np.concatenate(prediction_parts)
+        point_pair = np.concatenate(pair_parts)
+        base_weight = np.concatenate(weight_parts)
+        if not np.isfinite(scores).all():
+            raise RenderError("E48 OOF scores are incomplete")
+        metric[model_id] = _e48_metrics(labels, scores, predictions, base_weight)
+        bootstrap[model_id] = _e48_pair_bootstrap(
+            labels, scores, predictions, point_pair, base_weight, 369
+        )
+    ci_low = np.quantile(bootstrap, 0.025, axis=1, method="linear")
+    ci_high = np.quantile(bootstrap, 0.975, axis=1, method="linear")
+    model_fail = (ci_low[:, 0] >= 0.95) & (ci_low[:, 1] >= 0.90)
+    passed = not bool(np.any(model_fail))
+    saved = {
+        **plan,
+        "oof_pair_index": oof_pair_index.astype(np.int64),
+        "oof_score": oof_score,
+        "oof_prediction": oof_prediction,
+        "model_metric": metric,
+        "bootstrap_metric": bootstrap,
+        "bootstrap_ci_low": ci_low,
+        "bootstrap_ci_high": ci_high,
+        "model_fail": model_fail,
+        "model_iterations_or_nodes": model_iterations,
+    }
+    result = {
+        "experiment": "E48", "passed": passed,
+        "failure_classification": None if passed else "near_saturated_low_level_label_shortcut",
+        "input_artifact_sha256": FROZEN_E45B_V2_ARTIFACT_SHA256,
+        "input_scientific_array_hash": metadata["scientific_array_hash"],
+        "fold_namespace": E48_FOLD_NAMESPACE,
+        "unique_center_frames": 294,
+        "fold_test_pairs": test_count.tolist(),
+        "fold_train_pairs": train_count.tolist(),
+        "fold_excluded_pairs": excluded_count.tolist(),
+        "oof_pairs": 369,
+        "models": list(model_names),
+        "features": ["x", "y", "z", "intensity", "beam", "range", "local_density"],
+        "maximum_points_per_unit": 64,
+        "unit_total_weight": 1.0,
+        "metric_order": ["roc_auc", "balanced_accuracy", "control_recall", "proxy_recall"],
+        "metric": metric.tolist(),
+        "bootstrap_replicates": 2000,
+        "bootstrap_seed_sequence": list(E48_BOOTSTRAP_SEED),
+        "bootstrap_cluster": "matched_pair",
+        "bootstrap_ci_low": ci_low.tolist(),
+        "bootstrap_ci_high": ci_high.tolist(),
+        "model_fail": model_fail.tolist(),
+        "fail_rule": "any_model_LCB95_AUC_ge_0.95_and_LCB95_BA_ge_0.90",
+        "formal_repetitions": 1,
+        "feature_ablation_or_attribution_run": False,
+        "elapsed_seconds": elapsed,
+        "scientific_array_hash": _scientific_array_hash(saved),
+        "claim_limit": (
+            "E48 only tests whether frozen low-level point observations nearly "
+            "saturate rendered control/proxy label prediction; it does not test "
+            "proxy supervision utility or distinguish semantic geometry from artifacts."
+        ),
+    }
+    output = Path(output_path).expanduser().resolve()
+    output.parent.mkdir(parents=True, exist_ok=True)
+    temporary = output.with_suffix(output.suffix + ".tmp.npz")
+    np.savez_compressed(
+        temporary, **saved,
+        metadata_json=np.asarray(json.dumps(result, sort_keys=True, separators=(",", ":"))),
+    )
+    os.replace(temporary, output)
+    return result
+
+
 _E45A2_TARGET_UNITS: dict[str, np.ndarray] = {}
 _E45A2_SUPPORT_ROWS: tuple[np.ndarray, ...] = ()
 
@@ -17616,6 +17915,9 @@ def _render_parser() -> argparse.ArgumentParser:
         pair.add_argument("--support-pool", type=Path, required=True)
         pair.add_argument("--output", type=Path, required=True)
         pair.add_argument("--processes", type=int, default=24)
+    e48 = subcommands.add_parser("qualify-e48")
+    e48.add_argument("--e45b-v2-artifact", type=Path, required=True)
+    e48.add_argument("--output", type=Path, required=True)
     e45a2 = subcommands.add_parser("qualify-e45a-v2")
     e45a2.add_argument("--data-root", type=Path, required=True)
     e45a2.add_argument("--support-pool", type=Path, required=True)
@@ -17819,6 +18121,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             experiment=("E45A-new" if args.command.endswith("a-new") else "E45B-v2"),
             processes=args.processes,
         )
+        print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        return 0 if result["passed"] else 1
+    if args.command == "qualify-e48":
+        result = run_e48_qualification(args.e45b_v2_artifact, args.output)
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 0 if result["passed"] else 1
     if args.command == "qualify-e45a-v2":

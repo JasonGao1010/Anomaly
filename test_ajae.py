@@ -303,6 +303,40 @@ def test_e45_overlap_weights_balance_common_population() -> None:
     assert float(first["maximum_cell_mass_difference"]) < 1.0e-6
 
 
+def test_e48_joint_fold_plan_never_splits_pairs_or_center_frames() -> None:
+    centers = np.asarray(
+        ((10, 10), (10, 11), (12, 13), (14, 12), (15, 16), (17, 17)),
+        dtype=np.int16,
+    )
+    plan = render_module._e48_fold_plan(centers)
+    pair_fold = plan["pair_center_frame_fold"]
+    for fold in range(5):
+        test = plan["fold_test_pair"][fold]
+        train = plan["fold_train_pair"][fold]
+        excluded = plan["fold_excluded_pair"][fold]
+        np.testing.assert_array_equal(test | train | excluded, np.ones(6, dtype=np.bool_))
+        assert not np.any(test & train)
+        assert np.all(pair_fold[test] == fold)
+        assert np.all(pair_fold[train] != fold)
+        assert np.intersect1d(centers[test], centers[train]).size == 0
+
+
+def test_e48_matched_pair_bootstrap_is_deterministic() -> None:
+    labels = np.tile(np.asarray((0, 0, 1, 1), dtype=np.uint8), 4)
+    scores = np.tile(np.asarray((0.1, 0.2, 0.8, 0.9)), 4)
+    predictions = (scores >= 0.5).astype(np.uint8)
+    point_pair = np.repeat(np.arange(4, dtype=np.int64), 4)
+    weights = np.full(16, 0.5, dtype=np.float64)
+    first = render_module._e48_pair_bootstrap(
+        labels, scores, predictions, point_pair, weights, 4
+    )
+    second = render_module._e48_pair_bootstrap(
+        labels, scores, predictions, point_pair, weights, 4
+    )
+    np.testing.assert_array_equal(first, second)
+    np.testing.assert_array_equal(first, np.ones((2000, 4)))
+
+
 def test_schema4_development_worlds_are_rejected_after_world_v3_freeze() -> None:
     protocol = load_protocol(PROTOCOL_PATH)
     with pytest.raises(ProtocolError, match="authoritative WorldSpec"):

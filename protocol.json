@@ -3300,6 +3300,43 @@
           "result": {"passed": true, "failure_classification": null, "final_capacity": 1024, "capacity_ladder": [{"capacity": 512, "matched_pairs": 469, "center_frames": 123, "range_count_2p5_to_40": [82, 119, 137, 131], "legal_edges": 2208, "maximum_pairwise_smd": 0.04946893229867384, "passed": false}, {"capacity": 1024, "matched_pairs": 1347, "center_frames": 248, "range_count_2p5_to_40": [348, 287, 370, 342], "legal_edges": 8296, "exact_strata_with_edges": 40, "maximum_pairwise_smd": 0.06188532226272025, "passed": true}], "pairwise_smd": [0.020003587752592374, 0.06188532226272025, 0.007585807104632543, 0.010554985008941949, 0.014482345966325538], "caliper_errors": 0, "duplicate_errors": 0, "formal_repetitions": 1, "reproducibility_check": "not run by owner decision", "independent_read_only_validation": "passed: frozen input identities, bank and unit hashes, seed range, source pair, exact strata, all calipers, no reuse, cache-to-output arrays, pair/frame/range counts, SMD and final scientific hash were independently recomputed without generating candidates or performing a second formal run", "claim_limit": "PASS establishes a comparable rendered control/proxy population for E48. It does not adjudicate low-level label-shortcut separability."}
         }
       },
+      "E48": {
+        "status": "CURRENT FORMAL NODE; split revision frozen before model execution; formal run pending",
+        "question": "Can either frozen low-capacity model nearly saturate rendered control/proxy label prediction from only low-level point observations after leakage-free matched-pair evaluation?",
+        "input": {"path": "runs/ajae/e45b_v2_control_proxy_pairs.npz", "sha256": "19ecbc843cc5325e3f12497c50e5855388f0f5caa581179f6fd6639613a8ecfd", "scientific_array_sha256": "735df664e6ea2f54cac7f3d0c9a9778b17f035259cf716686063f30b5c31eaca", "matched_pairs": 1347},
+        "split_revision": {
+          "status": "OWNER-APPROVED PRE-RESULT VERSIONED COMPLETION",
+          "reason": "Pair co-location and global center-frame grouping jointly induce seven connected components, with 1,334 of 1,347 pairs in one component; ordinary five-fold grouped CV is therefore infeasible without leakage or a degenerate training fold.",
+          "fold_namespace": "E48-center-v1:{frame_id}",
+          "fold_hash": "little-endian integer from first 8 SHA-256 bytes modulo 5",
+          "test_rule": "both pair endpoint center-frame folds equal k",
+          "train_rule": "neither pair endpoint center-frame fold equals k",
+          "excluded_rule": "all remaining cross-fold pairs",
+          "unique_center_frames": 294,
+          "fold_test_pairs": [61, 46, 91, 74, 97],
+          "fold_train_pairs": [913, 1004, 800, 861, 832],
+          "fold_excluded_pairs": [373, 297, 456, 412, 418],
+          "unique_oof_pairs": 369,
+          "required_identity_checks": ["every frame maps to exactly one fold", "both endpoints of every test pair have the test fold", "train/test center-frame intersection is empty", "no pair is split", "test/train/excluded counts exactly match the frozen values", "OOF pair identities are unique", "each fold has equal control/proxy unit counts"],
+          "forbidden": ["searching another hash namespace or seed", "optimizing the E45B-v2 matching", "using E48 features, predictions or metrics to choose folds"]
+        },
+        "features": ["sensor-frame x", "sensor-frame y", "sensor-frame z", "intensity", "beam", "range", "local density"],
+        "forbidden_features_or_inputs": ["STU features", "object ID", "shape family", "primitive count", "generator report", "Nvis", "occlusion", "support semantic", "proposal count", "geometry descriptors", "feature ablation", "feature attribution"],
+        "sampling_and_weighting": {"maximum_points_per_entity_frame": 64, "selection": "already frozen point-identity hash saved by E45B-v2", "entity_frame_total_weight": 1.0},
+        "models": {
+          "logistic_regression": {"standardize_on_training_fold": true, "penalty": "L2", "C": 1.0, "solver": "lbfgs", "fit_intercept": true, "tolerance": 0.0001, "maximum_iterations": 5000, "class_weight": null, "random_state": 4800},
+          "decision_tree": {"features_standardized": false, "criterion": "gini", "splitter": "best", "maximum_depth": 3, "minimum_samples_per_leaf": 64, "class_weight": null, "random_state": 4801}
+        },
+        "metrics": ["pooled OOF weighted ROC-AUC", "pooled OOF weighted balanced accuracy", "control recall", "proxy recall"],
+        "bootstrap": {"cluster": "matched pair", "replicates": 2000, "seed_sequence": [4800, 2000], "draws_per_replicate": 369, "rule": "sample pair IDs with replacement and carry both control/proxy units together", "interval_percentiles": [2.5, 97.5]},
+        "fail_rule": "FAIL only if at least one frozen model simultaneously has 95% AUC lower bound at least 0.95 and 95% balanced-accuracy lower bound at least 0.90",
+        "command": "python -m src.render qualify-e48 --e45b-v2-artifact runs/ajae/e45b_v2_control_proxy_pairs.npz --output runs/ajae/e48_low_level_shortcut.npz",
+        "resource_preflight": {"date": "2026-08-29", "online_cpu_cores": 24, "memory_total_gib": 23, "memory_available_gib": 21, "swap_total_gib": 16, "swap_free_gib": 14, "gpu": "NVIDIA GeForce RTX 5080 Laptop GPU; not used", "windows_e_size_bytes": 484950659072, "windows_e_remaining_bytes": 95096451072, "competing_experiment_process": false, "input_artifact_bytes": 4785665, "expected_new_data": "far below 1 GiB; preserves the larger 5% disk reserve"},
+        "implementation": {"pre_revision_clean_commit": "308437330df2285457953e26993b7d67da785a0f", "render_source_sha256": "40303bc3accc7997e234c71dd3a92baccb62e2fb6dee222cd88c37c317e23438", "execution_freeze_commit": null},
+        "formal_repetitions": 1,
+        "result": null,
+        "unlock": "PASS unlocks E49; FAIL stops before B1 and permits only versioned attribution of the label-correlated proxy path"
+      },
       "E45B": {
         "current_validity": "historical PASS for the old normal-control distribution only; current E48 qualification is supplied separately by E45B-v2 PASS on E25-new",
         "question": "Can normal-control and anomaly-proxy support at least 1024 non-reused strictly matched pairs for E48?",
