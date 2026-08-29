@@ -1,6 +1,6 @@
 # AJAE 主线方案
 
-> 当前权威基线：本仓库`main`与本文记录的全部历史证据。E25-new、E26-v2、E38–E44刷新及E45B-v2已经正式PASS，E45A全分支已经终止且不再构成Gate 1前置条件；当前正式节点为E48，后续硬依赖为E49。旧提交`44fd6d13798e826b2cac8371de26a7d17707dadc`只保留为E22-v2时期的历史基线，不再代表当前工作区状态。
+> 当前权威基线：本仓库`main`与本文记录的全部历史证据。E25-new、E26-v2、E38–E44刷新、E45B-v2、E48与E49已经正式PASS，Gate 1已经关闭；E45A全分支已经终止且不构成Gate 1条件，当前正式节点为E50。旧提交`44fd6d13798e826b2cac8371de26a7d17707dadc`只保留为E22-v2时期的历史基线，不再代表当前工作区状态。
 
 ---
 
@@ -1827,7 +1827,7 @@ $$
 
 ---
 
-# 18. 当前状态（当前工作区：E38–E44与E45B-v2正式PASS，E48为当前节点）
+# 18. 当前状态（当前工作区：E48与E49正式PASS，Gate 1关闭，E50为当前节点）
 
 截至当前工作区权威提交，已经完成：
 
@@ -1924,11 +1924,15 @@ E45A-new已经按独立512→1,024→2,048银行阶梯完整执行并正式FAIL�
 
 E45A-overlap已经正式执行并FAIL，分类为`scientific_failure: insufficient_effective_overlap`。现有cache中有43个双方共同exact cells，保留1,491个real-normal与6,081个normal-control单位，分别覆盖297与338个center frames。两次完整加权逐元素一致；五项加权SMD最大为$5.513\times10^{-7}$，五项加权KS最大为0.060849，均通过0.10门槛。real/control ESS分别为207.526586与232.335050，均低于事前冻结的256，因此E46不解锁。该FAIL说明名义共同支持和frame覆盖充足、协变量可以被强平衡，但达到该平衡的有效总体过薄；它仍不构成renderer source fingerprint证据。正式产物为`runs/ajae/e45a_overlap_weights.npz`，SHA-256为`90f60e2432975dc8aa0aea6c5fc1e90b463b0318d9b61add362ccb30227bf1a6`，科学数组哈希为`e54eb12599b3887e2a73a5e22200dc277aa47b1a1839a0ebb8a3acd4f0ac3bfb`。
 
-课题负责人随后从AJAE总览作出止损裁决：E45A系列已经把来源风险过度具体化为natural real-normal与coverage-oriented inserted control的观测分布近似等价，而遮挡、距离、密度、support和azimuth差异主要混合了placement与scene composition，并非纯renderer属性。E45A-new与E45A-overlap的正式FAIL和全部历史证据永久保留，但不再是Gate 1硬门，也不要求修改E25-new。停止E45A-D1、transport feasibility、ESS/sampling optimization、E25 distribution-v2、更大control bank、新caliper、新matching、新weighting和target-conditioned generator。E46降为可选非阻断来源诊断；其可分性不能单独推出异常标签捷径。Gate 1硬门由已完成的renderer机械/传感器证据、E45B-v2 control/proxy资格和E48标签捷径审计组成；E45B-v2现已正式PASS，当前正式节点为E48，之后为E49。通过后进入E50–E71并尽快回答$B1>B0$。
+课题负责人随后从AJAE总览作出止损裁决：E45A系列已经把来源风险过度具体化为natural real-normal与coverage-oriented inserted control的观测分布近似等价，而遮挡、距离、密度、support和azimuth差异主要混合了placement与scene composition，并非纯renderer属性。E45A-new与E45A-overlap的正式FAIL和全部历史证据永久保留，但不再是Gate 1硬门，也不要求修改E25-new。停止E45A-D1、transport feasibility、ESS/sampling optimization、E25 distribution-v2、更大control bank、新caliper、新matching、新weighting和target-conditioned generator。E46降为可选非阻断来源诊断；其可分性不能单独推出异常标签捷径。Gate 1硬门由已完成的renderer机械/传感器证据、E45B-v2 control/proxy资格和E48标签捷径审计组成。该裁决当时把正式顺序收敛为E45B-v2、E48、E49；三者现均已PASS，Gate 1已经关闭，当前进入E50–E71并尽快回答$B1>B0$。
 
 E45B-v2已按提交`eaedefb38e7e3f0eca7c02970d5ad4e3d1f181a5`冻结的单次正式身份执行并PASS。容量512得到469对、123个control侧中心帧和四层计数[82,119,137,131]，因配对数低于1,024而按冻结阶梯继续；容量1,024得到1,347对、248个control侧中心帧和四层计数[348,287,370,342]。最终8,296条合法边覆盖40个精确分层，caliper错误与重复使用均为0，五项SMD为[0.020004,0.061885,0.007586,0.010555,0.014482]，最大值0.061885低于0.10。独立只读复核确认种子、输入身份、候选银行与单位缓存科学哈希、来源对[1,2]、三项精确分层、五项caliper、无复用、帧与距离覆盖、SMD和最终科学数组哈希全部一致。正式产物为`runs/ajae/e45b_v2_control_proxy_pairs.npz`，SHA-256为`19ecbc843cc5325e3f12497c50e5855388f0f5caa581179f6fd6639613a8ecfd`，科学数组哈希为`735df664e6ea2f54cac7f3d0c9a9778b17f035259cf716686063f30b5c31eaca`。该PASS只建立E48所需的rendered control/proxy可比较总体，不裁决低层标签捷径；E48现已解锁。
 
 E48在任何模型结果产生前完成版本化拆分规则补全。E45B-v2的1,347对只共享294个center-frame身份；若同时把pair两端放在同一fold并禁止任何center frame跨fold，传递闭包会形成一个包含1,334对的巨型连通分量，无法形成有效五折。补全规则固定以`E48-center-v1:{frame_id}`的SHA-256前8字节小端整数对5取模决定frame fold。对测试折$k$，仅当pair两端frame fold都为$k$时进入test；两端都不为$k$时进入train；其余pair在该折排除。五折test/train/excluded对数固定为[61,46,91,74,97]/[913,1004,800,861,832]/[373,297,456,412,418]，共369个不重复OOF pairs。该规则不读取特征、标签表现或模型输出，不修改E45B匹配。bootstrap相应冻结为2,000次matched-pair cluster resampling，`SeedSequence([4800,2000])`；每次抽中pair时同时带入control/proxy两端。E48的两个模型、七项低层输入、64点上限、unit等总权重和近饱和FAIL门槛均不变，不执行任何feature ablation或attribution。
+
+E48随后从提交`29f152fb4cfd871b74c24da17316945ea6c40fc0`完成唯一一次正式运行并PASS。逻辑回归的AUC与平衡准确率为0.513600和0.508942，对应95%下界为0.497434和0.495379；深度3决策树为0.505187和0.500505，对应下界为0.486033和0.487522。两者都远低于同时要求AUC下界至少0.95、平衡准确率下界至少0.90的FAIL条件。只读复核逐元素重建了折身份、369个OOF pairs、点估计和2,000次matched-pair bootstrap；未运行特征消融或归因。正式产物`runs/ajae/e48_low_level_shortcut.npz`的SHA-256为`b55ad1c7fecf030f4f3f22c5ba4423f1cfeaae46a4d763565ab22c97ad6206ce`。
+
+E49没有新增统计实验。合取裁决逐项核对E27、E28-v2、E29–E35、E36-v2、E37、E38-v2–E44-v2、E45B-v2和E48共20个当前产物，文件均存在且SHA-256与权威记录一致，所有对应当前节点均为PASS；E45A全分支、E45-V1、E46和E47按冻结规则排除。因此E49正式PASS，Gate 1关闭，E50解锁。该结论只说明渲染机械资格和直接低层标签捷径门已通过，不说明代理监督已经有效；后续仍须由E50–E71和$B1>B0$回答。
 
 E39已正式通过：三来源在2.5–10、10–20、20–30和30–40米均有非零return entity-frame覆盖，逐实体帧计数守恒错误0、非有限值0，两遍逐元素一致；三来源在40–50米均无观测，按冻结规则仅报告。共享trace已保存1,656,861条逐返回强度及E40–E44所需计数。E39关闭，E40解锁。
 
@@ -2020,21 +2024,21 @@ E26-v2已经在冻结实现提交`38079213a0801bf3a279414a8b120bfd24e1cd1b`上�
 当前执行节点为：
 
 $$
-\boxed{E38\text{--}E44\ \mathrm{PASS}\rightarrow E45B\text{-v2 PASS}\rightarrow E48\ \mathrm{CURRENT}\rightarrow E49}
+\boxed{E38\text{--}E44\ \mathrm{PASS}\rightarrow E45B\text{-v2 PASS}\rightarrow E48\ \mathrm{PASS}\rightarrow E49\ \mathrm{PASS}\rightarrow E50\ \mathrm{CURRENT}}
 $$
 
-E23与E24-v2已按冻结设计通过；当前Gate 1剩余顺序为：
+E23与E24-v2已按冻结设计通过；Gate 1已完成：
 
 $$
-E38\text{--}E44\ \mathrm{PASS}\rightarrow E45B\text{-v2 PASS}\rightarrow E48\ \mathrm{CURRENT}\rightarrow E49
+E38\text{--}E44\ \mathrm{PASS}\rightarrow E45B\text{-v2 PASS}\rightarrow E48\ \mathrm{PASS}\rightarrow E49\ \mathrm{PASS}
 $$
 
-E27–E37的纯机械资格继续保留；E36-v1、E45-v1、E45-v2、E45A、E45A-v2、E45A-new、E45A-overlap、E25-v2和E25-v3 normal-control FAIL均永久保留。旧E45B已PASS，但只资格旧normal-control分布。$D_{xy}+\alpha$路线、E25-v3逐对象五维条件复制路线和全部E45A后续演化均已终止。E25-new、E26-v2、E38–E44刷新与E45B-v2已经PASS。E46已降为非阻断诊断；当前正式节点是E48，E49等待E48 PASS。
+E27–E37的纯机械资格继续保留；E36-v1、E45-v1、E45-v2、E45A、E45A-v2、E45A-new、E45A-overlap、E25-v2和E25-v3 normal-control FAIL均永久保留。旧E45B已PASS，但只资格旧normal-control分布。$D_{xy}+\alpha$路线、E25-v3逐对象五维条件复制路线和全部E45A后续演化均已终止。E25-new、E26-v2、E38–E44刷新、E45B-v2、E48与E49已经PASS。E46已降为非阻断诊断；当前正式节点是E50。
 
 因此当前整体判断仍是：
 
 $$
-\boxed{E38\text{--}E44\ \mathrm{PASS}\rightarrow E45B\text{-v2 PASS}\rightarrow E48\ \mathrm{CURRENT}\rightarrow E49}
+\boxed{Gate\ 1\ \mathrm{PASS}\rightarrow E50\ \mathrm{CURRENT}\rightarrow E51\text{--}E71\rightarrow B1>B0}
 $$
 
 不能写成“AJAE 方法已经验证”或“剩余只需训练”。

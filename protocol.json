@@ -2656,8 +2656,8 @@
       }
     },
     "renderer_mechanical_qualification": {
-      "status": "E25-new and E26-v2 PASS; E27-E44 current mechanical/statistical evidence PASS; E45B-v2 current rendered control/proxy qualification PASS; E45A family permanently stopped and excluded from Gate 1; E46 optional nonblocking diagnostic; E48 is the current formal node, followed by E49",
-      "current_gate1_policy": {"hard_evidence": ["compatible canonical-ray and renderer mechanics through E44", "E45B-v2 rendered control/proxy qualification PASS", "E48 direct rendered-label-shortcut audit"], "excluded_from_conjunction": ["all E45A variants", "E45-V1", "E46", "E47"], "rationale": "Natural real-normal observations and coverage-oriented inserted controls need not reproduce the same scene/placement distribution. Real-versus-rendered source identifiability is not equivalent to anomaly-label shortcut predictability because rendered controls and rendered proxies carry different labels.", "current_node": "E48", "next_after_pass": ["E49", "E50-E71", "Gate 2 B1 versus B0"]},
+      "status": "Gate 1 PASS: E25-new and E26-v2 PASS; E27-E44 current mechanical/statistical evidence PASS; E45B-v2 and E48 PASS; E49 conjunction PASS; E45A family permanently stopped and excluded; E46/E47 optional nonblocking diagnostics; E50 is current",
+      "current_gate1_policy": {"hard_evidence": ["compatible canonical-ray and renderer mechanics through E44", "E45B-v2 rendered control/proxy qualification PASS", "E48 direct rendered-label-shortcut audit PASS"], "excluded_from_conjunction": ["all E45A variants", "E45-V1", "E46", "E47"], "rationale": "Natural real-normal observations and coverage-oriented inserted controls need not reproduce the same scene/placement distribution. Real-versus-rendered source identifiability is not equivalent to anomaly-label shortcut predictability because rendered controls and rendered proxies carry different labels.", "gate1_result": "PASS", "current_node": "E50", "next_after_pass": ["E50-E71", "Gate 2 B1 versus B0"]},
       "layer_boundaries": {"E27-E28": "direct geometry outputs only", "E29": "return probability and deterministic acceptance decision only", "E30-E31": "accepted returns", "E32-E33": "nearest-return occlusion competition"},
       "E27": {
         "question": "Does the formal geometry path return the correct nearest convex-hull hit, outward finite normal and object ID for active normal-control templates when return rejection is disabled?",
@@ -3301,7 +3301,7 @@
         }
       },
       "E48": {
-        "status": "CURRENT FORMAL NODE; split revision frozen before model execution; formal run pending",
+        "status": "PASS; single formal run completed and independently validated; E49 unlocked",
         "question": "Can either frozen low-capacity model nearly saturate rendered control/proxy label prediction from only low-level point observations after leakage-free matched-pair evaluation?",
         "input": {"path": "runs/ajae/e45b_v2_control_proxy_pairs.npz", "sha256": "19ecbc843cc5325e3f12497c50e5855388f0f5caa581179f6fd6639613a8ecfd", "scientific_array_sha256": "735df664e6ea2f54cac7f3d0c9a9778b17f035259cf716686063f30b5c31eaca", "matched_pairs": 1347},
         "split_revision": {
@@ -3332,10 +3332,21 @@
         "fail_rule": "FAIL only if at least one frozen model simultaneously has 95% AUC lower bound at least 0.95 and 95% balanced-accuracy lower bound at least 0.90",
         "command": "python -m src.render qualify-e48 --e45b-v2-artifact runs/ajae/e45b_v2_control_proxy_pairs.npz --output runs/ajae/e48_low_level_shortcut.npz",
         "resource_preflight": {"date": "2026-08-29", "online_cpu_cores": 24, "memory_total_gib": 23, "memory_available_gib": 21, "swap_total_gib": 16, "swap_free_gib": 14, "gpu": "NVIDIA GeForce RTX 5080 Laptop GPU; not used", "windows_e_size_bytes": 484950659072, "windows_e_remaining_bytes": 95096451072, "competing_experiment_process": false, "input_artifact_bytes": 4785665, "expected_new_data": "far below 1 GiB; preserves the larger 5% disk reserve"},
-        "implementation": {"pre_revision_clean_commit": "308437330df2285457953e26993b7d67da785a0f", "render_source_sha256": "40303bc3accc7997e234c71dd3a92baccb62e2fb6dee222cd88c37c317e23438", "execution_freeze_commit": null},
+        "implementation": {"pre_revision_clean_commit": "308437330df2285457953e26993b7d67da785a0f", "render_source_sha256": "40303bc3accc7997e234c71dd3a92baccb62e2fb6dee222cd88c37c317e23438", "execution_freeze_commit": "29f152fb4cfd871b74c24da17316945ea6c40fc0"},
         "formal_repetitions": 1,
-        "result": null,
+        "result": {"passed": true, "failure_classification": null, "metric_order": ["roc_auc", "balanced_accuracy", "control_recall", "proxy_recall"], "models": ["l2_logistic_regression", "depth3_decision_tree"], "metric": [[0.5136004781524589, 0.5089417986884427, 0.5615680353350732, 0.4563155620418123], [0.5051874717688358, 0.5005054085423235, 0.4867711178916063, 0.5142396991930408]], "bootstrap_ci_low": [[0.49743360039946605, 0.49537943111666577, 0.5251244044491304, 0.4197811422595917], [0.48603318494919723, 0.4875220756279056, 0.43661958015132696, 0.4660894924755431]], "bootstrap_ci_high": [[0.5295502888492872, 0.5228904760875102, 0.5996491995751586, 0.4928109101575004], [0.5250018298496688, 0.5134449335617463, 0.5342672901753105, 0.5661340495469441]], "model_fail": [false, false], "oof_pairs": 369, "formal_repetitions": 1, "feature_ablation_or_attribution_run": false, "elapsed_model_and_bootstrap_seconds": 0.9173262269760016, "wall_seconds": 11.42, "maximum_resident_kib": 234720, "process_swaps": 0, "artifact": {"path": "runs/ajae/e48_low_level_shortcut.npz", "bytes": 397260, "sha256": "b55ad1c7fecf030f4f3f22c5ba4423f1cfeaae46a4d763565ab22c97ad6206ce", "scientific_array_sha256": "dffa42342a31feac7adfe2b70c50f5616075fc1c86a819b8306b65005358d3e1"}, "independent_read_only_validation": "passed: fold identities, train/test center-frame disjointness, all 369 OOF pair identities, pooled metrics and all 2,000 matched-pair bootstrap rows reconstructed exactly", "claim_limit": "PASS excludes only a near-saturated shortcut for the two frozen low-capacity models and seven low-level inputs; it does not establish proxy-supervision utility or identify semantic geometry versus artifacts."},
         "unlock": "PASS unlocks E49; FAIL stops before B1 and permits only versioned attribution of the label-correlated proxy path"
+      },
+      "E49": {
+        "status": "PASS; Gate 1 closed; E50 unlocked",
+        "date": "2026-08-29",
+        "question": "Do all compatible current Gate 1 hard nodes pass under the frozen conjunction?",
+        "included_evidence": ["E27", "E28-v2", "E29", "E30", "E31", "E32", "E33", "E34", "E35", "E36-v2", "E37", "E38-v2", "E39-v2", "E40-v2", "E41-v2", "E42-v2", "E43-v2", "E44-v2", "E45B-v2", "E48"],
+        "excluded_evidence": ["all E45A variants", "E45-V1", "E46", "E47"],
+        "adjudication": {"passed": true, "checked_artifacts": 20, "present_artifacts": 20, "sha256_matches": 20, "failed_current_hard_nodes": [], "new_statistical_experiment": false, "e48_artifact_sha256": "b55ad1c7fecf030f4f3f22c5ba4423f1cfeaae46a4d763565ab22c97ad6206ce", "e45b_v2_artifact_sha256": "19ecbc843cc5325e3f12497c50e5855388f0f5caa581179f6fd6639613a8ecfd"},
+        "result": "Gate 1 PASS",
+        "claim_limit": "Gate 1 PASS establishes compatible renderer mechanics and absence of a frozen near-saturated low-level rendered-label shortcut. It does not establish AJAE effectiveness; E50-E71 and B1 versus B0 remain required.",
+        "unlock": "E50"
       },
       "E45B": {
         "current_validity": "historical PASS for the old normal-control distribution only; current E48 qualification is supplied separately by E45B-v2 PASS on E25-new",

@@ -3123,45 +3123,45 @@ Notes: This node cannot qualify or fail Gate 1.
 
 Experiment ID: E48
 Design-freeze commit/hash: Original near-saturation construct and thresholds retained. Pre-result E48-split revision approved on 2026-08-29 after the E45B-v2 identity graph showed that pair co-location plus global center-frame grouping would create one 1,334-pair connected component. Revision implementation source SHA-256 `40303bc3accc7997e234c71dd3a92baccb62e2fb6dee222cd88c37c317e23438`.
-Execution-freeze commit/hash: This versioned split record, implementation and matching `protocol.json` object are committed before the single formal run; resolved commit is recorded with the result.
-Date: 2026-08-29 split revision and execution freeze; formal result pending.
-Git commit / clean state: Pre-revision workspace was clean at `308437330df2285457953e26993b7d67da785a0f`; formal execution must start from the clean split-revision commit.
+Execution-freeze commit/hash: `29f152fb4cfd871b74c24da17316945ea6c40fc0`.
+Date: 2026-08-29 split revision, execution freeze and single formal run.
+Git commit / clean state: Formal execution started from the clean split-revision commit `29f152fb4cfd871b74c24da17316945ea6c40fc0`.
 Data identities: Current E45B-v2 matched control/proxy units from `runs/ajae/e45b_v2_control_proxy_pairs.npz`.
 Input artifact hashes: E45B-v2 artifact SHA-256 `19ecbc843cc5325e3f12497c50e5855388f0f5caa581179f6fd6639613a8ecfd`; scientific hash `735df664e6ea2f54cac7f3d0c9a9778b17f035259cf716686063f30b5c31eaca`.
 Random namespaces / seeds: Center-frame fold namespace is exactly ASCII `E48-center-v1:{frame_id}`; fold is the little-endian integer encoded by the first eight SHA-256 bytes modulo 5. This namespace is selected once and cannot be searched or changed after model results. Matched-pair cluster bootstrap uses exactly 2,000 multinomial resamples with `SeedSequence([4800,2000])`; each draw samples 369 pair identities with replacement and carries both control/proxy units together. Logistic random state is 4800 and tree random state is 4801.
 Command and resolved config: For fold $k$, pair $i$ is test iff both center-frame hashes equal $k$; it is train iff neither hash equals $k$; otherwise it is excluded. Frozen counts are test [61,46,91,74,97], train [913,1004,800,861,832], excluded [373,297,456,412,418], with 294 unique center frames and exactly 369 unique OOF pairs. Every train/test center-frame intersection must be empty, no pair may split, and each test pair contributes one control and one proxy unit. Use only saved sensor-frame `[x,y,z,intensity,beam,range,local density]`; retain at most the already identity-hashed 64 points per entity-frame and set each entity-frame's total point weight to one. Models are standardized L2 logistic regression (`C=1`, `lbfgs`, intercept, tolerance $10^{-4}$, maximum 5,000 iterations) and a raw-feature Gini tree (`max_depth=3`, `min_samples_leaf=64`); neither uses class reweighting because every training pair contributes one unit per label. Pooled OOF metrics are weighted point-level ROC-AUC, balanced accuracy and both recalls. The 2.5th and 97.5th bootstrap percentiles form the 95% interval. FAIL only if any one model simultaneously has AUC lower bound ≥0.95 and balanced-accuracy lower bound ≥0.90; otherwise PASS. No STU feature, ID, generator/report field, matching covariate outside the seven inputs, feature ablation or attribution is allowed. Command: `python -m src.render qualify-e48 --e45b-v2-artifact runs/ajae/e45b_v2_control_proxy_pairs.npz --output runs/ajae/e48_low_level_shortcut.npz`.
 Resource and disk preflight: Checked immediately before the freeze commit on 2026-08-29: 24 online CPU cores, 23 GiB RAM with 21 GiB available, 16 GiB swap with 14 GiB free, and no competing experiment process. The available RTX 5080 Laptop GPU is not used because both frozen estimators are CPU implementations. Windows E: has 95,096,451,072 bytes remaining of 484,950,659,072 bytes; the existing E45B-v2 artifact is 4,785,665 bytes and E48 is expected to write far below 1 GiB, so the larger 5% safety reserve is preserved.
-Artifacts and hashes: None.
+Artifacts and hashes: `runs/ajae/e48_low_level_shortcut.npz`, 397,260 bytes, SHA-256 `b55ad1c7fecf030f4f3f22c5ba4423f1cfeaae46a4d763565ab22c97ad6206ce`, scientific array SHA-256 `dffa42342a31feac7adfe2b70c50f5616075fc1c86a819b8306b65005358d3e1`.
 Primary construct: Whether low-level control/proxy classification is nearly saturated under strict matching.
-Primary result: Not executed. Only identity-only fold counts were computed before freeze; no formal-input model fit, score, metric, bootstrap interval, feature ablation or attribution has been run.
-PASS / FAIL / OUTCOME: OUTCOME — CURRENT FORMAL NODE / NOT EXECUTED.
+Primary result: L2 logistic regression pooled OOF [AUC, balanced accuracy, control recall, proxy recall] = [0.513600, 0.508942, 0.561568, 0.456316], with 95% pair-bootstrap interval lower bounds [0.497434, 0.495379, 0.525124, 0.419781]. The depth-3 tree obtained [0.505187, 0.500505, 0.486771, 0.514240], with lower bounds [0.486033, 0.487522, 0.436620, 0.466089]. Neither model met either near-saturation lower-bound threshold, so neither could meet the simultaneous FAIL condition. Independent read-only reconstruction reproduced all fold masks, zero train/test center-frame overlap, all 369 OOF pair identities, pooled metrics and 2,000 matched-pair bootstrap rows exactly. No feature ablation or attribution was run.
+PASS / FAIL / OUTCOME: PASS — closed.
 Failure classification: Not applicable.
-Unlocked next node: PASS unlocks E49 directly; FAIL permits only redesign of the label-correlated proxy path and invalidates relevant E20 and E42–E48 evidence.
-Invalidated downstream evidence: E49 remains locked until E48 PASS.
-Descriptive observations: None.
+Unlocked next node: E49, subsequently adjudicated PASS below.
+Invalidated downstream evidence: None.
+Descriptive observations: The scores are near chance under this frozen low-capacity audit, but E48 PASS is based only on absence of near-saturation and does not establish proxy usefulness.
 Notes: Historical E45B does not satisfy the new-distribution prerequisite; the current prerequisite is the independently validated E45B-v2 PASS above.
 
 ## E49 | Formal Gate 1 Adjudication
 
 Experiment ID: E49
 Design-freeze commit/hash: Gate conjunction frozen; commit not recorded.
-Execution-freeze commit/hash: Not executed.
-Date: Not executed.
-Git commit / clean state: Not applicable.
+Execution-freeze commit/hash: Conjunction applied after the E48 formal result from freeze commit `29f152fb4cfd871b74c24da17316945ea6c40fc0`; no new statistical execution identity is required.
+Date: 2026-08-29.
+Git commit / clean state: Read-only adjudication after independently validating the E48 artifact.
 Data identities: Valid current hard evidence through E44 plus E45B-v2 and E48 under one compatible route; optional E45A/E46/E47 artifacts are excluded from adjudication.
-Input artifact hashes: No complete current evidence set exists.
+Input artifact hashes: All 20 current artifacts for E27, E28-v2, E29–E35, E36-v2, E37, E38-v2–E44-v2, E45B-v2 and E48 were present and independently matched their `protocol.json` SHA-256 values. E45B-v2 is `19ecbc843cc5325e3f12497c50e5855388f0f5caa581179f6fd6639613a8ecfd`; E48 is `b55ad1c7fecf030f4f3f22c5ba4423f1cfeaae46a4d763565ab22c97ad6206ce`.
 Random namespaces / seeds: Inherited from prerequisites.
 Command and resolved config: PASS requires the compatible current canonical-ray and renderer-mechanics evidence through E44, E45B-v2 control/proxy qualification, and E48 rendered-label-shortcut audit to PASS. E45A family, E45-V1, E46, and E47 are historical or optional diagnostics and are excluded from the conjunction. Any remaining hard-node FAIL returns to its directly affected construct and locks E50 onward.
-Resource and disk preflight: Not executed.
+Resource and disk preflight: Read-only metadata and hash adjudication; no new experiment or material write.
 Artifacts and hashes: None.
 Primary construct: Conjunctive Gate 1 validity before STU feature-interface and modeling phases.
-Primary result: Not executed because E45B-v2 and E48 have not executed. E45A and E46 no longer block.
-PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
+Primary result: Every compatible current hard node is PASS and all 20 evidence files are hash-identical to the authoritative records. E45A variants, E45-V1, E46 and E47 were excluded exactly as frozen.
+PASS / FAIL / OUTCOME: PASS — Gate 1 closed.
 Failure classification: Not applicable.
-Unlocked next node: E50 only after PASS.
-Invalidated downstream evidence: E50 onward remains locked.
+Unlocked next node: E50.
+Invalidated downstream evidence: None.
 Descriptive observations: None.
-Notes: Current formal node is E45B-v2, followed by E48 and E49.
+Notes: This is a conjunction over existing evidence, not a new statistical experiment. Gate 1 PASS does not establish AJAE effectiveness; E50–E71 and the later B1 versus B0 test remain required.
 
 # Phase 5 | Frozen STU Point Interface and Five-Frame Coordinates
 
@@ -3179,11 +3179,11 @@ Command and resolved config: E50–E56 validate only the official STU interface 
 Resource and disk preflight: Not executed.
 Artifacts and hashes: None.
 Primary construct: Shared Phase 5 scope and data freeze.
-Primary result: Not executed because Gate 1 is not closed.
-PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
+Primary result: Not executed; Gate 1 is now closed and this phase is unlocked.
+PASS / FAIL / OUTCOME: OUTCOME — UNLOCKED / NOT EXECUTED.
 Failure classification: Not applicable.
 Unlocked next node: E50 after E49 PASS.
-Invalidated downstream evidence: E50–E56 remain locked.
+Invalidated downstream evidence: E51–E56 remain locked until their direct predecessors PASS.
 Descriptive observations: None.
 Notes: No model training belongs to Phase 5.
 
@@ -3202,7 +3202,7 @@ Resource and disk preflight: Not executed.
 Artifacts and hashes: None.
 Primary construct: Correct official 128-dimensional high-level point-feature interface.
 Primary result: Not executed.
-PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
+PASS / FAIL / OUTCOME: OUTCOME — CURRENT FORMAL NODE / NOT EXECUTED.
 Failure classification: Not applicable.
 Unlocked next node: E51 after PASS.
 Invalidated downstream evidence: E51 onward remains locked.
