@@ -3210,7 +3210,7 @@
       "E45A": {
         "current_validity": "historical FAIL for the old normal-control distribution; all E45A variants are now retired and nonblocking",
         "question": "Can real-normal and normal-control support at least 1024 non-reused strictly matched pairs for E46?",
-        "status": "FAIL; E46 locked",
+        "status": "HISTORICAL FAIL; no current hard node is blocked because E46 is optional and E45A is retired",
         "source_pair": ["real-normal", "normal-control"],
         "source_sequence": "train/201 only",
         "unit_cache": "runs/ajae/e45_v2_units_2048.npz",
@@ -3226,7 +3226,7 @@
         "artifact": "runs/ajae/e45a_real_control_pairs.npz",
         "pass_conditions": ["at least 1024 non-reused pairs", "at least 100 left-side center frames", "each observable range bin from 2.5 through 40 m has at least one pair", "all exact strata and fixed calipers pass", "all five continuous-covariate standardized mean differences are at most 0.10", "two complete matching runs are elementwise identical"],
         "unlock": "historical rule only; current E46 is optional and E45A does not unlock any hard node",
-        "result": {"passed": false, "failure_classification": "insufficient_pairwise_common_support", "capacity": 2048, "estimand_range_m": [2.5, 40.0], "range_40_50_status": "unobservable_for_real-vs-rendered-object matching in train/201", "legal_edges": 778, "exact_strata_with_edges": 15, "matched_pairs": 135, "center_frames": 73, "matched_range_count_2p5_to_40": [11, 107, 17, 0], "pairwise_smd": [0.08472369392930036, 0.1416936489548965, 0.041912701793768686, 1.00039918597199, 0.03765025981014738], "maximum_pairwise_smd": 1.00039918597199, "caliper_errors": 0, "duplicate_errors": 0, "elementwise_reproduced": true, "two_run_matching_seconds": 0.025716442003613338, "scientific_array_sha256": "b5cf376e3244d8ef2858471716f500bca9075733530482b6813dedb7ab7ce25d", "artifact_bytes": 565274, "artifact_sha256": "1eecff9d3b7229aad58e5269037e1bceaa09438f2fd826474d0dd9239ac72766", "decision_boundary": "E46 remains locked because the frozen maximum pairwise match fails pair count, center-frame coverage, 30--40 m coverage, and SMD requirements."}
+        "result": {"passed": false, "failure_classification": "insufficient_pairwise_common_support", "capacity": 2048, "estimand_range_m": [2.5, 40.0], "range_40_50_status": "unobservable_for_real-vs-rendered-object matching in train/201", "legal_edges": 778, "exact_strata_with_edges": 15, "matched_pairs": 135, "center_frames": 73, "matched_range_count_2p5_to_40": [11, 107, 17, 0], "pairwise_smd": [0.08472369392930036, 0.1416936489548965, 0.041912701793768686, 1.00039918597199, 0.03765025981014738], "maximum_pairwise_smd": 1.00039918597199, "caliper_errors": 0, "duplicate_errors": 0, "elementwise_reproduced": true, "two_run_matching_seconds": 0.025716442003613338, "scientific_array_sha256": "b5cf376e3244d8ef2858471716f500bca9075733530482b6813dedb7ab7ce25d", "artifact_bytes": 565274, "artifact_sha256": "1eecff9d3b7229aad58e5269037e1bceaa09438f2fd826474d0dd9239ac72766", "decision_boundary": "At execution time E46 remained locked because the frozen match failed count, frame coverage, range coverage and SMD criteria. The later route decision retired E45A and made E46 optional, so this result no longer blocks Gate 1."}
       },
       "E45A_overlap": {
         "current_validity": "permanent historical formal FAIL; E45A family is retired and excluded from Gate 1",
@@ -3249,7 +3249,7 @@
         "active_cli_entry": null,
         "artifact": "runs/ajae/e45a_overlap_weights.npz",
         "unlock": "none; E46 is optional and nonblocking, while E45B-v2 is the current formal node",
-        "result": {"passed": false, "failure_classification": "scientific_failure", "failure_reason": "insufficient_effective_overlap", "common_exact_cells": 43, "common_support_units_by_source": [1491, 6081], "center_frames_by_source": [297, 338], "effective_sample_size_by_source": [207.52658606582216, 232.33504971613075], "maximum_weight_fraction_by_source": [0.009596381158629342, 0.009595983235381769], "weighted_smd": [8.667579557894313e-09, 1.6655830266096388e-07, 1.4712650208933417e-07, 5.513148190330662e-07, 1.6406557286004413e-07], "maximum_weighted_smd": 5.513148190330662e-07, "weighted_ks": [0.02598820400819124, 0.0452114127101807, 0.05977886794245291, 0.06084930626104723, 0.03163086017496014], "maximum_weighted_ks": 0.06084930626104723, "maximum_exact_cell_mass_difference": 2.4349657203048825e-07, "maximum_fitted_basis_balance_error": 6.063299082814666e-07, "optimizer_iterations": 3050, "elementwise_reproduced": true, "two_run_seconds": 3.783648673008429, "scientific_array_sha256": "e54eb12599b3887e2a73a5e22200dc277aa47b1a1839a0ebb8a3acd4f0ac3bfb", "artifact_bytes": 382687, "artifact_sha256": "90f60e2432975dc8aa0aea6c5fc1e90b463b0318d9b61add362ccb30227bf1a6", "independent_recalculation": "source counts, unit weight sums, center-frame counts, ESS, weighted SMD, tied-value weighted KS, and exact-cell mass difference reproduced from saved arrays", "decision_boundary": "E46 remains locked. This result establishes thin effective overlap after balance, not renderer source fingerprint; changing E25-new requires a new scientific decision."},
+        "result": {"passed": false, "failure_classification": "scientific_failure", "failure_reason": "insufficient_effective_overlap", "common_exact_cells": 43, "common_support_units_by_source": [1491, 6081], "center_frames_by_source": [297, 338], "effective_sample_size_by_source": [207.52658606582216, 232.33504971613075], "maximum_weight_fraction_by_source": [0.009596381158629342, 0.009595983235381769], "weighted_smd": [8.667579557894313e-09, 1.6655830266096388e-07, 1.4712650208933417e-07, 5.513148190330662e-07, 1.6406557286004413e-07], "maximum_weighted_smd": 5.513148190330662e-07, "weighted_ks": [0.02598820400819124, 0.0452114127101807, 0.05977886794245291, 0.06084930626104723, 0.03163086017496014], "maximum_weighted_ks": 0.06084930626104723, "maximum_exact_cell_mass_difference": 2.4349657203048825e-07, "maximum_fitted_basis_balance_error": 6.063299082814666e-07, "optimizer_iterations": 3050, "elementwise_reproduced": true, "two_run_seconds": 3.783648673008429, "scientific_array_sha256": "e54eb12599b3887e2a73a5e22200dc277aa47b1a1839a0ebb8a3acd4f0ac3bfb", "artifact_bytes": 382687, "artifact_sha256": "90f60e2432975dc8aa0aea6c5fc1e90b463b0318d9b61add362ccb30227bf1a6", "independent_recalculation": "source counts, unit weight sums, center-frame counts, ESS, weighted SMD, tied-value weighted KS, and exact-cell mass difference reproduced from saved arrays", "decision_boundary": "At execution time E46 did not unlock. The later route decision made E46 optional and retired this qualification, so the result now establishes only thin effective real/control overlap after balance and does not block Gate 1 or require changing E25-new."},
         "implementation_attempt": {"date": "2026-08-29", "source_sha256": "75e690c90e550dbca00682b42f2fe62cf4f9ad7253fe275187bccb21b4fbd810", "outcome": "implementation_defect_no_scientific_result", "error": "L-BFGS reached 2000 iterations without convergence", "artifact_written": false, "wall_seconds": 2.07, "maximum_resident_kib": 320900, "repair": "optimizer tolerance 1e-11 to 1e-9 and maximum iterations 2000 to 10000; scientific design unchanged", "reexecution": "continue directly when scientific design and data identity are unchanged"},
         "subsequent_review_of_E45A_new": {"design_classification": "qualification_specification_defect", "preserve_formal_fail": true, "finding": "Strict one-to-one twins were stronger than the E46 weighted common-overlap estimand requires."},
         "owner_stop_decision": {"preserve_all_historical_results": true, "gate1_blocker": false, "E46_role": "optional nonblocking diagnostic", "finding": "Repeated real/control distribution qualification overfit Gate 1 to observational equivalence between natural observations and coverage-oriented inserted controls. Scene occlusion and placement differences are not pure renderer fidelity constructs.", "current_formal_node": "E45B-v2"}
@@ -3268,7 +3268,28 @@
         "prerequisites": ["E25-new PASS", "E26-v2 PASS", "E38-v2 through E44-v2 PASS"],
         "not_prerequisites": ["any E45A result", "E46"],
         "unlock": "PASS unlocks E48; FAIL follows the frozen E45B-v2 support branch without reviving E45A",
-        "execution": null
+        "execution": {
+          "status": "FROZEN; single formal run pending",
+          "date": "2026-08-29",
+          "implementation_commit": "e08b477e380e71b4b6144d46133b07c5a97b5d42",
+          "render_source_sha256": "9afdbc55ed84ec01d3ff558d0043d5903061054388ac6bf8f8872066b301ea8c",
+          "inputs": {
+            "e25_new_artifact": ["runs/ajae/e25_new_normal_control.npz", "30fc7d1ecd60d005cb18c60ac81b1c7335e2121fcd3f1da5f440b5387a747b19"],
+            "calibration": ["runs/ajae/calibration.pt", "b532b7e04d9025233b2768b8fb36287e477f62f20a3ff685a62f4a4a29bfefe0"],
+            "support_pool": ["runs/ajae/gate1_201_support_pool.npz", "fc3646fbc145cdc29d2cf203835a3e0018bacbc6eaf714e091d21f7b93bfaf50"],
+            "canonical_template_library_sha256": "de5dfd765ac7d4fe4bb4644c40ecafdd80cdc31a3d0b6fc4fccd8e84a9fd906b"
+          },
+          "seed_base": 4600000,
+          "seed_ranges_by_capacity": [[4600000, 4600511], [4600512, 4601023], [4601024, 4602047]],
+          "maximum_world_attempts": 48,
+          "processes": 24,
+          "numeric_library_threads_per_process": 1,
+          "formal_repetitions": 1,
+          "command": "python -m src.render qualify-e45b-v2 --data-root /home/jasongao/Data/STU --e25-new-artifact runs/ajae/e25_new_normal_control.npz --calibration runs/ajae/calibration.pt --support-pool runs/ajae/gate1_201_support_pool.npz --output runs/ajae/e45b_v2_control_proxy_pairs.npz --processes 24",
+          "output": "runs/ajae/e45b_v2_control_proxy_pairs.npz",
+          "resource_preflight": {"online_cpu_cores": 24, "memory_total_gib": 23, "memory_available_gib": 21, "swap_total_gib": 16, "swap_available_gib": 14, "gpu_used": false, "windows_e_total_bytes": 484950659072, "windows_e_remaining_bytes": 95153074176, "windows_e_safety_reserve_bytes": 24247532954, "conservative_peak_new_disk_gib": 0.2, "competing_experiment_processes": 0},
+          "result": null
+        }
       },
       "E45B": {
         "current_validity": "historical PASS for the old normal-control distribution; its E48 prerequisite is invalid until E45B-v2 passes on the E25-new distribution",
