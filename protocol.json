@@ -2656,8 +2656,8 @@
       }
     },
     "renderer_mechanical_qualification": {
-      "status": "E25-new and E26-v2 PASS; E27-E44 current mechanical/statistical evidence PASS; E45A family permanently stopped and excluded from Gate 1; E46 optional nonblocking diagnostic; E45B-v2 is the current formal node, followed by E48 and E49",
-      "current_gate1_policy": {"hard_evidence": ["compatible canonical-ray and renderer mechanics through E44", "E45B-v2 rendered control/proxy qualification", "E48 direct rendered-label-shortcut audit"], "excluded_from_conjunction": ["all E45A variants", "E45-V1", "E46", "E47"], "rationale": "Natural real-normal observations and coverage-oriented inserted controls need not reproduce the same scene/placement distribution. Real-versus-rendered source identifiability is not equivalent to anomaly-label shortcut predictability because rendered controls and rendered proxies carry different labels.", "current_node": "E45B-v2", "next_after_pass": ["E48", "E49", "E50-E71", "Gate 2 B1 versus B0"]},
+      "status": "E25-new and E26-v2 PASS; E27-E44 current mechanical/statistical evidence PASS; E45B-v2 current rendered control/proxy qualification PASS; E45A family permanently stopped and excluded from Gate 1; E46 optional nonblocking diagnostic; E48 is the current formal node, followed by E49",
+      "current_gate1_policy": {"hard_evidence": ["compatible canonical-ray and renderer mechanics through E44", "E45B-v2 rendered control/proxy qualification PASS", "E48 direct rendered-label-shortcut audit"], "excluded_from_conjunction": ["all E45A variants", "E45-V1", "E46", "E47"], "rationale": "Natural real-normal observations and coverage-oriented inserted controls need not reproduce the same scene/placement distribution. Real-versus-rendered source identifiability is not equivalent to anomaly-label shortcut predictability because rendered controls and rendered proxies carry different labels.", "current_node": "E48", "next_after_pass": ["E49", "E50-E71", "Gate 2 B1 versus B0"]},
       "layer_boundaries": {"E27-E28": "direct geometry outputs only", "E29": "return probability and deterministic acceptance decision only", "E30-E31": "accepted returns", "E32-E33": "nearest-return occlusion competition"},
       "E27": {
         "question": "Does the formal geometry path return the correct nearest convex-hull hit, outward finite normal and object ID for active normal-control templates when return rejection is disabled?",
@@ -3248,14 +3248,14 @@
         "historical_command": "python -m src.render qualify-e45a-overlap --unit-cache runs/ajae/e45a-new_units_2048.npz --output runs/ajae/e45a_overlap_weights.npz",
         "active_cli_entry": null,
         "artifact": "runs/ajae/e45a_overlap_weights.npz",
-        "unlock": "none; E46 is optional and nonblocking, while E45B-v2 is the current formal node",
+        "unlock": "none; E46 is optional and nonblocking. E45B-v2 subsequently passed and E48 is current",
         "result": {"passed": false, "failure_classification": "scientific_failure", "failure_reason": "insufficient_effective_overlap", "common_exact_cells": 43, "common_support_units_by_source": [1491, 6081], "center_frames_by_source": [297, 338], "effective_sample_size_by_source": [207.52658606582216, 232.33504971613075], "maximum_weight_fraction_by_source": [0.009596381158629342, 0.009595983235381769], "weighted_smd": [8.667579557894313e-09, 1.6655830266096388e-07, 1.4712650208933417e-07, 5.513148190330662e-07, 1.6406557286004413e-07], "maximum_weighted_smd": 5.513148190330662e-07, "weighted_ks": [0.02598820400819124, 0.0452114127101807, 0.05977886794245291, 0.06084930626104723, 0.03163086017496014], "maximum_weighted_ks": 0.06084930626104723, "maximum_exact_cell_mass_difference": 2.4349657203048825e-07, "maximum_fitted_basis_balance_error": 6.063299082814666e-07, "optimizer_iterations": 3050, "elementwise_reproduced": true, "two_run_seconds": 3.783648673008429, "scientific_array_sha256": "e54eb12599b3887e2a73a5e22200dc277aa47b1a1839a0ebb8a3acd4f0ac3bfb", "artifact_bytes": 382687, "artifact_sha256": "90f60e2432975dc8aa0aea6c5fc1e90b463b0318d9b61add362ccb30227bf1a6", "independent_recalculation": "source counts, unit weight sums, center-frame counts, ESS, weighted SMD, tied-value weighted KS, and exact-cell mass difference reproduced from saved arrays", "decision_boundary": "At execution time E46 did not unlock. The later route decision made E46 optional and retired this qualification, so the result now establishes only thin effective real/control overlap after balance and does not block Gate 1 or require changing E25-new."},
         "implementation_attempt": {"date": "2026-08-29", "source_sha256": "75e690c90e550dbca00682b42f2fe62cf4f9ad7253fe275187bccb21b4fbd810", "outcome": "implementation_defect_no_scientific_result", "error": "L-BFGS reached 2000 iterations without convergence", "artifact_written": false, "wall_seconds": 2.07, "maximum_resident_kib": 320900, "repair": "optimizer tolerance 1e-11 to 1e-9 and maximum iterations 2000 to 10000; scientific design unchanged", "reexecution": "continue directly when scientific design and data identity are unchanged"},
         "subsequent_review_of_E45A_new": {"design_classification": "qualification_specification_defect", "preserve_formal_fail": true, "finding": "Strict one-to-one twins were stronger than the E46 weighted common-overlap estimand requires."},
-        "owner_stop_decision": {"preserve_all_historical_results": true, "gate1_blocker": false, "E46_role": "optional nonblocking diagnostic", "finding": "Repeated real/control distribution qualification overfit Gate 1 to observational equivalence between natural observations and coverage-oriented inserted controls. Scene occlusion and placement differences are not pure renderer fidelity constructs.", "current_formal_node": "E45B-v2"}
+        "owner_stop_decision": {"preserve_all_historical_results": true, "gate1_blocker": false, "E46_role": "optional nonblocking diagnostic", "finding": "Repeated real/control distribution qualification overfit Gate 1 to observational equivalence between natural observations and coverage-oriented inserted controls. Scene occlusion and placement differences are not pure renderer fidelity constructs.", "next_hard_node_at_decision_time": "E45B-v2", "current_formal_node_after_E45B_v2_PASS": "E48"}
       },
-      "E45B_v2_current": {
-        "status": "CURRENT FORMAL NODE; design retained; not executed",
+      "E45B_v2": {
+        "status": "PASS; closed; E48 unlocked",
         "question": "Under the E25-new distribution, can rendered normal-controls and rendered anomaly-proxies form the frozen comparable population required for the direct E48 label-shortcut audit?",
         "source_pair": ["E25-new normal-control", "anomaly-proxy"],
         "source_sequence": "train/201",
@@ -3269,8 +3269,9 @@
         "not_prerequisites": ["any E45A result", "E46"],
         "unlock": "PASS unlocks E48; FAIL follows the frozen E45B-v2 support branch without reviving E45A",
         "execution": {
-          "status": "FROZEN; single formal run pending",
+          "status": "PASS; single formal run completed",
           "date": "2026-08-29",
+          "execution_freeze_commit": "eaedefb38e7e3f0eca7c02970d5ad4e3d1f181a5",
           "implementation_commit": "e08b477e380e71b4b6144d46133b07c5a97b5d42",
           "render_source_sha256": "9afdbc55ed84ec01d3ff558d0043d5903061054388ac6bf8f8872066b301ea8c",
           "inputs": {
@@ -3288,13 +3289,21 @@
           "command": "python -m src.render qualify-e45b-v2 --data-root /home/jasongao/Data/STU --e25-new-artifact runs/ajae/e25_new_normal_control.npz --calibration runs/ajae/calibration.pt --support-pool runs/ajae/gate1_201_support_pool.npz --output runs/ajae/e45b_v2_control_proxy_pairs.npz --processes 24",
           "output": "runs/ajae/e45b_v2_control_proxy_pairs.npz",
           "resource_preflight": {"online_cpu_cores": 24, "memory_total_gib": 23, "memory_available_gib": 21, "swap_total_gib": 16, "swap_available_gib": 14, "gpu_used": false, "windows_e_total_bytes": 484950659072, "windows_e_remaining_bytes": 95153074176, "windows_e_safety_reserve_bytes": 24247532954, "conservative_peak_new_disk_gib": 0.2, "competing_experiment_processes": 0},
-          "result": null
+          "resource_result": {"wall_seconds": 450.55, "aggregate_cpu_percent": 2002, "maximum_resident_kib": 3234620, "process_swaps": 0, "windows_e_remaining_bytes_after": 95131709440},
+          "artifacts": {
+            "bank_512": {"path": "runs/ajae/e45b-v2_bank_512.npz", "bytes": 2348651, "sha256": "c90536299479ed28869a042e7e328ad0e534c5a52f61135f32cc792df338cf9b", "scientific_array_sha256": "11b7b94440451cbcd4ec9f20b2d896f54dcb2cc710f500c81aee117ebbe9959c"},
+            "units_512": {"path": "runs/ajae/e45b-v2_units_512.npz", "bytes": 13625187, "sha256": "4420e9d8c638cf14f9c3e5c6254e7ef358aa9ae40803fc077fe66052097ef7ff", "scientific_array_sha256": "bef1ca88e0d63f4eef0192121e8e78ac1b4cb535ca16179a78bf6e29ef0e95f1"},
+            "bank_1024": {"path": "runs/ajae/e45b-v2_bank_1024.npz", "bytes": 4701391, "sha256": "d3088e29e4c6179999ccb34088dae558fa402bf6b1455394acdc99cac4118463", "scientific_array_sha256": "f4fb2081b346c686e2d6930a03e3f17bb6c6d3eee4fcfc16984c1a9c1d8de4f5"},
+            "units_1024": {"path": "runs/ajae/e45b-v2_units_1024.npz", "bytes": 27327223, "sha256": "bab7198607119dbe0737b7cf7e55a2a03016b9adf4cba60d9d2ab2bf90a0f0e3", "scientific_array_sha256": "f6377d661b1231f1d126f1c26ae39c638e11feb79e253886c14fa144109e5273"},
+            "final": {"path": "runs/ajae/e45b_v2_control_proxy_pairs.npz", "bytes": 4785665, "sha256": "19ecbc843cc5325e3f12497c50e5855388f0f5caa581179f6fd6639613a8ecfd", "scientific_array_sha256": "735df664e6ea2f54cac7f3d0c9a9778b17f035259cf716686063f30b5c31eaca"}
+          },
+          "result": {"passed": true, "failure_classification": null, "final_capacity": 1024, "capacity_ladder": [{"capacity": 512, "matched_pairs": 469, "center_frames": 123, "range_count_2p5_to_40": [82, 119, 137, 131], "legal_edges": 2208, "maximum_pairwise_smd": 0.04946893229867384, "passed": false}, {"capacity": 1024, "matched_pairs": 1347, "center_frames": 248, "range_count_2p5_to_40": [348, 287, 370, 342], "legal_edges": 8296, "exact_strata_with_edges": 40, "maximum_pairwise_smd": 0.06188532226272025, "passed": true}], "pairwise_smd": [0.020003587752592374, 0.06188532226272025, 0.007585807104632543, 0.010554985008941949, 0.014482345966325538], "caliper_errors": 0, "duplicate_errors": 0, "formal_repetitions": 1, "reproducibility_check": "not run by owner decision", "independent_read_only_validation": "passed: frozen input identities, bank and unit hashes, seed range, source pair, exact strata, all calipers, no reuse, cache-to-output arrays, pair/frame/range counts, SMD and final scientific hash were independently recomputed without generating candidates or performing a second formal run", "claim_limit": "PASS establishes a comparable rendered control/proxy population for E48. It does not adjudicate low-level label-shortcut separability."}
         }
       },
       "E45B": {
-        "current_validity": "historical PASS for the old normal-control distribution; its E48 prerequisite is invalid until E45B-v2 passes on the E25-new distribution",
+        "current_validity": "historical PASS for the old normal-control distribution only; current E48 qualification is supplied separately by E45B-v2 PASS on E25-new",
         "question": "Can normal-control and anomaly-proxy support at least 1024 non-reused strictly matched pairs for E48?",
-        "status": "HISTORICAL PASS for the old normal-control distribution; current E48 prerequisite not satisfied",
+        "status": "HISTORICAL PASS for the old normal-control distribution; not used as the current prerequisite because E45B-v2 now provides the valid E25-new qualification",
         "source_pair": ["normal-control", "anomaly-proxy"],
         "source_sequence": "train/201 only",
         "unit_cache": "runs/ajae/e45_v2_units_2048.npz",

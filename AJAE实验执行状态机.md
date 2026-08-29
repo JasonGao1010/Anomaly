@@ -2916,7 +2916,7 @@ Primary construct: Whether a sufficiently large and frame-dispersed train/201 po
 Primary result: FAIL. The 2,048 cache contained 43 exact cells shared by both sources, retaining 1,491 unique real-normal units and 6,081 unique controls over 297 and 338 center frames. Optimization converged in 3,050 iterations; two complete runs were elementwise identical. Source-normalized weights each summed to one. The five weighted SMDs were [0.000000009,0.000000167,0.000000147,0.000000551,0.000000164], maximum 0.000000551. Weighted KS distances were [0.025988,0.045211,0.059779,0.060849,0.031631], maximum 0.060849. Exact-cell mass difference was at most $2.435\times10^{-7}$ and fitted-basis balance error at most $6.063\times10^{-7}$. Both balance criteria and the 100-frame criterion passed. Real/control ESS were 207.526586 and 232.335050, both below the frozen 256 threshold; maximum individual weight fractions were 0.00959638 and 0.00959598. Independent recomputation from the saved raw arrays reproduced source counts, weight sums, center counts, ESS, all five SMDs, all five tied-value-correct KS distances, and exact-cell mass error.
 PASS / FAIL / OUTCOME: FAIL — permanent historical qualification result; no longer a Gate 1 blocker after the subsequent owner stop decision.
 Failure classification: `scientific_failure`; reason `insufficient_effective_overlap`. The earlier nonconvergent execution remains an `implementation_defect` with no scientific result.
-Unlocked next node: None. The subsequent owner decision permanently ended E45A evolution and removed this node from the Gate 1 conjunction. It does not require an E25-new placement revision. E45B-v2 is the current formal node.
+Unlocked next node: None. The subsequent owner decision permanently ended E45A evolution and removed this node from the Gate 1 conjunction. It does not require an E25-new placement revision. E45B-v2 later passed and E48 is now current.
 Invalidated downstream evidence: FAIL does not adjudicate renderer source fingerprint or invalidate E25-new. E46 is now an optional diagnostic and no longer requires this node to PASS.
 Descriptive observations: Formal overlap is broad in raw count and frame count, and the weighting achieves strong mean and marginal-distribution balance. The ESS loss shows that the balanced estimand depends on a comparatively concentrated subset of that nominal overlap. The first optimizer attempt showed only that the initial numerical iteration limit was insufficient and contributed no scientific evidence.
 Notes: This versioned revision classifies the E45A-new design-level mismatch as `qualification_specification_defect` while permanently retaining its formal FAIL. The later project-level review found that repeated real/control distribution qualification had become overdesigned relative to AJAE's direct label-shortcut risk. E45A-new, E45A-overlap, targeted controls, transport feasibility, ESS optimization, larger banks, new matching/weighting, and target-conditioned generation are all retired unless new direct scientific evidence establishes necessity. The formal artifact remains historical evidence that natural real observations and coverage-oriented inserted controls differ, especially in scene occlusion.
@@ -3004,10 +3004,10 @@ Primary construct: Pairwise common support between old-distribution controls and
 Primary result: PASS for the old distribution. Legal graph had 29,156 edges across 52 nonempty exact strata. Maximum match 3,624 pairs, control-side 357 centers, distance [1,133,1,877,563,51]. SMDs [0.031652,0.026288,0.006786,0.017766,0.016409], maximum 0.031652. Caliper/reuse errors zero; two runs identical.
 PASS / FAIL / OUTCOME: PASS — historical evidence only.
 Failure classification: Not applicable.
-Unlocked next node: Historically E48 prerequisite was satisfied, independently of E45A. Under E25-new, this qualification is invalid and E45B-v2 is required.
+Unlocked next node: Historically E48 prerequisite was satisfied, independently of E45A. Under E25-new this old qualification became invalid; E45B-v2 subsequently supplied the current valid prerequisite.
 Invalidated downstream evidence: It does not constitute E48 source-classification evidence and cannot qualify the new control distribution.
 Descriptive observations: Old control/proxy generation conditions were well aligned under the frozen covariates.
-Notes: E45B-v2 remains unexecuted, but the former E45A stop has now been removed; E45B-v2 is the current formal node.
+Notes: The former E45A stop was removed; E45B-v2 subsequently passed under E25-new and E48 is now current.
 
 ## E45A-v2 | Historical Audit-Only Targeted Normal-Control Candidate Bank
 
@@ -3035,23 +3035,23 @@ Notes: Historical dependency split was E45A → E46 and E45B → E48. The curren
 
 Experiment ID: E45B-v2
 Design-freeze commit/hash: Pair-specific Gate 1 responsibility frozen after E44-v2 and reaffirmed by the owner decision retiring E45A. Frozen implementation commit before this execution record: `e08b477e380e71b4b6144d46133b07c5a97b5d42`; `src/render.py` SHA-256 `9afdbc55ed84ec01d3ff558d0043d5903061054388ac6bf8f8872066b301ea8c`.
-Execution-freeze commit/hash: This record and the matching `protocol.json` execution object are committed immediately before the single formal run; the resolved commit is recorded with the result. No scientific configuration may change between that commit and execution.
-Date: 2026-08-29 execution freeze; formal result pending.
-Git commit / clean state: Workspace clean at `e08b477e380e71b4b6144d46133b07c5a97b5d42` before adding this execution record. The formal run must start from the clean execution-freeze commit.
+Execution-freeze commit/hash: `eaedefb38e7e3f0eca7c02970d5ad4e3d1f181a5`; `src/render.py` SHA-256 `9afdbc55ed84ec01d3ff558d0043d5903061054388ac6bf8f8872066b301ea8c`. Scientific configuration was unchanged between freeze and execution.
+Date: 2026-08-29.
+Git commit / clean state: Formal run started from clean commit `eaedefb38e7e3f0eca7c02970d5ad4e3d1f181a5`.
 Data identities: E25-new normal-control and anomaly-proxy units generated from train/201 by an independent pair-specific audit bank. Capacity ladder 512→1,024→2,048; only seeds not present at the preceding capacity are generated. The canonical train/206 template library must contain 256 unique templates with class counts 64/64/64/64 and SHA-256 `de5dfd765ac7d4fe4bb4644c40ecafdd80cdc31a3d0b6fc4fccd8e84a9fd906b`.
 Input artifact hashes: `runs/ajae/e25_new_normal_control.npz` SHA-256 `30fc7d1ecd60d005cb18c60ac81b1c7335e2121fcd3f1da5f440b5387a747b19`; `runs/ajae/calibration.pt` SHA-256 `b532b7e04d9025233b2768b8fb36287e477f62f20a3ff685a62f4a4a29bfefe0`; `runs/ajae/gate1_201_support_pool.npz` SHA-256 `fc3646fbc145cdc29d2cf203835a3e0018bacbc6eaf714e091d21f7b93bfaf50`. Current prerequisite artifacts E38-v2 through E44-v2 were rechecked against their recorded SHA-256 values before freeze.
 Random namespaces / seeds: Bank seed base 4,600,000. Capacity 512 uses seeds 4,600,000–4,600,511; later capacities append 4,600,512–4,601,023 and 4,601,024–4,602,047 only. Each bank seed retains the frozen maximum 48 world attempts and `attempt_seed=bank_seed+1,000,003a`; all renderer, placement, material and sensor random streams remain unchanged.
 Command and resolved config: `python -m src.render qualify-e45b-v2 --data-root /home/jasongao/Data/STU --e25-new-artifact runs/ajae/e25_new_normal_control.npz --calibration runs/ajae/calibration.pt --support-pool runs/ajae/gate1_201_support_pool.npz --output runs/ajae/e45b_v2_control_proxy_pairs.npz --processes 24`. Exact strata are qualified support semantic × frozen 2.5–40 m range bin × 45-degree sensor-azimuth sector. Five absolute calipers are range 2.0 m, median beam 4.0, `log1p(Nvis)` 0.25, occlusion 0.10 and `log1p(local density)` 0.25. Use all legal edges, deterministic maximum cardinality followed by minimum summed squared caliper-normalized imbalance, frozen unit-hash ties, and no reuse. PASS requires at least 1,024 pairs, at least 100 control-side center frames, every 2.5–40 m range bin nonempty, zero caliper/duplicate errors and all five SMD values ≤0.10. Stop at the first passing capacity; if 2,048 remains insufficient, return the frozen FAIL without changing calipers or generation. E45A, E46 and E48 outputs are not inputs.
-Resource and disk preflight: 24 online CPU cores, one thread per core; 23 GiB physical memory with approximately 21 GiB available; 16 GiB swap with approximately 14 GiB available; no competing experiment process. RTX 5080 Laptop GPU has 16,303 MiB total and 15,146 MiB free but is not used because the formal implementation is CPU-only. Windows E drive has 484,950,659,072 bytes total and 95,153,074,176 bytes remaining; required safety reserve is 24,247,532,954 bytes. Based on the same E45 pair-bank implementation's existing capacity-2,048 files, the conservative peak new disk estimate is below 0.2 GiB including suffix banks, cumulative unit caches, final output and atomic temporary copies. Monitor memory, swap and E-drive space during the run.
-Artifacts and hashes: None.
+Resource and disk preflight: 24 online CPU cores, one thread per core; 23 GiB physical memory with approximately 21 GiB available; 16 GiB swap with approximately 14 GiB available; no competing experiment process. RTX 5080 Laptop GPU had 16,303 MiB total and 15,146 MiB free but was not used because the formal implementation is CPU-only. Windows E drive had 484,950,659,072 bytes total and 95,153,074,176 bytes remaining; required safety reserve was 24,247,532,954 bytes. The run used 2,002% aggregate CPU, 3,234,620 KiB maximum resident memory, no process swaps, and 450.55 seconds wall time. E-drive free space after execution was 95,131,709,440 bytes, still 70.88 GB above the safety reserve.
+Artifacts and hashes: Capacity-512 bank `runs/ajae/e45b-v2_bank_512.npz`, 2,348,651 bytes, SHA-256 `c90536299479ed28869a042e7e328ad0e534c5a52f61135f32cc792df338cf9b`, scientific hash `11b7b94440451cbcd4ec9f20b2d896f54dcb2cc710f500c81aee117ebbe9959c`; capacity-512 units `runs/ajae/e45b-v2_units_512.npz`, 13,625,187 bytes, SHA-256 `4420e9d8c638cf14f9c3e5c6254e7ef358aa9ae40803fc077fe66052097ef7ff`, scientific hash `bef1ca88e0d63f4eef0192121e8e78ac1b4cb535ca16179a78bf6e29ef0e95f1`; capacity-1,024 bank `runs/ajae/e45b-v2_bank_1024.npz`, 4,701,391 bytes, SHA-256 `d3088e29e4c6179999ccb34088dae558fa402bf6b1455394acdc99cac4118463`, scientific hash `f4fb2081b346c686e2d6930a03e3f17bb6c6d3eee4fcfc16984c1a9c1d8de4f5`; capacity-1,024 units `runs/ajae/e45b-v2_units_1024.npz`, 27,327,223 bytes, SHA-256 `bab7198607119dbe0737b7cf7e55a2a03016b9adf4cba60d9d2ab2bf90a0f0e3`, scientific hash `f6377d661b1231f1d126f1c26ae39c638e11feb79e253886c14fa144109e5273`; final `runs/ajae/e45b_v2_control_proxy_pairs.npz`, 4,785,665 bytes, SHA-256 `19ecbc843cc5325e3f12497c50e5855388f0f5caa581179f6fd6639613a8ecfd`, scientific hash `735df664e6ea2f54cac7f3d0c9a9778b17f035259cf716686063f30b5c31eaca`.
 Primary construct: Pairwise common support between E25-new controls and proxies for E48.
-Primary result: Not executed. The earlier stop at E45A has been removed by owner decision.
-PASS / FAIL / OUTCOME: OUTCOME — CURRENT FORMAL NODE / NOT EXECUTED.
+Primary result: PASS at capacity 1,024. Capacity 512 produced 469 matched pairs, 123 control-side center frames, range counts [82,119,137,131], 2,208 legal edges and maximum SMD 0.049469; only pair count failed. Capacity 1,024 produced 1,347 matched pairs, 248 control-side center frames, range counts [348,287,370,342], 8,296 legal edges across 40 exact strata and maximum SMD 0.061885. Final five SMD values were [0.020004,0.061885,0.007586,0.010555,0.014482]; caliper and duplicate errors were zero.
+PASS / FAIL / OUTCOME: PASS — closed.
 Failure classification: Not applicable.
-Unlocked next node: E48 only after PASS.
-Invalidated downstream evidence: Historical E45B PASS is invalid for the new control distribution.
-Descriptive observations: None.
-Notes: The current state does not constitute E45B-v2 FAIL. E45B-v2 is now the next formal experiment; this protocol revision does not itself authorize or count as execution.
+Unlocked next node: E48.
+Invalidated downstream evidence: Historical E45B remains historical, but the current E25-new prerequisite is now satisfied.
+Descriptive observations: The frozen pair population passed without reaching capacity 2,048. No conclusion about label-shortcut separability is drawn at this node.
+Notes: Independent read-only validation recomputed candidate-bank, unit-cache and final scientific hashes; exact seed range 4,600,000–4,601,023; frozen input identities; source pair [1,2]; three exact strata; all five calipers; no unit reuse; cache-to-output fields; pair, frame and range counts; sample-standard-deviation SMD values; and the final PASS. All checks agreed with the saved result. This validation did not generate new candidates or constitute a second formal run.
 
 ## E45-V1 | Optional Blinded Human Source Discrimination
 
@@ -3123,23 +3123,23 @@ Notes: This node cannot qualify or fail Gate 1.
 
 Experiment ID: E48
 Design-freeze commit/hash: Frozen Gate 1 design; commit not recorded.
-Execution-freeze commit/hash: Not executed; E45B-v2 prerequisite absent.
+Execution-freeze commit/hash: Not yet frozen; E45B-v2 prerequisite is now satisfied.
 Date: Not executed.
 Git commit / clean state: Not applicable.
-Data identities: E45B-v2 matched control/proxy units; no current qualifying new-distribution set exists.
-Input artifact hashes: None.
+Data identities: Current E45B-v2 matched control/proxy units from `runs/ajae/e45b_v2_control_proxy_pairs.npz`.
+Input artifact hashes: E45B-v2 artifact SHA-256 `19ecbc843cc5325e3f12497c50e5855388f0f5caa581179f6fd6639613a8ecfd`; scientific hash `735df664e6ea2f54cac7f3d0c9a9778b17f035259cf716686063f30b5c31eaca`.
 Random namespaces / seeds: Same model and grouping scheme as E46.
 Command and resolved config: Use E46's frozen models and grouped evaluation. FAIL for near-saturation only if any model simultaneously has 95% lower confidence bound AUC ≥0.95 and 95% lower confidence bound balanced accuracy ≥0.90; otherwise PASS. There is no minimum learnability threshold; usefulness of proxy supervision is tested by B1.
 Resource and disk preflight: Not executed.
 Artifacts and hashes: None.
 Primary construct: Whether low-level control/proxy classification is nearly saturated under strict matching.
 Primary result: Not executed.
-PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
+PASS / FAIL / OUTCOME: OUTCOME — CURRENT FORMAL NODE / NOT EXECUTED.
 Failure classification: Not applicable.
 Unlocked next node: PASS unlocks E49 directly; FAIL permits only redesign of the label-correlated proxy path and invalidates relevant E20 and E42–E48 evidence.
-Invalidated downstream evidence: E49 remains locked.
+Invalidated downstream evidence: E49 remains locked until E48 PASS.
 Descriptive observations: None.
-Notes: Historical E45B does not satisfy the new-distribution prerequisite.
+Notes: Historical E45B does not satisfy the new-distribution prerequisite; the current prerequisite is the independently validated E45B-v2 PASS above.
 
 ## E49 | Formal Gate 1 Adjudication
 
