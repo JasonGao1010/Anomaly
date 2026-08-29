@@ -255,6 +255,54 @@ def test_protocol_contains_no_retired_training_route() -> None:
         assert retired not in text
 
 
+def test_e45_overlap_weights_balance_common_population() -> None:
+    rng = np.random.default_rng(4504)
+    records: dict[str, list[np.ndarray]] = {
+        name: [] for name in render_module._E45_UNIT_FIELDS
+    }
+    for source_id, shift in ((0, -0.15), (1, 0.15)):
+        for index in range(320):
+            values = rng.normal(size=5)
+            values[0] = 15.0 + 2.0 * values[0] + shift
+            values[1] = 60.0 + 3.0 * values[1] + shift
+            nvis = max(1, int(round(np.exp(3.0 + 0.2 * values[2] + shift) - 1.0)))
+            occlusion = float(np.clip(0.45 + 0.08 * values[3] + shift / 4.0, 0.26, 0.74))
+            density = max(0.01, float(np.exp(0.5 + 0.2 * values[4] + shift) - 1.0))
+            row = {
+                "bank_seed": np.asarray(index + 1000 * source_id, dtype=np.int64),
+                "source": np.asarray(source_id, dtype=np.uint8),
+                "center_frame": np.asarray(index % 160, dtype=np.int16),
+                "frame_id": np.asarray(index % 160, dtype=np.int16),
+                "support_semantic": np.asarray(40, dtype=np.uint16),
+                "range_bin": np.asarray(1, dtype=np.int8),
+                "azimuth_sector": np.asarray(index % 4, dtype=np.int8),
+                "median_distance_m": np.asarray(values[0]),
+                "median_beam": np.asarray(values[1]),
+                "Nvis": np.asarray(nvis, dtype=np.int32),
+                "O_hat": np.asarray(occlusion),
+                "local_density": np.asarray(density),
+                "geometry_hits": np.asarray(nvis + 2, dtype=np.int32),
+                "point_count": np.asarray(min(nvis, 64), dtype=np.int16),
+                "point_features": np.zeros((64, 7), dtype=np.float64),
+                "unit_hash": np.asarray(index + 10_000 * source_id, dtype=np.uint64),
+            }
+            for name, value in row.items():
+                records[name].append(value)
+    units = {}
+    for name, values in records.items():
+        stacked = np.stack(values)
+        units[name] = stacked.reshape(128, 5, *stacked.shape[1:])
+    first = render_module._e45_weighted_balance(units)
+    second = render_module._e45_weighted_balance(units)
+    for name in first:
+        np.testing.assert_array_equal(first[name], second[name])
+    assert first["common_cell_key"].shape == (4, 4)
+    assert np.all(first["effective_sample_size"] > 50)
+    assert float(np.max(first["weighted_smd"])) < 1.0e-6
+    assert float(np.max(first["weighted_ks"])) <= 0.06
+    assert float(first["maximum_cell_mass_difference"]) < 1.0e-6
+
+
 def test_schema4_development_worlds_are_rejected_after_world_v3_freeze() -> None:
     protocol = load_protocol(PROTOCOL_PATH)
     with pytest.raises(ProtocolError, match="authoritative WorldSpec"):

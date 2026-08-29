@@ -16,6 +16,7 @@ import gc
 import math
 import os
 import time
+import warnings
 import multiprocessing as mp
 from collections import deque
 from collections.abc import Iterable, Mapping, Sequence
@@ -32,7 +33,7 @@ for _thread_variable in (
 import numpy as np
 from scipy import ndimage
 from scipy.optimize import brentq, differential_evolution
-from scipy.sparse import coo_matrix
+from scipy.sparse import coo_matrix, csr_matrix, hstack
 from scipy.sparse.csgraph import min_weight_full_bipartite_matching
 from scipy.spatial import ConvexHull, QhullError, cKDTree
 from scipy.stats import qmc
@@ -16415,6 +16416,302 @@ def run_e45a_qualification(
         unit_cache_path, output_path, experiment="E45A",
         left_source=0, right_source=1,
     )
+
+
+def _e45_weighted_balance(
+    units: Mapping[str, np.ndarray],
+) -> dict[str, np.ndarray]:
+    """Estimate deterministic overlap weights on the frozen E46 confounders."""
+    from sklearn.exceptions import ConvergenceWarning
+    from sklearn.linear_model import LogisticRegression
+
+    flat = {
+        name: np.asarray(value).reshape((-1,) + value.shape[2:])
+        for name, value in units.items()
+    }
+    covariates = _e45_covariates(flat)
+    valid = (
+        np.isin(flat["source"], (0, 1))
+        & (flat["point_count"] > 0)
+        & (flat["range_bin"] >= 0)
+        & (flat["range_bin"] < 4)
+        & (flat["azimuth_sector"] >= 0)
+        & np.isfinite(covariates).all(axis=1)
+        & (flat["O_hat"] >= 0.0)
+        & (flat["O_hat"] <= 1.0)
+    )
+    candidates: list[np.ndarray] = []
+    for source_id in (0, 1):
+        index = np.flatnonzero(valid & (flat["source"] == source_id))
+        index = index[np.argsort(flat["unit_hash"][index], kind="stable")]
+        _, first = np.unique(flat["unit_hash"][index], return_index=True)
+        candidates.append(index[np.sort(first)])
+
+    occlusion = np.digitize(flat["O_hat"], (0.25, 0.75), right=False).astype(np.int8)
+    cell_key = np.column_stack((
+        flat["support_semantic"].astype(np.int64),
+        flat["range_bin"].astype(np.int64),
+        flat["azimuth_sector"].astype(np.int64),
+        occlusion.astype(np.int64),
+    ))
+    source_cells = [
+        {tuple(map(int, row)) for row in cell_key[index]}
+        for index in candidates
+    ]
+    common_keys = sorted(source_cells[0] & source_cells[1])
+    common_lookup = {key: cell_id for cell_id, key in enumerate(common_keys)}
+    selected_parts: list[np.ndarray] = []
+    cell_parts: list[np.ndarray] = []
+    for index in candidates:
+        keep = np.asarray(
+            [tuple(map(int, cell_key[item])) in common_lookup for item in index],
+            dtype=np.bool_,
+        )
+        selected = index[keep]
+        selected_parts.append(selected)
+        cell_parts.append(np.asarray(
+            [common_lookup[tuple(map(int, cell_key[item]))] for item in selected],
+            dtype=np.int32,
+        ))
+    selected_index = np.concatenate(selected_parts)
+    selected_cell = np.concatenate(cell_parts)
+    selected_source = flat["source"][selected_index].astype(np.uint8)
+    selected_covariates = covariates[selected_index]
+    if len(common_keys) == 0 or min(map(len, selected_parts)) < 2:
+        return {
+            "selected_flat_index": selected_index.astype(np.int64),
+            "selected_source": selected_source,
+            "selected_cell": selected_cell,
+            "common_cell_key": np.asarray(common_keys, dtype=np.int64).reshape(-1, 4),
+            "selected_covariates": selected_covariates,
+            "unit_weight": np.empty(selected_index.size, dtype=np.float64),
+            "propensity": np.empty(selected_index.size, dtype=np.float64),
+            "weighted_smd": np.full(5, np.inf),
+            "weighted_ks": np.full(5, np.inf),
+            "effective_sample_size": np.zeros(2, dtype=np.float64),
+            "center_frame_count": np.zeros(2, dtype=np.int64),
+            "maximum_cell_mass_difference": np.asarray(np.inf),
+            "maximum_basis_balance_error": np.asarray(np.inf),
+            "maximum_weight_fraction": np.ones(2, dtype=np.float64),
+            "optimizer_iterations": np.asarray(0, dtype=np.int64),
+        }
+
+    rows = np.arange(selected_index.size, dtype=np.int64)
+    cell_design = csr_matrix(
+        (np.ones(rows.size), (rows, selected_cell)),
+        shape=(rows.size, len(common_keys)),
+    )
+    mean = selected_covariates.mean(axis=0)
+    scale = selected_covariates.std(axis=0)
+    scale[scale == 0.0] = 1.0
+    continuous = (selected_covariates - mean) / scale
+    quantiles = np.quantile(
+        selected_covariates, np.linspace(0.05, 0.95, 19), axis=0,
+        method="linear",
+    )
+    distribution_basis = np.column_stack([
+        selected_covariates[:, feature] <= threshold
+        for feature in range(5) for threshold in np.unique(quantiles[:, feature])
+    ]).astype(np.float64)
+    design = hstack(
+        (cell_design, csr_matrix(continuous), csr_matrix(distribution_basis)),
+        format="csr",
+    )
+    model = LogisticRegression(
+        penalty="l2", C=np.inf, l1_ratio=0.0,
+        fit_intercept=False, solver="lbfgs",
+        tol=1.0e-9, max_iter=10_000,
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", ConvergenceWarning)
+        warnings.simplefilter("ignore", FutureWarning)
+        model.fit(design, selected_source)
+    propensity = model.predict_proba(design)[:, 1]
+    weight = np.where(selected_source == 0, propensity, 1.0 - propensity)
+    for source_id in (0, 1):
+        source = selected_source == source_id
+        total = float(weight[source].sum())
+        if not math.isfinite(total) or total <= 0.0:
+            raise RenderError("E45A-overlap produced a source with zero total weight")
+        weight[source] /= total
+
+    def weighted_mean_variance(
+        values: np.ndarray, weights: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        average = np.sum(values * weights[:, None], axis=0)
+        variance = np.sum(np.square(values - average) * weights[:, None], axis=0)
+        return average, variance
+
+    source_mask = [selected_source == source_id for source_id in (0, 1)]
+    summaries = [
+        weighted_mean_variance(selected_covariates[mask], weight[mask])
+        for mask in source_mask
+    ]
+    difference = np.abs(summaries[0][0] - summaries[1][0])
+    pooled = np.sqrt((summaries[0][1] + summaries[1][1]) / 2.0)
+    smd = np.divide(
+        difference, pooled, out=np.where(difference == 0.0, 0.0, np.inf),
+        where=pooled > 0.0,
+    )
+    ks = np.zeros(5, dtype=np.float64)
+    for feature in range(5):
+        order = np.argsort(selected_covariates[:, feature], kind="stable")
+        sorted_values = selected_covariates[order, feature]
+        sorted_source = selected_source[order]
+        sorted_weight = weight[order]
+        _, starts = np.unique(sorted_values, return_index=True)
+        left_cdf = np.cumsum(np.add.reduceat(
+            np.where(sorted_source == 0, sorted_weight, 0.0), starts,
+        ))
+        right_cdf = np.cumsum(np.add.reduceat(
+            np.where(sorted_source == 1, sorted_weight, 0.0), starts,
+        ))
+        ks[feature] = float(np.max(np.abs(left_cdf - right_cdf)))
+    ess = np.asarray([
+        1.0 / np.square(weight[mask]).sum() for mask in source_mask
+    ])
+    center_count = np.asarray([
+        np.unique(flat["center_frame"][selected_index[mask]][weight[mask] > 0.0]).size
+        for mask in source_mask
+    ], dtype=np.int64)
+    cell_mass = np.asarray([
+        np.bincount(selected_cell[mask], weights=weight[mask], minlength=len(common_keys))
+        for mask in source_mask
+    ])
+    fitted_basis = np.asarray(design[:, len(common_keys):].toarray())
+    basis_mean = np.asarray([
+        np.sum(fitted_basis[mask] * weight[mask, None], axis=0)
+        for mask in source_mask
+    ])
+    return {
+        "selected_flat_index": selected_index.astype(np.int64),
+        "selected_source": selected_source,
+        "selected_cell": selected_cell,
+        "common_cell_key": np.asarray(common_keys, dtype=np.int64),
+        "selected_covariates": selected_covariates,
+        "unit_weight": weight,
+        "propensity": propensity,
+        "weighted_smd": smd,
+        "weighted_ks": ks,
+        "effective_sample_size": ess,
+        "center_frame_count": center_count,
+        "maximum_cell_mass_difference": np.asarray(
+            np.max(np.abs(cell_mass[0] - cell_mass[1]))
+        ),
+        "maximum_basis_balance_error": np.asarray(
+            np.max(np.abs(basis_mean[0] - basis_mean[1]))
+        ),
+        "maximum_weight_fraction": np.asarray([
+            np.max(weight[mask]) for mask in source_mask
+        ]),
+        "optimizer_iterations": np.asarray(int(model.n_iter_[0]), dtype=np.int64),
+    }
+
+
+def run_e45a_overlap_qualification(
+    unit_cache_path: Path | str, output_path: Path | str,
+) -> dict[str, object]:
+    """Qualify the weighted common-overlap population used by E46."""
+    cache_path = Path(unit_cache_path).expanduser().resolve(strict=True)
+    if _sha256_path(cache_path) != "92fe629be31a7b5a5eb97bd1ee6a7d402d69fc507b1fbd23e925a19cab1be6cf":
+        raise RenderError("E45A-overlap requires the frozen E45A-new 2,048-unit cache")
+    with np.load(cache_path, allow_pickle=False) as source:
+        metadata = json.loads(str(source["metadata_json"]))
+        if (
+            metadata.get("experiment") != "E45-v2-units"
+            or metadata.get("passed") is not True
+            or int(metadata.get("capacity", -1)) != 2048
+            or metadata.get("scientific_array_hash")
+            != "39c2d55e9cd9a6acb5337d6d1eae0bf815de40e3a9c8ac1d1827af8a1f64f3d1"
+        ):
+            raise RenderError("E45A-overlap unit-cache metadata changed")
+        units = {name: np.asarray(source[name]) for name in _E45_UNIT_FIELDS}
+    started = time.monotonic()
+    runs = [_e45_weighted_balance(units) for _ in range(2)]
+    elapsed = time.monotonic() - started
+    reproduced = all(np.array_equal(runs[0][name], runs[1][name]) for name in runs[0])
+    balance = runs[0]
+    common_cells = int(balance["common_cell_key"].shape[0])
+    source_units = np.bincount(balance["selected_source"], minlength=2).astype(np.int64)
+    ess = np.asarray(balance["effective_sample_size"])
+    center_frames = np.asarray(balance["center_frame_count"])
+    maximum_smd = float(np.max(balance["weighted_smd"]))
+    maximum_ks = float(np.max(balance["weighted_ks"]))
+    passed = (
+        common_cells > 0 and bool(np.all(source_units > 0))
+        and bool(np.all(ess >= 256.0)) and int(center_frames[0]) >= 100
+        and maximum_smd <= 0.10 and maximum_ks <= 0.10 and reproduced
+    )
+    if passed:
+        failure_classification = None
+        failure_reason = None
+    elif common_cells == 0 or int(center_frames[0]) < 100:
+        failure_classification = "sample_or_observability_defect"
+        failure_reason = "insufficient_exact_common_support"
+    elif bool(np.any(ess < 256.0)):
+        failure_classification = "scientific_failure"
+        failure_reason = "insufficient_effective_overlap"
+    else:
+        failure_classification = "scientific_failure"
+        failure_reason = "structural_covariate_imbalance"
+    scientific = {
+        **balance,
+        "selected_unit_hash": np.asarray(units["unit_hash"]).reshape(-1)[
+            balance["selected_flat_index"]
+        ],
+        "selected_center_frame": np.asarray(units["center_frame"]).reshape(-1)[
+            balance["selected_flat_index"]
+        ],
+        "selected_point_count": np.asarray(units["point_count"]).reshape(-1)[
+            balance["selected_flat_index"]
+        ],
+    }
+    result = {
+        "experiment": "E45A-overlap",
+        "passed": passed,
+        "failure_classification": failure_classification,
+        "failure_reason": failure_reason,
+        "unit_cache_sha256": _sha256_path(cache_path),
+        "unit_cache_scientific_array_hash": metadata["scientific_array_hash"],
+        "estimand_range_m": [2.5, 40.0],
+        "exact_strata": [
+            "support_semantic", "range_bin", "45_degree_azimuth_sector",
+            "occlusion_stratum_[0,0.25)_[0.25,0.75)_[0.75,1]",
+        ],
+        "weighting": (
+            "unpenalized_logistic_overlap_weights_with_full_cell_indicators_"
+            "five_continuous_covariates_and_pooled_5_to_95_percentile_ecdf_basis"
+        ),
+        "common_exact_cells": common_cells,
+        "common_support_units_by_source": source_units.tolist(),
+        "center_frames_by_source": center_frames.tolist(),
+        "effective_sample_size_by_source": ess.tolist(),
+        "maximum_weight_fraction_by_source": balance["maximum_weight_fraction"].tolist(),
+        "weighted_smd": balance["weighted_smd"].tolist(),
+        "maximum_weighted_smd": maximum_smd,
+        "weighted_ks": balance["weighted_ks"].tolist(),
+        "maximum_weighted_ks": maximum_ks,
+        "maximum_exact_cell_mass_difference": float(balance["maximum_cell_mass_difference"]),
+        "maximum_fitted_basis_balance_error": float(balance["maximum_basis_balance_error"]),
+        "optimizer_iterations": int(balance["optimizer_iterations"]),
+        "elementwise_reproduced": reproduced,
+        "two_run_seconds": elapsed,
+        "scientific_array_hash": _scientific_array_hash(scientific),
+        "claim_limit": (
+            "E45A-overlap qualifies only the weighted train/201 real-normal and "
+            "E25-new control population from 2.5 m through 40 m for E46; it does "
+            "not establish renderer indistinguishability."
+        ),
+    }
+    output = Path(output_path).expanduser().resolve()
+    output.parent.mkdir(parents=True, exist_ok=True)
+    temporary = output.with_suffix(output.suffix + ".tmp.npz")
+    np.savez_compressed(
+        temporary, **scientific,
+        metadata_json=np.asarray(json.dumps(result, sort_keys=True, separators=(",", ":"))),
+    )
+    os.replace(temporary, output)
+    return result
 
 
 def run_e45b_qualification(

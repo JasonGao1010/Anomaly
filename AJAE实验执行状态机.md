@@ -113,18 +113,19 @@ flowchart TB
     E42["E42 Single-entity visible-point distribution"]
     E43["E43 Change in visible-point count across consecutive frames"]
     E44["E44 Occlusion-rate distribution"]
-    E45A["E45A-new Real-normal to control matching"]
+    E45AOLD["E45A family Historical stopped branch"]
     E45B["E45B-v2 Control to proxy matching"]
     E45V1["E45-V1 Human blind test of source fingerprints"]
-    E46["E46 Real-normal versus rendered-normal source classification"]
-    E47["E47 Source-fingerprint attribution ablation"]
+    E46["E46 Optional real-versus-rendered source diagnostic"]
+    E47["E47 Optional source-difference attribution"]
     E48["E48 Normal-control versus anomaly-proxy difficulty classification"]
     E49["E49 Formal Gate 1 decision"]
     E38 --> E39 --> E40 --> E41 --> E42 --> E43 --> E44
-    E44 --> E45A --> E46 --> E49
     E44 --> E45B --> E48 --> E49
-    E45A -. "Optional non-blocking human review" .-> E45V1
-    E46 -. "FAIL attribution" .-> E47
+    E44 -. "Historical stopped branch" .-> E45AOLD
+    E44 -. "Optional non-blocking diagnostic" .-> E46
+    E46 -. "Optional attribution" .-> E47
+    E46 -. "Optional non-blocking human review" .-> E45V1
   end
   subgraph P5["Phase 5 | Frozen STU point interface and five-frame coordinates"]
     E50["E50 128D STU high-level feature interface"]
@@ -224,8 +225,6 @@ flowchart TB
   E88 --> E89
   E94 --> E95
   E98 --> E99
-  E46 -. "FAIL: locate source fingerprint" .-> E47
-  E47 -. "Repair sensor factor" .-> E38
   E48 -. "FAIL: redesign hard proxies" .-> E20A
   E49 -. "Gate 1 FAIL" .-> E08
   E75 -. "Gate 2 FAIL" .-> E38
@@ -2165,7 +2164,7 @@ Primary construct: Legal, visible, coverage-oriented normal-control generation a
 Primary result: PASS. All 256 fixtures completed; attempted and completed template identities were 256 unique, each once; all four classes counted 64. Assigned and final-render median-range bins both exactly equaled [52,51,51,51,51], with zero per-fixture bin error and class×distance counts exactly as frozen. Every fixture had at least one visible return. $N_{vis}$ minimum/median/mean/$Q_{0.95}$/maximum was 1/53/269.41015625/1472/4927. Eight azimuth counts were [36,43,15,40,52,9,10,51], maximum 52 and fraction 0.203125. Occlusion counts were [204,50,2], with no undefined item; these were descriptive. Exactly 408 support proposals were evaluated and conserved as 256 acceptance, 119 physical-placement rejection, 0 no-visible-return rejection, and 33 final-bin rejection. Assigned-bin exhaustion, hard, accounting, support-identity, class–support, scale, pose, E22, E23, material, final-distance, and visibility errors were zero. There was no separate multi-entity E24 event because fixtures were single-entity. Independent read-only audit did not rerun or resample: it checked all fixture seeds/templates/bins; parsed and canonically round-tripped all `ObjectSpec` and `PlacementRecord`; reproduced material; checked E21-v4 support rows, frames, semantics, and class rules; recomputed E22 continuous grounding for all 256 shapes; recomputed occlusion, azimuth, proposal conservation, and scientific hash. Everything matched and no accepted E23 minimum-obstacle SDF was below -0.05 m.
 PASS / FAIL / OUTCOME: PASS.
 Failure classification: Not applicable. E25-v2 and E25-v3 generation FAILs remain permanent.
-Unlocked next node: E26-v2; after it, refresh the control-dependent E38–E44 evidence, run E45A-new and E45B-v2; E45A-new PASS unlocks E46 and E45B-v2 must PASS before E48.
+Unlocked next node at that time: E26-v2; the historical route then called for refreshing the control-dependent E38–E44 evidence and running E45A-new plus E45B-v2. The later route decision retired E45A from Gate 1; only E45B-v2 remains required before E48.
 Invalidated downstream evidence: The old control-distribution E45B PASS became inapplicable and had to be rerun as E45B-v2. E25-new does not establish a real-normal range distribution, real/control common support, or source indistinguishability.
 Descriptive observations: The range cycle is coverage-oriented anti-shortcut sampling, not an estimate of natural real-normal distance frequencies.
 Notes: E25 now owns legal, visible, broad-coverage controls; E45A owns which real/control samples are comparable; E46 owns whether source remains distinguishable under matching. These duties must not be merged again. Under the frozen FAIL branch, the result had to remain permanent and execution had to stop for a principal-investigator decision; templates, distance allocation, proposal cap, renderer, and downstream matching conditions could not be changed.
@@ -2555,10 +2554,10 @@ Design-freeze commit/hash: Frozen before E38-v2; separate commit not recorded.
 Execution-freeze commit/hash: Not applicable; shared protocol prerequisite.
 Date: Not recorded.
 Git commit / clean state: Not recorded.
-Data identities: train/201 frames 4–681, center frames 6–679; all Gate 1 units restricted to official range 2.5–50 m. E38-v2 shared bank: exactly 256 paired world seeds. Any later pair-specific E45A-new or E45B-v2 bank followed its own 512→1,024→2,048 capacity ladder.
+Data identities: train/201 frames 4–681, center frames 6–679; all Gate 1 units restricted to official range 2.5–50 m. E38-v2 shared bank: exactly 256 paired world seeds. Historically E45A-new and currently E45B-v2 use independent 512→1,024→2,048 pair-bank ladders; E45A is now retired.
 Input artifact hashes: train/201 support pool was to use the E21-v4 algorithm and observable ground semantics; exact artifact hash recorded in E38-v2.
 Random namespaces / seeds: Defined in E38-v2 and each pair-specific bank.
-Command and resolved config: There is no unified three-way capacity ladder. E38-v2 uses exactly 256 shared real-normal/control/proxy seeds. If E45A-new or E45B-v2 lacks predefined pairwise coverage, only its independent pairwise audit bank may expand 512→1,024→2,048. Candidate selection may read only frozen matching covariates and is forbidden from reading E46/E48 output. If a pairwise 2,048 bank remains insufficient, follow that node's FAIL route without changing calipers. The 201 support pool uses E21-v4's same algorithm and actually observable ground semantics; control support policy remains E25-new. A refreshed E38-v2–E44 PASS means statistics are valid and coverage can feed matching, not that source distributions are equal. Ordinary differences are adjudicated by E46/E48.
+Command and resolved config: There is no unified three-way capacity ladder. E38-v2 uses exactly 256 shared real-normal/control/proxy seeds. E45B-v2 alone may expand its independent pairwise audit bank 512→1,024→2,048. Candidate selection may read only frozen matching covariates and is forbidden from reading E48 output. If capacity 2,048 remains insufficient, follow E45B-v2's FAIL route without changing calipers. The 201 support pool uses E21-v4's same algorithm and actually observable ground semantics; control support policy remains E25-new. A refreshed E38-v2–E44 PASS establishes valid mechanics/statistics and support inputs, not equality of natural and inserted observation distributions. Real/control differences are optional E46 diagnostics; E48 alone addresses the current direct rendered-label shortcut.
 Resource and disk preflight: Not applicable.
 Artifacts and hashes: Shared protocol freeze only.
 Primary construct: Separate shared renderer-statistics evidence from pair-specific common-support matching and downstream source classifiers.
@@ -2873,7 +2872,7 @@ Primary construct: Old-distribution occlusion definition, conservation, and prel
 Primary result: PASS for the old distribution. Valid/invalid units real 1,280/0, control 1,280/0, proxy 1,276/4. Layers real [731,549,0], control [1,245,26,9], proxy [1,238,36,2]. Both generated sources covered all layers; nine jointly nonempty support-semantic×range×occlusion cells. All errors zero; two passes identical.
 PASS / FAIL / OUTCOME: PASS — historical old-distribution evidence.
 Failure classification: Not applicable.
-Unlocked next node: Historical E45; current route separately uses E45A-new and E45B-v2.
+Unlocked next node: Historical E45; the current route uses only E45B-v2 as a hard pairwise prerequisite, while E45A is retired.
 Invalidated downstream evidence: Cannot qualify E25-new controls or full matching.
 Descriptive observations: Real-normal lacked the high-occlusion layer in this old bank.
 Notes: None.
@@ -2893,12 +2892,34 @@ Resource and disk preflight: Bank-generation times at 512/1,024/2,048 were 106.2
 Artifacts and hashes: `runs/ajae/e45a_new_real_control_pairs.npz`, 271,518 bytes, SHA-256 `acad2f28c4f2cb47314206671bbfebbdc89004a81cd1c403fc33af15c5dfda21`; final scientific-array hash `6fa5f901574f5a621633d60bda50037fcb261a136caa4e2f1ae0beada02d1426`. Capacity-2,048 bank 9,206,668 bytes, SHA-256 `da73006666597175358bd62dbcbbbda30cedf7d4a6cd8c01ec774c70d978a4a3`; unit cache 53,608,043 bytes, SHA-256 `92fe629be31a7b5a5eb97bd1ee6a7d402d69fc507b1fbd23e925a19cab1be6cf`.
 Primary construct: Whether real-normal and E25-new rendered controls have sufficient pairwise common support under the frozen strict audit conditions.
 Primary result: FAIL. Capacities 512/1,024/2,048 produced 38/91/315 legal edges, maximum matches 14/30/63, and real-center coverage 8/14/29. Distance counts were [0,11,3,0], [0,22,8,0], [1,46,16,0]. Final 63 <1,024, 29 frames <100, and 30–40 m empty. Caliper and duplicate errors were zero at every capacity. Final SMDs in range, median beam, $\log(1+N_{vis})$, $\hat O$, $\log(1+\mathrm{local\ density})$ order were [0.083301,0.024199,0.007985,1.778776,0.044545]; maximum occlusion SMD 1.778776 exceeded 0.10.
-PASS / FAIL / OUTCOME: FAIL — current stopping node.
+PASS / FAIL / OUTCOME: FAIL — permanent predecessor to E45A-overlap.
 Failure classification: `insufficient_pairwise_common_support`. The pre-result `[0,255]` issue was a repaired `protocol implementation defect` and produced no scientific result.
-Unlocked next node: None. E46 remains locked. E45B-v2 was not started.
+Unlocked next node: The subsequent principal-investigator decision created E45A-overlap; this strict-matching node did not unlock E46. E45B-v2 was not started.
 Invalidated downstream evidence: No source classifier was executed and renderer failure was not adjudicated. Per the frozen stop rule, do not automatically expand, retry, relax calipers, or modify generation distribution.
 Descriptive observations: Occlusion was the dominant matched-sample imbalance; match size, frame coverage, and far observable-bin coverage also failed.
-Notes: Current state stops at this formal FAIL awaiting a new principal-investigator decision.
+Notes: This formal FAIL is permanent. Its former decision stop was resolved by the versioned E45A-overlap design.
+
+## E45A-overlap | Real-Normal ↔ E25-new Normal-Control Common-Overlap Qualification for E46
+
+Experiment ID: E45A-overlap
+Design-freeze commit/hash: Scientific design frozen by the principal-investigator decision after the E45A-new FAIL; implementation source hash is recorded at execution freeze.
+Execution-freeze commit/hash: First implementation source SHA-256 `75e690c90e550dbca00682b42f2fe62cf4f9ad7253fe275187bccb21b4fbd810`; it produced no scientific result because the optimizer reached its iteration limit. Final execution source SHA-256 `31bc96f8a1b998196088a18e0f6855470de193a8aba9d732999ea60a8f6e2e7a` changes only optimizer stopping tolerance from $10^{-11}$ to $10^{-9}$ and maximum iterations from 2,000 to 10,000; scientific inputs, features, weights, metrics, and thresholds are unchanged. Under the owner's subsequent instruction, an implementation-only stop no longer requires a separate re-execution authorization when the frozen scientific design and data identity remain unchanged.
+Date: 2026-08-29.
+Git commit / clean state: Pre-implementation workspace was clean at `d1ed41361133cd3802b7980ff54fff2b3ffcd0f7`; execution identity will record the final source hash and dirty state.
+Data identities: Reuse only `runs/ajae/e45a-new_units_2048.npz`, SHA-256 `92fe629be31a7b5a5eb97bd1ee6a7d402d69fc507b1fbd23e925a19cab1be6cf`, scientific-array hash `39c2d55e9cd9a6acb5337d6d1eae0bf815de40e3a9c8ac1d1827af8a1f64f3d1`. Keep unique valid real-normal and normal-control units in train/201 and the 2.5–40 m estimand. Do not generate, render, place, expand, or resample any control. The E45A-new FAIL and all historical results remain immutable.
+Input artifact hashes: The frozen 2,048-unit cache above is the sole scientific input. E25-new, E26-v2, renderer, calibration, E38–E44, and E45B-v2 are not read or changed by this node.
+Random namespaces / seeds: None. All ordering uses frozen `unit_hash`; optimization is deterministic and is executed twice for an elementwise reproduction check.
+Command and resolved config: Exact cells are support semantic × frozen range bin × 45° sensor-azimuth sector × occlusion stratum, with occlusion strata $[0,0.25)$, $[0.25,0.75)$, and $[0.75,1]$. Retain only cells observed in both sources. Fit an unpenalized logistic source-propensity model with no free intercept and with a complete exact-cell indicator basis, the five standardized continuous covariates $[range,median\ beam,\log(1+N_{vis}),\hat O,\log(1+density)]$, and indicators at each pooled 5th through 95th percentile in 5-point increments for every covariate. Use overlap weights: real-normal $w_i=e_i$ and control $w_i=1-e_i$, then normalize separately within source. Full-cell score equations target identical cell mass; continuous and percentile-indicator score equations target mean and distribution balance. No trimming, clipping, caliper, one-to-one pairing, unit reuse restriction, or post-result tuning is allowed. Compute five weighted SMDs, exact weighted empirical-CDF Kolmogorov–Smirnov distances, source-specific unit ESS, source-specific positive-weight center-frame counts, maximum weight fraction, exact-cell mass error, and fitted-basis balance error. PASS requires at least one common exact cell, both sources nonempty, $ESS_{real}\ge256$, $ESS_{control}\ge256$, at least 100 real-side center frames, all five $|SMD|\le0.10$, all five weighted KS distances $\le0.10$, and two elementwise-identical complete weighting runs. Command: `python -m src.render qualify-e45a-overlap --unit-cache runs/ajae/e45a-new_units_2048.npz --output runs/ajae/e45a_overlap_weights.npz`.
+Resource and disk preflight: This is a read-only statistical computation over the existing 53.6 MB cache and is expected to create far below 1 GiB; the Windows E-drive large-write preflight does not apply. No background experiment was running at design freeze.
+Artifacts and hashes: `runs/ajae/e45a_overlap_weights.npz`, 382,687 bytes, SHA-256 `90f60e2432975dc8aa0aea6c5fc1e90b463b0318d9b61add362ccb30227bf1a6`; scientific-array hash `e54eb12599b3887e2a73a5e22200dc277aa47b1a1839a0ebb8a3acd4f0ac3bfb`.
+Primary construct: Whether a sufficiently large and frame-dispersed train/201 population exists in which real-normal and E25-new normal-control share observable support and the five prespecified E46 confounders are balanced, so E46 can test residual low-level source fingerprint rather than gross observation-domain differences.
+Primary result: FAIL. The 2,048 cache contained 43 exact cells shared by both sources, retaining 1,491 unique real-normal units and 6,081 unique controls over 297 and 338 center frames. Optimization converged in 3,050 iterations; two complete runs were elementwise identical. Source-normalized weights each summed to one. The five weighted SMDs were [0.000000009,0.000000167,0.000000147,0.000000551,0.000000164], maximum 0.000000551. Weighted KS distances were [0.025988,0.045211,0.059779,0.060849,0.031631], maximum 0.060849. Exact-cell mass difference was at most $2.435\times10^{-7}$ and fitted-basis balance error at most $6.063\times10^{-7}$. Both balance criteria and the 100-frame criterion passed. Real/control ESS were 207.526586 and 232.335050, both below the frozen 256 threshold; maximum individual weight fractions were 0.00959638 and 0.00959598. Independent recomputation from the saved raw arrays reproduced source counts, weight sums, center counts, ESS, all five SMDs, all five tied-value-correct KS distances, and exact-cell mass error.
+PASS / FAIL / OUTCOME: FAIL — permanent historical qualification result; no longer a Gate 1 blocker after the subsequent owner stop decision.
+Failure classification: `scientific_failure`; reason `insufficient_effective_overlap`. The earlier nonconvergent execution remains an `implementation_defect` with no scientific result.
+Unlocked next node: None. The subsequent owner decision permanently ended E45A evolution and removed this node from the Gate 1 conjunction. It does not require an E25-new placement revision. E45B-v2 is the current formal node.
+Invalidated downstream evidence: FAIL does not adjudicate renderer source fingerprint or invalidate E25-new. E46 is now an optional diagnostic and no longer requires this node to PASS.
+Descriptive observations: Formal overlap is broad in raw count and frame count, and the weighting achieves strong mean and marginal-distribution balance. The ESS loss shows that the balanced estimand depends on a comparatively concentrated subset of that nominal overlap. The first optimizer attempt showed only that the initial numerical iteration limit was insufficient and contributed no scientific evidence.
+Notes: This versioned revision classifies the E45A-new design-level mismatch as `qualification_specification_defect` while permanently retaining its formal FAIL. The later project-level review found that repeated real/control distribution qualification had become overdesigned relative to AJAE's direct label-shortcut risk. E45A-new, E45A-overlap, targeted controls, transport feasibility, ESS optimization, larger banks, new matching/weighting, and target-conditioned generation are all retired unless new direct scientific evidence establishes necessity. The formal artifact remains historical evidence that natural real observations and coverage-oriented inserted controls differ, especially in scene occlusion.
 
 ## E45-v1 | Historical Three-Source Strict-Matching Audit with Fixed Distance Quotas
 
@@ -2986,7 +3007,7 @@ Failure classification: Not applicable.
 Unlocked next node: Historically E48 prerequisite was satisfied, independently of E45A. Under E25-new, this qualification is invalid and E45B-v2 is required.
 Invalidated downstream evidence: It does not constitute E48 source-classification evidence and cannot qualify the new control distribution.
 Descriptive observations: Old control/proxy generation conditions were well aligned under the frozen covariates.
-Notes: Current E45B-v2 has not executed because the state machine stopped at E45A-new FAIL.
+Notes: E45B-v2 remains unexecuted, but the former E45A stop has now been removed; E45B-v2 is the current formal node.
 
 ## E45A-v2 | Historical Audit-Only Targeted Normal-Control Candidate Bank
 
@@ -3005,32 +3026,32 @@ Primary construct: Whether audit-only control proposals targeted solely on froze
 Primary result: FAIL. Qualified controls at proposal levels 4/8/16/32/64 were [13,36,83,170,325]; maximum matches [13,36,80,148,212]; real centers [12,30,45,75,90]; distance counts [0,9,4,0], [0,18,18,0], [0,45,35,0], [1,92,55,0], [1,139,72,0]. Final 212 <1,024, 90 <100, and 30–40 m empty. Final SMDs [0.099364,0.159312,0.064798,0.882238,0.021068], with occlusion 0.882238 >0.10. Caliper, duplicate, and hard errors zero; two matches identical. At level 64, proposal-status codes 0–7 counted [5779,31355,297,3731,75121,325,0,0], respectively support exhaustion, placement rejection, invisible, exact-stratum mismatch, caliper mismatch, qualified, validation error, hard error.
 PASS / FAIL / OUTCOME: FAIL — permanent historical audit-only result.
 Failure classification: `targeted_control_common_support_failure`.
-Unlocked next node: At the time, none without a new user decision. That historical decision was later replaced by the E25-new contract; current E46 prerequisite is E45A-new PASS.
+Unlocked next node: At the time, none without a new user decision. Later decisions first replaced that stop with E25-new and then permanently retired the whole E45A family; E46 is now optional.
 Invalidated downstream evidence: It did not change E26, renderer, or production control distribution and did not run a source classifier. It cannot qualify the current E25-new distribution.
 Descriptive observations: Even 64 targeted proposals per real unit yielded only 212 pairs; occlusion remained the largest imbalance.
-Notes: State-machine dependency split was E45A → E46, E45B → E48, and (E46,E48) → E49.
+Notes: Historical dependency split was E45A → E46 and E45B → E48. The current route retains only E45B-v2 → E48 → E49 as a hard chain.
 
-## E45B-v2 | Pending E25-new Normal-Control ↔ Anomaly-Proxy Pairwise Matching
+## E45B-v2 | Current E25-new Normal-Control ↔ Anomaly-Proxy Pairwise Matching
 
 Experiment ID: E45B-v2
-Design-freeze commit/hash: Pair-specific Gate 1 responsibility frozen after E44-v2; full execution freeze not yet recorded.
+Design-freeze commit/hash: Pair-specific Gate 1 responsibility frozen after E44-v2 and reaffirmed by the owner decision retiring E45A; full execution freeze not yet recorded.
 Execution-freeze commit/hash: Not yet frozen or executed.
 Date: Not executed.
 Git commit / clean state: Not applicable.
 Data identities: E25-new normal-control and anomaly-proxy units from a pair-specific train/201 audit bank. Capacity ladder, if needed: 512→1,024→2,048; only new suffixes at each level.
 Input artifact hashes: E25-new and E38-v2–E44-v2 prerequisites; exact E45B-v2 bank/output hashes do not exist.
 Random namespaces / seeds: To be frozen under the pair-specific bank; no execution identities exist.
-Command and resolved config: Candidate selection may use only frozen matching covariates, never E48 output. Retain E45B exact strata, five calipers, complete legal edges, deterministic maximum-cardinality first objective, normalized-covariate-imbalance second objective, no reuse, and hash ties. If capacity 2,048 remains insufficient, stop without changing calipers. This node must PASS before E48. It need not wait for E46, but current state-machine execution stopped before it began.
+Command and resolved config: Candidate selection may use only frozen matching covariates, never E48 output. Retain E45B exact strata, five calipers, complete legal edges, deterministic maximum-cardinality first objective, normalized-covariate-imbalance second objective, no reuse, and hash ties. If capacity 2,048 remains insufficient, stop without changing calipers. This node must PASS before E48. E45A and E46 are not prerequisites.
 Resource and disk preflight: Not executed.
 Artifacts and hashes: None.
 Primary construct: Pairwise common support between E25-new controls and proxies for E48.
-Primary result: Not executed because E45A-new formally failed and the state machine stopped.
-PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
+Primary result: Not executed. The earlier stop at E45A has been removed by owner decision.
+PASS / FAIL / OUTCOME: OUTCOME — CURRENT FORMAL NODE / NOT EXECUTED.
 Failure classification: Not applicable.
 Unlocked next node: E48 only after PASS.
 Invalidated downstream evidence: Historical E45B PASS is invalid for the new control distribution.
 Descriptive observations: None.
-Notes: The current stop does not constitute E45B-v2 FAIL.
+Notes: The current state does not constitute E45B-v2 FAIL. E45B-v2 is now the next formal experiment; this protocol revision does not itself authorize or count as execution.
 
 ## E45-V1 | Optional Blinded Human Source Discrimination
 
@@ -3039,64 +3060,64 @@ Design-freeze commit/hash: Optional nonblocking design; commit not recorded.
 Execution-freeze commit/hash: Not executed.
 Date: Not executed.
 Git commit / clean state: Not applicable.
-Data identities: Blinded panels generated from fixed E45 matched units, if a valid matched set exists.
+Data identities: Optional blinded panels from a separately frozen diagnostic real/control sample, if this diagnostic is ever commissioned.
 Input artifact hashes: None for a completed execution.
 Random namespaces / seeds: Fixed panel identities would inherit E45; not executed.
-Command and resolved config: Without two independent human reviewers, do not adjudicate. This result cannot replace E46 and cannot block E46.
+Command and resolved config: Without two independent human reviewers, do not adjudicate. This result cannot replace E46 and cannot block Gate 1.
 Resource and disk preflight: Not executed.
 Artifacts and hashes: None.
 Primary construct: Optional human ability to identify source from matched local patches.
 Primary result: No formal adjudication recorded.
 PASS / FAIL / OUTCOME: OUTCOME — optional, nonblocking, not executed.
 Failure classification: Not applicable.
-Unlocked next node: None; E46 depends on E45A, not this node.
+Unlocked next node: None.
 Invalidated downstream evidence: None.
 Descriptive observations: None.
 Notes: Two independent reviewers are required for any formal score.
 
-## E46 | Real-Normal versus Rendered Normal-Control Source Classification
+## E46 | Optional Real-Normal versus Rendered Normal-Control Source Diagnostic
 
 Experiment ID: E46
-Design-freeze commit/hash: Frozen before Gate 1 matching; commit not recorded.
-Execution-freeze commit/hash: Not executed; locked by E45A-new FAIL.
+Design-freeze commit/hash: The former blocking matched-classification design is retired. A nonblocking diagnostic role is frozen by the owner decision; its exact sampling and execution identities are not yet frozen.
+Execution-freeze commit/hash: Not executed; optional diagnostic only.
 Date: Not executed.
 Git commit / clean state: Not applicable.
-Data identities: E45A-matched real-normal and rendered normal-control units; no current qualifying matched set exists.
+Data identities: If executed, use a separately preregistered reasonable shared-support subset of train/201 real-normal and E25-new rendered controls. No strict-pair, ESS≥256, transport, or natural-frequency-equivalence qualification is required. The existing E45A-overlap artifact may be reported as historical sensitivity evidence but may not silently define a new formal diagnostic sample.
 Input artifact hashes: None for execution.
 Random namespaces / seeds: Five folds grouped by center frame; entity-frame bootstrap 2,000 times. Exact seeds not restated here.
-Command and resolved config: Models: standardized L2 logistic regression and decision tree depth 3 with `min_samples_leaf=64`. Inputs only sensor-frame x/y/z, intensity, beam, range, and local density. Take at most 64 points per entity-frame by point-identity hash; point weight $1/n_{unit}$ so each unit has equal total weight. Five-fold split grouped by center frame; no frame crosses folds. Report ROC-AUC, balanced accuracy, and recall per class, with 2,000 entity-frame bootstrap resamples. Source-leakage FAIL if either frozen model has 95% lower confidence bound AUC ≥0.65 or 95% lower confidence bound balanced accuracy ≥0.65; otherwise PASS. The rule does not demand exactly random classification, only excludes stable practical low-capacity separation.
+Command and resolved config: If commissioned, freeze the diagnostic sampling rule before classification. Preserve the former low-capacity models unless a later diagnostic design explicitly versions them: standardized L2 logistic regression and depth-3 decision tree with `min_samples_leaf=64`; inputs sensor-frame x/y/z, intensity, beam, range, and local density; at most 64 identity-hash points per entity-frame; center-frame grouped five-fold evaluation and entity-frame bootstrap. Report AUC, balanced accuracy, class recall, uncertainty, feature ablation, and observation-domain limitations. The former 0.65 criteria may be retained as descriptive reference values but no E46 outcome is PASS/FAIL for Gate 1. Real/rendered source identifiability does not by itself establish a label shortcut because rendered controls have label 0 and rendered proxies have label 1.
 Resource and disk preflight: Not executed.
 Artifacts and hashes: None.
-Primary construct: Stable practical low-level source fingerprint between strictly matched real-normal and rendered normal-control.
-Primary result: Not executed because E45A-new failed common-support qualification.
-PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
+Primary construct: Descriptive low-level source identifiability between natural normal observations and rendered normal controls within a stated shared-support diagnostic domain.
+Primary result: Not executed; no blocking qualification is required.
+PASS / FAIL / OUTCOME: OUTCOME — OPTIONAL NONBLOCKING DIAGNOSTIC / NOT EXECUTED.
 Failure classification: Not applicable.
-Unlocked next node: PASS would unlock E48; FAIL would unlock E47.
-Invalidated downstream evidence: E49 and all post-Gate-1 nodes remain locked.
+Unlocked next node: None. Strong source identifiability may motivate optional E47 attribution but cannot block E49 or E50.
+Invalidated downstream evidence: None by itself. A diagnosed direct implementation error in already-qualified renderer mechanics would require a separately justified versioned repair, but ordinary scene/placement distribution differences do not invalidate Gate 1.
 Descriptive observations: None.
-Notes: A classifier must not be run on an unqualified matched set.
+Notes: Do not describe source identifiability as anomaly-label predictability. E46 is outside the Gate 1 conjunction.
 
-## E47 | Source-Fingerprint Attribution and Single Repair
+## E47 | Optional Source-Difference Attribution
 
 Experiment ID: E47
 Design-freeze commit/hash: Conditional design frozen; commit not recorded.
 Execution-freeze commit/hash: Not executed.
 Date: Not executed.
 Git commit / clean state: Not applicable.
-Data identities: The same E45 matched set as a failed E46, if that condition occurs.
+Data identities: The same separately frozen diagnostic sample as E46, if optional attribution is commissioned.
 Input artifact hashes: None.
 Random namespaces / seeds: Same models, folds, and bootstrap as E46.
-Command and resolved config: Run coordinate-only, intensity-only, beam/range-only, density-only, and leave-one-feature-group-out variants. Attribute by AUC decrease relative to full features and single-group lower confidence bounds. Output exactly one earliest repair node: E38/39 return calibration, E40 intensity, E41 empty-ray, E42/44 placement/matching, or E35 implementation. If several groups leak strongly, one shared-renderer repair is allowed, followed by sequential rerun from the earliest affected node through E46. Do not train AJAE. Attribution completion itself is not Gate 1 PASS.
+Command and resolved config: Run coordinate-only, intensity-only, beam/range-only, density-only, and leave-one-feature-group-out variants. Separate renderer-mechanics evidence from placement/scene-distribution evidence. Attribution is descriptive by default and may not automatically route to a renderer repair. Only a direct contradiction of an already-qualified mechanical semantic can justify a versioned return to the affected mechanical node.
 Resource and disk preflight: Not executed.
 Artifacts and hashes: None.
-Primary construct: Identify the earliest mechanism responsible for an E46 source fingerprint.
+Primary construct: Describe which low-level feature groups contribute to optional E46 source identifiability.
 Primary result: Not executed because E46 has not run.
-PASS / FAIL / OUTCOME: OUTCOME — LOCKED / CONDITIONAL.
+PASS / FAIL / OUTCOME: OUTCOME — OPTIONAL NONBLOCKING DIAGNOSTIC / NOT EXECUTED.
 Failure classification: Not applicable.
-Unlocked next node: A single versioned repair route if E46 FAILs.
-Invalidated downstream evidence: A repair invalidates every affected node from the earliest attribution through E46.
+Unlocked next node: None automatically.
+Invalidated downstream evidence: None unless a direct implementation contradiction is separately established.
 Descriptive observations: None.
-Notes: This node cannot itself qualify Gate 1.
+Notes: This node cannot qualify or fail Gate 1.
 
 ## E48 | Normal-Control versus Proxy Low-Level Difficulty
 
@@ -3115,7 +3136,7 @@ Primary construct: Whether low-level control/proxy classification is nearly satu
 Primary result: Not executed.
 PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
 Failure classification: Not applicable.
-Unlocked next node: PASS contributes to E49; FAIL permits only redesign of hard proxy and invalidates relevant E20 and E42–E48 evidence.
+Unlocked next node: PASS unlocks E49 directly; FAIL permits only redesign of the label-correlated proxy path and invalidates relevant E20 and E42–E48 evidence.
 Invalidated downstream evidence: E49 remains locked.
 Descriptive observations: None.
 Notes: Historical E45B does not satisfy the new-distribution prerequisite.
@@ -3127,20 +3148,20 @@ Design-freeze commit/hash: Gate conjunction frozen; commit not recorded.
 Execution-freeze commit/hash: Not executed.
 Date: Not executed.
 Git commit / clean state: Not applicable.
-Data identities: Valid E08–E48 evidence under one compatible current route.
+Data identities: Valid current hard evidence through E44 plus E45B-v2 and E48 under one compatible route; optional E45A/E46/E47 artifacts are excluded from adjudication.
 Input artifact hashes: No complete current evidence set exists.
 Random namespaces / seeds: Inherited from prerequisites.
-Command and resolved config: PASS requires canonical rays, single-published-return semantics, E23–E37 mechanics, E45 matching, E46 leakage audit, and E48 difficulty all to PASS. Optional human nodes are excluded from the conjunction. Any key FAIL returns to the earliest failed node and locks E50 onward.
+Command and resolved config: PASS requires the compatible current canonical-ray and renderer-mechanics evidence through E44, E45B-v2 control/proxy qualification, and E48 rendered-label-shortcut audit to PASS. E45A family, E45-V1, E46, and E47 are historical or optional diagnostics and are excluded from the conjunction. Any remaining hard-node FAIL returns to its directly affected construct and locks E50 onward.
 Resource and disk preflight: Not executed.
 Artifacts and hashes: None.
 Primary construct: Conjunctive Gate 1 validity before STU feature-interface and modeling phases.
-Primary result: Not executed because E45A-new failed and E46/E45B-v2/E48 remain locked.
+Primary result: Not executed because E45B-v2 and E48 have not executed. E45A and E46 no longer block.
 PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
 Failure classification: Not applicable.
 Unlocked next node: E50 only after PASS.
 Invalidated downstream evidence: E50 onward remains locked.
 Descriptive observations: None.
-Notes: Current formal stop is upstream at E45A-new.
+Notes: Current formal node is E45B-v2, followed by E48 and E49.
 
 # Phase 5 | Frozen STU Point Interface and Five-Frame Coordinates
 
@@ -4462,7 +4483,7 @@ Notes: Only E104 completion closes the full chain from counterfactual world thro
 
 ## Gate 1 | Is the Renderer Qualified to Generate Training Supervision?
 
-Every critical condition in E08–E49 must pass. Ordinary distribution differences in E38–E44 do not independently fail the gate. Gate 1 substantively requires correct mechanical semantics, valid E45 strict matching, no stable low-capacity source fingerprint in E46, and no near-saturation in E48. Failure returns to the earliest explanatory node. High B1 performance cannot retroactively prove the renderer credible.
+Every current hard condition in E08–E44, E45B-v2, E48, and E49 must pass. Ordinary real/control distribution differences do not independently fail the gate. Gate 1 substantively requires correct ray/renderer mechanics and no near-saturated low-level shortcut between rendered normal-controls and rendered anomaly-proxies. E45A variants and E46/E47 are historical or optional diagnostics, not hard conditions. Failure returns only to the directly affected construct. High B1 performance cannot retroactively repair a mechanical or direct rendered-label-shortcut FAIL.
 
 ## Gate 2 | Is Anomaly-Proxy Supervision Effective?
 
@@ -4513,7 +4534,7 @@ Notes:
 # 6. How to Advance AJAE with This State Machine
 
 1. The authoritative status is E25-new PASS and E26-v2 PASS; Phase 2 under the new normal-control distribution is closed.
-2. Historical E23 through old E26 and their subsequent E27–E37 mechanical qualifications remain. The current work is to refresh E38–E44 that depend on the new control distribution.
+2. E27–E37 mechanical qualifications and the E38-v2–E44-v2 refresh remain valid. The current formal work is E45B-v2, followed by E48 and E49. E45A is permanently stopped; E46/E47 are optional diagnostics.
 3. Every later phase first completes its whole-phase design freeze, then executes its nodes.
 4. Preflight checks only identity, support, schema, interface, and resources; it does not inspect formal outcomes.
 5. Classify FAIL using the five frozen categories. A `descriptive_deviation` is recorded and execution continues; it cannot create a new hard gate.
@@ -4522,6 +4543,6 @@ Notes:
 
 The main chain from the current route is:
 
-E38 → … → E44 → {E45A-new → E46; E45B-v2 → E48} → E49 → E50 → … → E77 → E78 → … → E84 → E85 → … → E98 → E99 → … → E104.
+E38 → … → E44 → E45B-v2 → E48 → E49 → E50 → … → E77 → E78 → … → E84 → E85 → … → E98 → E99 → … → E104.
 
 Only completion of E104 means that AJAE, under the current definition, has closed the complete chain from counterfactual worlds and renderer through model, development evidence, real-OOD confirmation, and hidden testing.
