@@ -251,6 +251,7 @@ def load_stu_weights(model: nn.Module, checkpoint: Path | str) -> None:
 class STUVoxelEvidence:
     """Assigned STU evidence on the sparse voxel rows."""
 
+    assigned_query: Tensor
     normal_evidence: Tensor
     reliability_assign: Tensor
     reliability_noobj: Tensor
@@ -300,6 +301,7 @@ def assigned_stu_evidence(
     ):
         _finite(name, value)
     return STUVoxelEvidence(
+        assigned_query=assigned_query,
         normal_evidence=normal_evidence,
         reliability_assign=reliability_assign,
         reliability_noobj=reliability_noobj,
@@ -312,6 +314,7 @@ class STUPointEncoding:
     """Frozen STU evidence restored to the supplied real-return order."""
 
     point_features: Tensor
+    assigned_query: Tensor
     normal_evidence: Tensor
     reliability_assign: Tensor
     reliability_noobj: Tensor
@@ -323,6 +326,12 @@ class STUPointEncoding:
         count = self.inverse_map.numel()
         if self.point_features.shape != (count, MASK_DIM):
             raise ModelError("STU point features must be [N,128]")
+        if self.assigned_query.dtype != torch.long or self.assigned_query.shape != (
+            count,
+        ):
+            raise ModelError("STU assigned query must be int64[N]")
+        if bool(torch.any((self.assigned_query < 0) | (self.assigned_query >= NUM_QUERIES))):
+            raise ModelError("STU assigned query is out of range")
         if self.normal_evidence.shape != (count, NUM_NORMAL_CLASSES):
             raise ModelError("STU normal evidence must be [N,19]")
         for name, value in (
@@ -342,6 +351,7 @@ class STUPointEncoding:
             raise ModelError("STU inverse map contains a negative row")
         devices = {
             self.point_features.device,
+            self.assigned_query.device,
             self.normal_evidence.device,
             self.reliability_assign.device,
             self.reliability_noobj.device,
@@ -550,6 +560,7 @@ class FrozenSTUPointEncoder(nn.Module):
         slots = torch.as_tensor(slots_np, dtype=torch.long, device=self.device)
         return STUPointEncoding(
             point_features=sparse_point_features[inverse_map].detach(),
+            assigned_query=sparse_evidence.assigned_query[inverse_map].detach(),
             normal_evidence=sparse_evidence.normal_evidence[inverse_map].detach(),
             reliability_assign=sparse_evidence.reliability_assign[
                 inverse_map

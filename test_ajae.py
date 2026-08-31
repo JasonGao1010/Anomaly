@@ -30,7 +30,12 @@ from src.evaluate import (
     load_prediction_coverage,
 )
 from src.model import AJAEPointTransformer, assigned_stu_evidence, temporal_radius_knn
-from src.qualify import PHASE5_FRAMES, independent_sparse_quantize, phase5_frame_ids
+from src.qualify import (
+    PHASE5_FRAMES,
+    e53_frame_seed,
+    independent_sparse_quantize,
+    phase5_frame_ids,
+)
 from src.protocol import (
     CAUSAL_OFFSETS,
     RELATIVE_TIMES,
@@ -384,6 +389,12 @@ def test_shared_stu_features_retain_one_final_logit_per_raw_point() -> None:
     torch.testing.assert_close(permuted, logits[order], rtol=0.0, atol=0.0)
 
 
+def test_e53_query_seed_is_bound_only_to_frozen_frame_identity() -> None:
+    assert e53_frame_seed(206, 14) == e53_frame_seed(206, 14)
+    assert len({e53_frame_seed(206, 14), e53_frame_seed(206, 41),
+                e53_frame_seed(201, 14)}) == 3
+
+
 def test_schema4_development_worlds_are_rejected_after_world_v3_freeze() -> None:
     protocol = load_protocol(PROTOCOL_PATH)
     with pytest.raises(ProtocolError, match="authoritative WorldSpec"):
@@ -484,6 +495,7 @@ def test_assigned_stu_evidence_uses_one_minimum_index_query() -> None:
     logits[0, 0] = logits[1, 1] = 5.0
     masks[:, :2] = 2.0
     evidence = assigned_stu_evidence(logits, masks)
+    torch.testing.assert_close(evidence.assigned_query, torch.zeros(2, dtype=torch.long))
     probability = logits.softmax(dim=1)
     mask_probability = torch.sigmoid(torch.tensor(2.0))
     assignment = mask_probability * probability[0, :19].max()

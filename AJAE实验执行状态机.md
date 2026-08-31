@@ -3256,19 +3256,19 @@ Notes: Synthetic cases are implementation counterexamples, not scientific data.
 ## E53 | Official Query Assignment
 
 Experiment ID: E53
-Design-freeze commit/hash: Frozen design; commit not recorded.
-Execution-freeze commit/hash: Not executed.
-Date: Not executed.
-Git commit / clean state: Not applicable.
-Data identities: Phase 5 official STU outputs plus a tie fixture.
+Design-freeze commit/hash: Original E53 construct retained. Execution runner SHA-256 `82d2ca8f94f19a134d52bf77415130cda2ef1550b3b5f24a3557d453c268ce09`; query-identity audit exposure in `src/model.py` SHA-256 `d281ae105bc02c8b7b8ad3f4c155baddb74f2d7b50ab2867bcd78ad7ed088c5f` before formal execution.
+Execution-freeze commit/hash: This record, E53 implementation, identity exposure and focused tests are committed before the formal run; resolved commit is recorded with the result.
+Date: 2026-09-01 execution freeze; formal result pending.
+Git commit / clean state: Tracked files were clean at `8480300`; untracked user-owned `PPT/` remains excluded.
+Data identities: The exact 32 E50–E52 real frames with labels forbidden, plus the frozen three-voxel exact tie fixture where q=0 and q=1 have equal assignment strength.
 Input artifact hashes: E52 SHA-256 `2e519c358133cb03fbbbafed82062906eceec071279da0149b2e6a1eac1c9a69`; scientific-array SHA-256 `2e8d2a67071b383606cdee1017406d7142d127b9a5fb6915a66ac92964249330`.
-Random namespaces / seeds: Frozen identities.
-Command and resolved config: Independently recompute softmax class, sigmoid mask, and smallest-index argmax q*. Require zero differences in query identity, 19D evidence, assignment reliability, and no-object index; tie fixture correct; two identical runs.
-Resource and disk preflight: Not executed.
+Random namespaces / seeds: Per-frame seed is the little-endian first eight SHA-256 bytes of ASCII `E53-STU-query-v1:train:{sequence_id}:{frame_id}`, reduced modulo `2^63-1`. The seed is reset before each pass, although the official evaluation branch does not subsample when it consumes all sparse rows.
+Command and resolved config: Run the unmodified official STU on CPU because the current CUDA sparse/attention path does not reproduce query outputs bitwise even under fixed seeds and deterministic-algorithm settings. Use four identity-fixed worker processes with six CPU threads each. Independently recompute class softmax, mask sigmoid, assignment strengths, minimum-index `argmax`, 19D evidence, assignment reliability and no-object reliability from captured official logits/masks; compare against the encoder's actual point-level assignment after its inverse map. All differences and tie errors must be zero and two complete output hashes must match. Command: `OMP_NUM_THREADS=6 MKL_NUM_THREADS=6 python -m src.qualify e53 --data-root /home/jasongao/Data/STU --protocol protocol.json --e52 runs/ajae/e52_raw_identity.npz --output runs/ajae/e53_query_assignment.npz --device cpu --workers 4 --threads-per-worker 6`.
+Resource and disk preflight: Checked 2026-09-01: 24 physical CPU cores in one socket with one thread per core; 23 GiB RAM with 20 GiB available; 16 GiB unused swap; no competing qualification/training process. Windows E: has 75,071,807,488 bytes remaining of 484,950,659,072 bytes, above the 5% reserve. Output is far below 1 GiB. CUDA diagnostics were excluded from evidence: two fixed-seed evaluations disagreed because of GPU operator non-determinism. A one-frame CPU no-artifact check took about 51.4 seconds per pass and reproduced the complete query/evidence hash exactly with all formula errors zero.
 Artifacts and hashes: None.
 Primary construct: Exact reproduction of official point-to-query assignment and evidence identity.
-Primary result: Not executed.
-PASS / FAIL / OUTCOME: OUTCOME — CURRENT FORMAL NODE / NOT EXECUTED.
+Primary result: Formal run pending.
+PASS / FAIL / OUTCOME: OUTCOME — EXECUTION FROZEN / NOT EXECUTED.
 Failure classification: Not applicable.
 Unlocked next node: E54 after PASS.
 Invalidated downstream evidence: E54 onward remains locked.

@@ -3394,6 +3394,23 @@
         "result": {"passed": true, "artifact_sha256": "2e519c358133cb03fbbbafed82062906eceec071279da0149b2e6a1eac1c9a69", "scientific_array_sha256": "2e8d2a67071b383606cdee1017406d7142d127b9a5fb6915a66ac92964249330", "protocol_sha256_at_execution": "f8a1a6c010268a95a784ba185744075b4f8f44a4b24a518ccf0a3f3b5b3806b9", "frames": 32, "total_real_returns": 3835507, "total_shared_voxels": 284441, "total_points_in_shared_voxels": 681251, "all_error_counts": 0, "reproduction_errors": 0, "elapsed_seconds": 30.95326317999934, "independent_read_only_validation": true},
         "unlock": "PASS; E53 unlocked"
       },
+      "E53": {
+        "status": "EXECUTION FROZEN; formal run pending",
+        "date": "2026-09-01",
+        "question": "Does the frozen encoder implement the official minimum-index point-to-query assignment and derived evidence exactly and reproducibly?",
+        "input": {"e52_artifact": "runs/ajae/e52_raw_identity.npz", "e52_artifact_sha256": "2e519c358133cb03fbbbafed82062906eceec071279da0149b2e6a1eac1c9a69", "e52_scientific_array_sha256": "2e8d2a67071b383606cdee1017406d7142d127b9a5fb6915a66ac92964249330", "frames": "exact E50-E52 32-frame identity", "labels": "forbidden", "official_stu_source_manifest_sha256": "f0cead4f5e721262f9f1c26231d116406bb4fb0a43139f22e3706be89b914891"},
+        "tie_fixture": {"voxels": 3, "equal_queries": [0, 1], "expected_assigned_query": [0, 0, 0]},
+        "random_stream": {"namespace": "E53-STU-query-v1:train:{sequence_id}:{frame_id}", "seed_rule": "little-endian first 8 SHA-256 bytes modulo 2^63-1", "reset_before_each_pass": true},
+        "execution": {"device": "cpu", "reason": "the official CUDA sparse/attention path did not reproduce query outputs bitwise under fixed seeds; the unmodified official CPU path did", "workers": 4, "threads_per_worker": 6, "frame_assignment": "fixed round-robin by frozen frame order"},
+        "implementation": {"runner": "src/qualify.py", "runner_sha256": "82d2ca8f94f19a134d52bf77415130cda2ef1550b3b5f24a3557d453c268ce09", "model_source_sha256": "d281ae105bc02c8b7b8ad3f4c155baddb74f2d7b50ab2867bcd78ad7ed088c5f", "model_change": "audit-only assigned_query exposure; no formula or AJAE input change", "execution_freeze_commit": null},
+        "command": "OMP_NUM_THREADS=6 MKL_NUM_THREADS=6 python -m src.qualify e53 --data-root /home/jasongao/Data/STU --protocol protocol.json --e52 runs/ajae/e52_raw_identity.npz --output runs/ajae/e53_query_assignment.npz --device cpu --workers 4 --threads-per-worker 6",
+        "pass_conditions": ["independent minimum-index assigned query exactly equals encoder assigned query after inverse mapping", "independent 19D evidence exactly equals encoder evidence", "independent assignment reliability exactly equals encoder value", "independent no-object reliability exactly equals encoder value", "exact tie selects query 0", "all error counts zero", "two complete output hashes reproduce exactly"],
+        "resource_preflight": {"physical_cpu_cores": 24, "threads_per_core": 1, "sockets": 1, "memory_total_gib": 23, "memory_available_gib": 20, "swap_total_gib": 16, "swap_used_gib": 0, "windows_e_total_bytes": 484950659072, "windows_e_remaining_bytes": 75071807488, "competing_experiment_process": false, "expected_output": "far below 1 GiB"},
+        "formal_repetitions": 2,
+        "artifact": "runs/ajae/e53_query_assignment.npz",
+        "result": null,
+        "unlock": "PASS unlocks E54; FAIL stops Phase 5"
+      },
       "E45B": {
         "current_validity": "historical PASS for the old normal-control distribution only; current E48 qualification is supplied separately by E45B-v2 PASS on E25-new",
         "question": "Can normal-control and anomaly-proxy support at least 1024 non-reused strictly matched pairs for E48?",
