@@ -3191,21 +3191,21 @@ Notes: No model training belongs to Phase 5.
 
 Experiment ID: E50
 Design-freeze commit/hash: Original E50 construct retained. Corrected execution implementation SHA-256 `5c8f9612af1171933f6875ea31afa68b4a5a7c65bd6c956d550e6352693197e7` before formal execution.
-Execution-freeze commit/hash: This corrected record and implementation are committed before the valid formal run; resolved commit is recorded with the result.
-Date: 2026-09-01 corrected execution freeze; valid formal result pending.
+Execution-freeze commit/hash: `1368c94d0514c532208b765bb0faea6cbd9a4b97`.
+Date: 2026-09-01 valid formal run completed.
 Git commit / clean state: Tracked files were clean at `2f25e2a8d366feab11157a73c43b7b323f02c1b9`; untracked user-owned `PPT/` is excluded from every read, command, hash and commit.
 Data identities: The lowest 16 SHA-256 ranks among legal centered frames for each sequence. Train/206 frames [14,41,98,125,189,199,272,304,329,347,378,385,386,387,407,409]; train/201 frames [16,67,176,239,245,289,337,344,416,417,423,474,479,496,524,670]. Labels are forbidden during E50.
 Input artifact hashes: Official STU 47-file Python/YAML source manifest SHA-256 `f0cead4f5e721262f9f1c26231d116406bb4fb0a43139f22e3706be89b914891`; checkpoint SHA-256 `743b10d39c4076d98533bf1e84d389ad2703016904d31146e48919618b07b67a`; restricted model-state file SHA-256 `bd62c2ace0fd13911e2ba81f4969ca6633e73ec5270ffc0b1bd61840b05f924d`; tensor-content SHA-256 `0be4805592a3d064b21655c6c6eeeb7227322c9670873345be52747b0a24d1fb`; `src/model.py` SHA-256 `f6adae23ce11c397536e5a2d2abc103865ddbeede97345398ab4619992adaeca`; `src/scene.py` SHA-256 `f55710c747d67c91b780498a8d19a1426865048c2dfe808c98a6f15bb02b88c9`.
 Random namespaces / seeds: Frame ranking namespace is exactly ASCII `E50-phase5-frame-v1:train:{sequence_id}:{frame_id}`. The namespace was selected once before any formal model output and cannot be searched or changed.
 Command and resolved config: Hook official `all_features[-1]→point_features_head`. Every selected nonempty frame must output finite `[V,128]`; output rows must equal every visible real return, STU must remain in evaluation mode with all parameters and outputs gradient-free, and both complete passes must reproduce the point-feature hashes exactly. Query classification, masks and derived evidence belong to E53–E54 and are excluded from E50 adjudication. Command: `OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python -m src.qualify e50 --data-root /home/jasongao/Data/STU --protocol protocol.json --output runs/ajae/e50_stu_features.npz --device cuda`.
 Resource and disk preflight: Checked 2026-09-01: 24 online CPU cores, 23 GiB RAM with 21 GiB available, 16 GiB unused swap, RTX 5080 Laptop GPU with 14,576 MiB free, and no competing experiment. Windows E: has 75,141,013,504 bytes remaining of 484,950,659,072 bytes, above the 5% reserve. A non-result one-frame smoke check used about 2,256 MiB GPU memory and confirmed executable `[V,128]` output; it wrote no artifact and is not evidence.
-Artifacts and hashes: No valid E50 artifact yet. The artifact SHA-256 `8fa2425bf7645390592d2709fb15dba86c9c08780518afc59ee4ed88c33515f4` was produced by the invalid over-broad implementation and is excluded from evidence; the corrected run will replace it.
+Artifacts and hashes: `runs/ajae/e50_stu_features.npz`, SHA-256 `2c2d8507df0f9e4c9984118e59c6d65a8f13835590fee5b51bed02c282c5671a`; scientific-array SHA-256 `c698f3b53d6a38f579f45fdfb4f06023f3b433d65a9f61e87c386dc2ac9090f2`. The earlier invalid artifact SHA-256 `8fa2425bf7645390592d2709fb15dba86c9c08780518afc59ee4ed88c33515f4` is excluded and was replaced.
 Primary construct: Correct official 128-dimensional high-level point-feature interface.
-Primary result: Valid formal run pending.
-PASS / FAIL / OUTCOME: OUTCOME — CORRECTED EXECUTION FROZEN / NOT EXECUTED.
-Failure classification: Not applicable to the protocol. The first implementation incorrectly added a full-encoding reproduction condition outside E50 and its output is invalid implementation evidence, not an E50 FAIL.
-Unlocked next node: E51 after a valid E50 PASS.
-Invalidated downstream evidence: E51 onward remains locked.
+Primary result: All 32 frames and 3,835,507 real returns produced finite `[V,128]` point features. Shape, finite-value, gradient, identity and reproduction errors were all zero; all 32 frame feature hashes matched across both complete passes. The run covered 3,438,697 sparse voxels and was independently recomputed from the saved artifact.
+PASS / FAIL / OUTCOME: PASS.
+Failure classification: None. The earlier implementation error remains excluded and is not an experimental result.
+Unlocked next node: E51.
+Invalidated downstream evidence: E52 onward remains locked pending E51.
 Descriptive observations: None.
 Notes: The invalid implementation run exited 1 after 31.979 seconds. Its own saved arrays show 32/32 point-feature hashes reproduced, but it failed only because the implementation also hashed later query evidence. No protocol change, seed search, feature attribution, or downstream experiment occurred.
 
@@ -3217,14 +3217,14 @@ Execution-freeze commit/hash: Not executed.
 Date: Not executed.
 Git commit / clean state: Not applicable.
 Data identities: Phase 5 real frames and analytic mapping fixtures.
-Input artifact hashes: E50 output required; none exists.
+Input artifact hashes: E50 SHA-256 `2c2d8507df0f9e4c9984118e59c6d65a8f13835590fee5b51bed02c282c5671a`; scientific-array SHA-256 `c698f3b53d6a38f579f45fdfb4f06023f3b433d65a9f61e87c386dc2ac9090f2`.
 Random namespaces / seeds: Frozen identities.
 Command and resolved config: Every valid raw return must have an in-range inverse row; recover 100% of valid points; invalid slots excluded; independently recomputed quantized coordinates and inverse map must have zero differences; two identical runs.
 Resource and disk preflight: Not executed.
 Artifacts and hashes: None.
 Primary construct: Exact inverse mapping from sparse voxels to every valid raw return.
 Primary result: Not executed.
-PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
+PASS / FAIL / OUTCOME: OUTCOME — CURRENT FORMAL NODE / NOT EXECUTED.
 Failure classification: Not applicable.
 Unlocked next node: E52 after PASS.
 Invalidated downstream evidence: E52 onward remains locked.
