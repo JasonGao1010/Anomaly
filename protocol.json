@@ -2656,8 +2656,8 @@
       }
     },
     "renderer_mechanical_qualification": {
-      "status": "Gate 1 PASS; E50-E53 valid formal runs PASS; E54 current",
-      "current_gate1_policy": {"hard_evidence": ["compatible canonical-ray and renderer mechanics through E44", "E45B-v2 rendered control/proxy qualification PASS", "E48 direct rendered-label-shortcut audit PASS"], "excluded_from_conjunction": ["all E45A variants", "E45-V1", "E46", "E47"], "rationale": "Natural real-normal observations and coverage-oriented inserted controls need not reproduce the same scene/placement distribution. Real-versus-rendered source identifiability is not equivalent to anomaly-label shortcut predictability because rendered controls and rendered proxies carry different labels.", "gate1_result": "PASS", "current_node": "E54", "next_after_pass": ["E55-E71", "Gate 2 B1 versus B0"]},
+      "status": "Gate 1 PASS; E50-E54 valid formal runs PASS; E55 current",
+      "current_gate1_policy": {"hard_evidence": ["compatible canonical-ray and renderer mechanics through E44", "E45B-v2 rendered control/proxy qualification PASS", "E48 direct rendered-label-shortcut audit PASS"], "excluded_from_conjunction": ["all E45A variants", "E45-V1", "E46", "E47"], "rationale": "Natural real-normal observations and coverage-oriented inserted controls need not reproduce the same scene/placement distribution. Real-versus-rendered source identifiability is not equivalent to anomaly-label shortcut predictability because rendered controls and rendered proxies carry different labels.", "gate1_result": "PASS", "current_node": "E55", "next_after_pass": ["E56-E71", "Gate 2 B1 versus B0"]},
       "layer_boundaries": {"E27-E28": "direct geometry outputs only", "E29": "return probability and deterministic acceptance decision only", "E30-E31": "accepted returns", "E32-E33": "nearest-return occlusion competition"},
       "E27": {
         "question": "Does the formal geometry path return the correct nearest convex-hull hit, outward finite normal and object ID for active normal-control templates when return rejection is disabled?",
@@ -3412,20 +3412,20 @@
         "unlock": "PASS; E54 unlocked"
       },
       "E54": {
-        "status": "EXECUTION FROZEN; formal run pending",
+        "status": "PASS; E55 unlocked",
         "date": "2026-09-01",
         "question": "Are the frozen 19D normal evidence and two reliability values numerically exact, finite, gradient-free and correctly broadcast from voxels to raw points?",
         "input": {"e53_artifact": "runs/ajae/e53_query_assignment.npz", "e53_artifact_sha256": "e39511b76aec4c90b6d77d22b9d5f89d57184873ddc495677c8e786ffb476a03", "e53_scientific_array_sha256": "4d079db8fd7470298333dca366eaed1c5bc552bb4e435b40d35bb87708e38145", "frames": "exact E50-E53 32-frame identity", "labels": "forbidden"},
         "reference": {"dtype": "official float32", "independent_path": "separate frozen-formula expression from captured pred_logits and pred_masks", "levels": ["sparse voxel", "inverse-mapped raw point"], "outputs": ["19D normal evidence", "assignment reliability", "no-object reliability"], "maximum_absolute_error": 1e-7},
         "execution": {"device": "cpu", "workers": 4, "threads_per_worker": 6, "frame_assignment": "fixed round-robin by frozen frame order", "seed_namespace": "E53-STU-query-v1:train:{sequence_id}:{frame_id}"},
-        "implementation": {"runner": "src/qualify.py", "runner_sha256": "f229fb8df8ebde0756fc6ec5e27c8abdff4f9e2050410cf36f0f381bfd686c5f", "model_source_sha256": "d281ae105bc02c8b7b8ad3f4c155baddb74f2d7b50ab2867bcd78ad7ed088c5f", "execution_freeze_commit": null},
+        "implementation": {"runner": "src/qualify.py", "runner_sha256": "f229fb8df8ebde0756fc6ec5e27c8abdff4f9e2050410cf36f0f381bfd686c5f", "model_source_sha256": "d281ae105bc02c8b7b8ad3f4c155baddb74f2d7b50ab2867bcd78ad7ed088c5f", "execution_freeze_commit": "0676cf41634bd6ec3cc0b8a4f732131b287b8c9f"},
         "command": "OMP_NUM_THREADS=6 MKL_NUM_THREADS=6 python -m src.qualify e54 --data-root /home/jasongao/Data/STU --protocol protocol.json --e53 runs/ajae/e53_query_assignment.npz --output runs/ajae/e54_evidence_reliability.npz --device cpu --workers 4 --threads-per-worker 6",
         "pass_conditions": ["all six voxel/point evidence and reliability maximum absolute errors <=1e-7", "inverse broadcasting differences zero", "all outputs finite", "all outputs gradient-free", "two complete output hashes reproduce exactly"],
         "resource_preflight": {"physical_cpu_cores": 24, "memory_total_gib": 23, "memory_available_gib": 21, "swap_total_gib": 16, "swap_used_gib": 0, "windows_e_total_bytes": 484950659072, "windows_e_remaining_bytes": 75070038016, "competing_experiment_process": false, "expected_output": "far below 1 GiB"},
         "formal_repetitions": 2,
         "artifact": "runs/ajae/e54_evidence_reliability.npz",
-        "result": null,
-        "unlock": "PASS unlocks E55; FAIL stops Phase 5"
+        "result": {"passed": true, "artifact_sha256": "67187b039bdafbea0d8f728a017daea043c2fdb6f7a6c7754da3998fa6173dac", "scientific_array_sha256": "53fd0985ec912a879c53d159acf73dda9e61843b5cd9c3f9a9524df4d3ccc651", "protocol_sha256_at_execution": "a296bbf3d159200d0801bb8fc8cb9b61cb4e6011f137fe35a99abd1ca9e5cfae", "frames": 32, "total_sparse_voxels": 3438697, "total_real_returns": 3835507, "maximum_absolute_error": 0.0, "all_error_counts": 0, "reproduction_errors": 0, "elapsed_seconds": 1154.5546786630002, "independent_read_only_validation": true},
+        "unlock": "PASS; E55 unlocked"
       },
       "E45B": {
         "current_validity": "historical PASS for the old normal-control distribution only; current E48 qualification is supplied separately by E45B-v2 PASS on E25-new",
