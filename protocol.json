@@ -3411,6 +3411,22 @@
         "result": {"passed": true, "artifact_sha256": "e39511b76aec4c90b6d77d22b9d5f89d57184873ddc495677c8e786ffb476a03", "scientific_array_sha256": "4d079db8fd7470298333dca366eaed1c5bc552bb4e435b40d35bb87708e38145", "protocol_sha256_at_execution": "48d8af9cc43bf8ad4b3d5ff2563403ae42f95209b94048a3268d2387ac9af923", "frames": 32, "total_sparse_voxels": 3438697, "active_queries_per_frame": [30, 49], "all_error_counts": 0, "reproduction_errors": 0, "elapsed_seconds": 994.8026928549989, "independent_read_only_validation": true},
         "unlock": "PASS; E54 unlocked"
       },
+      "E54": {
+        "status": "EXECUTION FROZEN; formal run pending",
+        "date": "2026-09-01",
+        "question": "Are the frozen 19D normal evidence and two reliability values numerically exact, finite, gradient-free and correctly broadcast from voxels to raw points?",
+        "input": {"e53_artifact": "runs/ajae/e53_query_assignment.npz", "e53_artifact_sha256": "e39511b76aec4c90b6d77d22b9d5f89d57184873ddc495677c8e786ffb476a03", "e53_scientific_array_sha256": "4d079db8fd7470298333dca366eaed1c5bc552bb4e435b40d35bb87708e38145", "frames": "exact E50-E53 32-frame identity", "labels": "forbidden"},
+        "reference": {"dtype": "official float32", "independent_path": "separate frozen-formula expression from captured pred_logits and pred_masks", "levels": ["sparse voxel", "inverse-mapped raw point"], "outputs": ["19D normal evidence", "assignment reliability", "no-object reliability"], "maximum_absolute_error": 1e-7},
+        "execution": {"device": "cpu", "workers": 4, "threads_per_worker": 6, "frame_assignment": "fixed round-robin by frozen frame order", "seed_namespace": "E53-STU-query-v1:train:{sequence_id}:{frame_id}"},
+        "implementation": {"runner": "src/qualify.py", "runner_sha256": "f229fb8df8ebde0756fc6ec5e27c8abdff4f9e2050410cf36f0f381bfd686c5f", "model_source_sha256": "d281ae105bc02c8b7b8ad3f4c155baddb74f2d7b50ab2867bcd78ad7ed088c5f", "execution_freeze_commit": null},
+        "command": "OMP_NUM_THREADS=6 MKL_NUM_THREADS=6 python -m src.qualify e54 --data-root /home/jasongao/Data/STU --protocol protocol.json --e53 runs/ajae/e53_query_assignment.npz --output runs/ajae/e54_evidence_reliability.npz --device cpu --workers 4 --threads-per-worker 6",
+        "pass_conditions": ["all six voxel/point evidence and reliability maximum absolute errors <=1e-7", "inverse broadcasting differences zero", "all outputs finite", "all outputs gradient-free", "two complete output hashes reproduce exactly"],
+        "resource_preflight": {"physical_cpu_cores": 24, "memory_total_gib": 23, "memory_available_gib": 21, "swap_total_gib": 16, "swap_used_gib": 0, "windows_e_total_bytes": 484950659072, "windows_e_remaining_bytes": 75070038016, "competing_experiment_process": false, "expected_output": "far below 1 GiB"},
+        "formal_repetitions": 2,
+        "artifact": "runs/ajae/e54_evidence_reliability.npz",
+        "result": null,
+        "unlock": "PASS unlocks E55; FAIL stops Phase 5"
+      },
       "E45B": {
         "current_validity": "historical PASS for the old normal-control distribution only; current E48 qualification is supplied separately by E45B-v2 PASS on E25-new",
         "question": "Can normal-control and anomaly-proxy support at least 1024 non-reused strictly matched pairs for E48?",

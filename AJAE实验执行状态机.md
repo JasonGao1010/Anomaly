@@ -3278,19 +3278,19 @@ Notes: Smallest index is the frozen tie rule.
 ## E54 | 19D Evidence and Reliability
 
 Experiment ID: E54
-Design-freeze commit/hash: Frozen design; commit not recorded.
-Execution-freeze commit/hash: Not executed.
-Date: Not executed.
-Git commit / clean state: Not applicable.
-Data identities: Phase 5 voxel- and point-level STU outputs.
+Design-freeze commit/hash: Original E54 construct and `1e-7` threshold retained. Execution runner SHA-256 `f229fb8df8ebde0756fc6ec5e27c8abdff4f9e2050410cf36f0f381bfd686c5f` before formal execution.
+Execution-freeze commit/hash: This record and E54 implementation are committed before the formal run; resolved commit is recorded with the result.
+Date: 2026-09-01 execution freeze; formal result pending.
+Git commit / clean state: Tracked files were clean at `c82985c`; untracked user-owned `PPT/` remains excluded.
+Data identities: The exact 32 E50–E53 real frames, their official voxel outputs and inverse-mapped real-return outputs; labels forbidden.
 Input artifact hashes: E53 SHA-256 `e39511b76aec4c90b6d77d22b9d5f89d57184873ddc495677c8e786ffb476a03`; scientific-array SHA-256 `4d079db8fd7470298333dca366eaed1c5bc552bb4e435b40d35bb87708e38145`.
-Random namespaces / seeds: Frozen identities.
-Command and resolved config: Independently recompute evidence and reliability at voxel and point levels. Numerical error ≤1e-7; correct broadcasting/inverse mapping; finite and no-gradient; two identical runs.
-Resource and disk preflight: Not executed.
+Random namespaces / seeds: Inherit the exact E53 per-frame namespace and seeds; each seed is reset before each pass.
+Command and resolved config: Reuse E53's deterministic official CPU execution and 4x6 fixed worker layout. Independently re-express the frozen softmax, sigmoid, minimum-index query, 19D evidence, assignment reliability and no-object reliability on captured official float32 tensors, then compare against both the actual voxel outputs and their actual inverse-mapped point outputs. Maximum absolute error for all six comparisons must be at most `1e-7`; all broadcast, finite-value and gradient errors must be zero; two output hashes must reproduce exactly. Command: `OMP_NUM_THREADS=6 MKL_NUM_THREADS=6 python -m src.qualify e54 --data-root /home/jasongao/Data/STU --protocol protocol.json --e53 runs/ajae/e53_query_assignment.npz --output runs/ajae/e54_evidence_reliability.npz --device cpu --workers 4 --threads-per-worker 6`.
+Resource and disk preflight: Checked 2026-09-01: 24 physical CPU cores; 23 GiB RAM with 21 GiB available; 16 GiB unused swap; no competing qualification/training process. Windows E: has 75,070,038,016 bytes remaining of 484,950,659,072 bytes, above the 5% reserve. Output is far below 1 GiB. Cross-library float64/NumPy diagnostics were rejected as implementation-mismatched comparisons because they changed the official float32 numerical semantics. The corrected one-frame no-artifact check had maximum error 0, zero finite/gradient/broadcast errors and identical hashes across two passes.
 Artifacts and hashes: None.
 Primary construct: Numerically exact 19-dimensional evidence and reliability construction.
-Primary result: Not executed.
-PASS / FAIL / OUTCOME: OUTCOME — CURRENT FORMAL NODE / NOT EXECUTED.
+Primary result: Formal run pending.
+PASS / FAIL / OUTCOME: OUTCOME — EXECUTION FROZEN / NOT EXECUTED.
 Failure classification: Not applicable.
 Unlocked next node: E55 after PASS.
 Invalidated downstream evidence: E55 onward remains locked.

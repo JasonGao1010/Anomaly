@@ -53,6 +53,9 @@ E51_ARTIFACT_SHA256 = (
 E52_ARTIFACT_SHA256 = (
     "2e519c358133cb03fbbbafed82062906eceec071279da0149b2e6a1eac1c9a69"
 )
+E53_ARTIFACT_SHA256 = (
+    "e39511b76aec4c90b6d77d22b9d5f89d57184873ddc495677c8e786ffb476a03"
+)
 E53_SEED_NAMESPACE = "E53-STU-query-v1"
 
 
@@ -243,6 +246,134 @@ def _e53_cpu_worker(
                     "frame_id": frame_id,
                     "repetitions": repetitions,
                 }
+            )
+    finally:
+        hook.remove()
+    return records
+
+
+def _e54_cpu_worker(
+    task: tuple[str, str, tuple[tuple[int, int], ...], int]
+) -> list[dict[str, object]]:
+    """Recompute voxel and point evidence on the official float32 tensors."""
+
+    data_root, protocol_path, selected, threads = task
+    torch.set_num_threads(threads)
+    torch.set_num_interop_threads(1)
+    protocol = load_protocol(protocol_path)
+    sequences = {
+        sequence_id: STUSequence.open(
+            data_root, protocol=protocol, partition="train",
+            sequence_id=sequence_id, label_mode=LabelMode.FORBIDDEN,
+        )
+        for sequence_id in sorted({item[0] for item in selected})
+    }
+    encoder = FrozenSTUPointEncoder.from_protocol(protocol).cpu().eval()
+    captured: list[object] = []
+    hook = encoder.stu.register_forward_hook(
+        lambda _module, _inputs, output: captured.append(output)
+    )
+    records: list[dict[str, object]] = []
+    try:
+        for sequence_id, frame_id in selected:
+            frame = sequences[sequence_id].source_frame(frame_id)
+            coordinates = official_stu_coordinates(frame.xyzi, frame.lidar_pose)
+            features = official_stu_features(frame.xyzi, frame.lidar_pose)
+            repetitions: list[dict[str, object]] = []
+            for _ in range(2):
+                captured.clear()
+                torch.manual_seed(e53_frame_seed(sequence_id, frame_id))
+                item_started = time.monotonic()
+                encoding = encoder(coordinates, features, frame.real_slots)
+                seconds = time.monotonic() - item_started
+                if len(captured) != 1 or not isinstance(captured[0], Mapping):
+                    raise QualificationError("E54 failed to capture one official output")
+                official_output = captured[0]
+                logits = encoder._single_prediction(
+                    official_output["pred_logits"], "pred_logits"
+                )
+                masks = encoder._single_prediction(
+                    official_output["pred_masks"], "pred_masks"
+                )
+                voxel_actual = assigned_stu_evidence(logits, masks)
+                probability = logits.softmax(dim=-1)
+                normal = probability[:, :19]
+                mask_probability = masks.sigmoid()
+                strength = mask_probability * normal.max(dim=1).values[None, :]
+                query = strength.argmax(dim=1)
+                row = torch.arange(query.numel())
+                voxel_evidence = mask_probability[row, query, None] * normal[query]
+                voxel_assignment = strength[row, query]
+                voxel_noobj = probability[query, 19]
+                inverse = encoding.inverse_map.numpy()
+                actual_arrays = (
+                    voxel_actual.normal_evidence.numpy(),
+                    voxel_actual.reliability_assign.numpy(),
+                    voxel_actual.reliability_noobj.numpy(),
+                    encoding.normal_evidence.numpy(),
+                    encoding.reliability_assign.numpy(),
+                    encoding.reliability_noobj.numpy(),
+                )
+                reference_arrays = (
+                    voxel_evidence.numpy(),
+                    voxel_assignment.numpy(),
+                    voxel_noobj.numpy(),
+                    voxel_evidence.numpy()[inverse],
+                    voxel_assignment.numpy()[inverse],
+                    voxel_noobj.numpy()[inverse],
+                )
+                maximum_errors = tuple(
+                    float(np.max(np.abs(actual.astype(np.float64) - reference)))
+                    for actual, reference in zip(
+                        actual_arrays, reference_arrays, strict=True
+                    )
+                )
+                finite_errors = int(
+                    sum(not np.isfinite(value).all() for value in actual_arrays)
+                )
+                gradient_errors = int(
+                    encoding.normal_evidence.requires_grad
+                    or encoding.reliability_assign.requires_grad
+                    or encoding.reliability_noobj.requires_grad
+                )
+                broadcast_errors = int(
+                    np.count_nonzero(
+                        voxel_actual.normal_evidence.numpy()[inverse]
+                        != encoding.normal_evidence.numpy()
+                    )
+                    + np.count_nonzero(
+                        voxel_actual.reliability_assign.numpy()[inverse]
+                        != encoding.reliability_assign.numpy()
+                    )
+                    + np.count_nonzero(
+                        voxel_actual.reliability_noobj.numpy()[inverse]
+                        != encoding.reliability_noobj.numpy()
+                    )
+                )
+                repetitions.append(
+                    {
+                        "voxel_count": int(query.numel()),
+                        "point_count": int(inverse.size),
+                        "maximum_errors": maximum_errors,
+                        "finite_errors": finite_errors,
+                        "gradient_errors": gradient_errors,
+                        "broadcast_errors": broadcast_errors,
+                        "output_hash": _array_hash(
+                            {
+                                "voxel_evidence": actual_arrays[0],
+                                "voxel_assignment": actual_arrays[1],
+                                "voxel_noobj": actual_arrays[2],
+                                "point_evidence": actual_arrays[3],
+                                "point_assignment": actual_arrays[4],
+                                "point_noobj": actual_arrays[5],
+                            }
+                        ),
+                        "seconds": seconds,
+                    }
+                )
+            records.append(
+                {"sequence_id": sequence_id, "frame_id": frame_id,
+                 "repetitions": repetitions}
             )
     finally:
         hook.remove()
@@ -1105,6 +1236,143 @@ def run_e53(
     return result
 
 
+def run_e54(
+    data_root: Path | str,
+    protocol_path: Path | str,
+    e53_path: Path | str,
+    output_path: Path | str,
+    *,
+    device: str = "cpu",
+    workers: int = 4,
+    threads_per_worker: int = 6,
+) -> dict[str, object]:
+    """Verify voxel/point evidence against an independent frozen-formula path."""
+
+    protocol_file = Path(protocol_path).expanduser().resolve(strict=True)
+    protocol = load_protocol(protocol_file)
+    e53_file = Path(e53_path).expanduser().resolve(strict=True)
+    if _sha256(e53_file) != E53_ARTIFACT_SHA256:
+        raise QualificationError("E54 input is not the frozen E53 PASS artifact")
+    with np.load(e53_file, allow_pickle=False) as e53:
+        metadata = json.loads(str(e53["metadata_json"]))
+        if not metadata.get("passed") or metadata.get("experiment") != "E53":
+            raise QualificationError("E54 input does not declare E53 PASS")
+    selected = [
+        (sequence_id, frame_id)
+        for sequence_id in (206, 201)
+        for frame_id in phase5_frame_ids(protocol, sequence_id)
+    ]
+    if any(
+        tuple(frame for sequence, frame in selected if sequence == sequence_id)
+        != PHASE5_FRAMES[sequence_id]
+        for sequence_id in (206, 201)
+    ):
+        raise QualificationError("E54 frozen frame identity changed")
+    if torch.device(device).type != "cpu":
+        raise QualificationError("E54 requires deterministic official CPU evaluation")
+    if workers != 4 or threads_per_worker != 6:
+        raise QualificationError("E54 requires the frozen 4x6 CPU execution layout")
+
+    count = len(selected)
+    sequence_array = np.asarray([item[0] for item in selected], dtype=np.int16)
+    frame_array = np.asarray([item[1] for item in selected], dtype=np.int16)
+    voxel_count = np.zeros((2, count), dtype=np.int32)
+    point_count = np.zeros_like(voxel_count)
+    maximum_error = np.zeros((2, count, 6), dtype=np.float64)
+    finite_errors = np.zeros_like(voxel_count)
+    gradient_errors = np.zeros_like(voxel_count)
+    broadcast_errors = np.zeros_like(voxel_count)
+    output_hash = np.empty((2, count), dtype="S64")
+    seconds = np.zeros((2, count), dtype=np.float64)
+
+    chunks = tuple(tuple(selected[offset::workers]) for offset in range(workers))
+    tasks = tuple(
+        (str(Path(data_root).expanduser().resolve()), str(protocol_file), chunk,
+         threads_per_worker)
+        for chunk in chunks
+    )
+    started = time.monotonic()
+    context = multiprocessing.get_context("spawn")
+    with concurrent.futures.ProcessPoolExecutor(
+        max_workers=workers, mp_context=context
+    ) as executor:
+        worker_outputs = tuple(executor.map(_e54_cpu_worker, tasks))
+    index_by_identity = {identity: index for index, identity in enumerate(selected)}
+    for worker_output in worker_outputs:
+        for record in worker_output:
+            index = index_by_identity[(int(record["sequence_id"]), int(record["frame_id"]))]
+            for repetition, values in enumerate(record["repetitions"]):
+                voxel_count[repetition, index] = int(values["voxel_count"])
+                point_count[repetition, index] = int(values["point_count"])
+                maximum_error[repetition, index] = values["maximum_errors"]
+                finite_errors[repetition, index] = int(values["finite_errors"])
+                gradient_errors[repetition, index] = int(values["gradient_errors"])
+                broadcast_errors[repetition, index] = int(values["broadcast_errors"])
+                output_hash[repetition, index] = str(values["output_hash"])
+                seconds[repetition, index] = float(values["seconds"])
+    elapsed = time.monotonic() - started
+
+    tolerance = 1e-7
+    tolerance_errors = int(np.count_nonzero(maximum_error > tolerance))
+    reproduction_errors = int(np.count_nonzero(output_hash[0] != output_hash[1]))
+    count_reproduction_errors = int(
+        not np.array_equal(voxel_count[0], voxel_count[1])
+        or not np.array_equal(point_count[0], point_count[1])
+        or not np.array_equal(maximum_error[0], maximum_error[1])
+    )
+    hard_errors = int(
+        finite_errors.sum()
+        + gradient_errors.sum()
+        + broadcast_errors.sum()
+        + tolerance_errors
+        + reproduction_errors
+        + count_reproduction_errors
+    )
+    arrays = {
+        "sequence_id": sequence_array,
+        "frame_id": frame_array,
+        "voxel_count": voxel_count,
+        "point_count": point_count,
+        "maximum_absolute_error": maximum_error,
+        "finite_errors": finite_errors,
+        "gradient_errors": gradient_errors,
+        "broadcast_errors": broadcast_errors,
+        "output_sha256": output_hash,
+        "frame_seconds": seconds,
+    }
+    result: dict[str, object] = {
+        "experiment": "E54",
+        "passed": hard_errors == 0,
+        "failure_classification": None
+        if hard_errors == 0
+        else "evidence_reliability_numerical_failure",
+        "frames": count,
+        "formal_repetitions": 2,
+        "e53_artifact_sha256": E53_ARTIFACT_SHA256,
+        "protocol_sha256": _sha256(protocol_file),
+        "device": "cpu",
+        "workers": workers,
+        "threads_per_worker": threads_per_worker,
+        "tolerance": tolerance,
+        "total_sparse_voxels": int(voxel_count[0].sum()),
+        "total_real_returns": int(point_count[0].sum()),
+        "maximum_absolute_error": float(maximum_error.max()),
+        "tolerance_errors": tolerance_errors,
+        "finite_errors": int(finite_errors.sum()),
+        "gradient_errors": int(gradient_errors.sum()),
+        "broadcast_errors": int(broadcast_errors.sum()),
+        "reproduction_errors": reproduction_errors + count_reproduction_errors,
+        "elapsed_seconds": elapsed,
+        "scientific_array_sha256": _array_hash(arrays),
+        "claim_limit": (
+            "E54 qualifies only the frozen 19D evidence and reliability numerics "
+            "and inverse broadcasting."
+        ),
+    }
+    _save(Path(output_path).expanduser().resolve(), arrays, result)
+    return result
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -1133,6 +1401,14 @@ def _parser() -> argparse.ArgumentParser:
     e53.add_argument("--device", default="cpu")
     e53.add_argument("--workers", type=int, default=4)
     e53.add_argument("--threads-per-worker", type=int, default=6)
+    e54 = commands.add_parser("e54")
+    e54.add_argument("--data-root", type=Path, required=True)
+    e54.add_argument("--protocol", type=Path, default=PROJECT_ROOT / "protocol.json")
+    e54.add_argument("--e53", type=Path, required=True)
+    e54.add_argument("--output", type=Path, required=True)
+    e54.add_argument("--device", default="cpu")
+    e54.add_argument("--workers", type=int, default=4)
+    e54.add_argument("--threads-per-worker", type=int, default=6)
     return parser
 
 
@@ -1169,6 +1445,18 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.data_root,
             args.protocol,
             args.e52,
+            args.output,
+            device=args.device,
+            workers=args.workers,
+            threads_per_worker=args.threads_per_worker,
+        )
+        print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        return 0 if result["passed"] else 1
+    if args.command == "e54":
+        result = run_e54(
+            args.data_root,
+            args.protocol,
+            args.e53,
             args.output,
             device=args.device,
             workers=args.workers,
