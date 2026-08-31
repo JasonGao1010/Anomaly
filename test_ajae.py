@@ -356,6 +356,34 @@ def test_independent_sparse_quantize_preserves_first_occurrence_rows() -> None:
     np.testing.assert_array_equal(inverse, [0, 1, 0, 2, 3])
 
 
+def test_shared_stu_features_retain_one_final_logit_per_raw_point() -> None:
+    protocol = load_protocol(PROTOCOL_PATH)
+    torch.manual_seed(5200)
+    model = AJAEPointTransformer.from_protocol(protocol).eval()
+    coordinates = torch.tensor(
+        [[0.001, 0.0, 0.0], [0.049, 0.0, 0.0],
+         [0.101, 0.0, 0.0], [0.149, 0.0, 0.0]]
+    )
+    times = torch.zeros(4, dtype=torch.long)
+    shared_features = torch.ones(4, 128)
+    evidence = torch.zeros(4, 19)
+    reliability = torch.zeros(4)
+    intensity = torch.tensor([0.1, 0.9, 0.2, 0.8])
+    order = torch.tensor([2, 0, 3, 1])
+    with torch.no_grad():
+        logits = model(
+            coordinates, times, shared_features, evidence, reliability,
+            reliability, intensity, cross_frame_enabled=False,
+        )
+        permuted = model(
+            coordinates[order], times[order], shared_features[order],
+            evidence[order], reliability[order], reliability[order],
+            intensity[order], cross_frame_enabled=False,
+        )
+    assert logits.shape == (4,)
+    torch.testing.assert_close(permuted, logits[order], rtol=0.0, atol=0.0)
+
+
 def test_schema4_development_worlds_are_rejected_after_world_v3_freeze() -> None:
     protocol = load_protocol(PROTOCOL_PATH)
     with pytest.raises(ProtocolError, match="authoritative WorldSpec"):

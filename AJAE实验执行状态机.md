@@ -3234,19 +3234,19 @@ Notes: None.
 ## E52 | Raw-Point Identity under Shared Voxels
 
 Experiment ID: E52
-Design-freeze commit/hash: Frozen design; commit not recorded.
-Execution-freeze commit/hash: Not executed.
-Date: Not executed.
-Git commit / clean state: Not applicable.
-Data identities: Real shared-voxel cases and synthetic counterexamples.
+Design-freeze commit/hash: Original E52 construct retained. Execution implementation SHA-256 `182edfc12ee4c5340342233c83016287e0a09c0de2a6785fcd9ed64261b23f13` before formal execution.
+Execution-freeze commit/hash: This record, E52 implementation and focused permutation test are committed before the formal run; resolved commit is recorded with the result.
+Date: 2026-09-01 execution freeze; formal result pending.
+Git commit / clean state: Tracked files were clean at `227e138`; untracked user-owned `PPT/` remains excluded.
+Data identities: The exact 32 E50–E51 real frames with source labels required only for identity checking, plus a four-point counterexample with x coordinates `[0.001,0.049,0.101,0.149]` metres, shared all-one 128D STU content, intensities `[0.1,0.9,0.2,0.8]`, raw labels `[10,2,40,2]`, ray IDs `[11,12,13,14]`, and permutation `[2,0,3,1]`.
 Input artifact hashes: E51 SHA-256 `bca33539ea2c3cb9d815cc4586d98fc356f134d40351e63cbb8d2e1c256ccafa`; scientific-array SHA-256 `02e22e4cc87f5f2bde0f84712fe624930ef2a6a8f52c7b0752fdc1c800f4fee2`.
-Random namespaces / seeds: Frozen fixture identities.
-Command and resolved config: Points may share one 128D feature, but every raw point must retain its own frame/ray, XYZ, intensity, label, and final-logit location. No identity merging; two identical runs.
-Resource and disk preflight: Not executed.
+Random namespaces / seeds: The mechanical AJAE counterexample initialization seed is exactly 5200; no seed search or model training occurs.
+Command and resolved config: On all frozen real frames, enumerate sparse rows with multiplicity greater than one, confirm all expanded point features within each shared row are exactly identical, and independently verify that window frame, raw slot, calibrated canonical ray, XYZ, intensity and packed label remain aligned one-for-one. Shared points must retain distinct `(slot,ray)` identities. The four-point counterexample must yield one finite final logit per raw row, reproduce exactly twice, and permute exactly with the frozen point permutation. Command: `OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python -m src.qualify e52 --data-root /home/jasongao/Data/STU --protocol protocol.json --e51 runs/ajae/e51_inverse_mapping.npz --output runs/ajae/e52_raw_identity.npz --device cuda`.
+Resource and disk preflight: Checked 2026-09-01: 24 CPU cores; 23 GiB RAM with 21 GiB available; 16 GiB unused swap; RTX 5080 Laptop GPU with 14,619 MiB free and 12% utilization; no competing qualification/training process. Windows E: has 75,073,314,816 bytes remaining of 484,950,659,072 bytes, above the 5% reserve. Output is far below 1 GiB. A one-frame no-artifact implementation check found 6,700 shared voxels and 13,859 points in shared voxels with zero feature or identity errors; it is not formal evidence.
 Artifacts and hashes: None.
 Primary construct: Preservation of individual raw-return identity despite shared sparse-voxel features.
-Primary result: Not executed.
-PASS / FAIL / OUTCOME: OUTCOME — CURRENT FORMAL NODE / NOT EXECUTED.
+Primary result: Formal run pending.
+PASS / FAIL / OUTCOME: OUTCOME — EXECUTION FROZEN / NOT EXECUTED.
 Failure classification: Not applicable.
 Unlocked next node: E53 after PASS.
 Invalidated downstream evidence: E53 onward remains locked.

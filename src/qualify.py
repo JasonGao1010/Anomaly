@@ -17,12 +17,14 @@ import torch
 from .model import (
     DEFAULT_STU_REPOSITORY,
     MASK_DIM,
+    AJAEPointTransformer,
     FrozenSTUPointEncoder,
     stu_source_manifest,
     stu_weight_identity,
 )
 from .protocol import load_protocol
 from .scene import (
+    ExperimentCondition,
     LabelMode,
     STUSequence,
     official_stu_coordinates,
@@ -41,6 +43,9 @@ FROZEN_STU_SOURCE_MANIFEST_SHA256 = (
 )
 E50_ARTIFACT_SHA256 = (
     "2c2d8507df0f9e4c9984118e59c6d65a8f13835590fee5b51bed02c282c5671a"
+)
+E51_ARTIFACT_SHA256 = (
+    "bca33539ea2c3cb9d815cc4586d98fc356f134d40351e63cbb8d2e1c256ccafa"
 )
 
 
@@ -506,6 +511,311 @@ def run_e51(
     return result
 
 
+def run_e52(
+    data_root: Path | str,
+    protocol_path: Path | str,
+    e51_path: Path | str,
+    output_path: Path | str,
+    *,
+    device: str = "cuda",
+) -> dict[str, object]:
+    """Verify raw-point identity survives shared STU sparse voxels."""
+
+    protocol_file = Path(protocol_path).expanduser().resolve(strict=True)
+    protocol = load_protocol(protocol_file)
+    e51_file = Path(e51_path).expanduser().resolve(strict=True)
+    if _sha256(e51_file) != E51_ARTIFACT_SHA256:
+        raise QualificationError("E52 input is not the frozen E51 PASS artifact")
+    with np.load(e51_file, allow_pickle=False) as e51:
+        e51_metadata = json.loads(str(e51["metadata_json"]))
+        if not e51_metadata.get("passed") or e51_metadata.get("experiment") != "E51":
+            raise QualificationError("E52 input does not declare E51 PASS")
+
+    selected: list[tuple[int, int]] = []
+    for sequence_id in (206, 201):
+        frame_ids = phase5_frame_ids(protocol, sequence_id)
+        if frame_ids != PHASE5_FRAMES[sequence_id]:
+            raise QualificationError("E52 frozen frame identity changed")
+        selected.extend((sequence_id, frame_id) for frame_id in frame_ids)
+    runtime_device = torch.device(device)
+    if runtime_device.type == "cuda" and not torch.cuda.is_available():
+        raise QualificationError("E52 requested CUDA but CUDA is unavailable")
+    sequences = {
+        sequence_id: STUSequence.open(
+            data_root,
+            protocol=protocol,
+            partition="train",
+            sequence_id=sequence_id,
+            label_mode=LabelMode.REQUIRED,
+        )
+        for sequence_id in (206, 201)
+    }
+    try:
+        from .evaluate import _protocol_slot_to_ray
+    except ImportError as error:  # pragma: no cover - package execution is required
+        raise QualificationError("E52 cannot load the frozen ray mapping") from error
+    slot_to_ray, ray_mapping_digest, calibration_sha256 = _protocol_slot_to_ray(
+        protocol
+    )
+    encoder = FrozenSTUPointEncoder.from_protocol(protocol).to(runtime_device)
+    encoder.eval()
+
+    count = len(selected)
+    sequence_array = np.asarray([item[0] for item in selected], dtype=np.int16)
+    frame_array = np.asarray([item[1] for item in selected], dtype=np.int16)
+    real_count = np.zeros((2, count), dtype=np.int32)
+    shared_voxel_count = np.zeros_like(real_count)
+    shared_point_count = np.zeros_like(real_count)
+    shared_feature_errors = np.zeros_like(real_count)
+    frame_identity_errors = np.zeros_like(real_count)
+    slot_identity_errors = np.zeros_like(real_count)
+    ray_identity_errors = np.zeros_like(real_count)
+    coordinate_identity_errors = np.zeros_like(real_count)
+    intensity_identity_errors = np.zeros_like(real_count)
+    label_identity_errors = np.zeros_like(real_count)
+    shared_identity_collision_errors = np.zeros_like(real_count)
+    identity_hash = np.empty((2, count), dtype="S64")
+    seconds = np.zeros((2, count), dtype=np.float64)
+
+    started = time.monotonic()
+    for repetition in range(2):
+        for index, (sequence_id, frame_id) in enumerate(selected):
+            sequence = sequences[sequence_id]
+            frame = sequence.source_frame(frame_id)
+            mapping = slot_to_ray(frame)
+            window = sequence.window(
+                frame_id,
+                condition=ExperimentCondition.B0,
+                canonical_ray_by_slot=mapping,
+                ray_mapping_audited=True,
+                ray_mapping_digest=ray_mapping_digest,
+            )
+            if frame.labels is None or window.labels is None:
+                raise QualificationError("E52 requires source and window labels")
+            coordinates = official_stu_coordinates(frame.xyzi, frame.lidar_pose)
+            features = official_stu_features(frame.xyzi, frame.lidar_pose)
+            item_started = time.monotonic()
+            encoding = encoder(coordinates, features, frame.real_slots)
+            if runtime_device.type == "cuda":
+                torch.cuda.synchronize(runtime_device)
+            seconds[repetition, index] = time.monotonic() - item_started
+
+            inverse = encoding.inverse_map
+            sparse_counts = torch.bincount(inverse)
+            shared_rows = sparse_counts > 1
+            point_is_shared = shared_rows[inverse]
+            order = torch.argsort(inverse)
+            sorted_inverse = inverse[order]
+            adjacent_shared = sorted_inverse[1:] == sorted_inverse[:-1]
+            adjacent_feature_difference = torch.any(
+                encoding.point_features[order][1:]
+                != encoding.point_features[order][:-1],
+                dim=1,
+            )
+            slots = frame.real_slots
+            rays = mapping[slots]
+            source_xyz = frame.xyzi[slots, :3]
+            source_intensity = frame.xyzi[slots, 3]
+            source_labels = frame.labels.packed[slots]
+
+            real_count[repetition, index] = frame.real_count
+            shared_voxel_count[repetition, index] = int(shared_rows.sum().item())
+            shared_point_count[repetition, index] = int(point_is_shared.sum().item())
+            shared_feature_errors[repetition, index] = int(
+                (adjacent_shared & adjacent_feature_difference).sum().item()
+            )
+            frame_identity_errors[repetition, index] = int(
+                np.count_nonzero(window.points.source_frame != frame_id)
+            )
+            slot_identity_errors[repetition, index] = int(
+                np.count_nonzero(window.points.source_slot != slots)
+            )
+            ray_identity_errors[repetition, index] = int(
+                np.count_nonzero(window.points.source_ray != rays)
+            )
+            coordinate_identity_errors[repetition, index] = int(
+                np.count_nonzero(window.points.coordinates_reference != source_xyz)
+            )
+            # The model input reads this exact source vector in visible-slot order.
+            intensity_identity_errors[repetition, index] = int(
+                source_intensity.shape != (frame.real_count,)
+                or not np.isfinite(source_intensity).all()
+            )
+            label_identity_errors[repetition, index] = int(
+                np.count_nonzero(window.labels.packed != source_labels)
+            )
+            shared_indices = np.flatnonzero(point_is_shared.detach().cpu().numpy())
+            shared_identities = np.column_stack((slots[shared_indices], rays[shared_indices]))
+            shared_identity_collision_errors[repetition, index] = int(
+                shared_identities.shape[0]
+                - np.unique(shared_identities, axis=0).shape[0]
+            )
+            identity_hash[repetition, index] = _array_hash(
+                {
+                    "source_frame": window.points.source_frame,
+                    "source_slot": window.points.source_slot,
+                    "source_ray": window.points.source_ray,
+                    "coordinates": window.points.coordinates_reference,
+                    "intensity": source_intensity,
+                    "packed_label": window.labels.packed,
+                    "inverse_map": inverse.detach().cpu().numpy(),
+                    "point_feature_sha256": np.frombuffer(
+                        _tensor_hash(encoding.point_features).encode("ascii"),
+                        dtype=np.uint8,
+                    ),
+                }
+            )
+            del encoding
+    elapsed = time.monotonic() - started
+
+    # Counterexample: shared STU content must still yield one final logit per raw row.
+    torch.manual_seed(5200)
+    fixture_model = AJAEPointTransformer.from_protocol(protocol).cpu().eval()
+    fixture_coordinates = torch.tensor(
+        [[0.001, 0.0, 0.0], [0.049, 0.0, 0.0],
+         [0.101, 0.0, 0.0], [0.149, 0.0, 0.0]],
+        dtype=torch.float32,
+    )
+    fixture_times = torch.zeros(4, dtype=torch.long)
+    fixture_features = torch.ones(4, MASK_DIM)
+    fixture_evidence = torch.zeros(4, 19)
+    fixture_reliability = torch.zeros(4)
+    fixture_intensity = torch.tensor([0.1, 0.9, 0.2, 0.8])
+    fixture_labels = np.asarray([10, 2, 40, 2], dtype=np.uint16)
+    fixture_rays = np.asarray([11, 12, 13, 14], dtype=np.int32)
+    fixture_order = torch.tensor([2, 0, 3, 1], dtype=torch.long)
+    fixture_logits = []
+    with torch.no_grad():
+        for _ in range(2):
+            fixture_logits.append(
+                fixture_model(
+                    fixture_coordinates,
+                    fixture_times,
+                    fixture_features,
+                    fixture_evidence,
+                    fixture_reliability,
+                    fixture_reliability,
+                    fixture_intensity,
+                    cross_frame_enabled=False,
+                )
+            )
+        permuted_logits = fixture_model(
+            fixture_coordinates[fixture_order],
+            fixture_times[fixture_order],
+            fixture_features[fixture_order],
+            fixture_evidence[fixture_order],
+            fixture_reliability[fixture_order],
+            fixture_reliability[fixture_order],
+            fixture_intensity[fixture_order],
+            cross_frame_enabled=False,
+        )
+    fixture_shape_errors = int(
+        fixture_logits[0].shape != (4,) or permuted_logits.shape != (4,)
+    )
+    fixture_reproduction_errors = int(
+        not torch.equal(fixture_logits[0], fixture_logits[1])
+    )
+    fixture_permutation_errors = int(
+        not torch.equal(permuted_logits, fixture_logits[0][fixture_order])
+    )
+    fixture_identity_errors = int(
+        np.unique(fixture_rays).size != 4
+        or np.unique(fixture_labels).size < 2
+        or not torch.equal(fixture_features[0], fixture_features[1])
+    )
+
+    reproduction_errors = int(np.count_nonzero(identity_hash[0] != identity_hash[1]))
+    statistic_reproduction_errors = int(
+        any(
+            not np.array_equal(value[0], value[1])
+            for value in (real_count, shared_voxel_count, shared_point_count)
+        )
+    )
+    error_arrays = (
+        shared_feature_errors,
+        frame_identity_errors,
+        slot_identity_errors,
+        ray_identity_errors,
+        coordinate_identity_errors,
+        intensity_identity_errors,
+        label_identity_errors,
+        shared_identity_collision_errors,
+    )
+    hard_errors = int(
+        sum(int(value.sum()) for value in error_arrays)
+        + reproduction_errors
+        + statistic_reproduction_errors
+        + fixture_shape_errors
+        + fixture_reproduction_errors
+        + fixture_permutation_errors
+        + fixture_identity_errors
+    )
+    arrays = {
+        "sequence_id": sequence_array,
+        "frame_id": frame_array,
+        "real_count": real_count,
+        "shared_voxel_count": shared_voxel_count,
+        "shared_point_count": shared_point_count,
+        "shared_feature_errors": shared_feature_errors,
+        "frame_identity_errors": frame_identity_errors,
+        "slot_identity_errors": slot_identity_errors,
+        "ray_identity_errors": ray_identity_errors,
+        "coordinate_identity_errors": coordinate_identity_errors,
+        "intensity_identity_errors": intensity_identity_errors,
+        "label_identity_errors": label_identity_errors,
+        "shared_identity_collision_errors": shared_identity_collision_errors,
+        "identity_sha256": identity_hash,
+        "frame_seconds": seconds,
+        "fixture_coordinates": fixture_coordinates.numpy(),
+        "fixture_intensity": fixture_intensity.numpy(),
+        "fixture_labels": fixture_labels,
+        "fixture_rays": fixture_rays,
+        "fixture_logits": torch.stack(fixture_logits).numpy(),
+        "fixture_order": fixture_order.numpy(),
+        "fixture_permuted_logits": permuted_logits.numpy(),
+    }
+    result: dict[str, object] = {
+        "experiment": "E52",
+        "passed": hard_errors == 0,
+        "failure_classification": None
+        if hard_errors == 0
+        else "raw_point_identity_merging_failure",
+        "frames": count,
+        "formal_repetitions": 2,
+        "e51_artifact_sha256": E51_ARTIFACT_SHA256,
+        "protocol_sha256": _sha256(protocol_file),
+        "calibration_sha256": calibration_sha256,
+        "ray_mapping_digest": ray_mapping_digest,
+        "device": str(runtime_device),
+        "total_real_returns": int(real_count[0].sum()),
+        "total_shared_voxels": int(shared_voxel_count[0].sum()),
+        "total_points_in_shared_voxels": int(shared_point_count[0].sum()),
+        "shared_feature_errors": int(shared_feature_errors.sum()),
+        "frame_identity_errors": int(frame_identity_errors.sum()),
+        "slot_identity_errors": int(slot_identity_errors.sum()),
+        "ray_identity_errors": int(ray_identity_errors.sum()),
+        "coordinate_identity_errors": int(coordinate_identity_errors.sum()),
+        "intensity_identity_errors": int(intensity_identity_errors.sum()),
+        "label_identity_errors": int(label_identity_errors.sum()),
+        "shared_identity_collision_errors": int(
+            shared_identity_collision_errors.sum()
+        ),
+        "fixture_shape_errors": fixture_shape_errors,
+        "fixture_reproduction_errors": fixture_reproduction_errors,
+        "fixture_permutation_errors": fixture_permutation_errors,
+        "fixture_identity_errors": fixture_identity_errors,
+        "reproduction_errors": reproduction_errors + statistic_reproduction_errors,
+        "elapsed_seconds": elapsed,
+        "scientific_array_sha256": _array_hash(arrays),
+        "claim_limit": (
+            "E52 qualifies raw-row identity preservation under shared STU sparse "
+            "features; it does not qualify query evidence or learned performance."
+        ),
+    }
+    _save(Path(output_path).expanduser().resolve(), arrays, result)
+    return result
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -520,6 +830,12 @@ def _parser() -> argparse.ArgumentParser:
     e51.add_argument("--e50", type=Path, required=True)
     e51.add_argument("--output", type=Path, required=True)
     e51.add_argument("--device", default="cuda")
+    e52 = commands.add_parser("e52")
+    e52.add_argument("--data-root", type=Path, required=True)
+    e52.add_argument("--protocol", type=Path, default=PROJECT_ROOT / "protocol.json")
+    e52.add_argument("--e51", type=Path, required=True)
+    e52.add_argument("--output", type=Path, required=True)
+    e52.add_argument("--device", default="cuda")
     return parser
 
 
@@ -536,6 +852,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.data_root,
             args.protocol,
             args.e50,
+            args.output,
+            device=args.device,
+        )
+        print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        return 0 if result["passed"] else 1
+    if args.command == "e52":
+        result = run_e52(
+            args.data_root,
+            args.protocol,
+            args.e51,
             args.output,
             device=args.device,
         )

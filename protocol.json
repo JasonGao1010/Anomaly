@@ -3379,6 +3379,21 @@
         "result": {"passed": true, "artifact_sha256": "bca33539ea2c3cb9d815cc4586d98fc356f134d40351e63cbb8d2e1c256ccafa", "scientific_array_sha256": "02e22e4cc87f5f2bde0f84712fe624930ef2a6a8f52c7b0752fdc1c800f4fee2", "protocol_sha256_at_execution": "eae5e7bd435e48db0fe2ea563cb8cb3462c388a0c4ae9836ddef3581b2fe7f74", "frames": 32, "total_file_slots": 4194304, "total_real_returns": 3835507, "total_zero_slots_excluded": 358797, "total_sparse_voxels": 3438697, "all_error_counts": 0, "reproduction_errors": 0, "elapsed_seconds": 29.597222142000646, "independent_read_only_validation": true},
         "unlock": "PASS; E52 unlocked"
       },
+      "E52": {
+        "status": "EXECUTION FROZEN; formal run pending",
+        "date": "2026-09-01",
+        "question": "When multiple raw returns share one sparse STU feature row, do all raw identities and one final-logit position per return remain intact?",
+        "input": {"e51_artifact": "runs/ajae/e51_inverse_mapping.npz", "e51_artifact_sha256": "bca33539ea2c3cb9d815cc4586d98fc356f134d40351e63cbb8d2e1c256ccafa", "e51_scientific_array_sha256": "02e22e4cc87f5f2bde0f84712fe624930ef2a6a8f52c7b0752fdc1c800f4fee2", "frames": "exact E50-E51 32-frame identity", "labels": "required only for raw identity checking"},
+        "counterexample": {"seed": 5200, "x_coordinates_m": [0.001, 0.049, 0.101, 0.149], "stu_features": "four identical all-one 128D rows", "intensity": [0.1, 0.9, 0.2, 0.8], "raw_labels": [10, 2, 40, 2], "ray_ids": [11, 12, 13, 14], "permutation": [2, 0, 3, 1], "training": false},
+        "implementation": {"runner": "src/qualify.py", "runner_sha256": "182edfc12ee4c5340342233c83016287e0a09c0de2a6785fcd9ed64261b23f13", "execution_freeze_commit": null},
+        "command": "OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python -m src.qualify e52 --data-root /home/jasongao/Data/STU --protocol protocol.json --e51 runs/ajae/e51_inverse_mapping.npz --output runs/ajae/e52_raw_identity.npz --device cuda",
+        "pass_conditions": ["at least one real shared sparse voxel and shared raw point", "points sharing one sparse row have exactly identical 128D STU features", "source frame, raw slot, calibrated ray, XYZ, intensity and packed label remain point-aligned", "shared points retain distinct raw identities", "counterexample returns exactly one finite final logit per raw row", "counterexample logits reproduce twice and permute exactly with raw rows", "all error counts zero", "two real-frame identity passes reproduce exactly"],
+        "resource_preflight": {"online_cpu_cores": 24, "memory_total_gib": 23, "memory_available_gib": 21, "swap_total_gib": 16, "swap_used_gib": 0, "gpu": "NVIDIA GeForce RTX 5080 Laptop GPU", "gpu_free_mib": 14619, "gpu_utilization_percent": 12, "windows_e_total_bytes": 484950659072, "windows_e_remaining_bytes": 75073314816, "competing_experiment_process": false, "expected_output": "far below 1 GiB"},
+        "formal_repetitions": 2,
+        "artifact": "runs/ajae/e52_raw_identity.npz",
+        "result": null,
+        "unlock": "PASS unlocks E53; FAIL stops Phase 5"
+      },
       "E45B": {
         "current_validity": "historical PASS for the old normal-control distribution only; current E48 qualification is supplied separately by E45B-v2 PASS on E25-new",
         "question": "Can normal-control and anomaly-proxy support at least 1024 non-reused strictly matched pairs for E48?",
