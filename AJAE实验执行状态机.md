@@ -3213,21 +3213,21 @@ Notes: The invalid implementation run exited 1 after 31.979 seconds. Its own sav
 
 Experiment ID: E51
 Design-freeze commit/hash: Original E51 construct retained. Execution implementation SHA-256 `8fdb06eba90d053b1d2061d16dfda1ec40bc477b3f8fb50227bfb74b742ed950` before formal execution.
-Execution-freeze commit/hash: This record, corrected E51 implementation and focused analytic test are committed before the formal run; resolved commit is recorded with the result.
-Date: 2026-09-01 execution freeze; formal result pending.
+Execution-freeze commit/hash: `867abd01071ae18e28d8aa2623363564de97d6d2`.
+Date: 2026-09-01 formal run completed.
 Git commit / clean state: Tracked files were clean at `69bb695`; untracked user-owned `PPT/` remains excluded.
 Data identities: The exact 32 E50 real frames and all their visible-return identities, plus the fixed five-point analytic mapping fixture `[0.11,0.01,0.12,-0.01,-0.06]` metres on x at 0.05 metre voxel size. Labels are forbidden.
 Input artifact hashes: E50 SHA-256 `2c2d8507df0f9e4c9984118e59c6d65a8f13835590fee5b51bed02c282c5671a`; scientific-array SHA-256 `c698f3b53d6a38f579f45fdfb4f06023f3b433d65a9f61e87c386dc2ac9090f2`.
 Random namespaces / seeds: None. Frame identities are inherited exactly from E50; no sampling occurs.
 Command and resolved config: Independently compute `floor(x/0.05)` voxel rows and first-occurrence sparse row order in plain NumPy. Compare those rows, unique indices and inverse indices against MinkowskiEngine, then compare the independently derived inverse against the actual frozen encoder output. Every visible return must recover an in-range row, actual `real_slots` must exactly equal the source visible-return slots, every zero slot must be excluded, all error counts must be zero, and complete mapping hashes must reproduce across two passes. Command: `OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python -m src.qualify e51 --data-root /home/jasongao/Data/STU --protocol protocol.json --e50 runs/ajae/e50_stu_features.npz --output runs/ajae/e51_inverse_mapping.npz --device cuda`.
 Resource and disk preflight: Checked 2026-09-01: 24 CPU cores; 23 GiB RAM with 21 GiB available; 16 GiB unused swap; RTX 5080 Laptop GPU with 14,616 MiB free and 6% utilization; no competing qualification/training process. Windows E: has 75,138,588,672 bytes remaining of 484,950,659,072 bytes, above the 5% reserve. Output is far below 1 GiB. A one-frame no-artifact implementation check confirmed exact agreement on 125,072 real returns, 6,000 excluded zero slots and 117,913 sparse voxels; it is not formal evidence.
-Artifacts and hashes: None.
+Artifacts and hashes: `runs/ajae/e51_inverse_mapping.npz`, SHA-256 `bca33539ea2c3cb9d815cc4586d98fc356f134d40351e63cbb8d2e1c256ccafa`; scientific-array SHA-256 `02e22e4cc87f5f2bde0f84712fe624930ef2a6a8f52c7b0752fdc1c800f4fee2`.
 Primary construct: Exact inverse mapping from sparse voxels to every valid raw return.
-Primary result: Formal run pending.
-PASS / FAIL / OUTCOME: OUTCOME — EXECUTION FROZEN / NOT EXECUTED.
+Primary result: Across 4,194,304 file slots, all 3,835,507 real returns recovered an in-range sparse row and all 358,797 zero slots were excluded. Independent coordinates, unique indices, direct MinkowskiEngine inverses and encoder inverses had zero differences; slot, range and recovery errors were zero; all 32 mapping hashes matched across both passes.
+PASS / FAIL / OUTCOME: PASS.
 Failure classification: Not applicable.
-Unlocked next node: E52 after PASS.
-Invalidated downstream evidence: E52 onward remains locked.
+Unlocked next node: E52.
+Invalidated downstream evidence: E53 onward remains locked pending E52.
 Descriptive observations: None.
 Notes: None.
 
@@ -3239,14 +3239,14 @@ Execution-freeze commit/hash: Not executed.
 Date: Not executed.
 Git commit / clean state: Not applicable.
 Data identities: Real shared-voxel cases and synthetic counterexamples.
-Input artifact hashes: E51 output required; none exists.
+Input artifact hashes: E51 SHA-256 `bca33539ea2c3cb9d815cc4586d98fc356f134d40351e63cbb8d2e1c256ccafa`; scientific-array SHA-256 `02e22e4cc87f5f2bde0f84712fe624930ef2a6a8f52c7b0752fdc1c800f4fee2`.
 Random namespaces / seeds: Frozen fixture identities.
 Command and resolved config: Points may share one 128D feature, but every raw point must retain its own frame/ray, XYZ, intensity, label, and final-logit location. No identity merging; two identical runs.
 Resource and disk preflight: Not executed.
 Artifacts and hashes: None.
 Primary construct: Preservation of individual raw-return identity despite shared sparse-voxel features.
 Primary result: Not executed.
-PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
+PASS / FAIL / OUTCOME: OUTCOME — CURRENT FORMAL NODE / NOT EXECUTED.
 Failure classification: Not applicable.
 Unlocked next node: E53 after PASS.
 Invalidated downstream evidence: E53 onward remains locked.
