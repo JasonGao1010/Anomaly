@@ -3443,6 +3443,21 @@
         "result": {"passed": true, "artifact_sha256": "13d367fa0f7f0ed86ba6de24fc535df44e4ea90ab6f38989dec4ea4d6e35aaf8", "scientific_array_sha256": "68cdfb42f5c8a533d19c4d92302fa4372e46d56030392229b81217be43bf533a", "protocol_sha256_at_execution": "0077a82b325fcb0c28127f80bec829439e72619e973951940ad6e1259030b0bf", "windows": 2, "point_counts": [625129, 514296], "total_points": 1139425, "base_input_width": 150, "all_error_counts": 0, "reproduction_errors": 0, "elapsed_seconds": 623.5464828870008, "independent_read_only_validation": true},
         "unlock": "PASS; E56 unlocked"
       },
+      "E56": {
+        "status": "EXECUTION FROZEN; formal run pending",
+        "date": "2026-09-01",
+        "question": "Do all five source frames enter the center LiDAR coordinates with the correct matrix direction, improve static alignment and retain genuine moving-normal displacement?",
+        "input": {"e55_artifact": "runs/ajae/e55_actual_input.npz", "e55_artifact_sha256": "13d367fa0f7f0ed86ba6de24fc535df44e4ea90ab6f38989dec4ea4d6e35aaf8", "e55_scientific_array_sha256": "68cdfb42f5c8a533d19c4d92302fa4372e46d56030392229b81217be43bf533a", "windows": "all 32 Phase 5 centers with complete five-frame train/206 or train/201 windows", "labels": "required for static/moving stratification"},
+        "definitions": {"static": "visible raw semantic nonzero, not 2, and not in moving semantics 252-259", "before": "source-frame raw XYZ queried against center static XYZ", "after": "actual source_to_reference aligned XYZ queried against center static XYZ", "summaries": "median of per-window medians and median of per-window Q95", "moving_track": "positive instance ID present in a noncenter frame and center frame within moving semantics 252-259"},
+        "implementation": {"runner": "src/qualify.py", "runner_sha256": "a507926a5ebd3c6fe173471d4471b241b83242ee957b46c1bf07a5c1681a014d", "scene_source_sha256": "f55710c747d67c91b780498a8d19a1426865048c2dfe808c98a6f15bb02b88c9", "execution_freeze_commit": null},
+        "command": "python -m src.qualify e56 --data-root /home/jasongao/Data/STU --protocol protocol.json --e55 runs/ajae/e55_actual_input.npz --output runs/ajae/e56_coordinate_alignment.npz",
+        "pass_conditions": ["analytic maximum coordinate error <1e-9 m", "median static residual strictly decreases after alignment", "Q95 static residual strictly decreases after alignment", "at least one matched moving-normal track retains displacement >1e-6 m", "source_to_reference equals solve(center_pose,source_pose) within 1e-9", "frame IDs and values valid", "all error counts zero", "two complete window/statistic passes reproduce exactly"],
+        "resource_preflight": {"online_cpu_cores": 24, "memory_total_gib": 23, "memory_available_gib": 21, "swap_total_gib": 16, "swap_used_gib": 0, "windows_e_total_bytes": 484950659072, "windows_e_remaining_bytes": 75068071936, "competing_experiment_process": false, "expected_output": "far below 1 GiB"},
+        "formal_repetitions": 2,
+        "artifact": "runs/ajae/e56_coordinate_alignment.npz",
+        "result": null,
+        "unlock": "PASS unlocks Phase 6/E57; FAIL stops Phase 5"
+      },
       "E45B": {
         "current_validity": "historical PASS for the old normal-control distribution only; current E48 qualification is supplied separately by E45B-v2 PASS on E25-new",
         "question": "Can normal-control and anomaly-proxy support at least 1024 non-reused strictly matched pairs for E48?",

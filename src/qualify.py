@@ -16,6 +16,7 @@ from typing import Mapping, Sequence
 
 import numpy as np
 import torch
+from scipy.spatial import cKDTree
 
 from .model import (
     DEFAULT_STU_REPOSITORY,
@@ -59,6 +60,9 @@ E53_ARTIFACT_SHA256 = (
 )
 E54_ARTIFACT_SHA256 = (
     "67187b039bdafbea0d8f728a017daea043c2fdb6f7a6c7754da3998fa6173dac"
+)
+E55_ARTIFACT_SHA256 = (
+    "13d367fa0f7f0ed86ba6de24fc535df44e4ea90ab6f38989dec4ea4d6e35aaf8"
 )
 E53_SEED_NAMESPACE = "E53-STU-query-v1"
 
@@ -1659,6 +1663,257 @@ def run_e55(
     return result
 
 
+def run_e56(
+    data_root: Path | str,
+    protocol_path: Path | str,
+    e55_path: Path | str,
+    output_path: Path | str,
+) -> dict[str, object]:
+    """Verify center-coordinate alignment and preservation of object motion."""
+
+    protocol_file = Path(protocol_path).expanduser().resolve(strict=True)
+    protocol = load_protocol(protocol_file)
+    e55_file = Path(e55_path).expanduser().resolve(strict=True)
+    if _sha256(e55_file) != E55_ARTIFACT_SHA256:
+        raise QualificationError("E56 input is not the frozen E55 PASS artifact")
+    with np.load(e55_file, allow_pickle=False) as e55:
+        metadata = json.loads(str(e55["metadata_json"]))
+        if not metadata.get("passed") or metadata.get("experiment") != "E55":
+            raise QualificationError("E56 input does not declare E55 PASS")
+    from .evaluate import _protocol_slot_to_ray
+
+    slot_to_ray, ray_digest, calibration_sha256 = _protocol_slot_to_ray(protocol)
+    sequences = {
+        sequence_id: STUSequence.open(
+            data_root, protocol=protocol, partition="train",
+            sequence_id=sequence_id, label_mode=LabelMode.REQUIRED,
+        )
+        for sequence_id in (206, 201)
+    }
+    moving_semantics = np.asarray(protocol.labels["moving_normal_semantic_ids"])
+    centers = [
+        (sequence_id, frame_id)
+        for sequence_id in (206, 201)
+        for frame_id in PHASE5_FRAMES[sequence_id]
+    ]
+    window_count = len(centers)
+    before_median = np.zeros((2, window_count), dtype=np.float64)
+    before_q95 = np.zeros_like(before_median)
+    after_median = np.zeros_like(before_median)
+    after_q95 = np.zeros_like(before_median)
+    static_point_count = np.zeros((2, window_count), dtype=np.int32)
+    moving_track_count = np.zeros_like(static_point_count)
+    moving_max_displacement = np.zeros_like(before_median)
+    matrix_errors = np.zeros_like(static_point_count)
+    frame_errors = np.zeros_like(static_point_count)
+    finite_errors = np.zeros_like(static_point_count)
+    window_hash = np.empty((2, window_count), dtype="S64")
+
+    # Exactly representable translations make the analytic expected error strict.
+    analytic_world = np.asarray([3.0, -2.0, 1.0], dtype=np.float64)
+    analytic_translations = np.asarray(
+        [[-2.0, 0.0, 0.0], [-1.0, 1.0, 0.0], [0.0, 0.0, 0.0],
+         [1.0, -1.0, 0.0], [2.0, 0.0, 0.0]],
+        dtype=np.float64,
+    )
+    analytic_errors = []
+    for translation in analytic_translations:
+        source_point = analytic_world - translation
+        transform = np.eye(4, dtype=np.float64)
+        transform[:3, 3] = translation
+        analytic_errors.append(
+            float(np.linalg.norm(source_point @ transform[:3, :3].T
+                                 + transform[:3, 3] - analytic_world))
+        )
+    analytic_max_error = max(analytic_errors)
+
+    started = time.monotonic()
+    for repetition in range(2):
+        for index, (sequence_id, center_frame) in enumerate(centers):
+            sequence = sequences[sequence_id]
+            mapping = slot_to_ray(sequence.source_frame(center_frame))
+            window = sequence.window(
+                center_frame, condition=ExperimentCondition.B3,
+                canonical_ray_by_slot=mapping, ray_mapping_audited=True,
+                ray_mapping_digest=ray_digest,
+            )
+            center_item = window.frames[2]
+            center_source = center_item.source
+            if center_source.labels is None:
+                raise QualificationError("E56 requires real labels")
+            center_slots = center_source.real_slots
+            center_semantic = center_source.labels.semantic[center_slots]
+            center_static = (
+                (center_semantic != 0)
+                & (center_semantic != 2)
+                & ~np.isin(center_semantic, moving_semantics)
+            )
+            center_xyz = center_source.xyzi[center_slots, :3][center_static]
+            if center_xyz.shape[0] == 0:
+                raise QualificationError("E56 center frame has no static background")
+            tree = cKDTree(center_xyz)
+            before_parts = []
+            after_parts = []
+            displacements = []
+            center_instance = center_source.labels.instance[center_slots]
+            center_moving = np.isin(center_semantic, moving_semantics) & (
+                center_instance > 0
+            )
+            center_centroids = {
+                int(instance): center_source.xyzi[center_slots, :3][
+                    center_moving & (center_instance == instance)
+                ].mean(axis=0)
+                for instance in np.unique(center_instance[center_moving])
+            }
+            for local_index, item in enumerate(window.frames):
+                expected_transform = np.linalg.solve(
+                    center_source.lidar_pose, item.source.lidar_pose
+                )
+                matrix_errors[repetition, index] += int(
+                    not np.allclose(
+                        item.source_to_reference, expected_transform,
+                        rtol=0.0, atol=1e-9,
+                    )
+                )
+                frame_errors[repetition, index] += int(
+                    item.source.frame_id != center_frame + local_index - 2
+                )
+                point_slice = window.points.frame_slice(local_index)
+                aligned = window.points.coordinates_center[point_slice]
+                source = item.source
+                if source.labels is None:
+                    raise QualificationError("E56 source frame lacks labels")
+                slots = source.real_slots
+                semantic = source.labels.semantic[slots]
+                static = (
+                    (semantic != 0)
+                    & (semantic != 2)
+                    & ~np.isin(semantic, moving_semantics)
+                )
+                if local_index != 2 and np.any(static):
+                    before_parts.append(
+                        tree.query(source.xyzi[slots, :3][static], workers=1)[0]
+                    )
+                    after_parts.append(tree.query(aligned[static], workers=1)[0])
+                instance = source.labels.instance[slots]
+                moving = np.isin(semantic, moving_semantics) & (instance > 0)
+                for identity in np.unique(instance[moving]):
+                    identity = int(identity)
+                    if local_index == 2 or identity not in center_centroids:
+                        continue
+                    centroid = aligned[moving & (instance == identity)].mean(axis=0)
+                    displacements.append(
+                        float(np.linalg.norm(centroid - center_centroids[identity]))
+                    )
+                finite_errors[repetition, index] += int(
+                    not np.isfinite(aligned).all()
+                    or not np.isfinite(item.source_to_reference).all()
+                )
+            before = np.concatenate(before_parts)
+            after = np.concatenate(after_parts)
+            before_median[repetition, index] = np.median(before)
+            before_q95[repetition, index] = np.quantile(before, 0.95)
+            after_median[repetition, index] = np.median(after)
+            after_q95[repetition, index] = np.quantile(after, 0.95)
+            static_point_count[repetition, index] = before.size
+            moving_track_count[repetition, index] = len(displacements)
+            moving_max_displacement[repetition, index] = (
+                max(displacements) if displacements else 0.0
+            )
+            window_hash[repetition, index] = _array_hash(
+                {
+                    "coordinates": window.points.coordinates_center,
+                    "source_frame": window.points.source_frame,
+                    "source_slot": window.points.source_slot,
+                    "source_ray": window.points.source_ray,
+                    "before_summary": np.asarray(
+                        [before_median[repetition, index], before_q95[repetition, index]]
+                    ),
+                    "after_summary": np.asarray(
+                        [after_median[repetition, index], after_q95[repetition, index]]
+                    ),
+                }
+            )
+    elapsed = time.monotonic() - started
+
+    pooled_before_median = float(np.median(before_median[0]))
+    pooled_before_q95 = float(np.median(before_q95[0]))
+    pooled_after_median = float(np.median(after_median[0]))
+    pooled_after_q95 = float(np.median(after_q95[0]))
+    improvement_errors = int(
+        not pooled_after_median < pooled_before_median
+        or not pooled_after_q95 < pooled_before_q95
+    )
+    motion_errors = int(
+        int(moving_track_count[0].sum()) == 0
+        or float(moving_max_displacement[0].max()) <= 1e-6
+    )
+    analytic_errors_count = int(not analytic_max_error < 1e-9)
+    reproduction_errors = int(
+        np.count_nonzero(window_hash[0] != window_hash[1])
+        + (not np.array_equal(before_median[0], before_median[1]))
+        + (not np.array_equal(before_q95[0], before_q95[1]))
+        + (not np.array_equal(after_median[0], after_median[1]))
+        + (not np.array_equal(after_q95[0], after_q95[1]))
+        + (not np.array_equal(moving_max_displacement[0], moving_max_displacement[1]))
+    )
+    hard_errors = int(
+        matrix_errors.sum() + frame_errors.sum() + finite_errors.sum()
+        + improvement_errors + motion_errors + analytic_errors_count
+        + reproduction_errors
+    )
+    arrays = {
+        "sequence_id": np.asarray([item[0] for item in centers], dtype=np.int16),
+        "center_frame": np.asarray([item[1] for item in centers], dtype=np.int16),
+        "before_median_m": before_median,
+        "before_q95_m": before_q95,
+        "after_median_m": after_median,
+        "after_q95_m": after_q95,
+        "static_point_count": static_point_count,
+        "moving_track_count": moving_track_count,
+        "moving_max_displacement_m": moving_max_displacement,
+        "matrix_errors": matrix_errors,
+        "frame_errors": frame_errors,
+        "finite_errors": finite_errors,
+        "window_sha256": window_hash,
+        "analytic_error_m": np.asarray(analytic_errors),
+    }
+    result: dict[str, object] = {
+        "experiment": "E56",
+        "passed": hard_errors == 0,
+        "failure_classification": None
+        if hard_errors == 0
+        else "center_coordinate_alignment_failure",
+        "windows": window_count,
+        "formal_repetitions": 2,
+        "e55_artifact_sha256": E55_ARTIFACT_SHA256,
+        "protocol_sha256": _sha256(protocol_file),
+        "calibration_sha256": calibration_sha256,
+        "analytic_max_error_m": analytic_max_error,
+        "static_points_compared": int(static_point_count[0].sum()),
+        "before_median_m": pooled_before_median,
+        "before_q95_m": pooled_before_q95,
+        "after_median_m": pooled_after_median,
+        "after_q95_m": pooled_after_q95,
+        "moving_tracks": int(moving_track_count[0].sum()),
+        "maximum_moving_displacement_m": float(moving_max_displacement[0].max()),
+        "matrix_errors": int(matrix_errors.sum()),
+        "frame_errors": int(frame_errors.sum()),
+        "finite_errors": int(finite_errors.sum()),
+        "improvement_errors": improvement_errors,
+        "motion_errors": motion_errors,
+        "reproduction_errors": reproduction_errors,
+        "elapsed_seconds": elapsed,
+        "scientific_array_sha256": _array_hash(arrays),
+        "claim_limit": (
+            "E56 qualifies rigid center-coordinate alignment and preservation of "
+            "observed moving-normal displacement on the frozen Phase 5 windows."
+        ),
+    }
+    _save(Path(output_path).expanduser().resolve(), arrays, result)
+    return result
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -1703,6 +1958,11 @@ def _parser() -> argparse.ArgumentParser:
     e55.add_argument("--device", default="cpu")
     e55.add_argument("--workers", type=int, default=2)
     e55.add_argument("--threads-per-worker", type=int, default=12)
+    e56 = commands.add_parser("e56")
+    e56.add_argument("--data-root", type=Path, required=True)
+    e56.add_argument("--protocol", type=Path, default=PROJECT_ROOT / "protocol.json")
+    e56.add_argument("--e55", type=Path, required=True)
+    e56.add_argument("--output", type=Path, required=True)
     return parser
 
 
@@ -1767,6 +2027,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             device=args.device,
             workers=args.workers,
             threads_per_worker=args.threads_per_worker,
+        )
+        print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        return 0 if result["passed"] else 1
+    if args.command == "e56":
+        result = run_e56(
+            args.data_root, args.protocol, args.e55, args.output
         )
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 0 if result["passed"] else 1
