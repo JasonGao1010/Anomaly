@@ -2656,8 +2656,8 @@
       }
     },
     "renderer_mechanical_qualification": {
-      "status": "Gate 1 PASS; E50-E51 valid formal runs PASS; E52 current",
-      "current_gate1_policy": {"hard_evidence": ["compatible canonical-ray and renderer mechanics through E44", "E45B-v2 rendered control/proxy qualification PASS", "E48 direct rendered-label-shortcut audit PASS"], "excluded_from_conjunction": ["all E45A variants", "E45-V1", "E46", "E47"], "rationale": "Natural real-normal observations and coverage-oriented inserted controls need not reproduce the same scene/placement distribution. Real-versus-rendered source identifiability is not equivalent to anomaly-label shortcut predictability because rendered controls and rendered proxies carry different labels.", "gate1_result": "PASS", "current_node": "E52", "next_after_pass": ["E53-E71", "Gate 2 B1 versus B0"]},
+      "status": "Gate 1 PASS; E50-E52 valid formal runs PASS; E53 current",
+      "current_gate1_policy": {"hard_evidence": ["compatible canonical-ray and renderer mechanics through E44", "E45B-v2 rendered control/proxy qualification PASS", "E48 direct rendered-label-shortcut audit PASS"], "excluded_from_conjunction": ["all E45A variants", "E45-V1", "E46", "E47"], "rationale": "Natural real-normal observations and coverage-oriented inserted controls need not reproduce the same scene/placement distribution. Real-versus-rendered source identifiability is not equivalent to anomaly-label shortcut predictability because rendered controls and rendered proxies carry different labels.", "gate1_result": "PASS", "current_node": "E53", "next_after_pass": ["E54-E71", "Gate 2 B1 versus B0"]},
       "layer_boundaries": {"E27-E28": "direct geometry outputs only", "E29": "return probability and deterministic acceptance decision only", "E30-E31": "accepted returns", "E32-E33": "nearest-return occlusion competition"},
       "E27": {
         "question": "Does the formal geometry path return the correct nearest convex-hull hit, outward finite normal and object ID for active normal-control templates when return rejection is disabled?",
@@ -3380,19 +3380,19 @@
         "unlock": "PASS; E52 unlocked"
       },
       "E52": {
-        "status": "EXECUTION FROZEN; formal run pending",
+        "status": "PASS; E53 unlocked",
         "date": "2026-09-01",
         "question": "When multiple raw returns share one sparse STU feature row, do all raw identities and one final-logit position per return remain intact?",
         "input": {"e51_artifact": "runs/ajae/e51_inverse_mapping.npz", "e51_artifact_sha256": "bca33539ea2c3cb9d815cc4586d98fc356f134d40351e63cbb8d2e1c256ccafa", "e51_scientific_array_sha256": "02e22e4cc87f5f2bde0f84712fe624930ef2a6a8f52c7b0752fdc1c800f4fee2", "frames": "exact E50-E51 32-frame identity", "labels": "required only for raw identity checking"},
         "counterexample": {"seed": 5200, "x_coordinates_m": [0.001, 0.049, 0.101, 0.149], "stu_features": "four identical all-one 128D rows", "intensity": [0.1, 0.9, 0.2, 0.8], "raw_labels": [10, 2, 40, 2], "ray_ids": [11, 12, 13, 14], "permutation": [2, 0, 3, 1], "training": false},
-        "implementation": {"runner": "src/qualify.py", "runner_sha256": "182edfc12ee4c5340342233c83016287e0a09c0de2a6785fcd9ed64261b23f13", "execution_freeze_commit": null},
+        "implementation": {"runner": "src/qualify.py", "runner_sha256": "182edfc12ee4c5340342233c83016287e0a09c0de2a6785fcd9ed64261b23f13", "execution_freeze_commit": "2d13e4a398e8d7d8f34558aff5c59c70c4b7fdb5"},
         "command": "OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python -m src.qualify e52 --data-root /home/jasongao/Data/STU --protocol protocol.json --e51 runs/ajae/e51_inverse_mapping.npz --output runs/ajae/e52_raw_identity.npz --device cuda",
         "pass_conditions": ["at least one real shared sparse voxel and shared raw point", "points sharing one sparse row have exactly identical 128D STU features", "source frame, raw slot, calibrated ray, XYZ, intensity and packed label remain point-aligned", "shared points retain distinct raw identities", "counterexample returns exactly one finite final logit per raw row", "counterexample logits reproduce twice and permute exactly with raw rows", "all error counts zero", "two real-frame identity passes reproduce exactly"],
         "resource_preflight": {"online_cpu_cores": 24, "memory_total_gib": 23, "memory_available_gib": 21, "swap_total_gib": 16, "swap_used_gib": 0, "gpu": "NVIDIA GeForce RTX 5080 Laptop GPU", "gpu_free_mib": 14619, "gpu_utilization_percent": 12, "windows_e_total_bytes": 484950659072, "windows_e_remaining_bytes": 75073314816, "competing_experiment_process": false, "expected_output": "far below 1 GiB"},
         "formal_repetitions": 2,
         "artifact": "runs/ajae/e52_raw_identity.npz",
-        "result": null,
-        "unlock": "PASS unlocks E53; FAIL stops Phase 5"
+        "result": {"passed": true, "artifact_sha256": "2e519c358133cb03fbbbafed82062906eceec071279da0149b2e6a1eac1c9a69", "scientific_array_sha256": "2e8d2a67071b383606cdee1017406d7142d127b9a5fb6915a66ac92964249330", "protocol_sha256_at_execution": "f8a1a6c010268a95a784ba185744075b4f8f44a4b24a518ccf0a3f3b5b3806b9", "frames": 32, "total_real_returns": 3835507, "total_shared_voxels": 284441, "total_points_in_shared_voxels": 681251, "all_error_counts": 0, "reproduction_errors": 0, "elapsed_seconds": 30.95326317999934, "independent_read_only_validation": true},
+        "unlock": "PASS; E53 unlocked"
       },
       "E45B": {
         "current_validity": "historical PASS for the old normal-control distribution only; current E48 qualification is supplied separately by E45B-v2 PASS on E25-new",
