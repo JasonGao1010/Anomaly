@@ -3323,21 +3323,21 @@ Notes: The prohibited fields must not enter the model input.
 
 Experiment ID: E56
 Design-freeze commit/hash: Original E56 construct retained. Execution runner SHA-256 `a507926a5ebd3c6fe173471d4471b241b83242ee957b46c1bf07a5c1681a014d` before formal execution.
-Execution-freeze commit/hash: This record and E56 implementation are committed before the formal run; resolved commit is recorded with the result.
-Date: 2026-09-01 execution freeze; formal result pending.
-Git commit / clean state: Tracked files were clean at `e2f2628`; untracked user-owned `PPT/` remains excluded.
+Execution-freeze commit/hash: `5568529bfdb4ae8770d260aed8ad2dfb4986d151`; runner SHA-256 `a507926a5ebd3c6fe173471d4471b241b83242ee957b46c1bf07a5c1681a014d`.
+Date: 2026-09-01 formal PASS.
+Git commit / clean state: The formal run used clean tracked state at `5568529bfdb4ae8770d260aed8ad2dfb4986d151`; untracked user-owned `PPT/` remained excluded.
 Data identities: All 32 Phase 5 centers and their complete train/206 or train/201 five-frame windows, with raw labels required for static/moving stratification, plus a fixed five-translation exact analytic fixture.
 Input artifact hashes: E55 SHA-256 `13d367fa0f7f0ed86ba6de24fc535df44e4ea90ab6f38989dec4ea4d6e35aaf8`; scientific-array SHA-256 `68cdfb42f5c8a533d19c4d92302fa4372e46d56030392229b81217be43bf533a`.
 Random namespaces / seeds: None. All 32 frame identities are inherited from Phase 5 and no sampling occurs.
 Command and resolved config: The analytic fixture uses exactly representable translations and must have maximum error below `1e-9` m. For every real window, build a KD-tree from the center frame's nonzero, non-anomaly, non-moving static points; compare each noncenter static point before alignment in its source LiDAR frame and after the actual `source_to_reference` transform. The median across per-window medians and median across per-window Q95 values must both strictly decrease. For moving-normal semantics 252–259, match positive instance IDs to the center frame after alignment and require at least one matched track with displacement above `1e-6` m. Actual matrices must equal `solve(center_pose,source_pose)` within `1e-9`, frame IDs and values must be valid, and all window/statistic hashes must reproduce twice. Command: `python -m src.qualify e56 --data-root /home/jasongao/Data/STU --protocol protocol.json --e55 runs/ajae/e55_actual_input.npz --output runs/ajae/e56_coordinate_alignment.npz`.
 Resource and disk preflight: Checked 2026-09-01: 24 CPU cores; 23 GiB RAM with 21 GiB available; 16 GiB unused swap; no competing qualification/training process. Windows E: has 75,068,071,936 bytes remaining of 484,950,659,072 bytes, above the 5% reserve. Output is far below 1 GiB. A train/206 center-14 no-artifact check compared 496,257 static points: median/Q95 decreased from 0.139185/0.585120 m to 0.037899/0.201026 m; 10 matched moving tracks retained up to 7.492775 m displacement.
-Artifacts and hashes: None.
+Artifacts and hashes: `runs/ajae/e56_coordinate_alignment.npz`; SHA-256 `2314f65af4db7bb7df79d319d07a14e11fc81bb9d3121df4399ddbffd7d41702`; scientific-array SHA-256 `670404303bf03120f62edb19d84b1f98fd9279e540612cd3934cde9b6debf04e`.
 Primary construct: Correct transformation of all five frames into center coordinates while retaining genuine object motion.
-Primary result: Formal run pending.
-PASS / FAIL / OUTCOME: OUTCOME — EXECUTION FROZEN / NOT EXECUTED.
-Failure classification: Not applicable.
-Unlocked next node: E57 after PASS.
-Invalidated downstream evidence: Phase 6 onward remains locked.
+Primary result: Across all 32 windows and 12,601,562 noncenter static-point comparisons, the median of window medians fell from 0.115999 m to 0.043199 m and the median of window Q95 values fell from 0.587486 m to 0.250396 m. The exact analytic fixture had 0 error. Ninety-five matched moving-normal tracks retained displacement, with maximum 7.492775 m. Matrix, frame, finite-value, improvement, motion and reproduction errors were all zero; independent read-only recomputation confirmed every threshold, both repetitions, metadata summaries and the scientific-array hash.
+PASS / FAIL / OUTCOME: PASS.
+Failure classification: None.
+Unlocked next node: E57.
+Invalidated downstream evidence: None within Phase 5; Phase 6 is unlocked and E57 is current.
 Descriptive observations: None.
 Notes: Alignment must improve static background without flattening moving objects.
 

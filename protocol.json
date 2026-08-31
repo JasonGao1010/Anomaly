@@ -2656,8 +2656,8 @@
       }
     },
     "renderer_mechanical_qualification": {
-      "status": "Gate 1 PASS; E50-E55 valid formal runs PASS; E56 current",
-      "current_gate1_policy": {"hard_evidence": ["compatible canonical-ray and renderer mechanics through E44", "E45B-v2 rendered control/proxy qualification PASS", "E48 direct rendered-label-shortcut audit PASS"], "excluded_from_conjunction": ["all E45A variants", "E45-V1", "E46", "E47"], "rationale": "Natural real-normal observations and coverage-oriented inserted controls need not reproduce the same scene/placement distribution. Real-versus-rendered source identifiability is not equivalent to anomaly-label shortcut predictability because rendered controls and rendered proxies carry different labels.", "gate1_result": "PASS", "current_node": "E56", "next_after_pass": ["E57-E71", "Gate 2 B1 versus B0"]},
+      "status": "Gate 1 PASS; E50-E56 valid formal runs PASS; E57 current",
+      "current_gate1_policy": {"hard_evidence": ["compatible canonical-ray and renderer mechanics through E44", "E45B-v2 rendered control/proxy qualification PASS", "E48 direct rendered-label-shortcut audit PASS"], "excluded_from_conjunction": ["all E45A variants", "E45-V1", "E46", "E47"], "rationale": "Natural real-normal observations and coverage-oriented inserted controls need not reproduce the same scene/placement distribution. Real-versus-rendered source identifiability is not equivalent to anomaly-label shortcut predictability because rendered controls and rendered proxies carry different labels.", "gate1_result": "PASS", "current_node": "E57", "next_after_pass": ["E58-E71", "Gate 2 B1 versus B0"]},
       "layer_boundaries": {"E27-E28": "direct geometry outputs only", "E29": "return probability and deterministic acceptance decision only", "E30-E31": "accepted returns", "E32-E33": "nearest-return occlusion competition"},
       "E27": {
         "question": "Does the formal geometry path return the correct nearest convex-hull hit, outward finite normal and object ID for active normal-control templates when return rejection is disabled?",
@@ -3444,19 +3444,19 @@
         "unlock": "PASS; E56 unlocked"
       },
       "E56": {
-        "status": "EXECUTION FROZEN; formal run pending",
+        "status": "PASS; E57 unlocked",
         "date": "2026-09-01",
         "question": "Do all five source frames enter the center LiDAR coordinates with the correct matrix direction, improve static alignment and retain genuine moving-normal displacement?",
         "input": {"e55_artifact": "runs/ajae/e55_actual_input.npz", "e55_artifact_sha256": "13d367fa0f7f0ed86ba6de24fc535df44e4ea90ab6f38989dec4ea4d6e35aaf8", "e55_scientific_array_sha256": "68cdfb42f5c8a533d19c4d92302fa4372e46d56030392229b81217be43bf533a", "windows": "all 32 Phase 5 centers with complete five-frame train/206 or train/201 windows", "labels": "required for static/moving stratification"},
         "definitions": {"static": "visible raw semantic nonzero, not 2, and not in moving semantics 252-259", "before": "source-frame raw XYZ queried against center static XYZ", "after": "actual source_to_reference aligned XYZ queried against center static XYZ", "summaries": "median of per-window medians and median of per-window Q95", "moving_track": "positive instance ID present in a noncenter frame and center frame within moving semantics 252-259"},
-        "implementation": {"runner": "src/qualify.py", "runner_sha256": "a507926a5ebd3c6fe173471d4471b241b83242ee957b46c1bf07a5c1681a014d", "scene_source_sha256": "f55710c747d67c91b780498a8d19a1426865048c2dfe808c98a6f15bb02b88c9", "execution_freeze_commit": null},
+        "implementation": {"runner": "src/qualify.py", "runner_sha256": "a507926a5ebd3c6fe173471d4471b241b83242ee957b46c1bf07a5c1681a014d", "scene_source_sha256": "f55710c747d67c91b780498a8d19a1426865048c2dfe808c98a6f15bb02b88c9", "execution_freeze_commit": "5568529bfdb4ae8770d260aed8ad2dfb4986d151"},
         "command": "python -m src.qualify e56 --data-root /home/jasongao/Data/STU --protocol protocol.json --e55 runs/ajae/e55_actual_input.npz --output runs/ajae/e56_coordinate_alignment.npz",
         "pass_conditions": ["analytic maximum coordinate error <1e-9 m", "median static residual strictly decreases after alignment", "Q95 static residual strictly decreases after alignment", "at least one matched moving-normal track retains displacement >1e-6 m", "source_to_reference equals solve(center_pose,source_pose) within 1e-9", "frame IDs and values valid", "all error counts zero", "two complete window/statistic passes reproduce exactly"],
         "resource_preflight": {"online_cpu_cores": 24, "memory_total_gib": 23, "memory_available_gib": 21, "swap_total_gib": 16, "swap_used_gib": 0, "windows_e_total_bytes": 484950659072, "windows_e_remaining_bytes": 75068071936, "competing_experiment_process": false, "expected_output": "far below 1 GiB"},
         "formal_repetitions": 2,
         "artifact": "runs/ajae/e56_coordinate_alignment.npz",
-        "result": null,
-        "unlock": "PASS unlocks Phase 6/E57; FAIL stops Phase 5"
+        "result": {"passed": true, "artifact_sha256": "2314f65af4db7bb7df79d319d07a14e11fc81bb9d3121df4399ddbffd7d41702", "scientific_array_sha256": "670404303bf03120f62edb19d84b1f98fd9279e540612cd3934cde9b6debf04e", "protocol_sha256_at_execution": "93a19489d5dc2fc236194c061ad43ed73e7b72f78851523bbf045ebf842b3dcb", "windows": 32, "static_points_compared": 12601562, "before_median_m": 0.11599898793416855, "before_q95_m": 0.587486297033589, "after_median_m": 0.04319868055457496, "after_q95_m": 0.25039646621752565, "analytic_max_error_m": 0.0, "moving_tracks": 95, "maximum_moving_displacement_m": 7.4927754402160645, "all_error_counts": 0, "elapsed_seconds": 37.58904509199965, "independent_read_only_validation": true},
+        "unlock": "PASS; E57 unlocked"
       },
       "E45B": {
         "current_validity": "historical PASS for the old normal-control distribution only; current E48 qualification is supplied separately by E45B-v2 PASS on E25-new",
