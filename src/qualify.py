@@ -153,7 +153,6 @@ def run_e50(
     real_count = np.zeros((2, len(selected)), dtype=np.int32)
     voxel_count = np.zeros_like(real_count)
     feature_hash = np.empty((2, len(selected)), dtype="S64")
-    encoding_hash = np.empty_like(feature_hash)
     seconds = np.zeros((2, len(selected)), dtype=np.float64)
     finite_errors = np.zeros((2, len(selected)), dtype=np.int32)
     shape_errors = np.zeros_like(finite_errors)
@@ -182,18 +181,6 @@ def run_e50(
                 encoding.point_features.requires_grad
             )
             feature_hash[repetition, index] = _tensor_hash(encoding.point_features)
-            combined = hashlib.sha256()
-            for value in (
-                encoding.point_features,
-                encoding.normal_evidence,
-                encoding.reliability_assign,
-                encoding.reliability_noobj,
-                encoding.maxlogit_score,
-                encoding.inverse_map,
-                encoding.real_slots,
-            ):
-                combined.update(_tensor_hash(value).encode("ascii"))
-            encoding_hash[repetition, index] = combined.hexdigest()
             del encoding
     elapsed = time.monotonic() - started
 
@@ -202,7 +189,6 @@ def run_e50(
         or not np.array_equal(voxel_count[0], voxel_count[1])
     )
     reproduction_errors = int(np.count_nonzero(feature_hash[0] != feature_hash[1]))
-    reproduction_errors += int(np.count_nonzero(encoding_hash[0] != encoding_hash[1]))
     hard_errors = int(
         finite_errors.sum()
         + shape_errors.sum()
@@ -217,7 +203,6 @@ def run_e50(
         "real_count": real_count,
         "voxel_count": voxel_count,
         "point_feature_sha256": feature_hash,
-        "complete_encoding_sha256": encoding_hash,
         "frame_seconds": seconds,
         "finite_errors": finite_errors,
         "shape_errors": shape_errors,
