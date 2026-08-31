@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import concurrent.futures
 import hashlib
+import inspect
 import json
 import multiprocessing
 import os
@@ -55,6 +56,9 @@ E52_ARTIFACT_SHA256 = (
 )
 E53_ARTIFACT_SHA256 = (
     "e39511b76aec4c90b6d77d22b9d5f89d57184873ddc495677c8e786ffb476a03"
+)
+E54_ARTIFACT_SHA256 = (
+    "67187b039bdafbea0d8f728a017daea043c2fdb6f7a6c7754da3998fa6173dac"
 )
 E53_SEED_NAMESPACE = "E53-STU-query-v1"
 
@@ -378,6 +382,149 @@ def _e54_cpu_worker(
     finally:
         hook.remove()
     return records
+
+
+def _e55_cpu_worker(
+    task: tuple[str, str, int, int, int]
+) -> dict[str, object]:
+    """Build one real five-frame AJAE input twice on deterministic CPU."""
+
+    data_root, protocol_path, sequence_id, center_frame, threads = task
+    torch.set_num_threads(threads)
+    torch.set_num_interop_threads(1)
+    protocol = load_protocol(protocol_path)
+    sequence = STUSequence.open(
+        data_root, protocol=protocol, partition="train",
+        sequence_id=sequence_id, label_mode=LabelMode.FORBIDDEN,
+    )
+    from .evaluate import _protocol_slot_to_ray
+
+    slot_to_ray, ray_digest, _ = _protocol_slot_to_ray(protocol)
+    mapping = slot_to_ray(sequence.source_frame(center_frame))
+    window = sequence.window(
+        center_frame,
+        condition=ExperimentCondition.B3,
+        canonical_ray_by_slot=mapping,
+        ray_mapping_audited=True,
+        ray_mapping_digest=ray_digest,
+    )
+    encoder = FrozenSTUPointEncoder.from_protocol(protocol).cpu().eval()
+    torch.manual_seed(5500)
+    projection = AJAEPointTransformer.from_protocol(protocol).cpu().eval().input_projection
+    repetitions: list[dict[str, object]] = []
+    for _ in range(2):
+        encoded = []
+        started = time.monotonic()
+        for item in window.frames:
+            source = item.source
+            torch.manual_seed(e53_frame_seed(sequence_id, source.frame_id))
+            encoded.append(
+                encoder(
+                    official_stu_coordinates(source.xyzi, source.lidar_pose),
+                    official_stu_features(source.xyzi, source.lidar_pose),
+                    source.real_slots,
+                )
+            )
+        coordinates = torch.from_numpy(window.points.coordinates_center.copy())
+        relative_times = torch.from_numpy(
+            window.points.relative_time.astype(np.int64, copy=True)
+        )
+        stu_features = torch.cat([value.point_features for value in encoded])
+        normal_evidence = torch.cat([value.normal_evidence for value in encoded])
+        assignment = torch.cat([value.reliability_assign for value in encoded])
+        noobj = torch.cat([value.reliability_noobj for value in encoded])
+        intensity = torch.from_numpy(
+            np.concatenate(
+                [item.source.xyzi[item.source.real_slots, 3] for item in window.frames]
+            ).astype(np.float32, copy=False)
+        )
+        expected_content = torch.cat(
+            (stu_features, normal_evidence, assignment[:, None],
+             noobj[:, None], intensity[:, None]), dim=1
+        )
+        captured_content: list[torch.Tensor] = []
+        captured_position: list[torch.Tensor] = []
+        captured_time: list[torch.Tensor] = []
+        hooks = (
+            projection.content[0].register_forward_pre_hook(
+                lambda _module, inputs: captured_content.append(inputs[0].detach())
+            ),
+            projection.position[0].register_forward_pre_hook(
+                lambda _module, inputs: captured_position.append(inputs[0].detach())
+            ),
+            projection.time.register_forward_pre_hook(
+                lambda _module, inputs: captured_time.append(inputs[0].detach())
+            ),
+        )
+        try:
+            with torch.no_grad():
+                projected = projection(
+                    coordinates, relative_times, stu_features, normal_evidence,
+                    assignment, noobj, intensity,
+                )
+        finally:
+            for hook in hooks:
+                hook.remove()
+        point_count = int(coordinates.shape[0])
+        slot_errors = int(
+            sum(
+                not np.array_equal(value.real_slots.numpy(), item.source.real_slots)
+                for value, item in zip(encoded, window.frames, strict=True)
+            )
+        )
+        identity_errors = int(
+            point_count != window.points.count
+            or window.points.source_frame.shape != (point_count,)
+            or window.points.source_slot.shape != (point_count,)
+            or window.points.source_ray.shape != (point_count,)
+        )
+        content_errors = int(
+            len(captured_content) != 1
+            or captured_content[0].shape != (point_count, 150)
+            or not torch.equal(captured_content[0], expected_content)
+        )
+        coordinate_errors = int(
+            len(captured_position) != 1
+            or not torch.equal(captured_position[0], coordinates)
+        )
+        time_errors = int(
+            len(captured_time) != 1
+            or not torch.equal(captured_time[0], relative_times + 2)
+        )
+        dtype_errors = int(
+            expected_content.dtype != torch.float32
+            or coordinates.dtype != torch.float32
+            or relative_times.dtype != torch.long
+        )
+        output_errors = int(
+            projected.shape != (point_count, int(protocol.model["hidden_dim"]))
+            or not bool(torch.isfinite(projected).all())
+        )
+        repetitions.append(
+            {
+                "point_count": point_count,
+                "time_counts": np.bincount(
+                    (relative_times + 2).numpy(), minlength=5
+                ).astype(np.int64),
+                "slot_errors": slot_errors,
+                "identity_errors": identity_errors,
+                "content_errors": content_errors,
+                "coordinate_errors": coordinate_errors,
+                "time_errors": time_errors,
+                "dtype_errors": dtype_errors,
+                "output_errors": output_errors,
+                "content_hash": _tensor_hash(expected_content),
+                "projected_hash": _tensor_hash(projected),
+                "seconds": time.monotonic() - started,
+            }
+        )
+        del encoded, projected, expected_content
+    return {
+        "sequence_id": sequence_id,
+        "center_frame": center_frame,
+        "source_frames": [item.source.frame_id for item in window.frames],
+        "repetitions": repetitions,
+    }
 
 
 def _save(path: Path, arrays: Mapping[str, np.ndarray], result: Mapping[str, object]) -> None:
@@ -1373,6 +1520,145 @@ def run_e54(
     return result
 
 
+def run_e55(
+    data_root: Path | str,
+    protocol_path: Path | str,
+    e54_path: Path | str,
+    output_path: Path | str,
+    *,
+    device: str = "cpu",
+    workers: int = 2,
+    threads_per_worker: int = 12,
+) -> dict[str, object]:
+    """Verify the actual five-frame AJAE input schema and field boundary."""
+
+    protocol_file = Path(protocol_path).expanduser().resolve(strict=True)
+    protocol = load_protocol(protocol_file)
+    e54_file = Path(e54_path).expanduser().resolve(strict=True)
+    if _sha256(e54_file) != E54_ARTIFACT_SHA256:
+        raise QualificationError("E55 input is not the frozen E54 PASS artifact")
+    with np.load(e54_file, allow_pickle=False) as e54:
+        metadata = json.loads(str(e54["metadata_json"]))
+        if not metadata.get("passed") or metadata.get("experiment") != "E54":
+            raise QualificationError("E55 input does not declare E54 PASS")
+    if torch.device(device).type != "cpu":
+        raise QualificationError("E55 requires deterministic official CPU evaluation")
+    if workers != 2 or threads_per_worker != 12:
+        raise QualificationError("E55 requires the frozen 2x12 CPU execution layout")
+
+    centers = ((206, PHASE5_FRAMES[206][0]), (201, PHASE5_FRAMES[201][0]))
+    tasks = tuple(
+        (str(Path(data_root).expanduser().resolve()), str(protocol_file), sequence,
+         center, threads_per_worker)
+        for sequence, center in centers
+    )
+    started = time.monotonic()
+    context = multiprocessing.get_context("spawn")
+    with concurrent.futures.ProcessPoolExecutor(
+        max_workers=workers, mp_context=context
+    ) as executor:
+        records = tuple(executor.map(_e55_cpu_worker, tasks))
+    elapsed = time.monotonic() - started
+
+    point_count = np.zeros((2, 2), dtype=np.int32)
+    time_count = np.zeros((2, 2, 5), dtype=np.int32)
+    error_names = (
+        "slot_errors", "identity_errors", "content_errors", "coordinate_errors",
+        "time_errors", "dtype_errors", "output_errors",
+    )
+    errors = {name: np.zeros((2, 2), dtype=np.int32) for name in error_names}
+    content_hash = np.empty((2, 2), dtype="S64")
+    projected_hash = np.empty((2, 2), dtype="S64")
+    seconds = np.zeros((2, 2), dtype=np.float64)
+    source_frames = np.zeros((2, 5), dtype=np.int16)
+    for window_index, record in enumerate(records):
+        source_frames[window_index] = record["source_frames"]
+        for repetition, values in enumerate(record["repetitions"]):
+            point_count[repetition, window_index] = int(values["point_count"])
+            time_count[repetition, window_index] = values["time_counts"]
+            for name in error_names:
+                errors[name][repetition, window_index] = int(values[name])
+            content_hash[repetition, window_index] = str(values["content_hash"])
+            projected_hash[repetition, window_index] = str(values["projected_hash"])
+            seconds[repetition, window_index] = float(values["seconds"])
+
+    allowed_parameters = {
+        "coordinates", "relative_times", "stu_features", "normal_evidence",
+        "reliability_assign", "reliability_noobj", "intensity",
+        "cross_frame_enabled",
+    }
+    observed_parameters = set(inspect.signature(AJAEPointTransformer.forward).parameters)
+    observed_parameters.discard("self")
+    forbidden = {
+        "assigned_query", "query_token", "entropy", "energy", "msp",
+        "instance_id", "moving_label", "generator_family", "nvis",
+        "occlusion", "support_semantic", "proposal_count",
+    }
+    signature_errors = int(
+        observed_parameters != allowed_parameters
+        or bool(observed_parameters.intersection(forbidden))
+    )
+    reproduction_errors = int(
+        np.count_nonzero(content_hash[0] != content_hash[1])
+        + np.count_nonzero(projected_hash[0] != projected_hash[1])
+        + (not np.array_equal(point_count[0], point_count[1]))
+        + (not np.array_equal(time_count[0], time_count[1]))
+    )
+    schema_errors = int(
+        int(protocol.model["input_dim"]) != 150
+        or 128 + 19 + 1 + 1 + 1 != 150
+        or np.any(time_count == 0)
+        or np.any(point_count != time_count.sum(axis=2))
+    )
+    hard_errors = int(
+        sum(int(value.sum()) for value in errors.values())
+        + signature_errors
+        + reproduction_errors
+        + schema_errors
+    )
+    arrays = {
+        "sequence_id": np.asarray([206, 201], dtype=np.int16),
+        "center_frame": np.asarray([centers[0][1], centers[1][1]], dtype=np.int16),
+        "source_frames": source_frames,
+        "point_count": point_count,
+        "time_count": time_count,
+        **errors,
+        "content_sha256": content_hash,
+        "projected_sha256": projected_hash,
+        "window_seconds": seconds,
+    }
+    result: dict[str, object] = {
+        "experiment": "E55",
+        "passed": hard_errors == 0,
+        "failure_classification": None
+        if hard_errors == 0
+        else "ajae_input_schema_or_leakage_failure",
+        "windows": 2,
+        "formal_repetitions": 2,
+        "centers": {"206": centers[0][1], "201": centers[1][1]},
+        "e54_artifact_sha256": E54_ARTIFACT_SHA256,
+        "protocol_sha256": _sha256(protocol_file),
+        "device": "cpu",
+        "workers": workers,
+        "threads_per_worker": threads_per_worker,
+        "base_input_width": 150,
+        "component_widths": [128, 19, 1, 1, 1],
+        "total_points": int(point_count[0].sum()),
+        "signature_errors": signature_errors,
+        "schema_errors": schema_errors,
+        "field_errors": int(sum(int(value.sum()) for value in errors.values())),
+        "reproduction_errors": reproduction_errors,
+        "elapsed_seconds": elapsed,
+        "scientific_array_sha256": _array_hash(arrays),
+        "claim_limit": (
+            "E55 qualifies the actual five-frame input schema and prohibited-field "
+            "boundary; it does not qualify coordinate alignment quality or learning."
+        ),
+    }
+    _save(Path(output_path).expanduser().resolve(), arrays, result)
+    return result
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -1409,6 +1695,14 @@ def _parser() -> argparse.ArgumentParser:
     e54.add_argument("--device", default="cpu")
     e54.add_argument("--workers", type=int, default=4)
     e54.add_argument("--threads-per-worker", type=int, default=6)
+    e55 = commands.add_parser("e55")
+    e55.add_argument("--data-root", type=Path, required=True)
+    e55.add_argument("--protocol", type=Path, default=PROJECT_ROOT / "protocol.json")
+    e55.add_argument("--e54", type=Path, required=True)
+    e55.add_argument("--output", type=Path, required=True)
+    e55.add_argument("--device", default="cpu")
+    e55.add_argument("--workers", type=int, default=2)
+    e55.add_argument("--threads-per-worker", type=int, default=12)
     return parser
 
 
@@ -1457,6 +1751,18 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.data_root,
             args.protocol,
             args.e53,
+            args.output,
+            device=args.device,
+            workers=args.workers,
+            threads_per_worker=args.threads_per_worker,
+        )
+        print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        return 0 if result["passed"] else 1
+    if args.command == "e55":
+        result = run_e55(
+            args.data_root,
+            args.protocol,
+            args.e54,
             args.output,
             device=args.device,
             workers=args.workers,

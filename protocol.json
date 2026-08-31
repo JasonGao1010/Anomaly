@@ -3427,6 +3427,22 @@
         "result": {"passed": true, "artifact_sha256": "67187b039bdafbea0d8f728a017daea043c2fdb6f7a6c7754da3998fa6173dac", "scientific_array_sha256": "53fd0985ec912a879c53d159acf73dda9e61843b5cd9c3f9a9524df4d3ccc651", "protocol_sha256_at_execution": "a296bbf3d159200d0801bb8fc8cb9b61cb4e6011f137fe35a99abd1ca9e5cfae", "frames": 32, "total_sparse_voxels": 3438697, "total_real_returns": 3835507, "maximum_absolute_error": 0.0, "all_error_counts": 0, "reproduction_errors": 0, "elapsed_seconds": 1154.5546786630002, "independent_read_only_validation": true},
         "unlock": "PASS; E55 unlocked"
       },
+      "E55": {
+        "status": "EXECUTION FROZEN; formal run pending",
+        "date": "2026-09-01",
+        "question": "Does the actual real five-frame AJAE path consume exactly the frozen 150D scientific content plus separate centered coordinates and q, with no prohibited field?",
+        "input": {"e54_artifact": "runs/ajae/e54_evidence_reliability.npz", "e54_artifact_sha256": "67187b039bdafbea0d8f728a017daea043c2fdb6f7a6c7754da3998fa6173dac", "e54_scientific_array_sha256": "53fd0985ec912a879c53d159acf73dda9e61843b5cd9c3f9a9524df4d3ccc651", "windows": {"train_206_center_14": [12, 13, 14, 15, 16], "train_201_center_16": [14, 15, 16, 17, 18]}, "labels": "forbidden"},
+        "schema": {"base_components": {"stu_feature": 128, "normal_evidence": 19, "assignment_reliability": 1, "no_object_reliability": 1, "intensity": 1}, "base_width": 150, "separate_geometry": "centered XYZ [N,3]", "separate_time": "q in [-2,-1,0,1,2] mapped to embedding index q+2", "forbidden": ["assigned_query", "query_token", "entropy", "energy", "MSP", "instance_id", "moving_label", "generator_family", "Nvis", "occlusion", "support_semantic", "proposal_count"]},
+        "execution": {"device": "cpu", "workers": 2, "threads_per_worker": 12, "window_assignment": "one fixed sequence/window per worker", "projection_seed": 5500, "stu_seed_namespace": "E53-STU-query-v1:train:{sequence_id}:{frame_id}"},
+        "implementation": {"runner": "src/qualify.py", "runner_sha256": "6ecda5e72629ce295a5e852a766fb59ab5ed268393351483ebc91124e3704f60", "model_source_sha256": "d281ae105bc02c8b7b8ad3f4c155baddb74f2d7b50ab2867bcd78ad7ed088c5f", "execution_freeze_commit": null},
+        "command": "OMP_NUM_THREADS=12 MKL_NUM_THREADS=12 python -m src.qualify e55 --data-root /home/jasongao/Data/STU --protocol protocol.json --e54 runs/ajae/e54_evidence_reliability.npz --output runs/ajae/e55_actual_input.npz --device cpu --workers 2 --threads-per-worker 12",
+        "pass_conditions": ["actual content pre-hook equals exact [N,150] frozen component concatenation", "coordinate pre-hook equals centered [N,3] coordinates", "time embedding pre-hook equals q+2 and every q is nonempty", "point identities and visible-slot order exact", "dtypes and finite projected output correct", "model signature contains no prohibited field", "all error counts zero", "two content and projection hashes reproduce exactly"],
+        "resource_preflight": {"physical_cpu_cores": 24, "memory_total_gib": 23, "memory_available_gib": 21, "swap_total_gib": 16, "swap_used_gib": 0, "windows_e_total_bytes": 484950659072, "windows_e_remaining_bytes": 75068989440, "competing_experiment_process": false, "expected_output": "far below 1 GiB"},
+        "formal_repetitions": 2,
+        "artifact": "runs/ajae/e55_actual_input.npz",
+        "result": null,
+        "unlock": "PASS unlocks E56; FAIL stops Phase 5"
+      },
       "E45B": {
         "current_validity": "historical PASS for the old normal-control distribution only; current E48 qualification is supplied separately by E45B-v2 PASS on E25-new",
         "question": "Can normal-control and anomaly-proxy support at least 1024 non-reused strictly matched pairs for E48?",
