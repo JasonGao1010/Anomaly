@@ -3364,6 +3364,21 @@
         "result": {"passed": true, "artifact_sha256": "2c2d8507df0f9e4c9984118e59c6d65a8f13835590fee5b51bed02c282c5671a", "scientific_array_sha256": "c698f3b53d6a38f579f45fdfb4f06023f3b433d65a9f61e87c386dc2ac9090f2", "protocol_sha256_at_execution": "4d35e0d9518a83e06810188faad173de55fcadfe2f0017ec5b61225ab126479f", "frames": 32, "total_real_returns": 3835507, "total_sparse_voxels": 3438697, "point_feature_hash_matches": 32, "finite_errors": 0, "shape_errors": 0, "gradient_errors": 0, "identity_errors": 0, "reproduction_errors": 0, "elapsed_seconds": 28.586874010999964, "independent_read_only_validation": true},
         "unlock": "PASS; E51 unlocked"
       },
+      "E51": {
+        "status": "EXECUTION FROZEN; formal run pending",
+        "date": "2026-09-01",
+        "question": "Does the official sparse inverse map recover every frozen E50 real return in its original slot order while excluding all zero slots?",
+        "input": {"e50_artifact": "runs/ajae/e50_stu_features.npz", "e50_artifact_sha256": "2c2d8507df0f9e4c9984118e59c6d65a8f13835590fee5b51bed02c282c5671a", "e50_scientific_array_sha256": "c698f3b53d6a38f579f45fdfb4f06023f3b433d65a9f61e87c386dc2ac9090f2", "frames": "exact E50 32-frame identity", "labels": "forbidden"},
+        "independent_reference": {"quantized_coordinate_rule": "floor(world_coordinate / 0.05 m) in NumPy float64", "sparse_row_order": "first raw-point occurrence of each integer voxel triplet", "analytic_x_coordinates_m": [0.11, 0.01, 0.12, -0.01, -0.06], "expected_x_rows": [2, 0, -1, -2], "expected_unique_indices": [0, 1, 3, 4], "expected_inverse": [0, 1, 0, 2, 3]},
+        "implementation": {"runner": "src/qualify.py", "runner_sha256": "8fdb06eba90d053b1d2061d16dfda1ec40bc477b3f8fb50227bfb74b742ed950", "execution_freeze_commit": null},
+        "command": "OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python -m src.qualify e51 --data-root /home/jasongao/Data/STU --protocol protocol.json --e50 runs/ajae/e50_stu_features.npz --output runs/ajae/e51_inverse_mapping.npz --device cuda",
+        "pass_conditions": ["independent quantized coordinates exactly equal MinkowskiEngine coordinates", "independent unique row indices exactly equal MinkowskiEngine indices", "independent inverse exactly equals both MinkowskiEngine and frozen encoder inverses", "100% of real returns recover in-range sparse rows", "actual real slots exactly equal source real slots", "all zero slots excluded", "all error counts zero", "two complete mapping passes reproduce exactly"],
+        "resource_preflight": {"online_cpu_cores": 24, "memory_total_gib": 23, "memory_available_gib": 21, "swap_total_gib": 16, "swap_used_gib": 0, "gpu": "NVIDIA GeForce RTX 5080 Laptop GPU", "gpu_free_mib": 14616, "gpu_utilization_percent": 6, "windows_e_total_bytes": 484950659072, "windows_e_remaining_bytes": 75138588672, "competing_experiment_process": false, "expected_output": "far below 1 GiB"},
+        "formal_repetitions": 2,
+        "artifact": "runs/ajae/e51_inverse_mapping.npz",
+        "result": null,
+        "unlock": "PASS unlocks E52; FAIL stops Phase 5"
+      },
       "E45B": {
         "current_validity": "historical PASS for the old normal-control distribution only; current E48 qualification is supplied separately by E45B-v2 PASS on E25-new",
         "question": "Can normal-control and anomaly-proxy support at least 1024 non-reused strictly matched pairs for E48?",

@@ -3212,19 +3212,19 @@ Notes: The invalid implementation run exited 1 after 31.979 seconds. Its own sav
 ## E51 | Sparse-Voxel to Raw-Point Inverse Mapping
 
 Experiment ID: E51
-Design-freeze commit/hash: Frozen design; commit not recorded.
-Execution-freeze commit/hash: Not executed.
-Date: Not executed.
-Git commit / clean state: Not applicable.
-Data identities: Phase 5 real frames and analytic mapping fixtures.
+Design-freeze commit/hash: Original E51 construct retained. Execution implementation SHA-256 `8fdb06eba90d053b1d2061d16dfda1ec40bc477b3f8fb50227bfb74b742ed950` before formal execution.
+Execution-freeze commit/hash: This record, corrected E51 implementation and focused analytic test are committed before the formal run; resolved commit is recorded with the result.
+Date: 2026-09-01 execution freeze; formal result pending.
+Git commit / clean state: Tracked files were clean at `69bb695`; untracked user-owned `PPT/` remains excluded.
+Data identities: The exact 32 E50 real frames and all their visible-return identities, plus the fixed five-point analytic mapping fixture `[0.11,0.01,0.12,-0.01,-0.06]` metres on x at 0.05 metre voxel size. Labels are forbidden.
 Input artifact hashes: E50 SHA-256 `2c2d8507df0f9e4c9984118e59c6d65a8f13835590fee5b51bed02c282c5671a`; scientific-array SHA-256 `c698f3b53d6a38f579f45fdfb4f06023f3b433d65a9f61e87c386dc2ac9090f2`.
-Random namespaces / seeds: Frozen identities.
-Command and resolved config: Every valid raw return must have an in-range inverse row; recover 100% of valid points; invalid slots excluded; independently recomputed quantized coordinates and inverse map must have zero differences; two identical runs.
-Resource and disk preflight: Not executed.
+Random namespaces / seeds: None. Frame identities are inherited exactly from E50; no sampling occurs.
+Command and resolved config: Independently compute `floor(x/0.05)` voxel rows and first-occurrence sparse row order in plain NumPy. Compare those rows, unique indices and inverse indices against MinkowskiEngine, then compare the independently derived inverse against the actual frozen encoder output. Every visible return must recover an in-range row, actual `real_slots` must exactly equal the source visible-return slots, every zero slot must be excluded, all error counts must be zero, and complete mapping hashes must reproduce across two passes. Command: `OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python -m src.qualify e51 --data-root /home/jasongao/Data/STU --protocol protocol.json --e50 runs/ajae/e50_stu_features.npz --output runs/ajae/e51_inverse_mapping.npz --device cuda`.
+Resource and disk preflight: Checked 2026-09-01: 24 CPU cores; 23 GiB RAM with 21 GiB available; 16 GiB unused swap; RTX 5080 Laptop GPU with 14,616 MiB free and 6% utilization; no competing qualification/training process. Windows E: has 75,138,588,672 bytes remaining of 484,950,659,072 bytes, above the 5% reserve. Output is far below 1 GiB. A one-frame no-artifact implementation check confirmed exact agreement on 125,072 real returns, 6,000 excluded zero slots and 117,913 sparse voxels; it is not formal evidence.
 Artifacts and hashes: None.
 Primary construct: Exact inverse mapping from sparse voxels to every valid raw return.
-Primary result: Not executed.
-PASS / FAIL / OUTCOME: OUTCOME — CURRENT FORMAL NODE / NOT EXECUTED.
+Primary result: Formal run pending.
+PASS / FAIL / OUTCOME: OUTCOME — EXECUTION FROZEN / NOT EXECUTED.
 Failure classification: Not applicable.
 Unlocked next node: E52 after PASS.
 Invalidated downstream evidence: E52 onward remains locked.

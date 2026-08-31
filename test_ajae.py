@@ -30,7 +30,7 @@ from src.evaluate import (
     load_prediction_coverage,
 )
 from src.model import AJAEPointTransformer, assigned_stu_evidence, temporal_radius_knn
-from src.qualify import PHASE5_FRAMES, phase5_frame_ids
+from src.qualify import PHASE5_FRAMES, independent_sparse_quantize, phase5_frame_ids
 from src.protocol import (
     CAUSAL_OFFSETS,
     RELATIVE_TIMES,
@@ -342,6 +342,18 @@ def test_phase5_frame_identity_is_frozen_before_stu_outputs() -> None:
     protocol = load_protocol(PROTOCOL_PATH)
     assert phase5_frame_ids(protocol, 206) == PHASE5_FRAMES[206]
     assert phase5_frame_ids(protocol, 201) == PHASE5_FRAMES[201]
+
+
+def test_independent_sparse_quantize_preserves_first_occurrence_rows() -> None:
+    points = np.asarray(
+        [[0.11, 0.0, 0.0], [0.01, 0.0, 0.0], [0.12, 0.0, 0.0],
+         [-0.01, 0.0, 0.0], [-0.06, 0.0, 0.0]],
+        dtype=np.float64,
+    )
+    rows, unique, inverse = independent_sparse_quantize(points, 0.05)
+    np.testing.assert_array_equal(rows[:, 0], [2, 0, -1, -2])
+    np.testing.assert_array_equal(unique, [0, 1, 3, 4])
+    np.testing.assert_array_equal(inverse, [0, 1, 0, 2, 3])
 
 
 def test_schema4_development_worlds_are_rejected_after_world_v3_freeze() -> None:
