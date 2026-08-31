@@ -3301,21 +3301,21 @@ Notes: None.
 
 Experiment ID: E55
 Design-freeze commit/hash: Original E55 construct retained. Execution runner SHA-256 `6ecda5e72629ce295a5e852a766fb59ab5ed268393351483ebc91124e3704f60` before formal execution.
-Execution-freeze commit/hash: This record and E55 implementation are committed before the formal run; resolved commit is recorded with the result.
-Date: 2026-09-01 execution freeze; formal result pending.
+Execution-freeze commit/hash: `64fd3fd3138576cbf463b40b08d0c1fb9a57c28d`.
+Date: 2026-09-01 formal run completed.
 Git commit / clean state: Tracked files were clean at `7429c1b`; untracked user-owned `PPT/` remains excluded.
 Data identities: Two real five-frame windows: train/206 center 14 with source frames 12–16 and train/201 center 16 with source frames 14–18. These are the first frozen Phase 5 identity frames in each sequence. Labels are forbidden.
 Input artifact hashes: E54 SHA-256 `67187b039bdafbea0d8f728a017daea043c2fdb6f7a6c7754da3998fa6173dac`; scientific-array SHA-256 `53fd0985ec912a879c53d159acf73dda9e61843b5cd9c3f9a9524df4d3ccc651`.
 Random namespaces / seeds: STU source frames inherit the exact E53 per-frame seeds. The mechanical AJAE input-projection initialization seed is exactly 5500; no model training or seed search occurs.
 Command and resolved config: Execute each five-frame window on deterministic CPU in one fixed worker, two workers with 12 threads each. Concatenate the actual fields in the only allowed base order: 128D STU feature, 19D normal evidence, assignment reliability, no-object reliability, intensity. A pre-hook on the actual first content linear layer must observe exactly `[N,150]` equal to this concatenation. Separate hooks must observe the centered `[N,3]` coordinates and time embedding indices `q+2`; every q=-2..2 must be nonempty. Raw point identities, data types, finite projected outputs and two-pass hashes must be exact. The model forward signature must contain only the seven scientific inputs plus `cross_frame_enabled`; assigned query, query token, entropy, energy, MSP, instance ID, moving label, generator family, Nvis, occlusion, support semantic and proposal count are forbidden. Command: `OMP_NUM_THREADS=12 MKL_NUM_THREADS=12 python -m src.qualify e55 --data-root /home/jasongao/Data/STU --protocol protocol.json --e54 runs/ajae/e54_evidence_reliability.npz --output runs/ajae/e55_actual_input.npz --device cpu --workers 2 --threads-per-worker 12`.
 Resource and disk preflight: Checked 2026-09-01: 24 physical CPU cores; 23 GiB RAM with 21 GiB available; 16 GiB unused swap; no competing qualification/training process. Windows E: has 75,068,989,440 bytes remaining of 484,950,659,072 bytes, above the 5% reserve. Output is far below 1 GiB. The 206/14 one-window no-artifact check covered 625,129 points; all field/schema errors were zero and both content/projection hashes reproduced across two passes.
-Artifacts and hashes: None.
+Artifacts and hashes: `runs/ajae/e55_actual_input.npz`, SHA-256 `13d367fa0f7f0ed86ba6de24fc535df44e4ea90ab6f38989dec4ea4d6e35aaf8`; scientific-array SHA-256 `68cdfb42f5c8a533d19c4d92302fa4372e46d56030392229b81217be43bf533a`.
 Primary construct: Correct, leakage-free actual model input tensor.
-Primary result: Formal run pending.
-PASS / FAIL / OUTCOME: OUTCOME — EXECUTION FROZEN / NOT EXECUTED.
+Primary result: The train/206 and train/201 windows contained 625,129 and 514,296 real points. Both actual content tensors were exactly `[N,150]` with component widths `[128,19,1,1,1]`; every q bin was nonempty. Field, schema, signature, prohibited-field and reproduction errors were all zero.
+PASS / FAIL / OUTCOME: PASS.
 Failure classification: Not applicable.
-Unlocked next node: E56 after PASS.
-Invalidated downstream evidence: E56 onward remains locked.
+Unlocked next node: E56.
+Invalidated downstream evidence: Phase 6 onward remains locked pending E56.
 Descriptive observations: None.
 Notes: The prohibited fields must not enter the model input.
 
@@ -3327,14 +3327,14 @@ Execution-freeze commit/hash: Not executed.
 Date: Not executed.
 Git commit / clean state: Not applicable.
 Data identities: Analytic rigid-transform fixtures and real five-frame static/moving-normal points.
-Input artifact hashes: E55 output required; none exists.
+Input artifact hashes: E55 SHA-256 `13d367fa0f7f0ed86ba6de24fc535df44e4ea90ab6f38989dec4ea4d6e35aaf8`; scientific-array SHA-256 `68cdfb42f5c8a533d19c4d92302fa4372e46d56030392229b81217be43bf533a`.
 Random namespaces / seeds: Frozen frame IDs.
 Command and resolved config: Analytic rigid fixture coordinate error <1e-9 m. On real five-frame static background, report nearest-neighbor residual before/after and require aligned median and Q95 both strictly improve. Moving-normal points must retain nonzero relative motion; no instance-level erasure. Matrix direction, frame IDs, finite values, and two-run reproduction all required.
 Resource and disk preflight: Not executed.
 Artifacts and hashes: None.
 Primary construct: Correct transformation of all five frames into center coordinates while retaining genuine object motion.
 Primary result: Not executed.
-PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
+PASS / FAIL / OUTCOME: OUTCOME — CURRENT FORMAL NODE / NOT EXECUTED.
 Failure classification: Not applicable.
 Unlocked next node: E57 after PASS.
 Invalidated downstream evidence: Phase 6 onward remains locked.

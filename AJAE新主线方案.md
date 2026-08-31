@@ -1944,7 +1944,7 @@ E53从提交`50361d6e17d6da6783d9e028c7dd580b35346be8`完成唯一一次正式�
 
 E54从提交`0676cf41634bd6ec3cc0b8a4f732131b287b8c9f`完成唯一一次正式运行并PASS。它继承E53的32帧、确定性CPU路径、逐帧随机身份和4进程×6线程布局，在官方float32张量上另行写出冻结公式，再分别核对实际体素输出与实际逆映射逐点输出。3,438,697个稀疏体素和3,835,507个真实回波的六类最大绝对误差均为0，`1e-7`超限、广播、有限值、梯度和两遍复现错误全部为0。只读复核重新计算了汇总量、哈希一致性与科学数组哈希。正式产物为`runs/ajae/e54_evidence_reliability.npz`，SHA-256为`67187b039bdafbea0d8f728a017daea043c2fdb6f7a6c7754da3998fa6173dac`，科学数组哈希为`53fd0985ec912a879c53d159acf73dda9e61843b5cd9c3f9a9524df4d3ccc651`。E55现已解锁。
 
-E55已在正式结果产生前冻结执行实现。它选择train/206中心帧14和train/201中心帧16两个真实五帧窗口，每个窗口在一个确定性CPU进程中执行两遍。实际内容只能按128维STU特征、19维正常证据、分配可靠性、无对象可靠性和强度拼成150维；实际内容线性层、坐标线性层和时间嵌入的前置钩子分别核对150维内容、中心坐标和`q+2`时间索引。模型签名同时排除查询编号/令牌、熵、能量、MSP、实例编号、移动标签、生成器家族及生成诊断字段。206/14非正式五帧检查覆盖625,129个真实点，五个时间位均非空，全部字段错误为0，两遍内容与投影哈希一致；未写证据产物。E55正式结果尚未产生。
+E55从提交`64fd3fd3138576cbf463b40b08d0c1fb9a57c28d`完成唯一一次正式运行并PASS。train/206中心14与train/201中心16两个真实五帧窗口分别含625,129和514,296个真实点。实际基础内容严格为128维STU特征、19维正常证据、分配可靠性、无对象可靠性和强度组成的150维，五个时间位均非空；实际内容层、坐标层和时间嵌入钩子全部逐元素对齐。模型签名未包含查询编号/令牌、熵、能量、MSP、实例编号、移动标签、生成器家族及生成诊断字段。字段、模式、签名和两遍复现错误均为0。只读复核重新计算了点数、五时位计数、哈希一致性与科学数组哈希。正式产物为`runs/ajae/e55_actual_input.npz`，SHA-256为`13d367fa0f7f0ed86ba6de24fc535df44e4ea90ab6f38989dec4ea4d6e35aaf8`，科学数组哈希为`68cdfb42f5c8a533d19c4d92302fa4372e46d56030392229b81217be43bf533a`。E56现已解锁。
 
 E39已正式通过：三来源在2.5–10、10–20、20–30和30–40米均有非零return entity-frame覆盖，逐实体帧计数守恒错误0、非有限值0，两遍逐元素一致；三来源在40–50米均无观测，按冻结规则仅报告。共享trace已保存1,656,861条逐返回强度及E40–E44所需计数。E39关闭，E40解锁。
 
@@ -2036,7 +2036,7 @@ E26-v2已经在冻结实现提交`38079213a0801bf3a279414a8b120bfd24e1cd1b`上�
 当前执行节点为：
 
 $$
-\boxed{E38\text{--}E44\ \mathrm{PASS}\rightarrow E45B\text{-v2 PASS}\rightarrow E48\ \mathrm{PASS}\rightarrow E49\ \mathrm{PASS}\rightarrow E50\text{--}E54\ \mathrm{PASS}\rightarrow E55\ \mathrm{CURRENT}}
+\boxed{E38\text{--}E44\ \mathrm{PASS}\rightarrow E45B\text{-v2 PASS}\rightarrow E48\ \mathrm{PASS}\rightarrow E49\ \mathrm{PASS}\rightarrow E50\text{--}E55\ \mathrm{PASS}\rightarrow E56\ \mathrm{CURRENT}}
 $$
 
 E23与E24-v2已按冻结设计通过；Gate 1已完成：
@@ -2045,12 +2045,12 @@ $$
 E38\text{--}E44\ \mathrm{PASS}\rightarrow E45B\text{-v2 PASS}\rightarrow E48\ \mathrm{PASS}\rightarrow E49\ \mathrm{PASS}
 $$
 
-E27–E37的纯机械资格继续保留；E36-v1、E45-v1、E45-v2、E45A、E45A-v2、E45A-new、E45A-overlap、E25-v2和E25-v3 normal-control FAIL均永久保留。旧E45B已PASS，但只资格旧normal-control分布。$D_{xy}+\alpha$路线、E25-v3逐对象五维条件复制路线和全部E45A后续演化均已终止。E25-new、E26-v2、E38–E44刷新、E45B-v2、E48、E49与E50–E54已经PASS。E46已降为非阻断诊断；当前正式节点是E55。
+E27–E37的纯机械资格继续保留；E36-v1、E45-v1、E45-v2、E45A、E45A-v2、E45A-new、E45A-overlap、E25-v2和E25-v3 normal-control FAIL均永久保留。旧E45B已PASS，但只资格旧normal-control分布。$D_{xy}+\alpha$路线、E25-v3逐对象五维条件复制路线和全部E45A后续演化均已终止。E25-new、E26-v2、E38–E44刷新、E45B-v2、E48、E49与E50–E55已经PASS。E46已降为非阻断诊断；当前正式节点是E56。
 
 因此当前整体判断仍是：
 
 $$
-\boxed{Gate\ 1\ \mathrm{PASS}\rightarrow E50\text{--}E54\ \mathrm{PASS}\rightarrow E55\ \mathrm{CURRENT}\rightarrow E56\text{--}E71\rightarrow B1>B0}
+\boxed{Gate\ 1\ \mathrm{PASS}\rightarrow E50\text{--}E55\ \mathrm{PASS}\rightarrow E56\ \mathrm{CURRENT}\rightarrow E57\text{--}E71\rightarrow B1>B0}
 $$
 
 不能写成“AJAE 方法已经验证”或“剩余只需训练”。

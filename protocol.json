@@ -2656,8 +2656,8 @@
       }
     },
     "renderer_mechanical_qualification": {
-      "status": "Gate 1 PASS; E50-E54 valid formal runs PASS; E55 current",
-      "current_gate1_policy": {"hard_evidence": ["compatible canonical-ray and renderer mechanics through E44", "E45B-v2 rendered control/proxy qualification PASS", "E48 direct rendered-label-shortcut audit PASS"], "excluded_from_conjunction": ["all E45A variants", "E45-V1", "E46", "E47"], "rationale": "Natural real-normal observations and coverage-oriented inserted controls need not reproduce the same scene/placement distribution. Real-versus-rendered source identifiability is not equivalent to anomaly-label shortcut predictability because rendered controls and rendered proxies carry different labels.", "gate1_result": "PASS", "current_node": "E55", "next_after_pass": ["E56-E71", "Gate 2 B1 versus B0"]},
+      "status": "Gate 1 PASS; E50-E55 valid formal runs PASS; E56 current",
+      "current_gate1_policy": {"hard_evidence": ["compatible canonical-ray and renderer mechanics through E44", "E45B-v2 rendered control/proxy qualification PASS", "E48 direct rendered-label-shortcut audit PASS"], "excluded_from_conjunction": ["all E45A variants", "E45-V1", "E46", "E47"], "rationale": "Natural real-normal observations and coverage-oriented inserted controls need not reproduce the same scene/placement distribution. Real-versus-rendered source identifiability is not equivalent to anomaly-label shortcut predictability because rendered controls and rendered proxies carry different labels.", "gate1_result": "PASS", "current_node": "E56", "next_after_pass": ["E57-E71", "Gate 2 B1 versus B0"]},
       "layer_boundaries": {"E27-E28": "direct geometry outputs only", "E29": "return probability and deterministic acceptance decision only", "E30-E31": "accepted returns", "E32-E33": "nearest-return occlusion competition"},
       "E27": {
         "question": "Does the formal geometry path return the correct nearest convex-hull hit, outward finite normal and object ID for active normal-control templates when return rejection is disabled?",
@@ -3428,20 +3428,20 @@
         "unlock": "PASS; E55 unlocked"
       },
       "E55": {
-        "status": "EXECUTION FROZEN; formal run pending",
+        "status": "PASS; E56 unlocked",
         "date": "2026-09-01",
         "question": "Does the actual real five-frame AJAE path consume exactly the frozen 150D scientific content plus separate centered coordinates and q, with no prohibited field?",
         "input": {"e54_artifact": "runs/ajae/e54_evidence_reliability.npz", "e54_artifact_sha256": "67187b039bdafbea0d8f728a017daea043c2fdb6f7a6c7754da3998fa6173dac", "e54_scientific_array_sha256": "53fd0985ec912a879c53d159acf73dda9e61843b5cd9c3f9a9524df4d3ccc651", "windows": {"train_206_center_14": [12, 13, 14, 15, 16], "train_201_center_16": [14, 15, 16, 17, 18]}, "labels": "forbidden"},
         "schema": {"base_components": {"stu_feature": 128, "normal_evidence": 19, "assignment_reliability": 1, "no_object_reliability": 1, "intensity": 1}, "base_width": 150, "separate_geometry": "centered XYZ [N,3]", "separate_time": "q in [-2,-1,0,1,2] mapped to embedding index q+2", "forbidden": ["assigned_query", "query_token", "entropy", "energy", "MSP", "instance_id", "moving_label", "generator_family", "Nvis", "occlusion", "support_semantic", "proposal_count"]},
         "execution": {"device": "cpu", "workers": 2, "threads_per_worker": 12, "window_assignment": "one fixed sequence/window per worker", "projection_seed": 5500, "stu_seed_namespace": "E53-STU-query-v1:train:{sequence_id}:{frame_id}"},
-        "implementation": {"runner": "src/qualify.py", "runner_sha256": "6ecda5e72629ce295a5e852a766fb59ab5ed268393351483ebc91124e3704f60", "model_source_sha256": "d281ae105bc02c8b7b8ad3f4c155baddb74f2d7b50ab2867bcd78ad7ed088c5f", "execution_freeze_commit": null},
+        "implementation": {"runner": "src/qualify.py", "runner_sha256": "6ecda5e72629ce295a5e852a766fb59ab5ed268393351483ebc91124e3704f60", "model_source_sha256": "d281ae105bc02c8b7b8ad3f4c155baddb74f2d7b50ab2867bcd78ad7ed088c5f", "execution_freeze_commit": "64fd3fd3138576cbf463b40b08d0c1fb9a57c28d"},
         "command": "OMP_NUM_THREADS=12 MKL_NUM_THREADS=12 python -m src.qualify e55 --data-root /home/jasongao/Data/STU --protocol protocol.json --e54 runs/ajae/e54_evidence_reliability.npz --output runs/ajae/e55_actual_input.npz --device cpu --workers 2 --threads-per-worker 12",
         "pass_conditions": ["actual content pre-hook equals exact [N,150] frozen component concatenation", "coordinate pre-hook equals centered [N,3] coordinates", "time embedding pre-hook equals q+2 and every q is nonempty", "point identities and visible-slot order exact", "dtypes and finite projected output correct", "model signature contains no prohibited field", "all error counts zero", "two content and projection hashes reproduce exactly"],
         "resource_preflight": {"physical_cpu_cores": 24, "memory_total_gib": 23, "memory_available_gib": 21, "swap_total_gib": 16, "swap_used_gib": 0, "windows_e_total_bytes": 484950659072, "windows_e_remaining_bytes": 75068989440, "competing_experiment_process": false, "expected_output": "far below 1 GiB"},
         "formal_repetitions": 2,
         "artifact": "runs/ajae/e55_actual_input.npz",
-        "result": null,
-        "unlock": "PASS unlocks E56; FAIL stops Phase 5"
+        "result": {"passed": true, "artifact_sha256": "13d367fa0f7f0ed86ba6de24fc535df44e4ea90ab6f38989dec4ea4d6e35aaf8", "scientific_array_sha256": "68cdfb42f5c8a533d19c4d92302fa4372e46d56030392229b81217be43bf533a", "protocol_sha256_at_execution": "0077a82b325fcb0c28127f80bec829439e72619e973951940ad6e1259030b0bf", "windows": 2, "point_counts": [625129, 514296], "total_points": 1139425, "base_input_width": 150, "all_error_counts": 0, "reproduction_errors": 0, "elapsed_seconds": 623.5464828870008, "independent_read_only_validation": true},
+        "unlock": "PASS; E56 unlocked"
       },
       "E45B": {
         "current_validity": "historical PASS for the old normal-control distribution only; current E48 qualification is supplied separately by E45B-v2 PASS on E25-new",
