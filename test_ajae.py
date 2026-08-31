@@ -30,6 +30,7 @@ from src.evaluate import (
     load_prediction_coverage,
 )
 from src.model import AJAEPointTransformer, assigned_stu_evidence, temporal_radius_knn
+from src.qualify import PHASE5_FRAMES, phase5_frame_ids
 from src.protocol import (
     CAUSAL_OFFSETS,
     RELATIVE_TIMES,
@@ -335,6 +336,12 @@ def test_e48_matched_pair_bootstrap_is_deterministic() -> None:
     )
     np.testing.assert_array_equal(first, second)
     np.testing.assert_array_equal(first, np.ones((2000, 4)))
+
+
+def test_phase5_frame_identity_is_frozen_before_stu_outputs() -> None:
+    protocol = load_protocol(PROTOCOL_PATH)
+    assert phase5_frame_ids(protocol, 206) == PHASE5_FRAMES[206]
+    assert phase5_frame_ids(protocol, 201) == PHASE5_FRAMES[201]
 
 
 def test_schema4_development_worlds_are_rejected_after_world_v3_freeze() -> None:

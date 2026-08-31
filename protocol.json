@@ -3348,6 +3348,21 @@
         "claim_limit": "Gate 1 PASS establishes compatible renderer mechanics and absence of a frozen near-saturated low-level rendered-label shortcut. It does not establish AJAE effectiveness; E50-E71 and B1 versus B0 remain required.",
         "unlock": "E50"
       },
+      "E50": {
+        "status": "EXECUTION FROZEN; formal run pending",
+        "date": "2026-09-01",
+        "question": "Does the unmodified official STU evaluation path expose one finite frozen 128-channel point feature for every selected real return, reproducibly?",
+        "frame_selection": {"namespace": "E50-phase5-frame-v1:train:{sequence_id}:{frame_id}", "rule": "lowest 16 SHA-256 ranks among legal centered frames per sequence, then ascending frame order", "train_206": [14, 41, 98, 125, 189, 199, 272, 304, 329, 347, 378, 385, 386, 387, 407, 409], "train_201": [16, 67, 176, 239, 245, 289, 337, 344, 416, 417, 423, 474, 479, 496, 524, 670], "labels": "forbidden"},
+        "inputs": {"official_stu_source_manifest_sha256": "f0cead4f5e721262f9f1c26231d116406bb4fb0a43139f22e3706be89b914891", "official_stu_source_files": 47, "checkpoint_sha256": "743b10d39c4076d98533bf1e84d389ad2703016904d31146e48919618b07b67a", "model_state_sha256": "bd62c2ace0fd13911e2ba81f4969ca6633e73ec5270ffc0b1bd61840b05f924d", "model_state_tensor_sha256": "0be4805592a3d064b21655c6c6eeeb7227322c9670873345be52747b0a24d1fb", "model_source_sha256": "f6adae23ce11c397536e5a2d2abc103865ddbeede97345398ab4619992adaeca", "scene_source_sha256": "f55710c747d67c91b780498a8d19a1426865048c2dfe808c98a6f15bb02b88c9"},
+        "implementation": {"runner": "src/qualify.py", "runner_sha256": "384c43800f9f82507762dd104d642b04003140e210cf35a552100db934164659", "pre_freeze_commit": "2f25e2a8d366feab11157a73c43b7b323f02c1b9", "execution_freeze_commit": null},
+        "command": "OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python -m src.qualify e50 --data-root /home/jasongao/Data/STU --protocol protocol.json --output runs/ajae/e50_stu_features.npz --device cuda",
+        "pass_conditions": ["32 selected real frames", "point_features_head output has exactly 128 channels", "one output row per visible real return", "all outputs finite", "STU evaluation mode and no gradients", "two complete passes reproduce point-feature and full-encoding hashes exactly"],
+        "resource_preflight": {"online_cpu_cores": 24, "memory_total_gib": 23, "memory_available_gib": 21, "swap_total_gib": 16, "swap_used_gib": 0, "gpu": "NVIDIA GeForce RTX 5080 Laptop GPU", "gpu_free_mib": 14576, "windows_e_total_bytes": 484950659072, "windows_e_remaining_bytes": 75141013504, "competing_experiment_process": false, "smoke_peak_gpu_mib": 2256.1, "expected_output": "far below 1 GiB"},
+        "formal_repetitions": 2,
+        "artifact": "runs/ajae/e50_stu_features.npz",
+        "result": null,
+        "unlock": "PASS unlocks E51; FAIL stops Phase 5"
+      },
       "E45B": {
         "current_validity": "historical PASS for the old normal-control distribution only; current E48 qualification is supplied separately by E45B-v2 PASS on E25-new",
         "question": "Can normal-control and anomaly-proxy support at least 1024 non-reused strictly matched pairs for E48?",
