@@ -2656,8 +2656,8 @@
       }
     },
     "renderer_mechanical_qualification": {
-      "status": "Gate 1 PASS; E50-E52 valid formal runs PASS; E53 current",
-      "current_gate1_policy": {"hard_evidence": ["compatible canonical-ray and renderer mechanics through E44", "E45B-v2 rendered control/proxy qualification PASS", "E48 direct rendered-label-shortcut audit PASS"], "excluded_from_conjunction": ["all E45A variants", "E45-V1", "E46", "E47"], "rationale": "Natural real-normal observations and coverage-oriented inserted controls need not reproduce the same scene/placement distribution. Real-versus-rendered source identifiability is not equivalent to anomaly-label shortcut predictability because rendered controls and rendered proxies carry different labels.", "gate1_result": "PASS", "current_node": "E53", "next_after_pass": ["E54-E71", "Gate 2 B1 versus B0"]},
+      "status": "Gate 1 PASS; E50-E53 valid formal runs PASS; E54 current",
+      "current_gate1_policy": {"hard_evidence": ["compatible canonical-ray and renderer mechanics through E44", "E45B-v2 rendered control/proxy qualification PASS", "E48 direct rendered-label-shortcut audit PASS"], "excluded_from_conjunction": ["all E45A variants", "E45-V1", "E46", "E47"], "rationale": "Natural real-normal observations and coverage-oriented inserted controls need not reproduce the same scene/placement distribution. Real-versus-rendered source identifiability is not equivalent to anomaly-label shortcut predictability because rendered controls and rendered proxies carry different labels.", "gate1_result": "PASS", "current_node": "E54", "next_after_pass": ["E55-E71", "Gate 2 B1 versus B0"]},
       "layer_boundaries": {"E27-E28": "direct geometry outputs only", "E29": "return probability and deterministic acceptance decision only", "E30-E31": "accepted returns", "E32-E33": "nearest-return occlusion competition"},
       "E27": {
         "question": "Does the formal geometry path return the correct nearest convex-hull hit, outward finite normal and object ID for active normal-control templates when return rejection is disabled?",
@@ -3395,21 +3395,21 @@
         "unlock": "PASS; E53 unlocked"
       },
       "E53": {
-        "status": "EXECUTION FROZEN; formal run pending",
+        "status": "PASS; E54 unlocked",
         "date": "2026-09-01",
         "question": "Does the frozen encoder implement the official minimum-index point-to-query assignment and derived evidence exactly and reproducibly?",
         "input": {"e52_artifact": "runs/ajae/e52_raw_identity.npz", "e52_artifact_sha256": "2e519c358133cb03fbbbafed82062906eceec071279da0149b2e6a1eac1c9a69", "e52_scientific_array_sha256": "2e8d2a67071b383606cdee1017406d7142d127b9a5fb6915a66ac92964249330", "frames": "exact E50-E52 32-frame identity", "labels": "forbidden", "official_stu_source_manifest_sha256": "f0cead4f5e721262f9f1c26231d116406bb4fb0a43139f22e3706be89b914891"},
         "tie_fixture": {"voxels": 3, "equal_queries": [0, 1], "expected_assigned_query": [0, 0, 0]},
         "random_stream": {"namespace": "E53-STU-query-v1:train:{sequence_id}:{frame_id}", "seed_rule": "little-endian first 8 SHA-256 bytes modulo 2^63-1", "reset_before_each_pass": true},
         "execution": {"device": "cpu", "reason": "the official CUDA sparse/attention path did not reproduce query outputs bitwise under fixed seeds; the unmodified official CPU path did", "workers": 4, "threads_per_worker": 6, "frame_assignment": "fixed round-robin by frozen frame order"},
-        "implementation": {"runner": "src/qualify.py", "runner_sha256": "82d2ca8f94f19a134d52bf77415130cda2ef1550b3b5f24a3557d453c268ce09", "model_source_sha256": "d281ae105bc02c8b7b8ad3f4c155baddb74f2d7b50ab2867bcd78ad7ed088c5f", "model_change": "audit-only assigned_query exposure; no formula or AJAE input change", "execution_freeze_commit": null},
+        "implementation": {"runner": "src/qualify.py", "runner_sha256": "82d2ca8f94f19a134d52bf77415130cda2ef1550b3b5f24a3557d453c268ce09", "model_source_sha256": "d281ae105bc02c8b7b8ad3f4c155baddb74f2d7b50ab2867bcd78ad7ed088c5f", "model_change": "audit-only assigned_query exposure; no formula or AJAE input change", "execution_freeze_commit": "50361d6e17d6da6783d9e028c7dd580b35346be8"},
         "command": "OMP_NUM_THREADS=6 MKL_NUM_THREADS=6 python -m src.qualify e53 --data-root /home/jasongao/Data/STU --protocol protocol.json --e52 runs/ajae/e52_raw_identity.npz --output runs/ajae/e53_query_assignment.npz --device cpu --workers 4 --threads-per-worker 6",
         "pass_conditions": ["independent minimum-index assigned query exactly equals encoder assigned query after inverse mapping", "independent 19D evidence exactly equals encoder evidence", "independent assignment reliability exactly equals encoder value", "independent no-object reliability exactly equals encoder value", "exact tie selects query 0", "all error counts zero", "two complete output hashes reproduce exactly"],
         "resource_preflight": {"physical_cpu_cores": 24, "threads_per_core": 1, "sockets": 1, "memory_total_gib": 23, "memory_available_gib": 20, "swap_total_gib": 16, "swap_used_gib": 0, "windows_e_total_bytes": 484950659072, "windows_e_remaining_bytes": 75071807488, "competing_experiment_process": false, "expected_output": "far below 1 GiB"},
         "formal_repetitions": 2,
         "artifact": "runs/ajae/e53_query_assignment.npz",
-        "result": null,
-        "unlock": "PASS unlocks E54; FAIL stops Phase 5"
+        "result": {"passed": true, "artifact_sha256": "e39511b76aec4c90b6d77d22b9d5f89d57184873ddc495677c8e786ffb476a03", "scientific_array_sha256": "4d079db8fd7470298333dca366eaed1c5bc552bb4e435b40d35bb87708e38145", "protocol_sha256_at_execution": "48d8af9cc43bf8ad4b3d5ff2563403ae42f95209b94048a3268d2387ac9af923", "frames": 32, "total_sparse_voxels": 3438697, "active_queries_per_frame": [30, 49], "all_error_counts": 0, "reproduction_errors": 0, "elapsed_seconds": 994.8026928549989, "independent_read_only_validation": true},
+        "unlock": "PASS; E54 unlocked"
       },
       "E45B": {
         "current_validity": "historical PASS for the old normal-control distribution only; current E48 qualification is supplied separately by E45B-v2 PASS on E25-new",

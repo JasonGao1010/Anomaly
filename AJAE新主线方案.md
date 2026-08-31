@@ -1940,7 +1940,7 @@ E51从提交`867abd01071ae18e28d8aa2623363564de97d6d2`完成唯一一次正式�
 
 E52从提交`2d13e4a398e8d7d8f34558aff5c59c70c4b7fdb5`完成唯一一次正式运行并PASS。32帧中共有284,441个多点共享稀疏体素，覆盖681,251个原始点；共享点的128维稀疏特征完全一致，但源帧、原始槽位、已校准规范射线、XYZ、强度、原始标签和共享身份碰撞错误均为0。四点解析反例保留四个最终输出位置，两遍输出完全一致，固定点置换后的输出也逐元素同步置换。只读复核重新计算了汇总量、置换关系与科学数组哈希。正式产物为`runs/ajae/e52_raw_identity.npz`，SHA-256为`2e519c358133cb03fbbbafed82062906eceec071279da0149b2e6a1eac1c9a69`，科学数组哈希为`2e8d2a67071b383606cdee1017406d7142d127b9a5fb6915a66ac92964249330`。E53现已解锁。
 
-E53已在正式结果产生前冻结执行实现。实现只为审计暴露编码器实际选择的查询编号，不改变查询分配、证据公式或任何AJAE输入。固定种子的CUDA诊断发现当前稀疏/注意力算子不能使查询结果逐位复现，因此该诊断不作为证据；未修改官方STU的CPU评估路径在一帧两次完整前向中精确复现。正式执行由4个身份固定进程各用6个CPU线程处理32帧，每帧两次运行；独立从官方`pred_logits`和`pred_masks`重算类别softmax、掩码sigmoid、最小编号并列规则、查询编号、19维证据及两项可靠性。固定并列夹具要求q=0和q=1强度相等时选择q=0。非正式CPU检查的查询、证据和两项可靠性错误均为0，完整哈希一致；E53正式结果尚未产生。
+E53从提交`50361d6e17d6da6783d9e028c7dd580b35346be8`完成唯一一次正式运行并PASS。实现只为审计暴露编码器实际选择的查询编号，不改变查询分配、证据公式或任何AJAE输入。4个身份固定CPU进程对32帧各运行两遍，共覆盖3,438,697个稀疏体素；每帧活跃查询数为30–49。独立从官方`pred_logits`和`pred_masks`重算后，查询身份、19维证据、分配可靠性、无对象可靠性、最小编号并列规则和两遍复现错误全部为0。只读复核重新计算了汇总量、哈希一致性与科学数组哈希。正式产物为`runs/ajae/e53_query_assignment.npz`，SHA-256为`e39511b76aec4c90b6d77d22b9d5f89d57184873ddc495677c8e786ffb476a03`，科学数组哈希为`4d079db8fd7470298333dca366eaed1c5bc552bb4e435b40d35bb87708e38145`。E54现已解锁。
 
 E39已正式通过：三来源在2.5–10、10–20、20–30和30–40米均有非零return entity-frame覆盖，逐实体帧计数守恒错误0、非有限值0，两遍逐元素一致；三来源在40–50米均无观测，按冻结规则仅报告。共享trace已保存1,656,861条逐返回强度及E40–E44所需计数。E39关闭，E40解锁。
 
@@ -2032,7 +2032,7 @@ E26-v2已经在冻结实现提交`38079213a0801bf3a279414a8b120bfd24e1cd1b`上�
 当前执行节点为：
 
 $$
-\boxed{E38\text{--}E44\ \mathrm{PASS}\rightarrow E45B\text{-v2 PASS}\rightarrow E48\ \mathrm{PASS}\rightarrow E49\ \mathrm{PASS}\rightarrow E50\text{--}E52\ \mathrm{PASS}\rightarrow E53\ \mathrm{CURRENT}}
+\boxed{E38\text{--}E44\ \mathrm{PASS}\rightarrow E45B\text{-v2 PASS}\rightarrow E48\ \mathrm{PASS}\rightarrow E49\ \mathrm{PASS}\rightarrow E50\text{--}E53\ \mathrm{PASS}\rightarrow E54\ \mathrm{CURRENT}}
 $$
 
 E23与E24-v2已按冻结设计通过；Gate 1已完成：
@@ -2041,12 +2041,12 @@ $$
 E38\text{--}E44\ \mathrm{PASS}\rightarrow E45B\text{-v2 PASS}\rightarrow E48\ \mathrm{PASS}\rightarrow E49\ \mathrm{PASS}
 $$
 
-E27–E37的纯机械资格继续保留；E36-v1、E45-v1、E45-v2、E45A、E45A-v2、E45A-new、E45A-overlap、E25-v2和E25-v3 normal-control FAIL均永久保留。旧E45B已PASS，但只资格旧normal-control分布。$D_{xy}+\alpha$路线、E25-v3逐对象五维条件复制路线和全部E45A后续演化均已终止。E25-new、E26-v2、E38–E44刷新、E45B-v2、E48、E49与E50–E52已经PASS。E46已降为非阻断诊断；当前正式节点是E53。
+E27–E37的纯机械资格继续保留；E36-v1、E45-v1、E45-v2、E45A、E45A-v2、E45A-new、E45A-overlap、E25-v2和E25-v3 normal-control FAIL均永久保留。旧E45B已PASS，但只资格旧normal-control分布。$D_{xy}+\alpha$路线、E25-v3逐对象五维条件复制路线和全部E45A后续演化均已终止。E25-new、E26-v2、E38–E44刷新、E45B-v2、E48、E49与E50–E53已经PASS。E46已降为非阻断诊断；当前正式节点是E54。
 
 因此当前整体判断仍是：
 
 $$
-\boxed{Gate\ 1\ \mathrm{PASS}\rightarrow E50\text{--}E52\ \mathrm{PASS}\rightarrow E53\ \mathrm{CURRENT}\rightarrow E54\text{--}E71\rightarrow B1>B0}
+\boxed{Gate\ 1\ \mathrm{PASS}\rightarrow E50\text{--}E53\ \mathrm{PASS}\rightarrow E54\ \mathrm{CURRENT}\rightarrow E55\text{--}E71\rightarrow B1>B0}
 $$
 
 不能写成“AJAE 方法已经验证”或“剩余只需训练”。
