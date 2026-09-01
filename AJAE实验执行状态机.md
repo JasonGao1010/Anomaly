@@ -3878,8 +3878,8 @@ Notes: Independent recomputation reproduced the scientific-array hash, signed di
 ## E76-V1 | Counterfactual and Safety Visual Audit
 
 Experiment ID: E76-V1
-Design-freeze commit/hash: Pending the tracked freeze commit. The node was added after E76-X-lite's moving-normal result, solely to describe proxy appearance and locate moving-normal errors. It has no PASS/FAIL rule, cannot replace E76-X-lite or full E76, and cannot unlock E78-X.
-Execution-freeze commit/hash: Pending the tracked freeze commit and source hashes before the first export or PLY inspection.
+Design-freeze commit/hash: Tracked freeze commit `33244cbaa3a23d1980480e78ddf8f570492eb6ea`. The node was added after E76-X-lite's moving-normal result, solely to describe proxy appearance and locate moving-normal errors. It has no PASS/FAIL rule, cannot replace E76-X-lite or full E76, and cannot unlock E78-X.
+Execution-freeze commit/hash: Same commit `33244cbaa3a23d1980480e78ddf8f570492eb6ea`; `src/qualify.py` SHA-256 `79ec6a62f98013aabae7c9ced1738cdc8c987820b88fb9c8124e0eaea95c918e`; `src/protocol.py` SHA-256 `070d6899d8a2d26cdf0dacd1dc7dc74d9330a694815aa7afd9b64d6961cddfe6`; `protocol.json` SHA-256 `4092ccb88e7e1661c426f7a984f2780437a5dcd92adbd601784c669f72620d16`. The complete 87-test scientific-semantic suite passed before execution.
 Date: 2026-09-02 design and review freeze; execution pending.
 Git commit / clean state: The first export must use the committed implementation from a clean tracked worktree. User-owned `PPT/` remains excluded.
 Data identities: Group A uses only the 23 E57 common-domain worlds after excluding `world_id=5`. Sort them by `(selected_descriptor[:,4], world_id)`, split the contiguous order with `numpy.array_split` into low/mid/high strata of sizes `[8,8,7]`, then take the two smallest world IDs in each stratum. This freezes low `[1,2]`, mid `[0,14]`, high `[8,9]`, with proxy visible-point counts `[9,7]`, `[85,43]`, and `[448,156]`. Group B uses all 273 E61 train/206 frames with at least one moving-normal point for ranking.
