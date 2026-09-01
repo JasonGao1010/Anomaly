@@ -39,6 +39,7 @@ from .model import (
 )
 from .protocol import load_protocol
 from .train import (
+    E63B1DevelopmentEvaluator,
     balanced_bce_loss,
     experiment_condition,
     make_window_training_data,
@@ -3272,7 +3273,7 @@ def e76_safety_statistics(
     pure = raw_pure.astype(np.float64, copy=False)
     moving = raw_moving.astype(np.float64, copy=False)
     fpr95_reported = raw_fpr95.astype(np.float64, copy=False)
-    model_count = 4
+    model_count = int(score.shape[0]) if score.ndim == 2 else 0
     if (
         world_id.tolist() != list(E63_COMMON_WORLD_ID)
         or fold.tolist() != [name.encode("ascii") for name in E63_COMMON_SAFETY_FOLD]
@@ -3286,6 +3287,7 @@ def e76_safety_statistics(
         or not np.issubdtype(raw_fpr95.dtype, np.floating)
         or point_world.shape != label.shape
         or control.shape != label.shape
+        or model_count not in {3, 4}
         or score.shape != (model_count, label.size)
         or pure.ndim != 2
         or pure.shape[0] != model_count
@@ -3352,7 +3354,9 @@ def e76_safety_statistics(
     seed_worsening = measure[1:] - measure[0]
     mean_worsening = seed_worsening.mean(axis=0)
     return {
-        "model_name": np.asarray(("B0", "B1_0", "B1_1", "B1_2")),
+        "model_name": np.asarray(
+            ("B0",) + tuple(f"B1_{seed}" for seed in range(model_count - 1))
+        ),
         "safety_measure_name": np.asarray(
             ("pure_normal_FPR", "normal_control_FPR", "moving_normal_FPR", "development_FPR95")
         ),
@@ -3365,6 +3369,326 @@ def e76_safety_statistics(
         "mean_safety_worsening": mean_worsening,
         "passed": np.asarray(bool(np.all(mean_worsening <= 0.03))),
     }
+
+
+def run_e76_exploratory(
+    data_root: Path | str,
+    protocol_path: Path | str,
+    e57_path: Path | str,
+    e61_path: Path | str,
+    e63_path: Path | str,
+    e72_path: Path | str,
+    b1_dir: Path | str,
+    output_path: Path | str,
+    *,
+    device: str = "cuda",
+) -> dict[str, object]:
+    """Execute the two-seed E76-X safety check without a formal gate verdict."""
+
+    from .render import load_sensor_calibration
+
+    started = time.monotonic()
+    protocol_file = Path(protocol_path).expanduser().resolve(strict=True)
+    protocol = load_protocol(protocol_file)
+    project_root = Path(protocol.path).parent
+    exploration = protocol.development["exploration_track"]
+    confirmation = exploration["e74_confirmation"]
+    if (
+        exploration["current_node"] != "E76-X"
+        or tuple(exploration["cohort"]["seeds"]) != (0, 1)
+        or exploration["formal_gate2_and_gate3_status"] != "not adjudicated"
+        or exploration["e75x_result"]["formal_gate2_adjudicated"] is not False
+        or confirmation["partial_seed2_result_use_forbidden"] is not True
+    ):
+        raise QualificationError("E76-X exploration identity changed")
+
+    e57_file = Path(e57_path).expanduser().resolve(strict=True)
+    e61_file = Path(e61_path).expanduser().resolve(strict=True)
+    e63_file = Path(e63_path).expanduser().resolve(strict=True)
+    e72_file = Path(e72_path).expanduser().resolve(strict=True)
+    expected = protocol.development["e63_freeze"]
+    if (
+        _sha256(e57_file) != expected["source_worlds"]["artifact_sha256"]
+        or _sha256(e61_file) != E61_ARTIFACT_SHA256
+        or _sha256(e63_file) != expected["identity_artifact"]["artifact_sha256"]
+        or _sha256(e72_file) != E72_ARTIFACT_SHA256
+    ):
+        raise QualificationError("E76-X input artifact identity changed")
+    progress_file = project_root / confirmation["paused_progress_path"]
+    if (
+        _sha256(progress_file) != confirmation["paused_progress_sha256"]
+        or (progress_file.parent / "model.pt").exists()
+        or (progress_file.parent / "result.json").exists()
+    ):
+        raise QualificationError("E76-X seed-2 suspension identity changed")
+
+    runtime_device = torch.device(device)
+    if runtime_device.type == "cuda" and not torch.cuda.is_available():
+        raise QualificationError("E76-X CUDA device is unavailable")
+    with np.load(e63_file, allow_pickle=False) as archive:
+        eligible = np.asarray(archive["common_domain_eligible"], dtype=np.bool_)
+        frozen_world = np.asarray(archive["world_id"], dtype=np.int16)
+        safety_fold = np.asarray(archive["safety_fold"])[eligible]
+    with np.load(e61_file, allow_pickle=False) as archive:
+        pure_frame = np.asarray(archive["pure_frame_id"], dtype=np.int16)
+        pure_packed = np.asarray(
+            archive["pure_canonical_mask_packed"], dtype=np.uint8
+        )
+        pure_count = np.asarray(
+            archive["pure_point_count_by_frame"], dtype=np.int32
+        )
+        moving_frame = np.asarray(archive["moving_frame_id"], dtype=np.int16)
+        moving_packed = np.asarray(
+            archive["moving_canonical_mask_packed"], dtype=np.uint8
+        )
+        moving_count = np.asarray(
+            archive["moving_point_count_by_frame"], dtype=np.int32
+        )
+    with np.load(e72_file, allow_pickle=False) as archive:
+        development_world = np.asarray(
+            archive["development_world_id"], dtype=np.int16
+        )
+        development_offset = np.asarray(
+            archive["development_point_offset"], dtype=np.int64
+        )
+        development_ray = np.asarray(
+            archive["development_canonical_ray"], dtype=np.int32
+        )
+        development_label = np.asarray(
+            archive["development_label"], dtype=np.bool_
+        )
+        development_control = np.asarray(
+            archive["development_normal_control"], dtype=np.bool_
+        )
+        b0_development_score = np.asarray(
+            archive["development_score"], dtype=np.float32
+        )
+        metric_order = np.asarray(archive["metric_order"])
+        b0_development_metric = np.asarray(
+            archive["development_metric"], dtype=np.float64
+        )
+        pure_offset = np.asarray(archive["pure_point_offset"], dtype=np.int64)
+        pure_ray = np.asarray(archive["pure_canonical_ray"], dtype=np.int32)
+        b0_pure_score = np.asarray(archive["pure_score"], dtype=np.float32)
+        moving_offset = np.asarray(
+            archive["moving_point_offset"], dtype=np.int64
+        )
+        moving_ray = np.asarray(
+            archive["moving_canonical_ray"], dtype=np.int32
+        )
+        b0_moving_score = np.asarray(archive["moving_score"], dtype=np.float32)
+    fpr95_column = np.flatnonzero(metric_order == "FPR95")
+    if (
+        fpr95_column.tolist() != [2]
+        or not np.array_equal(development_world, frozen_world[eligible])
+        or development_world.tolist() != list(E63_COMMON_WORLD_ID)
+        or development_offset.shape != (24,)
+        or pure_offset.shape != (pure_frame.size + 1,)
+        or moving_offset.shape != (moving_frame.size + 1,)
+        or int(pure_offset[-1]) != 48_828_507
+        or int(moving_offset[-1]) != 13_011
+    ):
+        raise QualificationError("E76-X aligned score identity changed")
+
+    grid, sensor = load_sensor_calibration(protocol.sensor_calibration_path())
+    canonical_by_slot = np.asarray(
+        grid.beam_ids * grid.columns + grid.column_ids, dtype=np.int32
+    )
+    encoder = FrozenSTUPointEncoder.from_protocol(
+        protocol, project_root=project_root
+    ).to(runtime_device).eval()
+    evaluator = E63B1DevelopmentEvaluator(
+        protocol=protocol,
+        project_root=project_root,
+        data_root=data_root,
+        device=runtime_device,
+        encoder=encoder,
+        grid=grid,
+        sensor=sensor,
+        canonical_by_slot=canonical_by_slot,
+    )
+    result_root = Path(b1_dir).expanduser().resolve(strict=True)
+    expected_models = tuple(confirmation["completed_seed_model_sha256"])
+    expected_results = tuple(confirmation["completed_seed_result_sha256"])
+    models: list[AJAEPointTransformer] = []
+    for seed in (0, 1):
+        model_file = result_root / f"seed-{seed}" / "model.pt"
+        result_file = result_root / f"seed-{seed}" / "result.json"
+        if (
+            _sha256(model_file) != expected_models[seed]
+            or _sha256(result_file) != expected_results[seed]
+        ):
+            raise QualificationError(f"E76-X seed {seed} artifact identity changed")
+        record = json.loads(result_file.read_text(encoding="utf-8"))
+        payload = torch.load(model_file, map_location="cpu", weights_only=True)
+        if (
+            record.get("status") != "completed"
+            or payload.get("seed") != seed
+            or payload.get("completion_id") != record.get("completion_id")
+            or payload.get("best_world") != record.get("best_world")
+            or payload.get("scientific_identity") != record.get("scientific_identity")
+        ):
+            raise QualificationError(f"E76-X seed {seed} completion is invalid")
+        model = AJAEPointTransformer.from_protocol(protocol).to(runtime_device).eval()
+        model.load_state_dict(payload["model"], strict=True)
+        models.append(model)
+
+    development_score = np.empty(
+        (3, b0_development_score.size), dtype=np.float32
+    )
+    development_score[0] = b0_development_score
+    development_fpr95 = np.empty((3, 23), dtype=np.float64)
+    development_fpr95[0] = b0_development_metric[:, 2]
+    prepared = evaluator._prepare_development()
+    for row, item in enumerate(prepared):
+        start, stop = development_offset[row : row + 2]
+        xyz = np.asarray(item["xyz"])
+        semantic = np.asarray(item["semantic"])
+        slots = np.asarray(item["slots"], dtype=np.int64)
+        ranges = np.linalg.norm(xyz.astype(np.float32, copy=False), axis=1)
+        valid = (
+            (ranges >= 2.5)
+            & (ranges <= 50.0)
+            & (semantic != 0)
+        )
+        order = np.argsort(canonical_by_slot[slots[valid]], kind="stable")
+        labels = (semantic[valid][order] == 2)
+        controls = np.asarray(item["control"], dtype=np.bool_)[valid][order]
+        rays = canonical_by_slot[slots[valid]][order]
+        if (
+            int(item["world_id"]) != int(development_world[row])
+            or not np.array_equal(rays, development_ray[start:stop])
+            or not np.array_equal(labels, development_label[start:stop])
+            or not np.array_equal(controls, development_control[start:stop])
+        ):
+            raise QualificationError("E76-X development alignment changed")
+        for model_index, model in enumerate(models, start=1):
+            scores = evaluator._scores(model, item)[valid][order]
+            development_score[model_index, start:stop] = scores
+            development_fpr95[model_index, row] = _point_metrics(
+                labels, scores
+            )["FPR95"]
+
+    pure_score = np.empty((3, b0_pure_score.size), dtype=np.float32)
+    pure_score[0] = b0_pure_score
+    for row, frame_id in enumerate(pure_frame.tolist()):
+        start, stop = pure_offset[row : row + 2]
+        if start == stop:
+            continue
+        source = evaluator.sequence.source_frame(int(frame_id))
+        item = evaluator._input(source)
+        slots = np.asarray(item["slots"], dtype=np.int64)
+        mask = np.unpackbits(pure_packed[row], bitorder="little")[
+            : canonical_by_slot.size
+        ]
+        selected = np.flatnonzero(mask[canonical_by_slot])
+        order = np.argsort(canonical_by_slot[selected], kind="stable")
+        if (
+            selected.size != int(pure_count[row])
+            or not np.array_equal(canonical_by_slot[selected][order], pure_ray[start:stop])
+        ):
+            raise QualificationError("E76-X pure-normal alignment changed")
+        slot_to_real = np.full(canonical_by_slot.size, -1, dtype=np.int32)
+        slot_to_real[slots] = np.arange(slots.size, dtype=np.int32)
+        selected_index = slot_to_real[selected[order]]
+        if bool(np.any(selected_index < 0)):
+            raise QualificationError(
+                "E76-X pure-normal mask selected an absent return"
+            )
+        for model_index, model in enumerate(models, start=1):
+            pure_score[model_index, start:stop] = evaluator._scores(
+                model, item
+            )[selected_index]
+
+    sequence_206 = STUSequence.open(
+        data_root,
+        protocol=protocol,
+        partition="train",
+        sequence_id=206,
+        label_mode=LabelMode.REQUIRED,
+    )
+    moving_score = np.empty((3, b0_moving_score.size), dtype=np.float32)
+    moving_score[0] = b0_moving_score
+    for row, frame_id in enumerate(moving_frame.tolist()):
+        start, stop = moving_offset[row : row + 2]
+        if start == stop:
+            continue
+        source = sequence_206.source_frame(int(frame_id))
+        item = evaluator._input(source)
+        slots = np.asarray(item["slots"], dtype=np.int64)
+        mask = np.unpackbits(moving_packed[row], bitorder="little")[
+            : canonical_by_slot.size
+        ]
+        selected = np.flatnonzero(mask[canonical_by_slot])
+        order = np.argsort(canonical_by_slot[selected], kind="stable")
+        if (
+            selected.size != int(moving_count[row])
+            or not np.array_equal(
+                canonical_by_slot[selected][order], moving_ray[start:stop]
+            )
+        ):
+            raise QualificationError("E76-X moving-normal alignment changed")
+        slot_to_real = np.full(canonical_by_slot.size, -1, dtype=np.int32)
+        slot_to_real[slots] = np.arange(slots.size, dtype=np.int32)
+        selected_index = slot_to_real[selected[order]]
+        if bool(np.any(selected_index < 0)):
+            raise QualificationError(
+                "E76-X moving-normal mask selected an absent return"
+            )
+        for model_index, model in enumerate(models, start=1):
+            moving_score[model_index, start:stop] = evaluator._scores(
+                model, item
+            )[selected_index]
+
+    point_world = np.repeat(development_world, np.diff(development_offset))
+    arrays = e76_safety_statistics(
+        development_world,
+        point_world,
+        development_label,
+        development_control,
+        development_score,
+        safety_fold,
+        pure_score,
+        moving_score,
+        development_fpr95,
+    )
+    reference_satisfied = bool(arrays["passed"])
+    result = {
+        "experiment": "E76-X",
+        "passed": True,
+        "pass_scope": "exploratory_execution_only",
+        "formal_e76_adjudicated": False,
+        "formal_gate2_adjudicated": False,
+        "training_seeds": [0, 1],
+        "development_worlds": 23,
+        "development_points": int(development_label.size),
+        "pure_normal_points": int(pure_score.shape[1]),
+        "moving_normal_points": int(moving_score.shape[1]),
+        "safety_measure_name": arrays["safety_measure_name"].tolist(),
+        "safety_measure": arrays["safety_measure"].tolist(),
+        "seed_safety_worsening": arrays["seed_safety_worsening"].tolist(),
+        "mean_safety_worsening": arrays["mean_safety_worsening"].tolist(),
+        "original_e76_mean_reference": 0.03,
+        "original_e76_mean_reference_satisfied": reference_satisfied,
+        "exploratory_outcome": (
+            "non_disastrous_continue_to_E78-X"
+            if reference_satisfied
+            else "safety_review_required_before_B2_B3"
+        ),
+        "next_node": "E78-X" if reference_satisfied else None,
+        "protocol_sha256": _sha256(protocol_file),
+        "e57_artifact_sha256": _sha256(e57_file),
+        "e61_artifact_sha256": _sha256(e61_file),
+        "e63_artifact_sha256": _sha256(e63_file),
+        "e72_artifact_sha256": _sha256(e72_file),
+        "b1_model_sha256": list(expected_models),
+        "b1_result_sha256": list(expected_results),
+        "seed2_paused_progress_sha256": _sha256(progress_file),
+        "scientific_array_sha256": _array_hash(arrays),
+        "seconds": time.monotonic() - started,
+    }
+    _save(Path(output_path).expanduser().resolve(), arrays, result)
+    return result
 
 
 def run_e75(
@@ -4554,6 +4878,16 @@ def _parser() -> argparse.ArgumentParser:
     e75x.add_argument("--e72", type=Path, required=True)
     e75x.add_argument("--b1-dir", type=Path, required=True)
     e75x.add_argument("--output", type=Path, required=True)
+    e76x = commands.add_parser("e76x")
+    e76x.add_argument("--data-root", type=Path, required=True)
+    e76x.add_argument("--protocol", type=Path, default=PROJECT_ROOT / "protocol.json")
+    e76x.add_argument("--e57", type=Path, required=True)
+    e76x.add_argument("--e61", type=Path, required=True)
+    e76x.add_argument("--e63", type=Path, required=True)
+    e76x.add_argument("--e72", type=Path, required=True)
+    e76x.add_argument("--b1-dir", type=Path, required=True)
+    e76x.add_argument("--output", type=Path, required=True)
+    e76x.add_argument("--device", default="cuda")
     phase7 = commands.add_parser("phase7")
     phase7.add_argument("--protocol", type=Path, default=PROJECT_ROOT / "protocol.json")
     phase7.add_argument("--e63", type=Path, required=True)
@@ -4677,6 +5011,20 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "e75x":
         result = run_e75_exploratory(
             args.protocol, args.e72, args.b1_dir, args.output
+        )
+        print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        return 0 if result["passed"] else 1
+    if args.command == "e76x":
+        result = run_e76_exploratory(
+            args.data_root,
+            args.protocol,
+            args.e57,
+            args.e61,
+            args.e63,
+            args.e72,
+            args.b1_dir,
+            args.output,
+            device=args.device,
         )
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 0 if result["passed"] else 1

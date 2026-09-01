@@ -32,6 +32,7 @@ from src.evaluate import (
 )
 from src.model import AJAEPointTransformer, assigned_stu_evidence, temporal_radius_knn
 from src.qualify import (
+    E63_COMMON_SAFETY_FOLD,
     PHASE5_FRAMES,
     e63_identity_arrays,
     e75_bootstrap_identity_arrays,
@@ -1937,6 +1938,30 @@ def test_e76_uses_crossfit_signed_mean_worsening_and_metric_scale() -> None:
     )
     assert result["mean_safety_worsening"][3] == pytest.approx(-0.04, abs=1e-15)
     assert bool(result["passed"])
+
+
+def test_e76_exploratory_accepts_exactly_two_b1_seeds() -> None:
+    world_id = np.asarray([*range(5), *range(6, 24)], dtype=np.int16)
+    fold = np.asarray(E63_COMMON_SAFETY_FOLD, dtype="S1")
+    point_world = np.repeat(world_id, 4)
+    point_fold = np.repeat(fold, 4)
+    label = np.tile(np.asarray([True, True, False, False]), 23)
+    control = ~label
+    base = np.where(label, np.where(point_fold == b"A", 0.8, 0.6), 0.1)
+    development_score = np.stack((base, base, base))
+    result = e76_safety_statistics(
+        world_id,
+        point_world,
+        label,
+        control,
+        development_score,
+        fold,
+        np.full((3, 8), 0.1),
+        np.full((3, 6), 0.1),
+        np.full((3, 23), 10.0),
+    )
+    np.testing.assert_array_equal(result["model_name"], ["B0", "B1_0", "B1_1"])
+    assert result["seed_safety_worsening"].shape == (2, 4)
 
 
 def test_phase7_mechanical_fixtures_all_pass_and_reproduce() -> None:
