@@ -3853,9 +3853,9 @@ Notes: Independent reconstruction reproduced the world identities, shapes, means
 
 Experiment ID: E76-X-lite
 Design-freeze commit/hash: Result-blind exploration-route revision after the full E76-X attempt was stopped without an artifact or any observed safety metric. The revision changes only the current compute allocation: all 23 development worlds, all rendered normal-controls and all 13,011 moving-normal points remain; pure-normal evaluation is restricted to 64 deterministically selected E61 frames. Full E76-X is retained for later confirmation.
-Execution-freeze commit/hash: Implementation commit pending before execution.
+Execution-freeze commit/hash: Route, subset and runner commit `ea1b92e84d463b987708f614196125d256dfa80c`; `src/qualify.py` SHA-256 `9b82ce9a354fccf7dc8e4dc683474c3cd749dc7d1184cfb9e2f3b6f76f2cc05a`; `protocol.json` SHA-256 `30434c141cc4ca535808f5996dde9bf8ec98b6656c75047f41b697d15b27d4a9`. The complete 85-test scientific-semantic suite passes before execution.
 Date: 2026-09-02 result-blind route and sample freeze.
-Git commit / clean state: Must be committed and pushed before execution; untracked user-owned `PPT/` remains excluded.
+Git commit / clean state: The result-blind implementation is tracked at the execution-freeze commit above; the following documentation-only commit records that identity. Untracked user-owned `PPT/` remains excluded.
 Data identities: E63's complete 23-world common domain; all valid normal-control points; all 13,011 E61 moving-normal points; 64 of the 678 E61 pure-normal frames selected without counts, features, predictions or results.
 Input artifact hashes: E57 `b14efc1aad86ac67b5bf7c8631f02b2e68664e071b747b7b210d5f7a30f5d123`; E61 `8d3e08e0512dc70a75d2279cfb4515bc960bbfda4f35a872c4a76e9dad69d0e0`; E63 `5dbf99eaa59a05a83774e42beb6b8d7a95cf9309ebd42ab7870604a20d410dd9`; E72 `208487d5c91b131856e908988cf6d955305fa09364450d509e32f617295b5863`; E74-X seed 0/1 and seed-2 pause identities above.
 Random namespaces / seeds: No random sampling. Rank all E61 `pure_frame_id` values by SHA-256 of ASCII `E76-X-lite-pure-normal-frame-v1:train:201:<frame_id>`, break a hypothetical digest tie by ascending frame ID, and take the first 64 exactly once. Namespace or seed search is forbidden.
