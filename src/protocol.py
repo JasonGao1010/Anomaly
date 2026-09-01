@@ -513,15 +513,13 @@ class AJAEProtocol:
                 "gate3",
                 "gate4",
                 "development_difficulty_coverage",
+                "B4_contribution",
             },
             "decision_gates.criteria",
         )
-        if criteria["status"] not in {
-            "unresolved_requires_owner_decision",
-            "frozen_before_training",
-        }:
+        if criteria["status"] != "frozen_before_training":
             raise ProtocolError("decision-gate criteria status is invalid")
-        if criteria["status"] == "frozen_before_training" and any(
+        if any(
             not isinstance(criteria[name], Mapping)
             for name in (
                 "gate1",
@@ -529,6 +527,7 @@ class AJAEProtocol:
                 "gate3",
                 "gate4",
                 "development_difficulty_coverage",
+                "B4_contribution",
             )
         ):
             raise ProtocolError("all scientific gate criteria must be frozen mappings")
@@ -680,7 +679,7 @@ class AJAEProtocol:
                 "in_generator_worlds", "generator_held_out_worlds",
                 "held_out_affects_selection", "pure_normal_is_separate",
                 "safety_sets", "qualification", "fixed_world_evaluation",
-                "checkpoint_selection", "difficulty_statistics",
+                "checkpoint_selection", "e63_freeze", "difficulty_statistics",
                 "boundary_leakage_radius_m", "position_score_scale",
             },
             "development",
@@ -846,26 +845,164 @@ class AJAEProtocol:
             {"status", "scope"},
             "development.fixed_world_evaluation",
         )
-        if world_evaluation.get("status") not in {
-            "unresolved_requires_owner_decision",
-            "frozen_before_training",
-        }:
+        if world_evaluation.get("status") != "frozen_before_training":
             raise ProtocolError("fixed-world evaluation must declare its freeze status")
-        if world_evaluation.get("status") == "frozen_before_training" and not isinstance(
-            world_evaluation.get("scope"), Mapping
-        ):
+        if not isinstance(world_evaluation.get("scope"), Mapping):
             raise ProtocolError("frozen fixed-world evaluation requires an explicit scope")
         selection = _mapping(development["checkpoint_selection"], "checkpoint selection")
-        if selection.get("status") not in {
-            "proposed_requires_owner_confirmation",
-            "frozen_before_training",
-        } or selection.get("held_out_input_forbidden") is not True:
-            raise ProtocolError("checkpoint selection must exclude held-out worlds and declare its freeze status")
-        if _number(selection["tie_tolerance"], "checkpoint tie tolerance") <= 0:
-            raise ProtocolError("checkpoint tie tolerance must be positive")
+        _exact_keys(
+            selection,
+            {
+                "status", "primary", "tie_tolerance", "first_tie_break",
+                "second_tie_break", "third_tie_break", "eligible_world_ids",
+                "held_out_input_forbidden",
+            },
+            "development.checkpoint_selection",
+        )
+        if (
+            selection.get("status") != "frozen_before_training"
+            or selection.get("primary")
+            != "maximum macro mean of per-world AP over the E63 common-domain eligible in-generator worlds"
+            or _number(selection["tie_tolerance"], "checkpoint tie tolerance")
+            != 0.001
+            or selection.get("first_tie_break")
+            != "lower development macro mean FPR95"
+            or selection.get("second_tie_break")
+            != "lower pure-normal cross-fit FPR"
+            or selection.get("third_tie_break")
+            != "earlier completed world index"
+            or selection.get("held_out_input_forbidden") is not True
+        ):
+            raise ProtocolError("checkpoint selection is not the frozen E63-v2 rule")
+        eligible_world_ids = _int_tuple(
+            selection["eligible_world_ids"], "checkpoint eligible world IDs"
+        )
+        if len(set(eligible_world_ids)) != len(eligible_world_ids) or any(
+            world_id >= 24 for world_id in eligible_world_ids
+        ):
+            raise ProtocolError("checkpoint eligible world IDs must be a unique E57 subset")
+        AJAEProtocol._validate_e63(
+            _mapping(development["e63_freeze"], "development.e63_freeze")
+        )
         difficulty = _mapping(development["difficulty_statistics"], "difficulty statistics")
         if set(difficulty) != {"Nvis", "O", "d", "V"}:
             raise ProtocolError("development difficulty must define Nvis, O, d, and V")
+
+    @staticmethod
+    def _validate_e63(specification: Mapping[str, object]) -> None:
+        """Keep the approved E63-v2 preregistration machine-readable."""
+
+        _exact_keys(
+            specification,
+            {
+                "version", "status", "source_worlds", "common_domain",
+                "safety_crossfit", "hierarchical_paired_bootstrap",
+                "shared_training", "sealed_data", "identity_artifact",
+            },
+            "development.e63_freeze",
+        )
+        if specification.get("version") != "E63-v2" or specification.get(
+            "status"
+        ) not in {"frozen_before_identity_generation", "formal_pass"}:
+            raise ProtocolError("E63-v2 status is invalid")
+        source = _mapping(specification["source_worlds"], "E63 source worlds")
+        if (
+            source.get("artifact") != "runs/ajae/e57_development_worlds.npz"
+            or source.get("artifact_sha256")
+            != "b14efc1aad86ac67b5bf7c8631f02b2e68664e071b747b7b210d5f7a30f5d123"
+            or source.get("scientific_array_sha256")
+            != "590c467da2dec0a161688f2587dc1c37cea2b0f42f326b9918fd6dc9df81f6ec"
+            or source.get("worlds") != 24
+            or source.get("world_id_array") != "selected_world_id"
+            or source.get("world_identity_array") != "selected_candidate_sha256"
+            or source.get("center_frame_array") != "selected_center_frame"
+        ):
+            raise ProtocolError("E63 source-world identity changed")
+        domain = _mapping(specification["common_domain"], "E63 common domain")
+        if (
+            (domain.get("partition"), domain.get("sequence_id")) != ("train", 201)
+            or tuple(domain.get("available_frame_range", ())) != (4, 681)
+            or _signed_int_tuple(
+                domain.get("required_source_offsets"), "E63 source offsets"
+            ) != (-4, -3, -2, -1, 0, 1, 2)
+            or domain.get("target") != "center q=0"
+            or tuple(domain.get("applies_to", ()))
+            != tuple(f"B{index}" for index in range(6))
+            or domain.get("identity_only_before_training") is not True
+            or domain.get("padding_or_zero_fill_forbidden") is not True
+        ):
+            raise ProtocolError("E63 common comparison domain changed")
+        crossfit = _mapping(specification["safety_crossfit"], "E63 safety crossfit")
+        if (
+            crossfit.get("namespace") != "E63-safety-crossfit-v1"
+            or crossfit.get("hash_payload")
+            != "UTF-8 namespace, then colon byte, then lowercase hexadecimal world identity"
+            or crossfit.get("assignment")
+            != "ascending SHA-256 rank; first 12 Fold A and last 12 Fold B"
+            or crossfit.get("source_worlds") != 24
+            or tuple(crossfit.get("fold_sizes", ())) != (12, 12)
+            or crossfit.get("threshold_comparison")
+            != "score strictly greater than threshold"
+            or crossfit.get("seed_search_forbidden") is not True
+        ):
+            raise ProtocolError("E63 safety cross-fit identity changed")
+        bootstrap = _mapping(
+            specification["hierarchical_paired_bootstrap"], "E63 bootstrap"
+        )
+        if (
+            bootstrap.get("namespace")
+            != "E63-hierarchical-paired-bootstrap-v1"
+            or bootstrap.get("generator") != "NumPy PCG64"
+            or bootstrap.get("seed") != 63002026
+            or bootstrap.get("replicates") != 5000
+            or tuple(bootstrap.get("training_seed_population", ())) != (0, 1, 2)
+            or bootstrap.get("training_seed_draws_per_replicate") != 3
+            or bootstrap.get("development_world_population") != 24
+            or bootstrap.get("development_world_draws_per_replicate") != 24
+            or bootstrap.get("replacement") is not True
+            or bootstrap.get("paired_models_share_realized_indices") is not True
+            or bootstrap.get("gate_lower_bound_percentile") != 2.5
+        ):
+            raise ProtocolError("E63 hierarchical paired bootstrap changed")
+        shared = _mapping(specification["shared_training"], "E63 shared training")
+        if (
+            tuple(shared.get("conditions", ())) != ("B1", "B2", "B3")
+            or tuple(shared.get("seeds", ())) != (0, 1, 2)
+            or shared.get("optimizer") != "AdamW"
+            or shared.get("learning_rate") != 1.0e-4
+            or shared.get("weight_decay") != 1.0e-4
+            or shared.get("micro_batch") != 1
+            or shared.get("gradient_accumulation") != 8
+            or shared.get("maximum_complete_worlds_per_seed") != 40
+            or shared.get("evaluate_every_complete_worlds") != 5
+            or shared.get("patience_evaluations") != 4
+            or dict(_mapping(shared.get("world_type_probabilities"), "E63 world types"))
+            != {"pure_normal": 0.2, "control_only": 0.2, "mixed": 0.4, "anomaly_only": 0.2}
+            or shared.get("same_budget_and_checkpoint_rule_required") is not True
+        ):
+            raise ProtocolError("E63 shared training rule changed")
+        sealed = _mapping(specification["sealed_data"], "E63 sealed data")
+        if (
+            sealed.get("held_out_torus_worlds") != 6
+            or sealed.get("public_real_ood_sequences") != 19
+            or sealed.get("hidden_test_sequences") != 51
+            or sealed.get("all_forbidden_for_e63_identity_generation") is not True
+        ):
+            raise ProtocolError("E63 sealed-data boundary changed")
+        artifact = _mapping(specification["identity_artifact"], "E63 identity artifact")
+        if artifact.get("path") != "runs/ajae/e63_training_freeze.npz":
+            raise ProtocolError("E63 identity-artifact path changed")
+        if specification.get("status") == "formal_pass" and (
+            not isinstance(artifact.get("artifact_sha256"), str)
+            or not isinstance(artifact.get("scientific_array_sha256"), str)
+            or artifact.get("eligible_worlds") != 23
+            or artifact.get("excluded_worlds") != 1
+            or artifact.get("fold_a_worlds") != 12
+            or artifact.get("fold_b_worlds") != 12
+            or tuple(artifact.get("bootstrap_shape", ())) != (5000, 3, 5000, 24)
+            or artifact.get("independent_read_only_validation") is not True
+        ):
+            raise ProtocolError("E63 formal identity artifact is incomplete")
 
     @staticmethod
     def _validate_evaluation(evaluation: Mapping[str, object]) -> None:
@@ -1046,11 +1183,7 @@ class AJAEProtocol:
             evaluation["comparison_frame_domain"], "comparison frame domain"
         )
         if (
-            frame_domain.get("status")
-            not in {
-                "proposed_requires_owner_confirmation",
-                "frozen_before_evaluation",
-            }
+            frame_domain.get("status") != "frozen_before_evaluation"
             or
             frame_domain.get("rule")
             != "intersection_of_complete_centered_q0_and_complete_causal_current_frames"
@@ -1121,9 +1254,14 @@ def _validate_gate1_evidence(
 
     calibration_digest = _sha256_file(protocol.sensor_calibration_path())
     criteria_document = protocol.decision_gates["criteria"]
-    gate1_criteria = (
+    gate1_policy = (
         criteria_document.get("gate1")
         if criteria_document.get("status") == "frozen_before_training"
+        else None
+    )
+    gate1_criteria = (
+        gate1_policy.get("legacy_evidence_compatibility")
+        if isinstance(gate1_policy, Mapping)
         else None
     )
     all_verdicts_pass = isinstance(gate1_criteria, Mapping)

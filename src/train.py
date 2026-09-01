@@ -477,13 +477,16 @@ class DevelopmentEvidence:
 
     def __post_init__(self) -> None:
         worlds = tuple(self.in_generator)
-        if len(worlds) != 24 or any(
+        if not worlds or len(worlds) > 24 or any(
             not isinstance(item, DevelopmentWorldMetrics) for item in worlds
         ):
-            raise ValueError("checkpoint selection requires exactly 24 world metrics")
+            raise ValueError("checkpoint selection requires 1--24 world metrics")
         identifiers = [item.world_id for item in worlds]
-        if tuple(sorted(identifiers)) != tuple(range(24)):
-            raise ValueError("in-generator development world IDs must be exactly 0..23")
+        if (
+            len(set(identifiers)) != len(identifiers)
+            or any(world_id < 0 or world_id >= 24 for world_id in identifiers)
+        ):
+            raise ValueError("in-generator development world IDs must be a unique 0..23 subset")
         if not isinstance(self.pure_normal, Mapping) or not self.pure_normal:
             raise ValueError("pure-normal statistics must be a non-empty mapping")
         normal: dict[str, float] = {}
@@ -509,15 +512,24 @@ class DevelopmentEvidence:
 def _checkpoint_selection_tolerance(rule: Mapping[str, Any]) -> float:
     expected = {
         "status": "frozen_before_training",
-        "primary": "maximum macro mean of per-world AP over the 24 in-generator worlds",
-        "first_tie_break": "lower pure-normal score q99.9",
-        "second_tie_break": "earlier completed world index",
+        "primary": "maximum macro mean of per-world AP over the E63 common-domain eligible in-generator worlds",
+        "first_tie_break": "lower development macro mean FPR95",
+        "second_tie_break": "lower pure-normal cross-fit FPR",
+        "third_tie_break": "earlier completed world index",
         "held_out_input_forbidden": True,
     }
-    if set(rule) != {*expected, "tie_tolerance"} or any(
+    if set(rule) != {*expected, "tie_tolerance", "eligible_world_ids"} or any(
         rule.get(name) != value for name, value in expected.items()
     ):
-        raise TrainingError("checkpoint selection rule is not the frozen schema-30 rule")
+        raise TrainingError("checkpoint selection rule is not the frozen E63-v2 rule")
+    eligible = rule.get("eligible_world_ids")
+    if (
+        not isinstance(eligible, list)
+        or not eligible
+        or len(set(eligible)) != len(eligible)
+        or any(type(world_id) is not int or world_id < 0 or world_id >= 24 for world_id in eligible)
+    ):
+        raise TrainingError("checkpoint selection lacks the E63 eligible-world identities")
     tolerance = rule.get("tie_tolerance")
     if isinstance(tolerance, bool) or not isinstance(tolerance, (int, float)):
         raise TrainingError("checkpoint-selection tolerance must be numeric")
@@ -529,18 +541,31 @@ def _checkpoint_selection_tolerance(rule: Mapping[str, Any]) -> float:
 
 def checkpoint_selection_key(
     rule: Mapping[str, Any], evidence: DevelopmentEvidence
-) -> tuple[float, float]:
-    """Return the frozen AP/safety key; an exact tie keeps the earlier world."""
+) -> tuple[float, float, float]:
+    """Return macro AP and the two frozen safety tie-break values."""
 
     _checkpoint_selection_tolerance(rule)
+    eligible = tuple(int(world_id) for world_id in rule["eligible_world_ids"])
+    if tuple(sorted(item.world_id for item in evidence.in_generator)) != tuple(
+        sorted(eligible)
+    ):
+        raise TrainingError("development evidence does not match the E63 common domain")
     ap = []
+    fpr95 = []
     for world in sorted(evidence.in_generator, key=lambda item: item.world_id):
-        if "AP" not in world.metrics:
-            raise TrainingError(f"development world {world.world_id} lacks AP")
+        if "AP" not in world.metrics or "FPR95" not in world.metrics:
+            raise TrainingError(
+                f"development world {world.world_id} lacks AP or FPR95"
+            )
         ap.append(float(world.metrics["AP"]))
-    if "q99.9" not in evidence.pure_normal:
-        raise TrainingError("pure-normal evidence lacks score q99.9")
-    return float(np.mean(ap)), -float(evidence.pure_normal["q99.9"])
+        fpr95.append(float(world.metrics["FPR95"]))
+    if "cross_fit_FPR" not in evidence.pure_normal:
+        raise TrainingError("pure-normal evidence lacks cross-fit FPR")
+    return (
+        float(np.mean(ap)),
+        -float(np.mean(fpr95)),
+        -float(evidence.pure_normal["cross_fit_FPR"]),
+    )
 
 
 def balanced_bce_loss(logits: Tensor, targets: Tensor, valid: Tensor) -> Tensor:
@@ -1430,7 +1455,7 @@ class AJAETrainer:
         if isinstance(raw_key, (str, bytes)):
             raise TrainingError("checkpoint selector must return a numeric sequence")
         key = tuple(float(value) for value in raw_key)
-        if len(key) != 2 or not all(math.isfinite(value) for value in key):
+        if len(key) != 3 or not all(math.isfinite(value) for value in key):
             raise TrainingError("checkpoint selector returned an invalid ordering key")
         record: dict[str, Any] = {
             "world": world_index,
@@ -1456,35 +1481,19 @@ class AJAETrainer:
         candidates = [
             candidate
             for candidate in candidates
-            if float(candidate["key"][0]) >= self.maximum_primary - tolerance
-        ]
-
-        # Retain the Pareto frontier needed if a later maximum narrows the band.
-        retained: list[dict[str, Any]] = []
-        for candidate in candidates:
-            primary, safety = map(float, candidate["key"])
-            candidate_world = int(candidate["world"])
-            dominated = any(
-                float(other["key"][0]) >= primary
-                and (
-                    float(other["key"][1]) > safety
-                    or (
-                        float(other["key"][1]) == safety
-                        and int(other["world"]) < candidate_world
-                    )
-                )
-                for other in candidates
-                if other is not candidate
+            if (
+                float(candidate["key"][0]) == self.maximum_primary
+                or float(candidate["key"][0]) > self.maximum_primary - tolerance
             )
-            if not dominated:
-                retained.append(candidate)
-        if not retained:
-            raise AssertionError("checkpoint candidate frontier cannot be empty")
-        self.selection_candidates = retained
+        ]
+        if not candidates:
+            raise AssertionError("checkpoint candidate set cannot be empty")
+        self.selection_candidates = candidates
         selected = max(
-            retained,
+            candidates,
             key=lambda candidate: (
                 float(candidate["key"][1]),
+                float(candidate["key"][2]),
                 -int(candidate["world"]),
             ),
         )

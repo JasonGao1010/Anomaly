@@ -73,6 +73,9 @@ E53_SEED_NAMESPACE = "E53-STU-query-v1"
 E61_MATCH_NAMESPACE = "E61-static-match-v1"
 E62_NUMERICAL_NAMESPACE = "E62-numerical-fixture-v1"
 E62_NUMERICAL_SEED = 62002026
+E63_SAFETY_NAMESPACE = "E63-safety-crossfit-v1"
+E63_BOOTSTRAP_NAMESPACE = "E63-hierarchical-paired-bootstrap-v1"
+E63_BOOTSTRAP_SEED = 63002026
 
 
 class QualificationError(ValueError):
@@ -2735,6 +2738,142 @@ def run_e62(
     return result
 
 
+def e63_identity_arrays(e57_path: Path | str) -> dict[str, np.ndarray]:
+    """Derive the common domain, safety folds, and resamples from identities only."""
+
+    source = Path(e57_path).expanduser().resolve(strict=True)
+    if _sha256(source) != (
+        "b14efc1aad86ac67b5bf7c8631f02b2e68664e071b747b7b210d5f7a30f5d123"
+    ):
+        raise QualificationError("E63 source must be the frozen E57-v2 artifact")
+    with np.load(source, allow_pickle=False) as archive:
+        world_id = np.asarray(archive["selected_world_id"], dtype=np.int16)
+        world_identity = np.asarray(archive["selected_candidate_sha256"], dtype="S64")
+        center_frame = np.asarray(archive["selected_center_frame"], dtype=np.int16)
+    if (
+        not np.array_equal(world_id, np.arange(24, dtype=np.int16))
+        or world_identity.shape != (24,)
+        or len(set(world_identity.tolist())) != 24
+        or center_frame.shape != (24,)
+    ):
+        raise QualificationError("E63 source-world identities are incomplete")
+    offsets = np.arange(-4, 3, dtype=np.int16)
+    required_frame_id = center_frame[:, None] + offsets[None, :]
+    common_domain_eligible = np.all(
+        (required_frame_id >= 4) & (required_frame_id <= 681), axis=1
+    )
+
+    safety_hash = np.asarray(
+        [
+            hashlib.sha256(
+                E63_SAFETY_NAMESPACE.encode("utf-8")
+                + b":"
+                + identity.decode("ascii").encode("utf-8")
+            ).hexdigest()
+            for identity in world_identity
+        ],
+        dtype="S64",
+    )
+    order = np.argsort(safety_hash, kind="stable")
+    safety_rank = np.empty(24, dtype=np.int16)
+    safety_rank[order] = np.arange(24, dtype=np.int16)
+    safety_fold = np.where(safety_rank < 12, b"A", b"B").astype("S1")
+
+    generator = np.random.Generator(np.random.PCG64(E63_BOOTSTRAP_SEED))
+    bootstrap_training_seed = generator.choice(
+        np.asarray((0, 1, 2), dtype=np.int8), size=(5000, 3), replace=True
+    )
+    bootstrap_world_id = generator.choice(
+        world_id, size=(5000, 24), replace=True
+    ).astype(np.int16, copy=False)
+    return {
+        "world_id": world_id,
+        "world_identity": world_identity,
+        "center_frame": center_frame,
+        "required_frame_id": required_frame_id,
+        "common_domain_eligible": common_domain_eligible,
+        "safety_hash": safety_hash,
+        "safety_rank": safety_rank,
+        "safety_fold": safety_fold,
+        "bootstrap_training_seed": bootstrap_training_seed,
+        "bootstrap_world_id": bootstrap_world_id,
+    }
+
+
+def run_e63(
+    protocol_path: Path | str,
+    e57_path: Path | str,
+    output_path: Path | str,
+) -> dict[str, object]:
+    """Materialize the approved E63-v2 identities without reading model results."""
+
+    started = time.monotonic()
+    protocol_file = Path(protocol_path).expanduser().resolve(strict=True)
+    protocol = load_protocol(protocol_file)
+    specification = protocol.development["e63_freeze"]
+    if specification["status"] not in {
+        "frozen_before_identity_generation",
+        "formal_pass",
+    }:
+        raise QualificationError("E63-v2 rules are not frozen")
+    expected_source = (PROJECT_ROOT / specification["source_worlds"]["artifact"]).resolve()
+    source = Path(e57_path).expanduser().resolve(strict=True)
+    if source != expected_source:
+        raise QualificationError("E63 input path differs from the frozen E57 source")
+    first = e63_identity_arrays(source)
+    second = e63_identity_arrays(source)
+    reproduction_errors = sum(
+        not np.array_equal(first[name], second[name]) for name in first
+    )
+    eligible = first["world_id"][first["common_domain_eligible"]]
+    fold_a = first["world_id"][first["safety_fold"] == b"A"]
+    fold_b = first["world_id"][first["safety_fold"] == b"B"]
+    identity_errors = int(
+        eligible.size != 23
+        or fold_a.size != 12
+        or fold_b.size != 12
+        or set(fold_a.tolist()).intersection(fold_b.tolist())
+        or sorted((*fold_a.tolist(), *fold_b.tolist())) != list(range(24))
+        or first["bootstrap_training_seed"].shape != (5000, 3)
+        or first["bootstrap_world_id"].shape != (5000, 24)
+    )
+    result = {
+        "experiment": "E63-v2",
+        "passed": reproduction_errors == 0 and identity_errors == 0,
+        "source_e57_sha256": _sha256(source),
+        "eligible_world_ids": eligible.astype(int).tolist(),
+        "excluded_world_ids": first["world_id"][~first["common_domain_eligible"]]
+        .astype(int)
+        .tolist(),
+        "fold_a_world_ids": fold_a.astype(int).tolist(),
+        "fold_b_world_ids": fold_b.astype(int).tolist(),
+        "eligible_fold_a_worlds": int(
+            np.count_nonzero(
+                first["common_domain_eligible"] & (first["safety_fold"] == b"A")
+            )
+        ),
+        "eligible_fold_b_worlds": int(
+            np.count_nonzero(
+                first["common_domain_eligible"] & (first["safety_fold"] == b"B")
+            )
+        ),
+        "bootstrap_replicates": 5000,
+        "bootstrap_seed_draws": 3,
+        "bootstrap_world_draws": 24,
+        "identity_errors": identity_errors,
+        "reproduction_errors": reproduction_errors,
+        "model_results_read": 0,
+        "held_out_worlds_read": 0,
+        "public_real_ood_sequences_read": 0,
+        "hidden_test_sequences_read": 0,
+        "protocol_sha256": _sha256(protocol_file),
+        "scientific_array_sha256": _array_hash(first),
+        "seconds": time.monotonic() - started,
+    }
+    _save(Path(output_path).expanduser().resolve(), first, result)
+    return result
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -2797,6 +2936,10 @@ def _parser() -> argparse.ArgumentParser:
     e62.add_argument("--protocol", type=Path, default=PROJECT_ROOT / "protocol.json")
     e62.add_argument("--fixture", type=Path, required=True)
     e62.add_argument("--output", type=Path, required=True)
+    e63 = commands.add_parser("e63")
+    e63.add_argument("--protocol", type=Path, default=PROJECT_ROOT / "protocol.json")
+    e63.add_argument("--e57", type=Path, required=True)
+    e63.add_argument("--output", type=Path, required=True)
     return parser
 
 
@@ -2880,6 +3023,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     if args.command == "e62":
         result = run_e62(args.protocol, args.fixture, args.output)
+        print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        return 0 if result["passed"] else 1
+    if args.command == "e63":
+        result = run_e63(args.protocol, args.e57, args.output)
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 0 if result["passed"] else 1
     raise AssertionError(args.command)

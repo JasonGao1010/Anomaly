@@ -32,6 +32,7 @@ from src.evaluate import (
 from src.model import AJAEPointTransformer, assigned_stu_evidence, temporal_radius_knn
 from src.qualify import (
     PHASE5_FRAMES,
+    e63_identity_arrays,
     e62_fixture_arrays,
     e53_frame_seed,
     independent_sparse_quantize,
@@ -202,20 +203,30 @@ def test_ray_grid_round_trip_uses_calibrated_beam_origin() -> None:
     assert grid.round_trip(frame)["maximum_point_error_m"] < 1.0e-7
 
 
-def _development_evidence(ap: float, normal_q: float) -> DevelopmentEvidence:
+def _development_evidence(
+    ap: float, development_fpr95: float, pure_normal_fpr: float
+) -> DevelopmentEvidence:
+    eligible = tuple(world_id for world_id in range(24) if world_id != 5)
     return DevelopmentEvidence(
-        tuple(DevelopmentWorldMetrics(world_id, {"AP": ap}) for world_id in range(24)),
-        {"q99.9": normal_q},
+        tuple(
+            DevelopmentWorldMetrics(
+                world_id, {"AP": ap, "FPR95": development_fpr95}
+            )
+            for world_id in eligible
+        ),
+        {"cross_fit_FPR": pure_normal_fpr},
     )
 
 
 def _selection_rule() -> dict[str, object]:
     return {
         "status": "frozen_before_training",
-        "primary": "maximum macro mean of per-world AP over the 24 in-generator worlds",
-        "tie_tolerance": 1.0e-6,
-        "first_tie_break": "lower pure-normal score q99.9",
-        "second_tie_break": "earlier completed world index",
+        "primary": "maximum macro mean of per-world AP over the E63 common-domain eligible in-generator worlds",
+        "tie_tolerance": 0.001,
+        "first_tie_break": "lower development macro mean FPR95",
+        "second_tie_break": "lower pure-normal cross-fit FPR",
+        "third_tie_break": "earlier completed world index",
+        "eligible_world_ids": [world_id for world_id in range(24) if world_id != 5],
         "held_out_input_forbidden": True,
     }
 
@@ -238,17 +249,15 @@ def test_protocol_is_only_schema30_route() -> None:
     assert protocol.training["loss"].endswith("binary cross entropy only")
     assert protocol.evaluation.minimum_range_m == 2.5
     assert protocol.evaluation.maximum_range_m == 50.0
-    assert protocol.development["checkpoint_selection"]["status"] == (
-        "proposed_requires_owner_confirmation"
-    )
+    assert protocol.development["checkpoint_selection"]["status"] == "frozen_before_training"
     assert protocol.development["fixed_world_evaluation"]["status"] == (
-        "unresolved_requires_owner_decision"
+        "frozen_before_training"
     )
     assert protocol.evaluation_document["comparison_frame_domain"]["status"] == (
-        "proposed_requires_owner_confirmation"
+        "frozen_before_evaluation"
     )
     assert protocol.decision_gates["criteria"]["status"] == (
-        "unresolved_requires_owner_decision"
+        "frozen_before_training"
     )
 
 
@@ -1618,9 +1627,9 @@ def test_checkpoint_selection_global_band_does_not_drift() -> None:
     trainer.stale_evaluations = 0
     evidence = iter(
         (
-            _development_evidence(0.5, 0.3),
-            _development_evidence(0.4999994, 0.2),
-            _development_evidence(0.4999988, 0.1),
+            _development_evidence(0.5, 0.3, 0.3),
+            _development_evidence(0.4994, 0.2, 0.3),
+            _development_evidence(0.4988, 0.1, 0.1),
         )
     )
     trainer.development_evaluator = lambda *_: next(evidence)
@@ -1628,16 +1637,29 @@ def test_checkpoint_selection_global_band_does_not_drift() -> None:
         trainer._development_update(world_id, 1.0)
     assert trainer.maximum_primary == pytest.approx(0.5)
     assert trainer.best_world == 1
-    assert trainer.best_key[0] >= trainer.maximum_primary - 1.0e-6
+    assert trainer.best_key[0] > trainer.maximum_primary - 0.001
 
 
-def test_checkpoint_key_structurally_requires_all_24_worlds() -> None:
-    evidence = _development_evidence(0.6, 0.2)
+def test_checkpoint_key_requires_the_e63_common_domain() -> None:
+    evidence = _development_evidence(0.6, 0.2, 0.1)
     assert checkpoint_selection_key(_selection_rule(), evidence) == pytest.approx(
-        (0.6, -0.2)
+        (0.6, -0.2, -0.1)
     )
-    with pytest.raises(ValueError, match="exactly 24"):
-        DevelopmentEvidence(evidence.in_generator[:-1], evidence.pure_normal)
+    incomplete = DevelopmentEvidence(evidence.in_generator[:-1], evidence.pure_normal)
+    with pytest.raises(TrainingError, match="common domain"):
+        checkpoint_selection_key(_selection_rule(), incomplete)
+
+
+def test_e63_identities_are_result_blind_and_reproducible() -> None:
+    first = e63_identity_arrays(ROOT / "runs/ajae/e57_development_worlds.npz")
+    second = e63_identity_arrays(ROOT / "runs/ajae/e57_development_worlds.npz")
+    for name in first:
+        np.testing.assert_array_equal(first[name], second[name])
+    assert first["world_id"][~first["common_domain_eligible"]].tolist() == [5]
+    assert np.count_nonzero(first["safety_fold"] == b"A") == 12
+    assert np.count_nonzero(first["safety_fold"] == b"B") == 12
+    assert first["bootstrap_training_seed"].shape == (5000, 3)
+    assert first["bootstrap_world_id"].shape == (5000, 24)
 
 
 def test_world_budget_exhaustion_cannot_publish_a_completed_model(

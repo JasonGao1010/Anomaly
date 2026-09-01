@@ -3689,16 +3689,106 @@
       }
     },
     "fixed_world_evaluation": {
-      "status": "unresolved_requires_owner_decision",
-      "scope": null
+      "status": "frozen_before_training",
+      "scope": {
+        "source": "E57 frozen in-generator worlds intersected with the E63 common-domain manifest",
+        "target": "frozen center target frame q=0 only",
+        "metrics_per_world": ["AP", "AUROC", "FPR95"],
+        "checkpoint_primary_aggregation": "macro mean of eligible per-world AP",
+        "range_m": [2.5, 50.0],
+        "semantic_zero_ignored": true,
+        "evaluator_semantics": "E62-v2 official-equivalent evaluator",
+        "held_out_torus_worlds_forbidden": ["checkpoint selection", "threshold selection", "early stopping", "PASS/FAIL"]
+      }
     },
     "checkpoint_selection": {
-      "status": "proposed_requires_owner_confirmation",
-      "primary": "maximum macro mean of per-world AP over the 24 in-generator worlds",
-      "tie_tolerance": 0.000001,
-      "first_tie_break": "lower pure-normal score q99.9",
-      "second_tie_break": "earlier completed world index",
+      "status": "frozen_before_training",
+      "primary": "maximum macro mean of per-world AP over the E63 common-domain eligible in-generator worlds",
+      "tie_tolerance": 0.001,
+      "first_tie_break": "lower development macro mean FPR95",
+      "second_tie_break": "lower pure-normal cross-fit FPR",
+      "third_tie_break": "earlier completed world index",
+      "eligible_world_ids": [],
       "held_out_input_forbidden": true
+    },
+    "e63_freeze": {
+      "version": "E63-v2",
+      "status": "frozen_before_identity_generation",
+      "source_worlds": {
+        "artifact": "runs/ajae/e57_development_worlds.npz",
+        "artifact_sha256": "b14efc1aad86ac67b5bf7c8631f02b2e68664e071b747b7b210d5f7a30f5d123",
+        "scientific_array_sha256": "590c467da2dec0a161688f2587dc1c37cea2b0f42f326b9918fd6dc9df81f6ec",
+        "worlds": 24,
+        "world_id_array": "selected_world_id",
+        "world_identity_array": "selected_candidate_sha256",
+        "center_frame_array": "selected_center_frame"
+      },
+      "common_domain": {
+        "partition": "train",
+        "sequence_id": 201,
+        "available_frame_range": [4, 681],
+        "required_source_offsets": [-4, -3, -2, -1, 0, 1, 2],
+        "target": "center q=0",
+        "applies_to": ["B0", "B1", "B2", "B3", "B4", "B5"],
+        "identity_only_before_training": true,
+        "padding_or_zero_fill_forbidden": true
+      },
+      "safety_crossfit": {
+        "namespace": "E63-safety-crossfit-v1",
+        "hash_payload": "UTF-8 namespace, then colon byte, then lowercase hexadecimal world identity",
+        "assignment": "ascending SHA-256 rank; first 12 Fold A and last 12 Fold B",
+        "source_worlds": 24,
+        "fold_sizes": [12, 12],
+        "threshold_selection": "one fold selects the point threshold for proxy TPR95 and the other evaluates safety FPR, then swap and pool",
+        "threshold_comparison": "score strictly greater than threshold",
+        "seed_search_forbidden": true
+      },
+      "hierarchical_paired_bootstrap": {
+        "namespace": "E63-hierarchical-paired-bootstrap-v1",
+        "generator": "NumPy PCG64",
+        "seed": 63002026,
+        "replicates": 5000,
+        "training_seed_population": [0, 1, 2],
+        "training_seed_draws_per_replicate": 3,
+        "development_world_population": 24,
+        "development_world_draws_per_replicate": 24,
+        "replacement": true,
+        "paired_models_share_realized_indices": true,
+        "cell_estimand": "paired metric difference by training seed and development world",
+        "interval": "percentile 95% interval",
+        "gate_lower_bound_percentile": 2.5
+      },
+      "shared_training": {
+        "conditions": ["B1", "B2", "B3"],
+        "seeds": [0, 1, 2],
+        "optimizer": "AdamW",
+        "learning_rate": 0.0001,
+        "weight_decay": 0.0001,
+        "micro_batch": 1,
+        "gradient_accumulation": 8,
+        "maximum_complete_worlds_per_seed": 40,
+        "evaluate_every_complete_worlds": 5,
+        "patience_evaluations": 4,
+        "world_type_probabilities": {"pure_normal": 0.2, "control_only": 0.2, "mixed": 0.4, "anomaly_only": 0.2},
+        "same_budget_and_checkpoint_rule_required": true
+      },
+      "sealed_data": {
+        "held_out_torus_worlds": 6,
+        "public_real_ood_sequences": 19,
+        "hidden_test_sequences": 51,
+        "all_forbidden_for_e63_identity_generation": true
+      },
+      "identity_artifact": {
+        "path": "runs/ajae/e63_training_freeze.npz",
+        "artifact_sha256": null,
+        "scientific_array_sha256": null,
+        "eligible_worlds": null,
+        "excluded_worlds": null,
+        "fold_a_worlds": null,
+        "fold_b_worlds": null,
+        "bootstrap_shape": null,
+        "independent_read_only_validation": null
+      }
     },
     "difficulty_statistics": {
       "Nvis": "median accepted visible returns per entity over its visible frames",
@@ -3775,7 +3865,7 @@
       }
     },
     "comparison_frame_domain": {
-      "status": "proposed_requires_owner_confirmation",
+      "status": "frozen_before_evaluation",
       "rule": "intersection_of_complete_centered_q0_and_complete_causal_current_frames",
       "required_source_offsets": [-4, -3, -2, -1, 0, 1, 2],
       "applies_to": ["B0", "B1", "B2", "B3", "B4", "B5"],
@@ -3835,15 +3925,64 @@
   "decision_gates": {
     "gate1": ["ray_slot_audit", "range_image_round_trip", "render_source_leakage", "beam_range_intensity"],
     "gate2": ["B1_vs_B0", "pure_normal_safety", "normal_control_safety"],
-    "gate3": ["three_seed_B3_vs_B1", "three_seed_B3_vs_B2", "B4_vs_same_checkpoint_B3"],
+    "gate3": ["three_seed_B3_vs_B1", "three_seed_B3_vs_B2", "normal_and_moving_safety"],
     "gate4": ["frozen_public_19_vs_B0_B1", "moving_normal_safety"],
     "criteria": {
-      "status": "unresolved_requires_owner_decision",
-      "gate1": null,
-      "gate2": null,
-      "gate3": null,
-      "gate4": null,
-      "development_difficulty_coverage": null
+      "status": "frozen_before_training",
+      "gate1": {
+        "status": "formal_pass",
+        "formal_conjunction": ["E38-E44", "E45B-v2", "E48", "E49"],
+        "excluded_from_conjunction": ["all E45A variants", "E45-V1", "E46", "E47"],
+        "legacy_evidence_compatibility": {
+          "ray_slot_audit": {"criterion_id": "schema30_ray_slot_identity"},
+          "range_image_round_trip": {"criterion_id": "schema30_range_image_round_trip"},
+          "render_source_leakage": {"criterion_id": "historical_source_diagnostic_nonblocking"},
+          "beam_range_intensity": {"criterion_id": "schema30_renderer_mechanics"}
+        }
+      },
+      "gate2": {
+        "comparison": "B1-B0",
+        "minimum_mean_macro_world_AP_difference": 0.02,
+        "bootstrap_95_percent_lower_bound_strictly_greater_than": 0.0,
+        "minimum_positive_training_seeds": 2,
+        "training_seeds": 3,
+        "maximum_absolute_safety_worsening": 0.03,
+        "safety_statistics": ["pure-normal FPR", "rendered normal-control FPR", "moving-normal FPR", "development FPR95"]
+      },
+      "gate3": {
+        "comparisons": ["B3-B1", "B3-B2"],
+        "minimum_mean_macro_world_AP_difference_each": 0.01,
+        "bootstrap_95_percent_lower_bound_strictly_greater_than": 0.0,
+        "minimum_positive_training_seeds_each": 2,
+        "training_seeds": 3,
+        "maximum_absolute_safety_worsening_vs_each_comparator": 0.03,
+        "safety_statistics": ["pure-normal FPR", "rendered normal-control FPR", "moving-normal FPR", "development FPR95"],
+        "B4_excluded": true
+      },
+      "gate4": {
+        "public_sequences": 19,
+        "minimum_mean_sequence_AP_difference_final_vs_B1": 0.01,
+        "minimum_mean_sequence_AP_difference_final_vs_B0": 0.02,
+        "bootstrap_95_percent_lower_bounds_strictly_greater_than": 0.0,
+        "minimum_sequences_positive_final_vs_B1": 12,
+        "maximum_absolute_safety_worsening": 0.03,
+        "failure_action": "terminate current research cycle without tuning on the opened 19 sequences"
+      },
+      "development_difficulty_coverage": {
+        "status": "nonblocking",
+        "source_experiments": ["E59", "E60"],
+        "statistics": ["d", "Nvis", "O", "V"],
+        "minimum_bin_counts": null,
+        "gate2_or_gate3_membership": false
+      },
+      "B4_contribution": {
+        "phase": 10,
+        "comparison": "B4-B3 at the same B3 checkpoint",
+        "minimum_mean_macro_world_AP_difference": 0.005,
+        "bootstrap_95_percent_lower_bound_strictly_greater_than": 0.0,
+        "maximum_absolute_safety_worsening": 0.03,
+        "unsupported_action": "retain B3; fusion is unsupported but Gate 3 remains unaffected"
+      }
     },
     "verdict_rule": "a gate verdict requires its real statistics and an explicit predeclared scientific judgment; artifact existence alone is never evidence"
   },
