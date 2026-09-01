@@ -3390,8 +3390,8 @@ Notes: World identity and diagnostics must be fixed once. Failure of a descripti
 ## E58 | Freeze Six Held-Out Diagnostic Worlds
 
 Experiment ID: E58
-Design-freeze commit/hash: E58 corrected and frozen after E57 PASS but before any formal E58 execution; commit not recorded.
-Execution-freeze commit/hash: Not executed.
+Design-freeze commit/hash: `c17a433f8acb481b90d5069fe42d30af28760591`; protocol SHA-256 `1159e9e1af9550cd12d97bb11140b5036cc753813af7a48109ed5c3b78e01925`.
+Execution-freeze commit/hash: Runner frozen but not formally executed at `c17a433f8acb481b90d5069fe42d30af28760591`; `src/render.py` SHA-256 `df186a6ff15640bbee8bdbd486102f6e778a15353f8c8cb32cb2bc2287fcf649`.
 Date: Not executed.
 Git commit / clean state: Not applicable.
 Data identities: Six worlds selected from deterministic held-out-torus replacements of the 24 frozen E57-v2 worlds. Each replacement retains its control, material, orientation and ground-contact point; only the in-generator proxy shape is replaced by `HeldOutTorusShape`, with a deterministic translation adjustment along the support normal to preserve contact.
