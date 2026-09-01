@@ -3080,14 +3080,14 @@ Notes: Two independent reviewers are required for any formal score.
 Experiment ID: E46
 Design-freeze commit/hash: The former blocking matched-classification design is retired. A nonblocking diagnostic role is frozen by the owner decision; its exact sampling and execution identities are not yet frozen.
 Execution-freeze commit/hash: Not executed; optional diagnostic only.
-Date: Not executed.
-Git commit / clean state: Not applicable.
+Date: 2026-09-01 formal characterization complete.
+Git commit / clean state: Shared run used clean tracked state at `2b87d4c5b1418867d161078d7da03c6f56444a61`; untracked user-owned `PPT/` remained excluded.
 Data identities: If executed, use a separately preregistered reasonable shared-support subset of train/201 real-normal and E25-new rendered controls. No strict-pair, ESS≥256, transport, or natural-frequency-equivalence qualification is required. The existing E45A-overlap artifact may be reported as historical sensitivity evidence but may not silently define a new formal diagnostic sample.
 Input artifact hashes: None for execution.
 Random namespaces / seeds: Five folds grouped by center frame; entity-frame bootstrap 2,000 times. Exact seeds not restated here.
 Command and resolved config: If commissioned, freeze the diagnostic sampling rule before classification. Preserve the former low-capacity models unless a later diagnostic design explicitly versions them: standardized L2 logistic regression and depth-3 decision tree with `min_samples_leaf=64`; inputs sensor-frame x/y/z, intensity, beam, range, and local density; at most 64 identity-hash points per entity-frame; center-frame grouped five-fold evaluation and entity-frame bootstrap. Report AUC, balanced accuracy, class recall, uncertainty, feature ablation, and observation-domain limitations. The former 0.65 criteria may be retained as descriptive reference values but no E46 outcome is PASS/FAIL for Gate 1. Real/rendered source identifiability does not by itself establish a label shortcut because rendered controls have label 0 and rendered proxies have label 1.
-Resource and disk preflight: Not executed.
-Artifacts and hashes: None.
+Resource and disk preflight: 24 CPU cores; 25,196,924,928 bytes RAM with 22,746,275,840 bytes available; 17,179,869,184 bytes unused swap; RTX 5080 Laptop GPU not used; no competing experiment process. Windows E had 75,055,095,808 bytes remaining of 484,950,659,072 bytes. One E57 read produced both artifacts without rendering.
+Artifacts and hashes: `runs/ajae/e59_characterization.npz`; 5,771 bytes; SHA-256 `d7fcb9783aa717db244eaa83528c65549e7d6f22970a55dc0918e986b2886ae5`; scientific-array SHA-256 `865300e0e2e80701e0cabb004beb7019e7d143e91222a3195c6cc2d44b9169f2`.
 Primary construct: Descriptive low-level source identifiability between natural normal observations and rendered normal controls within a stated shared-support diagnostic domain.
 Primary result: Not executed; no blocking qualification is required.
 PASS / FAIL / OUTCOME: OUTCOME — OPTIONAL NONBLOCKING DIAGNOSTIC / NOT EXECUTED.
@@ -3423,12 +3423,12 @@ Command and resolved config: Report controls and proxies separately in the retai
 Resource and disk preflight: Not executed.
 Artifacts and hashes: None.
 Primary construct: Descriptive limits of development evidence across distance, visible count and occlusion for both generated labels.
-Primary result: Not executed.
-PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED; characterization has no scientific FAIL verdict.
+Primary result: For control/proxy, distance counts were `[6,2,7,9]`/`[5,4,8,7]`, $N_{vis}$ counts were `[6,2,9,7]`/`[3,9,7,5]`, and occlusion counts were `[22,1,0,1]`/`[19,3,1,1]`. Every marginal count conserved 24 units per label. Independent read-only validation reconstructed all 24×2 records from the saved E57 five-frame diagnostic JSON rather than the descriptor array and reproduced every value, bin and hash exactly.
+PASS / FAIL / OUTCOME: OUTCOME — COMPLETE; this node has no scientific FAIL verdict.
 Failure classification: Not applicable; sparse strata restrict interpretation only.
-Unlocked next node: E60 after the characterization artifact is complete.
-Invalidated downstream evidence: E60 onward remains locked.
-Descriptive observations: None.
+Unlocked next node: E60 completed in the same frozen shared aggregation; E61 is now current.
+Invalidated downstream evidence: None.
+Descriptive observations: Occlusion is concentrated in `[0,0.25)` for both labels, while distance and visible-return counts retain broader marginal support. These are interpretation limits, not eligibility failures.
 Notes: These are marginal descriptive summaries, not Cartesian-product or quota requirements.
 
 ## E60 | Descriptive Development-World $V=1..5$ Characterization
@@ -3436,44 +3436,44 @@ Notes: These are marginal descriptive summaries, not Cartesian-product or quota 
 Experiment ID: E60
 Design-freeze commit/hash: Phase 6-v2 retains all five strata for reporting only at `bc135c0acc457ae22d57db92f772e4cae9a64338`.
 Execution-freeze commit/hash: Shared E59/E60 read-only aggregator frozen at `176a1d4b1a5c3b4adca2c2cc4529adbed7e36e3f`; `src/render.py` SHA-256 `4e948b121c15b946a3eef6a44b13cb0076736ed5b3492809f71e99cc9130e3e4`; complete test suite 68/68 PASS.
-Date: Not executed.
-Git commit / clean state: Not applicable.
+Date: 2026-09-01 formal characterization complete.
+Git commit / clean state: Same shared clean tracked-state run as E59 at `2b87d4c5b1418867d161078d7da03c6f56444a61`; untracked user-owned `PPT/` remained excluded.
 Data identities: Control and proxy entity-window records from E57 worlds.
 Input artifact hashes: Exact E57-v2 input used jointly with E59: SHA-256 `b14efc1aad86ac67b5bf7c8631f02b2e68664e071b747b7b210d5f7a30f5d123`; scientific-array SHA-256 `590c467da2dec0a161688f2587dc1c37cea2b0f42f326b9918fd6dc9df81f6ec`. E59 and E60 share one read and identity table, so E60 cannot precede or diverge from E59.
 Random namespaces / seeds: Inherited frozen identities.
 Command and resolved config: Report the control and proxy counts for each $V=1,2,3,4,5$. The same entity may appear in different windows, but world/entity/window identity must be retained and must not be counted as independent objects in inferential statistics. No per-stratum quota exists. The only cross-frame hard condition was already adjudicated by E57-v2: at least 12 of 24 worlds per label contain an entity with `V>=2`. Use the same shared formal command recorded under E59; no second E57 read or rendering pass is allowed.
-Resource and disk preflight: Not executed.
-Artifacts and hashes: None.
+Resource and disk preflight: Same shared E59/E60 preflight and single E57 read; no second renderer or aggregation pass was performed.
+Artifacts and hashes: `runs/ajae/e60_visibility_characterization.npz`; 4,607 bytes; SHA-256 `ddedfb4d386ca45307aafcd9f7c6e789fa58eb83a2bc51430c30970db3c51183`; scientific-array SHA-256 `972ee8390b3dfce147e275dd515df40b493646170b0dcdd38955084f80756941`.
 Primary construct: Descriptive development support over number of visible frames without identity pseudoreplication.
-Primary result: Not executed.
-PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED; characterization has no scientific FAIL verdict.
+Primary result: Control counts for $V=1,2,3,4,5$ were `[1,0,0,0,23]`; proxy counts were `[0,0,0,0,24]`. Both rows conserved all 24 identities. Independent reconstruction from the E57 diagnostic JSON reproduced the counts and scientific hash exactly.
+PASS / FAIL / OUTCOME: OUTCOME — COMPLETE; this node has no scientific FAIL verdict.
 Failure classification: Not applicable; sparse strata restrict interpretation only.
-Unlocked next node: E61 after the characterization artifact is complete.
-Invalidated downstream evidence: E61 onward remains locked.
-Descriptive observations: None.
+Unlocked next node: E61.
+Invalidated downstream evidence: None; E61 is current.
+Descriptive observations: The development evidence is overwhelmingly concentrated at five-frame visibility. It supports cross-frame learning but cannot support a detailed monotonic mechanism claim across intermediate $V$ strata.
 Notes: Repeated-window observations retain shared entity identity. E59/E60 never reopen E57 selection.
 
 ## E61 | Pure-Normal and Moving-Normal Safety Sets
 
 Experiment ID: E61
-Design-freeze commit/hash: Frozen design; commit not recorded.
+Design-freeze commit/hash: Not executable as currently written. The text fixes the pure-normal frame span and moving semantic IDs but does not fix the moving-subset source sequence or the static-normal matching rule. A versioned pre-result protocol completion is required before implementation or execution.
 Execution-freeze commit/hash: Not executed.
 Date: Not executed.
 Git commit / clean state: Not applicable.
-Data identities: Pure-normal: every valid-range point in train/201 frames 4–681. Moving subset: raw moving semantics 252–259, plus saved static-normal matched controls.
+Data identities: Proposed pure-normal source is train/201 frames 4–681. The moving source identity and static-normal matched-control identities remain unresolved. Read-only inventory found zero semantics 252–259 in all 682 train/201 frames, but 13,011 such points across 273 of 449 train/206 frames and eight positive moving instances.
 Input artifact hashes: None.
 Random namespaces / seeds: Frozen identity and matching rules.
-Command and resolved config: Labels are evaluation-only and forbidden from model inputs. Identity, count, hash, and access-isolation checks must PASS.
+Command and resolved config: Not frozen. Before execution, the protocol must state whether range-valid ignore points are excluded from pure-normal evaluation, bind the moving subset to an actual sequence, and define the static-control eligibility, matching variables, reuse rule, cardinality and deterministic tie-break. Labels remain evaluation-only and forbidden from model inputs.
 Resource and disk preflight: Not executed.
 Artifacts and hashes: None.
 Primary construct: Leakage-free pure-normal and moving-normal safety evaluation sets.
 Primary result: Not executed.
-PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
-Failure classification: Not applicable.
-Unlocked next node: E62 after PASS.
+PASS / FAIL / OUTCOME: OUTCOME — PRE-EXECUTION PROTOCOL INCOMPLETE / NOT EXECUTED.
+Failure classification: Definition incompleteness, not an E61 experimental FAIL.
+Unlocked next node: None until the E61 safety-set identity is completed and frozen before viewing model scores.
 Invalidated downstream evidence: E62 onward remains locked.
-Descriptive observations: None.
-Notes: Moving labels are never model features.
+Descriptive observations: In train/201 frames 4–681, the 2.5–50 m inventory contains 74,086,578 real returns: 48,828,507 nonzero non-anomaly static-normal points and 25,258,071 semantic-zero/ignore points, with no semantic-2 or moving-semantic points. Thus “every valid-range point” and “valid labeled normal point” are materially different populations.
+Notes: Moving labels are never model features. The inventory was read-only and used no model predictions; it cannot select the missing protocol rule.
 
 ## E62 | Custom Evaluator versus Official Evaluator
 
