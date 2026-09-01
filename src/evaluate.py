@@ -363,10 +363,17 @@ class MovingNormalDiagnostic:
         if self.moving_semantics.size == 0:
             raise EvaluationError("moving semantic set cannot be empty")
         self._moving: list[np.ndarray] = []
-        self._static: list[np.ndarray] = []
+        self._matched_moving: list[np.ndarray] = []
+        self._matched_static: list[np.ndarray] = []
 
     def update(
-        self, points: np.ndarray, scores: np.ndarray, raw_semantic: np.ndarray
+        self,
+        points: np.ndarray,
+        scores: np.ndarray,
+        raw_semantic: np.ndarray,
+        *,
+        matched_moving_mask: np.ndarray | None = None,
+        matched_static_mask: np.ndarray | None = None,
     ) -> None:
         semantic = np.asarray(raw_semantic)
         values = _finite_vector("moving-normal scores", scores, semantic.size)
@@ -375,15 +382,44 @@ class MovingNormalDiagnostic:
         valid = (semantic != 0) & (semantic != 2) & _range_mask(self.protocol, points)
         moving = valid & np.isin(semantic, self.moving_semantics)
         static = valid & ~np.isin(semantic, self.moving_semantics)
+        if (matched_moving_mask is None) != (matched_static_mask is None):
+            raise EvaluationError("both frozen matched masks must be supplied together")
+        if matched_moving_mask is None:
+            matched_moving = moving
+            matched_static = static
+        else:
+            matched_moving = np.asarray(matched_moving_mask)
+            matched_static = np.asarray(matched_static_mask)
+            if (
+                matched_moving.dtype != np.bool_
+                or matched_static.dtype != np.bool_
+                or matched_moving.shape != moving.shape
+                or matched_static.shape != static.shape
+                or np.any(matched_moving & ~moving)
+                or np.any(matched_static & ~static)
+            ):
+                raise EvaluationError("frozen matched masks violate moving/static eligibility")
         if np.any(moving):
             self._moving.append(values[moving].astype(np.float64))
-        if np.any(static):
-            self._static.append(values[static].astype(np.float64))
+        if np.any(matched_moving):
+            self._matched_moving.append(values[matched_moving].astype(np.float64))
+        if np.any(matched_static):
+            self._matched_static.append(values[matched_static].astype(np.float64))
 
     def compute(self) -> dict[str, float | int | None]:
         moving = np.concatenate(self._moving) if self._moving else np.empty(0)
-        static = np.concatenate(self._static) if self._static else np.empty(0)
+        matched_moving = (
+            np.concatenate(self._matched_moving)
+            if self._matched_moving else np.empty(0)
+        )
+        static = (
+            np.concatenate(self._matched_static)
+            if self._matched_static else np.empty(0)
+        )
         moving_mean = float(moving.mean()) if moving.size else None
+        matched_moving_mean = (
+            float(matched_moving.mean()) if matched_moving.size else None
+        )
         static_mean = float(static.mean()) if static.size else None
         return {
             "strict_threshold": self.strict_threshold,
@@ -397,10 +433,26 @@ class MovingNormalDiagnostic:
             "static_false_positive_rate": (
                 float(np.mean(static > self.strict_threshold)) if static.size else None
             ),
+            "matched_moving_points": int(matched_moving.size),
+            "matched_moving_mean": matched_moving_mean,
+            "matched_moving_false_positive_rate": (
+                float(np.mean(matched_moving > self.strict_threshold))
+                if matched_moving.size else None
+            ),
             "moving_minus_static_mean": (
                 moving_mean - static_mean
                 if moving_mean is not None and static_mean is not None
                 else None
+            ),
+            "matched_moving_minus_static_mean": (
+                matched_moving_mean - static_mean
+                if matched_moving_mean is not None and static_mean is not None
+                else None
+            ),
+            "matched_moving_minus_static_false_positive_rate": (
+                float(np.mean(matched_moving > self.strict_threshold))
+                - float(np.mean(static > self.strict_threshold))
+                if matched_moving.size and static.size else None
             ),
         }
 

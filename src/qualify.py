@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import concurrent.futures
 import hashlib
+import heapq
 import inspect
 import json
 import multiprocessing
@@ -65,6 +66,7 @@ E55_ARTIFACT_SHA256 = (
     "13d367fa0f7f0ed86ba6de24fc535df44e4ea90ab6f38989dec4ea4d6e35aaf8"
 )
 E53_SEED_NAMESPACE = "E53-STU-query-v1"
+E61_MATCH_NAMESPACE = "E61-static-match-v1"
 
 
 class QualificationError(ValueError):
@@ -1914,6 +1916,292 @@ def run_e56(
     return result
 
 
+def _e61_identity_rank(sequence_id: int, frame_id: int, ray_id: int) -> int:
+    payload = (
+        f"{E61_MATCH_NAMESPACE}:{sequence_id}:{frame_id}:{ray_id}"
+    ).encode("ascii")
+    digest = int.from_bytes(hashlib.sha256(payload).digest(), "big")
+    # The appended identity is only a deterministic SHA-256 collision tie-break.
+    return (digest << 40) | (int(frame_id) << 20) | int(ray_id)
+
+
+def _e61_build_once(data_root: Path | str, protocol: object) -> dict[str, np.ndarray]:
+    """Build score-blind E61 identities from the two frozen train sequences."""
+
+    from .evaluate import _protocol_slot_to_ray, _range_mask
+
+    safety = getattr(protocol, "development")["safety_sets"]
+    pure_rule = safety["pure_normal"]
+    moving_rule = safety["moving_normal"]
+    match_rule = safety["static_match"]
+    slot_to_ray, ray_digest, calibration_sha256 = _protocol_slot_to_ray(protocol)
+    sequences = {
+        sequence_id: STUSequence.open(
+            data_root, protocol=protocol, partition="train",
+            sequence_id=sequence_id, label_mode=LabelMode.REQUIRED,
+        )
+        for sequence_id in (201, 206)
+    }
+    first_mapping = slot_to_ray(sequences[206].source_frame(0))
+    ray_count = int(first_mapping.size)
+    if not np.array_equal(np.sort(first_mapping), np.arange(ray_count)):
+        raise QualificationError("E61 canonical ray mapping is not a permutation")
+    packed_width = (ray_count + 7) // 8
+    moving_semantics = np.asarray(moving_rule["semantic_ids"], dtype=np.uint16)
+    static_semantics = np.asarray(
+        [match_rule["moving_to_static_semantic"][str(int(value))]
+         for value in moving_semantics],
+        dtype=np.uint16,
+    )
+    inner_edges = np.asarray(match_rule["range_bin_edges_m"][1:-1])
+
+    pure_frames = np.arange(
+        int(pure_rule["frame_range"][0]),
+        int(pure_rule["frame_range"][1]) + 1,
+        dtype=np.int16,
+    )
+    pure_packed = np.zeros((pure_frames.size, packed_width), dtype=np.uint8)
+    pure_count = np.zeros(pure_frames.size, dtype=np.int32)
+    pure_sequence = sequences[201]
+    for row, frame_id in enumerate(pure_frames):
+        frame = pure_sequence.source_frame(int(frame_id))
+        assert frame.labels is not None
+        semantic = np.asarray(frame.labels.semantic)
+        eligible = (
+            _range_mask(protocol, frame.xyzi)
+            & (semantic != 0)
+            & (semantic != 2)
+            & ~np.isin(semantic, moving_semantics)
+        )
+        mapping = slot_to_ray(frame)
+        canonical = np.zeros(ray_count, dtype=np.bool_)
+        canonical[mapping[np.flatnonzero(eligible)]] = True
+        pure_packed[row] = np.packbits(canonical, bitorder="little")
+        pure_count[row] = int(np.count_nonzero(eligible))
+
+    moving_frames = np.arange(
+        int(moving_rule["frame_range"][0]),
+        int(moving_rule["frame_range"][1]) + 1,
+        dtype=np.int16,
+    )
+    moving_packed = np.zeros((moving_frames.size, packed_width), dtype=np.uint8)
+    moving_count = np.zeros(moving_frames.size, dtype=np.int32)
+    moving_candidate_count = np.zeros((8, 4), dtype=np.int32)
+    static_candidate_count = np.zeros((8, 4), dtype=np.int32)
+    moving_records: list[list[tuple[int, int, int]]] = [
+        [] for _ in range(32)
+    ]
+    moving_sequence = sequences[206]
+    for row, frame_id in enumerate(moving_frames):
+        frame = moving_sequence.source_frame(int(frame_id))
+        assert frame.labels is not None
+        semantic = np.asarray(frame.labels.semantic)
+        valid = _range_mask(protocol, frame.xyzi) & (semantic != 0) & (semantic != 2)
+        distance = np.linalg.norm(
+            np.asarray(frame.xyzi[:, :3], dtype=np.float32), axis=1
+        )
+        range_bin = np.searchsorted(inner_edges, distance, side="right")
+        mapping = slot_to_ray(frame)
+        canonical = np.zeros(ray_count, dtype=np.bool_)
+        moving_mask = valid & np.isin(semantic, moving_semantics)
+        canonical[mapping[np.flatnonzero(moving_mask)]] = True
+        moving_packed[row] = np.packbits(canonical, bitorder="little")
+        moving_count[row] = int(np.count_nonzero(moving_mask))
+        for family, (moving_value, static_value) in enumerate(
+            zip(moving_semantics, static_semantics, strict=True)
+        ):
+            for bin_id in range(4):
+                cell = family * 4 + bin_id
+                moving_slots = np.flatnonzero(
+                    valid & (semantic == moving_value) & (range_bin == bin_id)
+                )
+                static_slots = np.flatnonzero(
+                    valid & (semantic == static_value) & (range_bin == bin_id)
+                )
+                moving_candidate_count[family, bin_id] += moving_slots.size
+                static_candidate_count[family, bin_id] += static_slots.size
+                moving_records[cell].extend(
+                    (
+                        _e61_identity_rank(206, int(frame_id), int(mapping[slot])),
+                        int(frame_id),
+                        int(mapping[slot]),
+                    )
+                    for slot in moving_slots
+                )
+
+    matched_count = np.minimum(moving_candidate_count, static_candidate_count)
+    static_heaps: list[list[tuple[int, int, int]]] = [[] for _ in range(32)]
+    for frame_id in moving_frames:
+        frame = moving_sequence.source_frame(int(frame_id))
+        assert frame.labels is not None
+        semantic = np.asarray(frame.labels.semantic)
+        valid = _range_mask(protocol, frame.xyzi) & (semantic != 0) & (semantic != 2)
+        distance = np.linalg.norm(
+            np.asarray(frame.xyzi[:, :3], dtype=np.float32), axis=1
+        )
+        range_bin = np.searchsorted(inner_edges, distance, side="right")
+        mapping = slot_to_ray(frame)
+        for family, static_value in enumerate(static_semantics):
+            for bin_id in range(4):
+                limit = int(matched_count[family, bin_id])
+                if limit == 0:
+                    continue
+                cell = family * 4 + bin_id
+                heap = static_heaps[cell]
+                for slot in np.flatnonzero(
+                    valid & (semantic == static_value) & (range_bin == bin_id)
+                ):
+                    ray_id = int(mapping[slot])
+                    rank = _e61_identity_rank(206, int(frame_id), ray_id)
+                    entry = (-rank, int(frame_id), ray_id)
+                    if len(heap) < limit:
+                        heapq.heappush(heap, entry)
+                    elif rank < -heap[0][0]:
+                        heapq.heapreplace(heap, entry)
+
+    matched_moving_packed = np.zeros_like(moving_packed)
+    matched_static_packed = np.zeros_like(moving_packed)
+    paired_cell: list[int] = []
+    paired_moving_frame: list[int] = []
+    paired_moving_ray: list[int] = []
+    paired_static_frame: list[int] = []
+    paired_static_ray: list[int] = []
+    for cell in range(32):
+        family, bin_id = divmod(cell, 4)
+        limit = int(matched_count[family, bin_id])
+        selected_moving = sorted(moving_records[cell])[:limit]
+        selected_static = sorted(
+            ((-negated, frame_id, ray_id)
+             for negated, frame_id, ray_id in static_heaps[cell])
+        )
+        if len(selected_moving) != limit or len(selected_static) != limit:
+            raise QualificationError("E61 matched-cell cardinality changed")
+        for (_, moving_frame, moving_ray), (_, static_frame, static_ray) in zip(
+            selected_moving, selected_static, strict=True
+        ):
+            paired_cell.append(cell)
+            paired_moving_frame.append(moving_frame)
+            paired_moving_ray.append(moving_ray)
+            paired_static_frame.append(static_frame)
+            paired_static_ray.append(static_ray)
+            matched_moving_packed[moving_frame, moving_ray // 8] |= np.uint8(
+                1 << (moving_ray % 8)
+            )
+            matched_static_packed[static_frame, static_ray // 8] |= np.uint8(
+                1 << (static_ray % 8)
+            )
+
+    return {
+        "pure_frame_id": pure_frames,
+        "pure_canonical_mask_packed": pure_packed,
+        "pure_point_count_by_frame": pure_count,
+        "moving_frame_id": moving_frames,
+        "moving_canonical_mask_packed": moving_packed,
+        "moving_point_count_by_frame": moving_count,
+        "matched_moving_canonical_mask_packed": matched_moving_packed,
+        "matched_static_canonical_mask_packed": matched_static_packed,
+        "moving_candidate_count": moving_candidate_count,
+        "static_candidate_count": static_candidate_count,
+        "matched_count": matched_count,
+        "pair_cell": np.asarray(paired_cell, dtype=np.int8),
+        "pair_moving_frame": np.asarray(paired_moving_frame, dtype=np.int16),
+        "pair_moving_canonical_ray": np.asarray(paired_moving_ray, dtype=np.int32),
+        "pair_static_frame": np.asarray(paired_static_frame, dtype=np.int16),
+        "pair_static_canonical_ray": np.asarray(paired_static_ray, dtype=np.int32),
+        "moving_semantic": moving_semantics,
+        "static_semantic": static_semantics,
+        "range_bin_edges_m": np.asarray(
+            match_rule["range_bin_edges_m"], dtype=np.float64
+        ),
+        "canonical_ray_mapping_sha256": np.asarray(ray_digest, dtype="S64"),
+        "calibration_sha256": np.asarray(calibration_sha256, dtype="S64"),
+    }
+
+
+def run_e61(
+    data_root: Path | str,
+    protocol_path: Path | str,
+    output_path: Path | str,
+) -> dict[str, object]:
+    """Freeze E61 safety identities without reading predictions or model scores."""
+
+    protocol_file = Path(protocol_path).expanduser().resolve(strict=True)
+    protocol = load_protocol(protocol_file)
+    started = time.monotonic()
+    first = _e61_build_once(data_root, protocol)
+    second = _e61_build_once(data_root, protocol)
+    elapsed = time.monotonic() - started
+    reproduction_errors = sum(
+        int(not np.array_equal(first[name], second[name])) for name in first
+    )
+    pure_points = int(first["pure_point_count_by_frame"].sum())
+    moving_points = int(first["moving_point_count_by_frame"].sum())
+    paired_points = int(first["pair_cell"].size)
+    identity_errors = int(
+        pure_points
+        != int(protocol.development["safety_sets"]["pure_normal"]["expected_points"])
+        or moving_points
+        != int(protocol.development["safety_sets"]["moving_normal"]["expected_points"])
+        or np.unique(
+            first["pair_moving_frame"].astype(np.int64) * 131072
+            + first["pair_moving_canonical_ray"]
+        ).size != paired_points
+        or np.unique(
+            first["pair_static_frame"].astype(np.int64) * 131072
+            + first["pair_static_canonical_ray"]
+        ).size != paired_points
+    )
+    count_errors = int(
+        not np.array_equal(
+            first["matched_count"],
+            np.minimum(
+                first["moving_candidate_count"], first["static_candidate_count"]
+            ),
+        )
+        or int(first["matched_count"].sum()) != paired_points
+    )
+    prediction_access_errors = 0
+    label_input_errors = int(
+        "raw_semantic" in inspect.signature(AJAEPointTransformer.forward).parameters
+    )
+    passed = (
+        reproduction_errors == 0
+        and identity_errors == 0
+        and count_errors == 0
+        and prediction_access_errors == 0
+        and label_input_errors == 0
+    )
+    result: dict[str, object] = {
+        "experiment": "E61",
+        "passed": passed,
+        "failure_classification": None
+        if passed else "safety_identity_or_isolation_failure",
+        "pure_normal_points": pure_points,
+        "pure_normal_frames": int(first["pure_frame_id"].size),
+        "moving_normal_points": moving_points,
+        "moving_normal_frames_with_points": int(np.count_nonzero(
+            first["moving_point_count_by_frame"]
+        )),
+        "matched_pairs": paired_points,
+        "matched_fraction_of_moving": paired_points / max(moving_points, 1),
+        "moving_candidate_count": first["moving_candidate_count"].tolist(),
+        "static_candidate_count": first["static_candidate_count"].tolist(),
+        "matched_count": first["matched_count"].tolist(),
+        "identity_errors": identity_errors,
+        "count_errors": count_errors,
+        "prediction_access_errors": prediction_access_errors,
+        "label_input_errors": label_input_errors,
+        "reproduction_errors": reproduction_errors,
+        "formal_repetitions": 2,
+        "elapsed_seconds": elapsed,
+        "protocol_sha256": _sha256(protocol_file),
+        "scientific_array_sha256": _array_hash(first),
+        "claim_limit": protocol.development["safety_sets"]["claim_limit"],
+    }
+    _save(Path(output_path).expanduser().resolve(), first, result)
+    return result
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -1963,6 +2251,10 @@ def _parser() -> argparse.ArgumentParser:
     e56.add_argument("--protocol", type=Path, default=PROJECT_ROOT / "protocol.json")
     e56.add_argument("--e55", type=Path, required=True)
     e56.add_argument("--output", type=Path, required=True)
+    e61 = commands.add_parser("e61")
+    e61.add_argument("--data-root", type=Path, required=True)
+    e61.add_argument("--protocol", type=Path, default=PROJECT_ROOT / "protocol.json")
+    e61.add_argument("--output", type=Path, required=True)
     return parser
 
 
@@ -2034,6 +2326,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         result = run_e56(
             args.data_root, args.protocol, args.e55, args.output
         )
+        print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        return 0 if result["passed"] else 1
+    if args.command == "e61":
+        result = run_e61(args.data_root, args.protocol, args.output)
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 0 if result["passed"] else 1
     raise AssertionError(args.command)

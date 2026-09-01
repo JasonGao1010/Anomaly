@@ -1682,6 +1682,29 @@ def test_official_point_gate_and_moving_normal_safety() -> None:
     assert safety["moving_false_positive_rate"] == pytest.approx(0.5)
 
 
+def test_moving_normal_diagnostic_uses_frozen_matched_masks() -> None:
+    diagnostic = MovingNormalDiagnostic(0.5)
+    points = np.column_stack((np.full(4, 5.0), np.zeros((4, 2)))).astype(np.float32)
+    scores = np.asarray((0.1, 0.9, 0.2, 0.8), dtype=np.float32)
+    semantic = np.asarray((252, 252, 10, 10), dtype=np.uint16)
+    diagnostic.update(
+        points,
+        scores,
+        semantic,
+        matched_moving_mask=np.asarray((True, False, False, False)),
+        matched_static_mask=np.asarray((False, False, True, False)),
+    )
+    result = diagnostic.compute()
+    assert result["moving_points"] == 2
+    assert result["moving_false_positive_rate"] == pytest.approx(0.5)
+    assert result["matched_moving_points"] == 1
+    assert result["matched_moving_false_positive_rate"] == 0.0
+    assert result["static_points"] == 1
+    assert result["static_false_positive_rate"] == 0.0
+    assert result["moving_minus_static_mean"] == pytest.approx(0.3)
+    assert result["matched_moving_minus_static_mean"] == pytest.approx(-0.1)
+
+
 def test_point_metrics_match_released_stu_calculator(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
