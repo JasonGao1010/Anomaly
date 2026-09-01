@@ -148,6 +148,9 @@ def _qualified_callable(value: Callable[..., object] | None) -> str | None:
     if value is None:
         return None
     module = getattr(value, "__module__", type(value).__module__)
+    if module == "__main__":
+        main_spec = getattr(sys.modules.get("__main__"), "__spec__", None)
+        module = getattr(main_spec, "name", module)
     name = getattr(value, "__qualname__", type(value).__qualname__)
     return f"{module}.{name}"
 

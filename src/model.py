@@ -1149,7 +1149,7 @@ class AJAEPointTransformer(nn.Module):
         ),
         heads: int = 4,
         upsample_k: int = 3,
-        attention_chunk_size: int = 4096,
+        attention_chunk_size: int = 8192,
     ) -> None:
         super().__init__()
         if hidden_dim < 16 or hidden_dim % heads:
