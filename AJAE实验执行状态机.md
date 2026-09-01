@@ -3790,24 +3790,24 @@ Notes: Scientific underperformance is not an invalid-seed mechanical failure. Be
 ## E75 | B1 versus B0 Proxy-Supervision Effect
 
 Experiment ID: E75
-Design-freeze commit/hash: E63 Gate 2 superiority criteria.
-Execution-freeze commit/hash: Not executed.
-Date: Not executed.
-Git commit / clean state: Not applicable.
+Design-freeze commit/hash: E63 Gate 2 superiority criteria remain unchanged. Before any E74 development metric value was read, the owner approved the E75 pre-result statistical identity correction from the unavailable 24-world population to the fixed 23-world common domain.
+Execution-freeze commit/hash: Formal B1/B0 comparison is not executed. The corrected bootstrap identity is implemented in `src/qualify.py`, SHA-256 `95619d1fc3be7d5fa1abe6da24b37b4e89b323c60912d781be249cd321b4f8c3`.
+Date: 2026-09-01 pre-result bootstrap identity frozen; formal comparison pending E74.
+Git commit / clean state: Correction frozen while the valid E74 process continued from its unchanged in-memory protocol identity; `protocol.json` was deliberately not edited during the resumable training run. Untracked user-owned `PPT/` remained excluded.
 Data identities: Paired B1/B0 results across E57 worlds and seeds.
-Input artifact hashes: E72 and E74 outputs required.
-Random namespaces / seeds: E63 hierarchical paired bootstrap, 5,000 resamples.
-Command and resolved config: Apply E63 Gate 2 exactly: mean AP gain ≥0.02, 95% bootstrap lower bound >0, and positive mean-AP difference in at least 2/3 seeds.
-Resource and disk preflight: Not executed.
-Artifacts and hashes: None.
+Input artifact hashes: E72 and E74 outputs required for the comparison. Bootstrap source E63 SHA-256 `5dbf99eaa59a05a83774e42beb6b8d7a95cf9309ebd42ab7870604a20d410dd9`; corrected identity SHA-256 `1bae1dbe4b5ded34cf9cebd818b4877368973114c0e7046840c0ff342fb73b9d`.
+Random namespaces / seeds: `E75-common-domain-bootstrap-correction-v1`; NumPy PCG64 seed `63002026`; 5,000 resamples. Each replicate draws three training seeds with replacement from `{0,1,2}` and 23 development worlds with replacement from the fixed E63 common-domain set. B1 and B0 share every realized index.
+Command and resolved config: Identity freeze command: `python -m src.qualify e75-freeze --protocol protocol.json --e63 runs/ajae/e63_training_freeze.npz --output runs/ajae/e75_bootstrap_identity.npz`. After E74, apply E63 Gate 2 exactly: mean AP gain ≥0.02, 95% bootstrap lower bound >0, and positive mean-AP difference in at least 2/3 seeds.
+Resource and disk preflight: CPU-only identity materialization took 0.008740 seconds and wrote 91,013 bytes while E74 retained the GPU; it did not compete for the training device or approach the Windows E: reserve.
+Artifacts and hashes: `runs/ajae/e75_bootstrap_identity.npz`, 91,013 bytes, SHA-256 `1bae1dbe4b5ded34cf9cebd818b4877368973114c0e7046840c0ff342fb73b9d`, scientific-array SHA-256 `deac90b297fd84e4c3d5cde7c2d5d57a139f9d0a1aba85e3539c564f2ec50869`.
 Primary construct: Whether anomaly-proxy supervision adds meaningful single-frame anomaly-detection value over official STU MaxLogit.
-Primary result: Not executed.
+Primary result: Formal B1/B0 metrics are not executed. The pre-result identity correction reproduced the original 5,000×3 training-seed draws exactly, generated a reproducible 5,000×23 common-domain world array, excluded `world_id=5` from every draw, and had zero identity or reproduction errors. Independent read-only reconstruction reproduced every array and the scientific-array hash exactly. No E74 metric, loss or checkpoint-selection value was read.
 PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
 Failure classification: A formal FAIL would be `scientific_failure`.
 Unlocked next node: E76 after PASS. FAIL stops five-frame experiments and opens a new Gate 1/proxy-design research cycle; B3 cannot rescue B1.
 Invalidated downstream evidence: E76 onward remains locked on FAIL.
 Descriptive observations: None.
-Notes: No threshold tuning is allowed after observing B1/B0 results.
+Notes: No threshold tuning is allowed after observing B1/B0 results. This is a statistical-identity implementation correction, not E75-v2 and not a rerun of E63. E63's historical 24-world arrays remain unchanged; its old `bootstrap_world_id` is ineligible for E75 because 3,229/5,000 replicates contain the unavailable `world_id=5` (5,037 draws total). The corrected identity changes no Gate 2 threshold, training budget, model, metric or paired estimand.
 
 ## E76 | B1 Normal-Safety Qualification
 

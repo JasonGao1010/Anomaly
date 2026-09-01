@@ -86,6 +86,7 @@ E62_NUMERICAL_SEED = 62002026
 E63_SAFETY_NAMESPACE = "E63-safety-crossfit-v1"
 E63_BOOTSTRAP_NAMESPACE = "E63-hierarchical-paired-bootstrap-v1"
 E63_BOOTSTRAP_SEED = 63002026
+E75_BOOTSTRAP_NAMESPACE = "E75-common-domain-bootstrap-correction-v1"
 PHASE7_SEED = 640071
 E61_ARTIFACT_SHA256 = (
     "8d3e08e0512dc70a75d2279cfb4515bc960bbfda4f35a872c4a76e9dad69d0e0"
@@ -95,6 +96,9 @@ E72_ARTIFACT_SHA256 = (
 )
 E73_E26_ARTIFACT_SHA256 = (
     "2653f705d2e890d99cda732a7a00387b5621cd05abb9c4681c7a9f284c34363c"
+)
+E63_ARTIFACT_SHA256 = (
+    "5dbf99eaa59a05a83774e42beb6b8d7a95cf9309ebd42ab7870604a20d410dd9"
 )
 
 
@@ -2894,6 +2898,116 @@ def run_e63(
     return result
 
 
+def e75_bootstrap_identity_arrays(e63_path: Path | str) -> dict[str, np.ndarray]:
+    """Build the corrected E75 bootstrap over the 23-world common domain."""
+
+    source = Path(e63_path).expanduser().resolve(strict=True)
+    if _sha256(source) != E63_ARTIFACT_SHA256:
+        raise QualificationError("E75 bootstrap input is not the frozen E63 artifact")
+    with np.load(source, allow_pickle=False) as artifact:
+        required = {
+            "world_id",
+            "common_domain_eligible",
+            "bootstrap_training_seed",
+            "bootstrap_world_id",
+        }
+        if not required.issubset(artifact.files):
+            raise QualificationError("E63 artifact lacks E75 bootstrap identities")
+        world_id = np.asarray(artifact["world_id"], dtype=np.int16)
+        eligible = np.asarray(artifact["common_domain_eligible"], dtype=np.bool_)
+        predecessor_seed_draws = np.asarray(
+            artifact["bootstrap_training_seed"], dtype=np.int8
+        )
+    if (
+        world_id.shape != (24,)
+        or eligible.shape != (24,)
+        or world_id.tolist() != list(range(24))
+        or world_id[~eligible].tolist() != [5]
+        or int(np.count_nonzero(eligible)) != 23
+    ):
+        raise QualificationError("E63 common-domain identity changed")
+
+    # Preserve the original RNG prefix, then sample only observable paired worlds.
+    generator = np.random.Generator(np.random.PCG64(E63_BOOTSTRAP_SEED))
+    bootstrap_training_seed = generator.choice(
+        np.asarray((0, 1, 2), dtype=np.int8), size=(5000, 3), replace=True
+    )
+    if not np.array_equal(bootstrap_training_seed, predecessor_seed_draws):
+        raise QualificationError("E75 training-seed bootstrap stream changed")
+    common_world_id = world_id[eligible]
+    bootstrap_world_id = generator.choice(
+        common_world_id, size=(5000, 23), replace=True
+    ).astype(np.int16, copy=False)
+    return {
+        "common_domain_world_id": common_world_id,
+        "excluded_world_id": world_id[~eligible],
+        "bootstrap_training_seed": bootstrap_training_seed,
+        "bootstrap_world_id": bootstrap_world_id,
+    }
+
+
+def run_e75_identity_correction(
+    protocol_path: Path | str,
+    e63_path: Path | str,
+    output_path: Path | str,
+) -> dict[str, object]:
+    """Freeze E75's 23-world bootstrap before any model result is read."""
+
+    started = time.monotonic()
+    protocol_file = Path(protocol_path).expanduser().resolve(strict=True)
+    protocol = load_protocol(protocol_file)
+    gate2 = protocol.decision_gates["criteria"]["gate2"]
+    shared = protocol.development["e63_freeze"]["shared_training"]
+    if (
+        protocol.training["maximum_worlds"] != 25
+        or shared["maximum_complete_worlds_per_seed"] != 25
+        or gate2["minimum_mean_macro_world_AP_difference"] != 0.02
+        or gate2["bootstrap_95_percent_lower_bound_strictly_greater_than"] != 0.0
+        or gate2["minimum_positive_training_seeds"] != 2
+        or gate2["training_seeds"] != 3
+    ):
+        raise QualificationError("E75 training budget or Gate 2 criteria changed")
+    source = Path(e63_path).expanduser().resolve(strict=True)
+    first = e75_bootstrap_identity_arrays(source)
+    second = e75_bootstrap_identity_arrays(source)
+    reproduction_errors = sum(
+        not np.array_equal(first[name], second[name]) for name in first
+    )
+    identity_errors = int(
+        first["common_domain_world_id"].shape != (23,)
+        or first["excluded_world_id"].tolist() != [5]
+        or first["bootstrap_training_seed"].shape != (5000, 3)
+        or first["bootstrap_world_id"].shape != (5000, 23)
+        or bool(np.any(first["bootstrap_world_id"] == 5))
+        or set(np.unique(first["bootstrap_training_seed"]).tolist()) != {0, 1, 2}
+        or set(np.unique(first["bootstrap_world_id"]).tolist())
+        != set(first["common_domain_world_id"].tolist())
+    )
+    result = {
+        "experiment": "E75 pre-result statistical identity correction",
+        "status": "frozen_before_result_exposure",
+        "passed": reproduction_errors == 0 and identity_errors == 0,
+        "failure_classification": "statistical_identity_implementation_defect",
+        "namespace": E75_BOOTSTRAP_NAMESPACE,
+        "generator": "NumPy PCG64",
+        "seed": E63_BOOTSTRAP_SEED,
+        "replicates": 5000,
+        "training_seed_draws_per_replicate": 3,
+        "development_world_draws_per_replicate": 23,
+        "paired_models_share_realized_indices": True,
+        "source_e63_sha256": _sha256(source),
+        "protocol_sha256": _sha256(protocol_file),
+        "development_metric_values_read": False,
+        "training_maximum_worlds": 25,
+        "identity_errors": identity_errors,
+        "reproduction_errors": reproduction_errors,
+        "scientific_array_sha256": _array_hash(first),
+        "seconds": time.monotonic() - started,
+    }
+    _save(Path(output_path).expanduser().resolve(), first, result)
+    return result
+
+
 def phase7_mechanical_arrays() -> dict[str, np.ndarray]:
     """Execute the frozen E64--E71 analytic fixtures on the production paths."""
 
@@ -3924,6 +4038,12 @@ def _parser() -> argparse.ArgumentParser:
     e63.add_argument("--protocol", type=Path, default=PROJECT_ROOT / "protocol.json")
     e63.add_argument("--e57", type=Path, required=True)
     e63.add_argument("--output", type=Path, required=True)
+    e75_freeze = commands.add_parser("e75-freeze")
+    e75_freeze.add_argument(
+        "--protocol", type=Path, default=PROJECT_ROOT / "protocol.json"
+    )
+    e75_freeze.add_argument("--e63", type=Path, required=True)
+    e75_freeze.add_argument("--output", type=Path, required=True)
     phase7 = commands.add_parser("phase7")
     phase7.add_argument("--protocol", type=Path, default=PROJECT_ROOT / "protocol.json")
     phase7.add_argument("--e63", type=Path, required=True)
@@ -4030,6 +4150,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0 if result["passed"] else 1
     if args.command == "e63":
         result = run_e63(args.protocol, args.e57, args.output)
+        print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        return 0 if result["passed"] else 1
+    if args.command == "e75-freeze":
+        result = run_e75_identity_correction(
+            args.protocol, args.e63, args.output
+        )
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 0 if result["passed"] else 1
     if args.command == "phase7":

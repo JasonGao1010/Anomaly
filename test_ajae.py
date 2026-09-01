@@ -34,6 +34,7 @@ from src.model import AJAEPointTransformer, assigned_stu_evidence, temporal_radi
 from src.qualify import (
     PHASE5_FRAMES,
     e63_identity_arrays,
+    e75_bootstrap_identity_arrays,
     phase7_mechanical_arrays,
     e62_fixture_arrays,
     e53_frame_seed,
@@ -1827,6 +1828,22 @@ def test_e63_identities_are_result_blind_and_reproducible() -> None:
     assert np.count_nonzero(first["safety_fold"] == b"B") == 12
     assert first["bootstrap_training_seed"].shape == (5000, 3)
     assert first["bootstrap_world_id"].shape == (5000, 24)
+
+
+def test_e75_bootstrap_uses_only_the_common_23_worlds() -> None:
+    source = ROOT / "runs/ajae/e63_training_freeze.npz"
+    first = e75_bootstrap_identity_arrays(source)
+    second = e75_bootstrap_identity_arrays(source)
+    for name in first:
+        np.testing.assert_array_equal(first[name], second[name])
+    assert first["common_domain_world_id"].tolist() == [
+        0, 1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12,
+        13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
+    ]
+    assert first["excluded_world_id"].tolist() == [5]
+    assert first["bootstrap_training_seed"].shape == (5000, 3)
+    assert first["bootstrap_world_id"].shape == (5000, 23)
+    assert not np.any(first["bootstrap_world_id"] == 5)
 
 
 def test_phase7_mechanical_fixtures_all_pass_and_reproduce() -> None:
