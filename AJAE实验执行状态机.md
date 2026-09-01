@@ -3058,14 +3058,14 @@ Notes: Independent read-only validation recomputed candidate-bank, unit-cache an
 Experiment ID: E45-V1
 Design-freeze commit/hash: Optional nonblocking design; commit not recorded.
 Execution-freeze commit/hash: Not executed.
-Date: Not executed.
-Git commit / clean state: Not applicable.
+Date: 2026-09-01 formal PASS.
+Git commit / clean state: Formal run used the corrected execution identity from `ab98eaecb13534f0bfb6b825f0a6cc37c15ca0d1`, recorded at clean tracked-state commit `5cb1db3c65e4b13cb882e56d19fda9cbcc236db3`; untracked user-owned `PPT/` remained excluded.
 Data identities: Optional blinded panels from a separately frozen diagnostic real/control sample, if this diagnostic is ever commissioned.
 Input artifact hashes: None for a completed execution.
 Random namespaces / seeds: Fixed panel identities would inherit E45; not executed.
 Command and resolved config: Without two independent human reviewers, do not adjudicate. This result cannot replace E46 and cannot block Gate 1.
-Resource and disk preflight: Not executed.
-Artifacts and hashes: None.
+Resource and disk preflight: 24 physical CPU cores; 23 GiB RAM with about 21 GiB available; 16 GiB unused swap; RTX 5080 Laptop GPU not applicable to the geometry workload; no competing experiment process. Windows E had 75,055,554,560 bytes remaining of 484,950,659,072 bytes, above the 5% reserve. The formal run used 24 processes with one numerical-library thread each and completed in 8.970485 s.
+Artifacts and hashes: `runs/ajae/e58_held_out_worlds.npz`; 26,911 bytes; SHA-256 `cde17c339b5307de5f21c9ceeb9b207ad26a12026e2fe741f6926e1af8a8110b`; scientific-array SHA-256 `125bb629f8449b8fb85a5de98ff29ef5c0f3c18b01a8b8eca94ede86afdd9969`.
 Primary construct: Optional human ability to identify source from matched local patches.
 Primary result: No formal adjudication recorded.
 PASS / FAIL / OUTCOME: OUTCOME — optional, nonblocking, not executed.
@@ -3401,12 +3401,12 @@ Command and resolved config: Construct exactly one torus replacement per E57 wor
 Resource and disk preflight: Not executed.
 Artifacts and hashes: None.
 Primary construct: Strict isolation of held-out diagnostic worlds.
-Primary result: Not executed.
-PASS / FAIL / OUTCOME: OUTCOME — PRE-FORMAL IMPLEMENTATION CORRECTION COMPLETE / NOT EXECUTED.
-Failure classification: Not applicable.
-Unlocked next node: E58 formal execution remains current; E59 requires E58 PASS.
-Invalidated downstream evidence: E59 onward remains locked.
-Descriptive observations: None.
+Primary result: Twenty of 24 deterministic torus replacements were eligible; the fixed namespace-hash rule selected six worlds. All qualification, selection-reproduction, semantic-identity, per-slot sensor-stream, cache-identity and training-sampler isolation error counts were zero. The minimum center-frame valid anomaly and normal counts were 34 and 59,995. Independent read-only validation recomputed the scientific hash and selected indices `[15,9,14,16,12,1]`, reconstructed and rerendered all six worlds, and exactly reproduced their source identities, sensor streams, diagnostics and point counts.
+PASS / FAIL / OUTCOME: PASS.
+Failure classification: None.
+Unlocked next node: E59.
+Invalidated downstream evidence: None; E59 is current.
+Descriptive observations: Four candidates were ineligible under the frozen legal/visibility/evaluability qualification. This does not affect the fixed six-world selection because 20 candidates remained eligible.
 Notes: Held-out diagnostics cannot influence any selection or formal test. The superseded runner was never used to create a formal E58 artifact, so there is no prior E58 outcome to retain.
 
 ## E59 | Descriptive Development-World $N_{vis}$/Occlusion/Distance Characterization

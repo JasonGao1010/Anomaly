@@ -1952,7 +1952,9 @@ E57尚未执行时，Phase 6完成一次结果前协议瘦身并版本化为E57-
 
 E57-v2从提交`c65b946451df17ebe2a32cf56f7b57bf7d85c3d6`完成一次正式运行并PASS。1,024个冻结候选中有113个满足合法、五帧可见和中心帧可评价条件；固定选择器产生24个世界且复现错误为0。control/proxy分别有23/24个世界存在`V>=2`实体，均超过每类12个世界的冻结下限；中心帧有效异常点与正常点的最小值分别为6和60,235。独立只读复核重新解析并重渲染全部24个世界，另行重算秩空间最大最小选择，逐项复现描述量、点数、身份和哈希。正式产物为`runs/ajae/e57_development_worlds.npz`，SHA-256为`b14efc1aad86ac67b5bf7c8631f02b2e68664e071b747b7b210d5f7a30f5d123`，科学数组哈希为`590c467da2dec0a161688f2587dc1c37cea2b0f42f326b9918fd6dc9df81f6ec`。E58现为正式节点。
 
-E58正式执行前的无产物核验发现并修正了两项实现缺陷。旧通用表面取样器以包围球射线指向几何中心，隐含了几何相对中心为星形的假设；torus存在中心孔，因而会被误报为表面射线缺失。唯一权威取样器已对`HeldOutTorusShape`改用解析双角参数化表面点，测试确认点到torus有符号距离在`1e-12`内为0。旧替换实现还把派生的torus几何种子写入`WorldSpec.seed`，从而同时改变了control和proxy的逐槽传感器随机流。修正后，torus种子只决定几何，替换世界严格保留源世界的`seed`与`source_sequence_id`；control、材质、对象身份、朝向和支撑接触不变，proxy只改变形状及用于保持接地的平移。测试确认两个传感器通道的逐槽随机数与源世界完全一致，同时替换世界具有独立的世界和缓存身份。这些都是首次正式运行前的实现修正，不构成E58结果或协议修订。E58的正式规则、输入哈希、种子命名空间、六世界选择和隔离条件保持不变，尚未正式执行。
+E58正式执行前的无产物核验发现并修正了两项实现缺陷。旧通用表面取样器以包围球射线指向几何中心，隐含了几何相对中心为星形的假设；torus存在中心孔，因而会被误报为表面射线缺失。唯一权威取样器已对`HeldOutTorusShape`改用解析双角参数化表面点，测试确认点到torus有符号距离在`1e-12`内为0。旧替换实现还把派生的torus几何种子写入`WorldSpec.seed`，从而同时改变了control和proxy的逐槽传感器随机流。修正后，torus种子只决定几何，替换世界严格保留源世界的`seed`与`source_sequence_id`；control、材质、对象身份、朝向和支撑接触不变，proxy只改变形状及用于保持接地的平移。测试确认两个传感器通道的逐槽随机数与源世界完全一致，同时替换世界具有独立的世界和缓存身份。这些都是首次正式运行前的实现修正，不构成E58结果或协议修订。
+
+修正后的E58完成一次正式运行并PASS。24个确定性torus替换候选中20个满足资格条件，固定身份哈希规则选出6个世界；资格、选择复现、语义身份、逐槽传感器随机流、缓存身份和训练采样器隔离错误均为0，中心帧最少包含34个有效异常点和59,995个有效正常点。独立只读复核重算科学数组哈希和选择索引，重建并重渲染全部6个世界，逐项复现源身份、两个传感器通道的随机流、五帧诊断与中心点数。正式产物为`runs/ajae/e58_held_out_worlds.npz`，SHA-256为`cde17c339b5307de5f21c9ceeb9b207ad26a12026e2fe741f6926e1af8a8110b`，科学数组哈希为`125bb629f8449b8fb85a5de98ff29ef5c0f3c18b01a8b8eca94ede86afdd9969`。E59现为正式节点。
 
 E39已正式通过：三来源在2.5–10、10–20、20–30和30–40米均有非零return entity-frame覆盖，逐实体帧计数守恒错误0、非有限值0，两遍逐元素一致；三来源在40–50米均无观测，按冻结规则仅报告。共享trace已保存1,656,861条逐返回强度及E40–E44所需计数。E39关闭，E40解锁。
 
@@ -2044,7 +2046,7 @@ E26-v2已经在冻结实现提交`38079213a0801bf3a279414a8b120bfd24e1cd1b`上�
 当前执行节点为：
 
 $$
-\boxed{E38\text{--}E44\ \mathrm{PASS}\rightarrow E45B\text{-v2 PASS}\rightarrow E48\ \mathrm{PASS}\rightarrow E49\ \mathrm{PASS}\rightarrow E50\text{--}E57\ \mathrm{PASS}\rightarrow E58\ \mathrm{CURRENT}}
+\boxed{E38\text{--}E44\ \mathrm{PASS}\rightarrow E45B\text{-v2 PASS}\rightarrow E48\ \mathrm{PASS}\rightarrow E49\ \mathrm{PASS}\rightarrow E50\text{--}E58\ \mathrm{PASS}\rightarrow E59\ \mathrm{CURRENT}}
 $$
 
 E23与E24-v2已按冻结设计通过；Gate 1已完成：
@@ -2053,12 +2055,12 @@ $$
 E38\text{--}E44\ \mathrm{PASS}\rightarrow E45B\text{-v2 PASS}\rightarrow E48\ \mathrm{PASS}\rightarrow E49\ \mathrm{PASS}
 $$
 
-E27–E37的纯机械资格继续保留；E36-v1、E45-v1、E45-v2、E45A、E45A-v2、E45A-new、E45A-overlap、E25-v2和E25-v3 normal-control FAIL均永久保留。旧E45B已PASS，但只资格旧normal-control分布。$D_{xy}+\alpha$路线、E25-v3逐对象五维条件复制路线和全部E45A后续演化均已终止。E25-new、E26-v2、E38–E44刷新、E45B-v2、E48、E49与E50–E57已经PASS。E46已降为非阻断诊断；当前正式节点是尚未执行的E58。
+E27–E37的纯机械资格继续保留；E36-v1、E45-v1、E45-v2、E45A、E45A-v2、E45A-new、E45A-overlap、E25-v2和E25-v3 normal-control FAIL均永久保留。旧E45B已PASS，但只资格旧normal-control分布。$D_{xy}+\alpha$路线、E25-v3逐对象五维条件复制路线和全部E45A后续演化均已终止。E25-new、E26-v2、E38–E44刷新、E45B-v2、E48、E49与E50–E58已经PASS。E46已降为非阻断诊断；当前正式节点是E59。
 
 因此当前整体判断仍是：
 
 $$
-\boxed{Gate\ 1\ \mathrm{PASS}\rightarrow E50\text{--}E57\ \mathrm{PASS}\rightarrow E58\ \mathrm{CURRENT}\rightarrow E59\text{--}E71\rightarrow B1>B0}
+\boxed{Gate\ 1\ \mathrm{PASS}\rightarrow E50\text{--}E58\ \mathrm{PASS}\rightarrow E59\text{--}E71\rightarrow B1>B0}
 $$
 
 不能写成“AJAE 方法已经验证”或“剩余只需训练”。
