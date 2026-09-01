@@ -3853,7 +3853,7 @@ Notes: Independent reconstruction reproduced the world identities, shapes, means
 
 Experiment ID: E76-X-lite
 Design-freeze commit/hash: Result-blind exploration-route revision after the full E76-X attempt was stopped without an artifact or any observed safety metric. The revision changes only the current compute allocation: all 23 development worlds, all rendered normal-controls and all 13,011 moving-normal points remain; pure-normal evaluation is restricted to 64 deterministically selected E61 frames. Full E76-X is retained for later confirmation.
-Execution-freeze commit/hash: Route, subset and runner commit `ea1b92e84d463b987708f614196125d256dfa80c`; `src/qualify.py` SHA-256 `9b82ce9a354fccf7dc8e4dc683474c3cd749dc7d1184cfb9e2f3b6f76f2cc05a`; `protocol.json` SHA-256 `30434c141cc4ca535808f5996dde9bf8ec98b6656c75047f41b697d15b27d4a9`. The complete 85-test scientific-semantic suite passes before execution.
+Execution-freeze commit/hash: Route, subset and initial runner commit `ea1b92e84d463b987708f614196125d256dfa80c`; result-blind container-type comparison correction `5ef3f1f8a3fe034d6e9403bdad2c9a0690cf95fa`; current `src/qualify.py` SHA-256 `6ad087259e57616e18f178ee4049dbe3b39e8c83cdc4e115f7f6765ffd7a37b8`; frozen `protocol.json` SHA-256 `30434c141cc4ca535808f5996dde9bf8ec98b6656c75047f41b697d15b27d4a9`. The complete 85-test scientific-semantic suite passed before the first attempt, and the corrected frozen-identity regression passes before rerun.
 Date: 2026-09-02 result-blind route and sample freeze.
 Git commit / clean state: The result-blind implementation is tracked at the execution-freeze commit above; the following documentation-only commit records that identity. Untracked user-owned `PPT/` remains excluded.
 Data identities: E63's complete 23-world common domain; all valid normal-control points; all 13,011 E61 moving-normal points; 64 of the 678 E61 pure-normal frames selected without counts, features, predictions or results.
@@ -3869,7 +3869,7 @@ Failure classification: Implementation mismatches are repaired under this exact 
 Unlocked next node: E78-X only after a complete non-disastrous E76-X-lite result.
 Invalidated downstream evidence: None. Full E76-X and formal E76 remain required later if the temporal route is promising.
 Descriptive observations: None.
-Notes: This is a compute-priority reduction, not a sample-size claim or precise safety estimate. It cannot replace full safety evidence in the confirmation track.
+Notes: This is a compute-priority reduction, not a sample-size claim or precise safety estimate. It cannot replace full safety evidence in the confirmation track. The first launch stopped before model construction or forward inference because the immutable protocol loader represents JSON arrays as tuples while the runner compared the frozen IDs to a Python list. The correction normalizes only the two container types before equality comparison; it changes no frame, score, threshold or scientific rule, and the failed launch produced no artifact or safety value.
 
 ## E76-X | Deferred Full Two-Seed B1 Safety
 
