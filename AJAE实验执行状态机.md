@@ -3747,7 +3747,7 @@ Notes: The first E72 attempt under commit `17525d1` produced all expected point 
 
 Experiment ID: E73
 Design-freeze commit/hash: `9d8b39e14f8ea19c41a0b54051edfdf5818cf27f`; frozen before model execution with one result-blind pure-normal identity, one result-blind mixed identity, one optimizer update and same-seed numerical tolerances.
-Execution-freeze commit/hash: `9d8b39e14f8ea19c41a0b54051edfdf5818cf27f`; production renderer, frozen STU encoder, B1 model/loss/optimizer and checkpoint round-trip runner in `src/qualify.py`, source SHA-256 `edee35e830a7dd5a5d2838a0752ae73abebbcc9fd11ca55f961580b0b0a2a4d7`.
+Execution-freeze commit/hash: Corrected implementation commit `1fb4ab2b82c656597eda561940a22e46b72904f3`; production renderer, frozen STU encoder, B1 model/loss/optimizer and checkpoint round-trip runner in `src/qualify.py`, source SHA-256 `7f039638030732b12f20a9aff42d7e73a6dafcdefa8754278b6e57e3d039826a`.
 Date: 2026-09-01 execution identity frozen; formal run pending.
 Git commit / clean state: Pre-execution working tree; untracked user-owned `PPT/` remains excluded.
 Data identities: Reuse E26-v2 row 0 pure-normal world seed `2600000`, center frame `312`, world SHA-256 `27a1654c7241bb616964a3b47502c60b5376cfef189392f9eb2e4c76154246ea`; and row 128 mixed world seed `2600128`, center frame `440`, world SHA-256 `c83062ae310e2d468eaec74471235dabfa41b1405292f4229d8d0ce718b17a7a`. Label-only preflight before AJAE initialization found 125,299 valid negatives and zero positives in the pure window, and 50 valid positives plus 121,689 negatives in the mixed window.
