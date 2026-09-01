@@ -3769,7 +3769,7 @@ Notes: Smoke performance is not scientific evidence or a tuning signal. The firs
 
 Experiment ID: E74
 Design-freeze commit/hash: E63-v2 budget and selection rules remain unchanged.
-Execution-freeze commit/hash: E57/E63 formal preflight, fixed E57 q=0 B1 evaluator, E61 pure-normal cross-threshold evaluator, deterministic training and resumable block checkpoints implemented in `src/train.py`; commit/hash pending.
+Execution-freeze commit/hash: `12915657925765ad7c42df09718b1195160ede05`; E57/E63 formal preflight, fixed E57 q=0 B1 evaluator, E61 pure-normal cross-threshold evaluator, deterministic training and resumable block checkpoints implemented in `src/train.py`, SHA-256 `6b82db8e51094afcd4b3ae44ee37e999c8218afb0068d3ad0d1d708f669c7d40`.
 Date: 2026-09-01 execution identity frozen; formal run pending.
 Git commit / clean state: Pre-execution working tree; untracked user-owned `PPT/` remains excluded.
 Data identities: Training seeds 0, 1, 2 under identical data/config/budget.
