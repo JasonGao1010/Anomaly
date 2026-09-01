@@ -249,7 +249,7 @@ def test_protocol_is_only_schema30_route() -> None:
     assert protocol.model["levels"] == 4
     assert protocol.model["pooling"] == "per_time_mean_max"
     assert tuple(protocol.training["seeds"]) == (0, 1, 2)
-    assert protocol.training["maximum_worlds"] == 40
+    assert protocol.training["maximum_worlds"] == 25
     assert protocol.training["patience"] == 4
     assert protocol.training["loss"].endswith("binary cross entropy only")
     assert protocol.evaluation.minimum_range_m == 2.5
@@ -1700,6 +1700,51 @@ def test_multi_seed_resume_skips_complete_and_starts_unseen_seed(
     )
     assert starts == [(12, 2), (13, 0)]
     assert set(results) == {11, 12, 13}
+
+
+def test_result_blind_budget_revision_accepts_only_the_frozen_prefix() -> None:
+    protocol = load_protocol(PROTOCOL_PATH)
+    current = {"protocol": protocol.plain_document(), "other": "fixed"}
+    predecessor = json.loads(json.dumps(current))
+    predecessor_training = predecessor["protocol"]["training"]
+    predecessor_training.pop("result_blind_budget_revision")
+    predecessor_training["maximum_worlds"] = 40
+    predecessor["protocol"]["development"]["e63_freeze"]["shared_training"][
+        "maximum_complete_worlds_per_seed"
+    ] = 40
+    saved_hash = hashlib.sha256(
+        train_module._canonical_json_object(
+            "saved scientific identity", predecessor
+        ).encode("utf-8")
+    ).hexdigest()
+    revision = current["protocol"]["training"]["result_blind_budget_revision"]
+    prefix = revision["checkpoint_prefix_reuse"]
+    prefix["scientific_identity_sha256"] = saved_hash
+    payload = {
+        "training_condition": {"name": "B1"},
+        "seed": 0,
+        "phase": "windows",
+        "cursor": dict(prefix["cursor"]),
+        "history": [
+            {"development": {}} if index in {4, 9, 14, 19} else {}
+            for index in range(22)
+        ],
+        "maximum_worlds": 40,
+    }
+    assert train_module._result_blind_budget_prefix_matches(
+        current,
+        predecessor,
+        progress_sha256=prefix["progress_sha256"],
+        payload=payload,
+    )
+    changed = json.loads(json.dumps(predecessor))
+    changed["protocol"]["training"]["learning_rate"] = 2.0e-4
+    assert not train_module._result_blind_budget_prefix_matches(
+        current,
+        changed,
+        progress_sha256=prefix["progress_sha256"],
+        payload=payload,
+    )
 
 
 def test_module_execution_uses_stable_callable_identity(

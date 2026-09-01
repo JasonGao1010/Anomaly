@@ -656,8 +656,61 @@ class AJAEProtocol:
             raise ProtocolError("schema 30 forbids counterfactual memory and extra loss terms")
         if (training.get("source_partition"), training.get("source_sequence_id"), training.get("micro_batch")) != ("train", 206, 1):
             raise ProtocolError("training must use train/206 with one complete window per micro-batch")
-        if (training.get("maximum_worlds"), training.get("patience")) != (40, 4):
-            raise ProtocolError("formal training must stop by 40 worlds with patience 4")
+        if (training.get("maximum_worlds"), training.get("patience")) != (25, 4):
+            raise ProtocolError("formal training must stop by 25 worlds with patience 4")
+        revision = _mapping(
+            training.get("result_blind_budget_revision"),
+            "training result-blind budget revision",
+        )
+        _exact_keys(
+            revision,
+            {
+                "version", "status", "previous_maximum_worlds", "maximum_worlds",
+                "scope_conditions", "development_metric_values_read",
+                "checkpoint_prefix_reuse", "prefix_reuse_rule",
+            },
+            "training.result_blind_budget_revision",
+        )
+        prefix = _mapping(
+            revision.get("checkpoint_prefix_reuse"),
+            "training result-blind prefix reuse",
+        )
+        _exact_keys(
+            prefix,
+            {
+                "condition", "seed", "progress_sha256",
+                "scientific_identity_sha256", "phase", "cursor",
+                "history_worlds", "completed_development_evaluations",
+            },
+            "training.result_blind_budget_revision.checkpoint_prefix_reuse",
+        )
+        cursor = _mapping(prefix.get("cursor"), "training result-blind cursor")
+        if (
+            revision.get("version") != "E74-result-blind-budget-reduction-v1"
+            or revision.get("status") != "frozen_before_result_exposure"
+            or revision.get("previous_maximum_worlds") != 40
+            or revision.get("maximum_worlds") != 25
+            or tuple(revision.get("scope_conditions", ())) != ("B1", "B2", "B3")
+            or revision.get("development_metric_values_read") is not False
+            or (prefix.get("condition"), prefix.get("seed"), prefix.get("phase"))
+            != ("B1", 0, "windows")
+            or prefix.get("progress_sha256")
+            != "f2df8555226e2ca7b9b8ba70066e130659dc1f89818165f3f31bd806730b20df"
+            or prefix.get("scientific_identity_sha256")
+            != "e0da006e987252a85be37a80f7e78a908c7ffe56245d8ed36fb918067cb56d42"
+            or dict(cursor)
+            != {
+                "world_index": 22,
+                "block_index": 15,
+                "window_index": 0,
+                "windows_completed": 225,
+            }
+            or prefix.get("history_worlds") != 22
+            or prefix.get("completed_development_evaluations") != 4
+            or not isinstance(revision.get("prefix_reuse_rule"), str)
+            or not revision.get("prefix_reuse_rule")
+        ):
+            raise ProtocolError("result-blind 40-to-25 world revision identity changed")
         if training.get("deterministic_algorithms") is not True:
             raise ProtocolError("formal training must use deterministic algorithms")
         seeds = _int_tuple(training["seeds"], "training.seeds")
@@ -1075,7 +1128,7 @@ class AJAEProtocol:
             or shared.get("weight_decay") != 1.0e-4
             or shared.get("micro_batch") != 1
             or shared.get("gradient_accumulation") != 8
-            or shared.get("maximum_complete_worlds_per_seed") != 40
+            or shared.get("maximum_complete_worlds_per_seed") != 25
             or shared.get("evaluate_every_complete_worlds") != 5
             or shared.get("patience_evaluations") != 4
             or dict(_mapping(shared.get("world_type_probabilities"), "E63 world types"))

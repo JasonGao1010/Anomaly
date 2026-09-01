@@ -3589,7 +3589,7 @@
   },
   "training": {
     "source_partition": "train", "source_sequence_id": 206, "seeds": [0, 1, 2],
-    "learning_rate": 0.0001, "weight_decay": 0.0001, "maximum_worlds": 40,
+    "learning_rate": 0.0001, "weight_decay": 0.0001, "maximum_worlds": 25,
     "micro_batch": 1, "gradient_accumulation": 8, "worlds_per_evaluation": 5,
     "patience": 4, "chunk_centers": 16, "cache_frames": 7,
     "deterministic_algorithms": true,
@@ -3597,6 +3597,25 @@
     "loss": "range-filtered empty-class-safe class-balanced binary cross entropy only",
     "world_type_probabilities": {"pure_normal": 0.2, "control_only": 0.2, "mixed": 0.4, "anomaly_only": 0.2},
     "output_dir": "runs/ajae",
+    "result_blind_budget_revision": {
+      "version": "E74-result-blind-budget-reduction-v1",
+      "status": "frozen_before_result_exposure",
+      "previous_maximum_worlds": 40,
+      "maximum_worlds": 25,
+      "scope_conditions": ["B1", "B2", "B3"],
+      "development_metric_values_read": false,
+      "checkpoint_prefix_reuse": {
+        "condition": "B1",
+        "seed": 0,
+        "progress_sha256": "f2df8555226e2ca7b9b8ba70066e130659dc1f89818165f3f31bd806730b20df",
+        "scientific_identity_sha256": "e0da006e987252a85be37a80f7e78a908c7ffe56245d8ed36fb918067cb56d42",
+        "phase": "windows",
+        "cursor": {"world_index": 22, "block_index": 15, "window_index": 0, "windows_completed": 225},
+        "history_worlds": 22,
+        "completed_development_evaluations": 4
+      },
+      "prefix_reuse_rule": "reuse only the exact identity-bound B1 seed-0 prefix because reducing the future ceiling changes no completed sample, random state, update, evaluation, or checkpoint-selection rule"
+    },
     "e73_smoke": {
       "status": "formal_pass",
       "seed": 73002026,
@@ -3811,7 +3830,7 @@
         "weight_decay": 0.0001,
         "micro_batch": 1,
         "gradient_accumulation": 8,
-        "maximum_complete_worlds_per_seed": 40,
+        "maximum_complete_worlds_per_seed": 25,
         "evaluate_every_complete_worlds": 5,
         "patience_evaluations": 4,
         "world_type_probabilities": {"pure_normal": 0.2, "control_only": 0.2, "mixed": 0.4, "anomaly_only": 0.2},

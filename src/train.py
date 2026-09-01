@@ -166,6 +166,81 @@ def _sha256_file(path: Path | str) -> str:
     return digest.hexdigest()
 
 
+def _result_blind_budget_prefix_matches(
+    current_identity: Mapping[str, Any],
+    saved_identity: Mapping[str, Any],
+    *,
+    progress_sha256: str,
+    payload: Mapping[str, Any],
+) -> bool:
+    """Accept only the one frozen 40-to-25-world prefix revision."""
+
+    try:
+        current = _plain_json_object("current scientific identity", current_identity)
+        saved = _plain_json_object("saved scientific identity", saved_identity)
+    except TrainingError:
+        return False
+    protocol = current.get("protocol")
+    if not isinstance(protocol, dict):
+        return False
+    training = protocol.get("training")
+    development = protocol.get("development")
+    if not isinstance(training, dict) or not isinstance(development, dict):
+        return False
+    revision = training.get("result_blind_budget_revision")
+    freeze = development.get("e63_freeze")
+    shared = freeze.get("shared_training") if isinstance(freeze, dict) else None
+    if not isinstance(revision, dict) or not isinstance(shared, dict):
+        return False
+    prefix = revision.get("checkpoint_prefix_reuse")
+    if not isinstance(prefix, dict):
+        return False
+    cursor = payload.get("cursor")
+    condition = payload.get("training_condition")
+    history = payload.get("history")
+    saved_limit = payload.get("maximum_worlds")
+    development_count = (
+        sum(isinstance(record, Mapping) and "development" in record for record in history)
+        if isinstance(history, list)
+        else -1
+    )
+    if (
+        revision.get("version") != "E74-result-blind-budget-reduction-v1"
+        or revision.get("status") != "frozen_before_result_exposure"
+        or revision.get("previous_maximum_worlds") != 40
+        or revision.get("maximum_worlds") != 25
+        or training.get("maximum_worlds") != 25
+        or shared.get("maximum_complete_worlds_per_seed") != 25
+        or revision.get("development_metric_values_read") is not False
+        or tuple(revision.get("scope_conditions", ())) != ("B1", "B2", "B3")
+        or progress_sha256 != prefix.get("progress_sha256")
+        or not isinstance(condition, Mapping)
+        or condition.get("name") != prefix.get("condition")
+        or payload.get("seed") != prefix.get("seed")
+        or payload.get("phase") != prefix.get("phase")
+        or cursor != prefix.get("cursor")
+        or not isinstance(history, list)
+        or len(history) != prefix.get("history_worlds")
+        or development_count != prefix.get("completed_development_evaluations")
+        or saved_limit != revision.get("previous_maximum_worlds")
+        or hashlib.sha256(
+            _canonical_json_object("saved scientific identity", saved).encode("utf-8")
+        ).hexdigest()
+        != prefix.get("scientific_identity_sha256")
+    ):
+        return False
+
+    predecessor = _plain_json_object("predecessor scientific identity", current)
+    predecessor_protocol = predecessor["protocol"]
+    predecessor_training = predecessor_protocol["training"]
+    predecessor_training.pop("result_blind_budget_revision", None)
+    predecessor_training["maximum_worlds"] = 40
+    predecessor_protocol["development"]["e63_freeze"]["shared_training"][
+        "maximum_complete_worlds_per_seed"
+    ] = 40
+    return saved == predecessor
+
+
 def _qualified_class(value: object) -> str:
     kind = type(value)
     return f"{kind.__module__}.{kind.__qualname__}"
@@ -937,6 +1012,7 @@ class AJAETrainer:
         self.history: list[dict[str, Any]] = []
         self.commit_id = 0
         self.loaded_progress = False
+        self.loaded_budget_revision = False
         self.maximum_worlds: int | None = None
         self.stop_reason: str | None = None
         self.phase = "between_worlds"
@@ -1293,13 +1369,26 @@ class AJAETrainer:
 
     def load_progress(self) -> int:
         path = self.run_dir / "progress.pt"
+        progress_sha256 = _sha256_file(path)
         payload = torch.load(path, map_location="cpu", weights_only=False)
         if not isinstance(payload, Mapping) or payload.get("format") != PROGRESS_FORMAT:
             raise TrainingError("progress checkpoint has an unsupported format")
         if payload.get("config") != asdict(self.config):
             raise TrainingError("progress checkpoint uses a different runtime config")
-        if payload.get("scientific_identity") != self.scientific_identity:
-            raise TrainingError("progress checkpoint uses a different scientific identity")
+        saved_identity = payload.get("scientific_identity")
+        if saved_identity != self.scientific_identity:
+            if not isinstance(saved_identity, Mapping) or not (
+                _result_blind_budget_prefix_matches(
+                    self.scientific_identity,
+                    saved_identity,
+                    progress_sha256=progress_sha256,
+                    payload=payload,
+                )
+            ):
+                raise TrainingError(
+                    "progress checkpoint uses a different scientific identity"
+                )
+            self.loaded_budget_revision = True
         if payload.get("training_condition") != self.condition.to_dict():
             raise TrainingError("progress checkpoint uses a different B0--B5 condition")
         if payload.get("seed") != self.seed:
@@ -1636,7 +1725,13 @@ class AJAETrainer:
         ):
             raise ValueError("maximum_worlds must cover one complete world-type cycle")
         if self.loaded_progress and self.maximum_worlds not in {None, maximum_worlds}:
-            raise TrainingError("maximum_worlds differs from the saved runtime limit")
+            if not (
+                self.loaded_budget_revision
+                and self.maximum_worlds == 40
+                and maximum_worlds == 25
+                and self.resume_world < maximum_worlds
+            ):
+                raise TrainingError("maximum_worlds differs from the saved runtime limit")
         self.maximum_worlds = maximum_worlds
         if self.phase == "finalizing":
             return self._finalize()
