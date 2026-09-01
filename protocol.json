@@ -2656,8 +2656,8 @@
       }
     },
     "renderer_mechanical_qualification": {
-      "status": "Gate 1 PASS; E50-E58 and E61-E71 valid formal runs PASS; E59-E60 descriptive characterization complete; E72 current",
-      "current_gate1_policy": {"hard_evidence": ["compatible canonical-ray and renderer mechanics through E44", "E45B-v2 rendered control/proxy qualification PASS", "E48 direct rendered-label-shortcut audit PASS"], "excluded_from_conjunction": ["all E45A variants", "E45-V1", "E46", "E47"], "rationale": "Natural real-normal observations and coverage-oriented inserted controls need not reproduce the same scene/placement distribution. Real-versus-rendered source identifiability is not equivalent to anomaly-label shortcut predictability because rendered controls and rendered proxies carry different labels.", "gate1_result": "PASS", "current_node": "E72", "next_after_pass": ["E72-E75", "Gate 2 B1 versus B0"]},
+      "status": "Gate 1 PASS; E50-E58, E61-E72 valid formal runs PASS; E59-E60 descriptive characterization complete; E73 current",
+      "current_gate1_policy": {"hard_evidence": ["compatible canonical-ray and renderer mechanics through E44", "E45B-v2 rendered control/proxy qualification PASS", "E48 direct rendered-label-shortcut audit PASS"], "excluded_from_conjunction": ["all E45A variants", "E45-V1", "E46", "E47"], "rationale": "Natural real-normal observations and coverage-oriented inserted controls need not reproduce the same scene/placement distribution. Real-versus-rendered source identifiability is not equivalent to anomaly-label shortcut predictability because rendered controls and rendered proxies carry different labels.", "gate1_result": "PASS", "current_node": "E73", "next_after_pass": ["E73-E75", "Gate 2 B1 versus B0"]},
       "layer_boundaries": {"E27-E28": "direct geometry outputs only", "E29": "return probability and deterministic acceptance decision only", "E30-E31": "accepted returns", "E32-E33": "nearest-return occlusion competition"},
       "E27": {
         "question": "Does the formal geometry path return the correct nearest convex-hull hit, outward finite normal and object ID for active normal-control templates when return rejection is disabled?",
@@ -3699,6 +3699,20 @@
         "semantic_zero_ignored": true,
         "evaluator_semantics": "E62-v2 official-equivalent evaluator",
         "held_out_torus_worlds_forbidden": ["checkpoint selection", "threshold selection", "early stopping", "PASS/FAIL"]
+      },
+      "b0_reference": {
+        "status": "formal_pass",
+        "path": "runs/ajae/e72_b0_reference.npz",
+        "artifact_sha256": "208487d5c91b131856e908988cf6d955305fa09364450d509e32f617295b5863",
+        "scientific_array_sha256": "49fd285bb7dba95f33a9606309418987e93799470ce96016323cd29b0968c95a",
+        "development_worlds": 23,
+        "development_points": 2110885,
+        "pure_normal_points": 48828507,
+        "moving_normal_points": 13011,
+        "matched_static_points": 6756,
+        "evaluator_errors": 0,
+        "count_errors": 0,
+        "independent_read_only_validation": true
       }
     },
     "checkpoint_selection": {

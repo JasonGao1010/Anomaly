@@ -842,13 +842,34 @@ class AJAEProtocol:
         )
         _exact_keys(
             world_evaluation,
-            {"status", "scope"},
+            {"status", "scope", "b0_reference"},
             "development.fixed_world_evaluation",
         )
         if world_evaluation.get("status") != "frozen_before_training":
             raise ProtocolError("fixed-world evaluation must declare its freeze status")
         if not isinstance(world_evaluation.get("scope"), Mapping):
             raise ProtocolError("frozen fixed-world evaluation requires an explicit scope")
+        b0 = _mapping(
+            world_evaluation["b0_reference"],
+            "development.fixed_world_evaluation.b0_reference",
+        )
+        if (
+            b0.get("status") != "formal_pass"
+            or b0.get("path") != "runs/ajae/e72_b0_reference.npz"
+            or b0.get("artifact_sha256")
+            != "208487d5c91b131856e908988cf6d955305fa09364450d509e32f617295b5863"
+            or b0.get("scientific_array_sha256")
+            != "49fd285bb7dba95f33a9606309418987e93799470ce96016323cd29b0968c95a"
+            or b0.get("development_worlds") != 23
+            or b0.get("development_points") != 2_110_885
+            or b0.get("pure_normal_points") != 48_828_507
+            or b0.get("moving_normal_points") != 13_011
+            or b0.get("matched_static_points") != 6_756
+            or b0.get("evaluator_errors") != 0
+            or b0.get("count_errors") != 0
+            or b0.get("independent_read_only_validation") is not True
+        ):
+            raise ProtocolError("E72 B0 reference identity changed")
         selection = _mapping(development["checkpoint_selection"], "checkpoint selection")
         _exact_keys(
             selection,
