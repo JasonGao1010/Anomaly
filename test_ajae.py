@@ -85,6 +85,7 @@ from src.train import (
     FrameCacheKey,
     TrainConfig,
     TrainingError,
+    _finite_world_report_document,
     balanced_bce_loss,
     checkpoint_selection_key,
     experiment_condition,
@@ -1714,6 +1715,27 @@ def test_module_execution_uses_stable_callable_identity(
     assert train_module._qualified_callable(evaluator) == (
         f"src.train.{evaluator.__qualname__}"
     )
+
+
+def test_world_report_encodes_only_valid_positive_infinity_as_null() -> None:
+    report = SimpleNamespace(
+        to_dict=lambda: {
+            "placements": [
+                {
+                    "proposal_minimum_obstacle_sdf_m": [1.25, math.inf],
+                    "minimum_obstacle_sdf_m": math.inf,
+                }
+            ]
+        }
+    )
+    assert _finite_world_report_document(report) == {
+        "placements": [
+            {
+                "proposal_minimum_obstacle_sdf_m": [1.25, None],
+                "minimum_obstacle_sdf_m": None,
+            }
+        ]
+    }
 
 
 def test_checkpoint_selection_global_band_does_not_drift() -> None:

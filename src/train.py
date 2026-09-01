@@ -98,6 +98,32 @@ def _atomic_torch(path: Path, payload: Mapping[str, Any]) -> None:
     _fsync_parent(path)
 
 
+def _finite_world_report_document(report: object) -> dict[str, Any]:
+    """Encode the valid no-obstacle +infinity sentinel as JSON null."""
+
+    converter = getattr(report, "to_dict", None)
+    if not callable(converter):
+        raise TrainingError("world report does not expose to_dict()")
+    document = converter()
+    if not isinstance(document, dict) or not isinstance(
+        document.get("placements"), list
+    ):
+        raise TrainingError("world report document is malformed")
+    for placement in document["placements"]:
+        if not isinstance(placement, dict):
+            raise TrainingError("world report placement is malformed")
+        proposals = placement.get("proposal_minimum_obstacle_sdf_m")
+        minimum = placement.get("minimum_obstacle_sdf_m")
+        if not isinstance(proposals, list):
+            raise TrainingError("world report obstacle clearances are malformed")
+        for index, value in enumerate(proposals):
+            if isinstance(value, float) and math.isinf(value) and value > 0.0:
+                proposals[index] = None
+        if isinstance(minimum, float) and math.isinf(minimum) and minimum > 0.0:
+            placement["minimum_obstacle_sdf_m"] = None
+    return document
+
+
 def _json_plain(value: object) -> object:
     if isinstance(value, Mapping):
         return {str(key): _json_plain(item) for key, item in value.items()}
@@ -2229,7 +2255,9 @@ def build_formal_training(
         )
         report_dir = run_root / "world_reports"
         report_dir.mkdir(parents=True, exist_ok=True)
-        _atomic_json(report_dir / f"{seed}.json", report.to_dict())
+        _atomic_json(
+            report_dir / f"{seed}.json", _finite_world_report_document(report)
+        )
         return world
 
     def render_training_frame(source: object, world: object) -> object:
