@@ -100,6 +100,9 @@ E73_E26_ARTIFACT_SHA256 = (
 E63_ARTIFACT_SHA256 = (
     "5dbf99eaa59a05a83774e42beb6b8d7a95cf9309ebd42ab7870604a20d410dd9"
 )
+E75_IDENTITY_ARTIFACT_SHA256 = (
+    "1bae1dbe4b5ded34cf9cebd818b4877368973114c0e7046840c0ff342fb73b9d"
+)
 
 
 class QualificationError(ValueError):
@@ -3008,6 +3011,195 @@ def run_e75_identity_correction(
     return result
 
 
+def e75_superiority_statistics(
+    b0_world_id: np.ndarray,
+    b0_ap: np.ndarray,
+    b1_world_id: np.ndarray,
+    b1_ap: np.ndarray,
+    common_world_id: np.ndarray,
+    bootstrap_training_seed: np.ndarray,
+    bootstrap_world_id: np.ndarray,
+) -> dict[str, np.ndarray]:
+    """Compute the frozen paired 3-seed by 23-world E75 estimand."""
+
+    baseline_id = np.asarray(b0_world_id, dtype=np.int16)
+    baseline_ap = np.asarray(b0_ap, dtype=np.float64)
+    trained_id = np.asarray(b1_world_id, dtype=np.int16)
+    trained_ap = np.asarray(b1_ap, dtype=np.float64)
+    common = np.asarray(common_world_id, dtype=np.int16)
+    seed_draws = np.asarray(bootstrap_training_seed, dtype=np.int8)
+    world_draws = np.asarray(bootstrap_world_id, dtype=np.int16)
+    if (
+        baseline_id.shape != (23,)
+        or baseline_ap.shape != (23,)
+        or trained_id.shape != (3, 23)
+        or trained_ap.shape != (3, 23)
+        or common.shape != (23,)
+        or seed_draws.shape != (5000, 3)
+        or world_draws.shape != (5000, 23)
+        or not np.array_equal(baseline_id, common)
+        or not np.all(trained_id == common[None, :])
+        or not np.isfinite(baseline_ap).all()
+        or not np.isfinite(trained_ap).all()
+        or np.any((seed_draws < 0) | (seed_draws > 2))
+    ):
+        raise QualificationError("E75 paired metric identities are invalid")
+    column_by_world = np.full(24, -1, dtype=np.int16)
+    column_by_world[common] = np.arange(23, dtype=np.int16)
+    if np.any((world_draws < 0) | (world_draws >= 24)):
+        raise QualificationError("E75 bootstrap contains an invalid world identity")
+    world_columns = column_by_world[world_draws]
+    if np.any(world_columns < 0):
+        raise QualificationError("E75 bootstrap contains a non-common-domain world")
+
+    paired_difference = trained_ap - baseline_ap[None, :]
+    # Both models use the same realized seed/world indices in every replicate.
+    bootstrap_difference = paired_difference[
+        seed_draws[:, :, None], world_columns[:, None, :]
+    ].mean(axis=(1, 2))
+    return {
+        "world_id": common,
+        "b0_ap": baseline_ap,
+        "b1_ap": trained_ap,
+        "paired_ap_difference": paired_difference,
+        "seed_mean_ap_difference": paired_difference.mean(axis=1),
+        "bootstrap_mean_ap_difference": bootstrap_difference,
+    }
+
+
+def run_e75(
+    protocol_path: Path | str,
+    e72_path: Path | str,
+    identity_path: Path | str,
+    b1_dir: Path | str,
+    output_path: Path | str,
+) -> dict[str, object]:
+    """Adjudicate B1 versus B0 after all three formal B1 seeds complete."""
+
+    started = time.monotonic()
+    protocol_file = Path(protocol_path).expanduser().resolve(strict=True)
+    protocol = load_protocol(protocol_file)
+    e72_file = Path(e72_path).expanduser().resolve(strict=True)
+    identity_file = Path(identity_path).expanduser().resolve(strict=True)
+    result_root = Path(b1_dir).expanduser().resolve(strict=True)
+    if _sha256(e72_file) != E72_ARTIFACT_SHA256:
+        raise QualificationError("E75 B0 input is not the frozen E72 artifact")
+    if _sha256(identity_file) != E75_IDENTITY_ARTIFACT_SHA256:
+        raise QualificationError("E75 bootstrap identity artifact changed")
+    gate2 = protocol.decision_gates["criteria"]["gate2"]
+    if (
+        protocol.training["maximum_worlds"] != 25
+        or gate2["minimum_mean_macro_world_AP_difference"] != 0.02
+        or gate2["bootstrap_95_percent_lower_bound_strictly_greater_than"] != 0.0
+        or gate2["minimum_positive_training_seeds"] != 2
+        or gate2["training_seeds"] != 3
+    ):
+        raise QualificationError("E75 budget or Gate 2 criteria changed")
+
+    with np.load(e72_file, allow_pickle=False) as archive:
+        metric_order = np.asarray(archive["metric_order"])
+        ap_column = np.flatnonzero(metric_order == "AP")
+        if ap_column.tolist() != [0]:
+            raise QualificationError("E72 AP column identity changed")
+        b0_world_id = np.asarray(archive["development_world_id"], dtype=np.int16)
+        b0_ap = np.asarray(archive["development_metric"], dtype=np.float64)[:, 0]
+    with np.load(identity_file, allow_pickle=False) as archive:
+        common_world_id = np.asarray(archive["common_domain_world_id"], dtype=np.int16)
+        seed_draws = np.asarray(archive["bootstrap_training_seed"], dtype=np.int8)
+        world_draws = np.asarray(archive["bootstrap_world_id"], dtype=np.int16)
+
+    b1_world_id = np.empty((3, 23), dtype=np.int16)
+    b1_ap = np.empty((3, 23), dtype=np.float64)
+    result_hashes: list[str] = []
+    model_hashes: list[str] = []
+    required_seed_files = [
+        result_root / f"seed-{seed}" / name
+        for seed in range(3)
+        for name in ("result.json", "model.pt")
+    ]
+    if not all(path.is_file() for path in required_seed_files):
+        raise QualificationError("E74 is incomplete; E75 result reading remains locked")
+    for seed in range(3):
+        seed_dir = result_root / f"seed-{seed}"
+        result_file = seed_dir / "result.json"
+        model_file = seed_dir / "model.pt"
+        record = json.loads(result_file.read_text(encoding="utf-8"))
+        model = torch.load(model_file, map_location="cpu", weights_only=True)
+        if (
+            record.get("status") != "completed"
+            or record.get("seed") != seed
+            or record.get("maximum_worlds") != 25
+            or record.get("stop_reason") not in {"maximum_worlds", "development_patience"}
+            or record.get("condition", {}).get("name") != "B1"
+            or model.get("seed") != seed
+            or model.get("maximum_worlds") != 25
+            or model.get("completion_id") != record.get("completion_id")
+            or model.get("best_world") != record.get("best_world")
+            or list(model.get("best_selection_key", ()))
+            != record.get("best_selection_key")
+            or model.get("scientific_identity") != record.get("scientific_identity")
+        ):
+            raise QualificationError(f"E74 seed {seed} completion identity is invalid")
+        selected = [
+            item for item in record.get("history", ())
+            if item.get("world") == record.get("best_world") and "development" in item
+        ]
+        if len(selected) != 1:
+            raise QualificationError(f"E74 seed {seed} lacks one selected evaluation")
+        worlds = selected[0]["development"]["in_generator"]
+        if len(worlds) != 23:
+            raise QualificationError(f"E74 seed {seed} development count changed")
+        ordered = sorted(worlds, key=lambda item: item["world_id"])
+        b1_world_id[seed] = [item["world_id"] for item in ordered]
+        b1_ap[seed] = [item["metrics"]["AP"] for item in ordered]
+        if not np.isclose(
+            b1_ap[seed].mean(), float(record["best_selection_key"][0]),
+            rtol=0.0, atol=1.0e-12,
+        ):
+            raise QualificationError(f"E74 seed {seed} selected AP is inconsistent")
+        result_hashes.append(_sha256(result_file))
+        model_hashes.append(_sha256(model_file))
+
+    arrays = e75_superiority_statistics(
+        b0_world_id, b0_ap, b1_world_id, b1_ap, common_world_id,
+        seed_draws, world_draws,
+    )
+    mean_difference = float(arrays["paired_ap_difference"].mean())
+    lower_bound = float(np.percentile(
+        arrays["bootstrap_mean_ap_difference"], 2.5
+    ))
+    positive_seeds = int(np.count_nonzero(arrays["seed_mean_ap_difference"] > 0.0))
+    passed = (
+        mean_difference >= 0.02
+        and lower_bound > 0.0
+        and positive_seeds >= 2
+    )
+    result = {
+        "experiment": "E75",
+        "passed": passed,
+        "failure_classification": None if passed else "scientific_failure",
+        "mean_macro_world_AP_difference": mean_difference,
+        "bootstrap_95_percent_lower_bound": lower_bound,
+        "positive_training_seeds": positive_seeds,
+        "thresholds": {
+            "minimum_mean_macro_world_AP_difference": 0.02,
+            "bootstrap_95_percent_lower_bound_strictly_greater_than": 0.0,
+            "minimum_positive_training_seeds": 2,
+        },
+        "replicates": 5000,
+        "development_worlds": 23,
+        "protocol_sha256": _sha256(protocol_file),
+        "e72_artifact_sha256": _sha256(e72_file),
+        "bootstrap_identity_sha256": _sha256(identity_file),
+        "b1_result_sha256": result_hashes,
+        "b1_model_sha256": model_hashes,
+        "scientific_array_sha256": _array_hash(arrays),
+        "seconds": time.monotonic() - started,
+    }
+    _save(Path(output_path).expanduser().resolve(), arrays, result)
+    return result
+
+
 def phase7_mechanical_arrays() -> dict[str, np.ndarray]:
     """Execute the frozen E64--E71 analytic fixtures on the production paths."""
 
@@ -4044,6 +4236,12 @@ def _parser() -> argparse.ArgumentParser:
     )
     e75_freeze.add_argument("--e63", type=Path, required=True)
     e75_freeze.add_argument("--output", type=Path, required=True)
+    e75 = commands.add_parser("e75")
+    e75.add_argument("--protocol", type=Path, default=PROJECT_ROOT / "protocol.json")
+    e75.add_argument("--e72", type=Path, required=True)
+    e75.add_argument("--identity", type=Path, required=True)
+    e75.add_argument("--b1-dir", type=Path, required=True)
+    e75.add_argument("--output", type=Path, required=True)
     phase7 = commands.add_parser("phase7")
     phase7.add_argument("--protocol", type=Path, default=PROJECT_ROOT / "protocol.json")
     phase7.add_argument("--e63", type=Path, required=True)
@@ -4155,6 +4353,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "e75-freeze":
         result = run_e75_identity_correction(
             args.protocol, args.e63, args.output
+        )
+        print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        return 0 if result["passed"] else 1
+    if args.command == "e75":
+        result = run_e75(
+            args.protocol, args.e72, args.identity, args.b1_dir, args.output
         )
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 0 if result["passed"] else 1

@@ -35,6 +35,7 @@ from src.qualify import (
     PHASE5_FRAMES,
     e63_identity_arrays,
     e75_bootstrap_identity_arrays,
+    e75_superiority_statistics,
     phase7_mechanical_arrays,
     e62_fixture_arrays,
     e53_frame_seed,
@@ -1844,6 +1845,24 @@ def test_e75_bootstrap_uses_only_the_common_23_worlds() -> None:
     assert first["bootstrap_training_seed"].shape == (5000, 3)
     assert first["bootstrap_world_id"].shape == (5000, 23)
     assert not np.any(first["bootstrap_world_id"] == 5)
+
+
+def test_e75_superiority_uses_paired_seed_and_world_draws() -> None:
+    common = np.asarray([*range(5), *range(6, 24)], dtype=np.int16)
+    baseline = np.linspace(1.0, 2.0, 23)
+    trained = np.stack((baseline + 0.1, baseline + 0.2, baseline - 0.05))
+    seed_draws = np.tile(np.asarray([[0, 1, 2]], dtype=np.int8), (5000, 1))
+    world_draws = np.tile(common, (5000, 1))
+    result = e75_superiority_statistics(
+        common, baseline, np.tile(common, (3, 1)), trained,
+        common, seed_draws, world_draws,
+    )
+    np.testing.assert_allclose(
+        result["seed_mean_ap_difference"], [0.1, 0.2, -0.05], atol=1e-15
+    )
+    np.testing.assert_allclose(
+        result["bootstrap_mean_ap_difference"], 1.0 / 12.0, atol=1e-15
+    )
 
 
 def test_phase7_mechanical_fixtures_all_pass_and_reproduce() -> None:
