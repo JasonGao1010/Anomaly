@@ -3791,7 +3791,7 @@ Notes: Scientific underperformance is not an invalid-seed mechanical failure. Be
 
 Experiment ID: E75
 Design-freeze commit/hash: E63 Gate 2 superiority criteria remain unchanged. Before any E74 development metric value was read, the owner approved the E75 pre-result statistical identity correction from the unavailable 24-world population to the fixed 23-world common domain.
-Execution-freeze commit/hash: Formal B1/B0 comparison is not executed. The corrected bootstrap identity is implemented in `src/qualify.py`, SHA-256 `95619d1fc3be7d5fa1abe6da24b37b4e89b323c60912d781be249cd321b4f8c3`.
+Execution-freeze commit/hash: Pre-result correction commit `0a31ab0eb72f3feff9d41bb19694424ce2594a74`; formal B1/B0 comparison is not executed. The corrected bootstrap identity is implemented in `src/qualify.py`, SHA-256 `95619d1fc3be7d5fa1abe6da24b37b4e89b323c60912d781be249cd321b4f8c3`.
 Date: 2026-09-01 pre-result bootstrap identity frozen; formal comparison pending E74.
 Git commit / clean state: Correction frozen while the valid E74 process continued from its unchanged in-memory protocol identity; `protocol.json` was deliberately not edited during the resumable training run. Untracked user-owned `PPT/` remained excluded.
 Data identities: Paired B1/B0 results across E57 worlds and seeds.
