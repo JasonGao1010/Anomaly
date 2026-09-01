@@ -82,6 +82,9 @@ E63_SAFETY_NAMESPACE = "E63-safety-crossfit-v1"
 E63_BOOTSTRAP_NAMESPACE = "E63-hierarchical-paired-bootstrap-v1"
 E63_BOOTSTRAP_SEED = 63002026
 PHASE7_SEED = 640071
+E61_ARTIFACT_SHA256 = (
+    "8d3e08e0512dc70a75d2279cfb4515bc960bbfda4f35a872c4a76e9dad69d0e0"
+)
 
 
 class QualificationError(ValueError):
@@ -3242,6 +3245,273 @@ def run_phase7(
     return result
 
 
+def run_e72(
+    data_root: Path | str,
+    protocol_path: Path | str,
+    e57_path: Path | str,
+    e61_path: Path | str,
+    e63_path: Path | str,
+    output_path: Path | str,
+    *,
+    device: str = "cuda",
+) -> dict[str, object]:
+    """Freeze official STU MaxLogit on the E63 development and safety identities."""
+
+    from .render import WorldSpec, load_sensor_calibration, render_frame
+
+    started = time.monotonic()
+    protocol_file = Path(protocol_path).expanduser().resolve(strict=True)
+    protocol = load_protocol(protocol_file)
+    project_root = Path(protocol.path).parent
+    e57_file = Path(e57_path).expanduser().resolve(strict=True)
+    e61_file = Path(e61_path).expanduser().resolve(strict=True)
+    e63_file = Path(e63_path).expanduser().resolve(strict=True)
+    if _sha256(e57_file) != protocol.development["e63_freeze"]["source_worlds"][
+        "artifact_sha256"
+    ]:
+        raise QualificationError("E72 E57 identity changed")
+    if _sha256(e61_file) != E61_ARTIFACT_SHA256:
+        raise QualificationError("E72 E61 safety identity changed")
+    if _sha256(e63_file) != protocol.development["e63_freeze"]["identity_artifact"][
+        "artifact_sha256"
+    ]:
+        raise QualificationError("E72 E63 common-domain identity changed")
+    runtime_device = torch.device(device)
+    if runtime_device.type == "cuda" and not torch.cuda.is_available():
+        raise QualificationError("E72 CUDA device is unavailable")
+
+    with np.load(e57_file, allow_pickle=False) as archive:
+        e57_world_id = np.asarray(archive["selected_world_id"], dtype=np.int16)
+        e57_center = np.asarray(archive["selected_center_frame"], dtype=np.int16)
+        e57_world_json = np.asarray(archive["selected_world_json"])
+    with np.load(e63_file, allow_pickle=False) as archive:
+        eligible = np.asarray(archive["common_domain_eligible"], dtype=np.bool_)
+        frozen_world_id = np.asarray(archive["world_id"], dtype=np.int16)
+    if not np.array_equal(e57_world_id, frozen_world_id) or eligible.sum() != 23:
+        raise QualificationError("E72 development worlds differ from E63")
+    with np.load(e61_file, allow_pickle=False) as archive:
+        pure_frame_id = np.asarray(archive["pure_frame_id"], dtype=np.int16)
+        pure_packed = np.asarray(archive["pure_canonical_mask_packed"], dtype=np.uint8)
+        pure_count = np.asarray(archive["pure_point_count_by_frame"], dtype=np.int32)
+        moving_frame_id = np.asarray(archive["moving_frame_id"], dtype=np.int16)
+        moving_packed = np.asarray(
+            archive["moving_canonical_mask_packed"], dtype=np.uint8
+        )
+        moving_count = np.asarray(
+            archive["moving_point_count_by_frame"], dtype=np.int32
+        )
+        static_packed = np.asarray(
+            archive["matched_static_canonical_mask_packed"], dtype=np.uint8
+        )
+
+    grid, sensor = load_sensor_calibration(protocol.sensor_calibration_path())
+    canonical_by_slot = np.asarray(
+        grid.beam_ids * grid.columns + grid.column_ids, dtype=np.int32
+    )
+    sequence_201 = STUSequence.open(
+        data_root, protocol=protocol, partition="train", sequence_id=201,
+        label_mode=LabelMode.REQUIRED,
+    )
+    sequence_206 = STUSequence.open(
+        data_root, protocol=protocol, partition="train", sequence_id=206,
+        label_mode=LabelMode.REQUIRED,
+    )
+    encoder = FrozenSTUPointEncoder.from_protocol(protocol).to(runtime_device).eval()
+
+    def encode(source: object) -> np.ndarray:
+        sequence_id = int(getattr(source, "sequence_id"))
+        frame_id = int(getattr(source, "frame_id"))
+        seed = e53_frame_seed(sequence_id, frame_id)
+        torch.manual_seed(seed)
+        if runtime_device.type == "cuda":
+            torch.cuda.manual_seed_all(seed)
+        with torch.inference_mode():
+            encoding = encoder(
+                official_stu_coordinates(source.xyzi, source.lidar_pose),
+                official_stu_features(source.xyzi, source.lidar_pose),
+                source.real_slots,
+            )
+        full = np.zeros(source.slot_count, dtype=np.float32)
+        full[np.asarray(source.real_slots, dtype=np.int64)] = (
+            encoding.maxlogit_score.detach().cpu().numpy().astype(np.float32)
+        )
+        return full
+
+    official_type = _e62_official_calculator(
+        protocol.evaluation_document["evaluator_equivalence"]
+    )
+    metric_order = ("AP", "AUROC", "FPR95", "threshold")
+    development_world_id: list[int] = []
+    development_center: list[int] = []
+    development_offset = [0]
+    development_ray: list[np.ndarray] = []
+    development_score: list[np.ndarray] = []
+    development_label: list[np.ndarray] = []
+    development_control: list[np.ndarray] = []
+    development_proxy: list[np.ndarray] = []
+    development_metric: list[np.ndarray] = []
+    evaluator_errors = 0
+    for row in np.flatnonzero(eligible):
+        world_id = int(e57_world_id[row])
+        center = int(e57_center[row])
+        world = WorldSpec.from_dict(json.loads(str(e57_world_json[row])))
+        rendered = render_frame(
+            sequence_201.source_frame(center), world, grid, sensor
+        )
+        source = rendered.source
+        scores = encode(source)
+        slots = np.asarray(source.real_slots, dtype=np.int64)
+        points = np.asarray(source.xyzi)[slots, :3]
+        semantic = np.asarray(source.labels.semantic)[slots]
+        values = scores[slots]
+        official = official_type()
+        custom = PointMetricAccumulator(protocol)
+        official.update(points, values, semantic)
+        custom.update(points, values, semantic)
+        official_metric = official.compute_metrics()
+        custom_metric = custom.compute()
+        official_values = np.asarray(
+            [official_metric[name] for name in metric_order], dtype=np.float64
+        )
+        custom_values = np.asarray(
+            [custom_metric[name] for name in metric_order], dtype=np.float64
+        )
+        evaluator_errors += int(
+            not np.array_equal(official_values, custom_values)
+            or official_metric.get("accepted_frames") != 1
+            or custom_metric.get("accepted_frames") != 1
+        )
+        ranges = np.linalg.norm(points.astype(np.float32, copy=False), axis=1)
+        valid = (ranges >= 2.5) & (ranges <= 50.0) & (semantic != 0)
+        valid_slots = slots[valid]
+        order = np.argsort(canonical_by_slot[valid_slots], kind="stable")
+        valid_slots = valid_slots[order]
+        development_world_id.append(world_id)
+        development_center.append(center)
+        development_ray.append(canonical_by_slot[valid_slots])
+        development_score.append(scores[valid_slots])
+        development_label.append((np.asarray(source.labels.semantic)[valid_slots] == 2))
+        development_control.append(
+            np.asarray(rendered.normal_control_mask)[valid_slots]
+        )
+        development_proxy.append(np.asarray(rendered.anomaly_proxy_mask)[valid_slots])
+        development_metric.append(official_values)
+        development_offset.append(development_offset[-1] + valid_slots.size)
+
+    def unpack_masks(packed: np.ndarray) -> np.ndarray:
+        return np.unpackbits(packed, axis=1, bitorder="little")[:, : grid.slot_count]
+
+    def collect_native(
+        sequence: STUSequence,
+        frame_ids: np.ndarray,
+        masks: tuple[np.ndarray, ...],
+        expected_counts: tuple[np.ndarray, ...],
+    ) -> tuple[list[np.ndarray], list[np.ndarray], list[list[int]]]:
+        scores_by_mask = [[] for _ in masks]
+        rays_by_mask = [[] for _ in masks]
+        offsets = [[0] for _ in masks]
+        unpacked = tuple(unpack_masks(mask) for mask in masks)
+        for row, frame_id in enumerate(frame_ids.tolist()):
+            if not any(int(count[row]) for count in expected_counts):
+                for current in offsets:
+                    current.append(current[-1])
+                continue
+            source = sequence.source_frame(int(frame_id))
+            scores = encode(source)
+            for mask_id, (current_mask, current_count) in enumerate(
+                zip(unpacked, expected_counts, strict=True)
+            ):
+                selected_slots = np.flatnonzero(current_mask[row][canonical_by_slot])
+                if selected_slots.size != int(current_count[row]):
+                    raise QualificationError("E72 E61 canonical mask count changed")
+                selected_rays = canonical_by_slot[selected_slots]
+                order = np.argsort(selected_rays, kind="stable")
+                rays_by_mask[mask_id].append(selected_rays[order])
+                scores_by_mask[mask_id].append(scores[selected_slots[order]])
+                offsets[mask_id].append(
+                    offsets[mask_id][-1] + selected_slots.size
+                )
+        return scores_by_mask, rays_by_mask, offsets
+
+    pure_scores, pure_rays, pure_offsets = collect_native(
+        sequence_201, pure_frame_id, (pure_packed,), (pure_count,)
+    )
+    static_count = np.unpackbits(
+        static_packed, axis=1, bitorder="little"
+    )[:, : grid.slot_count].sum(axis=1).astype(np.int32)
+    moving_scores, moving_rays, moving_offsets = collect_native(
+        sequence_206,
+        moving_frame_id,
+        (moving_packed, static_packed),
+        (moving_count, static_count),
+    )
+
+    def concatenate(values: list[np.ndarray], dtype: np.dtype) -> np.ndarray:
+        return (
+            np.concatenate(values).astype(dtype, copy=False)
+            if values
+            else np.empty(0, dtype=dtype)
+        )
+
+    arrays = {
+        "development_world_id": np.asarray(development_world_id, dtype=np.int16),
+        "development_center_frame": np.asarray(development_center, dtype=np.int16),
+        "development_point_offset": np.asarray(development_offset, dtype=np.int64),
+        "development_canonical_ray": concatenate(development_ray, np.int32),
+        "development_score": concatenate(development_score, np.float32),
+        "development_label": concatenate(development_label, np.bool_),
+        "development_normal_control": concatenate(development_control, np.bool_),
+        "development_anomaly_proxy": concatenate(development_proxy, np.bool_),
+        "development_metric": np.stack(development_metric),
+        "pure_frame_id": pure_frame_id,
+        "pure_point_offset": np.asarray(pure_offsets[0], dtype=np.int64),
+        "pure_canonical_ray": concatenate(pure_rays[0], np.int32),
+        "pure_score": concatenate(pure_scores[0], np.float32),
+        "moving_frame_id": moving_frame_id,
+        "moving_point_offset": np.asarray(moving_offsets[0], dtype=np.int64),
+        "moving_canonical_ray": concatenate(moving_rays[0], np.int32),
+        "moving_score": concatenate(moving_scores[0], np.float32),
+        "matched_static_point_offset": np.asarray(moving_offsets[1], dtype=np.int64),
+        "matched_static_canonical_ray": concatenate(moving_rays[1], np.int32),
+        "matched_static_score": concatenate(moving_scores[1], np.float32),
+        "metric_order": np.asarray(metric_order, dtype="U16"),
+    }
+    count_errors = int(
+        arrays["development_world_id"].size != 23
+        or arrays["pure_score"].size != int(pure_count.sum())
+        or arrays["moving_score"].size != int(moving_count.sum())
+        or arrays["matched_static_score"].size != int(static_count.sum())
+        or arrays["pure_score"].size != 48_828_507
+        or arrays["moving_score"].size != 13_011
+        or arrays["matched_static_score"].size != 6_756
+    )
+    result = {
+        "experiment": "E72",
+        "passed": evaluator_errors == 0 and count_errors == 0,
+        "development_worlds": 23,
+        "development_points": int(arrays["development_score"].size),
+        "pure_normal_points": int(arrays["pure_score"].size),
+        "moving_normal_points": int(arrays["moving_score"].size),
+        "matched_static_points": int(arrays["matched_static_score"].size),
+        "evaluator_errors": evaluator_errors,
+        "count_errors": count_errors,
+        "official_stu_source_manifest_sha256": stu_source_manifest(
+            protocol.stu_repository_path(project_root)
+        )["manifest_sha256"],
+        "official_stu_weights": stu_weight_identity(
+            protocol.checkpoint_path(project_root)
+        ),
+        "protocol_sha256": _sha256(protocol_file),
+        "e57_artifact_sha256": _sha256(e57_file),
+        "e61_artifact_sha256": _sha256(e61_file),
+        "e63_artifact_sha256": _sha256(e63_file),
+        "scientific_array_sha256": _array_hash(arrays),
+        "seconds": time.monotonic() - started,
+    }
+    _save(Path(output_path).expanduser().resolve(), arrays, result)
+    return result
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -3312,6 +3582,14 @@ def _parser() -> argparse.ArgumentParser:
     phase7.add_argument("--protocol", type=Path, default=PROJECT_ROOT / "protocol.json")
     phase7.add_argument("--e63", type=Path, required=True)
     phase7.add_argument("--output", type=Path, required=True)
+    e72 = commands.add_parser("e72")
+    e72.add_argument("--data-root", type=Path, required=True)
+    e72.add_argument("--protocol", type=Path, default=PROJECT_ROOT / "protocol.json")
+    e72.add_argument("--e57", type=Path, required=True)
+    e72.add_argument("--e61", type=Path, required=True)
+    e72.add_argument("--e63", type=Path, required=True)
+    e72.add_argument("--output", type=Path, required=True)
+    e72.add_argument("--device", default="cuda")
     return parser
 
 
@@ -3403,6 +3681,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0 if result["passed"] else 1
     if args.command == "phase7":
         result = run_phase7(args.protocol, args.e63, args.output)
+        print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        return 0 if result["passed"] else 1
+    if args.command == "e72":
+        result = run_e72(
+            args.data_root, args.protocol, args.e57, args.e61, args.e63,
+            args.output, device=args.device,
+        )
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 0 if result["passed"] else 1
     raise AssertionError(args.command)

@@ -1,6 +1,6 @@
 # AJAE Fine-Grained Experiment Execution State Machine
 
-> Current authoritative baseline: repository `main` and all historical evidence recorded in this document. E50–E58 and E61–E63 have formally PASSed, E59/E60 descriptive characterization is complete, and the current formal node is E64. The old commit `44fd6d13798e826b2cac8371de26a7d17707dadc` is retained only as the historical baseline from the E22-v2 period and no longer represents the current workspace state.
+> Current authoritative baseline: repository `main` and all historical evidence recorded in this document. E50–E58 and E61–E71 have formally PASSed, E59/E60 descriptive characterization is complete, and the current formal node is E72. The old commit `44fd6d13798e826b2cac8371de26a7d17707dadc` is retained only as the historical baseline from the E22-v2 period and no longer represents the current workspace state.
 
 > Basis: [AJAE Mainline Plan](</home/jasongao/Study/AJAE/AJAE%E6%96%B0%E4%B8%BB%E7%BA%BF%E6%96%B9%E6%A1%88.md>). This document decomposes the mainline plan's immutable constraints, four Decision Gates, B0–B5 controls, normal-motion safety, object-scale diagnostics, development discipline, and one-time real-OOD validation into fine-grained experiment nodes that can be executed sequentially.
 
@@ -3524,198 +3524,198 @@ Notes: Safety folds are assigned over all 24 immutable E57 identities exactly 12
 ## Phase 7 Unified Freeze
 
 Experiment ID: Phase 7 unified freeze
-Design-freeze commit/hash: E64–E71 frozen together before first formal execution; commit to be recorded after this implementation-freeze commit.
-Execution-freeze commit/hash: The unified production-path harness is implemented in `src/qualify.py`; source hash to be recorded from the clean freeze commit.
-Date: 2026-09-01 implementation frozen; formal run pending.
-Git commit / clean state: Pre-execution working tree; untracked user-owned `PPT/` remains excluded.
+Design-freeze commit/hash: E64–E71 production-path fixtures frozen at `3a707d5a51d0e721d263e88b71166d5a131481e4` before the first attempt.
+Execution-freeze commit/hash: Exact E67 enforcement corrected and frozen at `cada10e938a01aa09a54d2cb3cbbc86451383b75`; `src/qualify.py` SHA-256 `d1e3e0311dfba8e4afcc0c991fb24f94e4b660d41bb3bbf7608234cf5225fb64`, `src/model.py` SHA-256 `0f1128aa5012dab6398ded9610083cd72bbf56f5e933faf96339af45436d2839`.
+Date: 2026-09-01 formal PASS.
+Git commit / clean state: Formal rerun used clean tracked state at `cada10e938a01aa09a54d2cb3cbbc86451383b75`; untracked user-owned `PPT/` remained excluded.
 Data identities: Analytic and boundary fixtures defined per node.
 Input artifact hashes: None.
 Random namespaces / seeds: Analytic fixture seed `640071`; no model checkpoint, training result, development score, public real-OOD sequence or hidden sequence is read.
 Command and resolved config: E64–E71 are implementation tests and cannot be modified in response to model performance. One unified command runs each node on the authoritative production function, repeats the complete fixture suite from the same seed, and requires every node error count and every reproduction error count to be zero: `python -m src.qualify phase7 --protocol protocol.json --e63 runs/ajae/e63_training_freeze.npz --output runs/ajae/e64_e71_mechanical.npz`.
-Resource and disk preflight: Formal preflight pending.
-Artifacts and hashes: Pending `runs/ajae/e64_e71_mechanical.npz`.
+Resource and disk preflight: 24 physical CPU cores; 25,196,924,928 bytes RAM with 22,403,272,704 bytes available; 17,179,869,184 bytes unused swap; RTX 5080 Laptop GPU idle and not used; no competing experiment process. Windows E had 75,041,857,536 bytes remaining of 484,950,659,072 bytes. The valid formal rerun completed in 0.1048 s.
+Artifacts and hashes: `runs/ajae/e64_e71_mechanical.npz`; 7,129 bytes; SHA-256 `e3ec4e024a7df50eccab37289033efd560997d27415edbf8887fa73d8434c088`; scientific-array SHA-256 `60b7521e5f534b7c822d7f54273d7f4c92d7ffa81a46ec4e5caf2c3749bcfcc7`.
 Primary construct: Shared mechanical-test freeze for AJAE architecture.
-Primary result: Pre-execution regression exercises all eight frozen constructs through production code and passed 75/75 repository tests. Formal qualification has not yet executed.
-PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
-Failure classification: Not applicable.
-Unlocked next node: E64 after E63 PASS.
-Invalidated downstream evidence: E64 onward remains locked.
+Primary result: E64–E71 each returned zero errors; two complete production-path fixture runs were elementwise identical. Independent read-only checks reproduced every stored expected/observed equality, multiplicity and scientific-array hash with zero errors. The repository regression suite passed 75/75 before execution.
+PASS / FAIL / OUTCOME: PASS.
+Failure classification: None.
+Unlocked next node: E72.
+Invalidated downstream evidence: None.
 Descriptive observations: None.
 Notes: The first harness attempt after `3a707d5` was invalidated before adjudication because E67 accepted a `2.38418579e-7` batch/single discrepancy under an unregistered tolerance although the frozen rule requires identical outputs. This was an implementation error, not a protocol failure: the fixture was changed to an exactly representable zero-parameter gate case, equality enforcement became exact, and a fresh execution-freeze commit is required before rerun. Model effect sizes cannot change mechanical semantics.
 
 ## E64 | Temporal-Identity Voxel Isolation
 
 Experiment ID: E64
-Design-freeze commit/hash: Frozen design; commit not recorded.
-Execution-freeze commit/hash: Not executed.
-Date: Not executed.
-Git commit / clean state: Not applicable.
+Design-freeze commit/hash: Unified Phase 7 freeze `3a707d5a51d0e721d263e88b71166d5a131481e4`.
+Execution-freeze commit/hash: Valid exact-harness freeze `cada10e938a01aa09a54d2cb3cbbc86451383b75`.
+Date: 2026-09-01 formal PASS.
+Git commit / clean state: Shared clean formal Phase 7 rerun at `cada10e938a01aa09a54d2cb3cbbc86451383b75`.
 Data identities: Same-XYZ/different-q and voxel-boundary fixtures.
 Input artifact hashes: None.
 Random namespaces / seeds: Fixed fixtures.
 Command and resolved config: Inspect keys at L1–L3. Every key includes q; no pooling merge across q; correct merge within q; deterministic.
-Resource and disk preflight: Not executed.
-Artifacts and hashes: None.
+Resource and disk preflight: Shared Phase 7 preflight and run.
+Artifacts and hashes: Shared `runs/ajae/e64_e71_mechanical.npz`, SHA-256 `e3ec4e024a7df50eccab37289033efd560997d27415edbf8887fa73d8434c088`.
 Primary construct: Preservation of temporal identity through hierarchical voxel pooling.
-Primary result: Not executed.
-PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
-Failure classification: Not applicable.
+Primary result: L1, L2 and L3 each produced three voxels: the two same-q points merged, while identical XYZ at different q and the within-q boundary point remained distinct. Two runs matched exactly; error count 0.
+PASS / FAIL / OUTCOME: PASS.
+Failure classification: None.
 Unlocked next node: E65 after PASS.
-Invalidated downstream evidence: E65 onward remains locked.
+Invalidated downstream evidence: None.
 Descriptive observations: None.
 Notes: None.
 
 ## E65 | Mean–Max Pooling Numerics
 
 Experiment ID: E65
-Design-freeze commit/hash: Frozen design; commit not recorded.
-Execution-freeze commit/hash: Not executed.
-Date: Not executed.
-Git commit / clean state: Not applicable.
+Design-freeze commit/hash: Unified Phase 7 freeze `3a707d5a51d0e721d263e88b71166d5a131481e4`.
+Execution-freeze commit/hash: Valid exact-harness freeze `cada10e938a01aa09a54d2cb3cbbc86451383b75`.
+Date: 2026-09-01 formal PASS.
+Git commit / clean state: Shared clean formal Phase 7 rerun.
 Data identities: Hand-calculable negative, repeated, and single-point voxel fixtures.
 Input artifact hashes: None.
 Random namespaces / seeds: Fixed fixtures.
 Command and resolved config: Mean, max, concatenation, and linear-layer input must match hand calculation elementwise; gradients finite; neither branch may degenerate away.
-Resource and disk preflight: Not executed.
-Artifacts and hashes: None.
+Resource and disk preflight: Shared Phase 7 preflight and run.
+Artifacts and hashes: Shared Phase 7 artifact and hashes.
 Primary construct: Correct dual-path mean–max voxel pooling.
-Primary result: Not executed.
-PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
-Failure classification: Not applicable.
+Primary result: Observed concatenated mean/max rows exactly equalled `[[-3,2,-2,3],[5,-6,5,-6]]`; gradients were finite and both branches remained distinct. Error count 0.
+PASS / FAIL / OUTCOME: PASS.
+Failure classification: None.
 Unlocked next node: E66 after PASS.
-Invalidated downstream evidence: E66 onward remains locked.
+Invalidated downstream evidence: None.
 Descriptive observations: None.
 Notes: None.
 
 ## E66 | Neighborhood Stratification by Temporal Offset
 
 Experiment ID: E66
-Design-freeze commit/hash: Frozen design; commit not recorded.
-Execution-freeze commit/hash: Not executed.
-Date: Not executed.
-Git commit / clean state: Not applicable.
+Design-freeze commit/hash: Unified Phase 7 freeze `3a707d5a51d0e721d263e88b71166d5a131481e4`.
+Execution-freeze commit/hash: Valid exact-harness freeze `cada10e938a01aa09a54d2cb3cbbc86451383b75`.
+Date: 2026-09-01 formal PASS.
+Git commit / clean state: Shared clean formal Phase 7 rerun.
 Data identities: Fixtures with saturated same-frame neighbors and sparse cross-frame neighbors.
 Input artifact hashes: None.
 Random namespaces / seeds: Point-identity tie-breaks.
 Command and resolved config: Every temporal offset δ has independent radius/K selection; another δ cannot occupy its quota; points outside radius are never used as filler; ties by point identity; empty candidate sets legal.
-Resource and disk preflight: Not executed.
-Artifacts and hashes: None.
+Resource and disk preflight: Shared Phase 7 preflight and run.
+Artifacts and hashes: Shared Phase 7 artifact and hashes.
 Primary construct: Independent neighborhood selection for each temporal offset.
-Primary result: Not executed.
-PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
-Failure classification: Not applicable.
+Primary result: For the q=0 query, same-frame neighbors were point rows `[0,1]`, delta +1 selected `[3]`, delta -1 selected `[5]`, and the out-of-radius row was excluded. The equal-distance same-frame tie selected lower point identity. Error count 0.
+PASS / FAIL / OUTCOME: PASS.
+Failure classification: None.
 Unlocked next node: E67 after PASS.
-Invalidated downstream evidence: E67 onward remains locked.
+Invalidated downstream evidence: None.
 Descriptive observations: None.
 Notes: None.
 
 ## E67 | Empty Cross-Frame Branch and Gate
 
 Experiment ID: E67
-Design-freeze commit/hash: Frozen design; commit not recorded.
-Execution-freeze commit/hash: Not executed.
-Date: Not executed.
-Git commit / clean state: Not applicable.
+Design-freeze commit/hash: Unified Phase 7 freeze `3a707d5a51d0e721d263e88b71166d5a131481e4`.
+Execution-freeze commit/hash: Exact batch-identity correction frozen at `cada10e938a01aa09a54d2cb3cbbc86451383b75`.
+Date: 2026-09-01 formal PASS.
+Git commit / clean state: Shared clean formal Phase 7 rerun.
 Data identities: Empty- and nonempty-neighborhood fixtures, in batch and single form.
 Input artifact hashes: None.
 Random namespaces / seeds: Fixed fixtures.
 Command and resolved config: Empty neighborhood must produce `message=0`, gate 0, no NaN. Nonempty gate in [0,1]. Batch and individual outputs identical.
-Resource and disk preflight: Not executed.
-Artifacts and hashes: None.
+Resource and disk preflight: Shared Phase 7 preflight and run.
+Artifacts and hashes: Shared Phase 7 artifact and hashes.
 Primary construct: Numerically safe gating when a temporal branch has no neighbors.
-Primary result: Not executed.
-PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
-Failure classification: Not applicable.
+Primary result: Empty-neighborhood messages and gates were exactly zero, all outputs were finite, nonempty sigmoid gates remained in `[0,1]`, and batch-versus-individual maximum difference was exactly 0. Error count 0.
+PASS / FAIL / OUTCOME: PASS.
+Failure classification: None.
 Unlocked next node: E68 after PASS.
-Invalidated downstream evidence: E68 onward remains locked.
+Invalidated downstream evidence: None.
 Descriptive observations: None.
 Notes: None.
 
 ## E68 | Same-Frame Residual Survival Path
 
 Experiment ID: E68
-Design-freeze commit/hash: Frozen design; commit not recorded.
-Execution-freeze commit/hash: Not executed.
-Date: Not executed.
-Git commit / clean state: Not applicable.
+Design-freeze commit/hash: Unified Phase 7 freeze `3a707d5a51d0e721d263e88b71166d5a131481e4`.
+Execution-freeze commit/hash: Valid exact-harness freeze `cada10e938a01aa09a54d2cb3cbbc86451383b75`.
+Date: 2026-09-01 formal PASS.
+Git commit / clean state: Shared clean formal Phase 7 rerun.
 Data identities: Fixture with every cross-frame branch disabled.
 Input artifact hashes: None.
 Random namespaces / seeds: Fixed fixture.
 Command and resolved config: Independently recompute h+F(m0). Same-frame message and residual must remain, output difference zero, cross-frame gradients zero.
-Resource and disk preflight: Not executed.
-Artifacts and hashes: None.
+Resource and disk preflight: Shared Phase 7 preflight and run.
+Artifacts and hashes: Shared Phase 7 artifact and hashes.
 Primary construct: Survival of the same-frame representation when cross-frame information is absent.
-Primary result: Not executed.
-PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
-Failure classification: Not applicable.
+Primary result: The production block output equalled the independently recomputed same-frame message, residual and feed-forward path with maximum error 0; the same-frame message was nonzero and the center output gradient to the other frame was exactly zero. Error count 0.
+PASS / FAIL / OUTCOME: PASS.
+Failure classification: None.
 Unlocked next node: E69 after PASS.
-Invalidated downstream evidence: E69 onward remains locked.
+Invalidated downstream evidence: None.
 Descriptive observations: None.
 Notes: None.
 
 ## E69 | Same-Frame 3-NN Upsampling
 
 Experiment ID: E69
-Design-freeze commit/hash: Frozen design; commit not recorded.
-Execution-freeze commit/hash: Not executed.
-Date: Not executed.
-Git commit / clean state: Not applicable.
+Design-freeze commit/hash: Unified Phase 7 freeze `3a707d5a51d0e721d263e88b71166d5a131481e4`.
+Execution-freeze commit/hash: Valid exact-harness freeze `cada10e938a01aa09a54d2cb3cbbc86451383b75`.
+Date: 2026-09-01 formal PASS.
+Git commit / clean state: Shared clean formal Phase 7 rerun.
 Data identities: Fixture where a parent point from another q is geometrically closer.
 Input artifact hashes: None.
 Random namespaces / seeds: Frozen point identities.
 Command and resolved config: Select only parents with the same q. With fewer than three, use the frozen repeat/available rule. Inverse-distance weights finite and sum to 1; numerical output difference zero.
-Resource and disk preflight: Not executed.
-Artifacts and hashes: None.
+Resource and disk preflight: Shared Phase 7 preflight and run.
+Artifacts and hashes: Shared Phase 7 artifact and hashes.
 Primary construct: Temporally isolated same-frame nearest-neighbor upsampling.
-Primary result: Not executed.
-PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
-Failure classification: Not applicable.
+Primary result: Both targets used only the three q=0 parents even though a q=1 parent was geometrically closer. Float32 inverse-distance outputs exactly matched the hand calculation, with no contribution from the value-100 cross-frame parent. Error count 0.
+PASS / FAIL / OUTCOME: PASS.
+Failure classification: None.
 Unlocked next node: E70 after PASS.
-Invalidated downstream evidence: E70 onward remains locked.
+Invalidated downstream evidence: None.
 Descriptive observations: None.
 Notes: None.
 
 ## E70 | Balanced BCE Empty-Class Safety
 
 Experiment ID: E70
-Design-freeze commit/hash: Frozen design; commit not recorded.
-Execution-freeze commit/hash: Not executed.
-Date: Not executed.
-Git commit / clean state: Not applicable.
+Design-freeze commit/hash: Unified Phase 7 freeze `3a707d5a51d0e721d263e88b71166d5a131481e4`.
+Execution-freeze commit/hash: Valid exact-harness freeze `cada10e938a01aa09a54d2cb3cbbc86451383b75`.
+Date: 2026-09-01 formal PASS.
+Git commit / clean state: Shared clean formal Phase 7 rerun.
 Data identities: All-negative, all-positive, mixed, and range/ignore-filtered fixtures.
 Input artifact hashes: None.
 Random namespaces / seeds: Fixed fixtures.
 Command and resolved config: Match hand calculation exactly and remain finite. In mixed batches each class contributes one half. The evaluation rule excluding frames with fewer than five anomaly points cannot enter training.
-Resource and disk preflight: Not executed.
-Artifacts and hashes: None.
+Resource and disk preflight: Shared Phase 7 preflight and run.
+Artifacts and hashes: Shared Phase 7 artifact and hashes.
 Primary construct: Numerically safe, semantically correct balanced binary cross-entropy when a class is absent.
-Primary result: Not executed.
-PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
-Failure classification: Not applicable.
+Primary result: All-negative, all-positive, mixed and validity-filtered observed losses exactly matched hand calculations and remained finite; mixed valid classes each contributed one half. Error count 0.
+PASS / FAIL / OUTCOME: PASS.
+Failure classification: None.
 Unlocked next node: E71 after PASS.
-Invalidated downstream evidence: E71 onward remains locked.
+Invalidated downstream evidence: None.
 Descriptive observations: None.
 Notes: None.
 
 ## E71 | Probability-Fusion Formula
 
 Experiment ID: E71
-Design-freeze commit/hash: Frozen design; commit not recorded.
-Execution-freeze commit/hash: Not executed.
-Date: Not executed.
-Git commit / clean state: Not applicable.
+Design-freeze commit/hash: Unified Phase 7 freeze `3a707d5a51d0e721d263e88b71166d5a131481e4`.
+Execution-freeze commit/hash: Valid exact-harness freeze `cada10e938a01aa09a54d2cb3cbbc86451383b75`.
+Date: 2026-09-01 formal PASS.
+Git commit / clean state: Shared clean formal Phase 7 rerun.
 Data identities: Fixed logits and repeated point-ID fixtures.
 Input artifact hashes: None.
 Random namespaces / seeds: Fixed identities.
 Command and resolved config: Output must equal mean(sigmoid(logit)) exactly and must not equal sigmoid(mean(logit)) in the distinguishing fixture. No q/center weighting. Multiplicity 1≤m_p≤5; no boundary padding.
-Resource and disk preflight: Not executed.
-Artifacts and hashes: None.
+Resource and disk preflight: Shared Phase 7 preflight and run.
+Artifacts and hashes: Shared Phase 7 artifact and hashes.
 Primary construct: Correct per-point probability fusion across available frames.
-Primary result: Not executed.
-PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
-Failure classification: Not applicable.
+Primary result: Stored multiplicities were exactly `[1,2,3,4,5]`; every output exactly equalled the arithmetic mean of sigmoid probabilities, and multi-occurrence distinguishing slots differed from sigmoid of the mean logit. Error count 0.
+PASS / FAIL / OUTCOME: PASS.
+Failure classification: None.
 Unlocked next node: E72 after PASS.
-Invalidated downstream evidence: Phase 8 remains locked.
+Invalidated downstream evidence: None; Phase 8 is unlocked.
 Descriptive observations: None.
 Notes: Fusion is the arithmetic mean of probabilities, not logits.
 
@@ -3724,22 +3724,22 @@ Notes: Fusion is the arithmetic mean of probabilities, not logits.
 ## E72 | Freeze the B0 STU Single-Frame Reference
 
 Experiment ID: E72
-Design-freeze commit/hash: Frozen design; commit not recorded.
-Execution-freeze commit/hash: Not executed.
-Date: Not executed.
-Git commit / clean state: Not applicable.
-Data identities: E57's 24 worlds plus pure-normal and moving-normal sets.
-Input artifact hashes: Official STU and evaluator identities to be frozen.
-Random namespaces / seeds: Frozen world/point identities.
-Command and resolved config: Generate official STU MaxLogit on all sets and independently recompute with official evaluator. Preserve complete per-world/per-point identity, metrics, and hashes.
-Resource and disk preflight: Not executed.
-Artifacts and hashes: None.
+Design-freeze commit/hash: E63 supersedes the old 24-world shorthand: E72 uses exactly the 23 common-domain E57 worlds plus the complete E61 safety identities. Freeze commit to be recorded before execution.
+Execution-freeze commit/hash: Production renderer, frozen official STU encoder, E62-bound official evaluator and compact E61-mask score collector implemented in `src/qualify.py`; commit/hash pending.
+Date: 2026-09-01 execution identity frozen; formal run pending.
+Git commit / clean state: Pre-execution working tree; untracked user-owned `PPT/` remains excluded.
+Data identities: E63-eligible E57 world IDs `[0,1,2,3,4,6,...,23]`, each at its frozen q=0 center; all 48,828,507 E61 pure-normal points; all 13,011 moving-normal points; and the 6,756 matched static counterparts. The six E58 torus worlds and all real-OOD sequences remain inaccessible.
+Input artifact hashes: E57-v2 SHA-256 `b14efc1aad86ac67b5bf7c8631f02b2e68664e071b747b7b210d5f7a30f5d123`; E61 SHA-256 `8d3e08e0512dc70a75d2279cfb4515bc960bbfda4f35a872c4a76e9dad69d0e0`; E63 SHA-256 `5dbf99eaa59a05a83774e42beb6b8d7a95cf9309ebd42ab7870604a20d410dd9`; official STU and E62 evaluator identities remain protocol-bound.
+Random namespaces / seeds: Official STU inference seed for each frame is the frozen `E53-STU-query-v1` frame-identity seed. Repeated E57 center IDs intentionally reuse the same frame seed while retaining distinct rendered world identity.
+Command and resolved config: Render each eligible E57 world only at q=0, run official frozen STU MaxLogit, and compare custom versus released official AP/AUROC/FPR95/threshold per world exactly. Run the same official B0 path once per native E61 frame and save scores in ascending canonical-ray order under the frozen E61 masks. Formal command: `python -m src.qualify e72 --data-root /home/jasongao/Data/STU --protocol protocol.json --e57 runs/ajae/e57_development_worlds.npz --e61 runs/ajae/e61_safety_identities.npz --e63 runs/ajae/e63_training_freeze.npz --output runs/ajae/e72_b0_reference.npz --device cuda`.
+Resource and disk preflight: Formal preflight pending. Expected artifact is below 0.5 GiB, chiefly 48,828,507 float32 pure-normal scores; Windows E reserve must be rechecked.
+Artifacts and hashes: Pending `runs/ajae/e72_b0_reference.npz`.
 Primary construct: Immutable official single-frame baseline B0.
 Primary result: Not executed.
-PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
+PASS / FAIL / OUTCOME: OUTCOME — EXECUTION FROZEN / NOT EXECUTED.
 Failure classification: Not applicable.
 Unlocked next node: E73 after PASS.
-Invalidated downstream evidence: E73 onward remains locked.
+Invalidated downstream evidence: E73 onward remains locked until formal E72 PASS.
 Descriptive observations: None.
 Notes: None.
 
