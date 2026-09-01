@@ -1,6 +1,6 @@
 # AJAE Fine-Grained Experiment Execution State Machine
 
-> Current authoritative baseline: repository `main` and all historical evidence recorded in this document. E50–E56 and E57-v2 have formally PASSed; the current formal node is E58. The old commit `44fd6d13798e826b2cac8371de26a7d17707dadc` is retained only as the historical baseline from the E22-v2 period and no longer represents the current workspace state.
+> Current authoritative baseline: repository `main` and all historical evidence recorded in this document. E50–E58 have formally PASSed, E59/E60 descriptive characterization is complete, and the current formal node is E61. The old commit `44fd6d13798e826b2cac8371de26a7d17707dadc` is retained only as the historical baseline from the E22-v2 period and no longer represents the current workspace state.
 
 > Basis: [AJAE Mainline Plan](</home/jasongao/Study/AJAE/AJAE%E6%96%B0%E4%B8%BB%E7%BA%BF%E6%96%B9%E6%A1%88.md>). This document decomposes the mainline plan's immutable constraints, four Decision Gates, B0–B5 controls, normal-motion safety, object-scale diagnostics, development discipline, and one-time real-OOD validation into fine-grained experiment nodes that can be executed sequentially.
 
