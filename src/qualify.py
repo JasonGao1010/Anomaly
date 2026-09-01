@@ -22,17 +22,22 @@ import numpy as np
 import torch
 from scipy.spatial import cKDTree
 
-from .evaluate import PointMetricAccumulator
+from .evaluate import PointMetricAccumulator, WindowScoreFusion
 from .model import (
     DEFAULT_STU_REPOSITORY,
     MASK_DIM,
     AJAEPointTransformer,
     FrozenSTUPointEncoder,
+    KnnUpsample,
+    TemporalPointBlock,
+    VoxelPool,
     assigned_stu_evidence,
     stu_source_manifest,
     stu_weight_identity,
+    temporal_radius_knn,
 )
 from .protocol import load_protocol
+from .train import balanced_bce_loss
 from .scene import (
     ExperimentCondition,
     LabelMode,
@@ -76,6 +81,7 @@ E62_NUMERICAL_SEED = 62002026
 E63_SAFETY_NAMESPACE = "E63-safety-crossfit-v1"
 E63_BOOTSTRAP_NAMESPACE = "E63-hierarchical-paired-bootstrap-v1"
 E63_BOOTSTRAP_SEED = 63002026
+PHASE7_SEED = 640071
 
 
 class QualificationError(ValueError):
@@ -2874,6 +2880,359 @@ def run_e63(
     return result
 
 
+def phase7_mechanical_arrays() -> dict[str, np.ndarray]:
+    """Execute the frozen E64--E71 analytic fixtures on the production paths."""
+
+    torch.manual_seed(PHASE7_SEED)
+    arrays: dict[str, np.ndarray] = {}
+
+    # E64: voxel keys must retain q at every pooled resolution.
+    features = torch.tensor(
+        ((1.0, -1.0), (3.0, -3.0), (5.0, -5.0), (7.0, -7.0))
+    )
+    coordinates = torch.tensor(
+        ((0.01, 0.0, 0.0), (0.02, 0.0, 0.0), (0.01, 0.0, 0.0), (0.41, 0.0, 0.0))
+    )
+    times = torch.tensor((0, 0, 1, 0), dtype=torch.long)
+    e64_errors: list[int] = []
+    e64_counts: list[int] = []
+    for size in (0.1, 0.2, 0.4):
+        pool = VoxelPool(features.shape[1], size)
+        pool.projection = torch.nn.Identity()
+        first = pool(features, coordinates, times)
+        second = pool(features, coordinates, times)
+        e64_counts.append(int(first.features.shape[0]))
+        e64_errors.append(
+            int(
+                first.features.shape[0] != 3
+                or int(first.inverse_map[0]) != int(first.inverse_map[1])
+                or int(first.inverse_map[0]) == int(first.inverse_map[2])
+                or int(first.inverse_map[0]) == int(first.inverse_map[3])
+                or not torch.equal(first.inverse_map, second.inverse_map)
+                or not torch.equal(first.relative_times, second.relative_times)
+                or not torch.equal(first.features, second.features)
+            )
+        )
+    arrays["e64_level_voxel_count"] = np.asarray(e64_counts, dtype=np.int16)
+    arrays["e64_error_count"] = np.asarray(e64_errors, dtype=np.int16)
+
+    # E65: expose the authoritative concatenated mean-max tensor directly.
+    e65_features = torch.tensor(
+        ((-2.0, 1.0), (-4.0, 3.0), (5.0, -6.0)), requires_grad=True
+    )
+    e65_coordinates = torch.tensor(
+        ((0.1, 0.1, 0.1), (0.2, 0.1, 0.1), (1.2, 0.1, 0.1))
+    )
+    e65_times = torch.zeros(3, dtype=torch.long)
+    e65_pool = VoxelPool(2, 1.0)
+    e65_pool.projection = torch.nn.Identity()
+    e65_level = e65_pool(e65_features, e65_coordinates, e65_times)
+    e65_expected = torch.tensor(((-3.0, 2.0, -2.0, 3.0), (5.0, -6.0, 5.0, -6.0)))
+    e65_level.features.sum().backward()
+    e65_error = int(
+        not torch.equal(e65_level.features, e65_expected)
+        or e65_features.grad is None
+        or not bool(torch.isfinite(e65_features.grad).all())
+        or bool(torch.equal(e65_level.features[:, :2], e65_level.features[:, 2:]))
+    )
+    arrays["e65_observed_mean_max"] = e65_level.features.detach().numpy()
+    arrays["e65_expected_mean_max"] = e65_expected.numpy()
+    arrays["e65_error_count"] = np.asarray((e65_error,), dtype=np.int16)
+
+    # E66: temporal deltas have separate K/radius budgets and stable row ties.
+    e66_coordinates = torch.tensor(
+        ((0.0, 0.0, 0.0), (0.1, 0.0, 0.0), (-0.1, 0.0, 0.0),
+         (0.05, 0.0, 0.0), (0.7, 0.0, 0.0), (0.02, 0.0, 0.0))
+    )
+    e66_times = torch.tensor((0, 0, 0, 1, 1, -1), dtype=torch.long)
+    same_neighbor, same_valid = temporal_radius_knn(
+        e66_coordinates, e66_times, 0, 0.5, 2
+    )
+    next_neighbor, next_valid = temporal_radius_knn(
+        e66_coordinates, e66_times, 1, 0.5, 2
+    )
+    prior_neighbor, prior_valid = temporal_radius_knn(
+        e66_coordinates, e66_times, -1, 0.5, 2
+    )
+    e66_error = int(
+        same_neighbor[0, same_valid[0]].tolist() != [0, 1]
+        or next_neighbor[0, next_valid[0]].tolist() != [3]
+        or prior_neighbor[0, prior_valid[0]].tolist() != [5]
+        or 4 in next_neighbor[0, next_valid[0]].tolist()
+    )
+    arrays["e66_same_neighbors"] = same_neighbor[0].numpy()
+    arrays["e66_same_valid"] = same_valid[0].numpy()
+    arrays["e66_next_neighbors"] = next_neighbor[0].numpy()
+    arrays["e66_next_valid"] = next_valid[0].numpy()
+    arrays["e66_prior_neighbors"] = prior_neighbor[0].numpy()
+    arrays["e66_prior_valid"] = prior_valid[0].numpy()
+    arrays["e66_error_count"] = np.asarray((e66_error,), dtype=np.int16)
+
+    # E67/E68 use one small production block with two spatially isolated pairs.
+    block = TemporalPointBlock(
+        16, 4, (0.4,) * 5, (2,) * 5, chunk_size=8
+    ).eval()
+    pair_coordinates = torch.tensor(
+        ((0.0, 0.0, 0.0), (0.1, 0.0, 0.0),
+         (10.0, 0.0, 0.0), (10.1, 0.0, 0.0))
+    )
+    pair_times = torch.tensor((0, 1, 0, 1), dtype=torch.long)
+    pair_features = torch.randn(4, 16)
+    batch_output = block(
+        pair_features, pair_coordinates, pair_times, cross_frame_enabled=True
+    )
+    individual_output = block(
+        pair_features[:2], pair_coordinates[:2], pair_times[:2],
+        cross_frame_enabled=True,
+    )
+    empty_neighbor, empty_valid = block.neighbors(
+        pair_coordinates[:2], pair_times[:2], 2
+    )
+    normalized = block.norm1(pair_features[:2])
+    query = block.query(normalized).view(2, 4, 4)
+    key = block.key(normalized).view(2, 4, 4)
+    value = block.value(normalized).view(2, 4, 4)
+    empty_message = block._message(
+        query, key, value, pair_coordinates[:2], empty_neighbor, empty_valid,
+        radius=0.4, delta=2,
+    )
+    empty_gate = torch.where(
+        empty_valid.any(dim=1),
+        torch.sigmoid(
+            block.cross_gate(
+                torch.cat(
+                    (
+                        pair_features[:2], empty_message,
+                        pair_features.new_full((2, 1), 1.0),
+                    ),
+                    dim=1,
+                )
+            )
+        ).squeeze(1),
+        torch.zeros(2),
+    )
+    nonempty_neighbor, nonempty_valid = block.neighbors(
+        pair_coordinates[:2], pair_times[:2], 1
+    )
+    nonempty_message = block._message(
+        query, key, value, pair_coordinates[:2], nonempty_neighbor, nonempty_valid,
+        radius=0.4, delta=1,
+    )
+    nonempty_gate = torch.sigmoid(
+        block.cross_gate(
+            torch.cat(
+                (
+                    pair_features[:2], nonempty_message,
+                    pair_features.new_full((2, 1), 0.5),
+                ),
+                dim=1,
+            )
+        )
+    ).squeeze(1)
+    e67_error = int(
+        not torch.equal(empty_message, torch.zeros_like(empty_message))
+        or not torch.equal(empty_gate, torch.zeros_like(empty_gate))
+        or not bool(torch.isfinite(batch_output).all())
+        or not bool(((nonempty_gate >= 0.0) & (nonempty_gate <= 1.0)).all())
+        or not torch.allclose(batch_output[:2], individual_output, atol=1.0e-6, rtol=0.0)
+    )
+    arrays["e67_empty_message"] = empty_message.detach().numpy()
+    arrays["e67_empty_gate"] = empty_gate.detach().numpy()
+    arrays["e67_batch_individual_max_error"] = np.asarray(
+        (
+            float(
+                torch.max(torch.abs(batch_output[:2] - individual_output))
+                .detach()
+                .cpu()
+            ),
+        ),
+        dtype=np.float64,
+    )
+    arrays["e67_error_count"] = np.asarray((e67_error,), dtype=np.int16)
+
+    residual_features = pair_features[:2].clone().requires_grad_(True)
+    residual_output = block(
+        residual_features, pair_coordinates[:2], pair_times[:2],
+        cross_frame_enabled=False,
+    )
+    residual_normalized = block.norm1(residual_features)
+    residual_query = block.query(residual_normalized).view(2, 4, 4)
+    residual_key = block.key(residual_normalized).view(2, 4, 4)
+    residual_value = block.value(residual_normalized).view(2, 4, 4)
+    residual_neighbor, residual_valid = block.neighbors(
+        pair_coordinates[:2], pair_times[:2], 0
+    )
+    same_message = block._message(
+        residual_query, residual_key, residual_value, pair_coordinates[:2],
+        residual_neighbor, residual_valid, radius=0.4, delta=0,
+    )
+    residual_updated = residual_features + block.message_projection(same_message)
+    residual_expected = residual_updated + block.ffn(block.norm2(residual_updated))
+    residual_output[0].sum().backward()
+    cross_gradient = residual_features.grad[1]
+    e68_difference = float(
+        torch.max(torch.abs(residual_output - residual_expected)).detach().cpu()
+    )
+    e68_error = int(
+        e68_difference != 0.0
+        or not torch.equal(cross_gradient, torch.zeros_like(cross_gradient))
+    )
+    arrays["e68_output_max_error"] = np.asarray((e68_difference,), dtype=np.float64)
+    arrays["e68_cross_frame_gradient"] = cross_gradient.detach().numpy()
+    arrays["e68_error_count"] = np.asarray((e68_error,), dtype=np.int16)
+
+    # E69: a closer node from another q must never become an interpolation parent.
+    upsample = KnnUpsample(3)
+    source_features = torch.tensor(((1.0,), (3.0,), (9.0,), (100.0,)))
+    source_coordinates = torch.tensor(
+        ((0.0, 0.0, 0.0), (2.0, 0.0, 0.0), (5.0, 0.0, 0.0), (1.0, 0.0, 0.0))
+    )
+    source_times = torch.tensor((0, 0, 0, 1), dtype=torch.long)
+    target_coordinates = torch.tensor(((1.0, 0.0, 0.0), (4.0, 0.0, 0.0)))
+    target_times = torch.tensor((0, 0), dtype=torch.long)
+    e69_observed = upsample(
+        source_features, source_coordinates, source_times,
+        target_coordinates, target_times,
+    )
+    distance = np.asarray(((1.0, 1.0, 4.0), (4.0, 2.0, 1.0)))
+    weights = 1.0 / np.maximum(distance, 1.0e-8)
+    weights /= weights.sum(axis=1, keepdims=True)
+    e69_expected = torch.from_numpy(
+        np.sum(
+            weights.astype(np.float32) * np.asarray((1.0, 3.0, 9.0), np.float32),
+            axis=1,
+            dtype=np.float32,
+        )[:, None]
+    )
+    e69_error = int(
+        not torch.equal(e69_observed, e69_expected)
+        or bool(torch.any(e69_observed >= 100.0))
+    )
+    arrays["e69_observed"] = e69_observed.numpy()
+    arrays["e69_expected"] = e69_expected.numpy()
+    arrays["e69_error_count"] = np.asarray((e69_error,), dtype=np.int16)
+
+    # E70: hand-compute each present-class mean after the training validity mask.
+    logits = torch.tensor((-2.0, 0.0, 2.0, 1.0), dtype=torch.float64)
+    targets = torch.tensor((False, False, True, True))
+    masks = (
+        torch.tensor((True, True, False, False)),
+        torch.tensor((False, False, True, True)),
+        torch.ones(4, dtype=torch.bool),
+        torch.tensor((False, True, True, False)),
+    )
+    raw = torch.nn.functional.binary_cross_entropy_with_logits(
+        logits, targets.to(logits.dtype), reduction="none"
+    )
+    expected_losses = torch.stack(
+        (
+            raw[:2].mean(),
+            raw[2:].mean(),
+            0.5 * raw[:2].mean() + 0.5 * raw[2:].mean(),
+            0.5 * raw[1:2].mean() + 0.5 * raw[2:3].mean(),
+        )
+    )
+    observed_losses = torch.stack(
+        tuple(balanced_bce_loss(logits, targets, mask) for mask in masks)
+    )
+    e70_difference = torch.abs(observed_losses - expected_losses)
+    e70_error = int(
+        not bool(torch.isfinite(observed_losses).all())
+        or float(e70_difference.max()) != 0.0
+    )
+    arrays["e70_observed_loss"] = observed_losses.numpy()
+    arrays["e70_expected_loss"] = expected_losses.numpy()
+    arrays["e70_error_count"] = np.asarray((e70_error,), dtype=np.int16)
+
+    # E71: multiplicities 1..5 average probabilities, never logits or padding.
+    logits_by_slot = tuple(
+        np.linspace(-2.0 + slot * 0.2, 2.0 - slot * 0.1, slot + 1)
+        for slot in range(5)
+    )
+    fusion = WindowScoreFusion(maximum_count=5)
+    slot_to_ray = np.arange(5, dtype=np.uint64)
+    for occurrence in range(5):
+        slots = np.asarray(
+            [slot for slot in range(5) if occurrence < slot + 1], dtype=np.int64
+        )
+        probabilities = np.asarray(
+            [1.0 / (1.0 + np.exp(-logits_by_slot[slot][occurrence])) for slot in slots],
+            dtype=np.float64,
+        )
+        fusion.add(
+            17, slots.astype(np.uint64), probabilities,
+            output_slots=slots, slot_to_ray=slot_to_ray,
+        )
+    e71_observed, e71_count = fusion.finalize(17)
+    e71_expected = np.asarray(
+        [np.mean(1.0 / (1.0 + np.exp(-values))) for values in logits_by_slot],
+        dtype=np.float32,
+    )
+    sigmoid_mean_logit = np.asarray(
+        [1.0 / (1.0 + np.exp(-np.mean(values))) for values in logits_by_slot],
+        dtype=np.float32,
+    )
+    distinguishing = np.asarray(
+        [values.size > 1 and e71_expected[index] != sigmoid_mean_logit[index]
+         for index, values in enumerate(logits_by_slot)]
+    )
+    e71_error = int(
+        not np.array_equal(e71_count, np.arange(1, 6, dtype=np.uint8))
+        or not np.array_equal(e71_observed, e71_expected)
+        or not np.any(distinguishing)
+    )
+    arrays["e71_observed_probability"] = e71_observed
+    arrays["e71_expected_probability"] = e71_expected
+    arrays["e71_sigmoid_mean_logit"] = sigmoid_mean_logit
+    arrays["e71_multiplicity"] = e71_count
+    arrays["e71_error_count"] = np.asarray((e71_error,), dtype=np.int16)
+    return arrays
+
+
+def run_phase7(
+    protocol_path: Path | str,
+    e63_path: Path | str,
+    output_path: Path | str,
+) -> dict[str, object]:
+    """Run the unified E64--E71 implementation qualification once."""
+
+    started = time.monotonic()
+    protocol_file = Path(protocol_path).expanduser().resolve(strict=True)
+    protocol = load_protocol(protocol_file)
+    e63 = protocol.development["e63_freeze"]
+    if e63["status"] != "formal_pass":
+        raise QualificationError("Phase 7 requires E63 PASS")
+    identity_file = Path(e63_path).expanduser().resolve(strict=True)
+    expected_identity = (PROJECT_ROOT / e63["identity_artifact"]["path"]).resolve()
+    if (
+        identity_file != expected_identity
+        or _sha256(identity_file) != e63["identity_artifact"]["artifact_sha256"]
+    ):
+        raise QualificationError("Phase 7 requires the frozen E63 identity artifact")
+    first = phase7_mechanical_arrays()
+    second = phase7_mechanical_arrays()
+    reproduction_errors = sum(
+        not np.array_equal(first[name], second[name]) for name in first
+    )
+    node_errors = {
+        f"E{node}": int(first[f"e{node}_error_count"].sum())
+        for node in range(64, 72)
+    }
+    result = {
+        "experiment": "E64-E71",
+        "passed": reproduction_errors == 0 and not any(node_errors.values()),
+        "node_errors": node_errors,
+        "reproduction_errors": reproduction_errors,
+        "seed": PHASE7_SEED,
+        "protocol_sha256": _sha256(protocol_file),
+        "e63_artifact_sha256": _sha256(identity_file),
+        "scientific_array_sha256": _array_hash(first),
+        "seconds": time.monotonic() - started,
+    }
+    _save(Path(output_path).expanduser().resolve(), first, result)
+    return result
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -2940,6 +3299,10 @@ def _parser() -> argparse.ArgumentParser:
     e63.add_argument("--protocol", type=Path, default=PROJECT_ROOT / "protocol.json")
     e63.add_argument("--e57", type=Path, required=True)
     e63.add_argument("--output", type=Path, required=True)
+    phase7 = commands.add_parser("phase7")
+    phase7.add_argument("--protocol", type=Path, default=PROJECT_ROOT / "protocol.json")
+    phase7.add_argument("--e63", type=Path, required=True)
+    phase7.add_argument("--output", type=Path, required=True)
     return parser
 
 
@@ -3027,6 +3390,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0 if result["passed"] else 1
     if args.command == "e63":
         result = run_e63(args.protocol, args.e57, args.output)
+        print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        return 0 if result["passed"] else 1
+    if args.command == "phase7":
+        result = run_phase7(args.protocol, args.e63, args.output)
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 0 if result["passed"] else 1
     raise AssertionError(args.command)

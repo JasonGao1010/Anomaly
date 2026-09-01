@@ -1308,8 +1308,9 @@ class AJAETrainer:
             raise TrainingError("progress checkpoint has an invalid best-state record")
         raw_key = best.get("key")
         self.best_key = None if raw_key is None else tuple(float(value) for value in raw_key)
-        if self.best_key is not None and not all(
-            math.isfinite(value) for value in self.best_key
+        if self.best_key is not None and (
+            len(self.best_key) != 3
+            or not all(math.isfinite(value) for value in self.best_key)
         ):
             raise TrainingError("saved checkpoint-selection key is non-finite")
         self.best_world = int(best["world"])
@@ -1333,7 +1334,7 @@ class AJAETrainer:
             candidate_key = tuple(float(value) for value in candidate.get("key", ()))
             candidate_state = candidate.get("state")
             if (
-                len(candidate_key) != 2
+                len(candidate_key) != 3
                 or not all(math.isfinite(value) for value in candidate_key)
                 or type(candidate.get("world")) is not int
                 or not isinstance(candidate_state, Mapping)

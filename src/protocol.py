@@ -884,6 +884,15 @@ class AJAEProtocol:
         AJAEProtocol._validate_e63(
             _mapping(development["e63_freeze"], "development.e63_freeze")
         )
+        if (
+            _mapping(development["e63_freeze"], "development.e63_freeze").get(
+                "status"
+            )
+            == "formal_pass"
+            and eligible_world_ids
+            != tuple(world_id for world_id in range(24) if world_id != 5)
+        ):
+            raise ProtocolError("checkpoint world IDs differ from the E63 common domain")
         difficulty = _mapping(development["difficulty_statistics"], "difficulty statistics")
         if set(difficulty) != {"Nvis", "O", "d", "V"}:
             raise ProtocolError("development difficulty must define Nvis, O, d, and V")
@@ -993,8 +1002,10 @@ class AJAEProtocol:
         if artifact.get("path") != "runs/ajae/e63_training_freeze.npz":
             raise ProtocolError("E63 identity-artifact path changed")
         if specification.get("status") == "formal_pass" and (
-            not isinstance(artifact.get("artifact_sha256"), str)
-            or not isinstance(artifact.get("scientific_array_sha256"), str)
+            artifact.get("artifact_sha256")
+            != "5dbf99eaa59a05a83774e42beb6b8d7a95cf9309ebd42ab7870604a20d410dd9"
+            or artifact.get("scientific_array_sha256")
+            != "e0df86313f27524fba9ed1d2bc563d94def568d36925c184f13e41a72540d207"
             or artifact.get("eligible_worlds") != 23
             or artifact.get("excluded_worlds") != 1
             or artifact.get("fold_a_worlds") != 12

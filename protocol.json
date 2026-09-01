@@ -2656,8 +2656,8 @@
       }
     },
     "renderer_mechanical_qualification": {
-      "status": "Gate 1 PASS; E50-E58 and E61-E62 valid formal runs PASS; E59-E60 descriptive characterization complete; E63 current",
-      "current_gate1_policy": {"hard_evidence": ["compatible canonical-ray and renderer mechanics through E44", "E45B-v2 rendered control/proxy qualification PASS", "E48 direct rendered-label-shortcut audit PASS"], "excluded_from_conjunction": ["all E45A variants", "E45-V1", "E46", "E47"], "rationale": "Natural real-normal observations and coverage-oriented inserted controls need not reproduce the same scene/placement distribution. Real-versus-rendered source identifiability is not equivalent to anomaly-label shortcut predictability because rendered controls and rendered proxies carry different labels.", "gate1_result": "PASS", "current_node": "E63", "next_after_pass": ["E63-E71", "Gate 2 B1 versus B0"]},
+      "status": "Gate 1 PASS; E50-E58 and E61-E63 valid formal runs PASS; E59-E60 descriptive characterization complete; E64 current",
+      "current_gate1_policy": {"hard_evidence": ["compatible canonical-ray and renderer mechanics through E44", "E45B-v2 rendered control/proxy qualification PASS", "E48 direct rendered-label-shortcut audit PASS"], "excluded_from_conjunction": ["all E45A variants", "E45-V1", "E46", "E47"], "rationale": "Natural real-normal observations and coverage-oriented inserted controls need not reproduce the same scene/placement distribution. Real-versus-rendered source identifiability is not equivalent to anomaly-label shortcut predictability because rendered controls and rendered proxies carry different labels.", "gate1_result": "PASS", "current_node": "E64", "next_after_pass": ["E64-E71", "Gate 2 B1 versus B0"]},
       "layer_boundaries": {"E27-E28": "direct geometry outputs only", "E29": "return probability and deterministic acceptance decision only", "E30-E31": "accepted returns", "E32-E33": "nearest-return occlusion competition"},
       "E27": {
         "question": "Does the formal geometry path return the correct nearest convex-hull hit, outward finite normal and object ID for active normal-control templates when return rejection is disabled?",
@@ -3708,12 +3708,12 @@
       "first_tie_break": "lower development macro mean FPR95",
       "second_tie_break": "lower pure-normal cross-fit FPR",
       "third_tie_break": "earlier completed world index",
-      "eligible_world_ids": [],
+      "eligible_world_ids": [0, 1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23],
       "held_out_input_forbidden": true
     },
     "e63_freeze": {
       "version": "E63-v2",
-      "status": "frozen_before_identity_generation",
+      "status": "formal_pass",
       "source_worlds": {
         "artifact": "runs/ajae/e57_development_worlds.npz",
         "artifact_sha256": "b14efc1aad86ac67b5bf7c8631f02b2e68664e071b747b7b210d5f7a30f5d123",
@@ -3780,14 +3780,14 @@
       },
       "identity_artifact": {
         "path": "runs/ajae/e63_training_freeze.npz",
-        "artifact_sha256": null,
-        "scientific_array_sha256": null,
-        "eligible_worlds": null,
-        "excluded_worlds": null,
-        "fold_a_worlds": null,
-        "fold_b_worlds": null,
-        "bootstrap_shape": null,
-        "independent_read_only_validation": null
+        "artifact_sha256": "5dbf99eaa59a05a83774e42beb6b8d7a95cf9309ebd42ab7870604a20d410dd9",
+        "scientific_array_sha256": "e0df86313f27524fba9ed1d2bc563d94def568d36925c184f13e41a72540d207",
+        "eligible_worlds": 23,
+        "excluded_worlds": 1,
+        "fold_a_worlds": 12,
+        "fold_b_worlds": 12,
+        "bootstrap_shape": [5000, 3, 5000, 24],
+        "independent_read_only_validation": true
       }
     },
     "difficulty_statistics": {

@@ -1,6 +1,6 @@
 # AJAE Fine-Grained Experiment Execution State Machine
 
-> Current authoritative baseline: repository `main` and all historical evidence recorded in this document. E50–E58 and E61–E62 have formally PASSed, E59/E60 descriptive characterization is complete, and the current formal node is E63. The old commit `44fd6d13798e826b2cac8371de26a7d17707dadc` is retained only as the historical baseline from the E22-v2 period and no longer represents the current workspace state.
+> Current authoritative baseline: repository `main` and all historical evidence recorded in this document. E50–E58 and E61–E63 have formally PASSed, E59/E60 descriptive characterization is complete, and the current formal node is E64. The old commit `44fd6d13798e826b2cac8371de26a7d17707dadc` is retained only as the historical baseline from the E22-v2 period and no longer represents the current workspace state.
 
 > Basis: [AJAE Mainline Plan](</home/jasongao/Study/AJAE/AJAE%E6%96%B0%E4%B8%BB%E7%BA%BF%E6%96%B9%E6%A1%88.md>). This document decomposes the mainline plan's immutable constraints, four Decision Gates, B0–B5 controls, normal-motion safety, object-scale diagnostics, development discipline, and one-time real-OOD validation into fine-grained experiment nodes that can be executed sequentially.
 
@@ -3500,42 +3500,42 @@ Notes: Filtering equivalence is part of the construct, not merely metric arithme
 ## E63 | One-Time Freeze of Training, Selection, Statistics, and Safety Rules
 
 Experiment ID: E63
-Design-freeze commit/hash: Owner-approved E63-v2 rules are machine-frozen before any model result; commit to be recorded after the rules-only commit.
-Execution-freeze commit/hash: Identity builder implemented and covered by the rules-only regression suite; formal identity generation has not yet executed.
-Date: 2026-09-01 rules frozen; identity generation pending.
-Git commit / clean state: Rules-only working tree; untracked user-owned `PPT/` remains excluded.
+Design-freeze commit/hash: Owner-approved E63-v2 rules were machine-frozen before any model result at `b4fbb4e518f98e158e34819fb9fc2edfb61486d1`; execution-time `protocol.json` SHA-256 `59ad84d0062670ce1fe87b5d444e45f740f7baf0fcb9ecb8317fe40a733db544`.
+Execution-freeze commit/hash: Same rules-only commit; `src/qualify.py` SHA-256 `082b9d007a6b66e400cc9c4abb71cc7b9357d75e1160ed776974c212a80cdb4c`, `src/protocol.py` SHA-256 `89cd1dbb722524bea40349b3859f026ba4214cfb41006cbf97b82418c780bb3e`, and `src/train.py` SHA-256 `23aec7ff978c2a620da456ed87285cb24b6b007359de87829c37392951c78490`. Rules-only regression suite passed 74/74 before formal materialization.
+Date: 2026-09-01 formal PASS.
+Git commit / clean state: Formal run used clean tracked state at `b4fbb4e518f98e158e34819fb9fc2edfb61486d1`; untracked user-owned `PPT/` remained excluded.
 Data identities: The 24 E57-v2 in-generator world identities and frozen q=0 centers are the only E63 source. The six E58 torus worlds, public 19 real-OOD sequences and hidden 51 sequences are inaccessible to identity generation and every development decision.
 Input artifact hashes: E57-v2 `runs/ajae/e57_development_worlds.npz`, SHA-256 `b14efc1aad86ac67b5bf7c8631f02b2e68664e071b747b7b210d5f7a30f5d123`, scientific-array SHA-256 `590c467da2dec0a161688f2587dc1c37cea2b0f42f326b9918fd6dc9df81f6ec`.
-Random namespaces / seeds: Safety split namespace `E63-safety-crossfit-v1`, using SHA-256 of UTF-8 `namespace:world_identity` and ascending 12/12 assignment. Bootstrap namespace `E63-hierarchical-paired-bootstrap-v1`, NumPy PCG64 seed `63002026`, 5,000 replicates, 3 seed draws and 24 world draws with replacement per replicate. Realized indices are still pending materialization.
+Random namespaces / seeds: Safety split namespace `E63-safety-crossfit-v1`, using SHA-256 of UTF-8 `namespace:world_identity` and ascending 12/12 assignment. Bootstrap namespace `E63-hierarchical-paired-bootstrap-v1`, NumPy PCG64 seed `63002026`, 5,000 replicates, 3 seed draws and 24 world draws with replacement per replicate. Both realized arrays are frozen in the E63 artifact.
 Command and resolved config: Training remains AdamW, learning rate 1e-4, weight decay 1e-4, micro-batch 1, gradient accumulation 8, at most 40 complete train/206 worlds per seed, evaluation every 5 worlds, patience 4, and world-type proportions 0.20/0.20/0.40/0.20. B1/B2/B3 share this budget and one checkpoint rule. Development uses E57 q=0 centers after the identity-only complete `[-4,+2]` common-domain intersection for every B0–B5 condition. Checkpoint selection maximizes macro per-world AP; AP differences below 0.001 tie, followed by lower development macro FPR95, lower pure-normal cross-fit FPR, and earlier checkpoint. Gate 2, both Gate 3 comparisons, optional B4 support, Gate 4, the 0.03 safety limits, strict `score>threshold`, and the nonblocking E59/E60 role are all machine-readable. Gate 3 excludes B4.
-Resource and disk preflight: Not yet executed for identity materialization; the rules-only regression used no experiment artifact write.
-Artifacts and hashes: Pending `runs/ajae/e63_training_freeze.npz`.
+Resource and disk preflight: 24 physical CPU cores; 25,196,924,928 bytes RAM with 22,551,293,952 bytes available; 17,179,869,184 bytes unused swap; RTX 5080 Laptop GPU idle and not used; no competing experiment process. Windows E had 75,047,690,240 bytes remaining of 484,950,659,072 bytes, above the 5% reserve. Formal materialization completed in 0.0078 s.
+Artifacts and hashes: `runs/ajae/e63_training_freeze.npz`; 99,237 bytes; SHA-256 `5dbf99eaa59a05a83774e42beb6b8d7a95cf9309ebd42ab7870604a20d410dd9`; scientific-array SHA-256 `e0df86313f27524fba9ed1d2bc563d94def568d36925c184f13e41a72540d207`.
 Primary construct: Complete preregistration of all training budgets, checkpoint selection, superiority, bootstrap, and safety criteria.
-Primary result: The owner decision removes every proposed/unresolved E63 state and corrects the machine Gate 3 mapping. Identity audit established before materialization that E57 `world_id=5`, center frame 6, lacks source frames 2 and 3 and therefore cannot satisfy the common domain; all other centers are eligible. This fact comes only from frozen frame identities, not model output.
-PASS / FAIL / OUTCOME: OUTCOME — RULES FROZEN / IDENTITY MATERIALIZATION PENDING. No training result, checkpoint score or model comparison has been observed.
-Failure classification: None; the prior protocol incompleteness is resolved.
-Unlocked next node: E64 remains locked until the E63 identity artifact is generated, independently reproduced, and recorded.
+Primary result: All proposed/unresolved E63 states were removed and Gate 3 no longer includes B4. The common-domain manifest retained 23 worlds and excluded only `world_id=5`, center frame 6, because source frames 2 and 3 are unavailable. Safety folds over the original 24 identities are A=`[2,3,5,6,8,9,11,13,18,20,21,22]` and B=`[0,1,4,7,10,12,14,15,16,17,19,23]`; their common-domain intersections contain 11 and 12 worlds. Formal double construction and a separate read-only reconstruction from E57 reproduced every identity, required frame, eligibility bit, hash rank, fold and bootstrap index exactly. All identity/reproduction errors were zero, and no model or sealed diagnostic/real-OOD input was read.
+PASS / FAIL / OUTCOME: PASS.
+Failure classification: None.
+Unlocked next node: E64.
 Invalidated downstream evidence: All model-mechanics and training gates remain locked.
 Descriptive observations: None.
-Notes: Safety folds are assigned over all 24 immutable E57 identities exactly 12/12, then formal use intersects each fold with the common-domain eligibility mask. No seed or namespace search is permitted. No criterion may move separately for B1, B2 or B3 after outcomes are known.
+Notes: Safety folds are assigned over all 24 immutable E57 identities exactly 12/12, then formal use intersects each fold with the common-domain eligibility mask. No seed or namespace search is permitted. No criterion may move separately for B1, B2 or B3 after outcomes are known. E63 is a preregistration/identity qualification and does not establish model performance.
 
 # Phase 7 | AJAE Model Mechanical Unit Qualification
 
 ## Phase 7 Unified Freeze
 
 Experiment ID: Phase 7 unified freeze
-Design-freeze commit/hash: E64–E71 frozen together before first execution; commit not recorded.
-Execution-freeze commit/hash: Not executed.
-Date: Not executed.
-Git commit / clean state: Not applicable.
+Design-freeze commit/hash: E64–E71 frozen together before first formal execution; commit to be recorded after this implementation-freeze commit.
+Execution-freeze commit/hash: The unified production-path harness is implemented in `src/qualify.py`; source hash to be recorded from the clean freeze commit.
+Date: 2026-09-01 implementation frozen; formal run pending.
+Git commit / clean state: Pre-execution working tree; untracked user-owned `PPT/` remains excluded.
 Data identities: Analytic and boundary fixtures defined per node.
 Input artifact hashes: None.
-Random namespaces / seeds: Frozen per-fixture identities; exact values not recorded.
-Command and resolved config: E64–E71 are zero-tolerance implementation tests and cannot be modified in response to model performance.
-Resource and disk preflight: Not executed.
-Artifacts and hashes: None.
+Random namespaces / seeds: Analytic fixture seed `640071`; no model checkpoint, training result, development score, public real-OOD sequence or hidden sequence is read.
+Command and resolved config: E64–E71 are implementation tests and cannot be modified in response to model performance. One unified command runs each node on the authoritative production function, repeats the complete fixture suite from the same seed, and requires every node error count and every reproduction error count to be zero: `python -m src.qualify phase7 --protocol protocol.json --e63 runs/ajae/e63_training_freeze.npz --output runs/ajae/e64_e71_mechanical.npz`.
+Resource and disk preflight: Formal preflight pending.
+Artifacts and hashes: Pending `runs/ajae/e64_e71_mechanical.npz`.
 Primary construct: Shared mechanical-test freeze for AJAE architecture.
-Primary result: Not executed.
+Primary result: Pre-execution regression exercises all eight frozen constructs through production code and passed 75/75 repository tests. Formal qualification has not yet executed.
 PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
 Failure classification: Not applicable.
 Unlocked next node: E64 after E63 PASS.

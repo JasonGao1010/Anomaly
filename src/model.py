@@ -615,8 +615,11 @@ def temporal_radius_knn(
         source_index = np.flatnonzero(times == query_time + delta)
         if query_index.size == 0 or source_index.size == 0:
             continue
-        width = min(k, int(source_index.size))
-        distance, local_index = cKDTree(points[source_index]).query(
+        # Ask for one extra row so a distance tie at the K boundary can be
+        # resolved by the stable source-row identity instead of KD-tree order.
+        width = min(k + 1, int(source_index.size))
+        tree = cKDTree(points[source_index])
+        distance, local_index = tree.query(
             points[query_index],
             k=width,
             distance_upper_bound=float(radius),
@@ -625,14 +628,38 @@ def temporal_radius_knn(
         if width == 1:
             distance = distance[:, None]
             local_index = local_index[:, None]
-        local_valid = (
-            np.isfinite(distance)
-            & (distance < float(radius))
-            & (local_index < source_index.size)
-        )
-        safe_local = np.where(local_valid, local_index, 0)
-        neighbor[query_index, :width] = source_index[safe_local]
-        valid[query_index, :width] = local_valid
+        for row, point in enumerate(points[query_index]):
+            row_distance = np.asarray(distance[row], dtype=np.float64)
+            row_local = np.asarray(local_index[row], dtype=np.int64)
+            row_valid = (
+                np.isfinite(row_distance)
+                & (row_distance < float(radius))
+                & (row_local < source_index.size)
+            )
+            row_distance = row_distance[row_valid]
+            row_local = row_local[row_valid]
+            if row_local.size > k and np.isclose(
+                row_distance[k - 1], row_distance[k], rtol=0.0, atol=1.0e-12
+            ):
+                tied_local = np.asarray(
+                    tree.query_ball_point(
+                        point, np.nextafter(row_distance[k - 1], np.inf)
+                    ),
+                    dtype=np.int64,
+                )
+                row_local = tied_local
+                row_distance = np.linalg.norm(
+                    points[source_index[tied_local]] - point, axis=1
+                )
+                inside = row_distance < float(radius)
+                row_local = row_local[inside]
+                row_distance = row_distance[inside]
+            global_index = source_index[row_local]
+            selected_order = np.lexsort((global_index, row_distance))[:k]
+            selected = global_index[selected_order]
+            count_selected = selected.size
+            neighbor[query_index[row], :count_selected] = selected
+            valid[query_index[row], :count_selected] = True
     return (
         torch.as_tensor(neighbor, dtype=torch.long, device=coordinates.device),
         torch.as_tensor(valid, dtype=torch.bool, device=coordinates.device),

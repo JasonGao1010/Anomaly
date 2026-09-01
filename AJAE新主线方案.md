@@ -1,6 +1,6 @@
 # AJAE 主线方案
 
-> 当前权威基线：本仓库`main`与本文记录的全部历史证据。E25-new、E26-v2、E38–E44刷新、E45B-v2、E48、E49、E50–E58与E61–E62已经正式PASS，E59/E60描述性聚合已经完成，Gate 1和Phase 5已经关闭；E45A全分支已经终止且不构成Gate 1条件，当前正式节点为E63。旧提交`44fd6d13798e826b2cac8371de26a7d17707dadc`只保留为E22-v2时期的历史基线，不再代表当前工作区状态。
+> 当前权威基线：本仓库`main`与本文记录的全部历史证据。E25-new、E26-v2、E38–E44刷新、E45B-v2、E48、E49、E50–E58与E61–E63已经正式PASS，E59/E60描述性聚合已经完成，Gate 1和Phase 5已经关闭；E45A全分支已经终止且不构成Gate 1条件，当前正式节点为E64。旧提交`44fd6d13798e826b2cac8371de26a7d17707dadc`只保留为E22-v2时期的历史基线，不再代表当前工作区状态。
 
 ---
 
@@ -1970,7 +1970,7 @@ E62-v2夹具随后在未调用任一评价器的条件下完成冻结。解析�
 
 E62-v2正式执行并PASS。五个冻结案例中，官方与自定义路径共同接受13帧、跳过2帧，最终纳入864个有效点，其中119个异常点、745个正常点。接受/跳过帧身份、入选点身份、三类计数、汇总标签和分数均完全相等，AP、AUROC、FPR95和官方暴露阈值的最大绝对差为0。独立只读复算再次复现全部逐案例结果和科学数组哈希。该结论只建立评价器等价性，不包含模型性能或真实异常泛化证据；当前正式节点推进到E63。
 
-E63-v2已经完成结果前规则统一。固定开发评价使用E57冻结的中心目标帧，并在任何模型训练前对所有B0–B5统一取完整`[-4,+2]`源帧域；身份审查显示24个世界中只有`world_id=5`因中心帧6缺少源帧2和3而必须排除，因此正式共同评价域将保留23个世界。检查点按宏平均逐世界AP选择，差异小于`0.001`时依次使用更低开发集FPR95、更低纯正常交叉拟合误报率和更早检查点破平局。安全折由`E63-safety-crossfit-v1`对原始24个不可变世界身份哈希排序后固定为12/12；正式使用时再与共同域取交集。5,000次层级配对bootstrap使用NumPy PCG64种子`63002026`，每次有放回抽取3个训练种子和24个世界，并对比较模型共用同一实现抽样。Gate 2、Gate 3、可选B4贡献、Gate 4和0.03绝对安全恶化界均已机器化，B4已从Gate 3删除。当前只剩身份数组正式生成、独立复算与哈希回填；尚未读取任何模型结果、六个E58留出世界、19条公开真实异常序列或51条隐藏序列。
+E63-v2已经正式PASS。固定开发评价使用E57冻结的中心目标帧，并对所有B0–B5统一取完整`[-4,+2]`源帧域；身份清单保留23个世界，只排除`world_id=5`，因为中心帧6缺少源帧2和3。检查点按宏平均逐世界AP选择，差异小于`0.001`时依次使用更低开发集FPR95、更低纯正常交叉拟合误报率和更早检查点破平局。安全折由`E63-safety-crossfit-v1`对原始24个不可变世界身份哈希排序后固定为12/12，与共同域取交集后为11/12。5,000次层级配对bootstrap使用NumPy PCG64种子`63002026`，每次有放回抽取3个训练种子和24个世界，并对比较模型共用同一实现抽样。正式双构建与独立只读复算逐元素一致，身份与复现错误均为0；产物`runs/ajae/e63_training_freeze.npz`的SHA-256为`5dbf99eaa59a05a83774e42beb6b8d7a95cf9309ebd42ab7870604a20d410dd9`，科学数组哈希为`e0df86313f27524fba9ed1d2bc563d94def568d36925c184f13e41a72540d207`。Gate 2、Gate 3、可选B4贡献、Gate 4和0.03绝对安全恶化界均已机器化，B4已从Gate 3删除。整个过程未读取模型结果、六个E58留出世界、19条公开真实异常序列或51条隐藏序列；当前节点推进到E64。
 
 E39已正式通过：三来源在2.5–10、10–20、20–30和30–40米均有非零return entity-frame覆盖，逐实体帧计数守恒错误0、非有限值0，两遍逐元素一致；三来源在40–50米均无观测，按冻结规则仅报告。共享trace已保存1,656,861条逐返回强度及E40–E44所需计数。E39关闭，E40解锁。
 
@@ -2062,7 +2062,7 @@ E26-v2已经在冻结实现提交`38079213a0801bf3a279414a8b120bfd24e1cd1b`上�
 当前执行节点为：
 
 $$
-\boxed{E38\text{--}E44\ \mathrm{PASS}\rightarrow E45B\text{-v2 PASS}\rightarrow E48\ \mathrm{PASS}\rightarrow E49\ \mathrm{PASS}\rightarrow E50\text{--}E58\ \mathrm{PASS}\rightarrow E59/E60\ \mathrm{COMPLETE}\rightarrow E61\text{--}E62\ \mathrm{PASS}\rightarrow E63\ \mathrm{CURRENT}}
+\boxed{E38\text{--}E44\ \mathrm{PASS}\rightarrow E45B\text{-v2 PASS}\rightarrow E48\ \mathrm{PASS}\rightarrow E49\ \mathrm{PASS}\rightarrow E50\text{--}E58\ \mathrm{PASS}\rightarrow E59/E60\ \mathrm{COMPLETE}\rightarrow E61\text{--}E63\ \mathrm{PASS}\rightarrow E64\ \mathrm{CURRENT}}
 $$
 
 E23与E24-v2已按冻结设计通过；Gate 1已完成：
@@ -2071,7 +2071,7 @@ $$
 E38\text{--}E44\ \mathrm{PASS}\rightarrow E45B\text{-v2 PASS}\rightarrow E48\ \mathrm{PASS}\rightarrow E49\ \mathrm{PASS}
 $$
 
-E27–E37的纯机械资格继续保留；E36-v1、E45-v1、E45-v2、E45A、E45A-v2、E45A-new、E45A-overlap、E25-v2和E25-v3 normal-control FAIL均永久保留。旧E45B已PASS，但只资格旧normal-control分布。$D_{xy}+\alpha$路线、E25-v3逐对象五维条件复制路线和全部E45A后续演化均已终止。E25-new、E26-v2、E38–E44刷新、E45B-v2、E48、E49、E50–E58与E61–E62已经PASS，E59/E60描述性聚合已经完成。E46已降为非阻断诊断；当前正式节点是E63。
+E27–E37的纯机械资格继续保留；E36-v1、E45-v1、E45-v2、E45A、E45A-v2、E45A-new、E45A-overlap、E25-v2和E25-v3 normal-control FAIL均永久保留。旧E45B已PASS，但只资格旧normal-control分布。$D_{xy}+\alpha$路线、E25-v3逐对象五维条件复制路线和全部E45A后续演化均已终止。E25-new、E26-v2、E38–E44刷新、E45B-v2、E48、E49、E50–E58与E61–E63已经PASS，E59/E60描述性聚合已经完成。E46已降为非阻断诊断；当前正式节点是E64。
 
 因此当前整体判断仍是：
 
