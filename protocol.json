@@ -3602,6 +3602,42 @@
     "worlds_file": "dev.json", "sequence_id": 201,
     "in_generator_worlds": 24, "generator_held_out_worlds": 6,
     "held_out_affects_selection": false, "pure_normal_is_separate": true,
+    "safety_sets": {
+      "status": "frozen_before_e61",
+      "pure_normal": {
+        "role": "independent_development_static_normal_safety",
+        "partition": "train", "sequence_id": 201, "frame_range": [4, 681],
+        "range_m": [2.5, 50.0],
+        "eligibility": "real return and raw semantic is nonzero, not 2, and not in 252-259",
+        "expected_points": 48828507,
+        "labels_are_evaluation_only": true
+      },
+      "moving_normal": {
+        "role": "label_blind_training_domain_normal_motion_safety_diagnostic",
+        "partition": "train", "sequence_id": 206, "frame_range": [0, 448],
+        "range_m": [2.5, 50.0], "semantic_ids": [252, 253, 254, 255, 256, 257, 258, 259],
+        "expected_points": 13011, "retain_all_eligible_points": true,
+        "held_out_or_unseen_generalization_claim_forbidden": true,
+        "labels_are_evaluation_only": true
+      },
+      "static_match": {
+        "role": "descriptive_motion_effect_attribution_only",
+        "moving_to_static_semantic": {"252": 10, "253": 31, "254": 30, "255": 32, "256": 16, "257": 13, "258": 18, "259": 20},
+        "range_bin_edges_m": [2.5, 10.0, 20.0, 30.0, 50.0],
+        "cell": ["moving semantic family", "range bin"],
+        "cell_cardinality": "minimum of moving and static candidate counts",
+        "selection": "separate ascending identity-hash ranks within each cell",
+        "identity_hash_namespace": "E61-static-match-v1",
+        "identity_hash_fields": ["sequence_id", "frame_id", "canonical_ray_id"],
+        "replacement": false, "point_reuse": false,
+        "same_frame_matching": false,
+        "forbidden_matching_inputs": ["intensity", "occlusion", "point density", "STU feature", "voxel density", "AJAE score", "STU anomaly score"],
+        "insufficient_cell_coverage_is_nonblocking": true,
+        "unmatched_moving_points_remain_in_moving_safety": true
+      },
+      "pass_conditions": ["pure and moving identities are unique", "eligibility exactly matches the frozen semantic and range rules", "semantic 0 and anomaly 2 are excluded", "static matching is deterministic and without replacement", "all identity hashes reproduce exactly twice", "no model prediction is read", "moving semantic labels never enter model inputs"],
+      "claim_limit": "The 201 set is an independent development normal-safety set. The 206 moving set is a label-blind training-domain subgroup guardrail, not held-out or unseen-motion generalization evidence. Matched moving/static comparisons are descriptive and never gate E61."
+    },
     "qualification": {
       "status": "frozen_before_e57",
       "source_candidate_bank": {

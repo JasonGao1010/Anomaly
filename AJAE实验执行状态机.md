@@ -3456,24 +3456,24 @@ Notes: Repeated-window observations retain shared entity identity. E59/E60 never
 ## E61 | Pure-Normal and Moving-Normal Safety Sets
 
 Experiment ID: E61
-Design-freeze commit/hash: Not executable as currently written. The text fixes the pure-normal frame span and moving semantic IDs but does not fix the moving-subset source sequence or the static-normal matching rule. A versioned pre-result protocol completion is required before implementation or execution.
+Design-freeze commit/hash: Owner-approved pre-result E61 protocol completion; commit pending. This replaces the incomplete source/matching text without observing any model score or E61 output.
 Execution-freeze commit/hash: Not executed.
 Date: Not executed.
 Git commit / clean state: Not applicable.
-Data identities: Proposed pure-normal source is train/201 frames 4–681. The moving source identity and static-normal matched-control identities remain unresolved. Read-only inventory found zero semantics 252–259 in all 682 train/201 frames, but 13,011 such points across 273 of 449 train/206 frames and eight positive moving instances.
+Data identities: Independent pure-normal safety uses all 48,828,507 real train/201 points in frames 4–681 whose float32 Euclidean range is in the inclusive 2.5–50 m interval and whose raw semantic is nonzero, not 2 and not 252–259. Label-blind moving-normal subgroup safety uses all 13,011 train/206 points in frames 0–448 in the same range whose raw semantic is 252–259. Moving labels are evaluation-only; 206 is the training domain, so this subgroup cannot support held-out or unseen-motion generalization claims.
 Input artifact hashes: None.
-Random namespaces / seeds: Frozen identity and matching rules.
-Command and resolved config: Not frozen. Before execution, the protocol must state whether range-valid ignore points are excluded from pure-normal evaluation, bind the moving subset to an actual sequence, and define the static-control eligibility, matching variables, reuse rule, cardinality and deterministic tie-break. Labels remain evaluation-only and forbidden from model inputs.
+Random namespaces / seeds: `E61-static-match-v1`; within each moving-semantic-family × `[2.5,10),[10,20),[20,30),[30,50]` m cell, independently rank moving and corresponding static-semantic candidates by SHA-256 over namespace, sequence, frame and canonical ray identity.
+Command and resolved config: Freeze the full pure-normal and moving-normal identities. Static counterparts map 252→10, 253→31, 254→30, 255→32, 256→16, 257→13, 258→18 and 259→20. In each semantic-family × range cell retain `min(moving,static)` points from both sides by ascending identity hash, without replacement or point reuse. Do not match intensity, occlusion, density, STU features, voxel features, frame identity or model scores. All moving points enter formal moving FPR; matched subsets serve only descriptive moving-versus-static FPR and mean-score differences. Sparse match coverage never FAILs E61. Formal command will be frozen after implementation.
 Resource and disk preflight: Not executed.
 Artifacts and hashes: None.
-Primary construct: Leakage-free pure-normal and moving-normal safety evaluation sets.
+Primary construct: Independent pure-normal development safety set and label-blind moving-normal training-domain subgroup safety diagnostic.
 Primary result: Not executed.
-PASS / FAIL / OUTCOME: OUTCOME — PRE-EXECUTION PROTOCOL INCOMPLETE / NOT EXECUTED.
-Failure classification: Definition incompleteness, not an E61 experimental FAIL.
-Unlocked next node: None until the E61 safety-set identity is completed and frozen before viewing model scores.
+PASS / FAIL / OUTCOME: OUTCOME — PROTOCOL COMPLETED BEFORE RESULTS / NOT EXECUTED.
+Failure classification: Not applicable.
+Unlocked next node: E61 implementation and execution freeze.
 Invalidated downstream evidence: E62 onward remains locked.
-Descriptive observations: In train/201 frames 4–681, the 2.5–50 m inventory contains 74,086,578 real returns: 48,828,507 nonzero non-anomaly static-normal points and 25,258,071 semantic-zero/ignore points, with no semantic-2 or moving-semantic points. Thus “every valid-range point” and “valid labeled normal point” are materially different populations.
-Notes: Moving labels are never model features. The inventory was read-only and used no model predictions; it cannot select the missing protocol rule.
+Descriptive observations: In train/201 frames 4–681, the 2.5–50 m inventory contains 74,086,578 real returns: 48,828,507 eligible static-normal points and 25,258,071 semantic-zero/ignore points, with no semantic-2 or moving-semantic points. Train/206 contains 13,011 eligible moving-normal points across 273 frames and eight positive instances.
+Notes: Matching coverage and moving/static score differences restrict mechanism interpretation only. They cannot remove unmatched points from moving safety, create an E61 FAIL or become model inputs.
 
 ## E62 | Custom Evaluator versus Official Evaluator
 

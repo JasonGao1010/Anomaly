@@ -679,7 +679,7 @@ class AJAEProtocol:
                 "phase6_version", "worlds_file", "sequence_id",
                 "in_generator_worlds", "generator_held_out_worlds",
                 "held_out_affects_selection", "pure_normal_is_separate",
-                "qualification", "fixed_world_evaluation",
+                "safety_sets", "qualification", "fixed_world_evaluation",
                 "checkpoint_selection", "difficulty_statistics",
                 "boundary_leakage_radius_m", "position_score_scale",
             },
@@ -693,6 +693,54 @@ class AJAEProtocol:
             development.get("held_out_affects_selection"),
         ) != ("E57-v2", "dev.json", 201, 24, 6, False):
             raise ProtocolError("development must preserve E57-v2 and the fixed 24+6 split on 201")
+        safety = _mapping(development["safety_sets"], "development.safety_sets")
+        _exact_keys(
+            safety,
+            {"status", "pure_normal", "moving_normal", "static_match",
+             "pass_conditions", "claim_limit"},
+            "development.safety_sets",
+        )
+        pure = _mapping(safety["pure_normal"], "E61 pure-normal safety")
+        moving = _mapping(safety["moving_normal"], "E61 moving-normal safety")
+        match = _mapping(safety["static_match"], "E61 static matching")
+        if (
+            safety.get("status") != "frozen_before_e61"
+            or (pure.get("partition"), pure.get("sequence_id"),
+                tuple(pure.get("frame_range", ())), tuple(pure.get("range_m", ())),
+                pure.get("expected_points"), pure.get("labels_are_evaluation_only"))
+            != ("train", 201, (4, 681), (2.5, 50.0), 48828507, True)
+            or (moving.get("partition"), moving.get("sequence_id"),
+                tuple(moving.get("frame_range", ())), tuple(moving.get("range_m", ())),
+                tuple(moving.get("semantic_ids", ())), moving.get("expected_points"),
+                moving.get("retain_all_eligible_points"),
+                moving.get("held_out_or_unseen_generalization_claim_forbidden"),
+                moving.get("labels_are_evaluation_only"))
+            != ("train", 206, (0, 448), (2.5, 50.0),
+                MOVING_NORMAL_SEMANTICS, 13011, True, True, True)
+        ):
+            raise ProtocolError("E61 pure/moving safety identities changed")
+        expected_mapping = {
+            "252": 10, "253": 31, "254": 30, "255": 32,
+            "256": 16, "257": 13, "258": 18, "259": 20,
+        }
+        if (
+            dict(_mapping(match.get("moving_to_static_semantic"),
+                          "E61 semantic matching")) != expected_mapping
+            or tuple(match.get("range_bin_edges_m", ()))
+            != (2.5, 10.0, 20.0, 30.0, 50.0)
+            or match.get("identity_hash_namespace") != "E61-static-match-v1"
+            or tuple(match.get("identity_hash_fields", ()))
+            != ("sequence_id", "frame_id", "canonical_ray_id")
+            or match.get("replacement") is not False
+            or match.get("point_reuse") is not False
+            or match.get("same_frame_matching") is not False
+            or match.get("insufficient_cell_coverage_is_nonblocking") is not True
+            or match.get("unmatched_moving_points_remain_in_moving_safety") is not True
+            or set(match.get("forbidden_matching_inputs", ()))
+            != {"intensity", "occlusion", "point density", "STU feature",
+                "voxel density", "AJAE score", "STU anomaly score"}
+        ):
+            raise ProtocolError("E61 static matching rule changed")
         qualification = _mapping(
             development["qualification"], "development.qualification"
         )

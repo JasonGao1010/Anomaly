@@ -377,6 +377,19 @@ def test_e59_e60_characterization_is_complete_and_nonblocking() -> None:
     ]
 
 
+def test_e61_safety_identity_protocol_is_frozen_before_scores() -> None:
+    safety = load_protocol(PROTOCOL_PATH).development["safety_sets"]
+    assert safety["pure_normal"]["expected_points"] == 48_828_507
+    assert safety["moving_normal"]["expected_points"] == 13_011
+    assert safety["moving_normal"][
+        "held_out_or_unseen_generalization_claim_forbidden"
+    ] is True
+    match = safety["static_match"]
+    assert match["identity_hash_namespace"] == "E61-static-match-v1"
+    assert match["replacement"] is False
+    assert match["unmatched_moving_points_remain_in_moving_safety"] is True
+
+
 def test_protocol_contains_no_retired_training_route() -> None:
     text = json.dumps(json.loads(PROTOCOL_PATH.read_text()), sort_keys=True)
     for retired in (
