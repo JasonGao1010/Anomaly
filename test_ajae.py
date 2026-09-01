@@ -363,6 +363,20 @@ def test_e58_torus_mechanical_fixture_and_json_round_trip() -> None:
     assert np.max(np.abs(torus.signed_distance(witnesses))) <= 1.0e-12
 
 
+def test_e59_e60_characterization_is_complete_and_nonblocking() -> None:
+    descriptor = np.tile(
+        np.asarray((1.0, 0.0, 2.5, 1.0, 128.0, 0.75, 50.0, 5.0)),
+        (24, 1),
+    )
+    e59, e60 = render_module._phase6_characterization_arrays(descriptor)
+    assert e59["distance_count"].tolist() == [[24, 0, 0, 0], [0, 0, 0, 24]]
+    assert e59["Nvis_count"].tolist() == [[24, 0, 0, 0], [0, 0, 0, 24]]
+    assert e59["occlusion_count"].tolist() == [[24, 0, 0, 0], [0, 0, 0, 24]]
+    assert e60["visible_frame_count"].tolist() == [
+        [24, 0, 0, 0, 0], [0, 0, 0, 0, 24]
+    ]
+
+
 def test_protocol_contains_no_retired_training_route() -> None:
     text = json.dumps(json.loads(PROTOCOL_PATH.read_text()), sort_keys=True)
     for retired in (

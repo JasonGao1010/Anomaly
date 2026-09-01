@@ -18099,6 +18099,168 @@ def run_e58_qualification(
     return result
 
 
+def _phase6_characterization_arrays(
+    descriptor: np.ndarray,
+) -> tuple[dict[str, np.ndarray], dict[str, np.ndarray]]:
+    """Aggregate frozen E57 descriptors without rerendering or reselection."""
+
+    values = np.asarray(descriptor, dtype=np.float64)
+    if values.shape != (24, 8) or not np.isfinite(values).all():
+        raise RenderError("E59/E60 require the finite 24-by-8 E57 descriptor")
+    shaped = values.reshape(24, 2, 4)
+    nvis, occlusion, distance, visible_frames = np.moveaxis(shaped, 2, 0)
+    if (
+        np.any(nvis < 1.0)
+        or np.any((occlusion < 0.0) | (occlusion > 1.0))
+        or np.any((distance < 2.5) | (distance > 50.0))
+        or np.any((visible_frames < 1.0) | (visible_frames > 5.0))
+        or not np.array_equal(visible_frames, np.floor(visible_frames))
+    ):
+        raise RenderError("E59/E60 E57 descriptors are outside frozen domains")
+    distance_bin = np.digitize(distance, (10.0, 20.0, 30.0)).astype(np.int8)
+    nvis_bin = np.digitize(nvis, (8.0, 32.0, 128.0)).astype(np.int8)
+    occlusion_bin = np.digitize(
+        occlusion, (0.25, 0.50, 0.75)
+    ).astype(np.int8)
+    distance_count = np.stack([
+        np.bincount(distance_bin[:, label], minlength=4)
+        for label in range(2)
+    ]).astype(np.int16)
+    nvis_count = np.stack([
+        np.bincount(nvis_bin[:, label], minlength=4)
+        for label in range(2)
+    ]).astype(np.int16)
+    occlusion_count = np.stack([
+        np.bincount(occlusion_bin[:, label], minlength=4)
+        for label in range(2)
+    ]).astype(np.int16)
+    v_count = np.stack([
+        np.bincount(
+            visible_frames[:, label].astype(np.int64), minlength=6
+        )[1:6]
+        for label in range(2)
+    ]).astype(np.int16)
+    common = {
+        "Nvis": nvis,
+        "occlusion": occlusion,
+        "distance_m": distance,
+        "visible_frames": visible_frames.astype(np.int8),
+    }
+    e59 = {
+        **common,
+        "distance_bin": distance_bin,
+        "Nvis_bin": nvis_bin,
+        "occlusion_bin": occlusion_bin,
+        "distance_count": distance_count,
+        "Nvis_count": nvis_count,
+        "occlusion_count": occlusion_count,
+    }
+    e60 = {**common, "visible_frame_count": v_count}
+    return e59, e60
+
+
+def run_e59_e60_characterization(
+    e57_path: Path | str,
+    e59_output_path: Path | str,
+    e60_output_path: Path | str,
+) -> dict[str, object]:
+    """Write both nonblocking Phase-6 characterizations from one E57 read."""
+
+    source_path = Path(e57_path).expanduser().resolve(strict=True)
+    source_hash = _sha256_path(source_path)
+    if source_hash != FROZEN_E57_ARTIFACT_SHA256:
+        raise RenderError("E59/E60 E57-v2 input identity changed")
+    with np.load(source_path, allow_pickle=False) as source:
+        metadata = json.loads(str(source["metadata_json"]))
+        source_arrays = {
+            name: np.asarray(source[name])
+            for name in source.files if name != "metadata_json"
+        }
+    if (
+        metadata.get("experiment") != "E57-v2"
+        or metadata.get("passed") is not True
+        or metadata.get("scientific_array_hash")
+        != _scientific_array_hash(source_arrays)
+    ):
+        raise RenderError("E59/E60 received invalid E57-v2 evidence")
+    e59, e60 = _phase6_characterization_arrays(
+        source_arrays["selected_descriptor"]
+    )
+    identity = {
+        "world_id": np.asarray(source_arrays["selected_world_id"], dtype=np.int16),
+        "center_frame": np.asarray(
+            source_arrays["selected_center_frame"], dtype=np.int16
+        ),
+        "object_id": np.asarray(
+            source_arrays["selected_object_id"], dtype=np.int16
+        ),
+        "candidate_sha256": np.asarray(
+            source_arrays["selected_candidate_sha256"], dtype="S64"
+        ),
+        "label": np.asarray(("normal-control", "anomaly-proxy"), dtype="U16"),
+    }
+    e59 = {**identity, **e59}
+    e60 = {**identity, **e60}
+    if (
+        not all(np.sum(e59[name], axis=1).tolist() == [24, 24]
+                for name in ("distance_count", "Nvis_count", "occlusion_count"))
+        or np.sum(e60["visible_frame_count"], axis=1).tolist() != [24, 24]
+    ):
+        raise RenderError("E59/E60 count conservation failed")
+    shared = {
+        "e57_artifact_sha256": source_hash,
+        "e57_scientific_array_hash": metadata["scientific_array_hash"],
+        "worlds": 24,
+        "units_per_label": 24,
+        "labels": ["normal-control", "anomaly-proxy"],
+        "rerendered_worlds": 0,
+        "model_scores_read": False,
+        "scientific_fail_verdict": False,
+        "claim_limit": (
+            "Descriptive marginal support only; sparse bins limit interpretation "
+            "but cannot block E61 or training."
+        ),
+    }
+    e59_result = {
+        "experiment": "E59",
+        "completed": True,
+        **shared,
+        "distance_count": e59["distance_count"].tolist(),
+        "Nvis_count": e59["Nvis_count"].tolist(),
+        "occlusion_count": e59["occlusion_count"].tolist(),
+        "scientific_array_hash": _scientific_array_hash(e59),
+    }
+    e60_result = {
+        "experiment": "E60",
+        "completed": True,
+        **shared,
+        "visible_frame_count": e60["visible_frame_count"].tolist(),
+        "scientific_array_hash": _scientific_array_hash(e60),
+    }
+    destinations = (
+        Path(e59_output_path).expanduser().resolve(),
+        Path(e60_output_path).expanduser().resolve(),
+    )
+    temporaries = tuple(
+        path.with_suffix(path.suffix + ".tmp.npz") for path in destinations
+    )
+    for path in destinations:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    for temporary, arrays, result in zip(
+        temporaries, (e59, e60), (e59_result, e60_result), strict=True
+    ):
+        np.savez_compressed(
+            temporary,
+            **arrays,
+            metadata_json=np.asarray(
+                json.dumps(result, sort_keys=True, separators=(",", ":"))
+            ),
+        )
+    for temporary, destination in zip(temporaries, destinations, strict=True):
+        os.replace(temporary, destination)
+    return {"E59": e59_result, "E60": e60_result}
+
+
 _E45A2_TARGET_UNITS: dict[str, np.ndarray] = {}
 _E45A2_SUPPORT_ROWS: tuple[np.ndarray, ...] = ()
 
@@ -18820,6 +18982,10 @@ def _render_parser() -> argparse.ArgumentParser:
     e58.add_argument("--calibration", type=Path, required=True)
     e58.add_argument("--output", type=Path, required=True)
     e58.add_argument("--processes", type=int, default=24)
+    e59_e60 = subcommands.add_parser("characterize-e59-e60")
+    e59_e60.add_argument("--e57", type=Path, required=True)
+    e59_e60.add_argument("--e59-output", type=Path, required=True)
+    e59_e60.add_argument("--e60-output", type=Path, required=True)
     e45a2 = subcommands.add_parser("qualify-e45a-v2")
     e45a2.add_argument("--data-root", type=Path, required=True)
     e45a2.add_argument("--support-pool", type=Path, required=True)
@@ -19043,6 +19209,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 0 if result["passed"] else 1
+    if args.command == "characterize-e59-e60":
+        result = run_e59_e60_characterization(
+            args.e57, args.e59_output, args.e60_output
+        )
+        print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        return 0
     if args.command == "qualify-e45a-v2":
         result = run_e45a_v2_qualification(
             args.data_root, args.support_pool, args.e25_artifact,
