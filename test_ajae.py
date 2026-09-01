@@ -1672,32 +1672,6 @@ def test_phase7_mechanical_fixtures_all_pass_and_reproduce() -> None:
         assert int(first[f"e{node}_error_count"].sum()) == 0
 
 
-def test_world_budget_exhaustion_cannot_publish_a_completed_model(
-    tmp_path: Path,
-) -> None:
-    trainer = object.__new__(AJAETrainer)
-    trainer.best_state = {}
-    trainer.best_key = (0.5, -0.2)
-    trainer.stop_reason = "maximum_worlds"
-    with pytest.raises(TrainingError, match="development-patience"):
-        trainer._finalize()
-
-    trainer.phase = "between_worlds"
-    trainer.commit_id = 3
-    trainer.run_dir = tmp_path
-    trainer.condition = experiment_condition("B1")
-    trainer.seed = 0
-    trainer.maximum_worlds = 20
-    trainer.resume_world = 20
-    trainer.best_world = 14
-    trainer.scientific_identity = {"protocol_schema": 30}
-    trainer.history = []
-    trainer.save_progress = lambda: None
-    result = trainer._record_budget_exhaustion()
-    assert result["status"] == "budget_exhausted_unfinished"
-    assert not (tmp_path / "model.pt").exists()
-
-
 def test_formal_preflight_refuses_pending_evidence() -> None:
     protocol = load_protocol(PROTOCOL_PATH)
     with pytest.raises(ProtocolError, match="authoritative WorldSpec"):

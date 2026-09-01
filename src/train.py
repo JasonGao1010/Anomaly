@@ -423,6 +423,7 @@ def _require_preflight_proof(
     ):
         raise TrainingError("preflight proof uses a different training config")
     selection = proof.checkpoint_selection
+    selection = _plain_json_object("checkpoint selection", selection)
     _checkpoint_selection_tolerance(selection)
     if proof.maximum_worlds < len(config.world_type_cycle):
         raise TrainingError(
@@ -1084,8 +1085,11 @@ class AJAETrainer:
         self.next_window = next_window
         assert self.block_order is not None
         self.phase = "world_complete" if next_block == len(self.block_order) else "windows"
-        self.commit_id += 1
-        self.save_progress()
+        # Persist only completed deterministic blocks. A crash inside a block
+        # resumes from its pre-block checkpoint and recomputes identical work.
+        if next_window == 0:
+            self.commit_id += 1
+            self.save_progress()
 
     def train_world(
         self,
@@ -1373,7 +1377,6 @@ class AJAETrainer:
             "development_pending",
             "between_worlds",
             "finalizing",
-            "budget_exhausted",
         }:
             raise TrainingError("progress checkpoint has an unknown phase")
         cursor = payload.get("cursor")
@@ -1526,9 +1529,9 @@ class AJAETrainer:
     def _finalize(self) -> dict[str, Any]:
         if self.best_state is None or self.best_key is None:
             raise TrainingError("training ended before any fixed development evaluation")
-        if self.stop_reason != "development_patience":
+        if self.stop_reason not in {"development_patience", "maximum_worlds"}:
             raise TrainingError(
-                "formal finalization requires the frozen development-patience rule"
+                "formal finalization requires patience or the frozen world budget"
             )
         self.model.load_state_dict(self.best_state, strict=True)
         if self.phase != "finalizing":
@@ -1590,32 +1593,6 @@ class AJAETrainer:
         _fsync_parent(progress)
         return result
 
-    def _record_budget_exhaustion(self) -> dict[str, Any]:
-        """Preserve resumable state without publishing an unfinished model."""
-
-        self.stop_reason = "maximum_worlds"
-        self.phase = "budget_exhausted"
-        self.commit_id += 1
-        self.save_progress()
-        result = {
-            "format": RUN_FORMAT,
-            "status": "budget_exhausted_unfinished",
-            "training_condition": self.condition.to_dict(),
-            "condition": self.condition.to_dict(),
-            "seed": self.seed,
-            "stop_reason": self.stop_reason,
-            "maximum_worlds": self.maximum_worlds,
-            "completed_worlds": self.resume_world,
-            "best_world": self.best_world if self.best_state is not None else None,
-            "best_selection_key": (
-                None if self.best_key is None else list(self.best_key)
-            ),
-            "scientific_identity": self.scientific_identity,
-            "history": self.history,
-        }
-        _atomic_json(self.run_dir / "result.json", result)
-        return result
-
     def fit(
         self,
         world_factory: Callable[[str, int], object],
@@ -1633,10 +1610,6 @@ class AJAETrainer:
         self.maximum_worlds = maximum_worlds
         if self.phase == "finalizing":
             return self._finalize()
-        if self.phase == "budget_exhausted":
-            raise TrainingError(
-                "the frozen world budget was exhausted; this run is scientifically unfinished"
-            )
         if maximum_worlds <= start_world:
             raise ValueError("maximum_worlds must exceed start_world")
         if self.phase != "between_worlds" and start_world != self.resume_world:
@@ -1721,11 +1694,13 @@ class AJAETrainer:
             if self.stop_reason == "development_patience":
                 return self._finalize()
             if world_index >= maximum_worlds:
-                return self._record_budget_exhaustion()
+                self.stop_reason = "maximum_worlds"
+                return self._finalize()
             self.phase = "between_worlds"
             self.commit_id += 1
             self.save_progress()
-        return self._record_budget_exhaustion()
+        self.stop_reason = "maximum_worlds"
+        return self._finalize()
 
 
 @dataclass(frozen=True, slots=True)
@@ -1741,9 +1716,281 @@ class FormalTrainingBuild:
     ray_mapping_digest: str
 
 
-_AUTHORITATIVE_DEVELOPMENT_EVALUATOR: Callable[
-    [nn.Module, int, int, ExperimentCondition], DevelopmentEvidence
-] | None = None
+class E63B1DevelopmentEvaluator:
+    """Evaluate B1 on the frozen E57 worlds and E61 pure-normal set."""
+
+    def __init__(
+        self,
+        *,
+        protocol: object,
+        project_root: Path,
+        data_root: Path | str,
+        device: torch.device,
+        encoder: nn.Module,
+        grid: object,
+        sensor: object,
+        canonical_by_slot: np.ndarray,
+    ) -> None:
+        try:
+            from .scene import LabelMode, STUSequence
+        except ImportError:  # pragma: no cover
+            from scene import LabelMode, STUSequence  # type: ignore[no-redef]
+        development = getattr(protocol, "development")
+        freeze = development["e63_freeze"]
+        e57_record = freeze["source_worlds"]
+        e63_record = freeze["identity_artifact"]
+        safety = development["safety_sets"]
+        e57_path = project_root / e57_record["artifact"]
+        e63_path = project_root / e63_record["path"]
+        e61_path = project_root / "runs/ajae/e61_safety_identities.npz"
+        if (
+            _sha256_file(e57_path) != e57_record["artifact_sha256"]
+            or _sha256_file(e63_path) != e63_record["artifact_sha256"]
+            or _sha256_file(e61_path)
+            != "8d3e08e0512dc70a75d2279cfb4515bc960bbfda4f35a872c4a76e9dad69d0e0"
+        ):
+            raise TrainingError("E63 development evaluator input identity changed")
+        with np.load(e57_path, allow_pickle=False) as archive:
+            self.world_id = np.asarray(archive["selected_world_id"], dtype=np.int16)
+            self.center = np.asarray(
+                archive["selected_center_frame"], dtype=np.int16
+            )
+            self.world_json = np.asarray(archive["selected_world_json"])
+        with np.load(e63_path, allow_pickle=False) as archive:
+            self.eligible = np.asarray(
+                archive["common_domain_eligible"], dtype=np.bool_
+            )
+            self.fold = np.asarray(archive["safety_fold"])
+        with np.load(e61_path, allow_pickle=False) as archive:
+            self.pure_frame_id = np.asarray(
+                archive["pure_frame_id"], dtype=np.int16
+            )
+            self.pure_mask_packed = np.asarray(
+                archive["pure_canonical_mask_packed"], dtype=np.uint8
+            )
+            self.pure_count = np.asarray(
+                archive["pure_point_count_by_frame"], dtype=np.int32
+            )
+        if (
+            self.world_id.shape != (24,)
+            or int(self.eligible.sum()) != 23
+            or self.fold.shape != (24,)
+            or int(self.pure_count.sum()) != int(safety["pure_normal"]["expected_points"])
+        ):
+            raise TrainingError("E63 development evaluator counts changed")
+        self.protocol = protocol
+        self.device = device
+        self.encoder = encoder.eval()
+        for parameter in self.encoder.parameters():
+            parameter.requires_grad_(False)
+        self.grid = grid
+        self.sensor = sensor
+        self.canonical_by_slot = np.asarray(canonical_by_slot, dtype=np.int32)
+        self.sequence = STUSequence.open(
+            data_root,
+            protocol=protocol,
+            partition="train",
+            sequence_id=201,
+            label_mode=LabelMode.REQUIRED,
+        )
+        self._development_inputs: list[dict[str, object]] | None = None
+        self.scientific_identity = {
+            "version": "E63-B1-fixed-development-evaluator-v1",
+            "e57_artifact_sha256": e57_record["artifact_sha256"],
+            "e63_artifact_sha256": e63_record["artifact_sha256"],
+            "e61_artifact_sha256": "8d3e08e0512dc70a75d2279cfb4515bc960bbfda4f35a872c4a76e9dad69d0e0",
+            "eligible_world_ids": self.world_id[self.eligible].astype(int).tolist(),
+            "target": "q=0",
+            "threshold_rule": "official first ROC threshold with TPR strictly greater than 0.95",
+            "pure_normal_cross_fit": "mean FPR on the complete E61 pure-normal set under the two opposite-fold proxy thresholds",
+            "threshold_comparison": "score strictly greater than threshold",
+        }
+
+    @staticmethod
+    def _frame_seed(sequence_id: int, frame_id: int) -> int:
+        payload = f"E53-STU-query-v1:train:{sequence_id}:{frame_id}".encode("ascii")
+        return int.from_bytes(hashlib.sha256(payload).digest()[:8], "little") % (
+            2**63 - 1
+        )
+
+    def _encode(self, source: object) -> dict[str, Tensor]:
+        seed = self._frame_seed(
+            int(getattr(source, "sequence_id")), int(getattr(source, "frame_id"))
+        )
+        torch.manual_seed(seed)
+        if self.device.type == "cuda":
+            torch.cuda.manual_seed_all(seed)
+        with torch.no_grad():
+            encoding = self.encoder(
+                getattr(source, "coordinates"),
+                getattr(source, "features"),
+                getattr(source, "real_slots"),
+            )
+        slots = np.asarray(getattr(source, "real_slots"), dtype=np.int64)
+        encoded_slots = getattr(encoding, "real_slots")
+        if isinstance(encoded_slots, Tensor):
+            encoded_slots = encoded_slots.detach().cpu().numpy()
+        if not np.array_equal(np.asarray(encoded_slots, dtype=np.int64), slots):
+            raise TrainingError("development STU output changed point order")
+        return {
+            "stu_features": getattr(encoding, "point_features").detach().cpu(),
+            "normal_evidence": getattr(encoding, "normal_evidence").detach().cpu(),
+            "assignment": getattr(encoding, "reliability_assign").detach().cpu(),
+            "no_object": getattr(encoding, "reliability_noobj").detach().cpu(),
+        }
+
+    def _input(self, source: object) -> dict[str, object]:
+        slots = np.asarray(getattr(source, "real_slots"), dtype=np.int64)
+        result: dict[str, object] = self._encode(source)
+        xyzi = np.asarray(getattr(source, "xyzi"))[slots]
+        result.update(
+            coordinates=torch.as_tensor(xyzi[:, :3].copy()),
+            intensity=torch.as_tensor(xyzi[:, 3].copy()),
+            slots=slots,
+        )
+        return result
+
+    def _scores(self, model: nn.Module, inputs: Mapping[str, object]) -> np.ndarray:
+        coordinates = inputs["coordinates"]
+        if not isinstance(coordinates, Tensor):
+            raise TrainingError("development coordinates are invalid")
+        count = int(coordinates.shape[0])
+        with torch.no_grad():
+            logits = model(
+                coordinates.to(self.device),
+                torch.zeros(count, dtype=torch.long, device=self.device),
+                inputs["stu_features"].to(self.device),
+                inputs["normal_evidence"].to(self.device),
+                inputs["assignment"].to(self.device),
+                inputs["no_object"].to(self.device),
+                inputs["intensity"].to(self.device),
+                cross_frame_enabled=False,
+            )
+        if logits.shape != (count,) or not bool(torch.isfinite(logits).all()):
+            raise TrainingError("development model logits are invalid")
+        return torch.sigmoid(logits).detach().cpu().numpy().astype(np.float32)
+
+    def _prepare_development(self) -> list[dict[str, object]]:
+        if self._development_inputs is not None:
+            return self._development_inputs
+        try:
+            from .render import WorldSpec, render_frame
+        except ImportError:  # pragma: no cover
+            from render import WorldSpec, render_frame  # type: ignore[no-redef]
+        prepared: list[dict[str, object]] = []
+        for row in np.flatnonzero(self.eligible):
+            world = WorldSpec.from_dict(json.loads(str(self.world_json[row])))
+            rendered = render_frame(
+                self.sequence.source_frame(int(self.center[row])),
+                world,
+                self.grid,
+                self.sensor,
+            )
+            source = rendered.source
+            item = self._input(source)
+            slots = np.asarray(item["slots"], dtype=np.int64)
+            item.update(
+                world_id=int(self.world_id[row]),
+                fold=bytes(self.fold[row]).decode("ascii"),
+                xyz=np.asarray(source.xyzi)[slots, :3].copy(),
+                semantic=np.asarray(rendered.packed_labels, dtype=np.uint32)[slots]
+                & np.uint32(0xFFFF),
+                control=np.asarray(rendered.normal_control_mask, dtype=np.bool_)[slots],
+                proxy=np.asarray(rendered.anomaly_proxy_mask, dtype=np.bool_)[slots],
+            )
+            prepared.append(item)
+        self._development_inputs = prepared
+        return prepared
+
+    def __call__(
+        self,
+        model: nn.Module,
+        world_index: int,
+        seed: int,
+        condition: ExperimentCondition,
+    ) -> DevelopmentEvidence:
+        del world_index, seed
+        if condition.name != "B1":
+            raise TrainingError("this evaluator instance is bound to B1")
+        try:
+            from .evaluate import PointMetricAccumulator
+        except ImportError:  # pragma: no cover
+            from evaluate import PointMetricAccumulator  # type: ignore[no-redef]
+        cpu_rng = torch.get_rng_state()
+        cuda_rng = torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None
+        was_training = model.training
+        model.eval()
+        try:
+            metrics: list[DevelopmentWorldMetrics] = []
+            fold_accumulator = {
+                "A": PointMetricAccumulator(self.protocol),
+                "B": PointMetricAccumulator(self.protocol),
+            }
+            for item in self._prepare_development():
+                scores = self._scores(model, item)
+                accumulator = PointMetricAccumulator(self.protocol)
+                accumulator.update(item["xyz"], scores, item["semantic"])
+                result = accumulator.compute()
+                if result.get("accepted_frames") != 1:
+                    raise TrainingError("one development world was not accepted")
+                metrics.append(
+                    DevelopmentWorldMetrics(
+                        int(item["world_id"]),
+                        {
+                            "AP": float(result["AP"]),
+                            "AUROC": float(result["AUROC"]),
+                            "FPR95": float(result["FPR95"]),
+                        },
+                    )
+                )
+                fold_accumulator[str(item["fold"])].update(
+                    item["xyz"], scores, item["semantic"]
+                )
+            thresholds = {
+                fold: float(accumulator.compute()["threshold"])
+                for fold, accumulator in fold_accumulator.items()
+            }
+            alarm = {"A": 0, "B": 0}
+            total = 0
+            for row, frame_id in enumerate(self.pure_frame_id.tolist()):
+                expected = int(self.pure_count[row])
+                if expected == 0:
+                    continue
+                source = self.sequence.source_frame(int(frame_id))
+                inputs = self._input(source)
+                scores = self._scores(model, inputs)
+                slots = np.asarray(inputs["slots"], dtype=np.int64)
+                full = np.zeros(int(getattr(source, "slot_count")), dtype=np.float32)
+                full[slots] = scores
+                canonical_mask = np.unpackbits(
+                    self.pure_mask_packed[row], bitorder="little"
+                )[: self.canonical_by_slot.size]
+                selected_slots = np.flatnonzero(
+                    canonical_mask[self.canonical_by_slot]
+                )
+                if selected_slots.size != expected:
+                    raise TrainingError("E61 pure-normal mask count changed")
+                selected_scores = full[selected_slots]
+                alarm["A"] += int(np.count_nonzero(selected_scores > thresholds["A"]))
+                alarm["B"] += int(np.count_nonzero(selected_scores > thresholds["B"]))
+                total += expected
+            if total != 48_828_507:
+                raise TrainingError("pure-normal development count changed")
+            cross_fit_fpr = 0.5 * (alarm["A"] + alarm["B"]) / total
+            return DevelopmentEvidence(
+                tuple(sorted(metrics, key=lambda item: item.world_id)),
+                {
+                    "cross_fit_FPR": float(cross_fit_fpr),
+                    "threshold_A": thresholds["A"],
+                    "threshold_B": thresholds["B"],
+                    "pure_normal_points": float(total),
+                },
+            )
+        finally:
+            model.train(was_training)
+            torch.set_rng_state(cpu_rng)
+            if cuda_rng is not None:
+                torch.cuda.set_rng_state_all(cuda_rng)
 
 
 def build_formal_training(
@@ -1769,31 +2016,10 @@ def build_formal_training(
         raise TrainingError(
             "maximum_worlds must equal the protocol-frozen training limit"
         )
-    authoritative_evaluator = _AUTHORITATIVE_DEVELOPMENT_EVALUATOR
-    if authoritative_evaluator is None:
+    if development_evaluator is not None:
         raise TrainingError(
-            "formal training cannot start: no reusable fixed-201 development "
-            "evaluator is bound; checkpoint selection requires 24 in-generator "
-            "per-world metrics plus independent pure-normal statistics"
+            "formal training constructs its identity-bound E63 evaluator internally"
         )
-    if (
-        development_evaluator is not None
-        and development_evaluator is not authoritative_evaluator
-    ):
-        raise TrainingError(
-            "formal training accepts only the repository-authoritative fixed-201 evaluator"
-        )
-    development_evaluator = authoritative_evaluator
-    raw_evaluator_identity = getattr(
-        development_evaluator, "scientific_identity", None
-    )
-    if not isinstance(raw_evaluator_identity, Mapping) or not raw_evaluator_identity:
-        raise TrainingError(
-            "the authoritative fixed-201 evaluator lacks a scientific identity"
-        )
-    evaluator_scientific_identity = _plain_json_object(
-        "development evaluator identity", raw_evaluator_identity
-    )
     if data_root is None:
         raise TrainingError("formal training requires the STU data root")
     try:
@@ -1964,6 +2190,28 @@ def build_formal_training(
     )
     precompute_coverage_control_support_streams(
         control_context, normal_templates
+    )
+
+    if condition.name != "B1":
+        raise TrainingError(
+            "the current formal evaluator implementation is qualified only for B1"
+        )
+    evaluator_encoder = FrozenSTUPointEncoder.from_protocol(
+        protocol, project_root=project_root
+    ).to(runtime_device)
+    development_evaluator = E63B1DevelopmentEvaluator(
+        protocol=protocol,
+        project_root=project_root,
+        data_root=data_root,
+        device=runtime_device,
+        encoder=evaluator_encoder,
+        grid=ray_grid,
+        sensor=sensor,
+        canonical_by_slot=canonical_ray_by_slot,
+    )
+    raw_evaluator_identity = development_evaluator.scientific_identity
+    evaluator_scientific_identity = _plain_json_object(
+        "development evaluator identity", raw_evaluator_identity
     )
 
     def world_factory(world_type: str, seed: int) -> object:
@@ -2376,6 +2624,102 @@ def validate_formal_preflight(
     )
 
 
+def validate_e63_formal_preflight(protocol: object) -> FormalPreflightProof:
+    """Bind formal training to E57/E63 instead of the retired dev.json."""
+
+    development = getattr(protocol, "development", None)
+    training = getattr(protocol, "training", None)
+    decision_gates = getattr(protocol, "decision_gates", None)
+    if not isinstance(development, Mapping) or not isinstance(training, Mapping):
+        raise TrainingError("formal protocol lacks development or training rules")
+    freeze = development.get("e63_freeze")
+    selection = development.get("checkpoint_selection")
+    fixed = development.get("fixed_world_evaluation")
+    if (
+        not isinstance(freeze, Mapping)
+        or freeze.get("status") != "formal_pass"
+        or not isinstance(selection, Mapping)
+        or not isinstance(fixed, Mapping)
+        or fixed.get("status") != "frozen_before_training"
+    ):
+        raise TrainingError("E63 formal identities are not complete")
+    selection = _plain_json_object("checkpoint selection", selection)
+    _checkpoint_selection_tolerance(selection)
+    project_root = Path(getattr(protocol, "path")).parent
+    source = freeze.get("source_worlds")
+    identity = freeze.get("identity_artifact")
+    smoke = training.get("e73_smoke")
+    if (
+        not isinstance(source, Mapping)
+        or not isinstance(identity, Mapping)
+        or not isinstance(smoke, Mapping)
+        or smoke.get("status") != "formal_pass"
+    ):
+        raise TrainingError("E57, E63, or E73 formal identity is missing")
+    e57_path = project_root / str(source["artifact"])
+    e63_path = project_root / str(identity["path"])
+    e73_result = smoke.get("result")
+    if not isinstance(e73_result, Mapping):
+        raise TrainingError("E73 formal result is missing")
+    e73_path = project_root / str(e73_result["path"])
+    for name, path, expected in (
+        ("E57", e57_path, source.get("artifact_sha256")),
+        ("E63", e63_path, identity.get("artifact_sha256")),
+        ("E73", e73_path, e73_result.get("artifact_sha256")),
+    ):
+        if not path.is_file() or _sha256_file(path) != expected:
+            raise TrainingError(f"{name} formal artifact identity changed")
+    with np.load(e57_path, allow_pickle=False) as archive:
+        world_ids = np.asarray(archive["selected_world_id"], dtype=np.int16)
+        world_json = np.asarray(archive["selected_world_json"])
+    with np.load(e63_path, allow_pickle=False) as archive:
+        frozen_ids = np.asarray(archive["world_id"], dtype=np.int16)
+        eligible = np.asarray(archive["common_domain_eligible"], dtype=np.bool_)
+        folds = np.asarray(archive["safety_fold"])
+    if (
+        not np.array_equal(world_ids, np.arange(24, dtype=np.int16))
+        or not np.array_equal(world_ids, frozen_ids)
+        or world_json.shape != (24,)
+        or eligible.shape != (24,)
+        or int(eligible.sum()) != 23
+        or world_ids[~eligible].tolist() != [5]
+        or folds.shape != (24,)
+        or int(np.count_nonzero(folds == b"A")) != 12
+        or int(np.count_nonzero(folds == b"B")) != 12
+    ):
+        raise TrainingError("E57/E63 development identity arrays changed")
+    criteria = (
+        decision_gates.get("criteria")
+        if isinstance(decision_gates, Mapping)
+        else None
+    )
+    if not isinstance(criteria, Mapping) or criteria.get("status") != (
+        "frozen_before_training"
+    ):
+        raise TrainingError("scientific decision criteria are not frozen")
+    config = TrainConfig.from_protocol(protocol)
+    converter = getattr(protocol, "plain_document", None)
+    document = converter() if callable(converter) else None
+    if not isinstance(document, Mapping):
+        raise TrainingError("protocol does not expose its complete document")
+    development_identity = {
+        "version": "E63-v2-formal-training-input-v1",
+        "e57_path": str(e57_path),
+        "e57_sha256": source["artifact_sha256"],
+        "e63_path": str(e63_path),
+        "e63_sha256": identity["artifact_sha256"],
+        "eligible_world_ids": world_ids[eligible].astype(int).tolist(),
+        "safety_fold": [bytes(value).decode("ascii") for value in folds],
+    }
+    return FormalPreflightProof(
+        _FORMAL_PREFLIGHT_SEAL,
+        _canonical_json_object("protocol", document),
+        _canonical_json_object("E63 development identity", development_identity),
+        _canonical_json_object("checkpoint selection", selection),
+        _canonical_json_object("training config", asdict(config)),
+    )
+
+
 def run_formal_training(
     protocol_path: Path | str = Path("protocol.json"),
     *,
@@ -2393,35 +2737,16 @@ def run_formal_training(
     """Run formal training only after validating the exact frozen inputs."""
 
     try:
-        from .protocol import load_development_worlds, load_protocol
+        from .protocol import load_protocol
     except ImportError:  # pragma: no cover - direct script execution
-        from protocol import load_development_worlds, load_protocol
+        from protocol import load_protocol
 
     protocol = load_protocol(protocol_path)
-    authoritative_development_path = (
-        protocol.development_worlds_path().expanduser().resolve(strict=True)
-    )
-    selected_development_path = (
-        authoritative_development_path
-        if development_path is None
-        else Path(development_path).expanduser().resolve(strict=True)
-    )
-    development_worlds = load_development_worlds(
-        selected_development_path,
-        protocol=protocol,
-    )
-    development_document = json.loads(
-        Path(selected_development_path).read_text(encoding="utf-8")
-    )
-    preflight = validate_formal_preflight(
-        protocol,
-        development_worlds,
-        development_document,
-    )
-    if selected_development_path != authoritative_development_path:
+    if development_path is not None:
         raise TrainingError(
-            "formal training must use the protocol-authoritative development worlds"
+            "formal training uses the E57/E63 artifacts; retired dev.json overrides are forbidden"
         )
+    preflight = validate_e63_formal_preflight(protocol)
     condition = experiment_condition(condition_name)
     build = build_formal_training(
         protocol,

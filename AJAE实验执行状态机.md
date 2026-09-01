@@ -3768,24 +3768,24 @@ Notes: Smoke performance is not scientific evidence or a tuning signal. The firs
 ## E74 | B1 Three Independent Training Seeds
 
 Experiment ID: E74
-Design-freeze commit/hash: E63 budget and selection rules.
-Execution-freeze commit/hash: Not executed.
-Date: Not executed.
-Git commit / clean state: Not applicable.
+Design-freeze commit/hash: E63-v2 budget and selection rules remain unchanged.
+Execution-freeze commit/hash: E57/E63 formal preflight, fixed E57 q=0 B1 evaluator, E61 pure-normal cross-threshold evaluator, deterministic training and resumable block checkpoints implemented in `src/train.py`; commit/hash pending.
+Date: 2026-09-01 execution identity frozen; formal run pending.
+Git commit / clean state: Pre-execution working tree; untracked user-owned `PPT/` remains excluded.
 Data identities: Training seeds 0, 1, 2 under identical data/config/budget.
-Input artifact hashes: E63 protocol and E73 implementation required.
+Input artifact hashes: E57 `b14efc1aad86ac67b5bf7c8631f02b2e68664e071b747b7b210d5f7a30f5d123`; E61 `8d3e08e0512dc70a75d2279cfb4515bc960bbfda4f35a872c4a76e9dad69d0e0`; E63 `5dbf99eaa59a05a83774e42beb6b8d7a95cf9309ebd42ab7870604a20d410dd9`; E73 `7d4eed7af2207cfffe10501cbbcf582f6a16c3fd1f258351a299f32dc540cff3`; frozen STU and calibration identities inherited.
 Random namespaces / seeds: 0, 1, 2.
-Command and resolved config: Complete all seeds with identical configuration and budget. PASS requires all complete, unique checkpoint selection, unchanged STU hash, and complete lineage. If a purely mechanical failure occurs with unchanged protocol, rerun only the invalid seed.
-Resource and disk preflight: Not executed.
-Artifacts and hashes: None.
+Command and resolved config: Complete seeds 0, 1 and 2 sequentially with deterministic CUDA algorithms, identical B1 configuration and budget. Each evaluation renders the 23 E63-eligible E57 worlds at q=0, reports official-equivalent per-world AP/AUROC/FPR95 and selects checkpoints by E63's macro rule. Fold A and Fold B each provide the official first `TPR>0.95` proxy threshold; the pure-normal tie-break is the mean FPR on the complete 48,828,507-point E61 pure-normal set under those two thresholds, using strict `score>threshold`. Threshold fitting never reads E58 or real-OOD data. The retired `dev.json` is prohibited. Reaching patience or the frozen 40-world ceiling publishes the unique best checkpoint; the ceiling is a valid maximum-budget stop, not an unfinished run. Progress is persisted after each deterministic 16-window block, so interruption recomputes at most one identical block rather than writing a full checkpoint after every window. PASS requires all three seeds complete, unique selection, unchanged STU identity and complete lineage. Formal command: `python -m src.train --protocol protocol.json --data-root /home/jasongao/Data/STU --condition B1 --max-worlds 40 --device cuda`.
+Resource and disk preflight: Pending.
+Artifacts and hashes: Pending per-seed `runs/ajae/B1/seed-{0,1,2}/{model.pt,result.json}` and world reports.
 Primary construct: Complete, comparable B1 training replications under the preregistered budget.
 Primary result: Not executed.
-PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
+PASS / FAIL / OUTCOME: OUTCOME — EXECUTION FROZEN / NOT EXECUTED.
 Failure classification: Not applicable.
 Unlocked next node: E75 after PASS.
 Invalidated downstream evidence: E75 onward remains locked.
 Descriptive observations: None.
-Notes: Scientific underperformance is not an invalid-seed mechanical failure.
+Notes: Scientific underperformance is not an invalid-seed mechanical failure. Before any E74 model result, the formal entry still depended on the explicitly retired `dev.json`, and the old 40-world branch refused to publish the already selected best checkpoint as though the budget were incomplete. These were stale implementation semantics. E74 now binds only E57/E63/E73, and both patience and the preregistered maximum-world stop publish through the same unchanged checkpoint selector. No E74 output had been produced before these corrections.
 
 ## E75 | B1 versus B0 Proxy-Supervision Effect
 
