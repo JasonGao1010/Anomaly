@@ -1112,10 +1112,12 @@ class AJAEProtocol:
             }
             or confirmation.get("resume_branch") != "confirm/e74-seed2-resume"
             or confirmation.get("partial_seed2_result_use_forbidden") is not True
-            or exploration.get("current_node") != "E76-X-lite"
+            or exploration.get("current_node") != "E76-X-lite-review"
             or exploration.get("formal_gate2_and_gate3_status") != "not adjudicated"
             or exploration.get("public_real_ood_sequences_remain_sealed") is not True
             or exploration.get("hidden_test_sequences_remain_sealed") is not True
+            or exploration.get("exploratory_continuation_status")
+            != "stopped_before_E78-X_for_scientific_moving-normal_safety_review"
         ):
             raise ProtocolError("exploration/confirmation split identity changed")
         e75x = _mapping(exploration.get("e75x_result"), "E75-X result")
@@ -1193,6 +1195,52 @@ class AJAEProtocol:
             != "deferred intact to the later three-seed confirmation track"
         ):
             raise ProtocolError("E76-X-lite freeze identity changed")
+        e76_result = _mapping(
+            exploration.get("e76x_lite_result"), "E76-X-lite result"
+        )
+        safety_measure = tuple(
+            tuple(row) for row in e76_result.get("safety_measure", ())
+        )
+        seed_worsening = tuple(
+            tuple(row) for row in e76_result.get("seed_safety_worsening", ())
+        )
+        if (
+            e76_result.get("status")
+            != "execution_complete_safety_review_required"
+            or e76_result.get("artifact_path")
+            != "runs/ajae/e76x_lite_b1_safety.npz"
+            or e76_result.get("artifact_sha256")
+            != "0826724f6939afaadf0d097c4359ced1f61eb6b6f114211306ef437a832c99c7"
+            or e76_result.get("scientific_array_sha256")
+            != "2bab9994dd32a9be85448b73926da7f7ec52c045c00ee158f3f0f406f52d7f5f"
+            or e76_result.get("execution_protocol_sha256")
+            != "30434c141cc4ca535808f5996dde9bf8ec98b6656c75047f41b697d15b27d4a9"
+            or e76_result.get("formal_e76_adjudicated") is not False
+            or e76_result.get("formal_gate2_adjudicated") is not False
+            or tuple(e76_result.get("safety_measure_order", ()))
+            != (
+                "pure_normal_FPR", "normal_control_FPR",
+                "moving_normal_FPR", "development_FPR95",
+            )
+            or safety_measure
+            != (
+                (0.8388513994425846, 0.8859360610445994, 0.511490277457536, 0.3711824257866622),
+                (0.18886691129973687, 0.9998684383633732, 0.9905464606871108, 0.0768848032564733),
+                (0.2764086523546291, 0.6036047888435732, 0.76170163707632, 0.06936114080439783),
+            )
+            or seed_worsening
+            != (
+                (-0.6499844881428477, 0.11393237731877381, 0.4790561832295749, -0.29429762253018893),
+                (-0.5624427470879555, -0.2823312722010263, 0.25021135961878405, -0.3018212849822644),
+            )
+            or tuple(e76_result.get("mean_safety_worsening", ()))
+            != (-0.6062136176154016, -0.08419944744112623, 0.36463377142417946, -0.29805945375622667)
+            or e76_result.get("continuation_reference") != 0.03
+            or e76_result.get("continuation_reference_satisfied") is not False
+            or e76_result.get("next_node") is not None
+            or e76_result.get("e78x_locked") is not True
+        ):
+            raise ProtocolError("E76-X-lite result identity changed")
         difficulty = _mapping(development["difficulty_statistics"], "difficulty statistics")
         if set(difficulty) != {"Nvis", "O", "d", "V"}:
             raise ProtocolError("development difficulty must define Nvis, O, d, and V")

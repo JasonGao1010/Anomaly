@@ -2656,8 +2656,8 @@
       }
     },
     "renderer_mechanical_qualification": {
-      "status": "Gate 1 PASS; E50-E58 and E61-E73 formal PASS; E59-E60 descriptive complete; E74 confirmation suspended after seeds 0/1; E75-X descriptive complete; E76-X-lite current",
-      "current_gate1_policy": {"hard_evidence": ["compatible canonical-ray and renderer mechanics through E44", "E45B-v2 rendered control/proxy qualification PASS", "E48 direct rendered-label-shortcut audit PASS"], "excluded_from_conjunction": ["all E45A variants", "E45-V1", "E46", "E47"], "rationale": "Natural real-normal observations and coverage-oriented inserted controls need not reproduce the same scene/placement distribution. Real-versus-rendered source identifiability is not equivalent to anomaly-label shortcut predictability because rendered controls and rendered proxies carry different labels.", "gate1_result": "PASS", "current_node": "E76-X-lite", "next_after_pass": ["E78-X", "B2/B3 exploratory track"]},
+      "status": "Gate 1 PASS; E50-E58 and E61-E73 formal PASS; E59-E60 descriptive complete; E74 confirmation suspended after seeds 0/1; E75-X descriptive complete; E76-X-lite complete with moving-normal safety review required; E78-X locked",
+      "current_gate1_policy": {"hard_evidence": ["compatible canonical-ray and renderer mechanics through E44", "E45B-v2 rendered control/proxy qualification PASS", "E48 direct rendered-label-shortcut audit PASS"], "excluded_from_conjunction": ["all E45A variants", "E45-V1", "E46", "E47"], "rationale": "Natural real-normal observations and coverage-oriented inserted controls need not reproduce the same scene/placement distribution. Real-versus-rendered source identifiability is not equivalent to anomaly-label shortcut predictability because rendered controls and rendered proxies carry different labels.", "gate1_result": "PASS", "current_node": "E76-X-lite-review", "next_after_pass": []},
       "layer_boundaries": {"E27-E28": "direct geometry outputs only", "E29": "return probability and deterministic acceptance decision only", "E30-E31": "accepted returns", "E32-E33": "nearest-return occlusion competition"},
       "E27": {
         "question": "Does the formal geometry path return the correct nearest convex-hull hit, outward finite normal and object ID for active normal-control templates when return rejection is disabled?",
@@ -3800,7 +3800,7 @@
         "partial_seed2_result_use_forbidden": true
       },
       "nodes": ["E75-X", "E76-X-lite", "E78-X", "E79-X", "E80-X", "E81-X", "E82-X", "E83-X", "exploratory B4 when temporal viability is supported", "E76-X full safety on the later confirmation track"],
-      "current_node": "E76-X-lite",
+      "current_node": "E76-X-lite-review",
       "e75x_result": {
         "status": "descriptive_execution_complete",
         "formal_gate2_adjudicated": false,
@@ -3839,6 +3839,25 @@
         "formal_e76_or_gate2_verdict_forbidden": true,
         "full_e76x_status": "deferred intact to the later three-seed confirmation track"
       },
+      "e76x_lite_result": {
+        "status": "execution_complete_safety_review_required",
+        "artifact_path": "runs/ajae/e76x_lite_b1_safety.npz",
+        "artifact_sha256": "0826724f6939afaadf0d097c4359ced1f61eb6b6f114211306ef437a832c99c7",
+        "scientific_array_sha256": "2bab9994dd32a9be85448b73926da7f7ec52c045c00ee158f3f0f406f52d7f5f",
+        "execution_protocol_sha256": "30434c141cc4ca535808f5996dde9bf8ec98b6656c75047f41b697d15b27d4a9",
+        "formal_e76_adjudicated": false,
+        "formal_gate2_adjudicated": false,
+        "safety_measure_order": ["pure_normal_FPR", "normal_control_FPR", "moving_normal_FPR", "development_FPR95"],
+        "safety_measure": [[0.8388513994425846, 0.8859360610445994, 0.511490277457536, 0.3711824257866622], [0.18886691129973687, 0.9998684383633732, 0.9905464606871108, 0.0768848032564733], [0.2764086523546291, 0.6036047888435732, 0.76170163707632, 0.06936114080439783]],
+        "seed_safety_worsening": [[-0.6499844881428477, 0.11393237731877381, 0.4790561832295749, -0.29429762253018893], [-0.5624427470879555, -0.2823312722010263, 0.25021135961878405, -0.3018212849822644]],
+        "mean_safety_worsening": [-0.6062136176154016, -0.08419944744112623, 0.36463377142417946, -0.29805945375622667],
+        "continuation_reference": 0.03,
+        "continuation_reference_satisfied": false,
+        "stopping_evidence": "moving-normal FPR worsening is positive in both seeds and has two-seed mean 0.36463377142417946",
+        "next_node": null,
+        "e78x_locked": true
+      },
+      "exploratory_continuation_status": "stopped_before_E78-X_for_scientific_moving-normal_safety_review",
       "formal_gate2_and_gate3_status": "not adjudicated",
       "confirmation_rule": "if temporal viability is promising, complete seed 2 for B1/B2/B3 and apply the unchanged three-seed Gate 2 and Gate 3 rules",
       "negative_temporal_action": "stop or redesign without spending the remaining confirmatory repeats",
@@ -4159,5 +4178,5 @@
     },
     "verdict_rule": "a gate verdict requires its real statistics and an explicit predeclared scientific judgment; artifact existence alone is never evidence"
   },
-  "status": {"implementation_target": "schema30", "scientific_route": "exploration_track_active_before_formal_gate2", "performance_claims_available": false}
+  "status": {"implementation_target": "schema30", "scientific_route": "exploration_track_stopped_at_E76-X-lite_moving-normal_safety_review", "performance_claims_available": false}
 }
