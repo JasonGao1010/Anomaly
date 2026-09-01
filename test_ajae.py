@@ -1701,6 +1701,21 @@ def test_multi_seed_resume_skips_complete_and_starts_unseen_seed(
     assert set(results) == {11, 12, 13}
 
 
+def test_module_execution_uses_stable_callable_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def evaluator() -> None:
+        return None
+
+    monkeypatch.setattr(evaluator, "__module__", "__main__")
+    monkeypatch.setattr(
+        sys.modules["__main__"], "__spec__", SimpleNamespace(name="src.train")
+    )
+    assert train_module._qualified_callable(evaluator) == (
+        f"src.train.{evaluator.__qualname__}"
+    )
+
+
 def test_checkpoint_selection_global_band_does_not_drift() -> None:
     trainer = object.__new__(AJAETrainer)
     trainer.model = nn.Linear(1, 1)
