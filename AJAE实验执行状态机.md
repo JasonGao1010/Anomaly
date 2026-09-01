@@ -1,6 +1,6 @@
 # AJAE Fine-Grained Experiment Execution State Machine
 
-> Current authoritative baseline: repository `main` and all historical evidence recorded in this document. E50–E58 have formally PASSed, E59/E60 descriptive characterization is complete, and the current formal node is E61. The old commit `44fd6d13798e826b2cac8371de26a7d17707dadc` is retained only as the historical baseline from the E22-v2 period and no longer represents the current workspace state.
+> Current authoritative baseline: repository `main` and all historical evidence recorded in this document. E50–E58 and E61 have formally PASSed, E59/E60 descriptive characterization is complete, and the current formal node is E62. The old commit `44fd6d13798e826b2cac8371de26a7d17707dadc` is retained only as the historical baseline from the E22-v2 period and no longer represents the current workspace state.
 
 > Basis: [AJAE Mainline Plan](</home/jasongao/Study/AJAE/AJAE%E6%96%B0%E4%B8%BB%E7%BA%BF%E6%96%B9%E6%A1%88.md>). This document decomposes the mainline plan's immutable constraints, four Decision Gates, B0–B5 controls, normal-motion safety, object-scale diagnostics, development discipline, and one-time real-OOD validation into fine-grained experiment nodes that can be executed sequentially.
 
@@ -3102,8 +3102,8 @@ Notes: Do not describe source identifiability as anomaly-label predictability. E
 Experiment ID: E47
 Design-freeze commit/hash: Conditional design frozen; commit not recorded.
 Execution-freeze commit/hash: Not executed.
-Date: Not executed.
-Git commit / clean state: Not applicable.
+Date: 2026-09-01 formal PASS.
+Git commit / clean state: Formal run used clean tracked state at `413596b76b686956874147b5e861279f09eefdc2`; untracked user-owned `PPT/` remained excluded.
 Data identities: The same separately frozen diagnostic sample as E46, if optional attribution is commissioned.
 Input artifact hashes: None.
 Random namespaces / seeds: Same models, folds, and bootstrap as E46.
@@ -3464,15 +3464,15 @@ Data identities: Independent pure-normal safety uses all 48,828,507 real train/2
 Input artifact hashes: None.
 Random namespaces / seeds: `E61-static-match-v1`; within each moving-semantic-family × `[2.5,10),[10,20),[20,30),[30,50]` m cell, independently rank moving and corresponding static-semantic candidates by SHA-256 over namespace, sequence, frame and canonical ray identity.
 Command and resolved config: Freeze the full pure-normal and moving-normal identities. Static counterparts map 252→10, 253→31, 254→30, 255→32, 256→16, 257→13, 258→18 and 259→20. In each semantic-family × range cell retain `min(moving,static)` points from both sides by ascending identity hash, without replacement or point reuse. Do not match intensity, occlusion, density, STU features, voxel features, frame identity or model scores. All moving points enter formal moving FPR; matched subsets serve only descriptive moving-versus-static FPR and mean-score differences. Sparse match coverage never FAILs E61. Store full-set identities as compact frame × canonical-ray bit masks and explicit matched pairs, build independently twice and require elementwise identity. Formal command: `python -m src.qualify e61 --data-root /home/jasongao/Data/STU --protocol protocol.json --output runs/ajae/e61_safety_identities.npz`.
-Resource and disk preflight: A full-data no-artifact implementation pilot preserved the frozen rules and expected counts, completed in 39.78 s, used 961,428 KiB peak resident memory and zero swap; formal resource preflight remains required immediately before execution.
-Artifacts and hashes: None.
+Resource and disk preflight: 24 physical CPU cores; 25,196,924,928 bytes RAM with 22,414,196,736 bytes available; 17,179,869,184 bytes unused swap; RTX 5080 Laptop GPU not used; no competing experiment process. Windows E had 75,052,802,048 bytes remaining of 484,950,659,072 bytes, above the 5% reserve. A full-data no-artifact implementation pilot completed in 39.78 s with 961,428 KiB peak resident memory and zero swap. The formal two-build run completed in 72.670612 s.
+Artifacts and hashes: `runs/ajae/e61_safety_identities.npz`; 1,931,323 bytes; SHA-256 `8d3e08e0512dc70a75d2279cfb4515bc960bbfda4f35a872c4a76e9dad69d0e0`; scientific-array SHA-256 `5227e6a6e6c807200373bf64ae947c7eb2634f09131277620e2c12fd91a85e31`.
 Primary construct: Independent pure-normal development safety set and label-blind moving-normal training-domain subgroup safety diagnostic.
-Primary result: Not executed.
-PASS / FAIL / OUTCOME: OUTCOME — PROTOCOL COMPLETED BEFORE RESULTS / NOT EXECUTED.
-Failure classification: Not applicable.
-Unlocked next node: E61 implementation and execution freeze.
-Invalidated downstream evidence: E62 onward remains locked.
-Descriptive observations: In train/201 frames 4–681, the 2.5–50 m inventory contains 74,086,578 real returns: 48,828,507 eligible static-normal points and 25,258,071 semantic-zero/ignore points, with no semantic-2 or moving-semantic points. Train/206 contains 13,011 eligible moving-normal points across 273 frames and eight positive instances.
+Primary result: The identity builder froze all 48,828,507 eligible train/201 static-normal points across 678 frames and all 13,011 eligible train/206 moving-normal points across 273 positive frames. It selected 6,756 deterministic matched moving/static pairs. Both full builds were elementwise identical; identity, count, prediction-access, label-input and reproduction errors were zero. Independent read-only validation rebuilt all 678 pure masks, all 449 moving masks, every semantic/range candidate cell, all SHA-256 ranks, the 6,756 pairs and both matched masks directly from raw frames without calling the formal builder; every array and hash matched.
+PASS / FAIL / OUTCOME: PASS.
+Failure classification: None.
+Unlocked next node: E62.
+Invalidated downstream evidence: None; E62 is current.
+Descriptive observations: The matched subset covers 51.9253% of all moving points. The available moving observations occur only in the person-family cells (254→30 and 255→32), and the 255→32 cells have no static counterpart. This limits matched motion-effect interpretation but does not affect the all-moving FPR guardrail or E61 PASS.
 Notes: Matching coverage and moving/static score differences restrict mechanism interpretation only. They cannot remove unmatched points from moving safety, create an E61 FAIL or become model inputs.
 
 ## E62 | Custom Evaluator versus Official Evaluator
