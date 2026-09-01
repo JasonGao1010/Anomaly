@@ -3854,22 +3854,22 @@ Notes: Independent reconstruction reproduced the world identities, shapes, means
 Experiment ID: E76-X
 Design-freeze commit/hash: Apply E76's result-blind threshold, cross-fit and metric-scale semantics to B0 and B1 seeds 0/1 only.
 Execution-freeze commit/hash: E76-X runner commit `652d9daac92f609935553e6d7c47e75b33120388`; `src/qualify.py` SHA-256 `6ad8c837720184613cdb9543cdb6045a77a5e67ea4d778085c1b7872bfd7afd7`. The complete 84-test scientific-semantic suite passes before execution.
-Date: 2026-09-02 design freeze; execution unlocked after E75-X.
+Date: 2026-09-02 design freeze; execution unlocked after E75-X. The first execution attempt was stopped at the owner's request before completion.
 Git commit / clean state: Execution must use the tracked runner above and a clean tracked worktree; untracked user-owned `PPT/` remains excluded.
 Data identities: The same 23 development worlds, complete E61 pure-normal set, complete E61 moving-normal set and rendered normal-controls.
 Input artifact hashes: E72, E61, E63 and E74-X required.
 Random namespaces / seeds: No new randomness.
 Command and resolved config: `python -m src.qualify e76x --data-root /home/jasongao/Data/STU --protocol protocol.json --e57 runs/ajae/e57_development_worlds.npz --e61 runs/ajae/e61_safety_identities.npz --e63 runs/ajae/e63_training_freeze.npz --e72 runs/ajae/e72_b0_reference.npz --b1-dir runs/ajae/B1 --output runs/ajae/e76x_b1_safety.npz --device cuda`. Compute each seed's pure-normal, cross-fitted normal-control, moving-normal and decision-scale development FPR95 worsening versus B0. Report both seeds and their mean. The original result-blind E76 mean-worsening reference `0.03` is reported as a continuation reference, not as a two-seed E76 or Gate 2 PASS. A conspicuous safety disaster stops exploratory B2/B3 pending scientific review; otherwise continue directly to E78-X.
 Resource and disk preflight: 24 physical CPU cores, RTX 5080 Laptop GPU with 16,303 MiB total and 14,428 MiB free, 20 GiB available RAM, no competing experiment, and Windows E: with 73,982,402,560 bytes remaining of 484,950,659,072 before execution. The runner reuses each frozen STU encoding for both B1 models and writes only summary arrays.
-Artifacts and hashes: None.
+Artifacts and hashes: None. The interrupted attempt did not reach the atomic result write, and `runs/ajae/e76x_b1_safety.npz` is absent.
 Primary construct: Detect whether the encouraging B1 ranking signal is accompanied by gross normal false alarms before spending GPU time on B2/B3.
-Primary result: Not executed.
-PASS / FAIL / OUTCOME: OUTCOME — CURRENT / NOT EXECUTED.
+Primary result: No valid E76-X result. The process completed development scoring and was scanning the complete pure-normal set when the owner requested a stop; no partial metric was emitted or read. A later continuation must rerun E76-X from the beginning under the unchanged frozen runner.
+PASS / FAIL / OUTCOME: OUTCOME — CURRENT / EXECUTION INCOMPLETE; NO ADJUDICATION.
 Failure classification: Implementation mismatches are repaired under the same design; a genuine large safety worsening is scientific exploratory evidence.
 Unlocked next node: E78-X after non-disastrous exploratory safety.
 Invalidated downstream evidence: Formal E76 remains locked and unchanged.
-Descriptive observations: None.
-Notes: No worst-seed hard gate is added.
+Descriptive observations: None; the interrupted process produced no result artifact.
+Notes: No worst-seed hard gate is added. The interruption is an owner-requested scheduling stop, not an implementation failure or scientific result. Do not unlock E78-X until a complete E76-X artifact is produced and checked.
 
 ## E75 | B1 versus B0 Proxy-Supervision Effect
 
