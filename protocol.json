@@ -2656,8 +2656,8 @@
       }
     },
     "renderer_mechanical_qualification": {
-      "status": "Gate 1 PASS; E50-E58 and E61-E73 formal PASS; E59-E60 descriptive complete; E74 confirmation suspended after seeds 0/1; E75-X descriptive complete; E76-X-lite moving-normal safety review required; E76-V1 descriptive visual audit current; E78-X locked",
-      "current_gate1_policy": {"hard_evidence": ["compatible canonical-ray and renderer mechanics through E44", "E45B-v2 rendered control/proxy qualification PASS", "E48 direct rendered-label-shortcut audit PASS"], "excluded_from_conjunction": ["all E45A variants", "E45-V1", "E46", "E47"], "rationale": "Natural real-normal observations and coverage-oriented inserted controls need not reproduce the same scene/placement distribution. Real-versus-rendered source identifiability is not equivalent to anomaly-label shortcut predictability because rendered controls and rendered proxies carry different labels.", "gate1_result": "PASS", "current_node": "E76-V1", "next_after_pass": []},
+      "status": "Gate 1 PASS; E50-E58 and E61-E73 formal PASS; E59-E60 descriptive complete; E74 confirmation suspended after seeds 0/1; E75-X descriptive complete; E76-X-lite moving-normal safety review required; E76-V1 export complete and visual review pending; E78-X locked",
+      "current_gate1_policy": {"hard_evidence": ["compatible canonical-ray and renderer mechanics through E44", "E45B-v2 rendered control/proxy qualification PASS", "E48 direct rendered-label-shortcut audit PASS"], "excluded_from_conjunction": ["all E45A variants", "E45-V1", "E46", "E47"], "rationale": "Natural real-normal observations and coverage-oriented inserted controls need not reproduce the same scene/placement distribution. Real-versus-rendered source identifiability is not equivalent to anomaly-label shortcut predictability because rendered controls and rendered proxies carry different labels.", "gate1_result": "PASS", "current_node": "E76-V1-review", "next_after_pass": []},
       "layer_boundaries": {"E27-E28": "direct geometry outputs only", "E29": "return probability and deterministic acceptance decision only", "E30-E31": "accepted returns", "E32-E33": "nearest-return occlusion competition"},
       "E27": {
         "question": "Does the formal geometry path return the correct nearest convex-hull hit, outward finite normal and object ID for active normal-control templates when return rejection is disabled?",
@@ -3800,7 +3800,7 @@
         "partial_seed2_result_use_forbidden": true
       },
       "nodes": ["E75-X", "E76-X-lite", "E76-V1 descriptive visual audit", "E78-X", "E79-X", "E80-X", "E81-X", "E82-X", "E83-X", "exploratory B4 when temporal viability is supported", "E76-X full safety on the later confirmation track"],
-      "current_node": "E76-V1",
+      "current_node": "E76-V1-review",
       "e75x_result": {
         "status": "descriptive_execution_complete",
         "formal_gate2_adjudicated": false,
@@ -3859,7 +3859,7 @@
       },
       "e76v1_freeze": {
         "version": "E76-V1-v1",
-        "status": "frozen_before_export_or_visual_review",
+        "status": "descriptive_export_complete_review_pending",
         "scientific_role": "descriptive diagnosis of proxy appearance and moving-normal false alarms; no gate, threshold, unlock, or replacement of E76-X-lite",
         "output_directory": "runs/ajae/e76_v1",
         "output_format": "binary_little_endian PLY 1.0 plus one JSON manifest",
@@ -3903,6 +3903,31 @@
         "e78x_remains_locked": true,
         "public_real_ood_sequences_remain_sealed": true,
         "hidden_test_sequences_remain_sealed": true
+      },
+      "e76v1_result": {
+        "status": "descriptive_export_complete_review_pending",
+        "manifest_path": "runs/ajae/e76_v1/manifest.json",
+        "manifest_sha256": "840b868456958cbdd25e63fa60e6f759c494e215e6ddf6bb33caea95a6b5b755",
+        "execution_protocol_sha256": "4092ccb88e7e1661c426f7a984f2780437a5dcd92adbd601784c669f72620d16",
+        "execution_runner_commit": "45dd98eb738565b256ca36838e6c34b9d874297e",
+        "execution_runner_sha256": "9f5478dcd758a996c099ca1d18e0069ff82bd66a363f460d54a5c87c5d8140ce",
+        "ply_file_count": 27,
+        "manifest_file_count": 1,
+        "group_a_world_ids": [1, 2, 0, 14, 8, 9],
+        "group_b_selected": [
+          {"frame_id": 200, "moving_points": 42, "b1_seed0_mean": 0.013158183189090763, "b1_seed1_mean": 0.06947609588377243, "selection_statistic": 0.041317139536431596},
+          {"frame_id": 194, "moving_points": 67, "b1_seed0_mean": 0.012369494707869235, "b1_seed1_mean": 0.016964499729343534, "selection_statistic": 0.014666997218606384},
+          {"frame_id": 167, "moving_points": 42, "b1_seed0_mean": 0.011881382596617961, "b1_seed1_mean": 0.01475655627115968, "selection_statistic": 0.01331896943388882}
+        ],
+        "point_count_by_group": {"A": 1906499, "B": 379847},
+        "byte_count_by_group": {"A": 41950889, "B": 16715208},
+        "total_bytes_including_manifest": 58737615,
+        "execution_seconds": 374.34216098899196,
+        "independent_structure_verification": "27/27 PLY hashes, headers, property order, vertex counts and binary payload sizes exact",
+        "visual_review_performed": false,
+        "formal_gate_adjudicated": false,
+        "e76x_lite_result_unchanged": true,
+        "e78x_locked": true
       },
       "exploratory_continuation_status": "stopped_before_E78-X_for_scientific_moving-normal_safety_review",
       "formal_gate2_and_gate3_status": "not adjudicated",
@@ -4225,5 +4250,5 @@
     },
     "verdict_rule": "a gate verdict requires its real statistics and an explicit predeclared scientific judgment; artifact existence alone is never evidence"
   },
-  "status": {"implementation_target": "schema30", "scientific_route": "E76-V1_descriptive_visual_audit_during_moving-normal_safety_review", "performance_claims_available": false}
+  "status": {"implementation_target": "schema30", "scientific_route": "E76-V1_export_complete_visual_review_pending_during_moving-normal_safety_review", "performance_claims_available": false}
 }

@@ -1112,7 +1112,7 @@ class AJAEProtocol:
             }
             or confirmation.get("resume_branch") != "confirm/e74-seed2-resume"
             or confirmation.get("partial_seed2_result_use_forbidden") is not True
-            or exploration.get("current_node") != "E76-V1"
+            or exploration.get("current_node") != "E76-V1-review"
             or exploration.get("formal_gate2_and_gate3_status") != "not adjudicated"
             or exploration.get("public_real_ood_sequences_remain_sealed") is not True
             or exploration.get("hidden_test_sequences_remain_sealed") is not True
@@ -1250,7 +1250,8 @@ class AJAEProtocol:
         review = _mapping(visual.get("review_freeze"), "E76-V1 review freeze")
         if (
             visual.get("version") != "E76-V1-v1"
-            or visual.get("status") != "frozen_before_export_or_visual_review"
+            or visual.get("status")
+            != "descriptive_export_complete_review_pending"
             or visual.get("output_directory") != "runs/ajae/e76_v1"
             or visual.get("output_format")
             != "binary_little_endian PLY 1.0 plus one JSON manifest"
@@ -1305,6 +1306,39 @@ class AJAEProtocol:
             or visual.get("hidden_test_sequences_remain_sealed") is not True
         ):
             raise ProtocolError("E76-V1 freeze identity changed")
+        visual_result = _mapping(
+            exploration.get("e76v1_result"), "E76-V1 result"
+        )
+        selected_b = visual_result.get("group_b_selected")
+        if (
+            visual_result.get("status")
+            != "descriptive_export_complete_review_pending"
+            or visual_result.get("manifest_path")
+            != "runs/ajae/e76_v1/manifest.json"
+            or visual_result.get("manifest_sha256")
+            != "840b868456958cbdd25e63fa60e6f759c494e215e6ddf6bb33caea95a6b5b755"
+            or visual_result.get("execution_protocol_sha256")
+            != "4092ccb88e7e1661c426f7a984f2780437a5dcd92adbd601784c669f72620d16"
+            or visual_result.get("execution_runner_commit")
+            != "45dd98eb738565b256ca36838e6c34b9d874297e"
+            or visual_result.get("execution_runner_sha256")
+            != "9f5478dcd758a996c099ca1d18e0069ff82bd66a363f460d54a5c87c5d8140ce"
+            or visual_result.get("ply_file_count") != 27
+            or visual_result.get("manifest_file_count") != 1
+            or tuple(visual_result.get("group_a_world_ids", ()))
+            != (1, 2, 0, 14, 8, 9)
+            or not isinstance(selected_b, list)
+            or tuple(item.get("frame_id") for item in selected_b)
+            != (200, 194, 167)
+            or tuple(item.get("moving_points") for item in selected_b)
+            != (42, 67, 42)
+            or visual_result.get("total_bytes_including_manifest") != 58737615
+            or visual_result.get("visual_review_performed") is not False
+            or visual_result.get("formal_gate_adjudicated") is not False
+            or visual_result.get("e76x_lite_result_unchanged") is not True
+            or visual_result.get("e78x_locked") is not True
+        ):
+            raise ProtocolError("E76-V1 result identity changed")
         difficulty = _mapping(development["difficulty_statistics"], "difficulty statistics")
         if set(difficulty) != {"Nvis", "O", "d", "V"}:
             raise ProtocolError("development difficulty must define Nvis, O, d, and V")
