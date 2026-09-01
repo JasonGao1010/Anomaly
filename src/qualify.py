@@ -4175,25 +4175,38 @@ def run_e76_visual_audit(
                     )
 
         moving_means: list[dict[str, float | int]] = []
+        candidate_scores: dict[int, tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
         for row in np.flatnonzero(moving_count > 0):
             frame = int(moving_frame[row])
             source = sequence_206.source_frame(frame)
-            _, b1_score, slots = score_frame(source)
+            b0_score, b1_score, slots = score_frame(source)
             mask = np.unpackbits(moving_packed[row], bitorder="little")[
                 : canonical_by_slot.size
             ][canonical_by_slot[slots]]
             if int(np.count_nonzero(mask)) != int(moving_count[row]):
                 raise QualificationError("E76-V1 moving-normal count changed")
             seed_mean = np.mean(b1_score[:, mask], axis=1, dtype=np.float64)
-            moving_means.append(
-                {
-                    "frame_id": frame,
-                    "moving_points": int(moving_count[row]),
-                    "b1_seed0_mean": float(seed_mean[0]),
-                    "b1_seed1_mean": float(seed_mean[1]),
-                    "selection_statistic": float(np.mean(seed_mean)),
-                }
-            )
+            moving_means.append({
+                "frame_id": frame,
+                "moving_points": int(moving_count[row]),
+                "b1_seed0_mean": float(seed_mean[0]),
+                "b1_seed1_mean": float(seed_mean[1]),
+                "selection_statistic": float(np.mean(seed_mean)),
+            })
+            current_top = {
+                int(item["frame_id"])
+                for item in sorted(
+                    moving_means,
+                    key=lambda item: (
+                        -float(item["selection_statistic"]),
+                        int(item["frame_id"]),
+                    ),
+                )[:3]
+            }
+            if frame in current_top:
+                candidate_scores[frame] = (b0_score, b1_score, slots)
+            for discarded in set(candidate_scores) - current_top:
+                del candidate_scores[discarded]
         selected_b = sorted(
             moving_means,
             key=lambda item: (-float(item["selection_statistic"]), int(item["frame_id"])),
@@ -4205,18 +4218,20 @@ def run_e76_visual_audit(
             frame = int(item["frame_id"])
             row = row_by_moving_frame[frame]
             source = sequence_206.source_frame(frame)
-            b0_score, b1_score, slots = score_frame(source)
+            b0_score, b1_score, slots = candidate_scores[frame]
+            if not np.array_equal(
+                slots, np.asarray(source.real_slots, dtype=np.int64)
+            ):
+                raise QualificationError("E76-V1 selected-frame point order changed")
             mask = np.unpackbits(moving_packed[row], bitorder="little")[
                 : canonical_by_slot.size
             ][canonical_by_slot[slots]]
-            repeated_mean = np.mean(b1_score[:, mask], axis=1, dtype=np.float64)
-            if not np.allclose(
-                repeated_mean,
+            retained_mean = np.mean(b1_score[:, mask], axis=1, dtype=np.float64)
+            if not np.array_equal(
+                retained_mean,
                 [item["b1_seed0_mean"], item["b1_seed1_mean"]],
-                rtol=0.0,
-                atol=1.0e-7,
             ):
-                raise QualificationError("E76-V1 selected-frame scores changed")
+                raise QualificationError("E76-V1 retained-frame scores changed")
             xyzi = np.asarray(source.xyzi)[slots]
             semantic = np.asarray(source.labels.semantic)[slots].astype(
                 "<u2", copy=False
