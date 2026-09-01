@@ -1,6 +1,6 @@
 # AJAE Fine-Grained Experiment Execution State Machine
 
-> Current authoritative baseline: repository `main` and all historical evidence recorded in this document. E50–E58 and E61–E72 have formally PASSed, E59/E60 descriptive characterization is complete, and the current formal node is E73. The old commit `44fd6d13798e826b2cac8371de26a7d17707dadc` is retained only as the historical baseline from the E22-v2 period and no longer represents the current workspace state.
+> Current authoritative baseline: repository `main` and all historical evidence recorded in this document. E50–E58 and E61–E73 have formally PASSed, E59/E60 descriptive characterization is complete, and the current formal node is E74. The old commit `44fd6d13798e826b2cac8371de26a7d17707dadc` is retained only as the historical baseline from the E22-v2 period and no longer represents the current workspace state.
 
 > Basis: [AJAE Mainline Plan](</home/jasongao/Study/AJAE/AJAE%E6%96%B0%E4%B8%BB%E7%BA%BF%E6%96%B9%E6%A1%88.md>). This document decomposes the mainline plan's immutable constraints, four Decision Gates, B0–B5 controls, normal-motion safety, object-scale diagnostics, development discipline, and one-time real-OOD validation into fine-grained experiment nodes that can be executed sequentially.
 
@@ -3748,21 +3748,21 @@ Notes: The first E72 attempt under commit `17525d1` produced all expected point 
 Experiment ID: E73
 Design-freeze commit/hash: `9d8b39e14f8ea19c41a0b54051edfdf5818cf27f`; frozen before model execution with one result-blind pure-normal identity, one result-blind mixed identity, one optimizer update and same-seed numerical tolerances.
 Execution-freeze commit/hash: Corrected deterministic implementation commit `5311d4fdfb4bdd0eb0fec110d35bb2000ee6543e`; production renderer, frozen STU encoder, B1 model/loss/optimizer and checkpoint round-trip runner in `src/qualify.py`, source SHA-256 `f591656da6ca5e59bf775809a65a8bf5e2f9f7ef7509fd4f21c1099456e4a453`; shared training source SHA-256 `4741e07e49a128495fb037e36b0612cf31e7561116a428186c19f683bb68a86c`.
-Date: 2026-09-01 execution identity frozen; formal run pending.
-Git commit / clean state: Pre-execution working tree; untracked user-owned `PPT/` remains excluded.
+Date: 2026-09-01 formal PASS.
+Git commit / clean state: Valid formal run started from tracked commit `3c7cf469e6e33b14c5d86f95ac5a7afcaf85a482`; untracked user-owned `PPT/` was excluded.
 Data identities: Reuse E26-v2 row 0 pure-normal world seed `2600000`, center frame `312`, world SHA-256 `27a1654c7241bb616964a3b47502c60b5376cfef189392f9eb2e4c76154246ea`; and row 128 mixed world seed `2600128`, center frame `440`, world SHA-256 `c83062ae310e2d468eaec74471235dabfa41b1405292f4229d8d0ce718b17a7a`. Label-only preflight before AJAE initialization found 125,299 valid negatives and zero positives in the pure window, and 50 valid positives plus 121,689 negatives in the mixed window.
 Input artifact hashes: E26-v2 `2653f705d2e890d99cda732a7a00387b5621cd05abb9c4681c7a9f284c34363c`; E72 `208487d5c91b131856e908988cf6d955305fa09364450d509e32f617295b5863`; frozen STU identity inherited unchanged.
 Random namespaces / seeds: Smoke seed `73002026`; no seed search.
 Command and resolved config: Encode the two fixed B1 windows once through frozen STU, then run the production AJAE forward path, empty-class-safe balanced BCE, frozen gradient-accumulation scaling and AdamW update. Exactly two micro-batches produce one partial accumulation update with factor `8/2=4`; this is below the 200-update ceiling. Verify finite loss/gradients; unchanged STU parameters, buffers and absent gradients; exact checkpoint restoration; and a second same-seed run with maximum absolute loss and parameter differences at most `1e-7`. Smoke losses cannot select any model or hyperparameter. Formal command: `python -m src.qualify e73 --data-root /home/jasongao/Data/STU --protocol protocol.json --e26 runs/ajae/e26_v2_world_builder.npz --e72 runs/ajae/e72_b0_reference.npz --output runs/ajae/e73_b1_smoke.npz --device cuda`.
-Resource and disk preflight: Pending.
-Artifacts and hashes: Pending `runs/ajae/e73_b1_smoke.npz`.
+Resource and disk preflight: 24 physical CPU cores; 25,196,924,928 bytes RAM with approximately 22.4 GB available; 17,179,869,184 bytes swap unused; RTX 5080 Laptop GPU with 16,303 MiB total and approximately 14,051 MiB free immediately before the valid rerun; no competing experiment. Windows E had 74,932,412,416 bytes free before the valid rerun and 74,932,674,560 after validation, above the required reserve.
+Artifacts and hashes: `runs/ajae/e73_b1_smoke.npz`, 4,696 bytes, SHA-256 `7d4eed7af2207cfffe10501cbbcf582f6a16c3fd1f258351a299f32dc540cff3`, scientific-array SHA-256 `2cf7449e0b101c12ba47d7049cc777a3332f5b66d5334faf373b6e5fab2d218e`.
 Primary construct: Mechanical trainability and frozen-STU isolation of B1.
-Primary result: Not executed.
-PASS / FAIL / OUTCOME: OUTCOME — EXECUTION FROZEN / NOT EXECUTED.
-Failure classification: Not applicable.
-Unlocked next node: E74 after PASS.
-Invalidated downstream evidence: E74 onward remains locked.
-Descriptive observations: None.
+Primary result: The pure-normal window contained 125,299 valid negatives and zero positives; the mixed window contained 50 valid positives and 121,689 negatives. Two micro-batches produced one frozen partial-accumulation AdamW update. Identity, finite-gradient, STU-state/gradient, checkpoint and reproduction error counts were all zero. Both same-seed losses, gradient norms and complete post-update model hashes were identical; maximum loss and parameter reproduction errors were exactly zero. Independent read-only validation reproduced every stored count, error, hash and the scientific-array digest with zero errors. Runtime was 16.799302 seconds.
+PASS / FAIL / OUTCOME: PASS.
+Failure classification: None.
+Unlocked next node: E74.
+Invalidated downstream evidence: None.
+Descriptive observations: The two mechanical smoke losses were 0.6988807917 and 0.6733818054. They cannot select a checkpoint or support any B1 quality claim.
 Notes: Smoke performance is not scientific evidence or a tuning signal. The first launch from commit `d7efcad` stopped before the first AJAE forward result because frozen-STU tensors had been created under `torch.inference_mode()` and therefore could not be saved by AJAE autograd. It wrote no E73 artifact and exposed no loss or model-performance value. Replacing only that context with `torch.no_grad()` preserved the frozen encoder and numerical inputs while producing ordinary detached tensors suitable for backward. The next full run completed but failed only the same-seed parameter criterion: losses were exactly equal, while unordered CUDA backward reductions produced a maximum post-update difference of `4.820525646209717e-06`; every identity, finite-gradient, STU-freeze and checkpoint check passed. A result-independent diagnostic with `torch.use_deterministic_algorithms(True)` made both loss and parameter errors exactly zero without changing inputs, formulas, optimizer, seed, thresholds or model outputs. Deterministic CUDA algorithms are therefore now enforced in E73 and the shared formal training seed initializer. Both corrections are execution implementation fixes, not protocol revisions; only the subsequent clean rerun may qualify E73.
 
 ## E74 | B1 Three Independent Training Seeds

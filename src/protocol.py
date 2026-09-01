@@ -675,7 +675,9 @@ class AJAEProtocol:
         pure = _mapping(smoke["pure_normal"], "training.e73_smoke.pure_normal")
         mixed = _mapping(smoke["mixed"], "training.e73_smoke.mixed")
         if (
-            smoke.get("status") != "frozen_before_model_execution"
+            smoke.get("status") not in {
+                "frozen_before_model_execution", "formal_pass"
+            }
             or smoke.get("seed") != 73002026
             or smoke.get("source_artifact")
             != "runs/ajae/e26_v2_world_builder.npz"
@@ -718,6 +720,27 @@ class AJAEProtocol:
             or smoke.get("model_quality_use_forbidden") is not True
         ):
             raise ProtocolError("E73 smoke identity changed")
+        if smoke.get("status") == "formal_pass":
+            result = _mapping(smoke["result"], "training.e73_smoke.result")
+            if (
+                result.get("path") != "runs/ajae/e73_b1_smoke.npz"
+                or result.get("artifact_sha256")
+                != "7d4eed7af2207cfffe10501cbbcf582f6a16c3fd1f258351a299f32dc540cff3"
+                or result.get("scientific_array_sha256")
+                != "2cf7449e0b101c12ba47d7049cc777a3332f5b66d5334faf373b6e5fab2d218e"
+                or result.get("protocol_sha256_at_execution")
+                != "54565db9e6887ffa62fed4ddb8bb9951b4626bebcf3cb25ae0f2bdf1d2299ebc"
+                or any(
+                    result.get(name) != 0
+                    for name in (
+                        "identity_errors", "gradient_errors", "stu_errors",
+                        "checkpoint_errors", "reproduction_errors",
+                        "loss_reproduction_error", "parameter_reproduction_error",
+                    )
+                )
+                or result.get("independent_read_only_validation") is not True
+            ):
+                raise ProtocolError("E73 formal result identity changed")
 
     @staticmethod
     def _validate_development(development: Mapping[str, object]) -> None:
