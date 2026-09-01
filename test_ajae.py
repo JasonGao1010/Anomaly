@@ -36,6 +36,7 @@ from src.qualify import (
     e53_frame_seed,
     independent_sparse_quantize,
     phase5_frame_ids,
+    run_e62,
 )
 from src.protocol import (
     CAUSAL_OFFSETS,
@@ -425,6 +426,19 @@ def test_e62_fixture_covers_frozen_boundaries_before_evaluator_calls() -> None:
         False, True, True, True, True, True, True, True, True, True
     ]
     assert arrays["numerical_points"].shape == (960, 3)
+
+
+def test_e62_frozen_custom_and_official_evaluators_are_exactly_equivalent(
+    tmp_path: Path,
+) -> None:
+    result = run_e62(
+        PROTOCOL_PATH,
+        PROTOCOL_PATH.parent / "runs" / "ajae" / "e62_evaluator_fixtures.npz",
+        tmp_path / "e62.npz",
+    )
+    assert result["passed"] is True
+    assert result["discrete_errors"] == 0
+    assert result["maximum_metric_absolute_difference"] <= 1.0e-10
 
 
 def test_protocol_contains_no_retired_training_route() -> None:

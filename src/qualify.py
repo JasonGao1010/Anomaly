@@ -7,10 +7,13 @@ import argparse
 import concurrent.futures
 import hashlib
 import heapq
+import importlib.util
 import inspect
 import json
 import multiprocessing
 import os
+import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Mapping, Sequence
@@ -19,6 +22,7 @@ import numpy as np
 import torch
 from scipy.spatial import cKDTree
 
+from .evaluate import PointMetricAccumulator
 from .model import (
     DEFAULT_STU_REPOSITORY,
     MASK_DIM,
@@ -2424,6 +2428,310 @@ def run_e62_fixture(
     return result
 
 
+def _e62_official_calculator(specification: Mapping[str, object]) -> type:
+    """Load the source-hashed released STU calculator without reading data."""
+
+    official = specification["official"]
+    repository = Path(str(official["repository"])).expanduser().resolve(strict=True)
+    source = (repository / str(official["source_file"])).resolve(strict=True)
+    if _sha256(source) != official["source_sha256"]:
+        raise QualificationError("E62 official evaluator source hash changed")
+    commit = subprocess.run(
+        ("git", "-C", str(repository), "rev-parse", "HEAD"),
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    if commit != official["commit"]:
+        raise QualificationError("E62 official evaluator repository commit changed")
+    module_name = "ajae_e62_frozen_official_evaluator"
+    module_spec = importlib.util.spec_from_file_location(module_name, source)
+    if module_spec is None or module_spec.loader is None:
+        raise QualificationError("E62 cannot load the official evaluator")
+    module = importlib.util.module_from_spec(module_spec)
+    sys.path.insert(0, str(repository))
+    try:
+        sys.modules[module_name] = module
+        module_spec.loader.exec_module(module)
+    finally:
+        sys.path.remove(str(repository))
+        sys.modules.pop(module_name, None)
+    return module.PointOODMetricsCalculator
+
+
+def _e62_fixture(path: Path, specification: Mapping[str, object]) -> dict[str, np.ndarray]:
+    fixture = specification["fixtures"]
+    expected_path = (PROJECT_ROOT / str(fixture["artifact"])).resolve()
+    if path.resolve(strict=True) != expected_path:
+        raise QualificationError("E62 must use the protocol-bound fixture path")
+    if _sha256(path) != fixture["artifact_sha256"]:
+        raise QualificationError("E62 fixture artifact hash changed")
+    with np.load(path, allow_pickle=False) as archive:
+        arrays = {
+            name: np.asarray(archive[name])
+            for name in archive.files
+            if name != "metadata_json"
+        }
+    if _array_hash(arrays) != fixture["scientific_array_sha256"]:
+        raise QualificationError("E62 fixture scientific-array hash changed")
+    return arrays
+
+
+def _e62_compare_case(
+    calculator_type: type,
+    protocol: object,
+    *,
+    frame_ids: np.ndarray,
+    point_offsets: np.ndarray,
+    points: np.ndarray,
+    scores: np.ndarray,
+    semantic: np.ndarray,
+    point_ids: np.ndarray,
+    expected_range_valid: np.ndarray,
+    expected_frame_accepted: np.ndarray,
+) -> dict[str, object]:
+    """Compare one frozen case through independent official and custom objects."""
+
+    official = calculator_type()
+    custom = PointMetricAccumulator(protocol)
+    official_identity = calculator_type()
+    custom_identity = PointMetricAccumulator(protocol)
+    accepted: list[int] = []
+    skipped: list[int] = []
+    selected_ids: list[np.ndarray] = []
+    selection_errors = 0
+    content_errors = 0
+    expected_errors = 0
+    for frame_index, frame_id in enumerate(frame_ids.tolist()):
+        start, stop = map(int, point_offsets[frame_index : frame_index + 2])
+        frame_points = points[start:stop]
+        frame_scores = scores[start:stop]
+        frame_semantic = semantic[start:stop]
+        before = len(official.all_scores)
+        official.update(frame_points, frame_scores, frame_semantic)
+        official_accepted = len(official.all_scores) == before + 1
+        custom_accepted = custom.update(frame_points, frame_scores, frame_semantic)
+
+        identity_scores = point_ids[start:stop].astype(np.float64)
+        identity_before = len(official_identity.all_scores)
+        official_identity.update(frame_points, identity_scores, frame_semantic)
+        official_identity_accepted = (
+            len(official_identity.all_scores) == identity_before + 1
+        )
+        custom_identity_accepted = custom_identity.update(
+            frame_points, identity_scores, frame_semantic
+        )
+        expected_accepted = bool(expected_frame_accepted[frame_index])
+        if not (
+            official_accepted
+            == custom_accepted
+            == official_identity_accepted
+            == custom_identity_accepted
+        ):
+            selection_errors += 1
+        if official_accepted != expected_accepted:
+            expected_errors += 1
+        if not official_accepted:
+            skipped.append(int(frame_id))
+            continue
+        accepted.append(int(frame_id))
+        official_ids = np.asarray(official_identity.all_scores[-1], dtype=np.int64)
+        custom_ids = np.asarray(custom_identity._scores[-1], dtype=np.int64)
+        expected_mask = (
+            expected_range_valid[start:stop] & (frame_semantic != 0)
+        )
+        expected_ids = point_ids[start:stop][expected_mask]
+        if not (
+            np.array_equal(official_ids, custom_ids)
+            and np.array_equal(official_ids, expected_ids)
+        ):
+            selection_errors += 1
+        selected_ids.append(official_ids)
+        if not (
+            np.array_equal(official.all_labels[-1].astype(np.bool_), custom._labels[-1])
+            and np.array_equal(
+                official.all_scores[-1].astype(np.float64), custom._scores[-1]
+            )
+        ):
+            content_errors += 1
+
+    official_result = official.compute_metrics()
+    custom_result = custom.compute()
+    metric_names = ("AP", "AUROC", "FPR95", "threshold")
+    official_metrics = np.asarray(
+        [official_result[name] for name in metric_names], dtype=np.float64
+    )
+    custom_metrics = np.asarray(
+        [custom_result[name] for name in metric_names], dtype=np.float64
+    )
+    metric_difference = np.abs(official_metrics - custom_metrics)
+    official_labels = np.concatenate(official.all_labels).astype(np.bool_)
+    custom_labels = np.concatenate(custom._labels).astype(np.bool_)
+    official_scores = np.concatenate(official.all_scores).astype(np.float64)
+    custom_scores = np.concatenate(custom._scores).astype(np.float64)
+    if not (
+        np.array_equal(official_labels, custom_labels)
+        and np.array_equal(official_scores, custom_scores)
+    ):
+        content_errors += 1
+    return {
+        "accepted_frame_id": np.asarray(accepted, dtype=np.int32),
+        "skipped_frame_id": np.asarray(skipped, dtype=np.int32),
+        "selected_point_id": (
+            np.concatenate(selected_ids) if selected_ids else np.empty(0, dtype=np.int64)
+        ),
+        "pooled_labels": official_labels,
+        "pooled_scores": official_scores,
+        "official_metrics": official_metrics,
+        "custom_metrics": custom_metrics,
+        "metric_difference": metric_difference,
+        "valid_points": int(official_labels.size),
+        "positive_points": int(np.count_nonzero(official_labels)),
+        "negative_points": int(np.count_nonzero(~official_labels)),
+        "selection_errors": selection_errors,
+        "content_errors": content_errors,
+        "expected_errors": expected_errors,
+    }
+
+
+def run_e62(
+    protocol_path: Path | str,
+    fixture_path: Path | str,
+    output_path: Path | str,
+) -> dict[str, object]:
+    """Run E62 on the sole fixture artifact frozen before this comparison."""
+
+    started = time.monotonic()
+    protocol_file = Path(protocol_path).expanduser().resolve(strict=True)
+    protocol = load_protocol(protocol_file)
+    specification = protocol.evaluation_document["evaluator_equivalence"]
+    if specification["status"] != "fixtures_frozen_before_formal_comparison":
+        raise QualificationError("E62 formal comparison requires frozen fixtures")
+    fixture_file = Path(fixture_path).expanduser().resolve(strict=True)
+    arrays = _e62_fixture(fixture_file, specification)
+    calculator_type = _e62_official_calculator(specification)
+
+    cases: list[tuple[str, dict[str, np.ndarray]]] = []
+    case_names = arrays["analytic_case_name"].tolist()
+    case_frame_offsets = arrays["analytic_case_frame_offset"]
+    analytic_point_offsets = arrays["analytic_frame_point_offset"]
+    for case_index, case_name in enumerate(case_names):
+        frame_start, frame_stop = map(
+            int, case_frame_offsets[case_index : case_index + 2]
+        )
+        point_start = int(analytic_point_offsets[frame_start])
+        point_stop = int(analytic_point_offsets[frame_stop])
+        cases.append(
+            (
+                str(case_name),
+                {
+                    "frame_ids": arrays["analytic_frame_id"][frame_start:frame_stop],
+                    "point_offsets": analytic_point_offsets[frame_start : frame_stop + 1] - point_start,
+                    "points": arrays["analytic_points"][point_start:point_stop],
+                    "scores": arrays["analytic_scores"][point_start:point_stop],
+                    "semantic": arrays["analytic_semantic"][point_start:point_stop],
+                    "point_ids": arrays["analytic_point_id"][point_start:point_stop],
+                    "expected_range_valid": arrays["analytic_expected_range_valid"][point_start:point_stop],
+                    "expected_frame_accepted": arrays["analytic_expected_frame_accepted"][frame_start:frame_stop],
+                },
+            )
+        )
+    cases.append(
+        (
+            "non_symbolic_numerical_fixture",
+            {
+                "frame_ids": arrays["numerical_frame_id"],
+                "point_offsets": arrays["numerical_frame_point_offset"],
+                "points": arrays["numerical_points"],
+                "scores": arrays["numerical_scores"],
+                "semantic": arrays["numerical_semantic"],
+                "point_ids": arrays["numerical_point_id"],
+                "expected_range_valid": arrays["numerical_expected_range_valid"],
+                "expected_frame_accepted": arrays["numerical_expected_frame_accepted"],
+            },
+        )
+    )
+
+    compared = [
+        (name, _e62_compare_case(calculator_type, protocol, **payload))
+        for name, payload in cases
+    ]
+    metric_names = np.asarray(("AP", "AUROC", "FPR95", "threshold"))
+    evidence: dict[str, np.ndarray] = {
+        "case_name": np.asarray([name for name, _ in compared]),
+        "metric_name": metric_names,
+        "official_metrics": np.stack([item["official_metrics"] for _, item in compared]),
+        "custom_metrics": np.stack([item["custom_metrics"] for _, item in compared]),
+        "metric_absolute_difference": np.stack(
+            [item["metric_difference"] for _, item in compared]
+        ),
+        "accepted_frame_count": np.asarray(
+            [item["accepted_frame_id"].size for _, item in compared], dtype=np.int64
+        ),
+        "skipped_frame_count": np.asarray(
+            [item["skipped_frame_id"].size for _, item in compared], dtype=np.int64
+        ),
+        "valid_point_count": np.asarray(
+            [item["valid_points"] for _, item in compared], dtype=np.int64
+        ),
+        "positive_point_count": np.asarray(
+            [item["positive_points"] for _, item in compared], dtype=np.int64
+        ),
+        "negative_point_count": np.asarray(
+            [item["negative_points"] for _, item in compared], dtype=np.int64
+        ),
+        "selection_errors": np.asarray(
+            [item["selection_errors"] for _, item in compared], dtype=np.int64
+        ),
+        "content_errors": np.asarray(
+            [item["content_errors"] for _, item in compared], dtype=np.int64
+        ),
+        "expected_identity_errors": np.asarray(
+            [item["expected_errors"] for _, item in compared], dtype=np.int64
+        ),
+    }
+    for field in (
+        "accepted_frame_id", "skipped_frame_id", "selected_point_id",
+        "pooled_labels", "pooled_scores",
+    ):
+        values = [np.asarray(item[field]) for _, item in compared]
+        offsets = np.cumsum([0] + [value.size for value in values], dtype=np.int64)
+        evidence[f"{field}_offset"] = offsets
+        evidence[field] = np.concatenate(values)
+
+    tolerance = float(specification["comparison"]["maximum_absolute_difference"])
+    maximum_difference = float(np.max(evidence["metric_absolute_difference"]))
+    discrete_errors = int(
+        evidence["selection_errors"].sum()
+        + evidence["content_errors"].sum()
+        + evidence["expected_identity_errors"].sum()
+    )
+    passed = discrete_errors == 0 and maximum_difference <= tolerance
+    result = {
+        "experiment": "E62-v2",
+        "passed": passed,
+        "fixture_sha256": _sha256(fixture_file),
+        "fixture_scientific_array_sha256": specification["fixtures"]["scientific_array_sha256"],
+        "official_commit": specification["official"]["commit"],
+        "official_source_sha256": specification["official"]["source_sha256"],
+        "cases": len(compared),
+        "accepted_frames": int(evidence["accepted_frame_count"].sum()),
+        "skipped_frames": int(evidence["skipped_frame_count"].sum()),
+        "valid_points": int(evidence["valid_point_count"].sum()),
+        "positive_points": int(evidence["positive_point_count"].sum()),
+        "negative_points": int(evidence["negative_point_count"].sum()),
+        "discrete_errors": discrete_errors,
+        "maximum_metric_absolute_difference": maximum_difference,
+        "metric_tolerance": tolerance,
+        "elapsed_seconds": time.monotonic() - started,
+        "protocol_sha256": _sha256(protocol_file),
+        "scientific_array_sha256": _array_hash(evidence),
+        "failure_meaning": "implementation mismatch only",
+    }
+    _save(Path(output_path).expanduser().resolve(), evidence, result)
+    return result
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -2482,6 +2790,10 @@ def _parser() -> argparse.ArgumentParser:
         "--protocol", type=Path, default=PROJECT_ROOT / "protocol.json"
     )
     e62_fixture.add_argument("--output", type=Path, required=True)
+    e62 = commands.add_parser("e62")
+    e62.add_argument("--protocol", type=Path, default=PROJECT_ROOT / "protocol.json")
+    e62.add_argument("--fixture", type=Path, required=True)
+    e62.add_argument("--output", type=Path, required=True)
     return parser
 
 
@@ -2563,6 +2875,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         result = run_e62_fixture(args.protocol, args.output)
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 0
+    if args.command == "e62":
+        result = run_e62(args.protocol, args.fixture, args.output)
+        print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        return 0 if result["passed"] else 1
     raise AssertionError(args.command)
 
 
