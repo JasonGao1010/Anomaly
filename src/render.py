@@ -17721,6 +17721,53 @@ def _e58_seed(candidate_hash: str) -> int:
     return int.from_bytes(hashlib.sha256(payload).digest()[:4], "little")
 
 
+def _e58_replacement_world(
+    source_world: WorldSpec, source_hash: str,
+) -> tuple[WorldSpec, int]:
+    """Replace only proxy geometry while preserving renderer RNG identity."""
+
+    if (
+        source_world.source_sequence_id != 201
+        or source_world.world_type != "mixed"
+        or tuple(item.object_id for item in source_world.objects) != (1, 2)
+        or tuple(item.label for item in source_world.objects)
+        != ("normal-control", "anomaly-proxy")
+    ):
+        raise RenderError("E58 source world identity changed")
+    control, source_proxy = source_world.objects
+    if not isinstance(source_proxy.shape, ShapeSpec):
+        raise RenderError("E58 source proxy is not in-generator geometry")
+    torus_seed = _e58_seed(source_hash)
+    source_diameter = float(np.clip(
+        2.0 * source_proxy.shape.bound_radius_m, 0.4, 3.0
+    ))
+    torus = sample_held_out_anomaly_shape(
+        torus_seed, size_m_range=(source_diameter, source_diameter)
+    )
+    rotation = np.asarray(
+        source_proxy.rotation_world_from_local, dtype=np.float64
+    )
+    old_lower = source_proxy.shape.minimum_z_m(
+        xy_resolution=33, z_steps=129
+    )
+    new_lower = torus.minimum_z_m()
+    translation = np.asarray(
+        source_proxy.translation_world_m, dtype=np.float64
+    ) + rotation[:, 2] * (old_lower - new_lower)
+    proxy = replace(
+        source_proxy,
+        shape=torus,
+        translation_world_m=tuple(map(float, translation)),
+        shape_generation_report=None,
+    )
+    return WorldSpec(
+        source_world.seed,
+        source_world.source_sequence_id,
+        (control, proxy),
+        source_world.tie_tolerance_m,
+    ), torus_seed
+
+
 def _e58_candidate_worker(index: int) -> dict[str, object]:
     """Replace one frozen proxy by a score-blind held-out torus."""
 
@@ -17733,41 +17780,33 @@ def _e58_candidate_worker(index: int) -> dict[str, object]:
             json.loads(str(_E58_BASE["selected_world_json"][index]))
         )
         center = int(_E58_BASE["selected_center_frame"][index])
-        if (
-            source_world.source_sequence_id != 201
-            or source_world.world_type != "mixed"
-            or tuple(item.object_id for item in source_world.objects) != (1, 2)
-            or tuple(item.label for item in source_world.objects)
-            != ("normal-control", "anomaly-proxy")
-        ):
-            raise RenderError("E58 source world identity changed")
-        control, source_proxy = source_world.objects
-        if not isinstance(source_proxy.shape, ShapeSpec):
-            raise RenderError("E58 source proxy is not in-generator geometry")
-        torus_seed = _e58_seed(source_hash)
-        source_diameter = float(np.clip(
-            2.0 * source_proxy.shape.bound_radius_m, 0.4, 3.0
-        ))
-        torus = sample_held_out_anomaly_shape(
-            torus_seed, size_m_range=(source_diameter, source_diameter)
+        world, torus_seed = _e58_replacement_world(source_world, source_hash)
+        control, proxy = world.objects
+        semantic_identity_errors = int(
+            world.seed != source_world.seed
+            or world.source_sequence_id != source_world.source_sequence_id
+            or world.tie_tolerance_m != source_world.tie_tolerance_m
+            or control.to_dict() != source_world.objects[0].to_dict()
+            or proxy.object_id != source_world.objects[1].object_id
+            or proxy.label != source_world.objects[1].label
+            or proxy.material != source_world.objects[1].material
+            or proxy.rotation_world_from_local
+            != source_world.objects[1].rotation_world_from_local
+            or not isinstance(proxy.shape, HeldOutTorusShape)
+            or proxy.shape_generation_report is not None
         )
-        rotation = np.asarray(
-            source_proxy.rotation_world_from_local, dtype=np.float64
-        )
-        old_lower = source_proxy.shape.minimum_z_m(
-            xy_resolution=33, z_steps=129
-        )
-        new_lower = torus.minimum_z_m()
-        translation = np.asarray(
-            source_proxy.translation_world_m, dtype=np.float64
-        ) + rotation[:, 2] * (old_lower - new_lower)
-        proxy = replace(
-            source_proxy,
-            shape=torus,
-            translation_world_m=tuple(map(float, translation)),
-            shape_generation_report=None,
-        )
-        world = WorldSpec(torus_seed, 201, (control, proxy))
+        slots = np.arange(grid.directions_sensor.shape[0], dtype=np.int64)
+        sensor_stream_errors = 0
+        for channel in (0, 1):
+            for object_id in (1, 2):
+                object_ids = np.full(slots.size, object_id, dtype=np.int32)
+                sensor_stream_errors += int(not np.array_equal(
+                    _slot_uniform(
+                        source_world, center, slots, object_ids, channel=channel
+                    ),
+                    _slot_uniform(world, center, slots, object_ids, channel=channel),
+                ))
+        cache_identity_errors = int(world.identity == source_world.identity)
         penetration, minimum_pair_sdf = obvious_pair_penetration(control, proxy)
         frames = tuple(
             sequence.source_frame(frame_id)
@@ -17846,6 +17885,9 @@ def _e58_candidate_worker(index: int) -> dict[str, object]:
             "diagnostics_json": diagnostics_json,
             "identity": identity,
             "training_sampler_torus_error": training_sampler_torus_error,
+            "semantic_identity_errors": semantic_identity_errors,
+            "sensor_stream_errors": sensor_stream_errors,
+            "cache_identity_errors": cache_identity_errors,
         }
     except Exception as error:
         return {
@@ -17854,6 +17896,9 @@ def _e58_candidate_worker(index: int) -> dict[str, object]:
             "reason": f"hard_error:{type(error).__name__}:{error}",
             "hard_error": 1,
             "training_sampler_torus_error": 1,
+            "semantic_identity_errors": 1,
+            "sensor_stream_errors": 1,
+            "cache_identity_errors": 1,
         }
 
 
@@ -17943,6 +17988,15 @@ def run_e58_qualification(
     isolation_errors = sum(
         int(item["training_sampler_torus_error"]) for item in records
     )
+    semantic_identity_errors = sum(
+        int(item["semantic_identity_errors"]) for item in records
+    )
+    sensor_stream_errors = sum(
+        int(item["sensor_stream_errors"]) for item in records
+    )
+    cache_identity_errors = sum(
+        int(item["cache_identity_errors"]) for item in records
+    )
     qualification_errors = int(len(selected) != 6)
     saved = {
         "candidate_e57_index": np.arange(24, dtype=np.int16),
@@ -17996,6 +18050,9 @@ def run_e58_qualification(
         qualification_errors == 0
         and selection_errors == 0
         and isolation_errors == 0
+        and semantic_identity_errors == 0
+        and sensor_stream_errors == 0
+        and cache_identity_errors == 0
     )
     result = {
         "experiment": "E58",
@@ -18009,6 +18066,9 @@ def run_e58_qualification(
         "selection_namespace": E58_TORUS_NAMESPACE,
         "selection_reproduction_errors": selection_errors,
         "training_sampler_torus_errors": isolation_errors,
+        "semantic_identity_errors": semantic_identity_errors,
+        "sensor_stream_errors": sensor_stream_errors,
+        "cache_identity_errors": cache_identity_errors,
         "held_out_affects_checkpoint_or_threshold": False,
         "model_scores_read": False,
         "qualification_errors": qualification_errors,

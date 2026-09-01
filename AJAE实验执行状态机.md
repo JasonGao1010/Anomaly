@@ -1,6 +1,6 @@
 # AJAE Fine-Grained Experiment Execution State Machine
 
-> Current authoritative baseline: repository `main`; all historical evidence recorded in this document; and the formal PASS results of E25-new, E26-v2, and E38-v2. Phase 2 under the new normal-control distribution is closed, E38-v2 is closed, and the E39 refresh is unlocked. The old commit `44fd6d13798e826b2cac8371de26a7d17707dadc` is retained only as the historical baseline from the E22-v2 period and no longer represents the current workspace state.
+> Current authoritative baseline: repository `main` and all historical evidence recorded in this document. E50–E56 and E57-v2 have formally PASSed; the current formal node is E58. The old commit `44fd6d13798e826b2cac8371de26a7d17707dadc` is retained only as the historical baseline from the E22-v2 period and no longer represents the current workspace state.
 
 > Basis: [AJAE Mainline Plan](</home/jasongao/Study/AJAE/AJAE%E6%96%B0%E4%B8%BB%E7%BA%BF%E6%96%B9%E6%A1%88.md>). This document decomposes the mainline plan's immutable constraints, four Decision Gates, B0–B5 controls, normal-motion safety, object-scale diagnostics, development discipline, and one-time real-OOD validation into fine-grained experiment nodes that can be executed sequentially.
 
@@ -3391,23 +3391,23 @@ Notes: World identity and diagnostics must be fixed once. Failure of a descripti
 
 Experiment ID: E58
 Design-freeze commit/hash: `c17a433f8acb481b90d5069fe42d30af28760591`; protocol SHA-256 `1159e9e1af9550cd12d97bb11140b5036cc753813af7a48109ed5c3b78e01925`.
-Execution-freeze commit/hash: Runner frozen but not formally executed at `c17a433f8acb481b90d5069fe42d30af28760591`; `src/render.py` SHA-256 `df186a6ff15640bbee8bdbd486102f6e778a15353f8c8cb32cb2bc2287fcf649`.
+Execution-freeze commit/hash: The execution identity at `c17a433f8acb481b90d5069fe42d30af28760591` was superseded before formal execution because it changed `WorldSpec.seed` during geometry replacement and therefore changed the renderer sensor-noise stream. The corrected execution identity is pending a clean implementation-freeze commit; this is a pre-result implementation correction, not E58-v2, a protocol change, or an E58 FAIL.
 Date: Not executed.
 Git commit / clean state: Not applicable.
-Data identities: Six worlds selected from deterministic held-out-torus replacements of the 24 frozen E57-v2 worlds. Each replacement retains its control, material, orientation and ground-contact point; only the in-generator proxy shape is replaced by `HeldOutTorusShape`, with a deterministic translation adjustment along the support normal to preserve contact.
+Data identities: Six worlds selected from deterministic held-out-torus replacements of the 24 frozen E57-v2 worlds. Each replacement preserves the source `WorldSpec.seed`, `source_sequence_id`, tie tolerance, control, object IDs, labels, materials and orientations, so the per-slot renderer random stream remains identical. Only the in-generator proxy shape is replaced by `HeldOutTorusShape`, with a deterministic translation adjustment along the support normal to preserve ground contact; the changed geometry gives the replacement a distinct world/cache identity.
 Input artifact hashes: E57-v2 SHA-256 `b14efc1aad86ac67b5bf7c8631f02b2e68664e071b747b7b210d5f7a30f5d123`; scientific-array SHA-256 `590c467da2dec0a161688f2587dc1c37cea2b0f42f326b9918fd6dc9df81f6ec`; calibration SHA-256 `b532b7e04d9025233b2768b8fb36287e477f62f20a3ff685a62f4a4a29bfefe0`.
 Random namespaces / seeds: `E58-held-out-torus-v1`; each torus seed is the first four little-endian bytes of SHA-256 over namespace plus the E57 candidate hash.
-Command and resolved config: Construct exactly one torus replacement per E57 world, require legal control/torus separation, five-frame visibility and a center frame with at least five valid-range anomaly points and one valid-range normal point, then select the six eligible replacements with the lowest fixed namespace hashes. The torus surface witness implementation uses an analytic two-angle parameterization because center-directed rays are invalid for a non-star-shaped torus. Perform only identity, evaluability and access-isolation checks. The training sampler must emit no torus, and held-out worlds must be excluded from training, checkpoint selection, threshold selection and every PASS statistic. No model output may be read. E58 has no checkpoint, threshold or model-quality criterion. Formal command is frozen but must not run until explicitly resumed: `python -m src.render qualify-e58 --data-root /home/jasongao/Data/STU --protocol protocol.json --e57 runs/ajae/e57_development_worlds.npz --calibration runs/ajae/calibration.pt --output runs/ajae/e58_held_out_worlds.npz --processes 24`.
+Command and resolved config: Construct exactly one torus replacement per E57 world while preserving the source world seed and source sequence identity; require exact equality of the two frozen per-slot sensor-noise streams, a distinct world/cache identity, legal control/torus separation, five-frame visibility and a center frame with at least five valid-range anomaly points and one valid-range normal point; then select the six eligible replacements with the lowest fixed namespace hashes. The torus surface witness implementation uses an analytic two-angle parameterization because center-directed rays are invalid for a non-star-shaped torus. Perform only identity, evaluability and access-isolation checks. The training sampler must emit no torus, and held-out worlds must be excluded from training, checkpoint selection, threshold selection and every PASS statistic. No model output may be read. E58 has no checkpoint, threshold or model-quality criterion. Formal command: `python -m src.render qualify-e58 --data-root /home/jasongao/Data/STU --protocol protocol.json --e57 runs/ajae/e57_development_worlds.npz --calibration runs/ajae/calibration.pt --output runs/ajae/e58_held_out_worlds.npz --processes 24`.
 Resource and disk preflight: Not executed.
 Artifacts and hashes: None.
 Primary construct: Strict isolation of held-out diagnostic worlds.
 Primary result: Not executed.
-PASS / FAIL / OUTCOME: OUTCOME — IMPLEMENTATION CORRECTED AND DESIGN FROZEN / NOT EXECUTED.
+PASS / FAIL / OUTCOME: OUTCOME — PRE-FORMAL IMPLEMENTATION CORRECTION COMPLETE / NOT EXECUTED.
 Failure classification: Not applicable.
 Unlocked next node: E58 formal execution remains current; E59 requires E58 PASS.
 Invalidated downstream evidence: E59 onward remains locked.
 Descriptive observations: None.
-Notes: Held-out diagnostics cannot influence any selection or formal test.
+Notes: Held-out diagnostics cannot influence any selection or formal test. The superseded runner was never used to create a formal E58 artifact, so there is no prior E58 outcome to retain.
 
 ## E59 | Descriptive Development-World $N_{vis}$/Occlusion/Distance Characterization
 

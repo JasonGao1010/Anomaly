@@ -283,6 +283,86 @@ def test_e58_torus_stream_is_disjoint_from_training_geometry() -> None:
     np.testing.assert_allclose(torus.signed_distance(witnesses), 0.0, atol=1.0e-12)
 
 
+def test_e58_replacement_preserves_sensor_stream_and_separates_cache() -> None:
+    vertices = np.asarray([
+        (x_value, y_value, z_value)
+        for x_value in (-0.2, 0.2)
+        for y_value in (-0.2, 0.2)
+        for z_value in (-0.3, 0.3)
+    ])
+    control_shape = NormalTemplateShape(
+        vertices, np.empty((0, 3), dtype=np.int32),
+        206, 0, 10, 1, (0.0, 0.0, 0.0),
+    )
+    proxy_shape = ShapeSpec.sample(58)
+    rotation = ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))
+    material = render_module.MaterialSpec(0.5, 0.2)
+    source = WorldSpec(1234, 201, (
+        render_module.ObjectSpec(
+            1, "normal-control", control_shape, material,
+            (8.0, -1.0, 0.3), rotation,
+        ),
+        render_module.ObjectSpec(
+            2, "anomaly-proxy", proxy_shape, material,
+            (10.0, 1.0, -proxy_shape.minimum_z_m()), rotation,
+        ),
+    ))
+    candidate_hash = hashlib.sha256(b"fixed E57 source identity").hexdigest()
+    replacement, torus_seed = render_module._e58_replacement_world(
+        source, candidate_hash
+    )
+    assert torus_seed == render_module._e58_seed(candidate_hash)
+    assert replacement.seed == source.seed
+    assert replacement.source_sequence_id == source.source_sequence_id
+    assert replacement.objects[0] == source.objects[0]
+    assert replacement.identity != source.identity
+
+    slots = np.asarray((0, 7, 19, 127), dtype=np.int64)
+    for channel in (0, 1):
+        for object_id in (1, 2):
+            object_ids = np.full(slots.size, object_id, dtype=np.int32)
+            np.testing.assert_array_equal(
+                render_module._slot_uniform(
+                    source, 53, slots, object_ids, channel=channel
+                ),
+                render_module._slot_uniform(
+                    replacement, 53, slots, object_ids, channel=channel
+                ),
+            )
+
+    digest = hashlib.sha256(b"fixed cache component").hexdigest()
+    source_key = FrameCacheKey(source.identity, digest, digest, digest)
+    replacement_key = FrameCacheKey(replacement.identity, digest, digest, digest)
+    cache = FrameCache(2)
+    calls = []
+    source_value = cache.rendered_frame(
+        source_key, lambda: calls.append("source") or "source"
+    )
+    replacement_value = cache.rendered_frame(
+        replacement_key, lambda: calls.append("replacement") or "replacement"
+    )
+    assert (source_value, replacement_value) == ("source", "replacement")
+    assert calls == ["source", "replacement"]
+
+
+def test_e58_torus_mechanical_fixture_and_json_round_trip() -> None:
+    torus = HeldOutTorusShape(1.0, 0.25)
+    origins = np.asarray(((0.0, 0.0, 3.0), (3.0, 0.0, 0.0)))
+    directions = np.asarray(((0.0, 0.0, -1.0), (-1.0, 0.0, 0.0)))
+    distance, normal, hit = torus.intersect(origins, directions)
+    assert not hit[0] and np.isinf(distance[0])
+    assert hit[1]
+    assert distance[1] == pytest.approx(1.75, abs=2.0e-7)
+    point = origins[1] + distance[1] * directions[1]
+    assert abs(float(torus.signed_distance(point[None])[0])) <= 2.0e-7
+    assert np.isfinite(normal[1]).all()
+    assert np.linalg.norm(normal[1]) == pytest.approx(1.0, abs=1.0e-12)
+    assert float(np.dot(normal[1], np.asarray((1.0, 0.0, 0.0)))) > 0.999999
+    assert HeldOutTorusShape.from_dict(torus.to_dict()) == torus
+    witnesses = render_module._fibonacci_surface_points(torus, 256)
+    assert np.max(np.abs(torus.signed_distance(witnesses))) <= 1.0e-12
+
+
 def test_protocol_contains_no_retired_training_route() -> None:
     text = json.dumps(json.loads(PROTOCOL_PATH.read_text()), sort_keys=True)
     for retired in (
