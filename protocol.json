@@ -3723,7 +3723,7 @@
     "minimum_anomaly_points": 5, "point_metrics": ["AP", "AUROC", "FPR95"],
     "evaluator_equivalence": {
       "version": "E62-v2",
-      "status": "protocol_completed_before_fixture_freeze",
+      "status": "fixtures_frozen_before_formal_comparison",
       "scientific_role": "sample-selection and numerical equivalence only; not model performance or real-OOD generalization",
       "official": {
         "repository": "/home/jasongao/Study/DynaCAN-deps/stu_dataset",
@@ -3733,8 +3733,8 @@
       },
       "fixtures": {
         "artifact": "runs/ajae/e62_evaluator_fixtures.npz",
-        "artifact_sha256": null,
-        "scientific_array_sha256": null,
+        "artifact_sha256": "b7f2a267aebdf6b092ba65a8edb2bd280aab22fddc02b792be6d306318ccb712",
+        "scientific_array_sha256": "fa77d594151a6cdb2f69a9f7f26965c493b223e4970a6736e6428a60a1de78ca",
         "analytic_cases": ["range_ignore_and_post_filter_frame_gate", "all_scores_tied", "strict_tpr_above_0.95", "mixed_repeated_scores"],
         "declared_range_boundaries_m": [2.499999, 2.5, 50.0, 50.000001],
         "range_norm_semantics": "numpy float32 norm exactly as the official evaluator",
