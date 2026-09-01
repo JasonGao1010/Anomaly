@@ -3102,8 +3102,8 @@ Notes: Do not describe source identifiability as anomaly-label predictability. E
 Experiment ID: E47
 Design-freeze commit/hash: Conditional design frozen; commit not recorded.
 Execution-freeze commit/hash: Not executed.
-Date: 2026-09-01 formal PASS.
-Git commit / clean state: Formal run used clean tracked state at `413596b76b686956874147b5e861279f09eefdc2`; untracked user-owned `PPT/` remained excluded.
+Date: Not executed.
+Git commit / clean state: Not applicable.
 Data identities: The same separately frozen diagnostic sample as E46, if optional attribution is commissioned.
 Input artifact hashes: None.
 Random namespaces / seeds: Same models, folds, and bootstrap as E46.
@@ -3458,8 +3458,8 @@ Notes: Repeated-window observations retain shared entity identity. E59/E60 never
 Experiment ID: E61
 Design-freeze commit/hash: Owner-approved pre-result protocol completion frozen at `e76b4fe42c0ac8cf111f61d362da4f578b99e60f`; protocol SHA-256 `04473d332a5705648a74f54343c955dbac79a145cbfe85f99c86ac76d4811ee7`. This replaces the incomplete source/matching text without observing any model score or E61 output.
 Execution-freeze commit/hash: Runner and frozen-mask evaluator interface frozen at `3eb28a9189a7b611502d057702d1b6e3a49e3d43`; `src/qualify.py` SHA-256 `d280d74c4ecf40ebabf91456704643655847c5a1c0b400553b02db547c257ffc`; `src/evaluate.py` SHA-256 `8eedfdcbc957abcd7d21d494f076e70d3f6b3661ebac344712bca706e115e718`. Full regression suite passed 70/70.
-Date: Not executed.
-Git commit / clean state: Not applicable.
+Date: 2026-09-01 formal PASS.
+Git commit / clean state: Formal run used clean tracked state at `413596b76b686956874147b5e861279f09eefdc2`; untracked user-owned `PPT/` remained excluded.
 Data identities: Independent pure-normal safety uses all 48,828,507 real train/201 points in frames 4–681 whose float32 Euclidean range is in the inclusive 2.5–50 m interval and whose raw semantic is nonzero, not 2 and not 252–259. Label-blind moving-normal subgroup safety uses all 13,011 train/206 points in frames 0–448 in the same range whose raw semantic is 252–259. Moving labels are evaluation-only; 206 is the training domain, so this subgroup cannot support held-out or unseen-motion generalization claims.
 Input artifact hashes: None.
 Random namespaces / seeds: `E61-static-match-v1`; within each moving-semantic-family × `[2.5,10),[10,20),[20,30),[30,50]` m cell, independently rank moving and corresponding static-semantic candidates by SHA-256 over namespace, sequence, frame and canonical ray identity.
@@ -3478,24 +3478,24 @@ Notes: Matching coverage and moving/static score differences restrict mechanism 
 ## E62 | Custom Evaluator versus Official Evaluator
 
 Experiment ID: E62
-Design-freeze commit/hash: Frozen design; commit not recorded.
+Design-freeze commit/hash: INCOMPLETE. The current text freezes the comparison quantities and tolerance but does not identify the analytic fixtures or the required fixed real prediction. This missing evidence identity was found before any E62 implementation or result and requires an owner-approved versioned protocol completion.
 Execution-freeze commit/hash: Not executed.
 Date: Not executed.
 Git commit / clean state: Not applicable.
-Data identities: Analytic prediction fixtures and one fixed real prediction.
-Input artifact hashes: Official evaluator identity to be frozen; none recorded.
-Random namespaces / seeds: Fixed prediction identities.
+Data identities: The intended inputs are analytic prediction fixtures and one fixed real prediction, but neither has an exact frozen identity. No prediction/score artifact currently exists under `runs/ajae`. Train/201 and train/206 cannot supply a real-data positive fixture because their E61 populations contain no semantic-2 anomaly points; the sealed public 19-sequence validation set must not be opened for E62.
+Input artifact hashes: Audited official source: `/home/jasongao/Study/DynaCAN-deps/stu_dataset/compute_point_level_ood.py`, SHA-256 `ed0330f80fbd3cd4cefafed33d6c747c51f2de521ef191e2868eb24f84b9ce61`, in clean repository commit `8f0f09c2ca4bf7b665e0ae5919b4092ddae140a2`. Current custom evaluator: `src/evaluate.py`, SHA-256 `8eedfdcbc957abcd7d21d494f076e70d3f6b3661ebac344712bca706e115e718`. The fixed prediction artifact, source frame/world, model/checkpoint and their hashes remain unspecified.
+Random namespaces / seeds: Fixed prediction identities are required but not yet specified.
 Command and resolved config: Run custom and official AP, AUROC, and FPR95. Filtering of 2.5–50 m, ignore labels, and fewer-than-five-anomaly-points-per-frame rule must be pointwise identical. Absolute metric differences ≤1e-10; valid point/frame counts exactly identical.
 Resource and disk preflight: Not executed.
 Artifacts and hashes: None.
 Primary construct: Numerical and sample-selection equivalence of the custom evaluator to the official evaluator.
-Primary result: Not executed.
-PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
-Failure classification: Not applicable.
-Unlocked next node: E63 after PASS.
+Primary result: A read-only pre-execution audit identified the official evaluator source exactly and confirmed that the repository has no already-frozen prediction artifact satisfying the stated real-prediction requirement. The existing analytic unit test is useful implementation evidence but does not complete the missing formal E62 fixture identity.
+PASS / FAIL / OUTCOME: OUTCOME — PROTOCOL INCOMPLETE / NOT EXECUTED. This is not an E62 FAIL and no scientific result has been observed.
+Failure classification: Protocol-definition incompleteness, not implementation failure. Before execution, the owner must freeze (1) exact analytic arrays covering the 2.5 m and 50 m boundaries, semantic-zero ignore behavior, four-versus-five anomaly-point frame gate, and tied-score/threshold behavior; and (2) what “one fixed real prediction” means, including its data source, frame/world identities, prediction-producing model/checkpoint and artifact hashes. If “real” means real-valued rather than real-data, that meaning must be stated explicitly.
+Unlocked next node: None until E62 is completed and PASSes; E63 remains locked.
 Invalidated downstream evidence: Training comparisons remain locked.
-Descriptive observations: None.
-Notes: Filtering equivalence is part of the construct, not merely metric arithmetic.
+Descriptive observations: The released calculator uses raw semantic 0 as ignore, semantic 2 as anomaly, inclusive 2.5–50 m range filtering, and skips frames with fewer than five anomaly points before pooling accepted points. These audited mechanics do not choose the missing fixture identity.
+Notes: Filtering equivalence is part of the construct, not merely metric arithmetic. Do not use the sealed public 19 sequences, invent a prediction source, or treat the missing identity as an implementation bug.
 
 ## E63 | One-Time Freeze of Training, Selection, Statistics, and Safety Rules
 
