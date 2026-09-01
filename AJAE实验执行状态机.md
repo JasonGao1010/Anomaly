@@ -3478,24 +3478,24 @@ Notes: Matching coverage and moving/static score differences restrict mechanism 
 ## E62 | Custom Evaluator versus Official Evaluator
 
 Experiment ID: E62
-Design-freeze commit/hash: INCOMPLETE. The current text freezes the comparison quantities and tolerance but does not identify the analytic fixtures or the required fixed real prediction. This missing evidence identity was found before any E62 implementation or result and requires an owner-approved versioned protocol completion.
+Design-freeze commit/hash: Owner-approved E62-v2 protocol completion prepared before any fixture comparison. E62 tests evaluator sample-selection and numerical equivalence only; the ambiguous fixed-real-prediction requirement is deleted and replaced by a frozen non-symbolic constructed numerical fixture. Commit/hash to be recorded after commit.
 Execution-freeze commit/hash: Not executed.
 Date: Not executed.
 Git commit / clean state: Not applicable.
-Data identities: The intended inputs are analytic prediction fixtures and one fixed real prediction, but neither has an exact frozen identity. No prediction/score artifact currently exists under `runs/ajae`. Train/201 and train/206 cannot supply a real-data positive fixture because their E61 populations contain no semantic-2 anomaly points; the sealed public 19-sequence validation set must not be opened for E62.
+Data identities: One frozen analytic suite and one frozen non-symbolic constructed numerical fixture. The analytic cases cover float32 range boundaries, semantic-zero ignore behavior, post-filter four-versus-five anomaly frame acceptance, all-tied scores, duplicate scores, TPR exactly 0.95 and the first threshold strictly above 0.95. The numerical fixture has 10 constructed frames × 96 points with mixed in/out-of-range, ignored, normal and anomaly identities. Public real-OOD 19, hidden-test 51 and every real anomaly sequence are forbidden.
 Input artifact hashes: Audited official source: `/home/jasongao/Study/DynaCAN-deps/stu_dataset/compute_point_level_ood.py`, SHA-256 `ed0330f80fbd3cd4cefafed33d6c747c51f2de521ef191e2868eb24f84b9ce61`, in clean repository commit `8f0f09c2ca4bf7b665e0ae5919b4092ddae140a2`. Current custom evaluator: `src/evaluate.py`, SHA-256 `8eedfdcbc957abcd7d21d494f076e70d3f6b3661ebac344712bca706e115e718`. The fixed prediction artifact, source frame/world, model/checkpoint and their hashes remain unspecified.
-Random namespaces / seeds: Fixed prediction identities are required but not yet specified.
+Random namespaces / seeds: Numerical fixture namespace `E62-numerical-fixture-v1`, NumPy PCG64 seed `62002026`; all realized arrays and their hashes must be frozen before the first formal comparison.
 Command and resolved config: Run custom and official AP, AUROC, and FPR95. Filtering of 2.5–50 m, ignore labels, and fewer-than-five-anomaly-points-per-frame rule must be pointwise identical. Absolute metric differences ≤1e-10; valid point/frame counts exactly identical.
 Resource and disk preflight: Not executed.
 Artifacts and hashes: None.
 Primary construct: Numerical and sample-selection equivalence of the custom evaluator to the official evaluator.
 Primary result: A read-only pre-execution audit identified the official evaluator source exactly and confirmed that the repository has no already-frozen prediction artifact satisfying the stated real-prediction requirement. The existing analytic unit test is useful implementation evidence but does not complete the missing formal E62 fixture identity.
-PASS / FAIL / OUTCOME: OUTCOME — PROTOCOL INCOMPLETE / NOT EXECUTED. This is not an E62 FAIL and no scientific result has been observed.
-Failure classification: Protocol-definition incompleteness, not implementation failure. Before execution, the owner must freeze (1) exact analytic arrays covering the 2.5 m and 50 m boundaries, semantic-zero ignore behavior, four-versus-five anomaly-point frame gate, and tied-score/threshold behavior; and (2) what “one fixed real prediction” means, including its data source, frame/world identities, prediction-producing model/checkpoint and artifact hashes. If “real” means real-valued rather than real-data, that meaning must be stated explicitly.
-Unlocked next node: None until E62 is completed and PASSes; E63 remains locked.
+PASS / FAIL / OUTCOME: OUTCOME — E62-v2 PROTOCOL COMPLETED BEFORE FIXTURE FREEZE / NOT EXECUTED. This is not an E62 FAIL and no scientific result has been observed.
+Failure classification: Any formal E62 mismatch is an evaluator or harness implementation defect. Repair implementation and rerun the unchanged frozen fixtures; it cannot fail AJAE, the data or Gate 2.
+Unlocked next node: Freeze the exact fixture artifact, then implement and execute E62; E63 remains locked until E62 PASS.
 Invalidated downstream evidence: Training comparisons remain locked.
 Descriptive observations: The released calculator uses raw semantic 0 as ignore, semantic 2 as anomaly, inclusive 2.5–50 m range filtering, and skips frames with fewer than five anomaly points before pooling accepted points. These audited mechanics do not choose the missing fixture identity.
-Notes: Filtering equivalence is part of the construct, not merely metric arithmetic. Do not use the sealed public 19 sequences, invent a prediction source, or treat the missing identity as an implementation bug.
+Notes: Filtering equivalence is part of the construct, not merely metric arithmetic. Do not use the sealed public 19 sequences, hidden test or any real anomaly source. The scalar decimal `50.000001` rounds to `50.0` in float32, so the analytic fixture must preserve the declared boundary value as metadata while using a float32 vector whose official computed norm is strictly above 50 m; expected inclusion is always determined by the official float32 norm.
 
 ## E63 | One-Time Freeze of Training, Selection, Statistics, and Safety Rules
 

@@ -390,6 +390,21 @@ def test_e61_safety_identity_protocol_is_frozen_before_scores() -> None:
     assert match["unmatched_moving_points_remain_in_moving_safety"] is True
 
 
+def test_e62_protocol_forbids_real_anomaly_data_and_freezes_strict_fpr95() -> None:
+    protocol = load_protocol(PROTOCOL_PATH)
+    e62 = protocol.evaluation_document["evaluator_equivalence"]
+    assert e62["version"] == "E62-v2"
+    assert set(e62["forbidden_data"]) == {
+        "public real-OOD 19 sequences",
+        "hidden-test 51 sequences",
+        "any real anomaly sequence",
+    }
+    assert e62["comparison"]["fpr95_tpr_rule"].endswith(
+        "strictly greater than 0.95"
+    )
+    assert e62["comparison"]["maximum_absolute_difference"] == 1.0e-10
+
+
 def test_protocol_contains_no_retired_training_route() -> None:
     text = json.dumps(json.loads(PROTOCOL_PATH.read_text()), sort_keys=True)
     for retired in (

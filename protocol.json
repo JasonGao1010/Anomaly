@@ -3721,6 +3721,42 @@
     "minimum_range_m": 2.5, "maximum_range_m": 50.0,
     "minimum_range_inclusive": true, "maximum_range_inclusive": true,
     "minimum_anomaly_points": 5, "point_metrics": ["AP", "AUROC", "FPR95"],
+    "evaluator_equivalence": {
+      "version": "E62-v2",
+      "status": "protocol_completed_before_fixture_freeze",
+      "scientific_role": "sample-selection and numerical equivalence only; not model performance or real-OOD generalization",
+      "official": {
+        "repository": "/home/jasongao/Study/DynaCAN-deps/stu_dataset",
+        "commit": "8f0f09c2ca4bf7b665e0ae5919b4092ddae140a2",
+        "source_file": "compute_point_level_ood.py",
+        "source_sha256": "ed0330f80fbd3cd4cefafed33d6c747c51f2de521ef191e2868eb24f84b9ce61"
+      },
+      "fixtures": {
+        "artifact": "runs/ajae/e62_evaluator_fixtures.npz",
+        "artifact_sha256": null,
+        "scientific_array_sha256": null,
+        "analytic_cases": ["range_ignore_and_post_filter_frame_gate", "all_scores_tied", "strict_tpr_above_0.95", "mixed_repeated_scores"],
+        "declared_range_boundaries_m": [2.499999, 2.5, 50.0, 50.000001],
+        "range_norm_semantics": "numpy float32 norm exactly as the official evaluator",
+        "numerical_fixture": {
+          "kind": "frozen non-symbolic constructed numerical predictions",
+          "namespace": "E62-numerical-fixture-v1",
+          "pcg64_seed": 62002026,
+          "frames": 10,
+          "points_per_frame": 96
+        }
+      },
+      "comparison": {
+        "discrete_exact": ["accepted frame identities", "skipped frame identities", "selected point identities", "valid point count", "positive point count", "negative point count", "pooled labels", "pooled scores"],
+        "metrics": ["AP", "AUROC", "FPR95"],
+        "threshold_if_exposed": true,
+        "maximum_absolute_difference": 1e-10,
+        "fpr95_tpr_rule": "first official ROC threshold with TPR strictly greater than 0.95"
+      },
+      "forbidden_data": ["public real-OOD 19 sequences", "hidden-test 51 sequences", "any real anomaly sequence"],
+      "pass_definition": "Every frozen fixture has exact custom-versus-official range, ignore, post-filter frame acceptance, selected identity, count, pooled-label and pooled-score equality; AP, AUROC, FPR95 and the exposed threshold differ by at most 1e-10.",
+      "failure_route": "implementation mismatch only; repair the evaluator or harness and rerun the unchanged frozen fixtures"
+    },
     "comparison_frame_domain": {
       "status": "proposed_requires_owner_confirmation",
       "rule": "intersection_of_complete_centered_q0_and_complete_causal_current_frames",

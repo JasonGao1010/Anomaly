@@ -877,6 +877,132 @@ class AJAEProtocol:
             raise ProtocolError("official point range, frame gate, or probability fusion changed")
         if tuple(evaluation.get("point_metrics", ())) != ("AP", "AUROC", "FPR95"):
             raise ProtocolError("official point metrics changed")
+        equivalence = _mapping(
+            evaluation["evaluator_equivalence"],
+            "evaluation.evaluator_equivalence",
+        )
+        _exact_keys(
+            equivalence,
+            {
+                "version", "status", "scientific_role", "official", "fixtures",
+                "comparison", "forbidden_data", "pass_definition", "failure_route",
+            },
+            "evaluation.evaluator_equivalence",
+        )
+        official = _mapping(equivalence["official"], "E62 official evaluator")
+        fixtures = _mapping(equivalence["fixtures"], "E62 fixtures")
+        numerical = _mapping(fixtures["numerical_fixture"], "E62 numerical fixture")
+        comparison = _mapping(equivalence["comparison"], "E62 comparison")
+        _exact_keys(
+            official,
+            {"repository", "commit", "source_file", "source_sha256"},
+            "E62 official evaluator",
+        )
+        _exact_keys(
+            fixtures,
+            {
+                "artifact", "artifact_sha256", "scientific_array_sha256",
+                "analytic_cases", "declared_range_boundaries_m",
+                "range_norm_semantics", "numerical_fixture",
+            },
+            "E62 fixtures",
+        )
+        _exact_keys(
+            numerical,
+            {"kind", "namespace", "pcg64_seed", "frames", "points_per_frame"},
+            "E62 numerical fixture",
+        )
+        _exact_keys(
+            comparison,
+            {
+                "discrete_exact", "metrics", "threshold_if_exposed",
+                "maximum_absolute_difference", "fpr95_tpr_rule",
+            },
+            "E62 comparison",
+        )
+        status = equivalence.get("status")
+        if (
+            equivalence.get("version") != "E62-v2"
+            or status not in {
+                "protocol_completed_before_fixture_freeze",
+                "fixtures_frozen_before_formal_comparison",
+                "formal_pass",
+            }
+            or (
+                official.get("repository"), official.get("commit"),
+                official.get("source_file"), official.get("source_sha256"),
+            )
+            != (
+                "/home/jasongao/Study/DynaCAN-deps/stu_dataset",
+                "8f0f09c2ca4bf7b665e0ae5919b4092ddae140a2",
+                "compute_point_level_ood.py",
+                "ed0330f80fbd3cd4cefafed33d6c747c51f2de521ef191e2868eb24f84b9ce61",
+            )
+            or fixtures.get("artifact") != "runs/ajae/e62_evaluator_fixtures.npz"
+            or tuple(fixtures.get("analytic_cases", ()))
+            != (
+                "range_ignore_and_post_filter_frame_gate",
+                "all_scores_tied",
+                "strict_tpr_above_0.95",
+                "mixed_repeated_scores",
+            )
+            or tuple(fixtures.get("declared_range_boundaries_m", ()))
+            != (2.499999, 2.5, 50.0, 50.000001)
+            or fixtures.get("range_norm_semantics")
+            != "numpy float32 norm exactly as the official evaluator"
+            or (
+                numerical.get("kind"), numerical.get("namespace"),
+                numerical.get("pcg64_seed"), numerical.get("frames"),
+                numerical.get("points_per_frame"),
+            )
+            != (
+                "frozen non-symbolic constructed numerical predictions",
+                "E62-numerical-fixture-v1",
+                62002026,
+                10,
+                96,
+            )
+            or tuple(comparison.get("metrics", ())) != ("AP", "AUROC", "FPR95")
+            or comparison.get("threshold_if_exposed") is not True
+            or _number(
+                comparison.get("maximum_absolute_difference"),
+                "E62 metric tolerance",
+            )
+            != 1.0e-10
+            or comparison.get("fpr95_tpr_rule")
+            != "first official ROC threshold with TPR strictly greater than 0.95"
+            or set(equivalence.get("forbidden_data", ()))
+            != {
+                "public real-OOD 19 sequences",
+                "hidden-test 51 sequences",
+                "any real anomaly sequence",
+            }
+            or equivalence.get("failure_route")
+            != "implementation mismatch only; repair the evaluator or harness and rerun the unchanged frozen fixtures"
+        ):
+            raise ProtocolError("E62 evaluator-equivalence protocol changed")
+        expected_discrete = {
+            "accepted frame identities", "skipped frame identities",
+            "selected point identities", "valid point count",
+            "positive point count", "negative point count", "pooled labels",
+            "pooled scores",
+        }
+        if set(comparison.get("discrete_exact", ())) != expected_discrete:
+            raise ProtocolError("E62 discrete equivalence checks changed")
+        hashes = (
+            fixtures.get("artifact_sha256"),
+            fixtures.get("scientific_array_sha256"),
+        )
+        if status == "protocol_completed_before_fixture_freeze":
+            if hashes != (None, None):
+                raise ProtocolError("unfrozen E62 fixtures cannot declare hashes")
+        elif any(
+            not isinstance(value, str)
+            or len(value) != 64
+            or any(character not in "0123456789abcdef" for character in value)
+            for value in hashes
+        ):
+            raise ProtocolError("frozen E62 fixture hashes are invalid")
         frame_domain = _mapping(
             evaluation["comparison_frame_domain"], "comparison frame domain"
         )
