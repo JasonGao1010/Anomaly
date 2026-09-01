@@ -7,6 +7,7 @@ import hashlib
 import importlib
 import json
 import math
+import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -30,6 +31,7 @@ STU_VOXEL_SIZE_METRES = 0.05
 RELATIVE_TIMES = (-2, -1, 0, 1, 2)
 STU_MODEL_STATE_FORMAT = "ajae-stu-normal-model-state-v2"
 STU_MODEL_STATE_CONVERSION_RULE = "extract_exact_model_prefix_strip_once_v1"
+KDTREE_WORKERS = max(1, min(24, os.cpu_count() or 1))
 
 # Frozen by the controlled model.* extraction from the official STU release.
 STU_CHECKPOINT_BYTES = 476_261_075
@@ -590,6 +592,8 @@ def temporal_radius_knn(
     delta: int,
     radius: float,
     k: int,
+    *,
+    workers: int | None = None,
 ) -> tuple[Tensor, Tensor]:
     """Find an independent radius-K neighborhood for one exact time difference."""
 
@@ -600,7 +604,8 @@ def temporal_radius_knn(
         raise ModelError("neighbor relative times must be int64[N]")
     if delta not in RELATIVE_TIMES:
         raise ModelError("neighbor time difference must be one of -2,-1,0,1,2")
-    if radius <= 0 or k <= 0:
+    selected_workers = KDTREE_WORKERS if workers is None else int(workers)
+    if radius <= 0 or k <= 0 or selected_workers < 1:
         raise ModelError("neighbor radius and K must be positive")
     if relative_times.device != coordinates.device:
         raise ModelError("neighbor coordinates and times must share a device")
@@ -623,19 +628,45 @@ def temporal_radius_knn(
             points[query_index],
             k=width,
             distance_upper_bound=float(radius),
-            workers=1,
+            workers=selected_workers,
         )
         if width == 1:
             distance = distance[:, None]
             local_index = local_index[:, None]
-        for row, point in enumerate(points[query_index]):
+        raw_valid = (
+            np.isfinite(distance)
+            & (distance < float(radius))
+            & (local_index < source_index.size)
+        )
+        tied = np.zeros(query_index.size, dtype=np.bool_)
+        if width > 1:
+            tied = np.any(
+                raw_valid[:, :-1]
+                & raw_valid[:, 1:]
+                & np.isclose(
+                    distance[:, :-1], distance[:, 1:], rtol=0.0, atol=1.0e-12
+                ),
+                axis=1,
+            )
+        # Strictly ordered rows already have the exact lexicographic result.
+        # Vectorizing them avoids one Python iteration per LiDAR return.
+        fast = ~tied
+        take = min(k, width)
+        if np.any(fast):
+            fast_local = local_index[fast, :take]
+            fast_valid = raw_valid[fast, :take]
+            safe_local = np.minimum(fast_local, source_index.size - 1)
+            target_rows = query_index[fast]
+            local_row, local_column = np.nonzero(fast_valid)
+            neighbor[target_rows[local_row], local_column] = source_index[
+                safe_local[local_row, local_column]
+            ]
+            valid[target_rows[local_row], local_column] = True
+        for row in np.flatnonzero(tied):
+            point = points[query_index[row]]
             row_distance = np.asarray(distance[row], dtype=np.float64)
             row_local = np.asarray(local_index[row], dtype=np.int64)
-            row_valid = (
-                np.isfinite(row_distance)
-                & (row_distance < float(radius))
-                & (row_local < source_index.size)
-            )
+            row_valid = raw_valid[row]
             row_distance = row_distance[row_valid]
             row_local = row_local[row_valid]
             if row_local.size > k and np.isclose(
@@ -1058,7 +1089,7 @@ class KnnUpsample(nn.Module):
             )
             width = min(self.k, source_points.shape[0])
             distance, local_index = cKDTree(source_points).query(
-                target_points, k=width, workers=1
+                target_points, k=width, workers=KDTREE_WORKERS
             )
             if width == 1:
                 distance = distance[:, None]

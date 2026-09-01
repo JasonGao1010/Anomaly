@@ -2390,12 +2390,52 @@ def train_all_seeds(
         model_refs.append(weakref.ref(trainer.model))
         run_dirs.add(run_dir)
         progress = trainer.run_dir / "progress.pt"
+        model_path = trainer.run_dir / "model.pt"
+        result_path = trainer.run_dir / "result.json"
         if resume:
-            if not progress.is_file():
-                raise TrainingError(f"seed {seed} has no progress checkpoint to resume")
-            start_world = trainer.load_progress()
+            if progress.is_file():
+                if model_path.exists() or result_path.exists():
+                    raise TrainingError(
+                        f"seed {seed} mixes progress and completed-run artifacts"
+                    )
+                start_world = trainer.load_progress()
+            elif model_path.is_file() and result_path.is_file():
+                saved_model = torch.load(
+                    model_path, map_location="cpu", weights_only=True
+                )
+                saved_result = json.loads(result_path.read_text(encoding="utf-8"))
+                shared_completion = (
+                    saved_result.get("status") == "completed"
+                    and saved_model.get("format") == MODEL_FORMAT
+                    and saved_result.get("format") == RUN_FORMAT
+                    and saved_model.get("completion_id")
+                    == saved_result.get("completion_id")
+                    and saved_model.get("seed") == seed
+                    and saved_result.get("seed") == seed
+                    and saved_model.get("config") == asdict(config)
+                    and saved_model.get("condition") == condition.to_dict()
+                    and saved_result.get("condition") == condition.to_dict()
+                    and saved_model.get("scientific_identity")
+                    == trainer.scientific_identity
+                    and saved_result.get("scientific_identity")
+                    == trainer.scientific_identity
+                )
+                if not shared_completion:
+                    raise TrainingError(
+                        f"seed {seed} completed artifacts do not match this run"
+                    )
+                results[seed] = saved_result
+                continue
+            elif model_path.exists() or result_path.exists():
+                raise TrainingError(
+                    f"seed {seed} has an incomplete completed-run artifact pair"
+                )
+            else:
+                # A resumed multi-seed run may legitimately reach a seed that
+                # had not started when the earlier process was interrupted.
+                start_world = 0
         else:
-            if progress.exists() or (trainer.run_dir / "model.pt").exists():
+            if progress.exists() or model_path.exists() or result_path.exists():
                 raise TrainingError(f"seed {seed} run directory already contains state")
             start_world = 0
         seed_result = trainer.fit(

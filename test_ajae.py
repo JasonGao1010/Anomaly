@@ -18,6 +18,7 @@ import torch
 from torch import nn
 
 import src.render as render_module
+import src.train as train_module
 from src.evaluate import (
     AJAEInference,
     EvaluationError,
@@ -82,10 +83,12 @@ from src.train import (
     DevelopmentWorldMetrics,
     FrameCache,
     FrameCacheKey,
+    TrainConfig,
     TrainingError,
     balanced_bce_loss,
     checkpoint_selection_key,
     experiment_condition,
+    train_all_seeds,
     validate_formal_preflight,
 )
 
@@ -1615,6 +1618,87 @@ def test_balanced_bce_is_empty_class_safe() -> None:
     )
     with pytest.raises(TrainingError, match="no valid"):
         balanced_bce_loss(logits, targets, torch.zeros(3, dtype=torch.bool))
+
+
+def test_multi_seed_resume_skips_complete_and_starts_unseen_seed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = TrainConfig(seeds=(11, 12, 13), output_dir="runs")
+    condition = experiment_condition("B1")
+    protocol_identity = {"training": {"maximum_worlds": 4}}
+    selection_identity = {"metric": "frozen"}
+    scientific_identity = {
+        "protocol": protocol_identity,
+        "checkpoint_selection": selection_identity,
+    }
+    preflight = SimpleNamespace(
+        maximum_worlds=4,
+        protocol_document=protocol_identity,
+        checkpoint_selection=selection_identity,
+    )
+    starts: list[tuple[int, int]] = []
+
+    class FakeTrainer:
+        def __init__(self, seed: int) -> None:
+            self.seed = seed
+            self.condition = condition
+            self.config = config
+            self.scientific_identity = scientific_identity
+            self.run_dir = tmp_path / f"seed-{seed}"
+            self.run_dir.mkdir(exist_ok=True)
+            self.model = nn.Linear(1, 1)
+
+        def load_progress(self) -> int:
+            return 2
+
+        def fit(self, _world_factory, *, maximum_worlds: int, start_world: int):
+            assert maximum_worlds == 4
+            starts.append((self.seed, start_world))
+            return {"status": "completed", "seed": self.seed}
+
+    complete_dir = tmp_path / "seed-11"
+    complete_dir.mkdir()
+    completion_id = 7
+    torch.save(
+        {
+            "format": train_module.MODEL_FORMAT,
+            "completion_id": completion_id,
+            "seed": 11,
+            "config": train_module.asdict(config),
+            "condition": condition.to_dict(),
+            "scientific_identity": scientific_identity,
+        },
+        complete_dir / "model.pt",
+    )
+    (complete_dir / "result.json").write_text(
+        json.dumps(
+            {
+                "format": train_module.RUN_FORMAT,
+                "status": "completed",
+                "completion_id": completion_id,
+                "seed": 11,
+                "condition": condition.to_dict(),
+                "scientific_identity": scientific_identity,
+            }
+        ),
+        encoding="utf-8",
+    )
+    progress_dir = tmp_path / "seed-12"
+    progress_dir.mkdir()
+    (progress_dir / "progress.pt").touch()
+    monkeypatch.setattr(train_module, "_require_preflight_proof", lambda *_: None)
+
+    results = train_all_seeds(
+        config,
+        condition,
+        lambda seed, _condition: FakeTrainer(seed),
+        lambda *_: None,
+        preflight=preflight,
+        maximum_worlds=4,
+        resume=True,
+    )
+    assert starts == [(12, 2), (13, 0)]
+    assert set(results) == {11, 12, 13}
 
 
 def test_checkpoint_selection_global_band_does_not_drift() -> None:
