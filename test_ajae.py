@@ -1986,6 +1986,10 @@ def test_e76_lite_selects_the_frozen_result_blind_frame_subset() -> None:
         ],
     )
     assert int(counts[rows].sum()) == 3_955_039
+    frozen = load_protocol(PROTOCOL_PATH).development["exploration_track"][
+        "e76x_lite_freeze"
+    ]["pure_normal_selection"]["selected_frame_ids"]
+    assert tuple(frames[rows].astype(int).tolist()) == tuple(frozen)
 
 
 def test_phase7_mechanical_fixtures_all_pass_and_reproduce() -> None:

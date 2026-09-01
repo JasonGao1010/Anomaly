@@ -3536,7 +3536,8 @@ def run_e76_exploratory(
         pure_frame = full_pure_frame[pure_rows]
         if (
             E76_LITE_PURE_NAMESPACE != selection["namespace"]
-            or pure_frame.astype(int).tolist() != selection["selected_frame_ids"]
+            or tuple(pure_frame.astype(int).tolist())
+            != tuple(selection["selected_frame_ids"])
         ):
             raise QualificationError("E76-X-lite frame selection changed")
         pure_packed = full_pure_packed[pure_rows]
