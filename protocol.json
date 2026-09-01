@@ -2656,8 +2656,8 @@
       }
     },
     "renderer_mechanical_qualification": {
-      "status": "Gate 1 PASS; E50-E58 and E61 valid formal runs PASS; E59-E60 descriptive characterization complete; E62 current",
-      "current_gate1_policy": {"hard_evidence": ["compatible canonical-ray and renderer mechanics through E44", "E45B-v2 rendered control/proxy qualification PASS", "E48 direct rendered-label-shortcut audit PASS"], "excluded_from_conjunction": ["all E45A variants", "E45-V1", "E46", "E47"], "rationale": "Natural real-normal observations and coverage-oriented inserted controls need not reproduce the same scene/placement distribution. Real-versus-rendered source identifiability is not equivalent to anomaly-label shortcut predictability because rendered controls and rendered proxies carry different labels.", "gate1_result": "PASS", "current_node": "E62", "next_after_pass": ["E62-E71", "Gate 2 B1 versus B0"]},
+      "status": "Gate 1 PASS; E50-E58 and E61-E62 valid formal runs PASS; E59-E60 descriptive characterization complete; E63 current",
+      "current_gate1_policy": {"hard_evidence": ["compatible canonical-ray and renderer mechanics through E44", "E45B-v2 rendered control/proxy qualification PASS", "E48 direct rendered-label-shortcut audit PASS"], "excluded_from_conjunction": ["all E45A variants", "E45-V1", "E46", "E47"], "rationale": "Natural real-normal observations and coverage-oriented inserted controls need not reproduce the same scene/placement distribution. Real-versus-rendered source identifiability is not equivalent to anomaly-label shortcut predictability because rendered controls and rendered proxies carry different labels.", "gate1_result": "PASS", "current_node": "E63", "next_after_pass": ["E63-E71", "Gate 2 B1 versus B0"]},
       "layer_boundaries": {"E27-E28": "direct geometry outputs only", "E29": "return probability and deterministic acceptance decision only", "E30-E31": "accepted returns", "E32-E33": "nearest-return occlusion competition"},
       "E27": {
         "question": "Does the formal geometry path return the correct nearest convex-hull hit, outward finite normal and object ID for active normal-control templates when return rejection is disabled?",
@@ -3723,7 +3723,7 @@
     "minimum_anomaly_points": 5, "point_metrics": ["AP", "AUROC", "FPR95"],
     "evaluator_equivalence": {
       "version": "E62-v2",
-      "status": "fixtures_frozen_before_formal_comparison",
+      "status": "formal_pass",
       "scientific_role": "sample-selection and numerical equivalence only; not model performance or real-OOD generalization",
       "official": {
         "repository": "/home/jasongao/Study/DynaCAN-deps/stu_dataset",
@@ -3755,7 +3755,24 @@
       },
       "forbidden_data": ["public real-OOD 19 sequences", "hidden-test 51 sequences", "any real anomaly sequence"],
       "pass_definition": "Every frozen fixture has exact custom-versus-official range, ignore, post-filter frame acceptance, selected identity, count, pooled-label and pooled-score equality; AP, AUROC, FPR95 and the exposed threshold differ by at most 1e-10.",
-      "failure_route": "implementation mismatch only; repair the evaluator or harness and rerun the unchanged frozen fixtures"
+      "failure_route": "implementation mismatch only; repair the evaluator or harness and rerun the unchanged frozen fixtures",
+      "result": {
+        "passed": true,
+        "artifact": "runs/ajae/e62_evaluator_equivalence.npz",
+        "artifact_sha256": "a561c2da0922a99bfe000e29a5f9cfedee432fdf17e3433e2c01d4b56c305226",
+        "scientific_array_sha256": "54d82af072df6fb3adb9d36d77c7dd8d0407b27cd1e53679fa489423d9121101",
+        "protocol_sha256_at_execution": "157b311ffc87ab076e9a4c006b2e6bc8be159feca0937d0bb4115e1e5ea866e7",
+        "cases": 5,
+        "accepted_frames": 13,
+        "skipped_frames": 2,
+        "valid_points": 864,
+        "positive_points": 119,
+        "negative_points": 745,
+        "discrete_errors": 0,
+        "maximum_metric_absolute_difference": 0.0,
+        "metric_tolerance": 1e-10,
+        "independent_read_only_validation": true
+      }
     },
     "comparison_frame_domain": {
       "status": "proposed_requires_owner_confirmation",

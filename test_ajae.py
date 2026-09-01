@@ -396,6 +396,8 @@ def test_e62_protocol_forbids_real_anomaly_data_and_freezes_strict_fpr95() -> No
     protocol = load_protocol(PROTOCOL_PATH)
     e62 = protocol.evaluation_document["evaluator_equivalence"]
     assert e62["version"] == "E62-v2"
+    assert e62["status"] == "formal_pass"
+    assert e62["result"]["passed"] is True
     assert set(e62["forbidden_data"]) == {
         "public real-OOD 19 sequences",
         "hidden-test 51 sequences",

@@ -881,12 +881,16 @@ class AJAEProtocol:
             evaluation["evaluator_equivalence"],
             "evaluation.evaluator_equivalence",
         )
+        status = equivalence.get("status")
+        equivalence_keys = {
+            "version", "status", "scientific_role", "official", "fixtures",
+            "comparison", "forbidden_data", "pass_definition", "failure_route",
+        }
+        if status == "formal_pass":
+            equivalence_keys.add("result")
         _exact_keys(
             equivalence,
-            {
-                "version", "status", "scientific_role", "official", "fixtures",
-                "comparison", "forbidden_data", "pass_definition", "failure_route",
-            },
+            equivalence_keys,
             "evaluation.evaluator_equivalence",
         )
         official = _mapping(equivalence["official"], "E62 official evaluator")
@@ -920,7 +924,6 @@ class AJAEProtocol:
             },
             "E62 comparison",
         )
-        status = equivalence.get("status")
         if (
             equivalence.get("version") != "E62-v2"
             or status not in {
@@ -1003,6 +1006,42 @@ class AJAEProtocol:
             for value in hashes
         ):
             raise ProtocolError("frozen E62 fixture hashes are invalid")
+        if status == "formal_pass":
+            result = _mapping(equivalence["result"], "E62 result")
+            _exact_keys(
+                result,
+                {
+                    "passed", "artifact", "artifact_sha256",
+                    "scientific_array_sha256", "protocol_sha256_at_execution",
+                    "cases", "accepted_frames", "skipped_frames", "valid_points",
+                    "positive_points", "negative_points", "discrete_errors",
+                    "maximum_metric_absolute_difference", "metric_tolerance",
+                    "independent_read_only_validation",
+                },
+                "E62 result",
+            )
+            if (
+                result.get("passed") is not True
+                or result.get("artifact")
+                != "runs/ajae/e62_evaluator_equivalence.npz"
+                or result.get("artifact_sha256")
+                != "a561c2da0922a99bfe000e29a5f9cfedee432fdf17e3433e2c01d4b56c305226"
+                or result.get("scientific_array_sha256")
+                != "54d82af072df6fb3adb9d36d77c7dd8d0407b27cd1e53679fa489423d9121101"
+                or result.get("protocol_sha256_at_execution")
+                != "157b311ffc87ab076e9a4c006b2e6bc8be159feca0937d0bb4115e1e5ea866e7"
+                or (
+                    result.get("cases"), result.get("accepted_frames"),
+                    result.get("skipped_frames"), result.get("valid_points"),
+                    result.get("positive_points"), result.get("negative_points"),
+                    result.get("discrete_errors"),
+                    result.get("maximum_metric_absolute_difference"),
+                    result.get("metric_tolerance"),
+                    result.get("independent_read_only_validation"),
+                )
+                != (5, 13, 2, 864, 119, 745, 0, 0.0, 1.0e-10, True)
+            ):
+                raise ProtocolError("E62 formal result changed")
         frame_domain = _mapping(
             evaluation["comparison_frame_domain"], "comparison frame domain"
         )

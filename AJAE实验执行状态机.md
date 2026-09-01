@@ -1,6 +1,6 @@
 # AJAE Fine-Grained Experiment Execution State Machine
 
-> Current authoritative baseline: repository `main` and all historical evidence recorded in this document. E50–E58 and E61 have formally PASSed, E59/E60 descriptive characterization is complete, and the current formal node is E62. The old commit `44fd6d13798e826b2cac8371de26a7d17707dadc` is retained only as the historical baseline from the E22-v2 period and no longer represents the current workspace state.
+> Current authoritative baseline: repository `main` and all historical evidence recorded in this document. E50–E58 and E61–E62 have formally PASSed, E59/E60 descriptive characterization is complete, and the current formal node is E63. The old commit `44fd6d13798e826b2cac8371de26a7d17707dadc` is retained only as the historical baseline from the E22-v2 period and no longer represents the current workspace state.
 
 > Basis: [AJAE Mainline Plan](</home/jasongao/Study/AJAE/AJAE%E6%96%B0%E4%B8%BB%E7%BA%BF%E6%96%B9%E6%A1%88.md>). This document decomposes the mainline plan's immutable constraints, four Decision Gates, B0–B5 controls, normal-motion safety, object-scale diagnostics, development discipline, and one-time real-OOD validation into fine-grained experiment nodes that can be executed sequentially.
 
@@ -3057,15 +3057,15 @@ Notes: Independent read-only validation recomputed candidate-bank, unit-cache an
 
 Experiment ID: E45-V1
 Design-freeze commit/hash: Optional nonblocking design; commit not recorded.
-Execution-freeze commit/hash: Comparison harness frozen at `60d3ebfd89805aaadfaf59e0e3d7ae4db859d432`; `src/qualify.py` SHA-256 `b564fc2d5eafd571bd678d5256880faab30389be8487cac47abb2aaa0249bf32`; unchanged custom `src/evaluate.py` SHA-256 `8eedfdcbc957abcd7d21d494f076e70d3f6b3661ebac344712bca706e115e718`. Full regression suite passed 73/73 before formal execution.
-Date: 2026-09-01 formal PASS.
-Git commit / clean state: Formal run used the corrected execution identity from `ab98eaecb13534f0bfb6b825f0a6cc37c15ca0d1`, recorded at clean tracked-state commit `5cb1db3c65e4b13cb882e56d19fda9cbcc236db3`; untracked user-owned `PPT/` remained excluded.
+Execution-freeze commit/hash: Not executed.
+Date: Not executed.
+Git commit / clean state: Not applicable.
 Data identities: Optional blinded panels from a separately frozen diagnostic real/control sample, if this diagnostic is ever commissioned.
-Input artifact hashes: None for a completed execution.
+Input artifact hashes: None.
 Random namespaces / seeds: Fixed panel identities would inherit E45; not executed.
 Command and resolved config: Without two independent human reviewers, do not adjudicate. This result cannot replace E46 and cannot block Gate 1.
-Resource and disk preflight: 24 physical CPU cores; 23 GiB RAM with about 21 GiB available; 16 GiB unused swap; RTX 5080 Laptop GPU not applicable to the geometry workload; no competing experiment process. Windows E had 75,055,554,560 bytes remaining of 484,950,659,072 bytes, above the 5% reserve. The formal run used 24 processes with one numerical-library thread each and completed in 8.970485 s.
-Artifacts and hashes: `runs/ajae/e58_held_out_worlds.npz`; 26,911 bytes; SHA-256 `cde17c339b5307de5f21c9ceeb9b207ad26a12026e2fe741f6926e1af8a8110b`; scientific-array SHA-256 `125bb629f8449b8fb85a5de98ff29ef5c0f3c18b01a8b8eca94ede86afdd9969`.
+Resource and disk preflight: Not executed.
+Artifacts and hashes: None.
 Primary construct: Optional human ability to identify source from matched local patches.
 Primary result: No formal adjudication recorded.
 PASS / FAIL / OUTCOME: OUTCOME — optional, nonblocking, not executed.
@@ -3479,45 +3479,45 @@ Notes: Matching coverage and moving/static score differences restrict mechanism 
 
 Experiment ID: E62
 Design-freeze commit/hash: Owner-approved E62-v2 protocol completion frozen at `675e8842590b938cee26a75ff0a727a540b50d0e`, before any fixture comparison. E62 tests evaluator sample-selection and numerical equivalence only; the ambiguous fixed-real-prediction requirement is deleted and replaced by a frozen non-symbolic constructed numerical fixture. The fixture builder was frozen at `2e24488a1d5c4a546f4b1d61869f9fbe74f96eee` and invoked without either evaluator.
-Execution-freeze commit/hash: Not executed.
-Date: Not executed.
-Git commit / clean state: Not applicable.
+Execution-freeze commit/hash: Comparison harness frozen at `60d3ebfd89805aaadfaf59e0e3d7ae4db859d432`; `src/qualify.py` SHA-256 `b564fc2d5eafd571bd678d5256880faab30389be8487cac47abb2aaa0249bf32`; unchanged custom `src/evaluate.py` SHA-256 `8eedfdcbc957abcd7d21d494f076e70d3f6b3661ebac344712bca706e115e718`. Full regression suite passed 73/73 before formal execution.
+Date: 2026-09-01 formal PASS.
+Git commit / clean state: Formal run used clean tracked state at `287eb7a2012d5bc5dfa23f506d131239f3ae8578`; untracked user-owned `PPT/` remained excluded.
 Data identities: One frozen analytic suite and one frozen non-symbolic constructed numerical fixture. The analytic cases cover float32 range boundaries, semantic-zero ignore behavior, post-filter four-versus-five anomaly frame acceptance, all-tied scores, duplicate scores, TPR exactly 0.95 and the first threshold strictly above 0.95. The numerical fixture has 10 constructed frames × 96 points with mixed in/out-of-range, ignored, normal and anomaly identities. Public real-OOD 19, hidden-test 51 and every real anomaly sequence are forbidden.
 Input artifact hashes: Audited official source: `/home/jasongao/Study/DynaCAN-deps/stu_dataset/compute_point_level_ood.py`, SHA-256 `ed0330f80fbd3cd4cefafed33d6c747c51f2de521ef191e2868eb24f84b9ce61`, in clean repository commit `8f0f09c2ca4bf7b665e0ae5919b4092ddae140a2`. Current custom evaluator: `src/evaluate.py`, SHA-256 `8eedfdcbc957abcd7d21d494f076e70d3f6b3661ebac344712bca706e115e718`. Frozen fixture: `runs/ajae/e62_evaluator_fixtures.npz`, 19,270 bytes, SHA-256 `b7f2a267aebdf6b092ba65a8edb2bd280aab22fddc02b792be6d306318ccb712`, scientific-array SHA-256 `fa77d594151a6cdb2f69a9f7f26965c493b223e4970a6736e6428a60a1de78ca`.
 Random namespaces / seeds: Numerical fixture namespace `E62-numerical-fixture-v1`, NumPy PCG64 seed `62002026`; all realized arrays and their hashes must be frozen before the first formal comparison.
 Command and resolved config: Run custom and official AP, AUROC, FPR95 and the exposed FPR95 threshold. Filtering of 2.5–50 m, ignore labels, and fewer-than-five-anomaly-points-per-frame rule must be pointwise identical. For each case, use separate official and custom calculator objects for the frozen prediction scores and for point-identity instrumentation; compare accepted/skipped frame IDs, selected point IDs, pooled labels/scores and valid/positive/negative counts exactly. Absolute numerical differences must be ≤1e-10. Formal command: `python -m src.qualify e62 --protocol protocol.json --fixture runs/ajae/e62_evaluator_fixtures.npz --output runs/ajae/e62_evaluator_equivalence.npz`.
-Resource and disk preflight: Not executed.
-Artifacts and hashes: None.
+Resource and disk preflight: 24 physical CPU cores; 25,196,924,928 bytes RAM with 22,480,494,592 bytes available; 17,179,869,184 bytes unused swap; RTX 5080 Laptop GPU idle and not used; no competing experiment process. Windows E had 75,049,132,032 bytes remaining of 484,950,659,072 bytes. All protocol, fixture, source, official commit and official-source hashes matched the execution freeze.
+Artifacts and hashes: `runs/ajae/e62_evaluator_equivalence.npz`; 9,209 bytes; SHA-256 `a561c2da0922a99bfe000e29a5f9cfedee432fdf17e3433e2c01d4b56c305226`; scientific-array SHA-256 `54d82af072df6fb3adb9d36d77c7dd8d0407b27cd1e53679fa489423d9121101`.
 Primary construct: Numerical and sample-selection equivalence of the custom evaluator to the official evaluator.
-Primary result: A read-only pre-execution audit identified the official evaluator source exactly and confirmed that the repository has no already-frozen prediction artifact satisfying the stated real-prediction requirement. The existing analytic unit test is useful implementation evidence but does not complete the missing formal E62 fixture identity.
-PASS / FAIL / OUTCOME: OUTCOME — E62-v2 FIXTURES FROZEN BEFORE FORMAL COMPARISON / NOT EXECUTED. This is not an E62 FAIL and no scientific result has been observed.
-Failure classification: Any formal E62 mismatch is an evaluator or harness implementation defect. Repair implementation and rerun the unchanged frozen fixtures; it cannot fail AJAE, the data or Gate 2.
-Unlocked next node: Implement and freeze the custom-versus-official comparison harness, then execute E62; E63 remains locked until E62 PASS.
-Invalidated downstream evidence: Training comparisons remain locked.
-Descriptive observations: The released calculator uses raw semantic 0 as ignore, semantic 2 as anomaly, inclusive 2.5–50 m range filtering, and skips frames with fewer than five anomaly points before pooling accepted points. These audited mechanics do not choose the missing fixture identity.
+Primary result: Across all five frozen cases, official and custom paths accepted the same 13 frames, skipped the same 2 frames, and pooled the same 864 valid points: 119 positive and 745 negative. Accepted/skipped frame IDs, selected point IDs, valid/positive/negative counts, pooled labels and pooled scores were exactly equal. The maximum absolute difference across AP, AUROC, FPR95 and exposed threshold was 0.0 against the frozen 1e-10 tolerance. Independent read-only reconstruction, without calling the formal E62 runner, reproduced every per-case identity, count, metric and scientific-array hash.
+PASS / FAIL / OUTCOME: PASS.
+Failure classification: None.
+Unlocked next node: E63.
+Invalidated downstream evidence: None; E63 is current.
+Descriptive observations: The all-tied analytic case reproduced official AUROC 50 and FPR95 100. The strict boundary case reproduced the first TPR strictly above 0.95, giving FPR95 20 and threshold approximately 0.7. These are evaluator mechanics only, not model-performance evidence.
 Notes: Filtering equivalence is part of the construct, not merely metric arithmetic. Do not use the sealed public 19 sequences, hidden test or any real anomaly source. The scalar decimal `50.000001` rounds to `50.0` in float32, so the analytic fixture must preserve the declared boundary value as metadata while using a float32 vector whose official computed norm is strictly above 50 m; expected inclusion is always determined by the official float32 norm.
 
 ## E63 | One-Time Freeze of Training, Selection, Statistics, and Safety Rules
 
 Experiment ID: E63
-Design-freeze commit/hash: Rules frozen before any B0/B1 result; commit not recorded.
+Design-freeze commit/hash: INCOMPLETE. The narrative proposal exists before any B0/B1 result, but the machine protocol still marks fixed-world evaluation and scientific gate criteria as owner-unresolved and marks checkpoint selection and the common comparison-frame domain as proposed. The checkpoint proposal also conflicts with this section's stated tie tolerance and tie-break order.
 Execution-freeze commit/hash: Not executed.
 Date: Not executed.
 Git commit / clean state: Not applicable.
 Data identities: B0/B1/B2/B3 development and safety sets from E57–E62; B4 and final 19-sequence rules included prospectively.
-Input artifact hashes: Machine-loadable protocol/config artifact to be produced; none exists.
-Random namespaces / seeds: Training seeds 0, 1, 2. Hierarchical paired bootstrap 5,000 times over seed and world. Fixed two-fold safety cross-fit.
+Input artifact hashes: `protocol.json` is the intended machine-loadable artifact, but its E63 fields are not yet mutually consistent or owner-frozen.
+Random namespaces / seeds: Training seeds 0, 1, 2 are stated. The narrative requires 5,000 hierarchical paired bootstrap resamples over seed and world and a fixed two-fold safety cross-fit, but no exact bootstrap namespace/seed, resampling algorithm, fold-identity rule or fold assignment is frozen.
 Command and resolved config: Training: AdamW, learning rate 1e-4, weight decay 1e-4, micro-batch 1, gradient accumulation 8; per seed at most 40 complete 206 worlds; evaluate every 5 worlds; patience 4; world-type proportions pure-normal/control-only/mixed/anomaly-only =0.20/0.20/0.40/0.20. B1/B2/B3 share budget, 201, and selection rule. Checkpoint: maximize mean AP across 24 worlds; differences <0.001 are ties, then lower FPR95, lower pure-normal cross-fit FPR, earlier checkpoint. Six held-out worlds forbidden. Statistics: 5,000 hierarchical paired bootstrap; direction consistency means at least 2/3 seed mean-AP differences positive. Gate 2 B1 vs B0 requires mean AP gain ≥0.02, 95% bootstrap lower bound >0, and ≥2/3 positive seeds. Gate 3 B3 vs B1 and B3 vs B2 each require gain ≥0.01, lower bound >0, ≥2/3 positive seeds. Safety: fixed two-fold cross-fit on 24 worlds; one fold selects point threshold for 95% proxy TPR, the other evaluates FPR, then swap. Relative model comparison may worsen pure-normal, rendered-control, moving-normal, and FPR95 by at most 0.03 absolute each. B4 vs B3 contribution supported only if gain ≥0.005, lower bound >0, all safety worsening ≤0.03; otherwise fusion unsupported while B3 may continue. Gate 4 real transfer: final model vs B1 19-sequence mean AP gain ≥0.01, vs B0 ≥0.02; both sequence-bootstrap lower bounds >0; at least 12/19 sequences positive vs B1; safety worsening ≤0.03. B1/B2/B3 cannot separately alter these rules after results. PASS means all rules/config are recorded in protocol and machine-loadable.
 Resource and disk preflight: Not executed.
 Artifacts and hashes: None.
 Primary construct: Complete preregistration of all training budgets, checkpoint selection, superiority, bootstrap, and safety criteria.
-Primary result: Not executed.
-PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
-Failure classification: Not applicable.
-Unlocked next node: E64 after PASS.
+Primary result: Read-only E63 pre-execution audit found four unresolved machine states: `development.fixed_world_evaluation.status=unresolved_requires_owner_decision`; `development.checkpoint_selection.status=proposed_requires_owner_confirmation`; `evaluation.comparison_frame_domain.status=proposed_requires_owner_confirmation`; and `decision_gates.criteria.status=unresolved_requires_owner_decision` with all Gate 1–4 and development-coverage mappings null. It also found a direct checkpoint conflict: the machine proposal uses tie tolerance `1e-6`, then lower pure-normal score q99.9 and earlier world, whereas this section states tolerance `0.001`, then lower FPR95, lower pure-normal cross-fit FPR and earlier checkpoint.
+PASS / FAIL / OUTCOME: OUTCOME — PROTOCOL INCOMPLETE / NOT EXECUTED. No training result, checkpoint score or model comparison has been observed.
+Failure classification: Protocol-definition inconsistency requiring owner decision, not an implementation failure.
+Unlocked next node: None until E63 is versioned, machine-loadable and internally consistent; E64 remains locked.
 Invalidated downstream evidence: All model-mechanics and training gates remain locked.
 Descriptive observations: None.
-Notes: No criterion may be moved separately for B1, B2, or B3 after outcomes are known.
+Notes: Before E63 can PASS, the owner must approve one exact fixed-world evaluation scope; one checkpoint objective, tolerance and complete tie-break order; the common B0–B5 frame domain; exact bootstrap and safety-fold identities; and complete machine mappings for Gate 2–4, difficulty coverage and safety comparisons. No criterion may be moved separately for B1, B2, or B3 after outcomes are known.
 
 # Phase 7 | AJAE Model Mechanical Unit Qualification
 

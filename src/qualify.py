@@ -2605,7 +2605,10 @@ def run_e62(
     protocol_file = Path(protocol_path).expanduser().resolve(strict=True)
     protocol = load_protocol(protocol_file)
     specification = protocol.evaluation_document["evaluator_equivalence"]
-    if specification["status"] != "fixtures_frozen_before_formal_comparison":
+    if specification["status"] not in {
+        "fixtures_frozen_before_formal_comparison",
+        "formal_pass",
+    }:
         raise QualificationError("E62 formal comparison requires frozen fixtures")
     fixture_file = Path(fixture_path).expanduser().resolve(strict=True)
     arrays = _e62_fixture(fixture_file, specification)
