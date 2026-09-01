@@ -2657,7 +2657,7 @@
     },
     "renderer_mechanical_qualification": {
       "status": "Gate 1 PASS; E50-E58, E61-E73 valid formal runs PASS; E59-E60 descriptive characterization complete; E74 current",
-      "current_gate1_policy": {"hard_evidence": ["compatible canonical-ray and renderer mechanics through E44", "E45B-v2 rendered control/proxy qualification PASS", "E48 direct rendered-label-shortcut audit PASS"], "excluded_from_conjunction": ["all E45A variants", "E45-V1", "E46", "E47"], "rationale": "Natural real-normal observations and coverage-oriented inserted controls need not reproduce the same scene/placement distribution. Real-versus-rendered source identifiability is not equivalent to anomaly-label shortcut predictability because rendered controls and rendered proxies carry different labels.", "gate1_result": "PASS", "current_node": "E74", "next_after_pass": ["E74-E75", "Gate 2 B1 versus B0"]},
+      "current_gate1_policy": {"hard_evidence": ["compatible canonical-ray and renderer mechanics through E44", "E45B-v2 rendered control/proxy qualification PASS", "E48 direct rendered-label-shortcut audit PASS"], "excluded_from_conjunction": ["all E45A variants", "E45-V1", "E46", "E47"], "rationale": "Natural real-normal observations and coverage-oriented inserted controls need not reproduce the same scene/placement distribution. Real-versus-rendered source identifiability is not equivalent to anomaly-label shortcut predictability because rendered controls and rendered proxies carry different labels.", "gate1_result": "PASS", "current_node": "E75-X", "next_after_pass": ["E76-X", "B2/B3 exploratory track"]},
       "layer_boundaries": {"E27-E28": "direct geometry outputs only", "E29": "return probability and deterministic acceptance decision only", "E30-E31": "accepted returns", "E32-E33": "nearest-return occlusion competition"},
       "E27": {
         "question": "Does the formal geometry path return the correct nearest convex-hull hit, outward finite normal and object ID for active normal-control templates when return rejection is disabled?",
@@ -3777,6 +3777,36 @@
       "eligible_world_ids": [0, 1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23],
       "held_out_input_forbidden": true
     },
+    "exploration_track": {
+      "version": "exploration-confirmation-split-v1",
+      "status": "active_before_formal_gate2",
+      "scientific_role": "rapidly test whole-method viability without replacing the frozen three-seed confirmatory standards",
+      "cohort": {
+        "seeds": [0, 1],
+        "selection": "the first two preregistered seeds completed in original order, never performance-selected",
+        "applies_to": ["B1", "B2", "B3"],
+        "shared_budget_and_checkpoint_rule": "exactly E63-v2"
+      },
+      "e74_confirmation": {
+        "status": "suspended_after_seeds_0_1",
+        "formal_pass_forbidden": true,
+        "completed_seed_model_sha256": ["892b9f71f0365aa189e8c572f50ac6156dac2773cbbb5f6b862927744890938f", "9111c223782e14b0cd90d9bb0f069e5c17bccf54215718250bc548f9a4a17412"],
+        "completed_seed_result_sha256": ["fccc0c513429807eee2580794b7ce01ae0228e6bfb31f5b5f2768c71de01bb22", "fb61b922faae623016a51c09a2f407cee1d9d1b7564d2ebf94acccffcb18e5e5"],
+        "paused_seed": 2,
+        "paused_progress_path": "runs/ajae/B1/seed-2/progress.pt",
+        "paused_progress_sha256": "f2a76821755ceb01725756afa43de7b91b1c6c4aff778573e8a6dd19cee65191",
+        "paused_cursor": {"world_index": 2, "block_index": 17, "window_index": 0, "windows_completed": 272, "update_index": 1170, "phase": "windows"},
+        "resume_branch": "confirm/e74-seed2-resume",
+        "partial_seed2_result_use_forbidden": true
+      },
+      "nodes": ["E75-X", "E76-X", "E78-X", "E79-X", "E80-X", "E81-X", "E82-X", "E83-X", "exploratory B4 when temporal viability is supported"],
+      "current_node": "E75-X",
+      "formal_gate2_and_gate3_status": "not adjudicated",
+      "confirmation_rule": "if temporal viability is promising, complete seed 2 for B1/B2/B3 and apply the unchanged three-seed Gate 2 and Gate 3 rules",
+      "negative_temporal_action": "stop or redesign without spending the remaining confirmatory repeats",
+      "public_real_ood_sequences_remain_sealed": true,
+      "hidden_test_sequences_remain_sealed": true
+    },
     "e63_freeze": {
       "version": "E63-v2",
       "status": "formal_pass",
@@ -4091,5 +4121,5 @@
     },
     "verdict_rule": "a gate verdict requires its real statistics and an explicit predeclared scientific judgment; artifact existence alone is never evidence"
   },
-  "status": {"implementation_target": "schema30", "scientific_route": "conditional_continue", "performance_claims_available": false}
+  "status": {"implementation_target": "schema30", "scientific_route": "exploration_track_active_before_formal_gate2", "performance_claims_available": false}
 }

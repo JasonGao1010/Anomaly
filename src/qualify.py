@@ -3083,6 +3083,167 @@ def e75_superiority_statistics(
     }
 
 
+def e75_exploratory_statistics(
+    b0_world_id: np.ndarray,
+    b0_ap_reported: np.ndarray,
+    b1_world_id: np.ndarray,
+    b1_ap_reported: np.ndarray,
+) -> dict[str, np.ndarray]:
+    """Describe the first two preregistered B1 seeds without a gate verdict."""
+
+    world_id = np.asarray(b0_world_id, dtype=np.int16)
+    baseline = np.asarray(b0_ap_reported, dtype=np.float64)
+    trained_world = np.asarray(b1_world_id, dtype=np.int16)
+    trained = np.asarray(b1_ap_reported, dtype=np.float64)
+    if (
+        world_id.tolist() != list(E63_COMMON_WORLD_ID)
+        or baseline.shape != (23,)
+        or trained_world.shape != (2, 23)
+        or not np.all(trained_world == world_id[None, :])
+        or trained.shape != (2, 23)
+        or not np.isfinite(baseline).all()
+        or not np.isfinite(trained).all()
+        or np.any((baseline < 0.0) | (baseline > REPORTED_PERCENT_SCALE))
+        or np.any((trained < 0.0) | (trained > REPORTED_PERCENT_SCALE))
+    ):
+        raise QualificationError("E75-X AP arrays or world identities are invalid")
+    baseline_decision = baseline / REPORTED_PERCENT_SCALE
+    trained_decision = trained / REPORTED_PERCENT_SCALE
+    paired = trained_decision - baseline_decision[None, :]
+    return {
+        "world_id": world_id,
+        "b0_ap_reported": baseline,
+        "b1_ap_reported": trained,
+        "b0_ap_decision": baseline_decision,
+        "b1_ap_decision": trained_decision,
+        "paired_ap_decision_difference": paired,
+        "seed_mean_ap_decision_difference": paired.mean(axis=1),
+        "two_seed_mean_ap_decision_difference": np.asarray(paired.mean()),
+        "positive_world_count": np.count_nonzero(paired > 0.0, axis=1).astype(
+            np.int16
+        ),
+    }
+
+
+def run_e75_exploratory(
+    protocol_path: Path | str,
+    e72_path: Path | str,
+    b1_dir: Path | str,
+    output_path: Path | str,
+) -> dict[str, object]:
+    """Execute E75-X on completed seeds 0/1 while seed 2 stays suspended."""
+
+    started = time.monotonic()
+    protocol_file = Path(protocol_path).expanduser().resolve(strict=True)
+    protocol = load_protocol(protocol_file)
+    project_root = Path(protocol.path).parent
+    exploration = protocol.development["exploration_track"]
+    confirmation = exploration["e74_confirmation"]
+    if (
+        exploration["current_node"] != "E75-X"
+        or tuple(exploration["cohort"]["seeds"]) != (0, 1)
+        or confirmation["formal_pass_forbidden"] is not True
+        or confirmation["partial_seed2_result_use_forbidden"] is not True
+    ):
+        raise QualificationError("E75-X exploration identity changed")
+    e72_file = Path(e72_path).expanduser().resolve(strict=True)
+    if _sha256(e72_file) != E72_ARTIFACT_SHA256:
+        raise QualificationError("E75-X B0 input is not the frozen E72 artifact")
+    progress_file = project_root / confirmation["paused_progress_path"]
+    if (
+        _sha256(progress_file) != confirmation["paused_progress_sha256"]
+        or (progress_file.parent / "model.pt").exists()
+        or (progress_file.parent / "result.json").exists()
+    ):
+        raise QualificationError("E75-X seed-2 suspension identity changed")
+
+    with np.load(e72_file, allow_pickle=False) as archive:
+        metric_order = np.asarray(archive["metric_order"])
+        ap_column = np.flatnonzero(metric_order == "AP")
+        if ap_column.tolist() != [0]:
+            raise QualificationError("E75-X E72 AP column identity changed")
+        b0_world_id = np.asarray(archive["development_world_id"], dtype=np.int16)
+        b0_ap = np.asarray(archive["development_metric"], dtype=np.float64)[:, 0]
+
+    result_root = Path(b1_dir).expanduser().resolve(strict=True)
+    expected_models = tuple(confirmation["completed_seed_model_sha256"])
+    expected_results = tuple(confirmation["completed_seed_result_sha256"])
+    b1_world_id = np.empty((2, 23), dtype=np.int16)
+    b1_ap = np.empty((2, 23), dtype=np.float64)
+    for seed in (0, 1):
+        seed_dir = result_root / f"seed-{seed}"
+        result_file = seed_dir / "result.json"
+        model_file = seed_dir / "model.pt"
+        if (
+            _sha256(result_file) != expected_results[seed]
+            or _sha256(model_file) != expected_models[seed]
+        ):
+            raise QualificationError(f"E75-X seed {seed} artifact identity changed")
+        record = json.loads(result_file.read_text(encoding="utf-8"))
+        if (
+            record.get("status") != "completed"
+            or record.get("seed") != seed
+            or record.get("maximum_worlds") != 25
+            or record.get("condition", {}).get("name") != "B1"
+        ):
+            raise QualificationError(f"E75-X seed {seed} completion is invalid")
+        selected = [
+            item
+            for item in record.get("history", ())
+            if item.get("world") == record.get("best_world")
+            and "development" in item
+        ]
+        if len(selected) != 1:
+            raise QualificationError(f"E75-X seed {seed} lacks one selected result")
+        worlds = sorted(
+            selected[0]["development"]["in_generator"],
+            key=lambda item: item["world_id"],
+        )
+        if len(worlds) != 23:
+            raise QualificationError(f"E75-X seed {seed} world count changed")
+        b1_world_id[seed] = [item["world_id"] for item in worlds]
+        b1_ap[seed] = [item["metrics"]["AP"] for item in worlds]
+        if not np.isclose(
+            b1_ap[seed].mean(),
+            float(record["best_selection_key"][0]),
+            rtol=0.0,
+            atol=1.0e-12,
+        ):
+            raise QualificationError(f"E75-X seed {seed} selected AP is inconsistent")
+
+    arrays = e75_exploratory_statistics(
+        b0_world_id, b0_ap, b1_world_id, b1_ap
+    )
+    result = {
+        "experiment": "E75-X",
+        "passed": True,
+        "pass_scope": "descriptive_execution_only",
+        "formal_gate2_adjudicated": False,
+        "formal_confidence_interval_computed": False,
+        "cohort_selection": exploration["cohort"]["selection"],
+        "training_seeds": [0, 1],
+        "development_worlds": 23,
+        "decision_metric_scale": "[0,1]",
+        "seed_mean_ap_decision_difference": arrays[
+            "seed_mean_ap_decision_difference"
+        ].tolist(),
+        "two_seed_mean_ap_decision_difference": float(
+            arrays["two_seed_mean_ap_decision_difference"]
+        ),
+        "positive_world_count": arrays["positive_world_count"].tolist(),
+        "next_node": "E76-X",
+        "protocol_sha256": _sha256(protocol_file),
+        "e72_artifact_sha256": _sha256(e72_file),
+        "seed2_paused_progress_sha256": _sha256(progress_file),
+        "b1_model_sha256": list(expected_models),
+        "b1_result_sha256": list(expected_results),
+        "scientific_array_sha256": _array_hash(arrays),
+        "seconds": time.monotonic() - started,
+    }
+    _save(Path(output_path).expanduser().resolve(), arrays, result)
+    return result
+
+
 def e76_safety_statistics(
     development_world_id: np.ndarray,
     development_point_world_id: np.ndarray,
@@ -4388,6 +4549,11 @@ def _parser() -> argparse.ArgumentParser:
     e75.add_argument("--identity", type=Path, required=True)
     e75.add_argument("--b1-dir", type=Path, required=True)
     e75.add_argument("--output", type=Path, required=True)
+    e75x = commands.add_parser("e75x")
+    e75x.add_argument("--protocol", type=Path, default=PROJECT_ROOT / "protocol.json")
+    e75x.add_argument("--e72", type=Path, required=True)
+    e75x.add_argument("--b1-dir", type=Path, required=True)
+    e75x.add_argument("--output", type=Path, required=True)
     phase7 = commands.add_parser("phase7")
     phase7.add_argument("--protocol", type=Path, default=PROJECT_ROOT / "protocol.json")
     phase7.add_argument("--e63", type=Path, required=True)
@@ -4505,6 +4671,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "e75":
         result = run_e75(
             args.protocol, args.e72, args.identity, args.b1_dir, args.output
+        )
+        print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        return 0 if result["passed"] else 1
+    if args.command == "e75x":
+        result = run_e75_exploratory(
+            args.protocol, args.e72, args.b1_dir, args.output
         )
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 0 if result["passed"] else 1

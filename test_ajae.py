@@ -35,6 +35,7 @@ from src.qualify import (
     PHASE5_FRAMES,
     e63_identity_arrays,
     e75_bootstrap_identity_arrays,
+    e75_exploratory_statistics,
     e75_superiority_statistics,
     e76_safety_statistics,
     phase7_mechanical_arrays,
@@ -1882,6 +1883,20 @@ def test_e75_converts_reported_ap_points_to_decision_scale() -> None:
     assert result["paired_ap_decision_difference"][0, 0] == pytest.approx(0.02)
     assert result["b0_ap_reported"][0] == 5.0
     assert result["b1_ap_reported"][0, 0] == 7.0
+
+
+def test_e75_exploratory_uses_first_two_seeds_without_formal_bootstrap() -> None:
+    common = np.asarray([*range(5), *range(6, 24)], dtype=np.int16)
+    baseline = np.full(23, 5.0)
+    trained = np.stack((np.full(23, 5.5), np.full(23, 8.0)))
+    result = e75_exploratory_statistics(
+        common, baseline, np.tile(common, (2, 1)), trained
+    )
+    np.testing.assert_allclose(
+        result["seed_mean_ap_decision_difference"], [0.005, 0.03]
+    )
+    assert result["two_seed_mean_ap_decision_difference"] == pytest.approx(0.0175)
+    np.testing.assert_array_equal(result["positive_world_count"], [23, 23])
 
 
 def test_e76_uses_crossfit_signed_mean_worsening_and_metric_scale() -> None:

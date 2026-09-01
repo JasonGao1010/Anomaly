@@ -834,7 +834,7 @@ class AJAEProtocol:
                 "in_generator_worlds", "generator_held_out_worlds",
                 "held_out_affects_selection", "pure_normal_is_separate",
                 "safety_sets", "qualification", "fixed_world_evaluation",
-                "checkpoint_selection", "e63_freeze", "difficulty_statistics",
+                "checkpoint_selection", "exploration_track", "e63_freeze", "difficulty_statistics",
                 "boundary_leakage_radius_m", "position_score_scale",
             },
             "development",
@@ -1069,6 +1069,55 @@ class AJAEProtocol:
             != tuple(world_id for world_id in range(24) if world_id != 5)
         ):
             raise ProtocolError("checkpoint world IDs differ from the E63 common domain")
+        exploration = _mapping(
+            development["exploration_track"], "development.exploration_track"
+        )
+        cohort = _mapping(exploration.get("cohort"), "exploration cohort")
+        confirmation = _mapping(
+            exploration.get("e74_confirmation"), "E74 confirmation pause"
+        )
+        cursor = _mapping(confirmation.get("paused_cursor"), "E74 paused cursor")
+        if (
+            exploration.get("version") != "exploration-confirmation-split-v1"
+            or exploration.get("status") != "active_before_formal_gate2"
+            or tuple(cohort.get("seeds", ())) != (0, 1)
+            or tuple(cohort.get("applies_to", ())) != ("B1", "B2", "B3")
+            or cohort.get("selection")
+            != "the first two preregistered seeds completed in original order, never performance-selected"
+            or cohort.get("shared_budget_and_checkpoint_rule") != "exactly E63-v2"
+            or confirmation.get("status") != "suspended_after_seeds_0_1"
+            or confirmation.get("formal_pass_forbidden") is not True
+            or tuple(confirmation.get("completed_seed_model_sha256", ()))
+            != (
+                "892b9f71f0365aa189e8c572f50ac6156dac2773cbbb5f6b862927744890938f",
+                "9111c223782e14b0cd90d9bb0f069e5c17bccf54215718250bc548f9a4a17412",
+            )
+            or tuple(confirmation.get("completed_seed_result_sha256", ()))
+            != (
+                "fccc0c513429807eee2580794b7ce01ae0228e6bfb31f5b5f2768c71de01bb22",
+                "fb61b922faae623016a51c09a2f407cee1d9d1b7564d2ebf94acccffcb18e5e5",
+            )
+            or confirmation.get("paused_seed") != 2
+            or confirmation.get("paused_progress_path")
+            != "runs/ajae/B1/seed-2/progress.pt"
+            or confirmation.get("paused_progress_sha256")
+            != "f2a76821755ceb01725756afa43de7b91b1c6c4aff778573e8a6dd19cee65191"
+            or cursor != {
+                "world_index": 2,
+                "block_index": 17,
+                "window_index": 0,
+                "windows_completed": 272,
+                "update_index": 1170,
+                "phase": "windows",
+            }
+            or confirmation.get("resume_branch") != "confirm/e74-seed2-resume"
+            or confirmation.get("partial_seed2_result_use_forbidden") is not True
+            or exploration.get("current_node") != "E75-X"
+            or exploration.get("formal_gate2_and_gate3_status") != "not adjudicated"
+            or exploration.get("public_real_ood_sequences_remain_sealed") is not True
+            or exploration.get("hidden_test_sequences_remain_sealed") is not True
+        ):
+            raise ProtocolError("exploration/confirmation split identity changed")
         difficulty = _mapping(development["difficulty_statistics"], "difficulty statistics")
         if set(difficulty) != {"Nvis", "O", "d", "V"}:
             raise ProtocolError("development difficulty must define Nvis, O, d, and V")
