@@ -67,6 +67,8 @@ E55_ARTIFACT_SHA256 = (
 )
 E53_SEED_NAMESPACE = "E53-STU-query-v1"
 E61_MATCH_NAMESPACE = "E61-static-match-v1"
+E62_NUMERICAL_NAMESPACE = "E62-numerical-fixture-v1"
+E62_NUMERICAL_SEED = 62002026
 
 
 class QualificationError(ValueError):
@@ -2202,6 +2204,226 @@ def run_e61(
     return result
 
 
+def _e62_points(declared_ranges: Sequence[float]) -> np.ndarray:
+    """Construct float32 points while retaining the requested range metadata."""
+
+    points = np.zeros((len(declared_ranges), 3), dtype=np.float32)
+    points[:, 0] = np.asarray(declared_ranges, dtype=np.float32)
+    for index, declared in enumerate(declared_ranges):
+        if declared == 50.000001:
+            # Scalar 50.000001 rounds to 50.0 in float32. This vector has the
+            # requested real norm but an official float32 norm strictly above 50.
+            points[index] = np.asarray((50.0, 0.011309734, 0.0), dtype=np.float32)
+    return points
+
+
+def e62_fixture_arrays() -> dict[str, np.ndarray]:
+    """Build the E62-v2 fixtures without invoking either evaluator."""
+
+    analytic_cases: list[tuple[str, list[tuple[int, list[float], list[float], list[int]]]]] = []
+    boundary_ranges = [
+        2.499999, 2.5, 50.0, 50.000001, 6.0, 7.0,
+        8.0, 9.0, 10.0, 12.0, 51.0, 20.0,
+    ]
+    analytic_cases.append(
+        (
+            "range_ignore_and_post_filter_frame_gate",
+            [
+                (
+                    100,
+                    boundary_ranges,
+                    [0.99, 0.10, 0.80, 1.00, 0.70, 0.60, 0.50, 0.20, 1.00, 0.30, 0.95, 0.40],
+                    [2, 10, 2, 2, 2, 2, 2, 10, 0, 10, 2, 10],
+                ),
+                (
+                    101,
+                    boundary_ranges,
+                    [0.98, 0.91, 0.81, 0.99, 0.71, 0.61, 0.51, 0.21, 1.00, 0.31, 0.96, 0.41],
+                    [10, 2, 2, 10, 2, 2, 2, 10, 0, 10, 2, 10],
+                ),
+            ],
+        )
+    )
+    analytic_cases.append(
+        (
+            "all_scores_tied",
+            [
+                (
+                    200,
+                    [float(value) for value in range(5, 17)],
+                    [0.5] * 12,
+                    [2, 10, 2, 10, 2, 10, 2, 10, 2, 10, 0, 30],
+                )
+            ],
+        )
+    )
+    strict_semantic = [2] * 20 + [10] * 10
+    strict_scores = [0.9] * 19 + [0.7] + [0.8] * 2 + [0.6] * 8
+    analytic_cases.append(
+        (
+            "strict_tpr_above_0.95",
+            [(300, [15.0] * 30, strict_scores, strict_semantic)],
+        )
+    )
+    analytic_cases.append(
+        (
+            "mixed_repeated_scores",
+            [
+                (
+                    400,
+                    [25.0] * 24,
+                    [0.95, 0.95, 0.8, 0.8, 0.6, 0.6, 0.4, 0.4,
+                     0.95, 0.8, 0.8, 0.6, 0.6, 0.4, 0.2, 0.2,
+                     0.1, 0.1, 0.05, 0.05, 1.0, 0.0, 0.4, 0.6],
+                    [2, 10, 2, 10, 2, 10, 2, 10, 2, 10, 2, 10,
+                     2, 10, 2, 10, 10, 10, 10, 10, 0, 0, 30, 31],
+                )
+            ],
+        )
+    )
+
+    case_names: list[str] = []
+    case_frame_offsets = [0]
+    frame_ids: list[int] = []
+    frame_point_offsets = [0]
+    points_parts: list[np.ndarray] = []
+    scores_parts: list[np.ndarray] = []
+    semantic_parts: list[np.ndarray] = []
+    declared_parts: list[np.ndarray] = []
+    point_id_parts: list[np.ndarray] = []
+    next_point_id = 0
+    for case_name, frames in analytic_cases:
+        case_names.append(case_name)
+        for frame_id, ranges, scores, semantic in frames:
+            count = len(ranges)
+            frame_ids.append(frame_id)
+            points_parts.append(_e62_points(ranges))
+            scores_parts.append(np.asarray(scores, dtype=np.float32))
+            semantic_parts.append(np.asarray(semantic, dtype=np.uint16))
+            declared_parts.append(np.asarray(ranges, dtype=np.float64))
+            point_id_parts.append(np.arange(next_point_id, next_point_id + count, dtype=np.int64))
+            next_point_id += count
+            frame_point_offsets.append(next_point_id)
+        case_frame_offsets.append(len(frame_ids))
+
+    analytic_points = np.concatenate(points_parts)
+    analytic_semantic = np.concatenate(semantic_parts)
+    analytic_norm = np.linalg.norm(analytic_points, axis=1)
+    analytic_range_valid = (analytic_norm >= 2.5) & (analytic_norm <= 50.0)
+    analytic_valid = analytic_range_valid & (analytic_semantic != 0)
+    analytic_frame_accepted = np.zeros(len(frame_ids), dtype=np.bool_)
+    for frame_index in range(len(frame_ids)):
+        start, stop = frame_point_offsets[frame_index : frame_index + 2]
+        analytic_frame_accepted[frame_index] = int(
+            np.count_nonzero(
+                analytic_valid[start:stop] & (analytic_semantic[start:stop] == 2)
+            )
+        ) >= 5
+
+    rng = np.random.Generator(np.random.PCG64(E62_NUMERICAL_SEED))
+    numerical_frame_ids = np.arange(1000, 1010, dtype=np.int32)
+    numerical_offsets = np.arange(0, 10 * 96 + 1, 96, dtype=np.int64)
+    numerical_points: list[np.ndarray] = []
+    numerical_scores: list[np.ndarray] = []
+    numerical_semantic: list[np.ndarray] = []
+    for frame_index in range(10):
+        radii = rng.uniform(3.0, 49.0, size=96)
+        radii[:4] = np.asarray((2.0, 51.0, 2.499999, 50.0))
+        angle = rng.uniform(-np.pi, np.pi, size=96)
+        points = np.zeros((96, 3), dtype=np.float32)
+        points[:, 0] = (radii * np.cos(angle)).astype(np.float32)
+        points[:, 1] = (radii * np.sin(angle)).astype(np.float32)
+        points[:, 2] = rng.uniform(-0.25, 0.25, size=96).astype(np.float32)
+        semantics = np.where(np.arange(96) % 3 == 0, 30, 10).astype(np.uint16)
+        semantics[np.arange(0, 96, 17)] = 0
+        eligible = np.flatnonzero(
+            (np.linalg.norm(points, axis=1) >= 2.5)
+            & (np.linalg.norm(points, axis=1) <= 50.0)
+            & (semantics != 0)
+        )
+        anomaly_count = 4 if frame_index == 0 else 4 + frame_index
+        semantics[eligible[:anomaly_count]] = 2
+        semantics[:2] = 2  # Out-of-range anomalies verify post-filter gating.
+        scores = (rng.integers(0, 41, size=96) / 40.0).astype(np.float32)
+        scores[np.arange(0, 96, 17)] = 1.0
+        scores[1::23] = 0.0
+        numerical_points.append(points)
+        numerical_scores.append(scores)
+        numerical_semantic.append(semantics)
+
+    numerical_points_array = np.concatenate(numerical_points)
+    numerical_semantic_array = np.concatenate(numerical_semantic)
+    numerical_norm = np.linalg.norm(numerical_points_array, axis=1)
+    numerical_valid = (
+        (numerical_norm >= 2.5)
+        & (numerical_norm <= 50.0)
+        & (numerical_semantic_array != 0)
+    )
+    numerical_frame_accepted = np.zeros(10, dtype=np.bool_)
+    for frame_index in range(10):
+        start, stop = numerical_offsets[frame_index : frame_index + 2]
+        numerical_frame_accepted[frame_index] = int(
+            np.count_nonzero(
+                numerical_valid[start:stop]
+                & (numerical_semantic_array[start:stop] == 2)
+            )
+        ) >= 5
+
+    return {
+        "analytic_case_name": np.asarray(case_names),
+        "analytic_case_frame_offset": np.asarray(case_frame_offsets, dtype=np.int64),
+        "analytic_frame_id": np.asarray(frame_ids, dtype=np.int32),
+        "analytic_frame_point_offset": np.asarray(frame_point_offsets, dtype=np.int64),
+        "analytic_points": analytic_points,
+        "analytic_scores": np.concatenate(scores_parts),
+        "analytic_semantic": analytic_semantic,
+        "analytic_declared_range_m": np.concatenate(declared_parts),
+        "analytic_point_id": np.concatenate(point_id_parts),
+        "analytic_expected_range_valid": analytic_range_valid,
+        "analytic_expected_frame_accepted": analytic_frame_accepted,
+        "numerical_frame_id": numerical_frame_ids,
+        "numerical_frame_point_offset": numerical_offsets,
+        "numerical_points": numerical_points_array,
+        "numerical_scores": np.concatenate(numerical_scores),
+        "numerical_semantic": numerical_semantic_array,
+        "numerical_point_id": np.arange(1_000_000, 1_000_960, dtype=np.int64),
+        "numerical_expected_range_valid": (numerical_norm >= 2.5) & (numerical_norm <= 50.0),
+        "numerical_expected_frame_accepted": numerical_frame_accepted,
+    }
+
+
+def run_e62_fixture(
+    protocol_path: Path | str,
+    output_path: Path | str,
+) -> dict[str, object]:
+    """Materialize the frozen E62 inputs before either evaluator is called."""
+
+    protocol = load_protocol(protocol_path)
+    specification = protocol.evaluation_document["evaluator_equivalence"]
+    if specification["status"] != "protocol_completed_before_fixture_freeze":
+        raise QualificationError("E62 fixture generation requires the pre-freeze status")
+    numerical = specification["fixtures"]["numerical_fixture"]
+    if (
+        numerical["namespace"] != E62_NUMERICAL_NAMESPACE
+        or numerical["pcg64_seed"] != E62_NUMERICAL_SEED
+    ):
+        raise QualificationError("E62 numerical fixture identity changed")
+    arrays = e62_fixture_arrays()
+    result = {
+        "experiment": "E62-fixture-freeze",
+        "fixture_frozen": True,
+        "evaluator_calls": 0,
+        "analytic_cases": int(arrays["analytic_case_name"].size),
+        "analytic_frames": int(arrays["analytic_frame_id"].size),
+        "analytic_points": int(arrays["analytic_points"].shape[0]),
+        "numerical_frames": int(arrays["numerical_frame_id"].size),
+        "numerical_points": int(arrays["numerical_points"].shape[0]),
+        "scientific_array_sha256": _array_hash(arrays),
+    }
+    _save(Path(output_path).expanduser().resolve(), arrays, result)
+    return result
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -2255,6 +2477,11 @@ def _parser() -> argparse.ArgumentParser:
     e61.add_argument("--data-root", type=Path, required=True)
     e61.add_argument("--protocol", type=Path, default=PROJECT_ROOT / "protocol.json")
     e61.add_argument("--output", type=Path, required=True)
+    e62_fixture = commands.add_parser("e62-fixture")
+    e62_fixture.add_argument(
+        "--protocol", type=Path, default=PROJECT_ROOT / "protocol.json"
+    )
+    e62_fixture.add_argument("--output", type=Path, required=True)
     return parser
 
 
@@ -2332,6 +2559,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         result = run_e61(args.data_root, args.protocol, args.output)
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 0 if result["passed"] else 1
+    if args.command == "e62-fixture":
+        result = run_e62_fixture(args.protocol, args.output)
+        print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        return 0
     raise AssertionError(args.command)
 
 

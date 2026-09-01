@@ -32,6 +32,7 @@ from src.evaluate import (
 from src.model import AJAEPointTransformer, assigned_stu_evidence, temporal_radius_knn
 from src.qualify import (
     PHASE5_FRAMES,
+    e62_fixture_arrays,
     e53_frame_seed,
     independent_sparse_quantize,
     phase5_frame_ids,
@@ -403,6 +404,27 @@ def test_e62_protocol_forbids_real_anomaly_data_and_freezes_strict_fpr95() -> No
         "strictly greater than 0.95"
     )
     assert e62["comparison"]["maximum_absolute_difference"] == 1.0e-10
+
+
+def test_e62_fixture_covers_frozen_boundaries_before_evaluator_calls() -> None:
+    arrays = e62_fixture_arrays()
+    assert arrays["analytic_case_name"].tolist() == [
+        "range_ignore_and_post_filter_frame_gate",
+        "all_scores_tied",
+        "strict_tpr_above_0.95",
+        "mixed_repeated_scores",
+    ]
+    declared = arrays["analytic_declared_range_m"][:12]
+    expected_range = arrays["analytic_expected_range_valid"][:12]
+    assert declared[:4].tolist() == [2.499999, 2.5, 50.0, 50.000001]
+    assert expected_range[:4].tolist() == [False, True, True, False]
+    assert arrays["analytic_expected_frame_accepted"].tolist() == [
+        False, True, True, True, True
+    ]
+    assert arrays["numerical_expected_frame_accepted"].tolist() == [
+        False, True, True, True, True, True, True, True, True, True
+    ]
+    assert arrays["numerical_points"].shape == (960, 3)
 
 
 def test_protocol_contains_no_retired_training_route() -> None:
