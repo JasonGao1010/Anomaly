@@ -3797,7 +3797,7 @@ Git commit / clean state: Correction frozen while the valid E74 process continue
 Data identities: Paired B1/B0 results across E57 worlds and seeds.
 Input artifact hashes: E72 and E74 outputs required for the comparison. Bootstrap source E63 SHA-256 `5dbf99eaa59a05a83774e42beb6b8d7a95cf9309ebd42ab7870604a20d410dd9`; corrected identity SHA-256 `1bae1dbe4b5ded34cf9cebd818b4877368973114c0e7046840c0ff342fb73b9d`.
 Random namespaces / seeds: `E75-common-domain-bootstrap-correction-v1`; NumPy PCG64 seed `63002026`; 5,000 resamples. Each replicate draws three training seeds with replacement from `{0,1,2}` and 23 development worlds with replacement from the fixed E63 common-domain set. B1 and B0 share every realized index.
-Command and resolved config: Identity freeze command: `python -m src.qualify e75-freeze --protocol protocol.json --e63 runs/ajae/e63_training_freeze.npz --output runs/ajae/e75_bootstrap_identity.npz`. Formal command, locked until E74 completes: `python -m src.qualify e75 --protocol protocol.json --e72 runs/ajae/e72_b0_reference.npz --identity runs/ajae/e75_bootstrap_identity.npz --b1-dir runs/ajae/B1 --output runs/ajae/e75_b1_vs_b0.npz`. Apply E63 Gate 2 exactly: mean AP gain ≥0.02, 95% bootstrap lower bound >0, and positive mean-AP difference in at least 2/3 seeds.
+Command and resolved config: Identity freeze command: `python -m src.qualify e75-freeze --protocol protocol.json --e63 runs/ajae/e63_training_freeze.npz --output runs/ajae/e75_bootstrap_identity.npz`. Formal command, locked until E74 completes: `python -m src.qualify e75 --protocol protocol.json --e72 runs/ajae/e72_b0_reference.npz --identity runs/ajae/e75_bootstrap_identity.npz --b1-dir runs/ajae/B1 --output runs/ajae/e75_b1_vs_b0.npz`. The evaluator-reported AP values remain on `[0,100]`; E75 divides both B1 and B0 AP by 100 before subtraction and adjudication. Thus the unchanged decision threshold `0.02` means two AP percentage points. Require decision-scale mean AP gain ≥0.02, 95% bootstrap lower bound >0, and positive mean-AP difference in at least 2/3 seeds. The existing 5,000×3 seed draws and 5,000×23 common-world draws in `e75_bootstrap_identity.npz` are the sole common resampling identity for E75, E81, E82 and E88; generating comparison-specific replacement arrays is forbidden.
 Resource and disk preflight: CPU-only identity materialization took 0.008740 seconds and wrote 91,013 bytes while E74 retained the GPU; it did not compete for the training device or approach the Windows E: reserve.
 Artifacts and hashes: `runs/ajae/e75_bootstrap_identity.npz`, 91,013 bytes, SHA-256 `1bae1dbe4b5ded34cf9cebd818b4877368973114c0e7046840c0ff342fb73b9d`, scientific-array SHA-256 `deac90b297fd84e4c3d5cde7c2d5d57a139f9d0a1aba85e3539c564f2ec50869`.
 Primary construct: Whether anomaly-proxy supervision adds meaningful single-frame anomaly-detection value over official STU MaxLogit.
@@ -3807,19 +3807,19 @@ Failure classification: A formal FAIL would be `scientific_failure`.
 Unlocked next node: E76 after PASS. FAIL stops five-frame experiments and opens a new Gate 1/proxy-design research cycle; B3 cannot rescue B1.
 Invalidated downstream evidence: E76 onward remains locked on FAIL.
 Descriptive observations: None.
-Notes: No threshold tuning is allowed after observing B1/B0 results. This is a statistical-identity implementation correction, not E75-v2 and not a rerun of E63. E63's historical 24-world arrays remain unchanged; its old `bootstrap_world_id` is ineligible for E75 because 3,229/5,000 replicates contain the unavailable `world_id=5` (5,037 draws total). The corrected identity changes no Gate 2 threshold, training budget, model, metric or paired estimand.
+Notes: No threshold tuning is allowed after observing B1/B0 results. This is a statistical-identity implementation correction, not E75-v2 and not a rerun of E63. E63's historical 24-world arrays remain unchanged; its old `bootstrap_world_id` is ineligible for E75 because 3,229/5,000 replicates contain the unavailable `world_id=5` (5,037 draws total). The corrected identity changes no Gate 2 threshold, training budget, model, metric or paired estimand. The result-blind metric-scale completion changes only the explicit unit conversion used for gate decisions. E74 checkpoint selection and its `0.001` tie tolerance remain on the original reported percentage scale.
 
 ## E76 | B1 Normal-Safety Qualification
 
 Experiment ID: E76
-Design-freeze commit/hash: E63 cross-fit safety criteria.
-Execution-freeze commit/hash: Not executed.
-Date: Not executed.
-Git commit / clean state: Not applicable.
-Data identities: Pure-normal, rendered normal-control, moving-normal, and FPR95 safety sets.
-Input artifact hashes: E74/E75 outputs and E61 sets required.
-Random namespaces / seeds: Fixed two-fold cross-fit from E63.
-Command and resolved config: Execute E63 safety thresholding and require every absolute worsening relative to the comparator to be ≤0.03.
+Design-freeze commit/hash: E63 cross-fit safety criteria plus the result-blind E76 execution completion frozen during E74 and before any E74 development metric was read.
+Execution-freeze commit/hash: Pure-array adjudication implemented; model-score execution remains locked until E75 PASS.
+Date: 2026-09-01 result-blind execution semantics completed; formal execution pending E75.
+Git commit / clean state: The completion is isolated from the active E74 worktree and does not alter `src/train.py`, `src/model.py`, `src/render.py` or E74's in-memory protocol.
+Data identities: For each of `B0`, `B1 seed 0`, `B1 seed 1`, and `B1 seed 2`: the same 23 common-domain development worlds with their fixed E63 Fold A/B assignments, complete E61 pure-normal points, complete E61 moving-normal points, and rendered normal-control masks. `world_id=5`, E58, public real-OOD and hidden-test data remain excluded.
+Input artifact hashes: E72 B0 reference; E74 selected checkpoints; E75 PASS artifact; E61 and E63 identities required.
+Random namespaces / seeds: No new randomness. Fixed E63 two-fold cross-fit; three already-frozen B1 training seeds.
+Command and resolved config: For each model separately, pool development predictions within each fixed E63 fold and obtain `tau_A` and `tau_B` from the official first ROC threshold whose TPR is strictly greater than 0.95. Evaluate Fold B normal-controls with `tau_A` and Fold A normal-controls with `tau_B`, then pool false-positive and point counts. Evaluate the complete pure-normal set and complete moving-normal set under both thresholds using strict `score > threshold`, then average the two FPR values. Development FPR95 is the macro mean over the 23 common worlds after each reported `[0,100]` value is divided by 100. For each of the four safety statistics compute each seed's signed `B1_s-B0` difference and then its mean over the three seeds. PASS requires every mean signed worsening to be ≤0.03. Improvements are negative and never fail through an absolute-value operation. Per-seed values are reported but do not create a new worst-seed gate. Runtime access to B1 models remains locked until E75 PASS.
 Resource and disk preflight: Not executed.
 Artifacts and hashes: None.
 Primary construct: B1 safety on normal and moving-normal data at frozen proxy-TPR operating points.
@@ -3829,7 +3829,7 @@ Failure classification: Not applicable until execution.
 Unlocked next node: E77 after PASS. FAIL returns to proxy/control/renderer design and locks E78.
 Invalidated downstream evidence: E77 and later phases remain locked on FAIL.
 Descriptive observations: None.
-Notes: All four safety comparisons are conjunctive.
+Notes: All four mean safety comparisons are conjunctive. `e76_safety_statistics` is a result-independent pure-array implementation of this estimand; formal score generation and adjudication have not run.
 
 ## E77 | Formal Gate 2 Adjudication
 
@@ -3930,8 +3930,8 @@ Date: Not executed.
 Git commit / clean state: Not applicable.
 Data identities: Paired B3 and B1 seed/world results.
 Input artifact hashes: E74 and E80 outputs required.
-Random namespaces / seeds: E63 5,000 hierarchical paired bootstrap resamples.
-Command and resolved config: Require mean AP gain ≥0.01, 95% bootstrap lower bound >0, and positive seed direction in at least 2/3 seeds.
+Random namespaces / seeds: Reuse exactly the frozen E75 common-domain artifact's 5,000 seed draws and 5,000×23 world draws; no new random arrays.
+Command and resolved config: Divide reported AP by 100 and require mean AP gain ≥0.01 on the decision scale, 95% bootstrap lower bound >0, and positive seed direction in at least 2/3 seeds.
 Resource and disk preflight: Not executed.
 Artifacts and hashes: None.
 Primary construct: Practical five-frame gain relative to the single-frame learned B1 model.
@@ -3952,8 +3952,8 @@ Date: Not executed.
 Git commit / clean state: Not applicable.
 Data identities: Paired B3 and B2 seed/world results.
 Input artifact hashes: E78 and E80 outputs required.
-Random namespaces / seeds: E63 5,000 hierarchical paired bootstrap resamples.
-Command and resolved config: Require mean AP gain ≥0.01, 95% bootstrap lower bound >0, and positive seed direction in at least 2/3 seeds.
+Random namespaces / seeds: Reuse exactly the frozen E75 common-domain artifact's 5,000 seed draws and 5,000×23 world draws; no new random arrays.
+Command and resolved config: Divide reported AP by 100 and require mean AP gain ≥0.01 on the decision scale, 95% bootstrap lower bound >0, and positive seed direction in at least 2/3 seeds.
 Resource and disk preflight: Not executed.
 Artifacts and hashes: None.
 Primary construct: Whether gain is specifically attributable to cross-frame evidence rather than a five-frame architecture/control effect.
@@ -4086,8 +4086,8 @@ Date: Not executed.
 Git commit / clean state: Not applicable.
 Data identities: Paired B4 and B3 development results.
 Input artifact hashes: E87 output required.
-Random namespaces / seeds: E63 paired bootstrap.
-Command and resolved config: Mark `FUSION_SUPPORTED` only if mean AP gain ≥0.005, 95% lower bound >0, and every safety worsening ≤0.03; otherwise `FUSION_UNSUPPORTED`. Both outcomes continue E89; only supported permits final B4 selection.
+Random namespaces / seeds: Reuse exactly the frozen E75 common-domain artifact's 5,000 seed draws and 5,000×23 world draws; no new random arrays.
+Command and resolved config: Divide reported AP by 100 and mark `FUSION_SUPPORTED` only if mean AP gain ≥0.005 on the decision scale, 95% lower bound >0, and every safety worsening ≤0.03; otherwise `FUSION_UNSUPPORTED`. Both outcomes continue E89; only supported permits final B4 selection.
 Resource and disk preflight: Not executed.
 Artifacts and hashes: None.
 Primary construct: Incremental utility and safety of probability fusion over B3.
@@ -4487,7 +4487,7 @@ Every current hard condition in E08–E44, E45B-v2, E48, and E49 must pass. Ordi
 
 ## Gate 2 | Is Anomaly-Proxy Supervision Effective?
 
-Apply E63 exactly: B1 versus B0 must achieve at least 0.02 mean-AP gain, hierarchical-bootstrap lower bound above zero, positive direction in at least 2/3 seeds, and pure-normal/control/moving safety. Failure means the proxy-supervision claim is unsupported and five-frame modeling does not begin.
+Apply the result-blind E63/E75 completion exactly: evaluator-reported AP is divided by 100, so B1 versus B0 must achieve at least 0.02 decision-scale mean-AP gain (two AP percentage points), common-domain paired-bootstrap lower bound above zero, positive direction in at least 2/3 seeds, and pure-normal/control/moving safety. Failure means the proxy-supervision claim is unsupported and five-frame modeling does not begin.
 
 ## Gate 3 | Does Cross-Frame Information Provide Identifiable Gain?
 
@@ -4507,7 +4507,21 @@ Open the 19 sequences once after E97–E98. Final versus B1/B0 must meet E63's s
 6. STU remains frozen throughout; train/206 updates only newly added AJAE parameters.
 7. Centered five-frame inference is the offline primary setting; causal five-frame inference is only an online ablation.
 
-# 5. Execution Record Template
+# 5. Result-Blind Phase 9--13 Revision Draft (Not Yet Active)
+
+This section records prospective scope reductions before Gate 2 results are available. It is not an execution identity, does not unlock any node, and does not modify the active E74 training path. Each item becomes authoritative only when versioned before its affected phase begins.
+
+1. **B2/B3 world-stream identity.** For the same training seed and world index, B1, B2 and B3 must reproduce the same `WorldSpec` hash, world type, center ordering, renderer input and STU input. Only the condition-specific model computation may differ. B2/B3 preflight will compare their reports against the saved B1 world reports; B1 is not regenerated.
+2. **Deferred pure-normal checkpoint tie-break.** Because evaluations occur only at worlds 5, 10, 15, 20 and 25, patience four cannot stop the 25-world run before its ceiling. After E74 is sealed, B2/B3 may save all five candidate checkpoints, rank AP and development FPR95 first, and evaluate the complete pure-normal tie-break only for candidates still tied. This is permitted only after an eager-versus-deferred regression proves identical candidate selection.
+3. **E79 minimal smoke.** Replace the prospective 200-update smoke with two fixed worlds, two micro-batches, one optimizer update, checkpoint round-trip and peak-memory record. It must still verify five-frame training, cross-frame gradients and frozen STU.
+4. **E85 common-domain audit.** Use the inherited 23 eligible worlds and their 11/12 E63 fold intersection; do not search for a more balanced split. If raw q-position scores are not comparable, disable optional B4 instead of introducing temperature calibration.
+5. **E91 descriptive visibility report.** Report only observed visibility levels. Because E60 found no support at `V=2,3,4`, do not run or gate on a monotonic trend test.
+6. **B5 optional supplement.** E92/E93 do not block E94/E95. E94 measures B1/B2/B3, includes B4 only if enabled, and includes B5 only if actually completed.
+7. **E96 point/object separation.** Use fixed folds over the 23-world common domain. Failure to find a safe DBSCAN configuration removes object-level claims but does not block point-level real-OOD confirmation; only failure to find a safe point threshold blocks the final point method. This must be finalized before Gate 3 results are read.
+
+The first future cleanup remains after Gate 2. `dev.json` is still referenced by the legacy protocol validator even though formal training forbids it; E45A activity entries, superseded runners and historical renderer paths also require reference checks before deletion. No file is deleted, moved or split while E74 is running.
+
+# 6. Execution Record Template
 
 ```text
 Experiment ID:
@@ -4531,10 +4545,10 @@ Descriptive observations:
 Notes:
 ```
 
-# 6. How to Advance AJAE with This State Machine
+# 7. How to Advance AJAE with This State Machine
 
-1. The authoritative status is E25-new PASS and E26-v2 PASS; Phase 2 under the new normal-control distribution is closed.
-2. E27–E37 mechanical qualifications and the E38-v2–E44-v2 refresh remain valid. The current formal work is E45B-v2, followed by E48 and E49. E45A is permanently stopped; E46/E47 are optional diagnostics.
+1. The authoritative status is E50–E73 PASS; E74 is the current formal node and is executing the three B1 seeds under the unchanged 25-world ceiling.
+2. Gate 1 is closed. E45A is permanently stopped and E46/E47 remain optional diagnostics outside the Gate 1 conjunction. E75 remains locked until all three E74 seeds complete; E76 remains locked until E75 PASS.
 3. Every later phase first completes its whole-phase design freeze, then executes its nodes.
 4. Preflight checks only identity, support, schema, interface, and resources; it does not inspect formal outcomes.
 5. Classify FAIL using the five frozen categories. A `descriptive_deviation` is recorded and execution continues; it cannot create a new hard gate.

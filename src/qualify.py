@@ -23,7 +23,7 @@ import numpy as np
 import torch
 from scipy.spatial import cKDTree
 
-from .evaluate import PointMetricAccumulator, WindowScoreFusion
+from .evaluate import PointMetricAccumulator, WindowScoreFusion, _point_metrics
 from .model import (
     DEFAULT_STU_REPOSITORY,
     MASK_DIM,
@@ -87,6 +87,13 @@ E63_SAFETY_NAMESPACE = "E63-safety-crossfit-v1"
 E63_BOOTSTRAP_NAMESPACE = "E63-hierarchical-paired-bootstrap-v1"
 E63_BOOTSTRAP_SEED = 63002026
 E75_BOOTSTRAP_NAMESPACE = "E75-common-domain-bootstrap-correction-v1"
+COMMON_DEVELOPMENT_BOOTSTRAP_COMPARISONS = ("E75", "E81", "E82", "E88")
+REPORTED_PERCENT_SCALE = 100.0
+E63_COMMON_WORLD_ID = (*range(5), *range(6, 24))
+E63_COMMON_SAFETY_FOLD = (
+    "B", "B", "A", "A", "B", "A", "B", "A", "A", "B", "A", "B",
+    "A", "B", "B", "B", "B", "A", "B", "A", "A", "A", "B",
+)
 PHASE7_SEED = 640071
 E61_ARTIFACT_SHA256 = (
     "8d3e08e0512dc70a75d2279cfb4515bc960bbfda4f35a872c4a76e9dad69d0e0"
@@ -3020,7 +3027,7 @@ def e75_superiority_statistics(
     bootstrap_training_seed: np.ndarray,
     bootstrap_world_id: np.ndarray,
 ) -> dict[str, np.ndarray]:
-    """Compute the frozen paired 3-seed by 23-world E75 estimand."""
+    """Compute E75 on the [0,1] decision scale from percent-reported AP."""
 
     baseline_id = np.asarray(b0_world_id, dtype=np.int16)
     baseline_ap = np.asarray(b0_ap, dtype=np.float64)
@@ -3052,18 +3059,150 @@ def e75_superiority_statistics(
     if np.any(world_columns < 0):
         raise QualificationError("E75 bootstrap contains a non-common-domain world")
 
-    paired_difference = trained_ap - baseline_ap[None, :]
+    if (
+        np.any((baseline_ap < 0.0) | (baseline_ap > REPORTED_PERCENT_SCALE))
+        or np.any((trained_ap < 0.0) | (trained_ap > REPORTED_PERCENT_SCALE))
+    ):
+        raise QualificationError("E75 reported AP must use the [0,100] scale")
+    baseline_decision_ap = baseline_ap / REPORTED_PERCENT_SCALE
+    trained_decision_ap = trained_ap / REPORTED_PERCENT_SCALE
+    paired_difference = trained_decision_ap - baseline_decision_ap[None, :]
     # Both models use the same realized seed/world indices in every replicate.
     bootstrap_difference = paired_difference[
         seed_draws[:, :, None], world_columns[:, None, :]
     ].mean(axis=(1, 2))
     return {
         "world_id": common,
-        "b0_ap": baseline_ap,
-        "b1_ap": trained_ap,
-        "paired_ap_difference": paired_difference,
-        "seed_mean_ap_difference": paired_difference.mean(axis=1),
-        "bootstrap_mean_ap_difference": bootstrap_difference,
+        "b0_ap_reported": baseline_ap,
+        "b1_ap_reported": trained_ap,
+        "b0_ap_decision": baseline_decision_ap,
+        "b1_ap_decision": trained_decision_ap,
+        "paired_ap_decision_difference": paired_difference,
+        "seed_mean_ap_decision_difference": paired_difference.mean(axis=1),
+        "bootstrap_mean_ap_decision_difference": bootstrap_difference,
+    }
+
+
+def e76_safety_statistics(
+    development_world_id: np.ndarray,
+    development_point_world_id: np.ndarray,
+    development_label: np.ndarray,
+    development_normal_control: np.ndarray,
+    development_score: np.ndarray,
+    safety_fold: np.ndarray,
+    pure_normal_score: np.ndarray,
+    moving_normal_score: np.ndarray,
+    development_fpr95_reported: np.ndarray,
+) -> dict[str, np.ndarray]:
+    """Compute the frozen B0/B1 safety estimand from aligned score arrays."""
+
+    raw_label = np.asarray(development_label)
+    raw_control = np.asarray(development_normal_control)
+    raw_score = np.asarray(development_score)
+    raw_pure = np.asarray(pure_normal_score)
+    raw_moving = np.asarray(moving_normal_score)
+    raw_fpr95 = np.asarray(development_fpr95_reported)
+    world_id = np.asarray(development_world_id, dtype=np.int16)
+    point_world = np.asarray(development_point_world_id, dtype=np.int16)
+    label = raw_label.astype(np.bool_, copy=False)
+    control = raw_control.astype(np.bool_, copy=False)
+    score = raw_score.astype(np.float64, copy=False)
+    fold = np.asarray(safety_fold, dtype="S1")
+    pure = raw_pure.astype(np.float64, copy=False)
+    moving = raw_moving.astype(np.float64, copy=False)
+    fpr95_reported = raw_fpr95.astype(np.float64, copy=False)
+    model_count = 4
+    if (
+        world_id.tolist() != list(E63_COMMON_WORLD_ID)
+        or fold.tolist() != [name.encode("ascii") for name in E63_COMMON_SAFETY_FOLD]
+        or fold.shape != (23,)
+        or set(np.unique(fold).tolist()) != {b"A", b"B"}
+        or raw_label.dtype != np.bool_
+        or raw_control.dtype != np.bool_
+        or not np.issubdtype(raw_score.dtype, np.floating)
+        or not np.issubdtype(raw_pure.dtype, np.floating)
+        or not np.issubdtype(raw_moving.dtype, np.floating)
+        or not np.issubdtype(raw_fpr95.dtype, np.floating)
+        or point_world.shape != label.shape
+        or control.shape != label.shape
+        or score.shape != (model_count, label.size)
+        or pure.ndim != 2
+        or pure.shape[0] != model_count
+        or pure.shape[1] == 0
+        or moving.ndim != 2
+        or moving.shape[0] != model_count
+        or moving.shape[1] == 0
+        or fpr95_reported.shape != (model_count, 23)
+        or not np.isfinite(score).all()
+        or not np.isfinite(pure).all()
+        or not np.isfinite(moving).all()
+        or not np.isfinite(fpr95_reported).all()
+        or np.any((fpr95_reported < 0.0) | (fpr95_reported > REPORTED_PERCENT_SCALE))
+        or set(np.unique(point_world).tolist()) != set(world_id.tolist())
+        or bool(np.any(control & label))
+    ):
+        raise QualificationError("E76 score or identity arrays are invalid")
+    fold_by_world = {int(current): fold[index] for index, current in enumerate(world_id)}
+    point_fold = np.asarray([fold_by_world[int(current)] for current in point_world])
+
+    threshold = np.empty((model_count, 2), dtype=np.float64)
+    control_false_positive = np.zeros((model_count, 2), dtype=np.int64)
+    control_count = np.asarray(
+        [np.count_nonzero(control & (point_fold == name)) for name in (b"A", b"B")],
+        dtype=np.int64,
+    )
+    if bool(np.any(control_count == 0)):
+        raise QualificationError("E76 requires normal-control points in both folds")
+    for model in range(model_count):
+        for fold_index, fold_name in enumerate((b"A", b"B")):
+            selected = point_fold == fold_name
+            threshold[model, fold_index] = float(
+                _point_metrics(label[selected], score[model, selected])["threshold"]
+            )
+        # Threshold A evaluates Fold B controls; threshold B evaluates Fold A.
+        control_false_positive[model, 0] = np.count_nonzero(
+            score[model, control & (point_fold == b"B")] > threshold[model, 0]
+        )
+        control_false_positive[model, 1] = np.count_nonzero(
+            score[model, control & (point_fold == b"A")] > threshold[model, 1]
+        )
+
+    control_fpr = control_false_positive.sum(axis=1) / control_count.sum()
+    pure_fpr = 0.5 * np.stack(
+        (
+            np.mean(pure > threshold[:, 0, None], axis=1),
+            np.mean(pure > threshold[:, 1, None], axis=1),
+        ),
+        axis=1,
+    ).sum(axis=1)
+    moving_fpr = 0.5 * np.stack(
+        (
+            np.mean(moving > threshold[:, 0, None], axis=1),
+            np.mean(moving > threshold[:, 1, None], axis=1),
+        ),
+        axis=1,
+    ).sum(axis=1)
+    development_fpr95 = np.mean(
+        fpr95_reported / REPORTED_PERCENT_SCALE, axis=1
+    )
+    measure = np.stack(
+        (pure_fpr, control_fpr, moving_fpr, development_fpr95), axis=1
+    )
+    seed_worsening = measure[1:] - measure[0]
+    mean_worsening = seed_worsening.mean(axis=0)
+    return {
+        "model_name": np.asarray(("B0", "B1_0", "B1_1", "B1_2")),
+        "safety_measure_name": np.asarray(
+            ("pure_normal_FPR", "normal_control_FPR", "moving_normal_FPR", "development_FPR95")
+        ),
+        "threshold": threshold,
+        "normal_control_count_by_fold": control_count,
+        "normal_control_evaluation_fold": np.asarray(("B", "A")),
+        "normal_control_false_positive_crossfit": control_false_positive,
+        "safety_measure": measure,
+        "seed_safety_worsening": seed_worsening,
+        "mean_safety_worsening": mean_worsening,
+        "passed": np.asarray(bool(np.all(mean_worsening <= 0.03))),
     }
 
 
@@ -3164,11 +3303,13 @@ def run_e75(
         b0_world_id, b0_ap, b1_world_id, b1_ap, common_world_id,
         seed_draws, world_draws,
     )
-    mean_difference = float(arrays["paired_ap_difference"].mean())
+    mean_difference = float(arrays["paired_ap_decision_difference"].mean())
     lower_bound = float(np.percentile(
-        arrays["bootstrap_mean_ap_difference"], 2.5
+        arrays["bootstrap_mean_ap_decision_difference"], 2.5
     ))
-    positive_seeds = int(np.count_nonzero(arrays["seed_mean_ap_difference"] > 0.0))
+    positive_seeds = int(np.count_nonzero(
+        arrays["seed_mean_ap_decision_difference"] > 0.0
+    ))
     passed = (
         mean_difference >= 0.02
         and lower_bound > 0.0
@@ -3178,8 +3319,10 @@ def run_e75(
         "experiment": "E75",
         "passed": passed,
         "failure_classification": None if passed else "scientific_failure",
-        "mean_macro_world_AP_difference": mean_difference,
-        "bootstrap_95_percent_lower_bound": lower_bound,
+        "decision_metric_scale": "[0,1]",
+        "reported_AP_scale": "[0,100]",
+        "mean_macro_world_AP_decision_difference": mean_difference,
+        "bootstrap_95_percent_lower_bound_decision_scale": lower_bound,
         "positive_training_seeds": positive_seeds,
         "thresholds": {
             "minimum_mean_macro_world_AP_difference": 0.02,
@@ -3188,6 +3331,9 @@ def run_e75(
         },
         "replicates": 5000,
         "development_worlds": 23,
+        "shared_bootstrap_comparisons": list(
+            COMMON_DEVELOPMENT_BOOTSTRAP_COMPARISONS
+        ),
         "protocol_sha256": _sha256(protocol_file),
         "e72_artifact_sha256": _sha256(e72_file),
         "bootstrap_identity_sha256": _sha256(identity_file),

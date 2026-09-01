@@ -36,6 +36,7 @@ from src.qualify import (
     e63_identity_arrays,
     e75_bootstrap_identity_arrays,
     e75_superiority_statistics,
+    e76_safety_statistics,
     phase7_mechanical_arrays,
     e62_fixture_arrays,
     e53_frame_seed,
@@ -1858,11 +1859,69 @@ def test_e75_superiority_uses_paired_seed_and_world_draws() -> None:
         common, seed_draws, world_draws,
     )
     np.testing.assert_allclose(
-        result["seed_mean_ap_difference"], [0.1, 0.2, -0.05], atol=1e-15
+        result["seed_mean_ap_decision_difference"],
+        [0.001, 0.002, -0.0005],
+        atol=1e-15,
     )
     np.testing.assert_allclose(
-        result["bootstrap_mean_ap_difference"], 1.0 / 12.0, atol=1e-15
+        result["bootstrap_mean_ap_decision_difference"], 1.0 / 1200.0,
+        atol=1e-15,
     )
+
+
+def test_e75_converts_reported_ap_points_to_decision_scale() -> None:
+    common = np.asarray([*range(5), *range(6, 24)], dtype=np.int16)
+    baseline = np.full(23, 5.0)
+    trained = np.full((3, 23), 7.0)
+    seed_draws = np.tile(np.asarray([[0, 1, 2]], dtype=np.int8), (5000, 1))
+    world_draws = np.tile(common, (5000, 1))
+    result = e75_superiority_statistics(
+        common, baseline, np.tile(common, (3, 1)), trained,
+        common, seed_draws, world_draws,
+    )
+    assert result["paired_ap_decision_difference"][0, 0] == pytest.approx(0.02)
+    assert result["b0_ap_reported"][0] == 5.0
+    assert result["b1_ap_reported"][0, 0] == 7.0
+
+
+def test_e76_uses_crossfit_signed_mean_worsening_and_metric_scale() -> None:
+    world_id = np.asarray([*range(5), *range(6, 24)], dtype=np.int16)
+    fold = np.asarray(
+        [
+            b"B", b"B", b"A", b"A", b"B", b"A", b"B", b"A", b"A", b"B",
+            b"A", b"B", b"A", b"B", b"B", b"B", b"B", b"A", b"B", b"A",
+            b"A", b"A", b"B",
+        ],
+        dtype="S1",
+    )
+    points_per_world = 20
+    point_world = np.repeat(world_id, points_per_world)
+    point_fold = np.repeat(fold, points_per_world)
+    label = np.tile(np.asarray([True] * 10 + [False] * 10), 23)
+    control = ~label
+    base = np.where(label, np.where(point_fold == b"A", 0.8, 0.6), 0.7)
+    development_score = np.stack((base, base, base, base))
+    pure_score = np.full((4, 16), 0.1)
+    moving_score = np.full((4, 12), 0.1)
+    development_fpr95 = np.stack(
+        (
+            np.full(23, 20.0),
+            np.full(23, 22.0),
+            np.full(23, 21.0),
+            np.full(23, 5.0),
+        )
+    )
+    result = e76_safety_statistics(
+        world_id, point_world, label, control, development_score, fold,
+        pure_score, moving_score, development_fpr95,
+    )
+    np.testing.assert_allclose(result["threshold"], np.asarray([[0.8, 0.6]] * 4))
+    np.testing.assert_allclose(result["safety_measure"][:, 1], 11.0 / 23.0)
+    np.testing.assert_allclose(
+        result["seed_safety_worsening"][:, 3], [0.02, 0.01, -0.15], atol=1e-15
+    )
+    assert result["mean_safety_worsening"][3] == pytest.approx(-0.04, abs=1e-15)
+    assert bool(result["passed"])
 
 
 def test_phase7_mechanical_fixtures_all_pass_and_reproduce() -> None:

@@ -512,6 +512,7 @@ class AJAEProtocol:
                 "gate2",
                 "gate3",
                 "gate4",
+                "decision_metric_scale",
                 "development_difficulty_coverage",
                 "B4_contribution",
             },
@@ -526,11 +527,40 @@ class AJAEProtocol:
                 "gate2",
                 "gate3",
                 "gate4",
+                "decision_metric_scale",
                 "development_difficulty_coverage",
                 "B4_contribution",
             )
         ):
             raise ProtocolError("all scientific gate criteria must be frozen mappings")
+        metric_scale = _mapping(
+            criteria["decision_metric_scale"], "decision metric scale"
+        )
+        if (
+            tuple(metric_scale.get("scale", ())) != (0.0, 1.0)
+            or tuple(metric_scale.get("reported_percent_metrics", ()))
+            != ("AP", "AUROC", "FPR95")
+            or metric_scale.get("reported_to_decision_conversion") != "divide by 100"
+            or metric_scale.get("normal_set_FPR_already_on_decision_scale") is not True
+            or metric_scale.get("checkpoint_tie_tolerance_remains_on_reported_percent_scale")
+            != 0.001
+        ):
+            raise ProtocolError("decision metric scale is not the result-blind freeze")
+        gate2 = _mapping(criteria["gate2"], "Gate 2 criteria")
+        e76 = _mapping(gate2.get("E76"), "E76 criteria")
+        if (
+            gate2.get("maximum_mean_safety_worsening") != 0.03
+            or gate2.get("safety_worsening_is_signed_not_absolute") is not True
+            or e76.get("prerequisite") != "E75 PASS"
+            or tuple(e76.get("models", ()))
+            != ("B0", "B1 seed 0", "B1 seed 1", "B1 seed 2")
+            or tuple(e76.get("fold_A_world_ids", ()))
+            != (2, 3, 6, 8, 9, 11, 13, 18, 20, 21, 22)
+            or tuple(e76.get("fold_B_world_ids", ()))
+            != (0, 1, 4, 7, 10, 12, 14, 15, 16, 17, 19, 23)
+            or e76.get("per_seed_values_reported_but_not_independently_gated") is not True
+        ):
+            raise ProtocolError("E76 result-blind safety definition changed")
 
     @staticmethod
     def _validate_data(data: Mapping[str, object]) -> None:
@@ -1052,6 +1082,7 @@ class AJAEProtocol:
             {
                 "version", "status", "source_worlds", "common_domain",
                 "safety_crossfit", "hierarchical_paired_bootstrap",
+                "common_domain_paired_bootstrap",
                 "shared_training", "sealed_data", "identity_artifact",
             },
             "development.e63_freeze",
@@ -1119,6 +1150,35 @@ class AJAEProtocol:
             or bootstrap.get("gate_lower_bound_percentile") != 2.5
         ):
             raise ProtocolError("E63 hierarchical paired bootstrap changed")
+        common_bootstrap = _mapping(
+            specification["common_domain_paired_bootstrap"],
+            "common-domain paired bootstrap",
+        )
+        if (
+            common_bootstrap.get("status") != "frozen_before_any_gate2_result"
+            or common_bootstrap.get("source_artifact_path")
+            != "runs/ajae/e75_bootstrap_identity.npz"
+            or common_bootstrap.get("source_artifact_sha256")
+            != "1bae1dbe4b5ded34cf9cebd818b4877368973114c0e7046840c0ff342fb73b9d"
+            or common_bootstrap.get("namespace")
+            != "E75-common-domain-bootstrap-correction-v1"
+            or common_bootstrap.get("generator") != "NumPy PCG64"
+            or common_bootstrap.get("seed") != 63002026
+            or common_bootstrap.get("replicates") != 5000
+            or tuple(common_bootstrap.get("training_seed_population", ()))
+            != (0, 1, 2)
+            or common_bootstrap.get("training_seed_draws_per_replicate") != 3
+            or tuple(common_bootstrap.get("development_world_ids", ()))
+            != tuple(world_id for world_id in range(24) if world_id != 5)
+            or common_bootstrap.get("development_world_draws_per_replicate") != 23
+            or common_bootstrap.get("replacement") is not True
+            or common_bootstrap.get("paired_models_share_realized_indices") is not True
+            or tuple(common_bootstrap.get("applies_to", ()))
+            != ("E75", "E81", "E82", "E88")
+            or common_bootstrap.get("new_random_arrays_for_these_comparisons_forbidden")
+            is not True
+        ):
+            raise ProtocolError("common-domain paired bootstrap changed")
         shared = _mapping(specification["shared_training"], "E63 shared training")
         if (
             tuple(shared.get("conditions", ())) != ("B1", "B2", "B3")

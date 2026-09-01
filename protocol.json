@@ -3744,6 +3744,8 @@
         "source": "E57 frozen in-generator worlds intersected with the E63 common-domain manifest",
         "target": "frozen center target frame q=0 only",
         "metrics_per_world": ["AP", "AUROC", "FPR95"],
+        "reported_metric_scale": {"AP": [0.0, 100.0], "AUROC": [0.0, 100.0], "FPR95": [0.0, 100.0]},
+        "decision_metric_conversion": "AP and FPR95 reported values are divided by 100 before every gate comparison; normal-set FPR values are already in [0,1] and are not converted",
         "checkpoint_primary_aggregation": "macro mean of eligible per-world AP",
         "range_m": [2.5, 50.0],
         "semantic_zero_ignored": true,
@@ -3821,6 +3823,23 @@
         "cell_estimand": "paired metric difference by training seed and development world",
         "interval": "percentile 95% interval",
         "gate_lower_bound_percentile": 2.5
+      },
+      "common_domain_paired_bootstrap": {
+        "status": "frozen_before_any_gate2_result",
+        "source_artifact_path": "runs/ajae/e75_bootstrap_identity.npz",
+        "source_artifact_sha256": "1bae1dbe4b5ded34cf9cebd818b4877368973114c0e7046840c0ff342fb73b9d",
+        "namespace": "E75-common-domain-bootstrap-correction-v1",
+        "generator": "NumPy PCG64",
+        "seed": 63002026,
+        "replicates": 5000,
+        "training_seed_population": [0, 1, 2],
+        "training_seed_draws_per_replicate": 3,
+        "development_world_ids": [0, 1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23],
+        "development_world_draws_per_replicate": 23,
+        "replacement": true,
+        "paired_models_share_realized_indices": true,
+        "applies_to": ["E75", "E81", "E82", "E88"],
+        "new_random_arrays_for_these_comparisons_forbidden": true
       },
       "shared_training": {
         "conditions": ["B1", "B2", "B3"],
@@ -3993,6 +4012,14 @@
     "gate4": ["frozen_public_19_vs_B0_B1", "moving_normal_safety"],
     "criteria": {
       "status": "frozen_before_training",
+      "decision_metric_scale": {
+        "scale": [0.0, 1.0],
+        "reported_percent_metrics": ["AP", "AUROC", "FPR95"],
+        "reported_to_decision_conversion": "divide by 100",
+        "normal_set_FPR_already_on_decision_scale": true,
+        "checkpoint_tie_tolerance_remains_on_reported_percent_scale": 0.001,
+        "threshold_meanings": {"0.02": "2 percentage points", "0.01": "1 percentage point", "0.005": "0.5 percentage points", "0.03": "3 percentage points"}
+      },
       "gate1": {
         "status": "formal_pass",
         "formal_conjunction": ["E38-E44", "E45B-v2", "E48", "E49"],
@@ -4010,8 +4037,22 @@
         "bootstrap_95_percent_lower_bound_strictly_greater_than": 0.0,
         "minimum_positive_training_seeds": 2,
         "training_seeds": 3,
-        "maximum_absolute_safety_worsening": 0.03,
-        "safety_statistics": ["pure-normal FPR", "rendered normal-control FPR", "moving-normal FPR", "development FPR95"]
+        "maximum_mean_safety_worsening": 0.03,
+        "safety_worsening_is_signed_not_absolute": true,
+        "safety_statistics": ["pure-normal FPR", "rendered normal-control FPR", "moving-normal FPR", "development FPR95"],
+        "E76": {
+          "prerequisite": "E75 PASS",
+          "models": ["B0", "B1 seed 0", "B1 seed 1", "B1 seed 2"],
+          "fold_A_world_ids": [2, 3, 6, 8, 9, 11, 13, 18, 20, 21, 22],
+          "fold_B_world_ids": [0, 1, 4, 7, 10, 12, 14, 15, 16, 17, 19, 23],
+          "thresholds": "for each model separately, pool each fixed E63 fold and use the official first ROC threshold whose TPR is strictly greater than 0.95",
+          "normal_control_crossfit": "threshold selected on Fold A evaluates Fold B controls and threshold selected on Fold B evaluates Fold A controls; pool false-positive and point counts",
+          "pure_and_moving_FPR": "evaluate the complete frozen set under both fold thresholds with strict score > threshold and average the two FPR values",
+          "development_FPR95": "macro mean over the 23 common-domain worlds after dividing each reported percentage value by 100",
+          "seed_aggregation": "for each safety statistic, average the three signed B1-minus-B0 differences",
+          "pass_rule": "all four mean signed worsenings are <= 0.03",
+          "per_seed_values_reported_but_not_independently_gated": true
+        }
       },
       "gate3": {
         "comparisons": ["B3-B1", "B3-B2"],
