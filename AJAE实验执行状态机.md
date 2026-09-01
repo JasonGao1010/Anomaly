@@ -3412,14 +3412,14 @@ Notes: Held-out diagnostics cannot influence any selection or formal test. The s
 ## E59 | Descriptive Development-World $N_{vis}$/Occlusion/Distance Characterization
 
 Experiment ID: E59
-Design-freeze commit/hash: Phase 6-v2 freezes the old marginal bins as reporting bins only; commit not recorded.
-Execution-freeze commit/hash: Not executed.
+Design-freeze commit/hash: Phase 6-v2 freezes the old marginal bins as reporting bins only at `bc135c0acc457ae22d57db92f772e4cae9a64338`.
+Execution-freeze commit/hash: Shared E59/E60 read-only aggregator frozen at `176a1d4b1a5c3b4adca2c2cc4529adbed7e36e3f`; `src/render.py` SHA-256 `4e948b121c15b946a3eef6a44b13cb0076736ed5b3492809f71e99cc9130e3e4`; complete test suite 68/68 PASS.
 Date: Not executed.
 Git commit / clean state: Not applicable.
 Data identities: Entity-window records from the 24 E57 worlds, separately for controls and proxies.
-Input artifact hashes: E57 artifact required; none exists.
+Input artifact hashes: E57-v2 SHA-256 `b14efc1aad86ac67b5bf7c8631f02b2e68664e071b747b7b210d5f7a30f5d123`; scientific-array SHA-256 `590c467da2dec0a161688f2587dc1c37cea2b0f42f326b9918fd6dc9df81f6ec`.
 Random namespaces / seeds: Inherited frozen world identities.
-Command and resolved config: Report controls and proxies separately in the retained distance bins [2.5,10), [10,20), [20,30), [30,50] m; $N_{vis}$ bins [1,8), [8,32), [32,128), [128,+∞); and occlusion bins [0,0.25), [0.25,0.50), [0.50,0.75), [0.75,1]. Identities must remain explicit and metrics finite. No minimum per-bin count exists, and no bin count can block E57, E61 or B1.
+Command and resolved config: Report controls and proxies separately in the retained distance bins [2.5,10), [10,20), [20,30), [30,50] m; $N_{vis}$ bins [1,8), [8,32), [32,128), [128,+∞); and occlusion bins [0,0.25), [0.25,0.50), [0.50,0.75), [0.75,1]. Identities must remain explicit and metrics finite. No minimum per-bin count exists, and no bin count can block E57, E61 or B1. Read the frozen E57 descriptor array exactly once, perform no rerendering or reselection, and write separate E59/E60 artifacts with shared identities. Formal command: `python -m src.render characterize-e59-e60 --e57 runs/ajae/e57_development_worlds.npz --e59-output runs/ajae/e59_characterization.npz --e60-output runs/ajae/e60_visibility_characterization.npz`.
 Resource and disk preflight: Not executed.
 Artifacts and hashes: None.
 Primary construct: Descriptive limits of development evidence across distance, visible count and occlusion for both generated labels.
@@ -3434,14 +3434,14 @@ Notes: These are marginal descriptive summaries, not Cartesian-product or quota 
 ## E60 | Descriptive Development-World $V=1..5$ Characterization
 
 Experiment ID: E60
-Design-freeze commit/hash: Phase 6-v2 retains all five strata for reporting only; commit not recorded.
-Execution-freeze commit/hash: Not executed.
+Design-freeze commit/hash: Phase 6-v2 retains all five strata for reporting only at `bc135c0acc457ae22d57db92f772e4cae9a64338`.
+Execution-freeze commit/hash: Shared E59/E60 read-only aggregator frozen at `176a1d4b1a5c3b4adca2c2cc4529adbed7e36e3f`; `src/render.py` SHA-256 `4e948b121c15b946a3eef6a44b13cb0076736ed5b3492809f71e99cc9130e3e4`; complete test suite 68/68 PASS.
 Date: Not executed.
 Git commit / clean state: Not applicable.
 Data identities: Control and proxy entity-window records from E57 worlds.
-Input artifact hashes: Complete E59 characterization required; none exists.
+Input artifact hashes: Exact E57-v2 input used jointly with E59: SHA-256 `b14efc1aad86ac67b5bf7c8631f02b2e68664e071b747b7b210d5f7a30f5d123`; scientific-array SHA-256 `590c467da2dec0a161688f2587dc1c37cea2b0f42f326b9918fd6dc9df81f6ec`. E59 and E60 share one read and identity table, so E60 cannot precede or diverge from E59.
 Random namespaces / seeds: Inherited frozen identities.
-Command and resolved config: Report the control and proxy counts for each $V=1,2,3,4,5$. The same entity may appear in different windows, but world/entity/window identity must be retained and must not be counted as independent objects in inferential statistics. No per-stratum quota exists. The only cross-frame hard condition was already adjudicated by E57-v2: at least 12 of 24 worlds per label contain an entity with `V>=2`.
+Command and resolved config: Report the control and proxy counts for each $V=1,2,3,4,5$. The same entity may appear in different windows, but world/entity/window identity must be retained and must not be counted as independent objects in inferential statistics. No per-stratum quota exists. The only cross-frame hard condition was already adjudicated by E57-v2: at least 12 of 24 worlds per label contain an entity with `V>=2`. Use the same shared formal command recorded under E59; no second E57 read or rendering pass is allowed.
 Resource and disk preflight: Not executed.
 Artifacts and hashes: None.
 Primary construct: Descriptive development support over number of visible frames without identity pseudoreplication.
