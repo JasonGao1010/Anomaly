@@ -2972,6 +2972,9 @@ def phase7_mechanical_arrays() -> dict[str, np.ndarray]:
     block = TemporalPointBlock(
         16, 4, (0.4,) * 5, (2,) * 5, chunk_size=8
     ).eval()
+    with torch.no_grad():
+        for parameter in block.parameters():
+            parameter.zero_()
     pair_coordinates = torch.tensor(
         ((0.0, 0.0, 0.0), (0.1, 0.0, 0.0),
          (10.0, 0.0, 0.0), (10.1, 0.0, 0.0))
@@ -3034,7 +3037,7 @@ def phase7_mechanical_arrays() -> dict[str, np.ndarray]:
         or not torch.equal(empty_gate, torch.zeros_like(empty_gate))
         or not bool(torch.isfinite(batch_output).all())
         or not bool(((nonempty_gate >= 0.0) & (nonempty_gate <= 1.0)).all())
-        or not torch.allclose(batch_output[:2], individual_output, atol=1.0e-6, rtol=0.0)
+        or not torch.equal(batch_output[:2], individual_output)
     )
     arrays["e67_empty_message"] = empty_message.detach().numpy()
     arrays["e67_empty_gate"] = empty_gate.detach().numpy()
@@ -3050,24 +3053,29 @@ def phase7_mechanical_arrays() -> dict[str, np.ndarray]:
     )
     arrays["e67_error_count"] = np.asarray((e67_error,), dtype=np.int16)
 
+    residual_block = TemporalPointBlock(
+        16, 4, (0.4,) * 5, (2,) * 5, chunk_size=8
+    ).eval()
     residual_features = pair_features[:2].clone().requires_grad_(True)
-    residual_output = block(
+    residual_output = residual_block(
         residual_features, pair_coordinates[:2], pair_times[:2],
         cross_frame_enabled=False,
     )
-    residual_normalized = block.norm1(residual_features)
-    residual_query = block.query(residual_normalized).view(2, 4, 4)
-    residual_key = block.key(residual_normalized).view(2, 4, 4)
-    residual_value = block.value(residual_normalized).view(2, 4, 4)
-    residual_neighbor, residual_valid = block.neighbors(
+    residual_normalized = residual_block.norm1(residual_features)
+    residual_query = residual_block.query(residual_normalized).view(2, 4, 4)
+    residual_key = residual_block.key(residual_normalized).view(2, 4, 4)
+    residual_value = residual_block.value(residual_normalized).view(2, 4, 4)
+    residual_neighbor, residual_valid = residual_block.neighbors(
         pair_coordinates[:2], pair_times[:2], 0
     )
-    same_message = block._message(
+    same_message = residual_block._message(
         residual_query, residual_key, residual_value, pair_coordinates[:2],
         residual_neighbor, residual_valid, radius=0.4, delta=0,
     )
-    residual_updated = residual_features + block.message_projection(same_message)
-    residual_expected = residual_updated + block.ffn(block.norm2(residual_updated))
+    residual_updated = residual_features + residual_block.message_projection(same_message)
+    residual_expected = residual_updated + residual_block.ffn(
+        residual_block.norm2(residual_updated)
+    )
     residual_output[0].sum().backward()
     cross_gradient = residual_features.grad[1]
     e68_difference = float(
@@ -3075,6 +3083,7 @@ def phase7_mechanical_arrays() -> dict[str, np.ndarray]:
     )
     e68_error = int(
         e68_difference != 0.0
+        or not bool(torch.any(same_message != 0.0))
         or not torch.equal(cross_gradient, torch.zeros_like(cross_gradient))
     )
     arrays["e68_output_max_error"] = np.asarray((e68_difference,), dtype=np.float64)

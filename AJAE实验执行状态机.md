@@ -3541,7 +3541,7 @@ Failure classification: Not applicable.
 Unlocked next node: E64 after E63 PASS.
 Invalidated downstream evidence: E64 onward remains locked.
 Descriptive observations: None.
-Notes: Model effect sizes cannot change mechanical semantics.
+Notes: The first harness attempt after `3a707d5` was invalidated before adjudication because E67 accepted a `2.38418579e-7` batch/single discrepancy under an unregistered tolerance although the frozen rule requires identical outputs. This was an implementation error, not a protocol failure: the fixture was changed to an exactly representable zero-parameter gate case, equality enforcement became exact, and a fresh execution-freeze commit is required before rerun. Model effect sizes cannot change mechanical semantics.
 
 ## E64 | Temporal-Identity Voxel Isolation
 
