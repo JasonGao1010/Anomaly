@@ -3592,6 +3592,7 @@
     "learning_rate": 0.0001, "weight_decay": 0.0001, "maximum_worlds": 40,
     "micro_batch": 1, "gradient_accumulation": 8, "worlds_per_evaluation": 5,
     "patience": 4, "chunk_centers": 16, "cache_frames": 7,
+    "deterministic_algorithms": true,
     "window_coverage": "every legal window exactly once per complete world",
     "loss": "range-filtered empty-class-safe class-balanced binary cross entropy only",
     "world_type_probabilities": {"pure_normal": 0.2, "control_only": 0.2, "mixed": 0.4, "anomaly_only": 0.2},

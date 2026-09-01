@@ -658,6 +658,8 @@ class AJAEProtocol:
             raise ProtocolError("training must use train/206 with one complete window per micro-batch")
         if (training.get("maximum_worlds"), training.get("patience")) != (40, 4):
             raise ProtocolError("formal training must stop by 40 worlds with patience 4")
+        if training.get("deterministic_algorithms") is not True:
+            raise ProtocolError("formal training must use deterministic algorithms")
         seeds = _int_tuple(training["seeds"], "training.seeds")
         if len(seeds) < 3 or len(set(seeds)) != len(seeds):
             raise ProtocolError("formal development requires at least three unique training seeds")

@@ -3586,6 +3586,10 @@ def run_e73(
     runtime_device = torch.device(device)
     if runtime_device.type == "cuda" and not torch.cuda.is_available():
         raise QualificationError("E73 CUDA device is unavailable")
+    torch.use_deterministic_algorithms(True)
+    if hasattr(torch.backends, "cudnn"):
+        torch.backends.cudnn.benchmark = False
+        torch.backends.cudnn.deterministic = True
 
     selected: list[tuple[str, int, int, str, WorldSpec]] = []
     with np.load(e26_file, allow_pickle=False) as archive:
@@ -3847,6 +3851,7 @@ def run_e73(
         "stu_state_sha256": stu_before,
         "scientific_array_sha256": _array_hash(arrays),
         "device": str(runtime_device),
+        "deterministic_algorithms": torch.are_deterministic_algorithms_enabled(),
         "seconds": time.monotonic() - started,
     }
     _save(output_file, arrays, result)
