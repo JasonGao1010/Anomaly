@@ -3377,8 +3377,8 @@ def run_e72(
             [custom_metric[name] for name in metric_order], dtype=np.float64
         )
         evaluator_errors += int(
-            not np.array_equal(official_values, custom_values)
-            or official_metric.get("accepted_frames") != 1
+            float(np.max(np.abs(official_values - custom_values))) > 1.0e-10
+            or len(official.all_scores) != 1
             or custom_metric.get("accepted_frames") != 1
         )
         ranges = np.linalg.norm(points.astype(np.float32, copy=False), axis=1)

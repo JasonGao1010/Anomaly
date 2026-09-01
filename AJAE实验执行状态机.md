@@ -3731,7 +3731,7 @@ Git commit / clean state: Pre-execution working tree; untracked user-owned `PPT/
 Data identities: E63-eligible E57 world IDs `[0,1,2,3,4,6,...,23]`, each at its frozen q=0 center; all 48,828,507 E61 pure-normal points; all 13,011 moving-normal points; and the 6,756 matched static counterparts. The six E58 torus worlds and all real-OOD sequences remain inaccessible.
 Input artifact hashes: E57-v2 SHA-256 `b14efc1aad86ac67b5bf7c8631f02b2e68664e071b747b7b210d5f7a30f5d123`; E61 SHA-256 `8d3e08e0512dc70a75d2279cfb4515bc960bbfda4f35a872c4a76e9dad69d0e0`; E63 SHA-256 `5dbf99eaa59a05a83774e42beb6b8d7a95cf9309ebd42ab7870604a20d410dd9`; official STU and E62 evaluator identities remain protocol-bound.
 Random namespaces / seeds: Official STU inference seed for each frame is the frozen `E53-STU-query-v1` frame-identity seed. Repeated E57 center IDs intentionally reuse the same frame seed while retaining distinct rendered world identity.
-Command and resolved config: Render each eligible E57 world only at q=0, run official frozen STU MaxLogit, and compare custom versus released official AP/AUROC/FPR95/threshold per world exactly. Run the same official B0 path once per native E61 frame and save scores in ascending canonical-ray order under the frozen E61 masks. Formal command: `python -m src.qualify e72 --data-root /home/jasongao/Data/STU --protocol protocol.json --e57 runs/ajae/e57_development_worlds.npz --e61 runs/ajae/e61_safety_identities.npz --e63 runs/ajae/e63_training_freeze.npz --output runs/ajae/e72_b0_reference.npz --device cuda`.
+Command and resolved config: Render each eligible E57 world only at q=0, run official frozen STU MaxLogit, and compare custom versus released official AP/AUROC/FPR95/threshold per world under E62-v2's `1e-10` absolute tolerance. Run the same official B0 path once per native E61 frame and save scores in ascending canonical-ray order under the frozen E61 masks. Formal command: `python -m src.qualify e72 --data-root /home/jasongao/Data/STU --protocol protocol.json --e57 runs/ajae/e57_development_worlds.npz --e61 runs/ajae/e61_safety_identities.npz --e63 runs/ajae/e63_training_freeze.npz --output runs/ajae/e72_b0_reference.npz --device cuda`.
 Resource and disk preflight: Formal preflight pending. Expected artifact is below 0.5 GiB, chiefly 48,828,507 float32 pure-normal scores; Windows E reserve must be rechecked.
 Artifacts and hashes: Pending `runs/ajae/e72_b0_reference.npz`.
 Primary construct: Immutable official single-frame baseline B0.
@@ -3741,7 +3741,7 @@ Failure classification: Not applicable.
 Unlocked next node: E73 after PASS.
 Invalidated downstream evidence: E73 onward remains locked until formal E72 PASS.
 Descriptive observations: None.
-Notes: None.
+Notes: The first E72 attempt under commit `17525d1` produced all expected point counts but was invalidated before scientific adjudication because the new harness asked the official calculator result for a nonexistent `accepted_frames` field. The released calculator records acceptance in `all_scores`; E62-v2 already established this interface and the `1e-10` metric tolerance. This is an E72 harness implementation error, not a protocol or B0 failure. The unchanged formal inputs and score path must be rerun after freezing the corrected acceptance check.
 
 ## E73 | B1 Single-Frame Smoke Training
 
