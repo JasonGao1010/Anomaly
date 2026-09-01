@@ -3763,7 +3763,7 @@ Failure classification: Not applicable.
 Unlocked next node: E74 after PASS.
 Invalidated downstream evidence: E74 onward remains locked.
 Descriptive observations: None.
-Notes: Smoke performance is not scientific evidence or a tuning signal.
+Notes: Smoke performance is not scientific evidence or a tuning signal. The first launch from commit `d7efcad` stopped before the first AJAE forward result because frozen-STU tensors had been created under `torch.inference_mode()` and therefore could not be saved by AJAE autograd. It wrote no E73 artifact and exposed no loss or model-performance value. Replacing only that context with `torch.no_grad()` preserves the frozen encoder and numerical inputs while producing ordinary detached tensors suitable for backward; this is an execution implementation correction, not a protocol revision.
 
 ## E74 | B1 Three Independent Training Seeds
 

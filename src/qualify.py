@@ -3629,7 +3629,9 @@ def run_e73(
 
     batches = []
     class_count = []
-    with torch.inference_mode():
+    # The frozen encoder needs no graph, but its outputs must remain valid inputs
+    # to AJAE autograd; inference-mode tensors cannot be saved for backward.
+    with torch.no_grad():
         for kind, _, center, _, world in selected:
             rendered = render_frame(
                 sequence.source_frame(center), world, grid, sensor
