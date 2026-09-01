@@ -14,6 +14,7 @@ import multiprocessing
 import os
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import Mapping, Sequence
@@ -37,7 +38,11 @@ from .model import (
     temporal_radius_knn,
 )
 from .protocol import load_protocol
-from .train import balanced_bce_loss
+from .train import (
+    balanced_bce_loss,
+    experiment_condition,
+    make_window_training_data,
+)
 from .scene import (
     ExperimentCondition,
     LabelMode,
@@ -84,6 +89,12 @@ E63_BOOTSTRAP_SEED = 63002026
 PHASE7_SEED = 640071
 E61_ARTIFACT_SHA256 = (
     "8d3e08e0512dc70a75d2279cfb4515bc960bbfda4f35a872c4a76e9dad69d0e0"
+)
+E72_ARTIFACT_SHA256 = (
+    "208487d5c91b131856e908988cf6d955305fa09364450d509e32f617295b5863"
+)
+E73_E26_ARTIFACT_SHA256 = (
+    "2653f705d2e890d99cda732a7a00387b5621cd05abb9c4681c7a9f284c34363c"
 )
 
 
@@ -3512,6 +3523,334 @@ def run_e72(
     return result
 
 
+def _tensor_state_hash(state: Mapping[str, torch.Tensor]) -> str:
+    digest = hashlib.sha256()
+    for name in sorted(state):
+        value = state[name].detach().cpu().contiguous()
+        array = value.numpy()
+        digest.update(name.encode("utf-8"))
+        digest.update(array.dtype.str.encode("ascii"))
+        digest.update(np.asarray(array.shape, dtype="<i8").tobytes())
+        digest.update(array.tobytes())
+    return digest.hexdigest()
+
+
+def _optimizer_state_equal(left: object, right: object) -> bool:
+    if isinstance(left, torch.Tensor) and isinstance(right, torch.Tensor):
+        return left.dtype == right.dtype and left.shape == right.shape and bool(
+            torch.equal(left.detach().cpu(), right.detach().cpu())
+        )
+    if isinstance(left, Mapping) and isinstance(right, Mapping):
+        return set(left) == set(right) and all(
+            _optimizer_state_equal(left[key], right[key]) for key in left
+        )
+    if isinstance(left, (list, tuple)) and isinstance(right, (list, tuple)):
+        return len(left) == len(right) and all(
+            _optimizer_state_equal(a, b) for a, b in zip(left, right, strict=True)
+        )
+    return type(left) is type(right) and left == right
+
+
+def run_e73(
+    data_root: Path | str,
+    protocol_path: Path | str,
+    e26_path: Path | str,
+    e72_path: Path | str,
+    output_path: Path | str,
+    *,
+    device: str = "cuda",
+) -> dict[str, object]:
+    """Run the frozen two-window B1 training and checkpoint smoke test."""
+
+    from .render import WorldSpec, load_sensor_calibration, render_frame
+    from .scene import assemble_window, canonical_ray_mapping_digest
+
+    started = time.monotonic()
+    protocol_file = Path(protocol_path).expanduser().resolve(strict=True)
+    protocol = load_protocol(protocol_file)
+    project_root = Path(protocol.path).parent
+    e26_file = Path(e26_path).expanduser().resolve(strict=True)
+    e72_file = Path(e72_path).expanduser().resolve(strict=True)
+    output_file = Path(output_path).expanduser().resolve()
+    smoke = protocol.training["e73_smoke"]
+    if (
+        _sha256(e26_file) != E73_E26_ARTIFACT_SHA256
+        or _sha256(e26_file) != smoke["source_artifact_sha256"]
+    ):
+        raise QualificationError("E73 E26-v2 identity changed")
+    if (
+        _sha256(e72_file) != E72_ARTIFACT_SHA256
+        or _sha256(e72_file) != smoke["b0_reference_sha256"]
+    ):
+        raise QualificationError("E73 E72 identity changed")
+    runtime_device = torch.device(device)
+    if runtime_device.type == "cuda" and not torch.cuda.is_available():
+        raise QualificationError("E73 CUDA device is unavailable")
+
+    selected: list[tuple[str, int, int, str, WorldSpec]] = []
+    with np.load(e26_file, allow_pickle=False) as archive:
+        for kind in ("pure_normal", "mixed"):
+            identity = smoke[kind]
+            row = int(identity["row"])
+            seed = int(archive["world_seed"][row])
+            world_type = str(archive["world_type"][row])
+            world_hash = bytes(archive["world_hash"][row]).decode("ascii")
+            world = WorldSpec.from_dict(
+                json.loads(bytes(archive["world_json"][row]).decode("utf-8"))
+            )
+            center = int(identity["center_frame"])
+            if (
+                world_type != kind
+                or seed != int(identity["world_seed"])
+                or world.seed != seed
+                or world.identity != world_hash
+                or world_hash != identity["world_sha256"]
+                or center != 2 + seed % 445
+            ):
+                raise QualificationError(f"E73 frozen {kind} world changed")
+            selected.append((kind, seed, center, world_hash, world))
+
+    grid, sensor = load_sensor_calibration(protocol.sensor_calibration_path())
+    canonical_by_slot = np.asarray(
+        grid.beam_ids * grid.columns + grid.column_ids, dtype=np.int32
+    )
+    ray_digest = canonical_ray_mapping_digest(canonical_by_slot)
+    sequence = STUSequence.open(
+        data_root, protocol=protocol, partition="train", sequence_id=206,
+        label_mode=LabelMode.REQUIRED,
+    )
+    condition = experiment_condition("B1")
+    encoder = FrozenSTUPointEncoder.from_protocol(
+        protocol, project_root=project_root
+    ).to(runtime_device).eval()
+    for parameter in encoder.parameters():
+        parameter.requires_grad_(False)
+    stu_before = _tensor_state_hash(encoder.state_dict())
+
+    batches = []
+    class_count = []
+    with torch.inference_mode():
+        for kind, _, center, _, world in selected:
+            rendered = render_frame(
+                sequence.source_frame(center), world, grid, sensor
+            )
+            source = rendered.source
+            encoding = encoder(
+                source.coordinates, source.features, source.real_slots
+            )
+            window = assemble_window(
+                sequence.spec,
+                center,
+                (source,),
+                condition="B1",
+                canonical_ray_by_slot=canonical_by_slot,
+                ray_mapping_audited=True,
+                ray_mapping_digest=ray_digest,
+            )
+            batch = make_window_training_data(
+                window,
+                (rendered,),
+                (encoding,),
+                condition,
+                minimum_range_m=2.5,
+                maximum_range_m=50.0,
+                device=runtime_device,
+            )
+            positive = int((batch.valid & batch.targets).sum().item())
+            negative = int((batch.valid & ~batch.targets).sum().item())
+            class_count.append((positive, negative))
+            batches.append(batch)
+            if kind == "pure_normal" and (positive != 0 or negative == 0):
+                raise QualificationError("E73 pure-normal window is not pure negative")
+            if kind == "mixed" and (positive == 0 or negative == 0):
+                raise QualificationError("E73 mixed window lacks one class")
+    stu_after_encoding = _tensor_state_hash(encoder.state_dict())
+
+    seed = int(smoke["seed"])
+    accumulation = int(protocol.training["gradient_accumulation"])
+    scale = accumulation / len(batches)
+
+    def train_once() -> tuple[np.ndarray, dict[str, torch.Tensor], dict[str, object], float, int]:
+        torch.manual_seed(seed)
+        if runtime_device.type == "cuda":
+            torch.cuda.manual_seed_all(seed)
+        model = AJAEPointTransformer.from_protocol(protocol).to(runtime_device).train()
+        optimizer = torch.optim.AdamW(
+            model.parameters(),
+            lr=float(protocol.training["learning_rate"]),
+            weight_decay=float(protocol.training["weight_decay"]),
+        )
+        optimizer.zero_grad(set_to_none=True)
+        losses = []
+        for batch in batches:
+            logits = model(
+                batch.coordinates,
+                batch.relative_times,
+                batch.stu_features,
+                batch.normal_evidence,
+                batch.assignment_reliability,
+                batch.no_object_reliability,
+                batch.intensity,
+                cross_frame_enabled=False,
+            )
+            loss = balanced_bce_loss(logits, batch.targets, batch.valid)
+            if not bool(torch.isfinite(loss)):
+                raise QualificationError("E73 produced a non-finite loss")
+            (loss / accumulation).backward()
+            losses.append(float(loss.detach().cpu()))
+        gradient_errors = 0
+        gradients = []
+        for parameter in model.parameters():
+            if parameter.grad is None:
+                continue
+            gradient_errors += int(not bool(torch.isfinite(parameter.grad).all()))
+            gradients.append(parameter.grad)
+        if not gradients:
+            gradient_errors += 1
+        for gradient in gradients:
+            gradient.mul_(scale)
+        gradient_norm = float(
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=10.0)
+            .detach()
+            .cpu()
+        )
+        gradient_errors += int(not np.isfinite(gradient_norm))
+        optimizer.step()
+        optimizer.zero_grad(set_to_none=True)
+        state = {
+            name: value.detach().cpu().clone()
+            for name, value in model.state_dict().items()
+        }
+        optimizer_state = optimizer.state_dict()
+        return (
+            np.asarray(losses, dtype=np.float64),
+            state,
+            optimizer_state,
+            gradient_norm,
+            gradient_errors,
+        )
+
+    first_loss, first_state, first_optimizer, first_norm, first_gradient_errors = (
+        train_once()
+    )
+    checkpoint_errors = 0
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(
+        prefix="e73-checkpoint-", dir=output_file.parent
+    ) as temporary:
+        checkpoint = Path(temporary) / "progress.pt"
+        torch.save(
+            {
+                "model": first_state,
+                "optimizer": first_optimizer,
+                "seed": seed,
+                "micro_batches": len(batches),
+                "optimizer_updates": 1,
+            },
+            checkpoint,
+        )
+        restored = torch.load(checkpoint, map_location="cpu", weights_only=False)
+        torch.manual_seed(seed + 1)
+        restored_model = AJAEPointTransformer.from_protocol(protocol).cpu()
+        restored_optimizer = torch.optim.AdamW(
+            restored_model.parameters(),
+            lr=float(protocol.training["learning_rate"]),
+            weight_decay=float(protocol.training["weight_decay"]),
+        )
+        restored_model.load_state_dict(restored["model"], strict=True)
+        restored_optimizer.load_state_dict(restored["optimizer"])
+        checkpoint_errors += int(
+            _tensor_state_hash(restored_model.state_dict())
+            != _tensor_state_hash(first_state)
+            or not _optimizer_state_equal(
+                restored_optimizer.state_dict(), first_optimizer
+            )
+            or restored.get("seed") != seed
+            or restored.get("micro_batches") != 2
+            or restored.get("optimizer_updates") != 1
+        )
+        del restored_model, restored_optimizer, restored
+
+    second_loss, second_state, _, second_norm, second_gradient_errors = train_once()
+    parameter_error = max(
+        float(torch.max(torch.abs(first_state[name] - second_state[name])).item())
+        if first_state[name].is_floating_point()
+        else float(not torch.equal(first_state[name], second_state[name]))
+        for name in first_state
+    )
+    loss_error = float(np.max(np.abs(first_loss - second_loss)))
+    stu_after = _tensor_state_hash(encoder.state_dict())
+    stu_gradient_errors = sum(
+        int(parameter.grad is not None) for parameter in encoder.parameters()
+    )
+    identity_errors = int(
+        class_count != [(0, 125_299), (50, 121_689)]
+        or len(batches) != int(smoke["micro_batches"])
+        or not np.isclose(
+            scale,
+            float(smoke["partial_accumulation_uses_frozen_factor"]),
+            rtol=0.0,
+            atol=0.0,
+        )
+    )
+    reproduction_errors = int(
+        loss_error > float(smoke["loss_reproduction_absolute_tolerance"])
+        or parameter_error
+        > float(smoke["parameter_reproduction_absolute_tolerance"])
+    )
+    stu_errors = int(
+        stu_before != stu_after_encoding
+        or stu_before != stu_after
+        or stu_gradient_errors != 0
+    )
+    gradient_errors = first_gradient_errors + second_gradient_errors
+    arrays = {
+        "world_seed": np.asarray([item[1] for item in selected], dtype=np.int64),
+        "center_frame": np.asarray([item[2] for item in selected], dtype=np.int16),
+        "world_sha256": np.asarray([item[3] for item in selected], dtype="S64"),
+        "positive_count": np.asarray([item[0] for item in class_count], dtype=np.int32),
+        "negative_count": np.asarray([item[1] for item in class_count], dtype=np.int32),
+        "first_loss": first_loss,
+        "second_loss": second_loss,
+        "gradient_norm": np.asarray([first_norm, second_norm], dtype=np.float64),
+        "first_model_sha256": np.asarray(_tensor_state_hash(first_state), dtype="S64"),
+        "second_model_sha256": np.asarray(_tensor_state_hash(second_state), dtype="S64"),
+        "loss_reproduction_error": np.asarray(loss_error, dtype=np.float64),
+        "parameter_reproduction_error": np.asarray(parameter_error, dtype=np.float64),
+        "identity_error_count": np.asarray(identity_errors, dtype=np.int32),
+        "gradient_error_count": np.asarray(gradient_errors, dtype=np.int32),
+        "stu_error_count": np.asarray(stu_errors, dtype=np.int32),
+        "checkpoint_error_count": np.asarray(checkpoint_errors, dtype=np.int32),
+        "reproduction_error_count": np.asarray(reproduction_errors, dtype=np.int32),
+    }
+    passed = not any(
+        (identity_errors, gradient_errors, stu_errors, checkpoint_errors, reproduction_errors)
+    )
+    result = {
+        "experiment": "E73",
+        "passed": passed,
+        "seed": seed,
+        "micro_batches": 2,
+        "optimizer_updates": 1,
+        "identity_errors": identity_errors,
+        "gradient_errors": gradient_errors,
+        "stu_errors": stu_errors,
+        "checkpoint_errors": checkpoint_errors,
+        "reproduction_errors": reproduction_errors,
+        "loss_reproduction_error": loss_error,
+        "parameter_reproduction_error": parameter_error,
+        "protocol_sha256": _sha256(protocol_file),
+        "e26_artifact_sha256": _sha256(e26_file),
+        "e72_artifact_sha256": _sha256(e72_file),
+        "stu_state_sha256": stu_before,
+        "scientific_array_sha256": _array_hash(arrays),
+        "device": str(runtime_device),
+        "seconds": time.monotonic() - started,
+    }
+    _save(output_file, arrays, result)
+    return result
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -3590,6 +3929,13 @@ def _parser() -> argparse.ArgumentParser:
     e72.add_argument("--e63", type=Path, required=True)
     e72.add_argument("--output", type=Path, required=True)
     e72.add_argument("--device", default="cuda")
+    e73 = commands.add_parser("e73")
+    e73.add_argument("--data-root", type=Path, required=True)
+    e73.add_argument("--protocol", type=Path, default=PROJECT_ROOT / "protocol.json")
+    e73.add_argument("--e26", type=Path, required=True)
+    e73.add_argument("--e72", type=Path, required=True)
+    e73.add_argument("--output", type=Path, required=True)
+    e73.add_argument("--device", default="cuda")
     return parser
 
 
@@ -3687,6 +4033,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         result = run_e72(
             args.data_root, args.protocol, args.e57, args.e61, args.e63,
             args.output, device=args.device,
+        )
+        print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        return 0 if result["passed"] else 1
+    if args.command == "e73":
+        result = run_e73(
+            args.data_root, args.protocol, args.e26, args.e72, args.output,
+            device=args.device,
         )
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 0 if result["passed"] else 1

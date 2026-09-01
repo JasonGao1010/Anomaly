@@ -669,6 +669,53 @@ class AJAEProtocol:
         values = tuple(_number(value, f"training world probability {key}") for key, value in probabilities.items())
         if any(value <= 0 for value in values) or not math.isclose(sum(values), 1.0, abs_tol=1e-9):
             raise ProtocolError("training world probabilities must be positive and sum to one")
+        smoke = _mapping(training["e73_smoke"], "training.e73_smoke")
+        pure = _mapping(smoke["pure_normal"], "training.e73_smoke.pure_normal")
+        mixed = _mapping(smoke["mixed"], "training.e73_smoke.mixed")
+        if (
+            smoke.get("status") != "frozen_before_model_execution"
+            or smoke.get("seed") != 73002026
+            or smoke.get("source_artifact")
+            != "runs/ajae/e26_v2_world_builder.npz"
+            or smoke.get("source_artifact_sha256")
+            != "2653f705d2e890d99cda732a7a00387b5621cd05abb9c4681c7a9f284c34363c"
+            or smoke.get("b0_reference") != "runs/ajae/e72_b0_reference.npz"
+            or smoke.get("b0_reference_sha256")
+            != "208487d5c91b131856e908988cf6d955305fa09364450d509e32f617295b5863"
+            or dict(pure)
+            != {
+                "row": 0,
+                "world_seed": 2600000,
+                "center_frame": 312,
+                "world_sha256": "27a1654c7241bb616964a3b47502c60b5376cfef189392f9eb2e4c76154246ea",
+            }
+            or dict(mixed)
+            != {
+                "row": 128,
+                "world_seed": 2600128,
+                "center_frame": 440,
+                "world_sha256": "c83062ae310e2d468eaec74471235dabfa41b1405292f4229d8d0ce718b17a7a",
+            }
+            or smoke.get("optimizer_updates") != 1
+            or smoke.get("micro_batches") != 2
+            or _number(
+                smoke["partial_accumulation_uses_frozen_factor"],
+                "E73 partial accumulation factor",
+            )
+            != 4.0
+            or _number(
+                smoke["loss_reproduction_absolute_tolerance"],
+                "E73 loss reproduction tolerance",
+            )
+            != 1.0e-7
+            or _number(
+                smoke["parameter_reproduction_absolute_tolerance"],
+                "E73 parameter reproduction tolerance",
+            )
+            != 1.0e-7
+            or smoke.get("model_quality_use_forbidden") is not True
+        ):
+            raise ProtocolError("E73 smoke identity changed")
 
     @staticmethod
     def _validate_development(development: Mapping[str, object]) -> None:

@@ -3746,19 +3746,19 @@ Notes: The first E72 attempt under commit `17525d1` produced all expected point 
 ## E73 | B1 Single-Frame Smoke Training
 
 Experiment ID: E73
-Design-freeze commit/hash: Frozen design; commit not recorded.
-Execution-freeze commit/hash: Not executed.
-Date: Not executed.
-Git commit / clean state: Not applicable.
-Data identities: One fixed pure-normal world and one fixed mixed world; at most 200 optimizer steps.
-Input artifact hashes: E72 and frozen STU required.
-Random namespaces / seeds: One frozen smoke seed; exact value not recorded.
-Command and resolved config: Verify that both pure-negative and mixed positive/negative windows actually occur; loss/gradients finite; STU parameters, buffers, and gradients unchanged; checkpoint save/restore works; same-seed short run reproduces. Smoke results cannot select hyperparameters.
-Resource and disk preflight: Not executed.
-Artifacts and hashes: None.
+Design-freeze commit/hash: Frozen E73 construct completed before model execution: one result-blind pure-normal identity and one result-blind mixed identity, one optimizer update, and same-seed numerical tolerances. Commit to be recorded before execution.
+Execution-freeze commit/hash: Production renderer, frozen STU encoder, B1 model/loss/optimizer and checkpoint round-trip runner in `src/qualify.py`; commit/hash pending.
+Date: 2026-09-01 execution identity frozen; formal run pending.
+Git commit / clean state: Pre-execution working tree; untracked user-owned `PPT/` remains excluded.
+Data identities: Reuse E26-v2 row 0 pure-normal world seed `2600000`, center frame `312`, world SHA-256 `27a1654c7241bb616964a3b47502c60b5376cfef189392f9eb2e4c76154246ea`; and row 128 mixed world seed `2600128`, center frame `440`, world SHA-256 `c83062ae310e2d468eaec74471235dabfa41b1405292f4229d8d0ce718b17a7a`. Label-only preflight before AJAE initialization found 125,299 valid negatives and zero positives in the pure window, and 50 valid positives plus 121,689 negatives in the mixed window.
+Input artifact hashes: E26-v2 `2653f705d2e890d99cda732a7a00387b5621cd05abb9c4681c7a9f284c34363c`; E72 `208487d5c91b131856e908988cf6d955305fa09364450d509e32f617295b5863`; frozen STU identity inherited unchanged.
+Random namespaces / seeds: Smoke seed `73002026`; no seed search.
+Command and resolved config: Encode the two fixed B1 windows once through frozen STU, then run the production AJAE forward path, empty-class-safe balanced BCE, frozen gradient-accumulation scaling and AdamW update. Exactly two micro-batches produce one partial accumulation update with factor `8/2=4`; this is below the 200-update ceiling. Verify finite loss/gradients; unchanged STU parameters, buffers and absent gradients; exact checkpoint restoration; and a second same-seed run with maximum absolute loss and parameter differences at most `1e-7`. Smoke losses cannot select any model or hyperparameter. Formal command to be recorded after implementation.
+Resource and disk preflight: Pending.
+Artifacts and hashes: Pending `runs/ajae/e73_b1_smoke.npz`.
 Primary construct: Mechanical trainability and frozen-STU isolation of B1.
 Primary result: Not executed.
-PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
+PASS / FAIL / OUTCOME: OUTCOME — EXECUTION FROZEN / NOT EXECUTED.
 Failure classification: Not applicable.
 Unlocked next node: E74 after PASS.
 Invalidated downstream evidence: E74 onward remains locked.
