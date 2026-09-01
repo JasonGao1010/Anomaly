@@ -3346,8 +3346,8 @@ Notes: Alignment must improve static background without flattening moving object
 ## Phase 6-v2 Candidate-Bank and One-Time Selection Freeze
 
 Experiment ID: Phase 6-v2 candidate-bank and selection freeze
-Design-freeze commit/hash: Frozen before any E57 result; commit not recorded.
-Execution-freeze commit/hash: Not executed.
+Design-freeze commit/hash: `bc135c0acc457ae22d57db92f772e4cae9a64338`; protocol SHA-256 `4f1f96966ba2da51044592c4c29f0d7a9936de744e108e2d4e067cd5ccbe30fb`.
+Execution-freeze commit/hash: The E57-v2 runner was frozen in the same commit; `src/render.py` SHA-256 `96dd2be3c36026b2c6ce4c5f763df83d60ca03cf9eb468960401fe2756a45c48`.
 Date: Not executed.
 Git commit / clean state: Not applicable.
 Data identities: The 1,024 complete raw generator rows in `runs/ajae/e45b-v2_bank_1024.npz`; SHA-256 `d3088e29e4c6179999ccb34088dae558fa402bf6b1455394acdc99cac4118463`; scientific-array SHA-256 `f4fb2081b346c686e2d6930a03e3f17bb6c6d3eee4fcfc16984c1a9c1d8de4f5`. Only raw control/proxy world specifications and placement records are permitted inputs. E45B matching outputs and every E48/model score are forbidden.
@@ -3368,14 +3368,14 @@ Notes: Distance, visible-return count, occlusion and visible-frame strata are de
 ## E57 | Freeze 24 In-Generator Development Worlds
 
 Experiment ID: E57-v2
-Design-freeze commit/hash: Phase 6-v2 design frozen before execution; commit not recorded.
-Execution-freeze commit/hash: Not executed.
+Design-freeze commit/hash: `bc135c0acc457ae22d57db92f772e4cae9a64338`; protocol SHA-256 `4f1f96966ba2da51044592c4c29f0d7a9936de744e108e2d4e067cd5ccbe30fb`.
+Execution-freeze commit/hash: `bc135c0acc457ae22d57db92f772e4cae9a64338`; runner SHA-256 `96dd2be3c36026b2c6ce4c5f763df83d60ca03cf9eb468960401fe2756a45c48`.
 Date: Not executed.
 Git commit / clean state: Not applicable.
 Data identities: Twenty-four train/201 mixed worlds deterministically selected from the exact Phase 6-v2 bank. Save world, entity, five source-frame and calibration-bound canonical-ray identities together with world specification, generation report, five-frame diagnostics and hashes.
-Input artifact hashes: The exact Phase 6-v2 source bank and calibration above.
+Input artifact hashes: Source bank SHA-256 `d3088e29e4c6179999ccb34088dae558fa402bf6b1455394acdc99cac4118463`, source-bank scientific-array SHA-256 `f4fb2081b346c686e2d6930a03e3f17bb6c6d3eee4fcfc16984c1a9c1d8de4f5`, calibration SHA-256 `b532b7e04d9025233b2768b8fb36287e477f62f20a3ff685a62f4a4a29bfefe0`.
 Random namespaces / seeds: No new random draw; deterministic maximin descriptor-span selection with hash tie-break.
-Command and resolved config: Every selected world must be legal and contain a visible control and proxy in its five-frame window. Every center frame must contain at least five valid-range anomaly points and at least one valid-range normal point under official 2.5–50 m and ignore filtering. For each label, at least 12 of the 24 selected worlds must contain an entity with `V>=2`. All 24 identities and selection must reproduce exactly. These are the complete E57 hard conditions. The `d/Nvis/O/V` bin counts are reported but never enter PASS/FAIL.
+Command and resolved config: Every selected world must be legal and contain a visible control and proxy in its five-frame window. Every center frame must contain at least five valid-range anomaly points and at least one valid-range normal point under official 2.5–50 m and ignore filtering. For each label, at least 12 of the 24 selected worlds must contain an entity with `V>=2`. All 24 identities and selection must reproduce exactly. These are the complete E57 hard conditions. The `d/Nvis/O/V` bin counts are reported but never enter PASS/FAIL. Formal command: `python -m src.render qualify-e57-v2 --data-root /home/jasongao/Data/STU --protocol protocol.json --source-bank runs/ajae/e45b-v2_bank_1024.npz --calibration runs/ajae/calibration.pt --output runs/ajae/e57_development_worlds.npz --processes 24`.
 Resource and disk preflight: Not executed.
 Artifacts and hashes: None.
 Primary construct: Immutable, evaluable and genuinely cross-frame-observable in-generator development testbed selected without model results.
