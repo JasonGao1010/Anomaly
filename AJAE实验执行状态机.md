@@ -140,8 +140,8 @@ flowchart TB
   subgraph P6["Phase 6 | Fixed train/201 development testbed and evaluator"]
     E57["E57 Freeze 24 in-generator development worlds"]
     E58["E58 Freeze six held-out diagnostic worlds"]
-    E59["E59 Development-world coverage of N_vis, O, and d"]
-    E60["E60 Development-world coverage of V=1..5"]
+    E59["E59 Descriptive N_vis, O, and d characterization"]
+    E60["E60 Descriptive V=1..5 characterization"]
     E61["E61 Pure-normal and moving-normal development subsets"]
     E62["E62 Agreement between the custom and official evaluators"]
     E63["E63 Freeze development decision rules"]
@@ -3343,49 +3343,49 @@ Notes: Alignment must improve static background without flattening moving object
 
 # Phase 6 | Frozen 201 Development Testbed, Evaluator, and Scientific Criteria
 
-## Phase 6 Candidate-Bank and One-Time Selection Freeze
+## Phase 6-v2 Candidate-Bank and One-Time Selection Freeze
 
-Experiment ID: Phase 6 candidate-bank and selection freeze
-Design-freeze commit/hash: Frozen before E57; commit not recorded.
+Experiment ID: Phase 6-v2 candidate-bank and selection freeze
+Design-freeze commit/hash: Frozen before any E57 result; commit not recorded.
 Execution-freeze commit/hash: Not executed.
 Date: Not executed.
 Git commit / clean state: Not applicable.
-Data identities: train/201 candidate worlds, capacity ladder 128/256/512/1,024.
-Input artifact hashes: None yet.
-Random namespaces / seeds: Deterministic predefined-difficulty greedy set cover.
-Command and resolved config: E57–E63 are frozen together before E57. Generate the 201 candidate bank only once. Select by predefined difficulty measures and deterministic greedy set cover. Never manually replace worlds per node and never read model scores.
+Data identities: The 1,024 complete raw generator rows in `runs/ajae/e45b-v2_bank_1024.npz`; SHA-256 `d3088e29e4c6179999ccb34088dae558fa402bf6b1455394acdc99cac4118463`; scientific-array SHA-256 `f4fb2081b346c686e2d6930a03e3f17bb6c6d3eee4fcfc16984c1a9c1d8de4f5`. Only raw control/proxy world specifications and placement records are permitted inputs. E45B matching outputs and every E48/model score are forbidden.
+Input artifact hashes: Source-bank hashes above; sensor calibration SHA-256 `b532b7e04d9025233b2768b8fb36287e477f62f20a3ff685a62f4a4a29bfefe0`.
+Random namespaces / seeds: None in selection. Candidate identities are inherited from the frozen bank. Hashes break exact descriptor ties.
+Command and resolved config: Combine each same-row control and proxy into one train/201 mixed-world candidate; reject actual pair penetration, missing five-frame visibility, or an unevaluable center frame. Rank-normalize the eight generator-side descriptors `(control/proxy) × (Nvis,O,d,V)`, choose the candidate nearest the descriptor center, then greedily add the candidate maximizing its minimum squared rank distance to the selected set, with candidate hash as the sole tie-break. Select exactly 24 worlds. The selector may not read model outputs, E45B matching quality, E48 scores, or optimize exact bin counts. E57 selection is frozen here; E58–E62 retain their stated identities, and E63 freezes training/statistical decisions before E72 and before any B0/B1 outcome.
 Resource and disk preflight: Not executed.
 Artifacts and hashes: None.
-Primary construct: One immutable, model-independent development-world selection process.
-Primary result: Not executed.
-PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
+Primary construct: One immutable, model-independent development-world selection process with only minimal non-degeneracy requirements.
+Primary result: Design revised before E57 execution; no E57 model or qualification result was observed.
+PASS / FAIL / OUTCOME: OUTCOME — DESIGN FROZEN / NOT EXECUTED.
 Failure classification: Not applicable.
 Unlocked next node: E57 after Phase 5 PASS.
 Invalidated downstream evidence: E57 onward remains locked.
 Descriptive observations: None.
-Notes: Candidate expansion is an a priori capacity ladder, not post-result world replacement.
+Notes: Distance, visible-return count, occlusion and visible-frame strata are descriptive characterization only. They cannot independently fail E57 or block B1.
 
 ## E57 | Freeze 24 In-Generator Development Worlds
 
-Experiment ID: E57
-Design-freeze commit/hash: Frozen design; commit not recorded.
+Experiment ID: E57-v2
+Design-freeze commit/hash: Phase 6-v2 design frozen before execution; commit not recorded.
 Execution-freeze commit/hash: Not executed.
 Date: Not executed.
 Git commit / clean state: Not applicable.
-Data identities: Twenty-four mixed worlds selected from the train/201 candidate bank.
-Input artifact hashes: None.
-Random namespaces / seeds: Frozen candidate-bank and deterministic set-cover identities.
-Command and resolved config: Freeze each world spec, generation report, five-frame diagnostics, and hash. If a capacity-1,024 bank cannot meet E59/E60 coverage, E57 FAILs; bins cannot be moved ad hoc.
+Data identities: Twenty-four train/201 mixed worlds deterministically selected from the exact Phase 6-v2 bank. Save world, entity, five source-frame and calibration-bound canonical-ray identities together with world specification, generation report, five-frame diagnostics and hashes.
+Input artifact hashes: The exact Phase 6-v2 source bank and calibration above.
+Random namespaces / seeds: No new random draw; deterministic maximin descriptor-span selection with hash tie-break.
+Command and resolved config: Every selected world must be legal and contain a visible control and proxy in its five-frame window. Every center frame must contain at least five valid-range anomaly points and at least one valid-range normal point under official 2.5–50 m and ignore filtering. For each label, at least 12 of the 24 selected worlds must contain an entity with `V>=2`. All 24 identities and selection must reproduce exactly. These are the complete E57 hard conditions. The `d/Nvis/O/V` bin counts are reported but never enter PASS/FAIL.
 Resource and disk preflight: Not executed.
 Artifacts and hashes: None.
-Primary construct: Immutable in-generator development world set with preregistered coverage capability.
+Primary construct: Immutable, evaluable and genuinely cross-frame-observable in-generator development testbed selected without model results.
 Primary result: Not executed.
 PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
 Failure classification: Not applicable.
 Unlocked next node: E58 after PASS.
 Invalidated downstream evidence: E58 onward remains locked.
 Descriptive observations: None.
-Notes: World identity and diagnostics must be fixed once.
+Notes: World identity and diagnostics must be fixed once. Failure of a descriptive bin count is a limitation of stratified interpretation, not an E57 failure.
 
 ## E58 | Freeze Six Held-Out Diagnostic Worlds
 
@@ -3395,9 +3395,9 @@ Execution-freeze commit/hash: Not executed.
 Date: Not executed.
 Git commit / clean state: Not applicable.
 Data identities: Six deterministically selected worlds from the held-out torus mechanism never sampled by formal training.
-Input artifact hashes: E57 candidate bank required; none exists.
+Input artifact hashes: E57-v2 selected-world artifact required; none exists.
 Random namespaces / seeds: Frozen held-out torus identities.
-Command and resolved config: Code must prevent these worlds from training, checkpoint/threshold selection, and PASS statistics. They are diagnostic only. Identity and isolation errors must be zero.
+Command and resolved config: Perform only deterministic torus-world identity generation and access-isolation checks. Code must prevent these worlds from training, checkpoint/threshold selection, and PASS statistics. They are diagnostic only. Identity and isolation errors must be zero; E58 has no checkpoint, threshold or model-quality criterion.
 Resource and disk preflight: Not executed.
 Artifacts and hashes: None.
 Primary construct: Strict isolation of held-out diagnostic worlds.
@@ -3409,49 +3409,49 @@ Invalidated downstream evidence: E59 onward remains locked.
 Descriptive observations: None.
 Notes: Held-out diagnostics cannot influence any selection or formal test.
 
-## E59 | Development-World $N_{vis}$/Occlusion/Distance Coverage
+## E59 | Descriptive Development-World $N_{vis}$/Occlusion/Distance Characterization
 
 Experiment ID: E59
-Design-freeze commit/hash: Frozen marginal bins and counts; commit not recorded.
+Design-freeze commit/hash: Phase 6-v2 freezes the old marginal bins as reporting bins only; commit not recorded.
 Execution-freeze commit/hash: Not executed.
 Date: Not executed.
 Git commit / clean state: Not applicable.
 Data identities: Entity-window records from the 24 E57 worlds, separately for controls and proxies.
 Input artifact hashes: E57 artifact required; none exists.
 Random namespaces / seeds: Inherited frozen world identities.
-Command and resolved config: Distance bins [2.5,10), [10,20), [20,30), [30,50] m; $N_{vis}$ bins [1,8), [8,32), [32,128), [128,+∞); occlusion bins [0,0.25), [0.25,0.50), [0.50,0.75), [0.75,1]. In 24 worlds, every marginal bin must have at least 32 entity-window records for control and at least 32 for proxy; identities unique and metrics finite.
+Command and resolved config: Report controls and proxies separately in the retained distance bins [2.5,10), [10,20), [20,30), [30,50] m; $N_{vis}$ bins [1,8), [8,32), [32,128), [128,+∞); and occlusion bins [0,0.25), [0.25,0.50), [0.50,0.75), [0.75,1]. Identities must remain explicit and metrics finite. No minimum per-bin count exists, and no bin count can block E57, E61 or B1.
 Resource and disk preflight: Not executed.
 Artifacts and hashes: None.
-Primary construct: Marginal development coverage across distance, visible count, and occlusion for both generated labels.
+Primary construct: Descriptive limits of development evidence across distance, visible count and occlusion for both generated labels.
 Primary result: Not executed.
-PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
-Failure classification: Not applicable.
-Unlocked next node: E60 after PASS.
+PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED; characterization has no scientific FAIL verdict.
+Failure classification: Not applicable; sparse strata restrict interpretation only.
+Unlocked next node: E60 after the characterization artifact is complete.
 Invalidated downstream evidence: E60 onward remains locked.
 Descriptive observations: None.
-Notes: These are marginal, not Cartesian-product, coverage requirements.
+Notes: These are marginal descriptive summaries, not Cartesian-product or quota requirements.
 
-## E60 | Development-World $V=1..5$ Coverage
+## E60 | Descriptive Development-World $V=1..5$ Characterization
 
 Experiment ID: E60
-Design-freeze commit/hash: Frozen design; commit not recorded.
+Design-freeze commit/hash: Phase 6-v2 retains all five strata for reporting only; commit not recorded.
 Execution-freeze commit/hash: Not executed.
 Date: Not executed.
 Git commit / clean state: Not applicable.
 Data identities: Control and proxy entity-window records from E57 worlds.
-Input artifact hashes: E59 PASS required; none exists.
+Input artifact hashes: Complete E59 characterization required; none exists.
 Random namespaces / seeds: Inherited frozen identities.
-Command and resolved config: For each $V=1,2,3,4,5$, controls and proxies each need at least 24 entity-window records. The same entity may appear in different windows, but world/entity/window identity must be retained and must not be counted as independent objects in statistics.
+Command and resolved config: Report the control and proxy counts for each $V=1,2,3,4,5$. The same entity may appear in different windows, but world/entity/window identity must be retained and must not be counted as independent objects in inferential statistics. No per-stratum quota exists. The only cross-frame hard condition was already adjudicated by E57-v2: at least 12 of 24 worlds per label contain an entity with `V>=2`.
 Resource and disk preflight: Not executed.
 Artifacts and hashes: None.
-Primary construct: Development coverage over number of visible frames without identity pseudoreplication.
+Primary construct: Descriptive development support over number of visible frames without identity pseudoreplication.
 Primary result: Not executed.
-PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
-Failure classification: Not applicable.
-Unlocked next node: E61 after PASS.
+PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED; characterization has no scientific FAIL verdict.
+Failure classification: Not applicable; sparse strata restrict interpretation only.
+Unlocked next node: E61 after the characterization artifact is complete.
 Invalidated downstream evidence: E61 onward remains locked.
 Descriptive observations: None.
-Notes: Repeated-window observations retain shared entity identity.
+Notes: Repeated-window observations retain shared entity identity. E59/E60 never reopen E57 selection.
 
 ## E61 | Pure-Normal and Moving-Normal Safety Sets
 

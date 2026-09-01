@@ -7,7 +7,6 @@ import argparse
 import hashlib
 import json
 import math
-from bisect import bisect_right
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -658,6 +657,8 @@ class AJAEProtocol:
             raise ProtocolError("schema 30 forbids counterfactual memory and extra loss terms")
         if (training.get("source_partition"), training.get("source_sequence_id"), training.get("micro_batch")) != ("train", 206, 1):
             raise ProtocolError("training must use train/206 with one complete window per micro-batch")
+        if (training.get("maximum_worlds"), training.get("patience")) != (40, 4):
+            raise ProtocolError("formal training must stop by 40 worlds with patience 4")
         seeds = _int_tuple(training["seeds"], "training.seeds")
         if len(seeds) < 3 or len(set(seeds)) != len(seeds):
             raise ProtocolError("formal development requires at least three unique training seeds")
@@ -672,13 +673,94 @@ class AJAEProtocol:
 
     @staticmethod
     def _validate_development(development: Mapping[str, object]) -> None:
+        _exact_keys(
+            development,
+            {
+                "phase6_version", "worlds_file", "sequence_id",
+                "in_generator_worlds", "generator_held_out_worlds",
+                "held_out_affects_selection", "pure_normal_is_separate",
+                "qualification", "fixed_world_evaluation",
+                "checkpoint_selection", "difficulty_statistics",
+                "boundary_leakage_radius_m", "position_score_scale",
+            },
+            "development",
+        )
         if (
+            development.get("phase6_version"),
             development.get("worlds_file"), development.get("sequence_id"),
             development.get("in_generator_worlds"),
             development.get("generator_held_out_worlds"),
             development.get("held_out_affects_selection"),
-        ) != ("dev.json", 201, 24, 6, False):
-            raise ProtocolError("development must preserve the fixed 24+6 split on 201")
+        ) != ("E57-v2", "dev.json", 201, 24, 6, False):
+            raise ProtocolError("development must preserve E57-v2 and the fixed 24+6 split on 201")
+        qualification = _mapping(
+            development["qualification"], "development.qualification"
+        )
+        _exact_keys(
+            qualification,
+            {
+                "status", "source_candidate_bank", "selection",
+                "hard_requirements", "descriptive_characterization",
+            },
+            "development.qualification",
+        )
+        source_bank = _mapping(
+            qualification["source_candidate_bank"],
+            "development.qualification.source_candidate_bank",
+        )
+        if (
+            qualification.get("status") != "frozen_before_e57"
+            or source_bank.get("path") != "runs/ajae/e45b-v2_bank_1024.npz"
+            or source_bank.get("sha256")
+            != "d3088e29e4c6179999ccb34088dae558fa402bf6b1455394acdc99cac4118463"
+            or source_bank.get("scientific_array_sha256")
+            != "f4fb2081b346c686e2d6930a03e3f17bb6c6d3eee4fcfc16984c1a9c1d8de4f5"
+            or source_bank.get("candidate_worlds") != 1024
+            or source_bank.get("e45b_matching_or_e48_scores_forbidden") is not True
+        ):
+            raise ProtocolError("E57-v2 source-bank identity or score isolation changed")
+        selection = _mapping(
+            qualification["selection"], "development.qualification.selection"
+        )
+        if (
+            selection.get("selected_worlds") != 24
+            or selection.get("rule")
+            != "rank_normalized_generator_descriptors_center_then_greedy_maximin_hash_tie"
+            or tuple(selection.get("descriptors", ()))
+            != (
+                "control_Nvis", "control_O", "control_d", "control_V",
+                "proxy_Nvis", "proxy_O", "proxy_d", "proxy_V",
+            )
+            or selection.get("model_outputs_forbidden") is not True
+            or selection.get("exact_bin_quotas_forbidden") is not True
+        ):
+            raise ProtocolError("E57-v2 model-independent selection rule changed")
+        hard = _mapping(
+            qualification["hard_requirements"],
+            "development.qualification.hard_requirements",
+        )
+        if (
+            hard.get("legal_mixed_worlds"),
+            hard.get("minimum_center_anomaly_points_per_world"),
+            hard.get("minimum_center_normal_points_per_world"),
+            hard.get("minimum_multiframe_worlds_per_label"),
+            hard.get("development_sequence"),
+            hard.get("gradients_forbidden"),
+        ) != (24, 5, 1, 12, "train/201", True):
+            raise ProtocolError("E57-v2 hard non-degeneracy requirements changed")
+        characterization = _mapping(
+            qualification["descriptive_characterization"],
+            "development.qualification.descriptive_characterization",
+        )
+        if (
+            characterization.get("status") != "nonblocking"
+            or tuple(characterization.get("statistics", ())) != ("d", "Nvis", "O", "V")
+            or tuple(characterization.get("distance_bin_edges_m", ())) != (10.0, 20.0, 30.0)
+            or tuple(characterization.get("Nvis_bin_edges", ())) != (8, 32, 128)
+            or tuple(characterization.get("O_bin_edges", ())) != (0.25, 0.5, 0.75)
+            or tuple(characterization.get("V_values", ())) != (1, 2, 3, 4, 5)
+        ):
+            raise ProtocolError("E59/E60 characterization must remain complete and nonblocking")
         world_evaluation = _mapping(
             development["fixed_world_evaluation"],
             "development.fixed_world_evaluation",
@@ -968,57 +1050,16 @@ def _development_difficulty_coverage_is_valid(
     worlds: Sequence[DevelopmentWorld],
     criteria: object,
 ) -> bool:
+    """Check only E57-v2 cross-frame non-degeneracy, never bin quotas."""
+
     if not isinstance(criteria, Mapping):
         return False
-    expected = {
-        "criterion_id",
-        "require_each_label",
-        "V_required",
-        "Nvis_bin_edges",
-        "O_bin_edges",
-        "d_bin_edges",
-        "minimum_occupied_bins_per_label",
-    }
-    if set(criteria) != expected or criteria.get("require_each_label") is not True:
+    minimum_worlds = criteria.get("minimum_multiframe_worlds_per_label")
+    if type(minimum_worlds) is not int or minimum_worlds < 1:
         return False
-    criterion_id = criteria.get("criterion_id")
-    if not isinstance(criterion_id, str) or not criterion_id.strip():
-        return False
-
-    def integer_values(value: object, name: str) -> tuple[int, ...]:
-        if not isinstance(value, tuple):
-            raise ProtocolError(f"{name} must be a frozen integer sequence")
-        return tuple(_integer(item, name, minimum=1) for item in value)
-
-    def edges(value: object, name: str) -> tuple[float, ...]:
-        if not isinstance(value, tuple):
-            raise ProtocolError(f"{name} must be a frozen numeric sequence")
-        result = tuple(_number(item, name) for item in value)
-        if len(result) < 2 or any(right <= left for left, right in zip(result, result[1:])):
-            raise ProtocolError(f"{name} must contain increasing bin edges")
-        return result
-
-    required_visibility = set(integer_values(criteria.get("V_required"), "V_required"))
-    if required_visibility != {1, 2, 3, 4, 5}:
-        raise ProtocolError("development V coverage must predeclare all five strata")
-    nvis_edges = edges(criteria.get("Nvis_bin_edges"), "Nvis_bin_edges")
-    occlusion_edges = edges(criteria.get("O_bin_edges"), "O_bin_edges")
-    distance_edges = edges(criteria.get("d_bin_edges"), "d_bin_edges")
-    minimum_bins = _integer(
-        criteria.get("minimum_occupied_bins_per_label"),
-        "minimum_occupied_bins_per_label",
-        minimum=2,
-    )
-    if minimum_bins > min(
-        len(nvis_edges) + 1,
-        len(occlusion_edges) + 1,
-        len(distance_edges) + 1,
-    ):
-        raise ProtocolError("minimum occupied difficulty bins exceeds available bins")
-
-    records: dict[str, list[Mapping[str, object]]] = {
-        "normal-control": [],
-        "anomaly-proxy": [],
+    multiframe_worlds: dict[str, set[int]] = {
+        "normal-control": set(),
+        "anomaly-proxy": set(),
     }
     for world in worlds:
         objects = _list(world.world.get("objects"), "development world objects")
@@ -1028,25 +1069,10 @@ def _development_difficulty_coverage_is_valid(
             for item in objects
         }
         for entry in world.difficulty:
-            records[labels[int(entry["object_id"])]].append(entry)
-
-    for label, label_records in records.items():
-        if not label_records:
-            return False
-        if {int(item["V"]) for item in label_records} != required_visibility:
-            return False
-        for field, field_edges in (
-            ("Nvis", nvis_edges),
-            ("O", occlusion_edges),
-            ("d", distance_edges),
-        ):
-            occupied = {
-                bisect_right(field_edges, float(item[field]))
-                for item in label_records
-            }
-            if len(occupied) < minimum_bins:
-                return False
-    return True
+            label = labels[int(entry["object_id"])]
+            if int(entry["V"]) >= 2:
+                multiframe_worlds[label].add(world.world_id)
+    return all(len(items) >= minimum_worlds for items in multiframe_worlds.values())
 
 
 def load_development_worlds(
@@ -1219,13 +1245,10 @@ def load_development_worlds(
     identifiers = tuple(item.world_id for item in (*in_generator, *held_out))
     if identifiers != tuple(range(30)):
         raise ProtocolError("development world IDs must be exactly 0 through 29")
-    criteria_document = protocol.decision_gates["criteria"]
-    difficulty_coverage_valid = (
-        criteria_document.get("status") == "frozen_before_training"
-        and _development_difficulty_coverage_is_valid(
-            in_generator,
-            criteria_document.get("development_difficulty_coverage"),
-        )
+    qualification = protocol.development["qualification"]
+    difficulty_coverage_valid = _development_difficulty_coverage_is_valid(
+        in_generator,
+        qualification["hard_requirements"],
     )
     return DevelopmentWorlds(
         str(root["format"]), SCHEMA_VERSION, 201, str(root["status"]),

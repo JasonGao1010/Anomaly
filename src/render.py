@@ -70,6 +70,12 @@ FROZEN_E39_V2_ARTIFACT_SHA256 = (
 FROZEN_E37_ARTIFACT_SHA256 = (
     "04e524a5428c9b906e9fefe253f7ec66533bd6cb3452ea6d9afdb830e1a94b34"
 )
+FROZEN_E57_SOURCE_BANK_SHA256 = (
+    "d3088e29e4c6179999ccb34088dae558fa402bf6b1455394acdc99cac4118463"
+)
+FROZEN_E57_SOURCE_BANK_ARRAY_SHA256 = (
+    "f4fb2081b346c686e2d6930a03e3f17bb6c6d3eee4fcfc16984c1a9c1d8de4f5"
+)
 SUPPORT_POOL_SEMANTICS = (40, 48, 49)
 CALIBRATION_FORMAT = "ajae-sensor-calibration-v4"
 DEVELOPMENT_FORMAT = "ajae-development-worlds-v2"
@@ -17211,6 +17217,473 @@ def run_e48_qualification(
     return result
 
 
+_E57_SEQUENCE: object | None = None
+_E57_GRID: RayGrid | None = None
+_E57_SENSOR: SensorCalibration | None = None
+_E57_BANK: dict[str, np.ndarray] = {}
+
+
+def _e57_candidate_worker(index: int) -> dict[str, object]:
+    """Build and characterize one mixed world without reading model output."""
+
+    sequence, grid, sensor = _E57_SEQUENCE, _E57_GRID, _E57_SENSOR
+    if sequence is None or grid is None or sensor is None or not _E57_BANK:
+        raise RuntimeError("E57 candidate fixtures are not initialized")
+    try:
+        bank_seed = int(_E57_BANK["bank_seed"][index])
+        center = int(_E57_BANK["center_frame"][index])
+        attempt = int(_E57_BANK["attempt"][index])
+        if str(_E57_BANK["error"][index]):
+            raise RenderError("E57 source bank contains an incomplete row")
+        control_world = WorldSpec.from_dict(
+            json.loads(str(_E57_BANK["control_world_json"][index]))
+        )
+        proxy_world = WorldSpec.from_dict(
+            json.loads(str(_E57_BANK["proxy_world_json"][index]))
+        )
+        control_record = PlacementRecord.from_dict(
+            json.loads(str(_E57_BANK["control_record_json"][index]))
+        )
+        proxy_record = PlacementRecord.from_dict(
+            json.loads(str(_E57_BANK["proxy_record_json"][index]))
+        )
+        if (
+            control_world.seed != bank_seed
+            or proxy_world.seed != bank_seed
+            or control_world.source_sequence_id != 201
+            or proxy_world.source_sequence_id != 201
+            or control_world.world_type != "control_only"
+            or proxy_world.world_type != "anomaly_only"
+            or len(control_world.objects) != 1
+            or len(proxy_world.objects) != 1
+            or not 6 <= center <= 679
+        ):
+            raise RenderError("E57 source-bank row identity changed")
+        control = replace(control_world.objects[0], object_id=1)
+        proxy = replace(proxy_world.objects[0], object_id=2)
+        control_record = replace(control_record, object_id=1)
+        proxy_record = replace(proxy_record, object_id=2)
+        world = WorldSpec(bank_seed, 201, (control, proxy))
+        # This world composes two independently generated source-bank rows.  A
+        # dedicated provenance record avoids inventing a single-world RNG trace.
+        report = {
+            "format": "ajae-e57-v2-composed-world-report",
+            "source_bank_scientific_array_sha256": (
+                FROZEN_E57_SOURCE_BANK_ARRAY_SHA256
+            ),
+            "source_bank_index": index,
+            "bank_seed": bank_seed,
+            "source_bank_attempt": attempt,
+            "center_frame": center,
+            "composition": "same-row control plus proxy with object IDs 1 and 2",
+            "placement_record_json": [
+                json.dumps(
+                    control_record.to_dict(),
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+                json.dumps(
+                    proxy_record.to_dict(),
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+            ],
+        }
+        penetration, minimum_pair_sdf = obvious_pair_penetration(control, proxy)
+        if penetration:
+            return {
+                "index": index,
+                "bank_seed": bank_seed,
+                "center_frame": center,
+                "eligible": False,
+                "reason": "pair_penetration",
+                "minimum_pair_sdf_m": minimum_pair_sdf,
+            }
+        frames = tuple(
+            sequence.source_frame(frame_id)
+            for frame_id in range(center - 2, center + 3)
+        )
+        diagnostics = five_frame_world_diagnostics(world, frames, grid, sensor)
+        objects = diagnostics["objects"]
+        if not isinstance(objects, list) or len(objects) != 2:
+            raise RenderError("E57 mixed-world diagnostics changed structure")
+        by_id = {int(item["object_id"]): item for item in objects}
+        if set(by_id) != {1, 2}:
+            raise RenderError("E57 diagnostics lost an object identity")
+        descriptor = np.asarray(
+            [
+                by_id[1]["Nvis"], by_id[1]["O"], by_id[1]["d"], by_id[1]["V"],
+                by_id[2]["Nvis"], by_id[2]["O"], by_id[2]["d"], by_id[2]["V"],
+            ],
+            dtype=np.float64,
+        )
+        visible = (
+            np.isfinite(descriptor).all()
+            and descriptor[0] > 0.0
+            and descriptor[4] > 0.0
+            and descriptor[3] >= 1.0
+            and descriptor[7] >= 1.0
+        )
+        rendered = render_frame(frames[2], world, grid, sensor)
+        labels = rendered.source.labels
+        if labels is None:
+            raise RenderError("E57 center render has no evaluation labels")
+        ranges = np.linalg.norm(
+            np.asarray(rendered.source.xyzi[:, :3], dtype=np.float32), axis=1
+        )
+        valid = (
+            ~np.asarray(rendered.source.zero_slot_mask, dtype=np.bool_)
+            & (ranges >= 2.5)
+            & (ranges <= 50.0)
+            & (np.asarray(labels.semantic) != 0)
+        )
+        anomaly_points = int(np.count_nonzero(valid & (labels.semantic == 2)))
+        normal_points = int(np.count_nonzero(valid & (labels.semantic != 2)))
+        evaluable = anomaly_points >= 5 and normal_points > 0
+        world_json = world.to_json()
+        report_json = json.dumps(
+            report, sort_keys=True, separators=(",", ":"), allow_nan=False
+        )
+        diagnostics_json = json.dumps(
+            diagnostics, sort_keys=True, separators=(",", ":"), allow_nan=False
+        )
+        if (
+            WorldSpec.from_dict(json.loads(world_json)).to_json() != world_json
+            or json.dumps(
+                json.loads(report_json),
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            ) != report_json
+        ):
+            raise RenderError("E57 canonical world or report round trip changed")
+        candidate_hash = hashlib.sha256(
+            (
+                FROZEN_E57_SOURCE_BANK_ARRAY_SHA256
+                + f":{index}:"
+                + world_json
+                + report_json
+                + diagnostics_json
+            ).encode("utf-8")
+        ).hexdigest()
+        return {
+            "index": index,
+            "bank_seed": bank_seed,
+            "center_frame": center,
+            "eligible": bool(visible and evaluable),
+            "reason": "" if visible and evaluable else (
+                "not_evaluable" if visible else "label_not_visible"
+            ),
+            "minimum_pair_sdf_m": minimum_pair_sdf,
+            "descriptor": descriptor,
+            "anomaly_points": anomaly_points,
+            "normal_points": normal_points,
+            "world_json": world_json,
+            "report_json": report_json,
+            "diagnostics_json": diagnostics_json,
+            "candidate_hash": candidate_hash,
+        }
+    except Exception as error:
+        return {
+            "index": index,
+            "bank_seed": int(_E57_BANK["bank_seed"][index]),
+            "center_frame": int(_E57_BANK["center_frame"][index]),
+            "eligible": False,
+            "reason": f"hard_error:{type(error).__name__}:{error}",
+            "hard_error": 1,
+        }
+
+
+def _e57_rank_coordinates(
+    descriptor: np.ndarray, candidate_hash: np.ndarray,
+) -> np.ndarray:
+    """Map each generator descriptor to a deterministic empirical rank."""
+
+    values = np.asarray(descriptor, dtype=np.float64)
+    hashes = np.asarray(candidate_hash)
+    if values.ndim != 2 or hashes.shape != (values.shape[0],):
+        raise RenderError("E57 descriptor and hash arrays are not aligned")
+    if values.shape[0] < 24 or not np.isfinite(values).all():
+        raise RenderError("E57 needs at least 24 finite eligible descriptors")
+    coordinates = np.empty_like(values)
+    denominator = max(values.shape[0] - 1, 1)
+    for column in range(values.shape[1]):
+        order = np.lexsort((hashes, values[:, column]))
+        coordinates[order, column] = np.arange(values.shape[0]) / denominator
+    return coordinates
+
+
+def _e57_select(
+    descriptor: np.ndarray, candidate_hash: np.ndarray, count: int = 24,
+) -> np.ndarray:
+    """Choose a model-independent maximin span without cell-count targets."""
+
+    coordinates = _e57_rank_coordinates(descriptor, candidate_hash)
+    hashes = np.asarray(candidate_hash)
+    if type(count) is not int or not 1 <= count <= coordinates.shape[0]:
+        raise RenderError("E57 selected-world count is invalid")
+    centrality = np.sum(np.square(coordinates - 0.5), axis=1)
+    first_order = np.lexsort((hashes, centrality))
+    selected = [int(first_order[0])]
+    available = np.ones(coordinates.shape[0], dtype=np.bool_)
+    available[selected[0]] = False
+    minimum_distance = np.sum(
+        np.square(coordinates - coordinates[selected[0]]), axis=1
+    )
+    while len(selected) < count:
+        candidates = np.flatnonzero(available)
+        best_distance = float(np.max(minimum_distance[candidates]))
+        tied = candidates[np.isclose(
+            minimum_distance[candidates], best_distance, rtol=0.0, atol=1.0e-15
+        )]
+        chosen = int(tied[np.argsort(hashes[tied], kind="stable")[0]])
+        selected.append(chosen)
+        available[chosen] = False
+        distance = np.sum(np.square(coordinates - coordinates[chosen]), axis=1)
+        minimum_distance = np.minimum(minimum_distance, distance)
+    return np.asarray(selected, dtype=np.int64)
+
+
+def _e57_characterization(descriptor: np.ndarray) -> dict[str, object]:
+    """Report the retained d/Nvis/O/V bins without turning them into gates."""
+
+    values = np.asarray(descriptor, dtype=np.float64).reshape(-1, 2, 4)
+    output: dict[str, object] = {}
+    for label, source in (("normal_control", 0), ("anomaly_proxy", 1)):
+        current = values[:, source]
+        output[label] = {
+            "Nvis": np.bincount(
+                np.searchsorted((8.0, 32.0, 128.0), current[:, 0], side="right"),
+                minlength=4,
+            ).tolist(),
+            "occlusion": np.bincount(
+                np.searchsorted((0.25, 0.50, 0.75), current[:, 1], side="right"),
+                minlength=4,
+            ).tolist(),
+            "distance": np.bincount(
+                np.searchsorted((10.0, 20.0, 30.0), current[:, 2], side="right"),
+                minlength=4,
+            ).tolist(),
+            "V": np.bincount(current[:, 3].astype(np.int64), minlength=6)[1:6].tolist(),
+        }
+    return output
+
+
+def run_e57_qualification(
+    data_root: Path | str,
+    protocol_path: Path | str,
+    source_bank_path: Path | str,
+    calibration_path: Path | str,
+    output_path: Path | str,
+    *,
+    processes: int = 24,
+) -> dict[str, object]:
+    """Freeze 24 legal, evaluable and model-independent development worlds."""
+
+    if processes != 24:
+        raise RenderError("formal E57 requires exactly 24 worker processes")
+    try:
+        from .protocol import load_protocol
+        from .scene import LabelMode, STUSequence
+    except ImportError:
+        from protocol import load_protocol  # type: ignore[no-redef]
+        from scene import LabelMode, STUSequence  # type: ignore[no-redef]
+    protocol_file = Path(protocol_path).expanduser().resolve(strict=True)
+    protocol = load_protocol(protocol_file)
+    source_path = Path(source_bank_path).expanduser().resolve(strict=True)
+    if _sha256_path(source_path) != FROZEN_E57_SOURCE_BANK_SHA256:
+        raise RenderError("E57 source bank identity changed")
+    with np.load(source_path, allow_pickle=False) as source:
+        metadata = json.loads(str(source["metadata_json"]))
+        arrays = {
+            name: np.asarray(source[name])
+            for name in source.files if name != "metadata_json"
+        }
+    if (
+        metadata.get("experiment") != "E45B-v2-pair-bank"
+        or metadata.get("passed") is not True
+        or metadata.get("capacity") != 1024
+        or metadata.get("scientific_array_hash")
+        != FROZEN_E57_SOURCE_BANK_ARRAY_SHA256
+        or _scientific_array_hash(arrays) != FROZEN_E57_SOURCE_BANK_ARRAY_SHA256
+    ):
+        raise RenderError("E57 source bank metadata or arrays changed")
+    calibration = Path(calibration_path).expanduser().resolve(strict=True)
+    if _sha256_path(calibration) != FROZEN_SENSOR_CALIBRATION_SHA256:
+        raise RenderError("E57 calibration identity changed")
+    grid, sensor = load_sensor_calibration(calibration)
+    sequence = STUSequence.open(
+        data_root,
+        protocol=protocol,
+        partition="train",
+        sequence_id=201,
+        label_mode=LabelMode.REQUIRED,
+    )
+    global _E57_SEQUENCE, _E57_GRID, _E57_SENSOR, _E57_BANK
+    _E57_SEQUENCE, _E57_GRID, _E57_SENSOR, _E57_BANK = (
+        sequence, grid, sensor, arrays
+    )
+    started = time.monotonic()
+    with mp.get_context("fork").Pool(processes=processes) as workers:
+        records = workers.map(_e57_candidate_worker, range(1024), chunksize=1)
+    elapsed = time.monotonic() - started
+    records.sort(key=lambda item: int(item["index"]))
+    hard_errors = sum(int(item.get("hard_error", 0)) for item in records)
+    if hard_errors:
+        examples = [str(item["reason"]) for item in records if item.get("hard_error")][:3]
+        raise RenderError(f"E57 candidate implementation errors: {examples}")
+    eligible = np.asarray([bool(item["eligible"]) for item in records])
+    eligible_index = np.flatnonzero(eligible)
+    descriptor = (
+        np.stack([records[index]["descriptor"] for index in eligible_index])
+        if eligible_index.size
+        else np.empty((0, 8), dtype=np.float64)
+    )
+    candidate_hash = np.asarray(
+        [records[index]["candidate_hash"] for index in eligible_index], dtype="S64"
+    )
+    local_selection = (
+        _e57_select(descriptor, candidate_hash, 24)
+        if eligible_index.size >= 24
+        else np.empty(0, dtype=np.int64)
+    )
+    repeated_selection = (
+        _e57_select(descriptor, candidate_hash, 24)
+        if eligible_index.size >= 24
+        else np.empty(0, dtype=np.int64)
+    )
+    reproduction_errors = int(not np.array_equal(local_selection, repeated_selection))
+    selected_index = eligible_index[local_selection]
+    selected_descriptor = descriptor[local_selection]
+    selected_records = [records[index] for index in selected_index]
+    control_multiframe_worlds = int(np.count_nonzero(selected_descriptor[:, 3] >= 2))
+    proxy_multiframe_worlds = int(np.count_nonzero(selected_descriptor[:, 7] >= 2))
+    qualification_errors = int(
+        selected_index.size != 24
+        or control_multiframe_worlds < 12
+        or proxy_multiframe_worlds < 12
+        or any(int(item["anomaly_points"]) < 5 for item in selected_records)
+        or any(int(item["normal_points"]) < 1 for item in selected_records)
+    )
+    selected_hash = hashlib.sha256(b"".join(
+        np.asarray([item["candidate_hash"] for item in selected_records], dtype="S64")
+    )).hexdigest()
+    saved = {
+        "candidate_bank_index": np.arange(1024, dtype=np.int32),
+        "candidate_bank_seed": np.asarray(
+            [item["bank_seed"] for item in records], dtype=np.int64
+        ),
+        "candidate_center_frame": np.asarray(
+            [item["center_frame"] for item in records], dtype=np.int16
+        ),
+        "candidate_eligible": eligible,
+        "candidate_rejection_reason": np.asarray(
+            [item["reason"] for item in records], dtype="U64"
+        ),
+        "eligible_bank_index": eligible_index.astype(np.int32),
+        "eligible_descriptor": descriptor,
+        "eligible_candidate_sha256": candidate_hash,
+        "selected_bank_index": selected_index.astype(np.int32),
+        "selected_descriptor": selected_descriptor,
+        "selected_candidate_sha256": np.asarray(
+            [item["candidate_hash"] for item in selected_records], dtype="S64"
+        ),
+        "selected_center_frame": np.asarray(
+            [item["center_frame"] for item in selected_records], dtype=np.int16
+        ),
+        "selected_world_id": np.arange(selected_index.size, dtype=np.int16),
+        "selected_object_id": np.tile(
+            np.asarray([[1, 2]], dtype=np.int16), (selected_index.size, 1)
+        ),
+        "selected_frame_id": np.asarray(
+            [
+                [int(item["center_frame"]) + offset for offset in (-2, -1, 0, 1, 2)]
+                for item in selected_records
+            ],
+            dtype=np.int16,
+        ),
+        "selected_anomaly_points": np.asarray(
+            [item["anomaly_points"] for item in selected_records], dtype=np.int32
+        ),
+        "selected_normal_points": np.asarray(
+            [item["normal_points"] for item in selected_records], dtype=np.int32
+        ),
+        "selected_world_json": np.asarray(
+            [item["world_json"] for item in selected_records]
+        ),
+        "selected_report_json": np.asarray(
+            [item["report_json"] for item in selected_records]
+        ),
+        "selected_diagnostics_json": np.asarray(
+            [item["diagnostics_json"] for item in selected_records]
+        ),
+    }
+    reason_count = {
+        reason: int(np.count_nonzero(saved["candidate_rejection_reason"] == reason))
+        for reason in np.unique(saved["candidate_rejection_reason"])
+        if reason
+    }
+    passed = qualification_errors == 0 and reproduction_errors == 0
+    result = {
+        "experiment": "E57-v2",
+        "passed": passed,
+        "failure_classification": None if passed else "development_testbed_non_degeneracy_failure",
+        "source_bank": str(source_path),
+        "source_bank_sha256": FROZEN_E57_SOURCE_BANK_SHA256,
+        "source_bank_scientific_array_sha256": FROZEN_E57_SOURCE_BANK_ARRAY_SHA256,
+        "source_bank_use": "raw generator worlds and placement records only",
+        "e45b_matching_or_e48_scores_read": False,
+        "candidate_worlds": 1024,
+        "eligible_candidate_worlds": int(eligible_index.size),
+        "candidate_rejection_count": reason_count,
+        "selected_worlds": int(selected_index.size),
+        "selected_world_sha256": selected_hash,
+        "selection_rule": "rank_normalized_generator_descriptors_center_then_greedy_maximin_hash_tie",
+        "selection_descriptors": [
+            "control_Nvis", "control_O", "control_d", "control_V",
+            "proxy_Nvis", "proxy_O", "proxy_d", "proxy_V",
+        ],
+        "selection_reproduction_errors": reproduction_errors,
+        "control_multiframe_worlds": control_multiframe_worlds,
+        "proxy_multiframe_worlds": proxy_multiframe_worlds,
+        "minimum_multiframe_worlds_per_label": 12,
+        "minimum_center_anomaly_points": (
+            int(np.min(saved["selected_anomaly_points"]))
+            if selected_index.size else 0
+        ),
+        "minimum_center_normal_points": (
+            int(np.min(saved["selected_normal_points"]))
+            if selected_index.size else 0
+        ),
+        "qualification_errors": qualification_errors,
+        "saved_identity_domain": (
+            "selected_world_id x selected_object_id x selected_frame_id x "
+            "calibration-bound canonical (beam_id,azimuth_column) ray"
+        ),
+        "descriptive_characterization": _e57_characterization(selected_descriptor),
+        "descriptive_bins_are_nonblocking": True,
+        "processes": processes,
+        "elapsed_seconds": elapsed,
+        "protocol_sha256": _sha256_path(protocol_file),
+        "scientific_array_hash": _scientific_array_hash(saved),
+        "claim_limit": (
+            "E57 freezes a model-independent and non-degenerate 24-world development "
+            "testbed; d, Nvis, occlusion and V strata are descriptive and do not "
+            "establish model utility or balanced synthetic coverage."
+        ),
+    }
+    destination = Path(output_path).expanduser().resolve()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_suffix(destination.suffix + ".tmp.npz")
+    np.savez_compressed(
+        temporary,
+        **saved,
+        metadata_json=np.asarray(json.dumps(result, sort_keys=True, separators=(",", ":"))),
+    )
+    os.replace(temporary, destination)
+    return result
+
+
 _E45A2_TARGET_UNITS: dict[str, np.ndarray] = {}
 _E45A2_SUPPORT_ROWS: tuple[np.ndarray, ...] = ()
 
@@ -17918,6 +18391,13 @@ def _render_parser() -> argparse.ArgumentParser:
     e48 = subcommands.add_parser("qualify-e48")
     e48.add_argument("--e45b-v2-artifact", type=Path, required=True)
     e48.add_argument("--output", type=Path, required=True)
+    e57 = subcommands.add_parser("qualify-e57-v2")
+    e57.add_argument("--data-root", type=Path, required=True)
+    e57.add_argument("--protocol", type=Path, required=True)
+    e57.add_argument("--source-bank", type=Path, required=True)
+    e57.add_argument("--calibration", type=Path, required=True)
+    e57.add_argument("--output", type=Path, required=True)
+    e57.add_argument("--processes", type=int, default=24)
     e45a2 = subcommands.add_parser("qualify-e45a-v2")
     e45a2.add_argument("--data-root", type=Path, required=True)
     e45a2.add_argument("--support-pool", type=Path, required=True)
@@ -18125,6 +18605,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0 if result["passed"] else 1
     if args.command == "qualify-e48":
         result = run_e48_qualification(args.e45b_v2_artifact, args.output)
+        print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        return 0 if result["passed"] else 1
+    if args.command == "qualify-e57-v2":
+        result = run_e57_qualification(
+            args.data_root, args.protocol, args.source_bank,
+            args.calibration, args.output, processes=args.processes,
+        )
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 0 if result["passed"] else 1
     if args.command == "qualify-e45a-v2":

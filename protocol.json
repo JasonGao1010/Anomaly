@@ -3589,18 +3589,55 @@
   },
   "training": {
     "source_partition": "train", "source_sequence_id": 206, "seeds": [0, 1, 2],
-    "learning_rate": 0.0001, "weight_decay": 0.0001, "maximum_worlds": null,
+    "learning_rate": 0.0001, "weight_decay": 0.0001, "maximum_worlds": 40,
     "micro_batch": 1, "gradient_accumulation": 8, "worlds_per_evaluation": 5,
-    "patience": 8, "chunk_centers": 16, "cache_frames": 7,
+    "patience": 4, "chunk_centers": 16, "cache_frames": 7,
     "window_coverage": "every legal window exactly once per complete world",
     "loss": "range-filtered empty-class-safe class-balanced binary cross entropy only",
     "world_type_probabilities": {"pure_normal": 0.2, "control_only": 0.2, "mixed": 0.4, "anomaly_only": 0.2},
     "output_dir": "runs/ajae"
   },
   "development": {
+    "phase6_version": "E57-v2",
     "worlds_file": "dev.json", "sequence_id": 201,
     "in_generator_worlds": 24, "generator_held_out_worlds": 6,
     "held_out_affects_selection": false, "pure_normal_is_separate": true,
+    "qualification": {
+      "status": "frozen_before_e57",
+      "source_candidate_bank": {
+        "path": "runs/ajae/e45b-v2_bank_1024.npz",
+        "sha256": "d3088e29e4c6179999ccb34088dae558fa402bf6b1455394acdc99cac4118463",
+        "scientific_array_sha256": "f4fb2081b346c686e2d6930a03e3f17bb6c6d3eee4fcfc16984c1a9c1d8de4f5",
+        "candidate_worlds": 1024,
+        "permitted_inputs": "raw generator worlds and placement records only",
+        "e45b_matching_or_e48_scores_forbidden": true
+      },
+      "selection": {
+        "selected_worlds": 24,
+        "rule": "rank_normalized_generator_descriptors_center_then_greedy_maximin_hash_tie",
+        "descriptors": ["control_Nvis", "control_O", "control_d", "control_V", "proxy_Nvis", "proxy_O", "proxy_d", "proxy_V"],
+        "model_outputs_forbidden": true,
+        "exact_bin_quotas_forbidden": true
+      },
+      "hard_requirements": {
+        "legal_mixed_worlds": 24,
+        "minimum_center_anomaly_points_per_world": 5,
+        "minimum_center_normal_points_per_world": 1,
+        "minimum_multiframe_worlds_per_label": 12,
+        "multiframe_definition": "entity V greater than or equal to 2 in its five-frame world",
+        "identity_domain": "world/entity/frame/canonical-ray",
+        "development_sequence": "train/201",
+        "gradients_forbidden": true
+      },
+      "descriptive_characterization": {
+        "status": "nonblocking",
+        "statistics": ["d", "Nvis", "O", "V"],
+        "distance_bin_edges_m": [10.0, 20.0, 30.0],
+        "Nvis_bin_edges": [8, 32, 128],
+        "O_bin_edges": [0.25, 0.5, 0.75],
+        "V_values": [1, 2, 3, 4, 5]
+      }
+    },
     "fixed_world_evaluation": {
       "status": "unresolved_requires_owner_decision",
       "scope": null

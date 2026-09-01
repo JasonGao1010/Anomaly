@@ -231,6 +231,8 @@ def test_protocol_is_only_schema30_route() -> None:
     assert protocol.model["levels"] == 4
     assert protocol.model["pooling"] == "per_time_mean_max"
     assert tuple(protocol.training["seeds"]) == (0, 1, 2)
+    assert protocol.training["maximum_worlds"] == 40
+    assert protocol.training["patience"] == 4
     assert protocol.training["loss"].endswith("binary cross entropy only")
     assert protocol.evaluation.minimum_range_m == 2.5
     assert protocol.evaluation.maximum_range_m == 50.0
@@ -246,6 +248,26 @@ def test_protocol_is_only_schema30_route() -> None:
     assert protocol.decision_gates["criteria"]["status"] == (
         "unresolved_requires_owner_decision"
     )
+
+
+def test_e57_v2_selection_is_deterministic_and_model_independent() -> None:
+    protocol = load_protocol(PROTOCOL_PATH)
+    qualification = protocol.development["qualification"]
+    assert qualification["status"] == "frozen_before_e57"
+    assert qualification["selection"]["model_outputs_forbidden"] is True
+    assert qualification["selection"]["exact_bin_quotas_forbidden"] is True
+    assert qualification["descriptive_characterization"]["status"] == "nonblocking"
+
+    generator_descriptors = np.arange(40 * 8, dtype=np.float64).reshape(40, 8)
+    candidate_hashes = np.asarray(
+        [hashlib.sha256(f"candidate:{index}".encode()).hexdigest() for index in range(40)],
+        dtype="S64",
+    )
+    first = render_module._e57_select(generator_descriptors, candidate_hashes)
+    second = render_module._e57_select(generator_descriptors, candidate_hashes)
+    np.testing.assert_array_equal(first, second)
+    assert first.shape == (24,)
+    assert np.unique(first).size == 24
 
 
 def test_protocol_contains_no_retired_training_route() -> None:
