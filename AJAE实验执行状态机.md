@@ -1,6 +1,6 @@
 # AJAE Fine-Grained Experiment Execution State Machine
 
-> Current authoritative baseline: repository `main` and all historical evidence recorded in this document. E50–E58 and E61–E73 have formally PASSed and E59/E60 descriptive characterization is complete. E74's three-seed confirmation is suspended after completed seeds 0/1 with seed 2 preserved at an exact resumable block checkpoint. The active node is E75-X on the explicitly exploratory track; formal Gate 2 remains unadjudicated.
+> Current authoritative baseline: repository `main` and all historical evidence recorded in this document. E50–E58 and E61–E73 have formally PASSed and E59/E60 descriptive characterization is complete. E74's three-seed confirmation is suspended after completed seeds 0/1 with seed 2 preserved at an exact resumable block checkpoint. E75-X has completed descriptively and the active node is E76-X on the explicitly exploratory track; formal Gate 2 remains unadjudicated.
 
 > Basis: [AJAE Mainline Plan](</home/jasongao/Study/AJAE/AJAE%E6%96%B0%E4%B8%BB%E7%BA%BF%E6%96%B9%E6%A1%88.md>). This document decomposes the mainline plan's immutable constraints, four Decision Gates, B0–B5 controls, normal-motion safety, object-scale diagnostics, development discipline, and one-time real-OOD validation into fine-grained experiment nodes that can be executed sequentially.
 
@@ -3831,30 +3831,30 @@ Notes: Every later B1/B2/B3 exploratory comparison must use both seeds 0 and 1.
 
 Experiment ID: E75-X
 Design-freeze commit/hash: Two-seed descriptive comparison; no Gate 2 PASS, no confirmatory confidence interval and no replacement of E75.
-Execution-freeze commit/hash: Pending commit before execution.
-Date: 2026-09-02 design freeze; execution pending.
-Git commit / clean state: Pending.
+Execution-freeze commit/hash: Exploration/confirmation split and E75-X implementation commit `df64840b6fa82a8319dc2e18081c36d37a0e6665`.
+Date: 2026-09-02 design freeze and descriptive execution.
+Git commit / clean state: Execution used tracked identity from `df64840`; the result is recorded by the following state commit. Untracked user-owned `PPT/` remained excluded.
 Data identities: The 23 E63 common-domain worlds for E72 B0 and E74-X seeds 0/1.
 Input artifact hashes: E72 `208487d5c91b131856e908988cf6d955305fa09364450d509e32f617295b5863`; E74-X hashes above; seed-2 paused-progress hash above.
 Random namespaces / seeds: No new randomness and no bootstrap required. Seeds 0 and 1 are both retained.
 Command and resolved config: `python -m src.qualify e75x --protocol protocol.json --e72 runs/ajae/e72_b0_reference.npz --b1-dir runs/ajae/B1 --output runs/ajae/e75x_b1_vs_b0.npz`. Convert reported AP from `[0,100]` to `[0,1]`, compute all 23 paired differences for each seed, each seed mean, the two-seed mean and positive-world count. Do not compute a formal Gate 2 verdict or confirmatory interval.
-Resource and disk preflight: CPU-only, negligible output.
-Artifacts and hashes: Pending.
+Resource and disk preflight: CPU-only, negligible output; it did not compete with training or approach the Windows E: reserve.
+Artifacts and hashes: `runs/ajae/e75x_b1_vs_b0.npz`, SHA-256 `0d90c4d6b118819dfec87ae41ec5a0646f3071c87aad73cc267cb5de503fdfc0`; scientific-array SHA-256 `a5c6c78dfdc563e4eff64ee6255abee2a32c65f848b9fe8b0e77f0cc8cde4d6d`; execution-time protocol SHA-256 `ef174f83e84c37e6695d2f2a4fedb54ee892c62ee3e25690c247890236b5bc18`.
 Primary construct: Descriptive evidence that the learned single-frame head has signal relative to B0.
-Primary result: Pending formal execution of this exploratory node.
-PASS / FAIL / OUTCOME: OUTCOME — CURRENT / NOT EXECUTED.
+Primary result: Seed 0 mean paired AP gain was `0.001308817527630322` on the decision scale, seed 1 was `0.05291273076915464`, and their descriptive mean was `0.027110774148392493` (respectively about 0.131, 5.291 and 2.711 AP percentage points). Positive-world counts were 19/23 and 20/23. The per-world arrays are retained in the artifact; their seed-wise ranges were `[-0.8243604044514481, 0.41226177015405785]` and `[-0.9345654812705606, 0.732691134567901]`, showing substantial heterogeneity and adverse worlds despite positive means.
+PASS / FAIL / OUTCOME: OUTCOME — DESCRIPTIVE EXECUTION COMPLETE; NOT A FORMAL GATE RESULT.
 Failure classification: Execution errors are implementation defects; numerical results are descriptive evidence.
-Unlocked next node: E76-X after descriptive completion.
+Unlocked next node: E76-X.
 Invalidated downstream evidence: None; formal E75 remains locked.
-Descriptive observations: All per-world differences must be retained, including adverse worlds.
-Notes: Artifact completion may be called PASS only in the mechanical sense `descriptive_execution_only`; it cannot be cited as Gate 2 PASS.
+Descriptive observations: Both preregistered exploratory seeds have positive mean differences, but seed 0's mean is only slightly positive and both seeds contain large negative world-level differences. This supports continuing to the prespecified exploratory safety check; it does not establish a confirmatory effect.
+Notes: Independent reconstruction reproduced the world identities, shapes, means, positive counts and scientific-array hash. No bootstrap or confidence interval was computed. Artifact completion is only mechanical `descriptive_execution_only`; it cannot be cited as Gate 2 PASS.
 
 ## E76-X | Exploratory B1 Safety
 
 Experiment ID: E76-X
 Design-freeze commit/hash: Apply E76's result-blind threshold, cross-fit and metric-scale semantics to B0 and B1 seeds 0/1 only.
 Execution-freeze commit/hash: Runner pending.
-Date: 2026-09-02 design freeze; execution pending E75-X.
+Date: 2026-09-02 design freeze; execution unlocked after E75-X.
 Git commit / clean state: Pending.
 Data identities: The same 23 development worlds, complete E61 pure-normal set, complete E61 moving-normal set and rendered normal-controls.
 Input artifact hashes: E72, E61, E63 and E74-X required.
@@ -3864,7 +3864,7 @@ Resource and disk preflight: Pending before execution.
 Artifacts and hashes: None.
 Primary construct: Detect whether the encouraging B1 ranking signal is accompanied by gross normal false alarms before spending GPU time on B2/B3.
 Primary result: Not executed.
-PASS / FAIL / OUTCOME: OUTCOME — LOCKED UNTIL E75-X COMPLETES.
+PASS / FAIL / OUTCOME: OUTCOME — CURRENT / NOT EXECUTED.
 Failure classification: Implementation mismatches are repaired under the same design; a genuine large safety worsening is scientific exploratory evidence.
 Unlocked next node: E78-X after non-disastrous exploratory safety.
 Invalidated downstream evidence: Formal E76 remains locked and unchanged.
@@ -4631,8 +4631,8 @@ Notes:
 
 # 7. How to Advance AJAE with This State Machine
 
-1. The authoritative status is E50–E73 PASS. E74 three-seed confirmation is suspended after seeds 0/1; seed 2 is preserved at its exact block checkpoint. E75-X is the current exploratory node.
-2. Gate 1 is closed. Formal E75–E77 remain locked until seed 2 is completed later. The exploratory chain E75-X → E76-X → B2/B3 seeds 0/1 may proceed without claiming Gate 2 or Gate 3 PASS.
+1. The authoritative status is E50–E73 PASS. E74 three-seed confirmation is suspended after seeds 0/1; seed 2 is preserved at its exact block checkpoint. E75-X is descriptively complete and E76-X is the current exploratory node.
+2. Gate 1 is closed. Formal E75–E77 remain locked until seed 2 is completed later. The exploratory chain E76-X → B2/B3 seeds 0/1 may proceed without claiming Gate 2 or Gate 3 PASS.
 3. Every later phase first completes its whole-phase design freeze, then executes its nodes.
 4. Preflight checks only identity, support, schema, interface, and resources; it does not inspect formal outcomes.
 5. Classify FAIL using the five frozen categories. A `descriptive_deviation` is recorded and execution continues; it cannot create a new hard gate.

@@ -3140,7 +3140,7 @@ def run_e75_exploratory(
     exploration = protocol.development["exploration_track"]
     confirmation = exploration["e74_confirmation"]
     if (
-        exploration["current_node"] != "E75-X"
+        exploration["current_node"] not in {"E75-X", "E76-X"}
         or tuple(exploration["cohort"]["seeds"]) != (0, 1)
         or confirmation["formal_pass_forbidden"] is not True
         or confirmation["partial_seed2_result_use_forbidden"] is not True

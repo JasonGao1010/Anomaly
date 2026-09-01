@@ -2657,7 +2657,7 @@
     },
     "renderer_mechanical_qualification": {
       "status": "Gate 1 PASS; E50-E58, E61-E73 valid formal runs PASS; E59-E60 descriptive characterization complete; E74 current",
-      "current_gate1_policy": {"hard_evidence": ["compatible canonical-ray and renderer mechanics through E44", "E45B-v2 rendered control/proxy qualification PASS", "E48 direct rendered-label-shortcut audit PASS"], "excluded_from_conjunction": ["all E45A variants", "E45-V1", "E46", "E47"], "rationale": "Natural real-normal observations and coverage-oriented inserted controls need not reproduce the same scene/placement distribution. Real-versus-rendered source identifiability is not equivalent to anomaly-label shortcut predictability because rendered controls and rendered proxies carry different labels.", "gate1_result": "PASS", "current_node": "E75-X", "next_after_pass": ["E76-X", "B2/B3 exploratory track"]},
+      "current_gate1_policy": {"hard_evidence": ["compatible canonical-ray and renderer mechanics through E44", "E45B-v2 rendered control/proxy qualification PASS", "E48 direct rendered-label-shortcut audit PASS"], "excluded_from_conjunction": ["all E45A variants", "E45-V1", "E46", "E47"], "rationale": "Natural real-normal observations and coverage-oriented inserted controls need not reproduce the same scene/placement distribution. Real-versus-rendered source identifiability is not equivalent to anomaly-label shortcut predictability because rendered controls and rendered proxies carry different labels.", "gate1_result": "PASS", "current_node": "E76-X", "next_after_pass": ["E78-X", "B2/B3 exploratory track"]},
       "layer_boundaries": {"E27-E28": "direct geometry outputs only", "E29": "return probability and deterministic acceptance decision only", "E30-E31": "accepted returns", "E32-E33": "nearest-return occlusion competition"},
       "E27": {
         "question": "Does the formal geometry path return the correct nearest convex-hull hit, outward finite normal and object ID for active normal-control templates when return rejection is disabled?",
@@ -3800,7 +3800,18 @@
         "partial_seed2_result_use_forbidden": true
       },
       "nodes": ["E75-X", "E76-X", "E78-X", "E79-X", "E80-X", "E81-X", "E82-X", "E83-X", "exploratory B4 when temporal viability is supported"],
-      "current_node": "E75-X",
+      "current_node": "E76-X",
+      "e75x_result": {
+        "status": "descriptive_execution_complete",
+        "formal_gate2_adjudicated": false,
+        "artifact_path": "runs/ajae/e75x_b1_vs_b0.npz",
+        "artifact_sha256": "0d90c4d6b118819dfec87ae41ec5a0646f3071c87aad73cc267cb5de503fdfc0",
+        "scientific_array_sha256": "a5c6c78dfdc563e4eff64ee6255abee2a32c65f848b9fe8b0e77f0cc8cde4d6d",
+        "seed_mean_ap_decision_difference": [0.001308817527630322, 0.05291273076915464],
+        "two_seed_mean_ap_decision_difference": 0.027110774148392493,
+        "positive_world_count": [19, 20],
+        "confirmatory_interval_computed": false
+      },
       "formal_gate2_and_gate3_status": "not adjudicated",
       "confirmation_rule": "if temporal viability is promising, complete seed 2 for B1/B2/B3 and apply the unchanged three-seed Gate 2 and Gate 3 rules",
       "negative_temporal_action": "stop or redesign without spending the remaining confirmatory repeats",

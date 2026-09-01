@@ -1112,12 +1112,29 @@ class AJAEProtocol:
             }
             or confirmation.get("resume_branch") != "confirm/e74-seed2-resume"
             or confirmation.get("partial_seed2_result_use_forbidden") is not True
-            or exploration.get("current_node") != "E75-X"
+            or exploration.get("current_node") != "E76-X"
             or exploration.get("formal_gate2_and_gate3_status") != "not adjudicated"
             or exploration.get("public_real_ood_sequences_remain_sealed") is not True
             or exploration.get("hidden_test_sequences_remain_sealed") is not True
         ):
             raise ProtocolError("exploration/confirmation split identity changed")
+        e75x = _mapping(exploration.get("e75x_result"), "E75-X result")
+        if (
+            e75x.get("status") != "descriptive_execution_complete"
+            or e75x.get("formal_gate2_adjudicated") is not False
+            or e75x.get("artifact_path") != "runs/ajae/e75x_b1_vs_b0.npz"
+            or e75x.get("artifact_sha256")
+            != "0d90c4d6b118819dfec87ae41ec5a0646f3071c87aad73cc267cb5de503fdfc0"
+            or e75x.get("scientific_array_sha256")
+            != "a5c6c78dfdc563e4eff64ee6255abee2a32c65f848b9fe8b0e77f0cc8cde4d6d"
+            or tuple(e75x.get("seed_mean_ap_decision_difference", ()))
+            != (0.001308817527630322, 0.05291273076915464)
+            or e75x.get("two_seed_mean_ap_decision_difference")
+            != 0.027110774148392493
+            or tuple(e75x.get("positive_world_count", ())) != (19, 20)
+            or e75x.get("confirmatory_interval_computed") is not False
+        ):
+            raise ProtocolError("E75-X descriptive result identity changed")
         difficulty = _mapping(development["difficulty_statistics"], "difficulty statistics")
         if set(difficulty) != {"Nvis", "O", "d", "V"}:
             raise ProtocolError("development difficulty must define Nvis, O, d, and V")
