@@ -3791,7 +3791,7 @@ Notes: Scientific underperformance is not an invalid-seed mechanical failure. Be
 
 Experiment ID: E75
 Design-freeze commit/hash: E63 Gate 2 superiority criteria remain unchanged. Before any E74 development metric value was read, the owner approved the E75 pre-result statistical identity correction from the unavailable 24-world population to the fixed 23-world common domain.
-Execution-freeze commit/hash: Pre-result correction commit `0a31ab0eb72f3feff9d41bb19694424ce2594a74`; result-blind formal adjudicator commit `be17022a72275fe14c96328d3cb53bc94b78a732`; formal B1/B0 comparison is not executed. The current `src/qualify.py` SHA-256 is `ddcdc41b7602bc72f74581ca2162c7f1a92133d8c5678141a663c1be598962f4`.
+Execution-freeze commit/hash: Pre-result correction commit `0a31ab0eb72f3feff9d41bb19694424ce2594a74`; result-blind formal adjudicator commit `be17022a72275fe14c96328d3cb53bc94b78a732`; result-blind decision-scale/E76 completion commit `738a3716abd3a977664d053d21a28380aaa75618`; formal B1/B0 comparison is not executed. The current `src/qualify.py` SHA-256 is `f9328db026795031643804c26f0946ff85a26091e5d334eb7432c737f222f7c1`.
 Date: 2026-09-01 pre-result bootstrap identity frozen; formal comparison pending E74.
 Git commit / clean state: Correction frozen while the valid E74 process continued from its unchanged in-memory protocol identity; `protocol.json` was deliberately not edited during the resumable training run. Untracked user-owned `PPT/` remained excluded.
 Data identities: Paired B1/B0 results across E57 worlds and seeds.
@@ -3813,9 +3813,9 @@ Notes: No threshold tuning is allowed after observing B1/B0 results. This is a s
 
 Experiment ID: E76
 Design-freeze commit/hash: E63 cross-fit safety criteria plus the result-blind E76 execution completion frozen during E74 and before any E74 development metric was read.
-Execution-freeze commit/hash: Pure-array adjudication implemented; model-score execution remains locked until E75 PASS.
+Execution-freeze commit/hash: Result-blind pure-array adjudication commit `738a3716abd3a977664d053d21a28380aaa75618`; `src/qualify.py` SHA-256 `f9328db026795031643804c26f0946ff85a26091e5d334eb7432c737f222f7c1`; `src/protocol.py` SHA-256 `8d541165d51fbd099300b900bb8113c0fe3d30fcf5187a7c96fd1f771d335cd3`. Model-score execution remains locked until E75 PASS.
 Date: 2026-09-01 result-blind execution semantics completed; formal execution pending E75.
-Git commit / clean state: The completion is isolated from the active E74 worktree and does not alter `src/train.py`, `src/model.py`, `src/render.py` or E74's in-memory protocol.
+Git commit / clean state: The completion is committed on isolated branch `pre-result/e75-e76-freeze`, separate from the active E74 worktree, and does not alter `src/train.py`, `src/model.py`, `src/render.py` or E74's in-memory protocol.
 Data identities: For each of `B0`, `B1 seed 0`, `B1 seed 1`, and `B1 seed 2`: the same 23 common-domain development worlds with their fixed E63 Fold A/B assignments, complete E61 pure-normal points, complete E61 moving-normal points, and rendered normal-control masks. `world_id=5`, E58, public real-OOD and hidden-test data remain excluded.
 Input artifact hashes: E72 B0 reference; E74 selected checkpoints; E75 PASS artifact; E61 and E63 identities required.
 Random namespaces / seeds: No new randomness. Fixed E63 two-fold cross-fit; three already-frozen B1 training seeds.
@@ -3829,7 +3829,7 @@ Failure classification: Not applicable until execution.
 Unlocked next node: E77 after PASS. FAIL returns to proxy/control/renderer design and locks E78.
 Invalidated downstream evidence: E77 and later phases remain locked on FAIL.
 Descriptive observations: None.
-Notes: All four mean safety comparisons are conjunctive. `e76_safety_statistics` is a result-independent pure-array implementation of this estimand; formal score generation and adjudication have not run.
+Notes: All four mean safety comparisons are conjunctive. `e76_safety_statistics` is a result-independent pure-array implementation of this estimand; formal score generation and adjudication have not run. Seven focused protocol/unit tests passed. The frozen E63 source independently reproduced the existing 5,000×3 and 5,000×23 arrays with scientific-array SHA-256 `deac90b297fd84e4c3d5cde7c2d5d57a139f9d0a1aba85e3539c564f2ec50869`; no development metric was read.
 
 ## E77 | Formal Gate 2 Adjudication
 
