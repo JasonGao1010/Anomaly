@@ -1112,7 +1112,7 @@ class AJAEProtocol:
             }
             or confirmation.get("resume_branch") != "confirm/e74-seed2-resume"
             or confirmation.get("partial_seed2_result_use_forbidden") is not True
-            or exploration.get("current_node") != "E76-X-lite-review"
+            or exploration.get("current_node") != "E76-V1"
             or exploration.get("formal_gate2_and_gate3_status") != "not adjudicated"
             or exploration.get("public_real_ood_sequences_remain_sealed") is not True
             or exploration.get("hidden_test_sequences_remain_sealed") is not True
@@ -1241,6 +1241,70 @@ class AJAEProtocol:
             or e76_result.get("e78x_locked") is not True
         ):
             raise ProtocolError("E76-X-lite result identity changed")
+        visual = _mapping(exploration.get("e76v1_freeze"), "E76-V1 freeze")
+        group_a = _mapping(visual.get("group_a"), "E76-V1 group A")
+        group_b = _mapping(visual.get("group_b"), "E76-V1 group B")
+        selected_worlds = _mapping(
+            group_a.get("selected_world_ids"), "E76-V1 selected worlds"
+        )
+        review = _mapping(visual.get("review_freeze"), "E76-V1 review freeze")
+        if (
+            visual.get("version") != "E76-V1-v1"
+            or visual.get("status") != "frozen_before_export_or_visual_review"
+            or visual.get("output_directory") != "runs/ajae/e76_v1"
+            or visual.get("output_format")
+            != "binary_little_endian PLY 1.0 plus one JSON manifest"
+            or visual.get("maximum_ply_files") != 27
+            or group_a.get("source_artifact_sha256")
+            != "b14efc1aad86ac67b5bf7c8631f02b2e68664e071b747b7b210d5f7a30f5d123"
+            or tuple(group_a.get("eligible_world_ids", ()))
+            != tuple(world for world in range(24) if world != 5)
+            or group_a.get("difficulty_field")
+            != "selected_descriptor[:,4] = proxy_Nvis"
+            or group_a.get("strata_rule")
+            != "sort by (proxy_Nvis, world_id), split contiguous order with numpy.array_split into sizes [8,8,7] named low/mid/high"
+            or group_a.get("within_stratum_rule")
+            != "take two smallest world_id values"
+            or tuple(selected_worlds.get("low", ())) != (1, 2)
+            or tuple(selected_worlds.get("mid", ())) != (0, 14)
+            or tuple(selected_worlds.get("high", ())) != (8, 9)
+            or group_a.get("selection_sha256")
+            != "282cd2b5390547813d57e56a39cda72d2bbdf06b5fc86060dea1f0cff113ea04"
+            or tuple(group_a.get("variants", ()))
+            != (
+                "base_real", "normal_control_overlay",
+                "anomaly_proxy_overlay", "anomaly_proxy_only",
+            )
+            or tuple(group_a.get("properties", ()))
+            != (
+                "x", "y", "z", "intensity", "red", "green", "blue",
+                "point_source", "semantic_id",
+            )
+            or group_b.get("source_artifact_sha256")
+            != "8d3e08e0512dc70a75d2279cfb4515bc960bbfda4f35a872c4a76e9dad69d0e0"
+            or group_b.get("eligible_frames")
+            != "all 273 E61 frames with at least one moving-normal point"
+            or group_b.get("selection_statistic")
+            != "for each frame, average B1 score over all moving-normal points separately for seeds 0 and 1, then average the two seed means"
+            or group_b.get("ranking")
+            != "descending selection statistic, then ascending frame_id"
+            or group_b.get("selected_frame_count") != 3
+            or group_b.get("result_driven_diagnostic_selection") is not True
+            or tuple(group_b.get("properties", ()))
+            != (
+                "x", "y", "z", "intensity", "red", "green", "blue",
+                "is_moving_normal", "semantic_id", "range", "b0_score",
+                "b1_seed0_score", "b1_seed1_score", "pred_b0_A",
+                "pred_b0_B", "pred_b1_seed0_A", "pred_b1_seed0_B",
+                "pred_b1_seed1_A", "pred_b1_seed1_B",
+            )
+            or review.get("reviewer_count") != 1
+            or review.get("pass_fail_forbidden") is not True
+            or visual.get("e78x_remains_locked") is not True
+            or visual.get("public_real_ood_sequences_remain_sealed") is not True
+            or visual.get("hidden_test_sequences_remain_sealed") is not True
+        ):
+            raise ProtocolError("E76-V1 freeze identity changed")
         difficulty = _mapping(development["difficulty_statistics"], "difficulty statistics")
         if set(difficulty) != {"Nvis", "O", "d", "V"}:
             raise ProtocolError("development difficulty must define Nvis, O, d, and V")

@@ -39,6 +39,7 @@ from src.qualify import (
     e75_exploratory_statistics,
     e75_superiority_statistics,
     e76_lite_pure_frame_rows,
+    e76v1_group_a_selection,
     e76_safety_statistics,
     phase7_mechanical_arrays,
     e62_fixture_arrays,
@@ -46,6 +47,7 @@ from src.qualify import (
     independent_sparse_quantize,
     phase5_frame_ids,
     run_e62,
+    _write_binary_ply,
 )
 from src.protocol import (
     CAUSAL_OFFSETS,
@@ -1990,6 +1992,49 @@ def test_e76_lite_selects_the_frozen_result_blind_frame_subset() -> None:
         "e76x_lite_freeze"
     ]["pure_normal_selection"]["selected_frame_ids"]
     assert tuple(frames[rows].astype(int).tolist()) == tuple(frozen)
+
+
+def test_e76v1_group_a_selection_matches_the_frozen_visibility_strata() -> None:
+    with np.load(
+        ROOT / "runs/ajae/e57_development_worlds.npz", allow_pickle=False
+    ) as archive:
+        worlds = np.asarray(archive["selected_world_id"], dtype=np.int16)
+        descriptor = np.asarray(archive["selected_descriptor"], dtype=np.float64)
+    assert e76v1_group_a_selection(worlds, descriptor) == (
+        ("low", 1, 9.0),
+        ("low", 2, 7.0),
+        ("mid", 0, 85.0),
+        ("mid", 14, 43.0),
+        ("high", 8, 448.0),
+        ("high", 9, 156.0),
+    )
+
+
+def test_e76v1_binary_ply_preserves_property_order_and_payload(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "fixture.ply"
+    record = _write_binary_ply(
+        output,
+        {
+            "x": np.asarray([1.0, 2.0], dtype="<f4"),
+            "red": np.asarray([3, 4], dtype=np.uint8),
+            "semantic_id": np.asarray([10, 11], dtype="<u2"),
+        },
+        comments=("E76-V1 fixture",),
+    )
+    payload = output.read_bytes()
+    header, body = payload.split(b"end_header\n", 1)
+    assert header.decode("ascii").splitlines()[-4:] == [
+        "element vertex 2",
+        "property float x",
+        "property uchar red",
+        "property ushort semantic_id",
+    ]
+    assert len(body) == 2 * (4 + 1 + 2)
+    assert record["points"] == 2
+    assert record["properties"] == ["x", "red", "semantic_id"]
+    assert record["sha256"] == hashlib.sha256(payload).hexdigest()
 
 
 def test_phase7_mechanical_fixtures_all_pass_and_reproduce() -> None:

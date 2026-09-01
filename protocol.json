@@ -2656,8 +2656,8 @@
       }
     },
     "renderer_mechanical_qualification": {
-      "status": "Gate 1 PASS; E50-E58 and E61-E73 formal PASS; E59-E60 descriptive complete; E74 confirmation suspended after seeds 0/1; E75-X descriptive complete; E76-X-lite complete with moving-normal safety review required; E78-X locked",
-      "current_gate1_policy": {"hard_evidence": ["compatible canonical-ray and renderer mechanics through E44", "E45B-v2 rendered control/proxy qualification PASS", "E48 direct rendered-label-shortcut audit PASS"], "excluded_from_conjunction": ["all E45A variants", "E45-V1", "E46", "E47"], "rationale": "Natural real-normal observations and coverage-oriented inserted controls need not reproduce the same scene/placement distribution. Real-versus-rendered source identifiability is not equivalent to anomaly-label shortcut predictability because rendered controls and rendered proxies carry different labels.", "gate1_result": "PASS", "current_node": "E76-X-lite-review", "next_after_pass": []},
+      "status": "Gate 1 PASS; E50-E58 and E61-E73 formal PASS; E59-E60 descriptive complete; E74 confirmation suspended after seeds 0/1; E75-X descriptive complete; E76-X-lite moving-normal safety review required; E76-V1 descriptive visual audit current; E78-X locked",
+      "current_gate1_policy": {"hard_evidence": ["compatible canonical-ray and renderer mechanics through E44", "E45B-v2 rendered control/proxy qualification PASS", "E48 direct rendered-label-shortcut audit PASS"], "excluded_from_conjunction": ["all E45A variants", "E45-V1", "E46", "E47"], "rationale": "Natural real-normal observations and coverage-oriented inserted controls need not reproduce the same scene/placement distribution. Real-versus-rendered source identifiability is not equivalent to anomaly-label shortcut predictability because rendered controls and rendered proxies carry different labels.", "gate1_result": "PASS", "current_node": "E76-V1", "next_after_pass": []},
       "layer_boundaries": {"E27-E28": "direct geometry outputs only", "E29": "return probability and deterministic acceptance decision only", "E30-E31": "accepted returns", "E32-E33": "nearest-return occlusion competition"},
       "E27": {
         "question": "Does the formal geometry path return the correct nearest convex-hull hit, outward finite normal and object ID for active normal-control templates when return rejection is disabled?",
@@ -3799,8 +3799,8 @@
         "resume_branch": "confirm/e74-seed2-resume",
         "partial_seed2_result_use_forbidden": true
       },
-      "nodes": ["E75-X", "E76-X-lite", "E78-X", "E79-X", "E80-X", "E81-X", "E82-X", "E83-X", "exploratory B4 when temporal viability is supported", "E76-X full safety on the later confirmation track"],
-      "current_node": "E76-X-lite-review",
+      "nodes": ["E75-X", "E76-X-lite", "E76-V1 descriptive visual audit", "E78-X", "E79-X", "E80-X", "E81-X", "E82-X", "E83-X", "exploratory B4 when temporal viability is supported", "E76-X full safety on the later confirmation track"],
+      "current_node": "E76-V1",
       "e75x_result": {
         "status": "descriptive_execution_complete",
         "formal_gate2_adjudicated": false,
@@ -3856,6 +3856,53 @@
         "stopping_evidence": "moving-normal FPR worsening is positive in both seeds and has two-seed mean 0.36463377142417946",
         "next_node": null,
         "e78x_locked": true
+      },
+      "e76v1_freeze": {
+        "version": "E76-V1-v1",
+        "status": "frozen_before_export_or_visual_review",
+        "scientific_role": "descriptive diagnosis of proxy appearance and moving-normal false alarms; no gate, threshold, unlock, or replacement of E76-X-lite",
+        "output_directory": "runs/ajae/e76_v1",
+        "output_format": "binary_little_endian PLY 1.0 plus one JSON manifest",
+        "maximum_ply_files": 27,
+        "group_a": {
+          "source_artifact_sha256": "b14efc1aad86ac67b5bf7c8631f02b2e68664e071b747b7b210d5f7a30f5d123",
+          "eligible_world_ids": [0, 1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23],
+          "difficulty_field": "selected_descriptor[:,4] = proxy_Nvis",
+          "strata_rule": "sort by (proxy_Nvis, world_id), split contiguous order with numpy.array_split into sizes [8,8,7] named low/mid/high",
+          "within_stratum_rule": "take two smallest world_id values",
+          "selected_world_ids": {"low": [1, 2], "mid": [0, 14], "high": [8, 9]},
+          "selected_proxy_Nvis": {"low": [9.0, 7.0], "mid": [85.0, 43.0], "high": [448.0, 156.0]},
+          "selection_sha256": "282cd2b5390547813d57e56a39cda72d2bbdf06b5fc86060dea1f0cff113ea04",
+          "variants": ["base_real", "normal_control_overlay", "anomaly_proxy_overlay", "anomaly_proxy_only"],
+          "render_rule": "render the frozen normal-control object alone or anomaly-proxy object alone against the same base frame using the frozen world seed and tie tolerance",
+          "properties": ["x", "y", "z", "intensity", "red", "green", "blue", "point_source", "semantic_id"]
+        },
+        "group_b": {
+          "source_artifact_sha256": "8d3e08e0512dc70a75d2279cfb4515bc960bbfda4f35a872c4a76e9dad69d0e0",
+          "eligible_frames": "all 273 E61 frames with at least one moving-normal point",
+          "selection_statistic": "for each frame, average B1 score over all moving-normal points separately for seeds 0 and 1, then average the two seed means",
+          "ranking": "descending selection statistic, then ascending frame_id",
+          "selected_frame_count": 3,
+          "result_driven_diagnostic_selection": true,
+          "properties": ["x", "y", "z", "intensity", "red", "green", "blue", "is_moving_normal", "semantic_id", "range", "b0_score", "b1_seed0_score", "b1_seed1_score", "pred_b0_A", "pred_b0_B", "pred_b1_seed0_A", "pred_b1_seed0_B", "pred_b1_seed1_A", "pred_b1_seed1_B"]
+        },
+        "colors_rgb": {"real_normal": [190, 190, 190], "ignore_or_background": [80, 80, 80], "normal_control": [50, 100, 255], "anomaly_proxy": [240, 50, 50], "moving_normal": [255, 140, 0]},
+        "review_freeze": {
+          "reviewer_count": 1,
+          "reviewer": "project owner",
+          "blinding": "unblinded because source colors and score fields are the diagnostic object",
+          "viewing_order": "ascending SHA-256 of relative PLY path",
+          "coordinate_system": "LiDAR sensor frame in metres",
+          "background": "black",
+          "point_size": 2,
+          "required_orthographic_views": ["top: look along -Z", "front: look along +X", "side: look along +Y"],
+          "free_orbit": "allowed only as supplemental descriptive inspection",
+          "questions": ["Does the proxy resemble an unfamiliar physical object rather than a point-cloud artifact?", "Is control-versus-proxy appearance driven by geometry rather than rendering style?", "Which semantic objects or observation conditions concentrate moving-normal high scores?", "Do high-score moving-normal regions locally resemble proxy geometry?"],
+          "pass_fail_forbidden": true
+        },
+        "e78x_remains_locked": true,
+        "public_real_ood_sequences_remain_sealed": true,
+        "hidden_test_sequences_remain_sealed": true
       },
       "exploratory_continuation_status": "stopped_before_E78-X_for_scientific_moving-normal_safety_review",
       "formal_gate2_and_gate3_status": "not adjudicated",
@@ -4178,5 +4225,5 @@
     },
     "verdict_rule": "a gate verdict requires its real statistics and an explicit predeclared scientific judgment; artifact existence alone is never evidence"
   },
-  "status": {"implementation_target": "schema30", "scientific_route": "exploration_track_stopped_at_E76-X-lite_moving-normal_safety_review", "performance_claims_available": false}
+  "status": {"implementation_target": "schema30", "scientific_route": "E76-V1_descriptive_visual_audit_during_moving-normal_safety_review", "performance_claims_available": false}
 }

@@ -1,6 +1,6 @@
 # AJAE Fine-Grained Experiment Execution State Machine
 
-> Current authoritative baseline: repository `main` and all historical evidence recorded in this document. E50–E58 and E61–E73 have formally PASSed and E59/E60 descriptive characterization is complete. E74's three-seed confirmation is suspended after completed seeds 0/1 with seed 2 preserved at an exact resumable block checkpoint. E75-X completed descriptively. E76-X-lite completed and found a two-seed moving-normal FPR worsening of `0.36463377142417946`, so E78-X/B2/B3 are locked pending scientific safety review; full E76-X remains deferred and formal Gate 2 is unadjudicated.
+> Current authoritative baseline: repository `main` and all historical evidence recorded in this document. E50–E58 and E61–E73 have formally PASSed and E59/E60 descriptive characterization is complete. E74's three-seed confirmation is suspended after completed seeds 0/1 with seed 2 preserved at an exact resumable block checkpoint. E75-X completed descriptively. E76-X-lite found a two-seed moving-normal FPR worsening of `0.36463377142417946`; E76-V1 is now frozen as a descriptive visual diagnosis of proxy appearance and moving-normal errors. E78-X/B2/B3 remain locked, full E76-X remains deferred, and formal Gate 2 is unadjudicated.
 
 > Basis: [AJAE Mainline Plan](</home/jasongao/Study/AJAE/AJAE%E6%96%B0%E4%B8%BB%E7%BA%BF%E6%96%B9%E6%A1%88.md>). This document decomposes the mainline plan's immutable constraints, four Decision Gates, B0–B5 controls, normal-motion safety, object-scale diagnostics, development discipline, and one-time real-OOD validation into fine-grained experiment nodes that can be executed sequentially.
 
@@ -182,6 +182,7 @@ flowchart TB
     E74X["E74-X B1 seeds 0/1 cohort"]
     E75X["E75-X descriptive B1 versus B0"]
     E76X["E76-X-lite complete: safety review required"]
+    E76V1["E76-V1 descriptive visual audit"]
     E78X["E78-X B2 seeds 0/1"]
     E79X["E79-X B3 mechanical smoke"]
     E80X["E80-X B3 seeds 0/1"]
@@ -189,7 +190,10 @@ flowchart TB
     E82X["E82-X B3 versus B2"]
     E83X["E83-X exploratory temporal safety"]
     E85X["E85-X–E94-X optional B4/mechanism exploration"]
-    E74X --> E75X --> E76X --> E78X --> E79X --> E80X --> E81X --> E82X --> E83X
+    E74X --> E75X --> E76X
+    E76X -. "descriptive diagnosis; no unlock" .-> E76V1
+    E76X -. "locked pending safety review" .-> E78X
+    E78X --> E79X --> E80X --> E81X --> E82X --> E83X
     E83X -. "promising temporal signal" .-> E85X
     E83X -. "no temporal value: stop/rethink" .-> E64
     E85X -. "resume three-seed confirmation" .-> E74
@@ -3871,6 +3875,28 @@ Invalidated downstream evidence: None. Full E76-X and formal E76 remain required
 Descriptive observations: Pure-normal and development FPR95 improve strongly relative to B0. Normal-control is heterogeneous across seeds. The stopping evidence is specifically the large, same-direction moving-normal worsening, not a general claim that all safety measures fail.
 Notes: Independent recomputation reproduced the scientific-array hash, signed differences, two-seed means, control FPR from raw fold counts, selected point count and failed continuation reference. The selected checkpoints' earlier complete pure-normal FPRs (`0.1962920861`, `0.2784818405`) closely agree with the 64-frame values (`0.1888669113`, `0.2764086524`), and their earlier development FPR95 values also agree, supporting score direction and checkpoint identity. This screen cannot replace full safety evidence. The first launch stopped before model construction because immutable JSON arrays become tuples while the runner compared them to a list; the container-only correction changed no scientific input and the failed launch produced no artifact or value.
 
+## E76-V1 | Counterfactual and Safety Visual Audit
+
+Experiment ID: E76-V1
+Design-freeze commit/hash: Pending the tracked freeze commit. The node was added after E76-X-lite's moving-normal result, solely to describe proxy appearance and locate moving-normal errors. It has no PASS/FAIL rule, cannot replace E76-X-lite or full E76, and cannot unlock E78-X.
+Execution-freeze commit/hash: Pending the tracked freeze commit and source hashes before the first export or PLY inspection.
+Date: 2026-09-02 design and review freeze; execution pending.
+Git commit / clean state: The first export must use the committed implementation from a clean tracked worktree. User-owned `PPT/` remains excluded.
+Data identities: Group A uses only the 23 E57 common-domain worlds after excluding `world_id=5`. Sort them by `(selected_descriptor[:,4], world_id)`, split the contiguous order with `numpy.array_split` into low/mid/high strata of sizes `[8,8,7]`, then take the two smallest world IDs in each stratum. This freezes low `[1,2]`, mid `[0,14]`, high `[8,9]`, with proxy visible-point counts `[9,7]`, `[85,43]`, and `[448,156]`. Group B uses all 273 E61 train/206 frames with at least one moving-normal point for ranking.
+Input artifact hashes: E57 `b14efc1aad86ac67b5bf7c8631f02b2e68664e071b747b7b210d5f7a30f5d123`; E61 `8d3e08e0512dc70a75d2279cfb4515bc960bbfda4f35a872c4a76e9dad69d0e0`; E76-X-lite `0826724f6939afaadf0d097c4359ced1f61eb6b6f114211306ef437a832c99c7`; B1 seed 0/1 model identities remain those frozen by E74-X.
+Random namespaces / seeds: Group A has no random sampling; its selection SHA-256 is `282cd2b5390547813d57e56a39cda72d2bbdf06b5fc86060dea1f0cff113ea04`. Group B ranks frames by the descending average of the two seed-specific mean B1 scores on moving-normal points, with ascending frame ID as the tie-break. The viewing order is ascending SHA-256 of each relative PLY path.
+Command and resolved config: `python -m src.qualify e76v1 --data-root /home/jasongao/Data/STU --protocol protocol.json --e57 runs/ajae/e57_development_worlds.npz --e61 runs/ajae/e61_safety_identities.npz --e76 runs/ajae/e76x_lite_b1_safety.npz --b1-dir runs/ajae/B1 --output-dir runs/ajae/e76_v1 --device cuda`. Group A exports four binary little-endian PLY files for each selected world: base real scan, normal-control overlay, anomaly-proxy overlay, and proxy-only points. Control and proxy are rendered separately against the same base frame with the frozen world seed and tolerance. Group B exports one full-frame, multi-attribute PLY for each of the top three moving-normal frames. The complete output is capped at 27 PLY files plus one JSON manifest.
+Resource and disk preflight: Pending immediately before execution.
+Artifacts and hashes: Pending.
+Primary construct: A descriptive distinction between physically meaningful unfamiliar geometry and generation/rendering artifacts, plus localization of the moving-normal false alarms observed by E76-X-lite.
+Primary result: Not executed. The visual review must use LiDAR sensor coordinates in metres, black background, point size 2, and orthographic top (`-Z`), front (`+X`) and side (`+Y`) views. One unblinded project-owner reviewer answers four frozen questions: whether proxies resemble physical unfamiliar objects, whether control/proxy differences are geometric rather than rendering-style differences, which moving-normal objects or conditions concentrate high scores, and whether those regions locally resemble proxy geometry. Free orbit is supplemental only.
+PASS / FAIL / OUTCOME: OUTCOME — DESCRIPTIVE ONLY; PASS/FAIL IS FORBIDDEN.
+Failure classification: Export, identity or field errors are implementation defects and must be corrected without changing the frozen sample/review definition. Visual observations cannot adjudicate a formal gate.
+Unlocked next node: None. E78-X and B2/B3 remain locked pending a separate scientific decision on moving-normal safety.
+Invalidated downstream evidence: None. E76-X-lite remains unchanged and full E76 remains required on the confirmation track.
+Descriptive observations: Pending review after the committed export.
+Notes: Real points are light gray, ignored/background points dark gray, controls blue, proxies red and moving-normal points orange. Group A includes `point_source`; Group B includes moving mask, semantic, range, B0/B1 seed scores and both E76 fold-threshold prediction flags. Public real-OOD and hidden-test sequences remain sealed.
+
 ## E76-X | Deferred Full Two-Seed B1 Safety
 
 Experiment ID: E76-X
@@ -4653,8 +4679,8 @@ Notes:
 
 # 7. How to Advance AJAE with This State Machine
 
-1. The authoritative status is E50–E73 PASS. E74 three-seed confirmation is suspended after seeds 0/1; seed 2 is preserved at its exact block checkpoint. E75-X is descriptively complete; E76-X-lite is complete with scientific safety review required; full E76-X is deferred intact.
-2. Gate 1 is closed and formal E75–E77 remain locked. E78-X and B2/B3 seeds 0/1 are also locked because E76-X-lite exceeded the result-blind continuation reference through same-direction moving-normal worsening. No automatic experiment follows until the scientific meaning of that moving-normal result is decided.
+1. The authoritative status is E50–E73 PASS. E74 three-seed confirmation is suspended after seeds 0/1; seed 2 is preserved at its exact block checkpoint. E75-X is descriptively complete; E76-X-lite requires scientific safety review; E76-V1 is the current descriptive visual audit; full E76-X is deferred intact.
+2. Gate 1 is closed and formal E75–E77 remain locked. E78-X and B2/B3 seeds 0/1 are also locked because E76-X-lite exceeded the result-blind continuation reference through same-direction moving-normal worsening. E76-V1 can explain that obstacle but cannot remove it or automatically advance the route.
 3. Every later phase first completes its whole-phase design freeze, then executes its nodes.
 4. Preflight checks only identity, support, schema, interface, and resources; it does not inspect formal outcomes.
 5. Classify FAIL using the five frozen categories. A `descriptive_deviation` is recorded and execution continues; it cannot create a new hard gate.
