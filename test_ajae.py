@@ -270,6 +270,19 @@ def test_e57_v2_selection_is_deterministic_and_model_independent() -> None:
     assert np.unique(first).size == 24
 
 
+def test_e58_torus_stream_is_disjoint_from_training_geometry() -> None:
+    candidate_hash = hashlib.sha256(b"fixed E57 world").hexdigest()
+    seed = render_module._e58_seed(candidate_hash)
+    assert seed == render_module._e58_seed(candidate_hash)
+    assert isinstance(sample_held_out_anomaly_shape(seed), HeldOutTorusShape)
+    assert isinstance(sample_training_anomaly_shape(seed), ShapeSpec)
+    assert not isinstance(sample_training_anomaly_shape(seed), HeldOutTorusShape)
+    torus = sample_held_out_anomaly_shape(seed)
+    witnesses = render_module._fibonacci_surface_points(torus, 256)
+    assert witnesses.shape == (256, 3)
+    np.testing.assert_allclose(torus.signed_distance(witnesses), 0.0, atol=1.0e-12)
+
+
 def test_protocol_contains_no_retired_training_route() -> None:
     text = json.dumps(json.loads(PROTOCOL_PATH.read_text()), sort_keys=True)
     for retired in (

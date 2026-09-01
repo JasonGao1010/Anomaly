@@ -3636,6 +3636,20 @@
         "Nvis_bin_edges": [8, 32, 128],
         "O_bin_edges": [0.25, 0.5, 0.75],
         "V_values": [1, 2, 3, 4, 5]
+      },
+      "held_out_diagnostics": {
+        "status": "frozen_before_e58",
+        "source_e57_artifact": {
+          "path": "runs/ajae/e57_development_worlds.npz",
+          "sha256": "b14efc1aad86ac67b5bf7c8631f02b2e68664e071b747b7b210d5f7a30f5d123",
+          "scientific_array_sha256": "590c467da2dec0a161688f2587dc1c37cea2b0f42f326b9918fd6dc9df81f6ec"
+        },
+        "worlds": 6,
+        "shape_mechanism": "held-out-torus-sdf",
+        "seed_namespace": "E58-held-out-torus-v1",
+        "selection_rule": "lowest namespace hash among legal visible center-evaluable replacements of the 24 E57 worlds",
+        "model_outputs_forbidden": true,
+        "training_checkpoint_threshold_and_pass_use_forbidden": true
       }
     },
     "fixed_world_evaluation": {

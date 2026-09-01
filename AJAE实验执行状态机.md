@@ -3370,41 +3370,41 @@ Notes: Distance, visible-return count, occlusion and visible-frame strata are de
 Experiment ID: E57-v2
 Design-freeze commit/hash: `bc135c0acc457ae22d57db92f772e4cae9a64338`; protocol SHA-256 `4f1f96966ba2da51044592c4c29f0d7a9936de744e108e2d4e067cd5ccbe30fb`.
 Execution-freeze commit/hash: `bc135c0acc457ae22d57db92f772e4cae9a64338`; runner SHA-256 `96dd2be3c36026b2c6ce4c5f763df83d60ca03cf9eb468960401fe2756a45c48`.
-Date: Not executed.
-Git commit / clean state: Not applicable.
+Date: 2026-09-01 formal PASS.
+Git commit / clean state: Formal run used clean tracked state at `c65b946451df17ebe2a32cf56f7b57bf7d85c3d6`; untracked user-owned `PPT/` remained excluded.
 Data identities: Twenty-four train/201 mixed worlds deterministically selected from the exact Phase 6-v2 bank. Save world, entity, five source-frame and calibration-bound canonical-ray identities together with world specification, generation report, five-frame diagnostics and hashes.
 Input artifact hashes: Source bank SHA-256 `d3088e29e4c6179999ccb34088dae558fa402bf6b1455394acdc99cac4118463`, source-bank scientific-array SHA-256 `f4fb2081b346c686e2d6930a03e3f17bb6c6d3eee4fcfc16984c1a9c1d8de4f5`, calibration SHA-256 `b532b7e04d9025233b2768b8fb36287e477f62f20a3ff685a62f4a4a29bfefe0`.
 Random namespaces / seeds: No new random draw; deterministic maximin descriptor-span selection with hash tie-break.
 Command and resolved config: Every selected world must be legal and contain a visible control and proxy in its five-frame window. Every center frame must contain at least five valid-range anomaly points and at least one valid-range normal point under official 2.5–50 m and ignore filtering. For each label, at least 12 of the 24 selected worlds must contain an entity with `V>=2`. All 24 identities and selection must reproduce exactly. These are the complete E57 hard conditions. The `d/Nvis/O/V` bin counts are reported but never enter PASS/FAIL. Formal command: `python -m src.render qualify-e57-v2 --data-root /home/jasongao/Data/STU --protocol protocol.json --source-bank runs/ajae/e45b-v2_bank_1024.npz --calibration runs/ajae/calibration.pt --output runs/ajae/e57_development_worlds.npz --processes 24`.
-Resource and disk preflight: Not executed.
-Artifacts and hashes: None.
+Resource and disk preflight: 24 physical CPU cores; 23 GiB RAM with 21 GiB available; 16 GiB unused swap; RTX 5080 Laptop GPU not applicable to the geometry workload; no competing experiment process. Windows E: had 75,056,537,600 bytes remaining of 484,950,659,072 bytes, above the 5% reserve. The formal run used 24 processes with one numerical-library thread each and completed in 66.521185 s.
+Artifacts and hashes: `runs/ajae/e57_development_worlds.npz`; 139,284 bytes; SHA-256 `b14efc1aad86ac67b5bf7c8631f02b2e68664e071b747b7b210d5f7a30f5d123`; scientific-array SHA-256 `590c467da2dec0a161688f2587dc1c37cea2b0f42f326b9918fd6dc9df81f6ec`; selected-world SHA-256 `dddfae4e484174c9601ed07dc0dc03ce4ef29399674a09a2d43ed57ae06bb03b`.
 Primary construct: Immutable, evaluable and genuinely cross-frame-observable in-generator development testbed selected without model results.
-Primary result: Not executed.
-PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
-Failure classification: Not applicable.
-Unlocked next node: E58 after PASS.
-Invalidated downstream evidence: E58 onward remains locked.
-Descriptive observations: None.
+Primary result: Of 1,024 frozen candidates, 113 were legal, visible and center-evaluable. The fixed selector chose 24 worlds with zero reproduction or qualification errors. Controls had `V>=2` in 23 worlds and proxies in all 24, both above the hard minimum of 12. The minimum center-frame valid anomaly and normal counts were 6 and 60,235. Independent read-only validation reconstructed every world and five-frame diagnostic, rerendered all 24 centers, reproduced the descriptor/maximin selection without calling the selector, and exactly matched point counts, identities, both hashes and all hard conditions.
+PASS / FAIL / OUTCOME: PASS.
+Failure classification: None.
+Unlocked next node: E58.
+Invalidated downstream evidence: None; E58 is current.
+Descriptive observations: Candidate rejections were 869 pair penetrations, 31 center-nonevaluable worlds and 11 label-not-visible worlds. Selected control/proxy `Nvis` counts were [6,2,9,7]/[3,9,7,5], distance counts [6,2,7,9]/[5,4,8,7], occlusion counts [22,1,0,1]/[19,3,1,1], and `V=1..5` counts [1,0,0,0,23]/[0,0,0,0,24]. These values are nonblocking characterizations and do not establish balanced synthetic coverage.
 Notes: World identity and diagnostics must be fixed once. Failure of a descriptive bin count is a limitation of stratified interpretation, not an E57 failure.
 
 ## E58 | Freeze Six Held-Out Diagnostic Worlds
 
 Experiment ID: E58
-Design-freeze commit/hash: Frozen design; commit not recorded.
+Design-freeze commit/hash: E58 corrected and frozen after E57 PASS but before any formal E58 execution; commit not recorded.
 Execution-freeze commit/hash: Not executed.
 Date: Not executed.
 Git commit / clean state: Not applicable.
-Data identities: Six deterministically selected worlds from the held-out torus mechanism never sampled by formal training.
-Input artifact hashes: E57-v2 selected-world artifact required; none exists.
-Random namespaces / seeds: Frozen held-out torus identities.
-Command and resolved config: Perform only deterministic torus-world identity generation and access-isolation checks. Code must prevent these worlds from training, checkpoint/threshold selection, and PASS statistics. They are diagnostic only. Identity and isolation errors must be zero; E58 has no checkpoint, threshold or model-quality criterion.
+Data identities: Six worlds selected from deterministic held-out-torus replacements of the 24 frozen E57-v2 worlds. Each replacement retains its control, material, orientation and ground-contact point; only the in-generator proxy shape is replaced by `HeldOutTorusShape`, with a deterministic translation adjustment along the support normal to preserve contact.
+Input artifact hashes: E57-v2 SHA-256 `b14efc1aad86ac67b5bf7c8631f02b2e68664e071b747b7b210d5f7a30f5d123`; scientific-array SHA-256 `590c467da2dec0a161688f2587dc1c37cea2b0f42f326b9918fd6dc9df81f6ec`; calibration SHA-256 `b532b7e04d9025233b2768b8fb36287e477f62f20a3ff685a62f4a4a29bfefe0`.
+Random namespaces / seeds: `E58-held-out-torus-v1`; each torus seed is the first four little-endian bytes of SHA-256 over namespace plus the E57 candidate hash.
+Command and resolved config: Construct exactly one torus replacement per E57 world, require legal control/torus separation, five-frame visibility and a center frame with at least five valid-range anomaly points and one valid-range normal point, then select the six eligible replacements with the lowest fixed namespace hashes. The torus surface witness implementation uses an analytic two-angle parameterization because center-directed rays are invalid for a non-star-shaped torus. Perform only identity, evaluability and access-isolation checks. The training sampler must emit no torus, and held-out worlds must be excluded from training, checkpoint selection, threshold selection and every PASS statistic. No model output may be read. E58 has no checkpoint, threshold or model-quality criterion. Formal command is frozen but must not run until explicitly resumed: `python -m src.render qualify-e58 --data-root /home/jasongao/Data/STU --protocol protocol.json --e57 runs/ajae/e57_development_worlds.npz --calibration runs/ajae/calibration.pt --output runs/ajae/e58_held_out_worlds.npz --processes 24`.
 Resource and disk preflight: Not executed.
 Artifacts and hashes: None.
 Primary construct: Strict isolation of held-out diagnostic worlds.
 Primary result: Not executed.
-PASS / FAIL / OUTCOME: OUTCOME — LOCKED / NOT EXECUTED.
+PASS / FAIL / OUTCOME: OUTCOME — IMPLEMENTATION CORRECTED AND DESIGN FROZEN / NOT EXECUTED.
 Failure classification: Not applicable.
-Unlocked next node: E59 after PASS.
+Unlocked next node: E58 formal execution remains current; E59 requires E58 PASS.
 Invalidated downstream evidence: E59 onward remains locked.
 Descriptive observations: None.
 Notes: Held-out diagnostics cannot influence any selection or formal test.

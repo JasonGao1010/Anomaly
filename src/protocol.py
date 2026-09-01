@@ -701,6 +701,7 @@ class AJAEProtocol:
             {
                 "status", "source_candidate_bank", "selection",
                 "hard_requirements", "descriptive_characterization",
+                "held_out_diagnostics",
             },
             "development.qualification",
         )
@@ -761,6 +762,33 @@ class AJAEProtocol:
             or tuple(characterization.get("V_values", ())) != (1, 2, 3, 4, 5)
         ):
             raise ProtocolError("E59/E60 characterization must remain complete and nonblocking")
+        held_out = _mapping(
+            qualification["held_out_diagnostics"],
+            "development.qualification.held_out_diagnostics",
+        )
+        held_out_source = _mapping(
+            held_out["source_e57_artifact"],
+            "development.qualification.held_out_diagnostics.source_e57_artifact",
+        )
+        if (
+            held_out.get("status") != "frozen_before_e58"
+            or held_out_source.get("path")
+            != "runs/ajae/e57_development_worlds.npz"
+            or held_out_source.get("sha256")
+            != "b14efc1aad86ac67b5bf7c8631f02b2e68664e071b747b7b210d5f7a30f5d123"
+            or held_out_source.get("scientific_array_sha256")
+            != "590c467da2dec0a161688f2587dc1c37cea2b0f42f326b9918fd6dc9df81f6ec"
+            or held_out.get("worlds") != 6
+            or held_out.get("shape_mechanism") != "held-out-torus-sdf"
+            or held_out.get("seed_namespace") != "E58-held-out-torus-v1"
+            or held_out.get("selection_rule")
+            != "lowest namespace hash among legal visible center-evaluable replacements of the 24 E57 worlds"
+            or held_out.get("model_outputs_forbidden") is not True
+            or held_out.get(
+                "training_checkpoint_threshold_and_pass_use_forbidden"
+            ) is not True
+        ):
+            raise ProtocolError("E58 held-out identity or isolation rule changed")
         world_evaluation = _mapping(
             development["fixed_world_evaluation"],
             "development.fixed_world_evaluation",

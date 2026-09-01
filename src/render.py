@@ -76,6 +76,10 @@ FROZEN_E57_SOURCE_BANK_SHA256 = (
 FROZEN_E57_SOURCE_BANK_ARRAY_SHA256 = (
     "f4fb2081b346c686e2d6930a03e3f17bb6c6d3eee4fcfc16984c1a9c1d8de4f5"
 )
+FROZEN_E57_ARTIFACT_SHA256 = (
+    "b14efc1aad86ac67b5bf7c8631f02b2e68664e071b747b7b210d5f7a30f5d123"
+)
+E58_TORUS_NAMESPACE = "E58-held-out-torus-v1"
 SUPPORT_POOL_SEMANTICS = (40, 48, 49)
 CALIBRATION_FORMAT = "ajae-sensor-calibration-v4"
 DEVELOPMENT_FORMAT = "ajae-development-worlds-v2"
@@ -5357,6 +5361,28 @@ def observed_normal_collision(
 
 def _fibonacci_surface_points(shape: InsertShape, count: int = 8192) -> np.ndarray:
     identifiers = np.arange(_integer("surface point count", count, minimum=32))
+    if isinstance(shape, HeldOutTorusShape):
+        # A torus is not star-shaped about its center, so center-directed rays
+        # miss the hole.  Two irrational rotations give deterministic surface
+        # witnesses without imposing the star-shaped assumption.
+        major_angle = 2.0 * math.pi * np.mod(
+            identifiers * ((math.sqrt(5.0) - 1.0) / 2.0), 1.0
+        )
+        tube_angle = 2.0 * math.pi * np.mod(
+            (identifiers + 0.5) * (math.sqrt(2.0) - 1.0), 1.0
+        )
+        radial = shape.major_radius_m + shape.tube_radius_m * np.cos(tube_angle)
+        points = np.column_stack(
+            (
+                radial * np.cos(major_angle),
+                radial * np.sin(major_angle),
+                shape.tube_radius_m * np.sin(tube_angle),
+            )
+        )
+        residual = np.abs(shape.signed_distance(points))
+        if not np.isfinite(points).all() or float(np.max(residual)) > 1.0e-12:
+            raise PlacementError("deterministic torus points are not on the geometry")
+        return points
     z = 1.0 - 2.0 * (identifiers + 0.5) / count
     angle = math.pi * (3.0 - math.sqrt(5.0)) * identifiers
     radial = np.sqrt(np.maximum(0.0, 1.0 - np.square(z)))
@@ -17684,6 +17710,335 @@ def run_e57_qualification(
     return result
 
 
+_E58_SEQUENCE: object | None = None
+_E58_GRID: RayGrid | None = None
+_E58_SENSOR: SensorCalibration | None = None
+_E58_BASE: dict[str, np.ndarray] = {}
+
+
+def _e58_seed(candidate_hash: str) -> int:
+    payload = f"{E58_TORUS_NAMESPACE}:{candidate_hash}".encode("ascii")
+    return int.from_bytes(hashlib.sha256(payload).digest()[:4], "little")
+
+
+def _e58_candidate_worker(index: int) -> dict[str, object]:
+    """Replace one frozen proxy by a score-blind held-out torus."""
+
+    sequence, grid, sensor = _E58_SEQUENCE, _E58_GRID, _E58_SENSOR
+    if sequence is None or grid is None or sensor is None or not _E58_BASE:
+        raise RuntimeError("E58 candidate fixtures are not initialized")
+    try:
+        source_hash = bytes(_E58_BASE["selected_candidate_sha256"][index]).decode()
+        source_world = WorldSpec.from_dict(
+            json.loads(str(_E58_BASE["selected_world_json"][index]))
+        )
+        center = int(_E58_BASE["selected_center_frame"][index])
+        if (
+            source_world.source_sequence_id != 201
+            or source_world.world_type != "mixed"
+            or tuple(item.object_id for item in source_world.objects) != (1, 2)
+            or tuple(item.label for item in source_world.objects)
+            != ("normal-control", "anomaly-proxy")
+        ):
+            raise RenderError("E58 source world identity changed")
+        control, source_proxy = source_world.objects
+        if not isinstance(source_proxy.shape, ShapeSpec):
+            raise RenderError("E58 source proxy is not in-generator geometry")
+        torus_seed = _e58_seed(source_hash)
+        source_diameter = float(np.clip(
+            2.0 * source_proxy.shape.bound_radius_m, 0.4, 3.0
+        ))
+        torus = sample_held_out_anomaly_shape(
+            torus_seed, size_m_range=(source_diameter, source_diameter)
+        )
+        rotation = np.asarray(
+            source_proxy.rotation_world_from_local, dtype=np.float64
+        )
+        old_lower = source_proxy.shape.minimum_z_m(
+            xy_resolution=33, z_steps=129
+        )
+        new_lower = torus.minimum_z_m()
+        translation = np.asarray(
+            source_proxy.translation_world_m, dtype=np.float64
+        ) + rotation[:, 2] * (old_lower - new_lower)
+        proxy = replace(
+            source_proxy,
+            shape=torus,
+            translation_world_m=tuple(map(float, translation)),
+            shape_generation_report=None,
+        )
+        world = WorldSpec(torus_seed, 201, (control, proxy))
+        penetration, minimum_pair_sdf = obvious_pair_penetration(control, proxy)
+        frames = tuple(
+            sequence.source_frame(frame_id)
+            for frame_id in range(center - 2, center + 3)
+        )
+        diagnostics = five_frame_world_diagnostics(world, frames, grid, sensor)
+        objects = diagnostics.get("objects")
+        if not isinstance(objects, list) or len(objects) != 2:
+            raise RenderError("E58 diagnostics changed structure")
+        by_id = {int(item["object_id"]): item for item in objects}
+        descriptor = np.asarray(
+            [
+                by_id[1]["Nvis"], by_id[1]["O"], by_id[1]["d"], by_id[1]["V"],
+                by_id[2]["Nvis"], by_id[2]["O"], by_id[2]["d"], by_id[2]["V"],
+            ],
+            dtype=np.float64,
+        )
+        visible = (
+            np.isfinite(descriptor).all()
+            and descriptor[0] > 0.0
+            and descriptor[4] > 0.0
+        )
+        rendered = render_frame(frames[2], world, grid, sensor)
+        labels = rendered.source.labels
+        if labels is None:
+            raise RenderError("E58 center render has no labels")
+        ranges = np.linalg.norm(
+            np.asarray(rendered.source.xyzi[:, :3], dtype=np.float32), axis=1
+        )
+        valid = (
+            ~np.asarray(rendered.source.zero_slot_mask, dtype=np.bool_)
+            & (ranges >= 2.5)
+            & (ranges <= 50.0)
+            & (np.asarray(labels.semantic) != 0)
+        )
+        anomaly_points = int(np.count_nonzero(valid & (labels.semantic == 2)))
+        normal_points = int(np.count_nonzero(valid & (labels.semantic != 2)))
+        world_json = world.to_json()
+        diagnostics_json = json.dumps(
+            diagnostics, sort_keys=True, separators=(",", ":"), allow_nan=False
+        )
+        identity = hashlib.sha256(
+            (
+                FROZEN_E57_ARTIFACT_SHA256
+                + f":{index}:{source_hash}:{torus_seed}:"
+                + world_json
+                + diagnostics_json
+            ).encode("utf-8")
+        ).hexdigest()
+        training_shape = sample_training_anomaly_shape(torus_seed)
+        training_sampler_torus_error = int(
+            isinstance(training_shape, HeldOutTorusShape)
+            or not isinstance(training_shape, ShapeSpec)
+        )
+        eligible = (
+            not penetration
+            and visible
+            and anomaly_points >= 5
+            and normal_points >= 1
+        )
+        return {
+            "index": index,
+            "source_candidate_hash": source_hash,
+            "center_frame": center,
+            "torus_seed": torus_seed,
+            "eligible": bool(eligible),
+            "reason": "" if eligible else (
+                "pair_penetration" if penetration else
+                "not_visible" if not visible else "not_evaluable"
+            ),
+            "minimum_pair_sdf_m": minimum_pair_sdf,
+            "descriptor": descriptor,
+            "anomaly_points": anomaly_points,
+            "normal_points": normal_points,
+            "world_json": world_json,
+            "diagnostics_json": diagnostics_json,
+            "identity": identity,
+            "training_sampler_torus_error": training_sampler_torus_error,
+        }
+    except Exception as error:
+        return {
+            "index": index,
+            "eligible": False,
+            "reason": f"hard_error:{type(error).__name__}:{error}",
+            "hard_error": 1,
+            "training_sampler_torus_error": 1,
+        }
+
+
+def _e58_selected_indices(records: Sequence[Mapping[str, object]]) -> np.ndarray:
+    eligible = [item for item in records if item.get("eligible") is True]
+    ordered = sorted(
+        eligible,
+        key=lambda item: hashlib.sha256(
+            f"{E58_TORUS_NAMESPACE}:select:{item['identity']}".encode("ascii")
+        ).digest(),
+    )
+    return np.asarray([int(item["index"]) for item in ordered[:6]], dtype=np.int16)
+
+
+def run_e58_qualification(
+    data_root: Path | str,
+    protocol_path: Path | str,
+    e57_path: Path | str,
+    calibration_path: Path | str,
+    output_path: Path | str,
+    *,
+    processes: int = 24,
+) -> dict[str, object]:
+    """Freeze six torus diagnostics and prove selection-path isolation."""
+
+    if processes != 24:
+        raise RenderError("formal E58 requires exactly 24 worker processes")
+    try:
+        from .protocol import load_protocol
+        from .scene import LabelMode, STUSequence
+    except ImportError:
+        from protocol import load_protocol  # type: ignore[no-redef]
+        from scene import LabelMode, STUSequence  # type: ignore[no-redef]
+    protocol_file = Path(protocol_path).expanduser().resolve(strict=True)
+    protocol = load_protocol(protocol_file)
+    if (
+        protocol.development["held_out_affects_selection"] is not False
+        or protocol.development["checkpoint_selection"][
+            "held_out_input_forbidden"
+        ] is not True
+    ):
+        raise RenderError("E58 held-out selection isolation changed")
+    e57_file = Path(e57_path).expanduser().resolve(strict=True)
+    if _sha256_path(e57_file) != FROZEN_E57_ARTIFACT_SHA256:
+        raise RenderError("E58 E57-v2 input identity changed")
+    with np.load(e57_file, allow_pickle=False) as source:
+        metadata = json.loads(str(source["metadata_json"]))
+        arrays = {
+            name: np.asarray(source[name])
+            for name in source.files if name != "metadata_json"
+        }
+    if (
+        metadata.get("experiment") != "E57-v2"
+        or metadata.get("passed") is not True
+        or metadata.get("scientific_array_hash") != _scientific_array_hash(arrays)
+        or arrays.get("selected_world_json", np.empty(0)).shape != (24,)
+    ):
+        raise RenderError("E58 received invalid E57-v2 evidence")
+    calibration = Path(calibration_path).expanduser().resolve(strict=True)
+    if _sha256_path(calibration) != FROZEN_SENSOR_CALIBRATION_SHA256:
+        raise RenderError("E58 calibration identity changed")
+    grid, sensor = load_sensor_calibration(calibration)
+    sequence = STUSequence.open(
+        data_root,
+        protocol=protocol,
+        partition="train",
+        sequence_id=201,
+        label_mode=LabelMode.REQUIRED,
+    )
+    global _E58_SEQUENCE, _E58_GRID, _E58_SENSOR, _E58_BASE
+    _E58_SEQUENCE, _E58_GRID, _E58_SENSOR, _E58_BASE = (
+        sequence, grid, sensor, arrays
+    )
+    started = time.monotonic()
+    with mp.get_context("fork").Pool(processes=processes) as workers:
+        records = workers.map(_e58_candidate_worker, range(24), chunksize=1)
+    elapsed = time.monotonic() - started
+    records.sort(key=lambda item: int(item["index"]))
+    hard_errors = sum(int(item.get("hard_error", 0)) for item in records)
+    if hard_errors:
+        examples = [str(item["reason"]) for item in records if item.get("hard_error")][:3]
+        raise RenderError(f"E58 candidate implementation errors: {examples}")
+    first_selection = _e58_selected_indices(records)
+    second_selection = _e58_selected_indices(records)
+    selection_errors = int(not np.array_equal(first_selection, second_selection))
+    selected = [records[int(index)] for index in first_selection]
+    isolation_errors = sum(
+        int(item["training_sampler_torus_error"]) for item in records
+    )
+    qualification_errors = int(len(selected) != 6)
+    saved = {
+        "candidate_e57_index": np.arange(24, dtype=np.int16),
+        "candidate_eligible": np.asarray(
+            [item["eligible"] for item in records], dtype=np.bool_
+        ),
+        "candidate_rejection_reason": np.asarray(
+            [item["reason"] for item in records], dtype="U64"
+        ),
+        "candidate_identity_sha256": np.asarray(
+            [item["identity"] for item in records], dtype="S64"
+        ),
+        "selected_e57_index": first_selection,
+        "selected_world_id": np.arange(24, 30, dtype=np.int16)[:len(selected)],
+        "selected_center_frame": np.asarray(
+            [item["center_frame"] for item in selected], dtype=np.int16
+        ),
+        "selected_frame_id": np.asarray(
+            [
+                [int(item["center_frame"]) + offset for offset in (-2, -1, 0, 1, 2)]
+                for item in selected
+            ],
+            dtype=np.int16,
+        ).reshape(len(selected), 5),
+        "selected_object_id": np.tile(
+            np.asarray([[1, 2]], dtype=np.int16), (len(selected), 1)
+        ),
+        "selected_torus_seed": np.asarray(
+            [item["torus_seed"] for item in selected], dtype=np.uint32
+        ),
+        "selected_descriptor": np.asarray(
+            [item["descriptor"] for item in selected], dtype=np.float64
+        ).reshape(len(selected), 8),
+        "selected_anomaly_points": np.asarray(
+            [item["anomaly_points"] for item in selected], dtype=np.int32
+        ),
+        "selected_normal_points": np.asarray(
+            [item["normal_points"] for item in selected], dtype=np.int32
+        ),
+        "selected_world_json": np.asarray(
+            [item["world_json"] for item in selected]
+        ),
+        "selected_diagnostics_json": np.asarray(
+            [item["diagnostics_json"] for item in selected]
+        ),
+        "selected_identity_sha256": np.asarray(
+            [item["identity"] for item in selected], dtype="S64"
+        ),
+    }
+    passed = (
+        qualification_errors == 0
+        and selection_errors == 0
+        and isolation_errors == 0
+    )
+    result = {
+        "experiment": "E58",
+        "passed": passed,
+        "failure_classification": None if passed else "held_out_identity_or_isolation_failure",
+        "e57_artifact_sha256": FROZEN_E57_ARTIFACT_SHA256,
+        "e57_scientific_array_hash": metadata["scientific_array_hash"],
+        "candidate_worlds": 24,
+        "eligible_candidate_worlds": int(np.count_nonzero(saved["candidate_eligible"])),
+        "selected_worlds": len(selected),
+        "selection_namespace": E58_TORUS_NAMESPACE,
+        "selection_reproduction_errors": selection_errors,
+        "training_sampler_torus_errors": isolation_errors,
+        "held_out_affects_checkpoint_or_threshold": False,
+        "model_scores_read": False,
+        "qualification_errors": qualification_errors,
+        "minimum_center_anomaly_points": (
+            int(np.min(saved["selected_anomaly_points"])) if selected else 0
+        ),
+        "minimum_center_normal_points": (
+            int(np.min(saved["selected_normal_points"])) if selected else 0
+        ),
+        "processes": processes,
+        "elapsed_seconds": elapsed,
+        "protocol_sha256": _sha256_path(protocol_file),
+        "scientific_array_hash": _scientific_array_hash(saved),
+        "claim_limit": (
+            "E58 proves fixed held-out torus identity and exclusion from training, "
+            "checkpoint, threshold and PASS paths; it makes no model-quality claim."
+        ),
+    }
+    destination = Path(output_path).expanduser().resolve()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_suffix(destination.suffix + ".tmp.npz")
+    np.savez_compressed(
+        temporary,
+        **saved,
+        metadata_json=np.asarray(json.dumps(result, sort_keys=True, separators=(",", ":"))),
+    )
+    os.replace(temporary, destination)
+    return result
+
+
 _E45A2_TARGET_UNITS: dict[str, np.ndarray] = {}
 _E45A2_SUPPORT_ROWS: tuple[np.ndarray, ...] = ()
 
@@ -18398,6 +18753,13 @@ def _render_parser() -> argparse.ArgumentParser:
     e57.add_argument("--calibration", type=Path, required=True)
     e57.add_argument("--output", type=Path, required=True)
     e57.add_argument("--processes", type=int, default=24)
+    e58 = subcommands.add_parser("qualify-e58")
+    e58.add_argument("--data-root", type=Path, required=True)
+    e58.add_argument("--protocol", type=Path, required=True)
+    e58.add_argument("--e57", type=Path, required=True)
+    e58.add_argument("--calibration", type=Path, required=True)
+    e58.add_argument("--output", type=Path, required=True)
+    e58.add_argument("--processes", type=int, default=24)
     e45a2 = subcommands.add_parser("qualify-e45a-v2")
     e45a2.add_argument("--data-root", type=Path, required=True)
     e45a2.add_argument("--support-pool", type=Path, required=True)
@@ -18610,6 +18972,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "qualify-e57-v2":
         result = run_e57_qualification(
             args.data_root, args.protocol, args.source_bank,
+            args.calibration, args.output, processes=args.processes,
+        )
+        print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        return 0 if result["passed"] else 1
+    if args.command == "qualify-e58":
+        result = run_e58_qualification(
+            args.data_root, args.protocol, args.e57,
             args.calibration, args.output, processes=args.processes,
         )
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
