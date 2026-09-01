@@ -1,6 +1,6 @@
 # AJAE Fine-Grained Experiment Execution State Machine
 
-> Current authoritative baseline: repository `main` and all historical evidence recorded in this document. E50–E58 and E61–E73 have formally PASSed and E59/E60 descriptive characterization is complete. E74's three-seed confirmation is suspended after completed seeds 0/1 with seed 2 preserved at an exact resumable block checkpoint. E75-X has completed descriptively and the active node is E76-X on the explicitly exploratory track; formal Gate 2 remains unadjudicated.
+> Current authoritative baseline: repository `main` and all historical evidence recorded in this document. E50–E58 and E61–E73 have formally PASSed and E59/E60 descriptive characterization is complete. E74's three-seed confirmation is suspended after completed seeds 0/1 with seed 2 preserved at an exact resumable block checkpoint. E75-X has completed descriptively and the active node is the result-blind E76-X-lite catastrophic-safety screen; full E76-X is deferred to the later confirmation track and formal Gate 2 remains unadjudicated.
 
 > Basis: [AJAE Mainline Plan](</home/jasongao/Study/AJAE/AJAE%E6%96%B0%E4%B8%BB%E7%BA%BF%E6%96%B9%E6%A1%88.md>). This document decomposes the mainline plan's immutable constraints, four Decision Gates, B0–B5 controls, normal-motion safety, object-scale diagnostics, development discipline, and one-time real-OOD validation into fine-grained experiment nodes that can be executed sequentially.
 
@@ -181,7 +181,7 @@ flowchart TB
   subgraph PX["Exploratory viability track | no formal gate verdicts"]
     E74X["E74-X B1 seeds 0/1 cohort"]
     E75X["E75-X descriptive B1 versus B0"]
-    E76X["E76-X exploratory B1 safety"]
+    E76X["E76-X-lite catastrophic B1 safety screen"]
     E78X["E78-X B2 seeds 0/1"]
     E79X["E79-X B3 mechanical smoke"]
     E80X["E80-X B3 seeds 0/1"]
@@ -3844,17 +3844,39 @@ Primary construct: Descriptive evidence that the learned single-frame head has s
 Primary result: Seed 0 mean paired AP gain was `0.001308817527630322` on the decision scale, seed 1 was `0.05291273076915464`, and their descriptive mean was `0.027110774148392493` (respectively about 0.131, 5.291 and 2.711 AP percentage points). Positive-world counts were 19/23 and 20/23. The per-world arrays are retained in the artifact; their seed-wise ranges were `[-0.8243604044514481, 0.41226177015405785]` and `[-0.9345654812705606, 0.732691134567901]`, showing substantial heterogeneity and adverse worlds despite positive means.
 PASS / FAIL / OUTCOME: OUTCOME — DESCRIPTIVE EXECUTION COMPLETE; NOT A FORMAL GATE RESULT.
 Failure classification: Execution errors are implementation defects; numerical results are descriptive evidence.
-Unlocked next node: E76-X.
+Unlocked next node: E76-X-lite under the result-blind exploration-route revision.
 Invalidated downstream evidence: None; formal E75 remains locked.
 Descriptive observations: Both preregistered exploratory seeds have positive mean differences, but seed 0's mean is only slightly positive and both seeds contain large negative world-level differences. This supports continuing to the prespecified exploratory safety check; it does not establish a confirmatory effect.
 Notes: Independent reconstruction reproduced the world identities, shapes, means, positive counts and scientific-array hash. No bootstrap or confidence interval was computed. Artifact completion is only mechanical `descriptive_execution_only`; it cannot be cited as Gate 2 PASS.
 
-## E76-X | Exploratory B1 Safety
+## E76-X-lite | Exploratory Catastrophic B1 Safety Screen
+
+Experiment ID: E76-X-lite
+Design-freeze commit/hash: Result-blind exploration-route revision after the full E76-X attempt was stopped without an artifact or any observed safety metric. The revision changes only the current compute allocation: all 23 development worlds, all rendered normal-controls and all 13,011 moving-normal points remain; pure-normal evaluation is restricted to 64 deterministically selected E61 frames. Full E76-X is retained for later confirmation.
+Execution-freeze commit/hash: Implementation commit pending before execution.
+Date: 2026-09-02 result-blind route and sample freeze.
+Git commit / clean state: Must be committed and pushed before execution; untracked user-owned `PPT/` remains excluded.
+Data identities: E63's complete 23-world common domain; all valid normal-control points; all 13,011 E61 moving-normal points; 64 of the 678 E61 pure-normal frames selected without counts, features, predictions or results.
+Input artifact hashes: E57 `b14efc1aad86ac67b5bf7c8631f02b2e68664e071b747b7b210d5f7a30f5d123`; E61 `8d3e08e0512dc70a75d2279cfb4515bc960bbfda4f35a872c4a76e9dad69d0e0`; E63 `5dbf99eaa59a05a83774e42beb6b8d7a95cf9309ebd42ab7870604a20d410dd9`; E72 `208487d5c91b131856e908988cf6d955305fa09364450d509e32f617295b5863`; E74-X seed 0/1 and seed-2 pause identities above.
+Random namespaces / seeds: No random sampling. Rank all E61 `pure_frame_id` values by SHA-256 of ASCII `E76-X-lite-pure-normal-frame-v1:train:201:<frame_id>`, break a hypothetical digest tie by ascending frame ID, and take the first 64 exactly once. Namespace or seed search is forbidden.
+Command and resolved config: `python -m src.qualify e76x-lite --data-root /home/jasongao/Data/STU --protocol protocol.json --e57 runs/ajae/e57_development_worlds.npz --e61 runs/ajae/e61_safety_identities.npz --e63 runs/ajae/e63_training_freeze.npz --e72 runs/ajae/e72_b0_reference.npz --b1-dir runs/ajae/B1 --output runs/ajae/e76x_lite_b1_safety.npz --device cuda`. Retain the unchanged E76 cross-fit threshold calculation and signed B1-minus-B0 worsening for pure-normal, normal-control, moving-normal and development FPR95. The two-seed mean `0.03` reference is only a continuation rule: continue to E78-X exactly when all four mean signed worsenings are at most `0.03`; otherwise stop for scientific safety review. No E76 or Gate 2 verdict is permitted.
+Resource and disk preflight: Before execution, recheck CPU, GPU, memory, competing processes and Windows E: free space. The selected 64 frames contain exactly 3,955,039 pure-normal points, 8.10% of the complete 48,828,507-point set.
+Artifacts and hashes: Pending. Frozen ordered frame IDs: `[288,302,673,505,572,111,332,635,258,464,589,504,681,443,201,592,99,45,602,502,401,265,415,106,196,87,354,10,652,536,603,391,406,672,663,343,494,271,234,110,294,121,562,148,468,125,540,251,416,616,33,594,526,633,636,523,541,359,363,476,317,533,608,51]`; canonical selection SHA-256 `d8c2989066d4352182fe998758018631fb493be67a825fa1cffac10a333133ad`.
+Primary construct: Whether B1 exhibits a normal-false-alarm collapse large enough to make immediate B2/B3 exploration scientifically irresponsible.
+Primary result: Not executed.
+PASS / FAIL / OUTCOME: OUTCOME — CURRENT / RESULT-BLIND FROZEN.
+Failure classification: Implementation mismatches are repaired under this exact freeze. Exceeding the unchanged mean continuation reference is exploratory scientific safety evidence and stops B2/B3 pending review.
+Unlocked next node: E78-X only after a complete non-disastrous E76-X-lite result.
+Invalidated downstream evidence: None. Full E76-X and formal E76 remain required later if the temporal route is promising.
+Descriptive observations: None.
+Notes: This is a compute-priority reduction, not a sample-size claim or precise safety estimate. It cannot replace full safety evidence in the confirmation track.
+
+## E76-X | Deferred Full Two-Seed B1 Safety
 
 Experiment ID: E76-X
 Design-freeze commit/hash: Apply E76's result-blind threshold, cross-fit and metric-scale semantics to B0 and B1 seeds 0/1 only.
 Execution-freeze commit/hash: E76-X runner commit `652d9daac92f609935553e6d7c47e75b33120388`; `src/qualify.py` SHA-256 `6ad8c837720184613cdb9543cdb6045a77a5e67ea4d778085c1b7872bfd7afd7`. The complete 84-test scientific-semantic suite passes before execution.
-Date: 2026-09-02 design freeze; execution unlocked after E75-X. The first execution attempt was stopped at the owner's request before completion.
+Date: 2026-09-02 design freeze. The first execution attempt was stopped at the owner's request before completion; on 2026-09-02 the full run was deferred result-blind to the later confirmation track.
 Git commit / clean state: Execution must use the tracked runner above and a clean tracked worktree; untracked user-owned `PPT/` remains excluded.
 Data identities: The same 23 development worlds, complete E61 pure-normal set, complete E61 moving-normal set and rendered normal-controls.
 Input artifact hashes: E72, E61, E63 and E74-X required.
@@ -3863,13 +3885,13 @@ Command and resolved config: `python -m src.qualify e76x --data-root /home/jason
 Resource and disk preflight: 24 physical CPU cores, RTX 5080 Laptop GPU with 16,303 MiB total and 14,428 MiB free, 20 GiB available RAM, no competing experiment, and Windows E: with 73,982,402,560 bytes remaining of 484,950,659,072 before execution. The runner reuses each frozen STU encoding for both B1 models and writes only summary arrays.
 Artifacts and hashes: None. The interrupted attempt did not reach the atomic result write, and `runs/ajae/e76x_b1_safety.npz` is absent.
 Primary construct: Detect whether the encouraging B1 ranking signal is accompanied by gross normal false alarms before spending GPU time on B2/B3.
-Primary result: No valid E76-X result. The process completed development scoring and was scanning the complete pure-normal set when the owner requested a stop; no partial metric was emitted or read. A later continuation must rerun E76-X from the beginning under the unchanged frozen runner.
-PASS / FAIL / OUTCOME: OUTCOME — CURRENT / EXECUTION INCOMPLETE; NO ADJUDICATION.
+Primary result: No valid E76-X result. The process completed development scoring and was scanning the complete pure-normal set when the owner requested a stop; no partial metric was emitted or read. If the temporal route is promising, later confirmation must rerun full E76-X from the beginning under the unchanged complete-set semantics.
+PASS / FAIL / OUTCOME: OUTCOME — DEFERRED TO CONFIRMATION / NO ADJUDICATION.
 Failure classification: Implementation mismatches are repaired under the same design; a genuine large safety worsening is scientific exploratory evidence.
-Unlocked next node: E78-X after non-disastrous exploratory safety.
+Unlocked next node: None on the current exploratory track; E76-X-lite now controls E78-X eligibility.
 Invalidated downstream evidence: Formal E76 remains locked and unchanged.
 Descriptive observations: None; the interrupted process produced no result artifact.
-Notes: No worst-seed hard gate is added. The interruption is an owner-requested scheduling stop, not an implementation failure or scientific result. Do not unlock E78-X until a complete E76-X artifact is produced and checked.
+Notes: No worst-seed hard gate is added. The interruption is an owner-requested scheduling stop, not an implementation failure or scientific result. This complete-set run is preserved rather than weakened; it is merely scheduled after exploratory temporal viability is known.
 
 ## E75 | B1 versus B0 Proxy-Supervision Effect
 
@@ -4631,8 +4653,8 @@ Notes:
 
 # 7. How to Advance AJAE with This State Machine
 
-1. The authoritative status is E50–E73 PASS. E74 three-seed confirmation is suspended after seeds 0/1; seed 2 is preserved at its exact block checkpoint. E75-X is descriptively complete and E76-X is the current exploratory node.
-2. Gate 1 is closed. Formal E75–E77 remain locked until seed 2 is completed later. The exploratory chain E76-X → B2/B3 seeds 0/1 may proceed without claiming Gate 2 or Gate 3 PASS.
+1. The authoritative status is E50–E73 PASS. E74 three-seed confirmation is suspended after seeds 0/1; seed 2 is preserved at its exact block checkpoint. E75-X is descriptively complete and E76-X-lite is the current exploratory node; full E76-X is deferred intact.
+2. Gate 1 is closed. Formal E75–E77 remain locked until seed 2 is completed later. The exploratory chain E76-X-lite → B2/B3 seeds 0/1 may proceed without claiming Gate 2 or Gate 3 PASS.
 3. Every later phase first completes its whole-phase design freeze, then executes its nodes.
 4. Preflight checks only identity, support, schema, interface, and resources; it does not inspect formal outcomes.
 5. Classify FAIL using the five frozen categories. A `descriptive_deviation` is recorded and execution continues; it cannot create a new hard gate.

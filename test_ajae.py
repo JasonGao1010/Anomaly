@@ -38,6 +38,7 @@ from src.qualify import (
     e75_bootstrap_identity_arrays,
     e75_exploratory_statistics,
     e75_superiority_statistics,
+    e76_lite_pure_frame_rows,
     e76_safety_statistics,
     phase7_mechanical_arrays,
     e62_fixture_arrays,
@@ -1962,6 +1963,29 @@ def test_e76_exploratory_accepts_exactly_two_b1_seeds() -> None:
     )
     np.testing.assert_array_equal(result["model_name"], ["B0", "B1_0", "B1_1"])
     assert result["seed_safety_worsening"].shape == (2, 4)
+
+
+def test_e76_lite_selects_the_frozen_result_blind_frame_subset() -> None:
+    with np.load(
+        ROOT / "runs/ajae/e61_safety_identities.npz", allow_pickle=False
+    ) as archive:
+        frames = np.asarray(archive["pure_frame_id"], dtype=np.int16)
+        counts = np.asarray(
+            archive["pure_point_count_by_frame"], dtype=np.int64
+        )
+    rows = e76_lite_pure_frame_rows(frames)
+    np.testing.assert_array_equal(
+        frames[rows],
+        [
+            288, 302, 673, 505, 572, 111, 332, 635, 258, 464, 589, 504,
+            681, 443, 201, 592, 99, 45, 602, 502, 401, 265, 415, 106,
+            196, 87, 354, 10, 652, 536, 603, 391, 406, 672, 663, 343,
+            494, 271, 234, 110, 294, 121, 562, 148, 468, 125, 540, 251,
+            416, 616, 33, 594, 526, 633, 636, 523, 541, 359, 363, 476,
+            317, 533, 608, 51,
+        ],
+    )
+    assert int(counts[rows].sum()) == 3_955_039
 
 
 def test_phase7_mechanical_fixtures_all_pass_and_reproduce() -> None:

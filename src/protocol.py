@@ -1078,7 +1078,7 @@ class AJAEProtocol:
         )
         cursor = _mapping(confirmation.get("paused_cursor"), "E74 paused cursor")
         if (
-            exploration.get("version") != "exploration-confirmation-split-v1"
+            exploration.get("version") != "exploration-confirmation-split-v2"
             or exploration.get("status") != "active_before_formal_gate2"
             or tuple(cohort.get("seeds", ())) != (0, 1)
             or tuple(cohort.get("applies_to", ())) != ("B1", "B2", "B3")
@@ -1112,7 +1112,7 @@ class AJAEProtocol:
             }
             or confirmation.get("resume_branch") != "confirm/e74-seed2-resume"
             or confirmation.get("partial_seed2_result_use_forbidden") is not True
-            or exploration.get("current_node") != "E76-X"
+            or exploration.get("current_node") != "E76-X-lite"
             or exploration.get("formal_gate2_and_gate3_status") != "not adjudicated"
             or exploration.get("public_real_ood_sequences_remain_sealed") is not True
             or exploration.get("hidden_test_sequences_remain_sealed") is not True
@@ -1135,6 +1135,64 @@ class AJAEProtocol:
             or e75x.get("confirmatory_interval_computed") is not False
         ):
             raise ProtocolError("E75-X descriptive result identity changed")
+        e76_lite = _mapping(
+            exploration.get("e76x_lite_freeze"), "E76-X-lite freeze"
+        )
+        pure_selection = _mapping(
+            e76_lite.get("pure_normal_selection"),
+            "E76-X-lite pure-normal selection",
+        )
+        selected_frames = (
+            288, 302, 673, 505, 572, 111, 332, 635, 258, 464, 589, 504,
+            681, 443, 201, 592, 99, 45, 602, 502, 401, 265, 415, 106,
+            196, 87, 354, 10, 652, 536, 603, 391, 406, 672, 663, 343,
+            494, 271, 234, 110, 294, 121, 562, 148, 468, 125, 540, 251,
+            416, 616, 33, 594, 526, 633, 636, 523, 541, 359, 363, 476,
+            317, 533, 608, 51,
+        )
+        selection_payload = dict(pure_selection)
+        selection_sha256 = selection_payload.pop("selection_sha256", None)
+        reproduced_selection_sha256 = hashlib.sha256(
+            json.dumps(
+                selection_payload, sort_keys=True, separators=(",", ":")
+            ).encode("utf-8")
+        ).hexdigest()
+        if (
+            e76_lite.get("version") != "E76-X-lite-v1"
+            or e76_lite.get("status") != "frozen_before_any_safety_result"
+            or e76_lite.get("development_worlds")
+            != "all 23 E63 common-domain worlds"
+            or e76_lite.get("normal_control")
+            != "all valid rendered normal-control points in the 23 development worlds"
+            or e76_lite.get("moving_normal") != "all 13011 E61 moving-normal points"
+            or pure_selection.get("namespace")
+            != "E76-X-lite-pure-normal-frame-v1"
+            or pure_selection.get("partition") != "train"
+            or pure_selection.get("sequence_id") != 201
+            or pure_selection.get("source_artifact_sha256")
+            != "8d3e08e0512dc70a75d2279cfb4515bc960bbfda4f35a872c4a76e9dad69d0e0"
+            or pure_selection.get("hash_payload")
+            != "UTF-8 namespace:partition:sequence_id:frame_id"
+            or pure_selection.get("ranking")
+            != "ascending SHA-256 digest, then ascending frame_id"
+            or tuple(pure_selection.get("selected_frame_ids", ()))
+            != selected_frames
+            or pure_selection.get("selected_frame_count") != 64
+            or pure_selection.get("selected_point_count") != 3_955_039
+            or selection_sha256
+            != "d8c2989066d4352182fe998758018631fb493be67a825fa1cffac10a333133ad"
+            or reproduced_selection_sha256 != selection_sha256
+            or pure_selection.get("seed_or_namespace_search_forbidden") is not True
+            or tuple(e76_lite.get("models", ()))
+            != ("B0", "B1 seed 0", "B1 seed 1")
+            or e76_lite.get("continuation_reference") != 0.03
+            or e76_lite.get("continuation_rule")
+            != "continue to E78-X iff every two-seed mean signed worsening is at most 0.03; otherwise stop for scientific safety review"
+            or e76_lite.get("formal_e76_or_gate2_verdict_forbidden") is not True
+            or e76_lite.get("full_e76x_status")
+            != "deferred intact to the later three-seed confirmation track"
+        ):
+            raise ProtocolError("E76-X-lite freeze identity changed")
         difficulty = _mapping(development["difficulty_statistics"], "difficulty statistics")
         if set(difficulty) != {"Nvis", "O", "d", "V"}:
             raise ProtocolError("development difficulty must define Nvis, O, d, and V")

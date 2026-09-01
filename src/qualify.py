@@ -88,6 +88,7 @@ E63_SAFETY_NAMESPACE = "E63-safety-crossfit-v1"
 E63_BOOTSTRAP_NAMESPACE = "E63-hierarchical-paired-bootstrap-v1"
 E63_BOOTSTRAP_SEED = 63002026
 E75_BOOTSTRAP_NAMESPACE = "E75-common-domain-bootstrap-correction-v1"
+E76_LITE_PURE_NAMESPACE = "E76-X-lite-pure-normal-frame-v1"
 COMMON_DEVELOPMENT_BOOTSTRAP_COMPARISONS = ("E75", "E81", "E82", "E88")
 REPORTED_PERCENT_SCALE = 100.0
 E63_COMMON_WORLD_ID = (*range(5), *range(6, 24))
@@ -3371,6 +3372,30 @@ def e76_safety_statistics(
     }
 
 
+def e76_lite_pure_frame_rows(frame_id: np.ndarray) -> np.ndarray:
+    """Select the frozen 64 E61 frames without using counts or model outputs."""
+
+    frames = np.asarray(frame_id)
+    if (
+        frames.dtype != np.int16
+        or frames.shape != (678,)
+        or np.unique(frames).size != frames.size
+    ):
+        raise QualificationError("E76-X-lite source frame identities are invalid")
+    ranked = sorted(
+        range(frames.size),
+        key=lambda row: (
+            hashlib.sha256(
+                f"{E76_LITE_PURE_NAMESPACE}:train:201:{int(frames[row])}".encode(
+                    "ascii"
+                )
+            ).digest(),
+            int(frames[row]),
+        ),
+    )
+    return np.asarray(ranked[:64], dtype=np.int16)
+
+
 def run_e76_exploratory(
     data_root: Path | str,
     protocol_path: Path | str,
@@ -3382,8 +3407,9 @@ def run_e76_exploratory(
     output_path: Path | str,
     *,
     device: str = "cuda",
+    lite: bool = False,
 ) -> dict[str, object]:
-    """Execute the two-seed E76-X safety check without a formal gate verdict."""
+    """Execute full or lightweight two-seed safety without a formal verdict."""
 
     from .render import load_sensor_calibration
 
@@ -3393,14 +3419,15 @@ def run_e76_exploratory(
     project_root = Path(protocol.path).parent
     exploration = protocol.development["exploration_track"]
     confirmation = exploration["e74_confirmation"]
+    experiment = "E76-X-lite" if lite else "E76-X"
     if (
-        exploration["current_node"] != "E76-X"
+        exploration["current_node"] != experiment
         or tuple(exploration["cohort"]["seeds"]) != (0, 1)
         or exploration["formal_gate2_and_gate3_status"] != "not adjudicated"
         or exploration["e75x_result"]["formal_gate2_adjudicated"] is not False
         or confirmation["partial_seed2_result_use_forbidden"] is not True
     ):
-        raise QualificationError("E76-X exploration identity changed")
+        raise QualificationError(f"{experiment} exploration identity changed")
 
     e57_file = Path(e57_path).expanduser().resolve(strict=True)
     e61_file = Path(e61_path).expanduser().resolve(strict=True)
@@ -3430,11 +3457,11 @@ def run_e76_exploratory(
         frozen_world = np.asarray(archive["world_id"], dtype=np.int16)
         safety_fold = np.asarray(archive["safety_fold"])[eligible]
     with np.load(e61_file, allow_pickle=False) as archive:
-        pure_frame = np.asarray(archive["pure_frame_id"], dtype=np.int16)
-        pure_packed = np.asarray(
+        full_pure_frame = np.asarray(archive["pure_frame_id"], dtype=np.int16)
+        full_pure_packed = np.asarray(
             archive["pure_canonical_mask_packed"], dtype=np.uint8
         )
-        pure_count = np.asarray(
+        full_pure_count = np.asarray(
             archive["pure_point_count_by_frame"], dtype=np.int32
         )
         moving_frame = np.asarray(archive["moving_frame_id"], dtype=np.int16)
@@ -3467,9 +3494,19 @@ def run_e76_exploratory(
         b0_development_metric = np.asarray(
             archive["development_metric"], dtype=np.float64
         )
-        pure_offset = np.asarray(archive["pure_point_offset"], dtype=np.int64)
-        pure_ray = np.asarray(archive["pure_canonical_ray"], dtype=np.int32)
-        b0_pure_score = np.asarray(archive["pure_score"], dtype=np.float32)
+        e72_pure_frame = np.asarray(archive["pure_frame_id"], dtype=np.int16)
+        full_pure_offset = np.asarray(
+            archive["pure_point_offset"], dtype=np.int64
+        )
+        full_pure_ray = np.asarray(
+            archive["pure_canonical_ray"], dtype=np.int32
+        )
+        full_b0_pure_score = np.asarray(
+            archive["pure_score"], dtype=np.float32
+        )
+        e72_moving_frame = np.asarray(
+            archive["moving_frame_id"], dtype=np.int16
+        )
         moving_offset = np.asarray(
             archive["moving_point_offset"], dtype=np.int64
         )
@@ -3483,12 +3520,61 @@ def run_e76_exploratory(
         or not np.array_equal(development_world, frozen_world[eligible])
         or development_world.tolist() != list(E63_COMMON_WORLD_ID)
         or development_offset.shape != (24,)
-        or pure_offset.shape != (pure_frame.size + 1,)
+        or not np.array_equal(e72_pure_frame, full_pure_frame)
+        or full_pure_offset.shape != (full_pure_frame.size + 1,)
+        or not np.array_equal(e72_moving_frame, moving_frame)
         or moving_offset.shape != (moving_frame.size + 1,)
-        or int(pure_offset[-1]) != 48_828_507
+        or int(full_pure_offset[-1]) != 48_828_507
         or int(moving_offset[-1]) != 13_011
     ):
         raise QualificationError("E76-X aligned score identity changed")
+
+    if lite:
+        lite_freeze = exploration["e76x_lite_freeze"]
+        selection = lite_freeze["pure_normal_selection"]
+        pure_rows = e76_lite_pure_frame_rows(full_pure_frame)
+        pure_frame = full_pure_frame[pure_rows]
+        if (
+            E76_LITE_PURE_NAMESPACE != selection["namespace"]
+            or pure_frame.astype(int).tolist() != selection["selected_frame_ids"]
+        ):
+            raise QualificationError("E76-X-lite frame selection changed")
+        pure_packed = full_pure_packed[pure_rows]
+        pure_count = full_pure_count[pure_rows]
+        pure_offset = np.concatenate(
+            (
+                np.asarray([0], dtype=np.int64),
+                np.cumsum(pure_count, dtype=np.int64),
+            )
+        )
+        pure_ray = np.concatenate(
+            [
+                full_pure_ray[
+                    full_pure_offset[row] : full_pure_offset[row + 1]
+                ]
+                for row in pure_rows
+            ]
+        )
+        b0_pure_score = np.concatenate(
+            [
+                full_b0_pure_score[
+                    full_pure_offset[row] : full_pure_offset[row + 1]
+                ]
+                for row in pure_rows
+            ]
+        )
+    else:
+        pure_frame = full_pure_frame
+        pure_packed = full_pure_packed
+        pure_count = full_pure_count
+        pure_offset = full_pure_offset
+        pure_ray = full_pure_ray
+        b0_pure_score = full_b0_pure_score
+    if lite and (
+        pure_frame.size != 64
+        or int(pure_offset[-1]) != int(selection["selected_point_count"])
+    ):
+        raise QualificationError("E76-X-lite pure-normal count changed")
 
     grid, sensor = load_sensor_calibration(protocol.sensor_calibration_path())
     canonical_by_slot = np.asarray(
@@ -3652,16 +3738,23 @@ def run_e76_exploratory(
         moving_score,
         development_fpr95,
     )
+    arrays["pure_normal_frame_id"] = pure_frame
+    arrays["pure_normal_point_count_by_frame"] = pure_count
     reference_satisfied = bool(arrays["passed"])
     result = {
-        "experiment": "E76-X",
+        "experiment": experiment,
         "passed": True,
-        "pass_scope": "exploratory_execution_only",
+        "pass_scope": (
+            "exploratory_catastrophic_safety_screen_only"
+            if lite
+            else "exploratory_execution_only"
+        ),
         "formal_e76_adjudicated": False,
         "formal_gate2_adjudicated": False,
         "training_seeds": [0, 1],
         "development_worlds": 23,
         "development_points": int(development_label.size),
+        "pure_normal_frames": int(pure_frame.size),
         "pure_normal_points": int(pure_score.shape[1]),
         "moving_normal_points": int(moving_score.shape[1]),
         "safety_measure_name": arrays["safety_measure_name"].tolist(),
@@ -3670,6 +3763,10 @@ def run_e76_exploratory(
         "mean_safety_worsening": arrays["mean_safety_worsening"].tolist(),
         "original_e76_mean_reference": 0.03,
         "original_e76_mean_reference_satisfied": reference_satisfied,
+        "pure_normal_selection_sha256": (
+            selection["selection_sha256"] if lite else None
+        ),
+        "full_e76x_deferred": lite,
         "exploratory_outcome": (
             "non_disastrous_continue_to_E78-X"
             if reference_satisfied
@@ -4888,6 +4985,18 @@ def _parser() -> argparse.ArgumentParser:
     e76x.add_argument("--b1-dir", type=Path, required=True)
     e76x.add_argument("--output", type=Path, required=True)
     e76x.add_argument("--device", default="cuda")
+    e76x_lite = commands.add_parser("e76x-lite")
+    e76x_lite.add_argument("--data-root", type=Path, required=True)
+    e76x_lite.add_argument(
+        "--protocol", type=Path, default=PROJECT_ROOT / "protocol.json"
+    )
+    e76x_lite.add_argument("--e57", type=Path, required=True)
+    e76x_lite.add_argument("--e61", type=Path, required=True)
+    e76x_lite.add_argument("--e63", type=Path, required=True)
+    e76x_lite.add_argument("--e72", type=Path, required=True)
+    e76x_lite.add_argument("--b1-dir", type=Path, required=True)
+    e76x_lite.add_argument("--output", type=Path, required=True)
+    e76x_lite.add_argument("--device", default="cuda")
     phase7 = commands.add_parser("phase7")
     phase7.add_argument("--protocol", type=Path, default=PROJECT_ROOT / "protocol.json")
     phase7.add_argument("--e63", type=Path, required=True)
@@ -5025,6 +5134,21 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.b1_dir,
             args.output,
             device=args.device,
+        )
+        print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        return 0 if result["passed"] else 1
+    if args.command == "e76x-lite":
+        result = run_e76_exploratory(
+            args.data_root,
+            args.protocol,
+            args.e57,
+            args.e61,
+            args.e63,
+            args.e72,
+            args.b1_dir,
+            args.output,
+            device=args.device,
+            lite=True,
         )
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 0 if result["passed"] else 1

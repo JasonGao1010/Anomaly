@@ -2656,8 +2656,8 @@
       }
     },
     "renderer_mechanical_qualification": {
-      "status": "Gate 1 PASS; E50-E58, E61-E73 valid formal runs PASS; E59-E60 descriptive characterization complete; E74 current",
-      "current_gate1_policy": {"hard_evidence": ["compatible canonical-ray and renderer mechanics through E44", "E45B-v2 rendered control/proxy qualification PASS", "E48 direct rendered-label-shortcut audit PASS"], "excluded_from_conjunction": ["all E45A variants", "E45-V1", "E46", "E47"], "rationale": "Natural real-normal observations and coverage-oriented inserted controls need not reproduce the same scene/placement distribution. Real-versus-rendered source identifiability is not equivalent to anomaly-label shortcut predictability because rendered controls and rendered proxies carry different labels.", "gate1_result": "PASS", "current_node": "E76-X", "next_after_pass": ["E78-X", "B2/B3 exploratory track"]},
+      "status": "Gate 1 PASS; E50-E58 and E61-E73 formal PASS; E59-E60 descriptive complete; E74 confirmation suspended after seeds 0/1; E75-X descriptive complete; E76-X-lite current",
+      "current_gate1_policy": {"hard_evidence": ["compatible canonical-ray and renderer mechanics through E44", "E45B-v2 rendered control/proxy qualification PASS", "E48 direct rendered-label-shortcut audit PASS"], "excluded_from_conjunction": ["all E45A variants", "E45-V1", "E46", "E47"], "rationale": "Natural real-normal observations and coverage-oriented inserted controls need not reproduce the same scene/placement distribution. Real-versus-rendered source identifiability is not equivalent to anomaly-label shortcut predictability because rendered controls and rendered proxies carry different labels.", "gate1_result": "PASS", "current_node": "E76-X-lite", "next_after_pass": ["E78-X", "B2/B3 exploratory track"]},
       "layer_boundaries": {"E27-E28": "direct geometry outputs only", "E29": "return probability and deterministic acceptance decision only", "E30-E31": "accepted returns", "E32-E33": "nearest-return occlusion competition"},
       "E27": {
         "question": "Does the formal geometry path return the correct nearest convex-hull hit, outward finite normal and object ID for active normal-control templates when return rejection is disabled?",
@@ -3778,7 +3778,7 @@
       "held_out_input_forbidden": true
     },
     "exploration_track": {
-      "version": "exploration-confirmation-split-v1",
+      "version": "exploration-confirmation-split-v2",
       "status": "active_before_formal_gate2",
       "scientific_role": "rapidly test whole-method viability without replacing the frozen three-seed confirmatory standards",
       "cohort": {
@@ -3799,8 +3799,8 @@
         "resume_branch": "confirm/e74-seed2-resume",
         "partial_seed2_result_use_forbidden": true
       },
-      "nodes": ["E75-X", "E76-X", "E78-X", "E79-X", "E80-X", "E81-X", "E82-X", "E83-X", "exploratory B4 when temporal viability is supported"],
-      "current_node": "E76-X",
+      "nodes": ["E75-X", "E76-X-lite", "E78-X", "E79-X", "E80-X", "E81-X", "E82-X", "E83-X", "exploratory B4 when temporal viability is supported", "E76-X full safety on the later confirmation track"],
+      "current_node": "E76-X-lite",
       "e75x_result": {
         "status": "descriptive_execution_complete",
         "formal_gate2_adjudicated": false,
@@ -3811,6 +3811,33 @@
         "two_seed_mean_ap_decision_difference": 0.027110774148392493,
         "positive_world_count": [19, 20],
         "confirmatory_interval_computed": false
+      },
+      "e76x_lite_freeze": {
+        "version": "E76-X-lite-v1",
+        "status": "frozen_before_any_safety_result",
+        "scientific_role": "catastrophic normal-false-alarm screen before spending compute on B2/B3; not a precise safety estimate or formal gate",
+        "development_worlds": "all 23 E63 common-domain worlds",
+        "normal_control": "all valid rendered normal-control points in the 23 development worlds",
+        "moving_normal": "all 13011 E61 moving-normal points",
+        "pure_normal_selection": {
+          "namespace": "E76-X-lite-pure-normal-frame-v1",
+          "partition": "train",
+          "sequence_id": 201,
+          "source_artifact_sha256": "8d3e08e0512dc70a75d2279cfb4515bc960bbfda4f35a872c4a76e9dad69d0e0",
+          "hash_payload": "UTF-8 namespace:partition:sequence_id:frame_id",
+          "ranking": "ascending SHA-256 digest, then ascending frame_id",
+          "selected_frame_ids": [288, 302, 673, 505, 572, 111, 332, 635, 258, 464, 589, 504, 681, 443, 201, 592, 99, 45, 602, 502, 401, 265, 415, 106, 196, 87, 354, 10, 652, 536, 603, 391, 406, 672, 663, 343, 494, 271, 234, 110, 294, 121, 562, 148, 468, 125, 540, 251, 416, 616, 33, 594, 526, 633, 636, 523, 541, 359, 363, 476, 317, 533, 608, 51],
+          "selected_frame_count": 64,
+          "selected_point_count": 3955039,
+          "selection_sha256": "d8c2989066d4352182fe998758018631fb493be67a825fa1cffac10a333133ad",
+          "seed_or_namespace_search_forbidden": true
+        },
+        "models": ["B0", "B1 seed 0", "B1 seed 1"],
+        "statistics": "unchanged E76 cross-fit thresholds and signed B1-minus-B0 worsening for pure-normal, normal-control, moving-normal, and development FPR95",
+        "continuation_reference": 0.03,
+        "continuation_rule": "continue to E78-X iff every two-seed mean signed worsening is at most 0.03; otherwise stop for scientific safety review",
+        "formal_e76_or_gate2_verdict_forbidden": true,
+        "full_e76x_status": "deferred intact to the later three-seed confirmation track"
       },
       "formal_gate2_and_gate3_status": "not adjudicated",
       "confirmation_rule": "if temporal viability is promising, complete seed 2 for B1/B2/B3 and apply the unchanged three-seed Gate 2 and Gate 3 rules",
