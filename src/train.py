@@ -3046,8 +3046,9 @@ def train_all_seeds(
     preflight: FormalPreflightProof,
     maximum_worlds: int,
     resume: bool = False,
+    seeds: Sequence[int] | None = None,
 ) -> dict[int, dict[str, Any]]:
-    """Run every frozen seed independently and retain every seed result."""
+    """Run the requested frozen seeds independently and retain their results."""
 
     _require_preflight_proof(preflight, config)
     if not condition.trainable:
@@ -3058,10 +3059,17 @@ def train_all_seeds(
         )
     if type(resume) is not bool:
         raise TrainingError("resume must be boolean")
+    selected_seeds = tuple(config.seeds if seeds is None else seeds)
+    if (
+        not selected_seeds
+        or len(set(selected_seeds)) != len(selected_seeds)
+        or any(seed not in config.seeds for seed in selected_seeds)
+    ):
+        raise TrainingError("selected seeds must be a unique subset of frozen seeds")
     results: dict[int, dict[str, Any]] = {}
     model_refs: list[weakref.ReferenceType[nn.Module]] = []
     run_dirs: set[Path] = set()
-    for seed in config.seeds:
+    for seed in selected_seeds:
         _seed_everything(seed)
         trainer = trainer_factory(seed, condition)
         if trainer.seed != seed or trainer.condition != condition or trainer.config != config:
@@ -3139,8 +3147,8 @@ def train_all_seeds(
             raise TrainingError(
                 f"seed {seed} exhausted the frozen world budget; no formal model was published"
             )
-    if set(results) != set(config.seeds):
-        raise TrainingError("formal result omitted one or more frozen seeds")
+    if set(results) != set(selected_seeds):
+        raise TrainingError("formal result omitted one or more selected seeds")
     return results
 
 
@@ -3464,6 +3472,7 @@ def run_formal_training(
     | None = None,
     device: torch.device | str = "cuda",
     resume: bool = False,
+    seed: int | None = None,
 ) -> dict[int, dict[str, Any]]:
     """Run formal training only after validating the exact frozen inputs."""
 
@@ -3496,6 +3505,7 @@ def run_formal_training(
         preflight=build.preflight,
         maximum_worlds=build.maximum_worlds,
         resume=resume,
+        seeds=None if seed is None else (seed,),
     )
 
 
@@ -3510,11 +3520,17 @@ def _main() -> None:
     parser.add_argument("--max-worlds", type=int, required=True)
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--resume", action="store_true")
+    parser.add_argument("--seed", type=int)
     parser.add_argument("--semantic-preflight-output", type=Path)
     args = parser.parse_args()
     try:
         if args.semantic_preflight_output is not None:
-            if args.development is not None or args.resume or args.condition != "B3":
+            if (
+                args.development is not None
+                or args.resume
+                or args.seed is not None
+                or args.condition != "B3"
+            ):
                 raise TrainingError(
                     "semantic preflight requires B3 without development override or resume"
                 )
@@ -3538,6 +3554,7 @@ def _main() -> None:
             development_evaluator=None,
             device=args.device,
             resume=args.resume,
+            seed=args.seed,
         )
     except (OSError, TypeError, ValueError, TrainingError) as error:
         raise SystemExit(

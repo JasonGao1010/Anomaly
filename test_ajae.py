@@ -594,7 +594,7 @@ def test_e76_c1_reuses_e48_split_and_detects_only_near_saturation() -> None:
 def test_e76_c1_protocol_is_result_blind_and_full_first() -> None:
     exploration = load_protocol(PROTOCOL_PATH).development["exploration_track"]
     assert exploration["version"] == "exploration-confirmation-split-v4-full-training"
-    assert exploration["current_node"] == "AJAE-F1-X_entry_P2"
+    assert exploration["current_node"] == "AJAE-F1-X_seed0_training"
     c1 = exploration["e76c1_freeze"]
     assert c1["status"] == "frozen_before_clearance_computation"
     assert c1["descriptive_difference_is_nonblocking"] is True
@@ -617,6 +617,7 @@ def test_e76_c1_protocol_is_result_blind_and_full_first() -> None:
     assert entry["p1_boundary_amendment"]["lite_pure_normal_q0"]["frames"] == 63
     assert entry["p2_semantic_training_preflight"]["world_seed"] == 1027531
     assert len(entry["p2_semantic_training_preflight"]["checks"]) == 7
+    assert entry["p2_semantic_training_preflight"]["result"]["passed"] is True
 
 
 def test_phase5_frame_identity_is_frozen_before_stu_outputs() -> None:
@@ -1820,6 +1821,19 @@ def test_multi_seed_resume_skips_complete_and_starts_unseen_seed(
     )
     assert starts == [(12, 2), (13, 0)]
     assert set(results) == {11, 12, 13}
+    starts.clear()
+    selected = train_all_seeds(
+        config,
+        condition,
+        lambda seed, _condition: FakeTrainer(seed),
+        lambda *_: None,
+        preflight=preflight,
+        maximum_worlds=4,
+        resume=True,
+        seeds=(12,),
+    )
+    assert starts == [(12, 2)]
+    assert set(selected) == {12}
 
 
 def test_result_blind_budget_revision_accepts_only_the_frozen_prefix() -> None:

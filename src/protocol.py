@@ -1114,12 +1114,12 @@ class AJAEProtocol:
             or confirmation.get("resume_branch") != "confirm/e74-seed2-resume"
             or confirmation.get("partial_seed2_result_use_forbidden") is not True
             or exploration.get("current_node")
-            != "AJAE-F1-X_entry_P2"
+            != "AJAE-F1-X_seed0_training"
             or exploration.get("formal_gate2_and_gate3_status") != "not adjudicated"
             or exploration.get("public_real_ood_sequences_remain_sealed") is not True
             or exploration.get("hidden_test_sequences_remain_sealed") is not True
             or exploration.get("exploratory_continuation_status")
-            != "full-first_v4_P1_frozen_AJAE-F1-X_entry_P2_current"
+            != "full-first_v4_P2_pass_AJAE-F1-X_seed0_training_current"
         ):
             raise ProtocolError("exploration/confirmation split identity changed")
         e75x = _mapping(exploration.get("e75x_result"), "E75-X result")
@@ -1393,6 +1393,7 @@ class AJAEProtocol:
         p2 = _mapping(
             f1_entry.get("p2_semantic_training_preflight"), "AJAE-F1-X P2"
         )
+        p2_result = _mapping(p2.get("result"), "AJAE-F1-X P2 result")
         p1_pure = _mapping(p1.get("pure_normal_q0"), "P1 pure-normal q0")
         p1_moving = _mapping(p1.get("moving_normal_q0"), "P1 moving-normal q0")
         if (
@@ -1494,7 +1495,7 @@ class AJAEProtocol:
             or c1_result.get("next_node") != "AJAE-F0-X"
             or full.get("version") != "AJAE-full-first-v4"
             or full.get("status")
-            != "AJAE-F1-X_entry_P2_frozen"
+            != "AJAE-F1-X_seed0_training"
             or f0.get("status") != "execution_complete_pass"
             or (f0.get("partition"), f0.get("sequence_id"), f0.get("center_frame"))
             != ("train", 206, 199)
@@ -1544,7 +1545,7 @@ class AJAEProtocol:
                 "frames"
             ) != 63
             or p1.get("b4_full_domain_safety_report_required") is not True
-            or p2.get("status") != "frozen_before_execution"
+            or p2.get("status") != "execution_complete_pass"
             or (
                 p2.get("seed"), p2.get("world_index"), p2.get("world_type"),
                 p2.get("world_seed"), p2.get("center_frame"),
@@ -1556,6 +1557,21 @@ class AJAEProtocol:
             or len(tuple(p2.get("checks", ()))) != 7
             or p2.get("failure_class") != "implementation_defect_only"
             or p2.get("scientific_verdict_forbidden") is not True
+            or p2_result.get("artifact_path")
+            != "runs/ajae/ajae_f1_x_semantic_preflight.npz"
+            or p2_result.get("artifact_sha256")
+            != "07a86fd71a94398aa829a1059b3516962ec0804a0df9c5686f7e97a97f373f6b"
+            or p2_result.get("scientific_array_sha256")
+            != "1d2aec9e53c00fbe94d82a86d261565a9da456b531f5872126fda84ae534a87f"
+            or p2_result.get("execution_protocol_sha256")
+            != "9afd77019facc69743f4506a5be44f82e1d35f788f2d635c1bdaae542a45232f"
+            or p2_result.get("execution_commit")
+            != "dd07df34bb260ce919ca148d8984eb7a664b80b5"
+            or (
+                p2_result.get("control_points"), p2_result.get("proxy_points"),
+                p2_result.get("total_errors"), p2_result.get("passed"),
+            ) != (590, 3833, 0, True)
+            or p2_result.get("model_quality_evaluated") is not False
             or full.get("b2_e78x_status")
             != "deferred ablation unlocked only after Full AJAE-X supports whole-method viability"
             or full.get("seed0_stop_rule")
