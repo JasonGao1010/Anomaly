@@ -23,7 +23,12 @@ import numpy as np
 import torch
 from scipy.spatial import cKDTree
 
-from .evaluate import PointMetricAccumulator, WindowScoreFusion, _point_metrics
+from .evaluate import (
+    PointMetricAccumulator,
+    WindowScoreFusion,
+    _point_metrics,
+    _protocol_slot_to_ray,
+)
 from .model import (
     DEFAULT_STU_REPOSITORY,
     MASK_DIM,
@@ -4638,6 +4643,198 @@ def run_phase7(
     return result
 
 
+def run_ajae_f0_x(
+    data_root: Path | str,
+    protocol_path: Path | str,
+    output_path: Path | str,
+    *,
+    device: torch.device | str = "cuda",
+) -> dict[str, object]:
+    """Run the frozen full-path mechanical preflight on one real micro window."""
+
+    protocol_file = Path(protocol_path).expanduser().resolve(strict=True)
+    protocol = load_protocol(protocol_file)
+    exploration = protocol.development["exploration_track"]
+    full = exploration["full_ajae_x_freeze"]
+    freeze = full["f0_preflight"]
+    if (
+        exploration["current_node"] != "AJAE-F0-X"
+        or full["status"]
+        != "AJAE-F0-X_current_after_E76-C1_no_direct_degeneracy"
+        or freeze["status"] != "frozen_before_preflight_execution"
+    ):
+        raise QualificationError("AJAE-F0-X is not frozen as the current node")
+    runtime_device = torch.device(device)
+    if runtime_device.type != "cuda" or not torch.cuda.is_available():
+        raise QualificationError("AJAE-F0-X requires the formal CUDA path")
+
+    b3 = experiment_condition("B3")
+    b4 = experiment_condition("B4")
+    expected_times = (-2, -1, 0, 1, 2)
+    contract_errors = int(
+        b3.frame_offsets != expected_times
+        or b3.model_times != expected_times
+        or b3.supervised_times != expected_times
+        or not b3.cross_frame_enabled
+        or b4.weights_from != "B3"
+        or b4.prediction_rule != "equal_probability_mean_by_frame_ray"
+    )
+    phase7 = phase7_mechanical_arrays()
+    temporal_errors = int(sum(
+        int(phase7[f"e{node}_error_count"].sum()) for node in (66, 67, 68)
+    ))
+    fusion_errors = int(phase7["e71_error_count"].sum())
+
+    sequence = STUSequence.open(
+        data_root, protocol=protocol, partition="train", sequence_id=206,
+        label_mode=LabelMode.FORBIDDEN,
+    )
+    slot_to_ray, ray_digest, calibration_sha256 = _protocol_slot_to_ray(protocol)
+    center = int(freeze["center_frame"])
+    mapping = slot_to_ray(sequence.source_frame(center))
+    window = sequence.window(
+        center,
+        condition=ExperimentCondition.B3,
+        canonical_ray_by_slot=mapping,
+        ray_mapping_audited=True,
+        ray_mapping_digest=ray_digest,
+    )
+    frame_count = int(freeze["points_per_frame"])
+    encoder = FrozenSTUPointEncoder.from_protocol(protocol).to(runtime_device).eval()
+    stu_requires_gradient = int(any(
+        parameter.requires_grad for parameter in encoder.parameters()
+    ))
+    coordinates: list[torch.Tensor] = []
+    times: list[torch.Tensor] = []
+    features: list[torch.Tensor] = []
+    evidence: list[torch.Tensor] = []
+    assignment: list[torch.Tensor] = []
+    no_object: list[torch.Tensor] = []
+    intensity: list[torch.Tensor] = []
+    selected_rays = np.empty((5, frame_count), dtype=np.int32)
+    selected_frames = np.empty(5, dtype=np.int16)
+    started = time.monotonic()
+    torch.cuda.reset_peak_memory_stats(runtime_device)
+    for local_frame, frame_view in enumerate(window.frames):
+        source = frame_view.source
+        torch.manual_seed(e53_frame_seed(206, int(source.frame_id)))
+        torch.cuda.manual_seed_all(e53_frame_seed(206, int(source.frame_id)))
+        with torch.no_grad():
+            encoding = encoder(
+                source.coordinates, source.features, source.real_slots
+            )
+        slots = np.asarray(source.real_slots, dtype=np.int64)
+        canonical = slot_to_ray(source)[slots]
+        order = np.argsort(canonical, kind="stable")[:frame_count]
+        if order.size != frame_count:
+            raise QualificationError("AJAE-F0-X real frame has too few returns")
+        point_slice = window.points.frame_slice(local_frame)
+        global_rows = np.arange(point_slice.start, point_slice.stop)[order]
+        selected_tensor = torch.as_tensor(
+            order, device=runtime_device, dtype=torch.long
+        )
+        coordinates.append(torch.as_tensor(
+            np.asarray(window.points.coordinates_center)[global_rows].copy(),
+            device=runtime_device, dtype=torch.float32,
+        ))
+        times.append(torch.full(
+            (frame_count,), expected_times[local_frame],
+            device=runtime_device, dtype=torch.long,
+        ))
+        features.append(encoding.point_features[selected_tensor])
+        evidence.append(encoding.normal_evidence[selected_tensor])
+        assignment.append(encoding.reliability_assign[selected_tensor])
+        no_object.append(encoding.reliability_noobj[selected_tensor])
+        intensity.append(torch.as_tensor(
+            np.asarray(source.xyzi)[slots[order], 3].copy(),
+            device=runtime_device, dtype=torch.float32,
+        ))
+        selected_rays[local_frame] = canonical[order]
+        selected_frames[local_frame] = int(source.frame_id)
+
+    torch.manual_seed(7600)
+    torch.cuda.manual_seed_all(7600)
+    model = AJAEPointTransformer.from_protocol(protocol).to(runtime_device).train()
+    model.zero_grad(set_to_none=True)
+    logits = model(
+        torch.cat(coordinates), torch.cat(times), torch.cat(features),
+        torch.cat(evidence), torch.cat(assignment), torch.cat(no_object),
+        torch.cat(intensity), cross_frame_enabled=True,
+    )
+    loss = logits.square().mean()
+    loss.backward()
+    finite_errors = int(
+        logits.shape != (5 * frame_count,)
+        or not bool(torch.isfinite(logits).all())
+        or not bool(torch.isfinite(loss))
+    )
+    model_gradients = [
+        parameter.grad for parameter in model.parameters()
+        if parameter.grad is not None
+    ]
+    gradient_errors = int(
+        not model_gradients
+        or any(not bool(torch.isfinite(value).all()) for value in model_gradients)
+        or any(parameter.grad is not None for parameter in encoder.parameters())
+    )
+    observed_times, observed_counts = np.unique(
+        torch.cat(times).detach().cpu().numpy(), return_counts=True
+    )
+    supervision_errors = int(
+        not np.array_equal(observed_times, np.asarray(expected_times))
+        or not np.array_equal(observed_counts, np.full(5, frame_count))
+    )
+    torch.cuda.synchronize(runtime_device)
+    elapsed = time.monotonic() - started
+    peak_memory = int(torch.cuda.max_memory_allocated(runtime_device))
+    arrays = {
+        "selected_frame_id": selected_frames,
+        "selected_canonical_ray_id": selected_rays,
+        "relative_time": observed_times.astype(np.int8),
+        "points_by_relative_time": observed_counts.astype(np.int16),
+        "micro_logits": logits.detach().cpu().numpy(),
+        "micro_loss": np.asarray(float(loss.detach().cpu())),
+        "b4_observed_probability": phase7["e71_observed_probability"],
+        "b4_expected_probability": phase7["e71_expected_probability"],
+        "b4_sigmoid_mean_logit": phase7["e71_sigmoid_mean_logit"],
+        "b4_occurrence_count": phase7["e71_multiplicity"],
+        "contract_error_count": np.asarray((contract_errors,), dtype=np.int16),
+        "temporal_error_count": np.asarray((temporal_errors,), dtype=np.int16),
+        "fusion_error_count": np.asarray((fusion_errors,), dtype=np.int16),
+        "supervision_error_count": np.asarray((supervision_errors,), dtype=np.int16),
+        "stu_gradient_error_count": np.asarray((stu_requires_gradient,), dtype=np.int16),
+        "finite_error_count": np.asarray((finite_errors,), dtype=np.int16),
+        "backward_gradient_error_count": np.asarray((gradient_errors,), dtype=np.int16),
+    }
+    total_errors = sum(
+        int(arrays[name].sum()) for name in arrays if name.endswith("error_count")
+    )
+    result = {
+        "experiment": "AJAE-F0-X",
+        "passed": total_errors == 0,
+        "total_errors": total_errors,
+        "sequence_id": 206,
+        "center_frame": center,
+        "frame_ids": selected_frames.astype(int).tolist(),
+        "points_per_frame": frame_count,
+        "stu_frozen": stu_requires_gradient == 0,
+        "cross_frame_enabled": b3.cross_frame_enabled,
+        "supervised_times": list(b3.supervised_times),
+        "b4_weights_from": b4.weights_from,
+        "b4_probability_fusion": fusion_errors == 0,
+        "micro_forward_backward_finite": finite_errors == 0 and gradient_errors == 0,
+        "protocol_sha256": _sha256(protocol_file),
+        "calibration_sha256": calibration_sha256,
+        "ray_mapping_digest": ray_digest,
+        "gpu_peak_memory_bytes": peak_memory,
+        "seconds": elapsed,
+        "model_quality_evaluated": False,
+        "scientific_array_sha256": _array_hash(arrays),
+    }
+    _save(Path(output_path).expanduser().resolve(), arrays, result)
+    return result
+
+
 def run_e72(
     data_root: Path | str,
     protocol_path: Path | str,
@@ -5351,6 +5548,11 @@ def _parser() -> argparse.ArgumentParser:
     )
     e76v1.add_argument("--source-dir", type=Path, required=True)
     e76v1.add_argument("--output-dir", type=Path, required=True)
+    f0 = commands.add_parser("ajae-f0-x")
+    f0.add_argument("--data-root", type=Path, required=True)
+    f0.add_argument("--protocol", type=Path, default=PROJECT_ROOT / "protocol.json")
+    f0.add_argument("--output", type=Path, required=True)
+    f0.add_argument("--device", default="cuda")
     phase7 = commands.add_parser("phase7")
     phase7.add_argument("--protocol", type=Path, default=PROJECT_ROOT / "protocol.json")
     phase7.add_argument("--e63", type=Path, required=True)
@@ -5514,6 +5716,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 0 if result["completed"] else 1
+    if args.command == "ajae-f0-x":
+        result = run_ajae_f0_x(
+            args.data_root, args.protocol, args.output, device=args.device
+        )
+        print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        return 0 if result["passed"] else 1
     if args.command == "phase7":
         result = run_phase7(args.protocol, args.e63, args.output)
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))

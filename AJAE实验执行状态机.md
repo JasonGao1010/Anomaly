@@ -3922,6 +3922,28 @@ Invalidated downstream evidence: None before execution. Gate 1 remains PASS unde
 Descriptive observations: The pairwise distribution has broad overlap: q05 of the paired difference is `-0.120144 m` and q95 is `0.178561 m`. The two visual examples therefore did not represent a nearly deterministic population-wide label code.
 Notes: The fold plan reused exact test/train/excluded counts `[61,46,91,74,97]`, `[913,1004,800,861,832]`, `[373,297,456,412,418]`, yielding 369 unique OOF pairs. Independent read-only recomputation exactly reproduced both class summaries, the paired summary, all 2,694 visible counts, pooled metrics, all 4,000 bootstrap rows, interval bounds and the branch outcome. Models, thresholds, public/hidden seals and all formal Gate 2/3 criteria are unchanged.
 
+## AJAE-F0-X | Full-Path Mechanical Preflight
+
+Experiment ID: AJAE-F0-X
+Design-freeze commit/hash: Full-first v3 route freeze completed before E76-C1; fixed micro-window execution identity completed after E76-C1 unlocked this node and before any B3 training or performance result.
+Execution-freeze commit/hash: Pending the tracked preflight runner commit.
+Date: 2026-09-02 freeze; execution pending.
+Git commit / clean state: Must use a clean tracked worktree, excluding only user-owned untracked `PPT/`.
+Data identities: One fixed real train/206 window centered at frame 199, using frames `[197,198,199,200,201]`. Within each source frame, select the 16 real returns with the smallest frozen canonical ray identities after running the complete frozen STU frame encoder. This micro selection is mechanical only and never enters training or evaluation.
+Input artifact hashes: Current schema-30 protocol, frozen STU source/weights, and frozen sensor calibration required. Public real-OOD and hidden test remain sealed.
+Random namespaces / seeds: Existing `E53-STU-query-v1` frame seed for each frozen STU forward; AJAE micro-model seed `7600`. No seed search or performance selection.
+Command and resolved config: `python -m src.qualify ajae-f0-x --data-root /home/jasongao/Data/STU --protocol protocol.json --output runs/ajae/ajae_f0_x_preflight.npz --device cuda`. Check exact B3 input/model/supervision positions `[-2,-1,0,1,2]`, enabled nonzero-time production edges, the same unweighted supervision rule at every q, frozen gradient-free STU, B4 frame-ray identity, probability rather than logit averaging, exact occurrence denominators, and finite forward/backward on the fixed 80-point real micro window.
+Resource and disk preflight: Pending.
+Artifacts and hashes: Pending.
+Primary construct: Whether the already-qualified components are connected into the intended B3 training and B4 fusion path before expensive Full AJAE training.
+Primary result: Pending.
+PASS / FAIL / OUTCOME: PASS only if every mechanical error count is zero. Any failure is an implementation defect and must be repaired under the unchanged Full AJAE-X protocol; no model-quality or scientific verdict is permitted.
+Failure classification: `implementation_defect` only.
+Unlocked next node: AJAE-F1-X seed 0 after PASS.
+Invalidated downstream evidence: None before execution.
+Descriptive observations: None; model outputs are not performance evidence.
+Notes: This node reuses the production E66–E68 temporal and E71 fusion paths and adds the fixed real-window integration check. It does not introduce another scientific qualification chain.
+
 ## E76-X | Deferred Full Two-Seed B1 Safety
 
 Experiment ID: E76-X

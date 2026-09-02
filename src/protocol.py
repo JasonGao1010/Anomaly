@@ -1385,6 +1385,7 @@ class AJAEProtocol:
         full = _mapping(
             exploration.get("full_ajae_x_freeze"), "Full AJAE-X freeze"
         )
+        f0 = _mapping(full.get("f0_preflight"), "AJAE-F0-X freeze")
         if (
             c1.get("version") != "E76-C1-v1"
             or c1.get("status") != "frozen_before_clearance_computation"
@@ -1485,6 +1486,26 @@ class AJAEProtocol:
             or full.get("version") != "AJAE-full-first-v1"
             or full.get("status")
             != "AJAE-F0-X_current_after_E76-C1_no_direct_degeneracy"
+            or f0.get("status") != "frozen_before_preflight_execution"
+            or (f0.get("partition"), f0.get("sequence_id"), f0.get("center_frame"))
+            != ("train", 206, 199)
+            or _signed_int_tuple(f0.get("frame_offsets"), "AJAE-F0-X offsets")
+            != (-2, -1, 0, 1, 2)
+            or f0.get("points_per_frame") != 16
+            or f0.get("point_selection")
+            != "ascending frozen canonical ray identity within each real source frame"
+            or tuple(f0.get("checks", ()))
+            != (
+                "B3 uses q=-2,-1,0,+1,+2",
+                "nonzero-delta temporal edges are active",
+                "all five q positions use the same unweighted supervision rule",
+                "STU parameters remain frozen and gradient-free",
+                "B4 fuses by frame-ray identity",
+                "B4 averages probabilities rather than logits",
+                "B4 occurrence count equals its averaging denominator",
+                "one fixed micro real window forward and backward is finite",
+            )
+            or f0.get("model_quality_use_forbidden") is not True
             or full.get("b2_e78x_status")
             != "deferred ablation unlocked only after Full AJAE-X supports whole-method viability"
             or full.get("seed0_stop_rule")

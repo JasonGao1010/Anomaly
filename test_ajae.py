@@ -605,6 +605,11 @@ def test_e76_c1_protocol_is_result_blind_and_full_first() -> None:
     assert exploration["full_ajae_x_freeze"]["b2_e78x_status"].startswith(
         "deferred ablation"
     )
+    f0 = exploration["full_ajae_x_freeze"]["f0_preflight"]
+    assert f0["center_frame"] == 199
+    assert f0["frame_offsets"] == (-2, -1, 0, 1, 2)
+    assert f0["points_per_frame"] == 16
+    assert f0["model_quality_use_forbidden"] is True
 
 
 def test_phase5_frame_identity_is_frozen_before_stu_outputs() -> None:

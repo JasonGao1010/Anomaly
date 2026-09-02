@@ -4017,6 +4017,18 @@
         "status": "AJAE-F0-X_current_after_E76-C1_no_direct_degeneracy",
         "definition": "B3 full symmetric five-frame AJAE training followed by B4 equal-weight probability fusion over overlapping windows from the same checkpoint",
         "order": ["AJAE-F0-X", "AJAE-F1-X seed 0", "AJAE-F2-X seed 0 B3/B4 evaluation and lite safety", "AJAE-F3-X conditional seed 1", "AJAE-F4-X two-seed viability review"],
+        "f0_preflight": {
+          "status": "frozen_before_preflight_execution",
+          "partition": "train",
+          "sequence_id": 206,
+          "center_frame": 199,
+          "frame_offsets": [-2, -1, 0, 1, 2],
+          "points_per_frame": 16,
+          "point_selection": "ascending frozen canonical ray identity within each real source frame",
+          "checks": ["B3 uses q=-2,-1,0,+1,+2", "nonzero-delta temporal edges are active", "all five q positions use the same unweighted supervision rule", "STU parameters remain frozen and gradient-free", "B4 fuses by frame-ray identity", "B4 averages probabilities rather than logits", "B4 occurrence count equals its averaging denominator", "one fixed micro real window forward and backward is finite"],
+          "model_quality_use_forbidden": true,
+          "command": "python -m src.qualify ajae-f0-x --data-root /home/jasongao/Data/STU --protocol protocol.json --output runs/ajae/ajae_f0_x_preflight.npz --device cuda"
+        },
         "b2_e78x_status": "deferred ablation unlocked only after Full AJAE-X supports whole-method viability",
         "training_contract": "exact E63-v2 B3 contract with maximum 25 complete worlds, evaluation every 5 worlds, patience 4, AdamW learning rate 1e-4, gradient accumulation 8, common 23-world development domain, and unchanged checkpoint rule",
         "seed0_stop_rule": "stop before seed 1 only if AP_B4 is at most AP_B0 and moving-normal FPR_B4 is at least B1 seed0 moving-normal FPR",
