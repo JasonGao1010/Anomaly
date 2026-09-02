@@ -3904,7 +3904,7 @@ Notes: Real points are light gray, ignored/background points dark gray, controls
 
 Experiment ID: E76-C1
 Design-freeze commit/hash: Result-blind v3 full-first route revision before any clearance value in the 1,347-pair E45B-v2 population is computed.
-Execution-freeze commit/hash: Pending the tracked CPU-only runner commit.
+Execution-freeze commit/hash: Tracked CPU-only runner commit `790400f9f302218283c7457d3de6577292fbd017`; `src/render.py` SHA-256 `1a26bbf323eeab1b5036a7c4209dc7391c68023e9f79e90c1133fd09f8a8c064`; frozen protocol SHA-256 `00f8959ec2c483c0c1a683cc72a0380c253f80dc25ee8070be2c3f69262e4098`. The complete 90-test scientific-semantic suite passed before formal execution.
 Date: 2026-09-02 design freeze; formal execution pending.
 Git commit / clean state: Must use a clean tracked worktree, excluding only user-owned untracked `PPT/`.
 Data identities: All 1,347 non-reused E45B-v2 control/proxy matched pairs. Pair selection, candidate expansion, rematching and result-driven sample selection are forbidden. The runner replays the exact frozen single-object world for each matched entity-frame because the saved E48 point cache contains at most 64 points and cannot identify the true minimum over all accepted returns.
