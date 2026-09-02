@@ -593,11 +593,8 @@ def test_e76_c1_reuses_e48_split_and_detects_only_near_saturation() -> None:
 
 def test_e76_c1_protocol_is_result_blind_and_full_first() -> None:
     exploration = load_protocol(PROTOCOL_PATH).development["exploration_track"]
-    assert exploration["version"] == "exploration-confirmation-split-v3-full-first"
-    assert (
-        exploration["current_node"]
-        == "AJAE-F1-X_protocol_completion_required_before_training"
-    )
+    assert exploration["version"] == "exploration-confirmation-split-v4-full-training"
+    assert exploration["current_node"] == "AJAE-F1-X_entry_P2"
     c1 = exploration["e76c1_freeze"]
     assert c1["status"] == "frozen_before_clearance_computation"
     assert c1["descriptive_difference_is_nonblocking"] is True
@@ -614,9 +611,12 @@ def test_e76_c1_protocol_is_result_blind_and_full_first() -> None:
     assert f0["points_per_frame"] == 16
     assert f0["model_quality_use_forbidden"] is True
     assert f0["result"]["passed"] is True
-    blocker = exploration["full_ajae_x_freeze"]["f1_protocol_blocker"]
-    assert blocker["pure_normal_boundary_points_without_b3_q0"] == 190240
-    assert blocker["moving_normal_boundary_points_without_b3_q0"] == 191
+    entry = exploration["full_ajae_x_freeze"]["f1_entry"]
+    assert entry["p1_boundary_amendment"]["pure_normal_q0"]["points"] == 48638267
+    assert entry["p1_boundary_amendment"]["moving_normal_q0"]["points"] == 12820
+    assert entry["p1_boundary_amendment"]["lite_pure_normal_q0"]["frames"] == 63
+    assert entry["p2_semantic_training_preflight"]["world_seed"] == 1027531
+    assert len(entry["p2_semantic_training_preflight"]["checks"]) == 7
 
 
 def test_phase5_frame_identity_is_frozen_before_stu_outputs() -> None:

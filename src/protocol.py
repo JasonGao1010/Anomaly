@@ -1079,7 +1079,7 @@ class AJAEProtocol:
         cursor = _mapping(confirmation.get("paused_cursor"), "E74 paused cursor")
         if (
             exploration.get("version")
-            != "exploration-confirmation-split-v3-full-first"
+            != "exploration-confirmation-split-v4-full-training"
             or exploration.get("status") != "active_before_formal_gate2"
             or tuple(cohort.get("seeds", ())) != (0, 1)
             or tuple(cohort.get("applies_to", ())) != ("B1", "B2", "B3")
@@ -1114,12 +1114,12 @@ class AJAEProtocol:
             or confirmation.get("resume_branch") != "confirm/e74-seed2-resume"
             or confirmation.get("partial_seed2_result_use_forbidden") is not True
             or exploration.get("current_node")
-            != "AJAE-F1-X_protocol_completion_required_before_training"
+            != "AJAE-F1-X_entry_P2"
             or exploration.get("formal_gate2_and_gate3_status") != "not adjudicated"
             or exploration.get("public_real_ood_sequences_remain_sealed") is not True
             or exploration.get("hidden_test_sequences_remain_sealed") is not True
             or exploration.get("exploratory_continuation_status")
-            != "AJAE-F0-X_passed_AJAE-F1-X_waiting_for_boundary_scoring_protocol"
+            != "full-first_v4_P1_frozen_AJAE-F1-X_entry_P2_current"
         ):
             raise ProtocolError("exploration/confirmation split identity changed")
         e75x = _mapping(exploration.get("e75x_result"), "E75-X result")
@@ -1388,9 +1388,13 @@ class AJAEProtocol:
         )
         f0 = _mapping(full.get("f0_preflight"), "AJAE-F0-X freeze")
         f0_result = _mapping(f0.get("result"), "AJAE-F0-X result")
-        f1_blocker = _mapping(
-            full.get("f1_protocol_blocker"), "AJAE-F1-X protocol blocker"
+        f1_entry = _mapping(full.get("f1_entry"), "AJAE-F1-X entry")
+        p1 = _mapping(f1_entry.get("p1_boundary_amendment"), "AJAE-F1-X P1")
+        p2 = _mapping(
+            f1_entry.get("p2_semantic_training_preflight"), "AJAE-F1-X P2"
         )
+        p1_pure = _mapping(p1.get("pure_normal_q0"), "P1 pure-normal q0")
+        p1_moving = _mapping(p1.get("moving_normal_q0"), "P1 moving-normal q0")
         if (
             c1.get("version") != "E76-C1-v1"
             or c1.get("status") != "frozen_before_clearance_computation"
@@ -1488,9 +1492,9 @@ class AJAEProtocol:
             is not True
             or c1_result.get("formal_gate_adjudicated") is not False
             or c1_result.get("next_node") != "AJAE-F0-X"
-            or full.get("version") != "AJAE-full-first-v1"
+            or full.get("version") != "AJAE-full-first-v4"
             or full.get("status")
-            != "AJAE-F1-X_protocol_completion_required_before_training"
+            != "AJAE-F1-X_entry_P2_frozen"
             or f0.get("status") != "execution_complete_pass"
             or (f0.get("partition"), f0.get("sequence_id"), f0.get("center_frame"))
             != ("train", 206, 199)
@@ -1518,17 +1522,40 @@ class AJAEProtocol:
             or f0_result.get("total_errors") != 0
             or f0_result.get("model_quality_evaluated") is not False
             or f0_result.get("passed") is not True
-            or f1_blocker.get("status")
-            != "unresolved_before_any_B3_training_or_performance_result"
-            or tuple(f1_blocker.get("train_201_b3_q0_frame_range", ()))
-            != (6, 679)
-            or f1_blocker.get("pure_normal_boundary_points_without_b3_q0")
-            != 190240
-            or f1_blocker.get("e76x_lite_selected_frame_without_b3_q0") != 681
-            or tuple(f1_blocker.get("train_206_b3_q0_frame_range", ()))
-            != (2, 446)
-            or f1_blocker.get("moving_normal_boundary_points_without_b3_q0")
-            != 191
+            or f1_entry.get("role")
+            != "two entry prerequisites inside AJAE-F1-X, not new scientific experiment nodes"
+            or p1.get("status")
+            != "frozen_result_blind_before_any_B3_training_or_performance_result"
+            or p1.get("b2_b3_prediction")
+            != "q=0 only; noncentral q must not fill boundary points"
+            or p1.get("paired_safety_rule")
+            != "every paired safety difference uses the intersection of the two formally defined point-identity domains"
+            or (
+                p1_pure.get("partition"), p1_pure.get("sequence_id"),
+                tuple(p1_pure.get("frame_range", ())), p1_pure.get("points"),
+                p1_pure.get("excluded_boundary_points"),
+            ) != ("train", 201, (6, 679), 48638267, 190240)
+            or (
+                p1_moving.get("partition"), p1_moving.get("sequence_id"),
+                tuple(p1_moving.get("frame_range", ())), p1_moving.get("points"),
+                p1_moving.get("excluded_boundary_points"),
+            ) != ("train", 206, (2, 446), 12820, 191)
+            or _mapping(p1.get("lite_pure_normal_q0"), "P1 lite q0").get(
+                "frames"
+            ) != 63
+            or p1.get("b4_full_domain_safety_report_required") is not True
+            or p2.get("status") != "frozen_before_execution"
+            or (
+                p2.get("seed"), p2.get("world_index"), p2.get("world_type"),
+                p2.get("world_seed"), p2.get("center_frame"),
+            ) != (0, 2, "mixed", 1027531, 2)
+            or tuple(p2.get("frame_ids", ())) != (0, 1, 2, 3, 4)
+            or _mapping(
+                p2.get("identity_only_visible_counts"), "P2 visible counts"
+            ) != {"normal_control": 590, "anomaly_proxy": 3833}
+            or len(tuple(p2.get("checks", ()))) != 7
+            or p2.get("failure_class") != "implementation_defect_only"
+            or p2.get("scientific_verdict_forbidden") is not True
             or full.get("b2_e78x_status")
             != "deferred ablation unlocked only after Full AJAE-X supports whole-method viability"
             or full.get("seed0_stop_rule")

@@ -98,6 +98,46 @@ def _atomic_torch(path: Path, payload: Mapping[str, Any]) -> None:
     _fsync_parent(path)
 
 
+def _tensor_state_sha256(state: Mapping[str, Tensor]) -> str:
+    """Hash a tensor state without depending on serialization metadata."""
+
+    digest = hashlib.sha256()
+    for name in sorted(state):
+        value = state[name].detach().cpu().contiguous()
+        digest.update(name.encode("utf-8"))
+        digest.update(value.numpy().dtype.str.encode("ascii"))
+        digest.update(np.asarray(value.shape, dtype="<i8").tobytes())
+        digest.update(value.numpy().tobytes())
+    return digest.hexdigest()
+
+
+def _array_sha256(arrays: Mapping[str, np.ndarray]) -> str:
+    digest = hashlib.sha256()
+    for name in sorted(arrays):
+        value = np.ascontiguousarray(arrays[name])
+        digest.update(name.encode("utf-8"))
+        digest.update(value.dtype.str.encode("ascii"))
+        digest.update(np.asarray(value.shape, dtype="<i8").tobytes())
+        digest.update(value.tobytes())
+    return digest.hexdigest()
+
+
+def _atomic_npz(
+    path: Path, arrays: Mapping[str, np.ndarray], metadata: Mapping[str, Any]
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp.npz")
+    np.savez_compressed(
+        temporary,
+        **arrays,
+        metadata_json=np.asarray(
+            json.dumps(dict(metadata), sort_keys=True, separators=(",", ":"))
+        ),
+    )
+    os.replace(temporary, path)
+    _fsync_parent(path)
+
+
 def _finite_world_report_document(report: object) -> dict[str, Any]:
     """Encode the valid no-obstacle +infinity sentinel as JSON null."""
 
@@ -2118,6 +2158,254 @@ class E63B1DevelopmentEvaluator:
                 torch.cuda.set_rng_state_all(cuda_rng)
 
 
+class E63B3DevelopmentEvaluator(E63B1DevelopmentEvaluator):
+    """Evaluate B3 q=0 on the frozen common and P1-intersection domains."""
+
+    def __init__(self, **kwargs: object) -> None:
+        super().__init__(**kwargs)
+        p1 = self.protocol.development["exploration_track"][
+            "full_ajae_x_freeze"
+        ]["f1_entry"]["p1_boundary_amendment"]
+        pure = p1["pure_normal_q0"]
+        frame_min, frame_max = map(int, pure["frame_range"])
+        keep = (self.pure_frame_id >= frame_min) & (
+            self.pure_frame_id <= frame_max
+        )
+        self.pure_frame_id = self.pure_frame_id[keep]
+        self.pure_mask_packed = self.pure_mask_packed[keep]
+        self.pure_count = self.pure_count[keep]
+        self.pure_expected = int(pure["points"])
+        if (
+            self.pure_frame_id.size != frame_max - frame_min + 1
+            or int(self.pure_count.sum()) != self.pure_expected
+        ):
+            raise TrainingError("P1 B3 pure-normal q=0 domain changed")
+        try:
+            from .scene import canonical_ray_mapping_digest
+        except ImportError:  # pragma: no cover
+            from scene import canonical_ray_mapping_digest  # type: ignore[no-redef]
+        self.ray_mapping_digest = canonical_ray_mapping_digest(
+            self.canonical_by_slot
+        )
+        self.condition = experiment_condition("B3")
+        self.scientific_identity = {
+            "version": "E63-B3-q0-development-evaluator-full-first-v4",
+            "e57_artifact_sha256": self.scientific_identity[
+                "e57_artifact_sha256"
+            ],
+            "e63_artifact_sha256": self.scientific_identity[
+                "e63_artifact_sha256"
+            ],
+            "e61_artifact_sha256": self.scientific_identity[
+                "e61_artifact_sha256"
+            ],
+            "eligible_world_ids": self.world_id[self.eligible]
+            .astype(int)
+            .tolist(),
+            "target": "B3 q=0 only",
+            "threshold_rule": "official first ROC threshold with TPR strictly greater than 0.95",
+            "pure_normal_cross_fit": "mean FPR on the P1 train/201 frame 6-679 q=0 intersection under the two opposite-fold proxy thresholds",
+            "pure_normal_points": self.pure_expected,
+            "threshold_comparison": "score strictly greater than threshold",
+        }
+
+    def _window_scores(
+        self,
+        model: nn.Module,
+        sources: Sequence[object],
+        center: int,
+        *,
+        input_cache: OrderedDict[int, dict[str, object]] | None = None,
+    ) -> np.ndarray:
+        try:
+            from .scene import assemble_window
+        except ImportError:  # pragma: no cover
+            from scene import assemble_window  # type: ignore[no-redef]
+        if len(sources) != 5:
+            raise TrainingError("B3 development requires exactly five source frames")
+        inputs: list[dict[str, object]] = []
+        for source in sources:
+            frame_id = int(getattr(source, "frame_id"))
+            item = input_cache.get(frame_id) if input_cache is not None else None
+            if item is None:
+                item = self._input(source)
+                if input_cache is not None:
+                    input_cache[frame_id] = item
+                    input_cache.move_to_end(frame_id)
+                    while len(input_cache) > 7:
+                        input_cache.popitem(last=False)
+            inputs.append(item)
+        window = assemble_window(
+            self.sequence.spec,
+            center,
+            sources,
+            condition="B3",
+            canonical_ray_by_slot=self.canonical_by_slot,
+            ray_mapping_audited=True,
+            ray_mapping_digest=self.ray_mapping_digest,
+        )
+        coordinates = torch.as_tensor(
+            np.asarray(window.points.coordinates_center).copy(),
+            device=self.device,
+            dtype=torch.float32,
+        )
+        times = torch.as_tensor(
+            np.asarray(window.points.relative_time).copy(),
+            device=self.device,
+            dtype=torch.long,
+        )
+        with torch.no_grad():
+            logits = model(
+                coordinates,
+                times,
+                torch.cat([item["stu_features"] for item in inputs]).to(
+                    self.device
+                ),
+                torch.cat([item["normal_evidence"] for item in inputs]).to(
+                    self.device
+                ),
+                torch.cat([item["assignment"] for item in inputs]).to(
+                    self.device
+                ),
+                torch.cat([item["no_object"] for item in inputs]).to(
+                    self.device
+                ),
+                torch.cat([item["intensity"] for item in inputs]).to(
+                    self.device
+                ),
+                cross_frame_enabled=True,
+            )
+        q0 = times == 0
+        expected = int(np.asarray(getattr(sources[2], "real_slots")).size)
+        if (
+            logits.shape != times.shape
+            or int(q0.sum()) != expected
+            or not bool(torch.isfinite(logits).all())
+        ):
+            raise TrainingError("B3 q=0 development logits are invalid")
+        return torch.sigmoid(logits[q0]).detach().cpu().numpy().astype(np.float32)
+
+    def __call__(
+        self,
+        model: nn.Module,
+        world_index: int,
+        seed: int,
+        condition: ExperimentCondition,
+    ) -> DevelopmentEvidence:
+        del world_index, seed
+        if condition.name != "B3":
+            raise TrainingError("this evaluator instance is bound to B3")
+        try:
+            from .evaluate import PointMetricAccumulator
+            from .render import WorldSpec, render_frame
+        except ImportError:  # pragma: no cover
+            from evaluate import PointMetricAccumulator  # type: ignore[no-redef]
+            from render import WorldSpec, render_frame  # type: ignore[no-redef]
+        cpu_rng = torch.get_rng_state()
+        cuda_rng = torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None
+        was_training = model.training
+        model.eval()
+        try:
+            metrics: list[DevelopmentWorldMetrics] = []
+            fold_accumulator = {
+                "A": PointMetricAccumulator(self.protocol),
+                "B": PointMetricAccumulator(self.protocol),
+            }
+            for row in np.flatnonzero(self.eligible):
+                center = int(self.center[row])
+                world = WorldSpec.from_dict(json.loads(str(self.world_json[row])))
+                rendered = tuple(
+                    render_frame(
+                        self.sequence.source_frame(frame_id),
+                        world,
+                        self.grid,
+                        self.sensor,
+                    )
+                    for frame_id in range(center - 2, center + 3)
+                )
+                scores = self._window_scores(
+                    model, tuple(item.source for item in rendered), center
+                )
+                source = rendered[2].source
+                slots = np.asarray(source.real_slots, dtype=np.int64)
+                xyz = np.asarray(source.xyzi)[slots, :3]
+                semantic = (
+                    np.asarray(rendered[2].packed_labels, dtype=np.uint32)[slots]
+                    & np.uint32(0xFFFF)
+                )
+                accumulator = PointMetricAccumulator(self.protocol)
+                accumulator.update(xyz, scores, semantic)
+                result = accumulator.compute()
+                if result.get("accepted_frames") != 1:
+                    raise TrainingError("one B3 development world was not accepted")
+                metrics.append(
+                    DevelopmentWorldMetrics(
+                        int(self.world_id[row]),
+                        {
+                            "AP": float(result["AP"]),
+                            "AUROC": float(result["AUROC"]),
+                            "FPR95": float(result["FPR95"]),
+                        },
+                    )
+                )
+                fold_accumulator[bytes(self.fold[row]).decode("ascii")].update(
+                    xyz, scores, semantic
+                )
+            thresholds = {
+                fold: float(accumulator.compute()["threshold"])
+                for fold, accumulator in fold_accumulator.items()
+            }
+            alarm = {"A": 0, "B": 0}
+            total = 0
+            cache: OrderedDict[int, dict[str, object]] = OrderedDict()
+            for row, center in enumerate(self.pure_frame_id.tolist()):
+                expected = int(self.pure_count[row])
+                sources = tuple(
+                    self.sequence.source_frame(frame_id)
+                    for frame_id in range(center - 2, center + 3)
+                )
+                scores = self._window_scores(
+                    model, sources, center, input_cache=cache
+                )
+                source = sources[2]
+                slots = np.asarray(source.real_slots, dtype=np.int64)
+                full = np.zeros(int(source.slot_count), dtype=np.float32)
+                full[slots] = scores
+                canonical_mask = np.unpackbits(
+                    self.pure_mask_packed[row], bitorder="little"
+                )[: self.canonical_by_slot.size]
+                selected_slots = np.flatnonzero(
+                    canonical_mask[self.canonical_by_slot]
+                )
+                if selected_slots.size != expected:
+                    raise TrainingError("P1 pure-normal mask count changed")
+                selected_scores = full[selected_slots]
+                alarm["A"] += int(
+                    np.count_nonzero(selected_scores > thresholds["A"])
+                )
+                alarm["B"] += int(
+                    np.count_nonzero(selected_scores > thresholds["B"])
+                )
+                total += expected
+            if total != self.pure_expected:
+                raise TrainingError("P1 B3 pure-normal total changed")
+            cross_fit_fpr = 0.5 * (alarm["A"] + alarm["B"]) / total
+            return DevelopmentEvidence(
+                tuple(sorted(metrics, key=lambda item: item.world_id)),
+                {
+                    "cross_fit_FPR": float(cross_fit_fpr),
+                    "threshold_A": thresholds["A"],
+                    "threshold_B": thresholds["B"],
+                    "pure_normal_points": float(total),
+                },
+            )
+        finally:
+            model.train(was_training)
+            torch.set_rng_state(cpu_rng)
+            if cuda_rng is not None:
+                torch.cuda.set_rng_state_all(cuda_rng)
+
+
 def build_formal_training(
     protocol: object,
     *,
@@ -2317,14 +2605,19 @@ def build_formal_training(
         control_context, normal_templates
     )
 
-    if condition.name != "B1":
+    if condition.name not in {"B1", "B3"}:
         raise TrainingError(
-            "the current formal evaluator implementation is qualified only for B1"
+            "the current formal evaluator implementation is qualified only for B1 and B3"
         )
     evaluator_encoder = FrozenSTUPointEncoder.from_protocol(
         protocol, project_root=project_root
     ).to(runtime_device)
-    development_evaluator = E63B1DevelopmentEvaluator(
+    evaluator_type = (
+        E63B1DevelopmentEvaluator
+        if condition.name == "B1"
+        else E63B3DevelopmentEvaluator
+    )
+    development_evaluator = evaluator_type(
         protocol=protocol,
         project_root=project_root,
         data_root=data_root,
@@ -2471,6 +2764,274 @@ def build_formal_training(
         maximum_worlds=maximum_worlds,
         ray_mapping_digest=ray_mapping_digest,
     )
+
+
+def run_b3_semantic_preflight(
+    protocol_path: Path | str,
+    *,
+    data_root: Path | str,
+    output_path: Path | str,
+    maximum_worlds: int,
+    device: torch.device | str = "cuda",
+) -> dict[str, Any]:
+    """Exercise one frozen mixed B3 window through the formal optimizer path."""
+
+    try:
+        from .protocol import load_protocol
+    except ImportError:  # pragma: no cover
+        from protocol import load_protocol  # type: ignore[no-redef]
+    protocol_file = Path(protocol_path).expanduser().resolve(strict=True)
+    protocol = load_protocol(protocol_file)
+    full = protocol.development["exploration_track"]["full_ajae_x_freeze"]
+    p2 = full["f1_entry"]["p2_semantic_training_preflight"]
+    if (
+        protocol.development["exploration_track"]["current_node"]
+        != "AJAE-F1-X_entry_P2"
+        or full["status"] != "AJAE-F1-X_entry_P2_frozen"
+        or p2["status"] != "frozen_before_execution"
+    ):
+        raise TrainingError("AJAE-F1-X P2 is not frozen as the current entry step")
+    condition = experiment_condition("B3")
+    preflight = validate_e63_formal_preflight(protocol)
+    build = build_formal_training(
+        protocol,
+        preflight=preflight,
+        data_root=data_root,
+        condition=condition,
+        maximum_worlds=maximum_worlds,
+        development_evaluator=None,
+        device=device,
+    )
+    seed = int(p2["seed"])
+    world_index = int(p2["world_index"])
+    world_kind = str(p2["world_type"])
+    world_seed = _derived_seed(seed, world_index, 0)
+    legal_centers = tuple(range(2, 447))
+    blocks = shuffled_center_blocks(
+        legal_centers,
+        build.config.chunk_centers,
+        _derived_seed(seed, world_index, 1),
+    )
+    center = int(blocks[0][0])
+    if (
+        build.config.world_type_cycle.index("mixed") != world_index
+        or world_kind != "mixed"
+        or world_seed != int(p2["world_seed"])
+        or center != int(p2["center_frame"])
+        or tuple(center + value for value in condition.frame_offsets)
+        != tuple(p2["frame_ids"])
+    ):
+        raise TrainingError("AJAE-F1-X P2 frozen world/window identity changed")
+
+    _seed_everything(seed)
+    trainer = build.trainer_factory(seed, condition)
+    world = build.world_factory(world_kind, world_seed)
+    trainer._require_world(world, world_kind, world_seed)
+    encoder_before = _tensor_state_sha256(trainer.encoder.state_dict())
+    model_before = _tensor_state_sha256(trainer.model.state_dict())
+    torch.cuda.reset_peak_memory_stats(trainer.device)
+    started = torch.cuda.Event(enable_timing=True)
+    finished = torch.cuda.Event(enable_timing=True)
+    started.record()
+    batch = trainer._window_data(world, center)
+    rendered = tuple(
+        trainer._render(world, center + offset)
+        for offset in condition.frame_offsets
+    )
+    control_parts: list[np.ndarray] = []
+    proxy_parts: list[np.ndarray] = []
+    semantic_parts: list[np.ndarray] = []
+    range_parts: list[np.ndarray] = []
+    for item in rendered:
+        source = item.source
+        slots = np.asarray(source.real_slots, dtype=np.int64)
+        control_parts.append(np.asarray(item.normal_control_mask, dtype=np.bool_)[slots])
+        proxy_parts.append(np.asarray(item.anomaly_proxy_mask, dtype=np.bool_)[slots])
+        semantic_parts.append(
+            np.asarray(item.packed_labels, dtype=np.uint32)[slots]
+            & np.uint32(0xFFFF)
+        )
+        range_parts.append(
+            np.linalg.norm(np.asarray(source.xyzi)[slots, :3], axis=1)
+        )
+    control = np.concatenate(control_parts)
+    proxy = np.concatenate(proxy_parts)
+    semantic = np.concatenate(semantic_parts)
+    distance = np.concatenate(range_parts)
+    valid_expected = (control | proxy | (semantic != 0))
+    valid_expected &= distance >= trainer.minimum_range_m
+    valid_expected &= distance <= trainer.maximum_range_m
+    target = batch.targets.detach().cpu().numpy()
+    valid = batch.valid.detach().cpu().numpy()
+    visible_counts = p2["identity_only_visible_counts"]
+    label_error = int(
+        np.any(control & proxy)
+        or not np.array_equal(target, proxy)
+        or not np.array_equal(valid, valid_expected)
+        or np.any(target[control])
+        or np.any(target[(~control & ~proxy) & valid_expected])
+        or int(control.sum()) != int(visible_counts["normal_control"])
+        or int(proxy.sum()) != int(visible_counts["anomaly_proxy"])
+    )
+
+    supervised = torch.zeros_like(batch.valid)
+    for relative_time in condition.supervised_times:
+        supervised |= batch.relative_times == relative_time
+    observed_times, counts_by_time = torch.unique(
+        batch.relative_times, sorted=True, return_counts=True
+    )
+    supervision_error = int(
+        tuple(observed_times.detach().cpu().tolist()) != RELATIVE_TIMES
+        or not bool(torch.equal(batch.valid & supervised, batch.valid))
+        or bool(torch.any(counts_by_time == 0))
+    )
+
+    trainer.model.train()
+    trainer.optimizer.zero_grad(set_to_none=True)
+    with torch.no_grad():
+        no_cross = trainer.model(
+            batch.coordinates,
+            batch.relative_times,
+            batch.stu_features,
+            batch.normal_evidence,
+            batch.assignment_reliability,
+            batch.no_object_reliability,
+            batch.intensity,
+            cross_frame_enabled=False,
+        )
+    logits = trainer.model(
+        batch.coordinates,
+        batch.relative_times,
+        batch.stu_features,
+        batch.normal_evidence,
+        batch.assignment_reliability,
+        batch.no_object_reliability,
+        batch.intensity,
+        cross_frame_enabled=True,
+    )
+    loss_mask = batch.valid & supervised
+    loss = balanced_bce_loss(logits, batch.targets, loss_mask)
+    element = F.binary_cross_entropy_with_logits(
+        logits, batch.targets.to(logits.dtype), reduction="none"
+    )
+    expected_terms = [
+        element[mask].mean()
+        for mask in (
+            loss_mask & batch.targets,
+            loss_mask & ~batch.targets,
+        )
+        if bool(mask.any())
+    ]
+    expected_loss = torch.stack(expected_terms).mean()
+    loss_error = int(
+        not bool(torch.isfinite(loss))
+        or not bool(torch.equal(loss, expected_loss))
+    )
+    q0 = batch.relative_times == 0
+    q0_difference = torch.abs(logits.detach()[q0] - no_cross[q0])
+    dependency_error = int(
+        not bool(torch.isfinite(q0_difference).all())
+        or not bool(torch.any(q0_difference > 0.0))
+    )
+
+    (loss / build.config.gradient_accumulation).backward()
+    cross_gradient_norms = []
+    for name, parameter in trainer.model.named_parameters():
+        if ".cross_gate." in name and parameter.grad is not None:
+            cross_gradient_norms.append(float(torch.linalg.vector_norm(parameter.grad)))
+    temporal_gradient_error = int(
+        not cross_gradient_norms
+        or not all(math.isfinite(value) for value in cross_gradient_norms)
+        or not any(value > 0.0 for value in cross_gradient_norms)
+    )
+    stu_gradient_error = int(
+        any(parameter.requires_grad for parameter in trainer.encoder.parameters())
+        or any(parameter.grad is not None for parameter in trainer.encoder.parameters())
+    )
+    trainer.accumulated_windows = 1
+    trainer._optimizer_step(partial=True)
+    model_after = _tensor_state_sha256(trainer.model.state_dict())
+    encoder_after = _tensor_state_sha256(trainer.encoder.state_dict())
+    stu_update_error = int(encoder_before != encoder_after)
+    model_update_error = int(model_before == model_after)
+    finished.record()
+    torch.cuda.synchronize(trainer.device)
+
+    arrays = {
+        "frame_id": np.asarray(p2["frame_ids"], dtype=np.int16),
+        "relative_time": observed_times.detach().cpu().numpy().astype(np.int8),
+        "points_by_relative_time": counts_by_time.detach()
+        .cpu()
+        .numpy()
+        .astype(np.int32),
+        "valid_points_by_relative_time": np.asarray(
+            [
+                int(
+                    torch.count_nonzero(
+                        batch.valid & (batch.relative_times == relative_time)
+                    )
+                )
+                for relative_time in RELATIVE_TIMES
+            ],
+            dtype=np.int32,
+        ),
+        "control_points": np.asarray(int(control.sum()), dtype=np.int32),
+        "proxy_points": np.asarray(int(proxy.sum()), dtype=np.int32),
+        "valid_real_normal_points": np.asarray(
+            int(np.count_nonzero((~control & ~proxy) & valid_expected)),
+            dtype=np.int32,
+        ),
+        "balanced_bce": np.asarray(float(loss.detach().cpu()), dtype=np.float64),
+        "q0_changed_points": np.asarray(
+            int(torch.count_nonzero(q0_difference > 0.0)), dtype=np.int32
+        ),
+        "q0_max_absolute_difference": np.asarray(
+            float(q0_difference.max().detach().cpu()), dtype=np.float64
+        ),
+        "cross_gate_gradient_norm": np.asarray(
+            cross_gradient_norms, dtype=np.float64
+        ),
+        "label_error_count": np.asarray(label_error, dtype=np.int16),
+        "supervision_error_count": np.asarray(supervision_error, dtype=np.int16),
+        "balanced_bce_error_count": np.asarray(loss_error, dtype=np.int16),
+        "stu_gradient_error_count": np.asarray(stu_gradient_error, dtype=np.int16),
+        "stu_update_error_count": np.asarray(stu_update_error, dtype=np.int16),
+        "model_update_error_count": np.asarray(model_update_error, dtype=np.int16),
+        "temporal_gradient_error_count": np.asarray(
+            temporal_gradient_error, dtype=np.int16
+        ),
+        "q0_dependency_error_count": np.asarray(dependency_error, dtype=np.int16),
+    }
+    total_errors = sum(
+        int(np.asarray(value).sum())
+        for name, value in arrays.items()
+        if name.endswith("error_count")
+    )
+    scientific_hash = _array_sha256(arrays)
+    result = {
+        "experiment": "AJAE-F1-X-entry-P2",
+        "status": "PASS" if total_errors == 0 else "IMPLEMENTATION_DEFECT",
+        "passed": total_errors == 0,
+        "total_errors": total_errors,
+        "seed": seed,
+        "world_index": world_index,
+        "world_type": world_kind,
+        "world_seed": world_seed,
+        "center_frame": center,
+        "model_quality_evaluated": False,
+        "protocol_sha256": _sha256_file(protocol_file),
+        "stu_before_sha256": encoder_before,
+        "stu_after_sha256": encoder_after,
+        "model_before_sha256": model_before,
+        "model_after_sha256": model_after,
+        "scientific_array_sha256": scientific_hash,
+        "gpu_peak_memory_bytes": int(
+            torch.cuda.max_memory_allocated(trainer.device)
+        ),
+        "milliseconds": float(started.elapsed_time(finished)),
+    }
+    _atomic_npz(Path(output_path).expanduser().resolve(), arrays, result)
+    return result
 
 
 def train_all_seeds(
@@ -2946,8 +3507,25 @@ def _main() -> None:
     parser.add_argument("--max-worlds", type=int, required=True)
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--resume", action="store_true")
+    parser.add_argument("--semantic-preflight-output", type=Path)
     args = parser.parse_args()
     try:
+        if args.semantic_preflight_output is not None:
+            if args.development is not None or args.resume or args.condition != "B3":
+                raise TrainingError(
+                    "semantic preflight requires B3 without development override or resume"
+                )
+            result = run_b3_semantic_preflight(
+                args.protocol,
+                data_root=args.data_root,
+                output_path=args.semantic_preflight_output,
+                maximum_worlds=args.max_worlds,
+                device=args.device,
+            )
+            print(json.dumps(result, indent=2, sort_keys=True))
+            if not result["passed"]:
+                raise SystemExit(1)
+            return
         results = run_formal_training(
             args.protocol,
             development_path=args.development,

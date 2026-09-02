@@ -2656,8 +2656,8 @@
       }
     },
     "renderer_mechanical_qualification": {
-      "status": "Gate 1 PASS; E50-E58 and E61-E73 formal PASS; E59-E60 descriptive complete; E74 confirmation suspended after seeds 0/1; E75-X descriptive complete; E76-X-lite moving-normal stop signal recorded; E76-V1 descriptive review complete without PASS/FAIL; E76-C1 found no direct clearance degeneracy; AJAE-F0-X PASS; AJAE-F1-X awaiting result-blind boundary-scoring protocol completion; E78-X/B2 and formal Gate 2 locked",
-      "current_gate1_policy": {"hard_evidence": ["compatible canonical-ray and renderer mechanics through E44", "E45B-v2 rendered control/proxy qualification PASS", "E48 direct rendered-label-shortcut audit PASS"], "excluded_from_conjunction": ["all E45A variants", "E45-V1", "E46", "E47"], "rationale": "Natural real-normal observations and coverage-oriented inserted controls need not reproduce the same scene/placement distribution. Real-versus-rendered source identifiability is not equivalent to anomaly-label shortcut predictability because rendered controls and rendered proxies carry different labels.", "gate1_result": "PASS", "current_node": "AJAE-F1-X_protocol_completion_required_before_training", "next_after_pass": []},
+      "status": "Gate 1 PASS; E50-E58 and E61-E73 formal PASS; E59-E60 descriptive complete; E74 confirmation suspended after seeds 0/1; E75-X descriptive complete; E76-X-lite moving-normal stop signal recorded; E76-V1 descriptive review complete without PASS/FAIL; E76-C1 found no direct clearance degeneracy; AJAE-F0-X PASS; full-first v4 P1 frozen; AJAE-F1-X entry P2 current; E78-X/B2 and formal Gate 2 locked",
+      "current_gate1_policy": {"hard_evidence": ["compatible canonical-ray and renderer mechanics through E44", "E45B-v2 rendered control/proxy qualification PASS", "E48 direct rendered-label-shortcut audit PASS"], "excluded_from_conjunction": ["all E45A variants", "E45-V1", "E46", "E47"], "rationale": "Natural real-normal observations and coverage-oriented inserted controls need not reproduce the same scene/placement distribution. Real-versus-rendered source identifiability is not equivalent to anomaly-label shortcut predictability because rendered controls and rendered proxies carry different labels.", "gate1_result": "PASS", "current_node": "AJAE-F1-X_entry_P2", "next_after_pass": []},
       "layer_boundaries": {"E27-E28": "direct geometry outputs only", "E29": "return probability and deterministic acceptance decision only", "E30-E31": "accepted returns", "E32-E33": "nearest-return occlusion competition"},
       "E27": {
         "question": "Does the formal geometry path return the correct nearest convex-hull hit, outward finite normal and object ID for active normal-control templates when return rejection is disabled?",
@@ -3778,7 +3778,7 @@
       "held_out_input_forbidden": true
     },
     "exploration_track": {
-      "version": "exploration-confirmation-split-v3-full-first",
+      "version": "exploration-confirmation-split-v4-full-training",
       "status": "active_before_formal_gate2",
       "scientific_role": "rapidly test whole-method viability without replacing the frozen three-seed confirmatory standards",
       "cohort": {
@@ -3800,7 +3800,7 @@
         "partial_seed2_result_use_forbidden": true
       },
       "nodes": ["E75-X", "E76-X-lite", "E76-V1 descriptive visual audit", "E76-C1 visible-ground-clearance direct-shortcut audit", "AJAE-F0-X full-path mechanical preflight", "AJAE-F1-X full AJAE seed 0", "AJAE-F2-X seed 0 B3/B4 evaluation and lite safety", "AJAE-F3-X conditional full AJAE seed 1", "AJAE-F4-X two-seed whole-method viability review", "E78-X deferred ablation after whole-method viability", "E76-X full safety on the later confirmation track"],
-      "current_node": "AJAE-F1-X_protocol_completion_required_before_training",
+      "current_node": "AJAE-F1-X_entry_P2",
       "e75x_result": {
         "status": "descriptive_execution_complete",
         "formal_gate2_adjudicated": false,
@@ -4013,8 +4013,8 @@
         "next_node": "AJAE-F0-X"
       },
       "full_ajae_x_freeze": {
-        "version": "AJAE-full-first-v1",
-        "status": "AJAE-F1-X_protocol_completion_required_before_training",
+        "version": "AJAE-full-first-v4",
+        "status": "AJAE-F1-X_entry_P2_frozen",
         "definition": "B3 full symmetric five-frame AJAE training followed by B4 equal-weight probability fusion over overlapping windows from the same checkpoint",
         "order": ["AJAE-F0-X", "AJAE-F1-X seed 0", "AJAE-F2-X seed 0 B3/B4 evaluation and lite safety", "AJAE-F3-X conditional seed 1", "AJAE-F4-X two-seed viability review"],
         "f0_preflight": {
@@ -4038,18 +4038,33 @@
             "passed": true
           }
         },
-        "f1_protocol_blocker": {
-          "status": "unresolved_before_any_B3_training_or_performance_result",
-          "issue": "B3 q=0 is defined only on legal five-frame centers, while the inherited complete E61 safety populations include boundary frames that cannot be q=0 centers",
-          "train_201_b3_q0_frame_range": [6, 679],
-          "train_201_frozen_pure_normal_frame_range": [4, 681],
-          "pure_normal_boundary_points_without_b3_q0": 190240,
-          "e76x_lite_selected_frame_without_b3_q0": 681,
-          "train_206_b3_q0_frame_range": [2, 446],
-          "train_206_frozen_moving_normal_frame_range": [0, 448],
-          "moving_normal_boundary_points_without_b3_q0": 191,
-          "forbidden_automatic_choices": ["drop boundary points", "replace q=0 with a noncentral B3 occurrence", "use B4 fusion as the B3 safety score"],
-          "required_action": "freeze one result-blind boundary scoring rule before implementing the B3 evaluator or starting AJAE-F1-X"
+        "f1_entry": {
+          "role": "two entry prerequisites inside AJAE-F1-X, not new scientific experiment nodes",
+          "p1_boundary_amendment": {
+            "status": "frozen_result_blind_before_any_B3_training_or_performance_result",
+            "b2_b3_prediction": "q=0 only; noncentral q must not fill boundary points",
+            "paired_safety_rule": "every paired safety difference uses the intersection of the two formally defined point-identity domains",
+            "pure_normal_q0": {"partition": "train", "sequence_id": 201, "frame_range": [6, 679], "points": 48638267, "excluded_boundary_points": 190240},
+            "moving_normal_q0": {"partition": "train", "sequence_id": 206, "frame_range": [2, 446], "points": 12820, "excluded_boundary_points": 191},
+            "lite_pure_normal_q0": {"retain_original_selected_frames_if_q0_legal": true, "frames": 63, "replacement_for_frame_681_forbidden": true},
+            "b4_domain": "retain every frozen E61 point identity having at least one legal B3-window occurrence",
+            "b4_full_domain_safety_report_required": true
+          },
+          "p2_semantic_training_preflight": {
+            "status": "frozen_before_execution",
+            "seed": 0,
+            "world_index": 2,
+            "world_type": "mixed",
+            "world_seed": 1027531,
+            "center_frame": 2,
+            "frame_ids": [0, 1, 2, 3, 4],
+            "selection": "first mixed world in the frozen seed0 world cycle and first window in its frozen formal block order",
+            "identity_only_visible_counts": {"normal_control": 590, "anomaly_proxy": 3833},
+            "checks": ["proxy=1, control=0, eligible real normal=0, and control/proxy masks are disjoint", "all q=-2,-1,0,+1,+2 positions enter the formal supervised-valid mask", "loss is the authoritative empty-class-safe balanced BCE", "STU has no gradients and an identical parameter hash before and after the step", "at least one AJAE parameter changes after one formal AdamW step", "at least one cross-frame gate parameter has positive finite anomaly-loss gradient norm", "before the step at least one finite q=0 logit differs when nonzero-delta messages are disabled"],
+            "failure_class": "implementation_defect_only",
+            "scientific_verdict_forbidden": true,
+            "command": "python -m src.train --protocol protocol.json --data-root /home/jasongao/Data/STU --condition B3 --max-worlds 25 --device cuda --semantic-preflight-output runs/ajae/ajae_f1_x_semantic_preflight.npz"
+          }
         },
         "b2_e78x_status": "deferred ablation unlocked only after Full AJAE-X supports whole-method viability",
         "training_contract": "exact E63-v2 B3 contract with maximum 25 complete worlds, evaluation every 5 worlds, patience 4, AdamW learning rate 1e-4, gradient accumulation 8, common 23-world development domain, and unchanged checkpoint rule",
@@ -4058,7 +4073,7 @@
         "public_real_ood_sequences_remain_sealed": true,
         "hidden_test_sequences_remain_sealed": true
       },
-      "exploratory_continuation_status": "AJAE-F0-X_passed_AJAE-F1-X_waiting_for_boundary_scoring_protocol",
+      "exploratory_continuation_status": "full-first_v4_P1_frozen_AJAE-F1-X_entry_P2_current",
       "formal_gate2_and_gate3_status": "not adjudicated",
       "confirmation_rule": "if temporal viability is promising, complete seed 2 for B1/B2/B3 and apply the unchanged three-seed Gate 2 and Gate 3 rules",
       "negative_temporal_action": "stop or redesign without spending the remaining confirmatory repeats",
