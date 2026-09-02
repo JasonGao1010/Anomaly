@@ -45,6 +45,7 @@ from .model import (
 from .protocol import load_protocol
 from .train import (
     E63B1DevelopmentEvaluator,
+    E63B3DevelopmentEvaluator,
     balanced_bce_loss,
     experiment_condition,
     make_window_training_data,
@@ -3940,6 +3941,436 @@ def run_e76_exploratory(
     return result
 
 
+def _fast_f2_model(
+    protocol: object,
+    run_dir: Path,
+    stage: str,
+    completed_worlds: int,
+    device: torch.device,
+) -> tuple[AJAEPointTransformer, str, int]:
+    """Load only the checkpoint identity permitted at one v5 pause."""
+
+    progress = run_dir / "progress.pt"
+    model_file = run_dir / "model.pt"
+    result_file = run_dir / "result.json"
+    model = AJAEPointTransformer.from_protocol(protocol).to(device).eval()
+    if stage in {"preview", "screen"}:
+        if not progress.is_file() or model_file.exists() or result_file.exists():
+            raise QualificationError("v5 stage requires one paused progress checkpoint")
+        payload = torch.load(progress, map_location="cpu", weights_only=False)
+        cursor = payload.get("cursor", {})
+        schedule = payload.get("training_schedule", {})
+        if (
+            payload.get("format") != "ajae-progress-v3"
+            or payload.get("phase") != "between_worlds"
+            or cursor.get("world_index") != completed_worlds
+            or cursor.get("windows_completed") != 0
+            or schedule.get("version")
+            != "AJAE-F1-X-v5-fast-whole-method-viability-v1"
+            or payload.get("seed") != 0
+            or payload.get("training_condition", {}).get("name") != "B3"
+        ):
+            raise QualificationError("v5 paused checkpoint identity changed")
+        model.load_state_dict(payload["model"], strict=True)
+        return model, _sha256(progress), completed_worlds - 1
+    if not model_file.is_file() or not result_file.is_file() or progress.exists():
+        raise QualificationError("v5 final stage requires one completed model/result pair")
+    payload = torch.load(model_file, map_location="cpu", weights_only=True)
+    record = json.loads(result_file.read_text(encoding="utf-8"))
+    if (
+        payload.get("format") != "ajae-model-v3"
+        or record.get("status") != "completed"
+        or record.get("maximum_worlds") != completed_worlds
+        or payload.get("completion_id") != record.get("completion_id")
+        or payload.get("scientific_identity") != record.get("scientific_identity")
+        or payload.get("condition", {}).get("name") != "B3"
+        or payload.get("seed") != 0
+    ):
+        raise QualificationError("v5 final checkpoint identity changed")
+    model.load_state_dict(payload["model"], strict=True)
+    return model, _sha256(model_file), int(payload["best_world"])
+
+
+def _fast_f2_development(
+    protocol: object,
+    evaluator: E63B3DevelopmentEvaluator,
+    model: AJAEPointTransformer,
+    world_ids: Sequence[int],
+    e72_file: Path,
+) -> tuple[dict[str, np.ndarray], list[dict[str, np.ndarray]]]:
+    """Compute aligned B3/B4 development metrics and point scores."""
+
+    with np.load(e72_file, allow_pickle=False) as archive:
+        reference_world = np.asarray(archive["development_world_id"], dtype=np.int16)
+        reference_offset = np.asarray(archive["development_point_offset"], dtype=np.int64)
+        reference_ray = np.asarray(archive["development_canonical_ray"], dtype=np.int32)
+        reference_label = np.asarray(archive["development_label"], dtype=np.bool_)
+        reference_control = np.asarray(
+            archive["development_normal_control"], dtype=np.bool_
+        )
+    reference_row = {int(value): row for row, value in enumerate(reference_world)}
+    raw = evaluator.development_b3_b4_scores(model, world_ids)
+    metrics = np.empty((2, len(raw), 4), dtype=np.float64)
+    aligned: list[dict[str, np.ndarray]] = []
+    for column, item in enumerate(raw):
+        world_id = int(item["world_id"])
+        row = reference_row[world_id]
+        start, stop = reference_offset[row : row + 2]
+        xyz = np.asarray(item["xyz"], dtype=np.float32)
+        semantic = np.asarray(item["semantic"], dtype=np.uint32)
+        valid = (
+            (np.linalg.norm(xyz, axis=1) >= np.float32(2.5))
+            & (np.linalg.norm(xyz, axis=1) <= np.float32(50.0))
+            & (semantic != 0)
+        )
+        rays = np.asarray(item["canonical_ray"], dtype=np.int32)[valid]
+        order = np.argsort(rays, kind="stable")
+        rays = rays[order]
+        labels = (semantic[valid][order] == 2)
+        controls = np.asarray(item["normal_control"], dtype=np.bool_)[valid][order]
+        if (
+            not np.array_equal(rays, reference_ray[start:stop])
+            or not np.array_equal(labels, reference_label[start:stop])
+            or not np.array_equal(controls, reference_control[start:stop])
+        ):
+            raise QualificationError("v5 development point identity changed")
+        scores = np.stack(
+            (
+                np.asarray(item["B3"], dtype=np.float32)[valid][order],
+                np.asarray(item["B4"], dtype=np.float32)[valid][order],
+            )
+        )
+        for model_index in range(2):
+            result = _point_metrics(labels, scores[model_index])
+            metrics[model_index, column] = [
+                result[name] for name in ("AP", "AUROC", "FPR95", "threshold")
+            ]
+        aligned.append(
+            {
+                "world_id": np.asarray(world_id, dtype=np.int16),
+                "label": labels,
+                "control": controls,
+                "score": scores,
+            }
+        )
+    arrays = {
+        "development_world_id": np.asarray(world_ids, dtype=np.int16),
+        "model_name": np.asarray(("B3", "B4")),
+        "metric_name": np.asarray(("AP", "AUROC", "FPR95", "threshold")),
+        "development_metric": metrics,
+    }
+    return arrays, aligned
+
+
+def _fast_f2_masked_scores(
+    evaluator: E63B3DevelopmentEvaluator,
+    sequence: object,
+    frame_id: np.ndarray,
+    packed_mask: np.ndarray,
+    point_count: np.ndarray,
+    reference_frame: np.ndarray,
+    reference_offset: np.ndarray,
+    reference_ray: np.ndarray,
+    model: AJAEPointTransformer,
+    *,
+    b3_legal_range: tuple[int, int],
+) -> tuple[np.ndarray, np.ndarray]:
+    """Align q=0 B3 and full-occurrence B4 scores to frozen E61 rays."""
+
+    scores = evaluator.sequence_b3_b4_scores(model, sequence, frame_id.tolist())
+    reference_row = {int(value): row for row, value in enumerate(reference_frame)}
+    b3_parts: list[np.ndarray] = []
+    b4_parts: list[np.ndarray] = []
+    for row, current in enumerate(frame_id.tolist()):
+        source = getattr(sequence, "source_frame")(int(current))
+        slots = np.asarray(getattr(source, "real_slots"), dtype=np.int64)
+        mask = np.unpackbits(packed_mask[row], bitorder="little")[
+            : evaluator.canonical_by_slot.size
+        ]
+        selected = np.flatnonzero(mask[evaluator.canonical_by_slot])
+        order = np.argsort(evaluator.canonical_by_slot[selected], kind="stable")
+        selected = selected[order]
+        reference_index = reference_row[int(current)]
+        start, stop = reference_offset[reference_index : reference_index + 2]
+        if (
+            selected.size != int(point_count[row])
+            or not np.array_equal(
+                evaluator.canonical_by_slot[selected], reference_ray[start:stop]
+            )
+        ):
+            raise QualificationError("v5 safety point identity changed")
+        slot_to_real = np.full(evaluator.canonical_by_slot.size, -1, dtype=np.int32)
+        slot_to_real[slots] = np.arange(slots.size, dtype=np.int32)
+        selected_index = slot_to_real[selected]
+        if np.any(selected_index < 0):
+            raise QualificationError("v5 safety mask selected an absent return")
+        b3, b4, _ = scores[int(current)]
+        if b3_legal_range[0] <= int(current) <= b3_legal_range[1]:
+            if b3 is None:
+                raise QualificationError("v5 legal q=0 safety score is absent")
+            b3_parts.append(b3[selected_index])
+        b4_parts.append(b4[selected_index])
+    return np.concatenate(b3_parts), np.concatenate(b4_parts)
+
+
+def _fast_f2_safety(
+    development: list[dict[str, np.ndarray]],
+    development_metric: np.ndarray,
+    pure_score: tuple[np.ndarray, np.ndarray],
+    moving_score: tuple[np.ndarray, np.ndarray],
+    safety_fold: np.ndarray,
+) -> dict[str, np.ndarray]:
+    """Apply the existing strict cross-fold threshold semantics to B3 and B4."""
+
+    world = np.asarray([int(item["world_id"]) for item in development], dtype=np.int16)
+    labels = np.concatenate([item["label"] for item in development])
+    controls = np.concatenate([item["control"] for item in development])
+    scores = np.concatenate([item["score"] for item in development], axis=1)
+    point_world = np.concatenate(
+        [np.full(item["label"].shape, int(item["world_id"]), dtype=np.int16) for item in development]
+    )
+    fold_by_world = {int(value): safety_fold[row] for row, value in enumerate(world)}
+    point_fold = np.asarray([fold_by_world[int(value)] for value in point_world], dtype="S1")
+    threshold = np.empty((2, 2), dtype=np.float64)
+    control_fpr = np.empty(2, dtype=np.float64)
+    pure_fpr = np.empty(2, dtype=np.float64)
+    moving_fpr = np.empty(2, dtype=np.float64)
+    for model_index in range(2):
+        for fold_index, name in enumerate((b"A", b"B")):
+            selected = point_fold == name
+            threshold[model_index, fold_index] = _point_metrics(
+                labels[selected], scores[model_index, selected]
+            )["threshold"]
+        false_positive = np.count_nonzero(
+            scores[model_index, controls & (point_fold == b"B")]
+            > threshold[model_index, 0]
+        ) + np.count_nonzero(
+            scores[model_index, controls & (point_fold == b"A")]
+            > threshold[model_index, 1]
+        )
+        control_fpr[model_index] = false_positive / np.count_nonzero(controls)
+        for destination, values in (
+            (pure_fpr, pure_score[model_index]),
+            (moving_fpr, moving_score[model_index]),
+        ):
+            destination[model_index] = 0.5 * (
+                np.mean(values > threshold[model_index, 0])
+                + np.mean(values > threshold[model_index, 1])
+            )
+    return {
+        "safety_measure_name": np.asarray(
+            ("pure_normal_FPR", "normal_control_FPR", "moving_normal_FPR", "development_FPR95")
+        ),
+        "safety_threshold": threshold,
+        "safety_measure": np.stack(
+            (
+                pure_fpr,
+                control_fpr,
+                moving_fpr,
+                development_metric[:, :, 2].mean(axis=1) / 100.0,
+            ),
+            axis=1,
+        ),
+    }
+
+
+def run_ajae_f2_x(
+    data_root: Path | str,
+    protocol_path: Path | str,
+    e57_path: Path | str,
+    e61_path: Path | str,
+    e63_path: Path | str,
+    e72_path: Path | str,
+    e75x_path: Path | str,
+    e76x_lite_path: Path | str,
+    b3_dir: Path | str,
+    output_path: Path | str,
+    *,
+    stage: str,
+    device: str = "cuda",
+) -> dict[str, object]:
+    """Run one frozen v5 B3/B4 preview, screen, or final evaluation."""
+
+    from .render import load_sensor_calibration
+
+    started = time.monotonic()
+    protocol_file = Path(protocol_path).expanduser().resolve(strict=True)
+    protocol = load_protocol(protocol_file)
+    project_root = Path(protocol.path).parent
+    full = protocol.development["exploration_track"]["full_ajae_x_freeze"]
+    fast = full["fast_viability"]
+    if (
+        full["version"] != "AJAE-full-first-v5-fast-viability"
+        or stage not in {"preview", "screen", "final"}
+    ):
+        raise QualificationError("AJAE-F2-X v5 stage identity changed")
+    stage_freeze = fast["stages"][stage]
+    completed_worlds = int(stage_freeze["completed_worlds"])
+    expected_output = (project_root / stage_freeze["output"]).resolve()
+    output_file = Path(output_path).expanduser().resolve()
+    if output_file != expected_output or output_file.exists():
+        raise QualificationError("AJAE-F2-X output is invalid or already exists")
+    inputs = {
+        "E57": Path(e57_path).expanduser().resolve(strict=True),
+        "E61": Path(e61_path).expanduser().resolve(strict=True),
+        "E63": Path(e63_path).expanduser().resolve(strict=True),
+        "E72": Path(e72_path).expanduser().resolve(strict=True),
+        "E75-X": Path(e75x_path).expanduser().resolve(strict=True),
+        "E76-X-lite": Path(e76x_lite_path).expanduser().resolve(strict=True),
+    }
+    expected_hash = fast["input_artifact_sha256"]
+    if any(_sha256(path) != expected_hash[name] for name, path in inputs.items()):
+        raise QualificationError("AJAE-F2-X input artifact identity changed")
+    runtime_device = torch.device(device)
+    if runtime_device.type == "cuda" and not torch.cuda.is_available():
+        raise QualificationError("AJAE-F2-X CUDA device is unavailable")
+    run_dir = Path(b3_dir).expanduser().resolve(strict=True) / "seed-0"
+    model, checkpoint_sha256, selected_world = _fast_f2_model(
+        protocol, run_dir, stage, completed_worlds, runtime_device
+    )
+    grid, sensor = load_sensor_calibration(protocol.sensor_calibration_path())
+    canonical = np.asarray(
+        grid.beam_ids * grid.columns + grid.column_ids, dtype=np.int32
+    )
+    encoder = FrozenSTUPointEncoder.from_protocol(
+        protocol, project_root=project_root
+    ).to(runtime_device).eval()
+    evaluator = E63B3DevelopmentEvaluator(
+        protocol=protocol,
+        project_root=project_root,
+        data_root=data_root,
+        device=runtime_device,
+        encoder=encoder,
+        grid=grid,
+        sensor=sensor,
+        canonical_by_slot=canonical,
+    )
+    world_ids = (
+        tuple(stage_freeze["development_world_ids"])
+        if stage == "preview"
+        else E63_COMMON_WORLD_ID
+    )
+    arrays, aligned = _fast_f2_development(
+        protocol, evaluator, model, world_ids, inputs["E72"]
+    )
+    with np.load(inputs["E75-X"], allow_pickle=False) as archive:
+        baseline_world = np.asarray(archive["world_id"], dtype=np.int16)
+        b0_ap = np.asarray(archive["b0_ap_reported"], dtype=np.float64)
+        b1_ap = np.asarray(archive["b1_ap_reported"], dtype=np.float64)[0]
+    baseline_row = {int(value): row for row, value in enumerate(baseline_world)}
+    selected_rows = np.asarray([baseline_row[int(value)] for value in world_ids])
+    arrays["baseline_model_name"] = np.asarray(("B0", "B1_seed0"))
+    arrays["baseline_AP"] = np.stack((b0_ap[selected_rows], b1_ap[selected_rows]))
+    arrays["macro_AP"] = arrays["development_metric"][:, :, 0].mean(axis=1)
+    arrays["baseline_macro_AP"] = arrays["baseline_AP"].mean(axis=1)
+    arrays["AP_difference_vs_baseline"] = (
+        arrays["macro_AP"][:, None] - arrays["baseline_macro_AP"][None, :]
+    )
+
+    collapse = False
+    if stage != "preview":
+        with np.load(inputs["E63"], allow_pickle=False) as archive:
+            frozen_world = np.asarray(archive["world_id"], dtype=np.int16)
+            eligible = np.asarray(archive["common_domain_eligible"], dtype=np.bool_)
+            safety_fold = np.asarray(archive["safety_fold"], dtype="S1")[eligible]
+        if not np.array_equal(frozen_world[eligible], np.asarray(world_ids)):
+            raise QualificationError("AJAE-F2-X safety fold identity changed")
+        with np.load(inputs["E61"], allow_pickle=False) as archive:
+            pure_frame_all = np.asarray(archive["pure_frame_id"], dtype=np.int16)
+            pure_packed_all = np.asarray(archive["pure_canonical_mask_packed"], dtype=np.uint8)
+            pure_count_all = np.asarray(archive["pure_point_count_by_frame"], dtype=np.int32)
+            moving_frame = np.asarray(archive["moving_frame_id"], dtype=np.int16)
+            moving_packed = np.asarray(archive["moving_canonical_mask_packed"], dtype=np.uint8)
+            moving_count = np.asarray(archive["moving_point_count_by_frame"], dtype=np.int32)
+        selected_pure = np.asarray(fast["lite_safety"]["pure_normal_frame_ids"], dtype=np.int16)
+        pure_row = {int(value): row for row, value in enumerate(pure_frame_all)}
+        pure_rows = np.asarray([pure_row[int(value)] for value in selected_pure])
+        with np.load(inputs["E72"], allow_pickle=False) as archive:
+            ref_pure_frame = np.asarray(archive["pure_frame_id"], dtype=np.int16)
+            ref_pure_offset = np.asarray(archive["pure_point_offset"], dtype=np.int64)
+            ref_pure_ray = np.asarray(archive["pure_canonical_ray"], dtype=np.int32)
+            ref_moving_frame = np.asarray(archive["moving_frame_id"], dtype=np.int16)
+            ref_moving_offset = np.asarray(archive["moving_point_offset"], dtype=np.int64)
+            ref_moving_ray = np.asarray(archive["moving_canonical_ray"], dtype=np.int32)
+        pure = _fast_f2_masked_scores(
+            evaluator,
+            evaluator.sequence,
+            selected_pure,
+            pure_packed_all[pure_rows],
+            pure_count_all[pure_rows],
+            ref_pure_frame,
+            ref_pure_offset,
+            ref_pure_ray,
+            model,
+            b3_legal_range=(6, 679),
+        )
+        sequence_206 = STUSequence.open(
+            data_root,
+            protocol=protocol,
+            partition="train",
+            sequence_id=206,
+            label_mode=LabelMode.REQUIRED,
+        )
+        moving = _fast_f2_masked_scores(
+            evaluator,
+            sequence_206,
+            moving_frame,
+            moving_packed,
+            moving_count,
+            ref_moving_frame,
+            ref_moving_offset,
+            ref_moving_ray,
+            model,
+            b3_legal_range=(2, 446),
+        )
+        safety = _fast_f2_safety(
+            aligned, arrays["development_metric"], pure, moving, safety_fold
+        )
+        arrays.update(safety)
+        with np.load(inputs["E76-X-lite"], allow_pickle=False) as archive:
+            baseline_safety = np.asarray(archive["safety_measure"], dtype=np.float64)
+            safety_names = np.asarray(archive["safety_measure_name"])
+        moving_column = np.flatnonzero(safety_names == "moving_normal_FPR")
+        if moving_column.tolist() != [2]:
+            raise QualificationError("AJAE-F2-X moving-normal reference changed")
+        arrays["baseline_safety_measure"] = baseline_safety[:2]
+        collapse = bool(
+            arrays["macro_AP"][1] <= arrays["baseline_macro_AP"][0]
+            and arrays["safety_measure"][1, 2] >= baseline_safety[1, 2]
+        )
+        arrays["whole_method_collapse"] = np.asarray(collapse)
+        if pure[0].size != 3955017 or pure[1].size != 3955039:
+            raise QualificationError("AJAE-F2-X pure-normal lite count changed")
+        if moving[0].size != 12820 or moving[1].size != 13011:
+            raise QualificationError("AJAE-F2-X moving-normal count changed")
+    result = {
+        "experiment": "AJAE-F2-X-v5",
+        "status": "descriptive_complete" if stage == "preview" else (
+            "whole_method_collapse" if collapse else "continue"
+        ),
+        "stage": stage,
+        "completed_worlds": completed_worlds,
+        "selected_checkpoint_world": selected_world,
+        "checkpoint_sha256": checkpoint_sha256,
+        "development_worlds": len(world_ids),
+        "macro_AP": arrays["macro_AP"].tolist(),
+        "baseline_macro_AP": arrays["baseline_macro_AP"].tolist(),
+        "descriptive_only": stage == "preview",
+        "checkpoint_selection_performed": stage == "final",
+        "collapse_rule_applied": stage != "preview",
+        "whole_method_collapse": collapse if stage != "preview" else None,
+        "formal_gate_adjudicated": False,
+        "public_real_ood_accessed": False,
+        "hidden_test_accessed": False,
+        "protocol_sha256": _sha256(protocol_file),
+        "input_artifact_sha256": {name: _sha256(path) for name, path in inputs.items()},
+        "scientific_array_sha256": _array_hash(arrays),
+        "seconds": time.monotonic() - started,
+    }
+    _save(output_file, arrays, result)
+    return result
+
+
 def run_e76_visual_audit(
     protocol_path: Path | str,
     source_dir: Path | str,
@@ -5553,6 +5984,19 @@ def _parser() -> argparse.ArgumentParser:
     f0.add_argument("--protocol", type=Path, default=PROJECT_ROOT / "protocol.json")
     f0.add_argument("--output", type=Path, required=True)
     f0.add_argument("--device", default="cuda")
+    f2 = commands.add_parser("ajae-f2-x")
+    f2.add_argument("--data-root", type=Path, required=True)
+    f2.add_argument("--protocol", type=Path, default=PROJECT_ROOT / "protocol.json")
+    f2.add_argument("--e57", type=Path, required=True)
+    f2.add_argument("--e61", type=Path, required=True)
+    f2.add_argument("--e63", type=Path, required=True)
+    f2.add_argument("--e72", type=Path, required=True)
+    f2.add_argument("--e75x", type=Path, required=True)
+    f2.add_argument("--e76x-lite", type=Path, required=True)
+    f2.add_argument("--b3-dir", type=Path, required=True)
+    f2.add_argument("--output", type=Path, required=True)
+    f2.add_argument("--stage", choices=("preview", "screen", "final"), required=True)
+    f2.add_argument("--device", default="cuda")
     phase7 = commands.add_parser("phase7")
     phase7.add_argument("--protocol", type=Path, default=PROJECT_ROOT / "protocol.json")
     phase7.add_argument("--e63", type=Path, required=True)
@@ -5722,6 +6166,23 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 0 if result["passed"] else 1
+    if args.command == "ajae-f2-x":
+        result = run_ajae_f2_x(
+            args.data_root,
+            args.protocol,
+            args.e57,
+            args.e61,
+            args.e63,
+            args.e72,
+            args.e75x,
+            args.e76x_lite,
+            args.b3_dir,
+            args.output,
+            stage=args.stage,
+            device=args.device,
+        )
+        print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        return 0
     if args.command == "phase7":
         result = run_phase7(args.protocol, args.e63, args.output)
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))

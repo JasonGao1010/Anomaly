@@ -966,11 +966,11 @@ def make_window_training_data(
 def shuffled_center_blocks(
     legal_centers: Sequence[int], block_size: int, seed: int
 ) -> tuple[tuple[int, ...], ...]:
-    """Shuffle contiguous blocks while preserving time order within each block."""
+    """Shuffle ordered center blocks while preserving order within each block."""
 
     centers = tuple(int(value) for value in legal_centers)
-    if not centers or any(right != left + 1 for left, right in zip(centers, centers[1:])):
-        raise ValueError("legal centers must be one consecutive range")
+    if not centers or any(right <= left for left, right in zip(centers, centers[1:])):
+        raise ValueError("legal centers must be strictly increasing")
     if block_size < 1:
         raise ValueError("block_size must be positive")
     blocks = [
@@ -979,6 +979,132 @@ def shuffled_center_blocks(
     ]
     random.Random(seed).shuffle(blocks)
     return tuple(blocks)
+
+
+@dataclass(frozen=True, slots=True)
+class TrainingSchedule:
+    """Freeze center sampling, development evaluations, and stage pauses."""
+
+    version: str
+    center_stride: int
+    phase_modulus: int
+    windows_per_world: int
+    development_worlds: tuple[int, ...]
+    pause_after_worlds: tuple[int, ...]
+    output_directory: str | None = None
+
+    def __post_init__(self) -> None:
+        if not self.version:
+            raise ValueError("training schedule version must be non-empty")
+        if (
+            type(self.center_stride) is not int
+            or self.center_stride < 1
+            or type(self.phase_modulus) is not int
+            or self.phase_modulus != self.center_stride
+            or type(self.windows_per_world) is not int
+            or self.windows_per_world < 1
+        ):
+            raise ValueError("training center schedule is invalid")
+        if (
+            not self.development_worlds
+            or tuple(sorted(set(self.development_worlds))) != self.development_worlds
+            or tuple(sorted(set(self.pause_after_worlds))) != self.pause_after_worlds
+        ):
+            raise ValueError("training stage worlds are invalid")
+        if self.output_directory is not None:
+            if not self.output_directory:
+                raise ValueError("schedule output directory must be non-empty")
+            output = Path(self.output_directory)
+            if output.is_absolute() or ".." in output.parts:
+                raise ValueError("schedule output directory must be project-relative")
+
+    def centers(
+        self, legal_centers: Sequence[int], world_index: int
+    ) -> tuple[int, ...]:
+        centers = tuple(int(value) for value in legal_centers)
+        if (
+            not centers
+            or any(right != left + 1 for left, right in zip(centers, centers[1:]))
+            or type(world_index) is not int
+            or world_index < 0
+        ):
+            raise TrainingError("training schedule requires one legal center range")
+        phase = world_index % self.phase_modulus
+        selected = centers[phase :: self.center_stride]
+        if len(selected) != self.windows_per_world:
+            raise TrainingError("training schedule changed its windows-per-world count")
+        return selected
+
+
+def training_schedule(
+    protocol: object,
+    condition: ExperimentCondition,
+    config: TrainConfig,
+    maximum_worlds: int,
+) -> TrainingSchedule:
+    """Resolve the active result-blind schedule from the authoritative protocol."""
+
+    if condition.name == "B3":
+        development = getattr(protocol, "development", None)
+        exploration = (
+            development.get("exploration_track")
+            if isinstance(development, Mapping)
+            else None
+        )
+        full = (
+            exploration.get("full_ajae_x_freeze")
+            if isinstance(exploration, Mapping)
+            else None
+        )
+        fast = full.get("fast_viability") if isinstance(full, Mapping) else None
+        if (
+            isinstance(full, Mapping)
+            and full.get("version") == "AJAE-full-first-v5-fast-viability"
+            and isinstance(fast, Mapping)
+        ):
+            window = fast.get("window_schedule")
+            stages = fast.get("stages")
+            if not isinstance(window, Mapping) or not isinstance(stages, Mapping):
+                raise TrainingError("fast viability schedule is incomplete")
+            preview = stages.get("preview")
+            screen = stages.get("screen")
+            final = stages.get("final")
+            if not all(isinstance(item, Mapping) for item in (preview, screen, final)):
+                raise TrainingError("fast viability stages are incomplete")
+            assert isinstance(preview, Mapping)
+            assert isinstance(screen, Mapping)
+            assert isinstance(final, Mapping)
+            schedule = TrainingSchedule(
+                version=str(fast.get("version", "")),
+                center_stride=int(window.get("stride", 0)),
+                phase_modulus=int(window.get("phase_modulus", 0)),
+                windows_per_world=int(window.get("windows_per_world", 0)),
+                development_worlds=(
+                    int(screen.get("completed_worlds", 0)),
+                    int(final.get("completed_worlds", 0)),
+                ),
+                pause_after_worlds=(
+                    int(preview.get("completed_worlds", 0)),
+                    int(screen.get("completed_worlds", 0)),
+                ),
+                output_directory=str(fast.get("output_directory", "")),
+            )
+            if schedule.development_worlds[-1] != maximum_worlds:
+                raise TrainingError("fast viability final stage differs from the world limit")
+            return schedule
+    evaluation_worlds = tuple(
+        range(config.worlds_per_evaluation, maximum_worlds + 1, config.worlds_per_evaluation)
+    )
+    if not evaluation_worlds or evaluation_worlds[-1] != maximum_worlds:
+        evaluation_worlds = (*evaluation_worlds, maximum_worlds)
+    return TrainingSchedule(
+        version="E63-full-grid-v1",
+        center_stride=1,
+        phase_modulus=1,
+        windows_per_world=445 if condition.name in {"B2", "B3"} else 449,
+        development_worlds=evaluation_worlds,
+        pause_after_worlds=(),
+    )
 
 
 def _derived_seed(training_seed: int, world_index: int, stream: int) -> int:
@@ -1009,6 +1135,7 @@ class AJAETrainer:
             [ExperimentCondition, int, Sequence[object]], object
         ],
         config: TrainConfig,
+        schedule: TrainingSchedule,
         evaluation_range: tuple[float, float],
         run_dir: Path | str,
         scientific_identity: Mapping[str, Any],
@@ -1044,6 +1171,7 @@ class AJAETrainer:
         self.render_frame_callback = render_frame
         self.assemble_window_callback = assemble_window
         self.config = config
+        self.schedule = schedule
         self.minimum_range_m, self.maximum_range_m = evaluation_range
         if not (
             math.isclose(self.minimum_range_m, 2.5, abs_tol=1.0e-12)
@@ -1311,13 +1439,14 @@ class AJAETrainer:
         self.active_world_seed = int(world_seed)
         self.model.train()
         self.cache.clear()
+        selected_centers = self.schedule.centers(self.legal_centers, world_index)
         new_world = blocks is None
         if new_world:
             if self.accumulated_windows != 0:
                 raise TrainingError("a new world cannot inherit accumulated gradients")
             self.optimizer.zero_grad(set_to_none=True)
             self.block_order = shuffled_center_blocks(
-                self.legal_centers,
+                selected_centers,
                 self.config.chunk_centers,
                 _derived_seed(self.seed, world_index, 1),
             )
@@ -1326,10 +1455,10 @@ class AJAETrainer:
                 tuple(int(center) for center in block) for block in blocks
             )
         flattened = tuple(center for block in self.block_order for center in block)
-        if sorted(flattened) != list(self.legal_centers) or len(set(flattened)) != len(
+        if sorted(flattened) != list(selected_centers) or len(set(flattened)) != len(
             flattened
         ):
-            raise TrainingError("saved block order does not cover every legal center once")
+            raise TrainingError("saved block order does not cover every selected center once")
         if not 0 <= start_block <= len(self.block_order):
             raise TrainingError("saved block cursor lies outside the world")
         if start_block < len(self.block_order) and not 0 <= start_window < len(
@@ -1376,8 +1505,8 @@ class AJAETrainer:
             self.cache.clear()
         if self.accumulated_windows:
             raise TrainingError("world completion left uncommitted gradients")
-        if self.world_window_count != len(self.legal_centers):
-            raise TrainingError("one world did not cover every legal window exactly once")
+        if self.world_window_count != len(selected_centers):
+            raise TrainingError("one world did not cover every selected window exactly once")
         return self.world_loss_sum / self.world_window_count
 
     def _progress_payload(self) -> dict[str, Any]:
@@ -1398,6 +1527,7 @@ class AJAETrainer:
             "training_condition": self.condition.to_dict(),
             "seed": self.seed,
             "config": asdict(self.config),
+            "training_schedule": asdict(self.schedule),
             "checkpoint_selector": self.selector_identity,
             "development_evaluator": self.evaluator_identity,
             "cursor": {
@@ -1468,6 +1598,8 @@ class AJAETrainer:
             raise TrainingError("progress checkpoint has an unsupported format")
         if payload.get("config") != asdict(self.config):
             raise TrainingError("progress checkpoint uses a different runtime config")
+        if payload.get("training_schedule") != asdict(self.schedule):
+            raise TrainingError("progress checkpoint uses a different training schedule")
         saved_identity = payload.get("scientific_identity")
         if saved_identity != self.scientific_identity:
             if not isinstance(saved_identity, Mapping) or not (
@@ -1868,7 +2000,9 @@ class AJAETrainer:
                         window_count=self.world_window_count,
                     )
                 else:
-                    if self.world_window_count != len(self.legal_centers):
+                    if self.world_window_count != len(
+                        self.schedule.centers(self.legal_centers, world_index)
+                    ):
                         raise TrainingError("completed world has an incomplete window count")
                     training_loss = self.world_loss_sum / self.world_window_count
             else:
@@ -1885,11 +2019,7 @@ class AJAETrainer:
             completed = world_index + 1
             full_cycle_seen = completed >= len(self.config.world_type_cycle)
             evaluate_now = development_was_pending or (
-                full_cycle_seen
-                and (
-                    completed % self.config.worlds_per_evaluation == 0
-                    or completed == maximum_worlds
-                )
+                full_cycle_seen and completed in self.schedule.development_worlds
             )
             if evaluate_now:
                 if not development_was_pending:
@@ -1917,6 +2047,17 @@ class AJAETrainer:
             self.phase = "between_worlds"
             self.commit_id += 1
             self.save_progress()
+            if world_index in self.schedule.pause_after_worlds:
+                return {
+                    "format": RUN_FORMAT,
+                    "status": "paused_for_external_evaluation",
+                    "seed": self.seed,
+                    "condition": self.condition.to_dict(),
+                    "completed_worlds": world_index,
+                    "maximum_worlds": maximum_worlds,
+                    "training_schedule": asdict(self.schedule),
+                    "progress_path": str(self.run_dir / "progress.pt"),
+                }
         self.stop_reason = "maximum_worlds"
         return self._finalize()
 
@@ -2221,15 +2362,38 @@ class E63B3DevelopmentEvaluator(E63B1DevelopmentEvaluator):
         ]["f1_entry"]["p1_boundary_amendment"]
         pure = p1["pure_normal_q0"]
         frame_min, frame_max = map(int, pure["frame_range"])
-        keep = (self.pure_frame_id >= frame_min) & (
-            self.pure_frame_id <= frame_max
-        )
+        full = self.protocol.development["exploration_track"][
+            "full_ajae_x_freeze"
+        ]
+        fast = full.get("fast_viability")
+        if isinstance(fast, Mapping):
+            lite = fast.get("lite_safety")
+            if not isinstance(lite, Mapping):
+                raise TrainingError("fast viability lite-safety identity is incomplete")
+            selected = np.asarray(lite.get("pure_normal_frame_ids", ()), dtype=np.int16)
+            keep = (
+                np.isin(self.pure_frame_id, selected)
+                & (self.pure_frame_id >= frame_min)
+                & (self.pure_frame_id <= frame_max)
+            )
+            expected_frames = int(lite.get("q0_frame_count", 0))
+            expected_points = int(lite.get("q0_point_count", 0))
+            evaluator_version = "E63-B3-q0-development-evaluator-v5-fast-lite"
+            pure_rule = "frozen E76-X-lite frames intersected with legal B3 q=0 centers"
+        else:
+            keep = (self.pure_frame_id >= frame_min) & (
+                self.pure_frame_id <= frame_max
+            )
+            expected_frames = frame_max - frame_min + 1
+            expected_points = int(pure["points"])
+            evaluator_version = "E63-B3-q0-development-evaluator-full-first-v4"
+            pure_rule = "P1 train/201 frame 6-679 q=0 intersection"
         self.pure_frame_id = self.pure_frame_id[keep]
         self.pure_mask_packed = self.pure_mask_packed[keep]
         self.pure_count = self.pure_count[keep]
-        self.pure_expected = int(pure["points"])
+        self.pure_expected = expected_points
         if (
-            self.pure_frame_id.size != frame_max - frame_min + 1
+            self.pure_frame_id.size != expected_frames
             or int(self.pure_count.sum()) != self.pure_expected
         ):
             raise TrainingError("P1 B3 pure-normal q=0 domain changed")
@@ -2242,7 +2406,7 @@ class E63B3DevelopmentEvaluator(E63B1DevelopmentEvaluator):
         )
         self.condition = experiment_condition("B3")
         self.scientific_identity = {
-            "version": "E63-B3-q0-development-evaluator-full-first-v4",
+            "version": evaluator_version,
             "e57_artifact_sha256": self.scientific_identity[
                 "e57_artifact_sha256"
             ],
@@ -2257,19 +2421,22 @@ class E63B3DevelopmentEvaluator(E63B1DevelopmentEvaluator):
             .tolist(),
             "target": "B3 q=0 only",
             "threshold_rule": "official first ROC threshold with TPR strictly greater than 0.95",
-            "pure_normal_cross_fit": "mean FPR on the P1 train/201 frame 6-679 q=0 intersection under the two opposite-fold proxy thresholds",
+            "pure_normal_cross_fit": (
+                f"mean FPR on the {pure_rule} under the two opposite-fold "
+                "proxy thresholds"
+            ),
             "pure_normal_points": self.pure_expected,
             "threshold_comparison": "score strictly greater than threshold",
         }
 
-    def _window_scores(
+    def _window_probabilities(
         self,
         model: nn.Module,
         sources: Sequence[object],
         center: int,
         *,
         input_cache: OrderedDict[int, dict[str, object]] | None = None,
-    ) -> np.ndarray:
+    ) -> tuple[np.ndarray, ...]:
         try:
             from .scene import assemble_window
         except ImportError:  # pragma: no cover
@@ -2328,15 +2495,160 @@ class E63B3DevelopmentEvaluator(E63B1DevelopmentEvaluator):
                 ),
                 cross_frame_enabled=True,
             )
-        q0 = times == 0
-        expected = int(np.asarray(getattr(sources[2], "real_slots")).size)
-        if (
-            logits.shape != times.shape
-            or int(q0.sum()) != expected
-            or not bool(torch.isfinite(logits).all())
+        counts = tuple(
+            int(np.asarray(getattr(source, "real_slots")).size) for source in sources
+        )
+        if logits.shape != times.shape or sum(counts) != logits.numel() or not bool(
+            torch.isfinite(logits).all()
         ):
-            raise TrainingError("B3 q=0 development logits are invalid")
-        return torch.sigmoid(logits[q0]).detach().cpu().numpy().astype(np.float32)
+            raise TrainingError("B3 development logits are invalid")
+        probabilities = torch.sigmoid(logits).detach().cpu().numpy().astype(np.float32)
+        offsets = np.cumsum((0, *counts), dtype=np.int64)
+        return tuple(
+            probabilities[offsets[index] : offsets[index + 1]]
+            for index in range(5)
+        )
+
+    def _window_scores(
+        self,
+        model: nn.Module,
+        sources: Sequence[object],
+        center: int,
+        *,
+        input_cache: OrderedDict[int, dict[str, object]] | None = None,
+    ) -> np.ndarray:
+        return self._window_probabilities(
+            model, sources, center, input_cache=input_cache
+        )[2]
+
+    def sequence_b3_b4_scores(
+        self,
+        model: nn.Module,
+        sequence: object,
+        target_frames: Sequence[int],
+    ) -> dict[int, tuple[np.ndarray | None, np.ndarray, np.ndarray]]:
+        """Score frozen targets once per legal window and fuse B4 occurrences."""
+
+        targets = tuple(sorted(set(int(value) for value in target_frames)))
+        legal = tuple(
+            int(value)
+            for value in getattr(sequence, "spec").legal_anchors(RELATIVE_TIMES)
+        )
+        legal_set = frozenset(legal)
+        target_set = frozenset(targets)
+        centers = tuple(
+            center
+            for center in legal
+            if any(abs(center - target) <= 2 for target in target_set)
+        )
+        sums: dict[int, np.ndarray] = {}
+        counts: dict[int, np.ndarray] = {}
+        direct: dict[int, np.ndarray] = {}
+        cache: OrderedDict[int, dict[str, object]] = OrderedDict()
+        for center in centers:
+            sources = tuple(
+                getattr(sequence, "source_frame")(center + offset)
+                for offset in RELATIVE_TIMES
+            )
+            probabilities = self._window_probabilities(
+                model, sources, center, input_cache=cache
+            )
+            for local, source in enumerate(sources):
+                frame_id = int(getattr(source, "frame_id"))
+                if frame_id not in target_set:
+                    continue
+                values = probabilities[local]
+                if local == 2:
+                    direct[frame_id] = values.copy()
+                if frame_id not in sums:
+                    sums[frame_id] = np.zeros(values.shape, dtype=np.float64)
+                    counts[frame_id] = np.zeros(values.shape, dtype=np.uint8)
+                if sums[frame_id].shape != values.shape:
+                    raise TrainingError("one frame changed point identity across windows")
+                sums[frame_id] += values
+                counts[frame_id] += np.uint8(1)
+        result: dict[int, tuple[np.ndarray | None, np.ndarray, np.ndarray]] = {}
+        for frame_id in targets:
+            if frame_id not in sums or not np.all(counts[frame_id] > 0):
+                raise TrainingError("B4 target has no legal window occurrence")
+            if (frame_id in legal_set) != (frame_id in direct):
+                raise TrainingError("B3 q=0 target legality changed")
+            result[frame_id] = (
+                direct.get(frame_id),
+                (sums[frame_id] / counts[frame_id]).astype(np.float32),
+                counts[frame_id].copy(),
+            )
+        return result
+
+    def development_b3_b4_scores(
+        self,
+        model: nn.Module,
+        world_ids: Sequence[int],
+    ) -> tuple[dict[str, object], ...]:
+        """Evaluate B3 q=0 and B4 fusion on fixed rendered worlds."""
+
+        try:
+            from .render import WorldSpec, render_frame
+        except ImportError:  # pragma: no cover
+            from render import WorldSpec, render_frame  # type: ignore[no-redef]
+        requested = tuple(int(value) for value in world_ids)
+        rows = {int(self.world_id[row]): row for row in np.flatnonzero(self.eligible)}
+        if len(set(requested)) != len(requested) or any(
+            value not in rows for value in requested
+        ):
+            raise TrainingError("development world selection is invalid")
+        output: list[dict[str, object]] = []
+        for world_id in requested:
+            row = rows[world_id]
+            target = int(self.center[row])
+            world = WorldSpec.from_dict(json.loads(str(self.world_json[row])))
+            rendered = {
+                frame_id: render_frame(
+                    self.sequence.source_frame(frame_id), world, self.grid, self.sensor
+                )
+                for frame_id in range(target - 4, target + 5)
+            }
+            cache: OrderedDict[int, dict[str, object]] = OrderedDict()
+            occurrences: list[np.ndarray] = []
+            b3: np.ndarray | None = None
+            for center in range(target - 2, target + 3):
+                sources = tuple(
+                    rendered[center + offset].source for offset in RELATIVE_TIMES
+                )
+                probabilities = self._window_probabilities(
+                    model, sources, center, input_cache=cache
+                )
+                local = target - center + 2
+                occurrences.append(probabilities[local])
+                if center == target:
+                    b3 = probabilities[2]
+            if b3 is None or any(value.shape != b3.shape for value in occurrences):
+                raise TrainingError("development B3/B4 point identity changed")
+            target_render = rendered[target]
+            source = target_render.source
+            slots = np.asarray(source.real_slots, dtype=np.int64)
+            output.append(
+                {
+                    "world_id": world_id,
+                    "center_frame": target,
+                    "slots": slots,
+                    "canonical_ray": self.canonical_by_slot[slots],
+                    "xyz": np.asarray(source.xyzi)[slots, :3],
+                    "semantic": (
+                        np.asarray(target_render.packed_labels, dtype=np.uint32)[slots]
+                        & np.uint32(0xFFFF)
+                    ),
+                    "normal_control": np.asarray(
+                        target_render.normal_control_mask, dtype=np.bool_
+                    )[slots],
+                    "B3": b3,
+                    "B4": np.mean(
+                        np.stack(occurrences, axis=0), axis=0, dtype=np.float64
+                    ).astype(np.float32),
+                    "B4_occurrence_count": np.full(b3.shape, 5, dtype=np.uint8),
+                }
+            )
+        return tuple(output)
 
     def __call__(
         self,
@@ -2722,7 +3034,12 @@ def build_formal_training(
         )
 
     legal_centers = sequence.spec.legal_anchors(condition.frame_offsets)
-    run_root = project_root / config.output_dir / condition.name
+    schedule = training_schedule(protocol, condition, config, maximum_worlds)
+    run_root = (
+        project_root / schedule.output_directory
+        if schedule.output_directory is not None
+        else project_root / config.output_dir / condition.name
+    )
     stu_identity_payload = {
         "weights": stu_weight_identity(getattr(protocol, "checkpoint_path")(project_root)),
         "source_manifest_sha256": stu_source_manifest(
@@ -2763,6 +3080,7 @@ def build_formal_training(
         "world_support_rule": "centered_five_frames_at_seed_modulo_legal_center_count",
         "normal_template_count": len(normal_templates),
         "normal_template_library_sha256": normal_templates_sha256,
+        "training_schedule": asdict(schedule),
     }
     evaluation = getattr(protocol, "evaluation_spec")
 
@@ -2796,6 +3114,7 @@ def build_formal_training(
             render_frame=render_training_frame,
             assemble_window=assemble_training_window,
             config=config,
+            schedule=schedule,
             evaluation_range=(
                 float(evaluation.minimum_range_m),
                 float(evaluation.maximum_range_m),
@@ -3196,6 +3515,8 @@ def train_all_seeds(
             start_world=start_world,
         )
         results[seed] = seed_result
+        if seed_result.get("status") == "paused_for_external_evaluation":
+            return results
         if seed_result.get("status") != "completed":
             raise TrainingError(
                 f"seed {seed} exhausted the frozen world budget; no formal model was published"
@@ -3616,7 +3937,14 @@ def _main() -> None:
     print(
         json.dumps(
             {
-                "status": "completed",
+                "status": (
+                    "paused_for_external_evaluation"
+                    if any(
+                        result.get("status") == "paused_for_external_evaluation"
+                        for result in results.values()
+                    )
+                    else "completed"
+                ),
                 "seeds": sorted(results),
             },
             indent=2,

@@ -93,12 +93,14 @@ from src.train import (
     FrameCache,
     FrameCacheKey,
     TrainConfig,
+    TrainingSchedule,
     TrainingError,
     _finite_world_report_document,
     balanced_bce_loss,
     checkpoint_selection_key,
     experiment_condition,
     train_all_seeds,
+    training_schedule,
     validate_formal_preflight,
 )
 
@@ -593,8 +595,8 @@ def test_e76_c1_reuses_e48_split_and_detects_only_near_saturation() -> None:
 
 def test_e76_c1_protocol_is_result_blind_and_full_first() -> None:
     exploration = load_protocol(PROTOCOL_PATH).development["exploration_track"]
-    assert exploration["version"] == "exploration-confirmation-split-v4-full-training"
-    assert exploration["current_node"] == "AJAE-F1-X_seed0_training"
+    assert exploration["version"] == "exploration-confirmation-split-v5-fast-viability"
+    assert exploration["current_node"] == "AJAE-F1-X-v5_fast_seed0_training"
     c1 = exploration["e76c1_freeze"]
     assert c1["status"] == "frozen_before_clearance_computation"
     assert c1["descriptive_difference_is_nonblocking"] is True
@@ -618,6 +620,28 @@ def test_e76_c1_protocol_is_result_blind_and_full_first() -> None:
     assert entry["p2_semantic_training_preflight"]["world_seed"] == 1027531
     assert len(entry["p2_semantic_training_preflight"]["checks"]) == 7
     assert entry["p2_semantic_training_preflight"]["result"]["passed"] is True
+
+
+def test_v5_fast_training_schedule_covers_each_center_once_per_phase_cycle() -> None:
+    protocol = load_protocol(PROTOCOL_PATH)
+    schedule = training_schedule(
+        protocol, experiment_condition("B3"), TrainConfig.from_protocol(protocol), 25
+    )
+    assert schedule == TrainingSchedule(
+        version="AJAE-F1-X-v5-fast-whole-method-viability-v1",
+        center_stride=5,
+        phase_modulus=5,
+        windows_per_world=89,
+        development_worlds=(12, 25),
+        pause_after_worlds=(4, 12),
+        output_directory="runs/ajae/B3-fast-v5",
+    )
+    legal = tuple(range(2, 447))
+    phases = [schedule.centers(legal, world) for world in range(5)]
+    assert all(len(centers) == 89 for centers in phases)
+    assert phases[0] == tuple(range(2, 447, 5))
+    assert phases[4] == tuple(range(6, 447, 5))
+    assert sorted(center for centers in phases for center in centers) == list(legal)
 
 
 def test_phase5_frame_identity_is_frozen_before_stu_outputs() -> None:

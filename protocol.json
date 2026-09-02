@@ -2657,7 +2657,7 @@
     },
     "renderer_mechanical_qualification": {
       "status": "Gate 1 PASS; E50-E58 and E61-E73 formal PASS; E59-E60 descriptive complete; E74 confirmation suspended after seeds 0/1; E75-X descriptive complete; E76-X-lite moving-normal stop signal recorded; E76-V1 descriptive review complete without PASS/FAIL; E76-C1 found no direct clearance degeneracy; AJAE-F0-X and AJAE-F1-X entry P2 PASS; B3 seed0 training current; E78-X/B2 and formal Gate 2 locked",
-      "current_gate1_policy": {"hard_evidence": ["compatible canonical-ray and renderer mechanics through E44", "E45B-v2 rendered control/proxy qualification PASS", "E48 direct rendered-label-shortcut audit PASS"], "excluded_from_conjunction": ["all E45A variants", "E45-V1", "E46", "E47"], "rationale": "Natural real-normal observations and coverage-oriented inserted controls need not reproduce the same scene/placement distribution. Real-versus-rendered source identifiability is not equivalent to anomaly-label shortcut predictability because rendered controls and rendered proxies carry different labels.", "gate1_result": "PASS", "current_node": "AJAE-F1-X_seed0_training", "next_after_pass": []},
+      "current_gate1_policy": {"hard_evidence": ["compatible canonical-ray and renderer mechanics through E44", "E45B-v2 rendered control/proxy qualification PASS", "E48 direct rendered-label-shortcut audit PASS"], "excluded_from_conjunction": ["all E45A variants", "E45-V1", "E46", "E47"], "rationale": "Natural real-normal observations and coverage-oriented inserted controls need not reproduce the same scene/placement distribution. Real-versus-rendered source identifiability is not equivalent to anomaly-label shortcut predictability because rendered controls and rendered proxies carry different labels.", "gate1_result": "PASS", "current_node": "AJAE-F1-X-v5_fast_seed0_training", "next_after_pass": []},
       "layer_boundaries": {"E27-E28": "direct geometry outputs only", "E29": "return probability and deterministic acceptance decision only", "E30-E31": "accepted returns", "E32-E33": "nearest-return occlusion competition"},
       "E27": {
         "question": "Does the formal geometry path return the correct nearest convex-hull hit, outward finite normal and object ID for active normal-control templates when return rejection is disabled?",
@@ -3778,7 +3778,7 @@
       "held_out_input_forbidden": true
     },
     "exploration_track": {
-      "version": "exploration-confirmation-split-v4-full-training",
+      "version": "exploration-confirmation-split-v5-fast-viability",
       "status": "active_before_formal_gate2",
       "scientific_role": "rapidly test whole-method viability without replacing the frozen three-seed confirmatory standards",
       "cohort": {
@@ -3800,7 +3800,7 @@
         "partial_seed2_result_use_forbidden": true
       },
       "nodes": ["E75-X", "E76-X-lite", "E76-V1 descriptive visual audit", "E76-C1 visible-ground-clearance direct-shortcut audit", "AJAE-F0-X full-path mechanical preflight", "AJAE-F1-X full AJAE seed 0", "AJAE-F2-X seed 0 B3/B4 evaluation and lite safety", "AJAE-F3-X conditional full AJAE seed 1", "AJAE-F4-X two-seed whole-method viability review", "E78-X deferred ablation after whole-method viability", "E76-X full safety on the later confirmation track"],
-      "current_node": "AJAE-F1-X_seed0_training",
+      "current_node": "AJAE-F1-X-v5_fast_seed0_training",
       "e75x_result": {
         "status": "descriptive_execution_complete",
         "formal_gate2_adjudicated": false,
@@ -4013,8 +4013,8 @@
         "next_node": "AJAE-F0-X"
       },
       "full_ajae_x_freeze": {
-        "version": "AJAE-full-first-v4",
-        "status": "AJAE-F1-X_seed0_training",
+        "version": "AJAE-full-first-v5-fast-viability",
+        "status": "AJAE-F1-X-v5_fast_seed0_frozen_before_initialization",
         "definition": "B3 full symmetric five-frame AJAE training followed by B4 equal-weight probability fusion over overlapping windows from the same checkpoint",
         "order": ["AJAE-F0-X", "AJAE-F1-X seed 0", "AJAE-F2-X seed 0 B3/B4 evaluation and lite safety", "AJAE-F3-X conditional seed 1", "AJAE-F4-X two-seed viability review"],
         "f0_preflight": {
@@ -4079,14 +4079,105 @@
             }
           }
         },
+        "full_grid_v4_aborted": {
+          "status": "COMPUTE-BUDGET ABORTED RESULT-BLIND",
+          "reason": "measured wall-clock cost of the highly overlapping 25-by-445 schedule was excessive for a whole-method viability experiment",
+          "seed": 0,
+          "completed_windows": 221,
+          "cursor": {"world_index": 0, "block_index": 14, "window_index": 0, "windows_completed": 221, "update_index": 221, "phase": "windows"},
+          "progress_path": "runs/ajae/B3-v4-full-grid-aborted/seed-0/progress.pt",
+          "progress_bytes": 14401505,
+          "progress_sha256": "a22d0cb910d10f01ededeb5f08821b6b38682bdc1b5cc367e3358d726593018a",
+          "performance_metric_exposed": false,
+          "model_artifact_exists": false,
+          "result_artifact_exists": false,
+          "reuse_by_fast_v5_forbidden": true
+        },
+        "fast_viability": {
+          "version": "AJAE-F1-X-v5-fast-whole-method-viability-v1",
+          "scientific_role": "result-blind low-redundancy exploration of whether the complete five-frame AJAE has enough signal to justify further work; not a formal Gate 3 experiment",
+          "output_directory": "runs/ajae/B3-fast-v5",
+          "seed": 0,
+          "fresh_initialization_required": true,
+          "window_schedule": {
+            "legal_center_range": [2, 446],
+            "phase": "world_index modulo 5",
+            "center_formula": "c = 2 + phase + 5*k, c <= 446",
+            "stride": 5,
+            "phase_modulus": 5,
+            "windows_per_world": 89,
+            "five_frame_input_unchanged": true,
+            "all_five_positions_supervised_unchanged": true,
+            "block_size": 16,
+            "within_selected_centers_block_shuffle_uses_existing_frozen_seed_stream": true
+          },
+          "stages": {
+            "preview": {
+              "completed_worlds": 4,
+              "training_windows": 356,
+              "development_world_ids": [1, 2, 0, 14, 8, 9],
+              "statistics": ["B3 AP", "B4 AP", "B3/B4 versus B0", "B3/B4 versus B1 seed0"],
+              "descriptive_only": true,
+              "checkpoint_selection_forbidden": true,
+              "stopping_forbidden": true,
+              "output": "runs/ajae/ajae_f2_x_preview_seed0.npz"
+            },
+            "screen": {
+              "completed_worlds": 12,
+              "training_windows": 1068,
+              "development_worlds": 23,
+              "lite_safety_required": true,
+              "collapse_rule": "STOP iff AP_B4 <= AP_B0 and moving_normal_FPR_B4 >= moving_normal_FPR_B1_seed0",
+              "output": "runs/ajae/ajae_f2_x_screen_seed0.npz"
+            },
+            "final": {
+              "completed_worlds": 25,
+              "training_windows": 2225,
+              "development_worlds": 23,
+              "lite_safety_required": true,
+              "output": "runs/ajae/ajae_f2_x_final_seed0.npz"
+            }
+          },
+          "checkpoint_selection": {
+            "eligible_completed_worlds": [12, 25],
+            "preview_is_ineligible": true,
+            "primary": "maximum macro mean of per-world AP",
+            "tie_breaks": ["lower development macro mean FPR95", "lower lite pure-normal cross-fit FPR", "earlier completed world index"],
+            "unchanged_e63_tie_tolerance": 0.001
+          },
+          "lite_safety": {
+            "source": "E76-X-lite-v1 deterministic frame selection",
+            "pure_normal_frame_ids": [288, 302, 673, 505, 572, 111, 332, 635, 258, 464, 589, 504, 681, 443, 201, 592, 99, 45, 602, 502, 401, 265, 415, 106, 196, 87, 354, 10, 652, 536, 603, 391, 406, 672, 663, 343, 494, 271, 234, 110, 294, 121, 562, 148, 468, 125, 540, 251, 416, 616, 33, 594, 526, 633, 636, 523, 541, 359, 363, 476, 317, 533, 608, 51],
+            "q0_legal_frame_range": [6, 679],
+            "q0_frame_count": 63,
+            "q0_point_count": 3955017,
+            "moving_normal_q0_points": 12820,
+            "b4_full_domain_reports_all_64_pure_frames_and_13011_moving_points": true,
+            "paired_comparisons_require_identical_point_identities": true
+          },
+          "input_artifact_sha256": {
+            "E57": "b14efc1aad86ac67b5bf7c8631f02b2e68664e071b747b7b210d5f7a30f5d123",
+            "E61": "8d3e08e0512dc70a75d2279cfb4515bc960bbfda4f35a872c4a76e9dad69d0e0",
+            "E63": "5dbf99eaa59a05a83774e42beb6b8d7a95cf9309ebd42ab7870604a20d410dd9",
+            "E72": "208487d5c91b131856e908988cf6d955305fa09364450d509e32f617295b5863",
+            "E75-X": "0d90c4d6b118819dfec87ae41ec5a0646f3071c87aad73cc267cb5de503fdfc0",
+            "E76-X-lite": "0826724f6939afaadf0d097c4359ced1f61eb6b6f114211306ef437a832c99c7"
+          },
+          "B4": "use the exact evaluated/selected B3 checkpoint and equal-weight probability fusion; no retraining",
+          "formal_gate_claim_forbidden": true,
+          "formal_three_seed_standard_unchanged": true,
+          "B2_B3_ablation_status_unchanged": true,
+          "public_real_ood_sequences_remain_sealed": true,
+          "hidden_test_sequences_remain_sealed": true
+        },
         "b2_e78x_status": "deferred ablation unlocked only after Full AJAE-X supports whole-method viability",
-        "training_contract": "exact E63-v2 B3 contract with maximum 25 complete worlds, evaluation every 5 worlds, patience 4, AdamW learning rate 1e-4, gradient accumulation 8, common 23-world development domain, and unchanged checkpoint rule",
+        "training_contract": "v5 fast viability uses fresh B3 seed0, 25 worlds maximum, exactly 89 stride-5 five-frame windows per world, full development only at worlds 12 and 25, unchanged AdamW/loss/gradient accumulation and E63 checkpoint rule, plus external pauses at worlds 4 and 12",
         "seed0_stop_rule": "stop before seed 1 only if AP_B4 is at most AP_B0 and moving-normal FPR_B4 is at least B1 seed0 moving-normal FPR",
         "formal_gate2_and_gate3_thresholds_changed": false,
         "public_real_ood_sequences_remain_sealed": true,
         "hidden_test_sequences_remain_sealed": true
       },
-      "exploratory_continuation_status": "full-first_v4_P2_pass_AJAE-F1-X_seed0_training_current",
+      "exploratory_continuation_status": "full-first_v5_fast_frozen_before_fresh_seed0_initialization",
       "formal_gate2_and_gate3_status": "not adjudicated",
       "confirmation_rule": "if temporal viability is promising, complete seed 2 for B1/B2/B3 and apply the unchanged three-seed Gate 2 and Gate 3 rules",
       "negative_temporal_action": "stop or redesign without spending the remaining confirmatory repeats",

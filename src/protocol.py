@@ -1079,7 +1079,7 @@ class AJAEProtocol:
         cursor = _mapping(confirmation.get("paused_cursor"), "E74 paused cursor")
         if (
             exploration.get("version")
-            != "exploration-confirmation-split-v4-full-training"
+            != "exploration-confirmation-split-v5-fast-viability"
             or exploration.get("status") != "active_before_formal_gate2"
             or tuple(cohort.get("seeds", ())) != (0, 1)
             or tuple(cohort.get("applies_to", ())) != ("B1", "B2", "B3")
@@ -1114,12 +1114,12 @@ class AJAEProtocol:
             or confirmation.get("resume_branch") != "confirm/e74-seed2-resume"
             or confirmation.get("partial_seed2_result_use_forbidden") is not True
             or exploration.get("current_node")
-            != "AJAE-F1-X_seed0_training"
+            != "AJAE-F1-X-v5_fast_seed0_training"
             or exploration.get("formal_gate2_and_gate3_status") != "not adjudicated"
             or exploration.get("public_real_ood_sequences_remain_sealed") is not True
             or exploration.get("hidden_test_sequences_remain_sealed") is not True
             or exploration.get("exploratory_continuation_status")
-            != "full-first_v4_P2_pass_AJAE-F1-X_seed0_training_current"
+            != "full-first_v5_fast_frozen_before_fresh_seed0_initialization"
         ):
             raise ProtocolError("exploration/confirmation split identity changed")
         e75x = _mapping(exploration.get("e75x_result"), "E75-X result")
@@ -1396,6 +1396,17 @@ class AJAEProtocol:
         p2_result = _mapping(p2.get("result"), "AJAE-F1-X P2 result")
         p1_pure = _mapping(p1.get("pure_normal_q0"), "P1 pure-normal q0")
         p1_moving = _mapping(p1.get("moving_normal_q0"), "P1 moving-normal q0")
+        aborted = _mapping(full.get("full_grid_v4_aborted"), "aborted v4 full grid")
+        fast = _mapping(full.get("fast_viability"), "v5 fast viability")
+        fast_window = _mapping(fast.get("window_schedule"), "v5 window schedule")
+        fast_stages = _mapping(fast.get("stages"), "v5 stages")
+        fast_preview = _mapping(fast_stages.get("preview"), "v5 preview")
+        fast_screen = _mapping(fast_stages.get("screen"), "v5 screen")
+        fast_final = _mapping(fast_stages.get("final"), "v5 final")
+        fast_selection = _mapping(
+            fast.get("checkpoint_selection"), "v5 checkpoint selection"
+        )
+        fast_safety = _mapping(fast.get("lite_safety"), "v5 lite safety")
         if (
             c1.get("version") != "E76-C1-v1"
             or c1.get("status") != "frozen_before_clearance_computation"
@@ -1493,9 +1504,9 @@ class AJAEProtocol:
             is not True
             or c1_result.get("formal_gate_adjudicated") is not False
             or c1_result.get("next_node") != "AJAE-F0-X"
-            or full.get("version") != "AJAE-full-first-v4"
+            or full.get("version") != "AJAE-full-first-v5-fast-viability"
             or full.get("status")
-            != "AJAE-F1-X_seed0_training"
+            != "AJAE-F1-X-v5_fast_seed0_frozen_before_initialization"
             or f0.get("status") != "execution_complete_pass"
             or (f0.get("partition"), f0.get("sequence_id"), f0.get("center_frame"))
             != ("train", 206, 199)
@@ -1572,6 +1583,84 @@ class AJAEProtocol:
                 p2_result.get("total_errors"), p2_result.get("passed"),
             ) != (590, 3833, 0, True)
             or p2_result.get("model_quality_evaluated") is not False
+            or aborted.get("status") != "COMPUTE-BUDGET ABORTED RESULT-BLIND"
+            or aborted.get("completed_windows") != 221
+            or aborted.get("cursor") != {
+                "world_index": 0,
+                "block_index": 14,
+                "window_index": 0,
+                "windows_completed": 221,
+                "update_index": 221,
+                "phase": "windows",
+            }
+            or aborted.get("progress_path")
+            != "runs/ajae/B3-v4-full-grid-aborted/seed-0/progress.pt"
+            or aborted.get("progress_bytes") != 14401505
+            or aborted.get("progress_sha256")
+            != "a22d0cb910d10f01ededeb5f08821b6b38682bdc1b5cc367e3358d726593018a"
+            or aborted.get("performance_metric_exposed") is not False
+            or aborted.get("model_artifact_exists") is not False
+            or aborted.get("result_artifact_exists") is not False
+            or aborted.get("reuse_by_fast_v5_forbidden") is not True
+            or fast.get("version")
+            != "AJAE-F1-X-v5-fast-whole-method-viability-v1"
+            or fast.get("output_directory") != "runs/ajae/B3-fast-v5"
+            or fast.get("seed") != 0
+            or fast.get("fresh_initialization_required") is not True
+            or tuple(fast_window.get("legal_center_range", ())) != (2, 446)
+            or fast_window.get("stride") != 5
+            or fast_window.get("phase_modulus") != 5
+            or fast_window.get("windows_per_world") != 89
+            or fast_window.get("five_frame_input_unchanged") is not True
+            or fast_window.get("all_five_positions_supervised_unchanged") is not True
+            or fast_window.get("block_size") != 16
+            or (
+                fast_preview.get("completed_worlds"),
+                fast_preview.get("training_windows"),
+                tuple(fast_preview.get("development_world_ids", ())),
+            ) != (4, 356, (1, 2, 0, 14, 8, 9))
+            or fast_preview.get("descriptive_only") is not True
+            or fast_preview.get("checkpoint_selection_forbidden") is not True
+            or fast_preview.get("stopping_forbidden") is not True
+            or (
+                fast_screen.get("completed_worlds"),
+                fast_screen.get("training_windows"),
+                fast_screen.get("development_worlds"),
+            ) != (12, 1068, 23)
+            or fast_screen.get("collapse_rule")
+            != "STOP iff AP_B4 <= AP_B0 and moving_normal_FPR_B4 >= moving_normal_FPR_B1_seed0"
+            or (
+                fast_final.get("completed_worlds"),
+                fast_final.get("training_windows"),
+                fast_final.get("development_worlds"),
+            ) != (25, 2225, 23)
+            or tuple(fast_selection.get("eligible_completed_worlds", ()))
+            != (12, 25)
+            or fast_selection.get("preview_is_ineligible") is not True
+            or fast_selection.get("unchanged_e63_tie_tolerance") != 0.001
+            or tuple(fast_safety.get("q0_legal_frame_range", ())) != (6, 679)
+            or fast_safety.get("q0_frame_count") != 63
+            or fast_safety.get("q0_point_count") != 3955017
+            or fast_safety.get("moving_normal_q0_points") != 12820
+            or tuple(fast_safety.get("pure_normal_frame_ids", ()))
+            != tuple(pure_selection.get("selected_frame_ids", ()))
+            or fast_safety.get(
+                "b4_full_domain_reports_all_64_pure_frames_and_13011_moving_points"
+            ) is not True
+            or fast_safety.get("paired_comparisons_require_identical_point_identities")
+            is not True
+            or fast.get("formal_gate_claim_forbidden") is not True
+            or fast.get("formal_three_seed_standard_unchanged") is not True
+            or fast.get("B2_B3_ablation_status_unchanged") is not True
+            or _mapping(fast.get("input_artifact_sha256"), "v5 input hashes")
+            != {
+                "E57": "b14efc1aad86ac67b5bf7c8631f02b2e68664e071b747b7b210d5f7a30f5d123",
+                "E61": "8d3e08e0512dc70a75d2279cfb4515bc960bbfda4f35a872c4a76e9dad69d0e0",
+                "E63": "5dbf99eaa59a05a83774e42beb6b8d7a95cf9309ebd42ab7870604a20d410dd9",
+                "E72": "208487d5c91b131856e908988cf6d955305fa09364450d509e32f617295b5863",
+                "E75-X": "0d90c4d6b118819dfec87ae41ec5a0646f3071c87aad73cc267cb5de503fdfc0",
+                "E76-X-lite": "0826724f6939afaadf0d097c4359ced1f61eb6b6f114211306ef437a832c99c7",
+            }
             or full.get("b2_e78x_status")
             != "deferred ablation unlocked only after Full AJAE-X supports whole-method viability"
             or full.get("seed0_stop_rule")

@@ -1,6 +1,6 @@
 # AJAE Fine-Grained Experiment Execution State Machine
 
-> Current authoritative baseline: repository `main` and all historical evidence recorded in this document. E50–E58 and E61–E73 have formally PASSed and E59/E60 descriptive characterization is complete. E74's three-seed confirmation is suspended after completed seeds 0/1 with seed 2 preserved at an exact resumable block checkpoint. E75-X completed descriptively, and E76-X-lite recorded a two-seed moving-normal FPR worsening of `0.36463377142417946`. E76-V1 is closed as `DESCRIPTIVE REVIEW COMPLETE / NO PASS/FAIL`. E76-C1 completed with `NO DIRECT CLEARANCE DEGENERACY DETECTED`, and AJAE-F0-X formally PASSed with zero mechanical errors. The result-blind `full-first v4` amendment freezes B2/B3 safety to legal q=0 intersections, preserves B4's full occurrence domain, and makes every paired safety comparison use identical point identities. AJAE-F1-X entry P2 has PASSed all seven implementation checks without evaluating model quality. Current node: B3 seed0 formal training. E78-X/B2, full E76-X and formal Gate 2 remain locked; public real-OOD and hidden test remain sealed.
+> Current authoritative baseline: repository `main` and all historical evidence recorded in this document. E50–E58 and E61–E73 have formally PASSed and E59/E60 descriptive characterization is complete. E74's three-seed confirmation is suspended after completed seeds 0/1 with seed 2 preserved at an exact resumable block checkpoint. E75-X completed descriptively, and E76-X-lite recorded a two-seed moving-normal FPR worsening of `0.36463377142417946`. E76-V1 is closed as `DESCRIPTIVE REVIEW COMPLETE / NO PASS/FAIL`. E76-C1 completed with `NO DIRECT CLEARANCE DEGENERACY DETECTED`, AJAE-F0-X formally PASSed, and AJAE-F1-X entry P2 passed all seven implementation checks without evaluating model quality. The result-blind 25×445 B3 seed0 run was stopped at its next atomic checkpoint after 221 windows because measured wall-clock cost was excessive; no performance metric, model artifact, or result artifact was exposed, and that progress is historical evidence only. Current node: a fresh seed0 initialization under `AJAE-full-first-v5-fast-viability`, using 89 stride-5 five-frame windows per world and external evaluation pauses after worlds 4 and 12. E78-X/B2, full E76-X and formal Gates 2/3 remain locked; public real-OOD and hidden test remain sealed.
 
 > Basis: [AJAE Mainline Plan](</home/jasongao/Study/AJAE/AJAE%E6%96%B0%E4%B8%BB%E7%BA%BF%E6%96%B9%E6%A1%88.md>). This document decomposes the mainline plan's immutable constraints, four Decision Gates, B0–B5 controls, normal-motion safety, object-scale diagnostics, development discipline, and one-time real-OOD validation into fine-grained experiment nodes that can be executed sequentially.
 
@@ -4724,6 +4724,20 @@ This section records prospective scope reductions before Gate 2 results are avai
 
 The first future cleanup remains after Gate 2. `dev.json` is still referenced by the legacy protocol validator even though formal training forbids it; E45A activity entries, superseded runners and historical renderer paths also require reference checks before deletion. No file is deleted, moved or split while E74 is running.
 
+## 5.25 Result-blind Full AJAE fast-viability amendment
+
+The original AJAE-F1-X seed0 full-grid run was interrupted at the first available atomic recovery point after the compute-cost decision. Its frozen cursor is world 0, block 14, window 0, with 221 completed windows and progress SHA-256 `a22d0cb910d10f01ededeb5f08821b6b38682bdc1b5cc367e3358d726593018a`. It is classified as `COMPUTE-BUDGET ABORTED RESULT-BLIND`. No development metric, training-loss interpretation, model artifact, or result artifact was exposed. The checkpoint at `runs/ajae/B3-v4-full-grid-aborted/seed-0/progress.pt` may not initialize or contribute to the v5 trajectory.
+
+`AJAE-full-first-v5-fast-viability` starts seed0 from a fresh initialization. For world index (j), phase (p=j\bmod 5), and the selected centers are (c=2+p+5k\leq 446). Each world therefore contains exactly 89 complete five-frame windows. The five-frame input, all-position supervision, loss, optimizer, gradient accumulation, world stream, renderer, STU and model remain unchanged.
+
+The run has three pre-result stages:
+
+1. After 4 worlds (356 windows), pause and evaluate B3/B4 AP only on frozen E57 world IDs `[1,2,0,14,8,9]`. This preview is descriptive, cannot select a checkpoint, and cannot stop training.
+2. Resume unconditionally to 12 worlds (1,068 windows), run the complete 23-world development evaluation and frozen lite-safety domains, then stop only if both (AP_{B4}\leq AP_{B0}) and (FPR^{moving}_{B4}\geq FPR^{moving}_{B1,seed0}).
+3. If the collapse condition is false, resume to 25 worlds (2,225 windows), repeat the complete evaluation, and select the exploratory B3 checkpoint only from worlds 12 and 25 using the existing E63 ordering. B4 is the equal-probability fusion of that exact B3 checkpoint and is never retrained.
+
+This route estimates whole-method viability only. It cannot claim formal B3, Gate 2 or Gate 3 PASS, cannot replace later B2/B3 ablations or the three-seed confirmation standard, and cannot open public real-OOD or hidden-test sequences.
+
 # 6. Execution Record Template
 
 ```text
@@ -4750,8 +4764,8 @@ Notes:
 
 # 7. How to Advance AJAE with This State Machine
 
-1. The authoritative status is E50–E73 PASS. E74 three-seed confirmation is suspended after seeds 0/1; seed 2 is preserved at its exact block checkpoint. E75-X is descriptively complete, E76-X-lite's moving-normal stop signal is preserved, E76-V1 is closed as a non-adjudicating descriptive review, and E76-C1 found no direct clearance degeneracy. AJAE-F0-X is the sole current node; full E76-X remains deferred intact.
-2. Gate 1 is closed and formal E75–E77 remain locked. E78-X/B2 is deferred until the full method shows viability. Full AJAE-X is now unlocked only at AJAE-F0-X; this mechanical preflight must pass before seed 0 B3 training.
+1. The authoritative status is E50–E73 PASS. E74 three-seed confirmation is suspended after seeds 0/1; seed 2 is preserved at its exact block checkpoint. E75-X is descriptively complete, E76-X-lite's moving-normal stop signal is preserved, E76-V1 is closed as a non-adjudicating descriptive review, E76-C1 found no direct clearance degeneracy, and AJAE-F0-X/P2 passed their mechanical checks. The sole current node is fresh v5 fast-viability B3 seed0 training; full E76-X remains deferred intact.
+2. Gate 1 is closed and formal E75–E77 remain locked. E78-X/B2 is deferred until the full method shows viability. Execute v5 seed0 to its frozen 4-world preview, continue unconditionally to its 12-world full screen, and apply only the frozen collapse rule before deciding whether to continue to world 25.
 3. Every later phase first completes its whole-phase design freeze, then executes its nodes.
 4. Preflight checks only identity, support, schema, interface, and resources; it does not inspect formal outcomes.
 5. Classify FAIL using the five frozen categories. A `descriptive_deviation` is recorded and execution continues; it cannot create a new hard gate.
@@ -4760,6 +4774,6 @@ Notes:
 
 The exploratory chain from the current route is:
 
-E76-C1 → AJAE-F0-X → full AJAE seed 0 → B3/B4 evaluation → conditional seed 1 → two-seed viability review → deferred B2 ablation and later confirmation when supported.
+AJAE-F1-X-v5 seed0 → 4-world descriptive preview → 12-world full screen → conditional 25-world completion → conditional seed1 → two-seed viability review → deferred B2 ablation and later confirmation when supported.
 
 Only completion of E104 means that AJAE, under the current definition, has closed the complete chain from counterfactual worlds and renderer through model, development evidence, real-OOD confirmation, and hidden testing.
