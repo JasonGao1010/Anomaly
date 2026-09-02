@@ -800,7 +800,7 @@ def test_four_level_model_forward_backward_and_b2_isolation() -> None:
         neighbor_radii=((0.5,) * 5, (1.0,) * 5, (2.0,) * 5, (4.0,) * 5),
         neighbor_k=((2,) * 5,) * 4,
         heads=4,
-        attention_chunk_size=32,
+        attention_chunk_size=4,
     )
     count = 10
     coordinates = torch.randn(count, 3) * 0.05
@@ -856,7 +856,7 @@ def test_temporal_activation_checkpoint_preserves_output_and_gradients() -> None
         neighbor_radii=((0.5,) * 5, (1.0,) * 5, (2.0,) * 5, (4.0,) * 5),
         neighbor_k=((2,) * 5,) * 4,
         heads=4,
-        attention_chunk_size=32,
+        attention_chunk_size=4,
     ).train()
     reference = AJAEPointTransformer(
         hidden_dim=16,
@@ -864,7 +864,7 @@ def test_temporal_activation_checkpoint_preserves_output_and_gradients() -> None
         neighbor_radii=((0.5,) * 5, (1.0,) * 5, (2.0,) * 5, (4.0,) * 5),
         neighbor_k=((2,) * 5,) * 4,
         heads=4,
-        attention_chunk_size=32,
+        attention_chunk_size=4,
     ).eval()
     reference.load_state_dict(checkpointed.state_dict())
     count = 15

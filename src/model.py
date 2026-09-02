@@ -826,18 +826,22 @@ class TemporalPointBlock(nn.Module):
         radius: float,
         delta: int,
     ) -> Tensor:
-        messages: list[Tensor] = []
-        count = query.shape[0]
-        for start in range(0, count, self.chunk_size):
-            stop = min(start + self.chunk_size, count)
-            index = neighbor[start:stop]
-            local_valid = valid[start:stop]
-            local_key = key[index]
-            local_value = value[index]
-            local_query = query[start:stop, None]
-            score = (local_query * local_key).sum(dim=-1) / math.sqrt(self.head_dim)
+        def chunk_message(
+            local_query: Tensor,
+            all_key: Tensor,
+            all_value: Tensor,
+            all_coordinates: Tensor,
+            index: Tensor,
+            local_valid: Tensor,
+            local_coordinates: Tensor,
+        ) -> Tensor:
+            local_key = all_key[index]
+            local_value = all_value[index]
+            score = (local_query * local_key).sum(dim=-1) / math.sqrt(
+                self.head_dim
+            )
             relative_position = (
-                coordinates[index] - coordinates[start:stop, None]
+                all_coordinates[index] - local_coordinates[:, None]
             ) / radius
             delta_channel = relative_position.new_full(
                 (*relative_position.shape[:-1], 1), float(delta) / 2.0
@@ -848,10 +852,42 @@ class TemporalPointBlock(nn.Module):
             present = local_valid.any(dim=1)
             score = score.masked_fill(~local_valid[..., None], -torch.inf)
             # Avoid an undefined all-masked softmax, then zero invalid weights.
-            score = torch.where(present[:, None, None], score, torch.zeros_like(score))
+            score = torch.where(
+                present[:, None, None], score, torch.zeros_like(score)
+            )
             weight = F.softmax(score, dim=1) * local_valid[..., None]
-            message = (weight[..., None] * local_value).sum(dim=1)
-            messages.append(message.reshape(stop - start, self.hidden_dim))
+            return (weight[..., None] * local_value).sum(dim=1).reshape(
+                local_query.shape[0], self.hidden_dim
+            )
+
+        messages: list[Tensor] = []
+        count = query.shape[0]
+        for start in range(0, count, self.chunk_size):
+            stop = min(start + self.chunk_size, count)
+            index = neighbor[start:stop]
+            local_valid = valid[start:stop]
+            local_query = query[start:stop, None]
+            arguments = (
+                local_query,
+                key,
+                value,
+                coordinates,
+                index,
+                local_valid,
+                coordinates[start:stop],
+            )
+            if self.training and torch.is_grad_enabled():
+                # Keep each neighbor-attention chunk exact while preventing
+                # all five branches from retaining their large local tensors.
+                message = checkpoint(
+                    chunk_message,
+                    *arguments,
+                    use_reentrant=True,
+                    preserve_rng_state=True,
+                )
+            else:
+                message = chunk_message(*arguments)
+            messages.append(message)
         return torch.cat(messages, dim=0)
 
     def forward(
