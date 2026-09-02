@@ -4350,7 +4350,7 @@ def run_e76_visual_audit(
         "manifest_path": str(final_manifest),
         "manifest_sha256": _sha256(final_manifest),
         "total_bytes": sum(int(item["bytes"]) for item in file_records)
-        + attribute_path.stat().st_size
+        + int(attribute_record["bytes"])
         + final_manifest.stat().st_size,
         "seconds": time.monotonic() - started,
     }
