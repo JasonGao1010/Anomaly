@@ -902,6 +902,53 @@ def test_temporal_activation_checkpoint_preserves_output_and_gradients() -> None
         )
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is unavailable")
+def test_saved_tensor_cpu_offload_preserves_output_and_gradients() -> None:
+    torch.manual_seed(23)
+    baseline = AJAEPointTransformer(
+        hidden_dim=16,
+        voxel_sizes=(0.1, 0.2, 0.4),
+        neighbor_radii=((0.5,) * 5, (1.0,) * 5, (2.0,) * 5, (4.0,) * 5),
+        neighbor_k=((2,) * 5,) * 4,
+        heads=4,
+        attention_chunk_size=4,
+    ).cuda().train()
+    offloaded = AJAEPointTransformer(
+        hidden_dim=16,
+        voxel_sizes=(0.1, 0.2, 0.4),
+        neighbor_radii=((0.5,) * 5, (1.0,) * 5, (2.0,) * 5, (4.0,) * 5),
+        neighbor_k=((2,) * 5,) * 4,
+        heads=4,
+        attention_chunk_size=4,
+    ).cuda().train()
+    offloaded.load_state_dict(baseline.state_dict())
+    count = 15
+    inputs = (
+        torch.randn(count, 3, device="cuda") * 0.05,
+        torch.tensor(RELATIVE_TIMES, device="cuda").repeat_interleave(3),
+        torch.randn(count, 128, device="cuda"),
+        torch.rand(count, 19, device="cuda"),
+        torch.rand(count, device="cuda"),
+        torch.rand(count, device="cuda"),
+        torch.rand(count, device="cuda"),
+    )
+    baseline_logits = baseline(*inputs, cross_frame_enabled=True)
+    baseline_logits.square().sum().backward()
+    with torch.autograd.graph.save_on_cpu(pin_memory=False, device_type="cuda"):
+        offloaded_logits = offloaded(*inputs, cross_frame_enabled=True)
+        offloaded_loss = offloaded_logits.square().sum()
+    offloaded_loss.backward()
+    torch.testing.assert_close(baseline_logits, offloaded_logits, rtol=0, atol=0)
+    for (baseline_name, baseline_parameter), (
+        offloaded_name,
+        offloaded_parameter,
+    ) in zip(baseline.named_parameters(), offloaded.named_parameters(), strict=True):
+        assert baseline_name == offloaded_name
+        torch.testing.assert_close(
+            baseline_parameter.grad, offloaded_parameter.grad, rtol=0, atol=0
+        )
+
+
 def test_training_and_heldout_geometry_are_disjoint_and_bounded() -> None:
     for seed in range(40):
         training_shape = sample_training_anomaly_shape(seed)

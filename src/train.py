@@ -1179,23 +1179,28 @@ class AJAETrainer:
 
     def _step_window(self, world: object, center: int) -> float:
         batch = self._window_data(world, center)
-        logits = self.model(
-            batch.coordinates,
-            batch.relative_times,
-            batch.stu_features,
-            batch.normal_evidence,
-            batch.assignment_reliability,
-            batch.no_object_reliability,
-            batch.intensity,
-            cross_frame_enabled=self.condition.cross_frame_enabled,
-        )
-        if logits.shape != batch.targets.shape:
-            raise TrainingError("AJAE must return one logit for every supplied point")
-        _finite_tensor("AJAE logits", logits)
-        supervised = torch.zeros_like(batch.valid)
-        for relative_time in self.condition.supervised_times:
-            supervised |= batch.relative_times == relative_time
-        loss = balanced_bce_loss(logits, batch.targets, batch.valid & supervised)
+        # Preserve exact tensors on host memory until backward so dense formal
+        # windows do not exceed WSL's GPU residency budget.
+        with torch.autograd.graph.save_on_cpu(
+            pin_memory=False, device_type=self.device.type
+        ):
+            logits = self.model(
+                batch.coordinates,
+                batch.relative_times,
+                batch.stu_features,
+                batch.normal_evidence,
+                batch.assignment_reliability,
+                batch.no_object_reliability,
+                batch.intensity,
+                cross_frame_enabled=self.condition.cross_frame_enabled,
+            )
+            if logits.shape != batch.targets.shape:
+                raise TrainingError("AJAE must return one logit for every supplied point")
+            _finite_tensor("AJAE logits", logits)
+            supervised = torch.zeros_like(batch.valid)
+            for relative_time in self.condition.supervised_times:
+                supervised |= batch.relative_times == relative_time
+            loss = balanced_bce_loss(logits, batch.targets, batch.valid & supervised)
         (loss / self.config.gradient_accumulation).backward()
         self.update_index += 1
         self.accumulated_windows += 1
