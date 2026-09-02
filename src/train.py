@@ -15,6 +15,7 @@ import sys
 import weakref
 from collections import OrderedDict
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from fractions import Fraction
 from pathlib import Path
@@ -58,6 +59,37 @@ def _release_host_saved_tensors() -> None:
     gc.collect()
     if _MALLOC_TRIM is not None:
         _MALLOC_TRIM(0)
+
+
+@contextmanager
+def _bounded_saved_tensor_offload(
+    device: torch.device, *, budget_bytes: int = 2 * 1024**3
+):
+    """Offload saved CUDA tensors synchronously within a fixed host budget."""
+
+    if device.type != "cuda":
+        yield
+        return
+    offloaded_bytes = 0
+
+    def pack(tensor: Tensor) -> tuple[Tensor, torch.device | None]:
+        nonlocal offloaded_bytes
+        if tensor.device.type != "cuda":
+            return tensor, None
+        tensor_bytes = tensor.numel() * tensor.element_size()
+        if offloaded_bytes + tensor_bytes > budget_bytes:
+            return tensor, None
+        offloaded_bytes += tensor_bytes
+        return tensor.detach().to(device="cpu", copy=True), tensor.device
+
+    def unpack(payload: tuple[Tensor, torch.device | None]) -> Tensor:
+        tensor, original_device = payload
+        if original_device is None:
+            return tensor
+        return tensor.to(device=original_device)
+
+    with torch.autograd.graph.saved_tensors_hooks(pack, unpack):
+        yield
 
 
 def _seed_everything(seed: int) -> None:
@@ -1195,9 +1227,7 @@ class AJAETrainer:
         batch = self._window_data(world, center)
         # Preserve exact tensors on host memory until backward so dense formal
         # windows do not exceed WSL's GPU residency budget.
-        with torch.autograd.graph.save_on_cpu(
-            pin_memory=False, device_type=self.device.type
-        ):
+        with _bounded_saved_tensor_offload(self.device):
             logits = self.model(
                 batch.coordinates,
                 batch.relative_times,

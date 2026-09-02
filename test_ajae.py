@@ -934,7 +934,7 @@ def test_saved_tensor_cpu_offload_preserves_output_and_gradients() -> None:
     )
     baseline_logits = baseline(*inputs, cross_frame_enabled=True)
     baseline_logits.square().sum().backward()
-    with torch.autograd.graph.save_on_cpu(pin_memory=False, device_type="cuda"):
+    with train_module._bounded_saved_tensor_offload(torch.device("cuda")):
         offloaded_logits = offloaded(*inputs, cross_frame_enabled=True)
         offloaded_loss = offloaded_logits.square().sum()
     offloaded_loss.backward()
