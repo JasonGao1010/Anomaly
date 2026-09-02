@@ -3926,14 +3926,14 @@ Notes: The fold plan reused exact test/train/excluded counts `[61,46,91,74,97]`,
 
 Experiment ID: AJAE-F0-X
 Design-freeze commit/hash: Full-first v3 route freeze completed before E76-C1; fixed micro-window execution identity completed after E76-C1 unlocked this node and before any B3 training or performance result.
-Execution-freeze commit/hash: Pending the tracked preflight runner commit.
+Execution-freeze commit/hash: `0ff02d13721f3e4fcd16089d21d1f676dbdf629f`; `src/qualify.py` SHA-256 `feafc792ca12eae038739fe66eb43ac4a54219bbda03536676209dea854b6f7c`; protocol SHA-256 `410eb9bd12f682ea879157cdca0128de44261b356261cfd65aaf8eab0aeb7e9e`. Full repository regression before this commit: `90 passed`.
 Date: 2026-09-02 freeze; execution pending.
 Git commit / clean state: Must use a clean tracked worktree, excluding only user-owned untracked `PPT/`.
 Data identities: One fixed real train/206 window centered at frame 199, using frames `[197,198,199,200,201]`. Within each source frame, select the 16 real returns with the smallest frozen canonical ray identities after running the complete frozen STU frame encoder. This micro selection is mechanical only and never enters training or evaluation.
 Input artifact hashes: Current schema-30 protocol, frozen STU source/weights, and frozen sensor calibration required. Public real-OOD and hidden test remain sealed.
 Random namespaces / seeds: Existing `E53-STU-query-v1` frame seed for each frozen STU forward; AJAE micro-model seed `7600`. No seed search or performance selection.
 Command and resolved config: `python -m src.qualify ajae-f0-x --data-root /home/jasongao/Data/STU --protocol protocol.json --output runs/ajae/ajae_f0_x_preflight.npz --device cuda`. Check exact B3 input/model/supervision positions `[-2,-1,0,1,2]`, enabled nonzero-time production edges, the same unweighted supervision rule at every q, frozen gradient-free STU, B4 frame-ray identity, probability rather than logit averaging, exact occurrence denominators, and finite forward/backward on the fixed 80-point real micro window.
-Resource and disk preflight: Pending.
+Resource and disk preflight: 24 physical CPU cores; 20 GiB available RAM and 16 GiB unused swap; NVIDIA GeForce RTX 5080 Laptop GPU with 16,303 MiB total / 14,617 MiB free and 6% utilization; Windows E: 73,837,633,536 bytes remaining of 484,950,659,072; no competing AJAE experiment or training process; target artifact absent before execution.
 Artifacts and hashes: Pending.
 Primary construct: Whether the already-qualified components are connected into the intended B3 training and B4 fusion path before expensive Full AJAE training.
 Primary result: Pending.
