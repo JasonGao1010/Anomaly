@@ -2436,6 +2436,7 @@ class E63B3DevelopmentEvaluator(E63B1DevelopmentEvaluator):
         center: int,
         *,
         input_cache: OrderedDict[int, dict[str, object]] | None = None,
+        sequence_spec: object | None = None,
     ) -> tuple[np.ndarray, ...]:
         try:
             from .scene import assemble_window
@@ -2456,7 +2457,7 @@ class E63B3DevelopmentEvaluator(E63B1DevelopmentEvaluator):
                         input_cache.popitem(last=False)
             inputs.append(item)
         window = assemble_window(
-            self.sequence.spec,
+            self.sequence.spec if sequence_spec is None else sequence_spec,
             center,
             sources,
             condition="B3",
@@ -2551,7 +2552,11 @@ class E63B3DevelopmentEvaluator(E63B1DevelopmentEvaluator):
                 for offset in RELATIVE_TIMES
             )
             probabilities = self._window_probabilities(
-                model, sources, center, input_cache=cache
+                model,
+                sources,
+                center,
+                input_cache=cache,
+                sequence_spec=getattr(sequence, "spec"),
             )
             for local, source in enumerate(sources):
                 frame_id = int(getattr(source, "frame_id"))

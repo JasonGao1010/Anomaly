@@ -2483,3 +2483,41 @@ def test_object_scale_diagnostic_excludes_normal_control_ids() -> None:
     assert len(result["objects"]) == 1
     assert result["objects"][0]["object_id"] == 2
     assert result["objects"][0]["visibility"] == 2
+
+
+def test_b3_b4_sequence_scoring_uses_the_supplied_sequence_spec(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cross-sequence safety scoring must not reuse the evaluator's base spec."""
+
+    evaluator = object.__new__(train_module.E63B3DevelopmentEvaluator)
+    expected_spec = SimpleNamespace(legal_anchors=lambda offsets: (2,))
+    sequence = SimpleNamespace(
+        spec=expected_spec,
+        source_frame=lambda frame_id: SimpleNamespace(frame_id=frame_id),
+    )
+
+    def probabilities(
+        model: nn.Module,
+        sources: tuple[SimpleNamespace, ...],
+        center: int,
+        *,
+        input_cache: object,
+        sequence_spec: object,
+    ) -> tuple[np.ndarray, ...]:
+        del model, input_cache
+        assert sequence_spec is expected_spec
+        assert center == 2
+        assert [source.frame_id for source in sources] == [0, 1, 2, 3, 4]
+        return tuple(
+            np.asarray([float(frame_id)], dtype=np.float32)
+            for frame_id in range(5)
+        )
+
+    monkeypatch.setattr(evaluator, "_window_probabilities", probabilities)
+    direct, fused, count = evaluator.sequence_b3_b4_scores(
+        nn.Identity(), sequence, [2]
+    )[2]
+    np.testing.assert_array_equal(direct, np.asarray([2.0], dtype=np.float32))
+    np.testing.assert_array_equal(fused, np.asarray([2.0], dtype=np.float32))
+    np.testing.assert_array_equal(count, np.asarray([1], dtype=np.uint8))
