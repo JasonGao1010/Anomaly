@@ -848,6 +848,59 @@ def test_four_level_model_forward_backward_and_b2_isolation() -> None:
     torch.testing.assert_close(disabled[times == 0], disabled_changed[times == 0])
 
 
+def test_temporal_activation_checkpoint_preserves_output_and_gradients() -> None:
+    torch.manual_seed(19)
+    checkpointed = AJAEPointTransformer(
+        hidden_dim=16,
+        voxel_sizes=(0.1, 0.2, 0.4),
+        neighbor_radii=((0.5,) * 5, (1.0,) * 5, (2.0,) * 5, (4.0,) * 5),
+        neighbor_k=((2,) * 5,) * 4,
+        heads=4,
+        attention_chunk_size=32,
+    ).train()
+    reference = AJAEPointTransformer(
+        hidden_dim=16,
+        voxel_sizes=(0.1, 0.2, 0.4),
+        neighbor_radii=((0.5,) * 5, (1.0,) * 5, (2.0,) * 5, (4.0,) * 5),
+        neighbor_k=((2,) * 5,) * 4,
+        heads=4,
+        attention_chunk_size=32,
+    ).eval()
+    reference.load_state_dict(checkpointed.state_dict())
+    count = 15
+    coordinates = torch.randn(count, 3) * 0.05
+    times = torch.tensor(RELATIVE_TIMES, dtype=torch.long).repeat_interleave(3)
+    inputs = (
+        coordinates,
+        times,
+        torch.randn(count, 128),
+        torch.rand(count, 19),
+        torch.rand(count),
+        torch.rand(count),
+        torch.rand(count),
+    )
+    checkpointed_logits = checkpointed(
+        *inputs, cross_frame_enabled=True
+    )
+    reference_logits = reference(*inputs, cross_frame_enabled=True)
+    torch.testing.assert_close(checkpointed_logits, reference_logits, rtol=0, atol=0)
+    checkpointed_logits.square().sum().backward()
+    reference_logits.square().sum().backward()
+    for (checkpointed_name, checkpointed_parameter), (
+        reference_name,
+        reference_parameter,
+    ) in zip(
+        checkpointed.named_parameters(), reference.named_parameters(), strict=True
+    ):
+        assert checkpointed_name == reference_name
+        torch.testing.assert_close(
+            checkpointed_parameter.grad,
+            reference_parameter.grad,
+            rtol=0,
+            atol=0,
+        )
+
+
 def test_training_and_heldout_geometry_are_disjoint_and_bounded() -> None:
     for seed in range(40):
         training_shape = sample_training_anomaly_shape(seed)

@@ -18,6 +18,7 @@ import torch
 from scipy.spatial import cKDTree
 from torch import Tensor, nn
 from torch.nn import functional as F
+from torch.utils.checkpoint import checkpoint
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -1003,11 +1004,37 @@ class VoxelPyramid(nn.Module):
         *,
         cross_frame_enabled: bool,
     ) -> tuple[VoxelLevel, ...]:
-        features = self.blocks[0](
-            features,
-            coordinates,
-            relative_times,
-            cross_frame_enabled=cross_frame_enabled,
+        def attend(
+            block: TemporalPointBlock,
+            values: Tensor,
+            points: Tensor,
+            times: Tensor,
+        ) -> Tensor:
+            if cross_frame_enabled and self.training and torch.is_grad_enabled():
+                # Recompute temporal attention during backward to keep an exact
+                # five-frame graph within the formal GPU memory budget.
+                return checkpoint(
+                    lambda current, current_points, current_times: block(
+                        current,
+                        current_points,
+                        current_times,
+                        cross_frame_enabled=True,
+                    ),
+                    values,
+                    points,
+                    times,
+                    use_reentrant=True,
+                    preserve_rng_state=True,
+                )
+            return block(
+                values,
+                points,
+                times,
+                cross_frame_enabled=cross_frame_enabled,
+            )
+
+        features = attend(
+            self.blocks[0], features, coordinates, relative_times
         )
         levels = [
             VoxelLevel(
@@ -1021,11 +1048,8 @@ class VoxelPyramid(nn.Module):
         ]
         for pool, block in zip(self.pools, self.blocks[1:], strict=True):
             level = pool(features, coordinates, relative_times)
-            attended = block(
-                level.features,
-                level.coordinates,
-                level.relative_times,
-                cross_frame_enabled=cross_frame_enabled,
+            attended = attend(
+                block, level.features, level.coordinates, level.relative_times
             )
             level = VoxelLevel(
                 coordinates=level.coordinates,

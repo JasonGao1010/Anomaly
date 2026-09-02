@@ -2899,6 +2899,9 @@ def run_b3_semantic_preflight(
             batch.intensity,
             cross_frame_enabled=False,
         )
+    # The control forward is retained only as logits. Release its cached CUDA
+    # blocks before constructing the substantially larger five-frame graph.
+    torch.cuda.empty_cache()
     logits = trainer.model(
         batch.coordinates,
         batch.relative_times,
