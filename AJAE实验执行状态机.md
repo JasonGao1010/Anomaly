@@ -1,6 +1,6 @@
 # AJAE Fine-Grained Experiment Execution State Machine
 
-> Current authoritative baseline: repository `main` and all historical evidence recorded in this document. E50–E58 and E61–E73 have formally PASSed and E59/E60 descriptive characterization is complete. E74's three-seed confirmation is suspended after completed seeds 0/1 with seed 2 preserved at an exact resumable block checkpoint. E75-X completed descriptively, and E76-X-lite recorded a two-seed moving-normal FPR worsening of `0.36463377142417946`. E76-V1 is closed as `DESCRIPTIVE REVIEW COMPLETE / NO PASS/FAIL`. E76-C1 has now completed with `NO DIRECT CLEARANCE DEGENERACY DETECTED`: its frozen scalar models remain near random and do not trigger the near-saturation branch. The visible-clearance mismatch remains a known limitation. AJAE-F0-X is the current node; E78-X/B2, full E76-X and formal Gate 2 remain locked.
+> Current authoritative baseline: repository `main` and all historical evidence recorded in this document. E50–E58 and E61–E73 have formally PASSed and E59/E60 descriptive characterization is complete. E74's three-seed confirmation is suspended after completed seeds 0/1 with seed 2 preserved at an exact resumable block checkpoint. E75-X completed descriptively, and E76-X-lite recorded a two-seed moving-normal FPR worsening of `0.36463377142417946`. E76-V1 is closed as `DESCRIPTIVE REVIEW COMPLETE / NO PASS/FAIL`. E76-C1 completed with `NO DIRECT CLEARANCE DEGENERACY DETECTED`, and AJAE-F0-X formally PASSed with zero mechanical errors. AJAE-F1-X is not yet authorized to start because its inherited B3 safety-evaluation rule does not define how boundary-frame points outside the legal q=0 center range are scored. This result-blind protocol gap affects 190,240 pure-normal points, 191 moving-normal points, and selected E76-X-lite frame 681. E78-X/B2, full E76-X and formal Gate 2 remain locked.
 
 > Basis: [AJAE Mainline Plan](</home/jasongao/Study/AJAE/AJAE%E6%96%B0%E4%B8%BB%E7%BA%BF%E6%96%B9%E6%A1%88.md>). This document decomposes the mainline plan's immutable constraints, four Decision Gates, B0–B5 controls, normal-motion safety, object-scale diagnostics, development discipline, and one-time real-OOD validation into fine-grained experiment nodes that can be executed sequentially.
 
@@ -3927,22 +3927,30 @@ Notes: The fold plan reused exact test/train/excluded counts `[61,46,91,74,97]`,
 Experiment ID: AJAE-F0-X
 Design-freeze commit/hash: Full-first v3 route freeze completed before E76-C1; fixed micro-window execution identity completed after E76-C1 unlocked this node and before any B3 training or performance result.
 Execution-freeze commit/hash: `0ff02d13721f3e4fcd16089d21d1f676dbdf629f`; `src/qualify.py` SHA-256 `feafc792ca12eae038739fe66eb43ac4a54219bbda03536676209dea854b6f7c`; protocol SHA-256 `410eb9bd12f682ea879157cdca0128de44261b356261cfd65aaf8eab0aeb7e9e`. Full repository regression before this commit: `90 passed`.
-Date: 2026-09-02 freeze; execution pending.
-Git commit / clean state: Must use a clean tracked worktree, excluding only user-owned untracked `PPT/`.
+Date: 2026-09-02 freeze and formal execution.
+Git commit / clean state: Formal execution used the tracked runner and frozen protocol with only user-owned untracked `PPT/` excluded.
 Data identities: One fixed real train/206 window centered at frame 199, using frames `[197,198,199,200,201]`. Within each source frame, select the 16 real returns with the smallest frozen canonical ray identities after running the complete frozen STU frame encoder. This micro selection is mechanical only and never enters training or evaluation.
 Input artifact hashes: Current schema-30 protocol, frozen STU source/weights, and frozen sensor calibration required. Public real-OOD and hidden test remain sealed.
 Random namespaces / seeds: Existing `E53-STU-query-v1` frame seed for each frozen STU forward; AJAE micro-model seed `7600`. No seed search or performance selection.
 Command and resolved config: `python -m src.qualify ajae-f0-x --data-root /home/jasongao/Data/STU --protocol protocol.json --output runs/ajae/ajae_f0_x_preflight.npz --device cuda`. Check exact B3 input/model/supervision positions `[-2,-1,0,1,2]`, enabled nonzero-time production edges, the same unweighted supervision rule at every q, frozen gradient-free STU, B4 frame-ray identity, probability rather than logit averaging, exact occurrence denominators, and finite forward/backward on the fixed 80-point real micro window.
 Resource and disk preflight: 24 physical CPU cores; 20 GiB available RAM and 16 GiB unused swap; NVIDIA GeForce RTX 5080 Laptop GPU with 16,303 MiB total / 14,617 MiB free and 6% utilization; Windows E: 73,837,633,536 bytes remaining of 484,950,659,072; no competing AJAE experiment or training process; target artifact absent before execution.
-Artifacts and hashes: Pending.
+Artifacts and hashes: `runs/ajae/ajae_f0_x_preflight.npz`, 5,069 bytes, SHA-256 `f7db876178e0b80a581902a682e4dbec81126f5fb4e2232cc1dd83abf81f2b4b`; scientific-array SHA-256 `547c3f09cf0b2a1154424b3a7cc6407ee80431f9e630a712b0dc655d4bcb76c1`.
 Primary construct: Whether the already-qualified components are connected into the intended B3 training and B4 fusion path before expensive Full AJAE training.
-Primary result: Pending.
-PASS / FAIL / OUTCOME: PASS only if every mechanical error count is zero. Any failure is an implementation defect and must be repaired under the unchanged Full AJAE-X protocol; no model-quality or scientific verdict is permitted.
+Primary result: All seven error counts were exactly zero. The runner used frames `[197,198,199,200,201]`, selected 16 strictly identity-ordered points per frame, retained q positions `[-2,-1,0,1,2]`, kept STU frozen and gradient-free, activated cross-frame computation, reproduced B4 probability averaging and occurrence denominators, and completed a finite forward/backward pass. Runtime was 3.130 seconds and peak allocated GPU memory was 2,217,224,704 bytes. No model-quality metric was computed.
+PASS / FAIL / OUTCOME: PASS. This verifies only the Full AJAE mechanical connection; it is not evidence that B3 or B4 improves anomaly detection.
 Failure classification: `implementation_defect` only.
-Unlocked next node: AJAE-F1-X seed 0 after PASS.
+Unlocked next node: AJAE-F1-X seed 0 is scientifically next, but execution is paused before training for the result-blind boundary-scoring completion described below.
 Invalidated downstream evidence: None before execution.
 Descriptive observations: None; model outputs are not performance evidence.
-Notes: This node reuses the production E66–E68 temporal and E71 fusion paths and adds the fixed real-window integration check. It does not introduce another scientific qualification chain.
+Notes: Independent read-only validation found artifact and scientific hashes exact; all seven stored error sums were zero; frame/time/count identities were exact; each frame's selected canonical rays were strictly increasing; logits and loss were finite; observed B4 probabilities exactly equaled the expected probability mean and differed from the sigmoid of mean logits. This node reuses the production E66–E68 temporal and E71 fusion paths and adds the fixed real-window integration check.
+
+## AJAE-F1-X | Result-Blind Boundary-Scoring Protocol Gap
+
+Status: `PROTOCOL COMPLETION REQUIRED BEFORE TRAINING`. No B3 training, development metric, B3/B4 safety score, public real-OOD value or hidden-test value has been computed.
+
+The frozen B3 comparison target is the q=0 output of a symmetric five-frame window. Under the already frozen source ranges, train/201 provides legal B3 q=0 centers only for frames 6–679, while the complete E61 pure-normal safety population covers frames 4–681. Boundary frames 4, 5, 680 and 681 contain 190,240 frozen pure-normal points. The frozen 64-frame E76-X-lite subset also includes frame 681. Similarly, train/206 provides legal B3 q=0 centers only for frames 2–446, while the complete moving-normal population covers frames 0–448; frames 0 and 1 contain 191 moving-normal points.
+
+The implementation can be generalized from B1 to B3, so the current B1-only evaluator rejection is an implementation gap and is not itself a reason to alter the experiment. The boundary scores, however, cannot be implemented uniquely from the current text. Dropping boundary points changes the frozen safety population; taking an outer-q score changes the q=0 B3 estimand; applying B4 fusion changes B3 into B4. None is authorized automatically. One result-blind choice must be frozen before AJAE-F1-X starts. Until then, no training artifact may be written and no scientific failure may be inferred.
 
 ## E76-X | Deferred Full Two-Seed B1 Safety
 

@@ -594,14 +594,17 @@ def test_e76_c1_reuses_e48_split_and_detects_only_near_saturation() -> None:
 def test_e76_c1_protocol_is_result_blind_and_full_first() -> None:
     exploration = load_protocol(PROTOCOL_PATH).development["exploration_track"]
     assert exploration["version"] == "exploration-confirmation-split-v3-full-first"
-    assert exploration["current_node"] == "AJAE-F0-X"
+    assert (
+        exploration["current_node"]
+        == "AJAE-F1-X_protocol_completion_required_before_training"
+    )
     c1 = exploration["e76c1_freeze"]
     assert c1["status"] == "frozen_before_clearance_computation"
     assert c1["descriptive_difference_is_nonblocking"] is True
     assert c1["renderer_modification_forbidden"] is True
     assert exploration["e76c1_result"]["model_fail"] == (False, False)
     assert exploration["e76c1_result"]["next_node"] == "AJAE-F0-X"
-    assert exploration["full_ajae_x_freeze"]["status"].startswith("AJAE-F0-X")
+    assert exploration["full_ajae_x_freeze"]["status"].startswith("AJAE-F1-X")
     assert exploration["full_ajae_x_freeze"]["b2_e78x_status"].startswith(
         "deferred ablation"
     )
@@ -610,6 +613,10 @@ def test_e76_c1_protocol_is_result_blind_and_full_first() -> None:
     assert f0["frame_offsets"] == (-2, -1, 0, 1, 2)
     assert f0["points_per_frame"] == 16
     assert f0["model_quality_use_forbidden"] is True
+    assert f0["result"]["passed"] is True
+    blocker = exploration["full_ajae_x_freeze"]["f1_protocol_blocker"]
+    assert blocker["pure_normal_boundary_points_without_b3_q0"] == 190240
+    assert blocker["moving_normal_boundary_points_without_b3_q0"] == 191
 
 
 def test_phase5_frame_identity_is_frozen_before_stu_outputs() -> None:

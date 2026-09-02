@@ -1113,12 +1113,13 @@ class AJAEProtocol:
             }
             or confirmation.get("resume_branch") != "confirm/e74-seed2-resume"
             or confirmation.get("partial_seed2_result_use_forbidden") is not True
-            or exploration.get("current_node") != "AJAE-F0-X"
+            or exploration.get("current_node")
+            != "AJAE-F1-X_protocol_completion_required_before_training"
             or exploration.get("formal_gate2_and_gate3_status") != "not adjudicated"
             or exploration.get("public_real_ood_sequences_remain_sealed") is not True
             or exploration.get("hidden_test_sequences_remain_sealed") is not True
             or exploration.get("exploratory_continuation_status")
-            != "Full_AJAE-X_unlocked_at_AJAE-F0-X"
+            != "AJAE-F0-X_passed_AJAE-F1-X_waiting_for_boundary_scoring_protocol"
         ):
             raise ProtocolError("exploration/confirmation split identity changed")
         e75x = _mapping(exploration.get("e75x_result"), "E75-X result")
@@ -1386,6 +1387,10 @@ class AJAEProtocol:
             exploration.get("full_ajae_x_freeze"), "Full AJAE-X freeze"
         )
         f0 = _mapping(full.get("f0_preflight"), "AJAE-F0-X freeze")
+        f0_result = _mapping(f0.get("result"), "AJAE-F0-X result")
+        f1_blocker = _mapping(
+            full.get("f1_protocol_blocker"), "AJAE-F1-X protocol blocker"
+        )
         if (
             c1.get("version") != "E76-C1-v1"
             or c1.get("status") != "frozen_before_clearance_computation"
@@ -1485,8 +1490,8 @@ class AJAEProtocol:
             or c1_result.get("next_node") != "AJAE-F0-X"
             or full.get("version") != "AJAE-full-first-v1"
             or full.get("status")
-            != "AJAE-F0-X_current_after_E76-C1_no_direct_degeneracy"
-            or f0.get("status") != "frozen_before_preflight_execution"
+            != "AJAE-F1-X_protocol_completion_required_before_training"
+            or f0.get("status") != "execution_complete_pass"
             or (f0.get("partition"), f0.get("sequence_id"), f0.get("center_frame"))
             != ("train", 206, 199)
             or _signed_int_tuple(f0.get("frame_offsets"), "AJAE-F0-X offsets")
@@ -1506,6 +1511,24 @@ class AJAEProtocol:
                 "one fixed micro real window forward and backward is finite",
             )
             or f0.get("model_quality_use_forbidden") is not True
+            or f0_result.get("artifact_sha256")
+            != "f7db876178e0b80a581902a682e4dbec81126f5fb4e2232cc1dd83abf81f2b4b"
+            or f0_result.get("scientific_array_sha256")
+            != "547c3f09cf0b2a1154424b3a7cc6407ee80431f9e630a712b0dc655d4bcb76c1"
+            or f0_result.get("total_errors") != 0
+            or f0_result.get("model_quality_evaluated") is not False
+            or f0_result.get("passed") is not True
+            or f1_blocker.get("status")
+            != "unresolved_before_any_B3_training_or_performance_result"
+            or tuple(f1_blocker.get("train_201_b3_q0_frame_range", ()))
+            != (6, 679)
+            or f1_blocker.get("pure_normal_boundary_points_without_b3_q0")
+            != 190240
+            or f1_blocker.get("e76x_lite_selected_frame_without_b3_q0") != 681
+            or tuple(f1_blocker.get("train_206_b3_q0_frame_range", ()))
+            != (2, 446)
+            or f1_blocker.get("moving_normal_boundary_points_without_b3_q0")
+            != 191
             or full.get("b2_e78x_status")
             != "deferred ablation unlocked only after Full AJAE-X supports whole-method viability"
             or full.get("seed0_stop_rule")
