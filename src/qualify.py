@@ -3911,7 +3911,7 @@ def run_e76_visual_audit(
     freeze = exploration["e76v1_freeze"]
     confirmation = exploration["e74_confirmation"]
     if (
-        exploration["current_node"] != "E76-V1"
+        exploration["current_node"] != "E76-V1-format-correction"
         or freeze["status"] != "viewer_format_correction_frozen_before_rerun"
         or freeze["e78x_remains_locked"] is not True
         or exploration["e76x_lite_result"]["e78x_locked"] is not True
