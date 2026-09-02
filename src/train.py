@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
+import gc
 import hashlib
 import json
 import math
@@ -40,10 +42,22 @@ GATE1_EVIDENCE_KEYS = {
     "render_source_leakage",
     "beam_range_intensity",
 }
+_MALLOC_TRIM = getattr(ctypes.CDLL(None), "malloc_trim", None)
+if _MALLOC_TRIM is not None:
+    _MALLOC_TRIM.argtypes = (ctypes.c_size_t,)
+    _MALLOC_TRIM.restype = ctypes.c_int
 
 
 class TrainingError(RuntimeError):
     """Report an invalid or failed AJAE optimization operation."""
+
+
+def _release_host_saved_tensors() -> None:
+    """Return freed offload buffers to Linux after an exact backward pass."""
+
+    gc.collect()
+    if _MALLOC_TRIM is not None:
+        _MALLOC_TRIM(0)
 
 
 def _seed_everything(seed: int) -> None:
@@ -1204,7 +1218,11 @@ class AJAETrainer:
         (loss / self.config.gradient_accumulation).backward()
         self.update_index += 1
         self.accumulated_windows += 1
-        return float(loss.detach().cpu())
+        loss_value = float(loss.detach().cpu())
+        del batch, logits, loss, supervised
+        if self.device.type == "cuda":
+            _release_host_saved_tensors()
+        return loss_value
 
     def _optimizer_step(self, *, partial: bool) -> None:
         if self.accumulated_windows < 1:

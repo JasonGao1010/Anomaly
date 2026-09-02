@@ -949,6 +949,15 @@ def test_saved_tensor_cpu_offload_preserves_output_and_gradients() -> None:
         )
 
 
+def test_host_saved_tensor_release_calls_platform_trim(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[int] = []
+    monkeypatch.setattr(train_module, "_MALLOC_TRIM", calls.append)
+    train_module._release_host_saved_tensors()
+    assert calls == [0]
+
+
 def test_training_and_heldout_geometry_are_disjoint_and_bounded() -> None:
     for seed in range(40):
         training_shape = sample_training_anomaly_shape(seed)
