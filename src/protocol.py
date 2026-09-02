@@ -1112,7 +1112,7 @@ class AJAEProtocol:
             }
             or confirmation.get("resume_branch") != "confirm/e74-seed2-resume"
             or confirmation.get("partial_seed2_result_use_forbidden") is not True
-            or exploration.get("current_node") != "E76-V1-format-correction"
+            or exploration.get("current_node") != "E76-V1-visual-review"
             or exploration.get("formal_gate2_and_gate3_status") != "not adjudicated"
             or exploration.get("public_real_ood_sequences_remain_sealed") is not True
             or exploration.get("hidden_test_sequences_remain_sealed") is not True
@@ -1323,19 +1323,26 @@ class AJAEProtocol:
         selected_b = visual_result.get("group_b_selected")
         if (
             visual_result.get("status")
-            != "invalidated_by_cloudcompare_default_scalar_field_display"
+            != "display_corrected_export_complete"
             or visual_result.get("manifest_path")
             != "runs/ajae/e76_v1/manifest.json"
             or visual_result.get("manifest_sha256")
+            != "2b8de48df52004a008e065408014f876020005fee12f3a240d2a2c7f2d0af4ed"
+            or visual_result.get("attribute_archive_sha256")
+            != "ecde4b8efcad2ba8a0dbeac8840682f4e37a24d700e68467af7019533d1fa7da"
+            or visual_result.get("attribute_scientific_array_sha256")
+            != "c541d5263f5b64395fec93dcde451b8b9465032f8748819726755f129559f271"
+            or visual_result.get("source_export_manifest_sha256")
             != "840b868456958cbdd25e63fa60e6f759c494e215e6ddf6bb33caea95a6b5b755"
             or visual_result.get("execution_protocol_sha256")
-            != "4092ccb88e7e1661c426f7a984f2780437a5dcd92adbd601784c669f72620d16"
+            != "401bd028b13369b13abbaf6b7e867b0dcb5e6d03dd4f07d52b988bf4c3c73a8f"
             or visual_result.get("execution_runner_commit")
-            != "45dd98eb738565b256ca36838e6c34b9d874297e"
+            != "cc9ea758af08526fa3f52e7cae3ce651a6407318"
             or visual_result.get("execution_runner_sha256")
-            != "9f5478dcd758a996c099ca1d18e0069ff82bd66a363f460d54a5c87c5d8140ce"
+            != "85ff378afab2e5d049e5561e5918a3d2b5bc82a577196648506657417fe973c5"
             or visual_result.get("ply_file_count") != 27
-            or visual_result.get("manifest_file_count") != 1
+            or visual_result.get("attribute_array_count") != 111
+            or visual_result.get("viewer_scalar_field_count") != 0
             or tuple(visual_result.get("group_a_world_ids", ()))
             != (1, 2, 0, 14, 8, 9)
             or not isinstance(selected_b, list)
@@ -1343,8 +1350,10 @@ class AJAEProtocol:
             != (200, 194, 167)
             or tuple(item.get("moving_points") for item in selected_b)
             != (42, 67, 42)
-            or visual_result.get("total_bytes_including_manifest") != 58737615
-            or visual_result.get("visual_review_performed") is not True
+            or visual_result.get("total_bytes_including_manifest_and_attributes")
+            != 44146724
+            or visual_result.get("source_payload_preserved_exactly") is not True
+            or visual_result.get("visual_review_performed") is not False
             or visual_result.get("scientific_visual_interpretation_valid") is not False
             or visual_result.get("formal_gate_adjudicated") is not False
             or visual_result.get("e76x_lite_result_unchanged") is not True
