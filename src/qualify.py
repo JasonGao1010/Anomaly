@@ -89,6 +89,7 @@ E63_BOOTSTRAP_NAMESPACE = "E63-hierarchical-paired-bootstrap-v1"
 E63_BOOTSTRAP_SEED = 63002026
 E75_BOOTSTRAP_NAMESPACE = "E75-common-domain-bootstrap-correction-v1"
 E76_LITE_PURE_NAMESPACE = "E76-X-lite-pure-normal-frame-v1"
+E76V1_PLY_PROPERTIES = ("x", "y", "z", "red", "green", "blue")
 COMMON_DEVELOPMENT_BOOTSTRAP_COMPARISONS = ("E75", "E81", "E82", "E88")
 REPORTED_PERCENT_SCALE = 100.0
 E63_COMMON_WORLD_ID = (*range(5), *range(6, 24))
@@ -3911,7 +3912,7 @@ def run_e76_visual_audit(
     confirmation = exploration["e74_confirmation"]
     if (
         exploration["current_node"] != "E76-V1"
-        or freeze["status"] != "frozen_before_export_or_visual_review"
+        or freeze["status"] != "viewer_format_correction_frozen_before_rerun"
         or freeze["e78x_remains_locked"] is not True
         or exploration["e76x_lite_result"]["e78x_locked"] is not True
     ):
@@ -4087,6 +4088,7 @@ def run_e76_visual_audit(
         )
 
     file_records: list[dict[str, object]] = []
+    attribute_arrays: dict[str, np.ndarray] = {}
     destination.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(
         dir=destination.parent, prefix="e76_v1_export_"
@@ -4099,8 +4101,23 @@ def run_e76_visual_audit(
             comments: Sequence[str],
             group: str,
         ) -> None:
+            if not set(E76V1_PLY_PROPERTIES).issubset(properties):
+                raise QualificationError("E76-V1 display properties are incomplete")
+            display = {
+                name: properties[name] for name in E76V1_PLY_PROPERTIES
+            }
+            attribute_names = [
+                name for name in properties if name not in E76V1_PLY_PROPERTIES
+            ]
+            attribute_prefix = hashlib.sha256(
+                relative.as_posix().encode("utf-8")
+            ).hexdigest()[:16]
+            for name in attribute_names:
+                attribute_arrays[f"{attribute_prefix}__{name}"] = np.ascontiguousarray(
+                    properties[name]
+                )
             record = _write_binary_ply(
-                temporary / relative, properties, comments=comments
+                temporary / relative, display, comments=comments
             )
             file_records.append(
                 {
@@ -4110,6 +4127,8 @@ def run_e76_visual_audit(
                     "bytes": record["bytes"],
                     "sha256": record["sha256"],
                     "properties": record["properties"],
+                    "attribute_key_prefix": attribute_prefix,
+                    "attribute_properties": attribute_names,
                 }
             )
 
@@ -4280,6 +4299,15 @@ def run_e76_visual_audit(
             relative_paths,
             key=lambda value: hashlib.sha256(value.encode("utf-8")).digest(),
         )
+        attribute_path = temporary / "attributes.npz"
+        np.savez_compressed(attribute_path, **attribute_arrays)
+        attribute_record = {
+            "path": "attributes.npz",
+            "arrays": len(attribute_arrays),
+            "bytes": attribute_path.stat().st_size,
+            "sha256": _sha256(attribute_path),
+            "scientific_array_sha256": _array_hash(attribute_arrays),
+        }
         manifest = {
             "experiment": "E76-V1",
             "status": "descriptive_export_complete",
@@ -4299,6 +4327,7 @@ def run_e76_visual_audit(
             "group_b_selected": selected_b,
             "review_freeze": _plain_json(freeze["review_freeze"]),
             "viewing_order": viewing_order,
+            "attribute_archive": attribute_record,
             "files": sorted(file_records, key=lambda item: str(item["path"])),
         }
         manifest_path = temporary / "manifest.json"
@@ -4321,6 +4350,7 @@ def run_e76_visual_audit(
         "manifest_path": str(final_manifest),
         "manifest_sha256": _sha256(final_manifest),
         "total_bytes": sum(int(item["bytes"]) for item in file_records)
+        + attribute_path.stat().st_size
         + final_manifest.stat().st_size,
         "seconds": time.monotonic() - started,
     }

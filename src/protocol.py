@@ -1112,7 +1112,7 @@ class AJAEProtocol:
             }
             or confirmation.get("resume_branch") != "confirm/e74-seed2-resume"
             or confirmation.get("partial_seed2_result_use_forbidden") is not True
-            or exploration.get("current_node") != "E76-V1-review"
+            or exploration.get("current_node") != "E76-V1-format-correction"
             or exploration.get("formal_gate2_and_gate3_status") != "not adjudicated"
             or exploration.get("public_real_ood_sequences_remain_sealed") is not True
             or exploration.get("hidden_test_sequences_remain_sealed") is not True
@@ -1249,12 +1249,12 @@ class AJAEProtocol:
         )
         review = _mapping(visual.get("review_freeze"), "E76-V1 review freeze")
         if (
-            visual.get("version") != "E76-V1-v1"
+            visual.get("version") != "E76-V1-v2-display"
             or visual.get("status")
-            != "descriptive_export_complete_review_pending"
+            != "viewer_format_correction_frozen_before_rerun"
             or visual.get("output_directory") != "runs/ajae/e76_v1"
             or visual.get("output_format")
-            != "binary_little_endian PLY 1.0 plus one JSON manifest"
+            != "27 RGB-only binary_little_endian PLY 1.0 files plus one aligned NPZ attribute archive and one JSON manifest"
             or visual.get("maximum_ply_files") != 27
             or group_a.get("source_artifact_sha256")
             != "b14efc1aad86ac67b5bf7c8631f02b2e68664e071b747b7b210d5f7a30f5d123"
@@ -1276,11 +1276,12 @@ class AJAEProtocol:
                 "base_real", "normal_control_overlay",
                 "anomaly_proxy_overlay", "anomaly_proxy_only",
             )
-            or tuple(group_a.get("properties", ()))
+            or tuple(group_a.get("ply_properties", ()))
             != (
-                "x", "y", "z", "intensity", "red", "green", "blue",
-                "point_source", "semantic_id",
+                "x", "y", "z", "red", "green", "blue",
             )
+            or tuple(group_a.get("attribute_properties", ()))
+            != ("intensity", "point_source", "semantic_id")
             or group_b.get("source_artifact_sha256")
             != "8d3e08e0512dc70a75d2279cfb4515bc960bbfda4f35a872c4a76e9dad69d0e0"
             or group_b.get("eligible_frames")
@@ -1291,10 +1292,13 @@ class AJAEProtocol:
             != "descending selection statistic, then ascending frame_id"
             or group_b.get("selected_frame_count") != 3
             or group_b.get("result_driven_diagnostic_selection") is not True
-            or tuple(group_b.get("properties", ()))
+            or tuple(group_b.get("ply_properties", ()))
             != (
-                "x", "y", "z", "intensity", "red", "green", "blue",
-                "is_moving_normal", "semantic_id", "range", "b0_score",
+                "x", "y", "z", "red", "green", "blue",
+            )
+            or tuple(group_b.get("attribute_properties", ()))
+            != (
+                "intensity", "is_moving_normal", "semantic_id", "range", "b0_score",
                 "b1_seed0_score", "b1_seed1_score", "pred_b0_A",
                 "pred_b0_B", "pred_b1_seed0_A", "pred_b1_seed0_B",
                 "pred_b1_seed1_A", "pred_b1_seed1_B",
@@ -1312,7 +1316,7 @@ class AJAEProtocol:
         selected_b = visual_result.get("group_b_selected")
         if (
             visual_result.get("status")
-            != "descriptive_export_complete_review_pending"
+            != "invalidated_by_cloudcompare_default_scalar_field_display"
             or visual_result.get("manifest_path")
             != "runs/ajae/e76_v1/manifest.json"
             or visual_result.get("manifest_sha256")
@@ -1333,7 +1337,8 @@ class AJAEProtocol:
             or tuple(item.get("moving_points") for item in selected_b)
             != (42, 67, 42)
             or visual_result.get("total_bytes_including_manifest") != 58737615
-            or visual_result.get("visual_review_performed") is not False
+            or visual_result.get("visual_review_performed") is not True
+            or visual_result.get("scientific_visual_interpretation_valid") is not False
             or visual_result.get("formal_gate_adjudicated") is not False
             or visual_result.get("e76x_lite_result_unchanged") is not True
             or visual_result.get("e78x_locked") is not True
