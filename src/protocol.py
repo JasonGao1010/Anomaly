@@ -1113,12 +1113,12 @@ class AJAEProtocol:
             }
             or confirmation.get("resume_branch") != "confirm/e74-seed2-resume"
             or confirmation.get("partial_seed2_result_use_forbidden") is not True
-            or exploration.get("current_node") != "E76-C1"
+            or exploration.get("current_node") != "AJAE-F0-X"
             or exploration.get("formal_gate2_and_gate3_status") != "not adjudicated"
             or exploration.get("public_real_ood_sequences_remain_sealed") is not True
             or exploration.get("hidden_test_sequences_remain_sealed") is not True
             or exploration.get("exploratory_continuation_status")
-            != "E76-C1_current_before_full_AJAE-X"
+            != "Full_AJAE-X_unlocked_at_AJAE-F0-X"
         ):
             raise ProtocolError("exploration/confirmation split identity changed")
         e75x = _mapping(exploration.get("e75x_result"), "E75-X result")
@@ -1379,6 +1379,9 @@ class AJAEProtocol:
             raise ProtocolError("E76-V1 result identity changed")
         c1 = _mapping(exploration.get("e76c1_freeze"), "E76-C1 freeze")
         c1_hash = _mapping(c1.get("input_sha256"), "E76-C1 input hashes")
+        c1_result = _mapping(
+            exploration.get("e76c1_result"), "E76-C1 result"
+        )
         full = _mapping(
             exploration.get("full_ajae_x_freeze"), "Full AJAE-X freeze"
         )
@@ -1422,8 +1425,66 @@ class AJAEProtocol:
             or c1.get("renderer_modification_forbidden") is not True
             or c1.get("public_real_ood_sequences_remain_sealed") is not True
             or c1.get("hidden_test_sequences_remain_sealed") is not True
+            or c1_result.get("status")
+            != "execution_complete_no_direct_clearance_degeneracy"
+            or c1_result.get("artifact_path")
+            != "runs/ajae/e76_c1_visible_clearance.npz"
+            or c1_result.get("artifact_sha256")
+            != "d82485fd830034d065bb9156ec0ec130c57076a730bd2ecba281573aeed1a216"
+            or c1_result.get("scientific_array_sha256")
+            != "25d8ac747ed01712be8f2e2d06f0a73caaa3c42236206c8b8c3443e4a22e8641"
+            or c1_result.get("protocol_sha256")
+            != "00f8959ec2c483c0c1a683cc72a0380c253f80dc25ee8070be2c3f69262e4098"
+            or (
+                c1_result.get("matched_pairs"),
+                c1_result.get("visible_units"),
+                c1_result.get("oof_pairs"),
+            ) != (1347, 2694, 369)
+            or tuple(c1_result.get("normal_control_clearance_m", ()))
+            != (
+                0.001687041409228148, 0.010700240620766613,
+                0.031108320961035787, 0.06829576769507004,
+                0.13119311246977655, 0.22811265405322204,
+                0.9115055899069934,
+            )
+            or tuple(c1_result.get("anomaly_proxy_clearance_m", ()))
+            != (
+                0.0012552380594685556, 0.012301679031201324,
+                0.03265636473764874, 0.061932802422266446,
+                0.11168806765870118, 0.1986637390279114,
+                0.4637956687606965,
+            )
+            or tuple(c1_result.get("paired_control_minus_proxy_summary", ()))
+            != (
+                0.012711116847071465, 0.0010496605671727888,
+                -0.12014395053699983, 0.17856108062053896,
+                0.5063103192279139, 0.25686711210096513,
+                0.12991833704528583,
+            )
+            or tuple(tuple(row) for row in c1_result.get("model_metric", ()))
+            != (
+                (0.5194953033541175, 0.5271002710027101,
+                 0.43902439024390244, 0.6151761517615176),
+                (0.5012558662171988, 0.532520325203252,
+                 0.2899728997289973, 0.7750677506775068),
+            )
+            or tuple(tuple(row) for row in c1_result.get("bootstrap_ci_low", ()))
+            != (
+                (0.4835387886399189, 0.497289972899729,
+                 0.3902439024390244, 0.5663956639566395),
+                (0.46781851998736795, 0.5040650406504065,
+                 0.24383468834688346, 0.7317073170731707),
+            )
+            or tuple(c1_result.get("model_fail", ())) != (False, False)
+            or c1_result.get("outcome")
+            != "NO DIRECT CLEARANCE DEGENERACY DETECTED"
+            or c1_result.get("visible_clearance_known_limitation_retained")
+            is not True
+            or c1_result.get("formal_gate_adjudicated") is not False
+            or c1_result.get("next_node") != "AJAE-F0-X"
             or full.get("version") != "AJAE-full-first-v1"
-            or full.get("status") != "locked_pending_E76-C1"
+            or full.get("status")
+            != "AJAE-F0-X_current_after_E76-C1_no_direct_degeneracy"
             or full.get("b2_e78x_status")
             != "deferred ablation unlocked only after Full AJAE-X supports whole-method viability"
             or full.get("seed0_stop_rule")

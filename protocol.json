@@ -2656,8 +2656,8 @@
       }
     },
     "renderer_mechanical_qualification": {
-      "status": "Gate 1 PASS; E50-E58 and E61-E73 formal PASS; E59-E60 descriptive complete; E74 confirmation suspended after seeds 0/1; E75-X descriptive complete; E76-X-lite moving-normal stop signal recorded; E76-V1 descriptive review complete without PASS/FAIL; E76-C1 current; E78-X/B2 and formal Gate 2 locked",
-      "current_gate1_policy": {"hard_evidence": ["compatible canonical-ray and renderer mechanics through E44", "E45B-v2 rendered control/proxy qualification PASS", "E48 direct rendered-label-shortcut audit PASS"], "excluded_from_conjunction": ["all E45A variants", "E45-V1", "E46", "E47"], "rationale": "Natural real-normal observations and coverage-oriented inserted controls need not reproduce the same scene/placement distribution. Real-versus-rendered source identifiability is not equivalent to anomaly-label shortcut predictability because rendered controls and rendered proxies carry different labels.", "gate1_result": "PASS", "current_node": "E76-C1", "next_after_pass": []},
+      "status": "Gate 1 PASS; E50-E58 and E61-E73 formal PASS; E59-E60 descriptive complete; E74 confirmation suspended after seeds 0/1; E75-X descriptive complete; E76-X-lite moving-normal stop signal recorded; E76-V1 descriptive review complete without PASS/FAIL; E76-C1 found no direct clearance degeneracy; AJAE-F0-X current; E78-X/B2 and formal Gate 2 locked",
+      "current_gate1_policy": {"hard_evidence": ["compatible canonical-ray and renderer mechanics through E44", "E45B-v2 rendered control/proxy qualification PASS", "E48 direct rendered-label-shortcut audit PASS"], "excluded_from_conjunction": ["all E45A variants", "E45-V1", "E46", "E47"], "rationale": "Natural real-normal observations and coverage-oriented inserted controls need not reproduce the same scene/placement distribution. Real-versus-rendered source identifiability is not equivalent to anomaly-label shortcut predictability because rendered controls and rendered proxies carry different labels.", "gate1_result": "PASS", "current_node": "AJAE-F0-X", "next_after_pass": []},
       "layer_boundaries": {"E27-E28": "direct geometry outputs only", "E29": "return probability and deterministic acceptance decision only", "E30-E31": "accepted returns", "E32-E33": "nearest-return occlusion competition"},
       "E27": {
         "question": "Does the formal geometry path return the correct nearest convex-hull hit, outward finite normal and object ID for active normal-control templates when return rejection is disabled?",
@@ -3800,7 +3800,7 @@
         "partial_seed2_result_use_forbidden": true
       },
       "nodes": ["E75-X", "E76-X-lite", "E76-V1 descriptive visual audit", "E76-C1 visible-ground-clearance direct-shortcut audit", "AJAE-F0-X full-path mechanical preflight", "AJAE-F1-X full AJAE seed 0", "AJAE-F2-X seed 0 B3/B4 evaluation and lite safety", "AJAE-F3-X conditional full AJAE seed 1", "AJAE-F4-X two-seed whole-method viability review", "E78-X deferred ablation after whole-method viability", "E76-X full safety on the later confirmation track"],
-      "current_node": "E76-C1",
+      "current_node": "AJAE-F0-X",
       "e75x_result": {
         "status": "descriptive_execution_complete",
         "formal_gate2_adjudicated": false,
@@ -3987,9 +3987,34 @@
         "no_direct_degeneracy_action": "record the known visible-clearance limitation and immediately continue to AJAE-F0-X",
         "command": "python -m src.render audit-e76-c1 --data-root /home/jasongao/Data/STU --protocol protocol.json --bank runs/ajae/e45b-v2_bank_1024.npz --units runs/ajae/e45b-v2_units_1024.npz --pairs runs/ajae/e45b_v2_control_proxy_pairs.npz --e48 runs/ajae/e48_low_level_shortcut.npz --calibration runs/ajae/calibration.pt --output runs/ajae/e76_c1_visible_clearance.npz --processes 24"
       },
+      "e76c1_result": {
+        "status": "execution_complete_no_direct_clearance_degeneracy",
+        "artifact_path": "runs/ajae/e76_c1_visible_clearance.npz",
+        "artifact_sha256": "d82485fd830034d065bb9156ec0ec130c57076a730bd2ecba281573aeed1a216",
+        "scientific_array_sha256": "25d8ac747ed01712be8f2e2d06f0a73caaa3c42236206c8b8c3443e4a22e8641",
+        "protocol_sha256": "00f8959ec2c483c0c1a683cc72a0380c253f80dc25ee8070be2c3f69262e4098",
+        "matched_pairs": 1347,
+        "visible_units": 2694,
+        "oof_pairs": 369,
+        "class_summary_order": ["min", "q05", "q25", "q50", "q75", "q95", "max"],
+        "normal_control_clearance_m": [0.001687041409228148, 0.010700240620766613, 0.031108320961035787, 0.06829576769507004, 0.13119311246977655, 0.22811265405322204, 0.9115055899069934],
+        "anomaly_proxy_clearance_m": [0.0012552380594685556, 0.012301679031201324, 0.03265636473764874, 0.061932802422266446, 0.11168806765870118, 0.1986637390279114, 0.4637956687606965],
+        "paired_summary_order": ["mean", "median", "q05", "q95", "p_gt_0", "p_gt_0.05m", "p_gt_0.10m"],
+        "paired_control_minus_proxy_summary": [0.012711116847071465, 0.0010496605671727888, -0.12014395053699983, 0.17856108062053896, 0.5063103192279139, 0.25686711210096513, 0.12991833704528583],
+        "metric_order": ["roc_auc", "balanced_accuracy", "control_recall", "proxy_recall"],
+        "model_metric": [[0.5194953033541175, 0.5271002710027101, 0.43902439024390244, 0.6151761517615176], [0.5012558662171988, 0.532520325203252, 0.2899728997289973, 0.7750677506775068]],
+        "bootstrap_ci_low": [[0.4835387886399189, 0.497289972899729, 0.3902439024390244, 0.5663956639566395], [0.46781851998736795, 0.5040650406504065, 0.24383468834688346, 0.7317073170731707]],
+        "bootstrap_ci_high": [[0.558142382914344, 0.5582655826558265, 0.4878048780487805, 0.6666666666666666], [0.5353641093999015, 0.5609756097560976, 0.33875338753387535, 0.8157181571815718]],
+        "model_fail": [false, false],
+        "outcome": "NO DIRECT CLEARANCE DEGENERACY DETECTED",
+        "visible_clearance_known_limitation_retained": true,
+        "independent_recomputation": "class and paired summaries, visible-return counts, both pooled metrics, all 4000 bootstrap metric rows, interval bounds, and branch outcome reproduced exactly",
+        "formal_gate_adjudicated": false,
+        "next_node": "AJAE-F0-X"
+      },
       "full_ajae_x_freeze": {
         "version": "AJAE-full-first-v1",
-        "status": "locked_pending_E76-C1",
+        "status": "AJAE-F0-X_current_after_E76-C1_no_direct_degeneracy",
         "definition": "B3 full symmetric five-frame AJAE training followed by B4 equal-weight probability fusion over overlapping windows from the same checkpoint",
         "order": ["AJAE-F0-X", "AJAE-F1-X seed 0", "AJAE-F2-X seed 0 B3/B4 evaluation and lite safety", "AJAE-F3-X conditional seed 1", "AJAE-F4-X two-seed viability review"],
         "b2_e78x_status": "deferred ablation unlocked only after Full AJAE-X supports whole-method viability",
@@ -3999,7 +4024,7 @@
         "public_real_ood_sequences_remain_sealed": true,
         "hidden_test_sequences_remain_sealed": true
       },
-      "exploratory_continuation_status": "E76-C1_current_before_full_AJAE-X",
+      "exploratory_continuation_status": "Full_AJAE-X_unlocked_at_AJAE-F0-X",
       "formal_gate2_and_gate3_status": "not adjudicated",
       "confirmation_rule": "if temporal viability is promising, complete seed 2 for B1/B2/B3 and apply the unchanged three-seed Gate 2 and Gate 3 rules",
       "negative_temporal_action": "stop or redesign without spending the remaining confirmatory repeats",
@@ -4320,5 +4345,5 @@
     },
     "verdict_rule": "a gate verdict requires its real statistics and an explicit predeclared scientific judgment; artifact existence alone is never evidence"
   },
-  "status": {"implementation_target": "schema30", "scientific_route": "E76-C1_visible_clearance_direct_shortcut_audit", "performance_claims_available": false}
+  "status": {"implementation_target": "schema30", "scientific_route": "AJAE-F0-X_full_path_mechanical_preflight", "performance_claims_available": false}
 }

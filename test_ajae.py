@@ -594,12 +594,14 @@ def test_e76_c1_reuses_e48_split_and_detects_only_near_saturation() -> None:
 def test_e76_c1_protocol_is_result_blind_and_full_first() -> None:
     exploration = load_protocol(PROTOCOL_PATH).development["exploration_track"]
     assert exploration["version"] == "exploration-confirmation-split-v3-full-first"
-    assert exploration["current_node"] == "E76-C1"
+    assert exploration["current_node"] == "AJAE-F0-X"
     c1 = exploration["e76c1_freeze"]
     assert c1["status"] == "frozen_before_clearance_computation"
     assert c1["descriptive_difference_is_nonblocking"] is True
     assert c1["renderer_modification_forbidden"] is True
-    assert exploration["full_ajae_x_freeze"]["status"] == "locked_pending_E76-C1"
+    assert exploration["e76c1_result"]["model_fail"] == (False, False)
+    assert exploration["e76c1_result"]["next_node"] == "AJAE-F0-X"
+    assert exploration["full_ajae_x_freeze"]["status"].startswith("AJAE-F0-X")
     assert exploration["full_ajae_x_freeze"]["b2_e78x_status"].startswith(
         "deferred ablation"
     )

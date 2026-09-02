@@ -1,6 +1,6 @@
 # AJAE 主线方案
 
-> 当前权威基线：本仓库`main`与本文记录的全部历史证据。E25-new、E26-v2、E38–E44刷新、E45B-v2、E48、E49、E50–E58与E61–E73已经正式PASS，E59/E60描述性聚合已经完成，Gate 1、Phase 5和Phase 7已经关闭；E74三种子确认在完成种子0/1后暂停，E75-X已经描述性完成，E76-X-lite记录了运动正常点误报恶化。E76-V1现以`DESCRIPTIVE REVIEW COMPLETE / NO PASS/FAIL`关闭：隐藏网格接地，但所查正常对照的最低可见回波高于对应代理。该观察本身既不推翻renderer或E48，也不能排除可学习提示。当前唯一节点为E76-C1；E78-X/B2、Full AJAE-X和正式Gate 2仍锁定。旧提交`44fd6d13798e826b2cac8371de26a7d17707dadc`只保留为E22-v2时期的历史基线，不再代表当前工作区状态。
+> 当前权威基线：本仓库`main`与本文记录的全部历史证据。E25-new、E26-v2、E38–E44刷新、E45B-v2、E48、E49、E50–E58与E61–E73已经正式PASS，E59/E60描述性聚合已经完成，Gate 1、Phase 5和Phase 7已经关闭；E74三种子确认在完成种子0/1后暂停，E75-X已经描述性完成，E76-X-lite记录了运动正常点误报恶化。E76-V1以`DESCRIPTIVE REVIEW COMPLETE / NO PASS/FAIL`关闭。E76-C1随后对1,347个冻结匹配对完成正式审计，逻辑回归和深度3树的AUC下界分别为`0.483539`和`0.467819`，未触发直接clearance标签退化。可见离地高度差继续作为已知限制记录；当前唯一节点为AJAE-F0-X。E78-X/B2、完整E76-X和正式Gate 2仍锁定。旧提交`44fd6d13798e826b2cac8371de26a7d17707dadc`只保留为E22-v2时期的历史基线，不再代表当前工作区状态。
 
 ---
 
@@ -1827,7 +1827,7 @@ $$
 
 ---
 
-# 18. 当前状态（当前工作区：E76-C1为唯一执行节点）
+# 18. 当前状态（当前工作区：AJAE-F0-X为唯一执行节点）
 
 截至当前工作区权威提交，已经完成：
 
@@ -2063,7 +2063,7 @@ E26-v2已经在冻结实现提交`38079213a0801bf3a279414a8b120bfd24e1cd1b`上�
 当前执行节点为：
 
 $$
-\boxed{E38\text{--}E44\ \mathrm{PASS}\rightarrow E45B\text{-v2 PASS}\rightarrow E48\ \mathrm{PASS}\rightarrow E49\ \mathrm{PASS}\rightarrow E50\text{--}E73\ \mathrm{DONE}\rightarrow E74\text{-X}/E75\text{-X}/E76\text{-X-lite}\ \mathrm{DONE}\rightarrow E76\text{-V1 COMPLETE}\rightarrow E76\text{-C1 CURRENT}}
+\boxed{E38\text{--}E44\ \mathrm{PASS}\rightarrow E45B\text{-v2 PASS}\rightarrow E48\ \mathrm{PASS}\rightarrow E49\ \mathrm{PASS}\rightarrow E50\text{--}E73\ \mathrm{DONE}\rightarrow E74\text{-X}/E75\text{-X}/E76\text{-X-lite}\ \mathrm{DONE}\rightarrow E76\text{-V1 COMPLETE}\rightarrow E76\text{-C1 COMPLETE}\rightarrow AJAE\text{-F0-X CURRENT}}
 $$
 
 E23与E24-v2已按冻结设计通过；Gate 1已完成：
@@ -2076,7 +2076,9 @@ E27–E37的纯机械资格继续保留；E36-v1、E45-v1、E45-v2、E45A、E45A
 
 E76-X-lite在两个冻结种子上观察到运动正常点误报率相对B0平均恶化`0.36463377142417946`，因此保留为探索性停止信号，不裁决正式Gate 2。随后E76-V1只作描述性可视检查。world 2和world 8的网格接触误差约为`1.61 cm`和`1.58 cm`，正常对照最低可见回波距支撑面约为`28.41 cm`和`23.76 cm`，对应异常代理约为`6.36 cm`和`10.89 cm`。这说明隐藏几何仍接地，肉眼看到的间隙来自可见回波；少量视觉样本不足以判断该差异是否构成标签捷径。
 
-因此，在任何Full AJAE训练之前，只执行E76-C1：对E45B-v2全部1,347个冻结匹配对计算有符号最低可见回波高度，完全复用E48的中心帧五折、两个低容量模型和2,000次匹配对bootstrap。只有任一模型同时满足AUC 95%下界至少0.95且平衡准确率95%下界至少0.90，才判定存在直接clearance标签退化并停止等待单独的合成监督修订；任何未达到近饱和的描述性差异均不阻断。若未触发，立即进入Full AJAE-X，即先训练B3，再对同一检查点执行B4重叠窗口概率融合；E78-X/B2后移为完整方法出现可行性信号后的消融。
+E76-C1已经按上述定义完成。全部1,347对中，正常对照与异常代理的最低可见回波中位数分别为`0.068296 m`和`0.061933 m`，配对差均值为`0.012711 m`；差值大于0、5 cm和10 cm的比例分别为`50.63%`、`25.69%`和`12.99%`。逻辑回归的AUC/平衡准确率为`0.519495/0.527100`，95%下界为`0.483539/0.497290`；深度3树为`0.501256/0.532520`，下界为`0.467819/0.504065`。两者都远未达到冻结的`0.95/0.90`联合下界，所以正式结果为`NO DIRECT CLEARANCE DEGENERACY DETECTED`。该结果只排除了单一clearance变量近乎直接解决标签，不说明分布完全相同，也不排除复杂模型利用这项差异。
+
+Full AJAE-X现已解锁，当前先执行AJAE-F0-X机械预检；通过后训练B3 seed 0，再对同一检查点执行B4重叠窗口概率融合。E78-X/B2后移为完整方法出现可行性信号后的消融。
 
 因此当前整体判断仍是：
 
