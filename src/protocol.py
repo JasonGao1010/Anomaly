@@ -1247,6 +1247,9 @@ class AJAEProtocol:
         selected_worlds = _mapping(
             group_a.get("selected_world_ids"), "E76-V1 selected worlds"
         )
+        visual_source = _mapping(
+            visual.get("source_export"), "E76-V1 source export"
+        )
         review = _mapping(visual.get("review_freeze"), "E76-V1 review freeze")
         if (
             visual.get("version") != "E76-V1-v2-display"
@@ -1256,6 +1259,10 @@ class AJAEProtocol:
             or visual.get("output_format")
             != "27 RGB-only binary_little_endian PLY 1.0 files plus one aligned NPZ attribute archive and one JSON manifest"
             or visual.get("maximum_ply_files") != 27
+            or visual_source.get("directory") != "runs/ajae/e76_v1_source"
+            or visual_source.get("manifest_sha256")
+            != "840b868456958cbdd25e63fa60e6f759c494e215e6ddf6bb33caea95a6b5b755"
+            or visual_source.get("model_recomputation_forbidden") is not True
             or group_a.get("source_artifact_sha256")
             != "b14efc1aad86ac67b5bf7c8631f02b2e68664e071b747b7b210d5f7a30f5d123"
             or tuple(group_a.get("eligible_world_ids", ()))

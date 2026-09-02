@@ -3495,6 +3495,53 @@ def _write_binary_ply(
     }
 
 
+def _read_binary_ply(
+    path: Path,
+) -> tuple[dict[str, np.ndarray], tuple[str, ...]]:
+    """Read the frozen vertex-only PLY layout without changing any values."""
+
+    type_by_name = {
+        "float": np.dtype("<f4"),
+        "uchar": np.dtype("|u1"),
+        "ushort": np.dtype("<u2"),
+    }
+    comments: list[str] = []
+    fields: list[tuple[str, np.dtype]] = []
+    count: int | None = None
+    with path.open("rb") as handle:
+        if handle.readline() != b"ply\n":
+            raise QualificationError(f"invalid PLY signature: {path}")
+        if handle.readline() != b"format binary_little_endian 1.0\n":
+            raise QualificationError(f"unsupported PLY format: {path}")
+        while True:
+            raw = handle.readline()
+            if not raw:
+                raise QualificationError(f"unterminated PLY header: {path}")
+            line = raw.decode("ascii").rstrip("\r\n")
+            if line == "end_header":
+                break
+            if line.startswith("comment "):
+                comments.append(line.removeprefix("comment "))
+            elif line.startswith("element vertex "):
+                count = int(line.rsplit(" ", 1)[1])
+            elif line.startswith("element "):
+                raise QualificationError(f"unsupported PLY element: {line}")
+            elif line.startswith("property "):
+                _, type_name, name = line.split()
+                if type_name not in type_by_name or count is None:
+                    raise QualificationError(f"unsupported PLY property: {line}")
+                fields.append((name, type_by_name[type_name]))
+        if count is None or not fields:
+            raise QualificationError(f"incomplete PLY vertex header: {path}")
+        vertices = np.fromfile(handle, dtype=np.dtype(fields, align=False), count=count)
+        if vertices.size != count or handle.read(1):
+            raise QualificationError(f"PLY payload size changed: {path}")
+    return (
+        {name: np.ascontiguousarray(vertices[name]) for name, _ in fields},
+        tuple(comments),
+    )
+
+
 def run_e76_exploratory(
     data_root: Path | str,
     protocol_path: Path | str,
@@ -3889,19 +3936,11 @@ def run_e76_exploratory(
 
 
 def run_e76_visual_audit(
-    data_root: Path | str,
     protocol_path: Path | str,
-    e57_path: Path | str,
-    e61_path: Path | str,
-    e76_path: Path | str,
-    b1_dir: Path | str,
+    source_dir: Path | str,
     output_dir: Path | str,
-    *,
-    device: str = "cuda",
 ) -> dict[str, object]:
-    """Export the frozen descriptive proxy and moving-normal PLY audit."""
-
-    from .render import WorldSpec, load_sensor_calibration, render_frame
+    """Repackage the frozen E76-V1 export for reliable RGB display."""
 
     started = time.monotonic()
     protocol_file = Path(protocol_path).expanduser().resolve(strict=True)
@@ -3909,7 +3948,7 @@ def run_e76_visual_audit(
     project_root = Path(protocol.path).parent
     exploration = protocol.development["exploration_track"]
     freeze = exploration["e76v1_freeze"]
-    confirmation = exploration["e74_confirmation"]
+    source_freeze = freeze["source_export"]
     if (
         exploration["current_node"] != "E76-V1-format-correction"
         or freeze["status"] != "viewer_format_correction_frozen_before_rerun"
@@ -3917,195 +3956,81 @@ def run_e76_visual_audit(
         or exploration["e76x_lite_result"]["e78x_locked"] is not True
     ):
         raise QualificationError("E76-V1 protocol identity changed")
-    e57_file = Path(e57_path).expanduser().resolve(strict=True)
-    e61_file = Path(e61_path).expanduser().resolve(strict=True)
-    e76_file = Path(e76_path).expanduser().resolve(strict=True)
-    if (
-        _sha256(e57_file) != freeze["group_a"]["source_artifact_sha256"]
-        or _sha256(e61_file) != freeze["group_b"]["source_artifact_sha256"]
-        or _sha256(e76_file)
-        != exploration["e76x_lite_result"]["artifact_sha256"]
-    ):
-        raise QualificationError("E76-V1 input artifact identity changed")
+
+    source = Path(source_dir).expanduser().resolve(strict=True)
     destination = Path(output_dir).expanduser().resolve()
+    source_manifest_path = source / "manifest.json"
+    if (
+        not source.is_dir()
+        or source != project_root / source_freeze["directory"]
+        or not source_manifest_path.is_file()
+        or _sha256(source_manifest_path) != source_freeze["manifest_sha256"]
+    ):
+        raise QualificationError("E76-V1 source export identity changed")
     if (
         destination != project_root / freeze["output_directory"]
         or destination.exists()
+        or destination == source
     ):
         raise QualificationError("E76-V1 output directory is invalid or already exists")
-    runtime_device = torch.device(device)
-    if runtime_device.type == "cuda" and not torch.cuda.is_available():
-        raise QualificationError("E76-V1 CUDA device is unavailable")
 
-    with np.load(e57_file, allow_pickle=False) as archive:
-        world_id = np.asarray(archive["selected_world_id"], dtype=np.int16)
-        center_frame = np.asarray(
-            archive["selected_center_frame"], dtype=np.int16
-        )
-        descriptor = np.asarray(archive["selected_descriptor"], dtype=np.float64)
-        world_json = np.asarray(archive["selected_world_json"])
-    selected_a = e76v1_group_a_selection(world_id, descriptor)
-    expected_a = tuple(
-        (name, int(current), float(value))
+    source_manifest = json.loads(source_manifest_path.read_text(encoding="utf-8"))
+    source_files = source_manifest.get("files")
+    if (
+        source_manifest.get("experiment") != "E76-V1"
+        or source_manifest.get("status") != "descriptive_export_complete"
+        or source_manifest.get("formal_gate_adjudicated") is not False
+        or source_manifest.get("e78x_locked") is not True
+        or not isinstance(source_files, list)
+        or len(source_files) != int(freeze["maximum_ply_files"])
+    ):
+        raise QualificationError("E76-V1 source manifest semantics changed")
+
+    expected_a = [
+        {"stratum": name, "world_id": world, "proxy_Nvis": nvis}
         for name in ("low", "mid", "high")
-        for current, value in zip(
+        for world, nvis in zip(
             freeze["group_a"]["selected_world_ids"][name],
             freeze["group_a"]["selected_proxy_Nvis"][name],
             strict=True,
         )
-    )
-    if selected_a != expected_a:
-        raise QualificationError("E76-V1 group-A selection changed")
-    row_by_world = {int(value): row for row, value in enumerate(world_id)}
-    with np.load(e61_file, allow_pickle=False) as archive:
-        moving_frame = np.asarray(archive["moving_frame_id"], dtype=np.int16)
-        moving_packed = np.asarray(
-            archive["moving_canonical_mask_packed"], dtype=np.uint8
-        )
-        moving_count = np.asarray(
-            archive["moving_point_count_by_frame"], dtype=np.int32
-        )
-    with np.load(e76_file, allow_pickle=False) as archive:
-        threshold = np.asarray(archive["threshold"], dtype=np.float64)
-        if (
-            np.asarray(archive["model_name"]).tolist()
-            != ["B0", "B1_0", "B1_1"]
-            or threshold.shape != (3, 2)
-        ):
-            raise QualificationError("E76-V1 threshold identity changed")
-
-    grid, sensor = load_sensor_calibration(protocol.sensor_calibration_path())
-    canonical_by_slot = np.asarray(
-        grid.beam_ids * grid.columns + grid.column_ids, dtype=np.int32
-    )
-    sequence_201 = STUSequence.open(
-        data_root, protocol=protocol, partition="train", sequence_id=201,
-        label_mode=LabelMode.REQUIRED,
-    )
-    sequence_206 = STUSequence.open(
-        data_root, protocol=protocol, partition="train", sequence_id=206,
-        label_mode=LabelMode.REQUIRED,
-    )
-    colors = {
-        name: np.asarray(value, dtype=np.uint8)
-        for name, value in freeze["colors_rgb"].items()
-    }
-
-    def colored_properties(
-        source: object,
-        point_source: np.ndarray,
-        *,
-        selected: np.ndarray | None = None,
-    ) -> dict[str, np.ndarray]:
-        slots = np.asarray(getattr(source, "real_slots"), dtype=np.int64)
-        choose = np.arange(slots.size) if selected is None else np.asarray(selected)
-        selected_slots = slots[choose]
-        xyzi = np.asarray(getattr(source, "xyzi"))[selected_slots]
-        labels = getattr(source, "labels")
-        semantic = np.asarray(getattr(labels, "semantic"))[selected_slots].astype(
-            "<u2", copy=False
-        )
-        source_code = np.asarray(point_source, dtype=np.uint8)[choose]
-        rgb = np.tile(colors["real_normal"], (choose.size, 1))
-        rgb[semantic == 0] = colors["ignore_or_background"]
-        rgb[source_code == 1] = colors["normal_control"]
-        rgb[source_code == 2] = colors["anomaly_proxy"]
-        return {
-            "x": xyzi[:, 0].astype("<f4", copy=False),
-            "y": xyzi[:, 1].astype("<f4", copy=False),
-            "z": xyzi[:, 2].astype("<f4", copy=False),
-            "intensity": xyzi[:, 3].astype("<f4", copy=False),
-            "red": rgb[:, 0],
-            "green": rgb[:, 1],
-            "blue": rgb[:, 2],
-            "point_source": source_code,
-            "semantic_id": semantic,
-        }
-
-    encoder = FrozenSTUPointEncoder.from_protocol(
-        protocol, project_root=project_root
-    ).to(runtime_device).eval()
-    expected_models = tuple(confirmation["completed_seed_model_sha256"])
-    models: list[AJAEPointTransformer] = []
-    for seed in (0, 1):
-        model_file = Path(b1_dir).expanduser().resolve(strict=True) / (
-            f"seed-{seed}/model.pt"
-        )
-        if _sha256(model_file) != expected_models[seed]:
-            raise QualificationError(f"E76-V1 B1 seed {seed} identity changed")
-        payload = torch.load(model_file, map_location="cpu", weights_only=True)
-        model = AJAEPointTransformer.from_protocol(protocol).to(runtime_device).eval()
-        model.load_state_dict(payload["model"], strict=True)
-        models.append(model)
-    torch.use_deterministic_algorithms(True)
-
-    def score_frame(source: object) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        seed = e53_frame_seed(
-            int(getattr(source, "sequence_id")), int(getattr(source, "frame_id"))
-        )
-        torch.manual_seed(seed)
-        if runtime_device.type == "cuda":
-            torch.cuda.manual_seed_all(seed)
-        slots = np.asarray(getattr(source, "real_slots"), dtype=np.int64)
-        with torch.no_grad():
-            encoding = encoder(
-                official_stu_coordinates(source.xyzi, source.lidar_pose),
-                official_stu_features(source.xyzi, source.lidar_pose),
-                slots,
-            )
-            encoded_slots = encoding.real_slots
-            if isinstance(encoded_slots, torch.Tensor):
-                encoded_slots = encoded_slots.detach().cpu().numpy()
-            if not np.array_equal(np.asarray(encoded_slots, dtype=np.int64), slots):
-                raise QualificationError("E76-V1 STU point order changed")
-            coordinates = torch.as_tensor(
-                np.asarray(source.xyzi)[slots, :3].copy(), device=runtime_device
-            )
-            intensity = torch.as_tensor(
-                np.asarray(source.xyzi)[slots, 3].copy(), device=runtime_device
-            )
-            relative_time = torch.zeros(
-                slots.size, dtype=torch.long, device=runtime_device
-            )
-            b1 = []
-            for model in models:
-                logits = model(
-                    coordinates,
-                    relative_time,
-                    encoding.point_features,
-                    encoding.normal_evidence,
-                    encoding.reliability_assign,
-                    encoding.reliability_noobj,
-                    intensity,
-                    cross_frame_enabled=False,
-                )
-                b1.append(torch.sigmoid(logits).detach().cpu().numpy())
-        b0 = encoding.maxlogit_score.detach().cpu().numpy()
-        return (
-            b0.astype(np.float32, copy=False),
-            np.stack(b1).astype(np.float32, copy=False),
-            slots,
-        )
+    ]
+    if source_manifest.get("group_a_selection") != expected_a:
+        raise QualificationError("E76-V1 source group-A selection changed")
+    selected_b = source_manifest.get("group_b_selected")
+    if (
+        not isinstance(selected_b, list)
+        or [int(item["frame_id"]) for item in selected_b] != [200, 194, 167]
+    ):
+        raise QualificationError("E76-V1 source group-B selection changed")
 
     file_records: list[dict[str, object]] = []
     attribute_arrays: dict[str, np.ndarray] = {}
     destination.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(
-        dir=destination.parent, prefix="e76_v1_export_"
+        dir=destination.parent, prefix="e76_v1_repack_"
     ) as temporary_name:
         temporary = Path(temporary_name)
+        for source_record in source_files:
+            relative = Path(str(source_record["path"]))
+            if relative.is_absolute() or ".." in relative.parts:
+                raise QualificationError("E76-V1 source path is unsafe")
+            source_ply = source / relative
+            if (
+                not source_ply.is_file()
+                or _sha256(source_ply) != source_record["sha256"]
+            ):
+                raise QualificationError(f"E76-V1 source PLY changed: {relative}")
+            properties, comments = _read_binary_ply(source_ply)
+            if (
+                list(properties) != source_record["properties"]
+                or int(next(iter(properties.values())).size)
+                != int(source_record["points"])
+                or not set(E76V1_PLY_PROPERTIES).issubset(properties)
+            ):
+                raise QualificationError(f"E76-V1 source PLY layout changed: {relative}")
 
-        def record_ply(
-            relative: Path,
-            properties: Mapping[str, np.ndarray],
-            comments: Sequence[str],
-            group: str,
-        ) -> None:
-            if not set(E76V1_PLY_PROPERTIES).issubset(properties):
-                raise QualificationError("E76-V1 display properties are incomplete")
-            display = {
-                name: properties[name] for name in E76V1_PLY_PROPERTIES
-            }
+            display = {name: properties[name] for name in E76V1_PLY_PROPERTIES}
             attribute_names = [
                 name for name in properties if name not in E76V1_PLY_PROPERTIES
             ]
@@ -4113,194 +4038,39 @@ def run_e76_visual_audit(
                 relative.as_posix().encode("utf-8")
             ).hexdigest()[:16]
             for name in attribute_names:
-                attribute_arrays[f"{attribute_prefix}__{name}"] = np.ascontiguousarray(
-                    properties[name]
-                )
-            record = _write_binary_ply(
+                attribute_arrays[f"{attribute_prefix}__{name}"] = properties[name]
+
+            written = _write_binary_ply(
                 temporary / relative, display, comments=comments
             )
+            check, _ = _read_binary_ply(temporary / relative)
+            if any(
+                not np.array_equal(check[name], display[name])
+                for name in E76V1_PLY_PROPERTIES
+            ):
+                raise QualificationError(f"E76-V1 RGB repack changed values: {relative}")
             file_records.append(
                 {
                     "path": relative.as_posix(),
-                    "group": group,
-                    "points": record["points"],
-                    "bytes": record["bytes"],
-                    "sha256": record["sha256"],
-                    "properties": record["properties"],
+                    "group": source_record["group"],
+                    "points": written["points"],
+                    "bytes": written["bytes"],
+                    "sha256": written["sha256"],
+                    "properties": written["properties"],
+                    "source_ply_sha256": source_record["sha256"],
                     "attribute_key_prefix": attribute_prefix,
                     "attribute_properties": attribute_names,
                 }
             )
 
-        for stratum, current_world, proxy_nvis in selected_a:
-            row = row_by_world[current_world]
-            center = int(center_frame[row])
-            base = sequence_201.source_frame(center)
-            world = WorldSpec.from_dict(json.loads(str(world_json[row])))
-            control_world = WorldSpec(
-                world.seed,
-                world.source_sequence_id,
-                tuple(item for item in world.objects if item.label == "normal-control"),
-                world.tie_tolerance_m,
-            )
-            proxy_world = WorldSpec(
-                world.seed,
-                world.source_sequence_id,
-                tuple(item for item in world.objects if item.label == "anomaly-proxy"),
-                world.tie_tolerance_m,
-            )
-            control = render_frame(base, control_world, grid, sensor)
-            proxy = render_frame(base, proxy_world, grid, sensor)
-            directory = Path(
-                f"group_a/{stratum}_world_{current_world:02d}_frame_{center:03d}"
-            )
-            base_slots = np.asarray(base.real_slots, dtype=np.int64)
-            zero_source = np.zeros(base_slots.size, dtype=np.uint8)
-            record_ply(
-                directory / "base_real.ply",
-                colored_properties(base, zero_source),
-                (f"E76-V1 world={current_world}", "variant=base_real"),
-                "A",
-            )
-            for variant, rendered, source_code, mask_name in (
-                ("normal_control_overlay", control, 1, "normal_control_mask"),
-                ("anomaly_proxy_overlay", proxy, 2, "anomaly_proxy_mask"),
-            ):
-                source = rendered.source
-                slots = np.asarray(source.real_slots, dtype=np.int64)
-                mask = np.asarray(getattr(rendered, mask_name), dtype=np.bool_)[slots]
-                point_source = np.zeros(slots.size, dtype=np.uint8)
-                point_source[mask] = source_code
-                record_ply(
-                    directory / f"{variant}.ply",
-                    colored_properties(source, point_source),
-                    (
-                        f"E76-V1 world={current_world}", f"variant={variant}",
-                        f"proxy_Nvis={proxy_nvis}",
-                    ),
-                    "A",
-                )
-                if variant == "anomaly_proxy_overlay":
-                    record_ply(
-                        directory / "anomaly_proxy_only.ply",
-                        colored_properties(
-                            source, point_source, selected=np.flatnonzero(mask)
-                        ),
-                        (
-                            f"E76-V1 world={current_world}",
-                            "variant=anomaly_proxy_only",
-                        ),
-                        "A",
-                    )
-
-        moving_means: list[dict[str, float | int]] = []
-        candidate_scores: dict[int, tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
-        for row in np.flatnonzero(moving_count > 0):
-            frame = int(moving_frame[row])
-            source = sequence_206.source_frame(frame)
-            b0_score, b1_score, slots = score_frame(source)
-            mask = np.unpackbits(moving_packed[row], bitorder="little")[
-                : canonical_by_slot.size
-            ][canonical_by_slot[slots]]
-            if int(np.count_nonzero(mask)) != int(moving_count[row]):
-                raise QualificationError("E76-V1 moving-normal count changed")
-            seed_mean = np.mean(b1_score[:, mask], axis=1, dtype=np.float64)
-            moving_means.append({
-                "frame_id": frame,
-                "moving_points": int(moving_count[row]),
-                "b1_seed0_mean": float(seed_mean[0]),
-                "b1_seed1_mean": float(seed_mean[1]),
-                "selection_statistic": float(np.mean(seed_mean)),
-            })
-            current_top = {
-                int(item["frame_id"])
-                for item in sorted(
-                    moving_means,
-                    key=lambda item: (
-                        -float(item["selection_statistic"]),
-                        int(item["frame_id"]),
-                    ),
-                )[:3]
-            }
-            if frame in current_top:
-                candidate_scores[frame] = (b0_score, b1_score, slots)
-            for discarded in set(candidate_scores) - current_top:
-                del candidate_scores[discarded]
-        selected_b = sorted(
-            moving_means,
-            key=lambda item: (-float(item["selection_statistic"]), int(item["frame_id"])),
-        )[:3]
-        row_by_moving_frame = {
-            int(frame): row for row, frame in enumerate(moving_frame)
-        }
-        for selection_rank, item in enumerate(selected_b, start=1):
-            frame = int(item["frame_id"])
-            row = row_by_moving_frame[frame]
-            source = sequence_206.source_frame(frame)
-            b0_score, b1_score, slots = candidate_scores[frame]
-            if not np.array_equal(
-                slots, np.asarray(source.real_slots, dtype=np.int64)
-            ):
-                raise QualificationError("E76-V1 selected-frame point order changed")
-            mask = np.unpackbits(moving_packed[row], bitorder="little")[
-                : canonical_by_slot.size
-            ][canonical_by_slot[slots]]
-            retained_mean = np.mean(b1_score[:, mask], axis=1, dtype=np.float64)
-            if not np.array_equal(
-                retained_mean,
-                [item["b1_seed0_mean"], item["b1_seed1_mean"]],
-            ):
-                raise QualificationError("E76-V1 retained-frame scores changed")
-            xyzi = np.asarray(source.xyzi)[slots]
-            semantic = np.asarray(source.labels.semantic)[slots].astype(
-                "<u2", copy=False
-            )
-            rgb = np.tile(colors["real_normal"], (slots.size, 1))
-            rgb[semantic == 0] = colors["ignore_or_background"]
-            rgb[mask] = colors["moving_normal"]
-            properties = {
-                "x": xyzi[:, 0].astype("<f4", copy=False),
-                "y": xyzi[:, 1].astype("<f4", copy=False),
-                "z": xyzi[:, 2].astype("<f4", copy=False),
-                "intensity": xyzi[:, 3].astype("<f4", copy=False),
-                "red": rgb[:, 0],
-                "green": rgb[:, 1],
-                "blue": rgb[:, 2],
-                "is_moving_normal": mask.astype(np.uint8),
-                "semantic_id": semantic,
-                "range": np.linalg.norm(
-                    xyzi[:, :3].astype(np.float32, copy=False), axis=1
-                ).astype("<f4", copy=False),
-                "b0_score": b0_score.astype("<f4", copy=False),
-                "b1_seed0_score": b1_score[0].astype("<f4", copy=False),
-                "b1_seed1_score": b1_score[1].astype("<f4", copy=False),
-                "pred_b0_A": (b0_score > threshold[0, 0]).astype(np.uint8),
-                "pred_b0_B": (b0_score > threshold[0, 1]).astype(np.uint8),
-                "pred_b1_seed0_A": (b1_score[0] > threshold[1, 0]).astype(np.uint8),
-                "pred_b1_seed0_B": (b1_score[0] > threshold[1, 1]).astype(np.uint8),
-                "pred_b1_seed1_A": (b1_score[1] > threshold[2, 0]).astype(np.uint8),
-                "pred_b1_seed1_B": (b1_score[1] > threshold[2, 1]).astype(np.uint8),
-            }
-            record_ply(
-                Path(f"group_b/rank_{selection_rank}_frame_{frame:03d}.ply"),
-                properties,
-                (
-                    f"E76-V1 moving-normal rank={selection_rank}",
-                    f"frame={frame}",
-                    f"selection_statistic={item['selection_statistic']}",
-                ),
-                "B",
-            )
-
-        if len(file_records) != int(freeze["maximum_ply_files"]):
-            raise QualificationError("E76-V1 PLY count changed")
-        relative_paths = [str(record["path"]) for record in file_records]
-        viewing_order = sorted(
-            relative_paths,
-            key=lambda value: hashlib.sha256(value.encode("utf-8")).digest(),
-        )
         attribute_path = temporary / "attributes.npz"
         np.savez_compressed(attribute_path, **attribute_arrays)
+        with np.load(attribute_path, allow_pickle=False) as archive:
+            if set(archive.files) != set(attribute_arrays) or any(
+                not np.array_equal(archive[name], value)
+                for name, value in attribute_arrays.items()
+            ):
+                raise QualificationError("E76-V1 attribute archive changed values")
         attribute_record = {
             "path": "attributes.npz",
             "arrays": len(attribute_arrays),
@@ -4308,22 +4078,32 @@ def run_e76_visual_audit(
             "sha256": _sha256(attribute_path),
             "scientific_array_sha256": _array_hash(attribute_arrays),
         }
+        relative_paths = [str(record["path"]) for record in file_records]
+        viewing_order = sorted(
+            relative_paths,
+            key=lambda value: hashlib.sha256(value.encode("utf-8")).digest(),
+        )
+        if viewing_order != source_manifest["viewing_order"]:
+            raise QualificationError("E76-V1 viewing order changed")
         manifest = {
             "experiment": "E76-V1",
-            "status": "descriptive_export_complete",
+            "status": "display_corrected_export_complete",
             "descriptive_only": True,
             "formal_gate_adjudicated": False,
             "e76x_lite_result_unchanged": True,
             "e78x_locked": True,
             "protocol_sha256": _sha256(protocol_file),
-            "e57_artifact_sha256": _sha256(e57_file),
-            "e61_artifact_sha256": _sha256(e61_file),
-            "e76x_lite_artifact_sha256": _sha256(e76_file),
-            "group_a_selection": [
-                {"stratum": name, "world_id": world, "proxy_Nvis": nvis}
-                for name, world, nvis in selected_a
-            ],
-            "group_b_frame_statistics": moving_means,
+            "source_export_manifest_sha256": _sha256(source_manifest_path),
+            "source_payload_preserved_exactly": True,
+            "display_correction": (
+                "PLY vertices retain only x,y,z,red,green,blue; all other "
+                "source properties are stored losslessly in attributes.npz"
+            ),
+            "e57_artifact_sha256": source_manifest["e57_artifact_sha256"],
+            "e61_artifact_sha256": source_manifest["e61_artifact_sha256"],
+            "e76x_lite_artifact_sha256": source_manifest["e76x_lite_artifact_sha256"],
+            "group_a_selection": source_manifest["group_a_selection"],
+            "group_b_frame_statistics": source_manifest["group_b_frame_statistics"],
             "group_b_selected": selected_b,
             "review_freeze": _plain_json(freeze["review_freeze"]),
             "viewing_order": viewing_order,
@@ -4341,11 +4121,12 @@ def run_e76_visual_audit(
     return {
         "experiment": "E76-V1",
         "completed": True,
-        "status": "descriptive_export_complete",
+        "status": "display_corrected_export_complete",
         "formal_gate_adjudicated": False,
         "e78x_locked": True,
+        "source_payload_preserved_exactly": True,
         "ply_files": len(file_records),
-        "group_a_world_ids": [item[1] for item in selected_a],
+        "group_a_world_ids": [int(item["world_id"]) for item in expected_a],
         "group_b_frame_ids": [int(item["frame_id"]) for item in selected_b],
         "manifest_path": str(final_manifest),
         "manifest_sha256": _sha256(final_manifest),
@@ -4354,7 +4135,6 @@ def run_e76_visual_audit(
         + final_manifest.stat().st_size,
         "seconds": time.monotonic() - started,
     }
-
 
 def run_e75(
     protocol_path: Path | str,
@@ -5566,16 +5346,11 @@ def _parser() -> argparse.ArgumentParser:
     e76x_lite.add_argument("--output", type=Path, required=True)
     e76x_lite.add_argument("--device", default="cuda")
     e76v1 = commands.add_parser("e76v1")
-    e76v1.add_argument("--data-root", type=Path, required=True)
     e76v1.add_argument(
         "--protocol", type=Path, default=PROJECT_ROOT / "protocol.json"
     )
-    e76v1.add_argument("--e57", type=Path, required=True)
-    e76v1.add_argument("--e61", type=Path, required=True)
-    e76v1.add_argument("--e76", type=Path, required=True)
-    e76v1.add_argument("--b1-dir", type=Path, required=True)
+    e76v1.add_argument("--source-dir", type=Path, required=True)
     e76v1.add_argument("--output-dir", type=Path, required=True)
-    e76v1.add_argument("--device", default="cuda")
     phase7 = commands.add_parser("phase7")
     phase7.add_argument("--protocol", type=Path, default=PROJECT_ROOT / "protocol.json")
     phase7.add_argument("--e63", type=Path, required=True)
@@ -5733,14 +5508,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0 if result["passed"] else 1
     if args.command == "e76v1":
         result = run_e76_visual_audit(
-            args.data_root,
             args.protocol,
-            args.e57,
-            args.e61,
-            args.e76,
-            args.b1_dir,
+            args.source_dir,
             args.output_dir,
-            device=args.device,
         )
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 0 if result["completed"] else 1

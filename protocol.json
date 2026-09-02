@@ -3864,6 +3864,12 @@
         "output_directory": "runs/ajae/e76_v1",
         "output_format": "27 RGB-only binary_little_endian PLY 1.0 files plus one aligned NPZ attribute archive and one JSON manifest",
         "maximum_ply_files": 27,
+        "source_export": {
+          "directory": "runs/ajae/e76_v1_source",
+          "manifest_sha256": "840b868456958cbdd25e63fa60e6f759c494e215e6ddf6bb33caea95a6b5b755",
+          "role": "frozen first export used only as the lossless source of the display-format correction",
+          "model_recomputation_forbidden": true
+        },
         "group_a": {
           "source_artifact_sha256": "b14efc1aad86ac67b5bf7c8631f02b2e68664e071b747b7b210d5f7a30f5d123",
           "eligible_world_ids": [0, 1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23],

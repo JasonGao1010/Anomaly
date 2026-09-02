@@ -47,6 +47,7 @@ from src.qualify import (
     independent_sparse_quantize,
     phase5_frame_ids,
     run_e62,
+    _read_binary_ply,
     _write_binary_ply,
 )
 from src.protocol import (
@@ -2035,6 +2036,12 @@ def test_e76v1_binary_ply_preserves_property_order_and_payload(
     assert record["points"] == 2
     assert record["properties"] == ["x", "red", "semantic_id"]
     assert record["sha256"] == hashlib.sha256(payload).hexdigest()
+    properties, comments = _read_binary_ply(output)
+    assert comments == ("E76-V1 fixture",)
+    assert list(properties) == ["x", "red", "semantic_id"]
+    np.testing.assert_array_equal(properties["x"], [1.0, 2.0])
+    np.testing.assert_array_equal(properties["red"], [3, 4])
+    np.testing.assert_array_equal(properties["semantic_id"], [10, 11])
 
 
 def test_phase7_mechanical_fixtures_all_pass_and_reproduce() -> None:
