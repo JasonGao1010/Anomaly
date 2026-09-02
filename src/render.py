@@ -16947,6 +16947,15 @@ def run_e45_pair_v2_qualification(
 FROZEN_E45B_V2_ARTIFACT_SHA256 = (
     "19ecbc843cc5325e3f12497c50e5855388f0f5caa581179f6fd6639613a8ecfd"
 )
+FROZEN_E45B_V2_BANK_SHA256 = (
+    "d3088e29e4c6179999ccb34088dae558fa402bf6b1455394acdc99cac4118463"
+)
+FROZEN_E45B_V2_UNITS_SHA256 = (
+    "bab7198607119dbe0737b7cf7e55a2a03016b9adf4cba60d9d2ab2bf90a0f0e3"
+)
+FROZEN_E48_ARTIFACT_SHA256 = (
+    "b55ad1c7fecf030f4f3f22c5ba4423f1cfeaae46a4d763565ab22c97ad6206ce"
+)
 E48_FOLD_NAMESPACE = "E48-center-v1"
 E48_BOOTSTRAP_SEED = (4800, 2000)
 
@@ -17237,6 +17246,372 @@ def run_e48_qualification(
     temporary = output.with_suffix(output.suffix + ".tmp.npz")
     np.savez_compressed(
         temporary, **saved,
+        metadata_json=np.asarray(json.dumps(result, sort_keys=True, separators=(",", ":"))),
+    )
+    os.replace(temporary, output)
+    return result
+
+
+_E76_C1_SEQUENCE: object | None = None
+_E76_C1_GRID: RayGrid | None = None
+_E76_C1_SENSOR: SensorCalibration | None = None
+_E76_C1_WORLDS: tuple[tuple[WorldSpec, WorldSpec], ...] = ()
+_E76_C1_LOWER_SUPPORT: np.ndarray | None = None
+_E76_C1_TASKS: tuple[tuple[int, int, int, int, int, int], ...] = ()
+
+
+def _visible_ground_clearance(
+    sensor_points: np.ndarray, lidar_pose: np.ndarray, item: ObjectSpec,
+    lower_support_m: float,
+) -> float:
+    """Measure the lowest visible return along the frozen support normal."""
+    points = np.asarray(sensor_points, dtype=np.float64)
+    if points.ndim != 2 or points.shape[1] != 3 or not np.isfinite(points).all():
+        raise RenderError("visible clearance requires finite sensor points [N,3]")
+    if points.shape[0] < 1:
+        raise RenderError("visible clearance is undefined without an accepted return")
+    pose = np.asarray(lidar_pose, dtype=np.float64)
+    if pose.shape != (4, 4) or not np.isfinite(pose).all():
+        raise RenderError("visible clearance lidar pose must be finite [4,4]")
+    object_rotation = np.asarray(item.rotation_world_from_local, dtype=np.float64)
+    translation = np.asarray(item.translation_world_m, dtype=np.float64)
+    normal = object_rotation[:, 2]
+    lower = _finite_scalar("lower_support_m", lower_support_m)
+    anchor = translation + normal * lower
+    world_points = points @ pose[:3, :3].T + pose[:3, 3]
+    clearance = (world_points - anchor) @ normal
+    if not np.isfinite(clearance).all():
+        raise RenderError("visible clearance produced a non-finite distance")
+    return float(np.min(clearance))
+
+
+def _e76_c1_worker(index: int) -> tuple[int, int, float, int]:
+    """Replay one frozen matched unit without changing its world or return set."""
+    sequence, grid, sensor = _E76_C1_SEQUENCE, _E76_C1_GRID, _E76_C1_SENSOR
+    lower_support = _E76_C1_LOWER_SUPPORT
+    if (
+        sequence is None or grid is None or sensor is None or lower_support is None
+        or index >= len(_E76_C1_TASKS)
+    ):
+        raise RuntimeError("E76-C1 fixtures are not initialized")
+    pair, source_index, bank_row, frame_id, expected_nvis, expected_seed = (
+        _E76_C1_TASKS[index]
+    )
+    world = _E76_C1_WORLDS[bank_row][source_index]
+    source_id = source_index + 1
+    if world.seed != expected_seed or len(world.objects) != 1:
+        raise RenderError("E76-C1 frozen world identity changed")
+    frame = sequence.source_frame(frame_id)
+    _, _, _, rendered = _gate1_single_object_trace(frame, world, grid, sensor)
+    returned = np.asarray(
+        rendered.normal_control_mask if source_id == 1 else rendered.anomaly_proxy_mask,
+        dtype=np.bool_,
+    )
+    official_range = np.asarray(grid.official_ranges(rendered.source))
+    returned &= (official_range >= 2.5) & (official_range <= 50.0)
+    visible_count = int(np.count_nonzero(returned))
+    if visible_count != expected_nvis:
+        raise RenderError(
+            f"E76-C1 visible count changed for pair {pair}, source {source_id}: "
+            f"{visible_count} != {expected_nvis}"
+        )
+    clearance = _visible_ground_clearance(
+        np.asarray(rendered.source.xyzi[returned, :3]),
+        np.asarray(frame.lidar_pose), world.objects[0],
+        float(lower_support[bank_row, source_index]),
+    )
+    return pair, source_index, clearance, visible_count
+
+
+def _e76_c1_scalar_models(
+    clearance: np.ndarray, plan: Mapping[str, np.ndarray],
+) -> dict[str, np.ndarray]:
+    """Apply the frozen E48 models and pair bootstrap to one scalar per unit."""
+    from sklearn.exceptions import ConvergenceWarning
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.preprocessing import StandardScaler
+    from sklearn.tree import DecisionTreeClassifier
+
+    values = np.asarray(clearance, dtype=np.float64)
+    if values.shape != (1347, 2) or not np.isfinite(values).all():
+        raise RenderError("E76-C1 requires finite clearance for 1,347 ordered pairs")
+    oof_score = np.full((2, 1347, 2), np.nan, dtype=np.float64)
+    oof_prediction = np.full((2, 1347, 2), 255, dtype=np.uint8)
+    model_iterations = np.zeros((2, 5), dtype=np.int64)
+    for fold in range(5):
+        train_pairs = np.flatnonzero(plan["fold_train_pair"][fold])
+        test_pairs = np.flatnonzero(plan["fold_test_pair"][fold])
+        train_x = values[train_pairs].reshape(-1, 1)
+        test_x = values[test_pairs].reshape(-1, 1)
+        train_y = np.tile(np.asarray((0, 1), dtype=np.uint8), train_pairs.size)
+        scaler = StandardScaler().fit(train_x)
+        logistic = LogisticRegression(
+            penalty="l2", C=1.0, solver="lbfgs", fit_intercept=True,
+            tol=1.0e-4, max_iter=5000, class_weight=None, random_state=4800,
+        )
+        tree = DecisionTreeClassifier(
+            criterion="gini", splitter="best", max_depth=3,
+            min_samples_leaf=64, class_weight=None, random_state=4801,
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", ConvergenceWarning)
+            logistic.fit(scaler.transform(train_x), train_y)
+        tree.fit(train_x, train_y)
+        models = ((logistic, scaler.transform(test_x)), (tree, test_x))
+        for model_id, (model, model_x) in enumerate(models):
+            score = model.predict_proba(model_x)[:, 1].reshape(-1, 2)
+            oof_score[model_id, test_pairs] = score
+            oof_prediction[model_id, test_pairs] = (score >= 0.5).astype(np.uint8)
+        model_iterations[0, fold] = int(logistic.n_iter_[0])
+        model_iterations[1, fold] = int(tree.tree_.node_count)
+
+    oof_pair_index = np.flatnonzero(plan["fold_test_pair"].any(axis=0))
+    if oof_pair_index.size != 369:
+        raise RenderError("E76-C1 frozen OOF pair count changed")
+    labels = np.tile(np.asarray((0, 1), dtype=np.uint8), oof_pair_index.size)
+    point_pair = np.repeat(np.arange(oof_pair_index.size, dtype=np.int64), 2)
+    weights = np.ones(labels.size, dtype=np.float64)
+    metric = np.empty((2, 4), dtype=np.float64)
+    bootstrap = np.empty((2, 2000, 4), dtype=np.float64)
+    for model_id in range(2):
+        score = oof_score[model_id, oof_pair_index].reshape(-1)
+        prediction = oof_prediction[model_id, oof_pair_index].reshape(-1)
+        metric[model_id] = _e48_metrics(labels, score, prediction, weights)
+        bootstrap[model_id] = _e48_pair_bootstrap(
+            labels, score, prediction, point_pair, weights, oof_pair_index.size
+        )
+    low = np.percentile(bootstrap, 2.5, axis=1)
+    high = np.percentile(bootstrap, 97.5, axis=1)
+    model_fail = (low[:, 0] >= 0.95) & (low[:, 1] >= 0.90)
+    return {
+        "oof_pair_index": oof_pair_index,
+        "oof_score": oof_score,
+        "oof_prediction": oof_prediction,
+        "model_metric": metric,
+        "bootstrap_metric": bootstrap,
+        "bootstrap_ci_low": low,
+        "bootstrap_ci_high": high,
+        "model_fail": model_fail,
+        "model_iterations_or_nodes": model_iterations,
+    }
+
+
+def run_e76_c1_audit(
+    data_root: Path | str, protocol_path: Path | str,
+    bank_path: Path | str, unit_path: Path | str,
+    pair_path: Path | str, e48_path: Path | str,
+    calibration_path: Path | str, output_path: Path | str,
+    *, processes: int = 24,
+) -> dict[str, object]:
+    """Audit whether visible ground clearance alone nearly recovers proxy labels."""
+    try:
+        from .protocol import load_protocol
+        from .scene import LabelMode, STUSequence
+    except ImportError:
+        from protocol import load_protocol  # type: ignore[no-redef]
+        from scene import LabelMode, STUSequence  # type: ignore[no-redef]
+
+    if processes != 24:
+        raise RenderError("formal E76-C1 requires exactly 24 CPU processes")
+    paths = {
+        "bank": Path(bank_path).expanduser().resolve(strict=True),
+        "units": Path(unit_path).expanduser().resolve(strict=True),
+        "pairs": Path(pair_path).expanduser().resolve(strict=True),
+        "e48": Path(e48_path).expanduser().resolve(strict=True),
+        "calibration": Path(calibration_path).expanduser().resolve(strict=True),
+        "protocol": Path(protocol_path).expanduser().resolve(strict=True),
+    }
+    expected_hashes = {
+        "bank": FROZEN_E45B_V2_BANK_SHA256,
+        "units": FROZEN_E45B_V2_UNITS_SHA256,
+        "pairs": FROZEN_E45B_V2_ARTIFACT_SHA256,
+        "e48": FROZEN_E48_ARTIFACT_SHA256,
+        "calibration": FROZEN_SENSOR_CALIBRATION_SHA256,
+    }
+    for name, expected in expected_hashes.items():
+        if _sha256_path(paths[name]) != expected:
+            raise RenderError(f"E76-C1 frozen {name} artifact identity changed")
+    protocol = load_protocol(paths["protocol"])
+    exploration = protocol.development["exploration_track"]
+    freeze = exploration.get("e76c1_freeze", {})
+    if (
+        exploration.get("version") != "exploration-confirmation-split-v3-full-first"
+        or exploration.get("current_node") != "E76-C1"
+        or not isinstance(freeze, Mapping)
+        or freeze.get("status") != "frozen_before_clearance_computation"
+    ):
+        raise RenderError("E76-C1 protocol is not frozen as the current node")
+
+    with np.load(paths["bank"], allow_pickle=False) as archive:
+        bank_metadata = json.loads(str(archive["metadata_json"]))
+        bank = {name: np.asarray(archive[name]) for name in archive.files if name != "metadata_json"}
+    with np.load(paths["units"], allow_pickle=False) as archive:
+        unit_metadata = json.loads(str(archive["metadata_json"]))
+        units = {name: np.asarray(archive[name]) for name in _E45_UNIT_FIELDS}
+    with np.load(paths["pairs"], allow_pickle=False) as archive:
+        pair_metadata = json.loads(str(archive["metadata_json"]))
+        pairs = {name: np.asarray(archive[name]) for name in archive.files if name != "metadata_json"}
+    with np.load(paths["e48"], allow_pickle=False) as archive:
+        e48_metadata = json.loads(str(archive["metadata_json"]))
+        e48_arrays = {name: np.asarray(archive[name]) for name in archive.files if name != "metadata_json"}
+    if (
+        bank_metadata.get("scientific_array_hash")
+        != "f4fb2081b346c686e2d6930a03e3f17bb6c6d3eee4fcfc16984c1a9c1d8de4f5"
+        or unit_metadata.get("scientific_array_hash")
+        != "f6377d661b1231f1d126f1c26ae39c638e11feb79e253886c14fa144109e5273"
+        or pair_metadata.get("scientific_array_hash")
+        != "735df664e6ea2f54cac7f3d0c9a9778b17f035259cf716686063f30b5c31eaca"
+        or e48_metadata.get("scientific_array_hash")
+        != "dffa42342a31feac7adfe2b70c50f5616075fc1c86a819b8306b65005358d3e1"
+    ):
+        raise RenderError("E76-C1 scientific input identity changed")
+    index = np.asarray(pairs["matched_flat_index"], dtype=np.int64)
+    if index.shape != (1347, 2) or np.unique(index).size != index.size:
+        raise RenderError("E76-C1 requires 1,347 non-reused matched pairs")
+    flat_units = {
+        name: value.reshape((-1,) + value.shape[2:])
+        for name, value in units.items()
+    }
+    for name in (
+        "bank_seed", "source", "center_frame", "frame_id", "support_semantic",
+        "Nvis", "unit_hash",
+    ):
+        if not np.array_equal(flat_units[name][index], pairs[f"matched_{name}"]):
+            raise RenderError(f"E76-C1 pair-to-unit {name} identity changed")
+    plan = _e48_fold_plan(pairs["matched_center_frame"])
+    for name in (
+        "unique_center_frame", "center_frame_fold", "pair_center_frame_fold",
+        "fold_test_pair", "fold_train_pair", "fold_excluded_pair",
+    ):
+        if not np.array_equal(plan[name], e48_arrays[name]):
+            raise RenderError(f"E76-C1 E48 {name} identity changed")
+
+    worlds: list[tuple[WorldSpec, WorldSpec]] = []
+    lower_support = np.empty((1024, 2), dtype=np.float64)
+    for row in range(1024):
+        control_world = WorldSpec.from_dict(json.loads(str(bank["control_world_json"][row])))
+        proxy_world = WorldSpec.from_dict(json.loads(str(bank["proxy_world_json"][row])))
+        control_record = PlacementRecord.from_dict(json.loads(str(bank["control_record_json"][row])))
+        proxy_record = PlacementRecord.from_dict(json.loads(str(bank["proxy_record_json"][row])))
+        worlds.append((control_world, proxy_world))
+        lower_support[row] = (
+            control_record.grounding_standard_lower_support_m,
+            proxy_record.grounding_standard_lower_support_m,
+        )
+    tasks: list[tuple[int, int, int, int, int, int]] = []
+    for pair in range(1347):
+        for source_index in range(2):
+            flat_index = int(index[pair, source_index])
+            bank_row, slot = divmod(flat_index, 15)
+            if slot != (int(pairs["matched_frame_id"][pair, source_index]) - int(pairs["matched_center_frame"][pair, source_index]) + 2) * 3 + source_index + 1:
+                raise RenderError("E76-C1 flattened unit position changed")
+            tasks.append((
+                pair, source_index, bank_row,
+                int(pairs["matched_frame_id"][pair, source_index]),
+                int(pairs["matched_Nvis"][pair, source_index]),
+                int(pairs["matched_bank_seed"][pair, source_index]),
+            ))
+
+    sequence = STUSequence.open(
+        data_root, protocol=protocol, partition="train", sequence_id=201,
+        label_mode=LabelMode.REQUIRED,
+    )
+    grid, sensor = load_sensor_calibration(paths["calibration"])
+    global _E76_C1_SEQUENCE, _E76_C1_GRID, _E76_C1_SENSOR
+    global _E76_C1_WORLDS, _E76_C1_LOWER_SUPPORT, _E76_C1_TASKS
+    _E76_C1_SEQUENCE, _E76_C1_GRID, _E76_C1_SENSOR = sequence, grid, sensor
+    _E76_C1_WORLDS = tuple(worlds)
+    _E76_C1_LOWER_SUPPORT = lower_support
+    _E76_C1_TASKS = tuple(tasks)
+    started = time.monotonic()
+    with mp.get_context("fork").Pool(processes=processes) as workers:
+        rows = workers.map(_e76_c1_worker, range(len(tasks)), chunksize=4)
+    clearance = np.empty((1347, 2), dtype=np.float64)
+    visible_count = np.empty((1347, 2), dtype=np.int32)
+    for pair, source_index, height, count in rows:
+        clearance[pair, source_index] = height
+        visible_count[pair, source_index] = count
+    render_seconds = time.monotonic() - started
+    if not np.array_equal(visible_count, pairs["matched_Nvis"]):
+        raise RenderError("E76-C1 replay did not preserve every visible-return count")
+
+    descriptive_quantiles = np.asarray((0.0, 0.05, 0.25, 0.5, 0.75, 0.95, 1.0))
+    class_summary = np.quantile(
+        clearance, descriptive_quantiles, axis=0, method="linear"
+    ).T
+    paired_difference = clearance[:, 0] - clearance[:, 1]
+    paired_summary = np.asarray((
+        np.mean(paired_difference), np.median(paired_difference),
+        np.quantile(paired_difference, 0.05, method="linear"),
+        np.quantile(paired_difference, 0.95, method="linear"),
+        np.mean(paired_difference > 0.0),
+        np.mean(paired_difference > 0.05),
+        np.mean(paired_difference > 0.10),
+    ), dtype=np.float64)
+    model = _e76_c1_scalar_models(clearance, plan)
+    direct_degeneracy = bool(np.any(model["model_fail"]))
+    scientific = {
+        **plan,
+        "matched_flat_index": index,
+        "matched_unit_hash": np.asarray(pairs["matched_unit_hash"]),
+        "visible_point_count": visible_count,
+        "visible_ground_clearance_m": clearance,
+        "descriptive_quantile_probability": descriptive_quantiles,
+        "class_clearance_summary_m": class_summary,
+        "paired_clearance_difference_m": paired_difference,
+        "paired_difference_summary": paired_summary,
+        **model,
+    }
+    result = {
+        "experiment": "E76-C1",
+        "completed": True,
+        "outcome": (
+            "DIRECT CLEARANCE LABEL DEGENERACY"
+            if direct_degeneracy else "NO DIRECT CLEARANCE DEGENERACY DETECTED"
+        ),
+        "direct_clearance_label_degeneracy": direct_degeneracy,
+        "matched_pairs": 1347,
+        "visible_units": 2694,
+        "oof_pairs": 369,
+        "class_order": ["normal_control", "anomaly_proxy"],
+        "class_summary_order": ["min", "q05", "q25", "q50", "q75", "q95", "max"],
+        "paired_difference": "normal_control_minus_anomaly_proxy",
+        "paired_summary_order": ["mean", "median", "q05", "q95", "p_gt_0", "p_gt_0.05m", "p_gt_0.10m"],
+        "models": ["l2_logistic_regression", "depth3_decision_tree"],
+        "metric_order": ["roc_auc", "balanced_accuracy", "control_recall", "proxy_recall"],
+        "metric": model["model_metric"].tolist(),
+        "bootstrap_ci_low": model["bootstrap_ci_low"].tolist(),
+        "bootstrap_ci_high": model["bootstrap_ci_high"].tolist(),
+        "model_fail": model["model_fail"].tolist(),
+        "fail_rule": "any_model_LCB95_AUC_ge_0.95_and_LCB95_BA_ge_0.90",
+        "bootstrap_cluster": "matched_pair",
+        "bootstrap_replicates": 2000,
+        "bootstrap_seed_sequence": list(E48_BOOTSTRAP_SEED),
+        "fold_namespace": E48_FOLD_NAMESPACE,
+        "fold_test_pairs": plan["fold_test_pair"].sum(axis=1).tolist(),
+        "fold_train_pairs": plan["fold_train_pair"].sum(axis=1).tolist(),
+        "fold_excluded_pairs": plan["fold_excluded_pair"].sum(axis=1).tolist(),
+        "input_sha256": expected_hashes,
+        "protocol_sha256": _sha256_path(paths["protocol"]),
+        "processes": processes,
+        "numeric_library_threads_per_process": 1,
+        "gpu_used": False,
+        "stu_or_model_forward_used": False,
+        "renderer_modified": False,
+        "pair_selection_or_matching_changed": False,
+        "render_seconds": render_seconds,
+        "scientific_array_hash": _scientific_array_hash(scientific),
+        "claim_limit": (
+            "E76-C1 tests only whether visible ground clearance alone nearly "
+            "saturates control/proxy label recovery in the frozen E45B-v2 "
+            "matched population; weaker differences remain descriptive."
+        ),
+    }
+    output = Path(output_path).expanduser().resolve()
+    output.parent.mkdir(parents=True, exist_ok=True)
+    temporary = output.with_suffix(output.suffix + ".tmp.npz")
+    np.savez_compressed(
+        temporary, **scientific,
         metadata_json=np.asarray(json.dumps(result, sort_keys=True, separators=(",", ":"))),
     )
     os.replace(temporary, output)
@@ -18968,6 +19343,16 @@ def _render_parser() -> argparse.ArgumentParser:
     e48 = subcommands.add_parser("qualify-e48")
     e48.add_argument("--e45b-v2-artifact", type=Path, required=True)
     e48.add_argument("--output", type=Path, required=True)
+    e76c1 = subcommands.add_parser("audit-e76-c1")
+    e76c1.add_argument("--data-root", type=Path, required=True)
+    e76c1.add_argument("--protocol", type=Path, required=True)
+    e76c1.add_argument("--bank", type=Path, required=True)
+    e76c1.add_argument("--units", type=Path, required=True)
+    e76c1.add_argument("--pairs", type=Path, required=True)
+    e76c1.add_argument("--e48", type=Path, required=True)
+    e76c1.add_argument("--calibration", type=Path, required=True)
+    e76c1.add_argument("--output", type=Path, required=True)
+    e76c1.add_argument("--processes", type=int, default=24)
     e57 = subcommands.add_parser("qualify-e57-v2")
     e57.add_argument("--data-root", type=Path, required=True)
     e57.add_argument("--protocol", type=Path, required=True)
@@ -19195,6 +19580,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         result = run_e48_qualification(args.e45b_v2_artifact, args.output)
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 0 if result["passed"] else 1
+    if args.command == "audit-e76-c1":
+        result = run_e76_c1_audit(
+            args.data_root, args.protocol, args.bank, args.units, args.pairs,
+            args.e48, args.calibration, args.output, processes=args.processes,
+        )
+        print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        return 0
     if args.command == "qualify-e57-v2":
         result = run_e57_qualification(
             args.data_root, args.protocol, args.source_bank,

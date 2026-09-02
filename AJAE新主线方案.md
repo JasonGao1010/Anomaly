@@ -1,6 +1,6 @@
 # AJAE 主线方案
 
-> 当前权威基线：本仓库`main`与本文记录的全部历史证据。E25-new、E26-v2、E38–E44刷新、E45B-v2、E48、E49、E50–E58与E61–E73已经正式PASS，E59/E60描述性聚合已经完成，Gate 1、Phase 5和Phase 7已经关闭；E45A全分支已经终止且不构成Gate 1条件，当前正式节点为E74。旧提交`44fd6d13798e826b2cac8371de26a7d17707dadc`只保留为E22-v2时期的历史基线，不再代表当前工作区状态。
+> 当前权威基线：本仓库`main`与本文记录的全部历史证据。E25-new、E26-v2、E38–E44刷新、E45B-v2、E48、E49、E50–E58与E61–E73已经正式PASS，E59/E60描述性聚合已经完成，Gate 1、Phase 5和Phase 7已经关闭；E74三种子确认在完成种子0/1后暂停，E75-X已经描述性完成，E76-X-lite记录了运动正常点误报恶化。E76-V1现以`DESCRIPTIVE REVIEW COMPLETE / NO PASS/FAIL`关闭：隐藏网格接地，但所查正常对照的最低可见回波高于对应代理。该观察本身既不推翻renderer或E48，也不能排除可学习提示。当前唯一节点为E76-C1；E78-X/B2、Full AJAE-X和正式Gate 2仍锁定。旧提交`44fd6d13798e826b2cac8371de26a7d17707dadc`只保留为E22-v2时期的历史基线，不再代表当前工作区状态。
 
 ---
 
@@ -1827,7 +1827,7 @@ $$
 
 ---
 
-# 18. 当前状态（当前工作区：E48与E49正式PASS，Gate 1关闭，E50为当前节点）
+# 18. 当前状态（当前工作区：E76-C1为唯一执行节点）
 
 截至当前工作区权威提交，已经完成：
 
@@ -2056,15 +2056,14 @@ E26-v2已经在冻结实现提交`38079213a0801bf3a279414a8b120bfd24e1cd1b`上�
 
 当前尚未成立：
 
-- renderer 来源泄漏 Gate 1；
-- B1 代理监督有效性；
+- 正式三种子Gate 2代理监督有效性；
 - B3 五帧时间增益；
 - 真实 OOD 迁移。
 
 当前执行节点为：
 
 $$
-\boxed{E38\text{--}E44\ \mathrm{PASS}\rightarrow E45B\text{-v2 PASS}\rightarrow E48\ \mathrm{PASS}\rightarrow E49\ \mathrm{PASS}\rightarrow E50\text{--}E58\ \mathrm{PASS}\rightarrow E59/E60\ \mathrm{COMPLETE}\rightarrow E61\text{--}E73\ \mathrm{PASS}\rightarrow E74\ \mathrm{CURRENT}}
+\boxed{E38\text{--}E44\ \mathrm{PASS}\rightarrow E45B\text{-v2 PASS}\rightarrow E48\ \mathrm{PASS}\rightarrow E49\ \mathrm{PASS}\rightarrow E50\text{--}E73\ \mathrm{DONE}\rightarrow E74\text{-X}/E75\text{-X}/E76\text{-X-lite}\ \mathrm{DONE}\rightarrow E76\text{-V1 COMPLETE}\rightarrow E76\text{-C1 CURRENT}}
 $$
 
 E23与E24-v2已按冻结设计通过；Gate 1已完成：
@@ -2073,12 +2072,16 @@ $$
 E38\text{--}E44\ \mathrm{PASS}\rightarrow E45B\text{-v2 PASS}\rightarrow E48\ \mathrm{PASS}\rightarrow E49\ \mathrm{PASS}
 $$
 
-E27–E37的纯机械资格继续保留；E36-v1、E45-v1、E45-v2、E45A、E45A-v2、E45A-new、E45A-overlap、E25-v2和E25-v3 normal-control FAIL均永久保留。旧E45B已PASS，但只资格旧normal-control分布。$D_{xy}+\alpha$路线、E25-v3逐对象五维条件复制路线和全部E45A后续演化均已终止。E25-new、E26-v2、E38–E44刷新、E45B-v2、E48、E49、E50–E58与E61–E73已经PASS，E59/E60描述性聚合已经完成。E46已降为非阻断诊断；当前正式节点是E74。
+E27–E37的纯机械资格继续保留；E36-v1、E45-v1、E45-v2、E45A、E45A-v2、E45A-new、E45A-overlap、E25-v2和E25-v3 normal-control FAIL均永久保留。旧E45B已PASS，但只资格旧normal-control分布。$D_{xy}+\alpha$路线、E25-v3逐对象五维条件复制路线和全部E45A后续演化均已终止。E25-new、E26-v2、E38–E44刷新、E45B-v2、E48、E49、E50–E58与E61–E73已经PASS，E59/E60描述性聚合已经完成。E46已降为非阻断诊断。
+
+E76-X-lite在两个冻结种子上观察到运动正常点误报率相对B0平均恶化`0.36463377142417946`，因此保留为探索性停止信号，不裁决正式Gate 2。随后E76-V1只作描述性可视检查。world 2和world 8的网格接触误差约为`1.61 cm`和`1.58 cm`，正常对照最低可见回波距支撑面约为`28.41 cm`和`23.76 cm`，对应异常代理约为`6.36 cm`和`10.89 cm`。这说明隐藏几何仍接地，肉眼看到的间隙来自可见回波；少量视觉样本不足以判断该差异是否构成标签捷径。
+
+因此，在任何Full AJAE训练之前，只执行E76-C1：对E45B-v2全部1,347个冻结匹配对计算有符号最低可见回波高度，完全复用E48的中心帧五折、两个低容量模型和2,000次匹配对bootstrap。只有任一模型同时满足AUC 95%下界至少0.95且平衡准确率95%下界至少0.90，才判定存在直接clearance标签退化并停止等待单独的合成监督修订；任何未达到近饱和的描述性差异均不阻断。若未触发，立即进入Full AJAE-X，即先训练B3，再对同一检查点执行B4重叠窗口概率融合；E78-X/B2后移为完整方法出现可行性信号后的消融。
 
 因此当前整体判断仍是：
 
 $$
-\boxed{Gate\ 1\ \mathrm{PASS}\rightarrow E50\text{--}E58\ \mathrm{PASS}\rightarrow E59/E60\ \mathrm{COMPLETE}\rightarrow E61\text{--}E62\ \mathrm{PASS}\rightarrow E63\text{--}E71\rightarrow B1>B0}
+\boxed{Gate\ 1\ \mathrm{PASS}\rightarrow E50\text{--}E73\ \mathrm{DONE}\rightarrow E76\text{-C1}\rightarrow \text{Full AJAE-X}\rightarrow \text{whole-method viability review}}
 $$
 
 不能写成“AJAE 方法已经验证”或“剩余只需训练”。

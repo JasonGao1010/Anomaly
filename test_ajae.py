@@ -561,6 +561,50 @@ def test_e48_matched_pair_bootstrap_is_deterministic() -> None:
     np.testing.assert_array_equal(first, np.ones((2000, 4)))
 
 
+def test_e76_c1_clearance_is_signed_distance_from_visible_returns() -> None:
+    item = render_module.ObjectSpec(
+        1, "anomaly-proxy", ShapeSpec.sample(7601),
+        render_module.MaterialSpec(0.5, 0.2),
+        (0.0, 0.0, 2.0),
+        ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0)),
+    )
+    points = np.asarray(((0.0, 0.0, 1.25), (0.0, 0.0, 2.0)))
+    clearance = render_module._visible_ground_clearance(
+        points, np.eye(4), item, -1.0
+    )
+    assert clearance == pytest.approx(0.25)
+    points[0, 2] = 0.9
+    assert render_module._visible_ground_clearance(
+        points, np.eye(4), item, -1.0
+    ) == pytest.approx(-0.1)
+
+
+def test_e76_c1_reuses_e48_split_and_detects_only_near_saturation() -> None:
+    with np.load(
+        ROOT / "runs/ajae/e45b_v2_control_proxy_pairs.npz", allow_pickle=False
+    ) as archive:
+        plan = render_module._e48_fold_plan(archive["matched_center_frame"])
+    clearance = np.tile(np.asarray((1.0, -1.0)), (1347, 1))
+    result = render_module._e76_c1_scalar_models(clearance, plan)
+    assert result["oof_pair_index"].size == 369
+    np.testing.assert_array_equal(result["model_fail"], (True, True))
+    assert np.all(result["bootstrap_ci_low"][:, :2] == 1.0)
+
+
+def test_e76_c1_protocol_is_result_blind_and_full_first() -> None:
+    exploration = load_protocol(PROTOCOL_PATH).development["exploration_track"]
+    assert exploration["version"] == "exploration-confirmation-split-v3-full-first"
+    assert exploration["current_node"] == "E76-C1"
+    c1 = exploration["e76c1_freeze"]
+    assert c1["status"] == "frozen_before_clearance_computation"
+    assert c1["descriptive_difference_is_nonblocking"] is True
+    assert c1["renderer_modification_forbidden"] is True
+    assert exploration["full_ajae_x_freeze"]["status"] == "locked_pending_E76-C1"
+    assert exploration["full_ajae_x_freeze"]["b2_e78x_status"].startswith(
+        "deferred ablation"
+    )
+
+
 def test_phase5_frame_identity_is_frozen_before_stu_outputs() -> None:
     protocol = load_protocol(PROTOCOL_PATH)
     assert phase5_frame_ids(protocol, 206) == PHASE5_FRAMES[206]

@@ -1078,7 +1078,8 @@ class AJAEProtocol:
         )
         cursor = _mapping(confirmation.get("paused_cursor"), "E74 paused cursor")
         if (
-            exploration.get("version") != "exploration-confirmation-split-v2"
+            exploration.get("version")
+            != "exploration-confirmation-split-v3-full-first"
             or exploration.get("status") != "active_before_formal_gate2"
             or tuple(cohort.get("seeds", ())) != (0, 1)
             or tuple(cohort.get("applies_to", ())) != ("B1", "B2", "B3")
@@ -1112,12 +1113,12 @@ class AJAEProtocol:
             }
             or confirmation.get("resume_branch") != "confirm/e74-seed2-resume"
             or confirmation.get("partial_seed2_result_use_forbidden") is not True
-            or exploration.get("current_node") != "E76-V1-visual-review"
+            or exploration.get("current_node") != "E76-C1"
             or exploration.get("formal_gate2_and_gate3_status") != "not adjudicated"
             or exploration.get("public_real_ood_sequences_remain_sealed") is not True
             or exploration.get("hidden_test_sequences_remain_sealed") is not True
             or exploration.get("exploratory_continuation_status")
-            != "stopped_before_E78-X_for_scientific_moving-normal_safety_review"
+            != "E76-C1_current_before_full_AJAE-X"
         ):
             raise ProtocolError("exploration/confirmation split identity changed")
         e75x = _mapping(exploration.get("e75x_result"), "E75-X result")
@@ -1254,7 +1255,7 @@ class AJAEProtocol:
         if (
             visual.get("version") != "E76-V1-v2-display"
             or visual.get("status")
-            != "viewer_format_correction_frozen_before_rerun"
+            != "descriptive_review_complete"
             or visual.get("output_directory") != "runs/ajae/e76_v1"
             or visual.get("output_format")
             != "27 RGB-only binary_little_endian PLY 1.0 files plus one aligned NPZ attribute archive and one JSON manifest"
@@ -1320,10 +1321,14 @@ class AJAEProtocol:
         visual_result = _mapping(
             exploration.get("e76v1_result"), "E76-V1 result"
         )
+        recalculation = _mapping(
+            visual_result.get("ground_contact_recalculation"),
+            "E76-V1 ground-contact recalculation",
+        )
         selected_b = visual_result.get("group_b_selected")
         if (
             visual_result.get("status")
-            != "display_corrected_export_complete"
+            != "descriptive_review_complete_no_pass_fail"
             or visual_result.get("manifest_path")
             != "runs/ajae/e76_v1/manifest.json"
             or visual_result.get("manifest_sha256")
@@ -1353,13 +1358,81 @@ class AJAEProtocol:
             or visual_result.get("total_bytes_including_manifest_and_attributes")
             != 44146724
             or visual_result.get("source_payload_preserved_exactly") is not True
-            or visual_result.get("visual_review_performed") is not False
-            or visual_result.get("scientific_visual_interpretation_valid") is not False
+            or visual_result.get("visual_review_performed") is not True
+            or visual_result.get("scientific_visual_interpretation_valid") is not True
+            or visual_result.get("interpretation_status")
+            != "DESCRIPTIVE REVIEW COMPLETE / NO PASS/FAIL"
+            or tuple(recalculation.get("reviewed_world_ids", ())) != (2, 8)
+            or tuple(recalculation.get("mesh_contact_error_m", ()))
+            != (0.0161, 0.0158)
+            or tuple(recalculation.get("normal_control_minimum_visible_clearance_m", ()))
+            != (0.2841, 0.2376)
+            or tuple(recalculation.get("anomaly_proxy_minimum_visible_clearance_m", ()))
+            != (0.0636, 0.1089)
+            or recalculation.get("renderer_or_e48_invalidated") is not False
+            or visual_result.get("moving_normal_visual_interpretation")
+            != "selected moving-normal clusters contain too few points for reliable shape attribution"
             or visual_result.get("formal_gate_adjudicated") is not False
             or visual_result.get("e76x_lite_result_unchanged") is not True
             or visual_result.get("e78x_locked") is not True
         ):
             raise ProtocolError("E76-V1 result identity changed")
+        c1 = _mapping(exploration.get("e76c1_freeze"), "E76-C1 freeze")
+        c1_hash = _mapping(c1.get("input_sha256"), "E76-C1 input hashes")
+        full = _mapping(
+            exploration.get("full_ajae_x_freeze"), "Full AJAE-X freeze"
+        )
+        if (
+            c1.get("version") != "E76-C1-v1"
+            or c1.get("status") != "frozen_before_clearance_computation"
+            or c1.get("population")
+            != "all 1347 frozen E45B-v2 matched control/proxy pairs without reuse, rematching, candidate expansion, or result-driven selection"
+            or c1_hash != {
+                "bank": "d3088e29e4c6179999ccb34088dae558fa402bf6b1455394acdc99cac4118463",
+                "units": "bab7198607119dbe0737b7cf7e55a2a03016b9adf4cba60d9d2ab2bf90a0f0e3",
+                "pairs": "19ecbc843cc5325e3f12497c50e5855388f0f5caa581179f6fd6639613a8ecfd",
+                "e48": "b55ad1c7fecf030f4f3f22c5ba4423f1cfeaae46a4d763565ab22c97ad6206ce",
+                "calibration": "b532b7e04d9025233b2768b8fb36287e477f62f20a3ff685a62f4a4a29bfefe0",
+            }
+            or tuple(c1.get("descriptive_quantiles", ()))
+            != (0.0, 0.05, 0.25, 0.5, 0.75, 0.95, 1.0)
+            or c1.get("descriptive_quantile_method") != "NumPy linear"
+            or c1.get("paired_difference")
+            != "normal_control_minus_anomaly_proxy"
+            or tuple(c1.get("paired_statistics", ()))
+            != (
+                "mean", "median", "q05", "q95", "p_gt_0",
+                "p_gt_0.05m", "p_gt_0.10m",
+            )
+            or c1.get("fold_rule")
+            != "exact E48-center-v1 center-frame hash five-fold plan with test/train/excluded pair counts [61,46,91,74,97]/[913,1004,800,861,832]/[373,297,456,412,418] and 369 OOF pairs"
+            or tuple(c1.get("models", ()))
+            != (
+                "standardized L2 logistic regression C=1 lbfgs tol=1e-4 max_iter=5000 random_state=4800",
+                "Gini decision tree max_depth=3 min_samples_leaf=64 random_state=4801",
+            )
+            or c1.get("bootstrap")
+            != "2000 matched-pair cluster replicates with NumPy SeedSequence(4800,2000); each draw carries both label endpoints"
+            or tuple(c1.get("metric_order", ()))
+            != ("roc_auc", "balanced_accuracy", "control_recall", "proxy_recall")
+            or c1.get("direct_degeneracy_rule")
+            != "any one frozen model simultaneously has 2.5th-percentile AUC at least 0.95 and balanced accuracy at least 0.90"
+            or c1.get("descriptive_difference_is_nonblocking") is not True
+            or c1.get("training_stu_or_model_forward_forbidden") is not True
+            or c1.get("renderer_modification_forbidden") is not True
+            or c1.get("public_real_ood_sequences_remain_sealed") is not True
+            or c1.get("hidden_test_sequences_remain_sealed") is not True
+            or full.get("version") != "AJAE-full-first-v1"
+            or full.get("status") != "locked_pending_E76-C1"
+            or full.get("b2_e78x_status")
+            != "deferred ablation unlocked only after Full AJAE-X supports whole-method viability"
+            or full.get("seed0_stop_rule")
+            != "stop before seed 1 only if AP_B4 is at most AP_B0 and moving-normal FPR_B4 is at least B1 seed0 moving-normal FPR"
+            or full.get("formal_gate2_and_gate3_thresholds_changed") is not False
+            or full.get("public_real_ood_sequences_remain_sealed") is not True
+            or full.get("hidden_test_sequences_remain_sealed") is not True
+        ):
+            raise ProtocolError("E76-C1 or Full AJAE-X freeze identity changed")
         difficulty = _mapping(development["difficulty_statistics"], "difficulty statistics")
         if set(difficulty) != {"Nvis", "O", "d", "V"}:
             raise ProtocolError("development difficulty must define Nvis, O, d, and V")

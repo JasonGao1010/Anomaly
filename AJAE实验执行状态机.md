@@ -1,6 +1,6 @@
 # AJAE Fine-Grained Experiment Execution State Machine
 
-> Current authoritative baseline: repository `main` and all historical evidence recorded in this document. E50–E58 and E61–E73 have formally PASSed and E59/E60 descriptive characterization is complete. E74's three-seed confirmation is suspended after completed seeds 0/1 with seed 2 preserved at an exact resumable block checkpoint. E75-X completed descriptively. E76-X-lite found a two-seed moving-normal FPR worsening of `0.36463377142417946`. E76-V1's CloudCompare display defect is repaired by a lossless RGB-only repackage of the frozen first export; the corrected 27 PLY files now await a fresh visual review. E78-X/B2/B3 remain locked, full E76-X remains deferred, and formal Gate 2 is unadjudicated.
+> Current authoritative baseline: repository `main` and all historical evidence recorded in this document. E50–E58 and E61–E73 have formally PASSed and E59/E60 descriptive characterization is complete. E74's three-seed confirmation is suspended after completed seeds 0/1 with seed 2 preserved at an exact resumable block checkpoint. E75-X completed descriptively, and E76-X-lite recorded a two-seed moving-normal FPR worsening of `0.36463377142417946`. E76-V1 is now closed as `DESCRIPTIVE REVIEW COMPLETE / NO PASS/FAIL`: the reviewed hidden meshes remain grounded, while selected normal-control visible returns show a larger ground clearance than their proxies. This observation neither invalidates E48 nor establishes a direct shortcut. E76-C1 is the current node; E78-X/B2, Full AJAE-X, full E76-X and formal Gate 2 remain locked until that result-blind audit branches.
 
 > Basis: [AJAE Mainline Plan](</home/jasongao/Study/AJAE/AJAE%E6%96%B0%E4%B8%BB%E7%BA%BF%E6%96%B9%E6%A1%88.md>). This document decomposes the mainline plan's immutable constraints, four Decision Gates, B0–B5 controls, normal-motion safety, object-scale diagnostics, development discipline, and one-time real-OOD validation into fine-grained experiment nodes that can be executed sequentially.
 
@@ -182,21 +182,24 @@ flowchart TB
     E74X["E74-X B1 seeds 0/1 cohort"]
     E75X["E75-X descriptive B1 versus B0"]
     E76X["E76-X-lite complete: safety review required"]
-    E76V1["E76-V1 descriptive visual audit"]
-    E78X["E78-X B2 seeds 0/1"]
-    E79X["E79-X B3 mechanical smoke"]
-    E80X["E80-X B3 seeds 0/1"]
-    E81X["E81-X B3 versus B1"]
-    E82X["E82-X B3 versus B2"]
-    E83X["E83-X exploratory temporal safety"]
-    E85X["E85-X–E94-X optional B4/mechanism exploration"]
+    E76V1["E76-V1 descriptive review complete"]
+    E76C1["E76-C1 visible-clearance shortcut audit"]
+    F0X["AJAE-F0-X full-path mechanical preflight"]
+    F1X["AJAE-F1-X full AJAE seed 0"]
+    F2X["AJAE-F2-X seed 0 B3/B4 evaluation"]
+    F3X["AJAE-F3-X conditional full AJAE seed 1"]
+    F4X["AJAE-F4-X two-seed viability review"]
+    E78X["E78-X B2 deferred ablation"]
     E74X --> E75X --> E76X
-    E76X -. "descriptive diagnosis; no unlock" .-> E76V1
-    E76X -. "locked pending safety review" .-> E78X
-    E78X --> E79X --> E80X --> E81X --> E82X --> E83X
-    E83X -. "promising temporal signal" .-> E85X
-    E83X -. "no temporal value: stop/rethink" .-> E64
-    E85X -. "resume three-seed confirmation" .-> E74
+    E76X --> E76V1 --> E76C1
+    E76C1 -. "direct clearance degeneracy: stop for supervision revision" .-> E45B
+    E76C1 -. "no direct degeneracy" .-> F0X
+    F0X --> F1X --> F2X
+    F2X -. "unequivocal whole-method collapse" .-> E64
+    F2X -. "otherwise continue" .-> F3X --> F4X
+    F4X -. "whole-method viability supported" .-> E78X
+    F4X -. "unsupported: stop/rethink" .-> E64
+    E78X -. "later confirmation" .-> E74
   end
   subgraph P10["Phase 10 | Temporal-position calibration and B4 fusion"]
     E85["E85 Diagnostic of position score q"]
@@ -3889,13 +3892,35 @@ Command and resolved config: `python -m src.qualify e76v1 --protocol protocol.js
 Resource and disk preflight: 24 physical CPU cores, RTX 5080 Laptop GPU with 16,303 MiB total and 14,592 MiB free, 20 GiB available RAM, no competing experiment, and Windows E: with 73,867,780,096 bytes remaining of 484,950,659,072 immediately before the successful correction. The correction is a CPU-only streaming repackage and produced 44,146,724 bytes.
 Artifacts and hashes: The invalid-for-default-view source is retained at `runs/ajae/e76_v1_source`, manifest SHA-256 `840b868456958cbdd25e63fa60e6f759c494e215e6ddf6bb33caea95a6b5b755`, solely as the frozen correction input. The corrected directory is `runs/ajae/e76_v1`: manifest SHA-256 `2b8de48df52004a008e065408014f876020005fee12f3a240d2a2c7f2d0af4ed`; `attributes.npz` SHA-256 `ecde4b8efcad2ba8a0dbeac8840682f4e37a24d700e68467af7019533d1fa7da`; attribute scientific-array SHA-256 `c541d5263f5b64395fec93dcde451b8b9465032f8748819726755f129559f271`. It contains 27 viewer PLY files, 111 archived attribute arrays and 44,146,724 total bytes. All 2,286,346 source point rows were compared independently: every XYZ/RGB value is exact in the new PLYs and every removed source property is exact in the archive. All 27 headers contain exactly six viewer properties and zero scalar fields.
 Primary construct: A descriptive distinction between physically meaningful unfamiliar geometry and generation/rendering artifacts, plus localization of the moving-normal false alarms observed by E76-X-lite.
-Primary result: The frozen A world and B-frame selections remain `[1,2,0,14,8,9]` and `[200,194,167]`, with the original B selection statistics `[0.041317139536431596,0.014666997218606384,0.01331896943388882]` unchanged. Inspection of CloudCompare's official `PlyFilter.cpp` established that the first viewing attempt showed scalar-field colors rather than the stored RGB. The corrected files remove that display ambiguity without changing the scientific payload. The earlier visual observations remain invalid; a fresh review of the corrected files is still required before any appearance interpretation.
-PASS / FAIL / OUTCOME: OUTCOME — VIEWER IMPLEMENTATION DEFECT REPAIRED / CORRECTED VISUAL REVIEW PENDING; PASS/FAIL IS FORBIDDEN.
-Failure classification: `implementation_defect`. Samples, point coordinates, RGB values, model scores, thresholds and review questions are unchanged.
-Unlocked next node: None. E78-X and B2/B3 remain locked pending a separate scientific decision on moving-normal safety.
+Primary result: The frozen A world and B-frame selections remain `[1,2,0,14,8,9]` and `[200,194,167]`, with the original B selection statistics `[0.041317139536431596,0.014666997218606384,0.01331896943388882]` unchanged. After the display correction, the project owner found that selected normal controls appeared above the visible ground return. Direct geometric recomputation on the two high-point cases, world 2 and world 8, found mesh-contact errors of about `0.0161 m` and `0.0158 m`, normal-control minimum visible clearances of `0.2841 m` and `0.2376 m`, and corresponding proxy clearances of `0.0636 m` and `0.1089 m`. Thus the hidden geometry is grounded; the apparent gap is a visible-return effect caused by object geometry and discrete LiDAR sampling, not a PLY or whole-object placement error. The selected moving-normal clusters contain only a few points and do not support reliable shape attribution.
+PASS / FAIL / OUTCOME: OUTCOME — DESCRIPTIVE REVIEW COMPLETE / NO PASS/FAIL.
+Failure classification: The earlier viewer problem was an `implementation_defect` and is repaired. The remaining visible-clearance difference is a descriptive scientific observation whose direct label recoverability is delegated to E76-C1.
+Unlocked next node: E76-C1 only. E78-X, B2/B3 and Full AJAE-X remain locked until E76-C1 branches.
 Invalidated downstream evidence: None. E76-X-lite remains unchanged and full E76 remains required on the confirmation track.
-Descriptive observations: The first visual attempt is invalidated in full; it cannot support any geometry, background or control/proxy interpretation. The corrected export has not yet been visually interpreted.
-Notes: Real points are light gray, ignored/background points dark gray, controls blue, proxies red and moving-normal points orange. CloudCompare source lines 1757–1768 compute imported scalar fields, set scalar field zero as current and call `showSF(true)`, overriding otherwise valid RGB. PLY has no portable display-preference flag, so retaining diagnostic scalars in the viewer vertex record cannot guarantee the frozen colors. The v2-display implementation separates representation from evidence: viewer PLYs have only XYZ+RGB, while `attributes.npz` preserves intensity, source/semantic identities, moving masks, scores and prediction flags in identical point order. Public real-OOD and hidden-test sequences remain sealed.
+Descriptive observations: Selected controls and proxies differ in lowest visible-return height even though both hidden meshes remain grounded. This may reflect ordinary shape and sampling differences or a learnable label cue; the six visual worlds cannot estimate which. The sparse moving-normal clusters are visually uninformative.
+Notes: Real points are light gray, ignored/background points dark gray, controls blue, proxies red and moving-normal points orange. CloudCompare source lines 1757–1768 compute imported scalar fields, set scalar field zero as current and call `showSF(true)`, overriding otherwise valid RGB. PLY has no portable display-preference flag, so retaining diagnostic scalars in the viewer vertex record cannot guarantee the frozen colors. The v2-display implementation separates representation from evidence: viewer PLYs have only XYZ+RGB, while `attributes.npz` preserves intensity, source/semantic identities, moving masks, scores and prediction flags in identical point order. E76-V1 does not invalidate the renderer or E48. Public real-OOD and hidden-test sequences remain sealed.
+
+## E76-C1 | Visible-Ground-Clearance Direct-Shortcut Audit
+
+Experiment ID: E76-C1
+Design-freeze commit/hash: Result-blind v3 full-first route revision before any clearance value in the 1,347-pair E45B-v2 population is computed.
+Execution-freeze commit/hash: Pending the tracked CPU-only runner commit.
+Date: 2026-09-02 design freeze; formal execution pending.
+Git commit / clean state: Must use a clean tracked worktree, excluding only user-owned untracked `PPT/`.
+Data identities: All 1,347 non-reused E45B-v2 control/proxy matched pairs. Pair selection, candidate expansion, rematching and result-driven sample selection are forbidden. The runner replays the exact frozen single-object world for each matched entity-frame because the saved E48 point cache contains at most 64 points and cannot identify the true minimum over all accepted returns.
+Input artifact hashes: bank `d3088e29e4c6179999ccb34088dae558fa402bf6b1455394acdc99cac4118463`; complete unit cache `bab7198607119dbe0737b7cf7e55a2a03016b9adf4cba60d9d2ab2bf90a0f0e3`; matched pairs `19ecbc843cc5325e3f12497c50e5855388f0f5caa581179f6fd6639613a8ecfd`; E48 `b55ad1c7fecf030f4f3f22c5ba4423f1cfeaae46a4d763565ab22c97ad6206ce`; calibration `b532b7e04d9025233b2768b8fb36287e477f62f20a3ff685a62f4a4a29bfefe0`.
+Random namespaces / seeds: Reuse E48 center-frame namespace `E48-center-v1` and pair bootstrap seed sequence `(4800,2000)` exactly. No new sample-selection randomness exists.
+Command and resolved config: `python -m src.render audit-e76-c1 --data-root /home/jasongao/Data/STU --protocol protocol.json --bank runs/ajae/e45b-v2_bank_1024.npz --units runs/ajae/e45b-v2_units_1024.npz --pairs runs/ajae/e45b_v2_control_proxy_pairs.npz --e48 runs/ajae/e48_low_level_shortcut.npz --calibration runs/ajae/calibration.pt --output runs/ajae/e76_c1_visible_clearance.npz --processes 24`. For each unit, compute the signed minimum `n^T(p-a)` over every accepted object return after the frozen official `2.5–50.0 m` filter. Do not truncate, supplement points, change the plane or remove a unit. Report each class's min/q05/q25/q50/q75/q95/max and paired control-minus-proxy mean/median/q05/q95 plus proportions above 0, 5 cm and 10 cm. Descriptive differences never block.
+Resource and disk preflight: Pending formal execution. CPU only; STU/model forward and GPU use are forbidden.
+Artifacts and hashes: Pending formal execution at `runs/ajae/e76_c1_visible_clearance.npz`.
+Primary construct: Whether minimum visible ground clearance alone nearly saturates control/proxy label recovery after the frozen E45B-v2 matching.
+Primary result: Pending.
+PASS / FAIL / OUTCOME: A branch is triggered only if either the frozen standardized L2 logistic model or depth-3 tree simultaneously has matched-pair-bootstrap 95% lower bounds `AUC >= 0.95` and `balanced accuracy >= 0.90`. Triggered outcome: `DIRECT CLEARANCE LABEL DEGENERACY`; keep Full AJAE-X locked and stop for a separately frozen synthetic-supervision revision. Otherwise: `NO DIRECT CLEARANCE DEGENERACY DETECTED`; record the mismatch as a known limitation and proceed immediately to AJAE-F0-X.
+Failure classification: Any identity, count, implementation or deterministic-reproduction mismatch is an `implementation_defect` and must be repaired under this freeze. Only the frozen near-saturation outcome can block Full AJAE-X.
+Unlocked next node: Pending the sole branch above. E78-X/B2 remains a deferred ablation even if E76-C1 does not trigger.
+Invalidated downstream evidence: None before execution. Gate 1 remains PASS under its original seven-feature audit; E76-C1 is a later method-continuation risk screen.
+Descriptive observations: Pending.
+Notes: The fold plan reuses exact test/train/excluded counts `[61,46,91,74,97]`, `[913,1004,800,861,832]`, `[373,297,456,412,418]`, yielding 369 unique OOF pairs. Models, thresholds, 2,000 matched-pair cluster bootstrap replicates, public/hidden seals and all formal Gate 2/3 criteria are unchanged.
 
 ## E76-X | Deferred Full Two-Seed B1 Safety
 
@@ -4679,16 +4704,16 @@ Notes:
 
 # 7. How to Advance AJAE with This State Machine
 
-1. The authoritative status is E50–E73 PASS. E74 three-seed confirmation is suspended after seeds 0/1; seed 2 is preserved at its exact block checkpoint. E75-X is descriptively complete; E76-X-lite requires scientific safety review; E76-V1's first visual artifact is invalidated and its RGB-only viewer-format correction is frozen before rerun; full E76-X is deferred intact.
-2. Gate 1 is closed and formal E75–E77 remain locked. E78-X and B2/B3 seeds 0/1 remain locked. Correcting E76-V1's display implementation cannot itself remove the E76-X-lite moving-normal obstacle or unlock another experiment.
+1. The authoritative status is E50–E73 PASS. E74 three-seed confirmation is suspended after seeds 0/1; seed 2 is preserved at its exact block checkpoint. E75-X is descriptively complete, E76-X-lite's moving-normal stop signal is preserved, and E76-V1 is closed as a non-adjudicating descriptive review. E76-C1 is the sole current node; full E76-X remains deferred intact.
+2. Gate 1 is closed and formal E75–E77 remain locked. E78-X/B2 is deferred until the full method shows viability. Full AJAE-X remains locked until E76-C1 either detects direct clearance degeneracy and stops for a separate supervision revision, or finds no such near-saturated shortcut and unlocks AJAE-F0-X.
 3. Every later phase first completes its whole-phase design freeze, then executes its nodes.
 4. Preflight checks only identity, support, schema, interface, and resources; it does not inspect formal outcomes.
 5. Classify FAIL using the five frozen categories. A `descriptive_deviation` is recorded and execution continues; it cannot create a new hard gate.
 6. Only a change to the scientific construct invalidates affected downstream evidence. A pure implementation repair reruns a versioned node under the same design.
 7. Do not train AJAE before E49, train a five-frame model before E77, access the 19 sequences before E98, or use the 51 hidden sequences before Gate 4 PASS.
 
-The main chain from the current route is:
+The exploratory chain from the current route is:
 
-E38 → … → E44 → E45B-v2 → E48 → E49 → E50 → … → E77 → E78 → … → E84 → E85 → … → E98 → E99 → … → E104.
+E76-C1 → AJAE-F0-X → full AJAE seed 0 → B3/B4 evaluation → conditional seed 1 → two-seed viability review → deferred B2 ablation and later confirmation when supported.
 
 Only completion of E104 means that AJAE, under the current definition, has closed the complete chain from counterfactual worlds and renderer through model, development evidence, real-OOD confirmation, and hidden testing.
