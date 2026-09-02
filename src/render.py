@@ -17308,7 +17308,7 @@ def _e76_c1_worker(index: int) -> tuple[int, int, float, int]:
         dtype=np.bool_,
     )
     official_range = np.asarray(grid.official_ranges(rendered.source))
-    returned &= (official_range >= 2.5) & (official_range <= 50.0)
+    returned = returned & (official_range >= 2.5) & (official_range <= 50.0)
     visible_count = int(np.count_nonzero(returned))
     if visible_count != expected_nvis:
         raise RenderError(
