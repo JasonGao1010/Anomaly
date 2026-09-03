@@ -4685,6 +4685,40 @@ def render_frames(
         yield render_frame(frame, world, ray_grid, sensor)
 
 
+def source_observation_identity(source: SourceFrame) -> str:
+    """Bind one rendered scan identity to its actual geometry, pose, and labels."""
+
+    if not isinstance(source, SourceFrame):
+        raise TypeError("source observation identity requires a SourceFrame")
+    digest = hashlib.sha256(b"AJAE-schema31-rendered-source-observation\0")
+    digest.update(
+        json.dumps(
+            {
+                "partition": source.partition,
+                "sequence_id": source.sequence_id,
+                "frame_id": source.frame_id,
+                "labels_available": source.labels is not None,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    )
+    arrays: list[tuple[str, np.ndarray]] = [
+        ("xyzi", source.xyzi),
+        ("lidar_pose", source.lidar_pose),
+        ("real_slots", source.real_slots),
+    ]
+    if source.labels is not None:
+        arrays.append(("packed_labels", source.labels.packed))
+    for name, value in arrays:
+        array = np.ascontiguousarray(value)
+        digest.update(name.encode("ascii"))
+        digest.update(array.dtype.str.encode("ascii"))
+        digest.update(np.asarray(array.shape, dtype="<i8").tobytes())
+        digest.update(array.tobytes())
+    return digest.hexdigest()
+
+
 @dataclass(frozen=True, slots=True)
 class WindowEntityDescriptor:
     """Observable five-scan geometry for one inserted entity."""
@@ -4850,6 +4884,15 @@ class WindowWorld:
         object.__setattr__(self, "descriptors", descriptors)
 
     @property
+    def source_observation_identities(self) -> tuple[str, str, str, str, str]:
+        """Return the five ordered content identities consumed by this window."""
+
+        identities = tuple(
+            source_observation_identity(item.source) for item in self.rendered_frames
+        )
+        return identities  # type: ignore[return-value]
+
+    @property
     def identity(self) -> str:
         payload = {
             "format": "ajae-window-world-v1",
@@ -4859,6 +4902,7 @@ class WindowWorld:
             "window_start": self.window_start,
             "frame_ids": self.frame_ids,
             "renderer_identity": self.renderer_identity,
+            "source_observation_identities": self.source_observation_identities,
         }
         return hashlib.sha256(
             json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
@@ -4874,6 +4918,9 @@ class WindowWorld:
             "window_start": self.window_start,
             "frame_ids": list(self.frame_ids),
             "renderer_identity": self.renderer_identity,
+            "source_observation_identities": list(
+                self.source_observation_identities
+            ),
             "world": self.world.to_dict(),
             "report": self.report.to_dict(),
             "descriptors": [item.to_dict() for item in self.descriptors],
@@ -5532,8 +5579,28 @@ class DevelopmentClipWorld:
         )
         if self.mechanism != expected_mechanism:
             raise RenderError("development mechanism does not match proxy geometry")
+        # Repeated window views of one physical frame must be byte-identical.
+        self.source_observation_identities
         object.__setattr__(self, "frame_ids", frame_ids)
         object.__setattr__(self, "windows", windows)
+
+    @property
+    def source_observation_identities(self) -> tuple[str, ...]:
+        """Return one stable rendered-content identity for each clip frame."""
+
+        by_frame: dict[int, str] = {}
+        for window in self.windows:
+            for rendered in window.rendered_frames:
+                frame_id = int(rendered.frame_id)
+                identity = source_observation_identity(rendered.source)
+                previous = by_frame.setdefault(frame_id, identity)
+                if previous != identity:
+                    raise RenderError(
+                        "one development source frame changed across overlapping windows"
+                    )
+        if set(by_frame) != set(self.frame_ids):
+            raise RenderError("development windows do not cover every clip frame")
+        return tuple(by_frame[frame_id] for frame_id in self.frame_ids)
 
     @property
     def identity(self) -> str:
@@ -5544,6 +5611,7 @@ class DevelopmentClipWorld:
             "frame_ids": self.frame_ids,
             "renderer_identity": self.renderer_identity,
             "mechanism": self.mechanism,
+            "source_observation_identities": self.source_observation_identities,
         }
         return hashlib.sha256(
             json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
@@ -5558,6 +5626,9 @@ class DevelopmentClipWorld:
             "frame_ids": list(self.frame_ids),
             "renderer_identity": self.renderer_identity,
             "mechanism": self.mechanism,
+            "source_observation_identities": list(
+                self.source_observation_identities
+            ),
             "world": self.world.to_dict(),
             "report": self.report.to_dict(),
             "windows": [
@@ -5565,6 +5636,9 @@ class DevelopmentClipWorld:
                     "identity": item.identity,
                     "window_start": item.window_start,
                     "frame_ids": list(item.frame_ids),
+                    "source_observation_identities": list(
+                        item.source_observation_identities
+                    ),
                     "descriptors": [
                         descriptor.to_dict() for descriptor in item.descriptors
                     ],
@@ -5725,12 +5799,10 @@ def development_worlds_payload(
     checks = {} if validation is None else dict(validation)
     if any(type(value) is not bool for value in checks.values()):
         raise RenderError("development validation values must be boolean")
-    validated = bool(items) and bool(checks) and all(checks.values())
-    status = (
-        "not_generated_R02"
-        if not items
-        else "validated_frozen" if validated else "definitions_only_unvalidated"
-    )
+    # Boolean implementation checks are not a scientific R02 verdict.  The
+    # current schema deliberately remains unvalidated until result-blind
+    # thresholds and a structured adjudication are frozen in the protocol.
+    status = "not_generated_R02" if not items else "definitions_only_unvalidated"
     return {
         "format": DEVELOPMENT_FORMAT,
         "protocol_schema": DEVELOPMENT_PROTOCOL_SCHEMA,

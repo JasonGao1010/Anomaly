@@ -297,6 +297,7 @@ class DevelopmentWindow:
     identity: str
     window_start: int
     frame_ids: tuple[int, ...]
+    source_observation_identities: tuple[str, ...]
     descriptors: tuple[Mapping[str, object], ...]
 
 
@@ -310,6 +311,7 @@ class DevelopmentClip:
     frame_ids: tuple[int, ...]
     renderer_identity: str
     mechanism: str
+    source_observation_identities: tuple[str, ...]
     world: Mapping[str, object]
     report: Mapping[str, object]
     windows: tuple[DevelopmentWindow, ...]
@@ -451,6 +453,28 @@ class AJAEProtocol:
         ).hexdigest()
 
     @property
+    def development_population_identity(self) -> str:
+        """Bind development worlds only to rules that determine their content."""
+
+        data = _mapping(self._document["data"], "data")
+        evaluation = _mapping(self._document["evaluation"], "evaluation")
+        payload = {
+            "format": "ajae-schema31-development-population-protocol-v1",
+            "schema_version": SCHEMA_VERSION,
+            "scientific_contract": _plain(self._document["scientific_contract"]),
+            "development_data": _plain(data["development"]),
+            "window": _plain(self._document["window"]),
+            "labels": _plain(self._document["labels"]),
+            "render": _plain(self._document["render"]),
+            "synthetic_development": _plain(
+                evaluation["synthetic_development"]
+            ),
+        }
+        return hashlib.sha256(
+            json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+
+    @property
     def window_frames(self) -> int:
         return WINDOW_FRAMES
 
@@ -549,7 +573,7 @@ class AJAEProtocol:
             "privileged_frame": None,
             "all_window_members_equally_supervised": True,
             "all_visible_returns_receive_logits": True,
-            "learned_time_or_position_input": False,
+            "learned_scan_time_or_member_position_input": False,
             "full_model_spatial_operations": [
                 "joint_voxelization", "joint_radius_neighborhood", "joint_knn_decoding"
             ],
@@ -685,6 +709,7 @@ class AJAEProtocol:
             "physical_scope_excludes", "world_unit", "freeze_before_render",
             "shared_renderer_for_normal_control_and_proxy", "window_descriptors",
             "proxy_control_matching", "forbidden_densification",
+            "rendered_observation_identity_fields",
         }
         _exact_keys(render, keys, "render")
         _expect(render["geometry_schema"], 7, "render.geometry_schema")
@@ -695,6 +720,14 @@ class AJAEProtocol:
         _expect(render["shared_renderer_for_normal_control_and_proxy"], True, "render.shared_renderer")
         _expect(render["freeze_before_render"], ["five_source_frames", "normal_controls", "anomaly_proxies", "world_positions", "orientations", "scales", "materials", "all_random_seeds"], "render.freeze_before_render")
         _expect(render["forbidden_densification"], ["synthetic_point_completion", "bottom_return_insertion", "scan_duplication", "single_scan_copying"], "render.forbidden_densification")
+        _expect(
+            render["rendered_observation_identity_fields"],
+            [
+                "partition", "sequence_id", "frame_id", "xyzi", "lidar_pose",
+                "real_slots", "packed_labels",
+            ],
+            "render.rendered_observation_identity_fields",
+        )
 
         ray = _mapping(render["ray_grid"], "render.ray_grid")
         _expect(ray, {"beam_count": 128, "column_count": 1024, "canonical_identity": ["beam_id", "azimuth_column"], "file_slot_role": "input_output_mapping_only"}, "render.ray_grid")
@@ -853,7 +886,11 @@ class AJAEProtocol:
         _expect(bank, {
             "name": "window_train_bank", "unit": "WindowWorld",
             "shared_by": ["B1", "B2", "B3"],
-            "required_identity": ["five_source_frames", "WorldSpec", "renderer_identity", "STU_identity", "point_identity", "labels"],
+            "required_identity": [
+                "five_source_frames", "WorldSpec", "five_rendered_point_arrays",
+                "renderer_identity", "STU_identity", "point_identity", "labels",
+                "window_level_density_descriptors",
+            ],
             "condition_invariants": ["same_five_aligned_points", "same_point_labels", "same_entry_order", "same_model_parameter_shapes_and_initialization", "same_loss", "same_optimizer"],
         }, "training.bank")
         _expect(training["loss"], {
@@ -882,8 +919,30 @@ class AJAEProtocol:
             raise ProtocolError("training.formal.recipe_status is not recognized")
         _expect(formal["allowed_only_after"], "R05", "training.formal.allowed_only_after")
         selection = _mapping(training["checkpoint_selection"], "checkpoint selection")
-        _exact_keys(selection, {"metric", "fusion_scope", "status"}, "checkpoint selection")
-        _expect(selection["metric"], "macro_mean_of_per_DevelopmentClipWorld_all_occurrence_fused_point_AP", "checkpoint metric")
+        _exact_keys(
+            selection,
+            {
+                "metric", "eligible_mechanism", "eligible_clip_count",
+                "held_out_torus_use", "fusion_scope", "status",
+            },
+            "checkpoint selection",
+        )
+        _expect(
+            selection["metric"],
+            "macro_mean_of_per_in_generator_DevelopmentClipWorld_all_occurrence_fused_point_AP",
+            "checkpoint metric",
+        )
+        _expect(
+            selection["eligible_mechanism"],
+            "in_generator",
+            "checkpoint eligible mechanism",
+        )
+        _expect(selection["eligible_clip_count"], 24, "checkpoint eligible clip count")
+        _expect(
+            selection["held_out_torus_use"],
+            "diagnostic_only_excluded_from_all_selection_and_method_changes",
+            "held-out torus use",
+        )
         _expect(selection["fusion_scope"], "within_one_frozen_world_identity_only", "checkpoint fusion scope")
         _nonempty_string(selection["status"], "checkpoint selection status")
 
@@ -894,7 +953,17 @@ class AJAEProtocol:
             "model_output_members": list(WINDOW_MEMBER_OFFSETS),
             "real_sequence_fusion_key": ["partition", "sequence_id", "source_frame", "source_ray"],
             "synthetic_fusion_key": ["world_identity", "source_frame", "source_ray"],
-            "fusion_value": "sigmoid_probability",
+            "fusion_values": {
+                "B0": {
+                    "input": "raw_finite_frozen_STU_official_MaxLogit_score",
+                    "per_occurrence_transform": "none",
+                    "repeated_window_mean": "identity_preserving",
+                },
+                "B1_B2_B3": {
+                    "input": "anomaly_logit",
+                    "per_occurrence_transform": "sigmoid",
+                },
+            },
             "fusion_reduction": "equal_arithmetic_mean_over_every_legal_window_occurrence",
             "domain": "every_visible_return_covered_by_at_least_one_legal_five_scan_window",
             "occurrence_count_strata": [1, 2, 3, 4, 5],
@@ -1049,7 +1118,7 @@ def load_development_worlds(
     _expect(root["format"], DEVELOPMENT_FORMAT, "development format")
     _expect(root["protocol_schema"], SCHEMA_VERSION, "development protocol_schema")
     _expect(
-        root["protocol_identity"], protocol.scientific_identity,
+        root["protocol_identity"], protocol.development_population_identity,
         "development protocol_identity",
     )
     _expect(root["sequence_id"], 201, "development sequence_id")
@@ -1088,7 +1157,8 @@ def load_development_worlds(
         clip = _mapping(raw_clip, clip_name)
         clip_keys = {
             "format", "identity", "world_identity", "clip_start", "frame_ids",
-            "renderer_identity", "mechanism", "world", "report", "windows",
+            "renderer_identity", "mechanism", "source_observation_identities",
+            "world", "report", "windows",
         }
         _exact_keys(clip, clip_keys, clip_name)
         _expect(clip["format"], "ajae-development-clip-world-v1", f"{clip_name}.format")
@@ -1108,6 +1178,19 @@ def load_development_worlds(
         mechanism = _nonempty_string(clip["mechanism"], f"{clip_name}.mechanism")
         if mechanism not in {"in_generator", "torus_SDF"}:
             raise ProtocolError(f"{clip_name}.mechanism is unsupported")
+        source_observation_identities = tuple(
+            sha(value, f"{clip_name}.source_observation_identities[{index}]")
+            for index, value in enumerate(
+                _list(
+                    clip["source_observation_identities"],
+                    f"{clip_name}.source_observation_identities",
+                )
+            )
+        )
+        if len(source_observation_identities) != len(frame_ids):
+            raise ProtocolError(
+                f"{clip_name} must bind one observation identity per source frame"
+            )
         world = _mapping(clip["world"], f"{clip_name}.world")
         report = _mapping(clip["report"], f"{clip_name}.report")
         if world.get("source_sequence_id") != 201 or report.get("source_sequence_id") != 201:
@@ -1145,7 +1228,11 @@ def load_development_worlds(
             window_name = f"{clip_name}.windows[{window_index}]"
             window = _mapping(raw_window, window_name)
             _exact_keys(
-                window, {"identity", "window_start", "frame_ids", "descriptors"},
+                window,
+                {
+                    "identity", "window_start", "frame_ids",
+                    "source_observation_identities", "descriptors",
+                },
                 window_name,
             )
             window_identity = sha(window["identity"], f"{window_name}.identity")
@@ -1155,6 +1242,29 @@ def load_development_worlds(
                 window_start + offset for offset in WINDOW_MEMBER_OFFSETS
             ):
                 raise ProtocolError(f"{window_name} has the wrong five-scan identity")
+            window_observation_identities = tuple(
+                sha(
+                    value,
+                    f"{window_name}.source_observation_identities[{index}]",
+                )
+                for index, value in enumerate(
+                    _list(
+                        window["source_observation_identities"],
+                        f"{window_name}.source_observation_identities",
+                    )
+                )
+            )
+            clip_offset = window_start - start
+            if (
+                len(window_observation_identities) != WINDOW_FRAMES
+                or window_observation_identities
+                != source_observation_identities[
+                    clip_offset : clip_offset + WINDOW_FRAMES
+                ]
+            ):
+                raise ProtocolError(
+                    f"{window_name} observation identities differ from its clip"
+                )
             expected_window_identity = digest(
                 {
                     "format": "ajae-window-world-v1",
@@ -1164,6 +1274,7 @@ def load_development_worlds(
                     "window_start": window_start,
                     "frame_ids": window_frames,
                     "renderer_identity": renderer_identity,
+                    "source_observation_identities": window_observation_identities,
                 }
             )
             if window_identity != expected_window_identity:
@@ -1188,6 +1299,7 @@ def load_development_worlds(
                     window_identity,
                     window_start,
                     window_frames,
+                    window_observation_identities,
                     tuple(descriptor_items),
                 )
             )
@@ -1199,6 +1311,7 @@ def load_development_worlds(
                 "frame_ids": frame_ids,
                 "renderer_identity": renderer_identity,
                 "mechanism": mechanism,
+                "source_observation_identities": source_observation_identities,
             }
         )
         if identity != expected_clip_identity:
@@ -1211,6 +1324,7 @@ def load_development_worlds(
                 frame_ids,
                 renderer_identity,
                 mechanism,
+                source_observation_identities,
                 _freeze(world),  # type: ignore[arg-type]
                 _freeze(report),  # type: ignore[arg-type]
                 tuple(parsed_windows),
@@ -1235,19 +1349,31 @@ def load_development_worlds(
     window_count = _integer(root["window_count"], "development.window_count")
     if clip_count != len(clips) or window_count != sum(len(item.windows) for item in clips):
         raise ProtocolError("development clip/window counts are inconsistent")
+    scientific_verdict = root["scientific_verdict"]
     if status == "not_generated_R02":
         if clips or any(validation.values()) or root["scientific_verdict"] is not None:
             raise ProtocolError("not-generated development data cannot carry evidence")
     elif not clips:
         raise ProtocolError("generated development data cannot be empty")
-    if status == "validated_frozen" and (
-        not validation or not all(validation.values())
-    ):
-        raise ProtocolError("validated development data require every check to pass")
+    if status == "definitions_only_unvalidated" and scientific_verdict is not None:
+        raise ProtocolError("unvalidated development definitions cannot carry a verdict")
+    if status == "validated_frozen":
+        if protocol.render["proxy_control_matching"]["thresholds"] == (
+            "freeze_result_blind_in_R02"
+        ):
+            raise ProtocolError(
+                "R02 thresholds must be frozen before development validation"
+            )
+        if not validation or not all(validation.values()) or not isinstance(
+            scientific_verdict, Mapping
+        ):
+            raise ProtocolError(
+                "validated development data require checks and a structured verdict"
+            )
     return DevelopmentWorlds(
         DEVELOPMENT_FORMAT,
         SCHEMA_VERSION,
-        protocol.scientific_identity,
+        protocol.development_population_identity,
         201,
         status,
         MappingProxyType(validation),

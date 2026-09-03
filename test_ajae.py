@@ -1,14 +1,19 @@
 #!/usr/bin/env python3
-"""Focused scientific-semantic tests for the sole AJAE schema-31 route."""
+"""Focused scientific-semantic tests for the sole AJAE schema-31 route.
+
+Every fixture is small and synthetic. The suite never opens the real STU
+sequences, renders a bank, loads the released network, or starts training.
+"""
 
 from __future__ import annotations
 
 import hashlib
 import importlib.util
+import inspect
 import json
 import math
 import sys
-from collections import Counter
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -17,42 +22,35 @@ import pytest
 import torch
 from torch import nn
 
-import src.render as render_module
-import src.train as train_module
+import src.model as model_module
 from src.evaluate import (
+    AJAE_FUSION_VALUE,
+    B0_FUSION_VALUE,
+    FUSION_SEMANTICS,
+    METHOD_FREEZE_FORMAT,
+    METHOD_FREEZE_STATUS,
     AJAEInference,
+    DevelopmentClipResult,
+    DevelopmentFusedAP,
     EvaluationError,
-    MovingNormalDiagnostic,
-    ObjectScaleDiagnostic,
+    EvaluationIdentity,
+    MethodFreezeRecord,
     PointMetricAccumulator,
     WindowScoreFusion,
-    _protocol_slot_to_ray,
-    _validate_public_result,
-    load_prediction_coverage,
+    open_sealed_sequence,
 )
-from src.model import AJAEPointTransformer, assigned_stu_evidence, temporal_radius_knn
-from src.qualify import (
-    E63_COMMON_SAFETY_FOLD,
-    PHASE5_FRAMES,
-    e63_identity_arrays,
-    e75_bootstrap_identity_arrays,
-    e75_exploratory_statistics,
-    e75_superiority_statistics,
-    e76_lite_pure_frame_rows,
-    e76v1_group_a_selection,
-    e76_safety_statistics,
-    phase7_mechanical_arrays,
-    e62_fixture_arrays,
-    e53_frame_seed,
-    independent_sparse_quantize,
-    phase5_frame_ids,
-    run_e62,
-    _read_binary_ply,
-    _write_binary_ply,
+from src.model import (
+    GroupedKnnUpsample,
+    GroupedRadiusKNN,
+    GroupedVoxelPool,
+    JointWindowPointTransformer,
+    STUPointEncoding,
+    assigned_stu_evidence,
+    stu_input_identity,
 )
 from src.protocol import (
-    CAUSAL_OFFSETS,
-    RELATIVE_TIMES,
+    SCHEMA_VERSION,
+    WINDOW_MEMBER_OFFSETS,
     ExperimentCondition,
     FrameSpan,
     ProtocolError,
@@ -60,48 +58,36 @@ from src.protocol import (
     load_development_worlds,
     load_protocol,
 )
+from src.qualify import joint_gradient_audit, scan_permutation_audit
 from src.render import (
-    PROCEDURAL_GENERATOR_SCHEMA,
+    DevelopmentClipWorld,
     HeldOutTorusShape,
+    MaterialSpec,
     NormalTemplateShape,
+    ObjectSpec,
     RayGrid,
+    RenderError,
     SensorCalibration,
     ShapeSpec,
-    QualifiedSupportPool,
-    ObservedObstacleIndex,
-    SupportPoints,
+    WindowEntityDescriptor,
+    WindowWorld,
+    WorldGenerationReport,
     WorldSpec,
-    load_sensor_calibration,
+    match_window_entities,
     render_frame,
-    sample_held_out_anomaly_shape,
-    sample_training_world,
-    sample_training_anomaly_shape,
+    save_development_worlds,
+    source_observation_identity,
+    window_matching_balance,
 )
 from src.scene import (
     LabelMode,
     PointLabels,
     SceneDataError,
     STUSequence,
+    WindowReferencePose,
     assemble_window,
     canonical_ray_mapping_digest,
     make_source_frame,
-)
-from src.train import (
-    AJAETrainer,
-    DevelopmentEvidence,
-    DevelopmentWorldMetrics,
-    FrameCache,
-    FrameCacheKey,
-    TrainConfig,
-    TrainingSchedule,
-    TrainingError,
-    _finite_world_report_document,
-    balanced_bce_loss,
-    checkpoint_selection_key,
-    experiment_condition,
-    train_all_seeds,
-    training_schedule,
-    validate_formal_preflight,
 )
 
 
@@ -122,78 +108,560 @@ def _labels(semantic: np.ndarray) -> PointLabels:
     )
 
 
-def test_public_sequences_are_sealed_before_path_resolution(
-    tmp_path: Path,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    protocol = load_protocol(PROTOCOL_PATH)
-    with pytest.raises(SceneDataError, match="sealed until"):
-        STUSequence.open(
-            tmp_path / "does-not-exist",
-            protocol=protocol,
-            partition="val",
-            sequence_id=protocol.public_sequence_ids[0],
-            label_mode=LabelMode.REQUIRED,
-        )
-    assert "Refused sealed sequence access" in caplog.text
-    assert not (tmp_path / "does-not-exist").exists()
-
-
-def test_hidden_sequences_are_sealed_before_path_resolution(
-    tmp_path: Path,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    protocol = load_protocol(PROTOCOL_PATH)
-    with pytest.raises(SceneDataError, match="sealed until"):
-        STUSequence.open(
-            tmp_path / "does-not-exist",
-            protocol=protocol,
-            partition="test",
-            sequence_id=protocol.hidden_sequence_ids[0],
-            label_mode=LabelMode.FORBIDDEN,
-        )
-    assert "Refused sealed sequence access" in caplog.text
-    assert not (tmp_path / "does-not-exist").exists()
-
-
-def _organized_frame(frame_id: int, *, real_slot: int = 0) -> object:
-    xyzi = np.zeros((128 * 1024, 4), dtype=np.float32)
-    xyzi[real_slot] = (5.0 + frame_id, 0.1, 0.2, 0.4)
-    semantic = np.zeros(xyzi.shape[0], dtype=np.uint16)
-    semantic[real_slot] = 10
+def _yaw_pose(angle: float, translation: tuple[float, float, float]) -> np.ndarray:
+    cosine, sine = math.cos(angle), math.sin(angle)
     pose = np.eye(4, dtype=np.float64)
-    pose[0, 3] = 0.1 * frame_id
+    pose[:3, :3] = (
+        (cosine, -sine, 0.0),
+        (sine, cosine, 0.0),
+        (0.0, 0.0, 1.0),
+    )
+    pose[:3, 3] = translation
+    return pose
+
+
+def _window_sources() -> tuple[object, ...]:
+    output = []
+    for offset, frame_id in enumerate(range(10, 15)):
+        xyzi = np.asarray(
+            (
+                (1.0 + 0.1 * offset, 0.2, 0.1, 0.20),
+                (0.0, 0.0, 0.0, 0.00),
+                (2.0, -0.3 + 0.02 * offset, 0.4, 0.35),
+                (3.0, 0.4, -0.2 + 0.01 * offset, 0.50),
+            ),
+            dtype=np.float32,
+        )
+        pose = _yaw_pose(
+            -0.10 + 0.05 * offset,
+            (0.4 * offset, -0.15 * offset, 0.03 * offset),
+        )
+        output.append(
+            make_source_frame(
+                frame_id,
+                xyzi,
+                pose,
+                _labels(np.asarray((10, 0, 10, 10), dtype=np.uint16)),
+                partition="train",
+                sequence_id=206,
+            )
+        )
+    return tuple(output)
+
+
+def _one_return_source(frame_id: int, distance: float, intensity: float) -> object:
     return make_source_frame(
         frame_id,
-        xyzi,
-        pose,
-        _labels(semantic),
+        np.asarray(
+            ((distance, 0.0, 0.0, intensity), (0.0, 0.0, 0.0, 0.0)),
+            dtype=np.float32,
+        ),
+        np.eye(4, dtype=np.float64),
+        _labels(np.asarray((10, 0), dtype=np.uint16)),
         partition="train",
         sequence_id=206,
     )
 
 
-def _small_ray_fixture() -> tuple[object, RayGrid]:
-    columns = 8
-    azimuth = np.arange(columns, dtype=np.float64) * (-2.0 * np.pi / columns)
-    directions = np.stack((np.cos(azimuth), np.sin(azimuth), np.zeros(columns)), axis=1)
-    grid = RayGrid(directions, np.zeros(1), azimuth, beam_count=1)
-    ranges = np.linspace(4.0, 8.0, columns, dtype=np.float32)
-    xyzi = np.zeros((columns, 4), dtype=np.float32)
-    xyzi[:, :3] = (directions * ranges[:, None]).astype(np.float32)
-    xyzi[:, 3] = np.linspace(0.1, 0.8, columns, dtype=np.float32)
-    frame = make_source_frame(
-        0,
-        xyzi,
-        np.eye(4, dtype=np.float64),
-        _labels(np.full(columns, 10, dtype=np.uint16)),
-        partition="fixture",
-        sequence_id=99,
+def _stu_encoding_for(source: object) -> STUPointEncoding:
+    return STUPointEncoding(
+        point_features=torch.zeros((1, 128)),
+        assigned_query=torch.zeros(1, dtype=torch.long),
+        normal_evidence=torch.zeros((1, 19)),
+        reliability_assign=torch.zeros(1),
+        reliability_noobj=torch.zeros(1),
+        maxlogit_score=torch.zeros(1),
+        inverse_map=torch.zeros(1, dtype=torch.long),
+        real_slots=torch.from_numpy(source.real_slots.astype(np.int64, copy=True)),
+        input_identity=stu_input_identity(
+            source.coordinates, source.features, source.real_slots
+        ),
     )
-    return frame, grid
 
 
-def test_ray_grid_round_trip_uses_calibrated_beam_origin() -> None:
+def _descriptor(
+    object_id: int,
+    label: str,
+    support: int,
+    *,
+    joint_voxels: int = 6,
+    distance: float = 12.0,
+) -> WindowEntityDescriptor:
+    returns = (2, 2, 2, 2, 2)
+    per_scan_voxels = (2, 2, 2, 2, 2)
+    beam = [0] * 128
+    beam[object_id % 128] = sum(returns)
+    return WindowEntityDescriptor(
+        object_id=object_id,
+        label=label,  # type: ignore[arg-type]
+        visible_returns_by_scan=returns,
+        spatial_voxels_by_scan=per_scan_voxels,
+        joint_visible_return_count=sum(returns),
+        joint_spatial_voxel_count=joint_voxels,
+        maximum_single_scan_spatial_voxel_count=max(per_scan_voxels),
+        densification_gain=joint_voxels / max(per_scan_voxels),
+        duplicate_fraction=1.0 - joint_voxels / sum(returns),
+        median_distance_m=distance,
+        occlusion_rate=0.2,
+        support_semantic_id=support,
+        visible_scan_count=5,
+        minimum_visible_return_height_m=0.03,
+        intensity_q05_median_q95=(0.1, 0.3, 0.7),
+        beam_histogram=tuple(beam),
+    )
+
+
+def _stub_window(seed: str, descriptors: tuple[WindowEntityDescriptor, ...]) -> WindowWorld:
+    """Build only the validated interface needed to isolate matching logic."""
+
+    item = object.__new__(WindowWorld)
+    digest = hashlib.sha256(seed.encode("ascii")).hexdigest()
+    sources = tuple(
+        make_source_frame(
+            frame_id,
+            np.asarray(((4.0, 0.0, 0.0, 0.2),), dtype=np.float32),
+            np.eye(4, dtype=np.float64),
+            _labels(np.asarray((10,), dtype=np.uint16)),
+            partition="train",
+            sequence_id=201,
+        )
+        for frame_id in range(4, 9)
+    )
+    object.__setattr__(item, "window_start", 4)
+    object.__setattr__(item, "frame_ids", (4, 5, 6, 7, 8))
+    object.__setattr__(
+        item,
+        "world",
+        SimpleNamespace(identity=digest, source_sequence_id=201),
+    )
+    object.__setattr__(item, "report", None)
+    object.__setattr__(item, "renderer_identity", "a" * 64)
+    object.__setattr__(item, "reference_pose", None)
+    object.__setattr__(
+        item,
+        "rendered_frames",
+        tuple(SimpleNamespace(source=source) for source in sources),
+    )
+    object.__setattr__(item, "descriptors", descriptors)
+    return item
+
+
+def _training_window(renderer_identity: str) -> object:
+    from src.train import WindowTrainingData
+
+    world = WorldSpec(3101, 206)
+    report = WorldGenerationReport(
+        world_seed=world.seed,
+        source_sequence_id=world.source_sequence_id,
+        world_type=world.world_type,
+        world_attempt=0,
+        normal_count=0,
+        anomaly_count=0,
+        count_seed=3102,
+        label_order_seed=3103,
+    )
+    frame_ids = (0, 1, 2, 3, 4)
+    sources = tuple(
+        _one_return_source(frame_id, 4.0 + frame_id, 0.2)
+        for frame_id in frame_ids
+    )
+    observation_identities = tuple(
+        source_observation_identity(source) for source in sources
+    )
+    stu_identities = tuple(
+        stu_input_identity(source.coordinates, source.features, source.real_slots)
+        for source in sources
+    )
+    identity_payload = {
+        "format": "ajae-window-world-v1",
+        "world_identity": world.identity,
+        "partition": "train",
+        "sequence_id": 206,
+        "window_start": 0,
+        "frame_ids": frame_ids,
+        "renderer_identity": renderer_identity,
+        "source_observation_identities": observation_identities,
+    }
+    window_identity = hashlib.sha256(
+        json.dumps(identity_payload, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    manifest = {
+        **identity_payload,
+        "identity": window_identity,
+        "world": world.to_dict(),
+        "report": report.to_dict(),
+        "descriptors": [],
+    }
+    groups = torch.arange(5, dtype=torch.long)
+    generator = torch.Generator().manual_seed(3104)
+    return WindowTrainingData(
+        coordinates=torch.column_stack(
+            (groups.float(), torch.zeros(5), torch.zeros(5))
+        ),
+        scan_group=groups,
+        stu_features=torch.randn((5, 128), generator=generator),
+        normal_evidence=torch.randn((5, 19), generator=generator),
+        reliability_assign=torch.rand(5, generator=generator),
+        reliability_noobj=torch.rand(5, generator=generator),
+        intensity=torch.rand(5, generator=generator),
+        target=torch.zeros(5, dtype=torch.bool),
+        valid=torch.ones(5, dtype=torch.bool),
+        source_frame=groups,
+        source_slot=torch.zeros(5, dtype=torch.long),
+        source_ray=torch.zeros(5, dtype=torch.long),
+        world_identity=world.identity,
+        source_observation_identities=observation_identities,
+        stu_input_identities=stu_identities,
+        window_manifest=manifest,
+    )
+
+
+def _minimal_development_clips() -> tuple[DevelopmentClipWorld, ...]:
+    """Build the frozen 24+6 shape with one point per source observation."""
+
+    normal_shape = NormalTemplateShape(
+        np.asarray(
+            ((0.0, 0.0, 0.0), (0.3, 0.0, 0.0), (0.0, 0.3, 0.0), (0.0, 0.0, 0.3))
+        ),
+        np.empty((0, 3), dtype=np.int32),
+        206,
+        0,
+        10,
+        1,
+        (0.0, 0.0, 0.0),
+    )
+    procedural_shape = ShapeSpec(
+        ((0.2, 0.2, 0.2),),
+        ((0.0, 0.0, 0.0),),
+        ((1.0, 1.0),),
+        (0.0,),
+        ("union",),
+    )
+    material = MaterialSpec(0.5, 0.1)
+    rotation = ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))
+    renderer_identity = "f" * 64
+    clips = []
+    for index in range(30):
+        torus = index >= 24
+        objects = (
+            ObjectSpec(
+                1,
+                "normal-control",
+                normal_shape,
+                material,
+                (8.0, 0.0, 0.0),
+                rotation,
+            ),
+            ObjectSpec(
+                2,
+                "anomaly-proxy",
+                HeldOutTorusShape(0.4, 0.1) if torus else procedural_shape,
+                material,
+                (10.0, 0.0, 0.0),
+                rotation,
+            ),
+        )
+        world = WorldSpec(5000 + index, 201, objects)
+        report = WorldGenerationReport(
+            world_seed=world.seed,
+            source_sequence_id=201,
+            world_type="mixed",
+            world_attempt=0,
+            normal_count=1,
+            anomaly_count=1,
+            count_seed=6000 + index,
+            label_order_seed=7000 + index,
+        )
+        start = 4 + 10 * index
+        sources = tuple(
+            make_source_frame(
+                frame_id,
+                np.asarray(((4.0, 0.0, 0.0, 0.2),), dtype=np.float32),
+                np.eye(4, dtype=np.float64),
+                _labels(np.asarray((10,), dtype=np.uint16)),
+                partition="train",
+                sequence_id=201,
+            )
+            for frame_id in range(start, start + 9)
+        )
+        windows = []
+        for offset in range(5):
+            window = object.__new__(WindowWorld)
+            members = sources[offset : offset + 5]
+            object.__setattr__(window, "window_start", start + offset)
+            object.__setattr__(
+                window, "frame_ids", tuple(item.frame_id for item in members)
+            )
+            object.__setattr__(window, "world", world)
+            object.__setattr__(window, "report", report)
+            object.__setattr__(window, "renderer_identity", renderer_identity)
+            object.__setattr__(window, "reference_pose", None)
+            object.__setattr__(
+                window,
+                "rendered_frames",
+                tuple(
+                    SimpleNamespace(frame_id=item.frame_id, source=item)
+                    for item in members
+                ),
+            )
+            object.__setattr__(
+                window,
+                "descriptors",
+                (
+                    _descriptor(1, "normal-control", 10),
+                    _descriptor(2, "anomaly-proxy", 10),
+                ),
+            )
+            windows.append(window)
+        clips.append(
+            DevelopmentClipWorld(
+                start,
+                tuple(item.frame_id for item in sources),
+                world,
+                report,
+                renderer_identity,
+                tuple(windows),
+                "torus_SDF" if torus else "in_generator",
+            )
+        )
+    return tuple(clips)
+
+
+def test_protocol_is_the_only_schema31_b0_to_b3_contract() -> None:
+    protocol = load_protocol(PROTOCOL_PATH)
+    assert protocol.schema_version == SCHEMA_VERSION == 31
+    assert [item.value for item in ExperimentCondition] == ["B0", "B1", "B2", "B3"]
+    assert set(protocol.experiments) == {"B0", "B1", "B2", "B3"}
+    assert protocol.window_member_offsets == WINDOW_MEMBER_OFFSETS == (0, 1, 2, 3, 4)
+    assert ExperimentCondition.B0.output_local_indices == (0,)
+    for condition in (ExperimentCondition.B1, ExperimentCondition.B2, ExperimentCondition.B3):
+        assert condition.input_member_indices == WINDOW_MEMBER_OFFSETS
+        assert condition.output_local_indices == WINDOW_MEMBER_OFFSETS
+    assert protocol.status["formal_training_allowed"] is False
+    assert protocol.model["input_dim"] == 150
+    assert {"relative_time", "absolute_time", "time_embedding"}.issubset(
+        protocol.model["forbidden_features"]
+    )
+
+
+def test_schema30_protocol_and_development_payload_are_rejected_early(
+    tmp_path: Path,
+) -> None:
+    old_protocol = tmp_path / "protocol30.json"
+    old_protocol.write_text(json.dumps({"schema_version": 30}), encoding="utf-8")
+    with pytest.raises(ProtocolError, match="schema 30 is retired"):
+        load_protocol(old_protocol)
+
+    protocol = load_protocol(PROTOCOL_PATH)
+    old_development = tmp_path / "dev30.json"
+    old_development.write_text(
+        json.dumps({"format": "ajae-development-worlds-v2", "protocol_schema": 30}),
+        encoding="utf-8",
+    )
+    with pytest.raises(ProtocolError, match="schema-30 centered"):
+        load_development_worlds(old_development, protocol=protocol)
+
+
+def test_training_entry_rejects_schema30_before_full_loader_or_bank(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import src.train as train_module
+
+    old_protocol = tmp_path / "protocol30.json"
+    old_protocol.write_text(json.dumps({"schema_version": 30}), encoding="utf-8")
+    calls = 0
+
+    def forbidden_loader(_path: object) -> object:
+        nonlocal calls
+        calls += 1
+        raise AssertionError("the full protocol loader must not see schema 30")
+
+    monkeypatch.setattr(train_module, "load_protocol", forbidden_loader)
+    bank = tmp_path / "bank-must-not-be-opened"
+    with pytest.raises(train_module.TrainingError, match="requires schema 31"):
+        train_module.run_training(
+            protocol_path=old_protocol,
+            bank_path=bank,
+            output_directory=tmp_path / "output",
+            mode="formal",
+            condition="B3",
+            seed=3101,
+            device="cpu",
+            config=None,  # type: ignore[arg-type]
+        )
+    assert calls == 0
+    assert not bank.exists()
+
+
+@pytest.mark.parametrize(
+    ("mode", "seed", "message"),
+    (
+        ("tiny_overfit", 1001, "permitted only during R04 or R05"),
+        ("pilot", 1001, "permitted only during R04 or R05"),
+        ("formal", 0, "completed R05 freeze"),
+    ),
+)
+def test_schema31_training_is_blocked_before_bank_loading(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mode: str,
+    seed: int,
+    message: str,
+) -> None:
+    import src.train as train_module
+
+    calls = 0
+
+    def forbidden_bank(*_args: object, **_kwargs: object) -> object:
+        nonlocal calls
+        calls += 1
+        raise AssertionError("a disabled formal route must not read the bank")
+
+    monkeypatch.setattr(train_module, "load_window_train_bank", forbidden_bank)
+    with pytest.raises(train_module.TrainingError, match=message):
+        train_module.run_training(
+            protocol_path=PROTOCOL_PATH,
+            bank_path=tmp_path / "bank-must-not-be-opened",
+            output_directory=tmp_path / "output",
+            mode=mode,
+            condition="B3",
+            seed=seed,
+            device="cpu",
+            config=None,  # type: ignore[arg-type]
+        )
+    assert calls == 0
+
+
+def test_frozen_sequence_spans_produce_exact_legal_window_counts() -> None:
+    protocol = load_protocol(PROTOCOL_PATH)
+    training = protocol.normal_training.legal_window_starts()
+    development = protocol.development_sequence.legal_window_starts()
+    assert len(training) == 445 and training == tuple(range(0, 445))
+    assert len(development) == 674 and development == tuple(range(4, 678))
+    assert protocol.window_frame_ids("train", 206, 444) == (444, 445, 446, 447, 448)
+    assert protocol.window_frame_ids("train", 201, 677) == (677, 678, 679, 680, 681)
+
+
+def test_empty_schema31_development_manifest_is_explicitly_not_evidence() -> None:
+    protocol = load_protocol(PROTOCOL_PATH)
+    development = load_development_worlds(DEVELOPMENT_PATH, protocol=protocol)
+    assert development.format == "ajae-development-window-worlds-v3"
+    assert development.status == "not_generated_R02"
+    assert development.clips == development.windows == ()
+    assert not development.validated
+
+
+def test_boolean_checks_cannot_forge_a_validated_development_freeze(
+    tmp_path: Path,
+) -> None:
+    protocol = load_protocol(PROTOCOL_PATH)
+    path = tmp_path / "development.json"
+    checks = {"geometry": True, "matching": True, "labels": True}
+    save_development_worlds(
+        path,
+        _minimal_development_clips(),
+        protocol_identity=protocol.development_population_identity,
+        validation=checks,
+    )
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["status"] == "definitions_only_unvalidated"
+    assert payload["validation"] == checks
+    assert payload["scientific_verdict"] is None
+    assert not load_development_worlds(path, protocol=protocol).validated
+
+    payload["status"] = "validated_frozen"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(ProtocolError, match="R02 thresholds must be frozen"):
+        load_development_worlds(path, protocol=protocol)
+
+
+def test_symmetric_reference_pose_is_permutation_deterministic_and_rigid() -> None:
+    poses = tuple(
+        _yaw_pose(0.04 * index - 0.08, (index * 0.5, -index * 0.2, index * 0.03))
+        for index in range(5)
+    )
+    expected = WindowReferencePose.from_sensor_poses(poses)
+    observed = WindowReferencePose.from_sensor_poses(tuple(poses[index] for index in (3, 0, 4, 1, 2)))
+    np.testing.assert_array_equal(observed.rotation, expected.rotation)
+    np.testing.assert_array_equal(observed.translation, expected.translation)
+    np.testing.assert_allclose(expected.rotation.T @ expected.rotation, np.eye(3), atol=1e-12)
+    assert np.linalg.det(expected.rotation) == pytest.approx(1.0, abs=1e-12)
+    np.testing.assert_allclose(
+        expected.world_from_window @ expected.window_from_world,
+        np.eye(4),
+        atol=1e-12,
+    )
+
+
+def test_symmetric_reference_pose_is_equivariant_to_a_global_rigid_transform() -> None:
+    poses = tuple(
+        _yaw_pose(0.03 * index, (0.7 * index, 0.1 * index, -0.02 * index))
+        for index in range(5)
+    )
+    global_from_world = _yaw_pose(0.37, (4.0, -3.0, 1.5))
+    reference = WindowReferencePose.from_sensor_poses(poses)
+    transformed = WindowReferencePose.from_sensor_poses(
+        tuple(global_from_world @ pose for pose in poses)
+    )
+    np.testing.assert_allclose(
+        transformed.world_from_window,
+        global_from_world @ reference.world_from_window,
+        atol=2e-12,
+        rtol=2e-12,
+    )
+
+
+def test_assemble_window_recovers_every_point_under_scan_permutation() -> None:
+    spec = SequenceSpec("train", 206, "fixture", True, FrameSpan(0, 449))
+    sources = _window_sources()
+    ordered = assemble_window(spec, 10, (10, 11, 12, 13, 14), sources)
+    shuffled = assemble_window(
+        spec,
+        10,
+        (10, 11, 12, 13, 14),
+        tuple(sources[index] for index in (3, 0, 4, 1, 2)),
+    )
+    assert ordered.points.count == shuffled.points.count == 15
+    assert not hasattr(ordered.points, "frame_offsets")
+    np.testing.assert_array_equal(
+        ordered.reference_pose.world_from_window,
+        shuffled.reference_pose.world_from_window,
+    )
+
+    def rows(window: object) -> dict[tuple[int, int], tuple[np.ndarray, int, int]]:
+        points = window.points
+        return {
+            (int(frame), int(slot)): (coordinate, int(group), int(ray))
+            for coordinate, group, frame, slot, ray in zip(
+                points.coordinates,
+                points.scan_group,
+                points.source_frame,
+                points.source_slot,
+                points.source_ray,
+                strict=True,
+            )
+        }
+
+    first, second = rows(ordered), rows(shuffled)
+    assert first.keys() == second.keys()
+    for identity in first:
+        np.testing.assert_allclose(first[identity][0], second[identity][0], atol=1e-7)
+        assert first[identity][1:] == second[identity][1:]
+
+    restored = ordered.restore_source_frame(12, ordered.points.source_frame)
+    np.testing.assert_array_equal(restored, np.asarray((12, 0, 12, 12), dtype=np.int32))
+    point = ordered.points.point_id(0)
+    assert (point.frame_id, point.ray.beam_id, point.ray.azimuth_column) == (10, 0, 0)
+
+
+def test_canonical_ray_mapping_and_round_trip_preserve_physical_identity() -> None:
+    mapping = np.arange(128 * 1024, dtype=np.int32)
+    digest = canonical_ray_mapping_digest(mapping)
+    assert len(digest) == 64
+    changed = mapping.copy()
+    changed[0], changed[1] = changed[1], changed[0]
+    assert canonical_ray_mapping_digest(changed) != digest
+
     directions = np.asarray(((1.0, 0.0, 0.0), (0.0, 1.0, 0.0)))
     origins = np.asarray(((0.1, 0.0, 0.05), (0.0, 0.1, 0.05)))
     grid = RayGrid(
@@ -209,631 +677,104 @@ def test_ray_grid_round_trip_uses_calibrated_beam_origin() -> None:
     frame = make_source_frame(
         0,
         xyzi,
-        np.eye(4),
+        np.eye(4, dtype=np.float64),
         _labels(np.full(2, 10, dtype=np.uint16)),
         partition="fixture",
         sequence_id=99,
     )
-    np.testing.assert_allclose(grid.ranges(frame), distances, atol=1.0e-7)
+    np.testing.assert_allclose(grid.ranges(frame), distances, atol=1e-7)
     np.testing.assert_allclose(grid.points_from_ranges(distances, frame), xyzi[:, :3])
-    assert grid.round_trip(frame)["maximum_point_error_m"] < 1.0e-7
+    assert grid.round_trip(frame)["maximum_point_error_m"] < 1e-7
 
 
-def _development_evidence(
-    ap: float, development_fpr95: float, pure_normal_fpr: float
-) -> DevelopmentEvidence:
-    eligible = tuple(world_id for world_id in range(24) if world_id != 5)
-    return DevelopmentEvidence(
-        tuple(
-            DevelopmentWorldMetrics(
-                world_id, {"AP": ap, "FPR95": development_fpr95}
-            )
-            for world_id in eligible
-        ),
-        {"cross_fit_FPR": pure_normal_fpr},
+def test_common_renderer_is_deterministic_and_uses_nearest_first_return() -> None:
+    xyzi = np.asarray(((5.0, 0.0, 0.0, 0.2),), dtype=np.float32)
+    frame = make_source_frame(
+        0,
+        xyzi,
+        np.eye(4, dtype=np.float64),
+        _labels(np.asarray((10,), dtype=np.uint16)),
+        partition="fixture",
+        sequence_id=99,
     )
-
-
-def _selection_rule() -> dict[str, object]:
-    return {
-        "status": "frozen_before_training",
-        "primary": "maximum macro mean of per-world AP over the E63 common-domain eligible in-generator worlds",
-        "tie_tolerance": 0.001,
-        "first_tie_break": "lower development macro mean FPR95",
-        "second_tie_break": "lower pure-normal cross-fit FPR",
-        "third_tie_break": "earlier completed world index",
-        "eligible_world_ids": [world_id for world_id in range(24) if world_id != 5],
-        "held_out_input_forbidden": True,
-    }
-
-
-def test_protocol_is_only_schema31_contract() -> None:
-    protocol = json.loads(PROTOCOL_PATH.read_text(encoding="utf-8"))
-    assert protocol["schema_version"] == 31
-    assert protocol["status"]["current_node"] == "R00"
-    assert protocol["status"]["formal_training_allowed"] is False
-    contract = protocol["scientific_contract"]
-    assert contract["observation_unit"] == "one_complete_five_scan_window"
-    assert contract["privileged_frame"] is None
-    assert contract["all_window_members_equally_supervised"] is True
-    assert contract["learned_time_or_position_input"] is False
-    assert contract["full_model_spatial_operations"] == [
-        "joint_voxelization",
-        "joint_radius_neighborhood",
-        "joint_knn_decoding",
-    ]
-    assert protocol["window"]["member_offsets_from_start"] == [0, 1, 2, 3, 4]
-    assert protocol["window"]["member_order_is_model_input"] is False
-    assert set(protocol["experiments"]) == {"B0", "B1", "B2", "B3"}
-    assert protocol["model"]["grouping_modes"] == {
-        "B1": "single",
-        "B2": "per_scan",
-        "B3": "joint",
-    }
-    assert protocol["evaluation"]["model_output_members"] == [0, 1, 2, 3, 4]
-    assert protocol["evaluation"]["fusion_value"] == "sigmoid_probability"
-
-
-def test_schema30_training_entries_are_rejected_before_loading(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    legacy = tmp_path / "protocol.json"
-    legacy.write_text('{"schema_version": 30}\n', encoding="utf-8")
-    output = tmp_path / "preflight.npz"
-    loader_called = False
-
-    def forbidden_loader(*_args: object, **_kwargs: object) -> object:
-        nonlocal loader_called
-        loader_called = True
-        raise AssertionError("schema-30 guard ran after the full protocol loader")
-
-    import src.protocol as protocol_module
-
-    monkeypatch.setattr(protocol_module, "load_protocol", forbidden_loader)
-    with pytest.raises(TrainingError, match="requires schema 31"):
-        train_module.run_formal_training(
-            legacy, maximum_worlds=1, device="cpu"
-        )
-    with pytest.raises(TrainingError, match="requires schema 31"):
-        train_module.run_b3_semantic_preflight(
-            legacy,
-            data_root=tmp_path,
-            output_path=output,
-            maximum_worlds=1,
-            device="cpu",
-        )
-    assert loader_called is False
-    assert not output.exists()
-
-
-def test_r00_schema31_contract_blocks_training_before_loading(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    loader_called = False
-
-    def forbidden_loader(*_args: object, **_kwargs: object) -> object:
-        nonlocal loader_called
-        loader_called = True
-        raise AssertionError("R00 guard ran after the full protocol loader")
-
-    import src.protocol as protocol_module
-
-    monkeypatch.setattr(protocol_module, "load_protocol", forbidden_loader)
-    with pytest.raises(TrainingError, match="disabled at the current schema-31 node"):
-        train_module.run_formal_training(
-            PROTOCOL_PATH, maximum_worlds=1, device="cpu"
-        )
-    assert loader_called is False
-
-
-def test_e57_v2_selection_is_deterministic_and_model_independent() -> None:
-    protocol = load_protocol(PROTOCOL_PATH)
-    qualification = protocol.development["qualification"]
-    assert qualification["status"] == "frozen_before_e57"
-    assert qualification["selection"]["model_outputs_forbidden"] is True
-    assert qualification["selection"]["exact_bin_quotas_forbidden"] is True
-    assert qualification["descriptive_characterization"]["status"] == "nonblocking"
-
-    generator_descriptors = np.arange(40 * 8, dtype=np.float64).reshape(40, 8)
-    candidate_hashes = np.asarray(
-        [hashlib.sha256(f"candidate:{index}".encode()).hexdigest() for index in range(40)],
-        dtype="S64",
+    grid = RayGrid(
+        np.asarray(((1.0, 0.0, 0.0),)),
+        np.asarray((0.0,)),
+        np.asarray((0.0,)),
+        beam_count=1,
     )
-    first = render_module._e57_select(generator_descriptors, candidate_hashes)
-    second = render_module._e57_select(generator_descriptors, candidate_hashes)
-    np.testing.assert_array_equal(first, second)
-    assert first.shape == (24,)
-    assert np.unique(first).size == 24
-
-
-def test_e58_torus_stream_is_disjoint_from_training_geometry() -> None:
-    candidate_hash = hashlib.sha256(b"fixed E57 world").hexdigest()
-    seed = render_module._e58_seed(candidate_hash)
-    assert seed == render_module._e58_seed(candidate_hash)
-    assert isinstance(sample_held_out_anomaly_shape(seed), HeldOutTorusShape)
-    assert isinstance(sample_training_anomaly_shape(seed), ShapeSpec)
-    assert not isinstance(sample_training_anomaly_shape(seed), HeldOutTorusShape)
-    torus = sample_held_out_anomaly_shape(seed)
-    witnesses = render_module._fibonacci_surface_points(torus, 256)
-    assert witnesses.shape == (256, 3)
-    np.testing.assert_allclose(torus.signed_distance(witnesses), 0.0, atol=1.0e-12)
-
-
-def test_e58_replacement_preserves_sensor_stream_and_separates_cache() -> None:
-    vertices = np.asarray([
-        (x_value, y_value, z_value)
-        for x_value in (-0.2, 0.2)
-        for y_value in (-0.2, 0.2)
-        for z_value in (-0.3, 0.3)
-    ])
-    control_shape = NormalTemplateShape(
-        vertices, np.empty((0, 3), dtype=np.int32),
-        206, 0, 10, 1, (0.0, 0.0, 0.0),
+    shape = ShapeSpec(
+        ((0.5, 0.5, 0.5),),
+        ((0.0, 0.0, 0.0),),
+        ((1.0, 1.0),),
+        (0.0,),
+        ("union",),
     )
-    proxy_shape = ShapeSpec.sample(58)
+    material = MaterialSpec(0.5, 0.1)
     rotation = ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))
-    material = render_module.MaterialSpec(0.5, 0.2)
-    source = WorldSpec(1234, 201, (
-        render_module.ObjectSpec(
-            1, "normal-control", control_shape, material,
-            (8.0, -1.0, 0.3), rotation,
+    farther = ObjectSpec(1, "anomaly-proxy", shape, material, (4.0, 0.0, 0.0), rotation)
+    nearer = ObjectSpec(2, "anomaly-proxy", shape, material, (3.0, 0.0, 0.0), rotation)
+    world = WorldSpec(31, 99, (farther, nearer))
+    sensor = SensorCalibration.constant(0.4)
+    first = render_frame(frame, world, grid, sensor)
+    second = render_frame(frame, world, grid, sensor)
+    np.testing.assert_array_equal(first.source.xyzi, second.source.xyzi)
+    np.testing.assert_array_equal(first.packed_labels, second.packed_labels)
+    assert first.object_id_internal.tolist() == [2]
+    assert first.anomaly_proxy_mask.tolist() == [True]
+    assert first.occluded_original_mask.tolist() == [True]
+    assert float(first.source.xyzi[0, 0]) == pytest.approx(2.5, abs=2e-4)
+
+
+def test_window_descriptor_enforces_observed_density_formulas() -> None:
+    descriptor = _descriptor(1, "normal-control", 10)
+    assert descriptor.densification_gain == pytest.approx(3.0)
+    assert descriptor.duplicate_fraction == pytest.approx(0.4)
+    payload = descriptor.to_dict()
+    payload["densification_gain"] = 2.9
+    with pytest.raises(RenderError, match="densification gain"):
+        WindowEntityDescriptor(**payload)  # type: ignore[arg-type]
+    payload = descriptor.to_dict()
+    payload["duplicate_fraction"] = 0.3
+    with pytest.raises(RenderError, match="duplicate fraction"):
+        WindowEntityDescriptor(**payload)  # type: ignore[arg-type]
+
+
+def test_window_matching_is_exact_within_support_semantic_strata() -> None:
+    controls = _stub_window(
+        "controls",
+        (
+            _descriptor(1, "normal-control", 10, joint_voxels=5, distance=20.0),
+            _descriptor(2, "normal-control", 11, joint_voxels=7, distance=8.0),
         ),
-        render_module.ObjectSpec(
-            2, "anomaly-proxy", proxy_shape, material,
-            (10.0, 1.0, -proxy_shape.minimum_z_m()), rotation,
+    )
+    proxies = _stub_window(
+        "proxies",
+        (
+            _descriptor(3, "anomaly-proxy", 10, joint_voxels=7, distance=8.1),
+            _descriptor(4, "anomaly-proxy", 11, joint_voxels=5, distance=19.9),
         ),
-    ))
-    candidate_hash = hashlib.sha256(b"fixed E57 source identity").hexdigest()
-    replacement, torus_seed = render_module._e58_replacement_world(
-        source, candidate_hash
     )
-    assert torus_seed == render_module._e58_seed(candidate_hash)
-    assert replacement.seed == source.seed
-    assert replacement.source_sequence_id == source.source_sequence_id
-    assert replacement.objects[0] == source.objects[0]
-    assert replacement.identity != source.identity
-
-    slots = np.asarray((0, 7, 19, 127), dtype=np.int64)
-    for channel in (0, 1):
-        for object_id in (1, 2):
-            object_ids = np.full(slots.size, object_id, dtype=np.int32)
-            np.testing.assert_array_equal(
-                render_module._slot_uniform(
-                    source, 53, slots, object_ids, channel=channel
-                ),
-                render_module._slot_uniform(
-                    replacement, 53, slots, object_ids, channel=channel
-                ),
-            )
-
-    digest = hashlib.sha256(b"fixed cache component").hexdigest()
-    source_key = FrameCacheKey(source.identity, digest, digest, digest)
-    replacement_key = FrameCacheKey(replacement.identity, digest, digest, digest)
-    cache = FrameCache(2)
-    calls = []
-    source_value = cache.rendered_frame(
-        source_key, lambda: calls.append("source") or "source"
-    )
-    replacement_value = cache.rendered_frame(
-        replacement_key, lambda: calls.append("replacement") or "replacement"
-    )
-    assert (source_value, replacement_value) == ("source", "replacement")
-    assert calls == ["source", "replacement"]
-
-
-def test_e58_torus_mechanical_fixture_and_json_round_trip() -> None:
-    torus = HeldOutTorusShape(1.0, 0.25)
-    origins = np.asarray(((0.0, 0.0, 3.0), (3.0, 0.0, 0.0)))
-    directions = np.asarray(((0.0, 0.0, -1.0), (-1.0, 0.0, 0.0)))
-    distance, normal, hit = torus.intersect(origins, directions)
-    assert not hit[0] and np.isinf(distance[0])
-    assert hit[1]
-    assert distance[1] == pytest.approx(1.75, abs=2.0e-7)
-    point = origins[1] + distance[1] * directions[1]
-    assert abs(float(torus.signed_distance(point[None])[0])) <= 2.0e-7
-    assert np.isfinite(normal[1]).all()
-    assert np.linalg.norm(normal[1]) == pytest.approx(1.0, abs=1.0e-12)
-    assert float(np.dot(normal[1], np.asarray((1.0, 0.0, 0.0)))) > 0.999999
-    assert HeldOutTorusShape.from_dict(torus.to_dict()) == torus
-    witnesses = render_module._fibonacci_surface_points(torus, 256)
-    assert np.max(np.abs(torus.signed_distance(witnesses))) <= 1.0e-12
-
-
-def test_e59_e60_characterization_is_complete_and_nonblocking() -> None:
-    descriptor = np.tile(
-        np.asarray((1.0, 0.0, 2.5, 1.0, 128.0, 0.75, 50.0, 5.0)),
-        (24, 1),
-    )
-    e59, e60 = render_module._phase6_characterization_arrays(descriptor)
-    assert e59["distance_count"].tolist() == [[24, 0, 0, 0], [0, 0, 0, 24]]
-    assert e59["Nvis_count"].tolist() == [[24, 0, 0, 0], [0, 0, 0, 24]]
-    assert e59["occlusion_count"].tolist() == [[24, 0, 0, 0], [0, 0, 0, 24]]
-    assert e60["visible_frame_count"].tolist() == [
-        [24, 0, 0, 0, 0], [0, 0, 0, 0, 24]
-    ]
-
-
-def test_e61_safety_identity_protocol_is_frozen_before_scores() -> None:
-    safety = load_protocol(PROTOCOL_PATH).development["safety_sets"]
-    assert safety["pure_normal"]["expected_points"] == 48_828_507
-    assert safety["moving_normal"]["expected_points"] == 13_011
-    assert safety["moving_normal"][
-        "held_out_or_unseen_generalization_claim_forbidden"
-    ] is True
-    match = safety["static_match"]
-    assert match["identity_hash_namespace"] == "E61-static-match-v1"
-    assert match["replacement"] is False
-    assert match["unmatched_moving_points_remain_in_moving_safety"] is True
-
-
-def test_e62_protocol_forbids_real_anomaly_data_and_freezes_strict_fpr95() -> None:
-    protocol = load_protocol(PROTOCOL_PATH)
-    e62 = protocol.evaluation_document["evaluator_equivalence"]
-    assert e62["version"] == "E62-v2"
-    assert e62["status"] == "formal_pass"
-    assert e62["result"]["passed"] is True
-    assert set(e62["forbidden_data"]) == {
-        "public real-OOD 19 sequences",
-        "hidden-test 51 sequences",
-        "any real anomaly sequence",
-    }
-    assert e62["comparison"]["fpr95_tpr_rule"].endswith(
-        "strictly greater than 0.95"
-    )
-    assert e62["comparison"]["maximum_absolute_difference"] == 1.0e-10
-
-
-def test_e62_fixture_covers_frozen_boundaries_before_evaluator_calls() -> None:
-    arrays = e62_fixture_arrays()
-    assert arrays["analytic_case_name"].tolist() == [
-        "range_ignore_and_post_filter_frame_gate",
-        "all_scores_tied",
-        "strict_tpr_above_0.95",
-        "mixed_repeated_scores",
-    ]
-    declared = arrays["analytic_declared_range_m"][:12]
-    expected_range = arrays["analytic_expected_range_valid"][:12]
-    assert declared[:4].tolist() == [2.499999, 2.5, 50.0, 50.000001]
-    assert expected_range[:4].tolist() == [False, True, True, False]
-    assert arrays["analytic_expected_frame_accepted"].tolist() == [
-        False, True, True, True, True
-    ]
-    assert arrays["numerical_expected_frame_accepted"].tolist() == [
-        False, True, True, True, True, True, True, True, True, True
-    ]
-    assert arrays["numerical_points"].shape == (960, 3)
-
-
-def test_e62_frozen_custom_and_official_evaluators_are_exactly_equivalent(
-    tmp_path: Path,
-) -> None:
-    result = run_e62(
-        PROTOCOL_PATH,
-        PROTOCOL_PATH.parent / "runs" / "ajae" / "e62_evaluator_fixtures.npz",
-        tmp_path / "e62.npz",
-    )
-    assert result["passed"] is True
-    assert result["discrete_errors"] == 0
-    assert result["maximum_metric_absolute_difference"] <= 1.0e-10
-
-
-def test_protocol_active_route_contains_no_retired_temporal_condition() -> None:
-    protocol = json.loads(PROTOCOL_PATH.read_text(encoding="utf-8"))
-    assert set(protocol["experiments"]) == {"B0", "B1", "B2", "B3"}
-    assert protocol["scientific_contract"]["privileged_frame"] is None
-    assert protocol["window"]["member_offsets_from_start"] == [0, 1, 2, 3, 4]
-    forbidden = set(protocol["model"]["forbidden_features"])
-    assert {"relative_time", "absolute_time", "time_embedding"} <= forbidden
-    assert protocol["evaluation"]["model_output_members"] == [0, 1, 2, 3, 4]
-
-
-def test_e45_overlap_weights_balance_common_population() -> None:
-    rng = np.random.default_rng(4504)
-    records: dict[str, list[np.ndarray]] = {
-        name: [] for name in render_module._E45_UNIT_FIELDS
-    }
-    for source_id, shift in ((0, -0.15), (1, 0.15)):
-        for index in range(320):
-            values = rng.normal(size=5)
-            values[0] = 15.0 + 2.0 * values[0] + shift
-            values[1] = 60.0 + 3.0 * values[1] + shift
-            nvis = max(1, int(round(np.exp(3.0 + 0.2 * values[2] + shift) - 1.0)))
-            occlusion = float(np.clip(0.45 + 0.08 * values[3] + shift / 4.0, 0.26, 0.74))
-            density = max(0.01, float(np.exp(0.5 + 0.2 * values[4] + shift) - 1.0))
-            row = {
-                "bank_seed": np.asarray(index + 1000 * source_id, dtype=np.int64),
-                "source": np.asarray(source_id, dtype=np.uint8),
-                "center_frame": np.asarray(index % 160, dtype=np.int16),
-                "frame_id": np.asarray(index % 160, dtype=np.int16),
-                "support_semantic": np.asarray(40, dtype=np.uint16),
-                "range_bin": np.asarray(1, dtype=np.int8),
-                "azimuth_sector": np.asarray(index % 4, dtype=np.int8),
-                "median_distance_m": np.asarray(values[0]),
-                "median_beam": np.asarray(values[1]),
-                "Nvis": np.asarray(nvis, dtype=np.int32),
-                "O_hat": np.asarray(occlusion),
-                "local_density": np.asarray(density),
-                "geometry_hits": np.asarray(nvis + 2, dtype=np.int32),
-                "point_count": np.asarray(min(nvis, 64), dtype=np.int16),
-                "point_features": np.zeros((64, 7), dtype=np.float64),
-                "unit_hash": np.asarray(index + 10_000 * source_id, dtype=np.uint64),
-            }
-            for name, value in row.items():
-                records[name].append(value)
-    units = {}
-    for name, values in records.items():
-        stacked = np.stack(values)
-        units[name] = stacked.reshape(128, 5, *stacked.shape[1:])
-    first = render_module._e45_weighted_balance(units)
-    second = render_module._e45_weighted_balance(units)
-    for name in first:
-        np.testing.assert_array_equal(first[name], second[name])
-    assert first["common_cell_key"].shape == (4, 4)
-    assert np.all(first["effective_sample_size"] > 50)
-    assert float(np.max(first["weighted_smd"])) < 1.0e-6
-    assert float(np.max(first["weighted_ks"])) <= 0.06
-    assert float(first["maximum_cell_mass_difference"]) < 1.0e-6
-
-
-def test_e48_joint_fold_plan_never_splits_pairs_or_center_frames() -> None:
-    centers = np.asarray(
-        ((10, 10), (10, 11), (12, 13), (14, 12), (15, 16), (17, 17)),
-        dtype=np.int16,
-    )
-    plan = render_module._e48_fold_plan(centers)
-    pair_fold = plan["pair_center_frame_fold"]
-    for fold in range(5):
-        test = plan["fold_test_pair"][fold]
-        train = plan["fold_train_pair"][fold]
-        excluded = plan["fold_excluded_pair"][fold]
-        np.testing.assert_array_equal(test | train | excluded, np.ones(6, dtype=np.bool_))
-        assert not np.any(test & train)
-        assert np.all(pair_fold[test] == fold)
-        assert np.all(pair_fold[train] != fold)
-        assert np.intersect1d(centers[test], centers[train]).size == 0
-
-
-def test_e48_matched_pair_bootstrap_is_deterministic() -> None:
-    labels = np.tile(np.asarray((0, 0, 1, 1), dtype=np.uint8), 4)
-    scores = np.tile(np.asarray((0.1, 0.2, 0.8, 0.9)), 4)
-    predictions = (scores >= 0.5).astype(np.uint8)
-    point_pair = np.repeat(np.arange(4, dtype=np.int64), 4)
-    weights = np.full(16, 0.5, dtype=np.float64)
-    first = render_module._e48_pair_bootstrap(
-        labels, scores, predictions, point_pair, weights, 4
-    )
-    second = render_module._e48_pair_bootstrap(
-        labels, scores, predictions, point_pair, weights, 4
-    )
-    np.testing.assert_array_equal(first, second)
-    np.testing.assert_array_equal(first, np.ones((2000, 4)))
-
-
-def test_e76_c1_clearance_is_signed_distance_from_visible_returns() -> None:
-    item = render_module.ObjectSpec(
-        1, "anomaly-proxy", ShapeSpec.sample(7601),
-        render_module.MaterialSpec(0.5, 0.2),
-        (0.0, 0.0, 2.0),
-        ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0)),
-    )
-    points = np.asarray(((0.0, 0.0, 1.25), (0.0, 0.0, 2.0)))
-    clearance = render_module._visible_ground_clearance(
-        points, np.eye(4), item, -1.0
-    )
-    assert clearance == pytest.approx(0.25)
-    points[0, 2] = 0.9
-    assert render_module._visible_ground_clearance(
-        points, np.eye(4), item, -1.0
-    ) == pytest.approx(-0.1)
-
-
-def test_e76_c1_reuses_e48_split_and_detects_only_near_saturation() -> None:
-    with np.load(
-        ROOT / "runs/ajae/e45b_v2_control_proxy_pairs.npz", allow_pickle=False
-    ) as archive:
-        plan = render_module._e48_fold_plan(archive["matched_center_frame"])
-    clearance = np.tile(np.asarray((1.0, -1.0)), (1347, 1))
-    result = render_module._e76_c1_scalar_models(clearance, plan)
-    assert result["oof_pair_index"].size == 369
-    np.testing.assert_array_equal(result["model_fail"], (True, True))
-    assert np.all(result["bootstrap_ci_low"][:, :2] == 1.0)
-
-
-def test_e76_c1_protocol_is_result_blind_and_full_first() -> None:
-    exploration = load_protocol(PROTOCOL_PATH).development["exploration_track"]
-    assert exploration["version"] == "exploration-confirmation-split-v5-fast-viability"
-    assert exploration["current_node"] == "AJAE-F1-X-v5_fast_seed0_training"
-    c1 = exploration["e76c1_freeze"]
-    assert c1["status"] == "frozen_before_clearance_computation"
-    assert c1["descriptive_difference_is_nonblocking"] is True
-    assert c1["renderer_modification_forbidden"] is True
-    assert exploration["e76c1_result"]["model_fail"] == (False, False)
-    assert exploration["e76c1_result"]["next_node"] == "AJAE-F0-X"
-    assert exploration["full_ajae_x_freeze"]["status"].startswith("AJAE-F1-X")
-    assert exploration["full_ajae_x_freeze"]["b2_e78x_status"].startswith(
-        "deferred ablation"
-    )
-    f0 = exploration["full_ajae_x_freeze"]["f0_preflight"]
-    assert f0["center_frame"] == 199
-    assert f0["frame_offsets"] == (-2, -1, 0, 1, 2)
-    assert f0["points_per_frame"] == 16
-    assert f0["model_quality_use_forbidden"] is True
-    assert f0["result"]["passed"] is True
-    entry = exploration["full_ajae_x_freeze"]["f1_entry"]
-    assert entry["p1_boundary_amendment"]["pure_normal_q0"]["points"] == 48638267
-    assert entry["p1_boundary_amendment"]["moving_normal_q0"]["points"] == 12820
-    assert entry["p1_boundary_amendment"]["lite_pure_normal_q0"]["frames"] == 63
-    assert entry["p2_semantic_training_preflight"]["world_seed"] == 1027531
-    assert len(entry["p2_semantic_training_preflight"]["checks"]) == 7
-    assert entry["p2_semantic_training_preflight"]["result"]["passed"] is True
-
-
-def test_v5_fast_training_schedule_covers_each_center_once_per_phase_cycle() -> None:
-    protocol = load_protocol(PROTOCOL_PATH)
-    schedule = training_schedule(
-        protocol, experiment_condition("B3"), TrainConfig.from_protocol(protocol), 25
-    )
-    assert schedule == TrainingSchedule(
-        version="AJAE-F1-X-v5-fast-whole-method-viability-v1",
-        center_stride=5,
-        phase_modulus=5,
-        windows_per_world=89,
-        development_worlds=(12, 25),
-        pause_after_worlds=(4, 12),
-        output_directory="runs/ajae/B3-fast-v5",
-    )
-    legal = tuple(range(2, 447))
-    phases = [schedule.centers(legal, world) for world in range(5)]
-    assert all(len(centers) == 89 for centers in phases)
-    assert phases[0] == tuple(range(2, 447, 5))
-    assert phases[4] == tuple(range(6, 447, 5))
-    assert sorted(center for centers in phases for center in centers) == list(legal)
-
-
-def test_phase5_frame_identity_is_frozen_before_stu_outputs() -> None:
-    protocol = load_protocol(PROTOCOL_PATH)
-    assert phase5_frame_ids(protocol, 206) == PHASE5_FRAMES[206]
-    assert phase5_frame_ids(protocol, 201) == PHASE5_FRAMES[201]
-
-
-def test_independent_sparse_quantize_preserves_first_occurrence_rows() -> None:
-    points = np.asarray(
-        [[0.11, 0.0, 0.0], [0.01, 0.0, 0.0], [0.12, 0.0, 0.0],
-         [-0.01, 0.0, 0.0], [-0.06, 0.0, 0.0]],
-        dtype=np.float64,
-    )
-    rows, unique, inverse = independent_sparse_quantize(points, 0.05)
-    np.testing.assert_array_equal(rows[:, 0], [2, 0, -1, -2])
-    np.testing.assert_array_equal(unique, [0, 1, 3, 4])
-    np.testing.assert_array_equal(inverse, [0, 1, 0, 2, 3])
-
-
-def test_shared_stu_features_retain_one_final_logit_per_raw_point() -> None:
-    protocol = load_protocol(PROTOCOL_PATH)
-    torch.manual_seed(5200)
-    model = AJAEPointTransformer.from_protocol(protocol).eval()
-    coordinates = torch.tensor(
-        [[0.001, 0.0, 0.0], [0.049, 0.0, 0.0],
-         [0.101, 0.0, 0.0], [0.149, 0.0, 0.0]]
-    )
-    times = torch.zeros(4, dtype=torch.long)
-    shared_features = torch.ones(4, 128)
-    evidence = torch.zeros(4, 19)
-    reliability = torch.zeros(4)
-    intensity = torch.tensor([0.1, 0.9, 0.2, 0.8])
-    order = torch.tensor([2, 0, 3, 1])
-    with torch.no_grad():
-        logits = model(
-            coordinates, times, shared_features, evidence, reliability,
-            reliability, intensity, cross_frame_enabled=False,
+    pairs = match_window_entities((controls, proxies))
+    assert len(pairs) == 2
+    assert {item.support_semantic_id for item in pairs} == {10, 11}
+    assert all(
+        next(
+            descriptor.support_semantic_id
+            for descriptor in controls.descriptors
+            if descriptor.object_id == item.control_object_id
         )
-        permuted = model(
-            coordinates[order], times[order], shared_features[order],
-            evidence[order], reliability[order], reliability[order],
-            intensity[order], cross_frame_enabled=False,
+        == next(
+            descriptor.support_semantic_id
+            for descriptor in proxies.descriptors
+            if descriptor.object_id == item.proxy_object_id
         )
-    assert logits.shape == (4,)
-    torch.testing.assert_close(permuted, logits[order], rtol=0.0, atol=0.0)
-
-
-def test_e53_query_seed_is_bound_only_to_frozen_frame_identity() -> None:
-    assert e53_frame_seed(206, 14) == e53_frame_seed(206, 14)
-    assert len({e53_frame_seed(206, 14), e53_frame_seed(206, 41),
-                e53_frame_seed(201, 14)}) == 3
-
-
-def test_schema4_development_worlds_are_rejected_after_world_v3_freeze() -> None:
-    protocol = load_protocol(PROTOCOL_PATH)
-    with pytest.raises(ProtocolError, match="authoritative WorldSpec"):
-        load_development_worlds(DEVELOPMENT_PATH, protocol=protocol)
-
-
-def test_gate1_cannot_be_unlocked_by_editing_status_or_arbitrary_numbers(
-    tmp_path: Path,
-) -> None:
-    protocol = load_protocol(PROTOCOL_PATH)
-    document = json.loads(DEVELOPMENT_PATH.read_text(encoding="utf-8"))
-    document["status"] = "validated_frozen"
-    document["validation"] = {
-        name: True for name in document["validation"]
-    }
-    document["gate1"]["status"] = "passed_with_real_evidence"
-    edited = tmp_path / "edited-dev.json"
-    edited.write_text(json.dumps(document), encoding="utf-8")
-    with pytest.raises(ProtocolError, match="authoritative WorldSpec"):
-        load_development_worlds(edited, protocol=protocol)
-
-
-def test_causal_window_separates_physical_and_model_time() -> None:
-    frames = tuple(_organized_frame(frame_id) for frame_id in range(5))
-    spec = SequenceSpec("train", 206, "fixture", True, FrameSpan(0, 5))
-    mapping = np.arange(128 * 1024, dtype=np.int32)
-    digest = canonical_ray_mapping_digest(mapping)
-    causal = assemble_window(
-        spec,
-        4,
-        frames,
-        condition=ExperimentCondition.B5,
-        canonical_ray_by_slot=mapping,
-        ray_mapping_audited=True,
-        ray_mapping_digest=digest,
+        == item.support_semantic_id
+        for item in pairs
     )
-    assert tuple(item.source_offset for item in causal.frames) == CAUSAL_OFFSETS
-    assert tuple(item.model_time_position for item in causal.frames) == RELATIVE_TIMES
-    assert causal.reference.frame_id == 4
-    assert tuple(causal.points.relative_time.tolist()) == RELATIVE_TIMES
-    assert causal.points.ray_mapping_digest == digest
-
-
-def test_causal_training_supervises_all_five_frames_but_outputs_current() -> None:
-    condition = experiment_condition("B5")
-    assert condition.frame_offsets == CAUSAL_OFFSETS
-    assert condition.model_times == RELATIVE_TIMES
-    assert condition.supervised_times == RELATIVE_TIMES
-    assert condition.prediction_rule == "causal_current_frame_at_model_position_plus2"
-
-
-def test_audited_mapping_requires_exact_calibration_digest() -> None:
-    frame = _organized_frame(0)
-    spec = SequenceSpec("train", 206, "fixture", True, FrameSpan(0, 1))
-    mapping = np.arange(128 * 1024, dtype=np.int32)
-    digest = canonical_ray_mapping_digest(mapping)
-    with pytest.raises(SceneDataError, match="requires an explicit"):
-        assemble_window(
-            spec,
-            0,
-            (frame,),
-            condition="B1",
-            ray_mapping_audited=True,
-            ray_mapping_digest=digest,
-        )
-    changed = mapping.copy()
-    changed[[0, 1]] = changed[[1, 0]]
-    with pytest.raises(SceneDataError, match="does not match"):
-        assemble_window(
-            spec,
-            0,
-            (frame,),
-            condition="B1",
-            canonical_ray_by_slot=changed,
-            ray_mapping_audited=True,
-            ray_mapping_digest=digest,
-        )
-
-
-def test_authoritative_calibration_is_complete_train206() -> None:
-    protocol = load_protocol(PROTOCOL_PATH)
-    grid, sensor = load_sensor_calibration(protocol.sensor_calibration_path())
-    assert grid.beam_count == 128 and grid.columns == 1024
-    assert grid.calibration_frame_ids == tuple(range(449))
-    assert sensor.source_sequence_id == 206
-    provenance = dict(sensor.provenance)
-    assert provenance["protocol_schema"] == "30"
-    assert provenance["partition"] == "train"
-    assert provenance["frames"] == "449"
-    mapper, ray_digest, calibration_digest = _protocol_slot_to_ray(protocol)
-    assert canonical_ray_mapping_digest(mapper(_organized_frame(0))) == ray_digest
-    assert len(calibration_digest) == 64
+    balance = window_matching_balance(pairs)
+    assert balance["exact_matching_stratum"] == "support_semantic_id"
+    assert balance["pair_count"] == 2
 
 
 def test_assigned_stu_evidence_uses_one_minimum_index_query() -> None:
@@ -854,1549 +795,678 @@ def test_assigned_stu_evidence_uses_one_minimum_index_query() -> None:
     torch.testing.assert_close(evidence.reliability_noobj, probability[0, 19].expand(2))
 
 
-def test_temporal_neighbors_are_partitioned_by_exact_delta() -> None:
-    coordinates = torch.zeros(5, 3)
-    times = torch.tensor(RELATIVE_TIMES, dtype=torch.long)
-    neighbor, valid = temporal_radius_knn(coordinates, times, 1, 0.5, 2)
-    assert not bool(valid[-1].any())
-    assert valid[:-1, 0].all()
-    assert torch.equal(neighbor[:-1, 0], torch.arange(1, 5))
-
-
-def test_four_level_model_forward_backward_and_b2_isolation() -> None:
-    torch.manual_seed(7)
-    model = AJAEPointTransformer(
-        hidden_dim=16,
-        voxel_sizes=(0.1, 0.2, 0.4),
-        neighbor_radii=((0.5,) * 5, (1.0,) * 5, (2.0,) * 5, (4.0,) * 5),
-        neighbor_k=((2,) * 5,) * 4,
-        heads=4,
-        attention_chunk_size=4,
-    )
-    count = 10
-    coordinates = torch.randn(count, 3) * 0.05
-    times = torch.tensor(RELATIVE_TIMES, dtype=torch.long).repeat_interleave(2)
-    features = torch.randn(count, 128)
-    evidence = torch.rand(count, 19)
-    assign, noobj, intensity = torch.rand(count), torch.rand(count), torch.rand(count)
-    logits = model(
-        coordinates,
-        times,
-        features,
-        evidence,
-        assign,
-        noobj,
-        intensity,
-        cross_frame_enabled=True,
-    )
-    assert logits.shape == (count,)
-    logits.sum().backward()
-    assert any(parameter.grad is not None for parameter in model.parameters())
-    model.eval()
-    with torch.no_grad():
-        disabled = model(
-            coordinates,
-            times,
-            features,
-            evidence,
-            assign,
-            noobj,
-            intensity,
-            cross_frame_enabled=False,
-        )
-        changed = features.clone()
-        changed[times != 0] += 100.0
-        disabled_changed = model(
-            coordinates,
-            times,
-            changed,
-            evidence,
-            assign,
-            noobj,
-            intensity,
-            cross_frame_enabled=False,
-        )
-    torch.testing.assert_close(disabled[times == 0], disabled_changed[times == 0])
-
-
-def test_temporal_activation_checkpoint_preserves_output_and_gradients() -> None:
-    torch.manual_seed(19)
-    checkpointed = AJAEPointTransformer(
-        hidden_dim=16,
-        voxel_sizes=(0.1, 0.2, 0.4),
-        neighbor_radii=((0.5,) * 5, (1.0,) * 5, (2.0,) * 5, (4.0,) * 5),
-        neighbor_k=((2,) * 5,) * 4,
-        heads=4,
-        attention_chunk_size=4,
-    ).train()
-    reference = AJAEPointTransformer(
-        hidden_dim=16,
-        voxel_sizes=(0.1, 0.2, 0.4),
-        neighbor_radii=((0.5,) * 5, (1.0,) * 5, (2.0,) * 5, (4.0,) * 5),
-        neighbor_k=((2,) * 5,) * 4,
-        heads=4,
-        attention_chunk_size=4,
-    ).eval()
-    reference.load_state_dict(checkpointed.state_dict())
-    count = 15
-    coordinates = torch.randn(count, 3) * 0.05
-    times = torch.tensor(RELATIVE_TIMES, dtype=torch.long).repeat_interleave(3)
-    inputs = (
-        coordinates,
-        times,
-        torch.randn(count, 128),
-        torch.rand(count, 19),
-        torch.rand(count),
-        torch.rand(count),
-        torch.rand(count),
-    )
-    checkpointed_logits = checkpointed(
-        *inputs, cross_frame_enabled=True
-    )
-    reference_logits = reference(*inputs, cross_frame_enabled=True)
-    torch.testing.assert_close(checkpointed_logits, reference_logits, rtol=0, atol=0)
-    checkpointed_logits.square().sum().backward()
-    reference_logits.square().sum().backward()
-    for (checkpointed_name, checkpointed_parameter), (
-        reference_name,
-        reference_parameter,
-    ) in zip(
-        checkpointed.named_parameters(), reference.named_parameters(), strict=True
-    ):
-        assert checkpointed_name == reference_name
-        torch.testing.assert_close(
-            checkpointed_parameter.grad,
-            reference_parameter.grad,
-            rtol=0,
-            atol=0,
-        )
-
-
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is unavailable")
-def test_saved_tensor_cpu_offload_preserves_output_and_gradients() -> None:
-    torch.manual_seed(23)
-    baseline = AJAEPointTransformer(
-        hidden_dim=16,
-        voxel_sizes=(0.1, 0.2, 0.4),
-        neighbor_radii=((0.5,) * 5, (1.0,) * 5, (2.0,) * 5, (4.0,) * 5),
-        neighbor_k=((2,) * 5,) * 4,
-        heads=4,
-        attention_chunk_size=4,
-    ).cuda().train()
-    offloaded = AJAEPointTransformer(
-        hidden_dim=16,
-        voxel_sizes=(0.1, 0.2, 0.4),
-        neighbor_radii=((0.5,) * 5, (1.0,) * 5, (2.0,) * 5, (4.0,) * 5),
-        neighbor_k=((2,) * 5,) * 4,
-        heads=4,
-        attention_chunk_size=4,
-    ).cuda().train()
-    offloaded.load_state_dict(baseline.state_dict())
-    count = 15
-    inputs = (
-        torch.randn(count, 3, device="cuda") * 0.05,
-        torch.tensor(RELATIVE_TIMES, device="cuda").repeat_interleave(3),
-        torch.randn(count, 128, device="cuda"),
-        torch.rand(count, 19, device="cuda"),
-        torch.rand(count, device="cuda"),
-        torch.rand(count, device="cuda"),
-        torch.rand(count, device="cuda"),
-    )
-    baseline_logits = baseline(*inputs, cross_frame_enabled=True)
-    baseline_logits.square().sum().backward()
-    with train_module._bounded_saved_tensor_offload(torch.device("cuda")):
-        offloaded_logits = offloaded(*inputs, cross_frame_enabled=True)
-        offloaded_loss = offloaded_logits.square().sum()
-    offloaded_loss.backward()
-    torch.testing.assert_close(baseline_logits, offloaded_logits, rtol=0, atol=0)
-    for (baseline_name, baseline_parameter), (
-        offloaded_name,
-        offloaded_parameter,
-    ) in zip(baseline.named_parameters(), offloaded.named_parameters(), strict=True):
-        assert baseline_name == offloaded_name
-        torch.testing.assert_close(
-            baseline_parameter.grad, offloaded_parameter.grad, rtol=0, atol=0
-        )
-
-
-def test_host_saved_tensor_release_calls_platform_trim(
+def test_reused_stu_encoding_is_rejected_when_content_changes_but_slots_do_not(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    calls: list[int] = []
-    monkeypatch.setattr(train_module, "_MALLOC_TRIM", calls.append)
-    train_module._release_host_saved_tensors()
-    assert calls == [0]
+    import src.train as train_module
 
-
-def test_training_and_heldout_geometry_are_disjoint_and_bounded() -> None:
-    for seed in range(40):
-        training_shape = sample_training_anomaly_shape(seed)
-        heldout_shape = sample_held_out_anomaly_shape(seed)
-        assert isinstance(training_shape, ShapeSpec)
-        assert isinstance(heldout_shape, HeldOutTorusShape)
-        lower, upper = (
-            training_shape.continuous_bounds(
-                maximum_iterations=80, population_size=10
-            )
-            if training_shape.primitive_count == 1
-            else training_shape.tight_continuous_outer_bounds()
-        )
-        assert 0.2 <= float(np.max(upper - lower)) <= 3.0
-        report = training_shape.geometry_report()
-        assert report["bounded"] and report["closed"] and report["components"] == 1
-
-
-def test_generator_schema7_preserves_single_continuous_acceptance() -> None:
-    protocol = load_protocol(PROTOCOL_PATH)
-    historical = protocol.render["anomaly_proxies"][
-        "continuous_size_acceptance_generator"
-    ]
-    current = protocol.render["anomaly_proxies"]["integrated_generator_schema7"]
-    assert historical["generator_schema"] == 2
-    assert PROCEDURAL_GENERATOR_SCHEMA == current["generator_schema"] == 7
-
-    for seed in range(8):
-        shape, report = ShapeSpec.sample_with_report(seed, primitive_count=1)
-        repeated_shape, repeated_report = ShapeSpec.sample_with_report(
-            seed, primitive_count=1
-        )
-        assert shape.to_dict() == repeated_shape.to_dict()
-        assert report == repeated_report
-        assert report.generator_schema == 7
-        assert report.shape_family in {"general", "blocky", "flat", "elongated"}
-        assert report.child_parent_indices == ()
-        assert report.shared_witnesses_undeformed_m == ()
-        assert report.witness_parent_margins_m == ()
-        assert report.witness_child_margins_m == ()
-        assert report.size_definition == "continuous-deformed-surface-aabb"
-        assert 0.2 <= report.accepted_size_lower_m
-        assert report.accepted_size_upper_m <= 3.0
-        lower, upper = shape.continuous_bounds(
-            maximum_iterations=80, population_size=10
-        )
-        np.testing.assert_array_equal(report.outer_lower_m, lower)
-        np.testing.assert_array_equal(report.outer_upper_m, upper)
-        expected = float(np.max(upper - lower))
-        assert report.accepted_size_lower_m == expected
-        assert report.accepted_size_upper_m == expected
-
-
-def test_generator_schema7_base_families_keep_the_qualified_supports() -> None:
-    observed: Counter[str] = Counter()
-    for seed in range(4096):
-        scale, family = ShapeSpec._schema7_base_scale(seed, 1.0)
-        ordered = np.sort(np.asarray(scale))[::-1]
-        r21, r31 = ordered[1] / ordered[0], ordered[2] / ordered[0]
-        observed[family] += 1
-        if family == "blocky":
-            assert 0.75 <= r31 <= r21 <= 1.0
-        elif family == "flat":
-            assert 0.75 <= r21 <= 1.0 and 0.20 <= r31 <= 0.40
-        elif family == "elongated":
-            assert 0.30 <= r21 <= 0.50 and 0.15 <= r31 <= min(0.40, r21)
-        else:
-            assert 0.0 < r31 <= r21 <= 1.0
-    assert observed == {
-        "general": 1647,
-        "blocky": 846,
-        "flat": 809,
-        "elongated": 794,
-    }
-
-
-def test_generator_schema7_keeps_all_nonreplaced_schema6_draws() -> None:
-    seed, count = 0, 5
-    shape, report = ShapeSpec.sample_with_report(seed, primitive_count=count)
-    assert report.proposal_count == 1
-    rng = np.random.default_rng(seed)
-    half = float(rng.uniform(0.1, 1.5))
-    rng.uniform(0.65, 1.25, size=3)
-    base, _ = ShapeSpec._schema7_base_scale(seed, half)
-    expected_scales = [base]
-    expected_exponents = [tuple(rng.uniform(0.55, 1.65, 2))]
-    expected_yaws = [float(rng.uniform(-np.pi, np.pi))]
-    expected_parents = []
-    for child_index in range(1, count):
-        expected_parents.append(int(rng.integers(0, child_index)))
-        rng.integers(0, 3)
-        rng.integers(0, 2)
-        rng.uniform(0.10, 0.50)
-        expected_scales.append(tuple(np.asarray(base) * rng.uniform(0.32, 0.78, 3)))
-        expected_exponents.append(tuple(rng.uniform(0.5, 1.8, 2)))
-        expected_yaws.append(float(rng.uniform(-np.pi, np.pi)))
-    expected_amplitude = float(rng.uniform(0.0, 0.08 * min(base)))
-    expected_twist = float(rng.uniform(-0.65, 0.65))
-    expected_bend = tuple(rng.uniform(-0.12, 0.12, 2))
-    expected_taper = tuple(rng.uniform(-0.18, 0.18, 2))
-    expected_frequency = tuple(rng.uniform(0.6, 2.2, 3))
-    expected_phase = tuple(rng.uniform(-np.pi, np.pi, 3))
-    np.testing.assert_array_equal(shape.primitive_scales_m, expected_scales)
-    np.testing.assert_array_equal(shape.primitive_exponents, expected_exponents)
-    np.testing.assert_array_equal(shape.primitive_yaws_rad, expected_yaws)
-    assert report.child_parent_indices == tuple(expected_parents)
-    assert shape.surface_amplitude_m == expected_amplitude
-    assert shape.twist_rad_per_m == expected_twist
-    assert shape.bend_per_m == expected_bend
-    assert shape.taper_per_m == expected_taper
-    assert shape.surface_frequency_per_m == expected_frequency
-    assert shape.surface_phase_rad == expected_phase
-
-
-def test_generator_schema7_uses_tight_union_certificate_for_multi_primitive() -> None:
-    shape, report = ShapeSpec.sample_with_report(0, primitive_count=2)
-    certificate = shape.continuous_size_certificate(
-        sobol_probes=4096, maximum_interior_lines=64
+    sources = tuple(
+        _one_return_source(frame_id, 4.0 + frame_id, 0.1 + 0.05 * frame_id)
+        for frame_id in range(5)
     )
-    tight_lower, tight_upper = shape.tight_continuous_outer_bounds()
-    assert report.generator_schema == 7
-    assert report.size_definition == "continuous-union-tight-certified-interval"
-    assert report.accepted_size_lower_m == certificate.lower_size_m
-    assert report.accepted_size_upper_m == float(np.max(tight_upper - tight_lower))
-    np.testing.assert_array_equal(report.outer_lower_m, tight_lower)
-    np.testing.assert_array_equal(report.outer_upper_m, tight_upper)
-    assert 0.2 <= report.accepted_size_lower_m
-    assert report.accepted_size_upper_m <= 3.0
+    assert all(np.array_equal(source.real_slots, sources[0].real_slots) for source in sources)
+    encoding = _stu_encoding_for(sources[0])
+    assert encoding.input_identity != stu_input_identity(
+        sources[1].coordinates, sources[1].features, sources[1].real_slots
+    )
+
+    reference = WindowReferencePose.from_sensor_poses(
+        tuple(source.lidar_pose for source in sources)
+    )
+    window = object.__new__(WindowWorld)
+    object.__setattr__(window, "window_start", 0)
+    object.__setattr__(window, "frame_ids", (0, 1, 2, 3, 4))
+    object.__setattr__(
+        window,
+        "rendered_frames",
+        tuple(SimpleNamespace(source=source) for source in sources),
+    )
+    object.__setattr__(window, "reference_pose", reference)
+    monkeypatch.setattr(
+        train_module,
+        "assemble_window",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            labels=object(), reference_pose=reference
+        ),
+    )
+    with pytest.raises(train_module.TrainingError, match="rendered frame 1"):
+        train_module.window_training_data(
+            window,
+            {frame_id: encoding for frame_id in range(5)},
+            canonical_ray_by_slot=np.arange(2, dtype=np.int32),
+            ray_mapping_digest="0" * 64,
+            protocol=load_protocol(PROTOCOL_PATH),
+        )
+
+    class ReusedEncoding(nn.Module):
+        def forward(self, *_args: object) -> STUPointEncoding:
+            return encoding
+
+    inference = AJAEInference._for_test(
+        None,
+        ReusedEncoding(),
+        condition="B0",
+        slot_to_ray=lambda source: np.arange(source.slot_count, dtype=np.int32),
+    )
+    assert inference._encode(sources[0]) is encoding
+    with pytest.raises(EvaluationError, match="different source-frame content"):
+        inference._encode(sources[1])
 
 
-def test_generator_schema7_records_the_authoritative_overlap_tree() -> None:
-    for primitive_count in range(2, 6):
-        for seed in range(8):
-            shape, report = ShapeSpec.sample_with_report(
-                seed, primitive_count=primitive_count
+def test_model_has_one_time_free_window_transformer_class() -> None:
+    transformer_classes = [
+        name
+        for name, value in vars(model_module).items()
+        if inspect.isclass(value)
+        and issubclass(value, nn.Module)
+        and "Transformer" in name
+    ]
+    assert transformer_classes == ["JointWindowPointTransformer"]
+    parameters = tuple(inspect.signature(JointWindowPointTransformer.forward).parameters)
+    assert parameters == (
+        "self",
+        "coordinates",
+        "stu_features",
+        "normal_evidence",
+        "reliability_assign",
+        "reliability_noobj",
+        "intensity",
+        "scan_group",
+        "grouping_mode",
+    )
+    source = inspect.getsource(JointWindowPointTransformer.forward)
+    assert not any(name in source for name in ("time", "frame_id", "member_index"))
+    model = JointWindowPointTransformer.from_protocol(load_protocol(PROTOCOL_PATH))
+    assert not any("time" in name.lower() for name in model.state_dict())
+
+
+def test_b2_b3_voxel_keys_and_population_are_semantically_distinct() -> None:
+    torch.manual_seed(31)
+    pool = GroupedVoxelPool(hidden_dim=4, voxel_size=1.0)
+    coordinates = torch.asarray(((0.10, 0.0, 0.0), (0.20, 0.0, 0.0)))
+    features = torch.asarray(((1.0, 2.0, 3.0, 4.0), (5.0, 6.0, 7.0, 8.0)))
+    groups = torch.asarray((0, 1), dtype=torch.long)
+    b2 = pool(features, coordinates, groups, grouping_mode="per_scan")
+    b3 = pool(features, coordinates, groups, grouping_mode="joint")
+    assert b2.coordinates.shape[0] == 2
+    assert b2.population.tolist() == [1, 1]
+    assert b3.coordinates.shape[0] == 1
+    assert b3.population.tolist() == [2]
+    assert b3.inverse_map.tolist() == [0, 0]
+
+
+def test_b3_radius_uses_cross_scan_points_and_reports_uncapped_count() -> None:
+    coordinates = torch.asarray(
+        ((0.00, 0.0, 0.0), (0.08, 0.0, 0.0), (0.12, 0.0, 0.0), (2.0, 0.0, 0.0))
+    )
+    groups = torch.asarray((0, 1, 1, 0), dtype=torch.long)
+    neighborhood = GroupedRadiusKNN(radius=0.20, k=2, workers=1)
+    joint_neighbor, joint_valid, joint_count = neighborhood(
+        coordinates, groups, grouping_mode="joint"
+    )
+    isolated_neighbor, isolated_valid, isolated_count = neighborhood(
+        coordinates, groups, grouping_mode="per_scan"
+    )
+    assert int(joint_count[0]) == 3 > neighborhood.k
+    assert int(joint_valid[0].sum()) == neighborhood.k
+    assert {1, 2} & set(joint_neighbor[0, joint_valid[0]].tolist())
+    assert int(isolated_count[0]) == 1
+    assert isolated_neighbor[0, isolated_valid[0]].tolist() == [0]
+
+
+def test_b3_upsampling_can_select_the_nearest_cross_scan_source() -> None:
+    upsample = GroupedKnnUpsample(k=1, workers=1)
+    source_features = torch.asarray(((2.0,), (9.0,)))
+    source_coordinates = torch.asarray(((3.0, 0.0, 0.0), (0.0, 0.0, 0.0)))
+    source_groups = torch.asarray((0, 1), dtype=torch.long)
+    target_coordinates = torch.asarray(((0.01, 0.0, 0.0),))
+    target_groups = torch.asarray((0,), dtype=torch.long)
+    joint = upsample(
+        source_features,
+        source_coordinates,
+        source_groups,
+        target_coordinates,
+        target_groups,
+        grouping_mode="joint",
+    )
+    isolated = upsample(
+        source_features,
+        source_coordinates,
+        source_groups,
+        target_coordinates,
+        target_groups,
+        grouping_mode="per_scan",
+    )
+    torch.testing.assert_close(joint, torch.asarray(((9.0,),)))
+    torch.testing.assert_close(isolated, torch.asarray(((2.0,),)))
+
+
+def test_b2_and_b3_models_are_scan_block_permutation_equivariant() -> None:
+    from src.qualify import _model_inputs, _tiny_model
+
+    result = scan_permutation_audit()
+    assert result["passed"] is True
+    assert result["points"] == 20
+    assert result["maximum_logit_error"] <= 2e-6
+
+    model = _tiny_model().eval()
+    inputs = _model_inputs()
+    order = (3, 0, 4, 1, 2)
+    permutation = torch.cat(
+        tuple(torch.nonzero(inputs[-1] == group).flatten() for group in order)
+    )
+    relabel = torch.empty(5, dtype=torch.long)
+    for new_group, old_group in enumerate(order):
+        relabel[old_group] = new_group
+    with torch.no_grad():
+        expected = model(*inputs, grouping_mode="per_scan")
+        observed = model(
+            *(value[permutation] for value in inputs[:-1]),
+            relabel[inputs[-1][permutation]],
+            grouping_mode="per_scan",
+        )
+    torch.testing.assert_close(observed, expected[permutation], atol=2e-6, rtol=0.0)
+
+
+def test_joint_model_scores_all_points_and_backpropagates_all_levels() -> None:
+    result = joint_gradient_audit()
+    assert result["passed"] is True
+    assert result["scored_points"] == 20
+    assert result["minimum_point_gradient_l1"] > 0.0
+    assert len(result["hierarchy_gradient_l1"]) == 4
+    assert all(value > 0.0 for value in result["hierarchy_gradient_l1"])
+
+
+def test_effective_batch_bce_balances_after_all_windows_and_handles_empty_class() -> None:
+    from src.train import TrainingError, effective_batch_balanced_bce
+
+    positive_logits = torch.asarray((0.0, 2.0))
+    negative_logits = torch.asarray((-1.0, 1.0, 4.0))
+    positive_target = torch.ones(2, dtype=torch.bool)
+    negative_target = torch.zeros(3, dtype=torch.bool)
+    positive_valid = torch.ones(2, dtype=torch.bool)
+    negative_valid = torch.asarray((True, True, False))
+    raw_positive = torch.nn.functional.binary_cross_entropy_with_logits(
+        positive_logits, positive_target.float(), reduction="none"
+    )
+    raw_negative = torch.nn.functional.binary_cross_entropy_with_logits(
+        negative_logits, negative_target.float(), reduction="none"
+    )
+    observed = effective_batch_balanced_bce(
+        (
+            (positive_logits, positive_target, positive_valid),
+            (negative_logits, negative_target, negative_valid),
+        )
+    )
+    torch.testing.assert_close(
+        observed,
+        0.5 * raw_positive.mean() + 0.5 * raw_negative[:2].mean(),
+    )
+    torch.testing.assert_close(
+        effective_batch_balanced_bce(
+            ((negative_logits, negative_target, negative_valid),)
+        ),
+        raw_negative[:2].mean(),
+    )
+    with pytest.raises(TrainingError, match="no valid targets"):
+        effective_batch_balanced_bce(
+            ((negative_logits, negative_target, torch.zeros(3, dtype=torch.bool)),)
+        )
+
+
+def test_one_frozen_bank_round_trips_and_is_shared_by_b1_b2_b3(tmp_path: Path) -> None:
+    from src.train import (
+        _predict_window_for_test,
+        load_window_train_bank,
+        write_window_train_bank,
+    )
+
+    protocol = load_protocol(PROTOCOL_PATH)
+    renderer_identity = "b" * 64
+    source = _training_window(renderer_identity)
+    bank_path = tmp_path / "bank"
+    bank = write_window_train_bank(
+        bank_path,
+        (source,),
+        protocol=protocol,
+        renderer_identity=renderer_identity,
+    )
+    document = json.loads((bank_path / "manifest.json").read_text(encoding="utf-8"))
+    assert document["shared_by"] == ["B1", "B2", "B3"]
+    assert document["entry_count"] == len(bank) == 1
+    stored_world = WorldSpec.from_dict(
+        document["entries"][0]["window_manifest"]["world"]
+    )
+    assert stored_world.identity == source.world_identity
+    assert document["entries"][0]["valid_count"] == 5
+    assert document["entries"][0]["anomaly_count"] == 0
+    assert document["entries"][0]["normal_count"] == 5
+
+    loaded = load_window_train_bank(bank_path, protocol=protocol)[0]
+    assert loaded.window_identity == source.window_identity
+    assert loaded.world_identity == source.world_identity
+    assert loaded.source_observation_identities == source.source_observation_identities
+    assert loaded.stu_input_identities == source.stu_input_identities
+    assert loaded.five_source_frames == (0, 1, 2, 3, 4)
+    for name in (
+        "coordinates",
+        "scan_group",
+        "stu_features",
+        "normal_evidence",
+        "reliability_assign",
+        "reliability_noobj",
+        "intensity",
+        "target",
+        "valid",
+        "source_frame",
+        "source_slot",
+        "source_ray",
+    ):
+        torch.testing.assert_close(getattr(loaded, name), getattr(source, name))
+
+    class RecordingModel(nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.bias = nn.Parameter(torch.zeros(()))
+            self.calls: list[tuple[str, tuple[int, ...]]] = []
+
+        def forward(
+            self,
+            coordinates: torch.Tensor,
+            _stu: torch.Tensor,
+            _normal: torch.Tensor,
+            _assign: torch.Tensor,
+            _no_object: torch.Tensor,
+            _intensity: torch.Tensor,
+            scan_group: torch.Tensor,
+            *,
+            grouping_mode: object,
+        ) -> torch.Tensor:
+            mode = getattr(grouping_mode, "value", str(grouping_mode))
+            self.calls.append((str(mode), tuple(scan_group.tolist())))
+            return coordinates[:, 0] + self.bias
+
+    expected = loaded.coordinates[:, 0]
+    expected_calls = {"B1": 5, "B2": 1, "B3": 1}
+    expected_mode = {"B1": "single", "B2": "per_scan", "B3": "joint"}
+    for condition in ("B1", "B2", "B3"):
+        model = RecordingModel()
+        logits = _predict_window_for_test(model, loaded, condition)
+        torch.testing.assert_close(logits, expected)
+        assert len(model.calls) == expected_calls[condition]
+        assert {mode for mode, _ in model.calls} == {expected_mode[condition]}
+        assert loaded.window_identity == source.window_identity
+
+
+def test_frozen_bank_rejects_a_tampered_shard_before_use(tmp_path: Path) -> None:
+    from src.train import TrainingError, load_window_train_bank, write_window_train_bank
+
+    protocol = load_protocol(PROTOCOL_PATH)
+    bank_path = tmp_path / "bank"
+    bank = write_window_train_bank(
+        bank_path,
+        (_training_window("c" * 64),),
+        protocol=protocol,
+        renderer_identity="c" * 64,
+    )
+    shard = bank.entries[0].shard
+    shard.write_bytes(shard.read_bytes() + b"tampered")
+    reloaded = load_window_train_bank(bank_path, protocol=protocol)
+    with pytest.raises(TrainingError, match="shard hash changed"):
+        _ = reloaded[0]
+
+
+def test_frozen_bank_rejects_an_entry_without_content_identities(
+    tmp_path: Path,
+) -> None:
+    from src.train import TrainingError, load_window_train_bank, write_window_train_bank
+
+    protocol = load_protocol(PROTOCOL_PATH)
+    bank_path = tmp_path / "bank"
+    write_window_train_bank(
+        bank_path,
+        (_training_window("e" * 64),),
+        protocol=protocol,
+        renderer_identity="e" * 64,
+    )
+    manifest_path = bank_path / "manifest.json"
+    document = json.loads(manifest_path.read_text(encoding="utf-8"))
+    document["entries"][0].pop("source_observation_identities")
+    document["entries"][0].pop("stu_input_identities")
+    identity_payload = dict(document)
+    identity_payload.pop("bank_identity")
+    document["bank_identity"] = hashlib.sha256(
+        json.dumps(
+            identity_payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    manifest_path.write_text(json.dumps(document), encoding="utf-8")
+    with pytest.raises(TrainingError, match=r"entries\[0\] keys differ"):
+        load_window_train_bank(bank_path, protocol=protocol)
+
+
+@pytest.mark.parametrize("changed_field", ("point", "label"))
+def test_window_identity_rejects_changed_rendered_observation(
+    changed_field: str,
+) -> None:
+    from src.train import TrainingError
+
+    source = _training_window("d" * 64)
+    original = _one_return_source(0, 4.0, 0.2)
+    if changed_field == "point":
+        xyzi = original.xyzi.copy()
+        xyzi[0, 0] += np.float32(0.01)
+        changed = make_source_frame(
+            original.frame_id,
+            xyzi,
+            original.lidar_pose,
+            original.labels,
+            partition=original.partition,
+            sequence_id=original.sequence_id,
+        )
+    else:
+        changed = make_source_frame(
+            original.frame_id,
+            original.xyzi,
+            original.lidar_pose,
+            _labels(np.asarray((11, 0), dtype=np.uint16)),
+            partition=original.partition,
+            sequence_id=original.sequence_id,
+        )
+    changed_identity = source_observation_identity(changed)
+    assert changed.frame_id == original.frame_id
+    assert changed.sequence_id == original.sequence_id
+    assert changed_identity != source.source_observation_identities[0]
+
+    observations = (changed_identity, *source.source_observation_identities[1:])
+    manifest = {
+        **source.window_manifest,
+        "source_observation_identities": list(observations),
+    }
+    assert manifest["frame_ids"] == source.window_manifest["frame_ids"]
+    assert manifest["world_identity"] == source.world_identity
+    with pytest.raises(TrainingError, match="identity does not match its inputs"):
+        replace(
+            source,
+            source_observation_identities=observations,
+            window_manifest=manifest,
+            window_identity="",
+        )
+
+
+def test_nine_frames_expose_every_window_and_occurrence_stratum() -> None:
+    spec = SequenceSpec("train", 201, "fixture", True, FrameSpan(0, 9))
+    starts = spec.legal_window_starts()
+    assert starts == (0, 1, 2, 3, 4)
+    assert tuple(spec.window_frame_ids(start) for start in starts) == (
+        (0, 1, 2, 3, 4),
+        (1, 2, 3, 4, 5),
+        (2, 3, 4, 5, 6),
+        (3, 4, 5, 6, 7),
+        (4, 5, 6, 7, 8),
+    )
+
+    world = "world-A"
+    fusion = WindowScoreFusion()
+    expected: dict[int, list[float]] = {frame: [] for frame in range(9)}
+    for start in starts:
+        frames = np.arange(start, start + 5, dtype=np.int32)
+        probabilities = 0.08 + 0.07 * start + 0.01 * frames
+        logits = np.log(probabilities / (1.0 - probabilities))
+        fusion.add_synthetic(
+            world_identity=world,
+            window_start=start,
+            source_frame=frames,
+            source_ray=1000 + frames,
+            source_slot=np.zeros(5, dtype=np.int32),
+            logits=logits,
+        )
+        for frame, probability in zip(frames, probabilities, strict=True):
+            expected[int(frame)].append(float(probability))
+
+    # Identical physical keys remain independent in another world and real sequence.
+    fusion.add_synthetic(
+        world_identity="world-B",
+        window_start=0,
+        source_frame=np.asarray((0,), dtype=np.int32),
+        source_ray=np.asarray((1000,), dtype=np.int32),
+        source_slot=np.asarray((0,), dtype=np.int32),
+        logits=np.asarray((math.log(0.99 / 0.01),)),
+    )
+    fusion.add_real(
+        partition="train",
+        sequence_id=201,
+        window_start=0,
+        source_frame=np.asarray((0,), dtype=np.int32),
+        source_ray=np.asarray((1000,), dtype=np.int32),
+        source_slot=np.asarray((0,), dtype=np.int32),
+        logits=np.asarray((math.log(0.25 / 0.75),)),
+    )
+    fusion.add_real(
+        partition="train",
+        sequence_id=206,
+        window_start=0,
+        source_frame=np.asarray((0,), dtype=np.int32),
+        source_ray=np.asarray((1000,), dtype=np.int32),
+        source_slot=np.asarray((0,), dtype=np.int32),
+        logits=np.asarray((0.0,)),
+    )
+    fusion.add_real(
+        partition="val",
+        sequence_id=125,
+        window_start=0,
+        source_frame=np.asarray((0,), dtype=np.int32),
+        source_ray=np.asarray((1000,), dtype=np.int32),
+        source_slot=np.asarray((0,), dtype=np.int32),
+        logits=np.asarray((math.log(0.75 / 0.25),)),
+    )
+
+    result = fusion.finalize_synthetic(world)
+    assert result.source_frame.tolist() == list(range(9))
+    assert result.occurrence_count.tolist() == [1, 2, 3, 4, 5, 4, 3, 2, 1]
+    assert result.occurrence_histogram == {"1": 2, "2": 2, "3": 2, "4": 2, "5": 1}
+    independent = np.asarray(
+        [np.sum(expected[frame], dtype=np.float64) / len(expected[frame]) for frame in range(9)]
+    )
+    np.testing.assert_allclose(result.probability, independent, atol=2e-16, rtol=2e-15)
+    assert fusion.finalize_synthetic("world-B").probability[0] == pytest.approx(0.99)
+    assert fusion.finalize_real("train", 201).probability[0] == pytest.approx(0.25)
+    assert fusion.finalize_real("train", 206).probability[0] == pytest.approx(0.5)
+    assert fusion.finalize_real("val", 125).probability[0] == pytest.approx(0.75)
+
+
+def test_b0_fusion_preserves_the_frozen_stu_score_domain() -> None:
+    fusion = WindowScoreFusion(fusion_value=B0_FUSION_VALUE)
+    for window_start in (0, 1):
+        fusion.add_real_scores(
+            partition="train",
+            sequence_id=206,
+            window_start=window_start,
+            source_frame=np.asarray((1,), dtype=np.int32),
+            source_ray=np.asarray((7,), dtype=np.int32),
+            source_slot=np.asarray((3,), dtype=np.int32),
+            scores=np.asarray((-4.25,), dtype=np.float64),
+        )
+    result = fusion.finalize_real("train", 206)
+    assert result.score.tolist() == [-4.25]
+    assert result.occurrence_count.tolist() == [2]
+    with pytest.raises(EvaluationError, match="not probabilities"):
+        _ = result.probability
+
+
+def test_checkpoint_selection_excludes_the_six_held_out_torus_clips() -> None:
+    import src.train as train_module
+
+    identity = EvaluationIdentity(
+        protocol_schema=31,
+        protocol_identity="1" * 64,
+        condition="B3",
+        fusion_value=AJAE_FUSION_VALUE,
+        model_class="JointWindowPointTransformer",
+        model_state_sha256="2" * 64,
+        stu_class="FrozenSTUPointEncoder",
+        stu_checkpoint_sha256="3" * 64,
+        stu_model_state_sha256="4" * 64,
+        stu_source_manifest_sha256="5" * 64,
+        calibration_sha256="6" * 64,
+        ray_mapping_sha256="7" * 64,
+    )
+    clips = []
+    definitions = []
+    for index in range(30):
+        mechanism = "in_generator" if index < 24 else "torus_SDF"
+        clip_identity = hashlib.sha256(f"clip-{index}".encode()).hexdigest()
+        world_identity = hashlib.sha256(f"world-{index}".encode()).hexdigest()
+        observations = tuple(
+            hashlib.sha256(f"observation-{index}-{frame}".encode()).hexdigest()
+            for frame in range(9)
+        )
+        clips.append(
+            DevelopmentClipResult(
+                clip_identity=clip_identity,
+                world_identity=world_identity,
+                source_observation_identities=observations,
+                mechanism=mechanism,
+                fused_point_ap=0.2 if mechanism == "in_generator" else 0.9,
+                unique_point_count=1,
+                occurrence_count=1,
+                occurrence_histogram={
+                    "1": 1,
+                    "2": 0,
+                    "3": 0,
+                    "4": 0,
+                    "5": 0,
+                },
+                frame_count=9,
+                window_count=5,
             )
-            assert report.generator_schema == 7
-            assert shape.operations == ("union",) * primitive_count
-            assert shape.connectivity_certificate.source == "connected_union_graph"
-            assert len(report.child_parent_indices) == primitive_count - 1
-            assert len(report.shared_witnesses_undeformed_m) == primitive_count - 1
-            assert all(
-                shape._primitive_star_certificate(index)
-                for index in range(primitive_count)
+        )
+        definitions.append(
+            SimpleNamespace(
+                identity=clip_identity,
+                world_identity=world_identity,
+                mechanism=mechanism,
+                frame_ids=tuple(range(9)),
+                windows=tuple(range(5)),
+                source_observation_identities=observations,
             )
-            for index in range(1, primitive_count):
-                parent = report.child_parent_indices[index - 1]
-                assert 0 <= parent < index
-                witness = np.asarray(report.shared_witnesses_undeformed_m[index - 1])[None]
-                parent_value = float(shape._primitive_perturbed_value(parent, witness)[0])
-                child_value = float(shape._primitive_perturbed_value(index, witness)[0])
-                assert parent_value < 0.0 and child_value < 0.0
-                assert report.witness_parent_margins_m[index - 1] == -parent_value
-                assert report.witness_child_margins_m[index - 1] == -child_value
+        )
+    evidence = DevelopmentFusedAP("B3", tuple(clips), identity, FUSION_SEMANTICS)
+    assert evidence.in_generator_macro_fused_point_ap == pytest.approx(0.2)
+    assert evidence.held_out_macro_fused_point_ap == pytest.approx(0.9)
+    assert evidence.macro_fused_point_ap == pytest.approx(0.2)
+    assert evidence.all_clips_macro_fused_point_ap == pytest.approx(
+        (24 * 0.2 + 6 * 0.9) / 30
+    )
+
+    development = SimpleNamespace(
+        definitions=SimpleNamespace(
+            protocol_identity=identity.protocol_identity,
+            clips=tuple(definitions),
+        ),
+        identity="8" * 64,
+    )
+    record = train_module._development_record(
+        evidence, ExperimentCondition.B3, development
+    )
+    assert record["selection_metric"] == "in_generator_macro_fused_point_ap"
+    assert record["in_generator_macro_fused_point_ap"] == pytest.approx(0.2)
+    assert record["held_out_torus_macro_fused_point_ap"] == pytest.approx(0.9)
+    assert record["held_out_torus_role"] == (
+        "diagnostic_only_excluded_from_checkpoint_selection"
+    )
 
 
 @pytest.mark.parametrize(
-    ("seed", "origin", "direction", "reference_root"),
-    (
-        (
-            99,
-            (0.7682490608623493, 0.5460731616297538, 4.583701428336049),
-            (-0.14755561851059673, -0.21011651960391545, -0.9664773083914038),
-            4.3844959571405315,
-        ),
-        (
-            15,
-            (-0.8973395825762842, -0.02533799707999456, -4.3863570066163655),
-            (0.26606760813298547, -0.067353110887987, 0.9615984538028869),
-            3.7124355859608693,
-        ),
-    ),
+    ("partition", "sequence_id", "label_mode"),
+    (("val", 125, LabelMode.REQUIRED), ("test", 100, LabelMode.FORBIDDEN)),
 )
-def test_intersection_refines_a_narrow_segment_before_a_later_coarse_hit(
-    seed: int,
-    origin: tuple[float, float, float],
-    direction: tuple[float, float, float],
-    reference_root: float,
+def test_sealed_sequences_are_rejected_before_path_resolution(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    partition: str,
+    sequence_id: int,
+    label_mode: LabelMode,
 ) -> None:
-    shape, _ = ShapeSpec.sample_with_report(seed)
-    distance, normal, hit = shape.intersect(
-        np.asarray(origin), np.asarray(direction)[None]
-    )
-    assert hit[0]
-    assert abs(distance[0] - reference_root) <= 1.0e-4
-    assert np.isfinite(normal[0]).all()
-    assert abs(np.linalg.norm(normal[0]) - 1.0) <= 1.0e-12
-
-
-def test_tight_continuous_outer_bound_is_conservative_and_no_looser() -> None:
-    shape = ShapeSpec(
-        ((1.0, 0.6, 0.8), (0.5, 0.4, 0.6)),
-        ((0.0, 0.0, 0.0), (0.3, 0.0, 0.1)),
-        ((1.0, 0.8), (1.2, 1.1)),
-        (0.35, -0.4),
-        ("union", "union"),
-        twist_rad_per_m=0.7,
-        bend_per_m=(0.04, -0.03),
-        taper_per_m=(0.08, -0.06),
-        surface_amplitude_m=0.01,
-    )
-    old_lower, old_upper = shape._continuous_outer_bounds()
-    new_lower, new_upper = shape.tight_continuous_outer_bounds()
-    assert np.all(new_lower >= old_lower)
-    assert np.all(new_upper <= old_upper)
-    rng = np.random.default_rng(20260826)
-    points = rng.uniform(old_lower, old_upper, size=(131_072, 3))
-    inside = points[shape.signed_distance(points) <= 0.0]
-    assert len(inside) > 0
-    assert np.all(inside >= new_lower)
-    assert np.all(inside <= new_upper)
-
-
-def test_continuous_primitive_bounds_match_an_analytic_rotated_ellipsoid() -> None:
-    scales = (0.3, 0.7, 1.1)
-    yaw = 0.4
-    shape = ShapeSpec(
-        (scales,),
-        ((0.0, 0.0, 0.0),),
-        ((1.0, 1.0),),
-        (yaw,),
-        ("union",),
-    )
-    lower, upper = shape.continuous_bounds(
-        maximum_iterations=80, population_size=10
-    )
-    expected = np.asarray(
-        (
-            np.hypot(scales[0] * np.cos(yaw), scales[1] * np.sin(yaw)),
-            np.hypot(scales[0] * np.sin(yaw), scales[1] * np.cos(yaw)),
-            scales[2],
-        )
-    )
-    np.testing.assert_allclose(lower, -expected, atol=5.0e-6, rtol=0.0)
-    np.testing.assert_allclose(upper, expected, atol=5.0e-6, rtol=0.0)
-
-
-def test_csg_continuous_size_certificate_encloses_analytic_lens() -> None:
-    shape = ShapeSpec(
-        ((1.0, 1.0, 1.0), (1.0, 1.0, 1.0)),
-        ((-0.5, 0.0, 0.0), (0.5, 0.0, 0.0)),
-        ((1.0, 1.0), (1.0, 1.0)),
-        (0.0, 0.0),
-        ("union", "intersection"),
-    )
-    standard = shape.continuous_size_certificate(
-        sobol_probes=4096, maximum_interior_lines=64
-    )
-    strict = shape.continuous_size_certificate(
-        sobol_probes=32768, maximum_interior_lines=256
-    )
-    exact_size = np.sqrt(3.0)
-    assert standard.lower_size_m <= exact_size <= standard.upper_size_m
-    assert strict.lower_size_m >= standard.lower_size_m
-    assert strict.outer_lower_m == standard.outer_lower_m
-    assert strict.outer_upper_m == standard.outer_upper_m
-    assert standard.maximum_surface_residual_m < 1.0e-8
-
-
-def test_training_world_uses_only_the_qualified_placement_pipeline(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    x, y = np.meshgrid(np.arange(20), np.arange(20), indexing="ij")
-    anchors = np.column_stack((4.0 * x.ravel(), 4.0 * y.ravel(), np.zeros(x.size)))
-    count = anchors.shape[0]
-    pool = QualifiedSupportPool(
-        np.arange(count), np.full(count, 40, np.uint16), np.arange(count) % 449,
-        np.arange(count), np.linalg.norm(anchors, axis=1), np.arange(count, dtype=np.uint64),
-        anchors, np.tile((0.0, 0.0, 1.0), (count, 1)), np.zeros(count),
-    )
-    obstacles = ObservedObstacleIndex(
-        np.asarray(((1000.0, 1000.0, 1000.0),)), np.asarray((1,), np.uint64)
-    )
-    vertices = np.asarray(
-        [
-            (x_value, y_value, z_value)
-            for x_value in (-1.0, 1.0)
-            for y_value in (-0.5, 0.5)
-            for z_value in (-0.5, 0.5)
-        ]
-    )
-    template = NormalTemplateShape(
-        vertices,
-        np.empty((0, 3), dtype=np.int32),
-        206,
-        0,
-        10,
-        1,
-        (0.0, 0.0, 0.0),
-    )
-    counts = [(1, 1)]
-    monkeypatch.setattr(render_module, "_training_entity_counts", lambda *_: counts[0])
-    fixture_frame, grid = _small_ray_fixture()
-    frames = tuple(make_source_frame(
-        frame_id,
-        fixture_frame.xyzi,
-        fixture_frame.lidar_pose,
-        fixture_frame.labels,
-        partition="train",
-        sequence_id=206,
-    ) for frame_id in range(449))
-    context = render_module.build_coverage_control_context(
-        frames, pool, grid, SensorCalibration.constant(1.0)
-    )
-    observed_worlds: list[tuple[int, tuple[int, ...]]] = []
-
-    def passing_observation(
-        _: object, item: object, patch: object, world_seed: int,
-        assigned_range_bin: int, world_objects: object,
-    ) -> object:
-        observed_worlds.append((
-            world_seed, tuple(value.object_id for value in world_objects)
-        ))
-        return render_module._E25NewObservation(
-            patch.frame_id, 1, 1, 1, 1, 5.0, 0.0,
-            assigned_range_bin, 0, 0.0,
-        )
-
-    monkeypatch.setattr(
-        render_module, "_coverage_control_observation", passing_observation
-    )
-    first, first_report = sample_training_world(
-        (template,), pool, obstacles, "mixed", 7,
-        control_context=context,
-    )
-    repeated, repeated_report = sample_training_world(
-        (template,), pool, obstacles, "mixed", 7,
-        control_context=context,
-    )
-    assert first.to_dict() == repeated.to_dict()
-    assert first_report.to_dict() == repeated_report.to_dict()
-    assert render_module.WorldGenerationReport.from_dict(
-        json.loads(first_report.to_json())
-    ).to_json() == first_report.to_json()
-    assert first_report.normal_count == 1
-    assert first_report.anomaly_count == 1
-    assert first_report.count_seed == 7
-    assert first.world_type == "mixed"
-    assert len(first_report.placements) == 2
-    assert all(record.support_semantic == 40 for record in first_report.placements)
-    assert all(record.accepted_proposal < 128 for record in first_report.placements)
-    assert all(not record.rejection_reasons or set(record.rejection_reasons) <= {
-        "observed_normal_deep_penetration", "obvious_pair_penetration",
-    } for record in first_report.placements)
-    assert observed_worlds
-    assert all(world_seed == 7 for world_seed, _ in observed_worlds)
-    assert any(len(object_ids) == 2 for _, object_ids in observed_worlds)
-
-
-def test_shape_stream_rejects_e22_invalid_shape_before_support_sampling() -> None:
-    _, _, grounding, proposed, rejected = render_module._grounding_qualified_shape(
-        3_000_471, stride=3072, maximum_proposals=64
-    )
-    assert proposed == (3_000_471, 3_003_543)
-    assert rejected == (3_000_471,)
-    assert grounding.passed
-
-
-def test_e25_new_contract_has_one_fixed_template_range_assignment() -> None:
-    assigned = np.asarray([
-        render_module._e25_new_assigned_range_bin(index)
-        for index in range(256)
-    ])
-    np.testing.assert_array_equal(
-        np.bincount(assigned, minlength=5), np.asarray((52, 51, 51, 51, 51))
-    )
-    arguments = render_module._render_parser().parse_args([
-        "qualify-e25-new-normal-control",
-        "--data-root", "/data",
-        "--support-pool", "support.npz",
-        "--calibration", "calibration.pt",
-        "--output", "e25-new.npz",
-    ])
-    assert arguments.processes == 24
-    e26 = render_module._render_parser().parse_args([
-        "qualify-e26-v2",
-        "--data-root", "/data",
-        "--support-pool", "support.npz",
-        "--calibration", "calibration.pt",
-        "--output", "e26-v2.npz",
-    ])
-    assert e26.processes == 24
-    e38 = render_module._render_parser().parse_args([
-        "qualify-e38-v2",
-        "--data-root", "/data",
-        "--e25-new-artifact", "e25-new.npz",
-        "--support-pool", "support-201.npz",
-        "--calibration", "calibration.pt",
-        "--candidate-bank-output", "gate1-v2.npz",
-        "--output", "e38-v2.npz",
-    ])
-    assert e38.processes == 24
-    assert e38.e25_new_artifact == Path("e25-new.npz")
-    assert e38.support_pool == Path("support-201.npz")
-
-
-def test_gate1_v2_template_draw_and_five_frame_filter_are_frozen(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    for attempt_seed in (3_800_000, 4_800_003, 51_800_141):
-        expected = int(
-            np.random.default_rng(attempt_seed + 1).integers(0, 256)
-        )
-        assert render_module._gate1_control_template_assignment(
-            attempt_seed
-        ) == (expected, expected % 5)
-
-    frames = np.asarray((4, 8, 9, 10, 12, 13), dtype=np.int16)
-    context = SimpleNamespace(
-        support_pool=SimpleNamespace(frames=frames)
-    )
-    global_stream = np.asarray((5, 2, 4, 1, 3, 0), dtype=np.int64)
-    monkeypatch.setattr(
-        render_module,
-        "_coverage_control_support_stream",
-        lambda *_: global_stream,
-    )
-    selected = render_module._gate1_control_rows(context, 7, 10, 2, 10)
-    np.testing.assert_array_equal(selected, np.asarray((2, 4, 1, 3)))
-
-
-def test_streaming_control_context_loads_only_requested_frames() -> None:
-    fixture, grid = _small_ray_fixture()
-    frames = {
-        frame_id: make_source_frame(
-            frame_id,
-            fixture.xyzi,
-            fixture.lidar_pose,
-            fixture.labels,
-            partition="train",
-            sequence_id=201,
-        )
-        for frame_id in (0, 1)
-    }
-    pool = QualifiedSupportPool(
-        np.asarray((0, 1)), np.asarray((40, 40), dtype=np.uint16),
-        np.asarray((0, 1)), np.asarray((0, 1)), np.asarray((4.0, 4.0)),
-        np.asarray((0, 1), dtype=np.uint64),
-        np.asarray(((4.0, 0.0, 0.0), (4.0, 0.0, 0.0))),
-        np.asarray(((0.0, 0.0, 1.0), (0.0, 0.0, 1.0))), np.zeros(2),
-    )
-    requested: list[int] = []
-
-    def load(frame_id: int) -> object:
-        requested.append(frame_id)
-        return frames[frame_id]
-
-    context = render_module.build_coverage_control_context(
-        (), pool, grid, SensorCalibration.constant(1.0),
-        frame_loader=load, frame_ids=(0, 1), source_sequence_id=201,
-        trajectory_yaws={0: 0.0, 1: 0.0},
-    )
-    assert context.frames_by_id == {}
-    first = render_module._e25_new_frame_context(context, 0)
-    repeated = render_module._e25_new_frame_context(context, 0)
-    assert first is repeated
-    assert requested == [0]
-    assert context.frames_by_id == {}
-    wrong = render_module.build_coverage_control_context(
-        (), pool, grid, SensorCalibration.constant(1.0),
-        frame_loader=lambda _: frames[1], frame_ids=(0, 1),
-        source_sequence_id=201, trajectory_yaws={0: 0.0, 1: 0.0},
-    )
-    with pytest.raises(render_module.RenderError, match="identity changed"):
-        render_module._e25_new_frame_context(wrong, 0)
-
-
-def test_gate1_v2_loader_rejects_historical_bank_schema(tmp_path: Path) -> None:
-    artifact = tmp_path / "historical-gate1.npz"
-    np.savez_compressed(
-        artifact,
-        metadata_json=np.asarray(json.dumps({
-            "experiment": "Gate1-candidate-bank-v1",
-            "passed": True,
-            "capacity": 256,
-        })),
-    )
-    with pytest.raises(render_module.RenderError, match="not qualified"):
-        render_module._load_gate1_bank(artifact)
-
-
-def test_gate1_trace_uses_the_official_range_offset() -> None:
-    columns = 8
-    azimuth = np.arange(columns, dtype=np.float64) * (-2.0 * np.pi / columns)
-    directions = np.stack(
-        (np.cos(azimuth), np.sin(azimuth), np.zeros(columns)), axis=1
-    )
-    grid = RayGrid(
-        directions, np.zeros(1), azimuth, beam_count=1,
-        official_range_offset_m=0.2,
-    )
-    xyzi = np.zeros((columns, 4), dtype=np.float32)
-    frame = make_source_frame(
-        8, xyzi, np.eye(4), _labels(np.zeros(columns, dtype=np.uint16)),
-        partition="train", sequence_id=201,
-    )
-    vertices = np.asarray([
-        (x_value, y_value, z_value)
-        for x_value in (-0.1, 0.1)
-        for y_value in (-0.2, 0.2)
-        for z_value in (-0.2, 0.2)
-    ])
-    shape = NormalTemplateShape(
-        vertices, np.empty((0, 3), dtype=np.int32),
-        206, 0, 10, 1, (0.0, 0.0, 0.0),
-    )
-    item = render_module.ObjectSpec(
-        1, "normal-control", shape, render_module.MaterialSpec(0.5, 0.2),
-        (9.93, 0.0, 0.0),
-        ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0)),
-    )
-    world = WorldSpec(3_800_000, 201, (item,))
-    geometry, accepted, distance, rendered = (
-        render_module._gate1_single_object_trace(
-            frame, world, grid, SensorCalibration.constant(1.0)
-        )
-    )
-    returned = np.asarray(rendered.normal_control_mask)
-    assert geometry[0] and accepted[0] and returned[0]
-    assert distance[0] == pytest.approx(10.03, abs=1.0e-10)
-    assert render_module._gate1_range_bin(distance)[0] == 1
-    rendered_range = np.asarray(grid.official_ranges(rendered.source))[returned]
-    assert rendered_range[0] == pytest.approx(10.03, abs=1.0e-6)
-
-
-def test_e38_shared_trace_contract_cross_checks_all_count_views() -> None:
-    _, grid = _small_ray_fixture()
-    units = tuple(
-        SimpleNamespace(bank_seed=3_800_000 + index, center_frame=10)
-        for index in range(256)
-    )
-    seeds = np.broadcast_to(
-        np.arange(3_800_000, 3_800_256, dtype=np.int64)[:, None, None],
-        (256, 3, 5),
-    ).copy()
-    sources = np.broadcast_to(
-        np.arange(3, dtype=np.uint8)[None, :, None], (256, 3, 5)
-    ).copy()
-    frames = np.broadcast_to(
-        np.arange(8, 13, dtype=np.int16)[None, None, :], (256, 3, 5)
-    ).copy()
-    trace = {
-        "bank_seed": seeds, "source": sources, "frame_id": frames,
-        "support_semantic": np.full((256, 3, 5), 40, dtype=np.uint16),
-        "opportunity": np.zeros((256, 3, 5, 1), dtype=np.int32),
-        "return_count": np.zeros((256, 3, 5, 1), dtype=np.int32),
-        "median_distance_m": np.zeros((256, 3, 5)),
-        "median_beam": np.zeros((256, 3, 5)),
-        "range_opportunity": np.zeros((256, 3, 5, 5), dtype=np.int32),
-        "range_return_count": np.zeros((256, 3, 5, 5), dtype=np.int32),
-        "geometry_hits": np.zeros((256, 3, 5), dtype=np.int32),
-        "accepted_hits": np.zeros((256, 3, 5), dtype=np.int32),
-        "visible_returns": np.zeros((256, 3, 5), dtype=np.int32),
-        "visible_distance_m": np.zeros((256, 3, 5)),
-        "empty_slots": np.zeros((256, 2, 5, 1), dtype=np.int32),
-        "empty_geometry": np.zeros((256, 2, 5, 1, 5), dtype=np.int32),
-        "empty_accepted": np.zeros((256, 2, 5, 1, 5), dtype=np.int32),
-        "empty_final_new": np.zeros((256, 2, 5, 1, 5), dtype=np.int32),
-        "intensity_source": np.asarray((1,), dtype=np.uint8),
-        "intensity_bank_seed": np.asarray((3_800_000,), dtype=np.int64),
-        "intensity_frame": np.asarray((8,), dtype=np.int16),
-        "intensity_slot": np.asarray((0,), dtype=np.int32),
-        "intensity_beam": np.asarray((0,), dtype=np.int16),
-        "intensity_official_range_m": np.asarray((5.0,)),
-        "intensity_range_bin": np.asarray((0,), dtype=np.int8),
-        "intensity_value": np.asarray((0.5,), dtype=np.float32),
-    }
-    trace["opportunity"][0, 1, 0, 0] = 1
-    trace["return_count"][0, 1, 0, 0] = 1
-    trace["range_opportunity"][0, 1, 0, 0] = 1
-    trace["range_return_count"][0, 1, 0, 0] = 1
-    trace["geometry_hits"][0, 1, 0] = 1
-    trace["accepted_hits"][0, 1, 0] = 1
-    trace["visible_returns"][0, 1, 0] = 1
-    assert render_module._e38_trace_contract_errors(trace, grid, units) == 0
-    trace["range_return_count"][0, 1, 0, 0] = 0
-    assert render_module._e38_trace_contract_errors(trace, grid, units) > 0
-
-
-def test_e26_manifest_audit_does_not_reclassify_finite_sampling_exhaustion() -> None:
-    records = ({"hard_error": 0, "placement_exhaustion": 1},)
-    assert render_module._e26_single_manifest_errors(records) == 0
-
-
-def test_placement_postcheck_rejects_only_the_current_support_proposal() -> None:
-    vertices = np.asarray([
-        (x_value, y_value, z_value)
-        for x_value in (-1.0, 1.0)
-        for y_value in (-0.5, 0.5)
-        for z_value in (-0.5, 0.5)
-    ])
-    template = NormalTemplateShape(
-        vertices, np.empty((0, 3), dtype=np.int32),
-        206, 0, 10, 1, (0.0, 0.0, 0.0),
-    )
-    pool = QualifiedSupportPool(
-        np.asarray((0, 1)), np.asarray((40, 40), dtype=np.uint16),
-        np.asarray((0, 1)), np.asarray((0, 1)), np.asarray((5.0, 6.0)),
-        np.asarray((0, 1), dtype=np.uint64),
-        np.asarray(((5.0, 0.0, 0.0), (6.0, 0.0, 0.0))),
-        np.asarray(((0.0, 0.0, 1.0), (0.0, 0.0, 1.0))),
-        np.zeros(2),
-    )
-    obstacles = ObservedObstacleIndex(
-        np.asarray(((1000.0, 1000.0, 1000.0),)), np.asarray((1,), np.uint64)
-    )
-    checked: list[int] = []
-
-    def postcheck(_: object, patch: object) -> str | None:
-        checked.append(patch.pool_index)
-        return "fixture_sensor_rejection" if len(checked) == 1 else None
-
-    _, record = render_module.place_object(
-        template,
-        render_module.MaterialSpec(0.5, 0.2),
-        pool,
-        obstacles,
-        object_id=1,
-        label="normal-control",
-        proposal_namespace="fixture",
-        proposal_stream=0,
-        yaw_rad=0.0,
-        material_seed=1,
-        yaw_seed=2,
-        template_identity="fixture",
-        proposal_rows=(0, 1),
-        post_placement_rejection=postcheck,
-    )
-    assert checked == [0, 1]
-    assert record.accepted_proposal == 1
-    assert record.rejection_reasons == ("fixture_sensor_rejection",)
-
-
-def test_e25_new_sparse_trace_is_rechecked_by_the_complete_renderer(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    fixture_frame, grid = _small_ray_fixture()
-    frame = make_source_frame(
-        0,
-        fixture_frame.xyzi,
-        fixture_frame.lidar_pose,
-        fixture_frame.labels,
-        partition="train",
-        sequence_id=206,
-    )
-    vertices = np.asarray([
-        (x_value, y_value, z_value)
-        for x_value in (-1.0, 1.0)
-        for y_value in (-0.5, 0.5)
-        for z_value in (-0.5, 0.5)
-    ])
-    template = NormalTemplateShape(
-        vertices, np.empty((0, 3), dtype=np.int32),
-        206, 0, 10, 1, (0.0, 0.0, 0.0),
-    )
-    item = render_module.ObjectSpec(
-        1,
-        "normal-control",
-        template,
-        render_module.MaterialSpec(0.5, 0.2),
-        (4.0, 0.0, 0.0),
-        ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0)),
-    )
-    sensor = SensorCalibration.constant(0.5)
-    pool = QualifiedSupportPool(
-        np.asarray((0,)), np.asarray((40,), dtype=np.uint16),
-        np.asarray((0,)), np.asarray((0,)), np.asarray((4.0,)),
-        np.asarray((0,), dtype=np.uint64),
-        np.asarray(((4.0, 0.0, 0.0),)),
-        np.asarray(((0.0, 0.0, 1.0),)), np.zeros(1),
-    )
-    context = render_module.build_coverage_control_context(
-        (
-            frame,
-            make_source_frame(
-                1,
-                fixture_frame.xyzi,
-                fixture_frame.lidar_pose,
-                fixture_frame.labels,
-                partition="train",
-                sequence_id=206,
-            ),
-        ),
-        pool,
-        grid,
-        sensor,
-    )
-    monkeypatch.setattr(render_module, "_E25_NEW_CONTROL_CONTEXT", context)
-    patch = render_module.SupportPatch(
-        0, 40, 0, 0, 4.0, 0,
-        (4.0, 0.0, 0.0), (0.0, 0.0, 1.0), 0.0,
-    )
-    observation = render_module._e25_new_observation(item, patch, 2_500_000, 0)
-    assert observation.visible_returns >= 1
-    assert observation.range_bin == 0
-
-
-def test_normal_template_pca_axis_is_aligned_before_support_pose() -> None:
-    angle = math.radians(37.0)
-    vertices = np.asarray([
-        (x_value, y_value, z_value)
-        for x_value in (-2.0, 2.0)
-        for y_value in (-0.5, 0.5)
-        for z_value in (-0.5, 0.5)
-    ])
-    rotation = np.asarray([
-        (math.cos(angle), -math.sin(angle)),
-        (math.sin(angle), math.cos(angle)),
-    ])
-    vertices[:, :2] = vertices[:, :2] @ rotation.T
-    source = NormalTemplateShape(
-        vertices, np.empty((0, 3), dtype=np.int32),
-        206, 0, 10, 1, (0.0, 0.0, 0.0),
-    )
-    aligned = render_module._aligned_scaled_template(source, (1.0, 1.0, 1.0))
-    covariance = np.cov(aligned.vertices_m[:, :2], rowvar=False, bias=True)
-    assert covariance[0, 0] > covariance[1, 1]
-    assert abs(covariance[0, 1]) < 1.0e-10
-
-
-def test_normal_template_surface_sampling_uses_a_convex_hull_interior() -> None:
-    vertices = np.asarray([
-        (x_value, y_value, z_value)
-        for x_value in (2.0, 4.0)
-        for y_value in (-0.5, 0.5)
-        for z_value in (-0.5, 0.5)
-    ])
-    template = NormalTemplateShape(
-        vertices, np.empty((0, 3), dtype=np.int32),
-        206, 0, 10, 1, (0.0, 0.0, 0.0),
-    )
-    points = render_module._fibonacci_surface_points(template, 256)
-    assert points.shape == (256, 3)
-    assert np.max(np.abs(template.signed_distance(points))) < 1.0e-10
-
-
-def test_placement_authority_audit_ignores_its_own_string_literals() -> None:
-    source = Path(render_module.__file__).read_text(encoding="utf-8")
-    assert render_module._placement_authority_errors(source) == 0
-
-
-def test_xy_hull_distance_uses_closed_polygon_euclidean_distance() -> None:
-    polygon = np.asarray(((0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)))
-    equations = np.asarray(
-        ((0.0, -1.0, 0.0), (1.0, 0.0, -1.0),
-         (0.0, 1.0, -1.0), (-1.0, 0.0, 0.0))
-    )
-    points = np.asarray(((0.5, 0.5), (1.3, 0.4), (-0.3, -0.4)))
-    assert np.allclose(
-        render_module._xy_hull_distance(points, polygon, equations),
-        np.asarray((0.0, 0.3, 0.5)),
-    )
-
-
-@pytest.mark.parametrize("slope_deg", [0.0, 5.0, 10.0])
-def test_e21_support_plane_fixtures(slope_deg: float) -> None:
-    coordinate = np.linspace(-1.25, 1.25, 51)
-    x, y = np.meshgrid(coordinate, coordinate, indexing="ij")
-    slope = math.radians(slope_deg)
-    z = np.tan(slope) * x + 0.002 * np.sin(7.0 * x + 3.0 * y)
-    points = np.column_stack((x.ravel(), y.ravel(), z.ravel()))
-    result = render_module.qualify_support_plane(
-        points, np.zeros(3, dtype=np.float64)
-    )
-    assert result.qualified
-    expected = np.asarray((-math.sin(slope), 0.0, math.cos(slope)))
-    angle = math.degrees(
-        math.acos(
-            float(
-                np.clip(
-                    np.dot(result.estimates[1].normal, expected), -1.0, 1.0
-                )
-            )
-        )
-    )
-    assert angle <= 0.5
-    assert abs(result.estimates[1].anchor_height_m) <= 0.01
-
-
-def test_common_renderer_is_deterministic_for_pure_normal_world() -> None:
-    frame, grid = _small_ray_fixture()
-    world = WorldSpec(9, 99)
-    sensor = SensorCalibration.constant(0.4)
-    first = render_frame(frame, world, grid, sensor)
-    second = render_frame(frame, world, grid, sensor)
-    np.testing.assert_array_equal(first.source.xyzi, second.source.xyzi)
-    np.testing.assert_array_equal(first.packed_labels, second.packed_labels)
-    assert not bool(first.inserted_mask.any())
-    assert not bool(first.anomaly_proxy_mask.any())
-    assert np.all(first.unchanged_normal_mask)
-
-
-def test_frame_cache_isolates_same_frame_across_worlds() -> None:
-    cache = FrameCache(4)
-    digest = lambda value: hashlib.sha256(value.encode("ascii")).hexdigest()
-    trainer = object.__new__(AJAETrainer)
-    trainer.training_source_identity = digest("train/206/content")
-    trainer.renderer_generator_identity = digest("renderer-generator-v1")
-    trainer.stu_identity = digest("stu-v1")
-    first_key = trainer._cache_key(WorldSpec(9, 206), 7)
-    second_key = trainer._cache_key(WorldSpec(10, 206), 7)
-    assert isinstance(first_key, FrameCacheKey)
-    assert first_key.frame_identity == second_key.frame_identity
-    assert first_key.world_identity != second_key.world_identity
-    first_uncached = np.asarray((1.0, 7.0), dtype=np.float32)
-    second_uncached = np.asarray((2.0, 7.0), dtype=np.float32)
-    first_cached = cache.rendered_frame(first_key, lambda: first_uncached.copy())
-    second_cached = cache.rendered_frame(second_key, lambda: second_uncached.copy())
-    np.testing.assert_array_equal(first_cached, first_uncached)
-    np.testing.assert_array_equal(second_cached, second_uncached)
-    assert not np.array_equal(first_cached, second_cached)
-    np.testing.assert_array_equal(
-        cache.rendered_frame(first_key, lambda: np.asarray((-1.0, -1.0))),
-        first_uncached,
-    )
-    first_encoded = cache.encoded_frame(first_key, lambda: first_uncached.copy())
-    second_encoded = cache.encoded_frame(second_key, lambda: second_uncached.copy())
-    np.testing.assert_array_equal(first_encoded, first_uncached)
-    np.testing.assert_array_equal(second_encoded, second_uncached)
-
-
-def test_balanced_bce_is_empty_class_safe() -> None:
-    logits = torch.tensor((0.0, 1.0, -1.0))
-    targets = torch.tensor((True, False, False))
-    valid = torch.ones(3, dtype=torch.bool)
-    raw = torch.nn.functional.binary_cross_entropy_with_logits(
-        logits, targets.float(), reduction="none"
-    )
-    torch.testing.assert_close(
-        balanced_bce_loss(logits, targets, valid),
-        0.5 * raw[:1].mean() + 0.5 * raw[1:].mean(),
-    )
-    torch.testing.assert_close(
-        balanced_bce_loss(logits, targets, torch.tensor((False, True, True))),
-        raw[1:].mean(),
-    )
-    with pytest.raises(TrainingError, match="no valid"):
-        balanced_bce_loss(logits, targets, torch.zeros(3, dtype=torch.bool))
-
-
-def test_multi_seed_resume_skips_complete_and_starts_unseen_seed(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    config = TrainConfig(seeds=(11, 12, 13), output_dir="runs")
-    condition = experiment_condition("B1")
-    protocol_identity = {"training": {"maximum_worlds": 4}}
-    selection_identity = {"metric": "frozen"}
-    scientific_identity = {
-        "protocol": protocol_identity,
-        "checkpoint_selection": selection_identity,
-    }
-    preflight = SimpleNamespace(
-        maximum_worlds=4,
-        protocol_document=protocol_identity,
-        checkpoint_selection=selection_identity,
-    )
-    starts: list[tuple[int, int]] = []
-
-    class FakeTrainer:
-        def __init__(self, seed: int) -> None:
-            self.seed = seed
-            self.condition = condition
-            self.config = config
-            self.scientific_identity = scientific_identity
-            self.run_dir = tmp_path / f"seed-{seed}"
-            self.run_dir.mkdir(exist_ok=True)
-            self.model = nn.Linear(1, 1)
-
-        def load_progress(self) -> int:
-            return 2
-
-        def fit(self, _world_factory, *, maximum_worlds: int, start_world: int):
-            assert maximum_worlds == 4
-            starts.append((self.seed, start_world))
-            return {"status": "completed", "seed": self.seed}
-
-    complete_dir = tmp_path / "seed-11"
-    complete_dir.mkdir()
-    completion_id = 7
-    torch.save(
-        {
-            "format": train_module.MODEL_FORMAT,
-            "completion_id": completion_id,
-            "seed": 11,
-            "config": train_module.asdict(config),
-            "condition": condition.to_dict(),
-            "scientific_identity": scientific_identity,
-        },
-        complete_dir / "model.pt",
-    )
-    (complete_dir / "result.json").write_text(
-        json.dumps(
-            {
-                "format": train_module.RUN_FORMAT,
-                "status": "completed",
-                "completion_id": completion_id,
-                "seed": 11,
-                "condition": condition.to_dict(),
-                "scientific_identity": scientific_identity,
-            }
-        ),
-        encoding="utf-8",
-    )
-    progress_dir = tmp_path / "seed-12"
-    progress_dir.mkdir()
-    (progress_dir / "progress.pt").touch()
-    monkeypatch.setattr(train_module, "_require_preflight_proof", lambda *_: None)
-
-    results = train_all_seeds(
-        config,
-        condition,
-        lambda seed, _condition: FakeTrainer(seed),
-        lambda *_: None,
-        preflight=preflight,
-        maximum_worlds=4,
-        resume=True,
-    )
-    assert starts == [(12, 2), (13, 0)]
-    assert set(results) == {11, 12, 13}
-    starts.clear()
-    selected = train_all_seeds(
-        config,
-        condition,
-        lambda seed, _condition: FakeTrainer(seed),
-        lambda *_: None,
-        preflight=preflight,
-        maximum_worlds=4,
-        resume=True,
-        seeds=(12,),
-    )
-    assert starts == [(12, 2)]
-    assert set(selected) == {12}
-
-
-def test_result_blind_budget_revision_accepts_only_the_frozen_prefix() -> None:
     protocol = load_protocol(PROTOCOL_PATH)
-    current = {"protocol": protocol.plain_document(), "other": "fixed"}
-    predecessor = json.loads(json.dumps(current))
-    predecessor_training = predecessor["protocol"]["training"]
-    predecessor_training.pop("result_blind_budget_revision")
-    predecessor_training["maximum_worlds"] = 40
-    predecessor["protocol"]["development"]["e63_freeze"]["shared_training"][
-        "maximum_complete_worlds_per_seed"
-    ] = 40
-    saved_hash = hashlib.sha256(
-        train_module._canonical_json_object(
-            "saved scientific identity", predecessor
-        ).encode("utf-8")
-    ).hexdigest()
-    revision = current["protocol"]["training"]["result_blind_budget_revision"]
-    prefix = revision["checkpoint_prefix_reuse"]
-    prefix["scientific_identity_sha256"] = saved_hash
-    payload = {
-        "training_condition": {"name": "B1"},
-        "seed": 0,
-        "phase": "windows",
-        "cursor": dict(prefix["cursor"]),
-        "history": [
-            {"development": {}} if index in {4, 9, 14, 19} else {}
-            for index in range(22)
-        ],
-        "maximum_worlds": 40,
-    }
-    assert train_module._result_blind_budget_prefix_matches(
-        current,
-        predecessor,
-        progress_sha256=prefix["progress_sha256"],
-        payload=payload,
-    )
-    changed = json.loads(json.dumps(predecessor))
-    changed["protocol"]["training"]["learning_rate"] = 2.0e-4
-    assert not train_module._result_blind_budget_prefix_matches(
-        current,
-        changed,
-        progress_sha256=prefix["progress_sha256"],
-        payload=payload,
-    )
-
-
-def test_module_execution_uses_stable_callable_identity(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    def evaluator() -> None:
-        return None
-
-    monkeypatch.setattr(evaluator, "__module__", "__main__")
-    monkeypatch.setattr(
-        sys.modules["__main__"], "__spec__", SimpleNamespace(name="src.train")
-    )
-    assert train_module._qualified_callable(evaluator) == (
-        f"src.train.{evaluator.__qualname__}"
-    )
-
-
-def test_world_report_encodes_only_valid_positive_infinity_as_null() -> None:
-    report = SimpleNamespace(
-        to_dict=lambda: {
-            "placements": [
-                {
-                    "proposal_minimum_obstacle_sdf_m": [1.25, math.inf],
-                    "minimum_obstacle_sdf_m": math.inf,
-                }
-            ]
-        }
-    )
-    assert _finite_world_report_document(report) == {
-        "placements": [
-            {
-                "proposal_minimum_obstacle_sdf_m": [1.25, None],
-                "minimum_obstacle_sdf_m": None,
-            }
-        ]
-    }
-
-
-def test_checkpoint_selection_global_band_does_not_drift() -> None:
-    trainer = object.__new__(AJAETrainer)
-    trainer.model = nn.Linear(1, 1)
-    trainer.seed = 0
-    trainer.condition = experiment_condition("B1")
-    trainer.selection_rule = _selection_rule()
-    trainer.best_key, trainer.best_world, trainer.best_state = None, -1, None
-    trainer.maximum_primary, trainer.selection_candidates = None, []
-    trainer.stale_evaluations = 0
-    evidence = iter(
-        (
-            _development_evidence(0.5, 0.3, 0.3),
-            _development_evidence(0.4994, 0.2, 0.3),
-            _development_evidence(0.4988, 0.1, 0.1),
+    missing = tmp_path / "must-not-be-opened"
+    with pytest.raises(EvaluationError, match="sealed .* unavailable"):
+        open_sealed_sequence(
+            missing,
+            protocol=protocol,
+            partition=partition,
+            sequence_id=sequence_id,
+            condition="B3",
+            label_mode=label_mode,
         )
-    )
-    trainer.development_evaluator = lambda *_: next(evidence)
-    for world_id in range(3):
-        trainer._development_update(world_id, 1.0)
-    assert trainer.maximum_primary == pytest.approx(0.5)
-    assert trainer.best_world == 1
-    assert trainer.best_key[0] > trainer.maximum_primary - 0.001
-
-
-def test_checkpoint_key_requires_the_e63_common_domain() -> None:
-    evidence = _development_evidence(0.6, 0.2, 0.1)
-    assert checkpoint_selection_key(_selection_rule(), evidence) == pytest.approx(
-        (0.6, -0.2, -0.1)
-    )
-    incomplete = DevelopmentEvidence(evidence.in_generator[:-1], evidence.pure_normal)
-    with pytest.raises(TrainingError, match="common domain"):
-        checkpoint_selection_key(_selection_rule(), incomplete)
-
-
-def test_e63_identities_are_result_blind_and_reproducible() -> None:
-    first = e63_identity_arrays(ROOT / "runs/ajae/e57_development_worlds.npz")
-    second = e63_identity_arrays(ROOT / "runs/ajae/e57_development_worlds.npz")
-    for name in first:
-        np.testing.assert_array_equal(first[name], second[name])
-    assert first["world_id"][~first["common_domain_eligible"]].tolist() == [5]
-    assert np.count_nonzero(first["safety_fold"] == b"A") == 12
-    assert np.count_nonzero(first["safety_fold"] == b"B") == 12
-    assert first["bootstrap_training_seed"].shape == (5000, 3)
-    assert first["bootstrap_world_id"].shape == (5000, 24)
-
-
-def test_e75_bootstrap_uses_only_the_common_23_worlds() -> None:
-    source = ROOT / "runs/ajae/e63_training_freeze.npz"
-    first = e75_bootstrap_identity_arrays(source)
-    second = e75_bootstrap_identity_arrays(source)
-    for name in first:
-        np.testing.assert_array_equal(first[name], second[name])
-    assert first["common_domain_world_id"].tolist() == [
-        0, 1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12,
-        13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
-    ]
-    assert first["excluded_world_id"].tolist() == [5]
-    assert first["bootstrap_training_seed"].shape == (5000, 3)
-    assert first["bootstrap_world_id"].shape == (5000, 23)
-    assert not np.any(first["bootstrap_world_id"] == 5)
-
-
-def test_e75_superiority_uses_paired_seed_and_world_draws() -> None:
-    common = np.asarray([*range(5), *range(6, 24)], dtype=np.int16)
-    baseline = np.linspace(1.0, 2.0, 23)
-    trained = np.stack((baseline + 0.1, baseline + 0.2, baseline - 0.05))
-    seed_draws = np.tile(np.asarray([[0, 1, 2]], dtype=np.int8), (5000, 1))
-    world_draws = np.tile(common, (5000, 1))
-    result = e75_superiority_statistics(
-        common, baseline, np.tile(common, (3, 1)), trained,
-        common, seed_draws, world_draws,
-    )
-    np.testing.assert_allclose(
-        result["seed_mean_ap_decision_difference"],
-        [0.001, 0.002, -0.0005],
-        atol=1e-15,
-    )
-    np.testing.assert_allclose(
-        result["bootstrap_mean_ap_decision_difference"], 1.0 / 1200.0,
-        atol=1e-15,
-    )
-
-
-def test_e75_converts_reported_ap_points_to_decision_scale() -> None:
-    common = np.asarray([*range(5), *range(6, 24)], dtype=np.int16)
-    baseline = np.full(23, 5.0)
-    trained = np.full((3, 23), 7.0)
-    seed_draws = np.tile(np.asarray([[0, 1, 2]], dtype=np.int8), (5000, 1))
-    world_draws = np.tile(common, (5000, 1))
-    result = e75_superiority_statistics(
-        common, baseline, np.tile(common, (3, 1)), trained,
-        common, seed_draws, world_draws,
-    )
-    assert result["paired_ap_decision_difference"][0, 0] == pytest.approx(0.02)
-    assert result["b0_ap_reported"][0] == 5.0
-    assert result["b1_ap_reported"][0, 0] == 7.0
-
-
-def test_e75_exploratory_uses_first_two_seeds_without_formal_bootstrap() -> None:
-    common = np.asarray([*range(5), *range(6, 24)], dtype=np.int16)
-    baseline = np.full(23, 5.0)
-    trained = np.stack((np.full(23, 5.5), np.full(23, 8.0)))
-    result = e75_exploratory_statistics(
-        common, baseline, np.tile(common, (2, 1)), trained
-    )
-    np.testing.assert_allclose(
-        result["seed_mean_ap_decision_difference"], [0.005, 0.03]
-    )
-    assert result["two_seed_mean_ap_decision_difference"] == pytest.approx(0.0175)
-    np.testing.assert_array_equal(result["positive_world_count"], [23, 23])
-
-
-def test_e76_uses_crossfit_signed_mean_worsening_and_metric_scale() -> None:
-    world_id = np.asarray([*range(5), *range(6, 24)], dtype=np.int16)
-    fold = np.asarray(
-        [
-            b"B", b"B", b"A", b"A", b"B", b"A", b"B", b"A", b"A", b"B",
-            b"A", b"B", b"A", b"B", b"B", b"B", b"B", b"A", b"B", b"A",
-            b"A", b"A", b"B",
-        ],
-        dtype="S1",
-    )
-    points_per_world = 20
-    point_world = np.repeat(world_id, points_per_world)
-    point_fold = np.repeat(fold, points_per_world)
-    label = np.tile(np.asarray([True] * 10 + [False] * 10), 23)
-    control = ~label
-    base = np.where(label, np.where(point_fold == b"A", 0.8, 0.6), 0.7)
-    development_score = np.stack((base, base, base, base))
-    pure_score = np.full((4, 16), 0.1)
-    moving_score = np.full((4, 12), 0.1)
-    development_fpr95 = np.stack(
-        (
-            np.full(23, 20.0),
-            np.full(23, 22.0),
-            np.full(23, 21.0),
-            np.full(23, 5.0),
+    with pytest.raises(SceneDataError, match="sealed until"):
+        STUSequence.open(
+            missing,
+            protocol=protocol,
+            partition=partition,
+            sequence_id=sequence_id,
+            label_mode=label_mode,
         )
-    )
-    result = e76_safety_statistics(
-        world_id, point_world, label, control, development_score, fold,
-        pure_score, moving_score, development_fpr95,
-    )
-    np.testing.assert_allclose(result["threshold"], np.asarray([[0.8, 0.6]] * 4))
-    np.testing.assert_allclose(result["safety_measure"][:, 1], 11.0 / 23.0)
-    np.testing.assert_allclose(
-        result["seed_safety_worsening"][:, 3], [0.02, 0.01, -0.15], atol=1e-15
-    )
-    assert result["mean_safety_worsening"][3] == pytest.approx(-0.04, abs=1e-15)
-    assert bool(result["passed"])
+    assert "Refused sealed sequence access" in caplog.text
+    assert not missing.exists()
 
 
-def test_e76_exploratory_accepts_exactly_two_b1_seeds() -> None:
-    world_id = np.asarray([*range(5), *range(6, 24)], dtype=np.int16)
-    fold = np.asarray(E63_COMMON_SAFETY_FOLD, dtype="S1")
-    point_world = np.repeat(world_id, 4)
-    point_fold = np.repeat(fold, 4)
-    label = np.tile(np.asarray([True, True, False, False]), 23)
-    control = ~label
-    base = np.where(label, np.where(point_fold == b"A", 0.8, 0.6), 0.1)
-    development_score = np.stack((base, base, base))
-    result = e76_safety_statistics(
-        world_id,
-        point_world,
-        label,
-        control,
-        development_score,
-        fold,
-        np.full((3, 8), 0.1),
-        np.full((3, 6), 0.1),
-        np.full((3, 23), 10.0),
-    )
-    np.testing.assert_array_equal(result["model_name"], ["B0", "B1_0", "B1_1"])
-    assert result["seed_safety_worsening"].shape == (2, 4)
-
-
-def test_e76_lite_selects_the_frozen_result_blind_frame_subset() -> None:
-    with np.load(
-        ROOT / "runs/ajae/e61_safety_identities.npz", allow_pickle=False
-    ) as archive:
-        frames = np.asarray(archive["pure_frame_id"], dtype=np.int16)
-        counts = np.asarray(
-            archive["pure_point_count_by_frame"], dtype=np.int64
-        )
-    rows = e76_lite_pure_frame_rows(frames)
-    np.testing.assert_array_equal(
-        frames[rows],
-        [
-            288, 302, 673, 505, 572, 111, 332, 635, 258, 464, 589, 504,
-            681, 443, 201, 592, 99, 45, 602, 502, 401, 265, 415, 106,
-            196, 87, 354, 10, 652, 536, 603, 391, 406, 672, 663, 343,
-            494, 271, 234, 110, 294, 121, 562, 148, 468, 125, 540, 251,
-            416, 616, 33, 594, 526, 633, 636, 523, 541, 359, 363, 476,
-            317, 533, 608, 51,
-        ],
-    )
-    assert int(counts[rows].sum()) == 3_955_039
-    frozen = load_protocol(PROTOCOL_PATH).development["exploration_track"][
-        "e76x_lite_freeze"
-    ]["pure_normal_selection"]["selected_frame_ids"]
-    assert tuple(frames[rows].astype(int).tolist()) == tuple(frozen)
-
-
-def test_e76v1_group_a_selection_matches_the_frozen_visibility_strata() -> None:
-    with np.load(
-        ROOT / "runs/ajae/e57_development_worlds.npz", allow_pickle=False
-    ) as archive:
-        worlds = np.asarray(archive["selected_world_id"], dtype=np.int16)
-        descriptor = np.asarray(archive["selected_descriptor"], dtype=np.float64)
-    assert e76v1_group_a_selection(worlds, descriptor) == (
-        ("low", 1, 9.0),
-        ("low", 2, 7.0),
-        ("mid", 0, 85.0),
-        ("mid", 14, 43.0),
-        ("high", 8, 448.0),
-        ("high", 9, 156.0),
-    )
-
-
-def test_e76v1_binary_ply_preserves_property_order_and_payload(
+def test_method_freeze_record_is_content_addressed_and_population_complete(
     tmp_path: Path,
 ) -> None:
-    output = tmp_path / "fixture.ply"
-    record = _write_binary_ply(
-        output,
-        {
-            "x": np.asarray([1.0, 2.0], dtype="<f4"),
-            "red": np.asarray([3, 4], dtype=np.uint8),
-            "semantic_id": np.asarray([10, 11], dtype="<u2"),
-        },
-        comments=("E76-V1 fixture",),
-    )
-    payload = output.read_bytes()
-    header, body = payload.split(b"end_header\n", 1)
-    assert header.decode("ascii").splitlines()[-4:] == [
-        "element vertex 2",
-        "property float x",
-        "property uchar red",
-        "property ushort semantic_id",
-    ]
-    assert len(body) == 2 * (4 + 1 + 2)
-    assert record["points"] == 2
-    assert record["properties"] == ["x", "red", "semantic_id"]
-    assert record["sha256"] == hashlib.sha256(payload).hexdigest()
-    properties, comments = _read_binary_ply(output)
-    assert comments == ("E76-V1 fixture",)
-    assert list(properties) == ["x", "red", "semantic_id"]
-    np.testing.assert_array_equal(properties["x"], [1.0, 2.0])
-    np.testing.assert_array_equal(properties["red"], [3, 4])
-    np.testing.assert_array_equal(properties["semantic_id"], [10, 11])
-
-
-def test_phase7_mechanical_fixtures_all_pass_and_reproduce() -> None:
-    first = phase7_mechanical_arrays()
-    second = phase7_mechanical_arrays()
-    for name in first:
-        np.testing.assert_array_equal(first[name], second[name])
-    for node in range(64, 72):
-        assert int(first[f"e{node}_error_count"].sum()) == 0
-
-
-def test_formal_preflight_refuses_pending_evidence() -> None:
     protocol = load_protocol(PROTOCOL_PATH)
-    with pytest.raises(ProtocolError, match="authoritative WorldSpec"):
-        load_development_worlds(DEVELOPMENT_PATH, protocol=protocol)
-
-
-def test_probability_fusion_uses_canonical_ray_probabilities() -> None:
-    mapping = np.asarray((2, 0, 3, 1), dtype=np.int32)
-    fusion = WindowScoreFusion(maximum_count=2)
-    for probabilities in ((0.2, 0.8), (0.4, 0.6)):
-        fusion.add(
-            5,
-            np.asarray((2, 3), dtype=np.int32),
-            np.asarray(probabilities, dtype=np.float32),
-            output_slots=np.asarray((0, 2), dtype=np.int32),
-            slot_to_ray=mapping,
-        )
-    scores, counts = fusion.finalize(5)
-    np.testing.assert_allclose(scores[[0, 2]], (0.3, 0.7))
-    np.testing.assert_array_equal(counts[[0, 2]], (2, 2))
-
-
-def test_common_frame_domain_and_coverage_forbid_zero_fill(tmp_path: Path) -> None:
-    sequence = SimpleNamespace(
-        frame_ids=tuple(range(10)),
-        spec=SimpleNamespace(excluded_source_frames=()),
+    identity = EvaluationIdentity(
+        protocol_schema=31,
+        protocol_identity=protocol.scientific_identity,
+        condition="B3",
+        fusion_value=AJAE_FUSION_VALUE,
+        model_class="JointWindowPointTransformer",
+        model_state_sha256="2" * 64,
+        stu_class="FrozenSTUPointEncoder",
+        stu_checkpoint_sha256="3" * 64,
+        stu_model_state_sha256="4" * 64,
+        stu_source_manifest_sha256="5" * 64,
+        calibration_sha256="6" * 64,
+        ray_mapping_sha256="7" * 64,
     )
-    assert AJAEInference._comparison_frame_ids(sequence) == (4, 5, 6, 7)
-    directory = tmp_path / "B3" / "125"
-    directory.mkdir(parents=True)
-    payload = {
-        "format": "ajae-prediction-coverage-v1",
-        "condition": "B3",
-        "frame_domain": (
-            "intersection_of_complete_centered_q0_and_complete_causal_current_frames"
-        ),
-        "frame_ids": [4, 5, 6, 7],
-        "padding_or_zero_fill_used": False,
+    unsigned = {
+        "format": METHOD_FREEZE_FORMAT,
+        "status": METHOD_FREEZE_STATUS,
+        "evaluation_identity": identity.to_dict(),
+        "sealed_sequences": {
+            "val": list(protocol.public_sequence_ids),
+            "test": list(protocol.hidden_sequence_ids),
+        },
     }
-    (directory / "coverage.json").write_text(json.dumps(payload))
-    assert load_prediction_coverage(
-        directory, condition="B3", expected_frame_ids=(4, 5, 6, 7)
-    ) == (4, 5, 6, 7)
-    payload["padding_or_zero_fill_used"] = True
-    (directory / "coverage.json").write_text(json.dumps(payload))
-    with pytest.raises(EvaluationError, match="frame domain"):
-        load_prediction_coverage(
-            directory, condition="B3", expected_frame_ids=(4, 5, 6, 7)
-        )
-
-
-def test_official_point_gate_and_moving_normal_safety() -> None:
-    accumulator = PointMetricAccumulator()
-    points = np.column_stack((np.full(8, 5.0), np.zeros((8, 2)))).astype(np.float32)
-    scores = np.linspace(0.1, 0.8, 8, dtype=np.float32)
-    semantic = np.asarray((10, 10, 10, 2, 2, 2, 2, 2), dtype=np.uint16)
-    assert accumulator.update(points, scores, semantic)
-    assert set(("AP", "AUROC", "FPR95")).issubset(accumulator.compute())
-    moving = MovingNormalDiagnostic(0.5)
-    moving.update(
-        points[:4],
-        np.asarray((0.1, 0.7, 0.2, 0.8), dtype=np.float32),
-        np.asarray((252, 252, 10, 10), dtype=np.uint16),
+    payload = {
+        **unsigned,
+        "record_sha256": hashlib.sha256(
+            json.dumps(
+                unsigned,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest(),
+    }
+    path = tmp_path / "method-freeze.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    loaded = MethodFreezeRecord.load(
+        path, expected_identity=identity, protocol=protocol
     )
-    safety = moving.compute()
-    assert safety["moving_points"] == 2
-    assert safety["moving_false_positive_rate"] == pytest.approx(0.5)
+    assert loaded.sealed_sequences["val"] == protocol.public_sequence_ids
+    assert loaded.sealed_sequences["test"] == protocol.hidden_sequence_ids
+
+    payload["sealed_sequences"]["val"] = payload["sealed_sequences"]["val"][:-1]
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(EvaluationError, match="content hash"):
+        MethodFreezeRecord.load(path, expected_identity=identity, protocol=protocol)
 
 
-def test_moving_normal_diagnostic_uses_frozen_matched_masks() -> None:
-    diagnostic = MovingNormalDiagnostic(0.5)
-    points = np.column_stack((np.full(4, 5.0), np.zeros((4, 2)))).astype(np.float32)
-    scores = np.asarray((0.1, 0.9, 0.2, 0.8), dtype=np.float32)
-    semantic = np.asarray((252, 252, 10, 10), dtype=np.uint16)
-    diagnostic.update(
-        points,
-        scores,
-        semantic,
-        matched_moving_mask=np.asarray((True, False, False, False)),
-        matched_static_mask=np.asarray((False, False, True, False)),
-    )
-    result = diagnostic.compute()
-    assert result["moving_points"] == 2
-    assert result["moving_false_positive_rate"] == pytest.approx(0.5)
-    assert result["matched_moving_points"] == 1
-    assert result["matched_moving_false_positive_rate"] == 0.0
-    assert result["static_points"] == 1
-    assert result["static_false_positive_rate"] == 0.0
-    assert result["moving_minus_static_mean"] == pytest.approx(0.3)
-    assert result["matched_moving_minus_static_mean"] == pytest.approx(-0.1)
-
-
-def test_point_metrics_match_released_stu_calculator(
+def test_point_metrics_match_the_released_stu_calculator(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     protocol = load_protocol(PROTOCOL_PATH)
@@ -2404,7 +1474,7 @@ def test_point_metrics_match_released_stu_calculator(
     official_script = official_root / "compute_point_level_ood.py"
     monkeypatch.syspath_prepend(str(official_root))
     specification = importlib.util.spec_from_file_location(
-        "ajae_test_official_point", official_script
+        "ajae_test_official_point_schema31", official_script
     )
     assert specification is not None and specification.loader is not None
     module = importlib.util.module_from_spec(specification)
@@ -2413,157 +1483,12 @@ def test_point_metrics_match_released_stu_calculator(
     official = module.PointOODMetricsCalculator()
     ours = PointMetricAccumulator(protocol)
 
-    points = np.column_stack(
-        (
-            np.asarray((2.5, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 50.0, 51.0)),
-            np.zeros((10, 2)),
-        )
-    ).astype(np.float32)
-    scores = np.asarray((0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0))
-    semantic = np.asarray((10, 10, 10, 10, 2, 2, 2, 2, 2, 2), dtype=np.uint16)
+    points = np.column_stack((np.arange(3.0, 15.0), np.zeros((12, 2)))).astype(np.float32)
+    scores = np.asarray((0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.35, 0.45, 0.55, 0.7, 0.8, 0.9))
+    semantic = np.asarray((10, 10, 10, 10, 10, 10, 2, 2, 2, 2, 2, 2), dtype=np.uint16)
     official.update(points, scores, semantic)
     assert ours.update(points, scores, semantic)
-
-    skipped_semantic = np.asarray((10, 10, 10, 10, 10, 10, 2, 2, 2, 2))
-    official.update(points, scores, skipped_semantic)
-    assert not ours.update(points, scores, skipped_semantic)
     official_result = official.compute_metrics()
     our_result = ours.compute()
     for metric in ("AP", "AUROC", "FPR95", "threshold"):
         assert our_result[metric] == pytest.approx(official_result[metric])
-
-
-def test_public_result_requires_complete_finite_19_sequence_evidence(
-    tmp_path: Path,
-) -> None:
-    protocol = load_protocol(PROTOCOL_PATH)
-    public_sequences: dict[str, object] = {}
-    total_frames = 0
-    for specification in protocol.public_validation:
-        frame_count = len(
-            set(specification.legal_anchors(RELATIVE_TIMES))
-            & set(specification.legal_anchors(CAUSAL_OFFSETS))
-        )
-        total_frames += frame_count
-        public_sequences[str(specification.sequence_id)] = {
-            "comparison_frame_count": frame_count,
-            "point": {
-                "AP": 50.0,
-                "AUROC": 60.0,
-                "FPR95": 20.0,
-                "threshold": 0.5,
-                "accepted_frames": frame_count,
-                "skipped_frames": 0,
-            },
-            "moving_normal": {
-                "strict_threshold": 0.5,
-                "moving_points": 1,
-                "moving_mean": 0.2,
-                "moving_false_positive_rate": 0.0,
-                "static_points": 1,
-                "static_mean": 0.1,
-                "static_false_positive_rate": 0.0,
-                "moving_minus_static_mean": 0.1,
-            },
-        }
-    payload = {
-        "format": "ajae-public-validation-result-v1",
-        "protocol_schema": 30,
-        "protocol_sha256": hashlib.sha256(PROTOCOL_PATH.read_bytes()).hexdigest(),
-        "condition": "B3",
-        "seeds": {},
-        "development_worlds": {},
-        "public_sequences": public_sequences,
-        "pooled": {
-            "point": {
-                "AP": 50.0,
-                "AUROC": 60.0,
-                "FPR95": 20.0,
-                "threshold": 0.5,
-                "accepted_frames": total_frames,
-                "skipped_frames": 0,
-            },
-            "moving_normal": {
-                "strict_threshold": 0.5,
-                "moving_points": 19,
-                "moving_mean": 0.2,
-                "moving_false_positive_rate": 0.0,
-                "static_points": 19,
-                "static_mean": 0.1,
-                "static_false_positive_rate": 0.0,
-                "moving_minus_static_mean": 0.1,
-            },
-        },
-        "cost": None,
-        "method_freeze": {"object_score_threshold": 0.5},
-    }
-    result_path = tmp_path / "public.json"
-    result_path.write_text(json.dumps(payload), encoding="utf-8")
-    assert _validate_public_result(
-        result_path, protocol=protocol, condition="B3"
-    )["condition"] == "B3"
-    payload["public_sequences"][str(protocol.public_sequence_ids[0])][
-        "moving_normal"
-    ] = {}
-    result_path.write_text(json.dumps(payload), encoding="utf-8")
-    with pytest.raises(EvaluationError, match="strict_threshold"):
-        _validate_public_result(result_path, protocol=protocol, condition="B3")
-
-
-def test_object_scale_diagnostic_excludes_normal_control_ids() -> None:
-    diagnostic = ObjectScaleDiagnostic()
-    points = np.asarray(
-        ((5.0, 0.0, 0.0), (5.1, 0.0, 0.0), (5.2, 0.0, 0.0), (5.25, 0.0, 0.0)),
-        dtype=np.float32,
-    )
-    diagnostic.update_window(
-        world_id=0,
-        window_id=0,
-        points=points,
-        scores=np.asarray((0.9, 0.8, 0.1, 0.2), dtype=np.float32),
-        object_ids=np.asarray((2, 2, 1, -1), dtype=np.int32),
-        relative_times=np.asarray((-1, 0, 0, 0), dtype=np.int8),
-        raw_semantic=np.asarray((2, 2, 10, 10), dtype=np.uint16),
-    )
-    result = diagnostic.compute()
-    assert len(result["objects"]) == 1
-    assert result["objects"][0]["object_id"] == 2
-    assert result["objects"][0]["visibility"] == 2
-
-
-def test_b3_b4_sequence_scoring_uses_the_supplied_sequence_spec(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Cross-sequence safety scoring must not reuse the evaluator's base spec."""
-
-    evaluator = object.__new__(train_module.E63B3DevelopmentEvaluator)
-    expected_spec = SimpleNamespace(legal_anchors=lambda offsets: (2,))
-    sequence = SimpleNamespace(
-        spec=expected_spec,
-        source_frame=lambda frame_id: SimpleNamespace(frame_id=frame_id),
-    )
-
-    def probabilities(
-        model: nn.Module,
-        sources: tuple[SimpleNamespace, ...],
-        center: int,
-        *,
-        input_cache: object,
-        sequence_spec: object,
-    ) -> tuple[np.ndarray, ...]:
-        del model, input_cache
-        assert sequence_spec is expected_spec
-        assert center == 2
-        assert [source.frame_id for source in sources] == [0, 1, 2, 3, 4]
-        return tuple(
-            np.asarray([float(frame_id)], dtype=np.float32)
-            for frame_id in range(5)
-        )
-
-    monkeypatch.setattr(evaluator, "_window_probabilities", probabilities)
-    direct, fused, count = evaluator.sequence_b3_b4_scores(
-        nn.Identity(), sequence, [2]
-    )[2]
-    np.testing.assert_array_equal(direct, np.asarray([2.0], dtype=np.float32))
-    np.testing.assert_array_equal(fused, np.asarray([2.0], dtype=np.float32))
-    np.testing.assert_array_equal(count, np.asarray([1], dtype=np.uint8))

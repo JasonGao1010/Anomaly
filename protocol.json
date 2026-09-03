@@ -19,7 +19,7 @@
     "privileged_frame": null,
     "all_window_members_equally_supervised": true,
     "all_visible_returns_receive_logits": true,
-    "learned_time_or_position_input": false,
+    "learned_scan_time_or_member_position_input": false,
     "full_model_spatial_operations": [
       "joint_voxelization",
       "joint_radius_neighborhood",
@@ -236,6 +236,15 @@
       "all_random_seeds"
     ],
     "shared_renderer_for_normal_control_and_proxy": true,
+    "rendered_observation_identity_fields": [
+      "partition",
+      "sequence_id",
+      "frame_id",
+      "xyzi",
+      "lidar_pose",
+      "real_slots",
+      "packed_labels"
+    ],
     "window_descriptors": {
       "density_voxel_size_m": 0.1,
       "density_coordinate_system": "symmetric_window_coordinates",
@@ -373,10 +382,12 @@
       "required_identity": [
         "five_source_frames",
         "WorldSpec",
+        "five_rendered_point_arrays",
         "renderer_identity",
         "STU_identity",
         "point_identity",
-        "labels"
+        "labels",
+        "window_level_density_descriptors"
       ],
       "condition_invariants": [
         "same_five_aligned_points",
@@ -421,7 +432,10 @@
       "allowed_only_after": "R05"
     },
     "checkpoint_selection": {
-      "metric": "macro_mean_of_per_DevelopmentClipWorld_all_occurrence_fused_point_AP",
+      "metric": "macro_mean_of_per_in_generator_DevelopmentClipWorld_all_occurrence_fused_point_AP",
+      "eligible_mechanism": "in_generator",
+      "eligible_clip_count": 24,
+      "held_out_torus_use": "diagnostic_only_excluded_from_all_selection_and_method_changes",
       "fusion_scope": "within_one_frozen_world_identity_only",
       "status": "freeze_clip_identity_count_and_tie_breaks_result_blind_in_R02_and_R05"
     },
@@ -432,7 +446,17 @@
     "model_output_members": [0, 1, 2, 3, 4],
     "real_sequence_fusion_key": ["partition", "sequence_id", "source_frame", "source_ray"],
     "synthetic_fusion_key": ["world_identity", "source_frame", "source_ray"],
-    "fusion_value": "sigmoid_probability",
+    "fusion_values": {
+      "B0": {
+        "input": "raw_finite_frozen_STU_official_MaxLogit_score",
+        "per_occurrence_transform": "none",
+        "repeated_window_mean": "identity_preserving"
+      },
+      "B1_B2_B3": {
+        "input": "anomaly_logit",
+        "per_occurrence_transform": "sigmoid"
+      }
+    },
     "fusion_reduction": "equal_arithmetic_mean_over_every_legal_window_occurrence",
     "domain": "every_visible_return_covered_by_at_least_one_legal_five_scan_window",
     "occurrence_count_strata": [1, 2, 3, 4, 5],
