@@ -82,7 +82,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_RUNS_ROOT = PROJECT_ROOT / "runs" / "ajae"
 DEFAULT_DEVELOPMENT_PATH = PROJECT_ROOT / "dev.json"
 AUDIT_NAME = "Window Densification Audit"
-AUDIT_FORMAT = "ajae-schema31-qualification-v1"
+AUDIT_FORMAT = "ajae-schema31-qualification-v2"
 
 
 class QualificationError(ValueError):
@@ -285,6 +285,7 @@ def retained_evidence_audit(
     return {
         "source_schema": 30,
         "record_count": len(records),
+        "files_hashed": hash_files,
         "stored_decision_fields_verified": True,
         "claim_scope_widened": False,
         "records": records,
@@ -391,10 +392,7 @@ def symmetric_coordinate_audit() -> dict[str, object]:
             first.reference_pose.world_from_window,
             repeated.reference_pose.world_from_window,
         )
-        and all(
-            np.array_equal(left[key][0], repeated_rows[key][0])
-            for key in left
-        ),
+        and all(np.array_equal(left[key][0], repeated_rows[key][0]) for key in left),
         "repeated symmetric-window construction is not deterministic",
     )
     global_transform = _yaw_pose(0.41, (7.0, -3.0, 1.25))
@@ -413,8 +411,7 @@ def symmetric_coordinate_audit() -> dict[str, object]:
     )
     transformed_rows = _point_rows(transformed)
     rigid_coordinate_error = max(
-        float(np.max(np.abs(left[key][0] - transformed_rows[key][0])))
-        for key in left
+        float(np.max(np.abs(left[key][0] - transformed_rows[key][0]))) for key in left
     )
     rigid_pose_error = float(
         np.max(
@@ -1029,7 +1026,7 @@ def window_proxy_evidence_status(
     if not path.is_file():
         return {
             "status": "pending",
-            "schema31_bank_loaded": False,
+            "development_manifest_loaded": False,
             "reason": "development record does not exist",
         }
     try:
@@ -1037,23 +1034,26 @@ def window_proxy_evidence_status(
     except (OSError, ValueError) as error:
         return {
             "status": "pending",
-            "schema31_bank_loaded": False,
+            "development_manifest_loaded": False,
             "reason": str(error),
         }
     clip_count = len(worlds.clips)
     window_count = len(worlds.windows)
-    validation = dict(worlds.validation)
-    matching = any(
-        value is True and "match" in name.lower() for name, value in validation.items()
+    verdict = worlds.scientific_verdict
+    matching = bool(
+        worlds.validated
+        and verdict is not None
+        and verdict["matching"]["passed"] is True
     )
-    shortcut = any(
-        value is True and "shortcut" in name.lower()
-        for name, value in validation.items()
+    shortcut = bool(
+        worlds.validated
+        and verdict is not None
+        and verdict["shortcut_audit"]["passed"] is True
     )
     qualified = worlds.validated and window_count > 0 and matching and shortcut
     return {
         "status": "qualified_record_available" if qualified else "pending",
-        "schema31_bank_loaded": True,
+        "development_manifest_loaded": True,
         "development_status": worlds.status,
         "clip_records": clip_count,
         "window_records": window_count,
@@ -1127,9 +1127,32 @@ def run_schema31_qualification(
         retained = retained_evidence_audit(
             protocol, runs_root, hash_files=hash_retained_files
         )
-    return {
+    try:
+        from .train import protocol_training_system_identity
+    except ImportError:
+        from train import protocol_training_system_identity
+
+    proxy = window_proxy_evidence_status(protocol, development_path)
+    retained_complete = bool(
+        retained is not None
+        and retained["files_hashed"] is True
+        and int(retained["record_count"]) == len(RETAINED_ARTIFACTS)
+        and retained["claim_scope_widened"] is False
+    )
+    qualified = bool(
+        protocol.status["current_node"] == "R03"
+        and protocol.status["r02_population_identity"] is not None
+        and protocol.status["r02_verdict_identity"] is not None
+        and mechanical["passed"] is True
+        and retained_complete
+        and proxy["status"] == "qualified_record_available"
+    )
+    result: dict[str, object] = {
         "format": AUDIT_FORMAT,
         "protocol_schema": SCHEMA_VERSION,
+        "training_system_identity": protocol_training_system_identity(protocol),
+        "r02_population_identity": protocol.status["r02_population_identity"],
+        "r02_verdict_identity": protocol.status["r02_verdict_identity"],
         "mechanical": mechanical,
         "retained_schema30_evidence": retained,
         "lightweight_primitives": {
@@ -1137,12 +1160,130 @@ def run_schema31_qualification(
             "official_point_metrics": evaluator_primitive_audit(),
             "sealed_data_access": sealed_access_audit(protocol),
         },
-        "window_proxy_science": window_proxy_evidence_status(
-            protocol, development_path
-        ),
-        "formal_training_qualified": False,
+        "window_proxy_science": proxy,
+        "decision": "pass" if qualified else "pending",
         "performance_claim_available": False,
     }
+    result["record_sha256"] = hashlib.sha256(
+        json.dumps(
+            result,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    return result
+
+
+@dataclass(frozen=True, slots=True)
+class R03QualificationRecord:
+    """Validated R03 mechanics bound to the passed R02 population."""
+
+    path: Path
+    record_sha256: str
+
+    @classmethod
+    def load(
+        cls, path: Path | str, *, protocol: AJAEProtocol
+    ) -> "R03QualificationRecord":
+        try:
+            from .train import protocol_training_system_identity
+        except ImportError:
+            from train import protocol_training_system_identity
+
+        requested = Path(path).expanduser()
+        try:
+            resolved = requested.resolve(strict=True)
+            raw = json.loads(resolved.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            raise QualificationError("R03 qualification record is unreadable") from error
+        expected_keys = {
+            "format",
+            "protocol_schema",
+            "training_system_identity",
+            "r02_population_identity",
+            "r02_verdict_identity",
+            "mechanical",
+            "retained_schema30_evidence",
+            "lightweight_primitives",
+            "window_proxy_science",
+            "decision",
+            "performance_claim_available",
+            "record_sha256",
+        }
+        if not isinstance(raw, Mapping) or set(raw) != expected_keys:
+            raise QualificationError("R03 qualification record has an invalid schema")
+        unsigned = dict(raw)
+        record_identity = str(unsigned.pop("record_sha256"))
+        if (
+            len(record_identity) != 64
+            or any(character not in "0123456789abcdef" for character in record_identity)
+            or hashlib.sha256(
+                json.dumps(
+                    unsigned,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest()
+            != record_identity
+        ):
+            raise QualificationError("R03 qualification content hash changed")
+        if (
+            raw["format"] != AUDIT_FORMAT
+            or raw["protocol_schema"] != SCHEMA_VERSION
+            or raw["training_system_identity"]
+            != protocol_training_system_identity(protocol)
+            or raw["r02_population_identity"]
+            != protocol.status["r02_population_identity"]
+            or raw["r02_verdict_identity"] != protocol.status["r02_verdict_identity"]
+            or raw["decision"] != "pass"
+            or raw["performance_claim_available"] is not False
+        ):
+            raise QualificationError("R03 qualification does not authorize this protocol")
+        mechanical = raw["mechanical"]
+        retained = raw["retained_schema30_evidence"]
+        primitives = raw["lightweight_primitives"]
+        proxy = raw["window_proxy_science"]
+        if (
+            not isinstance(mechanical, Mapping)
+            or mechanical.get("passed") is not True
+            or mechanical.get("check_count") != 10
+            or not isinstance(mechanical.get("checks"), Mapping)
+            or len(mechanical["checks"]) != 10
+            or any(
+                not isinstance(value, Mapping) or value.get("passed") is not True
+                for value in mechanical["checks"].values()
+            )
+            or not isinstance(retained, Mapping)
+            or retained.get("files_hashed") is not True
+            or retained.get("record_count") != len(RETAINED_ARTIFACTS)
+            or retained.get("claim_scope_widened") is not False
+            or not isinstance(retained.get("records"), list)
+            or any(
+                not isinstance(value, Mapping)
+                or value.get("recorded_pass") is not True
+                or not isinstance(value.get("sha256"), str)
+                or len(value["sha256"]) != 64
+                for value in retained["records"]
+            )
+            or not isinstance(primitives, Mapping)
+            or set(primitives)
+            != {"stu_assigned_evidence", "official_point_metrics", "sealed_data_access"}
+            or any(
+                not isinstance(value, Mapping) or value.get("passed") is not True
+                for value in primitives.values()
+            )
+            or not isinstance(proxy, Mapping)
+            or proxy.get("status") != "qualified_record_available"
+        ):
+            raise QualificationError("R03 qualification components are incomplete")
+        if protocol.status["r03_qualification_identity"] not in {
+            None,
+            record_identity,
+        }:
+            raise QualificationError("R03 record differs from the protocol identity")
+        return cls(resolved, record_identity)
 
 
 def _parser() -> argparse.ArgumentParser:

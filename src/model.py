@@ -260,9 +260,7 @@ class STUVoxelEvidence:
     maxlogit_score: Tensor
 
 
-def assigned_stu_evidence(
-    pred_logits: Tensor, pred_masks: Tensor
-) -> STUVoxelEvidence:
+def assigned_stu_evidence(pred_logits: Tensor, pred_masks: Tensor) -> STUVoxelEvidence:
     """Assign one official query to each voxel and retain the official B0 score."""
 
     if pred_logits.ndim != 2 or pred_logits.shape != (
@@ -333,7 +331,9 @@ class STUPointEncoding:
             count,
         ):
             raise ModelError("STU assigned query must be int64[N]")
-        if bool(torch.any((self.assigned_query < 0) | (self.assigned_query >= NUM_QUERIES))):
+        if bool(
+            torch.any((self.assigned_query < 0) | (self.assigned_query >= NUM_QUERIES))
+        ):
             raise ModelError("STU assigned query is out of range")
         if self.normal_evidence.shape != (count, NUM_NORMAL_CLASSES):
             raise ModelError("STU normal evidence must be [N,19]")
@@ -352,8 +352,7 @@ class STUPointEncoding:
             not isinstance(self.input_identity, str)
             or len(self.input_identity) != 64
             or any(
-                character not in "0123456789abcdef"
-                for character in self.input_identity
+                character not in "0123456789abcdef" for character in self.input_identity
             )
         ):
             raise ModelError("STU input identity must be a lowercase SHA-256 digest")
@@ -481,8 +480,14 @@ class FrozenSTUPointEncoder(nn.Module):
             or stu["b0_score"] != "official_STU_MaxLogit"
             or int(stu["checkpoint_bytes"]) != STU_CHECKPOINT_BYTES
             or stu["checkpoint_sha256"] != STU_CHECKPOINT_SHA256
+            or stu["model_state_tensor_sha256"] != STU_MODEL_STATE_TENSOR_SHA256
         ):
             raise ModelError("protocol does not identify the frozen official STU")
+        source_identity = stu_source_manifest(
+            Path(project_root).expanduser().resolve() / str(stu["repository"])
+        )["manifest_sha256"]
+        if stu["source_manifest_sha256"] != source_identity:
+            raise ModelError("protocol STU source manifest differs from the repository")
         if not math.isclose(
             float(stu["voxel_size_m"]), STU_VOXEL_SIZE_METRES, abs_tol=1.0e-12
         ):
@@ -630,18 +635,12 @@ class FrozenSTUPointEncoder(nn.Module):
             point_features=sparse_point_features[inverse_map].detach(),
             assigned_query=sparse_evidence.assigned_query[inverse_map].detach(),
             normal_evidence=sparse_evidence.normal_evidence[inverse_map].detach(),
-            reliability_assign=sparse_evidence.reliability_assign[
-                inverse_map
-            ].detach(),
-            reliability_noobj=sparse_evidence.reliability_noobj[
-                inverse_map
-            ].detach(),
+            reliability_assign=sparse_evidence.reliability_assign[inverse_map].detach(),
+            reliability_noobj=sparse_evidence.reliability_noobj[inverse_map].detach(),
             maxlogit_score=sparse_evidence.maxlogit_score[inverse_map].detach(),
             inverse_map=inverse_map,
             real_slots=slots,
-            input_identity=stu_input_identity(
-                coordinates_np, features_np, slots_np
-            ),
+            input_identity=stu_input_identity(coordinates_np, features_np, slots_np),
         )
 
 
@@ -783,11 +782,7 @@ class GroupedRadiusKNN(nn.Module):
             _finite("neighbor tie breaker", tie_breaker)
         _finite("neighbor coordinates", coordinates)
 
-        points = (
-            coordinates.detach()
-            .to(device="cpu", dtype=torch.float64)
-            .numpy()
-        )
+        points = coordinates.detach().to(device="cpu", dtype=torch.float64).numpy()
         groups = scan_group.detach().cpu().numpy().astype(np.int64, copy=False)
         neighbor = np.repeat(np.arange(count, dtype=np.int64)[:, None], self.k, axis=1)
         valid = np.zeros((count, self.k), dtype=np.bool_)
@@ -864,9 +859,7 @@ class GroupedRadiusKNN(nn.Module):
                 present = raw_valid[fast, :take]
                 safe = np.minimum(local, source_index.size - 1)
                 local_row, column = np.nonzero(present)
-                neighbor[row[local_row], column] = source_index[
-                    safe[local_row, column]
-                ]
+                neighbor[row[local_row], column] = source_index[safe[local_row, column]]
                 valid[row[local_row], column] = True
 
             for local_row in np.flatnonzero(tied):
@@ -952,8 +945,7 @@ class PointInputProjection(nn.Module):
             dim=1,
         )
         return self.norm(
-            self.content(content)
-            + self.position(coordinates.to(dtype=content.dtype))
+            self.content(content) + self.position(coordinates.to(dtype=content.dtype))
         )
 
 
@@ -1022,21 +1014,19 @@ class JointPointBlock(nn.Module):
         ) -> Tensor:
             local_key = all_key[index]
             local_value = all_value[index]
-            score = (local_query * local_key).sum(dim=-1) / math.sqrt(
-                self.head_dim
-            )
+            score = (local_query * local_key).sum(dim=-1) / math.sqrt(self.head_dim)
             displacement = (
                 all_coordinates[index] - local_coordinates[:, None]
             ) / self.radius
             score = score + self.relative_bias(displacement)
             present = local_valid.any(dim=1)
             score = score.masked_fill(~local_valid[..., None], -torch.inf)
-            score = torch.where(
-                present[:, None, None], score, torch.zeros_like(score)
-            )
+            score = torch.where(present[:, None, None], score, torch.zeros_like(score))
             weight = F.softmax(score, dim=1) * local_valid[..., None]
-            return (weight[..., None] * local_value).sum(dim=1).reshape(
-                local_query.shape[0], self.hidden_dim
+            return (
+                (weight[..., None] * local_value)
+                .sum(dim=1)
+                .reshape(local_query.shape[0], self.hidden_dim)
             )
 
         messages: list[Tensor] = []
@@ -1124,9 +1114,7 @@ class GroupedVoxelPool(nn.Module):
             if operation == "per_scan"
             else quantized
         )
-        unique, inverse = torch.unique(
-            keys, dim=0, sorted=True, return_inverse=True
-        )
+        unique, inverse = torch.unique(keys, dim=0, sorted=True, return_inverse=True)
         voxel_count = unique.shape[0]
         population = torch.bincount(inverse, minlength=voxel_count)
         order = _canonical_pool_order(keys, coordinates, features)
@@ -1145,9 +1133,7 @@ class GroupedVoxelPool(nn.Module):
             else torch.zeros(voxel_count, dtype=torch.long, device=features.device)
         )
         density = torch.log1p(population.to(dtype=features.dtype))[:, None]
-        pooled_features = self.projection(
-            torch.cat((mean, maximum, density), dim=1)
-        )
+        pooled_features = self.projection(torch.cat((mean, maximum, density), dim=1))
         return VoxelLevel(
             coordinates=pooled_coordinates,
             scan_group=pooled_group,
@@ -1192,9 +1178,7 @@ class JointVoxelPyramid(nn.Module):
                 neighbors,
                 chunk_size=attention_chunk_size,
             )
-            for radius, neighbors in zip(
-                neighbor_radii, neighbor_k, strict=True
-            )
+            for radius, neighbors in zip(neighbor_radii, neighbor_k, strict=True)
         )
 
     def forward(
@@ -1305,22 +1289,20 @@ class GroupedKnnUpsample(nn.Module):
         _finite("upsampling target coordinates", target_coordinates)
 
         source_points = (
-            source_coordinates.detach()
-            .to(device="cpu", dtype=torch.float64)
-            .numpy()
+            source_coordinates.detach().to(device="cpu", dtype=torch.float64).numpy()
         )
         target_points = (
-            target_coordinates.detach()
-            .to(device="cpu", dtype=torch.float64)
-            .numpy()
+            target_coordinates.detach().to(device="cpu", dtype=torch.float64).numpy()
         )
         source_groups = source_group.detach().cpu().numpy().astype(np.int64, copy=False)
         target_groups = target_group.detach().cpu().numpy().astype(np.int64, copy=False)
         if operation == "joint":
-            partitions = ((
-                np.arange(source_count, dtype=np.int64),
-                np.arange(target_count, dtype=np.int64),
-            ),)
+            partitions = (
+                (
+                    np.arange(source_count, dtype=np.int64),
+                    np.arange(target_count, dtype=np.int64),
+                ),
+            )
         else:
             partitions_list: list[tuple[np.ndarray, np.ndarray]] = []
             for group in np.unique(target_groups):
@@ -1521,14 +1503,12 @@ class JointWindowPointTransformer(nn.Module):
         if (
             int(model["levels"]) != 4
             or len(model["voxel_sizes_m"]) != 3
-            or tuple(model["voxel_feature"])
-            != ("mean", "max", "log1p_population")
+            or tuple(model["voxel_feature"]) != ("mean", "max", "log1p_population")
             or model["neighborhood_feature"]
             != "log1p_uncapped_count_of_all_points_strictly_inside_radius_before_top_K_selection"
             or not expected_forbidden.issubset(model["forbidden_features"])
             or model["B2_B3_shared_class_and_parameterization"] is not True
-            or model["output"]
-            != "one_anomaly_logit_for_every_visible_input_return"
+            or model["output"] != "one_anomaly_logit_for_every_visible_input_return"
             or model["scan_permutation_equivariant"] is not True
         ):
             raise ModelError("protocol does not define the joint-window model contract")
@@ -1576,21 +1556,26 @@ class JointWindowPointTransformer(nn.Module):
             intensity,
         )
         if any(not torch.is_floating_point(value) for value in tensors):
-            raise ModelError("AJAE coordinate and content tensors must be floating point")
+            raise ModelError(
+                "AJAE coordinate and content tensors must be floating point"
+            )
         if len({value.device for value in (*tensors, scan_group)}) != 1:
             raise ModelError("all AJAE point tensors must share a device")
-        if len(
-            {
-                value.dtype
-                for value in (
-                    stu_features,
-                    normal_evidence,
-                    reliability_assign,
-                    reliability_noobj,
-                    intensity,
-                )
-            }
-        ) != 1:
+        if (
+            len(
+                {
+                    value.dtype
+                    for value in (
+                        stu_features,
+                        normal_evidence,
+                        reliability_assign,
+                        reliability_noobj,
+                        intensity,
+                    )
+                }
+            )
+            != 1
+        ):
             raise ModelError("all AJAE content tensors must share a floating dtype")
         for name, value in (
             ("coordinates", coordinates),

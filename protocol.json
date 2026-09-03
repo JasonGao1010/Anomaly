@@ -4,6 +4,17 @@
     "implementation_target": "schema31",
     "current_node": "R02",
     "scientific_route": "window_proxy_and_joint_five_scan_dense_point_cloud",
+    "r02_population_identity": null,
+    "r02_verdict_identity": null,
+    "r03_qualification_identity": null,
+    "r04_training_bank_identity": null,
+    "r04_training_qualification_identity": null,
+    "r05_freeze_identity": null,
+    "g2_verdict_identity": null,
+    "g3_verdict_identity": null,
+    "s01_shift_audit_identity": null,
+    "m01_method_freeze_identity": null,
+    "v01_verdict_identity": null,
     "formal_training_allowed": false,
     "performance_claims_available": false
   },
@@ -157,10 +168,22 @@
     "source_sequence_id": 206,
     "sensor": "OS1-128_canonical_ray_first_return_approximation",
     "calibration_file": "runs/ajae/calibration.pt",
+    "calibration_sha256": "b532b7e04d9025233b2768b8fb36287e477f62f20a3ff685a62f4a4a29bfefe0",
+    "qualified_support_pools": {
+      "train/206": {
+        "file": "runs/ajae/e21_v4_support_pool.npz",
+        "sha256": "0e6e7299157f5e9ced0716f6dd14881c66ba1bca0cc9c372550e56f426ea844d"
+      },
+      "train/201": {
+        "file": "runs/ajae/gate1_201_support_pool.npz",
+        "sha256": "fc3646fbc145cdc29d2cf203835a3e0018bacbc6eaf714e091d21f7b93bfaf50"
+      }
+    },
     "ray_grid": {
       "beam_count": 128,
       "column_count": 1024,
       "canonical_identity": ["beam_id", "azimuth_column"],
+      "canonical_sha256": "b2ca37bf8e288aa3f7d0ca571fd3e459b054b5445e2c9da3b49e3af02c1dc627",
       "file_slot_role": "input_output_mapping_only"
     },
     "normal_controls": {
@@ -187,7 +210,20 @@
         "taper",
         "low_frequency_surface"
       ],
-      "held_out_mechanism": "torus_SDF"
+      "held_out_mechanism": "torus_SDF",
+      "held_out_recipe": {
+        "anomaly_proxy_count": 1,
+        "normal_control_count": 0,
+        "outer_diameter_m_range_inclusive": [0.4, 3.0],
+        "tube_to_outer_radius_range_inclusive": [0.18, 0.35],
+        "minimum_tube_radius_m": 0.04,
+        "minimum_major_radius_m": 0.15,
+        "intersection_steps": 160,
+        "support_semantic_ids": [40, 48, 49],
+        "material_sampler": "shared_MaterialSpec_seeded_quantile_roughness_return_bias",
+        "placement_pipeline": "shared_support_pool_grounding_collision_and_visibility",
+        "placement_namespace": "schema31-held-out-torus-v1"
+      }
     },
     "world_type_probabilities": {
       "pure_normal": 0.2,
@@ -302,6 +338,8 @@
     "checkpoint": "weights/59p6pq_ens1.ckpt",
     "checkpoint_bytes": 476261075,
     "checkpoint_sha256": "743b10d39c4076d98533bf1e84d389ad2703016904d31146e48919618b07b67a",
+    "model_state_tensor_sha256": "0be4805592a3d064b21655c6c6eeeb7227322c9670873345be52747b0a24d1fb",
+    "source_manifest_sha256": "f0cead4f5e721262f9f1c26231d116406bb4fb0a43139f22e3706be89b914891",
     "repository": "../DynaCAN-deps/stu_dataset/Mask4Former3D",
     "voxel_size_m": 0.05,
     "point_feature_dim": 128,
@@ -396,7 +434,18 @@
         "same_model_parameter_shapes_and_initialization",
         "same_loss",
         "same_optimizer"
-      ]
+      ],
+      "generation_plan": {
+        "namespace": "ajae-schema31-window-train-bank-plan-v1",
+        "formal_entry_count": 445,
+        "allowed_prefix_counts": [8, 128, 445],
+        "window_start_order": "ascending_sha256_namespace_and_window_start",
+        "world_type_cycle": ["pure_normal", "control_only", "mixed", "mixed", "anomaly_only"],
+        "world_seed_rule": "first_63_bits_of_sha256_namespace_position_and_window_start",
+        "observation_attempt_selection": "first_success_in_ascending_retry_index_no_manual_selection",
+        "observation_attempt_stride": 10000019,
+        "maximum_observation_attempts": 48
+      }
     },
     "micro_batch": "one_complete_WindowWorld",
     "effective_batch": "all_complete_WindowWorld_micro_batches_accumulated_into_one_optimizer_step",
@@ -411,7 +460,18 @@
     "modes": ["tiny_overfit", "pilot", "formal"],
     "tiny_overfit": {
       "windows": 8,
+      "seed": 2001,
       "maximum_updates": 500,
+      "config": {
+        "learning_rate": 0.0001,
+        "gradient_accumulation": 1,
+        "weight_decay": 0.0,
+        "scheduler": "constant",
+        "epochs": 1,
+        "maximum_updates": 500,
+        "evaluation_interval_updates": 500,
+        "gradient_clip_norm": null
+      },
       "pass_any": {
         "training_AP_minimum_percent": 99.0,
         "loss_strictly_below": 0.02
@@ -419,25 +479,56 @@
     },
     "pilot": {
       "windows": 128,
+      "condition": "B3",
       "seeds": [1001, 1002],
+      "stage_order": ["learning_rate_and_batch", "scheduler", "weight_decay"],
       "learning_rates": [0.00003, 0.0001, 0.0003],
       "gradient_accumulation": [1, 2],
       "screen_updates": [50, 200, 600],
       "schedulers_after_learning_rate_selection": ["constant", "five_percent_warmup_cosine"],
-      "weight_decay_after_scheduler_selection": [0.0, 0.00001, 0.0001]
+      "weight_decay_after_scheduler_selection": [0.0, 0.00001, 0.0001],
+      "fixed_run_parameters": {
+        "epochs": 1,
+        "evaluation_interval_updates": 50,
+        "gradient_clip_norm": null
+      },
+      "selection": {
+        "metric": "best_development_macro_fused_point_ap",
+        "score_comparison": "strictly_greater",
+        "exact_tie_break": "protocol_grid_order",
+        "probability_saturation_epsilon": 0.000001,
+        "maximum_complete_saturation_fraction_exclusive": 1.0,
+        "screen_50_rule": "all_six_candidates_must_produce_finite_auditable_runs_then_complete_probability_saturation_is_excluded_before_screen_200",
+        "screen_50_minimum_survivors": 2,
+        "screen_200_finalist_count": 2,
+        "screen_600_seed": 1002
+      },
+      "frozen_stage_winners": {
+        "learning_rate": null,
+        "gradient_accumulation": null,
+        "scheduler": null,
+        "weight_decay": null
+      }
     },
     "formal": {
       "seeds": [0, 1, 2],
+      "deployment_seed": 0,
+      "deployment_condition": "B3",
       "recipe_status": "pending_result_blind_R05_freeze",
+      "recipe": null,
+      "bank_identity": null,
+      "development_population_identity": null,
       "allowed_only_after": "R05"
     },
     "checkpoint_selection": {
       "metric": "macro_mean_of_per_in_generator_DevelopmentClipWorld_all_occurrence_fused_point_AP",
       "eligible_mechanism": "in_generator",
       "eligible_clip_count": 24,
-      "held_out_torus_use": "diagnostic_only_excluded_from_all_selection_and_method_changes",
+      "held_out_torus_use": "unopened_until_S01_after_all_training_before_M01_no_method_changes_after_opening",
       "fusion_scope": "within_one_frozen_world_identity_only",
-      "status": "freeze_clip_identity_count_and_tie_breaks_result_blind_in_R02_and_R05"
+      "score_comparison": "strictly_greater",
+      "exact_tie_break": "earliest_evaluated_update",
+      "status": "metric_population_and_tie_break_frozen_result_blind"
     },
     "deterministic_algorithms": true
   },
@@ -468,11 +559,38 @@
         "frames_per_clip": 9,
         "overlapping_windows_per_clip": 5,
         "in_generator_clips": 24,
-        "held_out_torus_clips": 6,
-        "total_clips": 30,
+        "total_clips": 24,
         "freeze_rule": "fixed_before_any_schema31_development_world_is_generated_or_scored"
       },
+      "generation_plan": {
+        "namespace": "ajae-schema31-development-clip-plan-v1",
+        "clip_start_selection": "sha256_ranked_greedy_nonoverlapping_nine_frame_clips",
+        "plan_positions_inclusive": [0, 23],
+        "mechanism": "in_generator",
+        "world_seed_rule": "first_63_bits_of_sha256_namespace_position_and_clip_start",
+        "observation_attempt_selection": "first_success_in_ascending_retry_index_no_manual_selection",
+        "observation_attempt_stride": 10000019,
+        "maximum_observation_attempts": 48
+      },
       "cross_world_fusion_forbidden": true
+    },
+    "held_out_synthetic_shift": {
+      "unit": "DevelopmentClipWorld",
+      "mechanism": "torus_SDF",
+      "clip_count": 6,
+      "frames_per_clip": 9,
+      "overlapping_windows_per_clip": 5,
+      "generation_plan_namespace": "ajae-schema31-development-clip-plan-v1",
+      "plan_positions_inclusive": [24, 29],
+      "allowed_only_at_or_after": "S01",
+      "excluded_before_S01_from": [
+        "rendering",
+        "visual_review",
+        "proxy_qualification",
+        "hyperparameter_selection",
+        "checkpoint_selection",
+        "method_changes"
+      ]
     },
     "minimum_range_m_inclusive": 2.5,
     "maximum_range_m_inclusive": 50.0,
@@ -499,17 +617,24 @@
     "G2": {
       "comparisons": ["B1_vs_B0"],
       "formal_seeds": [0, 1, 2],
-      "criteria_status": "freeze_result_blind_in_R05"
+      "criteria_status": "pending_result_blind_R05_freeze",
+      "criteria": null,
+      "criteria_identity": null
     },
     "G3": {
       "comparisons": ["B3_vs_B1", "B3_vs_B2"],
       "formal_seeds": [0, 1, 2],
-      "criteria_status": "freeze_result_blind_in_R05"
+      "criteria_status": "pending_result_blind_R05_freeze",
+      "criteria": null,
+      "criteria_identity": null
     },
     "V01": {
       "public_sequences": 19,
       "one_time_only": true,
-      "criteria_status": "freeze_before_M01"
+      "comparisons": ["frozen_final_vs_B0", "frozen_final_vs_B1"],
+      "criteria_status": "pending_result_blind_R05_freeze",
+      "criteria": null,
+      "criteria_identity": null
     }
   },
   "historical_evidence": {

@@ -49,8 +49,11 @@ from src.model import (
     stu_input_identity,
 )
 from src.protocol import (
+    R02_THRESHOLD_FORMAT,
+    R02_VALIDATION_KEYS,
     SCHEMA_VERSION,
     WINDOW_MEMBER_OFFSETS,
+    AJAEProtocol,
     ExperimentCondition,
     FrameSpan,
     ProtocolError,
@@ -211,7 +214,9 @@ def _descriptor(
     )
 
 
-def _stub_window(seed: str, descriptors: tuple[WindowEntityDescriptor, ...]) -> WindowWorld:
+def _stub_window(
+    seed: str, descriptors: tuple[WindowEntityDescriptor, ...]
+) -> WindowWorld:
     """Build only the validated interface needed to isolate matching logic."""
 
     item = object.__new__(WindowWorld)
@@ -262,8 +267,7 @@ def _training_window(renderer_identity: str) -> object:
     )
     frame_ids = (0, 1, 2, 3, 4)
     sources = tuple(
-        _one_return_source(frame_id, 4.0 + frame_id, 0.2)
-        for frame_id in frame_ids
+        _one_return_source(frame_id, 4.0 + frame_id, 0.2) for frame_id in frame_ids
     )
     observation_identities = tuple(
         source_observation_identity(source) for source in sources
@@ -316,8 +320,10 @@ def _training_window(renderer_identity: str) -> object:
     )
 
 
-def _minimal_development_clips() -> tuple[DevelopmentClipWorld, ...]:
-    """Build the frozen 24+6 shape with one point per source observation."""
+def _minimal_development_clips(
+    protocol: AJAEProtocol, *, proxy_support: int = 10
+) -> tuple[DevelopmentClipWorld, ...]:
+    """Build the protocol-planned 24-clip population without rendering."""
 
     normal_shape = NormalTemplateShape(
         np.asarray(
@@ -339,10 +345,9 @@ def _minimal_development_clips() -> tuple[DevelopmentClipWorld, ...]:
     )
     material = MaterialSpec(0.5, 0.1)
     rotation = ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))
-    renderer_identity = "f" * 64
+    renderer_identity = protocol.renderer_identity
     clips = []
-    for index in range(30):
-        torus = index >= 24
+    for plan in protocol.development_clip_plan():
         objects = (
             ObjectSpec(
                 1,
@@ -355,13 +360,13 @@ def _minimal_development_clips() -> tuple[DevelopmentClipWorld, ...]:
             ObjectSpec(
                 2,
                 "anomaly-proxy",
-                HeldOutTorusShape(0.4, 0.1) if torus else procedural_shape,
+                procedural_shape,
                 material,
                 (10.0, 0.0, 0.0),
                 rotation,
             ),
         )
-        world = WorldSpec(5000 + index, 201, objects)
+        world = WorldSpec(int(plan["root_seed"]), 201, objects)
         report = WorldGenerationReport(
             world_seed=world.seed,
             source_sequence_id=201,
@@ -369,10 +374,11 @@ def _minimal_development_clips() -> tuple[DevelopmentClipWorld, ...]:
             world_attempt=0,
             normal_count=1,
             anomaly_count=1,
-            count_seed=6000 + index,
-            label_order_seed=7000 + index,
+            count_seed=world.seed + 1,
+            label_order_seed=world.seed + 2,
         )
-        start = 4 + 10 * index
+        start = int(plan["clip_start"])
+        frame_ids = tuple(int(value) for value in plan["source_frames"])
         sources = tuple(
             make_source_frame(
                 frame_id,
@@ -382,7 +388,7 @@ def _minimal_development_clips() -> tuple[DevelopmentClipWorld, ...]:
                 partition="train",
                 sequence_id=201,
             )
-            for frame_id in range(start, start + 9)
+            for frame_id in frame_ids
         )
         windows = []
         for offset in range(5):
@@ -409,7 +415,7 @@ def _minimal_development_clips() -> tuple[DevelopmentClipWorld, ...]:
                 "descriptors",
                 (
                     _descriptor(1, "normal-control", 10),
-                    _descriptor(2, "anomaly-proxy", 10),
+                    _descriptor(2, "anomaly-proxy", proxy_support),
                 ),
             )
             windows.append(window)
@@ -421,10 +427,72 @@ def _minimal_development_clips() -> tuple[DevelopmentClipWorld, ...]:
                 report,
                 renderer_identity,
                 tuple(windows),
-                "torus_SDF" if torus else "in_generator",
+                "in_generator",
             )
         )
     return tuple(clips)
+
+
+def _protocol_with_frozen_r02_thresholds(
+    tmp_path: Path,
+    *,
+    name: str = "protocol.json",
+    node: str = "R02",
+    pilot_winners: dict[str, object] | None = None,
+) -> AJAEProtocol:
+    """Freeze harmless test thresholds so forged verdict content is inspected."""
+
+    document = json.loads(PROTOCOL_PATH.read_text(encoding="utf-8"))
+    document["render"]["proxy_control_matching"]["thresholds"] = {
+        "format": R02_THRESHOLD_FORMAT,
+        "frozen_result_blind": True,
+        "minimum_visual_reviewed_clips": 24,
+        "minimum_matched_pairs": 10,
+        "maximum_absolute_standardized_mean_difference": 0.25,
+        "minimum_median_proxy_joint_visible_return_count": 2.0,
+        "minimum_median_proxy_densification_gain": 1.1,
+        "minimum_proxy_fraction_densification_gain_above_one": 0.5,
+        "maximum_shortcut_balanced_accuracy": 0.6,
+        "maximum_shortcut_absolute_auroc_deviation_from_half": 0.1,
+    }
+    document["status"]["current_node"] = node
+    if node != "R02":
+        document["status"]["r02_population_identity"] = "a" * 64
+        document["status"]["r02_verdict_identity"] = "b" * 64
+    state = (
+        "R00",
+        "R01",
+        "R02",
+        "R03",
+        "R04",
+        "R05",
+        "G2",
+        "G3",
+        "S01",
+        "M01",
+        "V01",
+        "T01",
+    )
+    milestones = (
+        ("r03_qualification_identity", "R03", "c"),
+        ("r04_training_qualification_identity", "R04", "d"),
+        ("r05_freeze_identity", "R05", "e"),
+        ("g2_verdict_identity", "G2", "f"),
+        ("g3_verdict_identity", "G3", "1"),
+        ("s01_shift_audit_identity", "S01", "2"),
+        ("m01_method_freeze_identity", "M01", "3"),
+        ("v01_verdict_identity", "V01", "4"),
+    )
+    for field, milestone, digit in milestones:
+        if state.index(node) > state.index(milestone):
+            document["status"][field] = digit * 64
+    if state.index(node) >= state.index("R04"):
+        document["status"]["r04_training_bank_identity"] = "9" * 64
+    if pilot_winners is not None:
+        document["training"]["pilot"]["frozen_stage_winners"] = pilot_winners
+    path = tmp_path / name
+    path.write_text(json.dumps(document), encoding="utf-8")
+    return load_protocol(path)
 
 
 def test_protocol_is_the_only_schema31_b0_to_b3_contract() -> None:
@@ -434,7 +502,11 @@ def test_protocol_is_the_only_schema31_b0_to_b3_contract() -> None:
     assert set(protocol.experiments) == {"B0", "B1", "B2", "B3"}
     assert protocol.window_member_offsets == WINDOW_MEMBER_OFFSETS == (0, 1, 2, 3, 4)
     assert ExperimentCondition.B0.output_local_indices == (0,)
-    for condition in (ExperimentCondition.B1, ExperimentCondition.B2, ExperimentCondition.B3):
+    for condition in (
+        ExperimentCondition.B1,
+        ExperimentCondition.B2,
+        ExperimentCondition.B3,
+    ):
         assert condition.input_member_indices == WINDOW_MEMBER_OFFSETS
         assert condition.output_local_indices == WINDOW_MEMBER_OFFSETS
     assert protocol.status["formal_training_allowed"] is False
@@ -496,8 +568,8 @@ def test_training_entry_rejects_schema30_before_full_loader_or_bank(
 @pytest.mark.parametrize(
     ("mode", "seed", "message"),
     (
-        ("tiny_overfit", 1001, "permitted only during R04 or R05"),
-        ("pilot", 1001, "permitted only during R04 or R05"),
+        ("tiny_overfit", 1001, "permitted only during R04"),
+        ("pilot", 1001, "permitted only during R04"),
         ("formal", 0, "completed R05 freeze"),
     ),
 )
@@ -532,6 +604,254 @@ def test_schema31_training_is_blocked_before_bank_loading(
     assert calls == 0
 
 
+def test_pilot_stages_bind_prior_winners_and_fixed_run_parameters(
+    tmp_path: Path,
+) -> None:
+    from src.train import TrainingConfig, TrainingError, validate_training_request
+
+    empty_winners = {
+        "learning_rate": None,
+        "gradient_accumulation": None,
+        "scheduler": None,
+        "weight_decay": None,
+    }
+    first_protocol = _protocol_with_frozen_r02_thresholds(
+        tmp_path,
+        name="pilot-first.json",
+        node="R04",
+        pilot_winners=empty_winners,
+    )
+    first = TrainingConfig(
+        learning_rate=0.0001,
+        gradient_accumulation=1,
+        scheduler="constant",
+        weight_decay=0.0,
+        epochs=1,
+        maximum_updates=50,
+        evaluation_interval_updates=50,
+        gradient_clip_norm=None,
+    )
+    request = validate_training_request(
+        first_protocol,
+        "pilot",
+        "B3",
+        1001,
+        first,
+        bank_size=128,
+        pilot_stage="learning_rate_and_batch",
+    )
+    assert request.pilot_stage == "learning_rate_and_batch"
+    with pytest.raises(TrainingError, match="evaluation_interval_updates differs"):
+        validate_training_request(
+            first_protocol,
+            "pilot",
+            "B3",
+            1001,
+            replace(first, evaluation_interval_updates=25),
+            bank_size=128,
+            pilot_stage="learning_rate_and_batch",
+        )
+    with pytest.raises(TrainingError, match="requires the frozen learning-rate"):
+        validate_training_request(
+            first_protocol,
+            "pilot",
+            "B3",
+            1002,
+            replace(
+                first,
+                maximum_updates=600,
+                scheduler="five_percent_warmup_cosine",
+            ),
+            bank_size=128,
+            pilot_stage="scheduler",
+        )
+
+    selected_batch = {
+        **empty_winners,
+        "learning_rate": 0.0001,
+        "gradient_accumulation": 2,
+    }
+    scheduler_protocol = _protocol_with_frozen_r02_thresholds(
+        tmp_path,
+        name="pilot-scheduler.json",
+        node="R04",
+        pilot_winners=selected_batch,
+    )
+    scheduler = replace(
+        first,
+        gradient_accumulation=2,
+        scheduler="five_percent_warmup_cosine",
+        maximum_updates=600,
+    )
+    validate_training_request(
+        scheduler_protocol,
+        "pilot",
+        "B3",
+        1002,
+        scheduler,
+        bank_size=128,
+        pilot_stage="scheduler",
+    )
+    with pytest.raises(TrainingError, match="frozen learning-rate/batch winner"):
+        validate_training_request(
+            scheduler_protocol,
+            "pilot",
+            "B3",
+            1002,
+            replace(scheduler, learning_rate=0.0003),
+            bank_size=128,
+            pilot_stage="scheduler",
+        )
+
+    selected_scheduler = {
+        **selected_batch,
+        "scheduler": "five_percent_warmup_cosine",
+    }
+    weight_decay_protocol = _protocol_with_frozen_r02_thresholds(
+        tmp_path,
+        name="pilot-weight-decay.json",
+        node="R04",
+        pilot_winners=selected_scheduler,
+    )
+    weight_decay = replace(scheduler, weight_decay=0.00001)
+    validate_training_request(
+        weight_decay_protocol,
+        "pilot",
+        "B3",
+        1002,
+        weight_decay,
+        bank_size=128,
+        pilot_stage="weight_decay",
+    )
+    with pytest.raises(TrainingError, match="frozen scheduler-stage winners"):
+        validate_training_request(
+            weight_decay_protocol,
+            "pilot",
+            "B3",
+            1002,
+            replace(weight_decay, scheduler="constant"),
+            bank_size=128,
+            pilot_stage="weight_decay",
+        )
+
+
+def test_formal_result_authorization_binds_g2_only_for_g3() -> None:
+    from src.train import (
+        TrainMode,
+        TrainingConfig,
+        TrainingError,
+        _validate_result_request,
+    )
+
+    base = load_protocol(PROTOCOL_PATH)
+    training = base.plain_document()["training"]
+    config = TrainingConfig(
+        learning_rate=0.0001,
+        gradient_accumulation=1,
+        weight_decay=0.0,
+        scheduler="constant",
+        epochs=1,
+        maximum_updates=445,
+        evaluation_interval_updates=50,
+        gradient_clip_norm=None,
+    )
+    training["formal"]["recipe"] = {  # type: ignore[index]
+        "learning_rate": 0.0001,
+        "gradient_accumulation": 1,
+        "weight_decay": 0.0,
+        "scheduler": "constant",
+        "epochs": 1,
+        "maximum_updates": 445,
+        "evaluation_interval_updates": 50,
+        "gradient_clip_norm": None,
+    }
+    protocol = SimpleNamespace(
+        training=training,
+        status={
+            "r04_training_qualification_identity": "d" * 64,
+            "r05_freeze_identity": "e" * 64,
+            "g2_verdict_identity": "f" * 64,
+        },
+    )
+    common = {
+        "protocol": protocol,
+        "mode": TrainMode.FORMAL,
+        "seed": 0,
+        "config": config,
+        "pilot_stage": None,
+        "window_count": 445,
+        "maximum_updates": 445,
+        "r04_identity": "d" * 64,
+        "r05_identity": "e" * 64,
+    }
+    with pytest.raises(TrainingError, match="R05-authorized request"):
+        _validate_result_request(
+            **common,
+            condition=ExperimentCondition.B2,
+            authorization_node="G3",
+            g2_identity=None,
+        )
+    _validate_result_request(
+        **common,
+        condition=ExperimentCondition.B2,
+        authorization_node="G3",
+        g2_identity="f" * 64,
+    )
+    _validate_result_request(
+        **common,
+        condition=ExperimentCondition.B1,
+        authorization_node="G2",
+        g2_identity=None,
+    )
+
+
+def test_formal_gate_cannot_open_with_pending_decision_criteria(
+    tmp_path: Path,
+) -> None:
+    base = _protocol_with_frozen_r02_thresholds(tmp_path)
+    document = base.plain_document()
+    document["status"].update(
+        {
+            "current_node": "G2",
+            "r02_population_identity": "a" * 64,
+            "r02_verdict_identity": "b" * 64,
+            "r03_qualification_identity": "c" * 64,
+            "r04_training_bank_identity": "9" * 64,
+            "r04_training_qualification_identity": "d" * 64,
+            "r05_freeze_identity": "e" * 64,
+            "formal_training_allowed": True,
+        }
+    )
+    winners = {
+        "learning_rate": 0.0001,
+        "gradient_accumulation": 2,
+        "scheduler": "five_percent_warmup_cosine",
+        "weight_decay": 0.00001,
+    }
+    document["training"]["pilot"]["frozen_stage_winners"] = winners
+    document["training"]["formal"].update(
+        {
+            "recipe_status": "frozen_result_blind_in_R05",
+            "recipe": {
+                **winners,
+                "epochs": 1,
+                "maximum_updates": None,
+                "evaluation_interval_updates": 50,
+                "gradient_clip_norm": None,
+            },
+            "bank_identity": "9" * 64,
+            "development_population_identity": "a" * 64,
+        }
+    )
+    path = tmp_path / "g2-with-pending-criteria.json"
+    path.write_text(json.dumps(document), encoding="utf-8")
+
+    with pytest.raises(
+        ProtocolError, match="criteria must be frozen before formal runs"
+    ):
+        load_protocol(path)
+
+
 def test_frozen_sequence_spans_produce_exact_legal_window_counts() -> None:
     protocol = load_protocol(PROTOCOL_PATH)
     training = protocol.normal_training.legal_window_starts()
@@ -540,6 +860,37 @@ def test_frozen_sequence_spans_produce_exact_legal_window_counts() -> None:
     assert len(development) == 674 and development == tuple(range(4, 678))
     assert protocol.window_frame_ids("train", 206, 444) == (444, 445, 446, 447, 448)
     assert protocol.window_frame_ids("train", 201, 677) == (677, 678, 679, 680, 681)
+
+
+def test_schema31_generation_plans_are_unique_and_have_frozen_composition() -> None:
+    protocol = load_protocol(PROTOCOL_PATH)
+    bank = protocol.training_bank_plan()
+    assert len(bank) == 445
+    assert {int(item["source_frames"][0]) for item in bank} == set(range(445))
+    assert len({int(item["root_seed"]) for item in bank}) == 445
+    assert {
+        world_type: sum(item["world_type"] == world_type for item in bank)
+        for world_type in ("pure_normal", "control_only", "mixed", "anomaly_only")
+    } == {
+        "pure_normal": 89,
+        "control_only": 89,
+        "mixed": 178,
+        "anomaly_only": 89,
+    }
+
+    development = protocol.development_clip_plan()
+    held_out = protocol.held_out_synthetic_shift_plan()
+    assert tuple(item["position"] for item in development) == tuple(range(24))
+    assert tuple(item["position"] for item in held_out) == tuple(range(24, 30))
+    assert {item["mechanism"] for item in development} == {"in_generator"}
+    assert {item["mechanism"] for item in held_out} == {"torus_SDF"}
+    all_frames = [
+        int(frame)
+        for item in (*development, *held_out)
+        for frame in item["source_frames"]
+    ]
+    assert len(all_frames) == len(set(all_frames)) == 30 * 9
+    assert len({int(item["root_seed"]) for item in (*development, *held_out)}) == 30
 
 
 def test_empty_schema31_development_manifest_is_explicitly_not_evidence() -> None:
@@ -551,28 +902,148 @@ def test_empty_schema31_development_manifest_is_explicitly_not_evidence() -> Non
     assert not development.validated
 
 
+def test_old_empty_placeholder_can_be_replaced_once_but_definitions_cannot(
+    tmp_path: Path,
+) -> None:
+    protocol = _protocol_with_frozen_r02_thresholds(tmp_path)
+    clips = _minimal_development_clips(protocol)
+    path = tmp_path / "development.json"
+    path.write_text(
+        json.dumps(
+            {
+                "format": "ajae-development-window-worlds-v3",
+                "protocol_schema": 31,
+                "protocol_identity": "0" * 64,
+                "plan_identity": "1" * 64,
+                "population_identity": None,
+                "sequence_id": 201,
+                "status": "not_generated_R02",
+                "validation": {},
+                "clip_count": 0,
+                "window_count": 0,
+                "clips": [],
+                "scientific_verdict": None,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    save_development_worlds(
+        path,
+        clips,
+        protocol_identity=protocol.development_population_identity,
+        plan_identity=protocol.development_clip_plan_identity,
+    )
+    replaced = load_development_worlds(path, protocol=protocol)
+    assert replaced.status == "definitions_only_unvalidated"
+    assert replaced.protocol_identity == protocol.development_population_identity
+    assert replaced.plan_identity == protocol.development_clip_plan_identity
+    assert len(replaced.clips) == 24
+
+    with pytest.raises(RenderError, match="refusing to replace"):
+        save_development_worlds(
+            path,
+            clips,
+            protocol_identity=protocol.development_population_identity,
+            plan_identity=protocol.development_clip_plan_identity,
+        )
+
+
 def test_boolean_checks_cannot_forge_a_validated_development_freeze(
     tmp_path: Path,
 ) -> None:
-    protocol = load_protocol(PROTOCOL_PATH)
+    protocol = _protocol_with_frozen_r02_thresholds(tmp_path)
     path = tmp_path / "development.json"
-    checks = {"geometry": True, "matching": True, "labels": True}
     save_development_worlds(
         path,
-        _minimal_development_clips(),
+        _minimal_development_clips(protocol),
         protocol_identity=protocol.development_population_identity,
-        validation=checks,
+        plan_identity=protocol.development_clip_plan_identity,
     )
     payload = json.loads(path.read_text(encoding="utf-8"))
     assert payload["status"] == "definitions_only_unvalidated"
-    assert payload["validation"] == checks
+    assert payload["validation"] == {}
     assert payload["scientific_verdict"] is None
     assert not load_development_worlds(path, protocol=protocol).validated
 
     payload["status"] = "validated_frozen"
+    payload["validation"] = dict.fromkeys(R02_VALIDATION_KEYS, True)
+    payload["scientific_verdict"] = dict.fromkeys(R02_VALIDATION_KEYS, True)
     path.write_text(json.dumps(payload), encoding="utf-8")
-    with pytest.raises(ProtocolError, match="R02 thresholds must be frozen"):
+    with pytest.raises(ProtocolError, match="R02 scientific verdict keys differ"):
         load_development_worlds(path, protocol=protocol)
+
+
+def test_uncomputable_r02_matching_is_persisted_as_an_irreversible_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import src.train as train_module
+
+    protocol = _protocol_with_frozen_r02_thresholds(tmp_path)
+    clips = _minimal_development_clips(protocol, proxy_support=11)
+    path = tmp_path / "development.json"
+    save_development_worlds(
+        path,
+        clips,
+        protocol_identity=protocol.development_population_identity,
+        plan_identity=protocol.development_clip_plan_identity,
+    )
+    definitions = load_development_worlds(path, protocol=protocol)
+    review_path = tmp_path / "visual-review.json"
+    review_path.write_text(
+        json.dumps(
+            {
+                "format": "ajae-r02-visual-review-v1",
+                "population_identity": definitions.population_identity,
+                "reviewed_clip_identities": [
+                    item.identity for item in definitions.clips
+                ],
+                "reviewer": "test reviewer",
+                "reviewed_at_utc": "2026-09-03T00:00:00Z",
+                "checklist": {
+                    "world_fixed_before_all_scans": True,
+                    "no_synthetic_point_completion": True,
+                    "no_bottom_return_insertion": True,
+                    "no_scan_duplication_or_copying": True,
+                    "placements_visually_plausible": True,
+                    "returns_and_occlusion_visually_plausible": True,
+                },
+                "findings": "Synthetic fixture review.",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        train_module,
+        "_render_development_definitions",
+        lambda *_args, **_kwargs: clips,
+    )
+
+    adjudicated = train_module.finalize_r02_development_worlds(
+        protocol_path=protocol.path,
+        development_worlds_path=path,
+        data_root=tmp_path / "unused",
+        visual_review_path=review_path,
+    )
+    assert adjudicated.status == "adjudicated_failed_R02"
+    assert adjudicated.adjudicated and not adjudicated.validated
+    assert adjudicated.scientific_verdict is not None
+    assert adjudicated.scientific_verdict["decision"] == "fail"
+    matching = adjudicated.scientific_verdict["matching"]
+    assert matching["status"] == "not_computable"
+    assert matching["failure_code"] == "matching_not_computable"
+    assert matching["passed"] is False
+    assert adjudicated.scientific_verdict["shortcut_audit"]["failure_code"] == (
+        "matching_not_computable"
+    )
+
+    with pytest.raises(train_module.TrainingError, match="unadjudicated"):
+        train_module.finalize_r02_development_worlds(
+            protocol_path=protocol.path,
+            development_worlds_path=path,
+            data_root=tmp_path / "unused",
+            visual_review_path=review_path,
+        )
 
 
 def test_symmetric_reference_pose_is_permutation_deterministic_and_rigid() -> None:
@@ -581,10 +1052,14 @@ def test_symmetric_reference_pose_is_permutation_deterministic_and_rigid() -> No
         for index in range(5)
     )
     expected = WindowReferencePose.from_sensor_poses(poses)
-    observed = WindowReferencePose.from_sensor_poses(tuple(poses[index] for index in (3, 0, 4, 1, 2)))
+    observed = WindowReferencePose.from_sensor_poses(
+        tuple(poses[index] for index in (3, 0, 4, 1, 2))
+    )
     np.testing.assert_array_equal(observed.rotation, expected.rotation)
     np.testing.assert_array_equal(observed.translation, expected.translation)
-    np.testing.assert_allclose(expected.rotation.T @ expected.rotation, np.eye(3), atol=1e-12)
+    np.testing.assert_allclose(
+        expected.rotation.T @ expected.rotation, np.eye(3), atol=1e-12
+    )
     assert np.linalg.det(expected.rotation) == pytest.approx(1.0, abs=1e-12)
     np.testing.assert_allclose(
         expected.world_from_window @ expected.window_from_world,
@@ -783,7 +1258,9 @@ def test_assigned_stu_evidence_uses_one_minimum_index_query() -> None:
     logits[0, 0] = logits[1, 1] = 5.0
     masks[:, :2] = 2.0
     evidence = assigned_stu_evidence(logits, masks)
-    torch.testing.assert_close(evidence.assigned_query, torch.zeros(2, dtype=torch.long))
+    torch.testing.assert_close(
+        evidence.assigned_query, torch.zeros(2, dtype=torch.long)
+    )
     probability = logits.softmax(dim=1)
     mask_probability = torch.sigmoid(torch.tensor(2.0))
     assignment = mask_probability * probability[0, :19].max()
@@ -804,7 +1281,9 @@ def test_reused_stu_encoding_is_rejected_when_content_changes_but_slots_do_not(
         _one_return_source(frame_id, 4.0 + frame_id, 0.1 + 0.05 * frame_id)
         for frame_id in range(5)
     )
-    assert all(np.array_equal(source.real_slots, sources[0].real_slots) for source in sources)
+    assert all(
+        np.array_equal(source.real_slots, sources[0].real_slots) for source in sources
+    )
     encoding = _stu_encoding_for(sources[0])
     assert encoding.input_identity != stu_input_identity(
         sources[1].coordinates, sources[1].features, sources[1].real_slots
@@ -862,7 +1341,9 @@ def test_model_has_one_time_free_window_transformer_class() -> None:
         and "Transformer" in name
     ]
     assert transformer_classes == ["JointWindowPointTransformer"]
-    parameters = tuple(inspect.signature(JointWindowPointTransformer.forward).parameters)
+    parameters = tuple(
+        inspect.signature(JointWindowPointTransformer.forward).parameters
+    )
     assert parameters == (
         "self",
         "coordinates",
@@ -977,7 +1458,9 @@ def test_joint_model_scores_all_points_and_backpropagates_all_levels() -> None:
     assert all(value > 0.0 for value in result["hierarchy_gradient_l1"])
 
 
-def test_effective_batch_bce_balances_after_all_windows_and_handles_empty_class() -> None:
+def test_effective_batch_bce_balances_after_all_windows_and_handles_empty_class() -> (
+    None
+):
     from src.train import TrainingError, effective_batch_balanced_bce
 
     positive_logits = torch.asarray((0.0, 2.0))
@@ -1017,21 +1500,22 @@ def test_effective_batch_bce_balances_after_all_windows_and_handles_empty_class(
 def test_one_frozen_bank_round_trips_and_is_shared_by_b1_b2_b3(tmp_path: Path) -> None:
     from src.train import (
         _predict_window_for_test,
+        _write_window_train_bank_for_test,
         load_window_train_bank,
-        write_window_train_bank,
     )
 
     protocol = load_protocol(PROTOCOL_PATH)
     renderer_identity = "b" * 64
     source = _training_window(renderer_identity)
     bank_path = tmp_path / "bank"
-    bank = write_window_train_bank(
+    bank = _write_window_train_bank_for_test(
         bank_path,
         (source,),
         protocol=protocol,
         renderer_identity=renderer_identity,
     )
     document = json.loads((bank_path / "manifest.json").read_text(encoding="utf-8"))
+    assert document["test_fixture"] is True
     assert document["shared_by"] == ["B1", "B2", "B3"]
     assert document["entry_count"] == len(bank) == 1
     stored_world = WorldSpec.from_dict(
@@ -1099,11 +1583,15 @@ def test_one_frozen_bank_round_trips_and_is_shared_by_b1_b2_b3(tmp_path: Path) -
 
 
 def test_frozen_bank_rejects_a_tampered_shard_before_use(tmp_path: Path) -> None:
-    from src.train import TrainingError, load_window_train_bank, write_window_train_bank
+    from src.train import (
+        TrainingError,
+        _write_window_train_bank_for_test,
+        load_window_train_bank,
+    )
 
     protocol = load_protocol(PROTOCOL_PATH)
     bank_path = tmp_path / "bank"
-    bank = write_window_train_bank(
+    bank = _write_window_train_bank_for_test(
         bank_path,
         (_training_window("c" * 64),),
         protocol=protocol,
@@ -1119,11 +1607,15 @@ def test_frozen_bank_rejects_a_tampered_shard_before_use(tmp_path: Path) -> None
 def test_frozen_bank_rejects_an_entry_without_content_identities(
     tmp_path: Path,
 ) -> None:
-    from src.train import TrainingError, load_window_train_bank, write_window_train_bank
+    from src.train import (
+        TrainingError,
+        _write_window_train_bank_for_test,
+        load_window_train_bank,
+    )
 
     protocol = load_protocol(PROTOCOL_PATH)
     bank_path = tmp_path / "bank"
-    write_window_train_bank(
+    _write_window_train_bank_for_test(
         bank_path,
         (_training_window("e" * 64),),
         protocol=protocol,
@@ -1146,6 +1638,89 @@ def test_frozen_bank_rejects_an_entry_without_content_identities(
     manifest_path.write_text(json.dumps(document), encoding="utf-8")
     with pytest.raises(TrainingError, match=r"entries\[0\] keys differ"):
         load_window_train_bank(bank_path, protocol=protocol)
+
+
+def test_train_206_bank_rejects_held_out_torus_geometry() -> None:
+    from src.train import TrainingError, _bank_window_world
+
+    rotation = ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))
+    world = WorldSpec(
+        3101,
+        206,
+        (
+            ObjectSpec(
+                1,
+                "anomaly-proxy",
+                HeldOutTorusShape(0.4, 0.1),
+                MaterialSpec(0.5, 0.1),
+                (10.0, 0.0, 0.0),
+                rotation,
+            ),
+        ),
+    )
+    with pytest.raises(TrainingError, match="held-out torus geometry"):
+        _bank_window_world({"world": world.to_dict()})
+
+
+def test_pre_s01_development_render_rejects_torus_before_observation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import src.render as render_module
+
+    calls = 0
+
+    def forbidden_render(*_args: object, **_kwargs: object) -> object:
+        nonlocal calls
+        calls += 1
+        raise AssertionError("held-out observations must not be rendered")
+
+    monkeypatch.setattr(render_module, "render_frames", forbidden_render)
+    sources = tuple(
+        make_source_frame(
+            frame_id,
+            np.asarray(((4.0, 0.0, 0.0, 0.2),), dtype=np.float32),
+            np.eye(4, dtype=np.float64),
+            _labels(np.asarray((10,), dtype=np.uint16)),
+            partition="train",
+            sequence_id=201,
+        )
+        for frame_id in range(9)
+    )
+    rotation = ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))
+    world = WorldSpec(
+        3101,
+        201,
+        (
+            ObjectSpec(
+                1,
+                "anomaly-proxy",
+                HeldOutTorusShape(0.4, 0.1),
+                MaterialSpec(0.5, 0.1),
+                (10.0, 0.0, 0.0),
+                rotation,
+            ),
+        ),
+    )
+    report = WorldGenerationReport(
+        world_seed=world.seed,
+        source_sequence_id=201,
+        world_type="anomaly_only",
+        world_attempt=0,
+        normal_count=0,
+        anomaly_count=1,
+        count_seed=3102,
+        label_order_seed=3103,
+    )
+    with pytest.raises(RenderError, match="remain unopened until S01"):
+        render_module.render_development_clip_world(
+            world,
+            report,
+            sources,
+            None,  # type: ignore[arg-type]
+            None,  # type: ignore[arg-type]
+            renderer_identity="a" * 64,
+        )
+    assert calls == 0
 
 
 @pytest.mark.parametrize("changed_field", ("point", "label"))
@@ -1269,7 +1844,10 @@ def test_nine_frames_expose_every_window_and_occurrence_stratum() -> None:
     assert result.occurrence_count.tolist() == [1, 2, 3, 4, 5, 4, 3, 2, 1]
     assert result.occurrence_histogram == {"1": 2, "2": 2, "3": 2, "4": 2, "5": 1}
     independent = np.asarray(
-        [np.sum(expected[frame], dtype=np.float64) / len(expected[frame]) for frame in range(9)]
+        [
+            np.sum(expected[frame], dtype=np.float64) / len(expected[frame])
+            for frame in range(9)
+        ]
     )
     np.testing.assert_allclose(result.probability, independent, atol=2e-16, rtol=2e-15)
     assert fusion.finalize_synthetic("world-B").probability[0] == pytest.approx(0.99)
@@ -1297,7 +1875,7 @@ def test_b0_fusion_preserves_the_frozen_stu_score_domain() -> None:
         _ = result.probability
 
 
-def test_checkpoint_selection_excludes_the_six_held_out_torus_clips() -> None:
+def test_development_scoring_is_exactly_24_in_generator_clips() -> None:
     import src.train as train_module
 
     identity = EvaluationIdentity(
@@ -1314,53 +1892,58 @@ def test_checkpoint_selection_excludes_the_six_held_out_torus_clips() -> None:
         calibration_sha256="6" * 64,
         ray_mapping_sha256="7" * 64,
     )
-    clips = []
-    definitions = []
-    for index in range(30):
-        mechanism = "in_generator" if index < 24 else "torus_SDF"
+
+    def result(index: int, mechanism: str = "in_generator") -> DevelopmentClipResult:
         clip_identity = hashlib.sha256(f"clip-{index}".encode()).hexdigest()
         world_identity = hashlib.sha256(f"world-{index}".encode()).hexdigest()
         observations = tuple(
             hashlib.sha256(f"observation-{index}-{frame}".encode()).hexdigest()
             for frame in range(9)
         )
-        clips.append(
-            DevelopmentClipResult(
-                clip_identity=clip_identity,
-                world_identity=world_identity,
-                source_observation_identities=observations,
-                mechanism=mechanism,
-                fused_point_ap=0.2 if mechanism == "in_generator" else 0.9,
-                unique_point_count=1,
-                occurrence_count=1,
-                occurrence_histogram={
-                    "1": 1,
-                    "2": 0,
-                    "3": 0,
-                    "4": 0,
-                    "5": 0,
-                },
-                frame_count=9,
-                window_count=5,
-            )
+        return DevelopmentClipResult(
+            clip_identity=clip_identity,
+            world_identity=world_identity,
+            source_observation_identities=observations,
+            mechanism=mechanism,
+            fused_point_ap=0.2,
+            unique_point_count=1,
+            occurrence_count=1,
+            occurrence_histogram={
+                "1": 1,
+                "2": 0,
+                "3": 0,
+                "4": 0,
+                "5": 0,
+            },
+            frame_count=9,
+            window_count=5,
         )
+
+    with pytest.raises(EvaluationError, match="restricted to in-generator clips"):
+        result(24, "torus_SDF")
+
+    clips = tuple(result(index) for index in range(24))
+    definitions = []
+    for clip in clips:
         definitions.append(
             SimpleNamespace(
-                identity=clip_identity,
-                world_identity=world_identity,
-                mechanism=mechanism,
+                identity=clip.clip_identity,
+                world_identity=clip.world_identity,
+                mechanism=clip.mechanism,
                 frame_ids=tuple(range(9)),
                 windows=tuple(range(5)),
-                source_observation_identities=observations,
+                source_observation_identities=clip.source_observation_identities,
             )
         )
-    evidence = DevelopmentFusedAP("B3", tuple(clips), identity, FUSION_SEMANTICS)
-    assert evidence.in_generator_macro_fused_point_ap == pytest.approx(0.2)
-    assert evidence.held_out_macro_fused_point_ap == pytest.approx(0.9)
+    with pytest.raises(EvaluationError, match="frozen 24 in-generator clips"):
+        DevelopmentFusedAP("B3", clips[:-1], identity, FUSION_SEMANTICS)
+
+    evidence = DevelopmentFusedAP("B3", clips, identity, FUSION_SEMANTICS)
     assert evidence.macro_fused_point_ap == pytest.approx(0.2)
-    assert evidence.all_clips_macro_fused_point_ap == pytest.approx(
-        (24 * 0.2 + 6 * 0.9) / 30
-    )
+    serialized = evidence.to_dict()
+    assert serialized["mechanism"] == "in_generator"
+    assert serialized["clip_count"] == 24
+    assert "held_out_torus_macro_fused_point_ap" not in serialized
 
     development = SimpleNamespace(
         definitions=SimpleNamespace(
@@ -1372,12 +1955,212 @@ def test_checkpoint_selection_excludes_the_six_held_out_torus_clips() -> None:
     record = train_module._development_record(
         evidence, ExperimentCondition.B3, development
     )
-    assert record["selection_metric"] == "in_generator_macro_fused_point_ap"
-    assert record["in_generator_macro_fused_point_ap"] == pytest.approx(0.2)
-    assert record["held_out_torus_macro_fused_point_ap"] == pytest.approx(0.9)
-    assert record["held_out_torus_role"] == (
-        "diagnostic_only_excluded_from_checkpoint_selection"
+    assert record["selection_metric"] == "macro_fused_point_ap"
+    assert record["macro_fused_point_ap"] == pytest.approx(0.2)
+    assert record["scope"] == (
+        "24_in_generator_clips_only_held_out_torus_unopened_until_S01"
     )
+    assert "held_out_torus_macro_fused_point_ap" not in record
+
+
+def test_development_raw_samples_must_reproduce_every_clip_ap() -> None:
+    identity = EvaluationIdentity(
+        protocol_schema=31,
+        protocol_identity="1" * 64,
+        condition="B3",
+        fusion_value=AJAE_FUSION_VALUE,
+        model_class="JointWindowPointTransformer",
+        model_state_sha256="2" * 64,
+        stu_class="FrozenSTUPointEncoder",
+        stu_checkpoint_sha256="3" * 64,
+        stu_model_state_sha256="4" * 64,
+        stu_source_manifest_sha256="5" * 64,
+        calibration_sha256="6" * 64,
+        ray_mapping_sha256="7" * 64,
+    )
+    clips = tuple(
+        DevelopmentClipResult(
+            clip_identity=hashlib.sha256(f"raw-clip-{index}".encode()).hexdigest(),
+            world_identity=hashlib.sha256(f"raw-world-{index}".encode()).hexdigest(),
+            source_observation_identities=tuple(
+                hashlib.sha256(f"raw-source-{index}-{frame}".encode()).hexdigest()
+                for frame in range(9)
+            ),
+            mechanism="in_generator",
+            fused_point_ap=1.0,
+            unique_point_count=2,
+            occurrence_count=2,
+            occurrence_histogram={
+                "1": 2,
+                "2": 0,
+                "3": 0,
+                "4": 0,
+                "5": 0,
+            },
+            frame_count=9,
+            window_count=5,
+        )
+        for index in range(24)
+    )
+    samples = {
+        clip.clip_identity: (
+            np.asarray((False, True), dtype=np.bool_),
+            np.asarray((0.0, 1.0), dtype=np.float64),
+        )
+        for clip in clips
+    }
+    DevelopmentFusedAP("B3", clips, identity, FUSION_SEMANTICS, samples)
+    changed = dict(samples)
+    changed[clips[0].clip_identity] = (
+        np.asarray((False, True), dtype=np.bool_),
+        np.asarray((1.0, 0.0), dtype=np.float64),
+    )
+    with pytest.raises(EvaluationError, match="do not reproduce AP"):
+        DevelopmentFusedAP("B3", clips, identity, FUSION_SEMANTICS, changed)
+
+
+def test_raw_metric_artifacts_are_recomputed_and_content_addressed(
+    tmp_path: Path,
+) -> None:
+    from src.evaluate import (
+        FormalMetricEvidence,
+        NormalSafetyEvidence,
+        PublicMetricEvidence,
+        _save_public_metric_arrays,
+        save_formal_metric_evidence,
+        save_normal_safety_evidence,
+    )
+
+    protocol = _protocol_with_frozen_r02_thresholds(tmp_path)
+    identity = EvaluationIdentity(
+        protocol_schema=31,
+        protocol_identity=protocol.scientific_identity,
+        condition="B3",
+        fusion_value=AJAE_FUSION_VALUE,
+        model_class="JointWindowPointTransformer",
+        model_state_sha256="2" * 64,
+        stu_class="FrozenSTUPointEncoder",
+        stu_checkpoint_sha256=protocol.stu["checkpoint_sha256"],
+        stu_model_state_sha256=protocol.stu["model_state_tensor_sha256"],
+        stu_source_manifest_sha256=protocol.stu["source_manifest_sha256"],
+        calibration_sha256=protocol.render["calibration_sha256"],
+        ray_mapping_sha256=protocol.render["ray_grid"]["canonical_sha256"],
+    )
+    clip_ids = tuple(
+        hashlib.sha256(f"metric-clip-{index}".encode()).hexdigest()
+        for index in range(24)
+    )
+    samples = {
+        clip_id: (
+            np.asarray((False, True), dtype=np.bool_),
+            np.asarray((0.0, 1.0), dtype=np.float64),
+        )
+        for clip_id in clip_ids
+    }
+    clips = tuple(
+        DevelopmentClipResult(
+            clip_identity=clip_id,
+            world_identity=hashlib.sha256(f"metric-world-{index}".encode()).hexdigest(),
+            source_observation_identities=tuple(
+                hashlib.sha256(f"metric-source-{index}-{frame}".encode()).hexdigest()
+                for frame in range(9)
+            ),
+            mechanism="in_generator",
+            fused_point_ap=1.0,
+            unique_point_count=2,
+            occurrence_count=2,
+            occurrence_histogram={"1": 2, "2": 0, "3": 0, "4": 0, "5": 0},
+            frame_count=9,
+            window_count=5,
+        )
+        for index, clip_id in enumerate(clip_ids)
+    )
+    development_evidence = DevelopmentFusedAP(
+        "B3", clips, identity, FUSION_SEMANTICS, samples
+    )
+    formal_reference = save_formal_metric_evidence(
+        "formal-evidence.npz",
+        protocol=protocol,
+        development_evidence=development_evidence,
+        population_identity="a" * 64,
+    )
+    formal = FormalMetricEvidence.load(
+        formal_reference,
+        protocol=protocol,
+        expected_identity=identity,
+        expected_population_identity="a" * 64,
+        expected_clip_identities=clip_ids,
+    )
+    assert set(formal.clip_ap.values()) == {1.0}
+
+    safety_reference = save_normal_safety_evidence(
+        "normal-safety.npz",
+        protocol=protocol,
+        evaluation_identity=identity,
+        evaluation_set_identity="b" * 64,
+        threshold_rule_identity="c" * 64,
+        decision_threshold=0.5,
+        labels=np.zeros(4, dtype=np.bool_),
+        scores=np.asarray((0.1, 0.4, 0.6, 0.9), dtype=np.float64),
+    )
+    safety = NormalSafetyEvidence.load(
+        safety_reference, protocol=protocol, expected_identity=identity
+    )
+    assert safety.false_positive_rate == 0.5
+
+    # Public evidence only needs the current-node guard; use a trusted protocol clone
+    # to isolate raw metric recomputation from the later M01/G3 record graph.
+    public_protocol = object.__new__(AJAEProtocol)
+    public_protocol.__dict__.update(protocol.__dict__)
+    public_protocol.status = {**dict(protocol.status), "current_node": "V01"}
+    points = np.column_stack((np.arange(3.0, 15.0), np.zeros((12, 2)))).astype(
+        np.float32
+    )
+    semantic = np.asarray((10,) * 6 + (2,) * 6, dtype=np.int64)
+    scores = np.linspace(0.0, 1.0, 12, dtype=np.float64)
+    public_reference = _save_public_metric_arrays(
+        "public-evidence.npz",
+        protocol=public_protocol,
+        evaluation_identity=identity,
+        sequence_id=125,
+        source_frame=np.zeros(12, dtype=np.int64),
+        source_ray=np.arange(12, dtype=np.int64),
+        source_slot=np.arange(12, dtype=np.int64),
+        occurrence_count=np.ones(12, dtype=np.int64),
+        coordinates=points[:, :3],
+        raw_semantic=semantic,
+        scores=scores,
+    )
+    public = PublicMetricEvidence.load(
+        public_reference,
+        protocol=public_protocol,
+        expected_identity=identity,
+        expected_sequence_id=125,
+    )
+    assert public.metrics_unit_interval["AP"] == pytest.approx(1.0)
+    artifact = tmp_path / "public-evidence.npz"
+    artifact.write_bytes(artifact.read_bytes() + b"tampered")
+    with pytest.raises(EvaluationError, match="file identity changed"):
+        PublicMetricEvidence.load(
+            public_reference,
+            protocol=public_protocol,
+            expected_identity=identity,
+            expected_sequence_id=125,
+        )
+
+
+def test_s01_generator_is_blocked_before_any_held_out_access(tmp_path: Path) -> None:
+    from src.evaluate import generate_s01_clip_evidence
+
+    with pytest.raises(EvaluationError, match="authorized only at S01"):
+        generate_s01_clip_evidence(
+            protocol_path=PROTOCOL_PATH,
+            g3_verdict_path=tmp_path / "must-not-be-opened.json",
+            data_root=tmp_path / "must-not-be-opened",
+            plan_position=24,
+            destination=tmp_path / "must-not-exist.json",
+        )
+    assert not (tmp_path / "must-not-exist.json").exists()
 
 
 @pytest.mark.parametrize(
@@ -1483,7 +2266,9 @@ def test_point_metrics_match_the_released_stu_calculator(
     official = module.PointOODMetricsCalculator()
     ours = PointMetricAccumulator(protocol)
 
-    points = np.column_stack((np.arange(3.0, 15.0), np.zeros((12, 2)))).astype(np.float32)
+    points = np.column_stack((np.arange(3.0, 15.0), np.zeros((12, 2)))).astype(
+        np.float32
+    )
     scores = np.asarray((0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.35, 0.45, 0.55, 0.7, 0.8, 0.9))
     semantic = np.asarray((10, 10, 10, 10, 10, 10, 2, 2, 2, 2, 2, 2), dtype=np.uint16)
     official.update(points, scores, semantic)
