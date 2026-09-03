@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Frozen STU point evidence and the AJAE spatiotemporal point model."""
+"""Frozen STU point evidence and the AJAE joint-window point model."""
 
 from __future__ import annotations
 
@@ -29,7 +29,6 @@ NUM_NORMAL_CLASSES = 19
 NUM_QUERIES = 100
 MASK_DIM = 128
 STU_VOXEL_SIZE_METRES = 0.05
-RELATIVE_TIMES = (-2, -1, 0, 1, 2)
 STU_MODEL_STATE_FORMAT = "ajae-stu-normal-model-state-v2"
 STU_MODEL_STATE_CONVERSION_RULE = "extract_exact_model_prefix_strip_once_v1"
 KDTREE_WORKERS = max(1, min(24, os.cpu_count() or 1))
@@ -324,6 +323,7 @@ class STUPointEncoding:
     maxlogit_score: Tensor
     inverse_map: Tensor
     real_slots: Tensor
+    input_identity: str
 
     def __post_init__(self) -> None:
         count = self.inverse_map.numel()
@@ -348,6 +348,15 @@ class STUPointEncoding:
             raise ModelError("STU inverse map must be int64[N]")
         if self.real_slots.dtype != torch.long or self.real_slots.shape != (count,):
             raise ModelError("STU real slots must be int64[N]")
+        if (
+            not isinstance(self.input_identity, str)
+            or len(self.input_identity) != 64
+            or any(
+                character not in "0123456789abcdef"
+                for character in self.input_identity
+            )
+        ):
+            raise ModelError("STU input identity must be a lowercase SHA-256 digest")
         if count == 0:
             raise ModelError("STU cannot encode an empty real-return set")
         if int(self.inverse_map.min()) < 0:
@@ -380,6 +389,51 @@ def _numpy(value: np.ndarray | Tensor, *, dtype: np.dtype[Any]) -> np.ndarray:
     if isinstance(value, Tensor):
         value = value.detach().cpu().numpy()
     return np.asarray(value, dtype=dtype)
+
+
+def stu_input_identity(
+    coordinates: np.ndarray | Tensor,
+    features: np.ndarray | Tensor,
+    real_slots: np.ndarray | Tensor | None = None,
+) -> str:
+    """Bind frozen STU outputs to the exact effective single-scan inputs."""
+
+    coordinates_np = np.ascontiguousarray(_numpy(coordinates, dtype=np.float64))
+    features_np = np.ascontiguousarray(_numpy(features, dtype=np.float32))
+    if coordinates_np.ndim != 2 or coordinates_np.shape[1] != 3:
+        raise ModelError("STU identity coordinates must be [S,3]")
+    if features_np.shape != (coordinates_np.shape[0], 2):
+        raise ModelError("STU identity features must be [S,2]")
+    slots_np = (
+        np.arange(coordinates_np.shape[0], dtype=np.int64)
+        if real_slots is None
+        else np.ascontiguousarray(_numpy(real_slots, dtype=np.int64))
+    )
+    if (
+        slots_np.ndim != 1
+        or slots_np.size == 0
+        or np.any(slots_np < 0)
+        or np.any(slots_np >= coordinates_np.shape[0])
+        or np.unique(slots_np).size != slots_np.size
+    ):
+        raise ModelError("STU identity real_slots must select distinct input rows")
+    if not (
+        np.isfinite(coordinates_np[slots_np]).all()
+        and np.isfinite(features_np[slots_np]).all()
+    ):
+        raise ModelError("STU identity inputs contain non-finite values")
+
+    digest = hashlib.sha256(b"AJAE-schema31-frozen-STU-input\0")
+    for name, value in (
+        (b"coordinates", coordinates_np[slots_np]),
+        (b"features", features_np[slots_np]),
+        (b"real_slots", slots_np),
+    ):
+        array = np.ascontiguousarray(value)
+        digest.update(name)
+        digest.update(np.asarray(array.shape, dtype="<i8").tobytes())
+        digest.update(array.tobytes())
+    return digest.hexdigest()
 
 
 class FrozenSTUPointEncoder(nn.Module):
@@ -419,19 +473,30 @@ class FrozenSTUPointEncoder(nn.Module):
             raise ModelError("protocol STU point feature width must be 128")
         if int(stu["normal_evidence_dim"]) != NUM_NORMAL_CLASSES:
             raise ModelError("protocol STU normal evidence width must be 19")
-        if int(stu["query_count"]) != NUM_QUERIES or not bool(stu["frozen"]):
-            raise ModelError("protocol must select the frozen 100-query STU")
-        if tuple(stu["input_channels"]) != (
-            "intensity",
-            "official_STU_distance",
-        ) or not bool(stu["full_forward_is_eval"]):
-            raise ModelError(
-                "protocol must retain the official STU input and eval path"
-            )
+        if (
+            int(stu["assignment_reliability_dim"]) != 1
+            or int(stu["no_object_reliability_dim"]) != 1
+            or not bool(stu["frozen"])
+            or stu["source"] != "STU_official_Mask4Former3D"
+            or stu["b0_score"] != "official_STU_MaxLogit"
+            or int(stu["checkpoint_bytes"]) != STU_CHECKPOINT_BYTES
+            or stu["checkpoint_sha256"] != STU_CHECKPOINT_SHA256
+        ):
+            raise ModelError("protocol does not identify the frozen official STU")
+        if not math.isclose(
+            float(stu["voxel_size_m"]), STU_VOXEL_SIZE_METRES, abs_tol=1.0e-12
+        ):
+            raise ModelError("protocol STU voxel size must be exactly 0.05 m")
         root = Path(project_root).expanduser().resolve()
         repository = root / str(stu["repository"])
+        checkpoint_path = getattr(protocol, "checkpoint_path", None)
+        checkpoint = (
+            checkpoint_path(root)
+            if callable(checkpoint_path)
+            else root / str(stu["checkpoint"])
+        )
         return cls(
-            checkpoint=protocol.checkpoint_path(root),
+            checkpoint=checkpoint,
             official_repository=repository,
             voxel_size=float(stu["voxel_size_m"]),
         )
@@ -574,132 +639,280 @@ class FrozenSTUPointEncoder(nn.Module):
             maxlogit_score=sparse_evidence.maxlogit_score[inverse_map].detach(),
             inverse_map=inverse_map,
             real_slots=slots,
+            input_identity=stu_input_identity(
+                coordinates_np, features_np, slots_np
+            ),
         )
+
+
+GROUPING_MODES = frozenset({"single", "per_scan", "joint"})
+
+
+def _grouping_operation(
+    scan_group: Tensor, count: int, device: torch.device, grouping_mode: str
+) -> str:
+    if grouping_mode not in GROUPING_MODES:
+        raise ModelError("grouping_mode must be single, per_scan, or joint")
+    if scan_group.dtype != torch.long or scan_group.shape != (count,):
+        raise ModelError("scan_group must be int64[N]")
+    if scan_group.device != device:
+        raise ModelError("scan_group must share the point-tensor device")
+    if bool(torch.any(scan_group < 0)):
+        raise ModelError("scan_group must contain non-negative group labels")
+    if grouping_mode == "single":
+        if torch.unique(scan_group).numel() != 1:
+            raise ModelError("single grouping requires exactly one scan group")
+        return "joint"
+    return grouping_mode
+
+
+def _stable_candidate_order(
+    global_index: np.ndarray,
+    distance: np.ndarray,
+    points: np.ndarray,
+    tie_breaker: Tensor | None,
+) -> np.ndarray:
+    """Order a cutoff tie by intrinsic values, never by input row number."""
+
+    columns = [
+        np.asarray(distance, dtype=np.float64),
+        points[global_index, 0],
+        points[global_index, 1],
+        points[global_index, 2],
+    ]
+    if tie_breaker is not None:
+        index = torch.as_tensor(
+            global_index, dtype=torch.long, device=tie_breaker.device
+        )
+        values = (
+            tie_breaker.index_select(0, index)
+            .detach()
+            .to(device="cpu", dtype=torch.float64)
+            .numpy()
+        )
+        if values.ndim == 1:
+            values = values[:, None]
+        columns.extend(values[:, column] for column in range(values.shape[1]))
+    # np.lexsort uses the last key as primary, hence the reversed tuple.
+    return np.lexsort(tuple(reversed(columns)))
+
+
+def _canonical_pool_order(
+    keys: Tensor, coordinates: Tensor, features: Tensor
+) -> Tensor:
+    """Canonicalize every reduction sequence under input-row permutations."""
+
+    key_values = keys.detach().cpu().numpy()
+    point_values = coordinates.detach().to(device="cpu", dtype=torch.float64).numpy()
+    columns = [
+        *(key_values[:, column] for column in range(key_values.shape[1])),
+        *(point_values[:, column] for column in range(point_values.shape[1])),
+    ]
+    order = np.lexsort(tuple(reversed(columns)))
+
+    # Exact coincident returns are uncommon; use content only inside such ties.
+    ordered_keys = key_values[order]
+    ordered_points = point_values[order]
+    same = np.zeros(order.size, dtype=np.bool_)
+    same[1:] = np.all(ordered_keys[1:] == ordered_keys[:-1], axis=1) & np.all(
+        ordered_points[1:] == ordered_points[:-1], axis=1
+    )
+    boundaries = np.flatnonzero(~same)
+    stops = np.append(boundaries[1:], order.size)
+    repeated = stops - boundaries > 1
+    for start, stop in zip(boundaries[repeated], stops[repeated], strict=True):
+        rows = order[start:stop]
+        index = torch.as_tensor(rows, dtype=torch.long, device=features.device)
+        values = (
+            features.index_select(0, index)
+            .detach()
+            .to(device="cpu", dtype=torch.float64)
+            .numpy()
+        )
+        intrinsic = np.lexsort(
+            tuple(reversed([values[:, column] for column in range(values.shape[1])]))
+        )
+        order[start:stop] = rows[intrinsic]
+    return torch.as_tensor(order, dtype=torch.long, device=features.device)
 
 
 @dataclass(frozen=True, slots=True)
 class VoxelLevel:
-    """One time-preserving voxel level and its child-to-voxel assignment."""
+    """One spatial pyramid level and its child-to-voxel assignment."""
 
     coordinates: Tensor
-    relative_times: Tensor
+    scan_group: Tensor
     features: Tensor
     inverse_map: Tensor
+    population: Tensor
 
 
-def temporal_radius_knn(
-    coordinates: Tensor,
-    relative_times: Tensor,
-    delta: int,
-    radius: float,
-    k: int,
-    *,
-    workers: int | None = None,
-) -> tuple[Tensor, Tensor]:
-    """Find an independent radius-K neighborhood for one exact time difference."""
+class GroupedRadiusKNN(nn.Module):
+    """Build one spatial radius neighborhood, optionally isolated by scan."""
 
-    count = coordinates.shape[0]
-    if coordinates.ndim != 2 or coordinates.shape != (count, 3) or count == 0:
-        raise ModelError("neighbor coordinates must be non-empty [N,3]")
-    if relative_times.dtype != torch.long or relative_times.shape != (count,):
-        raise ModelError("neighbor relative times must be int64[N]")
-    if delta not in RELATIVE_TIMES:
-        raise ModelError("neighbor time difference must be one of -2,-1,0,1,2")
-    selected_workers = KDTREE_WORKERS if workers is None else int(workers)
-    if radius <= 0 or k <= 0 or selected_workers < 1:
-        raise ModelError("neighbor radius and K must be positive")
-    if relative_times.device != coordinates.device:
-        raise ModelError("neighbor coordinates and times must share a device")
-    _finite("neighbor coordinates", coordinates)
+    def __init__(self, radius: float, k: int, *, workers: int | None = None) -> None:
+        super().__init__()
+        selected_workers = KDTREE_WORKERS if workers is None else int(workers)
+        if radius <= 0.0 or k <= 0 or selected_workers < 1:
+            raise ModelError("neighbor radius, K, and workers must be positive")
+        self.radius = float(radius)
+        self.k = int(k)
+        self.workers = selected_workers
 
-    points = coordinates.detach().float().cpu().numpy().astype(np.float64, copy=False)
-    times = relative_times.detach().cpu().numpy().astype(np.int64, copy=False)
-    neighbor = np.repeat(np.arange(count, dtype=np.int64)[:, None], k, axis=1)
-    valid = np.zeros((count, k), dtype=np.bool_)
-    for query_time in RELATIVE_TIMES:
-        query_index = np.flatnonzero(times == query_time)
-        source_index = np.flatnonzero(times == query_time + delta)
-        if query_index.size == 0 or source_index.size == 0:
-            continue
-        # Ask for one extra row so a distance tie at the K boundary can be
-        # resolved by the stable source-row identity instead of KD-tree order.
-        width = min(k + 1, int(source_index.size))
-        tree = cKDTree(points[source_index])
-        distance, local_index = tree.query(
-            points[query_index],
-            k=width,
-            distance_upper_bound=float(radius),
-            workers=selected_workers,
+    def forward(
+        self,
+        coordinates: Tensor,
+        scan_group: Tensor,
+        *,
+        grouping_mode: str,
+        tie_breaker: Tensor | None = None,
+    ) -> tuple[Tensor, Tensor, Tensor]:
+        count = coordinates.shape[0]
+        if coordinates.ndim != 2 or coordinates.shape != (count, 3) or count == 0:
+            raise ModelError("neighbor coordinates must be non-empty [N,3]")
+        operation = _grouping_operation(
+            scan_group, count, coordinates.device, grouping_mode
         )
-        if width == 1:
-            distance = distance[:, None]
-            local_index = local_index[:, None]
-        raw_valid = (
-            np.isfinite(distance)
-            & (distance < float(radius))
-            & (local_index < source_index.size)
-        )
-        tied = np.zeros(query_index.size, dtype=np.bool_)
-        if width > 1:
-            tied = np.any(
-                raw_valid[:, :-1]
-                & raw_valid[:, 1:]
-                & np.isclose(
-                    distance[:, :-1], distance[:, 1:], rtol=0.0, atol=1.0e-12
-                ),
-                axis=1,
-            )
-        # Strictly ordered rows already have the exact lexicographic result.
-        # Vectorizing them avoids one Python iteration per LiDAR return.
-        fast = ~tied
-        take = min(k, width)
-        if np.any(fast):
-            fast_local = local_index[fast, :take]
-            fast_valid = raw_valid[fast, :take]
-            safe_local = np.minimum(fast_local, source_index.size - 1)
-            target_rows = query_index[fast]
-            local_row, local_column = np.nonzero(fast_valid)
-            neighbor[target_rows[local_row], local_column] = source_index[
-                safe_local[local_row, local_column]
-            ]
-            valid[target_rows[local_row], local_column] = True
-        for row in np.flatnonzero(tied):
-            point = points[query_index[row]]
-            row_distance = np.asarray(distance[row], dtype=np.float64)
-            row_local = np.asarray(local_index[row], dtype=np.int64)
-            row_valid = raw_valid[row]
-            row_distance = row_distance[row_valid]
-            row_local = row_local[row_valid]
-            if row_local.size > k and np.isclose(
-                row_distance[k - 1], row_distance[k], rtol=0.0, atol=1.0e-12
+        if tie_breaker is not None:
+            if (
+                tie_breaker.ndim not in {1, 2}
+                or tie_breaker.shape[0] != count
+                or tie_breaker.device != coordinates.device
             ):
-                tied_local = np.asarray(
-                    tree.query_ball_point(
-                        point, np.nextafter(row_distance[k - 1], np.inf)
+                raise ModelError("neighbor tie_breaker must be [N] or [N,D]")
+            _finite("neighbor tie breaker", tie_breaker)
+        _finite("neighbor coordinates", coordinates)
+
+        points = (
+            coordinates.detach()
+            .to(device="cpu", dtype=torch.float64)
+            .numpy()
+        )
+        groups = scan_group.detach().cpu().numpy().astype(np.int64, copy=False)
+        neighbor = np.repeat(np.arange(count, dtype=np.int64)[:, None], self.k, axis=1)
+        valid = np.zeros((count, self.k), dtype=np.bool_)
+        uncapped_count = np.zeros(count, dtype=np.int64)
+        partitions = (
+            (np.arange(count, dtype=np.int64),)
+            if operation == "joint"
+            else tuple(np.flatnonzero(groups == group) for group in np.unique(groups))
+        )
+        strict_radius = np.nextafter(self.radius, -np.inf)
+
+        for source_index in partitions:
+            source_points = points[source_index]
+            tree = cKDTree(source_points)
+            local_count = np.asarray(
+                tree.query_ball_point(
+                    source_points,
+                    strict_radius,
+                    workers=self.workers,
+                    return_length=True,
+                ),
+                dtype=np.int64,
+            )
+            uncapped_count[source_index] = local_count
+            width = min(self.k + 1, source_index.size)
+            distance, local_index = tree.query(
+                source_points,
+                k=width,
+                distance_upper_bound=self.radius,
+                workers=self.workers,
+            )
+            if width == 1:
+                distance = distance[:, None]
+                local_index = local_index[:, None]
+            distance = np.asarray(distance, dtype=np.float64)
+            local_index = np.asarray(local_index, dtype=np.int64)
+            raw_valid = (
+                np.isfinite(distance)
+                & (distance < self.radius)
+                & (local_index < source_index.size)
+            )
+            take = min(self.k, width)
+            tied = np.zeros(source_index.size, dtype=np.bool_)
+            if take > 1:
+                tied |= np.any(
+                    raw_valid[:, : take - 1]
+                    & raw_valid[:, 1:take]
+                    & np.isclose(
+                        distance[:, : take - 1],
+                        distance[:, 1:take],
+                        rtol=0.0,
+                        atol=1.0e-12,
                     ),
-                    dtype=np.int64,
+                    axis=1,
                 )
-                row_local = tied_local
-                row_distance = np.linalg.norm(
-                    points[source_index[tied_local]] - point, axis=1
+            boundary_tie = np.zeros(source_index.size, dtype=np.bool_)
+            if source_index.size > self.k:
+                boundary_tie = (
+                    raw_valid[:, self.k - 1]
+                    & raw_valid[:, self.k]
+                    & np.isclose(
+                        distance[:, self.k - 1],
+                        distance[:, self.k],
+                        rtol=0.0,
+                        atol=1.0e-12,
+                    )
                 )
-                inside = row_distance < float(radius)
-                row_local = row_local[inside]
-                row_distance = row_distance[inside]
-            global_index = source_index[row_local]
-            selected_order = np.lexsort((global_index, row_distance))[:k]
-            selected = global_index[selected_order]
-            count_selected = selected.size
-            neighbor[query_index[row], :count_selected] = selected
-            valid[query_index[row], :count_selected] = True
-    return (
-        torch.as_tensor(neighbor, dtype=torch.long, device=coordinates.device),
-        torch.as_tensor(valid, dtype=torch.bool, device=coordinates.device),
-    )
+                tied |= boundary_tie
+
+            fast = ~tied
+            if np.any(fast):
+                row = source_index[fast]
+                local = local_index[fast, :take]
+                present = raw_valid[fast, :take]
+                safe = np.minimum(local, source_index.size - 1)
+                local_row, column = np.nonzero(present)
+                neighbor[row[local_row], column] = source_index[
+                    safe[local_row, column]
+                ]
+                valid[row[local_row], column] = True
+
+            for local_row in np.flatnonzero(tied):
+                present = raw_valid[local_row, :take]
+                candidates = local_index[local_row, :take][present]
+                candidate_distance = distance[local_row, :take][present]
+                if boundary_tie[local_row]:
+                    boundary = distance[local_row, self.k - 1]
+                    candidates = np.asarray(
+                        tree.query_ball_point(
+                            source_points[local_row], np.nextafter(boundary, np.inf)
+                        ),
+                        dtype=np.int64,
+                    )
+                    candidate_distance = np.linalg.norm(
+                        source_points[candidates] - source_points[local_row], axis=1
+                    )
+                    inside = candidate_distance < self.radius
+                    candidates = candidates[inside]
+                    candidate_distance = candidate_distance[inside]
+                global_index = source_index[candidates]
+                order = _stable_candidate_order(
+                    global_index,
+                    candidate_distance,
+                    points,
+                    tie_breaker,
+                )[: self.k]
+                selected = global_index[order]
+                row = source_index[local_row]
+                neighbor[row, : selected.size] = selected
+                valid[row, : selected.size] = True
+
+        expected = np.minimum(uncapped_count, self.k)
+        if not np.array_equal(valid.sum(axis=1), expected):
+            raise ModelError("radius neighborhood count disagrees with top-K selection")
+        return (
+            torch.as_tensor(neighbor, dtype=torch.long, device=coordinates.device),
+            torch.as_tensor(valid, dtype=torch.bool, device=coordinates.device),
+            torch.as_tensor(
+                uncapped_count, dtype=torch.long, device=coordinates.device
+            ),
+        )
 
 
 class PointInputProjection(nn.Module):
-    """Project STU evidence and add center-frame geometry and time embeddings."""
+    """Project frozen STU content and symmetric-window spatial coordinates."""
 
     def __init__(self, hidden_dim: int) -> None:
         super().__init__()
@@ -711,13 +924,11 @@ class PointInputProjection(nn.Module):
         self.position = nn.Sequential(
             nn.Linear(3, hidden_dim), nn.GELU(), nn.Linear(hidden_dim, hidden_dim)
         )
-        self.time = nn.Embedding(len(RELATIVE_TIMES), hidden_dim)
         self.norm = nn.LayerNorm(hidden_dim)
 
     def forward(
         self,
         coordinates: Tensor,
-        relative_times: Tensor,
         stu_features: Tensor,
         normal_evidence: Tensor,
         reliability_assign: Tensor,
@@ -740,78 +951,55 @@ class PointInputProjection(nn.Module):
             ),
             dim=1,
         )
-        dtype = content.dtype
-        time_index = relative_times.to(dtype=torch.long) - RELATIVE_TIMES[0]
         return self.norm(
             self.content(content)
-            + self.position(coordinates.to(dtype=dtype))
-            + self.time(time_index)
+            + self.position(coordinates.to(dtype=content.dtype))
         )
 
 
-class TemporalPointBlock(nn.Module):
-    """Independent temporal branches with rejectable cross-frame evidence."""
+class JointPointBlock(nn.Module):
+    """Aggregate one grouped spatial neighborhood with explicit density."""
 
     def __init__(
         self,
         hidden_dim: int,
         heads: int,
-        radii: Sequence[float],
-        neighbors: Sequence[int],
+        radius: float,
+        neighbors: int,
         *,
         chunk_size: int = 4096,
     ) -> None:
         super().__init__()
         if hidden_dim % heads:
             raise ModelError("hidden dimension must be divisible by attention heads")
-        if len(radii) != len(RELATIVE_TIMES) or len(neighbors) != len(
-            RELATIVE_TIMES
-        ):
-            raise ModelError("each level requires five temporal radius-K branches")
-        if (
-            any(float(radius) <= 0.0 for radius in radii)
-            or any(int(k) <= 0 for k in neighbors)
-            or chunk_size <= 0
-        ):
-            raise ModelError("attention geometry and chunk size must be positive")
-        self.hidden_dim = hidden_dim
-        self.heads = heads
+        if chunk_size <= 0:
+            raise ModelError("attention chunk size must be positive")
+        self.hidden_dim = int(hidden_dim)
+        self.heads = int(heads)
         self.head_dim = hidden_dim // heads
-        self.radii = tuple(float(radius) for radius in radii)
-        self.neighbor_counts = tuple(int(k) for k in neighbors)
+        self.radius = float(radius)
         self.chunk_size = int(chunk_size)
+        self.neighborhood = GroupedRadiusKNN(radius, neighbors)
         self.norm1 = nn.LayerNorm(hidden_dim)
         self.query = nn.Linear(hidden_dim, hidden_dim)
         self.key = nn.Linear(hidden_dim, hidden_dim)
         self.value = nn.Linear(hidden_dim, hidden_dim)
         self.relative_bias = nn.Sequential(
-            nn.Linear(4, hidden_dim // 2),
+            nn.Linear(3, hidden_dim // 2),
             nn.GELU(),
             nn.Linear(hidden_dim // 2, heads),
         )
         self.message_projection = nn.Linear(hidden_dim, hidden_dim)
-        self.cross_gate = nn.Sequential(
-            nn.Linear(hidden_dim * 2 + 1, hidden_dim // 2),
+        self.neighbor_count_projection = nn.Sequential(
+            nn.Linear(1, hidden_dim // 2),
             nn.GELU(),
-            nn.Linear(hidden_dim // 2, 1),
+            nn.Linear(hidden_dim // 2, hidden_dim),
         )
         self.norm2 = nn.LayerNorm(hidden_dim)
         self.ffn = nn.Sequential(
             nn.Linear(hidden_dim, hidden_dim * 2),
             nn.GELU(),
             nn.Linear(hidden_dim * 2, hidden_dim),
-        )
-
-    def neighbors(
-        self, coordinates: Tensor, relative_times: Tensor, delta: int
-    ) -> tuple[Tensor, Tensor]:
-        branch = RELATIVE_TIMES.index(delta)
-        return temporal_radius_knn(
-            coordinates,
-            relative_times,
-            delta,
-            self.radii[branch],
-            self.neighbor_counts[branch],
         )
 
     def _message(
@@ -822,9 +1010,6 @@ class TemporalPointBlock(nn.Module):
         coordinates: Tensor,
         neighbor: Tensor,
         valid: Tensor,
-        *,
-        radius: float,
-        delta: int,
     ) -> Tensor:
         def chunk_message(
             local_query: Tensor,
@@ -840,18 +1025,12 @@ class TemporalPointBlock(nn.Module):
             score = (local_query * local_key).sum(dim=-1) / math.sqrt(
                 self.head_dim
             )
-            relative_position = (
+            displacement = (
                 all_coordinates[index] - local_coordinates[:, None]
-            ) / radius
-            delta_channel = relative_position.new_full(
-                (*relative_position.shape[:-1], 1), float(delta) / 2.0
-            )
-            score = score + self.relative_bias(
-                torch.cat((relative_position, delta_channel), dim=-1)
-            )
+            ) / self.radius
+            score = score + self.relative_bias(displacement)
             present = local_valid.any(dim=1)
             score = score.masked_fill(~local_valid[..., None], -torch.inf)
-            # Avoid an undefined all-masked softmax, then zero invalid weights.
             score = torch.where(
                 present[:, None, None], score, torch.zeros_like(score)
             )
@@ -861,29 +1040,24 @@ class TemporalPointBlock(nn.Module):
             )
 
         messages: list[Tensor] = []
-        count = query.shape[0]
-        for start in range(0, count, self.chunk_size):
-            stop = min(start + self.chunk_size, count)
-            index = neighbor[start:stop]
-            local_valid = valid[start:stop]
-            local_query = query[start:stop, None]
+        for start in range(0, query.shape[0], self.chunk_size):
+            stop = min(start + self.chunk_size, query.shape[0])
             arguments = (
-                local_query,
+                query[start:stop, None],
                 key,
                 value,
                 coordinates,
-                index,
-                local_valid,
+                neighbor[start:stop],
+                valid[start:stop],
                 coordinates[start:stop],
             )
             if self.training and torch.is_grad_enabled():
-                # Keep each neighbor-attention chunk exact while preventing
-                # all five branches from retaining their large local tensors.
+                # Recompute only local attention tensors during backward.
                 message = checkpoint(
                     chunk_message,
                     *arguments,
-                    use_reentrant=True,
-                    preserve_rng_state=True,
+                    use_reentrant=False,
+                    preserve_rng_state=False,
                 )
             else:
                 message = chunk_message(*arguments)
@@ -894,113 +1068,104 @@ class TemporalPointBlock(nn.Module):
         self,
         features: Tensor,
         coordinates: Tensor,
-        relative_times: Tensor,
+        scan_group: Tensor,
         *,
-        cross_frame_enabled: bool,
+        grouping_mode: str,
     ) -> Tensor:
-        if not isinstance(cross_frame_enabled, bool):
-            raise TypeError("cross_frame_enabled must be boolean")
         normalized = self.norm1(features)
         count = features.shape[0]
         query = self.query(normalized).view(count, self.heads, self.head_dim)
         key = self.key(normalized).view(count, self.heads, self.head_dim)
         value = self.value(normalized).view(count, self.heads, self.head_dim)
-        same_neighbor, same_valid = self.neighbors(coordinates, relative_times, 0)
-        same_message = self._message(
-            query,
-            key,
-            value,
+        neighbor, valid, uncapped_count = self.neighborhood(
             coordinates,
-            same_neighbor,
-            same_valid,
-            radius=self.radii[RELATIVE_TIMES.index(0)],
-            delta=0,
+            scan_group,
+            grouping_mode=grouping_mode,
+            tie_breaker=normalized,
         )
-        updated = features + self.message_projection(same_message)
-
-        if cross_frame_enabled:
-            for delta in RELATIVE_TIMES:
-                if delta == 0:
-                    continue
-                branch = RELATIVE_TIMES.index(delta)
-                neighbor, valid = self.neighbors(
-                    coordinates, relative_times, delta
-                )
-                message = self._message(
-                    query,
-                    key,
-                    value,
-                    coordinates,
-                    neighbor,
-                    valid,
-                    radius=self.radii[branch],
-                    delta=delta,
-                )
-                present = valid.any(dim=1)
-                delta_feature = features.new_full((count, 1), float(delta) / 2.0)
-                gate = torch.sigmoid(
-                    self.cross_gate(
-                        torch.cat((features, message, delta_feature), dim=1)
-                    )
-                ).squeeze(1)
-                gate = torch.where(present, gate, torch.zeros_like(gate))
-                updated = updated + gate[:, None] * self.message_projection(message)
+        message = self._message(query, key, value, coordinates, neighbor, valid)
+        density = torch.log1p(uncapped_count.to(dtype=features.dtype))[:, None]
+        updated = (
+            features
+            + self.message_projection(message)
+            + self.neighbor_count_projection(density)
+        )
         return updated + self.ffn(self.norm2(updated))
 
 
-class VoxelPool(nn.Module):
-    """Pool each time slice independently with concatenated mean and max."""
+class GroupedVoxelPool(nn.Module):
+    """Pool joint xyz voxels or scan-isolated group-plus-xyz voxels."""
 
     def __init__(self, hidden_dim: int, voxel_size: float) -> None:
         super().__init__()
-        if voxel_size <= 0:
+        if voxel_size <= 0.0:
             raise ModelError("voxel size must be positive")
         self.voxel_size = float(voxel_size)
         self.projection = nn.Sequential(
-            nn.Linear(hidden_dim * 2, hidden_dim),
+            nn.Linear(hidden_dim * 2 + 1, hidden_dim),
             nn.GELU(),
             nn.LayerNorm(hidden_dim),
         )
 
     def forward(
-        self, features: Tensor, coordinates: Tensor, relative_times: Tensor
+        self,
+        features: Tensor,
+        coordinates: Tensor,
+        scan_group: Tensor,
+        *,
+        grouping_mode: str,
     ) -> VoxelLevel:
-        quantized = torch.floor(coordinates / self.voxel_size).to(dtype=torch.long)
-        # Time is part of the key, so coincident points from different frames never merge.
-        keys = torch.cat((relative_times[:, None].to(torch.long), quantized), dim=1)
-        unique, inverse = torch.unique(keys, dim=0, sorted=True, return_inverse=True)
-        count = unique.shape[0]
-        width = features.shape[1]
-        index = inverse[:, None].expand(-1, width)
-        totals = features.new_zeros((count, width))
-        totals.scatter_add_(0, index, features)
-        population = features.new_zeros((count, 1))
-        population.scatter_add_(
-            0, inverse[:, None], features.new_ones((features.shape[0], 1))
+        operation = _grouping_operation(
+            scan_group, features.shape[0], features.device, grouping_mode
         )
-        mean = totals / population
-        maximum = features.new_full((count, width), -torch.inf)
-        maximum.scatter_reduce_(0, index, features, reduce="amax", include_self=True)
-        coordinate_totals = coordinates.new_zeros((count, 3))
-        coordinate_totals.scatter_add_(0, inverse[:, None].expand(-1, 3), coordinates)
-        pooled_coordinates = coordinate_totals / population.to(coordinates.dtype)
+        quantized = torch.floor(coordinates / self.voxel_size).to(dtype=torch.long)
+        keys = (
+            torch.cat((scan_group[:, None], quantized), dim=1)
+            if operation == "per_scan"
+            else quantized
+        )
+        unique, inverse = torch.unique(
+            keys, dim=0, sorted=True, return_inverse=True
+        )
+        voxel_count = unique.shape[0]
+        population = torch.bincount(inverse, minlength=voxel_count)
+        order = _canonical_pool_order(keys, coordinates, features)
+        mean = torch.segment_reduce(
+            features.index_select(0, order), "mean", lengths=population
+        )
+        maximum = torch.segment_reduce(
+            features.index_select(0, order), "max", lengths=population
+        )
+        pooled_coordinates = torch.segment_reduce(
+            coordinates.index_select(0, order), "mean", lengths=population
+        )
+        pooled_group = (
+            unique[:, 0]
+            if operation == "per_scan"
+            else torch.zeros(voxel_count, dtype=torch.long, device=features.device)
+        )
+        density = torch.log1p(population.to(dtype=features.dtype))[:, None]
+        pooled_features = self.projection(
+            torch.cat((mean, maximum, density), dim=1)
+        )
         return VoxelLevel(
             coordinates=pooled_coordinates,
-            relative_times=unique[:, 0],
-            features=self.projection(torch.cat((mean, maximum), dim=1)),
+            scan_group=pooled_group,
+            features=pooled_features,
             inverse_map=inverse,
+            population=population,
         )
 
 
-class VoxelPyramid(nn.Module):
-    """Encode fixed L0 raw points and three time-preserving voxel levels."""
+class JointVoxelPyramid(nn.Module):
+    """Encode raw returns and three grouped spatial voxel levels."""
 
     def __init__(
         self,
         hidden_dim: int,
         voxel_sizes: Sequence[float],
-        neighbor_radii: Sequence[Sequence[float]],
-        neighbor_k: Sequence[Sequence[int]],
+        neighbor_radii: Sequence[float],
+        neighbor_k: Sequence[int],
         *,
         heads: int,
         attention_chunk_size: int,
@@ -1009,165 +1174,254 @@ class VoxelPyramid(nn.Module):
         if len(voxel_sizes) != 3:
             raise ModelError("AJAE requires exactly three voxel sizes for L1-L3")
         if len(neighbor_radii) != 4 or len(neighbor_k) != 4:
-            raise ModelError("AJAE requires exactly four attention levels L0-L3")
-        if any(len(row) != 5 for row in neighbor_radii) or any(
-            len(row) != 5 for row in neighbor_k
-        ):
-            raise ModelError("each attention level requires five temporal branches")
+            raise ModelError("AJAE requires exactly four spatial levels L0-L3")
         if any(right <= left for left, right in zip(voxel_sizes, voxel_sizes[1:])):
             raise ModelError("voxel sizes must increase from fine to coarse")
-        for branch in range(len(RELATIVE_TIMES)):
-            radii = tuple(float(level[branch]) for level in neighbor_radii)
-            if any(right <= left for left, right in zip(radii, radii[1:])):
-                raise ModelError("attention radii must increase from L0 through L3")
-        self.pools = nn.ModuleList(VoxelPool(hidden_dim, size) for size in voxel_sizes)
+        if any(
+            right <= left for left, right in zip(neighbor_radii, neighbor_radii[1:])
+        ):
+            raise ModelError("neighbor radii must increase from L0 through L3")
+        self.pools = nn.ModuleList(
+            GroupedVoxelPool(hidden_dim, size) for size in voxel_sizes
+        )
         self.blocks = nn.ModuleList(
-            TemporalPointBlock(
+            JointPointBlock(
                 hidden_dim,
                 heads,
-                radii,
-                counts,
+                radius,
+                neighbors,
                 chunk_size=attention_chunk_size,
             )
-            for radii, counts in zip(neighbor_radii, neighbor_k, strict=True)
+            for radius, neighbors in zip(
+                neighbor_radii, neighbor_k, strict=True
+            )
         )
 
     def forward(
         self,
         features: Tensor,
         coordinates: Tensor,
-        relative_times: Tensor,
+        scan_group: Tensor,
         *,
-        cross_frame_enabled: bool,
+        grouping_mode: str,
     ) -> tuple[VoxelLevel, ...]:
-        def attend(
-            block: TemporalPointBlock,
-            values: Tensor,
-            points: Tensor,
-            times: Tensor,
-        ) -> Tensor:
-            if cross_frame_enabled and self.training and torch.is_grad_enabled():
-                # Recompute temporal attention during backward to keep an exact
-                # five-frame graph within the formal GPU memory budget.
-                return checkpoint(
-                    lambda current, current_points, current_times: block(
-                        current,
-                        current_points,
-                        current_times,
-                        cross_frame_enabled=True,
-                    ),
-                    values,
-                    points,
-                    times,
-                    use_reentrant=True,
-                    preserve_rng_state=True,
-                )
-            return block(
-                values,
-                points,
-                times,
-                cross_frame_enabled=cross_frame_enabled,
-            )
-
-        features = attend(
-            self.blocks[0], features, coordinates, relative_times
+        features = self.blocks[0](
+            features,
+            coordinates,
+            scan_group,
+            grouping_mode=grouping_mode,
         )
         levels = [
             VoxelLevel(
                 coordinates=coordinates,
-                relative_times=relative_times,
+                scan_group=scan_group,
                 features=features,
                 inverse_map=torch.arange(
+                    features.shape[0], dtype=torch.long, device=features.device
+                ),
+                population=torch.ones(
                     features.shape[0], dtype=torch.long, device=features.device
                 ),
             )
         ]
         for pool, block in zip(self.pools, self.blocks[1:], strict=True):
-            level = pool(features, coordinates, relative_times)
-            attended = attend(
-                block, level.features, level.coordinates, level.relative_times
+            level = pool(
+                features,
+                coordinates,
+                scan_group,
+                grouping_mode=grouping_mode,
+            )
+            attended = block(
+                level.features,
+                level.coordinates,
+                level.scan_group,
+                grouping_mode=grouping_mode,
             )
             level = VoxelLevel(
                 coordinates=level.coordinates,
-                relative_times=level.relative_times,
+                scan_group=level.scan_group,
                 features=attended,
                 inverse_map=level.inverse_map,
+                population=level.population,
             )
             levels.append(level)
             features = attended
             coordinates = level.coordinates
-            relative_times = level.relative_times
+            scan_group = level.scan_group
         return tuple(levels)
 
 
-class KnnUpsample(nn.Module):
-    """Interpolate geometrically from coarse nodes without crossing time slices."""
+class GroupedKnnUpsample(nn.Module):
+    """Interpolate from joint or scan-isolated coarse spatial nodes."""
 
-    def __init__(self, k: int = 3) -> None:
+    def __init__(self, k: int = 3, *, workers: int | None = None) -> None:
         super().__init__()
-        if k <= 0:
-            raise ModelError("upsampling K must be positive")
+        selected_workers = KDTREE_WORKERS if workers is None else int(workers)
+        if k <= 0 or selected_workers < 1:
+            raise ModelError("upsampling K and workers must be positive")
         self.k = int(k)
+        self.workers = selected_workers
 
     def forward(
         self,
         source_features: Tensor,
         source_coordinates: Tensor,
-        source_times: Tensor,
+        source_group: Tensor,
         target_coordinates: Tensor,
-        target_times: Tensor,
+        target_group: Tensor,
+        *,
+        grouping_mode: str,
     ) -> Tensor:
-        output = source_features.new_zeros(
-            (target_coordinates.shape[0], source_features.shape[1])
+        source_count = source_coordinates.shape[0]
+        target_count = target_coordinates.shape[0]
+        if (
+            source_coordinates.shape != (source_count, 3)
+            or target_coordinates.shape != (target_count, 3)
+            or source_features.ndim != 2
+            or source_features.shape[0] != source_count
+            or source_count == 0
+            or target_count == 0
+        ):
+            raise ModelError("upsampling tensors have invalid non-empty point shapes")
+        if not (
+            source_features.device
+            == source_coordinates.device
+            == source_group.device
+            == target_coordinates.device
+            == target_group.device
+        ):
+            raise ModelError("upsampling tensors must share one device")
+        source_operation = _grouping_operation(
+            source_group, source_count, source_features.device, grouping_mode
         )
-        for relative_time in torch.unique(target_times, sorted=True).tolist():
-            source_index = torch.nonzero(
-                source_times == relative_time, as_tuple=False
-            ).flatten()
-            target_index = torch.nonzero(
-                target_times == relative_time, as_tuple=False
-            ).flatten()
-            if source_index.numel() == 0:
-                raise ModelError(
-                    "kNN upsampling found a target frame without source nodes"
-                )
-            source_points = (
-                source_coordinates[source_index]
-                .detach()
-                .float()
-                .cpu()
-                .numpy()
-                .astype(np.float64, copy=False)
+        target_operation = _grouping_operation(
+            target_group, target_count, source_features.device, grouping_mode
+        )
+        if source_operation != target_operation:
+            raise AssertionError("source and target grouping operations differ")
+        operation = source_operation
+        _finite("upsampling source features", source_features)
+        _finite("upsampling source coordinates", source_coordinates)
+        _finite("upsampling target coordinates", target_coordinates)
+
+        source_points = (
+            source_coordinates.detach()
+            .to(device="cpu", dtype=torch.float64)
+            .numpy()
+        )
+        target_points = (
+            target_coordinates.detach()
+            .to(device="cpu", dtype=torch.float64)
+            .numpy()
+        )
+        source_groups = source_group.detach().cpu().numpy().astype(np.int64, copy=False)
+        target_groups = target_group.detach().cpu().numpy().astype(np.int64, copy=False)
+        if operation == "joint":
+            partitions = ((
+                np.arange(source_count, dtype=np.int64),
+                np.arange(target_count, dtype=np.int64),
+            ),)
+        else:
+            partitions_list: list[tuple[np.ndarray, np.ndarray]] = []
+            for group in np.unique(target_groups):
+                source_index = np.flatnonzero(source_groups == group)
+                target_index = np.flatnonzero(target_groups == group)
+                if source_index.size == 0:
+                    raise ModelError("upsampling target group has no source nodes")
+                partitions_list.append((source_index, target_index))
+            partitions = tuple(partitions_list)
+
+        output = source_features.new_zeros((target_count, source_features.shape[1]))
+        for source_index, target_index in partitions:
+            tree = cKDTree(source_points[source_index])
+            width = min(self.k, source_index.size)
+            query_width = min(self.k + 1, source_index.size)
+            distance, local_index = tree.query(
+                target_points[target_index],
+                k=query_width,
+                workers=self.workers,
             )
-            target_points = (
-                target_coordinates[target_index]
-                .detach()
-                .float()
-                .cpu()
-                .numpy()
-                .astype(np.float64, copy=False)
-            )
-            width = min(self.k, source_points.shape[0])
-            distance, local_index = cKDTree(source_points).query(
-                target_points, k=width, workers=KDTREE_WORKERS
-            )
-            if width == 1:
+            if query_width == 1:
                 distance = distance[:, None]
                 local_index = local_index[:, None]
-            weight = 1.0 / np.maximum(distance, 1e-8)
-            weight /= weight.sum(axis=1, keepdims=True)
-            neighbor = source_index[
-                torch.as_tensor(
-                    local_index, dtype=torch.long, device=source_index.device
+            distance = np.asarray(distance, dtype=np.float64)
+            local_index = np.asarray(local_index, dtype=np.int64)
+            selected_local = local_index[:, :width].copy()
+            selected_distance = distance[:, :width].copy()
+            tied = np.zeros(target_index.size, dtype=np.bool_)
+            if width > 1:
+                tied |= np.any(
+                    np.isclose(
+                        selected_distance[:, :-1],
+                        selected_distance[:, 1:],
+                        rtol=0.0,
+                        atol=1.0e-12,
+                    ),
+                    axis=1,
                 )
-            ]
+            boundary_tie = np.zeros(target_index.size, dtype=np.bool_)
+            if source_index.size > self.k:
+                boundary_tie = np.isclose(
+                    distance[:, self.k - 1],
+                    distance[:, self.k],
+                    rtol=0.0,
+                    atol=1.0e-12,
+                )
+                tied |= boundary_tie
+            for local_row in np.flatnonzero(tied):
+                candidates = selected_local[local_row]
+                candidate_distance = selected_distance[local_row]
+                if boundary_tie[local_row]:
+                    boundary = distance[local_row, self.k - 1]
+                    candidates = np.asarray(
+                        tree.query_ball_point(
+                            target_points[target_index[local_row]],
+                            np.nextafter(boundary, np.inf),
+                        ),
+                        dtype=np.int64,
+                    )
+                    candidate_distance = np.linalg.norm(
+                        source_points[source_index[candidates]]
+                        - target_points[target_index[local_row]],
+                        axis=1,
+                    )
+                global_index = source_index[candidates]
+                order = _stable_candidate_order(
+                    global_index,
+                    candidate_distance,
+                    source_points,
+                    source_features,
+                )[:width]
+                selected_local[local_row] = candidates[order]
+                selected_distance[local_row] = candidate_distance[order]
+
+            zero = selected_distance <= 1.0e-12
+            weight = np.empty_like(selected_distance)
+            rows_with_zero = zero.any(axis=1)
+            if np.any(rows_with_zero):
+                weight[rows_with_zero] = zero[rows_with_zero] / zero[
+                    rows_with_zero
+                ].sum(axis=1, keepdims=True)
+            if np.any(~rows_with_zero):
+                inverse_distance = 1.0 / selected_distance[~rows_with_zero]
+                weight[~rows_with_zero] = inverse_distance / inverse_distance.sum(
+                    axis=1, keepdims=True
+                )
+            neighbor = source_index[selected_local]
+            neighbor_tensor = torch.as_tensor(
+                neighbor, dtype=torch.long, device=source_features.device
+            )
             weight_tensor = torch.as_tensor(
                 weight, dtype=source_features.dtype, device=source_features.device
             )
-            interpolated = (source_features[neighbor] * weight_tensor[..., None]).sum(
-                dim=1
-            )
-            output[target_index] = interpolated
+            interpolated = (
+                source_features[neighbor_tensor] * weight_tensor[..., None]
+            ).sum(dim=1)
+            output[
+                torch.as_tensor(
+                    target_index, dtype=torch.long, device=source_features.device
+                )
+            ] = interpolated
         return output
 
 
@@ -1187,26 +1441,16 @@ class PointAnomalyHead(nn.Module):
         return self.layers(features).squeeze(1)
 
 
-class AJAEPointTransformer(nn.Module):
-    """Fixed four-level AJAE point model for single- or five-frame conditions."""
+class JointWindowPointTransformer(nn.Module):
+    """Four-level point model shared exactly by single, B2, and B3 paths."""
 
     def __init__(
         self,
         *,
         hidden_dim: int = 128,
         voxel_sizes: Sequence[float] = (0.1, 0.2, 0.4),
-        neighbor_radii: Sequence[Sequence[float]] = (
-            (0.45, 0.35, 0.25, 0.35, 0.45),
-            (0.90, 0.70, 0.50, 0.70, 0.90),
-            (1.80, 1.40, 1.00, 1.40, 1.80),
-            (3.60, 2.80, 2.00, 2.80, 3.60),
-        ),
-        neighbor_k: Sequence[Sequence[int]] = (
-            (6, 8, 12, 8, 6),
-            (8, 12, 16, 12, 8),
-            (12, 16, 24, 16, 12),
-            (16, 24, 32, 24, 16),
-        ),
+        neighbor_radii: Sequence[float] = (0.25, 0.5, 1.0, 2.0),
+        neighbor_k: Sequence[int] = (12, 16, 24, 32),
         heads: int = 4,
         upsample_k: int = 3,
         attention_chunk_size: int = 8192,
@@ -1215,17 +1459,17 @@ class AJAEPointTransformer(nn.Module):
         if hidden_dim < 16 or hidden_dim % heads:
             raise ModelError("hidden dimension must be at least 16 and divide heads")
         if upsample_k != 3:
-            raise ModelError("AJAE requires same-frame 3-NN upsampling")
+            raise ModelError("AJAE requires grouped spatial 3-NN upsampling")
         self.input_projection = PointInputProjection(hidden_dim)
-        self.pyramid = VoxelPyramid(
+        self.pyramid = JointVoxelPyramid(
             hidden_dim,
             tuple(float(value) for value in voxel_sizes),
-            tuple(tuple(float(value) for value in row) for row in neighbor_radii),
-            tuple(tuple(int(value) for value in row) for row in neighbor_k),
+            tuple(float(value) for value in neighbor_radii),
+            tuple(int(value) for value in neighbor_k),
             heads=heads,
             attention_chunk_size=attention_chunk_size,
         )
-        self.upsample = KnnUpsample(upsample_k)
+        self.upsample = GroupedKnnUpsample(upsample_k)
         self.decoder_fusions = nn.ModuleList(
             self._fusion(hidden_dim) for _ in range(len(voxel_sizes) - 1)
         )
@@ -1241,41 +1485,58 @@ class AJAEPointTransformer(nn.Module):
         )
 
     @classmethod
-    def from_protocol(cls, protocol: Any) -> AJAEPointTransformer:
+    def from_protocol(cls, protocol: Any) -> JointWindowPointTransformer:
         if not hasattr(protocol, "model"):
             raise TypeError("protocol must expose a model mapping")
         model = protocol.model
-        expected_input = MASK_DIM + NUM_NORMAL_CLASSES + 3
-        if int(model["input_dim"]) != expected_input:
+        expected_features = (
+            "stu_point_feature_128d",
+            "normal_evidence_19d",
+            "assignment_reliability",
+            "no_object_reliability",
+            "intensity",
+        )
+        expected_forbidden = {
+            "source_frame",
+            "window_member_index",
+            "relative_time",
+            "absolute_time",
+            "time_embedding",
+            "reversible_time_encoding",
+        }
+        grouping = model.get("grouping_modes")
+        radius = model.get("radius_neighbors")
+        if int(model["input_dim"]) != MASK_DIM + NUM_NORMAL_CLASSES + 3:
             raise ModelError("protocol point input dimension must be 150")
-        if (
-            int(model["stu_feature_dim"]) != MASK_DIM
-            or int(model["normal_evidence_dim"]) != NUM_NORMAL_CLASSES
-            or int(model["input_intensity_dim"]) != 1
-        ):
+        if tuple(model["input_features"]) != expected_features:
             raise ModelError("protocol point input components do not match AJAE")
-        if model["pooling"] != "per_time_mean_max":
-            raise ModelError("AJAE has one authoritative mean-max pooling path")
-        if model["upsample"] != "same_time_3NN_with_high_resolution_skip":
-            raise ModelError("AJAE has one authoritative same-frame kNN decoder")
-        if int(model["levels"]) != 4 or len(model["voxel_sizes_m"]) != 3:
-            raise ModelError("protocol must define fixed L0 plus voxel levels L1-L3")
-        radii = tuple(
-            tuple(float(value) for value in row)
-            for row in model["attention_radii_m"]
-        )
-        neighbors = tuple(
-            tuple(int(value) for value in row) for row in model["neighbors"]
-        )
-        if len(radii) != 4 or len(neighbors) != 4 or any(
-            len(row) != 5 for row in (*radii, *neighbors)
+        if not isinstance(grouping, Mapping) or dict(grouping) != {
+            "B1": "single",
+            "B2": "per_scan",
+            "B3": "joint",
+        }:
+            raise ModelError("protocol grouping modes do not define B1, B2, and B3")
+        if not isinstance(radius, Mapping):
+            raise ModelError("protocol radius-neighbor geometry is missing")
+        if (
+            int(model["levels"]) != 4
+            or len(model["voxel_sizes_m"]) != 3
+            or tuple(model["voxel_feature"])
+            != ("mean", "max", "log1p_population")
+            or model["neighborhood_feature"]
+            != "log1p_uncapped_count_of_all_points_strictly_inside_radius_before_top_K_selection"
+            or not expected_forbidden.issubset(model["forbidden_features"])
+            or model["B2_B3_shared_class_and_parameterization"] is not True
+            or model["output"]
+            != "one_anomaly_logit_for_every_visible_input_return"
+            or model["scan_permutation_equivariant"] is not True
         ):
-            raise ModelError("protocol attention geometry must be 4x5")
+            raise ModelError("protocol does not define the joint-window model contract")
         return cls(
             hidden_dim=int(model["hidden_dim"]),
-            voxel_sizes=tuple(model["voxel_sizes_m"]),
-            neighbor_radii=radii,
-            neighbor_k=neighbors,
+            voxel_sizes=tuple(float(value) for value in model["voxel_sizes_m"]),
+            neighbor_radii=tuple(float(value) for value in radius["radii_m"]),
+            neighbor_k=tuple(int(value) for value in radius["maximum_neighbors"]),
             heads=int(model["heads"]),
             upsample_k=int(model["upsample_neighbors"]),
         )
@@ -1283,20 +1544,19 @@ class AJAEPointTransformer(nn.Module):
     @staticmethod
     def _validate_inputs(
         coordinates: Tensor,
-        relative_times: Tensor,
         stu_features: Tensor,
         normal_evidence: Tensor,
         reliability_assign: Tensor,
         reliability_noobj: Tensor,
         intensity: Tensor,
-    ) -> Tensor:
+        scan_group: Tensor,
+        grouping_mode: str,
+    ) -> None:
         if coordinates.ndim != 2 or coordinates.shape[1] != 3:
-            raise ModelError("center-frame coordinates must be [N,3]")
+            raise ModelError("symmetric window coordinates must be [N,3]")
         count = coordinates.shape[0]
         if count == 0:
             raise ModelError("AJAE cannot score an empty window")
-        if relative_times.shape != (count,):
-            raise ModelError("relative times must be [N]")
         if stu_features.shape != (count, MASK_DIM):
             raise ModelError("STU point features must be [N,128]")
         if normal_evidence.shape != (count, NUM_NORMAL_CLASSES):
@@ -1307,20 +1567,33 @@ class AJAEPointTransformer(nn.Module):
             raise ModelError("no-object reliability must be [N] or [N,1]")
         if intensity.shape not in {(count,), (count, 1)}:
             raise ModelError("point intensity must be [N] or [N,1]")
-        devices = {
-            coordinates.device,
-            relative_times.device,
-            stu_features.device,
-            normal_evidence.device,
-            reliability_assign.device,
-            reliability_noobj.device,
-            intensity.device,
-        }
-        if len(devices) != 1:
+        tensors = (
+            coordinates,
+            stu_features,
+            normal_evidence,
+            reliability_assign,
+            reliability_noobj,
+            intensity,
+        )
+        if any(not torch.is_floating_point(value) for value in tensors):
+            raise ModelError("AJAE coordinate and content tensors must be floating point")
+        if len({value.device for value in (*tensors, scan_group)}) != 1:
             raise ModelError("all AJAE point tensors must share a device")
+        if len(
+            {
+                value.dtype
+                for value in (
+                    stu_features,
+                    normal_evidence,
+                    reliability_assign,
+                    reliability_noobj,
+                    intensity,
+                )
+            }
+        ) != 1:
+            raise ModelError("all AJAE content tensors must share a floating dtype")
         for name, value in (
             ("coordinates", coordinates),
-            ("relative_times", relative_times),
             ("STU features", stu_features),
             ("normal evidence", normal_evidence),
             ("assignment reliability", reliability_assign),
@@ -1328,39 +1601,32 @@ class AJAEPointTransformer(nn.Module):
             ("intensity", intensity),
         ):
             _finite(name, value)
-        rounded = relative_times.round()
-        if not bool(torch.equal(relative_times, rounded)):
-            raise ModelError("relative times must be exact integer positions")
-        integer_times = rounded.to(dtype=torch.long)
-        observed = tuple(torch.unique(integer_times, sorted=True).tolist())
-        if observed not in {(0,), RELATIVE_TIMES}:
-            raise ModelError("AJAE input must be single-frame q=0 or complete q=-2..2")
-        return integer_times
+        _grouping_operation(scan_group, count, coordinates.device, grouping_mode)
 
     def forward(
         self,
         coordinates: Tensor,
-        relative_times: Tensor,
         stu_features: Tensor,
         normal_evidence: Tensor,
         reliability_assign: Tensor,
         reliability_noobj: Tensor,
         intensity: Tensor,
+        scan_group: Tensor,
         *,
-        cross_frame_enabled: bool = True,
+        grouping_mode: str,
     ) -> Tensor:
-        integer_times = self._validate_inputs(
+        self._validate_inputs(
             coordinates,
-            relative_times,
             stu_features,
             normal_evidence,
             reliability_assign,
             reliability_noobj,
             intensity,
+            scan_group,
+            grouping_mode,
         )
         point_features = self.input_projection(
             coordinates,
-            integer_times,
             stu_features,
             normal_evidence,
             reliability_assign,
@@ -1371,8 +1637,8 @@ class AJAEPointTransformer(nn.Module):
         levels = self.pyramid(
             point_features,
             coordinates,
-            integer_times,
-            cross_frame_enabled=cross_frame_enabled,
+            scan_group,
+            grouping_mode=grouping_mode,
         )
 
         decoded = levels[-1].features
@@ -1383,9 +1649,10 @@ class AJAEPointTransformer(nn.Module):
             decoded = self.upsample(
                 decoded,
                 source.coordinates,
-                source.relative_times,
+                source.scan_group,
                 target.coordinates,
-                target.relative_times,
+                target.scan_group,
+                grouping_mode=grouping_mode,
             )
             decoded = fusion(torch.cat((decoded, target.features), dim=1))
             source = target
@@ -1393,9 +1660,10 @@ class AJAEPointTransformer(nn.Module):
         decoded = self.upsample(
             decoded,
             source.coordinates,
-            source.relative_times,
+            source.scan_group,
             levels[0].coordinates,
-            levels[0].relative_times,
+            levels[0].scan_group,
+            grouping_mode=grouping_mode,
         )
         decoded = self.high_resolution_fusion(
             torch.cat((decoded, levels[0].features), dim=1)
