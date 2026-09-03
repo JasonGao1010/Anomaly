@@ -53,6 +53,26 @@ class TrainingError(RuntimeError):
     """Report an invalid or failed AJAE optimization operation."""
 
 
+def _require_schema31_training_contract(protocol_path: Path | str) -> Path:
+    """Reject retired protocols before any training path can read data or write state."""
+
+    path = Path(protocol_path).expanduser().resolve(strict=True)
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            document = json.load(handle)
+    except (OSError, json.JSONDecodeError) as error:
+        raise TrainingError("training protocol is not readable JSON") from error
+    if not isinstance(document, Mapping):
+        raise TrainingError("training protocol must be a JSON object")
+    schema = document.get("schema_version")
+    if type(schema) is not int or schema != 31:
+        raise TrainingError("formal training requires schema 31; schema 30 is retired")
+    status = document.get("status")
+    if not isinstance(status, Mapping) or status.get("formal_training_allowed") is not True:
+        raise TrainingError("formal training is disabled at the current schema-31 node")
+    return path
+
+
 def _release_host_saved_tensors() -> None:
     """Return freed offload buffers to Linux after an exact backward pass."""
 
@@ -3157,7 +3177,7 @@ def run_b3_semantic_preflight(
         from .protocol import load_protocol
     except ImportError:  # pragma: no cover
         from protocol import load_protocol  # type: ignore[no-redef]
-    protocol_file = Path(protocol_path).expanduser().resolve(strict=True)
+    protocol_file = _require_schema31_training_contract(protocol_path)
     protocol = load_protocol(protocol_file)
     full = protocol.development["exploration_track"]["full_ajae_x_freeze"]
     p2 = full["f1_entry"]["p2_semantic_training_preflight"]
@@ -3860,7 +3880,8 @@ def run_formal_training(
     except ImportError:  # pragma: no cover - direct script execution
         from protocol import load_protocol
 
-    protocol = load_protocol(protocol_path)
+    protocol_file = _require_schema31_training_contract(protocol_path)
+    protocol = load_protocol(protocol_file)
     if development_path is not None:
         raise TrainingError(
             "formal training uses the E57/E63 artifacts; retired dev.json overrides are forbidden"

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Focused scientific-semantic tests for the sole AJAE schema-30 route."""
+"""Focused scientific-semantic tests for the sole AJAE schema-31 route."""
 
 from __future__ import annotations
 
@@ -247,34 +247,83 @@ def _selection_rule() -> dict[str, object]:
     }
 
 
-def test_protocol_is_only_schema30_route() -> None:
-    protocol = load_protocol(PROTOCOL_PATH)
-    assert protocol.schema_version == 30
-    assert protocol.authority["document"] == "AJAE新主线方案.md"
-    assert protocol.normal_training.sequence_id == 206
-    assert protocol.development_sequence.sequence_id == 201
-    assert protocol.normal_training.uses_gradients
-    assert not protocol.development_sequence.uses_gradients
-    assert protocol.stu["frozen"] is True
-    assert protocol.model["input_dim"] == 150
-    assert protocol.model["levels"] == 4
-    assert protocol.model["pooling"] == "per_time_mean_max"
-    assert tuple(protocol.training["seeds"]) == (0, 1, 2)
-    assert protocol.training["maximum_worlds"] == 25
-    assert protocol.training["patience"] == 4
-    assert protocol.training["loss"].endswith("binary cross entropy only")
-    assert protocol.evaluation.minimum_range_m == 2.5
-    assert protocol.evaluation.maximum_range_m == 50.0
-    assert protocol.development["checkpoint_selection"]["status"] == "frozen_before_training"
-    assert protocol.development["fixed_world_evaluation"]["status"] == (
-        "frozen_before_training"
-    )
-    assert protocol.evaluation_document["comparison_frame_domain"]["status"] == (
-        "frozen_before_evaluation"
-    )
-    assert protocol.decision_gates["criteria"]["status"] == (
-        "frozen_before_training"
-    )
+def test_protocol_is_only_schema31_contract() -> None:
+    protocol = json.loads(PROTOCOL_PATH.read_text(encoding="utf-8"))
+    assert protocol["schema_version"] == 31
+    assert protocol["status"]["current_node"] == "R00"
+    assert protocol["status"]["formal_training_allowed"] is False
+    contract = protocol["scientific_contract"]
+    assert contract["observation_unit"] == "one_complete_five_scan_window"
+    assert contract["privileged_frame"] is None
+    assert contract["all_window_members_equally_supervised"] is True
+    assert contract["learned_time_or_position_input"] is False
+    assert contract["full_model_spatial_operations"] == [
+        "joint_voxelization",
+        "joint_radius_neighborhood",
+        "joint_knn_decoding",
+    ]
+    assert protocol["window"]["member_offsets_from_start"] == [0, 1, 2, 3, 4]
+    assert protocol["window"]["member_order_is_model_input"] is False
+    assert set(protocol["experiments"]) == {"B0", "B1", "B2", "B3"}
+    assert protocol["model"]["grouping_modes"] == {
+        "B1": "single",
+        "B2": "per_scan",
+        "B3": "joint",
+    }
+    assert protocol["evaluation"]["model_output_members"] == [0, 1, 2, 3, 4]
+    assert protocol["evaluation"]["fusion_value"] == "sigmoid_probability"
+
+
+def test_schema30_training_entries_are_rejected_before_loading(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    legacy = tmp_path / "protocol.json"
+    legacy.write_text('{"schema_version": 30}\n', encoding="utf-8")
+    output = tmp_path / "preflight.npz"
+    loader_called = False
+
+    def forbidden_loader(*_args: object, **_kwargs: object) -> object:
+        nonlocal loader_called
+        loader_called = True
+        raise AssertionError("schema-30 guard ran after the full protocol loader")
+
+    import src.protocol as protocol_module
+
+    monkeypatch.setattr(protocol_module, "load_protocol", forbidden_loader)
+    with pytest.raises(TrainingError, match="requires schema 31"):
+        train_module.run_formal_training(
+            legacy, maximum_worlds=1, device="cpu"
+        )
+    with pytest.raises(TrainingError, match="requires schema 31"):
+        train_module.run_b3_semantic_preflight(
+            legacy,
+            data_root=tmp_path,
+            output_path=output,
+            maximum_worlds=1,
+            device="cpu",
+        )
+    assert loader_called is False
+    assert not output.exists()
+
+
+def test_r00_schema31_contract_blocks_training_before_loading(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    loader_called = False
+
+    def forbidden_loader(*_args: object, **_kwargs: object) -> object:
+        nonlocal loader_called
+        loader_called = True
+        raise AssertionError("R00 guard ran after the full protocol loader")
+
+    import src.protocol as protocol_module
+
+    monkeypatch.setattr(protocol_module, "load_protocol", forbidden_loader)
+    with pytest.raises(TrainingError, match="disabled at the current schema-31 node"):
+        train_module.run_formal_training(
+            PROTOCOL_PATH, maximum_worlds=1, device="cpu"
+        )
+    assert loader_called is False
 
 
 def test_e57_v2_selection_is_deterministic_and_model_independent() -> None:
@@ -468,17 +517,14 @@ def test_e62_frozen_custom_and_official_evaluators_are_exactly_equivalent(
     assert result["maximum_metric_absolute_difference"] <= 1.0e-10
 
 
-def test_protocol_contains_no_retired_training_route() -> None:
-    text = json.dumps(json.loads(PROTOCOL_PATH.read_text()), sort_keys=True)
-    for retired in (
-        "lambda_cf",
-        "memory_beta",
-        "memory_warmup_worlds",
-        "point_window_weight",
-        "Hungarian",
-        "object_adapter",
-    ):
-        assert retired not in text
+def test_protocol_active_route_contains_no_retired_temporal_condition() -> None:
+    protocol = json.loads(PROTOCOL_PATH.read_text(encoding="utf-8"))
+    assert set(protocol["experiments"]) == {"B0", "B1", "B2", "B3"}
+    assert protocol["scientific_contract"]["privileged_frame"] is None
+    assert protocol["window"]["member_offsets_from_start"] == [0, 1, 2, 3, 4]
+    forbidden = set(protocol["model"]["forbidden_features"])
+    assert {"relative_time", "absolute_time", "time_embedding"} <= forbidden
+    assert protocol["evaluation"]["model_output_members"] == [0, 1, 2, 3, 4]
 
 
 def test_e45_overlap_weights_balance_common_population() -> None:
