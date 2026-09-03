@@ -1,25 +1,26 @@
 #!/usr/bin/env python3
-"""Load the sole AJAE schema-30 protocol and fixed development worlds."""
+"""Load the sole active AJAE schema-31 scientific contract."""
 
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import math
+import re
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from types import MappingProxyType
-from typing import Mapping, Sequence
+from typing import Mapping
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_PROTOCOL_PATH = PROJECT_ROOT / "protocol.json"
-SCHEMA_VERSION = 30
+SCHEMA_VERSION = 31
 WINDOW_FRAMES = 5
-RELATIVE_TIMES = (-2, -1, 0, 1, 2)
-CAUSAL_OFFSETS = (-4, -3, -2, -1, 0)
+WINDOW_MEMBER_OFFSETS = (0, 1, 2, 3, 4)
+DEVELOPMENT_FORMAT = "ajae-development-window-worlds-v3"
+
 PUBLIC_ANOMALY_IDS = (
     125, 137, 138, 139, 140, 141, 142, 143, 144, 145,
     146, 147, 148, 149, 150, 151, 152, 153, 169,
@@ -33,59 +34,65 @@ HIDDEN_TEST_IDS = (
 )
 NORMAL_CONTROL_SEMANTICS = (10, 11, 15, 18, 20, 30, 31, 32)
 MOVING_NORMAL_SEMANTICS = (252, 253, 254, 255, 256, 257, 258, 259)
-GATE1_EVIDENCE = (
-    "ray_slot_audit",
-    "range_image_round_trip",
-    "render_source_leakage",
-    "beam_range_intensity",
+
+_STATE_MACHINE = (
+    "R00", "R01", "R02", "R03", "R04", "R05",
+    "G2", "G3", "S01", "M01", "V01", "T01",
 )
-ROUND_TRIP_POINT_TOLERANCE_M = 1.0e-9
-ROUND_TRIP_DIRECTION_TOLERANCE_RAD = 1.0e-6
+_ROOT_KEYS = {
+    "schema_version", "status", "authority", "scientific_contract",
+    "claims", "claim_exclusions", "data", "window", "labels", "render",
+    "stu", "model", "experiments", "training", "evaluation",
+    "state_machine", "decision_gates", "historical_evidence",
+}
 
 
 class ProtocolError(ValueError):
-    """Report a protocol or development-world semantic violation."""
+    """Report a protocol or development-data semantic violation."""
+
+
+class GroupingMode(str, Enum):
+    """Whether spatial operations isolate or join scan groups."""
+
+    SINGLE = "single"
+    PER_SCAN = "per_scan"
+    JOINT = "joint"
 
 
 class ExperimentCondition(str, Enum):
-    """Pre-registered conditions in the minimum comparison matrix."""
+    """The only registered schema-31 comparison conditions."""
 
     B0 = "B0"
     B1 = "B1"
     B2 = "B2"
     B3 = "B3"
-    B4 = "B4"
-    B5 = "B5"
 
     @property
     def trainable(self) -> bool:
-        return self in {self.B1, self.B2, self.B3, self.B5}
+        return self is not self.B0
+
+    @property
+    def grouping_mode(self) -> GroupingMode:
+        return {
+            self.B0: GroupingMode.SINGLE,
+            self.B1: GroupingMode.SINGLE,
+            self.B2: GroupingMode.PER_SCAN,
+            self.B3: GroupingMode.JOINT,
+        }[self]
 
     @property
     def frame_offsets(self) -> tuple[int, ...]:
-        if self in {self.B0, self.B1}:
-            return (0,)
-        if self is self.B5:
-            return CAUSAL_OFFSETS
-        return RELATIVE_TIMES
+        """Physical offsets only; they never enter learned features."""
+
+        return (0,) if self is self.B0 else WINDOW_MEMBER_OFFSETS
+
+    @property
+    def input_member_indices(self) -> tuple[int, ...]:
+        return self.frame_offsets
 
     @property
     def output_local_indices(self) -> tuple[int, ...]:
-        if self in {self.B0, self.B1}:
-            return (0,)
-        if self is self.B4:
-            return tuple(range(WINDOW_FRAMES))
-        if self is self.B5:
-            return (WINDOW_FRAMES - 1,)
-        return (2,)
-
-    @property
-    def cross_frame_enabled(self) -> bool:
-        return self not in {self.B0, self.B1, self.B2}
-
-    @property
-    def trained_checkpoint_condition(self) -> ExperimentCondition:
-        return self.B3 if self is self.B4 else self
+        return self.frame_offsets
 
 
 def _mapping(value: object, name: str) -> Mapping[str, object]:
@@ -115,6 +122,18 @@ def _number(value: object, name: str) -> float:
     return result
 
 
+def _boolean(value: object, name: str) -> bool:
+    if type(value) is not bool:
+        raise ProtocolError(f"{name} must be boolean")
+    return value
+
+
+def _nonempty_string(value: object, name: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ProtocolError(f"{name} must be a non-empty string")
+    return value
+
+
 def _exact_keys(value: Mapping[str, object], expected: set[str], name: str) -> None:
     missing = sorted(expected - set(value))
     extra = sorted(set(value) - expected)
@@ -122,40 +141,25 @@ def _exact_keys(value: Mapping[str, object], expected: set[str], name: str) -> N
         raise ProtocolError(f"{name} keys differ; missing={missing}, extra={extra}")
 
 
+def _expect(value: object, expected: object, name: str) -> None:
+    """Compare JSON values without accepting bool/int aliases."""
+
+    if type(value) is not type(expected) or value != expected:
+        raise ProtocolError(f"{name} must equal {expected!r}")
+
+
 def _int_tuple(value: object, name: str) -> tuple[int, ...]:
-    return tuple(_integer(item, f"{name}[{index}]") for index, item in enumerate(_list(value, name)))
+    return tuple(
+        _integer(item, f"{name}[{index}]")
+        for index, item in enumerate(_list(value, name))
+    )
 
 
-def _signed_int_tuple(value: object, name: str) -> tuple[int, ...]:
-    result: list[int] = []
-    for index, item in enumerate(_list(value, name)):
-        if type(item) is not int:
-            raise ProtocolError(f"{name}[{index}] must be an integer")
-        result.append(item)
-    return tuple(result)
-
-
-def _float_matrix(value: object, name: str, rows: int, columns: int) -> tuple[tuple[float, ...], ...]:
-    outer = _list(value, name)
-    if len(outer) != rows:
-        raise ProtocolError(f"{name} must contain {rows} rows")
-    result: list[tuple[float, ...]] = []
-    for row_index, row in enumerate(outer):
-        values = tuple(
-            _number(item, f"{name}[{row_index}][{column}]")
-            for column, item in enumerate(_list(row, f"{name}[{row_index}]"))
-        )
-        if len(values) != columns:
-            raise ProtocolError(f"{name}[{row_index}] must contain {columns} values")
-        result.append(values)
-    return tuple(result)
-
-
-def _int_matrix(value: object, name: str, rows: int, columns: int) -> tuple[tuple[int, ...], ...]:
-    matrix = _float_matrix(value, name, rows, columns)
-    if any(number != int(number) or number < 1 for row in matrix for number in row):
-        raise ProtocolError(f"{name} must contain positive integers")
-    return tuple(tuple(int(number) for number in row) for row in matrix)
+def _string_tuple(value: object, name: str) -> tuple[str, ...]:
+    return tuple(
+        _nonempty_string(item, f"{name}[{index}]")
+        for index, item in enumerate(_list(value, name))
+    )
 
 
 def _freeze(value: object) -> object:
@@ -176,7 +180,7 @@ def _plain(value: object) -> object:
 
 @dataclass(frozen=True, slots=True)
 class FrameSpan:
-    """Half-open source-frame span."""
+    """A half-open observed source-frame span."""
 
     start: int
     stop: int
@@ -196,7 +200,7 @@ class FrameSpan:
 
 @dataclass(frozen=True, slots=True)
 class SequenceSpec:
-    """One immutable sequence role and its legal source span."""
+    """One immutable data role and its currently observed frame span."""
 
     partition: str
     sequence_id: int
@@ -209,14 +213,14 @@ class SequenceSpec:
         if self.partition not in {"train", "val", "test"}:
             raise ProtocolError("sequence partition must be train, val, or test")
         _integer(self.sequence_id, "sequence_id")
-        if not self.role:
-            raise ProtocolError("sequence role must be non-empty")
-        if type(self.labels_available) is not bool:
-            raise ProtocolError("labels_available must be boolean")
+        _nonempty_string(self.role, "sequence role")
+        _boolean(self.labels_available, "labels_available")
         if tuple(sorted(set(self.excluded_source_frames))) != self.excluded_source_frames:
             raise ProtocolError("excluded source frames must be sorted and unique")
-        if self.span is not None and any(not self.span.contains(item) for item in self.excluded_source_frames):
-            raise ProtocolError("excluded frame lies outside its sequence span")
+        if self.span is not None and any(
+            not self.span.contains(item) for item in self.excluded_source_frames
+        ):
+            raise ProtocolError("excluded source frame lies outside the observed span")
 
     @property
     def frames(self) -> int | None:
@@ -230,29 +234,51 @@ class SequenceSpec:
     def supports_counterfactuals(self) -> bool:
         return self.partition == "train" and self.sequence_id in {201, 206}
 
-    def legal_anchors(self, offsets: Sequence[int]) -> tuple[int, ...]:
-        if self.span is None:
-            raise ProtocolError("hidden sequences need their observed frame count before windowing")
-        frozen_offsets = tuple(int(item) for item in offsets)
-        excluded = frozenset(self.excluded_source_frames)
-        return tuple(
-            anchor
-            for anchor in range(self.span.start, self.span.stop)
-            if all(self.span.contains(anchor + offset) and anchor + offset not in excluded for offset in frozen_offsets)
+    def with_observed_frame_count(self, frame_count: int) -> SequenceSpec:
+        count = _integer(frame_count, "frame_count", minimum=1)
+        if self.span is not None:
+            if len(self.span) != count:
+                raise ProtocolError(
+                    f"observed frame count {count} conflicts with frozen span {len(self.span)}"
+                )
+            return self
+        return SequenceSpec(
+            self.partition,
+            self.sequence_id,
+            self.role,
+            self.labels_available,
+            FrameSpan(0, count),
+            self.excluded_source_frames,
         )
 
-    def center_frames(self) -> tuple[int, ...]:
-        return self.legal_anchors(RELATIVE_TIMES)
+    def legal_window_starts(self) -> tuple[int, ...]:
+        if self.span is None:
+            raise ProtocolError(
+                "sequence frame count must be observed before computing legal windows"
+            )
+        excluded = frozenset(self.excluded_source_frames)
+        return tuple(
+            start
+            for start in range(self.span.start, self.span.stop - WINDOW_FRAMES + 1)
+            if all(start + offset not in excluded for offset in WINDOW_MEMBER_OFFSETS)
+        )
+
+    def window_frame_ids(self, window_start: int) -> tuple[int, ...]:
+        start = _integer(window_start, "window_start")
+        if start not in frozenset(self.legal_window_starts()):
+            raise ProtocolError(
+                f"{self.partition}/{self.sequence_id} window start {start} is not legal"
+            )
+        return tuple(start + offset for offset in WINDOW_MEMBER_OFFSETS)
 
 
 @dataclass(frozen=True, slots=True)
 class EvaluationSpec:
+    """The frozen point-evaluation domain."""
+
     minimum_range_m: float
     maximum_range_m: float
     minimum_anomaly_points: int
-    normal_point_alarm_rate: float
-    dbscan_eps_m: float
-    dbscan_min_samples: int
 
     def range_mask(self, ranges: object) -> object:
         import numpy as np
@@ -265,11 +291,14 @@ class EvaluationSpec:
 
 @dataclass(frozen=True, slots=True)
 class DevelopmentWorld:
-    world_id: int
+    """One five-scan window belonging to a shared synthetic clip world."""
+
+    world_identity: str
     seed: int
-    center_frame: int
+    window_start: int
+    frame_ids: tuple[int, ...]
     world: Mapping[str, object]
-    difficulty: tuple[Mapping[str, object], ...]
+    descriptors: Mapping[str, object]
     mechanism: str
 
 
@@ -280,9 +309,6 @@ class DevelopmentWorlds:
     sequence_id: int
     status: str
     validation: Mapping[str, bool]
-    gate1: Mapping[str, object]
-    gate1_evidence_valid: bool
-    difficulty_coverage_valid: bool
     in_generator: tuple[DevelopmentWorld, ...]
     generator_held_out: tuple[DevelopmentWorld, ...]
 
@@ -292,91 +318,85 @@ class DevelopmentWorlds:
             self.status == "validated_frozen"
             and bool(self.validation)
             and all(self.validation.values())
-            and self.gate1.get("status") == "passed_with_real_evidence"
-            and self.gate1_evidence_valid
-            and self.difficulty_coverage_valid
         )
 
 
 class AJAEProtocol:
-    """Validated immutable view of the schema-30 research route."""
+    """Validated immutable view of the schema-31 route."""
 
     def __init__(self, document: Mapping[str, object], *, path: Path) -> None:
         self._validate(document)
         self.path = path.expanduser().resolve(strict=True)
         self.schema_version = SCHEMA_VERSION
         self._document = _freeze(document)
-        self.authority = self._document["authority"]
-        self.task = self._document["task"]
-        self.data = self._document["data"]
-        self.labels = self._document["labels"]
-        self.stu = self._document["stu"]
-        self.render = self._document["render"]
-        self.window = self._document["window"]
-        self.model = self._document["model"]
-        self.training = self._document["training"]
-        self.development = self._document["development"]
-        self.experiments = self._document["experiments"]
+        for name in (
+            "status", "authority", "scientific_contract", "claims",
+            "claim_exclusions", "data", "window", "labels", "render", "stu",
+            "model", "experiments", "training", "state_machine",
+            "decision_gates", "historical_evidence",
+        ):
+            setattr(self, name, self._document[name])
         self.evaluation_document = self._document["evaluation"]
-        self.visual_reviews = self._document["visual_reviews"]
-        self.decision_gates = self._document["decision_gates"]
-        self.status = self._document["status"]
 
-        source_data = _mapping(document["data"], "data")
+        raw_data = _mapping(document["data"], "data")
         self.normal_training = self._sequence_from_record(
-            _mapping(source_data["normal_training"], "data.normal_training")
+            _mapping(raw_data["normal_training"], "data.normal_training")
         )
         self.development_sequence = self._sequence_from_record(
-            _mapping(source_data["development"], "data.development")
+            _mapping(raw_data["development"], "data.development")
         )
-        public = _mapping(source_data["public_anomaly_validation"], "public validation")
-        public_counts = _mapping(public["sequence_frame_counts"], "public frame counts")
+        public = _mapping(raw_data["public_anomaly_validation"], "public data")
+        hidden = _mapping(raw_data["hidden_test"], "hidden data")
         self.public_validation = tuple(
-            SequenceSpec(
-                "val", identifier, str(public["role"]), True,
-                FrameSpan(0, _integer(public_counts[str(identifier)], f"public frame count {identifier}")),
-            )
-            for identifier in PUBLIC_ANOMALY_IDS
+            SequenceSpec("val", item, str(public["role"]), True, None)
+            for item in PUBLIC_ANOMALY_IDS
         )
-        hidden = _mapping(source_data["hidden_test"], "hidden test")
         self.hidden_test = tuple(
-            SequenceSpec("test", identifier, str(hidden["role"]), False, None)
-            for identifier in HIDDEN_TEST_IDS
+            SequenceSpec("test", item, str(hidden["role"]), False, None)
+            for item in HIDDEN_TEST_IDS
         )
         all_sequences = (
-            self.normal_training,
-            self.development_sequence,
-            *self.public_validation,
-            *self.hidden_test,
+            self.normal_training, self.development_sequence,
+            *self.public_validation, *self.hidden_test,
         )
-        self._sequences = {(item.partition, item.sequence_id): item for item in all_sequences}
-        class_map = _mapping(_mapping(document["labels"], "labels")["normal_semantic_class_map"], "normal class map")
+        self._sequences = {
+            (item.partition, item.sequence_id): item for item in all_sequences
+        }
+
+        class_map = _mapping(
+            _mapping(document["labels"], "labels")["normal_semantic_class_map"],
+            "labels.normal_semantic_class_map",
+        )
         self.normal_training_class_map = MappingProxyType(
-            {int(raw): _integer(target, f"normal class {raw}") for raw, target in class_map.items()}
+            {
+                int(raw): _integer(target, f"normal semantic class {raw}")
+                for raw, target in class_map.items()
+            }
         )
         evaluation = _mapping(document["evaluation"], "evaluation")
-        self.evaluation_spec = EvaluationSpec(
-            _number(evaluation["minimum_range_m"], "evaluation.minimum_range_m"),
-            _number(evaluation["maximum_range_m"], "evaluation.maximum_range_m"),
-            _integer(evaluation["minimum_anomaly_points"], "evaluation.minimum_anomaly_points", minimum=1),
-            _number(evaluation["normal_point_alarm_rate"], "evaluation.normal_point_alarm_rate"),
-            _number(evaluation["dbscan_eps_m"], "evaluation.dbscan_eps_m"),
-            _integer(evaluation["dbscan_min_samples"], "evaluation.dbscan_min_samples", minimum=1),
+        self.evaluation = EvaluationSpec(
+            _number(evaluation["minimum_range_m_inclusive"], "minimum range"),
+            _number(evaluation["maximum_range_m_inclusive"], "maximum range"),
+            _integer(
+                evaluation["minimum_anomaly_points_per_evaluated_frame"],
+                "minimum anomaly points",
+                minimum=1,
+            ),
         )
-        self.evaluation = self.evaluation_spec
+        self.evaluation_spec = self.evaluation
 
     @staticmethod
     def _sequence_from_record(record: Mapping[str, object]) -> SequenceSpec:
-        inclusive = _int_tuple(record["frame_range"], "frame_range")
-        if len(inclusive) != 2 or inclusive[1] < inclusive[0]:
-            raise ProtocolError("frame_range must be [first,last] inclusive")
+        bounds = _int_tuple(record["frame_range_inclusive"], "frame range")
+        if len(bounds) != 2 or bounds[1] < bounds[0]:
+            raise ProtocolError("frame_range_inclusive must be [first, last]")
         return SequenceSpec(
             str(record["partition"]),
             _integer(record["sequence_id"], "sequence_id"),
             str(record["role"]),
-            bool(record["labels_available"]),
-            FrameSpan(inclusive[0], inclusive[1] + 1),
-            _int_tuple(record["excluded_source_frames"], "excluded_source_frames"),
+            _boolean(record["labels_available"], "labels_available"),
+            FrameSpan(bounds[0], bounds[1] + 1),
+            _int_tuple(record["excluded_source_frames"], "excluded source frames"),
         )
 
     @property
@@ -384,18 +404,18 @@ class AJAEProtocol:
         return self._document  # type: ignore[return-value]
 
     def plain_document(self) -> dict[str, object]:
-        plain = _plain(self._document)
-        if not isinstance(plain, dict):
+        value = _plain(self._document)
+        if not isinstance(value, dict):
             raise AssertionError("protocol root is not a dictionary")
-        return plain
+        return value
 
     @property
     def window_frames(self) -> int:
         return WINDOW_FRAMES
 
     @property
-    def relative_times(self) -> tuple[int, ...]:
-        return RELATIVE_TIMES
+    def window_member_offsets(self) -> tuple[int, ...]:
+        return WINDOW_MEMBER_OFFSETS
 
     @property
     def public_sequence_ids(self) -> tuple[int, ...]:
@@ -409,32 +429,17 @@ class AJAEProtocol:
         try:
             return self._sequences[(partition, sequence_id)]
         except KeyError as error:
-            raise ProtocolError(f"sequence {partition}/{sequence_id} is outside this protocol") from error
+            raise ProtocolError(
+                f"sequence {partition}/{sequence_id} is outside schema 31"
+            ) from error
 
-    def anchors(
-        self,
-        partition: str,
-        sequence_id: int,
-        condition: ExperimentCondition | str = ExperimentCondition.B3,
-    ) -> tuple[int, ...]:
-        selected = ExperimentCondition(condition)
-        return self.sequence(partition, sequence_id).legal_anchors(selected.frame_offsets)
-
-    def center_frames(self, partition: str, sequence_id: int) -> tuple[int, ...]:
-        return self.anchors(partition, sequence_id, ExperimentCondition.B3)
+    def legal_window_starts(self, partition: str, sequence_id: int) -> tuple[int, ...]:
+        return self.sequence(partition, sequence_id).legal_window_starts()
 
     def window_frame_ids(
-        self,
-        partition: str,
-        sequence_id: int,
-        anchor: int,
-        condition: ExperimentCondition | str = ExperimentCondition.B3,
+        self, partition: str, sequence_id: int, window_start: int
     ) -> tuple[int, ...]:
-        selected = ExperimentCondition(condition)
-        legal = self.anchors(partition, sequence_id, selected)
-        if anchor not in frozenset(legal):
-            raise ProtocolError(f"frame {anchor} is not a legal {selected.value} anchor")
-        return tuple(anchor + offset for offset in selected.frame_offsets)
+        return self.sequence(partition, sequence_id).window_frame_ids(window_start)
 
     def checkpoint_path(self, project_root: Path | str | None = None) -> Path:
         root = self.path.parent if project_root is None else Path(project_root).expanduser().resolve()
@@ -444,10 +449,6 @@ class AJAEProtocol:
         root = self.path.parent if project_root is None else Path(project_root).expanduser().resolve()
         return (root / str(self.stu["repository"])).resolve()
 
-    def development_worlds_path(self, project_root: Path | str | None = None) -> Path:
-        root = self.path.parent if project_root is None else Path(project_root).expanduser().resolve()
-        return (root / str(self.development["worlds_file"])).resolve()
-
     def sensor_calibration_path(self, project_root: Path | str | None = None) -> Path:
         root = self.path.parent if project_root is None else Path(project_root).expanduser().resolve()
         return (root / str(self.render["calibration_file"])).resolve()
@@ -455,2005 +456,578 @@ class AJAEProtocol:
     def summary(self) -> dict[str, object]:
         return {
             "schema_version": SCHEMA_VERSION,
-            "authority": self.authority["document"],
-            "train_windows": len(self.normal_training.center_frames()),
-            "development_windows": len(self.development_sequence.center_frames()),
+            "current_node": self.status["current_node"],
+            "scientific_document": self.authority["scientific_document"],
+            "conditions": [item.value for item in ExperimentCondition],
+            "train_windows": len(self.normal_training.legal_window_starts()),
+            "development_windows": len(self.development_sequence.legal_window_starts()),
             "public_sequences": len(self.public_validation),
             "hidden_sequences": len(self.hidden_test),
-            "training_seeds": list(self.training["seeds"]),
-            "model_levels": self.model["levels"],
+            "formal_training_allowed": self.status["formal_training_allowed"],
         }
 
     @classmethod
     def _validate(cls, source: Mapping[str, object]) -> None:
-        expected = {
-            "schema_version", "authority", "task", "data", "labels", "stu",
-            "render", "window", "model", "training", "development",
-            "experiments", "evaluation", "visual_reviews", "decision_gates",
-            "status",
-        }
-        _exact_keys(source, expected, "protocol")
-        if _integer(source["schema_version"], "schema_version") != SCHEMA_VERSION:
-            raise ProtocolError(f"schema_version must be {SCHEMA_VERSION}")
-        cls._validate_data(_mapping(source["data"], "data"))
-        cls._validate_labels(_mapping(source["labels"], "labels"))
-        cls._validate_stu(_mapping(source["stu"], "stu"))
-        cls._validate_render(_mapping(source["render"], "render"))
-        cls._validate_window(_mapping(source["window"], "window"))
-        cls._validate_model(_mapping(source["model"], "model"))
-        cls._validate_training(_mapping(source["training"], "training"))
-        cls._validate_development(_mapping(source["development"], "development"))
-        cls._validate_evaluation(_mapping(source["evaluation"], "evaluation"))
-        visual_reviews = _mapping(source["visual_reviews"], "visual_reviews")
-        _exact_keys(
-            visual_reviews,
-            {"global_discipline", "E26-V1", "E45-V1", "E88-V1"},
-            "visual_reviews",
-        )
-        for name in visual_reviews:
-            _mapping(visual_reviews[name], f"visual_reviews.{name}")
-        experiments = _mapping(source["experiments"], "experiments")
-        if set(experiments) != {item.value for item in ExperimentCondition}:
-            raise ProtocolError("experiments must define exactly B0 through B5")
-        gates = _mapping(source["decision_gates"], "decision_gates")
-        _exact_keys(
-            gates,
-            {"gate1", "gate2", "gate3", "gate4", "criteria", "verdict_rule"},
-            "decision_gates",
-        )
-        if tuple(_list(gates["gate1"], "decision_gates.gate1")) != GATE1_EVIDENCE:
-            raise ProtocolError("gate1 evidence identities changed")
-        criteria = _mapping(gates["criteria"], "decision_gates.criteria")
-        _exact_keys(
-            criteria,
-            {
-                "status",
-                "gate1",
-                "gate2",
-                "gate3",
-                "gate4",
-                "decision_metric_scale",
-                "development_difficulty_coverage",
-                "B4_contribution",
-            },
-            "decision_gates.criteria",
-        )
-        if criteria["status"] != "frozen_before_training":
-            raise ProtocolError("decision-gate criteria status is invalid")
-        if any(
-            not isinstance(criteria[name], Mapping)
-            for name in (
-                "gate1",
-                "gate2",
-                "gate3",
-                "gate4",
-                "decision_metric_scale",
-                "development_difficulty_coverage",
-                "B4_contribution",
+        # Reject old science before interpreting any legacy-shaped subtree.
+        if source.get("schema_version") != SCHEMA_VERSION:
+            raise ProtocolError(
+                f"schema_version must be {SCHEMA_VERSION}; schema 30 is retired"
             )
-        ):
-            raise ProtocolError("all scientific gate criteria must be frozen mappings")
-        metric_scale = _mapping(
-            criteria["decision_metric_scale"], "decision metric scale"
+        _exact_keys(source, _ROOT_KEYS, "protocol")
+        cls._validate_authority(source)
+        cls._validate_data(_mapping(source["data"], "data"))
+        cls._validate_window(_mapping(source["window"], "window"))
+        cls._validate_labels(_mapping(source["labels"], "labels"))
+        cls._validate_render(_mapping(source["render"], "render"))
+        cls._validate_stu(_mapping(source["stu"], "stu"))
+        cls._validate_model(_mapping(source["model"], "model"))
+        cls._validate_experiments(_mapping(source["experiments"], "experiments"))
+        cls._validate_training(_mapping(source["training"], "training"))
+        cls._validate_evaluation(_mapping(source["evaluation"], "evaluation"))
+        cls._validate_status(source)
+
+    @staticmethod
+    def _validate_authority(source: Mapping[str, object]) -> None:
+        authority = _mapping(source["authority"], "authority")
+        _exact_keys(
+            authority,
+            {"scientific_document", "state_machine", "history_baseline_commit", "history_tag", "supersedes"},
+            "authority",
         )
-        if (
-            tuple(metric_scale.get("scale", ())) != (0.0, 1.0)
-            or tuple(metric_scale.get("reported_percent_metrics", ()))
-            != ("AP", "AUROC", "FPR95")
-            or metric_scale.get("reported_to_decision_conversion") != "divide by 100"
-            or metric_scale.get("normal_set_FPR_already_on_decision_scale") is not True
-            or metric_scale.get("checkpoint_tie_tolerance_remains_on_reported_percent_scale")
-            != 0.001
-        ):
-            raise ProtocolError("decision metric scale is not the result-blind freeze")
-        gate2 = _mapping(criteria["gate2"], "Gate 2 criteria")
-        e76 = _mapping(gate2.get("E76"), "E76 criteria")
-        if (
-            gate2.get("maximum_mean_safety_worsening") != 0.03
-            or gate2.get("safety_worsening_is_signed_not_absolute") is not True
-            or e76.get("prerequisite") != "E75 PASS"
-            or tuple(e76.get("models", ()))
-            != ("B0", "B1 seed 0", "B1 seed 1", "B1 seed 2")
-            or tuple(e76.get("fold_A_world_ids", ()))
-            != (2, 3, 6, 8, 9, 11, 13, 18, 20, 21, 22)
-            or tuple(e76.get("fold_B_world_ids", ()))
-            != (0, 1, 4, 7, 10, 12, 14, 15, 16, 17, 19, 23)
-            or e76.get("per_seed_values_reported_but_not_independently_gated") is not True
-        ):
-            raise ProtocolError("E76 result-blind safety definition changed")
+        _expect(authority["scientific_document"], "AJAE新主线方案.md", "authority.scientific_document")
+        _expect(authority["state_machine"], "AJAE实验执行状态机.md", "authority.state_machine")
+        digest = _nonempty_string(authority["history_baseline_commit"], "history baseline")
+        if not re.fullmatch(r"[0-9a-f]{40}", digest):
+            raise ProtocolError("history_baseline_commit must be a lowercase SHA-1")
+        _expect(authority["history_tag"], "schema30-history-baseline", "authority.history_tag")
+        _expect(authority["supersedes"], "schema30_center_target_temporal_message_passing_route", "authority.supersedes")
+
+        contract = _mapping(source["scientific_contract"], "scientific contract")
+        expected = {
+            "observation_unit": "one_complete_five_scan_window",
+            "privileged_frame": None,
+            "all_window_members_equally_supervised": True,
+            "all_visible_returns_receive_logits": True,
+            "learned_time_or_position_input": False,
+            "full_model_spatial_operations": [
+                "joint_voxelization", "joint_radius_neighborhood", "joint_knn_decoding"
+            ],
+            "sequence_score": "equal_mean_of_window_probabilities_by_original_frame_ray_identity",
+        }
+        _exact_keys(contract, set(expected), "scientific_contract")
+        for name, value in expected.items():
+            _expect(contract[name], value, f"scientific_contract.{name}")
+
+        claims = _mapping(source["claims"], "claims")
+        _exact_keys(claims, {"proxy_supervision", "joint_densification", "real_ood_transfer"}, "claims")
+        for name, value in claims.items():
+            _nonempty_string(value, f"claims.{name}")
+        _expect(
+            source["claim_exclusions"],
+            ["motion_unknown_detection", "explicit_motion_understanding", "object_tracking", "future_frame_assistance", "privileged_frame_completion"],
+            "claim_exclusions",
+        )
+        _expect(source["state_machine"], list(_STATE_MACHINE), "state_machine")
+
+        history = _mapping(source["historical_evidence"], "historical evidence")
+        history_keys = {
+            "evidence_source_schema", "inheritance_rule", "continues_with_original_scope",
+            "old_distribution_only", "reusable_only_after_schema31_requalification",
+            "excluded_from_schema31_statistics",
+        }
+        _exact_keys(history, history_keys, "historical_evidence")
+        _expect(history["evidence_source_schema"], 30, "historical evidence schema")
+        _nonempty_string(history["inheritance_rule"], "historical inheritance rule")
+        for name in history_keys - {"evidence_source_schema", "inheritance_rule"}:
+            if not _string_tuple(history[name], f"historical_evidence.{name}"):
+                raise ProtocolError(f"historical_evidence.{name} cannot be empty")
 
     @staticmethod
     def _validate_data(data: Mapping[str, object]) -> None:
         _exact_keys(data, {"normal_training", "development", "public_anomaly_validation", "hidden_test"}, "data")
-        train = _mapping(data["normal_training"], "data.normal_training")
-        development = _mapping(data["development"], "data.development")
-        if (train["partition"], train["sequence_id"], train["role"]) != (
-            "train", 206, "AJAE_parameter_updates_and_renderer_calibration"
-        ):
-            raise ProtocolError("train/206 must be the only AJAE update and renderer-calibration source")
-        if (development["partition"], development["sequence_id"], development["role"]) != (
-            "train", 201, "development_only_no_gradients"
-        ):
-            raise ProtocolError("train/201 must remain development-only")
+        normal = _mapping(data["normal_training"], "normal training")
+        normal_expected = {
+            "partition": "train", "sequence_id": 206,
+            "role": "renderer_calibration_window_bank_and_all_parameter_updates",
+            "labels_available": True, "frame_range_inclusive": [0, 448],
+            "excluded_source_frames": [],
+        }
+        _exact_keys(normal, set(normal_expected), "data.normal_training")
+        for name, value in normal_expected.items():
+            _expect(normal[name], value, f"data.normal_training.{name}")
+
+        development = _mapping(data["development"], "development sequence")
+        development_expected = {
+            "partition": "train", "sequence_id": 201,
+            "role": "development_only_no_formal_gradients", "labels_available": True,
+            "frame_range_inclusive": [0, 681], "excluded_source_frames": [0, 1, 2, 3],
+            "exclusion_reason": "verified exact internal duplication in scans and labels",
+        }
+        _exact_keys(development, set(development_expected), "data.development")
+        for name, value in development_expected.items():
+            _expect(development[name], value, f"data.development.{name}")
+
+        common_keys = {
+            "partition", "role", "labels_available", "method_freeze_required",
+            "sequence_ids",
+        }
         public = _mapping(data["public_anomaly_validation"], "public validation")
         hidden = _mapping(data["hidden_test"], "hidden test")
-        if _int_tuple(public["sequence_ids"], "public ids") != PUBLIC_ANOMALY_IDS:
-            raise ProtocolError("public validation must contain the fixed 19 sequences")
-        if _int_tuple(hidden["sequence_ids"], "hidden ids") != HIDDEN_TEST_IDS:
-            raise ProtocolError("hidden test must contain the fixed 51 sequences")
-        if public.get("method_freeze_required") is not True or hidden.get("method_freeze_required") is not True:
-            raise ProtocolError("public and hidden roles require method freeze")
-
-    @staticmethod
-    def _validate_labels(labels: Mapping[str, object]) -> None:
-        binary = _mapping(labels["binary_anomaly"], "labels.binary_anomaly")
-        if set(binary) != {"raw_semantic_0", "raw_semantic_2", "other_nonzero_semantics", "normal_control_return", "anomaly_proxy_return"}:
-            raise ProtocolError("binary label sources are incomplete")
-        if binary["normal_control_return"] != "normal" or binary["anomaly_proxy_return"] != "anomaly":
-            raise ProtocolError("normal controls and anomaly proxies have wrong targets")
-        controls = _mapping(labels["normal_control_classes"], "normal control classes")
-        if tuple(sorted(map(int, controls))) != NORMAL_CONTROL_SEMANTICS:
-            raise ProtocolError("normal-control semantic classes changed")
-        if _int_tuple(labels["moving_normal_semantic_ids"], "moving semantics") != MOVING_NORMAL_SEMANTICS:
-            raise ProtocolError("moving-normal diagnostic classes changed")
-
-    @staticmethod
-    def _validate_stu(stu: Mapping[str, object]) -> None:
-        required = {
-            "source", "checkpoint", "repository", "voxel_size_m", "input_channels",
-            "point_feature_dim", "normal_evidence_dim", "assignment_reliability_dim",
-            "no_object_reliability_dim", "query_count", "point_feature_source",
-            "normal_evidence_rule", "assignment_reliability_rule",
-            "no_object_reliability_rule", "b0_score", "frozen", "full_forward_is_eval",
-        }
-        _exact_keys(stu, required, "stu")
-        dimensions = (
-            stu["point_feature_dim"], stu["normal_evidence_dim"],
-            stu["assignment_reliability_dim"], stu["no_object_reliability_dim"],
-            stu["query_count"], stu["frozen"], stu["full_forward_is_eval"],
-        )
-        if dimensions != (128, 19, 1, 1, 100, True, True):
-            raise ProtocolError("frozen STU interface dimensions changed")
-        if not math.isclose(_number(stu["voxel_size_m"], "stu.voxel_size_m"), 0.05):
-            raise ProtocolError("STU voxel size must be 0.05 m")
-        if "argmax_q" not in str(stu["normal_evidence_rule"]) or stu["b0_score"] != "official_STU_MaxLogit":
-            raise ProtocolError("STU must use unique-query evidence and official MaxLogit B0")
-
-    @staticmethod
-    def _validate_render(render: Mapping[str, object]) -> None:
-        if render.get("source_sequence_id") != 206:
-            raise ProtocolError("renderer calibration and templates must come from 206")
-        calibration_file = render.get("calibration_file")
-        if calibration_file != "runs/ajae/calibration.pt":
-            raise ProtocolError("schema 30 has one authoritative sensor calibration path")
-        ray = _mapping(render["ray_grid"], "render.ray_grid")
-        if (ray.get("beam_count"), ray.get("column_count"), tuple(ray.get("canonical_identity", ()))) != (
-            128, 1024, ("beam_id", "azimuth_column")
+        for record, name, partition, role, labels, ids in (
+            (public, "public_anomaly_validation", "val", "one_time_real_anomaly_confirmation_after_method_freeze", True, PUBLIC_ANOMALY_IDS),
+            (hidden, "hidden_test", "test", "final_hidden_test_after_supported_public_confirmation", False, HIDDEN_TEST_IDS),
         ):
-            raise ProtocolError("canonical OS1-128 ray identity changed")
-        controls = _mapping(render["normal_controls"], "render.normal_controls")
-        if _int_tuple(controls["semantic_ids"], "normal control semantics") != NORMAL_CONTROL_SEMANTICS:
-            raise ProtocolError("normal-control source classes changed")
-        sensor = _mapping(render["sensor_model"], "render.sensor_model")
-        if tuple(sensor.get("conditioning", ())) != ("beam", "range", "incidence", "material"):
-            raise ProtocolError("return and intensity models must share beam/range/incidence/material conditioning")
-        probabilities = _mapping(render["world_types"], "render.world_types")
-        values = tuple(_number(value, f"render.world_types.{key}") for key, value in probabilities.items())
-        if set(probabilities) != {"pure_normal", "control_only", "mixed", "anomaly_only"} or any(value <= 0 for value in values) or not math.isclose(sum(values), 1.0, abs_tol=1e-9):
-            raise ProtocolError("all four world types need positive probabilities summing to one")
+            _exact_keys(record, common_keys, f"data.{name}")
+            _expect(record["partition"], partition, f"data.{name}.partition")
+            _expect(record["role"], role, f"data.{name}.role")
+            _expect(record["labels_available"], labels, f"data.{name}.labels_available")
+            _expect(record["method_freeze_required"], True, f"data.{name}.method_freeze_required")
+            if _int_tuple(record["sequence_ids"], f"data.{name}.sequence_ids") != ids:
+                raise ProtocolError(f"data.{name}.sequence_ids changed")
 
     @staticmethod
     def _validate_window(window: Mapping[str, object]) -> None:
-        offline = _mapping(window["offline_main"], "window.offline_main")
-        causal = _mapping(window["causal_ablation"], "window.causal_ablation")
-        if _signed_int_tuple(offline["frame_offsets"], "offline offsets") != RELATIVE_TIMES:
-            raise ProtocolError("offline main window must be center-symmetric five frames")
-        # Negative values need direct validation because _int_tuple is non-negative.
-        causal_offsets = tuple(causal["frame_offsets"]) if isinstance(causal.get("frame_offsets"), list) else ()
-        if causal_offsets != CAUSAL_OFFSETS:
-            raise ProtocolError("causal ablation must use [t-4,t]")
-        if tuple(window.get("point_identity", ())) != ("frame_id", "beam_id", "azimuth_column") or window.get("file_slot_is_not_identity") is not True:
-            raise ProtocolError("point identity must be canonical frame-ray, not file slot")
-        if window.get("padding") is not False or window.get("frame_repetition") is not False:
-            raise ProtocolError("sequence boundaries cannot be padded or repeated")
+        expected = {
+            "frames": WINDOW_FRAMES,
+            "member_offsets_from_start": list(WINDOW_MEMBER_OFFSETS),
+            "identity": ["partition", "sequence_id", "window_start"],
+            "frame_ids": "window_start_plus_member_offsets",
+            "padding": False,
+            "frame_repetition": False,
+            "member_order_is_model_input": False,
+            "point_identity": ["source_frame", "source_ray"],
+            "restoration_fields": ["source_frame", "source_slot", "source_ray"],
+            "scan_group_use": "B2_grouped_operations_only_never_a_learned_feature",
+        }
+        _exact_keys(window, {*expected, "reference_pose"}, "window")
+        for name, value in expected.items():
+            _expect(window[name], value, f"window.{name}")
+        pose = _mapping(window["reference_pose"], "window.reference_pose")
+        expected_pose = {
+            "translation": "arithmetic_mean_of_five_sensor_translations",
+            "rotation": "SO3_chordal_mean_of_five_sensor_rotations",
+            "proper_rotation_projection": "U_diag_1_1_det_UVt_Vt",
+            "permutation_invariant": True,
+            "global_rigid_transform_invariant_coordinates": True,
+        }
+        _exact_keys(pose, set(expected_pose), "window.reference_pose")
+        for name, value in expected_pose.items():
+            _expect(pose[name], value, f"window.reference_pose.{name}")
+
+    @staticmethod
+    def _validate_labels(labels: Mapping[str, object]) -> None:
+        _exact_keys(labels, {"packed_label", "binary_anomaly", "normal_control_semantic_ids", "moving_normal_semantic_ids", "normal_semantic_class_map"}, "labels")
+        _expect(labels["packed_label"], {"semantic_bits_inclusive": [0, 15], "instance_bits_inclusive": [16, 31]}, "labels.packed_label")
+        _expect(labels["binary_anomaly"], {
+            "raw_semantic_0": "ignore_unless_replaced_by_a_valid_inserted_return",
+            "raw_semantic_2": "anomaly", "other_nonzero_semantics": "normal",
+            "normal_control_return": "normal", "anomaly_proxy_return": "anomaly",
+        }, "labels.binary_anomaly")
+        if _int_tuple(labels["normal_control_semantic_ids"], "normal controls") != NORMAL_CONTROL_SEMANTICS:
+            raise ProtocolError("normal-control semantic IDs changed")
+        if _int_tuple(labels["moving_normal_semantic_ids"], "moving normals") != MOVING_NORMAL_SEMANTICS:
+            raise ProtocolError("moving-normal semantic IDs changed")
+        class_map = _mapping(labels["normal_semantic_class_map"], "normal class map")
+        if not class_map or any(not raw.isdigit() for raw in class_map):
+            raise ProtocolError("normal semantic class map keys must be decimal IDs")
+        for raw, target in class_map.items():
+            _integer(target, f"normal semantic class {raw}")
+        if any(str(item) not in class_map for item in (*NORMAL_CONTROL_SEMANTICS, *MOVING_NORMAL_SEMANTICS)):
+            raise ProtocolError("normal class map omits a renderer/STU semantic")
+
+    @staticmethod
+    def _validate_render(render: Mapping[str, object]) -> None:
+        keys = {
+            "geometry_schema", "source_sequence_id", "sensor", "calibration_file",
+            "ray_grid", "normal_controls", "anomaly_proxies",
+            "world_type_probabilities", "common_entity_rules", "sensor_model",
+            "physical_scope_excludes", "world_unit", "freeze_before_render",
+            "shared_renderer_for_normal_control_and_proxy", "window_descriptors",
+            "proxy_control_matching", "forbidden_densification",
+        }
+        _exact_keys(render, keys, "render")
+        _expect(render["geometry_schema"], 7, "render.geometry_schema")
+        _expect(render["source_sequence_id"], 206, "render.source_sequence_id")
+        _expect(render["sensor"], "OS1-128_canonical_ray_first_return_approximation", "render.sensor")
+        _nonempty_string(render["calibration_file"], "render.calibration_file")
+        _expect(render["world_unit"], "WindowWorld", "render.world_unit")
+        _expect(render["shared_renderer_for_normal_control_and_proxy"], True, "render.shared_renderer")
+        _expect(render["freeze_before_render"], ["five_source_frames", "normal_controls", "anomaly_proxies", "world_positions", "orientations", "scales", "materials", "all_random_seeds"], "render.freeze_before_render")
+        _expect(render["forbidden_densification"], ["synthetic_point_completion", "bottom_return_insertion", "scan_duplication", "single_scan_copying"], "render.forbidden_densification")
+
+        ray = _mapping(render["ray_grid"], "render.ray_grid")
+        _expect(ray, {"beam_count": 128, "column_count": 1024, "canonical_identity": ["beam_id", "azimuth_column"], "file_slot_role": "input_output_mapping_only"}, "render.ray_grid")
+        controls = _mapping(render["normal_controls"], "render.normal_controls")
+        if _int_tuple(controls.get("semantic_ids"), "normal-control semantics") != NORMAL_CONTROL_SEMANTICS:
+            raise ProtocolError("renderer normal-control semantics differ from labels")
+        _expect(controls.get("source_sequence_id"), 206, "normal-control source")
+        proxies = _mapping(render["anomaly_proxies"], "render.anomaly_proxies")
+        _expect(proxies.get("training_mechanisms"), ["superquadric", "constructive_overlap_union", "bend", "twist", "taper", "low_frequency_surface"], "proxy mechanisms")
+        _expect(proxies.get("held_out_mechanism"), "torus_SDF", "held-out mechanism")
+
+        probabilities = _mapping(render["world_type_probabilities"], "world probabilities")
+        _exact_keys(probabilities, {"pure_normal", "control_only", "mixed", "anomaly_only"}, "world probabilities")
+        total = sum(_number(item, "world probability") for item in probabilities.values())
+        if not math.isclose(total, 1.0, abs_tol=1e-12):
+            raise ProtocolError("world type probabilities must sum to one")
+        common = _mapping(render["common_entity_rules"], "common entity rules")
+        for name in ("static_world_pose", "support_plane_required", "observed_surface_collision_rejection", "inserted_entity_collision_rejection"):
+            _expect(common.get(name), True, f"common_entity_rules.{name}")
+        sensor = _mapping(render["sensor_model"], "sensor model")
+        for name in ("return_probability", "intensity_quantiles", "nearest_accepted_return", "allow_new_return_on_empty_ray", "bidirectional_occlusion"):
+            _expect(sensor.get(name), True, f"sensor_model.{name}")
+
+        descriptors = _mapping(render["window_descriptors"], "window descriptors")
+        _exact_keys(descriptors, {"density_voxel_size_m", "density_coordinate_system", "density_voxel_quantization", "definitions", "required"}, "window descriptors")
+        if _number(descriptors["density_voxel_size_m"], "density voxel size") <= 0:
+            raise ProtocolError("density voxel size must be positive")
+        _expect(descriptors["density_coordinate_system"], "symmetric_window_coordinates", "density coordinate system")
+        required = _string_tuple(descriptors["required"], "window descriptor names")
+        expected_required = (
+            "joint_visible_return_count", "joint_spatial_voxel_count",
+            "maximum_single_scan_spatial_voxel_count", "densification_gain",
+            "duplicate_fraction", "distance", "occlusion", "support_surface",
+            "visible_scan_count", "minimum_visible_return_height_above_support",
+            "intensity_distribution", "beam_distribution",
+        )
+        if required != expected_required:
+            raise ProtocolError("window descriptor identities changed")
+        definitions = _mapping(descriptors["definitions"], "descriptor definitions")
+        if set(definitions) != {
+            *expected_required[:5],
+            "empty_entity_rule",
+        }:
+            raise ProtocolError("density descriptor definitions are incomplete")
+        matching = _mapping(render["proxy_control_matching"], "proxy/control matching")
+        _expect(matching.get("unit"), "complete_five_scan_window", "matching unit")
+        _expect(matching.get("thresholds"), "freeze_result_blind_in_R02", "matching status")
+        covariates = set(_string_tuple(matching.get("required_covariates"), "matching covariates"))
+        if len(covariates) != 7 or not covariates.issubset(set(required)):
+            raise ProtocolError("proxy/control matching covariates are invalid")
+
+    @staticmethod
+    def _validate_stu(stu: Mapping[str, object]) -> None:
+        expected = {
+            "source": "STU_official_Mask4Former3D", "checkpoint_bytes": 476261075,
+            "voxel_size_m": 0.05, "point_feature_dim": 128,
+            "normal_evidence_dim": 19, "assignment_reliability_dim": 1,
+            "no_object_reliability_dim": 1, "b0_score": "official_STU_MaxLogit",
+            "frozen": True,
+        }
+        _exact_keys(stu, {*expected, "checkpoint", "checkpoint_sha256", "repository"}, "stu")
+        for name, value in expected.items():
+            _expect(stu[name], value, f"stu.{name}")
+        _nonempty_string(stu["checkpoint"], "stu.checkpoint")
+        _nonempty_string(stu["repository"], "stu.repository")
+        digest = _nonempty_string(stu["checkpoint_sha256"], "stu.checkpoint_sha256")
+        if not re.fullmatch(r"[0-9a-f]{64}", digest):
+            raise ProtocolError("stu.checkpoint_sha256 must be lowercase SHA-256")
 
     @staticmethod
     def _validate_model(model: Mapping[str, object]) -> None:
-        if (
-            model.get("input_dim"), model.get("levels"), model.get("pooling"),
-            model.get("upsample"), model.get("upsample_neighbors"),
-        ) != (150, 4, "per_time_mean_max", "same_time_3NN_with_high_resolution_skip", 3):
-            raise ProtocolError("AJAE fixed four-level model identity changed")
-        if _signed_int_tuple(model["attention_deltas"], "attention deltas") != RELATIVE_TIMES:
-            raise ProtocolError("attention deltas must be -2 through +2")
-        voxels = tuple(_number(item, "voxel size") for item in _list(model["voxel_sizes_m"], "voxel sizes"))
-        if len(voxels) != 3 or not all(right > left > 0 for left, right in zip(voxels, voxels[1:])):
-            raise ProtocolError("L1-L3 require three increasing voxel sizes")
-        radii = _float_matrix(model["attention_radii_m"], "attention radii", 4, 5)
-        neighbors = _int_matrix(model["neighbors"], "neighbors", 4, 5)
-        if any(radius <= 0 for row in radii for radius in row) or any(
-            not radii[level + 1][delta] > radii[level][delta]
-            for level in range(3) for delta in range(5)
-        ):
-            raise ProtocolError("every time-stratified radius must grow from L0 to L3")
-        if not neighbors:
-            raise ProtocolError("time-stratified neighbor budgets are empty")
+        keys = {
+            "name", "input_features", "spatial_coordinates", "bookkeeping_inputs",
+            "input_dim", "forbidden_features", "hidden_dim", "heads", "levels",
+            "voxel_sizes_m", "radius_neighbors", "voxel_feature",
+            "neighborhood_feature", "upsample_neighbors", "grouping_modes",
+            "B2_B3_shared_class_and_parameterization", "output",
+            "scan_permutation_equivariant",
+        }
+        _exact_keys(model, keys, "model")
+        expected = {
+            "name": "JointWindowPointTransformer",
+            "input_features": ["stu_point_feature_128d", "normal_evidence_19d", "assignment_reliability", "no_object_reliability", "intensity"],
+            "spatial_coordinates": "symmetric_window_coordinates_may_enter_order_invariant_position_encoding_relative_displacement_voxel_neighborhood_and_decode_geometry",
+            "bookkeeping_inputs": "point_identity_for_restoration_and_scan_group_for_B2_isolation_only",
+            "input_dim": 150,
+            "forbidden_features": ["source_frame", "window_member_index", "relative_time", "absolute_time", "time_embedding", "reversible_time_encoding"],
+            "hidden_dim": 128, "heads": 4, "levels": 4,
+            "voxel_sizes_m": [0.1, 0.2, 0.4],
+            "radius_neighbors": {"radii_m": [0.25, 0.5, 1.0, 2.0], "maximum_neighbors": [12, 16, 24, 32]},
+            "voxel_feature": ["mean", "max", "log1p_population"],
+            "neighborhood_feature": "log1p_uncapped_count_of_all_points_strictly_inside_radius_before_top_K_selection",
+            "upsample_neighbors": 3,
+            "grouping_modes": {"B1": "single", "B2": "per_scan", "B3": "joint"},
+            "B2_B3_shared_class_and_parameterization": True,
+            "output": "one_anomaly_logit_for_every_visible_input_return",
+            "scan_permutation_equivariant": True,
+        }
+        for name, value in expected.items():
+            _expect(model[name], value, f"model.{name}")
+
+    @staticmethod
+    def _validate_experiments(experiments: Mapping[str, object]) -> None:
+        _exact_keys(experiments, {item.value for item in ExperimentCondition}, "experiments")
+        definitions = {
+            "B0": "frozen_STU_official_single_scan_MaxLogit",
+            "B1": "five_independent_single_scan_forwards_per_WindowWorld_with_one_all_point_loss",
+            "B2": "all_five_scans_input_output_and_supervised_with_voxel_neighborhood_and_decode_isolated_by_scan_group",
+            "B3": "all_five_scans_jointly_voxelized_neighbored_and_decoded_in_symmetric_window_coordinates",
+        }
+        for condition in ExperimentCondition:
+            record = _mapping(experiments[condition.value], f"experiments.{condition.value}")
+            keys = {"trainable", "definition"}
+            if condition.trainable:
+                keys.add("grouping_mode")
+            _exact_keys(record, keys, f"experiments.{condition.value}")
+            _expect(record["trainable"], condition.trainable, f"{condition.value}.trainable")
+            _expect(record["definition"], definitions[condition.value], f"{condition.value}.definition")
+            if condition.trainable:
+                _expect(record["grouping_mode"], condition.grouping_mode.value, f"{condition.value}.grouping_mode")
+                if condition.output_local_indices != WINDOW_MEMBER_OFFSETS:
+                    raise ProtocolError(f"{condition.value} must output all five members")
 
     @staticmethod
     def _validate_training(training: Mapping[str, object]) -> None:
-        banned = {"lambda_cf", "memory_beta", "memory_warmup_worlds", "memory_key", "point_window_weight"}
-        if set(training).intersection(banned):
-            raise ProtocolError("schema 30 forbids counterfactual memory and extra loss terms")
-        if (training.get("source_partition"), training.get("source_sequence_id"), training.get("micro_batch")) != ("train", 206, 1):
-            raise ProtocolError("training must use train/206 with one complete window per micro-batch")
-        if (training.get("maximum_worlds"), training.get("patience")) != (25, 4):
-            raise ProtocolError("formal training must stop by 25 worlds with patience 4")
-        revision = _mapping(
-            training.get("result_blind_budget_revision"),
-            "training result-blind budget revision",
-        )
-        _exact_keys(
-            revision,
-            {
-                "version", "status", "previous_maximum_worlds", "maximum_worlds",
-                "scope_conditions", "development_metric_values_read",
-                "checkpoint_prefix_reuse", "prefix_reuse_rule",
-            },
-            "training.result_blind_budget_revision",
-        )
-        prefix = _mapping(
-            revision.get("checkpoint_prefix_reuse"),
-            "training result-blind prefix reuse",
-        )
-        _exact_keys(
-            prefix,
-            {
-                "condition", "seed", "progress_sha256",
-                "scientific_identity_sha256", "phase", "cursor",
-                "history_worlds", "completed_development_evaluations",
-            },
-            "training.result_blind_budget_revision.checkpoint_prefix_reuse",
-        )
-        cursor = _mapping(prefix.get("cursor"), "training result-blind cursor")
-        if (
-            revision.get("version") != "E74-result-blind-budget-reduction-v1"
-            or revision.get("status") != "frozen_before_result_exposure"
-            or revision.get("previous_maximum_worlds") != 40
-            or revision.get("maximum_worlds") != 25
-            or tuple(revision.get("scope_conditions", ())) != ("B1", "B2", "B3")
-            or revision.get("development_metric_values_read") is not False
-            or (prefix.get("condition"), prefix.get("seed"), prefix.get("phase"))
-            != ("B1", 0, "windows")
-            or prefix.get("progress_sha256")
-            != "f2df8555226e2ca7b9b8ba70066e130659dc1f89818165f3f31bd806730b20df"
-            or prefix.get("scientific_identity_sha256")
-            != "e0da006e987252a85be37a80f7e78a908c7ffe56245d8ed36fb918067cb56d42"
-            or dict(cursor)
-            != {
-                "world_index": 22,
-                "block_index": 15,
-                "window_index": 0,
-                "windows_completed": 225,
-            }
-            or prefix.get("history_worlds") != 22
-            or prefix.get("completed_development_evaluations") != 4
-            or not isinstance(revision.get("prefix_reuse_rule"), str)
-            or not revision.get("prefix_reuse_rule")
-        ):
-            raise ProtocolError("result-blind 40-to-25 world revision identity changed")
-        if training.get("deterministic_algorithms") is not True:
-            raise ProtocolError("formal training must use deterministic algorithms")
-        seeds = _int_tuple(training["seeds"], "training.seeds")
-        if len(seeds) < 3 or len(set(seeds)) != len(seeds):
-            raise ProtocolError("formal development requires at least three unique training seeds")
-        if "only" not in str(training.get("loss", "")):
-            raise ProtocolError("training loss must explicitly contain only balanced BCE")
-        probabilities = _mapping(training["world_type_probabilities"], "training world probabilities")
-        if set(probabilities) != {"pure_normal", "control_only", "mixed", "anomaly_only"}:
-            raise ProtocolError("training must sample all four world types")
-        values = tuple(_number(value, f"training world probability {key}") for key, value in probabilities.items())
-        if any(value <= 0 for value in values) or not math.isclose(sum(values), 1.0, abs_tol=1e-9):
-            raise ProtocolError("training world probabilities must be positive and sum to one")
-        smoke = _mapping(training["e73_smoke"], "training.e73_smoke")
-        pure = _mapping(smoke["pure_normal"], "training.e73_smoke.pure_normal")
-        mixed = _mapping(smoke["mixed"], "training.e73_smoke.mixed")
-        if (
-            smoke.get("status") not in {
-                "frozen_before_model_execution", "formal_pass"
-            }
-            or smoke.get("seed") != 73002026
-            or smoke.get("source_artifact")
-            != "runs/ajae/e26_v2_world_builder.npz"
-            or smoke.get("source_artifact_sha256")
-            != "2653f705d2e890d99cda732a7a00387b5621cd05abb9c4681c7a9f284c34363c"
-            or smoke.get("b0_reference") != "runs/ajae/e72_b0_reference.npz"
-            or smoke.get("b0_reference_sha256")
-            != "208487d5c91b131856e908988cf6d955305fa09364450d509e32f617295b5863"
-            or dict(pure)
-            != {
-                "row": 0,
-                "world_seed": 2600000,
-                "center_frame": 312,
-                "world_sha256": "27a1654c7241bb616964a3b47502c60b5376cfef189392f9eb2e4c76154246ea",
-            }
-            or dict(mixed)
-            != {
-                "row": 128,
-                "world_seed": 2600128,
-                "center_frame": 440,
-                "world_sha256": "c83062ae310e2d468eaec74471235dabfa41b1405292f4229d8d0ce718b17a7a",
-            }
-            or smoke.get("optimizer_updates") != 1
-            or smoke.get("micro_batches") != 2
-            or _number(
-                smoke["partial_accumulation_uses_frozen_factor"],
-                "E73 partial accumulation factor",
-            )
-            != 4.0
-            or _number(
-                smoke["loss_reproduction_absolute_tolerance"],
-                "E73 loss reproduction tolerance",
-            )
-            != 1.0e-7
-            or _number(
-                smoke["parameter_reproduction_absolute_tolerance"],
-                "E73 parameter reproduction tolerance",
-            )
-            != 1.0e-7
-            or smoke.get("model_quality_use_forbidden") is not True
-        ):
-            raise ProtocolError("E73 smoke identity changed")
-        if smoke.get("status") == "formal_pass":
-            result = _mapping(smoke["result"], "training.e73_smoke.result")
-            if (
-                result.get("path") != "runs/ajae/e73_b1_smoke.npz"
-                or result.get("artifact_sha256")
-                != "7d4eed7af2207cfffe10501cbbcf582f6a16c3fd1f258351a299f32dc540cff3"
-                or result.get("scientific_array_sha256")
-                != "2cf7449e0b101c12ba47d7049cc777a3332f5b66d5334faf373b6e5fab2d218e"
-                or result.get("protocol_sha256_at_execution")
-                != "54565db9e6887ffa62fed4ddb8bb9951b4626bebcf3cb25ae0f2bdf1d2299ebc"
-                or any(
-                    result.get(name) != 0
-                    for name in (
-                        "identity_errors", "gradient_errors", "stu_errors",
-                        "checkpoint_errors", "reproduction_errors",
-                        "loss_reproduction_error", "parameter_reproduction_error",
-                    )
-                )
-                or result.get("independent_read_only_validation") is not True
-            ):
-                raise ProtocolError("E73 formal result identity changed")
-
-    @staticmethod
-    def _validate_development(development: Mapping[str, object]) -> None:
-        _exact_keys(
-            development,
-            {
-                "phase6_version", "worlds_file", "sequence_id",
-                "in_generator_worlds", "generator_held_out_worlds",
-                "held_out_affects_selection", "pure_normal_is_separate",
-                "safety_sets", "qualification", "fixed_world_evaluation",
-                "checkpoint_selection", "exploration_track", "e63_freeze", "difficulty_statistics",
-                "boundary_leakage_radius_m", "position_score_scale",
-            },
-            "development",
-        )
-        if (
-            development.get("phase6_version"),
-            development.get("worlds_file"), development.get("sequence_id"),
-            development.get("in_generator_worlds"),
-            development.get("generator_held_out_worlds"),
-            development.get("held_out_affects_selection"),
-        ) != ("E57-v2", "dev.json", 201, 24, 6, False):
-            raise ProtocolError("development must preserve E57-v2 and the fixed 24+6 split on 201")
-        safety = _mapping(development["safety_sets"], "development.safety_sets")
-        _exact_keys(
-            safety,
-            {"status", "pure_normal", "moving_normal", "static_match",
-             "pass_conditions", "claim_limit"},
-            "development.safety_sets",
-        )
-        pure = _mapping(safety["pure_normal"], "E61 pure-normal safety")
-        moving = _mapping(safety["moving_normal"], "E61 moving-normal safety")
-        match = _mapping(safety["static_match"], "E61 static matching")
-        if (
-            safety.get("status") != "frozen_before_e61"
-            or (pure.get("partition"), pure.get("sequence_id"),
-                tuple(pure.get("frame_range", ())), tuple(pure.get("range_m", ())),
-                pure.get("expected_points"), pure.get("labels_are_evaluation_only"))
-            != ("train", 201, (4, 681), (2.5, 50.0), 48828507, True)
-            or (moving.get("partition"), moving.get("sequence_id"),
-                tuple(moving.get("frame_range", ())), tuple(moving.get("range_m", ())),
-                tuple(moving.get("semantic_ids", ())), moving.get("expected_points"),
-                moving.get("retain_all_eligible_points"),
-                moving.get("held_out_or_unseen_generalization_claim_forbidden"),
-                moving.get("labels_are_evaluation_only"))
-            != ("train", 206, (0, 448), (2.5, 50.0),
-                MOVING_NORMAL_SEMANTICS, 13011, True, True, True)
-        ):
-            raise ProtocolError("E61 pure/moving safety identities changed")
-        expected_mapping = {
-            "252": 10, "253": 31, "254": 30, "255": 32,
-            "256": 16, "257": 13, "258": 18, "259": 20,
+        keys = {
+            "source_partition", "source_sequence_id", "bank", "micro_batch",
+            "effective_batch", "epoch", "loss",
+            "forced_partial_step_at_world_boundary", "modes", "tiny_overfit",
+            "pilot", "formal", "checkpoint_selection", "deterministic_algorithms",
         }
-        if (
-            dict(_mapping(match.get("moving_to_static_semantic"),
-                          "E61 semantic matching")) != expected_mapping
-            or tuple(match.get("range_bin_edges_m", ()))
-            != (2.5, 10.0, 20.0, 30.0, 50.0)
-            or match.get("identity_hash_namespace") != "E61-static-match-v1"
-            or tuple(match.get("identity_hash_fields", ()))
-            != ("sequence_id", "frame_id", "canonical_ray_id")
-            or match.get("replacement") is not False
-            or match.get("point_reuse") is not False
-            or match.get("same_frame_matching") is not False
-            or match.get("insufficient_cell_coverage_is_nonblocking") is not True
-            or match.get("unmatched_moving_points_remain_in_moving_safety") is not True
-            or set(match.get("forbidden_matching_inputs", ()))
-            != {"intensity", "occlusion", "point density", "STU feature",
-                "voxel density", "AJAE score", "STU anomaly score"}
-        ):
-            raise ProtocolError("E61 static matching rule changed")
-        qualification = _mapping(
-            development["qualification"], "development.qualification"
-        )
-        _exact_keys(
-            qualification,
-            {
-                "status", "source_candidate_bank", "selection",
-                "hard_requirements", "descriptive_characterization",
-                "held_out_diagnostics",
-            },
-            "development.qualification",
-        )
-        source_bank = _mapping(
-            qualification["source_candidate_bank"],
-            "development.qualification.source_candidate_bank",
-        )
-        if (
-            qualification.get("status") != "frozen_before_e57"
-            or source_bank.get("path") != "runs/ajae/e45b-v2_bank_1024.npz"
-            or source_bank.get("sha256")
-            != "d3088e29e4c6179999ccb34088dae558fa402bf6b1455394acdc99cac4118463"
-            or source_bank.get("scientific_array_sha256")
-            != "f4fb2081b346c686e2d6930a03e3f17bb6c6d3eee4fcfc16984c1a9c1d8de4f5"
-            or source_bank.get("candidate_worlds") != 1024
-            or source_bank.get("e45b_matching_or_e48_scores_forbidden") is not True
-        ):
-            raise ProtocolError("E57-v2 source-bank identity or score isolation changed")
-        selection = _mapping(
-            qualification["selection"], "development.qualification.selection"
-        )
-        if (
-            selection.get("selected_worlds") != 24
-            or selection.get("rule")
-            != "rank_normalized_generator_descriptors_center_then_greedy_maximin_hash_tie"
-            or tuple(selection.get("descriptors", ()))
-            != (
-                "control_Nvis", "control_O", "control_d", "control_V",
-                "proxy_Nvis", "proxy_O", "proxy_d", "proxy_V",
-            )
-            or selection.get("model_outputs_forbidden") is not True
-            or selection.get("exact_bin_quotas_forbidden") is not True
-        ):
-            raise ProtocolError("E57-v2 model-independent selection rule changed")
-        hard = _mapping(
-            qualification["hard_requirements"],
-            "development.qualification.hard_requirements",
-        )
-        if (
-            hard.get("legal_mixed_worlds"),
-            hard.get("minimum_center_anomaly_points_per_world"),
-            hard.get("minimum_center_normal_points_per_world"),
-            hard.get("minimum_multiframe_worlds_per_label"),
-            hard.get("development_sequence"),
-            hard.get("gradients_forbidden"),
-        ) != (24, 5, 1, 12, "train/201", True):
-            raise ProtocolError("E57-v2 hard non-degeneracy requirements changed")
-        characterization = _mapping(
-            qualification["descriptive_characterization"],
-            "development.qualification.descriptive_characterization",
-        )
-        if (
-            characterization.get("status") != "nonblocking"
-            or tuple(characterization.get("statistics", ())) != ("d", "Nvis", "O", "V")
-            or tuple(characterization.get("distance_bin_edges_m", ())) != (10.0, 20.0, 30.0)
-            or tuple(characterization.get("Nvis_bin_edges", ())) != (8, 32, 128)
-            or tuple(characterization.get("O_bin_edges", ())) != (0.25, 0.5, 0.75)
-            or tuple(characterization.get("V_values", ())) != (1, 2, 3, 4, 5)
-        ):
-            raise ProtocolError("E59/E60 characterization must remain complete and nonblocking")
-        held_out = _mapping(
-            qualification["held_out_diagnostics"],
-            "development.qualification.held_out_diagnostics",
-        )
-        held_out_source = _mapping(
-            held_out["source_e57_artifact"],
-            "development.qualification.held_out_diagnostics.source_e57_artifact",
-        )
-        if (
-            held_out.get("status") != "frozen_before_e58"
-            or held_out_source.get("path")
-            != "runs/ajae/e57_development_worlds.npz"
-            or held_out_source.get("sha256")
-            != "b14efc1aad86ac67b5bf7c8631f02b2e68664e071b747b7b210d5f7a30f5d123"
-            or held_out_source.get("scientific_array_sha256")
-            != "590c467da2dec0a161688f2587dc1c37cea2b0f42f326b9918fd6dc9df81f6ec"
-            or held_out.get("worlds") != 6
-            or held_out.get("shape_mechanism") != "held-out-torus-sdf"
-            or held_out.get("seed_namespace") != "E58-held-out-torus-v1"
-            or held_out.get("selection_rule")
-            != "lowest namespace hash among legal visible center-evaluable replacements of the 24 E57 worlds"
-            or held_out.get("model_outputs_forbidden") is not True
-            or held_out.get(
-                "training_checkpoint_threshold_and_pass_use_forbidden"
-            ) is not True
-        ):
-            raise ProtocolError("E58 held-out identity or isolation rule changed")
-        world_evaluation = _mapping(
-            development["fixed_world_evaluation"],
-            "development.fixed_world_evaluation",
-        )
-        _exact_keys(
-            world_evaluation,
-            {"status", "scope", "b0_reference"},
-            "development.fixed_world_evaluation",
-        )
-        if world_evaluation.get("status") != "frozen_before_training":
-            raise ProtocolError("fixed-world evaluation must declare its freeze status")
-        if not isinstance(world_evaluation.get("scope"), Mapping):
-            raise ProtocolError("frozen fixed-world evaluation requires an explicit scope")
-        b0 = _mapping(
-            world_evaluation["b0_reference"],
-            "development.fixed_world_evaluation.b0_reference",
-        )
-        if (
-            b0.get("status") != "formal_pass"
-            or b0.get("path") != "runs/ajae/e72_b0_reference.npz"
-            or b0.get("artifact_sha256")
-            != "208487d5c91b131856e908988cf6d955305fa09364450d509e32f617295b5863"
-            or b0.get("scientific_array_sha256")
-            != "49fd285bb7dba95f33a9606309418987e93799470ce96016323cd29b0968c95a"
-            or b0.get("development_worlds") != 23
-            or b0.get("development_points") != 2_110_885
-            or b0.get("pure_normal_points") != 48_828_507
-            or b0.get("moving_normal_points") != 13_011
-            or b0.get("matched_static_points") != 6_756
-            or b0.get("evaluator_errors") != 0
-            or b0.get("count_errors") != 0
-            or b0.get("independent_read_only_validation") is not True
-        ):
-            raise ProtocolError("E72 B0 reference identity changed")
-        selection = _mapping(development["checkpoint_selection"], "checkpoint selection")
-        _exact_keys(
-            selection,
-            {
-                "status", "primary", "tie_tolerance", "first_tie_break",
-                "second_tie_break", "third_tie_break", "eligible_world_ids",
-                "held_out_input_forbidden",
-            },
-            "development.checkpoint_selection",
-        )
-        if (
-            selection.get("status") != "frozen_before_training"
-            or selection.get("primary")
-            != "maximum macro mean of per-world AP over the E63 common-domain eligible in-generator worlds"
-            or _number(selection["tie_tolerance"], "checkpoint tie tolerance")
-            != 0.001
-            or selection.get("first_tie_break")
-            != "lower development macro mean FPR95"
-            or selection.get("second_tie_break")
-            != "lower pure-normal cross-fit FPR"
-            or selection.get("third_tie_break")
-            != "earlier completed world index"
-            or selection.get("held_out_input_forbidden") is not True
-        ):
-            raise ProtocolError("checkpoint selection is not the frozen E63-v2 rule")
-        eligible_world_ids = _int_tuple(
-            selection["eligible_world_ids"], "checkpoint eligible world IDs"
-        )
-        if len(set(eligible_world_ids)) != len(eligible_world_ids) or any(
-            world_id >= 24 for world_id in eligible_world_ids
-        ):
-            raise ProtocolError("checkpoint eligible world IDs must be a unique E57 subset")
-        AJAEProtocol._validate_e63(
-            _mapping(development["e63_freeze"], "development.e63_freeze")
-        )
-        if (
-            _mapping(development["e63_freeze"], "development.e63_freeze").get(
-                "status"
-            )
-            == "formal_pass"
-            and eligible_world_ids
-            != tuple(world_id for world_id in range(24) if world_id != 5)
-        ):
-            raise ProtocolError("checkpoint world IDs differ from the E63 common domain")
-        exploration = _mapping(
-            development["exploration_track"], "development.exploration_track"
-        )
-        cohort = _mapping(exploration.get("cohort"), "exploration cohort")
-        confirmation = _mapping(
-            exploration.get("e74_confirmation"), "E74 confirmation pause"
-        )
-        cursor = _mapping(confirmation.get("paused_cursor"), "E74 paused cursor")
-        if (
-            exploration.get("version")
-            != "exploration-confirmation-split-v5-fast-viability"
-            or exploration.get("status") != "active_before_formal_gate2"
-            or tuple(cohort.get("seeds", ())) != (0, 1)
-            or tuple(cohort.get("applies_to", ())) != ("B1", "B2", "B3")
-            or cohort.get("selection")
-            != "the first two preregistered seeds completed in original order, never performance-selected"
-            or cohort.get("shared_budget_and_checkpoint_rule") != "exactly E63-v2"
-            or confirmation.get("status") != "suspended_after_seeds_0_1"
-            or confirmation.get("formal_pass_forbidden") is not True
-            or tuple(confirmation.get("completed_seed_model_sha256", ()))
-            != (
-                "892b9f71f0365aa189e8c572f50ac6156dac2773cbbb5f6b862927744890938f",
-                "9111c223782e14b0cd90d9bb0f069e5c17bccf54215718250bc548f9a4a17412",
-            )
-            or tuple(confirmation.get("completed_seed_result_sha256", ()))
-            != (
-                "fccc0c513429807eee2580794b7ce01ae0228e6bfb31f5b5f2768c71de01bb22",
-                "fb61b922faae623016a51c09a2f407cee1d9d1b7564d2ebf94acccffcb18e5e5",
-            )
-            or confirmation.get("paused_seed") != 2
-            or confirmation.get("paused_progress_path")
-            != "runs/ajae/B1/seed-2/progress.pt"
-            or confirmation.get("paused_progress_sha256")
-            != "f2a76821755ceb01725756afa43de7b91b1c6c4aff778573e8a6dd19cee65191"
-            or cursor != {
-                "world_index": 2,
-                "block_index": 17,
-                "window_index": 0,
-                "windows_completed": 272,
-                "update_index": 1170,
-                "phase": "windows",
-            }
-            or confirmation.get("resume_branch") != "confirm/e74-seed2-resume"
-            or confirmation.get("partial_seed2_result_use_forbidden") is not True
-            or exploration.get("current_node")
-            != "AJAE-F1-X-v5_fast_seed0_training"
-            or exploration.get("formal_gate2_and_gate3_status") != "not adjudicated"
-            or exploration.get("public_real_ood_sequences_remain_sealed") is not True
-            or exploration.get("hidden_test_sequences_remain_sealed") is not True
-            or exploration.get("exploratory_continuation_status")
-            != "full-first_v5_fast_frozen_before_fresh_seed0_initialization"
-        ):
-            raise ProtocolError("exploration/confirmation split identity changed")
-        e75x = _mapping(exploration.get("e75x_result"), "E75-X result")
-        if (
-            e75x.get("status") != "descriptive_execution_complete"
-            or e75x.get("formal_gate2_adjudicated") is not False
-            or e75x.get("artifact_path") != "runs/ajae/e75x_b1_vs_b0.npz"
-            or e75x.get("artifact_sha256")
-            != "0d90c4d6b118819dfec87ae41ec5a0646f3071c87aad73cc267cb5de503fdfc0"
-            or e75x.get("scientific_array_sha256")
-            != "a5c6c78dfdc563e4eff64ee6255abee2a32c65f848b9fe8b0e77f0cc8cde4d6d"
-            or tuple(e75x.get("seed_mean_ap_decision_difference", ()))
-            != (0.001308817527630322, 0.05291273076915464)
-            or e75x.get("two_seed_mean_ap_decision_difference")
-            != 0.027110774148392493
-            or tuple(e75x.get("positive_world_count", ())) != (19, 20)
-            or e75x.get("confirmatory_interval_computed") is not False
-        ):
-            raise ProtocolError("E75-X descriptive result identity changed")
-        e76_lite = _mapping(
-            exploration.get("e76x_lite_freeze"), "E76-X-lite freeze"
-        )
-        pure_selection = _mapping(
-            e76_lite.get("pure_normal_selection"),
-            "E76-X-lite pure-normal selection",
-        )
-        selected_frames = (
-            288, 302, 673, 505, 572, 111, 332, 635, 258, 464, 589, 504,
-            681, 443, 201, 592, 99, 45, 602, 502, 401, 265, 415, 106,
-            196, 87, 354, 10, 652, 536, 603, 391, 406, 672, 663, 343,
-            494, 271, 234, 110, 294, 121, 562, 148, 468, 125, 540, 251,
-            416, 616, 33, 594, 526, 633, 636, 523, 541, 359, 363, 476,
-            317, 533, 608, 51,
-        )
-        selection_payload = dict(pure_selection)
-        selection_sha256 = selection_payload.pop("selection_sha256", None)
-        reproduced_selection_sha256 = hashlib.sha256(
-            json.dumps(
-                selection_payload, sort_keys=True, separators=(",", ":")
-            ).encode("utf-8")
-        ).hexdigest()
-        if (
-            e76_lite.get("version") != "E76-X-lite-v1"
-            or e76_lite.get("status") != "frozen_before_any_safety_result"
-            or e76_lite.get("development_worlds")
-            != "all 23 E63 common-domain worlds"
-            or e76_lite.get("normal_control")
-            != "all valid rendered normal-control points in the 23 development worlds"
-            or e76_lite.get("moving_normal") != "all 13011 E61 moving-normal points"
-            or pure_selection.get("namespace")
-            != "E76-X-lite-pure-normal-frame-v1"
-            or pure_selection.get("partition") != "train"
-            or pure_selection.get("sequence_id") != 201
-            or pure_selection.get("source_artifact_sha256")
-            != "8d3e08e0512dc70a75d2279cfb4515bc960bbfda4f35a872c4a76e9dad69d0e0"
-            or pure_selection.get("hash_payload")
-            != "UTF-8 namespace:partition:sequence_id:frame_id"
-            or pure_selection.get("ranking")
-            != "ascending SHA-256 digest, then ascending frame_id"
-            or tuple(pure_selection.get("selected_frame_ids", ()))
-            != selected_frames
-            or pure_selection.get("selected_frame_count") != 64
-            or pure_selection.get("selected_point_count") != 3_955_039
-            or selection_sha256
-            != "d8c2989066d4352182fe998758018631fb493be67a825fa1cffac10a333133ad"
-            or reproduced_selection_sha256 != selection_sha256
-            or pure_selection.get("seed_or_namespace_search_forbidden") is not True
-            or tuple(e76_lite.get("models", ()))
-            != ("B0", "B1 seed 0", "B1 seed 1")
-            or e76_lite.get("continuation_reference") != 0.03
-            or e76_lite.get("continuation_rule")
-            != "continue to E78-X iff every two-seed mean signed worsening is at most 0.03; otherwise stop for scientific safety review"
-            or e76_lite.get("formal_e76_or_gate2_verdict_forbidden") is not True
-            or e76_lite.get("full_e76x_status")
-            != "deferred intact to the later three-seed confirmation track"
-        ):
-            raise ProtocolError("E76-X-lite freeze identity changed")
-        e76_result = _mapping(
-            exploration.get("e76x_lite_result"), "E76-X-lite result"
-        )
-        safety_measure = tuple(
-            tuple(row) for row in e76_result.get("safety_measure", ())
-        )
-        seed_worsening = tuple(
-            tuple(row) for row in e76_result.get("seed_safety_worsening", ())
-        )
-        if (
-            e76_result.get("status")
-            != "execution_complete_safety_review_required"
-            or e76_result.get("artifact_path")
-            != "runs/ajae/e76x_lite_b1_safety.npz"
-            or e76_result.get("artifact_sha256")
-            != "0826724f6939afaadf0d097c4359ced1f61eb6b6f114211306ef437a832c99c7"
-            or e76_result.get("scientific_array_sha256")
-            != "2bab9994dd32a9be85448b73926da7f7ec52c045c00ee158f3f0f406f52d7f5f"
-            or e76_result.get("execution_protocol_sha256")
-            != "30434c141cc4ca535808f5996dde9bf8ec98b6656c75047f41b697d15b27d4a9"
-            or e76_result.get("formal_e76_adjudicated") is not False
-            or e76_result.get("formal_gate2_adjudicated") is not False
-            or tuple(e76_result.get("safety_measure_order", ()))
-            != (
-                "pure_normal_FPR", "normal_control_FPR",
-                "moving_normal_FPR", "development_FPR95",
-            )
-            or safety_measure
-            != (
-                (0.8388513994425846, 0.8859360610445994, 0.511490277457536, 0.3711824257866622),
-                (0.18886691129973687, 0.9998684383633732, 0.9905464606871108, 0.0768848032564733),
-                (0.2764086523546291, 0.6036047888435732, 0.76170163707632, 0.06936114080439783),
-            )
-            or seed_worsening
-            != (
-                (-0.6499844881428477, 0.11393237731877381, 0.4790561832295749, -0.29429762253018893),
-                (-0.5624427470879555, -0.2823312722010263, 0.25021135961878405, -0.3018212849822644),
-            )
-            or tuple(e76_result.get("mean_safety_worsening", ()))
-            != (-0.6062136176154016, -0.08419944744112623, 0.36463377142417946, -0.29805945375622667)
-            or e76_result.get("continuation_reference") != 0.03
-            or e76_result.get("continuation_reference_satisfied") is not False
-            or e76_result.get("next_node") is not None
-            or e76_result.get("e78x_locked") is not True
-        ):
-            raise ProtocolError("E76-X-lite result identity changed")
-        visual = _mapping(exploration.get("e76v1_freeze"), "E76-V1 freeze")
-        group_a = _mapping(visual.get("group_a"), "E76-V1 group A")
-        group_b = _mapping(visual.get("group_b"), "E76-V1 group B")
-        selected_worlds = _mapping(
-            group_a.get("selected_world_ids"), "E76-V1 selected worlds"
-        )
-        visual_source = _mapping(
-            visual.get("source_export"), "E76-V1 source export"
-        )
-        review = _mapping(visual.get("review_freeze"), "E76-V1 review freeze")
-        if (
-            visual.get("version") != "E76-V1-v2-display"
-            or visual.get("status")
-            != "descriptive_review_complete"
-            or visual.get("output_directory") != "runs/ajae/e76_v1"
-            or visual.get("output_format")
-            != "27 RGB-only binary_little_endian PLY 1.0 files plus one aligned NPZ attribute archive and one JSON manifest"
-            or visual.get("maximum_ply_files") != 27
-            or visual_source.get("directory") != "runs/ajae/e76_v1_source"
-            or visual_source.get("manifest_sha256")
-            != "840b868456958cbdd25e63fa60e6f759c494e215e6ddf6bb33caea95a6b5b755"
-            or visual_source.get("model_recomputation_forbidden") is not True
-            or group_a.get("source_artifact_sha256")
-            != "b14efc1aad86ac67b5bf7c8631f02b2e68664e071b747b7b210d5f7a30f5d123"
-            or tuple(group_a.get("eligible_world_ids", ()))
-            != tuple(world for world in range(24) if world != 5)
-            or group_a.get("difficulty_field")
-            != "selected_descriptor[:,4] = proxy_Nvis"
-            or group_a.get("strata_rule")
-            != "sort by (proxy_Nvis, world_id), split contiguous order with numpy.array_split into sizes [8,8,7] named low/mid/high"
-            or group_a.get("within_stratum_rule")
-            != "take two smallest world_id values"
-            or tuple(selected_worlds.get("low", ())) != (1, 2)
-            or tuple(selected_worlds.get("mid", ())) != (0, 14)
-            or tuple(selected_worlds.get("high", ())) != (8, 9)
-            or group_a.get("selection_sha256")
-            != "282cd2b5390547813d57e56a39cda72d2bbdf06b5fc86060dea1f0cff113ea04"
-            or tuple(group_a.get("variants", ()))
-            != (
-                "base_real", "normal_control_overlay",
-                "anomaly_proxy_overlay", "anomaly_proxy_only",
-            )
-            or tuple(group_a.get("ply_properties", ()))
-            != (
-                "x", "y", "z", "red", "green", "blue",
-            )
-            or tuple(group_a.get("attribute_properties", ()))
-            != ("intensity", "point_source", "semantic_id")
-            or group_b.get("source_artifact_sha256")
-            != "8d3e08e0512dc70a75d2279cfb4515bc960bbfda4f35a872c4a76e9dad69d0e0"
-            or group_b.get("eligible_frames")
-            != "all 273 E61 frames with at least one moving-normal point"
-            or group_b.get("selection_statistic")
-            != "for each frame, average B1 score over all moving-normal points separately for seeds 0 and 1, then average the two seed means"
-            or group_b.get("ranking")
-            != "descending selection statistic, then ascending frame_id"
-            or group_b.get("selected_frame_count") != 3
-            or group_b.get("result_driven_diagnostic_selection") is not True
-            or tuple(group_b.get("ply_properties", ()))
-            != (
-                "x", "y", "z", "red", "green", "blue",
-            )
-            or tuple(group_b.get("attribute_properties", ()))
-            != (
-                "intensity", "is_moving_normal", "semantic_id", "range", "b0_score",
-                "b1_seed0_score", "b1_seed1_score", "pred_b0_A",
-                "pred_b0_B", "pred_b1_seed0_A", "pred_b1_seed0_B",
-                "pred_b1_seed1_A", "pred_b1_seed1_B",
-            )
-            or review.get("reviewer_count") != 1
-            or review.get("pass_fail_forbidden") is not True
-            or visual.get("e78x_remains_locked") is not True
-            or visual.get("public_real_ood_sequences_remain_sealed") is not True
-            or visual.get("hidden_test_sequences_remain_sealed") is not True
-        ):
-            raise ProtocolError("E76-V1 freeze identity changed")
-        visual_result = _mapping(
-            exploration.get("e76v1_result"), "E76-V1 result"
-        )
-        recalculation = _mapping(
-            visual_result.get("ground_contact_recalculation"),
-            "E76-V1 ground-contact recalculation",
-        )
-        selected_b = visual_result.get("group_b_selected")
-        if (
-            visual_result.get("status")
-            != "descriptive_review_complete_no_pass_fail"
-            or visual_result.get("manifest_path")
-            != "runs/ajae/e76_v1/manifest.json"
-            or visual_result.get("manifest_sha256")
-            != "2b8de48df52004a008e065408014f876020005fee12f3a240d2a2c7f2d0af4ed"
-            or visual_result.get("attribute_archive_sha256")
-            != "ecde4b8efcad2ba8a0dbeac8840682f4e37a24d700e68467af7019533d1fa7da"
-            or visual_result.get("attribute_scientific_array_sha256")
-            != "c541d5263f5b64395fec93dcde451b8b9465032f8748819726755f129559f271"
-            or visual_result.get("source_export_manifest_sha256")
-            != "840b868456958cbdd25e63fa60e6f759c494e215e6ddf6bb33caea95a6b5b755"
-            or visual_result.get("execution_protocol_sha256")
-            != "401bd028b13369b13abbaf6b7e867b0dcb5e6d03dd4f07d52b988bf4c3c73a8f"
-            or visual_result.get("execution_runner_commit")
-            != "cc9ea758af08526fa3f52e7cae3ce651a6407318"
-            or visual_result.get("execution_runner_sha256")
-            != "85ff378afab2e5d049e5561e5918a3d2b5bc82a577196648506657417fe973c5"
-            or visual_result.get("ply_file_count") != 27
-            or visual_result.get("attribute_array_count") != 111
-            or visual_result.get("viewer_scalar_field_count") != 0
-            or tuple(visual_result.get("group_a_world_ids", ()))
-            != (1, 2, 0, 14, 8, 9)
-            or not isinstance(selected_b, list)
-            or tuple(item.get("frame_id") for item in selected_b)
-            != (200, 194, 167)
-            or tuple(item.get("moving_points") for item in selected_b)
-            != (42, 67, 42)
-            or visual_result.get("total_bytes_including_manifest_and_attributes")
-            != 44146724
-            or visual_result.get("source_payload_preserved_exactly") is not True
-            or visual_result.get("visual_review_performed") is not True
-            or visual_result.get("scientific_visual_interpretation_valid") is not True
-            or visual_result.get("interpretation_status")
-            != "DESCRIPTIVE REVIEW COMPLETE / NO PASS/FAIL"
-            or tuple(recalculation.get("reviewed_world_ids", ())) != (2, 8)
-            or tuple(recalculation.get("mesh_contact_error_m", ()))
-            != (0.0161, 0.0158)
-            or tuple(recalculation.get("normal_control_minimum_visible_clearance_m", ()))
-            != (0.2841, 0.2376)
-            or tuple(recalculation.get("anomaly_proxy_minimum_visible_clearance_m", ()))
-            != (0.0636, 0.1089)
-            or recalculation.get("renderer_or_e48_invalidated") is not False
-            or visual_result.get("moving_normal_visual_interpretation")
-            != "selected moving-normal clusters contain too few points for reliable shape attribution"
-            or visual_result.get("formal_gate_adjudicated") is not False
-            or visual_result.get("e76x_lite_result_unchanged") is not True
-            or visual_result.get("e78x_locked") is not True
-        ):
-            raise ProtocolError("E76-V1 result identity changed")
-        c1 = _mapping(exploration.get("e76c1_freeze"), "E76-C1 freeze")
-        c1_hash = _mapping(c1.get("input_sha256"), "E76-C1 input hashes")
-        c1_result = _mapping(
-            exploration.get("e76c1_result"), "E76-C1 result"
-        )
-        full = _mapping(
-            exploration.get("full_ajae_x_freeze"), "Full AJAE-X freeze"
-        )
-        f0 = _mapping(full.get("f0_preflight"), "AJAE-F0-X freeze")
-        f0_result = _mapping(f0.get("result"), "AJAE-F0-X result")
-        f1_entry = _mapping(full.get("f1_entry"), "AJAE-F1-X entry")
-        p1 = _mapping(f1_entry.get("p1_boundary_amendment"), "AJAE-F1-X P1")
-        p2 = _mapping(
-            f1_entry.get("p2_semantic_training_preflight"), "AJAE-F1-X P2"
-        )
-        p2_result = _mapping(p2.get("result"), "AJAE-F1-X P2 result")
-        p1_pure = _mapping(p1.get("pure_normal_q0"), "P1 pure-normal q0")
-        p1_moving = _mapping(p1.get("moving_normal_q0"), "P1 moving-normal q0")
-        aborted = _mapping(full.get("full_grid_v4_aborted"), "aborted v4 full grid")
-        fast = _mapping(full.get("fast_viability"), "v5 fast viability")
-        fast_window = _mapping(fast.get("window_schedule"), "v5 window schedule")
-        fast_stages = _mapping(fast.get("stages"), "v5 stages")
-        fast_preview = _mapping(fast_stages.get("preview"), "v5 preview")
-        fast_screen = _mapping(fast_stages.get("screen"), "v5 screen")
-        fast_final = _mapping(fast_stages.get("final"), "v5 final")
-        fast_selection = _mapping(
-            fast.get("checkpoint_selection"), "v5 checkpoint selection"
-        )
-        fast_safety = _mapping(fast.get("lite_safety"), "v5 lite safety")
-        if (
-            c1.get("version") != "E76-C1-v1"
-            or c1.get("status") != "frozen_before_clearance_computation"
-            or c1.get("population")
-            != "all 1347 frozen E45B-v2 matched control/proxy pairs without reuse, rematching, candidate expansion, or result-driven selection"
-            or c1_hash != {
-                "bank": "d3088e29e4c6179999ccb34088dae558fa402bf6b1455394acdc99cac4118463",
-                "units": "bab7198607119dbe0737b7cf7e55a2a03016b9adf4cba60d9d2ab2bf90a0f0e3",
-                "pairs": "19ecbc843cc5325e3f12497c50e5855388f0f5caa581179f6fd6639613a8ecfd",
-                "e48": "b55ad1c7fecf030f4f3f22c5ba4423f1cfeaae46a4d763565ab22c97ad6206ce",
-                "calibration": "b532b7e04d9025233b2768b8fb36287e477f62f20a3ff685a62f4a4a29bfefe0",
-            }
-            or tuple(c1.get("descriptive_quantiles", ()))
-            != (0.0, 0.05, 0.25, 0.5, 0.75, 0.95, 1.0)
-            or c1.get("descriptive_quantile_method") != "NumPy linear"
-            or c1.get("paired_difference")
-            != "normal_control_minus_anomaly_proxy"
-            or tuple(c1.get("paired_statistics", ()))
-            != (
-                "mean", "median", "q05", "q95", "p_gt_0",
-                "p_gt_0.05m", "p_gt_0.10m",
-            )
-            or c1.get("fold_rule")
-            != "exact E48-center-v1 center-frame hash five-fold plan with test/train/excluded pair counts [61,46,91,74,97]/[913,1004,800,861,832]/[373,297,456,412,418] and 369 OOF pairs"
-            or tuple(c1.get("models", ()))
-            != (
-                "standardized L2 logistic regression C=1 lbfgs tol=1e-4 max_iter=5000 random_state=4800",
-                "Gini decision tree max_depth=3 min_samples_leaf=64 random_state=4801",
-            )
-            or c1.get("bootstrap")
-            != "2000 matched-pair cluster replicates with NumPy SeedSequence(4800,2000); each draw carries both label endpoints"
-            or tuple(c1.get("metric_order", ()))
-            != ("roc_auc", "balanced_accuracy", "control_recall", "proxy_recall")
-            or c1.get("direct_degeneracy_rule")
-            != "any one frozen model simultaneously has 2.5th-percentile AUC at least 0.95 and balanced accuracy at least 0.90"
-            or c1.get("descriptive_difference_is_nonblocking") is not True
-            or c1.get("training_stu_or_model_forward_forbidden") is not True
-            or c1.get("renderer_modification_forbidden") is not True
-            or c1.get("public_real_ood_sequences_remain_sealed") is not True
-            or c1.get("hidden_test_sequences_remain_sealed") is not True
-            or c1_result.get("status")
-            != "execution_complete_no_direct_clearance_degeneracy"
-            or c1_result.get("artifact_path")
-            != "runs/ajae/e76_c1_visible_clearance.npz"
-            or c1_result.get("artifact_sha256")
-            != "d82485fd830034d065bb9156ec0ec130c57076a730bd2ecba281573aeed1a216"
-            or c1_result.get("scientific_array_sha256")
-            != "25d8ac747ed01712be8f2e2d06f0a73caaa3c42236206c8b8c3443e4a22e8641"
-            or c1_result.get("protocol_sha256")
-            != "00f8959ec2c483c0c1a683cc72a0380c253f80dc25ee8070be2c3f69262e4098"
-            or (
-                c1_result.get("matched_pairs"),
-                c1_result.get("visible_units"),
-                c1_result.get("oof_pairs"),
-            ) != (1347, 2694, 369)
-            or tuple(c1_result.get("normal_control_clearance_m", ()))
-            != (
-                0.001687041409228148, 0.010700240620766613,
-                0.031108320961035787, 0.06829576769507004,
-                0.13119311246977655, 0.22811265405322204,
-                0.9115055899069934,
-            )
-            or tuple(c1_result.get("anomaly_proxy_clearance_m", ()))
-            != (
-                0.0012552380594685556, 0.012301679031201324,
-                0.03265636473764874, 0.061932802422266446,
-                0.11168806765870118, 0.1986637390279114,
-                0.4637956687606965,
-            )
-            or tuple(c1_result.get("paired_control_minus_proxy_summary", ()))
-            != (
-                0.012711116847071465, 0.0010496605671727888,
-                -0.12014395053699983, 0.17856108062053896,
-                0.5063103192279139, 0.25686711210096513,
-                0.12991833704528583,
-            )
-            or tuple(tuple(row) for row in c1_result.get("model_metric", ()))
-            != (
-                (0.5194953033541175, 0.5271002710027101,
-                 0.43902439024390244, 0.6151761517615176),
-                (0.5012558662171988, 0.532520325203252,
-                 0.2899728997289973, 0.7750677506775068),
-            )
-            or tuple(tuple(row) for row in c1_result.get("bootstrap_ci_low", ()))
-            != (
-                (0.4835387886399189, 0.497289972899729,
-                 0.3902439024390244, 0.5663956639566395),
-                (0.46781851998736795, 0.5040650406504065,
-                 0.24383468834688346, 0.7317073170731707),
-            )
-            or tuple(c1_result.get("model_fail", ())) != (False, False)
-            or c1_result.get("outcome")
-            != "NO DIRECT CLEARANCE DEGENERACY DETECTED"
-            or c1_result.get("visible_clearance_known_limitation_retained")
-            is not True
-            or c1_result.get("formal_gate_adjudicated") is not False
-            or c1_result.get("next_node") != "AJAE-F0-X"
-            or full.get("version") != "AJAE-full-first-v5-fast-viability"
-            or full.get("status")
-            != "AJAE-F1-X-v5_fast_seed0_frozen_before_initialization"
-            or f0.get("status") != "execution_complete_pass"
-            or (f0.get("partition"), f0.get("sequence_id"), f0.get("center_frame"))
-            != ("train", 206, 199)
-            or _signed_int_tuple(f0.get("frame_offsets"), "AJAE-F0-X offsets")
-            != (-2, -1, 0, 1, 2)
-            or f0.get("points_per_frame") != 16
-            or f0.get("point_selection")
-            != "ascending frozen canonical ray identity within each real source frame"
-            or tuple(f0.get("checks", ()))
-            != (
-                "B3 uses q=-2,-1,0,+1,+2",
-                "nonzero-delta temporal edges are active",
-                "all five q positions use the same unweighted supervision rule",
-                "STU parameters remain frozen and gradient-free",
-                "B4 fuses by frame-ray identity",
-                "B4 averages probabilities rather than logits",
-                "B4 occurrence count equals its averaging denominator",
-                "one fixed micro real window forward and backward is finite",
-            )
-            or f0.get("model_quality_use_forbidden") is not True
-            or f0_result.get("artifact_sha256")
-            != "f7db876178e0b80a581902a682e4dbec81126f5fb4e2232cc1dd83abf81f2b4b"
-            or f0_result.get("scientific_array_sha256")
-            != "547c3f09cf0b2a1154424b3a7cc6407ee80431f9e630a712b0dc655d4bcb76c1"
-            or f0_result.get("total_errors") != 0
-            or f0_result.get("model_quality_evaluated") is not False
-            or f0_result.get("passed") is not True
-            or f1_entry.get("role")
-            != "two entry prerequisites inside AJAE-F1-X, not new scientific experiment nodes"
-            or p1.get("status")
-            != "frozen_result_blind_before_any_B3_training_or_performance_result"
-            or p1.get("b2_b3_prediction")
-            != "q=0 only; noncentral q must not fill boundary points"
-            or p1.get("paired_safety_rule")
-            != "every paired safety difference uses the intersection of the two formally defined point-identity domains"
-            or (
-                p1_pure.get("partition"), p1_pure.get("sequence_id"),
-                tuple(p1_pure.get("frame_range", ())), p1_pure.get("points"),
-                p1_pure.get("excluded_boundary_points"),
-            ) != ("train", 201, (6, 679), 48638267, 190240)
-            or (
-                p1_moving.get("partition"), p1_moving.get("sequence_id"),
-                tuple(p1_moving.get("frame_range", ())), p1_moving.get("points"),
-                p1_moving.get("excluded_boundary_points"),
-            ) != ("train", 206, (2, 446), 12820, 191)
-            or _mapping(p1.get("lite_pure_normal_q0"), "P1 lite q0").get(
-                "frames"
-            ) != 63
-            or p1.get("b4_full_domain_safety_report_required") is not True
-            or p2.get("status") != "execution_complete_pass"
-            or (
-                p2.get("seed"), p2.get("world_index"), p2.get("world_type"),
-                p2.get("world_seed"), p2.get("center_frame"),
-            ) != (0, 2, "mixed", 1027531, 2)
-            or tuple(p2.get("frame_ids", ())) != (0, 1, 2, 3, 4)
-            or _mapping(
-                p2.get("identity_only_visible_counts"), "P2 visible counts"
-            ) != {"normal_control": 590, "anomaly_proxy": 3833}
-            or len(tuple(p2.get("checks", ()))) != 7
-            or p2.get("failure_class") != "implementation_defect_only"
-            or p2.get("scientific_verdict_forbidden") is not True
-            or p2_result.get("artifact_path")
-            != "runs/ajae/ajae_f1_x_semantic_preflight.npz"
-            or p2_result.get("artifact_sha256")
-            != "07a86fd71a94398aa829a1059b3516962ec0804a0df9c5686f7e97a97f373f6b"
-            or p2_result.get("scientific_array_sha256")
-            != "1d2aec9e53c00fbe94d82a86d261565a9da456b531f5872126fda84ae534a87f"
-            or p2_result.get("execution_protocol_sha256")
-            != "9afd77019facc69743f4506a5be44f82e1d35f788f2d635c1bdaae542a45232f"
-            or p2_result.get("execution_commit")
-            != "dd07df34bb260ce919ca148d8984eb7a664b80b5"
-            or (
-                p2_result.get("control_points"), p2_result.get("proxy_points"),
-                p2_result.get("total_errors"), p2_result.get("passed"),
-            ) != (590, 3833, 0, True)
-            or p2_result.get("model_quality_evaluated") is not False
-            or aborted.get("status") != "COMPUTE-BUDGET ABORTED RESULT-BLIND"
-            or aborted.get("completed_windows") != 221
-            or aborted.get("cursor") != {
-                "world_index": 0,
-                "block_index": 14,
-                "window_index": 0,
-                "windows_completed": 221,
-                "update_index": 221,
-                "phase": "windows",
-            }
-            or aborted.get("progress_path")
-            != "runs/ajae/B3-v4-full-grid-aborted/seed-0/progress.pt"
-            or aborted.get("progress_bytes") != 14401505
-            or aborted.get("progress_sha256")
-            != "a22d0cb910d10f01ededeb5f08821b6b38682bdc1b5cc367e3358d726593018a"
-            or aborted.get("performance_metric_exposed") is not False
-            or aborted.get("model_artifact_exists") is not False
-            or aborted.get("result_artifact_exists") is not False
-            or aborted.get("reuse_by_fast_v5_forbidden") is not True
-            or fast.get("version")
-            != "AJAE-F1-X-v5-fast-whole-method-viability-v1"
-            or fast.get("output_directory") != "runs/ajae/B3-fast-v5"
-            or fast.get("seed") != 0
-            or fast.get("fresh_initialization_required") is not True
-            or tuple(fast_window.get("legal_center_range", ())) != (2, 446)
-            or fast_window.get("stride") != 5
-            or fast_window.get("phase_modulus") != 5
-            or fast_window.get("windows_per_world") != 89
-            or fast_window.get("five_frame_input_unchanged") is not True
-            or fast_window.get("all_five_positions_supervised_unchanged") is not True
-            or fast_window.get("block_size") != 16
-            or (
-                fast_preview.get("completed_worlds"),
-                fast_preview.get("training_windows"),
-                tuple(fast_preview.get("development_world_ids", ())),
-            ) != (4, 356, (1, 2, 0, 14, 8, 9))
-            or fast_preview.get("descriptive_only") is not True
-            or fast_preview.get("checkpoint_selection_forbidden") is not True
-            or fast_preview.get("stopping_forbidden") is not True
-            or (
-                fast_screen.get("completed_worlds"),
-                fast_screen.get("training_windows"),
-                fast_screen.get("development_worlds"),
-            ) != (12, 1068, 23)
-            or fast_screen.get("collapse_rule")
-            != "STOP iff AP_B4 <= AP_B0 and moving_normal_FPR_B4 >= moving_normal_FPR_B1_seed0"
-            or (
-                fast_final.get("completed_worlds"),
-                fast_final.get("training_windows"),
-                fast_final.get("development_worlds"),
-            ) != (25, 2225, 23)
-            or tuple(fast_selection.get("eligible_completed_worlds", ()))
-            != (12, 25)
-            or fast_selection.get("preview_is_ineligible") is not True
-            or fast_selection.get("unchanged_e63_tie_tolerance") != 0.001
-            or tuple(fast_safety.get("q0_legal_frame_range", ())) != (6, 679)
-            or fast_safety.get("q0_frame_count") != 63
-            or fast_safety.get("q0_point_count") != 3955017
-            or fast_safety.get("moving_normal_q0_points") != 12820
-            or tuple(fast_safety.get("pure_normal_frame_ids", ()))
-            != tuple(pure_selection.get("selected_frame_ids", ()))
-            or fast_safety.get(
-                "b4_full_domain_reports_all_64_pure_frames_and_13011_moving_points"
-            ) is not True
-            or fast_safety.get("paired_comparisons_require_identical_point_identities")
-            is not True
-            or fast.get("formal_gate_claim_forbidden") is not True
-            or fast.get("formal_three_seed_standard_unchanged") is not True
-            or fast.get("B2_B3_ablation_status_unchanged") is not True
-            or _mapping(fast.get("input_artifact_sha256"), "v5 input hashes")
-            != {
-                "E57": "b14efc1aad86ac67b5bf7c8631f02b2e68664e071b747b7b210d5f7a30f5d123",
-                "E61": "8d3e08e0512dc70a75d2279cfb4515bc960bbfda4f35a872c4a76e9dad69d0e0",
-                "E63": "5dbf99eaa59a05a83774e42beb6b8d7a95cf9309ebd42ab7870604a20d410dd9",
-                "E72": "208487d5c91b131856e908988cf6d955305fa09364450d509e32f617295b5863",
-                "E75-X": "0d90c4d6b118819dfec87ae41ec5a0646f3071c87aad73cc267cb5de503fdfc0",
-                "E76-X-lite": "0826724f6939afaadf0d097c4359ced1f61eb6b6f114211306ef437a832c99c7",
-            }
-            or full.get("b2_e78x_status")
-            != "deferred ablation unlocked only after Full AJAE-X supports whole-method viability"
-            or full.get("seed0_stop_rule")
-            != "stop before seed 1 only if AP_B4 is at most AP_B0 and moving-normal FPR_B4 is at least B1 seed0 moving-normal FPR"
-            or full.get("formal_gate2_and_gate3_thresholds_changed") is not False
-            or full.get("public_real_ood_sequences_remain_sealed") is not True
-            or full.get("hidden_test_sequences_remain_sealed") is not True
-        ):
-            raise ProtocolError("E76-C1 or Full AJAE-X freeze identity changed")
-        difficulty = _mapping(development["difficulty_statistics"], "difficulty statistics")
-        if set(difficulty) != {"Nvis", "O", "d", "V"}:
-            raise ProtocolError("development difficulty must define Nvis, O, d, and V")
-
-    @staticmethod
-    def _validate_e63(specification: Mapping[str, object]) -> None:
-        """Keep the approved E63-v2 preregistration machine-readable."""
-
-        _exact_keys(
-            specification,
-            {
-                "version", "status", "source_worlds", "common_domain",
-                "safety_crossfit", "hierarchical_paired_bootstrap",
-                "common_domain_paired_bootstrap",
-                "shared_training", "sealed_data", "identity_artifact",
-            },
-            "development.e63_freeze",
-        )
-        if specification.get("version") != "E63-v2" or specification.get(
-            "status"
-        ) not in {"frozen_before_identity_generation", "formal_pass"}:
-            raise ProtocolError("E63-v2 status is invalid")
-        source = _mapping(specification["source_worlds"], "E63 source worlds")
-        if (
-            source.get("artifact") != "runs/ajae/e57_development_worlds.npz"
-            or source.get("artifact_sha256")
-            != "b14efc1aad86ac67b5bf7c8631f02b2e68664e071b747b7b210d5f7a30f5d123"
-            or source.get("scientific_array_sha256")
-            != "590c467da2dec0a161688f2587dc1c37cea2b0f42f326b9918fd6dc9df81f6ec"
-            or source.get("worlds") != 24
-            or source.get("world_id_array") != "selected_world_id"
-            or source.get("world_identity_array") != "selected_candidate_sha256"
-            or source.get("center_frame_array") != "selected_center_frame"
-        ):
-            raise ProtocolError("E63 source-world identity changed")
-        domain = _mapping(specification["common_domain"], "E63 common domain")
-        if (
-            (domain.get("partition"), domain.get("sequence_id")) != ("train", 201)
-            or tuple(domain.get("available_frame_range", ())) != (4, 681)
-            or _signed_int_tuple(
-                domain.get("required_source_offsets"), "E63 source offsets"
-            ) != (-4, -3, -2, -1, 0, 1, 2)
-            or domain.get("target") != "center q=0"
-            or tuple(domain.get("applies_to", ()))
-            != tuple(f"B{index}" for index in range(6))
-            or domain.get("identity_only_before_training") is not True
-            or domain.get("padding_or_zero_fill_forbidden") is not True
-        ):
-            raise ProtocolError("E63 common comparison domain changed")
-        crossfit = _mapping(specification["safety_crossfit"], "E63 safety crossfit")
-        if (
-            crossfit.get("namespace") != "E63-safety-crossfit-v1"
-            or crossfit.get("hash_payload")
-            != "UTF-8 namespace, then colon byte, then lowercase hexadecimal world identity"
-            or crossfit.get("assignment")
-            != "ascending SHA-256 rank; first 12 Fold A and last 12 Fold B"
-            or crossfit.get("source_worlds") != 24
-            or tuple(crossfit.get("fold_sizes", ())) != (12, 12)
-            or crossfit.get("threshold_comparison")
-            != "score strictly greater than threshold"
-            or crossfit.get("seed_search_forbidden") is not True
-        ):
-            raise ProtocolError("E63 safety cross-fit identity changed")
-        bootstrap = _mapping(
-            specification["hierarchical_paired_bootstrap"], "E63 bootstrap"
-        )
-        if (
-            bootstrap.get("namespace")
-            != "E63-hierarchical-paired-bootstrap-v1"
-            or bootstrap.get("generator") != "NumPy PCG64"
-            or bootstrap.get("seed") != 63002026
-            or bootstrap.get("replicates") != 5000
-            or tuple(bootstrap.get("training_seed_population", ())) != (0, 1, 2)
-            or bootstrap.get("training_seed_draws_per_replicate") != 3
-            or bootstrap.get("development_world_population") != 24
-            or bootstrap.get("development_world_draws_per_replicate") != 24
-            or bootstrap.get("replacement") is not True
-            or bootstrap.get("paired_models_share_realized_indices") is not True
-            or bootstrap.get("gate_lower_bound_percentile") != 2.5
-        ):
-            raise ProtocolError("E63 hierarchical paired bootstrap changed")
-        common_bootstrap = _mapping(
-            specification["common_domain_paired_bootstrap"],
-            "common-domain paired bootstrap",
-        )
-        if (
-            common_bootstrap.get("status") != "frozen_before_any_gate2_result"
-            or common_bootstrap.get("source_artifact_path")
-            != "runs/ajae/e75_bootstrap_identity.npz"
-            or common_bootstrap.get("source_artifact_sha256")
-            != "1bae1dbe4b5ded34cf9cebd818b4877368973114c0e7046840c0ff342fb73b9d"
-            or common_bootstrap.get("namespace")
-            != "E75-common-domain-bootstrap-correction-v1"
-            or common_bootstrap.get("generator") != "NumPy PCG64"
-            or common_bootstrap.get("seed") != 63002026
-            or common_bootstrap.get("replicates") != 5000
-            or tuple(common_bootstrap.get("training_seed_population", ()))
-            != (0, 1, 2)
-            or common_bootstrap.get("training_seed_draws_per_replicate") != 3
-            or tuple(common_bootstrap.get("development_world_ids", ()))
-            != tuple(world_id for world_id in range(24) if world_id != 5)
-            or common_bootstrap.get("development_world_draws_per_replicate") != 23
-            or common_bootstrap.get("replacement") is not True
-            or common_bootstrap.get("paired_models_share_realized_indices") is not True
-            or tuple(common_bootstrap.get("applies_to", ()))
-            != ("E75", "E81", "E82", "E88")
-            or common_bootstrap.get("new_random_arrays_for_these_comparisons_forbidden")
-            is not True
-        ):
-            raise ProtocolError("common-domain paired bootstrap changed")
-        shared = _mapping(specification["shared_training"], "E63 shared training")
-        if (
-            tuple(shared.get("conditions", ())) != ("B1", "B2", "B3")
-            or tuple(shared.get("seeds", ())) != (0, 1, 2)
-            or shared.get("optimizer") != "AdamW"
-            or shared.get("learning_rate") != 1.0e-4
-            or shared.get("weight_decay") != 1.0e-4
-            or shared.get("micro_batch") != 1
-            or shared.get("gradient_accumulation") != 8
-            or shared.get("maximum_complete_worlds_per_seed") != 25
-            or shared.get("evaluate_every_complete_worlds") != 5
-            or shared.get("patience_evaluations") != 4
-            or dict(_mapping(shared.get("world_type_probabilities"), "E63 world types"))
-            != {"pure_normal": 0.2, "control_only": 0.2, "mixed": 0.4, "anomaly_only": 0.2}
-            or shared.get("same_budget_and_checkpoint_rule_required") is not True
-        ):
-            raise ProtocolError("E63 shared training rule changed")
-        sealed = _mapping(specification["sealed_data"], "E63 sealed data")
-        if (
-            sealed.get("held_out_torus_worlds") != 6
-            or sealed.get("public_real_ood_sequences") != 19
-            or sealed.get("hidden_test_sequences") != 51
-            or sealed.get("all_forbidden_for_e63_identity_generation") is not True
-        ):
-            raise ProtocolError("E63 sealed-data boundary changed")
-        artifact = _mapping(specification["identity_artifact"], "E63 identity artifact")
-        if artifact.get("path") != "runs/ajae/e63_training_freeze.npz":
-            raise ProtocolError("E63 identity-artifact path changed")
-        if specification.get("status") == "formal_pass" and (
-            artifact.get("artifact_sha256")
-            != "5dbf99eaa59a05a83774e42beb6b8d7a95cf9309ebd42ab7870604a20d410dd9"
-            or artifact.get("scientific_array_sha256")
-            != "e0df86313f27524fba9ed1d2bc563d94def568d36925c184f13e41a72540d207"
-            or artifact.get("eligible_worlds") != 23
-            or artifact.get("excluded_worlds") != 1
-            or artifact.get("fold_a_worlds") != 12
-            or artifact.get("fold_b_worlds") != 12
-            or tuple(artifact.get("bootstrap_shape", ())) != (5000, 3, 5000, 24)
-            or artifact.get("independent_read_only_validation") is not True
-        ):
-            raise ProtocolError("E63 formal identity artifact is incomplete")
+        _exact_keys(training, keys, "training")
+        expected = {
+            "source_partition": "train", "source_sequence_id": 206,
+            "micro_batch": "one_complete_WindowWorld",
+            "effective_batch": "all_complete_WindowWorld_micro_batches_accumulated_into_one_optimizer_step",
+            "epoch": "one_complete_pass_over_the_frozen_window_train_bank",
+            "forced_partial_step_at_world_boundary": False,
+            "modes": ["tiny_overfit", "pilot", "formal"],
+            "deterministic_algorithms": True,
+        }
+        for name, value in expected.items():
+            _expect(training[name], value, f"training.{name}")
+        bank = _mapping(training["bank"], "training.bank")
+        _expect(bank, {
+            "name": "window_train_bank", "unit": "WindowWorld",
+            "shared_by": ["B1", "B2", "B3"],
+            "required_identity": ["five_source_frames", "WorldSpec", "renderer_identity", "STU_identity", "point_identity", "labels"],
+            "condition_invariants": ["same_five_aligned_points", "same_point_labels", "same_entry_order", "same_model_parameter_shapes_and_initialization", "same_loss", "same_optimizer"],
+        }, "training.bank")
+        _expect(training["loss"], {
+            "name": "effective_batch_empty_class_safe_balanced_binary_cross_entropy",
+            "aggregation": "first_sum_positive_and_negative_unreduced_losses_and_counts_over_the_entire_effective_batch_then_average_each_present_class",
+            "two_class_formula": "0.5*positive_loss_sum/positive_count+0.5*negative_loss_sum/negative_count",
+            "one_class_rule": "mean_loss_of_the_single_present_class",
+        }, "training.loss")
+        _expect(training["tiny_overfit"], {
+            "windows": 8, "maximum_updates": 500,
+            "pass_any": {"training_AP_minimum_percent": 99.0, "loss_strictly_below": 0.02},
+        }, "training.tiny_overfit")
+        _expect(training["pilot"], {
+            "windows": 128, "seeds": [1001, 1002],
+            "learning_rates": [0.00003, 0.0001, 0.0003],
+            "gradient_accumulation": [1, 2], "screen_updates": [50, 200, 600],
+            "schedulers_after_learning_rate_selection": ["constant", "five_percent_warmup_cosine"],
+            "weight_decay_after_scheduler_selection": [0.0, 0.00001, 0.0001],
+        }, "training.pilot")
+        formal = _mapping(training["formal"], "training.formal")
+        _exact_keys(formal, {"seeds", "recipe_status", "allowed_only_after"}, "training.formal")
+        _expect(formal["seeds"], [0, 1, 2], "training.formal.seeds")
+        if formal["recipe_status"] not in {
+            "pending_result_blind_R05_freeze", "frozen_result_blind_in_R05"
+        }:
+            raise ProtocolError("training.formal.recipe_status is not recognized")
+        _expect(formal["allowed_only_after"], "R05", "training.formal.allowed_only_after")
+        selection = _mapping(training["checkpoint_selection"], "checkpoint selection")
+        _exact_keys(selection, {"metric", "fusion_scope", "status"}, "checkpoint selection")
+        _expect(selection["metric"], "macro_mean_of_per_DevelopmentClipWorld_all_occurrence_fused_point_AP", "checkpoint metric")
+        _expect(selection["fusion_scope"], "within_one_frozen_world_identity_only", "checkpoint fusion scope")
+        _nonempty_string(selection["status"], "checkpoint selection status")
 
     @staticmethod
     def _validate_evaluation(evaluation: Mapping[str, object]) -> None:
-        if (
-            evaluation.get("minimum_range_m"), evaluation.get("maximum_range_m"),
-            evaluation.get("minimum_range_inclusive"), evaluation.get("maximum_range_inclusive"),
-            evaluation.get("minimum_anomaly_points"), evaluation.get("score_fusion"),
-        ) != (2.5, 50.0, True, True, 5, "equal_mean_of_probabilities_by_frame_and_canonical_ray"):
-            raise ProtocolError("official point range, frame gate, or probability fusion changed")
-        if tuple(evaluation.get("point_metrics", ())) != ("AP", "AUROC", "FPR95"):
-            raise ProtocolError("official point metrics changed")
-        equivalence = _mapping(
-            evaluation["evaluator_equivalence"],
-            "evaluation.evaluator_equivalence",
-        )
-        status = equivalence.get("status")
-        equivalence_keys = {
-            "version", "status", "scientific_role", "official", "fixtures",
-            "comparison", "forbidden_data", "pass_definition", "failure_route",
+        expected = {
+            "legal_window_starts": "every_start_with_five_real_consecutive_nonexcluded_frames",
+            "model_output_members": list(WINDOW_MEMBER_OFFSETS),
+            "real_sequence_fusion_key": ["partition", "sequence_id", "source_frame", "source_ray"],
+            "synthetic_fusion_key": ["world_identity", "source_frame", "source_ray"],
+            "fusion_value": "sigmoid_probability",
+            "fusion_reduction": "equal_arithmetic_mean_over_every_legal_window_occurrence",
+            "domain": "every_visible_return_covered_by_at_least_one_legal_five_scan_window",
+            "occurrence_count_strata": [1, 2, 3, 4, 5],
+            "minimum_range_m_inclusive": 2.5,
+            "maximum_range_m_inclusive": 50.0,
+            "minimum_anomaly_points_per_evaluated_frame": 5,
+            "point_metrics": ["AP", "AUROC", "FPR95"],
+            "official_evaluator_equivalence_required": True,
+            "sealed_validation_and_test_access": True,
         }
-        if status == "formal_pass":
-            equivalence_keys.add("result")
-        _exact_keys(
-            equivalence,
-            equivalence_keys,
-            "evaluation.evaluator_equivalence",
-        )
-        official = _mapping(equivalence["official"], "E62 official evaluator")
-        fixtures = _mapping(equivalence["fixtures"], "E62 fixtures")
-        numerical = _mapping(fixtures["numerical_fixture"], "E62 numerical fixture")
-        comparison = _mapping(equivalence["comparison"], "E62 comparison")
-        _exact_keys(
-            official,
-            {"repository", "commit", "source_file", "source_sha256"},
-            "E62 official evaluator",
-        )
-        _exact_keys(
-            fixtures,
-            {
-                "artifact", "artifact_sha256", "scientific_array_sha256",
-                "analytic_cases", "declared_range_boundaries_m",
-                "range_norm_semantics", "numerical_fixture",
-            },
-            "E62 fixtures",
-        )
-        _exact_keys(
-            numerical,
-            {"kind", "namespace", "pcg64_seed", "frames", "points_per_frame"},
-            "E62 numerical fixture",
-        )
-        _exact_keys(
-            comparison,
-            {
-                "discrete_exact", "metrics", "threshold_if_exposed",
-                "maximum_absolute_difference", "fpr95_tpr_rule",
-            },
-            "E62 comparison",
-        )
-        if (
-            equivalence.get("version") != "E62-v2"
-            or status not in {
-                "protocol_completed_before_fixture_freeze",
-                "fixtures_frozen_before_formal_comparison",
-                "formal_pass",
-            }
-            or (
-                official.get("repository"), official.get("commit"),
-                official.get("source_file"), official.get("source_sha256"),
-            )
-            != (
-                "/home/jasongao/Study/DynaCAN-deps/stu_dataset",
-                "8f0f09c2ca4bf7b665e0ae5919b4092ddae140a2",
-                "compute_point_level_ood.py",
-                "ed0330f80fbd3cd4cefafed33d6c747c51f2de521ef191e2868eb24f84b9ce61",
-            )
-            or fixtures.get("artifact") != "runs/ajae/e62_evaluator_fixtures.npz"
-            or tuple(fixtures.get("analytic_cases", ()))
-            != (
-                "range_ignore_and_post_filter_frame_gate",
-                "all_scores_tied",
-                "strict_tpr_above_0.95",
-                "mixed_repeated_scores",
-            )
-            or tuple(fixtures.get("declared_range_boundaries_m", ()))
-            != (2.499999, 2.5, 50.0, 50.000001)
-            or fixtures.get("range_norm_semantics")
-            != "numpy float32 norm exactly as the official evaluator"
-            or (
-                numerical.get("kind"), numerical.get("namespace"),
-                numerical.get("pcg64_seed"), numerical.get("frames"),
-                numerical.get("points_per_frame"),
-            )
-            != (
-                "frozen non-symbolic constructed numerical predictions",
-                "E62-numerical-fixture-v1",
-                62002026,
-                10,
-                96,
-            )
-            or tuple(comparison.get("metrics", ())) != ("AP", "AUROC", "FPR95")
-            or comparison.get("threshold_if_exposed") is not True
-            or _number(
-                comparison.get("maximum_absolute_difference"),
-                "E62 metric tolerance",
-            )
-            != 1.0e-10
-            or comparison.get("fpr95_tpr_rule")
-            != "first official ROC threshold with TPR strictly greater than 0.95"
-            or set(equivalence.get("forbidden_data", ()))
-            != {
-                "public real-OOD 19 sequences",
-                "hidden-test 51 sequences",
-                "any real anomaly sequence",
-            }
-            or equivalence.get("failure_route")
-            != "implementation mismatch only; repair the evaluator or harness and rerun the unchanged frozen fixtures"
+        _exact_keys(evaluation, {*expected, "synthetic_development"}, "evaluation")
+        for name, value in expected.items():
+            _expect(evaluation[name], value, f"evaluation.{name}")
+        _expect(evaluation["synthetic_development"], {
+            "unit": "DevelopmentClipWorld",
+            "world_rule": "one_WorldSpec_and_random_identity_are_frozen_before_rendering_every_scan_used_by_all_overlapping_windows_in_the_clip",
+            "minimum_frames_to_expose_all_occurrence_strata": 9,
+            "exact_clip_length_and_count": "freeze_result_blind_in_R02_before_generation",
+            "cross_world_fusion_forbidden": True,
+        }, "evaluation.synthetic_development")
+
+    @staticmethod
+    def _validate_status(source: Mapping[str, object]) -> None:
+        status = _mapping(source["status"], "status")
+        _exact_keys(status, {"implementation_target", "current_node", "scientific_route", "formal_training_allowed", "performance_claims_available"}, "status")
+        _expect(status["implementation_target"], "schema31", "status.implementation_target")
+        _expect(status["scientific_route"], "window_proxy_and_joint_five_scan_dense_point_cloud", "status.scientific_route")
+        node = _nonempty_string(status["current_node"], "status.current_node")
+        if node not in _STATE_MACHINE:
+            raise ProtocolError("status.current_node is outside the schema-31 state machine")
+        formal_allowed = _boolean(status["formal_training_allowed"], "formal training status")
+        claims_available = _boolean(status["performance_claims_available"], "performance claim status")
+        formal = _mapping(_mapping(source["training"], "training")["formal"], "training.formal")
+        frozen_recipe = formal["recipe_status"] == "frozen_result_blind_in_R05"
+        if formal_allowed and (
+            not frozen_recipe
+            or _STATE_MACHINE.index(node) <= _STATE_MACHINE.index("R05")
         ):
-            raise ProtocolError("E62 evaluator-equivalence protocol changed")
-        expected_discrete = {
-            "accepted frame identities", "skipped frame identities",
-            "selected point identities", "valid point count",
-            "positive point count", "negative point count", "pooled labels",
-            "pooled scores",
-        }
-        if set(comparison.get("discrete_exact", ())) != expected_discrete:
-            raise ProtocolError("E62 discrete equivalence checks changed")
-        hashes = (
-            fixtures.get("artifact_sha256"),
-            fixtures.get("scientific_array_sha256"),
-        )
-        if status == "protocol_completed_before_fixture_freeze":
-            if hashes != (None, None):
-                raise ProtocolError("unfrozen E62 fixtures cannot declare hashes")
-        elif any(
-            not isinstance(value, str)
-            or len(value) != 64
-            or any(character not in "0123456789abcdef" for character in value)
-            for value in hashes
+            raise ProtocolError("formal training cannot be enabled before frozen R05")
+        if claims_available and _STATE_MACHINE.index(node) < _STATE_MACHINE.index("V01"):
+            raise ProtocolError("performance claims cannot exist before V01")
+
+        gates = _mapping(source["decision_gates"], "decision gates")
+        _exact_keys(gates, {"G2", "G3", "V01"}, "decision_gates")
+        for name, comparisons in (
+            ("G2", {"B1_vs_B0"}),
+            ("G3", {"B3_vs_B1", "B3_vs_B2"}),
         ):
-            raise ProtocolError("frozen E62 fixture hashes are invalid")
-        if status == "formal_pass":
-            result = _mapping(equivalence["result"], "E62 result")
-            _exact_keys(
-                result,
-                {
-                    "passed", "artifact", "artifact_sha256",
-                    "scientific_array_sha256", "protocol_sha256_at_execution",
-                    "cases", "accepted_frames", "skipped_frames", "valid_points",
-                    "positive_points", "negative_points", "discrete_errors",
-                    "maximum_metric_absolute_difference", "metric_tolerance",
-                    "independent_read_only_validation",
-                },
-                "E62 result",
-            )
-            if (
-                result.get("passed") is not True
-                or result.get("artifact")
-                != "runs/ajae/e62_evaluator_equivalence.npz"
-                or result.get("artifact_sha256")
-                != "a561c2da0922a99bfe000e29a5f9cfedee432fdf17e3433e2c01d4b56c305226"
-                or result.get("scientific_array_sha256")
-                != "54d82af072df6fb3adb9d36d77c7dd8d0407b27cd1e53679fa489423d9121101"
-                or result.get("protocol_sha256_at_execution")
-                != "157b311ffc87ab076e9a4c006b2e6bc8be159feca0937d0bb4115e1e5ea866e7"
-                or (
-                    result.get("cases"), result.get("accepted_frames"),
-                    result.get("skipped_frames"), result.get("valid_points"),
-                    result.get("positive_points"), result.get("negative_points"),
-                    result.get("discrete_errors"),
-                    result.get("maximum_metric_absolute_difference"),
-                    result.get("metric_tolerance"),
-                    result.get("independent_read_only_validation"),
-                )
-                != (5, 13, 2, 864, 119, 745, 0, 0.0, 1.0e-10, True)
-            ):
-                raise ProtocolError("E62 formal result changed")
-        frame_domain = _mapping(
-            evaluation["comparison_frame_domain"], "comparison frame domain"
-        )
-        if (
-            frame_domain.get("status") != "frozen_before_evaluation"
-            or
-            frame_domain.get("rule")
-            != "intersection_of_complete_centered_q0_and_complete_causal_current_frames"
-            or _signed_int_tuple(
-                frame_domain.get("required_source_offsets"),
-                "comparison frame offsets",
-            )
-            != (-4, -3, -2, -1, 0, 1, 2)
-            or tuple(frame_domain.get("applies_to", ()))
-            != tuple(f"B{index}" for index in range(6))
-            or frame_domain.get("padding_or_zero_fill_forbidden") is not True
-            or frame_domain.get("coverage_manifest_required") is not True
-        ):
-            raise ProtocolError(
-                "all B0--B5 comparisons require the same complete-window frame domain"
-            )
-        if evaluation.get("threshold_comparison") != "score_strictly_greater_than_threshold":
-            raise ProtocolError("object threshold comparison must remain strict")
+            gate = _mapping(gates[name], f"decision_gates.{name}")
+            _exact_keys(gate, {"comparisons", "formal_seeds", "criteria_status"}, f"decision_gates.{name}")
+            if set(_string_tuple(gate["comparisons"], f"{name}.comparisons")) != comparisons:
+                raise ProtocolError(f"decision_gates.{name}.comparisons changed")
+            _expect(gate["formal_seeds"], [0, 1, 2], f"{name}.formal_seeds")
+            _nonempty_string(gate["criteria_status"], f"{name}.criteria_status")
+        v01 = _mapping(gates["V01"], "decision_gates.V01")
+        _exact_keys(v01, {"public_sequences", "one_time_only", "criteria_status"}, "decision_gates.V01")
+        _expect(v01["public_sequences"], len(PUBLIC_ANOMALY_IDS), "V01.public_sequences")
+        _expect(v01["one_time_only"], True, "V01.one_time_only")
+        _nonempty_string(v01["criteria_status"], "V01.criteria_status")
 
 
-def _finite_statistics(value: Mapping[str, object], name: str) -> None:
-    found = False
-    stack: list[tuple[str, object]] = [(name, value)]
-    while stack:
-        path, item = stack.pop()
-        if isinstance(item, Mapping):
-            stack.extend((f"{path}.{key}", nested) for key, nested in item.items())
-        elif isinstance(item, (list, tuple)):
-            stack.extend((f"{path}[{index}]", nested) for index, nested in enumerate(item))
-        elif isinstance(item, (int, float)) and not isinstance(item, bool):
-            _number(item, path)
-            found = True
-    if not found:
-        raise ProtocolError(f"{name} must contain at least one finite numeric statistic")
-
-
-def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.expanduser().resolve(strict=True).open("rb") as handle:
-        for block in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
-
-
-def _gate1_verdict_is_explicit(
-    value: object, expected_criterion: object
-) -> bool:
-    if not isinstance(value, Mapping) or not isinstance(expected_criterion, Mapping):
-        return False
-    criterion_id = expected_criterion.get("criterion_id")
-    return (
-        value.get("passed") is True
-        and value.get("decided_before_training") is True
-        and isinstance(criterion_id, str)
-        and bool(criterion_id.strip())
-        and value.get("criterion") == criterion_id
-        and isinstance(value.get("judgment"), str)
-        and bool(str(value.get("judgment")).strip())
+def _validate_development_descriptors(
+    descriptors: Mapping[str, object], required: tuple[str, ...], name: str
+) -> None:
+    _exact_keys(descriptors, set(required), name)
+    returns = _integer(descriptors["joint_visible_return_count"], f"{name}.joint_visible_return_count", minimum=1)
+    joint = _integer(descriptors["joint_spatial_voxel_count"], f"{name}.joint_spatial_voxel_count", minimum=1)
+    single = _integer(descriptors["maximum_single_scan_spatial_voxel_count"], f"{name}.maximum_single_scan_spatial_voxel_count", minimum=1)
+    if not single <= joint <= returns:
+        raise ProtocolError(f"{name} must satisfy single voxels <= joint voxels <= returns")
+    gain = _number(descriptors["densification_gain"], f"{name}.densification_gain")
+    duplicate = _number(descriptors["duplicate_fraction"], f"{name}.duplicate_fraction")
+    if not math.isclose(gain, joint / single, rel_tol=1e-9, abs_tol=1e-12):
+        raise ProtocolError(f"{name}.densification_gain disagrees with counts")
+    if not math.isclose(duplicate, 1.0 - joint / returns, rel_tol=1e-9, abs_tol=1e-12):
+        raise ProtocolError(f"{name}.duplicate_fraction disagrees with counts")
+    if _number(descriptors["distance"], f"{name}.distance") < 0:
+        raise ProtocolError(f"{name}.distance cannot be negative")
+    occlusion = _number(descriptors["occlusion"], f"{name}.occlusion")
+    if not 0.0 <= occlusion <= 1.0:
+        raise ProtocolError(f"{name}.occlusion must lie in [0,1]")
+    visible = _integer(descriptors["visible_scan_count"], f"{name}.visible_scan_count", minimum=1)
+    if visible > WINDOW_FRAMES:
+        raise ProtocolError(f"{name}.visible_scan_count cannot exceed five")
+    _number(
+        descriptors["minimum_visible_return_height_above_support"],
+        f"{name}.minimum_visible_return_height_above_support",
     )
-
-
-def _validate_gate1_evidence(
-    evidence: Mapping[str, object],
-    *,
-    protocol: AJAEProtocol,
-) -> bool:
-    """Validate evidence identity and return whether all four verdicts explicitly pass."""
-
-    calibration_digest = _sha256_file(protocol.sensor_calibration_path())
-    criteria_document = protocol.decision_gates["criteria"]
-    gate1_policy = (
-        criteria_document.get("gate1")
-        if criteria_document.get("status") == "frozen_before_training"
-        else None
-    )
-    gate1_criteria = (
-        gate1_policy.get("legacy_evidence_compatibility")
-        if isinstance(gate1_policy, Mapping)
-        else None
-    )
-    all_verdicts_pass = isinstance(gate1_criteria, Mapping)
-    for name in GATE1_EVIDENCE:
-        raw_item = evidence[name]
-        if raw_item is None:
-            all_verdicts_pass = False
-            continue
-        item = _mapping(raw_item, f"dev.gate1.evidence.{name}")
-        _finite_statistics(item, name)
-        identity = _mapping(item.get("input_identity"), f"{name}.input_identity")
-        required_identity = {
-            "protocol_schema": SCHEMA_VERSION,
-            "sequence_id": 206,
-            "partition": "train",
-            "first_frame": 0,
-            "last_frame": 448,
-            "frame_count": 449,
-            "calibration_sha256": calibration_digest,
-        }
-        if any(identity.get(key) != value for key, value in required_identity.items()):
-            # A replaced authoritative calibration invalidates old evidence.  It
-            # must keep the development gate closed without making the pending
-            # development-world document unreadable.
-            all_verdicts_pass = False
-            continue
-        audited_returns = _integer(
-            identity.get("audited_real_returns_all_frames"),
-            f"{name}.audited_real_returns_all_frames",
-            minimum=1,
-        )
-        provenance = _mapping(item.get("provenance"), f"{name}.provenance")
-        if not provenance:
-            raise ProtocolError(f"{name} provenance cannot be empty")
-
-        if name == "ray_slot_audit":
-            audit = _mapping(item.get("audit"), "ray_slot_audit.audit")
-            layout = _mapping(audit.get("slot_layout"), "ray_slot_audit.slot_layout")
-            round_trip = _mapping(
-                audit.get("round_trip"), "ray_slot_audit.round_trip"
-            )
-            if (
-                _integer(audit.get("frame_count"), "ray_slot_audit.frame_count", minimum=1)
-                != 17
-                or _integer(
-                    layout.get("forward_reverse_mismatches"),
-                    "ray_slot_audit.forward_reverse_mismatches",
-                    minimum=0,
-                )
-                != 0
-                or _number(
-                    round_trip.get("maximum_point_error_m"),
-                    "ray_slot_audit.maximum_point_error_m",
-                )
-                > ROUND_TRIP_POINT_TOLERANCE_M
-                or _number(
-                    round_trip.get("maximum_direction_error_rad"),
-                    "ray_slot_audit.maximum_direction_error_rad",
-                )
-                > ROUND_TRIP_DIRECTION_TOLERANCE_RAD
-            ):
-                raise ProtocolError("ray-slot evidence failed its exact identity checks")
-        elif name == "range_image_round_trip":
-            aggregate = _mapping(item.get("aggregate"), "range_image_round_trip.aggregate")
-            if (
-                _integer(
-                    aggregate.get("return_count_mismatch_frames"),
-                    "range_image_round_trip.return_count_mismatch_frames",
-                    minimum=0,
-                )
-                != 0
-                or _integer(
-                    aggregate.get("total_real_returns"),
-                    "range_image_round_trip.total_real_returns",
-                    minimum=1,
-                )
-                != audited_returns
-                or _number(
-                    aggregate.get("maximum_point_error_m"),
-                    "range_image_round_trip.maximum_point_error_m",
-                )
-                > ROUND_TRIP_POINT_TOLERANCE_M
-                or _number(
-                    aggregate.get("maximum_range_error_m"),
-                    "range_image_round_trip.maximum_range_error_m",
-                )
-                > ROUND_TRIP_POINT_TOLERANCE_M
-                or _number(
-                    aggregate.get("maximum_direction_error_rad"),
-                    "range_image_round_trip.maximum_direction_error_rad",
-                )
-                > ROUND_TRIP_DIRECTION_TOLERANCE_RAD
-            ):
-                raise ProtocolError("range-image evidence does not preserve all returns")
-        elif name == "render_source_leakage":
-            audit = _mapping(item.get("audit"), "render_source_leakage.audit")
-            train_groups = {
-                _integer(value, "render_source_leakage.train_group", minimum=0)
-                for value in _list(audit.get("train_groups"), "render_source_leakage.train_groups")
-            }
-            test_groups = {
-                _integer(value, "render_source_leakage.test_group", minimum=0)
-                for value in _list(audit.get("test_groups"), "render_source_leakage.test_groups")
-            }
-            spatial_match = _mapping(
-                item.get("spatial_match_distance_m"),
-                "render_source_leakage.spatial_match_distance_m",
-            )
-            matched = _integer(
-                item.get("matched_samples_per_class"),
-                "render_source_leakage.matched_samples_per_class",
-                minimum=1,
-            )
-            if (
-                audit.get("split_unit") != "frame_or_world_group"
-                or not train_groups
-                or not test_groups
-                or not train_groups.isdisjoint(test_groups)
-                or _integer(audit.get("train_samples"), "source train samples", minimum=1) < 1
-                or _integer(audit.get("test_samples"), "source test samples", minimum=1) < 1
-                or not 0.0 <= _number(
-                    audit.get("balanced_accuracy"), "source balanced accuracy"
-                ) <= 1.0
-                or not 0.0 <= _number(audit.get("auroc"), "source AUROC") <= 1.0
-                or _integer(spatial_match.get("count"), "source match count", minimum=1)
-                != matched
-            ):
-                raise ProtocolError("source-leakage evidence is not group-disjoint and matched")
-        else:
-            statistics = _mapping(item.get("statistics"), "beam_range_intensity.statistics")
-            comparison = _mapping(
-                item.get("comparison_summary"),
-                "beam_range_intensity.comparison_summary",
-            )
-            if (
-                _integer(statistics.get("frames"), "beam_range_intensity.frames", minimum=1)
-                != 449
-                or _integer(
-                    statistics.get("normal_control_returns"),
-                    "beam_range_intensity.normal_control_returns",
-                    minimum=1,
-                )
-                < 1
-                or not comparison
-            ):
-                raise ProtocolError("beam-range-intensity evidence lacks full sensor coverage")
-
-        conclusion = item.get("threshold_conclusion")
-        if name == "range_image_round_trip" and conclusion is None:
-            conclusion = _mapping(
-                item.get("aggregate"), "range_image_round_trip.aggregate"
-            ).get("threshold_conclusion")
-        expected_criterion = (
-            gate1_criteria.get(name)
-            if isinstance(gate1_criteria, Mapping)
-            else None
-        )
-        all_verdicts_pass &= _gate1_verdict_is_explicit(
-            conclusion, expected_criterion
-        )
-    return all_verdicts_pass
-
-
-def _development_difficulty_coverage_is_valid(
-    worlds: Sequence[DevelopmentWorld],
-    criteria: object,
-) -> bool:
-    """Check only E57-v2 cross-frame non-degeneracy, never bin quotas."""
-
-    if not isinstance(criteria, Mapping):
-        return False
-    minimum_worlds = criteria.get("minimum_multiframe_worlds_per_label")
-    if type(minimum_worlds) is not int or minimum_worlds < 1:
-        return False
-    multiframe_worlds: dict[str, set[int]] = {
-        "normal-control": set(),
-        "anomaly-proxy": set(),
-    }
-    for world in worlds:
-        objects = _list(world.world.get("objects"), "development world objects")
-        labels = {
-            _integer(_mapping(item, "development object").get("object_id"), "object_id"):
-            str(_mapping(item, "development object").get("label"))
-            for item in objects
-        }
-        for entry in world.difficulty:
-            label = labels[int(entry["object_id"])]
-            if int(entry["V"]) >= 2:
-                multiframe_worlds[label].add(world.world_id)
-    return all(len(items) >= minimum_worlds for items in multiframe_worlds.values())
 
 
 def load_development_worlds(
-    path: Path | str,
-    *,
-    protocol: AJAEProtocol,
+    path: Path | str, *, protocol: AJAEProtocol
 ) -> DevelopmentWorlds:
-    """Load fixed 201 worlds; booleans alone can never validate gate 1."""
+    """Load schema-31 windows grouped by shared clip-world identity."""
 
+    if protocol.schema_version != SCHEMA_VERSION:
+        raise ProtocolError("development data require an active schema-31 protocol")
     resolved = Path(path).expanduser().resolve(strict=True)
     try:
         source = json.loads(resolved.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
         raise ProtocolError(f"cannot read development worlds: {resolved}") from error
-    root = _mapping(source, "dev.json")
-    expected = {
-        "format", "protocol_schema", "sequence_id", "status", "validation",
-        "gate1", "in_generator", "generator_held_out",
-    }
-    _exact_keys(root, expected, "dev.json")
-    if (root["format"], root["protocol_schema"], root["sequence_id"]) != (
-        "ajae-development-worlds-v2", SCHEMA_VERSION, 201
-    ):
-        raise ProtocolError("dev.json is not the schema-30 fixed-world format")
-    validation_source = _mapping(root["validation"], "dev.validation")
-    required_validation = {
-        "physical_placement", "sequence_visibility", "difficulty_coverage",
-        "normal_control_and_proxy_composition", "held_out_mechanism_isolation",
-    }
-    _exact_keys(validation_source, required_validation, "dev.validation")
-    validation: dict[str, bool] = {}
-    for key, value in validation_source.items():
-        if type(value) is not bool:
-            raise ProtocolError(f"dev.validation.{key} must be boolean")
-        validation[key] = value
-    gate1_source = _mapping(root["gate1"], "dev.gate1")
-    _exact_keys(gate1_source, {"status", "evidence"}, "dev.gate1")
-    evidence = _mapping(gate1_source["evidence"], "dev.gate1.evidence")
-    _exact_keys(evidence, set(GATE1_EVIDENCE), "dev.gate1.evidence")
-    evidence_valid = _validate_gate1_evidence(evidence, protocol=protocol)
-    try:
-        from .render import (
-            HeldOutTorusShape,
-            NormalTemplateShape,
-            ShapeSpec,
-            WorldSpec,
+    root = _mapping(source, "development data")
+    if root.get("format") == "ajae-development-worlds-v2" or root.get("protocol_schema") == 30:
+        raise ProtocolError(
+            "schema-30 centered dev.json is retired; regenerate schema-31 window/clip data"
         )
-    except ImportError:  # pragma: no cover - direct script execution
-        from render import (  # type: ignore[no-redef]
-            HeldOutTorusShape,
-            NormalTemplateShape,
-            ShapeSpec,
-            WorldSpec,
-        )
+    _exact_keys(root, {"format", "protocol_schema", "sequence_id", "status", "validation", "in_generator", "generator_held_out"}, "development data")
+    _expect(root["format"], DEVELOPMENT_FORMAT, "development format")
+    _expect(root["protocol_schema"], SCHEMA_VERSION, "development protocol_schema")
+    _expect(root["sequence_id"], 201, "development sequence_id")
+    status = _nonempty_string(root["status"], "development status")
+    validation_source = _mapping(root["validation"], "development.validation")
+    if not validation_source:
+        raise ProtocolError("development.validation cannot be empty")
+    validation = {
+        name: _boolean(value, f"development.validation.{name}")
+        for name, value in validation_source.items()
+    }
+    required = _string_tuple(
+        protocol.render["window_descriptors"]["required"],
+        "render.window_descriptors.required",
+    )
 
-    def parse_group(value: object, name: str, mechanism: str) -> tuple[DevelopmentWorld, ...]:
-        records = _list(value, name)
+    def parse_group(value: object, name: str, held_out: bool) -> tuple[DevelopmentWorld, ...]:
         parsed: list[DevelopmentWorld] = []
-        for index, record in enumerate(records):
-            item = _mapping(record, f"{name}[{index}]")
-            _exact_keys(
-                item,
-                {
-                    "world_id",
-                    "seed",
-                    "center_frame",
-                    "world",
-                    "difficulty",
-                    "mechanism",
-                },
-                f"{name}[{index}]",
-            )
-            center_frame = _integer(item["center_frame"], "center_frame")
-            if center_frame not in frozenset(protocol.development_sequence.center_frames()):
-                raise ProtocolError(
-                    "development center_frame is not a legal unexcluded five-frame center"
-                )
-            world = _mapping(item["world"], f"{name}[{index}].world")
-            try:
-                parsed_world = WorldSpec.from_dict(world)
-            except (TypeError, ValueError) as error:
-                raise ProtocolError(
-                    f"{name}[{index}] is not a valid authoritative WorldSpec"
-                ) from error
-            if (
-                parsed_world.seed != _integer(item["seed"], "seed")
-                or parsed_world.source_sequence_id != 201
-                or parsed_world.world_type != "mixed"
-            ):
-                raise ProtocolError("every fixed development world must be mixed train/201")
-            difficulty_values = tuple(
-                _mapping(entry, f"{name}[{index}].difficulty")
-                for entry in _list(item["difficulty"], f"{name}[{index}].difficulty")
-            )
-            for entry in difficulty_values:
-                if set(entry) != {"object_id", "Nvis", "O", "d", "V"}:
-                    raise ProtocolError("every entity difficulty record must define object_id,Nvis,O,d,V")
-                if _number(entry["Nvis"], "difficulty.Nvis") <= 0:
-                    raise ProtocolError("difficulty Nvis must be positive")
-                if not 0 <= _number(entry["O"], "difficulty.O") <= 1:
-                    raise ProtocolError("difficulty O must lie in [0,1]")
-                if _number(entry["d"], "difficulty.d") <= 0:
-                    raise ProtocolError("difficulty d must be positive")
-                if not 1 <= _integer(entry["V"], "difficulty.V", minimum=1) <= 5:
-                    raise ProtocolError("difficulty V must lie in [1,5]")
-            difficulty_ids = [int(entry["object_id"]) for entry in difficulty_values]
-            if (
-                len(difficulty_ids) != len(parsed_world.objects)
-                or len(set(difficulty_ids)) != len(difficulty_ids)
-                or set(difficulty_ids)
-                != {obj.object_id for obj in parsed_world.objects}
-            ):
-                raise ProtocolError(
-                    "difficulty records must identify every world object exactly once"
-                )
-            actual_mechanism = str(item["mechanism"])
-            if mechanism == "in_generator" and actual_mechanism != "in_generator":
-                raise ProtocolError("in-generator world uses a held-out mechanism")
-            if mechanism == "held_out" and actual_mechanism != "torus_SDF":
-                raise ProtocolError("held-out worlds must use the unseen torus_SDF mechanism")
-            objects = _list(world.get("objects"), f"{name}[{index}].world.objects")
-            object_records = tuple(_mapping(obj, "world object") for obj in objects)
-            labels = {str(obj.get("label")) for obj in object_records}
-            if labels != {"normal-control", "anomaly-proxy"}:
-                raise ProtocolError(
-                    "every fixed development world must contain controls and proxies"
-                )
-            expected_shape_kind = {
-                "normal-control": "normal-template-convex-hull",
-                "anomaly-proxy": (
-                    "procedural-csg" if mechanism == "in_generator" else "held-out-torus-sdf"
-                ),
-            }
-            for obj in object_records:
-                label = str(obj.get("label"))
-                shape = _mapping(obj.get("shape"), "world object shape")
-                if label not in expected_shape_kind or shape.get("kind") != expected_shape_kind[label]:
-                    raise ProtocolError(
-                        "development object label and generator mechanism are inconsistent"
-                    )
-            for obj in parsed_world.objects:
-                if obj.label == "normal-control" and not isinstance(
-                    obj.shape, NormalTemplateShape
-                ):
-                    raise ProtocolError("normal controls must use 206 normal templates")
-                if obj.label == "anomaly-proxy":
-                    expected_type = (
-                        ShapeSpec if mechanism == "in_generator" else HeldOutTorusShape
-                    )
-                    if not isinstance(obj.shape, expected_type):
-                        raise ProtocolError(
-                            "parsed anomaly shape violates generator-mechanism isolation"
-                        )
+        clip_identity: dict[str, tuple[int, str, str]] = {}
+        starts_by_clip: dict[str, list[int]] = {}
+        for index, raw in enumerate(_list(value, name)):
+            record_name = f"{name}[{index}]"
+            item = _mapping(raw, record_name)
+            _exact_keys(item, {"world_identity", "seed", "window_start", "frame_ids", "world", "descriptors", "mechanism"}, record_name)
+            identity = _nonempty_string(item["world_identity"], f"{record_name}.world_identity")
+            seed = _integer(item["seed"], f"{record_name}.seed")
+            start = _integer(item["window_start"], f"{record_name}.window_start")
+            frame_ids = _int_tuple(item["frame_ids"], f"{record_name}.frame_ids")
+            if frame_ids != tuple(start + offset for offset in WINDOW_MEMBER_OFFSETS):
+                raise ProtocolError(f"{record_name}.frame_ids must be five consecutive members")
+            if start not in frozenset(protocol.development_sequence.legal_window_starts()):
+                raise ProtocolError(f"{record_name}.window_start is illegal for train/201")
+            world = _mapping(item["world"], f"{record_name}.world")
+            if world.get("source_sequence_id") not in {None, 201}:
+                raise ProtocolError(f"{record_name}.world must belong to train/201")
+            descriptors = _mapping(item["descriptors"], f"{record_name}.descriptors")
+            _validate_development_descriptors(descriptors, required, f"{record_name}.descriptors")
+            mechanism = _nonempty_string(item["mechanism"], f"{record_name}.mechanism")
+            if held_out != (mechanism == "torus_SDF"):
+                raise ProtocolError(f"{record_name} violates held-out torus isolation")
+            world_token = json.dumps(world, sort_keys=True, separators=(",", ":"))
+            frozen = (seed, world_token, mechanism)
+            if identity in clip_identity and clip_identity[identity] != frozen:
+                raise ProtocolError(f"clip {identity!r} changes WorldSpec, seed, or mechanism")
+            clip_identity[identity] = frozen
+            starts_by_clip.setdefault(identity, []).append(start)
             parsed.append(
                 DevelopmentWorld(
-                    _integer(item["world_id"], "world_id"),
-                    _integer(item["seed"], "seed"),
-                    center_frame,
+                    identity, seed, start, frame_ids,
                     _freeze(world),  # type: ignore[arg-type]
-                    tuple(_freeze(entry) for entry in difficulty_values),  # type: ignore[arg-type]
-                    actual_mechanism,
+                    _freeze(descriptors),  # type: ignore[arg-type]
+                    mechanism,
                 )
             )
+        identities = [(item.world_identity, item.window_start) for item in parsed]
+        if len(identities) != len(set(identities)):
+            raise ProtocolError(f"{name} repeats a clip/window identity")
+        # Five overlapping windows span nine frames and expose occurrence strata 1..5.
+        for identity, starts in starts_by_clip.items():
+            ordered = sorted(starts)
+            if len(ordered) < 5 or any(
+                right != left + 1 for left, right in zip(ordered, ordered[1:])
+            ):
+                raise ProtocolError(
+                    f"clip {identity!r} needs at least five consecutive window starts"
+                )
         return tuple(parsed)
 
-    in_generator = parse_group(root["in_generator"], "in_generator", "in_generator")
-    held_out = parse_group(root["generator_held_out"], "generator_held_out", "held_out")
-    if len(in_generator) != int(protocol.development["in_generator_worlds"]) or len(held_out) != int(protocol.development["generator_held_out_worlds"]):
-        raise ProtocolError("dev.json does not contain the fixed 24+6 worlds")
-    identifiers = tuple(item.world_id for item in (*in_generator, *held_out))
-    if identifiers != tuple(range(30)):
-        raise ProtocolError("development world IDs must be exactly 0 through 29")
-    qualification = protocol.development["qualification"]
-    difficulty_coverage_valid = _development_difficulty_coverage_is_valid(
-        in_generator,
-        qualification["hard_requirements"],
-    )
+    in_generator = parse_group(root["in_generator"], "in_generator", False)
+    held_out = parse_group(root["generator_held_out"], "generator_held_out", True)
+    if {item.world_identity for item in in_generator} & {
+        item.world_identity for item in held_out
+    }:
+        raise ProtocolError("in-generator and held-out clips share world identities")
     return DevelopmentWorlds(
-        str(root["format"]), SCHEMA_VERSION, 201, str(root["status"]),
-        MappingProxyType(validation),
-        _freeze(gate1_source),  # type: ignore[arg-type]
-        evidence_valid,
-        difficulty_coverage_valid,
-        in_generator, held_out,
+        DEVELOPMENT_FORMAT, SCHEMA_VERSION, 201, status,
+        MappingProxyType(validation), in_generator, held_out,
     )
 
 
@@ -2469,22 +1043,10 @@ def load_protocol(path: Path | str = DEFAULT_PROTOCOL_PATH) -> AJAEProtocol:
 
 
 def _main() -> None:
-    parser = argparse.ArgumentParser(description="Inspect the AJAE schema-30 route.")
+    parser = argparse.ArgumentParser(description="Inspect the AJAE schema-31 route.")
     parser.add_argument("--protocol", type=Path, default=DEFAULT_PROTOCOL_PATH)
-    parser.add_argument("--development", action="store_true")
     args = parser.parse_args()
-    protocol = load_protocol(args.protocol)
-    output: dict[str, object] = protocol.summary()
-    if args.development:
-        worlds = load_development_worlds(protocol.development_worlds_path(), protocol=protocol)
-        output["development"] = {
-            "status": worlds.status,
-            "validated": worlds.validated,
-            "in_generator": len(worlds.in_generator),
-            "held_out": len(worlds.generator_held_out),
-            "gate1": worlds.gate1.get("status"),
-        }
-    print(json.dumps(output, ensure_ascii=False, indent=2, sort_keys=True))
+    print(json.dumps(load_protocol(args.protocol).summary(), ensure_ascii=False, indent=2, sort_keys=True))
 
 
 if __name__ == "__main__":
