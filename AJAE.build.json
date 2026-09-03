@@ -1,0 +1,16 @@
+{
+  "format": "ajae-pdf-build-v1",
+  "source": {
+    "path": "AJAE.tex",
+    "sha256": "76f480559f96816eee2dd06f5f4d54993b1b774da4ce9793089522d347009d39"
+  },
+  "output": {
+    "path": "AJAE.pdf",
+    "sha256": "38436982ab8adf50dca3d0e7b0f9068c928d21dc3ad65e14a6e73b83db355dec",
+    "pages": 5
+  },
+  "engine": "XeTeX 3.141592653-2.6-0.999995 (TeX Live 2023/Debian)",
+  "source_date_epoch": 1788443446,
+  "command": "SOURCE_DATE_EPOCH=1788443446 FORCE_SOURCE_DATE=1 latexmk -g -xelatex -interaction=nonstopmode -halt-on-error AJAE.tex",
+  "verification": "two_consecutive_clean_builds_produced_the_same_pdf_sha256"
+}

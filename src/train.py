@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Schema-31 training over frozen five-scan WindowWorld banks."""
+"""Schema-32 training over frozen five-scan WindowWorld banks."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ import random
 import shutil
 import tempfile
 from collections.abc import Iterable, Iterator, Mapping, Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from types import MappingProxyType
@@ -31,10 +31,8 @@ try:
         AJAEInference,
         DevelopmentClipResult,
         DevelopmentFusedAP,
-        EvaluationError,
         EvaluationIdentity,
         FUSION_SEMANTICS as DEVELOPMENT_FUSION_SEMANTICS,
-        FormalGateVerdictRecord,
         development_fused_ap,
         official_metrics,
     )
@@ -52,7 +50,9 @@ try:
         GroupingMode,
         ProtocolError,
         R02_MATCHING_FEATURES,
+        R02_PHYSICAL_SHORTCUT_FEATURES,
         R02_SHORTCUT_SEED,
+        R02_STU_SUMMARY_FEATURES,
         R02_VALIDATION_KEYS,
         load_development_worlds,
         load_protocol,
@@ -60,6 +60,7 @@ try:
     )
     from .render import (
         DevelopmentClipWorld,
+        NormalTemplateShape,
         RenderError,
         WindowEntityDescriptor,
         WorldGenerationReport,
@@ -69,6 +70,8 @@ try:
         load_qualified_support_pool,
         load_sensor_calibration,
         match_window_entities,
+        grouped_depth3_tree_audit,
+        linear_classification_audit,
         render_development_clip_world,
         sample_development_clip_world,
         sample_window_world,
@@ -88,10 +91,8 @@ except ImportError:  # Direct execution from src/.
         AJAEInference,
         DevelopmentClipResult,
         DevelopmentFusedAP,
-        EvaluationError,
         EvaluationIdentity,
         FUSION_SEMANTICS as DEVELOPMENT_FUSION_SEMANTICS,
-        FormalGateVerdictRecord,
         development_fused_ap,
         official_metrics,
     )
@@ -109,7 +110,9 @@ except ImportError:  # Direct execution from src/.
         GroupingMode,
         ProtocolError,
         R02_MATCHING_FEATURES,
+        R02_PHYSICAL_SHORTCUT_FEATURES,
         R02_SHORTCUT_SEED,
+        R02_STU_SUMMARY_FEATURES,
         R02_VALIDATION_KEYS,
         load_development_worlds,
         load_protocol,
@@ -117,6 +120,7 @@ except ImportError:  # Direct execution from src/.
     )
     from render import (
         DevelopmentClipWorld,
+        NormalTemplateShape,
         RenderError,
         WindowEntityDescriptor,
         WorldGenerationReport,
@@ -126,6 +130,8 @@ except ImportError:  # Direct execution from src/.
         load_qualified_support_pool,
         load_sensor_calibration,
         match_window_entities,
+        grouped_depth3_tree_audit,
+        linear_classification_audit,
         render_development_clip_world,
         sample_development_clip_world,
         sample_window_world,
@@ -143,16 +149,17 @@ except ImportError:  # Direct execution from src/.
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-SCHEMA_VERSION = 31
+SCHEMA_VERSION = 32
 WINDOW_GROUPS = (0, 1, 2, 3, 4)
 WINDOW_BANK_FORMAT = "ajae-window-train-bank-v1"
-TRAIN_CHECKPOINT_FORMAT = "ajae-schema31-training-checkpoint-v4"
-TRAIN_RESULT_FORMAT = "ajae-schema31-training-result-v4"
-R04_QUALIFICATION_FORMAT = "ajae-schema31-r04-training-qualification-v2"
-DEVELOPMENT_METRIC_EVIDENCE_FORMAT = "ajae-schema31-development-metric-evidence-v1"
+TRAIN_CHECKPOINT_FORMAT = "ajae-schema32-training-checkpoint-v1"
+TRAIN_RESULT_FORMAT = "ajae-schema32-training-result-v1"
+R04_QUALIFICATION_FORMAT = "ajae-schema32-r04-training-qualification-v1"
+DEVELOPMENT_METRIC_EVIDENCE_FORMAT = "ajae-schema32-development-metric-evidence-v1"
 MANIFEST_NAME = "manifest.json"
 _SHARD_ARRAYS = {
     "coordinates",
+    "native_coordinates",
     "scan_group",
     "stu_features",
     "normal_evidence",
@@ -168,11 +175,11 @@ _SHARD_ARRAYS = {
 
 
 class TrainingError(RuntimeError):
-    """Report an invalid schema-31 bank, request, or optimization state."""
+    """Report an invalid schema-32 bank, request, or optimization state."""
 
 
 class TrainMode(str, Enum):
-    """Mutually exclusive schema-31 training purposes."""
+    """Mutually exclusive schema-32 training purposes."""
 
     TINY_OVERFIT = "tiny_overfit"
     PILOT = "pilot"
@@ -450,6 +457,7 @@ class WindowTrainingData:
     """All supervised returns from one symmetric five-scan WindowWorld."""
 
     coordinates: Tensor
+    native_coordinates: Tensor
     scan_group: Tensor
     stu_features: Tensor
     normal_evidence: Tensor
@@ -475,6 +483,7 @@ class WindowTrainingData:
             raise TrainingError("coordinates must be a non-empty [N,3] tensor")
         floats = {
             "coordinates": (self.coordinates, (count, 3)),
+            "native_coordinates": (self.native_coordinates, (count, 3)),
             "stu_features": (self.stu_features, (count, 128)),
             "normal_evidence": (self.normal_evidence, (count, 19)),
             "reliability_assign": (self.reliability_assign, (count,)),
@@ -591,14 +600,14 @@ def protocol_bank_identity(protocol: object) -> str:
     """Hash only protocol rules that can change a frozen training-bank row."""
 
     if type(protocol) is not AJAEProtocol or protocol.schema_version != SCHEMA_VERSION:
-        raise TrainingError("window training banks require schema 31")
+        raise TrainingError("window training banks require schema 32")
     document = protocol.plain_document()
     data = _require_mapping(document["data"], "protocol.data")
     training = _require_mapping(document["training"], "protocol.training")
     evaluation = _require_mapping(document["evaluation"], "protocol.evaluation")
     # Model recipes and advancing run status do not alter this reusable artifact.
     payload = {
-        "format": "ajae-schema31-window-train-bank-protocol-v1",
+        "format": "ajae-schema32-window-train-bank-protocol-v1",
         "schema_version": SCHEMA_VERSION,
         "scientific_contract": document["scientific_contract"],
         "normal_training_data": data["normal_training"],
@@ -625,7 +634,7 @@ def protocol_training_system_identity(protocol: object) -> str:
     """Hash fixed R04 mechanics while excluding sequential pilot decisions."""
 
     if type(protocol) is not AJAEProtocol or protocol.schema_version != SCHEMA_VERSION:
-        raise TrainingError("training-system identity requires schema 31")
+        raise TrainingError("training-system identity requires schema 32")
     document = protocol.plain_document()
     training = _require_mapping(document["training"], "protocol.training")
     pilot = dict(_require_mapping(training["pilot"], "protocol.training.pilot"))
@@ -660,7 +669,7 @@ def protocol_training_system_identity(protocol: object) -> str:
     }
     return _identity_digest(
         {
-            "format": "ajae-schema31-training-system-protocol-v1",
+            "format": "ajae-schema32-training-system-protocol-v1",
             "schema_version": SCHEMA_VERSION,
             "scientific_contract": document["scientific_contract"],
             "data": document["data"],
@@ -684,8 +693,8 @@ def _load_training_protocol(path: Path | str) -> object:
         document = json.loads(resolved.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
         raise TrainingError("training protocol is unreadable") from error
-    if not isinstance(document, Mapping) or document.get("schema_version") != 31:
-        raise TrainingError("training requires schema 31; older schemas are retired")
+    if not isinstance(document, Mapping) or document.get("schema_version") != 32:
+        raise TrainingError("training requires schema 32; older schemas are retired")
     return load_protocol(resolved)
 
 
@@ -953,7 +962,7 @@ def window_training_data(
     """Build one bank row from a real WindowWorld and audited frozen STU outputs."""
 
     if type(protocol) is not AJAEProtocol or protocol.schema_version != SCHEMA_VERSION:
-        raise TrainingError("WindowTrainingData construction requires schema 31")
+        raise TrainingError("WindowTrainingData construction requires schema 32")
     if __package__:
         from .render import WindowWorld
     else:
@@ -1072,6 +1081,11 @@ def window_training_data(
         raise TrainingError("WindowWorld manifest changed its rendered observations")
     return WindowTrainingData(
         coordinates=torch.from_numpy(scene.points.coordinates.copy()),
+        native_coordinates=torch.from_numpy(
+            np.concatenate(
+                [item.source.xyzi[item.source.real_slots, :3] for item in rendered]
+            ).astype(np.float32, copy=False)
+        ),
         scan_group=torch.from_numpy(scene.points.scan_group.copy()),
         stu_features=torch.cat(stu_features),
         normal_evidence=torch.cat(normal_evidence),
@@ -1233,7 +1247,7 @@ def _test_bank_plan_identity(entries: Sequence[Mapping[str, object]]) -> str:
         )
     return _identity_digest(
         {
-            "format": "ajae-schema31-test-window-bank-plan-v1",
+            "format": "ajae-schema32-test-window-bank-plan-v1",
             "entries": plan_entries,
         }
     )
@@ -1278,7 +1292,7 @@ class WindowTrainingBank(Sequence[WindowTrainingData]):
             root["format"] != WINDOW_BANK_FORMAT
             or root["schema_version"] != SCHEMA_VERSION
         ):
-            raise TrainingError("window training bank is not schema 31")
+            raise TrainingError("window training bank is not schema 32")
         if type(root["test_fixture"]) is not bool:
             raise TrainingError("window training bank test_fixture must be boolean")
         test_fixture = bool(root["test_fixture"])
@@ -1572,6 +1586,7 @@ class WindowTrainingBank(Sequence[WindowTrainingData]):
 
         data = WindowTrainingData(
             coordinates=floating("coordinates"),
+            native_coordinates=floating("native_coordinates"),
             scan_group=integer("scan_group"),
             stu_features=floating("stu_features"),
             normal_evidence=floating("normal_evidence"),
@@ -1620,7 +1635,7 @@ class WindowTrainingBank(Sequence[WindowTrainingData]):
 def load_window_train_bank(
     manifest: Path | str, *, protocol: object
 ) -> WindowTrainingBank:
-    """Load the sole condition-independent schema-31 training bank."""
+    """Load the sole condition-independent schema-32 training bank."""
 
     return WindowTrainingBank(manifest, protocol=protocol)
 
@@ -1628,6 +1643,7 @@ def load_window_train_bank(
 def _window_arrays(window: WindowTrainingData) -> dict[str, np.ndarray]:
     return {
         "coordinates": window.coordinates.numpy(),
+        "native_coordinates": window.native_coordinates.numpy(),
         "scan_group": window.scan_group.numpy().astype(np.int8, copy=False),
         "stu_features": window.stu_features.numpy(),
         "normal_evidence": window.normal_evidence.numpy(),
@@ -1903,6 +1919,7 @@ def effective_batch_balanced_bce(
 @dataclass(frozen=True, slots=True)
 class _DeviceWindow:
     coordinates: Tensor
+    native_coordinates: Tensor
     scan_group: Tensor
     stu_features: Tensor
     normal_evidence: Tensor
@@ -1921,6 +1938,7 @@ def _to_device(window: WindowTrainingData, device: torch.device) -> _DeviceWindo
 
     return _DeviceWindow(
         move(window.coordinates),
+        move(window.native_coordinates),
         move(window.scan_group),
         move(window.stu_features),
         move(window.normal_evidence),
@@ -1939,12 +1957,16 @@ def _forward_rows(
     *,
     grouping_mode: GroupingMode,
     erase_group_identity: bool = False,
+    use_native_coordinates: bool = False,
 ) -> Tensor:
     groups = window.scan_group[rows]
     if erase_group_identity:
         groups = torch.zeros_like(groups)
+    coordinates = (
+        window.native_coordinates if use_native_coordinates else window.coordinates
+    )
     logits = model(
-        window.coordinates[rows],
+        coordinates[rows],
         window.stu_features[rows],
         window.normal_evidence[rows],
         window.reliability_assign[rows],
@@ -1993,6 +2015,7 @@ def _predict_window(
                     rows,
                     grouping_mode=GroupingMode.SINGLE,
                     erase_group_identity=True,
+                    use_native_coordinates=True,
                 )
             )
         joined_rows = torch.cat(row_parts)
@@ -2019,7 +2042,7 @@ def predict_window(
     *,
     device: torch.device | str | None = None,
 ) -> Tensor:
-    """Run the sole public schema-31 AJAE model path."""
+    """Run the sole public schema-32 AJAE model path."""
 
     if type(model) is not JointWindowPointTransformer:
         raise TrainingError(
@@ -2078,7 +2101,8 @@ class TrainingConfig:
     gradient_accumulation: int
     weight_decay: float = 0.0
     scheduler: str = "constant"
-    epochs: int = 1
+    budget_unit: str = "optimizer_updates"
+    epochs: int | None = None
     maximum_updates: int | None = None
     evaluation_interval_updates: int = 1
     gradient_clip_norm: float | None = None
@@ -2091,9 +2115,18 @@ class TrainingConfig:
             raise TrainingError("weight_decay cannot be negative")
         if self.scheduler not in {"constant", "five_percent_warmup_cosine"}:
             raise TrainingError("scheduler is not recognized")
-        _require_int(self.epochs, "epochs", minimum=1)
-        if self.maximum_updates is not None:
+        if self.budget_unit not in {"optimizer_updates", "epochs"}:
+            raise TrainingError("budget_unit must be optimizer_updates or epochs")
+        if self.budget_unit == "optimizer_updates":
+            if self.epochs is not None or self.maximum_updates is None:
+                raise TrainingError(
+                    "optimizer_updates budget requires maximum_updates only"
+                )
             _require_int(self.maximum_updates, "maximum_updates", minimum=1)
+        else:
+            if self.epochs is None or self.maximum_updates is not None:
+                raise TrainingError("epochs budget requires epochs only")
+            _require_int(self.epochs, "epochs", minimum=1)
         _require_int(
             self.evaluation_interval_updates,
             "evaluation_interval_updates",
@@ -2104,6 +2137,25 @@ class TrainingConfig:
             and _require_number(self.gradient_clip_norm, "gradient_clip_norm") <= 0.0
         ):
             raise TrainingError("gradient_clip_norm must be positive")
+
+
+def _config_record(config: TrainingConfig) -> dict[str, object]:
+    """Serialize exactly one training-budget field."""
+
+    record: dict[str, object] = {
+        "learning_rate": config.learning_rate,
+        "gradient_accumulation": config.gradient_accumulation,
+        "weight_decay": config.weight_decay,
+        "scheduler": config.scheduler,
+        "budget_unit": config.budget_unit,
+        "evaluation_interval_updates": config.evaluation_interval_updates,
+        "gradient_clip_norm": config.gradient_clip_norm,
+    }
+    if config.budget_unit == "optimizer_updates":
+        record["maximum_updates"] = config.maximum_updates
+    else:
+        record["epochs"] = config.epochs
+    return record
 
 
 def _validate_result_request(
@@ -2136,7 +2188,7 @@ def _validate_result_request(
                 ExperimentCondition.B3,
             }
             or seed != tiny["seed"]
-            or dict(asdict(config)) != _plain_json(tiny["config"])
+            or _config_record(config) != _plain_json(tiny["config"])
             or window_count != tiny["windows"]
             or maximum_updates != tiny["maximum_updates"]
             or r04_identity is not None
@@ -2165,10 +2217,11 @@ def _validate_result_request(
             not in tuple(pilot["schedulers_after_learning_rate_selection"])
             or config.weight_decay
             not in tuple(pilot["weight_decay_after_scheduler_selection"])
+            or config.budget_unit != "optimizer_updates"
             or any(
                 getattr(config, name) != fixed[name]
                 for name in (
-                    "epochs",
+                    "budget_unit",
                     "evaluation_interval_updates",
                     "gradient_clip_norm",
                 )
@@ -2195,12 +2248,11 @@ def _validate_result_request(
 
     formal = _require_mapping(training["formal"], "training.formal")
     recipe = _require_mapping(formal["recipe"], "training.formal.recipe")
-    expected_updates = (
-        int(config.maximum_updates)
-        if config.maximum_updates is not None
-        else int(config.epochs) * math.ceil(445 / int(config.gradient_accumulation))
+    if config.budget_unit != "epochs" or config.epochs is None:
+        raise TrainingError("formal training must use an epoch budget")
+    expected_updates = int(config.epochs) * math.ceil(
+        445 / int(config.gradient_accumulation)
     )
-    expected_node = "G2" if condition is ExperimentCondition.B1 else "G3"
     if (
         condition
         not in {
@@ -2208,22 +2260,15 @@ def _validate_result_request(
             ExperimentCondition.B2,
             ExperimentCondition.B3,
         }
-        or authorization_node != expected_node
+        or authorization_node != "F01"
         or pilot_stage is not None
         or seed not in tuple(formal["seeds"])
-        or dict(asdict(config)) != _plain_json(recipe)
+        or _config_record(config) != _plain_json(recipe)
         or window_count != 445
         or maximum_updates != expected_updates
         or r04_identity != protocol.status["r04_training_qualification_identity"]
         or r05_identity != protocol.status["r05_freeze_identity"]
-        or (
-            g2_identity
-            != (
-                None
-                if condition is ExperimentCondition.B1
-                else protocol.status["g2_verdict_identity"]
-            )
-        )
+        or g2_identity is not None
     ):
         raise TrainingError("formal result differs from the R05-authorized request")
 
@@ -2655,6 +2700,7 @@ class TrainingRunRecord:
             "completed_epochs",
             "optimizer_updates",
             "windows_seen",
+            "equivalent_bank_passes",
             "last_effective_batch_loss",
             "last_checkpoint_sha256",
             "last_model_state_sha256",
@@ -2682,7 +2728,7 @@ class TrainingRunRecord:
             payload["format"] != TRAIN_RESULT_FORMAT
             or payload["schema_version"] != SCHEMA_VERSION
         ):
-            raise TrainingError("training result is not the current schema-31 format")
+            raise TrainingError("training result is not the current schema-32 format")
         unsigned = dict(payload)
         record_identity = _require_digest(
             unsigned.pop("record_sha256"), "training result identity"
@@ -2809,6 +2855,16 @@ class TrainingRunRecord:
             payload["completed_epochs"], "completed epochs", minimum=0
         )
         windows_seen = _require_int(payload["windows_seen"], "windows seen", minimum=1)
+        equivalent_passes = _require_number(
+            payload["equivalent_bank_passes"], "equivalent bank passes"
+        )
+        if not math.isclose(
+            equivalent_passes,
+            windows_seen / int(payload["window_count"]),
+            rel_tol=1.0e-12,
+            abs_tol=1.0e-12,
+        ):
+            raise TrainingError("equivalent bank passes disagree with windows seen")
         if payload["checkpoint_selection_metric"] != "macro_fused_point_ap":
             raise TrainingError("training result checkpoint metric changed")
         _validate_result_request(
@@ -3634,7 +3690,7 @@ def validate_training_request(
     """Bind mode, seed, subset size, and search values to the protocol."""
 
     if type(protocol) is not AJAEProtocol or protocol.schema_version != SCHEMA_VERSION:
-        raise TrainingError("training requests require the schema-31 protocol")
+        raise TrainingError("training requests require the schema-32 protocol")
     selected_mode = TrainMode(mode)
     selected_condition = ExperimentCondition(condition)
     if not selected_condition.trainable:
@@ -3667,11 +3723,15 @@ def validate_training_request(
         if type(config) is not TrainingConfig:
             raise TrainingError("training config must be TrainingConfig")
         tiny = _require_mapping(training["tiny_overfit"], "training.tiny_overfit")
-        if seed != tiny["seed"] or dict(asdict(config)) != _plain_json(tiny["config"]):
+        if seed != tiny["seed"] or _config_record(config) != _plain_json(
+            tiny["config"]
+        ):
             raise TrainingError("tiny_overfit seed or config differs from the protocol")
         windows = int(tiny["windows"])
         maximum_updates = int(tiny["maximum_updates"])
-        if config.maximum_updates not in {None, maximum_updates}:
+        if config.budget_unit != "optimizer_updates" or (
+            config.maximum_updates != maximum_updates
+        ):
             raise TrainingError("tiny_overfit maximum_updates is fixed by the protocol")
     elif selected_mode is TrainMode.PILOT:
         if type(config) is not TrainingConfig:
@@ -3702,7 +3762,7 @@ def validate_training_request(
             pilot["fixed_run_parameters"], "training.pilot.fixed_run_parameters"
         )
         for name in (
-            "epochs",
+            "budget_unit",
             "evaluation_interval_updates",
             "gradient_clip_norm",
         ):
@@ -3777,28 +3837,22 @@ def validate_training_request(
             raise TrainingError(
                 "formal training requires an enabled, completed R05 freeze"
             )
-        allowed_conditions = {
-            "G2": {ExperimentCondition.B1},
-            "G3": {ExperimentCondition.B2, ExperimentCondition.B3},
-        }
-        if selected_condition not in allowed_conditions.get(str(node), set()):
+        if node != "F01":
             raise TrainingError(
-                "formal training is permitted only for B1 during G2 or B2/B3 during G3"
+                "all B1/B2/B3 formal checkpoints must be selected during F01"
             )
         if type(config) is not TrainingConfig:
             raise TrainingError("training config must be TrainingConfig")
         recipe = formal.get("recipe")
-        if not isinstance(recipe, Mapping) or dict(recipe) != asdict(config):
+        if not isinstance(recipe, Mapping) or dict(recipe) != _config_record(config):
             raise TrainingError("formal config differs from the frozen R05 recipe")
         windows = int(training["bank"]["generation_plan"]["formal_entry_count"])
         if bank_size != windows:
             raise TrainingError("formal training requires the complete 445-window bank")
         steps_per_epoch = math.ceil(windows / config.gradient_accumulation)
-        maximum_updates = (
-            config.maximum_updates
-            if config.maximum_updates is not None
-            else config.epochs * steps_per_epoch
-        )
+        if config.budget_unit != "epochs" or config.epochs is None:
+            raise TrainingError("formal training must use an epoch budget")
+        maximum_updates = config.epochs * steps_per_epoch
     if bank_size < windows:
         raise TrainingError(
             f"{selected_mode.value} requires {windows} frozen windows, "
@@ -4284,17 +4338,29 @@ def generate_development_worlds(
     protocol_path: Path | str,
     data_root: Path | str,
     destination: Path | str,
+    population_role: str = "selection",
 ) -> DevelopmentWorlds:
-    """Generate the sole 24-clip formal definitions after result-blind thresholds freeze."""
+    """Generate D_select at R02 or the still-sealed D_confirm at G2."""
 
     protocol = _load_training_protocol(protocol_path)
     assert isinstance(protocol, AJAEProtocol)
-    if protocol.status["current_node"] != "R02":
-        raise TrainingError("formal development generation belongs only to R02")
+    if population_role not in {"selection", "confirmation"}:
+        raise TrainingError("synthetic population role is unsupported")
+    required_node = "R02" if population_role == "selection" else "G2"
+    if protocol.status["current_node"] != required_node:
+        raise TrainingError(
+            f"{population_role} population generation belongs only to {required_node}"
+        )
     if protocol.r02_thresholds is None:
         raise TrainingError(
             "freeze result-blind R02 thresholds before formal generation"
         )
+    if protocol.status["r02_thresholds_frozen_result_blind"] is not True:
+        raise TrainingError("R02 thresholds are not marked result-blind and frozen")
+    if protocol.status["r02_threshold_identity"] != _identity_digest(
+        protocol.r02_thresholds
+    ):
+        raise TrainingError("R02 threshold identity is absent or stale")
     ray_grid, sensor = _verified_renderer_inputs(protocol)
     training_sequence = _open_training_sequence(data_root, protocol, 206)
     development_sequence = _open_training_sequence(data_root, protocol, 201)
@@ -4310,7 +4376,12 @@ def generate_development_worlds(
     )
 
     def clips() -> Iterator[DevelopmentClipWorld]:
-        for row in protocol.development_clip_plan():
+        plan = (
+            protocol.development_clip_plan()
+            if population_role == "selection"
+            else protocol.confirmation_clip_plan()
+        )
+        for row in plan:
             sources = tuple(
                 development_sequence.source_frame(int(frame_id))
                 for frame_id in row["source_frames"]
@@ -4333,16 +4404,27 @@ def generate_development_worlds(
                 )
             except (OSError, ValueError, TypeError, RenderError) as error:
                 raise TrainingError(
-                    f"cannot generate development plan position {row['position']}"
+                    f"cannot generate {population_role} plan position {row['position']}"
                 ) from error
 
     save_development_worlds(
         destination,
         clips(),
-        protocol_identity=protocol.development_population_identity,
-        plan_identity=protocol.development_clip_plan_identity,
+        protocol_identity=(
+            protocol.development_population_identity
+            if population_role == "selection"
+            else protocol.confirmation_population_identity
+        ),
+        plan_identity=(
+            protocol.development_clip_plan_identity
+            if population_role == "selection"
+            else protocol.confirmation_clip_plan_identity
+        ),
+        population_role=population_role,
     )
-    return load_development_worlds(destination, protocol=protocol)
+    return load_development_worlds(
+        destination, protocol=protocol, population_role=population_role
+    )
 
 
 def _sealed_summary(record: Mapping[str, object]) -> dict[str, object]:
@@ -4351,18 +4433,302 @@ def _sealed_summary(record: Mapping[str, object]) -> dict[str, object]:
     return result
 
 
+def _low_capacity_grouped_audit(
+    class_zero: np.ndarray,
+    class_one: np.ndarray,
+    class_zero_groups: np.ndarray,
+    class_one_groups: np.ndarray,
+    *,
+    seed: int,
+) -> dict[str, object]:
+    logistic = linear_classification_audit(
+        class_zero,
+        class_one,
+        class_zero_groups=class_zero_groups,
+        class_one_groups=class_one_groups,
+        seed=seed,
+        maximum_per_class=max(class_zero.shape[0], class_one.shape[0]),
+    )
+    tree = grouped_depth3_tree_audit(
+        class_zero,
+        class_one,
+        class_zero_groups,
+        class_one_groups,
+        train_groups=logistic["train_groups"],
+        test_groups=logistic["test_groups"],
+        seed=seed,
+    )
+    return {**logistic, "depth3_tree": tree}
+
+
+def _stu_summary(
+    parts: Sequence[tuple[STUPointEncoding, Tensor, np.ndarray, np.ndarray]],
+) -> np.ndarray:
+    """Reduce actual frozen-STU point evidence for one entity or real control."""
+
+    if not parts:
+        raise TrainingError("R02 STU summary cannot be empty")
+    point = torch.cat(
+        [encoding.point_features[index] for encoding, index, _, _ in parts]
+    )
+    evidence = torch.cat(
+        [encoding.normal_evidence[index] for encoding, index, _, _ in parts]
+    )
+    assign = torch.cat(
+        [encoding.reliability_assign[index] for encoding, index, _, _ in parts]
+    )
+    no_object = torch.cat(
+        [encoding.reliability_noobj[index] for encoding, index, _, _ in parts]
+    )
+    intensity = np.concatenate([value for _, _, value, _ in parts])
+    coordinates = np.concatenate([value for _, _, _, value in parts])
+    ranges = np.linalg.norm(coordinates, axis=1)
+    output = np.concatenate(
+        (
+            point.mean(0).detach().cpu().numpy(),
+            point.std(0, unbiased=False).detach().cpu().numpy(),
+            evidence.mean(0).detach().cpu().numpy(),
+            evidence.std(0, unbiased=False).detach().cpu().numpy(),
+            np.asarray(
+                (
+                    float(assign.mean()),
+                    float(assign.std(unbiased=False)),
+                    float(no_object.mean()),
+                    float(no_object.std(unbiased=False)),
+                )
+            ),
+            np.asarray((math.log1p(coordinates.shape[0]),)),
+            np.quantile(ranges, (0.05, 0.5, 0.95)),
+            np.quantile(coordinates[:, 2], (0.05, 0.5, 0.95)),
+            np.quantile(intensity, (0.05, 0.5, 0.95)),
+        )
+    ).astype(np.float64, copy=False)
+    if (
+        output.shape != (len(R02_STU_SUMMARY_FEATURES),)
+        or not np.isfinite(output).all()
+    ):
+        raise TrainingError("R02 frozen-STU summary is invalid")
+    return output
+
+
+def _r02_stu_audits(
+    clips: Sequence[DevelopmentClipWorld],
+    *,
+    protocol: AJAEProtocol,
+    data_root: Path | str,
+    device: torch.device,
+) -> tuple[dict[str, object], dict[str, object]]:
+    """Audit proxy signatures and rendered-control realism in actual STU evidence."""
+
+    encoder = FrozenSTUPointEncoder.from_protocol(
+        protocol, project_root=protocol.path.parent
+    ).to(device)
+    encoder.eval()
+    template_sequence = _open_training_sequence(data_root, protocol, 206)
+    cache: dict[str, STUPointEncoding] = {}
+    entity: dict[tuple[str, int], np.ndarray] = {}
+    world_by_window: dict[str, str] = {}
+    template_by_control: dict[tuple[str, int], NormalTemplateShape] = {}
+    template_summary: dict[tuple[int, int, int], np.ndarray] = {}
+
+    def encode(source: object) -> STUPointEncoding:
+        observation_identity = source_observation_identity(source)
+        result = cache.get(observation_identity)
+        if result is None:
+            result = encoder(source.coordinates, source.features, source.real_slots)
+            cache[observation_identity] = result
+        return result
+
+    def real_template(shape: NormalTemplateShape) -> np.ndarray:
+        key = (shape.source_frame_id, shape.raw_semantic_id, shape.source_instance_id)
+        existing = template_summary.get(key)
+        if existing is not None:
+            return existing
+        source = template_sequence.source_frame(shape.source_frame_id)
+        if source.labels is None:
+            raise TrainingError("train/206 normal template lacks instance labels")
+        slots = source.real_slots.astype(np.int64, copy=False)
+        rows = np.flatnonzero(
+            (source.labels.semantic[slots] == shape.raw_semantic_id)
+            & (source.labels.instance[slots] == shape.source_instance_id)
+        )
+        if not rows.size:
+            raise TrainingError("train/206 normal template instance is empty")
+        result = _stu_summary(
+            (
+                (
+                    encode(source),
+                    torch.as_tensor(rows, dtype=torch.long, device=device),
+                    source.xyzi[slots[rows], 3],
+                    source.xyzi[slots[rows], :3],
+                ),
+            )
+        )
+        template_summary[key] = result
+        return result
+
+    with torch.inference_mode():
+        for clip in clips:
+            objects = {item.object_id: item for item in clip.world.objects}
+            for window in clip.windows:
+                world_by_window[window.identity] = clip.world.identity
+                entity_parts: dict[
+                    int,
+                    list[tuple[STUPointEncoding, Tensor, np.ndarray, np.ndarray]],
+                ] = {descriptor.object_id: [] for descriptor in window.descriptors}
+                for descriptor in window.descriptors:
+                    if descriptor.label == "normal-control":
+                        shape = objects[descriptor.object_id].shape
+                        if not isinstance(shape, NormalTemplateShape):
+                            raise TrainingError(
+                                "R02 normal control lacks a train/206 template"
+                            )
+                        template_by_control[(window.identity, descriptor.object_id)] = (
+                            shape
+                        )
+                for rendered in window.rendered_frames:
+                    source = rendered.source
+                    encoding = encode(source)
+                    slots = source.real_slots.astype(np.int64, copy=False)
+                    object_ids = rendered.object_id_internal[slots]
+                    for object_id in entity_parts:
+                        rows = np.flatnonzero(object_ids == object_id)
+                        if rows.size:
+                            index = torch.as_tensor(
+                                rows, dtype=torch.long, device=device
+                            )
+                            entity_parts[object_id].append(
+                                (
+                                    encoding,
+                                    index,
+                                    source.xyzi[slots[rows], 3],
+                                    source.xyzi[slots[rows], :3],
+                                )
+                            )
+                for object_id, parts in entity_parts.items():
+                    entity[(window.identity, object_id)] = _stu_summary(parts)
+
+    pairs = match_window_entities(
+        tuple(window for clip in clips for window in clip.windows)
+    )
+    worlds = sorted({clip.world.identity for clip in clips})
+    group = {identity: index for index, identity in enumerate(worlds)}
+    control = np.stack(
+        [
+            entity[(pair.control_window_identity, pair.control_object_id)]
+            for pair in pairs
+        ]
+    )
+    proxy = np.stack(
+        [entity[(pair.proxy_window_identity, pair.proxy_object_id)] for pair in pairs]
+    )
+    control_groups = np.asarray(
+        [group[pair.control_world_identity] for pair in pairs], dtype=np.int64
+    )
+    proxy_groups = np.asarray(
+        [group[pair.proxy_world_identity] for pair in pairs], dtype=np.int64
+    )
+    shortcut = _low_capacity_grouped_audit(
+        control, proxy, control_groups, proxy_groups, seed=R02_SHORTCUT_SEED
+    )
+
+    control_keys = sorted(
+        key
+        for key in entity
+        if any(
+            window.identity == key[0]
+            and any(
+                descriptor.object_id == key[1] and descriptor.label == "normal-control"
+                for descriptor in window.descriptors
+            )
+            for clip in clips
+            for window in clip.windows
+        )
+    )
+    rendered_control = np.stack([entity[key] for key in control_keys])
+    matched_real = np.stack(
+        [real_template(template_by_control[key]) for key in control_keys]
+    )
+    realism_groups = np.asarray(
+        [group[world_by_window[key[0]]] for key in control_keys], dtype=np.int64
+    )
+    realism = _low_capacity_grouped_audit(
+        matched_real,
+        rendered_control,
+        realism_groups,
+        realism_groups,
+        seed=R02_SHORTCUT_SEED + 1,
+    )
+
+    def record(
+        result: Mapping[str, object],
+        *,
+        class_zero: str,
+        class_one: str,
+        zero: np.ndarray,
+        one: np.ndarray,
+        seed: int,
+    ) -> dict[str, object]:
+        tree = _require_mapping(result["depth3_tree"], "depth-three audit")
+        return {
+            "algorithm": "standardized_logistic_regression_and_depth3_tree",
+            "class_zero": class_zero,
+            "class_one": class_one,
+            "feature_names": list(R02_STU_SUMMARY_FEATURES),
+            "feature_evidence_sha256": _identity_digest(
+                {
+                    "class_zero": zero.tolist(),
+                    "class_one": one.tolist(),
+                }
+            ),
+            "split_unit": "WorldSpec_identity",
+            "seed": seed,
+            "train_samples": result["train_samples"],
+            "test_samples": result["test_samples"],
+            "balanced_accuracy": result["balanced_accuracy"],
+            "auroc": result["auroc"],
+            "depth3_tree": dict(tree),
+        }
+
+    return (
+        record(
+            shortcut,
+            class_zero="normal-control",
+            class_one="anomaly-proxy",
+            zero=control,
+            one=proxy,
+            seed=R02_SHORTCUT_SEED,
+        ),
+        record(
+            realism,
+            class_zero="matched-real-normal",
+            class_one="rendered-normal-control",
+            zero=matched_real,
+            one=rendered_control,
+            seed=R02_SHORTCUT_SEED + 1,
+        ),
+    )
+
+
 def finalize_r02_development_worlds(
     *,
     protocol_path: Path | str,
     development_worlds_path: Path | str,
     data_root: Path | str,
     visual_review_path: Path | str,
+    device: torch.device | str = "cpu",
 ) -> DevelopmentWorlds:
     """Recompute R02 evidence once and irreversibly record pass or stop."""
 
     protocol = _load_training_protocol(protocol_path)
     assert isinstance(protocol, AJAEProtocol)
-    if protocol.status["current_node"] != "R02" or protocol.r02_thresholds is None:
+    if (
+        protocol.status["current_node"] != "R02"
+        or protocol.r02_thresholds is None
+        or protocol.status["r02_thresholds_frozen_result_blind"] is not True
+        or protocol.status["r02_threshold_identity"]
+        != _identity_digest(protocol.r02_thresholds)
+    ):
         raise TrainingError("R02 finalization requires frozen thresholds at node R02")
     definitions = load_development_worlds(development_worlds_path, protocol=protocol)
     if definitions.status != "definitions_only_unvalidated":
@@ -4419,6 +4785,16 @@ def finalize_r02_development_worlds(
         protocol=protocol,
     )
     windows = tuple(window for clip in runtime for window in clip.windows)
+    try:
+        stu_shortcut, control_realism = _r02_stu_audits(
+            runtime,
+            protocol=protocol,
+            data_root=data_root,
+            device=_resolve_device(device),
+        )
+    except (OSError, ValueError, TypeError, RuntimeError, RenderError):
+        stu_shortcut = None
+        control_realism = None
     try:
         pairs = match_window_entities(windows)
         balance = window_matching_balance(pairs)
@@ -4526,8 +4902,8 @@ def finalize_r02_development_worlds(
     )
     shortcut_base = {
         "eligible_mechanism": "in_generator",
-        "algorithm": "standardized_logistic_regression",
-        "feature_names": list(R02_MATCHING_FEATURES),
+        "algorithm": "standardized_logistic_regression_and_depth3_tree",
+        "feature_names": list(R02_PHYSICAL_SHORTCUT_FEATURES),
         "seed": R02_SHORTCUT_SEED,
         "split_unit": "world_identity",
     }
@@ -4556,11 +4932,14 @@ def finalize_r02_development_worlds(
         test_worlds = [
             world_identities[int(index)] for index in shortcut["test_groups"]
         ]
-        shortcut_pass = float(shortcut["balanced_accuracy"]) <= float(
-            thresholds["maximum_shortcut_balanced_accuracy"]
-        ) and abs(float(shortcut["auroc"]) - 0.5) <= float(
-            thresholds["maximum_shortcut_absolute_auroc_deviation_from_half"]
-        )
+        tree = _require_mapping(shortcut["depth3_tree"], "depth-three shortcut tree")
+        shortcut_pass = max(
+            float(shortcut["balanced_accuracy"]),
+            float(tree["balanced_accuracy"]),
+        ) < float(thresholds["maximum_shortcut_balanced_accuracy_exclusive"]) and max(
+            float(shortcut["auroc"]),
+            float(tree["auroc"]),
+        ) < float(thresholds["maximum_shortcut_auroc_exclusive"])
         shortcut_summary = _sealed_summary(
             {
                 **shortcut_base,
@@ -4573,15 +4952,52 @@ def finalize_r02_development_worlds(
                 "intercept": shortcut["intercept"],
                 "balanced_accuracy": shortcut["balanced_accuracy"],
                 "auroc": shortcut["auroc"],
+                "depth3_tree": dict(tree),
                 "passed": shortcut_pass,
             }
         )
+
+    def model_audit_summary(
+        audit: Mapping[str, object] | None,
+        *,
+        failure_code: str,
+    ) -> tuple[dict[str, object], bool]:
+        if audit is None:
+            return (
+                _sealed_summary(
+                    {
+                        "status": "not_computable",
+                        "failure_code": failure_code,
+                        "passed": False,
+                    }
+                ),
+                False,
+            )
+        tree = _require_mapping(audit["depth3_tree"], "R02 depth-three audit")
+        passed = max(
+            float(audit["balanced_accuracy"]),
+            float(tree["balanced_accuracy"]),
+        ) < float(thresholds["maximum_shortcut_balanced_accuracy_exclusive"]) and max(
+            float(audit["auroc"]), float(tree["auroc"])
+        ) < float(thresholds["maximum_shortcut_auroc_exclusive"])
+        return _sealed_summary(
+            {**dict(audit), "status": "computed", "passed": passed}
+        ), passed
+
+    stu_shortcut_summary, stu_shortcut_pass = model_audit_summary(
+        stu_shortcut, failure_code="frozen_stu_shortcut_not_computable"
+    )
+    control_realism_summary, control_realism_pass = model_audit_summary(
+        control_realism, failure_code="normal_control_realism_not_computable"
+    )
     decisions = {
         "visual_review_passed": visual_pass,
         "descriptor_integrity_passed": True,
         "proxy_control_matching_passed": matching_pass,
         "densification_passed": density_pass,
         "shortcut_audit_passed": shortcut_pass,
+        "frozen_stu_shortcut_passed": stu_shortcut_pass,
+        "normal_control_realism_passed": control_realism_pass,
     }
     if set(decisions) != set(R02_VALIDATION_KEYS):
         raise AssertionError("R02 component decisions differ from the protocol")
@@ -4603,6 +5019,8 @@ def finalize_r02_development_worlds(
         "matching": matching,
         "densification": densification,
         "shortcut_audit": shortcut_summary,
+        "frozen_stu_shortcut_audit": stu_shortcut_summary,
+        "normal_control_realism_audit": control_realism_summary,
         "component_decisions": decisions,
         "decision": "pass" if all(decisions.values()) else "fail",
     }
@@ -4708,7 +5126,7 @@ class WindowTrainer:
             type(protocol) is not AJAEProtocol
             or protocol.schema_version != SCHEMA_VERSION
         ):
-            raise TrainingError("WindowTrainer requires the schema-31 protocol")
+            raise TrainingError("WindowTrainer requires the schema-32 protocol")
         if type(model) is not JointWindowPointTransformer:
             raise TrainingError(
                 "training requires the authoritative JointWindowPointTransformer"
@@ -4751,20 +5169,15 @@ class WindowTrainer:
         if r03_identity != protocol.status["r03_qualification_identity"]:
             raise TrainingError("trainer uses another R03 qualification")
         if request.mode is TrainMode.FORMAL:
-            expected_g2 = (
-                None
-                if request.condition is ExperimentCondition.B1
-                else protocol.status["g2_verdict_identity"]
-            )
             if (
                 authorization.r04_training_qualification_identity
                 != protocol.status["r04_training_qualification_identity"]
                 or authorization.r05_freeze_identity
                 != protocol.status["r05_freeze_identity"]
-                or authorization.g2_verdict_identity != expected_g2
+                or authorization.g2_verdict_identity is not None
             ):
                 raise TrainingError(
-                    "formal trainer lacks its bound R04/R05/G2 evidence"
+                    "F01 formal trainer lacks its bound R04/R05 evidence"
                 )
         elif (
             authorization.r04_training_qualification_identity is not None
@@ -4870,7 +5283,7 @@ class WindowTrainer:
             "r05_freeze_identity": self.authorization.r05_freeze_identity,
             "g2_verdict_identity": self.authorization.g2_verdict_identity,
             "initial_model_state_sha256": self.initial_model_state_sha256,
-            "config": asdict(self.config),
+            "config": _config_record(self.config),
             "bank_entry_count": len(self.bank),
             "bank_plan_prefix_count": self.bank.plan_prefix_count,
             "window_count": self.request.window_count,
@@ -4880,6 +5293,7 @@ class WindowTrainer:
             "next_entry": self.next_entry,
             "updates": self.updates,
             "windows_seen": self.windows_seen,
+            "equivalent_bank_passes": self.windows_seen / self.request.window_count,
             "last_loss": self.last_loss,
             "best_development_ap": self.best_development_ap,
             "last_development": self.last_development,
@@ -4949,7 +5363,7 @@ class WindowTrainer:
             "r05_freeze_identity": self.authorization.r05_freeze_identity,
             "g2_verdict_identity": self.authorization.g2_verdict_identity,
             "initial_model_state_sha256": self.initial_model_state_sha256,
-            "config": asdict(self.config),
+            "config": _config_record(self.config),
             "bank_entry_count": len(self.bank),
             "bank_plan_prefix_count": self.bank.plan_prefix_count,
             "window_count": self.request.window_count,
@@ -5230,7 +5644,7 @@ class WindowTrainer:
             ),
             "r05_freeze_identity": self.authorization.r05_freeze_identity,
             "g2_verdict_identity": self.authorization.g2_verdict_identity,
-            "config": asdict(self.config),
+            "config": _config_record(self.config),
             "protocol_identity": self.protocol_identity,
             "training_system_identity": protocol_training_system_identity(
                 self.protocol
@@ -5245,6 +5659,7 @@ class WindowTrainer:
             "completed_epochs": self.epoch,
             "optimizer_updates": self.updates,
             "windows_seen": self.windows_seen,
+            "equivalent_bank_passes": self.windows_seen / self.request.window_count,
             "last_effective_batch_loss": self.last_loss,
             "last_checkpoint_sha256": last_checkpoint_sha256,
             "last_model_state_sha256": last_model_state_sha256,
@@ -5298,7 +5713,6 @@ def run_training(
     pilot_stage: str | None = None,
     r03_qualification_path: Path | str | None = None,
     r04_qualification_path: Path | str | None = None,
-    g2_verdict_path: Path | str | None = None,
     development_worlds_path: Path | str | None = None,
     rendered_development_clips: Iterable[DevelopmentClipWorld] | None = None,
     data_root: Path | str | None = None,
@@ -5350,8 +5764,6 @@ def run_training(
             raise TrainingError(
                 "R04 qualification runs cannot consume their own verdict"
             )
-        if g2_verdict_path is not None:
-            raise TrainingError("R04 qualification runs cannot consume a G2 verdict")
     else:
         if r03_qualification_path is not None:
             raise TrainingError(
@@ -5369,26 +5781,6 @@ def run_training(
             protocol.status["r03_qualification_identity"],
             "status.r03_qualification_identity",
         )
-        if protocol.status["current_node"] == "G3":
-            if g2_verdict_path is None:
-                raise TrainingError("G3 training requires the passed bound G2 verdict")
-            try:
-                g2_record = FormalGateVerdictRecord.load(
-                    g2_verdict_path, protocol=protocol
-                )
-            except EvaluationError as error:
-                raise TrainingError(
-                    "G2 verdict does not authorize G3 training"
-                ) from error
-            g2_identity = g2_record.record_sha256
-            if (
-                g2_record.gate != "G2"
-                or g2_record.decision != "pass"
-                or g2_identity != protocol.status["g2_verdict_identity"]
-            ):
-                raise TrainingError("G3 training requires the passed bound G2 verdict")
-        elif g2_verdict_path is not None:
-            raise TrainingError("G2 training cannot consume an unfinished G2 verdict")
     if rendered_development_clips is None and development_worlds_path is not None:
         if data_root is None:
             raise TrainingError(
@@ -5492,7 +5884,7 @@ def run_training(
 
 def _main() -> None:
     parser = argparse.ArgumentParser(
-        description="Generate, adjudicate, or train the sole schema-31 AJAE route."
+        description="Generate, adjudicate, or train the sole schema-32 AJAE route."
     )
     commands = parser.add_subparsers(dest="command", required=True)
 
@@ -5517,6 +5909,14 @@ def _main() -> None:
     development_command.add_argument("--data-root", required=True, type=Path)
     development_command.add_argument("--output", required=True, type=Path)
 
+    confirmation_command = commands.add_parser(
+        "generate-confirmation",
+        help="open the sealed 24-clip D_confirm population at G2",
+    )
+    protocol_argument(confirmation_command)
+    confirmation_command.add_argument("--data-root", required=True, type=Path)
+    confirmation_command.add_argument("--output", required=True, type=Path)
+
     r02_command = commands.add_parser(
         "finalize-r02", help="recompute and irreversibly record the R02 verdict"
     )
@@ -5524,6 +5924,7 @@ def _main() -> None:
     r02_command.add_argument("--development-worlds", required=True, type=Path)
     r02_command.add_argument("--data-root", required=True, type=Path)
     r02_command.add_argument("--visual-review", required=True, type=Path)
+    r02_command.add_argument("--device", required=True)
 
     r04_command = commands.add_parser(
         "finalize-r04", help="recompute the R04 training qualification verdict"
@@ -5552,8 +5953,9 @@ def _main() -> None:
         choices=("constant", "five_percent_warmup_cosine"),
         default="constant",
     )
-    train_command.add_argument("--epochs", type=int, default=1)
-    train_command.add_argument("--maximum-updates", type=int)
+    budget = train_command.add_mutually_exclusive_group(required=True)
+    budget.add_argument("--epochs", type=int)
+    budget.add_argument("--maximum-updates", type=int)
     train_command.add_argument("--evaluation-interval-updates", type=int, default=1)
     train_command.add_argument("--gradient-clip-norm", type=float)
     train_command.add_argument(
@@ -5562,7 +5964,6 @@ def _main() -> None:
     )
     train_command.add_argument("--r03-qualification", type=Path)
     train_command.add_argument("--r04-qualification", type=Path)
-    train_command.add_argument("--g2-verdict", type=Path)
     train_command.add_argument("--development-worlds", type=Path)
     train_command.add_argument("--data-root", type=Path)
     train_command.add_argument("--resume", action="store_true")
@@ -5577,7 +5978,7 @@ def _main() -> None:
             device=args.device,
         )
         result: object = {
-            "format": "ajae-schema31-bank-generation-summary-v1",
+            "format": "ajae-schema32-bank-generation-summary-v1",
             "bank_identity": bank.bank_identity,
             "entry_count": len(bank),
             "plan_identity": bank.plan_identity,
@@ -5590,11 +5991,25 @@ def _main() -> None:
             destination=args.output,
         )
         result = {
-            "format": "ajae-schema31-development-generation-summary-v1",
+            "format": "ajae-schema32-development-generation-summary-v1",
             "status": development.status,
             "clip_count": len(development.clips),
             "plan_identity": development.plan_identity,
             "population_identity": development.population_identity,
+        }
+    elif args.command == "generate-confirmation":
+        confirmation = generate_development_worlds(
+            protocol_path=args.protocol,
+            data_root=args.data_root,
+            destination=args.output,
+            population_role="confirmation",
+        )
+        result = {
+            "format": "ajae-schema32-confirmation-generation-summary-v1",
+            "status": confirmation.status,
+            "clip_count": len(confirmation.clips),
+            "plan_identity": confirmation.plan_identity,
+            "population_identity": confirmation.population_identity,
         }
     elif args.command == "finalize-r02":
         development = finalize_r02_development_worlds(
@@ -5602,9 +6017,10 @@ def _main() -> None:
             development_worlds_path=args.development_worlds,
             data_root=args.data_root,
             visual_review_path=args.visual_review,
+            device=args.device,
         )
         result = {
-            "format": "ajae-schema31-r02-finalization-summary-v1",
+            "format": "ajae-schema32-r02-finalization-summary-v1",
             "status": development.status,
             "population_identity": development.population_identity,
             "validation": dict(development.validation),
@@ -5616,7 +6032,7 @@ def _main() -> None:
             destination=args.output,
         )
         result = {
-            "format": "ajae-schema31-r04-finalization-summary-v1",
+            "format": "ajae-schema32-r04-finalization-summary-v1",
             "record_sha256": qualification.record_sha256,
             "bank_identity": qualification.bank_identity,
             "frozen_stage_winners": dict(qualification.winner),
@@ -5627,6 +6043,7 @@ def _main() -> None:
             gradient_accumulation=args.gradient_accumulation,
             weight_decay=args.weight_decay,
             scheduler=args.scheduler,
+            budget_unit=("epochs" if args.epochs is not None else "optimizer_updates"),
             epochs=args.epochs,
             maximum_updates=args.maximum_updates,
             evaluation_interval_updates=args.evaluation_interval_updates,
@@ -5644,7 +6061,6 @@ def _main() -> None:
             pilot_stage=args.pilot_stage,
             r03_qualification_path=args.r03_qualification,
             r04_qualification_path=args.r04_qualification,
-            g2_verdict_path=args.g2_verdict,
             development_worlds_path=args.development_worlds,
             data_root=args.data_root,
             resume=args.resume,

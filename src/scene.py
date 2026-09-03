@@ -108,9 +108,7 @@ def _require_sealed_sequence_access(
         or access.protocol is not protocol
         or access.partition != partition
     ):
-        message = (
-            f"{partition} sequences are sealed until the evaluator validates method freeze"
-        )
+        message = f"{partition} sequences are sealed until the evaluator validates method freeze"
         LOGGER.warning(
             "Refused sealed sequence access: partition=%s sequence=%s",
             partition,
@@ -320,7 +318,9 @@ class SourceFrame:
             raise TypeError("coordinates must be float64[N,3]")
         if self.features.dtype != np.float32 or self.features.shape != (count, 2):
             raise TypeError("features must be float32[N,2]")
-        if self.zero_slot_mask.dtype != np.bool_ or self.zero_slot_mask.shape != (count,):
+        if self.zero_slot_mask.dtype != np.bool_ or self.zero_slot_mask.shape != (
+            count,
+        ):
             raise TypeError("zero_slot_mask must be bool[N]")
         if self.real_slots.dtype != np.int32 or self.real_slots.ndim != 1:
             raise TypeError("real_slots must be int32[M]")
@@ -331,7 +331,9 @@ class SourceFrame:
             self.coordinates, official_stu_coordinates(self.xyzi, self.lidar_pose)
         ):
             raise SceneDataError("coordinates differ from STU's official definition")
-        if not np.array_equal(self.features, official_stu_features(self.xyzi, self.lidar_pose)):
+        if not np.array_equal(
+            self.features, official_stu_features(self.xyzi, self.lidar_pose)
+        ):
             raise SceneDataError("features differ from STU's official definition")
         expected_zero = np.all(self.xyzi[:, :3] == np.float32(0.0), axis=1)
         if not np.array_equal(self.zero_slot_mask, expected_zero):
@@ -442,7 +444,9 @@ class WindowReferencePose:
             atol=1.0e-10,
             rtol=1.0e-10,
         ):
-            raise SceneDataError("window reference rotation is not numerically orthogonal")
+            raise SceneDataError(
+                "window reference rotation is not numerically orthogonal"
+            )
         if not math.isclose(
             float(np.linalg.det(rotation)), 1.0, abs_tol=1.0e-10, rel_tol=1.0e-10
         ):
@@ -476,7 +480,9 @@ class WindowReferencePose:
 
         poses = tuple(np.asarray(pose) for pose in sensor_to_world)
         if len(poses) != len(WINDOW_MEMBER_OFFSETS):
-            raise SceneDataError("a window reference requires exactly five sensor poses")
+            raise SceneDataError(
+                "a window reference requires exactly five sensor poses"
+            )
         for index, pose in enumerate(poses):
             if pose.dtype != np.float64:
                 raise TypeError(f"sensor_to_world[{index}] must be float64[4,4]")
@@ -579,12 +585,18 @@ class WindowPoints:
                     "an audited ray mapping requires its calibration digest"
                 )
         elif self.ray_mapping_digest is not None:
-            raise SceneDataError("an unaudited ray mapping cannot carry an audit digest")
+            raise SceneDataError(
+                "an unaudited ray mapping cannot carry an audit digest"
+            )
         _finite("symmetric-window coordinates", self.coordinates)
-        if np.any((self.scan_group < 0) | (self.scan_group >= len(WINDOW_MEMBER_OFFSETS))):
+        if np.any(
+            (self.scan_group < 0) | (self.scan_group >= len(WINDOW_MEMBER_OFFSETS))
+        ):
             raise SceneDataError("scan groups must lie in [0,4]")
         if np.any(self.source_frame < 0) or np.any(self.source_slot < 0):
-            raise SceneDataError("source frame and slot identities must be non-negative")
+            raise SceneDataError(
+                "source frame and slot identities must be non-negative"
+            )
         if np.any((self.source_ray < 0) | (self.source_ray >= RAY_MAPPING_DOMAIN)):
             raise SceneDataError("canonical ray IDs must lie in [0,131071]")
         if count > 1:
@@ -592,13 +604,17 @@ class WindowPoints:
             if np.any(same_group & (self.source_frame[1:] != self.source_frame[:-1])):
                 raise SceneDataError("one scan group cannot mix source frames")
             if np.any(same_group & (self.source_slot[1:] <= self.source_slot[:-1])):
-                raise SceneDataError("source slots must increase within each scan group")
+                raise SceneDataError(
+                    "source slots must increase within each scan group"
+                )
             starts = np.concatenate(
                 (np.asarray([True]), self.scan_group[1:] != self.scan_group[:-1])
             )
             started_groups = self.scan_group[starts]
             if np.unique(started_groups).size != started_groups.size:
-                raise SceneDataError("a scan group must occupy one contiguous point block")
+                raise SceneDataError(
+                    "a scan group must occupy one contiguous point block"
+                )
         for array in (
             self.coordinates,
             self.scan_group,
@@ -647,18 +663,28 @@ class SceneWindow:
             raise TypeError("frame_ids must contain plain integers")
         expected_ids = tuple(start + offset for offset in WINDOW_MEMBER_OFFSETS)
         if declared_ids != expected_ids:
-            raise SceneDataError("frame_ids must be the five consecutive IDs from window_start")
+            raise SceneDataError(
+                "frame_ids must be the five consecutive IDs from window_start"
+            )
         if tuple(self.spec.window_frame_ids(start)) != declared_ids:
-            raise SceneDataError("window identity is not legal for the sequence specification")
+            raise SceneDataError(
+                "window identity is not legal for the sequence specification"
+            )
         if not isinstance(self.reference_pose, WindowReferencePose):
             raise TypeError("reference_pose must be WindowReferencePose")
         if len(self.frames) != len(WINDOW_MEMBER_OFFSETS):
             raise SceneDataError("a SceneWindow must contain exactly five source scans")
 
         source_ids = tuple(item.source.frame_id for item in self.frames)
-        if len(set(source_ids)) != len(source_ids) or set(source_ids) != set(declared_ids):
-            raise SceneDataError("window source scans must match the declared frame IDs once each")
-        canonical_group = {frame_id: index for index, frame_id in enumerate(declared_ids)}
+        if len(set(source_ids)) != len(source_ids) or set(source_ids) != set(
+            declared_ids
+        ):
+            raise SceneDataError(
+                "window source scans must match the declared frame IDs once each"
+            )
+        canonical_group = {
+            frame_id: index for index, frame_id in enumerate(declared_ids)
+        }
         expected_pose = WindowReferencePose.from_sensor_poses(
             tuple(item.source.lidar_pose for item in self.frames)
         )
@@ -668,12 +694,16 @@ class SceneWindow:
             atol=IDENTITY_ATOL,
             rtol=IDENTITY_ATOL,
         ):
-            raise SceneDataError("window reference pose does not match all five sensor poses")
+            raise SceneDataError(
+                "window reference pose does not match all five sensor poses"
+            )
         window_from_world = self.reference_pose.window_from_world
         for item in self.frames:
             group = canonical_group[item.source.frame_id]
             if item.scan_group != group:
-                raise SceneDataError("scan group does not match the declared source frame")
+                raise SceneDataError(
+                    "scan group does not match the declared source frame"
+                )
             expected_transform = window_from_world @ item.source.lidar_pose
             if not np.allclose(
                 item.source_to_window,
@@ -684,11 +714,17 @@ class SceneWindow:
                 raise SceneDataError("source-to-window transform is inconsistent")
             mask = self.points.scan_group == group
             if not np.all(self.points.source_frame[mask] == item.source.frame_id):
-                raise SceneDataError("point frame identities do not match their scan group")
-            if not np.array_equal(self.points.source_slot[mask], item.source.real_slots):
+                raise SceneDataError(
+                    "point frame identities do not match their scan group"
+                )
+            if not np.array_equal(
+                self.points.source_slot[mask], item.source.real_slots
+            ):
                 raise SceneDataError("point slots do not match visible source returns")
         if self.points.count != sum(item.source.real_count for item in self.frames):
-            raise SceneDataError("window points do not contain every visible return exactly once")
+            raise SceneDataError(
+                "window points do not contain every visible return exactly once"
+            )
         if self.labels is not None and self.labels.packed.size != self.points.count:
             raise SceneDataError("window labels do not match visible returns")
 
@@ -735,7 +771,10 @@ def assemble_window(
     if any(type(frame_id) is not int for frame_id in declared_ids):
         raise TypeError("frame_ids must contain plain integers")
     expected_ids = tuple(start + offset for offset in WINDOW_MEMBER_OFFSETS)
-    if declared_ids != expected_ids or tuple(spec.window_frame_ids(start)) != declared_ids:
+    if (
+        declared_ids != expected_ids
+        or tuple(spec.window_frame_ids(start)) != declared_ids
+    ):
         raise SceneDataError("frame_ids do not define a legal five-scan window")
 
     source_frames = tuple(sources)
@@ -748,7 +787,9 @@ def assemble_window(
         source.partition != spec.partition or source.sequence_id != spec.sequence_id
         for source in source_frames
     ):
-        raise SceneDataError("source identity does not match the sequence specification")
+        raise SceneDataError(
+            "source identity does not match the sequence specification"
+        )
     labels_present = tuple(source.labels is not None for source in source_frames)
     if len(set(labels_present)) != 1:
         raise SceneDataError("all scans must have the same label availability")
@@ -759,7 +800,9 @@ def assemble_window(
     if labels_present[0] and len(set(targets_present)) != 1:
         raise SceneDataError("all labels must have the same STU-target availability")
     if ray_mapping_audited and canonical_ray_by_slot is None:
-        raise SceneDataError("an audited window requires an explicit calibrated mapping")
+        raise SceneDataError(
+            "an audited window requires an explicit calibrated mapping"
+        )
     if not ray_mapping_audited and ray_mapping_digest is not None:
         raise SceneDataError("an unaudited window cannot carry a calibration digest")
 
@@ -791,15 +834,15 @@ def assemble_window(
         aligned = source_xyz @ transform[:3, :3].T + transform[:3, 3]
         coordinates.append(aligned.astype(np.float32))
         scan_groups.append(np.full(slots.size, group, dtype=np.int8))
-        source_ids_by_point.append(
-            np.full(slots.size, source.frame_id, dtype=np.int32)
-        )
+        source_ids_by_point.append(np.full(slots.size, source.frame_id, dtype=np.int32))
         source_slots.append(slots.copy())
         if canonical_ray_by_slot is None:
             mapping = np.arange(source.slot_count, dtype=np.int32)
         elif isinstance(canonical_ray_by_slot, Mapping):
             if source.frame_id not in canonical_ray_by_slot:
-                raise SceneDataError(f"canonical ray mapping lacks frame {source.frame_id}")
+                raise SceneDataError(
+                    f"canonical ray mapping lacks frame {source.frame_id}"
+                )
             mapping = np.asarray(canonical_ray_by_slot[source.frame_id])
         else:
             mapping = np.asarray(canonical_ray_by_slot)
@@ -808,9 +851,16 @@ def assemble_window(
         if np.unique(mapping).size != mapping.size or np.any(
             (mapping < 0) | (mapping >= RAY_MAPPING_DOMAIN)
         ):
-            raise SceneDataError("canonical ray mapping must be an in-range one-to-one map")
-        if ray_mapping_audited and canonical_ray_mapping_digest(mapping) != ray_mapping_digest:
-            raise SceneDataError("canonical ray mapping does not match its calibration digest")
+            raise SceneDataError(
+                "canonical ray mapping must be an in-range one-to-one map"
+            )
+        if (
+            ray_mapping_audited
+            and canonical_ray_mapping_digest(mapping) != ray_mapping_digest
+        ):
+            raise SceneDataError(
+                "canonical ray mapping does not match its calibration digest"
+            )
         source_rays.append(mapping[slots].copy())
         if source.labels is not None:
             packed.append(source.labels.packed[slots])
@@ -835,7 +885,9 @@ def assemble_window(
             semantic=_freeze(np.concatenate(semantic)),
             instance=_freeze(np.concatenate(instance)),
             semantic_target=(
-                _freeze(np.concatenate(semantic_targets)) if targets_present[0] else None
+                _freeze(np.concatenate(semantic_targets))
+                if targets_present[0]
+                else None
             ),
         )
     return SceneWindow(
@@ -949,7 +1001,9 @@ def locate_sequence(
         sealed_access,
         sequence_id=identifier,
     )
-    path = Path(data_root).expanduser().resolve(strict=True) / partition / str(identifier)
+    path = (
+        Path(data_root).expanduser().resolve(strict=True) / partition / str(identifier)
+    )
     if not path.is_dir():
         raise FileNotFoundError(path)
     return path.resolve()
@@ -983,7 +1037,10 @@ class STUSequence:
         self.sequence_dir = Path(sequence_dir).expanduser().resolve(strict=True)
         if not self.sequence_dir.is_dir():
             raise NotADirectoryError(self.sequence_dir)
-        if self.sequence_dir.name != str(spec.sequence_id) or self.sequence_dir.parent.name != spec.partition:
+        if (
+            self.sequence_dir.name != str(spec.sequence_id)
+            or self.sequence_dir.parent.name != spec.partition
+        ):
             raise SceneDataError("sequence directory does not match protocol identity")
         self.label_mode = LabelMode(label_mode)
         if self.label_mode is LabelMode.REQUIRED and not spec.labels_available:
@@ -1116,13 +1173,17 @@ class STUSequence:
             mapped = self._semantic_target_lut[semantic]
             if np.any(mapped < 0):
                 unknown = sorted(map(int, np.unique(semantic[mapped < 0])))
-                raise SceneDataError(f"normal frame {frame} has unmapped labels {unknown}")
+                raise SceneDataError(
+                    f"normal frame {frame} has unmapped labels {unknown}"
+                )
             semantic_target = mapped.astype(np.uint8)
         return PointLabels(
             packed=_freeze(packed),
             semantic=_freeze(semantic),
             instance=_freeze(instance),
-            semantic_target=None if semantic_target is None else _freeze(semantic_target),
+            semantic_target=None
+            if semantic_target is None
+            else _freeze(semantic_target),
         )
 
     def window(
@@ -1201,9 +1262,7 @@ def summarize_window(window: SceneWindow) -> dict[str, object]:
         "scan_groups": [item.scan_group for item in window.frames],
         "input_slots_by_frame": [item.source.slot_count for item in window.frames],
         "visible_returns": window.points.count,
-        "visible_returns_by_frame": [
-            item.source.real_count for item in window.frames
-        ],
+        "visible_returns_by_frame": [item.source.real_count for item in window.frames],
         "feature_channels": 2,
         "labels_read": window.labels is not None,
         "ray_mapping_audited": window.points.ray_mapping_audited,
@@ -1211,12 +1270,14 @@ def summarize_window(window: SceneWindow) -> dict[str, object]:
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Inspect AJAE schema-31 STU windows.")
+    parser = argparse.ArgumentParser(description="Inspect AJAE schema-32 STU windows.")
     parser.add_argument("--protocol", type=Path)
     parser.add_argument("--data-root", type=Path, required=True)
     parser.add_argument("--partition", choices=("train", "val", "test"), required=True)
     parser.add_argument("--sequence", type=int, required=True)
-    parser.add_argument("--labels", choices=tuple(mode.value for mode in LabelMode), required=True)
+    parser.add_argument(
+        "--labels", choices=tuple(mode.value for mode in LabelMode), required=True
+    )
     parser.add_argument("--window-start", type=int, action="append")
     parser.add_argument(
         "--condition",
@@ -1229,7 +1290,9 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
-    protocol = load_protocol() if args.protocol is None else load_protocol(args.protocol)
+    protocol = (
+        load_protocol() if args.protocol is None else load_protocol(args.protocol)
+    )
     sequence = STUSequence.open(
         args.data_root,
         protocol=protocol,

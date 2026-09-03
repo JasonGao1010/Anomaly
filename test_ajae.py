@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Focused scientific-semantic tests for the sole AJAE schema-31 route.
+"""Focused scientific-semantic tests for the sole AJAE schema-32 route.
 
 Every fixture is small and synthetic. The suite never opens the real STU
 sequences, renders a bank, loads the released network, or starts training.
@@ -60,6 +60,7 @@ from src.protocol import (
     SequenceSpec,
     load_development_worlds,
     load_protocol,
+    validate_confirmation_seal,
 )
 from src.qualify import joint_gradient_audit, scan_permutation_audit
 from src.render import (
@@ -302,6 +303,9 @@ def _training_window(renderer_identity: str) -> object:
         coordinates=torch.column_stack(
             (groups.float(), torch.zeros(5), torch.zeros(5))
         ),
+        native_coordinates=torch.column_stack(
+            (groups.float() + 10.0, torch.zeros(5), torch.zeros(5))
+        ),
         scan_group=groups,
         stu_features=torch.randn((5, 128), generator=generator),
         normal_evidence=torch.randn((5, 19), generator=generator),
@@ -452,9 +456,19 @@ def _protocol_with_frozen_r02_thresholds(
         "minimum_median_proxy_joint_visible_return_count": 2.0,
         "minimum_median_proxy_densification_gain": 1.1,
         "minimum_proxy_fraction_densification_gain_above_one": 0.5,
-        "maximum_shortcut_balanced_accuracy": 0.6,
-        "maximum_shortcut_absolute_auroc_deviation_from_half": 0.1,
+        "maximum_shortcut_balanced_accuracy_exclusive": 0.95,
+        "maximum_shortcut_auroc_exclusive": 0.95,
     }
+    thresholds = document["render"]["proxy_control_matching"]["thresholds"]
+    document["status"]["r02_thresholds_frozen_result_blind"] = True
+    document["status"]["r02_threshold_identity"] = hashlib.sha256(
+        json.dumps(
+            thresholds,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
     document["status"]["current_node"] = node
     if node != "R02":
         document["status"]["r02_population_identity"] = "a" * 64
@@ -466,6 +480,7 @@ def _protocol_with_frozen_r02_thresholds(
         "R03",
         "R04",
         "R05",
+        "F01",
         "G2",
         "G3",
         "S01",
@@ -477,6 +492,7 @@ def _protocol_with_frozen_r02_thresholds(
         ("r03_qualification_identity", "R03", "c"),
         ("r04_training_qualification_identity", "R04", "d"),
         ("r05_freeze_identity", "R05", "e"),
+        ("f01_formal_training_identity", "F01", "0"),
         ("g2_verdict_identity", "G2", "f"),
         ("g3_verdict_identity", "G3", "1"),
         ("s01_shift_audit_identity", "S01", "2"),
@@ -495,9 +511,9 @@ def _protocol_with_frozen_r02_thresholds(
     return load_protocol(path)
 
 
-def test_protocol_is_the_only_schema31_b0_to_b3_contract() -> None:
+def test_protocol_is_the_only_schema32_b0_to_b3_contract() -> None:
     protocol = load_protocol(PROTOCOL_PATH)
-    assert protocol.schema_version == SCHEMA_VERSION == 31
+    assert protocol.schema_version == SCHEMA_VERSION == 32
     assert [item.value for item in ExperimentCondition] == ["B0", "B1", "B2", "B3"]
     assert set(protocol.experiments) == {"B0", "B1", "B2", "B3"}
     assert protocol.window_member_offsets == WINDOW_MEMBER_OFFSETS == (0, 1, 2, 3, 4)
@@ -550,7 +566,7 @@ def test_training_entry_rejects_schema30_before_full_loader_or_bank(
 
     monkeypatch.setattr(train_module, "load_protocol", forbidden_loader)
     bank = tmp_path / "bank-must-not-be-opened"
-    with pytest.raises(train_module.TrainingError, match="requires schema 31"):
+    with pytest.raises(train_module.TrainingError, match="requires schema 32"):
         train_module.run_training(
             protocol_path=old_protocol,
             bank_path=bank,
@@ -573,7 +589,7 @@ def test_training_entry_rejects_schema30_before_full_loader_or_bank(
         ("formal", 0, "completed R05 freeze"),
     ),
 )
-def test_schema31_training_is_blocked_before_bank_loading(
+def test_schema32_training_is_blocked_before_bank_loading(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     mode: str,
@@ -626,7 +642,6 @@ def test_pilot_stages_bind_prior_winners_and_fixed_run_parameters(
         gradient_accumulation=1,
         scheduler="constant",
         weight_decay=0.0,
-        epochs=1,
         maximum_updates=50,
         evaluation_interval_updates=50,
         gradient_clip_norm=None,
@@ -735,7 +750,27 @@ def test_pilot_stages_bind_prior_winners_and_fixed_run_parameters(
         )
 
 
-def test_formal_result_authorization_binds_g2_only_for_g3() -> None:
+def test_training_budget_uses_exactly_one_unit() -> None:
+    from src.train import TrainingConfig, TrainingError
+
+    with pytest.raises(TrainingError, match="maximum_updates only"):
+        TrainingConfig(
+            learning_rate=1.0e-4,
+            gradient_accumulation=1,
+            epochs=1,
+            maximum_updates=10,
+        )
+    with pytest.raises(TrainingError, match="epochs only"):
+        TrainingConfig(
+            learning_rate=1.0e-4,
+            gradient_accumulation=1,
+            budget_unit="epochs",
+            epochs=1,
+            maximum_updates=10,
+        )
+
+
+def test_all_formal_results_are_authorized_only_during_f01() -> None:
     from src.train import (
         TrainMode,
         TrainingConfig,
@@ -750,8 +785,9 @@ def test_formal_result_authorization_binds_g2_only_for_g3() -> None:
         gradient_accumulation=1,
         weight_decay=0.0,
         scheduler="constant",
+        budget_unit="epochs",
         epochs=1,
-        maximum_updates=445,
+        maximum_updates=None,
         evaluation_interval_updates=50,
         gradient_clip_norm=None,
     )
@@ -760,8 +796,8 @@ def test_formal_result_authorization_binds_g2_only_for_g3() -> None:
         "gradient_accumulation": 1,
         "weight_decay": 0.0,
         "scheduler": "constant",
+        "budget_unit": "epochs",
         "epochs": 1,
-        "maximum_updates": 445,
         "evaluation_interval_updates": 50,
         "gradient_clip_norm": None,
     }
@@ -770,6 +806,7 @@ def test_formal_result_authorization_binds_g2_only_for_g3() -> None:
         status={
             "r04_training_qualification_identity": "d" * 64,
             "r05_freeze_identity": "e" * 64,
+            "f01_formal_training_identity": "0" * 64,
             "g2_verdict_identity": "f" * 64,
         },
     )
@@ -794,13 +831,13 @@ def test_formal_result_authorization_binds_g2_only_for_g3() -> None:
     _validate_result_request(
         **common,
         condition=ExperimentCondition.B2,
-        authorization_node="G3",
-        g2_identity="f" * 64,
+        authorization_node="F01",
+        g2_identity=None,
     )
     _validate_result_request(
         **common,
         condition=ExperimentCondition.B1,
-        authorization_node="G2",
+        authorization_node="F01",
         g2_identity=None,
     )
 
@@ -819,7 +856,8 @@ def test_formal_gate_cannot_open_with_pending_decision_criteria(
             "r04_training_bank_identity": "9" * 64,
             "r04_training_qualification_identity": "d" * 64,
             "r05_freeze_identity": "e" * 64,
-            "formal_training_allowed": True,
+            "f01_formal_training_identity": "0" * 64,
+            "formal_training_allowed": False,
         }
     )
     winners = {
@@ -834,8 +872,8 @@ def test_formal_gate_cannot_open_with_pending_decision_criteria(
             "recipe_status": "frozen_result_blind_in_R05",
             "recipe": {
                 **winners,
+                "budget_unit": "epochs",
                 "epochs": 1,
-                "maximum_updates": None,
                 "evaluation_interval_updates": 50,
                 "gradient_clip_norm": None,
             },
@@ -862,7 +900,7 @@ def test_frozen_sequence_spans_produce_exact_legal_window_counts() -> None:
     assert protocol.window_frame_ids("train", 201, 677) == (677, 678, 679, 680, 681)
 
 
-def test_schema31_generation_plans_are_unique_and_have_frozen_composition() -> None:
+def test_schema32_generation_plans_are_unique_and_have_frozen_composition() -> None:
     protocol = load_protocol(PROTOCOL_PATH)
     bank = protocol.training_bank_plan()
     assert len(bank) == 445
@@ -879,21 +917,73 @@ def test_schema31_generation_plans_are_unique_and_have_frozen_composition() -> N
     }
 
     development = protocol.development_clip_plan()
+    confirmation = protocol.confirmation_clip_plan()
     held_out = protocol.held_out_synthetic_shift_plan()
     assert tuple(item["position"] for item in development) == tuple(range(24))
-    assert tuple(item["position"] for item in held_out) == tuple(range(24, 30))
+    assert tuple(item["position"] for item in confirmation) == tuple(range(24, 48))
+    assert tuple(item["position"] for item in held_out) == tuple(range(48, 54))
+    development_frames = {
+        frame for item in development for frame in item["source_frames"]
+    }
+    confirmation_frames = {
+        frame for item in confirmation for frame in item["source_frames"]
+    }
+    assert development_frames.isdisjoint(confirmation_frames)
     assert {item["mechanism"] for item in development} == {"in_generator"}
+    assert {item["mechanism"] for item in confirmation} == {"in_generator"}
     assert {item["mechanism"] for item in held_out} == {"torus_SDF"}
     all_frames = [
         int(frame)
-        for item in (*development, *held_out)
+        for item in (*development, *confirmation, *held_out)
         for frame in item["source_frames"]
     ]
-    assert len(all_frames) == len(set(all_frames)) == 30 * 9
-    assert len({int(item["root_seed"]) for item in (*development, *held_out)}) == 30
+    assert len(all_frames) == len(set(all_frames)) == 54 * 9
+    assert (
+        len(
+            {
+                int(item["root_seed"])
+                for item in (*development, *confirmation, *held_out)
+            }
+        )
+        == 54
+    )
 
 
-def test_empty_schema31_development_manifest_is_explicitly_not_evidence() -> None:
+def test_confirmation_population_is_sealed_before_formal_gate() -> None:
+    protocol = load_protocol(PROTOCOL_PATH)
+    seal = validate_confirmation_seal(ROOT / "confirm.json", protocol=protocol)
+    confirmation = load_development_worlds(
+        ROOT / "confirm.json", protocol=protocol, population_role="confirmation"
+    )
+    assert seal["status"] == "sealed_not_generated_before_G2"
+    assert seal["clip_count"] == 0
+    assert confirmation.status == "sealed_not_generated_before_G2"
+    assert confirmation.clips == ()
+
+
+def test_formal_development_generation_rejects_placeholder_thresholds(
+    tmp_path: Path,
+) -> None:
+    from src.train import TrainingError, generate_development_worlds
+
+    with pytest.raises(TrainingError, match="freeze result-blind R02 thresholds"):
+        generate_development_worlds(
+            protocol_path=PROTOCOL_PATH,
+            data_root=tmp_path / "must-not-be-opened",
+            destination=tmp_path / "must-not-be-written.json",
+        )
+    assert not (tmp_path / "must-not-be-written.json").exists()
+
+    with pytest.raises(TrainingError, match="confirmation population.*G2"):
+        generate_development_worlds(
+            protocol_path=PROTOCOL_PATH,
+            data_root=tmp_path / "must-not-be-opened",
+            destination=tmp_path / "confirm-must-not-be-written.json",
+            population_role="confirmation",
+        )
+
+
+def test_empty_schema32_development_manifest_is_explicitly_not_evidence() -> None:
     protocol = load_protocol(PROTOCOL_PATH)
     development = load_development_worlds(DEVELOPMENT_PATH, protocol=protocol)
     assert development.format == "ajae-development-window-worlds-v3"
@@ -912,7 +1002,7 @@ def test_old_empty_placeholder_can_be_replaced_once_but_definitions_cannot(
         json.dumps(
             {
                 "format": "ajae-development-window-worlds-v3",
-                "protocol_schema": 31,
+                "protocol_schema": 32,
                 "protocol_identity": "0" * 64,
                 "plan_identity": "1" * 64,
                 "population_identity": None,
@@ -1570,16 +1660,125 @@ def test_one_frozen_bank_round_trips_and_is_shared_by_b1_b2_b3(tmp_path: Path) -
             self.calls.append((str(mode), tuple(scan_group.tolist())))
             return coordinates[:, 0] + self.bias
 
-    expected = loaded.coordinates[:, 0]
     expected_calls = {"B1": 5, "B2": 1, "B3": 1}
     expected_mode = {"B1": "single", "B2": "per_scan", "B3": "joint"}
     for condition in ("B1", "B2", "B3"):
         model = RecordingModel()
         logits = _predict_window_for_test(model, loaded, condition)
+        expected = (
+            loaded.native_coordinates[:, 0]
+            if condition == "B1"
+            else loaded.coordinates[:, 0]
+        )
         torch.testing.assert_close(logits, expected)
         assert len(model.calls) == expected_calls[condition]
         assert {mode for mode, _ in model.calls} == {expected_mode[condition]}
         assert loaded.window_identity == source.window_identity
+
+
+def test_b1_target_scan_is_independent_of_the_other_four_frames() -> None:
+    from src.train import _predict_window_for_test
+
+    original = _training_window("b" * 64)
+    target = original.scan_group == 2
+    changed = ~target
+    coordinates = original.coordinates.clone()
+    coordinates[target] += 1000.0  # A changed window pose must not reach native B1.
+    coordinates[changed] -= 500.0
+    stu_features = original.stu_features.clone()
+    stu_features[changed] += 77.0
+    modified = replace(
+        original,
+        coordinates=coordinates,
+        stu_features=stu_features,
+    )
+
+    class CoordinateFeatureModel(nn.Module):
+        def forward(
+            self,
+            coordinates: torch.Tensor,
+            stu: torch.Tensor,
+            _normal: torch.Tensor,
+            _assign: torch.Tensor,
+            _no_object: torch.Tensor,
+            _intensity: torch.Tensor,
+            _scan_group: torch.Tensor,
+            *,
+            grouping_mode: object,
+        ) -> torch.Tensor:
+            assert getattr(grouping_mode, "value", str(grouping_mode)) == "single"
+            return coordinates[:, 0] + stu[:, 0]
+
+    model = CoordinateFeatureModel()
+    before = _predict_window_for_test(model, original, "B1")
+    after = _predict_window_for_test(model, modified, "B1")
+    torch.testing.assert_close(before[target], after[target], rtol=0.0, atol=0.0)
+
+
+def test_b1_reuses_one_exact_native_score_per_overlapping_frame_ray() -> None:
+    sources = tuple(
+        _one_return_source(frame_id, 4.0 + frame_id, 0.2) for frame_id in range(6)
+    )
+
+    class Encoder(nn.Module):
+        def forward(
+            self,
+            coordinates: torch.Tensor,
+            features: torch.Tensor,
+            real_slots: np.ndarray,
+        ) -> STUPointEncoding:
+            count = len(real_slots)
+            return STUPointEncoding(
+                point_features=torch.zeros((count, 128)),
+                assigned_query=torch.zeros(count, dtype=torch.long),
+                normal_evidence=torch.zeros((count, 19)),
+                reliability_assign=torch.zeros(count),
+                reliability_noobj=torch.zeros(count),
+                maxlogit_score=torch.zeros(count),
+                inverse_map=torch.arange(count),
+                real_slots=torch.from_numpy(real_slots.astype(np.int64, copy=True)),
+                input_identity=stu_input_identity(coordinates, features, real_slots),
+            )
+
+    class Model(nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.calls = 0
+
+        def forward(
+            self,
+            coordinates: torch.Tensor,
+            *_args: torch.Tensor,
+            grouping_mode: object,
+        ) -> torch.Tensor:
+            assert getattr(grouping_mode, "value", str(grouping_mode)) == "single"
+            self.calls += 1
+            return coordinates[:, 0]
+
+    def window(selected: tuple[object, ...], shift: float) -> object:
+        return SimpleNamespace(
+            frames=tuple(SimpleNamespace(source=source) for source in selected),
+            points=SimpleNamespace(
+                count=5,
+                coordinates=np.column_stack(
+                    (np.arange(5, dtype=np.float32) + shift, np.zeros((5, 2)))
+                ),
+                scan_group=np.arange(5, dtype=np.int64),
+            ),
+        )
+
+    model = Model()
+    inference = AJAEInference._for_test(
+        model,
+        Encoder(),
+        condition="B1",
+        slot_to_ray=lambda source: np.arange(source.slot_count, dtype=np.int32),
+    )
+    inference._cache_namespace = ("fixture-world",)
+    first = inference._model_logits(window(sources[:5], 0.0))
+    second = inference._model_logits(window(sources[1:], 1000.0))
+    assert model.calls == 6
+    np.testing.assert_array_equal(first[1:], second[:4])
 
 
 def test_frozen_bank_rejects_a_tampered_shard_before_use(tmp_path: Path) -> None:
@@ -1879,7 +2078,7 @@ def test_development_scoring_is_exactly_24_in_generator_clips() -> None:
     import src.train as train_module
 
     identity = EvaluationIdentity(
-        protocol_schema=31,
+        protocol_schema=32,
         protocol_identity="1" * 64,
         condition="B3",
         fusion_value=AJAE_FUSION_VALUE,
@@ -1965,7 +2164,7 @@ def test_development_scoring_is_exactly_24_in_generator_clips() -> None:
 
 def test_development_raw_samples_must_reproduce_every_clip_ap() -> None:
     identity = EvaluationIdentity(
-        protocol_schema=31,
+        protocol_schema=32,
         protocol_identity="1" * 64,
         condition="B3",
         fusion_value=AJAE_FUSION_VALUE,
@@ -2033,7 +2232,7 @@ def test_raw_metric_artifacts_are_recomputed_and_content_addressed(
 
     protocol = _protocol_with_frozen_r02_thresholds(tmp_path)
     identity = EvaluationIdentity(
-        protocol_schema=31,
+        protocol_schema=32,
         protocol_identity=protocol.scientific_identity,
         condition="B3",
         fusion_value=AJAE_FUSION_VALUE,
@@ -2202,7 +2401,7 @@ def test_method_freeze_record_is_content_addressed_and_population_complete(
 ) -> None:
     protocol = load_protocol(PROTOCOL_PATH)
     identity = EvaluationIdentity(
-        protocol_schema=31,
+        protocol_schema=32,
         protocol_identity=protocol.scientific_identity,
         condition="B3",
         fusion_value=AJAE_FUSION_VALUE,
@@ -2257,7 +2456,7 @@ def test_point_metrics_match_the_released_stu_calculator(
     official_script = official_root / "compute_point_level_ood.py"
     monkeypatch.syspath_prepend(str(official_root))
     specification = importlib.util.spec_from_file_location(
-        "ajae_test_official_point_schema31", official_script
+        "ajae_test_official_point_schema32", official_script
     )
     assert specification is not None and specification.loader is not None
     module = importlib.util.module_from_spec(specification)

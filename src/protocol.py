@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Load the sole active AJAE schema-31 scientific contract."""
+"""Load the sole active AJAE schema-32 scientific contract."""
 
 from __future__ import annotations
 
@@ -17,7 +17,8 @@ from typing import Mapping
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_PROTOCOL_PATH = PROJECT_ROOT / "protocol.json"
-SCHEMA_VERSION = 31
+DEFAULT_CONFIRMATION_PATH = PROJECT_ROOT / "confirm.json"
+SCHEMA_VERSION = 32
 WINDOW_FRAMES = 5
 WINDOW_MEMBER_OFFSETS = (0, 1, 2, 3, 4)
 DEVELOPMENT_FORMAT = "ajae-development-window-worlds-v3"
@@ -29,6 +30,8 @@ R02_VALIDATION_KEYS = (
     "proxy_control_matching_passed",
     "densification_passed",
     "shortcut_audit_passed",
+    "frozen_stu_shortcut_passed",
+    "normal_control_realism_passed",
 )
 R02_MATCHING_FEATURES = (
     "log1p_joint_visible_return_count",
@@ -38,6 +41,44 @@ R02_MATCHING_FEATURES = (
     "occlusion_rate",
     "minimum_visible_return_height_m",
     "visible_scan_count",
+)
+R02_PHYSICAL_SHORTCUT_FEATURES = (
+    "log1p_joint_visible_return_count",
+    "log1p_joint_spatial_voxel_count",
+    "log_densification_gain",
+    "duplicate_fraction",
+    "visible_scan_count",
+    *(f"sorted_log1p_visible_returns_{index}" for index in range(5)),
+    *(f"sorted_log1p_spatial_voxels_{index}" for index in range(5)),
+    "median_distance_m",
+    "occlusion_rate",
+    "minimum_visible_return_height_m",
+    "intensity_q05",
+    "intensity_median",
+    "intensity_q95",
+    *(f"normalized_beam_block_{index}" for index in range(8)),
+    "normalized_beam_mean",
+    "normalized_beam_std",
+)
+R02_STU_SUMMARY_FEATURES = (
+    *(f"stu_point_feature_mean_{index}" for index in range(128)),
+    *(f"stu_point_feature_std_{index}" for index in range(128)),
+    *(f"normal_evidence_mean_{index}" for index in range(19)),
+    *(f"normal_evidence_std_{index}" for index in range(19)),
+    "assignment_reliability_mean",
+    "assignment_reliability_std",
+    "no_object_reliability_mean",
+    "no_object_reliability_std",
+    "log1p_visible_return_count",
+    "range_m_q05",
+    "range_m_median",
+    "range_m_q95",
+    "height_m_q05",
+    "height_m_median",
+    "height_m_q95",
+    "intensity_q05",
+    "intensity_median",
+    "intensity_q95",
 )
 R02_SHORTCUT_SEED = 3102
 
@@ -125,6 +166,7 @@ _STATE_MACHINE = (
     "R03",
     "R04",
     "R05",
+    "F01",
     "G2",
     "G3",
     "S01",
@@ -158,6 +200,42 @@ class ProtocolError(ValueError):
     """Report a protocol or development-data semantic violation."""
 
 
+def validate_confirmation_seal(
+    path: Path | str,
+    *,
+    protocol: AJAEProtocol,
+) -> Mapping[str, object]:
+    """Verify that D_confirm is still an unopened, identity-bound placeholder."""
+
+    resolved = Path(path).expanduser().resolve(strict=True)
+    try:
+        value = json.loads(resolved.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ProtocolError("confirmation seal is unreadable") from error
+    root = _mapping(value, "confirmation seal")
+    expected = {
+        "clip_count": 0,
+        "clips": [],
+        "format": DEVELOPMENT_FORMAT,
+        "plan_identity": protocol.confirmation_clip_plan_identity,
+        "population_identity": None,
+        "protocol_identity": protocol.confirmation_population_identity,
+        "protocol_schema": SCHEMA_VERSION,
+        "sequence_id": 201,
+        "status": "sealed_not_generated_before_G2",
+        "validation": {},
+        "scientific_verdict": None,
+        "window_count": 0,
+    }
+    _exact_keys(root, set(expected), "confirmation seal")
+    for name, item in expected.items():
+        _expect(root[name], item, f"confirmation seal {name}")
+    node = str(protocol.status["current_node"])
+    if _STATE_MACHINE.index(node) >= _STATE_MACHINE.index("G2"):
+        raise ProtocolError("the unopened confirmation seal is valid only before G2")
+    return MappingProxyType(dict(root))
+
+
 class GroupingMode(str, Enum):
     """Whether spatial operations isolate or join scan groups."""
 
@@ -167,7 +245,7 @@ class GroupingMode(str, Enum):
 
 
 class ExperimentCondition(str, Enum):
-    """The only registered schema-31 comparison conditions."""
+    """The only registered schema-32 comparison conditions."""
 
     B0 = "B0"
     B1 = "B1"
@@ -318,15 +396,17 @@ def r02_audit_algorithm_identity() -> str:
 
     return _sha256_json(
         {
-            "format": "ajae-schema31-r02-audit-algorithms-v2",
+            "format": "ajae-schema32-r02-audit-algorithms-v2",
             "matching": "support_stratified_linear_sum_assignment_standardized_euclidean",
-            "features": R02_MATCHING_FEATURES,
-            "shortcut_model": "standardized_logistic_regression",
+            "matching_features": R02_MATCHING_FEATURES,
+            "physical_shortcut_features": R02_PHYSICAL_SHORTCUT_FEATURES,
+            "frozen_stu_summary_features": R02_STU_SUMMARY_FEATURES,
+            "shortcut_model": "standardized_logistic_regression_and_depth3_tree",
             "shortcut_seed": R02_SHORTCUT_SEED,
             "shortcut_split": "world_identity_grouped_80_20",
             "shortcut_iterations": 300,
             "shortcut_l2": 0.001,
-            "loader_rule": "recompute_all_matching_and_shortcut_statistics_from_frozen_descriptors",
+            "loader_rule": "recompute_physical_statistics_from_descriptors_and_content_bind_actual_frozen_STU_summaries",
             "not_computable_rule": "persist_irreversible_R02_failure",
         }
     )
@@ -347,8 +427,8 @@ def _r02_thresholds(value: object) -> Mapping[str, object] | None:
         "minimum_median_proxy_joint_visible_return_count",
         "minimum_median_proxy_densification_gain",
         "minimum_proxy_fraction_densification_gain_above_one",
-        "maximum_shortcut_balanced_accuracy",
-        "maximum_shortcut_absolute_auroc_deviation_from_half",
+        "maximum_shortcut_balanced_accuracy_exclusive",
+        "maximum_shortcut_auroc_exclusive",
     }
     _exact_keys(record, keys, "R02 thresholds")
     _expect(record["format"], R02_THRESHOLD_FORMAT, "R02 threshold format")
@@ -394,17 +474,17 @@ def _r02_thresholds(value: object) -> Mapping[str, object] | None:
     if not 0.0 <= fraction <= 1.0:
         raise ProtocolError("R02 minimum densified proxy fraction must be in [0,1]")
     balanced = _number(
-        record["maximum_shortcut_balanced_accuracy"],
+        record["maximum_shortcut_balanced_accuracy_exclusive"],
         "R02 maximum shortcut balanced accuracy",
     )
-    if not 0.5 <= balanced <= 1.0:
-        raise ProtocolError("R02 shortcut balanced-accuracy limit must be in [0.5,1]")
-    deviation = _number(
-        record["maximum_shortcut_absolute_auroc_deviation_from_half"],
-        "R02 maximum shortcut AUROC deviation",
+    if not 0.8 <= balanced <= 1.0:
+        raise ProtocolError("R02 shortcut balanced-accuracy limit must be in [0.8,1]")
+    auroc_limit = _number(
+        record["maximum_shortcut_auroc_exclusive"],
+        "R02 maximum shortcut AUROC",
     )
-    if not 0.0 <= deviation <= 0.5:
-        raise ProtocolError("R02 shortcut AUROC deviation must be in [0,0.5]")
+    if not 0.9 <= auroc_limit <= 1.0:
+        raise ProtocolError("R02 shortcut AUROC limit must be in [0.9,1]")
     return record
 
 
@@ -565,7 +645,8 @@ class DevelopmentWorlds:
     @property
     def validated(self) -> bool:
         return (
-            self.status == "validated_frozen"
+            self.status == "confirmation_frozen"
+            or self.status == "validated_frozen"
             and set(self.validation) == set(R02_VALIDATION_KEYS)
             and all(self.validation.values())
             and self.scientific_verdict is not None
@@ -588,7 +669,7 @@ class DevelopmentWorlds:
 
 
 class AJAEProtocol:
-    """Validated immutable view of the schema-31 route."""
+    """Validated immutable view of the schema-32 route."""
 
     def __init__(self, document: Mapping[str, object], *, path: Path) -> None:
         self._validate(document)
@@ -721,7 +802,7 @@ class AJAEProtocol:
         data = _mapping(self._document["data"], "data")
         evaluation = _mapping(self._document["evaluation"], "evaluation")
         payload = {
-            "format": "ajae-schema31-development-population-protocol-v1",
+            "format": "ajae-schema32-development-population-protocol-v1",
             "schema_version": SCHEMA_VERSION,
             "scientific_contract": _plain(self._document["scientific_contract"]),
             "development_data": _plain(data["development"]),
@@ -735,12 +816,31 @@ class AJAEProtocol:
         ).hexdigest()
 
     @property
+    def confirmation_population_identity(self) -> str:
+        """Bind the sealed D_confirm population independently from D_select."""
+
+        data = _mapping(self._document["data"], "data")
+        evaluation = _mapping(self._document["evaluation"], "evaluation")
+        return _sha256_json(
+            {
+                "format": "ajae-schema32-confirmation-population-protocol-v1",
+                "schema_version": SCHEMA_VERSION,
+                "scientific_contract": self._document["scientific_contract"],
+                "development_data": data["development"],
+                "window": self._document["window"],
+                "labels": self._document["labels"],
+                "render": self._document["render"],
+                "synthetic_confirmation": evaluation["synthetic_confirmation"],
+            }
+        )
+
+    @property
     def renderer_identity(self) -> str:
         """Bind the shared renderer to its rules and frozen input artifacts."""
 
         return _sha256_json(
             {
-                "format": "ajae-schema31-renderer-identity-v1",
+                "format": "ajae-schema32-renderer-identity-v1",
                 "render": self._document["render"],
                 "labels": self._document["labels"],
             }
@@ -771,7 +871,7 @@ class AJAEProtocol:
             return self._sequences[(partition, sequence_id)]
         except KeyError as error:
             raise ProtocolError(
-                f"sequence {partition}/{sequence_id} is outside schema 31"
+                f"sequence {partition}/{sequence_id} is outside schema 32"
             ) from error
 
     def legal_window_starts(self, partition: str, sequence_id: int) -> tuple[int, ...]:
@@ -864,13 +964,13 @@ class AJAEProtocol:
     def training_bank_plan_identity(self) -> str:
         return _sha256_json(
             {
-                "format": "ajae-schema31-window-train-bank-plan-v1",
+                "format": "ajae-schema32-window-train-bank-plan-v1",
                 "entries": self.training_bank_plan(),
             }
         )
 
     def _all_synthetic_clip_plan(self) -> tuple[Mapping[str, object], ...]:
-        """Freeze 24 development and six unopened S01 designs without rendering."""
+        """Freeze disjoint D_select, D_confirm, and S01 designs without rendering."""
 
         synthetic = _mapping(
             self.evaluation_document["synthetic_development"],
@@ -898,12 +998,10 @@ class AJAEProtocol:
             if occupied.isdisjoint(frames):
                 selected.append(start)
                 occupied.update(frames)
-                if len(selected) == 30:
+                if len(selected) == 54:
                     break
-        if len(selected) != 30:
-            raise ProtocolError(
-                "development plan cannot select 30 non-overlapping clips"
-            )
+        if len(selected) != 54:
+            raise ProtocolError("synthetic plan cannot select 54 non-overlapping clips")
         stride = int(generation["observation_attempt_stride"])
         attempts = int(generation["maximum_observation_attempts"])
         return tuple(
@@ -912,7 +1010,7 @@ class AJAEProtocol:
                     "position": position,
                     "clip_start": start,
                     "source_frames": tuple(range(start, start + 9)),
-                    "mechanism": "in_generator" if position < 24 else "torus_SDF",
+                    "mechanism": "in_generator" if position < 48 else "torus_SDF",
                     "root_seed": _plan_seed(namespace, position, start),
                     "observation_attempt_selection": generation[
                         "observation_attempt_selection"
@@ -933,21 +1031,35 @@ class AJAEProtocol:
     def development_clip_plan_identity(self) -> str:
         return _sha256_json(
             {
-                "format": "ajae-schema31-development-clip-plan-v1",
+                "format": "ajae-schema32-development-clip-plan-v1",
                 "entries": self.development_clip_plan(),
+            }
+        )
+
+    def confirmation_clip_plan(self) -> tuple[Mapping[str, object], ...]:
+        """Return the 24 D_confirm plans that stay unopened through F01."""
+
+        return self._all_synthetic_clip_plan()[24:48]
+
+    @property
+    def confirmation_clip_plan_identity(self) -> str:
+        return _sha256_json(
+            {
+                "format": "ajae-schema32-confirmation-clip-plan-v1",
+                "entries": self.confirmation_clip_plan(),
             }
         )
 
     def held_out_synthetic_shift_plan(self) -> tuple[Mapping[str, object], ...]:
         """Return the six frozen designs whose observations stay sealed until S01."""
 
-        return self._all_synthetic_clip_plan()[24:]
+        return self._all_synthetic_clip_plan()[48:]
 
     @property
     def held_out_synthetic_shift_plan_identity(self) -> str:
         return _sha256_json(
             {
-                "format": "ajae-schema31-held-out-synthetic-shift-plan-v1",
+                "format": "ajae-schema32-held-out-synthetic-shift-plan-v1",
                 "renderer_identity": self.renderer_identity,
                 "recipe": self.render["anomaly_proxies"]["held_out_recipe"],
                 "entries": self.held_out_synthetic_shift_plan(),
@@ -997,6 +1109,8 @@ class AJAEProtocol:
                 "state_machine",
                 "history_baseline_commit",
                 "history_tag",
+                "amendment_baseline_commit",
+                "amendment_history_tag",
                 "supersedes",
             },
             "authority",
@@ -1022,8 +1136,18 @@ class AJAEProtocol:
             "authority.history_tag",
         )
         _expect(
+            authority["amendment_baseline_commit"],
+            "0ceac1401654ddf43dd969a58269666bad1b6d9d",
+            "authority.amendment_baseline_commit",
+        )
+        _expect(
+            authority["amendment_history_tag"],
+            "schema31-preR02-audit",
+            "authority.amendment_history_tag",
+        )
+        _expect(
             authority["supersedes"],
-            "schema30_center_target_temporal_message_passing_route",
+            "schema31_preR02_experimental_contract",
             "authority.supersedes",
         )
 
@@ -1072,8 +1196,8 @@ class AJAEProtocol:
             "inheritance_rule",
             "continues_with_original_scope",
             "old_distribution_only",
-            "reusable_only_after_schema31_requalification",
-            "excluded_from_schema31_statistics",
+            "reusable_only_after_schema32_requalification",
+            "excluded_from_schema32_statistics",
         }
         _exact_keys(history, history_keys, "historical_evidence")
         _expect(history["evidence_source_schema"], 30, "historical evidence schema")
@@ -1378,7 +1502,7 @@ class AJAEProtocol:
                 "support_semantic_ids": [40, 48, 49],
                 "material_sampler": "shared_MaterialSpec_seeded_quantile_roughness_return_bias",
                 "placement_pipeline": "shared_support_pool_grounding_collision_and_visibility",
-                "placement_namespace": "schema31-held-out-torus-v1",
+                "placement_namespace": "schema32-held-out-torus-v1",
             },
             "held-out recipe",
         )
@@ -1467,7 +1591,7 @@ class AJAEProtocol:
         matching = _mapping(render["proxy_control_matching"], "proxy/control matching")
         _exact_keys(
             matching,
-            {"unit", "required_covariates", "thresholds"},
+            {"unit", "required_covariates", "shortcut_audits", "thresholds"},
             "proxy/control matching",
         )
         _expect(matching.get("unit"), "complete_five_scan_window", "matching unit")
@@ -1487,6 +1611,40 @@ class AJAEProtocol:
         }
         if covariates != expected_covariates:
             raise ProtocolError("proxy/control matching covariates are invalid")
+        _expect(
+            matching["shortcut_audits"],
+            {
+                "split_unit": "WorldSpec_identity",
+                "models": [
+                    "standardized_logistic_regression",
+                    "depth3_decision_tree",
+                ],
+                "physical_features": [
+                    "joint_counts_and_densification",
+                    "duplicate_fraction",
+                    "visible_scan_count",
+                    "sorted_per_scan_return_and_voxel_counts",
+                    "distance_occlusion_and_height",
+                    "intensity_quantiles",
+                    "low_dimensional_beam_statistics",
+                ],
+                "forbidden_physical_features": [
+                    "scan_index",
+                    "window_member_index",
+                ],
+                "frozen_stu_entity_summary": [
+                    "point_feature_128d_mean_and_std",
+                    "normal_evidence_19d_mean_and_std",
+                    "assignment_reliability_mean_and_std",
+                    "no_object_reliability_mean_and_std",
+                    "visible_return_count_and_range_height_quantiles",
+                    "intensity_q05_median_q95",
+                ],
+                "normal_control_realism": "rendered_normal_controls_versus_their_bound_original_train206_normal_template_instances_using_frozen_STU_simple_geometry_and_low_capacity_models",
+                "failure_rule": "either_model_at_or_above_a_pre_frozen_near_direct_separability_threshold_fails_R02",
+            },
+            "proxy/control shortcut audits",
+        )
 
     @staticmethod
     def _validate_stu(stu: Mapping[str, object]) -> None:
@@ -1563,7 +1721,7 @@ class AJAEProtocol:
                 "no_object_reliability",
                 "intensity",
             ],
-            "spatial_coordinates": "symmetric_window_coordinates_may_enter_order_invariant_position_encoding_relative_displacement_voxel_neighborhood_and_decode_geometry",
+            "spatial_coordinates": "B1_uses_native_sensor_coordinates_only; B2_and_B3_use_symmetric_window_coordinates",
             "bookkeeping_inputs": "point_identity_for_restoration_and_scan_group_for_B2_isolation_only",
             "input_dim": 150,
             "forbidden_features": [
@@ -1600,8 +1758,8 @@ class AJAEProtocol:
         )
         definitions = {
             "B0": "frozen_STU_official_single_scan_MaxLogit",
-            "B1": "five_independent_single_scan_forwards_per_WindowWorld_with_one_all_point_loss",
-            "B2": "all_five_scans_input_output_and_supervised_with_voxel_neighborhood_and_decode_isolated_by_scan_group",
+            "B1": "five_independent_native_sensor_coordinate_single_scan_forwards_per_WindowWorld_with_one_all_point_loss_and_one_identity_preserving_score_per_frame_ray",
+            "B2": "all_five_scans_in_symmetric_window_coordinates_with_voxel_neighborhood_and_decode_isolated_by_scan_group",
             "B3": "all_five_scans_jointly_voxelized_neighbored_and_decoded_in_symmetric_window_coordinates",
         }
         for condition in ExperimentCondition:
@@ -1642,6 +1800,7 @@ class AJAEProtocol:
             "epoch",
             "loss",
             "forced_partial_step_at_world_boundary",
+            "epoch_tail_partial_effective_batch",
             "modes",
             "tiny_overfit",
             "pilot",
@@ -1657,6 +1816,9 @@ class AJAEProtocol:
             "effective_batch": "all_complete_WindowWorld_micro_batches_accumulated_into_one_optimizer_step",
             "epoch": "one_complete_pass_over_the_frozen_window_train_bank",
             "forced_partial_step_at_world_boundary": False,
+            "epoch_tail_partial_effective_batch": (
+                "allowed_and_counted_as_one_optimizer_update"
+            ),
             "modes": ["tiny_overfit", "pilot", "formal"],
             "deterministic_algorithms": True,
         }
@@ -1685,12 +1847,14 @@ class AJAEProtocol:
                 "five_rendered_point_arrays",
                 "renderer_identity",
                 "STU_identity",
+                "native_sensor_coordinates",
+                "symmetric_window_coordinates",
                 "point_identity",
                 "labels",
                 "window_level_density_descriptors",
             ],
             "condition_invariants": [
-                "same_five_aligned_points",
+                "same_five_rendered_points_with_condition_specific_coordinates",
                 "same_point_labels",
                 "same_entry_order",
                 "same_model_parameter_shapes_and_initialization",
@@ -1703,7 +1867,7 @@ class AJAEProtocol:
         _expect(
             bank["generation_plan"],
             {
-                "namespace": "ajae-schema31-window-train-bank-plan-v1",
+                "namespace": "ajae-schema32-window-train-bank-plan-v1",
                 "formal_entry_count": 445,
                 "allowed_prefix_counts": [8, 128, 445],
                 "window_start_order": "ascending_sha256_namespace_and_window_start",
@@ -1742,7 +1906,7 @@ class AJAEProtocol:
                     "gradient_accumulation": 1,
                     "weight_decay": 0.0,
                     "scheduler": "constant",
-                    "epochs": 1,
+                    "budget_unit": "optimizer_updates",
                     "maximum_updates": 500,
                     "evaluation_interval_updates": 500,
                     "gradient_clip_norm": None,
@@ -1769,7 +1933,7 @@ class AJAEProtocol:
             ],
             "weight_decay_after_scheduler_selection": [0.0, 0.00001, 0.0001],
             "fixed_run_parameters": {
-                "epochs": 1,
+                "budget_unit": "optimizer_updates",
                 "evaluation_interval_updates": 50,
                 "gradient_clip_norm": None,
             },
@@ -1879,8 +2043,8 @@ class AJAEProtocol:
                     "gradient_accumulation",
                     "weight_decay",
                     "scheduler",
+                    "budget_unit",
                     "epochs",
-                    "maximum_updates",
                     "evaluation_interval_updates",
                     "gradient_clip_norm",
                 },
@@ -1893,9 +2057,8 @@ class AJAEProtocol:
                 raise ProtocolError("formal weight decay cannot be negative")
             if recipe["scheduler"] not in {"constant", "five_percent_warmup_cosine"}:
                 raise ProtocolError("formal scheduler is unsupported")
+            _expect(recipe["budget_unit"], "epochs", "formal budget unit")
             _integer(recipe["epochs"], "formal epochs", minimum=1)
-            if recipe["maximum_updates"] is not None:
-                _integer(recipe["maximum_updates"], "formal maximum updates", minimum=1)
             _integer(
                 recipe["evaluation_interval_updates"],
                 "formal evaluation interval",
@@ -2013,7 +2176,12 @@ class AJAEProtocol:
         }
         _exact_keys(
             evaluation,
-            {*expected, "synthetic_development", "held_out_synthetic_shift"},
+            {
+                *expected,
+                "synthetic_development",
+                "synthetic_confirmation",
+                "held_out_synthetic_shift",
+            },
             "evaluation",
         )
         for name, value in expected.items():
@@ -2029,10 +2197,10 @@ class AJAEProtocol:
                     "overlapping_windows_per_clip": 5,
                     "in_generator_clips": 24,
                     "total_clips": 24,
-                    "freeze_rule": "fixed_before_any_schema31_development_world_is_generated_or_scored",
+                    "freeze_rule": "D_select_fixed_before_any_schema32_selection_world_is_generated_or_scored",
                 },
                 "generation_plan": {
-                    "namespace": "ajae-schema31-development-clip-plan-v1",
+                    "namespace": "ajae-schema32-synthetic-clip-plan-v1",
                     "clip_start_selection": "sha256_ranked_greedy_nonoverlapping_nine_frame_clips",
                     "plan_positions_inclusive": [0, 23],
                     "mechanism": "in_generator",
@@ -2046,6 +2214,31 @@ class AJAEProtocol:
             "evaluation.synthetic_development",
         )
         _expect(
+            evaluation["synthetic_confirmation"],
+            {
+                "unit": "DevelopmentClipWorld",
+                "role": "D_confirm_independent_formal_gate_population",
+                "mechanism": "in_generator",
+                "clip_count": 24,
+                "frames_per_clip": 9,
+                "overlapping_windows_per_clip": 5,
+                "generation_plan_namespace": "ajae-schema32-synthetic-clip-plan-v1",
+                "plan_positions_inclusive": [24, 47],
+                "source_frames_disjoint_from_D_select": True,
+                "allowed_only_at_or_after": "G2",
+                "excluded_before_G2_from": [
+                    "rendering",
+                    "visual_review",
+                    "proxy_qualification",
+                    "hyperparameter_selection",
+                    "checkpoint_selection",
+                    "method_changes",
+                ],
+                "all_formal_checkpoints_fixed_before_opening": True,
+            },
+            "evaluation.synthetic_confirmation",
+        )
+        _expect(
             evaluation["held_out_synthetic_shift"],
             {
                 "unit": "DevelopmentClipWorld",
@@ -2053,8 +2246,8 @@ class AJAEProtocol:
                 "clip_count": 6,
                 "frames_per_clip": 9,
                 "overlapping_windows_per_clip": 5,
-                "generation_plan_namespace": "ajae-schema31-development-clip-plan-v1",
-                "plan_positions_inclusive": [24, 29],
+                "generation_plan_namespace": "ajae-schema32-synthetic-clip-plan-v1",
+                "plan_positions_inclusive": [48, 53],
                 "allowed_only_at_or_after": "S01",
                 "excluded_before_S01_from": [
                     "rendering",
@@ -2079,10 +2272,13 @@ class AJAEProtocol:
                 "scientific_route",
                 "r02_population_identity",
                 "r02_verdict_identity",
+                "r02_thresholds_frozen_result_blind",
+                "r02_threshold_identity",
                 "r03_qualification_identity",
                 "r04_training_bank_identity",
                 "r04_training_qualification_identity",
                 "r05_freeze_identity",
+                "f01_formal_training_identity",
                 "g2_verdict_identity",
                 "g3_verdict_identity",
                 "s01_shift_audit_identity",
@@ -2094,7 +2290,7 @@ class AJAEProtocol:
             "status",
         )
         _expect(
-            status["implementation_target"], "schema31", "status.implementation_target"
+            status["implementation_target"], "schema32", "status.implementation_target"
         )
         _expect(
             status["scientific_route"],
@@ -2104,11 +2300,31 @@ class AJAEProtocol:
         node = _nonempty_string(status["current_node"], "status.current_node")
         if node not in _STATE_MACHINE:
             raise ProtocolError(
-                "status.current_node is outside the schema-31 state machine"
+                "status.current_node is outside the schema-32 state machine"
             )
         thresholds = _r02_thresholds(
             _mapping(source["render"], "render")["proxy_control_matching"]["thresholds"]
         )
+        frozen_result_blind = status["r02_thresholds_frozen_result_blind"]
+        threshold_identity = status["r02_threshold_identity"]
+        if thresholds is None:
+            _expect(
+                frozen_result_blind,
+                False,
+                "status.r02_thresholds_frozen_result_blind",
+            )
+            _expect(threshold_identity, None, "status.r02_threshold_identity")
+        else:
+            _expect(
+                frozen_result_blind,
+                True,
+                "status.r02_thresholds_frozen_result_blind",
+            )
+            _expect(
+                threshold_identity,
+                _sha256_json(thresholds),
+                "status.r02_threshold_identity",
+            )
         if thresholds is None and _STATE_MACHINE.index(node) > _STATE_MACHINE.index(
             "R02"
         ):
@@ -2135,6 +2351,7 @@ class AJAEProtocol:
             ("r03_qualification_identity", "R03"),
             ("r04_training_qualification_identity", "R04"),
             ("r05_freeze_identity", "R05"),
+            ("f01_formal_training_identity", "F01"),
             ("g2_verdict_identity", "G2"),
             ("g3_verdict_identity", "G3"),
             ("s01_shift_audit_identity", "S01"),
@@ -2186,9 +2403,9 @@ class AJAEProtocol:
             raise ProtocolError(
                 "formal recipe must preserve the qualified R02 population identity"
             )
-        expected_formal_allowed = node in {"G2", "G3"}
+        expected_formal_allowed = node == "F01"
         if formal_allowed != expected_formal_allowed:
-            raise ProtocolError("formal training is enabled only during G2 and G3")
+            raise ProtocolError("formal training is enabled only during F01")
         if _STATE_MACHINE.index(node) > _STATE_MACHINE.index("R05") and (
             not frozen_recipe
         ):
@@ -2261,7 +2478,7 @@ class AJAEProtocol:
                 )
                 _expect(
                     criteria["format"],
-                    "ajae-schema31-formal-gate-criteria-v1",
+                    "ajae-schema32-formal-gate-criteria-v1",
                     f"{name} criteria format",
                 )
                 _expect(
@@ -2444,7 +2661,7 @@ class AJAEProtocol:
             )
             _expect(
                 criteria["format"],
-                "ajae-schema31-v01-transfer-criteria-v1",
+                "ajae-schema32-v01-transfer-criteria-v1",
                 "V01 criteria format",
             )
             _expect(
@@ -2572,7 +2789,7 @@ class AJAEProtocol:
 
         if _STATE_MACHINE.index(node) > _STATE_MACHINE.index("R05"):
             freeze_payload = {
-                "format": "ajae-schema31-r05-freeze-v1",
+                "format": "ajae-schema32-r05-freeze-v1",
                 "r04_training_qualification_identity": status[
                     "r04_training_qualification_identity"
                 ],
@@ -2780,6 +2997,8 @@ def _validate_r02_scientific_verdict(
             "matching",
             "densification",
             "shortcut_audit",
+            "frozen_stu_shortcut_audit",
+            "normal_control_realism_audit",
             "component_decisions",
             "decision",
             "record_sha256",
@@ -3135,6 +3354,7 @@ def _validate_r02_scientific_verdict(
                 "intercept",
                 "balanced_accuracy",
                 "auroc",
+                "depth3_tree",
             },
             "R02 shortcut audit",
         )
@@ -3150,10 +3370,14 @@ def _validate_r02_scientific_verdict(
     _expect(shortcut["eligible_mechanism"], "in_generator", "R02 shortcut scope")
     _expect(
         shortcut["algorithm"],
-        "standardized_logistic_regression",
+        "standardized_logistic_regression_and_depth3_tree",
         "R02 shortcut algorithm",
     )
-    _expect(shortcut["feature_names"], list(R02_MATCHING_FEATURES), "shortcut features")
+    _expect(
+        shortcut["feature_names"],
+        list(R02_PHYSICAL_SHORTCUT_FEATURES),
+        "shortcut features",
+    )
     _expect(shortcut["seed"], R02_SHORTCUT_SEED, "R02 shortcut seed")
     _expect(shortcut["split_unit"], "world_identity", "R02 shortcut split unit")
     if shortcut_status == "not_computable":
@@ -3209,13 +3433,30 @@ def _validate_r02_scientific_verdict(
                 _list(shortcut["standardized_coefficients"], "shortcut coefficients")
             )
         )
-        if len(coefficients) != len(R02_MATCHING_FEATURES):
+        if len(coefficients) != len(R02_PHYSICAL_SHORTCUT_FEATURES):
             raise ProtocolError("R02 shortcut coefficients have the wrong dimension")
         intercept = _number(shortcut["intercept"], "R02 shortcut intercept")
         balanced_accuracy = _number(
             shortcut["balanced_accuracy"], "shortcut balanced accuracy"
         )
         auroc = _number(shortcut["auroc"], "shortcut AUROC")
+        tree = _mapping(shortcut["depth3_tree"], "R02 depth-three tree")
+        _exact_keys(
+            tree,
+            {
+                "model",
+                "maximum_depth",
+                "train_samples",
+                "test_samples",
+                "balanced_accuracy",
+                "auroc",
+            },
+            "R02 depth-three tree",
+        )
+        _expect(tree["model"], "depth3_decision_tree", "R02 tree model")
+        _expect(tree["maximum_depth"], 3, "R02 tree depth")
+        tree_balanced = _number(tree["balanced_accuracy"], "R02 tree balanced accuracy")
+        tree_auroc = _number(tree["auroc"], "R02 tree AUROC")
         if not 0.0 <= balanced_accuracy <= 1.0 or not 0.0 <= auroc <= 1.0:
             raise ProtocolError("R02 shortcut metrics must be in [0,1]")
         reproduced_worlds = sorted(
@@ -3263,17 +3504,118 @@ def _validate_r02_scientific_verdict(
                 rel_tol=1e-12,
                 abs_tol=1e-12,
             )
+            or _plain(tree) != _plain(reproduced_shortcut["depth3_tree"])
         ):
             raise ProtocolError(
                 "R02 shortcut evidence differs from deterministic recomputation"
             )
-        shortcut_pass = balanced_accuracy <= float(
-            thresholds["maximum_shortcut_balanced_accuracy"]
-        ) and abs(auroc - 0.5) <= float(
-            thresholds["maximum_shortcut_absolute_auroc_deviation_from_half"]
+        shortcut_pass = max(balanced_accuracy, tree_balanced) < float(
+            thresholds["maximum_shortcut_balanced_accuracy_exclusive"]
+        ) and max(auroc, tree_auroc) < float(
+            thresholds["maximum_shortcut_auroc_exclusive"]
         )
     if _boolean(shortcut["passed"], "R02 shortcut pass") is not shortcut_pass:
         raise ProtocolError("R02 shortcut decision disagrees with its thresholds")
+
+    def validate_model_audit(
+        raw: object,
+        *,
+        name: str,
+        class_zero: str,
+        class_one: str,
+        seed: int,
+    ) -> bool:
+        audit = _mapping(raw, name)
+        status = audit.get("status")
+        common = {"artifact_sha256", "status", "passed"}
+        if status == "not_computable":
+            _exact_keys(audit, common | {"failure_code"}, name)
+            artifact(audit, name)
+            return False
+        if status != "computed":
+            raise ProtocolError(f"{name} status is unsupported")
+        _exact_keys(
+            audit,
+            common
+            | {
+                "algorithm",
+                "class_zero",
+                "class_one",
+                "feature_names",
+                "feature_evidence_sha256",
+                "split_unit",
+                "seed",
+                "train_samples",
+                "test_samples",
+                "balanced_accuracy",
+                "auroc",
+                "depth3_tree",
+            },
+            name,
+        )
+        artifact(audit, name)
+        _expect(
+            audit["algorithm"],
+            "standardized_logistic_regression_and_depth3_tree",
+            f"{name} algorithm",
+        )
+        _expect(audit["class_zero"], class_zero, f"{name} class zero")
+        _expect(audit["class_one"], class_one, f"{name} class one")
+        _expect(
+            audit["feature_names"], list(R02_STU_SUMMARY_FEATURES), f"{name} features"
+        )
+        _sha256(audit["feature_evidence_sha256"], f"{name} feature evidence")
+        _expect(audit["split_unit"], "WorldSpec_identity", f"{name} split")
+        _expect(audit["seed"], seed, f"{name} seed")
+        _integer(audit["train_samples"], f"{name} train samples", minimum=2)
+        _integer(audit["test_samples"], f"{name} test samples", minimum=2)
+        balanced = _number(audit["balanced_accuracy"], f"{name} balanced accuracy")
+        auroc = _number(audit["auroc"], f"{name} AUROC")
+        tree = _mapping(audit["depth3_tree"], f"{name} tree")
+        _exact_keys(
+            tree,
+            {
+                "model",
+                "maximum_depth",
+                "train_samples",
+                "test_samples",
+                "balanced_accuracy",
+                "auroc",
+            },
+            f"{name} tree",
+        )
+        _expect(tree["model"], "depth3_decision_tree", f"{name} tree model")
+        _expect(tree["maximum_depth"], 3, f"{name} tree depth")
+        tree_balanced = _number(
+            tree["balanced_accuracy"], f"{name} tree balanced accuracy"
+        )
+        tree_auroc = _number(tree["auroc"], f"{name} tree AUROC")
+        values = (balanced, auroc, tree_balanced, tree_auroc)
+        if any(not 0.0 <= item <= 1.0 for item in values):
+            raise ProtocolError(f"{name} metrics must be in [0,1]")
+        passed = max(balanced, tree_balanced) < float(
+            thresholds["maximum_shortcut_balanced_accuracy_exclusive"]
+        ) and max(auroc, tree_auroc) < float(
+            thresholds["maximum_shortcut_auroc_exclusive"]
+        )
+        if _boolean(audit["passed"], f"{name} pass") is not passed:
+            raise ProtocolError(f"{name} decision disagrees with its thresholds")
+        return passed
+
+    stu_shortcut_pass = validate_model_audit(
+        verdict["frozen_stu_shortcut_audit"],
+        name="R02 frozen-STU shortcut audit",
+        class_zero="normal-control",
+        class_one="anomaly-proxy",
+        seed=R02_SHORTCUT_SEED,
+    )
+    control_realism_pass = validate_model_audit(
+        verdict["normal_control_realism_audit"],
+        name="R02 normal-control realism audit",
+        class_zero="matched-real-normal",
+        class_one="rendered-normal-control",
+        seed=R02_SHORTCUT_SEED + 1,
+    )
 
     decisions = {
         "visual_review_passed": visual_pass,
@@ -3281,6 +3623,8 @@ def _validate_r02_scientific_verdict(
         "proxy_control_matching_passed": matching_pass,
         "densification_passed": density_pass,
         "shortcut_audit_passed": shortcut_pass,
+        "frozen_stu_shortcut_passed": stu_shortcut_pass,
+        "normal_control_realism_passed": control_realism_pass,
     }
     supplied_decisions = _mapping(verdict["component_decisions"], "R02 decisions")
     _exact_keys(supplied_decisions, set(R02_VALIDATION_KEYS), "R02 decisions")
@@ -3297,12 +3641,27 @@ def _validate_r02_scientific_verdict(
 
 
 def load_development_worlds(
-    path: Path | str, *, protocol: AJAEProtocol
+    path: Path | str,
+    *,
+    protocol: AJAEProtocol,
+    population_role: str = "selection",
 ) -> DevelopmentWorlds:
-    """Load schema-31 windows grouped by shared clip-world identity."""
+    """Load identity-bound D_select or D_confirm synthetic clip worlds."""
 
     if protocol.schema_version != SCHEMA_VERSION:
-        raise ProtocolError("development data require an active schema-31 protocol")
+        raise ProtocolError("development data require an active schema-32 protocol")
+    if population_role not in {"selection", "confirmation"}:
+        raise ProtocolError("synthetic population role is unsupported")
+    expected_protocol_identity = (
+        protocol.development_population_identity
+        if population_role == "selection"
+        else protocol.confirmation_population_identity
+    )
+    expected_plan_identity = (
+        protocol.development_clip_plan_identity
+        if population_role == "selection"
+        else protocol.confirmation_clip_plan_identity
+    )
     resolved = Path(path).expanduser().resolve(strict=True)
     try:
         source = json.loads(resolved.read_text(encoding="utf-8"))
@@ -3314,7 +3673,7 @@ def load_development_worlds(
         or root.get("protocol_schema") == 30
     ):
         raise ProtocolError(
-            "schema-30 centered dev.json is retired; regenerate schema-31 window/clip data"
+            "schema-30 centered dev.json is retired; regenerate schema-32 window/clip data"
         )
     root_keys = {
         "format",
@@ -3335,22 +3694,27 @@ def load_development_worlds(
     _expect(root["protocol_schema"], SCHEMA_VERSION, "development protocol_schema")
     _expect(
         root["protocol_identity"],
-        protocol.development_population_identity,
+        expected_protocol_identity,
         "development protocol_identity",
     )
     _expect(
         root["plan_identity"],
-        protocol.development_clip_plan_identity,
+        expected_plan_identity,
         "development plan_identity",
     )
     _expect(root["sequence_id"], 201, "development sequence_id")
     status = _nonempty_string(root["status"], "development status")
-    if status not in {
-        "not_generated_R02",
-        "definitions_only_unvalidated",
-        "validated_frozen",
-        "adjudicated_failed_R02",
-    }:
+    supported_statuses = (
+        {
+            "not_generated_R02",
+            "definitions_only_unvalidated",
+            "validated_frozen",
+            "adjudicated_failed_R02",
+        }
+        if population_role == "selection"
+        else {"sealed_not_generated_before_G2", "confirmation_frozen"}
+    )
+    if status not in supported_statuses:
         raise ProtocolError("development status is unsupported")
     validation_source = _mapping(root["validation"], "development.validation")
     validation = {
@@ -3377,7 +3741,11 @@ def load_development_worlds(
 
     legal_starts = frozenset(protocol.development_sequence.legal_window_starts())
     clips: list[DevelopmentClip] = []
-    plan = protocol.development_clip_plan()
+    plan = (
+        protocol.development_clip_plan()
+        if population_role == "selection"
+        else protocol.confirmation_clip_plan()
+    )
     for clip_index, raw_clip in enumerate(_list(root["clips"], "development.clips")):
         if clip_index >= len(plan):
             raise ProtocolError("development data exceed the frozen 24-clip plan")
@@ -3625,9 +3993,13 @@ def load_development_worlds(
         if not clips
         else _sha256_json(
             {
-                "format": "ajae-schema31-formal-development-population-v1",
-                "protocol_identity": protocol.development_population_identity,
-                "plan_identity": protocol.development_clip_plan_identity,
+                "format": (
+                    "ajae-schema32-selection-population-v1"
+                    if population_role == "selection"
+                    else "ajae-schema32-confirmation-population-v1"
+                ),
+                "protocol_identity": expected_protocol_identity,
+                "plan_identity": expected_plan_identity,
                 "clips": root["clips"],
             }
         )
@@ -3639,7 +4011,7 @@ def load_development_worlds(
     )
     scientific_verdict: Mapping[str, object] | None = None
     raw_scientific_verdict = root["scientific_verdict"]
-    if status == "not_generated_R02":
+    if status in {"not_generated_R02", "sealed_not_generated_before_G2"}:
         if clips or validation or raw_scientific_verdict is not None:
             raise ProtocolError("not-generated development data cannot carry evidence")
     elif not clips:
@@ -3650,7 +4022,10 @@ def load_development_worlds(
         raise ProtocolError(
             "unvalidated development definitions cannot carry a verdict"
         )
-    if status in {"validated_frozen", "adjudicated_failed_R02"}:
+    if population_role == "selection" and status in {
+        "validated_frozen",
+        "adjudicated_failed_R02",
+    }:
         thresholds = _r02_thresholds(
             protocol.render["proxy_control_matching"]["thresholds"]
         )
@@ -3661,9 +4036,9 @@ def load_development_worlds(
         scientific_verdict = _validate_r02_scientific_verdict(
             raw_scientific_verdict,
             thresholds=thresholds,
-            protocol_identity=protocol.development_population_identity,
+            protocol_identity=expected_protocol_identity,
             population_identity=expected_population_identity,  # type: ignore[arg-type]
-            plan_identity=protocol.development_clip_plan_identity,
+            plan_identity=expected_plan_identity,
             validation=validation,
             clips=tuple(clips),
         )
@@ -3671,7 +4046,9 @@ def load_development_worlds(
         if scientific_verdict["decision"] != expected_decision:
             raise ProtocolError("development status disagrees with the R02 decision")
     node = str(protocol.status["current_node"])
-    if _STATE_MACHINE.index(node) > _STATE_MACHINE.index("R02"):
+    if population_role == "selection" and _STATE_MACHINE.index(
+        node
+    ) > _STATE_MACHINE.index("R02"):
         if status != "validated_frozen" or scientific_verdict is None:
             raise ProtocolError("nodes after R02 require a passed development verdict")
         _expect(
@@ -3684,11 +4061,19 @@ def load_development_worlds(
             scientific_verdict["record_sha256"],
             "status R02 verdict identity",
         )
+    if population_role == "confirmation":
+        if validation or raw_scientific_verdict is not None:
+            raise ProtocolError("D_confirm cannot carry R02 selection evidence")
+        before_g2 = _STATE_MACHINE.index(node) < _STATE_MACHINE.index("G2")
+        if before_g2 and status != "sealed_not_generated_before_G2":
+            raise ProtocolError("D_confirm must remain unopened through F01")
+        if not before_g2 and status != "confirmation_frozen":
+            raise ProtocolError("G2/G3 require the opened frozen D_confirm population")
     return DevelopmentWorlds(
         DEVELOPMENT_FORMAT,
         SCHEMA_VERSION,
-        protocol.development_population_identity,
-        protocol.development_clip_plan_identity,
+        expected_protocol_identity,
+        expected_plan_identity,
         expected_population_identity,
         201,
         status,
@@ -3710,7 +4095,7 @@ def load_protocol(path: Path | str = DEFAULT_PROTOCOL_PATH) -> AJAEProtocol:
 
 
 def _main() -> None:
-    parser = argparse.ArgumentParser(description="Inspect the AJAE schema-31 route.")
+    parser = argparse.ArgumentParser(description="Inspect the AJAE schema-32 route.")
     parser.add_argument("--protocol", type=Path, default=DEFAULT_PROTOCOL_PATH)
     args = parser.parse_args()
     print(

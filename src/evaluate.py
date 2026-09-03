@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Schema-31 window inference, point-identity fusion, and STU metrics."""
+"""Schema-32 window inference, point-identity fusion, and STU metrics."""
 
 from __future__ import annotations
 
@@ -31,21 +31,21 @@ B0_FUSION_SEMANTICS = "all_occurrence_raw_score_mean_within_world"
 B0_FUSION_VALUE = "raw_finite_frozen_STU_official_MaxLogit_score"
 AJAE_FUSION_VALUE = "sigmoid_of_each_anomaly_logit"
 FUSION_REDUCTION = "equal_arithmetic_mean_over_every_legal_window_occurrence"
-PREDICTION_COVERAGE_FORMAT = "ajae-schema31-prediction-coverage-v2"
+PREDICTION_COVERAGE_FORMAT = "ajae-schema32-prediction-coverage-v1"
 # Kept for the narrow legacy loader used by the pre-M01 mechanical test.  Sealed
 # access accepts only the multi-method v2 record below.
-METHOD_FREEZE_FORMAT = "ajae-schema31-method-freeze-v1"
-MULTI_METHOD_FREEZE_FORMAT = "ajae-schema31-method-freeze-v2"
+METHOD_FREEZE_FORMAT = "ajae-schema32-method-freeze-v1"
+MULTI_METHOD_FREEZE_FORMAT = "ajae-schema32-method-freeze-v2"
 METHOD_FREEZE_STATUS = "frozen_before_sealed_data_access"
-FORMAL_EVALUATION_FORMAT = "ajae-schema31-formal-evaluation-v1"
-FORMAL_METRIC_EVIDENCE_FORMAT = "ajae-schema31-formal-metric-evidence-v1"
-NORMAL_SAFETY_EVIDENCE_FORMAT = "ajae-schema31-normal-safety-evidence-v1"
-FORMAL_GATE_VERDICT_FORMAT = "ajae-schema31-formal-gate-verdict-v1"
-S01_SHIFT_AUDIT_FORMAT = "ajae-schema31-s01-shift-audit-v1"
-S01_CLIP_EVIDENCE_FORMAT = "ajae-schema31-s01-clip-evidence-v1"
-PUBLIC_SEQUENCE_RESULT_FORMAT = "ajae-schema31-public-sequence-result-v1"
-PUBLIC_METRIC_EVIDENCE_FORMAT = "ajae-schema31-public-metric-evidence-v1"
-V01_VERDICT_FORMAT = "ajae-schema31-v01-verdict-v1"
+FORMAL_EVALUATION_FORMAT = "ajae-schema32-formal-evaluation-v1"
+FORMAL_METRIC_EVIDENCE_FORMAT = "ajae-schema32-formal-metric-evidence-v1"
+NORMAL_SAFETY_EVIDENCE_FORMAT = "ajae-schema32-normal-safety-evidence-v1"
+FORMAL_GATE_VERDICT_FORMAT = "ajae-schema32-formal-gate-verdict-v1"
+S01_SHIFT_AUDIT_FORMAT = "ajae-schema32-s01-shift-audit-v1"
+S01_CLIP_EVIDENCE_FORMAT = "ajae-schema32-s01-clip-evidence-v1"
+PUBLIC_SEQUENCE_RESULT_FORMAT = "ajae-schema32-public-sequence-result-v1"
+PUBLIC_METRIC_EVIDENCE_FORMAT = "ajae-schema32-public-metric-evidence-v1"
+V01_VERDICT_FORMAT = "ajae-schema32-v01-verdict-v1"
 PAIRED_STUDENT_T_METHOD = "paired_two_sided_student_t_v1"
 METHOD_SELECTION_RULE = "lowest_frozen_formal_seed_result_blind"
 METHOD_ROLES = ("B0_reference", "B1_reference", "frozen_final")
@@ -142,8 +142,8 @@ class EvaluationIdentity:
 
     def __post_init__(self) -> None:
         selected = _condition(self.condition)
-        if type(self.protocol_schema) is not int or self.protocol_schema != 31:
-            raise EvaluationError("evaluation identity requires protocol schema 31")
+        if type(self.protocol_schema) is not int or self.protocol_schema != 32:
+            raise EvaluationError("evaluation identity requires protocol schema 32")
         for name in (
             "protocol_identity",
             "stu_checkpoint_sha256",
@@ -689,10 +689,10 @@ class WindowScoreFusion:
     ) -> None:
         if maximum_count != 5:
             raise EvaluationError(
-                "schema 31 fixes the maximum occurrence count at five"
+                "schema 32 fixes the maximum occurrence count at five"
             )
         if fusion_value not in {B0_FUSION_VALUE, AJAE_FUSION_VALUE}:
-            raise EvaluationError("fusion_value is not a schema-31 score domain")
+            raise EvaluationError("fusion_value is not a schema-32 score domain")
         self.maximum_count = 5
         self.fusion_value = fusion_value
         self._states: dict[tuple[object, ...], _FusionState] = {}
@@ -1193,9 +1193,9 @@ class AJAEInference:
             )
             from protocol import AJAEProtocol
 
-        if type(protocol) is not AJAEProtocol or protocol.schema_version != 31:
+        if type(protocol) is not AJAEProtocol or protocol.schema_version != 32:
             raise EvaluationError(
-                "formal inference requires the active schema-31 protocol"
+                "formal inference requires the active schema-32 protocol"
             )
         if type(encoder) is not FrozenSTUPointEncoder:
             raise TypeError("formal inference requires FrozenSTUPointEncoder")
@@ -1217,7 +1217,7 @@ class AJAEInference:
             or _plain_json(fusion_values) != expected_fusion_values
         ):
             raise EvaluationError(
-                "protocol does not declare both schema-31 score domains"
+                "protocol does not declare both schema-32 score domains"
             )
         if evaluation.get("fusion_reduction") != FUSION_REDUCTION:
             raise EvaluationError(
@@ -1300,7 +1300,7 @@ class AJAEInference:
             model_state = model_state_sha256(model.state_dict())
 
         return EvaluationIdentity(
-            31,
+            32,
             _sha256(protocol.scientific_identity, "protocol scientific identity"),
             condition.value,
             _fusion_value(condition),
@@ -1335,7 +1335,7 @@ class AJAEInference:
         if selected is not ExperimentCondition.B0 and model is None:
             raise EvaluationError("AJAE test inference requires a model fixture")
         identity = EvaluationIdentity(
-            31,
+            32,
             "0" * 64,
             selected.value,
             _fusion_value(selected),
@@ -1396,6 +1396,7 @@ class AJAEInference:
         self.identity = identity
         self.device = torch.device(device)
         self.cache = RollingCache(cache_frames)
+        self._b1_logits: dict[tuple[object, ...], np.ndarray] = {}
         self._cache_namespace: tuple[object, ...] = ("unscoped",)
         self.time_budget_seconds = time_budget_seconds
         if self.model is not None:
@@ -1516,6 +1517,10 @@ class AJAEInference:
     def _model_logits(self, window: object) -> np.ndarray:
         if self.model is None:
             raise EvaluationError("AJAE model is unavailable")
+        try:
+            from .render import source_observation_identity
+        except ImportError:  # pragma: no cover - direct module execution
+            from render import source_observation_identity
         sources, encodings = self._window_content(window)
         points = getattr(window, "points")
 
@@ -1562,18 +1567,37 @@ class AJAEInference:
             for source in sources:
                 count = int(getattr(source, "real_count"))
                 selected = slice(offset, offset + count)
-                # Each member is an independent forward in the same window frame.
-                logits = self.model(
-                    coordinates[selected],
-                    stu_features[selected],
-                    normal_evidence[selected],
-                    reliability_assign[selected],
-                    reliability_noobj[selected],
-                    intensity[selected],
-                    torch.zeros(count, dtype=torch.long, device=self.device),
-                    grouping_mode="single",
+                key = (
+                    *self._cache_namespace,
+                    int(getattr(source, "frame_id")),
+                    source_observation_identity(source),
                 )
-                chunks.append(logits)
+                cached = self._b1_logits.get(key)
+                if cached is None:
+                    native_coordinates = torch.as_tensor(
+                        np.asarray(getattr(source, "xyzi"))[
+                            np.asarray(getattr(source, "real_slots")), :3
+                        ],
+                        dtype=torch.float32,
+                        device=self.device,
+                    )
+                    logits = self.model(
+                        native_coordinates,
+                        stu_features[selected],
+                        normal_evidence[selected],
+                        reliability_assign[selected],
+                        reliability_noobj[selected],
+                        intensity[selected],
+                        torch.zeros(count, dtype=torch.long, device=self.device),
+                        grouping_mode="single",
+                    )
+                    cached = logits.detach().cpu().numpy().copy()
+                    self._b1_logits[key] = cached
+                chunks.append(
+                    torch.as_tensor(
+                        cached, dtype=stu_features.dtype, device=self.device
+                    )
+                )
                 offset += count
             if offset != coordinates.shape[0]:
                 raise EvaluationError("B1 did not consume every window point")
@@ -1615,6 +1639,7 @@ class AJAEInference:
         if output_dir is not None and self.identity.test_fixture:
             raise EvaluationError("test-only inference cannot write formal artifacts")
         self.cache.clear()
+        self._b1_logits.clear()
         spec = getattr(sequence, "spec")
         partition = str(getattr(spec, "partition"))
         sequence_id = int(getattr(spec, "sequence_id"))
@@ -1842,7 +1867,7 @@ def evaluate_condition(
     *,
     output_dir: Path | str | None = None,
 ) -> ConditionEvaluation:
-    """Run and evaluate one registered schema-31 condition."""
+    """Run and evaluate one registered schema-32 condition."""
 
     prediction = inference.predict_sequence(sequence, output_dir=output_dir)
     return ConditionEvaluation(
@@ -1972,7 +1997,7 @@ class DevelopmentFusedAP:
 
     def to_dict(self) -> dict[str, object]:
         return {
-            "format": "ajae-schema31-in-generator-development-evaluation-v1",
+            "format": "ajae-schema32-in-generator-development-evaluation-v1",
             "condition": self.condition,
             "fusion_semantics": self.fusion_semantics,
             "fusion_value": self.evaluation_identity.fusion_value,
@@ -2025,7 +2050,7 @@ def development_fused_ap(
     if type(protocol) is not AJAEProtocol or type(development_worlds) is not (
         DevelopmentWorlds
     ):
-        raise TypeError("development evaluation requires schema-31 protocol objects")
+        raise TypeError("development evaluation requires schema-32 protocol objects")
     inference._assert_components_unchanged()
     if (
         inference.identity.test_fixture
@@ -2036,7 +2061,7 @@ def development_fused_ap(
         raise EvaluationError("development evaluation requires formal frozen inference")
     if (
         not development_worlds.validated
-        or development_worlds.protocol_schema != 31
+        or development_worlds.protocol_schema != 32
         or development_worlds.protocol_identity
         != protocol.development_population_identity
         or development_worlds.sequence_id != 201
@@ -2092,6 +2117,7 @@ def development_fused_ap(
         truth: dict[tuple[int, int], tuple[int, np.ndarray, int]] = {}
         observations: dict[int, tuple[str, object]] = {}
         inference.cache.clear()
+        inference._b1_logits.clear()
         inference._cache_namespace = ("synthetic", definition.world_identity)
         for frozen_window, rendered_window in zip(
             definition.windows, clip.windows, strict=True
@@ -2440,7 +2466,7 @@ def _assert_frozen_evaluation_components(
         None if identity.condition == "B0" else "JointWindowPointTransformer"
     )
     if (
-        identity.protocol_schema != 31
+        identity.protocol_schema != 32
         or identity.protocol_identity != _protocol_identity(protocol)
         or identity.stu_class != "FrozenSTUPointEncoder"
         or identity.model_class != expected_model_class
@@ -3007,7 +3033,9 @@ class FormalEvaluationRecord:
 
         try:
             development_worlds = load_development_worlds(
-                _protocol_root(protocol) / "dev.json", protocol=protocol
+                _protocol_root(protocol) / "confirm.json",
+                protocol=protocol,
+                population_role="confirmation",
             )
         except (OSError, ValueError) as error:
             raise EvaluationError(
@@ -3033,8 +3061,8 @@ class FormalEvaluationRecord:
             development["population_identity"], "formal development population"
         )
         expected_population = _sha256(
-            formal.get("development_population_identity"),
-            "protocol formal development population",
+            development_worlds.population_identity,
+            "frozen confirmation population",
         )
         if population_identity != expected_population:
             raise EvaluationError("formal result uses another development population")
@@ -3065,7 +3093,7 @@ class FormalEvaluationRecord:
             != expected_clip_identities
         ):
             raise EvaluationError(
-                "formal result clip identities or order differ from dev.json"
+                "formal result clip identities or order differ from confirm.json"
             )
         macro_ap = math.fsum(clip_values) / len(clip_values)
         reported_ap = _unit_interval(development["macro_AP"], "formal macro AP")
@@ -3111,30 +3139,6 @@ class FormalEvaluationRecord:
             best_development = _record_mapping(
                 run_payload.get("best_development"), "formal best development"
             )
-            run_clips = _record_list(
-                _plain_json(best_development.get("clips")),
-                "formal training best-development clips",
-            )
-            run_clip_values = {
-                str(
-                    _record_mapping(item, "training development clip")["clip_identity"]
-                ): _unit_interval(
-                    _record_mapping(item, "training development clip")[
-                        "fused_point_ap"
-                    ],
-                    "training development clip AP",
-                )
-                for item in run_clips
-            }
-            supplied_clip_values = {
-                str(
-                    _record_mapping(item, "formal development clip")["clip_identity"]
-                ): _unit_interval(
-                    _record_mapping(item, "formal development clip")["AP"],
-                    "formal development clip AP",
-                )
-                for item in clips
-            }
             best_identity = _evaluation_identity_record(
                 best_development.get("evaluation_identity"),
                 "training best-development identity",
@@ -3149,21 +3153,11 @@ class FormalEvaluationRecord:
                 or run_payload.get("best_model_state_sha256")
                 != identity.model_state_sha256
                 or run_payload.get("development_population_identity")
-                != population_identity
+                != formal.get("development_population_identity")
                 or best_identity != identity
-                or run_clip_values != supplied_clip_values
-                or not math.isclose(
-                    _unit_interval(
-                        best_development.get("macro_fused_point_ap"),
-                        "training best macro AP",
-                    ),
-                    macro_ap,
-                    rel_tol=1.0e-12,
-                    abs_tol=1.0e-12,
-                )
             ):
                 raise EvaluationError(
-                    "formal evaluation differs from its validated best training run"
+                    "formal evaluation does not use its D_select-chosen checkpoint"
                 )
 
         safety = _record_mapping(payload["normal_safety"], "formal normal safety")
@@ -3256,8 +3250,12 @@ def make_formal_evaluation_record(
         from protocol import load_development_worlds
 
     development = load_development_worlds(
-        _protocol_root(protocol) / "dev.json", protocol=protocol
+        _protocol_root(protocol) / "confirm.json",
+        protocol=protocol,
+        population_role="confirmation",
     )
+    if development_population_identity != development.population_identity:
+        raise EvaluationError("formal evaluation must use frozen D_confirm")
     expected_clips = tuple(str(item.identity) for item in development.clips)
     evidence = FormalMetricEvidence.load(
         metric_evidence,
@@ -5608,7 +5606,7 @@ def load_prediction_coverage(
     expected_window_starts: Iterable[int],
     expected_identity: EvaluationIdentity,
 ) -> Mapping[str, Any]:
-    """Validate the schema-31 covered-union manifest before reading scores."""
+    """Validate the schema-32 covered-union manifest before reading scores."""
 
     if type(expected_identity) is not EvaluationIdentity:
         raise TypeError("expected_identity must be EvaluationIdentity")
@@ -5647,7 +5645,7 @@ def load_prediction_coverage(
         or expected_identity.condition != _condition(condition).value
         or payload["padding_or_zero_fill_used"] is not False
     ):
-        raise EvaluationError("prediction coverage changed the schema-31 domain")
+        raise EvaluationError("prediction coverage changed the schema-32 domain")
     expected_frames = sorted(
         {frame_id for start in starts for frame_id in range(start, start + 5)}
     )

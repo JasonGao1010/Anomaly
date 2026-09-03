@@ -422,7 +422,7 @@ def stu_input_identity(
     ):
         raise ModelError("STU identity inputs contain non-finite values")
 
-    digest = hashlib.sha256(b"AJAE-schema31-frozen-STU-input\0")
+    digest = hashlib.sha256(b"AJAE-schema32-frozen-STU-input\0")
     for name, value in (
         (b"coordinates", coordinates_np[slots_np]),
         (b"features", features_np[slots_np]),

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Run the lightweight schema-31 mechanical qualifications.
+"""Run the lightweight schema-32 mechanical qualifications.
 
 The default command uses only deterministic synthetic fixtures. It does not
 open STU data, render a training bank, load the released STU network, train a
-model, or turn historical schema-30 records into schema-31 evidence.
+model, or turn historical schema-30 records into schema-32 evidence.
 """
 
 from __future__ import annotations
@@ -14,11 +14,12 @@ import inspect
 import json
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Mapping, Sequence
 
 import numpy as np
 import torch
-from torch import Tensor
+from torch import Tensor, nn
 
 try:
     from .model import (
@@ -82,7 +83,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_RUNS_ROOT = PROJECT_ROOT / "runs" / "ajae"
 DEFAULT_DEVELOPMENT_PATH = PROJECT_ROOT / "dev.json"
 AUDIT_NAME = "Window Densification Audit"
-AUDIT_FORMAT = "ajae-schema31-qualification-v2"
+AUDIT_FORMAT = "ajae-schema32-qualification-v1"
 
 
 class QualificationError(ValueError):
@@ -307,7 +308,7 @@ def _yaw_pose(angle: float, translation: Sequence[float]) -> np.ndarray:
 
 def _scene_fixture() -> tuple[SceneWindow, SceneWindow]:
     spec = SequenceSpec(
-        "train", 206, "schema31 qualification fixture", False, FrameSpan(0, 5)
+        "train", 206, "schema32 qualification fixture", False, FrameSpan(0, 5)
     )
     frames = []
     for frame_id in range(5):
@@ -815,7 +816,7 @@ def occurrence_fusion_audit() -> dict[str, object]:
 
     fusion = WindowScoreFusion()
     expected: dict[tuple[int, int], list[float]] = {}
-    world_identity = "schema31-fusion-fixture"
+    world_identity = "schema32-fusion-fixture"
     for occurrence_count in range(1, 6):
         # Frame c-1 occurs in exactly the consecutive starts 0 through c-1.
         source_frame = occurrence_count - 1
@@ -880,6 +881,159 @@ def occurrence_fusion_audit() -> dict[str, object]:
         "maximum_probability_error": maximum_error,
         "namespace_isolated": True,
     }
+
+
+def b1_construct_audits() -> tuple[dict[str, object], ...]:
+    """Exercise native-coordinate isolation and exact overlapping-score reuse."""
+
+    try:
+        from .evaluate import AJAEInference
+        from .model import STUPointEncoding, stu_input_identity
+        from .train import _predict_window_for_test
+    except ImportError:  # Direct script execution.
+        from evaluate import AJAEInference
+        from model import STUPointEncoding, stu_input_identity
+        from train import _predict_window_for_test
+
+    groups = torch.arange(5, dtype=torch.long)
+    generator = torch.Generator().manual_seed(3201)
+    tensors = {
+        "coordinates": torch.column_stack(
+            (groups.float(), torch.zeros(5), torch.zeros(5))
+        ),
+        "native_coordinates": torch.column_stack(
+            (groups.float() + 10.0, torch.zeros(5), torch.zeros(5))
+        ),
+        "scan_group": groups,
+        "stu_features": torch.randn((5, 128), generator=generator),
+        "normal_evidence": torch.randn((5, 19), generator=generator),
+        "reliability_assign": torch.rand(5, generator=generator),
+        "reliability_noobj": torch.rand(5, generator=generator),
+        "intensity": torch.rand(5, generator=generator),
+        "target": torch.zeros(5, dtype=torch.bool),
+        "valid": torch.ones(5, dtype=torch.bool),
+    }
+    base = SimpleNamespace(**tensors, point_count=5)
+    permutation = torch.tensor((4, 0, 2, 1, 3), dtype=torch.long)
+    changed_tensors = {
+        name: value[permutation].clone() for name, value in tensors.items()
+    }
+    changed_groups = changed_tensors["scan_group"]
+    other = changed_groups != 2
+    changed_tensors["coordinates"] += 1000.0
+    changed_tensors["native_coordinates"][other] -= 500.0
+    changed_tensors["stu_features"][other] += 77.0
+    changed = SimpleNamespace(**changed_tensors, point_count=5)
+
+    class CoordinateFeatureModel(nn.Module):
+        def forward(
+            self,
+            coordinates: Tensor,
+            stu_features: Tensor,
+            *_args: Tensor,
+            grouping_mode: object,
+        ) -> Tensor:
+            return coordinates[:, 0] + stu_features[:, 0]
+
+    construct_model = CoordinateFeatureModel()
+    b1_base = _predict_window_for_test(construct_model, base, "B1")
+    b1_changed = _predict_window_for_test(construct_model, changed, "B1")
+    target_base = b1_base[groups == 2]
+    target_changed = b1_changed[changed_groups == 2]
+    independent = torch.equal(target_base, target_changed)
+    _require(independent, "B1 target changed when only the other scans changed")
+    b2_base = _predict_window_for_test(construct_model, base, "B2")
+    construct_differs = not torch.equal(b1_base, b2_base)
+    _require(construct_differs, "B1 and B2 consumed the same coordinate construct")
+
+    sources = tuple(
+        make_source_frame(
+            frame_id,
+            np.asarray(((4.0 + frame_id, 0.0, 0.0, 0.2),), dtype=np.float32),
+            np.eye(4, dtype=np.float64),
+            partition="train",
+            sequence_id=206,
+        )
+        for frame_id in range(6)
+    )
+
+    class Encoder(nn.Module):
+        def forward(
+            self, coordinates: Tensor, features: Tensor, real_slots: np.ndarray
+        ) -> STUPointEncoding:
+            count = len(real_slots)
+            return STUPointEncoding(
+                point_features=torch.zeros((count, 128)),
+                assigned_query=torch.zeros(count, dtype=torch.long),
+                normal_evidence=torch.zeros((count, 19)),
+                reliability_assign=torch.zeros(count),
+                reliability_noobj=torch.zeros(count),
+                maxlogit_score=torch.zeros(count),
+                inverse_map=torch.arange(count),
+                real_slots=torch.from_numpy(real_slots.astype(np.int64, copy=True)),
+                input_identity=stu_input_identity(coordinates, features, real_slots),
+            )
+
+    class CountingModel(nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.calls = 0
+
+        def forward(
+            self,
+            coordinates: Tensor,
+            *_args: Tensor,
+            grouping_mode: object,
+        ) -> Tensor:
+            self.calls += 1
+            return coordinates[:, 0]
+
+    def inference_window(selected: Sequence[object], shift: float) -> object:
+        return SimpleNamespace(
+            frames=tuple(SimpleNamespace(source=source) for source in selected),
+            points=SimpleNamespace(
+                count=5,
+                coordinates=np.column_stack(
+                    (np.arange(5, dtype=np.float32) + shift, np.zeros((5, 2)))
+                ),
+                scan_group=np.arange(5, dtype=np.int64),
+            ),
+        )
+
+    counting_model = CountingModel()
+    inference = AJAEInference._for_test(
+        counting_model,
+        Encoder(),
+        condition="B1",
+        slot_to_ray=lambda source: np.arange(source.slot_count, dtype=np.int32),
+    )
+    inference._cache_namespace = ("schema32-b1-qualification",)
+    first = inference._model_logits(inference_window(sources[:5], 0.0))
+    second = inference._model_logits(inference_window(sources[1:], 1000.0))
+    exact_reuse = counting_model.calls == 6 and np.array_equal(first[1:], second[:4])
+    _require(exact_reuse, "B1 recomputed or changed an overlapping frame-ray score")
+
+    return (
+        {
+            "passed": independent,
+            "target_group": 2,
+            "other_scan_order_changed": True,
+            "other_scan_points_changed": True,
+            "symmetric_window_coordinates_changed": True,
+        },
+        {
+            "passed": construct_differs,
+            "B1_coordinate_mode": "native_sensor",
+            "B2_coordinate_mode": "symmetric_window",
+        },
+        {
+            "passed": exact_reuse,
+            "overlapping_windows": 2,
+            "unique_source_frames": 6,
+            "model_forward_calls": counting_model.calls,
+            "shared_scores_exact": True,
+        },
+    )
 
 
 def stu_evidence_primitive_audit(seed: int = 3107) -> dict[str, object]:
@@ -1060,17 +1214,18 @@ def window_proxy_evidence_status(
         "matching_recorded": matching,
         "shortcut_audit_recorded": shortcut,
         "reason": (
-            "validated schema31 window-bank record contains both decisions"
+            "validated schema32 window-bank record contains both decisions"
             if qualified
-            else "a validated nonempty schema31 window bank with matching and shortcut decisions is required"
+            else "a validated nonempty schema32 window bank with matching and shortcut decisions is required"
         ),
     }
 
 
 def run_window_densification_audit(protocol: AJAEProtocol) -> dict[str, object]:
-    """Execute the ten result-blind schema-31 densification mechanics."""
+    """Execute result-blind schema-32 window and densification mechanics."""
 
     voxel_joint, voxel_isolated, density = grouped_voxel_audits()
+    b1_independence, b1_b2_difference, b1_occurrence = b1_construct_audits()
     checks = (
         (
             "symmetric_coordinates_scan_permutation_invariant",
@@ -1094,8 +1249,11 @@ def run_window_densification_audit(protocol: AJAEProtocol) -> dict[str, object]:
             "occurrence_fusion_matches_independent_probability_mean",
             occurrence_fusion_audit(),
         ),
+        ("b1_native_scan_is_other_frame_independent", b1_independence),
+        ("b1_and_b2_use_distinct_coordinate_constructs", b1_b2_difference),
+        ("b1_overlaps_reuse_exact_frame_ray_score", b1_occurrence),
     )
-    _require(len(checks) == 10, "densification audit must contain exactly ten checks")
+    _require(len(checks) == 13, "window audit must contain exactly thirteen checks")
     _require(
         all(bool(result["passed"]) for _, result in checks), "an audit check failed"
     )
@@ -1109,7 +1267,7 @@ def run_window_densification_audit(protocol: AJAEProtocol) -> dict[str, object]:
     }
 
 
-def run_schema31_qualification(
+def run_schema32_qualification(
     protocol_path: Path | str = DEFAULT_PROTOCOL_PATH,
     *,
     runs_root: Path | str = DEFAULT_RUNS_ROOT,
@@ -1120,7 +1278,7 @@ def run_schema31_qualification(
     """Run mechanics and keep scientific evidence categories explicit."""
 
     protocol = load_protocol(protocol_path)
-    _require(protocol.schema_version == SCHEMA_VERSION, "schema-31 protocol required")
+    _require(protocol.schema_version == SCHEMA_VERSION, "schema-32 protocol required")
     mechanical = run_window_densification_audit(protocol)
     retained: dict[str, object] | None = None
     if inspect_retained:
@@ -1196,7 +1354,9 @@ class R03QualificationRecord:
             resolved = requested.resolve(strict=True)
             raw = json.loads(resolved.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as error:
-            raise QualificationError("R03 qualification record is unreadable") from error
+            raise QualificationError(
+                "R03 qualification record is unreadable"
+            ) from error
         expected_keys = {
             "format",
             "protocol_schema",
@@ -1240,7 +1400,9 @@ class R03QualificationRecord:
             or raw["decision"] != "pass"
             or raw["performance_claim_available"] is not False
         ):
-            raise QualificationError("R03 qualification does not authorize this protocol")
+            raise QualificationError(
+                "R03 qualification does not authorize this protocol"
+            )
         mechanical = raw["mechanical"]
         retained = raw["retained_schema30_evidence"]
         primitives = raw["lightweight_primitives"]
@@ -1248,9 +1410,9 @@ class R03QualificationRecord:
         if (
             not isinstance(mechanical, Mapping)
             or mechanical.get("passed") is not True
-            or mechanical.get("check_count") != 10
+            or mechanical.get("check_count") != 13
             or not isinstance(mechanical.get("checks"), Mapping)
-            or len(mechanical["checks"]) != 10
+            or len(mechanical["checks"]) != 13
             or any(
                 not isinstance(value, Mapping) or value.get("passed") is not True
                 for value in mechanical["checks"].values()
@@ -1288,7 +1450,7 @@ class R03QualificationRecord:
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Run result-blind schema-31 window densification qualifications."
+        description="Run result-blind schema-32 window densification qualifications."
     )
     parser.add_argument("--protocol", type=Path, default=DEFAULT_PROTOCOL_PATH)
     parser.add_argument("--runs-root", type=Path, default=DEFAULT_RUNS_ROOT)
@@ -1309,7 +1471,7 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
-    result = run_schema31_qualification(
+    result = run_schema32_qualification(
         args.protocol,
         runs_root=args.runs_root,
         development_path=args.development,

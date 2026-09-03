@@ -33,6 +33,7 @@ from scipy import ndimage
 from scipy.optimize import brentq, differential_evolution, linear_sum_assignment
 from scipy.spatial import ConvexHull, QhullError, cKDTree
 from scipy.stats import qmc
+from sklearn.tree import DecisionTreeClassifier
 
 try:
     from .scene import (
@@ -57,7 +58,7 @@ SUPPORT_POOL_SHA256_BY_SEQUENCE = {
 SUPPORT_POOL_SEMANTICS = (40, 48, 49)
 CALIBRATION_FORMAT = "ajae-sensor-calibration-v4"
 DEVELOPMENT_FORMAT = "ajae-development-window-worlds-v3"
-DEVELOPMENT_PROTOCOL_SCHEMA = 31
+DEVELOPMENT_PROTOCOL_SCHEMA = 32
 PROCEDURAL_GENERATOR_SCHEMA = 7
 SHAPE_FAMILIES = ("general", "blocky", "flat", "elongated")
 AXIS_PERMUTATIONS = (
@@ -4748,7 +4749,7 @@ def source_observation_identity(source: SourceFrame) -> str:
 
     if not isinstance(source, SourceFrame):
         raise TypeError("source observation identity requires a SourceFrame")
-    digest = hashlib.sha256(b"AJAE-schema31-rendered-source-observation\0")
+    digest = hashlib.sha256(b"AJAE-schema32-rendered-source-observation\0")
     digest.update(
         json.dumps(
             {
@@ -5216,6 +5217,25 @@ WINDOW_MATCHING_FEATURES = (
     "visible_scan_count",
 )
 
+WINDOW_PHYSICAL_SHORTCUT_FEATURES = (
+    "log1p_joint_visible_return_count",
+    "log1p_joint_spatial_voxel_count",
+    "log_densification_gain",
+    "duplicate_fraction",
+    "visible_scan_count",
+    *(f"sorted_log1p_visible_returns_{index}" for index in range(5)),
+    *(f"sorted_log1p_spatial_voxels_{index}" for index in range(5)),
+    "median_distance_m",
+    "occlusion_rate",
+    "minimum_visible_return_height_m",
+    "intensity_q05",
+    "intensity_median",
+    "intensity_q95",
+    *(f"normalized_beam_block_{index}" for index in range(8)),
+    "normalized_beam_mean",
+    "normalized_beam_std",
+)
+
 
 def window_matching_covariates(descriptor: WindowEntityDescriptor) -> np.ndarray:
     """Return the continuous window-level covariates frozen for matching."""
@@ -5236,6 +5256,47 @@ def window_matching_covariates(descriptor: WindowEntityDescriptor) -> np.ndarray
     )
 
 
+def window_physical_shortcut_features(
+    descriptor: WindowEntityDescriptor,
+) -> np.ndarray:
+    """Summarize observable physics without exposing scan position or object ID."""
+
+    if not isinstance(descriptor, WindowEntityDescriptor):
+        raise TypeError("descriptor must be WindowEntityDescriptor")
+    returns = sorted(math.log1p(value) for value in descriptor.visible_returns_by_scan)
+    voxels = sorted(math.log1p(value) for value in descriptor.spatial_voxels_by_scan)
+    histogram = np.asarray(descriptor.beam_histogram, dtype=np.float64)
+    total = float(histogram.sum())
+    beam_axis = np.arange(LASER_BEAMS, dtype=np.float64) / (LASER_BEAMS - 1)
+    blocks = np.add.reduceat(histogram, np.arange(0, LASER_BEAMS, 16)) / total
+    mean = float(np.sum(histogram * beam_axis) / total)
+    standard_deviation = float(
+        np.sqrt(np.sum(histogram * (beam_axis - mean) ** 2) / total)
+    )
+    output = np.asarray(
+        (
+            math.log1p(descriptor.joint_visible_return_count),
+            math.log1p(descriptor.joint_spatial_voxel_count),
+            math.log(descriptor.densification_gain),
+            descriptor.duplicate_fraction,
+            descriptor.visible_scan_count,
+            *returns,
+            *voxels,
+            descriptor.median_distance_m,
+            descriptor.occlusion_rate,
+            descriptor.minimum_visible_return_height_m,
+            *descriptor.intensity_q05_median_q95,
+            *blocks.tolist(),
+            mean,
+            standard_deviation,
+        ),
+        dtype=np.float64,
+    )
+    if output.shape != (len(WINDOW_PHYSICAL_SHORTCUT_FEATURES),):
+        raise AssertionError("physical shortcut feature declaration drifted")
+    return output
+
+
 @dataclass(frozen=True, slots=True)
 class WindowEntityMatch:
     """One result-blind normal-control/proxy pair in the same support stratum."""
@@ -5250,6 +5311,8 @@ class WindowEntityMatch:
     standardized_distance: float
     control_covariates: tuple[float, ...]
     proxy_covariates: tuple[float, ...]
+    control_physical_features: tuple[float, ...]
+    proxy_physical_features: tuple[float, ...]
 
     def __post_init__(self) -> None:
         for name in (
@@ -5275,6 +5338,11 @@ class WindowEntityMatch:
             values = tuple(_finite_scalar(name, value) for value in getattr(self, name))
             if len(values) != len(WINDOW_MATCHING_FEATURES):
                 raise RenderError("matching covariates have the wrong dimension")
+            object.__setattr__(self, name, values)
+        for name in ("control_physical_features", "proxy_physical_features"):
+            values = tuple(_finite_scalar(name, value) for value in getattr(self, name))
+            if len(values) != len(WINDOW_PHYSICAL_SHORTCUT_FEATURES):
+                raise RenderError("physical shortcut features have the wrong dimension")
             object.__setattr__(self, name, values)
 
     def to_dict(self) -> dict[str, object]:
@@ -5360,6 +5428,14 @@ def match_window_descriptor_records(
                     float(cost[left, right]),
                     tuple(map(float, control_values[left])),
                     tuple(map(float, proxy_values[right])),
+                    tuple(
+                        map(
+                            float, window_physical_shortcut_features(control_descriptor)
+                        )
+                    ),
+                    tuple(
+                        map(float, window_physical_shortcut_features(proxy_descriptor))
+                    ),
                 )
             )
     if not pairs:
@@ -5586,16 +5662,80 @@ def linear_classification_audit(
     }
 
 
+def grouped_depth3_tree_audit(
+    class_zero_features: np.ndarray,
+    class_one_features: np.ndarray,
+    class_zero_groups: np.ndarray,
+    class_one_groups: np.ndarray,
+    *,
+    train_groups: Sequence[int],
+    test_groups: Sequence[int],
+    seed: int,
+) -> dict[str, object]:
+    """Fit a deterministic depth-three tree on the exact logistic group split."""
+
+    zero = np.asarray(class_zero_features, dtype=np.float64)
+    one = np.asarray(class_one_features, dtype=np.float64)
+    zero_group = np.asarray(class_zero_groups, dtype=np.int64)
+    one_group = np.asarray(class_one_groups, dtype=np.int64)
+    train = np.vstack(
+        (zero[np.isin(zero_group, train_groups)], one[np.isin(one_group, train_groups)])
+    )
+    train_label = np.concatenate(
+        (
+            np.zeros(np.count_nonzero(np.isin(zero_group, train_groups))),
+            np.ones(np.count_nonzero(np.isin(one_group, train_groups))),
+        )
+    )
+    test = np.vstack(
+        (zero[np.isin(zero_group, test_groups)], one[np.isin(one_group, test_groups)])
+    )
+    test_label = np.concatenate(
+        (
+            np.zeros(np.count_nonzero(np.isin(zero_group, test_groups)), dtype=np.int8),
+            np.ones(np.count_nonzero(np.isin(one_group, test_groups)), dtype=np.int8),
+        )
+    )
+    if (
+        min(np.bincount(train_label.astype(np.int8), minlength=2)) == 0
+        or min(np.bincount(test_label, minlength=2)) == 0
+    ):
+        raise RenderError("depth-three tree split must contain both classes")
+    classifier = DecisionTreeClassifier(
+        max_depth=3,
+        random_state=_integer("seed", seed),
+        class_weight="balanced",
+    ).fit(train, train_label)
+    score = classifier.predict_proba(test)[:, 1]
+    prediction = score >= 0.5
+    class_accuracy = tuple(
+        float(np.mean(prediction[test_label == label] == bool(label)))
+        for label in (0, 1)
+    )
+    return {
+        "model": "depth3_decision_tree",
+        "maximum_depth": 3,
+        "train_samples": int(train.shape[0]),
+        "test_samples": int(test.shape[0]),
+        "balanced_accuracy": float(np.mean(class_accuracy)),
+        "auroc": _rank_auc(test_label, score),
+    }
+
+
 def window_shortcut_audit(
     pairs: Sequence[WindowEntityMatch], *, seed: int = 0
 ) -> dict[str, object]:
-    """Test whether matched density covariates directly reveal proxy labels."""
+    """Test whether broad observable physics directly reveal proxy labels."""
 
     items = tuple(pairs)
     if len(items) < 10:
         raise RenderError("shortcut audit requires at least ten matched pairs")
-    control = np.asarray([item.control_covariates for item in items], dtype=np.float64)
-    proxy = np.asarray([item.proxy_covariates for item in items], dtype=np.float64)
+    control = np.asarray(
+        [item.control_physical_features for item in items], dtype=np.float64
+    )
+    proxy = np.asarray(
+        [item.proxy_physical_features for item in items], dtype=np.float64
+    )
     identities = sorted(
         {item.control_world_identity for item in items}
         | {item.proxy_world_identity for item in items}
@@ -5613,12 +5753,26 @@ def window_shortcut_audit(
         seed=seed,
         maximum_per_class=len(items),
     )
+    tree = grouped_depth3_tree_audit(
+        control,
+        proxy,
+        np.asarray(
+            [group[item.control_world_identity] for item in items], dtype=np.int64
+        ),
+        np.asarray(
+            [group[item.proxy_world_identity] for item in items], dtype=np.int64
+        ),
+        train_groups=result["train_groups"],
+        test_groups=result["test_groups"],
+        seed=seed,
+    )
     return {
         "class_zero": "normal-control",
         "class_one": "anomaly-proxy",
-        "feature_names": list(WINDOW_MATCHING_FEATURES),
+        "feature_names": list(WINDOW_PHYSICAL_SHORTCUT_FEATURES),
         "exact_matching_stratum": "support_semantic_id",
         **result,
+        "depth3_tree": tree,
         "scientific_verdict": None,
     }
 
@@ -5933,6 +6087,7 @@ def _development_payload_from_manifests(
     *,
     protocol_identity: str,
     plan_identity: str,
+    population_role: str = "selection",
 ) -> dict[str, object]:
     """Build the small formal manifest after runtime point arrays are released."""
 
@@ -5988,13 +6143,20 @@ def _development_payload_from_manifests(
             or any(character not in "0123456789abcdef" for character in value)
         ):
             raise RenderError(f"{name} must be a lowercase SHA-256 digest")
+    if population_role not in {"selection", "confirmation"}:
+        raise RenderError("synthetic population role is unsupported")
+    identity_format = (
+        "ajae-schema32-selection-population-v1"
+        if population_role == "selection"
+        else "ajae-schema32-confirmation-population-v1"
+    )
     population_identity = (
         None
         if not items
         else hashlib.sha256(
             json.dumps(
                 {
-                    "format": "ajae-schema31-formal-development-population-v1",
+                    "format": identity_format,
                     "protocol_identity": protocol_identity,
                     "plan_identity": plan_identity,
                     "clips": items,
@@ -6004,7 +6166,15 @@ def _development_payload_from_manifests(
             ).encode()
         ).hexdigest()
     )
-    status = "not_generated_R02" if not items else "definitions_only_unvalidated"
+    status = (
+        "not_generated_R02"
+        if not items and population_role == "selection"
+        else "sealed_not_generated_before_G2"
+        if not items
+        else "definitions_only_unvalidated"
+        if population_role == "selection"
+        else "confirmation_frozen"
+    )
     return {
         "format": DEVELOPMENT_FORMAT,
         "protocol_schema": DEVELOPMENT_PROTOCOL_SCHEMA,
@@ -6026,6 +6196,7 @@ def development_worlds_payload(
     *,
     protocol_identity: str,
     plan_identity: str,
+    population_role: str = "selection",
 ) -> dict[str, object]:
     """Serialize formal definitions while releasing each clip's point arrays."""
 
@@ -6038,6 +6209,7 @@ def development_worlds_payload(
         manifests,
         protocol_identity=protocol_identity,
         plan_identity=plan_identity,
+        population_role=population_role,
     )
 
 
@@ -6047,11 +6219,15 @@ def save_development_worlds(
     *,
     protocol_identity: str,
     plan_identity: str,
+    population_role: str = "selection",
 ) -> None:
-    """Atomically save fixed schema-31 development clip definitions."""
+    """Atomically save fixed schema-32 development clip definitions."""
 
     payload = development_worlds_payload(
-        clips, protocol_identity=protocol_identity, plan_identity=plan_identity
+        clips,
+        protocol_identity=protocol_identity,
+        plan_identity=plan_identity,
+        population_role=population_role,
     )
     target = Path(path).expanduser().resolve()
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -6067,7 +6243,12 @@ def save_development_worlds(
             and existing.get("format") == DEVELOPMENT_FORMAT
             and existing.get("protocol_schema") == DEVELOPMENT_PROTOCOL_SCHEMA
             and existing.get("sequence_id") == 201
-            and existing.get("status") == "not_generated_R02"
+            and existing.get("status")
+            == (
+                "not_generated_R02"
+                if population_role == "selection"
+                else "sealed_not_generated_before_G2"
+            )
             and existing.get("population_identity") is None
             and existing.get("validation") == {}
             and existing.get("clip_count") == 0
@@ -7392,7 +7573,7 @@ def sample_world_spec(
                     obstacles,
                     object_id=entity_index + 1,
                     label=label,
-                    proposal_namespace="schema31-window-world-v1",
+                    proposal_namespace="schema32-window-world-v1",
                     proposal_stream=entity_seed,
                     yaw_rad=yaw,
                     material_seed=material_seed,
@@ -7487,7 +7668,7 @@ def _sample_held_out_torus_world_spec(
                 obstacles,
                 object_id=1,
                 label="anomaly-proxy",
-                proposal_namespace="schema31-held-out-torus-v1",
+                proposal_namespace="schema32-held-out-torus-v1",
                 proposal_stream=entity_seed,
                 yaw_rad=yaw,
                 material_seed=material_seed,

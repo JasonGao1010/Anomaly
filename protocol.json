@@ -1,15 +1,18 @@
 {
-  "schema_version": 31,
+  "schema_version": 32,
   "status": {
-    "implementation_target": "schema31",
+    "implementation_target": "schema32",
     "current_node": "R02",
     "scientific_route": "window_proxy_and_joint_five_scan_dense_point_cloud",
     "r02_population_identity": null,
     "r02_verdict_identity": null,
+    "r02_thresholds_frozen_result_blind": false,
+    "r02_threshold_identity": null,
     "r03_qualification_identity": null,
     "r04_training_bank_identity": null,
     "r04_training_qualification_identity": null,
     "r05_freeze_identity": null,
+    "f01_formal_training_identity": null,
     "g2_verdict_identity": null,
     "g3_verdict_identity": null,
     "s01_shift_audit_identity": null,
@@ -23,7 +26,9 @@
     "state_machine": "AJAE实验执行状态机.md",
     "history_baseline_commit": "f9b348e98de798366f3ca9291ed90ef752ed348a",
     "history_tag": "schema30-history-baseline",
-    "supersedes": "schema30_center_target_temporal_message_passing_route"
+    "amendment_baseline_commit": "0ceac1401654ddf43dd969a58269666bad1b6d9d",
+    "amendment_history_tag": "schema31-preR02-audit",
+    "supersedes": "schema31_preR02_experimental_contract"
   },
   "scientific_contract": {
     "observation_unit": "one_complete_five_scan_window",
@@ -40,7 +45,7 @@
   },
   "claims": {
     "proxy_supervision": "window-level rendered anomaly proxies provide learnable supervision without a recoverable low-level source or label shortcut",
-    "joint_densification": "B3 joint spatial modeling improves over both B1 single-scan modeling and B2 scan-isolated five-scan modeling",
+    "joint_densification": "B3_minus_B2_identifies_joint_densification; B3_minus_B1_is_complete_method_performance_against_a_native_single_scan_proxy_model",
     "real_ood_transfer": "a method frozen before access to the public anomaly split transfers from synthetic supervision to real STU anomalies"
   },
   "claim_exclusions": [
@@ -222,7 +227,7 @@
         "support_semantic_ids": [40, 48, 49],
         "material_sampler": "shared_MaterialSpec_seeded_quantile_roughness_return_bias",
         "placement_pipeline": "shared_support_pool_grounding_collision_and_visibility",
-        "placement_namespace": "schema31-held-out-torus-v1"
+        "placement_namespace": "schema32-held-out-torus-v1"
       }
     },
     "world_type_probabilities": {
@@ -324,6 +329,30 @@
         "visible_scan_count",
         "minimum_visible_return_height_m"
       ],
+      "shortcut_audits": {
+        "split_unit": "WorldSpec_identity",
+        "models": ["standardized_logistic_regression", "depth3_decision_tree"],
+        "physical_features": [
+          "joint_counts_and_densification",
+          "duplicate_fraction",
+          "visible_scan_count",
+          "sorted_per_scan_return_and_voxel_counts",
+          "distance_occlusion_and_height",
+          "intensity_quantiles",
+          "low_dimensional_beam_statistics"
+        ],
+        "forbidden_physical_features": ["scan_index", "window_member_index"],
+        "frozen_stu_entity_summary": [
+          "point_feature_128d_mean_and_std",
+          "normal_evidence_19d_mean_and_std",
+        "assignment_reliability_mean_and_std",
+        "no_object_reliability_mean_and_std",
+        "visible_return_count_and_range_height_quantiles",
+        "intensity_q05_median_q95"
+      ],
+      "normal_control_realism": "rendered_normal_controls_versus_their_bound_original_train206_normal_template_instances_using_frozen_STU_simple_geometry_and_low_capacity_models",
+        "failure_rule": "either_model_at_or_above_a_pre_frozen_near_direct_separability_threshold_fails_R02"
+      },
       "thresholds": "freeze_result_blind_in_R02"
     },
     "forbidden_densification": [
@@ -358,7 +387,7 @@
       "no_object_reliability",
       "intensity"
     ],
-    "spatial_coordinates": "symmetric_window_coordinates_may_enter_order_invariant_position_encoding_relative_displacement_voxel_neighborhood_and_decode_geometry",
+    "spatial_coordinates": "B1_uses_native_sensor_coordinates_only; B2_and_B3_use_symmetric_window_coordinates",
     "bookkeeping_inputs": "point_identity_for_restoration_and_scan_group_for_B2_isolation_only",
     "input_dim": 150,
     "forbidden_features": [
@@ -397,12 +426,12 @@
     "B1": {
       "trainable": true,
       "grouping_mode": "single",
-      "definition": "five_independent_single_scan_forwards_per_WindowWorld_with_one_all_point_loss"
+      "definition": "five_independent_native_sensor_coordinate_single_scan_forwards_per_WindowWorld_with_one_all_point_loss_and_one_identity_preserving_score_per_frame_ray"
     },
     "B2": {
       "trainable": true,
       "grouping_mode": "per_scan",
-      "definition": "all_five_scans_input_output_and_supervised_with_voxel_neighborhood_and_decode_isolated_by_scan_group"
+      "definition": "all_five_scans_in_symmetric_window_coordinates_with_voxel_neighborhood_and_decode_isolated_by_scan_group"
     },
     "B3": {
       "trainable": true,
@@ -423,12 +452,14 @@
         "five_rendered_point_arrays",
         "renderer_identity",
         "STU_identity",
+        "native_sensor_coordinates",
+        "symmetric_window_coordinates",
         "point_identity",
         "labels",
         "window_level_density_descriptors"
       ],
       "condition_invariants": [
-        "same_five_aligned_points",
+        "same_five_rendered_points_with_condition_specific_coordinates",
         "same_point_labels",
         "same_entry_order",
         "same_model_parameter_shapes_and_initialization",
@@ -436,7 +467,7 @@
         "same_optimizer"
       ],
       "generation_plan": {
-        "namespace": "ajae-schema31-window-train-bank-plan-v1",
+        "namespace": "ajae-schema32-window-train-bank-plan-v1",
         "formal_entry_count": 445,
         "allowed_prefix_counts": [8, 128, 445],
         "window_start_order": "ascending_sha256_namespace_and_window_start",
@@ -457,6 +488,7 @@
       "one_class_rule": "mean_loss_of_the_single_present_class"
     },
     "forced_partial_step_at_world_boundary": false,
+    "epoch_tail_partial_effective_batch": "allowed_and_counted_as_one_optimizer_update",
     "modes": ["tiny_overfit", "pilot", "formal"],
     "tiny_overfit": {
       "windows": 8,
@@ -467,7 +499,7 @@
         "gradient_accumulation": 1,
         "weight_decay": 0.0,
         "scheduler": "constant",
-        "epochs": 1,
+        "budget_unit": "optimizer_updates",
         "maximum_updates": 500,
         "evaluation_interval_updates": 500,
         "gradient_clip_norm": null
@@ -488,7 +520,7 @@
       "schedulers_after_learning_rate_selection": ["constant", "five_percent_warmup_cosine"],
       "weight_decay_after_scheduler_selection": [0.0, 0.00001, 0.0001],
       "fixed_run_parameters": {
-        "epochs": 1,
+        "budget_unit": "optimizer_updates",
         "evaluation_interval_updates": 50,
         "gradient_clip_norm": null
       },
@@ -560,10 +592,10 @@
         "overlapping_windows_per_clip": 5,
         "in_generator_clips": 24,
         "total_clips": 24,
-        "freeze_rule": "fixed_before_any_schema31_development_world_is_generated_or_scored"
+        "freeze_rule": "D_select_fixed_before_any_schema32_selection_world_is_generated_or_scored"
       },
       "generation_plan": {
-        "namespace": "ajae-schema31-development-clip-plan-v1",
+        "namespace": "ajae-schema32-synthetic-clip-plan-v1",
         "clip_start_selection": "sha256_ranked_greedy_nonoverlapping_nine_frame_clips",
         "plan_positions_inclusive": [0, 23],
         "mechanism": "in_generator",
@@ -574,14 +606,35 @@
       },
       "cross_world_fusion_forbidden": true
     },
+    "synthetic_confirmation": {
+      "unit": "DevelopmentClipWorld",
+      "role": "D_confirm_independent_formal_gate_population",
+      "mechanism": "in_generator",
+      "clip_count": 24,
+      "frames_per_clip": 9,
+      "overlapping_windows_per_clip": 5,
+      "generation_plan_namespace": "ajae-schema32-synthetic-clip-plan-v1",
+      "plan_positions_inclusive": [24, 47],
+      "source_frames_disjoint_from_D_select": true,
+      "allowed_only_at_or_after": "G2",
+      "excluded_before_G2_from": [
+        "rendering",
+        "visual_review",
+        "proxy_qualification",
+        "hyperparameter_selection",
+        "checkpoint_selection",
+        "method_changes"
+      ],
+      "all_formal_checkpoints_fixed_before_opening": true
+    },
     "held_out_synthetic_shift": {
       "unit": "DevelopmentClipWorld",
       "mechanism": "torus_SDF",
       "clip_count": 6,
       "frames_per_clip": 9,
       "overlapping_windows_per_clip": 5,
-      "generation_plan_namespace": "ajae-schema31-development-clip-plan-v1",
-      "plan_positions_inclusive": [24, 29],
+      "generation_plan_namespace": "ajae-schema32-synthetic-clip-plan-v1",
+      "plan_positions_inclusive": [48, 53],
       "allowed_only_at_or_after": "S01",
       "excluded_before_S01_from": [
         "rendering",
@@ -606,6 +659,7 @@
     "R03",
     "R04",
     "R05",
+    "F01",
     "G2",
     "G3",
     "S01",
@@ -639,7 +693,7 @@
   },
   "historical_evidence": {
     "evidence_source_schema": 30,
-    "inheritance_rule": "mechanical_evidence_keeps_its_original_schema30_identity_and_claim_scope_and_must_not_be_relabelled_as_generated_under_schema31",
+    "inheritance_rule": "mechanical_evidence_keeps_its_original_schema30_identity_and_claim_scope_and_must_not_be_relabelled_as_generated_under_schema32",
     "continues_with_original_scope": [
       "schema7_geometry_and_coverage",
       "support_placement_and_collision",
@@ -653,7 +707,7 @@
       "sealed_data_access"
     ],
     "old_distribution_only": ["E45B-v2", "E48", "E76-C1"],
-    "reusable_only_after_schema31_requalification": [
+    "reusable_only_after_schema32_requalification": [
       "E26_world_construction_primitives",
       "E37_point_identity_consistency_primitives",
       "E55_non_temporal_150d_input_content",
@@ -661,7 +715,7 @@
       "E71_probability_mean_primitive",
       "E72_B0_definition_not_its_old_domain_values"
     ],
-    "excluded_from_schema31_statistics": [
+    "excluded_from_schema32_statistics": [
       "E56_through_E60_center_based_worlds",
       "E63_single_member_common_domain",
       "E64_through_E69_temporal_branch_qualifications",
