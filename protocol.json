@@ -2,7 +2,7 @@
   "schema_version": 31,
   "status": {
     "implementation_target": "schema31",
-    "current_node": "R00",
+    "current_node": "R02",
     "scientific_route": "window_proxy_and_joint_five_scan_dense_point_cloud",
     "formal_training_allowed": false,
     "performance_claims_available": false
@@ -249,18 +249,22 @@
         "empty_entity_rule": "ineligible_if_joint_visible_return_count_or_maximum_single_scan_spatial_voxel_count_is_zero"
       },
       "required": [
+        "object_id",
+        "label",
+        "visible_returns_by_scan",
+        "spatial_voxels_by_scan",
         "joint_visible_return_count",
         "joint_spatial_voxel_count",
         "maximum_single_scan_spatial_voxel_count",
         "densification_gain",
         "duplicate_fraction",
-        "distance",
-        "occlusion",
-        "support_surface",
+        "median_distance_m",
+        "occlusion_rate",
+        "support_semantic_id",
         "visible_scan_count",
-        "minimum_visible_return_height_above_support",
-        "intensity_distribution",
-        "beam_distribution"
+        "minimum_visible_return_height_m",
+        "intensity_q05_median_q95",
+        "beam_histogram"
       ]
     },
     "proxy_control_matching": {
@@ -269,10 +273,11 @@
         "joint_visible_return_count",
         "joint_spatial_voxel_count",
         "densification_gain",
-        "distance",
-        "occlusion",
-        "support_surface",
-        "minimum_visible_return_height_above_support"
+        "median_distance_m",
+        "occlusion_rate",
+        "support_semantic_id",
+        "visible_scan_count",
+        "minimum_visible_return_height_m"
       ],
       "thresholds": "freeze_result_blind_in_R02"
     },
@@ -435,7 +440,14 @@
       "unit": "DevelopmentClipWorld",
       "world_rule": "one_WorldSpec_and_random_identity_are_frozen_before_rendering_every_scan_used_by_all_overlapping_windows_in_the_clip",
       "minimum_frames_to_expose_all_occurrence_strata": 9,
-      "exact_clip_length_and_count": "freeze_result_blind_in_R02_before_generation",
+      "exact_clip_length_and_count": {
+        "frames_per_clip": 9,
+        "overlapping_windows_per_clip": 5,
+        "in_generator_clips": 24,
+        "held_out_torus_clips": 6,
+        "total_clips": 30,
+        "freeze_rule": "fixed_before_any_schema31_development_world_is_generated_or_scored"
+      },
       "cross_world_fusion_forbidden": true
     },
     "minimum_range_m_inclusive": 2.5,

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import re
@@ -290,27 +291,39 @@ class EvaluationSpec:
 
 
 @dataclass(frozen=True, slots=True)
-class DevelopmentWorld:
-    """One five-scan window belonging to a shared synthetic clip world."""
+class DevelopmentWindow:
+    """One five-scan view within a frozen synthetic clip world."""
 
-    world_identity: str
-    seed: int
+    identity: str
     window_start: int
     frame_ids: tuple[int, ...]
-    world: Mapping[str, object]
-    descriptors: Mapping[str, object]
+    descriptors: tuple[Mapping[str, object], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class DevelopmentClip:
+    """One WorldSpec shared without change by all overlapping windows."""
+
+    identity: str
+    world_identity: str
+    clip_start: int
+    frame_ids: tuple[int, ...]
+    renderer_identity: str
     mechanism: str
+    world: Mapping[str, object]
+    report: Mapping[str, object]
+    windows: tuple[DevelopmentWindow, ...]
 
 
 @dataclass(frozen=True, slots=True)
 class DevelopmentWorlds:
     format: str
     protocol_schema: int
+    protocol_identity: str
     sequence_id: int
     status: str
     validation: Mapping[str, bool]
-    in_generator: tuple[DevelopmentWorld, ...]
-    generator_held_out: tuple[DevelopmentWorld, ...]
+    clips: tuple[DevelopmentClip, ...]
 
     @property
     def validated(self) -> bool:
@@ -319,6 +332,18 @@ class DevelopmentWorlds:
             and bool(self.validation)
             and all(self.validation.values())
         )
+
+    @property
+    def windows(self) -> tuple[DevelopmentWindow, ...]:
+        return tuple(window for clip in self.clips for window in clip.windows)
+
+    @property
+    def in_generator(self) -> tuple[DevelopmentClip, ...]:
+        return tuple(item for item in self.clips if item.mechanism == "in_generator")
+
+    @property
+    def generator_held_out(self) -> tuple[DevelopmentClip, ...]:
+        return tuple(item for item in self.clips if item.mechanism == "torus_SDF")
 
 
 class AJAEProtocol:
@@ -408,6 +433,22 @@ class AJAEProtocol:
         if not isinstance(value, dict):
             raise AssertionError("protocol root is not a dictionary")
         return value
+
+    @property
+    def scientific_identity(self) -> str:
+        """Hash only rules that determine data, models, training, and evaluation."""
+
+        names = (
+            "scientific_contract", "data", "window", "labels", "render", "stu",
+            "model", "experiments", "training", "evaluation",
+        )
+        payload = {
+            "schema_version": SCHEMA_VERSION,
+            **{name: _plain(self._document[name]) for name in names},
+        }
+        return hashlib.sha256(
+            json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
 
     @property
     def window_frames(self) -> int:
@@ -684,17 +725,22 @@ class AJAEProtocol:
         _expect(descriptors["density_coordinate_system"], "symmetric_window_coordinates", "density coordinate system")
         required = _string_tuple(descriptors["required"], "window descriptor names")
         expected_required = (
+            "object_id", "label", "visible_returns_by_scan",
+            "spatial_voxels_by_scan",
             "joint_visible_return_count", "joint_spatial_voxel_count",
             "maximum_single_scan_spatial_voxel_count", "densification_gain",
-            "duplicate_fraction", "distance", "occlusion", "support_surface",
-            "visible_scan_count", "minimum_visible_return_height_above_support",
-            "intensity_distribution", "beam_distribution",
+            "duplicate_fraction", "median_distance_m", "occlusion_rate",
+            "support_semantic_id", "visible_scan_count",
+            "minimum_visible_return_height_m", "intensity_q05_median_q95",
+            "beam_histogram",
         )
         if required != expected_required:
             raise ProtocolError("window descriptor identities changed")
         definitions = _mapping(descriptors["definitions"], "descriptor definitions")
         if set(definitions) != {
-            *expected_required[:5],
+            "joint_visible_return_count", "joint_spatial_voxel_count",
+            "maximum_single_scan_spatial_voxel_count", "densification_gain",
+            "duplicate_fraction",
             "empty_entity_rule",
         }:
             raise ProtocolError("density descriptor definitions are incomplete")
@@ -702,7 +748,13 @@ class AJAEProtocol:
         _expect(matching.get("unit"), "complete_five_scan_window", "matching unit")
         _expect(matching.get("thresholds"), "freeze_result_blind_in_R02", "matching status")
         covariates = set(_string_tuple(matching.get("required_covariates"), "matching covariates"))
-        if len(covariates) != 7 or not covariates.issubset(set(required)):
+        expected_covariates = {
+            "joint_visible_return_count", "joint_spatial_voxel_count",
+            "densification_gain", "median_distance_m", "occlusion_rate",
+            "support_semantic_id", "visible_scan_count",
+            "minimum_visible_return_height_m",
+        }
+        if covariates != expected_covariates:
             raise ProtocolError("proxy/control matching covariates are invalid")
 
     @staticmethod
@@ -860,7 +912,14 @@ class AJAEProtocol:
             "unit": "DevelopmentClipWorld",
             "world_rule": "one_WorldSpec_and_random_identity_are_frozen_before_rendering_every_scan_used_by_all_overlapping_windows_in_the_clip",
             "minimum_frames_to_expose_all_occurrence_strata": 9,
-            "exact_clip_length_and_count": "freeze_result_blind_in_R02_before_generation",
+            "exact_clip_length_and_count": {
+                "frames_per_clip": 9,
+                "overlapping_windows_per_clip": 5,
+                "in_generator_clips": 24,
+                "held_out_torus_clips": 6,
+                "total_clips": 30,
+                "freeze_rule": "fixed_before_any_schema31_development_world_is_generated_or_scored",
+            },
             "cross_world_fusion_forbidden": True,
         }, "evaluation.synthetic_development")
 
@@ -908,10 +967,26 @@ def _validate_development_descriptors(
     descriptors: Mapping[str, object], required: tuple[str, ...], name: str
 ) -> None:
     _exact_keys(descriptors, set(required), name)
+    _integer(descriptors["object_id"], f"{name}.object_id", minimum=1)
+    label = _nonempty_string(descriptors["label"], f"{name}.label")
+    if label not in {"normal-control", "anomaly-proxy"}:
+        raise ProtocolError(f"{name}.label is invalid")
+    per_scan_returns = _int_tuple(
+        descriptors["visible_returns_by_scan"], f"{name}.visible_returns_by_scan"
+    )
+    per_scan_voxels = _int_tuple(
+        descriptors["spatial_voxels_by_scan"], f"{name}.spatial_voxels_by_scan"
+    )
+    if len(per_scan_returns) != WINDOW_FRAMES or len(per_scan_voxels) != WINDOW_FRAMES:
+        raise ProtocolError(f"{name} requires five per-scan counts")
     returns = _integer(descriptors["joint_visible_return_count"], f"{name}.joint_visible_return_count", minimum=1)
     joint = _integer(descriptors["joint_spatial_voxel_count"], f"{name}.joint_spatial_voxel_count", minimum=1)
     single = _integer(descriptors["maximum_single_scan_spatial_voxel_count"], f"{name}.maximum_single_scan_spatial_voxel_count", minimum=1)
-    if not single <= joint <= returns:
+    if (
+        sum(per_scan_returns) != returns
+        or max(per_scan_voxels) != single
+        or not single <= joint <= returns
+    ):
         raise ProtocolError(f"{name} must satisfy single voxels <= joint voxels <= returns")
     gain = _number(descriptors["densification_gain"], f"{name}.densification_gain")
     duplicate = _number(descriptors["duplicate_fraction"], f"{name}.duplicate_fraction")
@@ -919,18 +994,33 @@ def _validate_development_descriptors(
         raise ProtocolError(f"{name}.densification_gain disagrees with counts")
     if not math.isclose(duplicate, 1.0 - joint / returns, rel_tol=1e-9, abs_tol=1e-12):
         raise ProtocolError(f"{name}.duplicate_fraction disagrees with counts")
-    if _number(descriptors["distance"], f"{name}.distance") < 0:
-        raise ProtocolError(f"{name}.distance cannot be negative")
-    occlusion = _number(descriptors["occlusion"], f"{name}.occlusion")
+    if _number(descriptors["median_distance_m"], f"{name}.median_distance_m") <= 0:
+        raise ProtocolError(f"{name}.median_distance_m must be positive")
+    occlusion = _number(descriptors["occlusion_rate"], f"{name}.occlusion_rate")
     if not 0.0 <= occlusion <= 1.0:
-        raise ProtocolError(f"{name}.occlusion must lie in [0,1]")
+        raise ProtocolError(f"{name}.occlusion_rate must lie in [0,1]")
+    _integer(descriptors["support_semantic_id"], f"{name}.support_semantic_id", minimum=1)
     visible = _integer(descriptors["visible_scan_count"], f"{name}.visible_scan_count", minimum=1)
+    if visible != sum(value > 0 for value in per_scan_returns):
+        raise ProtocolError(f"{name}.visible_scan_count disagrees with per-scan returns")
     if visible > WINDOW_FRAMES:
         raise ProtocolError(f"{name}.visible_scan_count cannot exceed five")
     _number(
-        descriptors["minimum_visible_return_height_above_support"],
-        f"{name}.minimum_visible_return_height_above_support",
+        descriptors["minimum_visible_return_height_m"],
+        f"{name}.minimum_visible_return_height_m",
     )
+    intensity = tuple(
+        _number(value, f"{name}.intensity_q05_median_q95")
+        for value in _list(
+            descriptors["intensity_q05_median_q95"],
+            f"{name}.intensity_q05_median_q95",
+        )
+    )
+    if len(intensity) != 3 or intensity != tuple(sorted(intensity)):
+        raise ProtocolError(f"{name}.intensity_q05_median_q95 is invalid")
+    beam = _int_tuple(descriptors["beam_histogram"], f"{name}.beam_histogram")
+    if len(beam) != 128 or sum(beam) != returns:
+        raise ProtocolError(f"{name}.beam_histogram is invalid")
 
 
 def load_development_worlds(
@@ -950,84 +1040,218 @@ def load_development_worlds(
         raise ProtocolError(
             "schema-30 centered dev.json is retired; regenerate schema-31 window/clip data"
         )
-    _exact_keys(root, {"format", "protocol_schema", "sequence_id", "status", "validation", "in_generator", "generator_held_out"}, "development data")
+    root_keys = {
+        "format", "protocol_schema", "protocol_identity", "sequence_id",
+        "status", "validation", "clip_count", "window_count", "clips",
+        "scientific_verdict",
+    }
+    _exact_keys(root, root_keys, "development data")
     _expect(root["format"], DEVELOPMENT_FORMAT, "development format")
     _expect(root["protocol_schema"], SCHEMA_VERSION, "development protocol_schema")
+    _expect(
+        root["protocol_identity"], protocol.scientific_identity,
+        "development protocol_identity",
+    )
     _expect(root["sequence_id"], 201, "development sequence_id")
     status = _nonempty_string(root["status"], "development status")
+    if status not in {
+        "not_generated_R02", "definitions_only_unvalidated", "validated_frozen"
+    }:
+        raise ProtocolError("development status is unsupported")
     validation_source = _mapping(root["validation"], "development.validation")
-    if not validation_source:
-        raise ProtocolError("development.validation cannot be empty")
     validation = {
         name: _boolean(value, f"development.validation.{name}")
         for name, value in validation_source.items()
     }
     required = _string_tuple(
-        protocol.render["window_descriptors"]["required"],
+        _plain(protocol.render["window_descriptors"]["required"]),
         "render.window_descriptors.required",
     )
 
-    def parse_group(value: object, name: str, held_out: bool) -> tuple[DevelopmentWorld, ...]:
-        parsed: list[DevelopmentWorld] = []
-        clip_identity: dict[str, tuple[int, str, str]] = {}
-        starts_by_clip: dict[str, list[int]] = {}
-        for index, raw in enumerate(_list(value, name)):
-            record_name = f"{name}[{index}]"
-            item = _mapping(raw, record_name)
-            _exact_keys(item, {"world_identity", "seed", "window_start", "frame_ids", "world", "descriptors", "mechanism"}, record_name)
-            identity = _nonempty_string(item["world_identity"], f"{record_name}.world_identity")
-            seed = _integer(item["seed"], f"{record_name}.seed")
-            start = _integer(item["window_start"], f"{record_name}.window_start")
-            frame_ids = _int_tuple(item["frame_ids"], f"{record_name}.frame_ids")
-            if frame_ids != tuple(start + offset for offset in WINDOW_MEMBER_OFFSETS):
-                raise ProtocolError(f"{record_name}.frame_ids must be five consecutive members")
-            if start not in frozenset(protocol.development_sequence.legal_window_starts()):
-                raise ProtocolError(f"{record_name}.window_start is illegal for train/201")
-            world = _mapping(item["world"], f"{record_name}.world")
-            if world.get("source_sequence_id") not in {None, 201}:
-                raise ProtocolError(f"{record_name}.world must belong to train/201")
-            descriptors = _mapping(item["descriptors"], f"{record_name}.descriptors")
-            _validate_development_descriptors(descriptors, required, f"{record_name}.descriptors")
-            mechanism = _nonempty_string(item["mechanism"], f"{record_name}.mechanism")
-            if held_out != (mechanism == "torus_SDF"):
-                raise ProtocolError(f"{record_name} violates held-out torus isolation")
-            world_token = json.dumps(world, sort_keys=True, separators=(",", ":"))
-            frozen = (seed, world_token, mechanism)
-            if identity in clip_identity and clip_identity[identity] != frozen:
-                raise ProtocolError(f"clip {identity!r} changes WorldSpec, seed, or mechanism")
-            clip_identity[identity] = frozen
-            starts_by_clip.setdefault(identity, []).append(start)
-            parsed.append(
-                DevelopmentWorld(
-                    identity, seed, start, frame_ids,
-                    _freeze(world),  # type: ignore[arg-type]
-                    _freeze(descriptors),  # type: ignore[arg-type]
-                    mechanism,
+    def digest(value: object) -> str:
+        return hashlib.sha256(
+            json.dumps(
+                value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+            ).encode("utf-8")
+        ).hexdigest()
+
+    def sha(value: object, name: str) -> str:
+        result = _nonempty_string(value, name)
+        if not re.fullmatch(r"[0-9a-f]{64}", result):
+            raise ProtocolError(f"{name} must be a lowercase SHA-256 digest")
+        return result
+
+    legal_starts = frozenset(protocol.development_sequence.legal_window_starts())
+    clips: list[DevelopmentClip] = []
+    for clip_index, raw_clip in enumerate(_list(root["clips"], "development.clips")):
+        clip_name = f"development.clips[{clip_index}]"
+        clip = _mapping(raw_clip, clip_name)
+        clip_keys = {
+            "format", "identity", "world_identity", "clip_start", "frame_ids",
+            "renderer_identity", "mechanism", "world", "report", "windows",
+        }
+        _exact_keys(clip, clip_keys, clip_name)
+        _expect(clip["format"], "ajae-development-clip-world-v1", f"{clip_name}.format")
+        identity = sha(clip["identity"], f"{clip_name}.identity")
+        world_identity = sha(
+            clip["world_identity"], f"{clip_name}.world_identity"
+        )
+        renderer_identity = sha(
+            clip["renderer_identity"], f"{clip_name}.renderer_identity"
+        )
+        start = _integer(clip["clip_start"], f"{clip_name}.clip_start")
+        frame_ids = _int_tuple(clip["frame_ids"], f"{clip_name}.frame_ids")
+        if len(frame_ids) < 9 or frame_ids != tuple(range(start, start + len(frame_ids))):
+            raise ProtocolError(f"{clip_name} requires at least nine consecutive frames")
+        if any(window_start not in legal_starts for window_start in range(start, frame_ids[-1] - 3)):
+            raise ProtocolError(f"{clip_name} contains an illegal train/201 window")
+        mechanism = _nonempty_string(clip["mechanism"], f"{clip_name}.mechanism")
+        if mechanism not in {"in_generator", "torus_SDF"}:
+            raise ProtocolError(f"{clip_name}.mechanism is unsupported")
+        world = _mapping(clip["world"], f"{clip_name}.world")
+        report = _mapping(clip["report"], f"{clip_name}.report")
+        if world.get("source_sequence_id") != 201 or report.get("source_sequence_id") != 201:
+            raise ProtocolError(f"{clip_name} must use train/201")
+        if digest(world) != world_identity:
+            raise ProtocolError(f"{clip_name}.world_identity does not hash WorldSpec")
+        objects = _list(world.get("objects"), f"{clip_name}.world.objects")
+        object_labels: dict[int, str] = {}
+        proxy_kinds: list[str] = []
+        for object_index, raw_object in enumerate(objects):
+            object_name = f"{clip_name}.world.objects[{object_index}]"
+            object_ = _mapping(raw_object, object_name)
+            object_id = _integer(object_.get("object_id"), f"{object_name}.object_id", minimum=1)
+            label = _nonempty_string(object_.get("label"), f"{object_name}.label")
+            if object_id in object_labels or label not in {"normal-control", "anomaly-proxy"}:
+                raise ProtocolError(f"{object_name} has an invalid identity or label")
+            object_labels[object_id] = label
+            if label == "anomaly-proxy":
+                shape = _mapping(object_.get("shape"), f"{object_name}.shape")
+                proxy_kinds.append(str(shape.get("kind")))
+        if not {"normal-control", "anomaly-proxy"}.issubset(set(object_labels.values())):
+            raise ProtocolError(f"{clip_name} must contain both controls and proxies")
+        held_out = mechanism == "torus_SDF"
+        if any((kind == "held-out-torus-sdf") != held_out for kind in proxy_kinds):
+            raise ProtocolError(f"{clip_name} violates held-out proxy isolation")
+
+        parsed_windows: list[DevelopmentWindow] = []
+        raw_windows = _list(clip["windows"], f"{clip_name}.windows")
+        expected_starts = tuple(range(start, frame_ids[-1] - 3))
+        if len(raw_windows) != len(expected_starts):
+            raise ProtocolError(f"{clip_name} omits an overlapping window")
+        for window_index, (raw_window, expected_start) in enumerate(
+            zip(raw_windows, expected_starts, strict=True)
+        ):
+            window_name = f"{clip_name}.windows[{window_index}]"
+            window = _mapping(raw_window, window_name)
+            _exact_keys(
+                window, {"identity", "window_start", "frame_ids", "descriptors"},
+                window_name,
+            )
+            window_identity = sha(window["identity"], f"{window_name}.identity")
+            window_start = _integer(window["window_start"], f"{window_name}.window_start")
+            window_frames = _int_tuple(window["frame_ids"], f"{window_name}.frame_ids")
+            if window_start != expected_start or window_frames != tuple(
+                window_start + offset for offset in WINDOW_MEMBER_OFFSETS
+            ):
+                raise ProtocolError(f"{window_name} has the wrong five-scan identity")
+            expected_window_identity = digest(
+                {
+                    "format": "ajae-window-world-v1",
+                    "world_identity": world_identity,
+                    "partition": "train",
+                    "sequence_id": 201,
+                    "window_start": window_start,
+                    "frame_ids": window_frames,
+                    "renderer_identity": renderer_identity,
+                }
+            )
+            if window_identity != expected_window_identity:
+                raise ProtocolError(f"{window_name}.identity does not match its inputs")
+            descriptor_items: list[Mapping[str, object]] = []
+            descriptor_ids: list[int] = []
+            for descriptor_index, raw_descriptor in enumerate(
+                _list(window["descriptors"], f"{window_name}.descriptors")
+            ):
+                descriptor_name = f"{window_name}.descriptors[{descriptor_index}]"
+                descriptor = _mapping(raw_descriptor, descriptor_name)
+                _validate_development_descriptors(descriptor, required, descriptor_name)
+                object_id = int(descriptor["object_id"])
+                if object_labels.get(object_id) != descriptor["label"]:
+                    raise ProtocolError(f"{descriptor_name} does not identify a world object")
+                descriptor_ids.append(object_id)
+                descriptor_items.append(_freeze(descriptor))  # type: ignore[arg-type]
+            if tuple(descriptor_ids) != tuple(sorted(object_labels)):
+                raise ProtocolError(f"{window_name} descriptors do not cover every object")
+            parsed_windows.append(
+                DevelopmentWindow(
+                    window_identity,
+                    window_start,
+                    window_frames,
+                    tuple(descriptor_items),
                 )
             )
-        identities = [(item.world_identity, item.window_start) for item in parsed]
-        if len(identities) != len(set(identities)):
-            raise ProtocolError(f"{name} repeats a clip/window identity")
-        # Five overlapping windows span nine frames and expose occurrence strata 1..5.
-        for identity, starts in starts_by_clip.items():
-            ordered = sorted(starts)
-            if len(ordered) < 5 or any(
-                right != left + 1 for left, right in zip(ordered, ordered[1:])
-            ):
-                raise ProtocolError(
-                    f"clip {identity!r} needs at least five consecutive window starts"
-                )
-        return tuple(parsed)
-
-    in_generator = parse_group(root["in_generator"], "in_generator", False)
-    held_out = parse_group(root["generator_held_out"], "generator_held_out", True)
-    if {item.world_identity for item in in_generator} & {
-        item.world_identity for item in held_out
-    }:
-        raise ProtocolError("in-generator and held-out clips share world identities")
+        expected_clip_identity = digest(
+            {
+                "format": "ajae-development-clip-world-v1",
+                "world_identity": world_identity,
+                "clip_start": start,
+                "frame_ids": frame_ids,
+                "renderer_identity": renderer_identity,
+                "mechanism": mechanism,
+            }
+        )
+        if identity != expected_clip_identity:
+            raise ProtocolError(f"{clip_name}.identity does not match its inputs")
+        clips.append(
+            DevelopmentClip(
+                identity,
+                world_identity,
+                start,
+                frame_ids,
+                renderer_identity,
+                mechanism,
+                _freeze(world),  # type: ignore[arg-type]
+                _freeze(report),  # type: ignore[arg-type]
+                tuple(parsed_windows),
+            )
+        )
+    if len({item.identity for item in clips}) != len(clips):
+        raise ProtocolError("development data repeat a clip identity")
+    if clips:
+        mechanism_counts = {
+            mechanism: sum(item.mechanism == mechanism for item in clips)
+            for mechanism in ("in_generator", "torus_SDF")
+        }
+        if (
+            len(clips) != 30
+            or mechanism_counts != {"in_generator": 24, "torus_SDF": 6}
+            or any(len(item.frame_ids) != 9 or len(item.windows) != 5 for item in clips)
+        ):
+            raise ProtocolError(
+                "formal development data violate the frozen 24+6 nine-frame design"
+            )
+    clip_count = _integer(root["clip_count"], "development.clip_count")
+    window_count = _integer(root["window_count"], "development.window_count")
+    if clip_count != len(clips) or window_count != sum(len(item.windows) for item in clips):
+        raise ProtocolError("development clip/window counts are inconsistent")
+    if status == "not_generated_R02":
+        if clips or any(validation.values()) or root["scientific_verdict"] is not None:
+            raise ProtocolError("not-generated development data cannot carry evidence")
+    elif not clips:
+        raise ProtocolError("generated development data cannot be empty")
+    if status == "validated_frozen" and (
+        not validation or not all(validation.values())
+    ):
+        raise ProtocolError("validated development data require every check to pass")
     return DevelopmentWorlds(
-        DEVELOPMENT_FORMAT, SCHEMA_VERSION, 201, status,
-        MappingProxyType(validation), in_generator, held_out,
+        DEVELOPMENT_FORMAT,
+        SCHEMA_VERSION,
+        protocol.scientific_identity,
+        201,
+        status,
+        MappingProxyType(validation),
+        tuple(clips),
     )
 
 
