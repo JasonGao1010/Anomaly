@@ -668,14 +668,17 @@ class AJAEProtocol:
         if tuple(window.get("member_offsets_from_start", ())) != WINDOW_MEMBER_OFFSETS:
             raise ProtocolError("window offsets must be 0 through 4")
         if (
-            window.get("coordinate_frame") != "latest_scan_t"
+            window.get("online_output_frame") != "latest_scan_t"
+            or window.get("geometry_reference_for_F1") != "latest_scan_t"
+            or window.get("ego_motion_registration")
+            != "five_poses_define_one_common_physical_scene"
             or window.get("stu_output_points")
             != "all_input_points_from_X_(t-4)_through_X_t"
             or window.get("primary_comparison_points")
             != "original_visible_points_of_current_scan_X_t"
         ):
             raise ProtocolError(
-                "alignment, full STU output, or current-point comparison changed"
+                "registration, output frame, or comparison points changed"
             )
         if window.get("overlap_fusion") != "none":
             raise ProtocolError("online schema 33 has no overlapping-score fusion")
@@ -684,10 +687,17 @@ class AJAEProtocol:
             raise ProtocolError("only single_stu and dense_stu may be active")
         dense_method = _mapping(methods[InputMode.DENSE_STU.value], "dense STU")
         if (
-            dense_method.get("actual_output") != "all_input_points_from_five_scans"
-            or dense_method.get("F2_F3_comparison_view") != "rows_originating_from_X_t"
+            dense_method.get("input")
+            != "five_registered_consecutive_scans_treated_as_one_pseudo_scan"
+            or dense_method.get("coordinate_input")
+            != "official_STU_sweep5_world_coordinates"
+            or dense_method.get("scan_order") != "chronological"
+            or dense_method.get("temporal_feature_used") is not False
+            or dense_method.get("actual_output")
+            != "all_input_points_from_five_scans"
+            or dense_method.get("comparison_view") != "rows_originating_from_X_t"
         ):
-            raise ProtocolError("dense STU output and comparison view changed")
+            raise ProtocolError("dense STU input, output, or comparison view changed")
         data = _mapping(source["data"], "data")
         archives = _mapping(data["official_archive_sha256"], "STU archives")
         if set(archives) != {"train.zip", "val.zip", "test.zip"}:

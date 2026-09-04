@@ -19,14 +19,14 @@
     "pre_experiment_revision_baseline_commit": "702363d4c774a4c56e5afdc9ca1642e927665af8",
     "supersedes": "schema32_B0_B1_B2_B3_training_matrix"
   },
-  "research_question": "Can five consecutive LiDAR scans aligned to the current scan improve frozen-STU anomaly evidence without unacceptable degradation on normal data?",
+  "research_question": "Can five registered consecutive LiDAR scans improve frozen-STU anomaly evidence without unacceptable degradation on normal data?",
   "window": {
     "frames": 5,
     "member_offsets_from_start": [0, 1, 2, 3, 4],
     "online_definition": "W_t={X_(t-4),X_(t-3),X_(t-2),X_(t-1),X_t}",
-    "coordinate_frame": "latest_scan_t",
-    "alignment": "T_current_from_source=inverse(T_world_from_current)@T_world_from_source",
-    "dense_input": "concatenate_all_visible_returns_after_alignment_to_latest_scan",
+    "online_output_frame": "latest_scan_t",
+    "geometry_reference_for_F1": "latest_scan_t",
+    "ego_motion_registration": "five_poses_define_one_common_physical_scene",
     "stu_output_points": "all_input_points_from_X_(t-4)_through_X_t",
     "primary_comparison_points": "original_visible_points_of_current_scan_X_t",
     "output_frequency": "one_primary_comparison_vector_per_current_frame",
@@ -40,11 +40,14 @@
       "output": "all_visible_points_of_X_t"
     },
     "dense_stu": {
-      "input": "five_scans_aligned_to_X_t_and_treated_as_one_pseudo_scan",
+      "input": "five_registered_consecutive_scans_treated_as_one_pseudo_scan",
+      "coordinate_input": "official_STU_sweep5_world_coordinates",
+      "scan_order": "chronological",
+      "temporal_feature_used": false,
       "model": "the_same_frozen_official_STU",
       "score": "official_MaxLogit",
       "actual_output": "all_input_points_from_five_scans",
-      "F2_F3_comparison_view": "rows_originating_from_X_t"
+      "comparison_view": "rows_originating_from_X_t"
     }
   },
   "data": {

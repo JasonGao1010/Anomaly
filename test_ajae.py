@@ -130,6 +130,17 @@ def test_protocol_is_the_only_schema33_pretraining_contract() -> None:
     assert protocol.status["performance_claims_available"] is False
 
 
+def test_protocol_separates_F1_geometry_from_official_STU_coordinates() -> None:
+    protocol = load_protocol()
+    window = protocol.document["window"]
+    dense = protocol.document["methods"]["dense_stu"]
+    assert window["online_output_frame"] == "latest_scan_t"
+    assert window["geometry_reference_for_F1"] == "latest_scan_t"
+    assert dense["coordinate_input"] == "official_STU_sweep5_world_coordinates"
+    assert dense["scan_order"] == "chronological"
+    assert dense["temporal_feature_used"] is False
+
+
 def test_contract_identity_excludes_mutable_execution_state(tmp_path: Path) -> None:
     protocol = load_protocol()
     payload = json.loads((ROOT / "protocol.json").read_text(encoding="utf-8"))
