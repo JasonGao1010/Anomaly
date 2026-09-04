@@ -4470,7 +4470,7 @@ def sample_development_clip_world(
         obstacles,
         root_seed,
         source_sequence_id=201,
-        support_frame_ids=tuple(item.frame_id for item in frames),
+        support_frame_ids=tuple(item.frame_id for item in frames[2:-2]),
         maximum_attempts=maximum_attempts,
     )
     return render_development_clip_world(
@@ -4643,8 +4643,8 @@ def load_qualified_support_pool(
             metadata.get("experiment") != expected[0]
             or metadata.get("source_sequence") != f"train/{sequence_id}"
             or metadata.get("source_frames") != expected[1]
-            or metadata.get("center_frames") != expected[2]
-            or metadata.get("covered_center_frames") != expected[3]
+            or metadata.get("anchor_frames") != expected[2]
+            or metadata.get("covered_anchor_frames") != expected[3]
             or metadata.get("passed") is not True
             or metadata.get("pool_size") != int(arrays["frame"].shape[0])
             or metadata.get("scientific_array_hash")
@@ -4766,11 +4766,23 @@ def _identity_order(
     allowed_semantics: Sequence[int],
     namespace: str,
     stream_id: int,
+    eligible_rows: Sequence[int] | None = None,
 ) -> np.ndarray:
-    """Hash stable support identities; no geometric result enters proposal order."""
+    """Seed-sort only legal support identities; geometry never enters the order."""
 
     allowed = np.asarray(tuple(sorted(map(int, allowed_semantics))), dtype=np.uint16)
-    rows = np.flatnonzero(np.isin(pool.semantics, allowed))
+    if eligible_rows is None:
+        candidates = np.arange(pool.pool_indices.shape[0], dtype=np.int64)
+    else:
+        candidates = np.asarray(tuple(map(int, eligible_rows)), dtype=np.int64)
+        if (
+            candidates.ndim != 1
+            or candidates.size < 1
+            or np.any((candidates < 0) | (candidates >= pool.pool_indices.shape[0]))
+            or np.unique(candidates).size != candidates.size
+        ):
+            raise PlacementError("eligible_rows contains an invalid support row")
+    rows = candidates[np.isin(pool.semantics[candidates], allowed)]
     if rows.size == 0:
         raise PlacementError("qualified pool has no semantically legal support")
     prefix = namespace.encode("ascii") + int(stream_id).to_bytes(8, "little")
@@ -5082,20 +5094,13 @@ def place_object(
         if not requested or not requested.issubset(allowed):
             raise PlacementError("requested supports violate the label semantic policy")
         allowed = requested
-    if proposal_rows is None:
-        order = _identity_order(
-            support_pool, allowed, proposal_namespace, proposal_stream
-        )
-    else:
-        order = np.asarray(tuple(map(int, proposal_rows)), dtype=np.int64)
-        if (
-            order.ndim != 1
-            or order.size < 1
-            or np.any((order < 0) | (order >= support_pool.pool_indices.shape[0]))
-        ):
-            raise PlacementError("proposal_rows contains an invalid support row")
-        if not np.isin(support_pool.semantics[order], tuple(allowed)).all():
-            raise PlacementError("proposal_rows violates the support semantic policy")
+    order = _identity_order(
+        support_pool,
+        allowed,
+        proposal_namespace,
+        proposal_stream,
+        eligible_rows=proposal_rows,
+    )
     grounding = (
         qualify_grounding(shape)
         if grounding_eligibility is None

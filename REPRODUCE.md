@@ -13,7 +13,9 @@ AJAE 直接使用的项目代码、第三方源码、冻结权重、射线几何
 
 `src/model.py` 默认只把当前工作区的 `vendor/stu/Mask4Former3D` 加入模块搜索路径。MinkowskiEngine 和 PyTorch3D 的二进制扩展由宿主 Python 环境加载，但与其对应的源码已经保存在上述 `vendor/` 目录，不再依赖其他工作区。
 
-权重目录使用 Git LFS。克隆后应运行 `git lfs pull`，并用 `python -m src.qualify` 核验权重、STU 源码和协议身份。
+权重和大型 NPZ 运行时输入使用 Git LFS。克隆后应运行 `git lfs pull`，并用 `python -m src.qualify` 核验权重、STU 源码和协议身份。
+
+五帧实验不使用 STU 数据集中的多扫描时间编号；五帧回波对齐后全部作为同一时刻的稠密空间观测送入冻结 STU，因此研究对象是空间观测密度，而不是带时间标识的时序建模。
 
 ## 准备数据与运行时输入
 
@@ -31,8 +33,8 @@ STU/
 
 - `artifacts/e11_d4b_calibration.npz`：生成正式射线网格所需的小型 E11 几何源；
 - `artifacts/calibration.pt`：从正式射线网格和 `train/206` 全部 449 帧重新估计的传感器统计；
-- `artifacts/development_201_support_pool.npz`：F1–F3 开发池，只使用 `train/201` 的 4–553 帧，中心帧为 6–551；
-- `artifacts/training_206_support_pool.npz`：若进入 F4 时使用的训练池，使用 `train/206` 的 0–448 帧，中心帧为 2–446。
+- `artifacts/development_201_support_pool.npz`：F1–F3 开发池，只使用 `train/201` 的 4–553 帧，支撑面估计锚点帧为 6–551；
+- `artifacts/training_206_support_pool.npz`：若进入 F4 时使用的训练池，使用 `train/206` 的 0–448 帧，支撑面估计锚点帧为 2–446。
 
 若需要从官方原始数据重建并逐字节核对三个运行时产物，执行：
 
@@ -40,10 +42,12 @@ STU/
 python -m src.prepare all --data-root /absolute/path/to/STU --processes 24
 ```
 
-也可以分别选择 `calibration`、`support-development` 或 `support-training`。生成器按中心帧顺序合并并写出确定性 NPZ，进程数只影响运行时间。生成结束后会自动比较 `protocol.json` 中的 SHA-256；不一致会直接报错。
+也可以分别选择 `calibration`、`support-development` 或 `support-training`。生成器按锚点帧顺序合并并写出确定性 NPZ，进程数只影响运行时间。生成结束后会自动比较 `protocol.json` 中的 SHA-256；不一致会直接报错。
 
 ## 宿主环境边界
 
 以下内容仍由宿主机提供：Linux x86-64 内核、Python 环境、兼容 CUDA 的 NVIDIA 驱动和 GPU、CUDA 工具链、编译器、Python 软件包，以及用户自行下载的官方 STU 数据。这些是环境或数据条件，不是其他工作区的代码依赖。
 
 当前已实际核验的参考环境为 Python 3.13.12、PyTorch 2.12.0（CUDA 13.0 构建）、CUDA 工具链 13.2.78、GCC/G++ 14.3.0 和 NVIDIA GeForce RTX 5080 Laptop GPU。MinkowskiEngine 0.5.4 与最小 PyTorch3D 0.7.6 均已从本工作区 `vendor/` 源码成功构建并执行 CUDA 算子。不同 CUDA、编译器和 PyTorch 组合可能需要重新编译这两个扩展。
+
+当前参考环境中的 CUDA/MinkowskiEngine 路径未通过同一输入重复前向检查：逐点 MaxLogit 和类别会变化；CPU 路径重复前向完全一致，并已在 `train/201` 的帧 8、198、387 上通过官方 `sweep=1` 路径与 AJAE 编码器的端到端等价检查，三帧 MaxLogit 最大绝对误差均为 0，逆映射和类别均逐点相同。因此 schema 33 暂时只授权 CPU 执行 F2/F3。重新授权 GPU 前必须先修复当前重复性问题，并在相同真实帧上重新通过重复前向和官方等价检查；不能仅凭 CUDA 算子可运行就用于正式实验。

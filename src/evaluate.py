@@ -4,9 +4,11 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import os
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Mapping, Sequence
@@ -53,6 +55,52 @@ except ImportError:  # Direct script execution.
 
 class EvaluationError(ValueError):
     """Report a feasibility input or metric contradiction."""
+
+
+def _file_sha256(path: Path) -> str:
+    with path.open("rb") as stream:
+        return hashlib.file_digest(stream, "sha256").hexdigest()
+
+
+def implementation_identity(protocol: AJAEProtocol) -> dict[str, object]:
+    """Bind every result to both its Git base and the exact active source bytes."""
+
+    root = protocol.path.parent.resolve()
+    relative_paths = (
+        Path("protocol.json"),
+        Path("src/evaluate.py"),
+        Path("src/model.py"),
+        Path("src/protocol.py"),
+        Path("src/render.py"),
+        Path("src/scene.py"),
+    )
+    files = {
+        path.as_posix(): _file_sha256(root / path) for path in relative_paths
+    }
+    try:
+        commit = subprocess.run(
+            ("git", "rev-parse", "HEAD"),
+            cwd=root,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        tracked_status = subprocess.run(
+            ("git", "status", "--porcelain", "--untracked-files=no"),
+            cwd=root,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+    except (OSError, subprocess.CalledProcessError) as error:
+        raise EvaluationError("cannot identify the Git implementation") from error
+    if len(commit) != 40:
+        raise EvaluationError("Git returned an invalid implementation commit")
+    return {
+        "git_commit": commit,
+        "git_tracked_worktree_clean": not bool(tracked_status.strip()),
+        "source_files_sha256": files,
+    }
 
 
 @dataclass(frozen=True, slots=True)
@@ -155,13 +203,7 @@ def _numpy(value: torch.Tensor) -> np.ndarray:
 
 
 def _classes(encoding: STUPointEncoding) -> np.ndarray:
-    classes = _numpy(encoding.normal_class).astype(np.uint8)
-    official_reference = _numpy(encoding.normal_evidence.argmax(dim=1)).astype(np.uint8)
-    if not np.array_equal(classes, official_reference):
-        raise EvaluationError(
-            "normal_class differs from the official assigned-query semantic output"
-        )
-    return classes
+    return _numpy(encoding.normal_class).astype(np.uint8)
 
 
 def score_window(
@@ -271,6 +313,16 @@ def _open_normal_201(data_root: Path, protocol: AJAEProtocol) -> STUSequence:
     )
 
 
+def _feasibility_device(protocol: AJAEProtocol, requested: str) -> torch.device:
+    device = torch.device(requested)
+    expected = str(protocol.stu["feasibility_inference_device"])
+    if device.type != expected:
+        raise EvaluationError(
+            f"schema 33 requires {expected} for reproducible F2/F3 inference"
+        )
+    return device
+
+
 def run_f1_geometry(
     data_root: Path,
     output_dir: Path,
@@ -317,6 +369,7 @@ def run_f1_geometry(
     summary = {
         "format": "ajae-schema33-F1-geometry-v1",
         "protocol_identity": protocol.scientific_identity,
+        "implementation_identity": implementation_identity(protocol),
         "status": "completed_descriptive",
         "window_count": len(records),
         "visible_return_ratio_median": float(np.median(ratios)),
@@ -376,7 +429,7 @@ def run_f2_normal_stability(
     model = (
         FrozenSTUPointEncoder.from_protocol(protocol) if encoder is None else encoder
     )
-    model.to(torch.device(device)).eval()
+    model.to(_feasibility_device(protocol, device)).eval()
     single_scores: list[np.ndarray] = []
     dense_scores: list[np.ndarray] = []
     targets: list[np.ndarray] = []
@@ -433,6 +486,7 @@ def run_f2_normal_stability(
     summary = {
         "format": "ajae-schema33-F2-normal-stability-v1",
         "protocol_identity": protocol.scientific_identity,
+        "implementation_identity": implementation_identity(protocol),
         "status": "passed" if stable else "failed",
         "frame_count": len(frame_records),
         "normal_anomaly_point_count": int(single_score.size),
@@ -638,12 +692,9 @@ def _f3_phase_summary(
 
 
 def f3_screen_action(summary: Mapping[str, object]) -> str:
-    """Apply the frozen eight-world rule without hiding unevaluable worlds."""
+    """Reject a uniformly nonpositive screen; every other screen is extended."""
 
     complete = summary["evaluable_worlds"] == summary["planned_worlds"]
-    interval = summary["paired_world_bootstrap_95_interval"]
-    if complete and interval is not None and interval[0] > 0.0:
-        return "support"
     if (
         complete
         and summary["mean_delta_AP"] is not None
@@ -652,6 +703,20 @@ def f3_screen_action(summary: Mapping[str, object]) -> str:
     ):
         return "reject"
     return "extend"
+
+
+def f3_final_action(
+    summary: Mapping[str, object], *, minimum_evaluable_worlds: int
+) -> str:
+    """Apply the frozen evidence-volume floor before a positive F3 decision."""
+
+    evaluable = int(summary["evaluable_worlds"])
+    if evaluable < minimum_evaluable_worlds:
+        return "insufficient_evidence"
+    interval = summary["paired_world_bootstrap_95_interval"]
+    if interval is not None and float(interval[0]) > 0.0:
+        return "support"
+    return "reject"
 
 
 def run_f3_proxy_signal(
@@ -667,7 +732,7 @@ def run_f3_proxy_signal(
     model = (
         FrozenSTUPointEncoder.from_protocol(protocol) if encoder is None else encoder
     )
-    model.to(torch.device(device)).eval()
+    model.to(_feasibility_device(protocol, device)).eval()
     protocol.verify_official_point_evaluator()
     calibration_path = protocol.verify_sensor_calibration()
     ray_grid, sensor = load_sensor_calibration(calibration_path)
@@ -704,12 +769,9 @@ def run_f3_proxy_signal(
         screen_records, repetitions=repetitions, seed=bootstrap_seed
     )
     screen_action = f3_screen_action(screen)
-    if screen_action == "support":
-        status = "screen_supported_pending_F2"
-        extension_records: list[dict[str, object]] = []
-    elif screen_action == "reject":
+    if screen_action == "reject":
         status = "screen_rejected_enter_F4"
-        extension_records = []
+        extension_records: list[dict[str, object]] = []
     else:
         extension_records = execute_plan(
             "extension_if_screen_is_inconclusive", len(screen_records)
@@ -719,16 +781,22 @@ def run_f3_proxy_signal(
             repetitions=repetitions,
             seed=bootstrap_seed,
         )
-        final_interval = final["paired_world_bootstrap_95_interval"]
-        status = (
-            "final_supported_pending_F2"
-            if final_interval is not None and final_interval[0] > 0.0
-            else "final_not_supported_enter_F4"
+        final_action = f3_final_action(
+            final,
+            minimum_evaluable_worlds=int(
+                settings["minimum_evaluable_worlds_for_final_support"]
+            ),
         )
+        status = {
+            "support": "final_supported_pending_F2",
+            "reject": "final_not_supported_enter_F4",
+            "insufficient_evidence": "final_insufficient_evidence_enter_F4",
+        }[final_action]
     records = [*screen_records, *extension_records]
     summary = {
         "format": "ajae-schema33-F3-proxy-signal-v2",
         "protocol_identity": protocol.scientific_identity,
+        "implementation_identity": implementation_identity(protocol),
         "status": status,
         "metric_scale": "percent",
         "screen": screen,
@@ -752,7 +820,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--data-root", required=True, type=Path)
     parser.add_argument("--output-dir", type=Path, default=Path("runs/ajae/schema33"))
     parser.add_argument("--protocol", type=Path)
-    parser.add_argument("--device", default="cuda")
+    parser.add_argument("--device", default="cpu")
     return parser
 
 

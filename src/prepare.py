@@ -39,9 +39,9 @@ except ImportError:  # Direct execution from src/.
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEVELOPMENT_SOURCE_FRAMES = (4, 553)
-DEVELOPMENT_CENTER_FRAMES = (6, 551)
+DEVELOPMENT_ANCHOR_FRAMES = (6, 551)
 TRAINING_SOURCE_FRAMES = (0, 448)
-TRAINING_CENTER_FRAMES = (2, 446)
+TRAINING_ANCHOR_FRAMES = (2, 446)
 _SUPPORT_SEQUENCE: STUSequence | None = None
 
 
@@ -167,16 +167,16 @@ def _qualified_plane(
     return middle[0], middle[1]
 
 
-def _support_center(center_frame: int) -> dict[str, np.ndarray]:
+def _support_anchor(anchor_frame: int) -> dict[str, np.ndarray]:
     sequence = _SUPPORT_SEQUENCE
     if sequence is None:
         raise PreparationError("support sequence is not initialized")
     frames = tuple(
         sequence.source_frame(frame)
-        for frame in range(center_frame - 2, center_frame + 3)
+        for frame in range(anchor_frame - 2, anchor_frame + 3)
     )
-    center = frames[2]
-    if center.labels is None:
+    anchor = frames[2]
+    if anchor.labels is None:
         raise PreparationError("support construction requires train labels")
     point_parts: list[np.ndarray] = []
     semantic_parts: list[np.ndarray] = []
@@ -193,16 +193,16 @@ def _support_center(center_frame: int) -> dict[str, np.ndarray]:
         semantic_parts.append(semantic[ground])
     points = np.concatenate(point_parts)
     semantics = np.concatenate(semantic_parts)
-    center_real = ~np.asarray(center.zero_slot_mask, dtype=np.bool_)
-    selected = center_real & np.isin(center.labels.semantic, SUPPORT_POOL_SEMANTICS)
+    anchor_real = ~np.asarray(anchor.zero_slot_mask, dtype=np.bool_)
+    selected = anchor_real & np.isin(anchor.labels.semantic, SUPPORT_POOL_SEMANTICS)
     slots = np.flatnonzero(selected).astype(np.int32)
-    rotation, translation = _pose(center)
-    anchors = np.asarray(center.xyzi[slots, :3], dtype=np.float64) @ rotation.T + translation
-    ranges = np.linalg.norm(np.asarray(center.xyzi[slots, :3], dtype=np.float64), axis=1)
-    anchor_semantics = np.asarray(center.labels.semantic[slots], dtype=np.uint16)
+    rotation, translation = _pose(anchor)
+    anchors = np.asarray(anchor.xyzi[slots, :3], dtype=np.float64) @ rotation.T + translation
+    ranges = np.linalg.norm(np.asarray(anchor.xyzi[slots, :3], dtype=np.float64), axis=1)
+    anchor_semantics = np.asarray(anchor.labels.semantic[slots], dtype=np.uint16)
     cell_x = np.floor(anchors[:, 0] / 0.5).astype(np.int64)
     cell_y = np.floor(anchors[:, 1] / 0.5).astype(np.int64)
-    packed = (np.uint64(center_frame) << np.uint64(32)) | slots.astype(np.uint64)
+    packed = (np.uint64(anchor_frame) << np.uint64(32)) | slots.astype(np.uint64)
     hashes = _splitmix64(
         packed ^ (anchor_semantics.astype(np.uint64) << np.uint64(48))
     )
@@ -241,7 +241,7 @@ def _support_center(center_frame: int) -> dict[str, np.ndarray]:
             continue
         normal, offset = plane
         output["semantic"].append(semantic)
-        output["frame"].append(center_frame)
+        output["frame"].append(anchor_frame)
         output["slot"].append(int(slots[index]))
         output["range_m"].append(float(ranges[index]))
         output["selection_hash"].append(int(hashes[index]))
@@ -267,7 +267,7 @@ def _build_support_pool(
     *,
     processes: int,
     source_frames: tuple[int, int],
-    center_frames: tuple[int, int],
+    anchor_frames: tuple[int, int],
     experiment: str,
     split_rule: str,
 ) -> dict[str, object]:
@@ -275,9 +275,9 @@ def _build_support_pool(
         raise PreparationError("processes must be positive")
     global _SUPPORT_SEQUENCE
     _SUPPORT_SEQUENCE = sequence
-    centers = tuple(range(center_frames[0], center_frames[1] + 1))
+    anchors = tuple(range(anchor_frames[0], anchor_frames[1] + 1))
     with mp.get_context("fork").Pool(processes=processes) as workers:
-        records = workers.map(_support_center, centers, chunksize=1)
+        records = workers.map(_support_anchor, anchors, chunksize=1)
     arrays = {
         name: np.concatenate([record[name] for record in records])
         for name in records[0]
@@ -288,13 +288,13 @@ def _build_support_pool(
         "passed": count > 0,
         "source_sequence": f"train/{sequence.spec.sequence_id}",
         "source_frames": list(source_frames),
-        "center_frames": list(center_frames),
+        "anchor_frames": list(anchor_frames),
         "pool_size": count,
         "semantic_counts": {
             str(semantic): int(np.count_nonzero(arrays["semantic"] == semantic))
             for semantic in SUPPORT_POOL_SEMANTICS
         },
-        "covered_center_frames": int(np.unique(arrays["frame"]).size),
+        "covered_anchor_frames": int(np.unique(arrays["frame"]).size),
         "scientific_array_hash": _scientific_array_hash(arrays),
         "estimator": "E21-v4 unchanged three-scale trimmed-SVD",
         "split_rule": split_rule,
@@ -317,7 +317,7 @@ def build_development_support_pool(
         output_path,
         processes=processes,
         source_frames=DEVELOPMENT_SOURCE_FRAMES,
-        center_frames=DEVELOPMENT_CENTER_FRAMES,
+        anchor_frames=DEVELOPMENT_ANCHOR_FRAMES,
         experiment="schema33-development-support-pool",
         split_rule="every estimator context frame is inside train/201 frames 4-553",
     )
@@ -333,7 +333,7 @@ def build_training_support_pool(
         output_path,
         processes=processes,
         source_frames=TRAINING_SOURCE_FRAMES,
-        center_frames=TRAINING_CENTER_FRAMES,
+        anchor_frames=TRAINING_ANCHOR_FRAMES,
         experiment="schema33-training-support-pool",
         split_rule="every estimator context frame is inside train/206 frames 0-448",
     )
@@ -357,7 +357,11 @@ def build_calibration(
     sensor = calibrate_sensor(
         (sequence.source_frame(frame) for frame in range(449)),
         ray_grid,
-        provenance={"authority": "AJAE新主线方案.md", "protocol_schema": 30},
+        provenance={
+            "authority": "AJAE新主线方案.md",
+            "algorithm_origin_schema": 30,
+            "runtime_protocol_schema": 33,
+        },
     )
     save_sensor_calibration(output_path, ray_grid, sensor)
 

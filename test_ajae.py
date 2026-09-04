@@ -9,6 +9,7 @@ import torch
 
 from src.evaluate import (
     EvaluationError,
+    f3_final_action,
     f3_screen_action,
     f2_point_masks,
     geometry_record,
@@ -38,6 +39,7 @@ from src.protocol import (
 )
 from src.qualify import run_schema33_qualification
 from src.render import (
+    QualifiedSupportPool,
     MaterialSpec,
     ObjectSpec,
     PlacementError,
@@ -46,6 +48,7 @@ from src.render import (
     ShapeSpec,
     WorldGenerationReport,
     WorldSpec,
+    _identity_order,
     render_development_clip_world,
     render_frame,
 )
@@ -100,6 +103,9 @@ def _protocol_at_stage(tmp_path: Path, stage: str) -> object:
         experiments_started=stage != "F1",
         training_allowed=stage == "F4",
         performance_claims_available=stage == "T1",
+        selected_method=("direct_dense_stu" if stage in {"C1", "V1", "T1"} else None),
+        f4_required=stage == "F4",
+        f4_completed=False,
     )
     claims = payload["claims"]
     claims["F1_completed"] = index >= order.index("F2")
@@ -166,13 +172,16 @@ def test_f2_endpoints_are_unique_legal_development_outputs() -> None:
     assert set(endpoints) <= legal
 
 
-def test_f3_virtual_sequence_sources_are_disjoint() -> None:
+def test_f3_screen_and_extension_sources_are_globally_disjoint() -> None:
     protocol = load_protocol()
     settings = protocol.feasibility["F3_proxy_signal"]
     length = int(settings["frames_per_sequence"])
+    starts = tuple(settings["screen"]["source_starts"]) + tuple(
+        settings["extension_if_screen_is_inconclusive"]["source_starts"]
+    )
     groups = [
         set(range(int(start), int(start) + length))
-        for start in settings["screen"]["source_starts"]
+        for start in starts
     ]
     assert all(
         left.isdisjoint(right)
@@ -182,7 +191,7 @@ def test_f3_virtual_sequence_sources_are_disjoint() -> None:
     seeds = tuple(settings["screen"]["world_root_seeds"]) + tuple(
         settings["extension_if_screen_is_inconclusive"]["world_root_seeds"]
     )
-    assert len(seeds) == len(set(seeds)) == 24
+    assert len(groups) == len(seeds) == len(set(seeds)) == 16
 
 
 @pytest.mark.parametrize(
@@ -196,7 +205,7 @@ def test_f3_virtual_sequence_sources_are_disjoint() -> None:
                 "median_delta_AP": 1.0,
                 "paired_world_bootstrap_95_interval": [0.1, 1.9],
             },
-            "support",
+            "extend",
         ),
         (
             {
@@ -224,6 +233,63 @@ def test_f3_screen_action_requires_all_eight_worlds(
     summary: dict[str, object], expected: str
 ) -> None:
     assert f3_screen_action(summary) == expected
+
+
+def test_f3_final_support_requires_twelve_evaluable_worlds() -> None:
+    positive = {
+        "evaluable_worlds": 11,
+        "paired_world_bootstrap_95_interval": [0.1, 1.9],
+    }
+    assert (
+        f3_final_action(positive, minimum_evaluable_worlds=12)
+        == "insufficient_evidence"
+    )
+    positive["evaluable_worlds"] = 12
+    assert f3_final_action(positive, minimum_evaluable_worlds=12) == "support"
+
+
+def test_failed_direct_branch_cannot_enter_c1(tmp_path: Path) -> None:
+    payload = json.loads((ROOT / "protocol.json").read_text(encoding="utf-8"))
+    payload["status"].update(
+        current_stage="C1",
+        experiments_started=True,
+        training_allowed=False,
+        performance_claims_available=False,
+        selected_method=None,
+        f4_required=True,
+        f4_completed=False,
+    )
+    payload["claims"].update(
+        F1_completed=True,
+        F2_completed=True,
+        F3_completed=True,
+    )
+    path = tmp_path / "invalid_C1.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(ProtocolError, match="completed method branch"):
+        load_protocol(path)
+
+
+def test_support_candidate_order_is_seeded_and_reproducible() -> None:
+    count = 32
+    pool = QualifiedSupportPool(
+        pool_indices=np.arange(count),
+        semantics=np.full(count, 40, dtype=np.uint16),
+        frames=np.arange(count, dtype=np.int32) + 6,
+        slots=np.arange(count, dtype=np.int32) * 17,
+        ranges_m=np.full(count, 10.0),
+        selection_hashes=np.arange(count, dtype=np.uint64),
+        anchors_world_m=np.column_stack((np.arange(count), np.zeros((count, 2)))),
+        normals_world=np.tile(np.asarray((0.0, 0.0, 1.0)), (count, 1)),
+        offsets=np.zeros(count),
+        source_sequence_id=201,
+    )
+    eligible = np.arange(4, 28, dtype=np.int64)
+    first = _identity_order(pool, (40,), "test", 33000, eligible)
+    repeated = _identity_order(pool, (40,), "test", 33000, eligible)
+    different = _identity_order(pool, (40,), "test", 33001, eligible)
+    np.testing.assert_array_equal(first, repeated)
+    assert not np.array_equal(first[:8], different[:8])
 
 
 def test_protocol_binds_the_sensor_calibration_bytes() -> None:
@@ -408,6 +474,7 @@ def test_proxy_feasibility_samples_one_anomaly_only_world(
         observed.update(
             seed=seed,
             source_sequence_id=kwargs["source_sequence_id"],
+            support_frame_ids=kwargs["support_frame_ids"],
         )
         return world, report
 
@@ -432,6 +499,7 @@ def test_proxy_feasibility_samples_one_anomaly_only_world(
     assert observed == {
         "seed": 33000,
         "source_sequence_id": 201,
+        "support_frame_ids": tuple(range(6, 30)),
     }
 
 

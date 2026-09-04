@@ -516,6 +516,8 @@ class AJAEProtocol:
             "experiments_started",
             "training_allowed",
             "performance_claims_available",
+            "f4_required",
+            "f4_completed",
         ):
             if type(status.get(key)) is not bool:
                 raise ProtocolError(f"status.{key} must be boolean")
@@ -527,6 +529,34 @@ class AJAEProtocol:
             raise ProtocolError(
                 "performance claims become available only after public validation"
             )
+        selected_method = status.get("selected_method")
+        if selected_method not in {None, "direct_dense_stu", "f4_small_head"}:
+            raise ProtocolError("status.selected_method is invalid")
+        if stage in {"F1", "F2", "F3"} and (
+            selected_method is not None
+            or status["f4_required"]
+            or status["f4_completed"]
+        ):
+            raise ProtocolError("no method branch may be selected before F3 completes")
+        if stage == "F4" and (
+            selected_method is not None
+            or status["f4_required"] is not True
+            or status["f4_completed"]
+        ):
+            raise ProtocolError("active F4 must record an unresolved required branch")
+        if stage in {"C1", "V1", "T1"}:
+            direct = (
+                selected_method == "direct_dense_stu"
+                and status["f4_required"] is False
+                and status["f4_completed"] is False
+            )
+            trained = (
+                selected_method == "f4_small_head"
+                and status["f4_required"] is True
+                and status["f4_completed"] is True
+            )
+            if not (direct or trained):
+                raise ProtocolError("C1 and later require one completed method branch")
         claims = _mapping(source["claims"], "claims")
         completion_keys = (
             "F1_completed",
@@ -590,6 +620,10 @@ class AJAEProtocol:
             raise ProtocolError("a future stage is prematurely marked complete")
         if stage in {"F1", "F2", "F3", "F4"} and claims["training_performed"]:
             raise ProtocolError("training cannot be claimed before leaving F4")
+        if stage in {"C1", "V1", "T1"} and claims["training_performed"] is not (
+            selected_method == "f4_small_head"
+        ):
+            raise ProtocolError("training_performed contradicts the selected method")
         window = _mapping(source["window"], "window")
         if window.get("frames") != WINDOW_FRAMES:
             raise ProtocolError("AJAE requires five scans")
@@ -664,6 +698,9 @@ class AJAEProtocol:
             stu.get("source") != "STU_official_Mask4Former3D"
             or stu.get("score") != "official_STU_MaxLogit"
             or stu.get("frozen") is not True
+            or stu.get("feasibility_inference_device") != "cpu"
+            or stu.get("cuda_status")
+            != "not_authorized_until_same_input_repeatability_and_official_equivalence_pass"
             or stu.get("official_semantic_prediction")
             != "query_class_of_argmax(mask_probability*query_class_confidence)"
         ):
@@ -728,19 +765,19 @@ class AJAEProtocol:
                 "F3 candidate current-frame count must equal sequence length minus four"
             )
         plans = (
-            ("screen", 8, True),
-            ("extension_if_screen_is_inconclusive", 16, False),
+            ("screen", 8),
+            ("extension_if_screen_is_inconclusive", 8),
         )
         all_pairs: set[tuple[int, int]] = set()
         all_seeds: set[int] = set()
-        for name, expected_count, disjoint in plans:
+        occupied: set[int] = set()
+        for name, expected_count in plans:
             plan = _mapping(f3[name], f"F3 {name}")
             count = _integer(plan["world_count"], f"F3 {name} count", minimum=1)
             starts = _int_tuple(plan["source_starts"], f"F3 {name} starts")
             seeds = _int_tuple(plan["world_root_seeds"], f"F3 {name} seeds")
             if count != expected_count or len(starts) != count or len(seeds) != count:
                 raise ProtocolError(f"F3 {name} plan has the wrong size")
-            occupied: set[int] = set()
             for start, seed in zip(starts, seeds, strict=True):
                 frames = set(range(start, start + length))
                 pair = (start, seed)
@@ -749,12 +786,16 @@ class AJAEProtocol:
                     or not all(development.span.contains(frame) for frame in frames)
                     or pair in all_pairs
                     or seed in all_seeds
-                    or (disjoint and not occupied.isdisjoint(frames))
+                    or not occupied.isdisjoint(frames)
                 ):
                     raise ProtocolError(f"F3 {name} contains an invalid fixed world")
                 occupied.update(frames)
                 all_pairs.add(pair)
                 all_seeds.add(seed)
+        if f3.get("support_anchor_rule") != (
+            "support_frame_must_be_at_least_2_frames_inside_its_28_frame_source_clip"
+        ):
+            raise ProtocolError("F3 support anchors must retain complete context")
         retry = _mapping(
             _mapping(source["render"], "render")["F3_world_retry"], "F3 retry"
         )
@@ -774,7 +815,10 @@ class AJAEProtocol:
             or f3.get("unevaluable_world_rule")
             != "record_without_seed_substitution_and_exclude_from_metric_bootstrap"
             or f3.get("screen_decision")
-            != "only_if_all_8_worlds_are_evaluable: support_if_delta_AP_lower_95_bound_above_zero; reject_if_mean_and_median_delta_AP_are_both_not_positive; otherwise_run_the_preplanned_16_world_extension"
+            != "only_if_all_8_worlds_are_evaluable: reject_if_mean_and_median_delta_AP_are_both_not_positive; otherwise_run_the_preplanned_8_world_extension_including_a_positive_screen"
+            or f3.get("minimum_evaluable_worlds_for_final_support") != 12
+            or f3.get("final_16_world_decision")
+            != "direct_dense_STU_is_supported_only_if_F2_passes_at_least_12_worlds_are_evaluable_and_the_lower_95_percent_bound_of_delta_AP_is_above_zero; otherwise_enter_F4"
         ):
             raise ProtocolError("F3 official metrics or two-phase decision changed")
         if tuple(source["stages"]) != STAGES:

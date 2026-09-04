@@ -5,7 +5,10 @@
     "route": "frozen_stu_dense_input_feasibility",
     "experiments_started": false,
     "training_allowed": false,
-    "performance_claims_available": false
+    "performance_claims_available": false,
+    "selected_method": null,
+    "f4_required": false,
+    "f4_completed": false
   },
   "authority": {
     "scientific_document": "AJAE新主线方案.md",
@@ -138,18 +141,18 @@
     "training_rule_if_needed": "generate_multiple_full_train_206_virtual_sequences_then_sample_window_endpoints_from_the_pool_each_epoch",
     "calibration": {
       "file": "artifacts/calibration.pt",
-      "sha256": "db071dd95d7ba2965c05ef75279f191cc7501979a9d8c4a7350a0016a645cb37",
+      "sha256": "44653fb3d413fd0cb14f9da1649081ba9b33191a6bc52973da32d850222f2bca",
       "source_file": "artifacts/e11_d4b_calibration.npz",
       "source_sha256": "42791278e2a6b36d975bbe9dc957c6f303b8b424c5b97cf54e42380ad191f253"
     },
     "qualified_support_pools": {
       "train/206": {
         "file": "artifacts/training_206_support_pool.npz",
-        "sha256": "a09ce4701c78ef72d0ea6de2ff5fb98f74e37ffd34f0eb9474f46994494bbb0a"
+        "sha256": "30821e0739a9ab4adc77aa6bee5c4645fbc654739d3489a346cbfca3e50fe04e"
       },
       "train/201": {
         "file": "artifacts/development_201_support_pool.npz",
-        "sha256": "47bed8f59f4d9c21c5deaeec6892dd1820a559737c6d07f2ef991c7733422119"
+        "sha256": "c78aa18f5054426b48a0c5a0fdf00cd3a0611cdf0cb9af0399f6056d01b1eb58"
       }
     },
     "proxy_geometry": "existing_in_generator_procedural_shapes_only",
@@ -185,6 +188,8 @@
       "file": "vendor/stu/compute_point_level_ood.py",
       "sha256": "ed0330f80fbd3cd4cefafed33d6c747c51f2de521ef191e2868eb24f84b9ce61"
     },
+    "feasibility_inference_device": "cpu",
+    "cuda_status": "not_authorized_until_same_input_repeatability_and_official_equivalence_pass",
     "frozen": true
   },
   "feasibility": {
@@ -214,23 +219,25 @@
       "candidate_current_frames_per_sequence": 24,
       "screen": {
         "world_count": 8,
-        "source_starts": [4, 79, 153, 228, 302, 377, 451, 526],
+        "source_starts": [4, 72, 140, 208, 276, 344, 412, 480],
         "world_root_seeds": [33000, 33001, 33002, 33003, 33004, 33005, 33006, 33007]
       },
       "extension_if_screen_is_inconclusive": {
-        "world_count": 16,
-        "source_starts": [20, 53, 86, 119, 152, 185, 218, 251, 284, 317, 350, 383, 416, 449, 482, 515],
-        "world_root_seeds": [33008, 33009, 33010, 33011, 33012, 33013, 33014, 33015, 33016, 33017, 33018, 33019, 33020, 33021, 33022, 33023]
+        "world_count": 8,
+        "source_starts": [38, 106, 174, 242, 310, 378, 446, 514],
+        "world_root_seeds": [33008, 33009, 33010, 33011, 33012, 33013, 33014, 33015]
       },
       "world_rule": "one_fixed_anomaly_only_WorldSpec_per_sequence",
+      "support_anchor_rule": "support_frame_must_be_at_least_2_frames_inside_its_28_frame_source_clip",
       "comparison": "official_point_metrics_dense_STU_minus_single_STU_on_the_same_current_points",
       "metrics": ["AP", "AUROC", "FPR95"],
       "uncertainty": "paired_world_bootstrap_95_percent_interval",
       "bootstrap_repetitions": 10000,
       "bootstrap_seed": 3303,
       "unevaluable_world_rule": "record_without_seed_substitution_and_exclude_from_metric_bootstrap",
-      "screen_decision": "only_if_all_8_worlds_are_evaluable: support_if_delta_AP_lower_95_bound_above_zero; reject_if_mean_and_median_delta_AP_are_both_not_positive; otherwise_run_the_preplanned_16_world_extension",
-      "final_24_world_decision": "direct_dense_STU_is_supported_only_if_F2_passes_and_the_lower_95_percent_bound_of_delta_AP_is_above_zero; otherwise_enter_F4"
+      "screen_decision": "only_if_all_8_worlds_are_evaluable: reject_if_mean_and_median_delta_AP_are_both_not_positive; otherwise_run_the_preplanned_8_world_extension_including_a_positive_screen",
+      "minimum_evaluable_worlds_for_final_support": 12,
+      "final_16_world_decision": "direct_dense_STU_is_supported_only_if_F2_passes_at_least_12_worlds_are_evaluable_and_the_lower_95_percent_bound_of_delta_AP_is_above_zero; otherwise_enter_F4"
     },
     "F4_minimal_training": {
       "allowed_only_if": "F2_or_F3_rejects_direct_dense_STU",

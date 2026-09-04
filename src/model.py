@@ -415,7 +415,7 @@ def stu_input_identity(
     features: np.ndarray | Tensor,
     real_slots: np.ndarray | Tensor | None = None,
 ) -> str:
-    """Bind frozen STU outputs to the exact effective single-scan inputs."""
+    """Bind frozen STU outputs to all model inputs and requested output slots."""
 
     coordinates_np = np.ascontiguousarray(_numpy(coordinates, dtype=np.float64))
     features_np = np.ascontiguousarray(_numpy(features, dtype=np.float32))
@@ -436,16 +436,13 @@ def stu_input_identity(
         or np.unique(slots_np).size != slots_np.size
     ):
         raise ModelError("STU identity real_slots must select distinct input rows")
-    if not (
-        np.isfinite(coordinates_np[slots_np]).all()
-        and np.isfinite(features_np[slots_np]).all()
-    ):
+    if not (np.isfinite(coordinates_np).all() and np.isfinite(features_np).all()):
         raise ModelError("STU identity inputs contain non-finite values")
 
     digest = hashlib.sha256(b"AJAE-schema33-frozen-STU-input\0")
     for name, value in (
-        (b"coordinates", coordinates_np[slots_np]),
-        (b"features", features_np[slots_np]),
+        (b"coordinates", coordinates_np),
+        (b"features", features_np),
         (b"real_slots", slots_np),
     ):
         array = np.ascontiguousarray(value)
@@ -606,9 +603,9 @@ class FrozenSTUPointEncoder(nn.Module):
         if np.unique(slots_np).size != slots_np.size:
             raise ModelError("real_slots must identify distinct source returns")
 
-        # Quantize only visible returns; inverse retains their supplied order.
-        point_coordinates = coordinates_np[slots_np]
-        point_features = features_np[slots_np]
+        # Official sweep=1 quantizes every file slot, including collapsed zero slots.
+        point_coordinates = coordinates_np
+        point_features = features_np
         sparse_coordinates, sparse_features, unique, inverse = (
             official_stu_sparse_quantize(
                 point_coordinates,
@@ -682,12 +679,15 @@ class FrozenSTUPointEncoder(nn.Module):
                 "normal_class differs from the released STU trainer semantics"
             )
 
-        inverse_map = torch.as_tensor(inverse, dtype=torch.long, device=self.device)
-        if inverse_map.shape != (slots_np.size,):
-            raise ModelError("STU inverse map does not restore every real return")
-        if int(inverse_map.max()) >= sparse_point_features.shape[0]:
+        full_inverse_map = torch.as_tensor(
+            inverse, dtype=torch.long, device=self.device
+        )
+        if full_inverse_map.shape != (coordinates_np.shape[0],):
+            raise ModelError("STU inverse map does not restore every file slot")
+        if int(full_inverse_map.max()) >= sparse_point_features.shape[0]:
             raise ModelError("STU inverse map exceeds the hooked sparse feature map")
         slots = torch.as_tensor(slots_np, dtype=torch.long, device=self.device)
+        inverse_map = full_inverse_map[slots]
         return STUPointEncoding(
             point_features=sparse_point_features[inverse_map].detach(),
             assigned_query=sparse_evidence.assigned_query[inverse_map].detach(),

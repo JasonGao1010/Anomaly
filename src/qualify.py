@@ -4,7 +4,11 @@
 from __future__ import annotations
 
 import argparse
+import importlib
+import importlib.util
 import json
+import sys
+import types
 from pathlib import Path
 from typing import Callable, Sequence
 
@@ -14,6 +18,7 @@ import torch
 try:
     from .evaluate import score_window, window_stu_inputs
     from .model import (
+        FrozenSTUPointEncoder,
         MASK_DIM,
         NUM_NORMAL_CLASSES,
         NUM_QUERIES,
@@ -23,11 +28,12 @@ try:
         official_stu_sparse_quantize,
         stu_input_identity,
     )
-    from .protocol import FrameSpan, SequenceSpec, load_protocol
-    from .scene import PointLabels, assemble_window, make_source_frame
+    from .protocol import AJAEProtocol, FrameSpan, SequenceSpec, load_protocol
+    from .scene import LabelMode, PointLabels, STUSequence, assemble_window, make_source_frame
 except ImportError:  # Direct script execution.
     from evaluate import score_window, window_stu_inputs
     from model import (
+        FrozenSTUPointEncoder,
         MASK_DIM,
         NUM_NORMAL_CLASSES,
         NUM_QUERIES,
@@ -37,12 +43,33 @@ except ImportError:  # Direct script execution.
         official_stu_sparse_quantize,
         stu_input_identity,
     )
-    from protocol import FrameSpan, SequenceSpec, load_protocol
-    from scene import PointLabels, assemble_window, make_source_frame
+    from protocol import AJAEProtocol, FrameSpan, SequenceSpec, load_protocol
+    from scene import LabelMode, PointLabels, STUSequence, assemble_window, make_source_frame
 
 
 class QualificationError(AssertionError):
     """Report a failed schema-33 semantic invariant."""
+
+
+def _module_from_file(name: str, path: Path) -> object:
+    spec = importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None:
+        raise QualificationError(f"cannot load official STU module {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _official_lidar_module(path: Path) -> object:
+    """Load inference-only STU data code without its unused augmentation package."""
+
+    if importlib.util.find_spec("volumentations") is not None:
+        return _module_from_file("_ajae_official_stu_lidar", path)
+    sys.modules["volumentations"] = types.ModuleType("volumentations")
+    try:
+        return _module_from_file("_ajae_official_stu_lidar", path)
+    finally:
+        sys.modules.pop("volumentations", None)
 
 
 def _source(frame_id: int, pose_x: float, point_x: float) -> object:
@@ -252,7 +279,175 @@ def _official_semantic_equivalence() -> dict[str, object]:
     return {"checked_voxels": 1, "class": int(reference[0])}
 
 
-def run_schema33_qualification() -> dict[str, object]:
+def _official_single_frame_equivalence(
+    data_root: Path,
+    frame_ids: Sequence[int],
+    *,
+    protocol: AJAEProtocol,
+    device: str,
+) -> dict[str, object]:
+    """Compare official sweep=1 loading and collation with the AJAE bridge."""
+
+    frames = tuple(int(value) for value in frame_ids)
+    if not 1 <= len(frames) <= 3 or len(set(frames)) != len(frames):
+        raise QualificationError("real equivalence requires one to three unique frames")
+    sequence = STUSequence.open(
+        data_root,
+        protocol=protocol,
+        partition="train",
+        sequence_id=201,
+        label_mode=LabelMode.REQUIRED,
+    )
+    repository = protocol.stu_repository_path()
+    encoder = FrozenSTUPointEncoder.from_protocol(protocol)
+    encoder.to(torch.device(device)).eval()
+    lidar_module = _official_lidar_module(repository / "datasets/lidar.py")
+    utils_module = _module_from_file(
+        "_ajae_official_stu_dataset_utils", repository / "datasets/utils.py"
+    )
+    lidar_class = lidar_module.LidarDataset
+    dataset = lidar_class.__new__(lidar_class)
+    dataset.mode = "validation"
+    dataset.add_distance = True
+    dataset.ignore_label = 255
+    dataset.instance_population = 0
+    dataset.sweep = 1
+    dataset.config = dataset._load_yaml(repository / "conf/semantic-kitti.yaml")
+    dataset.label_info = dataset._select_correct_labels(
+        dataset.config["learning_ignore"]
+    )
+    collate = utils_module.VoxelizeCollate(ignore_label=255, voxel_size=0.05)
+    me = importlib.import_module("MinkowskiEngine")
+    records: list[dict[str, object]] = []
+
+    for frame_id in frames:
+        source = sequence.source_frame(frame_id)
+        scan_path = sequence.sequence_dir / "velodyne" / f"{frame_id:06d}.bin"
+        label_path = sequence.sequence_dir / "labels" / f"{frame_id:06d}.label"
+        dataset.data = [[{
+            "filepath": str(scan_path),
+            "label_filepath": str(label_path),
+            "scene": 201,
+            "pose": source.lidar_pose.tolist(),
+        }]]
+        official_sample = dataset[0]
+        official_coordinates = np.asarray(official_sample["coordinates"])
+        official_features = np.asarray(official_sample["features"][:, 4:], dtype=np.float32)
+        np.testing.assert_array_equal(official_coordinates, source.coordinates)
+        np.testing.assert_array_equal(official_features, source.features)
+        official_data, _ = collate([official_sample])
+        ajae_coordinates, ajae_features, ajae_unique, ajae_inverse = (
+            official_stu_sparse_quantize(
+                source.coordinates,
+                source.features,
+                official_repository=repository,
+            )
+        )
+        if not isinstance(ajae_features, torch.Tensor):
+            ajae_features = torch.from_numpy(np.asarray(ajae_features))
+        ajae_collated_coordinates, ajae_collated_features = me.utils.sparse_collate(
+            [ajae_coordinates], [ajae_features.float()]
+        )
+        ajae_unique_np = np.asarray(ajae_unique, dtype=np.int64)
+        ajae_raw_coordinates = torch.from_numpy(
+            np.column_stack(
+                (
+                    source.coordinates[ajae_unique_np],
+                    np.zeros(ajae_unique_np.size, dtype=np.float64),
+                )
+            )
+        ).float()
+        for name, official_value, ajae_value in (
+            ("sparse coordinates", official_data.coordinates, ajae_collated_coordinates),
+            ("sparse features", official_data.features, ajae_collated_features),
+            ("raw coordinates", official_data.raw_coordinates, ajae_raw_coordinates),
+        ):
+            if not torch.equal(official_value.cpu(), ajae_value.cpu()):
+                raise QualificationError(f"AJAE {name} differs from official sweep=1")
+        if not np.array_equal(
+            np.asarray(official_data.inverse_maps[0]), np.asarray(ajae_inverse)
+        ):
+            raise QualificationError("AJAE full inverse map differs from official sweep=1")
+        sparse = me.SparseTensor(
+            coordinates=official_data.coordinates,
+            features=official_data.features,
+            device=encoder.device,
+        )
+        cpu_rng_state = torch.random.get_rng_state()
+        cuda_rng_state = (
+            torch.cuda.get_rng_state(encoder.device)
+            if encoder.device.type == "cuda"
+            else None
+        )
+        with torch.no_grad():
+            output = encoder.stu(
+                sparse,
+                raw_coordinates=official_data.raw_coordinates,
+                is_eval=True,
+            )
+        logits = encoder._single_prediction(output["pred_logits"], "pred_logits")
+        masks = encoder._single_prediction(output["pred_masks"], "pred_masks")
+        official_evidence = assigned_stu_evidence(logits, masks)
+        full_inverse = torch.as_tensor(
+            official_data.inverse_maps[0], dtype=torch.long, device=encoder.device
+        )
+        real_slots = torch.as_tensor(
+            np.asarray(source.real_slots).copy(),
+            dtype=torch.long,
+            device=encoder.device,
+        )
+        official_inverse = full_inverse[real_slots]
+        torch.random.set_rng_state(cpu_rng_state)
+        if cuda_rng_state is not None:
+            torch.cuda.set_rng_state(cuda_rng_state, encoder.device)
+        observed = encoder(source.coordinates, source.features, source.real_slots)
+        if not torch.equal(observed.inverse_map, official_inverse):
+            raise QualificationError("AJAE inverse map differs from official sweep=1")
+        official_score = official_evidence.maxlogit_score[official_inverse]
+        if not torch.allclose(
+            observed.maxlogit_score, official_score, atol=1.0e-6, rtol=1.0e-6
+        ):
+            maximum_error = float(
+                torch.max(torch.abs(observed.maxlogit_score - official_score)).item()
+            )
+            raise QualificationError(
+                f"AJAE MaxLogit differs from official sweep=1 by {maximum_error}"
+            )
+        official_class = official_evidence.normal_class[official_inverse]
+        if not torch.equal(observed.normal_class, official_class):
+            mismatches = int(torch.count_nonzero(observed.normal_class != official_class))
+            raise QualificationError(
+                f"AJAE normal class differs from official sweep=1 at {mismatches} points"
+            )
+        records.append(
+            {
+                "frame_id": frame_id,
+                "file_slots": int(source.slot_count),
+                "real_returns": int(source.real_count),
+                "sparse_voxels": int(masks.shape[0]),
+                "maximum_MaxLogit_absolute_error": float(
+                    torch.max(
+                        torch.abs(observed.maxlogit_score - official_score)
+                    ).item()
+                ),
+                "normal_class_exact": True,
+                "inverse_map_exact": True,
+            }
+        )
+    return {
+        "passed": True,
+        "official_path": "LidarDataset(sweep=1)->VoxelizeCollate->official_model",
+        "ajae_path": "STUSequence.SourceFrame->FrozenSTUPointEncoder",
+        "frames": records,
+    }
+
+
+def run_schema33_qualification(
+    *,
+    data_root: Path | None = None,
+    real_frame_ids: Sequence[int] = (8, 198, 387),
+    device: str = "cpu",
+) -> dict[str, object]:
     checks: tuple[tuple[str, Callable[[], dict[str, object]]], ...] = (
         ("latest_scan_is_the_coordinate_frame", _latest_frame_alignment),
         ("past_scans_use_current_from_source_transform", _past_frame_alignment),
@@ -269,23 +464,43 @@ def run_schema33_qualification() -> dict[str, object]:
     results = []
     for name, check in checks:
         results.append({"name": name, "passed": True, "details": check()})
-    return {
+    result: dict[str, object] = {
         "format": "ajae-schema33-qualification-v1",
         "mechanical": {"passed": True, "check_count": len(results), "checks": results},
         "scientific_status": "pending_real_F1_F2_F3_execution",
         "performance_claim_available": False,
     }
+    if data_root is not None:
+        protocol = load_protocol()
+        result["real_single_frame_equivalence"] = _official_single_frame_equivalence(
+            data_root,
+            real_frame_ids,
+            protocol=protocol,
+            device=device,
+        )
+    return result
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Qualify AJAE schema-33 mechanics")
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--data-root", type=Path)
+    parser.add_argument("--real-frames", default="8,198,387")
+    parser.add_argument("--device", default="cpu")
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
-    result = run_schema33_qualification()
+    try:
+        real_frames = tuple(int(value) for value in args.real_frames.split(","))
+    except ValueError as error:
+        raise QualificationError("--real-frames must be comma-separated integers") from error
+    result = run_schema33_qualification(
+        data_root=args.data_root,
+        real_frame_ids=real_frames,
+        device=args.device,
+    )
     rendered = json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
     if args.output is not None:
         args.output.write_text(rendered, encoding="utf-8")
