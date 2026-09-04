@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read STU sequences and assemble symmetric five-scan windows."""
+"""Read STU sequences and align causal five-scan windows to the current scan."""
 
 from __future__ import annotations
 
@@ -19,7 +19,6 @@ import numpy as np
 try:
     from .protocol import (
         AJAEProtocol,
-        ExperimentCondition,
         SequenceSpec,
         WINDOW_MEMBER_OFFSETS,
         load_protocol,
@@ -27,7 +26,6 @@ try:
 except ImportError:  # Direct script execution.
     from protocol import (
         AJAEProtocol,
-        ExperimentCondition,
         SequenceSpec,
         WINDOW_MEMBER_OFFSETS,
         load_protocol,
@@ -61,13 +59,12 @@ _SEALED_ACCESS_KEY = object()
 class _SealedSequenceAccess:
     """Carry a validated method-freeze decision into the lowest data loader."""
 
-    __slots__ = ("condition", "partition", "protocol")
+    __slots__ = ("partition", "protocol")
 
     def __init__(
         self,
         protocol: AJAEProtocol,
         partition: str,
-        condition: str,
         *,
         key: object,
     ) -> None:
@@ -77,21 +74,18 @@ class _SealedSequenceAccess:
             raise SceneDataError("only validation and test sequences are sealed")
         self.protocol = protocol
         self.partition = partition
-        self.condition = condition
 
 
 def _grant_sealed_sequence_access(
     protocol: AJAEProtocol,
     *,
     partition: str,
-    condition: str,
 ) -> _SealedSequenceAccess:
     """Create a loader capability only after the evaluator validates method freeze."""
 
     return _SealedSequenceAccess(
         protocol,
         partition,
-        condition,
         key=_SEALED_ACCESS_KEY,
     )
 
@@ -419,11 +413,11 @@ def make_source_frame(
 
 
 @dataclass(frozen=True, slots=True)
-class WindowReferencePose:
-    """A five-pose-symmetric window frame expressed in world coordinates.
+class CurrentFramePose:
+    """The latest scan pose used by an online window.
 
-    ``rotation`` is :math:`R_{W<-G}` and ``translation`` is the window origin
-    in world coordinates. Input sensor poses are always :math:`T_{W<-S}`.
+    ``rotation`` and ``translation`` represent :math:`T_{W<-t}`. This is the
+    physical current sensor frame, not an artificial intermediate frame.
     """
 
     rotation: np.ndarray
@@ -433,82 +427,56 @@ class WindowReferencePose:
         rotation = np.asarray(self.rotation)
         translation = np.asarray(self.translation)
         if rotation.dtype != np.float64 or rotation.shape != (3, 3):
-            raise TypeError("WindowReferencePose.rotation must be float64[3,3]")
+            raise TypeError("CurrentFramePose.rotation must be float64[3,3]")
         if translation.dtype != np.float64 or translation.shape != (3,):
-            raise TypeError("WindowReferencePose.translation must be float64[3]")
-        _finite("window reference rotation", rotation)
-        _finite("window reference translation", translation)
+            raise TypeError("CurrentFramePose.translation must be float64[3]")
+        _finite("current-frame rotation", rotation)
+        _finite("current-frame translation", translation)
         if not np.allclose(
             rotation.T @ rotation,
             np.eye(3, dtype=np.float64),
             atol=1.0e-10,
             rtol=1.0e-10,
         ):
-            raise SceneDataError(
-                "window reference rotation is not numerically orthogonal"
-            )
+            raise SceneDataError("current-frame rotation is not numerically orthogonal")
         if not math.isclose(
             float(np.linalg.det(rotation)), 1.0, abs_tol=1.0e-10, rel_tol=1.0e-10
         ):
-            raise SceneDataError("window reference rotation determinant is not +1")
+            raise SceneDataError("current-frame rotation determinant is not +1")
         object.__setattr__(self, "rotation", _freeze(rotation.copy()))
         object.__setattr__(self, "translation", _freeze(translation.copy()))
         identity = np.eye(4, dtype=np.float64)
-        world_from_window = self.world_from_window
-        window_from_world = self.window_from_world
+        world_from_current = self.world_from_current
+        current_from_world = self.current_from_world
         if not (
             np.allclose(
-                world_from_window @ window_from_world,
+                world_from_current @ current_from_world,
                 identity,
                 atol=1.0e-10,
                 rtol=1.0e-10,
             )
             and np.allclose(
-                window_from_world @ world_from_window,
+                current_from_world @ world_from_current,
                 identity,
                 atol=1.0e-10,
                 rtol=1.0e-10,
             )
         ):
-            raise SceneDataError("window reference transforms are not mutual inverses")
+            raise SceneDataError("current-frame transforms are not mutual inverses")
 
     @classmethod
-    def from_sensor_poses(
-        cls, sensor_to_world: Sequence[np.ndarray]
-    ) -> "WindowReferencePose":
-        """Compute the translation mean and SO(3) chordal mean of five T_W<-S poses."""
+    def from_source(cls, source: SourceFrame) -> "CurrentFramePose":
+        """Copy the exact :math:`T_{W<-t}` pose of the latest source scan."""
 
-        poses = tuple(np.asarray(pose) for pose in sensor_to_world)
-        if len(poses) != len(WINDOW_MEMBER_OFFSETS):
-            raise SceneDataError(
-                "a window reference requires exactly five sensor poses"
-            )
-        for index, pose in enumerate(poses):
-            if pose.dtype != np.float64:
-                raise TypeError(f"sensor_to_world[{index}] must be float64[4,4]")
-            _rigid(f"sensor_to_world[{index}]", pose)
-
-        # Canonical accumulation makes floating-point construction independent
-        # of the caller's scan order without assigning a privileged scan.
-        ordered = tuple(sorted(poses, key=lambda pose: pose.tobytes(order="C")))
-        translation = np.sum(
-            np.stack([pose[:3, 3] for pose in ordered]), axis=0, dtype=np.float64
-        ) / float(len(ordered))
-        rotation_sum = np.sum(
-            np.stack([pose[:3, :3] for pose in ordered]), axis=0, dtype=np.float64
-        )
-        left, _, right_t = np.linalg.svd(rotation_sum)
-        correction = np.eye(3, dtype=np.float64)
-        correction[2, 2] = -1.0 if np.linalg.det(left @ right_t) < 0.0 else 1.0
-        rotation = left @ correction @ right_t
-        return cls(
-            rotation.astype(np.float64, copy=False),
-            translation.astype(np.float64, copy=False),
-        )
+        if not isinstance(source, SourceFrame):
+            raise TypeError("current pose requires a SourceFrame")
+        pose = np.asarray(source.lidar_pose, dtype=np.float64)
+        _rigid("current source pose", pose)
+        return cls(pose[:3, :3].copy(), pose[:3, 3].copy())
 
     @property
-    def world_from_window(self) -> np.ndarray:
-        """Return T_W<-G, mapping symmetric-window coordinates to world coordinates."""
+    def world_from_current(self) -> np.ndarray:
+        """Return :math:`T_{W<-t}`."""
 
         transform = np.eye(4, dtype=np.float64)
         transform[:3, :3] = self.rotation
@@ -516,8 +484,8 @@ class WindowReferencePose:
         return _freeze(transform)
 
     @property
-    def window_from_world(self) -> np.ndarray:
-        """Return T_G<-W, the exact rigid inverse of ``world_from_window``."""
+    def current_from_world(self) -> np.ndarray:
+        """Return :math:`T_{t<-W}`, the rigid inverse of ``world_from_current``."""
 
         transform = np.eye(4, dtype=np.float64)
         transform[:3, :3] = self.rotation.T
@@ -527,11 +495,11 @@ class WindowReferencePose:
 
 @dataclass(frozen=True, slots=True)
 class WindowFrame:
-    """One source scan and its transform into the symmetric window frame."""
+    """One source scan and its transform into the latest scan frame."""
 
     source: SourceFrame
     scan_group: int
-    source_to_window: np.ndarray
+    source_to_current: np.ndarray
 
     def __post_init__(self) -> None:
         if not isinstance(self.source, SourceFrame):
@@ -539,16 +507,16 @@ class WindowFrame:
         group = _plain_int("WindowFrame.scan_group", self.scan_group)
         if group >= len(WINDOW_MEMBER_OFFSETS):
             raise SceneDataError("WindowFrame.scan_group must lie in [0,4]")
-        transform = np.asarray(self.source_to_window)
+        transform = np.asarray(self.source_to_current)
         if transform.dtype != np.float64:
-            raise TypeError("source_to_window must be float64[4,4]")
-        _rigid("source_to_window", transform)
-        object.__setattr__(self, "source_to_window", _freeze(transform.copy()))
+            raise TypeError("source_to_current must be float64[4,4]")
+        _rigid("source_to_current", transform)
+        object.__setattr__(self, "source_to_current", _freeze(transform.copy()))
 
 
 @dataclass(frozen=True, slots=True)
 class WindowPoints:
-    """All five scans' visible returns in symmetric window coordinates."""
+    """All visible returns expressed in the latest scan coordinate frame."""
 
     coordinates: np.ndarray
     scan_group: np.ndarray
@@ -588,7 +556,7 @@ class WindowPoints:
             raise SceneDataError(
                 "an unaudited ray mapping cannot carry an audit digest"
             )
-        _finite("symmetric-window coordinates", self.coordinates)
+        _finite("current-frame coordinates", self.coordinates)
         if np.any(
             (self.scan_group < 0) | (self.scan_group >= len(WINDOW_MEMBER_OFFSETS))
         ):
@@ -641,13 +609,12 @@ class WindowPoints:
 
 @dataclass(frozen=True, slots=True)
 class SceneWindow:
-    """One complete five-scan observation in a symmetric reference frame."""
+    """A causal five-scan observation aligned to its latest scan."""
 
     spec: SequenceSpec
-    condition: ExperimentCondition
     window_start: int
     frame_ids: tuple[int, ...]
-    reference_pose: WindowReferencePose
+    current_pose: CurrentFramePose
     frames: tuple[WindowFrame, ...]
     points: WindowPoints
     labels: PointLabels | None
@@ -655,8 +622,6 @@ class SceneWindow:
     def __post_init__(self) -> None:
         if not isinstance(self.spec, SequenceSpec):
             raise TypeError("spec must be SequenceSpec")
-        if not isinstance(self.condition, ExperimentCondition):
-            raise TypeError("condition must be ExperimentCondition")
         start = _plain_int("window_start", self.window_start)
         declared_ids = tuple(self.frame_ids)
         if any(type(frame_id) is not int for frame_id in declared_ids):
@@ -670,8 +635,8 @@ class SceneWindow:
             raise SceneDataError(
                 "window identity is not legal for the sequence specification"
             )
-        if not isinstance(self.reference_pose, WindowReferencePose):
-            raise TypeError("reference_pose must be WindowReferencePose")
+        if not isinstance(self.current_pose, CurrentFramePose):
+            raise TypeError("current_pose must be CurrentFramePose")
         if len(self.frames) != len(WINDOW_MEMBER_OFFSETS):
             raise SceneDataError("a SceneWindow must contain exactly five source scans")
 
@@ -685,33 +650,33 @@ class SceneWindow:
         canonical_group = {
             frame_id: index for index, frame_id in enumerate(declared_ids)
         }
-        expected_pose = WindowReferencePose.from_sensor_poses(
-            tuple(item.source.lidar_pose for item in self.frames)
+        current_id = declared_ids[-1]
+        current_source = next(
+            item.source for item in self.frames if item.source.frame_id == current_id
         )
+        expected_pose = CurrentFramePose.from_source(current_source)
         if not np.allclose(
-            self.reference_pose.world_from_window,
-            expected_pose.world_from_window,
+            self.current_pose.world_from_current,
+            expected_pose.world_from_current,
             atol=IDENTITY_ATOL,
             rtol=IDENTITY_ATOL,
         ):
-            raise SceneDataError(
-                "window reference pose does not match all five sensor poses"
-            )
-        window_from_world = self.reference_pose.window_from_world
+            raise SceneDataError("current pose does not match the latest scan")
+        current_from_world = self.current_pose.current_from_world
         for item in self.frames:
             group = canonical_group[item.source.frame_id]
             if item.scan_group != group:
                 raise SceneDataError(
                     "scan group does not match the declared source frame"
                 )
-            expected_transform = window_from_world @ item.source.lidar_pose
+            expected_transform = current_from_world @ item.source.lidar_pose
             if not np.allclose(
-                item.source_to_window,
+                item.source_to_current,
                 expected_transform,
                 atol=IDENTITY_ATOL,
                 rtol=IDENTITY_ATOL,
             ):
-                raise SceneDataError("source-to-window transform is inconsistent")
+                raise SceneDataError("source-to-current transform is inconsistent")
             mask = self.points.scan_group == group
             if not np.all(self.points.source_frame[mask] == item.source.frame_id):
                 raise SceneDataError(
@@ -737,6 +702,20 @@ class SceneWindow:
                 return frame
         raise KeyError(identifier)
 
+    @property
+    def current_frame_id(self) -> int:
+        return self.frame_ids[-1]
+
+    @property
+    def current_frame(self) -> WindowFrame:
+        return self.frame_for_id(self.current_frame_id)
+
+    @property
+    def current_mask(self) -> np.ndarray:
+        result = self.points.source_frame == self.current_frame_id
+        result.setflags(write=False)
+        return result
+
     def restore_source_frame(self, frame_id: int, values: np.ndarray) -> np.ndarray:
         """Restore a full-window value array to one source scan's file-slot order."""
 
@@ -756,7 +735,6 @@ def assemble_window(
     frame_ids: Sequence[int],
     sources: Sequence[SourceFrame],
     *,
-    condition: ExperimentCondition | str = ExperimentCondition.B3,
     canonical_ray_by_slot: np.ndarray | Mapping[int, np.ndarray] | None = None,
     ray_mapping_audited: bool = False,
     ray_mapping_digest: str | None = None,
@@ -765,7 +743,6 @@ def assemble_window(
 
     if not isinstance(spec, SequenceSpec):
         raise TypeError("spec must be SequenceSpec")
-    selected = ExperimentCondition(condition)
     start = _plain_int("window_start", window_start)
     declared_ids = tuple(frame_ids)
     if any(type(frame_id) is not int for frame_id in declared_ids):
@@ -806,10 +783,11 @@ def assemble_window(
     if not ray_mapping_audited and ray_mapping_digest is not None:
         raise SceneDataError("an unaudited window cannot carry a calibration digest")
 
-    reference_pose = WindowReferencePose.from_sensor_poses(
-        tuple(source.lidar_pose for source in source_frames)
+    current_source = next(
+        source for source in source_frames if source.frame_id == declared_ids[-1]
     )
-    window_from_world = reference_pose.window_from_world
+    current_pose = CurrentFramePose.from_source(current_source)
+    current_from_world = current_pose.current_from_world
     canonical_group = {frame_id: index for index, frame_id in enumerate(declared_ids)}
     frames: list[WindowFrame] = []
     coordinates: list[np.ndarray] = []
@@ -824,9 +802,9 @@ def assemble_window(
 
     for source in source_frames:
         group = canonical_group[source.frame_id]
-        # Poses are T_W<-S; composition gives T_G<-S for symmetric coordinates.
-        transform = window_from_world @ source.lidar_pose
-        _rigid(f"source-to-window pose {source.frame_id}", transform)
+        # Poses are T_W<-S; composition gives T_t<-S_i for current-frame coordinates.
+        transform = current_from_world @ source.lidar_pose
+        _rigid(f"source-to-current pose {source.frame_id}", transform)
         transform = _freeze(transform.astype(np.float64, copy=False))
         frames.append(WindowFrame(source, group, transform))
         slots = source.real_slots
@@ -892,10 +870,9 @@ def assemble_window(
         )
     return SceneWindow(
         spec=spec,
-        condition=selected,
         window_start=start,
         frame_ids=declared_ids,
-        reference_pose=reference_pose,
+        current_pose=current_pose,
         frames=tuple(frames),
         points=points,
         labels=labels,
@@ -1190,13 +1167,11 @@ class STUSequence:
         self,
         window_start: int,
         *,
-        condition: ExperimentCondition | str = ExperimentCondition.B3,
         canonical_ray_by_slot: np.ndarray | Mapping[int, np.ndarray] | None = None,
         ray_mapping_audited: bool = False,
         ray_mapping_digest: str | None = None,
     ) -> SceneWindow:
         start = _plain_int("window_start", window_start)
-        selected = ExperimentCondition(condition)
         if start not in frozenset(self.window_starts):
             raise SceneDataError(
                 f"frame {start} is not a legal five-scan window for "
@@ -1210,7 +1185,6 @@ class STUSequence:
             start,
             frame_ids,
             tuple(self.source_frame(frame_id) for frame_id in frame_ids),
-            condition=selected,
             canonical_ray_by_slot=canonical_ray_by_slot,
             ray_mapping_audited=ray_mapping_audited,
             ray_mapping_digest=ray_mapping_digest,
@@ -1255,8 +1229,9 @@ def summarize_window(window: SceneWindow) -> dict[str, object]:
     return {
         "partition": window.spec.partition,
         "sequence": window.spec.sequence_id,
-        "condition": window.condition.value,
         "window_start": window.window_start,
+        "current_frame": window.current_frame_id,
+        "coordinate_frame": "latest_scan",
         "frame_ids": list(window.frame_ids),
         "source_order": [item.source.frame_id for item in window.frames],
         "scan_groups": [item.scan_group for item in window.frames],
@@ -1270,7 +1245,9 @@ def summarize_window(window: SceneWindow) -> dict[str, object]:
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Inspect AJAE schema-32 STU windows.")
+    parser = argparse.ArgumentParser(
+        description="Inspect AJAE schema-33 causal windows."
+    )
     parser.add_argument("--protocol", type=Path)
     parser.add_argument("--data-root", type=Path, required=True)
     parser.add_argument("--partition", choices=("train", "val", "test"), required=True)
@@ -1279,11 +1256,6 @@ def _parser() -> argparse.ArgumentParser:
         "--labels", choices=tuple(mode.value for mode in LabelMode), required=True
     )
     parser.add_argument("--window-start", type=int, action="append")
-    parser.add_argument(
-        "--condition",
-        choices=tuple(item.value for item in ExperimentCondition),
-        default=ExperimentCondition.B3.value,
-    )
     parser.add_argument("--check-all", action="store_true")
     return parser
 
@@ -1300,14 +1272,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         sequence_id=args.sequence,
         label_mode=args.labels,
     )
-    condition = ExperimentCondition(args.condition)
     starts = sequence.window_starts
     selected_starts = args.window_start or [starts[0], starts[-1]]
     output = {
         "sequence": sequence.audit(deep=args.check_all),
         "windows": [
-            summarize_window(sequence.window(start, condition=condition))
-            for start in selected_starts
+            summarize_window(sequence.window(start)) for start in selected_starts
         ],
     }
     print(json.dumps(output, ensure_ascii=False, indent=2, sort_keys=True))

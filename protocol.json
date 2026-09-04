@@ -1,135 +1,90 @@
 {
-  "schema_version": 32,
+  "schema_version": 33,
   "status": {
-    "implementation_target": "schema32",
-    "current_node": "R02",
-    "scientific_route": "window_proxy_and_joint_five_scan_dense_point_cloud",
-    "r02_population_identity": null,
-    "r02_verdict_identity": null,
-    "r02_thresholds_frozen_result_blind": false,
-    "r02_threshold_identity": null,
-    "r03_qualification_identity": null,
-    "r04_training_bank_identity": null,
-    "r04_training_qualification_identity": null,
-    "r05_freeze_identity": null,
-    "f01_formal_training_identity": null,
-    "g2_verdict_identity": null,
-    "g3_verdict_identity": null,
-    "s01_shift_audit_identity": null,
-    "m01_method_freeze_identity": null,
-    "v01_verdict_identity": null,
-    "formal_training_allowed": false,
+    "current_stage": "F1",
+    "route": "frozen_stu_dense_input_feasibility",
+    "experiments_started": false,
+    "training_allowed": false,
     "performance_claims_available": false
   },
   "authority": {
     "scientific_document": "AJAE新主线方案.md",
-    "state_machine": "AJAE实验执行状态机.md",
-    "history_baseline_commit": "f9b348e98de798366f3ca9291ed90ef752ed348a",
-    "history_tag": "schema30-history-baseline",
-    "amendment_baseline_commit": "0ceac1401654ddf43dd969a58269666bad1b6d9d",
-    "amendment_history_tag": "schema31-preR02-audit",
-    "supersedes": "schema31_preR02_experimental_contract"
+    "execution_document": "AJAE实验执行状态机.md",
+    "amendment_baseline_commit": "42123bafccc43557d5e35e224a7bd8a1f3cadf84",
+    "supersedes": "schema32_B0_B1_B2_B3_training_matrix"
   },
-  "scientific_contract": {
-    "observation_unit": "one_complete_five_scan_window",
-    "privileged_frame": null,
-    "all_window_members_equally_supervised": true,
-    "all_visible_returns_receive_logits": true,
-    "learned_scan_time_or_member_position_input": false,
-    "full_model_spatial_operations": [
-      "joint_voxelization",
-      "joint_radius_neighborhood",
-      "joint_knn_decoding"
-    ],
-    "sequence_score": "equal_mean_of_window_probabilities_by_original_frame_ray_identity"
+  "research_question": "Can five consecutive LiDAR scans aligned to the current scan improve frozen-STU anomaly evidence without unacceptable degradation on normal data?",
+  "window": {
+    "frames": 5,
+    "member_offsets_from_start": [0, 1, 2, 3, 4],
+    "online_definition": "W_t={X_(t-4),X_(t-3),X_(t-2),X_(t-1),X_t}",
+    "coordinate_frame": "latest_scan_t",
+    "alignment": "T_current_from_source=inverse(T_world_from_current)@T_world_from_source",
+    "dense_input": "concatenate_all_visible_returns_after_alignment_to_latest_scan",
+    "output_points": "latest_scan_t_only",
+    "output_frequency": "one_score_vector_per_current_frame",
+    "overlap_fusion": "none"
   },
-  "claims": {
-    "proxy_supervision": "window-level rendered anomaly proxies provide learnable supervision without a recoverable low-level source or label shortcut",
-    "joint_densification": "B3_minus_B2_identifies_joint_densification; B3_minus_B1_is_complete_method_performance_against_a_native_single_scan_proxy_model",
-    "real_ood_transfer": "a method frozen before access to the public anomaly split transfers from synthetic supervision to real STU anomalies"
+  "methods": {
+    "single_stu": {
+      "input": "native_current_scan_X_t",
+      "model": "frozen_official_STU",
+      "score": "official_MaxLogit",
+      "output": "all_visible_points_of_X_t"
+    },
+    "dense_stu": {
+      "input": "five_scans_aligned_to_X_t_and_treated_as_one_pseudo_scan",
+      "model": "the_same_frozen_official_STU",
+      "score": "official_MaxLogit",
+      "output": "only_rows_originating_from_X_t"
+    }
   },
-  "claim_exclusions": [
-    "motion_unknown_detection",
-    "explicit_motion_understanding",
-    "object_tracking",
-    "future_frame_assistance",
-    "privileged_frame_completion"
-  ],
   "data": {
-    "normal_training": {
+    "future_training": {
       "partition": "train",
       "sequence_id": 206,
-      "role": "renderer_calibration_window_bank_and_all_parameter_updates",
+      "role": "future_full_virtual_sequence_generation_and_all_parameter_updates_if_F4_is_needed",
       "labels_available": true,
       "frame_range_inclusive": [0, 448],
       "excluded_source_frames": []
     },
-    "development": {
+    "normal_development": {
       "partition": "train",
       "sequence_id": 201,
-      "role": "development_only_no_formal_gradients",
+      "role": "F1_F2_F3_method_development_only",
       "labels_available": true,
-      "frame_range_inclusive": [0, 681],
-      "excluded_source_frames": [0, 1, 2, 3],
-      "exclusion_reason": "verified exact internal duplication in scans and labels"
+      "frame_range_inclusive": [4, 553],
+      "excluded_source_frames": [],
+      "source_exclusion": "original frames 0-3 remain excluded because they are exact internal duplicates"
+    },
+    "normal_confirmation": {
+      "partition": "train",
+      "sequence_id": 201,
+      "role": "result_blind_contiguous_normal_safety_confirmation_after_method_selection",
+      "labels_available": true,
+      "frame_range_inclusive": [554, 681],
+      "excluded_source_frames": [],
+      "access": "do_not_score_before_the_method_and_any_F4_training_recipe_are_fixed"
     },
     "public_anomaly_validation": {
       "partition": "val",
-      "role": "one_time_real_anomaly_confirmation_after_method_freeze",
+      "role": "one_time_real_anomaly_transfer_test_after_method_and_threshold_freeze",
       "labels_available": true,
-      "method_freeze_required": true,
-      "sequence_ids": [
-        125, 137, 138, 139, 140, 141, 142, 143, 144, 145,
-        146, 147, 148, 149, 150, 151, 152, 153, 169
-      ]
+      "sequence_ids": [125, 137, 138, 139, 140, 141, 142, 143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 169]
     },
     "hidden_test": {
       "partition": "test",
-      "role": "final_hidden_test_after_supported_public_confirmation",
+      "role": "final_hidden_test_only_after_supported_public_validation",
       "labels_available": false,
-      "method_freeze_required": true,
-      "sequence_ids": [
-        100, 101, 102, 103, 104, 105, 106, 107, 108, 109,
-        110, 111, 112, 113, 114, 115, 116, 117, 118, 119,
-        120, 121, 122, 123, 124, 126, 127, 128, 129, 130,
-        131, 132, 133, 134, 135, 136, 154, 155, 156, 157,
-        158, 159, 160, 161, 162, 163, 164, 165, 166, 167, 168
-      ]
-    }
-  },
-  "window": {
-    "frames": 5,
-    "member_offsets_from_start": [0, 1, 2, 3, 4],
-    "identity": ["partition", "sequence_id", "window_start"],
-    "frame_ids": "window_start_plus_member_offsets",
-    "padding": false,
-    "frame_repetition": false,
-    "member_order_is_model_input": false,
-    "point_identity": ["source_frame", "source_ray"],
-    "restoration_fields": ["source_frame", "source_slot", "source_ray"],
-    "scan_group_use": "B2_grouped_operations_only_never_a_learned_feature",
-    "reference_pose": {
-      "translation": "arithmetic_mean_of_five_sensor_translations",
-      "rotation": "SO3_chordal_mean_of_five_sensor_rotations",
-      "proper_rotation_projection": "U_diag_1_1_det_UVt_Vt",
-      "permutation_invariant": true,
-      "global_rigid_transform_invariant_coordinates": true
+      "sequence_ids": [100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 154, 155, 156, 157, 158, 159, 160, 161, 162, 163, 164, 165, 166, 167, 168]
     }
   },
   "labels": {
-    "packed_label": {
-      "semantic_bits_inclusive": [0, 15],
-      "instance_bits_inclusive": [16, 31]
-    },
     "binary_anomaly": {
-      "raw_semantic_0": "ignore_unless_replaced_by_a_valid_inserted_return",
+      "raw_semantic_0": "ignore",
       "raw_semantic_2": "anomaly",
-      "other_nonzero_semantics": "normal",
-      "normal_control_return": "normal",
-      "anomaly_proxy_return": "anomaly"
+      "other_nonzero_semantics": "normal"
     },
-    "normal_control_semantic_ids": [10, 11, 15, 18, 20, 30, 31, 32],
-    "moving_normal_semantic_ids": [252, 253, 254, 255, 256, 257, 258, 259],
     "normal_semantic_class_map": {
       "0": 255,
       "1": 255,
@@ -169,11 +124,9 @@
     }
   },
   "render": {
-    "geometry_schema": 7,
-    "source_sequence_id": 206,
-    "sensor": "OS1-128_canonical_ray_first_return_approximation",
+    "world_rule": "sample_one_immutable_anomaly_world_then_render_every_frame_of_the_selected_contiguous_sequence",
+    "training_rule_if_needed": "generate_multiple_full_train_206_virtual_sequences_then_sample_window_endpoints_from_the_pool_each_epoch",
     "calibration_file": "runs/ajae/calibration.pt",
-    "calibration_sha256": "b532b7e04d9025233b2768b8fb36287e477f62f20a3ff685a62f4a4a29bfefe0",
     "qualified_support_pools": {
       "train/206": {
         "file": "runs/ajae/e21_v4_support_pool.npz",
@@ -184,183 +137,9 @@
         "sha256": "fc3646fbc145cdc29d2cf203835a3e0018bacbc6eaf714e091d21f7b93bfaf50"
       }
     },
-    "ray_grid": {
-      "beam_count": 128,
-      "column_count": 1024,
-      "canonical_identity": ["beam_id", "azimuth_column"],
-      "canonical_sha256": "b2ca37bf8e288aa3f7d0ca571fd3e459b054b5445e2c9da3b49e3af02c1dc627",
-      "file_slot_role": "input_output_mapping_only"
-    },
-    "normal_controls": {
-      "source_sequence_id": 206,
-      "semantic_ids": [10, 11, 15, 18, 20, 30, 31, 32],
-      "template_surface": "closed_convex_hull_of_one_observed_labeled_instance_scan",
-      "scale_range_inclusive": [0.9, 1.1],
-      "minimum_template_points": 32,
-      "maximum_templates_per_class": 64,
-      "active_class_minimum_templates": 4,
-      "active_template_total_minimum": 32,
-      "vehicle_support_semantic_ids": [40],
-      "person_rider_support_semantic_ids": [40, 48]
-    },
-    "anomaly_proxies": {
-      "entity_count_range": [0, 9],
-      "primitive_count_range": [1, 5],
-      "continuous_size_m_range_inclusive": [0.2, 3.0],
-      "training_mechanisms": [
-        "superquadric",
-        "constructive_overlap_union",
-        "bend",
-        "twist",
-        "taper",
-        "low_frequency_surface"
-      ],
-      "held_out_mechanism": "torus_SDF",
-      "held_out_recipe": {
-        "anomaly_proxy_count": 1,
-        "normal_control_count": 0,
-        "outer_diameter_m_range_inclusive": [0.4, 3.0],
-        "tube_to_outer_radius_range_inclusive": [0.18, 0.35],
-        "minimum_tube_radius_m": 0.04,
-        "minimum_major_radius_m": 0.15,
-        "intersection_steps": 160,
-        "support_semantic_ids": [40, 48, 49],
-        "material_sampler": "shared_MaterialSpec_seeded_quantile_roughness_return_bias",
-        "placement_pipeline": "shared_support_pool_grounding_collision_and_visibility",
-        "placement_namespace": "schema32-held-out-torus-v1"
-      }
-    },
-    "world_type_probabilities": {
-      "pure_normal": 0.2,
-      "control_only": 0.2,
-      "mixed": 0.4,
-      "anomaly_only": 0.2
-    },
-    "common_entity_rules": {
-      "static_world_pose": true,
-      "qualified_support_semantic_ids": [40, 48, 49],
-      "support_plane_required": true,
-      "observed_surface_collision_rejection": true,
-      "inserted_entity_collision_rejection": true,
-      "range_tie_tolerance_m": 0.000001
-    },
-    "sensor_model": {
-      "conditioning": ["beam", "range", "incidence", "material"],
-      "return_probability": true,
-      "intensity_quantiles": true,
-      "empty_surface_opportunity": "same_beam_bracketing_return_interpolation_when_adjacent_ranges_agree",
-      "range_bin_edges_m": [0.0, 10.0, 20.0, 30.0, 40.0, 50.0, 120.0],
-      "incidence_bin_edges_rad": [0.0, 0.5235987755982988, 1.0471975511965976, 1.5707963267948966],
-      "low_count_backoff": "pooled_across_beam_at_same_range_incidence_cell",
-      "nearest_accepted_return": true,
-      "allow_new_return_on_empty_ray": true,
-      "bidirectional_occlusion": true
-    },
-    "physical_scope_excludes": [
-      "within_scan_motion_distortion",
-      "beam_divergence",
-      "finite_footprint",
-      "multiple_returns",
-      "multipath",
-      "electronic_noise",
-      "unobserved_hidden_surfaces"
-    ],
-    "world_unit": "WindowWorld",
-    "freeze_before_render": [
-      "five_source_frames",
-      "normal_controls",
-      "anomaly_proxies",
-      "world_positions",
-      "orientations",
-      "scales",
-      "materials",
-      "all_random_seeds"
-    ],
-    "shared_renderer_for_normal_control_and_proxy": true,
-    "rendered_observation_identity_fields": [
-      "partition",
-      "sequence_id",
-      "frame_id",
-      "xyzi",
-      "lidar_pose",
-      "real_slots",
-      "packed_labels"
-    ],
-    "window_descriptors": {
-      "density_voxel_size_m": 0.1,
-      "density_coordinate_system": "symmetric_window_coordinates",
-      "density_voxel_quantization": "floor_coordinate_divided_by_voxel_size_with_zero_origin",
-      "definitions": {
-        "joint_visible_return_count": "sum_of_visible_entity_returns_over_five_scans",
-        "joint_spatial_voxel_count": "unique_quantized_voxels_over_the_union_of_five_visible_return_sets",
-        "maximum_single_scan_spatial_voxel_count": "maximum_of_the_five_single_scan_unique_voxel_counts",
-        "densification_gain": "joint_spatial_voxel_count_divided_by_maximum_single_scan_spatial_voxel_count",
-        "duplicate_fraction": "one_minus_joint_spatial_voxel_count_divided_by_joint_visible_return_count",
-        "empty_entity_rule": "ineligible_if_joint_visible_return_count_or_maximum_single_scan_spatial_voxel_count_is_zero"
-      },
-      "required": [
-        "object_id",
-        "label",
-        "visible_returns_by_scan",
-        "spatial_voxels_by_scan",
-        "joint_visible_return_count",
-        "joint_spatial_voxel_count",
-        "maximum_single_scan_spatial_voxel_count",
-        "densification_gain",
-        "duplicate_fraction",
-        "median_distance_m",
-        "occlusion_rate",
-        "support_semantic_id",
-        "visible_scan_count",
-        "minimum_visible_return_height_m",
-        "intensity_q05_median_q95",
-        "beam_histogram"
-      ]
-    },
-    "proxy_control_matching": {
-      "unit": "complete_five_scan_window",
-      "required_covariates": [
-        "joint_visible_return_count",
-        "joint_spatial_voxel_count",
-        "densification_gain",
-        "median_distance_m",
-        "occlusion_rate",
-        "support_semantic_id",
-        "visible_scan_count",
-        "minimum_visible_return_height_m"
-      ],
-      "shortcut_audits": {
-        "split_unit": "WorldSpec_identity",
-        "models": ["standardized_logistic_regression", "depth3_decision_tree"],
-        "physical_features": [
-          "joint_counts_and_densification",
-          "duplicate_fraction",
-          "visible_scan_count",
-          "sorted_per_scan_return_and_voxel_counts",
-          "distance_occlusion_and_height",
-          "intensity_quantiles",
-          "low_dimensional_beam_statistics"
-        ],
-        "forbidden_physical_features": ["scan_index", "window_member_index"],
-        "frozen_stu_entity_summary": [
-          "point_feature_128d_mean_and_std",
-          "normal_evidence_19d_mean_and_std",
-        "assignment_reliability_mean_and_std",
-        "no_object_reliability_mean_and_std",
-        "visible_return_count_and_range_height_quantiles",
-        "intensity_q05_median_q95"
-      ],
-      "normal_control_realism": "rendered_normal_controls_versus_their_bound_original_train206_normal_template_instances_using_frozen_STU_simple_geometry_and_low_capacity_models",
-        "failure_rule": "either_model_at_or_above_a_pre_frozen_near_direct_separability_threshold_fails_R02"
-      },
-      "thresholds": "freeze_result_blind_in_R02"
-    },
-    "forbidden_densification": [
-      "synthetic_point_completion",
-      "bottom_return_insertion",
-      "scan_duplication",
-      "single_scan_copying"
-    ]
+    "proxy_geometry": "existing_in_generator_procedural_shapes_only",
+    "normal_controls": "not_part_of_F1_F2_F3",
+    "moving_normal_special_handling": "none_before_a_positive_primary_result"
   },
   "stu": {
     "source": "STU_official_Mask4Former3D",
@@ -375,354 +154,62 @@
     "normal_evidence_dim": 19,
     "assignment_reliability_dim": 1,
     "no_object_reliability_dim": 1,
-    "b0_score": "official_STU_MaxLogit",
+    "score": "official_STU_MaxLogit",
     "frozen": true
   },
-  "model": {
-    "name": "JointWindowPointTransformer",
-    "input_features": [
-      "stu_point_feature_128d",
-      "normal_evidence_19d",
-      "assignment_reliability",
-      "no_object_reliability",
-      "intensity"
-    ],
-    "spatial_coordinates": "B1_uses_native_sensor_coordinates_only; B2_and_B3_use_symmetric_window_coordinates",
-    "bookkeeping_inputs": "point_identity_for_restoration_and_scan_group_for_B2_isolation_only",
-    "input_dim": 150,
-    "forbidden_features": [
-      "source_frame",
-      "window_member_index",
-      "relative_time",
-      "absolute_time",
-      "time_embedding",
-      "reversible_time_encoding"
-    ],
-    "hidden_dim": 128,
-    "heads": 4,
-    "levels": 4,
-    "voxel_sizes_m": [0.1, 0.2, 0.4],
-    "radius_neighbors": {
-      "radii_m": [0.25, 0.5, 1.0, 2.0],
-      "maximum_neighbors": [12, 16, 24, 32]
+  "feasibility": {
+    "F1_geometry": {
+      "population": "all_546_legal_normal_development_windows",
+      "voxel_sizes_m": [0.05, 0.1, 0.2],
+      "metrics": ["visible_return_ratio", "unique_voxel_ratio", "new_voxels_not_present_in_X_t"],
+      "ply_current_frames": [8, 198, 387, 553],
+      "role": "descriptive_only"
     },
-    "voxel_feature": ["mean", "max", "log1p_population"],
-    "neighborhood_feature": "log1p_uncapped_count_of_all_points_strictly_inside_radius_before_top_K_selection",
-    "upsample_neighbors": 3,
-    "grouping_modes": {
-      "B1": "single",
-      "B2": "per_scan",
-      "B3": "joint"
+    "F2_normal_stability": {
+      "current_frames": [8, 32, 55, 79, 103, 126, 150, 174, 198, 221, 245, 269, 292, 316, 340, 363, 387, 411, 435, 458, 482, 506, 529, 553],
+      "paired_unit": "same_current_frame_point",
+      "metrics": ["MaxLogit_distribution", "normal_class_accuracy", "normal_class_mIoU"],
+      "maximum_median_MaxLogit_increase": 0.02,
+      "maximum_q95_MaxLogit_increase": 0.05,
+      "maximum_normal_accuracy_drop": 0.02,
+      "decision": "dense_STU_is_stable_only_if_all_three_limits_hold"
     },
-    "B2_B3_shared_class_and_parameterization": true,
-    "output": "one_anomaly_logit_for_every_visible_input_return",
-    "scan_permutation_equivariant": true
-  },
-  "experiments": {
-    "B0": {
-      "trainable": false,
-      "definition": "frozen_STU_official_single_scan_MaxLogit"
+    "F3_proxy_signal": {
+      "sequence_count": 8,
+      "frames_per_sequence": 28,
+      "source_starts": [4, 79, 153, 228, 302, 377, 451, 526],
+      "candidate_current_frames_per_sequence": 24,
+      "world_rule": "one_fixed_anomaly_only_WorldSpec_per_sequence",
+      "comparison": "AP_dense_STU_minus_AP_single_STU_on_the_same_current_points",
+      "uncertainty": "paired_world_bootstrap_95_percent_interval",
+      "bootstrap_repetitions": 10000,
+      "bootstrap_seed": 3303,
+      "decision": "direct_dense_STU_is_supported_only_if_F2_passes_and_the_lower_95_percent_bound_of_delta_AP_is_above_zero"
     },
-    "B1": {
-      "trainable": true,
-      "grouping_mode": "single",
-      "definition": "five_independent_native_sensor_coordinate_single_scan_forwards_per_WindowWorld_with_one_all_point_loss_and_one_identity_preserving_score_per_frame_ray"
-    },
-    "B2": {
-      "trainable": true,
-      "grouping_mode": "per_scan",
-      "definition": "all_five_scans_in_symmetric_window_coordinates_with_voxel_neighborhood_and_decode_isolated_by_scan_group"
-    },
-    "B3": {
-      "trainable": true,
-      "grouping_mode": "joint",
-      "definition": "all_five_scans_jointly_voxelized_neighbored_and_decoded_in_symmetric_window_coordinates"
+    "F4_minimal_training": {
+      "allowed_only_if": "F2_or_F3_rejects_direct_dense_STU",
+      "first_candidate": "per_scan_frozen_STU_features_aligned_to_current_geometry_plus_one_small_anomaly_head",
+      "large_new_network": "not_authorized_without_failure_of_the_small_head",
+      "architecture_and_budget": "intentionally_undefined_until_F1_F3_results_exist"
     }
   },
-  "training": {
-    "source_partition": "train",
-    "source_sequence_id": 206,
-    "bank": {
-      "name": "window_train_bank",
-      "unit": "WindowWorld",
-      "shared_by": ["B1", "B2", "B3"],
-      "required_identity": [
-        "five_source_frames",
-        "WorldSpec",
-        "five_rendered_point_arrays",
-        "renderer_identity",
-        "STU_identity",
-        "native_sensor_coordinates",
-        "symmetric_window_coordinates",
-        "point_identity",
-        "labels",
-        "window_level_density_descriptors"
-      ],
-      "condition_invariants": [
-        "same_five_rendered_points_with_condition_specific_coordinates",
-        "same_point_labels",
-        "same_entry_order",
-        "same_model_parameter_shapes_and_initialization",
-        "same_loss",
-        "same_optimizer"
-      ],
-      "generation_plan": {
-        "namespace": "ajae-schema32-window-train-bank-plan-v1",
-        "formal_entry_count": 445,
-        "allowed_prefix_counts": [8, 128, 445],
-        "window_start_order": "ascending_sha256_namespace_and_window_start",
-        "world_type_cycle": ["pure_normal", "control_only", "mixed", "mixed", "anomaly_only"],
-        "world_seed_rule": "first_63_bits_of_sha256_namespace_position_and_window_start",
-        "observation_attempt_selection": "first_success_in_ascending_retry_index_no_manual_selection",
-        "observation_attempt_stride": 10000019,
-        "maximum_observation_attempts": 48
-      }
-    },
-    "micro_batch": "one_complete_WindowWorld",
-    "effective_batch": "all_complete_WindowWorld_micro_batches_accumulated_into_one_optimizer_step",
-    "epoch": "one_complete_pass_over_the_frozen_window_train_bank",
-    "loss": {
-      "name": "effective_batch_empty_class_safe_balanced_binary_cross_entropy",
-      "aggregation": "first_sum_positive_and_negative_unreduced_losses_and_counts_over_the_entire_effective_batch_then_average_each_present_class",
-      "two_class_formula": "0.5*positive_loss_sum/positive_count+0.5*negative_loss_sum/negative_count",
-      "one_class_rule": "mean_loss_of_the_single_present_class"
-    },
-    "forced_partial_step_at_world_boundary": false,
-    "epoch_tail_partial_effective_batch": "allowed_and_counted_as_one_optimizer_update",
-    "modes": ["tiny_overfit", "pilot", "formal"],
-    "tiny_overfit": {
-      "windows": 8,
-      "seed": 2001,
-      "maximum_updates": 500,
-      "config": {
-        "learning_rate": 0.0001,
-        "gradient_accumulation": 1,
-        "weight_decay": 0.0,
-        "scheduler": "constant",
-        "budget_unit": "optimizer_updates",
-        "maximum_updates": 500,
-        "evaluation_interval_updates": 500,
-        "gradient_clip_norm": null
-      },
-      "pass_any": {
-        "training_AP_minimum_percent": 99.0,
-        "loss_strictly_below": 0.02
-      }
-    },
-    "pilot": {
-      "windows": 128,
-      "condition": "B3",
-      "seeds": [1001, 1002],
-      "stage_order": ["learning_rate_and_batch", "scheduler", "weight_decay"],
-      "learning_rates": [0.00003, 0.0001, 0.0003],
-      "gradient_accumulation": [1, 2],
-      "screen_updates": [50, 200, 600],
-      "schedulers_after_learning_rate_selection": ["constant", "five_percent_warmup_cosine"],
-      "weight_decay_after_scheduler_selection": [0.0, 0.00001, 0.0001],
-      "fixed_run_parameters": {
-        "budget_unit": "optimizer_updates",
-        "evaluation_interval_updates": 50,
-        "gradient_clip_norm": null
-      },
-      "selection": {
-        "metric": "best_development_macro_fused_point_ap",
-        "score_comparison": "strictly_greater",
-        "exact_tie_break": "protocol_grid_order",
-        "probability_saturation_epsilon": 0.000001,
-        "maximum_complete_saturation_fraction_exclusive": 1.0,
-        "screen_50_rule": "all_six_candidates_must_produce_finite_auditable_runs_then_complete_probability_saturation_is_excluded_before_screen_200",
-        "screen_50_minimum_survivors": 2,
-        "screen_200_finalist_count": 2,
-        "screen_600_seed": 1002
-      },
-      "frozen_stage_winners": {
-        "learning_rate": null,
-        "gradient_accumulation": null,
-        "scheduler": null,
-        "weight_decay": null
-      }
-    },
-    "formal": {
-      "seeds": [0, 1, 2],
-      "deployment_seed": 0,
-      "deployment_condition": "B3",
-      "recipe_status": "pending_result_blind_R05_freeze",
-      "recipe": null,
-      "bank_identity": null,
-      "development_population_identity": null,
-      "allowed_only_after": "R05"
-    },
-    "checkpoint_selection": {
-      "metric": "macro_mean_of_per_in_generator_DevelopmentClipWorld_all_occurrence_fused_point_AP",
-      "eligible_mechanism": "in_generator",
-      "eligible_clip_count": 24,
-      "held_out_torus_use": "unopened_until_S01_after_all_training_before_M01_no_method_changes_after_opening",
-      "fusion_scope": "within_one_frozen_world_identity_only",
-      "score_comparison": "strictly_greater",
-      "exact_tie_break": "earliest_evaluated_update",
-      "status": "metric_population_and_tie_break_frozen_result_blind"
-    },
-    "deterministic_algorithms": true
-  },
   "evaluation": {
-    "legal_window_starts": "every_start_with_five_real_consecutive_nonexcluded_frames",
-    "model_output_members": [0, 1, 2, 3, 4],
-    "real_sequence_fusion_key": ["partition", "sequence_id", "source_frame", "source_ray"],
-    "synthetic_fusion_key": ["world_identity", "source_frame", "source_ray"],
-    "fusion_values": {
-      "B0": {
-        "input": "raw_finite_frozen_STU_official_MaxLogit_score",
-        "per_occurrence_transform": "none",
-        "repeated_window_mean": "identity_preserving"
-      },
-      "B1_B2_B3": {
-        "input": "anomaly_logit",
-        "per_occurrence_transform": "sigmoid"
-      }
-    },
-    "fusion_reduction": "equal_arithmetic_mean_over_every_legal_window_occurrence",
-    "domain": "every_visible_return_covered_by_at_least_one_legal_five_scan_window",
-    "occurrence_count_strata": [1, 2, 3, 4, 5],
-    "synthetic_development": {
-      "unit": "DevelopmentClipWorld",
-      "world_rule": "one_WorldSpec_and_random_identity_are_frozen_before_rendering_every_scan_used_by_all_overlapping_windows_in_the_clip",
-      "minimum_frames_to_expose_all_occurrence_strata": 9,
-      "exact_clip_length_and_count": {
-        "frames_per_clip": 9,
-        "overlapping_windows_per_clip": 5,
-        "in_generator_clips": 24,
-        "total_clips": 24,
-        "freeze_rule": "D_select_fixed_before_any_schema32_selection_world_is_generated_or_scored"
-      },
-      "generation_plan": {
-        "namespace": "ajae-schema32-synthetic-clip-plan-v1",
-        "clip_start_selection": "sha256_ranked_greedy_nonoverlapping_nine_frame_clips",
-        "plan_positions_inclusive": [0, 23],
-        "mechanism": "in_generator",
-        "world_seed_rule": "first_63_bits_of_sha256_namespace_position_and_clip_start",
-        "observation_attempt_selection": "first_success_in_ascending_retry_index_no_manual_selection",
-        "observation_attempt_stride": 10000019,
-        "maximum_observation_attempts": 48
-      },
-      "cross_world_fusion_forbidden": true
-    },
-    "synthetic_confirmation": {
-      "unit": "DevelopmentClipWorld",
-      "role": "D_confirm_independent_formal_gate_population",
-      "mechanism": "in_generator",
-      "clip_count": 24,
-      "frames_per_clip": 9,
-      "overlapping_windows_per_clip": 5,
-      "generation_plan_namespace": "ajae-schema32-synthetic-clip-plan-v1",
-      "plan_positions_inclusive": [24, 47],
-      "source_frames_disjoint_from_D_select": true,
-      "allowed_only_at_or_after": "G2",
-      "excluded_before_G2_from": [
-        "rendering",
-        "visual_review",
-        "proxy_qualification",
-        "hyperparameter_selection",
-        "checkpoint_selection",
-        "method_changes"
-      ],
-      "all_formal_checkpoints_fixed_before_opening": true
-    },
-    "held_out_synthetic_shift": {
-      "unit": "DevelopmentClipWorld",
-      "mechanism": "torus_SDF",
-      "clip_count": 6,
-      "frames_per_clip": 9,
-      "overlapping_windows_per_clip": 5,
-      "generation_plan_namespace": "ajae-schema32-synthetic-clip-plan-v1",
-      "plan_positions_inclusive": [48, 53],
-      "allowed_only_at_or_after": "S01",
-      "excluded_before_S01_from": [
-        "rendering",
-        "visual_review",
-        "proxy_qualification",
-        "hyperparameter_selection",
-        "checkpoint_selection",
-        "method_changes"
-      ]
-    },
     "minimum_range_m_inclusive": 2.5,
     "maximum_range_m_inclusive": 50.0,
     "minimum_anomaly_points_per_evaluated_frame": 5,
-    "point_metrics": ["AP", "AUROC", "FPR95"],
-    "official_evaluator_equivalence_required": true,
-    "sealed_validation_and_test_access": true
+    "primary_proxy_metric": "point_AP",
+    "secondary_metrics": ["AUROC", "FPR95"],
+    "normal_safety": "MaxLogit_distribution_and_normal_semantic_quality",
+    "moving_normal": "report_as_a_subgroup_only_after_a_positive_primary_result"
   },
-  "state_machine": [
-    "R00",
-    "R01",
-    "R02",
-    "R03",
-    "R04",
-    "R05",
-    "F01",
-    "G2",
-    "G3",
-    "S01",
-    "M01",
-    "V01",
-    "T01"
-  ],
-  "decision_gates": {
-    "G2": {
-      "comparisons": ["B1_vs_B0"],
-      "formal_seeds": [0, 1, 2],
-      "criteria_status": "pending_result_blind_R05_freeze",
-      "criteria": null,
-      "criteria_identity": null
-    },
-    "G3": {
-      "comparisons": ["B3_vs_B1", "B3_vs_B2"],
-      "formal_seeds": [0, 1, 2],
-      "criteria_status": "pending_result_blind_R05_freeze",
-      "criteria": null,
-      "criteria_identity": null
-    },
-    "V01": {
-      "public_sequences": 19,
-      "one_time_only": true,
-      "comparisons": ["frozen_final_vs_B0", "frozen_final_vs_B1"],
-      "criteria_status": "pending_result_blind_R05_freeze",
-      "criteria": null,
-      "criteria_identity": null
-    }
-  },
-  "historical_evidence": {
-    "evidence_source_schema": 30,
-    "inheritance_rule": "mechanical_evidence_keeps_its_original_schema30_identity_and_claim_scope_and_must_not_be_relabelled_as_generated_under_schema32",
-    "continues_with_original_scope": [
-      "schema7_geometry_and_coverage",
-      "support_placement_and_collision",
-      "ray_mapping_and_range_image_round_trip",
-      "first_return_occlusion_intensity_and_empty_ray_rendering",
-      "shared_renderer_for_normal_control_and_proxy",
-      "official_STU_weight_and_point_evidence_restoration",
-      "E61_raw_normal_safety_frame_ray_identity_not_old_scores",
-      "point_identity",
-      "official_evaluator_numerical_equivalence",
-      "sealed_data_access"
-    ],
-    "old_distribution_only": ["E45B-v2", "E48", "E76-C1"],
-    "reusable_only_after_schema32_requalification": [
-      "E26_world_construction_primitives",
-      "E37_point_identity_consistency_primitives",
-      "E55_non_temporal_150d_input_content",
-      "E70_empty_class_safe_loss_primitive",
-      "E71_probability_mean_primitive",
-      "E72_B0_definition_not_its_old_domain_values"
-    ],
-    "excluded_from_schema32_statistics": [
-      "E56_through_E60_center_based_worlds",
-      "E63_single_member_common_domain",
-      "E64_through_E69_temporal_branch_qualifications",
-      "E73_through_E76_and_AJAE_F0_X_AJAE_F1_X",
-      "schema30_B1_through_B5",
-      "fast-v5",
-      "all_center_based_Gate2_and_Gate3_results"
-    ]
+  "stages": ["F0", "F1", "F2", "F3", "F4", "V1", "T1"],
+  "claims": {
+    "implementation_ready": true,
+    "F1_completed": false,
+    "F2_completed": false,
+    "F3_completed": false,
+    "training_performed": false,
+    "real_anomaly_validation_performed": false,
+    "supported_conclusion": "none"
   }
 }

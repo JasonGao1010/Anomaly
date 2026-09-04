@@ -17,7 +17,7 @@
 \usepackage[hidelinks]{hyperref}
 \usepackage{multicol,titlesec,indentfirst,needspace}
 
-\hypersetup{hypertexnames=false,pdftitle={AJAE：窗口级异常代理与五帧联合稠密点云的激光雷达异常分割},pdfsubject={激光雷达异常分割研究方案与可证伪实验协议}}
+\hypersetup{hypertexnames=false,pdftitle={AJAE：冻结STU的五帧稠密输入可行性研究},pdfsubject={激光雷达异常分割研究方案与可证伪实验协议}}
 \captionsetup{font=small,labelfont=bf,labelsep=quad,justification=centering,singlelinecheck=true,hypcap=false}
 \setstretch{1.06}
 \setlength{\parindent}{2em}
@@ -43,237 +43,153 @@
 
 \begin{center}
   {\bfseries\fontsize{16pt}{20pt}\selectfont
-  AJAE：窗口级异常代理与五帧联合稠密点云的激光雷达异常分割}\\[0.15em]
-  {\fontsize{9.5pt}{12pt}\selectfont 研究方案与可证伪实验协议（schema 32）}
+  AJAE：冻结STU的五帧稠密输入可行性研究}\\[0.15em]
+  {\fontsize{9.5pt}{12pt}\selectfont 研究方案与可证伪实验协议（schema 33）}
 \end{center}
 
 \section*{摘要}
 
-车载激光雷达中的未知障碍物常由少量、稀疏且受遮挡的回波表示。本文提出AJAE的研究方案：先在正常序列上构造物理约束明确的异常代理，再把五次连续扫描变换到由五个位姿共同决定的对称坐标系，形成一个联合稠密点云，并为其中每个可见回波预测异常概率。五帧没有中心帧或主帧，模型不接收帧编号、相对时间或时间嵌入；扫描身份只用于对照条件中的空间隔离、点身份恢复和重叠窗口融合。
+未知道路障碍物在单帧激光雷达中常只有少量且受遮挡的回波。AJAE首先检验一个比新模型设计更基础的问题：连续五帧对齐到当前扫描后，冻结的STU能否直接从更稠密的输入中获得更好的异常证据。窗口定义为当前帧及其前四帧，前四帧通过自车位姿变换到当前帧坐标。五帧作为一张稠密伪扫描进入原始冻结STU，但系统只读取当前帧原有点的MaxLogit异常分数。主比较因而是原始单帧STU与五帧稠密STU，不训练新的单帧网络，也不进行重叠窗口分数融合。
 
-异常代理和正常对照共用OS1-128规范射线、回波接受、首次回波竞争、遮挡与强度模型。每个训练条目先固定五个源扫描、完整世界、实体、位姿、材质和随机种子，再渲染五次观测。模型以冻结STU提供的128维点特征、19维正常语义证据、两项可靠性和强度为输入。完整条件在联合空间中共同体素化、共同建立半径邻域并共同解码；体素和邻域显式保留回波数量。每个原始点在所有覆盖它的合法窗口中得到多次概率，最终按规范\texttt{frame--ray}身份作算术平均。
+实验按信息增益依次进行。几何实验先测量回波数、唯一体素覆盖和新增体素，并用PLY检查配准。正常稳定性实验再比较两种输入的MaxLogit分布、正常语义准确率和平均交并比。少量合成异常实验为每段连续序列固定一个异常世界，以世界为配对单位比较点级平均精确率。只有冻结STU不能直接适应稠密输入时，才考虑在逐帧冻结STU特征之后训练小型异常头。当前完成的是schema 33路线和实现修订；三个真实可行性实验均未执行，因此本文不报告性能结论。
 
-实验以四个条件区分异常代理监督、重复曝光和真正联合稠密化的作用。B1始终在每帧原生传感器坐标中运行，同一帧射线在重叠窗口中只推理一次；B2和B3才使用对称窗口坐标。训练、D\_select检查点选择、D\_confirm正式确认、公开异常验证和隐藏测试严格分离。当前已建立schema 32合同与机械实现；D\_select与D\_confirm均尚未生成，微型过拟合、配方选择、正式训练和真实异常评价均未执行。本文因此不报告预测数字，也不声称AJAE已经优于基线或已迁移到真实未知障碍物。
-
-\noindent\textbf{关键词：} 激光雷达；异常分割；异常代理；联合点云；点Transformer；反事实渲染
+\noindent\textbf{关键词：} 激光雷达；异常分割；多帧稠密化；冻结模型；异常代理
 
 \section*{Abstract}
 
-Sparse and occluded returns make unknown road obstacles difficult to identify from a single LiDAR scan. AJAE is designed to learn from physically constrained anomaly proxies and to combine five consecutive scans into one dense spatial observation. The five scans are transformed into a symmetric reference frame determined jointly by their poses. No scan is a center or primary target, and the model receives neither scan position nor temporal encoding. Scan identity is retained only for the isolated control condition, point restoration, and overlapping-window fusion.
+Unknown road obstacles may produce only sparse and occluded returns in a single LiDAR scan. AJAE first tests a question that precedes the design of any new trainable model: whether a frozen STU model can obtain stronger anomaly evidence from five scans aligned to the current scan. Each causal window contains the current scan and its four predecessors. The five scans are treated as one dense pseudo-scan, while MaxLogit scores are read only for points originating from the current scan. The primary comparison is therefore the released single-scan STU input against the five-scan dense STU input.
 
-Normal controls and anomaly proxies share the same OS1-128 ray model, return acceptance, first-return competition, occlusion, and intensity process. A complete counterfactual world is fixed before any of its five observations is rendered. Frozen STU evidence supplies a 128-dimensional point feature, 19-dimensional normal-class evidence, two reliability values, and intensity. The full model performs joint voxel pooling, radius-neighborhood aggregation, and coarse-to-fine decoding across all scans, while explicit population features preserve the added density. Probabilities from every legal window occurrence are averaged by canonical frame--ray identity.
+The study proceeds through three pre-training experiments. Geometry statistics and PLY files first verify actual spatial densification. Normal-only data then test whether the dense input shifts MaxLogit or degrades semantic recognition. Finally, a small set of continuously rendered synthetic anomaly worlds tests paired changes in point-level average precision. A trainable anomaly head is considered only if direct dense input is rejected. No schema-33 feasibility experiment has yet been run, so this document makes no performance claim.
 
-Four conditions separate the effects of the frozen STU baseline, proxy supervision, repeated five-scan exposure, and genuine joint densification. Training, synthetic development, public anomaly validation, and hidden testing are separated by a result-blind state machine. The formal proxy population, training runs, and real-anomaly evaluations have not yet been executed; consequently, this document makes no performance or transfer claim.
+\noindent\textbf{Keywords:} LiDAR; anomaly segmentation; multi-scan densification; frozen model; anomaly proxy
 
-\noindent\textbf{Keywords:} LiDAR; anomaly segmentation; anomaly proxy; joint point cloud; point Transformer; counterfactual rendering
+\section{研究问题}
 
-\section{研究问题与证据边界}
+STU提供连续激光雷达扫描、逐点异常标注、冻结模型和评价程序\cite{nekrasov2025stu,stuofficial}。多扫描语义分割研究说明相邻观测可以缓解单帧稀疏\cite{li2023memoryseg,wu2024taseg}，但已知类别分割的改善不能直接推出未知障碍物检测改善。AJAE当前的研究问题是：
 
-STU为车载激光雷达异常分割提供逐点异常标签、连续扫描和官方评价程序\cite{nekrasov2025stu,stuofficial}。现有研究表明，异常分数设计与辅助异常构造都会改变激光雷达分布外检测结果。REL使用相对能量并以Point Raise生成辅助异常\cite{li2026rel}；NDP学习预测分布先验并加入Perlin噪声异常\cite{li2026ndp}；LIDO在特征空间建模正常类别原型，同时构造真实--合成混合数据集\cite{mosco2026lido}。这些工作支持“监督构造值得研究”，但不能证明本文的五帧代理或联合空间建模有效。
+\begin{quote}
+五帧激光雷达扫描对齐到当前帧形成的稠密伪扫描，能否改善冻结STU的异常证据，同时不造成不可接受的正常输出退化？
+\end{quote}
 
-多扫描语义分割也表明，相邻观测可以缓解单帧稀疏，例如MemorySeg的在线记忆和TASeg的多时刻聚合\cite{li2023memoryseg,wu2024taseg}。Point Transformer系列为点邻域注意力和分层池化提供了结构基础\cite{zhao2021pointtransformer,wu2022pointtransformerv2}。然而，已知类别语义分割的改善不能直接推出未知障碍物检测改善。AJAE因此只提出三个待验证问题：
+这个问题包含两个必要部分。异常信号增强只回答稠密观测是否有用；正常稳定性回答原本在单帧点云上训练的STU能否承受输入分布变化。只有两部分同时成立，直接稠密STU才构成可继续验证的方法。
 
-\begin{enumerate}
-  \item 完整五帧反事实世界中的异常代理，能否提供可学习且不依赖低层生成捷径的逐点监督？
-  \item 在输入点、标签、参数量、初始化、损失、优化器和融合完全一致时，跨扫描联合空间建模是否优于单帧独立计算和扫描隔离计算？
-  \item 方法完全冻结后，合成代理上形成的判断能否迁移到STU真实异常序列？
-\end{enumerate}
+schema 32曾预先建立B0、B1、B2、B3训练矩阵，用对称参考系处理五帧并为全部点输出，再融合重叠窗口分数。该设计在核心可行性尚未验证前引入了额外单帧网络、扫描隔离消融、联合点网络和复杂训练选择。schema 33停止这条活动路线。旧实现和旧机械检查不能作为当前方法的性能证据。
 
-第一个问题检验监督目标，第二个问题识别联合稠密化的增量作用，第三个问题检验合成到真实的泛化。张量形状正确、程序可运行或机械资格通过都不能代替这三项科学证据。AJAE不主张运动目标检测、对象跟踪、显式运动理解或“未来帧帮助当前帧”。
+\section{在线五帧观测}
 
-\section{五帧对称观测}
+当前时刻为$t$，窗口为
 
-\subsection{窗口、点身份与共同评价域}
-
-设第$f$帧可见回波集合为
 \begin{equation}
-  X_f=\{(\boldsymbol{x}_{f,r},I_{f,r},r):r\in\mathcal V_f\},
+\mathcal W_t=\{X_{t-4},X_{t-3},X_{t-2},X_{t-1},X_t\}.
 \end{equation}
-其中$\boldsymbol{x}_{f,r}\in\mathbb R^3$是传感器坐标，$I_{f,r}$是强度，$r$是经校准审计后的规范射线身份。以起点$s$定义五帧窗口
+
+令$T_{W\leftarrow i}$表示第$i$帧激光雷达坐标到世界坐标的刚体变换。过去帧通过
+
 \begin{equation}
-  \mathcal W_s=\{X_s,X_{s+1},X_{s+2},X_{s+3},X_{s+4}\}.
-  \label{eq:window}
+T_{t\leftarrow i}=T_{W\leftarrow t}^{-1}T_{W\leftarrow i}
 \end{equation}
-窗口只能由五个连续真实扫描组成，不允许填充、镜像或复制。原始点身份为$(\text{partition},\text{sequence},f,r)$；文件槽位仅用于读取和恢复顺序，不替代规范射线身份。
 
-模型对窗口中每个可见回波输出一个逻辑值。一个点可能出现在多个重叠窗口中，所有至少被一个合法窗口覆盖的可见回波构成B0--B3的共同评价域。边界帧出现1至4次，内部帧最多出现5次。
+变换到当前扫描坐标，形成
 
-\subsection{五姿态共同决定的参考系}
-
-设五个传感器到世界的刚体位姿为$(R_j,t_j)$。窗口平移取五个位置的算术平均：
 \begin{equation}
-  \bar t=\frac{1}{5}\sum_{j=0}^{4}t_j.
+\widetilde X_t=\bigcup_{i=t-4}^{t}T_{t\leftarrow i}X_i.
 \end{equation}
-旋转使用弦均值。令$M=\sum_{j=0}^{4}R_j=U\Sigma V^\top$，则
+
+该坐标系就是车辆当前传感器坐标，不是人为构造的中间参考空间。第$t$帧作为输出时刻具有明确作用，但五帧都作为STU的输入信息。系统只为$X_t$中的可见点返回异常分数。窗口从$t$移动到$t+1$时只输出新当前帧，因而无需平均一个点在多个窗口中的分数。
+
+五帧位姿只补偿自车运动。动态车辆或行人在当前坐标下可能形成拖影。F1通过点云检查直接暴露这种现象，F2检验它是否使正常输出失稳；当前不为移动正常目标引入专用损失或模型分支。
+
+\section{冻结STU比较}
+
+\subsection{单帧输入}
+
+单帧条件使用发布的STU预处理、冻结权重和MaxLogit异常分数：
+
 \begin{equation}
-  \bar R=U\operatorname{diag}\!\left(1,1,\det(UV^\top)\right)V^\top.
+X_t\xrightarrow{\operatorname{STU}_{\mathrm{frozen}}}S_t^{\mathrm{single}}.
 \end{equation}
-第$j$次扫描中的点转换为
+
+该条件是当前唯一基线。它不包含额外训练的单帧AJAE网络。
+
+\subsection{稠密输入}
+
+稠密条件将$\widetilde X_t$视为一张伪扫描，继续使用强度和扫描中心距离作为STU输入通道：
+
 \begin{equation}
-  \widetilde{\boldsymbol{x}}_{j}=\bar R^\top(R_j\boldsymbol{x}_j+t_j-\bar t).
-  \label{eq:symmetric-coordinate}
+\widetilde X_t\xrightarrow{\operatorname{STU}_{\mathrm{frozen}}}S_{t-4:t}^{\mathrm{dense}}.
 \end{equation}
-该构造对五个位姿的输入顺序不变，不给予任何扫描预测优先权。机械资格必须同时核对扫描置换、统一全局刚体变换、重复构造确定性、旋转正交性、$\det(\bar R)=1$以及五帧全点无损恢复。
 
-\section{窗口级反事实异常代理}
+随后按来源身份只选择$X_t$对应的行，得到$S_t^{\mathrm{dense}}$。单帧和稠密条件使用同一个模型、同一权重和同一分数定义，并在相同当前点上比较。五帧稠密输入会同时改变点密度、体素占用和扫描中心距离分布；F2必须把这些变化作为真实方法属性检验。
 
-\subsection{先固定世界，再形成五次观测}
-
-训练单位是一个独立的\texttt{WindowWorld}。在渲染任何扫描之前，系统固定五个源帧、正常对照、异常代理、世界位置、朝向、尺度、材质和全部随机种子。正常对照来自206中具有实例身份的正常类别模板；程序化代理由超二次曲面、集合组合及弯曲、扭转、渐缩和低频表面形变产生。环面有符号距离场只用于S01的留出生成机制与合成分布移位检查，不进入训练或R02开发总体；其计划可以预先冻结，但在S01前不得渲染或查看。
-
-两类实体共用同一支撑面、碰撞、规范射线、回波概率、强度和首次回波竞争过程。每条射线上只有最近的已接受回波进入新观测：
-\begin{equation}
-  d_{\mathrm{final}}(r)=\min\{d_{\mathrm{normal}}(r),d_{\mathrm{control}}(r),d_{\mathrm{proxy}}(r)\}.
-\end{equation}
-正常对照的回波标签为正常，异常代理的回波标签为异常；被更近表面遮挡的旧回波不再属于新世界。生成过程禁止补点、补底部回波、重复扫描或复制单帧来提高密度。
-
-\subsection{可观察稠密度与混杂控制}
-
-对某个实体在五次扫描中的实际可见回波集合$P_0,\ldots,P_4$，在对称窗口坐标中用边长$v=0.1$米、固定零原点的空间体素计算
-\begin{align}
-  N_{\mathrm{pts}}^{(5)} &= \sum_{j=0}^{4}|P_j|,\\
-  N_{\mathrm{vox}}^{(5)} &= \left|\operatorname{Voxel}_v\!\left(\bigcup_{j=0}^{4}P_j\right)\right|,\\
-  G_{\mathrm{dens}} &= \frac{N_{\mathrm{vox}}^{(5)}}{\max_j N_{\mathrm{vox}}^{(j)}},\\
-  R_{\mathrm{dup}} &=1-\frac{N_{\mathrm{vox}}^{(5)}}{N_{\mathrm{pts}}^{(5)}}.
-\end{align}
-描述量还包括每帧回波与体素数、中位距离、遮挡率、支撑语义、可见扫描数、最低可见回波离地高度、强度分位数和128束直方图。所有数值均由实际首次回波输出计算，几何表面采样不能冒充传感器观测。
-
-正常对照与异常代理先按支撑语义精确分层，再用联合回波数、联合体素数、稠密增益、距离、遮挡、可见扫描数和最低高度作结果盲匹配。R02再执行三类审查：用完整且与扫描顺序无关的物理观测统计区分正常对照和代理；用冻结STU实体的特征、证据、可靠度、强度与简单几何摘要区分两类实体；区分渲染正常对照与其模板绑定的train/206原始正常实例。每类审查均按\texttt{WorldSpec}分组划分，同时使用逻辑回归和最大深度为3的决策树。裁决阈值的数值和内容身份必须在生成D\_select前结果盲冻结；任一审查达到接近直接可分阈值时，R02停止。
-
-\section{冻结STU点证据与联合稠密模型}
-
-\subsection{逐点输入}
-
-AJAE不改动冻结的STU模型\cite{nekrasov2025stu,yilmaz2024mask4former}。STU逐帧独立产生128维点特征$\boldsymbol h_p^{\mathrm{stu}}$、19维正常类别证据$\boldsymbol c_p$、分配可靠性$r_p^{\mathrm{assign}}$和无对象可靠性$r_p^{\mathrm{noobj}}$。加上强度后，点属性为
-\begin{equation}
-  \boldsymbol u_p=[\boldsymbol h_p^{\mathrm{stu}};\boldsymbol c_p;r_p^{\mathrm{assign}};r_p^{\mathrm{noobj}};I_p]\in\mathbb R^{150}.
-\end{equation}
-空间坐标用于位置编码、相对位移、体素化、邻域和解码几何。\texttt{source\_frame}、窗口成员编号、相对时间、绝对时间和时间嵌入均不得进入学习特征。\texttt{scan\_group}只在B2中形成隔离键，不可被嵌入。
-
-\subsection{共同体素化、邻域与解码}
-
-唯一权威网络为\texttt{JointWindowPointTransformer}。它建立原始点层和$0.1$、$0.2$、$0.4$米三个体素层。B3的体素键仅为
-\begin{equation}
-  \kappa_l(p)=\left\lfloor\widetilde{\boldsymbol{x}}_p/v_l\right\rfloor,
-\end{equation}
-因此不同扫描的同空间回波可以合并。B2在同一实现中把扫描分组加入键：
-\begin{equation}
-  \kappa_l^{\mathrm{iso}}(p)=\left(g_p,\left\lfloor\widetilde{\boldsymbol{x}}_p/v_l\right\rfloor\right).
-\end{equation}
-除这一空间隔离外，B2与B3使用同一网络类别和参数形状。
-
-体素特征显式保留真实回波数量：
-\begin{equation}
-  \boldsymbol h_v=\operatorname{MLP}\!\left[\operatorname{mean}_{p\in v}\boldsymbol h_p;\operatorname{max}_{p\in v}\boldsymbol h_p;\log(1+n_v)\right].
-\end{equation}
-四层半径依次为$0.25$、$0.5$、$1.0$和$2.0$米，最多保留12、16、24和32个邻居。邻域聚合另输入截断前严格位于半径内的真实邻居数$\log(1+|\mathcal N_l(i)|)$，避免固定邻居上限完全抹去密度变化。B3在整个联合点云中搜索邻居，B2按扫描分组隔离。
-
-解码器逐级执行三近邻反距离插值。B3的粗细层搜索允许跨扫描，B2继续按扫描分组限制。最终异常头为每个输入回波输出一个逻辑值。对任意扫描排列$\pi$，恢复原点顺序后应满足
-\begin{equation}
-  F_\theta(\pi\mathcal W)=\pi F_\theta(\mathcal W).
-\end{equation}
-该等变性、跨扫描体素合并、跨扫描邻域、跨扫描上采样、密度计数变化和全点梯度都是R03机械资格，不能用参数名或结构图替代真实执行。
-
-\section{对照、训练与评价}
-
-\subsection{最小对照矩阵}
+\section{数据划分}
 
 \begin{table}[htbp]
 \centering
-\caption{schema 32的四个条件}
-\label{tab:conditions}
-\fontsize{8.2pt}{10.2pt}\selectfont
-\begin{tabularx}{\textwidth}{L{1.0cm}L{6.0cm}Y}
+\caption{schema 33的数据角色}
+\begin{tabularx}{\textwidth}{L{2.2cm}L{2.6cm}Y}
 \toprule
-条件 & 定义 & 识别目标 \\
+来源 & 范围 & 用途 \\
 \midrule
-B0 & 冻结STU官方单帧MaxLogit；在相同窗口覆盖域报告 & 不使用AJAE的参考表现 \\
-B1 & 每帧在原生传感器坐标中独立前向；同一帧射线只推理一次，训练损失覆盖五帧全部点 & 窗口代理监督本身是否可学习 \\
-B2 & 五帧全部输入、输出和监督；体素、邻域及解码按扫描身份隔离 & 重复曝光与共同训练单位的作用 \\
-B3 & 五帧在对称坐标中共同体素化、共同建立邻域并共同解码 & 跨扫描联合稠密化的增量作用 \\
+正常开发 & \texttt{train/201}帧4--553 & F1几何、F2正常稳定性和F3少量合成异常；不更新参数 \\
+正常确认 & \texttt{train/201}帧554--681 & 方法确定后一次性检查正常安全；此前不读取分数 \\
+未来训练 & \texttt{train/206}帧0--448 & 仅在进入F4后生成完整虚拟序列并更新小型异常头 \\
+真实异常 & 19条公开验证序列 & 方法和阈值固定后检验合成到真实的迁移 \\
+隐藏测试 & 51条测试序列 & 公开验证支持方法后进行最终测试 \\
 \bottomrule
 \end{tabularx}
 \end{table}
 
-B1、B2和B3必须读取同一份冻结\texttt{window\_train\_bank}。每个条目同时保存五帧原生传感器坐标与对称窗口坐标：B1只读取前者，B2和B3只读取后者。条目还保存源帧身份、\texttt{WorldSpec}、实际渲染点、点身份、标签、窗口描述量以及渲染器和STU身份。三种条件使用相同条目顺序；B2和B3还必须具有相同参数形状和初始化。训练bank、D\_select、D\_confirm和S01留出总体分别绑定独立的内容规则与源帧。原有只输出单个窗口成员的条件、时间分支条件和因果版本均不属于本实验矩阵。
+\texttt{train/201}帧0--3已确认存在内部精确重复，因此不进入开发范围。正常开发和正常确认是连续且不重叠的区间。确认区间不能参与输入选择、阈值选择或训练停止。
 
-\subsection{有效批次损失与运行模式}
+\section{递进实验}
 
-一个微批次是一个完整\texttt{WindowWorld}，一个时期是对冻结训练bank的完整遍历。梯度累计可跨窗口持续，不能在每个世界边界强制产生部分优化步骤；时期末未满的有效批次允许更新，并计为一次优化器更新。先在一个有效批次内汇总所有逐点二元交叉熵。两类均出现时，损失为
+\subsection{F1：几何稠密性}
+
+F1遍历正常开发区间的546个合法窗口，不运行STU。每个窗口报告五帧与当前单帧的回波数之比，在0.05、0.10和0.20米体素下报告唯一体素数之比及当前帧没有覆盖的新体素数。当前帧8、198、387和553导出带扫描年龄的PLY，用于检查位姿方向、表面重合和动态目标拖影。
+
+点数增加本身不能支持异常性能改善。若当前帧经过对齐后发生变化，或PLY显示普遍配准错误，必须停止后续实验。
+
+\subsection{F2：正常稳定性}
+
+F2在开发区间预先均匀选定的24个当前帧上运行单帧和稠密STU。两者只比较相同当前点。主要统计为MaxLogit中位数和第95百分位的变化、19类正常语义准确率和平均交并比。
+
+稠密STU只有在MaxLogit中位数增加不超过0.02、第95百分位增加不超过0.05、正常语义准确率下降不超过0.02时视为稳定。平均交并比用于解释哪些类别变化，不新增事后门槛。
+
+\subsection{F3：少量合成异常信号}
+
+F3在正常开发区间选取8个互不重叠的28帧片段。每个片段采样一个只含异常代理的固定世界，随后连续渲染全部帧。从每段第5帧开始产生24个候选在线输出，同一异常在相邻窗口中保持同一世界位置、形状、材质和射线观测。只有在2.5--50.0米范围内至少含5个异常点的当前帧才进入点级平均精确率计算；结果同时记录候选帧数和实际纳入帧数。
+
+两种条件在2.5--50.0米的相同当前点上计算点级平均精确率。每个世界产生一对结果，再以世界为配对单位执行10,000次自助重采样。只有F2通过，且
+
 \begin{equation}
-  \mathcal L=\frac12\frac{\sum_{i:y_i=1}\ell_i}{N_+}+\frac12\frac{\sum_{i:y_i=0}\ell_i}{N_-}.
+\Delta AP=AP_{\mathrm{dense}}-AP_{\mathrm{single}}
 \end{equation}
-若只有一类，则取该类损失的均值。这样类别权重由有效批次中的真实点数决定，不会让异常点极少和极多的窗口获得相同正类权重。
 
-训练模式互斥，预算单位也互斥。\texttt{tiny\_overfit}固定bank前8个窗口、种子2001、学习率$10^{-4}$、梯度累计1、恒定学习率和权重衰减0，只以最多500次优化器更新为预算，要求训练AP达到99\%或损失低于0.02。\texttt{pilot}固定128个窗口，也只使用优化器更新预算。它使用与正式训练分离的种子1001和1002：50次阶段要求六个学习率与累计步数组合形成有限、可审计结果；200次保留开发AP严格领先的两组；600次固定种子1002选出一组。调度器与权重衰减随后依次选择，完全平局按协议网格顺序裁决。R05在结果盲状态固定唯一配方和G2/G3阈值后，\texttt{formal}才在F01以epoch为唯一预算使用种子0、1和2。本文不预先指定尚未选择的正式学习率或训练时长。
+的95\%区间下界大于0，直接稠密STU才得到合成开发证据支持。
 
-\subsection{概率融合与官方指标}
+\subsection{F4：最小训练分支}
 
-对点$p=(f,r)$，令$\Omega(p)$为所有覆盖它的合法窗口，则最终分数为
-\begin{equation}
-  S_p=\frac{1}{|\Omega(p)|}\sum_{\mathcal W\in\Omega(p)}\sigma(z_p^{(\mathcal W)}).
-  \label{eq:fusion}
-\end{equation}
-系统先对每次出现的逻辑值取Sigmoid，再以64位浮点数求算术平均；不能先平均逻辑值，也不能跨序列融合。真实点键为$(\text{partition},\text{sequence},f,r)$。合成开发点还必须包含\texttt{world\_identity}，避免不同反事实世界中同名射线被误合并。
+F4只在F2或F3否定直接输入后启动。第一候选方法让五帧分别以原生单帧形式通过冻结STU，再把冻结特征和对齐后的几何送入一个小型异常头。训练样本来自多个在\texttt{train/206}上完整渲染的虚拟异常序列；相邻窗口复用同一物理帧。每轮可以从冻结窗口池抽样，避免重复计算全部窗口。
 
-点级评价沿用STU的AP、AUROC和FPR95，距离闭区间为$[2.5,50.0]$米；过滤后异常点少于5个的帧不进入官方点指标累计。除总体结果外，还按出现次数1至5报告。B0在同一覆盖域上计算，其相同单帧分数即使在多个窗口中重复加入，平均后数值不变。
+F1--F3完成前不规定F4的网络、损失和训练预算。大型Point Transformer只有在小型异常头被实际结果否定后才有讨论依据。
 
-D\_select检查点记录必须绑定实际\texttt{dev.json}，并保存24个片段各自的完整标签与融合分数数组；加载时重新计算逐片段AP和宏平均。正式G2/G3记录必须另行绑定\texttt{confirm.json}，并引用D\_confirm内容寻址的逐片段原始数组与正常安全原始数组。正式统计不得复用D\_select的指标。G3只读取F01选定的B2/B3检查点和真实G2裁决，不再训练或改选检查点。
+\section{评价、状态与限制}
 
-\section{数据角色与结果盲状态机}
+合成异常的主指标为点级平均精确率，AUROC和FPR95为辅助指标。所有条件使用相同距离掩码、当前点身份和标签。移动正常目标仍按原始语义计为正常；只有主异常结果为正时才报告该子组。
 
-\begin{table}[htbp]
-\centering
-\caption{数据用途与禁止事项}
-\label{tab:data-role}
-\fontsize{8.2pt}{10.2pt}\selectfont
-\begin{tabularx}{\textwidth}{L{2.25cm}L{2.25cm}L{3.15cm}Y}
-\toprule
-数据 & 窗口范围 & 唯一用途 & 禁止事项 \\
-\midrule
-正常206 & 帧0--448，445个合法起点 & 传感器校准、训练bank和全部新增参数更新 & 不接收201或真实异常梯度 \\
-正常201 & 排除重复源帧0--3，674个合法起点 & 24个D\_select、24个D\_confirm及6个S01片段 & 不更新AJAE参数；F01前不打开D\_confirm，S01前不打开环面片段 \\
-公开异常验证 & 19条官方序列 & 方法冻结后一次性迁移确认 & 不据此改结构、生成规则或阈值 \\
-隐藏测试 & 51条官方序列 & 最终冻结模型测试 & 不参与开发或调参 \\
-\bottomrule
-\end{tabularx}
-\end{table}
+当前权威协议为schema 33。F0的末帧坐标、成对冻结STU输入和F1--F3入口已经通过机械核验，当前状态是待执行的F1。当前没有schema 33真实几何统计、合成序列、训练检查点、正常确认结果、真实异常结果或隐藏测试结果。现阶段只能声称路线和实现已经收束，不能声称五帧输入改善了STU。
 
-D\_select与D\_confirm各由24个\texttt{DevelopmentClipWorld}组成，都使用与训练相同的生成机制，但源帧、世界身份和种子完全分离。每个片段先固定一个完整世界，再渲染9个连续扫描，形成5个重叠窗口。D\_select在R02生成，用于代理资格、先导与检查点选择。D\_confirm在F01选定全部正式检查点以前只保留密封计划，到G2才一次性生成，且只用于G2/G3正式统计。
+反事实渲染仍近似刚性扫描和首次回波，不覆盖扫描内运动畸变、束发散、多回波、多径及全部电子噪声。位姿对齐不能静止动态交通参与者。合成异常上的正向差异仍需公开真实异常序列确认，不能直接解释为真实道路泛化。
 
-三组计划在同一排序序列中分别占用位置0--23、24--47和48--53，以确保所有54个片段的源帧互不相交。后6个环面有符号距离场片段只用于S01生成机制与合成分布移位检查。S01到达前不得渲染或查看，也不得用于资格审查、超参数调节、检查点选择或方法修改。
+\section{预期产出}
 
-执行顺序为
-\begin{equation*}
-\mathrm{R00}\rightarrow\mathrm{R01}\rightarrow\mathrm{R02}\rightarrow\mathrm{R03}\rightarrow\mathrm{R04}\rightarrow\mathrm{R05}\rightarrow\mathrm{F01}\rightarrow\mathrm{G2}\rightarrow\mathrm{G3}\rightarrow\mathrm{S01}\rightarrow\mathrm{M01}\rightarrow\mathrm{V01}\rightarrow\mathrm{T01}.
-\end{equation*}
-F01使用D\_select完成全部B1/B2/B3正式训练与检查点选择。G2才打开D\_confirm并比较B1与B0；G3不再训练，在同一D\_confirm上比较B3与B1、B3与B2。只有两项结果都满足预注册标准，才支持联合稠密化的额外价值。S01验证真实G3裁决后，按冻结计划位置48--53生成6个环面留出片段。M01的B0、B1、B3点阈值只能由选中正式结果的原始正常安全证据派生。V01保存完整覆盖域的点身份、坐标、原始语义与分数数组，并重新计算官方指标；只有M01和通过的V01裁决同时绑定后，T01才可解封。
+若直接稠密STU得到支持，AJAE的核心产出将是一个无需训练的新输入构造及其正常安全和真实异常证据。若直接输入失败但小型异常头有效，AJAE的核心将转为冻结STU之后的多帧稠密特征适配。两条路线都必须由F1--F3的真实结果决定，而不能由预先设计的实验矩阵决定。
 
-\section{当前事实、局限与停止条件}
-
-当前协议为schema 32，权威节点是R02。schema 32以提交\texttt{0ceac1401654ddf43dd969a58269666bad1b6d9d}为修订基线，审查前schema 31状态由标签\texttt{schema31-preR02-audit}保存。R02的生成前阈值硬锁、物理观测捷径、冻结STU捷径和正常对照真实性审查已经实现。但D\_select尚未生成，\texttt{dev.json}的片段数和窗口数均为0；R02数值阈值仍为占位，生成入口会拒绝执行。D\_confirm的\texttt{confirm.json}也是零片段密封占位，在G2前不得渲染或查看。S01的6个环面片段只冻结了计划，在S01前同样不得渲染或查看。
-
-联合模型、双坐标训练bank、互斥预算、B1原生单帧推理、全点融合和D\_select/D\_confirm内容寻址证据路径已完成机械实现。小型确定性检查只验证实现语义。由于R02科学前置条件尚未通过，状态机不能越级把R03记为完成。R04还要求真实执行8个固定窗口的微型过拟合。当前没有生成schema 32训练bank，没有启动任何schema 32训练，也没有训练检查点、R05配方、F01正式模型、G2/G3结果、S01片段、M01冻结、真实异常验证结果或隐藏测试结果。schema 30与schema 31的失效输出只作为历史记录，不能重标为当前证据。
-
-反事实渲染只近似刚性扫描的OS1-128首次回波。它不模拟扫描内运动畸变、束发散、有限光斑、多回波、多径、全部电子噪声或隐藏表面。正常模板的观测凸包和程序化曲面都不是完整真实物体；同一渲染器也不能自动消除密度、接地、强度和可见性混杂。五帧位姿对齐只补偿自车运动，动态交通参与者不会因此静止。冻结STU证据仍可能对未知物体产生过度正常置信。
-
-若R02低层描述量能恢复标签，停止当前代理总体并修正生成或匹配；若B1不能通过微型过拟合，停止训练实现并查明监督或损失语义；若B3与B2不再只差扫描隔离，停止主比较；若正式G2或G3不满足R05预注册条件，分别否定当前代理监督或联合稠密化主张；若V01不支持迁移，结论必须限定在合成开发分布。任何失败都不能通过移动阈值或补做未预注册比较改写。
-
-\section{预期交付与复现要求}
-
-若后续真实实验支持研究问题，AJAE将提供三类可复核产出：由同一首次回波模型生成正常对照和异常代理的五帧反事实样本；一个不使用时间身份、显式保留联合密度并对全部回波输出的点网络；一套以稳定点身份进行全窗口概率融合并与STU官方指标对齐的评价流程。现阶段这些是待验证的实现目标，不是已成立的性能贡献。
-
-复现材料必须分别保存完整协议科学身份、训练bank内容规则身份、开发总体内容规则身份、世界说明、渲染器与STU身份、模型初始化、随机种子、优化器状态、实际检查点文件摘要、逐点预测和覆盖清单。开发、正式合成评价和公开真实评价必须同时保存内容寻址的原始指标数组，记录加载时独立复算，不能只保存汇总表。每个数字都应追溯到真实输出；模拟值、先导值和旧schema结果不得进入正式结果表。大体积bank生成前还需核对宿主磁盘的真实剩余空间，并采用有界缓存或分片，避免资源限制改变科学样本。
-
-\section*{数据、伦理与披露声明}
-
-\noindent\textbf{数据可得性。} STU数据、评价代码和相关模型资源由数据集作者发布\cite{stuofficial}。本研究使用的数据受原发布条款约束；反事实世界保存程序规格和身份，不重新发布原始扫描。
+\noindent\textbf{数据可得性。} STU数据、评价代码和模型资源由数据集作者发布\cite{stuofficial}。本研究不重新发布原始扫描。
 
 \noindent\textbf{伦理边界。} 本研究不新增道路采集，也不涉及人体或动物干预。若以后新增可识别图像或现场采集，应重新核对数据许可、隐私和机构审查要求。
 
-\noindent\textbf{利益冲突与资助。} 当前材料没有可核验的利益冲突或资助信息；正式投稿前由全体作者确认。
-
-\noindent\textbf{人工智能辅助。} 本文在文献核对、代码审查、文字修订和排版中使用生成式人工智能辅助。研究者负责核验引用、执行真实实验并审定科学结论；人工智能没有生成或替代本文中的实验数据。
+\noindent\textbf{人工智能辅助。} 本文在代码审查、文字修订和排版中使用生成式人工智能辅助。研究者负责执行真实实验并审定科学结论；人工智能没有生成或替代实验数据。
 
 \Needspace{12\baselineskip}
 \phantomsection
@@ -294,18 +210,6 @@ A. Nekrasov, M. Burdorf, S. Worrall, B. Leibe, and J. S. B. Perez. Spotting the 
 A. Nekrasov et al. STU Dataset: Data, Evaluation Code, Checkpoints, and Test Submission Instructions. Official repository, 2025--2026.
 \href{https://github.com/kumuji/stu_dataset}{Official repository}.
 
-\bibitem{li2026rel}
-Z. Li, Z. Xiang, J. Ao, J. West, and K. Khoshelham. Relative Energy Learning for LiDAR Out-of-Distribution Detection. \textit{ISPRS Journal of Photogrammetry and Remote Sensing}, vol. 239, 2026, pp. 334--346.
-\href{https://doi.org/10.1016/j.isprsjprs.2026.05.051}{DOI}.
-
-\bibitem{li2026ndp}
-Z. Li, Z. Xiang, J. Ao, F. Liu, J. West, and K. Khoshelham. Neural Distribution Prior for LiDAR Out-of-Distribution Detection. \textit{CVPR}, 2026, pp. 3035--3045.
-\href{https://openaccess.thecvf.com/content/CVPR2026/html/Li_Neural_Distribution_Prior_for_LiDAR_Out-of-Distribution_Detection_CVPR_2026_paper.html}{Official paper page}.
-
-\bibitem{mosco2026lido}
-S. Mosco, D. Fusaro, and A. Pretto. Learning to Identify Out-of-Distribution Objects for 3D LiDAR Anomaly Segmentation. \textit{CVPR}, 2026, pp. 17204--17214.
-\href{https://openaccess.thecvf.com/content/CVPR2026/papers/Mosco_Learning_to_Identify_Out-of-Distribution_Objects_for_3D_LiDAR_Anomaly_Segmentation_CVPR_2026_paper.pdf}{Official paper}.
-
 \bibitem{li2023memoryseg}
 E. Li, S. Casas, and R. Urtasun. MemorySeg: Online LiDAR Semantic Segmentation with a Latent Memory. \textit{ICCV}, 2023, pp. 745--754.
 \href{https://openaccess.thecvf.com/content/ICCV2023/html/Li_MemorySeg_Online_LiDAR_Semantic_Segmentation_ICCV_2023_paper.html}{Official paper page}.
@@ -313,18 +217,6 @@ E. Li, S. Casas, and R. Urtasun. MemorySeg: Online LiDAR Semantic Segmentation w
 \bibitem{wu2024taseg}
 X. Wu et al. TASeg: Temporal Aggregation Network for LiDAR Semantic Segmentation. \textit{CVPR}, 2024, pp. 15311--15320.
 \href{https://openaccess.thecvf.com/content/CVPR2024/html/Wu_TASeg_Temporal_Aggregation_Network_for_LiDAR_Semantic_Segmentation_CVPR_2024_paper.html}{Official paper page}.
-
-\bibitem{zhao2021pointtransformer}
-H. Zhao, L. Jiang, J. Jia, P. H. S. Torr, and V. Koltun. Point Transformer. \textit{ICCV}, 2021, pp. 16259--16268.
-\href{https://openaccess.thecvf.com/content/ICCV2021/html/Zhao_Point_Transformer_ICCV_2021_paper.html}{Official paper page}.
-
-\bibitem{wu2022pointtransformerv2}
-X. Wu, Y. Lao, L. Jiang, X. Liu, and H. Zhao. Point Transformer V2: Grouped Vector Attention and Partition-Based Pooling. \textit{NeurIPS}, vol. 35, 2022.
-\href{https://proceedings.neurips.cc/paper_files/paper/2022/hash/d78ece6613953f46501b958b7bb4582f-Abstract-Conference.html}{Official paper page}.
-
-\bibitem{yilmaz2024mask4former}
-K. Yilmaz, J. Schult, A. Nekrasov, and B. Leibe. Mask4Former: Mask Transformer for 4D Panoptic Segmentation. \textit{ICRA}, 2024, pp. 9418--9425.
-\href{https://doi.org/10.1109/ICRA57147.2024.10610262}{DOI}.
 
 \end{thebibliography}
 \end{multicols}

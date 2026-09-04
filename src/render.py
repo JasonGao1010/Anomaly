@@ -37,13 +37,13 @@ from sklearn.tree import DecisionTreeClassifier
 
 try:
     from .scene import (
+        CurrentFramePose,
         PointLabels,
         SourceFrame,
-        WindowReferencePose,
         make_source_frame,
     )
 except ImportError:  # Direct module execution and small isolated checks.
-    from scene import PointLabels, SourceFrame, WindowReferencePose, make_source_frame
+    from scene import CurrentFramePose, PointLabels, SourceFrame, make_source_frame
 
 
 LASER_BEAMS = 128
@@ -57,8 +57,6 @@ SUPPORT_POOL_SHA256_BY_SEQUENCE = {
 }
 SUPPORT_POOL_SEMANTICS = (40, 48, 49)
 CALIBRATION_FORMAT = "ajae-sensor-calibration-v4"
-DEVELOPMENT_FORMAT = "ajae-development-window-worlds-v3"
-DEVELOPMENT_PROTOCOL_SCHEMA = 32
 PROCEDURAL_GENERATOR_SCHEMA = 7
 SHAPE_FAMILIES = ("general", "blocky", "flat", "elongated")
 AXIS_PERMUTATIONS = (
@@ -4749,7 +4747,7 @@ def source_observation_identity(source: SourceFrame) -> str:
 
     if not isinstance(source, SourceFrame):
         raise TypeError("source observation identity requires a SourceFrame")
-    digest = hashlib.sha256(b"AJAE-schema32-rendered-source-observation\0")
+    digest = hashlib.sha256(b"AJAE-schema33-rendered-source-observation\0")
     digest.update(
         json.dumps(
             {
@@ -4893,7 +4891,7 @@ class WindowWorld:
     world: WorldSpec
     report: WorldGenerationReport
     renderer_identity: str
-    reference_pose: WindowReferencePose
+    current_pose: CurrentFramePose
     rendered_frames: tuple[
         RenderedFrame, RenderedFrame, RenderedFrame, RenderedFrame, RenderedFrame
     ]
@@ -4919,8 +4917,8 @@ class WindowWorld:
             or any(value not in "0123456789abcdef" for value in self.renderer_identity)
         ):
             raise RenderError("renderer_identity must be a lowercase SHA-256 digest")
-        if not isinstance(self.reference_pose, WindowReferencePose):
-            raise TypeError("WindowWorld requires a symmetric reference pose")
+        if not isinstance(self.current_pose, CurrentFramePose):
+            raise TypeError("WindowWorld requires the latest scan pose")
         rendered = tuple(self.rendered_frames)
         if len(rendered) != 5 or tuple(item.frame_id for item in rendered) != frame_ids:
             raise RenderError("WindowWorld rendered frames do not match its identity")
@@ -4929,6 +4927,12 @@ class WindowWorld:
             for item in rendered
         ):
             raise RenderError("WindowWorld mixes source sequences")
+        expected_current = CurrentFramePose.from_source(rendered[-1].source)
+        if not np.array_equal(
+            self.current_pose.world_from_current,
+            expected_current.world_from_current,
+        ):
+            raise RenderError("WindowWorld current pose differs from its latest scan")
         descriptors = tuple(self.descriptors)
         expected_objects = tuple(item.object_id for item in self.world.objects)
         if tuple(item.object_id for item in descriptors) != expected_objects:
@@ -4983,7 +4987,7 @@ def _window_entity_descriptors(
     world: WorldSpec,
     report: WorldGenerationReport,
     rendered_frames: Sequence[RenderedFrame],
-    reference_pose: WindowReferencePose,
+    current_pose: CurrentFramePose,
     ray_grid: RayGrid,
     sensor: SensorCalibration,
     *,
@@ -5010,7 +5014,7 @@ def _window_entity_descriptors(
         }
         for item in world.objects
     }
-    window_from_world = reference_pose.window_from_world
+    current_from_world = current_pose.current_from_world
     by_id = {item.object_id: item for item in world.objects}
     lower_support_by_id = {
         item.object_id: item.shape.minimum_z_m(xy_resolution=33, z_steps=129)
@@ -5043,7 +5047,7 @@ def _window_entity_descriptors(
             xyz_sensor = source.xyzi[slots, :3].astype(np.float64, copy=False)
             xyz_world = xyz_sensor @ rotation.T + origin
             xyz_window = (
-                xyz_world @ window_from_world[:3, :3].T + window_from_world[:3, 3]
+                xyz_world @ current_from_world[:3, :3].T + current_from_world[:3, 3]
             )
             keys = np.floor(xyz_window / voxel_size).astype(np.int64)
             record["points"].append(xyz_window)
@@ -5128,9 +5132,7 @@ def render_window_world(
     if any(item.sequence_id != world.source_sequence_id for item in frames):
         raise RenderError("WindowWorld source scans and world use different sequences")
     frozen_world_identity = world.identity
-    reference = WindowReferencePose.from_sensor_poses(
-        tuple(item.lidar_pose for item in frames)
-    )
+    current_pose = CurrentFramePose.from_source(frames[-1])
     rendered = tuple(render_frames(frames, world, ray_grid, sensor))
     if world.identity != frozen_world_identity:
         raise RenderError("WorldSpec changed while its five scans were rendered")
@@ -5138,7 +5140,7 @@ def render_window_world(
         world,
         report,
         rendered,
-        reference,
+        current_pose,
         ray_grid,
         sensor,
         density_voxel_size_m=density_voxel_size_m,
@@ -5149,7 +5151,7 @@ def render_window_world(
         world=world,
         report=report,
         renderer_identity=renderer_identity,
-        reference_pose=reference,
+        current_pose=current_pose,
         rendered_frames=rendered,  # type: ignore[arg-type]
         descriptors=descriptors,
     )
@@ -5779,7 +5781,7 @@ def window_shortcut_audit(
 
 @dataclass(frozen=True, slots=True)
 class DevelopmentClipWorld:
-    """One frozen WorldSpec observed by every overlapping window of a clip."""
+    """One frozen anomaly world observed throughout a contiguous source segment."""
 
     clip_start: int
     frame_ids: tuple[int, ...]
@@ -5938,14 +5940,12 @@ def _render_development_clip_world(
     for offset in range(len(frames) - 4):
         source_slice = frames[offset : offset + 5]
         rendered_slice = rendered[offset : offset + 5]
-        reference = WindowReferencePose.from_sensor_poses(
-            tuple(item.lidar_pose for item in source_slice)
-        )
+        current_pose = CurrentFramePose.from_source(source_slice[-1])
         descriptors = _window_entity_descriptors(
             world,
             report,
             rendered_slice,
-            reference,
+            current_pose,
             ray_grid,
             sensor,
             density_voxel_size_m=density_voxel_size_m,
@@ -5957,7 +5957,7 @@ def _render_development_clip_world(
                 world=world,
                 report=report,
                 renderer_identity=renderer_identity,
-                reference_pose=reference,
+                current_pose=current_pose,
                 rendered_frames=rendered_slice,  # type: ignore[arg-type]
                 descriptors=descriptors,
             )
@@ -6035,7 +6035,6 @@ def _render_held_out_torus_clip_world(
 
 
 def sample_development_clip_world(
-    normal_template_library: Sequence[NormalTemplateShape],
     support_pool: QualifiedSupportPool,
     obstacles: ObservedObstacleIndex,
     sources: Sequence[SourceFrame],
@@ -6047,7 +6046,7 @@ def sample_development_clip_world(
     density_voxel_size_m: float = 0.1,
     maximum_attempts: int = 48,
 ) -> DevelopmentClipWorld:
-    """Freeze one mixed development world before rendering its complete clip."""
+    """Freeze one anomaly-only development world before rendering the full segment."""
 
     frames = tuple(sorted(tuple(sources), key=lambda item: item.frame_id))
     if len(frames) < 9:
@@ -6057,10 +6056,10 @@ def sample_development_clip_world(
         world_seed = root_seed + 10_000_019 * observation_attempt
         try:
             world, report = sample_world_spec(
-                normal_template_library,
+                (),
                 support_pool,
                 obstacles,
-                "mixed",
+                "anomaly_only",
                 world_seed,
                 source_sequence_id=201,
                 support_frame_ids=tuple(item.frame_id for item in frames),
@@ -6080,202 +6079,6 @@ def sample_development_clip_world(
     raise PlacementError(
         f"development clip failed {maximum_attempts} visibility attempts"
     )
-
-
-def _development_payload_from_manifests(
-    manifests: Sequence[Mapping[str, object]],
-    *,
-    protocol_identity: str,
-    plan_identity: str,
-    population_role: str = "selection",
-) -> dict[str, object]:
-    """Build the small formal manifest after runtime point arrays are released."""
-
-    normalized: list[dict[str, object]] = []
-    for manifest in manifests:
-        item = dict(manifest)
-        report = item.get("report")
-        if isinstance(report, Mapping):
-            report = json.loads(json.dumps(report, allow_nan=True))
-            for placement in report.get("placements", []):
-                proposals = placement.get("proposal_minimum_obstacle_sdf_m")
-                if isinstance(proposals, list):
-                    placement["proposal_minimum_obstacle_sdf_m"] = [
-                        None
-                        if isinstance(value, float)
-                        and math.isinf(value)
-                        and value > 0.0
-                        else value
-                        for value in proposals
-                    ]
-                value = placement.get("minimum_obstacle_sdf_m")
-                if isinstance(value, float) and math.isinf(value) and value > 0.0:
-                    placement["minimum_obstacle_sdf_m"] = None
-            item["report"] = report
-        normalized.append(item)
-    items = tuple(normalized)
-    identities = [item.get("identity") for item in items]
-    if len(set(identities)) != len(items):
-        raise RenderError("development clip identities must be unique")
-    if items:
-        if (
-            len(items) != 24
-            or any(item.get("mechanism") != "in_generator" for item in items)
-            or any(
-                not isinstance(item.get("frame_ids"), list)
-                or len(item["frame_ids"]) != 9  # type: ignore[arg-type]
-                or not isinstance(item.get("windows"), list)
-                or len(item["windows"]) != 5  # type: ignore[arg-type]
-                for item in items
-            )
-        ):
-            raise RenderError(
-                "formal development data require 24 in-generator clips, each "
-                "with nine frames and five windows"
-            )
-    for value, name in (
-        (protocol_identity, "protocol_identity"),
-        (plan_identity, "plan_identity"),
-    ):
-        if (
-            not isinstance(value, str)
-            or len(value) != 64
-            or any(character not in "0123456789abcdef" for character in value)
-        ):
-            raise RenderError(f"{name} must be a lowercase SHA-256 digest")
-    if population_role not in {"selection", "confirmation"}:
-        raise RenderError("synthetic population role is unsupported")
-    identity_format = (
-        "ajae-schema32-selection-population-v1"
-        if population_role == "selection"
-        else "ajae-schema32-confirmation-population-v1"
-    )
-    population_identity = (
-        None
-        if not items
-        else hashlib.sha256(
-            json.dumps(
-                {
-                    "format": identity_format,
-                    "protocol_identity": protocol_identity,
-                    "plan_identity": plan_identity,
-                    "clips": items,
-                },
-                sort_keys=True,
-                separators=(",", ":"),
-            ).encode()
-        ).hexdigest()
-    )
-    status = (
-        "not_generated_R02"
-        if not items and population_role == "selection"
-        else "sealed_not_generated_before_G2"
-        if not items
-        else "definitions_only_unvalidated"
-        if population_role == "selection"
-        else "confirmation_frozen"
-    )
-    return {
-        "format": DEVELOPMENT_FORMAT,
-        "protocol_schema": DEVELOPMENT_PROTOCOL_SCHEMA,
-        "protocol_identity": protocol_identity,
-        "plan_identity": plan_identity,
-        "population_identity": population_identity,
-        "sequence_id": 201,
-        "status": status,
-        "validation": {},
-        "clip_count": len(items),
-        "window_count": sum(len(item["windows"]) for item in items),  # type: ignore[arg-type]
-        "clips": list(items),
-        "scientific_verdict": None,
-    }
-
-
-def development_worlds_payload(
-    clips: Iterable[DevelopmentClipWorld],
-    *,
-    protocol_identity: str,
-    plan_identity: str,
-    population_role: str = "selection",
-) -> dict[str, object]:
-    """Serialize formal definitions while releasing each clip's point arrays."""
-
-    manifests: list[Mapping[str, object]] = []
-    for item in clips:
-        if not isinstance(item, DevelopmentClipWorld):
-            raise TypeError("clips must contain DevelopmentClipWorld values")
-        manifests.append(item.to_manifest())
-    return _development_payload_from_manifests(
-        manifests,
-        protocol_identity=protocol_identity,
-        plan_identity=plan_identity,
-        population_role=population_role,
-    )
-
-
-def save_development_worlds(
-    path: Path | str,
-    clips: Iterable[DevelopmentClipWorld],
-    *,
-    protocol_identity: str,
-    plan_identity: str,
-    population_role: str = "selection",
-) -> None:
-    """Atomically save fixed schema-32 development clip definitions."""
-
-    payload = development_worlds_payload(
-        clips,
-        protocol_identity=protocol_identity,
-        plan_identity=plan_identity,
-        population_role=population_role,
-    )
-    target = Path(path).expanduser().resolve()
-    target.parent.mkdir(parents=True, exist_ok=True)
-    if target.exists():
-        try:
-            existing = json.loads(target.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as error:
-            raise RenderError(
-                "refusing to replace an unreadable development artifact"
-            ) from error
-        replaceable_placeholder = (
-            isinstance(existing, Mapping)
-            and existing.get("format") == DEVELOPMENT_FORMAT
-            and existing.get("protocol_schema") == DEVELOPMENT_PROTOCOL_SCHEMA
-            and existing.get("sequence_id") == 201
-            and existing.get("status")
-            == (
-                "not_generated_R02"
-                if population_role == "selection"
-                else "sealed_not_generated_before_G2"
-            )
-            and existing.get("population_identity") is None
-            and existing.get("validation") == {}
-            and existing.get("clip_count") == 0
-            and existing.get("window_count") == 0
-            and existing.get("clips") == []
-            and existing.get("scientific_verdict") is None
-        )
-        if not replaceable_placeholder:
-            raise RenderError("refusing to replace an existing development artifact")
-    temporary = target.with_suffix(target.suffix + ".tmp")
-    try:
-        with temporary.open("w", encoding="utf-8") as stream:
-            json.dump(
-                payload,
-                stream,
-                ensure_ascii=False,
-                indent=2,
-                sort_keys=True,
-                allow_nan=False,
-            )
-            stream.write("\n")
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, target)
-    finally:
-        if temporary.exists():
-            temporary.unlink()
 
 
 @dataclass(frozen=True, slots=True)
@@ -6494,7 +6297,7 @@ def load_qualified_support_pool(
 
 @dataclass(frozen=True, slots=True)
 class ObservedObstacleIndex:
-    """All actually observed non-ground train/206 returns in world coordinates."""
+    """Observed non-ground returns from one labelled normal train sequence."""
 
     points_world_m: np.ndarray
     identities: np.ndarray
@@ -7451,7 +7254,7 @@ def sample_world_spec(
             raise RenderError("support_frame_ids cannot be empty")
         allowed_frames = frozenset(members)
     normal_count, anomaly_count = _training_entity_counts(world_type, world_seed)
-    if (normal_count or anomaly_count) and (
+    if normal_count and (
         not templates
         or any(not isinstance(item, NormalTemplateShape) for item in templates)
         or any(item.source_sequence_id != 206 for item in templates)
@@ -7573,7 +7376,7 @@ def sample_world_spec(
                     obstacles,
                     object_id=entity_index + 1,
                     label=label,
-                    proposal_namespace="schema32-window-world-v1",
+                    proposal_namespace="schema33-sequence-world-v1",
                     proposal_stream=entity_seed,
                     yaw_rad=yaw,
                     material_seed=material_seed,
@@ -7668,7 +7471,7 @@ def _sample_held_out_torus_world_spec(
                 obstacles,
                 object_id=1,
                 label="anomaly-proxy",
-                proposal_namespace="schema32-held-out-torus-v1",
+                proposal_namespace="ajae-held-out-torus-v1",
                 proposal_stream=entity_seed,
                 yaw_rad=yaw,
                 material_seed=material_seed,
