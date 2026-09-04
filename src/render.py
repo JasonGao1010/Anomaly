@@ -16,7 +16,7 @@ import math
 import os
 from collections import deque
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass, field, fields, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Literal, TypeAlias
 
@@ -30,30 +30,28 @@ for _thread_variable in (
 
 import numpy as np
 from scipy import ndimage
-from scipy.optimize import brentq, differential_evolution, linear_sum_assignment
-from scipy.spatial import ConvexHull, QhullError, cKDTree
+from scipy.optimize import brentq, differential_evolution
+from scipy.spatial import cKDTree
 from scipy.stats import qmc
-from sklearn.tree import DecisionTreeClassifier
 
 try:
     from .scene import (
-        CurrentFramePose,
         PointLabels,
         SourceFrame,
         make_source_frame,
     )
 except ImportError:  # Direct module execution and small isolated checks.
-    from scene import CurrentFramePose, PointLabels, SourceFrame, make_source_frame
+    from scene import PointLabels, SourceFrame, make_source_frame
 
 
 LASER_BEAMS = 128
 GROUND_SEMANTIC_IDS = (40, 44, 48, 49, 60)
 WORLD_FORMAT = "ajae-world-v3"
-WORLD_REPORT_FORMAT = "ajae-world-generation-report-v2"
+WORLD_REPORT_FORMAT = "ajae-world-generation-report-v3"
 SUPPORT_POOL_FORMAT = "ajae-qualified-support-pool-v1"
 SUPPORT_POOL_SHA256_BY_SEQUENCE = {
-    206: "0e6e7299157f5e9ced0716f6dd14881c66ba1bca0cc9c372550e56f426ea844d",
-    201: "fc3646fbc145cdc29d2cf203835a3e0018bacbc6eaf714e091d21f7b93bfaf50",
+    206: "a09ce4701c78ef72d0ea6de2ff5fb98f74e37ffd34f0eb9474f46994494bbb0a",
+    201: "47bed8f59f4d9c21c5deaeec6892dd1820a559737c6d07f2ef991c7733422119",
 }
 SUPPORT_POOL_SEMANTICS = (40, 48, 49)
 CALIBRATION_FORMAT = "ajae-sensor-calibration-v4"
@@ -74,16 +72,8 @@ SCHEMA7_PARENT_TAU_STREAM = 3001
 SCHEMA7_CHILD_TAU_STREAM = 3002
 SYNTHETIC_INSTANCE_BASE = 60_000
 MAX_OBJECT_ID = np.iinfo(np.uint16).max - SYNTHETIC_INSTANCE_BASE
-OBJECT_LABELS = ("normal-control", "anomaly-proxy")
-ObjectLabel: TypeAlias = Literal["normal-control", "anomaly-proxy"]
-WORLD_TYPES = ("pure_normal", "control_only", "mixed", "anomaly_only")
-WorldType: TypeAlias = Literal["pure_normal", "control_only", "mixed", "anomaly_only"]
-NORMAL_TEMPLATE_SEMANTICS = frozenset((10, 11, 15, 18, 20, 30, 31, 32))
-NORMAL_SEMANTIC_TARGET = {10: 0, 11: 1, 15: 2, 18: 3, 20: 4, 30: 5, 31: 6, 32: 7}
-VEHICLE_TEMPLATE_SEMANTICS = frozenset((10, 11, 15, 18, 20))
-PERSON_RIDER_TEMPLATE_SEMANTICS = frozenset((30, 31, 32))
-VEHICLE_SUPPORT_SEMANTICS = frozenset((40,))
-PERSON_RIDER_SUPPORT_SEMANTICS = frozenset((40, 48))
+OBJECT_LABELS = ("anomaly-proxy",)
+ObjectLabel: TypeAlias = Literal["anomaly-proxy"]
 DEFAULT_RANGE_EDGES_M = (0.0, 10.0, 20.0, 30.0, 40.0, 50.0, 120.0)
 DEFAULT_INCIDENCE_EDGES_RAD = (
     0.0,
@@ -2311,440 +2301,14 @@ def _sampled_sdf_intersection(
     return _freeze(distance), _freeze(normal), _freeze(valid)
 
 
-@dataclass(frozen=True, slots=True)
-class NormalTemplateShape:
-    """Closed convex-hull approximation of one labelled normal instance from 206."""
-
-    vertices_m: np.ndarray
-    faces: np.ndarray
-    source_sequence_id: int
-    source_frame_id: int
-    raw_semantic_id: int
-    source_instance_id: int
-    source_center_sensor_m: tuple[float, float, float]
-    scale_xyz: tuple[float, float, float] = (1.0, 1.0, 1.0)
-    plane_normals: np.ndarray = field(init=False, repr=False, compare=False)
-    plane_offsets: np.ndarray = field(init=False, repr=False, compare=False)
-    hull_volume_m3: float = field(init=False)
-
-    def __post_init__(self) -> None:
-        vertices = np.asarray(self.vertices_m, dtype=np.float64)
-        if vertices.ndim != 2 or vertices.shape[1] != 3 or vertices.shape[0] < 4:
-            raise RenderError("normal template needs at least four 3D hull vertices")
-        if not np.isfinite(vertices).all():
-            raise RenderError("normal template vertices must be finite")
-        if _integer("source_sequence_id", self.source_sequence_id) != 206:
-            raise RenderError("normal templates must be extracted only from train/206")
-        _integer("source_frame_id", self.source_frame_id)
-        semantic = _integer("raw_semantic_id", self.raw_semantic_id)
-        if semantic not in NORMAL_TEMPLATE_SEMANTICS:
-            raise RenderError(
-                "normal template semantic is not an allowed instance class"
-            )
-        _integer("source_instance_id", self.source_instance_id, minimum=1)
-        center = _tuple_values("source_center_sensor_m", self.source_center_sensor_m, 3)
-        scale = _tuple_values("scale_xyz", self.scale_xyz, 3)
-        if any(not 0.9 <= value <= 1.1 for value in scale):
-            raise RenderError("normal-template scale factors must lie in [0.9,1.1]")
-        try:
-            hull = ConvexHull(vertices)
-        except QhullError as error:
-            raise RenderError(
-                "normal instance does not form a finite 3D convex hull"
-            ) from error
-        if not math.isfinite(float(hull.volume)) or hull.volume <= 1.0e-6:
-            raise RenderError("normal template convex hull has negligible volume")
-        hull_vertices = vertices[np.asarray(hull.vertices, dtype=np.int64)]
-        hull = ConvexHull(hull_vertices)
-        equations = np.asarray(hull.equations, dtype=np.float64)
-        object.__setattr__(self, "vertices_m", _freeze(hull_vertices))
-        object.__setattr__(
-            self, "faces", _freeze(np.asarray(hull.simplices, dtype=np.int32))
-        )
-        object.__setattr__(self, "source_center_sensor_m", center)
-        object.__setattr__(self, "scale_xyz", scale)
-        object.__setattr__(self, "plane_normals", _freeze(equations[:, :3]))
-        object.__setattr__(self, "plane_offsets", _freeze(equations[:, 3]))
-        object.__setattr__(self, "hull_volume_m3", float(hull.volume))
-
-    @classmethod
-    def from_source_frame(
-        cls,
-        frame: SourceFrame,
-        *,
-        raw_semantic_id: int,
-        instance_id: int,
-        source_sequence_id: int = 206,
-        scale_xyz: Sequence[float] = (1.0, 1.0, 1.0),
-        maximum_points: int = 4096,
-    ) -> "NormalTemplateShape":
-        """Extract one labelled single-frame instance and close it by a convex hull."""
-
-        if frame.labels is None:
-            raise RenderError(
-                "normal-template extraction requires packed instance labels"
-            )
-        if (
-            frame.partition != "train"
-            or frame.sequence_id != 206
-            or source_sequence_id != 206
-        ):
-            raise RenderError(
-                "normal-template extraction requires an identified train/206 frame"
-            )
-        if type(maximum_points) is not int or maximum_points < 16:
-            raise RenderError("maximum_points must be an integer >=16")
-        semantic = _integer("raw_semantic_id", raw_semantic_id)
-        instance = _integer("instance_id", instance_id, minimum=1)
-        selected = (
-            (frame.labels.semantic == np.uint16(semantic))
-            & (frame.labels.instance == np.uint16(instance))
-            & ~np.asarray(frame.zero_slot_mask, dtype=np.bool_)
-        )
-        points = np.asarray(frame.xyzi[selected, :3], dtype=np.float64)
-        if points.shape[0] < 4:
-            raise RenderError("normal instance has fewer than four visible points")
-        if points.shape[0] > maximum_points:
-            keep = np.linspace(0, points.shape[0] - 1, maximum_points, dtype=np.int64)
-            points = points[keep]
-        center = 0.5 * (points.min(axis=0) + points.max(axis=0))
-        factors = np.asarray(_tuple_values("scale_xyz", scale_xyz, 3), dtype=np.float64)
-        local = (points - center) * factors
-        try:
-            hull = ConvexHull(local)
-        except QhullError as error:
-            raise RenderError("normal instance points are not volumetric") from error
-        return cls(
-            vertices_m=local[np.asarray(hull.vertices, dtype=np.int64)],
-            faces=np.asarray(hull.simplices, dtype=np.int32),
-            source_sequence_id=source_sequence_id,
-            source_frame_id=int(frame.frame_id),
-            raw_semantic_id=semantic,
-            source_instance_id=instance,
-            source_center_sensor_m=tuple(map(float, center)),
-            scale_xyz=tuple(map(float, factors)),
-        )
-
-    @property
-    def bound_radius_m(self) -> float:
-        return float(np.max(np.linalg.norm(self.vertices_m, axis=1))) + 1.0e-6
-
-    def local_bounds(self, *, resolution: int = 0) -> tuple[np.ndarray, np.ndarray]:
-        del resolution
-        return self.vertices_m.min(axis=0), self.vertices_m.max(axis=0)
-
-    def minimum_z_m(self, *, xy_resolution: int = 0, z_steps: int = 0) -> float:
-        del xy_resolution, z_steps
-        return float(np.min(self.vertices_m[:, 2]))
-
-    def signed_distance(self, points_local: np.ndarray) -> np.ndarray:
-        points = np.asarray(points_local, dtype=np.float64)
-        if points.ndim < 1 or points.shape[-1] != 3 or not np.isfinite(points).all():
-            raise RenderError("points_local must be finite [...,3]")
-        return np.max(points @ self.plane_normals.T + self.plane_offsets, axis=-1)
-
-    def intersect(
-        self,
-        origin_local: np.ndarray,
-        directions_local: np.ndarray,
-        *,
-        steps: int = 0,
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        del steps
-        directions = np.asarray(directions_local, dtype=np.float64)
-        origin = np.asarray(origin_local, dtype=np.float64)
-        if origin.shape == (3,):
-            origin = np.broadcast_to(origin, directions.shape)
-        if (
-            origin.shape != directions.shape
-            or directions.ndim != 2
-            or directions.shape[1] != 3
-        ):
-            raise RenderError("ray origins and directions must be [N,3]")
-        lengths = np.linalg.norm(directions, axis=1)
-        if not np.isfinite(origin).all() or np.any(lengths <= EPSILON):
-            raise RenderError("convex-hull rays must be finite and nonzero")
-        directions = directions / lengths[:, None]
-        count = directions.shape[0]
-        distance = np.full(count, np.inf, dtype=np.float64)
-        normals = np.zeros((count, 3), dtype=np.float64)
-        for start in range(0, count, 4096):
-            stop = min(start + 4096, count)
-            o = origin[start:stop]
-            d = directions[start:stop]
-            numerator = -(o @ self.plane_normals.T + self.plane_offsets)
-            denominator = d @ self.plane_normals.T
-            parallel_outside = np.any(
-                (np.abs(denominator) <= EPSILON) & (numerator < 0.0), axis=1
-            )
-            lower_terms = np.full_like(denominator, -np.inf)
-            upper_terms = np.full_like(denominator, np.inf)
-            np.divide(
-                numerator,
-                denominator,
-                out=lower_terms,
-                where=denominator < -EPSILON,
-            )
-            np.divide(
-                numerator,
-                denominator,
-                out=upper_terms,
-                where=denominator > EPSILON,
-            )
-            enter_plane = np.argmax(lower_terms, axis=1)
-            exit_plane = np.argmin(upper_terms, axis=1)
-            enter = np.max(lower_terms, axis=1)
-            exit_distance = np.min(upper_terms, axis=1)
-            inside = np.all(numerator >= -1.0e-8, axis=1)
-            candidate = np.where(inside, exit_distance, enter)
-            valid = (
-                ~parallel_outside
-                & (exit_distance >= np.maximum(enter, 0.0))
-                & (candidate > 1.0e-5)
-            )
-            local_ids = np.flatnonzero(valid)
-            if local_ids.size:
-                distance[start + local_ids] = candidate[local_ids]
-                plane = np.where(inside, exit_plane, enter_plane)[local_ids]
-                normals[start + local_ids] = self.plane_normals[plane]
-        return _freeze(distance), _freeze(normals), _freeze(np.isfinite(distance))
-
-    def geometry_report(self, *, resolution: int = 0) -> dict[str, float | int | bool]:
-        del resolution
-        lower, upper = self.local_bounds()
-        return {
-            "bounded": True,
-            "closed": True,
-            "components": 1,
-            "vertices": int(self.vertices_m.shape[0]),
-            "faces": int(self.faces.shape[0]),
-            "volume_m3": self.hull_volume_m3,
-            **{
-                f"minimum_{axis}_m": float(lower[index])
-                for index, axis in enumerate("xyz")
-            },
-            **{
-                f"maximum_{axis}_m": float(upper[index])
-                for index, axis in enumerate("xyz")
-            },
-        }
-
-    def rescaled(self, scale_xyz: Sequence[float]) -> "NormalTemplateShape":
-        factors = np.asarray(_tuple_values("scale_xyz", scale_xyz, 3), dtype=np.float64)
-        combined = factors * np.asarray(self.scale_xyz, dtype=np.float64)
-        if np.any((combined < 0.9) | (combined > 1.1)):
-            raise RenderError("combined normal-template scale lies outside [0.9,1.1]")
-        return NormalTemplateShape(
-            vertices_m=self.vertices_m * factors,
-            faces=self.faces,
-            source_sequence_id=self.source_sequence_id,
-            source_frame_id=self.source_frame_id,
-            raw_semantic_id=self.raw_semantic_id,
-            source_instance_id=self.source_instance_id,
-            source_center_sensor_m=self.source_center_sensor_m,
-            scale_xyz=tuple(map(float, combined)),
-        )
-
-    def to_dict(self) -> dict[str, object]:
-        return {
-            "kind": "normal-template-convex-hull",
-            "vertices_m": self.vertices_m.tolist(),
-            "faces": self.faces.tolist(),
-            "source_sequence_id": self.source_sequence_id,
-            "source_frame_id": self.source_frame_id,
-            "raw_semantic_id": self.raw_semantic_id,
-            "source_instance_id": self.source_instance_id,
-            "source_center_sensor_m": list(self.source_center_sensor_m),
-            "scale_xyz": list(self.scale_xyz),
-        }
-
-    @classmethod
-    def from_dict(cls, value: Mapping[str, object]) -> "NormalTemplateShape":
-        plain = dict(value)
-        if plain.pop("kind", None) != "normal-template-convex-hull":
-            raise RenderError("normal-template JSON has the wrong geometry kind")
-        try:
-            return cls(**plain)  # type: ignore[arg-type]
-        except TypeError as error:
-            raise RenderError(f"invalid normal-template JSON: {error}") from error
-
-
-@dataclass(frozen=True, slots=True)
-class HeldOutTorusShape:
-    """Independent closed torus SDF reserved for generator-held-out diagnosis."""
-
-    major_radius_m: float
-    tube_radius_m: float
-
-    def __post_init__(self) -> None:
-        major = _finite_scalar("major_radius_m", self.major_radius_m)
-        tube = _finite_scalar("tube_radius_m", self.tube_radius_m)
-        if not 0.15 <= major <= 2.0 or not 0.04 <= tube < major:
-            raise RenderError("held-out torus radii are outside their stable range")
-        object.__setattr__(self, "major_radius_m", major)
-        object.__setattr__(self, "tube_radius_m", tube)
-
-    @classmethod
-    def sample(
-        cls,
-        seed: int,
-        *,
-        size_m_range: tuple[float, float] = (0.4, 3.0),
-    ) -> "HeldOutTorusShape":
-        rng = np.random.default_rng(_integer("seed", seed))
-        minimum, maximum = _tuple_values("size_m_range", size_m_range, 2)
-        if not 0.4 <= minimum <= maximum <= 3.0:
-            raise RenderError("held-out torus size range must lie in [0.4,3.0]")
-        outer_radius = 0.5 * float(rng.uniform(minimum, maximum))
-        tube = min(
-            max(0.04, outer_radius * float(rng.uniform(0.18, 0.35))),
-            outer_radius - 0.15,
-        )
-        return cls(outer_radius - tube, tube)
-
-    @property
-    def bound_radius_m(self) -> float:
-        return self.major_radius_m + self.tube_radius_m + 1.0e-6
-
-    def signed_distance(self, points_local: np.ndarray) -> np.ndarray:
-        points = np.asarray(points_local, dtype=np.float64)
-        if points.ndim < 1 or points.shape[-1] != 3 or not np.isfinite(points).all():
-            raise RenderError("points_local must be finite [...,3]")
-        radial = np.linalg.norm(points[..., :2], axis=-1) - self.major_radius_m
-        return (
-            np.sqrt(np.square(radial) + np.square(points[..., 2])) - self.tube_radius_m
-        )
-
-    def intersect(
-        self,
-        origin_local: np.ndarray,
-        directions_local: np.ndarray,
-        *,
-        steps: int = 160,
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        return _sampled_sdf_intersection(
-            self.signed_distance,
-            self.bound_radius_m,
-            origin_local,
-            directions_local,
-            steps=steps,
-        )
-
-    def local_bounds(self, *, resolution: int = 0) -> tuple[np.ndarray, np.ndarray]:
-        del resolution
-        radius = self.major_radius_m + self.tube_radius_m
-        return (
-            np.asarray((-radius, -radius, -self.tube_radius_m), dtype=np.float64),
-            np.asarray((radius, radius, self.tube_radius_m), dtype=np.float64),
-        )
-
-    def minimum_z_m(self, *, xy_resolution: int = 0, z_steps: int = 0) -> float:
-        del xy_resolution, z_steps
-        return -self.tube_radius_m
-
-    def geometry_report(self, *, resolution: int = 0) -> dict[str, float | int | bool]:
-        del resolution
-        return {
-            "bounded": True,
-            "closed": True,
-            "components": 1,
-            "major_radius_m": self.major_radius_m,
-            "tube_radius_m": self.tube_radius_m,
-        }
-
-    def to_dict(self) -> dict[str, object]:
-        return {
-            "kind": "held-out-torus-sdf",
-            "major_radius_m": self.major_radius_m,
-            "tube_radius_m": self.tube_radius_m,
-        }
-
-    @classmethod
-    def from_dict(cls, value: Mapping[str, object]) -> "HeldOutTorusShape":
-        plain = dict(value)
-        if plain.pop("kind", None) != "held-out-torus-sdf":
-            raise RenderError("held-out torus JSON has the wrong geometry kind")
-        try:
-            return cls(**plain)  # type: ignore[arg-type]
-        except TypeError as error:
-            raise RenderError(f"invalid held-out torus JSON: {error}") from error
-
-
-InsertShape: TypeAlias = ShapeSpec | NormalTemplateShape | HeldOutTorusShape
+InsertShape: TypeAlias = ShapeSpec
 
 
 def shape_from_dict(value: Mapping[str, object]) -> InsertShape:
     kind = value.get("kind") if isinstance(value, Mapping) else None
     if kind == "procedural-csg":
         return ShapeSpec.from_dict(value)
-    if kind == "normal-template-convex-hull":
-        return NormalTemplateShape.from_dict(value)
-    if kind == "held-out-torus-sdf":
-        return HeldOutTorusShape.from_dict(value)
     raise RenderError(f"unsupported geometry kind: {kind!r}")
-
-
-def extract_normal_template_library(
-    frames_206: Iterable[SourceFrame],
-    *,
-    minimum_points: int = 32,
-    maximum_templates_per_class: int = 64,
-) -> tuple[NormalTemplateShape, ...]:
-    """Extract E25-observable templates, then select by stable instance identity."""
-
-    if type(minimum_points) is not int or minimum_points < 4:
-        raise RenderError("minimum_points must be an integer >=4")
-    if type(maximum_templates_per_class) is not int or maximum_templates_per_class < 1:
-        raise RenderError("maximum_templates_per_class must be positive")
-    candidates: dict[int, list[tuple[bytes, NormalTemplateShape]]] = {
-        semantic: [] for semantic in NORMAL_TEMPLATE_SEMANTICS
-    }
-    for frame in frames_206:
-        if frame.partition != "train" or frame.sequence_id != 206:
-            raise RenderError("normal-template library input is not train/206")
-        if frame.labels is None:
-            raise RenderError("normal-template extraction requires train/206 labels")
-        semantic = frame.labels.semantic
-        instance = frame.labels.instance
-        for packed in np.unique(
-            semantic.astype(np.uint32) | (instance.astype(np.uint32) << np.uint32(16))
-        ):
-            raw = int(packed & np.uint32(0xFFFF))
-            identifier = int(packed >> np.uint32(16))
-            if raw not in candidates or identifier == 0:
-                continue
-            selected = (semantic == raw) & (instance == identifier)
-            if int(np.count_nonzero(selected)) < minimum_points:
-                continue
-            identity = f"206:{frame.frame_id}:{raw}:{identifier}".encode("ascii")
-            identity_hash = hashlib.sha256(identity).digest()
-            retained = candidates[raw]
-            if (
-                len(retained) >= maximum_templates_per_class
-                and identity_hash >= max(retained, key=lambda item: item[0])[0]
-            ):
-                continue
-            try:
-                template = NormalTemplateShape.from_source_frame(
-                    frame,
-                    raw_semantic_id=raw,
-                    instance_id=identifier,
-                )
-            except RenderError:
-                continue
-            retained.append((identity_hash, template))
-            if len(retained) > maximum_templates_per_class:
-                retained.remove(max(retained, key=lambda item: item[0]))
-    result: list[NormalTemplateShape] = []
-    for semantic in sorted(candidates):
-        ordered = sorted(candidates[semantic], key=lambda item: item[0])
-        if len(ordered) >= 4:
-            result.extend(item[1] for item in ordered[:maximum_templates_per_class])
-    if len(result) < 32:
-        raise PlacementError(
-            "train/206 has fewer than 32 templates across E25 active classes"
-        )
-    return tuple(result)
 
 
 def sample_training_anomaly_shape(
@@ -2752,7 +2316,7 @@ def sample_training_anomaly_shape(
     *,
     size_m_range: tuple[float, float] = (0.2, 3.0),
 ) -> ShapeSpec:
-    """The training sampler is intentionally unable to emit held-out torus geometry."""
+    """Sample the sole procedural anomaly geometry used by schema 33."""
 
     return ShapeSpec.sample(seed, size_m_range=size_m_range)
 
@@ -2828,20 +2392,10 @@ class ObjectSpec:
         label = str(self.label)
         if label not in OBJECT_LABELS:
             raise RenderError(f"object label must be one of {OBJECT_LABELS}")
-        if not isinstance(
-            self.shape, (ShapeSpec, NormalTemplateShape, HeldOutTorusShape)
-        ) or not isinstance(self.material, MaterialSpec):
-            raise TypeError("shape and material have unsupported types")
-        if label == "normal-control" and not isinstance(
-            self.shape, NormalTemplateShape
+        if not isinstance(self.shape, ShapeSpec) or not isinstance(
+            self.material, MaterialSpec
         ):
-            raise RenderError(
-                "normal-control objects require a 206 convex-hull template"
-            )
-        if label == "anomaly-proxy" and isinstance(self.shape, NormalTemplateShape):
-            raise RenderError(
-                "anomaly-proxy objects cannot use normal instance templates"
-            )
+            raise TypeError("shape and material have unsupported types")
         report = self.shape_generation_report
         if report is not None and not isinstance(report, ShapeGenerationReport):
             raise TypeError("shape_generation_report has an unsupported type")
@@ -2864,12 +2418,6 @@ class ObjectSpec:
     @property
     def bounding_radius_m(self) -> float:
         return self.shape.bound_radius_m
-
-    @property
-    def normal_semantic_id(self) -> int | None:
-        if isinstance(self.shape, NormalTemplateShape):
-            return self.shape.raw_semantic_id
-        return None
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -2929,12 +2477,8 @@ class WorldSpec:
         objects = tuple(self.objects)
         if any(not isinstance(item, ObjectSpec) for item in objects):
             raise RenderError("world objects must all be ObjectSpec values")
-        normal_count = sum(item.label == "normal-control" for item in objects)
-        anomaly_count = sum(item.label == "anomaly-proxy" for item in objects)
-        if normal_count > 9 or anomaly_count > 9:
-            raise RenderError(
-                "normal-control and anomaly-proxy counts must each lie in [0,9]"
-            )
+        if len(objects) > 9:
+            raise RenderError("anomaly-proxy count must lie in [0,9]")
         identifiers = [item.object_id for item in objects]
         if len(set(identifiers)) != len(identifiers):
             raise RenderError("world object IDs must be unique")
@@ -2949,21 +2493,13 @@ class WorldSpec:
         object.__setattr__(self, "tie_tolerance_m", tolerance)
 
     @property
-    def normal_control_count(self) -> int:
-        return sum(item.label == "normal-control" for item in self.objects)
-
-    @property
     def anomaly_proxy_count(self) -> int:
-        return sum(item.label == "anomaly-proxy" for item in self.objects)
+        return len(self.objects)
 
     @property
     def world_type(self) -> str:
         if not self.objects:
             return "pure_normal"
-        if self.normal_control_count and self.anomaly_proxy_count:
-            return "mixed"
-        if self.normal_control_count:
-            return "control_only"
         return "anomaly_only"
 
     def to_dict(self) -> dict[str, object]:
@@ -3013,8 +2549,7 @@ class PlacementRecord:
 
     object_id: int
     label: ObjectLabel
-    shape_seed: int | None
-    template_identity: str | None
+    shape_seed: int
     material_seed: int
     yaw_seed: int
     accepted_proposal: int
@@ -3029,9 +2564,6 @@ class PlacementRecord:
     accepted_shape_proposal: int = 0
     shape_proposal_seeds: tuple[int, ...] = ()
     grounding_rejection_seeds: tuple[int, ...] = ()
-    template_seed: int | None = None
-    scale_seed: int | None = None
-    pose_perturbation_rad: float | None = None
     grounding_standard_lower_support_m: float = math.nan
     grounding_strict_lower_support_m: float = math.nan
     grounding_buried_fraction: float = math.nan
@@ -3041,7 +2573,6 @@ class PlacementRecord:
             "object_id": self.object_id,
             "label": self.label,
             "shape_seed": self.shape_seed,
-            "template_identity": self.template_identity,
             "material_seed": self.material_seed,
             "yaw_seed": self.yaw_seed,
             "accepted_proposal": self.accepted_proposal,
@@ -3058,9 +2589,6 @@ class PlacementRecord:
             "accepted_shape_proposal": self.accepted_shape_proposal,
             "shape_proposal_seeds": list(self.shape_proposal_seeds),
             "grounding_rejection_seeds": list(self.grounding_rejection_seeds),
-            "template_seed": self.template_seed,
-            "scale_seed": self.scale_seed,
-            "pose_perturbation_rad": self.pose_perturbation_rad,
             "grounding_standard_lower_support_m": (
                 self.grounding_standard_lower_support_m
             ),
@@ -3094,10 +2622,9 @@ class WorldGenerationReport:
     source_sequence_id: int
     world_type: str
     world_attempt: int
-    normal_count: int
     anomaly_count: int
     count_seed: int
-    label_order_seed: int
+    placement_attempt_seed: int
     placements: tuple[PlacementRecord, ...] = ()
 
     def to_dict(self) -> dict[str, object]:
@@ -3107,10 +2634,9 @@ class WorldGenerationReport:
             "source_sequence_id": self.source_sequence_id,
             "world_type": self.world_type,
             "world_attempt": self.world_attempt,
-            "normal_count": self.normal_count,
             "anomaly_count": self.anomaly_count,
             "count_seed": self.count_seed,
-            "label_order_seed": self.label_order_seed,
+            "placement_attempt_seed": self.placement_attempt_seed,
             "placements": [item.to_dict() for item in self.placements],
         }
 
@@ -3124,10 +2650,9 @@ class WorldGenerationReport:
             "source_sequence_id",
             "world_type",
             "world_attempt",
-            "normal_count",
             "anomaly_count",
             "count_seed",
-            "label_order_seed",
+            "placement_attempt_seed",
             "placements",
         }:
             raise RenderError("WorldGenerationReport JSON fields are invalid")
@@ -3139,10 +2664,9 @@ class WorldGenerationReport:
             source_sequence_id=value["source_sequence_id"],  # type: ignore[arg-type]
             world_type=str(value["world_type"]),
             world_attempt=value["world_attempt"],  # type: ignore[arg-type]
-            normal_count=value["normal_count"],  # type: ignore[arg-type]
             anomaly_count=value["anomaly_count"],  # type: ignore[arg-type]
             count_seed=value["count_seed"],  # type: ignore[arg-type]
-            label_order_seed=value["label_order_seed"],  # type: ignore[arg-type]
+            placement_attempt_seed=value["placement_attempt_seed"],  # type: ignore[arg-type]
             placements=tuple(PlacementRecord.from_dict(item) for item in placements),  # type: ignore[arg-type]
         )
 
@@ -4436,7 +3960,6 @@ class RenderedFrame:
 
     source: SourceFrame
     packed_labels: np.ndarray
-    normal_control_mask: np.ndarray
     anomaly_proxy_mask: np.ndarray
     inserted_mask: np.ndarray
     occluded_original_mask: np.ndarray
@@ -4446,7 +3969,6 @@ class RenderedFrame:
     def __post_init__(self) -> None:
         count = int(self.source.xyzi.shape[0])
         packed = np.asarray(self.packed_labels)
-        normal_control = np.asarray(self.normal_control_mask)
         anomaly_proxy = np.asarray(self.anomaly_proxy_mask)
         inserted = np.asarray(self.inserted_mask)
         occluded = np.asarray(self.occluded_original_mask)
@@ -4455,7 +3977,6 @@ class RenderedFrame:
         if packed.dtype != np.uint32 or packed.shape != (count,):
             raise TypeError("packed_labels must be uint32[slot]")
         for name, value in (
-            ("normal_control_mask", normal_control),
             ("anomaly_proxy_mask", anomaly_proxy),
             ("inserted_mask", inserted),
             ("occluded_original_mask", occluded),
@@ -4465,10 +3986,8 @@ class RenderedFrame:
                 raise TypeError(f"{name} must be bool[slot]")
         if object_id.dtype != np.int32 or object_id.shape != (count,):
             raise TypeError("object_id_internal must be int32[slot]")
-        if np.any(normal_control & anomaly_proxy):
-            raise RenderError("normal-control and anomaly-proxy masks overlap")
-        if not np.array_equal(inserted, normal_control | anomaly_proxy):
-            raise RenderError("inserted mask must be the union of both entity labels")
+        if not np.array_equal(inserted, anomaly_proxy):
+            raise RenderError("inserted mask must equal the anomaly-proxy mask")
         if np.any(occluded & ~inserted) or np.any(inserted & unchanged):
             raise RenderError("render masks have contradictory slot semantics")
         if np.any((object_id >= 0) != inserted):
@@ -4478,19 +3997,12 @@ class RenderedFrame:
         semantic = (packed & np.uint32(0xFFFF)).astype(np.uint16)
         if not np.all(semantic[anomaly_proxy] == np.uint16(2)):
             raise RenderError("anomaly-proxy returns must carry raw semantic 2")
-        if not np.all(
-            np.isin(semantic[normal_control], tuple(NORMAL_TEMPLATE_SEMANTICS))
-        ):
-            raise RenderError(
-                "normal-control returns must preserve a legal normal class"
-            )
         if self.source.labels is not None and not np.array_equal(
             self.source.labels.packed, packed
         ):
             raise RenderError("SourceFrame labels and packed_labels differ")
         for name, value in (
             ("packed_labels", packed),
-            ("normal_control_mask", normal_control),
             ("anomaly_proxy_mask", anomaly_proxy),
             ("inserted_mask", inserted),
             ("occluded_original_mask", occluded),
@@ -4600,14 +4112,7 @@ def render_frame(
     )
     slots = np.flatnonzero(inserted).astype(np.int32)
     object_by_id = {item.object_id: item for item in world.objects}
-    normal_control = np.zeros(source.xyzi.shape[0], dtype=np.bool_)
-    anomaly_proxy = np.zeros(source.xyzi.shape[0], dtype=np.bool_)
-    for item in world.objects:
-        won = inserted & (competition.object_id == item.object_id)
-        if item.label == "normal-control":
-            normal_control |= won
-        else:
-            anomaly_proxy |= won
+    anomaly_proxy = inserted.copy()
     xyzi = np.asarray(source.xyzi, dtype=np.float32).copy()
     original_real = ~np.asarray(source.zero_slot_mask, dtype=np.bool_)
     xyzi[original_real, :3] = (
@@ -4668,18 +4173,9 @@ def render_frame(
         ).astype(np.uint16)
         for slot in slots:
             item = object_by_id[int(competition.object_id[slot])]
-            if item.label == "anomaly-proxy":
-                semantic[slot] = np.uint16(2)
-                if semantic_target is not None:
-                    semantic_target[slot] = np.uint8(255)
-            else:
-                normal_semantic = item.normal_semantic_id
-                assert normal_semantic is not None
-                semantic[slot] = np.uint16(normal_semantic)
-                if semantic_target is not None:
-                    semantic_target[slot] = np.uint8(
-                        NORMAL_SEMANTIC_TARGET[normal_semantic]
-                    )
+            semantic[slot] = np.uint16(2)
+            if semantic_target is not None:
+                semantic_target[slot] = np.uint8(255)
         packed = semantic.astype(np.uint32) | (
             instance.astype(np.uint32) << np.uint32(16)
         )
@@ -4694,11 +4190,7 @@ def render_frame(
     if labels is None:
         for slot in slots:
             item = object_by_id[int(competition.object_id[slot])]
-            semantic_id = (
-                2 if item.label == "anomaly-proxy" else item.normal_semantic_id
-            )
-            assert semantic_id is not None
-            packed[slot] = np.uint32(semantic_id) | np.uint32(
+            packed[slot] = np.uint32(2) | np.uint32(
                 SYNTHETIC_INSTANCE_BASE + item.object_id
             ) << np.uint32(16)
     occluded = inserted & original_real
@@ -4721,7 +4213,6 @@ def render_frame(
     return RenderedFrame(
         source=rendered_source,
         packed_labels=_freeze(packed),
-        normal_control_mask=_freeze(normal_control),
         anomaly_proxy_mask=_freeze(anomaly_proxy),
         inserted_mask=_freeze(inserted),
         occluded_original_mask=_freeze(occluded),
@@ -4777,174 +4268,28 @@ def source_observation_identity(source: SourceFrame) -> str:
 
 
 @dataclass(frozen=True, slots=True)
-class WindowEntityDescriptor:
-    """Observable five-scan geometry for one inserted entity."""
-
-    object_id: int
-    label: ObjectLabel
-    visible_returns_by_scan: tuple[int, int, int, int, int]
-    spatial_voxels_by_scan: tuple[int, int, int, int, int]
-    joint_visible_return_count: int
-    joint_spatial_voxel_count: int
-    maximum_single_scan_spatial_voxel_count: int
-    densification_gain: float
-    duplicate_fraction: float
-    median_distance_m: float
-    occlusion_rate: float
-    support_semantic_id: int
-    visible_scan_count: int
-    minimum_visible_return_height_m: float
-    intensity_q05_median_q95: tuple[float, float, float]
-    beam_histogram: tuple[int, ...]
-
-    def __post_init__(self) -> None:
-        _integer("object_id", self.object_id, minimum=1)
-        if self.label not in OBJECT_LABELS:
-            raise RenderError("window descriptor has an invalid entity label")
-        returns = tuple(
-            _integer("visible return count", value)
-            for value in self.visible_returns_by_scan
-        )
-        voxels = tuple(
-            _integer("spatial voxel count", value)
-            for value in self.spatial_voxels_by_scan
-        )
-        if len(returns) != 5 or len(voxels) != 5:
-            raise RenderError("window descriptors require five scan statistics")
-        total = _integer(
-            "joint_visible_return_count",
-            self.joint_visible_return_count,
-            minimum=1,
-        )
-        joint_voxels = _integer(
-            "joint_spatial_voxel_count",
-            self.joint_spatial_voxel_count,
-            minimum=1,
-        )
-        maximum = _integer(
-            "maximum_single_scan_spatial_voxel_count",
-            self.maximum_single_scan_spatial_voxel_count,
-            minimum=1,
-        )
-        visible_scans = _integer(
-            "visible_scan_count", self.visible_scan_count, minimum=1
-        )
-        if (
-            sum(returns) != total
-            or max(voxels) != maximum
-            or joint_voxels > total
-            or maximum > joint_voxels
-            or visible_scans != sum(value > 0 for value in returns)
-            or visible_scans > 5
-        ):
-            raise RenderError("window descriptor counts are inconsistent")
-        gain = _finite_scalar("densification_gain", self.densification_gain)
-        duplicate = _finite_scalar("duplicate_fraction", self.duplicate_fraction)
-        if not math.isclose(gain, joint_voxels / maximum, rel_tol=1e-12):
-            raise RenderError("densification gain does not match voxel counts")
-        if not math.isclose(duplicate, 1.0 - joint_voxels / total, abs_tol=1e-12):
-            raise RenderError("duplicate fraction does not match point counts")
-        distance = _finite_scalar("median_distance_m", self.median_distance_m)
-        occlusion = _finite_scalar("occlusion_rate", self.occlusion_rate)
-        height = _finite_scalar(
-            "minimum_visible_return_height_m",
-            self.minimum_visible_return_height_m,
-        )
-        support = _integer("support_semantic_id", self.support_semantic_id, minimum=1)
-        intensity = tuple(
-            _finite_scalar("intensity quantile", value)
-            for value in self.intensity_q05_median_q95
-        )
-        beam = tuple(_integer("beam count", value) for value in self.beam_histogram)
-        if (
-            gain < 1.0
-            or not 0.0 <= duplicate < 1.0
-            or distance <= 0.0
-            or not 0.0 <= occlusion <= 1.0
-            or len(intensity) != 3
-            or intensity != tuple(sorted(intensity))
-            or len(beam) != LASER_BEAMS
-            or sum(beam) != total
-        ):
-            raise RenderError("window descriptor values lie outside their domains")
-        object.__setattr__(self, "visible_returns_by_scan", returns)
-        object.__setattr__(self, "spatial_voxels_by_scan", voxels)
-        object.__setattr__(self, "densification_gain", gain)
-        object.__setattr__(self, "duplicate_fraction", duplicate)
-        object.__setattr__(self, "median_distance_m", distance)
-        object.__setattr__(self, "occlusion_rate", occlusion)
-        object.__setattr__(self, "support_semantic_id", support)
-        object.__setattr__(self, "minimum_visible_return_height_m", height)
-        object.__setattr__(self, "intensity_q05_median_q95", intensity)
-        object.__setattr__(self, "beam_histogram", beam)
-
-    def to_dict(self) -> dict[str, object]:
-        return {field.name: getattr(self, field.name) for field in fields(self)}
-
-
-@dataclass(frozen=True, slots=True)
-class WindowWorld:
-    """One immutable WorldSpec rendered exactly across one five-scan window."""
+class RenderedWindow:
+    """Five consecutive views cut from one already-rendered physical sequence."""
 
     window_start: int
     frame_ids: tuple[int, int, int, int, int]
-    world: WorldSpec
-    report: WorldGenerationReport
-    renderer_identity: str
-    current_pose: CurrentFramePose
     rendered_frames: tuple[
         RenderedFrame, RenderedFrame, RenderedFrame, RenderedFrame, RenderedFrame
     ]
-    descriptors: tuple[WindowEntityDescriptor, ...]
 
     def __post_init__(self) -> None:
         start = _integer("window_start", self.window_start)
         frame_ids = tuple(_integer("frame_id", value) for value in self.frame_ids)
-        if frame_ids != tuple(range(start, start + 5)):
-            raise RenderError("WindowWorld requires five consecutive frame IDs")
-        if not isinstance(self.world, WorldSpec) or not isinstance(
-            self.report, WorldGenerationReport
-        ):
-            raise TypeError("WindowWorld requires a WorldSpec and generation report")
-        if (
-            self.report.world_seed != self.world.seed
-            or self.report.source_sequence_id != self.world.source_sequence_id
-        ):
-            raise RenderError("WindowWorld report and WorldSpec identities differ")
-        if (
-            not isinstance(self.renderer_identity, str)
-            or len(self.renderer_identity) != 64
-            or any(value not in "0123456789abcdef" for value in self.renderer_identity)
-        ):
-            raise RenderError("renderer_identity must be a lowercase SHA-256 digest")
-        if not isinstance(self.current_pose, CurrentFramePose):
-            raise TypeError("WindowWorld requires the latest scan pose")
         rendered = tuple(self.rendered_frames)
+        if frame_ids != tuple(range(start, start + 5)):
+            raise RenderError("RenderedWindow requires five consecutive frame IDs")
         if len(rendered) != 5 or tuple(item.frame_id for item in rendered) != frame_ids:
-            raise RenderError("WindowWorld rendered frames do not match its identity")
-        if any(
-            item.source.sequence_id != self.world.source_sequence_id
-            for item in rendered
-        ):
-            raise RenderError("WindowWorld mixes source sequences")
-        expected_current = CurrentFramePose.from_source(rendered[-1].source)
-        if not np.array_equal(
-            self.current_pose.world_from_current,
-            expected_current.world_from_current,
-        ):
-            raise RenderError("WindowWorld current pose differs from its latest scan")
-        descriptors = tuple(self.descriptors)
-        expected_objects = tuple(item.object_id for item in self.world.objects)
-        if tuple(item.object_id for item in descriptors) != expected_objects:
-            raise RenderError("WindowWorld descriptors must cover every entity once")
+            raise RenderError("RenderedWindow frames do not match its identity")
         object.__setattr__(self, "frame_ids", frame_ids)
         object.__setattr__(self, "rendered_frames", rendered)
-        object.__setattr__(self, "descriptors", descriptors)
 
     @property
     def source_observation_identities(self) -> tuple[str, str, str, str, str]:
-        """Return the five ordered content identities consumed by this window."""
-
         identities = tuple(
             source_observation_identity(item.source) for item in self.rendered_frames
         )
@@ -4953,843 +4298,26 @@ class WindowWorld:
     @property
     def identity(self) -> str:
         payload = {
-            "format": "ajae-window-world-v1",
-            "world_identity": self.world.identity,
-            "partition": self.rendered_frames[0].source.partition,
-            "sequence_id": self.world.source_sequence_id,
+            "format": "ajae-rendered-window-v1",
             "window_start": self.window_start,
             "frame_ids": self.frame_ids,
-            "renderer_identity": self.renderer_identity,
             "source_observation_identities": self.source_observation_identities,
         }
         return hashlib.sha256(
             json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
         ).hexdigest()
 
-    def to_manifest(self) -> dict[str, object]:
-        return {
-            "format": "ajae-window-world-v1",
-            "identity": self.identity,
-            "world_identity": self.world.identity,
-            "partition": self.rendered_frames[0].source.partition,
-            "sequence_id": self.world.source_sequence_id,
-            "window_start": self.window_start,
-            "frame_ids": list(self.frame_ids),
-            "renderer_identity": self.renderer_identity,
-            "source_observation_identities": list(self.source_observation_identities),
-            "world": self.world.to_dict(),
-            "report": self.report.to_dict(),
-            "descriptors": [item.to_dict() for item in self.descriptors],
-        }
-
-
-def _window_entity_descriptors(
-    world: WorldSpec,
-    report: WorldGenerationReport,
-    rendered_frames: Sequence[RenderedFrame],
-    current_pose: CurrentFramePose,
-    ray_grid: RayGrid,
-    sensor: SensorCalibration,
-    *,
-    density_voxel_size_m: float,
-) -> tuple[WindowEntityDescriptor, ...]:
-    """Measure density from actual first-return observations, never from geometry."""
-
-    voxel_size = _finite_scalar("density_voxel_size_m", density_voxel_size_m)
-    if voxel_size <= 0.0:
-        raise RenderError("density voxel size must be positive")
-    placements = {item.object_id: item for item in report.placements}
-    if set(placements) != {item.object_id for item in world.objects}:
-        raise RenderError("generation report does not identify every world entity")
-    per_object: dict[int, dict[str, object]] = {
-        item.object_id: {
-            "points": [],
-            "returns": [],
-            "voxels": [],
-            "ranges": [],
-            "intensity": [],
-            "beams": [],
-            "accepted": 0,
-            "height": [],
-        }
-        for item in world.objects
-    }
-    current_from_world = current_pose.current_from_world
-    by_id = {item.object_id: item for item in world.objects}
-    lower_support_by_id = {
-        item.object_id: item.shape.minimum_z_m(xy_resolution=33, z_steps=129)
-        for item in world.objects
-    }
-    for rendered in rendered_frames:
-        source = rendered.source
-        rotation, origin = _pose(source)
-        directions_world = ray_grid.directions_for(source) @ rotation.T
-        origins_world = ray_grid.origins_for(source) @ rotation.T + origin
-        competition = _accepted_object_hits(
-            origins_world,
-            directions_world,
-            world,
-            ray_grid,
-            sensor,
-            int(source.frame_id),
-        )
-        rendered_ranges = np.asarray(ray_grid.ranges(source), dtype=np.float64)
-        for object_id, record in per_object.items():
-            selected = rendered.object_id_internal == object_id
-            slots = np.flatnonzero(selected)
-            record["returns"].append(int(slots.size))
-            record["accepted"] = int(record["accepted"]) + int(
-                competition.accepted_hits[object_id]
-            )
-            if slots.size == 0:
-                record["voxels"].append(0)
-                continue
-            xyz_sensor = source.xyzi[slots, :3].astype(np.float64, copy=False)
-            xyz_world = xyz_sensor @ rotation.T + origin
-            xyz_window = (
-                xyz_world @ current_from_world[:3, :3].T + current_from_world[:3, 3]
-            )
-            keys = np.floor(xyz_window / voxel_size).astype(np.int64)
-            record["points"].append(xyz_window)
-            record["voxels"].append(int(np.unique(keys, axis=0).shape[0]))
-            record["ranges"].append(rendered_ranges[slots])
-            record["intensity"].append(source.xyzi[slots, 3].astype(np.float64))
-            record["beams"].append(ray_grid.beam_ids[slots])
-            item = by_id[object_id]
-            object_rotation = np.asarray(
-                item.rotation_world_from_local, dtype=np.float64
-            )
-            object_translation = np.asarray(item.translation_world_m, dtype=np.float64)
-            xyz_local = (xyz_world - object_translation) @ object_rotation
-            record["height"].append(xyz_local[:, 2] - lower_support_by_id[object_id])
-
-    output: list[WindowEntityDescriptor] = []
-    for object_id in sorted(per_object):
-        record = per_object[object_id]
-        points = list(record["points"])
-        if not points:
-            raise PlacementError(
-                f"window entity {object_id} has no visible first-return observation"
-            )
-        joined = np.concatenate(points)
-        joint_keys = np.floor(joined / voxel_size).astype(np.int64)
-        joint_voxels = int(np.unique(joint_keys, axis=0).shape[0])
-        returns = tuple(int(value) for value in record["returns"])
-        voxels = tuple(int(value) for value in record["voxels"])
-        total = int(sum(returns))
-        maximum = int(max(voxels))
-        accepted = int(record["accepted"])
-        ranges = np.concatenate(list(record["ranges"]))
-        intensities = np.concatenate(list(record["intensity"]))
-        beams = np.concatenate(list(record["beams"])).astype(np.int64)
-        heights = np.concatenate(list(record["height"]))
-        placement = placements[object_id]
-        output.append(
-            WindowEntityDescriptor(
-                object_id=object_id,
-                label=by_id[object_id].label,
-                visible_returns_by_scan=returns,  # type: ignore[arg-type]
-                spatial_voxels_by_scan=voxels,  # type: ignore[arg-type]
-                joint_visible_return_count=total,
-                joint_spatial_voxel_count=joint_voxels,
-                maximum_single_scan_spatial_voxel_count=maximum,
-                densification_gain=joint_voxels / maximum,
-                duplicate_fraction=1.0 - joint_voxels / total,
-                median_distance_m=float(np.median(ranges)),
-                occlusion_rate=float(1.0 - total / accepted) if accepted else 1.0,
-                support_semantic_id=placement.support_semantic,
-                visible_scan_count=sum(value > 0 for value in returns),
-                minimum_visible_return_height_m=float(np.min(heights)),
-                intensity_q05_median_q95=tuple(
-                    map(float, np.quantile(intensities, (0.05, 0.5, 0.95)))
-                ),
-                beam_histogram=tuple(
-                    np.bincount(beams, minlength=LASER_BEAMS).astype(int).tolist()
-                ),
-            )
-        )
-    return tuple(output)
-
-
-def render_window_world(
-    world: WorldSpec,
-    report: WorldGenerationReport,
-    sources: Sequence[SourceFrame],
-    ray_grid: RayGrid,
-    sensor: SensorCalibration,
-    *,
-    renderer_identity: str,
-    density_voxel_size_m: float = 0.1,
-) -> WindowWorld:
-    """Render a complete frozen world over exactly five consecutive scans."""
-
-    frames = tuple(sorted(tuple(sources), key=lambda item: item.frame_id))
-    if len(frames) != 5:
-        raise RenderError("a WindowWorld requires exactly five source scans")
-    frame_ids = tuple(int(item.frame_id) for item in frames)
-    if frame_ids != tuple(range(frame_ids[0], frame_ids[0] + 5)):
-        raise RenderError("WindowWorld source scans must be consecutive")
-    if any(item.sequence_id != world.source_sequence_id for item in frames):
-        raise RenderError("WindowWorld source scans and world use different sequences")
-    frozen_world_identity = world.identity
-    current_pose = CurrentFramePose.from_source(frames[-1])
-    rendered = tuple(render_frames(frames, world, ray_grid, sensor))
-    if world.identity != frozen_world_identity:
-        raise RenderError("WorldSpec changed while its five scans were rendered")
-    descriptors = _window_entity_descriptors(
-        world,
-        report,
-        rendered,
-        current_pose,
-        ray_grid,
-        sensor,
-        density_voxel_size_m=density_voxel_size_m,
-    )
-    return WindowWorld(
-        window_start=frame_ids[0],
-        frame_ids=frame_ids,  # type: ignore[arg-type]
-        world=world,
-        report=report,
-        renderer_identity=renderer_identity,
-        current_pose=current_pose,
-        rendered_frames=rendered,  # type: ignore[arg-type]
-        descriptors=descriptors,
-    )
-
-
-def sample_window_world(
-    normal_template_library: Sequence[NormalTemplateShape],
-    support_pool: QualifiedSupportPool,
-    obstacles: ObservedObstacleIndex,
-    sources: Sequence[SourceFrame],
-    ray_grid: RayGrid,
-    sensor: SensorCalibration,
-    world_type: WorldType,
-    seed: int,
-    *,
-    renderer_identity: str,
-    density_voxel_size_m: float = 0.1,
-    maximum_attempts: int = 48,
-) -> WindowWorld:
-    """Freeze one WorldSpec, then render its complete five-scan observation."""
-
-    frames = tuple(sorted(tuple(sources), key=lambda item: item.frame_id))
-    if len(frames) != 5:
-        raise RenderError("a sampled WindowWorld requires five source scans")
-    sequence_ids = {item.sequence_id for item in frames}
-    if len(sequence_ids) != 1:
-        raise RenderError("a sampled WindowWorld cannot mix source sequences")
-    root_seed = _integer("seed", seed)
-    for observation_attempt in range(maximum_attempts):
-        world_seed = root_seed + 10_000_019 * observation_attempt
-        try:
-            world, report = sample_world_spec(
-                normal_template_library,
-                support_pool,
-                obstacles,
-                world_type,
-                world_seed,
-                source_sequence_id=next(iter(sequence_ids)),
-                support_frame_ids=tuple(item.frame_id for item in frames),
-                maximum_attempts=maximum_attempts,
-            )
-            return render_window_world(
-                world,
-                report,
-                frames,
-                ray_grid,
-                sensor,
-                renderer_identity=renderer_identity,
-                density_voxel_size_m=density_voxel_size_m,
-            )
-        except PlacementError:
-            continue
-    raise PlacementError(
-        f"window world failed {maximum_attempts} deterministic visibility attempts"
-    )
-
-
-WINDOW_MATCHING_FEATURES = (
-    "log1p_joint_visible_return_count",
-    "log1p_joint_spatial_voxel_count",
-    "log_densification_gain",
-    "median_distance_m",
-    "occlusion_rate",
-    "minimum_visible_return_height_m",
-    "visible_scan_count",
-)
-
-WINDOW_PHYSICAL_SHORTCUT_FEATURES = (
-    "log1p_joint_visible_return_count",
-    "log1p_joint_spatial_voxel_count",
-    "log_densification_gain",
-    "duplicate_fraction",
-    "visible_scan_count",
-    *(f"sorted_log1p_visible_returns_{index}" for index in range(5)),
-    *(f"sorted_log1p_spatial_voxels_{index}" for index in range(5)),
-    "median_distance_m",
-    "occlusion_rate",
-    "minimum_visible_return_height_m",
-    "intensity_q05",
-    "intensity_median",
-    "intensity_q95",
-    *(f"normalized_beam_block_{index}" for index in range(8)),
-    "normalized_beam_mean",
-    "normalized_beam_std",
-)
-
-
-def window_matching_covariates(descriptor: WindowEntityDescriptor) -> np.ndarray:
-    """Return the continuous window-level covariates frozen for matching."""
-
-    if not isinstance(descriptor, WindowEntityDescriptor):
-        raise TypeError("descriptor must be WindowEntityDescriptor")
-    return np.asarray(
-        (
-            math.log1p(descriptor.joint_visible_return_count),
-            math.log1p(descriptor.joint_spatial_voxel_count),
-            math.log(descriptor.densification_gain),
-            descriptor.median_distance_m,
-            descriptor.occlusion_rate,
-            descriptor.minimum_visible_return_height_m,
-            descriptor.visible_scan_count,
-        ),
-        dtype=np.float64,
-    )
-
-
-def window_physical_shortcut_features(
-    descriptor: WindowEntityDescriptor,
-) -> np.ndarray:
-    """Summarize observable physics without exposing scan position or object ID."""
-
-    if not isinstance(descriptor, WindowEntityDescriptor):
-        raise TypeError("descriptor must be WindowEntityDescriptor")
-    returns = sorted(math.log1p(value) for value in descriptor.visible_returns_by_scan)
-    voxels = sorted(math.log1p(value) for value in descriptor.spatial_voxels_by_scan)
-    histogram = np.asarray(descriptor.beam_histogram, dtype=np.float64)
-    total = float(histogram.sum())
-    beam_axis = np.arange(LASER_BEAMS, dtype=np.float64) / (LASER_BEAMS - 1)
-    blocks = np.add.reduceat(histogram, np.arange(0, LASER_BEAMS, 16)) / total
-    mean = float(np.sum(histogram * beam_axis) / total)
-    standard_deviation = float(
-        np.sqrt(np.sum(histogram * (beam_axis - mean) ** 2) / total)
-    )
-    output = np.asarray(
-        (
-            math.log1p(descriptor.joint_visible_return_count),
-            math.log1p(descriptor.joint_spatial_voxel_count),
-            math.log(descriptor.densification_gain),
-            descriptor.duplicate_fraction,
-            descriptor.visible_scan_count,
-            *returns,
-            *voxels,
-            descriptor.median_distance_m,
-            descriptor.occlusion_rate,
-            descriptor.minimum_visible_return_height_m,
-            *descriptor.intensity_q05_median_q95,
-            *blocks.tolist(),
-            mean,
-            standard_deviation,
-        ),
-        dtype=np.float64,
-    )
-    if output.shape != (len(WINDOW_PHYSICAL_SHORTCUT_FEATURES),):
-        raise AssertionError("physical shortcut feature declaration drifted")
-    return output
-
-
-@dataclass(frozen=True, slots=True)
-class WindowEntityMatch:
-    """One result-blind normal-control/proxy pair in the same support stratum."""
-
-    control_window_identity: str
-    control_world_identity: str
-    control_object_id: int
-    proxy_window_identity: str
-    proxy_world_identity: str
-    proxy_object_id: int
-    support_semantic_id: int
-    standardized_distance: float
-    control_covariates: tuple[float, ...]
-    proxy_covariates: tuple[float, ...]
-    control_physical_features: tuple[float, ...]
-    proxy_physical_features: tuple[float, ...]
-
-    def __post_init__(self) -> None:
-        for name in (
-            "control_window_identity",
-            "control_world_identity",
-            "proxy_window_identity",
-            "proxy_world_identity",
-        ):
-            identity = getattr(self, name)
-            if (
-                not isinstance(identity, str)
-                or len(identity) != 64
-                or any(character not in "0123456789abcdef" for character in identity)
-            ):
-                raise RenderError(f"{name} must be a lowercase SHA-256 digest")
-        _integer("control_object_id", self.control_object_id, minimum=1)
-        _integer("proxy_object_id", self.proxy_object_id, minimum=1)
-        _integer("support_semantic_id", self.support_semantic_id, minimum=1)
-        distance = _finite_scalar("standardized_distance", self.standardized_distance)
-        if distance < 0.0:
-            raise RenderError("matching distance cannot be negative")
-        for name in ("control_covariates", "proxy_covariates"):
-            values = tuple(_finite_scalar(name, value) for value in getattr(self, name))
-            if len(values) != len(WINDOW_MATCHING_FEATURES):
-                raise RenderError("matching covariates have the wrong dimension")
-            object.__setattr__(self, name, values)
-        for name in ("control_physical_features", "proxy_physical_features"):
-            values = tuple(_finite_scalar(name, value) for value in getattr(self, name))
-            if len(values) != len(WINDOW_PHYSICAL_SHORTCUT_FEATURES):
-                raise RenderError("physical shortcut features have the wrong dimension")
-            object.__setattr__(self, name, values)
-
-    def to_dict(self) -> dict[str, object]:
-        return {field.name: getattr(self, field.name) for field in fields(self)}
-
-
-def match_window_descriptor_records(
-    supplied: Sequence[tuple[str, str, WindowEntityDescriptor]],
-) -> tuple[WindowEntityMatch, ...]:
-    """Match content-bound descriptors without runtime point arrays."""
-
-    records: dict[str, list[tuple[str, str, WindowEntityDescriptor]]] = {
-        "normal-control": [],
-        "anomaly-proxy": [],
-    }
-    for world_identity, window_identity, descriptor in supplied:
-        for name, identity in (
-            ("world identity", world_identity),
-            ("window identity", window_identity),
-        ):
-            if (
-                not isinstance(identity, str)
-                or len(identity) != 64
-                or any(character not in "0123456789abcdef" for character in identity)
-            ):
-                raise RenderError(f"matching {name} must be a lowercase SHA-256 digest")
-        if not isinstance(descriptor, WindowEntityDescriptor):
-            raise TypeError(
-                "matching records must contain WindowEntityDescriptor values"
-            )
-        records[descriptor.label].append((world_identity, window_identity, descriptor))
-    if not records["normal-control"] or not records["anomaly-proxy"]:
-        raise RenderError("window matching requires both controls and proxies")
-
-    pairs: list[WindowEntityMatch] = []
-    common_support = sorted(
-        {item.support_semantic_id for _, _, item in records["normal-control"]}
-        & {item.support_semantic_id for _, _, item in records["anomaly-proxy"]}
-    )
-    for support in common_support:
-        control = sorted(
-            (
-                item
-                for item in records["normal-control"]
-                if item[2].support_semantic_id == support
-            ),
-            key=lambda item: (item[0], item[1], item[2].object_id),
-        )
-        proxy = sorted(
-            (
-                item
-                for item in records["anomaly-proxy"]
-                if item[2].support_semantic_id == support
-            ),
-            key=lambda item: (item[0], item[1], item[2].object_id),
-        )
-        if not control or not proxy:
-            continue
-        control_values = np.stack(
-            [window_matching_covariates(item[2]) for item in control]
-        )
-        proxy_values = np.stack([window_matching_covariates(item[2]) for item in proxy])
-        pooled = np.vstack((control_values, proxy_values))
-        scale = pooled.std(axis=0)
-        scale[scale < 1.0e-8] = 1.0
-        delta = (control_values[:, None, :] - proxy_values[None, :, :]) / scale[
-            None, None, :
-        ]
-        cost = np.sqrt(np.sum(delta * delta, axis=2))
-        rows, columns = linear_sum_assignment(cost)
-        for left, right in zip(rows, columns, strict=True):
-            control_world, control_identity, control_descriptor = control[int(left)]
-            proxy_world, proxy_identity, proxy_descriptor = proxy[int(right)]
-            pairs.append(
-                WindowEntityMatch(
-                    control_identity,
-                    control_world,
-                    control_descriptor.object_id,
-                    proxy_identity,
-                    proxy_world,
-                    proxy_descriptor.object_id,
-                    support,
-                    float(cost[left, right]),
-                    tuple(map(float, control_values[left])),
-                    tuple(map(float, proxy_values[right])),
-                    tuple(
-                        map(
-                            float, window_physical_shortcut_features(control_descriptor)
-                        )
-                    ),
-                    tuple(
-                        map(float, window_physical_shortcut_features(proxy_descriptor))
-                    ),
-                )
-            )
-    if not pairs:
-        raise RenderError(
-            "controls and proxies share no support stratum for valid matching"
-        )
-    return tuple(
-        sorted(
-            pairs,
-            key=lambda item: (
-                item.support_semantic_id,
-                item.control_world_identity,
-                item.control_window_identity,
-                item.control_object_id,
-                item.proxy_world_identity,
-                item.proxy_window_identity,
-                item.proxy_object_id,
-            ),
-        )
-    )
-
-
-def match_window_entities(
-    windows: Sequence[WindowWorld],
-) -> tuple[WindowEntityMatch, ...]:
-    """Match controls to proxies using only pre-model window observations."""
-
-    records: list[tuple[str, str, WindowEntityDescriptor]] = []
-    for window in windows:
-        if not isinstance(window, WindowWorld):
-            raise TypeError("windows must contain WindowWorld values")
-        for descriptor in window.descriptors:
-            records.append((window.world.identity, window.identity, descriptor))
-    return match_window_descriptor_records(records)
-
-
-def window_matching_balance(
-    pairs: Sequence[WindowEntityMatch],
-) -> dict[str, object]:
-    """Report paired standardized mean differences without declaring a gate."""
-
-    items = tuple(pairs)
-    if not items:
-        raise RenderError("matching balance requires at least one pair")
-    control = np.asarray([item.control_covariates for item in items], dtype=np.float64)
-    proxy = np.asarray([item.proxy_covariates for item in items], dtype=np.float64)
-    pooled_scale = np.sqrt(0.5 * (control.var(axis=0) + proxy.var(axis=0)))
-    pooled_scale[pooled_scale < 1.0e-8] = 1.0
-    standardized_mean_difference = (
-        proxy.mean(axis=0) - control.mean(axis=0)
-    ) / pooled_scale
-    return {
-        "pair_count": len(items),
-        "feature_names": list(WINDOW_MATCHING_FEATURES),
-        "exact_matching_stratum": "support_semantic_id",
-        "standardized_mean_difference": standardized_mean_difference.tolist(),
-        "maximum_absolute_standardized_mean_difference": float(
-            np.max(np.abs(standardized_mean_difference))
-        ),
-        "support_semantic_counts": {
-            str(value): sum(item.support_semantic_id == value for item in items)
-            for value in sorted({item.support_semantic_id for item in items})
-        },
-        "scientific_verdict": None,
-    }
-
-
-def _rank_auc(labels: np.ndarray, scores: np.ndarray) -> float:
-    order = np.argsort(scores, kind="mergesort")
-    sorted_scores = scores[order]
-    ranks = np.empty(scores.size, dtype=np.float64)
-    start = 0
-    while start < scores.size:
-        stop = start + 1
-        while stop < scores.size and sorted_scores[stop] == sorted_scores[start]:
-            stop += 1
-        ranks[order[start:stop]] = 0.5 * (start + stop - 1) + 1.0
-        start = stop
-    positive = labels == 1
-    positive_count = int(np.count_nonzero(positive))
-    negative_count = labels.size - positive_count
-    return float(
-        (ranks[positive].sum() - positive_count * (positive_count + 1) / 2)
-        / (positive_count * negative_count)
-    )
-
-
-def linear_classification_audit(
-    class_zero_features: np.ndarray,
-    class_one_features: np.ndarray,
-    *,
-    class_zero_groups: np.ndarray | None = None,
-    class_one_groups: np.ndarray | None = None,
-    seed: int = 0,
-    maximum_per_class: int = 100_000,
-    iterations: int = 300,
-) -> dict[str, object]:
-    """Fit a small deterministic linear shortcut classifier with held-out groups."""
-
-    zero = np.asarray(class_zero_features, dtype=np.float64)
-    one = np.asarray(class_one_features, dtype=np.float64)
-    if (
-        zero.ndim != 2
-        or one.ndim != 2
-        or zero.shape[1] != one.shape[1]
-        or min(zero.shape[0], one.shape[0]) < 10
-        or not np.isfinite(zero).all()
-        or not np.isfinite(one).all()
-    ):
-        raise RenderError(
-            "linear audit needs aligned finite features and ten samples per class"
-        )
-    if maximum_per_class < 10 or iterations < 1:
-        raise RenderError("linear audit limits are invalid")
-    if (class_zero_groups is None) != (class_one_groups is None):
-        raise RenderError("both shortcut classes must provide groups or neither may")
-    rng = np.random.default_rng(_integer("seed", seed))
-
-    def capped(indices: np.ndarray) -> np.ndarray:
-        return (
-            indices
-            if indices.size <= maximum_per_class
-            else np.sort(rng.choice(indices, maximum_per_class, replace=False))
-        )
-
-    if class_zero_groups is None:
-        zero_order = rng.permutation(zero.shape[0])
-        one_order = rng.permutation(one.shape[0])
-        zero_stop = max(1, int(math.floor(0.8 * zero_order.size)))
-        one_stop = max(1, int(math.floor(0.8 * one_order.size)))
-        zero_train, zero_test = (
-            zero[zero_order[:zero_stop]],
-            zero[zero_order[zero_stop:]],
-        )
-        one_train, one_test = one[one_order[:one_stop]], one[one_order[one_stop:]]
-        train_groups: list[int] | None = None
-        test_groups: list[int] | None = None
-        split_unit = "entity"
-    else:
-        zero_group = np.asarray(class_zero_groups)
-        one_group = np.asarray(class_one_groups)
-        if (
-            zero_group.shape != (zero.shape[0],)
-            or one_group.shape != (one.shape[0],)
-            or not np.issubdtype(zero_group.dtype, np.integer)
-            or not np.issubdtype(one_group.dtype, np.integer)
-        ):
-            raise RenderError("shortcut groups must be aligned integer vectors")
-        groups = np.unique(np.concatenate((zero_group, one_group))).astype(np.int64)
-        if groups.size < 2:
-            raise RenderError("grouped shortcut audit needs at least two windows")
-        masks: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray] | None = None
-        held_out_count = min(groups.size - 1, max(1, math.ceil(0.2 * groups.size)))
-        for _ in range(128):
-            shuffled = rng.permutation(groups)
-            test = np.sort(shuffled[:held_out_count])
-            train = np.sort(shuffled[held_out_count:])
-            candidate = (
-                np.isin(zero_group, train),
-                np.isin(zero_group, test),
-                np.isin(one_group, train),
-                np.isin(one_group, test),
-            )
-            if all(bool(value.any()) for value in candidate):
-                train_groups = train.astype(int).tolist()
-                test_groups = test.astype(int).tolist()
-                masks = candidate
-                break
-        if masks is None:
-            raise RenderError("no group split contains both shortcut classes")
-        zero_train = zero[capped(np.flatnonzero(masks[0]))]
-        zero_test = zero[capped(np.flatnonzero(masks[1]))]
-        one_train = one[capped(np.flatnonzero(masks[2]))]
-        one_test = one[capped(np.flatnonzero(masks[3]))]
-        split_unit = "world_identity"
-    if min(zero_test.shape[0], one_test.shape[0]) < 1:
-        raise RenderError("linear audit left no held-out sample")
-
-    train = np.vstack((zero_train, one_train))
-    train_label = np.concatenate(
-        (np.zeros(zero_train.shape[0]), np.ones(one_train.shape[0]))
-    )
-    test = np.vstack((zero_test, one_test))
-    test_label = np.concatenate(
-        (
-            np.zeros(zero_test.shape[0], dtype=np.int8),
-            np.ones(one_test.shape[0], dtype=np.int8),
-        )
-    )
-    mean = train.mean(axis=0)
-    scale = train.std(axis=0)
-    scale[scale < 1.0e-8] = 1.0
-    train = (train - mean) / scale
-    test = (test - mean) / scale
-    weight = np.zeros(train.shape[1], dtype=np.float64)
-    bias = 0.0
-    for iteration in range(iterations):
-        logits = np.clip(train @ weight + bias, -30.0, 30.0)
-        probability = 1.0 / (1.0 + np.exp(-logits))
-        error = probability - train_label
-        rate = 0.2 / math.sqrt(iteration + 1.0)
-        weight -= rate * ((train.T @ error) / train.shape[0] + 1.0e-3 * weight)
-        bias -= rate * float(error.mean())
-    score = 1.0 / (1.0 + np.exp(-np.clip(test @ weight + bias, -30.0, 30.0)))
-    prediction = score >= 0.5
-    class_accuracy = tuple(
-        float(np.mean(prediction[test_label == label] == bool(label)))
-        for label in (0, 1)
-    )
-    return {
-        "model": "standardized_logistic_regression",
-        "feature_count": int(train.shape[1]),
-        "train_samples": int(train.shape[0]),
-        "test_samples": int(test.shape[0]),
-        "split_unit": split_unit,
-        "train_groups": train_groups,
-        "test_groups": test_groups,
-        "accuracy": float(np.mean(prediction == test_label)),
-        "balanced_accuracy": float(np.mean(class_accuracy)),
-        "auroc": _rank_auc(test_label, score),
-        "standardized_coefficients": weight.tolist(),
-        "intercept": bias,
-        "threshold_conclusion": None,
-    }
-
-
-def grouped_depth3_tree_audit(
-    class_zero_features: np.ndarray,
-    class_one_features: np.ndarray,
-    class_zero_groups: np.ndarray,
-    class_one_groups: np.ndarray,
-    *,
-    train_groups: Sequence[int],
-    test_groups: Sequence[int],
-    seed: int,
-) -> dict[str, object]:
-    """Fit a deterministic depth-three tree on the exact logistic group split."""
-
-    zero = np.asarray(class_zero_features, dtype=np.float64)
-    one = np.asarray(class_one_features, dtype=np.float64)
-    zero_group = np.asarray(class_zero_groups, dtype=np.int64)
-    one_group = np.asarray(class_one_groups, dtype=np.int64)
-    train = np.vstack(
-        (zero[np.isin(zero_group, train_groups)], one[np.isin(one_group, train_groups)])
-    )
-    train_label = np.concatenate(
-        (
-            np.zeros(np.count_nonzero(np.isin(zero_group, train_groups))),
-            np.ones(np.count_nonzero(np.isin(one_group, train_groups))),
-        )
-    )
-    test = np.vstack(
-        (zero[np.isin(zero_group, test_groups)], one[np.isin(one_group, test_groups)])
-    )
-    test_label = np.concatenate(
-        (
-            np.zeros(np.count_nonzero(np.isin(zero_group, test_groups)), dtype=np.int8),
-            np.ones(np.count_nonzero(np.isin(one_group, test_groups)), dtype=np.int8),
-        )
-    )
-    if (
-        min(np.bincount(train_label.astype(np.int8), minlength=2)) == 0
-        or min(np.bincount(test_label, minlength=2)) == 0
-    ):
-        raise RenderError("depth-three tree split must contain both classes")
-    classifier = DecisionTreeClassifier(
-        max_depth=3,
-        random_state=_integer("seed", seed),
-        class_weight="balanced",
-    ).fit(train, train_label)
-    score = classifier.predict_proba(test)[:, 1]
-    prediction = score >= 0.5
-    class_accuracy = tuple(
-        float(np.mean(prediction[test_label == label] == bool(label)))
-        for label in (0, 1)
-    )
-    return {
-        "model": "depth3_decision_tree",
-        "maximum_depth": 3,
-        "train_samples": int(train.shape[0]),
-        "test_samples": int(test.shape[0]),
-        "balanced_accuracy": float(np.mean(class_accuracy)),
-        "auroc": _rank_auc(test_label, score),
-    }
-
-
-def window_shortcut_audit(
-    pairs: Sequence[WindowEntityMatch], *, seed: int = 0
-) -> dict[str, object]:
-    """Test whether broad observable physics directly reveal proxy labels."""
-
-    items = tuple(pairs)
-    if len(items) < 10:
-        raise RenderError("shortcut audit requires at least ten matched pairs")
-    control = np.asarray(
-        [item.control_physical_features for item in items], dtype=np.float64
-    )
-    proxy = np.asarray(
-        [item.proxy_physical_features for item in items], dtype=np.float64
-    )
-    identities = sorted(
-        {item.control_world_identity for item in items}
-        | {item.proxy_world_identity for item in items}
-    )
-    group = {identity: index for index, identity in enumerate(identities)}
-    result = linear_classification_audit(
-        control,
-        proxy,
-        class_zero_groups=np.asarray(
-            [group[item.control_world_identity] for item in items], dtype=np.int64
-        ),
-        class_one_groups=np.asarray(
-            [group[item.proxy_world_identity] for item in items], dtype=np.int64
-        ),
-        seed=seed,
-        maximum_per_class=len(items),
-    )
-    tree = grouped_depth3_tree_audit(
-        control,
-        proxy,
-        np.asarray(
-            [group[item.control_world_identity] for item in items], dtype=np.int64
-        ),
-        np.asarray(
-            [group[item.proxy_world_identity] for item in items], dtype=np.int64
-        ),
-        train_groups=result["train_groups"],
-        test_groups=result["test_groups"],
-        seed=seed,
-    )
-    return {
-        "class_zero": "normal-control",
-        "class_one": "anomaly-proxy",
-        "feature_names": list(WINDOW_PHYSICAL_SHORTCUT_FEATURES),
-        "exact_matching_stratum": "support_semantic_id",
-        **result,
-        "depth3_tree": tree,
-        "scientific_verdict": None,
-    }
-
 
 @dataclass(frozen=True, slots=True)
 class DevelopmentClipWorld:
-    """One frozen anomaly world observed throughout a contiguous source segment."""
+    """One fixed anomaly world rendered once over a contiguous source segment."""
 
     clip_start: int
     frame_ids: tuple[int, ...]
     world: WorldSpec
     report: WorldGenerationReport
     renderer_identity: str
-    windows: tuple[WindowWorld, ...]
-    mechanism: str
+    windows: tuple[RenderedWindow, ...]
 
     def __post_init__(self) -> None:
         start = _integer("clip_start", self.clip_start)
@@ -5802,42 +4330,23 @@ class DevelopmentClipWorld:
             )
         windows = tuple(self.windows)
         if not windows:
-            raise RenderError("a development clip cannot omit its overlapping windows")
+            raise RenderError("a development clip cannot omit its sliding windows")
         if (
             self.world.source_sequence_id != 201
             or self.report.source_sequence_id != 201
+            or self.report.world_seed != self.world.seed
         ):
-            raise RenderError("development clips must use train/201")
-        if self.world.identity != windows[0].world.identity:
-            raise RenderError("development clip and window WorldSpec identities differ")
+            raise RenderError("development world and report must identify train/201")
         expected_starts = tuple(range(start, frame_ids[-1] - 3))
         if tuple(item.window_start for item in windows) != expected_starts:
-            raise RenderError("development clip must contain every overlapping window")
-        if any(
-            item.world.identity != self.world.identity
-            or item.renderer_identity != self.renderer_identity
-            for item in windows
-        ):
-            raise RenderError("development windows do not share one frozen world")
-        expected_mechanism = (
-            "torus_SDF"
-            if any(
-                isinstance(item.shape, HeldOutTorusShape)
-                for item in self.world.objects
-                if item.label == "anomaly-proxy"
-            )
-            else "in_generator"
-        )
-        if self.mechanism != expected_mechanism:
-            raise RenderError("development mechanism does not match proxy geometry")
-        # Repeated window views of one physical frame must be byte-identical.
+            raise RenderError("development clip must contain every sliding window")
         self.source_observation_identities
         object.__setattr__(self, "frame_ids", frame_ids)
         object.__setattr__(self, "windows", windows)
 
     @property
     def source_observation_identities(self) -> tuple[str, ...]:
-        """Return one stable rendered-content identity for each clip frame."""
+        """Prove overlapping windows reuse identical rendered physical frames."""
 
         by_frame: dict[int, str] = {}
         for window in self.windows:
@@ -5847,7 +4356,7 @@ class DevelopmentClipWorld:
                 previous = by_frame.setdefault(frame_id, identity)
                 if previous != identity:
                     raise RenderError(
-                        "one development source frame changed across overlapping windows"
+                        "one source frame changed across overlapping windows"
                     )
         if set(by_frame) != set(self.frame_ids):
             raise RenderError("development windows do not cover every clip frame")
@@ -5856,12 +4365,11 @@ class DevelopmentClipWorld:
     @property
     def identity(self) -> str:
         payload = {
-            "format": "ajae-development-clip-world-v1",
+            "format": "ajae-development-clip-world-v2",
             "world_identity": self.world.identity,
             "clip_start": self.clip_start,
             "frame_ids": self.frame_ids,
             "renderer_identity": self.renderer_identity,
-            "mechanism": self.mechanism,
             "source_observation_identities": self.source_observation_identities,
         }
         return hashlib.sha256(
@@ -5870,13 +4378,12 @@ class DevelopmentClipWorld:
 
     def to_manifest(self) -> dict[str, object]:
         return {
-            "format": "ajae-development-clip-world-v1",
+            "format": "ajae-development-clip-world-v2",
             "identity": self.identity,
             "world_identity": self.world.identity,
             "clip_start": self.clip_start,
             "frame_ids": list(self.frame_ids),
             "renderer_identity": self.renderer_identity,
-            "mechanism": self.mechanism,
             "source_observation_identities": list(self.source_observation_identities),
             "world": self.world.to_dict(),
             "report": self.report.to_dict(),
@@ -5888,27 +4395,22 @@ class DevelopmentClipWorld:
                     "source_observation_identities": list(
                         item.source_observation_identities
                     ),
-                    "descriptors": [
-                        descriptor.to_dict() for descriptor in item.descriptors
-                    ],
                 }
                 for item in self.windows
             ],
         }
 
 
-def _render_development_clip_world(
+def render_development_clip_world(
     world: WorldSpec,
     report: WorldGenerationReport,
     sources: Sequence[SourceFrame],
     ray_grid: RayGrid,
     sensor: SensorCalibration,
     *,
-    mechanism: str,
     renderer_identity: str,
-    density_voxel_size_m: float = 0.1,
 ) -> DevelopmentClipWorld:
-    """Render one mechanism-checked clip and all overlapping five-scan views."""
+    """Render a fixed world once, then cut every causal five-scan window."""
 
     frames = tuple(sorted(tuple(sources), key=lambda item: item.frame_id))
     frame_ids = tuple(item.frame_id for item in frames)
@@ -5922,115 +4424,27 @@ def _render_development_clip_world(
         item.partition != "train" or item.sequence_id != 201 for item in frames
     ):
         raise RenderError("development clip sources must be identified train/201 scans")
-    contains_torus = any(
-        isinstance(item.shape, HeldOutTorusShape)
-        for item in world.objects
-        if item.label == "anomaly-proxy"
-    )
-    if (mechanism == "torus_SDF") != contains_torus or mechanism not in {
-        "in_generator",
-        "torus_SDF",
-    }:
-        raise RenderError("development mechanism does not match the frozen world")
+    if world.world_type != "anomaly_only":
+        raise RenderError("F3 development requires one anomaly-only world")
     frozen_world_identity = world.identity
     rendered = tuple(render_frames(frames, world, ray_grid, sensor))
     if world.identity != frozen_world_identity:
-        raise RenderError("WorldSpec changed while the development clip was rendered")
-    windows: list[WindowWorld] = []
-    for offset in range(len(frames) - 4):
-        source_slice = frames[offset : offset + 5]
-        rendered_slice = rendered[offset : offset + 5]
-        current_pose = CurrentFramePose.from_source(source_slice[-1])
-        descriptors = _window_entity_descriptors(
-            world,
-            report,
-            rendered_slice,
-            current_pose,
-            ray_grid,
-            sensor,
-            density_voxel_size_m=density_voxel_size_m,
+        raise RenderError("WorldSpec changed while the sequence was rendered")
+    windows = tuple(
+        RenderedWindow(
+            window_start=frames[offset].frame_id,
+            frame_ids=tuple(item.frame_id for item in frames[offset : offset + 5]),  # type: ignore[arg-type]
+            rendered_frames=rendered[offset : offset + 5],  # type: ignore[arg-type]
         )
-        windows.append(
-            WindowWorld(
-                window_start=source_slice[0].frame_id,
-                frame_ids=tuple(item.frame_id for item in source_slice),  # type: ignore[arg-type]
-                world=world,
-                report=report,
-                renderer_identity=renderer_identity,
-                current_pose=current_pose,
-                rendered_frames=rendered_slice,  # type: ignore[arg-type]
-                descriptors=descriptors,
-            )
-        )
+        for offset in range(len(frames) - 4)
+    )
     return DevelopmentClipWorld(
         clip_start=frame_ids[0],
         frame_ids=frame_ids,
         world=world,
         report=report,
         renderer_identity=renderer_identity,
-        windows=tuple(windows),
-        mechanism=mechanism,
-    )
-
-
-def render_development_clip_world(
-    world: WorldSpec,
-    report: WorldGenerationReport,
-    sources: Sequence[SourceFrame],
-    ray_grid: RayGrid,
-    sensor: SensorCalibration,
-    *,
-    renderer_identity: str,
-    density_voxel_size_m: float = 0.1,
-) -> DevelopmentClipWorld:
-    """Render one pre-S01 clip while making held-out torus access impossible."""
-
-    if any(
-        isinstance(item.shape, HeldOutTorusShape)
-        for item in world.objects
-        if item.label == "anomaly-proxy"
-    ):
-        raise RenderError("held-out torus observations must remain unopened until S01")
-    return _render_development_clip_world(
-        world,
-        report,
-        sources,
-        ray_grid,
-        sensor,
-        mechanism="in_generator",
-        renderer_identity=renderer_identity,
-        density_voxel_size_m=density_voxel_size_m,
-    )
-
-
-def _render_held_out_torus_clip_world(
-    world: WorldSpec,
-    report: WorldGenerationReport,
-    sources: Sequence[SourceFrame],
-    ray_grid: RayGrid,
-    sensor: SensorCalibration,
-    *,
-    renderer_identity: str,
-    density_voxel_size_m: float = 0.1,
-) -> DevelopmentClipWorld:
-    """Render the distinct S01-only torus mechanism after high-level authorization."""
-
-    torus = tuple(
-        item
-        for item in world.objects
-        if item.label == "anomaly-proxy" and isinstance(item.shape, HeldOutTorusShape)
-    )
-    if len(world.objects) != 1 or len(torus) != 1:
-        raise RenderError("held-out S01 worlds require exactly one torus proxy")
-    return _render_development_clip_world(
-        world,
-        report,
-        sources,
-        ray_grid,
-        sensor,
-        mechanism="torus_SDF",
-        renderer_identity=renderer_identity,
-        density_voxel_size_m=density_voxel_size_m,
+        windows=windows,
     )
 
 
@@ -6043,69 +4457,30 @@ def sample_development_clip_world(
     seed: int,
     *,
     renderer_identity: str,
-    density_voxel_size_m: float = 0.1,
     maximum_attempts: int = 48,
 ) -> DevelopmentClipWorld:
-    """Freeze one anomaly-only development world before rendering the full segment."""
+    """Construct one fixed world; window visibility never changes its root seed."""
 
     frames = tuple(sorted(tuple(sources), key=lambda item: item.frame_id))
     if len(frames) < 9:
         raise RenderError("development generation requires at least nine scans")
     root_seed = _integer("seed", seed)
-    for observation_attempt in range(maximum_attempts):
-        world_seed = root_seed + 10_000_019 * observation_attempt
-        try:
-            world, report = sample_world_spec(
-                (),
-                support_pool,
-                obstacles,
-                "anomaly_only",
-                world_seed,
-                source_sequence_id=201,
-                support_frame_ids=tuple(item.frame_id for item in frames),
-                maximum_attempts=maximum_attempts,
-            )
-            return render_development_clip_world(
-                world,
-                report,
-                frames,
-                ray_grid,
-                sensor,
-                renderer_identity=renderer_identity,
-                density_voxel_size_m=density_voxel_size_m,
-            )
-        except PlacementError:
-            continue
-    raise PlacementError(
-        f"development clip failed {maximum_attempts} visibility attempts"
+    world, report = sample_anomaly_world(
+        support_pool,
+        obstacles,
+        root_seed,
+        source_sequence_id=201,
+        support_frame_ids=tuple(item.frame_id for item in frames),
+        maximum_attempts=maximum_attempts,
     )
-
-
-@dataclass(frozen=True, slots=True)
-class SupportPoints:
-    ground_world: np.ndarray
-    ground_semantic: np.ndarray
-    obstacle_world: np.ndarray
-
-    def __post_init__(self) -> None:
-        ground = np.asarray(self.ground_world, dtype=np.float64)
-        semantic = np.asarray(self.ground_semantic, dtype=np.uint16)
-        obstacle = np.asarray(self.obstacle_world, dtype=np.float64)
-        if (
-            ground.ndim != 2
-            or ground.shape[1] != 3
-            or semantic.shape != (ground.shape[0],)
-        ):
-            raise RenderError(
-                "ground support coordinates and semantics are not aligned"
-            )
-        if obstacle.ndim != 2 or obstacle.shape[1] != 3:
-            raise RenderError("obstacle support coordinates must be [N,3]")
-        if not np.isfinite(ground).all() or not np.isfinite(obstacle).all():
-            raise RenderError("support coordinates must be finite")
-        object.__setattr__(self, "ground_world", _freeze(ground))
-        object.__setattr__(self, "ground_semantic", _freeze(semantic))
-        object.__setattr__(self, "obstacle_world", _freeze(obstacle))
+    return render_development_clip_world(
+        world,
+        report,
+        frames,
+        ray_grid,
+        sensor,
+        renderer_identity=renderer_identity,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -6206,6 +4581,19 @@ def _sha256_path(path: Path) -> str:
         return hashlib.file_digest(handle, "sha256").hexdigest()
 
 
+def _scientific_array_hash(arrays: Mapping[str, np.ndarray]) -> str:
+    digest = hashlib.sha256()
+    for name in sorted(arrays):
+        array = np.ascontiguousarray(arrays[name])
+        digest.update(name.encode("utf-8") + b"\0")
+        digest.update(array.dtype.str.encode("ascii") + b"\0")
+        digest.update(
+            json.dumps(list(array.shape), separators=(",", ":")).encode("ascii")
+        )
+        digest.update(array.tobytes(order="C"))
+    return digest.hexdigest()
+
+
 def load_qualified_support_pool(
     path: Path | str, *, source_sequence_id: int = 206
 ) -> QualifiedSupportPool:
@@ -6219,79 +4607,63 @@ def load_qualified_support_pool(
             "support-pool artifact does not match its frozen source sequence"
         )
     with np.load(source, allow_pickle=False) as payload:
-        if sequence_id == 201:
-            required = {
-                "semantic",
-                "frame",
-                "slot",
-                "range_m",
-                "selection_hash",
-                "anchor_world",
-                "normal",
-                "offset",
-                "metadata_json",
-            }
-            if set(payload.files) != required:
-                raise PlacementError(
-                    "train/201 support-pool artifact has unexpected arrays"
-                )
-            metadata = json.loads(str(payload["metadata_json"].item()))
-            if (
-                metadata.get("experiment") != "Gate1-201-support-pool"
-                or metadata.get("source_sequence") != "train/201"
-                or metadata.get("passed") is not True
-                or metadata.get("pool_size") != int(payload["frame"].shape[0])
-            ):
-                raise PlacementError("train/201 support-pool metadata is not qualified")
-            return QualifiedSupportPool(
-                np.arange(payload["frame"].shape[0], dtype=np.int64),
-                np.asarray(payload["semantic"], dtype=np.uint16),
-                np.asarray(payload["frame"], dtype=np.int32),
-                np.asarray(payload["slot"], dtype=np.int32),
-                np.asarray(payload["range_m"], dtype=np.float64),
-                np.asarray(payload["selection_hash"], dtype=np.uint64),
-                np.asarray(payload["anchor_world"], dtype=np.float64),
-                np.asarray(payload["normal"], dtype=np.float64),
-                np.asarray(payload["offset"], dtype=np.float64),
-                source_sequence_id=201,
-            )
         required = {
-            "semantic_index",
+            "semantic",
             "frame",
             "slot",
             "range_m",
             "selection_hash",
             "anchor_world",
-            "qualified",
-            "normals",
-            "offsets",
+            "normal",
+            "offset",
             "metadata_json",
         }
-        if not required.issubset(payload.files):
-            raise PlacementError("support-pool artifact is missing required arrays")
+        if set(payload.files) != required:
+            raise PlacementError("support-pool artifact has unexpected arrays")
+        arrays = {
+            name: np.asarray(payload[name])
+            for name in required - {"metadata_json"}
+        }
         metadata = json.loads(str(payload["metadata_json"].item()))
-        if metadata.get("experiment") != "E21-v4" or not metadata.get(
-            "elementwise_reproduced"
+        expected = {
+            201: (
+                "schema33-development-support-pool",
+                [4, 553],
+                [6, 551],
+                546,
+            ),
+            206: (
+                "schema33-training-support-pool",
+                [0, 448],
+                [2, 446],
+                445,
+            ),
+        }[sequence_id]
+        if (
+            metadata.get("experiment") != expected[0]
+            or metadata.get("source_sequence") != f"train/{sequence_id}"
+            or metadata.get("source_frames") != expected[1]
+            or metadata.get("center_frames") != expected[2]
+            or metadata.get("covered_center_frames") != expected[3]
+            or metadata.get("passed") is not True
+            or metadata.get("pool_size") != int(arrays["frame"].shape[0])
+            or metadata.get("scientific_array_hash")
+            != _scientific_array_hash(arrays)
+            or int(np.min(arrays["frame"])) != expected[2][0]
+            or int(np.max(arrays["frame"])) != expected[2][1]
         ):
-            raise PlacementError("support-pool metadata is not qualified E21-v4")
-        qualified = np.asarray(payload["qualified"], dtype=np.bool_)
-        rows = np.flatnonzero(qualified)
-        semantic_index = np.asarray(payload["semantic_index"], dtype=np.int64)[rows]
-        if np.any(
-            (semantic_index < 0) | (semantic_index >= len(SUPPORT_POOL_SEMANTICS))
-        ):
-            raise PlacementError("support-pool semantic index is invalid")
+            raise PlacementError("support-pool metadata is not schema-33 qualified")
         return QualifiedSupportPool(
-            rows.astype(np.int64),
-            np.asarray(SUPPORT_POOL_SEMANTICS, dtype=np.uint16)[semantic_index],
-            np.asarray(payload["frame"], dtype=np.int32)[rows],
-            np.asarray(payload["slot"], dtype=np.int32)[rows],
-            np.asarray(payload["range_m"], dtype=np.float64)[rows],
-            np.asarray(payload["selection_hash"], dtype=np.uint64)[rows],
-            np.asarray(payload["anchor_world"], dtype=np.float64)[rows],
-            np.asarray(payload["normals"], dtype=np.float64)[rows, 1],
-            np.asarray(payload["offsets"], dtype=np.float64)[rows, 1],
-            source_sequence_id=206,
+            np.arange(arrays["frame"].shape[0], dtype=np.int64),
+            np.asarray(arrays["semantic"], dtype=np.uint16),
+            np.asarray(arrays["frame"], dtype=np.int32),
+            np.asarray(arrays["slot"], dtype=np.int32),
+            np.asarray(arrays["range_m"], dtype=np.float64),
+            np.asarray(arrays["selection_hash"], dtype=np.uint64),
+            np.asarray(arrays["anchor_world"], dtype=np.float64),
+            np.asarray(arrays["normal"], dtype=np.float64),
+            np.asarray(arrays["offset"], dtype=np.float64),
+            source_sequence_id=sequence_id,
         )
 
 
@@ -6375,280 +4747,6 @@ def collect_observed_obstacle_index(
     )
 
 
-def collect_support_context(
-    frames: Iterable[SourceFrame],
-    *,
-    ground_semantic_ids: Sequence[int] = GROUND_SEMANTIC_IDS,
-    maximum_points_per_class: int = 500_000,
-) -> SupportPoints:
-    """Collect bounded world ground semantics and observed obstacle samples."""
-
-    if type(maximum_points_per_class) is not int or maximum_points_per_class < 1:
-        raise RenderError("maximum_points_per_class must be positive")
-    ground_ids = np.asarray(
-        tuple(int(item) for item in ground_semantic_ids), dtype=np.uint16
-    )
-    if ground_ids.size == 0:
-        raise RenderError("ground_semantic_ids must not be empty")
-    ground_chunks: list[np.ndarray] = []
-    semantic_chunks: list[np.ndarray] = []
-    obstacle_chunks: list[np.ndarray] = []
-
-    def compact_ground() -> None:
-        count = sum(item.shape[0] for item in ground_chunks)
-        if count <= 2 * maximum_points_per_class:
-            return
-        joined = np.concatenate(ground_chunks, axis=0)
-        semantics = np.concatenate(semantic_chunks, axis=0)
-        keep = np.linspace(
-            0, joined.shape[0] - 1, maximum_points_per_class, dtype=np.int64
-        )
-        ground_chunks[:] = [joined[keep]]
-        semantic_chunks[:] = [semantics[keep]]
-
-    def compact_obstacles() -> None:
-        chunks = obstacle_chunks
-        count = sum(item.shape[0] for item in chunks)
-        if count <= 2 * maximum_points_per_class:
-            return
-        joined = np.concatenate(chunks, axis=0)
-        keep = np.linspace(
-            0, joined.shape[0] - 1, maximum_points_per_class, dtype=np.int64
-        )
-        chunks[:] = [joined[keep]]
-
-    for frame in frames:
-        if frame.labels is None:
-            raise PlacementError("ground placement requires normal semantic labels")
-        rotation, translation = _pose(frame)
-        real = np.asarray(frame.real_slots, dtype=np.int32)
-        sensor = np.asarray(frame.xyzi[real, :3], dtype=np.float64)
-        world = sensor @ rotation.T + translation
-        semantic = frame.labels.semantic[real]
-        ground = np.isin(semantic, ground_ids)
-        obstacle = (semantic != np.uint16(0)) & ~ground
-        ground_chunks.append(world[ground])
-        semantic_chunks.append(semantic[ground])
-        obstacle_chunks.append(world[obstacle])
-        compact_ground()
-        compact_obstacles()
-    if not ground_chunks or sum(item.shape[0] for item in ground_chunks) < 3:
-        raise PlacementError(
-            "normal frames contain fewer than three stable ground points"
-        )
-
-    def finish(chunks: list[np.ndarray]) -> np.ndarray:
-        if not chunks:
-            return _freeze(np.empty((0, 3), dtype=np.float64))
-        joined = np.concatenate(chunks, axis=0)
-        if joined.shape[0] > maximum_points_per_class:
-            keep = np.linspace(
-                0, joined.shape[0] - 1, maximum_points_per_class, dtype=np.int64
-            )
-            joined = joined[keep]
-        return _freeze(joined, np.float64)
-
-    ground = finish(ground_chunks)
-    semantics = np.concatenate(semantic_chunks, axis=0)
-    if semantics.size > maximum_points_per_class:
-        keep = np.linspace(
-            0, semantics.size - 1, maximum_points_per_class, dtype=np.int64
-        )
-        semantics = semantics[keep]
-    return SupportPoints(
-        ground, _freeze(semantics.astype(np.uint16)), finish(obstacle_chunks)
-    )
-
-
-def collect_support_points(
-    frames: Iterable[SourceFrame],
-    *,
-    ground_semantic_ids: Sequence[int] = GROUND_SEMANTIC_IDS,
-    maximum_points_per_class: int = 500_000,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Return the legacy coordinate pair while retaining one authoritative collector."""
-
-    context = collect_support_context(
-        frames,
-        ground_semantic_ids=ground_semantic_ids,
-        maximum_points_per_class=maximum_points_per_class,
-    )
-    return context.ground_world, context.obstacle_world
-
-
-def normal_control_support_semantics(raw_semantic_id: int) -> frozenset[int]:
-    semantic = _integer("raw_semantic_id", raw_semantic_id)
-    if semantic in VEHICLE_TEMPLATE_SEMANTICS:
-        return VEHICLE_SUPPORT_SEMANTICS
-    if semantic in PERSON_RIDER_TEMPLATE_SEMANTICS:
-        return PERSON_RIDER_SUPPORT_SEMANTICS
-    raise RenderError("normal-control semantic has no support-surface policy")
-
-
-@dataclass(frozen=True, slots=True)
-class SupportPlaneEstimate:
-    """One deterministic trimmed-SVD plane at a fixed neighborhood radius."""
-
-    radius_m: float
-    support_count: int
-    normal: np.ndarray
-    offset: float
-    anchor_height_m: float
-    median_residual_m: float
-    q95_residual_m: float
-    rms_residual_m: float
-
-
-@dataclass(frozen=True, slots=True)
-class SupportPlaneQualification:
-    """Three-scale support decision used by placement and E21."""
-
-    estimates: tuple[SupportPlaneEstimate, ...]
-    rejection_reason: str | None
-    normal_angle_deg: float
-    anchor_height_difference_m: float
-
-    @property
-    def qualified(self) -> bool:
-        return self.rejection_reason is None
-
-
-def _trimmed_support_plane(
-    local_points_world: np.ndarray,
-    anchor_world: np.ndarray,
-    radius_m: float,
-) -> SupportPlaneEstimate:
-    """Fit one plane after removing the fixed largest-residual ten percent."""
-
-    local = np.asarray(local_points_world, dtype=np.float64)
-    anchor = np.asarray(anchor_world, dtype=np.float64)
-    if local.ndim != 2 or local.shape[1] != 3 or local.shape[0] < 32:
-        raise PlacementError("insufficient_support")
-    try:
-        center = local.mean(axis=0)
-        covariance = (local - center).T @ (local - center) / float(local.shape[0])
-        eigenvalues, eigenvectors = np.linalg.eigh(covariance)
-    except np.linalg.LinAlgError as error:
-        raise PlacementError("degenerate_covariance") from error
-    if not np.isfinite(eigenvalues).all() or float(eigenvalues[-2]) <= 1.0e-12:
-        raise PlacementError("degenerate_covariance")
-    first_normal = eigenvectors[:, 0]
-    first_residual = np.abs((local - center) @ first_normal)
-    retain_count = int(math.ceil(0.90 * local.shape[0]))
-    retained = local[np.argsort(first_residual, kind="stable")[:retain_count]]
-    retained_center = retained.mean(axis=0)
-    try:
-        _, singular_values, vectors = np.linalg.svd(
-            retained - retained_center, full_matrices=False
-        )
-    except np.linalg.LinAlgError as error:
-        raise PlacementError("degenerate_covariance") from error
-    if (
-        singular_values.size < 2
-        or not np.isfinite(singular_values).all()
-        or float(np.square(singular_values[-2]) / retained.shape[0]) <= 1.0e-12
-    ):
-        raise PlacementError("degenerate_covariance")
-    normal = vectors[-1]
-    if normal[2] < 0.0:
-        normal = -normal
-    normal /= np.linalg.norm(normal)
-    offset = -float(np.dot(normal, retained_center))
-    if (
-        not np.isfinite(normal).all()
-        or not math.isfinite(offset)
-        or normal[2] <= np.finfo(np.float64).eps
-    ):
-        raise PlacementError("nonfinite_or_unsolved_plane")
-    height = -(normal[0] * anchor[0] + normal[1] * anchor[1] + offset) / normal[2]
-    residual = np.abs(local @ normal + offset)
-    if not math.isfinite(float(height)) or not np.isfinite(residual).all():
-        raise PlacementError("nonfinite_or_unsolved_plane")
-    return SupportPlaneEstimate(
-        radius_m=float(radius_m),
-        support_count=int(local.shape[0]),
-        normal=_freeze(normal.astype(np.float64, copy=False)),
-        offset=offset,
-        anchor_height_m=float(height),
-        median_residual_m=float(np.median(residual)),
-        q95_residual_m=float(np.quantile(residual, 0.95)),
-        rms_residual_m=float(np.sqrt(np.mean(np.square(residual)))),
-    )
-
-
-def qualify_support_plane(
-    ground_points_world: np.ndarray,
-    anchor_world: np.ndarray,
-    *,
-    radius_m: float = 1.0,
-) -> SupportPlaneQualification:
-    """Identify a low-residual support patch that is stable across three scales."""
-
-    points = np.asarray(ground_points_world, dtype=np.float64)
-    anchor = np.asarray(anchor_world, dtype=np.float64)
-    radius = _finite_scalar("radius_m", radius_m)
-    if points.ndim != 2 or points.shape[1] != 3 or not np.isfinite(points).all():
-        raise PlacementError("ground_points_world must be finite [N,3]")
-    if anchor.shape != (3,) or not np.isfinite(anchor).all():
-        raise PlacementError("anchor_world must be finite [3]")
-    if radius <= 0.0:
-        raise PlacementError("support radius must be positive")
-    estimates: list[SupportPlaneEstimate] = []
-    for scale in (0.75, 1.0, 1.25):
-        current_radius = scale * radius
-        selected = np.linalg.norm(points[:, :2] - anchor[:2], axis=1) <= current_radius
-        try:
-            estimates.append(
-                _trimmed_support_plane(points[selected], anchor, current_radius)
-            )
-        except PlacementError as error:
-            reason = str(error)
-            if reason not in {
-                "insufficient_support",
-                "degenerate_covariance",
-                "nonfinite_or_unsolved_plane",
-            }:
-                raise
-            return SupportPlaneQualification(
-                tuple(estimates), reason, math.nan, math.nan
-            )
-    small, middle, large = estimates
-    cosine = float(np.clip(np.dot(small.normal, large.normal), -1.0, 1.0))
-    angle_deg = math.degrees(math.acos(cosine))
-    height_difference = abs(small.anchor_height_m - large.anchor_height_m)
-    reason = None
-    if middle.q95_residual_m > 0.08:
-        reason = "residual_q95"
-    elif middle.median_residual_m > 0.03:
-        reason = "residual_median"
-    elif angle_deg > 5.0:
-        reason = "multiscale_normal"
-    elif height_difference > 0.08:
-        reason = "multiscale_height"
-    return SupportPlaneQualification(
-        tuple(estimates), reason, float(angle_deg), float(height_difference)
-    )
-
-
-def fit_support_plane(
-    ground_points_world: np.ndarray,
-    anchor_world: np.ndarray,
-    *,
-    radius_m: float = 1.0,
-) -> tuple[np.ndarray, np.ndarray, float]:
-    """Return the qualified central support plane used by object placement."""
-
-    qualification = qualify_support_plane(
-        ground_points_world, anchor_world, radius_m=radius_m
-    )
-    if not qualification.qualified:
-        raise PlacementError(str(qualification.rejection_reason))
-    middle = qualification.estimates[1]
-    contact = np.asarray(anchor_world, dtype=np.float64).copy()
-    contact[2] = middle.anchor_height_m
-    return _freeze(contact), middle.normal, middle.rms_residual_m
-
-
 def _ground_rotation(normal: np.ndarray, yaw: float) -> np.ndarray:
     up = np.array(normal, dtype=np.float64, copy=True)
     up /= np.linalg.norm(up)
@@ -6686,9 +4784,7 @@ def _identity_order(
 
 
 def _shape_outer_bounds(shape: InsertShape) -> tuple[np.ndarray, np.ndarray]:
-    if isinstance(shape, ShapeSpec):
-        return shape.tight_continuous_outer_bounds(z_slabs=256, safety_margin_m=1.0e-6)
-    return shape.local_bounds()
+    return shape.tight_continuous_outer_bounds(z_slabs=256, safety_margin_m=1.0e-6)
 
 
 def _world_aabb(
@@ -6771,29 +4867,6 @@ def observed_normal_collision(
     if points.size == 0:
         return False, math.inf, identities
     local = (points - translation) @ rotation
-    if isinstance(proposed.shape, NormalTemplateShape):
-        # A point is deeply inside only if every hull half-space is below the
-        # threshold. Eliminated points cannot contain the global minimum once
-        # any deep point survives, so later planes only evaluate survivors.
-        local_lower, local_upper = proposed.shape.local_bounds()
-        candidates = np.flatnonzero(
-            np.all((local >= local_lower) & (local <= local_upper), axis=1)
-        )
-        maximum = np.full(local.shape[0], -np.inf, dtype=np.float64)
-        normals = proposed.shape.plane_normals
-        offsets = proposed.shape.plane_offsets
-        for start in range(0, normals.shape[0], 16):
-            stop = min(start + 16, normals.shape[0])
-            values = local[candidates] @ normals[start:stop].T + offsets[start:stop]
-            candidate_maximum = np.maximum(maximum[candidates], np.max(values, axis=1))
-            keep = candidate_maximum < -threshold
-            maximum[candidates] = candidate_maximum
-            candidates = candidates[keep]
-            if candidates.size == 0:
-                break
-        if candidates.size:
-            minimum = float(np.min(maximum[candidates]))
-            return True, minimum, identities
     distance = proposed.shape.signed_distance(local)
     minimum = float(np.min(distance))
     deep = distance < -threshold
@@ -6802,38 +4875,12 @@ def observed_normal_collision(
 
 def _fibonacci_surface_points(shape: InsertShape, count: int = 8192) -> np.ndarray:
     identifiers = np.arange(_integer("surface point count", count, minimum=32))
-    if isinstance(shape, HeldOutTorusShape):
-        # A torus is not star-shaped about its center, so center-directed rays
-        # miss the hole.  Two irrational rotations give deterministic surface
-        # witnesses without imposing the star-shaped assumption.
-        major_angle = (
-            2.0 * math.pi * np.mod(identifiers * ((math.sqrt(5.0) - 1.0) / 2.0), 1.0)
-        )
-        tube_angle = (
-            2.0 * math.pi * np.mod((identifiers + 0.5) * (math.sqrt(2.0) - 1.0), 1.0)
-        )
-        radial = shape.major_radius_m + shape.tube_radius_m * np.cos(tube_angle)
-        points = np.column_stack(
-            (
-                radial * np.cos(major_angle),
-                radial * np.sin(major_angle),
-                shape.tube_radius_m * np.sin(tube_angle),
-            )
-        )
-        residual = np.abs(shape.signed_distance(points))
-        if not np.isfinite(points).all() or float(np.max(residual)) > 1.0e-12:
-            raise PlacementError("deterministic torus points are not on the geometry")
-        return points
     z = 1.0 - 2.0 * (identifiers + 0.5) / count
     angle = math.pi * (3.0 - math.sqrt(5.0)) * identifiers
     radial = np.sqrt(np.maximum(0.0, 1.0 - np.square(z)))
     direction = np.column_stack((radial * np.cos(angle), radial * np.sin(angle), z))
-    if isinstance(shape, NormalTemplateShape):
-        center = np.mean(shape.vertices_m, axis=0)
-        radius = float(np.max(np.linalg.norm(shape.vertices_m - center, axis=1)))
-    else:
-        center = np.zeros(3, dtype=np.float64)
-        radius = shape.bound_radius_m
+    center = np.zeros(3, dtype=np.float64)
+    radius = shape.bound_radius_m
     origins = center + 1.05 * radius * direction
     distance, _, valid = shape.intersect(origins, -direction)
     if not bool(np.all(valid)):
@@ -6870,16 +4917,11 @@ def _pair_local_witnesses(item: ObjectSpec) -> np.ndarray:
     interior = probes[shape.signed_distance(probes) < 0.0]
     if interior.size:
         chunks.append(interior)
-    if isinstance(shape, ShapeSpec):
-        undeformed = list(shape.primitive_offsets_m)
-        report = item.shape_generation_report
-        if report is not None:
-            undeformed.extend(report.shared_witnesses_undeformed_m)
-        chunks.append(_forward_deform(shape, np.asarray(undeformed, dtype=np.float64)))
-    elif isinstance(shape, NormalTemplateShape):
-        chunks.extend(
-            (shape.vertices_m, np.mean(shape.vertices_m[shape.faces], axis=1))
-        )
+    undeformed = list(shape.primitive_offsets_m)
+    report = item.shape_generation_report
+    if report is not None:
+        undeformed.extend(report.shared_witnesses_undeformed_m)
+    chunks.append(_forward_deform(shape, np.asarray(undeformed, dtype=np.float64)))
     return np.concatenate(chunks, axis=0)
 
 
@@ -7009,8 +5051,7 @@ def place_object(
     yaw_rad: float,
     material_seed: int,
     yaw_seed: int,
-    shape_seed: int | None = None,
-    template_identity: str | None = None,
+    shape_seed: int,
     shape_generation_report: ShapeGenerationReport | None = None,
     existing_objects: Sequence[ObjectSpec] = (),
     allowed_support_semantics: Sequence[int] | None = None,
@@ -7031,16 +5072,9 @@ def place_object(
     ):
         raise TypeError("placement inputs have unsupported types")
     label_value = str(label)
-    if label_value == "normal-control":
-        if not isinstance(shape, NormalTemplateShape):
-            raise PlacementError(
-                "normal-control placement requires a train/206 template"
-            )
-        allowed = normal_control_support_semantics(shape.raw_semantic_id)
-    elif label_value == "anomaly-proxy":
-        allowed = frozenset(SUPPORT_POOL_SEMANTICS)
-    else:
-        raise PlacementError(f"label must be one of {OBJECT_LABELS}")
+    if label_value != "anomaly-proxy":
+        raise PlacementError("schema 33 placement only supports anomaly-proxy")
+    allowed = frozenset(SUPPORT_POOL_SEMANTICS)
     if type(maximum_candidates) is not int or not 1 <= maximum_candidates <= 128:
         raise PlacementError("maximum_candidates must lie in [1,128]")
     if allowed_support_semantics is not None:
@@ -7120,8 +5154,7 @@ def place_object(
         record = PlacementRecord(
             object_id,
             label_value,
-            shape_seed,
-            template_identity,
+            _integer("shape_seed", shape_seed),
             _integer("material_seed", material_seed),
             _integer("yaw_seed", yaw_seed),
             proposal,
@@ -7134,7 +5167,7 @@ def place_object(
             tuple(proposal_minimum_sdf),
             minimum_sdf,
             0,
-            () if shape_seed is None else (shape_seed,),
+            (shape_seed,),
             (),
         )
         return proposed, replace(
@@ -7146,100 +5179,31 @@ def place_object(
     raise PlacementExhaustion(proposal_pool_indices, rejections, proposal_minimum_sdf)
 
 
-def validate_world_visibility(
-    world: WorldSpec,
-    frames: Iterable[SourceFrame],
-    ray_grid: RayGrid,
-    sensor: SensorCalibration,
-    *,
-    minimum_returns_per_object: int = 1,
-) -> dict[int, int]:
-    """Require each entity to win nearest-return competition at least once."""
+def _anomaly_entity_count(seed: int) -> int:
+    """Draw one to nine proxies, with 90% probability on one to three."""
 
-    if type(minimum_returns_per_object) is not int or minimum_returns_per_object < 1:
-        raise RenderError("minimum_returns_per_object must be positive")
-    counts = {item.object_id: 0 for item in world.objects}
-    frame_count = 0
-    for frame in frames:
-        if frame.sequence_id != world.source_sequence_id:
-            raise RenderError("visibility frame and world use different sequences")
-        if int(frame.xyzi.shape[0]) != ray_grid.slot_count:
-            raise RenderError(
-                "visibility frame and ray grid have different slot counts"
-            )
-        rotation, lidar_origin = _pose(frame)
-        directions_world = ray_grid.directions_for(frame) @ rotation.T
-        origins_world = ray_grid.origins_for(frame) @ rotation.T + lidar_origin
-        competition = _accepted_object_hits(
-            origins_world,
-            directions_world,
-            world,
-            ray_grid,
-            sensor,
-            int(frame.frame_id),
-        )
-        normal_range = np.asarray(ray_grid.ranges(frame)).copy()
-        normal_range[np.asarray(frame.zero_slot_mask, dtype=np.bool_)] = np.inf
-        visible = np.isfinite(competition.distance_m) & (
-            competition.distance_m < normal_range - world.tie_tolerance_m
-        )
-        for identifier in counts:
-            counts[identifier] += int(
-                np.count_nonzero(visible & (competition.object_id == identifier))
-            )
-        frame_count += 1
-    if frame_count == 0:
-        raise RenderError("world visibility validation requires at least one frame")
-    missing = {
-        identifier: count
-        for identifier, count in counts.items()
-        if count < minimum_returns_per_object
-    }
-    if missing:
-        raise PlacementError(
-            f"world objects have insufficient visible returns: {missing}"
-        )
-    return counts
-
-
-def _training_entity_counts(world_type: WorldType, seed: int) -> tuple[int, int]:
-    """Freeze label counts with 90% of nonzero draws in the one-to-three range."""
-
-    if world_type not in WORLD_TYPES:
-        raise RenderError(f"world_type must be one of {WORLD_TYPES}")
-    if world_type == "pure_normal":
-        return 0, 0
     rng = np.random.default_rng(_integer("seed", seed))
     values = np.arange(1, 10)
     probability = np.asarray((0.36, 0.32, 0.22, 0.03, 0.02, 0.015, 0.01, 0.01, 0.015))
-
-    def draw() -> int:
-        return int(rng.choice(values, p=probability))
-
-    normal_count = draw() if world_type in {"control_only", "mixed"} else 0
-    anomaly_count = draw() if world_type in {"mixed", "anomaly_only"} else 0
-    return normal_count, anomaly_count
+    return int(rng.choice(values, p=probability))
 
 
-def sample_world_spec(
-    normal_template_library: Sequence[NormalTemplateShape],
+def sample_anomaly_world(
     support_pool: QualifiedSupportPool,
     obstacles: ObservedObstacleIndex,
-    world_type: WorldType,
     seed: int,
     *,
     source_sequence_id: int,
     support_frame_ids: Sequence[int] | None = None,
     maximum_attempts: int = 48,
 ) -> tuple[WorldSpec, WorldGenerationReport]:
-    """Build one immutable counterfactual world before any scan is rendered."""
+    """Build one immutable anomaly-only world before rendering any scan."""
 
-    templates = tuple(normal_template_library)
     world_seed = _integer("seed", seed)
     if not isinstance(support_pool, QualifiedSupportPool) or not isinstance(
         obstacles, ObservedObstacleIndex
     ):
-        raise TypeError("training world requires the qualified pool and obstacle index")
+        raise TypeError("anomaly world requires the qualified pool and obstacle index")
     sequence_id = _integer("source_sequence_id", source_sequence_id)
     if support_pool.source_sequence_id != sequence_id:
         raise PlacementError(
@@ -7253,102 +5217,27 @@ def sample_world_spec(
         if not members:
             raise RenderError("support_frame_ids cannot be empty")
         allowed_frames = frozenset(members)
-    normal_count, anomaly_count = _training_entity_counts(world_type, world_seed)
-    if normal_count and (
-        not templates
-        or any(not isinstance(item, NormalTemplateShape) for item in templates)
-        or any(item.source_sequence_id != 206 for item in templates)
-    ):
-        raise RenderError("training entities require a 206 normal-template library")
-    if normal_count == anomaly_count == 0:
-        world = WorldSpec(world_seed, sequence_id)
-        return world, WorldGenerationReport(
-            world_seed, sequence_id, world_type, 0, 0, 0, world_seed, world_seed
-        )
-    template_index_by_identity = {
-        hashlib.sha256(
-            json.dumps(item.to_dict(), sort_keys=True, separators=(",", ":")).encode(
-                "utf-8"
-            )
-        ).hexdigest(): index
-        for index, item in enumerate(templates)
-    }
-    if len(template_index_by_identity) != len(templates):
-        raise RenderError("training normal-template identities must be unique")
+    anomaly_count = _anomaly_entity_count(world_seed)
 
     for attempt in range(maximum_attempts):
+        # This is the only retry stream authorized by the schema-33 protocol.
         attempt_seed = world_seed + 1_000_003 * attempt
-        rng = np.random.default_rng(attempt_seed)
         objects: list[ObjectSpec] = []
         records: list[PlacementRecord] = []
         try:
-            labels: list[ObjectLabel] = ["normal-control"] * normal_count + [
-                "anomaly-proxy"
-            ] * anomaly_count
-            rng.shuffle(labels)
-            for entity_index, label in enumerate(labels):
+            for entity_index in range(anomaly_count):
                 entity_seed = attempt_seed + 10_007 * (entity_index + 1)
-                shape_seed: int | None = None
-                template_identity: str | None = None
-                template_index: int | None = None
-                template_seed: int | None = None
-                scale_seed: int | None = None
-                perturbation: float | None = None
-                report: ShapeGenerationReport | None = None
-                grounding: GroundingEligibility | None = None
-                shape_proposals: tuple[int, ...] = ()
-                grounding_rejections: tuple[int, ...] = ()
-                if label == "normal-control":
-                    template_seed = entity_seed + 1
-                    scale_seed = entity_seed + 2
-                    template_index = int(
-                        np.random.default_rng(template_seed).integers(0, len(templates))
-                    )
-                    source = templates[template_index]
-                    target_scale = np.random.default_rng(
-                        np.random.SeedSequence([scale_seed, 2501])
-                    ).uniform(0.9, 1.1, size=3)
-                    relative_scale = target_scale / np.asarray(
-                        source.scale_xyz, dtype=np.float64
-                    )
-                    shape = source.rescaled(relative_scale)
-                    grounding = qualify_grounding(shape)
-                    semantic = source.raw_semantic_id
-                    limit = (
-                        math.pi
-                        if semantic == 30
-                        else math.radians(30.0)
-                        if semantic in (11, 15, 31, 32)
-                        else math.radians(15.0)
-                    )
-                    perturbation = float(
-                        np.random.default_rng(
-                            np.random.SeedSequence([entity_seed + 31, 2502])
-                        ).uniform(-limit, limit)
-                    )
-                    template_identity = hashlib.sha256(
-                        json.dumps(
-                            source.to_dict(), sort_keys=True, separators=(",", ":")
-                        ).encode("utf-8")
-                    ).hexdigest()
-                else:
-                    (
-                        shape,
-                        report,
-                        grounding,
-                        shape_proposals,
-                        grounding_rejections,
-                    ) = _grounding_qualified_shape(
-                        entity_seed + 3, stride=3072, maximum_proposals=64
-                    )
-                    shape_seed = shape_proposals[-1]
-                allowed_semantics = (
-                    normal_control_support_semantics(shape.raw_semantic_id)
-                    if label == "normal-control"
-                    else frozenset(SUPPORT_POOL_SEMANTICS)
+                (
+                    shape,
+                    report,
+                    grounding,
+                    shape_proposals,
+                    grounding_rejections,
+                ) = _grounding_qualified_shape(
+                    entity_seed + 3, stride=3072, maximum_proposals=64
                 )
-                eligible_rows = np.flatnonzero(
-                    np.isin(support_pool.semantics, tuple(allowed_semantics))
+                eligible_rows = np.arange(
+                    support_pool.pool_indices.shape[0], dtype=np.int64
                 )
                 if allowed_frames is not None:
                     eligible_rows = eligible_rows[
@@ -7358,198 +5247,51 @@ def sample_world_spec(
                     ]
                 if eligible_rows.size == 0:
                     raise PlacementError(
-                        "the selected window has no semantically legal support patch"
+                        "the selected sequence has no legal support patch"
                     )
                 material_seed = entity_seed + 11
                 yaw_seed = entity_seed + 31
-                yaw = (
-                    float(perturbation)
-                    if perturbation is not None
-                    else float(
-                        np.random.default_rng(yaw_seed).uniform(-math.pi, math.pi)
-                    )
-                )
+                yaw = float(np.random.default_rng(yaw_seed).uniform(-math.pi, math.pi))
                 item, record = place_object(
                     shape,
                     MaterialSpec.sample(material_seed),
                     support_pool,
                     obstacles,
                     object_id=entity_index + 1,
-                    label=label,
-                    proposal_namespace="schema33-sequence-world-v1",
+                    label="anomaly-proxy",
+                    proposal_namespace="schema33-sequence-world-v2",
                     proposal_stream=entity_seed,
                     yaw_rad=yaw,
                     material_seed=material_seed,
                     yaw_seed=yaw_seed,
-                    shape_seed=shape_seed,
-                    template_identity=template_identity,
+                    shape_seed=shape_proposals[-1],
                     shape_generation_report=report,
                     existing_objects=objects,
                     grounding_eligibility=grounding,
                     proposal_rows=eligible_rows,
                 )
-                record = replace(
-                    record,
-                    template_seed=template_seed,
-                    scale_seed=scale_seed,
-                    pose_perturbation_rad=perturbation,
-                )
-                if label == "anomaly-proxy":
-                    record = replace(
+                records.append(
+                    replace(
                         record,
                         accepted_shape_proposal=len(shape_proposals) - 1,
                         shape_proposal_seeds=shape_proposals,
                         grounding_rejection_seeds=grounding_rejections,
                     )
+                )
                 objects.append(item)
-                records.append(record)
             world = WorldSpec(world_seed, sequence_id, tuple(objects))
-            if world.world_type != world_type:
-                raise AssertionError("training sampler produced the wrong world type")
         except PlacementError:
             continue
         return world, WorldGenerationReport(
             world_seed,
             sequence_id,
-            world_type,
+            "anomaly_only",
             attempt,
-            normal_count,
             anomaly_count,
             world_seed,
             attempt_seed,
             tuple(records),
         )
     raise PlacementError(
-        f"training {world_type} world failed {maximum_attempts} deterministic attempts"
-    )
-
-
-def _sample_held_out_torus_world_spec(
-    support_pool: QualifiedSupportPool,
-    obstacles: ObservedObstacleIndex,
-    seed: int,
-    *,
-    source_sequence_id: int,
-    support_frame_ids: Sequence[int],
-    maximum_attempts: int,
-) -> tuple[WorldSpec, WorldGenerationReport]:
-    """Create the one-proxy torus world frozen for an S01 plan row."""
-
-    world_seed = _integer("seed", seed)
-    sequence_id = _integer("source_sequence_id", source_sequence_id)
-    if (
-        not isinstance(support_pool, QualifiedSupportPool)
-        or support_pool.source_sequence_id != sequence_id
-        or not isinstance(obstacles, ObservedObstacleIndex)
-    ):
-        raise PlacementError("held-out world uses another support or obstacle source")
-    allowed_frames = tuple(
-        _integer("support frame", value) for value in support_frame_ids
-    )
-    if not allowed_frames or maximum_attempts < 1:
-        raise RenderError("held-out placement requires frames and positive attempts")
-    eligible_rows = np.flatnonzero(
-        np.isin(support_pool.semantics, (40, 48, 49))
-        & np.isin(support_pool.frames, allowed_frames)
-    )
-    if eligible_rows.size == 0:
-        raise PlacementError("held-out clip has no protocol-approved support patch")
-    for attempt in range(maximum_attempts):
-        attempt_seed = world_seed + 1_000_003 * attempt
-        entity_seed = attempt_seed + 10_007
-        shape_seed = entity_seed + 3
-        material_seed = entity_seed + 11
-        yaw_seed = entity_seed + 31
-        shape = HeldOutTorusShape.sample(shape_seed, size_m_range=(0.4, 3.0))
-        grounding = qualify_grounding(shape)
-        yaw = float(np.random.default_rng(yaw_seed).uniform(-math.pi, math.pi))
-        try:
-            item, placement = place_object(
-                shape,
-                MaterialSpec.sample(material_seed),
-                support_pool,
-                obstacles,
-                object_id=1,
-                label="anomaly-proxy",
-                proposal_namespace="ajae-held-out-torus-v1",
-                proposal_stream=entity_seed,
-                yaw_rad=yaw,
-                material_seed=material_seed,
-                yaw_seed=yaw_seed,
-                shape_seed=shape_seed,
-                existing_objects=(),
-                grounding_eligibility=grounding,
-                proposal_rows=eligible_rows,
-            )
-        except PlacementError:
-            continue
-        placement = replace(
-            placement,
-            accepted_shape_proposal=0,
-            shape_proposal_seeds=(shape_seed,),
-            grounding_rejection_seeds=(),
-        )
-        world = WorldSpec(world_seed, sequence_id, (item,))
-        return world, WorldGenerationReport(
-            world_seed,
-            sequence_id,
-            "anomaly_only",
-            attempt,
-            0,
-            1,
-            world_seed,
-            attempt_seed,
-            (placement,),
-        )
-    raise PlacementError(
-        f"held-out torus world failed {maximum_attempts} deterministic attempts"
-    )
-
-
-def _sample_held_out_torus_clip_world(
-    support_pool: QualifiedSupportPool,
-    obstacles: ObservedObstacleIndex,
-    sources: Sequence[SourceFrame],
-    ray_grid: RayGrid,
-    sensor: SensorCalibration,
-    seed: int,
-    *,
-    renderer_identity: str,
-    density_voxel_size_m: float = 0.1,
-    maximum_attempts: int = 48,
-) -> DevelopmentClipWorld:
-    """Freeze and render one deterministic held-out torus clip for S01 only."""
-
-    frames = tuple(sorted(tuple(sources), key=lambda item: item.frame_id))
-    if len(frames) != 9 or tuple(item.frame_id for item in frames) != tuple(
-        range(frames[0].frame_id, frames[0].frame_id + 9)
-    ):
-        raise RenderError("held-out generation requires exactly nine consecutive scans")
-    if any(item.partition != "train" or item.sequence_id != 201 for item in frames):
-        raise RenderError("held-out generation is restricted to train/201")
-    root_seed = _integer("seed", seed)
-    for observation_attempt in range(maximum_attempts):
-        world_seed = root_seed + 10_000_019 * observation_attempt
-        try:
-            world, report = _sample_held_out_torus_world_spec(
-                support_pool,
-                obstacles,
-                world_seed,
-                source_sequence_id=201,
-                support_frame_ids=tuple(item.frame_id for item in frames),
-                maximum_attempts=maximum_attempts,
-            )
-            return _render_held_out_torus_clip_world(
-                world,
-                report,
-                frames,
-                ray_grid,
-                sensor,
-                renderer_identity=renderer_identity,
-                density_voxel_size_m=density_voxel_size_m,
-            )
-        except PlacementError:
-            continue
-    raise PlacementError(
-        f"held-out torus clip failed {maximum_attempts} visibility attempts"
+        f"anomaly world failed {maximum_attempts} deterministic placement attempts"
     )

@@ -20,7 +20,7 @@ from torch import Tensor, nn
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_STU_REPOSITORY = (
-    PROJECT_ROOT.parent / "DynaCAN-deps" / "stu_dataset" / "Mask4Former3D"
+    PROJECT_ROOT / "vendor" / "stu" / "Mask4Former3D"
 )
 NUM_NORMAL_CLASSES = 19
 NUM_QUERIES = 100
@@ -258,6 +258,15 @@ class STUVoxelEvidence:
     normal_class: Tensor
 
 
+def official_stu_semantic_class(pred_logits: Tensor, pred_masks: Tensor) -> Tensor:
+    """Reproduce the released STU trainer's per-voxel semantic prediction."""
+
+    class_probability = pred_logits.softmax(dim=-1)[:, :NUM_NORMAL_CLASSES]
+    class_confidence, classes = class_probability.max(dim=1)
+    confidence = pred_masks.sigmoid() * class_confidence[None, :]
+    return classes[confidence.argmax(dim=1)]
+
+
 def assigned_stu_evidence(pred_logits: Tensor, pred_masks: Tensor) -> STUVoxelEvidence:
     """Assign one official query to each voxel and retain official MaxLogit."""
 
@@ -288,10 +297,11 @@ def assigned_stu_evidence(pred_logits: Tensor, pred_masks: Tensor) -> STUVoxelEv
     reliability_assign = assignment_strength[row, assigned_query]
     reliability_noobj = class_probability[assigned_query, NUM_NORMAL_CLASSES]
 
-    # The released STU score aggregates all queries before taking MaxLogit.
+    # MaxLogit aggregates all queries, while official semantics select one query.
     official_confidence = mask_probability @ normal_probability
     maxlogit_score = 1.0 - official_confidence.max(dim=1).values
-    normal_class = official_confidence.argmax(dim=1)
+    query_class = normal_probability.argmax(dim=1)
+    normal_class = query_class[assigned_query]
     for name, value in (
         ("STU assigned normal evidence", normal_evidence),
         ("STU assignment reliability", reliability_assign),
@@ -445,6 +455,37 @@ def stu_input_identity(
     return digest.hexdigest()
 
 
+def official_stu_sparse_quantize(
+    coordinates: np.ndarray,
+    features: np.ndarray,
+    *,
+    official_repository: Path | str = DEFAULT_STU_REPOSITORY,
+    voxel_size: float = STU_VOXEL_SIZE_METRES,
+) -> tuple[Any, Any, Any, Any]:
+    """Apply the exact MinkowskiEngine quantizer used by the frozen STU bridge."""
+
+    points = np.asarray(coordinates, dtype=np.float64)
+    values = np.asarray(features, dtype=np.float32)
+    if points.ndim != 2 or points.shape[1] != 3 or values.shape != (points.shape[0], 2):
+        raise ModelError(
+            "STU quantization requires coordinates [N,3] and features [N,2]"
+        )
+    if (
+        points.shape[0] == 0
+        or not np.isfinite(points).all()
+        or not np.isfinite(values).all()
+    ):
+        raise ModelError("STU quantization requires finite non-empty inputs")
+    _, me, _ = _official_modules(Path(official_repository).expanduser().resolve())
+    return me.utils.sparse_quantize(
+        coordinates=points,
+        features=values,
+        return_index=True,
+        return_inverse=True,
+        quantization_size=float(voxel_size),
+    )
+
+
 class FrozenSTUPointEncoder(nn.Module):
     """Run official single-frame STU and restore frozen point-level evidence."""
 
@@ -568,14 +609,15 @@ class FrozenSTUPointEncoder(nn.Module):
         # Quantize only visible returns; inverse retains their supplied order.
         point_coordinates = coordinates_np[slots_np]
         point_features = features_np[slots_np]
-        _, me, _ = _official_modules(self.official_repository)
-        sparse_coordinates, sparse_features, unique, inverse = me.utils.sparse_quantize(
-            coordinates=point_coordinates,
-            features=point_features,
-            return_index=True,
-            return_inverse=True,
-            quantization_size=self.voxel_size,
+        sparse_coordinates, sparse_features, unique, inverse = (
+            official_stu_sparse_quantize(
+                point_coordinates,
+                point_features,
+                official_repository=self.official_repository,
+                voxel_size=self.voxel_size,
+            )
         )
+        _, me, _ = _official_modules(self.official_repository)
         if not isinstance(sparse_features, Tensor):
             sparse_features = torch.from_numpy(np.asarray(sparse_features))
         collated_coordinates, collated_features = me.utils.sparse_collate(
@@ -634,6 +676,11 @@ class FrozenSTUPointEncoder(nn.Module):
         if masks.shape[0] != sparse_point_features.shape[0]:
             raise ModelError("STU masks and hooked sparse features do not align")
         sparse_evidence = assigned_stu_evidence(logits, masks)
+        official_semantic = official_stu_semantic_class(logits, masks)
+        if not torch.equal(sparse_evidence.normal_class, official_semantic):
+            raise ModelError(
+                "normal_class differs from the released STU trainer semantics"
+            )
 
         inverse_map = torch.as_tensor(inverse, dtype=torch.long, device=self.device)
         if inverse_map.shape != (slots_np.size,):

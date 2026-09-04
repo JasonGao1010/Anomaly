@@ -9,13 +9,34 @@ from pathlib import Path
 from typing import Callable, Sequence
 
 import numpy as np
+import torch
 
 try:
-    from .evaluate import window_stu_inputs
+    from .evaluate import score_window, window_stu_inputs
+    from .model import (
+        MASK_DIM,
+        NUM_NORMAL_CLASSES,
+        NUM_QUERIES,
+        STUPointEncoding,
+        assigned_stu_evidence,
+        official_stu_semantic_class,
+        official_stu_sparse_quantize,
+        stu_input_identity,
+    )
     from .protocol import FrameSpan, SequenceSpec, load_protocol
     from .scene import PointLabels, assemble_window, make_source_frame
 except ImportError:  # Direct script execution.
-    from evaluate import window_stu_inputs
+    from evaluate import score_window, window_stu_inputs
+    from model import (
+        MASK_DIM,
+        NUM_NORMAL_CLASSES,
+        NUM_QUERIES,
+        STUPointEncoding,
+        assigned_stu_evidence,
+        official_stu_semantic_class,
+        official_stu_sparse_quantize,
+        stu_input_identity,
+    )
     from protocol import FrameSpan, SequenceSpec, load_protocol
     from scene import PointLabels, assemble_window, make_source_frame
 
@@ -118,6 +139,119 @@ def _route_is_pretraining() -> dict[str, object]:
     return {"training_allowed": False, "methods": sorted(protocol.methods)}
 
 
+class _DeterministicEncoder:
+    def __call__(
+        self,
+        coordinates: np.ndarray,
+        features: np.ndarray,
+        real_slots: np.ndarray | None = None,
+    ) -> STUPointEncoding:
+        rows = (
+            np.arange(coordinates.shape[0], dtype=np.int64)
+            if real_slots is None
+            else np.asarray(real_slots, dtype=np.int64)
+        )
+        count = rows.size
+        score = torch.from_numpy(
+            np.asarray(features[rows, 0] + features[rows, 1], dtype=np.float32)
+        )
+        evidence = torch.zeros((count, NUM_NORMAL_CLASSES), dtype=torch.float32)
+        evidence[:, 8] = 1.0
+        return STUPointEncoding(
+            point_features=torch.zeros((count, MASK_DIM)),
+            assigned_query=torch.zeros(count, dtype=torch.long),
+            normal_evidence=evidence,
+            reliability_assign=torch.ones(count),
+            reliability_noobj=torch.zeros(count),
+            maxlogit_score=score,
+            normal_class=torch.full((count,), 8, dtype=torch.long),
+            inverse_map=torch.arange(count, dtype=torch.long),
+            real_slots=torch.as_tensor(rows, dtype=torch.long),
+            input_identity=stu_input_identity(coordinates, features, rows),
+        )
+
+
+def _single_scan_degeneracy() -> dict[str, object]:
+    spec = SequenceSpec("train", 201, "fixture", True, FrameSpan(0, 5))
+    sources = []
+    for frame in range(5):
+        xyzi = (
+            np.zeros((1, 4), dtype=np.float32)
+            if frame < 4
+            else np.asarray(((10.0, 0.0, 0.0, 0.5),), dtype=np.float32)
+        )
+        packed = np.asarray((40,), dtype=np.uint32)
+        labels = PointLabels(
+            packed=packed,
+            semantic=packed.astype(np.uint16),
+            instance=np.zeros(1, dtype=np.uint16),
+            semantic_target=np.asarray((8,), dtype=np.uint8),
+        )
+        sources.append(
+            make_source_frame(
+                frame,
+                xyzi,
+                np.eye(4, dtype=np.float64),
+                labels,
+                partition="train",
+                sequence_id=201,
+            )
+        )
+    window = assemble_window(spec, 0, tuple(range(5)), tuple(sources))
+    inputs = window_stu_inputs(window)
+    if not (
+        np.array_equal(inputs.single_coordinates, inputs.dense_coordinates)
+        and np.array_equal(inputs.single_features, inputs.dense_features)
+    ):
+        raise QualificationError(
+            "dense input does not reduce exactly to the single scan"
+        )
+    scores = score_window(_DeterministicEncoder(), window)  # type: ignore[arg-type]
+    if not (
+        np.array_equal(scores.single_score, scores.dense_current_score)
+        and np.array_equal(scores.single_class, scores.dense_current_class)
+    ):
+        raise QualificationError("single-scan degeneration changed its predictions")
+    return {"input_points": int(inputs.dense_coordinates.shape[0]), "exact": True}
+
+
+def _shared_voxel_current_recovery() -> dict[str, object]:
+    spec = SequenceSpec("train", 201, "fixture", True, FrameSpan(0, 5))
+    sources = tuple(_source(frame, 0.0, 1.001 + 0.001 * frame) for frame in range(5))
+    window = assemble_window(spec, 0, tuple(range(5)), sources)
+    inputs = window_stu_inputs(window)
+    _, _, _, inverse = official_stu_sparse_quantize(
+        inputs.dense_coordinates, inputs.dense_features
+    )
+    inverse_map = np.asarray(inverse, dtype=np.int64)
+    current = int(inputs.dense_current_rows[0])
+    if inverse_map.shape != (inputs.dense_coordinates.shape[0],) or not np.any(
+        inverse_map[:current] == inverse_map[current]
+    ):
+        raise QualificationError(
+            "official voxel inverse map did not recover a shared-voxel current point"
+        )
+    return {
+        "dense_points": int(inverse_map.size),
+        "current_row": current,
+        "shared_voxel_row": int(inverse_map[current]),
+    }
+
+
+def _official_semantic_equivalence() -> dict[str, object]:
+    logits = torch.full((NUM_QUERIES, NUM_NORMAL_CLASSES + 1), -20.0)
+    logits[:, -1] = 20.0
+    logits[0, 0], logits[0, -1] = 5.0, 0.0
+    logits[1, 1], logits[1, -1] = 4.0, 0.0
+    masks = torch.full((1, NUM_QUERIES), -20.0)
+    masks[0, 0], masks[0, 1] = 3.0, 1.0
+    evidence = assigned_stu_evidence(logits, masks)
+    reference = official_stu_semantic_class(logits, masks)
+    if not torch.equal(evidence.normal_class, reference):
+        raise QualificationError("normal_class differs from official query semantics")
+    return {"checked_voxels": 1, "class": int(reference[0])}
+
+
 def run_schema33_qualification() -> dict[str, object]:
     checks: tuple[tuple[str, Callable[[], dict[str, object]]], ...] = (
         ("latest_scan_is_the_coordinate_frame", _latest_frame_alignment),
@@ -125,6 +259,12 @@ def run_schema33_qualification() -> dict[str, object]:
         ("single_and_dense_score_the_same_current_points", _paired_input_rows),
         ("one_online_output_per_current_frame", _online_uniqueness),
         ("active_route_contains_no_trainable_model", _route_is_pretraining),
+        ("dense_degenerates_exactly_to_single_scan", _single_scan_degeneracy),
+        ("shared_voxel_inverse_recovers_current_point", _shared_voxel_current_recovery),
+        (
+            "normal_class_matches_official_query_semantics",
+            _official_semantic_equivalence,
+        ),
     )
     results = []
     for name, check in checks:

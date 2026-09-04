@@ -8,8 +8,12 @@ import pytest
 import torch
 
 from src.evaluate import (
-    average_precision,
+    EvaluationError,
+    f3_screen_action,
+    f2_point_masks,
     geometry_record,
+    official_point_metrics,
+    require_experiment_stage,
     score_window,
     window_stu_inputs,
 )
@@ -19,7 +23,10 @@ from src.model import (
     NUM_QUERIES,
     STUPointEncoding,
     assigned_stu_evidence,
+    official_stu_semantic_class,
+    official_stu_sparse_quantize,
     stu_input_identity,
+    stu_source_manifest,
 )
 from src.protocol import (
     InputMode,
@@ -33,10 +40,13 @@ from src.qualify import run_schema33_qualification
 from src.render import (
     MaterialSpec,
     ObjectSpec,
+    PlacementError,
     RayGrid,
     SensorCalibration,
     ShapeSpec,
+    WorldGenerationReport,
     WorldSpec,
+    render_development_clip_world,
     render_frame,
 )
 from src.scene import (
@@ -81,6 +91,28 @@ def _window(order: tuple[int, ...] = (0, 1, 2, 3, 4)) -> object:
     )
 
 
+def _protocol_at_stage(tmp_path: Path, stage: str) -> object:
+    payload = json.loads((ROOT / "protocol.json").read_text(encoding="utf-8"))
+    order = ("F1", "F2", "F3", "F4", "C1", "V1", "T1")
+    index = order.index(stage)
+    payload["status"].update(
+        current_stage=stage,
+        experiments_started=stage != "F1",
+        training_allowed=stage == "F4",
+        performance_claims_available=stage == "T1",
+    )
+    claims = payload["claims"]
+    claims["F1_completed"] = index >= order.index("F2")
+    claims["F2_completed"] = index >= order.index("F3")
+    claims["F3_completed"] = index >= order.index("F4")
+    claims["C1_completed"] = index >= order.index("V1")
+    claims["real_anomaly_validation_performed"] = stage == "T1"
+    claims["training_performed"] = False
+    path = tmp_path / f"{stage}.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return load_protocol(path)
+
+
 def test_protocol_is_the_only_schema33_pretraining_contract() -> None:
     protocol = load_protocol()
     assert protocol.schema_version == SCHEMA_VERSION == 33
@@ -100,6 +132,19 @@ def test_old_schema_is_rejected_before_interpretation(tmp_path: Path) -> None:
         load_protocol(path)
 
 
+def test_protocol_accepts_every_valid_forward_stage(tmp_path: Path) -> None:
+    for stage in ("F1", "F2", "F3", "F4", "C1", "V1", "T1"):
+        assert _protocol_at_stage(tmp_path, stage).status["current_stage"] == stage
+
+
+def test_evaluator_only_allows_the_active_feasibility_stage(tmp_path: Path) -> None:
+    for stage in ("F1", "F2", "F3"):
+        protocol = _protocol_at_stage(tmp_path, stage)
+        require_experiment_stage(protocol, stage)
+        with pytest.raises(EvaluationError, match="does not authorize"):
+            require_experiment_stage(protocol, "F1" if stage != "F1" else "F2")
+
+
 def test_train_201_development_and_confirmation_are_disjoint() -> None:
     protocol = load_protocol()
     development = protocol.normal_development
@@ -110,6 +155,7 @@ def test_train_201_development_and_confirmation_are_disjoint() -> None:
     assert len(confirmation.legal_window_starts()) == 124
     assert development.legal_window_starts()[-1] + 4 == 553
     assert confirmation.legal_window_starts()[0] == 554
+    assert confirmation.legal_window_starts()[0] + 4 == 558
 
 
 def test_f2_endpoints_are_unique_legal_development_outputs() -> None:
@@ -126,12 +172,82 @@ def test_f3_virtual_sequence_sources_are_disjoint() -> None:
     length = int(settings["frames_per_sequence"])
     groups = [
         set(range(int(start), int(start) + length))
-        for start in settings["source_starts"]
+        for start in settings["screen"]["source_starts"]
     ]
     assert all(
         left.isdisjoint(right)
         for i, left in enumerate(groups)
         for right in groups[i + 1 :]
+    )
+    seeds = tuple(settings["screen"]["world_root_seeds"]) + tuple(
+        settings["extension_if_screen_is_inconclusive"]["world_root_seeds"]
+    )
+    assert len(seeds) == len(set(seeds)) == 24
+
+
+@pytest.mark.parametrize(
+    ("summary", "expected"),
+    [
+        (
+            {
+                "planned_worlds": 8,
+                "evaluable_worlds": 8,
+                "mean_delta_AP": 1.0,
+                "median_delta_AP": 1.0,
+                "paired_world_bootstrap_95_interval": [0.1, 1.9],
+            },
+            "support",
+        ),
+        (
+            {
+                "planned_worlds": 8,
+                "evaluable_worlds": 8,
+                "mean_delta_AP": 0.0,
+                "median_delta_AP": -0.1,
+                "paired_world_bootstrap_95_interval": [-0.5, 0.5],
+            },
+            "reject",
+        ),
+        (
+            {
+                "planned_worlds": 8,
+                "evaluable_worlds": 7,
+                "mean_delta_AP": 2.0,
+                "median_delta_AP": 2.0,
+                "paired_world_bootstrap_95_interval": [1.0, 3.0],
+            },
+            "extend",
+        ),
+    ],
+)
+def test_f3_screen_action_requires_all_eight_worlds(
+    summary: dict[str, object], expected: str
+) -> None:
+    assert f3_screen_action(summary) == expected
+
+
+def test_protocol_binds_the_sensor_calibration_bytes() -> None:
+    protocol = load_protocol()
+    assert protocol.verify_sensor_calibration().name == "calibration.pt"
+    assert (
+        protocol.verify_official_point_evaluator().name == "compute_point_level_ood.py"
+    )
+
+
+def test_runtime_sources_and_inputs_are_workspace_local() -> None:
+    protocol = load_protocol()
+    repository = protocol.stu_repository_path()
+    paths = (
+        repository,
+        protocol.verify_official_point_evaluator(),
+        protocol.verify_sensor_calibration(),
+        protocol.verify_support_pool(201),
+        protocol.verify_support_pool(206),
+    )
+    assert all(path.is_relative_to(ROOT) for path in paths)
+    assert (
+        stu_source_manifest(repository)["manifest_sha256"]
+        == protocol.stu["source_manifest_sha256"]
     )
 
 
@@ -178,6 +294,43 @@ def test_alignment_is_independent_of_source_argument_order() -> None:
     assert set(expected) == set(observed)
     for identity in expected:
         np.testing.assert_array_equal(expected[identity], observed[identity])
+
+
+def test_f2_uses_distinct_anomaly_and_semantic_masks() -> None:
+    semantics = np.asarray((0, 2, 40, 52), dtype=np.uint32)
+    targets = np.asarray((255, 255, 8, 255), dtype=np.uint8)
+    xyzi = np.asarray(
+        (
+            (10.0, 0.0, 0.0, 0.2),
+            (11.0, 0.0, 0.0, 0.3),
+            (12.0, 0.0, 0.0, 0.4),
+            (13.0, 0.0, 0.0, 0.5),
+        ),
+        dtype=np.float32,
+    )
+    labels = PointLabels(
+        packed=semantics,
+        semantic=semantics.astype(np.uint16),
+        instance=np.zeros(4, dtype=np.uint16),
+        semantic_target=targets,
+    )
+    sources = tuple(
+        make_source_frame(
+            frame,
+            xyzi,
+            np.eye(4, dtype=np.float64),
+            labels,
+            partition="train",
+            sequence_id=201,
+        )
+        for frame in range(5)
+    )
+    spec = SequenceSpec("train", 201, "fixture", True, FrameSpan(0, 5))
+    masks = f2_point_masks(
+        assemble_window(spec, 0, tuple(range(5)), sources), load_protocol()
+    )
+    assert masks.normal_anomaly.tolist() == [False, False, True, True]
+    assert masks.semantic_class.tolist() == [False, False, True, False]
 
 
 def test_canonical_ray_mapping_identity_changes_with_the_mapping() -> None:
@@ -242,18 +395,17 @@ def test_proxy_feasibility_samples_one_anomaly_only_world(
     report = object()
     clip = object()
     observed: dict[str, object] = {}
+    calls = 0
 
     def fake_sample(
-        templates: object,
         support_pool: object,
         obstacles: object,
-        world_type: str,
         seed: int,
         **kwargs: object,
     ) -> tuple[object, object]:
+        nonlocal calls
+        calls += 1
         observed.update(
-            templates=templates,
-            world_type=world_type,
             seed=seed,
             source_sequence_id=kwargs["source_sequence_id"],
         )
@@ -263,7 +415,7 @@ def test_proxy_feasibility_samples_one_anomaly_only_world(
         assert args[0:2] == (world, report)
         return clip
 
-    monkeypatch.setattr(render_module, "sample_world_spec", fake_sample)
+    monkeypatch.setattr(render_module, "sample_anomaly_world", fake_sample)
     monkeypatch.setattr(render_module, "render_development_clip_world", fake_render)
     sources = tuple(_source(frame, float(frame)) for frame in range(4, 32))
     result = render_module.sample_development_clip_world(
@@ -276,15 +428,110 @@ def test_proxy_feasibility_samples_one_anomaly_only_world(
         renderer_identity="a" * 64,
     )
     assert result is clip
+    assert calls == 1
     assert observed == {
-        "templates": (),
-        "world_type": "anomaly_only",
         "seed": 33000,
         "source_sequence_id": 201,
     }
 
 
-def test_dense_stu_input_contains_all_scans_but_scores_current_rows_only() -> None:
+def test_f3_does_not_substitute_a_root_seed_after_placement_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import src.render as render_module
+
+    seeds: list[int] = []
+
+    def fail_sample(
+        support_pool: object,
+        obstacles: object,
+        seed: int,
+        **kwargs: object,
+    ) -> tuple[object, object]:
+        del support_pool, obstacles, kwargs
+        seeds.append(seed)
+        raise PlacementError("physical placement exhausted")
+
+    monkeypatch.setattr(render_module, "sample_anomaly_world", fail_sample)
+    sources = tuple(_source(frame, float(frame)) for frame in range(4, 32))
+    with pytest.raises(PlacementError, match="physical placement exhausted"):
+        render_module.sample_development_clip_world(
+            object(),  # type: ignore[arg-type]
+            object(),  # type: ignore[arg-type]
+            sources,
+            object(),  # type: ignore[arg-type]
+            object(),  # type: ignore[arg-type]
+            33000,
+            renderer_identity="a" * 64,
+        )
+    assert seeds == [33000]
+
+
+def test_invisible_windows_do_not_reject_a_fixed_f3_world() -> None:
+    packed = np.asarray((40,), dtype=np.uint32)
+    labels = PointLabels(
+        packed=packed,
+        semantic=packed.astype(np.uint16),
+        instance=np.zeros(1, dtype=np.uint16),
+        semantic_target=np.asarray((8,), dtype=np.uint8),
+    )
+    sources = tuple(
+        make_source_frame(
+            frame,
+            np.asarray(((5.0, 0.0, 0.0, 0.2),), dtype=np.float32),
+            np.eye(4, dtype=np.float64),
+            labels,
+            partition="train",
+            sequence_id=201,
+        )
+        for frame in range(9)
+    )
+    shape = ShapeSpec(
+        ((0.5, 0.5, 0.5),),
+        ((0.0, 0.0, 0.0),),
+        ((1.0, 1.0),),
+        (0.0,),
+        ("union",),
+    )
+    rotation = ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))
+    world = WorldSpec(
+        33000,
+        201,
+        (
+            ObjectSpec(
+                1,
+                "anomaly-proxy",
+                shape,
+                MaterialSpec(0.5, 0.1),
+                (5.0, 100.0, 0.0),
+                rotation,
+            ),
+        ),
+    )
+    report = WorldGenerationReport(33000, 201, "anomaly_only", 0, 1, 33000, 33000)
+    grid = RayGrid(
+        np.asarray(((1.0, 0.0, 0.0),)),
+        np.asarray((0.0,)),
+        np.asarray((0.0,)),
+        beam_count=1,
+    )
+    clip = render_development_clip_world(
+        world,
+        report,
+        sources,
+        grid,
+        SensorCalibration.constant(0.4),
+        renderer_identity="a" * 64,
+    )
+    assert len(clip.windows) == 5
+    assert all(
+        not np.any(frame.anomaly_proxy_mask)
+        for window in clip.windows
+        for frame in window.rendered_frames
+    )
+
+
+def test_dense_stu_input_contains_all_scans_and_identifies_current_rows() -> None:
     inputs = window_stu_inputs(_window())
     assert inputs.single_real_slots.size == 2
     assert inputs.dense_coordinates.shape == (10, 3)
@@ -332,14 +579,63 @@ class _DummyEncoder:
         )
 
 
-def test_score_window_extracts_only_current_dense_rows() -> None:
+def test_score_window_retains_all_dense_outputs_and_current_view() -> None:
     scores = score_window(_DummyEncoder(), _window())  # type: ignore[arg-type]
     np.testing.assert_allclose(scores.single_score, (0.0, 0.1))
-    np.testing.assert_allclose(scores.dense_score, (0.8, 0.9))
-    np.testing.assert_array_equal(scores.single_class, scores.dense_class)
+    np.testing.assert_allclose(scores.dense_all_score, np.arange(10) / 10.0)
+    np.testing.assert_allclose(scores.dense_current_score, (0.8, 0.9))
+    np.testing.assert_array_equal(scores.single_class, scores.dense_current_class)
 
 
-def test_normal_class_uses_the_official_all_query_aggregation() -> None:
+def test_dense_input_degenerates_exactly_when_history_has_no_returns() -> None:
+    spec = SequenceSpec("train", 201, "fixture", True, FrameSpan(0, 5))
+    sources = []
+    for frame in range(5):
+        xyzi = (
+            np.zeros((1, 4), dtype=np.float32)
+            if frame < 4
+            else np.asarray(((10.0, 0.0, 0.0, 0.5),), dtype=np.float32)
+        )
+        packed = np.asarray((40,), dtype=np.uint32)
+        sources.append(
+            make_source_frame(
+                frame,
+                xyzi,
+                np.eye(4, dtype=np.float64),
+                PointLabels(
+                    packed=packed,
+                    semantic=packed.astype(np.uint16),
+                    instance=np.zeros(1, dtype=np.uint16),
+                    semantic_target=np.asarray((8,), dtype=np.uint8),
+                ),
+                partition="train",
+                sequence_id=201,
+            )
+        )
+    window = assemble_window(spec, 0, tuple(range(5)), tuple(sources))
+    inputs = window_stu_inputs(window)
+    np.testing.assert_array_equal(inputs.single_coordinates, inputs.dense_coordinates)
+    np.testing.assert_array_equal(inputs.single_features, inputs.dense_features)
+    scores = score_window(_DummyEncoder(), window)  # type: ignore[arg-type]
+    np.testing.assert_array_equal(scores.single_score, scores.dense_current_score)
+
+
+def test_official_voxel_inverse_recovers_current_point_after_collision() -> None:
+    spec = SequenceSpec("train", 201, "fixture", True, FrameSpan(0, 5))
+    sources = tuple(_source(frame, 0.0) for frame in range(5))
+    window = assemble_window(spec, 0, tuple(range(5)), sources)
+    inputs = window_stu_inputs(window)
+    _, _, _, inverse = official_stu_sparse_quantize(
+        inputs.dense_coordinates, inputs.dense_features
+    )
+    inverse_map = np.asarray(inverse, dtype=np.int64)
+    current = int(inputs.dense_current_rows[0])
+    assert inverse_map[0] == inverse_map[current]
+    scores_for_current = inverse_map[inputs.dense_current_rows]
+    assert scores_for_current.shape == inputs.dense_current_rows.shape
+
+
+def test_normal_class_matches_the_official_assigned_query_prediction() -> None:
     logits = torch.full((NUM_QUERIES, NUM_NORMAL_CLASSES + 1), -20.0)
     logits[:, -1] = 20.0
     logits[0] = -20.0
@@ -353,22 +649,30 @@ def test_normal_class_uses_the_official_all_query_aggregation() -> None:
     masks[0, 0] = 3.0
     masks[0, 1:3] = 1.0
     evidence = assigned_stu_evidence(logits, masks)
+    reference = official_stu_semantic_class(logits, masks)
     assert int(evidence.assigned_query[0]) == 0
-    assert int(evidence.normal_class[0]) == 1
+    assert torch.equal(evidence.normal_class, reference)
+    assert int(reference[0]) == 0
+    assert int(evidence.normal_evidence.argmax(dim=1)[0]) == 0
 
 
-def test_average_precision_uses_point_ranking() -> None:
-    labels = np.asarray([False, True, False, True])
-    assert average_precision(labels, np.asarray([0.1, 0.9, 0.2, 0.8])) == 1.0
+def test_official_point_metrics_are_invariant_to_order_with_tied_scores() -> None:
+    labels = np.asarray([True, False, True, False])
+    scores = np.asarray([0.5, 0.5, 0.9, 0.1])
+    first = official_point_metrics(labels, scores)
+    order = np.asarray([1, 0, 2, 3])
+    second = official_point_metrics(labels[order], scores[order])
+    assert first == second
+    assert set(first) == {"AP", "AUROC", "FPR95", "threshold"}
     with pytest.raises(Exception, match="at least one anomaly"):
-        average_precision(np.zeros(4, dtype=np.bool_), np.arange(4.0))
+        official_point_metrics(np.zeros(4, dtype=np.bool_), np.arange(4.0))
     with pytest.raises(Exception, match="at least one normal"):
-        average_precision(np.ones(4, dtype=np.bool_), np.arange(4.0))
+        official_point_metrics(np.ones(4, dtype=np.bool_), np.arange(4.0))
 
 
 def test_schema33_qualification_covers_the_five_core_invariants() -> None:
     result = run_schema33_qualification()
     assert result["mechanical"]["passed"] is True
-    assert result["mechanical"]["check_count"] == 5
+    assert result["mechanical"]["check_count"] == 8
     assert result["scientific_status"] == "pending_real_F1_F2_F3_execution"
     assert result["performance_claim_available"] is False

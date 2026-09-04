@@ -20,6 +20,8 @@ DEFAULT_PROTOCOL_PATH = PROJECT_ROOT / "protocol.json"
 SCHEMA_VERSION = 33
 WINDOW_FRAMES = 5
 WINDOW_MEMBER_OFFSETS = (0, 1, 2, 3, 4)
+STAGES = ("F0", "F1", "F2", "F3", "F4", "C1", "V1", "T1")
+ACTIVE_STAGES = STAGES[1:]
 
 PUBLIC_ANOMALY_IDS = (
     125,
@@ -164,6 +166,14 @@ def _sha256(value: object, name: str) -> str:
     if not re.fullmatch(r"[0-9a-f]{64}", digest):
         raise ProtocolError(f"{name} must be a lowercase SHA-256 digest")
     return digest
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
 
 
 @dataclass(frozen=True, slots=True)
@@ -411,7 +421,30 @@ class AJAEProtocol:
             if project_root is None
             else Path(project_root).expanduser().resolve()
         )
-        return (root / str(self.render["calibration_file"])).resolve()
+        calibration = _mapping(self.render["calibration"], "calibration")
+        return (root / str(calibration["file"])).resolve()
+
+    def verify_sensor_calibration(self, project_root: Path | str | None = None) -> Path:
+        path = self.sensor_calibration_path(project_root)
+        calibration = _mapping(self.render["calibration"], "calibration")
+        expected = str(calibration["sha256"])
+        if not path.is_file() or _file_sha256(path) != expected:
+            raise ProtocolError("sensor calibration bytes differ from protocol")
+        return path
+
+    def verify_official_point_evaluator(
+        self, project_root: Path | str | None = None
+    ) -> Path:
+        root = (
+            self.path.parent
+            if project_root is None
+            else Path(project_root).expanduser().resolve()
+        )
+        evaluator = _mapping(self.stu["official_point_evaluator"], "point evaluator")
+        path = (root / str(evaluator["file"])).resolve()
+        if not path.is_file() or _file_sha256(path) != str(evaluator["sha256"]):
+            raise ProtocolError("official point evaluator bytes differ from protocol")
+        return path
 
     def support_pool_path(
         self, sequence_id: int, project_root: Path | str | None = None
@@ -426,6 +459,16 @@ class AJAEProtocol:
             pools[f"train/{_integer(sequence_id, 'support sequence')}"], "support pool"
         )
         return (root / str(record["file"])).resolve()
+
+    def verify_support_pool(
+        self, sequence_id: int, project_root: Path | str | None = None
+    ) -> Path:
+        path = self.support_pool_path(sequence_id, project_root)
+        pools = _mapping(self.render["qualified_support_pools"], "support pools")
+        record = _mapping(pools[f"train/{sequence_id}"], "support pool")
+        if not path.is_file() or _file_sha256(path) != str(record["sha256"]):
+            raise ProtocolError("support-pool bytes differ from protocol")
+        return path
 
     def summary(self) -> dict[str, object]:
         return {
@@ -463,24 +506,90 @@ class AJAEProtocol:
         ):
             raise ProtocolError("protocol must be the sole schema-33 contract")
         status = _mapping(source["status"], "status")
+        stage = status.get("current_stage")
         if (
-            status.get("current_stage") != "F1"
+            stage not in ACTIVE_STAGES
             or status.get("route") != "frozen_stu_dense_input_feasibility"
         ):
-            raise ProtocolError("schema 33 must wait at the F1 geometry stage")
-        if (
-            status.get("experiments_started") is not False
-            or status.get("training_allowed") is not False
+            raise ProtocolError("schema 33 has an invalid active stage or route")
+        for key in (
+            "experiments_started",
+            "training_allowed",
+            "performance_claims_available",
         ):
+            if type(status.get(key)) is not bool:
+                raise ProtocolError(f"status.{key} must be boolean")
+        if status["experiments_started"] is not (stage != "F1"):
+            raise ProtocolError("experiments_started contradicts the active stage")
+        if status["training_allowed"] is not (stage == "F4"):
+            raise ProtocolError("training is allowed only while F4 is active")
+        if status["performance_claims_available"] is not (stage == "T1"):
             raise ProtocolError(
-                "schema 33 cannot claim experiments or training before F1 runs"
+                "performance claims become available only after public validation"
             )
         claims = _mapping(source["claims"], "claims")
-        if (
-            claims.get("implementation_ready") is not True
-            or claims.get("F1_completed") is not False
+        completion_keys = (
+            "F1_completed",
+            "F2_completed",
+            "F3_completed",
+            "C1_completed",
+            "training_performed",
+            "real_anomaly_validation_performed",
+        )
+        if claims.get("implementation_ready") is not True or any(
+            type(claims.get(key)) is not bool for key in completion_keys
         ):
-            raise ProtocolError("F0 must be complete while F1 remains unexecuted")
+            raise ProtocolError("claims must record boolean stage completion")
+        required_completed = {
+            "F1": (),
+            "F2": ("F1_completed",),
+            "F3": ("F1_completed", "F2_completed"),
+            "F4": ("F1_completed", "F2_completed", "F3_completed"),
+            "C1": ("F1_completed", "F2_completed", "F3_completed"),
+            "V1": (
+                "F1_completed",
+                "F2_completed",
+                "F3_completed",
+                "C1_completed",
+            ),
+            "T1": (
+                "F1_completed",
+                "F2_completed",
+                "F3_completed",
+                "C1_completed",
+                "real_anomaly_validation_performed",
+            ),
+        }[str(stage)]
+        if any(claims[key] is not True for key in required_completed):
+            raise ProtocolError("a prerequisite stage is not marked complete")
+        future_completion = {
+            "F1": (
+                "F1_completed",
+                "F2_completed",
+                "F3_completed",
+                "C1_completed",
+                "real_anomaly_validation_performed",
+            ),
+            "F2": (
+                "F2_completed",
+                "F3_completed",
+                "C1_completed",
+                "real_anomaly_validation_performed",
+            ),
+            "F3": (
+                "F3_completed",
+                "C1_completed",
+                "real_anomaly_validation_performed",
+            ),
+            "F4": ("C1_completed", "real_anomaly_validation_performed"),
+            "C1": ("C1_completed", "real_anomaly_validation_performed"),
+            "V1": ("real_anomaly_validation_performed",),
+            "T1": (),
+        }[str(stage)]
+        if any(claims[key] is not False for key in future_completion):
+            raise ProtocolError("a future stage is prematurely marked complete")
+        if stage in {"F1", "F2", "F3", "F4"} and claims["training_performed"]:
+            raise ProtocolError("training cannot be claimed before leaving F4")
         window = _mapping(source["window"], "window")
         if window.get("frames") != WINDOW_FRAMES:
             raise ProtocolError("AJAE requires five scans")
@@ -488,17 +597,31 @@ class AJAEProtocol:
             raise ProtocolError("window offsets must be 0 through 4")
         if (
             window.get("coordinate_frame") != "latest_scan_t"
-            or window.get("output_points") != "latest_scan_t_only"
+            or window.get("stu_output_points")
+            != "all_input_points_from_X_(t-4)_through_X_t"
+            or window.get("primary_comparison_points")
+            != "original_visible_points_of_current_scan_X_t"
         ):
             raise ProtocolError(
-                "alignment and output must both target the current scan"
+                "alignment, full STU output, or current-point comparison changed"
             )
         if window.get("overlap_fusion") != "none":
             raise ProtocolError("online schema 33 has no overlapping-score fusion")
         methods = _mapping(source["methods"], "methods")
         if set(methods) != {item.value for item in InputMode}:
             raise ProtocolError("only single_stu and dense_stu may be active")
+        dense_method = _mapping(methods[InputMode.DENSE_STU.value], "dense STU")
+        if (
+            dense_method.get("actual_output") != "all_input_points_from_five_scans"
+            or dense_method.get("F2_F3_comparison_view") != "rows_originating_from_X_t"
+        ):
+            raise ProtocolError("dense STU output and comparison view changed")
         data = _mapping(source["data"], "data")
+        archives = _mapping(data["official_archive_sha256"], "STU archives")
+        if set(archives) != {"train.zip", "val.zip", "test.zip"}:
+            raise ProtocolError("STU archive identities are incomplete")
+        for name, digest in archives.items():
+            _sha256(digest, f"STU archive {name}")
         development = cls._sequence(data, "normal_development")
         confirmation = cls._sequence(data, "normal_confirmation")
         if development.partition != "train" or development.sequence_id != 201:
@@ -518,6 +641,18 @@ class AJAEProtocol:
             or len(confirmation.legal_window_starts()) != 124
         ):
             raise ProtocolError("train/201 split has unexpected window counts")
+        confirmation_record = _mapping(
+            data["normal_confirmation"], "normal confirmation"
+        )
+        if (
+            _int_tuple(
+                confirmation_record["output_frame_range_inclusive"],
+                "confirmation outputs",
+            )
+            != (558, 681)
+            or confirmation_record.get("output_window_count") != 124
+        ):
+            raise ProtocolError("normal confirmation outputs must be 558 through 681")
         public = _mapping(data["public_anomaly_validation"], "public anomalies")
         hidden = _mapping(data["hidden_test"], "hidden test")
         if _int_tuple(public["sequence_ids"], "public ids") != PUBLIC_ANOMALY_IDS:
@@ -529,12 +664,34 @@ class AJAEProtocol:
             stu.get("source") != "STU_official_Mask4Former3D"
             or stu.get("score") != "official_STU_MaxLogit"
             or stu.get("frozen") is not True
+            or stu.get("official_semantic_prediction")
+            != "query_class_of_argmax(mask_probability*query_class_confidence)"
         ):
             raise ProtocolError(
                 "both feasibility methods must use frozen official STU MaxLogit"
             )
         _sha256(stu["checkpoint_sha256"], "STU checkpoint")
         _sha256(stu["model_state_tensor_sha256"], "STU tensor state")
+        evaluator = _mapping(stu["official_point_evaluator"], "point evaluator")
+        _string(evaluator["file"], "point evaluator file")
+        _sha256(evaluator["sha256"], "point evaluator")
+        calibration = _mapping(
+            _mapping(source["render"], "render")["calibration"], "calibration"
+        )
+        _string(calibration["file"], "calibration file")
+        _sha256(calibration["sha256"], "calibration")
+        _string(calibration["source_file"], "calibration source file")
+        _sha256(calibration["source_sha256"], "calibration source")
+        pools = _mapping(
+            _mapping(source["render"], "render")["qualified_support_pools"],
+            "support pools",
+        )
+        if set(pools) != {"train/201", "train/206"}:
+            raise ProtocolError("support pools must cover train/201 and train/206")
+        for name, record_value in pools.items():
+            record = _mapping(record_value, f"support pool {name}")
+            _string(record["file"], f"support pool {name} file")
+            _sha256(record["sha256"], f"support pool {name}")
         f2 = _mapping(
             _mapping(source["feasibility"], "feasibility")["F2_normal_stability"], "F2"
         )
@@ -544,10 +701,22 @@ class AJAEProtocol:
             for frame in current_frames
         ):
             raise ProtocolError("F2 must use 24 legal development endpoints")
+        precheck = _int_tuple(
+            f2["official_normal_class_precheck_frames"], "F2 semantic precheck"
+        )
+        if not 3 <= len(precheck) <= 5 or not set(precheck) <= set(current_frames):
+            raise ProtocolError("F2 semantic precheck must use 3 to 5 F2 frames")
+        masks = _mapping(f2["masks"], "F2 masks")
+        if set(masks) != {"normal_anomaly_mask", "semantic_class_mask"} or (
+            masks.get("normal_anomaly_mask")
+            != "raw_semantic_not_0_and_not_2_and_range_2.5_to_50m_inclusive"
+            or masks.get("semantic_class_mask")
+            != "semantic_target_not_255_and_range_2.5_to_50m_inclusive"
+        ):
+            raise ProtocolError("F2 must declare separate anomaly and class masks")
         f3 = _mapping(
             _mapping(source["feasibility"], "feasibility")["F3_proxy_signal"], "F3"
         )
-        starts = _int_tuple(f3["source_starts"], "F3 starts")
         length = _integer(f3["frames_per_sequence"], "F3 sequence length", minimum=5)
         candidates = _integer(
             f3["candidate_current_frames_per_sequence"],
@@ -558,22 +727,58 @@ class AJAEProtocol:
             raise ProtocolError(
                 "F3 candidate current-frame count must equal sequence length minus four"
             )
-        if len(starts) != _integer(
-            f3["sequence_count"], "F3 sequence count", minimum=1
+        plans = (
+            ("screen", 8, True),
+            ("extension_if_screen_is_inconclusive", 16, False),
+        )
+        all_pairs: set[tuple[int, int]] = set()
+        all_seeds: set[int] = set()
+        for name, expected_count, disjoint in plans:
+            plan = _mapping(f3[name], f"F3 {name}")
+            count = _integer(plan["world_count"], f"F3 {name} count", minimum=1)
+            starts = _int_tuple(plan["source_starts"], f"F3 {name} starts")
+            seeds = _int_tuple(plan["world_root_seeds"], f"F3 {name} seeds")
+            if count != expected_count or len(starts) != count or len(seeds) != count:
+                raise ProtocolError(f"F3 {name} plan has the wrong size")
+            occupied: set[int] = set()
+            for start, seed in zip(starts, seeds, strict=True):
+                frames = set(range(start, start + length))
+                pair = (start, seed)
+                if (
+                    development.span is None
+                    or not all(development.span.contains(frame) for frame in frames)
+                    or pair in all_pairs
+                    or seed in all_seeds
+                    or (disjoint and not occupied.isdisjoint(frames))
+                ):
+                    raise ProtocolError(f"F3 {name} contains an invalid fixed world")
+                occupied.update(frames)
+                all_pairs.add(pair)
+                all_seeds.add(seed)
+        retry = _mapping(
+            _mapping(source["render"], "render")["F3_world_retry"], "F3 retry"
+        )
+        if (
+            retry.get("maximum_placement_attempts_per_root_seed") != 48
+            or retry.get("allowed_retry_cause")
+            != "PlacementError_during_physical_world_construction_before_rendering"
+            or retry.get("placement_attempt_seed_formula")
+            != "root_seed+1000003*attempt_index"
+            or retry.get("world_root_seed_substitution") != "forbidden"
+            or retry.get("retry_after_rendering_begins") != "forbidden"
+            or retry.get("retry_for_an_invisible_window") != "forbidden"
         ):
-            raise ProtocolError("F3 start count differs from its world count")
-        occupied: set[int] = set()
-        for start in starts:
-            frames = set(range(start, start + length))
-            if (
-                development.span is None
-                or not all(development.span.contains(frame) for frame in frames)
-                or not occupied.isdisjoint(frames)
-            ):
-                raise ProtocolError(
-                    "F3 source segments must be disjoint inside development"
-                )
-            occupied.update(frames)
+            raise ProtocolError("F3 retry identity or visibility rule changed")
+        if (
+            tuple(f3.get("metrics", ())) != ("AP", "AUROC", "FPR95")
+            or f3.get("unevaluable_world_rule")
+            != "record_without_seed_substitution_and_exclude_from_metric_bootstrap"
+            or f3.get("screen_decision")
+            != "only_if_all_8_worlds_are_evaluable: support_if_delta_AP_lower_95_bound_above_zero; reject_if_mean_and_median_delta_AP_are_both_not_positive; otherwise_run_the_preplanned_16_world_extension"
+        ):
+            raise ProtocolError("F3 official metrics or two-phase decision changed")
+        if tuple(source["stages"]) != STAGES:
+            raise ProtocolError("schema 33 stage order changed")
 
 
 def load_protocol(path: Path | str = DEFAULT_PROTOCOL_PATH) -> AJAEProtocol:
