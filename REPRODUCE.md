@@ -47,6 +47,15 @@ python -m src.qualify --data-root /absolute/path/to/STU --device cpu \
 
 当前保存的 F0 证据由干净提交 `f0d32486a939da0dd7bf9fce2f1315b95aecec19` 生成，科学合同身份为 `5330228fcc93c400b0154ea7f57c53cf11b90d2f355be2bdcc478941c584a353`。单帧 8、198、387 以及窗口 4--8、194--198、383--387 的全部输入、体素和逆映射均一致；官方与 AJAE、AJAE 两次重复以及当前帧视图的 MaxLogit 最大绝对误差均为 0，类别不一致数均为 0。该证据只确认 F0 输入与执行语义，不是 F1 几何结果或性能证据。
 
+`artifacts/f1_geometry.json` 保存正式 F1 的 546 条逐窗记录和三种体素尺度汇总，文件 SHA-256 为 `add308d89ac130cc59401685fc1295cf4d621652f8f2d885e32c74a7e9394b3b`。它由干净提交 `2b7885587d7b3619fe1a252b7a8397c11dd40098` 使用 23 个工作进程生成。复现命令为：
+
+```bash
+python src/evaluate.py F1 --data-root /absolute/path/to/STU \
+  --output-dir runs/ajae/schema33 --workers 23
+```
+
+四个 PLY 保存在本地 `runs/ajae/schema33`，没有纳入版本控制；它们可以由同一命令从官方数据重新生成。F1 只确认配准后的五帧增加独立空间覆盖，不是 STU 输出稳定性或异常性能证据。
+
 若需要从官方原始数据重建并逐字节核对三个运行时产物，执行：
 
 ```bash

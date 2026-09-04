@@ -127,9 +127,10 @@ def test_protocol_is_the_only_schema33_pretraining_contract() -> None:
     assert protocol.schema_version == SCHEMA_VERSION == 33
     assert [item.value for item in InputMode] == ["single_stu", "dense_stu"]
     assert set(protocol.methods) == {"single_stu", "dense_stu"}
-    assert protocol.status["current_stage"] == "F1"
+    assert protocol.status["current_stage"] == "F2"
     assert protocol.status["training_allowed"] is False
     assert protocol.status["performance_claims_available"] is False
+    assert protocol.claims["F1_completed"] is True
 
 
 def test_protocol_separates_F1_geometry_from_official_STU_coordinates() -> None:

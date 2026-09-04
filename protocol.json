@@ -1,9 +1,9 @@
 {
   "schema_version": 33,
   "status": {
-    "current_stage": "F1",
+    "current_stage": "F2",
     "route": "frozen_stu_dense_input_feasibility",
-    "experiments_started": false,
+    "experiments_started": true,
     "training_allowed": false,
     "performance_claims_available": false,
     "selected_method": null,
@@ -268,12 +268,12 @@
   "stages": ["F0", "F1", "F2", "F3", "F4", "C1", "V1", "T1"],
   "claims": {
     "implementation_ready": true,
-    "F1_completed": false,
+    "F1_completed": true,
     "F2_completed": false,
     "F3_completed": false,
     "training_performed": false,
     "C1_completed": false,
     "real_anomaly_validation_performed": false,
-    "supported_conclusion": "none"
+    "supported_conclusion": "F1_supports_registered_five_scan_geometric_densification_only"
   }
 }
