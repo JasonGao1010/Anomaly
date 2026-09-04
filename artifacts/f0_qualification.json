@@ -14,11 +14,11 @@
   },
   "format": "ajae-schema33-F0-qualification-v2",
   "implementation_identity": {
-    "git_commit": "804f92998409bec2d5ded3f92beaa5c86b95c08e",
+    "git_commit": "f0d32486a939da0dd7bf9fce2f1315b95aecec19",
     "git_tracked_worktree_clean": true,
     "source_files_sha256": {
       "protocol.json": "09eac1a190a06cf42f80f94f74369ecc63a92c78dbe9bf28146d9537c74e2cd8",
-      "src/evaluate.py": "78f21057bae11fbdf1ea8e20867f2ea4003921b4abd3df03031037f545a28d07",
+      "src/evaluate.py": "083b9e0bffaf5275057fb14a3b0c722aa8cd6c270a38fff717dc5dfac2dd844e",
       "src/model.py": "f788c2a6766f7274392986a5fe466bc41b0996e766510faa9b276e65f711195c",
       "src/protocol.py": "82a4edb15654da0e62452bbda229675573f6beeb612a93480be00b0c6b5bb495",
       "src/qualify.py": "48ad78181f6a40f90eac33915ea35e32ab633025a259a61abd3dbb2d7bf4e3a3",
