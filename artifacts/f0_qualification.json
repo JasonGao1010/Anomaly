@@ -1,6 +1,6 @@
 {
   "F0_verdict": "passed",
-  "contract_identity": "7f6edf5f71a0831f0fc26433218d2287d9735af5e3f0a6bc0c18ef33f2d0be4c",
+  "contract_identity": "5330228fcc93c400b0154ea7f57c53cf11b90d2f355be2bdcc478941c584a353",
   "environment": {
     "MinkowskiEngine": "0.5.4",
     "PyTorch3D": "0.7.6",
@@ -14,13 +14,13 @@
   },
   "format": "ajae-schema33-F0-qualification-v2",
   "implementation_identity": {
-    "git_commit": "500286f840d0eb294273179c1f1f40e5c72c67e2",
+    "git_commit": "804f92998409bec2d5ded3f92beaa5c86b95c08e",
     "git_tracked_worktree_clean": true,
     "source_files_sha256": {
-      "protocol.json": "111940faaf49ba2d157a644365123922c46c239e23db7251a3ec6f9fb675c529",
+      "protocol.json": "09eac1a190a06cf42f80f94f74369ecc63a92c78dbe9bf28146d9537c74e2cd8",
       "src/evaluate.py": "78f21057bae11fbdf1ea8e20867f2ea4003921b4abd3df03031037f545a28d07",
       "src/model.py": "f788c2a6766f7274392986a5fe466bc41b0996e766510faa9b276e65f711195c",
-      "src/protocol.py": "8a8ded43305945534fed4eba5a3b5edd064a5cfeb529d6c7269f76c3ccae80a6",
+      "src/protocol.py": "82a4edb15654da0e62452bbda229675573f6beeb612a93480be00b0c6b5bb495",
       "src/qualify.py": "48ad78181f6a40f90eac33915ea35e32ab633025a259a61abd3dbb2d7bf4e3a3",
       "src/render.py": "6416afcc0301876d0c112374e5121fed6e1bfcc1ad416362e46d4cc0926d58d2",
       "src/scene.py": "017664eadccf4c9be85d9e1e314407e0165c26f88f5a7b1bfbe79ae0965af3e0"
@@ -103,7 +103,7 @@
     "passed": true
   },
   "performance_claim_available": false,
-  "protocol_file_sha256": "111940faaf49ba2d157a644365123922c46c239e23db7251a3ec6f9fb675c529",
+  "protocol_file_sha256": "09eac1a190a06cf42f80f94f74369ecc63a92c78dbe9bf28146d9537c74e2cd8",
   "real_equivalence": {
     "AJAE_path": "STUSequence/SceneWindow->FrozenSTUPointEncoder",
     "AJAE_repeat_runs": 2,
