@@ -366,14 +366,41 @@ class AJAEProtocol:
         return self._document  # type: ignore[return-value]
 
     @property
-    def scientific_identity(self) -> str:
+    def contract_identity(self) -> str:
+        """Hash only the immutable F0--F3 scientific contract."""
+
+        document = _plain(self._document)
+        stu = dict(document["stu"])
+        feasibility = document["feasibility"]
+        contract = {
+            "schema_version": document["schema_version"],
+            "authority": document["authority"],
+            "research_question": document["research_question"],
+            "window": document["window"],
+            "methods": document["methods"],
+            "data": document["data"],
+            "labels": document["labels"],
+            "render": document["render"],
+            "stu": stu,
+            "feasibility": {
+                name: feasibility[name]
+                for name in ("F1_geometry", "F2_normal_stability", "F3_proxy_signal")
+            },
+            "evaluation": document["evaluation"],
+        }
         payload = json.dumps(
-            _plain(self._document),
+            contract,
             ensure_ascii=False,
             sort_keys=True,
             separators=(",", ":"),
         ).encode("utf-8")
         return hashlib.sha256(payload).hexdigest()
+
+    @property
+    def execution_identity(self) -> str:
+        """Hash the complete protocol file, including mutable execution state."""
+
+        return _file_sha256(self.path)
 
     @property
     def window_frames(self) -> int:
@@ -532,6 +559,17 @@ class AJAEProtocol:
         selected_method = status.get("selected_method")
         if selected_method not in {None, "direct_dense_stu", "f4_small_head"}:
             raise ProtocolError("status.selected_method is invalid")
+        device = status.get("feasibility_inference_device")
+        cuda_status = status.get("cuda_status")
+        if device not in {"cpu", "cuda"} or cuda_status not in {
+            "not_authorized_until_same_input_repeatability_and_official_equivalence_pass",
+            "qualified_by_same_input_repeatability_and_official_equivalence",
+        }:
+            raise ProtocolError("status has an invalid feasibility device qualification")
+        if device == "cuda" and cuda_status != (
+            "qualified_by_same_input_repeatability_and_official_equivalence"
+        ):
+            raise ProtocolError("CUDA feasibility execution requires qualification")
         if stage in {"F1", "F2", "F3"} and (
             selected_method is not None
             or status["f4_required"]
@@ -698,9 +736,6 @@ class AJAEProtocol:
             stu.get("source") != "STU_official_Mask4Former3D"
             or stu.get("score") != "official_STU_MaxLogit"
             or stu.get("frozen") is not True
-            or stu.get("feasibility_inference_device") != "cpu"
-            or stu.get("cuda_status")
-            != "not_authorized_until_same_input_repeatability_and_official_equivalence_pass"
             or stu.get("official_semantic_prediction")
             != "query_class_of_argmax(mask_probability*query_class_confidence)"
         ):
@@ -712,6 +747,33 @@ class AJAEProtocol:
         evaluator = _mapping(stu["official_point_evaluator"], "point evaluator")
         _string(evaluator["file"], "point evaluator file")
         _sha256(evaluator["sha256"], "point evaluator")
+        qualification = _mapping(stu["F0_qualification"], "F0 qualification")
+        if (
+            _int_tuple(qualification["single_frame_ids"], "F0 single frames")
+            != (8, 198, 387)
+            or _int_tuple(
+                qualification["five_scan_window_starts"], "F0 five-scan starts"
+            )
+            != (4, 194, 383)
+            or qualification.get("AJAE_repeat_runs") != 2
+            or not math.isclose(
+                _number(
+                    qualification["MaxLogit_absolute_tolerance"],
+                    "F0 MaxLogit absolute tolerance",
+                ),
+                1.0e-6,
+                abs_tol=1.0e-15,
+            )
+            or not math.isclose(
+                _number(
+                    qualification["MaxLogit_relative_tolerance"],
+                    "F0 MaxLogit relative tolerance",
+                ),
+                1.0e-6,
+                abs_tol=1.0e-15,
+            )
+        ):
+            raise ProtocolError("F0 qualification cases or tolerances changed")
         calibration = _mapping(
             _mapping(source["render"], "render")["calibration"], "calibration"
         )

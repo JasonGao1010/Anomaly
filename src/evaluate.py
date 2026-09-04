@@ -103,6 +103,17 @@ def implementation_identity(protocol: AJAEProtocol) -> dict[str, object]:
     }
 
 
+def require_clean_implementation(protocol: AJAEProtocol) -> dict[str, object]:
+    """Reject formal feasibility results produced from modified tracked code."""
+
+    identity = implementation_identity(protocol)
+    if identity["git_tracked_worktree_clean"] is not True:
+        raise EvaluationError(
+            "formal F1/F2/F3 execution requires a clean tracked Git worktree"
+        )
+    return identity
+
+
 @dataclass(frozen=True, slots=True)
 class WindowSTUInputs:
     """Exact single- and dense-STU inputs for one current frame."""
@@ -112,6 +123,7 @@ class WindowSTUInputs:
     single_real_slots: np.ndarray
     dense_coordinates: np.ndarray
     dense_features: np.ndarray
+    dense_real_slots: np.ndarray
     dense_current_rows: np.ndarray
 
     def __post_init__(self) -> None:
@@ -123,9 +135,16 @@ class WindowSTUInputs:
             raise EvaluationError("dense STU coordinates must be [N,3]")
         if self.dense_features.shape != (self.dense_coordinates.shape[0], 2):
             raise EvaluationError("dense STU features must be [N,2]")
-        if self.dense_current_rows.shape != (self.single_real_slots.size,):
+        if (
+            self.dense_real_slots.ndim != 1
+            or self.dense_current_rows.shape != (self.single_real_slots.size,)
+            or np.any(self.dense_real_slots < 0)
+            or np.any(self.dense_real_slots >= self.dense_coordinates.shape[0])
+            or np.any(self.dense_current_rows < 0)
+            or np.any(self.dense_current_rows >= self.dense_real_slots.size)
+        ):
             raise EvaluationError(
-                "dense current rows do not match current real returns"
+                "dense real-return rows or current rows are inconsistent"
             )
 
 
@@ -162,39 +181,53 @@ class PairedScores:
 
 
 def window_stu_inputs(window: SceneWindow) -> WindowSTUInputs:
-    """Build a pseudo-scan without exposing scan identity to frozen STU."""
+    """Build the official sweep=5 spatial input without exposing scan identity."""
 
     current = window.current_frame.source
-    frames = window.frames
-    intensity = np.concatenate(
-        [frame.source.xyzi[frame.source.real_slots, 3] for frame in frames]
-    ).astype(np.float32, copy=False)
-    if intensity.shape != (window.points.count,):
-        raise EvaluationError("dense intensity rows do not match aligned points")
-
-    current_xyz = np.asarray(window.points.coordinates, dtype=np.float64)
-    pose = window.current_pose.world_from_current
-    dense_world = current_xyz @ pose[:3, :3].T + pose[:3, 3]
+    frames = tuple(window.frame_for_id(frame_id) for frame_id in window.frame_ids)
+    # Empty historical scans contribute no observation; every non-empty official
+    # file-slot scan is otherwise retained exactly, including its zero slots.
+    active = tuple(
+        frame
+        for frame in frames
+        if frame.source.real_count > 0 or frame.source.frame_id == current.frame_id
+    )
+    dense_world = np.concatenate([frame.source.coordinates for frame in active])
+    intensity = np.concatenate([frame.source.xyzi[:, 3] for frame in active]).astype(
+        np.float32, copy=False
+    )
     center = dense_world.mean(axis=0)
     distance = np.linalg.norm(dense_world - center, axis=1).astype(np.float32)
     dense_features = np.column_stack((intensity, distance)).astype(np.float32)
-    dense_rows = np.flatnonzero(window.current_mask).astype(np.int64)
-
-    # The latest member must be geometrically unchanged by T_t<-t.
-    current_native = current.xyzi[current.real_slots, :3]
-    if not np.allclose(
-        window.points.coordinates[dense_rows], current_native, atol=1.0e-5, rtol=1.0e-6
+    real_rows: list[np.ndarray] = []
+    input_offset = 0
+    real_offset = 0
+    current_rows: np.ndarray | None = None
+    for frame in active:
+        source = frame.source
+        real_rows.append(source.real_slots.astype(np.int64) + input_offset)
+        if source.frame_id == current.frame_id:
+            current_rows = np.arange(
+                real_offset, real_offset + source.real_count, dtype=np.int64
+            )
+        input_offset += source.slot_count
+        real_offset += source.real_count
+    if current.real_count == 0 or current_rows is None:
+        raise EvaluationError("current STU scan has no real return")
+    dense_real_slots = np.concatenate(real_rows)
+    current_input_rows = dense_real_slots[current_rows]
+    if not np.array_equal(
+        dense_world[current_input_rows], current.coordinates[current.real_slots]
     ):
-        raise EvaluationError(
-            "latest-scan points changed during current-frame alignment"
-        )
+        raise EvaluationError("current rows do not retain official STU coordinates")
     return WindowSTUInputs(
         single_coordinates=np.asarray(current.coordinates),
         single_features=np.asarray(current.features),
         single_real_slots=np.asarray(current.real_slots, dtype=np.int64),
         dense_coordinates=dense_world,
         dense_features=dense_features,
-        dense_current_rows=dense_rows,
+        dense_real_slots=dense_real_slots,
+        dense_current_rows=current_rows,
     )
 
 
@@ -218,7 +251,9 @@ def score_window(
         inputs.single_features,
         inputs.single_real_slots,
     )
-    dense = encoder(inputs.dense_coordinates, inputs.dense_features)
+    dense = encoder(
+        inputs.dense_coordinates, inputs.dense_features, inputs.dense_real_slots
+    )
     rows = torch.as_tensor(
         inputs.dense_current_rows, dtype=torch.long, device=dense.maxlogit_score.device
     )
@@ -315,7 +350,7 @@ def _open_normal_201(data_root: Path, protocol: AJAEProtocol) -> STUSequence:
 
 def _feasibility_device(protocol: AJAEProtocol, requested: str) -> torch.device:
     device = torch.device(requested)
-    expected = str(protocol.stu["feasibility_inference_device"])
+    expected = str(protocol.status["feasibility_inference_device"])
     if device.type != expected:
         raise EvaluationError(
             f"schema 33 requires {expected} for reproducible F2/F3 inference"
@@ -329,6 +364,7 @@ def run_f1_geometry(
     *,
     protocol: AJAEProtocol,
 ) -> dict[str, object]:
+    implementation = require_clean_implementation(protocol)
     sequence = _open_normal_201(data_root, protocol)
     spec = protocol.normal_development
     settings = protocol.feasibility["F1_geometry"]
@@ -368,8 +404,9 @@ def run_f1_geometry(
         }
     summary = {
         "format": "ajae-schema33-F1-geometry-v1",
-        "protocol_identity": protocol.scientific_identity,
-        "implementation_identity": implementation_identity(protocol),
+        "contract_identity": protocol.contract_identity,
+        "protocol_file_sha256": protocol.execution_identity,
+        "implementation_identity": implementation,
         "status": "completed_descriptive",
         "window_count": len(records),
         "visible_return_ratio_median": float(np.median(ratios)),
@@ -424,6 +461,7 @@ def run_f2_normal_stability(
     device: str,
     encoder: FrozenSTUPointEncoder | None = None,
 ) -> dict[str, object]:
+    implementation = require_clean_implementation(protocol)
     sequence = _open_normal_201(data_root, protocol)
     settings = protocol.feasibility["F2_normal_stability"]
     model = (
@@ -466,6 +504,14 @@ def run_f2_normal_stability(
                 "dense_MaxLogit_median": float(
                     np.median(paired.dense_current_score[masks.normal_anomaly])
                 ),
+                "median_MaxLogit_increase": float(
+                    np.median(paired.dense_current_score[masks.normal_anomaly])
+                    - np.median(paired.single_score[masks.normal_anomaly])
+                ),
+                "q95_MaxLogit_increase": float(
+                    np.quantile(paired.dense_current_score[masks.normal_anomaly], 0.95)
+                    - np.quantile(paired.single_score[masks.normal_anomaly], 0.95)
+                ),
             }
         )
     single_score = np.concatenate(single_scores)
@@ -478,6 +524,8 @@ def run_f2_normal_stability(
     single_accuracy = float(np.mean(single_class == target))
     dense_accuracy = float(np.mean(dense_class == target))
     accuracy_drop = single_accuracy - dense_accuracy
+    worst_median = max(frame_records, key=lambda item: item["median_MaxLogit_increase"])
+    worst_q95 = max(frame_records, key=lambda item: item["q95_MaxLogit_increase"])
     stable = (
         median_shift <= float(settings["maximum_median_MaxLogit_increase"])
         and q95_shift <= float(settings["maximum_q95_MaxLogit_increase"])
@@ -485,8 +533,9 @@ def run_f2_normal_stability(
     )
     summary = {
         "format": "ajae-schema33-F2-normal-stability-v1",
-        "protocol_identity": protocol.scientific_identity,
-        "implementation_identity": implementation_identity(protocol),
+        "contract_identity": protocol.contract_identity,
+        "protocol_file_sha256": protocol.execution_identity,
+        "implementation_identity": implementation,
         "status": "passed" if stable else "failed",
         "frame_count": len(frame_records),
         "normal_anomaly_point_count": int(single_score.size),
@@ -502,6 +551,14 @@ def run_f2_normal_stability(
         "single_normal_accuracy": single_accuracy,
         "dense_normal_accuracy": dense_accuracy,
         "normal_accuracy_drop": accuracy_drop,
+        "worst_frame_median_shift": {
+            "current_frame": worst_median["current_frame"],
+            "value": worst_median["median_MaxLogit_increase"],
+        },
+        "worst_frame_q95_shift": {
+            "current_frame": worst_q95["current_frame"],
+            "value": worst_q95["q95_MaxLogit_increase"],
+        },
         "single_normal_mIoU": _miou(target, single_class),
         "dense_normal_mIoU": _miou(target, dense_class),
         "frames": frame_records,
@@ -584,7 +641,7 @@ def _f3_world_record(
             ray_grid,
             sensor,
             root_seed,
-            renderer_identity=protocol.scientific_identity,
+            renderer_identity=protocol.contract_identity,
             maximum_attempts=maximum_attempts,
         )
     except PlacementError as error:
@@ -727,6 +784,7 @@ def run_f3_proxy_signal(
     device: str,
     encoder: FrozenSTUPointEncoder | None = None,
 ) -> dict[str, object]:
+    implementation = require_clean_implementation(protocol)
     sequence = _open_normal_201(data_root, protocol)
     settings = protocol.feasibility["F3_proxy_signal"]
     model = (
@@ -795,10 +853,16 @@ def run_f3_proxy_signal(
     records = [*screen_records, *extension_records]
     summary = {
         "format": "ajae-schema33-F3-proxy-signal-v2",
-        "protocol_identity": protocol.scientific_identity,
-        "implementation_identity": implementation_identity(protocol),
+        "contract_identity": protocol.contract_identity,
+        "protocol_file_sha256": protocol.execution_identity,
+        "implementation_identity": implementation,
         "status": status,
         "metric_scale": "percent",
+        "metric_direction": {
+            "AP": "higher_better",
+            "AUROC": "higher_better",
+            "FPR95": "lower_better",
+        },
         "screen": screen,
         "final": (
             _f3_phase_summary(records, repetitions=repetitions, seed=bootstrap_seed)

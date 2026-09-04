@@ -8,7 +8,9 @@
     "performance_claims_available": false,
     "selected_method": null,
     "f4_required": false,
-    "f4_completed": false
+    "f4_completed": false,
+    "feasibility_inference_device": "cpu",
+    "cuda_status": "not_authorized_until_same_input_repeatability_and_official_equivalence_pass"
   },
   "authority": {
     "scientific_document": "AJAE新主线方案.md",
@@ -188,8 +190,13 @@
       "file": "vendor/stu/compute_point_level_ood.py",
       "sha256": "ed0330f80fbd3cd4cefafed33d6c747c51f2de521ef191e2868eb24f84b9ce61"
     },
-    "feasibility_inference_device": "cpu",
-    "cuda_status": "not_authorized_until_same_input_repeatability_and_official_equivalence_pass",
+    "F0_qualification": {
+      "single_frame_ids": [8, 198, 387],
+      "five_scan_window_starts": [4, 194, 383],
+      "AJAE_repeat_runs": 2,
+      "MaxLogit_absolute_tolerance": 1e-6,
+      "MaxLogit_relative_tolerance": 1e-6
+    },
     "frozen": true
   },
   "feasibility": {
@@ -240,7 +247,7 @@
       "final_16_world_decision": "direct_dense_STU_is_supported_only_if_F2_passes_at_least_12_worlds_are_evaluable_and_the_lower_95_percent_bound_of_delta_AP_is_above_zero; otherwise_enter_F4"
     },
     "F4_minimal_training": {
-      "allowed_only_if": "F2_or_F3_rejects_direct_dense_STU",
+      "allowed_only_if": "direct_dense_STU_is_not_supported_by_F2_and_F3",
       "first_candidate": "per_scan_frozen_STU_features_aligned_to_current_geometry_plus_one_small_anomaly_head",
       "large_new_network": "not_authorized_without_failure_of_the_small_head",
       "architecture_and_budget": "intentionally_undefined_until_F1_F3_results_exist"

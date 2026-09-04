@@ -15,7 +15,7 @@ AJAE 直接使用的项目代码、第三方源码、冻结权重、射线几何
 
 权重和大型 NPZ 运行时输入使用 Git LFS。克隆后应运行 `git lfs pull`，并用 `python -m src.qualify` 核验权重、STU 源码和协议身份。
 
-五帧实验不使用 STU 数据集中的多扫描时间编号；五帧回波对齐后全部作为同一时刻的稠密空间观测送入冻结 STU，因此研究对象是空间观测密度，而不是带时间标识的时序建模。
+五帧 STU 输入与官方 `LidarDataset(sweep=5)` 使用相同的时间升序文件槽、官方世界坐标、全扫描中心距离和 5 厘米体素化。模型实际使用的两个输入通道仍是强度和距离；官方整理路径产生的扫描时间编号只存在于原始坐标附加列，当前 `Mask4Former3D` 的位置编码不读取该列。因此研究对象是空间观测密度，而不是带时间标识的时序建模。
 
 ## 准备数据与运行时输入
 
@@ -36,6 +36,15 @@ STU/
 - `artifacts/development_201_support_pool.npz`：F1–F3 开发池，只使用 `train/201` 的 4–553 帧，支撑面估计锚点帧为 6–551；
 - `artifacts/training_206_support_pool.npz`：若进入 F4 时使用的训练池，使用 `train/206` 的 0–448 帧，支撑面估计锚点帧为 2–446。
 
+`artifacts/f0_qualification.json` 保存正式 F0 证据：固定真实单帧与五帧窗口的官方输入、体素、逆映射、MaxLogit、类别和 CPU 重复性比较。重新核验时执行：
+
+```bash
+python -m src.qualify --data-root /absolute/path/to/STU --device cpu \
+  --output artifacts/f0_qualification.json
+```
+
+真实 F0 和正式 F1--F3 都拒绝从存在已跟踪文件修改的工作区生成结果；`runs/` 中未跟踪的实验输出不影响该检查。
+
 若需要从官方原始数据重建并逐字节核对三个运行时产物，执行：
 
 ```bash
@@ -50,4 +59,6 @@ python -m src.prepare all --data-root /absolute/path/to/STU --processes 24
 
 当前已实际核验的参考环境为 Python 3.13.12、PyTorch 2.12.0（CUDA 13.0 构建）、CUDA 工具链 13.2.78、GCC/G++ 14.3.0 和 NVIDIA GeForce RTX 5080 Laptop GPU。MinkowskiEngine 0.5.4 与最小 PyTorch3D 0.7.6 均已从本工作区 `vendor/` 源码成功构建并执行 CUDA 算子。不同 CUDA、编译器和 PyTorch 组合可能需要重新编译这两个扩展。
 
-当前参考环境中的 CUDA/MinkowskiEngine 路径未通过同一输入重复前向检查：逐点 MaxLogit 和类别会变化；CPU 路径重复前向完全一致，并已在 `train/201` 的帧 8、198、387 上通过官方 `sweep=1` 路径与 AJAE 编码器的端到端等价检查，三帧 MaxLogit 最大绝对误差均为 0，逆映射和类别均逐点相同。因此 schema 33 暂时只授权 CPU 执行 F2/F3。重新授权 GPU 前必须先修复当前重复性问题，并在相同真实帧上重新通过重复前向和官方等价检查；不能仅凭 CUDA 算子可运行就用于正式实验。
+当前参考环境中的 CUDA/MinkowskiEngine 路径未通过同一输入重复前向检查：逐点 MaxLogit 和类别会变化；因此当前执行状态暂时只授权 CPU 执行 F2/F3。重新授权 GPU 前必须先修复当前重复性问题，并在相同真实帧和窗口上重新通过重复前向与官方等价检查；不能仅凭 CUDA 算子可运行就用于正式实验。
+
+协议身份分为两层。`contract_identity` 只绑定 F0--F3 不可变的科学问题、数据、输入、渲染、STU 和评价规则；阶段、完成声明及 CPU/GPU 授权属于可变执行状态，不进入该身份。`protocol_file_sha256` 则绑定当次运行使用的完整 `protocol.json`，因此执行状态变化仍可逐次追踪。

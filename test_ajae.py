@@ -14,6 +14,7 @@ from src.evaluate import (
     f2_point_masks,
     geometry_record,
     official_point_metrics,
+    require_clean_implementation,
     require_experiment_stage,
     score_window,
     window_stu_inputs,
@@ -127,6 +128,19 @@ def test_protocol_is_the_only_schema33_pretraining_contract() -> None:
     assert protocol.status["current_stage"] == "F1"
     assert protocol.status["training_allowed"] is False
     assert protocol.status["performance_claims_available"] is False
+
+
+def test_contract_identity_excludes_mutable_execution_state(tmp_path: Path) -> None:
+    protocol = load_protocol()
+    payload = json.loads((ROOT / "protocol.json").read_text(encoding="utf-8"))
+    payload["status"]["cuda_status"] = (
+        "qualified_by_same_input_repeatability_and_official_equivalence"
+    )
+    path = tmp_path / "qualified_gpu_status.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    changed = load_protocol(path)
+    assert changed.contract_identity == protocol.contract_identity
+    assert changed.execution_identity != protocol.execution_identity
 
 
 def test_old_schema_is_rejected_before_interpretation(tmp_path: Path) -> None:
@@ -360,6 +374,21 @@ def test_alignment_is_independent_of_source_argument_order() -> None:
     assert set(expected) == set(observed)
     for identity in expected:
         np.testing.assert_array_equal(expected[identity], observed[identity])
+
+    ordered_inputs = window_stu_inputs(ordered)
+    shuffled_inputs = window_stu_inputs(shuffled)
+    for name in (
+        "single_coordinates",
+        "single_features",
+        "single_real_slots",
+        "dense_coordinates",
+        "dense_features",
+        "dense_real_slots",
+        "dense_current_rows",
+    ):
+        np.testing.assert_array_equal(
+            getattr(ordered_inputs, name), getattr(shuffled_inputs, name)
+        )
 
 
 def test_f2_uses_distinct_anomaly_and_semantic_masks() -> None:
@@ -603,8 +632,41 @@ def test_dense_stu_input_contains_all_scans_and_identifies_current_rows() -> Non
     inputs = window_stu_inputs(_window())
     assert inputs.single_real_slots.size == 2
     assert inputs.dense_coordinates.shape == (10, 3)
+    np.testing.assert_array_equal(inputs.dense_real_slots, np.arange(10))
     np.testing.assert_array_equal(inputs.dense_current_rows, np.asarray([8, 9]))
     assert inputs.dense_features.shape == (10, 2)
+
+
+def test_dense_stu_quantizes_all_slots_but_restores_only_real_returns() -> None:
+    spec = SequenceSpec("train", 201, "fixture", True, FrameSpan(0, 5))
+    sources = []
+    for frame in range(5):
+        xyzi = np.asarray(
+            ((0.0, 0.0, 0.0, 0.0), (10.0, 0.0, 0.0, 0.5)),
+            dtype=np.float32,
+        )
+        packed = np.asarray((0, 40), dtype=np.uint32)
+        sources.append(
+            make_source_frame(
+                frame,
+                xyzi,
+                np.eye(4, dtype=np.float64),
+                PointLabels(
+                    packed=packed,
+                    semantic=packed.astype(np.uint16),
+                    instance=np.zeros(2, dtype=np.uint16),
+                    semantic_target=np.asarray((255, 8), dtype=np.uint8),
+                ),
+                partition="train",
+                sequence_id=201,
+            )
+        )
+    inputs = window_stu_inputs(
+        assemble_window(spec, 0, tuple(range(5)), tuple(reversed(sources)))
+    )
+    assert inputs.dense_coordinates.shape == (10, 3)
+    np.testing.assert_array_equal(inputs.dense_real_slots, (1, 3, 5, 7, 9))
+    np.testing.assert_array_equal(inputs.dense_current_rows, (4,))
 
 
 def test_geometry_record_reports_real_point_and_voxel_gain() -> None:
@@ -697,10 +759,23 @@ def test_official_voxel_inverse_recovers_current_point_after_collision() -> None
         inputs.dense_coordinates, inputs.dense_features
     )
     inverse_map = np.asarray(inverse, dtype=np.int64)
-    current = int(inputs.dense_current_rows[0])
+    current = int(inputs.dense_real_slots[inputs.dense_current_rows[0]])
     assert inverse_map[0] == inverse_map[current]
-    scores_for_current = inverse_map[inputs.dense_current_rows]
+    scores_for_current = inverse_map[
+        inputs.dense_real_slots[inputs.dense_current_rows]
+    ]
     assert scores_for_current.shape == inputs.dense_current_rows.shape
+
+
+def test_formal_experiments_reject_a_dirty_tracked_worktree(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "src.evaluate.implementation_identity",
+        lambda _protocol: {"git_tracked_worktree_clean": False},
+    )
+    with pytest.raises(EvaluationError, match="clean tracked Git worktree"):
+        require_clean_implementation(load_protocol())
 
 
 def test_normal_class_matches_the_official_assigned_query_prediction() -> None:

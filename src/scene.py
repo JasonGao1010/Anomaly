@@ -760,6 +760,9 @@ def assemble_window(
     source_ids = tuple(source.frame_id for source in source_frames)
     if len(set(source_ids)) != len(source_ids) or set(source_ids) != set(declared_ids):
         raise SceneDataError("sources must contain each declared frame exactly once")
+    by_id = {source.frame_id: source for source in source_frames}
+    # Canonical row order prevents voxel feature selection from depending on callers.
+    source_frames = tuple(by_id[frame_id] for frame_id in declared_ids)
     if any(
         source.partition != spec.partition or source.sequence_id != spec.sequence_id
         for source in source_frames

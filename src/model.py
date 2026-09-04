@@ -484,7 +484,7 @@ def official_stu_sparse_quantize(
 
 
 class FrozenSTUPointEncoder(nn.Module):
-    """Run official single-frame STU and restore frozen point-level evidence."""
+    """Run frozen official STU and restore selected point-level evidence."""
 
     def __init__(
         self,
@@ -603,7 +603,7 @@ class FrozenSTUPointEncoder(nn.Module):
         if np.unique(slots_np).size != slots_np.size:
             raise ModelError("real_slots must identify distinct source returns")
 
-        # Official sweep=1 quantizes every file slot, including collapsed zero slots.
+        # Official STU quantizes every input file slot, including collapsed zeros.
         point_coordinates = coordinates_np
         point_features = features_np
         sparse_coordinates, sparse_features, unique, inverse = (
