@@ -9,6 +9,8 @@ import torch
 
 from src.evaluate import (
     EvaluationError,
+    _contiguous_chunks,
+    _f1_worker_count,
     f3_final_action,
     f3_screen_action,
     f2_point_masks,
@@ -139,6 +141,15 @@ def test_protocol_separates_F1_geometry_from_official_STU_coordinates() -> None:
     assert dense["coordinate_input"] == "official_STU_sweep5_world_coordinates"
     assert dense["scan_order"] == "chronological"
     assert dense["temporal_feature_used"] is False
+
+
+def test_F1_uses_all_but_one_CPU_in_contiguous_order(monkeypatch: object) -> None:
+    monkeypatch.setattr("src.evaluate.os.cpu_count", lambda: 24)
+    assert _f1_worker_count(None, 546) == 23
+    chunks = _contiguous_chunks(tuple(range(4, 550)), 23)
+    assert len(chunks) == 23
+    assert tuple(value for chunk in chunks for value in chunk) == tuple(range(4, 550))
+    assert max(map(len, chunks)) - min(map(len, chunks)) == 1
 
 
 def test_contract_identity_excludes_mutable_execution_state(tmp_path: Path) -> None:

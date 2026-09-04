@@ -7,8 +7,10 @@ import argparse
 import hashlib
 import json
 import math
+import multiprocessing
 import os
 import subprocess
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Mapping, Sequence
@@ -348,6 +350,59 @@ def _open_normal_201(data_root: Path, protocol: AJAEProtocol) -> STUSequence:
     )
 
 
+def _f1_worker_count(requested: int | None, task_count: int) -> int:
+    """Use all but one logical CPU while keeping the formal run bounded."""
+
+    available = os.cpu_count() or 1
+    maximum = max(1, available - 1)
+    workers = maximum if requested is None else requested
+    if workers < 1 or workers > maximum:
+        raise EvaluationError(
+            f"F1 workers must be between 1 and {maximum} on this machine"
+        )
+    return min(workers, task_count)
+
+
+def _contiguous_chunks(
+    values: Sequence[int], chunk_count: int
+) -> tuple[tuple[int, ...], ...]:
+    """Keep adjacent windows together so each worker reuses its frame cache."""
+
+    base, remainder = divmod(len(values), chunk_count)
+    chunks: list[tuple[int, ...]] = []
+    offset = 0
+    for index in range(chunk_count):
+        size = base + (index < remainder)
+        chunks.append(tuple(values[offset : offset + size]))
+        offset += size
+    return tuple(chunks)
+
+
+def _f1_geometry_chunk(
+    data_root: Path,
+    protocol_path: Path,
+    starts: tuple[int, ...],
+    sizes: tuple[float, ...],
+    ply_frames: frozenset[int],
+    output_dir: Path,
+) -> list[dict[str, object]]:
+    """Process one contiguous F1 shard without changing window semantics."""
+
+    torch.set_num_threads(1)
+    protocol = load_protocol(protocol_path)
+    sequence = _open_normal_201(data_root, protocol)
+    records: list[dict[str, object]] = []
+    for start in starts:
+        window = sequence.window(start)
+        records.append(geometry_record(window, sizes))
+        if window.current_frame_id in ply_frames:
+            _write_ply(
+                output_dir / f"dense_current_{window.current_frame_id:06d}.ply",
+                window,
+            )
+    return records
+
+
 def _feasibility_device(protocol: AJAEProtocol, requested: str) -> torch.device:
     device = torch.device(requested)
     expected = str(protocol.status["feasibility_inference_device"])
@@ -363,21 +418,38 @@ def run_f1_geometry(
     output_dir: Path,
     *,
     protocol: AJAEProtocol,
+    workers: int | None = None,
 ) -> dict[str, object]:
     implementation = require_clean_implementation(protocol)
-    sequence = _open_normal_201(data_root, protocol)
     spec = protocol.normal_development
     settings = protocol.feasibility["F1_geometry"]
     sizes = tuple(float(value) for value in settings["voxel_sizes_m"])
     ply_frames = frozenset(int(value) for value in settings["ply_current_frames"])
-    records: list[dict[str, object]] = []
-    for start in spec.legal_window_starts():
-        window = sequence.window(start)
-        records.append(geometry_record(window, sizes))
-        if window.current_frame_id in ply_frames:
-            _write_ply(
-                output_dir / f"dense_current_{window.current_frame_id:06d}.ply", window
-            )
+    starts = spec.legal_window_starts()
+    worker_count = _f1_worker_count(workers, len(starts))
+    chunks = _contiguous_chunks(starts, worker_count)
+    if worker_count == 1:
+        records = _f1_geometry_chunk(
+            data_root, protocol.path, chunks[0], sizes, ply_frames, output_dir
+        )
+    else:
+        context = multiprocessing.get_context("fork")
+        with ProcessPoolExecutor(
+            max_workers=worker_count, mp_context=context
+        ) as executor:
+            futures = [
+                executor.submit(
+                    _f1_geometry_chunk,
+                    data_root,
+                    protocol.path,
+                    chunk,
+                    sizes,
+                    ply_frames,
+                    output_dir,
+                )
+                for chunk in chunks
+            ]
+            records = [record for future in futures for record in future.result()]
     ratios = np.asarray(
         [record["visible_return_ratio"] for record in records], dtype=np.float64
     )
@@ -408,6 +480,7 @@ def run_f1_geometry(
         "protocol_file_sha256": protocol.execution_identity,
         "implementation_identity": implementation,
         "status": "completed_descriptive",
+        "execution_workers": worker_count,
         "window_count": len(records),
         "visible_return_ratio_median": float(np.median(ratios)),
         "visible_return_ratio_q05_q95": np.quantile(ratios, (0.05, 0.95)).tolist(),
@@ -885,6 +958,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-dir", type=Path, default=Path("runs/ajae/schema33"))
     parser.add_argument("--protocol", type=Path)
     parser.add_argument("--device", default="cpu")
+    parser.add_argument("--workers", type=int)
     return parser
 
 
@@ -905,7 +979,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     require_experiment_stage(protocol, args.experiment)
     if args.experiment == "F1":
-        result = run_f1_geometry(args.data_root, args.output_dir, protocol=protocol)
+        result = run_f1_geometry(
+            args.data_root,
+            args.output_dir,
+            protocol=protocol,
+            workers=args.workers,
+        )
     elif args.experiment == "F2":
         result = run_f2_normal_stability(
             args.data_root, args.output_dir, protocol=protocol, device=args.device
