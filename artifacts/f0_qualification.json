@@ -1,0 +1,287 @@
+{
+  "F0_verdict": "passed",
+  "contract_identity": "7f6edf5f71a0831f0fc26433218d2287d9735af5e3f0a6bc0c18ef33f2d0be4c",
+  "environment": {
+    "MinkowskiEngine": "0.5.4",
+    "PyTorch3D": "0.7.6",
+    "execution_device": "cpu",
+    "logical_CPUs": 24,
+    "platform": "Linux-6.18.33.2-microsoft-standard-WSL2-x86_64-with-glibc2.39",
+    "python": "3.13.12",
+    "torch": "2.12.0+cu130",
+    "torch_CUDA_build": "13.0",
+    "torch_threads": 24
+  },
+  "format": "ajae-schema33-F0-qualification-v2",
+  "implementation_identity": {
+    "git_commit": "500286f840d0eb294273179c1f1f40e5c72c67e2",
+    "git_tracked_worktree_clean": true,
+    "source_files_sha256": {
+      "protocol.json": "111940faaf49ba2d157a644365123922c46c239e23db7251a3ec6f9fb675c529",
+      "src/evaluate.py": "78f21057bae11fbdf1ea8e20867f2ea4003921b4abd3df03031037f545a28d07",
+      "src/model.py": "f788c2a6766f7274392986a5fe466bc41b0996e766510faa9b276e65f711195c",
+      "src/protocol.py": "8a8ded43305945534fed4eba5a3b5edd064a5cfeb529d6c7269f76c3ccae80a6",
+      "src/qualify.py": "48ad78181f6a40f90eac33915ea35e32ab633025a259a61abd3dbb2d7bf4e3a3",
+      "src/render.py": "6416afcc0301876d0c112374e5121fed6e1bfcc1ad416362e46d4cc0926d58d2",
+      "src/scene.py": "017664eadccf4c9be85d9e1e314407e0165c26f88f5a7b1bfbe79ae0965af3e0"
+    }
+  },
+  "mechanical": {
+    "check_count": 8,
+    "checks": [
+      {
+        "details": {
+          "current_frame": 4,
+          "maximum_error": 0.0
+        },
+        "name": "latest_scan_is_the_coordinate_frame",
+        "passed": true
+      },
+      {
+        "details": {
+          "expected_first_x": 6.0,
+          "observed_first_x": 6.0
+        },
+        "name": "past_scans_use_current_from_source_transform",
+        "passed": true
+      },
+      {
+        "details": {
+          "dense_points": 10,
+          "scored_dense_rows": 2,
+          "single_points": 2
+        },
+        "name": "single_and_dense_score_the_same_current_points",
+        "passed": true
+      },
+      {
+        "details": {
+          "first_current": 8,
+          "last_current": 553,
+          "windows": 546
+        },
+        "name": "one_online_output_per_current_frame",
+        "passed": true
+      },
+      {
+        "details": {
+          "methods": [
+            "dense_stu",
+            "single_stu"
+          ],
+          "training_allowed": false
+        },
+        "name": "active_route_contains_no_trainable_model",
+        "passed": true
+      },
+      {
+        "details": {
+          "exact": true,
+          "input_points": 1
+        },
+        "name": "dense_degenerates_exactly_to_single_scan",
+        "passed": true
+      },
+      {
+        "details": {
+          "current_row": 8,
+          "dense_points": 10,
+          "shared_voxel_row": 0
+        },
+        "name": "shared_voxel_inverse_recovers_current_point",
+        "passed": true
+      },
+      {
+        "details": {
+          "checked_voxels": 1,
+          "class": 0
+        },
+        "name": "normal_class_matches_official_query_semantics",
+        "passed": true
+      }
+    ],
+    "passed": true
+  },
+  "performance_claim_available": false,
+  "protocol_file_sha256": "111940faaf49ba2d157a644365123922c46c239e23db7251a3ec6f9fb675c529",
+  "real_equivalence": {
+    "AJAE_path": "STUSequence/SceneWindow->FrozenSTUPointEncoder",
+    "AJAE_repeat_runs": 2,
+    "device": "cpu",
+    "five_scan": [
+      {
+        "AJAE_repeat_class_mismatches": 0,
+        "AJAE_repeat_inverse_map_exact": true,
+        "AJAE_repeat_max_abs_MaxLogit_error": 0.0,
+        "current_real_returns": 103824,
+        "current_view_class_mismatches": 0,
+        "current_view_max_abs_MaxLogit_error": 0.0,
+        "file_slots": 655360,
+        "frame_ids": [
+          4,
+          5,
+          6,
+          7,
+          8
+        ],
+        "full_inverse_map_exact": true,
+        "input_coordinates_exact": true,
+        "input_features_exact": true,
+        "official_time_ids_present": true,
+        "official_vs_AJAE_class_mismatches": 0,
+        "official_vs_AJAE_max_abs_MaxLogit_error": 0.0,
+        "passed": true,
+        "raw_spatial_coordinates_exact": true,
+        "real_returns": 519838,
+        "selected_inverse_map_exact": true,
+        "sparse_coordinates_exact": true,
+        "sparse_features_exact": true,
+        "sparse_voxels": 390728,
+        "time_ids_used_by_Mask4Former3D": false
+      },
+      {
+        "AJAE_repeat_class_mismatches": 0,
+        "AJAE_repeat_inverse_map_exact": true,
+        "AJAE_repeat_max_abs_MaxLogit_error": 0.0,
+        "current_real_returns": 121114,
+        "current_view_class_mismatches": 0,
+        "current_view_max_abs_MaxLogit_error": 0.0,
+        "file_slots": 655360,
+        "frame_ids": [
+          194,
+          195,
+          196,
+          197,
+          198
+        ],
+        "full_inverse_map_exact": true,
+        "input_coordinates_exact": true,
+        "input_features_exact": true,
+        "official_time_ids_present": true,
+        "official_vs_AJAE_class_mismatches": 0,
+        "official_vs_AJAE_max_abs_MaxLogit_error": 0.0,
+        "passed": true,
+        "raw_spatial_coordinates_exact": true,
+        "real_returns": 604722,
+        "selected_inverse_map_exact": true,
+        "sparse_coordinates_exact": true,
+        "sparse_features_exact": true,
+        "sparse_voxels": 428901,
+        "time_ids_used_by_Mask4Former3D": false
+      },
+      {
+        "AJAE_repeat_class_mismatches": 0,
+        "AJAE_repeat_inverse_map_exact": true,
+        "AJAE_repeat_max_abs_MaxLogit_error": 0.0,
+        "current_real_returns": 114740,
+        "current_view_class_mismatches": 0,
+        "current_view_max_abs_MaxLogit_error": 0.0,
+        "file_slots": 655360,
+        "frame_ids": [
+          383,
+          384,
+          385,
+          386,
+          387
+        ],
+        "full_inverse_map_exact": true,
+        "input_coordinates_exact": true,
+        "input_features_exact": true,
+        "official_time_ids_present": true,
+        "official_vs_AJAE_class_mismatches": 0,
+        "official_vs_AJAE_max_abs_MaxLogit_error": 0.0,
+        "passed": true,
+        "raw_spatial_coordinates_exact": true,
+        "real_returns": 574077,
+        "selected_inverse_map_exact": true,
+        "sparse_coordinates_exact": true,
+        "sparse_features_exact": true,
+        "sparse_voxels": 426815,
+        "time_ids_used_by_Mask4Former3D": false
+      }
+    ],
+    "official_path": "LidarDataset(sweep)->VoxelizeCollate->official_model",
+    "passed": true,
+    "single_scan": [
+      {
+        "AJAE_repeat_class_mismatches": 0,
+        "AJAE_repeat_inverse_map_exact": true,
+        "AJAE_repeat_max_abs_MaxLogit_error": 0.0,
+        "current_real_returns": 103824,
+        "current_view_class_mismatches": 0,
+        "current_view_max_abs_MaxLogit_error": 0.0,
+        "file_slots": 131072,
+        "frame_ids": [
+          8
+        ],
+        "full_inverse_map_exact": true,
+        "input_coordinates_exact": true,
+        "input_features_exact": true,
+        "official_time_ids_present": false,
+        "official_vs_AJAE_class_mismatches": 0,
+        "official_vs_AJAE_max_abs_MaxLogit_error": 0.0,
+        "passed": true,
+        "raw_spatial_coordinates_exact": true,
+        "real_returns": 103824,
+        "selected_inverse_map_exact": true,
+        "sparse_coordinates_exact": true,
+        "sparse_features_exact": true,
+        "sparse_voxels": 97188,
+        "time_ids_used_by_Mask4Former3D": false
+      },
+      {
+        "AJAE_repeat_class_mismatches": 0,
+        "AJAE_repeat_inverse_map_exact": true,
+        "AJAE_repeat_max_abs_MaxLogit_error": 0.0,
+        "current_real_returns": 121114,
+        "current_view_class_mismatches": 0,
+        "current_view_max_abs_MaxLogit_error": 0.0,
+        "file_slots": 131072,
+        "frame_ids": [
+          198
+        ],
+        "full_inverse_map_exact": true,
+        "input_coordinates_exact": true,
+        "input_features_exact": true,
+        "official_time_ids_present": false,
+        "official_vs_AJAE_class_mismatches": 0,
+        "official_vs_AJAE_max_abs_MaxLogit_error": 0.0,
+        "passed": true,
+        "raw_spatial_coordinates_exact": true,
+        "real_returns": 121114,
+        "selected_inverse_map_exact": true,
+        "sparse_coordinates_exact": true,
+        "sparse_features_exact": true,
+        "sparse_voxels": 114470,
+        "time_ids_used_by_Mask4Former3D": false
+      },
+      {
+        "AJAE_repeat_class_mismatches": 0,
+        "AJAE_repeat_inverse_map_exact": true,
+        "AJAE_repeat_max_abs_MaxLogit_error": 0.0,
+        "current_real_returns": 114740,
+        "current_view_class_mismatches": 0,
+        "current_view_max_abs_MaxLogit_error": 0.0,
+        "file_slots": 131072,
+        "frame_ids": [
+          387
+        ],
+        "full_inverse_map_exact": true,
+        "input_coordinates_exact": true,
+        "input_features_exact": true,
+        "official_time_ids_present": false,
+        "official_vs_AJAE_class_mismatches": 0,
+        "official_vs_AJAE_max_abs_MaxLogit_error": 0.0,
+        "passed": true,
+        "raw_spatial_coordinates_exact": true,
+        "real_returns": 114740,
+        "selected_inverse_map_exact": true,
+        "sparse_coordinates_exact": true,
+        "sparse_features_exact": true,
+        "sparse_voxels": 107944,
+        "time_ids_used_by_Mask4Former3D": false
+      }
+    ]
+  },
+  "scientific_status": "pending_real_F1_F2_F3_execution"
+}
