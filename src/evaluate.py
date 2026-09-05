@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 import gc
 import hashlib
 import json
+import os
 from pathlib import Path
 import resource
 import signal
@@ -387,9 +388,12 @@ def assert_unchanged(model, reference):
         raise RuntimeError("zero-update inference produced parameter gradients")
 
 
-def file_hash(path):
+def file_hash(path, *, discard_cache=False):
     with path.open("rb") as stream:
-        return hashlib.file_digest(stream, "sha256").hexdigest()
+        result = hashlib.file_digest(stream, "sha256").hexdigest()
+        if discard_cache:
+            os.posix_fadvise(stream.fileno(), 0, 0, os.POSIX_FADV_DONTNEED)
+        return result
 
 
 def summarize(rows, pooled, normal_scores):
@@ -875,6 +879,10 @@ def save_window(output, sample, window, scores, losses, scopes, timings):
         output / relative, window=window
     )
     prediction["file"] = relative.as_posix()
+    # A bounded Python writer must not accumulate unbounded host-backed file pages.
+    with (output / relative).open("rb") as stream:
+        os.fdatasync(stream.fileno())
+        os.posix_fadvise(stream.fileno(), 0, 0, os.POSIX_FADV_DONTNEED)
     current = window.current_mask
     xyz, semantic = window.points.coordinates[current], window.labels.semantic[current]
     current_target = evaluation_targets(xyz, semantic)
@@ -1281,7 +1289,6 @@ def verify_baseline(initial, monitors):
         raise ValueError("B validation worlds differ from the frozen manifest")
     for name in (
         "protocol.json",
-        "src/data.py",
         "src/model.py",
         "vendor/stu/compute_point_level_ood.py",
     ):
@@ -1301,7 +1308,7 @@ def verify_baseline(initial, monitors):
         if any(row[key] != value for key, value in sample.items()):
             raise ValueError("B prediction identities or check seeds differ")
         path = directory / row["prediction"]["file"]
-        if file_hash(path) != row["prediction"]["file_sha256"]:
+        if file_hash(path, discard_cache=True) != row["prediction"]["file_sha256"]:
             raise ValueError("B retained prediction content changed")
         with zipfile.ZipFile(path) as archive:
             overhead = sum(

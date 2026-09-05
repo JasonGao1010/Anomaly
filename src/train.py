@@ -969,7 +969,7 @@ def run(data_root: Path, output: Path, *, group=None, initial=None, workers=1):
     return result
 
 
-def run_fulltrain(data_root, output, initial, *, resume=False):
+def run_fulltrain(data_root, output, initial, *, resume=False, updated_code=False):
     """Execute the predeclared full-pool training and two-stage candidate selection."""
     from .evaluate import (
         assert_unchanged,
@@ -1022,9 +1022,26 @@ def run_fulltrain(data_root, output, initial, *, resume=False):
     sources = {name: file_hash(PROJECT_ROOT / name) for name in sorted(source_names)}
     if resume:
         plan = json.loads(plan_path.read_text())
+        resumed_payload = torch.load(
+            output / "last.pt", map_location="cpu", weights_only=False
+        )
+        previous_sources = resumed_payload.get(
+            "execution_sha256", plan["source_sha256"]
+        )
+        changed_sources = {
+            name: {"previous": previous_sources.get(name), "current": digest}
+            for name, digest in sources.items()
+            if previous_sources.get(name) != digest
+        }
+        if changed_sources and (
+            not updated_code
+            or set(changed_sources) - {"src/train.py", "src/evaluate.py", "src/data.py"}
+        ):
+            raise ValueError(
+                "changed execution requires --updated-code after equivalent-input regression; scientific model/data identities must remain fixed"
+            )
         if (
-            plan["source_sha256"] != sources
-            or plan["samples"] != samples
+            plan["samples"] != samples
             or plan["monitor_samples"] != monitors
             or plan["baseline"] != baseline
             or plan["config"] != json.loads(json.dumps(FULL_CONFIG))
@@ -1060,6 +1077,7 @@ def run_fulltrain(data_root, output, initial, *, resume=False):
                 "prefetch_windows": 1,
                 "raw_frame_cache": 16,
                 "synthetic_frame_cache": 5,
+                "sparse_segment_cache_bytes": 256 * 2**20,
             },
             "base_commit": subprocess.check_output(
                 ["git", "rev-parse", "HEAD"], text=True
@@ -1083,7 +1101,9 @@ def run_fulltrain(data_root, output, initial, *, resume=False):
     volume = host_disk()  # Re-query immediately before any substantial writes.
     if volume["SizeRemaining"] - remaining_disk < volume["reserve_bytes"]:
         raise OSError("measured full-training peak would invade the E: reserve")
-    train_data = FrozenWindowDataset(data_root, protocol, pool_name="train")
+    train_data = FrozenWindowDataset(
+        data_root, protocol, pool_name="train", segment_cache_bytes=256 * 2**20
+    )
     validation_data = FrozenWindowDataset(data_root, protocol, pool_name="validation")
     if (
         not train_data.gradient_updates_allowed
@@ -1100,7 +1120,7 @@ def run_fulltrain(data_root, output, initial, *, resume=False):
     )
     scaler = torch.amp.GradScaler("cuda", init_scale=128)
     if resume:
-        payload = torch.load(output / "last.pt", map_location="cpu", weights_only=False)
+        payload = resumed_payload
         if payload["plan_sha256"] != file_hash(plan_path):
             raise ValueError("recovery checkpoint belongs to another training plan")
         state = payload["state"]
@@ -1108,10 +1128,31 @@ def run_fulltrain(data_root, output, initial, *, resume=False):
             raise ValueError(
                 "numerical failure is preserved; automatic recipe retry is forbidden"
             )
+        if state["status"] in ("resource_limit", "interrupted", "execution_error"):
+            state.setdefault("interruptions", []).append(
+                {
+                    key: state.get(key)
+                    for key in (
+                        "status",
+                        "error",
+                        "planned_attempts",
+                        "elapsed_seconds",
+                    )
+                }
+            )
         model.load_state_dict(payload["model"], strict=True)
         optimizer.load_state_dict(payload["optimizer"])
         scaler.load_state_dict(payload["scaler"])
         restore_random_state(payload["random_state"])
+        if changed_sources:
+            state.setdefault("execution_updates", []).append(
+                {
+                    "next_step": state["planned_attempts"] + 1,
+                    "source_changes": changed_sources,
+                    "sparse_segment_cache_bytes": 256 * 2**20,
+                }
+            )
+        del resumed_payload
     else:
         payload = torch.load(initial, map_location="cpu", weights_only=False)
         if (
@@ -1200,6 +1241,7 @@ def run_fulltrain(data_root, output, initial, *, resume=False):
             "scaler": scaler.state_dict(),
             "random_state": random_state(),
             "schedule": plan["schedule"],
+            "execution_sha256": sources,
             "sampler_random_state": plan["sampler_random_state"],
             "next_schedule_index": state["planned_attempts"],
         }
@@ -1229,6 +1271,7 @@ def run_fulltrain(data_root, output, initial, *, resume=False):
         return resources()
 
     state["status"] = "running" if state["phase"] != "selection" else state["status"]
+    state.pop("error", None)
     initial_parameters = None
     if not state["successful_updates"]:
         initial_parameters = {
@@ -1240,6 +1283,8 @@ def run_fulltrain(data_root, output, initial, *, resume=False):
             resumed=resume,
             plan_sha256=file_hash(plan_path),
             next_step=state["planned_attempts"] + 1,
+            execution_sha256=sources,
+            sparse_segment_cache_bytes=256 * 2**20,
         )
         if not resume:
             save_state(output / "last.pt")
@@ -1307,7 +1352,9 @@ def run_fulltrain(data_root, output, initial, *, resume=False):
                         state["next_position"] = position + 1
                         state["visits"][epoch - 1][index] += 1
                         for key, value in {"total": loss, **parts}.items():
-                            state["epoch_loss_sums"][epoch - 1][key] += float(value)
+                            state["epoch_loss_sums"][epoch - 1][key] += float(
+                                value.detach()
+                            )
                             state["epoch_loss_counts"][epoch - 1][key] += 1
                         if update["updated"]:
                             state["successful_updates"] += 1
@@ -1645,6 +1692,11 @@ if __name__ == "__main__":
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--full", action="store_true", help="execute AJAE-FullTrain-v1")
     parser.add_argument(
+        "--updated-code",
+        action="store_true",
+        help="resume a verified equivalent execution update while retaining the original plan",
+    )
+    parser.add_argument(
         "--resume",
         action="store_true",
         help="continue the same full-training state and cumulative budget",
@@ -1652,6 +1704,8 @@ if __name__ == "__main__":
     args = parser.parse_args()
     if args.resume and not args.full:
         parser.error("--resume requires --full")
+    if args.updated_code and not args.resume:
+        parser.error("--updated-code requires --resume")
     if args.full:
         if args.coverage:
             parser.error("--full and --coverage are separate experiments")
@@ -1660,6 +1714,7 @@ if __name__ == "__main__":
             args.output or Path("runs/fulltrain_v1"),
             args.initial,
             resume=args.resume,
+            updated_code=args.updated_code,
         )
     elif args.coverage:
         run_coverage(

@@ -265,14 +265,16 @@ def test_streamed_frozen_input_matches_original_preparation() -> None:
 
     protocol = load_protocol()
     root = Path(os.environ["AJAE_STU_ROOT"])
-    dataset = FrozenWindowDataset(root, protocol, pool_name="train")
+    dataset = FrozenWindowDataset(
+        root, protocol, pool_name="train", segment_cache_bytes=256 * 2**20
+    )
     selected = training_samples(protocol.training_pool, full=True)
     model = AJAE().cuda().eval()
     payload = torch.load(
         "runs/learn/initial.pt", map_location="cpu", weights_only=False
     )
     model.load_state_dict(payload["model"], strict=True)
-    for sample in (selected[0], selected[384]):
+    for sample in (selected[0], selected[384], selected[0]):
         reference, expected, target = prepare_samples(root, protocol, [sample], 1)[0]
         window, actual, _, _ = prepare_window(dataset, None, sample)
         for name in (
@@ -286,6 +288,11 @@ def test_streamed_frozen_input_matches_original_preparation() -> None:
                 getattr(window.points, name), getattr(reference.points, name)
             )
         np.testing.assert_array_equal(window.labels.anomaly_target, target.numpy())
+        assert dataset._cached_bytes <= 256 * 2**20
+        assert (
+            sum(len(segment._frame_cache) for segment, _ in dataset._segments.values())
+            <= 5
+        )
         for field in fields(actual):
             value = getattr(actual, field.name)
             if isinstance(value, torch.Tensor):

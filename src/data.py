@@ -947,7 +947,12 @@ class FrozenWindowDataset:
     """Training/validation input whose constructor verifies both frozen pools."""
 
     def __init__(
-        self, data_root: Path, protocol: AJAEProtocol, *, pool_name: str
+        self,
+        data_root: Path,
+        protocol: AJAEProtocol,
+        *,
+        pool_name: str,
+        segment_cache_bytes: int = 0,
     ) -> None:
         if (
             not protocol.status["data_pool_frozen"]
@@ -976,6 +981,13 @@ class FrozenWindowDataset:
         )
         self._segment_index: int | None = None
         self._segment: FrozenSyntheticSegment | None = None
+        if segment_cache_bytes < 0:
+            raise ValueError("segment cache size must be nonnegative")
+        self._segment_cache_bytes = segment_cache_bytes
+        self._segments: OrderedDict[str, tuple[FrozenSyntheticSegment, int]] = (
+            OrderedDict()
+        )
+        self._cached_bytes = 0
 
     @property
     def gradient_updates_allowed(self) -> bool:
@@ -990,11 +1002,19 @@ class FrozenWindowDataset:
         segment_index, start = self._windows[index]
         if self._segment_index != segment_index:
             record = self.manifest["segments"][segment_index]
-            segment = FrozenSyntheticSegment(
-                self.protocol.path.parent / record["file"],
-                self.source_sequence,
-                record["file_sha256"],
-            )
+            if self._segment is not None:
+                self._segment._frame_cache.clear()
+            key = record["file_sha256"]
+            cached = self._segments.pop(key, None)
+            if cached is None:
+                segment = FrozenSyntheticSegment(
+                    self.protocol.path.parent / record["file"],
+                    self.source_sequence,
+                    record["file_sha256"],
+                )
+            else:
+                segment, size = cached
+                self._cached_bytes -= size
             if any(
                 segment.metadata[key] != record[key]
                 for key in (
@@ -1010,6 +1030,17 @@ class FrozenWindowDataset:
                 raise DataProtocolError(
                     "manifest and loaded segment identities disagree"
                 )
+            # Cache validated sparse deltas, never expanded windows or network features.
+            # File identity includes the world and raw-source identities; scope is this dataset.
+            size = sum(array.nbytes for array in segment.arrays.values()) + 4 * len(
+                json.dumps(segment.metadata)
+            )
+            if size <= self._segment_cache_bytes:
+                self._segments[key] = segment, size
+                self._cached_bytes += size
+                while self._cached_bytes > self._segment_cache_bytes:
+                    _, (_, size) = self._segments.popitem(last=False)
+                    self._cached_bytes -= size
             self._segment = segment
             self._segment_index = segment_index
         return self._segment.window(start)
