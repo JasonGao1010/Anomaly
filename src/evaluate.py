@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 from concurrent.futures import ThreadPoolExecutor
 import gc
 import hashlib
@@ -1289,13 +1290,26 @@ def verify_baseline(initial, monitors):
         raise ValueError("B validation worlds differ from the frozen manifest")
     for name in (
         "protocol.json",
-        "src/model.py",
         "vendor/stu/compute_point_level_ood.py",
     ):
         if file_hash(PROJECT_ROOT / name) != manifest["source_sha256"][name]:
             raise ValueError(
                 f"B scientific input or metric implementation changed: {name}"
             )
+    # Voxel sorting may change implementation after exact-input regression; network classes stay fixed.
+    old_model = subprocess.check_output(
+        ["git", "show", manifest["base_commit"] + ":src/model.py"], text=True
+    )
+
+    def classes(source):
+        return [
+            ast.dump(node)
+            for node in ast.parse(source).body
+            if isinstance(node, ast.ClassDef)
+        ]
+
+    if classes(old_model) != classes((PROJECT_ROOT / "src/model.py").read_text()):
+        raise ValueError("B network architecture or forward behavior changed")
     rows = [
         json.loads(line)
         for line in (directory / "results.jsonl").read_text().splitlines()

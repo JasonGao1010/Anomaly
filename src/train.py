@@ -1035,7 +1035,8 @@ def run_fulltrain(data_root, output, initial, *, resume=False, updated_code=Fals
         }
         if changed_sources and (
             not updated_code
-            or set(changed_sources) - {"src/train.py", "src/evaluate.py", "src/data.py"}
+            or set(changed_sources)
+            - {"src/train.py", "src/evaluate.py", "src/data.py", "src/model.py"}
         ):
             raise ValueError(
                 "changed execution requires --updated-code after equivalent-input regression; scientific model/data identities must remain fixed"

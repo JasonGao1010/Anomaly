@@ -76,10 +76,18 @@ def joint_voxelize(
     cells -= cells.min(axis=0)
     if cells.max() >= 2**16:
         raise ValueError("voxel extent exceeds LitePT's 16-bit spatial encoding")
-    grid, inverse, counts = np.unique(
-        cells.astype(np.int64), axis=0, return_inverse=True, return_counts=True
-    )
-    inverse = inverse.reshape(-1)
+    cells = cells.astype(np.int64)
+    # Match np.unique(axis=0)'s exact lexicographic order without structured-row sorting.
+    order = np.lexsort((cells[:, 2], cells[:, 1], cells[:, 0]))
+    ordered = cells[order]
+    first = np.empty(len(order), dtype=bool)
+    first[0] = True
+    first[1:] = np.any(ordered[1:] != ordered[:-1], axis=1)
+    starts = np.flatnonzero(first)
+    grid = ordered[first]
+    inverse = np.empty(len(order), dtype=np.int64)
+    inverse[order] = np.cumsum(first, dtype=np.int64) - 1
+    counts = np.diff(np.r_[starts, len(order)])
     count = len(grid)
     means = np.empty((count, 4), dtype=np.float32)
     for axis in range(4):

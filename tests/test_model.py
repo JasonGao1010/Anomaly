@@ -277,6 +277,26 @@ def test_streamed_frozen_input_matches_original_preparation() -> None:
     for sample in (selected[0], selected[384], selected[0]):
         reference, expected, target = prepare_samples(root, protocol, [sample], 1)[0]
         window, actual, _, _ = prepare_window(dataset, None, sample)
+        cells = np.floor(window.points.coordinates.astype(np.float64) / 0.05)
+        cells -= cells.min(axis=0)
+        grid, inverse, counts = np.unique(
+            cells.astype(np.int64), axis=0, return_inverse=True, return_counts=True
+        )
+        np.testing.assert_array_equal(actual.grid_coord.numpy(), grid)
+        np.testing.assert_array_equal(actual.point_to_voxel.numpy(), inverse)
+        np.testing.assert_array_equal(
+            np.bincount(actual.point_to_voxel.numpy()), counts
+        )
+        for axis in range(4):
+            values = (
+                window.points.coordinates[:, axis]
+                if axis < 3
+                else window.points.features[:, 0]
+            )
+            means = (
+                np.bincount(inverse, weights=values, minlength=len(grid)) / counts
+            ).astype(np.float32)
+            np.testing.assert_array_equal(actual.features[:, axis].numpy(), means)
         for name in (
             "coordinates",
             "features",
