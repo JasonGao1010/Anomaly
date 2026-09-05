@@ -253,3 +253,54 @@ def test_complete_frozen_windows_on_gpu() -> None:
             del logits, record
             if training:
                 del loss
+
+
+@pytest.mark.skipif(
+    not os.environ.get("AJAE_STU_ROOT") or not torch.cuda.is_available(),
+    reason="set AJAE_STU_ROOT for the frozen streaming-input equivalence check",
+)
+def test_streamed_frozen_input_matches_original_preparation() -> None:
+    from src.evaluate import prepare_window
+    from src.train import fixed_check, prepare_samples, training_samples
+
+    protocol = load_protocol()
+    root = Path(os.environ["AJAE_STU_ROOT"])
+    dataset = FrozenWindowDataset(root, protocol, pool_name="train")
+    selected = training_samples(protocol.training_pool, full=True)
+    model = AJAE().cuda().eval()
+    payload = torch.load(
+        "runs/learn/initial.pt", map_location="cpu", weights_only=False
+    )
+    model.load_state_dict(payload["model"], strict=True)
+    for sample in (selected[0], selected[384]):
+        reference, expected, target = prepare_samples(root, protocol, [sample], 1)[0]
+        window, actual, _, _ = prepare_window(dataset, None, sample)
+        for name in (
+            "coordinates",
+            "features",
+            "source_frame",
+            "source_slot",
+            "scan_group",
+        ):
+            np.testing.assert_array_equal(
+                getattr(window.points, name), getattr(reference.points, name)
+            )
+        np.testing.assert_array_equal(window.labels.anomaly_target, target.numpy())
+        for field in fields(actual):
+            value = getattr(actual, field.name)
+            if isinstance(value, torch.Tensor):
+                torch.testing.assert_close(
+                    value, getattr(expected, field.name), atol=0, rtol=0
+                )
+        with fixed_check(model, 23):
+            direct = model(window).cpu()
+        with fixed_check(model, 23):
+            streamed = model(window, inputs=actual.to("cuda")).cpu()
+        torch.testing.assert_close(streamed, direct, atol=1e-6, rtol=1e-5)
+        print(
+            {
+                "current_frame": window.current_frame_id,
+                "points": window.points.count,
+                "max_absolute_logit_difference": float((streamed - direct).abs().max()),
+            }
+        )

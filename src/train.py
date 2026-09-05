@@ -15,6 +15,7 @@ import random
 import resource
 import signal
 import subprocess
+import tempfile
 import threading
 import time
 
@@ -62,6 +63,195 @@ CONFIG = {
     "initialization": "random_no_checkpoint",
     "augmentation": None,
 }
+
+FULL_CONFIG = {
+    **{
+        key: CONFIG[key]
+        for key in (
+            "seed",
+            "voxel_size",
+            "batch_size",
+            "gradient_accumulation",
+            "optimizer",
+            "weight_decay",
+            "betas",
+            "eps",
+            "max_grad_norm",
+            "initial_loss_scale",
+            "consecutive_overflow_limit",
+            "loss",
+            "training_precision",
+            "inference_precision",
+            "augmentation",
+        )
+    },
+    "purpose": "AJAE-FullTrain-v1",
+    "epochs": 10,
+    "windows_per_epoch": 3080,
+    "planned_steps": 30800,
+    "warmup_updates": 200,
+    "warmup_initial_lr": 3e-5,
+    "lr_levels": [3e-4, 1e-4, 3e-5],
+    "ap_tolerance_percentage_points": 0.1,
+    "plateau_patience_epochs": 2,
+    "minimum_epochs": 4,
+    "minimum_low_lr_epochs": 2,
+    "timeout_seconds": 6 * 3600,
+    "recovery_interval": 500,
+    "recovery_versions": 2,
+    "rss_target_bytes": 6 * 2**30,
+    "rss_stop_bytes": 8 * 2**30,
+    "minimum_available_memory_bytes": 4 * 2**30,
+    "planned_disk_bytes": 35 * 2**30,
+    "normal_threshold": 0.5,
+    "selection": "AP within 0.1 percentage points of maximum; lower FPR95, lower normal fraction >=0.5, earlier checkpoint",
+}
+
+
+def write_progress(path, payload):
+    """Replace mutable progress atomically; immutable evidence uses _atomic_json."""
+    with tempfile.NamedTemporaryFile(
+        mode="w", dir=path.parent, suffix=".tmp", delete=False
+    ) as stream:
+        temporary = Path(stream.name)
+        try:
+            json.dump(payload, stream, allow_nan=False, indent=2)
+            stream.write("\n")
+            stream.flush()
+            os.replace(temporary, path)
+        finally:
+            temporary.unlink(missing_ok=True)
+
+
+def full_learning_rate(state):
+    updates = state["successful_updates"]
+    if updates < FULL_CONFIG["warmup_updates"]:
+        # Update 1 uses the initial rate; update 200 reaches the main rate.
+        fraction = updates / (FULL_CONFIG["warmup_updates"] - 1)
+        return 3e-5 + (3e-4 - 3e-5) * fraction
+    return FULL_CONFIG["lr_levels"][state["lr_level"]]
+
+
+def advance_full_schedule(state, ap):
+    """AP is in percentage units; only a strict >0.1 gain resets stagnation."""
+    if ap is None or not np.isfinite(ap):
+        raise FloatingPointError("fixed monitoring has no finite pooled AP")
+    reference = state["reference_ap"]
+    improved = reference is None or ap > reference + 0.1
+    if improved:
+        state["reference_ap"] = ap
+        state["bad_epochs"] = 0
+    else:
+        state["bad_epochs"] += 1
+    if state["lr_level"] == 2:
+        state["low_lr_epochs"] += 1
+        state["low_lr_bad_epochs"] = 0 if improved else state["low_lr_bad_epochs"] + 1
+    stopped = (
+        state["completed_epochs"] >= 4
+        and state["low_lr_epochs"] >= 2
+        and state["low_lr_bad_epochs"] >= 2
+    )
+    if state["bad_epochs"] >= 2 and state["lr_level"] < 2:
+        state["lr_level"] += 1
+        state["bad_epochs"] = 0
+    return improved, stopped
+
+
+def choose_candidate(candidates):
+    if not candidates or len({c["scope"] for c in candidates}) != 1:
+        raise ValueError("candidate selection requires one common evaluation scope")
+    for candidate in candidates:
+        if any(
+            not np.isfinite(candidate[key])
+            for key in ("AP", "FPR95", "normal_fraction")
+        ):
+            raise ValueError("candidate ranking metrics must be finite")
+    best = max(candidate["AP"] for candidate in candidates)
+    close = [
+        candidate for candidate in candidates if best - candidate["AP"] <= 0.1 + 1e-12
+    ]
+    return min(close, key=lambda c: (c["FPR95"], c["normal_fraction"], c["epoch"]))
+
+
+class FullResources:
+    """Check actual host limits and the persistent training/monitoring time budget."""
+
+    def __init__(
+        self, emit=lambda *args, **kwargs: None, elapsed=lambda: 0, *, timed=False
+    ):
+        self.emit, self.elapsed, self.timed = emit, elapsed, timed
+        self.last_host_check = -float("inf")
+        self.latest = {}
+
+    def __call__(self):
+        if self.timed and self.elapsed() >= FULL_CONFIG["timeout_seconds"]:
+            raise TimeoutError(
+                "six-hour cumulative training and monitoring budget exhausted"
+            )
+        memory = {
+            line.split(":")[0]: int(line.split()[1]) * 1024
+            for line in Path("/proc/meminfo").read_text().splitlines()
+            if line.startswith(
+                ("MemAvailable:", "MemTotal:", "SwapFree:", "SwapTotal:")
+            )
+        }
+        rss = next(
+            int(line.split()[1]) * 1024
+            for line in Path("/proc/self/status").read_text().splitlines()
+            if line.startswith("VmRSS:")
+        )
+        if rss >= FULL_CONFIG["rss_stop_bytes"]:
+            raise MemoryError("resident memory reached the 8 GiB stop limit")
+        if memory["MemAvailable"] < FULL_CONFIG["minimum_available_memory_bytes"]:
+            raise MemoryError(
+                "WSL available memory is below 4 GiB; stop further loading"
+            )
+        if time.monotonic() - self.last_host_check < 60:
+            return self.latest
+        volume = host_disk()
+        host = json.loads(
+            subprocess.check_output(
+                [
+                    "powershell.exe",
+                    "-NoProfile",
+                    "-Command",
+                    "Get-CimInstance Win32_OperatingSystem | Select-Object TotalVisibleMemorySize,FreePhysicalMemory | ConvertTo-Json -Compress",
+                ],
+                text=True,
+                timeout=20,
+            )
+        )
+        gpu = subprocess.check_output(
+            [
+                "nvidia-smi",
+                "--query-gpu=name,memory.used,memory.total,utilization.gpu",
+                "--format=csv,noheader,nounits",
+            ],
+            text=True,
+            timeout=20,
+        ).strip()
+        self.latest = {
+            "rss_bytes": rss,
+            "wsl_memory": memory,
+            "host_memory_kib": host,
+            "host_disk": volume,
+            "gpu": gpu,
+            "gpu_allocated_bytes": torch.cuda.memory_allocated(),
+            "gpu_reserved_bytes": torch.cuda.memory_reserved(),
+            "process_cpu_seconds": time.process_time(),
+        }
+        self.last_host_check = time.monotonic()
+        self.emit("resource", **self.latest)
+        if (
+            host["FreePhysicalMemory"] * 1024
+            < FULL_CONFIG["minimum_available_memory_bytes"]
+        ):
+            raise MemoryError(
+                "Windows available memory is below 4 GiB; stop further loading"
+            )
+        if volume["SizeRemaining"] < volume["reserve_bytes"] + 2 * 2**30:
+            raise OSError("E: reserve plus recovery/sorting headroom is exhausted")
+        return self.latest
 
 
 def balanced_loss(logits, target):
@@ -142,32 +332,33 @@ def shuffled_schedule(seed=23, window_count=8, planned_steps=200):
     ]
 
 
-def training_samples(pool, expanded=False):
-    """Choose terminal windows by identity, never by labels or model performance."""
+def training_samples(pool, expanded=False, *, full=False):
+    """Choose windows by identity, never by labels or model performance."""
     if pool.name != "train" or pool.source_sequence_id != 206:
         raise ValueError("only the frozen 206 training pool may update parameters")
     result = []
-    sequences = range(pool.synthetic_sequence_count) if expanded else (0,)
-    segments = range(len(pool.segments)) if expanded else SEGMENTS
+    sequences = range(pool.synthetic_sequence_count) if expanded or full else (0,)
+    segments = range(len(pool.segments)) if expanded or full else SEGMENTS
     for sequence in sequences:
         for segment in segments:
-            current = pool.segments[segment].stop - 1
-            index = (
-                sequence * pool.windows_per_sequence
-                + sum(len(pool.window_starts(s)) for s in range(segment + 1))
-                - 1
+            starts = pool.window_starts(segment)
+            offset = sequence * pool.windows_per_sequence + sum(
+                len(pool.window_starts(s)) for s in range(segment)
             )
-            result.append(
-                {
-                    "synthetic_sequence_index": sequence,
-                    "segment_index": segment,
-                    "dataset_index": index,
-                    "sequence_id": pool.synthetic_sequence_id(sequence),
-                    "current_frame": current,
-                    "frame_ids": list(range(current - 4, current + 1)),
-                    "check_seed": 23 + sequence * len(pool.segments) + segment,
-                }
-            )
+            for position in range(len(starts)) if full else (len(starts) - 1,):
+                current = starts[position] + 4
+                result.append(
+                    {
+                        "synthetic_sequence_index": sequence,
+                        "segment_index": segment,
+                        "dataset_index": offset + position,
+                        "sequence_id": pool.synthetic_sequence_id(sequence),
+                        "current_frame": current,
+                        "frame_ids": list(range(current - 4, current + 1)),
+                        "check_seed": 23 + sequence * len(pool.segments) + segment,
+                        **({"view": "synthetic"} if full else {}),
+                    }
+                )
     return result
 
 
@@ -778,6 +969,550 @@ def run(data_root: Path, output: Path, *, group=None, initial=None, workers=1):
     return result
 
 
+def run_fulltrain(data_root, output, initial, *, resume=False):
+    """Execute the predeclared full-pool training and two-stage candidate selection."""
+    from .evaluate import (
+        assert_unchanged,
+        evaluate_samples,
+        file_hash,
+        full_samples,
+        model_digest,
+        monitor_samples,
+        prepare_window,
+        run_full,
+        select_full_candidates,
+        verify_baseline,
+    )
+
+    if not torch.cuda.is_available():
+        raise RuntimeError("the unchanged LitePT implementation requires CUDA")
+    if output.exists() != resume:
+        raise FileExistsError("use a new full-training directory, or explicit --resume")
+    if any(
+        output.resolve().is_relative_to((PROJECT_ROOT / p).resolve())
+        for p in ("runs/learn", "runs/coverage", "runs/validation", "runs/transfer")
+    ):
+        raise ValueError("formal training must preserve earlier evidence directories")
+    torch.set_num_threads(1)
+    protocol = load_protocol()
+    samples = training_samples(protocol.training_pool, full=True)
+    monitors = monitor_samples(protocol.validation_pool)
+    if len(samples) != 3080:
+        raise ValueError("formal training must use all 3080 frozen windows")
+    resources = FullResources()
+    snapshot = resources()
+    baseline, disk_estimate = verify_baseline(initial, monitors)
+    plan_path = output / "plan.json"
+    source_names = [
+        "protocol.json",
+        "src/train.py",
+        "src/evaluate.py",
+        "src/model.py",
+        "src/data.py",
+        "src/scene.py",
+        "src/protocol.py",
+        "artifacts/data/train_manifest.json",
+        "artifacts/data/validation_manifest.json",
+        "artifacts/data/qualification.json",
+    ]
+    source_names += [
+        str(p.relative_to(PROJECT_ROOT))
+        for p in (PROJECT_ROOT / "vendor").rglob("*.py")
+    ]
+    sources = {name: file_hash(PROJECT_ROOT / name) for name in sorted(source_names)}
+    if resume:
+        plan = json.loads(plan_path.read_text())
+        if (
+            plan["source_sha256"] != sources
+            or plan["samples"] != samples
+            or plan["monitor_samples"] != monitors
+            or plan["baseline"] != baseline
+            or plan["config"] != json.loads(json.dumps(FULL_CONFIG))
+        ):
+            raise ValueError(
+                "resume source, data, initialization, or configuration changed"
+            )
+        written = sum(p.stat().st_size for p in output.rglob("*") if p.is_file())
+        remaining_disk = max(0, plan["estimated_peak_disk_bytes"] - written)
+    else:
+        generator = np.random.default_rng(23)
+        schedule = [int(i) for _ in range(10) for i in generator.permutation(3080)]
+        plan = {
+            "config": FULL_CONFIG,
+            "samples": samples,
+            "monitor_samples": monitors,
+            "full_validation_samples": full_samples(protocol.validation_pool),
+            "schedule": schedule,
+            "sampler_random_state": generator.bit_generator.state,
+            "source_sha256": sources,
+            "baseline": baseline,
+            "initial_checkpoint": {
+                "file": str(initial.resolve()),
+                "sha256": file_hash(initial),
+            },
+            "estimated_peak_disk_bytes": disk_estimate,
+            "resources_before": snapshot,
+            "cpu_topology": subprocess.check_output(["lscpu"], text=True),
+            "cpu_affinity": sorted(os.sched_getaffinity(0)),
+            "torch_threads": 1,
+            "streaming": {
+                "active_windows": 1,
+                "prefetch_windows": 1,
+                "raw_frame_cache": 16,
+                "synthetic_frame_cache": 5,
+            },
+            "base_commit": subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], text=True
+            ).strip(),
+            "versions": {
+                name: importlib.metadata.version(name)
+                for name in (
+                    "torch",
+                    "numpy",
+                    "scikit-learn",
+                    "spconv-cu126",
+                    "flash-attn",
+                )
+            },
+            "cuda_version": torch.version.cuda,
+            "deterministic_algorithms": torch.are_deterministic_algorithms_enabled(),
+            "matmul_precision": torch.get_float32_matmul_precision(),
+            "cudnn_benchmark": torch.backends.cudnn.benchmark,
+        }
+        remaining_disk = disk_estimate
+    volume = host_disk()  # Re-query immediately before any substantial writes.
+    if volume["SizeRemaining"] - remaining_disk < volume["reserve_bytes"]:
+        raise OSError("measured full-training peak would invade the E: reserve")
+    train_data = FrozenWindowDataset(data_root, protocol, pool_name="train")
+    validation_data = FrozenWindowDataset(data_root, protocol, pool_name="validation")
+    if (
+        not train_data.gradient_updates_allowed
+        or validation_data.gradient_updates_allowed
+    ):
+        raise ValueError("206/201 update roles differ from the frozen protocol")
+    if not resume:
+        output.mkdir(parents=True)
+        _atomic_json(plan_path, plan)
+    seed_all(23)
+    model = AJAE(0.05).cuda().train()
+    optimizer = torch.optim.AdamW(
+        model.parameters(), lr=3e-5, betas=(0.9, 0.999), eps=1e-8, weight_decay=1e-2
+    )
+    scaler = torch.amp.GradScaler("cuda", init_scale=128)
+    if resume:
+        payload = torch.load(output / "last.pt", map_location="cpu", weights_only=False)
+        if payload["plan_sha256"] != file_hash(plan_path):
+            raise ValueError("recovery checkpoint belongs to another training plan")
+        state = payload["state"]
+        if state["status"] == "numerical_error":
+            raise ValueError(
+                "numerical failure is preserved; automatic recipe retry is forbidden"
+            )
+        model.load_state_dict(payload["model"], strict=True)
+        optimizer.load_state_dict(payload["optimizer"])
+        scaler.load_state_dict(payload["scaler"])
+        restore_random_state(payload["random_state"])
+    else:
+        payload = torch.load(initial, map_location="cpu", weights_only=False)
+        if (
+            payload["state"]["planned_attempts"]
+            or payload["state"]["successful_updates"]
+            or payload["config"]["seed"] != 23
+            or payload["config"]["voxel_size"] != 0.05
+        ):
+            raise ValueError("initial.pt must be the original untrained seed-23 state")
+        model.load_state_dict(payload["model"], strict=True)
+        assert_unchanged(model, payload["model"])
+        restore_random_state(payload["random_state"])
+        if optimizer.state or scaler.state_dict() != payload["scaler"]:
+            raise RuntimeError("formal optimizer and loss scaler must be fresh")
+        state = {
+            "planned_attempts": 0,
+            "successful_updates": 0,
+            "overflow_skips": 0,
+            "consecutive_overflows": 0,
+            "completed_epochs": 0,
+            "next_position": 0,
+            "phase": "training",
+            "status": "running",
+            "lr_level": 0,
+            "reference_ap": None,
+            "bad_epochs": 0,
+            "low_lr_epochs": 0,
+            "low_lr_bad_epochs": 0,
+            "elapsed_seconds": 0.0,
+            "visits": [[0] * 3080 for _ in range(10)],
+            "updates": [[0] * 3080 for _ in range(10)],
+            "epoch_results": [],
+            "monitor_candidates": [],
+            "epoch_loss_sums": [
+                {key: 0.0 for key in ("normal", "anomaly", "total")} for _ in range(10)
+            ],
+            "epoch_loss_counts": [
+                {key: 0 for key in ("normal", "anomaly", "total")} for _ in range(10)
+            ],
+        }
+    del payload
+    gc.collect()
+    if resume:
+        records = []
+        valid_bytes = 0
+        with (output / "metrics.jsonl").open("rb") as stream:
+            for line in stream:
+                if not line.endswith(b"\n"):
+                    break
+                records.append(json.loads(line))
+                valid_bytes += len(line)
+        with (output / "metrics.jsonl").open("r+b") as stream:
+            stream.truncate(valid_bytes)
+        # Preserve the cost of any lost work after the latest periodic checkpoint.
+        state["elapsed_seconds"] = max(
+            [state["elapsed_seconds"], *[r["elapsed_seconds"] for r in records]]
+        )
+        last_attempt = next(
+            (r["step"] for r in reversed(records) if r["event"] == "train_step"), 0
+        )
+        state["discarded_attempts_on_recovery"] = state.get(
+            "discarded_attempts_on_recovery", 0
+        ) + max(0, last_attempt - state["planned_attempts"])
+        del records
+    session_started, prior_elapsed = time.monotonic(), state["elapsed_seconds"]
+    log = (output / "metrics.jsonl").open("a" if resume else "x", buffering=1)
+
+    def elapsed():
+        return prior_elapsed + time.monotonic() - session_started
+
+    def emit(event, **values):
+        row = {"event": event, "elapsed_seconds": elapsed(), **values}
+        line = json.dumps(row, allow_nan=False, separators=(",", ":"))
+        log.write(line + "\n")
+        if event != "train_step" or values["step"] <= 32 or values["step"] % 100 == 0:
+            print(line, flush=True)
+
+    def save_state(path):
+        state["elapsed_seconds"] = elapsed()
+        checkpoint = {
+            "config": FULL_CONFIG,
+            "plan_sha256": file_hash(plan_path),
+            "state": state,
+            "model": model.state_dict(),
+            "optimizer": optimizer.state_dict(),
+            "scaler": scaler.state_dict(),
+            "random_state": random_state(),
+            "schedule": plan["schedule"],
+            "sampler_random_state": plan["sampler_random_state"],
+            "next_schedule_index": state["planned_attempts"],
+        }
+        with tempfile.NamedTemporaryFile(
+            dir=output, suffix=".tmp", delete=False
+        ) as stream:
+            temporary = Path(stream.name)
+            try:
+                torch.save(checkpoint, stream)
+                stream.flush()
+                os.replace(temporary, path)
+            finally:
+                temporary.unlink(missing_ok=True)
+
+    resources = FullResources(emit, elapsed, timed=True)
+    interrupted = []
+    handlers = {
+        s: signal.signal(s, lambda signum, frame: interrupted.append(signum))
+        for s in (signal.SIGINT, signal.SIGTERM)
+    }
+
+    def check_resources():
+        if interrupted:
+            raise InterruptedError(
+                f"interrupted by signal {interrupted[0]} at a resumable boundary"
+            )
+        return resources()
+
+    state["status"] = "running" if state["phase"] != "selection" else state["status"]
+    initial_parameters = None
+    if not state["successful_updates"]:
+        initial_parameters = {
+            name: p.detach().cpu().clone() for name, p in model.named_parameters()
+        }
+    try:
+        emit(
+            "start",
+            resumed=resume,
+            plan_sha256=file_hash(plan_path),
+            next_step=state["planned_attempts"] + 1,
+        )
+        if not resume:
+            save_state(output / "last.pt")
+        while state["completed_epochs"] < 10 and state["phase"] != "selection":
+            epoch = state["completed_epochs"] + 1
+            if state["next_position"] == 3080:
+                state["phase"] = "monitor"
+            if state["phase"] == "training":
+                sequence = plan["schedule"][(epoch - 1) * 3080 : epoch * 3080]
+                with ThreadPoolExecutor(max_workers=1) as loader:
+                    check_resources()
+                    prepared = loader.submit(
+                        prepare_window,
+                        train_data,
+                        None,
+                        samples[sequence[state["next_position"]]],
+                    )
+                    for position in range(state["next_position"], 3080):
+                        check_resources()
+                        begin = time.monotonic()
+                        index = sequence[position]
+                        sample = samples[index]
+                        window, cpu_inputs, load_seconds, prepare_seconds = (
+                            prepared.result()
+                        )
+                        wait_seconds = time.monotonic() - begin
+                        del prepared
+                        if position + 1 < 3080:
+                            prepared = loader.submit(
+                                prepare_window,
+                                train_data,
+                                None,
+                                samples[sequence[position + 1]],
+                            )
+                        begin = time.monotonic()
+                        inputs = cpu_inputs.to("cuda")
+                        target = torch.tensor(
+                            window.labels.anomaly_target, device="cuda"
+                        )
+                        torch.cuda.synchronize()
+                        transfer_seconds = time.monotonic() - begin
+                        lr = full_learning_rate(state)
+                        for group in optimizer.param_groups:
+                            group["lr"] = lr
+                        optimizer.zero_grad(set_to_none=True)
+                        model.train()
+                        begin = time.monotonic()
+                        with torch.autocast("cuda", dtype=torch.float16):
+                            logits = model(window, inputs=inputs)
+                            loss, parts = balanced_loss(logits, target)
+                        if not torch.isfinite(loss):
+                            emit(
+                                "failed_window",
+                                epoch=epoch,
+                                position=position,
+                                sample=sample,
+                                reason="nonfinite loss",
+                                finite_logits=bool(torch.isfinite(logits).all()),
+                            )
+                            raise FloatingPointError("nonfinite training loss")
+                        update = optimizer_update(loss, model, optimizer, scaler)
+                        torch.cuda.synchronize()
+                        compute_seconds = time.monotonic() - begin
+                        state["planned_attempts"] += 1
+                        state["next_position"] = position + 1
+                        state["visits"][epoch - 1][index] += 1
+                        for key, value in {"total": loss, **parts}.items():
+                            state["epoch_loss_sums"][epoch - 1][key] += float(value)
+                            state["epoch_loss_counts"][epoch - 1][key] += 1
+                        if update["updated"]:
+                            state["successful_updates"] += 1
+                            state["updates"][epoch - 1][index] += 1
+                            state["consecutive_overflows"] = 0
+                            if initial_parameters is not None:
+                                emit(
+                                    "first_parameter_update",
+                                    changes=parameter_changes(
+                                        model, initial_parameters
+                                    ),
+                                )
+                                initial_parameters = None
+                        else:
+                            state["overflow_skips"] += 1
+                            state["consecutive_overflows"] += 1
+                        emit(
+                            "train_step",
+                            step=state["planned_attempts"],
+                            epoch=epoch,
+                            position=position,
+                            sample=sample,
+                            lr=lr,
+                            loss=float(loss),
+                            class_loss={k: float(v) for k, v in parts.items()},
+                            normal_count=int((target == 0).sum()),
+                            anomaly_count=int((target == 1).sum()),
+                            ignore_count=int((target == -1).sum()),
+                            point_count=window.points.count,
+                            voxel_count=len(inputs.features),
+                            load_seconds=load_seconds,
+                            prepare_seconds=prepare_seconds,
+                            input_wait_seconds=wait_seconds,
+                            transfer_seconds=transfer_seconds,
+                            compute_seconds=compute_seconds,
+                            successful_updates=state["successful_updates"],
+                            **update,
+                        )
+                        del inputs, cpu_inputs, target, logits, loss, parts, window
+                        optimizer.zero_grad(set_to_none=True)
+                        if state["planned_attempts"] == 32:
+                            resources.last_host_check = -float("inf")
+                            emit(
+                                "first_32_steps",
+                                visits=32,
+                                updates=state["successful_updates"],
+                                overflow_skips=state["overflow_skips"],
+                                wall_seconds=elapsed(),
+                            )
+                            check_resources()
+                        if state["consecutive_overflows"] >= 3:
+                            raise FloatingPointError(
+                                "three consecutive gradient overflows"
+                            )
+                        if state["planned_attempts"] % 500 == 0:
+                            path = (
+                                output / f"recover_{state['planned_attempts']:05d}.pt"
+                            )
+                            save_state(path)
+                            # Keep the latest two scheduled recovery states.
+                            for obsolete in sorted(output.glob("recover_*.pt"))[:-2]:
+                                obsolete.unlink()
+                            temporary = output / "last.link"
+                            os.link(path, temporary)
+                            os.replace(temporary, output / "last.pt")
+                state["phase"] = "monitor"
+                save_state(output / "last.pt")
+            check_resources()
+            monitor_path = output / f"monitor_{epoch:02d}"
+            result = evaluate_samples(
+                model,
+                validation_data,
+                monitors,
+                monitor_path,
+                identity={
+                    "plan_sha256": file_hash(plan_path),
+                    "epoch": epoch,
+                    "model_sha256": model_digest(model),
+                    "scope": "fixed_345",
+                },
+                check_resources=check_resources,
+            )
+            if state["visits"][epoch - 1] != [1] * 3080:
+                raise RuntimeError(
+                    "completed epoch did not visit every window exactly once"
+                )
+            state["completed_epochs"] = epoch
+            improved, plateau = advance_full_schedule(state, result["synthetic"]["AP"])
+            epoch_path = output / f"epoch_{epoch:02d}.pt"
+            candidate = {
+                "name": f"epoch_{epoch:02d}",
+                "epoch": epoch,
+                "scope": "fixed_345",
+                "AP": result["synthetic"]["AP"],
+                "AUROC": result["synthetic"]["AUROC"],
+                "FPR95": result["synthetic"]["FPR95"],
+                "normal_fraction": result["normal"]["fraction_ge_0_5"],
+                "checkpoint": str(epoch_path.resolve()),
+                "evaluation": str(monitor_path.resolve()),
+            }
+            state["monitor_candidates"].append(candidate)
+            state["epoch_results"].append(
+                {
+                    "epoch": epoch,
+                    "visits": sum(state["visits"][epoch - 1]),
+                    "updates": sum(state["updates"][epoch - 1]),
+                    "training_loss": {
+                        key: {
+                            "window_count": state["epoch_loss_counts"][epoch - 1][key],
+                            "window_mean": state["epoch_loss_sums"][epoch - 1][key]
+                            / state["epoch_loss_counts"][epoch - 1][key]
+                            if state["epoch_loss_counts"][epoch - 1][key]
+                            else None,
+                        }
+                        for key in ("normal", "anomaly", "total")
+                    },
+                    "substantive_improvement": improved,
+                    "next_lr": full_learning_rate(state),
+                    **candidate,
+                }
+            )
+            state["next_position"] = 0
+            state["phase"] = "selection" if plateau or epoch == 10 else "training"
+            if state["phase"] == "selection":
+                state["status"] = (
+                    "monitor_plateau"
+                    if plateau
+                    else "epoch_budget_without_predefined_plateau"
+                )
+            save_state(epoch_path)
+            save_state(output / "last.pt")
+            emit("epoch_complete", **state["epoch_results"][-1], status=state["status"])
+    except BaseException as error:
+        state["status"] = (
+            "interrupted"
+            if isinstance(error, InterruptedError)
+            else "resource_limit"
+            if isinstance(
+                error, (TimeoutError, MemoryError, OSError, torch.cuda.OutOfMemoryError)
+            )
+            else "numerical_error"
+            if isinstance(error, FloatingPointError)
+            else "execution_error"
+        )
+        state["error"] = f"{type(error).__name__}: {error}"
+        emit(
+            "stopped",
+            status=state["status"],
+            error=state["error"],
+            next_position=state["next_position"],
+        )
+    finally:
+        optimizer.zero_grad(set_to_none=True)
+        save_state(output / "last.pt")
+        write_progress(output / "summary.json", state)
+        for signum, handler in handlers.items():
+            signal.signal(signum, handler)
+        log.close()
+    model = optimizer = scaler = train_data = validation_data = initial_parameters = (
+        None
+    )
+    inputs = cpu_inputs = target = logits = loss = parts = window = prepared = None
+    gc.collect()
+    torch.cuda.empty_cache()
+    if not state["monitor_candidates"]:
+        return state
+    # Partial epochs never enter selection. Resource stops still retain completed candidates.
+    best = choose_candidate(state["monitor_candidates"])
+    last = state["monitor_candidates"][-1]
+    selected = list(
+        {candidate["name"]: candidate for candidate in (best, last)}.values()
+    )
+    selection_path = output / "selection.json"
+    if selection_path.exists():
+        previous = json.loads(selection_path.read_text())
+        if previous["candidate_names"] != [c["name"] for c in selected]:
+            raise ValueError(
+                "full validation candidates were already fixed differently"
+            )
+    else:
+        _atomic_json(
+            selection_path,
+            {
+                "candidate_names": [c["name"] for c in selected],
+                "monitor_best": best["name"],
+                "last_completed": last["name"],
+                "candidates": selected,
+            },
+        )
+    for candidate in selected:
+        run_full(
+            data_root,
+            Path(candidate["checkpoint"]),
+            output / "validation" / candidate["name"],
+        )
+    comparison = select_full_candidates(output, selected, baseline)
+    selection_summary = {
+        key: comparison[key]
+        for key in ("candidates", "selected", "real_anomaly_evaluated")
+    }
+    selection_summary["comparison_file"] = str(output / "comparison.json")
+    write_progress(output / "summary.json", {**state, "selection": selection_summary})
+    return {**state, "selection": selection_summary}
+
+
 def run_coverage(data_root, output, initial, samples_file, workers):
     """One initialized model, two coverage groups; no decisions from interim scores."""
     from .evaluate import file_hash, run as compare, select_samples
@@ -908,8 +1643,25 @@ if __name__ == "__main__":
         "--validation-samples", type=Path, default=Path("runs/transfer/samples.json")
     )
     parser.add_argument("--workers", type=int, default=4)
+    parser.add_argument("--full", action="store_true", help="execute AJAE-FullTrain-v1")
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="continue the same full-training state and cumulative budget",
+    )
     args = parser.parse_args()
-    if args.coverage:
+    if args.resume and not args.full:
+        parser.error("--resume requires --full")
+    if args.full:
+        if args.coverage:
+            parser.error("--full and --coverage are separate experiments")
+        run_fulltrain(
+            args.data_root,
+            args.output or Path("runs/fulltrain_v1"),
+            args.initial,
+            resume=args.resume,
+        )
+    elif args.coverage:
         run_coverage(
             args.data_root,
             args.output or Path("runs/coverage"),

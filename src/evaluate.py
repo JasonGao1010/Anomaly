@@ -13,6 +13,7 @@ import signal
 import subprocess
 import tempfile
 import time
+import zipfile
 
 import numpy as np
 import torch
@@ -913,6 +914,7 @@ def save_window(output, sample, window, scores, losses, scopes, timings):
             "file": metric_path.as_posix(),
             "offset": offset,
             "count": len(keys),
+            "sha256": hashlib.sha256(keys.tobytes()).hexdigest(),
         },
         **timings,
         "scoring_and_saving_seconds": time.perf_counter() - begin,
@@ -942,11 +944,13 @@ def loss_summary(rows):
     return {"full_window_loss": losses, "anomaly_loss_scopes": scopes}
 
 
-def summarize_full(rows, output):
+def summarize_full(rows, output, *, check_resources=None):
     synthetic = [row for row in rows if row["view"] == "synthetic"]
     normal = [row for row in rows if row["view"] == "normal"]
 
     def group(items):
+        if check_resources is not None:
+            check_resources()
         paths = sorted({output / row["evaluation_records"]["file"] for row in items})
         aps = [row["current"]["AP"] for row in items if row["current"]["eligible"]]
         metrics = pooled_files(paths)
@@ -1007,6 +1011,7 @@ def summarize_full(rows, output):
     }
     complete = group(synthetic)
     normal_metrics = pooled_files([output / "current/normal.bin"], normal=True)
+    world_aps = [world["AP"] for world in worlds if world["AP"] is not None]
     worst = sorted(
         normal, key=lambda row: row["current"]["fraction_ge_0_5"] or 0, reverse=True
     )
@@ -1015,12 +1020,32 @@ def summarize_full(rows, output):
         "subsets": subsets,
         "sequences": sequences,
         "world_count": len(worlds),
+        "world_AP_q25": float(np.quantile(world_aps, 0.25)) if world_aps else None,
+        "world_AP_median": float(np.median(world_aps)) if world_aps else None,
+        "worlds_below_10_AP": [
+            {
+                key: world[key]
+                for key in (
+                    "sequence_index",
+                    "segment_index",
+                    "AP",
+                    "anomaly_count",
+                    "eligible_windows",
+                )
+            }
+            for world in worlds
+            if world["AP"] is not None and world["AP"] < 10
+        ],
         "worlds_without_eligible_windows": sum(
             not world["eligible_windows"] for world in worlds
         ),
         "normal": {
             "window_count": len(normal),
             **normal_metrics,
+            "sequence": [
+                {"current_frame": row["current_frame"], **row["current"]}
+                for row in normal
+            ],
             "worst_windows": [
                 {"current_frame": row["current_frame"], **row["current"]}
                 for row in worst[:10]
@@ -1034,142 +1059,110 @@ def summarize_full(rows, output):
     }
 
 
-def run_full(data_root, checkpoint, output):
+def monitor_samples(pool):
+    """First, earlier middle and last legal window of every frozen 201 world."""
+    currents = set()
+    for segment in range(len(pool.segments)):
+        starts = pool.window_starts(segment)
+        currents.update(starts[i] + 4 for i in (0, (len(starts) - 1) // 2, -1))
+    samples = [s for s in full_samples(pool) if s["current_frame"] in currents]
+    if len(samples) != 345 or sum(s["view"] == "normal" for s in samples) != 69:
+        raise ValueError("the fixed 201 monitor must contain 276 + 69 windows")
+    return samples
+
+
+def evaluate_samples(model, dataset, samples, output, *, identity, check_resources):
+    """The same bounded, zero-update evaluator serves monitoring and full selection."""
+    from .train import write_progress
+
     started = time.perf_counter()
-    if output.exists() or output.resolve().is_relative_to(checkpoint.resolve().parent):
-        raise FileExistsError(
-            "full validation requires a new directory outside training evidence"
-        )
-    if not torch.cuda.is_available():
-        raise RuntimeError("the unchanged LitePT implementation requires CUDA")
-    torch.set_num_threads(1)
-    volume = host_disk()
-    disk_budget = (
-        32 * 2**30
-    )  # Full predictions, exact current records, sorting copy, write buffers.
-    if volume["SizeRemaining"] - disk_budget < volume["reserve_bytes"]:
-        raise OSError("full validation peak budget would invade the E: reserve")
-    protocol = load_protocol()
-    samples = full_samples(protocol.validation_pool)
-    old_manifest_path = PROJECT_ROOT / "runs/transfer/samples.json"
-    old_manifest = json.loads(old_manifest_path.read_text())
-    if old_manifest["samples"] != select_samples(protocol.validation_pool):
-        raise ValueError("the previously declared 23 validation windows differ")
-    dataset = FrozenWindowDataset(data_root, protocol, pool_name="validation")
+    manifest = {
+        "identity": identity,
+        "samples": samples,
+        "worlds": dataset.manifest["segments"],
+    }
+    partition = WindowPartition(dataset.source_sequence, 4, 681)
+    reference = {
+        name: value.detach().cpu().clone() for name, value in model.state_dict().items()
+    }
     if dataset.gradient_updates_allowed:
         raise RuntimeError("201 must not permit gradient updates")
-    worlds = dataset.manifest["segments"]
-    if old_manifest["worlds"] != [
-        w for w in worlds if w["synthetic_sequence_index"] == 0
-    ]:
-        raise ValueError("frozen validation worlds differ from prior evidence")
-    partition = WindowPartition(dataset.source_sequence, 4, 681)
-    digest = file_hash(checkpoint)
-    comparison_path = PROJECT_ROOT / "runs/coverage/check_1280/samples.json"
-    if digest != json.loads(comparison_path.read_text())["checkpoints"]["B"]["sha256"]:
-        raise ValueError(
-            "checkpoint is not the B model used in the 1280-step comparison"
-        )
-    payload = torch.load(checkpoint, map_location="cpu", weights_only=False)
-    state = payload["state"]
-    if (
-        state["planned_attempts"] != 1280
-        or state["successful_updates"] != 1280
-        or payload["config"]["voxel_size"] != 0.05
-    ):
-        raise ValueError("full validation requires the fixed B 1280-update state")
-    model = AJAE(voxel_size=0.05).cuda().eval().requires_grad_(False)
-    reference = payload["model"]
-    model.load_state_dict(reference, strict=True)
-    assert_unchanged(model, reference)
-    del payload
-    gc.collect()
-    output.mkdir(parents=True, exist_ok=False)
-    manifest = {
-        "purpose": "complete_frozen_201_development_validation_zero_updates",
-        "checkpoint": {
-            "file": str(checkpoint.resolve()),
-            "sha256": digest,
-            "training_state": state,
-        },
-        "samples": samples,
-        "worlds": worlds,
-        "normal_threshold": NORMAL_THRESHOLD,
-        "voxel_size": 0.05,
-        "inference_precision": "unchanged_AJAE_eval_path",
-        "check_seed_rule": "23 + 23 * synthetic_sequence_index + segment_index; raw uses sequence_index=0 and the current-frame segment; old 23 seeds unchanged",
-        "current_records": "native uint64: exact float32 score bits shifted left one, binary anomaly label in bit zero; only eligible current points; raw normal has label zero",
-        "exact_metrics": "in-place disk sort, exact ties, bounded point-count reduction, sklearn collinear ROC removal and strict TPR > 0.95; no binning",
-        "streaming": {
-            "preparation_workers": 1,
-            "writer_workers": 1,
-            "prepared_windows_ahead": 1,
-            "pending_writes": 1,
-            "synthetic_frame_cache": 5,
-            "raw_frame_cache": 16,
-        },
-        "host_disk_before": volume,
-        "peak_disk_budget_bytes": disk_budget,
-        "environment": {
-            "torch": torch.__version__,
-            "cuda": torch.version.cuda,
-            "GPU": torch.cuda.get_device_name(),
-            "torch_threads": torch.get_num_threads(),
-        },
-        "source_sample_manifest": {
-            "file": str(old_manifest_path),
-            "sha256": file_hash(old_manifest_path),
-        },
-        "base_commit": subprocess.check_output(
-            ["git", "rev-parse", "HEAD"], text=True
-        ).strip(),
-        "source_sha256": {
-            name: file_hash(PROJECT_ROOT / name)
-            for name in (
-                "src/evaluate.py",
-                "src/data.py",
-                "src/model.py",
-                "src/train.py",
-                "protocol.json",
-                "vendor/stu/compute_point_level_ood.py",
-            )
-        },
-    }
-    _atomic_json(output / "samples.json", manifest)
     rows = []
-    status, error = "completed", None
-    unchanged = False
-    torch.cuda.reset_peak_memory_stats()
-
-    def stop_signal(signum, _frame):
-        raise InterruptedError(f"full validation interrupted by signal {signum}")
-
-    handlers = {
-        s: signal.signal(s, stop_signal)
-        for s in (signal.SIGTERM, signal.SIGINT, signal.SIGALRM)
-    }
-    print(
-        json.dumps(
-            {"event": "full_start", "windows": len(samples), "checkpoint": digest}
-        ),
-        flush=True,
-    )
+    if output.exists():
+        if json.loads((output / "samples.json").read_text()) != manifest:
+            raise ValueError("resume evaluation identity or sample list differs")
+        result_path = output / "results.jsonl"
+        result_path.touch(exist_ok=True)
+        # A committed JSONL row is the boundary for both prediction and metric writes.
+        valid_bytes = 0
+        with result_path.open("rb") as stream:
+            for line in stream:
+                if not line.endswith(b"\n"):
+                    break
+                rows.append(json.loads(line))
+                valid_bytes += len(line)
+        if len(rows) > len(samples):
+            raise ValueError(
+                "evaluation log contains more rows than the fixed sample list"
+            )
+        with result_path.open("r+b") as stream:
+            stream.truncate(valid_bytes)
+        ends = {}
+        retained = set()
+        for sample, row in zip(samples, rows):
+            if any(row[key] != value for key, value in sample.items()):
+                raise ValueError("committed evaluation rows differ from fixed order")
+            pred = output / row["prediction"]["file"]
+            if file_hash(pred) != row["prediction"]["file_sha256"]:
+                raise ValueError("committed prediction changed")
+            retained.add(pred)
+            records = row["evaluation_records"]
+            path = output / records["file"]
+            if records["offset"] != ends.get(path, 0):
+                raise ValueError("evaluation record offsets are discontinuous")
+            ends[path] = records["offset"] + records["count"]
+            with path.open("rb") as stream:
+                stream.seek(records["offset"] * 8)
+                block = stream.read(records["count"] * 8)
+            if hashlib.sha256(block).hexdigest() != records["sha256"]:
+                raise ValueError("committed exact evaluation records changed")
+        for path in (output / "current").rglob("*.bin"):
+            length = ends.get(path, 0) * 8
+            if path.stat().st_size < length:
+                raise ValueError("committed evaluation records were truncated")
+            with path.open("r+b") as stream:
+                stream.truncate(length)
+        for path in (output / "predictions").rglob("*.npz"):
+            if path not in retained:
+                path.unlink()  # Only the interrupted, uncommitted write is removed.
+        summary_path = output / "summary.json"
+        if summary_path.exists():
+            summary = json.loads(summary_path.read_text())
+            if summary["status"] == "completed" and len(rows) == len(samples):
+                assert_unchanged(model, reference)
+                return summary
+    else:
+        output.mkdir(parents=True)
+        _atomic_json(output / "samples.json", manifest)
+    status, error, summary = "running", None, {}
     try:
         with (
-            (output / "results.jsonl").open("x", buffering=1) as log,
+            (output / "results.jsonl").open("a", buffering=1) as log,
             ThreadPoolExecutor(max_workers=1) as loader,
             ThreadPoolExecutor(max_workers=1) as writer,
         ):
+            prepared = None
             pending_write = None
-            prepared = loader.submit(prepare_window, dataset, partition, samples[0])
-            for index, sample in enumerate(samples):
-                if index == 0 or (sample["view"], sample["sequence_index"]) != (
-                    samples[index - 1]["view"],
-                    samples[index - 1]["sequence_index"],
-                ):
-                    # Each sequential source pass has a separate 30-minute safety timeout.
-                    signal.alarm(1800)
+            if len(rows) < len(samples):
+                check_resources()
+                prepared = loader.submit(
+                    prepare_window, dataset, partition, samples[len(rows)]
+                )
+            for index in range(len(rows), len(samples)):
+                check_resources()
+                sample = samples[index]
                 window, cpu_inputs, load_seconds, prepare_seconds = prepared.result()
+                prepared = None
                 if index + 1 < len(samples):
                     prepared = loader.submit(
                         prepare_window, dataset, partition, samples[index + 1]
@@ -1188,80 +1181,54 @@ def run_full(data_root, checkpoint, output):
                     "inference_seconds": inference_seconds,
                     "voxel_count": len(inputs.features),
                 }
-                del inputs, cpu_inputs
                 if pending_write is not None:
                     row = pending_write.result()
-                    rows.append(row)
                     log.write(
                         json.dumps(row, allow_nan=False, separators=(",", ":")) + "\n"
                     )
+                    rows.append(row)
                 pending_write = writer.submit(
                     save_window, output, sample, window, scores, losses, scopes, timings
                 )
-                del window, scores
+                del inputs, cpu_inputs, window, scores
                 if (index + 1) % 50 == 0:
-                    volume = host_disk()
-                    if volume["SizeRemaining"] < volume["reserve_bytes"] + 3 * 2**30:
-                        raise OSError(
-                            "E: remaining space cannot safely support further validation writes"
-                        )
                     print(
                         json.dumps(
                             {
-                                "event": "progress",
-                                "inferred": index + 1,
+                                "event": "evaluation_progress",
+                                "directory": str(output),
+                                "windows": index + 1,
                                 "total": len(samples),
                                 "wall_seconds": time.perf_counter() - started,
-                                "host_disk": volume,
-                                "peak_rss_bytes": resource.getrusage(
-                                    resource.RUSAGE_SELF
-                                ).ru_maxrss
-                                * 1024,
-                                "peak_gpu_allocated_bytes": torch.cuda.max_memory_allocated(),
                             }
                         ),
                         flush=True,
                     )
-            row = pending_write.result()
-            rows.append(row)
-            log.write(json.dumps(row, allow_nan=False, separators=(",", ":")) + "\n")
+            if pending_write is not None:
+                row = pending_write.result()
+                log.write(
+                    json.dumps(row, allow_nan=False, separators=(",", ":")) + "\n"
+                )
+                rows.append(row)
         assert_unchanged(model, reference)
-        if (
-            file_hash(checkpoint) != digest
-            or file_hash(old_manifest_path)
-            != manifest["source_sample_manifest"]["sha256"]
-        ):
-            raise RuntimeError("prior checkpoint or sample evidence changed")
-        unchanged = True
-        signal.alarm(1800)
-        inference_wall = time.perf_counter() - started
-        print(
-            json.dumps(
-                {
-                    "event": "inference_complete",
-                    "windows": len(rows),
-                    "wall_seconds": inference_wall,
-                }
-            ),
-            flush=True,
-        )
-        summary = summarize_full(rows, output)
+        # An interrupted summary is recomputed from the committed predictions.
+        if (output / "worlds.json").exists():
+            (output / "worlds.json").unlink()
+        summary = summarize_full(rows, output, check_resources=check_resources)
+        status = "completed"
     except BaseException as exception:
         status, error = "stopped_error", f"{type(exception).__name__}: {exception}"
-        summary = {}
         raise
     finally:
-        signal.alarm(0)
         result = {
-            "purpose": manifest["purpose"],
             "status": status,
             "error": error,
             "completed_windows": len(rows),
             "optimizer_updates": 0,
-            "model_parameters_and_buffers_unchanged": unchanged,
+            "model_parameters_and_buffers_unchanged": status == "completed",
             **summary,
             "resources": {
-                "wall_seconds": time.perf_counter() - started,
+                "session_wall_seconds": time.perf_counter() - started,
                 **{
                     key: sum(row[key] for row in rows)
                     for key in (
@@ -1272,27 +1239,302 @@ def run_full(data_root, checkpoint, output):
                         "scoring_and_saving_seconds",
                     )
                 },
-                "peak_rss_bytes": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-                * 1024,
-                "peak_gpu_allocated_bytes": torch.cuda.max_memory_allocated(),
-                "peak_gpu_reserved_bytes": torch.cuda.max_memory_reserved(),
             },
         }
-        _atomic_json(output / "summary.json", result)
-        print(
-            json.dumps(
+        write_progress(output / "summary.json", result)
+    return result
+
+
+def model_digest(model):
+    digest = hashlib.sha256()
+    for name, tensor in model.state_dict().items():
+        digest.update(name.encode())
+        digest.update(str((tensor.dtype, tuple(tensor.shape))).encode())
+        digest.update(tensor.detach().cpu().contiguous().numpy().tobytes())
+    return digest.hexdigest()
+
+
+def verify_baseline(initial, monitors):
+    """Bind B reuse to the same inputs, complete prediction rows and exact metrics."""
+    directory = PROJECT_ROOT / "runs/validation"
+    manifest = json.loads((directory / "samples.json").read_text())
+    summary = json.loads((directory / "summary.json").read_text())
+    plan = json.loads((PROJECT_ROOT / "runs/coverage/plan.json").read_text())
+    if file_hash(initial) != plan["initial_checkpoint"]["sha256"]:
+        raise ValueError("original initialization differs from coverage evidence")
+    checkpoint = Path(manifest["checkpoint"]["file"])
+    if (
+        file_hash(checkpoint) != manifest["checkpoint"]["sha256"]
+        or summary["status"] != "completed"
+        or summary["completed_windows"] != 3038
+        or summary["optimizer_updates"] != 0
+        or not summary["model_parameters_and_buffers_unchanged"]
+    ):
+        raise ValueError("B has no verified complete zero-update validation")
+    protocol = load_protocol()
+    if manifest["samples"] != full_samples(protocol.validation_pool):
+        raise ValueError("B complete validation samples or check seeds differ")
+    frozen = json.loads(
+        (PROJECT_ROOT / "artifacts/data/validation_manifest.json").read_text()
+    )
+    if manifest["worlds"] != frozen["segments"]:
+        raise ValueError("B validation worlds differ from the frozen manifest")
+    for name in (
+        "protocol.json",
+        "src/data.py",
+        "src/model.py",
+        "vendor/stu/compute_point_level_ood.py",
+    ):
+        if file_hash(PROJECT_ROOT / name) != manifest["source_sha256"][name]:
+            raise ValueError(
+                f"B scientific input or metric implementation changed: {name}"
+            )
+    rows = [
+        json.loads(line)
+        for line in (directory / "results.jsonl").read_text().splitlines()
+    ]
+    if len(rows) != 3038:
+        raise ValueError("B prediction row coverage differs")
+    monitor_ids = {(s["sequence_id"], s["current_frame"]) for s in monitors}
+    prediction_bound = monitor_bound = monitor_records = 0
+    for sample, row in zip(manifest["samples"], rows, strict=True):
+        if any(row[key] != value for key, value in sample.items()):
+            raise ValueError("B prediction identities or check seeds differ")
+        path = directory / row["prediction"]["file"]
+        if file_hash(path) != row["prediction"]["file_sha256"]:
+            raise ValueError("B retained prediction content changed")
+        with zipfile.ZipFile(path) as archive:
+            overhead = sum(
+                info.compress_size + 2 * len(info.filename) + 128
+                for info in archive.infolist()
+                if info.filename != "anomaly_score.npy"
+            )
+        # Bound new score storage by raw float32 bytes plus DEFLATE expansion.
+        bound = overhead + row["point_count"] * 4 * 1.001 + 1024
+        prediction_bound += bound
+        if (sample["sequence_id"], sample["current_frame"]) in monitor_ids:
+            monitor_bound += bound
+            monitor_records += row["evaluation_records"]["count"] * 8
+    paths = sorted((directory / "current").rglob("*.bin"))
+    current_bytes = sum(path.stat().st_size for path in paths)
+    official = pooled_files([path for path in paths if path.name != "normal.bin"])
+    normal = pooled_files([directory / "current/normal.bin"], normal=True)
+    if any(
+        abs(official[key] - summary["synthetic"][key]) > 1e-10
+        for key in ("AP", "AUROC", "FPR95")
+    ) or any(normal[key] != summary["normal"][key] for key in normal):
+        raise ValueError("independent exact B metric reduction disagrees")
+    evidence = {
+        name: file_hash(directory / name)
+        for name in ("samples.json", "results.jsonl", "summary.json", "worlds.json")
+    }
+    estimated_peak = int(
+        2 * (prediction_bound + current_bytes)
+        + 10 * (monitor_bound + monitor_records)
+        + 15 * checkpoint.stat().st_size
+        + current_bytes
+        + 0.5 * 2**30
+    )
+    return {
+        "checkpoint": str(checkpoint),
+        "sha256": manifest["checkpoint"]["sha256"],
+        "evaluation": str(directory),
+        "evidence_sha256": evidence,
+        "verified_complete_predictions": len(rows),
+        "recomputed_exact_metrics": official,
+        "normal": normal,
+    }, max(35 * 2**30, estimated_peak)
+
+
+def select_full_candidates(output, selected, baseline):
+    from .train import choose_candidate
+
+    candidates, paired, normal_series = [], {}, {}
+    entries = [
+        {"name": "B", "epoch": 0, **baseline},
+        *[
+            {**candidate, "evaluation": str(output / "validation" / candidate["name"])}
+            for candidate in selected
+        ],
+    ]
+    for entry in entries:
+        directory = Path(entry["evaluation"])
+        summary = json.loads((directory / "summary.json").read_text())
+        if summary["status"] != "completed" or summary["completed_windows"] != 3038:
+            raise ValueError("incomplete full validation cannot enter final selection")
+        worlds = json.loads((directory / "worlds.json").read_text())["worlds"]
+        rows = [
+            json.loads(line)
+            for line in (directory / "results.jsonl").read_text().splitlines()
+        ]
+        normal = [r for r in rows if r["view"] == "normal"]
+        aps = [world["AP"] for world in worlds if world["AP"] is not None]
+        rolling = []
+        for start in range(len(normal) - 20):
+            block = normal[start : start + 21]
+            count = sum(row["current"]["point_count"] for row in block)
+            high = sum(row["current"]["count_ge_0_5"] for row in block)
+            rolling.append(
                 {
-                    "event": "full_finished",
-                    "status": status,
-                    "error": error,
-                    "completed_windows": len(rows),
-                    "resources": result["resources"],
+                    "first_frame": block[0]["current_frame"],
+                    "last_frame": block[-1]["current_frame"],
+                    "fraction_ge_0_5": high / count,
+                    "count_ge_0_5": high,
+                    "point_count": count,
                 }
+            )
+        candidate = {
+            "name": entry["name"],
+            "epoch": entry["epoch"],
+            "scope": "complete_201",
+            **{key: summary["synthetic"][key] for key in ("AP", "AUROC", "FPR95")},
+            "normal_fraction": summary["normal"]["fraction_ge_0_5"],
+            "normal_median": summary["normal"]["median"],
+            "normal_p95": summary["normal"]["p95"],
+            "world_AP_q25": float(np.quantile(aps, 0.25)),
+            "world_AP_median": float(np.median(aps)),
+            "worlds_below_10_AP": [
+                {
+                    k: w[k]
+                    for k in ("sequence_index", "segment_index", "AP", "anomaly_count")
+                }
+                for w in worlds
+                if w["AP"] is not None and w["AP"] < 10
+            ],
+            "worst_21_consecutive_frames": max(
+                rolling, key=lambda r: r["fraction_ge_0_5"]
             ),
-            flush=True,
+            "checkpoint": entry["checkpoint"],
+            "sha256": file_hash(Path(entry["checkpoint"])),
+            "evaluation": str(directory),
+        }
+        candidates.append(candidate)
+        normal_series[entry["name"]] = [
+            {"current_frame": r["current_frame"], **r["current"]} for r in normal
+        ]
+        for world in worlds:
+            key = f"{world['sequence_index']}:{world['segment_index']}"
+            paired.setdefault(key, {})[entry["name"]] = {
+                k: world[k]
+                for k in (
+                    "AP",
+                    "AUROC",
+                    "FPR95",
+                    "eligible_windows",
+                    "anomaly_count",
+                    "normal_count",
+                )
+            }
+    for values in paired.values():
+        for name, metrics in values.items():
+            if any(
+                metrics[key] != values["B"][key]
+                for key in ("anomaly_count", "normal_count", "eligible_windows")
+            ):
+                raise ValueError(
+                    "paired world evaluation contains different point populations"
+                )
+            metrics["AP_change_from_B"] = metrics["AP"] - values["B"]["AP"]
+    winner = choose_candidate(candidates)
+    result = {
+        "candidates": candidates,
+        "selected": winner,
+        "paired_worlds": paired,
+        "normal_sequences": normal_series,
+        "real_anomaly_evaluated": False,
+        "score_definition": "sigmoid of unchanged AJAE full-window point logits; no calibration or fusion",
+        "inference": "five ordered causal scans, 0.05 m voxels, unchanged eval path; only current-frame scores enter official metrics",
+        "boundary": "one training seed and development-selected candidates; neither cross-seed stability nor five-frame mechanism attribution",
+    }
+    from .train import write_progress
+
+    write_progress(output / "comparison.json", result)
+    return result
+
+
+def run_full(data_root, checkpoint, output):
+    from .train import FullResources
+
+    if not torch.cuda.is_available():
+        raise RuntimeError("the unchanged LitePT implementation requires CUDA")
+    torch.set_num_threads(1)
+    protocol = load_protocol()
+    samples = full_samples(protocol.validation_pool)
+    digest = file_hash(checkpoint)
+    payload = torch.load(checkpoint, map_location="cpu", weights_only=False)
+    state = payload["state"]
+    formal = payload["config"]["purpose"] == "AJAE-FullTrain-v1"
+    if formal:
+        if (
+            not state["completed_epochs"]
+            or state["next_position"] != 0
+            or state["phase"] == "monitor"
+        ):
+            raise ValueError(
+                "full selection requires a completed training and monitoring epoch"
+            )
+        plan_path = checkpoint.parent / "plan.json"
+        if file_hash(plan_path) != payload["plan_sha256"]:
+            raise ValueError("candidate training plan changed")
+        selection = json.loads((checkpoint.parent / "selection.json").read_text())
+        if checkpoint.stem not in selection["candidate_names"]:
+            raise ValueError(
+                "only the two predeclared completed candidates may be fully evaluated"
+            )
+    else:
+        comparison = json.loads(
+            (PROJECT_ROOT / "runs/coverage/check_1280/samples.json").read_text()
         )
-        for signum, handler in handlers.items():
-            signal.signal(signum, handler)
+        if (
+            digest != comparison["checkpoints"]["B"]["sha256"]
+            or state["successful_updates"] != 1280
+        ):
+            raise ValueError("historical full validation requires the fixed B state")
+    if payload["config"]["voxel_size"] != 0.05:
+        raise ValueError("the fixed voxel size changed")
+    resources = FullResources(
+        lambda event, **values: print(
+            json.dumps({"event": event, **values}), flush=True
+        )
+    )
+    snapshot = resources()
+    # One complete candidate is below 11 GiB plus exact sorting and write buffers.
+    existing = (
+        sum(p.stat().st_size for p in output.rglob("*") if p.is_file())
+        if output.exists()
+        else 0
+    )
+    if (
+        snapshot["host_disk"]["SizeRemaining"] - max(0, 13 * 2**30 - existing)
+        < snapshot["host_disk"]["reserve_bytes"]
+    ):
+        raise OSError("complete candidate evaluation would invade the E: reserve")
+    dataset = FrozenWindowDataset(data_root, protocol, pool_name="validation")
+    model = AJAE(0.05).cuda().eval().requires_grad_(False)
+    model.load_state_dict(payload["model"], strict=True)
+    assert_unchanged(model, payload["model"])
+    del payload
+    gc.collect()
+    try:
+        result = evaluate_samples(
+            model,
+            dataset,
+            samples,
+            output,
+            identity={
+                "checkpoint": str(checkpoint.resolve()),
+                "sha256": digest,
+                "scope": "complete_201",
+                "model_sha256": model_digest(model),
+            },
+            check_resources=resources,
+        )
+        if file_hash(checkpoint) != digest:
+            raise RuntimeError("candidate checkpoint changed during inference")
+    finally:
+        del model, dataset
+        gc.collect()
+        torch.cuda.empty_cache()
     return result
 
 

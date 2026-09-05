@@ -252,3 +252,96 @@ def test_real_optimizer_update_and_overflow_skip_are_distinct():
     assert not update["updated"] and update["scale_after"] == 64
     for name, parameter in model.named_parameters():
         torch.testing.assert_close(parameter, before[name], atol=0, rtol=0)
+
+
+def test_full_pool_visits_include_all_early_and_terminal_windows():
+    pool = load_protocol().training_pool
+    samples = training_samples(pool, full=True)
+    assert len(samples) == 3080
+    assert [s["dataset_index"] for s in samples] == list(range(3080))
+    assert len({(s["sequence_id"], s["segment_index"]) for s in samples}) == 128
+    for sequence in range(8):
+        for segment in range(16):
+            selected = [
+                s
+                for s in samples
+                if s["synthetic_sequence_index"] == sequence
+                and s["segment_index"] == segment
+            ]
+            assert [s["current_frame"] - 4 for s in selected] == list(
+                pool.window_starts(segment)
+            )
+            assert all(
+                s["frame_ids"]
+                == list(range(s["current_frame"] - 4, s["current_frame"] + 1))
+                for s in selected
+            )
+    schedule = shuffled_schedule(23, 3080, 30800)
+    for start in range(0, 30800, 3080):
+        assert sorted(schedule[start : start + 3080]) == list(range(3080))
+
+
+def test_full_schedule_successful_warmup_and_two_complete_low_rate_epochs():
+    from src.train import advance_full_schedule, full_learning_rate
+
+    state = {
+        "successful_updates": 0,
+        "lr_level": 0,
+        "reference_ap": None,
+        "bad_epochs": 0,
+        "low_lr_epochs": 0,
+        "low_lr_bad_epochs": 0,
+        "completed_epochs": 0,
+    }
+    assert full_learning_rate(state) == pytest.approx(3e-5)
+    state["planned_attempts"] = 40  # Skipped attempts never advance warmup.
+    assert full_learning_rate(state) == pytest.approx(3e-5)
+    state["successful_updates"] = 199
+    assert full_learning_rate(state) == pytest.approx(3e-4)
+    state["successful_updates"] = 200
+    assert full_learning_rate(state) == pytest.approx(3e-4)
+    for epoch, ap in enumerate((94, 94.04, 94.1, 94.02, 94.07, 94.09, 94.05), 1):
+        state["completed_epochs"] = epoch
+        improved, stopped = advance_full_schedule(state, ap)
+        assert improved == (epoch == 1)
+        assert stopped == (epoch == 7)
+        assert state["reference_ap"] == 94
+        assert state["lr_level"] == (0 if epoch < 3 else 1 if epoch < 5 else 2)
+    state["completed_epochs"] = 8
+    assert advance_full_schedule(state, 94.12) == (True, False)
+    assert state["low_lr_bad_epochs"] == 0
+
+
+def test_full_selection_uses_global_ap_band_and_one_scope():
+    from src.train import choose_candidate
+
+    def candidate(name, ap, fpr, normal, epoch):
+        return {
+            "name": name,
+            "AP": ap,
+            "FPR95": fpr,
+            "normal_fraction": normal,
+            "epoch": epoch,
+            "scope": "complete_201",
+        }
+
+    a = candidate("A", 94, 0.1, 0.01, 1)
+    b = candidate("B", 94.09, 0.2, 0.01, 2)
+    c = candidate("C", 94.18, 0.3, 0.01, 3)
+    assert choose_candidate([a, b, c]) is b  # A is outside the maximum's AP band.
+    c.update(FPR95=0.2, normal_fraction=0.005)
+    assert choose_candidate([a, b, c]) is c
+    b.update(normal_fraction=0.005)
+    assert choose_candidate([a, b, c]) is b
+    with pytest.raises(ValueError, match="common evaluation scope"):
+        choose_candidate([a, {**b, "scope": "fixed_345"}])
+
+
+def test_atomic_progress_replaces_only_mutable_file(tmp_path):
+    from src.train import write_progress
+
+    path = tmp_path / "summary.json"
+    write_progress(path, {"next_position": 500})
+    write_progress(path, {"next_position": 1000})
+    assert json.loads(path.read_text()) == {"next_position": 1000}
+    assert list(tmp_path.iterdir()) == [path]

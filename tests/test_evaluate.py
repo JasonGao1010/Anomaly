@@ -180,3 +180,95 @@ def test_disk_normal_quantiles_are_exact_and_loss_scopes_count_points(tmp_path, 
     assert (
         result["all"]["loss_sum"] > 100
     )  # Do not recover this from saturated sigmoid.
+
+
+def test_fixed_monitor_covers_all_worlds_and_preserves_full_inference_seeds():
+    from src.evaluate import monitor_samples
+
+    pool = load_protocol().validation_pool
+    samples = monitor_samples(pool)
+    assert len(samples) == 345
+    full = full_samples(pool)
+    assert all(sample in full for sample in samples)
+    synthetic = [s for s in samples if s["view"] == "synthetic"]
+    normal = [s for s in samples if s["view"] == "normal"]
+    assert len(synthetic) == 276 and len(normal) == 69
+    assert len({s["current_frame"] for s in normal}) == 69
+    for sequence in range(4):
+        for segment in range(23):
+            rows = [
+                s
+                for s in synthetic
+                if s["sequence_index"] == sequence and s["segment_index"] == segment
+            ]
+            expected = (
+                [segment * 28 + i for i in (4, 15, 27)]
+                if segment < 22
+                else [620, 650, 681]
+            )
+            assert [s["current_frame"] for s in rows] == expected
+            assert [s["check_seed"] for s in rows] == [23 + 23 * sequence + segment] * 3
+
+
+def test_monitor_resume_removes_only_uncommitted_prediction_and_metric_tail(
+    tmp_path, monkeypatch
+):
+    import hashlib
+    import json
+    from types import SimpleNamespace
+
+    import src.evaluate as evaluation
+
+    model = nn.Linear(2, 1)
+    dataset = SimpleNamespace(
+        gradient_updates_allowed=False, manifest={"segments": []}, source_sequence=None
+    )
+    sample = {"view": "normal", "current_frame": 4}
+    identity = {"model": evaluation.model_digest(model)}
+    monkeypatch.setattr(evaluation, "WindowPartition", lambda *args: None)
+    (tmp_path / "samples.json").write_text(
+        json.dumps({"identity": identity, "samples": [sample], "worlds": []})
+    )
+    predictions = tmp_path / "predictions"
+    predictions.mkdir()
+    committed = predictions / "frame_000004.npz"
+    committed.write_bytes(b"transaction fixture, not scientific prediction evidence")
+    dangling = predictions / "frame_000005.npz"
+    dangling.write_bytes(b"uncommitted writer output")
+    current = tmp_path / "current"
+    current.mkdir()
+    keys = packed_scores(np.array([0.2, 0.7], np.float32), np.zeros(2))
+    records = current / "normal.bin"
+    records.write_bytes(keys.tobytes() + b"partial writer tail")
+    row = {
+        **sample,
+        "prediction": {
+            "file": "predictions/frame_000004.npz",
+            "file_sha256": evaluation.file_hash(committed),
+        },
+        "evaluation_records": {
+            "file": "current/normal.bin",
+            "offset": 0,
+            "count": 2,
+            "sha256": hashlib.sha256(keys.tobytes()).hexdigest(),
+        },
+    }
+    (tmp_path / "results.jsonl").write_bytes(
+        (json.dumps(row) + "\n").encode() + b'{"incomplete":'
+    )
+    summary = {"status": "completed", "completed_windows": 1}
+    (tmp_path / "summary.json").write_text(json.dumps(summary))
+    assert (
+        evaluation.evaluate_samples(
+            model,
+            dataset,
+            [sample],
+            tmp_path,
+            identity=identity,
+            check_resources=lambda: None,
+        )
+        == summary
+    )
+    assert committed.exists() and not dangling.exists()
+    assert records.read_bytes() == keys.tobytes()
+    assert (tmp_path / "results.jsonl").read_text() == json.dumps(row) + "\n"
