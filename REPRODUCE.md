@@ -28,7 +28,7 @@ STU/
 
 ```bash
 python src/protocol.py
-pytest -q
+python -m pytest -q
 ruff check src tests
 ```
 
@@ -60,6 +60,72 @@ python src/data.py check --pool validation --data-root /absolute/path/to/STU
 ```
 
 预测写入使用 `PredictionBatch.from_window(window, scores).save(path, window=window)`；读取使用 `PredictionBatch.load(path, window=window, expected_sha256=file_sha256)`。`scores` 必须已恢复为原输入窗口的全部点顺序；保存、读取均核对实际窗口，已有文件不覆盖。
+
+## 五帧异常分割模型
+
+`src/model.py` 实现唯一的首版模型：九通道联合体素输入、官方语义分割 LitePT-S 编码器与轻量解码器、`81→32→1` 逐点异常头，隐藏层使用 GELU。共有 12,729,089 个可训练参数，其中九通道骨干 12,726,432 个、异常头 2,657 个。模型全部随机初始化，不下载或加载外部权重，没有独立预训练阶段。
+
+`vendor/litept/` 仅引入 [LitePT 官方仓库](https://github.com/prs-eth/LitePT/tree/f0cc7692b81518124b96c856e79346fd19f40bec) 提交 `f0cc7692b81518124b96c856e79346fd19f40bec` 的独立 `litept/`、`libs/pointrope/` 实现及 MIT 许可证。骨干只把 PointROPE 的导入改为包内相对路径；结构参数保留官方语义分割小模型默认值，输入通道从 4 改为 9，解码输出为 72 维。未引入官方数据加载器、训练框架、演示数据或检查点。未安装 PointROPE 专用扩展时，使用官方提供的纯 PyTorch 实现。
+
+输入直接来自冻结的 `SceneWindow`，不重新配准，不裁点，不重新渲染。体素边长默认 `0.05` 米，以当前 LiDAR 原点为网格原点，按照 `floor(xyz / d)` 分组；整数网格再减去最小格号，以满足稀疏卷积的非负索引要求，物理坐标不平移。分格除法和均值累加使用双精度，网络输入保存为单精度。每个体素的九通道依次为坐标均值、原始强度均值和五次扫描命中标记。命中标记仅表示该次扫描在体素中存在返回，不代表可见性或异常判断。五帧共用一个场景编号，不把扫描来源拆成不同批次。
+
+每个原始点按逆映射取得 72 维体素特征，再拼接三维体素内均值偏移除以体素边长、该点原始强度、五维相对扫描来源独热编码，得到 81 维输入。标签、标签有效性、绝对帧号、槽号、序列编号和代理编号不进入特征。同一体素内的正常、异常和忽略标签保持逐点独立，不生成体素标签。
+
+模型的 `forward(window)` 返回原窗口顺序的 `M` 个未经过 sigmoid 的值，用于后续训练；`predict(window)` 返回已有的 `PredictionBatch`，保存全部点身份和 sigmoid 异常分数。分数尚未经概率校准。训练时只用 `labels.anomaly_target != -1` 排除官方忽略点，不使用 `current_mask` 限制训练监督；本轮尚未确定正式损失配方或训练循环。
+
+```python
+from pathlib import Path
+from src.model import AJAE
+
+window = train[0]  # train 来自上面的 FrozenWindowDataset，构造时已核验冻结池。
+model = AJAE(voxel_size=0.05).cuda().eval()
+prediction = model.predict(window)
+prediction.save(Path("runs/window_000004.npz"), window=window)
+online_scores = prediction.anomaly_score[prediction.online_mask]
+```
+
+先保存全部点预测，再提取当前帧在线分数；不同窗口中同一点的其他预测不参与在线分数融合。上述随机模型示例只验证接口，不产生有意义的异常检测结果。体素边长属于模型超参数，不改变 schema 34 的数据协议。
+
+本机模型环境使用 `.venv`，复用已有 Python 3.13、PyTorch 2.12.0 / CUDA 13.0，编译器为 CUDA 13.2；不复制另一份 PyTorch。新增依赖安装在项目环境内，不修改基础环境。安装命令如下，其他机器必须选择与其 PyTorch、Python 和显卡匹配的扩展版本：
+
+```bash
+python -m venv --system-site-packages .venv
+.venv/bin/python -m pip install --no-cache-dir \
+  spconv-cu126==2.3.8 addict==2.4.0 colorhash==2.1.0 \
+  timm==1.0.27 einops==0.8.2 ninja==1.13.0
+.venv/bin/python -m pip install --no-cache-dir --no-deps \
+  torch-scatter==2.1.2+pt212cu130 \
+  -f https://data.pyg.org/whl/torch-2.12.0+cu130.html
+MAX_JOBS=3 NVCC_THREADS=1 FLASH_ATTN_CUDA_ARCHS=120 \
+  FLASH_ATTENTION_FORCE_BUILD=TRUE \
+  .venv/bin/python -m pip install --no-cache-dir --no-deps \
+  --no-build-isolation flash-attn==2.8.3.post1
+```
+
+FlashAttention 针对本机 `sm_120` 编译，保留官方骨干使用的注意力实现。编译前仍需检查 E 盘物理剩余空间；本机使用三个编译任务，避免编译器内存叠加挤占交换空间。PointROPE 当前使用官方 PyTorch 实现，不执行上游仅指定 `sm_90` 的专用扩展安装命令。
+
+模型权重保持单精度，训练可由调用者启用自动混合精度。实际检查发现 `spconv 2.3.8` 的推理分支跳过了训练分支的权重自动类型转换，半精度特征与单精度权重混用会报错。因此 `AJAE.forward` 在 `eval()` 模式下关闭外层自动混合精度，按单精度调用骨干与预测头；官方注意力内部的半精度实现保持不变。该处理只限定执行精度，不修改官方网络结构，也不改变冻结坐标、点数或标签。
+
+下列检查不启动优化器或长训练，不保存模型检查点。普通检查覆盖独立体素计算、标签隔离、官方骨干前向与反向、全点预测保存和读取；显式设置数据路径后，另以完整冻结窗口进行显存与全点输出检查，训练 206 只做一次反向，合成与正常 201 均仅前向：
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 \
+  .venv/bin/python -m pytest -q -p no:cacheprovider
+AJAE_STU_ROOT=/absolute/path/to/STU PYTHONDONTWRITEBYTECODE=1 \
+  OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 \
+  .venv/bin/python -m pytest -q -s -p no:cacheprovider \
+  tests/test_model.py -k complete_frozen
+```
+
+本机已实际执行上述检查：普通测试 38 项通过，默认跳过的完整数据检查另行执行并通过；Ruff 和差异格式检查通过。所有输入特征的独立复算、混合标签逐点保留、有效历史点与当前点梯度、忽略点零损失梯度、全点预测保存与回读均通过对应实现检查。以下三个窗口的当前帧均为 4，没有裁点或改变体素边长：
+
+| 输入视图 | 全窗口点数 | 联合体素数 | 当前帧点数 | 执行内容 | 峰值已分配／已预留显存（GiB） |
+| --- | ---: | ---: | ---: | --- | ---: |
+| 206 合成训练 | 617,966 | 396,386 | 124,140 | 前向与反向 | 5.33／5.92 |
+| 201 合成验证 | 1,163,987 | 390,734 | 103,929 | 仅前向 | 1.56／3.05 |
+| 201 原始正常 | 1,163,892 | 391,106 | 103,915 | 仅前向 | 1.56／3.05 |
+
+显存由 PyTorch 统计，不包括桌面和驱动占用，也不是整个数据池或正式优化器训练的显存上界。训练检查使用半精度自动混合精度及损失缩放；验证使用上面说明的推理精度路径。修复后该次检查的单窗耗时分别为 6.93、1.53、0.96 秒，包含输入整理及对应梯度检查；首次训练窗口检查耗时为 28.45 秒，不能以其中任一单次耗时直接推算稳定训练吞吐。没有执行优化器更新、模型选择或 STU 性能评价，这些结果只支持模型接口与所测窗口的可执行性。
 
 ## 运行时几何输入
 
