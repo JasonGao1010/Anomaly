@@ -17,7 +17,7 @@ import torch
 from .data import FrozenWindowDataset, PredictionBatch, WindowPartition, _atomic_json
 from .model import AJAE, joint_voxelize
 from .protocol import PROJECT_ROOT, load_protocol
-from .train import balanced_loss, fixed_check, host_disk
+from .train import balanced_loss, fixed_check, host_disk, score_distribution
 from vendor.stu.compute_point_level_ood import PointOODMetricsCalculator
 
 
@@ -167,7 +167,8 @@ def file_hash(path):
 
 def summarize(rows, pooled, normal_scores):
     summary = {}
-    for name in ("initial", "final"):
+    names = tuple(pooled)
+    for name in names:
         synthetic = [row["models"][name] for row in rows if row["view"] == "synthetic"]
         normal = [row for row in rows if row["view"] == "normal"]
         aps = [
@@ -207,6 +208,14 @@ def summarize(rows, pooled, normal_scores):
                     int((x == 1).sum()) for x in pooled[name].all_labels
                 ),
                 "full_window_loss": losses,
+                "official_point_scores": score_distribution(
+                    np.concatenate(pooled[name].all_scores)
+                    if pooled[name].all_scores
+                    else np.empty(0),
+                    np.concatenate(pooled[name].all_labels)
+                    if pooled[name].all_labels
+                    else np.empty(0),
+                ),
             },
             "normal": {
                 "window_count": len(normal),
@@ -224,7 +233,7 @@ def summarize(rows, pooled, normal_scores):
     for row in rows:
         if row["view"] != "synthetic":
             continue
-        a, b = (row["models"][name]["current"] for name in ("initial", "final"))
+        a, b = (row["models"][name]["current"] for name in names)
         if (a["eligible"], a["normal_count"], a["anomaly_count"]) != (
             b["eligible"],
             b["normal_count"],
@@ -245,12 +254,31 @@ def summarize(rows, pooled, normal_scores):
             )
         )
         changes[key] += 1
-    return {"models": summary, "per_window_AP_changes": changes}
+    return {
+        "models": summary,
+        "comparison": {"reference": names[0], "candidate": names[1]},
+        "per_window_AP_changes": changes,
+    }
 
 
-def run(data_root, checkpoints, output):
+def run(
+    data_root,
+    checkpoints,
+    output,
+    *,
+    checkpoint_paths=None,
+    samples_file=None,
+    expected_attempts=None,
+):
     started = time.perf_counter()
-    if output.exists() or output.resolve().is_relative_to(checkpoints.resolve()):
+    paths = checkpoint_paths or {
+        "initial": checkpoints / "initial.pt",
+        "final": checkpoints / "final.pt",
+    }
+    if output.exists() or any(
+        output.resolve().is_relative_to(path.resolve().parent)
+        for path in paths.values()
+    ):
         raise FileExistsError(
             "use a new output directory outside the training evidence"
         )
@@ -264,27 +292,50 @@ def run(data_root, checkpoints, output):
         raise OSError("diagnostic output budget would invade the E: free-space reserve")
     protocol = load_protocol()
     samples = select_samples(protocol.validation_pool)
+    source_manifest = None
+    if samples_file is not None:
+        source_manifest = json.loads(samples_file.read_text())
+        if (
+            source_manifest["samples"] != samples
+            or source_manifest["normal_threshold"] != NORMAL_THRESHOLD
+            or source_manifest["voxel_size"] != 0.05
+        ):
+            raise ValueError(
+                "saved development-validation view differs from the fixed selection"
+            )
+        samples = source_manifest["samples"]
     begin = time.perf_counter()
     dataset = FrozenWindowDataset(data_root, protocol, pool_name="validation")
     if dataset.gradient_updates_allowed:
         raise RuntimeError(
             "the validation data role unexpectedly allows gradient updates"
         )
+    worlds = [
+        item
+        for item in dataset.manifest["segments"]
+        if item["synthetic_sequence_index"] == 0
+    ]
+    if source_manifest is not None and source_manifest["worlds"] != worlds:
+        raise ValueError("validation worlds differ from the saved diagnostic view")
     partition = WindowPartition(
         dataset.source_sequence, CURRENT_FRAMES[0], CURRENT_FRAMES[-1]
     )
     initialization_seconds = time.perf_counter() - begin
     models, references, checkpoint_records = {}, {}, {}
     begin = time.perf_counter()
-    for name, expected_steps in (("initial", 0), ("final", 200)):
-        path = checkpoints / f"{name}.pt"
+    if len(paths) != 2:
+        raise ValueError("paired evaluation requires exactly two model states")
+    for name, path in paths.items():
         digest = file_hash(path)
         # Only the two locally produced, user-designated checkpoint files are loaded.
         payload = torch.load(path, map_location="cpu", weights_only=False)
-        if (
-            payload["state"]["successful_updates"] != expected_steps
-            or payload["config"]["voxel_size"] != 0.05
-        ):
+        state = payload["state"]
+        valid_step = (
+            state["planned_attempts"] == expected_attempts
+            if expected_attempts is not None
+            else state["successful_updates"] == {"initial": 0, "final": 200}[name]
+        )
+        if not valid_step or payload["config"]["voxel_size"] != 0.05:
             raise ValueError(
                 "checkpoint does not match the requested training state or voxel size"
             )
@@ -318,6 +369,10 @@ def run(data_root, checkpoints, output):
             "deterministic_algorithms": torch.are_deterministic_algorithms_enabled(),
         },
         "checkpoints": checkpoint_records,
+        "source_sample_manifest": None
+        if samples_file is None
+        else {"file": str(samples_file.resolve()), "sha256": file_hash(samples_file)},
+        "planned_training_attempts": expected_attempts,
         "host_disk_before": volume,
         "disk_budget_bytes": disk_budget,
         "base_commit": subprocess.check_output(
@@ -333,11 +388,7 @@ def run(data_root, checkpoints, output):
                 "vendor/stu/compute_point_level_ood.py",
             )
         },
-        "worlds": [
-            item
-            for item in dataset.manifest["segments"]
-            if item["synthetic_sequence_index"] == 0
-        ],
+        "worlds": worlds,
     }
     _atomic_json(output / "samples.json", manifest)
     log = (output / "results.jsonl").open("x", encoding="utf-8", buffering=1)
@@ -446,6 +497,9 @@ def run(data_root, checkpoints, output):
                         normal_scores[name].append(values)
                     row["models"][name] = {
                         "loss": losses,
+                        "full_window_scores": score_distribution(
+                            scores, window.labels.anomaly_target
+                        ),
                         "current": metrics,
                         "prediction": saved,
                         "inference_seconds": inference_seconds,
@@ -475,10 +529,7 @@ def run(data_root, checkpoints, output):
                 )
         for name, model in models.items():
             assert_unchanged(model, references[name])
-            if (
-                file_hash(checkpoints / f"{name}.pt")
-                != checkpoint_records[name]["sha256"]
-            ):
+            if file_hash(paths[name]) != checkpoint_records[name]["sha256"]:
                 raise RuntimeError("source checkpoint changed during the diagnostic")
     except BaseException as exception:
         status, error = "stopped_error", f"{type(exception).__name__}: {exception}"
@@ -519,6 +570,7 @@ def run(data_root, checkpoints, output):
         print(json.dumps({"event": "finished", **result}, allow_nan=False), flush=True)
         for signum, handler in handlers.items():
             signal.signal(signum, handler)
+    return result
 
 
 if __name__ == "__main__":

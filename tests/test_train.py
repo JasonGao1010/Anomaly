@@ -1,4 +1,5 @@
 from collections import OrderedDict
+import json
 import random
 from types import SimpleNamespace
 
@@ -21,6 +22,7 @@ from src.train import (
     restore_random_state,
     select_windows,
     shuffled_schedule,
+    training_samples,
 )
 
 
@@ -107,6 +109,99 @@ def test_fixed_selection_and_without_replacement_passes():
     dataset.gradient_updates_allowed = False
     with pytest.raises(ValueError, match="only the frozen 206"):
         select_windows(dataset)
+
+
+def test_coverage_selection_and_equal_budget_schedules():
+    pool = load_protocol().training_pool
+    narrow, broad = (training_samples(pool, expanded=x) for x in (False, True))
+    assert len(narrow) == 8 and len(broad) == 128
+    assert tuple(s["current_frame"] for s in narrow) == CURRENT_FRAMES
+    assert all(sample in broad for sample in narrow)
+    assert len({(s["sequence_id"], s["segment_index"]) for s in broad}) == 128
+    for sample in broad:
+        sequence, segment = sample["synthetic_sequence_index"], sample["segment_index"]
+        assert sample["current_frame"] == pool.segments[segment].stop - 1
+        assert (
+            sample["dataset_index"]
+            == sequence * 385
+            + sum(len(pool.window_starts(s)) for s in range(segment + 1))
+            - 1
+        )
+    for count, visits in ((8, 160), (128, 10)):
+        schedule = shuffled_schedule(23, count, 1280)
+        assert all(schedule.count(i) == visits for i in range(count))
+        for start in range(0, 1280, count):
+            assert sorted(schedule[start : start + count]) == list(range(count))
+        assert schedule == shuffled_schedule(23, count, 1280)
+    assert shuffled_schedule(23, 8, 1280)[:200] == shuffled_schedule()
+    with pytest.raises(ValueError, match="complete passes"):
+        shuffled_schedule(23, 128, 200)
+    with pytest.raises(ValueError, match="206"):
+        training_samples(load_protocol().validation_pool, True)
+
+
+def test_coverage_runs_groups_then_predeclared_paired_checkpoints(
+    tmp_path, monkeypatch
+):
+    import src.train as train
+    import src.evaluate as evaluation
+
+    learning, transfer = tmp_path / "learn", tmp_path / "transfer"
+    learning.mkdir()
+    transfer.mkdir()
+    initial = learning / "initial.pt"
+    initial.write_bytes(b"fixture checkpoint, never loaded by this orchestration test")
+    (learning / "final.pt").write_bytes(b"preserved historical checkpoint")
+    manifest = transfer / "samples.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "samples": evaluation.select_samples(load_protocol().validation_pool),
+                "checkpoints": {"initial": {"sha256": evaluation.file_hash(initial)}},
+            }
+        )
+    )
+    for name in ("summary.json", "results.jsonl"):
+        (transfer / name).write_text("{}")
+    monkeypatch.setattr(
+        train,
+        "host_disk",
+        lambda: {"SizeRemaining": 100 * 2**30, "reserve_bytes": 10 * 2**30},
+    )
+    monkeypatch.setattr(torch.cuda, "empty_cache", lambda: None)
+    calls = []
+
+    def fit(data_root, output, *, group, initial, workers):
+        assert initial == learning / "initial.pt"
+        assert output.name == group
+        plan = json.loads((output.parent / "plan.json").read_text())
+        assert plan["primary_step"] == 1280 and plan["check_steps"] == [640, 1280]
+        assert len(plan["groups"][group]["schedule"]) == 1280
+        calls.append(group)
+        return {"status": "completed", "successful_updates": 1280}
+
+    def compare(
+        data_root,
+        checkpoints,
+        output,
+        *,
+        checkpoint_paths,
+        samples_file,
+        expected_attempts,
+    ):
+        assert samples_file == manifest
+        assert tuple(checkpoint_paths) == ("A", "B")
+        filename = "final.pt" if expected_attempts == 1280 else "step_0640.pt"
+        assert all(path.name == filename for path in checkpoint_paths.values())
+        calls.append(expected_attempts)
+        return {"status": "completed"}
+
+    monkeypatch.setattr(train, "run", fit)
+    monkeypatch.setattr(evaluation, "run", compare)
+    train.run_coverage(tmp_path, tmp_path / "coverage", initial, manifest, 1)
+    assert calls == ["A", "B", 640, 1280]
+    result = json.loads((tmp_path / "coverage" / "summary.json").read_text())
+    assert result["equal_successful_updates"] and result["prior_evidence_unchanged"]
 
 
 def test_official_ap_distance_ignore_and_eligibility():

@@ -57,6 +57,12 @@ def test_joint_voxels_match_independent_all_point_reference() -> None:
     window = _window()
     before = window.points.coordinates.copy()
     inputs = joint_voxelize(window)
+    transferred = inputs.to("cuda" if torch.cuda.is_available() else "cpu").to("cpu")
+    assert transferred.source_points is window.points
+    for field in fields(inputs):
+        value = getattr(inputs, field.name)
+        if isinstance(value, torch.Tensor):
+            assert torch.equal(value, getattr(transferred, field.name))
     assert inputs.features.shape[1] == inputs.point_features.shape[1] == 9
     assert inputs.point_to_voxel.shape == (window.points.count,)
     assert torch.count_nonzero(inputs.backbone_input()["batch"]) == 0

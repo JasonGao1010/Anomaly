@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from contextlib import nullcontext
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import math
 
 import numpy as np
@@ -25,6 +25,22 @@ class JointVoxels:
     point_features: torch.Tensor
     source_points: WindowPoints
     voxel_size: float
+
+    def to(self, device: torch.device | str) -> JointVoxels:
+        """Move only deterministic inputs; preserve the exact source-point identity."""
+        return replace(
+            self,
+            **{
+                name: getattr(self, name).to(device)
+                for name in (
+                    "coordinates",
+                    "grid_coord",
+                    "features",
+                    "point_to_voxel",
+                    "point_features",
+                )
+            },
+        )
 
     def backbone_input(self) -> dict[str, torch.Tensor]:
         return {
