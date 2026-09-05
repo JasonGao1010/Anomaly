@@ -569,6 +569,7 @@ class WindowPoints:
     def count(self) -> int:
         return int(self.coordinates.shape[0])
 
+
 @dataclass(frozen=True, slots=True)
 class SceneWindow:
     """A causal five-scan observation aligned to its latest scan."""
@@ -831,8 +832,7 @@ def assemble_window(
             aligned = source_xyz.copy()
         else:
             aligned = (
-                source_xyz.astype(np.float64) @ transform[:3, :3].T
-                + transform[:3, 3]
+                source_xyz.astype(np.float64) @ transform[:3, :3].T + transform[:3, 3]
             ).astype(np.float32)
         coordinates.append(aligned)
         # Intensity is raw observation data; Part 2 may add label-free features.
@@ -1200,8 +1200,9 @@ class STUSequence:
             "last_window_start": self.window_starts[-1],
             "labels_read": self.labels_available,
             "model_input": {
-                "coordinates": "released_STU_pre_voxel_coordinates",
-                "features": ["intensity", "official_STU_distance"],
+                "coordinates": "current_frame_lidar",
+                "features": ["intensity"],
+                "prediction_scope": "all_visible_window_points",
             },
         }
         if not deep:

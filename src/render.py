@@ -46,12 +46,12 @@ except ImportError:  # Direct module execution and small isolated checks.
 
 LASER_BEAMS = 128
 GROUND_SEMANTIC_IDS = (40, 44, 48, 49, 60)
-WORLD_FORMAT = "ajae-world-v3"
-WORLD_REPORT_FORMAT = "ajae-world-generation-report-v3"
-SUPPORT_POOL_FORMAT = "ajae-qualified-support-pool-v1"
+WORLD_FORMAT = "ajae-world"
+WORLD_REPORT_FORMAT = "ajae-world-generation-report"
+SUPPORT_POOL_FORMAT = "ajae-qualified-support-pool"
 SUPPORTED_COUNTERFACTUAL_SEQUENCES = frozenset((201, 206))
 SUPPORT_POOL_SEMANTICS = (40, 48, 49)
-CALIBRATION_FORMAT = "ajae-sensor-calibration-v4"
+CALIBRATION_FORMAT = "ajae-sensor-calibration"
 PROCEDURAL_GENERATOR_SCHEMA = 7
 SHAPE_FAMILIES = ("general", "blocky", "flat", "elongated")
 AXIS_PERMUTATIONS = (
@@ -62,11 +62,11 @@ AXIS_PERMUTATIONS = (
     (2, 0, 1),
     (2, 1, 0),
 )
-SCHEMA7_FAMILY_STREAM = 2001
-SCHEMA7_RATIO_STREAM = 2002
-SCHEMA7_AXIS_STREAM = 2003
-SCHEMA7_PARENT_TAU_STREAM = 3001
-SCHEMA7_CHILD_TAU_STREAM = 3002
+SHAPE_FAMILY_STREAM = 2001
+SHAPE_RATIO_STREAM = 2002
+SHAPE_AXIS_STREAM = 2003
+SHAPE_PARENT_TAU_STREAM = 3001
+SHAPE_CHILD_TAU_STREAM = 3002
 SYNTHETIC_INSTANCE_BASE = 60_000
 MAX_OBJECT_ID = np.iinfo(np.uint16).max - SYNTHETIC_INSTANCE_BASE
 OBJECT_LABELS = ("anomaly-proxy",)
@@ -1795,17 +1795,17 @@ class ShapeSpec:
         return _freeze(distance), _freeze(normal), _freeze(valid)
 
     @staticmethod
-    def _schema7_rng(seed: int, stream: int, *coordinates: int) -> np.random.Generator:
-        """Keep qualified schema-7 factors on structurally separate streams."""
+    def _factor_rng(seed: int, stream: int, *coordinates: int) -> np.random.Generator:
+        """Keep shape factors on structurally separate streams."""
         return np.random.default_rng(
             np.random.SeedSequence((seed, stream, *coordinates))
         )
 
     @classmethod
-    def _schema7_base_scale(
+    def _sample_base_scale(
         cls, seed: int, half: float
     ) -> tuple[tuple[float, float, float], str]:
-        family_value = float(cls._schema7_rng(seed, SCHEMA7_FAMILY_STREAM).random())
+        family_value = float(cls._factor_rng(seed, SHAPE_FAMILY_STREAM).random())
         if family_value < 0.4:
             family = 0
         elif family_value < 0.6:
@@ -1814,7 +1814,7 @@ class ShapeSpec:
             family = 2
         else:
             family = 3
-        rng = cls._schema7_rng(seed, SCHEMA7_RATIO_STREAM)
+        rng = cls._factor_rng(seed, SHAPE_RATIO_STREAM)
         if family == 0:
             factors = np.sort(rng.uniform(0.65, 1.25, 3))[::-1]
             r21, r31 = float(factors[1] / factors[0]), float(factors[2] / factors[0])
@@ -1827,7 +1827,7 @@ class ShapeSpec:
             r21 = float(rng.uniform(0.3, 0.5))
             r31 = float(rng.uniform(0.15, min(0.4, r21)))
         permutation = AXIS_PERMUTATIONS[
-            int(cls._schema7_rng(seed, SCHEMA7_AXIS_STREAM).integers(0, 6))
+            int(cls._factor_rng(seed, SHAPE_AXIS_STREAM).integers(0, 6))
         ]
         ordered = np.asarray((half, half * r21, half * r31))
         return tuple(
@@ -1879,12 +1879,12 @@ class ShapeSpec:
             )
 
         if implicit(0.0) >= 0.0:
-            raise RenderError("schema-7 primitive center is not strictly interior")
+            raise RenderError("procedural primitive center is not strictly interior")
         upper = 2.0 * float(np.linalg.norm(scale))
         while implicit(upper) <= 0.0 and upper < 64.0:
             upper *= 2.0
         if implicit(upper) <= 0.0:
-            raise RenderError("schema-7 radial boundary was not bracketed")
+            raise RenderError("procedural radial boundary was not bracketed")
         return float(brentq(implicit, 0.0, upper, xtol=1e-13, rtol=1e-13))
 
     @classmethod
@@ -1937,7 +1937,7 @@ class ShapeSpec:
         while child_boundary(upper) <= 0.0 and upper < 64.0:
             upper *= 2.0
         if child_boundary(0.0) >= 0.0 or child_boundary(upper) <= 0.0:
-            raise RenderError("schema-7 child boundary was not bracketed")
+            raise RenderError("procedural child boundary was not bracketed")
         offset_distance = float(
             brentq(child_boundary, 0.0, upper, xtol=1e-13, rtol=1e-13)
         )
@@ -1953,7 +1953,7 @@ class ShapeSpec:
             phase,
         )
         if abs(offset_distance - tau_child * child_radius) > 1e-10:
-            raise RenderError("schema-7 shared-witness formula is inconsistent")
+            raise RenderError("procedural shared-witness formula is inconsistent")
         parent_margin = -cls._perturbed_primitive_value(
             parent_scale,
             parent_center,
@@ -1975,7 +1975,7 @@ class ShapeSpec:
             phase,
         )
         if parent_margin <= 0.0 or child_margin <= 0.0:
-            raise RenderError("schema-7 shared witness is not strictly interior")
+            raise RenderError("procedural shared witness is not strictly interior")
         return child_center, witness, parent_margin, child_margin
 
     @classmethod
@@ -2009,7 +2009,7 @@ class ShapeSpec:
             )
             half = float(rng.uniform(minimum / 2.0, maximum / 2.0))
             rng.uniform(0.65, 1.25, size=3)  # Retired schema-6 axis draw.
-            base, shape_family = cls._schema7_base_scale(seed, half)
+            base, shape_family = cls._sample_base_scale(seed, half)
             base_array = np.asarray(base)
             scales = [base]
             exponents = [tuple(map(float, rng.uniform(0.55, 1.65, size=2)))]
@@ -2048,17 +2048,17 @@ class ShapeSpec:
                         direction[2] = 1.0
                     direction *= sign
                     tau_parent = float(
-                        cls._schema7_rng(
+                        cls._factor_rng(
                             seed,
-                            SCHEMA7_PARENT_TAU_STREAM,
+                            SHAPE_PARENT_TAU_STREAM,
                             proposal_count,
                             child_index,
                         ).uniform(0.65, 0.85)
                     )
                     tau_child = float(
-                        cls._schema7_rng(
+                        cls._factor_rng(
                             seed,
-                            SCHEMA7_CHILD_TAU_STREAM,
+                            SHAPE_CHILD_TAU_STREAM,
                             proposal_count,
                             child_index,
                         ).uniform(0.55, 0.80)
@@ -2104,7 +2104,7 @@ class ShapeSpec:
                 result.geometry_report(resolution=31)
                 result.geometry_report(resolution=41)
                 if count == 1:
-                    # Preserve the E16-v3 qualified single-primitive path.
+                    # Keep the qualified single-primitive geometry unchanged.
                     lower, upper = result.continuous_bounds(
                         maximum_iterations=80,
                         population_size=10,
@@ -2321,7 +2321,7 @@ def sample_training_anomaly_shape(
     *,
     size_m_range: tuple[float, float] = (0.2, 3.0),
 ) -> ShapeSpec:
-    """Sample the sole procedural anomaly geometry used by schema 33."""
+    """Sample the procedural geometry of one anomaly proxy."""
 
     return ShapeSpec.sample(seed, size_m_range=size_m_range)
 
@@ -2409,7 +2409,7 @@ class ObjectSpec:
             or report.generator_schema != PROCEDURAL_GENERATOR_SCHEMA
         ):
             raise RenderError(
-                "only current schema-7 objects may carry a generation report"
+                "only current procedural objects may carry a generation report"
             )
         translation = _tuple_values("translation_world_m", self.translation_world_m, 3)
         rotation = _rotation_tuple(
@@ -2628,9 +2628,10 @@ class WorldGenerationReport:
     world_type: str
     world_attempt: int
     anomaly_count: int
-    count_seed: int
     placement_attempt_seed: int
     placements: tuple[PlacementRecord, ...] = ()
+    placement_mode: str = "terminal_visible"
+    support_scope: str = "nearest_quartile"
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -2640,9 +2641,10 @@ class WorldGenerationReport:
             "world_type": self.world_type,
             "world_attempt": self.world_attempt,
             "anomaly_count": self.anomaly_count,
-            "count_seed": self.count_seed,
             "placement_attempt_seed": self.placement_attempt_seed,
             "placements": [item.to_dict() for item in self.placements],
+            "placement_mode": self.placement_mode,
+            "support_scope": self.support_scope,
         }
 
     @classmethod
@@ -2656,9 +2658,10 @@ class WorldGenerationReport:
             "world_type",
             "world_attempt",
             "anomaly_count",
-            "count_seed",
             "placement_attempt_seed",
             "placements",
+            "placement_mode",
+            "support_scope",
         }:
             raise RenderError("WorldGenerationReport JSON fields are invalid")
         placements = value["placements"]
@@ -2670,9 +2673,10 @@ class WorldGenerationReport:
             world_type=str(value["world_type"]),
             world_attempt=value["world_attempt"],  # type: ignore[arg-type]
             anomaly_count=value["anomaly_count"],  # type: ignore[arg-type]
-            count_seed=value["count_seed"],  # type: ignore[arg-type]
             placement_attempt_seed=value["placement_attempt_seed"],  # type: ignore[arg-type]
             placements=tuple(PlacementRecord.from_dict(item) for item in placements),  # type: ignore[arg-type]
+            placement_mode=str(value["placement_mode"]),
+            support_scope=str(value["support_scope"]),
         )
 
     def to_json(self) -> str:
@@ -3196,26 +3200,25 @@ class RayGrid:
             raise RenderError(f"invalid ray-grid payload: {error}") from error
 
 
-def calibrated_ray_grid_from_e11(path: Path | str) -> RayGrid:
-    """Build the single authoritative ray grid from the frozen E11-D4b artifact."""
+def calibrated_ray_grid(path: Path | str) -> RayGrid:
+    """Build the authoritative ray grid from the frozen calibration source."""
 
     artifact = np.load(Path(path).expanduser().resolve(strict=True), allow_pickle=False)
     required = {"even_params", "even_local", "integer_shift", "passed"}
     if not required.issubset(artifact.files) or not bool(artifact["passed"]):
-        raise RenderError("E11-D4b artifact is incomplete or did not pass")
+        raise RenderError("ray calibration source is incomplete or did not pass")
     parameters = np.asarray(artifact["even_params"], dtype=np.float64)
     local = np.asarray(artifact["even_local"], dtype=np.float64)
     shifts = np.asarray(artifact["integer_shift"])
     if parameters.shape != (3,) or local.shape != (LASER_BEAMS, 3):
-        raise RenderError("E11-D4b artifact has invalid calibrated parameters")
+        raise RenderError("ray calibration source has invalid calibrated parameters")
     if shifts.shape != (LASER_BEAMS,) or not np.issubdtype(shifts.dtype, np.integer):
-        raise RenderError("E11-D4b artifact has invalid row shifts")
+        raise RenderError("ray calibration source has invalid row shifts")
     gamma, origin_x, origin_z = map(float, parameters)
     columns = 1024
     raw_column = np.arange(columns, dtype=np.float64)[None, :]
     shift = shifts.astype(np.float64)[:, None]
-    # The D4b artifact stores gamma in Ouster's encoder gauge; Cartesian bearing
-    # has the fixed pi offset used by the formal D4b/D4c/v3 evaluations.
+    # Gamma uses Ouster's encoder gauge; Cartesian bearing has a fixed pi offset.
     eta = (
         math.pi
         + gamma
@@ -3865,9 +3868,8 @@ def _accepted_object_hits(
         slots = np.arange(count, dtype=np.int32)
     else:
         slots = np.asarray(canonical_ray_slots, dtype=np.int32)
-        if (
-            slots.shape != (count,)
-            or np.any((slots < 0) | (slots >= ray_grid.slot_count))
+        if slots.shape != (count,) or np.any(
+            (slots < 0) | (slots >= ray_grid.slot_count)
         ):
             raise RenderError("object competition canonical ray slots are invalid")
     beam_ids = ray_grid.beam_ids[slots]
@@ -4062,7 +4064,9 @@ def canonical_ray_slots_for_source(
     cursor = 0
     for file_start, length, canonical_start in runs:
         if file_start != cursor or canonical_start + length > ray_grid.slot_count:
-            raise RenderError("duplicate-prefix ray runs are not contiguous or in range")
+            raise RenderError(
+                "duplicate-prefix ray runs are not contiguous or in range"
+            )
         mapping[file_start : file_start + length] = np.arange(
             canonical_start,
             canonical_start + length,
@@ -4073,7 +4077,9 @@ def canonical_ray_slots_for_source(
         raise RenderError("duplicate-prefix ray runs do not cover the released frame")
     template = source.xyzi[template_start : template_start + ray_grid.slot_count]
     if not np.array_equal(source.xyzi, template[mapping]):
-        raise RenderError("released duplicate-prefix xyzi does not match its frozen layout")
+        raise RenderError(
+            "released duplicate-prefix xyzi does not match its frozen layout"
+        )
     if source.labels is not None:
         label_template = source.labels.packed[
             template_start : template_start + ray_grid.slot_count
@@ -4276,7 +4282,7 @@ def source_observation_identity(source: SourceFrame) -> str:
 
     if not isinstance(source, SourceFrame):
         raise TypeError("source observation identity requires a SourceFrame")
-    digest = hashlib.sha256(b"AJAE-rendered-source-observation-v2\0")
+    digest = hashlib.sha256(b"AJAE-rendered-source-observation\0")
     digest.update(
         json.dumps(
             {
@@ -4314,7 +4320,7 @@ def world_content_identity(world: WorldSpec) -> str:
         physical.pop("shape_generation_report")
         objects.append(physical)
     payload = {
-        "format": "ajae-physical-world-content-v1",
+        "format": "ajae-physical-world-content",
         "source_sequence_id": world.source_sequence_id,
         "objects": objects,
         "tie_tolerance_m": world.tie_tolerance_m,
@@ -4332,7 +4338,7 @@ def rendered_window_identity(
     """Hash one window from its immutable rendered-frame references."""
 
     payload = {
-        "format": "ajae-rendered-window-v1",
+        "format": "ajae-rendered-window",
         "window_start": _integer("window_start", window_start),
         "frame_ids": tuple(_integer("frame_id", item) for item in frame_ids),
         "source_observation_identities": tuple(source_observation_identities),
@@ -4352,7 +4358,7 @@ def rendered_segment_identity(
     """Hash one rendered segment without materializing its point arrays again."""
 
     payload = {
-        "format": "ajae-rendered-segment-v1",
+        "format": "ajae-rendered-segment",
         "world_identity": world_identity,
         "segment_start": _integer("segment_start", segment_start),
         "frame_ids": tuple(_integer("frame_id", item) for item in frame_ids),
@@ -4441,7 +4447,9 @@ class RenderedSegment:
                 for item in rendered
             )
         ):
-            raise RenderError("rendered segment source, world, or report is inconsistent")
+            raise RenderError(
+                "rendered segment source, world, or report is inconsistent"
+            )
         if any(
             not isinstance(identity, str) or len(identity) != 64
             for identity in identities
@@ -4460,8 +4468,7 @@ class RenderedSegment:
                 )
             )
             if not same_frames or (
-                window.source_observation_identities
-                != identities[offset : offset + 5]
+                window.source_observation_identities != identities[offset : offset + 5]
             ):
                 raise RenderError(
                     "overlapping windows must reuse the same rendered frame objects"
@@ -4483,15 +4490,13 @@ class RenderedSegment:
 
     def to_manifest(self) -> dict[str, object]:
         return {
-            "format": "ajae-rendered-segment-v1",
+            "format": "ajae-rendered-segment",
             "identity": self.identity,
             "world_identity": self.world.identity,
             "segment_start": self.segment_start,
             "frame_ids": list(self.frame_ids),
             "renderer_identity": self.renderer_identity,
-            "source_observation_identities": list(
-                self.source_observation_identities
-            ),
+            "source_observation_identities": list(self.source_observation_identities),
             "world": self.world.to_dict(),
             "report": self.report.to_dict(),
             "windows": [
@@ -4529,12 +4534,19 @@ def render_segment_world(
         raise RenderError("segment sources must be at least five consecutive scans")
     sequence_id = world.source_sequence_id
     if any(
-        item.partition != "train" or item.sequence_id != sequence_id
-        for item in frames
+        item.partition != "train" or item.sequence_id != sequence_id for item in frames
     ):
         raise RenderError("segment sources and world must identify one train sequence")
     if world.world_type != "anomaly_only":
         raise RenderError("formal synthetic data requires an anomaly-only world")
+    if (
+        len(world.objects) != 1
+        or world.objects[0].object_id != 1
+        or report.anomaly_count != 1
+    ):
+        raise RenderError(
+            "a segment requires exactly one anomaly proxy with object ID 1"
+        )
     frozen_world_identity = world.identity
     rendered = tuple(render_frames(frames, world, ray_grid, sensor))
     if world.identity != frozen_world_identity:
@@ -4587,6 +4599,9 @@ def sample_segment_world(
         _integer("seed", seed),
         source_sequence_id=sequence_id,
         support_frame_ids=tuple(item.frame_id for item in frames[2:-2]),
+        sources=frames,
+        ray_grid=ray_grid,
+        sensor=sensor,
         maximum_attempts=maximum_attempts,
     )
     return render_segment_world(
@@ -4601,7 +4616,7 @@ def sample_segment_world(
 
 @dataclass(frozen=True, slots=True)
 class SupportPatch:
-    """One E21-v4-qualified support plane with its stable source identity."""
+    """One geometrically qualified support plane with its stable source identity."""
 
     pool_index: int
     semantic: int
@@ -4616,7 +4631,7 @@ class SupportPatch:
 
 @dataclass(frozen=True, slots=True)
 class QualifiedSupportPool:
-    """Array-backed E21-v4 pool; failed candidates never enter placement."""
+    """Array-backed support pool; failed candidates never enter placement."""
 
     pool_indices: np.ndarray
     semantics: np.ndarray
@@ -4743,19 +4758,18 @@ def load_qualified_support_pool(
         if set(payload.files) != required:
             raise PlacementError("support-pool artifact has unexpected arrays")
         arrays = {
-            name: np.asarray(payload[name])
-            for name in required - {"metadata_json"}
+            name: np.asarray(payload[name]) for name in required - {"metadata_json"}
         }
         metadata = json.loads(str(payload["metadata_json"].item()))
         expected = {
             201: (
-                "schema34-validation-support-pool",
+                "validation-support-pool",
                 [0, 681],
                 [2, 679],
                 640,
             ),
             206: (
-                "schema33-training-support-pool",
+                "training-support-pool",
                 [0, 448],
                 [2, 446],
                 445,
@@ -4769,11 +4783,9 @@ def load_qualified_support_pool(
             or metadata.get("covered_anchor_frames") != expected[3]
             or metadata.get("passed") is not True
             or metadata.get("pool_size") != int(arrays["frame"].shape[0])
-            or metadata.get("scientific_array_hash")
-            != _scientific_array_hash(arrays)
+            or metadata.get("scientific_array_hash") != _scientific_array_hash(arrays)
             or int(np.min(arrays["frame"])) != expected[2][0]
-            or int(np.max(arrays["frame"]))
-            != ({201: 642, 206: 446}[sequence_id])
+            or int(np.max(arrays["frame"])) != ({201: 642, 206: 446}[sequence_id])
         ):
             raise PlacementError("support-pool metadata is not qualified")
         return QualifiedSupportPool(
@@ -5113,7 +5125,7 @@ def obvious_pair_penetration(
 
 @dataclass(frozen=True, slots=True)
 class GroundingEligibility:
-    """Cache the support-invariant E22-v2 grounding qualification for one shape."""
+    """Cache the support-invariant grounding qualification for one shape."""
 
     shape: InsertShape
     standard_lower_support_m: float
@@ -5130,7 +5142,7 @@ class GroundingEligibility:
 
 
 def qualify_grounding(shape: InsertShape) -> GroundingEligibility:
-    """Evaluate the frozen E22-v2 conditions before support placement."""
+    """Evaluate the frozen grounding conditions before support placement."""
 
     strict = float(shape.minimum_z_m(xy_resolution=65, z_steps=257))
     standard = float(shape.minimum_z_m(xy_resolution=33, z_steps=129))
@@ -5153,7 +5165,7 @@ def _grounding_qualified_shape(
     tuple[int, ...],
     tuple[int, ...],
 ]:
-    """Take the first E22-qualified shape from one deterministic seed stream."""
+    """Take the first grounding-qualified shape from one deterministic seed stream."""
 
     start = _integer("first_seed", first_seed)
     step = _integer("stride", stride, minimum=1)
@@ -5170,7 +5182,7 @@ def _grounding_qualified_shape(
         if grounding.passed:
             return shape, report, grounding, tuple(proposed), tuple(rejected)
         rejected.append(shape_seed)
-    raise PlacementError("no E22-qualified shape in 64 deterministic proposals")
+    raise PlacementError("no grounding-qualified shape in 64 deterministic proposals")
 
 
 def place_object(
@@ -5198,7 +5210,7 @@ def place_object(
         Callable[[ObjectSpec, SupportPatch], str | None] | None
     ) = None,
 ) -> tuple[ObjectSpec, PlacementRecord]:
-    """The sole support-pool-only E22/E23/E24/E25 placement pipeline."""
+    """Place a grounded anomaly proxy using only qualified support patches."""
 
     if (
         not isinstance(material, MaterialSpec)
@@ -5208,7 +5220,7 @@ def place_object(
         raise TypeError("placement inputs have unsupported types")
     label_value = str(label)
     if label_value != "anomaly-proxy":
-        raise PlacementError("schema 33 placement only supports anomaly-proxy")
+        raise PlacementError("placement only supports anomaly-proxy")
     allowed = frozenset(SUPPORT_POOL_SEMANTICS)
     if type(maximum_candidates) is not int or not 1 <= maximum_candidates <= 128:
         raise PlacementError("maximum_candidates must lie in [1,128]")
@@ -5232,7 +5244,7 @@ def place_object(
     if not isinstance(grounding, GroundingEligibility) or grounding.shape is not shape:
         raise PlacementError("grounding eligibility belongs to a different shape")
     if not grounding.passed:
-        raise PlacementError("shape fails E22 grounding eligibility")
+        raise PlacementError("shape fails grounding eligibility")
     rejections: list[str] = []
     proposal_pool_indices: list[int] = []
     proposal_minimum_sdf: list[float] = []
@@ -5307,25 +5319,19 @@ def place_object(
     raise PlacementExhaustion(proposal_pool_indices, rejections, proposal_minimum_sdf)
 
 
-def _anomaly_entity_count(seed: int) -> int:
-    """Draw one to nine proxies, with 90% probability on one to three."""
-
-    rng = np.random.default_rng(_integer("seed", seed))
-    values = np.arange(1, 10)
-    probability = np.asarray((0.36, 0.32, 0.22, 0.03, 0.02, 0.015, 0.01, 0.01, 0.015))
-    return int(rng.choice(values, p=probability))
-
-
 def sample_anomaly_world(
     support_pool: QualifiedSupportPool,
     obstacles: ObservedObstacleIndex,
     seed: int,
     *,
     source_sequence_id: int,
+    sources: Sequence[SourceFrame],
+    ray_grid: RayGrid,
+    sensor: SensorCalibration,
     support_frame_ids: Sequence[int] | None = None,
     maximum_attempts: int = 48,
 ) -> tuple[WorldSpec, WorldGenerationReport]:
-    """Build one immutable anomaly-only world before rendering any scan."""
+    """Place exactly one immutable anomaly proxy before rendering any scan."""
 
     world_seed = _integer("seed", seed)
     if not isinstance(support_pool, QualifiedSupportPool) or not isinstance(
@@ -5345,69 +5351,104 @@ def sample_anomaly_world(
         if not members:
             raise RenderError("support_frame_ids cannot be empty")
         allowed_frames = frozenset(members)
-    anomaly_count = _anomaly_entity_count(world_seed)
+    eligible_rows = np.arange(support_pool.pool_indices.shape[0], dtype=np.int64)
+    if allowed_frames is not None:
+        eligible_rows = eligible_rows[
+            np.isin(support_pool.frames[eligible_rows], tuple(allowed_frames))
+        ]
+    if eligible_rows.size == 0:
+        raise PlacementError("the selected sequence has no legal support patch")
 
-    for attempt in range(maximum_attempts):
+    frames = {frame.frame_id: frame for frame in sources}
+    terminal = max(frames)
+    end_position = frames[terminal].lidar_pose[:3, 3]
+    distances = np.linalg.norm(
+        support_pool.anchors_world_m[eligible_rows] - end_position, axis=1
+    )
+    # Randomize within the nearest quartile; no fixed side, bearing, or range.
+    preferred = eligible_rows[distances <= np.quantile(distances, 0.25)]
+    contexts: dict[int, tuple[np.ndarray, ...]] = {}
+
+    def visible(item: ObjectSpec, frame_id: int) -> bool:
+        if frame_id not in contexts:
+            contexts[frame_id] = _frame_trace_context(frames[frame_id], ray_grid)
+        slots, _, directions, _, origins, native_range = contexts[frame_id]
+        candidate = WorldSpec(world_seed, sequence_id, (item,))
+        hits = _accepted_object_hits(
+            origins,
+            directions,
+            candidate,
+            ray_grid,
+            sensor,
+            frame_id,
+            canonical_ray_slots=slots,
+        )
+        return bool(
+            np.any(
+                np.isfinite(hits.distance_m)
+                & (hits.distance_m < native_range - candidate.tie_tolerance_m)
+            )
+        )
+
+    # Exhaust the terminal-visible preference before a recorded physical fallback.
+    for trial in range(2 * maximum_attempts):
+        fallback = trial >= maximum_attempts
+        attempt = trial % maximum_attempts
         # Placement retries finish before rendering; the root seed never changes.
         attempt_seed = world_seed + 1_000_003 * attempt
-        objects: list[ObjectSpec] = []
-        records: list[PlacementRecord] = []
+        # Keep the first proxy's original random stream; do not sample a count.
+        entity_seed = attempt_seed + 10_007
         try:
-            for entity_index in range(anomaly_count):
-                entity_seed = attempt_seed + 10_007 * (entity_index + 1)
-                (
-                    shape,
-                    report,
-                    grounding,
-                    shape_proposals,
-                    grounding_rejections,
-                ) = _grounding_qualified_shape(
-                    entity_seed + 3, stride=3072, maximum_proposals=64
-                )
-                eligible_rows = np.arange(
-                    support_pool.pool_indices.shape[0], dtype=np.int64
-                )
-                if allowed_frames is not None:
-                    eligible_rows = eligible_rows[
-                        np.isin(
-                            support_pool.frames[eligible_rows], tuple(allowed_frames)
-                        )
-                    ]
-                if eligible_rows.size == 0:
-                    raise PlacementError(
-                        "the selected sequence has no legal support patch"
+            (
+                shape,
+                report,
+                grounding,
+                shape_proposals,
+                grounding_rejections,
+            ) = _grounding_qualified_shape(
+                entity_seed + 3, stride=3072, maximum_proposals=64
+            )
+            material_seed = entity_seed + 11
+            yaw_seed = entity_seed + 31
+            yaw = float(np.random.default_rng(yaw_seed).uniform(-math.pi, math.pi))
+
+            def visibility_rejection(
+                item: ObjectSpec, patch: SupportPatch
+            ) -> str | None:
+                frame_id = patch.frame_id if fallback else terminal
+                return None if visible(item, frame_id) else "no_visible_anomaly_return"
+
+            for rows in (preferred, eligible_rows):
+                try:
+                    item, record = place_object(
+                        shape,
+                        MaterialSpec.sample(material_seed),
+                        support_pool,
+                        obstacles,
+                        object_id=1,
+                        label="anomaly-proxy",
+                        proposal_namespace="ajae-segment-world",
+                        proposal_stream=entity_seed,
+                        yaw_rad=yaw,
+                        material_seed=material_seed,
+                        yaw_seed=yaw_seed,
+                        shape_seed=shape_proposals[-1],
+                        shape_generation_report=report,
+                        grounding_eligibility=grounding,
+                        proposal_rows=rows,
+                        post_placement_rejection=visibility_rejection,
                     )
-                material_seed = entity_seed + 11
-                yaw_seed = entity_seed + 31
-                yaw = float(np.random.default_rng(yaw_seed).uniform(-math.pi, math.pi))
-                item, record = place_object(
-                    shape,
-                    MaterialSpec.sample(material_seed),
-                    support_pool,
-                    obstacles,
-                    object_id=entity_index + 1,
-                    label="anomaly-proxy",
-                    proposal_namespace="ajae-segment-world-v1",
-                    proposal_stream=entity_seed,
-                    yaw_rad=yaw,
-                    material_seed=material_seed,
-                    yaw_seed=yaw_seed,
-                    shape_seed=shape_proposals[-1],
-                    shape_generation_report=report,
-                    existing_objects=objects,
-                    grounding_eligibility=grounding,
-                    proposal_rows=eligible_rows,
-                )
-                records.append(
-                    replace(
-                        record,
-                        accepted_shape_proposal=len(shape_proposals) - 1,
-                        shape_proposal_seeds=shape_proposals,
-                        grounding_rejection_seeds=grounding_rejections,
-                    )
-                )
-                objects.append(item)
-            world = WorldSpec(world_seed, sequence_id, tuple(objects))
+                    break
+                except PlacementError:
+                    if rows is eligible_rows:
+                        raise
+            record = replace(
+                record,
+                accepted_shape_proposal=len(shape_proposals) - 1,
+                shape_proposal_seeds=shape_proposals,
+                grounding_rejection_seeds=grounding_rejections,
+            )
+            world = WorldSpec(world_seed, sequence_id, (item,))
         except PlacementError:
             continue
         return world, WorldGenerationReport(
@@ -5415,11 +5456,12 @@ def sample_anomaly_world(
             sequence_id,
             "anomaly_only",
             attempt,
-            anomaly_count,
-            world_seed,
+            1,
             attempt_seed,
-            tuple(records),
+            (record,),
+            "support_visible_fallback" if fallback else "terminal_visible",
+            "nearest_quartile" if rows is preferred else "all_segment",
         )
     raise PlacementError(
-        f"anomaly world failed {maximum_attempts} deterministic placement attempts"
+        f"anomaly world failed {maximum_attempts} attempts in each visibility stage"
     )

@@ -1,26 +1,15 @@
 {
   "schema_version": 34,
   "status": {
-    "route": "ajae_data_and_five_frame_supervision_v2",
+    "route": "ajae_data_and_five_frame_supervision",
     "state": "frozen",
     "data_pool_frozen": true,
     "training_allowed": true,
     "validation_tuning_allowed": true,
-    "real_anomaly_access_allowed": false,
-    "old_F2_F3_retired": true
+    "real_anomaly_access_allowed": false
   },
   "authority": {
-    "scientific_document": "AJAE数据与五帧监督协议v2.md",
-    "supersedes": "schema33_frozen_stu_dense_input_feasibility",
-    "history": {
-      "schema33_protocol": "history/schema33/protocol.json",
-      "schema33_protocol_sha256": "b54209debf09f86cc5cfeac53414caa0866ad29724c93f5fa0f26d9c03312c2c",
-      "F0_artifact": "artifacts/f0_qualification.json",
-      "F0_sha256": "b78bce85ff336469583611d2a756ee8070590f9dd6cf9d6ec9537ce08fccf6ef",
-      "F1_artifact": "artifacts/f1_geometry.json",
-      "F1_sha256": "add308d89ac130cc59401685fc1295cf4d621652f8f2d885e32c74a7e9394b3b",
-      "interpretation": "historical_mechanism_evidence_only"
-    }
+    "scientific_document": "PROTOCOL.md"
   },
   "research_question": "Under one frozen pool of causal five-frame windows with pointwise supervision over every valid visible return, which model best improves the official STU anomaly metrics on the current frame?",
   "data": {
@@ -151,10 +140,18 @@
   },
   "synthetic_pools": {
     "generation_order": "sample_one_world_per_segment_then_render_each_segment_frame_once_then_cut_windows",
+    "anomaly_objects_per_segment": 1,
+    "placement": {
+      "preference": "nearest_terminal_support_quartile_then_all_segment_support",
+      "nearby_support_quantile": 0.25,
+      "visibility": "terminal_return_preferred_else_recorded_support_visible_fallback",
+      "physical_constraints": "unchanged",
+      "empty_anomaly_windows": "retain_as_normal_supervision"
+    },
     "cross_segment_windows": "forbidden",
     "rerender_same_frame_for_overlapping_windows": "forbidden",
     "root_seed_substitution_after_protocol_freeze": "forbidden",
-    "train_v1": {
+    "train": {
       "source_sequence_id": 206,
       "synthetic_sequence_count": 8,
       "segment_boundaries_inclusive": [[0, 27], [28, 55], [56, 83], [84, 111], [112, 139], [140, 167], [168, 195], [196, 223], [224, 251], [252, 279], [280, 307], [308, 335], [336, 363], [364, 391], [392, 419], [420, 448]],
@@ -164,9 +161,9 @@
       "world_count": 128,
       "windows_per_synthetic_sequence": 385,
       "total_window_count": 3080,
-      "output_directory": "artifacts/data_v2/train"
+      "output_directory": "artifacts/data/train"
     },
-    "validation_v1": {
+    "validation": {
       "source_sequence_id": 201,
       "synthetic_sequence_count": 4,
       "segment_boundaries_inclusive": [[0, 27], [28, 55], [56, 83], [84, 111], [112, 139], [140, 167], [168, 195], [196, 223], [224, 251], [252, 279], [280, 307], [308, 335], [336, 363], [364, 391], [392, 419], [420, 447], [448, 475], [476, 503], [504, 531], [532, 559], [560, 587], [588, 615], [616, 681]],
@@ -176,11 +173,11 @@
       "world_count": 92,
       "windows_per_synthetic_sequence": 590,
       "total_window_count": 2360,
-      "output_directory": "artifacts/data_v2/validation"
+      "output_directory": "artifacts/data/validation"
     }
   },
   "storage": {
-    "format": "ajae-sparse-rendered-segment-v1",
+    "format": "ajae-sparse-rendered-segment",
     "source_frames": "official_raw_STU_files_bound_by_per_frame_content_hashes",
     "synthetic_delta": "only_slots_whose_visible_return_is_replaced_by_an_anomaly_proxy",
     "one_file_per_segment": true,
@@ -189,7 +186,7 @@
     "segment_required_metadata": ["synthetic_sequence_id", "segment_index", "segment_boundary_inclusive", "seed", "world_identity", "world_content_identity", "world", "world_generation_report", "renderer_identity", "raw_source_identities", "rendered_source_identities", "window_identities", "scientific_content_hash"]
   },
   "predictions": {
-    "format": "ajae-complete-window-point-prediction-v1",
+    "format": "ajae-complete-window-point-prediction",
     "required_point_record_fields": ["synthetic_or_raw_sequence_id", "window_current_frame", "source_frame", "source_slot", "anomaly_score"],
     "online_selection": "source_frame_equals_window_current_frame",
     "historical_context_scores": "persist_unchanged_but_forbidden_from_online_primary_metric",
@@ -198,14 +195,14 @@
   "artifacts": {
     "sensor_calibration": {
       "file": "artifacts/calibration.pt",
-      "sha256": "44653fb3d413fd0cb14f9da1649081ba9b33191a6bc52973da32d850222f2bca",
-      "source_file": "artifacts/e11_d4b_calibration.npz",
+      "sha256": "7dc00282bdae7d7105fd4d3b89f08570fb095923988693a07368f4a4ccce4d5e",
+      "source_file": "artifacts/calibration_source.npz",
       "source_sha256": "42791278e2a6b36d975bbe9dc957c6f303b8b424c5b97cf54e42380ad191f253"
     },
     "qualified_support_pools": {
       "train/206": {
         "file": "artifacts/training_206_support_pool.npz",
-        "sha256": "30821e0739a9ab4adc77aa6bee5c4645fbc654739d3489a346cbfca3e50fe04e",
+        "sha256": "5f4aeec20070382f60266320dd383f88b5cbb59d5884a585679af73411e0c09d",
         "frame_range_inclusive": [0, 448],
         "anchor_range_inclusive": [2, 446],
         "qualified_anchor_count": 445,
@@ -214,7 +211,7 @@
       },
       "train/201": {
         "file": "artifacts/validation_201_support_pool.npz",
-        "sha256": "1414387f046a674a115138a3e4f525e76aa4c5b006a609d6cc6727f1f2ead99f",
+        "sha256": "2f0170612cefae10d6a5f1d14fffcbe6c55b1c8fdab331b6a4b2e8c9e31bec1c",
         "frame_range_inclusive": [0, 681],
         "anchor_range_inclusive": [2, 679],
         "qualified_anchor_count": 640,
@@ -223,16 +220,16 @@
       }
     },
     "train_pool_manifest": {
-      "file": "artifacts/data_v2/train_manifest.json",
-      "sha256": "c17dafce4866609f006d5d2820ae1b4f57e5dc557d8186ceca440e623554de34"
+      "file": "artifacts/data/train_manifest.json",
+      "sha256": "703cb0eb65e7432eaa9a0116424b229cb69506ff0468614842f2bf5ca262b972"
     },
     "validation_pool_manifest": {
-      "file": "artifacts/data_v2/validation_manifest.json",
-      "sha256": "27c686a26b9cda77a61f7cddff7258f143012e943cff2df2d489ff919969be26"
+      "file": "artifacts/data/validation_manifest.json",
+      "sha256": "60b1480072034f0b96d77e48aee0a9d8afd6af14e1dfae34ab830cfd8e183fe5"
     },
     "qualification": {
-      "file": "artifacts/data_v2/qualification.json",
-      "sha256": "ad4f0050c4a4c8e7578128830450ead4ba453528066f198ba2b233f6a8a468fd"
+      "file": "artifacts/data/qualification.json",
+      "sha256": "899e18f4863c975ea16639c21ed52d35daaa279dd6f11cc6d176222ecfb09168"
     }
   },
   "qualification": {
@@ -241,6 +238,8 @@
       "train_206_has_exactly_frames_0_through_448",
       "train_segments_are_disjoint_and_cover_0_through_448",
       "one_fixed_world_per_segment",
+      "exactly_one_anomaly_proxy_per_segment",
+      "terminal_placement_visibility_and_physical_exceptions_are_recorded",
       "same_seed_repeats_bitwise",
       "different_formal_seeds_produce_different_physical_world_contents",
       "each_segment_frame_is_rendered_once",

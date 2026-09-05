@@ -1,0 +1,2189 @@
+{
+  "format": "ajae-synthetic-pool-manifest",
+  "generation_identity": "fd2a69da1a59f6a58f523c3f0d0bcc367061948892c6da03ce23c49c2ea8e843",
+  "pool_name": "train",
+  "schema_version": 34,
+  "scientific_content_hash": "2f9a993ddc6d02f572e9aa31286bd2c5bbd8258977c07d15267d22a6c288db28",
+  "segments": [
+    {
+      "changed_slot_count": 4815,
+      "file": "artifacts/data/train/sequence_000/segment_00.npz",
+      "file_sha256": "040d4589ac18d9861efb5e3d774749ba8a631b66aaf80772538c0c895c6ac7aa",
+      "frame_range_inclusive": [
+        0,
+        27
+      ],
+      "scientific_content_hash": "7f7c177bb4f918e99efc8fedea214b1b2d0fa4d31d53e112640dee45c36908de",
+      "seed": 34100000,
+      "segment_index": 0,
+      "synthetic_sequence_id": "synthetic/train/000",
+      "synthetic_sequence_index": 0,
+      "window_count": 24,
+      "world_content_identity": "935824c588ac6dbc0e0d79167edf6d25e5dd8800984e72c79545c00e4fc38092",
+      "world_identity": "28dba7e1154c2197e6cd56f8a63c70585a5fe1a40b0358ee56c2f192054f867f"
+    },
+    {
+      "changed_slot_count": 916,
+      "file": "artifacts/data/train/sequence_000/segment_01.npz",
+      "file_sha256": "b45f95070f80c3f9f103c19934705402bc339f0f1a62a4b9c3f4b89d7b56b7bf",
+      "frame_range_inclusive": [
+        28,
+        55
+      ],
+      "scientific_content_hash": "2e89f257009ef60025bc18a88f261b3e093e11bf13b4be9634b0f59ab927d86e",
+      "seed": 34100001,
+      "segment_index": 1,
+      "synthetic_sequence_id": "synthetic/train/000",
+      "synthetic_sequence_index": 0,
+      "window_count": 24,
+      "world_content_identity": "c0af697cd4566933446fc58b5d45d3ab46396396b932d7023139d467927ddb3b",
+      "world_identity": "b0cb03d4694d816b58f5461deb6f35b74083a6d5aa0b179968805a7e4466ee6f"
+    },
+    {
+      "changed_slot_count": 26866,
+      "file": "artifacts/data/train/sequence_000/segment_02.npz",
+      "file_sha256": "6ce2bfee76f9afe7c80e61c0d06133c551e85c2acd9f197882a94f91da2e0e80",
+      "frame_range_inclusive": [
+        56,
+        83
+      ],
+      "scientific_content_hash": "cd5e56f9d6e90649b673a3c6046ff85362587077f0268a5e24d716905b7398a5",
+      "seed": 34100002,
+      "segment_index": 2,
+      "synthetic_sequence_id": "synthetic/train/000",
+      "synthetic_sequence_index": 0,
+      "window_count": 24,
+      "world_content_identity": "75c0466cfeb24f9048f47ec027e53f884c26e9deee7d3425a0c3866b984503bf",
+      "world_identity": "f0f97c3bc9b45533071c635a5e705b46a6a85a2b7bed9858ae9789cf8b052d77"
+    },
+    {
+      "changed_slot_count": 2614,
+      "file": "artifacts/data/train/sequence_000/segment_03.npz",
+      "file_sha256": "4ec812f9b036e40a0d8d3cbc904a16f014cdfff73c29ed6a71ffbf1a6d268a6c",
+      "frame_range_inclusive": [
+        84,
+        111
+      ],
+      "scientific_content_hash": "6e720e33ada19eec0cade92317e7bc95ea0520226e9ef174182aac419f752582",
+      "seed": 34100003,
+      "segment_index": 3,
+      "synthetic_sequence_id": "synthetic/train/000",
+      "synthetic_sequence_index": 0,
+      "window_count": 24,
+      "world_content_identity": "1b22490f8a3ee14505c33011d7e792ea177376b6a3d6773262ee7703e2426c88",
+      "world_identity": "cd37613b8b41cbe542110a289fde1ff3fdaa651cb4b76d9edad03c96f0949c5d"
+    },
+    {
+      "changed_slot_count": 14328,
+      "file": "artifacts/data/train/sequence_000/segment_04.npz",
+      "file_sha256": "b8f9c554bb31f201dc783ce1629f3533dacc19155b29b4cbbf06fe4e6e50967c",
+      "frame_range_inclusive": [
+        112,
+        139
+      ],
+      "scientific_content_hash": "87c3295a141530c6ee13bd06a137894db8c68817fba1e22cdc9f9c38de2553c8",
+      "seed": 34100004,
+      "segment_index": 4,
+      "synthetic_sequence_id": "synthetic/train/000",
+      "synthetic_sequence_index": 0,
+      "window_count": 24,
+      "world_content_identity": "b97370bfd6e534aa0d013c505769f55705320b003da611d504b187c048badbe7",
+      "world_identity": "29474aa5d390cbbdf4d410b0d30768245c5a74145c0d6e4229e47aeadcbeb1ec"
+    },
+    {
+      "changed_slot_count": 5016,
+      "file": "artifacts/data/train/sequence_000/segment_05.npz",
+      "file_sha256": "80c6ecfa505d900c14e0d691fad726e89a1178b8690152d15a403efb7838a40d",
+      "frame_range_inclusive": [
+        140,
+        167
+      ],
+      "scientific_content_hash": "9d2ae0fbb870bbae428a246aa87248c1f64d313ac0abe038589118aa05bf6b2f",
+      "seed": 34100005,
+      "segment_index": 5,
+      "synthetic_sequence_id": "synthetic/train/000",
+      "synthetic_sequence_index": 0,
+      "window_count": 24,
+      "world_content_identity": "d85726567d975471dbd7b51eb2742e22cb8c32caaf5499ed3d7178786b086419",
+      "world_identity": "aa1ca4ccb9ca8ccb6e2c9108d4a1cf3eccc4daf515975e99c692f5d0cd292286"
+    },
+    {
+      "changed_slot_count": 5111,
+      "file": "artifacts/data/train/sequence_000/segment_06.npz",
+      "file_sha256": "4bf1cb4ba8312ca6f982ce071b9891cfc4bbc26ecf08b976f1c8a32892dd10c2",
+      "frame_range_inclusive": [
+        168,
+        195
+      ],
+      "scientific_content_hash": "db3e5cfc02fd9dd9f06d0c53e9e0f2a3274bc0f527745cc06f1d0abd228e504e",
+      "seed": 34100006,
+      "segment_index": 6,
+      "synthetic_sequence_id": "synthetic/train/000",
+      "synthetic_sequence_index": 0,
+      "window_count": 24,
+      "world_content_identity": "160d395cf7e2284d3f5e7f0c760275577c4120e551ab735203e595aec9c0a8d8",
+      "world_identity": "381e57438cb6d51f92c076f6b2836dadaceb1fb30ad903f79135d11ff268402b"
+    },
+    {
+      "changed_slot_count": 50716,
+      "file": "artifacts/data/train/sequence_000/segment_07.npz",
+      "file_sha256": "13f25f0dc4f7960f147ba0e099a97fb322a4a9eba80d9d4bda73c98206bd3def",
+      "frame_range_inclusive": [
+        196,
+        223
+      ],
+      "scientific_content_hash": "a8664e4e5944debf2cb8fd57bb69cce65f6b12dfd1190aa0b263393a5e4e6db1",
+      "seed": 34100007,
+      "segment_index": 7,
+      "synthetic_sequence_id": "synthetic/train/000",
+      "synthetic_sequence_index": 0,
+      "window_count": 24,
+      "world_content_identity": "3f79808f8f7f059fc1bac94816c045e00e3c671741b48f4fe2bb4bcf93cbc303",
+      "world_identity": "0c337c0c8f7135e5bc2ee3607bb6fc9e9cbbea4df57daeba4a12ac02e37f00cd"
+    },
+    {
+      "changed_slot_count": 8187,
+      "file": "artifacts/data/train/sequence_000/segment_08.npz",
+      "file_sha256": "7906e3c9ef174daa682952708b74d5010774607715175599e0019d8c474fb954",
+      "frame_range_inclusive": [
+        224,
+        251
+      ],
+      "scientific_content_hash": "6b0d465867c6fa2dd3050958f161416826c8275693acf5dc03db3c35051fff3f",
+      "seed": 34100008,
+      "segment_index": 8,
+      "synthetic_sequence_id": "synthetic/train/000",
+      "synthetic_sequence_index": 0,
+      "window_count": 24,
+      "world_content_identity": "bdd83fd599fe49baf82d2ed362c37de65f7faf8abe7261bf36bb1654896d811e",
+      "world_identity": "be7d5a3e27c79d0b591f2b9deef6fa01095b86cf1d7e72257e3cdb0ec2145d3d"
+    },
+    {
+      "changed_slot_count": 12250,
+      "file": "artifacts/data/train/sequence_000/segment_09.npz",
+      "file_sha256": "1a8dbc1152a00ef2dbad01b8d6115ebdb36972130eacc39b9013b6ce4908589d",
+      "frame_range_inclusive": [
+        252,
+        279
+      ],
+      "scientific_content_hash": "cc075b877c69d3da6bc12c89c6fa2d8da28e8906d9bd5f4adebaac1676483b1c",
+      "seed": 34100009,
+      "segment_index": 9,
+      "synthetic_sequence_id": "synthetic/train/000",
+      "synthetic_sequence_index": 0,
+      "window_count": 24,
+      "world_content_identity": "2a56465a26daeff2533aa2423317af6c3d9fd2a38878748183326215abdbd316",
+      "world_identity": "206413e0a9ac8a250b82721e9c49638e564fdbb16100a8b7d000deb54791d1b6"
+    },
+    {
+      "changed_slot_count": 40174,
+      "file": "artifacts/data/train/sequence_000/segment_10.npz",
+      "file_sha256": "d7ae9a7dce7c1edcba57327dce0641102c1ecfdc3b113604cd4f8a87f4897944",
+      "frame_range_inclusive": [
+        280,
+        307
+      ],
+      "scientific_content_hash": "0f9e8c659afa56e765d58d19a31ad75f9dc7adec7a51ae96d09a64fd3eac916f",
+      "seed": 34100010,
+      "segment_index": 10,
+      "synthetic_sequence_id": "synthetic/train/000",
+      "synthetic_sequence_index": 0,
+      "window_count": 24,
+      "world_content_identity": "4759e4030050686310c7e68b302d16cf00aecdcc64aba2600ff0bd15872dd56e",
+      "world_identity": "863934b8736278f912d3d5aeaf035b44d064a13e9c377eb9390aae61a22166fa"
+    },
+    {
+      "changed_slot_count": 21739,
+      "file": "artifacts/data/train/sequence_000/segment_11.npz",
+      "file_sha256": "77b88da940ec923026705bcb75608b17f84f56e04b041ebcfb9b1bdec1bc6988",
+      "frame_range_inclusive": [
+        308,
+        335
+      ],
+      "scientific_content_hash": "49b00d36c100d800a16a360db476ba379adaf08827a7c805939a90d9d6b5c7c9",
+      "seed": 34100011,
+      "segment_index": 11,
+      "synthetic_sequence_id": "synthetic/train/000",
+      "synthetic_sequence_index": 0,
+      "window_count": 24,
+      "world_content_identity": "0f4a6b3eb3ec764bc0cd0cb14324a63993a2e5ffe76c84921a3045c9cb68b4e1",
+      "world_identity": "989d1f7ad084e7089c1dacbed5bbc4a6697b7479d38fe945508dd8a04f45032a"
+    },
+    {
+      "changed_slot_count": 25823,
+      "file": "artifacts/data/train/sequence_000/segment_12.npz",
+      "file_sha256": "9d796a1fbe02a1a0a1460880e8217e82b7fd1ebe727dc36226d8fb8e5ff41404",
+      "frame_range_inclusive": [
+        336,
+        363
+      ],
+      "scientific_content_hash": "632dbe0d68f59e175c4f133d9c900421d95c2b44b9cabd4fa816b95d2be75bc3",
+      "seed": 34100012,
+      "segment_index": 12,
+      "synthetic_sequence_id": "synthetic/train/000",
+      "synthetic_sequence_index": 0,
+      "window_count": 24,
+      "world_content_identity": "ca962aa4b5b141aeef7dea237eb71a443b5e5005f237166cdfed5f878c2afb78",
+      "world_identity": "ba3495055db95bbb3cf2388866fa7de9bfa3b46003afff1024e521531c60e428"
+    },
+    {
+      "changed_slot_count": 54504,
+      "file": "artifacts/data/train/sequence_000/segment_13.npz",
+      "file_sha256": "f40b21e95529993889722a09627ffb5feeca44bd211ccb75473481485c6ebbe4",
+      "frame_range_inclusive": [
+        364,
+        391
+      ],
+      "scientific_content_hash": "5d01f5aa82a04785b76c299bdcd4a97405976bb04feee217d1d9dc8af8c69e0e",
+      "seed": 34100013,
+      "segment_index": 13,
+      "synthetic_sequence_id": "synthetic/train/000",
+      "synthetic_sequence_index": 0,
+      "window_count": 24,
+      "world_content_identity": "d1642d88cdddfcc3b6248d56cf3ab5bf23078c9aeafba344cce91a7b5cbad390",
+      "world_identity": "e62fd62c240449d026c126c3fe6051fa11b42494e31aa515f80e34705809da38"
+    },
+    {
+      "changed_slot_count": 32808,
+      "file": "artifacts/data/train/sequence_000/segment_14.npz",
+      "file_sha256": "2952bcfd7328ac2ee48365769f523716f2178ee5995d0200a74547de14846b41",
+      "frame_range_inclusive": [
+        392,
+        419
+      ],
+      "scientific_content_hash": "061266240df31114722b37e27c19244980bf94a5f91c33f1617a6c6b545ffc4b",
+      "seed": 34100014,
+      "segment_index": 14,
+      "synthetic_sequence_id": "synthetic/train/000",
+      "synthetic_sequence_index": 0,
+      "window_count": 24,
+      "world_content_identity": "a73f13541f9d245d313c04fbb424496124cbb663dba7a022bea1b1ec9bd4c8c4",
+      "world_identity": "96d301f613b46b926404a6aa365fad1b1d9beee8a8168df043c0aedbffe82c26"
+    },
+    {
+      "changed_slot_count": 74830,
+      "file": "artifacts/data/train/sequence_000/segment_15.npz",
+      "file_sha256": "0e44aa6f1511caf3dad8278dc8a35e90b0efada1d37819524010808029c821ba",
+      "frame_range_inclusive": [
+        420,
+        448
+      ],
+      "scientific_content_hash": "fde17c1f14b8fa3deadec2fddeaedcdb8fc232497e13cbc99d12053cc916f3d8",
+      "seed": 34100015,
+      "segment_index": 15,
+      "synthetic_sequence_id": "synthetic/train/000",
+      "synthetic_sequence_index": 0,
+      "window_count": 25,
+      "world_content_identity": "0a99eab2e1cfbd6b9c81a7f2f4b7a27c5fd30f67e49d1a279fd00734fd66ab73",
+      "world_identity": "7a4dc45b8649f521579eedd59dfb241ba123c28565e946c7a8b1b5dbb1198960"
+    },
+    {
+      "changed_slot_count": 190,
+      "file": "artifacts/data/train/sequence_001/segment_00.npz",
+      "file_sha256": "91da65a456f9f92afb7ea8d5226acf4445625c2063dabe345ceec99de9075783",
+      "frame_range_inclusive": [
+        0,
+        27
+      ],
+      "scientific_content_hash": "366047f3d72b70754cde34b40fa09ecd2fa4cd86ec5117c6527008a2615e131d",
+      "seed": 34101000,
+      "segment_index": 0,
+      "synthetic_sequence_id": "synthetic/train/001",
+      "synthetic_sequence_index": 1,
+      "window_count": 24,
+      "world_content_identity": "3bdf4a7d315a15483c151b6762092ebf9289f95d87750d7ea8e3fe34bb364349",
+      "world_identity": "e34606f8f05ba0a9b337de8a9b78711afc4df1b0ca84c684e66153b3594a303d"
+    },
+    {
+      "changed_slot_count": 18548,
+      "file": "artifacts/data/train/sequence_001/segment_01.npz",
+      "file_sha256": "f4b44ed7e26beb0e08ef79d5c1b734996c9dcc6baccbfac08ba048b467093622",
+      "frame_range_inclusive": [
+        28,
+        55
+      ],
+      "scientific_content_hash": "6fc99e472eb49fca8b3fbd55fc02bde2056308ba4751b79518f6d3cef841dd14",
+      "seed": 34101001,
+      "segment_index": 1,
+      "synthetic_sequence_id": "synthetic/train/001",
+      "synthetic_sequence_index": 1,
+      "window_count": 24,
+      "world_content_identity": "19990d5d1830a42e1b175ed8eff1d95b7e0df5f3cfc9e8fc9401c04a01e5dccb",
+      "world_identity": "b0cf79ae6c730aecd967fa39a8f0f34fde3be771b112d1fb1568435fd9a87f6f"
+    },
+    {
+      "changed_slot_count": 4326,
+      "file": "artifacts/data/train/sequence_001/segment_02.npz",
+      "file_sha256": "e2237d44cc0e2a6873e8cb4bedece07583df7272dc4181217f6d5af5d3336349",
+      "frame_range_inclusive": [
+        56,
+        83
+      ],
+      "scientific_content_hash": "d11008ad9eca2adbd20f0d5066bd2c80d35721440acab7d7984616c2da3bcffc",
+      "seed": 34101002,
+      "segment_index": 2,
+      "synthetic_sequence_id": "synthetic/train/001",
+      "synthetic_sequence_index": 1,
+      "window_count": 24,
+      "world_content_identity": "cec0d527dded1140b6da4e5c745a7ee422cac1ea7c8a9430c7ace47ff21d892e",
+      "world_identity": "2c6968537ddf8f7b043f9ad2d101824ccf8270ddc763dab9577376daaeb0861c"
+    },
+    {
+      "changed_slot_count": 869,
+      "file": "artifacts/data/train/sequence_001/segment_03.npz",
+      "file_sha256": "a884e63957eae94f947c4d68b69a51bd7ac4bfebeee358c2d6b70c0334835f2e",
+      "frame_range_inclusive": [
+        84,
+        111
+      ],
+      "scientific_content_hash": "b25b8419363f4ff5c6f2f56d8bd96dcc43edd3048b350b8f05cf802a82f7e6db",
+      "seed": 34101003,
+      "segment_index": 3,
+      "synthetic_sequence_id": "synthetic/train/001",
+      "synthetic_sequence_index": 1,
+      "window_count": 24,
+      "world_content_identity": "4de659910f39c9346474c674ccb0fe4eefca8addd848e0070ef423739f0919b5",
+      "world_identity": "17a8ac8edbfaac830422e15a5900c0332938ab32defc8b7fdbe5f79796a3bc7c"
+    },
+    {
+      "changed_slot_count": 13198,
+      "file": "artifacts/data/train/sequence_001/segment_04.npz",
+      "file_sha256": "69e13f3afc260e0ae024c231df0c2488c156d7c70465dc3a1652b2ccdfaafdf9",
+      "frame_range_inclusive": [
+        112,
+        139
+      ],
+      "scientific_content_hash": "3945b9b7b55d6fedc8f029355da6068880dfca464bef562b418d7568b6ca7d71",
+      "seed": 34101004,
+      "segment_index": 4,
+      "synthetic_sequence_id": "synthetic/train/001",
+      "synthetic_sequence_index": 1,
+      "window_count": 24,
+      "world_content_identity": "937c5854cad6d5cea110b04a11dd95287053f89749c5a01a53ddb3d0ddca11c7",
+      "world_identity": "434587e3f5eabc8c44edbf37ecbcce6b971f76732d3db141b5a2d62db3e9fd74"
+    },
+    {
+      "changed_slot_count": 4889,
+      "file": "artifacts/data/train/sequence_001/segment_05.npz",
+      "file_sha256": "4816c4969fbf00b1d3c0d06f668fa7ea41135bc305724a90386c824a5daf896a",
+      "frame_range_inclusive": [
+        140,
+        167
+      ],
+      "scientific_content_hash": "d503653359e141fa1c2a5e1ad2a30369b07f82ebca6d9f65834616a61265059e",
+      "seed": 34101005,
+      "segment_index": 5,
+      "synthetic_sequence_id": "synthetic/train/001",
+      "synthetic_sequence_index": 1,
+      "window_count": 24,
+      "world_content_identity": "f145343f2e03de9daf5b9a8e57d5524f83518c1fe5dca25f3f515e5b9ba1a1fc",
+      "world_identity": "dcff7f41e60b6bd375c5a3a29e7b200f29c993dbdf15d146a3524e49603dc9ab"
+    },
+    {
+      "changed_slot_count": 2728,
+      "file": "artifacts/data/train/sequence_001/segment_06.npz",
+      "file_sha256": "9de4ac8cc10310b2adb138d64f9aa0d2717fd35625e48fe1b7f2e53588f7a28d",
+      "frame_range_inclusive": [
+        168,
+        195
+      ],
+      "scientific_content_hash": "2dda920eb6bda5faf33ba696525030cbd72c883337dfa50902bea4ff8de61282",
+      "seed": 34101006,
+      "segment_index": 6,
+      "synthetic_sequence_id": "synthetic/train/001",
+      "synthetic_sequence_index": 1,
+      "window_count": 24,
+      "world_content_identity": "4f5fc5b873317b496f5f2a15692bbd59783820a92d2a6b8f2260eccd367f16d5",
+      "world_identity": "0beafb561fdb681c7605670d4553842dee0c8ba55061c475fb48d66370f4f259"
+    },
+    {
+      "changed_slot_count": 10257,
+      "file": "artifacts/data/train/sequence_001/segment_07.npz",
+      "file_sha256": "3af8decf0d1f656617f3b61646da14048015ed11343ab77d4d789d79a67ca382",
+      "frame_range_inclusive": [
+        196,
+        223
+      ],
+      "scientific_content_hash": "4f7c26e3a4b661b131d0b5574612c7f651a39b72f7f5ed412f6b2cbfd196e191",
+      "seed": 34101007,
+      "segment_index": 7,
+      "synthetic_sequence_id": "synthetic/train/001",
+      "synthetic_sequence_index": 1,
+      "window_count": 24,
+      "world_content_identity": "54d595b6df2ba56b4dfdf87baf4ffd0a8cb661c9dab8db9e6f269dc731d3155e",
+      "world_identity": "8393c69894b8fda52d55f825aed8817a7794a5ab88a09ebab6859200846b974e"
+    },
+    {
+      "changed_slot_count": 15999,
+      "file": "artifacts/data/train/sequence_001/segment_08.npz",
+      "file_sha256": "ea283ca14680a0152992af2a27e87981b5e2631dd7e313cc12a52862d968b356",
+      "frame_range_inclusive": [
+        224,
+        251
+      ],
+      "scientific_content_hash": "c9f15fef5873c79a2dd8aaec31f2cca20665ff40e6473dc22bb84452b6dcbdd8",
+      "seed": 34101008,
+      "segment_index": 8,
+      "synthetic_sequence_id": "synthetic/train/001",
+      "synthetic_sequence_index": 1,
+      "window_count": 24,
+      "world_content_identity": "d4b7b20c9028262cd5b0ed97cb9429b9843e6e5a5811c055dcdfe6dc957a52f3",
+      "world_identity": "6a2f5a7d18157a9b6edf4a3f4f88330595dab054ace7247c5b61865eb0406f71"
+    },
+    {
+      "changed_slot_count": 29643,
+      "file": "artifacts/data/train/sequence_001/segment_09.npz",
+      "file_sha256": "e065374d14623d4f8410c62808f1c20fdf4036547a848d472e362f162ed2b6b6",
+      "frame_range_inclusive": [
+        252,
+        279
+      ],
+      "scientific_content_hash": "871cd3117fde6de097cbd5228e6b25ba3b552690beed744ae3bcff28b526bdf6",
+      "seed": 34101009,
+      "segment_index": 9,
+      "synthetic_sequence_id": "synthetic/train/001",
+      "synthetic_sequence_index": 1,
+      "window_count": 24,
+      "world_content_identity": "e9315f1aeae4fa7d68eee865e084703f9a44f350aaeb06d8c771b756b6c2fe4f",
+      "world_identity": "e611065431bb47f2e76e5fa456901a5785c77030a8e41eb0541b0dad3a151b11"
+    },
+    {
+      "changed_slot_count": 5805,
+      "file": "artifacts/data/train/sequence_001/segment_10.npz",
+      "file_sha256": "ad36487d01fcd8639e2d0903caa9320a589be1fb4229870f9b16b8810a6a5753",
+      "frame_range_inclusive": [
+        280,
+        307
+      ],
+      "scientific_content_hash": "43d233a9242e74a8558403273c0a67ae9b4bd4046d02000f09c695e02bef1c1d",
+      "seed": 34101010,
+      "segment_index": 10,
+      "synthetic_sequence_id": "synthetic/train/001",
+      "synthetic_sequence_index": 1,
+      "window_count": 24,
+      "world_content_identity": "4b4e6b151649b91328b997983146a152529a2424cbcc282a21bea94f80b7b031",
+      "world_identity": "fb7b486e55b425360062dcd5cbea955a06c2602919ad0d8a5bd2e7fdada8cf06"
+    },
+    {
+      "changed_slot_count": 21521,
+      "file": "artifacts/data/train/sequence_001/segment_11.npz",
+      "file_sha256": "1a56ee4b065d70fb456ba6099d2e5ab8861672e414a42bce1afd5ff420687e68",
+      "frame_range_inclusive": [
+        308,
+        335
+      ],
+      "scientific_content_hash": "85e93be71e64327f6bba256278ed2b14d04806e346e7a2fd8cbddbb22d5a649b",
+      "seed": 34101011,
+      "segment_index": 11,
+      "synthetic_sequence_id": "synthetic/train/001",
+      "synthetic_sequence_index": 1,
+      "window_count": 24,
+      "world_content_identity": "d70b58ebdb0987b80fb15c90b71ae0fd593d7230613e5325cae323d42d16f50f",
+      "world_identity": "cfc8ea032195ed2fa1b0ab4a32cc901f02be264ea72884756f8e86ba739e07de"
+    },
+    {
+      "changed_slot_count": 5788,
+      "file": "artifacts/data/train/sequence_001/segment_12.npz",
+      "file_sha256": "8a1deef2fbd4341bfad72d74de2e0bee2c1e2e3265f8b1ccdf3e475c572e3988",
+      "frame_range_inclusive": [
+        336,
+        363
+      ],
+      "scientific_content_hash": "b533d1893b45c79f472fbab46594a92f190b2c8e8562acde8f01daba366e76d4",
+      "seed": 34101012,
+      "segment_index": 12,
+      "synthetic_sequence_id": "synthetic/train/001",
+      "synthetic_sequence_index": 1,
+      "window_count": 24,
+      "world_content_identity": "99ada9da61b0d9c8e8214799e777037a21e86b9877482d8214f5e3c8ed27276f",
+      "world_identity": "b8665f2499b3f0d53cad9d4546b7e658c31ce69703887860736f74992f7c6557"
+    },
+    {
+      "changed_slot_count": 20480,
+      "file": "artifacts/data/train/sequence_001/segment_13.npz",
+      "file_sha256": "b0cb1ed9d01106523712c222a4aca2f380fd0e81fe5cb76fd1b9204f5ff2e00e",
+      "frame_range_inclusive": [
+        364,
+        391
+      ],
+      "scientific_content_hash": "bb54da100246cf5140e3c96d7557c9bced460e4456434779d8e41633f1335783",
+      "seed": 34101013,
+      "segment_index": 13,
+      "synthetic_sequence_id": "synthetic/train/001",
+      "synthetic_sequence_index": 1,
+      "window_count": 24,
+      "world_content_identity": "a91844247df765f50a186dbae940d0ed51cc5608e5384db3ac2152193e8b3f8e",
+      "world_identity": "b344381b72c5b915b184951bfd972163480c0eceee777d8429d247d9766fbbe0"
+    },
+    {
+      "changed_slot_count": 10650,
+      "file": "artifacts/data/train/sequence_001/segment_14.npz",
+      "file_sha256": "b52bd24a3488308924debd09010e7f109cda751544210fcb7333de64d302debc",
+      "frame_range_inclusive": [
+        392,
+        419
+      ],
+      "scientific_content_hash": "2bfe63b39c22fd31943730b4833f11774d0a9d43f7cfa3a394a9d965354783e5",
+      "seed": 34101014,
+      "segment_index": 14,
+      "synthetic_sequence_id": "synthetic/train/001",
+      "synthetic_sequence_index": 1,
+      "window_count": 24,
+      "world_content_identity": "6890b1f88318c42cc15eb52fd69b03def8ecd890ec81bcb8158fd518e76dc7e0",
+      "world_identity": "d3d39978577622762ed8c659722c89590033a199ef9b941e563651ab1af57ce5"
+    },
+    {
+      "changed_slot_count": 45542,
+      "file": "artifacts/data/train/sequence_001/segment_15.npz",
+      "file_sha256": "1d8ba1a995ab5b3f73d0644a99e22db2ab792fa22d3972152e9c7a98799aa010",
+      "frame_range_inclusive": [
+        420,
+        448
+      ],
+      "scientific_content_hash": "162c23f6f8b0d91fccdb9bd70cdb313bab24687bac90a842606dd89f8029e08a",
+      "seed": 34101015,
+      "segment_index": 15,
+      "synthetic_sequence_id": "synthetic/train/001",
+      "synthetic_sequence_index": 1,
+      "window_count": 25,
+      "world_content_identity": "9665d8b133fbc9477b085188c24f2491ebdbc3f333862b5fce285258b27cfa77",
+      "world_identity": "01819a5b493e39ac6ba4a2a89b3c95fdeafd5467d9a0f8ae1a6495fe00249fa8"
+    },
+    {
+      "changed_slot_count": 951,
+      "file": "artifacts/data/train/sequence_002/segment_00.npz",
+      "file_sha256": "48c62401210a38e42939ef95e18e27dec3f145ffa175746637da345b40255469",
+      "frame_range_inclusive": [
+        0,
+        27
+      ],
+      "scientific_content_hash": "9d619fc0640f783247771ac85cb90beaf1cd43ba975ad1dd91d02bfc1ef80f43",
+      "seed": 34102000,
+      "segment_index": 0,
+      "synthetic_sequence_id": "synthetic/train/002",
+      "synthetic_sequence_index": 2,
+      "window_count": 24,
+      "world_content_identity": "985d7ddc4807bbd4156081696fc9abdfc89ef33914f27a07d90a6cdbd3d4d017",
+      "world_identity": "99b3bd78b412ac7882afbcc946a295c1a52933e095878f84ae6a1027f36a6a8b"
+    },
+    {
+      "changed_slot_count": 34865,
+      "file": "artifacts/data/train/sequence_002/segment_01.npz",
+      "file_sha256": "51c39a555e9d764ebe89f70559e7ad1218d33e4de851c18c6ff1d2c601ab988e",
+      "frame_range_inclusive": [
+        28,
+        55
+      ],
+      "scientific_content_hash": "df24263b9aa757ef7eecd9510e44faa4f677a38e2ca0b1c81462f1216d399140",
+      "seed": 34102001,
+      "segment_index": 1,
+      "synthetic_sequence_id": "synthetic/train/002",
+      "synthetic_sequence_index": 2,
+      "window_count": 24,
+      "world_content_identity": "3750ed6ea8c78219a58de730f703f1e37dee1c80f6eaa4eb4f5c0d45c69d3240",
+      "world_identity": "72d0dbf225b067031a71d2f234348fc11e37ffdd4805866958c9db17658125f5"
+    },
+    {
+      "changed_slot_count": 779,
+      "file": "artifacts/data/train/sequence_002/segment_02.npz",
+      "file_sha256": "0049149558739f80007eba8441aa7c7291adf6c3f5753164df12f5e54268a5d1",
+      "frame_range_inclusive": [
+        56,
+        83
+      ],
+      "scientific_content_hash": "0fb5d4537d4659dd38333984c7ba36835961374eb973efca866d682ae1362afd",
+      "seed": 34102002,
+      "segment_index": 2,
+      "synthetic_sequence_id": "synthetic/train/002",
+      "synthetic_sequence_index": 2,
+      "window_count": 24,
+      "world_content_identity": "4f22d01b87a1a978bc9597cf93ec093cf4e7ff2cc5c43f482c69f6c7d8dabc0c",
+      "world_identity": "0c4ee844384b783fc2b7538a6e18fed572cc9be1f693c7814ac88e243b1f54d5"
+    },
+    {
+      "changed_slot_count": 1251,
+      "file": "artifacts/data/train/sequence_002/segment_03.npz",
+      "file_sha256": "8f2ece434ee4eea91408845fafcb0f917dcc64ba891bfe43a020889d97878af4",
+      "frame_range_inclusive": [
+        84,
+        111
+      ],
+      "scientific_content_hash": "de4a22bbe26409ae60a091b76eeeb0bee689b0b3ff52d2593c0e863366a5ac29",
+      "seed": 34102003,
+      "segment_index": 3,
+      "synthetic_sequence_id": "synthetic/train/002",
+      "synthetic_sequence_index": 2,
+      "window_count": 24,
+      "world_content_identity": "229833d25ee26840051ee804b84f4dc55ffd882d0a730b5659772df4484f36be",
+      "world_identity": "5181aee9547b78fa476f70db0278f3e344371013ca851467dc9a7aabac2756be"
+    },
+    {
+      "changed_slot_count": 14774,
+      "file": "artifacts/data/train/sequence_002/segment_04.npz",
+      "file_sha256": "6f7aaa7cf70daf160e48cd61d1bb64a531e5ea8d1fe0774586984920285b7f5f",
+      "frame_range_inclusive": [
+        112,
+        139
+      ],
+      "scientific_content_hash": "3fcc32eae2ceed84d2cc9f80e933cbe96807454f2eda6ea92936271fb538a135",
+      "seed": 34102004,
+      "segment_index": 4,
+      "synthetic_sequence_id": "synthetic/train/002",
+      "synthetic_sequence_index": 2,
+      "window_count": 24,
+      "world_content_identity": "83d6907238354c326a1f8c2cb7a4f776e462817d4de0b681a9ce688877d025ab",
+      "world_identity": "d2f40979bfe07c3f532dd8d90f37ce1b71baed42874167a3bcbc542b040b26fe"
+    },
+    {
+      "changed_slot_count": 9375,
+      "file": "artifacts/data/train/sequence_002/segment_05.npz",
+      "file_sha256": "5892d22973e0f3bf3927b9c8f34397e087a2fb09e4cf8bd40215b37d43262cf0",
+      "frame_range_inclusive": [
+        140,
+        167
+      ],
+      "scientific_content_hash": "531c752052edb1ddd0c2d8bca098889acd01cc7378a41a382bd3e13b919efd96",
+      "seed": 34102005,
+      "segment_index": 5,
+      "synthetic_sequence_id": "synthetic/train/002",
+      "synthetic_sequence_index": 2,
+      "window_count": 24,
+      "world_content_identity": "427e57b9b75b320145e6812c272b4e3724b7a364f96ca2754a2b9c7bed186c48",
+      "world_identity": "4d3c726bcedfb8da235ced2de3e03f02f8038348591bd2ecd9fc48e2953379d4"
+    },
+    {
+      "changed_slot_count": 7116,
+      "file": "artifacts/data/train/sequence_002/segment_06.npz",
+      "file_sha256": "d23c8bb5a8cd0b290a0ea3d265eec37f3d6920917f24af95e9645705d7ebe111",
+      "frame_range_inclusive": [
+        168,
+        195
+      ],
+      "scientific_content_hash": "4e0d2d0c3449c0c6989693f71866a0e66bc7e3f4d437797f7f8054f19a5b38eb",
+      "seed": 34102006,
+      "segment_index": 6,
+      "synthetic_sequence_id": "synthetic/train/002",
+      "synthetic_sequence_index": 2,
+      "window_count": 24,
+      "world_content_identity": "fc1dc77a37cb5e622bc6a04333ebca823d82231968c48ec30d5fb70809848465",
+      "world_identity": "e38a21c3398a9391fd67cf2f8b3e8c0d7372bd8228357a8aa3e9897669ddf67d"
+    },
+    {
+      "changed_slot_count": 102243,
+      "file": "artifacts/data/train/sequence_002/segment_07.npz",
+      "file_sha256": "e4cdea59514f648cd6c19adc7d18f4fcf3b674d49c456e60d37db5cb4dd835da",
+      "frame_range_inclusive": [
+        196,
+        223
+      ],
+      "scientific_content_hash": "f1f0ae92b1730478665279d3fd6217cd983517d0eb676277c6e9d4946c9d0168",
+      "seed": 34102007,
+      "segment_index": 7,
+      "synthetic_sequence_id": "synthetic/train/002",
+      "synthetic_sequence_index": 2,
+      "window_count": 24,
+      "world_content_identity": "4e94d72d7b4306da27b7f5fda1816949009500a1eea1623441a7c7a338e1691d",
+      "world_identity": "9c5ae87f02d07a8636da0ffc460bf6995ea35f7d68f48972d86caf8c612047f1"
+    },
+    {
+      "changed_slot_count": 3172,
+      "file": "artifacts/data/train/sequence_002/segment_08.npz",
+      "file_sha256": "8a7b4c6bdde65cd4fc1e25996a0686ccbfb24cf5ba1f4ebfe4ca1bc934e0d809",
+      "frame_range_inclusive": [
+        224,
+        251
+      ],
+      "scientific_content_hash": "1db5166e2ca7c1bac620513427b54c82d2ae0b1b35654c1832ffc5a080890347",
+      "seed": 34102008,
+      "segment_index": 8,
+      "synthetic_sequence_id": "synthetic/train/002",
+      "synthetic_sequence_index": 2,
+      "window_count": 24,
+      "world_content_identity": "96cef793501c9c0526f8f7c197f533b68d76b8651d6198ad7b18ac84e42ca9ea",
+      "world_identity": "bacd42c57397cb472ddc5ef33b1fa7fd052889a0c9d3a5f7b3828c8bb73ca8ab"
+    },
+    {
+      "changed_slot_count": 5402,
+      "file": "artifacts/data/train/sequence_002/segment_09.npz",
+      "file_sha256": "642c5bcd2fe3be3f4cf1ce4de132acc62a9e4cf4e17d4cad5922a0e51ed3bcfc",
+      "frame_range_inclusive": [
+        252,
+        279
+      ],
+      "scientific_content_hash": "5b7b1a26910442f4bb2c03cb7033289b6e670efc0615d36ed4c739a9432bf8d0",
+      "seed": 34102009,
+      "segment_index": 9,
+      "synthetic_sequence_id": "synthetic/train/002",
+      "synthetic_sequence_index": 2,
+      "window_count": 24,
+      "world_content_identity": "1ed8801da0402ae099c2bd4054b41ed7f93af70b563465e90efa3e8c53797086",
+      "world_identity": "144561c918b3bc0112e5c79a62c06b7e325bdc41d0502fcfda440315698ec6cb"
+    },
+    {
+      "changed_slot_count": 13169,
+      "file": "artifacts/data/train/sequence_002/segment_10.npz",
+      "file_sha256": "2d342aa0a8c62cba9a00e87cb6fe0ce7de359499876cef92fe6292bc14e7aa2e",
+      "frame_range_inclusive": [
+        280,
+        307
+      ],
+      "scientific_content_hash": "6acb81ffad185fbabb9b3e47e16030c2d37115e0555278598ce10fd3970aa3fb",
+      "seed": 34102010,
+      "segment_index": 10,
+      "synthetic_sequence_id": "synthetic/train/002",
+      "synthetic_sequence_index": 2,
+      "window_count": 24,
+      "world_content_identity": "faf91ad9eeca3c7e929a68f4a6b9d056798dcb7372a0b715df694a6114233647",
+      "world_identity": "6366288c70eb0516452fa683768a85fc6ea3ab0b0f30ee4483728817efc79a32"
+    },
+    {
+      "changed_slot_count": 68146,
+      "file": "artifacts/data/train/sequence_002/segment_11.npz",
+      "file_sha256": "57aaf27ec4b311c80bfa569862ae4c191b3fbbbbc48c4142fde21e754cc490d5",
+      "frame_range_inclusive": [
+        308,
+        335
+      ],
+      "scientific_content_hash": "85d2096c6795dd854d211d2bb125f10b866471fa846409da013793018f588bbe",
+      "seed": 34102011,
+      "segment_index": 11,
+      "synthetic_sequence_id": "synthetic/train/002",
+      "synthetic_sequence_index": 2,
+      "window_count": 24,
+      "world_content_identity": "e31430194bc8546ec9c01243ec02b9cd2eef3d159752664b8fa2d464dfbce2f2",
+      "world_identity": "ec8dc7038ab1839a2ae9d5fa2e68982dcc9e7e9e0365faa7d5a3f6a54165bf69"
+    },
+    {
+      "changed_slot_count": 12456,
+      "file": "artifacts/data/train/sequence_002/segment_12.npz",
+      "file_sha256": "49a03192b75ddc70e30f6b9a721ecf69be7961ef37e8a38c43337fb28f04b3e4",
+      "frame_range_inclusive": [
+        336,
+        363
+      ],
+      "scientific_content_hash": "048bae266ba9bd525456332940c88fe44bf14b14d371113a181f466a61c9d260",
+      "seed": 34102012,
+      "segment_index": 12,
+      "synthetic_sequence_id": "synthetic/train/002",
+      "synthetic_sequence_index": 2,
+      "window_count": 24,
+      "world_content_identity": "fa55de009113a6f78b121f3c6cf0c9d28b7dad7c4dedd34f141092b903dcd431",
+      "world_identity": "53174360208a25ac521d7e1b6adcbc3972d94b829b571fc9ac63317d4c1e3e80"
+    },
+    {
+      "changed_slot_count": 4529,
+      "file": "artifacts/data/train/sequence_002/segment_13.npz",
+      "file_sha256": "5cccbae292ade1cbb21625a8b29e7fab7080cdc2dbe10de157dcd34763b7ac3e",
+      "frame_range_inclusive": [
+        364,
+        391
+      ],
+      "scientific_content_hash": "d6ef3f13e06a07bd3b36092fbb579ab4c8dbd4eba04dfb0c094a007453754a12",
+      "seed": 34102013,
+      "segment_index": 13,
+      "synthetic_sequence_id": "synthetic/train/002",
+      "synthetic_sequence_index": 2,
+      "window_count": 24,
+      "world_content_identity": "ed25be77d2b2a8f39c497366cbb7884f877e436fbb6078ad1933f1cd3c1e4b0c",
+      "world_identity": "91e2ddddbf5e8df35d171d5c789def159b3ff0b969d5fa14a2c316d39464b61c"
+    },
+    {
+      "changed_slot_count": 2286,
+      "file": "artifacts/data/train/sequence_002/segment_14.npz",
+      "file_sha256": "6791c5741deac21664c762213bb72b39261b17585c8feed34b3ded7736034a52",
+      "frame_range_inclusive": [
+        392,
+        419
+      ],
+      "scientific_content_hash": "475b4aed3db0c66eb32c226a1d07f965190ec8af4750d71b5071a942a8383e05",
+      "seed": 34102014,
+      "segment_index": 14,
+      "synthetic_sequence_id": "synthetic/train/002",
+      "synthetic_sequence_index": 2,
+      "window_count": 24,
+      "world_content_identity": "bf898f31873a56f2e8c2ab69f40fef7cbfe0804213e21c24c1bd868d02349a5a",
+      "world_identity": "07710e8df26a90054a5ce1e77ca580a657bee5b554515e41764a1853e5a15fcb"
+    },
+    {
+      "changed_slot_count": 14429,
+      "file": "artifacts/data/train/sequence_002/segment_15.npz",
+      "file_sha256": "5dba1f94545652398423c751e2fc14ed372b506cd71089d3ea6048012926d9c1",
+      "frame_range_inclusive": [
+        420,
+        448
+      ],
+      "scientific_content_hash": "8890de63b4111d96affdd30f0818b756d4d1354dc41b472615b04e7dae562ad3",
+      "seed": 34102015,
+      "segment_index": 15,
+      "synthetic_sequence_id": "synthetic/train/002",
+      "synthetic_sequence_index": 2,
+      "window_count": 25,
+      "world_content_identity": "4b57668e2b8c95ade63d56c2c219e83228669010cd3af5df6e7eed41a975fb46",
+      "world_identity": "ec0ab026a642ea7143d6cf7575923b12112b686f47b29abce5241b025ebc7144"
+    },
+    {
+      "changed_slot_count": 91565,
+      "file": "artifacts/data/train/sequence_003/segment_00.npz",
+      "file_sha256": "b18f40c2219ad86e155e6b20563beaa3a4a794fb8d80da45e227cd5e5527a829",
+      "frame_range_inclusive": [
+        0,
+        27
+      ],
+      "scientific_content_hash": "3390afa5d370c7ebb474f6ef337e3e1cde85094448edb8ec26a553f611795ace",
+      "seed": 34103000,
+      "segment_index": 0,
+      "synthetic_sequence_id": "synthetic/train/003",
+      "synthetic_sequence_index": 3,
+      "window_count": 24,
+      "world_content_identity": "315d5b3d8321e3040c8a5231d63d473ee41dd52c9e82408485d7824f26519a6b",
+      "world_identity": "df0663a1cdd9cd41cec707cf489c8dd8dd5a49568a3932030a743fa2de575813"
+    },
+    {
+      "changed_slot_count": 18479,
+      "file": "artifacts/data/train/sequence_003/segment_01.npz",
+      "file_sha256": "9648d6217ece2ad8bfe8300851251d9d06d5f2427977d4471156fdc4a77a0693",
+      "frame_range_inclusive": [
+        28,
+        55
+      ],
+      "scientific_content_hash": "fe110dd720283bfe860862cf59115a4a69a8f8b7a4bb19969ab8155b0c1046d8",
+      "seed": 34103001,
+      "segment_index": 1,
+      "synthetic_sequence_id": "synthetic/train/003",
+      "synthetic_sequence_index": 3,
+      "window_count": 24,
+      "world_content_identity": "9b9697f60beb575eb2a9d2a72f5d5d72159e07e4e891b955cc070868089a4be4",
+      "world_identity": "496f9a91e5e44c47e946cc6b128221624ed906ceaa4dc6dc98ab2a04cc1ff729"
+    },
+    {
+      "changed_slot_count": 26179,
+      "file": "artifacts/data/train/sequence_003/segment_02.npz",
+      "file_sha256": "9e8cb110bde3a33540e6e22d49a8ab0446311eda2421ec2e803ab5ac8007ccd1",
+      "frame_range_inclusive": [
+        56,
+        83
+      ],
+      "scientific_content_hash": "200ece19f3c8f1a9d573b684e55e0e6cf08f7ff18c452062de32cc3d8473d5cc",
+      "seed": 34103002,
+      "segment_index": 2,
+      "synthetic_sequence_id": "synthetic/train/003",
+      "synthetic_sequence_index": 3,
+      "window_count": 24,
+      "world_content_identity": "e6aa9cadaad0311e4d1b7baff0c14592d1b3eb3657cae7f85d6f8faf7c976b64",
+      "world_identity": "64b09fe25a9be0b0495d06afb33216635d40ef9dc6eed6dd8358595f66fe8ffa"
+    },
+    {
+      "changed_slot_count": 141502,
+      "file": "artifacts/data/train/sequence_003/segment_03.npz",
+      "file_sha256": "058ff9966a9dd3b499059b0aab1bbf7193bb5cc6f28e878450ee80911426bd15",
+      "frame_range_inclusive": [
+        84,
+        111
+      ],
+      "scientific_content_hash": "9aabea4dbe3f7f983df1d28fc724c01ffb683a5d19ca8f9bebb78ba42719fdee",
+      "seed": 34103003,
+      "segment_index": 3,
+      "synthetic_sequence_id": "synthetic/train/003",
+      "synthetic_sequence_index": 3,
+      "window_count": 24,
+      "world_content_identity": "b4e0410e735c132be9d6bc1fbaab5a376513524a124300b461f14dbfec0d125b",
+      "world_identity": "de6713bb7515febaea595117f583660ce970b8938a1fef61ea75a0fa403680d2"
+    },
+    {
+      "changed_slot_count": 4110,
+      "file": "artifacts/data/train/sequence_003/segment_04.npz",
+      "file_sha256": "441d749cd67b86b3c495f0d231161e511cb911931c0e4bf89cac0066e3208385",
+      "frame_range_inclusive": [
+        112,
+        139
+      ],
+      "scientific_content_hash": "8807920751f94279e1c291e0f1c6b1e7203a4bfee94dea3ec683d854980d9616",
+      "seed": 34103004,
+      "segment_index": 4,
+      "synthetic_sequence_id": "synthetic/train/003",
+      "synthetic_sequence_index": 3,
+      "window_count": 24,
+      "world_content_identity": "d1e9db5346098e4c11815cf65ae8dc7911caedd3bd4f957b5c25c0c8b4d3aa51",
+      "world_identity": "ccebbbe89a0f31cdefe20661169a430ece99dc570eaa2ffeb82eb3f432f96a5a"
+    },
+    {
+      "changed_slot_count": 157,
+      "file": "artifacts/data/train/sequence_003/segment_05.npz",
+      "file_sha256": "dbb09d252ff7b3968a7e3d2fe7056e9b7a0916e5358b3684ff6ed2ce66e499d1",
+      "frame_range_inclusive": [
+        140,
+        167
+      ],
+      "scientific_content_hash": "59d037c070aeee93f0c5cdf1e4caa8404a1f6f0cc81d6a9c70e3cd51d9328e50",
+      "seed": 34103005,
+      "segment_index": 5,
+      "synthetic_sequence_id": "synthetic/train/003",
+      "synthetic_sequence_index": 3,
+      "window_count": 24,
+      "world_content_identity": "85aa160d908cc0f803eb6edffcbaf2ac55d87be214e27138400618bab91b320d",
+      "world_identity": "2c82b955ebe8e47e383effe37b9d8061e2c8eeac8c6f57d57a61ff4f6e99e722"
+    },
+    {
+      "changed_slot_count": 5671,
+      "file": "artifacts/data/train/sequence_003/segment_06.npz",
+      "file_sha256": "fb9250115531b9c0cddb19f392434f88525c837b83ef24460249024a3863faae",
+      "frame_range_inclusive": [
+        168,
+        195
+      ],
+      "scientific_content_hash": "1420b92e3bb9ab76077fbdfde6c7e24d1110aac47067cc73324fed782a631f28",
+      "seed": 34103006,
+      "segment_index": 6,
+      "synthetic_sequence_id": "synthetic/train/003",
+      "synthetic_sequence_index": 3,
+      "window_count": 24,
+      "world_content_identity": "58436dcf1375fcd77b2a71bc55bc5e9601d64d1544d200ab3b69d220fca7f0a6",
+      "world_identity": "0335b7d0877ff0f15cd74b80d32a9c1ca2b549ee3859eb29a6205f02a9b8e8d7"
+    },
+    {
+      "changed_slot_count": 805,
+      "file": "artifacts/data/train/sequence_003/segment_07.npz",
+      "file_sha256": "5688fd9bec566953ab718490008afeadbc167d800aad3cd5bc480e1217db0ac5",
+      "frame_range_inclusive": [
+        196,
+        223
+      ],
+      "scientific_content_hash": "66535c59c8121c1d64e7a91114bb7ac13c25935d84340fe15d987bb589299101",
+      "seed": 34103007,
+      "segment_index": 7,
+      "synthetic_sequence_id": "synthetic/train/003",
+      "synthetic_sequence_index": 3,
+      "window_count": 24,
+      "world_content_identity": "9ff23c8a64d04a5bc4c19bd0adb70c6a751ad0fe8aed0fcfa5f4727fc3b04882",
+      "world_identity": "895d67ef0526dfbdd3d7919efea3fdf2990c876c180cc998e163bbb4fd09d80b"
+    },
+    {
+      "changed_slot_count": 54366,
+      "file": "artifacts/data/train/sequence_003/segment_08.npz",
+      "file_sha256": "ebe3ef659362b0b06fad88d6ad18c44acf6ec564d52ca7f099f6d85108e63d35",
+      "frame_range_inclusive": [
+        224,
+        251
+      ],
+      "scientific_content_hash": "6accea584c750188abbb121506b223436c6159102b79f7817f937eac5bcd0a33",
+      "seed": 34103008,
+      "segment_index": 8,
+      "synthetic_sequence_id": "synthetic/train/003",
+      "synthetic_sequence_index": 3,
+      "window_count": 24,
+      "world_content_identity": "2c30130aa57fa4e623256d6a5a78c60d3155c03cdb934399d9ab323c6586f886",
+      "world_identity": "f57eb346cc29269865c7f6eda59d2722de4e7d6df78d1b636b4ff854d38fa5ab"
+    },
+    {
+      "changed_slot_count": 17086,
+      "file": "artifacts/data/train/sequence_003/segment_09.npz",
+      "file_sha256": "3dbe5292fb7ea745d3f9c4b43baa6c85b327649381ec3fa5c136d227021f2c2e",
+      "frame_range_inclusive": [
+        252,
+        279
+      ],
+      "scientific_content_hash": "9d51647c157fe5f3e120805471fad4ee929df808b9dac903d565b4c38a05ad79",
+      "seed": 34103009,
+      "segment_index": 9,
+      "synthetic_sequence_id": "synthetic/train/003",
+      "synthetic_sequence_index": 3,
+      "window_count": 24,
+      "world_content_identity": "d98c796200cb05767ca8cd11c64c091b4052ac8fcf49d399ced83f82dad0c4e3",
+      "world_identity": "5a54a9751b36b3474b1a1f1b4be836efd8e5eab781fec06a922787d674afad61"
+    },
+    {
+      "changed_slot_count": 13994,
+      "file": "artifacts/data/train/sequence_003/segment_10.npz",
+      "file_sha256": "3fbaf4bd29068525789427747d4891f37c16b543df115feec2766fd3a663a18a",
+      "frame_range_inclusive": [
+        280,
+        307
+      ],
+      "scientific_content_hash": "7ab835daa00911c115d1ac10d96a4117f0add204ed3e29c3cae5b850254eb7a7",
+      "seed": 34103010,
+      "segment_index": 10,
+      "synthetic_sequence_id": "synthetic/train/003",
+      "synthetic_sequence_index": 3,
+      "window_count": 24,
+      "world_content_identity": "0369b03440a1b17671030d99fdf004ac4e04b8b10e02608db2a6481658475f5a",
+      "world_identity": "61280b6c40a4626ecd1fc470cc451a4125dddd3fd414a94cac0095509032b9e4"
+    },
+    {
+      "changed_slot_count": 19827,
+      "file": "artifacts/data/train/sequence_003/segment_11.npz",
+      "file_sha256": "7a896165a94b213fb5ad2eb0ff6cc2375b419fff3f8ba73ea80d1698441a6e92",
+      "frame_range_inclusive": [
+        308,
+        335
+      ],
+      "scientific_content_hash": "9ed18ab045db98adfc45ab391add47f89ee594c716bfcb3dc9c54912b07a81c0",
+      "seed": 34103011,
+      "segment_index": 11,
+      "synthetic_sequence_id": "synthetic/train/003",
+      "synthetic_sequence_index": 3,
+      "window_count": 24,
+      "world_content_identity": "6a9cad455b25e4b4986d47def82c8b675a6e9ed22697119e0cef704b996f96f4",
+      "world_identity": "db5f67f4a45911bdf8d82e5ed6f211c1782b044b4e12d5f3194811a8cace177e"
+    },
+    {
+      "changed_slot_count": 11926,
+      "file": "artifacts/data/train/sequence_003/segment_12.npz",
+      "file_sha256": "38ed9055f29571a43eaea5f57049fde293224fbd07d67d2eb086606951d03c74",
+      "frame_range_inclusive": [
+        336,
+        363
+      ],
+      "scientific_content_hash": "06c56bce5d13dc21ae24cd738b15fa589f1943dcd2a5f9ca660ab211597920da",
+      "seed": 34103012,
+      "segment_index": 12,
+      "synthetic_sequence_id": "synthetic/train/003",
+      "synthetic_sequence_index": 3,
+      "window_count": 24,
+      "world_content_identity": "51a133b6a21e6f79ba58fd4b1a0cb6f0e5f69757063e24b6c6b4a834bb8dd5f4",
+      "world_identity": "3c2aff7f7656e94276ad05f768b997ead876bc4bc4e28bca54e999f361038776"
+    },
+    {
+      "changed_slot_count": 31508,
+      "file": "artifacts/data/train/sequence_003/segment_13.npz",
+      "file_sha256": "e7e52b13329631532bb549e75c4859b4889bdd3436f2d8df29472f0d503ff845",
+      "frame_range_inclusive": [
+        364,
+        391
+      ],
+      "scientific_content_hash": "c714e4353ea37fd3f3cb637068290113b7f44f800431ff21ea9f7e02477f7a1e",
+      "seed": 34103013,
+      "segment_index": 13,
+      "synthetic_sequence_id": "synthetic/train/003",
+      "synthetic_sequence_index": 3,
+      "window_count": 24,
+      "world_content_identity": "bc93dd14a44a9b6a6c12f30ef68feb20e0682849f391d3728b4a6392bda029ee",
+      "world_identity": "e183607763df2c5581f5a37dc228bf5dc95e7df48f42da71e05d07416275df7e"
+    },
+    {
+      "changed_slot_count": 17994,
+      "file": "artifacts/data/train/sequence_003/segment_14.npz",
+      "file_sha256": "f23563018623e4af9455e7d4e59293845aa93dafe9a4a8cb730ce218d744ef66",
+      "frame_range_inclusive": [
+        392,
+        419
+      ],
+      "scientific_content_hash": "7b62d13200ca6f1b0e6ad42b2ff857ad1d28d1e0999e00c7a9cb73473e65550f",
+      "seed": 34103014,
+      "segment_index": 14,
+      "synthetic_sequence_id": "synthetic/train/003",
+      "synthetic_sequence_index": 3,
+      "window_count": 24,
+      "world_content_identity": "d4d6e2263c5187fd6ec22482fd35993c2d0b76e2fbc92f1890472aaac0b0f25e",
+      "world_identity": "7ca60c506b2938c6d8d4d340bf148440d0c9fdae28779f0963442cf1aa2fa757"
+    },
+    {
+      "changed_slot_count": 55717,
+      "file": "artifacts/data/train/sequence_003/segment_15.npz",
+      "file_sha256": "a03ae9aec4faa17ff44d4cb872801b50f2da9f7bdc257ee5c49a2890d7e28ed4",
+      "frame_range_inclusive": [
+        420,
+        448
+      ],
+      "scientific_content_hash": "fce2c75f6ef7e6b2582b398a0cd72e2251b013354fa4ed7efce065c367ffb05a",
+      "seed": 34103015,
+      "segment_index": 15,
+      "synthetic_sequence_id": "synthetic/train/003",
+      "synthetic_sequence_index": 3,
+      "window_count": 25,
+      "world_content_identity": "46b8f63bfd93948635308f2c56511ee77aef1fcacf5b415fc8aa671f2f28e816",
+      "world_identity": "f0752199b78aad886666cce2e7eef4b019e99a8a2088b9b33d935b58a4c5a13c"
+    },
+    {
+      "changed_slot_count": 3500,
+      "file": "artifacts/data/train/sequence_004/segment_00.npz",
+      "file_sha256": "11edca399021d4a1ee657a56b9153317f5c840ea5d58833cbb8ab446f5c65be9",
+      "frame_range_inclusive": [
+        0,
+        27
+      ],
+      "scientific_content_hash": "fc171e853eee00b3051d3882c1cbe281a2545e7f15886d83f69277633f574344",
+      "seed": 34104000,
+      "segment_index": 0,
+      "synthetic_sequence_id": "synthetic/train/004",
+      "synthetic_sequence_index": 4,
+      "window_count": 24,
+      "world_content_identity": "315d1aa7943ce67115c31829c00dd24a2dc64a809cbb0d2508992560c8e1b4bf",
+      "world_identity": "f92eb739893e17ab63caa8551374ba1e013888a7b49a943fbd69676af5cd46f3"
+    },
+    {
+      "changed_slot_count": 15573,
+      "file": "artifacts/data/train/sequence_004/segment_01.npz",
+      "file_sha256": "274a2d272736f846b080da078c0cc967547d3bba2d16521ac3fcc5d582165d1a",
+      "frame_range_inclusive": [
+        28,
+        55
+      ],
+      "scientific_content_hash": "6d3794e36ac8125dbb273c53a9c6833980c18de864427cea362c3c564966975f",
+      "seed": 34104001,
+      "segment_index": 1,
+      "synthetic_sequence_id": "synthetic/train/004",
+      "synthetic_sequence_index": 4,
+      "window_count": 24,
+      "world_content_identity": "47c0fa59a16a1d417e667940b15c3eadfbcc0793a647a4be9aa066a67c41a10b",
+      "world_identity": "db95b06a6ff8405798a00ff4792e11f89b753b79d5493718b8396a82fca07a4a"
+    },
+    {
+      "changed_slot_count": 10217,
+      "file": "artifacts/data/train/sequence_004/segment_02.npz",
+      "file_sha256": "e05dd6de27ab3928d392b5563b8897e43c3b9c0362188e61aa8c2e6d91941f5e",
+      "frame_range_inclusive": [
+        56,
+        83
+      ],
+      "scientific_content_hash": "a14bb9695415aef0d49e1f6d08ba422ffcb867c7df32687182ecf928a5ec9cce",
+      "seed": 34104002,
+      "segment_index": 2,
+      "synthetic_sequence_id": "synthetic/train/004",
+      "synthetic_sequence_index": 4,
+      "window_count": 24,
+      "world_content_identity": "07e7fab7bd2f99d3c50b3f0f0418fd3bcaadf4d7067d9072152bbc4cf84cb77b",
+      "world_identity": "01c60b20b670766149a0a42a6f030fcbacc6ffcb93fc44a60cfa5ab1d7a4f722"
+    },
+    {
+      "changed_slot_count": 286,
+      "file": "artifacts/data/train/sequence_004/segment_03.npz",
+      "file_sha256": "876baf0795d0a775e8ccf1c12c6052a3192e874e7ce62a8318f7c81e000da3cf",
+      "frame_range_inclusive": [
+        84,
+        111
+      ],
+      "scientific_content_hash": "7fbc489c05951c41e13bbc7ccdb37d34f57f69d931a605b66103d2ff04eca951",
+      "seed": 34104003,
+      "segment_index": 3,
+      "synthetic_sequence_id": "synthetic/train/004",
+      "synthetic_sequence_index": 4,
+      "window_count": 24,
+      "world_content_identity": "938c84f2322ca8aa972e3802f005d7a8734d8ef3cb5e1c635ab25bea54fbd952",
+      "world_identity": "47617e196a8cdf748a04c7c685f016719076363564e143a1aca408e445f24df3"
+    },
+    {
+      "changed_slot_count": 705159,
+      "file": "artifacts/data/train/sequence_004/segment_04.npz",
+      "file_sha256": "6c30929aac97edd200a56ec78fd3524daef322f304d66f02e7ff40e7572eeb5a",
+      "frame_range_inclusive": [
+        112,
+        139
+      ],
+      "scientific_content_hash": "1bb8d95facc385841bc0e24aa4b0f2a6d9ec4383905e1c9ae62f542de97c2fb3",
+      "seed": 34104004,
+      "segment_index": 4,
+      "synthetic_sequence_id": "synthetic/train/004",
+      "synthetic_sequence_index": 4,
+      "window_count": 24,
+      "world_content_identity": "66d4b44ced42dc930660d256a40ffb1eb80b434f14f6699f8d3c6630057a7f0a",
+      "world_identity": "7708235bd463938585bed7b614d197b5693cee22318944e6015182d7d57e5e3f"
+    },
+    {
+      "changed_slot_count": 8320,
+      "file": "artifacts/data/train/sequence_004/segment_05.npz",
+      "file_sha256": "bb67728b01000a0c07d144fb0550cad9fc4906887c6fe24c54f2ddcf31cf3aaa",
+      "frame_range_inclusive": [
+        140,
+        167
+      ],
+      "scientific_content_hash": "4b4dd5bb72e606d6e0cad1dfab2c014947ec1ddf1748dcf0f3c7ba3758b02dd7",
+      "seed": 34104005,
+      "segment_index": 5,
+      "synthetic_sequence_id": "synthetic/train/004",
+      "synthetic_sequence_index": 4,
+      "window_count": 24,
+      "world_content_identity": "82edce4934f9dd677c5037eadb0353819fe4c33295d03802afeefdf70a8e400c",
+      "world_identity": "4dcc06905a96b813d67a2ff68960437ec9587dca080db17ff3c4f9632f000786"
+    },
+    {
+      "changed_slot_count": 17187,
+      "file": "artifacts/data/train/sequence_004/segment_06.npz",
+      "file_sha256": "8546d4975115b4533a3c1b4d775cbb09befd4017cc7ed0add23e08aa5dbd36ef",
+      "frame_range_inclusive": [
+        168,
+        195
+      ],
+      "scientific_content_hash": "3f64928d277b6e3d0ce7e3b24531e33690274ec2dcfc5d8f5135796f8721bc69",
+      "seed": 34104006,
+      "segment_index": 6,
+      "synthetic_sequence_id": "synthetic/train/004",
+      "synthetic_sequence_index": 4,
+      "window_count": 24,
+      "world_content_identity": "38e20988aabe38faa72807da5f568a52c4fab224fee18124d1648a88afa6c18b",
+      "world_identity": "ffa9bff491d281483f27d42cda7c1c5db3897bfc67592db37777c3f2ca4e80af"
+    },
+    {
+      "changed_slot_count": 16652,
+      "file": "artifacts/data/train/sequence_004/segment_07.npz",
+      "file_sha256": "d04f855e42a7cb7989830c6ca5794abbe33792909b7f34df67fc7525d7c6d987",
+      "frame_range_inclusive": [
+        196,
+        223
+      ],
+      "scientific_content_hash": "adde55f5c80cf75124392c90bdcd1583fb18029873e363e4aa66f78ed5d9e534",
+      "seed": 34104007,
+      "segment_index": 7,
+      "synthetic_sequence_id": "synthetic/train/004",
+      "synthetic_sequence_index": 4,
+      "window_count": 24,
+      "world_content_identity": "724e311abd63be32a9d6b76ef2ae3c3e1fd904777855c5c2573b775e7f126e3a",
+      "world_identity": "9442be96d7ece184e300df48ad60a9daf34cc9a616ce327b9675c710c3d5ab64"
+    },
+    {
+      "changed_slot_count": 612,
+      "file": "artifacts/data/train/sequence_004/segment_08.npz",
+      "file_sha256": "a6fb43b751ff9108775fc2d844e4d4cf0d281e9c93b9f85988e756a310ce745c",
+      "frame_range_inclusive": [
+        224,
+        251
+      ],
+      "scientific_content_hash": "da64c4388958722e3f3ae9723f13c64ac3b8631a5a9ab391b59c1577bbec45d6",
+      "seed": 34104008,
+      "segment_index": 8,
+      "synthetic_sequence_id": "synthetic/train/004",
+      "synthetic_sequence_index": 4,
+      "window_count": 24,
+      "world_content_identity": "782cba189e353399f53e6c299764f058a53d3b2859656383143fb9a6ad972ad7",
+      "world_identity": "f85d59679c4e40e27120928b10c2a3879e7ddadad2636668746a8a432f1b29eb"
+    },
+    {
+      "changed_slot_count": 866,
+      "file": "artifacts/data/train/sequence_004/segment_09.npz",
+      "file_sha256": "84ee822664a62e3ea23ad34eabe7631b314ada28d60f83bccee4e0c7731a4c7b",
+      "frame_range_inclusive": [
+        252,
+        279
+      ],
+      "scientific_content_hash": "e992910f7a1a1da6324daccbb996262d72e4cf63405b1e8aade3a0808f2e2b3e",
+      "seed": 34104009,
+      "segment_index": 9,
+      "synthetic_sequence_id": "synthetic/train/004",
+      "synthetic_sequence_index": 4,
+      "window_count": 24,
+      "world_content_identity": "82d417c8101d68cecbcfc7e41be498ffa13420f401959543d073863ce32ac81e",
+      "world_identity": "ac0be0b64ceb89ae8a44d9bb20c52b454160db3343956a5908b0c35bed489e6c"
+    },
+    {
+      "changed_slot_count": 38137,
+      "file": "artifacts/data/train/sequence_004/segment_10.npz",
+      "file_sha256": "ba144ba5ef3612f893e7001645cf314fb75d24c76c9712191e31e1329ac468e3",
+      "frame_range_inclusive": [
+        280,
+        307
+      ],
+      "scientific_content_hash": "d2f0ce6e196e6e4bcff8e131803db9bffbaf6999251916c5a5ee4ee08d6286e8",
+      "seed": 34104010,
+      "segment_index": 10,
+      "synthetic_sequence_id": "synthetic/train/004",
+      "synthetic_sequence_index": 4,
+      "window_count": 24,
+      "world_content_identity": "be038aad0a96d2f51ce952e409f567f1af376ed331cb06f5bc1f4f1bc6430e58",
+      "world_identity": "1891e0dacfcff8828dbcdb313cfae1b2a592bbcc3e05b1cde800b8815091f8b6"
+    },
+    {
+      "changed_slot_count": 8853,
+      "file": "artifacts/data/train/sequence_004/segment_11.npz",
+      "file_sha256": "d5134672182d1e357c3ed37f5bf61a9ec64d39836680950b5a5c179d82c8c12f",
+      "frame_range_inclusive": [
+        308,
+        335
+      ],
+      "scientific_content_hash": "ff7d094eaede94c633599c1913738367075e173f49506ad6bfb0cf5cf87eba77",
+      "seed": 34104011,
+      "segment_index": 11,
+      "synthetic_sequence_id": "synthetic/train/004",
+      "synthetic_sequence_index": 4,
+      "window_count": 24,
+      "world_content_identity": "a74144cdc719726b986df636b6850aeeadbb86b1c5a0f1a137f9a33ec4d7569b",
+      "world_identity": "c476f5ddadf1673c5579875fe79cc5803e20aec28d0d2a2258d012f92a9a67d0"
+    },
+    {
+      "changed_slot_count": 11452,
+      "file": "artifacts/data/train/sequence_004/segment_12.npz",
+      "file_sha256": "e346595319ebe55d91894eb70ecd6d2380e231d1376e3de11220961a937dcc7a",
+      "frame_range_inclusive": [
+        336,
+        363
+      ],
+      "scientific_content_hash": "5088ff503649c04a49429c3ed3c2162d2bfbe1dd1d7015d4b86e4b35fcda6967",
+      "seed": 34104012,
+      "segment_index": 12,
+      "synthetic_sequence_id": "synthetic/train/004",
+      "synthetic_sequence_index": 4,
+      "window_count": 24,
+      "world_content_identity": "03249fddaf52813daec97a8fa026713f7efdda0d2635bc9c66cd0957d2ebcbc8",
+      "world_identity": "571328a63e86bb122ee32381a37536df5d6500a69b7318cff8050a96e953dbae"
+    },
+    {
+      "changed_slot_count": 2297,
+      "file": "artifacts/data/train/sequence_004/segment_13.npz",
+      "file_sha256": "9ce87f3c5d8e5eece15dea564655ba7cfbd4ea23434f4355b701135be8d3a7f1",
+      "frame_range_inclusive": [
+        364,
+        391
+      ],
+      "scientific_content_hash": "d9d346093ca94a0bca9af359eeb30ff1807ff7fd1f0758325ce632c05d5154c4",
+      "seed": 34104013,
+      "segment_index": 13,
+      "synthetic_sequence_id": "synthetic/train/004",
+      "synthetic_sequence_index": 4,
+      "window_count": 24,
+      "world_content_identity": "a120301b3563662217016f5dc68e51bfba70c090349c5c25ebaf3ecd3f939a5c",
+      "world_identity": "9f1e82cecbfcc602930e9f528eeb84a24178eea1118c2a105c43f10cd1c6decc"
+    },
+    {
+      "changed_slot_count": 3952,
+      "file": "artifacts/data/train/sequence_004/segment_14.npz",
+      "file_sha256": "069caa81dcce485cfbbfcdcd269098f1c02db52c46fa0456b13ca04762bd6cb7",
+      "frame_range_inclusive": [
+        392,
+        419
+      ],
+      "scientific_content_hash": "a6d7ac05cdee0abaea396731c54df32239701283b649eb7af04fe30cef056ca9",
+      "seed": 34104014,
+      "segment_index": 14,
+      "synthetic_sequence_id": "synthetic/train/004",
+      "synthetic_sequence_index": 4,
+      "window_count": 24,
+      "world_content_identity": "5a97543d7cb52b57ef857ed54112e6f490e1b9af461cb8fd51eefab380ed44f8",
+      "world_identity": "4a5c157bf1d805ecab2b851c91c6c6598f59ddd8f8937451c9891e1b145abee0"
+    },
+    {
+      "changed_slot_count": 60114,
+      "file": "artifacts/data/train/sequence_004/segment_15.npz",
+      "file_sha256": "545a7b257244877e4934ff0e2e43dc24e4bef5cc5fa87e0b3bdf35e72dcba92d",
+      "frame_range_inclusive": [
+        420,
+        448
+      ],
+      "scientific_content_hash": "61d2b9b1bdca92862dd4394af7343e21d5b337284e1f07ea619b56d231c4742d",
+      "seed": 34104015,
+      "segment_index": 15,
+      "synthetic_sequence_id": "synthetic/train/004",
+      "synthetic_sequence_index": 4,
+      "window_count": 25,
+      "world_content_identity": "4fb18124f0bcd241d6fa69cee0b38e2a434070c1502cb3caa2b30ece1936a936",
+      "world_identity": "2c7f988a4eeca765bf984dcc62bb87826e52feae01c62abae1a15530c5e7e448"
+    },
+    {
+      "changed_slot_count": 146707,
+      "file": "artifacts/data/train/sequence_005/segment_00.npz",
+      "file_sha256": "11da0bfe5887216ac8958abe0e513468d6f6953926fd5b6e77763f6d2cd65b63",
+      "frame_range_inclusive": [
+        0,
+        27
+      ],
+      "scientific_content_hash": "f2b0f0a6cb25d094ea91edcea10762fa451c4dffbcad4cfd535883efff2ad504",
+      "seed": 34105000,
+      "segment_index": 0,
+      "synthetic_sequence_id": "synthetic/train/005",
+      "synthetic_sequence_index": 5,
+      "window_count": 24,
+      "world_content_identity": "3dffdbbdae3dcdd6e6f2e318a923d73c84a8ba843581cba09503ecad78cd7d8f",
+      "world_identity": "e72595ea624fce05d0a834f196674448c50b927d3e100ff5ba76eb6f096c4249"
+    },
+    {
+      "changed_slot_count": 36949,
+      "file": "artifacts/data/train/sequence_005/segment_01.npz",
+      "file_sha256": "eadf5df764336a006d65a4d6b43d2597179651b9e07b6be9963c56afbfc450d7",
+      "frame_range_inclusive": [
+        28,
+        55
+      ],
+      "scientific_content_hash": "060118cbed0c497d66e96677f89e99a920e77001f34ac3c8c1f092e6e4a92616",
+      "seed": 34105001,
+      "segment_index": 1,
+      "synthetic_sequence_id": "synthetic/train/005",
+      "synthetic_sequence_index": 5,
+      "window_count": 24,
+      "world_content_identity": "7b2fd613843123d15f2a2f484ea93a59edf795c59d6ffc03150b539c6f6a8bd3",
+      "world_identity": "02d98ac3f23536cc3568bbb98f2ef03b29569f97462d7a64a50ecf8f53a18caa"
+    },
+    {
+      "changed_slot_count": 29065,
+      "file": "artifacts/data/train/sequence_005/segment_02.npz",
+      "file_sha256": "d3446b2c15e5cc3efd411776787d9ebdf48b6d8bf4bfff5fb89879dfe8a818df",
+      "frame_range_inclusive": [
+        56,
+        83
+      ],
+      "scientific_content_hash": "d0ae9c4b3d6561f2ad4ebda081144e0ac87c947c10f8cc504d3d1eb874e22c99",
+      "seed": 34105002,
+      "segment_index": 2,
+      "synthetic_sequence_id": "synthetic/train/005",
+      "synthetic_sequence_index": 5,
+      "window_count": 24,
+      "world_content_identity": "e1ff1050b4c386d4cf4896df46ab0350c49ab803dda7a1c277c92b8d21299ece",
+      "world_identity": "772a750eaa0b86078c283e5f87aa8492b41dbdf7cf74a88083209174c84d044b"
+    },
+    {
+      "changed_slot_count": 4633,
+      "file": "artifacts/data/train/sequence_005/segment_03.npz",
+      "file_sha256": "f5960da783240b7016f7118b6eb6307d3f1756b24d41f62bc87916588e13ff01",
+      "frame_range_inclusive": [
+        84,
+        111
+      ],
+      "scientific_content_hash": "eba7d4b0911fe9b5ace57e2cec5aaf7b1fd881d48efc8eb8835ec30e163bfe18",
+      "seed": 34105003,
+      "segment_index": 3,
+      "synthetic_sequence_id": "synthetic/train/005",
+      "synthetic_sequence_index": 5,
+      "window_count": 24,
+      "world_content_identity": "e7ea23751459d18f6de08bd791ba7927cfb257002258e31ee9da5b66c7a3b5ee",
+      "world_identity": "4bfd8a2295ab37a6b79ff2b9560e503e4614fff5d90e75f3aa0e6effcbda843f"
+    },
+    {
+      "changed_slot_count": 16588,
+      "file": "artifacts/data/train/sequence_005/segment_04.npz",
+      "file_sha256": "ef3a6d6440fb084818cec58457ae5697b80aebf3b03eb3d9316511b9e27a5a33",
+      "frame_range_inclusive": [
+        112,
+        139
+      ],
+      "scientific_content_hash": "ee7bb1ba6f03ea1567ab839c7c4815614c04fb7120bbf84b3c022c4eb45a7764",
+      "seed": 34105004,
+      "segment_index": 4,
+      "synthetic_sequence_id": "synthetic/train/005",
+      "synthetic_sequence_index": 5,
+      "window_count": 24,
+      "world_content_identity": "70f8a614392c97d204303b2b93f8dda996f762bb1bae6990018650f56e2471b1",
+      "world_identity": "03549c8b255afe8a8853910ce57d1798bbe5a51f337e22bdde4b5d573dfa672f"
+    },
+    {
+      "changed_slot_count": 5526,
+      "file": "artifacts/data/train/sequence_005/segment_05.npz",
+      "file_sha256": "7445e7f5845605d6022073594d5952e3d2b2088d8fd4f69d2e9f6ddd69d65ca6",
+      "frame_range_inclusive": [
+        140,
+        167
+      ],
+      "scientific_content_hash": "d84aec8cc9098acabfc142c52f106c7fd1b33861726d61282c0bb8b284790c69",
+      "seed": 34105005,
+      "segment_index": 5,
+      "synthetic_sequence_id": "synthetic/train/005",
+      "synthetic_sequence_index": 5,
+      "window_count": 24,
+      "world_content_identity": "9b01cfd4ef6d9cdd0b871664b781c6ad5482b245fd4a9fd8b1a471a4cf62229c",
+      "world_identity": "62a0d4e82b9e2d679886af4a847b114753bdf354085181193711c2876a53c224"
+    },
+    {
+      "changed_slot_count": 38384,
+      "file": "artifacts/data/train/sequence_005/segment_06.npz",
+      "file_sha256": "1ba577022530dd58fcb9b496f39339dd8d7c67e9baf2e13aa5cfe5cb980c8e64",
+      "frame_range_inclusive": [
+        168,
+        195
+      ],
+      "scientific_content_hash": "f35f1088b7bc6c38a9e2cfb01ec637517c1623c68e68c8d7638ab59ad4e06bbd",
+      "seed": 34105006,
+      "segment_index": 6,
+      "synthetic_sequence_id": "synthetic/train/005",
+      "synthetic_sequence_index": 5,
+      "window_count": 24,
+      "world_content_identity": "2f91d08018e388bd01449bb3efc606f536fea567c56e6cf6368e8c5dd57dd77c",
+      "world_identity": "7089ab38a421fb5db53eafab93daf81f4b5ab7ec29694c0745984e824c816331"
+    },
+    {
+      "changed_slot_count": 11072,
+      "file": "artifacts/data/train/sequence_005/segment_07.npz",
+      "file_sha256": "52f2c2d0ec5311f1dfa74d407312bffbec3b9c0dc962854c452f73ed5625ed44",
+      "frame_range_inclusive": [
+        196,
+        223
+      ],
+      "scientific_content_hash": "627e782ac2340afa26643abc5707cbb8ae520254e6c620d8c101b5566a69627d",
+      "seed": 34105007,
+      "segment_index": 7,
+      "synthetic_sequence_id": "synthetic/train/005",
+      "synthetic_sequence_index": 5,
+      "window_count": 24,
+      "world_content_identity": "5d2c41376656168eb7c51986d9695f91c145ef3038b7625c1f9f040dc57544b7",
+      "world_identity": "612702a29041313e848660c4379bc4e722b786fd096f602825bd175709a6bccc"
+    },
+    {
+      "changed_slot_count": 5621,
+      "file": "artifacts/data/train/sequence_005/segment_08.npz",
+      "file_sha256": "705df6adbcb4356b177ba55e8294992b8d64eb7265c2d4b1b1af50052a68037b",
+      "frame_range_inclusive": [
+        224,
+        251
+      ],
+      "scientific_content_hash": "466b639792068d57017b8817014e2a2cdf3d7f8ce4969d3741e6c0b3c99eb83f",
+      "seed": 34105008,
+      "segment_index": 8,
+      "synthetic_sequence_id": "synthetic/train/005",
+      "synthetic_sequence_index": 5,
+      "window_count": 24,
+      "world_content_identity": "02033d2f69cc32d01306da72e4be3fe40a9569593f4a6c03f214093769482268",
+      "world_identity": "be2519046e18f372f1c95241b2a6a70bf1b6bf0e41a6a29e8269727e13ffa13f"
+    },
+    {
+      "changed_slot_count": 18816,
+      "file": "artifacts/data/train/sequence_005/segment_09.npz",
+      "file_sha256": "01c83cc7c5b7742f38c87402731b6d110d69ab919710677f508ec8a15ad4ce9d",
+      "frame_range_inclusive": [
+        252,
+        279
+      ],
+      "scientific_content_hash": "ff1b0eca9184927b899a9005f853965ad63d53a0d24ed11d5ddb016a8e5b01e2",
+      "seed": 34105009,
+      "segment_index": 9,
+      "synthetic_sequence_id": "synthetic/train/005",
+      "synthetic_sequence_index": 5,
+      "window_count": 24,
+      "world_content_identity": "9b0c7059e2a665231facb77fc86723c599ddcdbac10a3bd258cb32dfab44ec3f",
+      "world_identity": "616a724dc51024e36f1217c0fa0307dd5b73e6f21c51571c9c4f139563b360e2"
+    },
+    {
+      "changed_slot_count": 24678,
+      "file": "artifacts/data/train/sequence_005/segment_10.npz",
+      "file_sha256": "a8a8b7f444c7fb58b28cc04032b4c275b2773f611826170251a97a6a3953883e",
+      "frame_range_inclusive": [
+        280,
+        307
+      ],
+      "scientific_content_hash": "4c86f748c0960f9c31e89d78a8f8653de471af758120e465bdfdcd80fe01d54e",
+      "seed": 34105010,
+      "segment_index": 10,
+      "synthetic_sequence_id": "synthetic/train/005",
+      "synthetic_sequence_index": 5,
+      "window_count": 24,
+      "world_content_identity": "d99eba5e27522d6f4d2fb47055dc2beadbd52de036455a2fffec7550ca32e1f7",
+      "world_identity": "0b4ec538d8b02f0d50badc8bb1c3fc3a61eca0ac34504022735326519d619d86"
+    },
+    {
+      "changed_slot_count": 84528,
+      "file": "artifacts/data/train/sequence_005/segment_11.npz",
+      "file_sha256": "947973258dbceddfe1469c628e54c4f5f9351e347b6a4bee4b10b7ef968592e9",
+      "frame_range_inclusive": [
+        308,
+        335
+      ],
+      "scientific_content_hash": "6f10103d059be2f7b3918d92e7da9b72a04d43ee3353f28b047272e5d9481bd9",
+      "seed": 34105011,
+      "segment_index": 11,
+      "synthetic_sequence_id": "synthetic/train/005",
+      "synthetic_sequence_index": 5,
+      "window_count": 24,
+      "world_content_identity": "c277732b1023d6db8dedeb624225611c61b4ca03f3cb3ad2ab89f9d50a0f8ddf",
+      "world_identity": "b8ebab70162d8f2628826966e9656a4a2ca7c9ba6d7a70da456bd8cda9aaa3e7"
+    },
+    {
+      "changed_slot_count": 478,
+      "file": "artifacts/data/train/sequence_005/segment_12.npz",
+      "file_sha256": "84bc4def21f08c9a48731266a49fc3d77d79825f9945dafaa4a84bf7f1d769ac",
+      "frame_range_inclusive": [
+        336,
+        363
+      ],
+      "scientific_content_hash": "24c5124e65e6dc9f533dc428d598cce0b70f2a83fac532140e4d3851ccf0df3b",
+      "seed": 34105012,
+      "segment_index": 12,
+      "synthetic_sequence_id": "synthetic/train/005",
+      "synthetic_sequence_index": 5,
+      "window_count": 24,
+      "world_content_identity": "438e9d32f392deac35a17ec43994b2d72529eaaa169213f287de872149ba5aa8",
+      "world_identity": "42b9841c765b6463396494b824ff0ce9d554ba866ab8bbfddbda8e0918e5e348"
+    },
+    {
+      "changed_slot_count": 9475,
+      "file": "artifacts/data/train/sequence_005/segment_13.npz",
+      "file_sha256": "53561b311af5a7b3afe82583089b2ca999d060a7b8a3324ffb4cbd8682d5d994",
+      "frame_range_inclusive": [
+        364,
+        391
+      ],
+      "scientific_content_hash": "537007a461284b07a5de5e22ace655d23bf0a52ca2427101b1cd15ab1aac433c",
+      "seed": 34105013,
+      "segment_index": 13,
+      "synthetic_sequence_id": "synthetic/train/005",
+      "synthetic_sequence_index": 5,
+      "window_count": 24,
+      "world_content_identity": "715be254d78d93e83b8c1960ebb021bbe6cc1760c83d8a91230ab15d69f00478",
+      "world_identity": "72221a66a401296bd9675580df87e044390ca924de023a1a04cab2e3047a3b91"
+    },
+    {
+      "changed_slot_count": 2296,
+      "file": "artifacts/data/train/sequence_005/segment_14.npz",
+      "file_sha256": "b7ecf939d2ab16fee3b0c94fa72dc5beed1a73defe43407cc865134d1a1df052",
+      "frame_range_inclusive": [
+        392,
+        419
+      ],
+      "scientific_content_hash": "590fa81cd462c677d141c23f8769e918a852cec9b6bf393adf67e497847f57a3",
+      "seed": 34105014,
+      "segment_index": 14,
+      "synthetic_sequence_id": "synthetic/train/005",
+      "synthetic_sequence_index": 5,
+      "window_count": 24,
+      "world_content_identity": "3825d8c45204cbf07dadffde2d261d2673aee278b4fdda35abd5a0f6f7c26e48",
+      "world_identity": "49cfacaec088e584db9338dddda2aff6874038d46cd0e254033c47a5bed2c6a8"
+    },
+    {
+      "changed_slot_count": 14882,
+      "file": "artifacts/data/train/sequence_005/segment_15.npz",
+      "file_sha256": "67257362c1054b7c32e07f99919be2109dba3f3aeb63c587e961ded8b630bc89",
+      "frame_range_inclusive": [
+        420,
+        448
+      ],
+      "scientific_content_hash": "8890b66a4437bed0d8ed8836ec0e32c0ca19f17bd8a73b09f6e64f7e291a05e8",
+      "seed": 34105015,
+      "segment_index": 15,
+      "synthetic_sequence_id": "synthetic/train/005",
+      "synthetic_sequence_index": 5,
+      "window_count": 25,
+      "world_content_identity": "1baaefbe22c014246d3d37128440bdd4c1973cdffc4c6d2a5608ddeb7744ba4f",
+      "world_identity": "54bc3a1057314480b45c580668a553f308fd2d6d13956b83740ee7b2e9d61ac7"
+    },
+    {
+      "changed_slot_count": 35015,
+      "file": "artifacts/data/train/sequence_006/segment_00.npz",
+      "file_sha256": "e76483d570e530890149379dda959ea2ef2fc8f08240ac3139aac918f27bb7a2",
+      "frame_range_inclusive": [
+        0,
+        27
+      ],
+      "scientific_content_hash": "b4b4f7d00cd08bd7eb9c623d638b8ab91ca455107f1a2c28a488bd3a2bb273ea",
+      "seed": 34106000,
+      "segment_index": 0,
+      "synthetic_sequence_id": "synthetic/train/006",
+      "synthetic_sequence_index": 6,
+      "window_count": 24,
+      "world_content_identity": "7469e5b774e4475750d02f867f392e718240207463826ae5386c667c83a0f27f",
+      "world_identity": "93ff7d0f80c5b1f7dc6b512a0d336d913b148b981251bbd8571355cca0ff40e7"
+    },
+    {
+      "changed_slot_count": 26719,
+      "file": "artifacts/data/train/sequence_006/segment_01.npz",
+      "file_sha256": "41cc97a77ab6cd00a482bbb2ddfb2d8cd5076892e0936ca4eff100f68257bb4b",
+      "frame_range_inclusive": [
+        28,
+        55
+      ],
+      "scientific_content_hash": "cba0bb74de4a6560ddb65101bbce19a536de1cad8e9cde582345ad505d2fa103",
+      "seed": 34106001,
+      "segment_index": 1,
+      "synthetic_sequence_id": "synthetic/train/006",
+      "synthetic_sequence_index": 6,
+      "window_count": 24,
+      "world_content_identity": "e5e4ef3d37746a9b471dfc0aba0733bf5aa6ec321a6cc22e86bb4a9c8d25bd28",
+      "world_identity": "c4bac683d5cccca868cbfe6c95b295c3d2dc50891f5f87b4becb7dfc1b3f6018"
+    },
+    {
+      "changed_slot_count": 7245,
+      "file": "artifacts/data/train/sequence_006/segment_02.npz",
+      "file_sha256": "810a26c45756e5b55390661ee91f5a2d0c26844b666e19f4c3debff455b79752",
+      "frame_range_inclusive": [
+        56,
+        83
+      ],
+      "scientific_content_hash": "9db6c0df528fe6cd647e24515e4ca4c1b90e5f7fdd2d3059124787221432f5b5",
+      "seed": 34106002,
+      "segment_index": 2,
+      "synthetic_sequence_id": "synthetic/train/006",
+      "synthetic_sequence_index": 6,
+      "window_count": 24,
+      "world_content_identity": "9bdec9b035f9a787e5ee70091c8692f69f8c1559204d27651c9a0fb781540cf3",
+      "world_identity": "8a7180cd6e47cd76f92a30e96fe02a1310e8ee6cfc0634f982e5474cb7ea6458"
+    },
+    {
+      "changed_slot_count": 765,
+      "file": "artifacts/data/train/sequence_006/segment_03.npz",
+      "file_sha256": "83933354ece76abd4b6ad3a2b5a1d15e295004ef47a8979a72fc04cea53bbbb4",
+      "frame_range_inclusive": [
+        84,
+        111
+      ],
+      "scientific_content_hash": "56fb4665ca8ff8483b874b93b853f51233ab1279708ecc88043396043c1df16a",
+      "seed": 34106003,
+      "segment_index": 3,
+      "synthetic_sequence_id": "synthetic/train/006",
+      "synthetic_sequence_index": 6,
+      "window_count": 24,
+      "world_content_identity": "4bef6a1bb75835278c6b57c99f120da0d09b2f91ab29a28c7aa443c27f182c9d",
+      "world_identity": "4e19dc38a62d162e5bd8acfdadbf7f82e364fb39dfe95e45d9a32f2312a2a58b"
+    },
+    {
+      "changed_slot_count": 2502,
+      "file": "artifacts/data/train/sequence_006/segment_04.npz",
+      "file_sha256": "e40023e4c439db602875e5e8b908f9e8fe26745069bb788984c270d38eb8da41",
+      "frame_range_inclusive": [
+        112,
+        139
+      ],
+      "scientific_content_hash": "6100ef4e13906fb509cbaed0c4d194463670bd8070da00823baf70fa87fcd00d",
+      "seed": 34106004,
+      "segment_index": 4,
+      "synthetic_sequence_id": "synthetic/train/006",
+      "synthetic_sequence_index": 6,
+      "window_count": 24,
+      "world_content_identity": "c92ed222fa9c9f0d3746c586749688e298edbf17580105ab1ff4cfa52b978b1e",
+      "world_identity": "0d84bb67e08ed060a510e92816a8661f577d5a11ae586fa45fd2ecacc7767ca8"
+    },
+    {
+      "changed_slot_count": 35493,
+      "file": "artifacts/data/train/sequence_006/segment_05.npz",
+      "file_sha256": "74f50a5bd33d78660816cbb41e12fcfd5cb24eabf66112d5fa70c83e0cd7aecd",
+      "frame_range_inclusive": [
+        140,
+        167
+      ],
+      "scientific_content_hash": "acfe8d8aafe3bea15d795d3e5b02674c258255dacc74acd57ec94bef7ab1732d",
+      "seed": 34106005,
+      "segment_index": 5,
+      "synthetic_sequence_id": "synthetic/train/006",
+      "synthetic_sequence_index": 6,
+      "window_count": 24,
+      "world_content_identity": "c49c4290590854c066b955933186a41e13e0d02693654467bcf03a57704ba1e5",
+      "world_identity": "dbf2f3397718631540089a81aa01547d22477a72ce7261d9bcecb13f07e9f332"
+    },
+    {
+      "changed_slot_count": 20429,
+      "file": "artifacts/data/train/sequence_006/segment_06.npz",
+      "file_sha256": "17705948e4d874a53d179c53572c3a5b2b60b1dd2901754a0cb16ffd947756c2",
+      "frame_range_inclusive": [
+        168,
+        195
+      ],
+      "scientific_content_hash": "012bae5d5278b73b7d28529ae8da249850b575d4698ff054114d960a7cd544e9",
+      "seed": 34106006,
+      "segment_index": 6,
+      "synthetic_sequence_id": "synthetic/train/006",
+      "synthetic_sequence_index": 6,
+      "window_count": 24,
+      "world_content_identity": "4182272b0af2e804c2817e8e2ea4d87da6d3fff49e13f6f8a1734784e055b355",
+      "world_identity": "9ff871e98b5e2c712cc27ac665ad774d1d8dbdf697c5452f7c3da3dc8dd07dd1"
+    },
+    {
+      "changed_slot_count": 20306,
+      "file": "artifacts/data/train/sequence_006/segment_07.npz",
+      "file_sha256": "e16be2f0bc454ca6db04599a4e1c2c2f888767a5f08fd1d668cbc2c64bd605d4",
+      "frame_range_inclusive": [
+        196,
+        223
+      ],
+      "scientific_content_hash": "33313fc49e85e158703234cb49a254bce08eab2e7df9fbfa5e3ba4c71fb89e02",
+      "seed": 34106007,
+      "segment_index": 7,
+      "synthetic_sequence_id": "synthetic/train/006",
+      "synthetic_sequence_index": 6,
+      "window_count": 24,
+      "world_content_identity": "9907d749a7e892d63bf60634b22de2ebbd109fb155e024e6fd18fb72ae28143c",
+      "world_identity": "054be06d3b3827af6a301cf2b7d341406abd19e75befe270edcc9efd79eae46f"
+    },
+    {
+      "changed_slot_count": 2586,
+      "file": "artifacts/data/train/sequence_006/segment_08.npz",
+      "file_sha256": "2d0309a0d9bbc38fb593c356954ebf43eb70e3b35694fbd530c747c9dd25b276",
+      "frame_range_inclusive": [
+        224,
+        251
+      ],
+      "scientific_content_hash": "a876d755224049e3266e75e8117b40b7181e0d829cbb4c9612f8f7e730f62672",
+      "seed": 34106008,
+      "segment_index": 8,
+      "synthetic_sequence_id": "synthetic/train/006",
+      "synthetic_sequence_index": 6,
+      "window_count": 24,
+      "world_content_identity": "e69d7bd83c0aa8b1905057ad156a08a48db18a6b61343ef0de81bfaa350d4dfd",
+      "world_identity": "45f675202d246d5c8d1c2ea11439d7c08827559c8e3166ae34b85e840a7ba556"
+    },
+    {
+      "changed_slot_count": 3933,
+      "file": "artifacts/data/train/sequence_006/segment_09.npz",
+      "file_sha256": "ff1d088ae27af9d7ffd6c9a07cb363f2458e9fa4452250f9703e2bdd4d447fd3",
+      "frame_range_inclusive": [
+        252,
+        279
+      ],
+      "scientific_content_hash": "2b55b3f29214daa5a6d6945fe5bc246931776350e73c589802972e109e0adb76",
+      "seed": 34106009,
+      "segment_index": 9,
+      "synthetic_sequence_id": "synthetic/train/006",
+      "synthetic_sequence_index": 6,
+      "window_count": 24,
+      "world_content_identity": "de4400c542c582a17bdd9cb8ebeaed2d529c7207e439ecbac8705374062ff986",
+      "world_identity": "53bfeaa872c1d3ffa5170402f2b383b1666c2499cfb0f1c4eb2327cea6f2618c"
+    },
+    {
+      "changed_slot_count": 2039,
+      "file": "artifacts/data/train/sequence_006/segment_10.npz",
+      "file_sha256": "dbf87da1bf01d86085a38154c8813087546db424c757327c1e77ca335455a2f1",
+      "frame_range_inclusive": [
+        280,
+        307
+      ],
+      "scientific_content_hash": "33baf5ae3072cad4da4366d72e7583f7304ab78a04c99e365b49cecd27076dd9",
+      "seed": 34106010,
+      "segment_index": 10,
+      "synthetic_sequence_id": "synthetic/train/006",
+      "synthetic_sequence_index": 6,
+      "window_count": 24,
+      "world_content_identity": "855ffaef20666c9ae5ddf0b50094e8cfc022e9375749ef5f89eb93bf4a13c483",
+      "world_identity": "e33791675959e82c8e0b882b513cca24d1fa8f2d68225b8d03e7b5e19a1e3260"
+    },
+    {
+      "changed_slot_count": 4740,
+      "file": "artifacts/data/train/sequence_006/segment_11.npz",
+      "file_sha256": "5b77a620c66aeb18ecd8d98a615935b1e75ad3b602130a46813b9e701a568998",
+      "frame_range_inclusive": [
+        308,
+        335
+      ],
+      "scientific_content_hash": "176099e4244bd8b10bf1ab93fd52ed67f92c2638ebbc92d40450f5091c4b8107",
+      "seed": 34106011,
+      "segment_index": 11,
+      "synthetic_sequence_id": "synthetic/train/006",
+      "synthetic_sequence_index": 6,
+      "window_count": 24,
+      "world_content_identity": "b131a071ee09d556c84e9a031cd3df14c4f4e965ad7b83f457e9275e28ee4607",
+      "world_identity": "7e721828386bc4a9a3826ce33030b573984b6096f230fdb896af43888834c5ea"
+    },
+    {
+      "changed_slot_count": 1513,
+      "file": "artifacts/data/train/sequence_006/segment_12.npz",
+      "file_sha256": "d18730232c5ee2f4b76966a4f44da2ab1a87140898fca8da45fb2b92ef8b6b8f",
+      "frame_range_inclusive": [
+        336,
+        363
+      ],
+      "scientific_content_hash": "3bf21078599eb5821bbe537682dd7535b9773bb6cdfbc9832510b0597434e16b",
+      "seed": 34106012,
+      "segment_index": 12,
+      "synthetic_sequence_id": "synthetic/train/006",
+      "synthetic_sequence_index": 6,
+      "window_count": 24,
+      "world_content_identity": "1befc306cc4c9e77afdcb42642635a6fb13423dd54fffee21e29ce51d4f7d1e0",
+      "world_identity": "98d63b5bac29f7a441d70e311126ac6c4423dbbccb89742ddd86129c700e49ba"
+    },
+    {
+      "changed_slot_count": 1984,
+      "file": "artifacts/data/train/sequence_006/segment_13.npz",
+      "file_sha256": "3bd84ccc8398bb025ff109c97d7cd3985706da97ffb5092c3960f74c58ebd644",
+      "frame_range_inclusive": [
+        364,
+        391
+      ],
+      "scientific_content_hash": "1b64520f0903ad9c6c516cf1603e5b49eb7de724fe60bc0f38cafe7a18120f5c",
+      "seed": 34106013,
+      "segment_index": 13,
+      "synthetic_sequence_id": "synthetic/train/006",
+      "synthetic_sequence_index": 6,
+      "window_count": 24,
+      "world_content_identity": "6cf6449d14f091ed8800ec25a76c1498d59d77b00ac88682bcb0146c271b9a86",
+      "world_identity": "7d77bb3bebad2c1ab27745a967fd9ab9c6b12b47807e5a2fd5b9b752352ed9b7"
+    },
+    {
+      "changed_slot_count": 5722,
+      "file": "artifacts/data/train/sequence_006/segment_14.npz",
+      "file_sha256": "86cd423efb83c2549069dca7b009243d940cb76eb526b0a9f056837db129bd5c",
+      "frame_range_inclusive": [
+        392,
+        419
+      ],
+      "scientific_content_hash": "86198e9afa8f9cb6cfbf843fae27eca5a39dfd29072f4b7896c492ecda9f9a7a",
+      "seed": 34106014,
+      "segment_index": 14,
+      "synthetic_sequence_id": "synthetic/train/006",
+      "synthetic_sequence_index": 6,
+      "window_count": 24,
+      "world_content_identity": "381a67c8373fb1f3bdf8fb28ec1c4e8ed6003d103a67155547a7071e93889137",
+      "world_identity": "60bbed786eed91265fcf0bf85ca713c3795daf0dbfc30b7894e69d8c6249abc8"
+    },
+    {
+      "changed_slot_count": 8257,
+      "file": "artifacts/data/train/sequence_006/segment_15.npz",
+      "file_sha256": "12004ce8c2f71479269bfce4d634237d2378cc23bdb1830020109225bb5d4566",
+      "frame_range_inclusive": [
+        420,
+        448
+      ],
+      "scientific_content_hash": "50b673f9179456d7997cb0a9d064e44453fd4197817d0502657092d3afc2982e",
+      "seed": 34106015,
+      "segment_index": 15,
+      "synthetic_sequence_id": "synthetic/train/006",
+      "synthetic_sequence_index": 6,
+      "window_count": 25,
+      "world_content_identity": "ecafaed45664a59b83568df6723c1ea8ec566508bd06caf7a67f9afb4377b548",
+      "world_identity": "309de72eaf06a26ed12f49e65143acf0b5b00f236ffb976e6d3924b2b5d8b2da"
+    },
+    {
+      "changed_slot_count": 9891,
+      "file": "artifacts/data/train/sequence_007/segment_00.npz",
+      "file_sha256": "e83e892f5aef6f2af703dedbcd30813c8b8f08c662058a2f97dbba606950c6e8",
+      "frame_range_inclusive": [
+        0,
+        27
+      ],
+      "scientific_content_hash": "196167b3dfc1ecfd09e8edd823a833dfab501677a1803027991e31aecd8345dd",
+      "seed": 34107000,
+      "segment_index": 0,
+      "synthetic_sequence_id": "synthetic/train/007",
+      "synthetic_sequence_index": 7,
+      "window_count": 24,
+      "world_content_identity": "cfd16ea9d755de0cb97e39e4df5c4a4743680b8527537344979e49fe569579dc",
+      "world_identity": "83be141e57292bc328320a47b6012e72b63e3a21b08726f31720d277f9035907"
+    },
+    {
+      "changed_slot_count": 1764,
+      "file": "artifacts/data/train/sequence_007/segment_01.npz",
+      "file_sha256": "48c15f6aa54203007357b934f08b1dd6dad902f6b0e008f9fb1e895e3fa677f1",
+      "frame_range_inclusive": [
+        28,
+        55
+      ],
+      "scientific_content_hash": "a9c258f667fc7f8c518aa8554fbb7ac031dbdcd13fe60a2abeca012d7f9b4e28",
+      "seed": 34107001,
+      "segment_index": 1,
+      "synthetic_sequence_id": "synthetic/train/007",
+      "synthetic_sequence_index": 7,
+      "window_count": 24,
+      "world_content_identity": "6813cbd9a4f47836660b5b0342e6972263ea937c76e002348f773ed1f72a56b6",
+      "world_identity": "c9a4dbcfa520cac7bef48be054eece4c28f65c893bd39ae90d3ba702a17eabb7"
+    },
+    {
+      "changed_slot_count": 6119,
+      "file": "artifacts/data/train/sequence_007/segment_02.npz",
+      "file_sha256": "ec15336b7257dfb1f7563269cd871135447f38b9e658ce8a1633a020d2165117",
+      "frame_range_inclusive": [
+        56,
+        83
+      ],
+      "scientific_content_hash": "8a999179abd7e48f6e5f3eb8954c8a593f82630bc623404877d38cfd47eee2f3",
+      "seed": 34107002,
+      "segment_index": 2,
+      "synthetic_sequence_id": "synthetic/train/007",
+      "synthetic_sequence_index": 7,
+      "window_count": 24,
+      "world_content_identity": "58fa9fe2c5e2792c4e26ba780fbaf708035374e44a0d9fe5d9d974d2de2ddca1",
+      "world_identity": "39d86ed235a1c610e1ab39d835f927ab590fae43400f4ff284b315f9531b12a1"
+    },
+    {
+      "changed_slot_count": 312,
+      "file": "artifacts/data/train/sequence_007/segment_03.npz",
+      "file_sha256": "9bb27d822960fabd09aec6c2124085df184b1686d813c09a9eb9bdf2d70fdfaa",
+      "frame_range_inclusive": [
+        84,
+        111
+      ],
+      "scientific_content_hash": "07133dd2f36fe7d5ea194fed3243ddd3ce08dfaf845e6b16a9628285887a9b43",
+      "seed": 34107003,
+      "segment_index": 3,
+      "synthetic_sequence_id": "synthetic/train/007",
+      "synthetic_sequence_index": 7,
+      "window_count": 24,
+      "world_content_identity": "64d1a80646ebda001143b188d826448406cefec13b0b821582994854158d2bbf",
+      "world_identity": "059c56fa05085e89f3598c28115415300bacc3cb512fa04ecc97ea28269177bb"
+    },
+    {
+      "changed_slot_count": 14375,
+      "file": "artifacts/data/train/sequence_007/segment_04.npz",
+      "file_sha256": "da4a0cc13fdea2a8ede7e6820be50f562a1803129c6bad4dda0e85d197e08b3d",
+      "frame_range_inclusive": [
+        112,
+        139
+      ],
+      "scientific_content_hash": "4ba2d7e54347c8730257e6a81075df95b14bff187b1d529f2ab08f01b21db3cf",
+      "seed": 34107004,
+      "segment_index": 4,
+      "synthetic_sequence_id": "synthetic/train/007",
+      "synthetic_sequence_index": 7,
+      "window_count": 24,
+      "world_content_identity": "f17166061ea8def524e4f8d9973dbb04b5083671f9d139131fc600ceefd9cf94",
+      "world_identity": "1c776a1347607a8a76c319bdfbbb90962193dbd2576a6c868855dcfa0a0b8723"
+    },
+    {
+      "changed_slot_count": 4494,
+      "file": "artifacts/data/train/sequence_007/segment_05.npz",
+      "file_sha256": "cec6f6b29e496218d5e61f542aa4b24362ca4d62c33e03c6f023f549f961705c",
+      "frame_range_inclusive": [
+        140,
+        167
+      ],
+      "scientific_content_hash": "d97c3573f8fd3efd979acf6009329c19aae2a5556313ee29bc1575bd43cdb38b",
+      "seed": 34107005,
+      "segment_index": 5,
+      "synthetic_sequence_id": "synthetic/train/007",
+      "synthetic_sequence_index": 7,
+      "window_count": 24,
+      "world_content_identity": "e9005f916fa88465808ffd222e9f502bacf5da254446497a69ff82fbc72a4308",
+      "world_identity": "18ca1af6ce024318a5dc92d9afee63027e2ac2187b0210137bfa6767cd4bd65f"
+    },
+    {
+      "changed_slot_count": 1584,
+      "file": "artifacts/data/train/sequence_007/segment_06.npz",
+      "file_sha256": "6627653ce6171d4dc10732b314ef5ec8bfe6a2006c432ad9429da7ce3a8e95df",
+      "frame_range_inclusive": [
+        168,
+        195
+      ],
+      "scientific_content_hash": "db98ea0ff1f3e51fb99b42d27787900aa10955b70ea2075e37453f9f6ce7712b",
+      "seed": 34107006,
+      "segment_index": 6,
+      "synthetic_sequence_id": "synthetic/train/007",
+      "synthetic_sequence_index": 7,
+      "window_count": 24,
+      "world_content_identity": "951d7d64d98c5ffc5c15a69c74471ca952d6b0a84aef254c84c05e2e9dbb64a1",
+      "world_identity": "4cc949784b4b722458511dae9678afda1c14767ce04fe8a5542241f731b168bf"
+    },
+    {
+      "changed_slot_count": 9878,
+      "file": "artifacts/data/train/sequence_007/segment_07.npz",
+      "file_sha256": "2f9c3a1c75fa561452ce49cea8b0064b27d6aa8d53064b136a33a628b01ce330",
+      "frame_range_inclusive": [
+        196,
+        223
+      ],
+      "scientific_content_hash": "7176ab599cd84aab8b1927974e83deab4150f12136dd0095d8b53d90c3c9201e",
+      "seed": 34107007,
+      "segment_index": 7,
+      "synthetic_sequence_id": "synthetic/train/007",
+      "synthetic_sequence_index": 7,
+      "window_count": 24,
+      "world_content_identity": "978afee67c542c151cda7ef83d118ba5044f0576fbf92879f1c3fbc0acbb1a29",
+      "world_identity": "50d89857c66e99ea5b09768622dcd34a432e376aa0d75c2ed05bcd0c196b30cb"
+    },
+    {
+      "changed_slot_count": 35585,
+      "file": "artifacts/data/train/sequence_007/segment_08.npz",
+      "file_sha256": "553ca1b3f4d86daae9d32957c909df1d14f7f390c021cc1c9e3c16606d0547e3",
+      "frame_range_inclusive": [
+        224,
+        251
+      ],
+      "scientific_content_hash": "e2b0a9fee1792faf0b024f8af3b38bc1a2cb13c3b5277571aa4760b90535adb4",
+      "seed": 34107008,
+      "segment_index": 8,
+      "synthetic_sequence_id": "synthetic/train/007",
+      "synthetic_sequence_index": 7,
+      "window_count": 24,
+      "world_content_identity": "0dd400a15820637f8e0ad05269982480c812202db4441999ecc9d399d310a2d0",
+      "world_identity": "bea8e965a452ed0bd54250a35bb20401c743f196fa5b0314f3bc62372489e729"
+    },
+    {
+      "changed_slot_count": 510,
+      "file": "artifacts/data/train/sequence_007/segment_09.npz",
+      "file_sha256": "48528a963e2001ccddf504b9dd1b792948d5b19458787ac90cf4fb9e78986a46",
+      "frame_range_inclusive": [
+        252,
+        279
+      ],
+      "scientific_content_hash": "b4d9eaee4d299f91b74dafe6b31360ea25612058b57404034b16d4d1eb72e7dd",
+      "seed": 34107009,
+      "segment_index": 9,
+      "synthetic_sequence_id": "synthetic/train/007",
+      "synthetic_sequence_index": 7,
+      "window_count": 24,
+      "world_content_identity": "9f86d6c8f58eaed64cbee86ed9f40bb605158e17b4c568ee4af277af33baba45",
+      "world_identity": "dab8946393d497c039090afa39141fa620cc291a3c266f1cfe936c1ec3f08f9d"
+    },
+    {
+      "changed_slot_count": 1116,
+      "file": "artifacts/data/train/sequence_007/segment_10.npz",
+      "file_sha256": "d214731fd94da7d919a65a5906e1837025ddcc2b4b301f075cf999acca1cbabd",
+      "frame_range_inclusive": [
+        280,
+        307
+      ],
+      "scientific_content_hash": "ccffbd023762982e31cec4a730b5c0f730228a2cc3e3ef874e8977c92c250c66",
+      "seed": 34107010,
+      "segment_index": 10,
+      "synthetic_sequence_id": "synthetic/train/007",
+      "synthetic_sequence_index": 7,
+      "window_count": 24,
+      "world_content_identity": "b2466bc454e3d3ab408d3666bad69e273ffdf5f599a1a098e784cab5b2f16ed2",
+      "world_identity": "35fe097b212c30a76c7c5cd8e29acd6fb2f068e3f216b3f86fca1551b985ff3f"
+    },
+    {
+      "changed_slot_count": 25403,
+      "file": "artifacts/data/train/sequence_007/segment_11.npz",
+      "file_sha256": "234766cee0cab08447d892f986c1963560d768af77e9093dcba1106a5dcff008",
+      "frame_range_inclusive": [
+        308,
+        335
+      ],
+      "scientific_content_hash": "777596acf487f190339ce5015e8d4040b09c3aa0e3f01c78cb3d8dce5212ac88",
+      "seed": 34107011,
+      "segment_index": 11,
+      "synthetic_sequence_id": "synthetic/train/007",
+      "synthetic_sequence_index": 7,
+      "window_count": 24,
+      "world_content_identity": "f915e0713ec29420a9b6d45ef32b6ba34d84033da7157dd7dc694eba35b19a21",
+      "world_identity": "4df7547a88e274b7bc3e6609c9879d6059ae675150909d1274987090f60e4178"
+    },
+    {
+      "changed_slot_count": 5085,
+      "file": "artifacts/data/train/sequence_007/segment_12.npz",
+      "file_sha256": "febe12fa92e8e5779537565c852ac35d089dfed194437ceee8002f2780abb77f",
+      "frame_range_inclusive": [
+        336,
+        363
+      ],
+      "scientific_content_hash": "3359b57215cb30c56ce4273387066cbff4953356e626b5fb83ce6541c579fe28",
+      "seed": 34107012,
+      "segment_index": 12,
+      "synthetic_sequence_id": "synthetic/train/007",
+      "synthetic_sequence_index": 7,
+      "window_count": 24,
+      "world_content_identity": "fc964fa7ef0b62979196053cb64f4c6601845f938c1ebb64704fd8bd7d70a7cc",
+      "world_identity": "f97350f08b90d7814ef8f6541d8eba4f6833439074b698b9879b090e161dcfeb"
+    },
+    {
+      "changed_slot_count": 36688,
+      "file": "artifacts/data/train/sequence_007/segment_13.npz",
+      "file_sha256": "db38453174d75d394e5abe8cbb3d74640d41fd846ac94f4ce8449a2e721814a1",
+      "frame_range_inclusive": [
+        364,
+        391
+      ],
+      "scientific_content_hash": "747948c03b6f4528f6e483fd56c625a6335c1cd527b1880a61d8c39e70e427a7",
+      "seed": 34107013,
+      "segment_index": 13,
+      "synthetic_sequence_id": "synthetic/train/007",
+      "synthetic_sequence_index": 7,
+      "window_count": 24,
+      "world_content_identity": "d9f8d51f31a647c1e63c1e2a7806ff84a48cf0734c13234cfd2aa8dc1c97e30c",
+      "world_identity": "6528161e9778c3c766eafae8383b4418ea09fe6e5119753e6da13690de19d5a2"
+    },
+    {
+      "changed_slot_count": 13644,
+      "file": "artifacts/data/train/sequence_007/segment_14.npz",
+      "file_sha256": "d280939d33214c32e86f388b4e08aeffc086197821f6210c53d4a6c85b63e0f4",
+      "frame_range_inclusive": [
+        392,
+        419
+      ],
+      "scientific_content_hash": "b4434fb3accb5d7038b3f36e01ee16c1b924b513af7f2e3225e86d8e4a47cb7f",
+      "seed": 34107014,
+      "segment_index": 14,
+      "synthetic_sequence_id": "synthetic/train/007",
+      "synthetic_sequence_index": 7,
+      "window_count": 24,
+      "world_content_identity": "8e30d28cce570daa87a50015d5ac953aeb09ab850019f95ded519fe5cc1fb7c8",
+      "world_identity": "d9ae0591b257245be35cbc75273624e312d1aa90961567a73229d0bfa5817ce4"
+    },
+    {
+      "changed_slot_count": 28991,
+      "file": "artifacts/data/train/sequence_007/segment_15.npz",
+      "file_sha256": "b82f741af120bb02f961adfec39e6981f4d82d6e3e4b4d2abaf476d01d29bc3a",
+      "frame_range_inclusive": [
+        420,
+        448
+      ],
+      "scientific_content_hash": "d5840608738dfe7722b70682230fa29b0b35b61d1426b7f9c1727f96723f42df",
+      "seed": 34107015,
+      "segment_index": 15,
+      "synthetic_sequence_id": "synthetic/train/007",
+      "synthetic_sequence_index": 7,
+      "window_count": 25,
+      "world_content_identity": "c99f3a8e106a8b28622ae1bd80eb30bf982c14f4844908d69d8e29d232dceac0",
+      "world_identity": "ab82a7d93fe93e51a6ecc91cc1fd4bf4154c63c7baa04796b9d0e13406fe9d2e"
+    }
+  ],
+  "source_sequence_id": 206,
+  "synthetic_sequence_count": 8,
+  "window_count": 3080,
+  "world_count": 128
+}

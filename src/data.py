@@ -67,9 +67,9 @@ except ImportError:  # Direct script execution.
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-SPARSE_SEGMENT_FORMAT = "ajae-sparse-rendered-segment-v1"
-POOL_MANIFEST_FORMAT = "ajae-synthetic-pool-manifest-v1"
-PREDICTION_FORMAT = "ajae-complete-window-point-prediction-v1"
+SPARSE_SEGMENT_FORMAT = "ajae-sparse-rendered-segment"
+POOL_MANIFEST_FORMAT = "ajae-synthetic-pool-manifest"
+PREDICTION_FORMAT = "ajae-complete-window-point-prediction"
 
 
 class DataProtocolError(ValueError):
@@ -84,7 +84,7 @@ def _sha256(path: Path) -> str:
 def _canonical_hash(
     metadata: Mapping[str, object], arrays: Mapping[str, np.ndarray]
 ) -> str:
-    digest = hashlib.sha256(b"AJAE-sparse-rendered-content-v1\0")
+    digest = hashlib.sha256(b"AJAE-sparse-rendered-content\0")
     digest.update(
         json.dumps(
             metadata,
@@ -327,7 +327,7 @@ class PredictionBatch:
 def _prediction_content_hash(
     metadata: Mapping[str, object], arrays: Mapping[str, np.ndarray]
 ) -> str:
-    digest = hashlib.sha256(b"AJAE-complete-window-point-prediction-v1\0")
+    digest = hashlib.sha256(b"AJAE-complete-window-point-prediction\0")
     digest.update(
         json.dumps(
             metadata,
@@ -526,6 +526,12 @@ class FrozenSyntheticSegment:
             or world.seed != metadata.get("seed")
             or report.world_seed != world.seed
             or report.source_sequence_id != world.source_sequence_id
+            or len(world.objects) != 1
+            or world.objects[0].object_id != 1
+            or report.anomaly_count != 1
+            or report.placement_mode
+            not in {"terminal_visible", "support_visible_fallback"}
+            or report.support_scope not in {"nearest_quartile", "all_segment"}
         ):
             raise DataProtocolError(
                 "stored world parameters or report are inconsistent"
@@ -562,7 +568,7 @@ class FrozenSyntheticSegment:
             or np.any(
                 (arrays["changed_packed_labels"] & np.uint32(0xFFFF)) != np.uint32(2)
             )
-            or np.any(arrays["changed_object_ids"] < 1)
+            or np.any(arrays["changed_object_ids"] != 1)
         ):
             raise DataProtocolError("sparse segment arrays are misaligned")
         frame_id_tuple = tuple(map(int, frame_ids))
@@ -572,6 +578,10 @@ class FrozenSyntheticSegment:
         window_identities = tuple(metadata["window_identities"])
         visible_counts = tuple(map(int, metadata["visible_point_counts"]))
         anomaly_counts = tuple(map(int, metadata["anomaly_return_counts"]))
+        if report.placement_mode == "terminal_visible" and (
+            not anomaly_counts or anomaly_counts[-1] < 1
+        ):
+            raise DataProtocolError("terminal-visible placement has no terminal return")
         expected_starts = tuple(range(frame_id_tuple[0], frame_id_tuple[-1] - 3))
         digest_lists = raw_identities + rendered_identities + window_identities
         if (
@@ -709,6 +719,10 @@ def generation_identity(protocol: AJAEProtocol, pool: SyntheticPoolSpec) -> str:
     payload = {
         "schema_version": protocol.schema_version,
         "pool": protocol.synthetic_pools[pool.name],
+        "anomaly_objects_per_segment": protocol.synthetic_pools[
+            "anomaly_objects_per_segment"
+        ],
+        "placement": protocol.synthetic_pools["placement"],
         "source_role": protocol.data[
             "parameter_update_source"
             if pool.source_sequence_id == 206
@@ -739,9 +753,9 @@ def generation_identity(protocol: AJAEProtocol, pool: SyntheticPoolSpec) -> str:
 
 
 def _pool_spec(protocol: AJAEProtocol, name: str) -> SyntheticPoolSpec:
-    if name == "train_v1":
+    if name == "train":
         return protocol.training_pool
-    if name == "validation_v1":
+    if name == "validation":
         return protocol.validation_pool
     raise KeyError(name)
 
@@ -1094,7 +1108,7 @@ def _parser() -> argparse.ArgumentParser:
         description="Generate schema-34 sparse synthetic data segments"
     )
     parser.add_argument("action", choices=("generate", "manifest"))
-    parser.add_argument("--pool", required=True, choices=("train_v1", "validation_v1"))
+    parser.add_argument("--pool", required=True, choices=("train", "validation"))
     parser.add_argument("--data-root", type=Path)
     parser.add_argument("--protocol", type=Path, default=PROJECT_ROOT / "protocol.json")
     parser.add_argument("--output-directory", type=Path)

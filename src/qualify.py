@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import platform
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Mapping, Sequence
 
@@ -29,7 +30,7 @@ try:
         source_observation_identity,
         world_content_identity,
     )
-    from .scene import LabelMode, STUSequence
+    from .scene import LabelMode, SceneWindow, STUSequence
 except ImportError:  # Direct script execution.
     from data import (  # type: ignore[no-redef]
         POOL_MANIFEST_FORMAT,
@@ -47,7 +48,7 @@ except ImportError:  # Direct script execution.
         source_observation_identity,
         world_content_identity,
     )
-    from scene import LabelMode, STUSequence
+    from scene import LabelMode, SceneWindow, STUSequence
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -55,6 +56,58 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 class QualificationError(AssertionError):
     """Report a failed model-independent data invariant."""
+
+
+def _write_window_ply(window: SceneWindow, path: Path) -> int:
+    """Export every visible point; colors encode supervision, never features."""
+
+    if window.labels is None:
+        raise QualificationError("truth-colored PLY requires point labels")
+    dtype = np.dtype(
+        [
+            ("x", "<f4"),
+            ("y", "<f4"),
+            ("z", "<f4"),
+            ("red", "u1"),
+            ("green", "u1"),
+            ("blue", "u1"),
+        ]
+    )
+    records = np.empty(window.points.count, dtype=dtype)
+    for index, name in enumerate(("x", "y", "z")):
+        records[name] = window.points.coordinates[:, index]
+    # Index 0 is ignore, 1 is normal, and 2 is anomaly.
+    palette = np.asarray(((0, 128, 255), (160, 160, 160), (255, 0, 0)), dtype=np.uint8)
+    colors = palette[window.labels.anomaly_target + 1]
+    for index, name in enumerate(("red", "green", "blue")):
+        records[name] = colors[:, index]
+    header = (
+        "ply\nformat binary_little_endian 1.0\n"
+        f"comment sequence {window.observation_sequence_id}\n"
+        f"comment frames {' '.join(map(str, window.frame_ids))}\n"
+        "comment coordinates current_frame_lidar\n"
+        "comment truth normal=160,160,160 anomaly=255,0,0 ignore=0,128,255\n"
+        f"element vertex {records.size}\n"
+        "property float x\nproperty float y\nproperty float z\n"
+        "property uchar red\nproperty uchar green\nproperty uchar blue\nend_header\n"
+    ).encode("ascii")
+    expected_size = len(header) + records.nbytes
+    if path.exists():
+        expected = hashlib.sha256(header)
+        expected.update(records.view(np.uint8))
+        if (
+            path.stat().st_size != expected_size
+            or _sha256(path) != expected.hexdigest()
+        ):
+            raise QualificationError(f"existing PLY differs from this window: {path}")
+        return expected_size
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(".ply.tmp")
+    with temporary.open("xb") as stream:
+        stream.write(header)
+        records.tofile(stream)
+    temporary.replace(path)
+    return expected_size
 
 
 def _sha256(path: Path) -> str:
@@ -69,8 +122,8 @@ def _load_manifest(
 ) -> Mapping[str, object]:
     resolved = path.expanduser().resolve(strict=True)
     artifact_key = {
-        "train_v1": "train_pool_manifest",
-        "validation_v1": "validation_pool_manifest",
+        "train": "train_pool_manifest",
+        "validation": "validation_pool_manifest",
     }[pool.name]
     expected_file_hash = protocol.artifacts[artifact_key]["sha256"]
     if expected_file_hash is not None and _sha256(resolved) != expected_file_hash:
@@ -126,6 +179,7 @@ def _qualify_pool(
     pool: SyntheticPoolSpec,
     manifest: Mapping[str, object],
     source: STUSequence,
+    ply_directory: Path | None = None,
 ) -> dict[str, object]:
     expected_pairs = {
         (sequence, segment)
@@ -144,6 +198,13 @@ def _qualify_pool(
     total_points = 0
     total_supervised = 0
     total_anomalies = 0
+    total_objects = 0
+    terminal_visible_worlds = 0
+    fallback_worlds = 0
+    empty_anomaly_windows = 0
+    official_eligible_windows = 0
+    ply_bytes = 0
+    placement_observations: list[dict[str, object]] = []
     for record in manifest["segments"]:
         expected_record_keys = {
             "file",
@@ -207,6 +268,13 @@ def _qualify_pool(
             raise QualificationError("segment file differs from its manifest hash")
         frozen = FrozenSyntheticSegment(path, source, str(record["file_sha256"]))
         metadata = frozen.metadata
+        object_count = len(metadata["world"]["objects"])
+        if (
+            object_count != 1
+            or metadata["world_generation_report"]["anomaly_count"] != 1
+        ):
+            raise QualificationError("a segment must contain exactly one anomaly proxy")
+        total_objects += object_count
         if (
             metadata["synthetic_sequence_id"] != record["synthetic_sequence_id"]
             or metadata["synthetic_sequence_index"]
@@ -223,6 +291,51 @@ def _qualify_pool(
         if frozen.frame_ids != tuple(range(span.start, span.stop)):
             raise QualificationError("segment source frames cross a frozen boundary")
         frames = tuple(frozen.frame(frame_id) for frame_id in frozen.frame_ids)
+        counts = tuple(map(int, metadata["anomaly_return_counts"]))
+        # Match the retained official evaluator's range and per-frame anomaly gate.
+        official_counts = []
+        for frame in frames:
+            anomaly_xyz = frame.xyzi[frame.labels.semantic == 2, :3]
+            ranges = np.linalg.norm(anomaly_xyz, axis=1)
+            official_counts.append(
+                int(np.count_nonzero((ranges >= 2.5) & (ranges <= 50)))
+            )
+        official_eligible_windows += sum(count >= 5 for count in official_counts[4:])
+        mode = metadata["world_generation_report"]["placement_mode"]
+        if mode == "terminal_visible" and counts[-1] == 0:
+            raise QualificationError("terminal-visible placement lost its final return")
+        terminal_visible_worlds += int(counts[-1] > 0)
+        fallback_worlds += int(mode == "support_visible_fallback")
+        empty_count = sum(sum(counts[i : i + 5]) == 0 for i in range(len(counts) - 4))
+        empty_anomaly_windows += empty_count
+        center = np.asarray(metadata["world"]["objects"][0]["translation_world_m"])
+        distances = np.asarray(
+            [np.linalg.norm(center - frame.lidar_pose[:3, 3]) for frame in frames]
+        )
+        visible = [
+            frame.frame_id for frame, count in zip(frames, counts, strict=True) if count
+        ]
+        placement_observations.append(
+            {
+                "synthetic_sequence_index": sequence_index,
+                "segment_index": segment_index,
+                "placement_mode": mode,
+                "support_scope": metadata["world_generation_report"]["support_scope"],
+                "first_visible_frame": visible[0],
+                "last_visible_frame": visible[-1],
+                "terminal_anomaly_return_count": counts[-1],
+                "terminal_official_anomaly_return_count": official_counts[-1],
+                "official_eligible_window_count": sum(
+                    count >= 5 for count in official_counts[4:]
+                ),
+                "first_object_center_distance_m": float(distances[0]),
+                "terminal_object_center_distance_m": float(distances[-1]),
+                "closest_object_center_frame": frames[
+                    int(np.argmin(distances))
+                ].frame_id,
+                "empty_anomaly_window_count": empty_count,
+            }
+        )
         total_frames += len(frames)
         first_object_by_frame = {frame.frame_id: frame for frame in frames}
         starts = pool.window_starts(segment_index)
@@ -267,6 +380,14 @@ def _qualify_pool(
             total_supervised += int(window.supervision_mask.sum())
             total_anomalies += int(np.count_nonzero(window.labels.anomaly_target == 1))
             output_frames_by_sequence[sequence_index].append(window.current_frame_id)
+            if ply_directory is not None:
+                path = (
+                    ply_directory
+                    / pool.name
+                    / f"sequence_{sequence_index:03d}"
+                    / f"window_{window.current_frame_id:06d}.ply"
+                )
+                ply_bytes += _write_window_ply(window, path)
     if observed_pairs != expected_pairs:
         raise QualificationError("formal manifest omits a predeclared segment")
     if total_windows != pool.total_window_count or total_anomalies < 1:
@@ -286,6 +407,13 @@ def _qualify_pool(
     return {
         "generation_identity": generation_identity(protocol, pool),
         "world_count": len(observed_worlds),
+        "anomaly_object_count": total_objects,
+        "terminal_visible_world_count": terminal_visible_worlds,
+        "support_visible_fallback_world_count": fallback_worlds,
+        "empty_anomaly_window_count": empty_anomaly_windows,
+        "official_eligible_window_count": official_eligible_windows,
+        "ply_bytes": ply_bytes,
+        "placement_observations": placement_observations,
         "rendered_frame_count": total_frames,
         "window_count": total_windows,
         "point_observation_count": total_points,
@@ -389,11 +517,12 @@ def qualify_data(
     protocol: AJAEProtocol,
     *,
     output_path: Path | None = None,
+    ply_directory: Path | None = None,
 ) -> dict[str, object]:
     """Run every schema-34 qualification check without loading a model."""
 
-    train_manifest_path = protocol.pool_manifest_path("train_v1")
-    validation_manifest_path = protocol.pool_manifest_path("validation_v1")
+    train_manifest_path = protocol.pool_manifest_path("train")
+    validation_manifest_path = protocol.pool_manifest_path("validation")
     train_manifest = _load_manifest(
         train_manifest_path,
         protocol.training_pool,
@@ -424,18 +553,26 @@ def qualify_data(
         raise QualificationError("train/201 is not exactly frames 0 through 681")
     duplicate_prefix = _qualify_duplicate_prefix(protocol, validation_sequence)
 
-    train_result = _qualify_pool(
-        protocol,
-        protocol.training_pool,
-        train_manifest,
-        train_sequence,
-    )
-    validation_result = _qualify_pool(
-        protocol,
-        protocol.validation_pool,
-        validation_manifest,
-        validation_sequence,
-    )
+    # Each pool has its own source cache; point order and reductions stay serial.
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        train_future = executor.submit(
+            _qualify_pool,
+            protocol,
+            protocol.training_pool,
+            train_manifest,
+            train_sequence,
+            ply_directory,
+        )
+        validation_future = executor.submit(
+            _qualify_pool,
+            protocol,
+            protocol.validation_pool,
+            validation_manifest,
+            validation_sequence,
+            ply_directory,
+        )
+        train_result = train_future.result()
+        validation_result = validation_future.result()
     normal_outputs: list[int] = []
     normal_points = 0
     for window in WindowPartition(validation_sequence, 4, 681):
@@ -453,22 +590,9 @@ def qualify_data(
     determinism = _repeat_first_training_segment(
         protocol, train_manifest, train_sequence
     )
-    history = protocol.authority["history"]
-    historical_hashes = {}
-    for file_key, hash_key in (
-        ("schema33_protocol", "schema33_protocol_sha256"),
-        ("F0_artifact", "F0_sha256"),
-        ("F1_artifact", "F1_sha256"),
-    ):
-        path = (protocol.path.parent / str(history[file_key])).resolve(strict=True)
-        observed = _sha256(path)
-        if observed != history[hash_key]:
-            raise QualificationError(f"historical artifact changed: {path}")
-        historical_hashes[file_key] = observed
-
     checks = {name: True for name in protocol.qualification["required_checks"]}
     result: dict[str, object] = {
-        "format": "ajae-schema34-data-qualification-v1",
+        "format": "ajae-schema34-data-qualification",
         "schema_version": protocol.schema_version,
         "model_independent": True,
         "passed": all(checks.values()),
@@ -482,7 +606,6 @@ def qualify_data(
                 protocol.path.parent
             ).as_posix(),
             "validation_manifest_sha256": _sha256(validation_manifest_path),
-            "historical_hashes": historical_hashes,
         },
         "train_pool": train_result,
         "synthetic_validation_pool": validation_result,
@@ -498,6 +621,23 @@ def qualify_data(
             "duplicate_prefix": duplicate_prefix,
         },
         "determinism_repeat": determinism,
+        "visualizations": None
+        if ply_directory is None
+        else {
+            "directory": ply_directory.resolve()
+            .relative_to(protocol.path.parent)
+            .as_posix(),
+            "format": "binary_little_endian_ply",
+            "window_count": train_result["window_count"]
+            + validation_result["window_count"],
+            "bytes": train_result["ply_bytes"] + validation_result["ply_bytes"],
+            "all_visible_points_retained": True,
+            "truth_colors": {
+                "normal": [160, 160, 160],
+                "anomaly": [255, 0, 0],
+                "ignore": [0, 128, 255],
+            },
+        },
         "environment": {
             "python": platform.python_version(),
             "numpy": np.__version__,
@@ -538,6 +678,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--data-root", required=True, type=Path)
     parser.add_argument("--protocol", type=Path, default=PROJECT_ROOT / "protocol.json")
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--ply-directory", type=Path)
     return parser
 
 
@@ -547,6 +688,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         args.data_root,
         load_protocol(args.protocol),
         output_path=args.output,
+        ply_directory=args.ply_directory,
     )
     print(
         json.dumps(

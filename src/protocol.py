@@ -304,7 +304,7 @@ class SyntheticPoolSpec:
         index = _integer(sequence_index, "synthetic sequence index")
         if index >= self.synthetic_sequence_count:
             raise IndexError(index)
-        return f"{self.name}/{index:03d}"
+        return f"synthetic/{self.name}/{index:03d}"
 
     def world_seed(self, sequence_index: int, segment_index: int) -> int:
         sequence = _integer(sequence_index, "synthetic sequence index")
@@ -373,8 +373,8 @@ class AJAEProtocol:
             }
         )
         pools = _mapping(document["synthetic_pools"], "synthetic pools")
-        self.training_pool = self._pool("train_v1", pools["train_v1"])
-        self.validation_pool = self._pool("validation_v1", pools["validation_v1"])
+        self.training_pool = self._pool("train", pools["train"])
+        self.validation_pool = self._pool("validation", pools["validation"])
 
     @staticmethod
     def _sequence(data: Mapping[str, object], key: str) -> SequenceSpec:
@@ -524,8 +524,8 @@ class AJAEProtocol:
 
     def pool_manifest_path(self, pool_name: str) -> Path:
         key = {
-            "train_v1": "train_pool_manifest",
-            "validation_v1": "validation_pool_manifest",
+            "train": "train_pool_manifest",
+            "validation": "validation_pool_manifest",
         }.get(pool_name)
         if key is None:
             raise KeyError(pool_name)
@@ -570,7 +570,7 @@ class AJAEProtocol:
             raise ProtocolError("protocol must be the sole schema-34 contract")
 
         status = _mapping(source["status"], "status")
-        if status.get("route") != "ajae_data_and_five_frame_supervision_v2":
+        if status.get("route") != "ajae_data_and_five_frame_supervision":
             raise ProtocolError("schema 34 route is invalid")
         state = status.get("state")
         if state not in {"qualification_pending", "frozen"}:
@@ -580,7 +580,6 @@ class AJAEProtocol:
             "training_allowed",
             "validation_tuning_allowed",
             "real_anomaly_access_allowed",
-            "old_F2_F3_retired",
         ):
             if type(status.get(key)) is not bool:
                 raise ProtocolError(f"status.{key} must be boolean")
@@ -590,25 +589,12 @@ class AJAEProtocol:
             or status["training_allowed"] is not frozen
             or status["validation_tuning_allowed"] is not frozen
             or status["real_anomaly_access_allowed"] is not False
-            or status["old_F2_F3_retired"] is not True
         ):
             raise ProtocolError("schema 34 execution permissions contradict its state")
 
         authority = _mapping(source["authority"], "authority")
-        history = _mapping(authority["history"], "history")
-        if (
-            authority.get("scientific_document") != "AJAE数据与五帧监督协议v2.md"
-            or authority.get("supersedes")
-            != "schema33_frozen_stu_dense_input_feasibility"
-            or history.get("schema33_protocol") != "history/schema33/protocol.json"
-            or history.get("F0_artifact") != "artifacts/f0_qualification.json"
-            or history.get("F1_artifact") != "artifacts/f1_geometry.json"
-        ):
-            raise ProtocolError("schema-34 authority or historical boundary changed")
-        for key in ("schema33_protocol_sha256", "F0_sha256", "F1_sha256"):
-            _sha256(history[key], f"history.{key}")
-        if history.get("interpretation") != "historical_mechanism_evidence_only":
-            raise ProtocolError("schema 33 evidence cannot be active evidence")
+        if authority != {"scientific_document": "PROTOCOL.md"}:
+            raise ProtocolError("the scientific protocol document changed")
 
         data = _mapping(source["data"], "data")
         archives = _mapping(data["official_archive_sha256"], "official archives")
@@ -751,7 +737,7 @@ class AJAEProtocol:
 
         storage = _mapping(source["storage"], "storage")
         if (
-            storage.get("format") != "ajae-sparse-rendered-segment-v1"
+            storage.get("format") != "ajae-sparse-rendered-segment"
             or storage.get("source_frames")
             != "official_raw_STU_files_bound_by_per_frame_content_hashes"
             or storage.get("synthetic_delta")
@@ -789,7 +775,7 @@ class AJAEProtocol:
 
         predictions = _mapping(source["predictions"], "predictions")
         if (
-            predictions.get("format") != "ajae-complete-window-point-prediction-v1"
+            predictions.get("format") != "ajae-complete-window-point-prediction"
             or tuple(predictions.get("required_point_record_fields", ()))
             != (
                 "synthetic_or_raw_sequence_id",
@@ -807,23 +793,34 @@ class AJAEProtocol:
             raise ProtocolError("point-score persistence or online selection changed")
 
         pools = _mapping(source["synthetic_pools"], "synthetic pools")
+        placement = _mapping(pools.get("placement"), "placement")
+        if placement != {
+            "preference": "nearest_terminal_support_quartile_then_all_segment_support",
+            "nearby_support_quantile": 0.25,
+            "visibility": "terminal_return_preferred_else_recorded_support_visible_fallback",
+            "physical_constraints": "unchanged",
+            "empty_anomaly_windows": "retain_as_normal_supervision",
+        }:
+            raise ProtocolError("the terminal placement preference changed")
         if (
             pools.get("generation_order")
             != "sample_one_world_per_segment_then_render_each_segment_frame_once_then_cut_windows"
+            or type(pools.get("anomaly_objects_per_segment")) is not int
+            or pools.get("anomaly_objects_per_segment") != 1
             or pools.get("cross_segment_windows") != "forbidden"
             or pools.get("rerender_same_frame_for_overlapping_windows") != "forbidden"
             or pools.get("root_seed_substitution_after_protocol_freeze") != "forbidden"
         ):
             raise ProtocolError("synthetic world-before-window generation changed")
-        train_record = _mapping(pools["train_v1"], "train_v1")
-        validation_record = _mapping(pools["validation_v1"], "validation_v1")
-        train_pool = cls._pool("train_v1", train_record)
-        validation_pool = cls._pool("validation_v1", validation_record)
+        train_record = _mapping(pools["train"], "train")
+        validation_record = _mapping(pools["validation"], "validation")
+        train_pool = cls._pool("train", train_record)
+        validation_pool = cls._pool("validation", validation_record)
         if (
             train_pool.source_sequence_id != 206
             or train_pool.synthetic_sequence_count != 8
             or train_pool.seed_base != 34100000
-            or train_pool.output_directory != "artifacts/data_v2/train"
+            or train_pool.output_directory != "artifacts/data/train"
             or tuple(map(len, train_pool.segments)) != (28,) * 15 + (29,)
             or _int_tuple(train_record["segment_lengths"], "train segment lengths")
             != (28,) * 15 + (29,)
@@ -839,7 +836,7 @@ class AJAEProtocol:
             validation_pool.source_sequence_id != 201
             or validation_pool.synthetic_sequence_count != 4
             or validation_pool.seed_base != 34200000
-            or validation_pool.output_directory != "artifacts/data_v2/validation"
+            or validation_pool.output_directory != "artifacts/data/validation"
             or tuple(map(len, validation_pool.segments)) != (28,) * 22 + (66,)
             or _int_tuple(
                 validation_record["segment_lengths"],
@@ -877,10 +874,10 @@ class AJAEProtocol:
         calibration = _mapping(artifacts["sensor_calibration"], "sensor calibration")
         if (
             calibration.get("file") != "artifacts/calibration.pt"
-            or calibration.get("source_file") != "artifacts/e11_d4b_calibration.npz"
+            or calibration.get("source_file") != "artifacts/calibration_source.npz"
         ):
             raise ProtocolError("sensor calibration paths changed")
-        _sha256(calibration["sha256"], "sensor calibration")
+        _sha256(calibration["sha256"], "sensor calibration", pending_allowed=not frozen)
         _sha256(calibration["source_sha256"], "sensor calibration source")
         support = _mapping(artifacts["qualified_support_pools"], "support pools")
         expected_support = {
@@ -926,12 +923,12 @@ class AJAEProtocol:
             _sha256(
                 record["sha256"],
                 f"support train/{sequence_id}",
-                pending_allowed=sequence_id == 201,
+                pending_allowed=not frozen,
             )
         expected_artifact_paths = {
-            "train_pool_manifest": "artifacts/data_v2/train_manifest.json",
-            "validation_pool_manifest": "artifacts/data_v2/validation_manifest.json",
-            "qualification": "artifacts/data_v2/qualification.json",
+            "train_pool_manifest": "artifacts/data/train_manifest.json",
+            "validation_pool_manifest": "artifacts/data/validation_manifest.json",
+            "qualification": "artifacts/data/qualification.json",
         }
         for key, expected_path in expected_artifact_paths.items():
             record = _mapping(artifacts[key], key)
@@ -955,6 +952,8 @@ class AJAEProtocol:
             "train_206_has_exactly_frames_0_through_448",
             "train_segments_are_disjoint_and_cover_0_through_448",
             "one_fixed_world_per_segment",
+            "exactly_one_anomaly_proxy_per_segment",
+            "terminal_placement_visibility_and_physical_exceptions_are_recorded",
             "same_seed_repeats_bitwise",
             "different_formal_seeds_produce_different_physical_world_contents",
             "each_segment_frame_is_rendered_once",

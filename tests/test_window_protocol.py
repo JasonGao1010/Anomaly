@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+import json
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -12,11 +14,19 @@ from src.data import (
     WindowPartition,
     save_sparse_segment,
 )
-from src.protocol import FrameSpan, SCHEMA_VERSION, SequenceSpec, load_protocol
+from src.protocol import (
+    AJAEProtocol,
+    FrameSpan,
+    ProtocolError,
+    SCHEMA_VERSION,
+    SequenceSpec,
+    load_protocol,
+)
 from src.render import (
     MaterialSpec,
     ObjectSpec,
     RayGrid,
+    RenderError,
     SensorCalibration,
     ShapeSpec,
     WorldGenerationReport,
@@ -25,6 +35,7 @@ from src.render import (
     world_content_identity,
 )
 from src.scene import PointLabels, STUSequence, assemble_window, make_source_frame
+from src.qualify import _write_window_ply
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -78,7 +89,7 @@ def _window(order: tuple[int, ...] = (0, 1, 2, 3, 4)) -> object:
         0,
         tuple(range(5)),
         tuple(by_id[frame] for frame in order),
-        observation_sequence_id="train_v1/000",
+        observation_sequence_id="synthetic/train/000",
     )
 
 
@@ -134,7 +145,6 @@ def _rendered_fixture(sequence_id: int = 206) -> tuple[object, tuple[object, ...
         0,
         1,
         world.seed,
-        world.seed,
     )
     grid = RayGrid(
         np.asarray(((1.0, 0.0, 0.0),)),
@@ -167,7 +177,6 @@ def test_schema34_freezes_data_roles_and_counts() -> None:
     assert protocol.training_pool.total_window_count == 3080
     assert protocol.validation_pool.world_count == 92
     assert protocol.validation_pool.total_window_count == 2360
-    assert protocol.status["old_F2_F3_retired"] is True
     assert protocol.status["real_anomaly_access_allowed"] is False
     for key in (
         "train_pool_manifest",
@@ -195,6 +204,48 @@ def test_segments_cover_sources_without_overlap_and_windows_do_not_cross() -> No
             for start in pool.window_starts(index):
                 assert segment.start <= start
                 assert start + 4 < segment.stop
+
+
+def test_protocol_rejects_more_than_one_anomaly_proxy_per_segment() -> None:
+    document = json.loads((ROOT / "protocol.json").read_text(encoding="utf-8"))
+    document["synthetic_pools"]["anomaly_objects_per_segment"] = 2
+    with pytest.raises(ProtocolError, match="world-before-window"):
+        AJAEProtocol(document, path=ROOT / "protocol.json")
+
+
+def test_formal_segments_each_contain_exactly_one_anomaly_proxy() -> None:
+    protocol = load_protocol()
+    assert protocol.synthetic_pools["anomaly_objects_per_segment"] == 1
+    for pool in (protocol.training_pool, protocol.validation_pool):
+        manifest = json.loads(protocol.pool_manifest_path(pool.name).read_text())
+        assert len(manifest["segments"]) == pool.world_count
+        for record in manifest["segments"]:
+            with np.load(ROOT / record["file"], allow_pickle=False) as data:
+                metadata = json.loads(str(data["metadata_json"].item()))
+                assert len(metadata["world"]["objects"]) == 1
+                assert metadata["world_generation_report"]["anomaly_count"] == 1
+                assert np.all(data["changed_object_ids"] == 1)
+
+
+def test_segment_renderer_rejects_multiple_anomaly_proxies() -> None:
+    segment, sources = _rendered_fixture()
+    first = segment.world.objects[0]
+    multiple = replace(
+        segment.world,
+        objects=(
+            first,
+            replace(first, object_id=2, translation_world_m=(8.0, 0.0, 0.0)),
+        ),
+    )
+    with pytest.raises(RenderError, match="exactly one anomaly proxy"):
+        render_segment_world(
+            multiple,
+            replace(segment.report, anomaly_count=2),
+            sources,
+            None,
+            None,
+            renderer_identity="a" * 64,
+        )
 
 
 def test_formal_seeds_are_unique_and_predeclared() -> None:
@@ -322,6 +373,33 @@ def test_prediction_batch_requires_and_persists_all_point_scores(
         PredictionBatch.from_window(window, scores[:-1])
 
 
+def test_ply_preserves_all_coordinates_and_truth_colors(tmp_path: Path) -> None:
+    window = _window()
+    path = tmp_path / "window.ply"
+    size = _write_window_ply(window, path)
+    raw = path.read_bytes()
+    header, body = raw.split(b"end_header\n", 1)
+    assert b"format binary_little_endian 1.0" in header
+    assert f"element vertex {window.points.count}".encode() in header
+    points = np.frombuffer(body, dtype=[("xyz", "<f4", 3), ("rgb", "u1", 3)])
+    assert np.array_equal(points["xyz"], window.points.coordinates)
+    assert np.all(points["rgb"][window.labels.anomaly_target == 0] == (160, 160, 160))
+    assert np.all(points["rgb"][window.labels.anomaly_target == -1] == (0, 128, 255))
+    assert size == len(raw) == _write_window_ply(window, path)
+    segment, sources = _rendered_fixture()
+    spec = SequenceSpec("train", 206, "fixture", True, FrameSpan(0, 5))
+    anomaly_window = assemble_window(
+        spec, 0, tuple(range(5)), tuple(f.source for f in segment.rendered_frames)
+    )
+    anomaly_path = tmp_path / "anomaly.ply"
+    _write_window_ply(anomaly_window, anomaly_path)
+    anomaly_body = anomaly_path.read_bytes().split(b"end_header\n", 1)[1]
+    anomaly_points = np.frombuffer(
+        anomaly_body, dtype=[("xyz", "<f4", 3), ("rgb", "u1", 3)]
+    )
+    assert np.all(anomaly_points["rgb"] == (255, 0, 0))
+
+
 def test_window_partition_maps_each_output_to_past_four_plus_current() -> None:
     sequence = object.__new__(STUSequence)
     sequence.window_starts = tuple(range(20))
@@ -365,8 +443,8 @@ def test_sparse_segment_round_trip_preserves_points_labels_and_window(
         path,
         segment,
         sources,
-        pool_name="train_v1",
-        synthetic_sequence_id="train_v1/000",
+        pool_name="train",
+        synthetic_sequence_id="synthetic/train/000",
         synthetic_sequence_index=0,
         segment_index=0,
     )
@@ -380,23 +458,10 @@ def test_sparse_segment_round_trip_preserves_points_labels_and_window(
         assert np.array_equal(actual.xyzi, expected.source.xyzi)
         assert np.array_equal(actual.labels.packed, expected.packed_labels)
     window = frozen.window(0)
-    assert window.observation_sequence_id == "train_v1/000"
+    assert window.observation_sequence_id == "synthetic/train/000"
     assert window.points.count == 5
     assert np.all(window.labels.anomaly_target == 1)
     assert np.array_equal(
         window.points.coordinates[window.current_mask],
         segment.rendered_frames[-1].source.xyzi[:, :3],
     )
-
-
-def test_schema33_protocol_and_F0_F1_bytes_are_history_only_and_unchanged() -> None:
-    protocol = load_protocol()
-    history = protocol.authority["history"]
-    for file_key, hash_key in (
-        ("schema33_protocol", "schema33_protocol_sha256"),
-        ("F0_artifact", "F0_sha256"),
-        ("F1_artifact", "F1_sha256"),
-    ):
-        path = ROOT / str(history[file_key])
-        assert hashlib.sha256(path.read_bytes()).hexdigest() == history[hash_key]
-    assert history["interpretation"] == "historical_mechanism_evidence_only"

@@ -21,7 +21,7 @@ try:
     from .protocol import AJAEProtocol, load_protocol
     from .render import (
         SUPPORT_POOL_SEMANTICS,
-        calibrated_ray_grid_from_e11,
+        calibrated_ray_grid,
         calibrate_sensor,
         save_sensor_calibration,
     )
@@ -30,7 +30,7 @@ except ImportError:  # Direct execution from src/.
     from protocol import AJAEProtocol, load_protocol
     from render import (  # type: ignore[no-redef]
         SUPPORT_POOL_SEMANTICS,
-        calibrated_ray_grid_from_e11,
+        calibrated_ray_grid,
         calibrate_sensor,
         save_sensor_calibration,
     )
@@ -197,15 +197,17 @@ def _support_anchor(anchor_frame: int) -> dict[str, np.ndarray]:
     selected = anchor_real & np.isin(anchor.labels.semantic, SUPPORT_POOL_SEMANTICS)
     slots = np.flatnonzero(selected).astype(np.int32)
     rotation, translation = _pose(anchor)
-    anchors = np.asarray(anchor.xyzi[slots, :3], dtype=np.float64) @ rotation.T + translation
-    ranges = np.linalg.norm(np.asarray(anchor.xyzi[slots, :3], dtype=np.float64), axis=1)
+    anchors = (
+        np.asarray(anchor.xyzi[slots, :3], dtype=np.float64) @ rotation.T + translation
+    )
+    ranges = np.linalg.norm(
+        np.asarray(anchor.xyzi[slots, :3], dtype=np.float64), axis=1
+    )
     anchor_semantics = np.asarray(anchor.labels.semantic[slots], dtype=np.uint16)
     cell_x = np.floor(anchors[:, 0] / 0.5).astype(np.int64)
     cell_y = np.floor(anchors[:, 1] / 0.5).astype(np.int64)
     packed = (np.uint64(anchor_frame) << np.uint64(32)) | slots.astype(np.uint64)
-    hashes = _splitmix64(
-        packed ^ (anchor_semantics.astype(np.uint64) << np.uint64(48))
-    )
+    hashes = _splitmix64(packed ^ (anchor_semantics.astype(np.uint64) << np.uint64(48)))
     order = np.lexsort((slots, hashes, cell_y, cell_x, anchor_semantics))
     groups = np.column_stack((anchor_semantics[order], cell_x[order], cell_y[order]))
     keep = np.ones(order.size, dtype=np.bool_)
@@ -255,7 +257,9 @@ def _support_anchor(anchor_frame: int) -> dict[str, np.ndarray]:
         "slot": np.asarray(output["slot"], dtype=np.int32),
         "range_m": np.asarray(output["range_m"], dtype=np.float64),
         "selection_hash": np.asarray(output["selection_hash"], dtype=np.uint64),
-        "anchor_world": np.asarray(output["anchor_world"], dtype=np.float64).reshape(count, 3),
+        "anchor_world": np.asarray(output["anchor_world"], dtype=np.float64).reshape(
+            count, 3
+        ),
         "normal": np.asarray(output["normal"], dtype=np.float64).reshape(count, 3),
         "offset": np.asarray(output["offset"], dtype=np.float64),
     }
@@ -296,7 +300,7 @@ def _build_support_pool(
         },
         "covered_anchor_frames": int(np.unique(arrays["frame"]).size),
         "scientific_array_hash": _scientific_array_hash(arrays),
-        "estimator": "E21-v4 unchanged three-scale trimmed-SVD",
+        "estimator": "three-scale trimmed-SVD",
         "split_rule": split_rule,
     }
     payload = dict(arrays)
@@ -318,7 +322,7 @@ def build_validation_support_pool(
         processes=processes,
         source_frames=VALIDATION_SOURCE_FRAMES,
         anchor_frames=VALIDATION_ANCHOR_FRAMES,
-        experiment="schema34-validation-support-pool",
+        experiment="validation-support-pool",
         split_rule="every estimator context frame is inside train/201 frames 0-681",
     )
 
@@ -326,7 +330,7 @@ def build_validation_support_pool(
 def build_training_support_pool(
     sequence: STUSequence, output_path: Path, *, processes: int
 ) -> dict[str, object]:
-    """Rebuild the inherited full train/206 support pool."""
+    """Build the full train/206 support pool."""
 
     return _build_support_pool(
         sequence,
@@ -334,7 +338,7 @@ def build_training_support_pool(
         processes=processes,
         source_frames=TRAINING_SOURCE_FRAMES,
         anchor_frames=TRAINING_ANCHOR_FRAMES,
-        experiment="schema33-training-support-pool",
+        experiment="training-support-pool",
         split_rule="every estimator context frame is inside train/206 frames 0-448",
     )
 
@@ -353,13 +357,12 @@ def build_calibration(
         sequence_id=206,
         label_mode=LabelMode.REQUIRED,
     )
-    ray_grid = calibrated_ray_grid_from_e11(source)
+    ray_grid = calibrated_ray_grid(source)
     sensor = calibrate_sensor(
         (sequence.source_frame(frame) for frame in range(449)),
         ray_grid,
         provenance={
-            "authority": "AJAE数据与五帧监督协议v2.md",
-            "algorithm_origin_schema": 30,
+            "authority": "PROTOCOL.md",
             "runtime_protocol_schema": 34,
         },
     )
@@ -390,10 +393,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.target in {"calibration", "all"}:
         output = protocol.sensor_calibration_path()
         build_calibration(args.data_root, output, protocol=protocol)
-        expected = str(protocol.artifacts["sensor_calibration"]["sha256"])
-        if _sha256(output) != expected:
+        expected = protocol.artifacts["sensor_calibration"]["sha256"]
+        digest = _sha256(output)
+        if expected is not None and digest != expected:
             raise PreparationError("rebuilt sensor calibration differs from protocol")
-        print(json.dumps({"calibration": str(output), "sha256": expected}))
+        print(json.dumps({"calibration": str(output), "sha256": digest}), flush=True)
     plans = (
         (
             201,

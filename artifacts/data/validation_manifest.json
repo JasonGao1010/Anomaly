@@ -1,0 +1,1577 @@
+{
+  "format": "ajae-synthetic-pool-manifest",
+  "generation_identity": "d4960e498bb3cc2977454751c04a06a0c473ccd952f3253d0f5d05b1bfa6385e",
+  "pool_name": "validation",
+  "schema_version": 34,
+  "scientific_content_hash": "639fe3d776ce0cd0d9591d15e5ae8b901b751063db1414ca85e608dd03281db1",
+  "segments": [
+    {
+      "changed_slot_count": 15999,
+      "file": "artifacts/data/validation/sequence_000/segment_00.npz",
+      "file_sha256": "3cf63a282632d54a7a42da361a0763d378e65fa620e08fbfaf16fa82f6ee75d6",
+      "frame_range_inclusive": [
+        0,
+        27
+      ],
+      "scientific_content_hash": "934dcb5f5a9a1d0c5ac17d037926f640885768be1d1b7e683c46119f4c04fea6",
+      "seed": 34200000,
+      "segment_index": 0,
+      "synthetic_sequence_id": "synthetic/validation/000",
+      "synthetic_sequence_index": 0,
+      "window_count": 24,
+      "world_content_identity": "926f2b33ec5bad5ce11efc585ab4d84b06bd17c154023a82d531acf4b924253d",
+      "world_identity": "b9cb5a4f79ca7e96233d778083acf4a222e6d9defeba10748bfa629f6d135c99"
+    },
+    {
+      "changed_slot_count": 212,
+      "file": "artifacts/data/validation/sequence_000/segment_01.npz",
+      "file_sha256": "c83c76d023db758c9066f687dbbdd65b7fac440c88cc134ae32b472db698c04e",
+      "frame_range_inclusive": [
+        28,
+        55
+      ],
+      "scientific_content_hash": "ce3d78c62c8ed1b53a383f35a42807f93c3c7249e1f9f2ea394a4aa7d36cbc75",
+      "seed": 34200001,
+      "segment_index": 1,
+      "synthetic_sequence_id": "synthetic/validation/000",
+      "synthetic_sequence_index": 0,
+      "window_count": 24,
+      "world_content_identity": "7ae93349ed4d6c6a9bd361831905f0f50354fe0a407e0363ddb3e66aa2d37d90",
+      "world_identity": "0d7df44f92371f0d0d51a914606e3bfc5f460d9d64ed3bf1ac94dc82b3788cc4"
+    },
+    {
+      "changed_slot_count": 20236,
+      "file": "artifacts/data/validation/sequence_000/segment_02.npz",
+      "file_sha256": "681901bd2c2a46ba7bfdc6286d88e8352a6686ba5b388d019390a173600368ac",
+      "frame_range_inclusive": [
+        56,
+        83
+      ],
+      "scientific_content_hash": "658e168693014b5a6753885dc22d6627b5effbb7231244ff93d3c96ba633b0ad",
+      "seed": 34200002,
+      "segment_index": 2,
+      "synthetic_sequence_id": "synthetic/validation/000",
+      "synthetic_sequence_index": 0,
+      "window_count": 24,
+      "world_content_identity": "545891cb774c988477e2f518a936d242bac72812295cbaaaaf44a5d1d3ccf295",
+      "world_identity": "21e0d77faa72b0afd01936f51b1f047d7582f0b97aa02fd5685219e1346da8e7"
+    },
+    {
+      "changed_slot_count": 14751,
+      "file": "artifacts/data/validation/sequence_000/segment_03.npz",
+      "file_sha256": "0312a0b5d818db9aa82682a144341773b042a2175c11ea7ab5ab399589338f30",
+      "frame_range_inclusive": [
+        84,
+        111
+      ],
+      "scientific_content_hash": "2378aa5d9856801de9ac7fd58bb62f946067c91a278baba02ceb828f20339cdf",
+      "seed": 34200003,
+      "segment_index": 3,
+      "synthetic_sequence_id": "synthetic/validation/000",
+      "synthetic_sequence_index": 0,
+      "window_count": 24,
+      "world_content_identity": "c1051b16c15bf3bb6cd67cb907c925ac502d142dd955bd1c2a53c79ce8a04dc0",
+      "world_identity": "52dcfe3be9800fae3da1259b765ba67abe212a1b147e6a840c58096d365a77c8"
+    },
+    {
+      "changed_slot_count": 11289,
+      "file": "artifacts/data/validation/sequence_000/segment_04.npz",
+      "file_sha256": "c89654f7e3c2f53237b8961e6642975ebd57b321d89029b4acd6a1e7d6810084",
+      "frame_range_inclusive": [
+        112,
+        139
+      ],
+      "scientific_content_hash": "548c1066cc0b76aea87463a5dc5720419ae18a8dbf92a080fcdf4b7a81a23784",
+      "seed": 34200004,
+      "segment_index": 4,
+      "synthetic_sequence_id": "synthetic/validation/000",
+      "synthetic_sequence_index": 0,
+      "window_count": 24,
+      "world_content_identity": "f1654bdbe0f1502bff5465d63ac8788ed8910d4a2e370174ce85cf1d02df6b34",
+      "world_identity": "5aeb252e84997a54c6c091737d16c207ea174e1bd280d17fe52865b7bfe4853f"
+    },
+    {
+      "changed_slot_count": 4636,
+      "file": "artifacts/data/validation/sequence_000/segment_05.npz",
+      "file_sha256": "f13aa5008bd057e0b096de4b2b2f02e0f31170d649fdbef4b6f09ef50b172e3e",
+      "frame_range_inclusive": [
+        140,
+        167
+      ],
+      "scientific_content_hash": "08d7b776da5bd595d215bc0d396ead212ca51c03796c577ec9553e76f0800d8c",
+      "seed": 34200005,
+      "segment_index": 5,
+      "synthetic_sequence_id": "synthetic/validation/000",
+      "synthetic_sequence_index": 0,
+      "window_count": 24,
+      "world_content_identity": "0667c3afab57e0d3eeed18bf4d1a12862f8d06026ea71c953f0a7935adf2a292",
+      "world_identity": "ac80c9b9d56dc9a22bff61020466c5bd1db8cf94a6d4ba8890ecc21dab00f70d"
+    },
+    {
+      "changed_slot_count": 23583,
+      "file": "artifacts/data/validation/sequence_000/segment_06.npz",
+      "file_sha256": "5ad42a87123e16dd0d4a04f71bb84d7d8e7bc5b3edbd0af43c6e0c7042bd93b7",
+      "frame_range_inclusive": [
+        168,
+        195
+      ],
+      "scientific_content_hash": "541e9fe564f2734358526ece3c21a897b756a95a37bf4d3e12dfdec267d987fc",
+      "seed": 34200006,
+      "segment_index": 6,
+      "synthetic_sequence_id": "synthetic/validation/000",
+      "synthetic_sequence_index": 0,
+      "window_count": 24,
+      "world_content_identity": "564de0a0976c77d21e383ae8645eefc45f736f5def0397985549011e090a3c26",
+      "world_identity": "532cd07d734986c4a4f69d64f56b8509c8dae8b5fcd52322a85cc1a492db52b6"
+    },
+    {
+      "changed_slot_count": 10950,
+      "file": "artifacts/data/validation/sequence_000/segment_07.npz",
+      "file_sha256": "a7a92433738dea49f120cdf4c018b71821104ff279acd5782d0d61c109fc3014",
+      "frame_range_inclusive": [
+        196,
+        223
+      ],
+      "scientific_content_hash": "d153b05d007aa6edfdb729a25140db8057d4d301a7b4abcbd72957d9d1de375b",
+      "seed": 34200007,
+      "segment_index": 7,
+      "synthetic_sequence_id": "synthetic/validation/000",
+      "synthetic_sequence_index": 0,
+      "window_count": 24,
+      "world_content_identity": "97ab413d94daf8d5962b2e70b2a8315826bb5809836ad08cf25e0aacaf4187f5",
+      "world_identity": "c4a3d40c08260ec47e5d455aabd836b1e10fb0f28457bce6640a944eff6444b2"
+    },
+    {
+      "changed_slot_count": 3701,
+      "file": "artifacts/data/validation/sequence_000/segment_08.npz",
+      "file_sha256": "d9234cad3e56d7e8aea75cafb17f2afdab554ef9e2f6d87a75a14a12564591f1",
+      "frame_range_inclusive": [
+        224,
+        251
+      ],
+      "scientific_content_hash": "d7f4ce0eaec0310a250e4df96d754ab43cfed974e83375f6f8e25c41704a44f9",
+      "seed": 34200008,
+      "segment_index": 8,
+      "synthetic_sequence_id": "synthetic/validation/000",
+      "synthetic_sequence_index": 0,
+      "window_count": 24,
+      "world_content_identity": "c6710a7746d7c8dffb9dd2733927a4c04c2912ba6e417a63b6f6b101061dcc1c",
+      "world_identity": "ebb3d73ad63f396bab92e730e875e3c7b1d26436e2d1e8ea2490f18b66f61e3e"
+    },
+    {
+      "changed_slot_count": 124253,
+      "file": "artifacts/data/validation/sequence_000/segment_09.npz",
+      "file_sha256": "079e379117e2b8703e7ab0bea515765da4784842cb95c22e1bc7158d5d3dd3c6",
+      "frame_range_inclusive": [
+        252,
+        279
+      ],
+      "scientific_content_hash": "22d653d41a597c98684e165c927a2f12725144417d47c2a4825eb491741831bd",
+      "seed": 34200009,
+      "segment_index": 9,
+      "synthetic_sequence_id": "synthetic/validation/000",
+      "synthetic_sequence_index": 0,
+      "window_count": 24,
+      "world_content_identity": "923078917596d370064691fdbb0ad486849b54a3f57b7e3f6492cb400a9da065",
+      "world_identity": "ec361c77f133409e4ede0590e2fafb55e97f3c6a8b2e7fbbfc5adabe01ec78da"
+    },
+    {
+      "changed_slot_count": 337,
+      "file": "artifacts/data/validation/sequence_000/segment_10.npz",
+      "file_sha256": "8bfc5df2bf04e829eb11da8787f7a4b9b832c5a01e9b51256a9cad3d29332280",
+      "frame_range_inclusive": [
+        280,
+        307
+      ],
+      "scientific_content_hash": "0dddc95e29e0f25b1e62c1a78edeedafc34c45711c8fddd4def7813718ffb38c",
+      "seed": 34200010,
+      "segment_index": 10,
+      "synthetic_sequence_id": "synthetic/validation/000",
+      "synthetic_sequence_index": 0,
+      "window_count": 24,
+      "world_content_identity": "fc804ddafbf0ee2f9828d23b45ee75e880dbea159be139dc51ab242d4b3931b9",
+      "world_identity": "e1548d988cf6b461a293870020075c3d61229305e71b53c9a90d4745ff06db0e"
+    },
+    {
+      "changed_slot_count": 5444,
+      "file": "artifacts/data/validation/sequence_000/segment_11.npz",
+      "file_sha256": "c33f0da04309a7190c6b949e8e2aaaf78df21226709e8d1b964f211f40f697ed",
+      "frame_range_inclusive": [
+        308,
+        335
+      ],
+      "scientific_content_hash": "956f58b4b1221fee458c5901bb8ec3e7026d3367102d85255d12eaaf6b6f447f",
+      "seed": 34200011,
+      "segment_index": 11,
+      "synthetic_sequence_id": "synthetic/validation/000",
+      "synthetic_sequence_index": 0,
+      "window_count": 24,
+      "world_content_identity": "565347097ee401c147e5249e6b3cdc90e18867f084ae4d6f65dfbe7680a2b2df",
+      "world_identity": "eb1dbc47d99cc6ca9948a4eb968f805a5f0ec4c2818f20cfa83d76520fe5586e"
+    },
+    {
+      "changed_slot_count": 79972,
+      "file": "artifacts/data/validation/sequence_000/segment_12.npz",
+      "file_sha256": "46410bbdd7807000934b945f817a7d59b37111a36be1a293560d037044104306",
+      "frame_range_inclusive": [
+        336,
+        363
+      ],
+      "scientific_content_hash": "c563036b51494d1f4c3f862898e5efea66675ca01a0ceef72a961d8fbcd2787c",
+      "seed": 34200012,
+      "segment_index": 12,
+      "synthetic_sequence_id": "synthetic/validation/000",
+      "synthetic_sequence_index": 0,
+      "window_count": 24,
+      "world_content_identity": "f2ed7e12d5326e49db3b50124e05153d9e0bb850f79e2b6d04bc36a4a1d1cd91",
+      "world_identity": "ff8b0574f85cc8f0a04b7823dbdce156198488f8a11c55e03f32f51f79d6f373"
+    },
+    {
+      "changed_slot_count": 21079,
+      "file": "artifacts/data/validation/sequence_000/segment_13.npz",
+      "file_sha256": "fb836001e43282c932dc684aa1aaf0f3c3dbcb040390a85dce31d92c6b919109",
+      "frame_range_inclusive": [
+        364,
+        391
+      ],
+      "scientific_content_hash": "352ca687236a1c34fcf2fba01f977288499da47472cc802c6468ee7d0c91b159",
+      "seed": 34200013,
+      "segment_index": 13,
+      "synthetic_sequence_id": "synthetic/validation/000",
+      "synthetic_sequence_index": 0,
+      "window_count": 24,
+      "world_content_identity": "5fdb4b1d91a332bb6bfc5998b73ecd0c042d70511583ccb1f73a848ef067bb70",
+      "world_identity": "9464c9392fc54512c8bf70c0e8ad905f755eb0b123ae1c6994b116d660d1e357"
+    },
+    {
+      "changed_slot_count": 11871,
+      "file": "artifacts/data/validation/sequence_000/segment_14.npz",
+      "file_sha256": "51838916de687b11f0cf8f03becf8a794708feb75ccf88e8335336b03b218d1b",
+      "frame_range_inclusive": [
+        392,
+        419
+      ],
+      "scientific_content_hash": "51741b2c8327f020408a71ae09c481ac29004be43aef33fee58847572e12b4e0",
+      "seed": 34200014,
+      "segment_index": 14,
+      "synthetic_sequence_id": "synthetic/validation/000",
+      "synthetic_sequence_index": 0,
+      "window_count": 24,
+      "world_content_identity": "c2cdac402d62e21c79073551ad454041e78dbadde43db2dfdaed8dcc26409c37",
+      "world_identity": "767c221040f6ae98b22e2fee495046f72193a7756d7c4c6c2743549c57024464"
+    },
+    {
+      "changed_slot_count": 1366,
+      "file": "artifacts/data/validation/sequence_000/segment_15.npz",
+      "file_sha256": "8199c25ddc93d42b850b78797a1181cd33c3f78efeb43e7b01fd3b7569f82664",
+      "frame_range_inclusive": [
+        420,
+        447
+      ],
+      "scientific_content_hash": "e2ee02252fb0e8c33111526b54f57ccf845c3730faf72ef71bc1c63fee06ac31",
+      "seed": 34200015,
+      "segment_index": 15,
+      "synthetic_sequence_id": "synthetic/validation/000",
+      "synthetic_sequence_index": 0,
+      "window_count": 24,
+      "world_content_identity": "3a8110a7eb1d950c2e706cf985d4c9bc64f79f7f589e19e7750bffc9bbdb071f",
+      "world_identity": "5b0504aecbc8e5c530e983e0213b803b6fe88a18db36ee1efe0defbc25232767"
+    },
+    {
+      "changed_slot_count": 170,
+      "file": "artifacts/data/validation/sequence_000/segment_16.npz",
+      "file_sha256": "4a55b10823c589df42b897b5d85a47d2777a44ce6cf49d0f06d155ddafe1ab9f",
+      "frame_range_inclusive": [
+        448,
+        475
+      ],
+      "scientific_content_hash": "3a1f2d397c214f08b8b3af9836f44c89842bf5c3741b5656c59a761363b307c2",
+      "seed": 34200016,
+      "segment_index": 16,
+      "synthetic_sequence_id": "synthetic/validation/000",
+      "synthetic_sequence_index": 0,
+      "window_count": 24,
+      "world_content_identity": "74841fe19b2c64eeec398ff233dd787a841d1a1ffd67c8782a724a9389bafa0b",
+      "world_identity": "302d1373c001886a65401a36056741ed011e411e1ab400977ac54ff7a1a49eb3"
+    },
+    {
+      "changed_slot_count": 8350,
+      "file": "artifacts/data/validation/sequence_000/segment_17.npz",
+      "file_sha256": "263be108329fa5d336c831a697d77d7a856656aa49f4a3db37b9e62169db53bf",
+      "frame_range_inclusive": [
+        476,
+        503
+      ],
+      "scientific_content_hash": "1f4bf77fb4d78bd51024814f622db2393803a545ef44056db6be23ef60867ca6",
+      "seed": 34200017,
+      "segment_index": 17,
+      "synthetic_sequence_id": "synthetic/validation/000",
+      "synthetic_sequence_index": 0,
+      "window_count": 24,
+      "world_content_identity": "5c8cdb7c388af2eed1ab9a114b0b7cf082cd948509dc15fed369dff11380d367",
+      "world_identity": "07244bc1bfacc82fc45a78a425aaf49fb06c4e87a824e81cf3fc47ab70b7b249"
+    },
+    {
+      "changed_slot_count": 2000,
+      "file": "artifacts/data/validation/sequence_000/segment_18.npz",
+      "file_sha256": "d5f741d373f663c2a4d3febcbedefbf60384095382edab51f311520926a10e5d",
+      "frame_range_inclusive": [
+        504,
+        531
+      ],
+      "scientific_content_hash": "f9d7d5848e301d491dee35ab928d5b5309d17ac7ac898dd8b157def75e381e8d",
+      "seed": 34200018,
+      "segment_index": 18,
+      "synthetic_sequence_id": "synthetic/validation/000",
+      "synthetic_sequence_index": 0,
+      "window_count": 24,
+      "world_content_identity": "2ddb50ff9203e9d43c1fff7e9dbc6a2e04a5a16828745faa89da0db9165b316b",
+      "world_identity": "af2c19efd0ee8611503f370b462e654f64cee620b36e1793fb66acd50505425b"
+    },
+    {
+      "changed_slot_count": 25500,
+      "file": "artifacts/data/validation/sequence_000/segment_19.npz",
+      "file_sha256": "44eebc06e5f8cf320c10bf932b3c48710f2f4beea2b70c5bbf2f2a295ec260d8",
+      "frame_range_inclusive": [
+        532,
+        559
+      ],
+      "scientific_content_hash": "b43e9548d2d91cfe4b1b4e7e80bcd08e7febf4d575d4ad138060582462c5505d",
+      "seed": 34200019,
+      "segment_index": 19,
+      "synthetic_sequence_id": "synthetic/validation/000",
+      "synthetic_sequence_index": 0,
+      "window_count": 24,
+      "world_content_identity": "03c54cb8e50f4df4d9f5e25f3bb56a605d04d48c3390bbebb1cfe0e52cfcd00f",
+      "world_identity": "92ac475aa48b575b56ee51c953f0c09ed5afa285fcf51284b3f7e322cabf557d"
+    },
+    {
+      "changed_slot_count": 49492,
+      "file": "artifacts/data/validation/sequence_000/segment_20.npz",
+      "file_sha256": "df40fa8f0504aef89b5fbaf5a32120719f6e9b6cb42f9692ddae01e89c73a1e3",
+      "frame_range_inclusive": [
+        560,
+        587
+      ],
+      "scientific_content_hash": "f3b4ddf8f900a131168e5088349bb096887e49d4a122cc5926e0423891d5a1ab",
+      "seed": 34200020,
+      "segment_index": 20,
+      "synthetic_sequence_id": "synthetic/validation/000",
+      "synthetic_sequence_index": 0,
+      "window_count": 24,
+      "world_content_identity": "af1712043b50544baae605df6e78b3d30f008786bf8f08a4ce71831c889faf74",
+      "world_identity": "a79b0e48f8f40ee3b3c64dcf7bd04ee54ad9191ba17a38517d01eddda3807602"
+    },
+    {
+      "changed_slot_count": 7161,
+      "file": "artifacts/data/validation/sequence_000/segment_21.npz",
+      "file_sha256": "fcb7b0832a89a492dce8d6c6c8c9051c2ac0892a3264ab4e28a79647bb139709",
+      "frame_range_inclusive": [
+        588,
+        615
+      ],
+      "scientific_content_hash": "83595ebc08eb395305a8b85af2dde1d4ba9c46690e581d52e0def882d5601385",
+      "seed": 34200021,
+      "segment_index": 21,
+      "synthetic_sequence_id": "synthetic/validation/000",
+      "synthetic_sequence_index": 0,
+      "window_count": 24,
+      "world_content_identity": "f32a447b9118a081ae1d3073ecec57c36321674ad2d7768d68ef44f4044a549e",
+      "world_identity": "05428ef242ab3aa5d381d5f818c62c05630cc6c8b8aad6d9f136d1fc9e347ac4"
+    },
+    {
+      "changed_slot_count": 1061,
+      "file": "artifacts/data/validation/sequence_000/segment_22.npz",
+      "file_sha256": "9896ab7281ff713ac13e793753f55ce7f2446cb1c17183565d0806e8b447f200",
+      "frame_range_inclusive": [
+        616,
+        681
+      ],
+      "scientific_content_hash": "51bd9574d7cecf89d7a5a610633d43d306e8330f6dfcdfaa618372788649f40d",
+      "seed": 34200022,
+      "segment_index": 22,
+      "synthetic_sequence_id": "synthetic/validation/000",
+      "synthetic_sequence_index": 0,
+      "window_count": 62,
+      "world_content_identity": "677128da2d3238cd4777003c74b7feefa07812339d85a719c59c29b33eb6a4ac",
+      "world_identity": "cec17c8377128f748adf077a259507b8e31aaa8f046b1c82b7ac352f3045a670"
+    },
+    {
+      "changed_slot_count": 165922,
+      "file": "artifacts/data/validation/sequence_001/segment_00.npz",
+      "file_sha256": "686506d87158fcec20750ffe0daaccbe84afa9b311e7d67cba133edbcf6a55fb",
+      "frame_range_inclusive": [
+        0,
+        27
+      ],
+      "scientific_content_hash": "4af2ff759ef72d8006b743b10e46ad68baaef726f6820942a8cf5ed3b7b347d6",
+      "seed": 34201000,
+      "segment_index": 0,
+      "synthetic_sequence_id": "synthetic/validation/001",
+      "synthetic_sequence_index": 1,
+      "window_count": 24,
+      "world_content_identity": "aeda062efef417d26c2ebe336791e07bec220a550cf200c4a7949985eba9ade3",
+      "world_identity": "c86816f15a51777d99db0838dd8e81eebb074906d7ec6465431f1343736ecb17"
+    },
+    {
+      "changed_slot_count": 585,
+      "file": "artifacts/data/validation/sequence_001/segment_01.npz",
+      "file_sha256": "a436da8445b6ec26bb015490d94effcdd9f190e07bfb87b8c6f5ffcda8d007d1",
+      "frame_range_inclusive": [
+        28,
+        55
+      ],
+      "scientific_content_hash": "9a8341a20958d501f1f61023b66b0a6e2636048854b9c1405beb18f201958b50",
+      "seed": 34201001,
+      "segment_index": 1,
+      "synthetic_sequence_id": "synthetic/validation/001",
+      "synthetic_sequence_index": 1,
+      "window_count": 24,
+      "world_content_identity": "d8d9009d2516debe630b0674d742bbc2a7e5b1b9a4a2fd2e87e58ad17fa764e8",
+      "world_identity": "e9ffb9f26d89bc72505cb5735c3f1877167a7f0713813e95043c7b6e653b7aad"
+    },
+    {
+      "changed_slot_count": 9181,
+      "file": "artifacts/data/validation/sequence_001/segment_02.npz",
+      "file_sha256": "0ccf40501a161fde57643417036ee90c41827a54ad92ff587eefb657510e7e93",
+      "frame_range_inclusive": [
+        56,
+        83
+      ],
+      "scientific_content_hash": "5d524cf54750b270a689d8cb714dcd14ae62922cad7536fde2fc9418b238813a",
+      "seed": 34201002,
+      "segment_index": 2,
+      "synthetic_sequence_id": "synthetic/validation/001",
+      "synthetic_sequence_index": 1,
+      "window_count": 24,
+      "world_content_identity": "fc9bd4e99c13feecc25f19b7896914dd63e72d20298546e09775036d9da47be8",
+      "world_identity": "c364f1617c9b2e7cabeb9ec543950684d7d00d5d3f6446908415099dd715f135"
+    },
+    {
+      "changed_slot_count": 6555,
+      "file": "artifacts/data/validation/sequence_001/segment_03.npz",
+      "file_sha256": "5b37945f52b66e6546c619eaa117c00326c015cd972aefbedc1cd69b5a1da542",
+      "frame_range_inclusive": [
+        84,
+        111
+      ],
+      "scientific_content_hash": "7632131f0bc0a15e639bc75847da9ad4b20c9fc005aa18dbccff0b6d336e2d7f",
+      "seed": 34201003,
+      "segment_index": 3,
+      "synthetic_sequence_id": "synthetic/validation/001",
+      "synthetic_sequence_index": 1,
+      "window_count": 24,
+      "world_content_identity": "2fc7c13242cc670e8d3de0f19ae73ee3977fd3b2e87d268358888f9ac1a870b8",
+      "world_identity": "13980314d964d151aa83ebf839bf7bea1b968b9f7ecf58d5636a3b71fc8f0e26"
+    },
+    {
+      "changed_slot_count": 18388,
+      "file": "artifacts/data/validation/sequence_001/segment_04.npz",
+      "file_sha256": "296e38c3ca2886832f1066ce33b39e252399e8cddaac9dda43790e37b7107ed6",
+      "frame_range_inclusive": [
+        112,
+        139
+      ],
+      "scientific_content_hash": "9f9fccb3dbeb52c6069a5e5c6280cc76bcf38368ac5163b15d4c5fd7ca6956e5",
+      "seed": 34201004,
+      "segment_index": 4,
+      "synthetic_sequence_id": "synthetic/validation/001",
+      "synthetic_sequence_index": 1,
+      "window_count": 24,
+      "world_content_identity": "a514fc52b4b7f5509e082f59e5acfe9fd33701c3fbebfb17387b6f3628e9bcec",
+      "world_identity": "cba5e8c8d20776ec11394f53e09754ba8e4d629e76fd10458459bb320f1b8d12"
+    },
+    {
+      "changed_slot_count": 2964,
+      "file": "artifacts/data/validation/sequence_001/segment_05.npz",
+      "file_sha256": "bef8fe9734261e619b2d03849d649982b18d336327d2771de171ac262b04a40e",
+      "frame_range_inclusive": [
+        140,
+        167
+      ],
+      "scientific_content_hash": "59bfe47913054d6968a53734f7c135e00facaa5f6bb9ba0fc0c6f1c032bb0c56",
+      "seed": 34201005,
+      "segment_index": 5,
+      "synthetic_sequence_id": "synthetic/validation/001",
+      "synthetic_sequence_index": 1,
+      "window_count": 24,
+      "world_content_identity": "945aaa711c39a350fa04bfe9f311762e7a333edb6fd9922ad2e00be933683b68",
+      "world_identity": "5b0d35f813a6bc6cf6e23be165e9cb3dc0358c8ff8e123a910cffe7bdfbcc1f7"
+    },
+    {
+      "changed_slot_count": 8835,
+      "file": "artifacts/data/validation/sequence_001/segment_06.npz",
+      "file_sha256": "57380acaac5a60f717063f1f5a74adb29f45f5db848b24a0dd1b326649796c00",
+      "frame_range_inclusive": [
+        168,
+        195
+      ],
+      "scientific_content_hash": "cd9bcacecbae1a12fe1fe4f0fda6385d23bf8a430988cc42a2f20275768fe087",
+      "seed": 34201006,
+      "segment_index": 6,
+      "synthetic_sequence_id": "synthetic/validation/001",
+      "synthetic_sequence_index": 1,
+      "window_count": 24,
+      "world_content_identity": "deb5bc2f8aaae370fe393e6501a17fffbf8b005074f91abb5a574b826a023404",
+      "world_identity": "590eb586eab58b30c48ab13ce6fe091b9c921c20ed325c5448d51c1759cc6d46"
+    },
+    {
+      "changed_slot_count": 6266,
+      "file": "artifacts/data/validation/sequence_001/segment_07.npz",
+      "file_sha256": "9e841926dabcf189f7fc7d8663b05ab17e9ee666a83133096e75d964f00c6e3f",
+      "frame_range_inclusive": [
+        196,
+        223
+      ],
+      "scientific_content_hash": "05f05e0e2271e178ac3f1e15fec069c2c9887989aa8e4dc9e3e6c492b8464722",
+      "seed": 34201007,
+      "segment_index": 7,
+      "synthetic_sequence_id": "synthetic/validation/001",
+      "synthetic_sequence_index": 1,
+      "window_count": 24,
+      "world_content_identity": "870fbe0332b57ed88509214ea7f97a901603dec250ae854cd4d64d0b7fcd8332",
+      "world_identity": "f1e1bc81f7d628c51f3442da2a504fed5b4b92c37eec2c2c0313d46683418ad6"
+    },
+    {
+      "changed_slot_count": 18620,
+      "file": "artifacts/data/validation/sequence_001/segment_08.npz",
+      "file_sha256": "2825371059d6564ef758d77d90f65fc99dac1ff479ab82c8d1fef0b8e15dd249",
+      "frame_range_inclusive": [
+        224,
+        251
+      ],
+      "scientific_content_hash": "104bde7029f470ea0dbbbb521216351b576e0160cf1489df54b23f8a88af250d",
+      "seed": 34201008,
+      "segment_index": 8,
+      "synthetic_sequence_id": "synthetic/validation/001",
+      "synthetic_sequence_index": 1,
+      "window_count": 24,
+      "world_content_identity": "f3777fe5457f0424f23d105577db8a79e842ca3ba7afa8412c8b6c195a72e6a4",
+      "world_identity": "cc24d0d73e5c236007f44e140b56e111dedb202dd1de09a2c39dae1df69ace72"
+    },
+    {
+      "changed_slot_count": 2498,
+      "file": "artifacts/data/validation/sequence_001/segment_09.npz",
+      "file_sha256": "c5cdf4c6febc4db9478ed892ce30e9d683aa90b2d015d28c5f5e6af973529f7d",
+      "frame_range_inclusive": [
+        252,
+        279
+      ],
+      "scientific_content_hash": "ace7bdb702161f49f26c8a3c36a2b83e8295535be2a932d2b4fb87b9ac0ef716",
+      "seed": 34201009,
+      "segment_index": 9,
+      "synthetic_sequence_id": "synthetic/validation/001",
+      "synthetic_sequence_index": 1,
+      "window_count": 24,
+      "world_content_identity": "e35388252019ce6726cfcce037d8934722ce8b31b7d9e4839d3acde14d8e3317",
+      "world_identity": "89ab220e22f028286ae1cb6c6104e02097e366817daf44e4618a911b9ebd25db"
+    },
+    {
+      "changed_slot_count": 2532,
+      "file": "artifacts/data/validation/sequence_001/segment_10.npz",
+      "file_sha256": "a6c2ba1c9c12774584fa26588ed1aaf25911b29c3a35cc981886fe29cc56136e",
+      "frame_range_inclusive": [
+        280,
+        307
+      ],
+      "scientific_content_hash": "14387bc8419e2d1d05d7f40d08ae98e7ecc12e6dfd24b8818cce525c82db8c94",
+      "seed": 34201010,
+      "segment_index": 10,
+      "synthetic_sequence_id": "synthetic/validation/001",
+      "synthetic_sequence_index": 1,
+      "window_count": 24,
+      "world_content_identity": "75967612e86cc1afedb39104a552824f1e54090872590a3a1203ce9fa815bb49",
+      "world_identity": "70a87ac057292449b565b88e38c6b4866b1c70ab58b21538f3ac2cf105762820"
+    },
+    {
+      "changed_slot_count": 2131,
+      "file": "artifacts/data/validation/sequence_001/segment_11.npz",
+      "file_sha256": "ab9feb5d51964deb470e8476963c0bef7b3290ccac73a647a279866f61baf52b",
+      "frame_range_inclusive": [
+        308,
+        335
+      ],
+      "scientific_content_hash": "5619b4da00c156f5fcdd62cbe28573dd539e998fbd4bb8f3c5c0fc14ceb3f50b",
+      "seed": 34201011,
+      "segment_index": 11,
+      "synthetic_sequence_id": "synthetic/validation/001",
+      "synthetic_sequence_index": 1,
+      "window_count": 24,
+      "world_content_identity": "c1002904c325674dcb2b5712ef56fc7388ce3e3c35efdcc845b008fc8252aab9",
+      "world_identity": "35af7e68fdd36c033f842b2dc5cb00cc99eeb0005e25ea6c38d0ccb0d16ea036"
+    },
+    {
+      "changed_slot_count": 10775,
+      "file": "artifacts/data/validation/sequence_001/segment_12.npz",
+      "file_sha256": "b9efc5115a58b94f8e93a4ffafc08230ab83caf39408b5d609847333c41fa477",
+      "frame_range_inclusive": [
+        336,
+        363
+      ],
+      "scientific_content_hash": "8eead1eda4acae3b428bc4e5e475dbad9546aae360ae5fa9efeb14a0b914bf85",
+      "seed": 34201012,
+      "segment_index": 12,
+      "synthetic_sequence_id": "synthetic/validation/001",
+      "synthetic_sequence_index": 1,
+      "window_count": 24,
+      "world_content_identity": "8d679653f33141c98d2488a525d42935ad60ea1f5e4dcc1f7fc955e3073690f6",
+      "world_identity": "259b14c82dc12babd4f043dc46c4a5962a1c4c6c6a64b848a15fc350ac6f9cd4"
+    },
+    {
+      "changed_slot_count": 643,
+      "file": "artifacts/data/validation/sequence_001/segment_13.npz",
+      "file_sha256": "b70fa7e2ff677f2d6b11be350a000ab5fe1e124b56ab82f6c53ac24061ab7275",
+      "frame_range_inclusive": [
+        364,
+        391
+      ],
+      "scientific_content_hash": "f98f1379d05db00d99a59bb6841863567583da3fb263273d4a3d75d513edf415",
+      "seed": 34201013,
+      "segment_index": 13,
+      "synthetic_sequence_id": "synthetic/validation/001",
+      "synthetic_sequence_index": 1,
+      "window_count": 24,
+      "world_content_identity": "298a0d4d3bc192eb1668dfcb966f1e2beecd8f074d44f828e379ffe8dd484c8a",
+      "world_identity": "a26df5f1b74bb3ed6c037399d7a080160af459a4ee3b4f9683396d11ae04c3cf"
+    },
+    {
+      "changed_slot_count": 41380,
+      "file": "artifacts/data/validation/sequence_001/segment_14.npz",
+      "file_sha256": "8b5bc354bcadb430827f554d64fd96f6af91093e643a5a94b93f19724959205e",
+      "frame_range_inclusive": [
+        392,
+        419
+      ],
+      "scientific_content_hash": "c521c99138debc0c7e0a0c05da1cd4da4c1a8ddadc2cef7dd9d9b4433edef024",
+      "seed": 34201014,
+      "segment_index": 14,
+      "synthetic_sequence_id": "synthetic/validation/001",
+      "synthetic_sequence_index": 1,
+      "window_count": 24,
+      "world_content_identity": "e85ac8d469767d65d1fc292d813d6b5650dfcf61f167c4453b3ca1210a89f02c",
+      "world_identity": "87b98109896679c5aad299a57dac5927ae60942415defd7f24f147da252974df"
+    },
+    {
+      "changed_slot_count": 76674,
+      "file": "artifacts/data/validation/sequence_001/segment_15.npz",
+      "file_sha256": "c0818fc79fb2cdf3fd7d9dc140394daa6f1929f5c50541202e199b4d8304acf5",
+      "frame_range_inclusive": [
+        420,
+        447
+      ],
+      "scientific_content_hash": "7175a66622ebf9008bca691dafecb33c994ac9f7ed78cba8188f25179806f815",
+      "seed": 34201015,
+      "segment_index": 15,
+      "synthetic_sequence_id": "synthetic/validation/001",
+      "synthetic_sequence_index": 1,
+      "window_count": 24,
+      "world_content_identity": "16f005f19426437f062bd37dd232d09a99efd29ad6f5dbb3944216c5bd390e30",
+      "world_identity": "e97106f154fc377aaa35d8c0628e3e2c8038eac80152b06d5564f263ba828f55"
+    },
+    {
+      "changed_slot_count": 1558,
+      "file": "artifacts/data/validation/sequence_001/segment_16.npz",
+      "file_sha256": "3abccabd2a31a8f5da6a94c0a1ad5a85e799d6dabc2cc4abbb66b4848457eec2",
+      "frame_range_inclusive": [
+        448,
+        475
+      ],
+      "scientific_content_hash": "239e21db66b621bed89fcaeb54f1e6d3d970fb5e3b9da7b95caf498dd577e28f",
+      "seed": 34201016,
+      "segment_index": 16,
+      "synthetic_sequence_id": "synthetic/validation/001",
+      "synthetic_sequence_index": 1,
+      "window_count": 24,
+      "world_content_identity": "e1f6eff03d948e47758f936c4b303e83329f7a84aab95d82d7f2b10c76da2e17",
+      "world_identity": "9f0eb3ba6b55ee7208b8b44ba6ee68df09d056f1e05d584cc7ead0c5128fcdbe"
+    },
+    {
+      "changed_slot_count": 78353,
+      "file": "artifacts/data/validation/sequence_001/segment_17.npz",
+      "file_sha256": "1cd616cc6940d142278fa33a8dafeb58754523fc4230c85ad3b749eb77950aed",
+      "frame_range_inclusive": [
+        476,
+        503
+      ],
+      "scientific_content_hash": "b81ffdb68a9c058381c9e8d4da633da5989b325bcfcfcf176ab89d82f16b3d4d",
+      "seed": 34201017,
+      "segment_index": 17,
+      "synthetic_sequence_id": "synthetic/validation/001",
+      "synthetic_sequence_index": 1,
+      "window_count": 24,
+      "world_content_identity": "a5fb7edc7f91daf67218defbd09f561abb258b0b667fcb30feef4f19bea867d7",
+      "world_identity": "0cb02909c7ba482c1e67d44c067de761eccf7d38447fb1f36f28031449b3162f"
+    },
+    {
+      "changed_slot_count": 11327,
+      "file": "artifacts/data/validation/sequence_001/segment_18.npz",
+      "file_sha256": "d688901502840618d89394a04058a82b95454787e57f08735d918e6eeb26889f",
+      "frame_range_inclusive": [
+        504,
+        531
+      ],
+      "scientific_content_hash": "ebabbfbe655f6d15b2273a6ea1eca2e7911190b7a0b6f164595497cf91262a5a",
+      "seed": 34201018,
+      "segment_index": 18,
+      "synthetic_sequence_id": "synthetic/validation/001",
+      "synthetic_sequence_index": 1,
+      "window_count": 24,
+      "world_content_identity": "49dc1bbfc4b365507070deab446d69cca1cb441aafd463767e80329315ad2c80",
+      "world_identity": "e2bdec7fdf29d20ea96a7122903157de9bd4085da36f853932c2ed6d9889e3c6"
+    },
+    {
+      "changed_slot_count": 632,
+      "file": "artifacts/data/validation/sequence_001/segment_19.npz",
+      "file_sha256": "3bd77212ca3c62d1b37a8860b68b93739cb169b706a5463d20e185b8956fb533",
+      "frame_range_inclusive": [
+        532,
+        559
+      ],
+      "scientific_content_hash": "6eb9618925cfd766b66ccccda649d21d739b16248d66cd24dd1ea59a8edddf3c",
+      "seed": 34201019,
+      "segment_index": 19,
+      "synthetic_sequence_id": "synthetic/validation/001",
+      "synthetic_sequence_index": 1,
+      "window_count": 24,
+      "world_content_identity": "d2952c5facb655ffb20e7140a110e5370e9d5d50bb369736d7311521b132da69",
+      "world_identity": "923a5c0efa9dd9549ebf1d1d9e12980b2b096120f5b48494231a74d8f3ad9eeb"
+    },
+    {
+      "changed_slot_count": 2298,
+      "file": "artifacts/data/validation/sequence_001/segment_20.npz",
+      "file_sha256": "f3f5f3a289432338b3405f819720e7172b1bcdb6dad935ac4b0e1784af952597",
+      "frame_range_inclusive": [
+        560,
+        587
+      ],
+      "scientific_content_hash": "1110c98daa2b1b9a86a00d916e4fa0262e6e5d511b3c0b7267c8b0218d821f6c",
+      "seed": 34201020,
+      "segment_index": 20,
+      "synthetic_sequence_id": "synthetic/validation/001",
+      "synthetic_sequence_index": 1,
+      "window_count": 24,
+      "world_content_identity": "579c952a5b33ca3c2bd384d8d20bfaa5dedeacb3d9ccbbaf8e6c7ee47c85be95",
+      "world_identity": "d281c0ea25f2a601adcedc800e96402911244f44eefad5cf025ffeea160a8e76"
+    },
+    {
+      "changed_slot_count": 6513,
+      "file": "artifacts/data/validation/sequence_001/segment_21.npz",
+      "file_sha256": "bb75453e009f940b89658efc317ecdc4506158117116c2b27560c91703168fe8",
+      "frame_range_inclusive": [
+        588,
+        615
+      ],
+      "scientific_content_hash": "b1f28fa15bb9ee5297f8d112dbd45748d2e61aae8b216e4f4a737b429566c671",
+      "seed": 34201021,
+      "segment_index": 21,
+      "synthetic_sequence_id": "synthetic/validation/001",
+      "synthetic_sequence_index": 1,
+      "window_count": 24,
+      "world_content_identity": "003148aa5b4135037aee54aead2f3de6d475c1b2a0ae596a69a8495d25ef7dde",
+      "world_identity": "781674d512e7a6676d984032b411007a917abbfbd7f07d70b0a11b0e55263507"
+    },
+    {
+      "changed_slot_count": 1801,
+      "file": "artifacts/data/validation/sequence_001/segment_22.npz",
+      "file_sha256": "8db96923607ba733dc80a51f2eea3e3abb6a25761ae3166a38ef5cc37d5c1176",
+      "frame_range_inclusive": [
+        616,
+        681
+      ],
+      "scientific_content_hash": "36b0834d55d61e4366b80f5c812d071931c13e48cbdda57f728fff2f3885021a",
+      "seed": 34201022,
+      "segment_index": 22,
+      "synthetic_sequence_id": "synthetic/validation/001",
+      "synthetic_sequence_index": 1,
+      "window_count": 62,
+      "world_content_identity": "76ea18aa8c09f4526ff037205a6dd1cc9e80627b3951097f36dfcf0c8f95cdcc",
+      "world_identity": "c7abe1a53f1fd6ce544189cca3f05a339ed4dcab4d76ef97810b1020bfce5966"
+    },
+    {
+      "changed_slot_count": 32274,
+      "file": "artifacts/data/validation/sequence_002/segment_00.npz",
+      "file_sha256": "315ea9ce4651d1a1da391210482cde051aed061eecb0858e54c02c717b7b20c5",
+      "frame_range_inclusive": [
+        0,
+        27
+      ],
+      "scientific_content_hash": "1b83ad31bff829b0aeae6b685ef74e99e7b1fbdc5652da532ab13fa57ac284a7",
+      "seed": 34202000,
+      "segment_index": 0,
+      "synthetic_sequence_id": "synthetic/validation/002",
+      "synthetic_sequence_index": 2,
+      "window_count": 24,
+      "world_content_identity": "491c576618347fa3c6e3ed040ce521f751a0d3800801b9bc2068e5811611f047",
+      "world_identity": "b76fd3070a91c2ae7ec28b572ed51c7e529313671f9529134cba9d8e967a1180"
+    },
+    {
+      "changed_slot_count": 83422,
+      "file": "artifacts/data/validation/sequence_002/segment_01.npz",
+      "file_sha256": "2993c5562cb79e623b981f19065b84ea730a329ac101097bd608f4c8f8d0c6b8",
+      "frame_range_inclusive": [
+        28,
+        55
+      ],
+      "scientific_content_hash": "ed68c62cc39ec4eb9d1f9f5fcb3973168cb65497f67256d88f189b76199d3e12",
+      "seed": 34202001,
+      "segment_index": 1,
+      "synthetic_sequence_id": "synthetic/validation/002",
+      "synthetic_sequence_index": 2,
+      "window_count": 24,
+      "world_content_identity": "a229e82f52fa424cdcec119f3e0876f643f854ab1632d047ee53b14e6c24e478",
+      "world_identity": "2a89953be71384ceca2e733c0a2a71fc2710176e101e6613f528e8df7a5bc24e"
+    },
+    {
+      "changed_slot_count": 322,
+      "file": "artifacts/data/validation/sequence_002/segment_02.npz",
+      "file_sha256": "356be274800edbec68698594a8f15eafeb3d27dd0b07a3663be8f7f656cc714d",
+      "frame_range_inclusive": [
+        56,
+        83
+      ],
+      "scientific_content_hash": "8d3ba1c018d68a22a006e53b6e8e97e29f5a65851aa547e5b5f4c1d3346b722a",
+      "seed": 34202002,
+      "segment_index": 2,
+      "synthetic_sequence_id": "synthetic/validation/002",
+      "synthetic_sequence_index": 2,
+      "window_count": 24,
+      "world_content_identity": "12f198cdc9d550ae8fe64c9fcc464d3f47f6de29ede36ad6126d93077af8d3b0",
+      "world_identity": "cca672f029e7a24fc97111a8b3f761458767e2486e84a5ba493814f6d88fab4d"
+    },
+    {
+      "changed_slot_count": 12032,
+      "file": "artifacts/data/validation/sequence_002/segment_03.npz",
+      "file_sha256": "af960379292a72b27b3ca37a3a9efac259045df527daf65b005453f110adc109",
+      "frame_range_inclusive": [
+        84,
+        111
+      ],
+      "scientific_content_hash": "df5cef57b1a918c1d8db6150984a7202adefabb8db81b7b70a635bd2edce47a2",
+      "seed": 34202003,
+      "segment_index": 3,
+      "synthetic_sequence_id": "synthetic/validation/002",
+      "synthetic_sequence_index": 2,
+      "window_count": 24,
+      "world_content_identity": "9b87572bd8b53385d01735741c5bfbada2eee4990351412ce51d741b54e48251",
+      "world_identity": "fb94cdc5738b3675c50dddb6aa3185b0d52c7a0c59836e01f47fca6b79e5a3a5"
+    },
+    {
+      "changed_slot_count": 10193,
+      "file": "artifacts/data/validation/sequence_002/segment_04.npz",
+      "file_sha256": "c25b8c9ba9a0540199dd1c9da993dc44ad0f5ecf4fc171e49f9525776a5a40df",
+      "frame_range_inclusive": [
+        112,
+        139
+      ],
+      "scientific_content_hash": "97b8b0e828ea126de97c05f740b2b5047a509ba4306da1792e59415454a6f2f3",
+      "seed": 34202004,
+      "segment_index": 4,
+      "synthetic_sequence_id": "synthetic/validation/002",
+      "synthetic_sequence_index": 2,
+      "window_count": 24,
+      "world_content_identity": "74f158bc5960458ea4af59e05f4887fdde2367ce2cf2f047b7e1ceaa6805b089",
+      "world_identity": "4e9b94796bccdf90f639e20520059386a784800cc6d14d280abd184654751322"
+    },
+    {
+      "changed_slot_count": 326,
+      "file": "artifacts/data/validation/sequence_002/segment_05.npz",
+      "file_sha256": "4c97e17ae090a3dfdc9b6fdc71020180862156532a75cd5e69d5b6d360b39ddb",
+      "frame_range_inclusive": [
+        140,
+        167
+      ],
+      "scientific_content_hash": "5fc737a5de1555e8e10761634a1895318646e120f286866acffbb9c31401ea41",
+      "seed": 34202005,
+      "segment_index": 5,
+      "synthetic_sequence_id": "synthetic/validation/002",
+      "synthetic_sequence_index": 2,
+      "window_count": 24,
+      "world_content_identity": "1ce662e2ce3db3179f5dfe7b0c32a180550e907e332b865c26a671b5f89ea381",
+      "world_identity": "93e793a0d32ca4e8d90dc1b9dcd43ccc4a0b489059dacfbde6d7713b0a8e1d66"
+    },
+    {
+      "changed_slot_count": 6521,
+      "file": "artifacts/data/validation/sequence_002/segment_06.npz",
+      "file_sha256": "1c050c753af65c2fabc84f63192994af789246de7fdc9ad1517dc98496f74d0b",
+      "frame_range_inclusive": [
+        168,
+        195
+      ],
+      "scientific_content_hash": "e2020b3390b5c0fdb800f4046300ce5ba606bd9054b8b761cbd65a014e01912b",
+      "seed": 34202006,
+      "segment_index": 6,
+      "synthetic_sequence_id": "synthetic/validation/002",
+      "synthetic_sequence_index": 2,
+      "window_count": 24,
+      "world_content_identity": "9788edc828833414bbb5d418657740a8f64c55ee96d89335222d35bf9357a045",
+      "world_identity": "2bf8c7dac5990cbe32d105aa7f0fef93781703113cfeac5b6d1d563864cf7223"
+    },
+    {
+      "changed_slot_count": 2538,
+      "file": "artifacts/data/validation/sequence_002/segment_07.npz",
+      "file_sha256": "a36cdb94c158bdc36455834db86207f2d30638c48a1a1aadc7cb6d26beac60dc",
+      "frame_range_inclusive": [
+        196,
+        223
+      ],
+      "scientific_content_hash": "7371cd8396331e783379ca7e9143d6dde5eff06f75220afd7796bafae3d74e90",
+      "seed": 34202007,
+      "segment_index": 7,
+      "synthetic_sequence_id": "synthetic/validation/002",
+      "synthetic_sequence_index": 2,
+      "window_count": 24,
+      "world_content_identity": "cb022e63f303daa572bfcd7b65b5f29005d481b9bfb0db477a98a32f1e07d437",
+      "world_identity": "85c6e2f4f2367e4233eb38cd02d5c5e1ae7fdf45ec243c2b3750275f705d815d"
+    },
+    {
+      "changed_slot_count": 244,
+      "file": "artifacts/data/validation/sequence_002/segment_08.npz",
+      "file_sha256": "e0be2f4fc6371893cb558ac8b0b625b2c850e175eae7a55c07d23d92d0d78a85",
+      "frame_range_inclusive": [
+        224,
+        251
+      ],
+      "scientific_content_hash": "d456b10ffa65c849f01bf7bc5111a4359bb1a7428538f0bf8091368226ed90e1",
+      "seed": 34202008,
+      "segment_index": 8,
+      "synthetic_sequence_id": "synthetic/validation/002",
+      "synthetic_sequence_index": 2,
+      "window_count": 24,
+      "world_content_identity": "67c9563484ff28184c9c5907162c080dff9c81e23da0e5dfc5af9eeb3a00ba52",
+      "world_identity": "d9e5597e495acaba1f244783d6b61f713b8f0199a78705c91c870f166d7ef853"
+    },
+    {
+      "changed_slot_count": 29683,
+      "file": "artifacts/data/validation/sequence_002/segment_09.npz",
+      "file_sha256": "4c4aa8130e2cf1024595efb26c89e6617922236bd726355493852c321df75f16",
+      "frame_range_inclusive": [
+        252,
+        279
+      ],
+      "scientific_content_hash": "ba2f6553eecd99c7bbe9c011401d74fdcfa4c29d042b2381f881fe16c12b248c",
+      "seed": 34202009,
+      "segment_index": 9,
+      "synthetic_sequence_id": "synthetic/validation/002",
+      "synthetic_sequence_index": 2,
+      "window_count": 24,
+      "world_content_identity": "d95e7a9a29f245b8653d7b75f85f8f26916d9fe7d2bd32a8c0fc2cbbbcf97f5d",
+      "world_identity": "0930979db1b91ef1d7f069e59bb771a79ca7599b6a91ed46b0cf067ba085714d"
+    },
+    {
+      "changed_slot_count": 4145,
+      "file": "artifacts/data/validation/sequence_002/segment_10.npz",
+      "file_sha256": "15aece39d1de68cdf453010c020cb4a9111215c7b9d187d2ec241e5ff88a5532",
+      "frame_range_inclusive": [
+        280,
+        307
+      ],
+      "scientific_content_hash": "f6e06396b787fbae5745cff3db17fc66886c7e70a060656c4de330774e6fcdf5",
+      "seed": 34202010,
+      "segment_index": 10,
+      "synthetic_sequence_id": "synthetic/validation/002",
+      "synthetic_sequence_index": 2,
+      "window_count": 24,
+      "world_content_identity": "1f6903b88e18987f6cb78ae70c1d972e502db16d71338e4241c62d6c4bea9c5b",
+      "world_identity": "6bc85cb951bdc0bac44e6b0de939071b3a0df8e5b307a289a0724eb4c43fe599"
+    },
+    {
+      "changed_slot_count": 14842,
+      "file": "artifacts/data/validation/sequence_002/segment_11.npz",
+      "file_sha256": "98ca8f5e3fb7f95b14cb1180548955ac0dbfc9451ef1f2441136005fd2ae9556",
+      "frame_range_inclusive": [
+        308,
+        335
+      ],
+      "scientific_content_hash": "52018518546705ac281e515570fdf84d5c8276b3e4a8467bef7048ec4a3446b8",
+      "seed": 34202011,
+      "segment_index": 11,
+      "synthetic_sequence_id": "synthetic/validation/002",
+      "synthetic_sequence_index": 2,
+      "window_count": 24,
+      "world_content_identity": "2feec56e0aadb78b037319ba9152bff2d931869998a07a2a04fe2ef18f7d27e4",
+      "world_identity": "1d4b3a3faa28e09b5c60a3f1792973541ba63b5ebcf8518cede09d855207f0a1"
+    },
+    {
+      "changed_slot_count": 905,
+      "file": "artifacts/data/validation/sequence_002/segment_12.npz",
+      "file_sha256": "9eca05818baadf22290d31601ad4ad12d1d89fc5cc74e8400f6698984718f3a6",
+      "frame_range_inclusive": [
+        336,
+        363
+      ],
+      "scientific_content_hash": "be8015eacb015e7b8855acf989ea7472373ce0021d535d77a64850308edd0837",
+      "seed": 34202012,
+      "segment_index": 12,
+      "synthetic_sequence_id": "synthetic/validation/002",
+      "synthetic_sequence_index": 2,
+      "window_count": 24,
+      "world_content_identity": "0797ba9aeafc0ec2351aba34442c1c06022b8dc8e39e7a17ae627c89d799fe65",
+      "world_identity": "07e52b6b14a4a14b11ccc03bee7cf0ef053a83e0e6bf8120303829466b8c5f61"
+    },
+    {
+      "changed_slot_count": 15401,
+      "file": "artifacts/data/validation/sequence_002/segment_13.npz",
+      "file_sha256": "7e1b4628fdaed484437ec94f80e210b0a6f638299c317d464937b648e0341ef6",
+      "frame_range_inclusive": [
+        364,
+        391
+      ],
+      "scientific_content_hash": "f609791818dcf8635278a4492b2f0304ae3467a4e0c3034690b2b947fce36bbf",
+      "seed": 34202013,
+      "segment_index": 13,
+      "synthetic_sequence_id": "synthetic/validation/002",
+      "synthetic_sequence_index": 2,
+      "window_count": 24,
+      "world_content_identity": "d1e34e2a0baeb9f1436dcc9f883946890ef5fa9e74c981f8602a0f517b0e0aa8",
+      "world_identity": "1bd595dff2dd2dae3a3e0600589fdc2de658a21c677475ddeb6e9fc7f210fe0c"
+    },
+    {
+      "changed_slot_count": 390,
+      "file": "artifacts/data/validation/sequence_002/segment_14.npz",
+      "file_sha256": "e81903fd8c14610b99765b73b9e9b3ffe8a0d28e0883e48b70085acd9ecd3ca9",
+      "frame_range_inclusive": [
+        392,
+        419
+      ],
+      "scientific_content_hash": "1e1716e1ba0151f479ca6d6ef4e97852c1c07f520081d76d4187cf2e00cbc38a",
+      "seed": 34202014,
+      "segment_index": 14,
+      "synthetic_sequence_id": "synthetic/validation/002",
+      "synthetic_sequence_index": 2,
+      "window_count": 24,
+      "world_content_identity": "60456a71a2ee7557120b0b35967206a00a82097d3455883b94128f56068ea540",
+      "world_identity": "770768f50c2b3c953a27ee59249670e2c60575a7b619d662e12beccc4e58d7fa"
+    },
+    {
+      "changed_slot_count": 1705,
+      "file": "artifacts/data/validation/sequence_002/segment_15.npz",
+      "file_sha256": "ef539b56e03e5c3105d4ed12694ef5b2d6886ac55aefadde501205f051f970d5",
+      "frame_range_inclusive": [
+        420,
+        447
+      ],
+      "scientific_content_hash": "53a60424c4647788284ffcc44ec2247b0746760ad1ba8d226dba1df6b4ae7b03",
+      "seed": 34202015,
+      "segment_index": 15,
+      "synthetic_sequence_id": "synthetic/validation/002",
+      "synthetic_sequence_index": 2,
+      "window_count": 24,
+      "world_content_identity": "2ee5d36eee0978b1444e9999bca5669c5c769c266fe65c058e7d815d26fbbae8",
+      "world_identity": "2a6068e0fd2caf22746f4aa8e644aa2607f50020f55ee14713cd06d1bafed5fb"
+    },
+    {
+      "changed_slot_count": 10034,
+      "file": "artifacts/data/validation/sequence_002/segment_16.npz",
+      "file_sha256": "cc4f1e77f46c962ab2bb27fadaacaff2540fb0ac0e88cecd0ceba87e0ed49956",
+      "frame_range_inclusive": [
+        448,
+        475
+      ],
+      "scientific_content_hash": "40160a1d428825f1e109d1b2f49e3627931a742d5072f837089bb7883c4f42a8",
+      "seed": 34202016,
+      "segment_index": 16,
+      "synthetic_sequence_id": "synthetic/validation/002",
+      "synthetic_sequence_index": 2,
+      "window_count": 24,
+      "world_content_identity": "ef254a77a4a571746aba6062ef7d2d90e0c5be775eeb4e9810cc9b1b5cd888d9",
+      "world_identity": "4e50ad849f662d15d4096fce20e4f8c4bd4a47cf34eb8899eacab3649dc097d2"
+    },
+    {
+      "changed_slot_count": 1566,
+      "file": "artifacts/data/validation/sequence_002/segment_17.npz",
+      "file_sha256": "a7ab2c0e1590d8f4ec18820440aaace6e3f483cdc934578c42393cbe9af73786",
+      "frame_range_inclusive": [
+        476,
+        503
+      ],
+      "scientific_content_hash": "b2298b9901fc2ef802af399ebb33361be26e0b6a17dffb2e29579b91ec820225",
+      "seed": 34202017,
+      "segment_index": 17,
+      "synthetic_sequence_id": "synthetic/validation/002",
+      "synthetic_sequence_index": 2,
+      "window_count": 24,
+      "world_content_identity": "4713c9b90f34e2416ccb49332515b49590f80a83a4295687ededdd7e9de988b4",
+      "world_identity": "e209eb2c872c5345018dcc70036b0a5a01ccf427d0da1aecd7ab752a3e12ba13"
+    },
+    {
+      "changed_slot_count": 33210,
+      "file": "artifacts/data/validation/sequence_002/segment_18.npz",
+      "file_sha256": "83b0c0325d8f5339bc32b05c2ba5f6942c02e7fb8afd0035df2f8267b2306d56",
+      "frame_range_inclusive": [
+        504,
+        531
+      ],
+      "scientific_content_hash": "56393d146345cdd4c0e7091143381cadd1ed0b0e8d055fce8803b3ec3836cff8",
+      "seed": 34202018,
+      "segment_index": 18,
+      "synthetic_sequence_id": "synthetic/validation/002",
+      "synthetic_sequence_index": 2,
+      "window_count": 24,
+      "world_content_identity": "e8db5a224df7475185e0b595af2df59f86739997d84f8ac58eb52632ebfb70b3",
+      "world_identity": "56eb953a3bc91d59c679a1152c77f2442ff21a67c113696c058d38085da920f1"
+    },
+    {
+      "changed_slot_count": 19003,
+      "file": "artifacts/data/validation/sequence_002/segment_19.npz",
+      "file_sha256": "d33428c89c1d9de7d318e0fec9e0f7cfae963b70f8ec681973a636ad44bd3a25",
+      "frame_range_inclusive": [
+        532,
+        559
+      ],
+      "scientific_content_hash": "cc30de7e5dc8e883d9b900f778d47f7d6b4043217f792c59eb7dbc76cea1c64b",
+      "seed": 34202019,
+      "segment_index": 19,
+      "synthetic_sequence_id": "synthetic/validation/002",
+      "synthetic_sequence_index": 2,
+      "window_count": 24,
+      "world_content_identity": "340ee6dd9c85c28fcf195f7283cde25ac23bb7f3c2089fd5c8654b3817cc2008",
+      "world_identity": "20341c3c724e384ff91e743703990fb536064124c2f58a5222cb7e862ef7e5fc"
+    },
+    {
+      "changed_slot_count": 31678,
+      "file": "artifacts/data/validation/sequence_002/segment_20.npz",
+      "file_sha256": "203841d10837f6637b958a9c9a7d154f6919a91f300271f949148cddb135504c",
+      "frame_range_inclusive": [
+        560,
+        587
+      ],
+      "scientific_content_hash": "7caf6ca908dea77de63ece9892563af4a35eb300140ff7f82b42b84a4b733f86",
+      "seed": 34202020,
+      "segment_index": 20,
+      "synthetic_sequence_id": "synthetic/validation/002",
+      "synthetic_sequence_index": 2,
+      "window_count": 24,
+      "world_content_identity": "47588a339c288a3a8ea2119876d8010935d40d3775b5d10b0343a22e4e972174",
+      "world_identity": "c6e9e735290b5cde391ee268c3f9b6c2dd0ef49cc32236af48be647219ff45e9"
+    },
+    {
+      "changed_slot_count": 11926,
+      "file": "artifacts/data/validation/sequence_002/segment_21.npz",
+      "file_sha256": "acd6e199ad031c53f934c123c04723e553530e7efd98378809af3447d87bb13a",
+      "frame_range_inclusive": [
+        588,
+        615
+      ],
+      "scientific_content_hash": "b5984c299209d86e57d7aecb55192a5145f4ff5d435e449586ace9656e653d1e",
+      "seed": 34202021,
+      "segment_index": 21,
+      "synthetic_sequence_id": "synthetic/validation/002",
+      "synthetic_sequence_index": 2,
+      "window_count": 24,
+      "world_content_identity": "a1537547b722d89ee104b008610e88f5dcf57bbfcd3e577e578f70c11d5f4b43",
+      "world_identity": "46e2665017b476eaf4f8c252d5a716b7022f1de93789a5b066debbb947ab6f0e"
+    },
+    {
+      "changed_slot_count": 2577,
+      "file": "artifacts/data/validation/sequence_002/segment_22.npz",
+      "file_sha256": "26a1ccd7df2f5a53841eeb442b657329db37e396975e2cffdbb035db636674ee",
+      "frame_range_inclusive": [
+        616,
+        681
+      ],
+      "scientific_content_hash": "38ef387b57596a25fa30540f0d53d868119cc678a9e79a0ed399179761bbd7f2",
+      "seed": 34202022,
+      "segment_index": 22,
+      "synthetic_sequence_id": "synthetic/validation/002",
+      "synthetic_sequence_index": 2,
+      "window_count": 62,
+      "world_content_identity": "3f7feb30008dfe5cd1794e99a5cf855820afbe42d7744669dc421712f0198470",
+      "world_identity": "0b2f4b008f78586de4340dfa076c2a155a70ff17ec460516521fa23b18f7c9ae"
+    },
+    {
+      "changed_slot_count": 810,
+      "file": "artifacts/data/validation/sequence_003/segment_00.npz",
+      "file_sha256": "cc941ba4a1540f940b0e570f376c659fcf6f9eb335444c575a6047eb6222ba53",
+      "frame_range_inclusive": [
+        0,
+        27
+      ],
+      "scientific_content_hash": "d6adce4c39877dcfe32bd99186dc7d330deddad80fafe97c3a640c04a0e1d8d0",
+      "seed": 34203000,
+      "segment_index": 0,
+      "synthetic_sequence_id": "synthetic/validation/003",
+      "synthetic_sequence_index": 3,
+      "window_count": 24,
+      "world_content_identity": "fbc9a6bbd123a741fb1e46047ffbd0f7e9eb66c05a4f918370e4e007a077fc34",
+      "world_identity": "efce38a449cb725fe41a3c5f9d0940f4cc3873f976ef3c1443f760288cacc20b"
+    },
+    {
+      "changed_slot_count": 14890,
+      "file": "artifacts/data/validation/sequence_003/segment_01.npz",
+      "file_sha256": "a0cf02c83e6559f16785f08e472dcea865af9af5a6b12a93861a26240d34f41d",
+      "frame_range_inclusive": [
+        28,
+        55
+      ],
+      "scientific_content_hash": "c3ce66704884fcc41dc85bd3de56a98902f7c0102ab101220239937cb4ce5f6e",
+      "seed": 34203001,
+      "segment_index": 1,
+      "synthetic_sequence_id": "synthetic/validation/003",
+      "synthetic_sequence_index": 3,
+      "window_count": 24,
+      "world_content_identity": "5d7ca50a707b88774a3fa44e9d54aa624551a2dbe40f9f596b53de6f85e9fd08",
+      "world_identity": "9934ea2d3973a12d4663ef71746bb80c77737e1180c1c7ac16c7eb59b9caae10"
+    },
+    {
+      "changed_slot_count": 1229,
+      "file": "artifacts/data/validation/sequence_003/segment_02.npz",
+      "file_sha256": "33a6882bf7194b1a64609b271232d9ddf49820f920ce748e373c7428d79bfdf3",
+      "frame_range_inclusive": [
+        56,
+        83
+      ],
+      "scientific_content_hash": "e13fa7eb806e4aa8c0de541a13f643289ca498c93e2ba44addfd9a630345bc3f",
+      "seed": 34203002,
+      "segment_index": 2,
+      "synthetic_sequence_id": "synthetic/validation/003",
+      "synthetic_sequence_index": 3,
+      "window_count": 24,
+      "world_content_identity": "c359fda8a905565955dd7c91baa2fee9d4892f5cb56c793673f38a20da9bde8b",
+      "world_identity": "ad932fdc94d0d7bdd96f169a03fde98abad7bd16d0278d208511e7211d86edc1"
+    },
+    {
+      "changed_slot_count": 12869,
+      "file": "artifacts/data/validation/sequence_003/segment_03.npz",
+      "file_sha256": "c078bac35075388b311998fc952fb65632d26e598dec022ed728ee57c598d892",
+      "frame_range_inclusive": [
+        84,
+        111
+      ],
+      "scientific_content_hash": "48d13a0f3f7d1bf68d3607b4d789fdbb553daf05268b26e3ba0933c240ff31d7",
+      "seed": 34203003,
+      "segment_index": 3,
+      "synthetic_sequence_id": "synthetic/validation/003",
+      "synthetic_sequence_index": 3,
+      "window_count": 24,
+      "world_content_identity": "bfbd78a1d102a992c7f47358e3ec57361c46e119aa45d5fa2a772fcc8499c34a",
+      "world_identity": "cee915b33c92ca735d4fa561657cb11cabbe5b4cd2a9d680866037efc2108278"
+    },
+    {
+      "changed_slot_count": 3683,
+      "file": "artifacts/data/validation/sequence_003/segment_04.npz",
+      "file_sha256": "1c7ab12694482b683ef157a9677262fd73572b25af88f737e8df5d593076fbb8",
+      "frame_range_inclusive": [
+        112,
+        139
+      ],
+      "scientific_content_hash": "d88e56d5764f157251b2fbadef79aa1028f8ac80fb7a74db3b7eb27ab1bf6182",
+      "seed": 34203004,
+      "segment_index": 4,
+      "synthetic_sequence_id": "synthetic/validation/003",
+      "synthetic_sequence_index": 3,
+      "window_count": 24,
+      "world_content_identity": "45e8c46a044960484b21145f2e7d7073c24d45a3df13e0a6a5c182a235d33025",
+      "world_identity": "c8b71cf93becc994894e6c08234add67777715c61e786bfb3865a5266f76d73a"
+    },
+    {
+      "changed_slot_count": 26802,
+      "file": "artifacts/data/validation/sequence_003/segment_05.npz",
+      "file_sha256": "12effba759f6238e78c22ad8e598fd72cae3416ac029c57c548e6dab9ff0901a",
+      "frame_range_inclusive": [
+        140,
+        167
+      ],
+      "scientific_content_hash": "bdc38842c67ae74ec5e46f12e1fa6535bd6faa45dd808c5c17643783a6bc4bc4",
+      "seed": 34203005,
+      "segment_index": 5,
+      "synthetic_sequence_id": "synthetic/validation/003",
+      "synthetic_sequence_index": 3,
+      "window_count": 24,
+      "world_content_identity": "09e6a15ce448c9b84d408ee0b0537f48f886de8eb23ca2bb7fa44d20e5bf9d3d",
+      "world_identity": "62f1addd6377dcb4046f96b870fb7eb94f89856d71ae6817713bf04439dc5aaf"
+    },
+    {
+      "changed_slot_count": 11014,
+      "file": "artifacts/data/validation/sequence_003/segment_06.npz",
+      "file_sha256": "4cfd2160c4984a9b426899f30f161cc718c9d5e4cc93c192e5d9ba0be2e8e7cc",
+      "frame_range_inclusive": [
+        168,
+        195
+      ],
+      "scientific_content_hash": "d1a0452186b158e61e30eba0d8eb16960b30ab74b31fab93d7661b66624284d6",
+      "seed": 34203006,
+      "segment_index": 6,
+      "synthetic_sequence_id": "synthetic/validation/003",
+      "synthetic_sequence_index": 3,
+      "window_count": 24,
+      "world_content_identity": "40e2e393f3c5fc8caeb6e10d67cdc9e8a92301d3b1861b7e0b26ea212956239e",
+      "world_identity": "aa1283be82025f556fc29aff3a948cedae12c7dff8b24b24e9e92041c4c8f5c0"
+    },
+    {
+      "changed_slot_count": 17898,
+      "file": "artifacts/data/validation/sequence_003/segment_07.npz",
+      "file_sha256": "f87c113c49d571221409aa2bee19480740c467df504c9ef86a7afd9a3f1cd6e6",
+      "frame_range_inclusive": [
+        196,
+        223
+      ],
+      "scientific_content_hash": "32d9003f65933a35b06b2d70ece47c39b93a7431c88357ca10e787f7923c55e3",
+      "seed": 34203007,
+      "segment_index": 7,
+      "synthetic_sequence_id": "synthetic/validation/003",
+      "synthetic_sequence_index": 3,
+      "window_count": 24,
+      "world_content_identity": "9917151c723f09cc11c162190c14abf66d875b40c796f2637d6d130f6fa67abf",
+      "world_identity": "8d0c91c96f47ebd532bba3a5a1511af3a2fca1019221652570d342c2aa0d2073"
+    },
+    {
+      "changed_slot_count": 4368,
+      "file": "artifacts/data/validation/sequence_003/segment_08.npz",
+      "file_sha256": "565a66213d55a211d4b244bca039349d710c6b561a98b2f9c6217dd0a4402201",
+      "frame_range_inclusive": [
+        224,
+        251
+      ],
+      "scientific_content_hash": "f7cef4b93b7fe8d1abc7b09199b53e3301a060c5a1320ecec89834c431069f41",
+      "seed": 34203008,
+      "segment_index": 8,
+      "synthetic_sequence_id": "synthetic/validation/003",
+      "synthetic_sequence_index": 3,
+      "window_count": 24,
+      "world_content_identity": "e7827ef13ac082753fd61ffe0584b005db05343f955360af557be8aed0b8c1bc",
+      "world_identity": "9c3217f4a00d00c19994a6ea62b2f6ada0ccb49f4a2312f8c71cf08c192ca60c"
+    },
+    {
+      "changed_slot_count": 9035,
+      "file": "artifacts/data/validation/sequence_003/segment_09.npz",
+      "file_sha256": "325ffff73c41f50e102fbb831171a5bf122511f43b801dcc895b5e3411c2e9aa",
+      "frame_range_inclusive": [
+        252,
+        279
+      ],
+      "scientific_content_hash": "88074b811e6512bc0f7afcd74c083785a447ee931bb4e89e6aafc72d57619bfc",
+      "seed": 34203009,
+      "segment_index": 9,
+      "synthetic_sequence_id": "synthetic/validation/003",
+      "synthetic_sequence_index": 3,
+      "window_count": 24,
+      "world_content_identity": "44f147ba76af0b1fdc542d2d81a618c5b72385889bbc443727174caed602ef0e",
+      "world_identity": "200ac43b5c3d57aef2b4832badcb3e41d8a59149c268a8141bbcd2c6c2c09a96"
+    },
+    {
+      "changed_slot_count": 18460,
+      "file": "artifacts/data/validation/sequence_003/segment_10.npz",
+      "file_sha256": "c735c4d29da11fad95317879a43769630cf43f56d622253e513d61f043efb379",
+      "frame_range_inclusive": [
+        280,
+        307
+      ],
+      "scientific_content_hash": "a57cb3535c4c81a187a207fea13bed7cfb80179aafa29febe325d48a66a79e4e",
+      "seed": 34203010,
+      "segment_index": 10,
+      "synthetic_sequence_id": "synthetic/validation/003",
+      "synthetic_sequence_index": 3,
+      "window_count": 24,
+      "world_content_identity": "c05a34d2edf2c5f001362df6a4d101e72c10f49f5305eea4eee10c8b7fe818c8",
+      "world_identity": "f2ebea792d7bd959d219d0b2d24559236ced2aa8b4a12a85b1f379e2cacab171"
+    },
+    {
+      "changed_slot_count": 3560,
+      "file": "artifacts/data/validation/sequence_003/segment_11.npz",
+      "file_sha256": "47150b144264c47fdc9b2910d7a89c1b8828da53c190f6f3d6ff2ba68c7de891",
+      "frame_range_inclusive": [
+        308,
+        335
+      ],
+      "scientific_content_hash": "c91861092df062f150f034ada8b7850f0c1a984eaba99086c5e3015fb81e4956",
+      "seed": 34203011,
+      "segment_index": 11,
+      "synthetic_sequence_id": "synthetic/validation/003",
+      "synthetic_sequence_index": 3,
+      "window_count": 24,
+      "world_content_identity": "a5e293b8b587f8ef1486e6f16f5067c6af5a64994bb729fc5e8ffc6b9d644f7d",
+      "world_identity": "ee75e194297d80d9ff0bf919f758c19ac55bfb40392b116b8e59b9ef0ec8120b"
+    },
+    {
+      "changed_slot_count": 9106,
+      "file": "artifacts/data/validation/sequence_003/segment_12.npz",
+      "file_sha256": "869203b536f8bf8f73b88f36b12bb5d322c72d50826bb71edf574844b89b757c",
+      "frame_range_inclusive": [
+        336,
+        363
+      ],
+      "scientific_content_hash": "5d6c10e5d329d99ac670c944103eb153d6a4bd80d533fc2fb657fd55962def32",
+      "seed": 34203012,
+      "segment_index": 12,
+      "synthetic_sequence_id": "synthetic/validation/003",
+      "synthetic_sequence_index": 3,
+      "window_count": 24,
+      "world_content_identity": "db3fd0dc309f242d782fa145aa4e4929a693e45688ed743eebb234903ebf93cf",
+      "world_identity": "e23fc559ca9577f9d93c88ec0a0bc2d392846eab9e2fe5de292c8ef82647040a"
+    },
+    {
+      "changed_slot_count": 526,
+      "file": "artifacts/data/validation/sequence_003/segment_13.npz",
+      "file_sha256": "45919d1433eefa0a93235fb99cb2b7db12e2207ffe53b3fb3f36e472a4b76319",
+      "frame_range_inclusive": [
+        364,
+        391
+      ],
+      "scientific_content_hash": "7c0383578ca273671b587258be9ca0404165e35c925b79d98e8d700050adb5a6",
+      "seed": 34203013,
+      "segment_index": 13,
+      "synthetic_sequence_id": "synthetic/validation/003",
+      "synthetic_sequence_index": 3,
+      "window_count": 24,
+      "world_content_identity": "cb48b9994916d8cf966cda4fc73f18f01ffa93aad411a1e5ff1d5d253963e54f",
+      "world_identity": "d1b69760b64c2b86ac2eb5d01ae522cab85e7cb9999e4295fa0c3d3eba599583"
+    },
+    {
+      "changed_slot_count": 87995,
+      "file": "artifacts/data/validation/sequence_003/segment_14.npz",
+      "file_sha256": "93b6bfc8ec68c84917ecb0c4274f1d398b3a3dc834112d4f8b113bc02197d762",
+      "frame_range_inclusive": [
+        392,
+        419
+      ],
+      "scientific_content_hash": "9729060bdef964d7ac10cd4e845d8e29c13ef0f859e72a908accfd2653a64983",
+      "seed": 34203014,
+      "segment_index": 14,
+      "synthetic_sequence_id": "synthetic/validation/003",
+      "synthetic_sequence_index": 3,
+      "window_count": 24,
+      "world_content_identity": "140eda5241fb22076b6e6b965529f7e8e70bf202b84b6006c685170098fa3425",
+      "world_identity": "dac0e667ae68c4d8570e7b5ae7ceca5da322bc91b3db5f41311a428fc178262d"
+    },
+    {
+      "changed_slot_count": 27085,
+      "file": "artifacts/data/validation/sequence_003/segment_15.npz",
+      "file_sha256": "65948fbc07b4a9e9fc66c517dabf1bf5136ae20a6f5f27e018eb2e377bfae20d",
+      "frame_range_inclusive": [
+        420,
+        447
+      ],
+      "scientific_content_hash": "218f5a95d5f26387c2c6639b592d4737dfcb7ee0f1a818769cf89b7304f0380e",
+      "seed": 34203015,
+      "segment_index": 15,
+      "synthetic_sequence_id": "synthetic/validation/003",
+      "synthetic_sequence_index": 3,
+      "window_count": 24,
+      "world_content_identity": "111ad65cb83cf2001f633f4e64580a6192fed94dfd9f8dfb24a23e8229ec0fcc",
+      "world_identity": "3877eb997dcb922f70127ee5f49054263f9af4e1fdf5b420e8fcda5b4fae6566"
+    },
+    {
+      "changed_slot_count": 22944,
+      "file": "artifacts/data/validation/sequence_003/segment_16.npz",
+      "file_sha256": "152df372305ebb21515b172697e57826562d08caefe314aec1d16730c6614141",
+      "frame_range_inclusive": [
+        448,
+        475
+      ],
+      "scientific_content_hash": "f263a293b309953fb22454f3caf6a5380813d0a80529b1b72cf9d80063334ad6",
+      "seed": 34203016,
+      "segment_index": 16,
+      "synthetic_sequence_id": "synthetic/validation/003",
+      "synthetic_sequence_index": 3,
+      "window_count": 24,
+      "world_content_identity": "5ce97a3f3f6651999993d2f3145f0e42a0bf59096c053eb3aebf91e18c436702",
+      "world_identity": "0b11fce46f1965f99b58a6829b4633abad57f8b4cb6b7eb9b373dcabc3c3c103"
+    },
+    {
+      "changed_slot_count": 488,
+      "file": "artifacts/data/validation/sequence_003/segment_17.npz",
+      "file_sha256": "88b215f8ac5f4154b8bc605c7069f03e0540d89b2c31a5434ef1c8aece09c37c",
+      "frame_range_inclusive": [
+        476,
+        503
+      ],
+      "scientific_content_hash": "bfada2f78448b0bdfeb91bbbdae854c17abaa9c8a17177f6111f035d2a08d87e",
+      "seed": 34203017,
+      "segment_index": 17,
+      "synthetic_sequence_id": "synthetic/validation/003",
+      "synthetic_sequence_index": 3,
+      "window_count": 24,
+      "world_content_identity": "26fbb67053bef4c30da82ad62c1d56491c0d905cead04160404af484140962e5",
+      "world_identity": "d9d87906ee878e12df9e134e3d15bb50c3dca46515bc4610ca09b948ec203ffe"
+    },
+    {
+      "changed_slot_count": 1161,
+      "file": "artifacts/data/validation/sequence_003/segment_18.npz",
+      "file_sha256": "e5247dd70b007dcdcefad96b85f245ef129303cf3dedfe842a5fbcd8ee672d4a",
+      "frame_range_inclusive": [
+        504,
+        531
+      ],
+      "scientific_content_hash": "e48dc8e7e241e14f1eebb626ef3db15d1b8da5586d898e14096445e2b5043513",
+      "seed": 34203018,
+      "segment_index": 18,
+      "synthetic_sequence_id": "synthetic/validation/003",
+      "synthetic_sequence_index": 3,
+      "window_count": 24,
+      "world_content_identity": "b8bf87a52616b721f9d98137fa7c2d63401fc2f01508c213d75ae9e39e4c771f",
+      "world_identity": "02a82d0ba9cd6217f595681197a5303379ac4daaf44f3fa0884c746654c53f05"
+    },
+    {
+      "changed_slot_count": 27393,
+      "file": "artifacts/data/validation/sequence_003/segment_19.npz",
+      "file_sha256": "8a3adb3dc223f2eb62410de90657af411592bafa77c6780404249b1000b42174",
+      "frame_range_inclusive": [
+        532,
+        559
+      ],
+      "scientific_content_hash": "841ce525695fb60524853531ceddf0cbc80215dd36b6e71017374860648934dd",
+      "seed": 34203019,
+      "segment_index": 19,
+      "synthetic_sequence_id": "synthetic/validation/003",
+      "synthetic_sequence_index": 3,
+      "window_count": 24,
+      "world_content_identity": "f60ceabaaec65ab59e5490785bb0bfd20862103a90c5bf56694c2e80e4ab4f96",
+      "world_identity": "01b5c0e72e86f84f14f6d71e78e9cf33cbb32e18ac630777001da2310551524a"
+    },
+    {
+      "changed_slot_count": 50655,
+      "file": "artifacts/data/validation/sequence_003/segment_20.npz",
+      "file_sha256": "140e13e672fa567eebd175e09d0a68803b59c4b872ebfcbf487325970f444297",
+      "frame_range_inclusive": [
+        560,
+        587
+      ],
+      "scientific_content_hash": "4e0def32d79dae925ea749be6b23a7b8a449022ec935711a49415ba8de8f0a02",
+      "seed": 34203020,
+      "segment_index": 20,
+      "synthetic_sequence_id": "synthetic/validation/003",
+      "synthetic_sequence_index": 3,
+      "window_count": 24,
+      "world_content_identity": "b771bdcb1268c7d0f59b82ab34e188cee024f40721692f2c4c2896f489cacce4",
+      "world_identity": "4e419b2743972e0c816a1cc36af39b8639f83b2d3391739fc48d037e2ef9d8c9"
+    },
+    {
+      "changed_slot_count": 134,
+      "file": "artifacts/data/validation/sequence_003/segment_21.npz",
+      "file_sha256": "1c8d5501b9625b9f66c1ad5ad6a0d98cf83be8b7cc78e83bcc5637b75cd777b4",
+      "frame_range_inclusive": [
+        588,
+        615
+      ],
+      "scientific_content_hash": "2a2d1e7c654721cba8317133d954a8783a809c79f3ac30fce20ff91fa75cf018",
+      "seed": 34203021,
+      "segment_index": 21,
+      "synthetic_sequence_id": "synthetic/validation/003",
+      "synthetic_sequence_index": 3,
+      "window_count": 24,
+      "world_content_identity": "97187d64f7181ab75f29ffacacc28caaae5bab4ce581287c0ba649577fc7cf61",
+      "world_identity": "1fc2ce5bc33d9df6e8e1f674be688f8bc42d90270b7c4c38f0699f8b95d5a149"
+    },
+    {
+      "changed_slot_count": 6735,
+      "file": "artifacts/data/validation/sequence_003/segment_22.npz",
+      "file_sha256": "24594454714dca3df87531bc488ccc36ee9de558b818c1b17da97195f5cee18e",
+      "frame_range_inclusive": [
+        616,
+        681
+      ],
+      "scientific_content_hash": "ad0190f18bc97b3cee9f0cab72f872341922063f61439a76a7568cf7c5be6a22",
+      "seed": 34203022,
+      "segment_index": 22,
+      "synthetic_sequence_id": "synthetic/validation/003",
+      "synthetic_sequence_index": 3,
+      "window_count": 62,
+      "world_content_identity": "0b18e2762ce6b3678ae7fda4344d756ac31915eb6b307432f4e05933e6fd9561",
+      "world_identity": "d7dc757d5b2eda200f68f347eb21bc77ac79c6b2e19f2c3e888de48c81129dd8"
+    }
+  ],
+  "source_sequence_id": 201,
+  "synthetic_sequence_count": 4,
+  "window_count": 2360,
+  "world_count": 92
+}
