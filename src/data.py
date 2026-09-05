@@ -11,6 +11,7 @@ import multiprocessing as mp
 import os
 import tempfile
 import zipfile
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterator, Mapping, Sequence
@@ -103,11 +104,16 @@ def _canonical_hash(
     return digest.hexdigest()
 
 
-def _stable_npz(path: Path, arrays: Mapping[str, np.ndarray]) -> None:
+def _stable_npz(
+    path: Path, arrays: Mapping[str, np.ndarray], *, compression_level: int = 9
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(dir=path.parent, suffix=".tmp") as temporary:
         with zipfile.ZipFile(
-            temporary, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9
+            temporary,
+            "w",
+            compression=zipfile.ZIP_DEFLATED,
+            compresslevel=compression_level,
         ) as archive:
             for name in sorted(arrays):
                 buffer = io.BytesIO()
@@ -118,7 +124,7 @@ def _stable_npz(path: Path, arrays: Mapping[str, np.ndarray]) -> None:
                 )
                 info = zipfile.ZipInfo(f"{name}.npy", date_time=(1980, 1, 1, 0, 0, 0))
                 info.compress_type = zipfile.ZIP_DEFLATED
-                info._compresslevel = 9
+                info._compresslevel = compression_level
                 info.external_attr = 0o600 << 16
                 archive.writestr(info, buffer.getvalue())
         temporary.flush()
@@ -289,7 +295,9 @@ class PredictionBatch:
                 metadata, ensure_ascii=False, sort_keys=True, separators=(",", ":")
             )
         )
-        _stable_npz(path, payload)
+        # Scores are incompressible enough that maximum DEFLATE wastes CPU time.
+        # Lossless level 1 changes packaging only, not point rows or scientific hashes.
+        _stable_npz(path, payload, compression_level=1)
         return {
             "file": path.as_posix(),
             "file_sha256": _sha256(path),
@@ -485,7 +493,9 @@ class FrozenSyntheticSegment:
     expected_sha256: str | None = None
     metadata: Mapping[str, object] = field(init=False)
     arrays: Mapping[str, np.ndarray] = field(init=False, repr=False)
-    _frame_cache: dict[int, SourceFrame] = field(init=False, default_factory=dict)
+    _frame_cache: OrderedDict[int, SourceFrame] = field(
+        init=False, default_factory=OrderedDict
+    )
 
     def __post_init__(self) -> None:
         self.path = self.path.expanduser().resolve(strict=True)
@@ -679,7 +689,9 @@ class FrozenSyntheticSegment:
 
     def frame(self, frame_id: int) -> SourceFrame:
         if frame_id in self._frame_cache:
-            return self._frame_cache[frame_id]
+            result = self._frame_cache.pop(frame_id)
+            self._frame_cache[frame_id] = result
+            return result
         try:
             index = self.frame_ids.index(frame_id)
         except ValueError as error:
@@ -718,6 +730,9 @@ class FrozenSyntheticSegment:
         if source_observation_identity(result) != expected:
             raise DataProtocolError("reconstructed frame differs from frozen rendering")
         self._frame_cache[frame_id] = result
+        # Overlapping causal windows need five immutable frames, not a whole segment.
+        while len(self._frame_cache) > 5:
+            self._frame_cache.popitem(last=False)
         return result
 
     def window(self, window_start: int) -> SceneWindow:

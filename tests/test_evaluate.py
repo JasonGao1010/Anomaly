@@ -11,6 +11,11 @@ from src.evaluate import (
     official_metrics,
     select_samples,
     synthetic_metrics,
+    anomaly_losses,
+    exact_metrics,
+    full_samples,
+    packed_scores,
+    pooled_files,
 )
 from src.protocol import load_protocol
 from src.train import fixed_check
@@ -97,3 +102,81 @@ def test_zero_update_checks_parameters_and_batchnorm_buffers():
         model[1].weight.add_(0.1)
     with pytest.raises(RuntimeError, match="changed model"):
         assert_unchanged(model, reference)
+
+
+def test_full_sample_coverage_preserves_old_view_and_boundaries():
+    pool = load_protocol().validation_pool
+    samples = full_samples(pool)
+    assert len(samples) == 3038
+    assert sum(row["scope"] == "selected_23" for row in samples) == 23
+    assert sum(row["scope"] == "sequence_0_remaining" for row in samples) == 567
+    assert sum(row["scope"] == "sequences_1_3" for row in samples) == 1770
+    synthetic = samples[:2360]
+    assert [row["dataset_index"] for row in synthetic] == list(range(2360))
+    for row in synthetic:
+        span = pool.segments[row["segment_index"]]
+        assert span.start <= row["frame_ids"][0] < row["current_frame"] < span.stop
+    for old, row in zip(
+        select_samples(pool),
+        [r for r in samples if r["scope"] == "selected_23"],
+        strict=True,
+    ):
+        assert row["current_frame"] == old["current_frame"]
+        assert row["check_seed"] == old["check_seed"]
+    assert [row["current_frame"] for row in samples[2360:]] == list(range(4, 682))
+    assert len({(row["sequence_id"], row["current_frame"]) for row in samples}) == 3038
+
+
+@pytest.mark.parametrize("chunk_size", [1, 2, 7, 1000000])
+def test_exact_disk_metrics_match_official_ties_and_roc_pruning(tmp_path, chunk_size):
+    generator = np.random.default_rng(91)
+    cases = [
+        (generator.random(2000, dtype=np.float32), generator.integers(0, 2, 2000)),
+        (
+            generator.integers(0, 8, 2000).astype(np.float32) / 8,
+            generator.integers(0, 2, 2000),
+        ),
+        (np.full(100, 0.5, dtype=np.float32), np.tile([0, 1], 50)),
+        (
+            np.array([0.9] * 19 + [0.1, 0.2, 0.05], np.float32),
+            np.array([1] * 20 + [0, 0]),
+        ),
+        # Collinear ROC nodes crossing 95% must be dropped before strict FPR95.
+        (np.arange(100, 0, -1, dtype=np.float32).repeat(2) / 101, np.tile([0, 1], 100)),
+    ]
+    for index, (scores, target) in enumerate(cases):
+        calculator = PointOODMetricsCalculator()
+        calculator.all_scores = [scores]
+        calculator.all_labels = [target]
+        expected = official_metrics(calculator)
+        keys = packed_scores(scores, target)
+        result = exact_metrics(np.sort(keys), chunk_size=chunk_size)
+        for name, value in expected.items():
+            assert result[name] == pytest.approx(value, abs=1e-10, rel=0)
+        paths = [tmp_path / f"{index}_{part}.bin" for part in range(2)]
+        for path, block in zip(paths, np.array_split(keys, 2), strict=True):
+            block.tofile(path)
+        pooled = pooled_files(paths)
+        for name, value in expected.items():
+            assert pooled[name] == pytest.approx(value, abs=1e-10, rel=0)
+        assert pooled["normal_count"] == int((target == 0).sum())
+
+
+@pytest.mark.parametrize("count", [103, 104])
+def test_disk_normal_quantiles_are_exact_and_loss_scopes_count_points(tmp_path, count):
+    scores = np.random.default_rng(6).random(count, dtype=np.float32)
+    path = tmp_path / "normal.bin"
+    packed_scores(scores, np.zeros(len(scores))).tofile(path)
+    assert pooled_files([path], normal=True) == normal_statistics(scores)
+    logits = torch.tensor([-100.0, 100.0, -3.0, 4.0, 6.0, -9.0])
+    target = torch.tensor([1, 1, 1, 0, -1, 1])
+    current = np.array([False, False, True, True, True, True])
+    result = anomaly_losses(logits, target, current, np.array([1, 0, -1, -1]))
+    assert [result[key]["point_count"] for key in result] == [4, 2, 2, 1]
+    assert (
+        result["all"]["loss_sum"]
+        == result["history"]["loss_sum"] + result["current"]["loss_sum"]
+    )
+    assert (
+        result["all"]["loss_sum"] > 100
+    )  # Do not recover this from saturated sigmoid.
