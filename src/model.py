@@ -11,7 +11,7 @@ import torch
 from torch import nn
 
 from .data import PredictionBatch
-from .scene import SceneWindow
+from .scene import SceneWindow, WindowPoints
 
 
 @dataclass(frozen=True)
@@ -23,6 +23,8 @@ class JointVoxels:
     features: torch.Tensor
     point_to_voxel: torch.Tensor
     point_features: torch.Tensor
+    source_points: WindowPoints
+    voxel_size: float
 
     def backbone_input(self) -> dict[str, torch.Tensor]:
         return {
@@ -87,6 +89,8 @@ def joint_voxelize(
         features=torch.tensor(features, device=device),
         point_to_voxel=torch.tensor(inverse, dtype=torch.long, device=device),
         point_features=torch.tensor(point_features, device=device),
+        source_points=points,
+        voxel_size=voxel_size,
     )
 
 
@@ -105,11 +109,23 @@ class AJAE(nn.Module):
         self.backbone = LitePT(in_channels=9)
         self.head = nn.Sequential(nn.Linear(81, 32), nn.GELU(), nn.Linear(32, 1))
 
-    def forward(self, window: SceneWindow) -> torch.Tensor:
+    def forward(
+        self, window: SceneWindow, *, inputs: JointVoxels | None = None
+    ) -> torch.Tensor:
         """Return one trainable logit per original point, including history."""
 
         device = next(self.parameters()).device
-        inputs = joint_voxelize(window, self.voxel_size, device=device)
+        if inputs is None:
+            inputs = joint_voxelize(window, self.voxel_size, device=device)
+        elif (
+            inputs.source_points is not window.points
+            or inputs.voxel_size != self.voxel_size
+            or inputs.features.device != device
+        ):
+            # Reuse only deterministic inputs for this exact immutable window.
+            raise ValueError(
+                "prepared voxels belong to different points, grid or device"
+            )
         # spconv 2.3.8 eval bypasses its AMP weight cast. Keep eval inputs/weights
         # in float32; the official attention's internal float16 path is unchanged.
         precision = (

@@ -99,7 +99,9 @@ def test_labels_and_absolute_identities_never_enter_features() -> None:
     unlabelled = _window(start=70, labels=False)
     a, b = joint_voxelize(labelled), joint_voxelize(unlabelled)
     for field in fields(a):
-        assert torch.equal(getattr(a, field.name), getattr(b, field.name))
+        value = getattr(a, field.name)
+        if isinstance(value, torch.Tensor):
+            assert torch.equal(value, getattr(b, field.name))
     # Normal, anomaly and ignore coexist inside a single voxel without voting.
     assert a.point_to_voxel[:3].unique().numel() == 1
     np.testing.assert_array_equal(labelled.labels.anomaly_target[:3], (0, 1, -1))
@@ -121,6 +123,17 @@ def test_official_backbone_and_all_point_head_forward_backward(tmp_path: Path) -
     assert all(parameter.requires_grad for parameter in model.parameters())
     assert model.head[0].in_features == 81 and model.head[0].out_features == 32
     window = _window(512)
+    inputs = joint_voxelize(window, device="cuda")
+    model.eval()
+    with torch.no_grad(), torch.random.fork_rng():
+        torch.manual_seed(91)
+        uncached = model(window)
+        torch.manual_seed(91)
+        cached = model(window, inputs=inputs)
+        torch.testing.assert_close(cached, uncached, atol=1e-6, rtol=1e-5)
+    with pytest.raises(ValueError, match="different points"):
+        model(_window(512), inputs=inputs)
+    model.train()
     logits = model(window)
     assert logits.shape == (window.points.count,)
     assert torch.isfinite(logits).all()

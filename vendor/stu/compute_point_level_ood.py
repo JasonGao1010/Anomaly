@@ -6,8 +6,6 @@ import numpy as np
 from sklearn.metrics import auc, average_precision_score, roc_curve
 from tqdm import tqdm
 
-from utils.common import convert_to_builtin_types, load_labels, load_point_cloud
-
 """
 # Example usage in a model
 metrics = PointOODMetricsCalculator()
@@ -107,6 +105,9 @@ class PointOODMetricsCalculator:
 
 
 def main(args):
+    # The metric class can be imported without the upstream dataset CLI helpers.
+    from utils.common import convert_to_builtin_types, load_labels, load_point_cloud
+
     metrics_calculator = PointOODMetricsCalculator()
 
     for seq_path in tqdm(sorted(list(args.data_dir.glob("1[0-9][0-9]")))):
