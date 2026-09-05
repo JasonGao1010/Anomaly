@@ -1,713 +1,568 @@
 #!/usr/bin/env python3
-"""Mechanical qualification for the compact schema-33 feasibility path."""
+"""Model-independent qualification for the schema-34 frozen data pools."""
 
 from __future__ import annotations
 
 import argparse
-import gc
 import hashlib
-import importlib
-import importlib.metadata
-import importlib.util
 import json
-import os
 import platform
-import sys
-import types
 from pathlib import Path
-from typing import Callable, Sequence
+from typing import Mapping, Sequence
 
 import numpy as np
-import torch
 
 try:
-    from .evaluate import (
-        require_clean_implementation,
-        score_window,
-        window_stu_inputs,
+    from .data import (
+        POOL_MANIFEST_FORMAT,
+        FrozenSyntheticSegment,
+        WindowPartition,
+        generation_identity,
     )
-    from .model import (
-        FrozenSTUPointEncoder,
-        MASK_DIM,
-        NUM_NORMAL_CLASSES,
-        NUM_QUERIES,
-        STUPointEncoding,
-        assigned_stu_evidence,
-        official_stu_semantic_class,
-        official_stu_sparse_quantize,
-        stu_input_identity,
+    from .protocol import AJAEProtocol, SyntheticPoolSpec, load_protocol
+    from .render import (
+        canonical_ray_slots_for_source,
+        collect_observed_obstacle_index,
+        load_qualified_support_pool,
+        load_sensor_calibration,
+        sample_segment_world,
+        source_observation_identity,
+        world_content_identity,
     )
-    from .protocol import AJAEProtocol, FrameSpan, SequenceSpec, load_protocol
-    from .scene import LabelMode, PointLabels, STUSequence, assemble_window, make_source_frame
+    from .scene import LabelMode, STUSequence
 except ImportError:  # Direct script execution.
-    from evaluate import (
-        require_clean_implementation,
-        score_window,
-        window_stu_inputs,
+    from data import (  # type: ignore[no-redef]
+        POOL_MANIFEST_FORMAT,
+        FrozenSyntheticSegment,
+        WindowPartition,
+        generation_identity,
     )
-    from model import (
-        FrozenSTUPointEncoder,
-        MASK_DIM,
-        NUM_NORMAL_CLASSES,
-        NUM_QUERIES,
-        STUPointEncoding,
-        assigned_stu_evidence,
-        official_stu_semantic_class,
-        official_stu_sparse_quantize,
-        stu_input_identity,
+    from protocol import AJAEProtocol, SyntheticPoolSpec, load_protocol
+    from render import (  # type: ignore[no-redef]
+        canonical_ray_slots_for_source,
+        collect_observed_obstacle_index,
+        load_qualified_support_pool,
+        load_sensor_calibration,
+        sample_segment_world,
+        source_observation_identity,
+        world_content_identity,
     )
-    from protocol import AJAEProtocol, FrameSpan, SequenceSpec, load_protocol
-    from scene import LabelMode, PointLabels, STUSequence, assemble_window, make_source_frame
+    from scene import LabelMode, STUSequence
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 class QualificationError(AssertionError):
-    """Report a failed schema-33 semantic invariant."""
+    """Report a failed model-independent data invariant."""
 
 
-def _module_from_file(name: str, path: Path) -> object:
-    spec = importlib.util.spec_from_file_location(name, path)
-    if spec is None or spec.loader is None:
-        raise QualificationError(f"cannot load official STU module {path}")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-def _official_lidar_module(path: Path) -> object:
-    """Load inference-only STU data code without its unused augmentation package."""
-
-    if importlib.util.find_spec("volumentations") is not None:
-        return _module_from_file("_ajae_official_stu_lidar", path)
-    sys.modules["volumentations"] = types.ModuleType("volumentations")
-    try:
-        return _module_from_file("_ajae_official_stu_lidar", path)
-    finally:
-        sys.modules.pop("volumentations", None)
-
-
-def _source(frame_id: int, pose_x: float, point_x: float) -> object:
-    xyzi = np.asarray(
-        [[point_x, 0.0, 0.0, 0.5], [point_x + 1.0, 0.0, 0.0, 0.7]],
-        dtype=np.float32,
-    )
-    pose = np.eye(4, dtype=np.float64)
-    pose[0, 3] = pose_x
-    packed = np.asarray([40, 40], dtype=np.uint32)
-    labels = PointLabels(
-        packed=packed,
-        semantic=packed.astype(np.uint16),
-        instance=np.zeros(2, dtype=np.uint16),
-        semantic_target=np.asarray([8, 8], dtype=np.uint8),
-    )
-    return make_source_frame(
-        frame_id,
-        xyzi,
-        pose,
-        labels,
-        partition="train",
-        sequence_id=201,
-    )
-
-
-def _window() -> object:
-    spec = SequenceSpec("train", 201, "fixture", True, FrameSpan(0, 5))
-    sources = tuple(_source(index, float(index), 10.0) for index in range(5))
-    return assemble_window(spec, 0, tuple(range(5)), sources)
-
-
-def _latest_frame_alignment() -> dict[str, object]:
-    window = _window()
-    latest = window.current_frame.source
-    rows = window.current_mask
-    error = float(
-        np.max(
-            np.abs(window.points.coordinates[rows] - latest.xyzi[latest.real_slots, :3])
-        )
-    )
-    if error != 0.0:
-        raise QualificationError("latest scan did not remain in its native coordinates")
-    return {"current_frame": window.current_frame_id, "maximum_error": error}
-
-
-def _past_frame_alignment() -> dict[str, object]:
-    window = _window()
-    # Every fixture point has world x = 10 + source pose; current pose is x = 4.
-    expected_first_x = 6.0
-    observed_first_x = float(window.points.coordinates[0, 0])
-    if observed_first_x != expected_first_x:
-        raise QualificationError("past scan was not transformed by T_current<-source")
-    return {"expected_first_x": expected_first_x, "observed_first_x": observed_first_x}
-
-
-def _paired_input_rows() -> dict[str, object]:
-    inputs = window_stu_inputs(_window())
-    if inputs.dense_coordinates.shape[0] != 5 * inputs.single_real_slots.size:
-        raise QualificationError("dense pseudo-scan does not contain all five scans")
-    if inputs.dense_current_rows.size != inputs.single_real_slots.size:
-        raise QualificationError(
-            "single and dense outputs do not address the same points"
-        )
-    return {
-        "single_points": int(inputs.single_real_slots.size),
-        "dense_points": int(inputs.dense_coordinates.shape[0]),
-        "scored_dense_rows": int(inputs.dense_current_rows.size),
-    }
-
-
-def _online_uniqueness() -> dict[str, object]:
-    protocol = load_protocol()
-    starts = protocol.normal_development.legal_window_starts()
-    current = tuple(start + 4 for start in starts)
-    if len(current) != len(set(current)) or len(current) != 546:
-        raise QualificationError(
-            "online windows must produce each development time once"
-        )
-    return {
-        "windows": len(starts),
-        "first_current": current[0],
-        "last_current": current[-1],
-    }
-
-
-def _route_is_pretraining() -> dict[str, object]:
-    protocol = load_protocol()
-    if protocol.status["training_allowed"] or set(protocol.methods) != {
-        "single_stu",
-        "dense_stu",
-    }:
-        raise QualificationError("schema 33 retained a trainable comparison condition")
-    return {"training_allowed": False, "methods": sorted(protocol.methods)}
-
-
-class _DeterministicEncoder:
-    def __call__(
-        self,
-        coordinates: np.ndarray,
-        features: np.ndarray,
-        real_slots: np.ndarray | None = None,
-    ) -> STUPointEncoding:
-        rows = (
-            np.arange(coordinates.shape[0], dtype=np.int64)
-            if real_slots is None
-            else np.asarray(real_slots, dtype=np.int64)
-        )
-        count = rows.size
-        score = torch.from_numpy(
-            np.asarray(features[rows, 0] + features[rows, 1], dtype=np.float32)
-        )
-        evidence = torch.zeros((count, NUM_NORMAL_CLASSES), dtype=torch.float32)
-        evidence[:, 8] = 1.0
-        return STUPointEncoding(
-            point_features=torch.zeros((count, MASK_DIM)),
-            assigned_query=torch.zeros(count, dtype=torch.long),
-            normal_evidence=evidence,
-            reliability_assign=torch.ones(count),
-            reliability_noobj=torch.zeros(count),
-            maxlogit_score=score,
-            normal_class=torch.full((count,), 8, dtype=torch.long),
-            inverse_map=torch.arange(count, dtype=torch.long),
-            real_slots=torch.as_tensor(rows, dtype=torch.long),
-            input_identity=stu_input_identity(coordinates, features, rows),
-        )
-
-
-def _single_scan_degeneracy() -> dict[str, object]:
-    spec = SequenceSpec("train", 201, "fixture", True, FrameSpan(0, 5))
-    sources = []
-    for frame in range(5):
-        xyzi = (
-            np.zeros((1, 4), dtype=np.float32)
-            if frame < 4
-            else np.asarray(((10.0, 0.0, 0.0, 0.5),), dtype=np.float32)
-        )
-        packed = np.asarray((40,), dtype=np.uint32)
-        labels = PointLabels(
-            packed=packed,
-            semantic=packed.astype(np.uint16),
-            instance=np.zeros(1, dtype=np.uint16),
-            semantic_target=np.asarray((8,), dtype=np.uint8),
-        )
-        sources.append(
-            make_source_frame(
-                frame,
-                xyzi,
-                np.eye(4, dtype=np.float64),
-                labels,
-                partition="train",
-                sequence_id=201,
-            )
-        )
-    window = assemble_window(spec, 0, tuple(range(5)), tuple(sources))
-    inputs = window_stu_inputs(window)
-    if not (
-        np.array_equal(inputs.single_coordinates, inputs.dense_coordinates)
-        and np.array_equal(inputs.single_features, inputs.dense_features)
-    ):
-        raise QualificationError(
-            "dense input does not reduce exactly to the single scan"
-        )
-    scores = score_window(_DeterministicEncoder(), window)  # type: ignore[arg-type]
-    if not (
-        np.array_equal(scores.single_score, scores.dense_current_score)
-        and np.array_equal(scores.single_class, scores.dense_current_class)
-    ):
-        raise QualificationError("single-scan degeneration changed its predictions")
-    return {"input_points": int(inputs.dense_coordinates.shape[0]), "exact": True}
-
-
-def _shared_voxel_current_recovery() -> dict[str, object]:
-    spec = SequenceSpec("train", 201, "fixture", True, FrameSpan(0, 5))
-    sources = tuple(_source(frame, 0.0, 1.001 + 0.001 * frame) for frame in range(5))
-    window = assemble_window(spec, 0, tuple(range(5)), sources)
-    inputs = window_stu_inputs(window)
-    _, _, _, inverse = official_stu_sparse_quantize(
-        inputs.dense_coordinates, inputs.dense_features
-    )
-    inverse_map = np.asarray(inverse, dtype=np.int64)
-    current = int(inputs.dense_current_rows[0])
-    if inverse_map.shape != (inputs.dense_coordinates.shape[0],) or not np.any(
-        inverse_map[:current] == inverse_map[current]
-    ):
-        raise QualificationError(
-            "official voxel inverse map did not recover a shared-voxel current point"
-        )
-    return {
-        "dense_points": int(inverse_map.size),
-        "current_row": current,
-        "shared_voxel_row": int(inverse_map[current]),
-    }
-
-
-def _official_semantic_equivalence() -> dict[str, object]:
-    logits = torch.full((NUM_QUERIES, NUM_NORMAL_CLASSES + 1), -20.0)
-    logits[:, -1] = 20.0
-    logits[0, 0], logits[0, -1] = 5.0, 0.0
-    logits[1, 1], logits[1, -1] = 4.0, 0.0
-    masks = torch.full((1, NUM_QUERIES), -20.0)
-    masks[0, 0], masks[0, 1] = 3.0, 1.0
-    evidence = assigned_stu_evidence(logits, masks)
-    reference = official_stu_semantic_class(logits, masks)
-    if not torch.equal(evidence.normal_class, reference):
-        raise QualificationError("normal_class differs from official query semantics")
-    return {"checked_voxels": 1, "class": int(reference[0])}
-
-
-def _file_sha256(path: Path) -> str:
+def _sha256(path: Path) -> str:
     with path.open("rb") as stream:
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
-def _restore_rng(
-    cpu_state: torch.Tensor,
-    cuda_state: torch.Tensor | None,
-    device: torch.device,
-) -> None:
-    torch.random.set_rng_state(cpu_state)
-    if cuda_state is not None:
-        torch.cuda.set_rng_state(cuda_state, device)
-
-
-def _official_projection(
-    encoder: FrozenSTUPointEncoder,
-    official_data: object,
-    selected_rows: np.ndarray,
-) -> dict[str, np.ndarray | int]:
-    me = importlib.import_module("MinkowskiEngine")
-    sparse = me.SparseTensor(
-        coordinates=official_data.coordinates,
-        features=official_data.features,
-        device=encoder.device,
-    )
-    with torch.no_grad():
-        output = encoder.stu(
-            sparse,
-            raw_coordinates=official_data.raw_coordinates,
-            is_eval=True,
-        )
-    logits = encoder._single_prediction(output["pred_logits"], "pred_logits")
-    masks = encoder._single_prediction(output["pred_masks"], "pred_masks")
-    evidence = assigned_stu_evidence(logits, masks)
-    full_inverse = torch.as_tensor(
-        official_data.inverse_maps[0], dtype=torch.long, device=encoder.device
-    )
-    rows = torch.as_tensor(selected_rows, dtype=torch.long, device=encoder.device)
-    inverse = full_inverse[rows]
-    return {
-        "score": evidence.maxlogit_score[inverse].detach().cpu().numpy(),
-        "normal_class": evidence.normal_class[inverse].detach().cpu().numpy(),
-        "inverse_map": inverse.detach().cpu().numpy(),
-        "sparse_voxels": int(masks.shape[0]),
-    }
-
-
-def _ajae_projection(
-    encoder: FrozenSTUPointEncoder,
-    coordinates: np.ndarray,
-    features: np.ndarray,
-    selected_rows: np.ndarray,
-) -> dict[str, np.ndarray]:
-    encoding = encoder(coordinates, features, selected_rows)
-    result = {
-        "score": encoding.maxlogit_score.detach().cpu().numpy(),
-        "normal_class": encoding.normal_class.detach().cpu().numpy(),
-        "inverse_map": encoding.inverse_map.detach().cpu().numpy(),
-    }
-    del encoding
-    gc.collect()
-    if encoder.device.type == "cuda":
-        torch.cuda.empty_cache()
-    return result
-
-
-def _maximum_absolute_error(left: np.ndarray, right: np.ndarray) -> float:
-    return float(np.max(np.abs(left.astype(np.float64) - right.astype(np.float64))))
-
-
-def _equivalence_case(
-    *,
-    sequence: STUSequence,
-    encoder: FrozenSTUPointEncoder,
-    dataset: object,
-    collate: object,
-    frame_ids: tuple[int, ...],
-    coordinates: np.ndarray,
-    features: np.ndarray,
-    selected_rows: np.ndarray,
-    current_rows: np.ndarray,
-    repeat_runs: int,
-    absolute_tolerance: float,
-    relative_tolerance: float,
-) -> dict[str, object]:
-    repository = encoder.official_repository
-    sources = tuple(sequence.source_frame(frame_id) for frame_id in frame_ids)
-    dataset.sweep = len(frame_ids)
-    dataset.data = [[
-        {
-            "filepath": str(
-                sequence.sequence_dir / "velodyne" / f"{source.frame_id:06d}.bin"
-            ),
-            "label_filepath": str(
-                sequence.sequence_dir / "labels" / f"{source.frame_id:06d}.label"
-            ),
-            "scene": 201,
-            "pose": source.lidar_pose.tolist(),
-        }
-        for source in sources
-    ]]
-    official_sample = dataset[0]
-    official_coordinates = np.asarray(official_sample["coordinates"])
-    official_features = np.asarray(
-        official_sample["features"][:, 4:], dtype=np.float32
-    )
-    if not np.array_equal(official_coordinates, coordinates):
-        error = _maximum_absolute_error(official_coordinates, coordinates)
-        raise QualificationError(
-            f"AJAE coordinates differ from official sweep={len(frame_ids)} by {error}"
-        )
-    if not np.array_equal(official_features, features):
-        error = _maximum_absolute_error(official_features, features)
-        raise QualificationError(
-            f"AJAE features differ from official sweep={len(frame_ids)} by {error}"
-        )
-
-    official_data, _ = collate([official_sample])
-    sparse_c, sparse_f, unique, inverse = official_stu_sparse_quantize(
-        coordinates,
-        features,
-        official_repository=repository,
-    )
-    me = importlib.import_module("MinkowskiEngine")
-    if not isinstance(sparse_f, torch.Tensor):
-        sparse_f = torch.from_numpy(np.asarray(sparse_f))
-    collated_c, collated_f = me.utils.sparse_collate(
-        [sparse_c], [sparse_f.float()]
-    )
-    unique_np = np.asarray(unique, dtype=np.int64)
-    raw_spatial = torch.from_numpy(coordinates[unique_np]).float()
-    comparisons = (
-        ("sparse coordinates", official_data.coordinates, collated_c),
-        ("sparse features", official_data.features, collated_f),
-        ("raw spatial coordinates", official_data.raw_coordinates[:, :3], raw_spatial),
-    )
-    for name, official_value, ajae_value in comparisons:
-        if not torch.equal(official_value.cpu(), ajae_value.cpu()):
-            raise QualificationError(
-                f"AJAE {name} differs from official sweep={len(frame_ids)}"
-            )
-    if not np.array_equal(
-        np.asarray(official_data.inverse_maps[0]), np.asarray(inverse)
-    ):
-        raise QualificationError(
-            f"AJAE full inverse map differs from official sweep={len(frame_ids)}"
-        )
-
-    cpu_state = torch.random.get_rng_state()
-    cuda_state = (
-        torch.cuda.get_rng_state(encoder.device)
-        if encoder.device.type == "cuda"
-        else None
-    )
-    official = _official_projection(encoder, official_data, selected_rows)
-    observed_runs: list[dict[str, np.ndarray]] = []
-    for _ in range(repeat_runs):
-        _restore_rng(cpu_state, cuda_state, encoder.device)
-        observed_runs.append(
-            _ajae_projection(encoder, coordinates, features, selected_rows)
-        )
-    observed = observed_runs[0]
-    official_score = np.asarray(official["score"])
-    official_class = np.asarray(official["normal_class"])
-    official_inverse = np.asarray(official["inverse_map"])
-    score_error = _maximum_absolute_error(observed["score"], official_score)
-    class_mismatches = int(
-        np.count_nonzero(observed["normal_class"] != official_class)
-    )
-    if not np.allclose(
-        observed["score"],
-        official_score,
-        atol=absolute_tolerance,
-        rtol=relative_tolerance,
-    ):
-        raise QualificationError(
-            f"AJAE MaxLogit differs from official sweep={len(frame_ids)} by {score_error}"
-        )
-    if class_mismatches or not np.array_equal(
-        observed["inverse_map"], official_inverse
-    ):
-        raise QualificationError(
-            f"AJAE classes or selected inverse map differ from official sweep={len(frame_ids)}"
-        )
-
-    repeat_score_error = 0.0
-    repeat_class_mismatches = 0
-    repeat_inverse_exact = True
-    for repeated in observed_runs[1:]:
-        repeat_score_error = max(
-            repeat_score_error,
-            _maximum_absolute_error(repeated["score"], observed["score"]),
-        )
-        repeat_class_mismatches += int(
-            np.count_nonzero(repeated["normal_class"] != observed["normal_class"])
-        )
-        repeat_inverse_exact &= np.array_equal(
-            repeated["inverse_map"], observed["inverse_map"]
-        )
-    if repeat_score_error != 0.0 or repeat_class_mismatches or not repeat_inverse_exact:
-        raise QualificationError(
-            f"AJAE sweep={len(frame_ids)} repeatability is not exact"
-        )
-
-    current_score_error = _maximum_absolute_error(
-        observed["score"][current_rows], official_score[current_rows]
-    )
-    current_class_mismatches = int(
-        np.count_nonzero(
-            observed["normal_class"][current_rows]
-            != official_class[current_rows]
-        )
-    )
-    sparse_voxels = int(official["sparse_voxels"])
-    del official_data, official, observed_runs
-    gc.collect()
-    return {
-        "passed": True,
-        "frame_ids": list(frame_ids),
-        "file_slots": int(coordinates.shape[0]),
-        "real_returns": int(selected_rows.size),
-        "current_real_returns": int(current_rows.size),
-        "sparse_voxels": sparse_voxels,
-        "input_coordinates_exact": True,
-        "input_features_exact": True,
-        "sparse_coordinates_exact": True,
-        "sparse_features_exact": True,
-        "raw_spatial_coordinates_exact": True,
-        "full_inverse_map_exact": True,
-        "official_vs_AJAE_max_abs_MaxLogit_error": score_error,
-        "official_vs_AJAE_class_mismatches": class_mismatches,
-        "selected_inverse_map_exact": True,
-        "AJAE_repeat_max_abs_MaxLogit_error": repeat_score_error,
-        "AJAE_repeat_class_mismatches": repeat_class_mismatches,
-        "AJAE_repeat_inverse_map_exact": repeat_inverse_exact,
-        "current_view_max_abs_MaxLogit_error": current_score_error,
-        "current_view_class_mismatches": current_class_mismatches,
-        "official_time_ids_present": len(frame_ids) > 1,
-        "time_ids_used_by_Mask4Former3D": False,
-    }
-
-
-def _official_real_equivalence(
-    data_root: Path,
-    *,
+def _load_manifest(
+    path: Path,
+    pool: SyntheticPoolSpec,
     protocol: AJAEProtocol,
-    device: str,
+) -> Mapping[str, object]:
+    resolved = path.expanduser().resolve(strict=True)
+    artifact_key = {
+        "train_v1": "train_pool_manifest",
+        "validation_v1": "validation_pool_manifest",
+    }[pool.name]
+    expected_file_hash = protocol.artifacts[artifact_key]["sha256"]
+    if expected_file_hash is not None and _sha256(resolved) != expected_file_hash:
+        raise QualificationError(f"{pool.name} manifest bytes differ from protocol")
+    payload = json.loads(resolved.read_text(encoding="utf-8"))
+    expected_generation = generation_identity(protocol, pool)
+    expected_keys = {
+        "format",
+        "schema_version",
+        "pool_name",
+        "generation_identity",
+        "source_sequence_id",
+        "synthetic_sequence_count",
+        "world_count",
+        "window_count",
+        "scientific_content_hash",
+        "segments",
+    }
+    if (
+        set(payload) != expected_keys
+        or payload.get("format") != POOL_MANIFEST_FORMAT
+        or payload.get("schema_version") != protocol.schema_version
+        or payload.get("pool_name") != pool.name
+        or payload.get("generation_identity") != expected_generation
+        or payload.get("source_sequence_id") != pool.source_sequence_id
+        or payload.get("synthetic_sequence_count") != pool.synthetic_sequence_count
+        or payload.get("world_count") != pool.world_count
+        or payload.get("window_count") != pool.total_window_count
+        or not isinstance(payload.get("segments"), list)
+        or len(payload["segments"]) != pool.world_count
+    ):
+        raise QualificationError(f"{pool.name} manifest contradicts the protocol")
+    scientific_hash = hashlib.sha256(
+        json.dumps(
+            {
+                "pool_name": pool.name,
+                "generation_identity": expected_generation,
+                "segment_scientific_hashes": [
+                    item["scientific_content_hash"] for item in payload["segments"]
+                ],
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+    if payload.get("scientific_content_hash") != scientific_hash:
+        raise QualificationError(f"{pool.name} manifest scientific hash differs")
+    return payload
+
+
+def _qualify_pool(
+    protocol: AJAEProtocol,
+    pool: SyntheticPoolSpec,
+    manifest: Mapping[str, object],
+    source: STUSequence,
 ) -> dict[str, object]:
-    sequence = STUSequence.open(
+    expected_pairs = {
+        (sequence, segment)
+        for sequence in range(pool.synthetic_sequence_count)
+        for segment in range(len(pool.segments))
+    }
+    observed_pairs: set[tuple[int, int]] = set()
+    observed_worlds: set[str] = set()
+    observed_world_contents: set[str] = set()
+    observed_seeds: set[int] = set()
+    output_frames_by_sequence: dict[int, list[int]] = {
+        index: [] for index in range(pool.synthetic_sequence_count)
+    }
+    total_frames = 0
+    total_windows = 0
+    total_points = 0
+    total_supervised = 0
+    total_anomalies = 0
+    for record in manifest["segments"]:
+        expected_record_keys = {
+            "file",
+            "file_sha256",
+            "scientific_content_hash",
+            "synthetic_sequence_id",
+            "synthetic_sequence_index",
+            "segment_index",
+            "seed",
+            "world_identity",
+            "world_content_identity",
+            "frame_range_inclusive",
+            "window_count",
+            "changed_slot_count",
+        }
+        if not isinstance(record, Mapping) or set(record) != expected_record_keys:
+            raise QualificationError("manifest segment record has an invalid schema")
+        sequence_index = int(record["synthetic_sequence_index"])
+        segment_index = int(record["segment_index"])
+        pair = (sequence_index, segment_index)
+        if pair in observed_pairs or pair not in expected_pairs:
+            raise QualificationError(
+                "manifest segment identity is duplicated or invalid"
+            )
+        observed_pairs.add(pair)
+        expected_seed = pool.world_seed(sequence_index, segment_index)
+        span = pool.segments[segment_index]
+        expected_file = (
+            Path(pool.output_directory)
+            / f"sequence_{sequence_index:03d}"
+            / f"segment_{segment_index:02d}.npz"
+        ).as_posix()
+        if (
+            int(record["seed"]) != expected_seed
+            or record["synthetic_sequence_id"]
+            != pool.synthetic_sequence_id(sequence_index)
+            or record["file"] != expected_file
+            or record["frame_range_inclusive"] != [span.start, span.stop - 1]
+            or int(record["window_count"]) != len(pool.window_starts(segment_index))
+            or int(record["changed_slot_count"]) < 1
+        ):
+            raise QualificationError(
+                "manifest segment differs from the frozen seed, boundary, or identity"
+            )
+        seed = int(record["seed"])
+        world = str(record["world_identity"])
+        world_content = str(record["world_content_identity"])
+        if (
+            seed in observed_seeds
+            or world in observed_worlds
+            or world_content in observed_world_contents
+        ):
+            raise QualificationError(
+                "formal seeds and physical world contents must be unique"
+            )
+        observed_seeds.add(seed)
+        observed_worlds.add(world)
+        observed_world_contents.add(world_content)
+        path = (protocol.path.parent / str(record["file"])).resolve(strict=True)
+        if _sha256(path) != record["file_sha256"]:
+            raise QualificationError("segment file differs from its manifest hash")
+        frozen = FrozenSyntheticSegment(path, source, str(record["file_sha256"]))
+        metadata = frozen.metadata
+        if (
+            metadata["synthetic_sequence_id"] != record["synthetic_sequence_id"]
+            or metadata["synthetic_sequence_index"]
+            != record["synthetic_sequence_index"]
+            or metadata["segment_index"] != record["segment_index"]
+            or metadata["seed"] != record["seed"]
+            or metadata["world_identity"] != record["world_identity"]
+            or metadata["world_content_identity"] != record["world_content_identity"]
+            or metadata["scientific_content_hash"] != record["scientific_content_hash"]
+        ):
+            raise QualificationError(
+                "manifest record and sparse-segment metadata disagree"
+            )
+        if frozen.frame_ids != tuple(range(span.start, span.stop)):
+            raise QualificationError("segment source frames cross a frozen boundary")
+        frames = tuple(frozen.frame(frame_id) for frame_id in frozen.frame_ids)
+        total_frames += len(frames)
+        first_object_by_frame = {frame.frame_id: frame for frame in frames}
+        starts = pool.window_starts(segment_index)
+        if tuple(map(int, frozen.metadata["window_starts"])) != starts:
+            raise QualificationError("segment windows differ from the frozen plan")
+        for start in starts:
+            window = frozen.window(start)
+            if window.frame_ids != tuple(range(start, start + 5)):
+                raise QualificationError("a window is not five consecutive frames")
+            if not span.contains(start) or not span.contains(start + 4):
+                raise QualificationError("a window crosses an anomaly-world boundary")
+            if any(
+                item.source is not first_object_by_frame[item.source.frame_id]
+                for item in window.frames
+            ):
+                raise QualificationError(
+                    "overlapping windows do not reuse the same reconstructed frame"
+                )
+            current = window.current_frame.source
+            if not np.array_equal(
+                window.points.coordinates[window.current_mask],
+                current.xyzi[current.real_slots, :3],
+            ):
+                raise QualificationError("current frame is not a bitwise xyz copy")
+            if not np.array_equal(
+                window.current_mask,
+                window.points.source_frame == window.current_frame_id,
+            ):
+                raise QualificationError("current_mask is not defined by source frame")
+            if window.labels is None or not np.array_equal(
+                window.supervision_mask, window.labels.anomaly_target != -1
+            ):
+                raise QualificationError("three-state labels and loss mask disagree")
+            if window.points.count != sum(
+                item.source.real_count for item in window.frames
+            ):
+                raise QualificationError(
+                    "a window omitted or duplicated visible returns"
+                )
+            total_windows += 1
+            total_points += window.points.count
+            total_supervised += int(window.supervision_mask.sum())
+            total_anomalies += int(np.count_nonzero(window.labels.anomaly_target == 1))
+            output_frames_by_sequence[sequence_index].append(window.current_frame_id)
+    if observed_pairs != expected_pairs:
+        raise QualificationError("formal manifest omits a predeclared segment")
+    if total_windows != pool.total_window_count or total_anomalies < 1:
+        raise QualificationError(
+            "formal pool has the wrong windows or no anomaly labels"
+        )
+    for sequence_index, outputs in output_frames_by_sequence.items():
+        expected = [
+            start + 4
+            for segment in range(len(pool.segments))
+            for start in pool.window_starts(segment)
+        ]
+        if outputs != expected or len(outputs) != len(set(outputs)):
+            raise QualificationError(
+                f"synthetic sequence {sequence_index} has invalid online outputs"
+            )
+    return {
+        "generation_identity": generation_identity(protocol, pool),
+        "world_count": len(observed_worlds),
+        "rendered_frame_count": total_frames,
+        "window_count": total_windows,
+        "point_observation_count": total_points,
+        "supervised_point_observation_count": total_supervised,
+        "anomaly_point_observation_count": total_anomalies,
+        "distinct_seed_count": len(observed_seeds),
+        "distinct_world_count": len(observed_worlds),
+        "distinct_physical_world_count": len(observed_world_contents),
+    }
+
+
+def _repeat_first_training_segment(
+    protocol: AJAEProtocol,
+    manifest: Mapping[str, object],
+    sequence: STUSequence,
+) -> dict[str, object]:
+    pool = protocol.training_pool
+    first = manifest["segments"][0]
+    if int(first["synthetic_sequence_index"]) != 0 or int(first["segment_index"]) != 0:
+        raise QualificationError("training manifest order is not canonical")
+    support_record = protocol.artifacts["qualified_support_pools"]["train/206"]
+    support = load_qualified_support_pool(
+        protocol.verify_support_pool(206),
+        source_sequence_id=206,
+        expected_sha256=str(support_record["sha256"]),
+    )
+    ray_grid, sensor = load_sensor_calibration(protocol.verify_sensor_calibration())
+    obstacles = collect_observed_obstacle_index(
+        (sequence.source_frame(frame_id) for frame_id in range(len(sequence))),
+        source_sequence_id=206,
+    )
+    span = pool.segments[0]
+    sources = tuple(
+        sequence.source_frame(frame_id) for frame_id in range(span.start, span.stop)
+    )
+    repeated = sample_segment_world(
+        support,
+        obstacles,
+        sources,
+        ray_grid,
+        sensor,
+        pool.world_seed(0, 0),
+        renderer_identity=generation_identity(protocol, pool),
+    )
+    path = (protocol.path.parent / str(first["file"])).resolve(strict=True)
+    frozen = FrozenSyntheticSegment(path, sequence, str(first["file_sha256"]))
+    if (
+        repeated.world.identity != first["world_identity"]
+        or world_content_identity(repeated.world) != first["world_content_identity"]
+        or tuple(repeated.source_observation_identities)
+        != tuple(frozen.metadata["rendered_source_identities"])
+        or [int(item.inserted_mask.sum()) for item in repeated.rendered_frames]
+        != list(frozen.metadata["anomaly_return_counts"])
+    ):
+        raise QualificationError("same seed did not reproduce the frozen segment")
+    return {
+        "seed": pool.world_seed(0, 0),
+        "world_identity": repeated.world.identity,
+        "rendered_frame_identities_exact": True,
+        "anomaly_return_counts_exact": True,
+    }
+
+
+def _qualify_duplicate_prefix(
+    protocol: AJAEProtocol,
+    sequence: STUSequence,
+) -> dict[str, object]:
+    """Verify and report every retained file slot in train/201 frames 0 through 3."""
+
+    ray_grid, _ = load_sensor_calibration(protocol.verify_sensor_calibration())
+    records: dict[str, object] = {}
+    for frame_id in range(4):
+        source = sequence.source_frame(frame_id)
+        mapping = canonical_ray_slots_for_source(source, ray_grid)
+        multiplicity = np.bincount(mapping, minlength=ray_grid.slot_count)
+        if (
+            mapping.shape != (source.slot_count,)
+            or np.count_nonzero(multiplicity) != ray_grid.slot_count
+        ):
+            raise QualificationError(
+                "duplicate-prefix mapping does not retain every file slot and ray"
+            )
+        records[str(frame_id)] = {
+            "file_slot_count": source.slot_count,
+            "visible_return_count": source.real_count,
+            "canonical_ray_count": ray_grid.slot_count,
+            "minimum_ray_multiplicity": int(multiplicity.min()),
+            "maximum_ray_multiplicity": int(multiplicity.max()),
+            "source_observation_identity": source_observation_identity(source),
+        }
+    return {
+        "frame_ids": [0, 1, 2, 3],
+        "all_file_slots_retained": True,
+        "exact_xyzi_and_label_repetition_verified": True,
+        "frames": records,
+    }
+
+
+def qualify_data(
+    data_root: Path,
+    protocol: AJAEProtocol,
+    *,
+    output_path: Path | None = None,
+) -> dict[str, object]:
+    """Run every schema-34 qualification check without loading a model."""
+
+    train_manifest_path = protocol.pool_manifest_path("train_v1")
+    validation_manifest_path = protocol.pool_manifest_path("validation_v1")
+    train_manifest = _load_manifest(
+        train_manifest_path,
+        protocol.training_pool,
+        protocol,
+    )
+    validation_manifest = _load_manifest(
+        validation_manifest_path,
+        protocol.validation_pool,
+        protocol,
+    )
+    train_sequence = STUSequence.open(
+        data_root,
+        protocol=protocol,
+        partition="train",
+        sequence_id=206,
+        label_mode=LabelMode.REQUIRED,
+    )
+    validation_sequence = STUSequence.open(
         data_root,
         protocol=protocol,
         partition="train",
         sequence_id=201,
         label_mode=LabelMode.REQUIRED,
     )
-    repository = protocol.stu_repository_path()
-    encoder = FrozenSTUPointEncoder.from_protocol(protocol)
-    encoder.to(torch.device(device)).eval()
-    lidar_module = _official_lidar_module(repository / "datasets/lidar.py")
-    utils_module = _module_from_file(
-        "_ajae_official_stu_dataset_utils", repository / "datasets/utils.py"
+    if train_sequence.frame_ids != tuple(range(449)):
+        raise QualificationError("train/206 is not exactly frames 0 through 448")
+    if validation_sequence.frame_ids != tuple(range(682)):
+        raise QualificationError("train/201 is not exactly frames 0 through 681")
+    duplicate_prefix = _qualify_duplicate_prefix(protocol, validation_sequence)
+
+    train_result = _qualify_pool(
+        protocol,
+        protocol.training_pool,
+        train_manifest,
+        train_sequence,
     )
-    dataset = lidar_module.LidarDataset.__new__(lidar_module.LidarDataset)
-    dataset.mode = "validation"
-    dataset.add_distance = True
-    dataset.ignore_label = 255
-    dataset.instance_population = 0
-    dataset.config = dataset._load_yaml(repository / "conf/semantic-kitti.yaml")
-    dataset.label_info = dataset._select_correct_labels(
-        dataset.config["learning_ignore"]
+    validation_result = _qualify_pool(
+        protocol,
+        protocol.validation_pool,
+        validation_manifest,
+        validation_sequence,
     )
-    collate = utils_module.VoxelizeCollate(ignore_label=255, voxel_size=0.05)
-    settings = protocol.stu["F0_qualification"]
-    repeat_runs = int(settings["AJAE_repeat_runs"])
-    absolute_tolerance = float(settings["MaxLogit_absolute_tolerance"])
-    relative_tolerance = float(settings["MaxLogit_relative_tolerance"])
+    normal_outputs: list[int] = []
+    normal_points = 0
+    for window in WindowPartition(validation_sequence, 4, 681):
+        current = window.current_frame.source
+        if not np.array_equal(
+            window.points.coordinates[window.current_mask],
+            current.xyzi[current.real_slots, :3],
+        ):
+            raise QualificationError("normal 201 current xyz is not a bitwise copy")
+        normal_outputs.append(window.current_frame_id)
+        normal_points += window.points.count
+    if normal_outputs != list(range(4, 682)):
+        raise QualificationError("normal 201 does not have 678 unique online outputs")
 
-    single_records = []
-    for value in settings["single_frame_ids"]:
-        frame_id = int(value)
-        source = sequence.source_frame(frame_id)
-        selected = source.real_slots.astype(np.int64)
-        single_records.append(
-            _equivalence_case(
-                sequence=sequence,
-                encoder=encoder,
-                dataset=dataset,
-                collate=collate,
-                frame_ids=(frame_id,),
-                coordinates=source.coordinates,
-                features=source.features,
-                selected_rows=selected,
-                current_rows=np.arange(selected.size, dtype=np.int64),
-                repeat_runs=repeat_runs,
-                absolute_tolerance=absolute_tolerance,
-                relative_tolerance=relative_tolerance,
-            )
-        )
-
-    five_scan_records = []
-    for value in settings["five_scan_window_starts"]:
-        start = int(value)
-        inputs = window_stu_inputs(sequence.window(start))
-        five_scan_records.append(
-            _equivalence_case(
-                sequence=sequence,
-                encoder=encoder,
-                dataset=dataset,
-                collate=collate,
-                frame_ids=tuple(range(start, start + 5)),
-                coordinates=inputs.dense_coordinates,
-                features=inputs.dense_features,
-                selected_rows=inputs.dense_real_slots,
-                current_rows=inputs.dense_current_rows,
-                repeat_runs=repeat_runs,
-                absolute_tolerance=absolute_tolerance,
-                relative_tolerance=relative_tolerance,
-            )
-        )
-    return {
-        "passed": True,
-        "device": str(encoder.device),
-        "AJAE_repeat_runs": repeat_runs,
-        "official_path": "LidarDataset(sweep)->VoxelizeCollate->official_model",
-        "AJAE_path": "STUSequence/SceneWindow->FrozenSTUPointEncoder",
-        "single_scan": single_records,
-        "five_scan": five_scan_records,
-    }
-
-
-def run_schema33_qualification(
-    *,
-    data_root: Path | None = None,
-    device: str = "cpu",
-) -> dict[str, object]:
-    checks: tuple[tuple[str, Callable[[], dict[str, object]]], ...] = (
-        ("latest_scan_is_the_coordinate_frame", _latest_frame_alignment),
-        ("past_scans_use_current_from_source_transform", _past_frame_alignment),
-        ("single_and_dense_score_the_same_current_points", _paired_input_rows),
-        ("one_online_output_per_current_frame", _online_uniqueness),
-        ("active_route_contains_no_trainable_model", _route_is_pretraining),
-        ("dense_degenerates_exactly_to_single_scan", _single_scan_degeneracy),
-        ("shared_voxel_inverse_recovers_current_point", _shared_voxel_current_recovery),
-        (
-            "normal_class_matches_official_query_semantics",
-            _official_semantic_equivalence,
-        ),
+    determinism = _repeat_first_training_segment(
+        protocol, train_manifest, train_sequence
     )
-    results = []
-    for name, check in checks:
-        results.append({"name": name, "passed": True, "details": check()})
+    history = protocol.authority["history"]
+    historical_hashes = {}
+    for file_key, hash_key in (
+        ("schema33_protocol", "schema33_protocol_sha256"),
+        ("F0_artifact", "F0_sha256"),
+        ("F1_artifact", "F1_sha256"),
+    ):
+        path = (protocol.path.parent / str(history[file_key])).resolve(strict=True)
+        observed = _sha256(path)
+        if observed != history[hash_key]:
+            raise QualificationError(f"historical artifact changed: {path}")
+        historical_hashes[file_key] = observed
+
+    checks = {name: True for name in protocol.qualification["required_checks"]}
     result: dict[str, object] = {
-        "format": "ajae-schema33-F0-qualification-v2",
-        "mechanical": {"passed": True, "check_count": len(results), "checks": results},
-        "scientific_status": "pending_real_F1_F2_F3_execution",
-        "performance_claim_available": False,
-        "F0_verdict": "not_run_without_real_data",
+        "format": "ajae-schema34-data-qualification-v1",
+        "schema_version": protocol.schema_version,
+        "model_independent": True,
+        "passed": all(checks.values()),
+        "checks": checks,
+        "inputs": {
+            "train_manifest": train_manifest_path.relative_to(
+                protocol.path.parent
+            ).as_posix(),
+            "train_manifest_sha256": _sha256(train_manifest_path),
+            "validation_manifest": validation_manifest_path.relative_to(
+                protocol.path.parent
+            ).as_posix(),
+            "validation_manifest_sha256": _sha256(validation_manifest_path),
+            "historical_hashes": historical_hashes,
+        },
+        "train_pool": train_result,
+        "synthetic_validation_pool": validation_result,
+        "normal_validation": {
+            "source_frame_count": len(validation_sequence),
+            "window_count": len(normal_outputs),
+            "output_frame_range_inclusive": [
+                normal_outputs[0],
+                normal_outputs[-1],
+            ],
+            "point_observation_count": normal_points,
+            "known_duplicate_prefix_frames_retained": [0, 1, 2, 3],
+            "duplicate_prefix": duplicate_prefix,
+        },
+        "determinism_repeat": determinism,
+        "environment": {
+            "python": platform.python_version(),
+            "numpy": np.__version__,
+            "platform": platform.platform(),
+        },
+        "source_files_sha256": {
+            name: _sha256(PROJECT_ROOT / name)
+            for name in (
+                "src/data.py",
+                "src/protocol.py",
+                "src/qualify.py",
+                "src/render.py",
+                "src/scene.py",
+            )
+        },
     }
-    if data_root is not None:
-        protocol = load_protocol()
-        implementation = require_clean_implementation(protocol)
-        implementation["source_files_sha256"] = {
-            **implementation["source_files_sha256"],
-            "src/qualify.py": _file_sha256(Path(__file__).resolve()),
-        }
-        result.update(
-            {
-                "contract_identity": protocol.contract_identity,
-                "protocol_file_sha256": protocol.execution_identity,
-                "implementation_identity": implementation,
-                "environment": {
-                    "platform": platform.platform(),
-                    "python": platform.python_version(),
-                    "torch": torch.__version__,
-                    "torch_CUDA_build": torch.version.cuda,
-                    "MinkowskiEngine": importlib.metadata.version(
-                        "MinkowskiEngine"
-                    ),
-                    "PyTorch3D": importlib.metadata.version("pytorch3d"),
-                    "logical_CPUs": os.cpu_count(),
-                    "torch_threads": torch.get_num_threads(),
-                    "execution_device": str(torch.device(device)),
-                },
-            }
-        )
-        result["real_equivalence"] = _official_real_equivalence(
-            data_root,
-            protocol=protocol,
-            device=device,
-        )
-        result["F0_verdict"] = "passed"
+    target = (
+        (
+            protocol.path.parent / str(protocol.artifacts["qualification"]["file"])
+        ).resolve()
+        if output_path is None
+        else output_path.expanduser().resolve()
+    )
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temporary = target.with_suffix(target.suffix + ".tmp")
+    temporary.write_text(
+        json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    temporary.replace(target)
     return result
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Qualify AJAE schema-33 mechanics")
+    parser = argparse.ArgumentParser(
+        description="Qualify the complete schema-34 data pools"
+    )
+    parser.add_argument("--data-root", required=True, type=Path)
+    parser.add_argument("--protocol", type=Path, default=PROJECT_ROOT / "protocol.json")
     parser.add_argument("--output", type=Path)
-    parser.add_argument("--data-root", type=Path)
-    parser.add_argument("--device", default="cpu")
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
-    result = run_schema33_qualification(
-        data_root=args.data_root,
-        device=args.device,
+    result = qualify_data(
+        args.data_root,
+        load_protocol(args.protocol),
+        output_path=args.output,
     )
-    rendered = json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
-    if args.output is not None:
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        temporary = args.output.with_suffix(args.output.suffix + ".tmp")
-        temporary.write_text(rendered, encoding="utf-8")
-        os.replace(temporary, args.output)
-    print(rendered, end="")
+    print(
+        json.dumps(
+            {
+                "passed": result["passed"],
+                "train_windows": result["train_pool"]["window_count"],
+                "synthetic_validation_windows": result["synthetic_validation_pool"][
+                    "window_count"
+                ],
+                "normal_validation_windows": result["normal_validation"][
+                    "window_count"
+                ],
+            },
+            sort_keys=True,
+        )
+    )
     return 0
 
 

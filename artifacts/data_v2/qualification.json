@@ -1,0 +1,136 @@
+{
+  "checks": {
+    "all_world_parameters_seeds_boundaries_raw_identities_and_scientific_hashes_are_saved": true,
+    "coordinates_identity_and_labels_are_row_aligned": true,
+    "current_frame_xyz_is_a_bitwise_copy": true,
+    "different_formal_seeds_produce_different_physical_world_contents": true,
+    "each_segment_frame_is_rendered_once": true,
+    "every_visible_return_appears_once_per_window": true,
+    "every_window_is_inside_one_segment": true,
+    "historical_registration_meets_the_frozen_tolerance": true,
+    "known_duplicate_prefix_is_retained_with_frozen_ray_runs": true,
+    "normal_201_has_exactly_678_windows_and_unique_outputs_4_through_681": true,
+    "one_fixed_world_per_segment": true,
+    "one_rendered_frame_is_bitwise_identical_across_overlapping_windows": true,
+    "same_seed_repeats_bitwise": true,
+    "train_201_has_exactly_frames_0_through_681": true,
+    "train_206_has_exactly_frames_0_through_448": true,
+    "train_segments_are_disjoint_and_cover_0_through_448": true
+  },
+  "determinism_repeat": {
+    "anomaly_return_counts_exact": true,
+    "rendered_frame_identities_exact": true,
+    "seed": 34100000,
+    "world_identity": "89f4467981e8df38dc4fc03ab43da35af8c59c9768e8ea7c737a6261a7b0bb08"
+  },
+  "environment": {
+    "numpy": "2.4.6",
+    "platform": "Linux-6.18.33.2-microsoft-standard-WSL2-x86_64-with-glibc2.39",
+    "python": "3.13.12"
+  },
+  "format": "ajae-schema34-data-qualification-v1",
+  "inputs": {
+    "historical_hashes": {
+      "F0_artifact": "b78bce85ff336469583611d2a756ee8070590f9dd6cf9d6ec9537ce08fccf6ef",
+      "F1_artifact": "add308d89ac130cc59401685fc1295cf4d621652f8f2d885e32c74a7e9394b3b",
+      "schema33_protocol": "b54209debf09f86cc5cfeac53414caa0866ad29724c93f5fa0f26d9c03312c2c"
+    },
+    "train_manifest": "artifacts/data_v2/train_manifest.json",
+    "train_manifest_sha256": "c17dafce4866609f006d5d2820ae1b4f57e5dc557d8186ceca440e623554de34",
+    "validation_manifest": "artifacts/data_v2/validation_manifest.json",
+    "validation_manifest_sha256": "27c686a26b9cda77a61f7cddff7258f143012e943cff2df2d489ff919969be26"
+  },
+  "model_independent": true,
+  "normal_validation": {
+    "duplicate_prefix": {
+      "all_file_slots_retained": true,
+      "exact_xyzi_and_label_repetition_verified": true,
+      "frame_ids": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "frames": {
+        "0": {
+          "canonical_ray_count": 131072,
+          "file_slot_count": 393216,
+          "maximum_ray_multiplicity": 3,
+          "minimum_ray_multiplicity": 3,
+          "source_observation_identity": "810c1fe1c2c31f4390bc20fb9ea87ca08e649f8f76c2a4c86749a234762febc2",
+          "visible_return_count": 314739
+        },
+        "1": {
+          "canonical_ray_count": 131072,
+          "file_slot_count": 393216,
+          "maximum_ray_multiplicity": 3,
+          "minimum_ray_multiplicity": 3,
+          "source_observation_identity": "73cea22f78504351261c085a7a31973c4726c931c5ea781eb7eb5e17b7e03573",
+          "visible_return_count": 313707
+        },
+        "2": {
+          "canonical_ray_count": 131072,
+          "file_slot_count": 291328,
+          "maximum_ray_multiplicity": 3,
+          "minimum_ray_multiplicity": 2,
+          "source_observation_identity": "0f75c0dcf6423358408676236704983406bf9f4398b61408597c8800658f1ab6",
+          "visible_return_count": 223351
+        },
+        "3": {
+          "canonical_ray_count": 131072,
+          "file_slot_count": 262144,
+          "maximum_ray_multiplicity": 2,
+          "minimum_ray_multiplicity": 2,
+          "source_observation_identity": "60642bb6d256d01655c712fd1694032607f982251b9065216a6116d95951c812",
+          "visible_return_count": 208180
+        }
+      }
+    },
+    "known_duplicate_prefix_frames_retained": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "output_frame_range_inclusive": [
+      4,
+      681
+    ],
+    "point_observation_count": 390116395,
+    "source_frame_count": 682,
+    "window_count": 678
+  },
+  "passed": true,
+  "schema_version": 34,
+  "source_files_sha256": {
+    "src/data.py": "bdf9df2dc4e2b721a0c5834b06359818de8c48e7c39ad7155c8706e0d3bdddae",
+    "src/protocol.py": "ec5538615dd03787f4df96b869426a39f3dd6a7d34c79a5dd78009137237d9fb",
+    "src/qualify.py": "3e62ce7ec8ebfbd47d0c2ec0b49c7ad008ce616be9ccd58976c93dbcf368926d",
+    "src/render.py": "71696d3482d592b8a37900095bc110def43cfa1ca6b61642c93289874a54bb5f",
+    "src/scene.py": "d4bce06680887f31e68c1824155a28095402ae8e9fd1f0dd5fa1f956fc64dba7"
+  },
+  "synthetic_validation_pool": {
+    "anomaly_point_observation_count": 7303031,
+    "distinct_physical_world_count": 92,
+    "distinct_seed_count": 92,
+    "distinct_world_count": 92,
+    "generation_identity": "16896e711089961b243769dda45e33195b672115f3486cb048ffc583900f854c",
+    "point_observation_count": 1359825939,
+    "rendered_frame_count": 2728,
+    "supervised_point_observation_count": 851367301,
+    "window_count": 2360,
+    "world_count": 92
+  },
+  "train_pool": {
+    "anomaly_point_observation_count": 12210254,
+    "distinct_physical_world_count": 128,
+    "distinct_seed_count": 128,
+    "distinct_world_count": 128,
+    "generation_identity": "45cf7c053b19a13b250964e82a7e8b0ad504745e2eb64e6c1371198397f4c45d",
+    "point_observation_count": 1927531861,
+    "rendered_frame_count": 3592,
+    "supervised_point_observation_count": 1878325665,
+    "window_count": 3080,
+    "world_count": 128
+  }
+}

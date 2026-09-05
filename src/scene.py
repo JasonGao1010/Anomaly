@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import logging
 import math
@@ -37,8 +36,12 @@ SCAN_DTYPE = np.dtype("<f4")
 LABEL_DTYPE = np.dtype("<u4")
 RIGID_ATOL = 1.0e-3
 IDENTITY_ATOL = 1.0e-9
-RAY_MAPPING_DOMAIN = 128 * 1024
 SOURCE_FRAME_CACHE_SIZE = 16
+HISTORICAL_COORDINATE_ATOL_M = 1.0e-6
+HISTORICAL_COORDINATE_RTOL = 1.0e-5
+ANOMALY_IGNORE = np.int8(-1)
+ANOMALY_NORMAL = np.int8(0)
+ANOMALY_POSITIVE = np.int8(1)
 LOGGER = logging.getLogger(__name__)
 
 
@@ -149,21 +152,6 @@ def _rigid(name: str, matrix: np.ndarray) -> None:
         raise SceneDataError(f"{name} rotation determinant is not +1")
 
 
-def canonical_ray_mapping_digest(mapping: np.ndarray) -> str:
-    """Bind a complete slot-to-ray permutation to immutable calibration bytes."""
-
-    values = np.asarray(mapping)
-    if values.dtype != np.int32 or values.shape != (RAY_MAPPING_DOMAIN,):
-        raise TypeError("canonical ray mapping must be int32[131072]")
-    if np.unique(values).size != values.size or np.any(
-        (values < 0) | (values >= RAY_MAPPING_DOMAIN)
-    ):
-        raise SceneDataError("canonical ray mapping must be a complete permutation")
-    return hashlib.sha256(
-        b"AJAE-schema30-OS1-128-slot-to-ray\0" + values.tobytes(order="C")
-    ).hexdigest()
-
-
 def official_stu_coordinates(xyzi: np.ndarray, lidar_pose: np.ndarray) -> np.ndarray:
     """Reproduce STU's released pre-voxel coordinate formula exactly."""
 
@@ -197,30 +185,21 @@ def official_stu_features(xyzi: np.ndarray, lidar_pose: np.ndarray) -> np.ndarra
 
 
 @dataclass(frozen=True, slots=True)
-class RayId:
-    """One canonical OS1-128 beam and azimuth-column identity."""
-
-    beam_id: int
-    azimuth_column: int
-
-    def __post_init__(self) -> None:
-        if not 0 <= _plain_int("RayId.beam_id", self.beam_id) < 128:
-            raise SceneDataError("RayId.beam_id must lie in [0,127]")
-        if not 0 <= _plain_int("RayId.azimuth_column", self.azimuth_column) < 1024:
-            raise SceneDataError("RayId.azimuth_column must lie in [0,1023]")
-
-
-@dataclass(frozen=True, slots=True)
 class PointId:
-    """Stable identity of one visible return in the canonical ray grid."""
+    """Stable identity of one visible return, independent of array order."""
 
+    observation_sequence_id: str
     frame_id: int
-    ray: RayId
+    source_slot: int
 
     def __post_init__(self) -> None:
+        if (
+            not isinstance(self.observation_sequence_id, str)
+            or not self.observation_sequence_id
+        ):
+            raise TypeError("PointId.observation_sequence_id must be non-empty")
         _plain_int("PointId.frame_id", self.frame_id)
-        if not isinstance(self.ray, RayId):
-            raise TypeError("PointId.ray must be RayId")
+        _plain_int("PointId.source_slot", self.source_slot)
 
 
 @dataclass(frozen=True, slots=True)
@@ -278,6 +257,16 @@ class PointLabels:
     @property
     def binary_valid(self) -> np.ndarray:
         result = self.semantic != np.uint16(0)
+        result.setflags(write=False)
+        return result
+
+    @property
+    def anomaly_target(self) -> np.ndarray:
+        """Return the three-state target: ignore=-1, normal=0, anomaly=1."""
+
+        result = np.full(self.semantic.shape, ANOMALY_NORMAL, dtype=np.int8)
+        result[self.semantic == np.uint16(0)] = ANOMALY_IGNORE
+        result[self.semantic == np.uint16(2)] = ANOMALY_POSITIVE
         result.setflags(write=False)
         return result
 
@@ -435,12 +424,15 @@ class CurrentFramePose:
         if not np.allclose(
             rotation.T @ rotation,
             np.eye(3, dtype=np.float64),
-            atol=1.0e-10,
-            rtol=1.0e-10,
+            atol=RIGID_ATOL,
+            rtol=RIGID_ATOL,
         ):
             raise SceneDataError("current-frame rotation is not numerically orthogonal")
         if not math.isclose(
-            float(np.linalg.det(rotation)), 1.0, abs_tol=1.0e-10, rel_tol=1.0e-10
+            float(np.linalg.det(rotation)),
+            1.0,
+            abs_tol=RIGID_ATOL,
+            rel_tol=RIGID_ATOL,
         ):
             raise SceneDataError("current-frame rotation determinant is not +1")
         object.__setattr__(self, "rotation", _freeze(rotation.copy()))
@@ -485,12 +477,9 @@ class CurrentFramePose:
 
     @property
     def current_from_world(self) -> np.ndarray:
-        """Return :math:`T_{t<-W}`, the rigid inverse of ``world_from_current``."""
+        """Return :math:`T_{t<-W}` as the numerical matrix inverse."""
 
-        transform = np.eye(4, dtype=np.float64)
-        transform[:3, :3] = self.rotation.T
-        transform[:3, 3] = -(self.rotation.T @ self.translation)
-        return _freeze(transform)
+        return _freeze(np.linalg.inv(self.world_from_current))
 
 
 @dataclass(frozen=True, slots=True)
@@ -519,43 +508,28 @@ class WindowPoints:
     """All visible returns expressed in the latest scan coordinate frame."""
 
     coordinates: np.ndarray
+    features: np.ndarray | None
     scan_group: np.ndarray
     source_frame: np.ndarray
     source_slot: np.ndarray
-    source_ray: np.ndarray
-    ray_mapping_audited: bool
-    ray_mapping_digest: str | None
 
     def __post_init__(self) -> None:
         count = self.coordinates.shape[0]
         if self.coordinates.dtype != np.float32 or self.coordinates.shape != (count, 3):
             raise TypeError("coordinates must be float32[M,3]")
+        if self.features is not None and (
+            self.features.dtype != np.float32
+            or self.features.ndim != 2
+            or self.features.shape[0] != count
+        ):
+            raise TypeError("features must be optional float32[M,F]")
         for name, array, dtype in (
             ("scan_group", self.scan_group, np.int8),
             ("source_frame", self.source_frame, np.int32),
             ("source_slot", self.source_slot, np.int32),
-            ("source_ray", self.source_ray, np.int32),
         ):
             if array.dtype != dtype or array.shape != (count,):
                 raise TypeError(f"{name} must be {np.dtype(dtype).name}[M]")
-        if type(self.ray_mapping_audited) is not bool:
-            raise TypeError("ray_mapping_audited must be boolean")
-        if self.ray_mapping_audited:
-            if (
-                not isinstance(self.ray_mapping_digest, str)
-                or len(self.ray_mapping_digest) != 64
-                or any(
-                    character not in "0123456789abcdef"
-                    for character in self.ray_mapping_digest
-                )
-            ):
-                raise SceneDataError(
-                    "an audited ray mapping requires its calibration digest"
-                )
-        elif self.ray_mapping_digest is not None:
-            raise SceneDataError(
-                "an unaudited ray mapping cannot carry an audit digest"
-            )
         _finite("current-frame coordinates", self.coordinates)
         if np.any(
             (self.scan_group < 0) | (self.scan_group >= len(WINDOW_MEMBER_OFFSETS))
@@ -565,8 +539,6 @@ class WindowPoints:
             raise SceneDataError(
                 "source frame and slot identities must be non-negative"
             )
-        if np.any((self.source_ray < 0) | (self.source_ray >= RAY_MAPPING_DOMAIN)):
-            raise SceneDataError("canonical ray IDs must lie in [0,131071]")
         if count > 1:
             same_group = self.scan_group[1:] == self.scan_group[:-1]
             if np.any(same_group & (self.source_frame[1:] != self.source_frame[:-1])):
@@ -588,30 +560,21 @@ class WindowPoints:
             self.scan_group,
             self.source_frame,
             self.source_slot,
-            self.source_ray,
         ):
             array.setflags(write=False)
+        if self.features is not None:
+            self.features.setflags(write=False)
 
     @property
     def count(self) -> int:
         return int(self.coordinates.shape[0])
-
-    def point_id(self, index: int) -> PointId:
-        point = _plain_int("point index", index)
-        if point >= self.count:
-            raise IndexError(point)
-        ray = int(self.source_ray[point])
-        return PointId(
-            int(self.source_frame[point]),
-            RayId(ray // 1024, ray % 1024),
-        )
-
 
 @dataclass(frozen=True, slots=True)
 class SceneWindow:
     """A causal five-scan observation aligned to its latest scan."""
 
     spec: SequenceSpec
+    observation_sequence_id: str
     window_start: int
     frame_ids: tuple[int, ...]
     current_pose: CurrentFramePose
@@ -622,6 +585,11 @@ class SceneWindow:
     def __post_init__(self) -> None:
         if not isinstance(self.spec, SequenceSpec):
             raise TypeError("spec must be SequenceSpec")
+        if (
+            not isinstance(self.observation_sequence_id, str)
+            or not self.observation_sequence_id
+        ):
+            raise TypeError("observation_sequence_id must be a non-empty string")
         start = _plain_int("window_start", self.window_start)
         declared_ids = tuple(self.frame_ids)
         if any(type(frame_id) is not int for frame_id in declared_ids):
@@ -669,13 +637,23 @@ class SceneWindow:
                 raise SceneDataError(
                     "scan group does not match the declared source frame"
                 )
-            expected_transform = current_from_world @ item.source.lidar_pose
-            if not np.allclose(
-                item.source_to_current,
-                expected_transform,
-                atol=IDENTITY_ATOL,
-                rtol=IDENTITY_ATOL,
-            ):
+            is_current = item.source.frame_id == current_id
+            expected_transform = (
+                np.eye(4, dtype=np.float64)
+                if is_current
+                else current_from_world @ item.source.lidar_pose
+            )
+            transform_valid = (
+                np.array_equal(item.source_to_current, expected_transform)
+                if is_current
+                else np.allclose(
+                    item.source_to_current,
+                    expected_transform,
+                    atol=IDENTITY_ATOL,
+                    rtol=IDENTITY_ATOL,
+                )
+            )
+            if not transform_valid:
                 raise SceneDataError("source-to-current transform is inconsistent")
             mask = self.points.scan_group == group
             if not np.all(self.points.source_frame[mask] == item.source.frame_id):
@@ -686,12 +664,34 @@ class SceneWindow:
                 self.points.source_slot[mask], item.source.real_slots
             ):
                 raise SceneDataError("point slots do not match visible source returns")
+            raw_xyz = item.source.xyzi[item.source.real_slots, :3]
+            if is_current:
+                if not np.array_equal(self.points.coordinates[mask], raw_xyz):
+                    raise SceneDataError(
+                        "current-frame coordinates must be a bitwise raw-xyz copy"
+                    )
+            else:
+                expected_xyz = (
+                    raw_xyz.astype(np.float64) @ expected_transform[:3, :3].T
+                    + expected_transform[:3, 3]
+                ).astype(np.float32)
+                if not np.allclose(
+                    self.points.coordinates[mask],
+                    expected_xyz,
+                    atol=HISTORICAL_COORDINATE_ATOL_M,
+                    rtol=HISTORICAL_COORDINATE_RTOL,
+                ):
+                    raise SceneDataError(
+                        "historical coordinates violate the frozen registration"
+                    )
         if self.points.count != sum(item.source.real_count for item in self.frames):
             raise SceneDataError(
                 "window points do not contain every visible return exactly once"
             )
         if self.labels is not None and self.labels.packed.size != self.points.count:
             raise SceneDataError("window labels do not match visible returns")
+        # Distinct frame IDs plus exact, strictly increasing source slots prove
+        # point-identity uniqueness without sorting the full point population.
 
     def frame_for_id(self, frame_id: int) -> WindowFrame:
         """Return one member by stable source-frame identity, independent of row order."""
@@ -710,9 +710,29 @@ class SceneWindow:
     def current_frame(self) -> WindowFrame:
         return self.frame_for_id(self.current_frame_id)
 
+    def point_id(self, index: int) -> PointId:
+        """Return the protocol identity of one row in the complete window."""
+
+        point = _plain_int("point index", index)
+        if point >= self.points.count:
+            raise IndexError(point)
+        return PointId(
+            self.observation_sequence_id,
+            int(self.points.source_frame[point]),
+            int(self.points.source_slot[point]),
+        )
+
     @property
     def current_mask(self) -> np.ndarray:
         result = self.points.source_frame == self.current_frame_id
+        result.setflags(write=False)
+        return result
+
+    @property
+    def supervision_mask(self) -> np.ndarray:
+        if self.labels is None:
+            raise SceneDataError("an unlabeled window has no supervision mask")
+        result = self.labels.anomaly_target != ANOMALY_IGNORE
         result.setflags(write=False)
         return result
 
@@ -735,9 +755,7 @@ def assemble_window(
     frame_ids: Sequence[int],
     sources: Sequence[SourceFrame],
     *,
-    canonical_ray_by_slot: np.ndarray | Mapping[int, np.ndarray] | None = None,
-    ray_mapping_audited: bool = False,
-    ray_mapping_digest: str | None = None,
+    observation_sequence_id: str | None = None,
 ) -> SceneWindow:
     """Assemble all five scans while preserving order-independent point identity."""
 
@@ -779,13 +797,6 @@ def assemble_window(
     )
     if labels_present[0] and len(set(targets_present)) != 1:
         raise SceneDataError("all labels must have the same STU-target availability")
-    if ray_mapping_audited and canonical_ray_by_slot is None:
-        raise SceneDataError(
-            "an audited window requires an explicit calibrated mapping"
-        )
-    if not ray_mapping_audited and ray_mapping_digest is not None:
-        raise SceneDataError("an unaudited window cannot carry a calibration digest")
-
     current_source = next(
         source for source in source_frames if source.frame_id == declared_ids[-1]
     )
@@ -794,10 +805,10 @@ def assemble_window(
     canonical_group = {frame_id: index for index, frame_id in enumerate(declared_ids)}
     frames: list[WindowFrame] = []
     coordinates: list[np.ndarray] = []
+    features: list[np.ndarray] = []
     scan_groups: list[np.ndarray] = []
     source_ids_by_point: list[np.ndarray] = []
     source_slots: list[np.ndarray] = []
-    source_rays: list[np.ndarray] = []
     packed: list[np.ndarray] = []
     semantic: list[np.ndarray] = []
     instance: list[np.ndarray] = []
@@ -806,43 +817,29 @@ def assemble_window(
     for source in source_frames:
         group = canonical_group[source.frame_id]
         # Poses are T_W<-S; composition gives T_t<-S_i for current-frame coordinates.
-        transform = current_from_world @ source.lidar_pose
+        transform = (
+            np.eye(4, dtype=np.float64)
+            if source.frame_id == current_source.frame_id
+            else current_from_world @ source.lidar_pose
+        )
         _rigid(f"source-to-current pose {source.frame_id}", transform)
         transform = _freeze(transform.astype(np.float64, copy=False))
         frames.append(WindowFrame(source, group, transform))
         slots = source.real_slots
-        source_xyz = source.xyzi[slots, :3].astype(np.float64, copy=False)
-        aligned = source_xyz @ transform[:3, :3].T + transform[:3, 3]
-        coordinates.append(aligned.astype(np.float32))
+        source_xyz = source.xyzi[slots, :3]
+        if source.frame_id == current_source.frame_id:
+            aligned = source_xyz.copy()
+        else:
+            aligned = (
+                source_xyz.astype(np.float64) @ transform[:3, :3].T
+                + transform[:3, 3]
+            ).astype(np.float32)
+        coordinates.append(aligned)
+        # Intensity is raw observation data; Part 2 may add label-free features.
+        features.append(source.xyzi[slots, 3:4].copy())
         scan_groups.append(np.full(slots.size, group, dtype=np.int8))
         source_ids_by_point.append(np.full(slots.size, source.frame_id, dtype=np.int32))
         source_slots.append(slots.copy())
-        if canonical_ray_by_slot is None:
-            mapping = np.arange(source.slot_count, dtype=np.int32)
-        elif isinstance(canonical_ray_by_slot, Mapping):
-            if source.frame_id not in canonical_ray_by_slot:
-                raise SceneDataError(
-                    f"canonical ray mapping lacks frame {source.frame_id}"
-                )
-            mapping = np.asarray(canonical_ray_by_slot[source.frame_id])
-        else:
-            mapping = np.asarray(canonical_ray_by_slot)
-        if mapping.dtype != np.int32 or mapping.shape != (source.slot_count,):
-            raise TypeError("canonical_ray_by_slot must provide int32[slot]")
-        if np.unique(mapping).size != mapping.size or np.any(
-            (mapping < 0) | (mapping >= RAY_MAPPING_DOMAIN)
-        ):
-            raise SceneDataError(
-                "canonical ray mapping must be an in-range one-to-one map"
-            )
-        if (
-            ray_mapping_audited
-            and canonical_ray_mapping_digest(mapping) != ray_mapping_digest
-        ):
-            raise SceneDataError(
-                "canonical ray mapping does not match its calibration digest"
-            )
-        source_rays.append(mapping[slots].copy())
         if source.labels is not None:
             packed.append(source.labels.packed[slots])
             semantic.append(source.labels.semantic[slots])
@@ -852,12 +849,10 @@ def assemble_window(
 
     points = WindowPoints(
         coordinates=_freeze(np.concatenate(coordinates)),
+        features=_freeze(np.concatenate(features)),
         scan_group=_freeze(np.concatenate(scan_groups)),
         source_frame=_freeze(np.concatenate(source_ids_by_point)),
         source_slot=_freeze(np.concatenate(source_slots)),
-        source_ray=_freeze(np.concatenate(source_rays)),
-        ray_mapping_audited=ray_mapping_audited,
-        ray_mapping_digest=ray_mapping_digest,
     )
     labels: PointLabels | None = None
     if labels_present[0]:
@@ -873,6 +868,11 @@ def assemble_window(
         )
     return SceneWindow(
         spec=spec,
+        observation_sequence_id=(
+            observation_sequence_id
+            if observation_sequence_id is not None
+            else f"{spec.partition}/{spec.sequence_id}"
+        ),
         window_start=start,
         frame_ids=declared_ids,
         current_pose=current_pose,
@@ -1053,7 +1053,7 @@ class STUSequence:
                 raise SceneDataError("labels must cover every scan")
             self._label_paths = paths
         self._semantic_target_lut = np.full(1 << 16, -1, dtype=np.int16)
-        for raw, target in protocol.normal_training_class_map.items():
+        for raw, target in protocol.semantic_class_map.items():
             self._semantic_target_lut[raw] = target
         self._semantic_target_lut.setflags(write=False)
         self._frames: OrderedDict[int, SourceFrame] = OrderedDict()
@@ -1096,8 +1096,9 @@ class STUSequence:
         return self.window(window_start)
 
     def __iter__(self) -> Iterator[SceneWindow]:
-        for window_start in self.window_starts:
-            yield self.window(window_start)
+        raise TypeError(
+            "direct STUSequence iteration is forbidden; use an explicit WindowPartition"
+        )
 
     def lidar_pose(self, frame_id: int) -> np.ndarray:
         frame = _plain_int("frame_id", frame_id)
@@ -1169,10 +1170,6 @@ class STUSequence:
     def window(
         self,
         window_start: int,
-        *,
-        canonical_ray_by_slot: np.ndarray | Mapping[int, np.ndarray] | None = None,
-        ray_mapping_audited: bool = False,
-        ray_mapping_digest: str | None = None,
     ) -> SceneWindow:
         start = _plain_int("window_start", window_start)
         if start not in frozenset(self.window_starts):
@@ -1188,9 +1185,6 @@ class STUSequence:
             start,
             frame_ids,
             tuple(self.source_frame(frame_id) for frame_id in frame_ids),
-            canonical_ray_by_slot=canonical_ray_by_slot,
-            ray_mapping_audited=ray_mapping_audited,
-            ray_mapping_digest=ray_mapping_digest,
         )
 
     def audit(self, *, deep: bool = False) -> dict[str, object]:
@@ -1241,15 +1235,14 @@ def summarize_window(window: SceneWindow) -> dict[str, object]:
         "input_slots_by_frame": [item.source.slot_count for item in window.frames],
         "visible_returns": window.points.count,
         "visible_returns_by_frame": [item.source.real_count for item in window.frames],
-        "feature_channels": 2,
+        "feature_channels": 1,
         "labels_read": window.labels is not None,
-        "ray_mapping_audited": window.points.ray_mapping_audited,
     }
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Inspect AJAE schema-33 causal windows."
+        description="Inspect AJAE schema-34 causal windows."
     )
     parser.add_argument("--protocol", type=Path)
     parser.add_argument("--data-root", type=Path, required=True)

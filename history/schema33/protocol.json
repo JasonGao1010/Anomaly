@@ -1,0 +1,279 @@
+{
+  "schema_version": 33,
+  "status": {
+    "current_stage": "F2",
+    "route": "frozen_stu_dense_input_feasibility",
+    "experiments_started": true,
+    "training_allowed": false,
+    "performance_claims_available": false,
+    "selected_method": null,
+    "f4_required": false,
+    "f4_completed": false,
+    "feasibility_inference_device": "cpu",
+    "cuda_status": "not_authorized_until_same_input_repeatability_and_official_equivalence_pass"
+  },
+  "authority": {
+    "scientific_document": "AJAE新主线方案.md",
+    "execution_document": "AJAE实验执行状态机.md",
+    "amendment_baseline_commit": "42123bafccc43557d5e35e224a7bd8a1f3cadf84",
+    "pre_experiment_revision_baseline_commit": "702363d4c774a4c56e5afdc9ca1642e927665af8",
+    "supersedes": "schema32_B0_B1_B2_B3_training_matrix"
+  },
+  "research_question": "Can five registered consecutive LiDAR scans improve frozen-STU anomaly evidence without unacceptable degradation on normal data?",
+  "window": {
+    "frames": 5,
+    "member_offsets_from_start": [0, 1, 2, 3, 4],
+    "online_definition": "W_t={X_(t-4),X_(t-3),X_(t-2),X_(t-1),X_t}",
+    "online_output_frame": "latest_scan_t",
+    "geometry_reference_for_F1": "latest_scan_t",
+    "ego_motion_registration": "five_poses_define_one_common_physical_scene",
+    "stu_output_points": "all_input_points_from_X_(t-4)_through_X_t",
+    "primary_comparison_points": "original_visible_points_of_current_scan_X_t",
+    "output_frequency": "one_primary_comparison_vector_per_current_frame",
+    "overlap_fusion": "none"
+  },
+  "methods": {
+    "single_stu": {
+      "input": "native_current_scan_X_t",
+      "model": "frozen_official_STU",
+      "score": "official_MaxLogit",
+      "output": "all_visible_points_of_X_t"
+    },
+    "dense_stu": {
+      "input": "five_registered_consecutive_scans_treated_as_one_pseudo_scan",
+      "coordinate_input": "official_STU_sweep5_world_coordinates",
+      "scan_order": "chronological",
+      "temporal_feature_used": false,
+      "model": "the_same_frozen_official_STU",
+      "score": "official_MaxLogit",
+      "actual_output": "all_input_points_from_five_scans",
+      "comparison_view": "rows_originating_from_X_t"
+    }
+  },
+  "data": {
+    "official_archive_sha256": {
+      "train.zip": "c89319a23887567695d4e8bf27aa845107348871b5063b10704b230862757259",
+      "val.zip": "7d3d9ad2ec588700aa51930db82185a8ecb3dbb2e5ba9e97d73609dd293a81d2",
+      "test.zip": "ba1c6c0e5793b7da608376b217230380c820f1c2003f8cb5c862c669eae832fd"
+    },
+    "future_training": {
+      "partition": "train",
+      "sequence_id": 206,
+      "role": "future_full_virtual_sequence_generation_and_all_parameter_updates_if_F4_is_needed",
+      "labels_available": true,
+      "frame_range_inclusive": [0, 448],
+      "excluded_source_frames": []
+    },
+    "normal_development": {
+      "partition": "train",
+      "sequence_id": 201,
+      "role": "F1_F2_F3_method_development_only",
+      "labels_available": true,
+      "frame_range_inclusive": [4, 553],
+      "excluded_source_frames": [],
+      "source_exclusion": "original frames 0-3 remain excluded because they are exact internal duplicates"
+    },
+    "normal_confirmation": {
+      "partition": "train",
+      "sequence_id": 201,
+      "role": "result_blind_contiguous_normal_safety_confirmation_after_method_selection",
+      "labels_available": true,
+      "frame_range_inclusive": [554, 681],
+      "output_frame_range_inclusive": [558, 681],
+      "output_window_count": 124,
+      "excluded_source_frames": [],
+      "access": "do_not_score_before_the_method_and_any_F4_training_recipe_are_fixed"
+    },
+    "public_anomaly_validation": {
+      "partition": "val",
+      "role": "one_time_real_anomaly_transfer_test_after_method_and_threshold_freeze",
+      "labels_available": true,
+      "sequence_ids": [125, 137, 138, 139, 140, 141, 142, 143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 169]
+    },
+    "hidden_test": {
+      "partition": "test",
+      "role": "final_hidden_test_only_after_supported_public_validation",
+      "labels_available": false,
+      "sequence_ids": [100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 154, 155, 156, 157, 158, 159, 160, 161, 162, 163, 164, 165, 166, 167, 168]
+    }
+  },
+  "labels": {
+    "binary_anomaly": {
+      "raw_semantic_0": "ignore",
+      "raw_semantic_2": "anomaly",
+      "other_nonzero_semantics": "normal"
+    },
+    "normal_semantic_class_map": {
+      "0": 255,
+      "1": 255,
+      "2": 255,
+      "10": 0,
+      "11": 1,
+      "13": 4,
+      "15": 2,
+      "16": 4,
+      "18": 3,
+      "20": 4,
+      "30": 5,
+      "31": 6,
+      "32": 7,
+      "40": 8,
+      "44": 9,
+      "48": 10,
+      "49": 11,
+      "50": 12,
+      "51": 13,
+      "52": 255,
+      "60": 8,
+      "70": 14,
+      "71": 15,
+      "72": 16,
+      "80": 17,
+      "81": 18,
+      "99": 255,
+      "252": 0,
+      "253": 6,
+      "254": 5,
+      "255": 7,
+      "256": 4,
+      "257": 4,
+      "258": 3,
+      "259": 4
+    }
+  },
+  "render": {
+    "world_rule": "sample_one_immutable_anomaly_world_then_render_every_frame_of_the_selected_contiguous_sequence",
+    "training_rule_if_needed": "generate_multiple_full_train_206_virtual_sequences_then_sample_window_endpoints_from_the_pool_each_epoch",
+    "calibration": {
+      "file": "artifacts/calibration.pt",
+      "sha256": "44653fb3d413fd0cb14f9da1649081ba9b33191a6bc52973da32d850222f2bca",
+      "source_file": "artifacts/e11_d4b_calibration.npz",
+      "source_sha256": "42791278e2a6b36d975bbe9dc957c6f303b8b424c5b97cf54e42380ad191f253"
+    },
+    "qualified_support_pools": {
+      "train/206": {
+        "file": "artifacts/training_206_support_pool.npz",
+        "sha256": "30821e0739a9ab4adc77aa6bee5c4645fbc654739d3489a346cbfca3e50fe04e"
+      },
+      "train/201": {
+        "file": "artifacts/development_201_support_pool.npz",
+        "sha256": "c78aa18f5054426b48a0c5a0fdf00cd3a0611cdf0cb9af0399f6056d01b1eb58"
+      }
+    },
+    "proxy_geometry": "existing_in_generator_procedural_shapes_only",
+    "normal_controls": "not_part_of_F1_F2_F3",
+    "moving_normal_special_handling": "none_before_a_positive_primary_result",
+    "F3_world_retry": {
+      "maximum_placement_attempts_per_root_seed": 48,
+      "allowed_retry_cause": "PlacementError_during_physical_world_construction_before_rendering",
+      "placement_attempt_seed_formula": "root_seed+1000003*attempt_index",
+      "world_root_seed_substitution": "forbidden",
+      "retry_after_rendering_begins": "forbidden",
+      "retry_for_an_invisible_window": "forbidden"
+    }
+  },
+  "stu": {
+    "source": "STU_official_Mask4Former3D",
+    "checkpoint": "weights/59p6pq_ens1.ckpt",
+    "checkpoint_bytes": 476261075,
+    "checkpoint_sha256": "743b10d39c4076d98533bf1e84d389ad2703016904d31146e48919618b07b67a",
+    "model_state_tensor_sha256": "0be4805592a3d064b21655c6c6eeeb7227322c9670873345be52747b0a24d1fb",
+    "source_manifest_sha256": "f0cead4f5e721262f9f1c26231d116406bb4fb0a43139f22e3706be89b914891",
+    "repository": "vendor/stu/Mask4Former3D",
+    "upstream_repository_commit": "8f0f09c2ca4bf7b665e0ae5919b4092ddae140a2",
+    "license_file": "vendor/stu/LICENSE",
+    "voxel_size_m": 0.05,
+    "point_feature_dim": 128,
+    "normal_evidence_dim": 19,
+    "assignment_reliability_dim": 1,
+    "no_object_reliability_dim": 1,
+    "score": "official_STU_MaxLogit",
+    "official_semantic_prediction": "query_class_of_argmax(mask_probability*query_class_confidence)",
+    "official_point_evaluator": {
+      "file": "vendor/stu/compute_point_level_ood.py",
+      "sha256": "ed0330f80fbd3cd4cefafed33d6c747c51f2de521ef191e2868eb24f84b9ce61"
+    },
+    "F0_qualification": {
+      "single_frame_ids": [8, 198, 387],
+      "five_scan_window_starts": [4, 194, 383],
+      "AJAE_repeat_runs": 2,
+      "MaxLogit_absolute_tolerance": 1e-6,
+      "MaxLogit_relative_tolerance": 1e-6
+    },
+    "frozen": true
+  },
+  "feasibility": {
+    "F1_geometry": {
+      "population": "all_546_legal_normal_development_windows",
+      "voxel_sizes_m": [0.05, 0.1, 0.2],
+      "metrics": ["visible_return_ratio", "unique_voxel_ratio", "new_voxels_not_present_in_X_t"],
+      "ply_current_frames": [8, 198, 387, 553],
+      "role": "descriptive_only"
+    },
+    "F2_normal_stability": {
+      "current_frames": [8, 32, 55, 79, 103, 126, 150, 174, 198, 221, 245, 269, 292, 316, 340, 363, 387, 411, 435, 458, 482, 506, 529, 553],
+      "paired_unit": "same_current_frame_point",
+      "metrics": ["MaxLogit_distribution", "normal_class_accuracy", "normal_class_mIoU"],
+      "masks": {
+        "normal_anomaly_mask": "raw_semantic_not_0_and_not_2_and_range_2.5_to_50m_inclusive",
+        "semantic_class_mask": "semantic_target_not_255_and_range_2.5_to_50m_inclusive"
+      },
+      "official_normal_class_precheck_frames": [8, 198, 387, 553],
+      "maximum_median_MaxLogit_increase": 0.02,
+      "maximum_q95_MaxLogit_increase": 0.05,
+      "maximum_normal_accuracy_drop": 0.02,
+      "decision": "dense_STU_is_stable_only_if_all_three_limits_hold"
+    },
+    "F3_proxy_signal": {
+      "frames_per_sequence": 28,
+      "candidate_current_frames_per_sequence": 24,
+      "screen": {
+        "world_count": 8,
+        "source_starts": [4, 72, 140, 208, 276, 344, 412, 480],
+        "world_root_seeds": [33000, 33001, 33002, 33003, 33004, 33005, 33006, 33007]
+      },
+      "extension_if_screen_is_inconclusive": {
+        "world_count": 8,
+        "source_starts": [38, 106, 174, 242, 310, 378, 446, 514],
+        "world_root_seeds": [33008, 33009, 33010, 33011, 33012, 33013, 33014, 33015]
+      },
+      "world_rule": "one_fixed_anomaly_only_WorldSpec_per_sequence",
+      "support_anchor_rule": "support_frame_must_be_at_least_2_frames_inside_its_28_frame_source_clip",
+      "comparison": "official_point_metrics_dense_STU_minus_single_STU_on_the_same_current_points",
+      "metrics": ["AP", "AUROC", "FPR95"],
+      "uncertainty": "paired_world_bootstrap_95_percent_interval",
+      "bootstrap_repetitions": 10000,
+      "bootstrap_seed": 3303,
+      "unevaluable_world_rule": "record_without_seed_substitution_and_exclude_from_metric_bootstrap",
+      "screen_decision": "only_if_all_8_worlds_are_evaluable: reject_if_mean_and_median_delta_AP_are_both_not_positive; otherwise_run_the_preplanned_8_world_extension_including_a_positive_screen",
+      "minimum_evaluable_worlds_for_final_support": 12,
+      "final_16_world_decision": "direct_dense_STU_is_supported_only_if_F2_passes_at_least_12_worlds_are_evaluable_and_the_lower_95_percent_bound_of_delta_AP_is_above_zero; otherwise_enter_F4"
+    },
+    "F4_minimal_training": {
+      "allowed_only_if": "direct_dense_STU_is_not_supported_by_F2_and_F3",
+      "first_candidate": "per_scan_frozen_STU_features_aligned_to_current_geometry_plus_one_small_anomaly_head",
+      "large_new_network": "not_authorized_without_failure_of_the_small_head",
+      "architecture_and_budget": "intentionally_undefined_until_F1_F3_results_exist"
+    }
+  },
+  "evaluation": {
+    "minimum_range_m_inclusive": 2.5,
+    "maximum_range_m_inclusive": 50.0,
+    "minimum_anomaly_points_per_evaluated_frame": 5,
+    "primary_proxy_metric": "point_AP",
+    "secondary_metrics": ["AUROC", "FPR95"],
+    "normal_safety": "MaxLogit_distribution_and_normal_semantic_quality",
+    "moving_normal": "report_as_a_subgroup_only_after_a_positive_primary_result"
+  },
+  "stages": ["F0", "F1", "F2", "F3", "F4", "C1", "V1", "T1"],
+  "claims": {
+    "implementation_ready": true,
+    "F1_completed": true,
+    "F2_completed": false,
+    "F3_completed": false,
+    "training_performed": false,
+    "C1_completed": false,
+    "real_anomaly_validation_performed": false,
+    "supported_conclusion": "F1_supports_registered_five_scan_geometric_densification_only"
+  }
+}

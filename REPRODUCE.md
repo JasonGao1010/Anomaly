@@ -1,25 +1,10 @@
-# AJAE 代码与输入复现说明
+# AJAE 数据协议复现说明
 
-AJAE 直接使用的项目代码、第三方源码、冻结权重、射线几何源和运行时输入均位于当前工作区。代码不再读取任何兄弟工作区。Python、CUDA、编译器和已安装软件包仍属于宿主环境，不复制进代码仓库。
+当前活动路线是 schema 34“数据与五帧监督协议 v2”。科学定义见 `AJAE数据与五帧监督协议v2.md`，机器可检查合同见 `protocol.json`。旧 schema 33 协议快照位于 `history/schema33/protocol.json`，只用于解释保留的 F0/F1 产物；旧路线文档、F2/F3 入口和旧冻结 STU 模型入口均已删除。
 
-## 工作区内的第三方代码
+## 原始数据
 
-第三方源码身份如下：
-
-- `vendor/stu/Mask4Former3D`：STU 官方提交 `8f0f09c2ca4bf7b665e0ae5919b4092ddae140a2`。AJAE 未修改其模型源码，许可证见 `vendor/stu/LICENSE`。
-- `vendor/stu/compute_point_level_ood.py`：同一提交的官方点级评价程序，文件哈希由 `protocol.json` 绑定。
-- `vendor/pytorch3d`：PyTorch3D 提交 `f34104cf6ebefacd7b7e07955ee7aaa823e616ac` 的最小运行子集。它只编译 AJAE 使用的最远点采样算子，并包含 CUDA 13 构建兼容修改；BSD 许可证和第三方许可证均保留。
-- `vendor/MinkowskiEngine`：MinkowskiEngine 提交 `02fc608bea4c0549b0a7b00ca1bf15dee4a0b228`，包含 Python 3.13、PyTorch 2.12 和 CUDA 13 所需的构建兼容修改；MIT 许可证保留。
-
-`src/model.py` 默认只把当前工作区的 `vendor/stu/Mask4Former3D` 加入模块搜索路径。MinkowskiEngine 和 PyTorch3D 的二进制扩展由宿主 Python 环境加载，但与其对应的源码已经保存在上述 `vendor/` 目录，不再依赖其他工作区。
-
-权重和大型 NPZ 运行时输入使用 Git LFS。克隆后应运行 `git lfs pull`，并用 `python -m src.qualify` 核验权重、STU 源码和协议身份。
-
-五帧 STU 输入与官方 `LidarDataset(sweep=5)` 使用相同的时间升序文件槽、官方世界坐标、全扫描中心距离和 5 厘米体素化。模型实际使用的两个输入通道仍是强度和距离；官方整理路径产生的扫描时间编号只存在于原始坐标附加列，当前 `Mask4Former3D` 的位置编码不读取该列。因此研究对象是空间观测密度，而不是带时间标识的时序建模。
-
-## 准备数据与运行时输入
-
-STU 原始数据约 24 GiB，不随代码仓库再分发。下载官方压缩包后，应先按 `protocol.json` 的 `data.official_archive_sha256` 校验 `train.zip`、`val.zip` 和 `test.zip`，再整理为以下结构：
+STU 原始数据不随仓库分发。先按 `protocol.json` 的 `data.official_archive_sha256` 核对官方压缩包，再整理为：
 
 ```text
 STU/
@@ -29,47 +14,84 @@ STU/
 └── test/<sequence>/{velodyne,poses.txt,calib.txt}
 ```
 
-仓库已保存并由协议绑定以下运行时输入：
+活动协议只在数据冻结阶段读取 `train/206` 和 `train/201`。19 条真实异常 `val` 序列与隐藏 `test` 序列仍保持封存。
 
-- `artifacts/e11_d4b_calibration.npz`：生成正式射线网格所需的小型 E11 几何源；
-- `artifacts/calibration.pt`：从正式射线网格和 `train/206` 全部 449 帧重新估计的传感器统计；
-- `artifacts/development_201_support_pool.npz`：F1–F3 开发池，只使用 `train/201` 的 4–553 帧，支撑面估计锚点帧为 6–551；
-- `artifacts/training_206_support_pool.npz`：若进入 F4 时使用的训练池，使用 `train/206` 的 0–448 帧，支撑面估计锚点帧为 2–446。
+## 代码检查
 
-`artifacts/f0_qualification.json` 保存正式 F0 证据：固定真实单帧与五帧窗口的官方输入、体素、逆映射、MaxLogit、类别和 CPU 重复性比较。重新核验时执行：
+安装依赖后，在仓库根目录运行：
 
 ```bash
-python -m src.qualify --data-root /absolute/path/to/STU --device cpu \
-  --output artifacts/f0_qualification.json
+python src/protocol.py
+pytest -q
+ruff check src tests
 ```
 
-真实 F0 和正式 F1--F3 都拒绝从存在已跟踪文件修改的工作区生成结果；`runs/` 中未跟踪的实验输出不影响该检查。
+协议摘要应显示 schema 34、206 训练源、201 完整验证源、3080 个合成训练窗口和 2360 个合成验证窗口。正式池尚未完成时，状态必须保持 `qualification_pending`，`training_allowed` 必须为 `false`。
 
-当前保存的 F0 证据由干净提交 `f0d32486a939da0dd7bf9fce2f1315b95aecec19` 生成，科学合同身份为 `5330228fcc93c400b0154ea7f57c53cf11b90d2f355be2bdcc478941c584a353`。单帧 8、198、387 以及窗口 4--8、194--198、383--387 的全部输入、体素和逆映射均一致；官方与 AJAE、AJAE 两次重复以及当前帧视图的 MaxLogit 最大绝对误差均为 0，类别不一致数均为 0。该证据只确认 F0 输入与执行语义，不是 F1 几何结果或性能证据。
+## 运行时几何输入
 
-`artifacts/f1_geometry.json` 保存正式 F1 的 546 条逐窗记录和三种体素尺度汇总，文件 SHA-256 为 `add308d89ac130cc59401685fc1295cf4d621652f8f2d885e32c74a7e9394b3b`。它由干净提交 `2b7885587d7b3619fe1a252b7a8397c11dd40098` 使用 23 个工作进程生成。复现命令为：
+现有 `artifacts/calibration.pt` 由 206 全部 449 帧建立，并由协议中的文件哈希绑定。206 支撑面池 `artifacts/training_206_support_pool.npz` 已覆盖 0–448，锚点范围为 2–446，可以直接继承。
+
+201 的活动支撑面池必须覆盖完整 0–681，锚点范围为 2–679。首次建立时执行：
 
 ```bash
-python src/evaluate.py F1 --data-root /absolute/path/to/STU \
-  --output-dir runs/ajae/schema33 --workers 23
+python src/prepare.py support-validation \
+  --data-root /absolute/path/to/STU --processes <按实测资源确定>
 ```
 
-四个 PLY 保存在本地 `runs/ajae/schema33`，没有纳入版本控制；它们可以由同一命令从官方数据重新生成。F1 只确认配准后的五帧增加独立空间覆盖，不是 STU 输出稳定性或异常性能证据。
+程序写出 `artifacts/validation_201_support_pool.npz` 并打印文件 SHA-256。当前冻结候选文件的 SHA-256 为 `1414387f046a674a115138a3e4f525e76aa4c5b006a609d6cc6727f1f2ead99f`，覆盖 0–681，包含 1,210,186 个合格支撑记录和 640 个实际产生合格记录的锚点帧。旧 4–553 开发区支撑池已删除。
 
-若需要从官方原始数据重建并逐字节核对三个运行时产物，执行：
+201 帧 0–3 的文件槽数分别为 393,216、393,216、291,328 和 262,144，它们包含协议文档记录的精确重复槽。复现时不得先行删除或去重；读取和渲染程序会校验 `xyzi`、标签和冻结的多对一射线布局。
+
+## 先导生成
+
+正式生成前，只选择一个训练片段写入 `runs/`，测量耗时、内存和稀疏文件大小：
 
 ```bash
-python -m src.prepare all --data-root /absolute/path/to/STU --processes 24
+python src/data.py generate --pool train_v1 \
+  --data-root /absolute/path/to/STU \
+  --sequence-indices 0 --segment-indices 0 \
+  --output-directory runs/ajae/data_v2_pilot
 ```
 
-也可以分别选择 `calibration`、`support-development` 或 `support-training`。生成器按锚点帧顺序合并并写出确定性 NPZ，进程数只影响运行时间。生成结束后会自动比较 `protocol.json` 中的 SHA-256；不一致会直接报错。
+先导必须确认固定根种子可重复、未命中异常的原始槽位逐位不变、异常标签与新回波同步、片段内每帧只渲染一次、窗口引用相同的渲染帧。先导结果不能加入正式清单，检查结束后应从 `runs/ajae/data_v2_pilot` 删除。
 
-## 宿主环境边界
+## 正式池生成
 
-以下内容仍由宿主机提供：Linux x86-64 内核、Python 环境、兼容 CUDA 的 NVIDIA 驱动和 GPU、CUDA 工具链、编译器、Python 软件包，以及用户自行下载的官方 STU 数据。这些是环境或数据条件，不是其他工作区的代码依赖。
+正式生成前必须重新检查 CPU、内存、交换空间、GPU 占用、其他实验进程和 Windows E 盘实际剩余空间。若预计峰值新增超过 1 GiB，应从 Windows 侧执行：
 
-当前已实际核验的参考环境为 Python 3.13.12、PyTorch 2.12.0（CUDA 13.0 构建）、CUDA 工具链 13.2.78、GCC/G++ 14.3.0 和 NVIDIA GeForce RTX 5080 Laptop GPU。MinkowskiEngine 0.5.4 与最小 PyTorch3D 0.7.6 均已从本工作区 `vendor/` 源码成功构建并执行 CUDA 算子。不同 CUDA、编译器和 PyTorch 组合可能需要重新编译这两个扩展。
+```powershell
+Get-Volume -DriveLetter E | Select-Object Size,SizeRemaining
+```
 
-当前参考环境中的 CUDA/MinkowskiEngine 路径未通过同一输入重复前向检查：逐点 MaxLogit 和类别会变化；因此当前执行状态暂时只授权 CPU 执行 F2/F3。重新授权 GPU 前必须先修复当前重复性问题，并在相同真实帧和窗口上重新通过重复前向与官方等价检查；不能仅凭 CUDA 算子可运行就用于正式实验。
+生成期间须保留 E 盘总容量 5% 与 10 GiB 中较大的安全余量。当前实现按片段保存稀疏变化，不复制未变化的官方点，也不为重叠窗口重复保存点数组。
 
-协议身份分为两层。`contract_identity` 只绑定 F0--F3 不可变的科学问题、数据、输入、渲染、STU 和评价规则；阶段、完成声明及 CPU/GPU 授权属于可变执行状态，不进入该身份。`protocol_file_sha256` 则绑定当次运行使用的完整 `protocol.json`，因此执行状态变化仍可逐次追踪。
+确认资源安全后，生成完整池：
+
+```bash
+python src/data.py generate --pool train_v1 \
+  --data-root /absolute/path/to/STU --workers 3
+python src/data.py manifest --pool train_v1
+
+python src/data.py generate --pool validation_v1 \
+  --data-root /absolute/path/to/STU --workers 3
+python src/data.py manifest --pool validation_v1
+```
+
+中断后只能使用 `--resume` 复用已经存在且身份完全一致的正式片段。它不会更换根种子，也不会覆盖内容冲突的文件。训练池应包含 128 个片段世界和 3080 个窗口；合成验证池应包含 92 个片段世界和 2360 个窗口。
+
+## 冻结完成条件
+
+模型无关资格程序必须进一步核对所有正式片段、重建帧、窗口和原始 201 的 678 个在线输出。只有以下三个文件全部生成且通过独立检查后，才允许把其 SHA-256 写入协议：
+
+```text
+artifacts/data_v2/train_manifest.json
+artifacts/data_v2/validation_manifest.json
+artifacts/data_v2/qualification.json
+```
+
+随后才可把协议状态改为 `frozen`，并同步设置 `data_pool_frozen=true`、`training_allowed=true`、`validation_tuning_allowed=true`。`real_anomaly_access_allowed` 仍保持 `false`，直到模型和选择规则另外完成冻结。
+
+## 历史证据边界
+
+`artifacts/f0_qualification.json` 的 SHA-256 为 `b78bce85ff336469583611d2a756ee8070590f9dd6cf9d6ec9537ce08fccf6ef`；它只说明旧路线的官方 STU 输入与执行等价。`artifacts/f1_geometry.json` 的 SHA-256 为 `add308d89ac130cc59401685fc1295cf4d621652f8f2d885e32c74a7e9394b3b`；它只说明旧开发区间 546 个窗口的几何稠密性。这两个结果不能证明 schema 34 数据池已经生成、标签正确或训练有效。

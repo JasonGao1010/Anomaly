@@ -1,108 +1,116 @@
 {
-  "schema_version": 33,
+  "schema_version": 34,
   "status": {
-    "current_stage": "F2",
-    "route": "frozen_stu_dense_input_feasibility",
-    "experiments_started": true,
-    "training_allowed": false,
-    "performance_claims_available": false,
-    "selected_method": null,
-    "f4_required": false,
-    "f4_completed": false,
-    "feasibility_inference_device": "cpu",
-    "cuda_status": "not_authorized_until_same_input_repeatability_and_official_equivalence_pass"
+    "route": "ajae_data_and_five_frame_supervision_v2",
+    "state": "frozen",
+    "data_pool_frozen": true,
+    "training_allowed": true,
+    "validation_tuning_allowed": true,
+    "real_anomaly_access_allowed": false,
+    "old_F2_F3_retired": true
   },
   "authority": {
-    "scientific_document": "AJAE新主线方案.md",
-    "execution_document": "AJAE实验执行状态机.md",
-    "amendment_baseline_commit": "42123bafccc43557d5e35e224a7bd8a1f3cadf84",
-    "pre_experiment_revision_baseline_commit": "702363d4c774a4c56e5afdc9ca1642e927665af8",
-    "supersedes": "schema32_B0_B1_B2_B3_training_matrix"
-  },
-  "research_question": "Can five registered consecutive LiDAR scans improve frozen-STU anomaly evidence without unacceptable degradation on normal data?",
-  "window": {
-    "frames": 5,
-    "member_offsets_from_start": [0, 1, 2, 3, 4],
-    "online_definition": "W_t={X_(t-4),X_(t-3),X_(t-2),X_(t-1),X_t}",
-    "online_output_frame": "latest_scan_t",
-    "geometry_reference_for_F1": "latest_scan_t",
-    "ego_motion_registration": "five_poses_define_one_common_physical_scene",
-    "stu_output_points": "all_input_points_from_X_(t-4)_through_X_t",
-    "primary_comparison_points": "original_visible_points_of_current_scan_X_t",
-    "output_frequency": "one_primary_comparison_vector_per_current_frame",
-    "overlap_fusion": "none"
-  },
-  "methods": {
-    "single_stu": {
-      "input": "native_current_scan_X_t",
-      "model": "frozen_official_STU",
-      "score": "official_MaxLogit",
-      "output": "all_visible_points_of_X_t"
-    },
-    "dense_stu": {
-      "input": "five_registered_consecutive_scans_treated_as_one_pseudo_scan",
-      "coordinate_input": "official_STU_sweep5_world_coordinates",
-      "scan_order": "chronological",
-      "temporal_feature_used": false,
-      "model": "the_same_frozen_official_STU",
-      "score": "official_MaxLogit",
-      "actual_output": "all_input_points_from_five_scans",
-      "comparison_view": "rows_originating_from_X_t"
+    "scientific_document": "AJAE数据与五帧监督协议v2.md",
+    "supersedes": "schema33_frozen_stu_dense_input_feasibility",
+    "history": {
+      "schema33_protocol": "history/schema33/protocol.json",
+      "schema33_protocol_sha256": "b54209debf09f86cc5cfeac53414caa0866ad29724c93f5fa0f26d9c03312c2c",
+      "F0_artifact": "artifacts/f0_qualification.json",
+      "F0_sha256": "b78bce85ff336469583611d2a756ee8070590f9dd6cf9d6ec9537ce08fccf6ef",
+      "F1_artifact": "artifacts/f1_geometry.json",
+      "F1_sha256": "add308d89ac130cc59401685fc1295cf4d621652f8f2d885e32c74a7e9394b3b",
+      "interpretation": "historical_mechanism_evidence_only"
     }
   },
+  "research_question": "Under one frozen pool of causal five-frame windows with pointwise supervision over every valid visible return, which model best improves the official STU anomaly metrics on the current frame?",
   "data": {
     "official_archive_sha256": {
       "train.zip": "c89319a23887567695d4e8bf27aa845107348871b5063b10704b230862757259",
       "val.zip": "7d3d9ad2ec588700aa51930db82185a8ecb3dbb2e5ba9e97d73609dd293a81d2",
       "test.zip": "ba1c6c0e5793b7da608376b217230380c820f1c2003f8cb5c862c669eae832fd"
     },
-    "future_training": {
+    "parameter_update_source": {
       "partition": "train",
       "sequence_id": 206,
-      "role": "future_full_virtual_sequence_generation_and_all_parameter_updates_if_F4_is_needed",
+      "role": "only_source_allowed_to_influence_parameter_updates",
       "labels_available": true,
       "frame_range_inclusive": [0, 448],
-      "excluded_source_frames": []
+      "gradient_updates_allowed": true
     },
-    "normal_development": {
+    "model_validation_source": {
       "partition": "train",
       "sequence_id": 201,
-      "role": "F1_F2_F3_method_development_only",
+      "role": "only_source_for_model_validation_hyperparameter_tuning_and_model_selection",
       "labels_available": true,
-      "frame_range_inclusive": [4, 553],
-      "excluded_source_frames": [],
-      "source_exclusion": "original frames 0-3 remain excluded because they are exact internal duplicates"
+      "frame_range_inclusive": [0, 681],
+      "gradient_updates_allowed": false,
+      "normal_window_count": 678,
+      "normal_output_frame_range_inclusive": [4, 681],
+      "known_duplicate_prefix_frames": [0, 1, 2, 3],
+      "duplicate_prefix_ray_runs": {
+        "0": [[0, 131072, 0], [131072, 131072, 0], [262144, 131072, 0]],
+        "1": [[0, 131072, 0], [131072, 131072, 0], [262144, 131072, 0]],
+        "2": [[0, 29184, 0], [29184, 131072, 0], [160256, 131072, 0]],
+        "3": [[0, 131072, 0], [131072, 131072, 0]]
+      },
+      "duplicate_policy": "retain_and_report"
     },
-    "normal_confirmation": {
-      "partition": "train",
-      "sequence_id": 201,
-      "role": "result_blind_contiguous_normal_safety_confirmation_after_method_selection",
-      "labels_available": true,
-      "frame_range_inclusive": [554, 681],
-      "output_frame_range_inclusive": [558, 681],
-      "output_window_count": 124,
-      "excluded_source_frames": [],
-      "access": "do_not_score_before_the_method_and_any_F4_training_recipe_are_fixed"
-    },
-    "public_anomaly_validation": {
+    "real_anomaly_final_test": {
       "partition": "val",
-      "role": "one_time_real_anomaly_transfer_test_after_method_and_threshold_freeze",
+      "role": "sealed_until_model_structure_training_recipe_hyperparameters_and_selection_rule_are_fixed",
       "labels_available": true,
       "sequence_ids": [125, 137, 138, 139, 140, 141, 142, 143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 169]
     },
     "hidden_test": {
       "partition": "test",
-      "role": "final_hidden_test_only_after_supported_public_validation",
+      "role": "sealed_final_hidden_test",
       "labels_available": false,
       "sequence_ids": [100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 154, 155, 156, 157, 158, 159, 160, 161, 162, 163, 164, 165, 166, 167, 168]
     }
   },
+  "window": {
+    "frames": 5,
+    "causal_offsets_from_current": [-4, -3, -2, -1, 0],
+    "definition": "W_t={X_(t-4),X_(t-3),X_(t-2),X_(t-1),X_t}",
+    "training_unit": "one_complete_five_frame_observation_window",
+    "prediction_scope": "all_visible_points_in_the_five_frames",
+    "supervision_scope": "all_visible_points_with_valid_binary_truth_in_the_five_frames",
+    "online_output": "current_frame_point_anomaly_scores_only",
+    "current_mask_role": "online_output_extraction_only_never_training_loss",
+    "coordinate_reference": "current_frame_lidar",
+    "historical_transform": "T_current_from_i=inverse(T_world_from_current)@T_world_from_i",
+    "current_transform": "direct_bitwise_copy_of_raw_xyz",
+    "historical_coordinate_tolerance": {
+      "absolute_m": 1e-6,
+      "relative": 1e-5
+    },
+    "rigid_pose_tolerance": {
+      "absolute": 0.001,
+      "relative": 0.001
+    },
+    "point_identity": ["synthetic_or_raw_sequence_id", "source_frame", "source_slot"],
+    "discrete_fields_exact": ["source_frame", "source_slot", "label_state", "current_mask", "point_count"],
+    "overlap_fusion_for_online_result": "forbidden"
+  },
   "labels": {
-    "binary_anomaly": {
-      "raw_semantic_0": "ignore",
-      "raw_semantic_2": "anomaly",
+    "field": "anomaly_target",
+    "states": {
+      "-1": "ignore",
+      "0": "normal",
+      "1": "anomaly"
+    },
+    "raw_rule": {
+      "semantic_0": "ignore",
+      "semantic_2": "anomaly",
       "other_nonzero_semantics": "normal"
     },
+    "synthetic_rule": {
+      "anomaly_proxy_visible_return": "anomaly",
+      "retained_valid_normal_return": "normal",
+      "retained_raw_semantic_0": "ignore"
+    },
+    "loss_rule": "binary_loss_over_anomaly_target_in_{0,1}_only",
+    "feature_leakage": "labels_masks_and_world_parameters_are_forbidden_model_features",
     "normal_semantic_class_map": {
       "0": 255,
       "1": 255,
@@ -141,10 +149,54 @@
       "259": 4
     }
   },
-  "render": {
-    "world_rule": "sample_one_immutable_anomaly_world_then_render_every_frame_of_the_selected_contiguous_sequence",
-    "training_rule_if_needed": "generate_multiple_full_train_206_virtual_sequences_then_sample_window_endpoints_from_the_pool_each_epoch",
-    "calibration": {
+  "synthetic_pools": {
+    "generation_order": "sample_one_world_per_segment_then_render_each_segment_frame_once_then_cut_windows",
+    "cross_segment_windows": "forbidden",
+    "rerender_same_frame_for_overlapping_windows": "forbidden",
+    "root_seed_substitution_after_protocol_freeze": "forbidden",
+    "train_v1": {
+      "source_sequence_id": 206,
+      "synthetic_sequence_count": 8,
+      "segment_boundaries_inclusive": [[0, 27], [28, 55], [56, 83], [84, 111], [112, 139], [140, 167], [168, 195], [196, 223], [224, 251], [252, 279], [280, 307], [308, 335], [336, 363], [364, 391], [392, 419], [420, 448]],
+      "segment_lengths": [28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 29],
+      "seed_base": 34100000,
+      "seed_formula": "seed_base+1000*synthetic_sequence_index+segment_index",
+      "world_count": 128,
+      "windows_per_synthetic_sequence": 385,
+      "total_window_count": 3080,
+      "output_directory": "artifacts/data_v2/train"
+    },
+    "validation_v1": {
+      "source_sequence_id": 201,
+      "synthetic_sequence_count": 4,
+      "segment_boundaries_inclusive": [[0, 27], [28, 55], [56, 83], [84, 111], [112, 139], [140, 167], [168, 195], [196, 223], [224, 251], [252, 279], [280, 307], [308, 335], [336, 363], [364, 391], [392, 419], [420, 447], [448, 475], [476, 503], [504, 531], [532, 559], [560, 587], [588, 615], [616, 681]],
+      "segment_lengths": [28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 66],
+      "seed_base": 34200000,
+      "seed_formula": "seed_base+1000*synthetic_sequence_index+segment_index",
+      "world_count": 92,
+      "windows_per_synthetic_sequence": 590,
+      "total_window_count": 2360,
+      "output_directory": "artifacts/data_v2/validation"
+    }
+  },
+  "storage": {
+    "format": "ajae-sparse-rendered-segment-v1",
+    "source_frames": "official_raw_STU_files_bound_by_per_frame_content_hashes",
+    "synthetic_delta": "only_slots_whose_visible_return_is_replaced_by_an_anomaly_proxy",
+    "one_file_per_segment": true,
+    "window_storage": "identities_and_frame_references_only_no_duplicate_point_arrays",
+    "segment_required_arrays": ["frame_ids", "frame_offsets", "changed_slots", "changed_xyzi", "changed_packed_labels", "changed_object_ids"],
+    "segment_required_metadata": ["synthetic_sequence_id", "segment_index", "segment_boundary_inclusive", "seed", "world_identity", "world_content_identity", "world", "world_generation_report", "renderer_identity", "raw_source_identities", "rendered_source_identities", "window_identities", "scientific_content_hash"]
+  },
+  "predictions": {
+    "format": "ajae-complete-window-point-prediction-v1",
+    "required_point_record_fields": ["synthetic_or_raw_sequence_id", "window_current_frame", "source_frame", "source_slot", "anomaly_score"],
+    "online_selection": "source_frame_equals_window_current_frame",
+    "historical_context_scores": "persist_unchanged_but_forbidden_from_online_primary_metric",
+    "future_offline_fusion": "outside_active_protocol"
+  },
+  "artifacts": {
+    "sensor_calibration": {
       "file": "artifacts/calibration.pt",
       "sha256": "44653fb3d413fd0cb14f9da1649081ba9b33191a6bc52973da32d850222f2bca",
       "source_file": "artifacts/e11_d4b_calibration.npz",
@@ -153,127 +205,56 @@
     "qualified_support_pools": {
       "train/206": {
         "file": "artifacts/training_206_support_pool.npz",
-        "sha256": "30821e0739a9ab4adc77aa6bee5c4645fbc654739d3489a346cbfca3e50fe04e"
+        "sha256": "30821e0739a9ab4adc77aa6bee5c4645fbc654739d3489a346cbfca3e50fe04e",
+        "frame_range_inclusive": [0, 448],
+        "anchor_range_inclusive": [2, 446],
+        "qualified_anchor_count": 445,
+        "pool_size": 772602,
+        "scientific_array_hash": "0de96f149b1ae0154c2befbdf69e0fcd912bcda0fad18f72a6bf9e93f2608910"
       },
       "train/201": {
-        "file": "artifacts/development_201_support_pool.npz",
-        "sha256": "c78aa18f5054426b48a0c5a0fdf00cd3a0611cdf0cb9af0399f6056d01b1eb58"
+        "file": "artifacts/validation_201_support_pool.npz",
+        "sha256": "1414387f046a674a115138a3e4f525e76aa4c5b006a609d6cc6727f1f2ead99f",
+        "frame_range_inclusive": [0, 681],
+        "anchor_range_inclusive": [2, 679],
+        "qualified_anchor_count": 640,
+        "pool_size": 1210186,
+        "scientific_array_hash": "8865d0b65cc6814650213adcaff429a9ad75309871f99bee56936458b5249a7c"
       }
     },
-    "proxy_geometry": "existing_in_generator_procedural_shapes_only",
-    "normal_controls": "not_part_of_F1_F2_F3",
-    "moving_normal_special_handling": "none_before_a_positive_primary_result",
-    "F3_world_retry": {
-      "maximum_placement_attempts_per_root_seed": 48,
-      "allowed_retry_cause": "PlacementError_during_physical_world_construction_before_rendering",
-      "placement_attempt_seed_formula": "root_seed+1000003*attempt_index",
-      "world_root_seed_substitution": "forbidden",
-      "retry_after_rendering_begins": "forbidden",
-      "retry_for_an_invisible_window": "forbidden"
+    "train_pool_manifest": {
+      "file": "artifacts/data_v2/train_manifest.json",
+      "sha256": "c17dafce4866609f006d5d2820ae1b4f57e5dc557d8186ceca440e623554de34"
+    },
+    "validation_pool_manifest": {
+      "file": "artifacts/data_v2/validation_manifest.json",
+      "sha256": "27c686a26b9cda77a61f7cddff7258f143012e943cff2df2d489ff919969be26"
+    },
+    "qualification": {
+      "file": "artifacts/data_v2/qualification.json",
+      "sha256": "ad4f0050c4a4c8e7578128830450ead4ba453528066f198ba2b233f6a8a468fd"
     }
   },
-  "stu": {
-    "source": "STU_official_Mask4Former3D",
-    "checkpoint": "weights/59p6pq_ens1.ckpt",
-    "checkpoint_bytes": 476261075,
-    "checkpoint_sha256": "743b10d39c4076d98533bf1e84d389ad2703016904d31146e48919618b07b67a",
-    "model_state_tensor_sha256": "0be4805592a3d064b21655c6c6eeeb7227322c9670873345be52747b0a24d1fb",
-    "source_manifest_sha256": "f0cead4f5e721262f9f1c26231d116406bb4fb0a43139f22e3706be89b914891",
-    "repository": "vendor/stu/Mask4Former3D",
-    "upstream_repository_commit": "8f0f09c2ca4bf7b665e0ae5919b4092ddae140a2",
-    "license_file": "vendor/stu/LICENSE",
-    "voxel_size_m": 0.05,
-    "point_feature_dim": 128,
-    "normal_evidence_dim": 19,
-    "assignment_reliability_dim": 1,
-    "no_object_reliability_dim": 1,
-    "score": "official_STU_MaxLogit",
-    "official_semantic_prediction": "query_class_of_argmax(mask_probability*query_class_confidence)",
-    "official_point_evaluator": {
-      "file": "vendor/stu/compute_point_level_ood.py",
-      "sha256": "ed0330f80fbd3cd4cefafed33d6c747c51f2de521ef191e2868eb24f84b9ce61"
-    },
-    "F0_qualification": {
-      "single_frame_ids": [8, 198, 387],
-      "five_scan_window_starts": [4, 194, 383],
-      "AJAE_repeat_runs": 2,
-      "MaxLogit_absolute_tolerance": 1e-6,
-      "MaxLogit_relative_tolerance": 1e-6
-    },
-    "frozen": true
-  },
-  "feasibility": {
-    "F1_geometry": {
-      "population": "all_546_legal_normal_development_windows",
-      "voxel_sizes_m": [0.05, 0.1, 0.2],
-      "metrics": ["visible_return_ratio", "unique_voxel_ratio", "new_voxels_not_present_in_X_t"],
-      "ply_current_frames": [8, 198, 387, 553],
-      "role": "descriptive_only"
-    },
-    "F2_normal_stability": {
-      "current_frames": [8, 32, 55, 79, 103, 126, 150, 174, 198, 221, 245, 269, 292, 316, 340, 363, 387, 411, 435, 458, 482, 506, 529, 553],
-      "paired_unit": "same_current_frame_point",
-      "metrics": ["MaxLogit_distribution", "normal_class_accuracy", "normal_class_mIoU"],
-      "masks": {
-        "normal_anomaly_mask": "raw_semantic_not_0_and_not_2_and_range_2.5_to_50m_inclusive",
-        "semantic_class_mask": "semantic_target_not_255_and_range_2.5_to_50m_inclusive"
-      },
-      "official_normal_class_precheck_frames": [8, 198, 387, 553],
-      "maximum_median_MaxLogit_increase": 0.02,
-      "maximum_q95_MaxLogit_increase": 0.05,
-      "maximum_normal_accuracy_drop": 0.02,
-      "decision": "dense_STU_is_stable_only_if_all_three_limits_hold"
-    },
-    "F3_proxy_signal": {
-      "frames_per_sequence": 28,
-      "candidate_current_frames_per_sequence": 24,
-      "screen": {
-        "world_count": 8,
-        "source_starts": [4, 72, 140, 208, 276, 344, 412, 480],
-        "world_root_seeds": [33000, 33001, 33002, 33003, 33004, 33005, 33006, 33007]
-      },
-      "extension_if_screen_is_inconclusive": {
-        "world_count": 8,
-        "source_starts": [38, 106, 174, 242, 310, 378, 446, 514],
-        "world_root_seeds": [33008, 33009, 33010, 33011, 33012, 33013, 33014, 33015]
-      },
-      "world_rule": "one_fixed_anomaly_only_WorldSpec_per_sequence",
-      "support_anchor_rule": "support_frame_must_be_at_least_2_frames_inside_its_28_frame_source_clip",
-      "comparison": "official_point_metrics_dense_STU_minus_single_STU_on_the_same_current_points",
-      "metrics": ["AP", "AUROC", "FPR95"],
-      "uncertainty": "paired_world_bootstrap_95_percent_interval",
-      "bootstrap_repetitions": 10000,
-      "bootstrap_seed": 3303,
-      "unevaluable_world_rule": "record_without_seed_substitution_and_exclude_from_metric_bootstrap",
-      "screen_decision": "only_if_all_8_worlds_are_evaluable: reject_if_mean_and_median_delta_AP_are_both_not_positive; otherwise_run_the_preplanned_8_world_extension_including_a_positive_screen",
-      "minimum_evaluable_worlds_for_final_support": 12,
-      "final_16_world_decision": "direct_dense_STU_is_supported_only_if_F2_passes_at_least_12_worlds_are_evaluable_and_the_lower_95_percent_bound_of_delta_AP_is_above_zero; otherwise_enter_F4"
-    },
-    "F4_minimal_training": {
-      "allowed_only_if": "direct_dense_STU_is_not_supported_by_F2_and_F3",
-      "first_candidate": "per_scan_frozen_STU_features_aligned_to_current_geometry_plus_one_small_anomaly_head",
-      "large_new_network": "not_authorized_without_failure_of_the_small_head",
-      "architecture_and_budget": "intentionally_undefined_until_F1_F3_results_exist"
-    }
-  },
-  "evaluation": {
-    "minimum_range_m_inclusive": 2.5,
-    "maximum_range_m_inclusive": 50.0,
-    "minimum_anomaly_points_per_evaluated_frame": 5,
-    "primary_proxy_metric": "point_AP",
-    "secondary_metrics": ["AUROC", "FPR95"],
-    "normal_safety": "MaxLogit_distribution_and_normal_semantic_quality",
-    "moving_normal": "report_as_a_subgroup_only_after_a_positive_primary_result"
-  },
-  "stages": ["F0", "F1", "F2", "F3", "F4", "C1", "V1", "T1"],
-  "claims": {
-    "implementation_ready": true,
-    "F1_completed": true,
-    "F2_completed": false,
-    "F3_completed": false,
-    "training_performed": false,
-    "C1_completed": false,
-    "real_anomaly_validation_performed": false,
-    "supported_conclusion": "F1_supports_registered_five_scan_geometric_densification_only"
+  "qualification": {
+    "model_independent": true,
+    "required_checks": [
+      "train_206_has_exactly_frames_0_through_448",
+      "train_segments_are_disjoint_and_cover_0_through_448",
+      "one_fixed_world_per_segment",
+      "same_seed_repeats_bitwise",
+      "different_formal_seeds_produce_different_physical_world_contents",
+      "each_segment_frame_is_rendered_once",
+      "every_window_is_inside_one_segment",
+      "every_visible_return_appears_once_per_window",
+      "coordinates_identity_and_labels_are_row_aligned",
+      "current_frame_xyz_is_a_bitwise_copy",
+      "historical_registration_meets_the_frozen_tolerance",
+      "one_rendered_frame_is_bitwise_identical_across_overlapping_windows",
+      "train_201_has_exactly_frames_0_through_681",
+      "known_duplicate_prefix_is_retained_with_frozen_ray_runs",
+      "normal_201_has_exactly_678_windows_and_unique_outputs_4_through_681",
+      "all_world_parameters_seeds_boundaries_raw_identities_and_scientific_hashes_are_saved"
+    ],
+    "status": "passed"
   }
 }

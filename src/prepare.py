@@ -38,8 +38,8 @@ except ImportError:  # Direct execution from src/.
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-DEVELOPMENT_SOURCE_FRAMES = (4, 553)
-DEVELOPMENT_ANCHOR_FRAMES = (6, 551)
+VALIDATION_SOURCE_FRAMES = (0, 681)
+VALIDATION_ANCHOR_FRAMES = (2, 679)
 TRAINING_SOURCE_FRAMES = (0, 448)
 TRAINING_ANCHOR_FRAMES = (2, 446)
 _SUPPORT_SEQUENCE: STUSequence | None = None
@@ -307,26 +307,26 @@ def _build_support_pool(
     return metadata
 
 
-def build_development_support_pool(
+def build_validation_support_pool(
     sequence: STUSequence, output_path: Path, *, processes: int
 ) -> dict[str, object]:
-    """Build patches whose full context remains inside the F1--F3 split."""
+    """Build patches whose context remains inside complete train/201."""
 
     return _build_support_pool(
         sequence,
         output_path,
         processes=processes,
-        source_frames=DEVELOPMENT_SOURCE_FRAMES,
-        anchor_frames=DEVELOPMENT_ANCHOR_FRAMES,
-        experiment="schema33-development-support-pool",
-        split_rule="every estimator context frame is inside train/201 frames 4-553",
+        source_frames=VALIDATION_SOURCE_FRAMES,
+        anchor_frames=VALIDATION_ANCHOR_FRAMES,
+        experiment="schema34-validation-support-pool",
+        split_rule="every estimator context frame is inside train/201 frames 0-681",
     )
 
 
 def build_training_support_pool(
     sequence: STUSequence, output_path: Path, *, processes: int
 ) -> dict[str, object]:
-    """Build the compact train/206 pool used only if F4 is reached."""
+    """Rebuild the inherited full train/206 support pool."""
 
     return _build_support_pool(
         sequence,
@@ -342,7 +342,7 @@ def build_training_support_pool(
 def build_calibration(
     data_root: Path, output_path: Path, *, protocol: AJAEProtocol
 ) -> None:
-    record = protocol.render["calibration"]
+    record = protocol.artifacts["sensor_calibration"]
     source = (protocol.path.parent / str(record["source_file"])).resolve(strict=True)
     if _sha256(source) != str(record["source_sha256"]):
         raise PreparationError("ray-grid calibration source differs from protocol")
@@ -358,9 +358,9 @@ def build_calibration(
         (sequence.source_frame(frame) for frame in range(449)),
         ray_grid,
         provenance={
-            "authority": "AJAE新主线方案.md",
+            "authority": "AJAE数据与五帧监督协议v2.md",
             "algorithm_origin_schema": 30,
-            "runtime_protocol_schema": 33,
+            "runtime_protocol_schema": 34,
         },
     )
     save_sensor_calibration(output_path, ray_grid, sensor)
@@ -372,7 +372,7 @@ def _parser() -> argparse.ArgumentParser:
         "target",
         choices=(
             "calibration",
-            "support-development",
+            "support-validation",
             "support-training",
             "support",
             "all",
@@ -390,15 +390,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.target in {"calibration", "all"}:
         output = protocol.sensor_calibration_path()
         build_calibration(args.data_root, output, protocol=protocol)
-        expected = str(protocol.render["calibration"]["sha256"])
+        expected = str(protocol.artifacts["sensor_calibration"]["sha256"])
         if _sha256(output) != expected:
             raise PreparationError("rebuilt sensor calibration differs from protocol")
         print(json.dumps({"calibration": str(output), "sha256": expected}))
     plans = (
         (
             201,
-            "support-development",
-            build_development_support_pool,
+            "support-validation",
+            build_validation_support_pool,
         ),
         (
             206,
@@ -419,12 +419,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         output = protocol.support_pool_path(sequence_id)
         metadata = builder(sequence, output, processes=args.processes)
         digest = _sha256(output)
-        expected = str(
-            protocol.render["qualified_support_pools"][f"train/{sequence_id}"][
-                "sha256"
-            ]
-        )
-        if digest != expected:
+        expected = protocol.artifacts["qualified_support_pools"][
+            f"train/{sequence_id}"
+        ]["sha256"]
+        if expected is not None and digest != expected:
             raise PreparationError(
                 f"rebuilt support pool has sha256 {digest}, expected {expected}"
             )

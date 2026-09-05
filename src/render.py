@@ -49,10 +49,7 @@ GROUND_SEMANTIC_IDS = (40, 44, 48, 49, 60)
 WORLD_FORMAT = "ajae-world-v3"
 WORLD_REPORT_FORMAT = "ajae-world-generation-report-v3"
 SUPPORT_POOL_FORMAT = "ajae-qualified-support-pool-v1"
-SUPPORT_POOL_SHA256_BY_SEQUENCE = {
-    206: "a09ce4701c78ef72d0ea6de2ff5fb98f74e37ffd34f0eb9474f46994494bbb0a",
-    201: "47bed8f59f4d9c21c5deaeec6892dd1820a559737c6d07f2ef991c7733422119",
-}
+SUPPORTED_COUNTERFACTUAL_SEQUENCES = frozenset((201, 206))
 SUPPORT_POOL_SEMANTICS = (40, 48, 49)
 CALIBRATION_FORMAT = "ajae-sensor-calibration-v4"
 PROCEDURAL_GENERATOR_SCHEMA = 7
@@ -74,6 +71,14 @@ SYNTHETIC_INSTANCE_BASE = 60_000
 MAX_OBJECT_ID = np.iinfo(np.uint16).max - SYNTHETIC_INSTANCE_BASE
 OBJECT_LABELS = ("anomaly-proxy",)
 ObjectLabel: TypeAlias = Literal["anomaly-proxy"]
+# File slots are retained exactly. These four released train/201 scans contain
+# exact repeated canonical-ray runs and therefore require a many-to-one ray map.
+DUPLICATE_201_RAY_LAYOUT = {
+    0: (0, ((0, 131072, 0), (131072, 131072, 0), (262144, 131072, 0))),
+    1: (0, ((0, 131072, 0), (131072, 131072, 0), (262144, 131072, 0))),
+    2: (29184, ((0, 29184, 0), (29184, 131072, 0), (160256, 131072, 0))),
+    3: (0, ((0, 131072, 0), (131072, 131072, 0))),
+}
 DEFAULT_RANGE_EDGES_M = (0.0, 10.0, 20.0, 30.0, 40.0, 50.0, 120.0)
 DEFAULT_INCIDENCE_EDGES_RAD = (
     0.0,
@@ -3839,7 +3844,7 @@ def _accepted_object_hits(
     sensor: SensorCalibration,
     frame_id: int,
     *,
-    slot_ids: np.ndarray | None = None,
+    canonical_ray_slots: np.ndarray | None = None,
 ) -> _ObjectCompetition:
     """Accept each object's returns independently before nearest-return competition."""
 
@@ -3854,18 +3859,17 @@ def _accepted_object_hits(
     best_object = np.full(count, -1, dtype=np.int32)
     geometric_hits: dict[int, int] = {}
     accepted_hits: dict[int, int] = {}
-    if slot_ids is None:
+    if canonical_ray_slots is None:
         if count != ray_grid.slot_count:
             raise RenderError("compact object competition requires original slot IDs")
         slots = np.arange(count, dtype=np.int32)
     else:
-        slots = np.asarray(slot_ids, dtype=np.int32)
+        slots = np.asarray(canonical_ray_slots, dtype=np.int32)
         if (
             slots.shape != (count,)
             or np.any((slots < 0) | (slots >= ray_grid.slot_count))
-            or np.unique(slots).size != count
         ):
-            raise RenderError("object competition slot IDs are invalid")
+            raise RenderError("object competition canonical ray slots are invalid")
     beam_ids = ray_grid.beam_ids[slots]
     for item in world.objects:
         translation = np.asarray(item.translation_world_m, dtype=np.float64)
@@ -4036,20 +4040,70 @@ class RenderedFrame:
         return self.source.real_slots
 
 
+def canonical_ray_slots_for_source(
+    source: SourceFrame,
+    ray_grid: RayGrid,
+) -> np.ndarray:
+    """Map retained file slots to calibrated rays, including the known 201 prefix."""
+
+    count = source.slot_count
+    if count == ray_grid.slot_count:
+        return _freeze(np.arange(count, dtype=np.int32))
+    layout = DUPLICATE_201_RAY_LAYOUT.get(source.frame_id)
+    if (
+        source.partition != "train"
+        or source.sequence_id != 201
+        or ray_grid.slot_count != 131072
+        or layout is None
+    ):
+        raise RenderError("source frame has no frozen file-slot to ray mapping")
+    template_start, runs = layout
+    mapping = np.empty(count, dtype=np.int32)
+    cursor = 0
+    for file_start, length, canonical_start in runs:
+        if file_start != cursor or canonical_start + length > ray_grid.slot_count:
+            raise RenderError("duplicate-prefix ray runs are not contiguous or in range")
+        mapping[file_start : file_start + length] = np.arange(
+            canonical_start,
+            canonical_start + length,
+            dtype=np.int32,
+        )
+        cursor += length
+    if cursor != count or template_start + ray_grid.slot_count > count:
+        raise RenderError("duplicate-prefix ray runs do not cover the released frame")
+    template = source.xyzi[template_start : template_start + ray_grid.slot_count]
+    if not np.array_equal(source.xyzi, template[mapping]):
+        raise RenderError("released duplicate-prefix xyzi does not match its frozen layout")
+    if source.labels is not None:
+        label_template = source.labels.packed[
+            template_start : template_start + ray_grid.slot_count
+        ]
+        if not np.array_equal(source.labels.packed, label_template[mapping]):
+            raise RenderError(
+                "released duplicate-prefix labels do not match its frozen layout"
+            )
+    return _freeze(mapping)
+
+
 def _frame_trace_context(
     source: SourceFrame,
     ray_grid: RayGrid,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Build the immutable ray/native-return state shared by one frame render."""
 
     rotation, lidar_origin_world = _pose(source)
-    directions_sensor = ray_grid.directions_for(source)
+    ray_slots = canonical_ray_slots_for_source(source, ray_grid)
+    directions_sensor = ray_grid.directions_sensor[ray_slots]
     directions_world = directions_sensor @ rotation.T
-    origins_sensor = ray_grid.origins_for(source)
+    origins_sensor = ray_grid.origins_sensor[ray_slots]
     origins_world = origins_sensor @ rotation.T + lidar_origin_world
-    native_range = np.asarray(ray_grid.ranges(source)).copy()
+    xyz = np.asarray(source.xyzi[:, :3], dtype=np.float64)
+    native_range = np.sum((xyz - origins_sensor) * directions_sensor, axis=1)
     native_range[np.asarray(source.zero_slot_mask, dtype=np.bool_)] = np.inf
+    if np.any(native_range < 0.0):
+        raise RenderError("a published return lies behind its calibrated beam origin")
     return (
+        ray_slots,
         directions_sensor,
         directions_world,
         origins_sensor,
@@ -4063,10 +4117,6 @@ def render_frame(
     world: WorldSpec,
     ray_grid: RayGrid,
     sensor: SensorCalibration,
-    *,
-    _trace_context: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]
-    | None = None,
-    _competition: _ObjectCompetition | None = None,
 ) -> RenderedFrame:
     """Deterministically render one frame of a fixed complete virtual world."""
 
@@ -4082,30 +4132,22 @@ def render_frame(
         raise RenderError(
             "formal counterfactual worlds require identified train frames"
         )
-    if int(source.xyzi.shape[0]) != ray_grid.slot_count:
-        raise RenderError("source frame and ray grid have different slot counts")
     (
+        canonical_ray_slots,
         directions_sensor,
         directions_world,
         origins_sensor,
         origins_world,
         normal_range,
-    ) = (
-        _frame_trace_context(source, ray_grid)
-        if _trace_context is None
-        else _trace_context
-    )
-    competition = (
-        _accepted_object_hits(
-            origins_world,
-            directions_world,
-            world,
-            ray_grid,
-            sensor,
-            int(source.frame_id),
-        )
-        if _competition is None
-        else _competition
+    ) = _frame_trace_context(source, ray_grid)
+    competition = _accepted_object_hits(
+        origins_world,
+        directions_world,
+        world,
+        ray_grid,
+        sensor,
+        int(source.frame_id),
+        canonical_ray_slots=canonical_ray_slots,
     )
     inserted = np.isfinite(competition.distance_m) & (
         competition.distance_m < normal_range - world.tie_tolerance_m
@@ -4115,10 +4157,6 @@ def render_frame(
     anomaly_proxy = inserted.copy()
     xyzi = np.asarray(source.xyzi, dtype=np.float32).copy()
     original_real = ~np.asarray(source.zero_slot_mask, dtype=np.bool_)
-    xyzi[original_real, :3] = (
-        origins_sensor[original_real]
-        + normal_range[original_real, None] * directions_sensor[original_real]
-    ).astype(np.float32)
     if slots.size:
         xyzi[slots, :3] = (
             origins_sensor[slots]
@@ -4144,12 +4182,12 @@ def render_frame(
             random_quantile = _slot_uniform(
                 world,
                 int(source.frame_id),
-                object_slots,
+                canonical_ray_slots[object_slots],
                 np.full(object_slots.size, item.object_id, dtype=np.int32),
                 channel=1,
             )
             xyzi[object_slots, 3] = sensor.sample_intensity(
-                ray_grid.beam_ids[object_slots],
+                ray_grid.beam_ids[canonical_ray_slots[object_slots]],
                 competition.distance_m[object_slots],
                 incidence[selected],
                 random_quantile,
@@ -4238,7 +4276,7 @@ def source_observation_identity(source: SourceFrame) -> str:
 
     if not isinstance(source, SourceFrame):
         raise TypeError("source observation identity requires a SourceFrame")
-    digest = hashlib.sha256(b"AJAE-schema33-rendered-source-observation\0")
+    digest = hashlib.sha256(b"AJAE-rendered-source-observation-v2\0")
     digest.update(
         json.dumps(
             {
@@ -4267,6 +4305,65 @@ def source_observation_identity(source: SourceFrame) -> str:
     return digest.hexdigest()
 
 
+def world_content_identity(world: WorldSpec) -> str:
+    """Hash physical object content without letting the root seed prove diversity."""
+
+    objects = []
+    for item in world.objects:
+        physical = item.to_dict()
+        physical.pop("shape_generation_report")
+        objects.append(physical)
+    payload = {
+        "format": "ajae-physical-world-content-v1",
+        "source_sequence_id": world.source_sequence_id,
+        "objects": objects,
+        "tie_tolerance_m": world.tie_tolerance_m,
+    }
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
+def rendered_window_identity(
+    window_start: int,
+    frame_ids: Sequence[int],
+    source_observation_identities: Sequence[str],
+) -> str:
+    """Hash one window from its immutable rendered-frame references."""
+
+    payload = {
+        "format": "ajae-rendered-window-v1",
+        "window_start": _integer("window_start", window_start),
+        "frame_ids": tuple(_integer("frame_id", item) for item in frame_ids),
+        "source_observation_identities": tuple(source_observation_identities),
+    }
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
+def rendered_segment_identity(
+    world_identity: str,
+    segment_start: int,
+    frame_ids: Sequence[int],
+    renderer_identity: str,
+    source_observation_identities: Sequence[str],
+) -> str:
+    """Hash one rendered segment without materializing its point arrays again."""
+
+    payload = {
+        "format": "ajae-rendered-segment-v1",
+        "world_identity": world_identity,
+        "segment_start": _integer("segment_start", segment_start),
+        "frame_ids": tuple(_integer("frame_id", item) for item in frame_ids),
+        "renderer_identity": renderer_identity,
+        "source_observation_identities": tuple(source_observation_identities),
+    }
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
 @dataclass(frozen=True, slots=True)
 class RenderedWindow:
     """Five consecutive views cut from one already-rendered physical sequence."""
@@ -4276,6 +4373,7 @@ class RenderedWindow:
     rendered_frames: tuple[
         RenderedFrame, RenderedFrame, RenderedFrame, RenderedFrame, RenderedFrame
     ]
+    source_observation_identities: tuple[str, str, str, str, str]
 
     def __post_init__(self) -> None:
         start = _integer("window_start", self.window_start)
@@ -4285,106 +4383,115 @@ class RenderedWindow:
             raise RenderError("RenderedWindow requires five consecutive frame IDs")
         if len(rendered) != 5 or tuple(item.frame_id for item in rendered) != frame_ids:
             raise RenderError("RenderedWindow frames do not match its identity")
+        identities = tuple(self.source_observation_identities)
+        if len(identities) != 5 or any(
+            not isinstance(item, str) or len(item) != 64 for item in identities
+        ):
+            raise RenderError(
+                "RenderedWindow requires five source observation identities"
+            )
         object.__setattr__(self, "frame_ids", frame_ids)
         object.__setattr__(self, "rendered_frames", rendered)
-
-    @property
-    def source_observation_identities(self) -> tuple[str, str, str, str, str]:
-        identities = tuple(
-            source_observation_identity(item.source) for item in self.rendered_frames
-        )
-        return identities  # type: ignore[return-value]
+        object.__setattr__(self, "source_observation_identities", identities)
 
     @property
     def identity(self) -> str:
-        payload = {
-            "format": "ajae-rendered-window-v1",
-            "window_start": self.window_start,
-            "frame_ids": self.frame_ids,
-            "source_observation_identities": self.source_observation_identities,
-        }
-        return hashlib.sha256(
-            json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
-        ).hexdigest()
+        return rendered_window_identity(
+            self.window_start,
+            self.frame_ids,
+            self.source_observation_identities,
+        )
 
 
 @dataclass(frozen=True, slots=True)
-class DevelopmentClipWorld:
-    """One fixed anomaly world rendered once over a contiguous source segment."""
+class RenderedSegment:
+    """One immutable anomaly world rendered once over one source segment."""
 
-    clip_start: int
+    segment_start: int
     frame_ids: tuple[int, ...]
     world: WorldSpec
     report: WorldGenerationReport
     renderer_identity: str
+    rendered_frames: tuple[RenderedFrame, ...]
+    source_observation_identities: tuple[str, ...]
     windows: tuple[RenderedWindow, ...]
 
     def __post_init__(self) -> None:
-        start = _integer("clip_start", self.clip_start)
+        start = _integer("segment_start", self.segment_start)
         frame_ids = tuple(_integer("frame_id", value) for value in self.frame_ids)
-        if len(frame_ids) < 9 or frame_ids != tuple(
+        if len(frame_ids) < 5 or frame_ids != tuple(
             range(start, start + len(frame_ids))
         ):
             raise RenderError(
-                "a development clip requires at least nine consecutive source scans"
+                "a rendered segment requires at least five consecutive scans"
             )
+        rendered = tuple(self.rendered_frames)
+        identities = tuple(self.source_observation_identities)
         windows = tuple(self.windows)
-        if not windows:
-            raise RenderError("a development clip cannot omit its sliding windows")
+        sequence_id = self.world.source_sequence_id
         if (
-            self.world.source_sequence_id != 201
-            or self.report.source_sequence_id != 201
+            sequence_id not in SUPPORTED_COUNTERFACTUAL_SEQUENCES
+            or self.report.source_sequence_id != sequence_id
             or self.report.world_seed != self.world.seed
+            or tuple(item.frame_id for item in rendered) != frame_ids
+            or len(identities) != len(rendered)
+            or any(
+                item.source.partition != "train"
+                or item.source.sequence_id != sequence_id
+                for item in rendered
+            )
         ):
-            raise RenderError("development world and report must identify train/201")
+            raise RenderError("rendered segment source, world, or report is inconsistent")
+        if any(
+            not isinstance(identity, str) or len(identity) != 64
+            for identity in identities
+        ):
+            raise RenderError("a rendered source observation identity is invalid")
         expected_starts = tuple(range(start, frame_ids[-1] - 3))
         if tuple(item.window_start for item in windows) != expected_starts:
-            raise RenderError("development clip must contain every sliding window")
-        self.source_observation_identities
+            raise RenderError("a segment must contain every local sliding window")
+        for offset, window in enumerate(windows):
+            same_frames = all(
+                actual is expected
+                for actual, expected in zip(
+                    window.rendered_frames,
+                    rendered[offset : offset + 5],
+                    strict=True,
+                )
+            )
+            if not same_frames or (
+                window.source_observation_identities
+                != identities[offset : offset + 5]
+            ):
+                raise RenderError(
+                    "overlapping windows must reuse the same rendered frame objects"
+                )
         object.__setattr__(self, "frame_ids", frame_ids)
+        object.__setattr__(self, "rendered_frames", rendered)
+        object.__setattr__(self, "source_observation_identities", identities)
         object.__setattr__(self, "windows", windows)
 
     @property
-    def source_observation_identities(self) -> tuple[str, ...]:
-        """Prove overlapping windows reuse identical rendered physical frames."""
-
-        by_frame: dict[int, str] = {}
-        for window in self.windows:
-            for rendered in window.rendered_frames:
-                frame_id = int(rendered.frame_id)
-                identity = source_observation_identity(rendered.source)
-                previous = by_frame.setdefault(frame_id, identity)
-                if previous != identity:
-                    raise RenderError(
-                        "one source frame changed across overlapping windows"
-                    )
-        if set(by_frame) != set(self.frame_ids):
-            raise RenderError("development windows do not cover every clip frame")
-        return tuple(by_frame[frame_id] for frame_id in self.frame_ids)
-
-    @property
     def identity(self) -> str:
-        payload = {
-            "format": "ajae-development-clip-world-v2",
-            "world_identity": self.world.identity,
-            "clip_start": self.clip_start,
-            "frame_ids": self.frame_ids,
-            "renderer_identity": self.renderer_identity,
-            "source_observation_identities": self.source_observation_identities,
-        }
-        return hashlib.sha256(
-            json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
-        ).hexdigest()
+        return rendered_segment_identity(
+            self.world.identity,
+            self.segment_start,
+            self.frame_ids,
+            self.renderer_identity,
+            self.source_observation_identities,
+        )
 
     def to_manifest(self) -> dict[str, object]:
         return {
-            "format": "ajae-development-clip-world-v2",
+            "format": "ajae-rendered-segment-v1",
             "identity": self.identity,
             "world_identity": self.world.identity,
-            "clip_start": self.clip_start,
+            "segment_start": self.segment_start,
             "frame_ids": list(self.frame_ids),
             "renderer_identity": self.renderer_identity,
-            "source_observation_identities": list(self.source_observation_identities),
+            "source_observation_identities": list(
+                self.source_observation_identities
+            ),
             "world": self.world.to_dict(),
             "report": self.report.to_dict(),
             "windows": [
@@ -4401,7 +4508,7 @@ class DevelopmentClipWorld:
         }
 
 
-def render_development_clip_world(
+def render_segment_world(
     world: WorldSpec,
     report: WorldGenerationReport,
     sources: Sequence[SourceFrame],
@@ -4409,46 +4516,52 @@ def render_development_clip_world(
     sensor: SensorCalibration,
     *,
     renderer_identity: str,
-) -> DevelopmentClipWorld:
-    """Render a fixed world once, then cut every causal five-scan window."""
+) -> RenderedSegment:
+    """Render every source once, then cut all segment-local causal windows."""
 
     frames = tuple(sorted(tuple(sources), key=lambda item: item.frame_id))
+    if not frames:
+        raise RenderError("a rendered segment cannot be empty")
     frame_ids = tuple(item.frame_id for item in frames)
-    if len(frames) < 9 or frame_ids != tuple(
+    if len(frames) < 5 or frame_ids != tuple(
         range(frame_ids[0], frame_ids[0] + len(frames))
     ):
-        raise RenderError(
-            "development clip sources must be at least nine consecutive scans"
-        )
-    if world.source_sequence_id != 201 or any(
-        item.partition != "train" or item.sequence_id != 201 for item in frames
+        raise RenderError("segment sources must be at least five consecutive scans")
+    sequence_id = world.source_sequence_id
+    if any(
+        item.partition != "train" or item.sequence_id != sequence_id
+        for item in frames
     ):
-        raise RenderError("development clip sources must be identified train/201 scans")
+        raise RenderError("segment sources and world must identify one train sequence")
     if world.world_type != "anomaly_only":
-        raise RenderError("F3 development requires one anomaly-only world")
+        raise RenderError("formal synthetic data requires an anomaly-only world")
     frozen_world_identity = world.identity
     rendered = tuple(render_frames(frames, world, ray_grid, sensor))
     if world.identity != frozen_world_identity:
-        raise RenderError("WorldSpec changed while the sequence was rendered")
+        raise RenderError("WorldSpec changed while the segment was rendered")
+    identities = tuple(source_observation_identity(item.source) for item in rendered)
     windows = tuple(
         RenderedWindow(
             window_start=frames[offset].frame_id,
             frame_ids=tuple(item.frame_id for item in frames[offset : offset + 5]),  # type: ignore[arg-type]
             rendered_frames=rendered[offset : offset + 5],  # type: ignore[arg-type]
+            source_observation_identities=identities[offset : offset + 5],  # type: ignore[arg-type]
         )
         for offset in range(len(frames) - 4)
     )
-    return DevelopmentClipWorld(
-        clip_start=frame_ids[0],
+    return RenderedSegment(
+        segment_start=frame_ids[0],
         frame_ids=frame_ids,
         world=world,
         report=report,
         renderer_identity=renderer_identity,
+        rendered_frames=rendered,
+        source_observation_identities=identities,
         windows=windows,
     )
 
 
-def sample_development_clip_world(
+def sample_segment_world(
     support_pool: QualifiedSupportPool,
     obstacles: ObservedObstacleIndex,
     sources: Sequence[SourceFrame],
@@ -4458,22 +4571,25 @@ def sample_development_clip_world(
     *,
     renderer_identity: str,
     maximum_attempts: int = 48,
-) -> DevelopmentClipWorld:
-    """Construct one fixed world; window visibility never changes its root seed."""
+) -> RenderedSegment:
+    """Sample one fixed world before rendering any frame of the segment."""
 
     frames = tuple(sorted(tuple(sources), key=lambda item: item.frame_id))
-    if len(frames) < 9:
-        raise RenderError("development generation requires at least nine scans")
-    root_seed = _integer("seed", seed)
+    if len(frames) < 5:
+        raise RenderError("synthetic generation requires at least five scans")
+    sequence_ids = {item.sequence_id for item in frames}
+    if len(sequence_ids) != 1:
+        raise RenderError("segment frames must come from one source sequence")
+    sequence_id = sequence_ids.pop()
     world, report = sample_anomaly_world(
         support_pool,
         obstacles,
-        root_seed,
-        source_sequence_id=201,
+        _integer("seed", seed),
+        source_sequence_id=sequence_id,
         support_frame_ids=tuple(item.frame_id for item in frames[2:-2]),
         maximum_attempts=maximum_attempts,
     )
-    return render_development_clip_world(
+    return render_segment_world(
         world,
         report,
         frames,
@@ -4543,7 +4659,7 @@ class QualifiedSupportPool:
         if not np.isin(arrays[1], SUPPORT_POOL_SEMANTICS).all():
             raise PlacementError("qualified support-pool semantic is unsupported")
         sequence_id = _integer("source_sequence_id", self.source_sequence_id)
-        if sequence_id not in SUPPORT_POOL_SHA256_BY_SEQUENCE:
+        if sequence_id not in SUPPORTED_COUNTERFACTUAL_SEQUENCES:
             raise PlacementError("qualified support pool has an unsupported source")
         names = (
             "pool_indices",
@@ -4595,14 +4711,20 @@ def _scientific_array_hash(arrays: Mapping[str, np.ndarray]) -> str:
 
 
 def load_qualified_support_pool(
-    path: Path | str, *, source_sequence_id: int = 206
+    path: Path | str,
+    *,
+    source_sequence_id: int,
+    expected_sha256: str,
 ) -> QualifiedSupportPool:
     """Load one sequence-specific qualified pool after verifying its identity."""
 
     source = Path(path).expanduser().resolve(strict=True)
     sequence_id = _integer("source_sequence_id", source_sequence_id)
-    expected_digest = SUPPORT_POOL_SHA256_BY_SEQUENCE.get(sequence_id)
-    if expected_digest is None or _sha256_path(source) != expected_digest:
+    if (
+        not isinstance(expected_sha256, str)
+        or len(expected_sha256) != 64
+        or _sha256_path(source) != expected_sha256
+    ):
         raise PlacementError(
             "support-pool artifact does not match its frozen source sequence"
         )
@@ -4627,10 +4749,10 @@ def load_qualified_support_pool(
         metadata = json.loads(str(payload["metadata_json"].item()))
         expected = {
             201: (
-                "schema33-development-support-pool",
-                [4, 553],
-                [6, 551],
-                546,
+                "schema34-validation-support-pool",
+                [0, 681],
+                [2, 679],
+                640,
             ),
             206: (
                 "schema33-training-support-pool",
@@ -4650,9 +4772,10 @@ def load_qualified_support_pool(
             or metadata.get("scientific_array_hash")
             != _scientific_array_hash(arrays)
             or int(np.min(arrays["frame"])) != expected[2][0]
-            or int(np.max(arrays["frame"])) != expected[2][1]
+            or int(np.max(arrays["frame"]))
+            != ({201: 642, 206: 446}[sequence_id])
         ):
-            raise PlacementError("support-pool metadata is not schema-33 qualified")
+            raise PlacementError("support-pool metadata is not qualified")
         return QualifiedSupportPool(
             np.arange(arrays["frame"].shape[0], dtype=np.int64),
             np.asarray(arrays["semantic"], dtype=np.uint16),
@@ -5225,7 +5348,7 @@ def sample_anomaly_world(
     anomaly_count = _anomaly_entity_count(world_seed)
 
     for attempt in range(maximum_attempts):
-        # This is the only retry stream authorized by the schema-33 protocol.
+        # Placement retries finish before rendering; the root seed never changes.
         attempt_seed = world_seed + 1_000_003 * attempt
         objects: list[ObjectSpec] = []
         records: list[PlacementRecord] = []
@@ -5264,7 +5387,7 @@ def sample_anomaly_world(
                     obstacles,
                     object_id=entity_index + 1,
                     label="anomaly-proxy",
-                    proposal_namespace="schema33-sequence-world-v2",
+                    proposal_namespace="ajae-segment-world-v1",
                     proposal_stream=entity_seed,
                     yaw_rad=yaw,
                     material_seed=material_seed,
