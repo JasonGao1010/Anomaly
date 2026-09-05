@@ -9,9 +9,17 @@ import numpy as np
 import pytest
 
 from src.data import (
+    DataProtocolError,
     FrozenSyntheticSegment,
+    FrozenWindowDataset,
     PredictionBatch,
     WindowPartition,
+    _atomic_json,
+    _prediction_content_hash,
+    _stable_npz,
+    build_pool_manifest,
+    generation_identity,
+    load_pool_manifest,
     save_sparse_segment,
 )
 from src.protocol import (
@@ -35,7 +43,7 @@ from src.render import (
     world_content_identity,
 )
 from src.scene import PointLabels, STUSequence, assemble_window, make_source_frame
-from src.qualify import _write_window_ply
+from src.qualify import QualificationError, _write_window_ply, qualify_data
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -357,11 +365,12 @@ def test_prediction_batch_requires_and_persists_all_point_scores(
     assert np.array_equal(batch.online_mask, window.current_mask)
     first = tmp_path / "prediction_a.npz"
     second = tmp_path / "prediction_b.npz"
-    first_record = batch.save(first)
-    second_record = batch.save(second)
+    first_record = batch.save(first, window=window)
+    second_record = batch.save(second, window=window)
     assert first_record["file_sha256"] == second_record["file_sha256"]
     restored = PredictionBatch.load(
         first,
+        window=window,
         expected_sha256=str(first_record["file_sha256"]),
     )
     assert restored.observation_sequence_id == window.observation_sequence_id
@@ -371,6 +380,184 @@ def test_prediction_batch_requires_and_persists_all_point_scores(
     assert np.array_equal(restored.anomaly_score, scores)
     with pytest.raises(Exception, match="every point"):
         PredictionBatch.from_window(window, scores[:-1])
+    before = first.read_bytes()
+    with pytest.raises(FileExistsError):
+        batch.save(first, window=window)
+    assert first.read_bytes() == before
+    with pytest.raises(TypeError, match="window"):
+        batch.save(first)
+    with pytest.raises(TypeError, match="window"):
+        PredictionBatch.load(first)
+
+
+@pytest.mark.parametrize(
+    "invalid",
+    ("missing_history", "missing_current", "reordered", "wrong_sequence", "wrong_slot"),
+)
+def test_prediction_save_rejects_incomplete_or_mismatched_window(
+    tmp_path: Path, invalid: str
+) -> None:
+    window = _window()
+    indices = np.arange(window.points.count)
+    if invalid == "missing_history":
+        indices = indices[1:]
+    elif invalid == "missing_current":
+        indices = indices[:-1]
+    elif invalid == "reordered":
+        indices = indices[::-1]
+    slots = window.points.source_slot[indices].copy()
+    if invalid == "wrong_slot":
+        slots[0] += 100
+    batch = PredictionBatch(
+        "synthetic/train/001"
+        if invalid == "wrong_sequence"
+        else window.observation_sequence_id,
+        window.current_frame_id,
+        window.points.source_frame[indices],
+        slots,
+        np.zeros(indices.size, dtype=np.float32),
+    )
+    path = tmp_path / "invalid.npz"
+    with pytest.raises(DataProtocolError, match="every input window point"):
+        batch.save(path, window=window)
+    assert not path.exists()
+
+
+def test_prediction_rejects_duplicate_points_and_nonfinite_scores() -> None:
+    window = _window()
+    indices = np.arange(window.points.count)
+    indices[-1] = indices[-2]
+    with pytest.raises(DataProtocolError, match="duplicated"):
+        PredictionBatch(
+            window.observation_sequence_id,
+            window.current_frame_id,
+            window.points.source_frame[indices],
+            window.points.source_slot[indices],
+            np.zeros(indices.size, dtype=np.float32),
+        )
+    for value in (np.nan, np.inf):
+        scores = np.full(window.points.count, value, dtype=np.float32)
+        with pytest.raises(DataProtocolError, match="finite"):
+            PredictionBatch.from_window(window, scores)
+
+
+def test_prediction_load_checks_actual_window_even_with_valid_file_hash(
+    tmp_path: Path,
+) -> None:
+    window = _window()
+    path = tmp_path / "prediction.npz"
+    batch = PredictionBatch.from_window(
+        window, np.zeros(window.points.count, dtype=np.float32)
+    )
+    record = batch.save(path, window=window)
+    wrong_sequence = replace(window, observation_sequence_id="synthetic/train/001")
+    later = assemble_window(
+        SequenceSpec("train", 206, "fixture", True, FrameSpan(0, 6)),
+        1,
+        (1, 2, 3, 4, 5),
+        tuple(_source(t) for t in range(1, 6)),
+        observation_sequence_id=window.observation_sequence_id,
+    )
+    for wrong_window in (wrong_sequence, later):
+        with pytest.raises(DataProtocolError, match="every input window point"):
+            PredictionBatch.load(
+                path, window=wrong_window, expected_sha256=record["file_sha256"]
+            )
+    # A valid self-hash cannot make a truncated prediction complete.
+    with np.load(path, allow_pickle=False) as payload:
+        arrays = {
+            name: payload[name][:-1]
+            for name in ("source_frame", "source_slot", "anomaly_score")
+        }
+        metadata = json.loads(str(payload["metadata_json"].item()))
+    metadata.pop("content_hash")
+    metadata["point_count"] -= 1
+    metadata["content_hash"] = _prediction_content_hash(metadata, arrays)
+    shortened = tmp_path / "shortened.npz"
+    _stable_npz(
+        shortened, {**arrays, "metadata_json": np.asarray(json.dumps(metadata))}
+    )
+    with pytest.raises(DataProtocolError, match="every input window point"):
+        PredictionBatch.load(shortened, window=window)
+
+
+def test_rechecks_cannot_overwrite_frozen_or_existing_evidence(tmp_path: Path) -> None:
+    protocol = load_protocol()
+    frozen = ROOT / protocol.artifacts["qualification"]["file"]
+    before = frozen.read_bytes()
+    alias = tmp_path / "alias.json"
+    alias.symlink_to(frozen)
+    for path in (frozen, alias):
+        with pytest.raises(QualificationError, match="cannot replace frozen"):
+            qualify_data(tmp_path, protocol, output_path=path)
+    assert frozen.read_bytes() == before
+    report = tmp_path / "recheck.json"
+    _atomic_json(report, {"original": True})
+    before = report.read_bytes()
+    with pytest.raises(FileExistsError):
+        qualify_data(tmp_path, protocol, output_path=report)
+    with pytest.raises(FileExistsError):
+        _atomic_json(report, {"replacement": True})
+    assert report.read_bytes() == before
+    for pool in ("train", "validation"):
+        with pytest.raises(DataProtocolError, match="read-only"):
+            build_pool_manifest(protocol, pool)
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+def _linked_frozen_protocol(tmp_path: Path) -> AJAEProtocol:
+    """Use small isolated links; damage tests replace a link, never its target."""
+
+    protocol = load_protocol()
+    path = tmp_path / "protocol.json"
+    path.write_bytes((ROOT / "protocol.json").read_bytes())
+    paths = [protocol.artifacts["qualification"]["file"]]
+    for pool in (protocol.training_pool, protocol.validation_pool):
+        manifest_path = protocol.pool_manifest_path(pool.name)
+        paths.append(manifest_path.relative_to(ROOT).as_posix())
+        manifest = json.loads(manifest_path.read_text())
+        paths.extend(record["file"] for record in manifest["segments"])
+    for relative in paths:
+        link = tmp_path / relative
+        link.parent.mkdir(parents=True, exist_ok=True)
+        link.symlink_to(ROOT / relative)
+    return load_protocol(path)
+
+
+@pytest.mark.parametrize(
+    "damaged",
+    (
+        "artifacts/data/qualification.json",
+        "artifacts/data/train_manifest.json",
+        "artifacts/data/validation_manifest.json",
+        "artifacts/data/train/sequence_007/segment_15.npz",
+        "artifacts/data/validation/sequence_003/segment_22.npz",
+    ),
+)
+def test_training_constructor_verifies_all_frozen_files_before_loading_data(
+    tmp_path: Path,
+    damaged: str,
+) -> None:
+    protocol = _linked_frozen_protocol(tmp_path)
+    path = tmp_path / damaged
+    path.unlink()
+    path.write_bytes(b"damaged fixture")
+    with pytest.raises(DataProtocolError, match="bytes differ|segment file differs"):
+        FrozenWindowDataset(tmp_path / "no_raw_data", protocol, pool_name="train")
+
+
+def test_consumer_changes_do_not_redefine_frozen_generation_provenance() -> None:
+    protocol = load_protocol()
+    evidence = json.loads(
+        (ROOT / protocol.artifacts["qualification"]["file"]).read_text()
+    )
+    for pool in (protocol.training_pool, protocol.validation_pool):
+        manifest = load_pool_manifest(protocol, pool)
+        assert manifest["generation_identity"] == generation_identity(
+            protocol,
+            pool,
+            source_files_sha256=evidence["source_files_sha256"],
+        )
 
 
 def test_ply_preserves_all_coordinates_and_truth_colors(tmp_path: Path) -> None:

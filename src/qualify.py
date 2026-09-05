@@ -15,10 +15,10 @@ import numpy as np
 
 try:
     from .data import (
-        POOL_MANIFEST_FORMAT,
         FrozenSyntheticSegment,
         WindowPartition,
-        generation_identity,
+        _atomic_json,
+        load_pool_manifest,
     )
     from .protocol import AJAEProtocol, SyntheticPoolSpec, load_protocol
     from .render import (
@@ -33,10 +33,10 @@ try:
     from .scene import LabelMode, SceneWindow, STUSequence
 except ImportError:  # Direct script execution.
     from data import (  # type: ignore[no-redef]
-        POOL_MANIFEST_FORMAT,
         FrozenSyntheticSegment,
         WindowPartition,
-        generation_identity,
+        _atomic_json,
+        load_pool_manifest,
     )
     from protocol import AJAEProtocol, SyntheticPoolSpec, load_protocol
     from render import (  # type: ignore[no-redef]
@@ -113,65 +113,6 @@ def _write_window_ply(window: SceneWindow, path: Path) -> int:
 def _sha256(path: Path) -> str:
     with path.open("rb") as stream:
         return hashlib.file_digest(stream, "sha256").hexdigest()
-
-
-def _load_manifest(
-    path: Path,
-    pool: SyntheticPoolSpec,
-    protocol: AJAEProtocol,
-) -> Mapping[str, object]:
-    resolved = path.expanduser().resolve(strict=True)
-    artifact_key = {
-        "train": "train_pool_manifest",
-        "validation": "validation_pool_manifest",
-    }[pool.name]
-    expected_file_hash = protocol.artifacts[artifact_key]["sha256"]
-    if expected_file_hash is not None and _sha256(resolved) != expected_file_hash:
-        raise QualificationError(f"{pool.name} manifest bytes differ from protocol")
-    payload = json.loads(resolved.read_text(encoding="utf-8"))
-    expected_generation = generation_identity(protocol, pool)
-    expected_keys = {
-        "format",
-        "schema_version",
-        "pool_name",
-        "generation_identity",
-        "source_sequence_id",
-        "synthetic_sequence_count",
-        "world_count",
-        "window_count",
-        "scientific_content_hash",
-        "segments",
-    }
-    if (
-        set(payload) != expected_keys
-        or payload.get("format") != POOL_MANIFEST_FORMAT
-        or payload.get("schema_version") != protocol.schema_version
-        or payload.get("pool_name") != pool.name
-        or payload.get("generation_identity") != expected_generation
-        or payload.get("source_sequence_id") != pool.source_sequence_id
-        or payload.get("synthetic_sequence_count") != pool.synthetic_sequence_count
-        or payload.get("world_count") != pool.world_count
-        or payload.get("window_count") != pool.total_window_count
-        or not isinstance(payload.get("segments"), list)
-        or len(payload["segments"]) != pool.world_count
-    ):
-        raise QualificationError(f"{pool.name} manifest contradicts the protocol")
-    scientific_hash = hashlib.sha256(
-        json.dumps(
-            {
-                "pool_name": pool.name,
-                "generation_identity": expected_generation,
-                "segment_scientific_hashes": [
-                    item["scientific_content_hash"] for item in payload["segments"]
-                ],
-            },
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode()
-    ).hexdigest()
-    if payload.get("scientific_content_hash") != scientific_hash:
-        raise QualificationError(f"{pool.name} manifest scientific hash differs")
-    return payload
 
 
 def _qualify_pool(
@@ -405,7 +346,7 @@ def _qualify_pool(
                 f"synthetic sequence {sequence_index} has invalid online outputs"
             )
     return {
-        "generation_identity": generation_identity(protocol, pool),
+        "generation_identity": manifest["generation_identity"],
         "world_count": len(observed_worlds),
         "anomaly_object_count": total_objects,
         "terminal_visible_world_count": terminal_visible_worlds,
@@ -456,7 +397,7 @@ def _repeat_first_training_segment(
         ray_grid,
         sensor,
         pool.world_seed(0, 0),
-        renderer_identity=generation_identity(protocol, pool),
+        renderer_identity=str(manifest["generation_identity"]),
     )
     path = (protocol.path.parent / str(first["file"])).resolve(strict=True)
     frozen = FrozenSyntheticSegment(path, sequence, str(first["file_sha256"]))
@@ -521,18 +462,24 @@ def qualify_data(
 ) -> dict[str, object]:
     """Run every schema-34 qualification check without loading a model."""
 
+    frozen_target = (
+        protocol.path.parent / str(protocol.artifacts["qualification"]["file"])
+    ).resolve()
+    target = None if output_path is None else output_path.expanduser().resolve()
+    if protocol.status["data_pool_frozen"]:
+        if target == frozen_target:
+            raise QualificationError(
+                "rechecks cannot replace frozen qualification evidence"
+            )
+    elif target is None:
+        target = frozen_target
+    if target is not None and target.exists():
+        raise FileExistsError(target)
+
     train_manifest_path = protocol.pool_manifest_path("train")
     validation_manifest_path = protocol.pool_manifest_path("validation")
-    train_manifest = _load_manifest(
-        train_manifest_path,
-        protocol.training_pool,
-        protocol,
-    )
-    validation_manifest = _load_manifest(
-        validation_manifest_path,
-        protocol.validation_pool,
-        protocol,
-    )
+    train_manifest = load_pool_manifest(protocol, protocol.training_pool)
+    validation_manifest = load_pool_manifest(protocol, protocol.validation_pool)
     train_sequence = STUSequence.open(
         data_root,
         protocol=protocol,
@@ -654,20 +601,9 @@ def qualify_data(
             )
         },
     }
-    target = (
-        (
-            protocol.path.parent / str(protocol.artifacts["qualification"]["file"])
-        ).resolve()
-        if output_path is None
-        else output_path.expanduser().resolve()
-    )
-    target.parent.mkdir(parents=True, exist_ok=True)
-    temporary = target.with_suffix(target.suffix + ".tmp")
-    temporary.write_text(
-        json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-    temporary.replace(target)
+    # Frozen rechecks are read-only unless the caller chooses a new report path.
+    if target is not None:
+        _atomic_json(target, result)
     return result
 
 
@@ -677,7 +613,11 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--data-root", required=True, type=Path)
     parser.add_argument("--protocol", type=Path, default=PROJECT_ROOT / "protocol.json")
-    parser.add_argument("--output", type=Path)
+    parser.add_argument(
+        "--output",
+        type=Path,
+        help="new report path; frozen rechecks default to no write",
+    )
     parser.add_argument("--ply-directory", type=Path)
     return parser
 

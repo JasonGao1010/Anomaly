@@ -9,6 +9,7 @@ import io
 import json
 import multiprocessing as mp
 import os
+import tempfile
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -104,8 +105,7 @@ def _canonical_hash(
 
 def _stable_npz(path: Path, arrays: Mapping[str, np.ndarray]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    try:
+    with tempfile.NamedTemporaryFile(dir=path.parent, suffix=".tmp") as temporary:
         with zipfile.ZipFile(
             temporary, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9
         ) as archive:
@@ -121,30 +121,27 @@ def _stable_npz(path: Path, arrays: Mapping[str, np.ndarray]) -> None:
                 info._compresslevel = 9
                 info.external_attr = 0o600 << 16
                 archive.writestr(info, buffer.getvalue())
-        os.replace(temporary, path)
-    finally:
-        if temporary.exists():
-            temporary.unlink()
+        temporary.flush()
+        # Publish atomically without replacing an existing observation or prediction.
+        os.link(temporary.name, path)
 
 
 def _atomic_json(path: Path, payload: Mapping[str, object]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    try:
-        temporary.write_text(
+    with tempfile.NamedTemporaryFile(
+        mode="w", encoding="utf-8", dir=path.parent, suffix=".tmp"
+    ) as temporary:
+        temporary.write(
             json.dumps(
                 payload,
                 ensure_ascii=False,
                 indent=2,
                 sort_keys=True,
             )
-            + "\n",
-            encoding="utf-8",
+            + "\n"
         )
-        os.replace(temporary, path)
-    finally:
-        if temporary.exists():
-            temporary.unlink()
+        temporary.flush()
+        os.link(temporary.name, path)
 
 
 @dataclass(frozen=True, slots=True)
@@ -222,21 +219,47 @@ class PredictionBatch:
             or np.any(self.source_slot < 0)
         ):
             raise DataProtocolError("prediction point identities leave their window")
-        for array in (self.source_frame, self.source_slot, self.anomaly_score):
+        identities = (self.source_frame.astype(np.int64) << 32) | self.source_slot
+        if count == 0 or np.unique(identities).size != count:
+            raise DataProtocolError(
+                "prediction point identities are empty or duplicated"
+            )
+        for name in ("source_frame", "source_slot", "anomaly_score"):
+            array = getattr(self, name).copy()
             array.setflags(write=False)
+            object.__setattr__(self, name, array)
 
     @classmethod
     def from_window(cls, window: SceneWindow, scores: np.ndarray) -> "PredictionBatch":
         values = np.asarray(scores, dtype=np.float32)
         if values.shape != (window.points.count,):
             raise DataProtocolError("a model must score every point in the window")
-        return cls(
+        result = cls(
             window.observation_sequence_id,
             window.current_frame_id,
             window.points.source_frame.copy(),
             window.points.source_slot.copy(),
             values.copy(),
         )
+        result.validate_window(window)
+        return result
+
+    def validate_window(self, window: SceneWindow) -> None:
+        """Require the complete canonical input rows, not a self-consistent subset."""
+
+        if not isinstance(window, SceneWindow):
+            raise TypeError("prediction verification requires the actual SceneWindow")
+        if (
+            self.observation_sequence_id != window.observation_sequence_id
+            or self.window_current_frame != window.current_frame_id
+            or self.anomaly_score.shape != (window.points.count,)
+            or not np.array_equal(self.source_frame, window.points.source_frame)
+            or not np.array_equal(self.source_slot, window.points.source_slot)
+            or not np.isfinite(self.anomaly_score).all()
+        ):
+            raise DataProtocolError(
+                "prediction does not match every input window point in row order"
+            )
 
     @property
     def online_mask(self) -> np.ndarray:
@@ -244,9 +267,10 @@ class PredictionBatch:
         result.setflags(write=False)
         return result
 
-    def save(self, path: Path) -> dict[str, object]:
+    def save(self, path: Path, *, window: SceneWindow) -> dict[str, object]:
         """Persist every point score; no historical observation may be discarded."""
 
+        self.validate_window(window)
         arrays = {
             "source_frame": self.source_frame,
             "source_slot": self.source_slot,
@@ -278,6 +302,7 @@ class PredictionBatch:
         cls,
         path: Path,
         *,
+        window: SceneWindow,
         expected_sha256: str | None = None,
     ) -> "PredictionBatch":
         """Load one complete-window prediction after content verification."""
@@ -315,13 +340,15 @@ class PredictionBatch:
             or content_hash != _prediction_content_hash(metadata, arrays)
         ):
             raise DataProtocolError("prediction metadata or content hash differs")
-        return cls(
+        result = cls(
             str(metadata["synthetic_or_raw_sequence_id"]),
             int(metadata["window_current_frame"]),
             arrays["source_frame"],
             arrays["source_slot"],
             arrays["anomaly_score"],
         )
+        result.validate_window(window)
+        return result
 
 
 def _prediction_content_hash(
@@ -710,7 +737,12 @@ class FrozenSyntheticSegment:
             yield self.window(int(start))
 
 
-def generation_identity(protocol: AJAEProtocol, pool: SyntheticPoolSpec) -> str:
+def generation_identity(
+    protocol: AJAEProtocol,
+    pool: SyntheticPoolSpec,
+    *,
+    source_files_sha256: Mapping[str, str] | None = None,
+) -> str:
     """Bind a pool to its scientific rules, inputs, and rendering source code."""
 
     support = protocol.artifacts["qualified_support_pools"][
@@ -738,6 +770,8 @@ def generation_identity(protocol: AJAEProtocol, pool: SyntheticPoolSpec) -> str:
         "support_pool_sha256": support["sha256"],
         "source_files_sha256": {
             name: _sha256(PROJECT_ROOT / name)
+            if source_files_sha256 is None
+            else source_files_sha256[name]
             for name in ("src/data.py", "src/render.py", "src/scene.py")
         },
     }
@@ -750,6 +784,220 @@ def generation_identity(protocol: AJAEProtocol, pool: SyntheticPoolSpec) -> str:
             default=lambda value: dict(value),
         ).encode("utf-8")
     ).hexdigest()
+
+
+def _frozen_qualification(protocol: AJAEProtocol) -> Mapping[str, object]:
+    """Read the original evidence by its pinned bytes; never refresh it in place."""
+
+    record = protocol.artifacts["qualification"]
+    path = protocol.path.parent / str(record["file"])
+    if (
+        not path.is_file()
+        or record["sha256"] is None
+        or _sha256(path) != record["sha256"]
+    ):
+        raise DataProtocolError("frozen qualification bytes differ from protocol")
+    result = json.loads(path.read_text(encoding="utf-8"))
+    if (
+        result.get("format") != "ajae-schema34-data-qualification"
+        or result.get("schema_version") != protocol.schema_version
+        or result.get("passed") is not True
+        or result.get("model_independent") is not True
+        or result.get("checks")
+        != {name: True for name in protocol.qualification["required_checks"]}
+    ):
+        raise DataProtocolError(
+            "frozen qualification does not certify the required checks"
+        )
+    for name in ("train", "validation"):
+        record = protocol.artifacts[f"{name}_pool_manifest"]
+        if (
+            result["inputs"].get(f"{name}_manifest") != record["file"]
+            or result["inputs"].get(f"{name}_manifest_sha256") != record["sha256"]
+        ):
+            raise DataProtocolError("qualification and frozen manifests disagree")
+    return result
+
+
+def load_pool_manifest(
+    protocol: AJAEProtocol, pool: SyntheticPoolSpec
+) -> Mapping[str, object]:
+    """Verify the authoritative manifest and every declared segment before use."""
+
+    qualification = (
+        _frozen_qualification(protocol) if protocol.status["data_pool_frozen"] else None
+    )
+    path = protocol.pool_manifest_path(pool.name)
+    expected_hash = protocol.artifacts[f"{pool.name}_pool_manifest"]["sha256"]
+    if not path.is_file() or (
+        expected_hash is not None and _sha256(path) != expected_hash
+    ):
+        raise DataProtocolError(f"{pool.name} manifest bytes differ from protocol")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    # Generation provenance belongs to the frozen evidence, not today's consumer code.
+    expected_generation = generation_identity(
+        protocol,
+        pool,
+        source_files_sha256=None
+        if qualification is None
+        else qualification["source_files_sha256"],
+    )
+    if (
+        set(payload)
+        != {
+            "format",
+            "schema_version",
+            "pool_name",
+            "generation_identity",
+            "source_sequence_id",
+            "synthetic_sequence_count",
+            "world_count",
+            "window_count",
+            "scientific_content_hash",
+            "segments",
+        }
+        or payload.get("format") != POOL_MANIFEST_FORMAT
+        or payload.get("schema_version") != protocol.schema_version
+        or payload.get("pool_name") != pool.name
+        or payload.get("generation_identity") != expected_generation
+        or payload.get("source_sequence_id") != pool.source_sequence_id
+        or payload.get("synthetic_sequence_count") != pool.synthetic_sequence_count
+        or payload.get("world_count") != pool.world_count
+        or payload.get("window_count") != pool.total_window_count
+        or not isinstance(payload.get("segments"), list)
+        or len(payload["segments"]) != pool.world_count
+    ):
+        raise DataProtocolError(f"{pool.name} manifest contradicts the protocol")
+    scientific_hash = hashlib.sha256(
+        json.dumps(
+            {
+                "pool_name": pool.name,
+                "generation_identity": expected_generation,
+                "segment_scientific_hashes": [
+                    item["scientific_content_hash"] for item in payload["segments"]
+                ],
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+    if payload.get("scientific_content_hash") != scientific_hash:
+        raise DataProtocolError(f"{pool.name} manifest scientific hash differs")
+    worlds: set[str] = set()
+    physical_worlds: set[str] = set()
+    for index, record in enumerate(payload["segments"]):
+        sequence_index, segment_index = divmod(index, len(pool.segments))
+        span = pool.segments[segment_index]
+        expected = {
+            "synthetic_sequence_id": pool.synthetic_sequence_id(sequence_index),
+            "synthetic_sequence_index": sequence_index,
+            "segment_index": segment_index,
+            "seed": pool.world_seed(sequence_index, segment_index),
+            "frame_range_inclusive": [span.start, span.stop - 1],
+            "window_count": len(pool.window_starts(segment_index)),
+            "file": _segment_path(
+                Path(pool.output_directory), sequence_index, segment_index
+            ).as_posix(),
+        }
+        if (
+            set(record)
+            != set(expected)
+            | {
+                "file_sha256",
+                "scientific_content_hash",
+                "world_identity",
+                "world_content_identity",
+                "changed_slot_count",
+            }
+            or any(record.get(key) != value for key, value in expected.items())
+            or type(record["changed_slot_count"]) is not int
+            or record["changed_slot_count"] < 1
+            or record["world_identity"] in worlds
+            or record["world_content_identity"] in physical_worlds
+        ):
+            raise DataProtocolError(
+                "manifest segment order, identity, seed, or boundary differs"
+            )
+        worlds.add(record["world_identity"])
+        physical_worlds.add(record["world_content_identity"])
+        path = protocol.path.parent / record["file"]
+        if not path.is_file() or _sha256(path) != record["file_sha256"]:
+            raise DataProtocolError(
+                f"segment file differs from its manifest: {record['file']}"
+            )
+    return payload
+
+
+class FrozenWindowDataset:
+    """Training/validation input whose constructor verifies both frozen pools."""
+
+    def __init__(
+        self, data_root: Path, protocol: AJAEProtocol, *, pool_name: str
+    ) -> None:
+        if (
+            not protocol.status["data_pool_frozen"]
+            or not protocol.status["training_allowed"]
+        ):
+            raise DataProtocolError("training data must be frozen and qualified")
+        self.pool = _pool_spec(protocol, pool_name)
+        # No window is exposed until the qualification, both manifests, and all files pass.
+        manifests = {
+            pool.name: load_pool_manifest(protocol, pool)
+            for pool in (protocol.training_pool, protocol.validation_pool)
+        }
+        self.manifest = manifests[pool_name]
+        self.protocol = protocol
+        self.source_sequence = STUSequence.open(
+            data_root,
+            protocol=protocol,
+            partition="train",
+            sequence_id=self.pool.source_sequence_id,
+            label_mode=LabelMode.REQUIRED,
+        )
+        self._windows = tuple(
+            (index, start)
+            for index, record in enumerate(self.manifest["segments"])
+            for start in self.pool.window_starts(record["segment_index"])
+        )
+        self._segment_index: int | None = None
+        self._segment: FrozenSyntheticSegment | None = None
+
+    @property
+    def gradient_updates_allowed(self) -> bool:
+        return self.pool.name == "train"
+
+    def __len__(self) -> int:
+        return len(self._windows)
+
+    def __getitem__(self, index: int) -> SceneWindow:
+        if type(index) is not int or not 0 <= index < len(self):
+            raise IndexError(index)
+        segment_index, start = self._windows[index]
+        if self._segment_index != segment_index:
+            record = self.manifest["segments"][segment_index]
+            segment = FrozenSyntheticSegment(
+                self.protocol.path.parent / record["file"],
+                self.source_sequence,
+                record["file_sha256"],
+            )
+            if any(
+                segment.metadata[key] != record[key]
+                for key in (
+                    "synthetic_sequence_id",
+                    "synthetic_sequence_index",
+                    "segment_index",
+                    "seed",
+                    "world_identity",
+                    "world_content_identity",
+                    "scientific_content_hash",
+                )
+            ):
+                raise DataProtocolError(
+                    "manifest and loaded segment identities disagree"
+                )
+            self._segment = segment
+            self._segment_index = segment_index
+        return self._segment.window(start)
 
 
 def _pool_spec(protocol: AJAEProtocol, name: str) -> SyntheticPoolSpec:
@@ -998,6 +1246,19 @@ def build_pool_manifest(
     """Bind every predeclared segment only after the complete pool exists."""
 
     pool_spec = _pool_spec(protocol, pool_name)
+    target = (
+        protocol.pool_manifest_path(pool_name)
+        if manifest_path is None
+        else manifest_path.expanduser().resolve()
+    )
+    if protocol.status["data_pool_frozen"] and target == protocol.pool_manifest_path(
+        pool_name
+    ):
+        raise DataProtocolError(
+            "frozen manifests are read-only; load and verify them instead"
+        )
+    if target.exists():
+        raise FileExistsError(target)
     output = (
         (protocol.path.parent / pool_spec.output_directory).resolve()
         if output_directory is None
@@ -1083,11 +1344,6 @@ def build_pool_manifest(
         "scientific_content_hash": scientific_hash,
         "segments": records,
     }
-    target = (
-        protocol.pool_manifest_path(pool_name)
-        if manifest_path is None
-        else manifest_path.expanduser().resolve()
-    )
     _atomic_json(target, manifest)
     return manifest
 
@@ -1105,9 +1361,9 @@ def _indices(text: str | None) -> tuple[int, ...] | None:
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Generate schema-34 sparse synthetic data segments"
+        description="Generate or verify schema-34 frozen window data"
     )
-    parser.add_argument("action", choices=("generate", "manifest"))
+    parser.add_argument("action", choices=("generate", "manifest", "check"))
     parser.add_argument("--pool", required=True, choices=("train", "validation"))
     parser.add_argument("--data-root", type=Path)
     parser.add_argument("--protocol", type=Path, default=PROJECT_ROOT / "protocol.json")
@@ -1137,7 +1393,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             workers=args.workers,
         )
         print(json.dumps({"generated_segments": len(records)}, sort_keys=True))
-    else:
+    elif args.action == "manifest":
         manifest = build_pool_manifest(
             protocol,
             args.pool,
@@ -1150,6 +1406,25 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "world_count": manifest["world_count"],
                     "window_count": manifest["window_count"],
                     "scientific_content_hash": manifest["scientific_content_hash"],
+                },
+                sort_keys=True,
+            )
+        )
+    else:
+        if args.data_root is None:
+            raise DataProtocolError("training-input verification requires --data-root")
+        dataset = FrozenWindowDataset(args.data_root, protocol, pool_name=args.pool)
+        print(
+            json.dumps(
+                {
+                    "pool": dataset.pool.name,
+                    "window_count": len(dataset),
+                    "gradient_updates_allowed": dataset.gradient_updates_allowed,
+                    "both_frozen_pools_verified": True,
+                    "first_window_current_frame": dataset[0].current_frame_id,
+                    "last_window_current_frame": dataset[
+                        len(dataset) - 1
+                    ].current_frame_id,
                 },
                 sort_keys=True,
             )

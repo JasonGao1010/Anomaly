@@ -48,7 +48,16 @@
       "partition": "val",
       "role": "sealed_until_model_structure_training_recipe_hyperparameters_and_selection_rule_are_fixed",
       "labels_available": true,
-      "sequence_ids": [125, 137, 138, 139, 140, 141, 142, 143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 169]
+      "sequence_ids": [125, 137, 138, 139, 140, 141, 142, 143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 169],
+      "qualitative_inspection": {
+        "user_authorized": true,
+        "sequence_id": 125,
+        "source_frame_range_inclusive": [0, 18],
+        "output_frame_range_inclusive": [4, 18],
+        "window_count": 15,
+        "purpose": "truth_colored_visual_inspection_only_no_model_inference_or_metrics",
+        "ply_directory": "artifacts/ply/real/125"
+      }
     },
     "hidden_test": {
       "partition": "test",
