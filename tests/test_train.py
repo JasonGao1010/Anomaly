@@ -345,3 +345,27 @@ def test_atomic_progress_replaces_only_mutable_file(tmp_path):
     write_progress(path, {"next_position": 1000})
     assert json.loads(path.read_text()) == {"next_position": 1000}
     assert list(tmp_path.iterdir()) == [path]
+
+
+def test_user_finish_keeps_complete_epoch_and_rejects_partial_training_or_monitoring():
+    from src.train import finish_full_training
+
+    state = {
+        "phase": "training",
+        "status": "running",
+        "completed_epochs": 7,
+        "next_position": 0,
+        "monitor_candidates": list(range(7)),
+        "planned_attempts": 21560,
+        "successful_updates": 21559,
+    }
+    for change in ({"next_position": 1}, {"phase": "monitor"}, {"completed_epochs": 8}):
+        with pytest.raises(ValueError, match="complete trained and monitored epoch"):
+            finish_full_training({**state, **change})
+    finish_full_training(state)
+    assert state["phase"] == "selection"
+    assert state["status"] == "user_requested_epoch_stop"
+    assert state["user_stop_after_epoch"] == 7
+    assert (state["planned_attempts"], state["successful_updates"]) == (21560, 21559)
+    finish_full_training(state)  # Resuming final evaluation cannot restart training.
+    assert state["status"] == "user_requested_epoch_stop"

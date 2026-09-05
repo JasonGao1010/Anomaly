@@ -173,6 +173,23 @@ def choose_candidate(candidates):
     return min(close, key=lambda c: (c["FPR95"], c["normal_fraction"], c["epoch"]))
 
 
+def finish_full_training(state):
+    """An explicit user stop can select only fully trained and monitored epochs."""
+    if (
+        state["phase"] not in ("training", "selection")
+        or state["next_position"] != 0
+        or state["completed_epochs"] < 1
+        or len(state["monitor_candidates"]) != state["completed_epochs"]
+    ):
+        raise ValueError("user finish requires a complete trained and monitored epoch")
+    if state["phase"] == "training":
+        state.update(
+            phase="selection",
+            status="user_requested_epoch_stop",
+            user_stop_after_epoch=state["completed_epochs"],
+        )
+
+
 class FullResources:
     """Check actual host limits and the persistent training/monitoring time budget."""
 
@@ -969,7 +986,9 @@ def run(data_root: Path, output: Path, *, group=None, initial=None, workers=1):
     return result
 
 
-def run_fulltrain(data_root, output, initial, *, resume=False, updated_code=False):
+def run_fulltrain(
+    data_root, output, initial, *, resume=False, updated_code=False, finish=False
+):
     """Execute the predeclared full-pool training and two-stage candidate selection."""
     from .evaluate import (
         assert_unchanged,
@@ -988,6 +1007,8 @@ def run_fulltrain(data_root, output, initial, *, resume=False, updated_code=Fals
         raise RuntimeError("the unchanged LitePT implementation requires CUDA")
     if output.exists() != resume:
         raise FileExistsError("use a new full-training directory, or explicit --resume")
+    if finish and not resume:
+        raise ValueError("user finish requires an existing full-training checkpoint")
     if any(
         output.resolve().is_relative_to((PROJECT_ROOT / p).resolve())
         for p in ("runs/learn", "runs/coverage", "runs/validation", "runs/transfer")
@@ -1195,6 +1216,8 @@ def run_fulltrain(data_root, output, initial, *, resume=False, updated_code=Fals
             ],
         }
     del payload
+    if finish:
+        finish_full_training(state)
     gc.collect()
     if resume:
         records = []
@@ -1702,11 +1725,18 @@ if __name__ == "__main__":
         action="store_true",
         help="continue the same full-training state and cumulative budget",
     )
+    parser.add_argument(
+        "--finish",
+        action="store_true",
+        help="end full training at a saved complete epoch and run final selection",
+    )
     args = parser.parse_args()
     if args.resume and not args.full:
         parser.error("--resume requires --full")
     if args.updated_code and not args.resume:
         parser.error("--updated-code requires --resume")
+    if args.finish and not args.resume:
+        parser.error("--finish requires --resume")
     if args.full:
         if args.coverage:
             parser.error("--full and --coverage are separate experiments")
@@ -1716,6 +1746,7 @@ if __name__ == "__main__":
             args.initial,
             resume=args.resume,
             updated_code=args.updated_code,
+            finish=args.finish,
         )
     elif args.coverage:
         run_coverage(
