@@ -94,6 +94,23 @@ def test_diagnostic_strata_use_fixed_half_open_boundaries():
         diagnostic_bin(5, 50.001)
 
 
+def test_intensity_distribution_matches_exact_weighted_order_statistics():
+    from src.intensity import distribution, QUANTILES
+
+    values = np.array([0, 0, 1 / 3500, 1 / 3500, 0.1234567, 2], np.float32)
+    result = distribution(values, (0.0, 2.0))
+    np.testing.assert_allclose(
+        list(result["quantiles"].values()),
+        np.quantile(values.astype(np.float64), QUANTILES),
+        rtol=0,
+        atol=1e-15,
+    )
+    assert result["unique_count"] == 4
+    assert result["zero_fraction"] == 2 / 6
+    assert result["repeated_point_fraction"] == 4 / 6
+    assert result["grid_1_over_3500_fraction"] == 5 / 6
+
+
 def test_normal_filter_ignores_frame_eligibility_and_keeps_fixed_threshold():
     points = np.zeros((6, 3), dtype=np.float32)
     points[:, 0] = (2.5, 50, 2.49, 50.01, 10, 10)

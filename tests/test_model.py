@@ -100,6 +100,77 @@ def test_joint_voxels_match_independent_all_point_reference() -> None:
     )
 
 
+def test_scan_intensity_permutation_is_label_free_and_updates_both_inputs():
+    from collections import OrderedDict
+    from src.intensity import permute_window, scan_permutation
+
+    window = _window(40)
+    inputs = joint_voxelize(window)
+    sources = [member.source for member in window.frames]
+    last = sources[-1]
+    next_source = make_source_frame(
+        5, last.xyzi, last.lidar_pose, last.labels, partition="train", sequence_id=206
+    )
+    overlapping = assemble_window(
+        SequenceSpec("train", 206, "fixture", True, FrameSpan(0, 6)),
+        1,
+        (1, 2, 3, 4, 5),
+        [*sources[1:], next_source],
+        observation_sequence_id=window.observation_sequence_id,
+    )
+    cache = OrderedDict()
+    for seed in (0, 1, 2):
+        changed, prepared = permute_window(window, inputs, seed, cache)
+        reference = joint_voxelize(changed)
+        for field in fields(inputs):
+            actual = getattr(prepared, field.name)
+            if isinstance(actual, torch.Tensor):
+                assert torch.equal(actual, getattr(reference, field.name))
+        for name in ("coordinates", "grid_coord", "point_to_voxel"):
+            assert torch.equal(getattr(inputs, name), getattr(prepared, name))
+        assert torch.equal(inputs.features[:, 4:], prepared.features[:, 4:])
+        assert torch.equal(inputs.point_features[:, :3], prepared.point_features[:, :3])
+        assert changed.labels is window.labels
+        assert not torch.equal(
+            inputs.point_features[:, 3], prepared.point_features[:, 3]
+        )
+        for original, shuffled in zip(window.frames, changed.frames, strict=True):
+            source = original.source
+            slots = source.real_slots
+            bins = np.floor(
+                np.linalg.norm(source.xyzi[slots, :3], axis=1).astype(np.float64) / 2.5
+            )
+            for group in np.unique(bins):
+                np.testing.assert_array_equal(
+                    np.sort(source.xyzi[slots[bins == group], 3]),
+                    np.sort(shuffled.source.xyzi[slots[bins == group], 3]),
+                )
+            first = scan_permutation(
+                source.xyzi,
+                slots,
+                window.observation_sequence_id,
+                source.frame_id,
+                seed,
+            )
+            np.testing.assert_array_equal(
+                first,
+                scan_permutation(
+                    source.xyzi,
+                    slots,
+                    window.observation_sequence_id,
+                    source.frame_id,
+                    seed,
+                ),
+            )
+        repeated, _ = permute_window(window, inputs, seed, OrderedDict())
+        np.testing.assert_array_equal(repeated.points.features, changed.points.features)
+        shifted, _ = permute_window(
+            overlapping, joint_voxelize(overlapping), seed, OrderedDict()
+        )
+        for a, b in zip(changed.frames[1:], shifted.frames[:4], strict=True):
+            np.testing.assert_array_equal(a.source.xyzi, b.source.xyzi)
+
+
 def test_labels_and_absolute_identities_never_enter_features() -> None:
     labelled = _window()
     unlabelled = _window(start=70, labels=False)
