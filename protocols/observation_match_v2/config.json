@@ -1,6 +1,6 @@
 {
   "experiment": "AJAE-ObservationMatch-v2",
-  "status": "generation_rules_fixed",
+  "status": "samples_completed",
   "baseline_commit": "69b10a04a509f9d1f6ec91310aadc0f568d09de0",
   "scientific_question": "Does a joint redesign of synthetic observation distributions improve real STU performance with the same model?",
   "interpretation": "multifactor development experiment; not a causal ablation or independent test",
@@ -221,7 +221,10 @@
     "second_round_seed_offset": 100000,
     "output": "runs/generation/v2",
     "calibration": "Round 1 established feasible candidate combinations; round 2 replaces irrevocable greedy selection with the fixed width-32 combination search. Physical generation parameters remain unchanged.",
-    "completed_rounds": [1, 2],
+    "completed_rounds": [
+      1,
+      2
+    ],
     "decision": "Core visibility intervals and all three far cells are covered on both sources in round 2. Freeze these rules; no third pilot. Formal pools must report actual world coverage and remaining discrepancies.",
     "round_2_profiles": "profiles/v2/pilot_2",
     "remaining_limits": "Few-point 35-50 m and 20-99 point 20-35 m cells each have only one pilot world per side. One proxy per world does not cover real multi-instance observations. Validation background proximity and geometry reliability remain different from real observations.",
@@ -300,7 +303,8 @@
     "synthetic_plateau_stopping": false,
     "legacy_six_hour_stop": false,
     "normal_resampling": null,
-    "normal_loss_weight_note": "about half empty windows implies nominal normal/anomaly coefficients near 75/25; keep the original loss"
+    "normal_loss_weight_note": "about half empty windows implies nominal normal/anomaly coefficients near 75/25; keep the original loss",
+    "status": "deferred_by_user; settings below are the previous proposal, not an executed or newly approved model design"
   },
   "monitor": {
     "real_qualified_per_sequence": 8,
@@ -334,7 +338,8 @@
     "official": "unchanged STU range, semantic and frame eligibility; global point aggregation",
     "score_storage": "all actual window points, lossless float32 and original identities",
     "baseline_real": "reuse epoch_07 complete real predictions; preserve original 3.475451% AP",
-    "baseline_checkpoint_sha256": "eb84e5383e9134968a3421749dd7e2f5b04248e631772eed0befb5486e44a7bb"
+    "baseline_checkpoint_sha256": "eb84e5383e9134968a3421749dd7e2f5b04248e631772eed0befb5486e44a7bb",
+    "status": "not_executed; no v2 checkpoint exists"
   },
   "paths": {
     "data": "artifacts/data/v2",
@@ -345,11 +350,60 @@
   "resources": {
     "host_drive": "E",
     "reserve": "max(5% total capacity, 10 GiB)",
-    "status": "formal data preparation allowed within its bounded budget; full training awaits a complete E capacity budget",
+    "status": "sample generation completed on E; any future model design requires a new training and evaluation budget",
     "storage_policy": "all outputs remain on E; no C directory or symlink",
     "old_artifact_cleanup_bytes": 22125185123,
     "unused_dependency_cleanup_bytes": 12785807949,
     "v1_sample_files": "all 220 restored and retained",
     "preserved": "v1 epoch_07, initial.pt, full real predictions, normal201 predictions, all reports, profiles and manifests"
+  },
+  "execution_scope": "User stopped this round after formal sample generation; model redesign precedes any training.",
+  "completion": {
+    "stop_reason": "user_requested_end_after_training_and_validation_sample_generation",
+    "generation_commit": "abc64f0",
+    "formal_profile": "stopped by user scope change after 12 of 32 training worlds; 0 of 8 validation worlds; no complete formal CSV profile",
+    "model_updates": 0,
+    "model_forwards": 0,
+    "preserved_partial_profile": "runs/profiles/v2/train; completed worlds only; interrupted outputs removed",
+    "pools": {
+      "train": {
+        "manifest": "artifacts/data/v2/train/manifest.json",
+        "manifest_sha256": "2ad121203b732e0b0f86061f25499578670d619cc430ca4b5ddb7a5d4893ec6f",
+        "worlds": 32,
+        "frames": 14368,
+        "windows": 14240,
+        "generation_identity": "a063791c84f6d409dc4ca148915bfcf806431742fac47e10ddea5d28502ee390",
+        "visibility": {
+          "00000": 7234,
+          "11111": 4747,
+          "partial": 2259
+        },
+        "current_absent_history_present": 1123,
+        "required_far_cell_worlds": [
+          21,
+          5,
+          5
+        ]
+      },
+      "validation": {
+        "manifest": "artifacts/data/v2/validation/manifest.json",
+        "manifest_sha256": "5b6dbb6e262b120fe61b12a8ffc10e683360dd3d4fdf456657c062c404e805fc",
+        "worlds": 8,
+        "frames": 5456,
+        "windows": 5424,
+        "generation_identity": "a063791c84f6d409dc4ca148915bfcf806431742fac47e10ddea5d28502ee390",
+        "visibility": {
+          "00000": 2704,
+          "11111": 1750,
+          "partial": 970
+        },
+        "current_absent_history_present": 556,
+        "required_far_cell_worlds": [
+          6,
+          4,
+          3
+        ]
+      }
+    }
   }
 }

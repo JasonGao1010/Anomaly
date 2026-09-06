@@ -1282,6 +1282,15 @@ def profile_pools(args, disk):
         path = directory / "spec.json"
         if path.exists():
             old = json.loads(path.read_text())
+            if not args.observation_pools:
+                # These two descriptors were implicit in the original v1 profile.
+                old.setdefault("pool_format", manifest["format"])
+                old.setdefault("expected_whole_window_unseen", 20 if pool.name == "train" else 10)
+            # Storage moves do not change the recorded observations or metric definitions.
+            old["manifest"], old["real_profile"] = spec["manifest"], spec["real_profile"]
+            for key, record in old["records"].items():
+                if key in records:
+                    record["file"] = records[key]["file"]
             if any(
                 old[k] != spec[k] for k in spec if k not in ("workers", "host_disk")
             ):

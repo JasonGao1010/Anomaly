@@ -3135,6 +3135,148 @@ def compare_profiles(synthetic, real, output, directory):
             raise ValueError("saved comparison differs")
     else:
         _atomic_json(path, comparison)
+    if (
+        populations[0]["definitions"].get("pool_format")
+        == "ajae-observation-match-pool"
+    ):
+        root = Path(__file__).resolve().parents[1]
+        targets = json.loads(
+            (root / "protocols/observation_match_v2/config.json").read_text()
+        )["targets"]
+        rows = []
+        for name, current in synthetic.items():
+            baseline = json.loads(
+                (root / "runs/profiles/v1" / name / "summary.json").read_text()
+            )
+            sides = (baseline, current, real)
+
+            def fraction_row(factor, condition, scope, measures, target, limits=None):
+                # Numerators retain their own unit; worlds/sequences are coverage, not roads.
+                values = [m[0] / m[1] if m[1] else None for m in measures]
+                rows.append(
+                    [
+                        name,
+                        factor,
+                        condition,
+                        scope,
+                        *[
+                            v
+                            for measure, value in zip(measures, values)
+                            for v in (*measure, value)
+                        ],
+                        target,
+                        limits[0] if limits else None,
+                        limits[1] if limits else None,
+                        values[1] - target if values[1] is not None else None,
+                        "缺覆盖"
+                        if measures[1][0] == 0 and measures[2][0] > 0
+                        else "目标范围内"
+                        if limits and limits[0] <= values[1] <= limits[1]
+                        else "仍超出目标范围"
+                        if limits
+                        else "报告实际差异；不要求精确相等",
+                    ]
+                )
+
+            visibility_key = "E02|visibility_pattern|complete_windows|all"
+            for condition, codes in (
+                ("00000", (0,)),
+                ("11111", (31,)),
+                ("partial", tuple(range(1, 31))),
+                ("current_absent_history_present", tuple(range(2, 31, 2))),
+            ):
+                measures = []
+                for side in sides:
+                    d = data(side, visibility_key)
+                    count = sum(d["category_counts"].get(str(c), 0) for c in codes)
+                    covered = sum(
+                        any(
+                            data(s, visibility_key)["category_counts"].get(str(c), 0)
+                            for c in codes
+                        )
+                        for s in side["sequences"].values()
+                    )
+                    measures.append((count, d["denominator"], covered))
+                fraction_row(
+                    "E02",
+                    condition,
+                    "完整五帧窗口",
+                    measures,
+                    measures[2][0] / measures[2][1],
+                    targets["visibility"].get(condition),
+                )
+            for a in range(4):
+                for b in range(4):
+                    measures = []
+                    for side in sides:
+                        joint = side["joint"]["official_count_distance"]
+                        cell = joint[f"{a}|{b}"]
+                        measures.append(
+                            (
+                                cell["frames"],
+                                sum(v["frames"] for v in joint.values()),
+                                cell["sequence_count"],
+                            )
+                        )
+                    fraction_row(
+                        "G01",
+                        f"count_bin_{a}|distance_bin_{b}",
+                        "完整五帧区间的官方合格当前帧；分箱沿用固定定义",
+                        measures,
+                        targets["qualified_joint_probability"][a][b],
+                    )
+            for factor, condition, key in (
+                (
+                    "C04",
+                    "at_least_3_normal_neighbors_within_0.5m",
+                    "C04|background_intensity_std|all_frames|all",
+                ),
+                ("B05", "reliable_visible_geometry", "B05|length|all_frames|all"),
+            ):
+                measures = [
+                    (
+                        data(s, key)["n"],
+                        data(s, key)["denominator"],
+                        data(s, key)["sequence_count"],
+                    )
+                    for s in sides
+                ]
+                fraction_row(
+                    factor,
+                    condition,
+                    "全部异常点" if factor == "C04" else "实例×帧记录",
+                    measures,
+                    measures[2][0] / measures[2][1],
+                )
+        writer.table(
+            "targets",
+            "v1、v2与真实参照的主要目标及残余差异",
+            "不新增因素。v2为本目录对应的先导或正式池；五帧指标使用完整窗口，背景与几何另用原单位。比例均为0至1；覆盖数量指世界或真实序列，不指独立道路。",
+            [
+                "池",
+                "因素",
+                "条件",
+                "统计范围",
+                "v1分子",
+                "v1分母",
+                "v1覆盖世界",
+                "v1比例",
+                "v2分子",
+                "v2分母",
+                "v2覆盖世界",
+                "v2比例",
+                "真实分子",
+                "真实分母",
+                "真实覆盖序列",
+                "真实比例",
+                "目标参考比例",
+                "目标下限",
+                "目标上限",
+                "v2减目标",
+                "残余状态",
+            ],
+            rows,
+        )
     writer.close(
         "三侧同口径分布对照",
         "真实侧直接复用runs/profiles/real；两侧合成观测补全同一31项因素。train/和validation/为全量明细，真实明细仍在profiles/real/。",
