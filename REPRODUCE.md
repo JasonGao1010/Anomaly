@@ -1,6 +1,6 @@
 # AJAE 数据协议复现说明
 
-当前主线为 `AJAE-NRE`：使用已完成的 v2 数据训练一个以正常结构为参照的五帧异常模型。接入及必要短检查已完成，正式训练准备启动，尚无新模型的真实性能结论。唯一配方见 `protocols/nre/config.json`；此前的数据生成与交付记录保留在 `protocols/observation_match_v2/config.json`。32 个 206 世界提供 14,240 个训练窗口，8 个 201 世界提供 5,424 个合成验证窗口，样本均不重新生成。schema 34 的 `protocol.json` 继续保存 v1 历史池定义与共同五帧接口。
+当前主线为 `AJAE-NRE`：使用已完成的 v2 数据训练一个以正常结构为参照的五帧异常模型。接入及必要短检查已完成，正式训练已启动，尚无新模型的真实性能结论。实际访问和成功更新记录见 `runs/train/nre/metrics.jsonl`，恢复状态见 `last.pt`，完成状态由 `summary.json` 记录。唯一配方见 `protocols/nre/config.json`；此前的数据生成与交付记录保留在 `protocols/observation_match_v2/config.json`。32 个 206 世界提供 14,240 个训练窗口，8 个 201 世界提供 5,424 个合成验证窗口，样本均不重新生成。schema 34 的 `protocol.json` 继续保存 v1 历史池定义与共同五帧接口。
 
 ## 当前模型与训练
 
