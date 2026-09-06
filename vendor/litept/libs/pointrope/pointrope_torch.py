@@ -14,7 +14,10 @@ class PointROPE(torch.nn.Module):
         self.cache = {}
 
     def get_cos_sin(self, D, seq_len, device, dtype):
-        key = (D, device, dtype)
+        # einsum is autocast-sensitive even though the requested table is float32.
+        # Training tables must never substitute for single-precision evaluation.
+        precision = torch.get_autocast_dtype(device.type) if torch.is_autocast_enabled(device.type) else None
+        key = (D, device, dtype, precision)
         cached = self.cache.get(key)
         if cached is None or cached[0].shape[0] < seq_len:
             # Every position is independent: reuse one growing prefix without changing its values.

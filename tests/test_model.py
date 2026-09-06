@@ -534,3 +534,27 @@ def test_rope_prefix_cache_matches_exact_tables_without_accumulating_lengths():
         assert torch.equal(cos, phase.cos()) and torch.equal(sin, phase.sin())
         assert len(rope.cache) == 1
         assert next(iter(rope.cache.values()))[0].shape[0] <= 2 * max(513, length)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA autocast regression")
+def test_rope_cache_never_carries_training_precision_into_evaluation():
+    from vendor.litept.libs.pointrope.pointrope_torch import PointROPE
+
+    device = torch.device("cuda:0")
+    warm, cold = PointROPE(), PointROPE()
+    with torch.autocast("cuda", dtype=torch.float16):
+        training = warm.get_cos_sin(6, 4096, device, torch.float32)
+    evaluation = warm.get_cos_sin(6, 1024, device, torch.float32)
+    reference = cold.get_cos_sin(6, 1024, device, torch.float32)
+    for actual, expected in zip(evaluation, reference, strict=True):
+        torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+    assert any(
+        not torch.equal(a[:1024], b) for a, b in zip(training, evaluation, strict=True)
+    )
+    with torch.autocast("cuda", dtype=torch.float16):
+        resumed = warm.get_cos_sin(6, 4096, device, torch.float32)
+    assert all(
+        a.data_ptr() == b.data_ptr() and torch.equal(a, b)
+        for a, b in zip(training, resumed, strict=True)
+    )
+    assert len(warm.cache) == 2

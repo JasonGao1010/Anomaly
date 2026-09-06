@@ -430,6 +430,24 @@ def test_real_pooling_includes_startup_and_keeps_normal_only_frames(tmp_path, ki
         )
         assert restored.score_kind == kind
         np.testing.assert_array_equal(restored.anomaly_score, scores)
+        if current == 4:
+            linked = save_window(
+                tmp_path / "reuse",
+                row,
+                window,
+                scores,
+                {},
+                None,
+                {},
+                prediction_from=(
+                    tmp_path / row["prediction"]["file"],
+                    row["prediction"],
+                ),
+            )
+            source = tmp_path / row["prediction"]["file"]
+            destination = tmp_path / "reuse" / linked["prediction"]["file"]
+            assert source.stat().st_ino == destination.stat().st_ino
+            assert linked["current"] == row["current"]
         raw = window.current_frame.source.restore_real(scores[window.current_mask])
         reference.update(points[:, :3], raw, semantic)
         if current == 4:
@@ -453,3 +471,36 @@ def test_real_pooling_includes_startup_and_keeps_normal_only_frames(tmp_path, ki
         == result["normal_without_anomaly_returns"]
     )
     assert "full_history" not in monitor
+
+
+def test_interim_candidate_requires_healthy_completed_monitor_not_final_selection(
+    tmp_path,
+):
+    from src.evaluate import file_hash, nre_candidate
+
+    checkpoint = tmp_path / "visit_14240.pt"
+    checkpoint.write_bytes(b"fixture")
+    plan_path = tmp_path / "plan.json"
+    plan_path.write_text("{}")
+    recipe = {"fixed": True}
+    payload = dict(
+        config=dict(purpose="AJAE-NRE", nre=recipe, voxel_size=0.05),
+        plan_sha256=file_hash(plan_path),
+        model={"running_mean": torch.zeros(2)},
+        state=dict(
+            next_position=0,
+            status="running",
+            planned_attempts=14240,
+            monitor_candidates=[dict(visit=14240, checkpoint=str(checkpoint))],
+        ),
+    )
+    assert nre_candidate(checkpoint, payload, recipe, interim=True) == {}
+    with pytest.raises(FileNotFoundError):
+        nre_candidate(checkpoint, payload, recipe)
+    payload["state"]["next_position"] = 29
+    with pytest.raises(ValueError, match="healthy completed"):
+        nre_candidate(checkpoint, payload, recipe, interim=True)
+    payload["state"]["next_position"] = 0
+    payload["model"]["running_mean"][0] = float("nan")
+    with pytest.raises(ValueError, match="healthy completed"):
+        nre_candidate(checkpoint, payload, recipe, interim=True)

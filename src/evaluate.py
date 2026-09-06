@@ -1061,7 +1061,9 @@ def official_current_scores(prediction, slot_count):
     return result
 
 
-def save_window(output, sample, window, scores, losses, scopes, timings):
+def save_window(
+    output, sample, window, scores, losses, scopes, timings, *, prediction_from=None
+):
     """One bounded writer retains all predictions and only current metric records."""
     begin = time.perf_counter()
     view = sample["view"]
@@ -1075,7 +1077,13 @@ def save_window(output, sample, window, scores, losses, scopes, timings):
         Path("predictions") / directory / f"frame_{sample['current_frame']:06d}.npz"
     )
     batch = PredictionBatch.from_window(window, scores, score_kind=score_kind)
-    prediction = batch.save(output / relative, window=window)
+    if prediction_from is None:
+        prediction = batch.save(output / relative, window=window)
+    else:
+        source, previous = prediction_from
+        (output / relative).parent.mkdir(parents=True, exist_ok=True)
+        os.link(source, output / relative)
+        prediction = dict(previous)
     prediction["file"] = relative.as_posix()
     # A bounded Python writer must not accumulate unbounded host-backed file pages.
     with (output / relative).open("rb") as stream:
@@ -1345,18 +1353,54 @@ def monitor_samples(pool):
     return samples
 
 
-def evaluate_samples(model, dataset, samples, output, *, identity, check_resources):
+def reusable_predictions(directories, model_sha256):
+    """Reuse only completed predictions from the identical model and point task."""
+    result = {}
+    for directory in directories:
+        if not (directory / "summary.json").exists():
+            continue
+        manifest = json.loads((directory / "samples.json").read_text())
+        summary = json.loads((directory / "summary.json").read_text())
+        if (
+            summary["status"] != "completed"
+            or manifest["identity"].get("model_sha256") != model_sha256
+            or manifest["identity"].get("rotary_cache_precision")
+            != "autocast_separated"
+        ):
+            continue
+        for line in (directory / "results.jsonl").read_text().splitlines():
+            row = json.loads(line)
+            key = (row["sequence_id"], row["current_frame"])
+            result.setdefault(key, (directory, row))
+    return result
+
+
+def evaluate_samples(
+    model, dataset, samples, output, *, identity, check_resources, reuse=None
+):
     """The same bounded, zero-update evaluator serves monitoring and full selection."""
     from .train import write_progress
 
     started = time.perf_counter()
     real = identity.get("scope") == "real_val"
+    reuse = reuse or {}
+    overlapping = [
+        (s["sequence_id"], s["current_frame"])
+        for s in samples
+        if (s.get("sequence_id"), s["current_frame"]) in reuse
+    ]
+    recheck = {
+        overlapping[i]
+        for i in (0, len(overlapping) // 2, len(overlapping) - 1)
+        if overlapping
+    }
     score_kind = getattr(model, "score_kind", "probability")
     if score_kind == "logit":
         identity = {
             **identity,
             "score_kind": "logit",
             "normal_observation_threshold": 0.0,
+            "rotary_cache_precision": "autocast_separated",
         }
     manifest = {
         "identity": identity,
@@ -1460,15 +1504,60 @@ def evaluate_samples(model, dataset, samples, output, *, identity, check_resourc
                 inputs = cpu_inputs.to("cuda")
                 torch.cuda.synchronize()
                 transfer_seconds = time.perf_counter() - begin
-                scores, losses, scopes, inference_seconds = predict_window(
-                    model, window, inputs, sample["check_seed"], split_losses=True
-                )
+                key = (sample.get("sequence_id"), sample["current_frame"])
+                reused = reuse.get(key)
+                prediction_from = None
+                if reused:
+                    directory, old = reused
+                    if any(
+                        sample[k] != old[k]
+                        for k in (
+                            "sequence_id",
+                            "current_frame",
+                            "frame_ids",
+                            "check_seed",
+                        )
+                    ):
+                        raise ValueError(
+                            "reused prediction has different input identity"
+                        )
+                    source = directory / old["prediction"]["file"]
+                    prior = PredictionBatch.load(
+                        source,
+                        window=window,
+                        expected_sha256=old["prediction"]["file_sha256"],
+                    )
+                    if prior.score_kind != score_kind:
+                        raise ValueError("reused prediction has a different score kind")
+                    scores, losses, scopes, inference_seconds = (
+                        prior.anomaly_score,
+                        old["loss"],
+                        old["anomaly_loss_scopes"],
+                        0.0,
+                    )
+                    prediction_from = source, old["prediction"]
+                if not reused or key in recheck:
+                    scores, losses, scopes, inference_seconds = predict_window(
+                        model, window, inputs, sample["check_seed"], split_losses=True
+                    )
+                    if reused and not np.array_equal(scores, prior.anomaly_score):
+                        raise ValueError(
+                            "reused and recomputed full-window scores differ"
+                        )
                 timings = {
                     "load_seconds": load_seconds,
                     "prepare_seconds": prepare_seconds,
                     "transfer_seconds": transfer_seconds,
                     "inference_seconds": inference_seconds,
                     "voxel_count": len(inputs.features),
+                    **(
+                        dict(
+                            reused_prediction=str(source),
+                            reuse_rechecked=key in recheck,
+                        )
+                        if reused
+                        else {}
+                    ),
                 }
                 if pending_write is not None:
                     row = pending_write.result()
@@ -1477,7 +1566,15 @@ def evaluate_samples(model, dataset, samples, output, *, identity, check_resourc
                     )
                     rows.append(row)
                 pending_write = writer.submit(
-                    save_window, output, sample, window, scores, losses, scopes, timings
+                    save_window,
+                    output,
+                    sample,
+                    window,
+                    scores,
+                    losses,
+                    scopes,
+                    timings,
+                    prediction_from=prediction_from,
                 )
                 del inputs, cpu_inputs, window, scores
                 if (index + 1) % 50 == 0:
@@ -1511,7 +1608,7 @@ def evaluate_samples(model, dataset, samples, output, *, identity, check_resourc
                 rows,
                 output,
                 check_resources=check_resources,
-                continuous=not identity.get("monitor", False),
+                continuous=not (identity.get("monitor") or identity.get("interim")),
             )
             if real
             else summarize_full(rows, output, check_resources=check_resources)
@@ -1772,8 +1869,12 @@ def summarize_real(rows, output, *, check_resources, continuous=True):
 
     def group(items):
         check_resources()
-        paths = sorted({output / row["evaluation_records"]["file"] for row in items})
-        metrics = pooled_files(paths, score_kind=kind)
+        records = [row["evaluation_records"] for row in items]
+        metrics = pooled_files(
+            [output / r["file"] for r in records],
+            ranges=[(r["offset"], r["count"]) for r in records],
+            score_kind=kind,
+        )
         eligible = [row for row in items if row["current"]["eligible"]]
         for key in ("normal_count", "anomaly_count"):
             if metrics[key] != sum(row["current"][key] for row in eligible):
@@ -2268,31 +2369,226 @@ def nre_storage(data_root, config):
     )
 
 
-def nre_candidate(checkpoint, payload, recipe):
-    """Load the training identities of the one candidate selected on real monitors."""
+def nre_candidate(checkpoint, payload, recipe, *, interim=False):
+    """Distinguish a healthy completed monitor from the final selected candidate."""
     plan_path = checkpoint.parent / "plan.json"
     plan = json.loads(plan_path.read_text())
-    selection = json.loads((checkpoint.parent / "selection.json").read_text())
     state = payload["state"]
     if (
         payload["config"]["purpose"] != "AJAE-NRE"
         or payload["config"]["nre"] != recipe
         or payload["plan_sha256"] != file_hash(plan_path)
-        or selection["checkpoint_sha256"] != file_hash(checkpoint)
-        or Path(selection["selected"]["checkpoint"]).resolve() != checkpoint.resolve()
-        or [c["visit"] for c in selection["candidates"]] != [7120, 14240, 21360, 28480]
-        or state["planned_attempts"] != selection["selected"]["visit"]
         or state["next_position"] != 0
         or payload["config"]["voxel_size"] != 0.05
+        or state["status"] == "numerical_error"
+        or any(not torch.isfinite(v).all() for v in payload["model"].values())
     ):
-        raise ValueError("NRE final evaluation requires the fixed selected candidate")
+        raise ValueError("NRE evaluation requires a healthy completed candidate")
+    if interim:
+        if not any(
+            c["visit"] == state["planned_attempts"]
+            and Path(c["checkpoint"]).resolve() == checkpoint.resolve()
+            for c in state["monitor_candidates"]
+        ):
+            raise ValueError(
+                "interim evaluation requires a completed monitor checkpoint"
+            )
+    else:
+        selection = json.loads((checkpoint.parent / "selection.json").read_text())
+        if (
+            selection["checkpoint_sha256"] != file_hash(checkpoint)
+            or Path(selection["selected"]["checkpoint"]).resolve()
+            != checkpoint.resolve()
+            or [c["visit"] for c in selection["candidates"]]
+            != [7120, 14240, 21360, 28480]
+            or state["planned_attempts"] != selection["selected"]["visit"]
+        ):
+            raise ValueError(
+                "NRE final evaluation requires the fixed selected candidate"
+            )
     return plan
 
 
-def run_real(data_root, output, *, startup_only=False, checkpoint=None, nre=None):
+def interim_inventory(data_root, protocol, baseline, check_resources):
+    """Select every official scoring frame from the retained full-run observations."""
+    rows = [
+        json.loads(line)
+        for line in (baseline / "results.jsonl").read_text().splitlines()
+    ]
+    samples = json.loads((baseline / "samples.json").read_text())["samples"]
+    if len(rows) != 8659 or len(samples) != len(rows):
+        raise ValueError("the interim scope requires the complete retained v1 run")
+    selected, predictions = [], 0
+    for sample, row in zip(samples, rows, strict=True):
+        if any(row[k] != v for k, v in sample.items()):
+            raise ValueError("retained v1 observations differ from their sample list")
+        if not row["current"]["eligible"]:
+            continue
+        selected.append(sample)
+        with zipfile.ZipFile(baseline / row["prediction"]["file"]) as archive:
+            identities = sum(
+                archive.getinfo(k + ".npy").compress_size
+                for k in ("source_frame", "source_slot_delta")
+            )
+        predictions += int(4.004 * row["point_count"]) + identities + 8192
+    eligible = [r for r in rows if r["current"]["eligible"]]
+    if (
+        len(selected) != 1960
+        or sum(r["current"]["normal_count"] for r in eligible) != 193792470
+        or sum(r["current"]["anomaly_count"] for r in eligible) != 87499
+        or {s["sequence_index"] for s in selected} != set(protocol.public_sequence_ids)
+    ):
+        raise ValueError("the complete official scoring population differs")
+    sequences = {}
+    for index in protocol.public_sequence_ids:
+        check_resources()
+        sequences[index] = STUSequence.open(
+            data_root,
+            protocol=protocol,
+            partition="val",
+            sequence_id=index,
+            label_mode=LabelMode.REQUIRED,
+        )
+    records = 8 * (193792470 + 87499)
+    budget = dict(
+        predictions=predictions,
+        official_records=records,
+        normal_records=0,
+        temporary_sort=records,
+        buffers_and_startup=2**30,
+        persistent_bound_bytes=predictions + records + 2**30,
+        peak_new_bytes=predictions + 2 * records + 2**30,
+    )
+    inventory = dict(
+        source="retained full v1 observations; only official eligible frames selected",
+        baseline_results_sha256=file_hash(baseline / "results.jsonl"),
+        baseline_inventory_sha256=file_hash(baseline / "inventory.json"),
+        frames=len(selected),
+        startup_frames=sum(s["current_frame"] < 4 for s in selected),
+        normal_count=193792470,
+        anomaly_count=87499,
+    )
+    return sequences, inventory, selected, budget
+
+
+def compare_interim(output, baseline, monitor, summary, check_resources):
+    """Compare identical official point populations and retain development subsets."""
+    rows = [json.loads(s) for s in (output / "results.jsonl").read_text().splitlines()]
+    old_rows = [
+        json.loads(s) for s in (baseline / "results.jsonl").read_text().splitlines()
+    ]
+    old = {(r["sequence_id"], r["current_frame"]): r for r in old_rows}
+    monitor_rows = [
+        json.loads(s) for s in (monitor / "results.jsonl").read_text().splitlines()
+    ]
+    monitor_ids = {(r["sequence_id"], r["current_frame"]) for r in monitor_rows}
+    baseline_summary = json.loads((baseline / "summary.json").read_text())
+    if len(rows) != 1960 or {(r["sequence_id"], r["current_frame"]) for r in rows} != {
+        key for key, r in old.items() if r["current"]["eligible"]
+    }:
+        raise ValueError(
+            "interim predictions must cover exactly all official eligible frames"
+        )
+    for row in rows:
+        previous = old[(row["sequence_id"], row["current_frame"])]
+        if any(
+            row[k] != previous[k] for k in ("frame_ids", "check_seed", "point_count")
+        ) or any(
+            row["current"][k] != previous["current"][k]
+            for k in ("eligible", "normal_count", "anomaly_count", "raw_slot_count")
+        ):
+            raise ValueError("interim and v1 current point populations differ")
+
+    def pair(current, previous):
+        if any(current[k] != previous[k] for k in ("normal_count", "anomaly_count")):
+            raise ValueError("paired metric point counts differ")
+        return {
+            metric: dict(
+                v1=previous[metric],
+                nre=current[metric],
+                difference_percentage_points=current[metric] - previous[metric],
+            )
+            for metric in ("AP", "AUROC", "FPR95")
+        }
+
+    subsets = {}
+    for name, inside in (("monitor", True), ("outside_monitor", False)):
+        selected = [
+            r
+            for r in rows
+            if ((r["sequence_id"], r["current_frame"]) in monitor_ids) == inside
+        ]
+        metrics = []
+        for directory, records, kind in (
+            (output, selected, "logit"),
+            (
+                baseline,
+                [old[(r["sequence_id"], r["current_frame"])] for r in selected],
+                "probability",
+            ),
+        ):
+            check_resources()
+            refs = [r["evaluation_records"] for r in records]
+            metrics.append(
+                pooled_files(
+                    [directory / r["file"] for r in refs],
+                    ranges=[(r["offset"], r["count"]) for r in refs],
+                    score_kind=kind,
+                )
+            )
+        subsets[name] = dict(
+            frame_count=len(selected),
+            sequence_count=len({r["sequence_index"] for r in selected}),
+            normal_count=metrics[0]["normal_count"],
+            anomaly_count=metrics[0]["anomaly_count"],
+            comparison=pair(*metrics),
+        )
+        if len(selected) != (152 if inside else 1808):
+            raise ValueError("the fixed monitor partition differs")
+    normal_rows = [r for r in monitor_rows if r["current"]["raw_anomaly_count"] == 0]
+    previous_normal = [old[(r["sequence_id"], r["current_frame"])] for r in normal_rows]
+    normal = json.loads((monitor / "summary.json").read_text())[
+        "normal_without_anomaly_returns"
+    ]
+    if (
+        len(normal_rows) != 152
+        or sum(r["current"]["normal"]["point_count"] for r in previous_normal)
+        != normal["point_count"]
+    ):
+        raise ValueError("normal monitor populations differ")
+    return dict(
+        scope="same official scoring points; outside-monitor frames remain development data",
+        overall=pair(summary["all_frames"], baseline_summary["all_frames"]),
+        subsets=subsets,
+        sequences={
+            key: pair(
+                value["all_frames"], baseline_summary["sequences"][key]["all_frames"]
+            )
+            for key, value in summary["sequences"].items()
+        },
+        normal_monitor=dict(
+            source=str(monitor),
+            interpretation="historical monitor with training-warmed rotary cache; not recomputed by this interim evaluation",
+            frame_count=len(normal_rows),
+            point_count=normal["point_count"],
+            nre_logit_ge_0=normal["fraction_ge_0"],
+            v1_probability_ge_0_5=sum(
+                r["current"]["normal"]["count_ge_0_5"] for r in previous_normal
+            )
+            / normal["point_count"],
+            full_normal_phases_evaluated=False,
+        ),
+    )
+
+
+def run_real(
+    data_root, output, *, startup_only=False, checkpoint=None, nre=None, interim=False
+):
     from .train import FullResources, write_progress
 
     protocol = load_protocol()
+    if interim and (not nre or checkpoint is None or startup_only):
+        raise ValueError("interim evaluation requires one explicit NRE checkpoint")
     rule = protocol.data["real_anomaly_development_validation"]
     checkpoint = checkpoint if nre else PROJECT_ROOT / rule["checkpoint"]
     digest = file_hash(checkpoint, discard_cache=True)
@@ -2308,7 +2604,19 @@ def run_real(data_root, output, *, startup_only=False, checkpoint=None, nre=None
     )
     snapshot = resources()
     payload = torch.load(checkpoint, map_location="cpu", weights_only=False)
-    plan = nre_candidate(checkpoint, payload, nre) if nre else None
+    plan = nre_candidate(checkpoint, payload, nre, interim=interim) if nre else None
+    candidate = (
+        next(
+            (
+                c
+                for c in payload["state"].get("monitor_candidates", [])
+                if c["visit"] == payload["state"]["planned_attempts"]
+            ),
+            None,
+        )
+        if nre
+        else None
+    )
     model = (
         AJAE(
             0.05,
@@ -2332,8 +2640,11 @@ def run_real(data_root, output, *, startup_only=False, checkpoint=None, nre=None
     assert_unchanged(model, reference)
     if startup_only:
         return checks
-    sequences, inventory, samples, budget = real_inventory(
-        data_root, protocol, resources
+    baseline = PROJECT_ROOT / "runs/eval/v1/real"
+    sequences, inventory, samples, budget = (
+        interim_inventory(data_root, protocol, baseline, resources)
+        if interim
+        else real_inventory(data_root, protocol, resources)
     )
     volume = host_disk()
     existing = sum(p.stat().st_size for p in output.rglob("*") if p.is_file())
@@ -2350,6 +2661,32 @@ def run_real(data_root, output, *, startup_only=False, checkpoint=None, nre=None
         host_disk_before_inference=volume,
         startup_checks_sha256=file_hash(output / "startup/checks.json"),
     )
+    if interim:
+        # The interim sorting array is temporary; its saved predictions remain during training.
+        seen, retained = set(), 0
+        for p in (PROJECT_ROOT / nre["paths"]["training"]).rglob("*"):
+            if p.is_file():
+                stat = p.stat()
+                if (stat.st_dev, stat.st_ino) not in seen:
+                    seen.add((stat.st_dev, stat.st_ino))
+                    retained += stat.st_size
+        remaining = max(0, plan["storage"]["peak_new_bytes"] - retained)
+        combined = max(
+            budget["peak_new_bytes"], budget["persistent_bound_bytes"] + remaining
+        )
+        record["subsequent_training_and_evaluation"] = dict(
+            remaining_original_bound=remaining,
+            interim_persistent_bound=budget["persistent_bound_bytes"],
+            combined_peak_new_bytes=combined,
+            projected_free_bytes=volume["SizeRemaining"] - max(0, combined - existing),
+        )
+        if (
+            record["subsequent_training_and_evaluation"]["projected_free_bytes"]
+            < volume["reserve_bytes"]
+        ):
+            raise OSError(
+                "interim plus remaining full plan would invade the E: reserve"
+            )
     if not _path.exists():
         _atomic_json(_path, record)
     else:
@@ -2374,9 +2711,34 @@ def run_real(data_root, output, *, startup_only=False, checkpoint=None, nre=None
             model_sha256=model_digest(model),
             inventory_sha256=file_hash(_path),
             protocol_sha256=file_hash(protocol.path),
+            **(
+                dict(
+                    interim=True,
+                    purpose="official scoring coverage at an intermediate checkpoint",
+                )
+                if interim
+                else {}
+            ),
         ),
         check_resources=resources,
+        reuse=reusable_predictions(
+            [
+                Path(candidate["evaluation"]) / "real",
+                PROJECT_ROOT / nre["paths"]["evaluation"] / "interim_14240",
+            ],
+            model_digest(model),
+        )
+        if nre
+        else None,
     )
+    if interim:
+        summary["scope"] = "official_eligible_development_interim"
+        summary.pop("normal_without_anomaly_returns", None)
+        for sequence in summary["sequences"].values():
+            sequence.pop("normal_without_anomaly_returns", None)
+        summary["v1_comparison"] = compare_interim(
+            output, baseline, Path(candidate["evaluation"]) / "real", summary, resources
+        )
     assert_unchanged(model, reference)
     if file_hash(checkpoint, discard_cache=True) != digest:
         raise RuntimeError("candidate changed during real validation")
@@ -2976,10 +3338,23 @@ if __name__ == "__main__":
     mode.add_argument("--export-official", type=Path)
     parser.add_argument("--sequence", type=int)
     parser.add_argument("--startup-only", action="store_true")
+    parser.add_argument("--checkpoint", type=Path)
+    parser.add_argument("--nre", action="store_true")
     parser.add_argument(
-        "--checkpoint", type=Path, default=Path("runs/history/coverage/B/final.pt")
+        "--interim",
+        action="store_true",
+        help="cover all official eligible real frames at an explicit healthy NRE checkpoint",
     )
     args = parser.parse_args()
+    if args.nre and (not (args.real or args.full) or args.checkpoint is None):
+        parser.error("--nre requires --real or --full and an explicit --checkpoint")
+    if args.interim and (not (args.nre and args.real) or args.startup_only):
+        parser.error("--interim requires --nre --real and cannot use --startup-only")
+    recipe = (
+        json.loads((PROJECT_ROOT / "protocols/nre/config.json").read_text())
+        if args.nre
+        else None
+    )
     if args.diagnose:
         run_diagnostic(
             args.data_root, args.output or Path("runs/diagnostics/v1/conditions")
@@ -2987,8 +3362,17 @@ if __name__ == "__main__":
     elif args.real:
         run_real(
             args.data_root,
-            args.output or Path("runs/eval/v1/real"),
+            args.output
+            or Path("runs/eval/nre" if args.nre else "runs/eval/v1")
+            / (
+                args.checkpoint.stem.replace("visit_", "interim_")
+                if args.interim
+                else "real"
+            ),
             startup_only=args.startup_only,
+            checkpoint=args.checkpoint,
+            nre=recipe,
+            interim=args.interim,
         )
     elif args.export_official:
         if args.sequence is None or args.output is None:
@@ -2999,8 +3383,12 @@ if __name__ == "__main__":
     elif args.full:
         run_full(
             args.data_root,
-            args.checkpoint,
-            args.output or Path("runs/history/validation"),
+            args.checkpoint or Path("runs/history/coverage/B/final.pt"),
+            args.output
+            or Path(
+                "runs/eval/nre/synthetic" if args.nre else "runs/history/validation"
+            ),
+            nre=recipe,
         )
     else:
         run(

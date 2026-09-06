@@ -1091,12 +1091,46 @@ def run(data_root: Path, output: Path, *, group=None, initial=None, workers=1):
     return result
 
 
+def recovery_payload(checkpoint, plan_path):
+    """Reject damaged state before restoring weights, optimizer, scaler and RNG together."""
+    from .evaluate import file_hash
+
+    payload = torch.load(checkpoint, map_location="cpu", weights_only=False)
+    plan = json.loads(plan_path.read_text())
+    if (
+        payload["plan_sha256"] != file_hash(plan_path)
+        or payload["config"] != plan["config"]
+        or payload["schedule"] != plan["schedule"]
+        or payload["sampler_random_state"] != plan["sampler_random_state"]
+        or payload["next_schedule_index"] != payload["state"]["planned_attempts"]
+    ):
+        raise ValueError(
+            "recovery checkpoint belongs to another training plan or position"
+        )
+    if payload["state"]["status"] == "numerical_error":
+        raise ValueError(
+            "numerical failure is preserved; choose a healthy recovery source"
+        )
+    tensors = list(payload["model"].values()) + [
+        value
+        for state in payload["optimizer"]["state"].values()
+        for value in state.values()
+        if torch.is_tensor(value)
+    ]
+    if any(not torch.isfinite(value).all() for value in tensors):
+        raise ValueError(
+            "recovery model, normalization buffers or optimizer are nonfinite"
+        )
+    return payload
+
+
 def run_fulltrain(
     data_root,
     output,
     initial,
     *,
     resume=False,
+    resume_from=None,
     updated_code=False,
     finish=False,
     nre=None,
@@ -1117,6 +1151,7 @@ def run_fulltrain(
         compare_real_results,
     )
 
+    resume = resume or resume_from is not None
     if not torch.cuda.is_available():
         raise RuntimeError("the unchanged LitePT implementation requires CUDA")
     if output.exists() != resume:
@@ -1229,9 +1264,8 @@ def run_fulltrain(
     sources = {name: file_hash(PROJECT_ROOT / name) for name in sorted(source_names)}
     if resume:
         plan = json.loads(plan_path.read_text())
-        resumed_payload = torch.load(
-            output / "last.pt", map_location="cpu", weights_only=False
-        )
+        recovery_source = resume_from or output / "last.pt"
+        resumed_payload = recovery_payload(recovery_source, plan_path)
         previous_sources = resumed_payload.get(
             "execution_sha256", plan["source_sha256"]
         )
@@ -1265,12 +1299,30 @@ def run_fulltrain(
             raise ValueError(
                 "resume source, data, initialization, or configuration changed"
             )
+        if nre:
+            for candidate in resumed_payload["state"]["monitor_candidates"]:
+                manifest = json.loads(
+                    (Path(candidate["evaluation"]) / "real/samples.json").read_text()
+                )
+                if (
+                    manifest["identity"].get("rotary_cache_precision")
+                    != "autocast_separated"
+                ):
+                    raise ValueError(
+                        "earlier monitors used legacy precision caches; consistent reevaluation is required before continuing candidate selection"
+                    )
         inodes = {}
         for directory in [
             output,
             *([PROJECT_ROOT / nre["paths"]["evaluation"]] if nre else []),
         ]:
             for path in directory.rglob("*"):
+                if (
+                    nre
+                    and directory != output
+                    and path.relative_to(directory).parts[0].startswith("interim_")
+                ):
+                    continue  # Interim predictions are additional to the original plan.
                 if path.is_file():
                     stat = path.stat()
                     inodes[(stat.st_dev, stat.st_ino)] = stat.st_size
@@ -1386,13 +1438,7 @@ def run_fulltrain(
     scaler = torch.amp.GradScaler("cuda", init_scale=128)
     if resume:
         payload = resumed_payload
-        if payload["plan_sha256"] != file_hash(plan_path):
-            raise ValueError("recovery checkpoint belongs to another training plan")
         state = payload["state"]
-        if state["status"] == "numerical_error":
-            raise ValueError(
-                "numerical failure is preserved; automatic recipe retry is forbidden"
-            )
         if state["status"] in ("resource_limit", "interrupted", "execution_error"):
             state.setdefault("interruptions", []).append(
                 {
@@ -1409,6 +1455,38 @@ def run_fulltrain(
         optimizer.load_state_dict(payload["optimizer"])
         scaler.load_state_dict(payload["scaler"])
         restore_random_state(payload["random_state"])
+        if resume_from is not None:
+            recovery = dict(
+                source=str(recovery_source.resolve()), sha256=file_hash(recovery_source)
+            )
+            last = output / "last.pt"
+            if last.exists() and last.resolve() != recovery_source.resolve():
+                failed = torch.load(last, map_location="cpu", weights_only=False)
+                if failed["state"]["status"] == "numerical_error":
+                    failed_path = (
+                        output / f"failed_{failed['state']['planned_attempts'] + 1}.pt"
+                    )
+                    if failed_path.exists():
+                        if file_hash(failed_path) != file_hash(last):
+                            raise ValueError(
+                                "an unrelated failure checkpoint already occupies the recovery path"
+                            )
+                    else:
+                        os.link(last, failed_path)
+                    recovery.update(
+                        failed_checkpoint=str(failed_path),
+                        failed_state={
+                            k: failed["state"].get(k)
+                            for k in (
+                                "status",
+                                "error",
+                                "planned_attempts",
+                                "successful_updates",
+                            )
+                        },
+                    )
+                del failed
+            state.setdefault("explicit_recoveries", []).append(recovery)
         if changed_sources:
             state.setdefault("execution_updates", []).append(
                 {
@@ -1569,8 +1647,9 @@ def run_fulltrain(
             next_step=state["planned_attempts"] + 1,
             execution_sha256=sources,
             sparse_segment_cache_bytes=256 * 2**20,
+            recovery_source=str(recovery_source) if resume else None,
         )
-        if not resume:
+        if not resume or resume_from is not None:
             save_state(output / "last.pt")
         while state[completed_key] < intervals and state["phase"] != "selection":
             epoch = state[completed_key] + 1
@@ -2149,11 +2228,17 @@ if __name__ == "__main__":
         help="continue the same full-training state and cumulative budget",
     )
     parser.add_argument(
+        "--resume-from",
+        type=Path,
+        help="restore all training state from this healthy checkpoint",
+    )
+    parser.add_argument(
         "--finish",
         action="store_true",
         help="end full training at a saved complete epoch and run final selection",
     )
     args = parser.parse_args()
+    args.resume = args.resume or args.resume_from is not None
     if args.resume and not (args.full or args.nre):
         parser.error("--resume requires --full or --nre")
     if args.updated_code and not args.resume:
@@ -2176,6 +2261,7 @@ if __name__ == "__main__":
             or Path(recipe["paths"]["training"] if recipe else "runs/train/v1"),
             args.initial,
             resume=args.resume,
+            resume_from=args.resume_from,
             updated_code=args.updated_code,
             finish=args.finish,
             nre=recipe,

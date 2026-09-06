@@ -337,6 +337,59 @@ def test_nre_learning_rate_uses_visits_after_successful_update_warmup():
         nre_learning_rate(state)
 
 
+def test_explicit_recovery_keeps_training_state_and_rejects_damaged_buffers(tmp_path):
+    from src.evaluate import file_hash
+    from src.train import recovery_payload
+
+    plan_path, checkpoint = tmp_path / "plan.json", tmp_path / "visit_14240.pt"
+    plan = dict(
+        config={"seed": 23}, schedule=[0, 1], sampler_random_state={"fixed": 23}
+    )
+    plan_path.write_text(json.dumps(plan))
+    payload = dict(
+        **plan,
+        plan_sha256=file_hash(plan_path),
+        next_schedule_index=14240,
+        state=dict(
+            status="running",
+            planned_attempts=14240,
+            successful_updates=14236,
+            next_position=0,
+            completed_monitors=2,
+        ),
+        model={"running_mean": torch.ones(2)},
+        optimizer={"state": {0: {"exp_avg": torch.tensor([0.125])}}},
+        scaler={"scale": 128.0},
+        random_state=random_state(),
+    )
+    torch.save(payload, checkpoint)
+    restored = recovery_payload(checkpoint, plan_path)
+    assert restored["state"] == payload["state"]
+    assert restored["scaler"] == payload["scaler"]
+    assert restored["schedule"] == payload["schedule"]
+    torch.testing.assert_close(
+        restored["optimizer"]["state"][0]["exp_avg"],
+        payload["optimizer"]["state"][0]["exp_avg"],
+        rtol=0,
+        atol=0,
+    )
+    torch.testing.assert_close(
+        restored["random_state"]["torch"],
+        payload["random_state"]["torch"],
+        rtol=0,
+        atol=0,
+    )
+    payload["model"]["running_mean"][0] = float("inf")
+    torch.save(payload, checkpoint)
+    with pytest.raises(ValueError, match="nonfinite"):
+        recovery_payload(checkpoint, plan_path)
+    payload["model"]["running_mean"].zero_()
+    payload["state"]["status"] = "numerical_error"
+    torch.save(payload, checkpoint)
+    with pytest.raises(ValueError, match="healthy recovery source"):
+        recovery_payload(checkpoint, plan_path)
+
+
 @pytest.mark.parametrize("position", ["epoch", "visit"])
 def test_full_selection_uses_global_ap_band_and_one_scope(position):
     from src.train import choose_candidate
