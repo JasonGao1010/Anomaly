@@ -802,36 +802,40 @@ class FrozenSyntheticSegment:
             raise IndexError(frame_id) from error
         raw = self.source_sequence.source_frame(frame_id)
         raw_identities = self.metadata["raw_source_identities"]
-        if source_observation_identity(raw) != raw_identities[index]:
+        raw_identity = source_observation_identity(raw)
+        if raw_identity != raw_identities[index]:
             raise DataProtocolError(
                 "raw source observation differs from the frozen pool"
             )
         offsets = self.arrays["frame_offsets"]
         start, stop = int(offsets[index]), int(offsets[index + 1])
         slots = self.arrays["changed_slots"][start:stop]
-        xyzi = raw.xyzi.copy()
-        xyzi[slots] = self.arrays["changed_xyzi"][start:stop]
         if raw.labels is None:
             raise DataProtocolError("frozen synthetic data requires source labels")
-        packed = raw.labels.packed.copy()
-        packed[slots] = self.arrays["changed_packed_labels"][start:stop]
-        semantic = (packed & np.uint32(0xFFFF)).astype(np.uint16)
-        instance = (packed >> np.uint32(16)).astype(np.uint16)
-        semantic_target = None
-        if raw.labels.semantic_target is not None:
-            semantic_target = raw.labels.semantic_target.copy()
-            semantic_target[slots] = np.uint8(255)
-        labels = PointLabels(packed, semantic, instance, semantic_target)
-        result = make_source_frame(
-            frame_id,
-            xyzi,
-            raw.lidar_pose,
-            labels,
-            partition=raw.partition,
-            sequence_id=raw.sequence_id,
-        )
+        result = raw
+        if len(slots):
+            xyzi = raw.xyzi.copy()
+            xyzi[slots] = self.arrays["changed_xyzi"][start:stop]
+            packed = raw.labels.packed.copy()
+            packed[slots] = self.arrays["changed_packed_labels"][start:stop]
+            semantic = (packed & np.uint32(0xFFFF)).astype(np.uint16)
+            instance = (packed >> np.uint32(16)).astype(np.uint16)
+            semantic_target = None
+            if raw.labels.semantic_target is not None:
+                semantic_target = raw.labels.semantic_target.copy()
+                semantic_target[slots] = np.uint8(255)
+            result = make_source_frame(
+                frame_id,
+                xyzi,
+                raw.lidar_pose,
+                PointLabels(packed, semantic, instance, semantic_target),
+                partition=raw.partition,
+                sequence_id=raw.sequence_id,
+            )
+        # An unchanged synthetic scan is the identical immutable raw observation.
         expected = self.metadata["rendered_source_identities"][index]
-        if source_observation_identity(result) != expected:
+        actual = source_observation_identity(result) if len(slots) else raw_identity
+        if actual != expected:
             raise DataProtocolError("reconstructed frame differs from frozen rendering")
         self._frame_cache[frame_id] = result
         # Overlapping causal windows need five immutable frames, not a whole segment.

@@ -14,15 +14,20 @@ class PointROPE(torch.nn.Module):
         self.cache = {}
 
     def get_cos_sin(self, D, seq_len, device, dtype):
-        if (D,seq_len,device,dtype) not in self.cache:
+        key = (D, device, dtype)
+        cached = self.cache.get(key)
+        if cached is None or cached[0].shape[0] < seq_len:
+            # Every position is independent: reuse one growing prefix without changing its values.
+            capacity = 1 << max(0, (seq_len - 1).bit_length())
             inv_freq = self.F0 / (self.base ** (torch.arange(0, D, 2).float().to(device) / D))
-            t = torch.arange(seq_len, device=device, dtype=inv_freq.dtype)
+            t = torch.arange(capacity, device=device, dtype=inv_freq.dtype)
             freqs = torch.einsum("i,j->ij", t, inv_freq).to(dtype)
             freqs = torch.cat((freqs, freqs), dim=-1)
             cos = freqs.cos()
             sin = freqs.sin()
-            self.cache[D,seq_len,device,dtype] = (cos,sin)
-        return self.cache[D,seq_len,device,dtype]
+            self.cache[key] = (cos,sin)
+        cos, sin = self.cache[key]
+        return cos[:seq_len], sin[:seq_len]
         
     @staticmethod
     def rotate_half(x):

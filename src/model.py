@@ -79,14 +79,15 @@ def joint_voxelize(
     if cells.max() >= 2**16:
         raise ValueError("voxel extent exceeds LitePT's 16-bit spatial encoding")
     cells = cells.astype(np.int64)
-    # Match np.unique(axis=0)'s exact lexicographic order without structured-row sorting.
-    order = np.lexsort((cells[:, 2], cells[:, 1], cells[:, 0]))
-    ordered = cells[order]
+    # A collision-free 48-bit key preserves the same lexicographic voxel order.
+    keys = (cells[:, 0] << 32) | (cells[:, 1] << 16) | cells[:, 2]
+    order = np.argsort(keys, kind="stable")
+    ordered = keys[order]
     first = np.empty(len(order), dtype=bool)
     first[0] = True
-    first[1:] = np.any(ordered[1:] != ordered[:-1], axis=1)
+    first[1:] = ordered[1:] != ordered[:-1]
     starts = np.flatnonzero(first)
-    grid = ordered[first]
+    grid = cells[order[first]]
     inverse = np.empty(len(order), dtype=np.int64)
     inverse[order] = np.cumsum(first, dtype=np.int64) - 1
     counts = np.diff(np.r_[starts, len(order)])
@@ -110,11 +111,11 @@ def joint_voxelize(
         axis=1,
     )
     return JointVoxels(
-        coordinates=torch.tensor(means[:, :3], device=device),
-        grid_coord=torch.tensor(grid, dtype=torch.long, device=device),
-        features=torch.tensor(features, device=device),
-        point_to_voxel=torch.tensor(inverse, dtype=torch.long, device=device),
-        point_features=torch.tensor(point_features, device=device),
+        coordinates=torch.from_numpy(np.ascontiguousarray(means[:, :3])).to(device),
+        grid_coord=torch.from_numpy(grid).to(device),
+        features=torch.from_numpy(features).to(device),
+        point_to_voxel=torch.from_numpy(inverse).to(device),
+        point_features=torch.from_numpy(point_features).to(device),
         source_points=points,
         voxel_size=voxel_size,
     )

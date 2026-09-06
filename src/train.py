@@ -579,13 +579,15 @@ def optimizer_update(loss, model, optimizer, scaler):
     parameters = [p for p in model.parameters() if p.requires_grad]
     if any(p.grad is None for p in parameters):
         raise RuntimeError("a trainable parameter has no gradient")
-    finite = bool(torch.stack([p.grad.isfinite().all() for p in parameters]).all())
-    norm = None
+    norm = torch.nn.utils.get_total_norm([p.grad for p in parameters])
+    # A finite L2 norm establishes finite gradients. Inspect elements only on failure.
+    finite = bool(torch.isfinite(norm))
+    if not finite:
+        if bool(torch.stack([p.grad.isfinite().all() for p in parameters]).all()):
+            raise FloatingPointError("finite gradients have a nonfinite total norm")
+        norm = None
     if finite:
         # Inspect unscaled gradients before clipping; overflow is never clipped away.
-        norm = torch.nn.utils.get_total_norm([p.grad for p in parameters])
-        if not torch.isfinite(norm):
-            raise FloatingPointError("finite gradients have a nonfinite total norm")
         torch.nn.utils.clip_grads_with_norm_(parameters, CONFIG["max_grad_norm"], norm)
     calls = []
     hook = optimizer.register_step_post_hook(lambda *_: calls.append(True))
@@ -1241,7 +1243,14 @@ def run_fulltrain(
         if changed_sources and (
             not updated_code
             or set(changed_sources)
-            - {"src/train.py", "src/evaluate.py", "src/data.py", "src/model.py"}
+            - {
+                "src/train.py",
+                "src/evaluate.py",
+                "src/data.py",
+                "src/model.py",
+                "src/scene.py",
+                "vendor/litept/libs/pointrope/pointrope_torch.py",
+            }
         ):
             raise ValueError(
                 "changed execution requires --updated-code after equivalent-input regression; scientific model/data identities must remain fixed"

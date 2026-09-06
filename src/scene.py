@@ -9,7 +9,7 @@ import logging
 import os
 import math
 from collections import OrderedDict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import Iterator, Mapping, Sequence
@@ -182,6 +182,11 @@ def official_stu_features(xyzi: np.ndarray, lidar_pose: np.ndarray) -> np.ndarra
     if array.dtype != np.float32 or array.ndim != 2 or array.shape[1] != 4:
         raise TypeError("xyzi must be float32[N,4]")
     coordinates = official_stu_coordinates(array, lidar_pose)
+    return _features_from_coordinates(array, coordinates)
+
+
+def _features_from_coordinates(array, coordinates):
+    """Reuse the exact world coordinates when constructing an immutable scan."""
     center = coordinates.mean(axis=0)
     distance = np.linalg.norm(coordinates - center, axis=1)[:, None]
     return _freeze(np.hstack((array[:, 3:4], distance)).astype(np.float32, copy=False))
@@ -283,10 +288,10 @@ class SourceFrame:
     frame_id: int
     xyzi: np.ndarray
     lidar_pose: np.ndarray
-    coordinates: np.ndarray
-    features: np.ndarray
-    zero_slot_mask: np.ndarray
-    real_slots: np.ndarray
+    coordinates: np.ndarray = field(init=False)
+    features: np.ndarray = field(init=False)
+    zero_slot_mask: np.ndarray = field(init=False)
+    real_slots: np.ndarray = field(init=False)
     labels: PointLabels | None
 
     def __post_init__(self) -> None:
@@ -300,33 +305,19 @@ class SourceFrame:
         if self.lidar_pose.dtype != np.float64:
             raise TypeError("lidar_pose must be float64[4,4]")
         _rigid("lidar_pose", self.lidar_pose)
-        if self.coordinates.dtype != np.float64 or self.coordinates.shape != (count, 3):
-            raise TypeError("coordinates must be float64[N,3]")
-        if self.features.dtype != np.float32 or self.features.shape != (count, 2):
-            raise TypeError("features must be float32[N,2]")
-        if self.zero_slot_mask.dtype != np.bool_ or self.zero_slot_mask.shape != (
-            count,
-        ):
-            raise TypeError("zero_slot_mask must be bool[N]")
-        if self.real_slots.dtype != np.int32 or self.real_slots.ndim != 1:
-            raise TypeError("real_slots must be int32[M]")
         _finite("xyzi", self.xyzi)
+        # Derive arrays once from the validated source; callers cannot supply conflicting copies.
+        object.__setattr__(
+            self, "coordinates", official_stu_coordinates(self.xyzi, self.lidar_pose)
+        )
+        object.__setattr__(
+            self, "features", _features_from_coordinates(self.xyzi, self.coordinates)
+        )
+        zero = np.all(self.xyzi[:, :3] == np.float32(0.0), axis=1)
+        object.__setattr__(self, "zero_slot_mask", zero)
+        object.__setattr__(self, "real_slots", np.flatnonzero(~zero).astype(np.int32))
         _finite("official STU coordinates", self.coordinates)
         _finite("official STU features", self.features)
-        if not np.array_equal(
-            self.coordinates, official_stu_coordinates(self.xyzi, self.lidar_pose)
-        ):
-            raise SceneDataError("coordinates differ from STU's official definition")
-        if not np.array_equal(
-            self.features, official_stu_features(self.xyzi, self.lidar_pose)
-        ):
-            raise SceneDataError("features differ from STU's official definition")
-        expected_zero = np.all(self.xyzi[:, :3] == np.float32(0.0), axis=1)
-        if not np.array_equal(self.zero_slot_mask, expected_zero):
-            raise SceneDataError("zero-slot mask does not match raw coordinates")
-        expected_real = np.flatnonzero(~expected_zero).astype(np.int32)
-        if not np.array_equal(self.real_slots, expected_real):
-            raise SceneDataError("real slots do not complement zero-coordinate slots")
         if self.labels is not None and self.labels.packed.size != count:
             raise SceneDataError("scan and label slot counts differ")
         for array in (
@@ -388,18 +379,12 @@ def make_source_frame(
         raise TypeError("lidar_pose must be float64[4,4]")
     _rigid("lidar_pose", pose)
     owned = _freeze(array.copy())
-    zero_mask = _freeze(np.all(owned[:, :3] == np.float32(0.0), axis=1))
-    real_slots = _freeze(np.flatnonzero(~zero_mask).astype(np.int32, copy=False))
     return SourceFrame(
         partition=partition,
         sequence_id=_plain_int("sequence_id", sequence_id),
         frame_id=frame,
         xyzi=owned,
         lidar_pose=_freeze(pose.copy()),
-        coordinates=official_stu_coordinates(owned, pose),
-        features=official_stu_features(owned, pose),
-        zero_slot_mask=zero_mask,
-        real_slots=real_slots,
         labels=labels,
     )
 
