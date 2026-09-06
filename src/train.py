@@ -1011,7 +1011,7 @@ def run_fulltrain(
         raise ValueError("user finish requires an existing full-training checkpoint")
     if any(
         output.resolve().is_relative_to((PROJECT_ROOT / p).resolve())
-        for p in ("runs/learn", "runs/coverage", "runs/validation", "runs/transfer")
+        for p in ("runs/learn", "runs/history/coverage", "runs/history/validation", "runs/history/transfer")
     ):
         raise ValueError("formal training must preserve earlier evidence directories")
     torch.set_num_threads(1)
@@ -1711,7 +1711,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--initial", type=Path, default=Path("runs/learn/initial.pt"))
     parser.add_argument(
-        "--validation-samples", type=Path, default=Path("runs/transfer/samples.json")
+        "--validation-samples", type=Path, default=Path("runs/history/transfer/samples.json")
     )
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--full", action="store_true", help="execute AJAE-FullTrain-v1")
@@ -1751,7 +1751,7 @@ if __name__ == "__main__":
     elif args.coverage:
         run_coverage(
             args.data_root,
-            args.output or Path("runs/coverage"),
+            args.output or Path("runs/history/coverage"),
             args.initial,
             args.validation_samples,
             args.workers,

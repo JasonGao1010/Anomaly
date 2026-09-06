@@ -1215,7 +1215,22 @@ def profile_pools(args, disk):
         )
     jobs = []
     for pool in (protocol.training_pool, protocol.validation_pool):
-        manifest = load_pool_manifest(protocol, pool)
+        manifest_path = (
+            args.observation_pools / pool.name / "manifest.json"
+            if args.observation_pools
+            else protocol.pool_manifest_path(pool.name)
+        )
+        manifest = (
+            json.loads(manifest_path.read_text())
+            if args.observation_pools
+            else load_pool_manifest(protocol, pool)
+        )
+        if args.observation_pools and (
+            manifest["format"] != "ajae-observation-match-pool"
+            or manifest["pool_name"] != pool.name
+            or manifest["source_sequence_id"] != pool.source_sequence_id
+        ):
+            raise ValueError("observation profile has the wrong source population")
         directory = args.output / pool.name
         directory.mkdir(parents=True, exist_ok=True)
         records = {
@@ -1233,12 +1248,22 @@ def profile_pools(args, disk):
                 r["frame_range_inclusive"][1] - r["frame_range_inclusive"][0] + 1
                 for r in records.values()
             ),
-            complete_windows=pool.total_window_count,
+            complete_windows=manifest["window_count"],
             source="frozen sparse observations reconstructed on train/206 or train/201; no generation",
             source_sequence_id=pool.source_sequence_id,
-            synthetic_versions=pool.synthetic_sequence_count,
-            world_count=pool.world_count,
-            manifest=str(protocol.pool_manifest_path(pool.name)),
+            synthetic_versions=manifest.get(
+                "synthetic_sequence_count", manifest["world_count"]
+            ),
+            world_count=manifest["world_count"],
+            manifest=str(manifest_path),
+            pool_format=manifest["format"],
+            expected_whole_window_unseen=(
+                manifest["pattern_counts"][0]
+                if args.observation_pools
+                else 20
+                if pool.name == "train"
+                else 10
+            ),
             boundaries="each world independently; first four local frames are context only; no startup windows",
             entity_weighting="sequence_equal denotes equal worlds, not independent roads or versions",
             point_intensity="original float32 exact unique values; each synthetic frame once per world; versions share raw background",
@@ -1314,11 +1339,22 @@ def main():
     )
     parser.add_argument("--real-profile", type=Path, default=Path("runs/profile_v1"))
     parser.add_argument(
+        "--observation-pools",
+        type=Path,
+        help="v2 or pilot pool directory; use with --synthetic and separate outputs",
+    )
+    parser.add_argument(
         "--pilot",
         type=int,
         help="first N frames of val/125, in a separate output directory",
     )
     args = parser.parse_args()
+    if args.observation_pools and (
+        not args.synthetic or args.output is None or args.tables is None
+    ):
+        parser.error(
+            "observation pools require --synthetic and explicit --output/--tables"
+        )
     args.output = args.output or Path(
         "runs/profile_pools" if args.synthetic else "runs/profile_v1"
     )

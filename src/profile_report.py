@@ -467,7 +467,10 @@ def aggregate_profile(output):
             frames=spec["frames"],
             complete_windows=spec["complete_windows"],
             startup_windows=0,
-            whole_window_unseen=20 if spec["population"] == "train" else 10,
+            whole_window_unseen=spec.get(
+                "expected_whole_window_unseen",
+                20 if spec["population"] == "train" else 10,
+            ),
         )
         totals.update(
             worlds=len(spec["sequences"]),
@@ -508,10 +511,15 @@ def aggregate_profile(output):
         totals["legal_official_normal_points"] = sum(
             r["normal_in_range"] for r in legal if r["state"] == 3
         )
-        if spec["population"] == "validation" and (
-            totals["legal_current_states"][3] != 2278
-            or totals["legal_official_anomaly_points"] != 1207724
-            or totals["legal_official_normal_points"] != 162980036
+        if (
+            spec["population"] == "validation"
+            and spec.get("pool_format", "ajae-synthetic-pool-manifest")
+            == "ajae-synthetic-pool-manifest"
+            and (
+                totals["legal_current_states"][3] != 2278
+                or totals["legal_official_anomaly_points"] != 1207724
+                or totals["legal_official_normal_points"] != 162980036
+            )
         ):
             raise ValueError(
                 "synthetic validation profile differs from the saved official evaluation population"
@@ -2870,7 +2878,13 @@ def compare_profiles(synthetic, real, output, directory):
                 else "采样或观测过程；片段边界截断单列",
             ),
         )
-        coverage = "全帧3592/2728/8659；完整窗3080/2360/8583；合成等权单位为世界，真实为序列，非独立道路配对"
+        coverage = (
+            "全帧"
+            + "/".join(str(r["totals"]["frames"]) for r in populations)
+            + "；完整窗"
+            + "/".join(str(r["totals"]["complete_windows"]) for r in populations)
+            + "；合成等权单位为世界，真实为序列，非独立道路配对"
+        )
         if factor in ("B05", "B06", "B07", "D02"):
             coverage = "；".join(
                 f"{label}:实例帧{r['totals']['instance_frames']}，形状{r['totals']['shape_status']}，地面{r['totals']['ground_status']}，未知身份点{r['totals']['unknown_instance_points']}"
@@ -3103,7 +3117,12 @@ def compare_profiles(synthetic, real, output, directory):
         a["real_sequences"] = sorted(a["real_sequences"])
     comparison = dict(
         missing_training_coverage=absent,
-        selected_next_candidate="whole_window_normal_sampling",
+        selected_next_candidate=(
+            "evaluate_observation_matched_data"
+            if populations[0]["definitions"].get("pool_format")
+            == "ajae-observation-match-pool"
+            else "whole_window_normal_sampling"
+        ),
         recommendation_only=True,
         model_forward_calls=0,
         parameter_updates=0,

@@ -14,7 +14,7 @@ import zipfile
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterator, Mapping, Sequence
+from typing import Iterable, Iterator, Mapping, Sequence
 
 import numpy as np
 
@@ -22,6 +22,7 @@ try:
     from .protocol import AJAEProtocol, SyntheticPoolSpec, load_protocol
     from .render import (
         RenderedSegment,
+        render_frame,
         WorldGenerationReport,
         WorldSpec,
         collect_observed_obstacle_index,
@@ -46,6 +47,7 @@ except ImportError:  # Direct script execution.
     from protocol import AJAEProtocol, SyntheticPoolSpec, load_protocol
     from render import (  # type: ignore[no-redef]
         RenderedSegment,
+        render_frame,
         WorldGenerationReport,
         WorldSpec,
         collect_observed_obstacle_index,
@@ -394,19 +396,40 @@ def _prediction_content_hash(
 
 def save_sparse_segment(
     path: Path,
-    segment: RenderedSegment,
-    raw_sources: Sequence[SourceFrame],
+    segment: RenderedSegment | None,
+    raw_sources: Iterable[SourceFrame],
     *,
     pool_name: str,
     synthetic_sequence_id: str,
     synthetic_sequence_index: int,
     segment_index: int,
+    world: WorldSpec | None = None,
+    report: WorldGenerationReport | None = None,
+    renderer_identity: str | None = None,
+    ray_grid=None,
+    sensor=None,
+    statistics: dict | None = None,
 ) -> dict[str, object]:
-    """Persist only anomaly-replaced slots; all other bytes remain official data."""
+    """Stream changed slots and frame references; never expand overlapping windows."""
 
-    raw = tuple(sorted(tuple(raw_sources), key=lambda item: item.frame_id))
-    if tuple(item.frame_id for item in raw) != segment.frame_ids:
-        raise DataProtocolError("raw and rendered segment frames do not align")
+    if segment is not None:
+        world, report, renderer_identity = (
+            segment.world,
+            segment.report,
+            segment.renderer_identity,
+        )
+        pairs = zip(raw_sources, segment.rendered_frames, strict=True)
+    else:
+        if world is None or report is None or renderer_identity is None:
+            raise DataProtocolError(
+                "streamed rendering requires a world and its provenance"
+            )
+        pairs = (
+            (source, render_frame(source, world, ray_grid, sensor))
+            for source in raw_sources
+        )
+    frame_ids: list[int] = []
+    rendered_identities: list[str] = []
     offsets = [0]
     slot_parts: list[np.ndarray] = []
     xyzi_parts: list[np.ndarray] = []
@@ -415,10 +438,18 @@ def save_sparse_segment(
     raw_identities: list[str] = []
     visible_counts: list[int] = []
     anomaly_counts: list[int] = []
-    for source, rendered in zip(raw, segment.rendered_frames, strict=True):
+    for source, rendered in pairs:
+        if source.frame_id != rendered.frame_id or (
+            frame_ids and source.frame_id != frame_ids[-1] + 1
+        ):
+            raise DataProtocolError(
+                "raw and rendered frames must align and be consecutive"
+            )
+        frame_ids.append(source.frame_id)
+        rendered_identities.append(source_observation_identity(rendered.source))
         if source.labels is None:
             raise DataProtocolError("formal synthetic sources require labels")
-        changed = np.asarray(rendered.inserted_mask, dtype=np.bool_)
+        changed = np.asarray(rendered.changed_mask, dtype=np.bool_)
         slots = np.flatnonzero(changed).astype(np.int32)
         if not np.array_equal(rendered.source.xyzi[~changed], source.xyzi[~changed]):
             raise DataProtocolError("the renderer changed a retained source return")
@@ -437,12 +468,39 @@ def save_sparse_segment(
         offsets.append(offsets[-1] + slots.size)
         raw_identities.append(source_observation_identity(source))
         visible_counts.append(rendered.source.real_count)
-        anomaly_counts.append(int(slots.size))
-    if offsets[-1] == 0:
-        raise DataProtocolError("a formal anomaly world produced no visible return")
+        anomaly_counts.append(int(rendered.inserted_mask.sum()))
+        if statistics is not None:
+            distance = np.linalg.norm(rendered.xyzi[rendered.inserted_mask, :3], axis=1)
+            inside = distance[(distance >= 2.5) & (distance <= 50)]
+            statistics.setdefault("frames", []).append(
+                dict(
+                    frame=source.frame_id,
+                    anomaly=int(distance.size),
+                    anomaly_in_range=int(inside.size),
+                    anomaly_in_range_distance_median=float(np.median(inside))
+                    if inside.size
+                    else None,
+                    cleared_native_slots=int(
+                        (
+                            rendered.occluded_original_mask & ~rendered.inserted_mask
+                        ).sum()
+                    ),
+                )
+            )
+    if len(frame_ids) < 5:
+        raise DataProtocolError(
+            "a stored world must contain a complete five-frame window"
+        )
+    starts = list(range(frame_ids[0], frame_ids[-1] - 3))
+    window_identities = [
+        rendered_window_identity(
+            start, frame_ids[i : i + 5], rendered_identities[i : i + 5]
+        )
+        for i, start in enumerate(starts)
+    ]
 
     arrays = {
-        "frame_ids": np.asarray(segment.frame_ids, dtype=np.int32),
+        "frame_ids": np.asarray(frame_ids, dtype=np.int32),
         "frame_offsets": np.asarray(offsets, dtype=np.int64),
         "changed_slots": np.concatenate(slot_parts).astype(np.int32, copy=False),
         "changed_xyzi": np.concatenate(xyzi_parts).astype(np.float32, copy=False),
@@ -457,19 +515,25 @@ def save_sparse_segment(
         "synthetic_sequence_id": synthetic_sequence_id,
         "synthetic_sequence_index": synthetic_sequence_index,
         "segment_index": segment_index,
-        "source_sequence_id": segment.world.source_sequence_id,
-        "segment_identity": segment.identity,
-        "segment_boundary_inclusive": [segment.frame_ids[0], segment.frame_ids[-1]],
-        "seed": segment.world.seed,
-        "world_identity": segment.world.identity,
-        "world_content_identity": world_content_identity(segment.world),
-        "world": segment.world.to_dict(),
-        "world_generation_report": segment.report.to_dict(),
-        "renderer_identity": segment.renderer_identity,
+        "source_sequence_id": world.source_sequence_id,
+        "segment_identity": rendered_segment_identity(
+            world.identity,
+            frame_ids[0],
+            frame_ids,
+            renderer_identity,
+            rendered_identities,
+        ),
+        "segment_boundary_inclusive": [frame_ids[0], frame_ids[-1]],
+        "seed": world.seed,
+        "world_identity": world.identity,
+        "world_content_identity": world_content_identity(world),
+        "world": world.to_dict(),
+        "world_generation_report": report.to_dict(),
+        "renderer_identity": renderer_identity,
         "raw_source_identities": raw_identities,
-        "rendered_source_identities": list(segment.source_observation_identities),
-        "window_identities": [item.identity for item in segment.windows],
-        "window_starts": [item.window_start for item in segment.windows],
+        "rendered_source_identities": rendered_identities,
+        "window_identities": window_identities,
+        "window_starts": starts,
         "visible_point_counts": visible_counts,
         "anomaly_return_counts": anomaly_counts,
         "changed_slot_count": offsets[-1],
@@ -487,11 +551,11 @@ def save_sparse_segment(
         "synthetic_sequence_id": synthetic_sequence_id,
         "synthetic_sequence_index": synthetic_sequence_index,
         "segment_index": segment_index,
-        "seed": segment.world.seed,
-        "world_identity": segment.world.identity,
-        "world_content_identity": world_content_identity(segment.world),
-        "frame_range_inclusive": [segment.frame_ids[0], segment.frame_ids[-1]],
-        "window_count": len(segment.windows),
+        "seed": world.seed,
+        "world_identity": world.identity,
+        "world_content_identity": world_content_identity(world),
+        "frame_range_inclusive": [frame_ids[0], frame_ids[-1]],
+        "window_count": len(starts),
         "changed_slot_count": offsets[-1],
     }
 
@@ -575,12 +639,16 @@ class FrozenSyntheticSegment:
             or world.seed != metadata.get("seed")
             or report.world_seed != world.seed
             or report.source_sequence_id != world.source_sequence_id
-            or len(world.objects) != 1
-            or world.objects[0].object_id != 1
-            or report.anomaly_count != 1
+            or not 1 <= len(world.objects) <= 2
+            or report.anomaly_count != len(world.objects)
             or report.placement_mode
-            not in {"terminal_visible", "support_visible_fallback"}
-            or report.support_scope not in {"nearest_quartile", "all_segment"}
+            not in {
+                "terminal_visible",
+                "support_visible_fallback",
+                "continuous_observation",
+            }
+            or report.support_scope
+            not in {"nearest_quartile", "all_segment", "full_trajectory"}
         ):
             raise DataProtocolError(
                 "stored world parameters or report are inconsistent"
@@ -614,12 +682,24 @@ class FrozenSyntheticSegment:
             or arrays["changed_object_ids"].dtype != np.int32
             or arrays["changed_object_ids"].shape != (count,)
             or not np.isfinite(arrays["changed_xyzi"]).all()
-            or np.any(
-                (arrays["changed_packed_labels"] & np.uint32(0xFFFF)) != np.uint32(2)
-            )
-            or np.any(arrays["changed_object_ids"] != 1)
         ):
             raise DataProtocolError("sparse segment arrays are misaligned")
+        returned = np.any(arrays["changed_xyzi"][:, :3] != 0, axis=1)
+        packed = arrays["changed_packed_labels"]
+        objects = arrays["changed_object_ids"]
+        if (
+            np.any((packed[returned] & np.uint32(0xFFFF)) != 2)
+            or not np.isin(
+                objects[returned], [item.object_id for item in world.objects]
+            ).all()
+            or np.any((packed[returned] >> np.uint32(16)) != 60000 + objects[returned])
+            or np.any(packed[~returned] != 0)
+            or np.any(objects[~returned] != -1)
+            or np.any(arrays["changed_xyzi"][~returned] != 0)
+        ):
+            raise DataProtocolError(
+                "changed slots must be anomaly returns or cleared opaque occlusions"
+            )
         frame_id_tuple = tuple(map(int, frame_ids))
         starts = tuple(map(int, metadata["window_starts"]))
         raw_identities = tuple(metadata["raw_source_identities"])
@@ -652,7 +732,7 @@ class FrozenSyntheticSegment:
             or int(metadata["changed_slot_count"]) != count
             or anomaly_counts
             != tuple(
-                int(offsets[index + 1] - offsets[index])
+                int(returned[offsets[index] : offsets[index + 1]].sum())
                 for index in range(frame_ids.size)
             )
             or metadata["segment_identity"]
@@ -685,8 +765,10 @@ class FrozenSyntheticSegment:
                 raise DataProtocolError(
                     "changed slots are not sorted unique source slots"
                 )
-            expected_visible = raw.real_count + int(
-                np.count_nonzero(raw.zero_slot_mask[slots])
+            expected_visible = (
+                raw.real_count
+                - int((~raw.zero_slot_mask[slots]).sum())
+                + int(returned[offsets[index] : offsets[index + 1]].sum())
             )
             if visible_counts[index] != expected_visible:
                 raise DataProtocolError(
@@ -1419,6 +1501,420 @@ def build_pool_manifest(
     return manifest
 
 
+_OBSERVATION_STATE = None
+
+
+def observation_distribution(frames):
+    """Use raw visibility for five-bit states and official current points for the joint grid."""
+    patterns = np.zeros(32, dtype=np.int64)
+    joint = np.zeros((4, 4), dtype=np.int64)
+    joint_points = np.zeros((4, 4), dtype=np.int64)
+    current_absent_history_present = 0
+    for t in range(4, len(frames)):
+        bits = [int(row["anomaly"] > 0) for row in frames[t - 4 : t + 1]]
+        pattern = sum(bit << (4 - i) for i, bit in enumerate(bits))
+        patterns[pattern] += 1
+        current_absent_history_present += int(not bits[-1] and any(bits[:-1]))
+        row = frames[t]
+        if row["anomaly_in_range"] >= 5:
+            c = int(
+                np.searchsorted([20, 100, 500], row["anomaly_in_range"], side="right")
+            )
+            d = int(
+                np.searchsorted(
+                    [10, 20, 35], row["anomaly_in_range_distance_median"], side="right"
+                )
+            )
+            joint[c, d] += 1
+            joint_points[c, d] += row["anomaly_in_range"]
+    return dict(
+        pattern_counts=patterns.tolist(),
+        qualified_joint_counts=joint.tolist(),
+        qualified_joint_anomaly_points=joint_points.tolist(),
+        current_absent_history_present=current_absent_history_present,
+        cleared_native_slots=sum(r["cleared_native_slots"] for r in frames),
+        frame_count=len(frames),
+        window_count=len(frames) - 4,
+    )
+
+
+def _observation_candidate(task):
+    """Evaluate one bounded, independent candidate; no anomaly model is loaded."""
+    import time
+    from dataclasses import replace
+    from .render import (
+        MaterialSpec,
+        PlacementError,
+        WorldGenerationReport,
+        WorldSpec,
+        _grounding_qualified_shape,
+        place_object,
+    )
+
+    state = _OBSERVATION_STATE
+    sequence, support, obstacles, grid, sensor = state["inputs"]
+    rules = state["config"]["generation"]
+    world_index, attempt = task
+    world_seed = state["seed_base"] + 1000 * world_index
+    streams = (
+        np.random.SeedSequence([world_seed, attempt]).generate_state(5).astype(np.int64)
+    )
+    shape_seed, material_seed, yaw_seed, placement_seed, factor_seed = map(int, streams)
+    rng = np.random.default_rng(factor_seed)
+    role = str(
+        rng.choice(rules["candidate_roles"], p=rules["candidate_role_probabilities"])
+    )
+    family = str(
+        rng.choice(
+            list(rules["desired_shape_family_probabilities"]),
+            p=list(rules["desired_shape_family_probabilities"].values()),
+        )
+    )
+    broad = bool(rng.random() < rules["broad_world_probability"])
+    size = tuple(rules["broad_size_range_m"] if broad else rules["size_range_m"])
+    identity = f"synthetic/{state['namespace']}/{state['pool']}/{world_index:03d}"
+    path = state["output"] / f"candidate_{world_index:03d}_{attempt:02d}.npz"
+    started = time.monotonic()
+    result = dict(
+        world_index=world_index,
+        attempt=attempt,
+        seed=world_seed,
+        streams=streams.tolist(),
+        role=role,
+        desired_family=family,
+        broad_shape=broad,
+        size_range_m=list(size),
+    )
+    try:
+        shape, shape_report, grounding, proposed, rejected = _grounding_qualified_shape(
+            shape_seed,
+            stride=1,
+            maximum_proposals=rules["maximum_shape_proposals"],
+            size_m_range=size,
+            desired_family=family,
+        )
+        rows = state["support_rows"][role]
+        if not len(rows):
+            raise PlacementError(
+                "no source support satisfies the fixed trajectory range stratum"
+            )
+        item, placement = place_object(
+            shape,
+            MaterialSpec.sample(material_seed),
+            support,
+            obstacles,
+            object_id=1,
+            label="anomaly-proxy",
+            proposal_namespace=f"{world_seed}:{attempt}",
+            proposal_stream=placement_seed,
+            yaw_rad=float(np.random.default_rng(yaw_seed).uniform(-np.pi, np.pi)),
+            material_seed=material_seed,
+            yaw_seed=yaw_seed,
+            shape_seed=proposed[-1],
+            shape_generation_report=shape_report,
+            proposal_rows=rows,
+            maximum_candidates=rules["maximum_support_proposals"],
+            grounding_eligibility=grounding,
+        )
+        placement = replace(
+            placement,
+            shape_proposal_seeds=proposed,
+            grounding_rejection_seeds=rejected,
+            accepted_shape_proposal=len(proposed) - 1,
+        )
+        world = WorldSpec(world_seed, sequence.spec.sequence_id, (item,))
+        report = WorldGenerationReport(
+            world_seed,
+            sequence.spec.sequence_id,
+            "anomaly_only",
+            attempt,
+            1,
+            placement_seed,
+            (placement,),
+            "continuous_observation",
+            "full_trajectory",
+        )
+        statistics = {}
+        record = save_sparse_segment(
+            path,
+            None,
+            (sequence.source_frame(t) for t in sequence.frame_ids),
+            world=world,
+            report=report,
+            renderer_identity=state["identity"],
+            ray_grid=grid,
+            sensor=sensor,
+            statistics=statistics,
+            pool_name=state["pool"],
+            synthetic_sequence_id=identity,
+            synthetic_sequence_index=world_index,
+            segment_index=0,
+        )
+        result.update(
+            status="rendered",
+            record=record,
+            world=world.to_dict(),
+            placement=report.to_dict(),
+            frames=statistics["frames"],
+            distribution=observation_distribution(statistics["frames"]),
+        )
+    except PlacementError as error:
+        result.update(status="rejected", rejection=str(error))
+        for key in (
+            "proposal_pool_indices",
+            "rejection_reasons",
+            "minimum_obstacle_sdf_m",
+        ):
+            if hasattr(error, key):
+                result[key] = list(getattr(error, key))
+    sequence._frames.clear()
+    result["wall_seconds"] = time.monotonic() - started
+    return result
+
+
+def generate_observation_match(
+    data_root, pool_name, *, config_path, pilot_round, workers
+):
+    """Generate full-sequence candidates, then select worlds only by fixed data targets."""
+    import time
+    from scipy.spatial import cKDTree
+    from .train import host_disk
+
+    global _OBSERVATION_STATE
+    protocol = load_protocol()
+    config = json.loads(Path(config_path).read_text())
+    if pilot_round not in (0, 1, 2) or workers < 1:
+        raise DataProtocolError("use at most two pilot rounds and positive workers")
+    if not pilot_round and config["status"] != "generation_rules_fixed":
+        raise DataProtocolError(
+            "formal generation requires the completed pilot decision"
+        )
+    pool = config["pools"][pool_name]
+    source_id = pool["source_sequence"]
+    count = config["pilot"]["worlds"][pool_name] if pilot_round else pool["world_count"]
+    seed_base = (
+        config["pilot"]["seed_bases"][pool_name]
+        + (pilot_round - 1) * config["pilot"]["second_round_seed_offset"]
+        if pilot_round
+        else pool["seed_base"]
+    )
+    output = (
+        Path(config["pilot"]["output"]) / f"round_{pilot_round}" / pool_name
+        if pilot_round
+        else Path(config["paths"]["data"]) / pool_name
+    )
+    output.mkdir(parents=True, exist_ok=True)
+    scientific = {k: config[k] for k in ("targets", "generation", "pools", "seed_rule")}
+    identity = hashlib.sha256(
+        json.dumps(scientific, sort_keys=True).encode()
+        + Path(__file__).read_bytes()
+        + Path(__file__).with_name("render.py").read_bytes()
+    ).hexdigest()
+    disk = host_disk()
+    # Candidates are sparse; two GiB includes scratch, selected worlds and atomic writes.
+    if disk["SizeRemaining"] - disk["reserve_bytes"] < 2 * 2**30:
+        raise OSError("insufficient host capacity for bounded generation")
+    spec = dict(
+        experiment=config["experiment"],
+        pilot_round=pilot_round,
+        pool=pool_name,
+        seed_base=seed_base,
+        world_count=count,
+        candidate_limit=config["generation"]["maximum_world_candidates"],
+        scientific=scientific,
+        renderer_identity=identity,
+        workers=workers,
+        host_disk=disk,
+    )
+    spec_path = output / "spec.json"
+    if spec_path.exists():
+        old = json.loads(spec_path.read_text())
+        if any(old[k] != spec[k] for k in spec if k not in ("workers", "host_disk")):
+            raise DataProtocolError(
+                "saved candidate inputs differ; do not reuse another pilot's state"
+            )
+    else:
+        _atomic_json(spec_path, spec)
+    if (output / "manifest.json").exists():
+        return json.loads((output / "manifest.json").read_text())
+    started = time.monotonic()
+    sequence = STUSequence.open(
+        data_root,
+        protocol=protocol,
+        partition="train",
+        sequence_id=source_id,
+        label_mode=LabelMode.REQUIRED,
+    )
+    sequence._cache_frames = 5
+    support = load_qualified_support_pool(
+        protocol.verify_support_pool(source_id),
+        source_sequence_id=source_id,
+        expected_sha256=protocol.artifacts["qualified_support_pools"][
+            f"train/{source_id}"
+        ]["sha256"],
+    )
+    nearest, _ = cKDTree(sequence._lidar_poses[:, :3, 3]).query(
+        support.anchors_world_m, workers=workers
+    )
+    support_rows = {}
+    for role, (lower, upper) in config["generation"][
+        "candidate_minimum_trajectory_range_m"
+    ].items():
+        keep = (nearest >= lower) & (nearest < upper)
+        if role == "complete_pass":
+            a, b = config["generation"]["complete_pass_support_time_fraction"]
+            keep &= (support.frames >= a * (len(sequence) - 1)) & (
+                support.frames <= b * (len(sequence) - 1)
+            )
+        support_rows[role] = np.flatnonzero(keep)
+    print(
+        json.dumps(
+            dict(
+                event="support_strata",
+                pool=pool_name,
+                counts={k: len(v) for k, v in support_rows.items()},
+            )
+        ),
+        flush=True,
+    )
+    obstacles = collect_observed_obstacle_index(
+        (sequence.source_frame(t) for t in sequence.frame_ids),
+        source_sequence_id=source_id,
+    )
+    sequence._frames.clear()
+    grid, sensor = load_sensor_calibration(protocol.verify_sensor_calibration())
+    _OBSERVATION_STATE = dict(
+        inputs=(sequence, support, obstacles, grid, sensor),
+        config=config,
+        support_rows=support_rows,
+        identity=identity,
+        output=output,
+        pool=pool_name,
+        namespace=f"pilot_v2_r{pilot_round}" if pilot_round else "v2",
+        seed_base=seed_base,
+    )
+    candidates = {}
+    trace = output / "candidates.jsonl"
+    if trace.exists():
+        for line in trace.read_text().splitlines():
+            row = json.loads(line)
+            candidates[(row["world_index"], row["attempt"])] = row
+    tasks = [
+        (i, j)
+        for i in range(count)
+        for j in range(spec["candidate_limit"])
+        if (i, j) not in candidates
+    ]
+    try:
+        with (
+            trace.open("a") as stream,
+            mp.get_context("fork").Pool(processes=workers) as processes,
+        ):
+            for row in processes.imap_unordered(
+                _observation_candidate, tasks, chunksize=1
+            ):
+                candidates[(row["world_index"], row["attempt"])] = row
+                stream.write(json.dumps(row) + "\n")
+                stream.flush()
+                print(
+                    json.dumps(
+                        dict(
+                            event="candidate",
+                            pool=pool_name,
+                            world=row["world_index"],
+                            attempt=row["attempt"],
+                            status=row["status"],
+                            wall_seconds=row["wall_seconds"],
+                        )
+                    ),
+                    flush=True,
+                )
+                volume = host_disk()
+                if volume["SizeRemaining"] - volume["reserve_bytes"] < 512 * 2**20:
+                    raise OSError("candidate writes approached the host reserve")
+    finally:
+        _OBSERVATION_STATE = None
+    patterns = np.zeros(32, dtype=np.int64)
+    joint = np.zeros((4, 4), dtype=np.int64)
+    target_visibility = np.array([4355, 2856, 1372]) / 8583
+    target_joint = np.array(config["targets"]["qualified_joint_probability"])
+    records, selections = [], []
+    for i in range(count):
+        scored = []
+        for j in range(spec["candidate_limit"]):
+            row = candidates[(i, j)]
+            if row["status"] != "rendered":
+                continue
+            p = patterns + np.array(row["distribution"]["pattern_counts"])
+            q = joint + np.array(row["distribution"]["qualified_joint_counts"])
+            visibility = np.array([p[0], p[31], p.sum() - p[0] - p[31]]) / p.sum()
+            cost = 0.5 * np.abs(visibility - target_visibility).sum()
+            cost += 0.5 * np.abs(q / max(1, q.sum()) - target_joint).sum()
+            cost += (
+                sum(q[a, b] == 0 for a, b in config["targets"]["required_far_cells"])
+                / 3
+            )
+            scored.append((float(cost), j, row))
+        if not scored:
+            raise DataProtocolError(
+                f"world {i} exhausted all fixed geometry/support candidates"
+            )
+        cost, j, chosen = min(scored, key=lambda x: (x[0], x[1]))
+        patterns += np.array(chosen["distribution"]["pattern_counts"])
+        joint += np.array(chosen["distribution"]["qualified_joint_counts"])
+        record = dict(chosen["record"])
+        target = output / f"world_{i:03d}.npz"
+        Path(record["file"]).rename(target)
+        record["file"] = target.as_posix()
+        records.append(record)
+        selections.append(
+            dict(
+                world_index=i,
+                selected_attempt=j,
+                objective=cost,
+                distribution=chosen["distribution"],
+                frames=chosen["frames"],
+                rejected_rendered_attempts=[r[1] for r in scored if r[1] != j],
+                rejection_reason="larger fixed pool distribution objective",
+            )
+        )
+    manifest = dict(
+        format="ajae-observation-match-pool",
+        experiment=config["experiment"],
+        pilot_round=pilot_round,
+        pool_name=pool_name,
+        source_sequence_id=source_id,
+        generation_identity=identity,
+        world_count=count,
+        window_count=int(patterns.sum()),
+        frame_count=count * pool["frame_count"],
+        segments=records,
+        pattern_counts=patterns.tolist(),
+        qualified_joint_counts=joint.tolist(),
+        selections=selections,
+        wall_seconds=time.monotonic() - started,
+    )
+    _atomic_json(output / "manifest.json", manifest)
+    # Candidate deltas are temporary; their seeds, physical parameters and statistics remain in the trace.
+    for row in candidates.values():
+        if row["status"] == "rendered":
+            Path(row["record"]["file"]).unlink(missing_ok=True)
+    print(
+        json.dumps(
+            dict(
+                event="pool_generated",
+                pool=pool_name,
+                world_count=count,
+                patterns=patterns.tolist(),
+                joint=joint.tolist(),
+                wall_seconds=manifest["wall_seconds"],
+            )
+        ),
+        flush=True,
+    )
+    return manifest
+
+
 def _indices(text: str | None) -> tuple[int, ...] | None:
     if text is None:
         return None
@@ -1434,7 +1930,7 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Generate or verify schema-34 frozen window data"
     )
-    parser.add_argument("action", choices=("generate", "manifest", "check"))
+    parser.add_argument("action", choices=("generate", "manifest", "check", "observe"))
     parser.add_argument("--pool", required=True, choices=("train", "validation"))
     parser.add_argument("--data-root", type=Path)
     parser.add_argument("--protocol", type=Path, default=PROJECT_ROOT / "protocol.json")
@@ -1444,13 +1940,29 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--segment-indices")
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--workers", type=int, default=1)
+    parser.add_argument("--pilot-round", type=int, choices=(0, 1, 2), default=0)
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=PROJECT_ROOT / "protocols/observation_match_v2/config.json",
+    )
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     protocol = load_protocol(args.protocol)
-    if args.action == "generate":
+    if args.action == "observe":
+        if args.data_root is None:
+            raise DataProtocolError("observation matching requires --data-root")
+        generate_observation_match(
+            args.data_root,
+            args.pool,
+            config_path=args.config,
+            pilot_round=args.pilot_round,
+            workers=args.workers,
+        )
+    elif args.action == "generate":
         if args.data_root is None:
             raise DataProtocolError("generation requires --data-root")
         records = generate_segments(

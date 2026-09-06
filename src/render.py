@@ -3835,11 +3835,12 @@ class _ObjectCompetition:
     distance_m: np.ndarray
     normal_world: np.ndarray
     object_id: np.ndarray
+    returned: np.ndarray
     geometric_hits: Mapping[int, int]
     accepted_hits: Mapping[int, int]
 
 
-def _accepted_object_hits(
+def _object_hits(
     origin_world: np.ndarray,
     directions_world: np.ndarray,
     world: WorldSpec,
@@ -3849,7 +3850,7 @@ def _accepted_object_hits(
     *,
     canonical_ray_slots: np.ndarray | None = None,
 ) -> _ObjectCompetition:
-    """Accept each object's returns independently before nearest-return competition."""
+    """Choose the nearest opaque surface before deciding whether it returns."""
 
     count = directions_world.shape[0]
     origins = np.asarray(origin_world, dtype=np.float64)
@@ -3860,6 +3861,7 @@ def _accepted_object_hits(
     best_distance = np.full(count, np.inf, dtype=np.float64)
     best_normal = np.zeros((count, 3), dtype=np.float64)
     best_object = np.full(count, -1, dtype=np.int32)
+    best_returned = np.zeros(count, dtype=np.bool_)
     geometric_hits: dict[int, int] = {}
     accepted_hits: dict[int, int] = {}
     if canonical_ray_slots is None:
@@ -3907,13 +3909,13 @@ def _accepted_object_hits(
         accepted = valid & (uniform < chance)
         geometric_hits[item.object_id] = int(np.count_nonzero(valid))
         accepted_hits[item.object_id] = int(np.count_nonzero(accepted))
-        comparable = accepted & np.isfinite(best_distance)
+        comparable = valid & np.isfinite(best_distance)
         tied = np.zeros(count, dtype=np.bool_)
         tied[comparable] = (
             np.abs(distance[comparable] - best_distance[comparable])
             <= world.tie_tolerance_m
         )
-        closer = accepted & (
+        closer = valid & (
             (distance < best_distance - world.tie_tolerance_m)
             | tied & ((best_object < 0) | (item.object_id < best_object))
         )
@@ -3921,10 +3923,12 @@ def _accepted_object_hits(
             best_distance[closer] = distance[closer]
             best_normal[closer] = world_normal[closer]
             best_object[closer] = item.object_id
+            best_returned[closer] = accepted[closer]
     return _ObjectCompetition(
         _freeze(best_distance),
         _freeze(best_normal),
         _freeze(best_object),
+        _freeze(best_returned),
         geometric_hits,
         accepted_hits,
     )
@@ -3994,8 +3998,11 @@ class RenderedFrame:
             raise TypeError("object_id_internal must be int32[slot]")
         if not np.array_equal(inserted, anomaly_proxy):
             raise RenderError("inserted mask must equal the anomaly-proxy mask")
-        if np.any(occluded & ~inserted) or np.any(inserted & unchanged):
+        missing = occluded & ~inserted
+        if np.any((inserted | occluded) & unchanged):
             raise RenderError("render masks have contradictory slot semantics")
+        if np.any(self.source.xyzi[missing] != 0) or np.any(packed[missing] != 0):
+            raise RenderError("opaque occlusion without a return must clear the slot")
         if np.any((object_id >= 0) != inserted):
             raise RenderError(
                 "internal object IDs must identify exactly inserted slots"
@@ -4019,7 +4026,7 @@ class RenderedFrame:
 
     @property
     def changed_mask(self) -> np.ndarray:
-        return self.inserted_mask
+        return self.inserted_mask | self.occluded_original_mask
 
     @property
     def frame_id(self) -> int:
@@ -4146,7 +4153,7 @@ def render_frame(
         origins_world,
         normal_range,
     ) = _frame_trace_context(source, ray_grid)
-    competition = _accepted_object_hits(
+    competition = _object_hits(
         origins_world,
         directions_world,
         world,
@@ -4155,14 +4162,18 @@ def render_frame(
         int(source.frame_id),
         canonical_ray_slots=canonical_ray_slots,
     )
-    inserted = np.isfinite(competition.distance_m) & (
+    foreground = np.isfinite(competition.distance_m) & (
         competition.distance_m < normal_range - world.tie_tolerance_m
     )
+    inserted = foreground & competition.returned
     slots = np.flatnonzero(inserted).astype(np.int32)
     object_by_id = {item.object_id: item for item in world.objects}
     anomaly_proxy = inserted.copy()
     xyzi = np.asarray(source.xyzi, dtype=np.float32).copy()
     original_real = ~np.asarray(source.zero_slot_mask, dtype=np.bool_)
+    # A failed return cannot reveal an original point behind an opaque object.
+    missing = foreground & ~competition.returned & original_real
+    xyzi[missing] = 0
     if slots.size:
         xyzi[slots, :3] = (
             origins_sensor[slots]
@@ -4199,6 +4210,10 @@ def render_frame(
                 random_quantile,
                 item.material,
             )
+        # Match the measured output format; retain the sensor model's full range.
+        xyzi[slots, 3] = (
+            np.rint(xyzi[slots, 3].astype(np.float64) * 3500) / 3500
+        ).astype(np.float32)
 
     labels = source.labels
     if labels is None:
@@ -4215,6 +4230,10 @@ def render_frame(
         instance[slots] = (
             SYNTHETIC_INSTANCE_BASE + competition.object_id[slots]
         ).astype(np.uint16)
+        instance[missing] = 0
+        semantic[missing] = 0
+        if semantic_target is not None:
+            semantic_target[missing] = np.uint8(255)
         for slot in slots:
             item = object_by_id[int(competition.object_id[slot])]
             semantic[slot] = np.uint16(2)
@@ -4237,8 +4256,8 @@ def render_frame(
             packed[slot] = np.uint32(2) | np.uint32(
                 SYNTHETIC_INSTANCE_BASE + item.object_id
             ) << np.uint32(16)
-    occluded = inserted & original_real
-    unchanged = original_real & ~inserted
+    occluded = foreground & original_real
+    unchanged = original_real & ~foreground
     if semantic is not None:
         original_semantic = labels.semantic
         unchanged &= (original_semantic != np.uint16(0)) & (
@@ -5158,6 +5177,8 @@ def _grounding_qualified_shape(
     *,
     stride: int,
     maximum_proposals: int = 64,
+    size_m_range: tuple[float, float] = (0.2, 3.0),
+    desired_family: str | None = None,
 ) -> tuple[
     ShapeSpec,
     ShapeGenerationReport,
@@ -5176,9 +5197,14 @@ def _grounding_qualified_shape(
     rejected: list[int] = []
     for proposal in range(limit):
         shape_seed = start + step * proposal
-        shape, report = ShapeSpec.sample_with_report(shape_seed)
-        grounding = qualify_grounding(shape)
+        shape, report = ShapeSpec.sample_with_report(
+            shape_seed, size_m_range=size_m_range
+        )
         proposed.append(shape_seed)
+        if desired_family is not None and report.shape_family != desired_family:
+            rejected.append(shape_seed)
+            continue
+        grounding = qualify_grounding(shape)
         if grounding.passed:
             return shape, report, grounding, tuple(proposed), tuple(rejected)
         rejected.append(shape_seed)
@@ -5374,7 +5400,7 @@ def sample_anomaly_world(
             contexts[frame_id] = _frame_trace_context(frames[frame_id], ray_grid)
         slots, _, directions, _, origins, native_range = contexts[frame_id]
         candidate = WorldSpec(world_seed, sequence_id, (item,))
-        hits = _accepted_object_hits(
+        hits = _object_hits(
             origins,
             directions,
             candidate,
@@ -5386,6 +5412,7 @@ def sample_anomaly_world(
         return bool(
             np.any(
                 np.isfinite(hits.distance_m)
+                & hits.returned
                 & (hits.distance_m < native_range - candidate.tie_tolerance_m)
             )
         )

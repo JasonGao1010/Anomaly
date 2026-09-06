@@ -39,6 +39,7 @@ from src.render import (
     ShapeSpec,
     WorldGenerationReport,
     WorldSpec,
+    render_frame,
     render_segment_world,
     world_content_identity,
 )
@@ -169,6 +170,78 @@ def _rendered_fixture(sequence_id: int = 206) -> tuple[object, tuple[object, ...
         renderer_identity="a" * 64,
     )
     return segment, sources
+
+
+def test_opaque_missing_return_blocks_rear_object_and_roundtrips(tmp_path, monkeypatch):
+    segment, sources = _rendered_fixture()
+    front = segment.world.objects[0]
+    rear = replace(front, object_id=2, translation_world_m=(4.0, 0.0, 0.0))
+    world = replace(segment.world, objects=(front, rear))
+    grid = RayGrid(
+        np.array([[1.0, 0.0, 0.0]]), np.array([0.0]), np.array([0.0]), beam_count=1
+    )
+    sensor = SensorCalibration.constant(1.234567)
+    # The rear surface returns, but the nearer opaque surface does not.
+    monkeypatch.setattr(
+        SensorCalibration,
+        "return_chance",
+        lambda self, beam, distance, incidence, bias: (distance > 3).astype(float),
+    )
+    missing = render_frame(sources[0], world, grid, sensor)
+    assert not missing.inserted_mask.any()
+    assert missing.occluded_original_mask.all() and missing.changed_mask.all()
+    assert not missing.xyzi.any() and not missing.packed_labels.any()
+    report = replace(
+        segment.report,
+        anomaly_count=2,
+        placement_mode="continuous_observation",
+        support_scope="full_trajectory",
+    )
+    path = tmp_path / "world.npz"
+    record = save_sparse_segment(
+        path,
+        None,
+        iter(sources),
+        world=world,
+        report=report,
+        renderer_identity="b" * 64,
+        ray_grid=grid,
+        sensor=sensor,
+        pool_name="train",
+        synthetic_sequence_id="synthetic/v2/train/000",
+        synthetic_sequence_index=0,
+        segment_index=0,
+    )
+    sequence = object.__new__(STUSequence)
+    sequence.spec = SequenceSpec("train", 206, "fixture", True, FrameSpan(0, 5))
+    sequence.source_frame = lambda frame_id: sources[frame_id]
+    restored = FrozenSyntheticSegment(path, sequence, record["file_sha256"])
+    assert restored.metadata["anomaly_return_counts"] == [0] * 5
+    assert restored.metadata["visible_point_counts"] == [0] * 5
+    assert not restored.frame(0).xyzi.any()
+    # Native foreground and a ray missing both objects are unchanged byte for byte.
+    native = sources[0]
+    xyzi = native.xyzi.copy()
+    xyzi[:, 0] = 1
+    foreground = make_source_frame(
+        0, xyzi, native.lidar_pose, native.labels, partition="train", sequence_id=206
+    )
+    assert np.array_equal(render_frame(foreground, world, grid, sensor).xyzi, xyzi)
+    empty_ray_world = replace(
+        world, objects=(replace(front, translation_world_m=(3.0, 10.0, 0.0)),)
+    )
+    unchanged = render_frame(native, empty_ray_world, grid, sensor)
+    assert np.array_equal(unchanged.xyzi, native.xyzi)
+    assert np.array_equal(unchanged.packed_labels, native.labels.packed)
+    monkeypatch.setattr(
+        SensorCalibration,
+        "return_chance",
+        lambda self, beam, distance, incidence, bias: np.ones_like(distance),
+    )
+    returned = render_frame(native, world, grid, sensor)
+    assert returned.inserted_mask.all() and (returned.object_id_internal == 1).all()
+    assert returned.xyzi[0, 3] == np.float32(round(3500 * 1.234567) / 3500)
+    assert returned.xyzi[0, 3] > 1
 
 
 def test_schema34_freezes_data_roles_and_counts() -> None:

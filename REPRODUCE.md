@@ -1,6 +1,6 @@
 # AJAE 数据协议复现说明
 
-当前活动协议是 schema 34。科学定义见 `PROTOCOL.md`，机器可检查合同见 `protocol.json`。
+当前主线为 `AJAE-ObservationMatch-v2`，规则与预先选定的监控窗口见 `protocols/observation_match_v2/config.json` 和 `monitor.json`。schema 34 的 `protocol.json` 保留 v1 历史池定义与共同五帧接口；v2 尚在生成先导阶段，正式数据、训练和真实成绩尚未产生。
 
 当前正式数据池已生成并通过完整窗口检查，协议状态为 `frozen`：206 训练池包含 128 个单代理世界、3080 个窗口；201 合成验证池包含 92 个单代理世界、2360 个窗口；原始完整 201 另有 678 个在线窗口。完整检查记录见 `artifacts/data/qualification.json`。这说明数据实现通过本协议检查，不代表模型效果已经得到验证。
 
@@ -12,7 +12,7 @@
 
 整窗无异常比例为0.6494%、0.4237%、50.7398%；五帧持续可见比例为97.7597%、97.9661%、33.2751%。训练合格帧中少于100个异常点占20.9387%，合成验证35.6892%，真实完整五帧子集87.1166%。训练侧当前合格帧异常距离中位数20至50米的联合列为空，真实侧有519个合格帧落在其中三个非空格。已有但稀少、完全缺覆盖、固定背景或估计限制分别报告，未据此宣称某种模型失败机制已经成立。
 
-本次唯一统计入口为`python -m src.profile --data-root /absolute/path/to/STU --synthetic --workers 12`；默认输出`runs/profile_pools/`与`profiles/`，真实统计默认读取`runs/profile_v1/`。合成连续阶段按世界截断，初始四帧只计观测；完整输入体素、分位数、分箱和可靠性规则复用原实现。原始统计耗时401.695秒，5项相关检查及两侧先导独立成员复算通过；资源、准确范围和限制见结果说明。本轮无训练、模型前向、异常生成或隐藏测试读取。下一项选定的优先候选是整窗正常窗口抽样比例的单因素对照，尚未确定新配比或执行训练；原数据和合成验证集未修改。
+本次唯一统计入口为`python -m src.profile --data-root /absolute/path/to/STU --synthetic --workers 12`；默认输出`runs/profile_pools/`与`profiles/`，真实统计默认读取`runs/profile_v1/`。合成连续阶段按世界截断，初始四帧只计观测；完整输入体素、分位数、分箱和可靠性规则复用原实现。原始统计耗时401.695秒，5项相关检查及两侧先导独立成员复算通过；资源、准确范围和限制见结果说明。本轮无训练、模型前向、异常生成或隐藏测试读取。该轮原先提出整窗正常抽样的单因素对照；用户随后授权直接实施多因素 `AJAE-ObservationMatch-v2`，因此单因素对照不再是当前前置任务。
 
 此前完成的19条公开真实验证序列全量画像见[统计执行说明与结果](profiles/real/method.md)、[CSV目录说明](profiles/real/index.csv)和[31项要素总表](profiles/real/factors.csv)。按用户要求，交付已改为20个CSV文件，数值、分母和缺失说明保留，公式转换为已复算数值。该轮读取全部8,659帧，完整五帧因素使用8,583窗，76个启动窗口单列；没有新增模型前向、训练或合成生成。FullTrain-v1仍以第七轮候选结束，首次真实评价及强度置换结论不因数据统计而改写。
 
@@ -23,6 +23,44 @@
 唯一入口为`python -m src.profile --data-root /absolute/path/to/STU --workers 12`，CSV默认保存于`profiles/real/`，可用`--tables`指定目录。统计使用原`STUSequence`和`joint_voxelize`，完整保留正常、异常、忽略及范围外成员；`src/profile_report.py`完成分布汇总和CSV导出。原始强度精确合并取值计数；大量残差分位数附宽度至多0.1毫米的区间；静态表面残差明确为固定抽样代理。依赖、规则、覆盖、6项必要检查、原始帧独立复算及资源记录均在执行说明中。正式原始扫描耗时486.842秒；随后报告补充只复用已有统计。`runs/profile_v1/`保存逐帧、逐窗口、逐实例、连续阶段、统计长表和三页字体已核验的结果图，沿用本地忽略规则。
 
 真实侧与两侧合成画像现已全部完成。描述统计阶段到此结束，后续由一次固定配方的受控训练回答真实指标能否改善，不继续扩充因素清单。第七轮真实官方全帧AP 3.475451%保持原样；本次尚未验证任何改进的效果。
+
+## 产物用途与当前状态
+
+所有活动产物使用英文路径。`v1` 表示已完成的历史基线，`v2` 表示当前分布改造；历史基线仍有比较用途，不等同于废弃文件。
+
+| 位置 | 状态与用途 |
+| --- | --- |
+| `protocols/observation_match_v2/` | 当前 v2 目标、生成与训练规则、固定监控清单 |
+| `runs/observation_match_v2/pilot/` | 当前有限生成先导；与正式训练样本隔离 |
+| `artifacts/data_v2/`、`profiles/v2/` | 预定正式 v2 数据与画像；生成前不标为完成 |
+| `runs/fulltrain_v2/`、`runs/real_val_v2/` | 预定 v2 训练与完整真实评价；尚未执行 |
+| `artifacts/calibration.pt`、`artifacts/calibration_source.npz`、两份支撑池 | v2 继续使用的 206 传感器校准及 206／201 支撑观测 |
+| `runs/learn/initial.pt` | v2 必需的原始未训练初始化，保留原路径与文件内容 |
+| `artifacts/data/` | 完整保留的 v1 冻结样本、清单和资格记录 |
+| `runs/fulltrain_v1/epoch_07.pt`、`runs/real_val_v1/` | 必需的 v1 候选与完整真实对照证据 |
+| `runs/fulltrain_v1/validation/epoch_07/predictions/normal/` | 保留的 v1 正常 201 预测；同目录合成预测已清理 |
+| `profiles/` 的既有 CSV、`runs/profile_v1/`、`runs/profile_pools/` | 已完成的真实及 v1 三侧画像，继续作为 v2 目标与对照 |
+| `runs/diagnostic_v1/`、`runs/intensity_v1/` | 历史失败诊断与强度检查的统计证据；置换预测已清理 |
+| `runs/fulltrain_v1/monitor_*/` | 仅保留历史监控清单、逐窗与汇总报告；大体积预测和排序记录已清理 |
+| `runs/history/{learning,transfer,coverage,validation}/` | 早期探索的轻量历史报告，无活动检查点或预测，不作为 v2 输入 |
+
+原 `runs/transfer/`、`runs/coverage/`、`runs/validation/` 现移入 `runs/history/`；原 `runs/learn/metrics.jsonl` 移至 `runs/history/learning/`。下文历史叙述中的原路径记录当时执行身份，查找现存报告时按此表定位。已废弃且无后续用途的大体积探索预测、未选中检查点及 `DynaCAN-deps` 已直接删除，不另设存放废弃副本的目录。原始 STU、有效基线和当前 v2 产物均不属于废弃材料。
+
+## 当前生成先导与存储
+
+v2 使用完整 206／201 序列上的静态世界，近表面不透明遮挡先于回波接受；未产生回波的遮挡槽清零，不恢复后方点。新异常强度采用 `float32(round(3500*I)/3500)`，原始正常点保持不变。流式保存同时支持异常回波和清空槽位，重叠窗口引用同一冻结帧。第一轮目标、候选上限与独立种子已在配置中登记；正式池仍须依据先导覆盖作出决定。
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 \
+.venv/bin/python -m src.data observe --pool train --pilot-round 1 \
+  --data-root /absolute/path/to/STU --workers 12
+```
+
+201 先导将 `--pool` 改为 `validation`，使用独立种子。先导写入 `runs/observation_match_v2/pilot/round_1/`，每个世界至多 8 个候选，依据同一数据分布目标选择；候选参数、拒绝原因和逐帧统计保留。这里的候选渲染是模型无关校准，尚不能证明真实检测得到改善。
+
+本轮按用户授权清除了约 20.606 GiB 的旧过程监控预测、强度置换预测、旧合成验证预测和未选中／恢复检查点。原有汇总与逐帧报告仍保留，这些已清理的预测路径只能作为历史来源，不能再声称本机仍有全部旧预测。v1 初始模型、第七轮模型、完整真实预测、正常 201 预测、冻结样本、清单和画像保留。220 个小体积 v1 样本曾被删除，随后按用户更正全部从 Git 恢复。
+
+用户另行授权在确认不再依赖后删除 `DynaCAN-deps`；已核对当前代码、导入路径、加载动态库及活动进程，没有发现依赖，并在删除后成功构建 GPU 模型。该目录文件总量约 11.908 GiB。两次空闲块回收后，E 盘实际剩余从约 35.26 GiB 增至 61.40 GiB；此数值仅为当时测量，后续大体积执行仍重新核算峰值。用户明确要求所有新产物留在 E 盘，不使用 C 盘。
 
 ## 原始数据
 

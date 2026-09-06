@@ -1410,10 +1410,10 @@ def model_digest(model):
 
 def verify_baseline(initial, monitors):
     """Bind B reuse to the same inputs, complete prediction rows and exact metrics."""
-    directory = PROJECT_ROOT / "runs/validation"
+    directory = PROJECT_ROOT / "runs/history/validation"
     manifest = json.loads((directory / "samples.json").read_text())
     summary = json.loads((directory / "summary.json").read_text())
-    plan = json.loads((PROJECT_ROOT / "runs/coverage/plan.json").read_text())
+    plan = json.loads((PROJECT_ROOT / "runs/history/coverage/plan.json").read_text())
     if file_hash(initial) != plan["initial_checkpoint"]["sha256"]:
         raise ValueError("original initialization differs from coverage evidence")
     checkpoint = Path(manifest["checkpoint"]["file"])
@@ -2068,7 +2068,7 @@ def run_full(data_root, checkpoint, output):
             )
     else:
         comparison = json.loads(
-            (PROJECT_ROOT / "runs/coverage/check_1280/samples.json").read_text()
+            (PROJECT_ROOT / "runs/history/coverage/check_1280/samples.json").read_text()
         )
         if (
             digest != comparison["checkpoints"]["B"]["sha256"]
@@ -2553,7 +2553,7 @@ if __name__ == "__main__":
     parser.add_argument("--sequence", type=int)
     parser.add_argument("--startup-only", action="store_true")
     parser.add_argument(
-        "--checkpoint", type=Path, default=Path("runs/coverage/B/final.pt")
+        "--checkpoint", type=Path, default=Path("runs/history/coverage/B/final.pt")
     )
     args = parser.parse_args()
     if args.diagnose:
@@ -2572,7 +2572,7 @@ if __name__ == "__main__":
         )
     elif args.full:
         run_full(
-            args.data_root, args.checkpoint, args.output or Path("runs/validation")
+            args.data_root, args.checkpoint, args.output or Path("runs/history/validation")
         )
     else:
-        run(args.data_root, args.checkpoints, args.output or Path("runs/transfer"))
+        run(args.data_root, args.checkpoints, args.output or Path("runs/history/transfer"))
