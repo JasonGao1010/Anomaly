@@ -16,6 +16,7 @@ from src.evaluate import (
     full_samples,
     packed_scores,
     pooled_files,
+    diagnostic_bin,
 )
 from src.protocol import load_protocol
 from src.train import fixed_check
@@ -42,6 +43,55 @@ def test_earlier_middle_selection_and_paired_frames():
     assert samples[-1]["current_frame"] == 650
     with pytest.raises(ValueError, match="201 validation"):
         select_samples(load_protocol().training_pool)
+
+
+def test_weighted_ap_and_realizable_recall_keep_score_ties(tmp_path):
+    from sklearn.metrics import average_precision_score, roc_auc_score, roc_curve
+
+    # The tie at .8 exceeds the 1% FPR budget and cannot be partially selected.
+    scores = np.array([0.9, 0.8, 0.8, 0.8, 0.7] + [0.1] * 98, dtype=np.float32)
+    target = np.array([1, 1, 0, 0, 1] + [0] * 98)
+    positive, negative = int(target.sum()), int((target == 0).sum())
+    pi = 87398 / 193470656
+    weights = np.where(target, pi / positive, (1 - pi) / negative)
+    reference = average_precision_score(target, scores, sample_weight=weights) * 100
+    fpr, tpr, thresholds = roc_curve(target, scores, drop_intermediate=False)
+    best = np.flatnonzero(tpr == max(tpr[fpr <= 0.01]))[0]
+    records = packed_scores(scores, target)
+    for chunk in (1, 2, 7, 1 << 20):
+        result = exact_metrics(np.sort(records), chunk_size=chunk, prevalence=pi)
+        assert result["standardized_AP"] == pytest.approx(reference, abs=1e-11)
+        assert result["AUROC"] == pytest.approx(roc_auc_score(target, scores) * 100)
+        point = result["recall_at_fpr_limit"]
+        assert point["recall"] == pytest.approx(tpr[best] * 100)
+        assert point["FPR"] == fpr[best] * 100
+        assert point["threshold"] == thresholds[best]
+        assert point["tp"] == 1 and point["fp"] == 0
+    path = tmp_path / "records.bin"
+    np.r_[records[:5], np.uint64(0), records[5:]].tofile(path)
+    result = pooled_files(
+        [path, path], ranges=[(0, 5), (6, len(records) - 5)], prevalence=pi
+    )
+    assert result["standardized_AP"] == pytest.approx(reference, abs=1e-11)
+    # At the pool's own prevalence, standardized AP equals ordinary AP.
+    result = exact_metrics(np.sort(records), prevalence=positive / len(target))
+    assert result["standardized_AP"] == pytest.approx(result["AP"], abs=1e-11)
+    blocked = exact_metrics(np.sort(packed_scores([0.9, 0.9], [0, 1])), prevalence=pi)
+    assert blocked["recall_at_fpr_limit"] == dict(
+        recall=0.0, FPR=0.0, threshold=None, tp=0, fp=0
+    )
+
+
+def test_diagnostic_strata_use_fixed_half_open_boundaries():
+    assert diagnostic_bin(4, 10) is None
+    assert diagnostic_bin(5, 2.5) == "0_0"
+    assert diagnostic_bin(19, 9.999) == "0_0"
+    assert diagnostic_bin(20, 10) == "1_1"
+    assert diagnostic_bin(100, 20) == "2_2"
+    assert diagnostic_bin(500, 35) == "3_3"
+    assert diagnostic_bin(500, 50) == "3_3"
+    with pytest.raises(ValueError, match="official-range"):
+        diagnostic_bin(5, 50.001)
 
 
 def test_normal_filter_ignores_frame_eligibility_and_keeps_fixed_threshold():

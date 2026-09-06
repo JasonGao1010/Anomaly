@@ -109,12 +109,14 @@ def score_groups(ordered, chunk_size=1 << 20):
         )
 
 
-def exact_metrics(ordered, *, chunk_size=1 << 20):
+def exact_metrics(ordered, *, chunk_size=1 << 20, prevalence=None, fpr_limit=0.01):
     """Exact point pooling with bounded RAM; ordered is an ascending uint64 array.
 
     No score quantization is used. ROC drops the same collinear threshold nodes
     as sklearn's default roc_curve before applying the upstream strict TPR > .95.
     """
+    if prevalence is not None and not (0 < prevalence < 1 and 0 <= fpr_limit <= 1):
+        raise ValueError("invalid diagnostic prevalence or FPR limit")
     positive = sum(
         int(np.sum(ordered[start : start + chunk_size] & 1, dtype=np.int64))
         for start in range(0, len(ordered), chunk_size)
@@ -127,21 +129,41 @@ def exact_metrics(ordered, *, chunk_size=1 << 20):
         "normal_count": negative,
         "anomaly_count": positive,
     }
+    if prevalence is not None:
+        result.update(standardized_AP=None, recall_at_fpr_limit=None)
     if not positive or not negative:
         if positive:
             result.update(AP=100.0)
         return result
     tp = fp = 0
-    ap = area = 0.0
+    ap = area = standardized_ap = 0.0
+    operating_point = dict(recall=0.0, FPR=0.0, threshold=None, tp=0, fp=0)
     fpr95 = None
     previous = None
     first = True
-    for _, counts, pos in score_groups(ordered, chunk_size):
+    for bits, counts, pos in score_groups(ordered, chunk_size):
         neg = counts - pos
         tps = tp + np.cumsum(pos, dtype=np.int64)
         fps = fp + np.cumsum(neg, dtype=np.int64)
         recall, fpr = tps / positive, fps / negative
         ap += float(np.sum(np.diff(np.r_[tp / positive, recall]) * tps / (tps + fps)))
+        if prevalence is not None:
+            # Constant class weights retain every score and change only prevalence.
+            precision = (
+                prevalence * recall / (prevalence * recall + (1 - prevalence) * fpr)
+            )
+            standardized_ap += float(np.sum(pos / positive * precision))
+            feasible = np.flatnonzero(fpr <= fpr_limit)
+            if len(feasible) and tps[feasible[-1]] > operating_point["tp"]:
+                # Keep complete ties; among equal recalls use the highest threshold.
+                index = int(np.searchsorted(tps, tps[feasible[-1]]))
+                operating_point = dict(
+                    recall=float(recall[index]) * 100,
+                    FPR=float(fpr[index]) * 100,
+                    threshold=float(bits[index].view(np.float32)),
+                    tp=int(tps[index]),
+                    fp=int(fps[index]),
+                )
         area += float(
             np.sum(
                 np.diff(np.r_[fp / negative, fpr])
@@ -171,6 +193,11 @@ def exact_metrics(ordered, *, chunk_size=1 << 20):
     if fpr95 is None:
         fpr95 = previous[3]  # The final ROC threshold is always retained.
     result.update(AP=ap * 100, AUROC=area * 100, FPR95=fpr95 * 100)
+    if prevalence is not None:
+        result.update(
+            standardized_AP=standardized_ap * 100,
+            recall_at_fpr_limit=operating_point,
+        )
     return result
 
 
@@ -238,31 +265,44 @@ def normal_files(paths, *, float32=False):
     )
 
 
-def pooled_files(paths, *, normal=False, normal_float32=False):
+def pooled_files(
+    paths, *, normal=False, normal_float32=False, ranges=None, prevalence=None
+):
     """Sort exact records on disk, then reduce them in bounded chunks."""
     if normal:
         return normal_files(paths, float32=normal_float32)
-    size = sum(path.stat().st_size for path in paths)
-    if size % 8:
+    sizes = [path.stat().st_size for path in paths]
+    if any(size % 8 for size in sizes):
         raise ValueError("truncated exact evaluation records")
+    if ranges is None:
+        ranges = [(0, size // 8) for size in sizes]
+    if len(ranges) != len(paths) or any(
+        start < 0 or count < 0 or (start + count) * 8 > size
+        for (start, count), size in zip(ranges, sizes, strict=True)
+    ):
+        raise ValueError("evaluation record range exceeds its source file")
+    size = sum(count * 8 for _, count in ranges)
     if not size:
-        return (
-            normal_statistics(np.empty(0))
-            if normal
-            else exact_metrics(np.empty(0, np.uint64))
-        )
+        return exact_metrics(np.empty(0, np.uint64), prevalence=prevalence)
     with tempfile.TemporaryFile(dir=paths[0].parent) as stream:
         stream.truncate(size)
         ordered = np.memmap(stream, dtype=np.uint64, mode="r+", shape=(size // 8,))
         offset = 0
-        for path in paths:
+        for path, (start, count) in zip(paths, ranges, strict=True):
             with path.open("rb") as source:
-                while len(block := np.fromfile(source, dtype=np.uint64, count=1 << 20)):
+                source.seek(start * 8)
+                while count:
+                    block = np.fromfile(
+                        source, dtype=np.uint64, count=min(count, 1 << 20)
+                    )
+                    if not len(block):
+                        raise ValueError("truncated evaluation record range")
                     ordered[offset : offset + len(block)] = block
                     offset += len(block)
+                    count -= len(block)
         # Numeric in-place quicksort avoids point-count-sized index/ROC arrays.
         ordered.sort(kind="quicksort")
-        result = exact_metrics(ordered)
+        result = exact_metrics(ordered, prevalence=prevalence)
         del ordered
     return result
 
@@ -2083,6 +2123,423 @@ def run_full(data_root, checkpoint, output):
     return result
 
 
+COUNT_BINS = ((5, 20), (20, 100), (100, 500), (500, None))
+DISTANCE_BINS = ((2.5, 10), (10, 20), (20, 35), (35, 50))
+
+
+def diagnostic_bin(count, distance):
+    if count < 5:
+        return None
+    if distance is None or not 2.5 <= distance <= 50:
+        raise ValueError("eligible anomalies require an official-range distance")
+    i = int(np.searchsorted([20, 100, 500], count, side="right"))
+    j = int(np.searchsorted([10, 20, 35], distance, side="right"))
+    return f"{i}_{j}"
+
+
+def diagnostic_frames(data_root, protocol, directory, rows, *, synthetic=False):
+    """Read current observations only; saved inference supplies every score."""
+    if synthetic:
+        dataset = FrozenWindowDataset(data_root, protocol, pool_name="validation")
+    else:
+        source_sequence = STUSequence.open(
+            data_root,
+            protocol=protocol,
+            partition="val",
+            sequence_id=rows[0]["sequence_index"],
+            label_mode=LabelMode.REQUIRED,
+        )
+    frames = []
+    for row in rows:
+        current = row["current"]
+        count = current["anomaly_count"]
+        frame = {
+            "domain": "synthetic" if synthetic else "real",
+            "sequence_id": row["sequence_id"],
+            "current_frame": row["current_frame"],
+            "world_identity": None,
+            "normal_count": current["normal_count"],
+            "anomaly_count": count,
+            "eligible": current["eligible"],
+            "anomaly_distance_median": None,
+            "stratum": None,
+            "detected_anomaly_ge_0_5": 0,
+            "evaluation_records": row["evaluation_records"],
+        }
+        if synthetic:
+            segment, start = dataset.segment_for_window(row["dataset_index"])
+            if (
+                start + 4 != row["current_frame"]
+                or segment.metadata["synthetic_sequence_id"] != row["sequence_id"]
+            ):
+                raise ValueError("saved prediction and synthetic observation disagree")
+            frame["world_identity"] = segment.metadata["world_identity"]
+        if count:
+            source = (
+                segment.frame(row["current_frame"])
+                if synthetic
+                else source_sequence.source_frame(row["current_frame"])
+            )
+            target = evaluation_targets(source.xyzi[:, :3], source.labels.semantic)
+            if (
+                int((target == 1).sum()) != count
+                or int((target == 0).sum()) != current["normal_count"]
+                or current["eligible"] != (count >= 5)
+            ):
+                raise ValueError(
+                    "current observation counts differ from saved evaluation"
+                )
+            distance = float(
+                np.median(np.linalg.norm(source.xyzi[target == 1, :3], axis=1))
+            )
+            frame["anomaly_distance_median"] = distance
+            frame["stratum"] = diagnostic_bin(count, distance)
+            if current["eligible"]:
+                record = row["evaluation_records"]
+                with (directory / record["file"]).open("rb") as stream:
+                    stream.seek(record["offset"] * 8)
+                    values = np.fromfile(stream, dtype=np.uint64, count=record["count"])
+                # Preserve the original point order, labels and exact float32 scores.
+                np.testing.assert_array_equal(values & 1, target[target != -1])
+                scores = (values >> 1).astype(np.uint32).view(np.float32)
+                if not np.isfinite(scores).all() or np.any((scores < 0) | (scores > 1)):
+                    raise ValueError("saved evaluation contains invalid scores")
+                detected = int(np.count_nonzero((values & 1) & (scores >= 0.5)))
+            elif synthetic:
+                window = segment.window(start)
+                batch = PredictionBatch.load(
+                    directory / row["prediction"]["file"], window=window
+                )
+                anomaly = target[batch.source_slot[batch.online_mask]] == 1
+                detected = int(
+                    np.count_nonzero(
+                        batch.anomaly_score[batch.online_mask][anomaly] >= 0.5
+                    )
+                )
+            else:
+                detected = current["anomaly"]["count_ge_0_5"]
+            frame["detected_anomaly_ge_0_5"] = detected
+        frames.append(frame)
+    print(
+        json.dumps(
+            {
+                "event": "diagnostic_observations",
+                "domain": frames[0]["domain"],
+                "sequence": "all" if synthetic else rows[0]["sequence_id"],
+                "frames": len(frames),
+            }
+        ),
+        flush=True,
+    )
+    return frames
+
+
+def diagnostic_coverage(frames):
+    sequences = sorted({r["sequence_id"] for r in frames})
+    worlds = sorted({r["world_identity"] for r in frames if r["world_identity"]})
+    positive = sum(r["anomaly_count"] for r in frames)
+    negative = sum(r["normal_count"] for r in frames)
+    return dict(
+        frame_count=len(frames),
+        sequence_count=len(sequences),
+        sequences=sequences,
+        world_count=len(worlds),
+        worlds=worlds,
+        anomaly_count=positive,
+        normal_count=negative,
+        prevalence=positive / (positive + negative) if positive + negative else None,
+        detected_anomaly_ge_0_5=sum(r["detected_anomaly_ge_0_5"] for r in frames),
+        frames_without_detection_ge_0_5=sum(
+            r["detected_anomaly_ge_0_5"] == 0 for r in frames
+        ),
+    )
+
+
+def diagnostic_group(directory, frames, prevalence):
+    records = [r["evaluation_records"] for r in frames]
+    metrics = pooled_files(
+        [directory / r["file"] for r in records],
+        ranges=[(r["offset"], r["count"]) for r in records],
+        prevalence=prevalence,
+    )
+    coverage = diagnostic_coverage(frames)
+    for key in ("anomaly_count", "normal_count"):
+        if metrics[key] != coverage[key]:
+            raise ValueError(
+                "pooled scores differ from the stratum's observation counts"
+            )
+    return {**coverage, **metrics}
+
+
+def run_diagnostic(data_root, output):
+    """One fixed prevalence/count/distance comparison, with no model loading."""
+    started = time.monotonic()
+    protocol = load_protocol()
+    directories = dict(
+        synthetic=PROJECT_ROOT / "runs/fulltrain_v1/validation/epoch_07",
+        real=PROJECT_ROOT / "runs/real_val_v1",
+    )
+    manifests = {
+        name: json.loads((p / "samples.json").read_text())
+        for name, p in directories.items()
+    }
+    summaries = {
+        name: json.loads((p / "summary.json").read_text())
+        for name, p in directories.items()
+    }
+    checkpoint = protocol.data["real_anomaly_development_validation"][
+        "checkpoint_sha256"
+    ]
+    if any(m["identity"]["sha256"] != checkpoint for m in manifests.values()) or (
+        len({m["identity"]["model_sha256"] for m in manifests.values()}) != 1
+    ):
+        raise ValueError("diagnosis requires the same fixed epoch-seven predictions")
+    rows = {}
+    for name, directory in directories.items():
+        records = [
+            json.loads(line)
+            for line in (directory / "results.jsonl").read_text().splitlines()
+        ]
+        rows[name] = [
+            r for r in records if r["view"] == name and r["current_frame"] >= 4
+        ]
+        expected = [
+            r
+            for r in manifests[name]["samples"]
+            if r["view"] == name and r["current_frame"] >= 4
+        ]
+        keys = [(r["sequence_id"], r["current_frame"]) for r in rows[name]]
+        if len(set(keys)) != len(keys) or set(keys) != {
+            (r["sequence_id"], r["current_frame"]) for r in expected
+        }:
+            raise ValueError("diagnostic input is not the complete saved sample set")
+        if summaries[name]["status"] != "completed":
+            raise ValueError("diagnosis requires completed inference")
+    reference = summaries["real"]["full_history"]
+    positive, negative = reference["anomaly_count"], reference["normal_count"]
+    prevalence = positive / (positive + negative)
+    record_bytes = sum(
+        r["evaluation_records"]["count"] * 8 for domain in rows.values() for r in domain
+    )
+    disk = host_disk()
+    # Disjoint strata together need at most the total record size, even in parallel.
+    peak_bytes = record_bytes + 64 * 2**20
+    if disk["SizeRemaining"] - peak_bytes < disk["reserve_bytes"]:
+        raise OSError("diagnostic sorting would invade the host E: reserve")
+    available = (
+        int(
+            next(
+                line.split()[1]
+                for line in Path("/proc/meminfo").read_text().splitlines()
+                if line.startswith("MemAvailable:")
+            )
+        )
+        * 1024
+    )
+    workers = min(4, len(os.sched_getaffinity(0)), max(1, available // (2 * 2**30)))
+    spec = dict(
+        checkpoint_sha256=checkpoint,
+        model_sha256=manifests["real"]["identity"]["model_sha256"],
+        prediction_directories={k: str(v) for k, v in directories.items()},
+        reference_anomaly_count=positive,
+        reference_normal_count=negative,
+        reference_prevalence=prevalence,
+        count_bins=COUNT_BINS,
+        distance_bins=DISTANCE_BINS,
+        distance_closure="left_closed_right_open_except_50_included",
+        fpr_limit=0.01,
+        score_rule="score >= threshold; complete ties; no interpolation; null threshold means +inf",
+        weights="positive pi/P, negative (1-pi)/N separately within every reported pool",
+        scope="synthetic complete 201; real val current_frame >= 4; official eligible points and frames",
+        official_real_all_frames=summaries["real"]["all_frames"],
+        interpretation="descriptive conditional comparison, not causal matching or an official score",
+        host_disk=disk,
+        predicted_peak_extra_bytes=peak_bytes,
+        available_memory_bytes=available,
+        cpu_affinity=sorted(os.sched_getaffinity(0)),
+        workers=workers,
+        numeric_threads=1,
+        model_forward_calls=0,
+        optimizer_updates=0,
+    )
+    _atomic_json(
+        output / "spec.json", spec
+    )  # Persist the requested rules before metrics.
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        synthetic = pool.submit(
+            diagnostic_frames,
+            data_root,
+            protocol,
+            directories["synthetic"],
+            rows["synthetic"],
+            synthetic=True,
+        )
+        real = [
+            pool.submit(
+                diagnostic_frames,
+                data_root,
+                protocol,
+                directories["real"],
+                [r for r in rows["real"] if r["sequence_id"] == sequence],
+            )
+            for sequence in sorted({r["sequence_id"] for r in rows["real"]})
+        ]
+        frames = dict(
+            synthetic=synthetic.result(),
+            real=[r for task in real for r in task.result()],
+        )
+    with (output / "frames.jsonl").open("x") as stream:
+        for domain in frames.values():
+            for frame in domain:
+                stream.write(json.dumps(frame) + "\n")
+    eligible = {
+        name: [r for r in domain if r["eligible"]] for name, domain in frames.items()
+    }
+    counts = diagnostic_coverage(eligible["real"])
+    if (counts["anomaly_count"], counts["normal_count"]) != (positive, negative):
+        raise ValueError(
+            "reference prevalence differs from the full-history observations"
+        )
+    result = dict(overall={}, strata={}, few_points={}, zero_anomaly_frames={})
+    for name, domain in frames.items():
+        result["few_points"][name] = diagnostic_coverage(
+            [r for r in domain if 1 <= r["anomaly_count"] <= 4]
+        )
+        result["zero_anomaly_frames"][name] = sum(
+            r["anomaly_count"] == 0 for r in domain
+        )
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        jobs = {
+            name: pool.submit(diagnostic_group, directories[name], domain, prevalence)
+            for name, domain in eligible.items()
+        }
+        for name, task in jobs.items():
+            result["overall"][name] = task.result()
+        for name, previous in (
+            ("synthetic", summaries["synthetic"]["synthetic"]),
+            ("real", reference),
+        ):
+            for key in ("AP", "AUROC", "FPR95"):
+                if abs(result["overall"][name][key] - previous[key]) > 1e-10:
+                    raise ValueError(
+                        "reused scores do not reproduce the original pooled metrics"
+                    )
+        jobs = {}
+        for i in range(4):
+            for j in range(4):
+                key = f"{i}_{j}"
+                jobs[key] = {
+                    name: pool.submit(
+                        diagnostic_group,
+                        directories[name],
+                        [r for r in domain if r["stratum"] == key],
+                        prevalence,
+                    )
+                    for name, domain in eligible.items()
+                }
+        for key, tasks in jobs.items():
+            cell = {name: task.result() for name, task in tasks.items()}
+            cell["common_coverage"] = all(c["frame_count"] > 0 for c in cell.values())
+            result["strata"][key] = cell
+            print(
+                json.dumps(
+                    {
+                        "event": "diagnostic_stratum",
+                        "stratum": key,
+                        "common_coverage": cell["common_coverage"],
+                    }
+                ),
+                flush=True,
+            )
+    result.update(
+        status="completed",
+        reference_prevalence=prevalence,
+        wall_seconds=time.monotonic() - started,
+        max_rss_bytes=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024,
+        final_host_disk=host_disk(),
+    )
+    _atomic_json(output / "summary.json", result)
+    plot_diagnostic(output, result)
+    print(
+        json.dumps(
+            {"event": "diagnostic_completed", "wall_seconds": result["wall_seconds"]}
+        ),
+        flush=True,
+    )
+    return result
+
+
+def plot_diagnostic(output, summary):
+    import matplotlib
+
+    matplotlib.use("Agg")
+    from matplotlib import font_manager, pyplot as plt
+
+    for family, filename in (
+        ("SimSun", "simsun.ttc"),
+        ("Times New Roman", "times.ttf"),
+    ):
+        path = Path("/mnt/c/Windows/Fonts") / filename
+        if path.exists():
+            font_manager.fontManager.addfont(path)
+        font_manager.findfont(family, fallback_to_default=False)
+    with plt.rc_context(
+        {"font.family": ["Times New Roman", "SimSun"], "pdf.fonttype": 42}
+    ):
+        fig, axes = plt.subplots(2, 3, figsize=(13, 8), layout="constrained")
+        cmap = plt.colormaps["viridis"].copy()
+        cmap.set_bad("0.88")
+        for row, (domain, name) in enumerate((("synthetic", "合成"), ("real", "真实"))):
+            for column, (metric, title) in enumerate(
+                (
+                    ("AUROC", "AUROC"),
+                    ("standardized_AP", "统一占比 AP"),
+                    ("recall_at_fpr_limit", "误报率不超过 1% 时的召回率"),
+                )
+            ):
+                ax = axes[row, column]
+                values = np.full((4, 4), np.nan)
+                for i in range(4):
+                    for j in range(4):
+                        cell = summary["strata"][f"{i}_{j}"][domain]
+                        value = cell[metric]
+                        if isinstance(value, dict):
+                            value = value["recall"]
+                        values[i, j] = np.nan if value is None else value
+                        label = (
+                            "空"
+                            if value is None
+                            else f"{value:.2f}\n{cell['frame_count']} 帧"
+                        )
+                        ax.text(
+                            j,
+                            i,
+                            label,
+                            ha="center",
+                            va="center",
+                            fontsize=10,
+                            color="white"
+                            if value is not None and value < 45
+                            else "black",
+                        )
+                chart = ax.imshow(values, vmin=0, vmax=100, cmap=cmap)
+                ax.set_title(f"{name}：{title}", fontsize=12)
+                ax.set_xticks(
+                    range(4), ["[2.5, 10)", "[10, 20)", "[20, 35)", "[35, 50]"]
+                )
+                ax.set_yticks(range(4), ["5–19", "20–99", "100–499", "≥500"])
+                ax.set_xlabel("异常点距离中位数（米）")
+                if column == 0:
+                    ax.set_ylabel("当前帧异常点数")
+        fig.colorbar(chart, ax=axes, shrink=0.8, label="百分比")
+        fig.suptitle(
+            "第七轮候选的条件分层诊断\n真实区间从第 4 帧开始；各组统一异常占比为 0.0451738%；空表示没有合格帧",
+            fontsize=14,
+        )
+        fig.savefig(output / "results.pdf")
+        plt.close(fig)
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data-root", type=Path, required=True)
@@ -2091,6 +2548,7 @@ if __name__ == "__main__":
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--full", action="store_true")
     mode.add_argument("--real", action="store_true")
+    mode.add_argument("--diagnose", action="store_true")
     mode.add_argument("--export-official", type=Path)
     parser.add_argument("--sequence", type=int)
     parser.add_argument("--startup-only", action="store_true")
@@ -2098,7 +2556,9 @@ if __name__ == "__main__":
         "--checkpoint", type=Path, default=Path("runs/coverage/B/final.pt")
     )
     args = parser.parse_args()
-    if args.real:
+    if args.diagnose:
+        run_diagnostic(args.data_root, args.output or Path("runs/diagnostic_v1"))
+    elif args.real:
         run_real(
             args.data_root,
             args.output or Path("runs/real_val_v1"),

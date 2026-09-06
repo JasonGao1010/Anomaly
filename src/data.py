@@ -1017,6 +1017,11 @@ class FrozenWindowDataset:
         return len(self._windows)
 
     def __getitem__(self, index: int) -> SceneWindow:
+        segment, start = self.segment_for_window(index)
+        return segment.window(start)
+
+    def segment_for_window(self, index: int) -> tuple[FrozenSyntheticSegment, int]:
+        """Reuse the frozen segment when only the current observation is needed."""
         if type(index) is not int or not 0 <= index < len(self):
             raise IndexError(index)
         segment_index, start = self._windows[index]
@@ -1063,7 +1068,7 @@ class FrozenWindowDataset:
                     self._cached_bytes -= size
             self._segment = segment
             self._segment_index = segment_index
-        return self._segment.window(start)
+        return self._segment, start
 
 
 def _pool_spec(protocol: AJAEProtocol, name: str) -> SyntheticPoolSpec:
