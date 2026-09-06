@@ -1,6 +1,6 @@
 # STU-RealProfile-v1：19条真实开发序列统计执行说明
 
-本文记录真实画像阶段的定义和结果。后续已完成[三侧分布对照](../results.md)；本目录及所有CSV文件已按最新要求改为英文命名，真实统计数值沿用原结果。
+本文记录真实画像阶段的定义和结果。后续已完成[三侧分布对照](../v1/results.md)；本目录及所有CSV文件已按最新要求改为英文命名，真实统计数值沿用原结果。
 
 ## 当前交付状态
 
@@ -157,9 +157,9 @@ PYTHONDONTWRITEBYTECODE=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 \
 运行前重新检查实际资源并确定工作进程数。已经完成的逐序列统计会复用，事件中区分复用与新扫描，不把复用阶段耗时冒充首次原始扫描耗时。
 
 - `profiles/real/`：20个CSV文件，原XLSX已由CSV替代。先读`index.csv`和`factors.csv`；所有表只有一个表头，详细计数与可靠性可以直接程序读取。
-- `runs/profile_v1/summary.json`与`statistics.csv`：206种“因素、量、范围、分组”组合的三种汇总视图及精确分位数边界；CSV还提供分箱和分类频数。
-- `runs/profile_v1/<序列>/frames.jsonl`：每个原始帧一次；`windows.jsonl`：完整和启动窗口；`instances.jsonl`：正实例标识观测；`stages.jsonl`：连续阶段及截断。
+- `runs/profiles/real/summary.json`与`statistics.csv`：206种“因素、量、范围、分组”组合的三种汇总视图及精确分位数边界；CSV还提供分箱和分类频数。
+- `runs/profiles/real/<序列>/frames.jsonl`：每个原始帧一次；`windows.jsonl`：完整和启动窗口；`instances.jsonl`：正实例标识观测；`stages.jsonl`：连续阶段及截断。
 - 各序列`anomaly.npz`：90,739个异常回波的原始槽身份、几何、强度和局部／体素统计；不是预测文件。`histograms.npz`保存精确取值计数及帧权重，避免保存海量正常点副本。
-- `runs/profile_v1/results.pdf`：三页科学图。大体积本地统计沿用忽略规则，不上传原始数据、模型或预测。
+- `runs/profiles/real/results.pdf`：三页科学图。大体积本地统计沿用忽略规则，不上传原始数据、模型或预测。
 
 这份画像已给出真实观测分布及可观测边界。它支持下一步按同一定义统计206训练池和201合成验证池，确认覆盖差异；尚不能单凭真实侧统计确定生成参数、训练配比或模型失败机制。本轮至此结束，不同时调整模型与生成器。

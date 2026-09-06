@@ -824,7 +824,7 @@ class AJAEProtocol:
             train_pool.source_sequence_id != 206
             or train_pool.synthetic_sequence_count != 8
             or train_pool.seed_base != 34100000
-            or train_pool.output_directory != "artifacts/data/train"
+            or train_pool.output_directory != "artifacts/data/v1/train"
             or tuple(map(len, train_pool.segments)) != (28,) * 15 + (29,)
             or _int_tuple(train_record["segment_lengths"], "train segment lengths")
             != (28,) * 15 + (29,)
@@ -840,7 +840,7 @@ class AJAEProtocol:
             validation_pool.source_sequence_id != 201
             or validation_pool.synthetic_sequence_count != 4
             or validation_pool.seed_base != 34200000
-            or validation_pool.output_directory != "artifacts/data/validation"
+            or validation_pool.output_directory != "artifacts/data/v1/validation"
             or tuple(map(len, validation_pool.segments)) != (28,) * 22 + (66,)
             or _int_tuple(
                 validation_record["segment_lengths"],
@@ -877,8 +877,8 @@ class AJAEProtocol:
         artifacts = _mapping(source["artifacts"], "artifacts")
         calibration = _mapping(artifacts["sensor_calibration"], "sensor calibration")
         if (
-            calibration.get("file") != "artifacts/calibration.pt"
-            or calibration.get("source_file") != "artifacts/calibration_source.npz"
+            calibration.get("file") != "artifacts/calibration/model.pt"
+            or calibration.get("source_file") != "artifacts/calibration/source.npz"
         ):
             raise ProtocolError("sensor calibration paths changed")
         _sha256(calibration["sha256"], "sensor calibration", pending_allowed=not frozen)
@@ -886,7 +886,7 @@ class AJAEProtocol:
         support = _mapping(artifacts["qualified_support_pools"], "support pools")
         expected_support = {
             206: {
-                "file": "artifacts/training_206_support_pool.npz",
+                "file": "artifacts/support/206.npz",
                 "frame_range_inclusive": (0, 448),
                 "anchor_range_inclusive": (2, 446),
                 "qualified_anchor_count": 445,
@@ -894,7 +894,7 @@ class AJAEProtocol:
                 "scientific_array_hash": "0de96f149b1ae0154c2befbdf69e0fcd912bcda0fad18f72a6bf9e93f2608910",
             },
             201: {
-                "file": "artifacts/validation_201_support_pool.npz",
+                "file": "artifacts/support/201.npz",
                 "frame_range_inclusive": (0, 681),
                 "anchor_range_inclusive": (2, 679),
                 "qualified_anchor_count": 640,
@@ -930,9 +930,9 @@ class AJAEProtocol:
                 pending_allowed=not frozen,
             )
         expected_artifact_paths = {
-            "train_pool_manifest": "artifacts/data/train_manifest.json",
-            "validation_pool_manifest": "artifacts/data/validation_manifest.json",
-            "qualification": "artifacts/data/qualification.json",
+            "train_pool_manifest": "artifacts/data/v1/train_manifest.json",
+            "validation_pool_manifest": "artifacts/data/v1/validation_manifest.json",
+            "qualification": "artifacts/data/v1/qualification.json",
         }
         for key, expected_path in expected_artifact_paths.items():
             record = _mapping(artifacts[key], key)

@@ -298,7 +298,7 @@ def test_formal_segments_each_contain_exactly_one_anomaly_proxy() -> None:
     protocol = load_protocol()
     assert protocol.synthetic_pools["anomaly_objects_per_segment"] == 1
     for pool in (protocol.training_pool, protocol.validation_pool):
-        manifest = json.loads(protocol.pool_manifest_path(pool.name).read_text())
+        manifest = load_pool_manifest(protocol, pool)
         assert len(manifest["segments"]) == pool.world_count
         for record in manifest["segments"]:
             with np.load(ROOT / record["file"], allow_pickle=False) as data:
@@ -588,7 +588,7 @@ def _linked_frozen_protocol(tmp_path: Path) -> AJAEProtocol:
     for pool in (protocol.training_pool, protocol.validation_pool):
         manifest_path = protocol.pool_manifest_path(pool.name)
         paths.append(manifest_path.relative_to(ROOT).as_posix())
-        manifest = json.loads(manifest_path.read_text())
+        manifest = load_pool_manifest(protocol, pool)
         paths.extend(record["file"] for record in manifest["segments"])
     for relative in paths:
         link = tmp_path / relative
@@ -600,11 +600,11 @@ def _linked_frozen_protocol(tmp_path: Path) -> AJAEProtocol:
 @pytest.mark.parametrize(
     "damaged",
     (
-        "artifacts/data/qualification.json",
-        "artifacts/data/train_manifest.json",
-        "artifacts/data/validation_manifest.json",
-        "artifacts/data/train/sequence_007/segment_15.npz",
-        "artifacts/data/validation/sequence_003/segment_22.npz",
+        "artifacts/data/v1/qualification.json",
+        "artifacts/data/v1/train_manifest.json",
+        "artifacts/data/v1/validation_manifest.json",
+        "artifacts/data/v1/train/sequence_007/segment_15.npz",
+        "artifacts/data/v1/validation/sequence_003/segment_22.npz",
     ),
 )
 def test_training_constructor_verifies_all_frozen_files_before_loading_data(

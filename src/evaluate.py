@@ -1429,7 +1429,7 @@ def verify_baseline(initial, monitors):
     if manifest["samples"] != full_samples(protocol.validation_pool):
         raise ValueError("B complete validation samples or check seeds differ")
     frozen = json.loads(
-        (PROJECT_ROOT / "artifacts/data/validation_manifest.json").read_text()
+        (PROJECT_ROOT / "artifacts/data/v1/validation_manifest.json").read_text()
     )
     if manifest["worlds"] != frozen["segments"]:
         raise ValueError("B validation worlds differ from the frozen manifest")
@@ -2276,8 +2276,8 @@ def run_diagnostic(data_root, output):
     started = time.monotonic()
     protocol = load_protocol()
     directories = dict(
-        synthetic=PROJECT_ROOT / "runs/fulltrain_v1/validation/epoch_07",
-        real=PROJECT_ROOT / "runs/real_val_v1",
+        synthetic=PROJECT_ROOT / "runs/eval/v1/synthetic",
+        real=PROJECT_ROOT / "runs/eval/v1/real",
     )
     manifests = {
         name: json.loads((p / "samples.json").read_text())
@@ -2543,7 +2543,7 @@ def plot_diagnostic(output, summary):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data-root", type=Path, required=True)
-    parser.add_argument("--checkpoints", type=Path, default=Path("runs/learn"))
+    parser.add_argument("--checkpoints", type=Path, default=Path("runs/history/learning"))
     parser.add_argument("--output", type=Path)
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--full", action="store_true")
@@ -2557,11 +2557,11 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
     if args.diagnose:
-        run_diagnostic(args.data_root, args.output or Path("runs/diagnostic_v1"))
+        run_diagnostic(args.data_root, args.output or Path("runs/diagnostics/v1/conditions"))
     elif args.real:
         run_real(
             args.data_root,
-            args.output or Path("runs/real_val_v1"),
+            args.output or Path("runs/eval/v1/real"),
             startup_only=args.startup_only,
         )
     elif args.export_official:

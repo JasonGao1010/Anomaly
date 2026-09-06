@@ -46,7 +46,7 @@
     },
     "real_anomaly_development_validation": {
       "gradient_updates_allowed": false,
-      "checkpoint": "runs/fulltrain_v1/epoch_07.pt",
+      "checkpoint": "runs/train/v1/epoch_07.pt",
       "checkpoint_sha256": "eb84e5383e9134968a3421749dd7e2f5b04248e631772eed0befb5486e44a7bb",
       "startup": "available_prefix_right_aligned_in_five_slots_no_padding_points",
       "main_scope": "all_original_frames_continuous_per_sequence",
@@ -180,7 +180,7 @@
       "world_count": 128,
       "windows_per_synthetic_sequence": 385,
       "total_window_count": 3080,
-      "output_directory": "artifacts/data/train"
+      "output_directory": "artifacts/data/v1/train"
     },
     "validation": {
       "source_sequence_id": 201,
@@ -192,7 +192,7 @@
       "world_count": 92,
       "windows_per_synthetic_sequence": 590,
       "total_window_count": 2360,
-      "output_directory": "artifacts/data/validation"
+      "output_directory": "artifacts/data/v1/validation"
     }
   },
   "storage": {
@@ -213,14 +213,14 @@
   },
   "artifacts": {
     "sensor_calibration": {
-      "file": "artifacts/calibration.pt",
+      "file": "artifacts/calibration/model.pt",
       "sha256": "7dc00282bdae7d7105fd4d3b89f08570fb095923988693a07368f4a4ccce4d5e",
-      "source_file": "artifacts/calibration_source.npz",
+      "source_file": "artifacts/calibration/source.npz",
       "source_sha256": "42791278e2a6b36d975bbe9dc957c6f303b8b424c5b97cf54e42380ad191f253"
     },
     "qualified_support_pools": {
       "train/206": {
-        "file": "artifacts/training_206_support_pool.npz",
+        "file": "artifacts/support/206.npz",
         "sha256": "5f4aeec20070382f60266320dd383f88b5cbb59d5884a585679af73411e0c09d",
         "frame_range_inclusive": [0, 448],
         "anchor_range_inclusive": [2, 446],
@@ -229,7 +229,7 @@
         "scientific_array_hash": "0de96f149b1ae0154c2befbdf69e0fcd912bcda0fad18f72a6bf9e93f2608910"
       },
       "train/201": {
-        "file": "artifacts/validation_201_support_pool.npz",
+        "file": "artifacts/support/201.npz",
         "sha256": "2f0170612cefae10d6a5f1d14fffcbe6c55b1c8fdab331b6a4b2e8c9e31bec1c",
         "frame_range_inclusive": [0, 681],
         "anchor_range_inclusive": [2, 679],
@@ -239,15 +239,15 @@
       }
     },
     "train_pool_manifest": {
-      "file": "artifacts/data/train_manifest.json",
+      "file": "artifacts/data/v1/train_manifest.json",
       "sha256": "703cb0eb65e7432eaa9a0116424b229cb69506ff0468614842f2bf5ca262b972"
     },
     "validation_pool_manifest": {
-      "file": "artifacts/data/validation_manifest.json",
+      "file": "artifacts/data/v1/validation_manifest.json",
       "sha256": "60b1480072034f0b96d77e48aee0a9d8afd6af14e1dfae34ab830cfd8e183fe5"
     },
     "qualification": {
-      "file": "artifacts/data/qualification.json",
+      "file": "artifacts/data/v1/qualification.json",
       "sha256": "899e18f4863c975ea16639c21ed52d35daaa279dd6f11cc6d176222ecfb09168"
     }
   },

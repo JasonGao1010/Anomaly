@@ -1,0 +1,5 @@
+﻿合成版本,原始道路,世界数,帧观测次数,合法窗口,整窗无异常,全帧异常点
+synthetic/pilot_v2_r1/train/000,206,1,449,445,275,1551
+synthetic/pilot_v2_r1/train/001,206,1,449,445,126,59036
+synthetic/pilot_v2_r1/train/002,206,1,449,445,220,2836
+synthetic/pilot_v2_r1/train/003,206,1,449,445,201,7406

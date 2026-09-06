@@ -805,7 +805,7 @@ def run(data_root: Path, output: Path, *, group=None, initial=None, workers=1):
         "frozen_segments": [
             record
             for record in json.loads(
-                (PROJECT_ROOT / "artifacts/data/train_manifest.json").read_text()
+                (PROJECT_ROOT / "artifacts/data/v1/train_manifest.json").read_text()
             )["segments"]
             if (record["synthetic_sequence_index"], record["segment_index"])
             in {
@@ -1011,7 +1011,7 @@ def run_fulltrain(
         raise ValueError("user finish requires an existing full-training checkpoint")
     if any(
         output.resolve().is_relative_to((PROJECT_ROOT / p).resolve())
-        for p in ("runs/learn", "runs/history/coverage", "runs/history/validation", "runs/history/transfer")
+        for p in ("runs/history/learning", "runs/history/coverage", "runs/history/validation", "runs/history/transfer")
     ):
         raise ValueError("formal training must preserve earlier evidence directories")
     torch.set_num_threads(1)
@@ -1032,9 +1032,9 @@ def run_fulltrain(
         "src/data.py",
         "src/scene.py",
         "src/protocol.py",
-        "artifacts/data/train_manifest.json",
-        "artifacts/data/validation_manifest.json",
-        "artifacts/data/qualification.json",
+        "artifacts/data/v1/train_manifest.json",
+        "artifacts/data/v1/validation_manifest.json",
+        "artifacts/data/v1/qualification.json",
     ]
     source_names += [
         str(p.relative_to(PROJECT_ROOT))
@@ -1709,7 +1709,7 @@ if __name__ == "__main__":
         action="store_true",
         help="sequential A/B equal-budget coverage contrast",
     )
-    parser.add_argument("--initial", type=Path, default=Path("runs/learn/initial.pt"))
+    parser.add_argument("--initial", type=Path, default=Path("runs/train/initial.pt"))
     parser.add_argument(
         "--validation-samples", type=Path, default=Path("runs/history/transfer/samples.json")
     )
@@ -1742,7 +1742,7 @@ if __name__ == "__main__":
             parser.error("--full and --coverage are separate experiments")
         run_fulltrain(
             args.data_root,
-            args.output or Path("runs/fulltrain_v1"),
+            args.output or Path("runs/train/v1"),
             args.initial,
             resume=args.resume,
             updated_code=args.updated_code,
@@ -1757,4 +1757,4 @@ if __name__ == "__main__":
             args.workers,
         )
     else:
-        run(args.data_root, args.output or Path("runs/learn"), workers=args.workers)
+        run(args.data_root, args.output or Path("runs/history/learning"), workers=args.workers)

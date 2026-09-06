@@ -1,0 +1,31 @@
+﻿量,值
+slots,235405312
+visible,224788180
+zero_slots,10617132
+normal,218977353
+ignore,5739998
+anomaly,70829
+anomaly_in_range,70778
+unknown_instance_points,0
+sequences,4
+frames,1796
+complete_windows,1780
+startup_windows,0
+states,"[929, 32, 143, 692]"
+official_anomaly_points,70390
+official_normal_points,83845681
+normal_stage_evaluation_points,113774356
+whole_window_unseen,822
+instance_frames,867
+labelled_instances,4
+shape_status,"{""fewer_than_10_distinct_returns"": 331, ""reliable_visible_extent"": 536}"
+ground_status,"{""fewer_than_20_ground_returns"": 265, ""local_plane_proxy"": 568, ""plane_fit_or_spatial_support_unreliable"": 34}"
+static_sampled,3645440
+static_matched,3598548
+worlds,4
+synthetic_versions,4
+background_source_sequences,1
+context_frames,16
+legal_current_states,"[917, 32, 141, 690]"
+legal_official_anomaly_points,70380
+legal_official_normal_points,83603555

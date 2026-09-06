@@ -342,7 +342,7 @@ def test_streamed_frozen_input_matches_original_preparation() -> None:
     selected = training_samples(protocol.training_pool, full=True)
     model = AJAE().cuda().eval()
     payload = torch.load(
-        "runs/learn/initial.pt", map_location="cpu", weights_only=False
+        "runs/train/initial.pt", map_location="cpu", weights_only=False
     )
     model.load_state_dict(payload["model"], strict=True)
     for sample in (selected[0], selected[384], selected[0]):

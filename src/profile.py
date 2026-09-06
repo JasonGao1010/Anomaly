@@ -1231,6 +1231,12 @@ def profile_pools(args, disk):
             or manifest["source_sequence_id"] != pool.source_sequence_id
         ):
             raise ValueError("observation profile has the wrong source population")
+        if args.observation_pools:
+            # The manifest owns its world files; old recorded paths remain provenance.
+            for record in manifest["segments"]:
+                record["file"] = (
+                    manifest_path.parent / Path(record["file"]).name
+                ).as_posix()
         directory = args.output / pool.name
         directory.mkdir(parents=True, exist_ok=True)
         records = {
@@ -1337,7 +1343,7 @@ def main():
     parser.add_argument(
         "--synthetic", action="store_true", help="both frozen pools; reuse real profile"
     )
-    parser.add_argument("--real-profile", type=Path, default=Path("runs/profile_v1"))
+    parser.add_argument("--real-profile", type=Path, default=Path("runs/profiles/real"))
     parser.add_argument(
         "--observation-pools",
         type=Path,
@@ -1356,9 +1362,9 @@ def main():
             "observation pools require --synthetic and explicit --output/--tables"
         )
     args.output = args.output or Path(
-        "runs/profile_pools" if args.synthetic else "runs/profile_v1"
+        "runs/profiles/v1" if args.synthetic else "runs/profiles/real"
     )
-    args.tables = args.tables or Path("profiles" if args.synthetic else "profiles/real")
+    args.tables = args.tables or Path("profiles/v1" if args.synthetic else "profiles/real")
     torch.set_num_threads(1)
     disk = host_disk()
     args.output.mkdir(parents=True, exist_ok=True)

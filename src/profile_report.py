@@ -3137,5 +3137,5 @@ def compare_profiles(synthetic, real, output, directory):
         _atomic_json(path, comparison)
     writer.close(
         "三侧同口径分布对照",
-        "真实侧直接复用runs/profile_v1；两侧合成观测补全同一31项因素。train/和validation/为全量明细，真实明细仍在profiles/real/。",
+        "真实侧直接复用runs/profiles/real；两侧合成观测补全同一31项因素。train/和validation/为全量明细，真实明细仍在profiles/real/。",
     )

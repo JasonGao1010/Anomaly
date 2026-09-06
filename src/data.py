@@ -869,9 +869,13 @@ def generation_identity(
         source_role["role"] = (
             "only_source_for_model_validation_hyperparameter_tuning_and_model_selection"
         )
+    pool_record = dict(protocol.synthetic_pools[pool.name])
+    if source_files_sha256 is not None:
+        # Frozen v1 evidence records its original location, not today's storage layout.
+        pool_record["output_directory"] = f"artifacts/data/{pool.name}"
     payload = {
         "schema_version": protocol.schema_version,
-        "pool": protocol.synthetic_pools[pool.name],
+        "pool": pool_record,
         "anomaly_objects_per_segment": protocol.synthetic_pools[
             "anomaly_objects_per_segment"
         ],
@@ -929,7 +933,8 @@ def _frozen_qualification(protocol: AJAEProtocol) -> Mapping[str, object]:
     for name in ("train", "validation"):
         record = protocol.artifacts[f"{name}_pool_manifest"]
         if (
-            result["inputs"].get(f"{name}_manifest") != record["file"]
+            result["inputs"].get(f"{name}_manifest")
+            != f"artifacts/data/{name}_manifest.json"
             or result["inputs"].get(f"{name}_manifest_sha256") != record["sha256"]
         ):
             raise DataProtocolError("qualification and frozen manifests disagree")
@@ -1013,7 +1018,7 @@ def load_pool_manifest(
             "frame_range_inclusive": [span.start, span.stop - 1],
             "window_count": len(pool.window_starts(segment_index)),
             "file": _segment_path(
-                Path(pool.output_directory), sequence_index, segment_index
+                Path(f"artifacts/data/{pool.name}"), sequence_index, segment_index
             ).as_posix(),
         }
         if (
@@ -1037,11 +1042,16 @@ def load_pool_manifest(
             )
         worlds.add(record["world_identity"])
         physical_worlds.add(record["world_content_identity"])
-        path = protocol.path.parent / record["file"]
+        # Resolve the current location after validating the unchanged historical manifest.
+        current_file = _segment_path(
+            Path(pool.output_directory), sequence_index, segment_index
+        ).as_posix()
+        path = protocol.path.parent / current_file
         if not path.is_file() or _sha256(path) != record["file_sha256"]:
             raise DataProtocolError(
                 f"segment file differs from its manifest: {record['file']}"
             )
+        record["file"] = current_file
     return payload
 
 
@@ -1672,6 +1682,54 @@ def _observation_candidate(task):
     return result
 
 
+def select_observation_candidates(candidates, world_count, config):
+    """Keep a bounded set of pool combinations instead of irrevocable greedy choices."""
+    rules = config["generation"]
+    targets = config["targets"]
+    real = targets["real_visibility_counts"]
+    reference = (
+        np.array([real[k] for k in ("00000", "11111", "partial")]) / real["denominator"]
+    )
+    limits = np.array([targets["visibility"][k] for k in ("00000", "11111", "partial")])
+    target_joint = np.array(targets["qualified_joint_probability"])
+    beam = [((), np.zeros(32, np.int64), np.zeros((4, 4), np.int64), (3, 1.0, 1.0))]
+    for i in range(world_count):
+        options = [
+            candidates[(i, j)]
+            for j in range(rules["maximum_world_candidates"])
+            if candidates[(i, j)]["status"] == "rendered"
+        ]
+        if not options:
+            raise DataProtocolError(
+                f"world {i} exhausted all fixed geometry/support candidates"
+            )
+        expanded = []
+        for chosen, patterns, joint, _ in beam:
+            for row in options:
+                p = patterns + np.array(row["distribution"]["pattern_counts"], np.int64)
+                q = joint + np.array(
+                    row["distribution"]["qualified_joint_counts"], np.int64
+                )
+                fractions = np.array([p[0], p[31], p.sum() - p[0] - p[31]]) / p.sum()
+                # Core coverage and predeclared visibility ranges precede softer joint matching.
+                cost = (
+                    int(sum(q[a, b] == 0 for a, b in targets["required_far_cells"])),
+                    float(
+                        np.maximum(limits[:, 0] - fractions, 0).sum()
+                        + np.maximum(fractions - limits[:, 1], 0).sum()
+                    ),
+                    float(
+                        0.5 * np.abs(fractions - reference).sum()
+                        + 0.5 * np.abs(q / max(1, q.sum()) - target_joint).sum()
+                    ),
+                )
+                expanded.append((chosen + (row["attempt"],), p, q, cost))
+        beam = sorted(expanded, key=lambda item: (item[3], item[0]))[
+            : rules["pool_selection_beam_width"]
+        ]
+    return beam[0]
+
+
 def generate_observation_match(
     data_root, pool_name, *, config_path, pilot_round, workers
 ):
@@ -1685,6 +1743,22 @@ def generate_observation_match(
     config = json.loads(Path(config_path).read_text())
     if pilot_round not in (0, 1, 2) or workers < 1:
         raise DataProtocolError("use at most two pilot rounds and positive workers")
+    if not pilot_round:
+        # Formal object streams must not repeat either debugging pool or the other split.
+        seen = {
+            base + r * config["pilot"]["second_round_seed_offset"] + 1000 * i
+            for name, base in config["pilot"]["seed_bases"].items()
+            for r in range(config["pilot"]["maximum_rounds"])
+            for i in range(config["pilot"]["worlds"][name])
+        }
+        for specification in config["pools"].values():
+            seeds = {
+                specification["seed_base"] + 1000 * i
+                for i in range(specification["world_count"])
+            }
+            if seen.intersection(seeds):
+                raise DataProtocolError("formal and pilot world random streams overlap")
+            seen.update(seeds)
     if not pilot_round and config["status"] != "generation_rules_fixed":
         raise DataProtocolError(
             "formal generation requires the completed pilot decision"
@@ -1699,7 +1773,7 @@ def generate_observation_match(
         else pool["seed_base"]
     )
     output = (
-        Path(config["pilot"]["output"]) / f"round_{pilot_round}" / pool_name
+        Path(config["pilot"]["output"]) / f"pilot_{pilot_round}" / pool_name
         if pilot_round
         else Path(config["paths"]["data"]) / pool_name
     )
@@ -1834,48 +1908,30 @@ def generate_observation_match(
                     raise OSError("candidate writes approached the host reserve")
     finally:
         _OBSERVATION_STATE = None
-    patterns = np.zeros(32, dtype=np.int64)
-    joint = np.zeros((4, 4), dtype=np.int64)
-    target_visibility = np.array([4355, 2856, 1372]) / 8583
-    target_joint = np.array(config["targets"]["qualified_joint_probability"])
+    choices, patterns, joint, cost = select_observation_candidates(
+        candidates, count, config
+    )
     records, selections = [], []
-    for i in range(count):
-        scored = []
-        for j in range(spec["candidate_limit"]):
-            row = candidates[(i, j)]
-            if row["status"] != "rendered":
-                continue
-            p = patterns + np.array(row["distribution"]["pattern_counts"])
-            q = joint + np.array(row["distribution"]["qualified_joint_counts"])
-            visibility = np.array([p[0], p[31], p.sum() - p[0] - p[31]]) / p.sum()
-            cost = 0.5 * np.abs(visibility - target_visibility).sum()
-            cost += 0.5 * np.abs(q / max(1, q.sum()) - target_joint).sum()
-            cost += (
-                sum(q[a, b] == 0 for a, b in config["targets"]["required_far_cells"])
-                / 3
-            )
-            scored.append((float(cost), j, row))
-        if not scored:
-            raise DataProtocolError(
-                f"world {i} exhausted all fixed geometry/support candidates"
-            )
-        cost, j, chosen = min(scored, key=lambda x: (x[0], x[1]))
-        patterns += np.array(chosen["distribution"]["pattern_counts"])
-        joint += np.array(chosen["distribution"]["qualified_joint_counts"])
+    for i, j in enumerate(choices):
+        chosen = candidates[(i, j)]
         record = dict(chosen["record"])
         target = output / f"world_{i:03d}.npz"
         Path(record["file"]).rename(target)
-        record["file"] = target.as_posix()
+        record["file"] = target.name
         records.append(record)
         selections.append(
             dict(
                 world_index=i,
                 selected_attempt=j,
-                objective=cost,
+                pool_objective=list(cost),
                 distribution=chosen["distribution"],
                 frames=chosen["frames"],
-                rejected_rendered_attempts=[r[1] for r in scored if r[1] != j],
-                rejection_reason="larger fixed pool distribution objective",
+                rejected_rendered_attempts=[
+                    a
+                    for a in range(spec["candidate_limit"])
+                    if a != j and candidates[(i, a)]["status"] == "rendered"
+                ],
+                rejection_reason="not retained by the fixed bounded pool combination search",
             )
         )
     manifest = dict(

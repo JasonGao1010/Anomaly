@@ -129,14 +129,14 @@ def distribution(values, support):
 
 
 def fixed_samples():
-    diagnostic = PROJECT_ROOT / "runs/diagnostic_v1"
+    diagnostic = PROJECT_ROOT / "runs/diagnostics/v1/conditions"
     frames = [
         json.loads(line)
         for line in (diagnostic / "frames.jsonl").read_text().splitlines()
     ]
     roots = dict(
-        synthetic=PROJECT_ROOT / "runs/fulltrain_v1/validation/epoch_07",
-        real=PROJECT_ROOT / "runs/real_val_v1",
+        synthetic=PROJECT_ROOT / "runs/eval/v1/synthetic",
+        real=PROJECT_ROOT / "runs/eval/v1/real",
     )
     selected = []
     for domain, root in roots.items():
@@ -393,7 +393,7 @@ def feature_statistics(data_root, protocol, samples, output, resources):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data-root", type=Path, required=True)
-    parser.add_argument("--output", type=Path, default=Path("runs/intensity_v1"))
+    parser.add_argument("--output", type=Path, default=Path("runs/diagnostics/v1/intensity"))
     parser.add_argument("--statistics-only", action="store_true")
     args = parser.parse_args()
     protocol, samples = load_protocol(), fixed_samples()
@@ -424,7 +424,7 @@ def main():
         radial_width_m=DISTANCE_WIDTH,
         permutation="all visible points including ignored labels; raw-source radial floor bins; PCG64 seeded by SHA256(sequence,frame,seed); same frame reused across windows",
         reference_prevalence=json.loads(
-            (PROJECT_ROOT / "runs/diagnostic_v1/spec.json").read_text()
+            (PROJECT_ROOT / "runs/diagnostics/v1/conditions/spec.json").read_text()
         )["reference_prevalence"],
         feature_population="current official points; voxel mean from all five scans mapped back to each current point; feature distance subsets do not replace score evaluation",
         quantization_probe="exact float32 reconstruction on k/3500, suggested by raw train/206 frame 0; raw val/141 frame 400 inspected preliminarily but excluded from formal current-frame statistics",

@@ -1,6 +1,6 @@
 {
   "experiment": "AJAE-ObservationMatch-v2",
-  "status": "implementation_and_pilot_pending",
+  "status": "generation_rules_fixed",
   "baseline_commit": "69b10a04a509f9d1f6ec91310aadc0f568d09de0",
   "scientific_question": "Does a joint redesign of synthetic observation distributions improve real STU performance with the same model?",
   "interpretation": "multifactor development experiment; not a causal ablation or independent test",
@@ -205,7 +205,8 @@
       0.1,
       0.9
     ],
-    "pool_candidate_objective": "greedy world order: TV of three visibility states + TV of qualified count-distance joint frequencies; missing required far cells add 1/3 each; ties use earlier attempt"
+    "pool_candidate_objective": "bounded combination search in world order; keep 32 prefixes; lexicographically minimize missing required far cells, summed visibility interval violations, and visibility TV plus qualified joint TV; ties use earlier attempt tuples",
+    "pool_selection_beam_width": 32
   },
   "pilot": {
     "maximum_rounds": 2,
@@ -218,7 +219,13 @@
       "validation": 36300000
     },
     "second_round_seed_offset": 100000,
-    "output": "runs/observation_match_v2/pilot"
+    "output": "runs/generation/v2",
+    "calibration": "Round 1 established feasible candidate combinations; round 2 replaces irrevocable greedy selection with the fixed width-32 combination search. Physical generation parameters remain unchanged.",
+    "completed_rounds": [1, 2],
+    "decision": "Core visibility intervals and all three far cells are covered on both sources in round 2. Freeze these rules; no third pilot. Formal pools must report actual world coverage and remaining discrepancies.",
+    "round_2_profiles": "profiles/v2/pilot_2",
+    "remaining_limits": "Few-point 35-50 m and 20-99 point 20-35 m cells each have only one pilot world per side. One proxy per world does not cover real multi-instance observations. Validation background proximity and geometry reliability remain different from real observations.",
+    "random_stream_note": "The legacy round-1 validation and round-2 training pilot bases coincide numerically on different source sequences. No pilot enters a formal pool; both formal seed ranges are disjoint from every pilot range and from each other."
   },
   "pools": {
     "train": {
@@ -227,7 +234,7 @@
       "world_count": 32,
       "windows_per_world": 445,
       "window_count": 14240,
-      "seed_base": 36400000
+      "seed_base": 36600000
     },
     "validation": {
       "source_sequence": 201,
@@ -235,12 +242,12 @@
       "world_count": 8,
       "windows_per_world": 678,
       "window_count": 5424,
-      "seed_base": 36500000
+      "seed_base": 36700000
     }
   },
   "seed_rule": "base + 1000 * world_index; attempt and factor streams use SeedSequence coordinates",
   "training": {
-    "initial_checkpoint": "runs/learn/initial.pt",
+    "initial_checkpoint": "runs/train/initial.pt",
     "seed": 23,
     "model": "unchanged LitePT-S, 9 voxel channels, point anomaly head",
     "voxel_size_m": 0.05,
@@ -330,15 +337,15 @@
     "baseline_checkpoint_sha256": "eb84e5383e9134968a3421749dd7e2f5b04248e631772eed0befb5486e44a7bb"
   },
   "paths": {
-    "data": "artifacts/data_v2",
+    "data": "artifacts/data/v2",
     "profiles": "profiles/v2",
-    "training": "runs/fulltrain_v2",
-    "real_evaluation": "runs/real_val_v2"
+    "training": "runs/train/v2",
+    "real_evaluation": "runs/eval/v2/real"
   },
   "resources": {
     "host_drive": "E",
     "reserve": "max(5% total capacity, 10 GiB)",
-    "status": "capacity planning; formal training not started",
+    "status": "formal data preparation allowed within its bounded budget; full training awaits a complete E capacity budget",
     "storage_policy": "all outputs remain on E; no C directory or symlink",
     "old_artifact_cleanup_bytes": 22125185123,
     "unused_dependency_cleanup_bytes": 12785807949,

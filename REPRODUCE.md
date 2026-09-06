@@ -2,17 +2,17 @@
 
 当前主线为 `AJAE-ObservationMatch-v2`，规则与预先选定的监控窗口见 `protocols/observation_match_v2/config.json` 和 `monitor.json`。schema 34 的 `protocol.json` 保留 v1 历史池定义与共同五帧接口；v2 尚在生成先导阶段，正式数据、训练和真实成绩尚未产生。
 
-当前正式数据池已生成并通过完整窗口检查，协议状态为 `frozen`：206 训练池包含 128 个单代理世界、3080 个窗口；201 合成验证池包含 92 个单代理世界、2360 个窗口；原始完整 201 另有 678 个在线窗口。完整检查记录见 `artifacts/data/qualification.json`。这说明数据实现通过本协议检查，不代表模型效果已经得到验证。
+v1 历史数据池已生成并通过完整窗口检查，协议状态为 `frozen`：206 训练池包含 128 个单代理世界、3080 个窗口；201 合成验证池包含 92 个单代理世界、2360 个窗口；原始完整 201 另有 678 个在线窗口。完整检查记录见 `artifacts/data/v1/qualification.json`。v2 的生成和训练状态另由当前配置与实际输出记录。
 
 训练池和合成验证池的 5440 个真值着色 PLY 曾完整导出，共 49,311,794,379 字节（45.93 GiB）。用户完成可视化检查后，已按要求删除 `artifacts/ply/` 中全部 5455 个可视化文件，包括另行授权的 15 个真实异常窗口；冻结数据池和逐点预测未删除，下面保留重新导出方法。220 个正式世界在末帧均有可见异常回波；训练池仍有 20 个、合成验证池仍有 10 个全窗口无异常回波的样本，均按规则保留。末帧物理可见不等于进入官方 2.5–50 米评价范围，资格记录分别保存两种计数。
 
 `vendor/stu/` 保存官方点级评价源码和许可证。为直接导入评价类，只将原始数据命令行工具的 `utils.common` 导入移至 `main` 内，点筛选和指标公式不变；模型训练和最终评价的完成情况应以真实运行结果为准。
 
-最近完成的是[训练、合成验证与真实开发分布对照](profiles/results.md)：206的128个冻结世界、3,592次帧观测、3,080个合法窗口，以及201的92个世界、2,728次帧观测、2,360个合法窗口均已按同一31项因素统计。真实19条序列直接复用既有画像，未重新扫描。主结果见[因素对照](profiles/comparison.csv)与[联合条件对照](profiles/joint_comparison.csv)，新增29个CSV包含两侧合成全量和逐世界明细。
+最近完成的是[训练、合成验证与真实开发分布对照](profiles/v1/results.md)：206的128个冻结世界、3,592次帧观测、3,080个合法窗口，以及201的92个世界、2,728次帧观测、2,360个合法窗口均已按同一31项因素统计。真实19条序列直接复用既有画像，未重新扫描。主结果见[因素对照](profiles/v1/comparison.csv)与[联合条件对照](profiles/v1/joint_comparison.csv)，新增29个CSV包含两侧合成全量和逐世界明细。
 
 整窗无异常比例为0.6494%、0.4237%、50.7398%；五帧持续可见比例为97.7597%、97.9661%、33.2751%。训练合格帧中少于100个异常点占20.9387%，合成验证35.6892%，真实完整五帧子集87.1166%。训练侧当前合格帧异常距离中位数20至50米的联合列为空，真实侧有519个合格帧落在其中三个非空格。已有但稀少、完全缺覆盖、固定背景或估计限制分别报告，未据此宣称某种模型失败机制已经成立。
 
-本次唯一统计入口为`python -m src.profile --data-root /absolute/path/to/STU --synthetic --workers 12`；默认输出`runs/profile_pools/`与`profiles/`，真实统计默认读取`runs/profile_v1/`。合成连续阶段按世界截断，初始四帧只计观测；完整输入体素、分位数、分箱和可靠性规则复用原实现。原始统计耗时401.695秒，5项相关检查及两侧先导独立成员复算通过；资源、准确范围和限制见结果说明。本轮无训练、模型前向、异常生成或隐藏测试读取。该轮原先提出整窗正常抽样的单因素对照；用户随后授权直接实施多因素 `AJAE-ObservationMatch-v2`，因此单因素对照不再是当前前置任务。
+本次唯一统计入口为`python -m src.profile --data-root /absolute/path/to/STU --synthetic --workers 12`；默认输出`runs/profiles/v1/`与`profiles/v1/`，真实统计默认读取`runs/profiles/real/`。合成连续阶段按世界截断，初始四帧只计观测；完整输入体素、分位数、分箱和可靠性规则复用原实现。原始统计耗时401.695秒，5项相关检查及两侧先导独立成员复算通过；资源、准确范围和限制见结果说明。本轮无训练、模型前向、异常生成或隐藏测试读取。该轮原先提出整窗正常抽样的单因素对照；用户随后授权直接实施多因素 `AJAE-ObservationMatch-v2`，因此单因素对照不再是当前前置任务。
 
 此前完成的19条公开真实验证序列全量画像见[统计执行说明与结果](profiles/real/method.md)、[CSV目录说明](profiles/real/index.csv)和[31项要素总表](profiles/real/factors.csv)。按用户要求，交付已改为20个CSV文件，数值、分母和缺失说明保留，公式转换为已复算数值。该轮读取全部8,659帧，完整五帧因素使用8,583窗，76个启动窗口单列；没有新增模型前向、训练或合成生成。FullTrain-v1仍以第七轮候选结束，首次真实评价及强度置换结论不因数据统计而改写。
 
@@ -20,7 +20,7 @@
 
 全量异常强度中位数按点、帧和序列等权分别为0.171714、0.117714和0.224857。原始异常距离按点合并的中位数为6.761米，而3,545个有异常帧的各帧距离中位数再取中位数为23.788米。这些差异要求后续覆盖比较保留不同分母。五帧联合异常占据体素96.4044%为纯异常，历史新增正常混合影响1,633/75,412个当前异常占据体素；这些只是输入分布，尚未识别预测失败的因果因素。
 
-唯一入口为`python -m src.profile --data-root /absolute/path/to/STU --workers 12`，CSV默认保存于`profiles/real/`，可用`--tables`指定目录。统计使用原`STUSequence`和`joint_voxelize`，完整保留正常、异常、忽略及范围外成员；`src/profile_report.py`完成分布汇总和CSV导出。原始强度精确合并取值计数；大量残差分位数附宽度至多0.1毫米的区间；静态表面残差明确为固定抽样代理。依赖、规则、覆盖、6项必要检查、原始帧独立复算及资源记录均在执行说明中。正式原始扫描耗时486.842秒；随后报告补充只复用已有统计。`runs/profile_v1/`保存逐帧、逐窗口、逐实例、连续阶段、统计长表和三页字体已核验的结果图，沿用本地忽略规则。
+唯一入口为`python -m src.profile --data-root /absolute/path/to/STU --workers 12`，CSV默认保存于`profiles/real/`，可用`--tables`指定目录。统计使用原`STUSequence`和`joint_voxelize`，完整保留正常、异常、忽略及范围外成员；`src/profile_report.py`完成分布汇总和CSV导出。原始强度精确合并取值计数；大量残差分位数附宽度至多0.1毫米的区间；静态表面残差明确为固定抽样代理。依赖、规则、覆盖、6项必要检查、原始帧独立复算及资源记录均在执行说明中。正式原始扫描耗时486.842秒；随后报告补充只复用已有统计。`runs/profiles/real/`保存逐帧、逐窗口、逐实例、连续阶段、统计长表和三页字体已核验的结果图，沿用本地忽略规则。
 
 真实侧与两侧合成画像现已全部完成。描述统计阶段到此结束，后续由一次固定配方的受控训练回答真实指标能否改善，不继续扩充因素清单。第七轮真实官方全帧AP 3.475451%保持原样；本次尚未验证任何改进的效果。
 
@@ -28,23 +28,23 @@
 
 所有活动产物使用英文路径。`v1` 表示已完成的历史基线，`v2` 表示当前分布改造；历史基线仍有比较用途，不等同于废弃文件。
 
-| 位置 | 状态与用途 |
-| --- | --- |
-| `protocols/observation_match_v2/` | 当前 v2 目标、生成与训练规则、固定监控清单 |
-| `runs/observation_match_v2/pilot/` | 当前有限生成先导；与正式训练样本隔离 |
-| `artifacts/data_v2/`、`profiles/v2/` | 预定正式 v2 数据与画像；生成前不标为完成 |
-| `runs/fulltrain_v2/`、`runs/real_val_v2/` | 预定 v2 训练与完整真实评价；尚未执行 |
-| `artifacts/calibration.pt`、`artifacts/calibration_source.npz`、两份支撑池 | v2 继续使用的 206 传感器校准及 206／201 支撑观测 |
-| `runs/learn/initial.pt` | v2 必需的原始未训练初始化，保留原路径与文件内容 |
-| `artifacts/data/` | 完整保留的 v1 冻结样本、清单和资格记录 |
-| `runs/fulltrain_v1/epoch_07.pt`、`runs/real_val_v1/` | 必需的 v1 候选与完整真实对照证据 |
-| `runs/fulltrain_v1/validation/epoch_07/predictions/normal/` | 保留的 v1 正常 201 预测；同目录合成预测已清理 |
-| `profiles/` 的既有 CSV、`runs/profile_v1/`、`runs/profile_pools/` | 已完成的真实及 v1 三侧画像，继续作为 v2 目标与对照 |
-| `runs/diagnostic_v1/`、`runs/intensity_v1/` | 历史失败诊断与强度检查的统计证据；置换预测已清理 |
-| `runs/fulltrain_v1/monitor_*/` | 仅保留历史监控清单、逐窗与汇总报告；大体积预测和排序记录已清理 |
-| `runs/history/{learning,transfer,coverage,validation}/` | 早期探索的轻量历史报告，无活动检查点或预测，不作为 v2 输入 |
+目录按“产物类型 → 版本 → 数据角色”组织。同一类结果共用父目录，尚未产生的正式 v2 目录不提前创建空壳。
 
-原 `runs/transfer/`、`runs/coverage/`、`runs/validation/` 现移入 `runs/history/`；原 `runs/learn/metrics.jsonl` 移至 `runs/history/learning/`。下文历史叙述中的原路径记录当时执行身份，查找现存报告时按此表定位。已废弃且无后续用途的大体积探索预测、未选中检查点及 `DynaCAN-deps` 已直接删除，不另设存放废弃副本的目录。原始 STU、有效基线和当前 v2 产物均不属于废弃材料。
+| 父目录 | 子目录与内容 | 当前状态 |
+| --- | --- | --- |
+| `protocols/` | `observation_match_v2/` 保存当前目标、生成及训练规则、固定监控清单 | 当前主线；根目录 `protocol.json` 保留 v1 与共同输入定义 |
+| `artifacts/data/` | `v1/`、`v2/` 各保存正式训练／验证样本与清单；池内使用 `train/`、`validation/` | v1 的 220 个样本完整保留；v2 正式池尚未生成 |
+| `artifacts/calibration/` | `model.pt` 为 206 传感器校准，`source.npz` 为其源观测 | 两版共用，内容不变 |
+| `artifacts/support/` | `206.npz`、`201.npz` 为各自的合格支撑池 | 两版共用，内容不变 |
+| `profiles/` | `real/` 为真实画像；`v1/`、`v2/` 为对应合成画像及对照 CSV；各版本再分 `train/`、`validation/` | 真实及 v1 已完成；v2 的 `pilot_1/`、`pilot_2/` 单列先导 |
+| `runs/train/` | `initial.pt` 为共用原初始化；`v1/`、`v2/` 保存检查点、训练日志与过程监控 | v1 保留第七轮候选及历史报告；v2 尚未训练 |
+| `runs/eval/` | 每版下 `real/` 为完整真实评价，`synthetic/` 为完整合成 201 与正常 201 对照；内含预测和统计 | v1 真实预测和正常 201 预测保留，旧合成预测已删除；v2 尚未评价 |
+| `runs/generation/` | `v2/pilot_1/`、`v2/pilot_2/` 保存有限先导的候选记录、选定调试世界和清单 | 只用于生成校准，不进入正式训练池 |
+| `runs/profiles/` | `real/`、`v1/`、`v2/` 保存画像的逐帧／逐窗／逐实例统计、直方图及汇总；v2 先导按轮次单列 | 是 CSV 的可复算来源，按原规则复用已有真实统计 |
+| `runs/diagnostics/` | `v1/conditions/` 为条件分层，`v1/intensity/` 为强度检查 | 保留有效历史统计；大体积置换预测已删除 |
+| `runs/history/` | `learning/`、`transfer/`、`coverage/`、`validation/` 保存早期探索的轻量报告 | 已停止路线，不作为 v2 输入，也不保留废弃模型或预测副本 |
+
+文件移动没有重新生成观测、预测或历史资格记录。冻结清单、资格文件和历史日志中的路径保留当时执行出处；当前读取入口按对应清单所在位置或协议中的现存目录定位，内容校验仍使用原有摘要。下文面向使用者的路径指向现存目录。已废弃且无后续用途的大体积探索预测、未选中检查点及 `DynaCAN-deps` 已直接删除，不另设存放废弃副本的目录。原始 STU、有效基线和当前 v2 产物均不属于废弃材料。
 
 ## 当前生成先导与存储
 
@@ -56,7 +56,20 @@ PYTHONDONTWRITEBYTECODE=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 \
   --data-root /absolute/path/to/STU --workers 12
 ```
 
-201 先导将 `--pool` 改为 `validation`，使用独立种子。先导写入 `runs/observation_match_v2/pilot/round_1/`，每个世界至多 8 个候选，依据同一数据分布目标选择；候选参数、拒绝原因和逐帧统计保留。这里的候选渲染是模型无关校准，尚不能证明真实检测得到改善。
+201 先导将 `--pool` 改为 `validation`。两轮先导现已全部完成；原始生成记录在 `runs/generation/v2/pilot_1/`、`pilot_2/`，同口径 CSV 在 `profiles/v2/pilot_1/`、`pilot_2/`。每轮接受 4 个训练调试世界、2 个验证调试世界，每个世界至多检查 8 个候选，两轮实际共渲染 96 个候选。所有候选的参数、统计和选择原因保留，未加载异常模型选择世界。
+
+| 先导 | 完整窗口 | 整窗无异常 | 五帧均可见 | 部分可见 | 官方合格帧 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 第一轮 206 | 1,780 | 822（46.180%） | 778（43.708%） | 180（10.112%） | 690 |
+| 第一轮 201 | 1,356 | 665（49.041%） | 333（24.558%） | 358（26.401%） | 258 |
+| 第二轮 206 | 1,780 | 963（54.101%） | 503（28.258%） | 314（17.640%） | 460 |
+| 第二轮 201 | 1,356 | 693（51.106%） | 428（31.563%） | 235（17.330%） | 299 |
+
+第一轮的逐世界贪心选择未同时满足可见状态范围。对该轮已生成候选的组合复算显示，原候选中存在满足范围的组合，因此第二轮只将池级选择改为固定宽度 32 的有界组合搜索；形状、材质、放置及回波规则保持不变。第一轮实际选中的结果未重写。第二轮两侧均满足三个可见状态目标，三个规定远距格也均非空；训练侧分别有 3、1、1 个世界提供这三格覆盖，验证侧为 2、1、1 个。训练和验证分别保留 165、121 个当前无异常而历史仍有异常的窗口。
+
+第二轮的 0.5 米内至少三个正常邻居覆盖为 12,786/16,682（76.645%）与 6,168/10,788（57.175%）。可见长边中位数分别为 0.5013 米和 0.4892 米，可见形状估计可靠率为 380/652（58.282%）与 241/543（44.383%）；这些是观测估计，不是物体完整尺寸。两侧共记录 37 个被不透明前表面遮挡且未返回的原生槽，新生成异常点全部满足既定强度数值格式。
+
+据此固定当前生成规则，不增加第三轮先导。正式池仍需报告实际频数、多世界覆盖和残余偏差；单代理世界尚未覆盖真实多实例情况，验证侧背景接近比例和几何可靠率也未完全匹配。先导的局部根种子曾在不同来源间数值重合，该情况保留在配置说明中；正式训练与验证根种子改为 36,600,000 和 36,700,000 起始，两者与全部调试种子范围均不相交。任何先导样本都不进入正式池。当前没有 v2 参数更新或真实性能结果。
 
 本轮按用户授权清除了约 20.606 GiB 的旧过程监控预测、强度置换预测、旧合成验证预测和未选中／恢复检查点。原有汇总与逐帧报告仍保留，这些已清理的预测路径只能作为历史来源，不能再声称本机仍有全部旧预测。v1 初始模型、第七轮模型、完整真实预测、正常 201 预测、冻结样本、清单和画像保留。220 个小体积 v1 样本曾被删除，随后按用户更正全部从 Git 恢复。
 
@@ -90,7 +103,7 @@ ruff check src tests
 
 ## 正式训练数据入口
 
-仓库保留下文的历史学习诊断，并新增 `AJAE-FullTrain-v1` 全池正式训练。正式训练的实际进度与停止原因读取 `runs/fulltrain_v1/summary.json`；运行期间逐步记录在 `metrics.jsonl`，不能由入口存在推断训练完成。数据入口实际执行冻结清单核验，不依赖调用者先手动运行检查命令：
+仓库保留下文的历史学习诊断，并新增 `AJAE-FullTrain-v1` 全池正式训练。正式训练的实际进度与停止原因读取 `runs/train/v1/summary.json`；运行期间逐步记录在 `metrics.jsonl`，不能由入口存在推断训练完成。数据入口实际执行冻结清单核验，不依赖调用者先手动运行检查命令：
 
 ```python
 from pathlib import Path
@@ -122,7 +135,7 @@ python src/data.py check --pool validation --data-root /absolute/path/to/STU
 ```bash
 PYTHONDONTWRITEBYTECODE=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 \
   .venv/bin/python -u -m src.evaluate --real \
-  --data-root /absolute/path/to/STU --output runs/real_val_v1
+  --data-root /absolute/path/to/STU --output runs/eval/v1/real
 ```
 
 `startup/checks.json` 记录实际启动核验，`inventory.json` 记录原始数据规模和空间估计，`samples.json` 固定本次候选和全部时间窗口。`results.jsonl` 逐帧保留官方资格、正常及异常分数、全窗口预测路径和精确指标记录。`summary.json` 汇总全部原始帧、完整五帧区间、每条序列和无异常回波阶段；必须实际完成后才能解释为完整真实结果。
@@ -247,7 +260,7 @@ AP 表示综合异常排序精确率与召回率的平均精确率；AUROC 描�
 
 采样资源记录位于 `resources.jsonl`。正式推理采样中观察到的最大常驻内存约 2.88 GiB、最大 PyTorch 保留显存约 9.74 GiB；Windows 可用内存最低约 11.92 GiB，所有采样中的交换占用与开始时相同。每分钟采样不能替代未采样瞬间的精确峰值，也不能把窗口之间测得的 GPU 利用率当作整段平均利用率。推理产物逻辑大小约 20.53 GiB；结束后的 E 盘实测约余 39.81 GiB，仍高于安全余量。
 
-核心结果为 `runs/real_val_v1/summary.json`；逐帧记录为 `results.jsonl`；独立核验为 `verification.json` 与 `official_check.json`；候选、帧清单、数据规模和预算分别记录在 `samples.json`、`inventory.json`；结果图为 `results.pdf`。这些原始预测与运行产物遵守既有忽略规则，不上传到远端。
+核心结果为 `runs/eval/v1/real/summary.json`；逐帧记录为 `results.jsonl`；独立核验为 `verification.json` 与 `official_check.json`；候选、帧清单、数据规模和预算分别记录在 `samples.json`、`inventory.json`；结果图为 `results.pdf`。这些原始预测与运行产物遵守既有忽略规则，不上传到远端。
 
 当前可以确认：第七轮候选已经完成固定条件下的首次真实开发验证，评价输入、点槽和指标计算的必要核验通过，真实合并表现仍弱，启动区间之外也存在连续失败。当前证据没有确定体素、强度、时间特征或合成生成因素的责任，也没有比较单帧输入、其他模型或多随机种子。下一项能改变机制判断的工作应是同一训练来源和预算、同一真实点级评价范围下的一项明确对照，例如对应的单帧模型；本轮在交付这些真实结果后结束，不自动追加对照或训练。
 
@@ -255,10 +268,10 @@ AP 表示综合异常排序精确率与召回率的平均精确率；AUROC 描�
 
 ```bash
 .venv/bin/python -m src.evaluate --data-root /absolute/path/to/STU \
-  --export-official runs/real_val_v1 --sequence 125 --output /path/to/official_predictions
+  --export-official runs/eval/v1/real --sequence 125 --output /path/to/official_predictions
 ```
 
-本轮按用户授权删除旧探索运行 `runs/learn`、`runs/transfer`、`runs/coverage`、`runs/validation` 中 3,667 个检查点、逐点预测和指标二进制文件，合计 12,864,079,537 字节（约 11.98 GiB）。保留 `runs/learn/initial.pt`、历史汇总记录和整个 `runs/fulltrain_v1`。下文旧报告中的已删除预测和探索检查点不再能够直接回读；B 的历史比较数字保留原始汇总依据，不声称本轮重新运行了 B。删除后 Windows E 盘实测只由约 47.03 GiB 增至 47.41 GiB，不能将 WSL 内部释放量当作宿主机回收量。
+本轮按用户授权删除旧探索运行 `runs/history/learning`、`runs/history/transfer`、`runs/history/coverage`、`runs/history/validation` 中 3,667 个检查点、逐点预测和指标二进制文件，合计 12,864,079,537 字节（约 11.98 GiB）。保留 `runs/train/initial.pt`、历史汇总记录和整个 `runs/train/v1`。下文旧报告中的已删除预测和探索检查点不再能够直接回读；B 的历史比较数字保留原始汇总依据，不声称本轮重新运行了 B。删除后 Windows E 盘实测只由约 47.03 GiB 增至 47.41 GiB，不能将 WSL 内部释放量当作宿主机回收量。
 
 ## 固定候选的强度依赖检查
 
@@ -268,9 +281,9 @@ AP 表示综合异常排序精确率与召回率的平均精确率；AUROC 描�
 
 ### 比较范围与实际输入
 
-模型保持为 `runs/fulltrain_v1/epoch_07.pt`，SHA-256 为 `eb84e5383e9134968a3421749dd7e2f5b04248e631772eed0befb5486e44a7bb`。本轮没有更新参数、归一化缓冲区、骨干、冻结生成器或数据池，没有选择其他检查点，也没有启动训练。既有真实全帧官方 AP **3.475451%** 原样保留。
+模型保持为 `runs/train/v1/epoch_07.pt`，SHA-256 为 `eb84e5383e9134968a3421749dd7e2f5b04248e631772eed0befb5486e44a7bb`。本轮没有更新参数、归一化缓冲区、骨干、冻结生成器或数据池，没有选择其他检查点，也没有启动训练。既有真实全帧官方 AP **3.475451%** 原样保留。
 
-验证窗口直接取 `runs/diagnostic_v1/frames.jsonl` 的 `stratum="1_1"`，即当前官方范围内异常点数 20–99、异常距离中位数 [10,20) 米。合成侧固定 113 窗、15 个世界，真实侧固定 303 窗、14 条序列。每个窗口输入完整五帧，指标只使用当前帧原有的官方合格点。没有按原始或置换分数筛选样本。正常点的指标范围仍为全部官方合格点，不额外截到 10–20 米。
+验证窗口直接取 `runs/diagnostics/v1/conditions/frames.jsonl` 的 `stratum="1_1"`，即当前官方范围内异常点数 20–99、异常距离中位数 [10,20) 米。合成侧固定 113 窗、15 个世界，真实侧固定 303 窗、14 条序列。每个窗口输入完整五帧，指标只使用当前帧原有的官方合格点。没有按原始或置换分数筛选样本。正常点的指标范围仍为全部官方合格点，不额外截到 10–20 米。
 
 | 特征统计来源 | 同条件窗口 | 世界／序列 | 当前正常点 | 当前异常点 |
 | --- | ---: | ---: | ---: | ---: |
@@ -432,7 +445,7 @@ PYTHONDONTWRITEBYTECODE=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 \
 .venv/bin/python -m src.intensity --data-root /absolute/path/to/STU
 ```
 
-默认结果目录为 `runs/intensity_v1`。同一规则下再次调用可恢复已登记的置换前缀；已完成时复用统计并重绘结果图，不追加推理。如要从头完整复算，应显式提供另一个 `--output` 目录并重新检查空间。`--statistics-only` 只运行数据统计。
+默认结果目录为 `runs/diagnostics/v1/intensity`。同一规则下再次调用可恢复已登记的置换前缀；已完成时复用统计并重绘结果图，不追加推理。如要从头完整复算，应显式提供另一个 `--output` 目录并重新检查空间。`--statistics-only` 只运行数据统计。
 
 `spec.json` 保存规则及固定样本，`training.json` 保存训练覆盖和所选训练窗，`distributions.json` 保存全部三侧、两类、两入口、逐实体及逐点距离分布，`summary.json` 保存原始与所有置换指标，`numerics.json` 保存数值中断的独立核查，`verification.json` 保存实际置换幅度与独立复算，`results.pdf` 给出三页结果图。各 `seed_*/results.jsonl` 保留逐窗结果，`seed_*/predictions` 保留完整五帧的逐点分数。模型与预测仍遵循既有忽略规则，不上传远端。
 
@@ -448,7 +461,7 @@ PYTHONDONTWRITEBYTECODE=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 \
 
 ### 固定统计方法
 
-参考异常占比在计算前写入 `runs/diagnostic_v1/spec.json`：
+参考异常占比在计算前写入 `runs/diagnostics/v1/conditions/spec.json`：
 
 $$
 \pi_\mathrm{ref}=\frac{87\,398}{87\,398+193\,383\,258}
@@ -555,7 +568,7 @@ $$
 
 统计运行耗时 **171.652 秒**，最大常驻内存 **4.145 GiB**；四个读取或统计工作线程使用单线程数值库，没有模型前向或参数更新。运行前实测 24 个可用 CPU 核、约 23.47 GiB WSL 内存及 RTX 5080 Laptop 16 GiB 显存，本诊断不使用 GPU 计算。E 盘在统计启动时剩余约 **39.807 GiB**，预计临时记录、缓冲及小产物峰值新增 **2.727 GiB**，高于安全余量的可用空间足够；运行中复查仍安全。临时排序文件在计算后自动释放，结束时 Windows E 盘实测余 **40.092 GiB**，未删除任何已有正式预测或检查点。
 
-复现入口复用原评价程序，默认输出目录为 `runs/diagnostic_v1`；如该目录已经存在，应为新的完整复算指定另一输出目录，现有证据不会被覆盖：
+复现入口复用原评价程序，默认输出目录为 `runs/diagnostics/v1/conditions`；如该目录已经存在，应为新的完整复算指定另一输出目录，现有证据不会被覆盖：
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 \
@@ -569,12 +582,12 @@ PYTHONDONTWRITEBYTECODE=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 \
 
 ## 全池正式训练
 
-`AJAE-FullTrain-v1` 从 `runs/learn/initial.pt` 恢复原始模型、归一化状态和随机状态，重新创建 AdamW 与初始缩放值为 128 的动态损失缩放器。模型、5 厘米体素、全五帧类别平衡二分类损失和全部冻结数据保持原样。每轮以独立随机数生成器产生的排列无放回访问 3,080 个窗口，最多十轮。训练使用一个活动窗口、至多一个预取窗口及既有有界源帧缓存，不保存整池展开输入或中间网络特征。
+`AJAE-FullTrain-v1` 从 `runs/train/initial.pt` 恢复原始模型、归一化状态和随机状态，重新创建 AdamW 与初始缩放值为 128 的动态损失缩放器。模型、5 厘米体素、全五帧类别平衡二分类损失和全部冻结数据保持原样。每轮以独立随机数生成器产生的排列无放回访问 3,080 个窗口，最多十轮。训练使用一个活动窗口、至多一个预取窗口及既有有界源帧缓存，不保存整池展开输入或中间网络特征。
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 \
   .venv/bin/python -u -m src.train --full \
-  --data-root /absolute/path/to/STU --output runs/fulltrain_v1
+  --data-root /absolute/path/to/STU --output runs/train/v1
 ```
 
 前 200 次成功更新的学习率从 `3e-5` 线性升至 `3e-4`，第 1 次取起点，第 200 次取终点；溢出跳步不推进预热且不补抽窗口。每轮固定监控四条合成 201 中每个世界的首、中、末窗口，共 276 窗，以及原始正常 201 对应的 69 个不同时间窗口。中间取靠前者，末段取当前帧 620、650、681。检查随机种子沿用完整验证；评价模式和训练随机状态在检查后恢复。
@@ -628,7 +641,7 @@ PYTHONDONTWRITEBYTECODE=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 \
 | B | 93.360878 | 98.394620 | 2.522800 | 0.073711 | 50.275946 | 94.124636 |
 | 第七轮 | 97.161646 | 99.349523 | 0.046213 | 0.151258 | 77.748421 | 98.566802 |
 
-第七轮完整 AP 比 B 提高 3.800769 个百分点，FPR95 降低 2.476587 个百分点，按原选模规则胜出。最终候选为 `runs/fulltrain_v1/epoch_07.pt`，SHA-256 为 `eb84e5383e9134968a3421749dd7e2f5b04248e631772eed0befb5486e44a7bb`。B 原检查点和完整预测继续只读保留；原始初始化身份及数据身份见原始 `plan.json`，本轮未改写资格证据。
+第七轮完整 AP 比 B 提高 3.800769 个百分点，FPR95 降低 2.476587 个百分点，按原选模规则胜出。最终候选为 `runs/train/v1/epoch_07.pt`，SHA-256 为 `eb84e5383e9134968a3421749dd7e2f5b04248e631772eed0befb5486e44a7bb`。B 原检查点和完整预测继续只读保留；原始初始化身份及数据身份见原始 `plan.json`，本轮未改写资格证据。
 
 92 个世界中，AP 有 69 个上升、23 个下降，逐世界 AP 变化的中位数为 +0.829077 个百分点；AUROC 有 76 个上升、16 个下降；FPR95 有 70 个降低、11 个相同、11 个升高。这些是配对描述，不是跨种子稳定性或统计显著性结论。世界 AP 下四分位从 50.275946% 提高到 77.748421%，但仍有 12 个世界 AP 低于 10%（B 为 15 个）。其中 11 个延续 B 的低 AP，4 个原低 AP 世界升至 10% 以上，序列 2、片段 17 新降至 10% 以下。该世界 AP 从 48.286067% 降至 6.571073%，FPR95 从 49.323593% 升至 55.075335%，是最大的 AP 退化。序列 2、片段 8 的 AP 仍仅 0.065657%。这 12 个低 AP 世界在合资格当前帧中累计仅有 147–2,179 个异常点；这是各世界的汇总点数，不能当作单窗点数或独立物理样本数。
 
@@ -837,10 +850,10 @@ AJAE_STU_ROOT=/absolute/path/to/STU PYTHONDONTWRITEBYTECODE=1 \
 ```bash
 PYTHONDONTWRITEBYTECODE=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 \
   .venv/bin/python -u -m src.train \
-  --data-root /absolute/path/to/STU --output runs/learn
+  --data-root /absolute/path/to/STU --output runs/history/learning
 ```
 
-已有输出目录会被拒绝，不覆盖此前证据。`runs/learn/metrics.jsonl` 记录固定配置、完整访问顺序、源数据身份、逐步更新与各检查点结果；`predictions/step_*/` 保存两次前向的全部点分数及身份，历史四帧不丢弃。`initial.pt` 保存初始状态，`final.pt` 同时保存模型、优化器、损失缩放器、随机状态、计划／成功步骤计数及后续访问位置。检查点只加载自行生成的可信文件；含 NumPy 随机状态时使用 `torch.load(..., weights_only=False)`。
+已有输出目录会被拒绝，不覆盖此前证据。`runs/history/learning/metrics.jsonl` 记录固定配置、完整访问顺序、源数据身份、逐步更新与各检查点结果；`predictions/step_*/` 保存两次前向的全部点分数及身份，历史四帧不丢弃。`initial.pt` 保存初始状态，`final.pt` 同时保存模型、优化器、损失缩放器、随机状态、计划／成功步骤计数及后续访问位置。检查点只加载自行生成的可信文件；含 NumPy 随机状态时使用 `torch.load(..., weights_only=False)`。
 
 本机已完成这一次固定配方实验：八个窗口共 5,009,637 个可见点，200 个计划步骤全部成功，每窗恰好访问 25 次，溢出跳步为 0，损失缩放保持 128。第一次更新使骨干 12,726,431 个参数元素、异常头全部 2,657 个参数元素发生变化。最终状态中全部 203 个优化器参数状态的步数均为 200。
 
@@ -888,10 +901,10 @@ PYTHONDONTWRITEBYTECODE=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 \
 PYTHONDONTWRITEBYTECODE=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 \
   .venv/bin/python -u -m src.evaluate \
   --data-root /absolute/path/to/STU \
-  --checkpoints runs/learn --output runs/transfer
+  --checkpoints runs/history/learning --output runs/history/transfer
 ```
 
-`runs/transfer/samples.json` 在推理前保存固定样本清单、检查点哈希、源世界身份和执行设置；`results.jsonl` 保存 46 个窗口的配对结果；`summary.json` 保存官方汇总、正常对照、零更新检查和资源记录；`predictions/` 保存 92 份完整窗口分数与点身份。输入按窗口整理一次，供两份模型共用，推理后释放；源帧读取沿用原有有界缓存。资源分别统计数据入口初始化、检查点加载、窗口读取、体素输入整理、模型前向，以及损失／指标计算和预测保存的耗时。已有输出目录或位于训练证据目录内的输出路径均被拒绝，不覆盖 `runs/learn`。本次不生成 PLY，不读取真实异常数据。
+`runs/history/transfer/samples.json` 在推理前保存固定样本清单、检查点哈希、源世界身份和执行设置；`results.jsonl` 保存 46 个窗口的配对结果；`summary.json` 保存官方汇总、正常对照、零更新检查和资源记录；`predictions/` 保存 92 份完整窗口分数与点身份。输入按窗口整理一次，供两份模型共用，推理后释放；源帧读取沿用原有有界缓存。资源分别统计数据入口初始化、检查点加载、窗口读取、体素输入整理、模型前向，以及损失／指标计算和预测保存的耗时。已有输出目录或位于训练证据目录内的输出路径均被拒绝，不覆盖 `runs/history/learning`。本次不生成 PLY，不读取真实异常数据。
 
 本机已完成该次诊断，46 个输入窗口共 26,270,654 个点，92 份预测保留 52,541,308 条带身份的分数记录。模型参数、运行缓冲区和检查点文件均未改变，参数更新次数为 0。两份源文件 SHA-256 为：
 
@@ -970,24 +983,24 @@ PYTHONDONTWRITEBYTECODE=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 \
 
 本次对照检验整体训练覆盖扩展是否比重复少量世界更有利于跨序列合成迁移。A 使用原第 0 条 206 合成序列的八个窗口，当前帧仍为 27、83、139、195、251、307、363、448；B 使用八条冻结合成序列、每条 16 个片段的最后一个合法窗口，共 128 个。B 同时扩大异常世界与正常背景片段的覆盖，因此不能把差异单独归因于异常形状多样性。数据、异常代理、标签、5 厘米体素、网络结构、全窗口类别平衡损失和优化配方均保持不变。
 
-两组均严格加载原 `runs/learn/initial.pt` 的模型参数、归一化统计和随机状态，各自新建 AdamW 与初值 128 的损失缩放器。每组在运行前固定 1,280 个计划步骤，每轮无放回排列全部本组窗口；没有跳步时，A 每窗访问 160 次，B 每窗访问 10 次。成功更新、溢出跳步、处理点数和体素数分别记录，不补跳步，不为了平衡计算量而裁点。原 200 步模型不作为继续训练的起点。
+两组均严格加载原 `runs/train/initial.pt` 的模型参数、归一化统计和随机状态，各自新建 AdamW 与初值 128 的损失缩放器。每组在运行前固定 1,280 个计划步骤，每轮无放回排列全部本组窗口；没有跳步时，A 每窗访问 160 次，B 每窗访问 10 次。成功更新、溢出跳步、处理点数和体素数分别记录，不补跳步，不为了平衡计算量而裁点。原 200 步模型不作为继续训练的起点。
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 \
   .venv/bin/python -u -m src.train --coverage \
   --data-root /absolute/path/to/STU \
-  --initial runs/learn/initial.pt \
-  --validation-samples runs/transfer/samples.json \
-  --output runs/coverage --workers 4
+  --initial runs/train/initial.pt \
+  --validation-samples runs/history/transfer/samples.json \
+  --output runs/history/coverage --workers 4
 ```
 
 训练继续使用同一个 `src/train.py` 优化循环，A、B 顺序运行。完整窗口和确定性的体素输入只缓存在主存，每步把当前一个窗口传入 GPU，骨干特征每次重新计算。实际八窗对照中，一线程与四线程准备的坐标、身份、标签、全部体素张量及随机状态完全一致，耗时分别为 9.19 和 4.43 秒，因此正式准备使用四线程、底层数值库单线程。每次准备新窗口前检查可用主存是否至少为 3 GiB；预计磁盘峰值预算为 5 GiB，包含 320 份全窗口预测、四份模型／优化器状态和写入缓冲，并沿用 E 盘安全余量检查。
 
 在 640 步保存 `step_0640.pt`，在 1,280 步保存 `final.pt`，均包含优化器、损失缩放器、随机状态与访问位置。每组最终对自身全部训练窗口做一次固定推理检查，保留全点预测、逐窗两类损失及汇总；此检查不改变参数或归一化统计。两组训练结束后，读取同一步数的 A／B 状态成对评价，以减少验证输入的重复准备。640 步仅观察过程，1,280 步是预先指定的主要比较位置，不根据中间结果改变训练或选择检查点。
 
-评价直接复用 `src/evaluate.py`，从原 `runs/transfer/samples.json` 读取并核对同一批 23 对 201 窗口、异常世界和检查种子。主要结果保留官方点级汇总 AP、AUROC、FPR95、逐窗 AP 中位数及 B 相对 A 的改善／持平／下降数量；正常对照仍使用固定阈值 0.5，另保留全窗口两类损失、分数分布和最差正常窗口。127 不满足异常评价资格时继续保留，完整五帧预测不丢弃历史点、不融合未来窗口。201 已参与研究决策，应称为固定开发验证视图，不是盲测集或完整 201 验证。
+评价直接复用 `src/evaluate.py`，从原 `runs/history/transfer/samples.json` 读取并核对同一批 23 对 201 窗口、异常世界和检查种子。主要结果保留官方点级汇总 AP、AUROC、FPR95、逐窗 AP 中位数及 B 相对 A 的改善／持平／下降数量；正常对照仍使用固定阈值 0.5，另保留全窗口两类损失、分数分布和最差正常窗口。127 不满足异常评价资格时继续保留，完整五帧预测不丢弃历史点、不融合未来窗口。201 已参与研究决策，应称为固定开发验证视图，不是盲测集或完整 201 验证。
 
-`runs/coverage/plan.json` 在训练前保存样本、访问顺序、初始模型和开发验证清单身份。`A/`、`B/` 各自保存训练日志、检查点、最终训练子集预测及汇总；`check_0640/`、`check_1280/` 保存配对开发验证的完整预测与结果；根目录 `summary.json` 汇总两组执行状态及两次比较。原学习与迁移实验的检查点、清单和结果文件只读保留，不覆盖；本轮不读取真实异常序列。
+`runs/history/coverage/plan.json` 在训练前保存样本、访问顺序、初始模型和开发验证清单身份。`A/`、`B/` 各自保存训练日志、检查点、最终训练子集预测及汇总；`check_0640/`、`check_1280/` 保存配对开发验证的完整预测与结果；根目录 `summary.json` 汇总两组执行状态及两次比较。原学习与迁移实验的检查点、清单和结果文件只读保留，不覆盖；本轮不读取真实异常序列。
 
 本机正式执行已完成，两组均成功更新 1,280 次，溢出跳步为 0。实际日志与训练前访问清单逐项一致，A 每窗访问 160 次，B 每窗访问 10 次；两组首次更新均实际改变骨干与异常头参数。主存缓存经设备传输后与直接整理输入的完整预测差为 0。两次开发验证均完成全部 46 个窗口，推理没有改变模型参数或归一化缓冲区。
 
@@ -1076,7 +1089,7 @@ B 在 640 步时的高分占比高于 A，不能隐去这个过程结果；到�
 
 ## 完整 201 零更新开发验证
 
-本轮固定 `runs/coverage/B/final.pt`，即扩大覆盖组原定 1,280 步结束时的状态，模型内容哈希为 `22678e6bf7ef40f66b35a8cd836993e2d1aff500090307353f6b86335ea5dce6`。同时加载该状态的归一化运行统计，不创建优化器，不反向传播，不校准分数，不追加训练，不比较其他检查点。模型、5 厘米体素、标签和冻结异常世界保持不变。
+本轮固定 `runs/history/coverage/B/final.pt`，即扩大覆盖组原定 1,280 步结束时的状态，模型内容哈希为 `22678e6bf7ef40f66b35a8cd836993e2d1aff500090307353f6b86335ea5dce6`。同时加载该状态的归一化运行统计，不创建优化器，不反向传播，不校准分数，不追加训练，不比较其他检查点。模型、5 厘米体素、标签和冻结异常世界保持不变。
 
 验证读取四条冻结合成 201 的全部合法窗口，每条 590 个，共 92 个世界、2,360 个窗口；合成窗口不跨片段。原始正常 201 完整读取 0–681 帧，仅运行一遍，输出 4–681 的 678 个窗口，保留开头重复槽位。总计 3,038 个窗口，全部保存五帧完整预测及点身份，在线指标只使用当前帧，不融合其他窗口的分数，不生成 PLY，也不读取真实异常序列。
 
@@ -1084,7 +1097,7 @@ B 在 640 步时的高分占比高于 A，不能隐去这个过程结果；到�
 PYTHONDONTWRITEBYTECODE=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 \
   .venv/bin/python -u -m src.evaluate --full \
   --data-root /absolute/path/to/STU \
-  --checkpoint runs/coverage/B/final.pt --output runs/validation
+  --checkpoint runs/history/coverage/B/final.pt --output runs/history/validation
 ```
 
 `src/evaluate.py` 的完整验证使用与局部配对检查相同的前向、类别平衡损失、官方点筛选和逐窗评价函数。合成检查种子固定为 `23 + 23 * sequence_index + segment_index`；正常窗口使用当前帧所在片段的 `23 + segment_index`。因此原第 0 条合成版本中 23 窗及其正常对照的种子保持不变。每次检查恢复随机状态并检查归一化缓冲区，结束时逐项检查模型参数与缓冲区没有改变。
@@ -1095,7 +1108,7 @@ PYTHONDONTWRITEBYTECODE=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 \
 
 运行前，旧 23 窗真实预测的官方逐点计算与磁盘分块汇总得到完全相同的 AP 94.42336702020746%、AUROC 98.31521187709309%、FPR95 0.7556010142459914%；同一批 1,647,962 个点的指标计算分别耗时 0.502 和 0.076 秒。并列分数、跨分块并列分数、共线 ROC 点及严格召回门槛另有针对性检查。单线程和后台线程准备的完整坐标、标签、体素张量与随机状态一致；三个实际窗口的直接 GPU 输入与主存准备后传输的预测差均为零，其中第 15 帧与旧预测也完全一致。最大的开头正常窗口包含 1,163,892 个点，先导检查峰值显存约 1.60 GiB，没有裁点。
 
-结果写入新的 `runs/validation/`：`samples.json` 保存完整样本、模型、冻结世界和执行身份；`results.jsonl` 保存全部逐窗结果及预测位置；`predictions/` 保存 3,038 份全窗口预测；`current/` 只保存必要的当前帧精确评价记录；`worlds.json` 保存 92 个世界的汇总与逐窗 AP；`summary.json` 保存完整结果、子范围和资源记录。旧学习、迁移和覆盖对照证据只读保留。
+结果写入新的 `runs/history/validation/`：`samples.json` 保存完整样本、模型、冻结世界和执行身份；`results.jsonl` 保存全部逐窗结果及预测位置；`predictions/` 保存 3,038 份全窗口预测；`current/` 只保存必要的当前帧精确评价记录；`worlds.json` 保存 92 个世界的汇总与逐窗 AP；`summary.json` 保存完整结果、子范围和资源记录。旧学习、迁移和覆盖对照证据只读保留。
 
 合成主结果按合格点汇总，并另列原 23 窗、第 0 条版本其余 567 窗、第 1–3 条版本的 1,770 窗，以及四条版本各自的结果。全窗口类别平衡损失保持原公式；异常损失额外按全部点、历史点、当前帧全部点及当前帧官方距离范围内的点分开，均直接由 logits 计算，分别保存点数、损失总和、按点均值和按窗均值。该距离范围统计不以当前帧是否达到五个异常点为前提。重复出现的历史观测按所在窗口分别统计，不假定重叠窗口相互独立。
 
@@ -1239,7 +1252,7 @@ PYTHONDONTWRITEBYTECODE=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 \
 
 ## 运行时几何输入
 
-`artifacts/calibration.pt` 由 206 全部 449 帧建立，射线参数来源为 `artifacts/calibration_source.npz`。206 支撑面池 `artifacts/training_206_support_pool.npz` 覆盖 0–448，锚点范围为 2–446。各文件由 `protocol.json` 中的哈希绑定。
+`artifacts/calibration/model.pt` 由 206 全部 449 帧建立，射线参数来源为 `artifacts/calibration/source.npz`。206 支撑面池 `artifacts/support/206.npz` 覆盖 0–448，锚点范围为 2–446。各文件由 `protocol.json` 中的哈希绑定。
 
 201 的活动支撑面池必须覆盖完整 0–681，锚点范围为 2–679。首次建立时执行：
 
@@ -1248,7 +1261,7 @@ python src/prepare.py support-validation \
   --data-root /absolute/path/to/STU --processes <按实测资源确定>
 ```
 
-程序写出 `artifacts/validation_201_support_pool.npz` 并打印文件 SHA-256，应与 `protocol.json` 对应字段一致。该文件覆盖 0–681，包含 1,210,186 个合格支撑记录和 640 个实际产生合格记录的锚点帧。
+程序写出 `artifacts/support/201.npz` 并打印文件 SHA-256，应与 `protocol.json` 对应字段一致。该文件覆盖 0–681，包含 1,210,186 个合格支撑记录和 640 个实际产生合格记录的锚点帧。
 
 201 帧 0–3 的文件槽数分别为 393,216、393,216、291,328 和 262,144，它们包含协议文档记录的精确重复槽。复现时不得先行删除或去重；读取和渲染程序会校验 `xyzi`、标签和冻结的多对一射线布局。
 
@@ -1303,7 +1316,7 @@ python src/data.py manifest --pool validation
 python src/qualify.py --data-root /absolute/path/to/STU
 ```
 
-当前状态为 `frozen`，该命令默认只读复核，不重写 `artifacts/data/qualification.json`。如需另外保存结果，指定尚不存在的路径，例如 `--output runs/qualification.json`；指向冻结资格文件或任意已有文件时都会拒绝执行。复核重新检查已有世界；同种子确定性检查只在内存重放既定首段，不重抽种子、不挑选替代世界，也不写回数据池。两份冻结清单同样禁止覆盖。
+当前状态为 `frozen`，该命令默认只读复核，不重写 `artifacts/data/v1/qualification.json`。如需另外保存结果，指定尚不存在的路径，例如 `--output runs/qualification.json`；指向冻结资格文件或任意已有文件时都会拒绝执行。复核重新检查已有世界；同种子确定性检查只在内存重放既定首段，不重抽种子、不挑选替代世界，也不写回数据池。两份冻结清单同样禁止覆盖。
 
 需要逐窗口人工核查时，可在同一次检查中导出完整点云：
 
@@ -1321,9 +1334,9 @@ python src/qualify.py --data-root /absolute/path/to/STU \
 模型无关资格程序必须进一步核对所有正式片段、重建帧、窗口和原始 201 的 678 个在线输出。只有以下三个文件全部生成且通过独立检查后，才允许把其 SHA-256 写入协议：
 
 ```text
-artifacts/data/train_manifest.json
-artifacts/data/validation_manifest.json
-artifacts/data/qualification.json
+artifacts/data/v1/train_manifest.json
+artifacts/data/v1/validation_manifest.json
+artifacts/data/v1/qualification.json
 ```
 
 随后才可把协议状态改为 `frozen`，并同步设置 `data_pool_frozen=true`、`training_allowed=true`、`validation_tuning_allowed=true`。`real_anomaly_access_allowed` 仍保持 `false`，直到模型和选择规则另外完成冻结。
