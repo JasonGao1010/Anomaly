@@ -272,3 +272,73 @@ def test_monitor_resume_removes_only_uncommitted_prediction_and_metric_tail(
     assert committed.exists() and not dangling.exists()
     assert records.read_bytes() == keys.tobytes()
     assert (tmp_path / "results.jsonl").read_text() == json.dumps(row) + "\n"
+
+
+@pytest.mark.parametrize("count", [0, 1, 2, 103, 104, 1048579])
+def test_float32_normal_records_keep_exact_quantiles_without_sort_copy(tmp_path, count):
+    values = np.random.default_rng(66).random(count, dtype=np.float32)
+    values[::3] = 0.5
+    paths = [tmp_path / f"part_{i}.bin" for i in range(2)]
+    for path, block in zip(paths, np.array_split(values, 2)):
+        block.tofile(path)
+    assert pooled_files(paths, normal=True, normal_float32=True) == normal_statistics(
+        values
+    )
+
+
+def test_real_pooling_includes_startup_and_keeps_normal_only_frames(tmp_path):
+    from src.evaluate import save_window, summarize_real
+    from src.protocol import SequenceSpec, FrameSpan
+    from src.scene import PointLabels, make_source_frame, assemble_window
+
+    spec = SequenceSpec("val", 125, "fixture", True, FrameSpan(0, 5))
+    sources, rows = [], []
+    reference = PointOODMetricsCalculator()
+    full_reference = PointOODMetricsCalculator()
+    for current, anomaly_count in enumerate((6, 0, 4, 0, 5)):
+        points = np.tile(np.array([10, 0, 0, 0.2], np.float32), (12, 1))
+        points[-1, :3] = 0  # A labelled file slot still has no observed return.
+        semantic = np.array(
+            [2] * anomaly_count + [40] * (12 - anomaly_count), np.uint16
+        )
+        labels = PointLabels(
+            semantic.astype(np.uint32), semantic, np.zeros(12, np.uint16), None
+        )
+        sources.append(
+            make_source_frame(
+                current, points, np.eye(4), labels, partition="val", sequence_id=125
+            )
+        )
+        window = assemble_window(
+            spec, 0, tuple(range(current + 1)), sources, startup=current < 4
+        )
+        scores = np.linspace(0, 1, window.points.count, dtype=np.float32)
+        row = save_window(
+            tmp_path,
+            dict(
+                view="real",
+                sequence_index=125,
+                current_frame=current,
+                scope="startup" if current < 4 else "full",
+            ),
+            window,
+            scores,
+            {},
+            None,
+            {},
+        )
+        rows.append(row)
+        raw = window.current_frame.source.restore_real(scores[window.current_mask])
+        reference.update(points[:, :3], raw, semantic)
+        if current == 4:
+            full_reference.update(points[:, :3], raw, semantic)
+    result = summarize_real(rows, tmp_path, check_resources=lambda: None)
+    for name, value in official_metrics(reference).items():
+        assert result["all_frames"][name] == pytest.approx(value, abs=1e-10)
+    for name, value in official_metrics(full_reference).items():
+        assert result["full_history"][name] == pytest.approx(value, abs=1e-10)
+    assert result["all_frames"]["eligible_frames"] == 2
+    assert result["startup"]["eligible_frames"] == 1
+    assert result["normal_without_anomaly_returns"]["frame_count"] == 2
+    assert result["normal_without_anomaly_returns"]["point_count"] == 22
+    assert result["ineligible_frames"]["one_to_four_official_anomaly_points"] == 1

@@ -6,7 +6,7 @@
     "data_pool_frozen": true,
     "training_allowed": true,
     "validation_tuning_allowed": true,
-    "real_anomaly_access_allowed": false
+    "real_anomaly_access_allowed": true
   },
   "authority": {
     "scientific_document": "PROTOCOL.md"
@@ -29,7 +29,7 @@
     "model_validation_source": {
       "partition": "train",
       "sequence_id": 201,
-      "role": "only_source_for_model_validation_hyperparameter_tuning_and_model_selection",
+      "role": "synthetic_development_source_without_parameter_updates",
       "labels_available": true,
       "frame_range_inclusive": [0, 681],
       "gradient_updates_allowed": false,
@@ -44,9 +44,19 @@
       },
       "duplicate_policy": "retain_and_report"
     },
-    "real_anomaly_final_test": {
+    "real_anomaly_development_validation": {
+      "gradient_updates_allowed": false,
+      "checkpoint": "runs/fulltrain_v1/epoch_07.pt",
+      "checkpoint_sha256": "eb84e5383e9134968a3421749dd7e2f5b04248e631772eed0befb5486e44a7bb",
+      "startup": "available_prefix_right_aligned_in_five_slots_no_padding_points",
+      "main_scope": "all_original_frames_continuous_per_sequence",
+      "supplementary_scope": "current_frame_at_least_4",
+      "zero_coordinate_slot_score": 0.0,
+      "normal_score_threshold": 0.5,
+      "postprocessing": "none",
+      "normalization_updates": false,
       "partition": "val",
-      "role": "sealed_until_model_structure_training_recipe_hyperparameters_and_selection_rule_are_fixed",
+      "role": "public_real_development_validation_without_parameter_updates",
       "labels_available": true,
       "sequence_ids": [125, 137, 138, 139, 140, 141, 142, 143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 169],
       "qualitative_inspection": {

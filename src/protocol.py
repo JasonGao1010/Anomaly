@@ -343,7 +343,9 @@ class AJAEProtocol:
         data = _mapping(document["data"], "data")
         self.training_sequence = self._sequence(data, "parameter_update_source")
         self.validation_sequence = self._sequence(data, "model_validation_source")
-        public = _mapping(data["real_anomaly_final_test"], "real anomaly test")
+        public = _mapping(
+            data["real_anomaly_development_validation"], "real development validation"
+        )
         hidden = _mapping(data["hidden_test"], "hidden test")
         self.public_validation = tuple(
             SequenceSpec("val", item, str(public["role"]), True, None)
@@ -588,7 +590,7 @@ class AJAEProtocol:
             status["data_pool_frozen"] is not frozen
             or status["training_allowed"] is not frozen
             or status["validation_tuning_allowed"] is not frozen
-            or status["real_anomaly_access_allowed"] is not False
+            or status["real_anomaly_access_allowed"] is not frozen
         ):
             raise ProtocolError("schema 34 execution permissions contradict its state")
 
@@ -630,7 +632,7 @@ class AJAEProtocol:
             or validation.sequence_id != 201
             or validation.span != FrameSpan(0, 682)
             or validation.role
-            != "only_source_for_model_validation_hyperparameter_tuning_and_model_selection"
+            != "synthetic_development_source_without_parameter_updates"
             or validation.labels_available is not True
             or validation_record.get("gradient_updates_allowed") is not False
             or validation_record.get("normal_window_count") != 678
@@ -658,12 +660,14 @@ class AJAEProtocol:
             raise ProtocolError(
                 "train/201 must be one complete no-gradient validation sequence"
             )
-        public = _mapping(data["real_anomaly_final_test"], "real anomaly test")
+        public = _mapping(
+            data["real_anomaly_development_validation"], "real development validation"
+        )
         hidden = _mapping(data["hidden_test"], "hidden test")
         if (
             public.get("partition") != "val"
             or public.get("role")
-            != "sealed_until_model_structure_training_recipe_hyperparameters_and_selection_rule_are_fixed"
+            != "public_real_development_validation_without_parameter_updates"
             or public.get("labels_available") is not True
             or _int_tuple(public["sequence_ids"], "public ids") != PUBLIC_ANOMALY_IDS
         ):

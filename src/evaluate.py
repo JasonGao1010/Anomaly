@@ -7,6 +7,8 @@ import ast
 from concurrent.futures import ThreadPoolExecutor
 import gc
 import hashlib
+import io
+import zlib
 import json
 import os
 from pathlib import Path
@@ -24,6 +26,7 @@ from torch.nn import functional as F
 from .data import FrozenWindowDataset, PredictionBatch, WindowPartition, _atomic_json
 from .model import AJAE, joint_voxelize
 from .protocol import PROJECT_ROOT, load_protocol
+from .scene import STUSequence, LabelMode
 from .train import balanced_loss, fixed_check, host_disk, score_distribution
 from vendor.stu.compute_point_level_ood import PointOODMetricsCalculator
 
@@ -171,8 +174,74 @@ def exact_metrics(ordered, *, chunk_size=1 << 20):
     return result
 
 
-def pooled_files(paths, *, normal=False):
+def normal_files(paths, *, float32=False):
+    """Select exact float32 order statistics by bytes, with no full sorting copy."""
+    dtype = np.uint32 if float32 else np.uint64
+    itemsize = np.dtype(dtype).itemsize
+    sizes = [path.stat().st_size for path in paths]
+    if any(size % itemsize for size in sizes):
+        raise ValueError("truncated normal score records")
+    count = sum(sizes) // itemsize
+    if not count:
+        return normal_statistics(np.empty(0))
+    positions = [(count - 1) * q for q in (0.5, 0.95)]
+    ranks = sorted({int(f(p)) for p in positions for f in (np.floor, np.ceil)})
+    # Positive finite float32 bit order equals numerical order; no score is quantized.
+    nodes = {0: {rank: rank for rank in ranks}}
+    high = 0
+    for shift in (24, 16, 8, 0):
+        histograms = {prefix: np.zeros(256, dtype=np.int64) for prefix in nodes}
+        for path in paths:
+            with path.open("rb") as stream:
+                while len(block := np.fromfile(stream, dtype=dtype, count=1 << 20)):
+                    bits = block if float32 else (block >> 1).astype(np.uint32)
+                    if shift == 24:
+                        high += int(
+                            np.count_nonzero(bits >= np.float32(0.5).view(np.uint32))
+                        )
+                    for prefix, hist in histograms.items():
+                        selected = (
+                            bits
+                            if shift == 24
+                            else bits[(bits >> (shift + 8)) == prefix]
+                        )
+                        hist += np.bincount((selected >> shift) & 255, minlength=256)
+                os.posix_fadvise(stream.fileno(), 0, 0, os.POSIX_FADV_DONTNEED)
+        next_nodes = {}
+        for prefix, entries in nodes.items():
+            cumulative = np.cumsum(histograms[prefix])
+            for rank, relative in entries.items():
+                byte = int(np.searchsorted(cumulative, relative, side="right"))
+                before = int(cumulative[byte - 1]) if byte else 0
+                next_nodes.setdefault((prefix << 8) | byte, {})[rank] = (
+                    relative - before
+                )
+        nodes = next_nodes
+    values = {
+        rank: np.uint32(bits).view(np.float32)
+        for bits, entries in nodes.items()
+        for rank in entries
+    }
+    quantiles = []
+    for q, position in zip((0.5, 0.95), positions):
+        lo, hi = int(np.floor(position)), int(np.ceil(position))
+        pair = np.array([values[lo], values[hi]], dtype=np.float32)
+        quantiles.append(
+            float(np.median(pair) if q == 0.5 else np.quantile(pair, position - lo))
+        )
+    return dict(
+        point_count=count,
+        median=quantiles[0],
+        p95=quantiles[1],
+        count_ge_0_5=high,
+        fraction_ge_0_5=high / count,
+    )
+
+
+def pooled_files(paths, *, normal=False, normal_float32=False):
     """Sort exact records on disk, then reduce them in bounded chunks."""
+    if normal:
+        return normal_files(paths, float32=normal_float32)
     size = sum(path.stat().st_size for path in paths)
     if size % 8:
         raise ValueError("truncated exact evaluation records")
@@ -193,37 +262,7 @@ def pooled_files(paths, *, normal=False):
                     offset += len(block)
         # Numeric in-place quicksort avoids point-count-sized index/ROC arrays.
         ordered.sort(kind="quicksort")
-        if normal:
-
-            def quantile(array, q):
-                position = (len(array) - 1) * q
-                lo, hi = int(np.floor(position)), int(np.ceil(position))
-                values = (
-                    (np.asarray(array[[lo, hi]]) >> 1)
-                    .astype(np.uint32)
-                    .view(np.float32)
-                )
-                return float(
-                    np.median(values)
-                    if q == 0.5
-                    else np.quantile(values, position - lo)
-                )
-
-            count = len(ordered) - int(
-                np.searchsorted(
-                    ordered,
-                    packed_scores(np.array([NORMAL_THRESHOLD]), np.array([0]))[0],
-                )
-            )
-            result = {
-                "point_count": len(ordered),
-                "median": quantile(ordered, 0.5),
-                "p95": quantile(ordered, 0.95),
-                "count_ge_0_5": count,
-                "fraction_ge_0_5": count / len(ordered),
-            }
-        else:
-            result = exact_metrics(ordered)
+        result = exact_metrics(ordered)
         del ordered
     return result
 
@@ -846,10 +885,15 @@ def full_samples(pool):
 
 def prepare_window(dataset, partition, sample):
     begin = time.perf_counter()
+    if sample["view"] == "real" and sample["current_frame"] == 0:
+        for sequence in dataset.values():
+            sequence._frames.clear()
     window = (
         dataset[sample["dataset_index"]]
         if sample["view"] == "synthetic"
-        else partition.for_output(sample["current_frame"])
+        else (
+            dataset[sample["sequence_index"]] if sample["view"] == "real" else partition
+        ).for_output(sample["current_frame"])
     )
     if (
         window.observation_sequence_id != sample["sequence_id"]
@@ -864,6 +908,35 @@ def prepare_window(dataset, partition, sample):
     return window, inputs, loaded, time.perf_counter() - begin
 
 
+def append_records(output, relative, values):
+    path = output / relative
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("ab") as stream:
+        offset = stream.tell() // values.dtype.itemsize
+        values.tofile(stream)
+        stream.flush()
+        os.fdatasync(stream.fileno())
+        os.posix_fadvise(stream.fileno(), 0, 0, os.POSIX_FADV_DONTNEED)
+    return dict(
+        file=relative.as_posix(),
+        offset=offset,
+        count=len(values),
+        itemsize=values.dtype.itemsize,
+        sha256=hashlib.sha256(values.tobytes()).hexdigest(),
+    )
+
+
+def official_current_scores(prediction, slot_count):
+    """Restore file slots with a label-independent zero for absent returns."""
+    current = prediction.online_mask
+    slots = prediction.source_slot[current]
+    if len(slots) and int(slots.max()) >= slot_count:
+        raise ValueError("current prediction lies outside original scan slots")
+    result = np.zeros(slot_count, np.float32)
+    result[slots] = prediction.anomaly_score[current]
+    return result
+
+
 def save_window(output, sample, window, scores, losses, scopes, timings):
     """One bounded writer retains all predictions and only current metric records."""
     begin = time.perf_counter()
@@ -876,9 +949,8 @@ def save_window(output, sample, window, scores, losses, scopes, timings):
     relative = (
         Path("predictions") / directory / f"frame_{sample['current_frame']:06d}.npz"
     )
-    prediction = PredictionBatch.from_window(window, scores).save(
-        output / relative, window=window
-    )
+    batch = PredictionBatch.from_window(window, scores)
+    prediction = batch.save(output / relative, window=window)
     prediction["file"] = relative.as_posix()
     # A bounded Python writer must not accumulate unbounded host-backed file pages.
     with (output / relative).open("rb") as stream:
@@ -886,31 +958,57 @@ def save_window(output, sample, window, scores, losses, scopes, timings):
         os.posix_fadvise(stream.fileno(), 0, 0, os.POSIX_FADV_DONTNEED)
     current = window.current_mask
     xyz, semantic = window.points.coordinates[current], window.labels.semantic[current]
+    current_values = scores[current]
+    if view == "real":
+        source = window.current_frame.source
+        xyz, semantic = source.xyzi[:, :3], source.labels.semantic
+        current_values = official_current_scores(batch, source.slot_count)
     current_target = evaluation_targets(xyz, semantic)
     calculator = PointOODMetricsCalculator()
-    if view == "synthetic":
-        metrics = synthetic_metrics(xyz, scores[current], semantic, calculator)
+    if view in {"synthetic", "real"}:
+        metrics = synthetic_metrics(xyz, current_values, semantic, calculator)
         keys = (
             packed_scores(calculator.all_scores[0], calculator.all_labels[0])
             if metrics["eligible"]
             else np.empty(0, np.uint64)
         )
-        subset = "selected" if sample["scope"] == "selected_23" else "remaining"
-        metric_path = (
-            Path("current")
-            / f"{sample['sequence_index']:03d}"
-            / f"segment_{sample['segment_index']:02d}_{subset}.bin"
-        )
+        if view == "real":
+            metrics["raw_anomaly_count"] = int(
+                (window.labels.semantic[current] == 2).sum()
+            )
+            metrics["normal"] = normal_statistics(current_values[current_target == 0])
+            metrics["anomaly"] = normal_statistics(current_values[current_target == 1])
+            metrics["raw_slot_count"] = window.current_frame.source.slot_count
+            normal_values = (
+                current_values[current_target == 0]
+                if metrics["raw_anomaly_count"] == 0
+                else np.empty(0, np.float32)
+            )
+            normal_records = append_records(
+                output,
+                Path("current")
+                / str(sample["sequence_index"])
+                / f"normal_{sample['scope']}.bin",
+                normal_values.astype(np.float32, copy=False),
+            )
+            metric_path = (
+                Path("current")
+                / str(sample["sequence_index"])
+                / f"{sample['scope']}.bin"
+            )
+        else:
+            subset = "selected" if sample["scope"] == "selected_23" else "remaining"
+            metric_path = (
+                Path("current")
+                / f"{sample['sequence_index']:03d}"
+                / f"segment_{sample['segment_index']:02d}_{subset}.bin"
+            )
     else:
-        values = scores[current][current_target == 0]
+        values = current_values[current_target == 0]
         metrics = normal_statistics(values)
         keys = packed_scores(values, np.zeros(len(values), dtype=np.int8))
         metric_path = Path("current/normal.bin")
-    path = output / metric_path
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("ab") as stream:
-        offset = stream.tell() // 8
-        keys.tofile(stream)
+    records = append_records(output, metric_path, keys)
     return {
         **sample,
         "point_count": window.points.count,
@@ -919,12 +1017,8 @@ def save_window(output, sample, window, scores, losses, scopes, timings):
         "anomaly_loss_scopes": scopes,
         "current": metrics,
         "prediction": prediction,
-        "evaluation_records": {
-            "file": metric_path.as_posix(),
-            "offset": offset,
-            "count": len(keys),
-            "sha256": hashlib.sha256(keys.tobytes()).hexdigest(),
-        },
+        "evaluation_records": records,
+        **({"normal_records": normal_records} if view == "real" else {}),
         **timings,
         "scoring_and_saving_seconds": time.perf_counter() - begin,
     }
@@ -1085,19 +1179,20 @@ def evaluate_samples(model, dataset, samples, output, *, identity, check_resourc
     from .train import write_progress
 
     started = time.perf_counter()
+    real = identity.get("scope") == "real_val"
     manifest = {
         "identity": identity,
         "samples": samples,
-        "worlds": dataset.manifest["segments"],
+        "worlds": [] if real else dataset.manifest["segments"],
     }
-    partition = WindowPartition(dataset.source_sequence, 4, 681)
+    partition = None if real else WindowPartition(dataset.source_sequence, 4, 681)
     reference = {
         name: value.detach().cpu().clone() for name, value in model.state_dict().items()
     }
-    if dataset.gradient_updates_allowed:
+    if not real and dataset.gradient_updates_allowed:
         raise RuntimeError("201 must not permit gradient updates")
     rows = []
-    if output.exists():
+    if (output / "samples.json").exists():
         if json.loads((output / "samples.json").read_text()) != manifest:
             raise ValueError("resume evaluation identity or sample list differs")
         result_path = output / "results.jsonl"
@@ -1122,21 +1217,26 @@ def evaluate_samples(model, dataset, samples, output, *, identity, check_resourc
             if any(row[key] != value for key, value in sample.items()):
                 raise ValueError("committed evaluation rows differ from fixed order")
             pred = output / row["prediction"]["file"]
-            if file_hash(pred) != row["prediction"]["file_sha256"]:
+            if file_hash(pred, discard_cache=True) != row["prediction"]["file_sha256"]:
                 raise ValueError("committed prediction changed")
             retained.add(pred)
-            records = row["evaluation_records"]
-            path = output / records["file"]
-            if records["offset"] != ends.get(path, 0):
-                raise ValueError("evaluation record offsets are discontinuous")
-            ends[path] = records["offset"] + records["count"]
-            with path.open("rb") as stream:
-                stream.seek(records["offset"] * 8)
-                block = stream.read(records["count"] * 8)
-            if hashlib.sha256(block).hexdigest() != records["sha256"]:
-                raise ValueError("committed exact evaluation records changed")
+            for key in ("evaluation_records", "normal_records"):
+                if key not in row:
+                    continue
+                records = row[key]
+                path = output / records["file"]
+                itemsize = records.get("itemsize", 8)
+                if records["offset"] * itemsize != ends.get(path, 0):
+                    raise ValueError("evaluation record offsets are discontinuous")
+                ends[path] = (records["offset"] + records["count"]) * itemsize
+                with path.open("rb") as stream:
+                    stream.seek(records["offset"] * itemsize)
+                    block = stream.read(records["count"] * itemsize)
+                    os.posix_fadvise(stream.fileno(), 0, 0, os.POSIX_FADV_DONTNEED)
+                if hashlib.sha256(block).hexdigest() != records["sha256"]:
+                    raise ValueError("committed exact evaluation records changed")
         for path in (output / "current").rglob("*.bin"):
-            length = ends.get(path, 0) * 8
+            length = ends.get(path, 0)
             if path.stat().st_size < length:
                 raise ValueError("committed evaluation records were truncated")
             with path.open("r+b") as stream:
@@ -1151,7 +1251,7 @@ def evaluate_samples(model, dataset, samples, output, *, identity, check_resourc
                 assert_unchanged(model, reference)
                 return summary
     else:
-        output.mkdir(parents=True)
+        output.mkdir(parents=True, exist_ok=True)
         _atomic_json(output / "samples.json", manifest)
     status, error, summary = "running", None, {}
     try:
@@ -1223,7 +1323,12 @@ def evaluate_samples(model, dataset, samples, output, *, identity, check_resourc
         # An interrupted summary is recomputed from the committed predictions.
         if (output / "worlds.json").exists():
             (output / "worlds.json").unlink()
-        summary = summarize_full(rows, output, check_resources=check_resources)
+        if real:
+            for sequence in dataset.values():
+                sequence._frames.clear()
+        summary = (summarize_real if real else summarize_full)(
+            rows, output, check_resources=check_resources
+        )
         status = "completed"
     except BaseException as exception:
         status, error = "stopped_error", f"{type(exception).__name__}: {exception}"
@@ -1473,6 +1578,425 @@ def select_full_candidates(output, selected, baseline):
     return result
 
 
+def summarize_real(rows, output, *, check_resources):
+    def group(items):
+        check_resources()
+        paths = sorted({output / row["evaluation_records"]["file"] for row in items})
+        metrics = pooled_files(paths)
+        eligible = [row for row in items if row["current"]["eligible"]]
+        for key in ("normal_count", "anomaly_count"):
+            if metrics[key] != sum(row["current"][key] for row in eligible):
+                raise RuntimeError(
+                    "real pooled point counts disagree with frame records"
+                )
+        return dict(frame_count=len(items), eligible_frames=len(eligible), **metrics)
+
+    def normal(items):
+        paths = sorted({output / row["normal_records"]["file"] for row in items})
+        values = pooled_files(paths, normal=True, normal_float32=True)
+        selected = [r for r in items if r["current"]["raw_anomaly_count"] == 0]
+        if values["point_count"] != sum(
+            r["current"]["normal"]["point_count"] for r in selected
+        ):
+            raise RuntimeError("normal-only frame records disagree with pooled scores")
+        return dict(frame_count=len(selected), **values)
+
+    def excerpt(row):
+        return dict(current_frame=row["current_frame"], **row["current"])
+
+    def longest_run(items, predicate):
+        best, current = [], []
+        for row in items:
+            if predicate(row):
+                current.append(row)
+                if len(current) > len(best):
+                    best = current.copy()
+            else:
+                current = []
+        return [excerpt(row) for row in best]
+
+    sequences = {}
+    for sequence in sorted({row["sequence_index"] for row in rows}):
+        items = [row for row in rows if row["sequence_index"] == sequence]
+        full = [row for row in items if row["current_frame"] >= 4]
+        visible = [
+            i for i, row in enumerate(items) if row["current"]["raw_anomaly_count"]
+        ]
+        sequences[str(sequence)] = dict(
+            all_frames=group(items),
+            full_history=group(full),
+            normal_without_anomaly_returns=normal(items),
+            first_visible=items[visible[0]]["current_frame"] if visible else None,
+            last_visible=items[visible[-1]]["current_frame"] if visible else None,
+            first_visible_phase=[excerpt(r) for r in items[visible[0] : visible[0] + 5]]
+            if visible
+            else [],
+            after_last_visible=[
+                excerpt(r) for r in items[visible[-1] + 1 : visible[-1] + 6]
+            ]
+            if visible
+            else [],
+            longest_few_point_miss=longest_run(
+                items,
+                lambda r: (
+                    1 <= r["current"]["anomaly_count"] <= 4
+                    and r["current"]["anomaly"]["count_ge_0_5"] == 0
+                ),
+            ),
+            longest_eligible_complete_miss=longest_run(
+                items,
+                lambda r: (
+                    r["current"]["eligible"]
+                    and r["current"]["anomaly"]["count_ge_0_5"] == 0
+                ),
+            ),
+            worst_normal_frames=[
+                excerpt(r)
+                for r in sorted(
+                    [r for r in items if r["current"]["raw_anomaly_count"] == 0],
+                    key=lambda r: r["current"]["normal"]["fraction_ge_0_5"] or 0,
+                    reverse=True,
+                )[:5]
+            ],
+        )
+        print(
+            json.dumps({"event": "real_sequence_metrics", "sequence": sequence}),
+            flush=True,
+        )
+    return dict(
+        all_frames=group(rows),
+        full_history=group([r for r in rows if r["current_frame"] >= 4]),
+        startup=group([r for r in rows if r["current_frame"] < 4]),
+        normal_without_anomaly_returns=normal(rows),
+        sequences=sequences,
+        ineligible_frames=dict(
+            zero_official_anomaly_points=sum(
+                r["current"]["anomaly_count"] == 0 for r in rows
+            ),
+            one_to_four_official_anomaly_points=sum(
+                1 <= r["current"]["anomaly_count"] <= 4 for r in rows
+            ),
+        ),
+    )
+
+
+def check_startup(model, data_root, protocol, output, checkpoint_sha256):
+    identity = dict(
+        checkpoint_sha256=checkpoint_sha256,
+        source_sha256={
+            name: file_hash(PROJECT_ROOT / name)
+            for name in (
+                "src/scene.py",
+                "src/data.py",
+                "src/model.py",
+                "src/evaluate.py",
+            )
+        },
+    )
+    path = output / "startup/checks.json"
+    if path.exists():
+        result = json.loads(path.read_text())
+        if result["identity"] != identity:
+            raise ValueError("startup check implementation or candidate changed")
+        return result
+    rows = []
+    for sequence_id in (206, 201):
+        sequence = STUSequence.open(
+            data_root,
+            protocol=protocol,
+            partition="train",
+            sequence_id=sequence_id,
+            label_mode=LabelMode.REQUIRED,
+        )
+        for current in (0, 1, 2, 3, 4, 5, sequence.frame_count - 1):
+            window = sequence.for_output(current)
+            inputs = joint_voxelize(window)
+            scores, _, _, _ = predict_window(
+                model, window, inputs.to("cuda"), CHECK_SEED
+            )
+            batch = PredictionBatch.from_window(window, scores)
+            prediction_path = (
+                output / "startup" / str(sequence_id) / f"{current:06d}.npz"
+            )
+            record = batch.save(prediction_path, window=window)
+            recovered = PredictionBatch.load(
+                prediction_path, window=window, expected_sha256=record["file_sha256"]
+            )
+            np.testing.assert_array_equal(recovered.anomaly_score, scores)
+            expected_groups = np.arange(4 - current, 5) if current < 4 else np.arange(5)
+            np.testing.assert_array_equal(
+                np.unique(window.points.scan_group), expected_groups
+            )
+            assert list(window.frame_ids) == list(
+                range(max(0, current - 4), current + 1)
+            )
+            if current < 4:
+                assert not np.any(inputs.features.numpy()[:, 4 : 4 + (4 - current)])
+            maximum_difference = None
+            if current >= 4:
+                old = sequence.window(current - 4)
+                old_inputs = joint_voxelize(old)
+                for key in (
+                    "coordinates",
+                    "grid_coord",
+                    "features",
+                    "point_to_voxel",
+                    "point_features",
+                ):
+                    assert torch.equal(getattr(inputs, key), getattr(old_inputs, key))
+                old_scores, _, _, _ = predict_window(
+                    model, old, old_inputs.to("cuda"), CHECK_SEED
+                )
+                np.testing.assert_array_equal(scores, old_scores)
+                maximum_difference = float(np.max(np.abs(scores - old_scores)))
+                del old, old_inputs, old_scores
+            raw = official_current_scores(
+                recovered, window.current_frame.source.slot_count
+            )
+            text_buffer = io.StringIO()
+            np.savetxt(text_buffer, raw, fmt="%.9g")
+            text_buffer.seek(0)
+            np.testing.assert_array_equal(
+                np.loadtxt(text_buffer).astype(np.float32), raw
+            )
+            source = window.current_frame.source
+            np.testing.assert_array_equal(
+                raw[source.real_slots], scores[window.current_mask]
+            )
+            assert np.isfinite(raw).all() and np.all(raw[source.zero_slot_mask] == 0)
+            rows.append(
+                dict(
+                    sequence_id=sequence_id,
+                    current_frame=current,
+                    frame_ids=list(window.frame_ids),
+                    scan_groups=expected_groups.tolist(),
+                    window_points=window.points.count,
+                    raw_slots=len(raw),
+                    full_path_max_difference=maximum_difference,
+                    prediction=record,
+                )
+            )
+            del window, inputs, scores, batch, recovered, raw, text_buffer
+        sequence._frames.clear()
+    result = dict(
+        identity=identity,
+        rows=rows,
+        status="passed",
+        note="206/201 input and inference checks only; no real-val score selection",
+    )
+    _atomic_json(path, result)
+    return result
+
+
+def real_inventory(data_root, protocol, check_resources):
+    sequences, inventory, samples = {}, [], []
+    total_prediction_bytes = 0
+    for sequence_id in protocol.public_sequence_ids:
+        sequence = STUSequence.open(
+            data_root,
+            protocol=protocol,
+            partition="val",
+            sequence_id=sequence_id,
+            label_mode=LabelMode.REQUIRED,
+        )
+        sequences[sequence_id] = sequence
+        stats = dict(
+            sequence_id=sequence_id,
+            frame_count=sequence.frame_count,
+            raw_slots=0,
+            visible_points=0,
+            window_points=0,
+            eligible_frames=0,
+            eligible_points=0,
+            normal_only_points=0,
+            prediction_bound_bytes=0,
+        )
+        digest = hashlib.sha256()
+        for name in ("calib.txt", "poses.txt"):
+            digest.update((sequence.sequence_dir / name).read_bytes())
+        for current in sequence.frame_ids:
+            check_resources()
+            source = sequence.source_frame(current)
+            digest.update(np.int32(current).tobytes())
+            digest.update(source.xyzi.tobytes())
+            digest.update(source.labels.packed.tobytes())
+            target = evaluation_targets(source.xyzi[:, :3], source.labels.semantic)
+            count = source.real_count
+            repetitions = min(5, sequence.frame_count - current)
+            # Worst-case lossless score bytes; identity compression is measured on actual slots.
+            slots = np.diff(source.real_slots, prepend=np.int32(0))
+            slot_bytes = len(zlib.compress(slots.tobytes(), 1)) + 64
+            frame_bytes = (
+                len(zlib.compress(np.full(count, current, np.int32).tobytes(), 1)) + 64
+            )
+            stats["prediction_bound_bytes"] += repetitions * (
+                int(4.004 * count) + slot_bytes + frame_bytes
+            )
+            stats["raw_slots"] += source.slot_count
+            stats["visible_points"] += count
+            stats["window_points"] += repetitions * count
+            anomalies = int((target == 1).sum())
+            stats["eligible_frames"] += anomalies >= 5
+            stats["eligible_points"] += (
+                int((target >= 0).sum()) if anomalies >= 5 else 0
+            )
+            stats["normal_only_points"] += (
+                int((target == 0).sum())
+                if not np.any(source.labels.semantic[source.real_slots] == 2)
+                else 0
+            )
+            samples.append(
+                dict(
+                    view="real",
+                    sequence_index=sequence_id,
+                    dataset_index=None,
+                    sequence_id=f"val/{sequence_id}",
+                    current_frame=current,
+                    frame_ids=list(range(max(0, current - 4), current + 1)),
+                    check_seed=CHECK_SEED + sequence_id,
+                    scope="startup" if current < 4 else "full",
+                )
+            )
+        stats["source_content_sha256"] = digest.hexdigest()
+        total_prediction_bytes += stats["prediction_bound_bytes"]
+        inventory.append(stats)
+        sequence._frames.clear()
+        print(json.dumps({"event": "real_inventory", **stats}), flush=True)
+    official_bytes = 8 * sum(row["eligible_points"] for row in inventory)
+    normal_bytes = 4 * sum(row["normal_only_points"] for row in inventory)
+    # One atomic prediction, startup checks, metadata, allocator slack; no text duplicate.
+    budget = dict(
+        predictions=total_prediction_bytes + len(samples) * 8192,
+        official_records=official_bytes,
+        normal_records=normal_bytes,
+        temporary_sort=official_bytes,
+        buffers_and_startup=2**30,
+    )
+    budget["peak_new_bytes"] = sum(budget.values())
+    return sequences, inventory, samples, budget
+
+
+def run_real(data_root, output, *, startup_only=False):
+    from .train import FullResources, write_progress
+
+    protocol = load_protocol()
+    rule = protocol.data["real_anomaly_development_validation"]
+    checkpoint = PROJECT_ROOT / rule["checkpoint"]
+    digest = file_hash(checkpoint, discard_cache=True)
+    if digest != rule["checkpoint_sha256"]:
+        raise ValueError("the fixed epoch-seven candidate bytes differ")
+    if not torch.cuda.is_available():
+        raise RuntimeError("the unchanged inference path requires CUDA")
+    torch.set_num_threads(1)
+    resources = FullResources(
+        lambda event, **values: print(
+            json.dumps({"event": event, **values}), flush=True
+        )
+    )
+    snapshot = resources()
+    payload = torch.load(checkpoint, map_location="cpu", weights_only=False)
+    model = AJAE(0.05).cuda().eval().requires_grad_(False)
+    model.load_state_dict(payload["model"], strict=True)
+    reference = payload["model"]
+    del payload
+    checks = check_startup(model, data_root, protocol, output, digest)
+    assert_unchanged(model, reference)
+    if startup_only:
+        return checks
+    sequences, inventory, samples, budget = real_inventory(
+        data_root, protocol, resources
+    )
+    volume = host_disk()
+    existing = sum(p.stat().st_size for p in output.rglob("*") if p.is_file())
+    if (
+        volume["SizeRemaining"] - max(0, budget["peak_new_bytes"] - existing)
+        < volume["reserve_bytes"]
+    ):
+        raise OSError(f"real-val peak output would invade E: reserve: {budget}")
+    _path = output / "inventory.json"
+    record = dict(
+        sequences=inventory,
+        budget=budget,
+        resources=snapshot,
+        host_disk_before_inference=volume,
+        startup_checks_sha256=file_hash(output / "startup/checks.json"),
+    )
+    if not _path.exists():
+        _atomic_json(_path, record)
+    else:
+        previous = json.loads(_path.read_text())
+        if previous["sequences"] != inventory or previous["budget"] != budget:
+            raise ValueError(
+                "real input identity or storage estimate changed on resume"
+            )
+    print(
+        json.dumps({"event": "real_ready", "frames": len(samples), "budget": budget}),
+        flush=True,
+    )
+    summary = evaluate_samples(
+        model,
+        sequences,
+        samples,
+        output,
+        identity=dict(
+            scope="real_val",
+            checkpoint=str(checkpoint),
+            sha256=digest,
+            model_sha256=model_digest(model),
+            inventory_sha256=file_hash(_path),
+            protocol_sha256=file_hash(protocol.path),
+        ),
+        check_resources=resources,
+    )
+    assert_unchanged(model, reference)
+    if file_hash(checkpoint, discard_cache=True) != digest:
+        raise RuntimeError("candidate changed during real validation")
+    summary["final_resources"] = resources()
+    write_progress(output / "summary.json", summary)
+    return summary
+
+
+def export_official(data_root, evaluation, sequence_id, output):
+    protocol = load_protocol()
+    if sequence_id not in protocol.public_sequence_ids:
+        raise ValueError("official export is restricted to public val")
+    rows = [
+        json.loads(line)
+        for line in (evaluation / "results.jsonl").read_text().splitlines()
+    ]
+    rows = [r for r in rows if r["sequence_index"] == sequence_id]
+    sequence = STUSequence.open(
+        data_root,
+        protocol=protocol,
+        partition="val",
+        sequence_id=sequence_id,
+        label_mode=LabelMode.REQUIRED,
+    )
+    if [r["current_frame"] for r in rows] != list(sequence.frame_ids):
+        raise ValueError("official export requires every original frame")
+    volume = host_disk()
+    bound = sum(r["current"]["raw_slot_count"] for r in rows) * 16 + 2**28
+    if volume["SizeRemaining"] - bound < volume["reserve_bytes"]:
+        raise OSError("official text export would invade the E: reserve")
+    directory = output / str(sequence_id)
+    directory.mkdir(parents=True, exist_ok=False)
+    for row in rows:
+        window = sequence.for_output(row["current_frame"])
+        batch = PredictionBatch.load(
+            evaluation / row["prediction"]["file"],
+            window=window,
+            expected_sha256=row["prediction"]["file_sha256"],
+        )
+        scores = official_current_scores(batch, row["current"]["raw_slot_count"])
+        path = directory / f"{row['current_frame']:06d}.txt"
+        with path.open("x") as stream:
+            np.savetxt(stream, scores, fmt="%.9g")
+            stream.flush()
+            os.fdatasync(stream.fileno())
+            os.posix_fadvise(stream.fileno(), 0, 0, os.POSIX_FADV_DONTNEED)
+    return directory
+
+
 def run_full(data_root, checkpoint, output):
     from .train import FullResources
 
@@ -1564,12 +2088,29 @@ if __name__ == "__main__":
     parser.add_argument("--data-root", type=Path, required=True)
     parser.add_argument("--checkpoints", type=Path, default=Path("runs/learn"))
     parser.add_argument("--output", type=Path)
-    parser.add_argument("--full", action="store_true")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--full", action="store_true")
+    mode.add_argument("--real", action="store_true")
+    mode.add_argument("--export-official", type=Path)
+    parser.add_argument("--sequence", type=int)
+    parser.add_argument("--startup-only", action="store_true")
     parser.add_argument(
         "--checkpoint", type=Path, default=Path("runs/coverage/B/final.pt")
     )
     args = parser.parse_args()
-    if args.full:
+    if args.real:
+        run_real(
+            args.data_root,
+            args.output or Path("runs/real_val_v1"),
+            startup_only=args.startup_only,
+        )
+    elif args.export_official:
+        if args.sequence is None or args.output is None:
+            parser.error("official export requires --sequence and --output")
+        export_official(
+            args.data_root, args.export_official, args.sequence, args.output
+        )
+    elif args.full:
         run_full(
             args.data_root, args.checkpoint, args.output or Path("runs/validation")
         )

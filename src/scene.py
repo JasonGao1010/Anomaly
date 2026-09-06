@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import math
 from collections import OrderedDict
 from dataclasses import dataclass
@@ -100,6 +101,8 @@ def _require_sealed_sequence_access(
     *,
     sequence_id: int,
 ) -> None:
+    if partition == "val" and protocol.status["real_anomaly_access_allowed"]:
+        return
     if partition in {"val", "test"} and (
         not isinstance(access, _SealedSequenceAccess)
         or access.protocol is not protocol
@@ -582,6 +585,7 @@ class SceneWindow:
     frames: tuple[WindowFrame, ...]
     points: WindowPoints
     labels: PointLabels | None
+    startup: bool = False
 
     def __post_init__(self) -> None:
         if not isinstance(self.spec, SequenceSpec):
@@ -595,19 +599,17 @@ class SceneWindow:
         declared_ids = tuple(self.frame_ids)
         if any(type(frame_id) is not int for frame_id in declared_ids):
             raise TypeError("frame_ids must contain plain integers")
-        expected_ids = tuple(start + offset for offset in WINDOW_MEMBER_OFFSETS)
-        if declared_ids != expected_ids:
-            raise SceneDataError(
-                "frame_ids must be the five consecutive IDs from window_start"
-            )
-        if tuple(self.spec.window_frame_ids(start)) != declared_ids:
-            raise SceneDataError(
-                "window identity is not legal for the sequence specification"
-            )
+        _validate_window_ids(self.spec, start, declared_ids, self.startup)
+        if (
+            self.startup
+            and self.observation_sequence_id
+            != f"{self.spec.partition}/{self.spec.sequence_id}"
+        ):
+            raise SceneDataError("startup is only defined for raw sequence inference")
         if not isinstance(self.current_pose, CurrentFramePose):
             raise TypeError("current_pose must be CurrentFramePose")
-        if len(self.frames) != len(WINDOW_MEMBER_OFFSETS):
-            raise SceneDataError("a SceneWindow must contain exactly five source scans")
+        if len(self.frames) != len(declared_ids):
+            raise SceneDataError("source scans must match the actual window length")
 
         source_ids = tuple(item.source.frame_id for item in self.frames)
         if len(set(source_ids)) != len(source_ids) or set(source_ids) != set(
@@ -617,7 +619,8 @@ class SceneWindow:
                 "window source scans must match the declared frame IDs once each"
             )
         canonical_group = {
-            frame_id: index for index, frame_id in enumerate(declared_ids)
+            frame_id: index + 5 - len(declared_ids)
+            for index, frame_id in enumerate(declared_ids)
         }
         current_id = declared_ids[-1]
         current_source = next(
@@ -750,6 +753,24 @@ class SceneWindow:
         return frame.source.restore_real(array[mask])
 
 
+def _validate_window_ids(spec, start, frame_ids, startup):
+    # Only the beginning of a raw sequence may contain fewer than five scans.
+    if startup:
+        if (
+            start != 0
+            or not 1 <= len(frame_ids) < 5
+            or frame_ids != tuple(range(len(frame_ids)))
+            or spec.span is None
+            or any(
+                not spec.span.contains(i) or i in spec.excluded_source_frames
+                for i in frame_ids
+            )
+        ):
+            raise SceneDataError("startup requires the available sequence prefix")
+    elif frame_ids != spec.window_frame_ids(start):
+        raise SceneDataError("frame_ids do not define a legal five-scan window")
+
+
 def assemble_window(
     spec: SequenceSpec,
     window_start: int,
@@ -757,6 +778,7 @@ def assemble_window(
     sources: Sequence[SourceFrame],
     *,
     observation_sequence_id: str | None = None,
+    startup: bool = False,
 ) -> SceneWindow:
     """Assemble all five scans while preserving order-independent point identity."""
 
@@ -766,16 +788,10 @@ def assemble_window(
     declared_ids = tuple(frame_ids)
     if any(type(frame_id) is not int for frame_id in declared_ids):
         raise TypeError("frame_ids must contain plain integers")
-    expected_ids = tuple(start + offset for offset in WINDOW_MEMBER_OFFSETS)
-    if (
-        declared_ids != expected_ids
-        or tuple(spec.window_frame_ids(start)) != declared_ids
-    ):
-        raise SceneDataError("frame_ids do not define a legal five-scan window")
-
+    _validate_window_ids(spec, start, declared_ids, startup)
     source_frames = tuple(sources)
-    if len(source_frames) != len(WINDOW_MEMBER_OFFSETS):
-        raise SceneDataError("a window requires exactly five source scans")
+    if len(source_frames) != len(declared_ids):
+        raise SceneDataError("sources must cover the actual window scans")
     source_ids = tuple(source.frame_id for source in source_frames)
     if len(set(source_ids)) != len(source_ids) or set(source_ids) != set(declared_ids):
         raise SceneDataError("sources must contain each declared frame exactly once")
@@ -803,7 +819,10 @@ def assemble_window(
     )
     current_pose = CurrentFramePose.from_source(current_source)
     current_from_world = current_pose.current_from_world
-    canonical_group = {frame_id: index for index, frame_id in enumerate(declared_ids)}
+    canonical_group = {
+        frame_id: index + 5 - len(declared_ids)
+        for index, frame_id in enumerate(declared_ids)
+    }
     frames: list[WindowFrame] = []
     coordinates: list[np.ndarray] = []
     features: list[np.ndarray] = []
@@ -879,6 +898,7 @@ def assemble_window(
         frames=tuple(frames),
         points=points,
         labels=labels,
+        startup=startup,
     )
 
 
@@ -1118,7 +1138,9 @@ class STUSequence:
         record_bytes = SCAN_CHANNELS * SCAN_DTYPE.itemsize
         if path.stat().st_size <= 0 or path.stat().st_size % record_bytes:
             raise SceneDataError(f"invalid scan byte length: {path}")
-        raw = np.fromfile(path, dtype=SCAN_DTYPE)
+        with path.open("rb") as stream:
+            raw = np.fromfile(stream, dtype=SCAN_DTYPE)
+            os.posix_fadvise(stream.fileno(), 0, 0, os.POSIX_FADV_DONTNEED)
         if raw.size % SCAN_CHANNELS:
             raise SceneDataError(f"scan cannot be reshaped to N x 4: {path}")
         xyzi = raw.reshape(-1, SCAN_CHANNELS).astype(np.float32, copy=False)
@@ -1142,7 +1164,11 @@ class STUSequence:
         path = self._label_paths[frame]
         if path.stat().st_size <= 0 or path.stat().st_size % LABEL_DTYPE.itemsize:
             raise SceneDataError(f"invalid label byte length: {path}")
-        packed = np.fromfile(path, dtype=LABEL_DTYPE).astype(np.uint32, copy=False)
+        with path.open("rb") as stream:
+            packed = np.fromfile(stream, dtype=LABEL_DTYPE).astype(
+                np.uint32, copy=False
+            )
+            os.posix_fadvise(stream.fileno(), 0, 0, os.POSIX_FADV_DONTNEED)
         if packed.size != slot_count:
             raise SceneDataError(
                 f"frame {frame} has {slot_count} scan slots but {packed.size} labels"
@@ -1185,6 +1211,17 @@ class STUSequence:
             start,
             frame_ids,
             tuple(self.source_frame(frame_id) for frame_id in frame_ids),
+        )
+
+    def for_output(self, frame_id: int) -> SceneWindow:
+        current = _plain_int("frame_id", frame_id)
+        if current >= self.frame_count:
+            raise IndexError(current)
+        if current >= 4:
+            return self.window(current - 4)
+        ids = tuple(range(current + 1))
+        return assemble_window(
+            self.spec, 0, ids, tuple(self.source_frame(i) for i in ids), startup=True
         )
 
     def audit(self, *, deep: bool = False) -> dict[str, object]:

@@ -207,8 +207,8 @@ class PredictionBatch:
             or not self.observation_sequence_id
         ):
             raise TypeError("observation_sequence_id must be a non-empty string")
-        if type(self.window_current_frame) is not int or self.window_current_frame < 4:
-            raise TypeError("window_current_frame must be an integer >= 4")
+        if type(self.window_current_frame) is not int or self.window_current_frame < 0:
+            raise TypeError("window_current_frame must be an integer >= 0")
         if self.source_frame.dtype != np.int32 or self.source_frame.shape != (count,):
             raise TypeError("source_frame must be int32[M]")
         if self.source_slot.dtype != np.int32 or self.source_slot.shape != (count,):
@@ -220,7 +220,7 @@ class PredictionBatch:
         if not np.isfinite(self.anomaly_score).all():
             raise DataProtocolError("anomaly scores must be finite")
         if (
-            np.any(self.source_frame < self.window_current_frame - 4)
+            np.any(self.source_frame < max(0, self.window_current_frame - 4))
             or np.any(self.source_frame > self.window_current_frame)
             or np.any(self.source_slot < 0)
         ):
@@ -290,6 +290,9 @@ class PredictionBatch:
         }
         metadata["content_hash"] = _prediction_content_hash(metadata, arrays)
         payload = dict(arrays)
+        # Slot deltas compress monotone identities; content hashes bind decoded rows.
+        payload["source_slot_delta"] = np.diff(self.source_slot, prepend=np.int32(0))
+        del payload["source_slot"]
         payload["metadata_json"] = np.asarray(
             json.dumps(
                 metadata, ensure_ascii=False, sort_keys=True, separators=(",", ":")
@@ -319,17 +322,26 @@ class PredictionBatch:
         if expected_sha256 is not None and _sha256(resolved) != expected_sha256:
             raise DataProtocolError("prediction file hash differs")
         with np.load(resolved, allow_pickle=False) as payload:
+            slot_key = (
+                "source_slot_delta" if "source_slot_delta" in payload else "source_slot"
+            )
             if set(payload.files) != {
                 "source_frame",
-                "source_slot",
+                slot_key,
                 "anomaly_score",
                 "metadata_json",
             }:
                 raise DataProtocolError("prediction file has unexpected arrays")
             arrays = {
                 name: np.asarray(payload[name]).copy()
-                for name in ("source_frame", "source_slot", "anomaly_score")
+                for name in ("source_frame", "anomaly_score")
             }
+            slots = np.asarray(payload[slot_key])
+            arrays["source_slot"] = (
+                np.cumsum(slots, dtype=np.int32)
+                if slot_key == "source_slot_delta"
+                else slots.copy()
+            )
             metadata = json.loads(str(payload["metadata_json"].item()))
         content_hash = metadata.pop("content_hash", None)
         if (
@@ -763,6 +775,18 @@ def generation_identity(
     support = protocol.artifacts["qualified_support_pools"][
         f"train/{pool.source_sequence_id}"
     ]
+    source_role = dict(
+        protocol.data[
+            "parameter_update_source"
+            if pool.source_sequence_id == 206
+            else "model_validation_source"
+        ]
+    )
+    if pool.source_sequence_id == 201:
+        # Preserve the original generation identity; later access policy changes no points.
+        source_role["role"] = (
+            "only_source_for_model_validation_hyperparameter_tuning_and_model_selection"
+        )
     payload = {
         "schema_version": protocol.schema_version,
         "pool": protocol.synthetic_pools[pool.name],
@@ -770,11 +794,7 @@ def generation_identity(
             "anomaly_objects_per_segment"
         ],
         "placement": protocol.synthetic_pools["placement"],
-        "source_role": protocol.data[
-            "parameter_update_source"
-            if pool.source_sequence_id == 206
-            else "model_validation_source"
-        ],
+        "source_role": source_role,
         "official_train_archive_sha256": protocol.data["official_archive_sha256"][
             "train.zip"
         ],

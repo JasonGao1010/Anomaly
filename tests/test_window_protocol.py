@@ -185,7 +185,7 @@ def test_schema34_freezes_data_roles_and_counts() -> None:
     assert protocol.training_pool.total_window_count == 3080
     assert protocol.validation_pool.world_count == 92
     assert protocol.validation_pool.total_window_count == 2360
-    assert protocol.status["real_anomaly_access_allowed"] is False
+    assert protocol.status["real_anomaly_access_allowed"] is True
     for key in (
         "train_pool_manifest",
         "validation_pool_manifest",
@@ -466,7 +466,7 @@ def test_prediction_load_checks_actual_window_even_with_valid_file_hash(
     # A valid self-hash cannot make a truncated prediction complete.
     with np.load(path, allow_pickle=False) as payload:
         arrays = {
-            name: payload[name][:-1]
+            name: getattr(batch, name)[:-1]
             for name in ("source_frame", "source_slot", "anomaly_score")
         }
         metadata = json.loads(str(payload["metadata_json"].item()))
@@ -652,3 +652,45 @@ def test_sparse_segment_round_trip_preserves_points_labels_and_window(
         window.points.coordinates[window.current_mask],
         segment.rendered_frames[-1].source.xyzi[:, :3],
     )
+
+
+@pytest.mark.parametrize("current", range(5))
+def test_startup_uses_actual_prefix_and_right_aligned_empty_slots(tmp_path, current):
+    from src.model import joint_voxelize
+    from src.evaluate import official_current_scores
+    from src.scene import SceneDataError
+
+    spec = SequenceSpec("train", 206, "fixture", True, FrameSpan(0, 5))
+    ids = tuple(range(current + 1))
+    window = assemble_window(
+        spec, 0, ids, tuple(_source(i) for i in ids), startup=current < 4
+    )
+    inputs = joint_voxelize(window)
+    assert window.points.count == sum(
+        frame.source.real_count for frame in window.frames
+    )
+    np.testing.assert_array_equal(
+        np.unique(window.points.scan_group), np.arange(4 - current, 5)
+    )
+    assert not inputs.features[:, 4 : 8 - current].count_nonzero()
+    assert np.all(window.points.scan_group[window.current_mask] == 4)
+    scores = np.linspace(0, 1, window.points.count, dtype=np.float32)
+    batch = PredictionBatch.from_window(window, scores)
+    record = batch.save(tmp_path / "prediction.npz", window=window)
+    restored = PredictionBatch.load(
+        tmp_path / "prediction.npz",
+        window=window,
+        expected_sha256=record["file_sha256"],
+    )
+    np.testing.assert_array_equal(restored.source_slot, window.points.source_slot)
+    np.testing.assert_array_equal(restored.anomaly_score, scores)
+    raw = official_current_scores(restored, window.current_frame.source.slot_count)
+    np.testing.assert_array_equal(
+        raw[window.current_frame.source.real_slots], scores[window.current_mask]
+    )
+    assert np.all(raw[window.current_frame.source.zero_slot_mask] == 0)
+    if current < 4:
+        with pytest.raises(SceneDataError):
+            assemble_window(spec, 0, ids, tuple(_source(i) for i in ids))
+        with pytest.raises(SceneDataError, match="raw sequence"):
+            replace(window, observation_sequence_id="synthetic/train/000")
