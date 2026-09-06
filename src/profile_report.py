@@ -194,13 +194,13 @@ def joint_tables(frames, windows, instances):
             )
         return "outside_only" if frame["anomaly"] else "unseen"
 
-    for frame, window in zip(frames, windows, strict=True):
-        assert (frame["sequence"], frame["frame"]) == (
-            window["sequence"],
-            window["frame"],
-        )
+    window_by_frame = {(w["sequence"], w["frame"]): w for w in windows}
+    if len(window_by_frame) != len(windows):
+        raise ValueError("duplicate output window identity")
+    for frame in frames:
         record("stage_count", f"{frame['stage']}|{cb(frame['anomaly'])}", frame)
-        if window["scope"] != "complete_windows":
+        window = window_by_frame.get((frame["sequence"], frame["frame"]))
+        if window is None or window["scope"] != "complete_windows":
             continue
         count = cb(frame["anomaly_in_range"])
         distance = db(frame)
@@ -461,19 +461,61 @@ def aggregate_profile(output):
         official_normal_points=193792470,
         normal_stage_evaluation_points=366706288,
     )
+    synthetic = spec.get("population") in ("train", "validation")
+    if synthetic:
+        expected = dict(
+            frames=spec["frames"],
+            complete_windows=spec["complete_windows"],
+            startup_windows=0,
+            whole_window_unseen=20 if spec["population"] == "train" else 10,
+        )
+        totals.update(
+            worlds=len(spec["sequences"]),
+            synthetic_versions=spec["synthetic_versions"],
+            background_source_sequences=1,
+            context_frames=4 * len(spec["sequences"]),
+        )
     for key, value in expected.items():
         if totals[key] != value:
             raise ValueError(
                 f"raw profile disagrees with existing evidence: {key}: {totals[key]} != {value}"
             )
-    if sum(r["length"] for r in episodes) != 8659:
+    if sum(r["length"] for r in episodes) != spec["frames"]:
         raise ValueError("observation stages do not partition all frames")
     joint = result["joint"]["official_count_distance"]
-    if (
+    if not synthetic and (
         sum(r["frames"] for r in joint.values()) != 1956
         or sum(r["anomaly_in_range_points"] for r in joint.values()) != 87398
     ):
         raise ValueError("full-history official subset changed")
+    if synthetic:
+        frame_index = {(r["sequence"], r["frame"]): r for r in frames}
+        legal = [frame_index[(w["sequence"], w["frame"])] for w in windows]
+        if sum(
+            r["frames"] for r in result["joint"]["count_distance_history"].values()
+        ) != len(legal):
+            raise ValueError("joint conditions do not partition legal windows")
+        if sum(r["frames"] for r in joint.values()) != sum(
+            r["state"] == 3 for r in legal
+        ):
+            raise ValueError("qualified joint cells disagree with legal current frames")
+        totals["legal_current_states"] = np.bincount(
+            [r["state"] for r in legal], minlength=4
+        ).tolist()
+        totals["legal_official_anomaly_points"] = sum(
+            r["anomaly_in_range"] for r in legal if r["state"] == 3
+        )
+        totals["legal_official_normal_points"] = sum(
+            r["normal_in_range"] for r in legal if r["state"] == 3
+        )
+        if spec["population"] == "validation" and (
+            totals["legal_current_states"][3] != 2278
+            or totals["legal_official_anomaly_points"] != 1207724
+            or totals["legal_official_normal_points"] != 162980036
+        ):
+            raise ValueError(
+                "synthetic validation profile differs from the saved official evaluation population"
+            )
     result.update(
         status="completed",
         totals=totals,
@@ -897,7 +939,7 @@ FACTORS = [
         "原始槽数、xyz非全零回波数及忽略标签数分别统计",
         "原始帧/原始点",
         "逐帧分位数、各类点数、占比",
-        "只知全局总量；不能把零槽当正常回波",
+        "零槽不作为实际回波；忽略点仍保留于完整输入",
     ],
     [
         "A03",
@@ -1239,11 +1281,12 @@ class CsvTables:
         temporary.replace(path)
         self.index.append([path.name, title, count, note])
 
-    def close(self):
+    def close(self, title="19条真实验证序列全量观测画像", note=None):
         self.table(
-            "说明",
-            "19条真实验证序列全量观测画像",
-            "全部8,659帧；8,583完整窗口；76启动窗口。空字段表示缺测或不适用，0为实测零；五位模式按文本读取。统计单位、范围和权重以各表为准。",
+            "index",
+            title,
+            note
+            or "全部8,659帧；8,583完整窗口；76启动窗口。空字段表示缺测或不适用，0为实测零；五位模式按文本读取。统计单位、范围和权重以各表为准。",
             ["文件", "内容", "数据行数", "统计范围与解释"],
             self.index.copy(),
         )
@@ -1280,7 +1323,7 @@ def write_tables(output, result, directory):
             ]
         )
     writer.table(
-        "要素总表",
+        "factors",
         "31项要素的定义、结果和完成状态",
         "原用户要素定义保留；统计结果来自全部公开真实观测。尺寸、地面和局部形态同时记录支持不足的缺失，物理属性不补猜。",
         [
@@ -1358,7 +1401,7 @@ def write_tables(output, result, directory):
         )
     assert sum(r[10] for r in known) == totals["normal_stage_evaluation_points"]
     writer.table(
-        "19序列已知统计",
+        "prior_sequences",
         "与既有报告复核一致的19条序列计数",
         "全部原始帧；有异常但不合格包括范围外和范围内1至4点。比例直接写入数值，未保留电子表格公式。",
         [
@@ -1378,7 +1421,7 @@ def write_tables(output, result, directory):
         known,
     )
     writer.table(
-        "逐序列全量统计",
+        "sequences",
         "19条序列核心因素",
         "静态因素使用全部原始帧；窗口因素使用当前帧4至末。强度、距离按点，尺寸按有效实例×帧，混合按指定体素，其余中位数按帧；比例均为0至1的小数。",
         [
@@ -1559,7 +1602,7 @@ def write_tables(output, result, directory):
         "固定平面及支持规则",
     )
     writer.table(
-        "全局分布",
+        "totals",
         "全量计数及明确分母",
         "比例为分子除以分母；计数无适用分母时留空。各范围互不替代。",
         ["指标", "数量或分子", "分母", "比例", "范围", "定义与限制", "来源"],
@@ -1584,7 +1627,7 @@ def write_tables(output, result, directory):
                 ]
             )
     writer.table(
-        "点数距离联合",
+        "count_distance",
         "完整五帧合格子集的16格联合分布",
         "1,956帧、87,398异常点；空格保留。边缘合计由对应行求和，CSV不混入第二组表头。",
         [
@@ -1601,14 +1644,24 @@ def write_tables(output, result, directory):
         joint_rows,
     )
     writer.table(
-        "强度仅条件子集",
+        "prior_intensity",
         "历史303个条件窗口的强度统计",
         "来自14条序列303窗，保留原报告舍入数值和分位数定义；不能替代全量19条。原始当前正常点31,233,470，异常点10,546。",
         HISTORICAL_INTENSITY[0],
         HISTORICAL_INTENSITY[1:],
     )
+    write_distributions(writer, result)
+    append_records(writer, output, result)
+    writer.close()
+
+
+def write_distributions(writer, result):
+    synthetic = result["definitions"].get("population") in ("train", "validation")
+    view_labels = dict(VIEW)
+    if synthetic:
+        view_labels["sequence_equal"] = "世界等权（同一背景）"
     populations = [
-        ("全部", series),
+        ("全部", result["series"]),
         *[(seq, data["series"]) for seq, data in result["sequences"].items()],
     ]
 
@@ -1628,7 +1681,7 @@ def write_tables(output, result, directory):
                         SCOPE[d["scope"]],
                         group_name(d["group"]),
                         unit,
-                        VIEW[view],
+                        view_labels[view],
                         d["n"],
                         d["denominator"],
                         d["frames"],
@@ -1678,7 +1731,7 @@ def write_tables(output, result, directory):
                             ]
 
     base_headers = [
-        "序列",
+        "世界" if synthetic else "序列",
         "因素",
         "统计量",
         "范围",
@@ -1689,10 +1742,10 @@ def write_tables(output, result, directory):
         "适用候选数量",
         "总帧或阶段组数",
         "有有效观测的帧或组数",
-        "有覆盖序列数",
+        "有覆盖世界数" if synthetic else "有覆盖序列数",
     ]
     writer.table(
-        "全量连续统计",
+        "continuous",
         "连续因素：分位数、覆盖与可靠性",
         "分位数由各权重的完整经验分布计算。区间宽度为0时为精确值；非零时点值展示区间中点，上下界另列。缺失率以未加权候选数为分母，三种视图不混用。",
         base_headers
@@ -1716,7 +1769,7 @@ def write_tables(output, result, directory):
         distributions("continuous"),
     )
     writer.table(
-        "全量分类统计",
+        "categorical",
         "分类因素：完整类别及零覆盖",
         "类别原始计数在三种视图相同；比例按对应权重计算。五位模式由最早扫描到当前扫描排列。全部体素成员编码为正常1、异常2、忽略4的位和。",
         base_headers
@@ -1724,14 +1777,12 @@ def write_tables(output, result, directory):
         distributions("categories"),
     )
     writer.table(
-        "全量固定分箱",
+        "bins",
         "连续因素固定分箱",
         "区间左闭右开；末区间包含右端。普通距离直方图[50,无穷)不能解读为严格大于50米；官方范围标记与2.5米强度距离组均将50米纳入范围内。计数为未加权数，比例按对应权重计算。",
         base_headers + ["左边界", "右边界", "原始数量", "对应权重比例", "来源"],
         distributions("bins"),
     )
-    append_records(writer, output, result)
-    writer.close()
 
 
 def append_records(writer, output, result):
@@ -1812,7 +1863,7 @@ def append_records(writer, output, result):
                         ]
                     )
     writer.table(
-        "全量强度概览",
+        "intensity",
         "全量原始强度及离散取值",
         "每个源帧只计一次，包含全部距离。重复值比例指落在出现次数至少为2的精确取值上的点比例；极值仅为样本极值。网格关系是实测格式特征，不能称为硬件规格。",
         [
@@ -1840,7 +1891,7 @@ def append_records(writer, output, result):
         intensity_rows,
     )
     writer.table(
-        "五位模式与命中",
+        "patterns",
         "五位可见模式和体素扫描命中",
         "最左为历史最早扫描，最右为当前扫描。类别可见模式按全距离异常回波存在性；体素命中按全部输入点。32类均保留；命中位数可用于汇总1至5次观测的频数。",
         [
@@ -1912,7 +1963,7 @@ def append_records(writer, output, result):
                 ]
             )
     writer.table(
-        "模式条件支持量",
+        "pattern_support",
         "按固定可见模式分组的五帧异常支持量",
         "完整五帧窗口；源帧全距离异常点数逐槽统计，包含实测零。各序列及全局按窗口等权；模式为空时覆盖数为0。00000没有定义历史异常点占比，不将空分母置零。",
         [
@@ -1962,7 +2013,7 @@ def append_records(writer, output, result):
             ]
 
     writer.table(
-        "逐帧全量记录",
+        "frames",
         "全部8,659帧：状态、点数及强度",
         "原始帧序号从0开始。状态0为无异常，1为仅范围外，2为范围内1至4点，3为范围内至少5点。强度分位数仅取本帧对应类别原始回波；无回波时留空。阶段是类别回波观测状态，不是物体物理出现或消失。",
         [
@@ -2064,14 +2115,14 @@ def append_records(writer, output, result):
         *[f"槽{i}源坐标范围内异常点数" for i in range(5)],
     ]
     writer.table(
-        "逐窗口完整记录",
+        "windows",
         "8,583个完整五帧窗口",
         "体素由所有实际输入点共同建立，再按语义事后统计。正常、异常、忽略成员均保留。历史支持是类别支持，不能解读为同一物体点的跨帧匹配。",
         window_headers,
         window_values([r for r in windows if r["scope"] == "complete_windows"]),
     )
     writer.table(
-        "启动区间记录",
+        "startup",
         "76个启动窗口单列",
         "缺少的历史槽为空，不是零点扫描；所有已到达点按原始启动路径构造体素。本页不并入完整五帧窗口分布。",
         window_headers,
@@ -2101,7 +2152,7 @@ def append_records(writer, output, result):
         "ground_rmse",
     )
     writer.table(
-        "逐实例观测",
+        "instances",
         "4,729条有效正实例标识的实例×帧记录",
         "尺寸是本帧LiDAR坐标轴下可见点的水平长短边和竖向跨度；至少10个不同坐标点。非完整物理尺寸或朝向框。正实例标识按序列隔离；另有1个零标识异常点保留于逐帧和逐点记录，未强行分组。",
         [
@@ -2139,7 +2190,7 @@ def append_records(writer, output, result):
         "right_censored",
     )
     writer.table(
-        "连续观测阶段",
+        "stages",
         "619段连续回波观测阶段",
         "同一物体的稀疏回波可导致多次类别可见中断。左截断表示段开始于序列首帧，右截断表示段结束于序列末帧；均不能推断真实物理起止。长度单位为帧。",
         ["序列", "阶段", "首帧", "末帧", "长度（帧）", "左边界截断", "右边界截断"],
@@ -2174,7 +2225,7 @@ def append_records(writer, output, result):
                 ]
             )
     writer.table(
-        "联合条件",
+        "joints",
         "固定联合条件与共同覆盖量",
         "一般点数编码0/1/2/3/4/5对应0、1至4、5至19、20至99、100至499、至少500；合格表点数编码0至3从5至19起。距离0至3对应[2.5,10)、[10,20)、[20,35)、[35,50]；unseen和outside_only单列。混合0为0，1为(0,0.25]，2为(0.25,0.75]，3为大于0.75。平移边界0.1/0.5/1/2/5米。",
         [
@@ -2242,7 +2293,7 @@ def append_records(writer, output, result):
         ],
     ]
     writer.table(
-        "可靠性与不可观测",
+        "reliability",
         "可靠性不足与不可观测边界",
         "缺测表示定义不适用、观测支持不足或真值缺少，不是零。阈值在原始统计执行前确定，未根据模型预测或评价成绩选择。",
         [
@@ -2525,3 +2576,547 @@ def plot_profile(output, result):
             "真实验证观测画像：五帧表示与观测阶段",
             "体素统计先使用完整输入建立 5 厘米网格，再按标签区分成员；序列开头 76 窗另列。\n静态表面项每窗最多抽样 2,048 点，匹配范围 0.2 米；不是真值配准误差。所有阶段均按回波观测定义。",
         )
+
+
+def write_pool_tables(output, result, directory):
+    """Export the same measurements with worlds and shared roads explicitly distinguished."""
+    writer = CsvTables(directory)
+    totals, spec = result["totals"], result["definitions"]
+    rows = []
+    for identifier, group, name, definition, unit, statistics, caution in FACTORS:
+        keys = [k for k in result["series"] if k.startswith(identifier + "|")]
+        if identifier == "A01":
+            definition = "逐冻结世界读取全部帧；前四帧为上下文；只统计段内合法五帧窗口"
+        rows.append(
+            [
+                identifier,
+                group,
+                name,
+                definition,
+                unit,
+                statistics,
+                "不可作真实横向比较"
+                if identifier == "G02"
+                else "已统计；固定抽样代理"
+                if identifier == "E05"
+                else "已统计；支持不足留空",
+                len(keys),
+                "生成器完整物理参数未混入可见观测分布"
+                if identifier == "G02"
+                else caution,
+            ]
+        )
+    writer.table(
+        "factors",
+        "同一31项因素及可观测边界",
+        "原定义见profiles/real/method.md。原始单位、帧、世界等权分开；世界不是独立道路。",
+        [
+            "因素",
+            "组",
+            "名称",
+            "定义",
+            "单位",
+            "统计内容",
+            "完成状态",
+            "统计组合数",
+            "边界",
+        ],
+        rows,
+    )
+    coverages = [d["coverage"] for d in result["sequences"].values()]
+    headers = list(coverages[0])
+    writer.table(
+        "worlds",
+        "各世界覆盖及边界",
+        "sequence为世界内唯一目录标识；first_frame/last_frame为源扫描号；一个世界只属于一个合成版本。",
+        headers,
+        [
+            [
+                json.dumps(r.get(k), ensure_ascii=False)
+                if isinstance(r.get(k), (list, dict))
+                else r.get(k)
+                for k in headers
+            ]
+            for r in coverages
+        ],
+    )
+    version_rows = []
+    for version in sorted({r["version"] for r in coverages}):
+        members = [r for r in coverages if r["version"] == version]
+        version_rows.append(
+            [
+                version,
+                spec["source_sequence_id"],
+                len(members),
+                *[
+                    sum(r[k] for r in members)
+                    for k in (
+                        "frames",
+                        "complete_windows",
+                        "whole_window_unseen",
+                        "anomaly",
+                    )
+                ],
+            ]
+        )
+    writer.table(
+        "versions",
+        "观测次数与道路来源",
+        "同一池所有版本共用一条原始道路，版本数不是道路数。",
+        [
+            "合成版本",
+            "原始道路",
+            "世界数",
+            "帧观测次数",
+            "合法窗口",
+            "整窗无异常",
+            "全帧异常点",
+        ],
+        version_rows,
+    )
+    writer.table(
+        "totals",
+        "全帧与合法当前帧分别汇总",
+        "全帧包括每个世界前四帧；legal字段只统计合法当前帧；startup_windows=0不是未保存原始上下文。",
+        ["量", "值"],
+        [
+            [k, json.dumps(v, ensure_ascii=False) if isinstance(v, (list, dict)) else v]
+            for k, v in totals.items()
+        ],
+    )
+    write_distributions(writer, result)
+    for name, title in [
+        ("frames", "逐帧观测"),
+        ("windows", "逐窗口观测"),
+        ("instances", "逐实例观测"),
+        ("stages", "连续观测阶段"),
+    ]:
+
+        def records():
+            for key in spec["sequences"]:
+                yield from read_rows(Path(output) / key / f"{name}.jsonl")
+
+        headers = sorted({k for r in records() for k in r})
+        writer.table(
+            name,
+            title,
+            "sequence标识世界；frame为世界内索引，source_frame为原始扫描号。连续阶段首尾保留截断；空值不补零。",
+            headers,
+            (
+                [
+                    json.dumps(r.get(k), ensure_ascii=False)
+                    if isinstance(r.get(k), (list, dict))
+                    else r.get(k)
+                    for k in headers
+                ]
+                for r in records()
+            ),
+        )
+    writer.close(
+        "冻结合成池同口径画像",
+        f"背景train/{spec['source_sequence_id']}，{spec['synthetic_versions']}个版本，"
+        f"{totals['worlds']}个世界，{totals['frames']}帧，{totals['complete_windows']}合法窗口。"
+        "所有统计只读冻结观测；五位模式按文本读取，空字段与实测零分开。",
+    )
+
+
+def compare_profiles(synthetic, real, output, directory):
+    """Compare completed profiles without opening real scans or using model scores."""
+    populations = [synthetic["train"], synthetic["validation"], real]
+    labels = ["206训练", "201合成验证", "真实开发"]
+    writer = CsvTables(directory)
+
+    def data(result, key, view="observation_equal"):
+        return result["series"][key][view]
+
+    def qtext(result, key, view="observation_equal"):
+        d = data(result, key, view)
+        values = [d["quantiles"].get(str(q), {}).get("value") for q in QUANTILES]
+        text = "/".join("空" if v is None else f"{v:.6g}" for v in values)
+        return f"P5/P25/P50/P75/P95={text}；有效{d['n']}/{d['denominator']}，{d['valid_frames']}帧，{d['sequence_count']}世界或序列"
+
+    def cattext(result, key):
+        d = data(result, key)
+        return "; ".join(
+            f"{category_name(d['metric'], c)}={n}/{d['n']}={n / d['n']:.6%}"
+            for c, n in d["category_counts"].items()
+        )
+
+    keys = {
+        "A02": ["A02|visible|all_frames|all", "A02|ignore_fraction|all_frames|all"],
+        "B01": ["B01|anomaly_in_range|all_frames|all"],
+        "B02": [
+            "B02|distance|all_frames|all",
+            "B02|anomaly_distance_median|all_frames|all",
+        ],
+        "B04": ["B04|x|all_frames|all", "B04|azimuth|all_frames|all"],
+        "B05": [
+            "B05|length|all_frames|all",
+            "B05|width|all_frames|all",
+            "B05|height|all_frames|all",
+        ],
+        "B06": ["B06|same_instance_neighbor_distance|all_frames|all"],
+        "B07": ["B07|azimuth_span|all_frames|all"],
+        "C01": ["C01|intensity|all_frames|normal", "C01|intensity|all_frames|anomaly"],
+        "C04": [
+            "C04|intensity_contrast|all_frames|all",
+            "C04|background_intensity_variance|all_frames|all",
+        ],
+        "D02": [
+            "D02|nearest_normal_distance|all_frames|all",
+            "D02|ground_height_median|all_frames|all",
+        ],
+        "E01": [
+            "E01|history_visible_scans|complete_windows|all",
+            "E01|history_anomaly_fraction|complete_windows|all",
+        ],
+        "E03": [
+            "E03|stage_length|sequence_runs|visible",
+            "E03|stage_length|sequence_runs|gap",
+        ],
+        "E04": [
+            "E04|translation|complete_windows|all",
+            "E04|rotation|complete_windows|all",
+        ],
+        "E05": ["E05|sampled_static_distance|complete_windows|all"],
+        "F01": ["F01|current_anomaly_compression|complete_windows|all"],
+        "F05": ["F05|mean_displacement|complete_windows|current_anomaly"],
+    }
+    # The main table gives representative existing measures; full distributions retain every measure.
+    common_keys = set.intersection(*(set(r["series"]) for r in populations))
+    for factor, selected in keys.items():
+        if any(k not in common_keys for k in selected):
+            raise ValueError(
+                f"comparison metric name not in authoritative profiles: {factor}: {selected}"
+            )
+
+    def overview(r, factor):
+        t, s = r["totals"], r["series"]
+        if factor in keys:
+            return "；".join(
+                f"{metric_name(k.split('|')[1])}({group_name(k.split('|')[-1])}): {qtext(r, k)}"
+                for k in keys[factor]
+            )
+        if factor == "A01":
+            return f"原始背景序列{t.get('background_source_sequences', t['sequences'])}；版本{t.get('synthetic_versions', '不适用')}；世界或序列{t['sequences']}；帧{t['frames']}；完整窗{t['complete_windows']}"
+        if factor in ("A03", "A04", "A05"):
+            indexes = {"A03": [0], "A04": [1], "A05": [2, 3]}[factor]
+            return "；".join(
+                f"四态{i}={t['states'][i]}/{t['frames']}={t['states'][i] / t['frames']:.6%}"
+                for i in indexes
+            )
+        if factor == "A06":
+            n, den = t["whole_window_unseen"], t["complete_windows"]
+            members = [
+                e["coverage"]
+                for e in r["sequences"].values()
+                if e["coverage"]["whole_window_unseen"]
+            ]
+            return f"{n}/{den}={n / den:.6%}；覆盖{len(members)}个世界或序列"
+        if factor == "B03":
+            j = r["joint"]["official_count_distance"]
+            return f"合格帧{sum(x['frames'] for x in j.values())}；异常点{sum(x['anomaly_in_range_points'] for x in j.values())}；覆盖格{sum(x['frames'] > 0 for x in j.values())}/16"
+        if factor == "C02":
+            return "；".join(
+                f"{group_name(g)}零强度{fraction(s, f'C02|zero|all_frames|{g}'):.6%}；k/3500精确匹配{fraction(s, f'C02|grid_match|all_frames|{g}'):.6%}；重复取值点{data(r, f'C01|intensity|all_frames|{g}')['repeated_value_fraction']:.6%}"
+                for g in ("normal", "anomaly", "ignore")
+            )
+        if factor == "C03":
+            return f"{sum(k.startswith('C03|') for k in s)}个原有逐点距离×类别条件；全量连续统计保留各组原始、帧、世界或序列权重"
+        if factor == "D01":
+            d = data(r, "D01|normal_semantic|all_frames|all")
+            top = sorted(d["category_counts"].items(), key=lambda kv: -kv[1])[:5]
+            return "；".join(f"{SEMANTIC.get(int(k), k)}={v}/{d['n']}" for k, v in top)
+        if factor == "E02":
+            d = data(r, "E02|visibility_pattern|complete_windows|all")
+            c = d["category_counts"]
+            return f"覆盖{sum(v > 0 for v in c.values())}/32；00000={c['0']}，11111={c['31']}，部分={d['n'] - c['0'] - c['31']}，00001={c['1']}；分母{d['n']}"
+        if factor == "F02":
+            return cattext(r, "F02|anomaly_voxel_mix|complete_windows|all")
+        if factor == "F03":
+            return cattext(r, "F03|new_normal|complete_windows|all")
+        if factor == "F04":
+            d = data(r, "F04|scan_hits|complete_windows|current_anomaly")
+            return f"当前异常体素观测{d['n']}；扫描命中类别{sum(v > 0 for v in d['category_counts'].values())}；完整32格见分类表"
+        if factor == "G01":
+            j = r["joint"]["count_distance_history"]
+            return f"点数×距离×历史覆盖{sum(v['frames'] > 0 for v in j.values())}/{len(j)}格；窗口{sum(v['frames'] for v in j.values())}"
+        if factor == "G02":
+            return "完整物理尺寸、真实材质、精确遮挡率、位姿真值误差及可靠时间未作横向估计；合成真值参数不混入"
+        raise ValueError(f"unhandled original factor {factor}")
+
+    difference = {
+        "A01": ("固定背景限制", "增加世界数不能增加原始道路数"),
+        "A06": ("已有覆盖但频率不匹配", "采样或训练权重；保留异常条件覆盖"),
+        "B03": ("共同覆盖与空格并存，逐格判定", "采样或世界生成；见联合条件对照"),
+        "G01": (
+            "频率不匹配与完全缺覆盖分开",
+            "采样或世界生成；先看真实非空且训练为零的格",
+        ),
+        "G02": ("不可观测或不可直接横向比较", "不得以不可观测属性指导确定参数"),
+    }
+    main = []
+    for factor, group, name, definition, unit, statistics, caution in FACTORS:
+        dtype, action = difference.get(
+            factor,
+            (
+                "观测分布或可靠性差异；不作因果归因",
+                "强度生成；当前不优先"
+                if factor.startswith("C")
+                else "生成覆盖或表示；未进行模型干预"
+                if factor.startswith("F")
+                else "几何、放置或观测过程；先核对可靠性"
+                if factor.startswith(("B", "D"))
+                else "采样或观测过程；片段边界截断单列",
+            ),
+        )
+        coverage = "全帧3592/2728/8659；完整窗3080/2360/8583；合成等权单位为世界，真实为序列，非独立道路配对"
+        if factor in ("B05", "B06", "B07", "D02"):
+            coverage = "；".join(
+                f"{label}:实例帧{r['totals']['instance_frames']}，形状{r['totals']['shape_status']}，地面{r['totals']['ground_status']}，未知身份点{r['totals']['unknown_instance_points']}"
+                for label, r in zip(labels, populations)
+            )
+        main.append(
+            [
+                factor,
+                group,
+                name,
+                *[overview(r, factor) for r in populations],
+                coverage,
+                dtype,
+                action,
+                caution,
+            ]
+        )
+    writer.table(
+        "comparison",
+        "训练—合成验证—真实开发的31项因素",
+        "连续量主表按原始单位等权；每帧中位数单独列；其余权重及缺失、区间在明细中。",
+        [
+            "因素",
+            "组",
+            "因素或联合条件",
+            *labels,
+            "覆盖与可靠性",
+            "差异类型",
+            "可调整环节",
+            "解释边界",
+        ],
+        main,
+    )
+    joints = []
+    absent = {}
+    for table in real["joint"]:
+        all_cells = sorted(set.union(*(set(r["joint"][table]) for r in populations)))
+        absent[table] = dict(
+            cells=0, real_frames=0, real_anomaly_points=0, real_sequences=set()
+        )
+        for cell in all_cells:
+            entries = [
+                r["joint"][table].get(
+                    cell,
+                    dict(
+                        frames=0,
+                        anomaly_points=0,
+                        anomaly_in_range_points=0,
+                        sequence_count=0,
+                        sequences=[],
+                        instance_count=0,
+                    ),
+                )
+                for r in populations
+            ]
+            tr, va, re = entries
+            kind = (
+                "训练完全缺覆盖"
+                if re["frames"] and not tr["frames"]
+                else "合成验证完全缺覆盖"
+                if re["frames"] and not va["frames"]
+                else "共同覆盖；比较频率"
+                if all(e["frames"] for e in entries)
+                else "三侧均无观测"
+                if not any(e["frames"] for e in entries)
+                else "该发布真实集合无覆盖"
+            )
+            if re["frames"] and not tr["frames"]:
+                a = absent[table]
+                a["cells"] += 1
+                a["real_frames"] += re["frames"]
+                a["real_anomaly_points"] += re["anomaly_points"]
+                a["real_sequences"].update(re["sequences"])
+            values = []
+            for r, e in zip(populations, entries):
+                entities = e["sequences"]
+                versions = len(
+                    {
+                        r["sequences"][str(x)]["coverage"].get("version", str(x))
+                        for x in entities
+                    }
+                )
+                roads = 1 if entities and r is not real else len(entities)
+                den = sum(x["frames"] for x in r["joint"][table].values())
+                values.extend(
+                    [
+                        e["sequence_count"],
+                        versions,
+                        roads,
+                        e["frames"],
+                        den,
+                        e["frames"] / den if den else None,
+                        e["anomaly_points"],
+                        e["anomaly_in_range_points"],
+                        e["instance_count"],
+                    ]
+                )
+            pieces = cell.split("|")
+            counts = ("0", "1至4", "5至19", "20至99", "100至499", "至少500")
+            distances = {
+                str(i): v
+                for i, v in enumerate(("[2.5,10)", "[10,20)", "[20,35)", "[35,50]"))
+            }
+            distances.update(unseen="未见异常", outside_only="仅范围外异常")
+            mix = ("0", "(0,0.25]", "(0.25,0.75]", "(0.75,1]")
+            if table == "official_count_distance":
+                description = f"范围内{counts[int(pieces[0]) + 2]}点；距离中位数{distances[pieces[1]]}米"
+            elif table in ("count_distance_history", "motion_count_distance"):
+                description = f"范围内{counts[int(pieces[0])]}点；距离中位数{distances[pieces[1]]}"
+                description += (
+                    f"；历史可见{pieces[2]}次"
+                    if table == "count_distance_history"
+                    else f"；五帧平移{('[0,0.1)', '[0.1,0.5)', '[0.5,1)', '[1,2)', '[2,5)', '[5,无穷)')[int(pieces[2])]}米"
+                )
+            elif table == "mix_count_distance":
+                description = f"混合比例{mix[int(pieces[0])]}；范围内{counts[int(pieces[1])]}点；距离中位数{distances[pieces[2]]}"
+            elif table == "mix_background":
+                description = f"混合比例{mix[int(pieces[0])]}；{dict(no_neighbor='无邻近正常点', road_majority='道路类占邻域至少一半', other_majority='道路类占邻域不足一半')[pieces[1]]}"
+            else:
+                description = f"{GROUP[pieces[0]]}；全距离{counts[int(pieces[1])]}点"
+            joints.append([table, cell, description, *values, kind])
+    fields = [
+        "世界或序列数",
+        "合成版本或真实序列数",
+        "原始背景序列数（非独立道路）",
+        "帧数",
+        "该联合表帧分母",
+        "帧比例",
+        "全距离异常点",
+        "范围内异常点",
+        "已观测实例标识数",
+    ]
+    writer.table(
+        "joint_comparison",
+        "原有联合格的覆盖与频率",
+        "分组编码与真实画像一致；零格保留；各联合表是不同切面，覆盖量不能跨表相加。",
+        [
+            "联合条件",
+            "格编码",
+            "条件说明",
+            *[f"{label}_{k}" for label in labels for k in fields],
+            "差异类型",
+        ],
+        joints,
+    )
+    modes = []
+    key = "E02|visibility_pattern|complete_windows|all"
+    for code in range(32):
+        values = []
+        for r in populations:
+            d = data(r, key)
+            members = [
+                e
+                for e in r["sequences"].values()
+                if e["series"][key]["observation_equal"]["category_counts"].get(
+                    str(code), 0
+                )
+            ]
+            values.extend(
+                [
+                    d["category_counts"][str(code)],
+                    d["n"],
+                    d["categories"][str(code)],
+                    len(members),
+                ]
+            )
+        modes.append([f"{code:05b}", code.bit_count(), *values])
+    writer.table(
+        "visibility",
+        "全部32种五帧异常可见模式",
+        "五位文本从历史到当前；00000整窗无异常；11111持续可见；0末位与历史有1表示当前消失但历史仍可见。",
+        [
+            "五位文本模式",
+            "可见扫描数",
+            *[
+                f"{label}_{k}"
+                for label in labels
+                for k in ["窗口数", "总窗口", "比例", "覆盖世界或序列数"]
+            ],
+        ],
+        modes,
+    )
+    # Compare the full weighted CDF summaries, not an average of per-entity quantiles.
+    weights = []
+    for label, r in zip(labels, populations):
+        for key in [
+            "B02|distance|all_frames|all",
+            "B02|anomaly_distance_median|all_frames|all",
+            "C01|intensity|all_frames|anomaly",
+        ]:
+            for view, d in r["series"][key].items():
+                weights.append(
+                    [
+                        label,
+                        key,
+                        "世界等权"
+                        if view == "sequence_equal" and r is not real
+                        else VIEW[view],
+                        d["n"],
+                        d["denominator"],
+                        d["valid_frames"],
+                        d["sequence_count"],
+                        *[
+                            d["quantiles"].get(str(q), {}).get("value")
+                            for q in QUANTILES
+                        ],
+                    ]
+                )
+    writer.table(
+        "weights",
+        "逐点分布与每帧代表值分开",
+        "每帧中位数的分布不是帧等权逐点分布；世界等权不代表道路等权或相互独立。",
+        [
+            "侧",
+            "量",
+            "权重",
+            "有效数",
+            "候选数",
+            "有效帧",
+            "世界或序列数",
+            "P5",
+            "P25",
+            "P50",
+            "P75",
+            "P95",
+        ],
+        weights,
+    )
+    for a in absent.values():
+        a["real_sequences"] = sorted(a["real_sequences"])
+    comparison = dict(
+        missing_training_coverage=absent,
+        selected_next_candidate="whole_window_normal_sampling",
+        recommendation_only=True,
+        model_forward_calls=0,
+        parameter_updates=0,
+        real_raw_scans_read=0,
+        real_official_ap_unchanged=0.03475451,
+    )
+    path = Path(output) / "comparison.json"
+    if path.exists():
+        if json.loads(path.read_text()) != comparison:
+            raise ValueError("saved comparison differs")
+    else:
+        _atomic_json(path, comparison)
+    writer.close(
+        "三侧同口径分布对照",
+        "真实侧直接复用runs/profile_v1；两侧合成观测补全同一31项因素。train/和validation/为全量明细，真实明细仍在profiles/real/。",
+    )

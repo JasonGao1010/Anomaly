@@ -152,3 +152,40 @@ def test_report_sequence_weights_and_variance_use_full_distributions(tmp_path):
         assert data["observation_equal"]["quantiles"]["0.95"]["value"] == 0
         assert data["sequence_equal"]["quantiles"]["0.5"]["value"] == 0
         assert data["sequence_equal"]["quantiles"]["0.75"]["value"] == 10
+
+
+def test_synthetic_context_and_worlds_are_not_joined():
+    from src.profile_report import joint_tables
+
+    frames, windows = [], []
+    for world, counts in (("000_00", [1, 1, 0, 0, 0]), ("000_01", [0, 0, 0, 0, 6])):
+        rows = [
+            dict(
+                sequence=world,
+                frame=i,
+                anomaly=n,
+                anomaly_in_range=n,
+                anomaly_in_range_distance_median=12 if n else None,
+                neighbor_road_fraction=None,
+            )
+            for i, n in enumerate(counts)
+        ]
+        episodes = stages(rows, world)
+        assert episodes[0]["left_censored"] and episodes[-1]["right_censored"]
+        frames.extend(rows)
+        windows.append(
+            dict(
+                sequence=world,
+                frame=4,
+                scope="complete_windows",
+                history_visible_scans=sum(n > 0 for n in counts[:4]),
+                translation_m=1,
+                normal_mix_fraction=0,
+            )
+        )
+    result = joint_tables(frames, windows, [])
+    assert sum(r["frames"] for r in result["stage_count"].values()) == 10
+    assert sum(r["frames"] for r in result["count_distance_history"].values()) == 2
+    assert result["count_distance_history"]["0|unseen|2"]["sequences"] == ["000_00"]
+    assert result["count_distance_history"]["2|1|0"]["sequences"] == ["000_01"]
+    assert result["official_count_distance"]["0|1"]["anomaly_in_range_points"] == 6

@@ -15,7 +15,7 @@ import numpy as np
 from scipy.spatial import cKDTree, ConvexHull, QhullError
 import torch
 
-from .data import _atomic_json
+from .data import FrozenSyntheticSegment, _atomic_json, load_pool_manifest
 from .model import joint_voxelize
 from .protocol import load_protocol
 from .scene import STUSequence, LabelMode
@@ -347,7 +347,9 @@ def frame_geometry(source, ledger, sequence, frame):
     az = np.arctan2(ax[:, 1], ax[:, 0])
     el = np.arctan2(ax[:, 2], np.linalg.norm(ax[:, :2], axis=1))
     points = dict(
-        sequence=np.full(a, sequence, np.int32),
+        sequence=np.full(
+            a, sequence, dtype=np.int32 if isinstance(sequence, int) else None
+        ),
         frame=np.full(a, frame, np.int32),
         slot=slots[anomaly],
         instance=instance[anomaly],
@@ -910,7 +912,7 @@ def window_geometry(window, inputs, frame_rows, ledger, sequence, frame):
         rec["history_new_normal_voxels"] / ca.sum() if ca.any() else None
     )
     sampled, matched, distances = static_overlap(
-        xyz, semantic, current, sequence, frame
+        xyz, semantic, current, window.spec.sequence_id, window.current_frame_id
     )
     rec.update(
         static_sampled=sampled,
@@ -1008,7 +1010,7 @@ def stages(frames, sequence):
     return output
 
 
-def profile_sequence(data_root, output, sequence, limit=None):
+def profile_sequence(data_root, output, sequence, limit=None, segment_record=None):
     started = time.monotonic()
     cpu_started = time.process_time()
     torch.set_num_threads(1)
@@ -1016,35 +1018,90 @@ def profile_sequence(data_root, output, sequence, limit=None):
     if (directory / "summary.json").exists():
         return json.loads((directory / "summary.json").read_text())
     directory.mkdir(parents=True, exist_ok=True)
+    protocol = load_protocol()
+    synthetic = segment_record is not None
+    source_id = segment_record["source_sequence_id"] if synthetic else sequence
     source = STUSequence.open(
         data_root,
-        protocol=load_protocol(),
-        partition="val",
-        sequence_id=sequence,
+        protocol=protocol,
+        partition="train" if synthetic else "val",
+        sequence_id=source_id,
         label_mode=LabelMode.REQUIRED,
     )
     source._cache_frames = 5
+    segment = None
+    if synthetic:
+        segment = FrozenSyntheticSegment(
+            protocol.path.parent / segment_record["file"],
+            source,
+            segment_record["file_sha256"],
+        )
+        for key in ("world_identity", "synthetic_sequence_id", "segment_index"):
+            if segment.metadata[key] != segment_record[key]:
+                raise ValueError(f"frozen world identity differs: {key}")
     ledger = Ledger()
     frames = []
     windows = []
     instances = []
     point_chunks = []
-    count = min(source.frame_count, limit) if limit is not None else source.frame_count
-    for frame in range(count):
-        raw = source.source_frame(frame)
+    frame_ids = segment.frame_ids if synthetic else tuple(range(source.frame_count))
+    if limit is not None:
+        frame_ids = frame_ids[:limit]
+    count = len(frame_ids)
+    for frame, source_frame in enumerate(frame_ids):
+        raw = (
+            segment.frame(source_frame)
+            if synthetic
+            else source.source_frame(source_frame)
+        )
         record, objects, points = frame_geometry(raw, ledger, sequence, frame)
+        if synthetic:
+            # Local indices define world boundaries; source IDs preserve raw observation identity.
+            for row in (record, *objects):
+                row.update(
+                    source_frame=source_frame,
+                    source_sequence=source_id,
+                    version=segment_record["synthetic_sequence_id"],
+                    segment=segment_record["segment_index"],
+                )
         frames.append(record)
         instances.extend(objects)
-        window = source.for_output(frame)
-        inputs = joint_voxelize(window)
-        record, detail = window_geometry(
-            window, inputs, frames, ledger, sequence, frame
-        )
-        windows.append(record)
-        points.update(detail)
+        if not synthetic or frame >= 4:
+            window = (
+                segment.window(source_frame - 4)
+                if synthetic
+                else source.for_output(frame)
+            )
+            inputs = joint_voxelize(window)
+            record, detail = window_geometry(
+                window, inputs, frames, ledger, sequence, frame
+            )
+            if synthetic:
+                record.update(
+                    source_frame=source_frame,
+                    source_sequence=source_id,
+                    version=segment_record["synthetic_sequence_id"],
+                    segment=segment_record["segment_index"],
+                    source_frames=list(window.frame_ids),
+                )
+            windows.append(record)
+            points.update(detail)
+            del window, inputs, detail
+        else:
+            # Initial context is observed once, but has no legal synthetic output window.
+            for key in (
+                "voxel_normal_fraction",
+                "voxel_anomaly_fraction",
+                "voxel_ignore_fraction",
+                "voxel_mix",
+                "voxel_hits",
+                "history_new_normal",
+                "point_residual",
+            ):
+                points[key] = np.full(len(points["frame"]), np.nan)
         if len(points["frame"]):
             point_chunks.append(points)
-        del window, inputs, detail, points, raw
+        del points, raw
         if (frame + 1) % 100 == 0:
             print(
                 json.dumps(
@@ -1058,6 +1115,11 @@ def profile_sequence(data_root, output, sequence, limit=None):
                 flush=True,
             )
     episodes = stages(frames, sequence)
+    if synthetic:
+        for row in episodes:
+            row.update(
+                source_start=frame_ids[row["start"]], source_end=frame_ids[row["end"]]
+            )
     for kind in ("visible", "prefix", "gap", "tail", "entire_unseen"):
         ledger.add(
             "E03",
@@ -1109,10 +1171,10 @@ def profile_sequence(data_root, output, sequence, limit=None):
     result = dict(
         sequence=sequence,
         frames=count,
-        first_frame=0,
-        last_frame=count - 1,
+        first_frame=frame_ids[0],
+        last_frame=frame_ids[-1],
         complete_windows=max(0, count - 4),
-        startup_windows=min(4, count),
+        startup_windows=0 if synthetic else min(4, count),
         states=states.tolist(),
         slots=sum(r["slots"] for r in frames),
         visible=sum(r["visible"] for r in frames),
@@ -1131,32 +1193,151 @@ def profile_sequence(data_root, output, sequence, limit=None):
         cpu_seconds=time.process_time() - cpu_started,
         max_rss_bytes=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024,
     )
+    if synthetic:
+        result.update(
+            world=segment_record["world_identity"],
+            version=segment_record["synthetic_sequence_id"],
+            source_sequence=source_id,
+            segment=segment_record["segment_index"],
+            context_frames=min(4, count),
+        )
     _atomic_json(directory / "summary.json", result)
     return result
+
+
+def profile_pools(args, disk):
+    """Profile frozen worlds independently and reuse the completed real observation profile."""
+    protocol = load_protocol()
+    real_spec = json.loads((args.real_profile / "spec.json").read_text())
+    if not (args.real_profile / "summary.json").is_file():
+        raise ValueError(
+            "completed real profile is required; raw val is never opened here"
+        )
+    jobs = []
+    for pool in (protocol.training_pool, protocol.validation_pool):
+        manifest = load_pool_manifest(protocol, pool)
+        directory = args.output / pool.name
+        directory.mkdir(parents=True, exist_ok=True)
+        records = {
+            f"{r['synthetic_sequence_index']:03d}_{r['segment_index']:02d}": dict(
+                r, source_sequence_id=pool.source_sequence_id
+            )
+            for r in manifest["segments"]
+        }
+        spec = dict(real_spec)
+        spec.update(
+            population=pool.name,
+            sequences=list(records),
+            records=records,
+            frames=sum(
+                r["frame_range_inclusive"][1] - r["frame_range_inclusive"][0] + 1
+                for r in records.values()
+            ),
+            complete_windows=pool.total_window_count,
+            source="frozen sparse observations reconstructed on train/206 or train/201; no generation",
+            source_sequence_id=pool.source_sequence_id,
+            synthetic_versions=pool.synthetic_sequence_count,
+            world_count=pool.world_count,
+            manifest=str(protocol.pool_manifest_path(pool.name)),
+            boundaries="each world independently; first four local frames are context only; no startup windows",
+            entity_weighting="sequence_equal denotes equal worlds, not independent roads or versions",
+            point_intensity="original float32 exact unique values; each synthetic frame once per world; versions share raw background",
+            static_seed_identity="unchanged seed 20260906, raw source sequence ID, raw source frame ID",
+            real_profile=str(args.real_profile),
+            workers=args.workers,
+            output_peak_budget_bytes=4 * 2**30,
+            host_disk=disk,
+        )
+        path = directory / "spec.json"
+        if path.exists():
+            old = json.loads(path.read_text())
+            if any(
+                old[k] != spec[k] for k in spec if k not in ("workers", "host_disk")
+            ):
+                raise ValueError("saved synthetic profile definitions differ")
+        else:
+            _atomic_json(path, spec)
+        jobs.extend((directory, key, record) for key, record in records.items())
+    started = time.monotonic()
+    pending = [job for job in jobs if not (job[0] / job[1] / "summary.json").exists()]
+    with ProcessPoolExecutor(
+        max_workers=args.workers, mp_context=mp.get_context("fork")
+    ) as pool:
+        futures = {
+            pool.submit(
+                profile_sequence, args.data_root, directory, key, None, record
+            ): (directory.name, key)
+            for directory, key, record in pending
+        }
+        for future in as_completed(futures):
+            row = future.result()
+            print(
+                json.dumps(
+                    dict(event="world_completed", pool=futures[future][0], **row)
+                ),
+                flush=True,
+            )
+            volume = host_disk()
+            if volume["SizeRemaining"] - 512 * 2**20 < volume["reserve_bytes"]:
+                raise OSError("profile writes are approaching the host reserve")
+    timing = dict(
+        wall_seconds=time.monotonic() - started,
+        scanned_worlds=len(pending),
+        reused_worlds=len(jobs) - len(pending),
+        host_disk=host_disk(),
+    )
+    print(json.dumps(dict(event="pool_scans_completed", **timing)), flush=True)
+    if pending:
+        _atomic_json(args.output / "execution.json", timing)
+    from .profile_report import aggregate_profile, write_pool_tables, compare_profiles
+
+    results = {}
+    for name in ("train", "validation"):
+        results[name] = aggregate_profile(args.output / name)
+        write_pool_tables(args.output / name, results[name], args.tables / name)
+    real = json.loads((args.real_profile / "summary.json").read_text())
+    compare_profiles(results, real, args.output, args.tables)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data-root", type=Path, required=True)
-    parser.add_argument("--output", type=Path, default=Path("runs/profile_v1"))
+    parser.add_argument("--output", type=Path)
     parser.add_argument("--workers", type=int, default=8)
     parser.add_argument(
         "--tables",
         type=Path,
-        default=Path("STU19_数据画像"),
         help="directory for the completed UTF-8 CSV tables",
     )
+    parser.add_argument(
+        "--synthetic", action="store_true", help="both frozen pools; reuse real profile"
+    )
+    parser.add_argument("--real-profile", type=Path, default=Path("runs/profile_v1"))
     parser.add_argument(
         "--pilot",
         type=int,
         help="first N frames of val/125, in a separate output directory",
     )
     args = parser.parse_args()
+    args.output = args.output or Path(
+        "runs/profile_pools" if args.synthetic else "runs/profile_v1"
+    )
+    args.tables = args.tables or Path("profiles" if args.synthetic else "profiles/real")
     torch.set_num_threads(1)
     disk = host_disk()
     args.output.mkdir(parents=True, exist_ok=True)
-    if disk["SizeRemaining"] - 2 * 2**30 < disk["reserve_bytes"]:
+    if (
+        disk["SizeRemaining"] - (4 if args.synthetic else 2) * 2**30
+        < disk["reserve_bytes"]
+    ):
         raise OSError("profile output budget would invade the E: reserve")
+    if args.synthetic:
+        if args.pilot:
+            parser.error(
+                "use a separate bounded world pilot before profiling both frozen pools"
+            )
+        profile_pools(args, disk)
+        return
     if args.pilot:
         print(
             json.dumps(profile_sequence(args.data_root, args.output, 125, args.pilot)),
