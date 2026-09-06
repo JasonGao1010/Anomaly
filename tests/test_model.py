@@ -476,6 +476,8 @@ def test_streamed_frozen_input_matches_original_preparation() -> None:
                 "max_absolute_logit_difference": float((streamed - direct).abs().max()),
             }
         )
+
+
 def test_rope_prefix_cache_matches_exact_tables_without_accumulating_lengths():
     from vendor.litept.libs.pointrope.pointrope_torch import PointROPE
 
@@ -488,4 +490,3 @@ def test_rope_prefix_cache_matches_exact_tables_without_accumulating_lengths():
         assert torch.equal(cos, phase.cos()) and torch.equal(sin, phase.sin())
         assert len(rope.cache) == 1
         assert next(iter(rope.cache.values()))[0].shape[0] <= 2 * max(513, length)
-
