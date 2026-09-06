@@ -528,8 +528,14 @@ class GridUnpooling(PointModule):
         inverse = point.pooling_inverse
         feat = point.feat
 
-        parent = self.proj_skip(parent)
-        parent.feat = parent.feat + self.proj(point).feat[inverse]
+        # Residual features can make the projection exceed float16 before BN.
+        # Keep both projection/normalization branches in float32, as in eval.
+        with torch.autocast(point.feat.device.type, enabled=False):
+            point.feat = point.feat.float()
+            parent.feat = parent.feat.float()
+            parent = self.proj_skip(parent)
+            projected = self.proj(point).feat
+        parent.feat = parent.feat + projected[inverse]
         parent.sparse_conv_feat = parent.sparse_conv_feat.replace_feature(parent.feat)
 
         if self.traceable:

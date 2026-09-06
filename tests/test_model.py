@@ -90,6 +90,50 @@ def test_nre_shallow_features_preserve_backbone_rows_and_legacy_output():
     assert torch.equal(shallow, captured[0]) and torch.equal(shallow, captured[1])
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="LitePT requires CUDA")
+@pytest.mark.parametrize("large_branch", ["proj", "proj_skip"])
+def test_decoder_projection_preserves_finite_batchnorm_under_autocast(large_branch):
+    import copy
+    import spconv.pytorch as spconv
+    from vendor.litept.litept.model import GridUnpooling, Point
+
+    layer = GridUnpooling(1, 1, 1, norm_layer=torch.nn.BatchNorm1d).cuda().train()
+    with torch.no_grad():
+        for branch in (layer.proj, layer.proj_skip):
+            branch[0].weight.fill_(2)
+            branch[0].bias.zero_()
+    reference = copy.deepcopy(layer)
+    large = torch.arange(40000, 60000, 5000, device="cuda").float()[:, None]
+    small = torch.arange(1, 5, device="cuda").float()[:, None]
+
+    def point():
+        deep, skip = (large, small) if large_branch == "proj" else (small, large)
+        parent = Point(feat=skip.clone().requires_grad_())
+        indices = torch.zeros((4, 4), dtype=torch.int32, device="cuda")
+        indices[:, 1] = torch.arange(4, device="cuda")
+        parent.sparse_conv_feat = spconv.SparseConvTensor(
+            parent.feat, indices, [4, 1, 1], batch_size=1
+        )
+        return Point(
+            feat=deep.clone().requires_grad_(),
+            pooling_parent=parent,
+            pooling_inverse=torch.arange(3, -1, -1, device="cuda"),
+        )
+
+    with torch.autocast("cuda", dtype=torch.float16):
+        # The old half-precision projection overflows before normalization.
+        assert not torch.isfinite(getattr(layer, large_branch)[0](large)).all()
+        actual = layer(point()).feat
+    expected = reference(point()).feat
+    assert actual.dtype == torch.float32 and torch.isfinite(actual).all()
+    torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+    (actual[:, 0] * torch.arange(1, 5, device="cuda")).sum().backward()
+    assert all(
+        p.grad is not None and p.grad.isfinite().all() for p in layer.parameters()
+    )
+    assert all(b.isfinite().all() for b in layer.buffers())
+
+
 def _window(count: int = 8, *, start: int = 0, labels: bool = True) -> SceneWindow:
     rng = np.random.default_rng(19)
     sources = []

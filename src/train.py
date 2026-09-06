@@ -1249,6 +1249,7 @@ def run_fulltrain(
                 "src/data.py",
                 "src/model.py",
                 "src/scene.py",
+                "vendor/litept/litept/model.py",
                 "vendor/litept/libs/pointrope/pointrope_torch.py",
             }
         ):
