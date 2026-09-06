@@ -863,7 +863,7 @@ class LitePT(PointModule):
                     )
                 self.dec.add(module=dec, name=f"dec{s}")
 
-    def forward(self, data_dict):
+    def forward(self, data_dict, *, return_shallow=False):
         """
         data_dict is the batched input point cloud, it should contain as least:
         1. feat [N, input_dim]: input feature for the point cloud
@@ -880,9 +880,16 @@ class LitePT(PointModule):
         point.sparsify()
 
         point = self.embedding(point)
-        point = self.enc(point)
+        if return_shallow:
+            # Capture the first encoder output before decoder skip projections replace it.
+            point = self.enc[0](point)
+            shallow = point.feat
+            for stage in list(self.enc.children())[1:]:
+                point = stage(point)
+        else:
+            point = self.enc(point)
 
         if not self.enc_mode:
             point = self.dec(point)
 
-        return point
+        return (point, shallow) if return_shallow else point

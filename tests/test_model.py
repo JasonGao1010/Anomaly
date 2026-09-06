@@ -16,6 +16,80 @@ from src.protocol import FrameSpan, SequenceSpec, load_protocol
 from src.scene import PointLabels, SceneWindow, assemble_window, make_source_frame
 
 
+def test_nre_support_formula_bounded_correction_and_ignore_gradients():
+    from types import SimpleNamespace
+    from src.model import NREHead, NREEvidence
+    from src.train import nre_loss
+
+    torch.manual_seed(23)
+    head = NREHead((0, 8, 19))
+    shallow = torch.randn(3, 36, requires_grad=True)
+    deep = torch.randn(3, 72, requires_grad=True)
+    inverse, detail = torch.tensor([0, 0, 1, 2]), torch.randn(4, 9)
+    evidence = NREEvidence(*head(shallow, deep, inverse, detail))
+    h = (
+        head.fusion(torch.cat((shallow[inverse], deep[inverse], detail), 1))
+        .detach()
+        .numpy()
+    )
+    mu = head.prototypes.detach().numpy()
+    q = (h / np.linalg.norm(h, axis=1, keepdims=True)) @ (
+        mu / np.linalg.norm(mu, axis=2, keepdims=True)
+    ).reshape(-1, 64).T
+    expected = -np.log(np.exp((q.astype(np.float64) - 0.5) / 0.07).mean(axis=1))
+    np.testing.assert_allclose(evidence.support.detach(), expected, atol=2e-6)
+    assert torch.equal(evidence.score, evidence.support)
+    for x in (evidence.score, evidence.support, evidence.normal_logits):
+        x.retain_grad()
+    target, groups = torch.tensor([0, 1, -1, 0]), torch.tensor([0, -1, -1, 19])
+    statistics = dict(pi_normal=1, pi_anomaly=0.5, class_weights=[1, 2, 3])
+    loss, parts, _ = nre_loss(
+        evidence, target, groups, SimpleNamespace(head=head), statistics, 999
+    )
+    normal_mean = F.softplus(evidence.score[[0, 3]]).mean()
+    anomaly_mean = F.softplus(-evidence.score[1])
+    torch.testing.assert_close(parts["detection"], 0.5 * normal_mean + anomaly_mean)
+    logp = evidence.normal_logits.log_softmax(1)
+    expected_sem = -(logp[0, 0] + 3 * logp[3, 2]) / (4 * np.log(3))
+    torch.testing.assert_close(parts["semantic"], expected_sem)
+    loss.backward()
+    assert evidence.score.grad[2] == evidence.support.grad[2] == 0
+    assert torch.count_nonzero(evidence.normal_logits.grad[2]) == 0
+    for p in (
+        shallow,
+        deep,
+        head.prototypes,
+        head.acceptance,
+        head.fusion[0].weight,
+        head.correction[-1].weight,
+    ):
+        assert p.grad is not None and p.grad.abs().sum() > 0
+    with torch.no_grad():
+        for bias in (-50, 50):
+            head.correction[-1].bias.fill_(bias)
+            values = NREEvidence(*head(shallow, deep, inverse, detail))
+            assert torch.all((values.score - values.support).abs() <= 2 + 1e-6)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="LitePT requires CUDA")
+def test_nre_shallow_features_preserve_backbone_rows_and_legacy_output():
+    model = AJAE().cuda().eval()
+    inputs = joint_voxelize(_window(512), device="cuda")
+    captured = []
+    hook = model.backbone.enc[0].register_forward_hook(
+        lambda _m, _a, point: captured.append(point.feat.detach().clone())
+    )
+    with torch.inference_mode():
+        torch.manual_seed(23)
+        original = model.backbone(inputs.backbone_input())
+        torch.manual_seed(23)
+        decoded, shallow = model.backbone(inputs.backbone_input(), return_shallow=True)
+    hook.remove()
+    assert torch.equal(original.feat, decoded.feat)
+    assert torch.equal(decoded.grid_coord, inputs.grid_coord)
+    assert torch.equal(shallow, captured[0]) and torch.equal(shallow, captured[1])
+
+
 def _window(count: int = 8, *, start: int = 0, labels: bool = True) -> SceneWindow:
     rng = np.random.default_rng(19)
     sources = []

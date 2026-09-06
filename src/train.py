@@ -132,6 +132,15 @@ def full_learning_rate(state):
     return FULL_CONFIG["lr_levels"][state["lr_level"]]
 
 
+def nre_learning_rate(state):
+    if state["successful_updates"] < 200:
+        return 3e-5 + (3e-4 - 3e-5) * state["successful_updates"] / 199
+    visit = state["planned_attempts"] + 1
+    if not 1 <= visit <= 28480:
+        raise ValueError("NRE learning rate requested outside its visit budget")
+    return 3e-4 if visit <= 14240 else 1e-4 if visit <= 21360 else 3e-5
+
+
 def advance_full_schedule(state, ap):
     """AP is in percentage units; only a strict >0.1 gain resets stagnation."""
     if ap is None or not np.isfinite(ap):
@@ -170,7 +179,14 @@ def choose_candidate(candidates):
     close = [
         candidate for candidate in candidates if best - candidate["AP"] <= 0.1 + 1e-12
     ]
-    return min(close, key=lambda c: (c["FPR95"], c["normal_fraction"], c["epoch"]))
+    return min(
+        close,
+        key=lambda c: (
+            c["FPR95"],
+            c["normal_fraction"],
+            c.get("visit", c.get("epoch")),
+        ),
+    )
 
 
 def finish_full_training(state):
@@ -455,6 +471,93 @@ def score_distribution(scores, target):
     }
 
 
+def nre_loss(evidence, target, groups, model, statistics, successful_updates):
+    """All visible valid points contribute; class presence weights are fixed from 206."""
+    score, support = evidence.score.float(), evidence.support.float()
+    normal, anomaly = target == 0, target == 1
+    if not torch.equal(groups >= 0, normal):
+        raise ValueError("normal groups must match binary-normal supervision exactly")
+    pi_n, pi_a = statistics["pi_normal"], statistics["pi_anomaly"]
+
+    def detection(values):
+        zero = values.sum() * 0
+        n = F.softplus(values[normal]).mean() if normal.any() else zero
+        a = F.softplus(-values[anomaly]).mean() if anomaly.any() else zero
+        return n / (2 * pi_n) + a / (2 * pi_a), n, a
+
+    det, normal_loss, anomaly_loss = detection(score)
+    base, _, _ = detection(support)
+    semantic = score.sum() * 0
+    tail = score.sum() * 0
+    usage = torch.zeros(
+        (len(model.head.active_groups), 4), device=score.device, dtype=torch.long
+    )
+    if normal.any():
+        lookup = torch.full((20,), -1, device=score.device, dtype=torch.long)
+        lookup[model.head.active_groups] = torch.arange(
+            len(model.head.active_groups), device=score.device
+        )
+        group = lookup[groups[normal]]
+        if (group < 0).any():
+            raise ValueError(
+                "a supervised normal group is absent from the support library"
+            )
+        weights = torch.tensor(
+            statistics["class_weights"], device=score.device, dtype=torch.float32
+        )
+        semantic = F.cross_entropy(
+            evidence.normal_logits[normal].float(), group, weight=weights
+        ) / np.log(len(weights))
+        hard = max(1, int(np.ceil(int(normal.sum()) * 0.01)))
+        tail = torch.topk(F.softplus(score[normal]), hard, sorted=False).values.mean()
+        chosen = (
+            evidence.prototype_choice[normal]
+            .gather(1, group[:, None])
+            .squeeze(1)
+            .long()
+        )
+        usage = torch.bincount(4 * group + chosen, minlength=len(weights) * 4).reshape(
+            -1, 4
+        )
+    # Successful update 1 has zero tail weight; update 1000 reaches 0.1.
+    tail_weight = 0.1 * min(successful_updates / 999, 1)
+    total = det + 0.25 * base + 0.5 * semantic + tail_weight * tail
+    return (
+        total,
+        dict(
+            detection=det,
+            support=base,
+            semantic=semantic,
+            tail=tail,
+            normal=normal_loss,
+            anomaly=anomaly_loss,
+        ),
+        dict(
+            tail_weight=tail_weight,
+            prototype_usage=usage.detach().cpu().tolist(),
+            thresholds=model.head.thresholds.detach().cpu().tolist(),
+            correction_near_bound_fraction=float(
+                (evidence.correction.detach().abs() >= 1.98).float().mean()
+            ),
+            correction_mean=float(evidence.correction.detach().mean()),
+        ),
+    )
+
+
+def nre_optimizer(model):
+    """No decay on prototype directions, acceptance, normalization parameters or biases."""
+    decay, no_decay = [], []
+    for name, parameter in model.named_parameters():
+        excluded = parameter.ndim == 1 or name in ("head.prototypes", "head.acceptance")
+        (no_decay if excluded else decay).append(parameter)
+    return torch.optim.AdamW(
+        [dict(params=decay, weight_decay=0.01), dict(params=no_decay, weight_decay=0)],
+        lr=3e-5,
+        betas=(0.9, 0.999),
+        eps=1e-8,
+    )
+
+
 def current_metrics(points, scores, semantic):
     """Use the retained official filter and AP, including the >=5 anomaly rule."""
     calculator = PointOODMetricsCalculator()
@@ -533,7 +636,7 @@ def host_disk():
         timeout=20,
     )
     volume = json.loads(result.stdout)
-    reserve = max(volume["Size"] * 0.05, 10 * 2**30)
+    reserve = 10_000_000_000  # Fixed 10 GB host reserve, as requested in AGENTS.md.
     if volume["SizeRemaining"] <= reserve:
         raise OSError("host E: has reached the required free-space reserve")
     return {**volume, "reserve_bytes": reserve}
@@ -987,9 +1090,16 @@ def run(data_root: Path, output: Path, *, group=None, initial=None, workers=1):
 
 
 def run_fulltrain(
-    data_root, output, initial, *, resume=False, updated_code=False, finish=False
+    data_root,
+    output,
+    initial,
+    *,
+    resume=False,
+    updated_code=False,
+    finish=False,
+    nre=None,
 ):
-    """Execute the predeclared full-pool training and two-stage candidate selection."""
+    """Train complete fixed pools and select only at the declared monitor visits."""
     from .evaluate import (
         assert_unchanged,
         evaluate_samples,
@@ -1001,6 +1111,8 @@ def run_fulltrain(
         run_full,
         select_full_candidates,
         verify_baseline,
+        run_real,
+        compare_real_results,
     )
 
     if not torch.cuda.is_available():
@@ -1011,18 +1123,82 @@ def run_fulltrain(
         raise ValueError("user finish requires an existing full-training checkpoint")
     if any(
         output.resolve().is_relative_to((PROJECT_ROOT / p).resolve())
-        for p in ("runs/history/learning", "runs/history/coverage", "runs/history/validation", "runs/history/transfer")
+        for p in (
+            "runs/history/learning",
+            "runs/history/coverage",
+            "runs/history/validation",
+            "runs/history/transfer",
+        )
     ):
         raise ValueError("formal training must preserve earlier evidence directories")
     torch.set_num_threads(1)
     protocol = load_protocol()
-    samples = training_samples(protocol.training_pool, full=True)
-    monitors = monitor_samples(protocol.validation_pool)
-    if len(samples) != 3080:
-        raise ValueError("formal training must use all 3080 frozen windows")
+    if nre:
+        from .data import observation_pool, normal_group_targets
+        from .scene import STUSequence, LabelMode
+
+        pool, _ = observation_pool("train")
+        validation_pool, _ = observation_pool("validation")
+        statistics = json.loads((PROJECT_ROOT / nre["labels"]).read_text())
+        if statistics["manifest_sha256"] != file_hash(
+            PROJECT_ROOT / "artifacts/data/v2/train/manifest.json"
+        ):
+            raise ValueError("NRE supervision weights describe another training pool")
+        config = {
+            key: FULL_CONFIG[key]
+            for key in (
+                "seed",
+                "voxel_size",
+                "batch_size",
+                "gradient_accumulation",
+                "optimizer",
+                "max_grad_norm",
+                "initial_loss_scale",
+                "consecutive_overflow_limit",
+                "augmentation",
+            )
+        }
+        config.update(
+            purpose="AJAE-NRE",
+            epochs=2,
+            windows_per_epoch=14240,
+            planned_steps=28480,
+            nre=nre,
+        )
+        monitors = json.loads((PROJECT_ROOT / nre["monitor"]).read_text())["windows"]
+        if len(monitors) != 464 or [
+            sum(s["view"] == v for s in monitors)
+            for v in ("real", "synthetic", "normal")
+        ] != [304, 128, 32]:
+            raise ValueError("NRE requires the fixed 304 + 128 + 32 monitor")
+    else:
+        config = FULL_CONFIG
+        pool, validation_pool = protocol.training_pool, protocol.validation_pool
+        monitors = monitor_samples(validation_pool)
+    count, passes = config["windows_per_epoch"], config["epochs"]
+    interval = 7120 if nre else count
+    intervals = config["planned_steps"] // interval
+    completed_key = "completed_monitors" if nre else "completed_epochs"
+    results_key = "monitor_results" if nre else "epoch_results"
+    samples = training_samples(pool, full=True)
+    if len(samples) != count:
+        raise ValueError("full training must visit every fixed pool window")
     resources = FullResources()
     snapshot = resources()
-    baseline, disk_estimate = verify_baseline(initial, monitors)
+    if nre:
+        budget = json.loads((PROJECT_ROOT / "protocols/nre/storage.json").read_text())
+        if budget["manifest_sha256"] != file_hash(
+            PROJECT_ROOT / "artifacts/data/v2/validation/manifest.json"
+        ) or budget["monitor_sha256"] != file_hash(PROJECT_ROOT / nre["monitor"]):
+            raise ValueError("NRE storage inventory describes different samples")
+        baseline = json.loads((PROJECT_ROOT / "runs/train/v1/plan.json").read_text())[
+            "initial_checkpoint"
+        ]
+        if file_hash(initial) != baseline["sha256"]:
+            raise ValueError("NRE must restore the original untrained backbone")
+        disk_estimate = budget["peak_new_bytes"]
+    else:
+        baseline, disk_estimate = verify_baseline(initial, monitors)
     plan_path = output / "plan.json"
     source_names = [
         "protocol.json",
@@ -1040,6 +1216,14 @@ def run_fulltrain(
         str(p.relative_to(PROJECT_ROOT))
         for p in (PROJECT_ROOT / "vendor").rglob("*.py")
     ]
+    if nre:
+        source_names += [
+            "protocols/nre/config.json",
+            nre["labels"],
+            nre["monitor"],
+            "artifacts/data/v2/train/manifest.json",
+            "artifacts/data/v2/validation/manifest.json",
+        ]
     sources = {name: file_hash(PROJECT_ROOT / name) for name in sorted(source_names)}
     if resume:
         plan = json.loads(plan_path.read_text())
@@ -1066,21 +1250,30 @@ def run_fulltrain(
             plan["samples"] != samples
             or plan["monitor_samples"] != monitors
             or plan["baseline"] != baseline
-            or plan["config"] != json.loads(json.dumps(FULL_CONFIG))
+            or plan["config"] != json.loads(json.dumps(config))
         ):
             raise ValueError(
                 "resume source, data, initialization, or configuration changed"
             )
-        written = sum(p.stat().st_size for p in output.rglob("*") if p.is_file())
+        inodes = {}
+        for directory in [
+            output,
+            *([PROJECT_ROOT / nre["paths"]["evaluation"]] if nre else []),
+        ]:
+            for path in directory.rglob("*"):
+                if path.is_file():
+                    stat = path.stat()
+                    inodes[(stat.st_dev, stat.st_ino)] = stat.st_size
+        written = sum(inodes.values())
         remaining_disk = max(0, plan["estimated_peak_disk_bytes"] - written)
     else:
         generator = np.random.default_rng(23)
-        schedule = [int(i) for _ in range(10) for i in generator.permutation(3080)]
+        schedule = [int(i) for _ in range(passes) for i in generator.permutation(count)]
         plan = {
-            "config": FULL_CONFIG,
+            "config": config,
             "samples": samples,
             "monitor_samples": monitors,
-            "full_validation_samples": full_samples(protocol.validation_pool),
+            "full_validation_samples": full_samples(validation_pool),
             "schedule": schedule,
             "sampler_random_state": generator.bit_generator.state,
             "source_sha256": sources,
@@ -1119,14 +1312,36 @@ def run_fulltrain(
             "matmul_precision": torch.get_float32_matmul_precision(),
             "cudnn_benchmark": torch.backends.cudnn.benchmark,
         }
+        if nre:
+            plan.update(storage=budget, label_statistics=statistics)
         remaining_disk = disk_estimate
     volume = host_disk()  # Re-query immediately before any substantial writes.
     if volume["SizeRemaining"] - remaining_disk < volume["reserve_bytes"]:
         raise OSError("measured full-training peak would invade the E: reserve")
     train_data = FrozenWindowDataset(
-        data_root, protocol, pool_name="train", segment_cache_bytes=256 * 2**20
+        data_root,
+        protocol,
+        pool_name="train",
+        segment_cache_bytes=256 * 2**20,
+        version="v2" if nre else "v1",
     )
-    validation_data = FrozenWindowDataset(data_root, protocol, pool_name="validation")
+    validation_data = FrozenWindowDataset(
+        data_root, protocol, pool_name="validation", version="v2" if nre else "v1"
+    )
+    real_data = (
+        {
+            i: STUSequence.open(
+                data_root,
+                protocol=protocol,
+                partition="val",
+                sequence_id=i,
+                label_mode=LabelMode.REQUIRED,
+            )
+            for i in protocol.public_sequence_ids
+        }
+        if nre
+        else None
+    )
     if (
         not train_data.gradient_updates_allowed
         or validation_data.gradient_updates_allowed
@@ -1136,9 +1351,27 @@ def run_fulltrain(
         output.mkdir(parents=True)
         _atomic_json(plan_path, plan)
     seed_all(23)
-    model = AJAE(0.05).cuda().train()
-    optimizer = torch.optim.AdamW(
-        model.parameters(), lr=3e-5, betas=(0.9, 0.999), eps=1e-8, weight_decay=1e-2
+    model = (
+        AJAE(
+            0.05,
+            **(
+                dict(
+                    normal_groups=statistics["active_groups"],
+                    point_chunk_size=nre["model"]["point_chunk_size"],
+                )
+                if nre
+                else {}
+            ),
+        )
+        .cuda()
+        .train()
+    )
+    optimizer = (
+        nre_optimizer(model)
+        if nre
+        else torch.optim.AdamW(
+            model.parameters(), lr=3e-5, betas=(0.9, 0.999), eps=1e-8, weight_decay=1e-2
+        )
     )
     scaler = torch.amp.GradScaler("cuda", init_scale=128)
     if resume:
@@ -1184,9 +1417,19 @@ def run_fulltrain(
             or payload["config"]["voxel_size"] != 0.05
         ):
             raise ValueError("initial.pt must be the original untrained seed-23 state")
-        model.load_state_dict(payload["model"], strict=True)
-        assert_unchanged(model, payload["model"])
-        restore_random_state(payload["random_state"])
+        if nre:
+            backbone = {
+                key.removeprefix("backbone."): value
+                for key, value in payload["model"].items()
+                if key.startswith("backbone.")
+            }
+            model.backbone.load_state_dict(backbone, strict=True)
+            assert_unchanged(model.backbone, backbone)
+            del backbone
+        else:
+            model.load_state_dict(payload["model"], strict=True)
+            assert_unchanged(model, payload["model"])
+            restore_random_state(payload["random_state"])
         if optimizer.state or scaler.state_dict() != payload["scaler"]:
             raise RuntimeError("formal optimizer and loss scaler must be fresh")
         state = {
@@ -1204,19 +1447,26 @@ def run_fulltrain(
             "low_lr_epochs": 0,
             "low_lr_bad_epochs": 0,
             "elapsed_seconds": 0.0,
-            "visits": [[0] * 3080 for _ in range(10)],
-            "updates": [[0] * 3080 for _ in range(10)],
-            "epoch_results": [],
+            "visits": [[0] * count for _ in range(passes)],
+            "updates": [[0] * count for _ in range(passes)],
+            results_key: [],
+            completed_key: 0,
             "monitor_candidates": [],
             "epoch_loss_sums": [
-                {key: 0.0 for key in ("normal", "anomaly", "total")} for _ in range(10)
+                {key: 0.0 for key in ("normal", "anomaly", "total")}
+                for _ in range(passes)
             ],
             "epoch_loss_counts": [
-                {key: 0 for key in ("normal", "anomaly", "total")} for _ in range(10)
+                {key: 0 for key in ("normal", "anomaly", "total")}
+                for _ in range(passes)
             ],
         }
     del payload
     if finish:
+        if nre:
+            raise ValueError(
+                "NRE uses the fixed visit budget; no inherited v1 epoch-stop rule"
+            )
         finish_full_training(state)
     gc.collect()
     if resume:
@@ -1257,7 +1507,7 @@ def run_fulltrain(
     def save_state(path):
         state["elapsed_seconds"] = elapsed()
         checkpoint = {
-            "config": FULL_CONFIG,
+            "config": config,
             "plan_sha256": file_hash(plan_path),
             "state": state,
             "model": model.state_dict(),
@@ -1280,7 +1530,7 @@ def run_fulltrain(
             finally:
                 temporary.unlink(missing_ok=True)
 
-    resources = FullResources(emit, elapsed, timed=True)
+    resources = FullResources(emit, elapsed, timed=not nre)
     interrupted = []
     handlers = {
         s: signal.signal(s, lambda signum, frame: interrupted.append(signum))
@@ -1312,12 +1562,13 @@ def run_fulltrain(
         )
         if not resume:
             save_state(output / "last.pt")
-        while state["completed_epochs"] < 10 and state["phase"] != "selection":
-            epoch = state["completed_epochs"] + 1
-            if state["next_position"] == 3080:
+        while state[completed_key] < intervals and state["phase"] != "selection":
+            epoch = state[completed_key] + 1
+            pass_index = (epoch - 1) * interval // count
+            if state["next_position"] == interval:
                 state["phase"] = "monitor"
             if state["phase"] == "training":
-                sequence = plan["schedule"][(epoch - 1) * 3080 : epoch * 3080]
+                sequence = plan["schedule"][(epoch - 1) * interval : epoch * interval]
                 with ThreadPoolExecutor(max_workers=1) as loader:
                     check_resources()
                     prepared = loader.submit(
@@ -1326,7 +1577,7 @@ def run_fulltrain(
                         None,
                         samples[sequence[state["next_position"]]],
                     )
-                    for position in range(state["next_position"], 3080):
+                    for position in range(state["next_position"], interval):
                         check_resources()
                         begin = time.monotonic()
                         index = sequence[position]
@@ -1336,7 +1587,7 @@ def run_fulltrain(
                         )
                         wait_seconds = time.monotonic() - begin
                         del prepared
-                        if position + 1 < 3080:
+                        if position + 1 < interval:
                             prepared = loader.submit(
                                 prepare_window,
                                 train_data,
@@ -1350,19 +1601,53 @@ def run_fulltrain(
                         )
                         torch.cuda.synchronize()
                         transfer_seconds = time.monotonic() - begin
-                        lr = full_learning_rate(state)
+                        lr = (
+                            nre_learning_rate(state)
+                            if nre
+                            else full_learning_rate(state)
+                        )
                         for group in optimizer.param_groups:
                             group["lr"] = lr
                         optimizer.zero_grad(set_to_none=True)
                         model.train()
                         begin = time.monotonic()
                         with torch.autocast("cuda", dtype=torch.float16):
-                            logits = model(window, inputs=inputs)
-                            loss, parts = balanced_loss(logits, target)
+                            details, observations = {}, {}
+                            if nre:
+                                groups = torch.tensor(
+                                    normal_group_targets(window.labels), device="cuda"
+                                )
+                                evidence = model(
+                                    window, inputs=inputs, return_evidence=True
+                                )
+                                logits = evidence.score
+                                loss, details, observations = nre_loss(
+                                    evidence,
+                                    target,
+                                    groups,
+                                    model,
+                                    statistics,
+                                    state["successful_updates"],
+                                )
+                                parts = {
+                                    key: details[key]
+                                    for key, present in (
+                                        ("normal", (target == 0).any()),
+                                        ("anomaly", (target == 1).any()),
+                                    )
+                                    if present
+                                }
+                            else:
+                                logits = model(window, inputs=inputs)
+                                loss, parts = balanced_loss(logits, target)
                         if not torch.isfinite(loss):
                             emit(
                                 "failed_window",
-                                epoch=epoch,
+                                **(
+                                    {"monitor_interval": epoch, "pass": pass_index + 1}
+                                    if nre
+                                    else {"epoch": epoch}
+                                ),
                                 position=position,
                                 sample=sample,
                                 reason="nonfinite loss",
@@ -1374,15 +1659,15 @@ def run_fulltrain(
                         compute_seconds = time.monotonic() - begin
                         state["planned_attempts"] += 1
                         state["next_position"] = position + 1
-                        state["visits"][epoch - 1][index] += 1
+                        state["visits"][pass_index][index] += 1
                         for key, value in {"total": loss, **parts}.items():
-                            state["epoch_loss_sums"][epoch - 1][key] += float(
+                            state["epoch_loss_sums"][pass_index][key] += float(
                                 value.detach()
                             )
-                            state["epoch_loss_counts"][epoch - 1][key] += 1
+                            state["epoch_loss_counts"][pass_index][key] += 1
                         if update["updated"]:
                             state["successful_updates"] += 1
-                            state["updates"][epoch - 1][index] += 1
+                            state["updates"][pass_index][index] += 1
                             state["consecutive_overflows"] = 0
                             if initial_parameters is not None:
                                 emit(
@@ -1398,12 +1683,26 @@ def run_fulltrain(
                         emit(
                             "train_step",
                             step=state["planned_attempts"],
-                            epoch=epoch,
+                            **(
+                                {"monitor_interval": epoch, "pass": pass_index + 1}
+                                if nre
+                                else {"epoch": epoch}
+                            ),
                             position=position,
                             sample=sample,
                             lr=lr,
                             loss=float(loss),
                             class_loss={k: float(v) for k, v in parts.items()},
+                            **(
+                                dict(
+                                    nre_loss={
+                                        k: float(v.detach()) for k, v in details.items()
+                                    },
+                                    nre_observations=observations,
+                                )
+                                if nre
+                                else {}
+                            ),
                             normal_count=int((target == 0).sum()),
                             anomaly_count=int((target == 1).sum()),
                             ignore_count=int((target == -1).sum()),
@@ -1418,6 +1717,9 @@ def run_fulltrain(
                             **update,
                         )
                         del inputs, cpu_inputs, target, logits, loss, parts, window
+                        if nre:
+                            del evidence, groups
+                        details, observations = {}, {}
                         optimizer.zero_grad(set_to_none=True)
                         if state["planned_attempts"] == 32:
                             resources.last_host_check = -float("inf")
@@ -1448,6 +1750,72 @@ def run_fulltrain(
                 save_state(output / "last.pt")
             check_resources()
             monitor_path = output / f"monitor_{epoch:02d}"
+            if nre:
+                result = {}
+                for domain in ("real", "synthetic"):
+                    result[domain] = evaluate_samples(
+                        model,
+                        real_data if domain == "real" else validation_data,
+                        [
+                            s
+                            for s in monitors
+                            if (s["view"] == "real") == (domain == "real")
+                        ],
+                        monitor_path / domain,
+                        identity=dict(
+                            plan_sha256=file_hash(plan_path),
+                            visit=state["planned_attempts"],
+                            model_sha256=model_digest(model),
+                            monitor=True,
+                            scope="real_val"
+                            if domain == "real"
+                            else "nre_synthetic_monitor",
+                        ),
+                        check_resources=check_resources,
+                    )
+                if (
+                    state["planned_attempts"] % count == 0
+                    and state["visits"][pass_index] != [1] * count
+                ):
+                    raise RuntimeError(
+                        "completed NRE pass did not visit each window exactly once"
+                    )
+                state["completed_monitors"] = epoch
+                state["completed_epochs"] = state["planned_attempts"] // count
+                candidate_path = output / f"visit_{state['planned_attempts']:05d}.pt"
+                real_result = result["real"]
+                candidate = dict(
+                    name=candidate_path.stem,
+                    visit=state["planned_attempts"],
+                    scope="fixed_real_304",
+                    **{
+                        k: real_result["all_frames"][k]
+                        for k in ("AP", "AUROC", "FPR95")
+                    },
+                    normal_fraction=real_result["normal_without_anomaly_returns"][
+                        "fraction_ge_0"
+                    ],
+                    checkpoint=str(candidate_path.resolve()),
+                    evaluation=str(monitor_path.resolve()),
+                )
+                state["monitor_candidates"].append(candidate)
+                state[results_key].append(
+                    dict(
+                        candidate,
+                        completed_passes=state["completed_epochs"],
+                        successful_updates=state["successful_updates"],
+                        real=real_result,
+                        synthetic=result["synthetic"],
+                    )
+                )
+                state["next_position"] = 0
+                state["phase"] = "selection" if epoch == intervals else "training"
+                if state["phase"] == "selection":
+                    state["status"] = "planned_visit_budget_completed"
+                save_state(candidate_path)
+                save_state(output / "last.pt")
+                emit("monitor_complete", **candidate, status=state["status"])
+                continue
             result = evaluate_samples(
                 model,
                 validation_data,
@@ -1537,14 +1905,54 @@ def run_fulltrain(
         for signum, handler in handlers.items():
             signal.signal(signum, handler)
         log.close()
-    model = optimizer = scaler = train_data = validation_data = initial_parameters = (
-        None
-    )
+    model = optimizer = scaler = train_data = validation_data = real_data = (
+        initial_parameters
+    ) = None
     inputs = cpu_inputs = target = logits = loss = parts = window = prepared = None
+    evidence = groups = details = None
     gc.collect()
     torch.cuda.empty_cache()
     if not state["monitor_candidates"]:
         return state
+    if nre:
+        if state["phase"] != "selection" or state["completed_monitors"] != intervals:
+            return state
+        best = choose_candidate(state["monitor_candidates"])
+        selection = dict(
+            rule=nre["selection"],
+            candidates=state["monitor_candidates"],
+            selected=best,
+            checkpoint_sha256=file_hash(Path(best["checkpoint"])),
+        )
+        path = output / "selection.json"
+        if path.exists():
+            if json.loads(path.read_text()) != selection:
+                raise ValueError("NRE candidate was already fixed differently")
+        else:
+            _atomic_json(path, selection)
+        evaluation = PROJECT_ROOT / nre["paths"]["evaluation"]
+        synthetic_result = run_full(
+            data_root, Path(best["checkpoint"]), evaluation / "synthetic", nre=nre
+        )
+        real_result = run_real(
+            data_root, evaluation / "real", checkpoint=Path(best["checkpoint"]), nre=nre
+        )
+        baseline_real = PROJECT_ROOT / "runs/eval/v1/real/summary.json"
+        result = {
+            **state,
+            "selection": selection,
+            "synthetic_evaluation": synthetic_result,
+            "real_evaluation": real_result,
+            "v1_real_comparison": {
+                "baseline": str(baseline_real),
+                "scope": "v2 data and NRE model changed together; public development results only",
+                **compare_real_results(
+                    real_result, json.loads(baseline_real.read_text())
+                ),
+            },
+        }
+        write_progress(output / "summary.json", result)
+        return result
     # Partial epochs never enter selection. Resource stops still retain completed candidates.
     best = choose_candidate(state["monitor_candidates"])
     last = state["monitor_candidates"][-1]
@@ -1711,10 +2119,15 @@ if __name__ == "__main__":
     )
     parser.add_argument("--initial", type=Path, default=Path("runs/train/initial.pt"))
     parser.add_argument(
-        "--validation-samples", type=Path, default=Path("runs/history/transfer/samples.json")
+        "--validation-samples",
+        type=Path,
+        default=Path("runs/history/transfer/samples.json"),
     )
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--full", action="store_true", help="execute AJAE-FullTrain-v1")
+    parser.add_argument(
+        "--nre", action="store_true", help="execute the single AJAE-NRE v2 recipe"
+    )
     parser.add_argument(
         "--updated-code",
         action="store_true",
@@ -1731,22 +2144,31 @@ if __name__ == "__main__":
         help="end full training at a saved complete epoch and run final selection",
     )
     args = parser.parse_args()
-    if args.resume and not args.full:
-        parser.error("--resume requires --full")
+    if args.resume and not (args.full or args.nre):
+        parser.error("--resume requires --full or --nre")
     if args.updated_code and not args.resume:
         parser.error("--updated-code requires --resume")
     if args.finish and not args.resume:
         parser.error("--finish requires --resume")
-    if args.full:
-        if args.coverage:
-            parser.error("--full and --coverage are separate experiments")
+    if sum((args.full, args.nre, args.coverage)) > 1:
+        parser.error("--full, --nre and --coverage are separate experiments")
+    if args.nre and args.finish:
+        parser.error("NRE ends at its fixed visit budget")
+    if args.full or args.nre:
+        recipe = (
+            json.loads((PROJECT_ROOT / "protocols/nre/config.json").read_text())
+            if args.nre
+            else None
+        )
         run_fulltrain(
             args.data_root,
-            args.output or Path("runs/train/v1"),
+            args.output
+            or Path(recipe["paths"]["training"] if recipe else "runs/train/v1"),
             args.initial,
             resume=args.resume,
             updated_code=args.updated_code,
             finish=args.finish,
+            nre=recipe,
         )
     elif args.coverage:
         run_coverage(
@@ -1757,4 +2179,8 @@ if __name__ == "__main__":
             args.workers,
         )
     else:
-        run(args.data_root, args.output or Path("runs/history/learning"), workers=args.workers)
+        run(
+            args.data_root,
+            args.output or Path("runs/history/learning"),
+            workers=args.workers,
+        )

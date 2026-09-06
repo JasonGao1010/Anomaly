@@ -312,7 +312,33 @@ def test_full_schedule_successful_warmup_and_two_complete_low_rate_epochs():
     assert state["low_lr_bad_epochs"] == 0
 
 
-def test_full_selection_uses_global_ap_band_and_one_scope():
+def test_nre_learning_rate_uses_visits_after_successful_update_warmup():
+    from src.train import nre_learning_rate
+
+    state = dict(successful_updates=0, planned_attempts=0)
+    assert nre_learning_rate(state) == pytest.approx(3e-5)
+    # An overflow consumes a visit but does not advance successful-update warmup.
+    state["planned_attempts"] = 1
+    assert nre_learning_rate(state) == pytest.approx(3e-5)
+    state.update(successful_updates=199, planned_attempts=200)
+    assert nre_learning_rate(state) == pytest.approx(3e-4)
+    state["successful_updates"] = 200
+    for completed, expected in (
+        (14239, 3e-4),
+        (14240, 1e-4),
+        (21359, 1e-4),
+        (21360, 3e-5),
+        (28479, 3e-5),
+    ):
+        state["planned_attempts"] = completed
+        assert nre_learning_rate(state) == expected
+    state["planned_attempts"] = 28480
+    with pytest.raises(ValueError, match="visit budget"):
+        nre_learning_rate(state)
+
+
+@pytest.mark.parametrize("position", ["epoch", "visit"])
+def test_full_selection_uses_global_ap_band_and_one_scope(position):
     from src.train import choose_candidate
 
     def candidate(name, ap, fpr, normal, epoch):
@@ -321,7 +347,7 @@ def test_full_selection_uses_global_ap_band_and_one_scope():
             "AP": ap,
             "FPR95": fpr,
             "normal_fraction": normal,
-            "epoch": epoch,
+            position: epoch,
             "scope": "complete_201",
         }
 

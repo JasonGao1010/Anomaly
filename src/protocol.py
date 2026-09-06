@@ -252,6 +252,7 @@ class SyntheticPoolSpec:
     declared_world_count: int
     declared_windows_per_sequence: int
     declared_total_window_count: int
+    namespace: str = ""
 
     def __post_init__(self) -> None:
         _string(self.name, "pool name")
@@ -304,7 +305,8 @@ class SyntheticPoolSpec:
         index = _integer(sequence_index, "synthetic sequence index")
         if index >= self.synthetic_sequence_count:
             raise IndexError(index)
-        return f"synthetic/{self.name}/{index:03d}"
+        prefix = f"{self.namespace}/" if self.namespace else ""
+        return f"synthetic/{prefix}{self.name}/{index:03d}"
 
     def world_seed(self, sequence_index: int, segment_index: int) -> int:
         sequence = _integer(sequence_index, "synthetic sequence index")

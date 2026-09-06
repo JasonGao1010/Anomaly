@@ -23,6 +23,31 @@ from src.train import fixed_check
 from vendor.stu.compute_point_level_ood import PointOODMetricsCalculator
 
 
+def test_signed_logit_pooling_preserves_unsaturated_order_and_zero_threshold(tmp_path):
+    from sklearn.metrics import average_precision_score, roc_auc_score
+    from src.evaluate import bits_score, normal_files
+
+    scores = np.array([-80, -4, -0.0, 0.0, 4, 80, 81, 81], np.float32)
+    target = np.array([0, 0, 1, 0, 1, 0, 1, 0])
+    packed = packed_scores(scores, target, score_kind="logit")
+    np.testing.assert_array_equal(
+        bits_score((packed >> 1).astype(np.uint32), "logit"), scores
+    )
+    for chunk in (1, 3, 100):
+        result = exact_metrics(np.sort(packed), chunk_size=chunk, score_kind="logit")
+        assert result["AP"] == pytest.approx(
+            100 * average_precision_score(target, scores)
+        )
+        assert result["AUROC"] == pytest.approx(100 * roc_auc_score(target, scores))
+    for raw in (True, False):
+        path = tmp_path / f"{raw}.bin"
+        (scores if raw else packed).tofile(path)
+        result = normal_files([path], float32=raw, score_kind="logit")
+        assert result["count_ge_0"] == 6
+        assert result["median"] == float(np.median(scores))
+        assert result["p95"] == pytest.approx(float(np.quantile(scores, 0.95)))
+
+
 def test_earlier_middle_selection_and_paired_frames():
     pool = load_protocol().validation_pool
     samples = select_samples(pool)
@@ -353,8 +378,10 @@ def test_float32_normal_records_keep_exact_quantiles_without_sort_copy(tmp_path,
     )
 
 
-def test_real_pooling_includes_startup_and_keeps_normal_only_frames(tmp_path):
+@pytest.mark.parametrize("kind", ["probability", "logit"])
+def test_real_pooling_includes_startup_and_keeps_normal_only_frames(tmp_path, kind):
     from src.evaluate import save_window, summarize_real
+    from src.data import PredictionBatch
     from src.protocol import SequenceSpec, FrameSpan
     from src.scene import PointLabels, make_source_frame, assemble_window
 
@@ -380,6 +407,8 @@ def test_real_pooling_includes_startup_and_keeps_normal_only_frames(tmp_path):
             spec, 0, tuple(range(current + 1)), sources, startup=current < 4
         )
         scores = np.linspace(0, 1, window.points.count, dtype=np.float32)
+        if kind == "logit":
+            scores = 40 * scores - 20
         row = save_window(
             tmp_path,
             dict(
@@ -387,6 +416,7 @@ def test_real_pooling_includes_startup_and_keeps_normal_only_frames(tmp_path):
                 sequence_index=125,
                 current_frame=current,
                 scope="startup" if current < 4 else "full",
+                score_kind=kind,
             ),
             window,
             scores,
@@ -395,6 +425,11 @@ def test_real_pooling_includes_startup_and_keeps_normal_only_frames(tmp_path):
             {},
         )
         rows.append(row)
+        restored = PredictionBatch.load(
+            tmp_path / row["prediction"]["file"], window=window
+        )
+        assert restored.score_kind == kind
+        np.testing.assert_array_equal(restored.anomaly_score, scores)
         raw = window.current_frame.source.restore_real(scores[window.current_mask])
         reference.update(points[:, :3], raw, semantic)
         if current == 4:
@@ -409,3 +444,12 @@ def test_real_pooling_includes_startup_and_keeps_normal_only_frames(tmp_path):
     assert result["normal_without_anomaly_returns"]["frame_count"] == 2
     assert result["normal_without_anomaly_returns"]["point_count"] == 22
     assert result["ineligible_frames"]["one_to_four_official_anomaly_points"] == 1
+    monitor = summarize_real(
+        rows, tmp_path, check_resources=lambda: None, continuous=False
+    )
+    assert monitor["all_frames"] == result["all_frames"]
+    assert (
+        monitor["normal_without_anomaly_returns"]
+        == result["normal_without_anomaly_returns"]
+    )
+    assert "full_history" not in monitor

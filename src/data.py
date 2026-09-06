@@ -201,8 +201,11 @@ class PredictionBatch:
     source_frame: np.ndarray
     source_slot: np.ndarray
     anomaly_score: np.ndarray
+    score_kind: str = "probability"
 
     def __post_init__(self) -> None:
+        if self.score_kind not in ("probability", "logit"):
+            raise DataProtocolError("unknown anomaly score kind")
         count = int(self.source_frame.size)
         if (
             not isinstance(self.observation_sequence_id, str)
@@ -238,7 +241,9 @@ class PredictionBatch:
             object.__setattr__(self, name, array)
 
     @classmethod
-    def from_window(cls, window: SceneWindow, scores: np.ndarray) -> "PredictionBatch":
+    def from_window(
+        cls, window: SceneWindow, scores: np.ndarray, *, score_kind="probability"
+    ) -> "PredictionBatch":
         values = np.asarray(scores, dtype=np.float32)
         if values.shape != (window.points.count,):
             raise DataProtocolError("a model must score every point in the window")
@@ -248,6 +253,7 @@ class PredictionBatch:
             window.points.source_frame.copy(),
             window.points.source_slot.copy(),
             values.copy(),
+            score_kind,
         )
         result.validate_window(window)
         return result
@@ -290,6 +296,8 @@ class PredictionBatch:
             "window_current_frame": self.window_current_frame,
             "point_count": int(self.anomaly_score.size),
         }
+        if self.score_kind == "logit":
+            metadata["score_kind"] = self.score_kind
         metadata["content_hash"] = _prediction_content_hash(metadata, arrays)
         payload = dict(arrays)
         # Slot deltas compress monotone identities; content hashes bind decoded rows.
@@ -347,7 +355,7 @@ class PredictionBatch:
             metadata = json.loads(str(payload["metadata_json"].item()))
         content_hash = metadata.pop("content_hash", None)
         if (
-            set(metadata)
+            set(metadata) - {"score_kind"}
             != {
                 "format",
                 "synthetic_or_raw_sequence_id",
@@ -355,6 +363,7 @@ class PredictionBatch:
                 "point_count",
             }
             or metadata.get("format") != PREDICTION_FORMAT
+            or metadata.get("score_kind", "probability") not in ("probability", "logit")
             or not isinstance(metadata.get("synthetic_or_raw_sequence_id"), str)
             or not metadata["synthetic_or_raw_sequence_id"]
             or type(metadata.get("window_current_frame")) is not int
@@ -368,6 +377,7 @@ class PredictionBatch:
             arrays["source_frame"],
             arrays["source_slot"],
             arrays["anomaly_score"],
+            metadata.get("score_kind", "probability"),
         )
         result.validate_window(window)
         return result
@@ -1065,19 +1075,24 @@ class FrozenWindowDataset:
         *,
         pool_name: str,
         segment_cache_bytes: int = 0,
+        version: str = "v1",
     ) -> None:
         if (
             not protocol.status["data_pool_frozen"]
             or not protocol.status["training_allowed"]
         ):
             raise DataProtocolError("training data must be frozen and qualified")
-        self.pool = _pool_spec(protocol, pool_name)
-        # No window is exposed until the qualification, both manifests, and all files pass.
-        manifests = {
-            pool.name: load_pool_manifest(protocol, pool)
-            for pool in (protocol.training_pool, protocol.validation_pool)
-        }
-        self.manifest = manifests[pool_name]
+        if version == "v2":
+            self.pool, self.manifest = observation_pool(pool_name)
+        elif version == "v1":
+            self.pool = _pool_spec(protocol, pool_name)
+            manifests = {
+                pool.name: load_pool_manifest(protocol, pool)
+                for pool in (protocol.training_pool, protocol.validation_pool)
+            }
+            self.manifest = manifests[pool_name]
+        else:
+            raise DataProtocolError("unknown frozen data version")
         self.protocol = protocol
         self.source_sequence = STUSequence.open(
             data_root,
@@ -1161,6 +1176,165 @@ class FrozenWindowDataset:
             self._segment = segment
             self._segment_index = segment_index
         return self._segment, start
+
+
+def observation_pool(pool_name):
+    """Read completed v2 observations; never substitute pilots or rerender a frame."""
+    from .protocol import FrameSpan
+
+    config = json.loads(
+        (PROJECT_ROOT / "protocols/observation_match_v2/config.json").read_text()
+    )
+    pools, manifests, seeds, identities = {}, {}, set(), set()
+    for name, source, frames, worlds in (
+        ("train", 206, 449, 32),
+        ("validation", 201, 682, 8),
+    ):
+        spec = config["pools"][name]
+        directory = PROJECT_ROOT / config["paths"]["data"] / name
+        path = directory / "manifest.json"
+        fixed = config["completion"]["pools"][name]
+        if _sha256(path) != fixed["manifest_sha256"]:
+            raise DataProtocolError("completed v2 manifest changed")
+        manifest = json.loads(path.read_text())
+        if (
+            manifest["pilot_round"],
+            manifest["source_sequence_id"],
+            manifest["world_count"],
+            manifest["window_count"],
+            len(manifest["segments"]),
+        ) != (0, source, worlds, worlds * (frames - 4), worlds):
+            raise DataProtocolError("v2 source roles or full-sequence coverage differ")
+        pool = SyntheticPoolSpec(
+            name,
+            source,
+            worlds,
+            (FrameSpan(0, frames),),
+            spec["seed_base"],
+            str(directory),
+            worlds,
+            frames - 4,
+            worlds * (frames - 4),
+            "v2",
+        )
+        for index, record in enumerate(manifest["segments"]):
+            path = directory / f"world_{index:03d}.npz"
+            if any(
+                (
+                    record["file"] != path.name,
+                    record["synthetic_sequence_id"]
+                    != pool.synthetic_sequence_id(index),
+                    record["synthetic_sequence_index"] != index,
+                    record["segment_index"] != 0,
+                    record["seed"] != pool.world_seed(index, 0),
+                    record["frame_range_inclusive"] != [0, frames - 1],
+                    record["window_count"] != frames - 4,
+                    record["seed"] in seeds,
+                    record["world_content_identity"] in identities,
+                    _sha256(path) != record["file_sha256"],
+                )
+            ):
+                raise DataProtocolError(
+                    "v2 identity, independence or full window range differs"
+                )
+            seeds.add(record["seed"])
+            identities.add(record["world_content_identity"])
+            record["file"] = str(path)
+        pools[name], manifests[name] = pool, manifest
+    return pools[pool_name], manifests[pool_name]
+
+
+def normal_group_targets(labels):
+    """Only binary-normal returns receive a semantic group; ignore remains ignore."""
+    if labels.semantic_target is None:
+        raise DataProtocolError(
+            "fine semantic supervision is unavailable on real anomaly val"
+        )
+    groups = np.full(labels.semantic.shape, -1, np.int64)
+    normal = labels.anomaly_target == 0
+    groups[normal] = np.where(
+        labels.semantic_target[normal] == 255, 19, labels.semantic_target[normal]
+    )
+    return groups
+
+
+def training_label_statistics(data_root):
+    """Count actual v2 supervision by reusing each source scan across sparse worlds."""
+    pool, manifest = observation_pool("train")
+    protocol = load_protocol()
+    sequence = STUSequence.open(
+        data_root,
+        protocol=protocol,
+        partition="train",
+        sequence_id=206,
+        label_mode=LabelMode.REQUIRED,
+    )
+    counts = np.zeros((32, 449, 20), np.int64)
+    anomalies = np.zeros((32, 449), np.int64)
+    arrays = []
+    for record in manifest["segments"]:
+        with np.load(record["file"], allow_pickle=False) as payload:
+            arrays.append(
+                {
+                    k: payload[k].copy()
+                    for k in (
+                        "changed_slots",
+                        "changed_xyzi",
+                        "changed_packed_labels",
+                        "frame_offsets",
+                    )
+                }
+            )
+    for frame in range(449):
+        raw = sequence.source_frame(frame)
+        if np.any(raw.labels.anomaly_target[raw.real_slots] == 1):
+            raise DataProtocolError("normal 206 source contains anomaly returns")
+        groups = normal_group_targets(raw.labels)
+        groups[raw.zero_slot_mask] = -1
+        base = np.bincount(groups[groups >= 0], minlength=20)
+        for world, a in enumerate(arrays):
+            start, stop = a["frame_offsets"][frame : frame + 2]
+            slots = a["changed_slots"][start:stop]
+            removed = groups[slots]
+            counts[world, frame] = base - np.bincount(
+                removed[removed >= 0], minlength=20
+            )
+            returned = np.any(a["changed_xyzi"][start:stop, :3] != 0, axis=1)
+            if np.any((a["changed_packed_labels"][start:stop][returned] & 0xFFFF) != 2):
+                raise DataProtocolError("new v2 returns must be anomalies")
+            anomalies[world, frame] = int(returned.sum())
+    # Count repeated history exactly as it appears in the fixed training windows.
+    exposure = np.convolve(np.ones(445, np.int64), np.ones(5, np.int64))
+    total = (counts * exposure[None, :, None]).sum(axis=(0, 1))
+    present_n = present_a = 0
+    for world in range(32):
+        present_n += int(
+            (
+                np.convolve(counts[world].sum(1), np.ones(5, np.int64), mode="valid")
+                > 0
+            ).sum()
+        )
+        present_a += int(
+            (
+                np.convolve(anomalies[world], np.ones(5, np.int64), mode="valid") > 0
+            ).sum()
+        )
+    active = np.flatnonzero(total)
+    weights = np.clip(np.sqrt(total[active].mean() / total[active]), 0.25, 4)
+    return dict(
+        source="frozen v2 train/206 only; actual full-window point exposures",
+        manifest_sha256=_sha256(PROJECT_ROOT / "artifacts/data/v2/train/manifest.json"),
+        window_count=pool.total_window_count,
+        normal_present_windows=present_n,
+        anomaly_present_windows=present_a,
+        pi_normal=present_n / pool.total_window_count,
+        pi_anomaly=present_a / pool.total_window_count,
+        normal_group_point_counts=total.tolist(),
+        active_groups=active.tolist(),
+        class_weights=weights.tolist(),
+        weight_rule="sqrt(mean active-group count / group count), clipped to [0.25,4] before weighted CE normalization",
+        other_normal_group=19,
+    )
 
 
 def _pool_spec(protocol: AJAEProtocol, name: str) -> SyntheticPoolSpec:
@@ -1986,7 +2160,9 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Generate or verify schema-34 frozen window data"
     )
-    parser.add_argument("action", choices=("generate", "manifest", "check", "observe"))
+    parser.add_argument(
+        "action", choices=("generate", "manifest", "check", "observe", "labels")
+    )
     parser.add_argument("--pool", required=True, choices=("train", "validation"))
     parser.add_argument("--data-root", type=Path)
     parser.add_argument("--protocol", type=Path, default=PROJECT_ROOT / "protocol.json")
@@ -2008,7 +2184,20 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     protocol = load_protocol(args.protocol)
-    if args.action == "observe":
+    if args.action == "labels":
+        if (
+            args.data_root is None
+            or args.pool != "train"
+            or args.output_directory is None
+        ):
+            raise DataProtocolError(
+                "normal-group statistics require train, data-root and an output directory"
+            )
+        statistics = training_label_statistics(args.data_root)
+        args.output_directory.mkdir(parents=True, exist_ok=True)
+        _atomic_json(args.output_directory / "labels.json", statistics)
+        print(json.dumps(statistics, indent=2))
+    elif args.action == "observe":
         if args.data_root is None:
             raise DataProtocolError("observation matching requires --data-root")
         generate_observation_match(

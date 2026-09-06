@@ -9,6 +9,8 @@ import math
 import numpy as np
 import torch
 from torch import nn
+from torch.nn import functional as F
+from torch.utils.checkpoint import checkpoint
 
 from .data import PredictionBatch
 from .scene import SceneWindow, WindowPoints
@@ -118,10 +120,67 @@ def joint_voxelize(
     )
 
 
-class AJAE(nn.Module):
-    """Randomly initialized semantic LitePT-S plus an 81 -> 32 -> 1 point head."""
+@dataclass
+class NREEvidence:
+    score: torch.Tensor
+    support: torch.Tensor
+    normal_logits: torch.Tensor
+    correction: torch.Tensor
+    prototype_choice: torch.Tensor
 
-    def __init__(self, voxel_size: float = 0.05) -> None:
+
+class NREHead(nn.Module):
+    """Normal support and a bounded correction share one learned point representation."""
+
+    def __init__(self, active_groups):
+        super().__init__()
+        groups = tuple(active_groups)
+        if (
+            len(groups) < 2
+            or tuple(sorted(set(groups))) != groups
+            or not all(0 <= g < 20 for g in groups)
+        ):
+            raise ValueError(
+                "normal support needs at least two distinct supervised groups"
+            )
+        self.register_buffer("active_groups", torch.tensor(groups, dtype=torch.long))
+        self.fusion = nn.Sequential(
+            nn.Linear(117, 96), nn.LayerNorm(96), nn.GELU(), nn.Linear(96, 64)
+        )
+        self.prototypes = nn.Parameter(torch.randn(len(groups), 4, 64))
+        self.acceptance = nn.Parameter(torch.zeros(len(groups)))
+        self.correction = nn.Sequential(nn.Linear(64, 32), nn.GELU(), nn.Linear(32, 1))
+        nn.init.zeros_(self.correction[-1].weight)
+        nn.init.zeros_(self.correction[-1].bias)
+
+    @property
+    def thresholds(self):
+        return 0.2 + 0.6 * self.acceptance.sigmoid()
+
+    def forward(self, shallow, deep, inverse, detail):
+        h = self.fusion(torch.cat((shallow[inverse], deep[inverse], detail), dim=1))
+        # Directional support, log-sum-exp and final logits always use float32.
+        with torch.autocast(h.device.type, enabled=False):
+            h = h.float()
+            q = (
+                F.normalize(h, dim=1)
+                @ F.normalize(self.prototypes.float(), dim=2).flatten(0, 1).T
+            )
+            q = q.reshape(-1, len(self.active_groups), 4)
+            a = torch.logsumexp(
+                (q - self.thresholds[None, :, None]) / 0.07, dim=2
+            ) - math.log(4)
+            support = math.log(len(self.active_groups)) - torch.logsumexp(a, dim=1)
+            correction = 2 * torch.tanh(self.correction(h).squeeze(1))
+        return support + correction, support, a, correction, q.argmax(2).to(torch.uint8)
+
+
+class AJAE(nn.Module):
+    """One joint LitePT-S backbone with the NRE or historical binary point head."""
+
+    def __init__(
+        self, voxel_size: float = 0.05, *, normal_groups=None, point_chunk_size=65536
+    ) -> None:
         super().__init__()
         if not math.isfinite(voxel_size) or voxel_size <= 0:
             raise ValueError("voxel_size must be finite and positive")
@@ -131,11 +190,23 @@ class AJAE(nn.Module):
         self.voxel_size = voxel_size
         # All other defaults are the official semantic LitePT-S configuration.
         self.backbone = LitePT(in_channels=9)
-        self.head = nn.Sequential(nn.Linear(81, 32), nn.GELU(), nn.Linear(32, 1))
+        self.head = (
+            NREHead(normal_groups)
+            if normal_groups is not None
+            else nn.Sequential(nn.Linear(81, 32), nn.GELU(), nn.Linear(32, 1))
+        )
+        self.score_kind = "logit" if normal_groups is not None else "probability"
+        if point_chunk_size < 1:
+            raise ValueError("point chunk size must be positive")
+        self.point_chunk_size = point_chunk_size
 
     def forward(
-        self, window: SceneWindow, *, inputs: JointVoxels | None = None
-    ) -> torch.Tensor:
+        self,
+        window: SceneWindow,
+        *,
+        inputs: JointVoxels | None = None,
+        return_evidence=False,
+    ) -> torch.Tensor | NREEvidence:
         """Return one trainable logit per original point, including history."""
 
         device = next(self.parameters()).device
@@ -158,13 +229,47 @@ class AJAE(nn.Module):
             else torch.autocast(device.type, enabled=False)
         )
         with precision:
-            decoded = self.backbone(inputs.backbone_input())
+            nre = isinstance(self.head, NREHead)
+            if nre:
+                decoded, shallow = self.backbone(
+                    inputs.backbone_input(), return_shallow=True
+                )
+                if shallow.shape != (len(inputs.coordinates), 36):
+                    raise RuntimeError(
+                        "shallow encoder features must retain original voxel rows"
+                    )
+            else:
+                decoded = self.backbone(inputs.backbone_input())
             if decoded.feat.shape != (len(inputs.coordinates), 72) or not torch.equal(
                 decoded.grid_coord, inputs.grid_coord
             ):
                 raise RuntimeError(
                     "LitePT decoder did not preserve the input voxel rows"
                 )
+            if nre:
+                chunks = []
+                for start in range(
+                    0, len(inputs.point_to_voxel), self.point_chunk_size
+                ):
+                    stop = start + self.point_chunk_size
+                    args = (
+                        shallow,
+                        decoded.feat,
+                        inputs.point_to_voxel[start:stop],
+                        inputs.point_features[start:stop],
+                    )
+                    # Recompute only the small head during backward; never repeat the backbone.
+                    chunks.append(
+                        checkpoint(self.head, *args, use_reentrant=False)
+                        if self.training and torch.is_grad_enabled()
+                        else self.head(*args)
+                    )
+                evidence = NREEvidence(
+                    *(torch.cat(items) for items in zip(*chunks, strict=True))
+                )
+                return evidence if return_evidence else evidence.score
+            if return_evidence:
+                raise ValueError("normal evidence is available only for AJAE-NRE")
             # Labels never vote at voxel level: distinct points share context only.
             features = torch.cat(
                 (decoded.feat[inputs.point_to_voxel], inputs.point_features), dim=1
@@ -177,5 +282,8 @@ class AJAE(nn.Module):
 
         if self.training:
             raise RuntimeError("call model.eval() before prediction")
-        scores = torch.sigmoid(self(window).float()).cpu().numpy()
-        return PredictionBatch.from_window(window, scores)
+        logits = self(window).float()
+        scores = (
+            (logits if self.score_kind == "logit" else logits.sigmoid()).cpu().numpy()
+        )
+        return PredictionBatch.from_window(window, scores, score_kind=self.score_kind)
