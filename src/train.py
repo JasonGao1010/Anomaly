@@ -1091,6 +1091,178 @@ def run(data_root: Path, output: Path, *, group=None, initial=None, workers=1):
     return result
 
 
+def nre_monitor_candidate(checkpoint, directory, results):
+    """Candidate ranking always uses the same real monitor population."""
+    real = results["real"]
+    return dict(
+        name=checkpoint.stem,
+        visit=int(checkpoint.stem.removeprefix("visit_")),
+        scope="fixed_real_304",
+        checkpoint=str(checkpoint.resolve()),
+        evaluation=str(directory.resolve()),
+        **{k: real["all_frames"][k] for k in ("AP", "AUROC", "FPR95")},
+        normal_fraction=real["normal_without_anomaly_returns"]["fraction_ge_0"],
+    )
+
+
+def recompute_monitors(
+    model, real_data, validation_data, output, plan, check_resources
+):
+    """Reevaluate both historical candidates without changing their checkpoint bytes."""
+    from .evaluate import (
+        evaluate_samples,
+        file_hash,
+        model_digest,
+        nre_candidate,
+        reusable_predictions,
+    )
+
+    record_path = output / "monitor_corrections.json"
+    if record_path.exists():
+        return
+    started = time.perf_counter()
+    entries = []
+    recipe = plan["config"]["nre"]
+    for index, visit in enumerate((7120, 14240), 1):
+        checkpoint = output / f"visit_{visit:05d}.pt"
+        digest = file_hash(checkpoint)
+        payload = torch.load(checkpoint, map_location="cpu", weights_only=False)
+        nre_candidate(checkpoint, payload, recipe, interim=True)
+        model.load_state_dict(payload["model"], strict=True)
+        del payload
+        old_path, corrected_path = (
+            output / f"monitor_{index:02d}",
+            output / f"monitor_{index:02d}_corrected",
+        )
+        results, previous = {}, {}
+        for domain in ("real", "synthetic"):
+            previous[domain] = json.loads(
+                (old_path / domain / "summary.json").read_text()
+            )
+            results[domain] = evaluate_samples(
+                model,
+                real_data if domain == "real" else validation_data,
+                [
+                    s
+                    for s in plan["monitor_samples"]
+                    if (s["view"] == "real") == (domain == "real")
+                ],
+                corrected_path / domain,
+                identity=dict(
+                    plan_sha256=file_hash(output / "plan.json"),
+                    visit=visit,
+                    checkpoint_sha256=digest,
+                    model_sha256=model_digest(model),
+                    monitor=True,
+                    scope="real_val" if domain == "real" else "nre_synthetic_monitor",
+                ),
+                check_resources=check_resources,
+                reuse=reusable_predictions(
+                    [PROJECT_ROOT / recipe["paths"]["evaluation"] / "interim_14240"],
+                    model_digest(model),
+                )
+                if domain == "real"
+                else None,
+            )
+        if file_hash(checkpoint) != digest:
+            raise RuntimeError(
+                "historical checkpoint changed during monitor correction"
+            )
+        entries.append(
+            dict(
+                visit=visit,
+                checkpoint_sha256=digest,
+                original=nre_monitor_candidate(checkpoint, old_path, previous),
+                corrected=nre_monitor_candidate(checkpoint, corrected_path, results),
+                reused_windows={
+                    domain: r.get("reused_windows", 0) for domain, r in results.items()
+                },
+            )
+        )
+        print(json.dumps(dict(event="monitor_corrected", **entries[-1])), flush=True)
+    _atomic_json(
+        record_path,
+        dict(
+            status="completed",
+            plan_sha256=file_hash(output / "plan.json"),
+            reason="authorized uniform reevaluation after rotary cache precision repair",
+            additional_bound_bytes=plan["storage"]["parts"]["four_monitors"] // 2,
+            optimizer_updates=0,
+            wall_seconds=time.perf_counter() - started,
+            entries=entries,
+        ),
+    )
+
+
+def apply_monitor_corrections(state, output, plan):
+    """Replace only working candidate metrics after validating the full corrected view."""
+    from .evaluate import file_hash
+
+    record_path = output / "monitor_corrections.json"
+    corrections = {}
+    if record_path.exists():
+        record = json.loads(record_path.read_text())
+        if (
+            record["status"] != "completed"
+            or record["plan_sha256"] != file_hash(output / "plan.json")
+            or [r["visit"] for r in record["entries"]] != [7120, 14240]
+        ):
+            raise ValueError(
+                "monitor correction record does not match the original plan"
+            )
+        corrections = {r["visit"]: r for r in record["entries"]}
+    for index, old in enumerate(state["monitor_candidates"]):
+        correction = corrections.get(old["visit"])
+        candidate = correction["corrected"] if correction else old
+        checkpoint = Path(candidate["checkpoint"])
+        if candidate["checkpoint"] != old["checkpoint"] or (
+            correction and file_hash(checkpoint) != correction["checkpoint_sha256"]
+        ):
+            raise ValueError("correction changed the historical model identity")
+        results = {}
+        for domain in ("real", "synthetic"):
+            directory = Path(candidate["evaluation"]) / domain
+            manifest = json.loads((directory / "samples.json").read_text())
+            result = json.loads((directory / "summary.json").read_text())
+            expected = [
+                s
+                for s in plan["monitor_samples"]
+                if (s["view"] == "real") == (domain == "real")
+            ]
+            if (
+                manifest["identity"].get("rotary_cache_precision")
+                != "autocast_separated"
+                or manifest["identity"]["plan_sha256"]
+                != file_hash(output / "plan.json")
+                or manifest["identity"]["visit"] != old["visit"]
+                or (
+                    correction
+                    and manifest["identity"].get("checkpoint_sha256")
+                    != correction["checkpoint_sha256"]
+                )
+                or manifest["samples"] != expected
+                or result["status"] != "completed"
+                or result["completed_windows"] != len(expected)
+                or result["optimizer_updates"] != 0
+                or not result["model_parameters_and_buffers_unchanged"]
+            ):
+                raise ValueError(
+                    "candidate needs the complete corrected monitor before selection"
+                )
+            results[domain] = result
+        actual = nre_monitor_candidate(
+            checkpoint, Path(candidate["evaluation"]), results
+        )
+        if actual != candidate:
+            raise ValueError("candidate metrics differ from their corrected summaries")
+        state["monitor_candidates"][index] = actual
+        state["monitor_results"][index].update(actual, **results)
+    if corrections:
+        state["monitor_corrections"] = dict(
+            file=str(record_path.resolve()), sha256=file_hash(record_path)
+        )
+
+
 def recovery_payload(checkpoint, plan_path):
     """Reject damaged state before restoring weights, optimizer, scaler and RNG together."""
     from .evaluate import file_hash
@@ -1131,6 +1303,7 @@ def run_fulltrain(
     *,
     resume=False,
     resume_from=None,
+    correct_monitors=False,
     updated_code=False,
     finish=False,
     nre=None,
@@ -1152,6 +1325,8 @@ def run_fulltrain(
     )
 
     resume = resume or resume_from is not None
+    if correct_monitors and not (nre and resume):
+        raise ValueError("monitor correction requires an existing NRE training state")
     if not torch.cuda.is_available():
         raise RuntimeError("the unchanged LitePT implementation requires CUDA")
     if output.exists() != resume:
@@ -1299,18 +1474,12 @@ def run_fulltrain(
             raise ValueError(
                 "resume source, data, initialization, or configuration changed"
             )
-        if nre:
-            for candidate in resumed_payload["state"]["monitor_candidates"]:
-                manifest = json.loads(
-                    (Path(candidate["evaluation"]) / "real/samples.json").read_text()
-                )
-                if (
-                    manifest["identity"].get("rotary_cache_precision")
-                    != "autocast_separated"
-                ):
-                    raise ValueError(
-                        "earlier monitors used legacy precision caches; consistent reevaluation is required before continuing candidate selection"
-                    )
+        correction_bound = (
+            plan["storage"]["parts"]["four_monitors"] // 2
+            if nre
+            and (correct_monitors or (output / "monitor_corrections.json").exists())
+            else 0
+        )
         inodes = {}
         for directory in [
             output,
@@ -1327,7 +1496,9 @@ def run_fulltrain(
                     stat = path.stat()
                     inodes[(stat.st_dev, stat.st_ino)] = stat.st_size
         written = sum(inodes.values())
-        remaining_disk = max(0, plan["estimated_peak_disk_bytes"] - written)
+        remaining_disk = max(
+            0, plan["estimated_peak_disk_bytes"] + correction_bound - written
+        )
     else:
         generator = np.random.default_rng(23)
         schedule = [int(i) for _ in range(passes) for i in generator.permutation(count)]
@@ -1380,6 +1551,17 @@ def run_fulltrain(
     volume = host_disk()  # Re-query immediately before any substantial writes.
     if volume["SizeRemaining"] - remaining_disk < volume["reserve_bytes"]:
         raise OSError("measured full-training peak would invade the E: reserve")
+    print(
+        json.dumps(
+            dict(
+                event="remaining_storage",
+                additional_peak_bytes=remaining_disk,
+                host_disk=volume,
+                projected_free_bytes=volume["SizeRemaining"] - remaining_disk,
+            )
+        ),
+        flush=True,
+    )
     train_data = FrozenWindowDataset(
         data_root,
         protocol,
@@ -1439,6 +1621,12 @@ def run_fulltrain(
     if resume:
         payload = resumed_payload
         state = payload["state"]
+        if nre:
+            if correct_monitors:
+                recompute_monitors(
+                    model, real_data, validation_data, output, plan, resources
+                )
+            apply_monitor_corrections(state, output, plan)
         if state["status"] in ("resource_limit", "interrupted", "execution_error"):
             state.setdefault("interruptions", []).append(
                 {
@@ -1872,28 +2060,14 @@ def run_fulltrain(
                 state["completed_monitors"] = epoch
                 state["completed_epochs"] = state["planned_attempts"] // count
                 candidate_path = output / f"visit_{state['planned_attempts']:05d}.pt"
-                real_result = result["real"]
-                candidate = dict(
-                    name=candidate_path.stem,
-                    visit=state["planned_attempts"],
-                    scope="fixed_real_304",
-                    **{
-                        k: real_result["all_frames"][k]
-                        for k in ("AP", "AUROC", "FPR95")
-                    },
-                    normal_fraction=real_result["normal_without_anomaly_returns"][
-                        "fraction_ge_0"
-                    ],
-                    checkpoint=str(candidate_path.resolve()),
-                    evaluation=str(monitor_path.resolve()),
-                )
+                candidate = nre_monitor_candidate(candidate_path, monitor_path, result)
                 state["monitor_candidates"].append(candidate)
                 state[results_key].append(
                     dict(
                         candidate,
                         completed_passes=state["completed_epochs"],
                         successful_updates=state["successful_updates"],
-                        real=real_result,
+                        real=result["real"],
                         synthetic=result["synthetic"],
                     )
                 )
@@ -2006,6 +2180,7 @@ def run_fulltrain(
     if nre:
         if state["phase"] != "selection" or state["completed_monitors"] != intervals:
             return state
+        apply_monitor_corrections(state, output, plan)
         best = choose_candidate(state["monitor_candidates"])
         selection = dict(
             rule=nre["selection"],
@@ -2233,6 +2408,11 @@ if __name__ == "__main__":
         help="restore all training state from this healthy checkpoint",
     )
     parser.add_argument(
+        "--correct-monitors",
+        action="store_true",
+        help="reevaluate the first two fixed monitors before restoring training",
+    )
+    parser.add_argument(
         "--finish",
         action="store_true",
         help="end full training at a saved complete epoch and run final selection",
@@ -2262,6 +2442,7 @@ if __name__ == "__main__":
             args.initial,
             resume=args.resume,
             resume_from=args.resume_from,
+            correct_monitors=args.correct_monitors,
             updated_code=args.updated_code,
             finish=args.finish,
             nre=recipe,

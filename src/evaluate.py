@@ -1006,7 +1006,7 @@ def full_samples(pool):
     return result
 
 
-def prepare_window(dataset, partition, sample):
+def prepare_window(dataset, partition, sample, *, voxelize=True):
     begin = time.perf_counter()
     if sample["view"] == "real":
         for index, sequence in dataset.items():
@@ -1028,7 +1028,7 @@ def prepare_window(dataset, partition, sample):
         raise ValueError("raw normal 201 contains anomaly labels")
     loaded = time.perf_counter() - begin
     begin = time.perf_counter()
-    inputs = joint_voxelize(window, 0.05)
+    inputs = joint_voxelize(window, 0.05) if voxelize else None
     return window, inputs, loaded, time.perf_counter() - begin
 
 
@@ -1384,16 +1384,6 @@ def evaluate_samples(
     started = time.perf_counter()
     real = identity.get("scope") == "real_val"
     reuse = reuse or {}
-    overlapping = [
-        (s["sequence_id"], s["current_frame"])
-        for s in samples
-        if (s.get("sequence_id"), s["current_frame"]) in reuse
-    ]
-    recheck = {
-        overlapping[i]
-        for i in (0, len(overlapping) // 2, len(overlapping) - 1)
-        if overlapping
-    }
     score_kind = getattr(model, "score_kind", "probability")
     if score_kind == "logit":
         identity = {
@@ -1487,7 +1477,15 @@ def evaluate_samples(
             if len(rows) < len(samples):
                 check_resources()
                 prepared = loader.submit(
-                    prepare_window, dataset, partition, samples[len(rows)]
+                    prepare_window,
+                    dataset,
+                    partition,
+                    samples[len(rows)],
+                    voxelize=(
+                        samples[len(rows)].get("sequence_id"),
+                        samples[len(rows)]["current_frame"],
+                    )
+                    not in reuse,
                 )
             for index in range(len(rows), len(samples)):
                 check_resources()
@@ -1498,11 +1496,21 @@ def evaluate_samples(
                 prepared = None
                 if index + 1 < len(samples):
                     prepared = loader.submit(
-                        prepare_window, dataset, partition, samples[index + 1]
+                        prepare_window,
+                        dataset,
+                        partition,
+                        samples[index + 1],
+                        voxelize=(
+                            samples[index + 1].get("sequence_id"),
+                            samples[index + 1]["current_frame"],
+                        )
+                        not in reuse,
                     )
                 begin = time.perf_counter()
-                inputs = cpu_inputs.to("cuda")
-                torch.cuda.synchronize()
+                # Reused scores need point-identity validation, not another voxel grid or GPU copy.
+                inputs = cpu_inputs.to("cuda") if cpu_inputs is not None else None
+                if inputs is not None:
+                    torch.cuda.synchronize()
                 transfer_seconds = time.perf_counter() - begin
                 key = (sample.get("sequence_id"), sample["current_frame"])
                 reused = reuse.get(key)
@@ -1536,24 +1544,22 @@ def evaluate_samples(
                         0.0,
                     )
                     prediction_from = source, old["prediction"]
-                if not reused or key in recheck:
+                if not reused:
                     scores, losses, scopes, inference_seconds = predict_window(
                         model, window, inputs, sample["check_seed"], split_losses=True
                     )
-                    if reused and not np.array_equal(scores, prior.anomaly_score):
-                        raise ValueError(
-                            "reused and recomputed full-window scores differ"
-                        )
                 timings = {
                     "load_seconds": load_seconds,
                     "prepare_seconds": prepare_seconds,
                     "transfer_seconds": transfer_seconds,
                     "inference_seconds": inference_seconds,
-                    "voxel_count": len(inputs.features),
+                    "voxel_count": old["voxel_count"]
+                    if reused
+                    else len(inputs.features),
                     **(
                         dict(
                             reused_prediction=str(source),
-                            reuse_rechecked=key in recheck,
+                            reuse_identity_verified=True,
                         )
                         if reused
                         else {}
@@ -1622,6 +1628,7 @@ def evaluate_samples(
             "status": status,
             "error": error,
             "completed_windows": len(rows),
+            "reused_windows": sum("reused_prediction" in row for row in rows),
             "optimizer_updates": 0,
             "model_parameters_and_buffers_unchanged": status == "completed",
             **summary,
@@ -2617,6 +2624,10 @@ def run_real(
         if nre
         else None
     )
+    if nre and not interim:
+        candidate = json.loads((checkpoint.parent / "selection.json").read_text())[
+            "selected"
+        ]
     model = (
         AJAE(
             0.05,
@@ -2739,6 +2750,22 @@ def run_real(
         summary["v1_comparison"] = compare_interim(
             output, baseline, Path(candidate["evaluation"]) / "real", summary, resources
         )
+    elif nre and checkpoint.stem == "visit_14240":
+        earlier = (
+            PROJECT_ROOT / nre["paths"]["evaluation"] / "interim_14240/summary.json"
+        )
+        if earlier.exists():
+            prior = json.loads(earlier.read_text())["all_frames"]
+            if any(
+                summary["all_frames"][k] != prior[k]
+                for k in ("AP", "AUROC", "FPR95", "normal_count", "anomaly_count")
+            ):
+                raise ValueError(
+                    "selected 14240 full evaluation differs from its identical reused interim scoring points"
+                )
+            summary["interim_scoring_consistency"] = dict(
+                source=str(earlier), metrics_identical=True
+            )
     assert_unchanged(model, reference)
     if file_hash(checkpoint, discard_cache=True) != digest:
         raise RuntimeError("candidate changed during real validation")

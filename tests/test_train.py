@@ -390,6 +390,93 @@ def test_explicit_recovery_keeps_training_state_and_rejects_damaged_buffers(tmp_
         recovery_payload(checkpoint, plan_path)
 
 
+def test_monitor_corrections_replace_working_metrics_without_changing_checkpoints(
+    tmp_path,
+):
+    from src.evaluate import file_hash
+    from src.train import apply_monitor_corrections, nre_monitor_candidate
+
+    plan = {
+        "monitor_samples": [{"view": "real"}, {"view": "synthetic"}, {"view": "normal"}]
+    }
+    plan_path = tmp_path / "plan.json"
+    plan_path.write_text(json.dumps(plan))
+    state = dict(
+        planned_attempts=14240,
+        successful_updates=14236,
+        monitor_candidates=[],
+        monitor_results=[],
+    )
+    entries = []
+    for index, visit in enumerate((7120, 14240), 1):
+        checkpoint = tmp_path / f"visit_{visit:05d}.pt"
+        checkpoint.write_bytes(b"immutable original model and training state")
+        directory = tmp_path / f"monitor_{index:02d}_corrected"
+        results = {}
+        for domain in ("real", "synthetic"):
+            path = directory / domain
+            path.mkdir(parents=True)
+            samples = [
+                s
+                for s in plan["monitor_samples"]
+                if (s["view"] == "real") == (domain == "real")
+            ]
+            manifest = dict(
+                identity=dict(
+                    plan_sha256=file_hash(plan_path),
+                    visit=visit,
+                    checkpoint_sha256=file_hash(checkpoint),
+                    rotary_cache_precision="autocast_separated",
+                ),
+                samples=samples,
+            )
+            (path / "samples.json").write_text(json.dumps(manifest))
+            results[domain] = dict(
+                status="completed",
+                completed_windows=len(samples),
+                optimizer_updates=0,
+                model_parameters_and_buffers_unchanged=True,
+                all_frames=dict(AP=50 + index, AUROC=99, FPR95=5),
+                normal_without_anomaly_returns=dict(fraction_ge_0=0.001),
+            )
+            (path / "summary.json").write_text(json.dumps(results[domain]))
+        candidate = nre_monitor_candidate(checkpoint, directory, results)
+        state["monitor_candidates"].append(
+            {
+                **candidate,
+                "AP": 1.0,
+                "evaluation": str(tmp_path / f"monitor_{index:02d}"),
+            }
+        )
+        state["monitor_results"].append({"AP": 1.0, "successful_updates": visit})
+        entries.append(
+            dict(
+                visit=visit,
+                checkpoint_sha256=file_hash(checkpoint),
+                corrected=candidate,
+            )
+        )
+    record = dict(status="completed", plan_sha256=file_hash(plan_path), entries=entries)
+    (tmp_path / "monitor_corrections.json").write_text(json.dumps(record))
+    apply_monitor_corrections(state, tmp_path, plan)
+    assert [c["AP"] for c in state["monitor_candidates"]] == [51, 52]
+    assert [c["AP"] for c in state["monitor_results"]] == [51, 52]
+    assert (state["planned_attempts"], state["successful_updates"]) == (14240, 14236)
+    assert all(
+        file_hash(tmp_path / f"visit_{e['visit']:05d}.pt") == e["checkpoint_sha256"]
+        for e in entries
+    )
+    apply_monitor_corrections(
+        state, tmp_path, plan
+    )  # Resume uses the same corrected evidence.
+    summary_path = tmp_path / "monitor_01_corrected/synthetic/summary.json"
+    damaged = json.loads(summary_path.read_text())
+    damaged["completed_windows"] -= 1
+    summary_path.write_text(json.dumps(damaged))
+    with pytest.raises(ValueError, match="complete corrected monitor"):
+        apply_monitor_corrections(state, tmp_path, plan)
+
+
 @pytest.mark.parametrize("position", ["epoch", "visit"])
 def test_full_selection_uses_global_ap_band_and_one_scope(position):
     from src.train import choose_candidate
