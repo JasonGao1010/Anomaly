@@ -245,6 +245,12 @@ def test_exact_disk_metrics_match_official_ties_and_roc_pruning(tmp_path, chunk_
         result = exact_metrics(np.sort(keys), chunk_size=chunk_size)
         for name, value in expected.items():
             assert result[name] == pytest.approx(value, abs=1e-10, rel=0)
+        high = result["official_high_recall"]
+        accepted = scores >= high["threshold"]
+        assert high["tp"] == int(np.sum(accepted & (target == 1)))
+        assert high["fp"] == int(np.sum(accepted & (target == 0)))
+        assert high["recall"] > 95
+        assert high["FPR"] == pytest.approx(expected["FPR95"], abs=1e-10)
         paths = [tmp_path / f"{index}_{part}.bin" for part in range(2)]
         for path, block in zip(paths, np.array_split(keys, 2), strict=True):
             block.tofile(path)
@@ -252,6 +258,33 @@ def test_exact_disk_metrics_match_official_ties_and_roc_pruning(tmp_path, chunk_
         for name, value in expected.items():
             assert pooled[name] == pytest.approx(value, abs=1e-10, rel=0)
         assert pooled["normal_count"] == int((target == 0).sum())
+
+
+def test_global_ap_deficit_uses_complete_ties():
+    from src.diagnose import CurveObserver
+    from src.evaluate import score_bits
+
+    scores = np.array([2, 2, 1, -1, -1, -3], dtype=np.float32)
+    labels = np.array([1, 0, 1, 1, 0, 0])
+    observer = CurveObserver()
+    result = exact_metrics(
+        np.sort(packed_scores(scores, labels, score_kind="logit")),
+        chunk_size=2,
+        score_kind="logit",
+        observe=observer,
+    )
+    precision = dict(
+        zip(
+            np.concatenate(observer.bits),
+            np.concatenate(observer.precision),
+            strict=True,
+        )
+    )
+    deficit = np.array(
+        [1 - precision[b] for b in score_bits(scores[labels == 1], "logit")]
+    )
+    assert deficit.sum() / 3 == pytest.approx(1 - result["AP"] / 100, abs=1e-12)
+    assert precision[score_bits([2], "logit")[0]] == 0.5
 
 
 @pytest.mark.parametrize("count", [103, 104])

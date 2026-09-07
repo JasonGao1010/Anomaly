@@ -139,6 +139,7 @@ def exact_metrics(
     prevalence=None,
     fpr_limit=0.01,
     score_kind="probability",
+    observe=None,
 ):
     """Exact point pooling with bounded RAM; ordered is an ascending uint64 array.
 
@@ -171,12 +172,16 @@ def exact_metrics(
     operating_point = dict(recall=0.0, FPR=0.0, threshold=None, tp=0, fp=0)
     fpr95 = None
     previous = None
+    high_recall = None
     first = True
     for bits, counts, pos in score_groups(ordered, chunk_size):
         neg = counts - pos
         tps = tp + np.cumsum(pos, dtype=np.int64)
         fps = fp + np.cumsum(neg, dtype=np.int64)
         recall, fpr = tps / positive, fps / negative
+        if observe is not None:
+            # Observers see the same complete ties used by the authoritative AP.
+            observe(bits, pos, tps, fps, positive, negative)
         ap += float(np.sum(np.diff(np.r_[tp / positive, recall]) * tps / (tps + fps)))
         if prevalence is not None:
             # Constant class weights retain every score and change only prevalence.
@@ -203,28 +208,48 @@ def exact_metrics(
             )
         )
         if previous is not None and fpr95 is None:
-            p, n, r, f, was_first = previous
+            p, n, r, f, was_first, last_point = previous
             if (was_first or p != pos[0] or n != neg[0]) and r > 0.95:
                 fpr95 = f
+                high_recall = last_point
         keep = (pos[:-1] != pos[1:]) | (neg[:-1] != neg[1:])
         if first and len(keep):
             keep[0] = True
         eligible = np.flatnonzero(keep & (recall[:-1] > 0.95))
         if fpr95 is None and len(eligible):
-            fpr95 = float(fpr[eligible[0]])
+            index = int(eligible[0])
+            fpr95 = float(fpr[index])
+            high_recall = dict(
+                threshold=float(bits_score(bits[index], score_kind)),
+                tp=int(tps[index]),
+                fp=int(fps[index]),
+            )
         previous = (
             int(pos[-1]),
             int(neg[-1]),
             float(recall[-1]),
             float(fpr[-1]),
             first and len(pos) == 1,
+            dict(
+                threshold=float(bits_score(bits[-1], score_kind)),
+                tp=int(tps[-1]),
+                fp=int(fps[-1]),
+            ),
         )
         tp, fp = int(tps[-1]), int(fps[-1])
         first = False
     if fpr95 is None:
         fpr95 = previous[3]  # The final ROC threshold is always retained.
+        high_recall = previous[5]
     result.update(AP=ap * 100, AUROC=area * 100, FPR95=fpr95 * 100)
     result["recall_at_fpr_limit"] = operating_point
+    result["official_high_recall"] = {
+        **high_recall,
+        "fn": positive - high_recall["tp"],
+        "tn": negative - high_recall["fp"],
+        "recall": high_recall["tp"] / positive * 100,
+        "FPR": high_recall["fp"] / negative * 100,
+    }
     if prevalence is not None:
         result.update(
             standardized_AP=standardized_ap * 100,
@@ -318,6 +343,7 @@ def pooled_files(
     ranges=None,
     prevalence=None,
     score_kind="probability",
+    observe=None,
 ):
     """Sort exact records on disk, then reduce them in bounded chunks."""
     if normal:
@@ -355,7 +381,9 @@ def pooled_files(
                     count -= len(block)
         # Numeric in-place quicksort avoids point-count-sized index/ROC arrays.
         ordered.sort(kind="quicksort")
-        result = exact_metrics(ordered, prevalence=prevalence, score_kind=score_kind)
+        result = exact_metrics(
+            ordered, prevalence=prevalence, score_kind=score_kind, observe=observe
+        )
         del ordered
     return result
 
