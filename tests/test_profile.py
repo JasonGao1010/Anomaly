@@ -1,20 +1,14 @@
-from collections import Counter
-
 import numpy as np
 import pytest
 from scipy.spatial import cKDTree
 
-from src.model import joint_voxelize
 from src.profile import (
     Ledger,
     describe,
     frame_geometry,
     ground_relation,
-    stages,
-    window_geometry,
 )
-from src.protocol import FrameSpan, SequenceSpec
-from src.scene import PointLabels, assemble_window, make_source_frame
+from src.scene import PointLabels, make_source_frame
 
 
 def test_profile_weights_and_quantile_bounds(tmp_path):
@@ -47,64 +41,7 @@ def test_profile_weights_and_quantile_bounds(tmp_path):
         assert interval["upper"] - interval["lower"] <= 0.000100000001
 
 
-def test_profile_voxels_keep_all_members_and_history():
-    sources = []
-    ledger = Ledger()
-    frame_rows = []
-    for frame in range(5):
-        points = np.array(
-            [
-                [1.011, 0.01, 0.01, 0.1],
-                [1.012, 0.01, 0.01, 0.8],
-                [1.013, 0.01, 0.01, 0.3],
-                [2, 2, 2, 0.2],
-                [0, 0, 0, 0],
-            ],
-            np.float32,
-        )
-        if frame == 4:
-            points[0, 0] = 2.4
-        semantic = np.array([40, 2 if frame % 2 == 0 else 40, 0, 40, 2], np.uint16)
-        instance = np.where(semantic == 2, 1, 0).astype(np.uint16)
-        packed = semantic.astype(np.uint32) + (instance.astype(np.uint32) << 16)
-        labels = PointLabels(packed, semantic, instance)
-        source = make_source_frame(
-            frame, points, np.eye(4), labels, partition="train", sequence_id=206
-        )
-        sources.append(source)
-        record, _, _ = frame_geometry(source, ledger, 206, frame)
-        frame_rows.append(record)
-        assert record["zero_slots"] == 1
-        assert record["anomaly"] == int(frame % 2 == 0)
-    spec = SequenceSpec("train", 206, "fixture", True, FrameSpan(0, 5))
-    window = assemble_window(spec, 0, (0, 1, 2, 3, 4), sources)
-    inputs = joint_voxelize(window)
-    result, detail = window_geometry(window, inputs, frame_rows, ledger, 206, 4)
-    assert result["visibility_pattern"] == "10101"
-    assert result["history_visible_scans"] == 2
-    assert result["current_anomaly_voxels"] == 1
-    assert result["history_new_normal_voxels"] == 1
-    assert result["history_new_normal_points"] == 1
-    members = Counter()
-    target = int(
-        inputs.point_to_voxel[
-            np.flatnonzero(window.current_mask & (window.labels.semantic == 2))[0]
-        ]
-    )
-    for voxel, label in zip(
-        inputs.point_to_voxel.tolist(), window.labels.semantic.tolist(), strict=True
-    ):
-        if voxel == target:
-            members[label] += 1
-    denominator = sum(members.values())
-    assert detail["voxel_normal_fraction"][0] == members[40] / denominator
-    assert detail["voxel_ignore_fraction"][0] == members[0] / denominator
-    assert detail["voxel_anomaly_fraction"][0] == members[2] / denominator
-    assert detail["voxel_mix"][0] == 3
-    assert detail["voxel_hits"][0] == 31
-
-
-def test_ground_support_and_observation_boundary_censoring():
+def test_ground_support_and_missing_height():
     x, y = np.meshgrid(np.linspace(-1, 1, 9), np.linspace(-1, 1, 9))
     ground = np.column_stack((x.ravel(), y.ravel(), np.zeros(x.size)))
     tree = cKDTree(ground[:, :2])
@@ -113,12 +50,6 @@ def test_ground_support_and_observation_boundary_censoring():
     assert value["ground_status"] == "local_plane_proxy"
     assert value["ground_height_median"] == pytest.approx(1.1)
     assert ground_relation(obj + 10, ground, tree)["ground_height_median"] is None
-    frames = [dict(anomaly=x) for x in (1, 1, 0, 1, 0, 0)]
-    runs = stages(frames, 125)
-    assert [r["kind"] for r in runs] == ["visible", "gap", "visible", "tail"]
-    assert [r["length"] for r in runs] == [2, 1, 1, 2]
-    assert runs[0]["left_censored"] and runs[-1]["right_censored"]
-    assert frames[0]["first_in_visible_run"]
 
 
 def test_report_sequence_weights_and_variance_use_full_distributions(tmp_path):
@@ -154,38 +85,20 @@ def test_report_sequence_weights_and_variance_use_full_distributions(tmp_path):
         assert data["sequence_equal"]["quantiles"]["0.75"]["value"] == 10
 
 
-def test_synthetic_context_and_worlds_are_not_joined():
-    from src.profile_report import joint_tables
-
-    frames, windows = [], []
-    for world, counts in (("000_00", [1, 1, 0, 0, 0]), ("000_01", [0, 0, 0, 0, 6])):
-        rows = [
-            dict(
-                sequence=world,
-                frame=i,
-                anomaly=n,
-                anomaly_in_range=n,
-                anomaly_in_range_distance_median=12 if n else None,
-                neighbor_road_fraction=None,
-            )
-            for i, n in enumerate(counts)
-        ]
-        episodes = stages(rows, world)
-        assert episodes[0]["left_censored"] and episodes[-1]["right_censored"]
-        frames.extend(rows)
-        windows.append(
-            dict(
-                sequence=world,
-                frame=4,
-                scope="complete_windows",
-                history_visible_scans=sum(n > 0 for n in counts[:4]),
-                translation_m=1,
-                normal_mix_fraction=0,
-            )
-        )
-    result = joint_tables(frames, windows, [])
-    assert sum(r["frames"] for r in result["stage_count"].values()) == 10
-    assert sum(r["frames"] for r in result["count_distance_history"].values()) == 2
-    assert result["count_distance_history"]["0|unseen|2"]["sequences"] == ["000_00"]
-    assert result["count_distance_history"]["2|1|0"]["sequences"] == ["000_01"]
-    assert result["official_count_distance"]["0|1"]["anomaly_in_range_points"] == 6
+def test_empty_scan_and_unknown_instance_keep_missing_values():
+    xyzi = np.zeros((2, 4), np.float32)
+    semantic = np.array([2, 40], np.uint16)
+    labels = PointLabels(semantic.astype(np.uint32), semantic, np.zeros(2, np.uint16))
+    source = make_source_frame(
+        0, xyzi, np.eye(4), labels, partition="fixture", sequence_id=1
+    )
+    record, instances, points = frame_geometry(source, Ledger())
+    assert record["visible"] == 0 and record["normal_fraction"] is None
+    assert not instances and len(points["slot"]) == 0
+    xyzi[0, 0] = 10
+    source = make_source_frame(
+        0, xyzi, np.eye(4), labels, partition="fixture", sequence_id=1
+    )
+    record, instances, points = frame_geometry(source, Ledger())
+    assert record["unknown_instance_points"] == 1 and record["instance_count"] is None
+    assert not instances and np.isnan(points["same_instance_neighbor_distance"]).all()

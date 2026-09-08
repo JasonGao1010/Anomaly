@@ -1,124 +1,158 @@
 {
-  "schema_version": 34,
+  "format": "stu-single-frame",
+  "schema_version": 1,
+  "research_question": "Which local geometric conditions are associated with residual single-scan STU anomaly segmentation errors?",
   "status": {
-    "route": "ajae_data_and_five_frame_supervision",
-    "state": "frozen",
-    "data_pool_frozen": true,
-    "training_allowed": true,
-    "validation_tuning_allowed": true,
-    "real_anomaly_access_allowed": true
+    "stage": "single_frame_infrastructure",
+    "model_defined": false,
+    "training_defined": false,
+    "atlas_decisions": null
   },
-  "authority": {
-    "scientific_document": "PROTOCOL.md"
-  },
-  "research_question": "Under one frozen pool of causal five-frame windows with pointwise supervision over every valid visible return, which model best improves the official STU anomaly metrics on the current frame?",
   "data": {
+    "normal_sources": [
+      {
+        "partition": "train",
+        "sequence_id": 201,
+        "frame_count": 682,
+        "labels_available": true
+      },
+      {
+        "partition": "train",
+        "sequence_id": 206,
+        "frame_count": 449,
+        "labels_available": true
+      }
+    ],
+    "development": {
+      "partition": "val",
+      "sequence_ids": [
+        125,
+        137,
+        138,
+        139,
+        140,
+        141,
+        142,
+        143,
+        144,
+        145,
+        146,
+        147,
+        148,
+        149,
+        150,
+        151,
+        152,
+        153,
+        169
+      ],
+      "labels_available": true
+    },
+    "hidden_test": {
+      "partition": "test",
+      "sequence_ids": [
+        100,
+        101,
+        102,
+        103,
+        104,
+        105,
+        106,
+        107,
+        108,
+        109,
+        110,
+        111,
+        112,
+        113,
+        114,
+        115,
+        116,
+        117,
+        118,
+        119,
+        120,
+        121,
+        122,
+        123,
+        124,
+        126,
+        127,
+        128,
+        129,
+        130,
+        131,
+        132,
+        133,
+        134,
+        135,
+        136,
+        154,
+        155,
+        156,
+        157,
+        158,
+        159,
+        160,
+        161,
+        162,
+        163,
+        164,
+        165,
+        166,
+        167,
+        168
+      ],
+      "labels_available": false,
+      "in_active_scope": false
+    },
     "official_archive_sha256": {
       "train.zip": "c89319a23887567695d4e8bf27aa845107348871b5063b10704b230862757259",
       "val.zip": "7d3d9ad2ec588700aa51930db82185a8ecb3dbb2e5ba9e97d73609dd293a81d2",
       "test.zip": "ba1c6c0e5793b7da608376b217230380c820f1c2003f8cb5c862c669eae832fd"
-    },
-    "parameter_update_source": {
-      "partition": "train",
-      "sequence_id": 206,
-      "role": "only_source_allowed_to_influence_parameter_updates",
-      "labels_available": true,
-      "frame_range_inclusive": [0, 448],
-      "gradient_updates_allowed": true
-    },
-    "model_validation_source": {
-      "partition": "train",
-      "sequence_id": 201,
-      "role": "synthetic_development_source_without_parameter_updates",
-      "labels_available": true,
-      "frame_range_inclusive": [0, 681],
-      "gradient_updates_allowed": false,
-      "normal_window_count": 678,
-      "normal_output_frame_range_inclusive": [4, 681],
-      "known_duplicate_prefix_frames": [0, 1, 2, 3],
-      "duplicate_prefix_ray_runs": {
-        "0": [[0, 131072, 0], [131072, 131072, 0], [262144, 131072, 0]],
-        "1": [[0, 131072, 0], [131072, 131072, 0], [262144, 131072, 0]],
-        "2": [[0, 29184, 0], [29184, 131072, 0], [160256, 131072, 0]],
-        "3": [[0, 131072, 0], [131072, 131072, 0]]
-      },
-      "duplicate_policy": "retain_and_report"
-    },
-    "real_anomaly_development_validation": {
-      "gradient_updates_allowed": false,
-      "checkpoint": "runs/train/v1/epoch_07.pt",
-      "checkpoint_sha256": "eb84e5383e9134968a3421749dd7e2f5b04248e631772eed0befb5486e44a7bb",
-      "startup": "available_prefix_right_aligned_in_five_slots_no_padding_points",
-      "main_scope": "all_original_frames_continuous_per_sequence",
-      "supplementary_scope": "current_frame_at_least_4",
-      "zero_coordinate_slot_score": 0.0,
-      "normal_score_threshold": 0.5,
-      "postprocessing": "none",
-      "normalization_updates": false,
-      "partition": "val",
-      "role": "public_real_development_validation_without_parameter_updates",
-      "labels_available": true,
-      "sequence_ids": [125, 137, 138, 139, 140, 141, 142, 143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 169],
-      "qualitative_inspection": {
-        "user_authorized": true,
-        "sequence_id": 125,
-        "source_frame_range_inclusive": [0, 18],
-        "output_frame_range_inclusive": [4, 18],
-        "window_count": 15,
-        "purpose": "truth_colored_visual_inspection_only_no_model_inference_or_metrics",
-        "ply_directory": "artifacts/ply/real/125"
-      }
-    },
-    "hidden_test": {
-      "partition": "test",
-      "role": "sealed_final_hidden_test",
-      "labels_available": false,
-      "sequence_ids": [100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 154, 155, 156, 157, 158, 159, 160, 161, 162, 163, 164, 165, 166, 167, 168]
     }
   },
-  "window": {
-    "frames": 5,
-    "causal_offsets_from_current": [-4, -3, -2, -1, 0],
-    "definition": "W_t={X_(t-4),X_(t-3),X_(t-2),X_(t-1),X_t}",
-    "training_unit": "one_complete_five_frame_observation_window",
-    "prediction_scope": "all_visible_points_in_the_five_frames",
-    "supervision_scope": "all_visible_points_with_valid_binary_truth_in_the_five_frames",
-    "online_output": "current_frame_point_anomaly_scores_only",
-    "current_mask_role": "online_output_extraction_only_never_training_loss",
-    "coordinate_reference": "current_frame_lidar",
-    "historical_transform": "T_current_from_i=inverse(T_world_from_current)@T_world_from_i",
-    "current_transform": "direct_bitwise_copy_of_raw_xyz",
-    "historical_coordinate_tolerance": {
-      "absolute_m": 1e-6,
-      "relative": 1e-5
-    },
-    "rigid_pose_tolerance": {
-      "absolute": 0.001,
-      "relative": 0.001
-    },
-    "point_identity": ["synthetic_or_raw_sequence_id", "source_frame", "source_slot"],
-    "discrete_fields_exact": ["source_frame", "source_slot", "label_state", "current_mask", "point_count"],
-    "overlap_fusion_for_online_result": "forbidden"
+  "input": {
+    "unit": "one_current_scan",
+    "channels": [
+      "x",
+      "y",
+      "z",
+      "intensity"
+    ],
+    "coordinate_frame": "current_sensor",
+    "model_features_exclude": [
+      "semantic",
+      "instance",
+      "ground_truth_geometry"
+    ],
+    "zero_coordinate_slots": "preserve_in_source_exclude_from_returns"
+  },
+  "predictions": {
+    "format": "stu-frame-prediction",
+    "identity": [
+      "partition",
+      "sequence_id",
+      "frame_id",
+      "source_slot"
+    ],
+    "score": "finite_float32_higher_is_more_anomalous",
+    "coverage": "exactly_SourceFrame.real_slots",
+    "export": "restore_original_file_slots_fill_zero_coordinate_slots_with_0"
+  },
+  "evaluation": {
+    "distance_m": [
+      2.5,
+      50
+    ],
+    "ignore_semantic": 0,
+    "anomaly_semantic": 2,
+    "min_anomaly_points_per_frame": 5,
+    "pooling": "all_official_points_across_eligible_frames",
+    "fpr_limit": 0.01,
+    "fpr95": "first_retained_official_ROC_node_with_TPR_strictly_greater_than_0.95"
   },
   "labels": {
-    "field": "anomaly_target",
-    "states": {
-      "-1": "ignore",
-      "0": "normal",
-      "1": "anomaly"
-    },
-    "raw_rule": {
-      "semantic_0": "ignore",
-      "semantic_2": "anomaly",
-      "other_nonzero_semantics": "normal"
-    },
-    "synthetic_rule": {
-      "anomaly_proxy_visible_return": "anomaly",
-      "retained_valid_normal_return": "normal",
-      "retained_raw_semantic_0": "ignore"
-    },
-    "loss_rule": "binary_loss_over_anomaly_target_in_{0,1}_only",
-    "feature_leakage": "labels_masks_and_world_parameters_are_forbidden_model_features",
     "normal_semantic_class_map": {
       "0": 255,
       "1": 255,
@@ -157,122 +191,17 @@
       "259": 4
     }
   },
-  "synthetic_pools": {
-    "generation_order": "sample_one_world_per_segment_then_render_each_segment_frame_once_then_cut_windows",
-    "anomaly_objects_per_segment": 1,
-    "placement": {
-      "preference": "nearest_terminal_support_quartile_then_all_segment_support",
-      "nearby_support_quantile": 0.25,
-      "visibility": "terminal_return_preferred_else_recorded_support_visible_fallback",
-      "physical_constraints": "unchanged",
-      "empty_anomaly_windows": "retain_as_normal_supervision"
-    },
-    "cross_segment_windows": "forbidden",
-    "rerender_same_frame_for_overlapping_windows": "forbidden",
-    "root_seed_substitution_after_protocol_freeze": "forbidden",
-    "train": {
-      "source_sequence_id": 206,
-      "synthetic_sequence_count": 8,
-      "segment_boundaries_inclusive": [[0, 27], [28, 55], [56, 83], [84, 111], [112, 139], [140, 167], [168, 195], [196, 223], [224, 251], [252, 279], [280, 307], [308, 335], [336, 363], [364, 391], [392, 419], [420, 448]],
-      "segment_lengths": [28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 29],
-      "seed_base": 34100000,
-      "seed_formula": "seed_base+1000*synthetic_sequence_index+segment_index",
-      "world_count": 128,
-      "windows_per_synthetic_sequence": 385,
-      "total_window_count": 3080,
-      "output_directory": "artifacts/data/v1/train"
-    },
-    "validation": {
-      "source_sequence_id": 201,
-      "synthetic_sequence_count": 4,
-      "segment_boundaries_inclusive": [[0, 27], [28, 55], [56, 83], [84, 111], [112, 139], [140, 167], [168, 195], [196, 223], [224, 251], [252, 279], [280, 307], [308, 335], [336, 363], [364, 391], [392, 419], [420, 447], [448, 475], [476, 503], [504, 531], [532, 559], [560, 587], [588, 615], [616, 681]],
-      "segment_lengths": [28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 66],
-      "seed_base": 34200000,
-      "seed_formula": "seed_base+1000*synthetic_sequence_index+segment_index",
-      "world_count": 92,
-      "windows_per_synthetic_sequence": 590,
-      "total_window_count": 2360,
-      "output_directory": "artifacts/data/v1/validation"
-    }
-  },
-  "storage": {
-    "format": "ajae-sparse-rendered-segment",
-    "source_frames": "official_raw_STU_files_bound_by_per_frame_content_hashes",
-    "synthetic_delta": "only_slots_whose_visible_return_is_replaced_by_an_anomaly_proxy",
-    "one_file_per_segment": true,
-    "window_storage": "identities_and_frame_references_only_no_duplicate_point_arrays",
-    "segment_required_arrays": ["frame_ids", "frame_offsets", "changed_slots", "changed_xyzi", "changed_packed_labels", "changed_object_ids"],
-    "segment_required_metadata": ["synthetic_sequence_id", "segment_index", "segment_boundary_inclusive", "seed", "world_identity", "world_content_identity", "world", "world_generation_report", "renderer_identity", "raw_source_identities", "rendered_source_identities", "window_identities", "scientific_content_hash"]
-  },
-  "predictions": {
-    "format": "ajae-complete-window-point-prediction",
-    "required_point_record_fields": ["synthetic_or_raw_sequence_id", "window_current_frame", "source_frame", "source_slot", "anomaly_score"],
-    "online_selection": "source_frame_equals_window_current_frame",
-    "historical_context_scores": "persist_unchanged_but_forbidden_from_online_primary_metric",
-    "future_offline_fusion": "outside_active_protocol"
-  },
-  "artifacts": {
-    "sensor_calibration": {
-      "file": "artifacts/calibration/model.pt",
-      "sha256": "7dc00282bdae7d7105fd4d3b89f08570fb095923988693a07368f4a4ccce4d5e",
-      "source_file": "artifacts/calibration/source.npz",
-      "source_sha256": "42791278e2a6b36d975bbe9dc957c6f303b8b424c5b97cf54e42380ad191f253"
-    },
-    "qualified_support_pools": {
-      "train/206": {
-        "file": "artifacts/support/206.npz",
-        "sha256": "5f4aeec20070382f60266320dd383f88b5cbb59d5884a585679af73411e0c09d",
-        "frame_range_inclusive": [0, 448],
-        "anchor_range_inclusive": [2, 446],
-        "qualified_anchor_count": 445,
-        "pool_size": 772602,
-        "scientific_array_hash": "0de96f149b1ae0154c2befbdf69e0fcd912bcda0fad18f72a6bf9e93f2608910"
-      },
-      "train/201": {
-        "file": "artifacts/support/201.npz",
-        "sha256": "2f0170612cefae10d6a5f1d14fffcbe6c55b1c8fdab331b6a4b2e8c9e31bec1c",
-        "frame_range_inclusive": [0, 681],
-        "anchor_range_inclusive": [2, 679],
-        "qualified_anchor_count": 640,
-        "pool_size": 1210186,
-        "scientific_array_hash": "8865d0b65cc6814650213adcaff429a9ad75309871f99bee56936458b5249a7c"
-      }
-    },
-    "train_pool_manifest": {
-      "file": "artifacts/data/v1/train_manifest.json",
-      "sha256": "703cb0eb65e7432eaa9a0116424b229cb69506ff0468614842f2bf5ca262b972"
-    },
-    "validation_pool_manifest": {
-      "file": "artifacts/data/v1/validation_manifest.json",
-      "sha256": "60b1480072034f0b96d77e48aee0a9d8afd6af14e1dfae34ab830cfd8e183fe5"
-    },
-    "qualification": {
-      "file": "artifacts/data/v1/qualification.json",
-      "sha256": "899e18f4863c975ea16639c21ed52d35daaa279dd6f11cc6d176222ecfb09168"
-    }
-  },
-  "qualification": {
-    "model_independent": true,
-    "required_checks": [
-      "train_206_has_exactly_frames_0_through_448",
-      "train_segments_are_disjoint_and_cover_0_through_448",
-      "one_fixed_world_per_segment",
-      "exactly_one_anomaly_proxy_per_segment",
-      "terminal_placement_visibility_and_physical_exceptions_are_recorded",
-      "same_seed_repeats_bitwise",
-      "different_formal_seeds_produce_different_physical_world_contents",
-      "each_segment_frame_is_rendered_once",
-      "every_window_is_inside_one_segment",
-      "every_visible_return_appears_once_per_window",
-      "coordinates_identity_and_labels_are_row_aligned",
-      "current_frame_xyz_is_a_bitwise_copy",
-      "historical_registration_meets_the_frozen_tolerance",
-      "one_rendered_frame_is_bitwise_identical_across_overlapping_windows",
-      "train_201_has_exactly_frames_0_through_681",
-      "known_duplicate_prefix_is_retained_with_frozen_ray_runs",
-      "normal_201_has_exactly_678_windows_and_unique_outputs_4_through_681",
-      "all_world_parameters_seeds_boundaries_raw_identities_and_scientific_hashes_are_saved"
+  "geometry": {
+    "scope": "current_scan",
+    "ground_semantic_ids": [
+      40,
+      44,
+      48,
+      49,
+      60
     ],
-    "status": "passed"
+    "ground_estimator": "local_plane_proxy",
+    "unreliable_values": "missing",
+    "model_input_use": "label_dependent_geometry_is_diagnostic_only"
   }
 }

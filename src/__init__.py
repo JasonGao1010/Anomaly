@@ -1,1 +1,1 @@
-"""AJAE data, rendering, and future model components."""
+"""Single-scan STU data, evaluation, geometry, and rendering."""

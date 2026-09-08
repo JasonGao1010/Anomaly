@@ -13,13 +13,10 @@ import time
 
 import numpy as np
 from scipy.spatial import cKDTree, ConvexHull, QhullError
-import torch
 
-from .data import FrozenSyntheticSegment, _atomic_json, load_pool_manifest
-from .model import joint_voxelize
+from .data import _atomic_json, host_disk
 from .protocol import load_protocol
 from .scene import STUSequence, LabelMode
-from .train import host_disk
 
 
 QUANTILES = (0.05, 0.25, 0.5, 0.75, 0.95)
@@ -29,9 +26,7 @@ FRACTION_BINS = (0, 0.001, 0.01, 0.1, 0.25, 0.5, 0.75, 0.9, 1.000001)
 LENGTH_BINS = (0, 0.01, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 50, float("inf"))
 INTENSITY_BINS = (-float("inf"), 0, 0.05, 0.1, 0.2, 0.4, 0.6, 1, 2, float("inf"))
 GROUND = (40, 44, 48, 49, 60)
-STATIC = (40, 44, 48, 49, 50, 51, 60, 71, 72, 80, 81)
 NAMES = ("normal", "anomaly", "ignore")
-BIT_COUNTS = np.array([i.bit_count() for i in range(32)], np.uint8)
 
 
 def categories(semantic):
@@ -199,7 +194,12 @@ def describe(meta, values, weights, *, mean=None, bin_weights=None):
     return result
 
 
-def frame_geometry(source, ledger, sequence, frame):
+def frame_geometry(source, ledger):
+    if source.labels is None:
+        raise ValueError(
+            "geometry diagnostics require source semantic and instance labels"
+        )
+    sequence, frame = source.sequence_id, source.frame_id
     slots = source.real_slots
     xyzi = source.xyzi[slots]
     xyz, intensity = xyzi[:, :3], xyzi[:, 3]
@@ -248,8 +248,10 @@ def frame_geometry(source, ledger, sequence, frame):
         ("normal_fraction", record["normal"], len(slots)),
         ("anomaly_fraction", a, len(slots)),
     ):
-        record[name] = numerator / denominator
-        ledger.add("A02", name, [record[name]], bins=FRACTION_BINS)
+        record[name] = numerator / denominator if denominator else None
+        ledger.add(
+            "A02", name, [record[name] if denominator else np.nan], bins=FRACTION_BINS
+        )
     ledger.add(
         "A03", "current_state", [state], categorical=True, bins=np.arange(-0.5, 4.5)
     )
@@ -260,14 +262,6 @@ def frame_geometry(source, ledger, sequence, frame):
         ("A05", "eligible", state == 3),
     ):
         ledger.add(factor, metric, [value], categorical=True, bins=(-0.5, 0.5, 1.5))
-        ledger.add(
-            factor,
-            metric,
-            [value],
-            scope="complete_frames" if frame >= 4 else "startup_frames",
-            categorical=True,
-            bins=(-0.5, 0.5, 1.5),
-        )
     for metric in ("anomaly", "anomaly_in_range"):
         ledger.add("B01", metric, [record[metric]])
     for metric in ("anomaly_distance_median", "anomaly_in_range_distance_median"):
@@ -347,9 +341,7 @@ def frame_geometry(source, ledger, sequence, frame):
     az = np.arctan2(ax[:, 1], ax[:, 0])
     el = np.arctan2(ax[:, 2], np.linalg.norm(ax[:, :2], axis=1))
     points = dict(
-        sequence=np.full(
-            a, sequence, dtype=np.int32 if isinstance(sequence, int) else None
-        ),
+        sequence=np.full(a, sequence, np.int32),
         frame=np.full(a, frame, np.int32),
         slot=slots[anomaly],
         instance=instance[anomaly],
@@ -625,537 +617,27 @@ def ground_relation(obj, ground, tree):
     return result
 
 
-def window_geometry(window, inputs, frame_rows, ledger, sequence, frame):
-    scope = "complete_windows" if frame >= 4 else "startup_windows"
-    xyz = window.points.coordinates
-    semantic = window.labels.semantic
-    label = categories(semantic)
-    scan = window.points.scan_group
-    current = window.current_mask
-    inverse = inputs.point_to_voxel.numpy()
-    v = len(inputs.features)
-    features = inputs.features.numpy()
-    means = inputs.coordinates.numpy()
-    counts = np.bincount(inverse, minlength=v)
-    member = [np.bincount(inverse[label == g], minlength=v) for g in range(3)]
-    current_counts = np.bincount(inverse[current], minlength=v)
-    current_normal = np.bincount(inverse[current & (label == 0)], minlength=v)
-    current_anomaly = np.bincount(inverse[current & (label == 1)], minlength=v)
-    ca = current_anomaly > 0
-    ja = member[1] > 0
-    cv = current_counts > 0
-    mix = (member[0] > 0).astype(np.uint8) + 2 * (member[2] > 0)
-    hits = (features[:, 4:] @ np.array((16, 8, 4, 2, 1), np.float32)).astype(np.uint8)
-    anomaly_hits = np.zeros(v, np.uint8)
-    np.bitwise_or.at(
-        anomaly_hits,
-        inverse[label == 1],
-        (1 << (4 - scan[label == 1])).astype(np.uint8),
-    )
-    new_normal = ca & (current_normal == 0) & (member[0] > 0)
-    raw = [r["anomaly"] for r in frame_rows[-5:]]
-    official = [r["anomaly_in_range"] for r in frame_rows[-5:]]
-    padded = [None] * (5 - len(raw)) + raw
-    official_padded = [None] * (5 - len(raw)) + official
-    pattern = "".join("-" if x is None else str(int(x > 0)) for x in padded)
-    history = sum(raw[:-1])
-    support = sum(x > 0 for x in raw[:-1])
-    rec = dict(
-        sequence=sequence,
-        frame=frame,
-        scope=scope,
-        anomaly_vector=padded,
-        anomaly_in_range_vector=official_padded,
-        visibility_pattern=pattern,
-        all_unseen=sum(raw) == 0,
-        history_anomaly=history,
-        history_visible_scans=support,
-        history_anomaly_fraction=history / sum(raw) if sum(raw) else None,
-        voxels=v,
-        current_voxels=int(cv.sum()),
-        current_anomaly_voxels=int(ca.sum()),
-        joint_anomaly_voxels=int(ja.sum()),
-        joint_anomaly_voxel_increment=int(ja.sum() - ca.sum()),
-        current_anomaly_compression=raw[-1] / ca.sum() if ca.any() else None,
-        joint_anomaly_compression=sum(raw) / ja.sum() if ja.any() else None,
-        current_anomaly_normal_mix_voxels=int((ca & (member[0] > 0)).sum()),
-        current_anomaly_ignore_mix_voxels=int((ca & (member[2] > 0)).sum()),
-        history_new_normal_voxels=int(new_normal.sum()),
-        history_new_normal_points=int(current_anomaly[new_normal].sum()),
-    )
-    for key in ("history_anomaly", "history_visible_scans"):
-        ledger.add(
-            "E01",
-            key,
-            [rec[key]],
-            scope=scope,
-            bins=COUNT_BINS if key == "history_anomaly" else np.arange(-0.5, 5.5),
-        )
-    ledger.add(
-        "E01",
-        "history_anomaly_fraction",
-        [
-            rec["history_anomaly_fraction"]
-            if rec["history_anomaly_fraction"] is not None
-            else np.nan
-        ],
-        scope=scope,
-        bins=FRACTION_BINS,
-    )
-    ledger.add(
-        "A06",
-        "whole_window_unseen",
-        [sum(raw) == 0],
-        scope=scope,
-        categorical=True,
-        bins=(-0.5, 0.5, 1.5),
-    )
-    if frame >= 4:
-        ledger.add(
-            "E02",
-            "visibility_pattern",
-            [int(pattern, 2)],
-            scope=scope,
-            categorical=True,
-            bins=np.arange(-0.5, 32.5),
-        )
-    transform = (
-        window.current_pose.current_from_world @ window.frames[0].source.lidar_pose
-    )
-    rec["translation_m"] = float(np.linalg.norm(transform[:3, 3])) if frame else 0.0
-    rec["rotation_rad"] = (
-        float(np.arccos(np.clip((np.trace(transform[:3, :3]) - 1) / 2, -1, 1)))
-        if frame
-        else 0.0
-    )
-    ledger.add(
-        "E04", "translation", [rec["translation_m"]], scope=scope, bins=LENGTH_BINS
-    )
-    ledger.add(
-        "E04",
-        "rotation",
-        [rec["rotation_rad"]],
-        scope=scope,
-        bins=(0, 0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, np.pi),
-    )
-    for key in (
-        "current_anomaly_voxels",
-        "joint_anomaly_voxels",
-        "joint_anomaly_voxel_increment",
-    ):
-        ledger.add("F01", key, [rec[key]], scope=scope)
-    for key in ("current_anomaly_compression", "joint_anomaly_compression"):
-        ledger.add(
-            "F01",
-            key,
-            [rec[key] if rec[key] is not None else np.nan],
-            scope=scope,
-            bins=(1, 1.01, 1.1, 1.5, 2, 3, 5, 10, 50, float("inf")),
-        )
-    ledger.add(
-        "F02",
-        "all_voxel_label_presence",
-        (member[0] > 0) + 2 * (member[1] > 0) + 4 * (member[2] > 0),
-        scope=scope,
-        unit="voxel",
-        categorical=True,
-        bins=np.arange(-0.5, 8.5),
-    )
-    ledger.add(
-        "F02",
-        "anomaly_voxel_mix",
-        mix[ja],
-        scope=scope,
-        unit="anomaly_voxel",
-        categorical=True,
-        bins=np.arange(-0.5, 4.5),
-    )
-    cur_anomaly_inverse = inverse[current & (label == 1)]
-    ledger.add(
-        "F02",
-        "current_anomaly_point_mix",
-        mix[cur_anomaly_inverse],
-        scope=scope,
-        unit="current_anomaly_point",
-        categorical=True,
-        bins=np.arange(-0.5, 4.5),
-    )
-    for g, name in enumerate(NAMES):
-        ledger.add(
-            "F02",
-            "member_fraction",
-            member[g][ja] / counts[ja],
-            scope=scope,
-            group=name,
-            unit="anomaly_voxel",
-            bins=FRACTION_BINS,
-        )
-    ledger.add(
-        "F03",
-        "new_normal",
-        new_normal[ca],
-        scope=scope,
-        unit="current_anomaly_voxel",
-        categorical=True,
-        bins=(-0.5, 0.5, 1.5),
-    )
-    ledger.add(
-        "F03",
-        "new_normal",
-        new_normal[cur_anomaly_inverse],
-        scope=scope,
-        unit="current_anomaly_point",
-        group="point_weighted",
-        categorical=True,
-        bins=(-0.5, 0.5, 1.5),
-    )
-    for s in range(4):
-        h = np.bincount(inverse[(scan == s) & (label == 0)], minlength=v) > 0
-        ledger.add(
-            "F03",
-            f"normal_from_scan_{s}",
-            h[new_normal],
-            scope=scope,
-            unit="newly_mixed_anomaly_voxel",
-            categorical=True,
-            bins=(-0.5, 0.5, 1.5),
-        )
-    ledger.add(
-        "F04",
-        "scan_hits",
-        hits,
-        scope=scope,
-        unit="voxel",
-        categorical=True,
-        bins=np.arange(-0.5, 32.5),
-    )
-    ledger.add(
-        "F04",
-        "scan_hits",
-        hits[ca],
-        scope=scope,
-        group="current_anomaly",
-        unit="voxel",
-        categorical=True,
-        bins=np.arange(-0.5, 32.5),
-    )
-    ledger.add(
-        "F04",
-        "anomaly_history_hits",
-        BIT_COUNTS[anomaly_hits[ca] & 30],
-        scope=scope,
-        unit="current_anomaly_voxel",
-        categorical=True,
-        bins=np.arange(-0.5, 5.5),
-    )
-    cur = np.flatnonzero(current)
-    ci = inverse[cur]
-    current_means = np.column_stack(
-        [
-            np.bincount(
-                ci,
-                weights=xyz[cur, c] if c < 3 else window.points.features[cur, 0],
-                minlength=v,
-            )[cv]
-            / current_counts[cv]
-            for c in range(4)
-        ]
-    ).astype(np.float32)
-    shift = np.linalg.norm(means[cv] - current_means[:, :3], axis=1)
-    intensity_shift = features[cv, 3] - current_means[:, 3]
-    residual = np.linalg.norm(xyz[cur] - means[ci], axis=1)
-    for group, selected in (
-        ("all_current", np.ones(cv.sum(), bool)),
-        ("current_anomaly", ca[cv]),
-    ):
-        ledger.add(
-            "F05",
-            "mean_displacement",
-            shift[selected],
-            scope=scope,
-            group=group,
-            unit="current_voxel",
-            bins=LENGTH_BINS,
-            resolution=0.0001,
-        )
-        ledger.add(
-            "F05",
-            "mean_intensity_shift",
-            intensity_shift[selected],
-            scope=scope,
-            group=group,
-            unit="current_voxel",
-            bins=(-float("inf"), -0.2, -0.05, -0.01, 0, 0.01, 0.05, 0.2, float("inf")),
-            resolution=0.0001,
-        )
-    for g, name in enumerate(NAMES):
-        ledger.add(
-            "F05",
-            "point_residual",
-            residual[label[cur] == g],
-            scope=scope,
-            group=name,
-            unit="current_point",
-            bins=LENGTH_BINS,
-            resolution=0.0001,
-        )
-    rec["anomaly_mean_displacement_median"] = (
-        float(np.median(shift[ca[cv]])) if ca.any() else None
-    )
-    rec["normal_mix_fraction"] = (
-        rec["current_anomaly_normal_mix_voxels"] / ca.sum() if ca.any() else None
-    )
-    rec["ignore_mix_fraction"] = (
-        rec["current_anomaly_ignore_mix_voxels"] / ca.sum() if ca.any() else None
-    )
-    rec["new_normal_fraction"] = (
-        rec["history_new_normal_voxels"] / ca.sum() if ca.any() else None
-    )
-    sampled, matched, distances = static_overlap(
-        xyz, semantic, current, window.spec.sequence_id, window.current_frame_id
-    )
-    rec.update(
-        static_sampled=sampled,
-        static_matched=matched,
-        static_match_fraction=matched / sampled if sampled else None,
-    )
-    ledger.add(
-        "E05",
-        "sampled_static_distance",
-        distances,
-        scope=scope,
-        unit="sampled_current_static_point",
-        bins=(0, 0.005, 0.01, 0.025, 0.05, 0.1, 0.2, float("inf")),
-        resolution=0.0001,
-    )
-    ledger.add(
-        "E05",
-        "static_match_fraction",
-        [rec["static_match_fraction"] if sampled else np.nan],
-        scope=scope,
-        bins=FRACTION_BINS,
-    )
-    # Save anomaly-specific measurements only; all background members were counted.
-    detail = dict(
-        voxel_normal_fraction=member[0][cur_anomaly_inverse]
-        / counts[cur_anomaly_inverse],
-        voxel_anomaly_fraction=member[1][cur_anomaly_inverse]
-        / counts[cur_anomaly_inverse],
-        voxel_ignore_fraction=member[2][cur_anomaly_inverse]
-        / counts[cur_anomaly_inverse],
-        voxel_mix=mix[cur_anomaly_inverse],
-        voxel_hits=hits[cur_anomaly_inverse],
-        history_new_normal=new_normal[cur_anomaly_inverse],
-        point_residual=residual[label[cur] == 1],
-    )
-    return rec, detail
-
-
-def static_overlap(xyz, semantic, current, sequence, frame):
-    ids = np.flatnonzero(current & np.isin(semantic, STATIC))
-    if not frame or not len(ids):
-        return 0, 0, np.empty(0)
-    if len(ids) > 2048:
-        ids = np.sort(
-            np.random.default_rng(
-                np.random.SeedSequence([20260906, sequence, frame])
-            ).choice(ids, 2048, replace=False)
-        )
-    distances = np.full(len(ids), np.nan)
-    for raw in np.unique(semantic[ids]):
-        chosen = semantic[ids] == raw
-        history = (~current) & (semantic == raw)
-        if history.any():
-            found = cKDTree(xyz[history]).query(
-                xyz[ids[chosen]], k=1, distance_upper_bound=0.2, workers=1
-            )[0]
-            found[~np.isfinite(found)] = np.nan
-            distances[chosen] = found
-    return len(ids), int(np.isfinite(distances).sum()), distances
-
-
-def stages(frames, sequence):
-    visible = np.array([r["anomaly"] > 0 for r in frames])
-    starts = np.r_[0, np.flatnonzero(visible[1:] != visible[:-1]) + 1]
-    ends = np.r_[starts[1:], len(frames)]
-    output = []
-    for start, end in zip(starts, ends, strict=True):
-        kind = (
-            "visible"
-            if visible[start]
-            else "entire_unseen"
-            if start == 0 and end == len(frames)
-            else "prefix"
-            if start == 0
-            else "tail"
-            if end == len(frames)
-            else "gap"
-        )
-        output.append(
-            dict(
-                sequence=sequence,
-                start=int(start),
-                end=int(end - 1),
-                length=int(end - start),
-                kind=kind,
-                left_censored=bool(start == 0),
-                right_censored=bool(end == len(frames)),
-            )
-        )
-        for frame in range(start, end):
-            frames[frame]["stage"] = kind
-            frames[frame]["first_in_visible_run"] = bool(
-                visible[start] and frame == start
-            )
-    return output
-
-
-def profile_sequence(data_root, output, sequence, limit=None, segment_record=None):
+def profile_sequence(data_root, output, sequence, limit=None):
+    """Read each current scan once; retain only single-scan observations."""
     started = time.monotonic()
-    cpu_started = time.process_time()
-    torch.set_num_threads(1)
-    directory = Path(output) / str(sequence)
-    if (directory / "summary.json").exists():
-        return json.loads((directory / "summary.json").read_text())
-    directory.mkdir(parents=True, exist_ok=True)
-    protocol = load_protocol()
-    synthetic = segment_record is not None
-    source_id = segment_record["source_sequence_id"] if synthetic else sequence
     source = STUSequence.open(
         data_root,
-        protocol=protocol,
-        partition="train" if synthetic else "val",
-        sequence_id=source_id,
+        protocol=load_protocol(),
+        partition="val",
+        sequence_id=sequence,
         label_mode=LabelMode.REQUIRED,
     )
-    source._cache_frames = 5
-    segment = None
-    if synthetic:
-        segment = FrozenSyntheticSegment(
-            protocol.path.parent / segment_record["file"],
-            source,
-            segment_record["file_sha256"],
-        )
-        for key in ("world_identity", "synthetic_sequence_id", "segment_index"):
-            if segment.metadata[key] != segment_record[key]:
-                raise ValueError(f"frozen world identity differs: {key}")
-    ledger = Ledger()
-    frames = []
-    windows = []
-    instances = []
-    point_chunks = []
-    frame_ids = segment.frame_ids if synthetic else tuple(range(source.frame_count))
-    if limit is not None:
-        frame_ids = frame_ids[:limit]
-    count = len(frame_ids)
-    for frame, source_frame in enumerate(frame_ids):
-        raw = (
-            segment.frame(source_frame)
-            if synthetic
-            else source.source_frame(source_frame)
-        )
-        record, objects, points = frame_geometry(raw, ledger, sequence, frame)
-        if synthetic:
-            # Local indices define world boundaries; source IDs preserve raw observation identity.
-            for row in (record, *objects):
-                row.update(
-                    source_frame=source_frame,
-                    source_sequence=source_id,
-                    version=segment_record["synthetic_sequence_id"],
-                    segment=segment_record["segment_index"],
-                )
+    directory = Path(output) / str(sequence)
+    directory.mkdir(parents=True, exist_ok=True)
+    frame_ids = source.frame_ids if limit is None else source.frame_ids[:limit]
+    ledger, frames, instances, point_chunks = Ledger(), [], [], []
+    for frame_id in frame_ids:
+        record, objects, points = frame_geometry(source.source_frame(frame_id), ledger)
         frames.append(record)
         instances.extend(objects)
-        if not synthetic or frame >= 4:
-            window = (
-                segment.window(source_frame - 4)
-                if synthetic
-                else source.for_output(frame)
-            )
-            inputs = joint_voxelize(window)
-            record, detail = window_geometry(
-                window, inputs, frames, ledger, sequence, frame
-            )
-            if synthetic:
-                record.update(
-                    source_frame=source_frame,
-                    source_sequence=source_id,
-                    version=segment_record["synthetic_sequence_id"],
-                    segment=segment_record["segment_index"],
-                    source_frames=list(window.frame_ids),
-                )
-            windows.append(record)
-            points.update(detail)
-            del window, inputs, detail
-        else:
-            # Initial context is observed once, but has no legal synthetic output window.
-            for key in (
-                "voxel_normal_fraction",
-                "voxel_anomaly_fraction",
-                "voxel_ignore_fraction",
-                "voxel_mix",
-                "voxel_hits",
-                "history_new_normal",
-                "point_residual",
-            ):
-                points[key] = np.full(len(points["frame"]), np.nan)
-        if len(points["frame"]):
-            point_chunks.append(points)
-        del points, raw
-        if (frame + 1) % 100 == 0:
-            print(
-                json.dumps(
-                    dict(
-                        event="sequence_progress",
-                        sequence=sequence,
-                        frames=frame + 1,
-                        total=count,
-                    )
-                ),
-                flush=True,
-            )
-    episodes = stages(frames, sequence)
-    if synthetic:
-        for row in episodes:
-            row.update(
-                source_start=frame_ids[row["start"]], source_end=frame_ids[row["end"]]
-            )
-    for kind in ("visible", "prefix", "gap", "tail", "entire_unseen"):
-        ledger.add(
-            "E03",
-            "stage_length",
-            [x["length"] for x in episodes if x["kind"] == kind],
-            scope="sequence_runs",
-            group=kind,
-            unit="observed_run",
-            bins=(0, 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, float("inf")),
-        )
-    stage_codes = {
-        name: i
-        for i, name in enumerate(("prefix", "visible", "gap", "tail", "entire_unseen"))
-    }
-    for row in frames:
-        ledger.add(
-            "E03",
-            "stage",
-            [stage_codes[row["stage"]]],
-            categorical=True,
-            bins=np.arange(-0.5, 5.5),
-        )
-        ledger.add(
-            "E03",
-            "first_in_visible_run",
-            [row["first_in_visible_run"]],
-            categorical=True,
-            bins=(-0.5, 0.5, 1.5),
-        )
-    for name, rows in (
-        ("frames", frames),
-        ("windows", windows),
-        ("instances", instances),
-        ("stages", episodes),
-    ):
-        with (directory / f"{name}.jsonl").open("w") as stream:
+        point_chunks.append(points)
+    for name, rows in (("frames", frames), ("instances", instances)):
+        with (directory / f"{name}.jsonl").open("w", encoding="utf-8") as stream:
             for row in rows:
                 stream.write(json.dumps(row, allow_nan=False) + "\n")
     if point_chunks:
@@ -1167,319 +649,110 @@ def profile_sequence(data_root, output, sequence, limit=None, segment_record=Non
             },
         )
     ledger.save(directory / "histograms.npz")
-    states = np.bincount([r["state"] for r in frames], minlength=4)
     result = dict(
+        format="stu-frame-profile",
         sequence=sequence,
-        frames=count,
+        frames=len(frames),
         first_frame=frame_ids[0],
         last_frame=frame_ids[-1],
-        complete_windows=max(0, count - 4),
-        startup_windows=0 if synthetic else min(4, count),
-        states=states.tolist(),
-        slots=sum(r["slots"] for r in frames),
-        visible=sum(r["visible"] for r in frames),
-        ignore=sum(r["ignore"] for r in frames),
-        normal=sum(r["normal"] for r in frames),
-        anomaly=sum(r["anomaly"] for r in frames),
-        anomaly_in_range=sum(r["anomaly_in_range"] for r in frames),
-        unknown_instance_points=sum(r["unknown_instance_points"] for r in frames),
-        instance_frame_count=len(instances),
-        labelled_instance_count=len({r["instance"] for r in instances}),
-        whole_window_unseen=sum(
-            r["all_unseen"] for r in windows if r["scope"] == "complete_windows"
+        states=np.bincount([r["state"] for r in frames], minlength=4).tolist(),
+        **{
+            key: sum(r[key] for r in frames)
+            for key in (
+                "slots",
+                "visible",
+                "zero_slots",
+                "ignore",
+                "normal",
+                "anomaly",
+                "anomaly_in_range",
+                "unknown_instance_points",
+            )
+        },
+        official_frames=sum(r["state"] == 3 for r in frames),
+        official_anomaly_points=sum(
+            r["anomaly_in_range"] for r in frames if r["state"] == 3
         ),
-        timestamp_available=False,
+        official_normal_points=sum(
+            r["normal_in_range"] for r in frames if r["state"] == 3
+        ),
+        instance_frame_count=len(instances),
         wall_seconds=time.monotonic() - started,
-        cpu_seconds=time.process_time() - cpu_started,
         max_rss_bytes=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024,
     )
-    if synthetic:
-        result.update(
-            world=segment_record["world_identity"],
-            version=segment_record["synthetic_sequence_id"],
-            source_sequence=source_id,
-            segment=segment_record["segment_index"],
-            context_frames=min(4, count),
-        )
     _atomic_json(directory / "summary.json", result)
     return result
-
-
-def profile_pools(args, disk):
-    """Profile frozen worlds independently and reuse the completed real observation profile."""
-    protocol = load_protocol()
-    real_spec = json.loads((args.real_profile / "spec.json").read_text())
-    if not (args.real_profile / "summary.json").is_file():
-        raise ValueError(
-            "completed real profile is required; raw val is never opened here"
-        )
-    jobs = []
-    for pool in (protocol.training_pool, protocol.validation_pool):
-        manifest_path = (
-            args.observation_pools / pool.name / "manifest.json"
-            if args.observation_pools
-            else protocol.pool_manifest_path(pool.name)
-        )
-        manifest = (
-            json.loads(manifest_path.read_text())
-            if args.observation_pools
-            else load_pool_manifest(protocol, pool)
-        )
-        if args.observation_pools and (
-            manifest["format"] != "ajae-observation-match-pool"
-            or manifest["pool_name"] != pool.name
-            or manifest["source_sequence_id"] != pool.source_sequence_id
-        ):
-            raise ValueError("observation profile has the wrong source population")
-        if args.observation_pools:
-            # The manifest owns its world files; old recorded paths remain provenance.
-            for record in manifest["segments"]:
-                record["file"] = (
-                    manifest_path.parent / Path(record["file"]).name
-                ).as_posix()
-        directory = args.output / pool.name
-        directory.mkdir(parents=True, exist_ok=True)
-        records = {
-            f"{r['synthetic_sequence_index']:03d}_{r['segment_index']:02d}": dict(
-                r, source_sequence_id=pool.source_sequence_id
-            )
-            for r in manifest["segments"]
-        }
-        spec = dict(real_spec)
-        spec.update(
-            population=pool.name,
-            sequences=list(records),
-            records=records,
-            frames=sum(
-                r["frame_range_inclusive"][1] - r["frame_range_inclusive"][0] + 1
-                for r in records.values()
-            ),
-            complete_windows=manifest["window_count"],
-            source="frozen sparse observations reconstructed on train/206 or train/201; no generation",
-            source_sequence_id=pool.source_sequence_id,
-            synthetic_versions=manifest.get(
-                "synthetic_sequence_count", manifest["world_count"]
-            ),
-            world_count=manifest["world_count"],
-            manifest=str(manifest_path),
-            pool_format=manifest["format"],
-            expected_whole_window_unseen=(
-                manifest["pattern_counts"][0]
-                if args.observation_pools
-                else 20
-                if pool.name == "train"
-                else 10
-            ),
-            boundaries="each world independently; first four local frames are context only; no startup windows",
-            entity_weighting="sequence_equal denotes equal worlds, not independent roads or versions",
-            point_intensity="original float32 exact unique values; each synthetic frame once per world; versions share raw background",
-            static_seed_identity="unchanged seed 20260906, raw source sequence ID, raw source frame ID",
-            real_profile=str(args.real_profile),
-            workers=args.workers,
-            output_peak_budget_bytes=4 * 2**30,
-            host_disk=disk,
-        )
-        path = directory / "spec.json"
-        if path.exists():
-            old = json.loads(path.read_text())
-            if not args.observation_pools:
-                # These two descriptors were implicit in the original v1 profile.
-                old.setdefault("pool_format", manifest["format"])
-                old.setdefault("expected_whole_window_unseen", 20 if pool.name == "train" else 10)
-            # Storage moves do not change the recorded observations or metric definitions.
-            old["manifest"], old["real_profile"] = spec["manifest"], spec["real_profile"]
-            for key, record in old["records"].items():
-                if key in records:
-                    record["file"] = records[key]["file"]
-            if any(
-                old[k] != spec[k] for k in spec if k not in ("workers", "host_disk")
-            ):
-                raise ValueError("saved synthetic profile definitions differ")
-        else:
-            _atomic_json(path, spec)
-        jobs.extend((directory, key, record) for key, record in records.items())
-    started = time.monotonic()
-    pending = [job for job in jobs if not (job[0] / job[1] / "summary.json").exists()]
-    with ProcessPoolExecutor(
-        max_workers=args.workers, mp_context=mp.get_context("fork")
-    ) as pool:
-        futures = {
-            pool.submit(
-                profile_sequence, args.data_root, directory, key, None, record
-            ): (directory.name, key)
-            for directory, key, record in pending
-        }
-        for future in as_completed(futures):
-            row = future.result()
-            print(
-                json.dumps(
-                    dict(event="world_completed", pool=futures[future][0], **row)
-                ),
-                flush=True,
-            )
-            volume = host_disk()
-            if volume["SizeRemaining"] - 512 * 2**20 < volume["reserve_bytes"]:
-                raise OSError("profile writes are approaching the host reserve")
-    timing = dict(
-        wall_seconds=time.monotonic() - started,
-        scanned_worlds=len(pending),
-        reused_worlds=len(jobs) - len(pending),
-        host_disk=host_disk(),
-    )
-    print(json.dumps(dict(event="pool_scans_completed", **timing)), flush=True)
-    if pending:
-        _atomic_json(args.output / "execution.json", timing)
-    from .profile_report import aggregate_profile, write_pool_tables, compare_profiles
-
-    results = {}
-    for name in ("train", "validation"):
-        results[name] = aggregate_profile(args.output / name)
-        write_pool_tables(args.output / name, results[name], args.tables / name)
-    real = json.loads((args.real_profile / "summary.json").read_text())
-    compare_profiles(results, real, args.output, args.tables)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data-root", type=Path, required=True)
-    parser.add_argument("--output", type=Path)
-    parser.add_argument("--workers", type=int, default=8)
-    parser.add_argument(
-        "--tables",
-        type=Path,
-        help="directory for the completed UTF-8 CSV tables",
-    )
-    parser.add_argument(
-        "--synthetic", action="store_true", help="both frozen pools; reuse real profile"
-    )
-    parser.add_argument("--real-profile", type=Path, default=Path("runs/profiles/real"))
-    parser.add_argument(
-        "--observation-pools",
-        type=Path,
-        help="v2 or pilot pool directory; use with --synthetic and separate outputs",
-    )
-    parser.add_argument(
-        "--pilot",
-        type=int,
-        help="first N frames of val/125, in a separate output directory",
-    )
+    parser.add_argument("--output", type=Path, default=Path("runs/profiles/real"))
+    parser.add_argument("--tables", type=Path, default=Path("profiles/real"))
+    parser.add_argument("--workers", type=int, required=True)
+    parser.add_argument("--sequence", type=int, action="append")
+    parser.add_argument("--limit", type=int)
+    parser.add_argument("--tables-only", action="store_true")
     args = parser.parse_args()
-    if args.observation_pools and (
-        not args.synthetic or args.output is None or args.tables is None
-    ):
-        parser.error(
-            "observation pools require --synthetic and explicit --output/--tables"
-        )
-    args.output = args.output or Path(
-        "runs/profiles/v1" if args.synthetic else "runs/profiles/real"
+    if args.workers < 1 or (args.limit is not None and args.limit < 1):
+        parser.error("workers and limit must be positive")
+    sequences = (
+        tuple(args.sequence) if args.sequence else load_protocol().public_sequence_ids
     )
-    args.tables = args.tables or Path("profiles/v1" if args.synthetic else "profiles/real")
-    torch.set_num_threads(1)
-    disk = host_disk()
-    args.output.mkdir(parents=True, exist_ok=True)
+    if len(sequences) != len(set(sequences)):
+        parser.error("duplicate sequences")
+    for sequence in sequences:
+        load_protocol().sequence("val", sequence)
     if (
-        disk["SizeRemaining"] - (4 if args.synthetic else 2) * 2**30
-        < disk["reserve_bytes"]
+        args.limit is not None
+        or set(sequences) != set(load_protocol().public_sequence_ids)
+    ) and (
+        args.output.resolve() == Path("runs/profiles/real").resolve()
+        or args.tables.resolve() == Path("profiles/real").resolve()
     ):
-        raise OSError("profile output budget would invade the E: reserve")
-    if args.synthetic:
-        if args.pilot:
-            parser.error(
-                "use a separate bounded world pilot before profiling both frozen pools"
-            )
-        profile_pools(args, disk)
-        return
-    if args.pilot:
-        print(
-            json.dumps(profile_sequence(args.data_root, args.output, 125, args.pilot)),
-            flush=True,
-        )
-        return
-    spec = dict(
-        sequences=list(load_protocol().public_sequence_ids),
-        frames=8659,
-        complete_windows=8583,
-        voxel_size_m=0.05,
-        source="public val raw scans, labels and provided poses only; no model or prediction reads",
-        neighborhoods=dict(
-            background_radius_m=0.5,
-            background_min_points=3,
-            same_instance_radius_m=0.25,
-            shape_min_distinct_points=10,
-        ),
-        ground=dict(
-            semantics=GROUND,
-            xy_radius_m=2,
-            min_points=20,
-            max_rmse_m=0.05,
-            max_slope_degrees=20,
-            min_xy_eigenvalue=0.01,
-            centroid_inside_support=True,
-        ),
-        static_proxy=dict(
-            semantics=STATIC,
-            max_current_sample=2048,
-            seed=20260906,
-            match_radius_m=0.2,
-            same_semantic=True,
-            history="all arrived history in current coordinates",
-        ),
-        aggregation="inverse empirical CDF; observation, frame and sequence weights separately; 0.0001 fine bins only for massive residual/shift arrays with quantile bounds",
-        point_intensity="original float32 exact unique values; all visible returns, no repeated source frames",
-        radial_bins="2.5 m through 50 m inclusive; >50 separate; no clipping of intensity",
-        workers=args.workers,
-        output_peak_budget_bytes=2 * 2**30,
-        host_disk=disk,
-    )
-    if (args.output / "spec.json").exists():
-        previous = json.loads((args.output / "spec.json").read_text())
-        if any(
-            previous[k] != json.loads(json.dumps(spec[k]))
-            for k in spec
-            if k not in ("workers", "host_disk")
-        ):
-            raise ValueError("profile definitions differ from saved results")
-    else:
-        _atomic_json(args.output / "spec.json", spec)
-    started = time.monotonic()
-    reused = {
-        seq
-        for seq in spec["sequences"]
-        if (args.output / str(seq) / "summary.json").exists()
-    }
-    with ProcessPoolExecutor(
-        max_workers=args.workers, mp_context=mp.get_context("fork")
-    ) as pool:
-        futures = {
-            pool.submit(profile_sequence, args.data_root, args.output, seq): seq
-            for seq in spec["sequences"]
-        }
-        for future in as_completed(futures):
-            row = future.result()
-            event = (
-                "sequence_reused" if row["sequence"] in reused else "sequence_completed"
-            )
-            print(json.dumps(dict(event=event, **row)), flush=True)
-            host_disk()
-    print(
-        json.dumps(
+        parser.error("subset profiles require separate output and table directories")
+    args.output.mkdir(parents=True, exist_ok=True)
+    if not args.tables_only:
+        disk = host_disk()
+        # The compact distributions and anomaly-only records fit within this bound.
+        if disk["SizeRemaining"] - 2 * 2**30 < disk["reserve_bytes"]:
+            raise OSError("profile storage would invade the E: reserve")
+        _atomic_json(
+            args.output / "spec.json",
             dict(
-                event="profile_scan_stage_completed",
-                wall_seconds=time.monotonic() - started,
-                reused_sequences=len(reused),
-                scanned_sequences=len(spec["sequences"]) - len(reused),
-            )
-        ),
-        flush=True,
-    )
-    from .profile_report import aggregate_profile, write_tables, plot_profile
+                format="stu-frame-profile",
+                sequences=list(sequences),
+                limit=args.limit,
+                source="current scans and labels from public STU validation",
+                ground=dict(
+                    semantics=GROUND,
+                    xy_radius_m=2,
+                    min_points=20,
+                    max_rmse_m=0.05,
+                    max_slope_degrees=20,
+                    min_xy_eigenvalue=0.01,
+                    centroid_inside_support=True,
+                ),
+            ),
+        )
+        with ProcessPoolExecutor(
+            max_workers=args.workers, mp_context=mp.get_context("spawn")
+        ) as pool:
+            futures = [
+                pool.submit(
+                    profile_sequence, args.data_root, args.output, seq, args.limit
+                )
+                for seq in sequences
+            ]
+            for future in as_completed(futures):
+                print(json.dumps(future.result()), flush=True)
+                host_disk()
+    from .profile_report import aggregate_profile, write_tables
 
     result = aggregate_profile(args.output)
     write_tables(args.output, result, args.tables)
-    plot_profile(args.output, result)
     print(
-        json.dumps(dict(event="profile_completed", tables=str(args.tables))),
-        flush=True,
+        json.dumps({"tables": str(args.tables), "totals": result["totals"]}), flush=True
     )
 
 

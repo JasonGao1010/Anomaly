@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-"""Read STU sequences and align causal five-scan windows to the current scan."""
+"""Read one STU scan with its original file-slot identity and labels."""
 
 from __future__ import annotations
 
 import argparse
 import json
-import logging
 import os
 import math
 from collections import OrderedDict
@@ -16,20 +15,7 @@ from typing import Iterator, Mapping, Sequence
 
 import numpy as np
 
-try:
-    from .protocol import (
-        AJAEProtocol,
-        SequenceSpec,
-        WINDOW_MEMBER_OFFSETS,
-        load_protocol,
-    )
-except ImportError:  # Direct script execution.
-    from protocol import (
-        AJAEProtocol,
-        SequenceSpec,
-        WINDOW_MEMBER_OFFSETS,
-        load_protocol,
-    )
+from .protocol import STUProtocol, SequenceSpec, load_protocol
 
 
 SCAN_CHANNELS = 4
@@ -37,13 +23,10 @@ SCAN_DTYPE = np.dtype("<f4")
 LABEL_DTYPE = np.dtype("<u4")
 RIGID_ATOL = 1.0e-3
 IDENTITY_ATOL = 1.0e-9
-SOURCE_FRAME_CACHE_SIZE = 16
-HISTORICAL_COORDINATE_ATOL_M = 1.0e-6
-HISTORICAL_COORDINATE_RTOL = 1.0e-5
+SOURCE_FRAME_CACHE_SIZE = 1
 ANOMALY_IGNORE = np.int8(-1)
 ANOMALY_NORMAL = np.int8(0)
 ANOMALY_POSITIVE = np.int8(1)
-LOGGER = logging.getLogger(__name__)
 
 
 class SceneDataError(ValueError):
@@ -55,66 +38,6 @@ class LabelMode(str, Enum):
 
     REQUIRED = "required"
     FORBIDDEN = "forbidden"
-
-
-_SEALED_ACCESS_KEY = object()
-
-
-class _SealedSequenceAccess:
-    """Carry a validated method-freeze decision into the lowest data loader."""
-
-    __slots__ = ("partition", "protocol")
-
-    def __init__(
-        self,
-        protocol: AJAEProtocol,
-        partition: str,
-        *,
-        key: object,
-    ) -> None:
-        if key is not _SEALED_ACCESS_KEY:
-            raise SceneDataError("sealed sequence access must come from the evaluator")
-        if partition not in {"val", "test"}:
-            raise SceneDataError("only validation and test sequences are sealed")
-        self.protocol = protocol
-        self.partition = partition
-
-
-def _grant_sealed_sequence_access(
-    protocol: AJAEProtocol,
-    *,
-    partition: str,
-) -> _SealedSequenceAccess:
-    """Create a loader capability only after the evaluator validates method freeze."""
-
-    return _SealedSequenceAccess(
-        protocol,
-        partition,
-        key=_SEALED_ACCESS_KEY,
-    )
-
-
-def _require_sealed_sequence_access(
-    protocol: AJAEProtocol,
-    partition: str,
-    access: _SealedSequenceAccess | None,
-    *,
-    sequence_id: int,
-) -> None:
-    if partition == "val" and protocol.status["real_anomaly_access_allowed"]:
-        return
-    if partition in {"val", "test"} and (
-        not isinstance(access, _SealedSequenceAccess)
-        or access.protocol is not protocol
-        or access.partition != partition
-    ):
-        message = f"{partition} sequences are sealed until the evaluator validates method freeze"
-        LOGGER.warning(
-            "Refused sealed sequence access: partition=%s sequence=%s",
-            partition,
-            sequence_id,
-        )
-        raise SceneDataError(message)
 
 
 def _plain_int(name: str, value: int, *, minimum: int = 0) -> int:
@@ -190,24 +113,6 @@ def _features_from_coordinates(array, coordinates):
     center = coordinates.mean(axis=0)
     distance = np.linalg.norm(coordinates - center, axis=1)[:, None]
     return _freeze(np.hstack((array[:, 3:4], distance)).astype(np.float32, copy=False))
-
-
-@dataclass(frozen=True, slots=True)
-class PointId:
-    """Stable identity of one visible return, independent of array order."""
-
-    observation_sequence_id: str
-    frame_id: int
-    source_slot: int
-
-    def __post_init__(self) -> None:
-        if (
-            not isinstance(self.observation_sequence_id, str)
-            or not self.observation_sequence_id
-        ):
-            raise TypeError("PointId.observation_sequence_id must be non-empty")
-        _plain_int("PointId.frame_id", self.frame_id)
-        _plain_int("PointId.source_slot", self.source_slot)
 
 
 @dataclass(frozen=True, slots=True)
@@ -389,504 +294,6 @@ def make_source_frame(
     )
 
 
-@dataclass(frozen=True, slots=True)
-class CurrentFramePose:
-    """The latest scan pose used by an online window.
-
-    ``rotation`` and ``translation`` represent :math:`T_{W<-t}`. This is the
-    physical current sensor frame, not an artificial intermediate frame.
-    """
-
-    rotation: np.ndarray
-    translation: np.ndarray
-
-    def __post_init__(self) -> None:
-        rotation = np.asarray(self.rotation)
-        translation = np.asarray(self.translation)
-        if rotation.dtype != np.float64 or rotation.shape != (3, 3):
-            raise TypeError("CurrentFramePose.rotation must be float64[3,3]")
-        if translation.dtype != np.float64 or translation.shape != (3,):
-            raise TypeError("CurrentFramePose.translation must be float64[3]")
-        _finite("current-frame rotation", rotation)
-        _finite("current-frame translation", translation)
-        if not np.allclose(
-            rotation.T @ rotation,
-            np.eye(3, dtype=np.float64),
-            atol=RIGID_ATOL,
-            rtol=RIGID_ATOL,
-        ):
-            raise SceneDataError("current-frame rotation is not numerically orthogonal")
-        if not math.isclose(
-            float(np.linalg.det(rotation)),
-            1.0,
-            abs_tol=RIGID_ATOL,
-            rel_tol=RIGID_ATOL,
-        ):
-            raise SceneDataError("current-frame rotation determinant is not +1")
-        object.__setattr__(self, "rotation", _freeze(rotation.copy()))
-        object.__setattr__(self, "translation", _freeze(translation.copy()))
-        identity = np.eye(4, dtype=np.float64)
-        world_from_current = self.world_from_current
-        current_from_world = self.current_from_world
-        if not (
-            np.allclose(
-                world_from_current @ current_from_world,
-                identity,
-                atol=1.0e-10,
-                rtol=1.0e-10,
-            )
-            and np.allclose(
-                current_from_world @ world_from_current,
-                identity,
-                atol=1.0e-10,
-                rtol=1.0e-10,
-            )
-        ):
-            raise SceneDataError("current-frame transforms are not mutual inverses")
-
-    @classmethod
-    def from_source(cls, source: SourceFrame) -> "CurrentFramePose":
-        """Copy the exact :math:`T_{W<-t}` pose of the latest source scan."""
-
-        if not isinstance(source, SourceFrame):
-            raise TypeError("current pose requires a SourceFrame")
-        pose = np.asarray(source.lidar_pose, dtype=np.float64)
-        _rigid("current source pose", pose)
-        return cls(pose[:3, :3].copy(), pose[:3, 3].copy())
-
-    @property
-    def world_from_current(self) -> np.ndarray:
-        """Return :math:`T_{W<-t}`."""
-
-        transform = np.eye(4, dtype=np.float64)
-        transform[:3, :3] = self.rotation
-        transform[:3, 3] = self.translation
-        return _freeze(transform)
-
-    @property
-    def current_from_world(self) -> np.ndarray:
-        """Return :math:`T_{t<-W}` as the numerical matrix inverse."""
-
-        return _freeze(np.linalg.inv(self.world_from_current))
-
-
-@dataclass(frozen=True, slots=True)
-class WindowFrame:
-    """One source scan and its transform into the latest scan frame."""
-
-    source: SourceFrame
-    scan_group: int
-    source_to_current: np.ndarray
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.source, SourceFrame):
-            raise TypeError("WindowFrame.source must be SourceFrame")
-        group = _plain_int("WindowFrame.scan_group", self.scan_group)
-        if group >= len(WINDOW_MEMBER_OFFSETS):
-            raise SceneDataError("WindowFrame.scan_group must lie in [0,4]")
-        transform = np.asarray(self.source_to_current)
-        if transform.dtype != np.float64:
-            raise TypeError("source_to_current must be float64[4,4]")
-        _rigid("source_to_current", transform)
-        object.__setattr__(self, "source_to_current", _freeze(transform.copy()))
-
-
-@dataclass(frozen=True, slots=True)
-class WindowPoints:
-    """All visible returns expressed in the latest scan coordinate frame."""
-
-    coordinates: np.ndarray
-    features: np.ndarray | None
-    scan_group: np.ndarray
-    source_frame: np.ndarray
-    source_slot: np.ndarray
-
-    def __post_init__(self) -> None:
-        count = self.coordinates.shape[0]
-        if self.coordinates.dtype != np.float32 or self.coordinates.shape != (count, 3):
-            raise TypeError("coordinates must be float32[M,3]")
-        if self.features is not None and (
-            self.features.dtype != np.float32
-            or self.features.ndim != 2
-            or self.features.shape[0] != count
-        ):
-            raise TypeError("features must be optional float32[M,F]")
-        for name, array, dtype in (
-            ("scan_group", self.scan_group, np.int8),
-            ("source_frame", self.source_frame, np.int32),
-            ("source_slot", self.source_slot, np.int32),
-        ):
-            if array.dtype != dtype or array.shape != (count,):
-                raise TypeError(f"{name} must be {np.dtype(dtype).name}[M]")
-        _finite("current-frame coordinates", self.coordinates)
-        if np.any(
-            (self.scan_group < 0) | (self.scan_group >= len(WINDOW_MEMBER_OFFSETS))
-        ):
-            raise SceneDataError("scan groups must lie in [0,4]")
-        if np.any(self.source_frame < 0) or np.any(self.source_slot < 0):
-            raise SceneDataError(
-                "source frame and slot identities must be non-negative"
-            )
-        if count > 1:
-            same_group = self.scan_group[1:] == self.scan_group[:-1]
-            if np.any(same_group & (self.source_frame[1:] != self.source_frame[:-1])):
-                raise SceneDataError("one scan group cannot mix source frames")
-            if np.any(same_group & (self.source_slot[1:] <= self.source_slot[:-1])):
-                raise SceneDataError(
-                    "source slots must increase within each scan group"
-                )
-            starts = np.concatenate(
-                (np.asarray([True]), self.scan_group[1:] != self.scan_group[:-1])
-            )
-            started_groups = self.scan_group[starts]
-            if np.unique(started_groups).size != started_groups.size:
-                raise SceneDataError(
-                    "a scan group must occupy one contiguous point block"
-                )
-        for array in (
-            self.coordinates,
-            self.scan_group,
-            self.source_frame,
-            self.source_slot,
-        ):
-            array.setflags(write=False)
-        if self.features is not None:
-            self.features.setflags(write=False)
-
-    @property
-    def count(self) -> int:
-        return int(self.coordinates.shape[0])
-
-
-@dataclass(frozen=True, slots=True)
-class SceneWindow:
-    """A causal five-scan observation aligned to its latest scan."""
-
-    spec: SequenceSpec
-    observation_sequence_id: str
-    window_start: int
-    frame_ids: tuple[int, ...]
-    current_pose: CurrentFramePose
-    frames: tuple[WindowFrame, ...]
-    points: WindowPoints
-    labels: PointLabels | None
-    startup: bool = False
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.spec, SequenceSpec):
-            raise TypeError("spec must be SequenceSpec")
-        if (
-            not isinstance(self.observation_sequence_id, str)
-            or not self.observation_sequence_id
-        ):
-            raise TypeError("observation_sequence_id must be a non-empty string")
-        start = _plain_int("window_start", self.window_start)
-        declared_ids = tuple(self.frame_ids)
-        if any(type(frame_id) is not int for frame_id in declared_ids):
-            raise TypeError("frame_ids must contain plain integers")
-        _validate_window_ids(self.spec, start, declared_ids, self.startup)
-        if (
-            self.startup
-            and self.observation_sequence_id
-            != f"{self.spec.partition}/{self.spec.sequence_id}"
-        ):
-            raise SceneDataError("startup is only defined for raw sequence inference")
-        if not isinstance(self.current_pose, CurrentFramePose):
-            raise TypeError("current_pose must be CurrentFramePose")
-        if len(self.frames) != len(declared_ids):
-            raise SceneDataError("source scans must match the actual window length")
-
-        source_ids = tuple(item.source.frame_id for item in self.frames)
-        if len(set(source_ids)) != len(source_ids) or set(source_ids) != set(
-            declared_ids
-        ):
-            raise SceneDataError(
-                "window source scans must match the declared frame IDs once each"
-            )
-        canonical_group = {
-            frame_id: index + 5 - len(declared_ids)
-            for index, frame_id in enumerate(declared_ids)
-        }
-        current_id = declared_ids[-1]
-        current_source = next(
-            item.source for item in self.frames if item.source.frame_id == current_id
-        )
-        expected_pose = CurrentFramePose.from_source(current_source)
-        if not np.allclose(
-            self.current_pose.world_from_current,
-            expected_pose.world_from_current,
-            atol=IDENTITY_ATOL,
-            rtol=IDENTITY_ATOL,
-        ):
-            raise SceneDataError("current pose does not match the latest scan")
-        current_from_world = self.current_pose.current_from_world
-        for item in self.frames:
-            group = canonical_group[item.source.frame_id]
-            if item.scan_group != group:
-                raise SceneDataError(
-                    "scan group does not match the declared source frame"
-                )
-            is_current = item.source.frame_id == current_id
-            expected_transform = (
-                np.eye(4, dtype=np.float64)
-                if is_current
-                else current_from_world @ item.source.lidar_pose
-            )
-            transform_valid = (
-                np.array_equal(item.source_to_current, expected_transform)
-                if is_current
-                else np.allclose(
-                    item.source_to_current,
-                    expected_transform,
-                    atol=IDENTITY_ATOL,
-                    rtol=IDENTITY_ATOL,
-                )
-            )
-            if not transform_valid:
-                raise SceneDataError("source-to-current transform is inconsistent")
-            mask = self.points.scan_group == group
-            if not np.all(self.points.source_frame[mask] == item.source.frame_id):
-                raise SceneDataError(
-                    "point frame identities do not match their scan group"
-                )
-            if not np.array_equal(
-                self.points.source_slot[mask], item.source.real_slots
-            ):
-                raise SceneDataError("point slots do not match visible source returns")
-            raw_xyz = item.source.xyzi[item.source.real_slots, :3]
-            if is_current:
-                if not np.array_equal(self.points.coordinates[mask], raw_xyz):
-                    raise SceneDataError(
-                        "current-frame coordinates must be a bitwise raw-xyz copy"
-                    )
-            else:
-                expected_xyz = (
-                    raw_xyz.astype(np.float64) @ expected_transform[:3, :3].T
-                    + expected_transform[:3, 3]
-                ).astype(np.float32)
-                if not np.allclose(
-                    self.points.coordinates[mask],
-                    expected_xyz,
-                    atol=HISTORICAL_COORDINATE_ATOL_M,
-                    rtol=HISTORICAL_COORDINATE_RTOL,
-                ):
-                    raise SceneDataError(
-                        "historical coordinates violate the frozen registration"
-                    )
-        if self.points.count != sum(item.source.real_count for item in self.frames):
-            raise SceneDataError(
-                "window points do not contain every visible return exactly once"
-            )
-        if self.labels is not None and self.labels.packed.size != self.points.count:
-            raise SceneDataError("window labels do not match visible returns")
-        # Distinct frame IDs plus exact, strictly increasing source slots prove
-        # point-identity uniqueness without sorting the full point population.
-
-    def frame_for_id(self, frame_id: int) -> WindowFrame:
-        """Return one member by stable source-frame identity, independent of row order."""
-
-        identifier = _plain_int("frame_id", frame_id)
-        for frame in self.frames:
-            if frame.source.frame_id == identifier:
-                return frame
-        raise KeyError(identifier)
-
-    @property
-    def current_frame_id(self) -> int:
-        return self.frame_ids[-1]
-
-    @property
-    def current_frame(self) -> WindowFrame:
-        return self.frame_for_id(self.current_frame_id)
-
-    def point_id(self, index: int) -> PointId:
-        """Return the protocol identity of one row in the complete window."""
-
-        point = _plain_int("point index", index)
-        if point >= self.points.count:
-            raise IndexError(point)
-        return PointId(
-            self.observation_sequence_id,
-            int(self.points.source_frame[point]),
-            int(self.points.source_slot[point]),
-        )
-
-    @property
-    def current_mask(self) -> np.ndarray:
-        result = self.points.source_frame == self.current_frame_id
-        result.setflags(write=False)
-        return result
-
-    @property
-    def supervision_mask(self) -> np.ndarray:
-        if self.labels is None:
-            raise SceneDataError("an unlabeled window has no supervision mask")
-        result = self.labels.anomaly_target != ANOMALY_IGNORE
-        result.setflags(write=False)
-        return result
-
-    def restore_source_frame(self, frame_id: int, values: np.ndarray) -> np.ndarray:
-        """Restore a full-window value array to one source scan's file-slot order."""
-
-        frame = self.frame_for_id(frame_id)
-        array = np.asarray(values)
-        if array.ndim < 1 or array.shape[0] != self.points.count:
-            raise ValueError(
-                f"values must have leading size {self.points.count}, got {array.shape}"
-            )
-        mask = self.points.source_frame == frame.source.frame_id
-        return frame.source.restore_real(array[mask])
-
-
-def _validate_window_ids(spec, start, frame_ids, startup):
-    # Only the beginning of a raw sequence may contain fewer than five scans.
-    if startup:
-        if (
-            start != 0
-            or not 1 <= len(frame_ids) < 5
-            or frame_ids != tuple(range(len(frame_ids)))
-            or spec.span is None
-            or any(
-                not spec.span.contains(i) or i in spec.excluded_source_frames
-                for i in frame_ids
-            )
-        ):
-            raise SceneDataError("startup requires the available sequence prefix")
-    elif frame_ids != spec.window_frame_ids(start):
-        raise SceneDataError("frame_ids do not define a legal five-scan window")
-
-
-def assemble_window(
-    spec: SequenceSpec,
-    window_start: int,
-    frame_ids: Sequence[int],
-    sources: Sequence[SourceFrame],
-    *,
-    observation_sequence_id: str | None = None,
-    startup: bool = False,
-) -> SceneWindow:
-    """Assemble all five scans while preserving order-independent point identity."""
-
-    if not isinstance(spec, SequenceSpec):
-        raise TypeError("spec must be SequenceSpec")
-    start = _plain_int("window_start", window_start)
-    declared_ids = tuple(frame_ids)
-    if any(type(frame_id) is not int for frame_id in declared_ids):
-        raise TypeError("frame_ids must contain plain integers")
-    _validate_window_ids(spec, start, declared_ids, startup)
-    source_frames = tuple(sources)
-    if len(source_frames) != len(declared_ids):
-        raise SceneDataError("sources must cover the actual window scans")
-    source_ids = tuple(source.frame_id for source in source_frames)
-    if len(set(source_ids)) != len(source_ids) or set(source_ids) != set(declared_ids):
-        raise SceneDataError("sources must contain each declared frame exactly once")
-    by_id = {source.frame_id: source for source in source_frames}
-    # Canonical row order prevents voxel feature selection from depending on callers.
-    source_frames = tuple(by_id[frame_id] for frame_id in declared_ids)
-    if any(
-        source.partition != spec.partition or source.sequence_id != spec.sequence_id
-        for source in source_frames
-    ):
-        raise SceneDataError(
-            "source identity does not match the sequence specification"
-        )
-    labels_present = tuple(source.labels is not None for source in source_frames)
-    if len(set(labels_present)) != 1:
-        raise SceneDataError("all scans must have the same label availability")
-    targets_present = tuple(
-        source.labels is not None and source.labels.semantic_target is not None
-        for source in source_frames
-    )
-    if labels_present[0] and len(set(targets_present)) != 1:
-        raise SceneDataError("all labels must have the same STU-target availability")
-    current_source = next(
-        source for source in source_frames if source.frame_id == declared_ids[-1]
-    )
-    current_pose = CurrentFramePose.from_source(current_source)
-    current_from_world = current_pose.current_from_world
-    canonical_group = {
-        frame_id: index + 5 - len(declared_ids)
-        for index, frame_id in enumerate(declared_ids)
-    }
-    frames: list[WindowFrame] = []
-    coordinates: list[np.ndarray] = []
-    features: list[np.ndarray] = []
-    scan_groups: list[np.ndarray] = []
-    source_ids_by_point: list[np.ndarray] = []
-    source_slots: list[np.ndarray] = []
-    packed: list[np.ndarray] = []
-    semantic: list[np.ndarray] = []
-    instance: list[np.ndarray] = []
-    semantic_targets: list[np.ndarray] = []
-
-    for source in source_frames:
-        group = canonical_group[source.frame_id]
-        # Poses are T_W<-S; composition gives T_t<-S_i for current-frame coordinates.
-        transform = (
-            np.eye(4, dtype=np.float64)
-            if source.frame_id == current_source.frame_id
-            else current_from_world @ source.lidar_pose
-        )
-        _rigid(f"source-to-current pose {source.frame_id}", transform)
-        transform = _freeze(transform.astype(np.float64, copy=False))
-        frames.append(WindowFrame(source, group, transform))
-        slots = source.real_slots
-        source_xyz = source.xyzi[slots, :3]
-        if source.frame_id == current_source.frame_id:
-            aligned = source_xyz.copy()
-        else:
-            aligned = (
-                source_xyz.astype(np.float64) @ transform[:3, :3].T + transform[:3, 3]
-            ).astype(np.float32)
-        coordinates.append(aligned)
-        # Intensity is raw observation data; Part 2 may add label-free features.
-        features.append(source.xyzi[slots, 3:4].copy())
-        scan_groups.append(np.full(slots.size, group, dtype=np.int8))
-        source_ids_by_point.append(np.full(slots.size, source.frame_id, dtype=np.int32))
-        source_slots.append(slots.copy())
-        if source.labels is not None:
-            packed.append(source.labels.packed[slots])
-            semantic.append(source.labels.semantic[slots])
-            instance.append(source.labels.instance[slots])
-            if source.labels.semantic_target is not None:
-                semantic_targets.append(source.labels.semantic_target[slots])
-
-    points = WindowPoints(
-        coordinates=_freeze(np.concatenate(coordinates)),
-        features=_freeze(np.concatenate(features)),
-        scan_group=_freeze(np.concatenate(scan_groups)),
-        source_frame=_freeze(np.concatenate(source_ids_by_point)),
-        source_slot=_freeze(np.concatenate(source_slots)),
-    )
-    labels: PointLabels | None = None
-    if labels_present[0]:
-        labels = PointLabels(
-            packed=_freeze(np.concatenate(packed)),
-            semantic=_freeze(np.concatenate(semantic)),
-            instance=_freeze(np.concatenate(instance)),
-            semantic_target=(
-                _freeze(np.concatenate(semantic_targets))
-                if targets_present[0]
-                else None
-            ),
-        )
-    return SceneWindow(
-        spec=spec,
-        observation_sequence_id=(
-            observation_sequence_id
-            if observation_sequence_id is not None
-            else f"{spec.partition}/{spec.sequence_id}"
-        ),
-        window_start=start,
-        frame_ids=declared_ids,
-        current_pose=current_pose,
-        frames=tuple(frames),
-        points=points,
-        labels=labels,
-        startup=startup,
-    )
-
-
 def _matrix(values: Sequence[float], name: str) -> np.ndarray:
     if len(values) not in {12, 16}:
         raise SceneDataError(f"{name} must contain 12 or 16 numbers")
@@ -972,20 +379,14 @@ def locate_sequence(
     partition: str,
     sequence_id: int,
     *,
-    protocol: AJAEProtocol,
-    sealed_access: _SealedSequenceAccess | None = None,
+    protocol: STUProtocol,
 ) -> Path:
     """Resolve one protocol sequence without searching alternative layouts."""
 
     if partition not in {"train", "val", "test"}:
         raise ValueError("partition must be train, val, or test")
     identifier = _plain_int("sequence_id", sequence_id)
-    _require_sealed_sequence_access(
-        protocol,
-        partition,
-        sealed_access,
-        sequence_id=identifier,
-    )
+    protocol.sequence(partition, identifier)
     path = (
         Path(data_root).expanduser().resolve(strict=True) / partition / str(identifier)
     )
@@ -1001,23 +402,16 @@ class STUSequence:
         self,
         sequence_dir: Path | str,
         *,
-        protocol: AJAEProtocol,
+        protocol: STUProtocol,
         spec: SequenceSpec,
         label_mode: LabelMode | str,
-        sealed_access: _SealedSequenceAccess | None = None,
     ) -> None:
-        if not isinstance(protocol, AJAEProtocol):
-            raise TypeError("protocol must be AJAEProtocol")
+        if not isinstance(protocol, STUProtocol):
+            raise TypeError("protocol must be STUProtocol")
         if not isinstance(spec, SequenceSpec):
             raise TypeError("spec must be SequenceSpec")
         if protocol.sequence(spec.partition, spec.sequence_id) != spec:
             raise SceneDataError("sequence spec is not part of this protocol")
-        _require_sealed_sequence_access(
-            protocol,
-            spec.partition,
-            sealed_access,
-            sequence_id=spec.sequence_id,
-        )
         self.protocol = protocol
         self.sequence_dir = Path(sequence_dir).expanduser().resolve(strict=True)
         if not self.sequence_dir.is_dir():
@@ -1034,10 +428,8 @@ class STUSequence:
         self._scan_paths = _indexed_files(self.sequence_dir / "velodyne", ".bin")
         self.frame_count = len(self._scan_paths)
         self.frame_ids = tuple(range(self.frame_count))
-        # Hidden sequence lengths become observable only after opening their files.
+        # Public sequence lengths come from the released scan inventory.
         self.spec = spec.with_observed_frame_count(self.frame_count)
-        self.span = self.spec.span
-        self.window_starts = self.spec.legal_window_starts()
 
         calibration = read_calibration(self.sequence_dir / "calib.txt")
         camera_poses = read_poses(self.sequence_dir / "poses.txt")
@@ -1069,11 +461,10 @@ class STUSequence:
         cls,
         data_root: Path | str,
         *,
-        protocol: AJAEProtocol,
+        protocol: STUProtocol,
         partition: str,
         sequence_id: int,
         label_mode: LabelMode | str,
-        sealed_access: _SealedSequenceAccess | None = None,
     ) -> "STUSequence":
         spec = protocol.sequence(partition, sequence_id)
         return cls(
@@ -1082,12 +473,10 @@ class STUSequence:
                 partition,
                 sequence_id,
                 protocol=protocol,
-                sealed_access=sealed_access,
             ),
             protocol=protocol,
             spec=spec,
             label_mode=label_mode,
-            sealed_access=sealed_access,
         )
 
     @property
@@ -1097,13 +486,12 @@ class STUSequence:
     def __len__(self) -> int:
         return self.frame_count
 
-    def __getitem__(self, window_start: int) -> SceneWindow:
-        return self.window(window_start)
+    def __getitem__(self, frame_id: int) -> SourceFrame:
+        return self.source_frame(frame_id)
 
-    def __iter__(self) -> Iterator[SceneWindow]:
-        raise TypeError(
-            "direct STUSequence iteration is forbidden; use an explicit WindowPartition"
-        )
+    def __iter__(self) -> Iterator[SourceFrame]:
+        for frame_id in self.frame_ids:
+            yield self.source_frame(frame_id)
 
     def lidar_pose(self, frame_id: int) -> np.ndarray:
         frame = _plain_int("frame_id", frame_id)
@@ -1161,7 +549,7 @@ class STUSequence:
         semantic = (packed & np.uint32(0xFFFF)).astype(np.uint16, copy=False)
         instance = (packed >> np.uint32(16)).astype(np.uint16, copy=False)
         semantic_target: np.ndarray | None = None
-        if self.spec.supports_counterfactuals:
+        if self.spec.partition == "train":
             mapped = self._semantic_target_lut[semantic]
             if np.any(mapped < 0):
                 unknown = sorted(map(int, np.unique(semantic[mapped < 0])))
@@ -1178,109 +566,18 @@ class STUSequence:
             else _freeze(semantic_target),
         )
 
-    def window(
-        self,
-        window_start: int,
-    ) -> SceneWindow:
-        start = _plain_int("window_start", window_start)
-        if start not in frozenset(self.window_starts):
-            raise SceneDataError(
-                f"frame {start} is not a legal five-scan window for "
-                f"{self.spec.partition}/{self.spec.sequence_id}"
-            )
-        frame_ids = self.spec.window_frame_ids(start)
-        if frame_ids[-1] >= self.frame_count:
-            raise SceneDataError("protocol window refers to a missing source frame")
-        return assemble_window(
-            self.spec,
-            start,
-            frame_ids,
-            tuple(self.source_frame(frame_id) for frame_id in frame_ids),
-        )
 
-    def for_output(self, frame_id: int) -> SceneWindow:
-        current = _plain_int("frame_id", frame_id)
-        if current >= self.frame_count:
-            raise IndexError(current)
-        if current >= 4:
-            return self.window(current - 4)
-        ids = tuple(range(current + 1))
-        return assemble_window(
-            self.spec, 0, ids, tuple(self.source_frame(i) for i in ids), startup=True
-        )
-
-    def audit(self, *, deep: bool = False) -> dict[str, object]:
-        """Describe source data without running a model or metric."""
-
-        result: dict[str, object] = {
-            "partition": self.spec.partition,
-            "sequence": self.spec.sequence_id,
-            "role": self.spec.role,
-            "source_frames": self.frame_count,
-            "legal_windows": len(self.window_starts),
-            "first_window_start": self.window_starts[0],
-            "last_window_start": self.window_starts[-1],
-            "labels_read": self.labels_available,
-            "model_input": {
-                "coordinates": "current_frame_lidar",
-                "features": ["intensity"],
-                "prediction_scope": "all_visible_window_points",
-            },
-        }
-        if not deep:
-            return result
-        slots = 0
-        real = 0
-        for frame_id in self.frame_ids:
-            source = self.source_frame(frame_id)
-            slots += source.slot_count
-            real += source.real_count
-        result.update(
-            {
-                "file_slots": slots,
-                "real_returns": real,
-                "zero_coordinate_slots": slots - real,
-            }
-        )
-        return result
-
-
-def summarize_window(window: SceneWindow) -> dict[str, object]:
-    return {
-        "partition": window.spec.partition,
-        "sequence": window.spec.sequence_id,
-        "window_start": window.window_start,
-        "current_frame": window.current_frame_id,
-        "coordinate_frame": "latest_scan",
-        "frame_ids": list(window.frame_ids),
-        "source_order": [item.source.frame_id for item in window.frames],
-        "scan_groups": [item.scan_group for item in window.frames],
-        "input_slots_by_frame": [item.source.slot_count for item in window.frames],
-        "visible_returns": window.points.count,
-        "visible_returns_by_frame": [item.source.real_count for item in window.frames],
-        "feature_channels": 1,
-        "labels_read": window.labels is not None,
-    }
-
-
-def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description="Inspect AJAE schema-34 causal windows."
-    )
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--protocol", type=Path)
     parser.add_argument("--data-root", type=Path, required=True)
-    parser.add_argument("--partition", choices=("train", "val", "test"), required=True)
+    parser.add_argument("--partition", choices=("train", "val"), required=True)
     parser.add_argument("--sequence", type=int, required=True)
+    parser.add_argument("--frame", type=int, default=0)
     parser.add_argument(
-        "--labels", choices=tuple(mode.value for mode in LabelMode), required=True
+        "--labels", choices=tuple(mode.value for mode in LabelMode), default="forbidden"
     )
-    parser.add_argument("--window-start", type=int, action="append")
-    parser.add_argument("--check-all", action="store_true")
-    return parser
-
-
-def main(argv: Sequence[str] | None = None) -> int:
-    args = _parser().parse_args(argv)
+    args = parser.parse_args()
     protocol = (
         load_protocol() if args.protocol is None else load_protocol(args.protocol)
     )
@@ -1291,15 +588,23 @@ def main(argv: Sequence[str] | None = None) -> int:
         sequence_id=args.sequence,
         label_mode=args.labels,
     )
-    starts = sequence.window_starts
-    selected_starts = args.window_start or [starts[0], starts[-1]]
-    output = {
-        "sequence": sequence.audit(deep=args.check_all),
-        "windows": [
-            summarize_window(sequence.window(start)) for start in selected_starts
-        ],
-    }
-    print(json.dumps(output, ensure_ascii=False, indent=2, sort_keys=True))
+    frame = sequence.source_frame(args.frame)
+    print(
+        json.dumps(
+            {
+                "partition": frame.partition,
+                "sequence": frame.sequence_id,
+                "frame": frame.frame_id,
+                "sequence_frames": len(sequence),
+                "file_slots": frame.slot_count,
+                "real_returns": frame.real_count,
+                "zero_coordinate_slots": frame.slot_count - frame.real_count,
+                "labels_read": frame.labels is not None,
+                "input": "current scan xyzi in sensor coordinates",
+            },
+            indent=2,
+        )
+    )
     return 0
 
 
