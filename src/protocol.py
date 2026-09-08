@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Mapping
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_PROTOCOL_PATH = PROJECT_ROOT / "protocol.json"
+DEFAULT_PROTOCOL_PATH = PROJECT_ROOT / "protocol" / "spec.json"
 SCHEMA_VERSION = 1
 PUBLIC_ANOMALY_IDS = (
     125,

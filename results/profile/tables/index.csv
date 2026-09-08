@@ -1,0 +1,10 @@
+﻿file,rows,source
+frames.csv,8659,../records/summary.json
+instances.csv,4729,../records/summary.json
+sequences.csv,19,../records/summary.json
+totals.csv,1,../records/summary.json
+continuous.csv,4346,../records/summary.json
+categorical.csv,32964,../records/summary.json
+bins.csv,72242,../records/summary.json
+count_distance.csv,16,../records/summary.json
+reliability.csv,4,../records/summary.json

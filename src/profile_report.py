@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections import Counter
 import csv
 import json
+import os
 from pathlib import Path
 
 import numpy as np
@@ -42,14 +43,18 @@ def physical_unit(meta):
         "azimuth_span",
         "elevation_span",
         "azimuth_gap",
-        "rotation",
     ):
         return "弧度"
-    if any(
-        x in key for x in ("distance", "displacement", "residual", "ground_height")
-    ) or key in ("x", "y", "z", "length", "width", "height", "translation"):
+    if any(x in key for x in ("distance", "ground_height")) or key in (
+        "x",
+        "y",
+        "z",
+        "length",
+        "width",
+        "height",
+    ):
         return "米"
-    if any(x in key for x in ("fraction", "compression")) or key in (
+    if "fraction" in key or key in (
         "aspect",
         "linearity",
         "planarity",
@@ -77,19 +82,16 @@ def summarize(
             c,
             meta["total"] / meta["n"] if meta["n"] else None,
             meta["bin_counts"],
-        )
+        ),
+        (
+            "frame_equal",
+            w,
+            meta["frame_total"] / meta["valid_frames"]
+            if meta["valid_frames"]
+            else None,
+            meta["bin_frame_weights"],
+        ),
     ]
-    if meta["scope"] != "sequence_runs":
-        variants.append(
-            (
-                "frame_equal",
-                w,
-                meta["frame_total"] / meta["valid_frames"]
-                if meta["valid_frames"]
-                else None,
-                meta["bin_frame_weights"],
-            )
-        )
     if sequence_weights is not None:
         variants.append(
             (
@@ -443,7 +445,7 @@ def write_tables(output, result, directory):
             dict(
                 file=f"{name}.csv",
                 rows=len(rows),
-                source=str(Path(output) / "summary.json"),
+                source=os.path.relpath(Path(output) / "summary.json", directory),
             )
             for name, rows in tables.items()
         ],
@@ -478,7 +480,8 @@ def write_tables(output, result, directory):
         "CSV 为 UTF-8，空单元格表示缺失或不适用；CSV 本身不保存字体。\n\n"
         "再生成命令："
         "`PYTHONDONTWRITEBYTECODE=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 "
-        ".venv/bin/python -m src.profile --data-root /home/jasongao/Data/STU --workers 12`。"
+        ".venv/bin/python -m src.profile --data-root /home/jasongao/Data/STU "
+        f"--output {directory.parent.as_posix()} --workers 12`。"
         "进程数应依据运行时资源重新确定。\n",
         encoding="utf-8",
     )

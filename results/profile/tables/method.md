@@ -16,4 +16,4 @@
 
 连续分布分别保留观测等权、有效帧等权和有效序列等权结果。分位数取加权经验分布的逆函数，不平均各序列分位数。强度保留原始值；局部强度方差由完整标准差分布逐值平方后计算。CSV 为 UTF-8，空单元格表示缺失或不适用；CSV 本身不保存字体。
 
-再生成命令：`PYTHONDONTWRITEBYTECODE=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 .venv/bin/python -m src.profile --data-root /home/jasongao/Data/STU --workers 12`。进程数应依据运行时资源重新确定。
+再生成命令：`PYTHONDONTWRITEBYTECODE=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 .venv/bin/python -m src.profile --data-root /home/jasongao/Data/STU --output results/profile --workers 12`。进程数应依据运行时资源重新确定。

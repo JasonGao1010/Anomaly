@@ -46,11 +46,10 @@ except ImportError:  # Direct module execution and small isolated checks.
 
 LASER_BEAMS = 128
 GROUND_SEMANTIC_IDS = (40, 44, 48, 49, 60)
-WORLD_FORMAT = "ajae-world"
-SUPPORT_POOL_FORMAT = "ajae-qualified-support-pool"
-SUPPORTED_COUNTERFACTUAL_SEQUENCES = frozenset((201, 206))
+WORLD_FORMAT = "stu-world"
+NORMAL_SOURCE_SEQUENCES = frozenset((201, 206))
 SUPPORT_POOL_SEMANTICS = (40, 48, 49)
-CALIBRATION_FORMAT = "ajae-sensor-calibration"
+CALIBRATION_FORMAT = "stu-sensor-calibration"
 PROCEDURAL_GENERATOR_SCHEMA = 7
 SHAPE_FAMILIES = ("general", "blocky", "flat", "elongated")
 AXIS_PERMUTATIONS = (
@@ -4289,7 +4288,7 @@ class QualifiedSupportPool:
         if not np.isin(arrays[1], SUPPORT_POOL_SEMANTICS).all():
             raise PlacementError("qualified support-pool semantic is unsupported")
         sequence_id = _integer("source_sequence_id", self.source_sequence_id)
-        if sequence_id not in SUPPORTED_COUNTERFACTUAL_SEQUENCES:
+        if sequence_id not in NORMAL_SOURCE_SEQUENCES:
             raise PlacementError("qualified support pool has an unsupported source")
         names = (
             "pool_indices",
@@ -4319,101 +4318,6 @@ class QualifiedSupportPool:
             tuple(map(float, self.anchors_world_m[index])),
             tuple(map(float, self.normals_world[index])),
             float(self.offsets[index]),
-        )
-
-
-def _sha256_path(path: Path) -> str:
-    with path.open("rb") as handle:
-        return hashlib.file_digest(handle, "sha256").hexdigest()
-
-
-def _scientific_array_hash(arrays: Mapping[str, np.ndarray]) -> str:
-    digest = hashlib.sha256()
-    for name in sorted(arrays):
-        array = np.ascontiguousarray(arrays[name])
-        digest.update(name.encode("utf-8") + b"\0")
-        digest.update(array.dtype.str.encode("ascii") + b"\0")
-        digest.update(
-            json.dumps(list(array.shape), separators=(",", ":")).encode("ascii")
-        )
-        digest.update(array.tobytes(order="C"))
-    return digest.hexdigest()
-
-
-def load_qualified_support_pool(
-    path: Path | str,
-    *,
-    source_sequence_id: int,
-    expected_sha256: str,
-) -> QualifiedSupportPool:
-    """Load one sequence-specific qualified pool after verifying its identity."""
-
-    source = Path(path).expanduser().resolve(strict=True)
-    sequence_id = _integer("source_sequence_id", source_sequence_id)
-    if (
-        not isinstance(expected_sha256, str)
-        or len(expected_sha256) != 64
-        or _sha256_path(source) != expected_sha256
-    ):
-        raise PlacementError(
-            "support-pool artifact does not match its frozen source sequence"
-        )
-    with np.load(source, allow_pickle=False) as payload:
-        required = {
-            "semantic",
-            "frame",
-            "slot",
-            "range_m",
-            "selection_hash",
-            "anchor_world",
-            "normal",
-            "offset",
-            "metadata_json",
-        }
-        if set(payload.files) != required:
-            raise PlacementError("support-pool artifact has unexpected arrays")
-        arrays = {
-            name: np.asarray(payload[name]) for name in required - {"metadata_json"}
-        }
-        metadata = json.loads(str(payload["metadata_json"].item()))
-        expected = {
-            201: (
-                "validation-support-pool",
-                [0, 681],
-                [2, 679],
-                640,
-            ),
-            206: (
-                "training-support-pool",
-                [0, 448],
-                [2, 446],
-                445,
-            ),
-        }[sequence_id]
-        if (
-            metadata.get("experiment") != expected[0]
-            or metadata.get("source_sequence") != f"train/{sequence_id}"
-            or metadata.get("source_frames") != expected[1]
-            or metadata.get("anchor_frames") != expected[2]
-            or metadata.get("covered_anchor_frames") != expected[3]
-            or metadata.get("passed") is not True
-            or metadata.get("pool_size") != int(arrays["frame"].shape[0])
-            or metadata.get("scientific_array_hash") != _scientific_array_hash(arrays)
-            or int(np.min(arrays["frame"])) != expected[2][0]
-            or int(np.max(arrays["frame"])) != ({201: 642, 206: 446}[sequence_id])
-        ):
-            raise PlacementError("support-pool metadata is not qualified")
-        return QualifiedSupportPool(
-            np.arange(arrays["frame"].shape[0], dtype=np.int64),
-            np.asarray(arrays["semantic"], dtype=np.uint16),
-            np.asarray(arrays["frame"], dtype=np.int32),
-            np.asarray(arrays["slot"], dtype=np.int32),
-            np.asarray(arrays["range_m"], dtype=np.float64),
-            np.asarray(arrays["selection_hash"], dtype=np.uint64),
-            np.asarray(arrays["anchor_world"], dtype=np.float64),
-            np.asarray(arrays["normal"], dtype=np.float64),
-            np.asarray(arrays["offset"], dtype=np.float64),
-            source_sequence_id=sequence_id,
         )
 
 
@@ -4766,45 +4670,6 @@ def qualify_grounding(shape: InsertShape) -> GroundingEligibility:
     return GroundingEligibility(
         shape, standard, strict, buried_fraction, _freeze(surface)
     )
-
-
-def _grounding_qualified_shape(
-    first_seed: int,
-    *,
-    stride: int,
-    maximum_proposals: int = 64,
-    size_m_range: tuple[float, float] = (0.2, 3.0),
-    desired_family: str | None = None,
-) -> tuple[
-    ShapeSpec,
-    ShapeGenerationReport,
-    GroundingEligibility,
-    tuple[int, ...],
-    tuple[int, ...],
-]:
-    """Take the first grounding-qualified shape from one deterministic seed stream."""
-
-    start = _integer("first_seed", first_seed)
-    step = _integer("stride", stride, minimum=1)
-    limit = _integer("maximum_proposals", maximum_proposals, minimum=1)
-    if limit > 64:
-        raise PlacementError("shape proposal limit must not exceed 64")
-    proposed: list[int] = []
-    rejected: list[int] = []
-    for proposal in range(limit):
-        shape_seed = start + step * proposal
-        shape, report = ShapeSpec.sample_with_report(
-            shape_seed, size_m_range=size_m_range
-        )
-        proposed.append(shape_seed)
-        if desired_family is not None and report.shape_family != desired_family:
-            rejected.append(shape_seed)
-            continue
-        grounding = qualify_grounding(shape)
-        if grounding.passed:
-            return shape, report, grounding, tuple(proposed), tuple(rejected)
-        rejected.append(shape_seed)
-    raise PlacementError("no grounding-qualified shape in 64 deterministic proposals")
 
 
 def place_object(

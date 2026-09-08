@@ -34,7 +34,7 @@ def categories(semantic):
 
 
 class Ledger:
-    """Exact weighted empirical counts; bounded bins for billion-member residuals."""
+    """Exact weighted empirical counts and bounded bins for scan geometry."""
 
     def __init__(self):
         self.series = {}
@@ -687,8 +687,7 @@ def profile_sequence(data_root, output, sequence, limit=None):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data-root", type=Path, required=True)
-    parser.add_argument("--output", type=Path, default=Path("runs/profiles/real"))
-    parser.add_argument("--tables", type=Path, default=Path("profiles/real"))
+    parser.add_argument("--output", type=Path, default=Path("results/profile"))
     parser.add_argument("--workers", type=int, required=True)
     parser.add_argument("--sequence", type=int, action="append")
     parser.add_argument("--limit", type=int)
@@ -706,19 +705,18 @@ def main():
     if (
         args.limit is not None
         or set(sequences) != set(load_protocol().public_sequence_ids)
-    ) and (
-        args.output.resolve() == Path("runs/profiles/real").resolve()
-        or args.tables.resolve() == Path("profiles/real").resolve()
-    ):
-        parser.error("subset profiles require separate output and table directories")
-    args.output.mkdir(parents=True, exist_ok=True)
+    ) and args.output.resolve() == Path("results/profile").resolve():
+        parser.error("subset profiles require a separate output directory")
+    # Records and derived tables share one result root to keep their scope together.
+    records, tables = args.output / "records", args.output / "tables"
+    records.mkdir(parents=True, exist_ok=True)
     if not args.tables_only:
         disk = host_disk()
         # The compact distributions and anomaly-only records fit within this bound.
         if disk["SizeRemaining"] - 2 * 2**30 < disk["reserve_bytes"]:
             raise OSError("profile storage would invade the E: reserve")
         _atomic_json(
-            args.output / "spec.json",
+            records / "spec.json",
             dict(
                 format="stu-frame-profile",
                 sequences=list(sequences),
@@ -739,9 +737,7 @@ def main():
             max_workers=args.workers, mp_context=mp.get_context("spawn")
         ) as pool:
             futures = [
-                pool.submit(
-                    profile_sequence, args.data_root, args.output, seq, args.limit
-                )
+                pool.submit(profile_sequence, args.data_root, records, seq, args.limit)
                 for seq in sequences
             ]
             for future in as_completed(futures):
@@ -749,11 +745,9 @@ def main():
                 host_disk()
     from .profile_report import aggregate_profile, write_tables
 
-    result = aggregate_profile(args.output)
-    write_tables(args.output, result, args.tables)
-    print(
-        json.dumps({"tables": str(args.tables), "totals": result["totals"]}), flush=True
-    )
+    result = aggregate_profile(records)
+    write_tables(records, result, tables)
+    print(json.dumps({"tables": str(tables), "totals": result["totals"]}), flush=True)
 
 
 if __name__ == "__main__":

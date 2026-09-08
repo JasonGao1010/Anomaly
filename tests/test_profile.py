@@ -27,7 +27,7 @@ def test_profile_weights_and_quantile_bounds(tmp_path):
         assert saved["w0"].sum() == 2
     ledger = Ledger()
     values = np.array([-0.00203, 0.000001, 0.003234, 0.00412, np.nan])
-    ledger.add("F05", "shift", values, resolution=0.0001, bins=(-1, 0, 1))
+    ledger.add("E01", "ground_height", values, resolution=0.0001, bins=(-1, 0, 1))
     item = next(iter(ledger.series.values()))
     x = np.array(sorted(item["counts"]))
     w = np.array([item["counts"][v] for v in x])

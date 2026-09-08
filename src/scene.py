@@ -186,7 +186,7 @@ class PointLabels:
 
 @dataclass(frozen=True, slots=True)
 class SourceFrame:
-    """One complete STU file-slot scan and its frozen official model inputs."""
+    """One complete STU file-slot scan and its read-only official arrays."""
 
     partition: str
     sequence_id: int
