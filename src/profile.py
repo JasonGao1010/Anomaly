@@ -459,56 +459,14 @@ def frame_geometry(source, ledger):
             if len(unique) >= 10
             else "fewer_than_10_distinct_returns",
         )
-        metrics = {
-            key: np.nan
-            for key in (
-                "length",
-                "width",
-                "height",
-                "aspect",
-                "linearity",
-                "planarity",
-                "scattering",
-                "azimuth_span",
-                "elevation_span",
-                "azimuth_gap",
-            )
-        }
         if len(obj) >= 2:
             otree = cKDTree(obj)
             nn[chosen] = otree.query(obj, k=2, workers=1)[0][:, 1]
             neighbor_count[chosen] = (
                 otree.query_ball_point(obj, 0.25, return_length=True, workers=1) - 1
             )
-        if len(unique) >= 10:
-            spans = np.ptp(obj, axis=0)
-            metrics.update(
-                length=float(max(spans[:2])),
-                width=float(min(spans[:2])),
-                height=float(spans[2]),
-            )
-            metrics["aspect"] = (
-                metrics["length"] / metrics["width"] if metrics["width"] > 0 else np.nan
-            )
-            eigen = np.linalg.eigvalsh(np.cov(obj, rowvar=False))[::-1]
-            if eigen[0] > 1e-12:
-                metrics.update(
-                    linearity=float((eigen[0] - eigen[1]) / eigen[0]),
-                    planarity=float((eigen[1] - eigen[2]) / eigen[0]),
-                    scattering=float(eigen[2] / eigen[0]),
-                )
-            angles = np.unique(np.mod(az[chosen], 2 * np.pi))
-            gaps = np.diff(np.r_[angles, angles[0] + 2 * np.pi])
-            metrics.update(
-                azimuth_span=float(2 * np.pi - gaps.max()),
-                elevation_span=float(np.ptp(el[chosen])),
-                azimuth_gap=float(np.max(np.delete(gaps, np.argmax(gaps))))
-                if len(gaps) > 1
-                else np.nan,
-            )
-        item.update(
-            {k: float(v) if np.isfinite(v) else None for k, v in metrics.items()}
-        )
+        metrics = visible_shape(obj)
+        item.update(metrics)
         ground = ground_relation(obj, ground_xyz, ground_tree)
         item.update(ground)
         records.append(item)
@@ -562,6 +520,55 @@ def frame_geometry(source, ledger):
         same_instance_neighbor_distance=nn, same_instance_neighbors=neighbor_count
     )
     return record, records, points
+
+
+def visible_shape(obj):
+    """Describe the observed returns, never the unobserved solid object extent."""
+    unique = np.unique(obj, axis=0)
+    az = np.arctan2(obj[:, 1], obj[:, 0])
+    el = np.arctan2(obj[:, 2], np.linalg.norm(obj[:, :2], axis=1))
+    metrics = {
+        key: np.nan
+        for key in (
+            "length",
+            "width",
+            "height",
+            "aspect",
+            "linearity",
+            "planarity",
+            "scattering",
+            "azimuth_span",
+            "elevation_span",
+            "azimuth_gap",
+        )
+    }
+    if len(unique) >= 10:
+        spans = np.ptp(obj, axis=0)
+        metrics.update(
+            length=float(max(spans[:2])),
+            width=float(min(spans[:2])),
+            height=float(spans[2]),
+        )
+        metrics["aspect"] = (
+            metrics["length"] / metrics["width"] if metrics["width"] > 0 else np.nan
+        )
+        eigen = np.linalg.eigvalsh(np.cov(obj, rowvar=False))[::-1]
+        if eigen[0] > 1e-12:
+            metrics.update(
+                linearity=float((eigen[0] - eigen[1]) / eigen[0]),
+                planarity=float((eigen[1] - eigen[2]) / eigen[0]),
+                scattering=float(eigen[2] / eigen[0]),
+            )
+        angles = np.unique(np.mod(az, 2 * np.pi))
+        gaps = np.diff(np.r_[angles, angles[0] + 2 * np.pi])
+        metrics.update(
+            azimuth_span=float(2 * np.pi - gaps.max()),
+            elevation_span=float(np.ptp(el)),
+            azimuth_gap=float(np.max(np.delete(gaps, np.argmax(gaps))))
+            if len(gaps) > 1
+            else np.nan,
+        )
+    return {k: float(v) if np.isfinite(v) else None for k, v in metrics.items()}
 
 
 def ground_relation(obj, ground, tree):

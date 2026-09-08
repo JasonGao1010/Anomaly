@@ -1,12 +1,16 @@
 {
   "format": "stu-single-frame",
   "schema_version": 1,
-  "research_question": "Which local geometric conditions are associated with residual single-scan STU anomaly segmentation errors?",
+  "research_question": "How can boundary supervision, sampling-normalized geometry and learned normal-surface expectations improve single-scan STU anomaly segmentation?",
   "status": {
-    "stage": "single_frame_infrastructure",
+    "stage": "v1_dataset_frozen",
     "model_defined": false,
     "training_defined": false,
-    "atlas_decisions": null
+    "active_experiment": "v1.json",
+    "iteration": "frozen_dataset_then_v1_then_evaluation_and_error_analysis_then_v2",
+    "synthetic_dataset_frozen": true,
+    "distribution_match": "approximate_with_reported_residuals",
+    "model_experiment_executed": false
   },
   "data": {
     "normal_sources": [

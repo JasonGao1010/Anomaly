@@ -1,0 +1,173 @@
+{
+  "format": "stu-frozen-experiment",
+  "version": "v1",
+  "base_protocol": "spec.json",
+  "seed": 2062026,
+  "iteration": [
+    "freeze_full_sequence_dataset",
+    "implement_model",
+    "train_one_epoch",
+    "evaluate",
+    "review_results_and_decide_next_epoch",
+    "analyze_v1",
+    "design_v2"
+  ],
+  "dataset": {
+    "directory": "results/synthetic/v1",
+    "unit": "one_source_sequence_and_one_fixed_world_object",
+    "input_unit": "one_current_scan_xyzi",
+    "splits": {
+      "train": {
+        "source_sequence": 206,
+        "frames_per_world": 449,
+        "worlds": 32,
+        "candidates": 128
+      },
+      "validation": {
+        "source_sequence": 201,
+        "frames_per_world": 682,
+        "worlds": 8,
+        "candidates": 64
+      }
+    },
+    "all_frames": "render_once_and_freeze_including_zero_anomaly_returns",
+    "storage": "lossless_per_scan_delta_bound_to_original_xyzi_labels_and_pose",
+    "training_renderer": false,
+    "anomaly_target": "inserted_returns_only",
+    "normal_target": "valid_original_normal_class_map_entries",
+    "auxiliary_targets": "defined_after_dataset_freeze_no_ground_truth_in_inference_features",
+    "split_unit": "whole_world_and_source_sequence"
+  },
+  "calibration": {
+    "rays": "assets/rays.npz",
+    "source_sequence": 206,
+    "frames": 449,
+    "seed": 2062027,
+    "quantile_count": 257,
+    "maximum_samples_per_cell": 4096,
+    "minimum_cell_count": 64
+  },
+  "placement": {
+    "support_source": "one_current_normal_scan",
+    "semantics": [
+      40,
+      48,
+      49
+    ],
+    "proposal_range_m": [
+      5,
+      45
+    ],
+    "plane_radius_m": 2,
+    "minimum_ground_points": 20,
+    "maximum_plane_rmse_m": 0.05,
+    "maximum_slope_degrees": 20,
+    "minimum_xy_eigenvalue": 0.01,
+    "minimum_trajectory_clearance_m": 3,
+    "maximum_closest_trajectory_distance_m": 12,
+    "maximum_support_attempts": 64,
+    "collision": "all_nonzero_non_ground_source_returns_in_every_frame",
+    "deep_penetration_m": 0.05
+  },
+  "shape": {
+    "family": "closed_superquadric",
+    "length_m": [
+      0.2,
+      1.4
+    ],
+    "width_ratio": [
+      0.3,
+      1
+    ],
+    "height_m": [
+      0.06,
+      0.8
+    ],
+    "dimension_sampling": "log_uniform_independent_of_validation_instance_identity",
+    "exponents": [
+      0.3,
+      1.8
+    ],
+    "yaw_rad": [
+      -3.141592653589793,
+      3.141592653589793
+    ],
+    "material_quantile": [
+      0.05,
+      0.95
+    ],
+    "material_roughness": [
+      0,
+      0.5
+    ]
+  },
+  "qualification": {
+    "reference": "results/profile/records",
+    "reference_unit": "one_nonzero_instance_id_within_one_public_validation_sequence",
+    "unknown_instance": "exclude_from_object_trajectories_and_report",
+    "reference_use": "aggregate_observation_distributions_not_shapes_or_instance_specific_trajectories",
+    "minimum_eligible_frames": 1,
+    "trajectory_envelope": [
+      "visible_fraction",
+      "range_span",
+      "count_p95"
+    ],
+    "envelope": "reference_minimum_to_maximum_with_explicit_margins",
+    "selection": "deterministic_greedy_then_single_swap_minimum_mean_total_variation",
+    "features": [
+      "count",
+      "range",
+      "count_range",
+      "length",
+      "width",
+      "height",
+      "linearity",
+      "planarity",
+      "scattering",
+      "same_instance_neighbor_distance",
+      "background_neighbors",
+      "intensity_contrast",
+      "nearest_road_fraction",
+      "ground_height_median",
+      "visible_fraction",
+      "eligible_fraction",
+      "longest_visible_run",
+      "range_span",
+      "range_step",
+      "count_step",
+      "height_step",
+      "range_count_correlation"
+    ],
+    "weighting": "equal_worlds_equal_feature_groups_all_frames_with_explicit_missing_bins",
+    "claim": "finite_candidate_distribution_approximation_report_each_residual_no_exact_match_claim",
+    "envelope_margins": {
+      "visible_fraction": 0.1,
+      "range_span": 10.0,
+      "count_p95": 20.0
+    }
+  },
+  "model_plan": {
+    "backbone": "LitePT-S",
+    "C1": "boundary_distance_auxiliary_supervision",
+    "C2": "absolute_and_local_sampling_normalized_geometry",
+    "C3": "learned_normal_surface_expectation_from_current_xyzi",
+    "status": "implement_after_dataset_freeze"
+  },
+  "training": {
+    "fixed_epochs": null,
+    "review_interval_epochs": 1,
+    "continuation": "review_each_epoch_before_deciding_to_continue",
+    "budget_note": "previous_fixed_ten_epoch_setting_revoked_by_user"
+  },
+  "evaluation": {
+    "implementation": "src/evaluate.py",
+    "scope": "all_19_public_validation_sequences_all_8659_frames",
+    "metrics": [
+      "AP",
+      "AUROC",
+      "FPR95",
+      "recall_at_1_percent_FPR"
+    ],
+    "interpretation": "development_results_with_repeated_adaptive_observation_not_hidden_test_performance"
+  }
+}

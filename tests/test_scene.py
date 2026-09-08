@@ -3,7 +3,7 @@ from dataclasses import replace
 import numpy as np
 import pytest
 
-from src.data import DataProtocolError, FramePrediction
+from src.data import DataProtocolError, FramePrediction, FrozenFrame
 from src.protocol import ProtocolError, load_protocol
 from src.scene import (
     LabelMode,
@@ -121,6 +121,75 @@ def test_active_protocol_keeps_test_outside_development():
     assert protocol.document["status"]["model_defined"] is False
     with pytest.raises(ProtocolError, match="outside"):
         protocol.sequence("test", 100)
+
+
+def test_frozen_frame_restores_insertions_missing_returns_and_ignored_labels(tmp_path):
+    xyzi = np.array(
+        [
+            [5, 0, 0, 0.2],
+            [0, 0, 0, 8.2],
+            [6, 1, 0, 0.4],
+            [5, -1, 0, 0.3],
+            [8, 1, 1, 0.8],
+            [7, 1, 0, 0.5],
+        ],
+        np.float32,
+    )
+    packed = np.array([40, 0, 40, 2, 40, 1], np.uint32)
+    target = np.array([8, 255, 8, 255, 8, 255], np.uint8)
+    labels = PointLabels(
+        packed, packed.astype(np.uint16), np.zeros(6, np.uint16), target
+    )
+    original = make_source_frame(
+        7, xyzi, np.eye(4), labels, partition="train", sequence_id=206
+    )
+    rendered_xyzi = xyzi.copy()
+    rendered_xyzi[0] = 0  # Occlusion without a returned pulse.
+    rendered_xyzi[1:3] = [[3, 0, 0, 0.1], [4, 1, 0, 0.2]]
+    rendered_packed = packed.copy()
+    rendered_packed[0] = 0
+    rendered_packed[1:3] = 2 | (60001 << 16)
+    rendered_target = target.copy()
+    rendered_target[:3] = 255
+    labels = PointLabels(
+        rendered_packed,
+        (rendered_packed & 65535).astype(np.uint16),
+        (rendered_packed >> 16).astype(np.uint16),
+        rendered_target,
+    )
+    rendered = make_source_frame(
+        7, rendered_xyzi, np.eye(4), labels, partition="train", sequence_id=206
+    )
+    inserted = np.array([False, True, True, False, False, False])
+    occluded = np.array([True, False, True, False, False, False])
+    sample = FrozenFrame(rendered, "a" * 64, inserted, occluded)
+    path = tmp_path / "frame.npz"
+    sample.save(path, original)
+    restored = FrozenFrame.load(path, original, "a" * 64)
+    np.testing.assert_array_equal(restored.source.xyzi, rendered_xyzi)
+    np.testing.assert_array_equal(restored.source.labels.packed, rendered_packed)
+    np.testing.assert_array_equal(restored.anomaly_target, [-1, 1, 1, -1, 0, -1])
+    with pytest.raises(DataProtocolError, match="another fixed world"):
+        FrozenFrame.load(path, original, "b" * 64)
+    moved = np.eye(4)
+    moved[0, 3] = 1
+    with pytest.raises(DataProtocolError, match="changed after freezing"):
+        FrozenFrame.load(path, replace(original, lidar_pose=moved), "a" * 64)
+    changed_classes = original.labels.semantic_target.copy()
+    changed_classes[5] = 0
+    relabeled = replace(
+        original, labels=replace(original.labels, semantic_target=changed_classes)
+    )
+    with pytest.raises(DataProtocolError, match="changed after freezing"):
+        FrozenFrame.load(path, relabeled, "a" * 64)
+    with pytest.raises(FileExistsError):
+        sample.save(path, original)
+    # A world with no visible anomaly still contributes the complete normal scan.
+    normal = FrozenFrame(original, "a" * 64, np.zeros(6, bool), np.zeros(6, bool))
+    normal.save(tmp_path / "normal.npz", original)
+    normal = FrozenFrame.load(tmp_path / "normal.npz", original, "a" * 64)
+    np.testing.assert_array_equal(normal.source.xyzi, original.xyzi)
+    np.testing.assert_array_equal(normal.anomaly_target, [0, -1, 0, -1, 0, -1])
 
 
 def test_single_scan_renderer_keeps_physical_occlusion(monkeypatch):
