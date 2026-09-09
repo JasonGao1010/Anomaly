@@ -39,7 +39,7 @@
     "split_unit": "whole_world_and_source_sequence"
   },
   "information_use": {
-    "scope": "本轮实现三项监督并计算固定少量完整单帧的先导；不训练、不重生成、不替换当前冻结池，旧 v2 不恢复为正式训练集。",
+    "scope": "本轮只在同一批 14 帧上实现损失聚合并比较 C3 可见支撑 20 与 10；参考支撑仍至少 20。不训练、不重生成、不替换冻结池、不补算全池，旧 v2 不恢复为正式训练集。",
     "val19_generation_permission": "尚未核实允许使用 val19 标签统计拟合生成分布；这种拟合不是正式方案的前提。",
     "diagnosis": "可引用已有真实画像说明困难和缺测；不得据此自动调整生成参数、困难条件比例、训练权重或重新选择世界。",
     "formal_default": "在可比信息使用条件核实前，正式方案按不依赖 val19 标签统计拟合生成分布与选择世界的条件设计；本轮不指定新的生成分布。",
@@ -151,9 +151,22 @@
       "output": "results/supervision/pilot",
       "decision": "不设覆盖率通过门槛；先区分实现错误、监督条件限制与当前观测缺失，计算结束后停止。",
       "definition_commit": "0c9df87",
-      "reason_encoding": "各原因按对应 ignore_when／output 列表顺序编码为 uint16 的 1<<index，0 为有效。C1/C2 可同时记录多个原因；C3 记录计算顺序中第一个失败原因。额外平面质量位 RMSE=1、坡度=2、水平展开=4。"
+      "reason_encoding": "各原因按对应 ignore_when／output 列表顺序编码为 uint16 的 1<<index，0 为有效。C1/C2 可同时记录多个原因；C3 记录计算顺序中第一个失败原因。额外平面质量位 RMSE=1、坡度=2、水平展开=4。",
+      "comparison": {
+        "scope": "只使用原先固定的 14 帧和原有三个视图，不改相位、不扩大先导、不补算全池、不训练。",
+        "minimum_reference_support_points": 20,
+        "visible_support_points": [
+          20,
+          10
+        ],
+        "official_default": 20,
+        "constant_probe": "C1 分视图合并同一批 14 帧的现有目标，比较逐点等权 L1 与分区域、分类别聚合；核对常数 1 与新聚合下的最优常数，不训练模型。",
+        "output": "results/supervision/pilot/comparison",
+        "invariants": "插入前参考点和拟合内点均至少 20；几何阈值和表面构造不变。两个可见阈值共用同一次参考拟合；重新检查支撑数 10–19 点的后续几何条件。既有有效表面目标逐元素不变，新恢复点来自同一参考平面，原无效占位 0 不是参考表面真值。",
+        "decision": "只报告损失聚合的计算性质和可见支撑单变量对照；有效率增加不证明 10 更好，默认不切换。"
+      }
     },
-    "status": "src/supervision.py 已实现无标签尺度、C1/C2/C3 计算；固定先导结果单独保存在 results/supervision/pilot。全量辅助监督尚未补算，模型尚未实现或训练。",
+    "status": "已实现三项监督和分类别损失聚合；同一批 14 帧已完成 C3 可见支持 20 对 10 的比较，参考支持仍为 20，正式默认可见支持仍为 20。全量辅助监督未补算，模型未实现或训练。",
     "common": {
       "input": "每个视图独立输入 source.xyzi[source.real_slots]，只含当前扫描传感器坐标与原始强度；完整扫描中的忽略标签回波仍可作为输入，零坐标空槽不进入模型。",
       "identity": "每个点用 world_identity、源分区、源序列、frame_id、view_id、原始 source_slot 标识。全帧点行对应 source.real_slots；NPZ 中的 source_slot 只列变化槽位，不能冒充全帧点索引。",
@@ -171,7 +184,7 @@
         "calculation": "对每个不同位置 p_i，从当前视图全部实际回波中找 0 < ||p_j-p_i|| <= 0.5 的最近至多 6 个不同位置，等距按代表槽位排序，记为 K_i。|K_i| >= 3 时 delta_i=max(median_j ||p_j-p_i||, 1e-6)，scale_valid_i=true；否则 delta_i=0、scale_valid_i=false。该过程完全不使用标签。",
         "representation": "真实位移 p_j-p_i 始终保留；scale_valid_i=true 时可同时计算 (p_j-p_i)/(delta_i+1e-6)。无有效尺度时关闭归一化分量及依赖它的辅助约束，不以零尺度声称采样极密。每个稀疏视图重新计算自己的尺度。"
       },
-      "parameter_status": "0.5 米局部范围沿用现有邻域画像的量纲，C3 的基础拟合阈值沿用现有地面检查；其余邻居数、尺度倍数、删减强度与证据保留比例是明确的 V1 初始定义，未通过 val19 调优，也未证明为最佳或足以保证可辨识性。辅助损失权重和训练抽样权重不在本轮确定。",
+      "parameter_status": "局部邻域与 C3 几何阈值保持原定义；C1 区域内类别等权并按 3:1 聚合区域，C2/C3 有效类别等权，均为 V1 初始规则。C3 正式最低可见支持数仍为 20，10 仅作同批样本对照。辅助项之间和基础检测损失的权重本轮不设定。",
       "availability": [
         {
           "item": "当前帧、逐点检测标签、插入前正常帧与前后槽位身份",
@@ -211,7 +224,7 @@
         "local_label_support_unreliable：局部含未知标签，或同标签支持不足",
         "no_observed_interface_path：没有可靠异类短边，或同标签子图到交界不可达；包括无异常回波帧及只有隔空近邻而无局部交界的情况"
       ],
-      "training_meaning": "模型预测 boundary_distance，基础辅助误差为有效行上的绝对误差。边界距离不能替代二值异常标签，异常边界点仍为 y=1，不强制其异常分数低于内部点。若某帧无可靠边界，只关闭 C1。稀疏视图如使用 C1，须在稀疏图上重新计算，不能把稠密边界距离当作采样不变真值。",
+      "training_meaning": "模型预测 boundary_distance，基础辅助误差为有效行上的绝对误差。边界距离不能替代二值异常标签，异常边界点仍为 y=1，不强制其异常分数低于内部点。若某帧无可靠边界，只关闭 C1。稀疏视图如使用 C1，须在稀疏图上重新计算，不能把稠密边界距离当作采样不变真值。 聚合采用 supervision.loss.C1，不再把全部有效行直接合并取一个点均值。",
       "availability": [
         {
           "item": "异常/正常标签、可见点、最近正常点与邻域统计的计算基础",
@@ -264,7 +277,7 @@
         "sampling_consistency_valid": "bool[Ns]，按稀疏点行排列",
         "sampling_ignore_reason": "unknown_label、sampling_scale_unavailable、local_unknown_labels、lost_label_group_support、lost_spatial_span，或 valid"
       },
-      "training_meaning": "离线准备的是观测配对、对应关系和有效掩码；训练时同一个模型分别读取两个单帧，qD=sigmoid(sD)、qS=sigmoid(sS)，在有效对应点计算 (qS-stop_gradient(qD))^2。基础视图预测只是停止梯度的一致性参照，不是真值置信度；两视图保留各自逐点检测标签。两个前向不交换输入特征，真实推理只有一个当前扫描。",
+      "training_meaning": "离线准备的是观测配对、对应关系和有效掩码；训练时同一个模型分别读取两个单帧，qD=sigmoid(sD)、qS=sigmoid(sS)，在有效对应点计算 (qS-stop_gradient(qD))^2。基础视图预测只是停止梯度的一致性参照，不是真值置信度；两视图保留各自逐点检测标签。两个前向不交换输入特征，真实推理只有一个当前扫描。 聚合采用 supervision.loss.C2，对正常/异常有效对应点分别求均值后等权合并。",
       "disabled_constraints": "无效对应点关闭异常分数一致性；不对删除点、零回波或已消失异常补充高置信预测。C1 距离依赖观测图，C3 可靠性依赖剩余支撑，二者不直接套用分数一致性，也不从稠密视图无条件复制有效掩码。若稀疏视图无实际回波，记录该配对为空并关闭其前向和辅助项，基础帧保留；不重选世界。",
       "availability": [
         {
@@ -289,14 +302,15 @@
           49
         ],
         "xy_radius_m": 2,
-        "minimum_distinct_support_points": 20,
         "minimum_inlier_residual_m": 0.05,
         "mad_multiplier": 3,
         "mad_normalization": 1.4826,
         "maximum_plane_rmse_m": 0.05,
         "maximum_slope_degrees": 20,
         "minimum_xy_covariance_eigenvalue_m2": 0.01,
-        "convex_hull_tolerance_m": 1e-10
+        "convex_hull_tolerance_m": 1e-10,
+        "minimum_reference_support_points": 20,
+        "minimum_visible_support_points": 20
       },
       "calculation": [
         "对合成后每个 y 属于 {0,1} 的实际点 p_i，在插入前同一帧中取原始类别映射有效、语义属于 {40,48,49}、且水平距离 ||q_xy-p_i,xy||<=2 米的实际回波。坐标去重后记为 Q0；不能用插入后的物体点、其他帧或世界放置时的一张锚点平面替代。",
@@ -310,7 +324,7 @@
         "surface_valid": "bool[N]",
         "surface_ignore_reason": "unknown_query_label、insufficient_reference_support、rank_deficient_or_nonfinite、insufficient_inliers、plane_fit_unreliable、outside_reference_hull、insufficient_visible_support、outside_visible_hull、visible_support_unreliable，或 valid"
       },
-      "training_meaning": "模型仅从合成后当前 xyzi 预测 surface_offset_z，基础辅助误差为有效行上的绝对误差。预测正常表面为 (p_i,x,p_i,y,p_i,z+predicted_offset)，当前观测相对它的有符号 z 偏离为 -predicted_offset。偏离供异常判断使用，不设大于某个高度就异常的规则；地面、坡面、路缘及正常物体仍服从原始检测标签。所有有效正常点和异常点均可有此目标。",
+      "training_meaning": "模型仅从合成后当前 xyzi 预测 surface_offset_z，基础辅助误差为有效行上的绝对误差。预测正常表面为 (p_i,x,p_i,y,p_i,z+predicted_offset)，当前观测相对它的有符号 z 偏离为 -predicted_offset。偏离供异常判断使用，不设大于某个高度就异常的规则；地面、坡面、路缘及正常物体仍服从原始检测标签。所有有效正常点和异常点均可有此目标。 聚合采用 supervision.loss.C3，对正常/异常有效点分别求均值后等权合并。",
       "reliability_boundary": "这是插入前单帧支持的局部平面估计目标，不是遮挡区域精确表面真值。训练可靠掩码允许用原始语义和可见支撑判断，真实推理不得读取这些掩码或语义；若模型需要表面可信度，须只从当前 xyzi 估计。未满足条件仅关闭 C3，不把点改成正常、不丢弃异常样本，也不据此自动要求重生成。",
       "availability": [
         {
@@ -324,6 +338,31 @@
           "evidence": "src/supervision.py: surface_targets；本轮只计算固定先导样本，覆盖率以 results/supervision/pilot/summary.json 的实际结果为准，不代表整个池。"
         }
       ]
+    },
+    "loss": {
+      "scope": "每个辅助项在当前小批量的同一视图或同一删减级别内合并点行，再分组取均值；先导核对分别以同一批 14 帧的每个视图作为聚合单元，不平均逐帧均值。",
+      "classes": "只使用对应有效掩码内的正常 y=0 与异常 y=1。每类内部按点平均，存在的类别等权；忽略类别不参与。",
+      "empty_groups": "空类别跳过；C1 空区域跳过后，将剩余区域权重归一化。整项无有效点时返回与预测计算图相连的零，不填充目标。先按掩码选点，再计算误差，避免忽略行污染损失。",
+      "C1": {
+        "band_weight": 0.75,
+        "saturated_weight": 0.25,
+        "error": "abs(predicted_boundary_distance-boundary_distance)",
+        "band": "boundary_valid 且 boundary_distance<1",
+        "saturated": "boundary_valid 且 boundary_distance==1",
+        "aggregation": "区域内先分别求正常/异常点的平均绝对误差，再对存在类别等权平均。两个区域均存在时为 0.75*L_band+0.25*L_saturated。",
+        "status": "3:1 为明确的 V1 初始设置，未证明最优；不改边界定义、目标或有效掩码。"
+      },
+      "C2": {
+        "error": "(sigmoid(sparse_logits)-stop_gradient(sigmoid(dense_logits[dense_row])))^2",
+        "aggregation": "sampling_consistency_valid 内分别平均正常/异常点，再对存在类别等权平均；停止基础分支梯度。配对、删减相位和可靠性条件保持不变。"
+      },
+      "C3": {
+        "error": "abs(predicted_surface_offset_z-surface_offset_z)",
+        "aggregation": "surface_valid 内分别平均正常/异常点，再对存在类别等权平均；正式默认使用可见支撑至少 20 的掩码。"
+      },
+      "between_views": "若训练同时使用多个视图，同一辅助项先按上述规则在每个视图/级别计算，再对存在有效监督的视图/级别等权平均；空视图不参与。",
+      "between_terms": "本轮不设 C1/C2/C3 与基础检测损失之间的系数，不实现模型或训练循环。",
+      "training_only": "分组标签、目标、对应关系、有效掩码及计算出的点权重只用于损失，不进入模型输入。"
     }
   },
   "calibration": {

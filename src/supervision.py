@@ -39,6 +39,60 @@ REASONS = {
 }
 
 
+def loss_point_weights(labels, valid, *, dtype, boundary_target=None, region_weights=(.75, .25)):
+    """Normalize within classes, then regions; input rows belong to one batch/view."""
+    import torch
+
+    if labels.ndim != 1 or valid.shape != labels.shape or valid.dtype != torch.bool:
+        raise ValueError("loss labels and boolean validity must be aligned point vectors")
+    if boundary_target is None:
+        regions = ((valid, 1.0),)
+    else:
+        if boundary_target.shape != labels.shape or len(region_weights) != 2 or min(region_weights) <= 0:
+            raise ValueError("boundary loss needs aligned targets and two positive region weights")
+        regions = ((valid & (boundary_target < 1), region_weights[0]),
+                   (valid & (boundary_target == 1), region_weights[1]))
+    # Keep reductions in at least float32, even under mixed-precision prediction.
+    dtype = torch.float64 if dtype == torch.float64 else torch.float32
+    weights = torch.zeros(labels.shape, dtype=dtype, device=labels.device)
+    active_weight = weights.new_zeros(())
+    for region, weight in regions:
+        groups = torch.stack((region & (labels == 0), region & (labels == 1)))
+        counts = groups.sum(dim=1)
+        present = (counts > 0).sum()
+        within = (groups.to(dtype) / counts.clamp_min(1).to(dtype)[:, None]).sum(dim=0)
+        weights += weight * within / present.clamp_min(1)
+        active_weight += weight * (present > 0)
+    return weights / active_weight.clamp_min(torch.finfo(dtype).tiny)
+
+
+def boundary_loss(prediction, target, labels, valid, region_weights=(.75, .25)):
+    """C1: balanced L1 within each region, with a 3:1 band/saturation default."""
+    weights = loss_point_weights(labels, valid, dtype=prediction.dtype,
+                                 boundary_target=target, region_weights=region_weights)
+    selected = valid & ((labels == 0) | (labels == 1))
+    # Mask before arithmetic: an ignored NaN must not contaminate the loss or gradient.
+    error = (prediction[selected] - target.detach()[selected]).abs()
+    return (error * weights[selected]).sum()
+
+
+def sampling_loss(sparse_logits, dense_logits, dense_row, labels, valid):
+    """C2: balanced squared score consistency; the dense branch receives no gradient."""
+    weights = loss_point_weights(labels, valid, dtype=sparse_logits.dtype)
+    selected = valid & ((labels == 0) | (labels == 1))
+    sparse = sparse_logits[selected].to(weights.dtype).sigmoid()
+    dense = dense_logits[dense_row[selected]].detach().to(weights.dtype).sigmoid()
+    return ((sparse - dense).square() * weights[selected]).sum()
+
+
+def surface_loss(prediction, target, labels, valid):
+    """C3: equal normal/anomaly means of the valid surface-offset absolute error."""
+    weights = loss_point_weights(labels, valid, dtype=prediction.dtype)
+    selected = valid & ((labels == 0) | (labels == 1))
+    error = (prediction[selected] - target.detach()[selected]).abs()
+    return (error * weights[selected]).sum()
+
+
 class ScanGeometry:
     """Label-free geometry; duplicate positions retain every original input row."""
 
@@ -304,15 +358,17 @@ def _plane_fit(points):
 
 
 @njit(parallel=True)
-def _surface_chunk(queries, ground, visible, indptr, indices, query_known, p):
+def _surface_chunk(queries, ground, visible, indptr, indices, query_known, p, visible_minimums):
     minimum, residual_floor, mad_multiplier, mad_normalization, rmse_limit, slope_limit, eigen_limit, tolerance = p
     n, views = query_known.shape
-    offset = np.zeros((n, views))
-    reason = np.zeros((n, views), np.uint16)
+    levels = len(visible_minimums)
+    visible_floor = np.min(visible_minimums)
+    offset = np.zeros((n, views, levels))
+    reason = np.zeros((n, views, levels), np.uint16)
     inlier_count = np.zeros(n, np.int32)
     seen_count = np.zeros((n, views), np.int32)
     quality = np.zeros(n, np.uint8)
-    seen_quality = np.zeros((n, views), np.uint8)
+    seen_quality = np.zeros((n, views, levels), np.uint8)
     for i in prange(n):
         ids = indices[indptr[i]:indptr[i + 1]]
         for view in range(views):
@@ -365,24 +421,29 @@ def _surface_chunk(queries, ground, visible, indptr, indices, query_known, p):
             keep = visible[ids, view]
             seen = points[keep]
             seen_count[i, view] = len(seen)
-            if len(seen) < minimum:
-                reason[i, view] = 64
-                continue
-            # Qseen validates observability; it never redefines the pre-insertion plane.
-            _, rank, seen_matrix = _plane_fit(seen)
-            if rank != 3:
-                reason[i, view] = 4
-                continue
-            eigen = _xy_eigenvalue(seen[:, :2])
-            rmse = np.sqrt(np.mean((seen[:, 2] - seen_matrix @ coef) ** 2))
-            seen_quality[i, view] = (int(not np.isfinite(rmse) or rmse > rmse_limit)
-                                    + 4 * int(not np.isfinite(eigen) or eigen < eigen_limit))
-            if seen_quality[i, view]:
-                reason[i, view] = 256
-            elif not _inside_hull(seen[:, :2], tolerance):
-                reason[i, view] = 128
-            else:
-                offset[i, view] = coef[2] - queries[i, 2]
+            seen_failure, rejection = 0, 0
+            if len(seen) >= visible_floor:
+                # Both thresholds share this unchanged reference plane and geometry check.
+                _, rank, seen_matrix = _plane_fit(seen)
+                if rank != 3:
+                    seen_failure = 4
+                else:
+                    eigen = _xy_eigenvalue(seen[:, :2])
+                    rmse = np.sqrt(np.mean((seen[:, 2] - seen_matrix @ coef) ** 2))
+                    rejection = (int(not np.isfinite(rmse) or rmse > rmse_limit)
+                                 + 4 * int(not np.isfinite(eigen) or eigen < eigen_limit))
+                    if rejection:
+                        seen_failure = 256
+                    elif not _inside_hull(seen[:, :2], tolerance):
+                        seen_failure = 128
+            for level in range(levels):
+                if len(seen) < visible_minimums[level]:
+                    reason[i, view, level] = 64
+                else:
+                    reason[i, view, level] = seen_failure
+                    seen_quality[i, view, level] = rejection
+                    if seen_failure == 0:
+                        offset[i, view, level] = coef[2] - queries[i, 2]
     return offset, reason, inlier_count, seen_count, quality, seen_quality
 
 
@@ -399,8 +460,12 @@ def surface_reference_data(original, sample, pairs, parameters):
     return ground, visible
 
 
-def surface_targets(original, sample, geometries, labels, pairs, parameters):
-    """Fit each pre-insertion plane once and check visible support in every view."""
+def surface_targets(original, sample, geometries, labels, pairs, parameters, visible_minimums=None):
+    """Return {visible minimum: view targets}, sharing every reference plane."""
+    thresholds = np.asarray(visible_minimums if visible_minimums is not None
+                            else [parameters["minimum_visible_support_points"]], np.int64)
+    if thresholds.ndim != 1 or not len(thresholds) or np.any(thresholds < 3) or len(np.unique(thresholds)) != len(thresholds):
+        raise ValueError("visible support thresholds must be distinct integers of at least three")
     dense = geometries[0]
     ground, visible = surface_reference_data(original, sample, pairs, parameters)
     tree = cKDTree(ground[:, :2])
@@ -411,14 +476,14 @@ def surface_targets(original, sample, geometries, labels, pairs, parameters):
         known[rows, view] = g.groups(y) >= 0
     counts = tree.query_ball_point(dense.xyz[:, :2], parameters["xy_radius_m"],
                                    return_length=True, workers=dense.workers)
-    reason = np.where(known, 2, 1).astype(np.uint16)
-    offset = np.zeros((n, views))
+    reason = np.repeat(np.where(known, 2, 1)[..., None], len(thresholds), axis=2).astype(np.uint16)
+    offset = np.zeros((n, views, len(thresholds)))
     inlier_count = np.zeros(n, np.int32)
     seen_count = np.zeros((n, views), np.int32)
     quality = np.zeros(n, np.uint8)
-    seen_quality = np.zeros((n, views), np.uint8)
-    rows = np.flatnonzero((counts >= parameters["minimum_distinct_support_points"]) & known.any(axis=1))
-    p = np.array([parameters["minimum_distinct_support_points"], parameters["minimum_inlier_residual_m"],
+    seen_quality = np.zeros((n, views, len(thresholds)), np.uint8)
+    rows = np.flatnonzero((counts >= parameters["minimum_reference_support_points"]) & known.any(axis=1))
+    p = np.array([parameters["minimum_reference_support_points"], parameters["minimum_inlier_residual_m"],
                   parameters["mad_multiplier"], parameters["mad_normalization"],
                   parameters["maximum_plane_rmse_m"], np.tan(np.deg2rad(parameters["maximum_slope_degrees"])),
                   parameters["minimum_xy_covariance_eigenvalue_m2"], parameters["convex_hull_tolerance_m"]])
@@ -431,20 +496,22 @@ def surface_targets(original, sample, geometries, labels, pairs, parameters):
         neighbors = tree.query_ball_point(dense.xyz[chunk, :2], parameters["xy_radius_m"],
                                           workers=dense.workers, return_sorted=True)
         ptr, ids = _csr_neighbors(neighbors)
-        values = _surface_chunk(dense.xyz[chunk], ground, visible, ptr, ids, known[chunk], p)
+        values = _surface_chunk(dense.xyz[chunk], ground, visible, ptr, ids, known[chunk], p, thresholds)
         offset[chunk], reason[chunk], inlier_count[chunk], seen_count[chunk], quality[chunk], seen_quality[chunk] = values
         start += size
-    results = []
-    for view, (g, rows) in enumerate(zip(geometries, match)):
-        back = rows[g.inverse]
-        results.append(dict(surface_offset_z=offset[back, view].astype(np.float32),
-                            surface_valid=reason[back, view] == 0,
-                            surface_ignore_reason=reason[back, view],
-                            surface_reference_count=counts[back].astype(np.int32),
-                            surface_inlier_count=inlier_count[back],
-                            surface_seen_count=seen_count[back, view],
-                            surface_plane_rejection=quality[back],
-                            surface_seen_rejection=seen_quality[back, view]))
+    results = {}
+    for level, threshold in enumerate(thresholds):
+        results[int(threshold)] = []
+        for view, (g, rows) in enumerate(zip(geometries, match)):
+            back = rows[g.inverse]
+            results[int(threshold)].append(dict(surface_offset_z=offset[back, view, level].astype(np.float32),
+                                                surface_valid=reason[back, view, level] == 0,
+                                                surface_ignore_reason=reason[back, view, level],
+                                                surface_reference_count=counts[back].astype(np.int32),
+                                                surface_inlier_count=inlier_count[back],
+                                                surface_seen_count=seen_count[back, view],
+                                                surface_plane_rejection=quality[back],
+                                                surface_seen_rejection=seen_quality[back, view, level]))
     return results
 
 
@@ -473,7 +540,8 @@ def compute_supervision(sample, original, grid, world_seed, protocol, workers=1,
         target.update(sparse_source_slot=pair["sparse_source_slot"], dense_row=pair["dense_row"])
     if progress:
         progress("sampling_pairs")
-    for target, surface in zip(result, surface_targets(original, sample, geometries, labels, pairs, config["C3"]["parameters"])):
+    surfaces = surface_targets(original, sample, geometries, labels, pairs, config["C3"]["parameters"])
+    for target, surface in zip(result, surfaces[config["C3"]["parameters"]["minimum_visible_support_points"]]):
         target.update(surface)
     if progress:
         progress("surface")
@@ -489,7 +557,7 @@ def surface_probe(point, original, sample, view_slots, parameters):
     slots = slots[np.linalg.norm(original.xyzi[slots, :2].astype(np.float64) - point[:2], axis=1) <= p["xy_radius_m"]]
     ground, inverse = np.unique(original.xyzi[slots, :3].astype(np.float64), axis=0, return_inverse=True)
     record = dict(query_xyz_m=point.tolist(), reference_positions=len(ground), valid=False)
-    minimum = p["minimum_distinct_support_points"]
+    minimum = p["minimum_reference_support_points"]
     if len(ground) < minimum:
         return dict(record, reason="insufficient_reference_support")
     matrix = np.column_stack((ground[:, :2] - point[:2], np.ones(len(ground))))
@@ -527,7 +595,7 @@ def surface_probe(point, original, sample, view_slots, parameters):
     np.logical_or.at(visible, inverse, unchanged & present)
     seen = visible & inlier
     record["seen_positions"] = int(seen.sum())
-    if seen.sum() < minimum:
+    if seen.sum() < p["minimum_visible_support_points"]:
         return dict(record, reason="insufficient_visible_support")
     if np.linalg.matrix_rank(matrix[seen]) != 3:
         return dict(record, reason="rank_deficient_or_nonfinite")
@@ -728,16 +796,209 @@ def _aggregate(records):
     return result
 
 
+def _loss_probe(parts, region_weights):
+    """Evaluate constants on saved targets, not a trained model or synthetic scores."""
+    import torch
+
+    labels = torch.from_numpy(np.concatenate([p["labels"] for p in parts]))
+    distance = torch.from_numpy(np.concatenate([p["distance"] for p in parts]).astype(np.float64))
+    valid = torch.from_numpy(np.concatenate([p["boundary_valid"] for p in parts]))
+    weights = loss_point_weights(labels, valid, dtype=torch.float64,
+                                 boundary_target=distance, region_weights=region_weights)
+    d, w = distance[valid].numpy(), weights[valid].numpy()
+    order = np.argsort(d, kind="stable")
+    best = float(d[order[np.searchsorted(np.cumsum(w[order]), .5)]]) if len(d) else None
+    one = torch.ones_like(distance)
+    constant_one = float(boundary_loss(one, distance, labels, valid, region_weights))
+    best_loss = float(boundary_loss(torch.full_like(distance, best), distance, labels, valid, region_weights)) if best is not None else None
+    groups = {}
+    for region, mask in (("band", valid & (distance < 1)), ("saturated", valid & (distance == 1))):
+        groups[region] = {name: dict(points=int((mask & (labels == y)).sum()),
+                                    weight=float(weights[mask & (labels == y)].sum()))
+                          for y, name in ((0, "normal"), (1, "anomaly"))}
+    report = dict(C1=dict(valid=len(d), non_saturated=int(np.sum(d < 1)),
+                         original_constant_one_loss=float(np.mean(1 - d)) if len(d) else None,
+                         original_constant_one_bound=float(np.mean(d < 1)) if len(d) else None,
+                         original_optimal_constant=float(np.median(d)) if len(d) else None,
+                         grouped_constant_one_loss=constant_one,
+                         grouped_optimal_constant=best, grouped_optimal_constant_loss=best_loss,
+                         groups=groups))
+    if len(d):
+        assert best < 1 and constant_one > best_loss
+        # An extra copy of every saturated group changes counts, not its total weight.
+        extra = valid & (distance == 1)
+        torch.testing.assert_close(boundary_loss(
+            torch.cat((one, one[extra])), torch.cat((distance, distance[extra])),
+            torch.cat((labels, labels[extra])), torch.cat((valid, valid[extra])), region_weights),
+            torch.tensor(constant_one, dtype=torch.float64), rtol=0, atol=1e-12)
+    for key, mask_key in (("C2", "sampling_valid"), ("C3", "surface_valid")):
+        if mask_key not in parts[0]:
+            continue
+        mask = torch.from_numpy(np.concatenate([p[mask_key] for p in parts]))
+        w = loss_point_weights(labels, mask, dtype=torch.float64)
+        counts = {name: int((mask & (labels == y)).sum()) for y, name in ((0, "normal"), (1, "anomaly"))}
+        total = sum(counts.values())
+        report[key] = dict(valid=counts, original_anomaly_weight=counts["anomaly"] / total if total else None,
+                           grouped_weight={name: float(w[labels == y].sum()) for y, name in ((0, "normal"), (1, "anomaly"))})
+    return report
+
+
+def compare_pilot(protocol, data_root, workers):
+    """Read the fixed pilot, compare one visible-support variable, and check losses."""
+    import torch
+
+    torch.set_num_threads(1)
+    config = protocol["supervision"]
+    plan = config["pilot"]["comparison"]
+    baseline = Path(config["pilot"]["output"])
+    output = Path(plan["output"])
+    parameters = config["C3"]["parameters"]
+    thresholds = plan["visible_support_points"]
+    if thresholds != [20, 10] or parameters["minimum_reference_support_points"] != 20 or parameters["minimum_visible_support_points"] != 20:
+        raise ValueError("this comparison holds reference/default minima at 20 and changes visible support only")
+    previous = json.loads((baseline / "summary.json").read_text())
+    if [r["sample"] for r in previous["records"]] != config["pilot"]["samples"]:
+        raise ValueError("comparison must use exactly the already computed fixed pilot")
+    old_parameters = dict(previous["parameters"]["surface"])
+    old_parameters["minimum_reference_support_points"] = old_parameters.pop("minimum_distinct_support_points")
+    old_parameters["minimum_visible_support_points"] = 20
+    if parameters != old_parameters:
+        raise ValueError("reference fitting or other geometric conditions changed")
+    disk_before = host_disk()
+    datasets = {split: FrozenDataset(protocol["dataset"]["directory"], data_root, split) for split in ("train", "validation")}
+    records, loss_parts = [], [[], [], []]
+    start = time.monotonic()
+    for number, old_record in enumerate(previous["records"]):
+        selection = old_record["sample"]
+        dataset = datasets[selection["split"]]
+        index = next(i for i, (p, _, frame) in enumerate(dataset.samples)
+                     if p.parent.parent.name == selection["world"] and frame == selection["frame"])
+        if hashlib.sha256(dataset.samples[index][0].read_bytes()).hexdigest() != old_record["binding"]["frozen_delta_sha256"]:
+            raise ValueError("frozen base frame changed since the original pilot")
+        sample, original = dataset[index], dataset.sequence[selection["frame"]]
+        relative = Path(selection["split"]) / selection["world"] / f"{selection['frame']:06d}.npz"
+        source_path = baseline / relative
+        before = hashlib.sha256(source_path.read_bytes()).hexdigest()
+        with np.load(source_path, allow_pickle=False) as saved:
+            arrays = {key: saved[key] for key in saved.files}
+        if arrays["source_identity"].item() != source_identity(original) or arrays["world_identity"].item() != sample.world_identity:
+            raise ValueError("pilot auxiliaries identify a different normal source or frozen world")
+        geometries, labels, pairs = [], [], []
+        for view in range(3):
+            slots = arrays[f"view_{view}/source_slot"]
+            geometries.append(ScanGeometry(sample.source.xyzi[slots], slots, config["common"]["sampling_scale"], workers))
+            labels.append(sample.anomaly_target[slots])
+            if view == 0:
+                np.testing.assert_array_equal(slots, sample.source.real_slots)
+            else:
+                keep = np.zeros(original.slot_count, bool)
+                keep[slots] = True
+                row = arrays[f"view_{view}/dense_row"]
+                np.testing.assert_array_equal(slots, geometries[0].slots[row])
+                pairs.append(dict(dense_row=row, ray_keep=keep))
+            part = dict(labels=labels[-1], distance=arrays[f"view_{view}/boundary_distance"],
+                        boundary_valid=arrays[f"view_{view}/boundary_valid"], surface_valid=arrays[f"view_{view}/surface_valid"])
+            if view:
+                part["sampling_valid"] = arrays[f"view_{view}/sampling_consistency_valid"]
+            loss_parts[view].append(part)
+        compared = surface_targets(original, sample, geometries, labels, pairs, parameters, thresholds)
+        views, probes = [], []
+        artifact = dict(format=np.asarray("stu-visible-support-comparison"),
+                        source_identity=arrays["source_identity"], world_identity=arrays["world_identity"],
+                        baseline_auxiliary_sha256=np.asarray(before), minimum_reference_support_points=np.asarray(20),
+                        minimum_visible_support_points=np.asarray(10), formal_default=np.asarray(False))
+        for view, (g, y, a, b) in enumerate(zip(geometries, labels, compared[20], compared[10])):
+            for key, value in a.items():
+                np.testing.assert_array_equal(value, arrays[f"view_{view}/{key}"])
+            assert np.all(~a["surface_valid"] | b["surface_valid"])
+            np.testing.assert_array_equal(a["surface_offset_z"][a["surface_valid"]], b["surface_offset_z"][a["surface_valid"]])
+            restored = b["surface_valid"] & ~a["surface_valid"]
+            candidates = a["surface_ignore_reason"] == 64
+            row = {}
+            for name, mask in (("normal", y == 0), ("anomaly", y == 1),
+                               ("low_anomaly", (y == 1) & ("low" in old_record["conditions"]))):
+                reason = b["surface_ignore_reason"]
+                row[name] = dict(total=int(mask.sum()), valid_20=int(np.sum(mask & a["surface_valid"])),
+                                 valid_10=int(np.sum(mask & b["surface_valid"])), recovered=int(np.sum(mask & restored)),
+                                 recovered_distinct_positions=len(np.unique(g.inverse[mask & restored])),
+                                 quantity_failed_20=int(np.sum(mask & candidates)),
+                                 remaining_after_quantity_failure={key: int(np.sum(mask & candidates & ((reason & (1 << k)) != 0)))
+                                                                  for k, key in enumerate(REASONS["surface"])},
+                                 remaining_geometry_rejection={key: int(np.sum(mask & candidates & ((b["surface_seen_rejection"] & bit) != 0)))
+                                                               for key, bit in (("rmse", 1), ("xy_extent", 4))})
+            views.append(row)
+            check_rows = list(np.flatnonzero((y == 1) & candidates))
+            for mask in (restored, candidates & ~restored):
+                normal_rows = np.flatnonzero((y == 0) & mask)
+                if len(normal_rows):
+                    check_rows.extend(normal_rows[[0, len(normal_rows) // 2, -1]])
+            for point in np.unique(check_rows):
+                probe = surface_probe(g.xyzi[point, :3].astype(np.float64), original, sample, g.slots,
+                                      dict(parameters, minimum_visible_support_points=10))
+                assert probe["valid"] == bool(b["surface_valid"][point]), (selection, view, int(g.slots[point]), probe)
+                if probe["valid"]:
+                    np.testing.assert_allclose(b["surface_offset_z"][point], probe["offset_z_m"], rtol=1e-6, atol=1e-6)
+                else:
+                    assert b["surface_ignore_reason"][point] & (1 << REASONS["surface"].index(probe["reason"]))
+                probes.append(dict(view=view, source_slot=int(g.slots[point]), label=int(y[point]), **probe))
+            artifact[f"view_{view}/source_slot"] = g.slots
+            artifact[f"view_{view}/recovered_source_slot"] = g.slots[restored]
+            artifact.update({f"view_{view}/{key}": value for key, value in b.items()})
+        destination = output / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        np.savez_compressed(destination, **artifact)
+        with np.load(destination, allow_pickle=False) as saved:
+            for key, value in artifact.items():
+                np.testing.assert_array_equal(saved[key], value)
+        assert before == hashlib.sha256(source_path.read_bytes()).hexdigest()
+        record = dict(sample=selection, conditions=old_record["conditions"], views=views, probes=probes,
+                      baseline_auxiliary_sha256=before, baseline_20_arrays_identical=True,
+                      auxiliary_bytes=destination.stat().st_size)
+        _atomic_json(destination.with_suffix(".json"), record)
+        records.append(record)
+        print(json.dumps(dict(sample=number, stage="visible_20_vs_10", seconds=round(time.monotonic() - start, 2),
+                              recovered=[{name: counts["recovered"] for name, counts in view.items()} for view in views])), flush=True)
+        host_disk()
+    groups = {}
+    for name in ("all", "train", "validation"):
+        selected = [r for r in records if name == "all" or r["sample"]["split"] == name]
+        groups[name] = []
+        for view in range(3):
+            totals = {}
+            for label in ("normal", "anomaly", "low_anomaly"):
+                parts = [r["views"][view][label] for r in selected]
+                totals[label] = {key: sum(p[key] for p in parts) for key, value in parts[0].items() if isinstance(value, int)}
+                for key in ("remaining_after_quantity_failure", "remaining_geometry_rejection"):
+                    totals[label][key] = {reason: sum(p[key][reason] for p in parts) for reason in parts[0][key]}
+            groups[name].append(totals)
+    weights = config["loss"]["C1"]
+    report = dict(plan=plan, loss_rules=config["loss"], reference_parameters=parameters,
+                  scope="同一批 14 帧、42 个视图的损失计算性质及 C3 单变量对照；未训练。",
+                  baseline="results/supervision/pilot/summary.json at 9a0ecb5", records=records, groups=groups,
+                  loss_checks=[_loss_probe(parts, (weights["band_weight"], weights["saturated_weight"])) for parts in loss_parts],
+                  implementation_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+                  counts="实际文件回波行；低矮异常是异常子集，不能与异常总数相加。三个视图分别统计；失效原因按首次失败条件记录。",
+                  seconds=time.monotonic() - start, workers=workers,
+                  peak_rss_bytes=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024,
+                  disk_before=disk_before, disk_after=host_disk())
+    _atomic_json(output / "summary.json", report)
+    print(json.dumps(dict(comparison=str(output / "summary.json"), frames=len(records))), flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--protocol", type=Path, default=Path("protocol/v1.json"))
     parser.add_argument("--data-root", type=Path, default=Path("/home/jasongao/Data/STU"))
     parser.add_argument("--workers", type=int, default=min(16, len(os.sched_getaffinity(0))))
+    parser.add_argument("--compare", action="store_true", help="compare losses and visible support on the existing fixed pilot")
     args = parser.parse_args()
     if not 1 <= args.workers <= len(os.sched_getaffinity(0)):
         parser.error("workers must fit current CPU affinity")
     set_num_threads(args.workers)
     protocol = json.loads(args.protocol.read_text())
+    if args.compare:
+        compare_pilot(protocol, args.data_root, args.workers)
+        return
     config = protocol["supervision"]
     output = Path(config["pilot"]["output"])
     output.mkdir(parents=True, exist_ok=True)

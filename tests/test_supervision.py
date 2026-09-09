@@ -4,11 +4,13 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
+import torch
 from scipy.spatial import ConvexHull
 
 from src.supervision import (
     ScanGeometry, _conditions, _inside_hull, _surface_chunk, boundary_targets,
     sampling_targets, surface_targets, surface_probe,
+    boundary_loss, loss_point_weights, sampling_loss, surface_loss,
 )
 
 
@@ -128,7 +130,7 @@ def test_surface_uses_preinsertion_plane_and_each_views_visible_support():
     sparse = ScanGeometry(post[rows], slots[rows], dense.parameters)
     pair = dict(dense_row=rows, ray_keep=np.isin(slots, rows))
     labels = changed.astype(np.int8)
-    result = surface_targets(original, sample, [dense, sparse], [labels, labels[rows]], [pair], CONFIG["C3"]["parameters"])
+    result = surface_targets(original, sample, [dense, sparse], [labels, labels[rows]], [pair], CONFIG["C3"]["parameters"])[20]
     assert result[0]["surface_valid"][center]
     np.testing.assert_allclose(result[0]["surface_offset_z"][center], -.1, atol=1e-6)
     assert not result[1]["surface_valid"][-1]
@@ -145,6 +147,78 @@ def test_surface_rejects_one_sided_support_even_with_twenty_positions():
     visible = np.column_stack((np.ones(len(ground), bool), ground[:, 0] > 0))
     p = np.array([20, .05, 3, 1.4826, .05, np.tan(np.deg2rad(20)), .01, 1e-10])
     result = _surface_chunk(np.array([[0., 0., -.9]]), ground, visible, np.array([0, len(ground)]),
-                            np.arange(len(ground)), np.ones((1, 2), bool), p)
-    np.testing.assert_array_equal(result[1], [[0, 128]])
+                            np.arange(len(ground)), np.ones((1, 2), bool), p, np.array([20]))
+    np.testing.assert_array_equal(result[1][..., 0], [[0, 128]])
     assert result[3][0, 1] >= 20
+
+
+def test_visible_minimum_is_independent_of_reference_and_checks_remaining_geometry():
+    x, y = np.meshgrid(np.linspace(-1, 1, 9), np.linspace(-1, 1, 9))
+    ground = np.array(sorted(np.column_stack((x.ravel(), y.ravel(), np.full(x.size, -1.))).tolist()))
+    # Thirteen well-spread positions, thirteen one-sided positions, nine positions.
+    spread = np.zeros(len(ground), bool)
+    spread[np.r_[np.arange(0, 81, 8), [4, 76]]] = True
+    side = np.zeros(len(ground), bool)
+    side[np.flatnonzero(ground[:, 0] > 0)[-13:]] = True
+    visible = np.column_stack((spread, side, np.arange(len(ground)) < 9))
+    p = np.array([20, .05, 3, 1.4826, .05, np.tan(np.deg2rad(20)), .01, 1e-10])
+    result = _surface_chunk(np.array([[0., 0., -.9]]), ground, visible, np.array([0, len(ground)]),
+                            np.arange(len(ground)), np.ones((1, 3), bool), p, np.array([20, 10]))
+    np.testing.assert_array_equal(result[1][0], [[64, 0], [64, 128], [64, 64]])
+    np.testing.assert_allclose(result[0][0, 0, 1], -.1, atol=1e-12)
+    insufficient = _surface_chunk(np.array([[0., 0., -.9]]), ground, visible, np.array([0, 19]),
+                                  np.arange(19), np.ones((1, 3), bool), p, np.array([20, 10]))
+    assert np.all(insufficient[1] == 2)
+    # Symmetric outliers leave exactly eighteen plane inliers from twenty-two references.
+    reference = np.vstack((ground[10:28], [[-.9, -.9, -.5], [-.9, .9, -1.5],
+                                          [.9, -.9, -1.5], [.9, .9, -.5]]))
+    reference = np.array(sorted(reference.tolist()))
+    too_few_inliers = _surface_chunk(np.array([[0., 0., -.9]]), reference, np.ones((22, 1), bool),
+                                     np.array([0, 22]), np.arange(22), np.ones((1, 1), bool), p, np.array([20, 10]))
+    assert too_few_inliers[2][0] == 18 and np.all(too_few_inliers[1] == 8)
+
+
+def test_boundary_loss_balances_regions_and_classes_and_ignores_invalid_values():
+    target = torch.tensor([.1, .2, .3, 1., 1., 1., float('nan')], dtype=torch.float64)
+    labels = torch.tensor([0, 0, 1, 0, 0, 1, -1])
+    valid = labels >= 0
+    prediction = torch.tensor([1., 1., 1., 0., 0., 0., float('nan')], dtype=torch.float64, requires_grad=True)
+    loss = boundary_loss(prediction, target, labels, valid)
+    expected = .75 * ((.9 + .8) / 2 + .7) / 2 + .25
+    torch.testing.assert_close(loss, torch.tensor(expected, dtype=torch.float64))
+    loss.backward()
+    torch.testing.assert_close(prediction.grad, torch.tensor([.1875, .1875, .375, -.0625, -.0625, -.125, 0.], dtype=torch.float64))
+    repeated = torch.tensor([0, 1, 2] + [3, 4, 5] * 100)
+    a = boundary_loss(torch.ones_like(target[:6]), target[:6], labels[:6], valid[:6])
+    b = boundary_loss(torch.ones(len(repeated), dtype=torch.float64), target[repeated], labels[repeated], valid[repeated])
+    torch.testing.assert_close(a, b)
+
+
+def test_empty_groups_and_class_balancing_keep_differentiable_zero():
+    prediction = torch.tensor([2., 2., 5., float('nan')], requires_grad=True)
+    target = torch.tensor([1., 1., 1., float('nan')])
+    labels = torch.tensor([0, 0, 1, -1])
+    valid = labels >= 0
+    torch.testing.assert_close(surface_loss(prediction, target, labels, valid), torch.tensor(2.5))
+    torch.testing.assert_close(boundary_loss(prediction, target, labels, valid), torch.tensor(2.5))
+    weights = loss_point_weights(labels, valid, dtype=torch.float16)
+    assert weights.dtype == torch.float32
+    torch.testing.assert_close(weights, torch.tensor([.25, .25, .5, 0.]))
+    empty = surface_loss(prediction, target, labels, torch.zeros(4, dtype=torch.bool))
+    empty.backward()
+    assert empty.item() == 0 and torch.all(prediction.grad == 0)
+    only_normal = surface_loss(prediction[:2], target[:2], labels[:2], valid[:2])
+    assert only_normal.item() == 1
+
+
+def test_sampling_loss_stops_dense_gradient_and_weights_anomaly_equally():
+    dense = torch.tensor([0., 2., 0.], requires_grad=True)
+    sparse = torch.tensor([0., 0., float('nan')], requires_grad=True)
+    rows = torch.tensor([0, 1, 2])
+    labels = torch.tensor([0, 1, -1])
+    valid = labels >= 0
+    loss = sampling_loss(sparse, dense, rows, labels, valid)
+    expected = .5 * (.5 - torch.sigmoid(torch.tensor(2.))) ** 2
+    torch.testing.assert_close(loss, expected)
+    loss.backward()
+    assert dense.grad is None and sparse.grad[0] == 0 and sparse.grad[1] != 0 and sparse.grad[2] == 0
