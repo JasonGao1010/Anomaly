@@ -17,7 +17,7 @@ from scipy.sparse.csgraph import dijkstra
 from scipy.spatial import cKDTree, ConvexHull, QhullError
 
 from .data import FrozenDataset, _atomic_json, host_disk, source_identity
-from .render import calibrated_ray_grid, canonical_ray_slots_for_source
+from .render import calibrated_ray_grid, canonical_ray_slots_for_source, shape_from_dict, shape_geometry
 
 
 REASONS = {
@@ -865,7 +865,7 @@ def compare_pilot(protocol, data_root, workers):
     if parameters != old_parameters:
         raise ValueError("reference fitting or other geometric conditions changed")
     disk_before = host_disk()
-    datasets = {split: FrozenDataset(protocol["dataset"]["directory"], data_root, split) for split in ("train", "validation")}
+    datasets = {split: FrozenDataset(protocol["supervision"]["pilot"]["dataset_directory"], data_root, split) for split in ("train", "validation")}
     records, loss_parts = [], [[], [], []]
     start = time.monotonic()
     for number, old_record in enumerate(previous["records"]):
@@ -1011,7 +1011,7 @@ def main():
                       sampling=config["C2"]["evidence_parameters"], surface=config["C3"]["parameters"])
     parameters["scale"] = {k: v for k, v in parameters["scale"].items() if isinstance(v, (int, float))}
     parameter_identity = hashlib.sha256(json.dumps(parameters, sort_keys=True).encode()).hexdigest()
-    datasets = {split: FrozenDataset(protocol["dataset"]["directory"], args.data_root, split) for split in ("train", "validation")}
+    datasets = {split: FrozenDataset(protocol["supervision"]["pilot"]["dataset_directory"], args.data_root, split) for split in ("train", "validation")}
     grid = calibrated_ray_grid(protocol["calibration"]["rays"])
     rays_identity = hashlib.sha256(Path(protocol["calibration"]["rays"]).read_bytes()).hexdigest()
     records = []
@@ -1023,7 +1023,7 @@ def main():
         world_dir = path.parent.parent
         world = json.loads((world_dir / "world.json").read_text())["world"]
         manifest = json.loads((world_dir / "manifest.json").read_text())["frames"][frame]
-        height = 2 * world["objects"][0]["shape"]["primitive_scales_m"][0][2]
+        height = shape_geometry(shape_from_dict(world["objects"][0]["shape"]))["height_m"]
         directory = output / selection["split"] / selection["world"]
         directory.mkdir(parents=True, exist_ok=True)
         summary_path = directory / f"{frame:06d}.json"

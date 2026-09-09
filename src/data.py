@@ -213,12 +213,12 @@ class FrozenFrame:
 class FrozenDataset:
     """Read complete frozen worlds as independent scans without importing a renderer."""
 
-    def __init__(self, directory, data_root, split):
+    def __init__(self, directory, data_root, split, *, allow_candidates=False):
         self.directory = Path(directory)
         manifest = json.loads((self.directory / "manifest.json").read_text())
         if (
             manifest.get("format") != "stu-frozen-dataset"
-            or manifest.get("status") != "frozen"
+            or manifest.get("status") not in ({"frozen", "candidates_complete"} if allow_candidates else {"frozen"})
         ):
             raise DataProtocolError("dataset has not completed full-sequence freezing")
         if split not in {"train", "validation"}:

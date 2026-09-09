@@ -17,7 +17,7 @@ from numba import set_num_threads
 from scipy.spatial import cKDTree
 
 from .data import FrozenDataset, _atomic_json, host_disk
-from .render import calibrated_ray_grid
+from .render import calibrated_ray_grid, shape_from_dict, shape_geometry
 from .supervision import (
     ScanGeometry, boundary_targets, local_evidence, sampling_targets,
     surface_probe, surface_targets, summarize_view, thinning_pair,
@@ -34,6 +34,7 @@ def conditions(world, row):
         few_eligible=5 <= row["in_range"] < 20,
         far=far, far_eligible=far and eligible,
         far_few_eligible=far and 5 <= row["in_range"] < 20,
+        far_denser=far and row["in_range"] >= 20,
         low_visible=low and count > 0, low_eligible=low and eligible,
         low_few_eligible=low and 5 <= row["in_range"] < 20,
         low_far_eligible=low and far and eligible,
@@ -54,7 +55,7 @@ def concentration(counts):
 def inventory(directory):
     root = json.loads((directory / "manifest.json").read_text())
     worlds = []
-    # Use selected root entries only; candidate folders are not members of the pool.
+    # Root entries define membership; rejected physical worlds remain outside it.
     for split, part in root["splits"].items():
         for entry in part["worlds"]:
             path = directory / entry["path"]
@@ -62,16 +63,16 @@ def inventory(directory):
             manifest = json.loads((path / "manifest.json").read_text())
             obj = definition["world"]["objects"][0]
             shape, generation = obj["shape"], definition["generation"]
-            scales = np.asarray(shape["primitive_scales_m"])
-            if len(scales) != 1:
-                raise ValueError("physical height audit needs bounds for composed shapes")
+            geometry = shape_geometry(shape_from_dict(shape))
             normal = np.asarray(generation["support_plane"]["normal_world"])
             world = dict(
                 split=split, world=path.name, source_sequence=part["source_sequence"],
                 identity=entry["world_identity"], seed=definition["world"]["seed"],
-                primitives=len(scales), length_m=float(2 * scales[0, 0]),
-                width_m=float(2 * scales[0, 1]), height_m=float(2 * scales[0, 2]),
-                exponents=shape["primitive_exponents"][0], material=obj["material"],
+                primitives=len(shape["primitive_scales_m"]), **geometry,
+                shape_family=generation.get("shape_family", "single"),
+                background=generation.get("background", "not_stratified"),
+                candidate_category=generation.get("candidate_category", "development_pool"),
+                exponents=shape["primitive_exponents"], material=obj["material"],
                 support_semantic=generation["placement"]["support_semantic"],
                 support_slope_degrees=float(np.degrees(np.arccos(np.clip(normal[2], -1, 1)))),
                 support_rmse_m=generation["plane_rmse_m"],
@@ -99,7 +100,7 @@ def inventory(directory):
     for split in root["splits"]:
         selected = [w for w in worlds if w["split"] == split]
         totals[split] = {}
-        for name in conditions(selected[0], selected[0]["rows"][0]):
+        for name in conditions(dict(height_m=0), dict(count=0, in_range=0)):
             frames, points, inside = {}, {}, {}
             for w in selected:
                 rows = [r for r in w["rows"] if conditions(w, r)[name]]
@@ -112,7 +113,7 @@ def inventory(directory):
     return root, worlds, totals
 
 
-def select_checks(worlds):
+def select_checks(worlds, far_limit=None):
     selections = {}
     for world in worlds:
         eligible = [r for r in world["rows"] if r["in_range"] >= 5]
@@ -121,10 +122,21 @@ def select_checks(worlds):
         chosen = []
         if eligible:
             chosen.append((min(eligible, key=lambda r: (-r["in_range"], r["frame"])), "densest"))
+        elif world["rows"]:
+            chosen.append((min(world["rows"], key=lambda r: (-r["count"], r["frame"])), "no_eligible_representative"))
         if few:
             chosen.append((few[(len(few) - 1) // 2], "few_representative"))
-        chosen.extend((r, "all_far_eligible") for r in eligible
-                      if conditions(world, r)["far_eligible"])
+        far = [r for r in eligible if conditions(world, r)["far_eligible"]]
+        if far_limit is None:
+            chosen.extend((r, "all_far_eligible") for r in far)
+        else:
+            for dense in (False, True):
+                rows = sorted((r for r in far if (r["in_range"] >= 20) == dense), key=lambda r: (r["range"], r["frame"]))
+                ids = np.linspace(0, len(rows) - 1, min(far_limit, len(rows)), dtype=int)
+                chosen.extend((rows[i], "far_denser_representative" if dense else "far_few_representative") for i in ids)
+            weak = sorted((r for r in world["rows"] if 1 <= r["in_range"] < 5 and 35 <= r.get("range", -1) <= 50), key=lambda r: r["frame"])
+            if weak:
+                chosen.append((weak[(len(weak) - 1) // 2], "far_below_official_threshold"))
         for row, reason in chosen:
             key = (world["split"], world["world"], row["frame"])
             selections.setdefault(key, dict(split=key[0], world=key[1], frame=key[2], reasons=[]))
@@ -136,7 +148,7 @@ def _initialize(protocol, data_root, threads):
     global _protocol, _datasets, _grid, _threads
     _protocol, _threads = protocol, threads
     set_num_threads(threads)
-    _datasets = {s: FrozenDataset(protocol["dataset"]["directory"], data_root, s)
+    _datasets = {s: FrozenDataset(protocol["dataset"]["directory"], data_root, s, allow_candidates=True)
                  for s in ("train", "validation")}
     _grid = calibrated_ray_grid(protocol["calibration"]["rays"])
 
@@ -179,6 +191,9 @@ def check_scan(selection):
     surfaces = surface_targets(original, sample, geometries, labels, pairs, config["C3"]["parameters"])
     for target, surface in zip(targets, surfaces[config["C3"]["parameters"]["minimum_visible_support_points"]]):
         target.update(surface)
+    auxiliary = targets[0]["boundary_valid"] | targets[0]["surface_valid"]
+    for pair, target in zip(pairs, targets[1:]):
+        auxiliary[pair["dense_row"][target["sampling_consistency_valid"]]] = True
     views = [summarize_view(g, sy, target, y if v else None)
              for v, (g, sy, target) in enumerate(zip(geometries, labels, targets))]
     edges = targets[0]["boundary_edges"]
@@ -213,6 +228,8 @@ def check_scan(selection):
             probes.append(dict(kind=name, source_slot=int(slots[row]), label=int(y[row]),
                                semantic=int(source.labels.semantic[slots[row]]), **probe))
     return dict(sample=selection, observation=observed, views=views, context=contexts,
+                base_anomaly_without_checked_auxiliary=int(np.sum((y == 1) & ~auxiliary)),
+                anomaly_reference_positions=_counts(targets[0]["surface_reference_count"][y == 1]),
                 boundary_edges=len(edges), boundary_normal_semantics=_counts(source.labels.semantic[edges[:, 0]]),
                 actual_far_anomaly_returns=int(np.sum((y == 1) & (ranges >= 35) & (ranges <= 50))),
                 probes=probes, seconds=time.monotonic() - start, cpu_seconds=time.process_time() - cpu,
@@ -224,7 +241,8 @@ def summarize_checks(records, worlds):
     output = {}
     for split in ("train", "validation"):
         output[split] = {}
-        for group in ("all", "densest", "few_representative", "far_eligible", "low_eligible", "low_far_eligible"):
+        for group in ("all", "densest", "few_representative", "far_eligible", "far_few_eligible",
+                      "far_denser", "far_below_official_threshold", "low_eligible", "low_far_eligible"):
             chosen = []
             for r in records:
                 s = r["sample"]
@@ -235,6 +253,7 @@ def summarize_checks(records, worlds):
                     chosen.append(r)
             metrics = {}
             accessors = {"boundary_edges": lambda r: r["boundary_edges"],
+                         "base_anomaly_without_checked_auxiliary": lambda r: r["base_anomaly_without_checked_auxiliary"],
                          "actual_far_anomaly_returns": lambda r: r["actual_far_anomaly_returns"]}
             for view in range(3):
                 for label in ("normal", "anomaly"):
@@ -271,7 +290,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--protocol", type=Path, default=Path("protocol/v1.json"))
     parser.add_argument("--data-root", type=Path, default=Path("/home/jasongao/Data/STU"))
-    parser.add_argument("--output", type=Path, default=Path("results/coverage/v1.json"))
+    parser.add_argument("--output", type=Path)
+    parser.add_argument("--dataset", type=Path)
+    parser.add_argument("--far-limit", type=int, help="check at most this many frames per world and far count stratum")
     parser.add_argument("--workers", type=int, default=1)
     parser.add_argument("--threads", type=int, default=1)
     parser.add_argument("--inventory-only", action="store_true")
@@ -279,8 +300,13 @@ def main():
     if min(args.workers, args.threads) < 1 or args.workers * args.threads > len(os.sched_getaffinity(0)):
         parser.error("workers times threads must fit the available CPUs")
     protocol = json.loads(args.protocol.read_text())
+    args.output = args.output or Path(protocol["content_coverage"]["output"])
+    if args.dataset:
+        protocol["dataset"]["directory"] = str(args.dataset)
+    if args.far_limit is not None and args.far_limit < 1:
+        parser.error("far limit must be positive")
     root, worlds, totals = inventory(Path(protocol["dataset"]["directory"]))
-    selections = select_checks(worlds)
+    selections = select_checks(worlds, args.far_limit)
     report = dict(scope="full_pool_inventory_and_targeted_scan_checks_not_full_pool_supervision_coverage",
                   dataset=protocol["dataset"]["directory"], pool_status=root["status"],
                   supervision_parameters=dict(seed=protocol["seed"],
@@ -291,9 +317,10 @@ def main():
                                               surface=protocol["supervision"]["C3"]["parameters"]),
                   definitions=dict(far="median recorded anomaly range in [35,50] m",
                                    eligible="at least 5 anomaly returns with sensor range in [2.5,50] m",
-                                   low="fixed object full local height <= 0.2 m, not gravity height",
+                                   low="whole continuous object outer local z extent <= 0.2 m, not gravity height",
                                    few="5 to 19 distance-filtered anomaly returns",
-                                   selection="per world: earliest maximum in-range count; median (count,frame) among eligible few-point frames; every far eligible frame; union without replacement",
+                                   selection="per world: earliest maximum count; median eligible few-point frame; all far frames or equally spaced range ranks in separate 5-19 and >=20 point strata; with a limit also retain a weak far representative",
+                                   far_checks_per_world_per_count_stratum=args.far_limit,
                                    nearby="normal return within 2 m Euclidean distance of an inserted return",
                                    raised_normal="known normal with valid C3 and offset in [-0.20,-0.05] m; descriptive proxy, no curb annotation or learned difficulty claim",
                                    counts="return observations, not distinct objects or independent trials; repeated backgrounds remain correlated"),

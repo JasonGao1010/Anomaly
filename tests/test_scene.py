@@ -251,3 +251,28 @@ def test_single_scan_renderer_keeps_physical_occlusion(monkeypatch):
     observed = render_frame(source, world, grid, sensor)
     assert observed.inserted_mask.all() and (observed.object_id_internal == 1).all()
     assert observed.xyzi[0, 3] == np.float32(round(3500 * 1.234567) / 3500)
+
+
+def test_composed_shape_bounds_grounding_and_distinct_contacts():
+    from src.generate import make_shape
+    from src.render import qualify_grounding
+    from src.coverage import conditions
+
+    profile = dict(length_m=[1.2, 1.2], width_m=[.8, .8], height_m=[.3, .3])
+    config = dict(exponents=[1., 1.], composed_exponents=[1., 1.])
+    for family, count in (("single", 1), ("step", 2), ("elbow", 3), ("bridge", 3)):
+        shape, geometry = make_shape(np.random.default_rng(13), dict(profile, shape=family), config)
+        assert len(shape.primitive_scales_m) == count
+        assert shape.continuous_connectivity_certificate().state == "connected"
+        np.testing.assert_allclose([geometry[k] for k in ("length_m", "width_m", "height_m")], [1.2, .8, .3], atol=3e-6)
+        assert not conditions(geometry, dict(count=5, in_range=5, range=10))["low_eligible"]
+        if family == "step":
+            assert 2 * shape.primitive_scales_m[0][2] < .2
+        grounding = qualify_grounding(shape)
+        assert grounding.passed and abs(grounding.strict_lower_support_m + .15) < 1e-6
+        if family == "bridge":
+            # The center under the crosspiece is empty; both leg centers touch the support plane.
+            offsets = np.array(shape.primitive_offsets_m)
+            points = np.vstack(([0, 0, -.14], np.column_stack((offsets[:2, :2], np.full(2, -.14)))))
+            signed = shape.signed_distance(points)
+            assert signed[0] > 0 and (signed[1:] < 0).all()

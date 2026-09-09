@@ -2314,6 +2314,17 @@ def shape_from_dict(value: Mapping[str, object]) -> InsertShape:
     raise RenderError(f"unsupported geometry kind: {kind!r}")
 
 
+def shape_geometry(shape: ShapeSpec) -> dict:
+    """Use the complete continuous object, including offsets and deformations."""
+    lower, upper = shape.tight_continuous_outer_bounds(z_slabs=256, safety_margin_m=1e-6)
+    extent = upper - lower
+    return dict(lower_local_m=lower.tolist(), upper_local_m=upper.tolist(),
+                length_m=float(extent[0]), width_m=float(extent[1]), height_m=float(extent[2]),
+                footprint_radius_m=float(np.linalg.norm(np.maximum(np.abs(lower[:2]), np.abs(upper[:2])))),
+                coordinate_system="object_local_axes_before_world_yaw_and_support_tilt",
+                bounds="continuous_outer_bounds_with_1e-6_m_padding")
+
+
 def sample_training_anomaly_shape(
     seed: int,
     *,

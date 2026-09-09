@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+from collections import Counter
+import os
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import hashlib
 import json
@@ -20,6 +22,7 @@ from .data import FrozenFrame, _atomic_json, host_disk, source_identity
 from .profile import GROUND, ground_relation, visible_shape
 from .protocol import load_protocol
 from .scene import STUSequence
+from .coverage import conditions
 from .render import (
     MaterialSpec,
     ObservedObstacleIndex,
@@ -33,6 +36,9 @@ from .render import (
     place_object,
     render_frames,
     save_sensor_calibration,
+    shape_geometry,
+    qualify_grounding,
+    _frame_trace_context,
 )
 
 
@@ -142,77 +148,6 @@ def distributions(rows):
     return summary, hist
 
 
-def reference(profile, margins):
-    worlds, unknown = [], 0
-    for directory in sorted(Path(profile).glob("[0-9]*")):
-        frame_count = sum(1 for _ in (directory / "frames.jsonl").open())
-        items = [json.loads(line) for line in (directory / "instances.jsonl").open()]
-        shapes = {(r["frame"], r["instance"]): r for r in items}
-        with np.load(directory / "anomaly.npz") as points:
-            unknown += int(np.count_nonzero(points["instance"] == 0))
-            for iid in np.unique(points["instance"]):
-                if iid == 0:
-                    continue
-                rows = [dict(frame=f, count=0, in_range=0) for f in range(frame_count)]
-                chosen = points["instance"] == iid
-                for f in np.unique(points["frame"][chosen]):
-                    mask = chosen & (points["frame"] == f)
-                    row = rows[int(f)]
-                    row.update(
-                        count=int(mask.sum()),
-                        in_range=int(points["inside"][mask].sum()),
-                        range=finite_median(points["distance"][mask]),
-                    )
-                    for key in (
-                        "same_instance_neighbor_distance",
-                        "background_neighbors",
-                        "intensity_contrast",
-                    ):
-                        row[key] = finite_median(points[key][mask])
-                    row["nearest_road_fraction"] = float(
-                        np.mean(points["nearest_normal_semantic"][mask] == 40)
-                    )
-                    item = shapes[(int(f), int(iid))]
-                    for key in (
-                        "length",
-                        "width",
-                        "height",
-                        "linearity",
-                        "planarity",
-                        "scattering",
-                        "ground_height_median",
-                    ):
-                        row[key] = item[key]
-                stats, hist = distributions(rows)
-                worlds.append(
-                    dict(
-                        sequence=int(directory.name),
-                        instance=int(iid),
-                        trajectory=stats,
-                        histograms=hist,
-                    )
-                )
-    if len({w["sequence"] for w in worlds}) != 19:
-        raise ValueError("matching requires the complete current 19-sequence profile")
-    mean = {
-        key: np.mean([w["histograms"][key] for w in worlds], axis=0).tolist()
-        for key in worlds[0]["histograms"]
-    }
-    envelope = {}
-    for key, margin in margins.items():
-        values = [
-            w["trajectory"][key] for w in worlds if w["trajectory"][key] is not None
-        ]
-        envelope[key] = [max(0.0, min(values) - margin), max(values) + margin]
-    return dict(
-        worlds=worlds,
-        histograms=mean,
-        trajectory_envelope=envelope,
-        unknown_instance_points=unknown,
-        weighting="equal_object_trajectories_then_equal_feature_groups",
-    )
-
-
 def observation(rendered):
     source = rendered.source
     ids = np.flatnonzero(rendered.inserted_mask)
@@ -258,81 +193,74 @@ def observation(rendered):
     return row
 
 
-def sample_support(sequence, rng, config, footprint_radius):
+def sample_support(sequence, rng, config, footprint_radius, background, rejections):
     poses = np.stack([sequence.lidar_pose(f) for f in sequence.frame_ids])
-    for _ in range(config["maximum_support_attempts"]):
+    accepted = 0
+    for attempt in range(config["maximum_support_attempts"]):
         frame = sequence[int(rng.integers(len(sequence)))]
-        ground_slots = frame.real_slots[
-            np.isin(frame.labels.semantic[frame.real_slots], config["semantics"])
-        ]
+        ground_slots = frame.real_slots[np.isin(frame.labels.semantic[frame.real_slots], config["semantics"])]
         xyz = frame.xyzi[ground_slots, :3].astype(np.float64)
         distance = np.linalg.norm(xyz, axis=1)
-        choices = np.flatnonzero(
-            (distance >= config["proposal_range_m"][0])
-            & (distance <= config["proposal_range_m"][1])
-        )
+        choices = np.flatnonzero((distance >= config["proposal_range_m"][0]) & (distance <= config["proposal_range_m"][1]))
         if not len(choices):
+            rejections["no_ground_in_proposal_range"] += 1
             continue
         selected = int(rng.choice(choices))
         center = xyz[selected, :2]
-        nearby = np.linalg.norm(xyz[:, :2] - center, axis=1) <= config["plane_radius_m"]
-        points = xyz[nearby]
+        points = xyz[np.linalg.norm(xyz[:, :2] - center, axis=1) <= config["plane_radius_m"]]
         if len(points) < config["minimum_ground_points"]:
+            rejections["insufficient_ground"] += 1
             continue
         design = np.column_stack((points[:, :2] - center, np.ones(len(points))))
-        coefficients = np.linalg.lstsq(design, points[:, 2], rcond=None)[0]
+        coefficients, _, rank, _ = np.linalg.lstsq(design, points[:, 2], rcond=None)
         residual = points[:, 2] - design @ coefficients
         mad = 1.4826 * np.median(np.abs(residual - np.median(residual)))
         keep = np.abs(residual) <= max(0.05, 3 * mad)
-        if keep.sum() < config["minimum_ground_points"]:
+        if rank != 3 or keep.sum() < config["minimum_ground_points"]:
+            rejections["reference_rank_or_inlier_support"] += 1
             continue
-        coefficients = np.linalg.lstsq(design[keep], points[keep, 2], rcond=None)[0]
-        rmse = float(
-            np.sqrt(np.mean((points[keep, 2] - design[keep] @ coefficients) ** 2))
-        )
+        coefficients, _, rank, _ = np.linalg.lstsq(design[keep], points[keep, 2], rcond=None)
+        rmse = float(np.sqrt(np.mean((points[keep, 2] - design[keep] @ coefficients) ** 2)))
         try:
             hull = ConvexHull(design[keep, :2])
         except QhullError:
+            rejections["support_hull"] += 1
             continue
-        if (
-            rmse > config["maximum_plane_rmse_m"]
-            or np.linalg.norm(coefficients[:2])
-            > np.tan(np.deg2rad(config["maximum_slope_degrees"]))
-            or np.linalg.eigvalsh(np.cov(design[keep, :2], rowvar=False))[0]
-            < config["minimum_xy_eigenvalue"]
-            or np.any(hull.equations[:, -1] > -footprint_radius)
-        ):
+        if (rank != 3 or rmse > config["maximum_plane_rmse_m"]
+                or np.linalg.norm(coefficients[:2]) > np.tan(np.deg2rad(config["maximum_slope_degrees"]))
+                or np.linalg.eigvalsh(np.cov(design[keep, :2], rowvar=False))[0] < config["minimum_xy_eigenvalue"]
+                or np.any(hull.equations[:, -1] > -footprint_radius)):
+            rejections["plane_quality_or_full_footprint"] += 1
             continue
         rotation, translation = frame.lidar_pose[:3, :3], frame.lidar_pose[:3, 3]
         anchor = np.r_[center, coefficients[2]] @ rotation.T + translation
-        trajectory_range = np.linalg.norm(poses[:, :2, 3] - anchor[:2], axis=1)
-        if (
-            not config["minimum_trajectory_clearance_m"]
-            <= trajectory_range.min()
-            <= config["maximum_closest_trajectory_distance_m"]
-        ):
+        trajectory_range = np.linalg.norm(poses[:, :3, 3] - anchor, axis=1)
+        if not config["minimum_trajectory_clearance_m"] <= trajectory_range.min() <= config["maximum_closest_trajectory_distance_m"]:
+            rejections["trajectory_clearance"] += 1
+            continue
+        real = frame.real_slots
+        nearby = real[np.linalg.norm(frame.xyzi[real, :3] - np.r_[center, coefficients[2]], axis=1) <= config["background_radius_m"]]
+        semantic = frame.labels.semantic[nearby]
+        known = frame.labels.semantic_target[nearby] != 255
+        ground_ids = set(semantic[known & np.isin(semantic, config["semantics"])].tolist())
+        structures = int(np.sum(known & ~np.isin(semantic, GROUND)))
+        category = "structured" if len(ground_ids) >= 2 or structures >= 3 else "ground"
+        if category != background:
+            rejections["background_stratum"] += 1
             continue
         normal = rotation @ np.r_[-coefficients[:2], 1.0]
         normal /= np.linalg.norm(normal)
         slot = int(ground_slots[selected])
-        pool = QualifiedSupportPool(
-            np.array([0]),
-            np.array([frame.labels.semantic[slot]]),
-            np.array([frame.frame_id]),
-            np.array([slot]),
-            np.array([distance[selected]]),
-            np.array([0], np.uint64),
-            anchor[None],
-            normal[None],
-            np.array([-normal @ anchor]),
-            sequence.spec.sequence_id,
-        )
-        return pool, dict(
-            plane_rmse_m=rmse,
-            plane_support=int(keep.sum()),
-            closest_trajectory_distance_m=float(trajectory_range.min()),
-        )
-    raise ValueError("no_single_scan_support_with_full_trajectory_clearance")
+        pool = QualifiedSupportPool(np.array([0]), np.array([frame.labels.semantic[slot]]),
+                                    np.array([frame.frame_id]), np.array([slot]), np.array([distance[selected]]),
+                                    np.array([0], np.uint64), anchor[None], normal[None],
+                                    np.array([-normal @ anchor]), sequence.spec.sequence_id)
+        yield pool, dict(plane_rmse_m=rmse, plane_support=int(keep.sum()), proposal_attempt=attempt,
+                         closest_trajectory_distance_m=float(trajectory_range.min()), background=category,
+                         background_semantic_counts={str(k): int(v) for k, v in Counter(semantic[known].tolist()).items()})
+        accepted += 1
+        if accepted == config["support_candidates"]:
+            break
 
 
 def nearby_obstacles(source, item):
@@ -356,68 +284,126 @@ def nearby_obstacles(source, item):
     return ObservedObstacleIndex(world, identities)
 
 
-def make_world(sequence, seed, config):
+def make_shape(rng, profile, config):
+    dimensions = np.exp([rng.uniform(*np.log(profile[key])) for key in ("length_m", "width_m", "height_m")])
+    family = profile["shape"]
+    if family == "single":
+        scales, offsets = np.array([[.5, .5, .5]]), np.zeros((1, 3))
+    elif family == "step":
+        # The second part is taller: the first primitive cannot define object height.
+        scales = np.array([[.45, .30, .30], [.27, .30, .50]])
+        offsets = np.array([[-.15, 0, -.20], [.25, 0, 0]])
+    elif family == "elbow":
+        scales = np.array([[.45, .20, .5], [.20, .35, .5], [.30, .20, .5]])
+        offsets = np.array([[0, 0, 0], [.35, .20, 0], [-.10, .35, 0]])
+    elif family == "bridge":
+        scales = np.array([[.22, .35, .40], [.22, .35, .40], [.50, .35, .28]])
+        offsets = np.array([[-.30, 0, -.10], [.30, 0, -.10], [0, 0, .22]])
+    else:
+        raise ValueError("unknown declared shape family")
+    lower, upper = (offsets - scales).min(axis=0), (offsets + scales).max(axis=0)
+    factors = dimensions / (upper - lower)
+    offsets = (offsets - (upper + lower) / 2) * factors
+    scales *= factors
+    exponent_range = config["exponents" if family == "single" else "composed_exponents"]
+    shape = ShapeSpec(tuple(map(tuple, scales)), tuple(map(tuple, offsets)),
+                      tuple(map(tuple, rng.uniform(*exponent_range, (len(scales), 2)))),
+                      (0.,) * len(scales), ("union",) * len(scales))
+    geometry = shape_geometry(shape)
+    if not np.allclose([geometry[k] for k in ("length_m", "width_m", "height_m")], dimensions, atol=3e-6, rtol=0):
+        raise ValueError("complete shape bounds differ from requested dimensions")
+    return shape, geometry
+
+
+def far_ray_opportunities(sequence, item, grid, geometry):
+    center = np.asarray(item.translation_world_m)
+    distances = np.array([np.linalg.norm(center - sequence.lidar_pose(f)[:3, 3]) for f in sequence.frame_ids])
+    far = np.flatnonzero((distances >= 35) & (distances <= 50))
+    if not len(far):
+        return []
+    frames = sorted({int(far[np.argmin(np.abs(distances[far] - value))]) for value in (35., 42.5, 50.)})
+    rotation = np.asarray(item.rotation_world_from_local)
+    lower, upper = np.asarray(geometry["lower_local_m"]), np.asarray(geometry["upper_local_m"])
+    observations = []
+    for frame in frames:
+        source = sequence[frame]
+        slots, _, directions, _, origins, native = _frame_trace_context(source, grid)
+        origin, direction = (origins - center) @ rotation, directions @ rotation
+        # Box intersections are proposal opportunities, never rendered return counts.
+        parallel = np.abs(direction) < 1e-15
+        safe_direction = np.where(parallel, 1., direction)
+        a, b = (lower - origin) / safe_direction, (upper - origin) / safe_direction
+        a[parallel], b[parallel] = -np.inf, np.inf
+        enter, leave = np.minimum(a, b).max(axis=1), np.maximum(a, b).min(axis=1)
+        available = (leave >= np.maximum(enter, 0)) & (enter < native - 1e-6)
+        available &= ~np.any(parallel & ((origin < lower) | (origin > upper)), axis=1)
+        count = len(np.unique(grid.canonical_ray_by_slot[slots[available]]))
+        observations.append(dict(frame=frame, range_m=float(distances[frame]), available_box_rays=count))
+    return observations
+
+
+def make_world(sequence, seed, config, profile, grid):
     rng = np.random.default_rng(seed)
-    shape_config = config["shape"]
-    length = float(np.exp(rng.uniform(*np.log(shape_config["length_m"]))))
-    width = max(0.05, length * float(rng.uniform(*shape_config["width_ratio"])))
-    height = float(np.exp(rng.uniform(*np.log(shape_config["height_m"]))))
-    shape = ShapeSpec(
-        ((length / 2, width / 2, height / 2),),
-        ((0.0, 0.0, 0.0),),
-        (tuple(rng.uniform(*shape_config["exponents"], 2)),),
-        (0.0,),
-        ("union",),
-    )
-    material = MaterialSpec(
-        float(rng.uniform(*shape_config["material_quantile"])),
-        float(rng.uniform(*shape_config["material_roughness"])),
-    )
-    pool, support = sample_support(
-        sequence, rng, config["placement"], shape.bound_radius_m
-    )
-    # Placement reuses the renderer's support/contact calculation. Full-sequence collisions follow below.
-    frame = sequence[int(pool.frames[0])]
-    real = frame.real_slots
-    normal = real[
-        (frame.labels.semantic[real] != 0)
-        & ~np.isin(frame.labels.semantic[real], GROUND)
-    ]
-    points = (
-        frame.xyzi[normal, :3].astype(float) @ frame.lidar_pose[:3, :3].T
-        + frame.lidar_pose[:3, 3]
-    )
-    obstacles = ObservedObstacleIndex(
-        points, (np.uint64(frame.frame_id) << np.uint64(32)) | normal.astype(np.uint64)
-    )
-    item, placement = place_object(
-        shape,
-        material,
-        pool,
-        obstacles,
-        object_id=1,
-        label="anomaly-proxy",
-        proposal_namespace=f"single-frame-v1/{seed}",
-        proposal_stream=0,
-        yaw_rad=float(rng.uniform(*shape_config["yaw_rad"])),
-        material_seed=seed,
-        yaw_seed=seed,
-        shape_seed=seed,
-        proposal_rows=[0],
-        maximum_candidates=1,
-    )
+    shape, geometry = make_shape(rng, profile, config["shape"])
+    grounding = qualify_grounding(shape)
+    if not grounding.passed:
+        raise ValueError("shape_grounding_unreliable")
+    material = MaterialSpec(float(rng.uniform(*config["shape"]["material_quantile"])),
+                            float(rng.uniform(*config["shape"]["material_roughness"])))
+    rejections, candidates = Counter(), []
+    for pool, support in sample_support(sequence, rng, config["placement"], geometry["footprint_radius_m"], profile["background"], rejections):
+        frame = sequence[int(pool.frames[0])]
+        slots = frame.real_slots
+        selected = slots[(frame.labels.semantic[slots] != 0) & ~np.isin(frame.labels.semantic[slots], GROUND)]
+        obstacles = ObservedObstacleIndex(frame.xyzi[selected, :3].astype(float) @ frame.lidar_pose[:3, :3].T + frame.lidar_pose[:3, 3],
+                                         (np.uint64(frame.frame_id) << np.uint64(32)) | selected.astype(np.uint64))
+        yaw = float(rng.uniform(-np.pi, np.pi))
+        if profile["view"] != "ordinary":
+            poses = np.array([sequence.lidar_pose(f)[:3, 3] for f in sequence.frame_ids])
+            direction = pool.anchors_world_m[0] - poses[np.argmin(np.abs(np.linalg.norm(poses - pool.anchors_world_m[0], axis=1) - 42.5))]
+            yaw = float(np.arctan2(direction[1], direction[0]) + np.pi / 2 + rng.uniform(-.35, .35))
+        try:
+            item, placement = place_object(shape, material, pool, obstacles, object_id=1, label="anomaly-proxy",
+                                           proposal_namespace=f"single-frame-content/{seed}", proposal_stream=0,
+                                           yaw_rad=yaw, material_seed=seed, yaw_seed=seed, shape_seed=seed,
+                                           proposal_rows=[0], maximum_candidates=1, grounding_eligibility=grounding)
+        except ValueError:
+            rejections["local_collision_or_grounding"] += 1
+            continue
+        opportunities = far_ray_opportunities(sequence, item, grid, geometry) if profile["view"] != "ordinary" else []
+        rays = [r["available_box_rays"] for r in opportunities]
+        target = profile["proposal_ray_target"]
+        score = (sum(n >= 5 for n in rays), -sum(abs(n - target) for n in rays)) if opportunities else (-1, 0)
+        candidates.append((score, item, dict(**support, placement=clean_json(placement.to_dict()),
+                                            support_plane=dict(anchor_world_m=pool.anchors_world_m[0].tolist(),
+                                                               normal_world=pool.normals_world[0].tolist(), offset=float(pool.offsets[0])),
+                                            yaw_rad=yaw, far_ray_opportunities=opportunities)))
+    if not candidates:
+        raise ValueError("no_physical_support:" + json.dumps(dict(rejections), sort_keys=True))
+    best = max(range(len(candidates)), key=lambda i: (candidates[i][0], -i))
+    _, item, chosen = candidates[best]
     return WorldSpec(seed, sequence.spec.sequence_id, (item,)), dict(
-        **support,
-        placement=clean_json(placement.to_dict()),
-        support_plane=dict(
-            anchor_world_m=pool.anchors_world_m[0].tolist(),
-            normal_world=pool.normals_world[0].tolist(),
-            offset=float(pool.offsets[0]),
-        ),
-    )
+        **chosen, geometry=geometry, shape_family=profile["shape"], candidate_category=profile["name"],
+        proposal_intent=profile["view"], support_rejections=dict(rejections),
+        support_proposals=[dict(frame=c[2]["placement"]["support_frame"], slot=c[2]["placement"]["support_slot"],
+                                far_ray_opportunities=c[2]["far_ray_opportunities"], chosen=i == best)
+                           for i, c in enumerate(candidates)],
+        connectivity=shape.continuous_connectivity_certificate().state)
 
 
-def generate_candidate(data_root, output, split, index, config, target, identity):
+def content_summary(rows, placement):
+    world = placement["geometry"]
+    result = {key: dict(frames=0, anomaly_returns=0) for key in conditions(world, dict(count=0, in_range=0))}
+    for row in rows:
+        flags = conditions(world, row)
+        for key, active in flags.items():
+            if active:
+                result[key]["frames"] += 1
+                result[key]["anomaly_returns"] += row["count"]
+    return result
+
+
+def generate_candidate(data_root, output, split, index, config, identity):
     started = time.perf_counter()
     split_config = config["dataset"]["splits"][split]
     sequence_id = split_config["source_sequence"]
@@ -443,12 +429,16 @@ def generate_candidate(data_root, output, split, index, config, target, identity
         configuration_identity=identity,
     )
     try:
-        world, placement = make_world(sequence, seed, config)
+        grid, sensor = load_sensor_calibration(Path(output) / "calibration.pt")
+        profile = config["proposals"]["categories"][index // config["proposals"]["repeats_per_source"]]
+        report["candidate_category"] = profile["name"]
+        world, placement = make_world(sequence, seed, config, profile, grid)
     except ValueError as error:
-        report.update(status="rejected", reason=str(error), frames=[])
+        report.update(status="rejected", reason=str(error), frames=[],
+                      seconds=time.perf_counter() - started,
+                      peak_rss_bytes=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024)
         _atomic_json(directory / "manifest.json", report)
         return report
-    grid, sensor = load_sensor_calibration(Path(output) / "calibration.pt")
     definition = dict(world=world.to_dict(), generation=placement)
     world_path = directory / "world.json"
     if world_path.exists() and json.loads(world_path.read_text()) != definition:
@@ -483,8 +473,8 @@ def generate_candidate(data_root, output, split, index, config, target, identity
                     local_bounds=local_bounds,
                 )
                 if hit:
-                    collision = dict(frame=source.frame_id, minimum_sdf_m=minimum)
-                    return
+                    if collision is None:
+                        collision = dict(frame=source.frame_id, minimum_sdf_m=minimum)
             path = directory / "frames" / f"{source.frame_id:06d}.npz"
             if path.exists():
                 record_sample(FrozenFrame.load(path, source, world.identity))
@@ -522,19 +512,15 @@ def generate_candidate(data_root, output, split, index, config, target, identity
                 )
         record_sample(sample)
     reason = "observed_normal_deep_penetration" if collision else None
-    stats, hist = distributions(rows) if rows and collision is None else ({}, {})
+    stats, hist = distributions(rows) if rows else ({}, {})
+    if len(rows) != len(sequence):
+        raise ValueError("world stopped before its final source frame")
     if collision is None:
-        if len(rows) != len(sequence):
-            raise ValueError("world stopped before its final source frame")
         if (
             stats["eligible_frames"]
             < config["qualification"]["minimum_eligible_frames"]
         ):
             reason = "no_eligible_anomaly_observation"
-        for key, (low, high) in target["trajectory_envelope"].items():
-            if stats[key] is None or not low <= stats[key] <= high:
-                reason = f"trajectory_outside_reference_envelope:{key}"
-                break
     report.update(
         status="qualified" if reason is None else "rejected",
         reason=reason,
@@ -543,85 +529,44 @@ def generate_candidate(data_root, output, split, index, config, target, identity
         frames=rows,
         trajectory=stats,
         histograms=hist,
+        content=content_summary(rows, placement),
+        shape_family=placement["shape_family"],
+        background=placement["background"],
+        geometry=placement["geometry"],
         seconds=time.perf_counter() - started,
         peak_rss_bytes=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024,
         reconstruction="all_rendered_frames_equal_xyzi_packed_labels_slots_and_masks",
     )
-    if reason is not None:
-        frame_directory = directory / "frames"
-        if frame_directory.exists():
-            shutil.rmtree(frame_directory)
     _atomic_json(directory / "manifest.json", report)
     return report
 
 
-def discrepancy(histograms, target):
-    return {
-        key: float(0.5 * np.abs(np.asarray(histograms[key]) - target[key]).sum())
-        for key in target
-    }
-
-
-def select_worlds(reports, number, target):
-    reports = sorted(
-        (r for r in reports if r["status"] == "qualified"), key=lambda r: r["index"]
-    )
-    if len(reports) < number:
-        raise RuntimeError(
-            f"only {len(reports)} complete worlds qualified; {number} required"
-        )
-    keys = tuple(target)
-    matrix = np.array(
-        [np.concatenate([r["histograms"][k] for k in keys]) for r in reports]
-    )
-    reference_vector = np.concatenate([target[k] for k in keys])
-
-    def loss(total, count):
-        return float(np.abs(total / count - reference_vector).sum() / (2 * len(keys)))
-
-    selected, total = [], np.zeros(matrix.shape[1])
-    while len(selected) < number:
-        best = min(
-            (i for i in range(len(reports)) if i not in selected),
-            key=lambda i: (
-                loss(total + matrix[i], len(selected) + 1),
-                reports[i]["index"],
-            ),
-        )
-        selected.append(best)
-        total += matrix[best]
-    # A deterministic finite descent improves the aggregate without changing any world.
-    while True:
-        improvement = None
-        current = loss(total, number)
-        for position, old in enumerate(selected):
-            for new in range(len(reports)):
-                if new in selected:
-                    continue
-                value = loss(total - matrix[old] + matrix[new], number)
-                if value < current - 1e-12:
-                    current, improvement = value, (position, old, new)
-        if improvement is None:
-            break
-        position, old, new = improvement
-        selected[position] = new
-        total += matrix[new] - matrix[old]
-    chosen = sorted((reports[i] for i in selected), key=lambda r: r["index"])
-    mean = {
-        key: np.mean([r["histograms"][key] for r in chosen], axis=0).tolist()
-        for key in keys
-    }
-    before = {
-        key: np.mean([r["histograms"][key] for r in reports], axis=0).tolist()
-        for key in keys
-    }
-    return chosen, dict(
-        selected_histograms=mean,
-        qualified_candidate_histograms=before,
-        selected_total_variation=discrepancy(mean, target),
-        qualified_candidate_total_variation=discrepancy(before, target),
-        mean_total_variation=loss(total, number),
-    )
+def select_worlds(reports, number=None):
+    """Round-robin content strata; frames and auxiliary validity never determine weight."""
+    available = sorted((r for r in reports if r["status"] == "qualified"), key=lambda r: r["index"])
+    number = len(available) if number is None else number
+    if number > len(available):
+        raise ValueError("selection requests more qualified worlds than exist")
+    conditions_order = ("far_few_eligible", "far_denser", "low_far_eligible", "few_eligible", "low_eligible", "all")
+    chosen, cells, shapes, backgrounds = [], Counter(), Counter(), Counter()
+    while len(chosen) < number:
+        for condition in conditions_order:
+            members = [r for r in available if r["content"][condition]["frames"] > 0]
+            if not members:
+                continue
+            best = min(members, key=lambda r: (cells[(r["shape_family"], r["background"])],
+                                               shapes[r["shape_family"]], backgrounds[r["background"]], r["index"]))
+            chosen.append(best)
+            available.remove(best)
+            cells[(best["shape_family"], best["background"])] += 1
+            shapes[best["shape_family"]] += 1
+            backgrounds[best["background"]] += 1
+            if len(chosen) == number:
+                break
+    return chosen, dict(order=[r["index"] for r in chosen],
+                        conditions={c: sum(r["content"][c]["frames"] > 0 for r in chosen) for c in conditions_order},
+                        shape_worlds=dict(shapes), background_worlds=dict(backgrounds),
+                        rule="content_round_robin_then_least_represented_shape_background_then_index")
 
 
 def prepare_calibration(data_root, output, config):
@@ -643,6 +588,12 @@ def prepare_calibration(data_root, output, config):
         json.dumps(signature, sort_keys=True).encode()
     ).hexdigest()
     path = output / "calibration.pt"
+    reuse = Path(config["calibration_source"]) if config.get("calibration_source") else None
+    if not path.exists() and reuse is not None:
+        _, sensor = load_sensor_calibration(reuse)
+        if json.loads(dict(sensor.provenance).get("input_identity", '""')) != identity:
+            raise ValueError("reused calibration does not match the complete normal source inputs")
+        shutil.copyfile(reuse, path)
     if path.exists():
         _, sensor = load_sensor_calibration(path)
         if json.loads(dict(sensor.provenance).get("input_identity", '""')) != identity:
@@ -691,232 +642,110 @@ def prepare_calibration(data_root, output, config):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--data-root", type=Path, default=Path("/home/jasongao/Data/STU")
-    )
+    parser.add_argument("--data-root", type=Path, default=Path("/home/jasongao/Data/STU"))
     parser.add_argument("--config", type=Path, default=Path("protocol/v1.json"))
     parser.add_argument("--output", type=Path)
     parser.add_argument("--workers", type=int, required=True)
-    parser.add_argument(
-        "--pilot",
-        type=int,
-        help="process this many candidates per source, retaining valid frozen frames for the full run",
-    )
+    parser.add_argument("--select", type=int, nargs=2, metavar=("TRAIN_WORLDS", "VALIDATION_WORLDS"),
+                        help="select and freeze explicit quotas after candidate inspection")
     args = parser.parse_args()
-    if args.workers < 1 or (args.pilot is not None and args.pilot < 1):
-        parser.error("workers and pilot candidates must be positive")
+    if not 1 <= args.workers <= len(os.sched_getaffinity(0)) or (args.select and min(args.select) < 1):
+        parser.error("workers must fit the CPU affinity; explicit quotas must be positive")
     config = json.loads(args.config.read_text())
     output = args.output or Path(config["dataset"]["directory"])
-    output.mkdir(parents=True, exist_ok=True)
-    science = {
-        key: config[key]
-        for key in (
-            "seed",
-            "dataset",
-            "calibration",
-            "placement",
-            "shape",
-            "qualification",
-        )
-    }
-    implementation = {
-        p.name: hashlib.sha256(p.read_bytes()).hexdigest()
-        for p in (
-            Path(__file__),
-            Path(__file__).with_name("render.py"),
-            Path(__file__).with_name("data.py"),
-            Path(__file__).with_name("profile.py"),
-        )
-    }
-    identity = hashlib.sha256(
-        json.dumps(
-            dict(science=science, implementation=implementation), sort_keys=True
-        ).encode()
-    ).hexdigest()
+    science = {k: config[k] for k in ("seed", "dataset", "calibration", "placement", "shape", "qualification", "proposals")}
+    if config["qualification"]["reference_use"] != "normal_sources_and_predeclared_content_only":
+        raise ValueError("this generator requires the current content specification without real-label fitting")
+    implementation = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in
+                      (Path(__file__), Path(__file__).with_name("render.py"), Path(__file__).with_name("data.py"),
+                       Path(__file__).with_name("profile.py"), Path(__file__).with_name("coverage.py"))}
+    identity = hashlib.sha256(json.dumps(dict(science=science, implementation=implementation), sort_keys=True).encode()).hexdigest()
     manifest_path = output / "manifest.json"
     if manifest_path.exists():
         existing = json.loads(manifest_path.read_text())
         if existing["status"] == "frozen":
-            raise FileExistsError(
-                "the dataset is already frozen; use its single-frame reader"
-            )
+            raise FileExistsError("the dataset is already frozen")
         if existing["configuration_identity"] != identity:
-            raise ValueError(
-                "unfinished candidate data belongs to different generation inputs"
-            )
-    disk = host_disk()
-    # Hard upper bound: every slot could change, including temporary atomic files.
-    sizes = {}
+            raise ValueError("candidate directory belongs to different generation inputs")
+    count = len(config["proposals"]["categories"]) * config["proposals"]["repeats_per_source"]
+    schedule = []
     for split, item in config["dataset"]["splits"].items():
-        sequence = STUSequence.open(
-            args.data_root,
-            protocol=load_protocol(),
-            partition="train",
-            sequence_id=item["source_sequence"],
-            label_mode="required",
-        )
-        slots = sum(p.stat().st_size // 16 for p in sequence._scan_paths.values())
-        sizes[split] = slots * 32 * item["candidates"]
-    # Actual deltas are sparse; enforce a bounded working allocation during generation.
+        if item["candidates"] != count:
+            raise ValueError("candidate budget must cover exactly the declared categories and repeats")
+        for index in range(count):
+            seed = int(np.random.SeedSequence([config["seed"], item["source_sequence"], index]).generate_state(1)[0])
+            schedule.append(dict(split=split, index=index, seed=seed,
+                                 category=config["proposals"]["categories"][index // config["proposals"]["repeats_per_source"]]["name"]))
+    disk = host_disk()
+    # Each candidate is streamed and bounded; include active atomic/raw frame copies.
     active_peak = args.workers * (256 * 1024**2 + 2 * 393216 * 32)
-    allocation = min(
-        20_000_000_000, disk["SizeRemaining"] - disk["reserve_bytes"] - active_peak
-    )
-    if allocation < 1_000_000_000:
-        raise OSError("insufficient host space for the bounded generation allocation")
-    manifest = dict(
-        format="stu-frozen-dataset",
-        status="building",
-        configuration_identity=identity,
-        configuration=science,
-        implementation=implementation,
-        splits={},
-        execution=dict(
-            workers=args.workers,
-            host_before=disk,
-            allocation_bytes=allocation,
-            active_candidate_peak_bytes=active_peak,
-            dense_uncompressed_upper_bytes=sizes,
-        ),
-        generation={},
-    )
+    allocation = len(schedule) * 256 * 1024**2
+    peak = allocation + active_peak + 256 * 1024**2
+    if disk["SizeRemaining"] - peak < disk["reserve_bytes"]:
+        raise OSError("candidate peak allocation would enter the physical E: reserve")
+    manifest = dict(format="stu-frozen-dataset", status="building", configuration_identity=identity,
+                    configuration=science, implementation=implementation, splits={}, generation={},
+                    information_use="normal_sources_only_no_val19_numeric_reference_or_world_reuse",
+                    planned_candidates=schedule,
+                    execution=dict(workers=args.workers, host_before=disk, allocation_bytes=allocation,
+                                   active_candidate_peak_bytes=active_peak, peak_budget_bytes=peak))
+    output.mkdir(parents=True, exist_ok=True)
     _atomic_json(manifest_path, manifest)
     manifest["calibration"] = prepare_calibration(args.data_root, output, config)
-    target = reference(
-        config["qualification"]["reference"],
-        config["qualification"]["envelope_margins"],
-    )
-    _atomic_json(output / "reference.json", clean_json(target))
+    reports, jobs = {split: [] for split in config["dataset"]["splits"]}, []
+    for planned in schedule:
+        split, index = planned["split"], planned["index"]
+        path = output / split / f"candidate_{index:03d}" / "manifest.json"
+        if path.exists():
+            report = json.loads(path.read_text())
+            if report["configuration_identity"] != identity:
+                raise ValueError("cached candidate belongs to another generator")
+            reports[split].append(report)
+        else:
+            jobs.append((split, index))
     started = time.perf_counter()
-    reports = {split: [] for split in config["dataset"]["splits"]}
-    jobs = []
-    for split, item in config["dataset"]["splits"].items():
-        limit = (
-            min(args.pilot, item["candidates"]) if args.pilot else item["candidates"]
-        )
-        for index in range(limit):
-            path = output / split / f"candidate_{index:03d}" / "manifest.json"
-            if path.exists():
-                report = json.loads(path.read_text())
-                if report["configuration_identity"] != identity:
-                    raise ValueError("cached candidate belongs to another generator")
-                reports[split].append(report)
-            else:
-                jobs.append((split, index))
-    with ProcessPoolExecutor(
-        max_workers=args.workers, mp_context=mp.get_context("spawn")
-    ) as pool:
-        futures = {
-            pool.submit(
-                generate_candidate,
-                str(args.data_root),
-                str(output),
-                split,
-                index,
-                config,
-                target,
-                identity,
-            ): (split, index)
-            for split, index in jobs
-        }
+    with ProcessPoolExecutor(max_workers=args.workers, mp_context=mp.get_context("spawn")) as pool:
+        futures = {pool.submit(generate_candidate, str(args.data_root), str(output), split, index, config, identity): (split, index)
+                   for split, index in jobs}
         for future in as_completed(futures):
             split, index = futures[future]
             report = future.result()
             reports[split].append(report)
-            print(
-                json.dumps(
-                    dict(
-                        event="candidate",
-                        split=split,
-                        index=index,
-                        status=report["status"],
-                        reason=report["reason"],
-                        trajectory=report.get("trajectory"),
-                        seconds=report.get("seconds"),
-                        peak_rss_bytes=report.get("peak_rss_bytes"),
-                    )
-                ),
-                flush=True,
-            )
-            if sum(map(len, reports.values())) % 8 == 0:
+            print(json.dumps(dict(event="candidate", split=split, index=index, category=report.get("candidate_category"),
+                                  status=report["status"], reason=report["reason"], content=report.get("content"),
+                                  seconds=report.get("seconds"), peak_rss_bytes=report.get("peak_rss_bytes"))), flush=True)
+            if sum(map(len, reports.values())) % 4 == 0:
                 remaining = host_disk()
                 used = sum(p.stat().st_size for p in output.rglob("*") if p.is_file())
-                if (
-                    used > allocation
-                    or remaining["SizeRemaining"]
-                    < remaining["reserve_bytes"] + 2_000_000_000
-                ):
+                if used > allocation or remaining["SizeRemaining"] < remaining["reserve_bytes"] + active_peak:
                     for pending in futures:
                         pending.cancel()
-                    raise OSError(
-                        "bounded synthetic working allocation reached; completed candidates are retained"
-                    )
-    manifest["execution"]["seconds"] = time.perf_counter() - started
-    for split, values in reports.items():
-        manifest["generation"][split] = [
-            dict(
-                index=r["index"],
-                seed=r["seed"],
-                status=r["status"],
-                reason=r["reason"],
-                trajectory=r.get("trajectory"),
-                collision=r.get("collision"),
-                seconds=r.get("seconds"),
-                peak_rss_bytes=r.get("peak_rss_bytes"),
-            )
-            for r in sorted(values, key=lambda r: r["index"])
-        ]
-    if args.pilot:
-        _atomic_json(manifest_path, manifest)
-        print(
-            json.dumps(
-                dict(event="pilot_complete", status="building", directory=str(output))
-            ),
-            flush=True,
-        )
-        return
-    selected = {}
+                    raise OSError("generation allocation reached; complete candidates are retained")
     for split, item in config["dataset"]["splits"].items():
-        chosen, comparison = select_worlds(
-            reports[split], item["worlds"], target["histograms"]
-        )
-        selected[split] = chosen
-        manifest["splits"][split] = dict(
-            source_sequence=item["source_sequence"],
-            samples=item["worlds"] * item["frames_per_world"],
-            worlds=[],
-            comparison=comparison,
-        )
-    for split, chosen in selected.items():
-        for world_index, report in enumerate(chosen):
-            source = output / split / f"candidate_{report['index']:03d}"
-            destination = output / split / f"world_{world_index:03d}"
-            source.rename(destination)
-            manifest["splits"][split]["worlds"].append(
-                dict(
-                    path=str(destination.relative_to(output)),
-                    world_identity=report["world_identity"],
-                    candidate_index=report["index"],
-                )
-            )
-        for directory in (output / split).glob("candidate_*"):
-            shutil.rmtree(directory)
-    manifest["status"] = "frozen"
-    manifest["execution"]["host_after"] = host_disk()
-    manifest["execution"]["bytes_on_disk"] = sum(
-        p.stat().st_size for p in output.rglob("*") if p.is_file()
-    )
+        values = sorted(reports[split], key=lambda r: r["index"])
+        # Complete, physically valid candidates remain inspectable even without eligible observations.
+        complete = [r for r in values if len(r["frames"]) == item["frames_per_world"] and not r.get("collision")]
+        _, order = select_worlds(values)
+        manifest["generation"][split] = values
+        manifest["splits"][split] = dict(source_sequence=item["source_sequence"],
+                                         samples=len(complete) * item["frames_per_world"],
+                                         selection_preview=order,
+                                         worlds=[dict(path=f"{split}/candidate_{r['index']:03d}", world_identity=r["world_identity"],
+                                                      candidate_index=r["index"]) for r in complete])
+    manifest["status"] = "candidates_complete"
+    if args.select:
+        for (split, item), number in zip(config["dataset"]["splits"].items(), args.select):
+            chosen, selection = select_worlds(reports[split], number)
+            manifest["splits"][split].update(samples=number * item["frames_per_world"], selection=selection,
+                                             worlds=[dict(path=f"{split}/candidate_{r['index']:03d}", world_identity=r["world_identity"],
+                                                          candidate_index=r["index"]) for r in chosen])
+        manifest["status"] = "frozen"
+    manifest["execution"].update(seconds=time.perf_counter() - started, host_after=host_disk(),
+                                 bytes_on_disk=sum(p.stat().st_size for p in output.rglob("*") if p.is_file()))
     _atomic_json(manifest_path, manifest)
-    print(
-        json.dumps(
-            dict(
-                event="frozen",
-                samples={s: x["samples"] for s, x in manifest["splits"].items()},
-                bytes_on_disk=manifest["execution"]["bytes_on_disk"],
-            )
-        ),
-        flush=True,
-    )
+    print(json.dumps(dict(event=manifest["status"], directory=str(output),
+                          samples={s: x["samples"] for s, x in manifest["splits"].items()},
+                          seconds=manifest["execution"]["seconds"])), flush=True)
 
 
 if __name__ == "__main__":

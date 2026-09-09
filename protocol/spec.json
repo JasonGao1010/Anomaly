@@ -3,15 +3,17 @@
   "schema_version": 1,
   "research_question": "How can boundary supervision, sampling-normalized geometry and learned normal-surface expectations improve single-scan STU anomaly segmentation?",
   "status": {
-    "stage": "v1_content_checked_generation_revision_planned",
+    "stage": "v1_content_candidates_generated_and_checked",
     "model_defined": false,
     "training_defined": false,
     "active_experiment": "v1.json",
-    "iteration": "frozen_dataset_then_v1_then_evaluation_and_error_analysis_then_v2",
-    "synthetic_dataset_frozen": true,
-    "distribution_match": "approximate_with_reported_residuals",
+    "iteration": "candidate_content_then_world_selection_then_supervision_then_v1",
+    "synthetic_dataset_frozen": false,
+    "distribution_match": "not_a_selection_objective",
     "model_experiment_executed": false,
-    "formal_default_dataset_available": false
+    "formal_default_dataset_available": false,
+    "development_dataset_frozen": true,
+    "candidate_worlds_generated": 32
   },
   "data": {
     "normal_sources": [
