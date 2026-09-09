@@ -35,21 +35,125 @@
     "training_renderer": false,
     "anomaly_target": "inserted_returns_only",
     "normal_target": "valid_original_normal_class_map_entries",
-    "auxiliary_targets": "see_supervision_C1_C2_C3_definitions_not_yet_implemented",
+    "auxiliary_targets": "separate_training_only_supervision_from_src/supervision.py",
     "split_unit": "whole_world_and_source_sequence"
   },
   "information_use": {
-    "scope": "本轮只定义监督，不生成数据、不构造监督文件、不实现模型、不改变当前冻结池，旧 v2 不恢复为正式训练集。",
+    "scope": "本轮实现三项监督并计算固定少量完整单帧的先导；不训练、不重生成、不替换当前冻结池，旧 v2 不恢复为正式训练集。",
     "val19_generation_permission": "尚未核实允许使用 val19 标签统计拟合生成分布；这种拟合不是正式方案的前提。",
     "diagnosis": "可引用已有真实画像说明困难和缺测；不得据此自动调整生成参数、困难条件比例、训练权重或重新选择世界。",
     "formal_default": "在可比信息使用条件核实前，正式方案按不依赖 val19 标签统计拟合生成分布与选择世界的条件设计；本轮不指定新的生成分布。",
     "existing_pool": "当前 32 个训练世界和 8 个合成验证世界保持原样，作为待决定用途的开发候选资产；其生成与选择已经使用 val19 聚合标签统计，不能重述为未使用真实验证标签。",
-    "generation_record": "dataset、calibration、placement、shape、qualification 描述现存池的生成设置；当时完整配置以 results/synthetic/v1/manifest.json 的 configuration 为准。本次只替换 dataset.auxiliary_targets 的占位说明并增加监督定义，不重写生成记录。",
+    "generation_record": "dataset、calibration、placement、shape、qualification 描述现存池的生成设置；当时完整配置以 results/synthetic/v1/manifest.json 的 configuration 为准。本次辅助结果单独保存，不重写生成记录。",
     "implementation_boundary": "src/generate.py 仍按 qualification 读取真实参考并选择候选；本节是后续正式方案的信息使用边界，不表示生成器已改成不依赖 val19 的实现，也不授权运行该入口。",
     "comparison": "现存池上的 val19 成绩只能按已利用该开发集统计的条件解释；公平比较条件与隐藏测试结论仍待核实和真实实验。"
   },
   "supervision": {
-    "status": "定义已明确；C1/C2/C3 的逐点目标、配对及有效掩码均需要补充实现，尚未写入冻结样本。",
+    "pilot": {
+      "scope": "固定的 14 张完整单帧实现先导；不训练、不重生成、不替换世界、不估计全池覆盖率。每帧保留基础视图和两种规定的删减视图。",
+      "selection": "在辅助计算开始前，仅按既有 world/manifest.json 和 world.json 选取。每个来源、每个条件内按 (world,frame) 升序排列，取零基下标 (候选数-1)//2；条件重叠保留并在报告中说明。201 另取特殊槽位条件与特殊槽位且有异常条件各一张。样本不随监督结果更换。",
+      "conditions": {
+        "normal": "异常回波数为 0",
+        "one_to_four": "异常回波数为 1–4",
+        "five_to_nineteen": "异常回波数为 5–19",
+        "dense": "异常回波数至少 100",
+        "far": "有异常回波且其距离中位数在 [35,50] 米",
+        "low": "物体局部完整高度 2*primitive_scales_m[0][2] 不超过 0.2 米，且有异常回波；选取 low 代表帧时另要求至少 5 个异常回波，报告分组不加这一限制",
+        "special_slots": "源文件槽位数不是 131072",
+        "special_anomaly": "特殊槽位且有异常回波"
+      },
+      "samples": [
+        {
+          "split": "train",
+          "world": "world_016",
+          "frame": 385,
+          "selected_for": "normal"
+        },
+        {
+          "split": "train",
+          "world": "world_011",
+          "frame": 322,
+          "selected_for": "one_to_four"
+        },
+        {
+          "split": "train",
+          "world": "world_015",
+          "frame": 285,
+          "selected_for": "five_to_nineteen"
+        },
+        {
+          "split": "train",
+          "world": "world_015",
+          "frame": 446,
+          "selected_for": "dense"
+        },
+        {
+          "split": "train",
+          "world": "world_010",
+          "frame": 210,
+          "selected_for": "far"
+        },
+        {
+          "split": "train",
+          "world": "world_018",
+          "frame": 191,
+          "selected_for": "low"
+        },
+        {
+          "split": "validation",
+          "world": "world_004",
+          "frame": 116,
+          "selected_for": "normal"
+        },
+        {
+          "split": "validation",
+          "world": "world_003",
+          "frame": 451,
+          "selected_for": "one_to_four"
+        },
+        {
+          "split": "validation",
+          "world": "world_003",
+          "frame": 260,
+          "selected_for": "five_to_nineteen"
+        },
+        {
+          "split": "validation",
+          "world": "world_001",
+          "frame": 499,
+          "selected_for": "dense"
+        },
+        {
+          "split": "validation",
+          "world": "world_003",
+          "frame": 189,
+          "selected_for": "far"
+        },
+        {
+          "split": "validation",
+          "world": "world_003",
+          "frame": 310,
+          "selected_for": "low"
+        },
+        {
+          "split": "validation",
+          "world": "world_003",
+          "frame": 3,
+          "selected_for": "special_slots"
+        },
+        {
+          "split": "validation",
+          "world": "world_000",
+          "frame": 0,
+          "selected_for": "special_anomaly"
+        }
+      ],
+      "output": "results/supervision/pilot",
+      "decision": "不设覆盖率通过门槛；先区分实现错误、监督条件限制与当前观测缺失，计算结束后停止。",
+      "definition_commit": "0c9df87",
+      "reason_encoding": "各原因按对应 ignore_when／output 列表顺序编码为 uint16 的 1<<index，0 为有效。C1/C2 可同时记录多个原因；C3 记录计算顺序中第一个失败原因。额外平面质量位 RMSE=1、坡度=2、水平展开=4。"
+    },
+    "status": "src/supervision.py 已实现无标签尺度、C1/C2/C3 计算；固定先导结果单独保存在 results/supervision/pilot。全量辅助监督尚未补算，模型尚未实现或训练。",
     "common": {
       "input": "每个视图独立输入 source.xyzi[source.real_slots]，只含当前扫描传感器坐标与原始强度；完整扫描中的忽略标签回波仍可作为输入，零坐标空槽不进入模型。",
       "identity": "每个点用 world_identity、源分区、源序列、frame_id、view_id、原始 source_slot 标识。全帧点行对应 source.real_slots；NPZ 中的 source_slot 只列变化槽位，不能冒充全帧点索引。",
@@ -59,11 +163,11 @@
       "mask_contract": "各目标、有效掩码及忽略原因均按本视图 source.real_slots 对齐。无效连续目标保存 0 且有效掩码为 false；损失必须先用掩码选取有效行，0 不表示已观测到零距离或零偏离。多个忽略原因可同时记录。某项没有有效行时，该辅助项贡献 0，基础逐点异常监督保持原样。",
       "geometry_duplicates": "邻域几何按完全相同的 xyz 去重，代表点取最小原始槽位；几何结果回填所有对应回波行。同位置标签不一致时，该位置的辅助标签视为未知，涉及它的可靠性检查失败。去重只用于目标计算，不删除模型输入点或基础检测标签。",
       "sampling_scale": {
-        "status": "需要补充；现有同实例最近邻画像依赖标签，不能直接用作输入尺度。",
+        "status": "已经具备：src/supervision.py: ScanGeometry；按完整当前扫描独立计算，既有同实例画像不作为输入尺度。",
         "neighbors": 6,
         "radius_m": 0.5,
         "minimum_distinct_neighbors": 3,
-        "epsilon_m": 0.000001,
+        "epsilon_m": 1e-06,
         "calculation": "对每个不同位置 p_i，从当前视图全部实际回波中找 0 < ||p_j-p_i|| <= 0.5 的最近至多 6 个不同位置，等距按代表槽位排序，记为 K_i。|K_i| >= 3 时 delta_i=max(median_j ||p_j-p_i||, 1e-6)，scale_valid_i=true；否则 delta_i=0、scale_valid_i=false。该过程完全不使用标签。",
         "representation": "真实位移 p_j-p_i 始终保留；scale_valid_i=true 时可同时计算 (p_j-p_i)/(delta_i+1e-6)。无有效尺度时关闭归一化分量及依赖它的辅助约束，不以零尺度声称采样极密。每个稀疏视图重新计算自己的尺度。"
       },
@@ -76,8 +180,8 @@
         },
         {
           "item": "三项监督字段及其有效性记录",
-          "status": "需要补充",
-          "evidence": "FrozenFrame.save/load 目前只有变化 xyzi、打包标签、插入/遮挡槽及身份；world/manifest.json 中的观测摘要也不是以下逐点目标。"
+          "status": "已经具备计算实现；全池需要补算",
+          "evidence": "src/supervision.py: compute_supervision；辅助 NPZ 按 view_0、view_1、view_2 保存，各视图 source_slot 为完整输入回波槽位。冻结世界与基础差量文件保持原样。"
         }
       ]
     },
@@ -116,8 +220,8 @@
         },
         {
           "item": "无标签尺度、可信邻接图、边界槽位对、归一化距离和忽略原因",
-          "status": "需要补充",
-          "evidence": "当前读取和画像代码没有构造或保存这些目标；所需原始点与标签可由现存冻结帧取得。有效覆盖尚未计算，不因此要求重生成世界。"
+          "status": "已经具备计算实现；全池需要补算",
+          "evidence": "src/supervision.py: boundary_targets；本轮只计算固定先导样本，覆盖率以 results/supervision/pilot/summary.json 的实际结果为准，不代表整个池。"
         }
       ]
     },
@@ -170,8 +274,8 @@
         },
         {
           "item": "两个离线删减视图的保留槽位、配对记录、无标签尺度及一致性有效掩码",
-          "status": "需要补充",
-          "evidence": "现存 NPZ 没有受控采样配对。它们可从同一冻结帧离线删减得到，不需要再次物理渲染；现有点数和邻近点间距画像不能替代配对或证明稀疏后信息仍充分。"
+          "status": "已经具备计算实现；全池需要补算",
+          "evidence": "src/supervision.py: thinning_pair、sampling_targets；本轮只计算固定先导样本，覆盖率以 results/supervision/pilot/summary.json 的实际结果为准，不代表整个池。"
         }
       ]
     },
@@ -179,7 +283,11 @@
       "name": "插入前正常地面表面监督",
       "sample_requires": "与合成帧身份一致的插入前正常单帧、原始正常语义、插入/遮挡槽、合成后当前实际回波，以及逐查询点的局部表面目标与可靠性。V1 的表面范围限于有支持的局部地面平面，不覆盖任意正常物体表面。",
       "parameters": {
-        "ground_semantics": [40, 48, 49],
+        "ground_semantics": [
+          40,
+          48,
+          49
+        ],
         "xy_radius_m": 2,
         "minimum_distinct_support_points": 20,
         "minimum_inlier_residual_m": 0.05,
@@ -188,7 +296,7 @@
         "maximum_plane_rmse_m": 0.05,
         "maximum_slope_degrees": 20,
         "minimum_xy_covariance_eigenvalue_m2": 0.01,
-        "convex_hull_tolerance_m": 0.0000000001
+        "convex_hull_tolerance_m": 1e-10
       },
       "calculation": [
         "对合成后每个 y 属于 {0,1} 的实际点 p_i，在插入前同一帧中取原始类别映射有效、语义属于 {40,48,49}、且水平距离 ||q_xy-p_i,xy||<=2 米的实际回波。坐标去重后记为 Q0；不能用插入后的物体点、其他帧或世界放置时的一张锚点平面替代。",
@@ -212,8 +320,8 @@
         },
         {
           "item": "逐点插入前平面、逐点表面位移目标、插入后/稀疏后支撑检查及忽略原因",
-          "status": "需要补充",
-          "evidence": "ground_relation 只在可见实例中心拟合并返回实例高度摘要，没有逐点系数或上述前后支撑掩码。results/profile/tables/reliability.csv 中 4729 条实例帧记录只有 2202 条 local_plane_proxy；这是既有诊断的缺测证据，不是本 C3 目标的可用比例。"
+          "status": "已经具备计算实现；全池需要补算",
+          "evidence": "src/supervision.py: surface_targets；本轮只计算固定先导样本，覆盖率以 results/supervision/pilot/summary.json 的实际结果为准，不代表整个池。"
         }
       ]
     }
