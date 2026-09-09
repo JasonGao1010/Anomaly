@@ -72,6 +72,8 @@ def inventory(directory):
                 shape_family=generation.get("shape_family", "single"),
                 background=generation.get("background", "not_stratified"),
                 candidate_category=generation.get("candidate_category", "development_pool"),
+                origin=entry.get("origin", "base"),
+                content_check_frames=manifest.get("content_check_frames", []),
                 exponents=shape["primitive_exponents"], material=obj["material"],
                 support_semantic=generation["placement"]["support_semantic"],
                 support_slope_degrees=float(np.degrees(np.arccos(np.clip(normal[2], -1, 1)))),
@@ -120,6 +122,7 @@ def select_checks(worlds, far_limit=None):
         few = sorted((r for r in eligible if r["in_range"] < 20),
                      key=lambda r: (r["in_range"], r["frame"]))
         chosen = []
+        chosen.extend((world["rows"][f], "declared_content_witness") for f in world.get("content_check_frames", []))
         if eligible:
             chosen.append((min(eligible, key=lambda r: (-r["in_range"], r["frame"])), "densest"))
         elif world["rows"]:
@@ -296,6 +299,7 @@ def main():
     parser.add_argument("--workers", type=int, default=1)
     parser.add_argument("--threads", type=int, default=1)
     parser.add_argument("--inventory-only", action="store_true")
+    parser.add_argument("--new-only", action="store_true", help="inventory the full experiment and compute supervision only for supplements")
     args = parser.parse_args()
     if min(args.workers, args.threads) < 1 or args.workers * args.threads > len(os.sched_getaffinity(0)):
         parser.error("workers times threads must fit the available CPUs")
@@ -306,9 +310,10 @@ def main():
     if args.far_limit is not None and args.far_limit < 1:
         parser.error("far limit must be positive")
     root, worlds, totals = inventory(Path(protocol["dataset"]["directory"]))
-    selections = select_checks(worlds, args.far_limit)
+    selections = select_checks([w for w in worlds if not args.new_only or w["origin"] == "supplement"], args.far_limit)
     report = dict(scope="full_pool_inventory_and_targeted_scan_checks_not_full_pool_supervision_coverage",
                   dataset=protocol["dataset"]["directory"], pool_status=root["status"],
+                  local_scope="supplement_only" if args.new_only else "all_selected_worlds",
                   supervision_parameters=dict(seed=protocol["seed"],
                                               scale=protocol["supervision"]["common"]["sampling_scale"],
                                               boundary=protocol["supervision"]["C1"]["parameters"],
@@ -344,7 +349,7 @@ def main():
     report.update(checks=records, targeted=summarize_checks(records, worlds),
                   execution=dict(workers=args.workers, threads=args.threads, seconds=time.monotonic() - start,
                                  worker_cpu_seconds=sum(r["cpu_seconds"] for r in records),
-                                 maximum_worker_rss_bytes=max(r["peak_rss_bytes"] for r in records),
+                                 maximum_worker_rss_bytes=max((r["peak_rss_bytes"] for r in records), default=0),
                                  disk_before=disk, disk_after=host_disk()))
     _atomic_json(args.output, report)
 

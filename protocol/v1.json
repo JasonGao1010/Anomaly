@@ -13,21 +13,23 @@
     "design_v2"
   ],
   "dataset": {
-    "directory": "results/synthetic/candidates",
+    "directory": "results/synthetic/experiment",
     "unit": "one_source_sequence_and_one_fixed_world_object",
     "input_unit": "one_current_scan_xyzi",
     "splits": {
       "train": {
         "source_sequence": 206,
         "frames_per_world": 449,
-        "worlds": null,
-        "candidates": 16
+        "candidates": 4,
+        "base_worlds": 16,
+        "maximum_worlds": 20
       },
       "validation": {
         "source_sequence": 201,
         "frames_per_world": 682,
-        "worlds": null,
-        "candidates": 16
+        "candidates": 4,
+        "base_worlds": 16,
+        "maximum_worlds": 20
       }
     },
     "all_frames": "render_once_and_freeze_including_zero_anomaly_returns",
@@ -36,51 +38,53 @@
     "anomaly_target": "inserted_returns_only",
     "normal_target": "valid_original_normal_class_map_entries",
     "auxiliary_targets": "separate_training_only_supervision_from_src/supervision.py",
-    "split_unit": "whole_world_and_source_sequence"
+    "split_unit": "whole_world_and_source_sequence",
+    "base_directory": "results/synthetic/candidates"
   },
   "information_use": {
-    "scope": "本轮实际生成独立候选世界并检查新增形态、远距、低矮远距和正常背景内容；保留当前 C1/C2/C3 监督、损失和 C3 默认 20，不训练、不覆盖旧池。",
+    "scope": "本轮保留全部 32 个基础世界，最多定向补充 8 个完整世界后冻结首轮实验池；不混入 val19 数值拟合的历史开发池。C1/C2/C3 监督、损失和 C3 默认 20 保持不变，下一阶段直接实施 V1。",
     "val19_generation_permission": "尚未核实允许使用 val19 标签统计拟合生成分布；这种拟合不是正式方案的前提。",
     "diagnosis": "可引用已有真实画像说明困难和缺测；不得据此自动调整生成参数、困难条件比例、训练权重或重新选择世界。",
     "formal_default": "在可比信息使用条件核实前，正式方案按不依赖 val19 标签统计拟合生成分布与选择世界的条件设计；generation_plan 根据当前合成池内容检查修订，不使用 val19 标签统计确定新的生成比例。",
     "existing_pool": "results/synthetic/v1 的 32 个训练世界和 8 个合成验证世界保持原样，作为开发对照；其生成与选择已使用 val19 聚合标签统计。",
-    "generation_record": "当前 dataset、shape、placement、qualification、proposals 描述新候选设置；旧池完整历史配置仍以 results/synthetic/v1/manifest.json 的 configuration 为准。正常 train/206 标定仅在全部输入身份核对相同时复用。",
-    "implementation_boundary": "src/generate.py 仅读取正常 train/206、train/201、射线和正常源标定；已移除 val19 参考包络与最小总变差调用，不从旧池复用世界。候选条件取自已明确的内容缺口，不拟合 val19 比例。",
+    "generation_record": "当前配置描述有界补充；32 个基础世界的原始配置和记录仍在 results/synthetic/candidates/manifest.json，历史开发池仍在 results/synthetic/v1/manifest.json。实验根清单引用基础世界，不复制或覆盖它们。",
+    "implementation_boundary": "src/generate.py 按正常源的真实前景表面命中提出远距位置，从正常源直接寻找局部凸起参照；八次预算后保留全部基础世界并仅追加达到目的的补充，冻结实际结果。",
     "comparison": "现存池上的 val19 成绩只能按已利用该开发集统计的条件解释；公平比较条件与隐藏测试结论仍待核实和真实实验。"
   },
   "content_coverage": {
     "implementation": "src/coverage.py",
-    "output": "results/coverage/candidates.json",
-    "inventory": "枚举新候选根清单中的全部完整且物理有效世界；生成清单另外保留全部固定尝试及失败原因。按来源统计帧数、原始和距离内异常点数、不同世界数及前一／五世界集中度。",
+    "output": "results/coverage/experiment.json",
+    "inventory": "枚举最终实验清单引用的全部基础世界和成功补充；失败尝试保留在实验生成清单中。",
     "conditions": {
       "eligible": "当前帧在传感器距离 [2.5,50] 米内至少 5 个异常回波，遵循官方计数口径。",
       "few": "官方距离内 5–19 个异常回波。",
       "far": "已有清单中异常回波的中位距离在 [35,50] 米；针对性检查另核对实际位于该距离段的异常回波数。",
       "low": "整个物体在物体局部坐标中的连续几何范围高度不超过 0.2 米；包含全部基元、偏移与变形，不等同重力方向高度。",
-      "far_denser": "异常中位距离在 [35,50] 米且官方距离内至少 20 个异常回波；与远距 5–19 点分开记录，不表示删减后必有 C2 支持。"
+      "far_denser": "异常中位距离在 [35,50] 米且官方距离内至少 20 个异常回波；与远距 5–19 点分开记录，不表示删减后必有 C2 支持。 此组仅作探索性记录，不作为数据冻结门槛。"
     },
-    "selection": "每世界选最密合格帧与普通合格少点中位帧；远距 5–19 与至少 20 点分层，各按 (range,frame) 排序等距取最多 3 帧；另保留一张远距 1–4 点代表。若无合格帧选最多原始异常点的一帧。计算监督前写出身份，不按辅助有效率换样本。执行 coverage 时指定 --far-limit 3。",
+    "selection": "复用已有基础世界检查作为历史证据；本轮用 --new-only 只为成功补充计算完整扫描监督，沿既有最密、少点、远距代表规则并加入预先确定的局部参照核对帧。全实验清单统计仍全部计算。",
     "local_checks": "复用完整当前扫描上的 C1 基础视图图距离、两级 C2 配对与掩码、三视图 C3 默认 20。正常参照另统计距异常实际回波 2 米内、C3 有效且相对正常表面凸起 5–20 厘米的正常点。这是几何参照，不是路缘标注或模型困难程度真值。",
-    "interpretation": "清单统计覆盖本轮完整物理候选；局部监督只覆盖预先按观测选出的代表帧，不能外推全候选有效率。普通少点、合格远距少点、较密远距和低矮远距分别解释；检测标签有效但三项已检查辅助均无效的点仍保留。多个世界复用正常源背景，点和帧不等同独立物体。",
+    "interpretation": "全实验清单统计覆盖全部保留世界；新的局部监督统计只适用于成功补充的固定核对扫描，基础 32 世界的 134 帧结果仍以 results/coverage/candidates.json 为准。冻结后进入 V1，不因辅助覆盖低自动开启新一轮补样。",
     "executed": {
-      "worlds": 32,
-      "frames": 18096,
-      "targeted_scans": 134,
-      "targeted_train": 53,
-      "targeted_validation": 81,
-      "independent_surface_probes": 66
+      "inventory_worlds": 40,
+      "inventory_frames": 22620,
+      "local_scope": "仅新增 8 世界的固定完整扫描；未重复计算基础 32 世界的辅助目标，也未补算全池数组。",
+      "checked_scans": {"train": 24, "validation": 17},
+      "checked_eligible_far_scans": {"train": 14, "validation": 1},
+      "independent_surface_probes": 33
     }
   },
   "generation_plan": {
-    "status": "已实际生成 32 个完整候选世界、18,096 帧，完成 134 张完整扫描的针对性监督检查；结果见 protocol/README.md 及 results/coverage/candidates.json。旧开发池不变，新候选尚未选择正式配额或冻结。",
-    "information_sources": "正式生成与选样只使用预先指定的几何条件、正常 train/206 与 train/201、射线和正常回波标定。移除现生成流程中的 val19 参考轨迹包络与最小总变差选样依赖；不得仅改清单文字、沿用当前 40 个已按 val19 选出的世界并声称未用验证标签。",
+    "status": "八次补充已全部完成并达到各自目的；保留全部 32 个基础世界，首轮数据已冻结为训练 20 世界和合成验证 20 世界。数据补充到此结束，下一阶段实现 V1、准备监督并逐轮训练。",
+    "information_sources": "正式生成与选样只使用预先指定的几何条件、正常 train/206 与 train/201、射线和正常回波标定。生成流程已移除 val19 参考轨迹包络与最小总变差选样依赖；历史开发池 40 个已按 val19 选出的世界保持隔离，不进入首轮实验池。",
     "C1": "保留单基元作为已有形态；增加明确的连通多基元组合，利用已有 ShapeSpec 组合能力提供相交部件、非单体外轮廓与不同接触关系。扁平形态当前已存在，不把它宣称为全新补齐项。形状与道路／其他正常背景的搭配按世界独立记录，避免仅靠同一物体的更多帧增加边界权重。当前尺寸范围先保留为参照，不据 val19 实例尺寸回归形状。",
     "C2": "将合格远距、合格少点、低矮且合格远距分别列为世界选择的内容条件，替代仅要求任意一帧合格再拟合所有分布的做法。按固定物体在正常轨迹上的实际距离、投影尺度、朝向和遮挡提出／选择不同世界，以完整渲染后的真实回波核对，禁止按远距补点或伪造回波。各条件单独报告不同世界数与集中度；不以总帧数或一个大物体的大量连续帧代替覆盖。删减配对仍使用原规则，失去异常证据时关闭一致性。",
     "C3": "低矮物体需与不同距离、采样和正常背景搭配；同时保留插入前正常帧，以及邻近的有标签正常结构和表面偏离参照。放置仍须具有真实局部支撑并通过物理碰撞检查，背景可含路缘附近的语义过渡、坡面或合法凸起；不得把整个背景处理为平面，也不得为了 C3 有效而删除困难正常点。参考表面、可见支持和损失条件本轮全部保持不变。",
     "material": "本轮没有隔离出材质／回波规律导致的内容缺口，先保留正常源标定和当前材质采样；不同时更改未得到诊断支持的因素。",
-    "selection_and_budget": "本轮执行 proposals 中 8 类内容、每正常来源每类 2 个候选，共 32 个固定种子；完整世界最大 18,096 帧。物理失败如实记录；完成候选另存，不覆盖开发池。先检查覆盖与监督，再决定正式配额；本轮只计算选样顺序，不冻结新训练池。",
+    "selection_and_budget": "本轮严格使用 proposals 的新种子空间和八次尝试；基础世界不重排淘汰，成功补充追加，结束后按实际成功数量冻结。远距至少 20 点降为探索性条件，四分之一远距 C2 无效保留为适用边界。",
     "decision_boundary": "内容缺失或只来自极少世界时，处理形状、放置、观察条件或世界选择；内容存在但被可靠性条件排除时，先核对局部证据，不自动放宽掩码；仅权重集中时才处理训练抽样或损失。现有损失修正不能作为样本质量合格或迁移有效的证据。",
     "candidate_findings": {
+      "scope": "bc6c588 的 32 个基础世界；以下为补充前证据。",
       "complete_worlds": {
         "train": 16,
         "validation": 16
@@ -106,7 +110,33 @@
         "validation": 0
       },
       "limits": "训练低矮远距仍只来自两个世界；较大投影提出未产生至少 20 点的远距帧。所检低矮远距异常三项辅助均无效；低矮验证异常附近的有效正常凸起参照只覆盖一个世界。不得由此扩大有效率结论、自动放宽监督或宣称迁移改善。",
-      "next_decision": "依据候选实测确定正式世界配额与内容搭配；训练低矮远距、较密远距及邻近正常参照仍须明确处理。远距删减后证据缺失另作为 C2 机制检查依据，不以只选容易世界掩盖。本轮固定尝试预算已结束，未追加种子或重生成。"
+      "next_decision": "用户已决定保留全部 32 个基础世界；本轮只补训练低矮远距与验证局部正常参照，八次预算后冻结，不再把较密远距和辅助有效率作为无限补样理由。"
+    },
+    "supplement_findings": {
+      "manifest": "results/synthetic/experiment/manifest.json",
+      "attempted_worlds": {"train": 4, "validation": 4},
+      "accepted_worlds": {"train": 4, "validation": 4},
+      "frozen_worlds": {"train": 20, "validation": 20},
+      "frozen_frames": {"train": 8980, "validation": 13640},
+      "eligible_far_worlds": {"train": 9, "validation": 13},
+      "eligible_low_far_worlds": {"train": 6, "validation": 7},
+      "new_train_low_far": {"worlds": 4, "frames": 166, "anomaly_returns": 1026},
+      "new_validation_local_references": {
+        "worlds": 4,
+        "source_frames": [280, 520],
+        "protected_distinct_frame_positions": 83,
+        "all_preserved_and_default_C3_valid": true,
+        "interpretation": "四个物体与放置搭配共享同一正常序列，三项核对来自第 520 帧；世界数不是独立正常背景数。"
+      },
+      "checked_new_far_C2": {
+        "train_base_anomaly_returns": 92,
+        "train_half_retained_and_valid": [46, 0],
+        "train_quarter_retained_and_valid": [35, 0],
+        "validation_base_anomaly_returns": 5,
+        "validation_half_retained_and_valid": [2, 0],
+        "validation_quarter_retained_and_valid": [0, 0]
+      },
+      "remaining_limits": "全池仍无远距至少 20 点观测，该组仅作探索。新增所检远距两级 C2 均无异常一致性，保留检测监督；基础世界已有的半采样远距支持仍有效。局部参照是按既有表面条件计算的正常几何偏离，不是路缘身份或模型困难真值。不得据此声称真实分布代表性或迁移改善；不追加补样，不修改监督、损失或 C3 默认 20。"
     }
   },
   "supervision": {
@@ -454,14 +484,21 @@
     "minimum_xy_eigenvalue": 0.01,
     "minimum_trajectory_clearance_m": 3,
     "maximum_closest_trajectory_distance_m": 12,
-    "maximum_support_attempts": 128,
+    "maximum_support_attempts": 192,
     "collision": "all_nonzero_non_ground_source_returns_in_every_frame",
     "deep_penetration_m": 0.05,
-    "support_candidates": 6,
+    "support_candidates": 12,
     "background_radius_m": 3,
     "footprint": "complete_object_local_xy_circumcircle_inside_observed_inlier_hull",
     "background": "structured_if_at_least_two_support_semantics_or_three_known_non_ground_returns_within_3m_else_ground",
-    "far_proposals": "among_up_to_six_physical_supports_use_actual_normal_rays_at_35_42.5_50m_anchor_ranges_to_rank_unoccluded_object_box_opportunities;_rendered_returns_decide_content"
+    "far_proposals": "rank_true_foreground_shape_surface_hits_in_three_predeclared_far_frames;_record_box_hits_and_fixed_final_signal_separately",
+    "reference_cluster_radius_m": 0.3,
+    "minimum_reference_positions": 3,
+    "reference_clearance_m": [
+      0.15,
+      0.65
+    ],
+    "normal_reference": "propose_ground_anchors_near_native_known_normal_returns_with_unchanged_C3_offset_in_[-0.20,-0.05]m;_protect_all_selected_reference_positions_from_occlusion"
   },
   "shape": {
     "exponents": [
@@ -487,18 +524,11 @@
   "qualification": {
     "reference_use": "normal_sources_and_predeclared_content_only",
     "minimum_eligible_frames": 1,
-    "selection": "content_round_robin_then_least_represented_shape_background_then_index",
-    "content_order": [
-      "far_few_eligible",
-      "far_denser",
-      "low_far_eligible",
-      "few_eligible",
-      "low_eligible",
-      "all"
-    ],
-    "hard_frames": "retain_every_frame_of_a_physical_world_even_when_auxiliary_targets_or_official_anomaly_count_are_invalid",
-    "candidate_membership": "all_complete_physically_valid_worlds;_no_eligible_worlds_remain_inspectable_but_are_not_selected_for_freezing",
-    "quotas": "undecided_until_candidate_measurement;_default_command_only_generates_candidates_and_previews_selection"
+    "base_selection": "retain_all_32_base_worlds_in_original_order_without_rerendering_or_auxiliary_selection",
+    "supplement_selection": "append_only_physically_valid_complete_worlds_achieving_their_predeclared_source_specific_purpose",
+    "freeze": "freeze_after_the_eight_bounded_attempts_at_actual_successful_counts;_no_filling_quotas_or_unlimited_resampling",
+    "far_denser": "exploratory_observation_group_only;_not_a_V1_selection_or_freezing_requirement",
+    "hard_frames": "all_detection_labeled_points_remain;_auxiliary_masks_may_all_be_false;_no_change_to_C1_C2_C3_or_losses"
   },
   "model_plan": {
     "backbone": "LitePT-S",
@@ -524,168 +554,115 @@
     ],
     "interpretation": "development_results_with_repeated_adaptive_observation_not_hidden_test_performance"
   },
-  "calibration_source": "results/synthetic/v1/calibration.pt",
+  "calibration_source": "results/synthetic/candidates/calibration.pt",
   "proposals": {
+    "seed_namespace": 1,
     "repeats_per_source": 2,
-    "categories": [
-      {
-        "name": "single",
-        "shape": "single",
-        "view": "ordinary",
-        "background": "ground",
-        "length_m": [
-          0.2,
-          1.4
-        ],
-        "width_m": [
-          0.12,
-          1.0
-        ],
-        "height_m": [
-          0.2,
-          0.8
-        ],
-        "proposal_ray_target": 0
-      },
-      {
-        "name": "flat",
-        "shape": "single",
-        "view": "ordinary",
-        "background": "structured",
-        "length_m": [
-          0.8,
-          1.4
-        ],
-        "width_m": [
-          0.5,
-          0.9
-        ],
-        "height_m": [
-          0.07,
-          0.16
-        ],
-        "proposal_ray_target": 0
-      },
-      {
-        "name": "joined",
-        "shape": "step",
-        "view": "ordinary",
-        "background": "structured",
-        "length_m": [
-          0.7,
-          1.4
-        ],
-        "width_m": [
-          0.4,
-          0.8
-        ],
-        "height_m": [
-          0.25,
-          0.65
-        ],
-        "proposal_ray_target": 0
-      },
-      {
-        "name": "bent_flat",
-        "shape": "elbow",
-        "view": "ordinary",
-        "background": "ground",
-        "length_m": [
-          0.8,
-          1.4
-        ],
-        "width_m": [
-          0.6,
-          1.1
-        ],
-        "height_m": [
-          0.08,
-          0.18
-        ],
-        "proposal_ray_target": 0
-      },
-      {
-        "name": "far_sparse",
-        "shape": "single",
-        "view": "far_sparse",
-        "background": "ground",
-        "length_m": [
-          0.6,
-          1.2
-        ],
-        "width_m": [
-          0.4,
-          0.7
-        ],
-        "height_m": [
-          0.25,
-          0.45
-        ],
-        "proposal_ray_target": 8
-      },
-      {
-        "name": "far_supported",
-        "shape": "bridge",
-        "view": "far_supported",
-        "background": "structured",
-        "length_m": [
-          1.2,
-          1.8
-        ],
-        "width_m": [
-          0.8,
-          1.2
-        ],
-        "height_m": [
-          0.45,
-          0.75
-        ],
-        "proposal_ray_target": 24
-      },
-      {
-        "name": "low_far_single",
-        "shape": "single",
-        "view": "low_far",
-        "background": "ground",
-        "length_m": [
-          1.4,
-          1.8
-        ],
-        "width_m": [
-          1.0,
-          1.5
-        ],
-        "height_m": [
-          0.16,
-          0.195
-        ],
-        "proposal_ray_target": 8
-      },
-      {
-        "name": "low_far_composed",
-        "shape": "elbow",
-        "view": "low_far",
-        "background": "structured",
-        "length_m": [
-          1.4,
-          1.8
-        ],
-        "width_m": [
-          1.0,
-          1.5
-        ],
-        "height_m": [
-          0.16,
-          0.195
-        ],
-        "proposal_ray_target": 8
-      }
+    "categories": {
+      "train": [
+        {
+          "name": "low_far_single",
+          "shape": "single",
+          "view": "low_far",
+          "background": "any",
+          "length_m": [
+            1.4,
+            1.8
+          ],
+          "width_m": [
+            1.0,
+            1.5
+          ],
+          "height_m": [
+            0.16,
+            0.195
+          ]
+        },
+        {
+          "name": "low_far_composed",
+          "shape": "elbow",
+          "view": "low_far",
+          "background": "any",
+          "length_m": [
+            1.4,
+            1.8
+          ],
+          "width_m": [
+            1.0,
+            1.5
+          ],
+          "height_m": [
+            0.16,
+            0.195
+          ]
+        }
+      ],
+      "validation": [
+        {
+          "name": "low_reference_single",
+          "shape": "single",
+          "view": "normal_reference",
+          "background": "any",
+          "length_m": [
+            0.8,
+            1.2
+          ],
+          "width_m": [
+            0.4,
+            0.8
+          ],
+          "height_m": [
+            0.08,
+            0.18
+          ]
+        },
+        {
+          "name": "low_reference_composed",
+          "shape": "elbow",
+          "view": "normal_reference",
+          "background": "any",
+          "length_m": [
+            0.8,
+            1.2
+          ],
+          "width_m": [
+            0.6,
+            0.9
+          ],
+          "height_m": [
+            0.08,
+            0.18
+          ]
+        }
+      ]
+    },
+    "seed_rule": "SeedSequence([2062026,1,source_sequence,index]).generate_state(1)[0]; index=category_index*2+repeat; a new stream distinct from the 32 base worlds",
+    "normal_reference_frames": [
+      40,
+      120,
+      200,
+      280,
+      360,
+      440,
+      520,
+      600
     ],
-    "seed_rule": "SeedSequence([seed,source_sequence,index]).generate_state(1)[0]; index=category_index*2+repeat; seed remains 2062026",
-    "budget": "16 candidates for each normal source; 32 fixed seeds; at most 18096 complete-sequence frames; no outcome-dependent additional candidates",
-    "support_budget": "one shape and material per seed; at most 128 normal ground proposals, collecting up to 6 geometric/background-qualified supports; deterministic best ray opportunity score then proposal order",
-    "score": "maximize number of tested far frames with at least 5 unoccluded box rays, then minimize total absolute deviation from category proposal_ray_target; ordinary uses first physically valid support",
-    "interpretation": "proposal_ray_target is a predeclared box-opportunity heuristic, neither actual return count nor C2 validity requirement; all full-sequence frames are retained",
-    "composed_contacts": "step: two parts share the support level; elbow: connected bent footprint; bridge: two legs below a connected raised crosspiece; whole bounds determine all dimensions and placement"
+    "far_check_ranges_m": [
+      36,
+      42,
+      48
+    ],
+    "yaw_offsets_rad": [
+      -0.5235987755982988,
+      0.0,
+      0.5235987755982988
+    ],
+    "budget": "exactly four attempts per source, at most eight complete new worlds and 4524 new frames; never append seeds or replace a failed candidate",
+    "support_budget": "one fixed shape and material per seed; up to 192 anchor attempts and 12 geometrically qualified supports; three specified yaw offsets per support",
+    "far_score": "maximize number of check frames with at least five distinct true foreground surface ray hits, then sum of true hits capped at twelve per frame, then proposal order; final signal draws do not enter the score",
+    "normal_reference_goal": "at least one official-eligible complete frame of a low object jointly observes at least three distinct original known normal positions within 2m of an inserted return, each with unchanged default C3-valid offset in [-0.20,-0.05]m; all protected reference positions retain exact original xyzi and labels",
+    "normal_reference_search": "compute default C3 on complete original scans at the eight fixed normal-source frames; choose a native reference cluster within 0.3m and a normal anchor at whole-object footprint radius plus 0.15 to 0.65m; protect the cluster; qualify on its declared source frame after full rendering",
+    "low_far_goal": "whole-object local height <=0.2m and at least one complete rendered frame with anomaly median range [35,50]m and >=5 anomaly returns after [2.5,50]m filtering",
+    "signal_rule": "reuse exact shape intersection, foreground competition and fixed world/frame/ray signal draws; do not change return probability, relocate points or repeat signal draws"
   }
 }

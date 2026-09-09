@@ -39,32 +39,28 @@ def test_content_selection_precedes_supervision_and_keeps_every_eligible_far_fra
     assert selected == select_checks([world])
 
 
-def test_candidate_selection_balances_worlds_and_separates_far_count_strata():
-    from copy import deepcopy
-    from src.coverage import conditions, select_checks
+def test_supplements_preserve_base_order_and_keep_content_failures_out():
+    from src.coverage import select_checks
     from src.generate import select_worlds
 
     rows = [dict(frame=i, count=n, in_range=n, range=r)
             for i, (n, r) in enumerate([(3, 40), (5, 36), (10, 40), (19, 49),
                                        (20, 36), (40, 40), (60, 49), (100, 6)])]
-    world = dict(split="train", world="candidate_000", height_m=.1, rows=rows)
+    world = dict(split="train", world="supplement_000", height_m=.1, rows=rows, content_check_frames=[5])
     selected = select_checks([world], far_limit=2)
-    assert [r["frame"] for r in selected] == [0, 1, 2, 3, 4, 6, 7]
+    assert [r["frame"] for r in selected] == list(range(8))
     assert selected[0]["reasons"] == ["far_below_official_threshold"]
-    reports = []
-    for index, (shape, background, row) in enumerate([
-            ("single", "ground", rows[1]), ("single", "ground", rows[1]),
-            ("bridge", "structured", rows[4]), ("elbow", "ground", rows[3])]):
-        reports.append(dict(index=index, status="qualified", shape_family=shape, background=background,
-                            content={k: dict(frames=int(v), anomaly_returns=int(v) * row["count"])
-                                     for k, v in conditions(world, row).items()}))
-    chosen, selection = select_worlds(reports)
-    assert [r["index"] for r in chosen] == [0, 2, 3, 1]
-    scaled = deepcopy(reports)
-    for value in scaled[1]["content"].values():
-        value["frames"] *= 1000
-        value["anomaly_returns"] *= 1000
-    assert select_worlds(scaled)[1] == selection
+    assert selected[5]["reasons"] == ["declared_content_witness"]
+    base = [dict(path="../candidates/train/candidate_009", world_identity="a" * 64),
+            dict(path="../candidates/train/candidate_000", world_identity="b" * 64)]
+    reports = [dict(index=2, status="qualified", purpose=dict(achieved=True), world_identity="c" * 64, reason=None),
+               dict(index=0, status="rejected", purpose=dict(achieved=False), reason="content"),
+               dict(index=1, status="rejected", purpose=dict(achieved=True), reason="physical")]
+    chosen, selection = select_worlds(base, reports, "train")
+    assert chosen[:2] == base
+    assert len(chosen) == 3 and chosen[-1]["path"] == "train/supplement_002"
+    assert selection["accepted_supplements"] == [2]
+    assert selection["rejected_supplements"] == {"0": "content", "1": "physical"}
 
 
 def test_profile_weights_and_quantile_bounds(tmp_path):

@@ -276,3 +276,39 @@ def test_composed_shape_bounds_grounding_and_distinct_contacts():
             points = np.vstack(([0, 0, -.14], np.column_stack((offsets[:2, :2], np.full(2, -.14)))))
             signed = shape.signed_distance(points)
             assert signed[0] > 0 and (signed[1:] < 0).all()
+
+
+def test_proposal_counts_true_surface_gaps_occlusion_and_the_same_signal(monkeypatch):
+    from src.generate import make_shape, ray_observation
+    from src.render import MaterialSpec, ObjectSpec, RayGrid, SensorCalibration, WorldSpec, render_frame
+
+    shape, geometry = make_shape(np.random.default_rng(13),
+                                dict(shape="bridge", length_m=[1.2, 1.2], width_m=[.8, .8], height_m=[.3, .3]),
+                                dict(exponents=[1., 1.], composed_exponents=[1., 1.]))
+    x = np.asarray(shape.primitive_offsets_m)[:2, 0]
+    origins = np.array([[0, 0, -.14], [0, x[0], -.14], [0, x[1], -.14]])
+    directions = np.tile([1., 0, 0], (3, 1))
+    grid = RayGrid(directions, np.array([0.]), np.zeros(3), beam_count=1, origins_sensor=origins)
+    semantic = np.full(3, 40, np.uint16)
+    xyz = origins + 6 * directions
+    source = make_source_frame(0, np.column_stack((xyz, [.2] * 3)).astype(np.float32), np.eye(4),
+                               PointLabels(semantic.astype(np.uint32), semantic, np.zeros(3, np.uint16)),
+                               partition="train", sequence_id=206)
+    item = ObjectSpec(1, "anomaly-proxy", shape, MaterialSpec(.5, .1), (3., 0., 0.),
+                      ((0., -1., 0.), (1., 0., 0.), (0., 0., 1.)))
+    world = WorldSpec(13, 206, (item,))
+    sensor = SensorCalibration.constant(1.)
+    monkeypatch.setattr(SensorCalibration, "return_chance", lambda self, beam, distance, incidence, bias: np.ones_like(distance))
+    result, foreground = ray_observation(source, world, grid, sensor, geometry)
+    assert (result["available_box_rays"], result["foreground_surface_rays"], result["final_anomaly_slots"]) == (3, 2, 2)
+    rendered = render_frame(source, world, grid, sensor)
+    np.testing.assert_array_equal(foreground, rendered.inserted_mask)
+    blocked_xyz = source.xyzi.copy()
+    blocked_xyz[1, :3] = origins[1] + directions[1]
+    blocked = make_source_frame(0, blocked_xyz, np.eye(4), source.labels, partition="train", sequence_id=206)
+    blocked_result, _ = ray_observation(blocked, world, grid, sensor, geometry)
+    assert blocked_result["foreground_surface_rays"] == 1
+    monkeypatch.setattr(SensorCalibration, "return_chance", lambda self, beam, distance, incidence, bias: np.zeros_like(distance))
+    missing, surface = ray_observation(source, world, grid, sensor, geometry)
+    assert missing["foreground_surface_rays"] == 2 and missing["final_anomaly_slots"] == 0
+    np.testing.assert_array_equal(surface, render_frame(source, world, grid, sensor).occluded_original_mask)
