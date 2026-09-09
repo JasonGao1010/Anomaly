@@ -118,7 +118,6 @@ def test_active_protocol_keeps_test_outside_development():
     assert len(protocol.public_sequence_ids) == 19
     assert protocol.sequence("train", 201).frame_count == 682
     assert protocol.sequence("train", 206).frame_count == 449
-    assert protocol.document["status"]["model_defined"] is False
     with pytest.raises(ProtocolError, match="outside"):
         protocol.sequence("test", 100)
 

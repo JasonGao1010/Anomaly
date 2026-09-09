@@ -69,8 +69,14 @@
       "inventory_worlds": 40,
       "inventory_frames": 22620,
       "local_scope": "仅新增 8 世界的固定完整扫描；未重复计算基础 32 世界的辅助目标，也未补算全池数组。",
-      "checked_scans": {"train": 24, "validation": 17},
-      "checked_eligible_far_scans": {"train": 14, "validation": 1},
+      "checked_scans": {
+        "train": 24,
+        "validation": 17
+      },
+      "checked_eligible_far_scans": {
+        "train": 14,
+        "validation": 1
+      },
       "independent_surface_probes": 33
     }
   },
@@ -114,27 +120,64 @@
     },
     "supplement_findings": {
       "manifest": "results/synthetic/experiment/manifest.json",
-      "attempted_worlds": {"train": 4, "validation": 4},
-      "accepted_worlds": {"train": 4, "validation": 4},
-      "frozen_worlds": {"train": 20, "validation": 20},
-      "frozen_frames": {"train": 8980, "validation": 13640},
-      "eligible_far_worlds": {"train": 9, "validation": 13},
-      "eligible_low_far_worlds": {"train": 6, "validation": 7},
-      "new_train_low_far": {"worlds": 4, "frames": 166, "anomaly_returns": 1026},
+      "attempted_worlds": {
+        "train": 4,
+        "validation": 4
+      },
+      "accepted_worlds": {
+        "train": 4,
+        "validation": 4
+      },
+      "frozen_worlds": {
+        "train": 20,
+        "validation": 20
+      },
+      "frozen_frames": {
+        "train": 8980,
+        "validation": 13640
+      },
+      "eligible_far_worlds": {
+        "train": 9,
+        "validation": 13
+      },
+      "eligible_low_far_worlds": {
+        "train": 6,
+        "validation": 7
+      },
+      "new_train_low_far": {
+        "worlds": 4,
+        "frames": 166,
+        "anomaly_returns": 1026
+      },
       "new_validation_local_references": {
         "worlds": 4,
-        "source_frames": [280, 520],
+        "source_frames": [
+          280,
+          520
+        ],
         "protected_distinct_frame_positions": 83,
         "all_preserved_and_default_C3_valid": true,
         "interpretation": "四个物体与放置搭配共享同一正常序列，三项核对来自第 520 帧；世界数不是独立正常背景数。"
       },
       "checked_new_far_C2": {
         "train_base_anomaly_returns": 92,
-        "train_half_retained_and_valid": [46, 0],
-        "train_quarter_retained_and_valid": [35, 0],
+        "train_half_retained_and_valid": [
+          46,
+          0
+        ],
+        "train_quarter_retained_and_valid": [
+          35,
+          0
+        ],
         "validation_base_anomaly_returns": 5,
-        "validation_half_retained_and_valid": [2, 0],
-        "validation_quarter_retained_and_valid": [0, 0]
+        "validation_half_retained_and_valid": [
+          2,
+          0
+        ],
+        "validation_quarter_retained_and_valid": [
+          0,
+          0
+        ]
       },
       "remaining_limits": "全池仍无远距至少 20 点观测，该组仅作探索。新增所检远距两级 C2 均无异常一致性，保留检测监督；基础世界已有的半采样远距支持仍有效。局部参照是按既有表面条件计算的正常几何偏离，不是路缘身份或模型困难真值。不得据此声称真实分布代表性或迁移改善；不追加补样，不修改监督、损失或 C3 默认 20。"
     }
@@ -258,7 +301,7 @@
       },
       "dataset_directory": "results/synthetic/v1"
     },
-    "status": "已实现三项监督和分类别损失聚合；同一批 14 帧已完成 C3 可见支持 20 对 10 的比较，参考支持仍为 20，正式默认可见支持仍为 20。全量辅助监督未补算，模型未实现或训练。",
+    "status": "最终实验清单的 8980 张训练帧、13640 张合成验证帧已完成三视图训练监督准备。三项定义和损失聚合不变，C3 参考与可见支持均为 20。V1 实现及隔离检查完成，正式训练等待用户逐文件审查并确认。",
     "common": {
       "input": "每个视图独立输入 source.xyzi[source.real_slots]，只含当前扫描传感器坐标与原始强度；完整扫描中的忽略标签回波仍可作为输入，零坐标空槽不进入模型。",
       "identity": "每个点用 world_identity、源分区、源序列、frame_id、view_id、原始 source_slot 标识。全帧点行对应 source.real_slots；NPZ 中的 source_slot 只列变化槽位，不能冒充全帧点索引。",
@@ -276,7 +319,7 @@
         "calculation": "对每个不同位置 p_i，从当前视图全部实际回波中找 0 < ||p_j-p_i|| <= 0.5 的最近至多 6 个不同位置，等距按代表槽位排序，记为 K_i。|K_i| >= 3 时 delta_i=max(median_j ||p_j-p_i||, 1e-6)，scale_valid_i=true；否则 delta_i=0、scale_valid_i=false。该过程完全不使用标签。",
         "representation": "真实位移 p_j-p_i 始终保留；scale_valid_i=true 时可同时计算 (p_j-p_i)/(delta_i+1e-6)。无有效尺度时关闭归一化分量及依赖它的辅助约束，不以零尺度声称采样极密。每个稀疏视图重新计算自己的尺度。"
       },
-      "parameter_status": "局部邻域与 C3 几何阈值保持原定义；C1 区域内类别等权并按 3:1 聚合区域，C2/C3 有效类别等权，均为 V1 初始规则。C3 正式最低可见支持数仍为 20，10 仅作同批样本对照。辅助项之间和基础检测损失的权重本轮不设定。",
+      "parameter_status": "局部邻域与 C3 几何阈值保持原定义；C1 区域内类别等权并按 3:1 聚合区域，C2/C3 有效类别等权。C3 正式最低可见支持数仍为 20，10 仅为历史对照。基础检测与三个辅助项之间的初始权重见 training.loss_coefficients。",
       "availability": [
         {
           "item": "当前帧、逐点检测标签、插入前正常帧与前后槽位身份",
@@ -285,8 +328,8 @@
         },
         {
           "item": "三项监督字段及其有效性记录",
-          "status": "已经具备计算实现；全池需要补算",
-          "evidence": "src/supervision.py: compute_supervision；辅助 NPZ 按 view_0、view_1、view_2 保存，各视图 source_slot 为完整输入回波槽位。冻结世界与基础差量文件保持原样。"
+          "status": "已经具备；最终实验池所需训练数组已全量保存",
+          "evidence": "src/supervision.py: prepare_training_dataset、load_training_auxiliary；results/supervision/experiment/manifest.json 已完成 22620 个基础样本。每个 NPZ 按 view_0、view_1、view_2 保存训练目标、有效掩码、删减对应和完整输入回波槽位，绑定当前世界与原始正常源。冻结世界与基础差量保持原样。"
         }
       ]
     },
@@ -325,8 +368,8 @@
         },
         {
           "item": "无标签尺度、可信邻接图、边界槽位对、归一化距离和忽略原因",
-          "status": "已经具备计算实现；全池需要补算",
-          "evidence": "src/supervision.py: boundary_targets；本轮只计算固定先导样本，覆盖率以 results/supervision/pilot/summary.json 的实际结果为准，不代表整个池。"
+          "status": "已经具备；最终实验池所需训练数组已全量保存",
+          "evidence": "src/supervision.py: boundary_targets；训练缓存保存三个视图的距离、有效掩码和槽位。邻接边及忽略原因仍由原诊断接口提供，没有额外保存全池诊断数组；历史先导覆盖数不作为全池结论。"
         }
       ]
     },
@@ -379,8 +422,8 @@
         },
         {
           "item": "两个离线删减视图的保留槽位、配对记录、无标签尺度及一致性有效掩码",
-          "status": "已经具备计算实现；全池需要补算",
-          "evidence": "src/supervision.py: thinning_pair、sampling_targets；本轮只计算固定先导样本，覆盖率以 results/supervision/pilot/summary.json 的实际结果为准，不代表整个池。"
+          "status": "已经具备；最终实验池所需训练数组已全量保存",
+          "evidence": "src/supervision.py: thinning_pair、sampling_targets；训练缓存保存两个删减级别的槽位、基础行对应、相位和一致性有效掩码；训练读取器精确还原保留点的坐标、强度与标签，各视图的无标签尺度独立计算。"
         }
       ]
     },
@@ -426,8 +469,8 @@
         },
         {
           "item": "逐点插入前平面、逐点表面位移目标、插入后/稀疏后支撑检查及忽略原因",
-          "status": "已经具备计算实现；全池需要补算",
-          "evidence": "src/supervision.py: surface_targets；本轮只计算固定先导样本，覆盖率以 results/supervision/pilot/summary.json 的实际结果为准，不代表整个池。"
+          "status": "已经具备；最终实验池所需训练数组已全量保存",
+          "evidence": "src/supervision.py: surface_targets；训练缓存保存三个视图的表面位移、有效掩码和槽位。参考平面、支撑与忽略原因仍由原诊断接口提供，不额外保存全池诊断数组；原表面条件和目标计算保持不变。"
         }
       ]
     },
@@ -535,13 +578,220 @@
     "C1": "boundary_distance_auxiliary_supervision",
     "C2": "absolute_and_local_sampling_normalized_geometry",
     "C3": "learned_normal_surface_expectation_from_current_xyzi",
-    "status": "implement_after_dataset_freeze"
+    "status": "implemented_pending_user_code_review_and_formal_training"
+  },
+  "model": {
+    "name": "V1",
+    "encoder_source": "prs-eth/LitePT@436d04801c8151faebe66a1b2d368a9711e7e6aa standalone LitePT-S",
+    "initialization": "seeded PyTorch and spconv module defaults; no pretrained weights",
+    "voxel_size_m": 0.05,
+    "voxel_reduction": "mean features and coordinates of every return; map decoded context back by exact inverse",
+    "feature_divisor": [
+      50.0,
+      50.0,
+      5.0,
+      1.0
+    ],
+    "geometry_channels": 32,
+    "point_refinement": "each original point retains its offset from its voxel mean divided by voxel size, original intensity, physical and normalized local geometry; labels never vote at voxel level",
+    "fusion_channels": 96,
+    "head_channels": 48,
+    "geometry": "shared edge MLP on physical displacement, sampling-normalized displacement, intensity difference and label-free scale availability; masked mean/max over the existing six-neighbor current-scan geometry; unavailable normalized terms are zero, original points remain",
+    "outputs": "sigmoid unsigned boundary distance; unconstrained vertical surface offset in metres; anomaly logit from fused features and both predictions with detection gradients through both heads",
+    "backbone": {
+      "in_channels": 4,
+      "order": [
+        "z",
+        "z-trans",
+        "hilbert",
+        "hilbert-trans"
+      ],
+      "stride": [
+        2,
+        2,
+        2,
+        2
+      ],
+      "enc_depths": [
+        2,
+        2,
+        2,
+        6,
+        2
+      ],
+      "enc_channels": [
+        36,
+        72,
+        144,
+        252,
+        504
+      ],
+      "enc_num_head": [
+        2,
+        4,
+        8,
+        14,
+        28
+      ],
+      "enc_patch_size": [
+        1024,
+        1024,
+        1024,
+        1024,
+        1024
+      ],
+      "enc_conv": [
+        true,
+        true,
+        true,
+        false,
+        false
+      ],
+      "enc_attn": [
+        false,
+        false,
+        false,
+        true,
+        true
+      ],
+      "enc_rope_freq": [
+        100,
+        100,
+        100,
+        100,
+        100
+      ],
+      "dec_depths": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "dec_channels": [
+        72,
+        72,
+        144,
+        252
+      ],
+      "dec_num_head": [
+        4,
+        4,
+        8,
+        14
+      ],
+      "dec_patch_size": [
+        1024,
+        1024,
+        1024,
+        1024
+      ],
+      "dec_conv": [
+        false,
+        false,
+        false,
+        false
+      ],
+      "dec_attn": [
+        false,
+        false,
+        false,
+        false
+      ],
+      "dec_rope_freq": [
+        100,
+        100,
+        100,
+        100
+      ],
+      "mlp_ratio": 4,
+      "qkv_bias": true,
+      "attn_drop": 0.0,
+      "proj_drop": 0.0,
+      "drop_path": 0.1,
+      "pre_norm": true,
+      "shuffle_orders": false,
+      "enc_mode": false,
+      "norm_running_stats": false
+    },
+    "enhancements": {
+      "boundary": true,
+      "sampling": true,
+      "surface": true
+    },
+    "normalization": "Backbone BatchNorm affine parameters are learned; both training and inference compute mean/variance from the current scan only (track_running_stats=false). No cross-view statistics or output-score normalization."
   },
   "training": {
     "fixed_epochs": null,
     "review_interval_epochs": 1,
     "continuation": "review_each_epoch_before_deciding_to_continue",
-    "budget_note": "previous_fixed_ten_epoch_setting_revoked_by_user"
+    "budget_note": "previous_fixed_ten_epoch_setting_revoked_by_user",
+    "run_directory": "results/v1",
+    "supervision_directory": "results/supervision/experiment",
+    "storage": {
+      "supervision_budget_bytes": 28000000000,
+      "real_prediction_upper_bytes": 9079619584,
+      "synthetic_prediction_upper_bytes": 14433075200,
+      "largest_metric_temporary_bytes": 14433075200,
+      "checkpoint_and_pending_write_bytes": 1000000000,
+      "peak_additional_bytes": 66945769984
+    },
+    "seed": 2062028,
+    "epochs_this_run": 1,
+    "base_frames_per_epoch": 8980,
+    "views": "base, half and quarter are three independent single-scan forwards; teacher scores detached; no point feature exchange",
+    "batch_base_frames": 1,
+    "gradient_accumulation": 4,
+    "optimizer": "AdamW",
+    "learning_rate": 0.001,
+    "weight_decay": 0.005,
+    "betas": [
+      0.9,
+      0.999
+    ],
+    "warmup_updates": 100,
+    "warmup_start_factor": 0.1,
+    "scheduler_after_warmup": "constant",
+    "gradient_clip_norm": 1.0,
+    "precision": "float16 autocast with GradScaler; float32 prediction heads and loss reductions; no TF32",
+    "loss_coefficients": {
+      "boundary": 0.1,
+      "surface": 0.1,
+      "sampling": 0.1
+    },
+    "detection_loss": "binary cross entropy with logits; mean separately over valid normal/anomaly points, then equal mean over present classes; ignore -1",
+    "view_aggregation": "detection, boundary and surface average three per-view losses; consistency averages the two sparse-to-detached-base losses; a completely empty auxiliary loss is zero",
+    "sampling": "one seeded permutation of all 8980 base frames, no dropping, cropping, class resampling or extra augmentation",
+    "evaluation": "epoch-end checkpoint; all 13640 synthetic base frames and auxiliary diagnostics; label-forbidden inference on all 8659 real val19 frames followed by the existing official evaluator",
+    "stop": "save model, optimizer, scaler, random state, visited identities and successful update count after epoch one; never start epoch two automatically",
+    "initial_loss_scale": 1024,
+    "loader_workers": 4,
+    "torch_threads": 2,
+    "checkpoint_interval_updates": 50,
+    "implementation_check": {
+      "training_samples": [
+        {
+          "world": "supplement_002",
+          "frame": 37
+        },
+        {
+          "world": "supplement_001",
+          "frame": 207
+        }
+      ],
+      "updates_per_arm": 64,
+      "arms": [
+        "joint",
+        "detection_only"
+      ],
+      "purpose": "isolated expression and learnability check, not a coverage or transfer experiment; discard all optimized weights; also disable every enhancement for one forward/backward structural check",
+      "special_slot_sample": {
+        "split": "validation",
+        "world": "candidate_000",
+        "frame": 0,
+        "optimized": false
+      }
+    },
+    "current_authorization": "finish implementation, offline supervision and isolated checks; pause for user code review; formal epoch and model evaluation require the user to confirm"
   },
   "evaluation": {
     "implementation": "src/evaluate.py",

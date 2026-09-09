@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ProcessPoolExecutor, as_completed
 import hashlib
 import json
+import multiprocessing as mp
 import os
 from pathlib import Path
 import resource
+import tempfile
 import time
 
 import numpy as np
@@ -16,7 +19,7 @@ from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import dijkstra
 from scipy.spatial import cKDTree, ConvexHull, QhullError
 
-from .data import FrozenDataset, _atomic_json, host_disk, source_identity
+from .data import FrozenDataset, FrozenFrame, _atomic_json, host_disk, source_identity
 from .render import calibrated_ray_grid, canonical_ray_slots_for_source, shape_from_dict, shape_geometry
 
 
@@ -91,6 +94,16 @@ def surface_loss(prediction, target, labels, valid):
     selected = valid & ((labels == 0) | (labels == 1))
     error = (prediction[selected] - target.detach()[selected]).abs()
     return (error * weights[selected]).sum()
+
+
+def detection_loss(logits, labels):
+    """Detection is supervised even when every auxiliary mask is false."""
+    import torch
+    valid = labels >= 0
+    weights = loss_point_weights(labels, valid, dtype=logits.dtype)
+    error = torch.nn.functional.binary_cross_entropy_with_logits(
+        logits[valid].float(), labels[valid].float(), reduction="none")
+    return (error * weights[valid]).sum()
 
 
 class ScanGeometry:
@@ -460,7 +473,7 @@ def surface_reference_data(original, sample, pairs, parameters):
     return ground, visible
 
 
-def surface_targets(original, sample, geometries, labels, pairs, parameters, visible_minimums=None):
+def surface_targets(original, sample, geometries, labels, pairs, parameters, visible_minimums=None, reference_cache=None):
     """Return {visible minimum: view targets}, sharing every reference plane."""
     thresholds = np.asarray(visible_minimums if visible_minimums is not None
                             else [parameters["minimum_visible_support_points"]], np.int64)
@@ -482,7 +495,29 @@ def surface_targets(original, sample, geometries, labels, pairs, parameters, vis
     seen_count = np.zeros((n, views), np.int32)
     quality = np.zeros(n, np.uint8)
     seen_quality = np.zeros((n, views, len(thresholds)), np.uint8)
-    rows = np.flatnonzero((counts >= parameters["minimum_reference_support_points"]) & known.any(axis=1))
+    affected = np.ones(n, bool)
+    if reference_cache is not None:
+        if (reference_cache["source"] != source_identity(original) or reference_cache["parameters"] != parameters
+                or list(thresholds) != [parameters["minimum_visible_support_points"]]):
+            raise ValueError("normal-surface reuse has different scientific inputs")
+        changed = sample.inserted_mask | sample.occluded_original_mask
+        affected = ~known.any(axis=1)
+        np.logical_or.at(affected, dense.inverse, changed[dense.slots])
+        changed_returns = changed & ~original.zero_slot_mask
+        if np.any(changed_returns):
+            nearest = cKDTree(original.xyzi[changed_returns, :3].astype(float)).query(dense.xyz, workers=dense.workers)[0]
+            affected |= nearest == 0  # Removing a conflicting alias can change query-label availability.
+        ground_slots = reference_cache["ground_slots"]
+        changed_ground = ground_slots[changed[ground_slots]]
+        if len(changed_ground):
+            # Only queries whose original reference disk intersects a changed support can differ.
+            distance = cKDTree(original.xyzi[changed_ground, :2].astype(float)).query(dense.xyz[:, :2], workers=dense.workers)[0]
+            affected |= distance <= np.nextafter(parameters["xy_radius_m"], np.inf)
+        for pair in pairs:
+            key = _phase_key(pair["phase"])
+            if not np.array_equal(pair["ray_keep"], reference_cache["views"][key]["ray_keep"]):
+                raise ValueError("surface cache uses a different exact ray mask")
+    rows = np.flatnonzero((counts >= parameters["minimum_reference_support_points"]) & known.any(axis=1) & affected)
     p = np.array([parameters["minimum_reference_support_points"], parameters["minimum_inlier_residual_m"],
                   parameters["mad_multiplier"], parameters["mad_normalization"],
                   parameters["maximum_plane_rmse_m"], np.tan(np.deg2rad(parameters["maximum_slope_degrees"])),
@@ -512,10 +547,53 @@ def surface_targets(original, sample, geometries, labels, pairs, parameters, vis
                                                 surface_seen_count=seen_count[back, view],
                                                 surface_plane_rejection=quality[back],
                                                 surface_seen_rejection=seen_quality[back, view, level]))
+            if reference_cache is not None:
+                cached = reference_cache["views"]["base" if view == 0 else _phase_key(pairs[view-1]["phase"])]
+                unchanged_rows = ~affected[back]
+                for name, array in results[int(threshold)][view].items():
+                    array[unchanged_rows] = cached[name][g.slots[unchanged_rows]]
     return results
 
 
-def compute_supervision(sample, original, grid, world_seed, protocol, workers=1, progress=None):
+def _phase_key(phase):
+    return f'{phase["level_index"]}/{phase["phase_b"]}/{phase["phase_c"]}'
+
+
+def normal_surface_cache(original, grid, protocol, workers):
+    """Fit a normal source once for all declared phases; reuse only unaffected query disks."""
+    empty = np.zeros(original.slot_count, bool)
+    sample = FrozenFrame(original, source_identity(original), empty, empty)
+    slots = original.real_slots
+    canonical = grid.canonical_ray_by_slot[canonical_ray_slots_for_source(original, grid)]
+    pairs = []
+    for level in protocol["supervision"]["C2"]["levels"]:
+        for b in range(level["beam_stride"]):
+            for c in range(level["column_stride"]):
+                keep = (((canonical // grid.columns) % level["beam_stride"] == b)
+                        & ((canonical % grid.columns) % level["column_stride"] == c))
+                rows = np.flatnonzero(keep[slots]).astype(np.int32)
+                pairs.append(dict(ray_keep=keep, dense_row=rows, sparse_source_slot=slots[rows],
+                                  phase=dict(**level, phase_b=b, phase_c=c)))
+    scale = protocol["supervision"]["common"]["sampling_scale"]
+    geometries = [ScanGeometry(original.xyzi[slots], slots, scale, workers)]
+    geometries.extend(ScanGeometry(original.xyzi[p["sparse_source_slot"]], p["sparse_source_slot"], scale, workers) for p in pairs)
+    labels = [sample.anomaly_target[g.slots] for g in geometries]
+    parameters = protocol["supervision"]["C3"]["parameters"]
+    values = surface_targets(original, sample, geometries, labels, pairs, parameters)[parameters["minimum_visible_support_points"]]
+    views = {}
+    for i, (g, target) in enumerate(zip(geometries, values)):
+        record = {}
+        for name, value in target.items():
+            record[name] = np.zeros(original.slot_count, value.dtype)
+            record[name][g.slots] = value
+        record["ray_keep"] = np.ones(original.slot_count, bool) if i == 0 else pairs[i-1]["ray_keep"]
+        views["base" if i == 0 else _phase_key(pairs[i-1]["phase"])] = record
+    ground_slots = slots[(original.labels.semantic_target[slots] != 255)
+                         & np.isin(original.labels.semantic[slots], parameters["ground_semantics"])]
+    return dict(source=source_identity(original), parameters=parameters, ground_slots=ground_slots, views=views)
+
+
+def compute_supervision(sample, original, grid, world_seed, protocol, workers=1, progress=None, surface_cache=None):
     """Training-only targets; each geometry object sees its complete current scan."""
     config = protocol["supervision"]
     slots = sample.source.real_slots
@@ -540,7 +618,7 @@ def compute_supervision(sample, original, grid, world_seed, protocol, workers=1,
         target.update(sparse_source_slot=pair["sparse_source_slot"], dense_row=pair["dense_row"])
     if progress:
         progress("sampling_pairs")
-    surfaces = surface_targets(original, sample, geometries, labels, pairs, config["C3"]["parameters"])
+    surfaces = surface_targets(original, sample, geometries, labels, pairs, config["C3"]["parameters"], reference_cache=surface_cache)
     for target, surface in zip(result, surfaces[config["C3"]["parameters"]["minimum_visible_support_points"]]):
         target.update(surface)
     if progress:
@@ -985,17 +1063,198 @@ def compare_pilot(protocol, data_root, workers):
     print(json.dumps(dict(comparison=str(output / "summary.json"), frames=len(records))), flush=True)
 
 
+def training_identity(protocol):
+    config = protocol["supervision"]
+    parameters = dict(seed=protocol["seed"], scale=config["common"]["sampling_scale"],
+                      boundary=config["C1"]["parameters"], levels=config["C2"]["levels"],
+                      sampling=config["C2"]["evidence_parameters"], surface=config["C3"]["parameters"])
+    implementation = {name: hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
+                      for name in ("supervision.py", "data.py", "scene.py", "render.py", "protocol.py")}
+    rays = hashlib.sha256(Path(protocol["calibration"]["rays"]).read_bytes()).hexdigest()
+    return hashlib.sha256(json.dumps(dict(parameters=parameters, implementation=implementation, rays=rays),
+                                    sort_keys=True).encode()).hexdigest()
+
+
+def auxiliary_path(protocol, split, frozen_path):
+    return Path(protocol["training"]["supervision_directory"]) / split / frozen_path.parent.parent.name / frozen_path.name
+
+
+def auxiliary_binding(sample, original, frozen_path, identity):
+    return dict(configuration=identity, world=sample.world_identity, source=source_identity(original),
+                sequence=original.sequence_id, frame=original.frame_id,
+                delta=hashlib.sha256(frozen_path.read_bytes()).hexdigest())
+
+
+def load_training_auxiliary(path, sample, original, frozen_path, identity):
+    """Verify the full scientific identity before exposing aligned training-only arrays."""
+    with np.load(path, allow_pickle=False) as saved:
+        if (saved["format"].item() != "stu-v1-training-supervision"
+                or json.loads(saved["binding"].item()) != auxiliary_binding(sample, original, frozen_path, identity)):
+            raise ValueError("auxiliary cache belongs to a different world, source or supervision definition")
+        views = [{key.split("/", 1)[1]: saved[key] for key in saved.files if key.startswith(f"view_{v}/")}
+                 for v in range(3)]
+    if not np.array_equal(views[0]["source_slot"], sample.source.real_slots):
+        raise ValueError("auxiliary base slots differ from the frozen current scan")
+    for v, view in enumerate(views):
+        slots = view["source_slot"]
+        if v:
+            rows = view["dense_row"]
+            if (np.any(np.diff(rows) <= 0) or np.any(rows < 0) or np.any(rows >= len(views[0]["source_slot"]))
+                    or not np.array_equal(slots, views[0]["source_slot"][rows])):
+                raise ValueError("sparse-to-base source-slot correspondence is not exact")
+        for name in ("boundary_distance", "boundary_valid", "surface_offset_z", "surface_valid"):
+            if view[name].shape != slots.shape:
+                raise ValueError("auxiliary target rows differ from view slots")
+        for target, valid in (("boundary_distance", "boundary_valid"), ("surface_offset_z", "surface_valid")):
+            if view[valid].dtype != np.bool_ or not np.isfinite(view[target][view[valid]]).all():
+                raise ValueError("valid auxiliary supervision is not finite")
+    return views
+
+
+def prepare_training_sample(dataset, index, split, protocol, identity, threads, *, original=None, reuse=None, surface_cache=None):
+    frozen_path, world_identity, frame = dataset.samples[index]
+    original = dataset.sequence[frame] if original is None else original
+    sample = FrozenFrame.load(frozen_path, original, world_identity)
+    destination = auxiliary_path(protocol, split, frozen_path)
+    if destination.exists():
+        load_training_auxiliary(destination, sample, original, frozen_path, identity)
+        return dict(bytes=destination.stat().st_size, reused_file=True, reused_calculation=False)
+    definition = json.loads((frozen_path.parent.parent / "world.json").read_text())["world"]
+    grid = calibrated_ray_grid(protocol["calibration"]["rays"])
+    pairs = [thinning_pair(sample, original, grid, definition["seed"], level, protocol["seed"])
+             for level in protocol["supervision"]["C2"]["levels"]]
+    # Within this one original frame, identical full scans and phases have identical targets.
+    # The saved identity still belongs to each individual world; no cross-source reuse occurs.
+    key = hashlib.sha256()
+    key.update((identity + source_identity(original)).encode())
+    for array in (sample.source.xyzi, sample.anomaly_target, sample.inserted_mask, sample.occluded_original_mask):
+        key.update(array.tobytes())
+    key.update(json.dumps([pair["phase"] for pair in pairs], sort_keys=True).encode())
+    key = key.hexdigest()
+    reused = reuse is not None and key in reuse
+    if reused:
+        arrays = dict(reuse[key])
+    else:
+        geometries, labels, pairs, targets = compute_supervision(sample, original, grid, definition["seed"], protocol, threads,
+                                                               surface_cache=surface_cache)
+        arrays = {}
+        for v, (geometry, target) in enumerate(zip(geometries, targets)):
+            arrays[f"view_{v}/source_slot"] = geometry.slots
+            for name in ("boundary_distance", "boundary_valid", "surface_offset_z", "surface_valid"):
+                arrays[f"view_{v}/{name}"] = target[name]
+            if v:
+                for name in ("dense_row", "sampling_consistency_valid"):
+                    arrays[f"view_{v}/{name}"] = target[name]
+                arrays[f"view_{v}/phase"] = np.asarray(json.dumps(pairs[v-1]["phase"], sort_keys=True))
+        if reuse is not None:
+            reuse[key] = dict(arrays)
+    arrays.update(format=np.asarray("stu-v1-training-supervision"),
+                  binding=np.asarray(json.dumps(auxiliary_binding(sample, original, frozen_path, identity), sort_keys=True)))
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(dir=destination.parent, delete=False) as stream:
+            temporary = Path(stream.name)
+            np.savez_compressed(stream, **arrays)
+        with np.load(temporary, allow_pickle=False) as saved:
+            for name, array in arrays.items():
+                if not np.array_equal(saved[name], array):
+                    raise ValueError("saved training supervision changed target values")
+        os.link(temporary, destination)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+    return dict(bytes=destination.stat().st_size, reused_file=False, reused_calculation=reused)
+
+
+def _training_worker(protocol, data_root, threads):
+    global _training_protocol, _training_datasets, _training_threads, _training_identity
+    _training_protocol, _training_threads = protocol, threads
+    _training_identity = training_identity(protocol)
+    set_num_threads(threads)
+    _training_datasets = {s: FrozenDataset(protocol["dataset"]["directory"], data_root, s) for s in ("train", "validation")}
+
+
+def _prepare_source_frame(selection):
+    split, frame = selection
+    dataset = _training_datasets[split]
+    original = dataset.sequence[frame]
+    start, cpu = time.monotonic(), time.process_time()
+    indices = [i for i, (_, _, f) in enumerate(dataset.samples) if f == frame]
+    reused = {}
+    pending = any(not auxiliary_path(_training_protocol, split, dataset.samples[i][0]).exists() for i in indices)
+    cache = (normal_surface_cache(original, calibrated_ray_grid(_training_protocol["calibration"]["rays"]),
+                                  _training_protocol, _training_threads) if pending else None)
+    records = [prepare_training_sample(dataset, i, split, _training_protocol, _training_identity, _training_threads,
+                                       original=original, reuse=reused, surface_cache=cache) for i in indices]
+    return dict(split=split, frame=frame, samples=len(records), bytes=sum(r["bytes"] for r in records),
+                reused_files=sum(r["reused_file"] for r in records), reused_calculations=sum(r["reused_calculation"] for r in records),
+                seconds=time.monotonic()-start, cpu_seconds=time.process_time()-cpu,
+                peak_rss_bytes=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss*1024)
+
+
+def prepare_training_dataset(protocol, data_root, jobs, threads):
+    identity = training_identity(protocol)
+    output = Path(protocol["training"]["supervision_directory"])
+    output.mkdir(parents=True, exist_ok=True)
+    datasets = {s: FrozenDataset(protocol["dataset"]["directory"], data_root, s) for s in ("train", "validation")}
+    disk = host_disk()
+    stored = sum(p.stat().st_size for p in output.rglob("*.npz"))
+    storage = protocol["training"]["storage"]
+    if disk["SizeRemaining"] - (storage["peak_additional_bytes"] - stored) < disk["reserve_bytes"]:
+        raise OSError("the remaining preparation, prediction and metric peak would enter the E: reserve")
+    expected = {s: len(d) for s, d in datasets.items()}
+    manifest_path = output / "manifest.json"
+    manifest = dict(format="stu-v1-training-supervision", configuration=identity, dataset=protocol["dataset"]["directory"],
+                    expected=expected, status="preparing", jobs=jobs, threads=threads, disk_before=disk)
+    if manifest_path.exists() and json.loads(manifest_path.read_text())["configuration"] != identity:
+        raise ValueError("the training cache directory belongs to a different supervision implementation")
+    _atomic_json(manifest_path, manifest)
+    schedule = [(s, f) for s, d in datasets.items() for f in d.sequence.frame_ids]
+    start, records = time.monotonic(), []
+    with ProcessPoolExecutor(max_workers=jobs, mp_context=mp.get_context("spawn"),
+                             initializer=_training_worker, initargs=(protocol, data_root, threads)) as pool:
+        futures = [pool.submit(_prepare_source_frame, selection) for selection in schedule]
+        for future in as_completed(futures):
+            records.append(future.result())
+            completed = sum(r["samples"] for r in records)
+            print(json.dumps(dict(event="supervision", completed=completed, total=sum(expected.values()),
+                                  elapsed_seconds=round(time.monotonic()-start, 1), **records[-1])), flush=True)
+            if len(records) % 10 == 0:
+                current_disk = host_disk()
+                if (sum(r["bytes"] for r in records) > storage["supervision_budget_bytes"]
+                        or current_disk["SizeRemaining"] < current_disk["reserve_bytes"] + 3_000_000_000):
+                    for pending in futures:
+                        pending.cancel()
+                    raise OSError("preparation stopped before exceeding its storage allocation")
+    manifest.update(status="complete", completed={s: sum(r["samples"] for r in records if r["split"] == s) for s in expected},
+                    seconds=time.monotonic()-start, bytes=sum(r["bytes"] for r in records),
+                    reused_calculations=sum(r["reused_calculations"] for r in records),
+                    cpu_seconds=sum(r["cpu_seconds"] for r in records),
+                    maximum_worker_rss_bytes=max(r["peak_rss_bytes"] for r in records), disk_after=host_disk())
+    if manifest["completed"] != expected:
+        raise ValueError("supervision preparation missed final-list samples")
+    _atomic_json(manifest_path, manifest)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--protocol", type=Path, default=Path("protocol/v1.json"))
     parser.add_argument("--data-root", type=Path, default=Path("/home/jasongao/Data/STU"))
     parser.add_argument("--workers", type=int, default=min(16, len(os.sched_getaffinity(0))))
     parser.add_argument("--compare", action="store_true", help="compare losses and visible support on the existing fixed pilot")
+    parser.add_argument("--full", action="store_true", help="prepare training targets for every final-list scan")
+    parser.add_argument("--jobs", type=int, default=1, help="process count for final-dataset preparation")
     args = parser.parse_args()
     if not 1 <= args.workers <= len(os.sched_getaffinity(0)):
         parser.error("workers must fit current CPU affinity")
     set_num_threads(args.workers)
     protocol = json.loads(args.protocol.read_text())
+    if args.full:
+        if args.jobs < 1 or args.jobs * args.workers > len(os.sched_getaffinity(0)):
+            parser.error("jobs times workers must fit CPU affinity")
+        prepare_training_dataset(protocol, args.data_root, args.jobs, args.workers)
+        return
     if args.compare:
         compare_pilot(protocol, args.data_root, args.workers)
         return

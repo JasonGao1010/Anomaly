@@ -10,11 +10,30 @@ from scipy.spatial import ConvexHull
 from src.supervision import (
     ScanGeometry, _conditions, _inside_hull, _surface_chunk, boundary_targets,
     sampling_targets, surface_targets, surface_probe,
-    boundary_loss, loss_point_weights, sampling_loss, surface_loss,
+    boundary_loss, detection_loss, loss_point_weights, sampling_loss, surface_loss,
 )
 
 
 CONFIG = json.loads(Path("protocol/v1.json").read_text())["supervision"]
+
+
+def test_detection_class_balance_ignore_and_auxiliary_invalid_gradients():
+    labels = torch.tensor([0, 0, 0, 1, -1])
+    logits = torch.tensor([-.2, .3, .4, -.7, 12.], requires_grad=True)
+    actual = detection_loss(logits, labels)
+    expected = (torch.nn.functional.softplus(logits[:3]).mean()
+                + torch.nn.functional.softplus(-logits[3])) / 2
+    torch.testing.assert_close(actual, expected)
+    # No auxiliary mask participates; the only positive still has a detection gradient.
+    actual.backward()
+    assert logits.grad[3] < 0 and logits.grad[4] == 0
+    teacher = logits.detach().clone().requires_grad_()
+    sparse = logits.detach().clone().requires_grad_()
+    valid = torch.zeros(5, dtype=torch.bool)
+    total = detection_loss(teacher, labels) + detection_loss(sparse, labels)
+    total = total + sampling_loss(sparse, teacher, torch.arange(5), labels, valid)
+    total.backward()
+    assert teacher.grad[3] < 0 and sparse.grad[3] < 0
 
 
 def test_normal_manifest_does_not_require_anomaly_range():
