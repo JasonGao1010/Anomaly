@@ -11,6 +11,34 @@ from src.profile import (
 from src.scene import PointLabels, make_source_frame
 
 
+def test_content_coverage_uses_official_count_and_distinct_worlds():
+    from src.coverage import conditions, concentration
+
+    world = {"height_m": .1}
+    row = {"count": 9, "in_range": 4, "range": 40.}
+    assert conditions(world, row)["far"]
+    assert not conditions(world, row)["far_eligible"]
+    row["in_range"] = 5
+    assert conditions(world, row)["low_far_eligible"]
+    counts = concentration({"one_object": 1000, "another_object": 10, "empty": 0})
+    assert counts["worlds"] == 2 and counts["total"] == 1010
+    assert counts["top_one_share"] == 1000 / 1010
+
+
+def test_content_selection_precedes_supervision_and_keeps_every_eligible_far_frame():
+    from src.coverage import select_checks
+
+    rows = [dict(frame=i, count=n, in_range=n, range=r, auxiliary_valid=False)
+            for i, (n, r) in enumerate([(4, 40), (5, 40), (7, 42), (100, 6), (9, 20)])]
+    world = dict(split="train", world="world_000", height_m=.1, rows=rows)
+    selected = select_checks([world])
+    assert [s["frame"] for s in selected] == [1, 2, 3]
+    assert selected[1]["reasons"] == ["few_representative", "all_far_eligible"]
+    for row in rows:
+        row["auxiliary_valid"] = True
+    assert selected == select_checks([world])
+
+
 def test_profile_weights_and_quantile_bounds(tmp_path):
     ledger = Ledger()
     ledger.add("C01", "intensity", np.zeros(100), unit="point", bins=(-1, 1, 11))
