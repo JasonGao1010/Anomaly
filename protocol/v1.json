@@ -35,8 +35,188 @@
     "training_renderer": false,
     "anomaly_target": "inserted_returns_only",
     "normal_target": "valid_original_normal_class_map_entries",
-    "auxiliary_targets": "defined_after_dataset_freeze_no_ground_truth_in_inference_features",
+    "auxiliary_targets": "see_supervision_C1_C2_C3_definitions_not_yet_implemented",
     "split_unit": "whole_world_and_source_sequence"
+  },
+  "information_use": {
+    "scope": "本轮只定义监督，不生成数据、不构造监督文件、不实现模型、不改变当前冻结池，旧 v2 不恢复为正式训练集。",
+    "val19_generation_permission": "尚未核实允许使用 val19 标签统计拟合生成分布；这种拟合不是正式方案的前提。",
+    "diagnosis": "可引用已有真实画像说明困难和缺测；不得据此自动调整生成参数、困难条件比例、训练权重或重新选择世界。",
+    "formal_default": "在可比信息使用条件核实前，正式方案按不依赖 val19 标签统计拟合生成分布与选择世界的条件设计；本轮不指定新的生成分布。",
+    "existing_pool": "当前 32 个训练世界和 8 个合成验证世界保持原样，作为待决定用途的开发候选资产；其生成与选择已经使用 val19 聚合标签统计，不能重述为未使用真实验证标签。",
+    "generation_record": "dataset、calibration、placement、shape、qualification 描述现存池的生成设置；当时完整配置以 results/synthetic/v1/manifest.json 的 configuration 为准。本次只替换 dataset.auxiliary_targets 的占位说明并增加监督定义，不重写生成记录。",
+    "implementation_boundary": "src/generate.py 仍按 qualification 读取真实参考并选择候选；本节是后续正式方案的信息使用边界，不表示生成器已改成不依赖 val19 的实现，也不授权运行该入口。",
+    "comparison": "现存池上的 val19 成绩只能按已利用该开发集统计的条件解释；公平比较条件与隐藏测试结论仍待核实和真实实验。"
+  },
+  "supervision": {
+    "status": "定义已明确；C1/C2/C3 的逐点目标、配对及有效掩码均需要补充实现，尚未写入冻结样本。",
+    "common": {
+      "input": "每个视图独立输入 source.xyzi[source.real_slots]，只含当前扫描传感器坐标与原始强度；完整扫描中的忽略标签回波仍可作为输入，零坐标空槽不进入模型。",
+      "identity": "每个点用 world_identity、源分区、源序列、frame_id、view_id、原始 source_slot 标识。全帧点行对应 source.real_slots；NPZ 中的 source_slot 只列变化槽位，不能冒充全帧点索引。",
+      "coordinates": "p_i 为当前视图实际回波的 xyzi[:3]，单位米。邻域、距离、采样尺度及 C3 的 x/y/z 均在同一当前传感器坐标中计算；z 方向不宣称是真实重力方向。监督几何用 float64 计算，最终连续目标保存 float32。",
+      "labels": "y_i 直接取 FrozenFrame.anomaly_target：实际插入回波为 1，原始正常类别映射有效且未被替换的回波为 0，其他为 -1。原始语义 2 不自动成为插入异常；遮挡后无回波的槽位没有逐点目标。",
+      "training_only": "y、语义与实例标签、插入及遮挡掩码、原始正常扫描、世界真值、边界目标、对应关系、表面目标及所有依赖标签的有效掩码只用于训练监督或评价。真实推理不读取这些信息，不由它们裁点、选邻居或产生特征。采样尺度及其可计算标志可以仅从当前输入重新计算。",
+      "mask_contract": "各目标、有效掩码及忽略原因均按本视图 source.real_slots 对齐。无效连续目标保存 0 且有效掩码为 false；损失必须先用掩码选取有效行，0 不表示已观测到零距离或零偏离。多个忽略原因可同时记录。某项没有有效行时，该辅助项贡献 0，基础逐点异常监督保持原样。",
+      "geometry_duplicates": "邻域几何按完全相同的 xyz 去重，代表点取最小原始槽位；几何结果回填所有对应回波行。同位置标签不一致时，该位置的辅助标签视为未知，涉及它的可靠性检查失败。去重只用于目标计算，不删除模型输入点或基础检测标签。",
+      "sampling_scale": {
+        "status": "需要补充；现有同实例最近邻画像依赖标签，不能直接用作输入尺度。",
+        "neighbors": 6,
+        "radius_m": 0.5,
+        "minimum_distinct_neighbors": 3,
+        "epsilon_m": 0.000001,
+        "calculation": "对每个不同位置 p_i，从当前视图全部实际回波中找 0 < ||p_j-p_i|| <= 0.5 的最近至多 6 个不同位置，等距按代表槽位排序，记为 K_i。|K_i| >= 3 时 delta_i=max(median_j ||p_j-p_i||, 1e-6)，scale_valid_i=true；否则 delta_i=0、scale_valid_i=false。该过程完全不使用标签。",
+        "representation": "真实位移 p_j-p_i 始终保留；scale_valid_i=true 时可同时计算 (p_j-p_i)/(delta_i+1e-6)。无有效尺度时关闭归一化分量及依赖它的辅助约束，不以零尺度声称采样极密。每个稀疏视图重新计算自己的尺度。"
+      },
+      "parameter_status": "0.5 米局部范围沿用现有邻域画像的量纲，C3 的基础拟合阈值沿用现有地面检查；其余邻居数、尺度倍数、删减强度与证据保留比例是明确的 V1 初始定义，未通过 val19 调优，也未证明为最佳或足以保证可辨识性。辅助损失权重和训练抽样权重不在本轮确定。",
+      "availability": [
+        {
+          "item": "当前帧、逐点检测标签、插入前正常帧与前后槽位身份",
+          "status": "已经具备",
+          "evidence": "src/data.py: FrozenFrame、FrozenFrame.anomaly_target、FrozenDataset.sequence；src/scene.py: SourceFrame.real_slots。原始帧用 dataset.sequence[frame_id] 读取，sample.source 是插入后的帧。"
+        },
+        {
+          "item": "三项监督字段及其有效性记录",
+          "status": "需要补充",
+          "evidence": "FrozenFrame.save/load 目前只有变化 xyzi、打包标签、插入/遮挡槽及身份；world/manifest.json 中的观测摘要也不是以下逐点目标。"
+        }
+      ]
+    },
+    "C1": {
+      "name": "观测边界距离监督",
+      "sample_requires": "合成后当前视图的实际回波、y_i、无标签采样尺度，以及由可信正常—异常邻接边定义的局部交界。",
+      "parameters": {
+        "scale_multiplier": 3,
+        "minimum_same_label_positions": 3
+      },
+      "calculation": [
+        "对 scale_valid_i=true 的位置，令 r_i=min(0.5, 3*delta_i)。r_i 邻域含自身，按不同 xyz 计数；若存在 y=-1 或标签冲突位置，或与自身同标签的位置不足 3 个，则该位置不参加边界图。异常的同标签支持还必须属于同一插入物体。",
+        "在其余 y 属于 {0,1} 的位置上建无向图 G：i 与 j 互为 K 邻居，且 ||p_i-p_j|| <= min(r_i,r_j) 才连边；边长为欧氏距离。先按全部输入计算 K，再用监督条件筛边，不能用标签改变模型的输入邻域。",
+        "标签不同的边组成 E01；每条边 (u,v) 的中点是一个离散观测交界样本。这只定义可见点邻接图中的交界，不推断实体表面、遮挡轮廓或连续空间的精确物理边界。",
+        "距离沿同标签子图计算：以每条 E01 边两端为种子，端点初始距离取相邻异类边长度的一半，再按同标签边长做多源最短路径。等价地，每条无向异类边先按 y_u=y_i 定向，d_i=min_(u,v in E01)[dist_G_same_label(i,u)+0.5*||p_u-p_v||]；不可达取无穷。",
+        "boundary_valid_i=true 当且仅当该位置参加 G 且 d_i 有限。目标 boundary_distance_i=min(d_i/(3*delta_i+1e-6),1)，是无符号、截断、按采样尺度归一化的图距离。回填到该位置的所有原始回波行；E01 端点另以代表 source_slot 配对记录。"
+      ],
+      "output": {
+        "boundary_edges": "int32[M,2]，每行为 (正常代表点原始槽位, 异常代表点原始槽位)，去重后按这两个槽位字典序排列",
+        "boundary_distance": "float32[N]，有效时属于 [0,1]",
+        "boundary_valid": "bool[N]",
+        "boundary_ignore_reason": "按点记录下列失效原因，正常有效行为 valid"
+      },
+      "ignore_when": [
+        "query_label_unknown_or_conflicting：查询点忽略或同位置标签冲突",
+        "sampling_scale_unavailable：不足 3 个局部不同位置邻居",
+        "local_label_support_unreliable：局部含未知标签，或同标签支持不足",
+        "no_observed_interface_path：没有可靠异类短边，或同标签子图到交界不可达；包括无异常回波帧及只有隔空近邻而无局部交界的情况"
+      ],
+      "training_meaning": "模型预测 boundary_distance，基础辅助误差为有效行上的绝对误差。边界距离不能替代二值异常标签，异常边界点仍为 y=1，不强制其异常分数低于内部点。若某帧无可靠边界，只关闭 C1。稀疏视图如使用 C1，须在稀疏图上重新计算，不能把稠密边界距离当作采样不变真值。",
+      "availability": [
+        {
+          "item": "异常/正常标签、可见点、最近正常点与邻域统计的计算基础",
+          "status": "已经具备",
+          "evidence": "src/data.py: FrozenFrame.anomaly_target；src/profile.py 的 nearest_normal_distance、background_neighbors，以及 results/profile/tables/continuous.csv。既有最近正常点距离只作诊断，不等于本边界目标。"
+        },
+        {
+          "item": "无标签尺度、可信邻接图、边界槽位对、归一化距离和忽略原因",
+          "status": "需要补充",
+          "evidence": "当前读取和画像代码没有构造或保存这些目标；所需原始点与标签可由现存冻结帧取得。有效覆盖尚未计算，不因此要求重生成世界。"
+        }
+      ]
+    },
+    "C2": {
+      "name": "受控采样配对与一致性监督",
+      "sample_requires": "同一冻结世界、同一源帧的基础观测与离线删减视图，各自的实际回波和检测标签，保留槽位对应关系，以及信息保留有效掩码。基础观测仅相对删减视图较稠密，不声称它是完整物体观测。",
+      "levels": [
+        {
+          "level_index": 0,
+          "beam_stride": 1,
+          "column_stride": 2
+        },
+        {
+          "level_index": 1,
+          "beam_stride": 2,
+          "column_stride": 2
+        }
+      ],
+      "pair_construction": [
+        "由插入前的原始 source 调用 src/render.py: canonical_ray_slots_for_source(source, grid)，获得文件槽到完整射线模板槽 g(s) 的对应；再令 k(s)=grid.canonical_ray_by_slot[g(s)]，beam=k//grid.columns、column=k%grid.columns。不能在含重复前缀的 201 帧上直接用文件槽整除来认束，也不能遗漏标定列移位。",
+        "每帧对两个 level 各定义一个离线删减视图。使用 Generator(PCG64(SeedSequence([2062026, source_sequence_id, world.seed, frame_id, level_index])))，依次从 [0,beam_stride) 与 [0,column_stride) 均匀抽取整数 phase_b、phase_c，并记录级别与相位。",
+        "保留满足 beam % beam_stride == phase_b 且 column % column_stride == phase_c 的射线上的已有实际回波。同一射线的重复文件槽共同保留或共同删除，但保留的文件槽仍分别记录。采样选择不读标签，不以异常是否存活重抽相位。",
+        "稀疏视图直接取基础视图保留槽位的原始 xyzi 与检测标签，数值和槽位身份保持不变；不移动物体、不改强度、不补点、不恢复被遮挡的后方回波。删减只改变观测，不改变世界、物体身份或剩余点的标签。",
+        "稀疏点仅与同一 world_identity、源序列、frame_id、source_slot 的基础视图点对应；dense_row 由该原始槽位在基础 source.real_slots 中的位置确定。不同帧、不同世界、原始正常点与插入替换点之间均不以同槽位建立表面点对应。缺失或被删掉的回波没有预测一致性目标。"
+      ],
+      "evidence_parameters": {
+        "radius_m": 0.5,
+        "minimum_positions_per_present_label_group": 3,
+        "minimum_retained_span_ratio": 0.5
+      },
+      "consistency_validity": [
+        "只考虑精确对应且 y 属于 {0,1} 的保留点；两视图的无标签 sampling_scale 都必须有效。以对应点位置为中心，在两视图各取 0.5 米球内的不同 xyz。",
+        "若任一邻域含未知或冲突标签，关闭该点的一致性。按正常 y=0 和各插入物体分组；对基础邻域中每一个出现的组，两视图该组都须至少有 3 个不同位置。这样异常或边界另一侧证据消失时不能继续强制一致。",
+        "对每个上述组，以 L=||max(p,axis=0)-min(p,axis=0)||_2 定义局部空间跨度；要求基础 L>1e-6 且稀疏 L/基础 L>=0.5。任一组不满足即关闭。该条件只是一项保守的可计算证据保留代理，不宣称证明语义仍可识别。"
+      ],
+      "output": {
+        "sparse_source_slot": "int32[Ns]，升序保留槽位；稀疏 xyzi 和 y 从基础帧按槽位无损取得，无需复制背景",
+        "dense_row": "int32[Ns]，与每个 sparse_source_slot 精确对应的基础点行",
+        "sampling_level_and_phase": "级别、束/列步长与相位",
+        "sampling_consistency_valid": "bool[Ns]，按稀疏点行排列",
+        "sampling_ignore_reason": "unknown_label、sampling_scale_unavailable、local_unknown_labels、lost_label_group_support、lost_spatial_span，或 valid"
+      },
+      "training_meaning": "离线准备的是观测配对、对应关系和有效掩码；训练时同一个模型分别读取两个单帧，qD=sigmoid(sD)、qS=sigmoid(sS)，在有效对应点计算 (qS-stop_gradient(qD))^2。基础视图预测只是停止梯度的一致性参照，不是真值置信度；两视图保留各自逐点检测标签。两个前向不交换输入特征，真实推理只有一个当前扫描。",
+      "disabled_constraints": "无效对应点关闭异常分数一致性；不对删除点、零回波或已消失异常补充高置信预测。C1 距离依赖观测图，C3 可靠性依赖剩余支撑，二者不直接套用分数一致性，也不从稠密视图无条件复制有效掩码。若稀疏视图无实际回波，记录该配对为空并关闭其前向和辅助项，基础帧保留；不重选世界。",
+      "availability": [
+        {
+          "item": "基础冻结帧、准确槽位身份、标定射线与 201 特殊槽位处理",
+          "status": "已经具备",
+          "evidence": "src/data.py: FrozenFrame；src/render.py: calibrated_ray_grid、canonical_ray_slots_for_source、RayGrid.canonical_ray_by_slot；assets/rays.npz。"
+        },
+        {
+          "item": "两个离线删减视图的保留槽位、配对记录、无标签尺度及一致性有效掩码",
+          "status": "需要补充",
+          "evidence": "现存 NPZ 没有受控采样配对。它们可从同一冻结帧离线删减得到，不需要再次物理渲染；现有点数和邻近点间距画像不能替代配对或证明稀疏后信息仍充分。"
+        }
+      ]
+    },
+    "C3": {
+      "name": "插入前正常地面表面监督",
+      "sample_requires": "与合成帧身份一致的插入前正常单帧、原始正常语义、插入/遮挡槽、合成后当前实际回波，以及逐查询点的局部表面目标与可靠性。V1 的表面范围限于有支持的局部地面平面，不覆盖任意正常物体表面。",
+      "parameters": {
+        "ground_semantics": [40, 48, 49],
+        "xy_radius_m": 2,
+        "minimum_distinct_support_points": 20,
+        "minimum_inlier_residual_m": 0.05,
+        "mad_multiplier": 3,
+        "mad_normalization": 1.4826,
+        "maximum_plane_rmse_m": 0.05,
+        "maximum_slope_degrees": 20,
+        "minimum_xy_covariance_eigenvalue_m2": 0.01,
+        "convex_hull_tolerance_m": 0.0000000001
+      },
+      "calculation": [
+        "对合成后每个 y 属于 {0,1} 的实际点 p_i，在插入前同一帧中取原始类别映射有效、语义属于 {40,48,49}、且水平距离 ||q_xy-p_i,xy||<=2 米的实际回波。坐标去重后记为 Q0；不能用插入后的物体点、其他帧或世界放置时的一张锚点平面替代。",
+        "令 u=q_x-p_i,x、v=q_y-p_i,y，设计矩阵 A=[u,v,1]。Q0 至少有 20 个不同位置且 A 秩为 3 时，以普通最小二乘拟合 q_z=a*u+b*v+c。残差 e=q_z-A*[a,b,c]；MAD=1.4826*median(|e-median(e)|)，保留 |e|<=max(0.05,3*MAD) 的点。只做这一次筛选，再对保留点重新拟合。",
+        "重新拟合的不同位置内点至少 20 个且矩阵秩为 3；RMSE<=0.05 米；sqrt(a*a+b*b)<=tan(20 度)；内点水平坐标的样本协方差最小特征值>=0.01 平方米。查询水平位置必须在内点 XY 凸包内：以查询点为原点的凸包全部半空间常数<=1e-10 米。凸包退化、数值非有限或任一条件失败则忽略。",
+        "另检查插入后当前视图仍能提供局部证据：从上述 Q0 内点对应的原始槽中，仅取未被插入/遮挡改变且仍作为该视图输入保留的回波，坐标去重得到 Qseen。Qseen 也须至少 20 个不同位置、设计矩阵秩为 3、水平协方差最小特征值>=0.01 平方米、查询点在其 XY 凸包内，并且相对插入前所拟平面的 RMSE<=0.05 米。稀疏视图额外交集其保留槽位；不以稠密视图的可见支撑代替。",
+        "满足所有条件时，查询水平位置的正常表面高度为 z0_i=c，表面位置为 (p_i,x,p_i,y,c)。目标 surface_offset_z_i=c-p_i,z，单位米；预期表面低于当前点时为负。其余查询点 surface_valid_i=false，不用 0、物体底面、最近邻深度或实例平均高度代填真值。"
+      ],
+      "output": {
+        "surface_offset_z": "float32[N]，插入前局部正常地面相对当前点的 z 位移，单位米",
+        "surface_valid": "bool[N]",
+        "surface_ignore_reason": "unknown_query_label、insufficient_reference_support、rank_deficient_or_nonfinite、insufficient_inliers、plane_fit_unreliable、outside_reference_hull、insufficient_visible_support、outside_visible_hull、visible_support_unreliable，或 valid"
+      },
+      "training_meaning": "模型仅从合成后当前 xyzi 预测 surface_offset_z，基础辅助误差为有效行上的绝对误差。预测正常表面为 (p_i,x,p_i,y,p_i,z+predicted_offset)，当前观测相对它的有符号 z 偏离为 -predicted_offset。偏离供异常判断使用，不设大于某个高度就异常的规则；地面、坡面、路缘及正常物体仍服从原始检测标签。所有有效正常点和异常点均可有此目标。",
+      "reliability_boundary": "这是插入前单帧支持的局部平面估计目标，不是遮挡区域精确表面真值。训练可靠掩码允许用原始语义和可见支撑判断，真实推理不得读取这些掩码或语义；若模型需要表面可信度，须只从当前 xyzi 估计。未满足条件仅关闭 C3，不把点改成正常、不丢弃异常样本，也不据此自动要求重生成。",
+      "availability": [
+        {
+          "item": "插入前正常扫描、地面类别、前后槽位和基础平面拟合方法",
+          "status": "已经具备",
+          "evidence": "src/data.py: FrozenDataset.sequence、FrozenFrame 的插入/遮挡掩码；src/generate.py: sample_support；src/profile.py: ground_relation。地面类别采用当前 placement 的 {40,48,49}，不是照搬真实画像更宽的 GROUND 集合。"
+        },
+        {
+          "item": "逐点插入前平面、逐点表面位移目标、插入后/稀疏后支撑检查及忽略原因",
+          "status": "需要补充",
+          "evidence": "ground_relation 只在可见实例中心拟合并返回实例高度摘要，没有逐点系数或上述前后支撑掩码。results/profile/tables/reliability.csv 中 4729 条实例帧记录只有 2202 条 local_plane_proxy；这是既有诊断的缺测证据，不是本 C3 目标的可用比例。"
+        }
+      ]
+    }
   },
   "calibration": {
     "rays": "assets/rays.npz",
