@@ -496,7 +496,7 @@
         "aggregation": "surface_valid 内分别平均正常/异常点，再对存在类别等权平均；正式默认使用可见支撑至少 20 的掩码。"
       },
       "between_views": "若训练同时使用多个视图，同一辅助项先按上述规则在每个视图/级别计算，再对存在有效监督的视图/级别等权平均；空视图不参与。",
-      "between_terms": "本轮不设 C1/C2/C3 与基础检测损失之间的系数，不实现模型或训练循环。",
+      "between_terms": "基础检测系数为 1，C1/C2/C3 初始系数均为 0.1，统一记录在 training.loss_coefficients；训练反向、日志和隔离检查均遵循上述有效视图平均规则。",
       "training_only": "分组标签、目标、对应关系、有效掩码及计算出的点权重只用于损失，不进入模型输入。"
     }
   },
@@ -759,7 +759,7 @@
       "sampling": 0.1
     },
     "detection_loss": "binary cross entropy with logits; mean separately over valid normal/anomaly points, then equal mean over present classes; ignore -1",
-    "view_aggregation": "detection, boundary and surface average three per-view losses; consistency averages the two sparse-to-detached-base losses; a completely empty auxiliary loss is zero",
+    "view_aggregation": "detection averages all participating views; each auxiliary averages only views or pairs with valid normal/anomaly supervision rows; an active zero-error view counts and an entirely inactive auxiliary is zero",
     "sampling": "one seeded permutation of all 8980 base frames, no dropping, cropping, class resampling or extra augmentation",
     "evaluation": "epoch-end checkpoint; all 13640 synthetic base frames and auxiliary diagnostics; label-forbidden inference on all 8659 real val19 frames followed by the existing official evaluator",
     "stop": "save model, optimizer, scaler, random state, visited identities and successful update count after epoch one; never start epoch two automatically",
@@ -789,7 +789,13 @@
         "world": "candidate_000",
         "frame": 0,
         "optimized": false
-      }
+      },
+      "resume_tolerance": {
+        "parameters": {"atol": 0.0002, "rtol": 0.0001},
+        "optimizer": {"atol": 0.00001, "rtol": 0.0001},
+        "reductions": {"atol": 0.000001, "rtol": 0.0001}
+      },
+      "resume_tolerance_basis": "Restored starting parameters, AdamW state, scaler and all RNG states must match exactly. Subsequent CUDA updates use explicit numerical tolerances: an independent same-start in-memory replay already differed by 1.62e-4 in parameters and 1.58e-6 in first moments; the disk-resume control differed by 1.24e-4 and 3.00e-6. The initial 1e-5 parameter tolerance failed and is retained in the report. These are execution-check tolerances, not changes to training or scientific thresholds."
     },
     "current_authorization": "finish implementation, offline supervision and isolated checks; pause for user code review; formal epoch and model evaluation require the user to confirm"
   },

@@ -114,7 +114,23 @@ class RealDataset(Dataset):
         return dict(source=source, scan=scan)
 
 
-def view_losses(output, target, dense=None):
+def loss_view_weights(views):
+    """Empty supervision does not dilute other views; a valid zero error still counts."""
+    weights = [dict(detection=1 / len(views)) for _ in views]
+    for name, mask in (("boundary", "boundary_valid"), ("surface", "surface_valid"),
+                       ("sampling", "sampling_consistency_valid")):
+        active = []
+        for view in views:
+            target = view["target"]
+            known = (target["labels"] == 0) | (target["labels"] == 1)
+            active.append(mask in target and bool((known & target[mask]).any()))
+        count = sum(active)
+        for weight, present in zip(weights, active):
+            weight[name] = int(present) / max(count, 1)
+    return weights
+
+
+def view_losses(output, target, weights, dense=None):
     labels = target["labels"]
     result = dict(detection=detection_loss(output["logits"], labels),
                   boundary=boundary_loss(output["boundary"], target["boundary_distance"],
@@ -124,20 +140,20 @@ def view_losses(output, target, dense=None):
     if dense is not None:
         result["sampling"] = sampling_loss(output["logits"], dense, target["dense_row"].long(),
                                             labels, target["sampling_consistency_valid"])
-    return result
+    return {name: value * weights[name] for name, value in result.items()}
 
 
 def backward_sample(model, sample, scaler, coefficients, accumulation):
     dense, values = None, defaultdict(float)
-    for view in sample["views"]:
+    for view, weights in zip(sample["views"], loss_view_weights(sample["views"])):
         scan, target = to_device(view["scan"]), to_device(view["target"])
         with torch.autocast("cuda", dtype=torch.float16):
             output = model(scan)
-        losses = view_losses(output, target, dense)
-        objective = losses["detection"] / 3
+        losses = view_losses(output, target, weights, dense)
+        objective = losses["detection"]
         for name, coefficient in coefficients.items():
             if name in losses:
-                objective = objective + coefficient * losses[name] / (2 if name == "sampling" else 3)
+                objective = objective + coefficient * losses[name]
         if not torch.isfinite(objective):
             raise FloatingPointError(f"nonfinite loss at {sample['world']}/{sample['frame']}")
         scaler.scale(objective / accumulation).backward()
@@ -145,7 +161,7 @@ def backward_sample(model, sample, scaler, coefficients, accumulation):
             # Only C2's teacher is detached; base detection has already backpropagated.
             dense = output["logits"].detach()
         for name, value in losses.items():
-            values[name] += float(value.detach()) / (2 if name == "sampling" else 3)
+            values[name] += float(value.detach())
         del output, scan, target, losses, objective
     return dict(values)
 
@@ -158,18 +174,33 @@ def optimizer_for(model, config):
 
 
 def update(model, optimizer, scaler, config, attempt):
+    scaler.unscale_(optimizer)
+    parameters = [p for p in model.parameters() if p.grad is not None]
+    # Split PyTorch's clipping operation so an overflowing norm cannot zero finite gradients.
+    norm = torch.nn.utils.get_total_norm([p.grad for p in parameters])
+    finite_norm = bool(torch.isfinite(norm))
+    if finite_norm:
+        torch.nn.utils.clip_grads_with_norm_(parameters, config["gradient_clip_norm"], norm)
+    else:
+        finite_elements = bool(torch.stack([torch.isfinite(p.grad).all() for p in parameters]).all())
+        if finite_elements:
+            raise FloatingPointError("finite gradient elements produced a nonfinite total norm; update refused")
+        if not scaler.is_enabled():
+            raise FloatingPointError("nonfinite gradient elements without AMP skip protection; update refused")
+        # unscale_ already recorded the nonfinite elements; scaler.step must skip this optimizer.
     warm = min(1., attempt / config["warmup_updates"])
     factor = config["warmup_start_factor"] + (1 - config["warmup_start_factor"]) * warm
     for group in optimizer.param_groups:
         group["lr"] = config["learning_rate"] * factor
-    scaler.unscale_(optimizer)
-    norm = torch.nn.utils.clip_grad_norm_(model.parameters(), config["gradient_clip_norm"])
     before = scaler.get_scale()
     scaler.step(optimizer)
     scaler.update()
     optimizer.zero_grad(set_to_none=True)
-    return dict(success=scaler.get_scale() >= before,
-                gradient_norm=float(norm) if torch.isfinite(norm) else None,
+    success = scaler.get_scale() >= before
+    if success and not finite_norm:
+        raise RuntimeError("AMP failed to skip nonfinite gradients")
+    return dict(success=success, gradient_norm=float(norm) if finite_norm else None,
+                skip_reason=None if success else "nonfinite_gradient_elements",
                 loss_scale=scaler.get_scale(), learning_rate=optimizer.param_groups[0]["lr"])
 
 
@@ -212,6 +243,108 @@ def save_checkpoint(path, model, optimizer, scaler, config, order, visited, succ
         temporary.unlink(missing_ok=True)
 
 
+def restore_checkpoint(path, model, optimizer, scaler, config, order):
+    state = torch.load(path, map_location="cpu", weights_only=False)
+    if state["configuration"] != config or state["order"] != order:
+        raise ValueError("resume would change the scientific execution")
+    model.load_state_dict(state["model"])
+    optimizer.load_state_dict(state["optimizer"])
+    scaler.load_state_dict(state["scaler"])
+    random.setstate(state["rng"]["python"])
+    np.random.set_state(state["rng"]["numpy"])
+    torch.set_rng_state(state["rng"]["torch"])
+    torch.cuda.set_rng_state_all(state["rng"]["cuda"])
+    return state
+
+
+def assert_state_close(actual, expected, *, atol=0., rtol=0.):
+    """Compare checkpoint tensors numerically and all discrete identities exactly."""
+    if isinstance(expected, torch.Tensor):
+        actual, expected = actual.detach().cpu(), expected.detach().cpu()
+        torch.testing.assert_close(actual, expected, atol=atol, rtol=rtol)
+        return float((actual - expected).abs().max()) if expected.is_floating_point() and expected.numel() else 0.
+    if isinstance(expected, np.ndarray):
+        np.testing.assert_array_equal(actual, expected)
+    elif isinstance(expected, dict):
+        assert actual.keys() == expected.keys()
+        return max((assert_state_close(actual[k], v, atol=atol, rtol=rtol)
+                    for k, v in expected.items()), default=0.)
+    elif isinstance(expected, (tuple, list)):
+        assert type(actual) is type(expected) and len(actual) == len(expected)
+        return max((assert_state_close(a, b, atol=atol, rtol=rtol)
+                    for a, b in zip(actual, expected)), default=0.)
+    else:
+        assert actual == expected
+    return 0.
+
+
+def check_resume(protocol, run, samples, indices, initial):
+    """Compare a real V1 next update with and without reconstruction from disk."""
+    settings = protocol["training"]
+    tolerance = settings["implementation_check"]["resume_tolerance"]
+    config = execution_config(protocol)
+    accumulation = settings["gradient_accumulation"]
+    order = [indices[i % len(indices)] for i in range(2 * accumulation)]
+    selected = dict(zip(indices, samples))
+
+    def group(model, optimizer, scaler, start):
+        values = defaultdict(float)
+        optimizer.zero_grad(set_to_none=True)
+        for index in order[start:start + accumulation]:
+            for name, value in backward_sample(model, selected[index], scaler,
+                            settings["loss_coefficients"], accumulation).items():
+                values[name] += value / accumulation
+        result = update(model, optimizer, scaler, settings, start // accumulation + 1)
+        return dict(indices=order[start:start + accumulation], losses=dict(values), **result)
+
+    seed_all(settings["seed"])
+    model = V1(protocol["model"]).cuda().train()
+    model.load_state_dict(initial)
+    optimizer, scaler = optimizer_for(model, settings)
+    with tempfile.TemporaryDirectory(dir=run) as directory:
+        path, reference = Path(directory) / "resume.pt", Path(directory) / "continuous.pt"
+        first = group(model, optimizer, scaler, 0)
+        save_checkpoint(path, model, optimizer, scaler, config, order, accumulation,
+                        int(first["success"]), [first])
+        second = group(model, optimizer, scaler, accumulation)
+        if not first["success"] or not second["success"]:
+            raise ValueError("resume check must exercise two actual optimizer updates")
+        save_checkpoint(reference, model, optimizer, scaler, config, order, len(order), 2, [first, second])
+        del model, optimizer, scaler
+        # Construction consumes RNG; restoration must put every stream back at the group boundary.
+        model = V1(protocol["model"]).cuda().train()
+        optimizer, scaler = optimizer_for(model, settings)
+        state = restore_checkpoint(path, model, optimizer, scaler, config, order)
+        assert_state_close(model.state_dict(), state["model"])
+        assert_state_close(optimizer.state_dict(), state["optimizer"])
+        assert_state_close(scaler.state_dict(), state["scaler"])
+        assert_state_close(dict(python=random.getstate(), numpy=np.random.get_state(),
+                           torch=torch.get_rng_state(), cuda=torch.cuda.get_rng_state_all()), state["rng"])
+        resumed = group(model, optimizer, scaler, state["visited"])
+        save_checkpoint(path, model, optimizer, scaler, config, order, len(order),
+                        state["successful_updates"] + int(resumed["success"]), state["history"] + [resumed])
+        del state, model, optimizer, scaler
+        expected = torch.load(reference, map_location="cpu", weights_only=False)
+        actual = torch.load(path, map_location="cpu", weights_only=False)
+        for key in ("order", "visited", "successful_updates", "attempted_updates", "complete", "scaler", "rng"):
+            assert_state_close(actual[key], expected[key])
+        for key in ("indices", "success", "skip_reason", "loss_scale", "learning_rate"):
+            assert_state_close(resumed[key], second[key])
+        parameter_error = assert_state_close(actual["model"], expected["model"], **tolerance["parameters"])
+        optimizer_error = assert_state_close(actual["optimizer"], expected["optimizer"], **tolerance["optimizer"])
+        for key in second["losses"]:
+            torch.testing.assert_close(torch.tensor(resumed["losses"][key], dtype=torch.float64),
+                                       torch.tensor(second["losses"][key], dtype=torch.float64), **tolerance["reductions"])
+        torch.testing.assert_close(torch.tensor(resumed["gradient_norm"], dtype=torch.float64),
+                                   torch.tensor(second["gradient_norm"], dtype=torch.float64), **tolerance["reductions"])
+    return dict(groups=2, accumulation=accumulation, next_group_indices=second["indices"],
+                successful_updates=2, parameters_max_absolute_difference=parameter_error,
+                optimizer_max_absolute_difference=optimizer_error, tolerance=tolerance,
+                learning_rate=second["learning_rate"], restored_start_state_exact=True, scaler_and_rng_exact=True,
+                sample_order_and_update_flags_exact=True, continuous_next_update=second,
+                resumed_next_update=resumed)
+
+
 def train_epoch(protocol, data_root, run):
     config = execution_config(protocol)
     check = json.loads((run / "check.json").read_text())
@@ -235,17 +368,8 @@ def train_epoch(protocol, data_root, run):
     history = []
     checkpoint = run / "epoch1.pt"
     if checkpoint.exists():
-        state = torch.load(checkpoint, map_location="cpu", weights_only=False)
-        if state["configuration"] != config or state["order"] != order:
-            raise ValueError("resume would change the scientific execution")
-        model.load_state_dict(state["model"])
-        optimizer.load_state_dict(state["optimizer"])
-        scaler.load_state_dict(state["scaler"])
+        state = restore_checkpoint(checkpoint, model, optimizer, scaler, config, order)
         visited, successes, history = state["visited"], state["successful_updates"], state["history"]
-        random.setstate(state["rng"]["python"])
-        np.random.set_state(state["rng"]["numpy"])
-        torch.set_rng_state(state["rng"]["torch"])
-        torch.cuda.set_rng_state_all(state["rng"]["cuda"])
         del state
     if visited == len(order):
         _atomic_json(run / "training.json", dict(base_frames=visited, views=3*visited,
@@ -315,13 +439,14 @@ def check_summary(model, samples):
     for sample in samples:
         losses, predictions, errors = defaultdict(float), [], {}
         dense = None
-        for v, view in enumerate(sample["views"]):
+        for v, (view, weights) in enumerate(zip(sample["views"], loss_view_weights(sample["views"]))):
             output = predict(model, view["scan"])
             predictions.append(output)
             tensors = {key: torch.from_numpy(value) for key, value in output.items()}
-            values = view_losses(tensors, view["target"], None if dense is None else torch.from_numpy(dense))
+            values = view_losses(tensors, view["target"], weights,
+                                 None if dense is None else torch.from_numpy(dense))
             for name, value in values.items():
-                losses[name] += float(value) / (2 if name == "sampling" else 3)
+                losses[name] += float(value)
             add_errors(errors, v, output, view["target"], dense)
             if v == 0:
                 dense = output["logits"]
@@ -517,23 +642,14 @@ def implementation_check(protocol, data_root, run):
                 restored = FramePrediction.load(temporary / "prediction.npz", source)
                 if not np.array_equal(prediction.anomaly_score, restored.anomaly_score):
                     raise ValueError("saving FramePrediction altered a raw model score")
-                check_order = [indices[i % len(indices)] for i in range(len(history))]
-                save_checkpoint(temporary / "check.pt", model, optimizer, scaler, configuration,
-                                check_order, len(check_order), sum(r["success"] for r in history), history)
-                state = torch.load(temporary / "check.pt", map_location="cpu", weights_only=False)
-                if (any(not torch.equal(state["model"][k], v.cpu()) for k,v in model.state_dict().items())
-                        or state["scaler"] != scaler.state_dict() or state["order"] != check_order):
-                    raise ValueError("checkpoint round-trip changed model, scaler or sample identities")
-                optimizer.load_state_dict(state["optimizer"])
-                storage_checks = dict(prediction_scores_exact=True, checkpoint_parameters_exact=True,
-                                      optimizer_restored=True, scaler_and_order_exact=True)
-                del state
+                storage_checks = dict(prediction_scores_exact=True)
         learned = all(b["losses"]["detection"] < a["losses"]["detection"]
                       and b["class_mean_logit"]["1"] > b["class_mean_logit"]["0"]
                       for a,b in zip(before,after))
         arms[arm] = dict(after=after, history=history, detection_learned=learned,
                          successful_updates=sum(r["success"] for r in history), seconds=time.monotonic()-start)
         del model, optimizer, scaler
+    resume = check_resume(protocol, run, samples, indices, initial)
     passed = all(arm["detection_learned"] for arm in arms.values())
     _atomic_json(previous, dict(configuration=configuration, passed=passed, scope=specification,
                  before=before, arms=arms, point_checks=point_checks, gradient_checks=gradient_checks,
@@ -543,6 +659,7 @@ def implementation_check(protocol, data_root, run):
                  frame=real["source"].frame_id, actual_points=len(real_output["logits"])),
                  C2_teacher_detached_only_in_consistency=True,
                  storage_checks=storage_checks,
+                 resumed_next_update=resume,
                  formal_initialization="fresh seeded module defaults; all check weights discarded", resources=runtime()))
     if not passed:
         raise ValueError("isolated training did not yet demonstrate positive/negative learnability")
