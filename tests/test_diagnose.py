@@ -47,3 +47,32 @@ def test_background_identity_counts_worlds_and_coincident_slots_separately():
     assert unique["false_positive"] == [1, 1, 0]
     assert unique["fp_world_histograms"][0][2] == 1
     assert unique["fp_world_histograms"][1][1] == 1
+
+
+def test_real_required_fpr_counts_complete_ties_and_separates_frame_from_global():
+    from src.diagnose import required_frame_fpr, anomaly_summary, POINT_DTYPE
+    from src.evaluate import APAttribution, exact_metrics, packed_scores
+
+    scores = np.array([2, 2, -1, -2, 4, 3, 1, 0], np.float32)
+    target = np.array([1, 0, 1, 0, 0, 0, 1, 0])
+    frame = np.array([0] * 4 + [1] * 4)
+    observer = APAttribution()
+    metrics = exact_metrics(np.sort(packed_scores(scores, target, score_kind="logit")),
+                            score_kind="logit", observe=observer, chunk_size=2)
+    positive = target == 1
+    points = np.zeros(positive.sum(), POINT_DTYPE)
+    points["score"] = scores[positive]
+    points["frame"] = frame[positive]
+    points["precision"], points["q_global"] = observer.values(points["score"])
+    for fid in (0, 1):
+        normals = scores[(frame == fid) & (target == 0)]
+        use = points["frame"] == fid
+        points["q_frame"][use] = required_frame_fpr(normals, points["score"][use])
+        for score, actual in zip(points["score"][use], points["q_frame"][use], strict=True):
+            assert actual == np.mean(normals >= score)
+    np.testing.assert_allclose(points["q_frame"], [.5, .5, 2/3])
+    np.testing.assert_allclose(points["q_global"], [.6, .8, .6])
+    parts = [anomaly_summary(points[points["frame"] == fid], len(points), [2., -1.]) for fid in (0, 1)]
+    assert abs(sum(r["ap_deficit_pp"] for r in parts) - (100-metrics["AP"])) < 1e-12
+    assert sum(r["tp_1"] for r in parts) == 1
+    assert sum(r["tp_95"] for r in parts) == 3

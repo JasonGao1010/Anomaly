@@ -1,20 +1,24 @@
-"""Locate false positives using saved synthetic scores; never run a model."""
+"""Attribute detection failures using saved scores; never run a model."""
 
 from __future__ import annotations
 
 import argparse
-from collections import defaultdict
-from concurrent.futures import ProcessPoolExecutor
+from collections import defaultdict, deque
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+import csv
 import hashlib
 import json
 from pathlib import Path
 import tempfile
 import time
+from threading import local
 
 import numpy as np
 
 from .data import FrozenDataset, FrozenFrame, FramePrediction, _atomic_json, host_disk
-from .evaluate import packed_scores, pooled_files
+from .evaluate import APAttribution, evaluate_frames, official_frame, packed_scores, pooled_files
+from .protocol import load_protocol
+from .scene import LabelMode, STUSequence
 from vendor.stu.compute_point_level_ood import PointOODMetricsCalculator as Official
 
 
@@ -22,6 +26,382 @@ SCOPES = ("all", "stu_filtered")
 LIMITS = (0.01, 0.001, 0.0001)
 RANGES = ("<2.5", "[2.5,10)", "[10,20)", "[20,35)", "[35,50]", ">50")
 FRAME_GROUPS = ("no_anomaly", "anomaly_not_eligible", "eligible")
+REAL_READERS = local()
+POINT_DTYPE = np.dtype([(name, kind) for name, kind in (
+    ("sequence", "i4"), ("frame", "i4"), ("slot", "i4"), ("score", "f4"),
+    ("precision", "f8"), ("q_global", "f8"), ("q_frame", "f8"), ("distance", "f4"))])
+REAL_CASE_RULES = {
+    "125_failure": "two eligible 125 frames with largest AP deficit; ties by frame ID",
+    "125_success": "remaining eligible 125 frame with highest recall at global 1% FPR; ties by anomaly count descending, frame ID",
+    "other_success": "eligible non-125 frame with highest recall at global 1% FPR; ties by anomaly count descending, sequence/frame ID",
+    "normal_clusters": "two sequences with most FP at global 1% FPR; in each, densest one-metre cell of distinct FP positions; ties by frame ID then lexicographic cell; anchor highest score, then original slot",
+    "display": "all anomaly bounds plus 2 m per axis for anomaly cases; 6 m radius with +/-1.2 m detail for normal cases; no geometry-based reselection",
+}
+
+
+def read_real(identity, data_root, run):
+    sequence_id, frame_id = identity
+    key = (str(Path(data_root).resolve()), sequence_id)
+    # Readers own a mutable frame cache, so each loading thread has its own reader.
+    if getattr(REAL_READERS, "key", None) != key:
+        REAL_READERS.source = STUSequence.open(data_root, protocol=load_protocol(),
+            partition="val", sequence_id=sequence_id, label_mode=LabelMode.REQUIRED)
+        REAL_READERS.key = key
+    source = REAL_READERS.source[frame_id]
+    path = Path(run) / "predictions" / "real" / "val" / str(sequence_id) / f"{frame_id:06d}.npz"
+    return source, FramePrediction.load(path, source)
+
+
+def real_frames(identities, data_root, run, jobs):
+    # Bound live complete scans; executor.map would eagerly retain thousands of scans.
+    iterator = iter(identities)
+    with ThreadPoolExecutor(jobs) as pool:
+        pending = deque()
+        for _ in range(jobs):
+            identity = next(iterator, None)
+            if identity is not None:
+                pending.append(pool.submit(read_real, identity, data_root, run))
+        while pending:
+            yield pending.popleft().result()
+            identity = next(iterator, None)
+            if identity is not None:
+                pending.append(pool.submit(read_real, identity, data_root, run))
+
+
+def required_frame_fpr(normal_scores, anomaly_scores):
+    """Empirical normal survival at each anomaly, including the entire score tie."""
+    ordered = np.sort(normal_scores)
+    if not len(ordered):
+        raise ValueError("within-frame FPR is undefined without official normal points")
+    return (len(ordered) - np.searchsorted(ordered, anomaly_scores, side="left")) / len(ordered)
+
+
+def anomaly_summary(points, total_positive, thresholds):
+    result = dict(anomaly_points=len(points),
+        ap_deficit_pp=float(100 * np.sum(1 - points["precision"], dtype=np.float64) / total_positive))
+    if not len(points):
+        return result
+    for name in ("q_global", "q_frame"):
+        values = 100 * points[name]
+        for key, value in zip(("min", "median", "p90", "p95", "max"), np.quantile(values, [0, .5, .9, .95, 1]), strict=True):
+            result[f"{name}_{key}_percent"] = float(value)
+        result[f"{name}_mean_percent"] = float(values.mean())
+    high_global, high_frame = points["q_global"] > .01, points["q_frame"] > .01
+    for name, mask in (("both_q_above_1pct", high_global & high_frame),
+                       ("only_global_q_above_1pct", high_global & ~high_frame),
+                       ("only_frame_q_above_1pct", ~high_global & high_frame),
+                       ("both_q_at_most_1pct", ~high_global & ~high_frame)):
+        result[name] = int(mask.sum())
+    score = points["score"]
+    result.update(tp_1=int(np.count_nonzero(score >= thresholds[0])),
+        tp_95=int(np.count_nonzero(score >= thresholds[1])),
+        below_t95=int(np.count_nonzero(score < thresholds[1])),
+        at_t95=int(np.count_nonzero(score == thresholds[1])),
+        q_global_above_10pct=int(np.count_nonzero(points["q_global"] > .1)))
+    result["recall_1_percent"] = 100 * result["tp_1"] / len(points)
+    result["recall_95_percent"] = 100 * result["tp_95"] / len(points)
+    return result
+
+
+def real_frame_attribution(identity, data_root, run, observer, metrics):
+    source, prediction = read_real(identity, data_root, run)
+    scores, target, eligible = official_frame(source, prediction)
+    if not eligible:
+        raise ValueError("attribution requested for a frame outside official evaluation")
+    slots = np.flatnonzero(target == 1)
+    points = np.empty(len(slots), POINT_DTYPE)
+    points["sequence"] = identity[0]
+    points["frame"] = identity[1]
+    points["slot"] = slots
+    points["score"] = scores[slots]
+    points["precision"], points["q_global"] = observer.values(scores[slots])
+    points["q_frame"] = required_frame_fpr(scores[target == 0], scores[slots])
+    distance = np.linalg.norm(source.xyzi[:, :3], axis=1)
+    points["distance"] = distance[slots]
+    thresholds = [metrics["recall_at_fpr_limit"]["threshold"], metrics["official_high_recall"]["threshold"]]
+    row = dict(sequence=identity[0], frame=identity[1], eligible=True,
+        normal_points=int(np.count_nonzero(target == 0)),
+        **anomaly_summary(points, metrics["anomaly_count"], thresholds))
+    normal = target == 0
+    groups = []
+    bins = range_ids(distance)
+    for index in range(1, 5):
+        use = normal & (bins == index)
+        groups.append(dict(sequence=identity[0], distance=RANGES[index], normal_points=int(use.sum()),
+            fp_1=int(np.count_nonzero(use & (scores >= thresholds[0]))),
+            fp_95=int(np.count_nonzero(use & (scores >= thresholds[1])))))
+    row.update({key: sum(group[key] for group in groups) for key in ("fp_1", "fp_95")})
+    # Spatial cells select displays only; official metrics keep every original slot.
+    fp_slots = np.flatnonzero(normal & (scores >= thresholds[0]))
+    candidate = None
+    if len(fp_slots):
+        xyz = np.unique(source.xyzi[fp_slots, :3], axis=0)
+        cells, counts = np.unique(np.floor(xyz).astype(np.int32), axis=0, return_counts=True)
+        cell = cells[np.argmax(counts)]
+        members = fp_slots[np.all(np.floor(source.xyzi[fp_slots, :3]) == cell, axis=1)]
+        anchor = int(members[np.argmax(scores[members])])
+        candidate = dict(sequence=identity[0], frame=identity[1], slot=anchor,
+            unique_fp_positions_in_cell=int(counts.max()), cell=cell.tolist(),
+            center=source.xyzi[anchor, :3].astype(float).tolist())
+    return row, points, groups, candidate
+
+
+def select_real_cases(rows, sequences, candidates):
+    failures = sorted((r for r in rows if r["eligible"] and r["sequence"] == 125),
+                      key=lambda r: (-r["ap_deficit_pp"], r["frame"]))[:2]
+    used = {(r["sequence"], r["frame"]) for r in failures}
+    success_key = lambda r: (-r["recall_1_percent"], -r["anomaly_points"], r["sequence"], r["frame"])
+    own = min((r for r in rows if r["eligible"] and r["sequence"] == 125 and (125, r["frame"]) not in used), key=success_key)
+    other = min((r for r in rows if r["eligible"] and r["sequence"] != 125), key=success_key)
+    cases = [dict(kind=kind, sequence=r["sequence"], frame=r["frame"])
+             for kind, r in zip(("125_failure", "125_failure", "125_success", "other_success"), [*failures, own, other], strict=True)]
+    leaders = sorted(sequences, key=lambda r: (-r["fp_1"], r["sequence"]))[:2]
+    for leader in leaders:
+        case = min((c for c in candidates if c and c["sequence"] == leader["sequence"]),
+                   key=lambda c: (-c["unique_fp_positions_in_cell"], c["frame"], c["cell"]))
+        cases.append(dict(kind="normal_cluster", **case))
+    return cases
+
+
+def write_table(path, rows):
+    columns = list(dict.fromkeys(key for row in rows for key in row))
+    with path.open("w", newline="", encoding="utf-8") as stream:
+        writer = csv.DictWriter(stream, fieldnames=columns)
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def inspect_real_cases(cases, data_root, run, points, thresholds, output):
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.font_manager import FontProperties, fontManager
+    from matplotlib.colors import Normalize
+    from scipy.spatial import cKDTree
+
+    chinese = FontProperties(fname="/mnt/c/Windows/Fonts/simsun.ttc")
+    english = FontProperties(fname="/mnt/c/Windows/Fonts/times.ttf")
+    if chinese.get_name() != "SimSun" or english.get_name() != "Times New Roman":
+        raise ValueError("required figure fonts are unavailable")
+    fontManager.addfont(english.get_file())
+    fontManager.addfont(chinese.get_file())
+    matplotlib.rcParams.update({"font.family": "Times New Roman", "pdf.fonttype": 42, "axes.unicode_minus": False})
+    details = []
+    for index, case in enumerate(cases, 1):
+        identity = case["sequence"], case["frame"]
+        source, prediction = read_real(identity, data_root, run)
+        scores, target, eligible = official_frame(source, prediction)
+        if not eligible:
+            raise ValueError("selected case is no longer officially eligible")
+        xyz = source.xyzi[:, :3]
+        anomaly = target == 1
+        normal = target == 0
+        if case["kind"] == "normal_cluster":
+            center = np.asarray(case["center"])
+            display = np.linalg.norm(xyz - center, axis=1) <= 6
+        else:
+            lower, upper = xyz[anomaly].min(axis=0), xyz[anomaly].max(axis=0)
+            center = (lower + upper) / 2
+            display = np.all((xyz >= lower-2) & (xyz <= upper+2), axis=1)
+        display &= ~source.zero_slot_mask
+        local_slots = np.flatnonzero(display)
+        relative = xyz - center
+        frame_points = points[(points["sequence"] == identity[0]) & (points["frame"] == identity[1])]
+        accepted = scores >= thresholds[0]
+        groups = [(display & (target < 0), "#dedede", "范围外或忽略", 2),
+                  (display & normal & ~accepted, "#a8a8a8", "正常正确", 3),
+                  (display & normal & accepted, "#8826a8", "正常误报", 8),
+                  (display & anomaly & accepted, "#008641", "异常检出", 20),
+                  (display & anomaly & ~accepted, "#d73027", "异常漏检", 20)]
+        fig, axes = plt.subplots(3, 3, figsize=(15, 12))
+        for row, (a, b) in enumerate(((0, 1), (0, 2), (1, 2))):
+            left, middle, right = axes[row]
+            left.scatter(relative[display & ~anomaly, a], relative[display & ~anomaly, b], s=3, color="#aaaaaa", linewidths=0, rasterized=True)
+            left.scatter(relative[display & anomaly, a], relative[display & anomaly, b], s=20, color="#0062b8", linewidths=0, rasterized=True)
+            # One fixed raw-logit colour scale for all six displays; scores are never transformed.
+            order = np.r_[local_slots[target[local_slots] != 1], local_slots[target[local_slots] == 1]]
+            scatter = middle.scatter(relative[order, a], relative[order, b], s=np.where(target[order] == 1, 20, 4),
+                c=scores[order], cmap="coolwarm", norm=Normalize(-15, 15), linewidths=0, rasterized=True)
+            for use, color, label, size in groups:
+                right.scatter(relative[use, a], relative[use, b], s=size, color=color, label=label, linewidths=0, rasterized=True)
+            if case["kind"] == "normal_cluster":
+                detail = right.inset_axes((.025, .035, .34, .42))
+                near = np.all(np.abs(relative) <= 1.2, axis=1)
+                for use, color, _, size in groups:
+                    take = use & near
+                    detail.scatter(relative[take, a], relative[take, b], s=size, color=color, linewidths=0, rasterized=True)
+                detail.set(xlim=(-1.2, 1.2), ylim=(-1.2, 1.2), aspect="equal")
+                detail.set_title("误报簇局部", fontproperties=chinese, fontsize=8)
+                detail.tick_params(labelsize=7)
+            for ax in (left, middle, right):
+                ax.set_xlabel(f"{'xyz'[a]} (m)", fontproperties=english)
+                ax.set_ylabel(f"{'xyz'[b]} (m)", fontproperties=english)
+                ax.set_xlim(relative[display, a].min()-.1, relative[display, a].max()+.1)
+                ax.set_ylim(relative[display, b].min()-.1, relative[display, b].max()+.1)
+                ax.set_aspect("equal", adjustable="box")
+                ax.grid(alpha=.15)
+                for tick in ax.get_xticklabels() + ax.get_yticklabels():
+                    tick.set_fontproperties(english)
+        for ax, title in zip(axes[0], ("真实异常标注为蓝色", "原始异常分数", "固定全局阈值下的检出与误报"), strict=True):
+            ax.set_title(title, fontproperties=chinese, fontsize=12)
+        handles, labels = axes[0, 2].get_legend_handles_labels()
+        fig.legend(handles, labels, loc="lower center", ncol=5, prop=chinese)
+        fig.suptitle("真实局部观测与模型排序", fontproperties=chinese, fontsize=17)
+        fig.text(.5, .955, f"Case {index} | val/{identity[0]}/{identity[1]:06d} | t1={thresholds[0]:.6f} | t95={thresholds[1]:.6f} | N+={anomaly.sum()} | TP1={np.count_nonzero(anomaly & accepted)}",
+                 ha="center", fontproperties=english)
+        fig.tight_layout(rect=(0, .055, .93, .94))
+        bar = fig.colorbar(scatter, cax=fig.add_axes((.945, .29, .013, .42)), extend="both")
+        bar.set_label("Raw logit", fontproperties=english)
+        for threshold, label in zip(thresholds, ("t1", "t95"), strict=True):
+            bar.ax.axhline(threshold, color="black", linewidth=.8)
+            bar.ax.text(-.4, threshold, label, ha="right", va="center", fontproperties=english)
+        for tick in bar.ax.get_yticklabels():
+            tick.set_fontproperties(english)
+        stem = f"case_{index}"
+        fig.savefig(output / f"{stem}.png", dpi=160)
+        fig.savefig(output / f"{stem}.pdf")
+        plt.close(fig)
+        # Geometric descriptions concern observed returns, not an inferred ground surface.
+        anomalous_xyz = xyz[anomaly]
+        missed_xyz = xyz[anomaly & ~accepted]
+        nearest_normal = cKDTree(xyz[normal]).query(anomalous_xyz, k=1)[0]
+        normal_local = display & normal
+        raw, counts = np.unique(source.labels.semantic[normal_local], return_counts=True)
+        anomaly_world = anomalous_xyz.astype(np.float64) @ source.lidar_pose[:3, :3].T + source.lidar_pose[:3, 3]
+        summary = dict(case=index, figure=f"{stem}.png", pdf=f"{stem}.pdf", center=center.tolist(),
+            normal_points_local=int(normal_local.sum()), fp_1_local=int(np.count_nonzero(normal_local & accepted)),
+            anomaly_points_local=int(np.count_nonzero(display & anomaly)),
+            score_display_clipped_points=int(np.count_nonzero(display & ((scores < -15) | (scores > 15)))),
+            normal_raw_codes=dict(zip(map(str, raw), map(int, counts), strict=True)),
+            anomaly_unique_positions=len(np.unique(anomalous_xyz, axis=0)),
+            anomaly_extent_xyz_m=np.ptp(anomalous_xyz, axis=0).astype(float).tolist(),
+            missed_extent_xyz_m=np.ptp(missed_xyz, axis=0).astype(float).tolist() if len(missed_xyz) else None,
+            anomaly_world_centroid=anomaly_world.mean(axis=0).tolist(),
+            anomaly_distance_min_m=float(frame_points["distance"].min()),
+            anomaly_distance_max_m=float(frame_points["distance"].max()),
+            anomaly_score_quantiles=np.quantile(scores[anomaly], [0, .1, .5, .9, 1]).tolist(),
+            normal_local_score_quantiles=np.quantile(scores[normal_local], [0, .1, .5, .9, 1]).tolist(),
+            anomaly_nearest_normal_distance_quantiles_m=np.quantile(nearest_normal, [0, .5, .9, 1]).tolist(),
+            nearest_anomaly_to_center_m=float(np.linalg.norm(anomalous_xyz-center, axis=1).min()),
+            **anomaly_summary(frame_points, len(points), thresholds))
+        if case["kind"] == "normal_cluster":
+            cell = np.all(np.floor(xyz) == case["cell"], axis=1) & ~source.zero_slot_mask
+            cell_normal = cell & normal
+            cell_fp = cell_normal & accepted
+            distance = np.linalg.norm(xyz, axis=1)
+            raw, counts = np.unique(source.labels.semantic[cell_fp], return_counts=True)
+            summary["selected_cell"] = dict(actual_points=int(cell.sum()), normal_points=int(cell_normal.sum()),
+                fp_1=int(cell_fp.sum()), outside_range=int(np.count_nonzero(cell &
+                    ((distance < Official.min_eval_distance) | (distance > Official.max_eval_distance)))),
+                distance_min_m=float(distance[cell].min()), distance_max_m=float(distance[cell].max()),
+                fp_extent_xyz_m=np.ptp(xyz[cell_fp], axis=0).tolist(),
+                fp_raw_codes=dict(zip(map(str, raw), map(int, counts), strict=True)),
+                fp_score_quantiles=np.quantile(scores[cell_fp], [0, .5, 1]).tolist())
+        details.append({**case, **summary})
+    _atomic_json(output / "cases.json", dict(rules=REAL_CASE_RULES, thresholds=thresholds,
+        score_display="fixed linear raw logit [-15,15], colour-only clipping; left column marks true anomalies; t1 decisions use full unmodified values",
+        cases=details))
+
+
+def diagnose_real(args):
+    started = time.monotonic()
+    previous = json.loads((args.run / "real.json").read_text())
+    binding = json.loads((args.run / "predictions" / "manifest.json").read_text())
+    with (args.run / "epoch1.pt").open("rb") as stream:
+        digest = hashlib.file_digest(stream, "sha256").hexdigest()
+    if binding != previous["binding"] or binding["checkpoint_sha256"] != digest:
+        raise ValueError("saved real result and predictions do not bind to this epoch1 checkpoint")
+    output = args.run / "attribution"
+    output.mkdir(exist_ok=True)
+    host_before = host_disk()
+    peak = 8 * (previous["metrics"]["normal_count"] + previous["metrics"]["anomaly_count"]) + 100_000_000
+    if host_before["SizeRemaining"] - peak < host_before["reserve_bytes"]:
+        raise OSError("real attribution would consume the E: safety reserve")
+    print(json.dumps(dict(event="real_start", jobs=args.jobs, peak_new_bytes=peak,
+        case_rules=REAL_CASE_RULES, host=host_before)), flush=True)
+    identities = []
+    for sequence in load_protocol().public_sequence_ids:
+        source = STUSequence.open(args.data_root, protocol=load_protocol(), partition="val",
+                                  sequence_id=sequence, label_mode=LabelMode.REQUIRED)
+        identities.extend((sequence, frame) for frame in source.frame_ids)
+    count = 0
+    def progress():
+        nonlocal count
+        count += 1
+        if count % 500 == 0 or count == len(identities):
+            print(json.dumps(dict(event="real_pool", frames=count, seconds=time.monotonic()-started, host=host_disk())), flush=True)
+    observer = APAttribution()
+    metrics, frame_rows = evaluate_frames(real_frames(identities, args.data_root, args.run, args.jobs),
+        directory=output, observe=observer, check_resources=progress)
+    if metrics != previous["metrics"] or frame_rows != previous["frames"]:
+        raise ValueError("original real metrics or official frame membership did not reproduce exactly")
+    observer.values(np.empty(0, np.float32))  # Freeze the small lookup before concurrent read-only queries.
+    _atomic_json(output / "metrics.json", dict(binding=binding, metrics=metrics,
+        original_result_exactly_reproduced=True))
+    print(json.dumps(dict(event="real_metrics", metrics=metrics, seconds=time.monotonic()-started)), flush=True)
+    eligible = [(r["sequence"], r["frame"]) for r in frame_rows if r["eligible"]]
+    rows, point_blocks, candidates, joint = [], [], [], {}
+    def analyze(identity):
+        return real_frame_attribution(identity, args.data_root, args.run, observer, metrics)
+    with ThreadPoolExecutor(args.jobs) as pool:
+        for i, (row, points, groups, candidate) in enumerate(pool.map(analyze, eligible), 1):
+            rows.append(row)
+            point_blocks.append(points)
+            candidates.append(candidate)
+            for group in groups:
+                key = group["sequence"], group["distance"]
+                if key not in joint:
+                    joint[key] = dict(sequence=key[0], distance=key[1], normal_points=0, fp_1=0, fp_95=0)
+                for name in ("normal_points", "fp_1", "fp_95"):
+                    joint[key][name] += group[name]
+            if i % 300 == 0 or i == len(eligible):
+                print(json.dumps(dict(event="real_attribute", frames=i, seconds=time.monotonic()-started, host=host_disk())), flush=True)
+    points = np.concatenate(point_blocks)
+    thresholds = [metrics["recall_at_fpr_limit"]["threshold"], metrics["official_high_recall"]["threshold"]]
+    total = anomaly_summary(points, metrics["anomaly_count"], thresholds)
+    if len(points) != metrics["anomaly_count"] or not np.isclose(total["ap_deficit_pp"], 100-metrics["AP"], rtol=0, atol=1e-10):
+        raise ValueError("positive-point AP deficits do not sum to 100 minus AP")
+    sequences = []
+    for sequence in load_protocol().public_sequence_ids:
+        frames = [r for r in rows if r["sequence"] == sequence]
+        summary = dict(sequence=sequence, eligible_frames=len(frames),
+            **anomaly_summary(points[points["sequence"] == sequence], metrics["anomaly_count"], thresholds))
+        for key in ("normal_points", "fp_1", "fp_95"):
+            summary[key] = sum(r[key] for r in frames)
+        sequences.append(summary)
+    for index, key in ((0, "1"), (1, "95")):
+        reference = metrics["recall_at_fpr_limit" if index == 0 else "official_high_recall"]
+        if sum(r[f"fp_{key}"] for r in rows) != reference["fp"] or total[f"tp_{key}"] != reference["tp"]:
+            raise ValueError("global threshold counts do not match the saved operating point")
+    if sum(r["normal_points"] for r in joint.values()) != metrics["normal_count"]:
+        raise ValueError("joint distance groups lost official normal points")
+    for table in (rows, sequences, list(joint.values())):
+        for row in table:
+            for suffix, reference in (("1", metrics["recall_at_fpr_limit"]), ("95", metrics["official_high_recall"])):
+                row[f"fpr_{suffix}_percent"] = 100 * row[f"fp_{suffix}"] / row["normal_points"] if row["normal_points"] else None
+                row[f"fp_{suffix}_share_percent"] = 100 * row[f"fp_{suffix}"] / reference["fp"]
+            row["additional_fp_to_95"] = row["fp_95"] - row["fp_1"]
+            if "ap_deficit_pp" in row:
+                row["ap_deficit_share_percent"] = 100 * row["ap_deficit_pp"] / total["ap_deficit_pp"]
+    cases = select_real_cases(rows, sequences, candidates)
+    # Persist statistical selection before any local geometry is inspected or plotted.
+    _atomic_json(output / "cases.json", dict(rules=REAL_CASE_RULES, thresholds=thresholds, cases=cases))
+    row_lookup = {(r["sequence"], r["frame"]): r for r in rows}
+    complete_rows = [row_lookup.get((r["sequence"], r["frame"]), {**r, "ap_deficit_pp": 0.0}) for r in frame_rows]
+    write_table(output / "frames.csv", complete_rows)
+    write_table(output / "sequences.csv", sequences)
+    write_table(output / "joint.csv", list(joint.values()))
+    np.savez_compressed(output / "anomalies.npz", **{name: points[name] for name in points.dtype.names})
+    _atomic_json(output / "summary.json", dict(binding=binding, total=total, sequences=sequences,
+        definitions=dict(scope="official eligible frames and original valid slots; no score changes",
+            ap_deficit="100/N_positive * sum(1 - global precision at the complete anomaly-score tie); percentage points, not causal attribution",
+            required_fpr="normal scores >= anomaly score, divided by normal count in global or same-frame official scope",
+            tail="below_t95 is score < official pruned-ROC high-recall threshold; q_global_above_10pct is a separately declared tail descriptor",
+            joint="sequence x sensor distance at unchanged global 1% FPR and official FPR95 thresholds",
+            ineligible="frame inventory retained; ineligible points do not enter AP or required-FPR summaries"),
+        seconds_before_plots=time.monotonic()-started, jobs=args.jobs, host_before=host_before, host_after=host_disk()))
+    inspect_real_cases(cases, args.data_root, args.run, points, thresholds, output)
+    print(json.dumps(dict(event="real_complete", directory=str(output), seconds=time.monotonic()-started, host=host_disk())), flush=True)
 
 
 def scope_masks(xyzi, target):
@@ -337,9 +717,13 @@ def main():
     parser.add_argument("--data-root", type=Path, default=Path("/home/jasongao/Data/STU"))
     parser.add_argument("--run", type=Path, default=Path("results/v1"))
     parser.add_argument("--jobs", type=int, required=True)
+    parser.add_argument("--real", action="store_true", help="attribute saved real val19 ranking and inspect six fixed cases")
     args = parser.parse_args()
     if args.jobs < 1:
         parser.error("jobs must be positive")
+    if args.real:
+        diagnose_real(args)
+        return
     started = time.monotonic()
     previous = json.loads((args.run / "synthetic.json").read_text())
     binding = json.loads((args.run / "predictions" / "manifest.json").read_text())
