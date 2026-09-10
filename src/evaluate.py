@@ -95,13 +95,16 @@ def exact_metrics(
     fpr_limit=0.01,
     score_kind="probability",
     observe=None,
+    fpr_limits=(),
 ):
     """Exact point pooling with bounded RAM; ordered is an ascending uint64 array.
 
     No score quantization is used. ROC drops the same collinear threshold nodes
     as sklearn's default roc_curve before applying the upstream strict TPR > .95.
     """
-    if not 0 <= fpr_limit <= 1 or (prevalence is not None and not 0 < prevalence < 1):
+    if any(not 0 <= limit <= 1 for limit in (fpr_limit, *fpr_limits)) or (
+        prevalence is not None and not 0 < prevalence < 1
+    ):
         raise ValueError("invalid diagnostic prevalence or FPR limit")
     positive = sum(
         int(np.sum(ordered[start : start + chunk_size] & 1, dtype=np.int64))
@@ -124,7 +127,8 @@ def exact_metrics(
         return result
     tp = fp = 0
     ap = area = standardized_ap = 0.0
-    operating_point = dict(recall=0.0, FPR=0.0, threshold=None, tp=0, fp=0)
+    points = {limit: dict(recall=0.0, FPR=0.0, threshold=None, tp=0, fp=0)
+              for limit in (fpr_limit, *fpr_limits)}
     fpr95 = None
     previous = None
     high_recall = None
@@ -144,17 +148,18 @@ def exact_metrics(
                 prevalence * recall / (prevalence * recall + (1 - prevalence) * fpr)
             )
             standardized_ap += float(np.sum(pos / positive * precision))
-        feasible = np.flatnonzero(fpr <= fpr_limit)
-        if len(feasible) and tps[feasible[-1]] > operating_point["tp"]:
-            # Complete score ties are indivisible, including ties across read chunks.
-            index = int(np.searchsorted(tps, tps[feasible[-1]]))
-            operating_point = dict(
-                recall=float(recall[index]) * 100,
-                FPR=float(fpr[index]) * 100,
-                threshold=float(bits_score(bits[index], score_kind)),
-                tp=int(tps[index]),
-                fp=int(fps[index]),
-            )
+        for limit, point in points.items():
+            feasible = np.flatnonzero(fpr <= limit)
+            if len(feasible) and tps[feasible[-1]] > point["tp"]:
+                # Complete ties are indivisible; retain the first threshold at the best recall.
+                index = int(np.searchsorted(tps, tps[feasible[-1]]))
+                points[limit] = dict(
+                    recall=float(recall[index]) * 100,
+                    FPR=float(fpr[index]) * 100,
+                    threshold=float(bits_score(bits[index], score_kind)),
+                    tp=int(tps[index]),
+                    fp=int(fps[index]),
+                )
         area += float(
             np.sum(
                 np.diff(np.r_[fp / negative, fpr])
@@ -197,7 +202,15 @@ def exact_metrics(
         fpr95 = previous[3]  # The final ROC threshold is always retained.
         high_recall = previous[5]
     result.update(AP=ap * 100, AUROC=area * 100, FPR95=fpr95 * 100)
+    operating_point = points[fpr_limit]
     result["recall_at_fpr_limit"] = operating_point
+    if fpr_limits:
+        result["operating_points"] = {
+            f"{limit:g}": {**point, "FPR_limit": limit * 100,
+                            "precision": 100 * point["tp"] / (point["tp"] + point["fp"])
+                            if point["tp"] + point["fp"] else None}
+            for limit, point in points.items()
+        }
     result["official_high_recall"] = {
         **high_recall,
         "fn": positive - high_recall["tp"],
@@ -220,6 +233,7 @@ def pooled_files(
     prevalence=None,
     score_kind="probability",
     observe=None,
+    fpr_limits=(),
 ):
     """Sort exact records on disk, then reduce them in bounded chunks."""
     sizes = [path.stat().st_size for path in paths]
@@ -235,7 +249,8 @@ def pooled_files(
     size = sum(count * 8 for _, count in ranges)
     if not size:
         return exact_metrics(
-            np.empty(0, np.uint64), prevalence=prevalence, score_kind=score_kind
+            np.empty(0, np.uint64), prevalence=prevalence, score_kind=score_kind,
+            fpr_limits=fpr_limits,
         )
     with tempfile.TemporaryFile(dir=paths[0].parent) as stream:
         stream.truncate(size)
@@ -256,7 +271,8 @@ def pooled_files(
         # Numeric in-place quicksort avoids point-count-sized index/ROC arrays.
         ordered.sort(kind="quicksort")
         result = exact_metrics(
-            ordered, prevalence=prevalence, score_kind=score_kind, observe=observe
+            ordered, prevalence=prevalence, score_kind=score_kind, observe=observe,
+            fpr_limits=fpr_limits,
         )
         del ordered
     return result

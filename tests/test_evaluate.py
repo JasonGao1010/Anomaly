@@ -33,6 +33,27 @@ def test_signed_logit_pooling_preserves_unsaturated_order_and_zero_threshold(tmp
         assert result["AUROC"] == pytest.approx(100 * roc_auc_score(target, scores))
 
 
+def test_multiple_global_fpr_limits_match_individual_complete_tie_reductions(tmp_path):
+    scores = np.array([9, 8, 8, 7, 6, 6, 5] + [-4] * 9998, np.float32)
+    target = np.array([1, 1, 0, 1, 1, 0, 0] + [0] * 9998)
+    records = packed_scores(scores, target, score_kind="logit")
+    limits = (0.01, 0.001, 0.0001)
+    path = tmp_path / "scores.bin"
+    records.tofile(path)
+    pooled = pooled_files([path], score_kind="logit", fpr_limits=limits)
+    for chunk in (2, 100000):
+        result = exact_metrics(np.sort(records), chunk_size=chunk, score_kind="logit", fpr_limits=limits)
+        for limit in limits:
+            reference = exact_metrics(np.sort(records), chunk_size=chunk, score_kind="logit", fpr_limit=limit)
+            point = result["operating_points"][f"{limit:g}"]
+            assert {key: point[key] for key in reference["recall_at_fpr_limit"]} == reference["recall_at_fpr_limit"]
+            assert pooled["operating_points"][f"{limit:g}"] == point
+            accepted = scores >= point["threshold"]
+            assert point["fp"] == np.count_nonzero(accepted & (target == 0))
+            assert point["tp"] == np.count_nonzero(accepted & (target == 1))
+            assert point["precision"] == pytest.approx(100 * target[accepted].mean(), abs=1e-12)
+
+
 def test_weighted_ap_and_realizable_recall_keep_score_ties(tmp_path):
     from sklearn.metrics import average_precision_score, roc_auc_score, roc_curve
 
