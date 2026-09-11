@@ -49,7 +49,7 @@ def test_content_selection_precedes_geometry_and_keeps_every_eligible_far_frame(
     assert selected == select_checks([world])
 
 
-def test_supplements_preserve_base_order_and_keep_content_failures_out():
+def test_expansion_preserves_base_order_without_selecting_by_final_returns():
     from src.coverage import select_checks
     from src.generate import select_worlds
 
@@ -63,14 +63,29 @@ def test_supplements_preserve_base_order_and_keep_content_failures_out():
     assert selected[5]["reasons"] == ["declared_content_witness"]
     base = [dict(path="../candidates/train/candidate_009", world_identity="a" * 64),
             dict(path="../candidates/train/candidate_000", world_identity="b" * 64)]
-    reports = [dict(index=2, status="qualified", purpose=dict(achieved=True), world_identity="c" * 64, reason=None),
-               dict(index=0, status="rejected", purpose=dict(achieved=False), reason="content"),
+    reports = [dict(index=2, status="qualified", purpose=dict(achieved=False), count=0,
+                    world_identity="c" * 64, reason=None, family_id="train/2", paired=False, variant=0),
+               dict(index=0, status="rejected", purpose=dict(achieved=False), reason="physical"),
                dict(index=1, status="rejected", purpose=dict(achieved=True), reason="physical")]
     chosen, selection = select_worlds(base, reports, "train")
     assert chosen[:2] == base
-    assert len(chosen) == 3 and chosen[-1]["path"] == "train/supplement_002"
-    assert selection["accepted_supplements"] == [2]
-    assert selection["rejected_supplements"] == {"0": "content", "1": "physical"}
+    assert len(chosen) == 3 and chosen[-1]["path"] == "train/world_002"
+    assert chosen[-1]["cohort"] == "added"
+    assert selection["accepted"] == [2]
+    assert selection["rejected"] == {"0": "physical", "1": "physical"}
+
+
+def test_expansion_geometry_parents_stay_within_source_and_budget():
+    from src.generate import expansion_schedule
+
+    config = json.loads(Path("protocol/data.json").read_text())
+    schedule = expansion_schedule(config)
+    assert len({r["seed"] for r in schedule}) == len(schedule)
+    for split, count, pairs in (("train", 60, 8), ("validation", 20, 4)):
+        groups = [r for r in schedule if r["split"] == split]
+        assert [i for r in groups for i in r["members"]] == list(range(count))
+        assert sum(len(r["members"]) == 2 for r in groups) == pairs
+        assert {r["profile"]["shape"] for r in groups} == {"single", "step", "elbow", "bridge"}
 
 
 def test_profile_weights_and_quantile_bounds(tmp_path):

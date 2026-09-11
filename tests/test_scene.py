@@ -258,7 +258,8 @@ def test_composed_shape_bounds_grounding_and_distinct_contacts():
     from src.coverage import conditions
 
     profile = dict(length_m=[1.2, 1.2], width_m=[.8, .8], height_m=[.3, .3])
-    config = dict(exponents=[1., 1.], composed_exponents=[1., 1.])
+    config = dict(exponents=[1., 1.], composed_exponents=[1., 1.],
+                  part_scale_multiplier=[1., 1.], part_offset_jitter=0., part_yaw_rad=[0., 0.])
     for family, count in (("single", 1), ("step", 2), ("elbow", 3), ("bridge", 3)):
         shape, geometry = make_shape(np.random.default_rng(13), dict(profile, shape=family), config)
         assert len(shape.primitive_scales_m) == count
@@ -283,7 +284,8 @@ def test_proposal_counts_true_surface_gaps_occlusion_and_the_same_signal(monkeyp
 
     shape, geometry = make_shape(np.random.default_rng(13),
                                 dict(shape="bridge", length_m=[1.2, 1.2], width_m=[.8, .8], height_m=[.3, .3]),
-                                dict(exponents=[1., 1.], composed_exponents=[1., 1.]))
+                                dict(exponents=[1., 1.], composed_exponents=[1., 1.],
+                                     part_scale_multiplier=[1., 1.], part_offset_jitter=0., part_yaw_rad=[0., 0.]))
     x = np.asarray(shape.primitive_offsets_m)[:2, 0]
     origins = np.array([[0, 0, -.14], [0, x[0], -.14], [0, x[1], -.14]])
     directions = np.tile([1., 0, 0], (3, 1))

@@ -73,6 +73,8 @@ def inventory(directory):
                 background=generation.get("background", "not_stratified"),
                 candidate_category=generation.get("candidate_category", "development_pool"),
                 origin=entry.get("origin", "base"),
+                cohort=entry.get("cohort", "original"),
+                family_id=entry.get("family_id"), paired=entry.get("paired", False),
                 content_check_frames=manifest.get("content_check_frames", []),
                 exponents=shape["primitive_exponents"], material=obj["material"],
                 support_semantic=generation["placement"]["support_semantic"],
@@ -98,21 +100,27 @@ def inventory(directory):
             )
             worlds.append(world)
         assert sum(len(w["rows"]) for w in worlds if w["split"] == split) == part["samples"]
+    return root, worlds, inventory_totals(worlds, root["splits"])
+
+
+def inventory_totals(worlds, splits):
     totals = {}
-    for split in root["splits"]:
+    for split in splits:
         selected = [w for w in worlds if w["split"] == split]
         totals[split] = {}
         for name in conditions(dict(height_m=0), dict(count=0, in_range=0)):
-            frames, points, inside = {}, {}, {}
+            frames, points, inside, source_frames = {}, {}, {}, set()
             for w in selected:
                 rows = [r for r in w["rows"] if conditions(w, r)[name]]
                 frames[w["world"]] = len(rows)
                 points[w["world"]] = sum(r["count"] for r in rows)
                 inside[w["world"]] = sum(r["in_range"] for r in rows)
+                source_frames.update((w["source_sequence"], r["frame"]) for r in rows)
             totals[split][name] = dict(frames=concentration(frames),
                                        anomaly_returns=concentration(points),
-                                       in_range_anomaly_returns=concentration(inside))
-    return root, worlds, totals
+                                       in_range_anomaly_returns=concentration(inside),
+                                       unique_source_frames=len(source_frames))
+    return totals
 
 
 def select_checks(worlds, far_limit=None):
@@ -793,7 +801,9 @@ def main():
         if args.geometry or args.inventory_only or args.new_only or args.far_limit is not None:
             parser.error("--summarize only reads existing full-pool and fixed-selection records")
         coverage = Path(protocol["content_coverage"]["output"]).parent
-        report = summarize_existing(Path(protocol["dataset"]["directory"]), coverage)
+        # Fixed geometry evidence retains its original population after pool expansion.
+        fixed = json.loads((coverage / "geometry/inserted/selection.json").read_text())["dataset"]
+        report = summarize_existing(args.dataset or Path(fixed), coverage)
         output = args.output or coverage / "summary.json"
         _atomic_json(output, report)
         print(json.dumps(dict(output=str(output), scope=report["scope"])), flush=True)
@@ -807,7 +817,7 @@ def main():
     if args.far_limit is not None and args.far_limit < 1:
         parser.error("far limit must be positive")
     root, worlds, totals = inventory(Path(protocol["dataset"]["directory"]))
-    selections = select_checks([w for w in worlds if not args.new_only or w["origin"] == "supplement"], args.far_limit)
+    selections = select_checks([w for w in worlds if not args.new_only or w["origin"] in ("supplement", "expanded")], args.far_limit)
     report = dict(scope="full_pool_inventory_and_targeted_scan_checks_not_full_pool_geometric_support_coverage",
                   dataset=protocol["dataset"]["directory"], pool_status=root["status"],
                   local_scope="supplement_only" if args.new_only else "all_selected_worlds",
@@ -827,7 +837,10 @@ def main():
                                    raised_normal="known normal with valid reference-surface fit and offset in [-0.20,-0.05] m; descriptive proxy, no curb annotation or learned difficulty claim",
                                    counts="return observations, not distinct objects or independent trials; repeated backgrounds remain correlated"),
                   worlds=[{k: v for k, v in w.items() if k != "rows"} for w in worlds],
-                  inventory=totals, selection=selections, checks=[])
+                  inventory=totals,
+                  cohorts={c: inventory_totals([w for w in worlds if w["cohort"] == c], root["splits"])
+                           for c in sorted({w["cohort"] for w in worlds})},
+                  selection=selections, checks=[])
     _atomic_json(args.output, report)
     print(json.dumps(dict(worlds=len(worlds), frames=sum(len(w["rows"]) for w in worlds), selected=len(selections))), flush=True)
     if args.inventory_only:

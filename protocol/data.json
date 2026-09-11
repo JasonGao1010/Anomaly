@@ -3,25 +3,25 @@
   "version": 1,
   "base_protocol": "spec.json",
   "seed": 2062026,
-  "scope": "保留既有合成数据的生成参数和核查工具；正式AJAE V1尚未设计实现。本轮不生成新世界或修改冻结样本。",
+  "scope": "已按用户授权扩充为训练80世界、验证40世界并冻结；原世界保留，正式模型设计仍未开始。",
   "dataset": {
-    "directory": "results/synthetic/experiment",
+    "directory": "results/synthetic/expanded",
     "unit": "one_source_sequence_and_one_fixed_world_object",
     "input_unit": "one_current_scan_xyzi",
     "splits": {
       "train": {
         "source_sequence": 206,
         "frames_per_world": 449,
-        "candidates": 4,
-        "base_worlds": 16,
-        "maximum_worlds": 20
+        "candidates": 60,
+        "base_worlds": 20,
+        "maximum_worlds": 80
       },
       "validation": {
         "source_sequence": 201,
         "frames_per_world": 682,
-        "candidates": 4,
-        "base_worlds": 16,
-        "maximum_worlds": 20
+        "candidates": 20,
+        "base_worlds": 20,
+        "maximum_worlds": 40
       }
     },
     "all_frames": "render_once_and_freeze_including_zero_anomaly_returns",
@@ -29,17 +29,17 @@
     "anomaly_target": "inserted_returns_only",
     "normal_target": "valid_original_normal_class_map_entries",
     "split_unit": "whole_world_and_source_sequence",
-    "base_directory": "results/synthetic/candidates"
+    "base_directory": "results/synthetic/experiment"
   },
   "information_use": {
-    "current_pool": "results/synthetic/experiment；按原顺序引用32个基础世界并追加8个既有补充，划分、标签及来源保持冻结。",
-    "generation_sources": "仅正常206/201、射线、标定和预先指定的物理内容条件；不以val19分布拟合为生成或选择目标。",
+    "current_pool": "原experiment的40世界原序保留，新生成60个训练与20个验证世界；原验证20世界标为original，新增验证20世界标为added，分别报告。",
+    "generation_sources": "仅原正常206/201、既有射线与传感器标定及预定物理变化；不使用val19分布选样，不引入其他正常来源。",
     "historical_development_pool": "results/synthetic/v1已使用val19聚合统计生成和选样；本轮完整保留，隔离于当前默认数据入口。",
     "original_records": "冻结清单与世界定义完整保留原始配置、实现摘要和来源字段。旧源码名称是生成时的历史记录，不随工具整理重写。"
   },
   "content_coverage": {
     "implementation": "src/coverage.py",
-    "output": "results/coverage/experiment.json",
+    "output": "results/coverage/expanded.json",
     "conditions": {
       "eligible": "当前帧在传感器距离 [2.5,50] 米内至少 5 个异常回波，遵循官方计数口径。",
       "few": "官方距离内 5–19 个异常回波。",
@@ -47,7 +47,7 @@
       "low": "整个物体在物体局部坐标中的连续几何范围高度不超过 0.2 米；包含全部基元、偏移与变形，不等同重力方向高度。",
       "far_denser": "异常中位距离在[35,50]米且官方距离内至少20个异常回波；仅作探索性内容记录，不代表删减后几何可计算。"
     },
-    "scope": "既有40世界的内容统计和固定扫描几何核查；保留全部既有结果与选样记录，不重选或重生成。",
+    "scope": "扩充池全量清单统计；原40世界的固定几何核查保持原范围，不扩展其比例。",
     "geometry_use": "边界、删减观测对应及参考表面仅服务于既有数据生成和核查，不是正式AJAE V1监督任务。"
   },
   "geometry": {
@@ -133,14 +133,14 @@
     "background_radius_m": 3,
     "footprint": "complete_object_local_xy_circumcircle_inside_observed_inlier_hull",
     "background": "structured_if_at_least_two_support_semantics_or_three_known_non_ground_returns_within_3m_else_ground",
-    "far_proposals": "rank_true_foreground_shape_surface_hits_in_three_predeclared_far_frames;_record_box_hits_and_fixed_final_signal_separately",
+    "far_proposals": "require center-trajectory near and far opportunities; do not rank or accept by returned signal counts",
     "reference_cluster_radius_m": 0.3,
     "minimum_reference_positions": 3,
     "reference_clearance_m": [
       0.15,
       0.65
     ],
-    "normal_reference": "propose_ground_anchors_near_native_known_normal_returns_with_valid_surface_offset_in_[-0.20,-0.05]m;_protect_all_selected_reference_positions_from_occlusion"
+    "normal_reference": "preserve selected native raised-normal positions; geometry is a placement-context diagnostic only"
   },
   "shape": {
     "exponents": [
@@ -160,127 +160,288 @@
       0.4,
       1.2
     ],
-    "dimensions": "log_uniform_whole_object_local_extents_from_each_proposal_category",
-    "bounds": "continuous_outer_bounds_in_object_local_axes_with_1e-6_m_padding"
+    "dimensions": "sample nominal whole-object extents before within-part yaw; record actual continuous local-axis bounds, including all rotations",
+    "bounds": "continuous_outer_bounds_in_object_local_axes_with_1e-6_m_padding",
+    "part_scale_multiplier": [
+      0.8,
+      1.2
+    ],
+    "part_offset_jitter": 0.06,
+    "part_yaw_rad": [
+      -0.35,
+      0.35
+    ]
   },
   "qualification": {
     "reference_use": "normal_sources_and_predeclared_content_only",
-    "minimum_eligible_frames": 1,
-    "base_selection": "retain_all_32_base_worlds_in_original_order_without_rerendering_or_auxiliary_selection",
-    "supplement_selection": "append_only_physically_valid_complete_worlds_achieving_their_predeclared_source_specific_purpose",
-    "freeze": "freeze_after_the_eight_bounded_attempts_at_actual_successful_counts;_no_filling_quotas_or_unlimited_resampling",
-    "far_denser": "exploratory_observation_group_only;_not_a_selection_or_freezing_requirement",
+    "minimum_eligible_frames": 0,
+    "base_selection": "retain_every_original_world_in_order_with_original_cohort",
+    "supplement_selection": "accept_first_fully_physically_legal_world_or_yaw_pair; no threshold on final returns or anomaly scores",
+    "freeze": "bounded_shape_and_support_search_per_planned_group; no unplanned_seed_extension",
+    "far_denser": "record_only_no_acceptance_threshold",
     "hard_frames": "retain_all_actual_returns_and_detection_labels_regardless_of_geometry_measurement_validity"
   },
   "calibration_source": "results/synthetic/candidates/calibration.pt",
   "proposals": {
-    "seed_namespace": 1,
-    "repeats_per_source": 2,
-    "categories": {
+    "seed_namespace": 2,
+    "families": [
+      "single",
+      "step",
+      "elbow",
+      "bridge"
+    ],
+    "shape_attempts": 3,
+    "profiles": {
       "train": [
         {
-          "name": "low_far_single",
-          "shape": "single",
-          "view": "low_far",
+          "name": "low",
+          "repeats": 3,
+          "view": "ordinary",
           "background": "any",
           "length_m": [
-            1.4,
+            0.4,
             1.8
           ],
           "width_m": [
-            1.0,
-            1.5
+            0.3,
+            1.2
           ],
           "height_m": [
-            0.16,
+            0.1,
             0.195
+          ],
+          "yaw_offsets_rad": [
+            0.0
           ]
         },
         {
-          "name": "low_far_composed",
-          "shape": "elbow",
-          "view": "low_far",
-          "background": "any",
+          "name": "raised",
+          "repeats": 3,
+          "view": "ordinary",
+          "background": "structured",
           "length_m": [
-            1.4,
+            0.4,
             1.8
           ],
           "width_m": [
-            1.0,
-            1.5
+            0.3,
+            1.2
           ],
           "height_m": [
-            0.16,
+            0.22,
+            0.8
+          ],
+          "yaw_offsets_rad": [
+            0.0
+          ]
+        },
+        {
+          "name": "low_range",
+          "repeats": 3,
+          "view": "range_span",
+          "background": "any",
+          "length_m": [
+            0.8,
+            1.8
+          ],
+          "width_m": [
+            0.5,
+            1.2
+          ],
+          "height_m": [
+            0.1,
             0.195
+          ],
+          "yaw_offsets_rad": [
+            0.0
+          ]
+        },
+        {
+          "name": "native_context",
+          "repeats": 2,
+          "view": "normal_reference",
+          "background": "any",
+          "length_m": [
+            0.4,
+            1.2
+          ],
+          "width_m": [
+            0.3,
+            0.8
+          ],
+          "height_m": [
+            0.1,
+            0.3
+          ],
+          "yaw_offsets_rad": [
+            0.0
+          ]
+        },
+        {
+          "name": "low_yaw_pair",
+          "repeats": 1,
+          "view": "ordinary",
+          "background": "any",
+          "length_m": [
+            0.4,
+            1.8
+          ],
+          "width_m": [
+            0.3,
+            1.2
+          ],
+          "height_m": [
+            0.1,
+            0.195
+          ],
+          "yaw_offsets_rad": [
+            0.0,
+            1.5707963267948966
+          ]
+        },
+        {
+          "name": "raised_yaw_pair",
+          "repeats": 1,
+          "view": "ordinary",
+          "background": "any",
+          "length_m": [
+            0.4,
+            1.8
+          ],
+          "width_m": [
+            0.3,
+            1.2
+          ],
+          "height_m": [
+            0.22,
+            0.7
+          ],
+          "yaw_offsets_rad": [
+            0.0,
+            1.5707963267948966
           ]
         }
       ],
       "validation": [
         {
-          "name": "low_reference_single",
-          "shape": "single",
-          "view": "normal_reference",
+          "name": "low_range",
+          "repeats": 1,
+          "view": "range_span",
           "background": "any",
           "length_m": [
             0.8,
-            1.2
+            1.8
           ],
           "width_m": [
-            0.4,
-            0.8
+            0.5,
+            1.2
           ],
           "height_m": [
-            0.08,
-            0.18
+            0.1,
+            0.195
+          ],
+          "yaw_offsets_rad": [
+            0.0
           ]
         },
         {
-          "name": "low_reference_composed",
-          "shape": "elbow",
+          "name": "native_context",
+          "repeats": 1,
           "view": "normal_reference",
           "background": "any",
           "length_m": [
-            0.8,
+            0.4,
             1.2
           ],
           "width_m": [
-            0.6,
-            0.9
+            0.3,
+            0.8
           ],
           "height_m": [
-            0.08,
-            0.18
+            0.1,
+            0.3
+          ],
+          "yaw_offsets_rad": [
+            0.0
+          ]
+        },
+        {
+          "name": "raised",
+          "repeats": 1,
+          "view": "ordinary",
+          "background": "structured",
+          "length_m": [
+            0.4,
+            1.8
+          ],
+          "width_m": [
+            0.3,
+            1.2
+          ],
+          "height_m": [
+            0.22,
+            0.8
+          ],
+          "yaw_offsets_rad": [
+            0.0
+          ]
+        },
+        {
+          "name": "low_yaw_pair",
+          "repeats": 1,
+          "view": "ordinary",
+          "background": "any",
+          "length_m": [
+            0.4,
+            1.8
+          ],
+          "width_m": [
+            0.3,
+            1.2
+          ],
+          "height_m": [
+            0.1,
+            0.195
+          ],
+          "yaw_offsets_rad": [
+            0.0,
+            1.5707963267948966
           ]
         }
       ]
     },
-    "seed_rule": "SeedSequence([2062026,1,source_sequence,index]).generate_state(1)[0]; index=category_index*2+repeat; a new stream distinct from the 32 base worlds",
-    "normal_reference_frames": [
-      40,
-      120,
-      200,
-      280,
-      360,
-      440,
-      520,
-      600
-    ],
+    "normal_reference_frames": {
+      "train": [
+        16,
+        72,
+        128,
+        184,
+        240,
+        296,
+        352,
+        408
+      ],
+      "validation": [
+        40,
+        120,
+        200,
+        280,
+        360,
+        440,
+        520,
+        600
+      ]
+    },
     "far_check_ranges_m": [
       36,
       42,
       48
     ],
-    "yaw_offsets_rad": [
-      -0.5235987755982988,
-      0.0,
-      0.5235987755982988
-    ],
-    "budget": "exactly four attempts per source, at most eight complete new worlds and 4524 new frames; never append seeds or replace a failed candidate",
-    "support_budget": "one fixed shape and material per seed; up to 192 anchor attempts and 12 geometrically qualified supports; three specified yaw offsets per support",
-    "far_score": "maximize number of check frames with at least five distinct true foreground surface ray hits, then sum of true hits capped at twelve per frame, then proposal order; final signal draws do not enter the score",
-    "normal_reference_goal": "at least one official-eligible complete frame of a low object jointly observes at least three distinct original known normal positions within 2m of an inserted return, each with unchanged reference surface-valid offset in [-0.20,-0.05]m; all protected reference positions retain exact original xyzi and labels",
-    "normal_reference_search": "compute reference surface on complete original scans at the eight fixed normal-source frames; choose a native reference cluster within 0.3m and a normal anchor at whole-object footprint radius plus 0.15 to 0.65m; protect the cluster; qualify on its declared source frame after full rendering",
-    "low_far_goal": "whole-object local height <=0.2m and at least one complete rendered frame with anomaly median range [35,50]m and >=5 anomaly returns after [2.5,50]m filtering",
-    "signal_rule": "reuse exact shape intersection, foreground competition and fixed world/frame/ray signal draws; do not change return probability, relocate points or repeat signal draws"
+    "anchor_windows": 4,
+    "seed_rule": "SeedSequence([2062026,2,source_sequence,group_index]); geometry parents and yaw variants stay within one split",
+    "budget": "52 train groups generate 60 new worlds; 16 validation groups generate 20; at most 3 physical shape attempts and 192 support draws/12 locally qualified supports per group; failures remain documented and do not trigger unlimited replacements",
+    "selection": "first connected grounded shape and first support legal over the complete observed trajectory; no final-signal, probe or eligible-frame acceptance filter",
+    "pairs": "8 train and 4 validation yaw pairs share shape, material, support anchor, normal, source and signal seed; offsets 0 and pi/2; both variants must pass physical checks",
+    "signal_rule": "unchanged exact renderer, foreground competition, return probabilities and fixed ray/frame signal draws; retain all frames including no-return and sparse observations"
   }
 }
