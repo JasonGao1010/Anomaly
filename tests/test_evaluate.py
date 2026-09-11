@@ -5,7 +5,9 @@ from src.data import FramePrediction
 from src.evaluate import (
     official_metrics,
     exact_metrics,
+    metrics_from_groups,
     packed_scores,
+    score_bits,
     pooled_files,
     diagnostic_bin,
     APAttribution,
@@ -101,6 +103,63 @@ def test_diagnostic_strata_use_fixed_half_open_boundaries():
     assert diagnostic_bin(500, 50) == "3_3"
     with pytest.raises(ValueError, match="official-range"):
         diagnostic_bin(5, 50.001)
+
+
+@pytest.mark.parametrize("block_size", [1, 3, 1000000])
+def test_merged_frame_ties_match_exact_point_metrics(block_size):
+    scores = np.array(
+        [-80, -4, -0.0, 0.0, 4, 80, 81, 81] * 13, dtype=np.float32
+    )
+    labels = (np.arange(len(scores)) % 7 < 3).astype(np.int64)
+    bits = score_bits(scores, "logit")
+    merged = {}
+    # Merge per-frame unique scores without expanding or rounding any tie.
+    for rows in np.array_split(np.arange(len(scores)), 5):
+        unique, inverse, counts = np.unique(
+            bits[rows], return_inverse=True, return_counts=True
+        )
+        positives = np.bincount(inverse, weights=labels[rows]).astype(np.int64)
+        for key, count, positive in zip(unique, counts, positives, strict=True):
+            old_count, old_positive = merged.get(key, (0, 0))
+            merged[key] = (old_count + count, old_positive + positive)
+    unique = np.array(sorted(merged, reverse=True), dtype=np.uint32)
+    counts, positives = np.array([merged[key] for key in unique], np.int64).T
+    groups = (
+        (unique[start:start + block_size], counts[start:start + block_size],
+         positives[start:start + block_size])
+        for start in range(0, len(unique), block_size)
+    )
+    kwargs = dict(score_kind="logit", prevalence=0.03, fpr_limits=(0.1, 0.5))
+    grouped_observer, point_observer = APAttribution(), APAttribution()
+    result = metrics_from_groups(
+        groups, positive=int(labels.sum()), negative=int((labels == 0).sum()),
+        observe=grouped_observer, **kwargs,
+    )
+    expected = exact_metrics(
+        np.sort(packed_scores(scores, labels, score_kind="logit")),
+        chunk_size=5, observe=point_observer, **kwargs,
+    )
+    # Only floating summation grouping may differ; thresholds and counts are exact.
+    for name in ("AP", "AUROC", "standardized_AP"):
+        assert result.pop(name) == pytest.approx(expected.pop(name), abs=1e-12, rel=0)
+    assert result == expected
+    for name in ("bits", "precision", "required_fpr"):
+        np.testing.assert_array_equal(
+            np.concatenate(getattr(grouped_observer, name)),
+            np.concatenate(getattr(point_observer, name)),
+        )
+
+
+def test_group_metrics_reject_incomplete_ties_and_wrong_totals():
+    bits = score_bits([0.9, 0.8], "probability")
+    one = np.array([1], np.int64)
+    zero = np.array([0], np.int64)
+    with pytest.raises(ValueError, match="complete ties"):
+        metrics_from_groups(
+            [(bits[:1], one, one), (bits[:1], one, zero)], positive=1, negative=1
+        )
+    with pytest.raises(ValueError, match="match class totals"):
+        metrics_from_groups([(bits[:1], one, one)], positive=1, negative=1)
 
 
 @pytest.mark.parametrize("chunk_size", [1, 2, 7, 1000000])

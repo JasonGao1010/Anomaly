@@ -27,10 +27,140 @@ LENGTH_BINS = (0, 0.01, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 50, float("inf"))
 INTENSITY_BINS = (-float("inf"), 0, 0.05, 0.1, 0.2, 0.4, 0.6, 1, 2, float("inf"))
 GROUND = (40, 44, 48, 49, 60)
 NAMES = ("normal", "anomaly", "ignore")
+GEOMETRY_PARAMETERS = dict(
+    neighbors=32,
+    radius_m=2.0,
+    minimum_neighbors=8,
+    normal_eigengap=0.05,
+    normal_second_eigenvalue_min=1e-12,
+    minimum_normal_neighbors=8,
+)
 
 
 def categories(semantic):
     return np.where(semantic == 2, 1, np.where(semantic == 0, 2, 0))
+
+
+def observed_geometry(xyzi, source_slots, query_slots=None, workers=1, block_size=4096):
+    """Label-free geometry from the complete current scan, returned by file slot.
+
+    Covariance uses up to 32 distinct neighboring positions within 2 m, excluding
+    the query, with population normalization. At least eight positions are needed.
+    Normals additionally require the stated eigengap; nonplanar shape statistics
+    remain available. These reliability thresholds are fixed pilot conventions.
+    Normal change is the mean unoriented angle in radians to valid neighbor normals.
+    """
+    xyzi, slots = np.asarray(xyzi), np.asarray(source_slots)
+    if (slots.ndim != 1 or xyzi.shape != (len(slots), 4)
+            or not np.issubdtype(slots.dtype, np.integer)
+            or np.any(slots < 0) or np.any(slots > np.iinfo(np.int32).max)
+            or len(np.unique(slots)) != len(slots)):
+        raise ValueError("xyzi requires one unique nonnegative original file slot per row")
+    if not np.isfinite(xyzi).all() or np.any(np.all(xyzi[:, :3] == 0, axis=1)):
+        raise ValueError("geometry requires only finite actual returns")
+    if workers < 1 or block_size < 1:
+        raise ValueError("workers and block_size must be positive")
+    query = slots if query_slots is None else np.asarray(query_slots)
+    if query.ndim != 1 or not np.issubdtype(query.dtype, np.integer):
+        raise ValueError("query_slots must contain original integer file slots")
+    order = np.argsort(slots)
+    rows = np.searchsorted(slots[order], query)
+    if np.any(rows >= len(slots)) or not np.array_equal(slots[order[rows]], query):
+        raise ValueError("query_slots include a slot absent from this complete scan")
+    rows = order[rows]
+    xyz, inverse = np.unique(xyzi[:, :3].astype(np.float64), axis=0, return_inverse=True)
+    n, p = len(xyz), GEOMETRY_PARAMETERS
+    k, radius = p["neighbors"], p["radius_m"]
+    representative = np.full(n + 1, np.iinfo(np.int32).max, np.int32)
+    np.minimum.at(representative, inverse, slots.astype(np.int32))
+    padded_xyz = np.vstack((xyz, np.zeros(3)))
+    tree = cKDTree(xyz)
+    neighbors = np.full((n, k), -1, np.int32)
+    count = np.zeros(n, np.int16)
+    names = ("scale", "surface_residual", "roughness", "normal_change", "variation",
+             "linearity", "planarity", "residual_scaled", "roughness_scaled")
+    values = {name: np.full(n, np.nan) for name in names}
+    normals = np.full((n, 3), np.nan)
+    valid, normal_valid, change_valid = (np.zeros(n, bool) for _ in range(3))
+    for start in range(0, n, block_size):
+        stop = min(n, start + block_size)
+        selected = np.arange(start, stop)
+        # One extra candidate exposes boundary ties; original slots break them.
+        _, ids = tree.query(xyz[selected], k=np.arange(1, k + 3),
+                            distance_upper_bound=np.nextafter(radius, np.inf), workers=workers)
+        distances = np.linalg.norm(padded_xyz[ids] - xyz[selected, None], axis=2)
+        distances[(ids == selected[:, None]) | (ids == n) | (distances > radius)] = np.inf
+        sort = np.lexsort((representative[ids], distances), axis=1)
+        ids = np.take_along_axis(ids, sort, axis=1)
+        distances = np.take_along_axis(distances, sort, axis=1)
+        tied = np.flatnonzero(np.isfinite(distances[:, k]) & (distances[:, k-1] == distances[:, k]))
+        for row in tied:
+            candidates = np.asarray(tree.query_ball_point(
+                xyz[selected[row]], np.nextafter(distances[row, k], np.inf)), np.int32)
+            measured = np.linalg.norm(xyz[candidates] - xyz[selected[row]], axis=1)
+            keep = (candidates != selected[row]) & (measured <= radius)
+            candidates, measured = candidates[keep], measured[keep]
+            take = np.lexsort((representative[candidates], measured))[:k]
+            ids[row, :k], distances[row, :k] = candidates[take], measured[take]
+        ids, distances = ids[:, :k], distances[:, :k]
+        seen = np.isfinite(distances)
+        counts = seen.sum(axis=1)
+        neighbors[selected] = np.where(seen, ids, -1)
+        count[selected] = counts
+        eligible = counts >= p["minimum_neighbors"]
+        local_rows = np.flatnonzero(eligible)
+        if not len(local_rows):
+            continue
+        chosen = selected[eligible]
+        sizes = counts[eligible]
+        values["scale"][chosen] = (
+            distances[local_rows, (sizes - 1) // 2] + distances[local_rows, sizes // 2]) / 2
+        # Use offsets to avoid subtracting two large raw-coordinate moments.
+        offsets = padded_xyz[ids[eligible]] - xyz[chosen, None]
+        visible = seen[eligible]
+        offsets[~visible] = 0
+        center = offsets.sum(axis=1) / sizes[:, None]
+        centered = offsets - center[:, None]
+        centered[~visible] = 0
+        covariance = np.einsum("bni,bnj->bij", centered, centered) / sizes[:, None, None]
+        eigen, vectors = np.linalg.eigh(covariance)
+        eigen = np.maximum(eigen, 0)
+        total, largest = eigen.sum(axis=1), eigen[:, 2]
+        defined = total > 0
+        valid[chosen] = defined
+        usable = chosen[defined]
+        values["roughness"][usable] = np.sqrt(eigen[defined, 0])
+        values["variation"][usable] = eigen[defined, 0] / total[defined]
+        values["linearity"][usable] = (eigen[defined, 2] - eigen[defined, 1]) / largest[defined]
+        values["planarity"][usable] = (eigen[defined, 1] - eigen[defined, 0]) / largest[defined]
+        reliable = (defined & (eigen[:, 1] > p["normal_second_eigenvalue_min"])
+                    & ((eigen[:, 1] - eigen[:, 0]) >= p["normal_eigengap"] * largest))
+        normal_valid[chosen] = reliable
+        normals[chosen[reliable]] = vectors[reliable, :, 0]
+        values["surface_residual"][chosen[reliable]] = np.abs(
+            np.einsum("bi,bi->b", center[reliable], vectors[reliable, :, 0]))
+    # Every neighbor normal uses its own full-scan support, including unqueried points.
+    for start in range(0, n, block_size):
+        chosen = np.flatnonzero(normal_valid[start:start + block_size]) + start
+        ids = neighbors[chosen]
+        usable = (ids >= 0) & normal_valid[np.maximum(ids, 0)]
+        counts = usable.sum(axis=1)
+        enough = counts >= p["minimum_normal_neighbors"]
+        chosen, ids, usable, counts = chosen[enough], ids[enough], usable[enough], counts[enough]
+        cosine = np.abs(np.einsum("bi,bni->bn", normals[chosen], normals[np.maximum(ids, 0)]))
+        angles = np.arccos(np.clip(cosine, 0, 1))
+        values["normal_change"][chosen] = np.where(usable, angles, 0).sum(axis=1) / counts
+        change_valid[chosen] = True
+    for target, raw in (("residual_scaled", "surface_residual"), ("roughness_scaled", "roughness")):
+        np.divide(values[raw], values["scale"], out=values[target], where=np.isfinite(values["scale"]))
+    query_positions = inverse[rows]
+    distance = np.linalg.norm(xyzi[rows, :3].astype(np.float64), axis=1)
+    return dict(source_slot=query.astype(np.int32), range=distance.astype(np.float32),
+                ray_z=(xyzi[rows, 2] / distance).astype(np.float32),
+                neighbor_count=count[query_positions], valid=valid[query_positions],
+                condition_valid=np.isfinite(values["scale"][query_positions]),
+                normal_valid=normal_valid[query_positions], normal_change_valid=change_valid[query_positions],
+                **{name: array[query_positions].astype(np.float32) for name, array in values.items()})
 
 
 class Ledger:

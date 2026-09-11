@@ -7,6 +7,7 @@ from src.profile import (
     describe,
     frame_geometry,
     ground_relation,
+    observed_geometry,
 )
 from src.scene import PointLabels, make_source_frame
 
@@ -154,3 +155,64 @@ def test_empty_scan_and_unknown_instance_keep_missing_values():
     record, instances, points = frame_geometry(source, Ledger())
     assert record["unknown_instance_points"] == 1 and record["instance_count"] is None
     assert not instances and np.isnan(points["same_instance_neighbor_distance"]).all()
+
+
+def test_observed_plane_residual_uses_unqueried_full_scan_neighbors():
+    angles = np.arange(32) * (2 * np.pi / 32)
+    xyz = np.column_stack((10 + .5 * np.cos(angles), .5 * np.sin(angles), np.ones(32)))
+    xyzi = np.column_stack((np.vstack(([10, 0, 1.2], xyz)), np.zeros(33)))
+    slots = np.arange(33, dtype=np.int32) * 3 + 7
+    result = observed_geometry(xyzi, slots, slots[:1], block_size=5)
+    assert result["source_slot"].tolist() == [7]
+    assert result["neighbor_count"].tolist() == [32]
+    assert result["valid"].all() and result["condition_valid"].all() and result["normal_valid"].all()
+    assert result["surface_residual"][0] == pytest.approx(.2)
+    assert result["roughness"][0] == pytest.approx(0, abs=1e-7)
+    assert result["variation"][0] == pytest.approx(0, abs=1e-7)
+    assert result["planarity"][0] == pytest.approx(1)
+    assert result["scale"][0] == pytest.approx(np.sqrt(.5**2 + .2**2))
+    assert result["residual_scaled"][0] == pytest.approx(.2 / np.sqrt(.5**2 + .2**2))
+    assert np.isnan(observed_geometry(xyzi[:1], slots[:1])["surface_residual"]).all()
+    whole = observed_geometry(xyzi, slots)
+    for key in result:
+        np.testing.assert_array_equal(result[key], whole[key][:1])
+
+
+def test_observed_geometry_keeps_slot_aliases_without_inflating_support():
+    # Exact repeated coordinates are file-row aliases, not additional physical support.
+    angles = np.arange(40) * (2 * np.pi / 40)
+    xyz = np.column_stack((10 + np.cos(angles), np.sin(angles), np.ones(40)))
+    xyzi = np.column_stack((xyz, np.zeros(40)))
+    slots = np.arange(40, dtype=np.int32) + 100
+    reference = observed_geometry(xyzi, slots, workers=1)
+    assert reference["normal_change_valid"].all()
+    np.testing.assert_allclose(reference["normal_change"], 0, atol=1e-7)
+    duplicated = np.vstack((xyzi, xyzi[3]))
+    duplicated[-1, 3] = 99  # Intensity does not enter these geometric descriptors.
+    duplicate_slots = np.r_[slots, 500].astype(np.int32)
+    order = np.arange(41)[::-1]
+    result = observed_geometry(duplicated[order], duplicate_slots[order], duplicate_slots,
+                               workers=2, block_size=7)
+    for key in reference:
+        np.testing.assert_array_equal(result[key][:-1], reference[key])
+        if key != "source_slot":
+            np.testing.assert_array_equal(result[key][-1:], reference[key][3:4])
+    assert result["source_slot"][-1] == 500
+
+
+def test_observed_nonplanar_shape_survives_unreliable_normal_and_sparse_scale_is_missing():
+    corners = np.array(np.meshgrid(*[[-.5, .5]] * 3)).reshape(3, -1).T
+    xyz = np.vstack(([10, 0, 1], corners + [10, 0, 1], [100, 0, 1]))
+    xyzi = np.column_stack((xyz, np.zeros(len(xyz))))
+    slots = np.arange(len(xyz), dtype=np.int32)
+    result = observed_geometry(xyzi, slots, np.array([0, 9], np.int32))
+    assert result["neighbor_count"].tolist() == [8, 0]
+    assert result["valid"].tolist() == [True, False]
+    assert result["normal_valid"].tolist() == [False, False]
+    assert result["normal_change_valid"].tolist() == [False, False]
+    assert result["variation"][0] == pytest.approx(1 / 3)
+    assert result["roughness"][0] == pytest.approx(.5)
+    assert np.isnan(result["surface_residual"]).all()
+    assert np.isnan(result["scale"][1]) and not result["condition_valid"][1]
+    with pytest.raises(ValueError, match="absent"):
+        observed_geometry(xyzi, slots, np.array([10], np.int32))

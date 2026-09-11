@@ -15,6 +15,641 @@ from .evaluate import diagnostic_bin
 from .profile import QUANTILES, describe
 
 
+def summarize_geometry(output, extraction):
+    """Aggregate exact probe counts on their existing common-valid point sets."""
+    from contextlib import ExitStack
+    from zipfile import ZipFile, ZIP_DEFLATED
+
+    from .geometry import (GROUP_DTYPE, csv_rows, group_metrics, merge_groups,
+                           normal_threshold, subtract_groups, threshold_counts)
+    from .protocol import load_protocol
+
+    output = Path(output)
+    directory = output / "tables"
+    directory.mkdir(exist_ok=True)
+    sequences = tuple(load_protocol().public_sequence_ids)
+    locations = [("train", 206), ("train", 201), *[("val", seq) for seq in sequences]]
+    summaries = {where: json.loads((output / "counts" / where[0] / str(where[1]) / "summary.json").read_text())
+                 for where in locations}
+    keys = summaries[("train", 206)]["keys"]
+    if any(set(summary["keys"]) != set(keys) for summary in summaries.values()):
+        raise ValueError("Probe cohorts differ between normal sources and validation sequences")
+    indices = {where: {key: str(i) for i, key in enumerate(summary["keys"])}
+               for where, summary in summaries.items()}
+    tables = {name: [] for name in ("metrics", "normal_transfer", "coverage", "confusion", "frames")}
+    pooled_coverage, pooled_confusion, candidates = Counter(), Counter(), []
+    for seq in sequences:
+        summary = summaries[("val", seq)]
+        tables["frames"].extend(summary["frames"])
+        candidates.extend(summary["candidates"])
+        for key, counts in summary["coverage"].items():
+            for i, count in enumerate(counts):
+                pooled_coverage[key, i] += count
+        for key, counts in summary["confusion"].items():
+            for i, count in enumerate(counts):
+                pooled_confusion[key, i] += count
+
+    def coverage_row(scope, sequence, key, counts):
+        cohort, stratum = key.rsplit("|", 1)
+        normal, anomaly, covered_normal, covered_anomaly = map(int, counts)
+        return dict(scope=scope, sequence=sequence, cohort=cohort, stratum=stratum,
+                    all_normal=normal, all_anomaly=anomaly, covered_normal=covered_normal,
+                    covered_anomaly=covered_anomaly,
+                    normal_coverage=100 * covered_normal / normal if normal else None,
+                    anomaly_coverage=100 * covered_anomaly / anomaly if anomaly else None)
+
+    for scope, seq, coverage, confusion in [
+        *[("sequence", seq, summaries[("val", seq)]["coverage"], summaries[("val", seq)]["confusion"])
+          for seq in sequences],
+        ("pooled", "all", {key: [pooled_coverage[key, i] for i in range(4)] for key, _ in pooled_coverage},
+         {key: [pooled_confusion[key, i] for i in range(3)] for key, _ in pooled_confusion}),
+    ]:
+        tables["coverage"].extend(coverage_row(scope, seq, key, counts) for key, counts in sorted(coverage.items()))
+        for key, counts in sorted(confusion.items()):
+            cohort, model, semantic = key.rsplit("|", 2)
+            normal, fp = map(int, counts[:2])
+            tables["confusion"].append(dict(scope=scope, sequence=seq, cohort=cohort, model=model,
+                                           semantic=int(semantic), normal=normal, fp=fp,
+                                           FPR=100 * fp / normal if normal else None))
+
+    def metric_row(scope, sequence, key, groups, threshold):
+        cohort, model = key.rsplit("|", 1)
+        result = group_metrics(groups)
+        point = result.get("recall_at_fpr_limit") or {}
+        fixed = threshold_counts(groups, threshold)
+        return dict(scope=scope, sequence=sequence, cohort=cohort, model=model,
+                    normal=fixed["normal"], anomaly=fixed["anomaly"], AP=result["AP"],
+                    AUROC=result["AUROC"], FPR95=result["FPR95"], R1=point.get("recall"),
+                    threshold1=point.get("threshold"), FPR1=point.get("FPR"),
+                    threshold_train206=threshold, FPR_train206=fixed["FPR"], recall_train206=fixed["recall"])
+
+    def checked_counts(archives, where, key):
+        group = archives[where][indices[where][key]]
+        count, anomaly = int(group["count"].sum()), int(group["positive"].sum())
+        cohort = key.rsplit("|", 1)[0]
+        coverage = summaries[where]["coverage"][cohort + "|all"]
+        if [count - anomaly, anomaly] != coverage[2:]:
+            raise ValueError(f"Exact score counts differ from existing cohort coverage: {where}, {key}")
+        return group
+
+    # Archive members are read by one comparison key; complete archives never enter RAM.
+    with ExitStack() as stack:
+        archives = {where: stack.enter_context(np.load(
+            output / "counts" / where[0] / str(where[1]) / "groups.npz", allow_pickle=False)) for where in locations}
+        pooled_archive = stack.enter_context(ZipFile(output / "counts" / "pooled.npz", "w", ZIP_DEFLATED, allowZip64=True))
+        for key_index, key in enumerate(keys):
+            train = checked_counts(archives, ("train", 206), key)
+            threshold = normal_threshold(train)
+            cohort, model = key.rsplit("|", 1)
+            for seq in (206, 201):
+                group = train if seq == 206 else checked_counts(archives, ("train", seq), key)
+                fixed = threshold_counts(group, threshold)
+                if fixed["anomaly"]:
+                    raise ValueError("Normal-only transfer summaries contain anomaly labels")
+                all_normal = summaries[("train", seq)]["coverage"][cohort + "|all"][0]
+                tables["normal_transfer"].append(dict(sequence=seq, cohort=cohort, model=model,
+                    all_normal=all_normal, normal=fixed["normal"],
+                    normal_coverage=100 * fixed["normal"] / all_normal if all_normal else None,
+                    threshold_train206=threshold, fp=fixed["fp"], FPR_train206=fixed["FPR"]))
+            del train, group
+            uncompressed = sum(archives[("val", seq)].zip.getinfo(indices[("val", seq)][key] + ".npy").file_size
+                               for seq in sequences)
+            # Cache at most 450 MB of one-key inputs, allowing sorting and subtraction workspace.
+            cache = {} if uncompressed <= 450_000_000 else None
+            pooled = np.empty(0, GROUP_DTYPE)
+            for seq in sequences:
+                group = checked_counts(archives, ("val", seq), key)
+                tables["metrics"].append(metric_row("sequence", seq, key, group, threshold))
+                if cache is not None:
+                    cache[seq] = group
+                else:
+                    if 4 * (pooled.nbytes + group.nbytes) > 2_500_000_000:
+                        raise MemoryError("One exact probe group exceeds the bounded aggregation workspace")
+                    pooled = merge_groups([pooled, group])
+            if cache is not None:
+                pooled = merge_groups(list(cache.values()))
+            tables["metrics"].append(metric_row("pooled", "all", key, pooled, threshold))
+            for seq in sequences:
+                group = cache[seq] if cache is not None else checked_counts(archives, ("val", seq), key)
+                remaining = subtract_groups(pooled, group)
+                tables["metrics"].append(metric_row("leave_one_out", seq, key, remaining, threshold))
+                del remaining
+            with pooled_archive.open(str(key_index) + ".npy", "w", force_zip64=True) as member:
+                np.lib.format.write_array(member, pooled, allow_pickle=False)
+            del pooled, cache, group
+
+    for name, rows in tables.items():
+        csv_rows(directory / (name + ".csv"), rows)
+    _atomic_json(directory / "candidates.json", candidates)
+    _atomic_json(output / "counts" / "keys.json", dict(keys=keys, sequences=list(sequences)))
+    val_frames = [row for row in extraction["frames"] if row["partition"] == "val"]
+    official_frames = [row for row in val_frames if row["eligible"]]
+    denominators = dict(sequences=len(sequences), scanned_frames=len(val_frames), eligible_frames=len(official_frames),
+                        normal=sum(row["official_normal"] for row in official_frames),
+                        anomaly=sum(row["official_anomaly"] for row in official_frames))
+    pooled_rows = [row for row in tables["coverage"] if row["scope"] == "pooled" and row["stratum"] == "all"]
+    if any([row["all_normal"], row["all_anomaly"]] != [denominators["normal"], denominators["anomaly"]]
+           for row in pooled_rows):
+        raise ValueError("Extracted official point denominators differ from aggregated coverage")
+    result = dict(format="stu-conditional-geometry-probes", normal_fit="train/206", normal_transfer="train/201",
+                  scope="Public development val19; each comparison uses its existing common-valid subset, not full_STU",
+                  full_STU=False, independent_test=False, official_input=denominators,
+                  metric_units="percent, except raw score thresholds", sequences=list(sequences),
+                  threshold_source="train/206 normal scores; complete ties with empirical FPR at most 1 percent",
+                  cohorts={row["cohort"]: row for row in pooled_rows},
+                  tables={name: len(rows) for name, rows in tables.items()}, candidates=len(candidates),
+                  pooled_groups=dict(archive="counts/pooled.npz", keys="counts/keys.json"),
+                  leave_one_out="Subtract each original sequence's exact score counts; retain every remaining original point",
+                  aggregation="One comparison key at a time; input cache at most 450 MB; streamed pooled archive")
+    _atomic_json(output / "summary.json", result)
+    return result
+
+
+def _geometry_fonts():
+    from matplotlib import font_manager
+    from matplotlib.ft2font import FT2Font
+
+    paths = ("/mnt/c/Windows/Fonts/simsun.ttc", "/mnt/c/Windows/Fonts/times.ttf")
+    for path, expected in zip(paths, ("SimSun", "Times New Roman"), strict=True):
+        if FT2Font(path).family_name != expected:
+            raise ValueError("The requested font file does not contain the required actual font")
+        font_manager.fontManager.addfont(path)
+    return tuple(font_manager.FontProperties(fname=path) for path in paths)
+
+
+def _geometry_pdf(path, pages):
+    import re
+    import subprocess
+
+    report = subprocess.run(["pdffonts", str(path)], check=True, capture_output=True, text=True).stdout
+    rows = [line for line in report.splitlines()[2:] if line.strip()]
+    names = {line.split()[0].split("+")[-1] for line in rows}
+    if names != {"SimSun", "TimesNewRomanPSMT"} or any(
+        "TrueType" not in line or not re.search(r"\byes\s+yes\s+yes\s+\d+\s+\d+$", line) for line in rows
+    ):
+        raise RuntimeError("Geometry PDF did not embed exclusively the required TrueType fonts")
+    info = subprocess.run(["pdfinfo", str(path)], check=True, capture_output=True, text=True).stdout
+    if not re.search(rf"^Pages:\s+{pages}$", info, flags=re.MULTILINE):
+        raise RuntimeError("Geometry PDF has an unexpected page count")
+    return sorted(names)
+
+
+def sampling_increment(output, reference=None):
+    """Compare added sampling conditioning on exactly the sampling cohort's points.
+
+    This is a supplementary development comparison after the main readout. Scores,
+    reference conditions and tie handling remain unchanged; only C_direction's
+    existing counts lose points outside the already defined sampling cohort.
+    """
+    import resource
+    import time
+
+    from .geometry import (as_data, comparisons, csv_rows, group_metrics, merge_groups,
+                           score_groups, subtract_groups)
+    from .probes import DIRECT, GEOMETRY, SAMPLING, _cells, fit_reference, score_reference
+    from .protocol import load_protocol
+
+    output = Path(output)
+    started = time.monotonic()
+    metadata = json.loads((output / "reference.json").read_text())
+    if reference is None:
+        normal = np.concatenate([np.load(path, allow_pickle=False)
+                                 for path in sorted((output / "features/train/206").glob("*.npy"))])
+        if np.any(normal["target"] != 0) or len(np.unique(normal["frame"])) != 449:
+            raise ValueError("Sampling comparison requires the same normal train/206 reference")
+        reference = fit_reference(as_data(normal))
+        del normal
+    if reference["metadata"] != metadata or metadata["source"] != "train/206 normal":
+        raise ValueError("Sampling comparison cannot change the fitted normal reference")
+    supported = {mode: np.array([int(cell) for cell, values in metadata["cells"][mode].items()
+                                 if values["trusted_all"]], np.int32)
+                 for mode in ("direction", "sampling")}
+    global_valid = {mode: all(metadata["global_fields"][name]["trusted"] for name in (*GEOMETRY, *conditions))
+                    for mode, conditions in (("direction", DIRECT), ("sampling", SAMPLING))}
+    sequences = tuple(load_protocol().public_sequence_ids)
+    groups = {model: {} for model in ("C_direction", "C_sampling")}
+    removed_counts, rows = np.zeros(2, np.int64), []
+
+    def counts(group):
+        positive = int(group["positive"].sum())
+        return np.array([int(group["count"].sum()) - positive, positive], np.int64)
+
+    def metric_row(scope, sequence, model, group):
+        metrics = group_metrics(group)
+        point = metrics.get("recall_at_fpr_limit") or {}
+        return dict(scope=scope, sequence=sequence, model=model, AP=metrics["AP"],
+                    AUROC=metrics["AUROC"], FPR95=metrics["FPR95"], R1=point.get("recall"),
+                    normal=metrics["normal_count"], anomaly=metrics["anomaly_count"])
+
+    for sequence in sequences:
+        parts, expected = [], {mode: np.zeros(2, np.int64) for mode in supported}
+        for path in sorted((output / "features/val" / str(sequence)).glob("*.npy")):
+            values = np.load(path, allow_pickle=False, mmap_mode="r")
+            cells = _cells(as_data(values), reference["edges"])
+            geometry_valid = np.logical_and.reduce([np.isfinite(values[name]) for name in GEOMETRY])
+            masks = {}
+            for mode, conditions in (("direction", DIRECT), ("sampling", SAMPLING)):
+                masks[mode] = (geometry_valid & global_valid[mode]
+                               & np.logical_and.reduce([np.isfinite(values[name]) for name in conditions])
+                               & np.isin(cells[mode], supported[mode]))
+                expected[mode] += np.bincount(values["target"][masks[mode]], minlength=2)
+            if np.any(masks["sampling"] & ~masks["direction"]):
+                raise ValueError("The sampling cohort must remain a subset of the direction cohort")
+            excluded = masks["direction"] & ~masks["sampling"]
+            if not excluded.any():
+                continue
+            selected = values[excluded]
+            scores, individual, _ = score_reference(as_data(selected), reference)
+            actual = {mode: finite for mode, _, finite in comparisons(scores, individual)
+                      if mode in masks}
+            if not actual["direction"].all() or actual["sampling"].any():
+                raise ValueError("Fast exclusion identities disagree with the original score coverage")
+            parts.append(score_groups(scores["C_direction"], selected["target"]))
+        directory = output / "counts/val" / str(sequence)
+        keys = json.loads((directory / "summary.json").read_text())["keys"]
+        with np.load(directory / "groups.npz", allow_pickle=False) as saved:
+            direction = saved[str(keys.index("direction|C_direction"))]
+            sampling = saved[str(keys.index("sampling|C_sampling"))]
+        if not np.array_equal(counts(direction), expected["direction"]) or not np.array_equal(counts(sampling), expected["sampling"]):
+            raise ValueError("Fast cohort masks disagree with the existing exact score counts")
+        removed = merge_groups(parts)
+        direction = subtract_groups(direction, removed)
+        if not np.array_equal(counts(direction), counts(sampling)):
+            raise ValueError("Sampling increment methods do not cover the same normal/anomaly points")
+        removed_counts += counts(removed)
+        groups["C_direction"][sequence], groups["C_sampling"][sequence] = direction, sampling
+        for model in groups:
+            rows.append(metric_row("sequence", sequence, model, groups[model][sequence]))
+        print(json.dumps(dict(stage="sampling_increment", sequence=sequence,
+                              excluded_normal=int(counts(removed)[0]), excluded_anomaly=int(counts(removed)[1]),
+                              seconds=round(time.monotonic() - started, 2))), flush=True)
+    for model, sequence_groups in groups.items():
+        pooled = merge_groups(list(sequence_groups.values()))
+        rows.append(metric_row("pooled", "all", model, pooled))
+        for sequence in sequences:
+            remaining = subtract_groups(pooled, sequence_groups[sequence])
+            rows.append(metric_row("leave_one_out", sequence, model, remaining))
+    csv_rows(output / "tables/sampling_increment.csv", rows)
+    return dict(rows=rows, excluded_normal=int(removed_counts[0]), excluded_anomaly=int(removed_counts[1]),
+                seconds=time.monotonic() - started,
+                max_rss_bytes=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024,
+                supplementary_development_comparison=True)
+
+
+def plot_geometry(output):
+    """Plot common-cohort diagnostics, using the actual required embedded fonts."""
+    import warnings
+
+    import matplotlib as mpl
+    mpl.use("Agg")
+    from matplotlib import pyplot as plt
+    from matplotlib.backends.backend_pdf import PdfPages
+    from matplotlib.colors import TwoSlopeNorm
+    from .probes import GEOMETRY
+
+    output = Path(output)
+    with (output / "tables" / "metrics.csv").open(encoding="utf-8-sig", newline="") as stream:
+        metrics = list(csv.DictReader(stream))
+    with (output / "tables" / "coverage.csv").open(encoding="utf-8-sig", newline="") as stream:
+        coverage = list(csv.DictReader(stream))
+    indexed = {(row["scope"], row["sequence"], row["cohort"], row["model"]): row for row in metrics}
+    covered = {(row["cohort"], row["stratum"]): row for row in coverage if row["scope"] == "pooled"}
+    if len(indexed) != len(metrics):
+        raise ValueError("Plot inputs contain duplicate metric identities")
+    cn, en = _geometry_fonts()
+    modes = ("range", "direction", "sampling")
+    mode_names = dict(range="距离", direction="距离与射线方向", sampling="再加入邻距尺度")
+    feature_names = ("局部表面残差", "表面厚度", "法向变化", "最小方差占比", "线性度", "平面度")
+    controls = ("A_range", "A_direct", "A_sampling")
+    colors = ("#4b5563", "#3176ab", "#bf6435")
+    pngs = ("overview.png", "sequences.png", "coverage.png", "features.png")
+
+    def number(row, field):
+        return float(row[field]) if row[field] not in (None, "") else np.nan
+
+    def ap(cohort, model, scope="pooled", sequence="all"):
+        return number(indexed[(scope, str(sequence), cohort, model)], "AP")
+
+    def coverage_percent(row, label):
+        total = int(row["all_" + label])
+        return 100 * int(row["covered_" + label]) / total if total else np.nan
+
+    def style(axis):
+        axis.spines[["top", "right"]].set_visible(False)
+        for label in (*axis.get_xticklabels(), *axis.get_yticklabels()):
+            label.set_fontproperties(en)
+            label.set_fontsize(10)
+        axis.xaxis.get_offset_text().set_fontproperties(en)
+        axis.yaxis.get_offset_text().set_fontproperties(en)
+
+    def save(fig, pdf, name):
+        fig.savefig(output / name, dpi=190, facecolor="white")
+        pdf.savefig(fig, facecolor="white")
+        plt.close(fig)
+
+    settings = {"font.family": "Times New Roman", "pdf.fonttype": 42,
+                "ps.fonttype": 42, "axes.unicode_minus": False, "font.size": 10}
+    with warnings.catch_warnings(record=True) as caught, mpl.rc_context(settings), PdfPages(output / "plots.pdf") as pdf:
+        warnings.simplefilter("always")
+        fig, axes = plt.subplots(1, 3, figsize=(12.2, 4.6))
+        fig.subplots_adjust(left=.065, right=.98, bottom=.18, top=.72, wspace=.3)
+        fig.suptitle("共同有效子集中的总体区分能力", fontproperties=cn, fontsize=17, y=.96)
+        for axis, mode, control in zip(axes, modes, controls):
+            values = np.array([ap(mode, model) for model in (control, "B_geometry", "C_" + mode)])
+            ceiling = max(.01, float(np.nanmax(values)) * 1.25) if np.isfinite(values).any() else 1.
+            axis.bar(np.arange(3), values, color=colors, width=.65)
+            axis.set_ylim(0, ceiling)
+            axis.set_xticks(np.arange(3), ("A", "B", "C"))
+            axis.set_ylabel("AP (%)", fontproperties=en)
+            axis.set_title(mode_names[mode], fontproperties=cn, fontsize=13, pad=36)
+            for index, value in enumerate(values):
+                axis.text(index, value + .02 * ceiling if np.isfinite(value) else .02 * ceiling,
+                          f"{value:.4f}" if np.isfinite(value) else "NA", ha="center", fontproperties=en)
+            row = covered[(mode, "all")]
+            for label, x, chinese in (("normal", .02, "正常"), ("anomaly", .52, "异常")):
+                value = coverage_percent(row, label)
+                axis.text(x, 1.035, chinese, transform=axis.transAxes, fontproperties=cn, fontsize=10)
+                axis.text(x + .16, 1.035, f"{value:.1f}%" if np.isfinite(value) else "NA",
+                          transform=axis.transAxes, fontproperties=en, fontsize=10)
+            style(axis)
+        fig.text(.5, .055, "图上比例表示共同覆盖率；每组仅比较共同有效点，不代表完整基准成绩。",
+                 ha="center", fontproperties=cn, fontsize=10)
+        save(fig, pdf, pngs[0])
+
+        sequences = sorted({int(row["sequence"]) for row in metrics if row["scope"] == "sequence"})
+        differences = np.array([[ap(mode, "C_" + mode, "sequence", seq) - ap(mode, "B_geometry", "sequence", seq)
+                                 for mode in modes] for seq in sequences])
+        span = max(.1, float(np.nanmax(np.abs(differences)))) if np.isfinite(differences).any() else 1.
+        fig, axis = plt.subplots(figsize=(8.2, max(5.2, .29 * len(sequences) + 2.2)))
+        fig.subplots_adjust(left=.15, right=.85, bottom=.12, top=.89)
+        fig.suptitle("共同有效子集中的逐序列条件化变化", fontproperties=cn, fontsize=17, y=.965)
+        image = axis.imshow(np.ma.masked_invalid(differences), aspect="auto", cmap="RdBu_r",
+                            norm=TwoSlopeNorm(vmin=-span, vcenter=0, vmax=span))
+        axis.set_xticks(np.arange(3), [mode_names[mode] for mode in modes])
+        axis.set_yticks(np.arange(len(sequences)), [str(seq) for seq in sequences])
+        axis.set_ylabel("序列", fontproperties=cn)
+        for row in range(len(sequences)):
+            for col in range(3):
+                value = differences[row, col]
+                axis.text(col, row, f"{value:+.4f}" if np.isfinite(value) else "NA", ha="center", va="center",
+                          color="white" if abs(value) > .55 * span else "#171d23", fontproperties=en, fontsize=10)
+        bar = fig.colorbar(image, ax=axis, fraction=.045, pad=.055)
+        bar.set_label("平均精确率的条件化增益（百分点）", fontproperties=cn)
+        style(axis)
+        for label in axis.get_xticklabels():
+            label.set_fontproperties(cn)
+        style(bar.ax)
+        fig.text(.5, .035, "逐序列使用该对照的共同有效点；正值表示条件参考得分的平均精确率更高。",
+                 ha="center", fontproperties=cn, fontsize=10)
+        save(fig, pdf, pngs[1])
+
+        fig, axes = plt.subplots(1, 2, figsize=(11.2, 4.8), sharey=True)
+        fig.subplots_adjust(left=.075, right=.98, bottom=.21, top=.79, wspace=.18)
+        fig.suptitle("共同有效子集相对官方评价点的距离分组覆盖", fontproperties=cn, fontsize=17, y=.96)
+        for axis, label in zip(axes, ("normal", "anomaly")):
+            for mode, color in zip(modes, colors):
+                rows = [covered[(mode, "range_" + str(i))] for i in range(4)]
+                axis.plot(np.arange(4), [coverage_percent(row, label) for row in rows],
+                          marker="o", linewidth=1.6, markersize=5, color=color, label=mode_names[mode])
+            axis.set_title("正常" if label == "normal" else "异常", fontproperties=cn, fontsize=13)
+            axis.set_xticks(np.arange(4), ("[2.5, 10)", "[10, 20)", "[20, 35)", "[35, 50]"))
+            axis.set_xlabel("距离（米）", fontproperties=cn)
+            axis.set_ylim(0, 105)
+            axis.grid(axis="y", alpha=.2)
+            axis.legend(prop=cn, loc="best", frameon=False)
+            style(axis)
+        axes[0].set_ylabel("覆盖率（百分比）", fontproperties=cn)
+        fig.text(.5, .055, "每个比例的分母为相应距离内的全部官方正常点或异常点。",
+                 ha="center", fontproperties=cn, fontsize=10)
+        save(fig, pdf, pngs[2])
+
+        fig, axes = plt.subplots(1, 2, figsize=(12.8, 6.2), sharey=True)
+        fig.subplots_adjust(left=.18, right=.98, bottom=.16, top=.76, wspace=.15)
+        fig.suptitle("共同有效子集中的单个几何量区分能力", fontproperties=cn, fontsize=17, y=.96)
+        for axis, mode, color in zip(axes, ("direction", "sampling"), colors[1:]):
+            # Each B score comes from the very same feature/mode cohort as its C partner.
+            values = np.array([[ap(f"feature/{feature}/{mode}", model) for model in ("B_geometry", "C_" + mode)]
+                               for feature in GEOMETRY])
+            ceiling = max(.01, float(np.nanmax(values)) * 1.25) if np.isfinite(values).any() else 1.
+            for column, (name, shade) in enumerate((("无条件几何", colors[0]), ("条件几何", color))):
+                locations = np.arange(len(GEOMETRY)) + (column - .5) * .3
+                axis.barh(locations, values[:, column], height=.28, color=shade, label=name)
+                for location, value in zip(locations, values[:, column]):
+                    axis.text(value + .015 * ceiling if np.isfinite(value) else .015 * ceiling, location,
+                              f"{value:.4f}" if np.isfinite(value) else "NA", va="center", fontproperties=en, fontsize=9)
+            axis.set_xlim(0, ceiling)
+            axis.set_yticks(np.arange(len(GEOMETRY)), feature_names)
+            axis.set_xlabel("AP (%)", fontproperties=en)
+            axis.set_title(mode_names[mode], fontproperties=cn, fontsize=13, pad=42)
+            axis.legend(prop=cn, loc="lower left", bbox_to_anchor=(0, 1.01), ncol=2, frameon=False)
+            style(axis)
+            for label in axis.get_yticklabels():
+                label.set_fontproperties(cn)
+        axes[0].invert_yaxis()
+        fig.text(.5, .05, "每一对柱均使用对应特征与条件下的共同有效点。",
+                 ha="center", fontproperties=cn, fontsize=10)
+        save(fig, pdf, pngs[3])
+    if any("Glyph" in str(warning.message) or "font" in str(warning.message).lower() for warning in caught):
+        raise RuntimeError("Rendered geometry figures reported a missing glyph or font warning")
+    names = _geometry_pdf(output / "plots.pdf", 4)
+    return dict(pdf="plots.pdf", pages=4, pngs=list(pngs), embedded_fonts=names)
+
+
+def geometry_cases(output, data_root, reference=None):
+    """Inspect preselected normal false-positive neighborhoods after full scoring."""
+    import warnings
+
+    import matplotlib as mpl
+    mpl.use("Agg")
+    from matplotlib import pyplot as plt
+    from matplotlib.backends.backend_pdf import PdfPages
+    from matplotlib.patches import Rectangle
+
+    from .evaluate import evaluation_targets
+    from .geometry import as_data, comparisons, csv_rows
+    from .probes import GEOMETRY, fit_reference, score_reference
+    from .protocol import load_protocol
+    from .scene import STUSequence, LabelMode
+
+    output = Path(output)
+    # Only the final all-sequence summary owns these case candidates.
+    summary = json.loads((output / "summary.json").read_text())
+    candidates = json.loads((output / "tables/candidates.json").read_text())
+    if summary["candidates"] != len(candidates):
+        raise ValueError("Final case-candidate count differs from the completed summary")
+    methods = ("C_direction", "C_sampling")
+    candidates = sorted((row for row in candidates if row["method"] in methods),
+                        key=lambda row: (-row["fp"], row["sequence"], row["frame"], row["slot"]))
+    selected, used_frames, used_sequences = [], set(), set()
+    # Two rounds give each method at most two cases; no visual reselection is used.
+    for _ in range(2):
+        for method in methods:
+            available = [row for row in candidates if row["method"] == method
+                         and (row["sequence"], row["frame"]) not in used_frames]
+            diverse = [row for row in available if row["sequence"] not in used_sequences]
+            if not available:
+                continue
+            row = (diverse or available)[0]
+            selected.append(row)
+            used_frames.add((row["sequence"], row["frame"]))
+            used_sequences.add(row["sequence"])
+    rules = dict(methods=list(methods), maximum_per_method=2,
+                 frames="two rounds, direction then sampling; prefer an unused sequence; descending frame FP, then sequence/frame/slot; no repeated frame",
+                 anchor="one-metre sensor-coordinate grid with most distinct FP coordinates; lexicographic cell tie-break",
+                 display="all actual returns within a 6 m cube about the selected cell centre; no display subsampling",
+                 interpretation="preselected extreme development cases, not a representative sample or an object taxonomy")
+    if not selected:
+        result = dict(rules=rules, cases=[], pages=0, reason="no eligible normal false-positive candidates")
+        _atomic_json(output / "cases.json", result)
+        return result
+    if reference is None:
+        normal = np.concatenate([np.load(path, allow_pickle=False)
+                                 for path in sorted((output / "features/train/206").glob("*.npy"))])
+        if np.any(normal["target"] != 0) or len(np.unique(normal["frame"])) != 449:
+            raise ValueError("Case reference requires all 449 cached normal train/206 frames")
+        reference = fit_reference(as_data(normal))
+        del normal
+    if reference["metadata"] != json.loads((output / "reference.json").read_text()):
+        raise ValueError("Reconstructed normal reference differs from the scoring reference")
+    thresholds = json.loads((output / "thresholds.json").read_text())["values"]
+    cn, en = _geometry_fonts()
+    settings = {"font.family": "Times New Roman", "pdf.fonttype": 42,
+                "ps.fonttype": 42, "axes.unicode_minus": False, "font.size": 10}
+    details, table = [], []
+    with warnings.catch_warnings(record=True) as caught, mpl.rc_context(settings), PdfPages(output / "cases.pdf") as pdf:
+        warnings.simplefilter("always")
+        for index, case in enumerate(selected, 1):
+            seq, frame_id, method, cohort = (case[key] for key in ("sequence", "frame", "method", "cohort"))
+            source = STUSequence.open(data_root, protocol=load_protocol(), partition="val",
+                                      sequence_id=seq, label_mode=LabelMode.REQUIRED)[frame_id]
+            xyz = source.xyzi[:, :3]
+            target = evaluation_targets(xyz, source.labels.semantic)
+            path = output / "features/val" / str(seq) / f"{frame_id:06d}.npy"
+            values = np.load(path, allow_pickle=False)
+            slots = values["source_slot"]
+            if (not np.all(values["frame"] == frame_id)
+                    or not np.array_equal(slots, np.flatnonzero(target >= 0))
+                    or not np.array_equal(values["target"], target[slots])
+                    or np.count_nonzero(target == 1) < 5):
+                raise ValueError("Case cached point identities differ from the raw official point set")
+            scores, individual, condition_cells = score_reference(as_data(values), reference)
+            _, _, covered = next(item for item in comparisons(scores, individual) if item[0] == cohort)
+            threshold = thresholds[cohort + "|" + method]
+            fp_rows = np.flatnonzero(covered & (values["target"] == 0) & (scores[method] >= threshold)) if threshold is not None else np.array([], int)
+            if len(fp_rows) != case["fp"] or not len(fp_rows):
+                raise ValueError("Reconstructed case FP count differs from the final candidate")
+            anchor = np.flatnonzero(slots == case["slot"])
+            if len(anchor) != 1 or float(scores[method][anchor[0]]) != case["score"] or anchor[0] not in fp_rows:
+                raise ValueError("Recorded candidate slot or score changed during case reconstruction")
+            fp_slots = slots[fp_rows]
+            unique_fp = np.unique(xyz[fp_slots], axis=0)
+            cells, cell_counts = np.unique(np.floor(unique_fp).astype(np.int64), axis=0, return_counts=True)
+            cell = cells[int(np.argmax(cell_counts))]
+            center = cell.astype(float) + .5
+            display = np.zeros(len(xyz), bool)
+            display[source.real_slots] = np.all(np.abs(xyz[source.real_slots] - center) <= 3, axis=1)
+            relative = xyz - center
+            supported = np.zeros(len(xyz), bool)
+            supported[slots[covered]] = True
+            false = np.zeros(len(xyz), bool)
+            false[fp_slots] = True
+            anomaly = target == 1
+            local_fp = display & false
+            cell_fp = false & np.all(np.floor(xyz) == cell, axis=1)
+            local_unique = np.unique(xyz[local_fp], axis=0).astype(np.float64)
+            centred = local_unique - local_unique.mean(axis=0)
+            covariance = centred.T @ centred / len(centred)
+            eigenvalues, eigenvectors = np.linalg.eigh(covariance)
+            maximum = float(eigenvalues[-1])
+            normal_z = float(abs(eigenvectors[2, 0])) if eigenvalues[1] > 1e-12 else None
+            fig, axes = plt.subplots(3, 2, figsize=(11.5, 11.8))
+            fig.subplots_adjust(left=.07, right=.97, bottom=.11, top=.88, wspace=.15, hspace=.3)
+            styles = ((display & ~supported & ~anomaly, "#d0d0d0", "未评价或未覆盖", 3),
+                      (display & supported & (target == 0) & ~false, "#808080", "正常未误报", 4),
+                      (local_fp, "#ad4a15", "正常误报", 7),
+                      (display & anomaly, "#126aa4", "官方异常回波", 14))
+            for row, (a, b) in enumerate(((0, 1), (0, 2), (1, 2))):
+                left, right = axes[row]
+                left.scatter(relative[display & ~anomaly, a], relative[display & ~anomaly, b],
+                             s=4, c="#888888", linewidths=0, rasterized=True)
+                left.scatter(relative[display & anomaly, a], relative[display & anomaly, b],
+                             s=14, c="#126aa4", linewidths=0, rasterized=True)
+                for take, color, label, size in styles:
+                    right.scatter(relative[take, a], relative[take, b], s=size, c=color,
+                                  label=label, linewidths=0, rasterized=True)
+                for axis in (left, right):
+                    axis.add_patch(Rectangle((-.5, -.5), 1, 1, fill=False, edgecolor="#191919", linewidth=.8))
+                    axis.set(xlim=(-3, 3), ylim=(-3, 3), aspect="equal")
+                    axis.set_xlabel(f"{'xyz'[a]} (m)", fontproperties=en)
+                    axis.set_ylabel(f"{'xyz'[b]} (m)", fontproperties=en)
+                    axis.grid(alpha=.15)
+                    for tick in (*axis.get_xticklabels(), *axis.get_yticklabels()):
+                        tick.set_fontproperties(en)
+            axes[0, 0].set_title("实际可见结构与官方异常位置", fontproperties=cn, fontsize=12)
+            axes[0, 1].set_title("固定正常训练阈值下的误报", fontproperties=cn, fontsize=12)
+            fig.suptitle("正常误报附近的真实可见结构", fontproperties=cn, fontsize=17, y=.972)
+            fig.text(.5, .935, f"{index} | val/{seq}/{frame_id:06d} | {method} | t={threshold:.7g} | FP={len(fp_rows)}",
+                     ha="center", fontproperties=en)
+            handles, labels = axes[0, 1].get_legend_handles_labels()
+            fig.legend(handles, labels, loc="lower center", bbox_to_anchor=(.5, .045), ncol=4, prop=cn, frameon=False)
+            fig.text(.5, .023, "坐标原点为网格中心；方框为一米网格投影；同尺度显示，缺测点不视为正常预测。",
+                     ha="center", fontproperties=cn, fontsize=10)
+            name = f"case_{index}.png"
+            fig.savefig(output / name, dpi=180, facecolor="white")
+            pdf.savefig(fig, facecolor="white")
+            plt.close(fig)
+            local_rows = fp_rows[display[fp_slots]]
+            feature_rows = []
+            for feature in GEOMETRY:
+                maximum_rows = local_rows[individual[method][feature][local_rows] == scores[method][local_rows]]
+                identities = condition_cells[cohort][maximum_rows]
+                tails = dict(lower_tail=0, upper_tail=0, equal_tail=0)
+                # Resolve direction against the same complete-tie conditional reference.
+                for identity in np.unique(identities):
+                    ordered = reference["conditional"][cohort][int(identity)][feature]
+                    observed = values[feature][maximum_rows[identities == identity]]
+                    lower = np.searchsorted(ordered, observed, side="right")
+                    upper = len(ordered) - np.searchsorted(ordered, observed, side="left")
+                    tails["lower_tail"] += int(np.count_nonzero(lower < upper))
+                    tails["upper_tail"] += int(np.count_nonzero(upper < lower))
+                    tails["equal_tail"] += int(np.count_nonzero(lower == upper))
+                if sum(tails.values()) != len(maximum_rows):
+                    raise ValueError("Case tail directions do not account for every co-maximum point")
+                feature_rows.append(dict(feature=feature,
+                    observed_median=float(np.median(values[feature][local_rows])),
+                    rarity_median=float(np.median(individual[method][feature][local_rows])),
+                    co_maximum_points=len(maximum_rows), **tails))
+            span = np.ptp(local_unique, axis=0).tolist()
+            row = dict(case=index, sequence=seq, frame=frame_id, cohort=cohort, model=method,
+                       figure=name, threshold_train206=threshold, frame_fp=len(fp_rows),
+                       local_actual=int(display.sum()), local_normal=int(np.sum(display & (target == 0))),
+                       local_covered_normal=int(np.sum(display & supported & (target == 0))),
+                       local_fp=int(local_fp.sum()), local_anomaly=int(np.sum(display & anomaly)),
+                       local_unique_fp=len(local_unique), cell_unique_fp=int(cell_counts.max()),
+                       co_maximum_features=",".join(item["feature"] for item in feature_rows if item["co_maximum_points"]),
+                       fp_span_x_m=span[0], fp_span_y_m=span[1], fp_span_z_m=span[2],
+                       fp_plane_rms_m=float(np.sqrt(max(0., eigenvalues[0]))), fp_plane_abs_normal_z=normal_z,
+                       fp_linearity=float((eigenvalues[2] - eigenvalues[1]) / maximum) if maximum > 0 else None,
+                       fp_planarity=float((eigenvalues[1] - eigenvalues[0]) / maximum) if maximum > 0 else None,
+                       centre_x_m=float(center[0]), centre_y_m=float(center[1]), centre_z_m=float(center[2]),
+                       nearest_official_anomaly_m=float(np.linalg.norm(xyz[anomaly] - center, axis=1).min()))
+            table.append(row)
+            details.append(dict(**row, feature_cache=str(path.relative_to(output)),
+                                selected_cell=cell.tolist(), selected_cell_fp_slots=np.flatnonzero(cell_fp).tolist(),
+                                local_fp_bounds_m=[local_unique.min(axis=0).tolist(), local_unique.max(axis=0).tolist()],
+                                local_fp_covariance_eigenvalues_m2=eigenvalues.tolist(), feature_rarity=feature_rows))
+    if any("Glyph" in str(warning.message) or "font" in str(warning.message).lower() for warning in caught):
+        raise RuntimeError("Rendered geometry cases reported a missing glyph or font warning")
+    names = _geometry_pdf(output / "cases.pdf", len(details))
+    csv_rows(output / "tables/cases.csv", table)
+    result = dict(rules=rules, pages=len(details), pdf="cases.pdf", embedded_fonts=names,
+                  geometry="PCA describes distinct visible local FP coordinates, not object identity or true normal surfaces",
+                  feature_rarity="co-maximum counts include all ties and may overlap; lower/upper/equal tail uses inclusive normal counts in the same condition cell; score components, not causal attribution",
+                  cases=details)
+    _atomic_json(output / "cases.json", result)
+    return result
+
+
 def read_rows(path):
     return [json.loads(line) for line in path.read_text().splitlines()]
 

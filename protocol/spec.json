@@ -1,16 +1,17 @@
 {
   "format": "stu-single-frame",
   "schema_version": 1,
-  "research_question": "How can boundary supervision, sampling-normalized geometry and learned normal-surface expectations improve single-scan STU anomaly segmentation?",
+  "research_question": "Using only the current scan, do observable local geometries distinguish anomaly labels from complex normal structures, and does a normal reference conditioned on sampling improve discrimination over both unconditional geometry and conditions alone?",
   "status": {
-    "stage": "v1_ready_for_user_code_review_before_formal_training",
+    "stage": "real_geometry_analysis_completed",
     "model_defined": true,
     "training_defined": true,
-    "active_experiment": "v1.json",
-    "iteration": "finish_code_and_isolated_checks_then_pause_for_user_review_before_formal_training",
+    "active_experiment": "real_geometry_analysis",
+    "historical_model_experiment": "v1.json",
+    "iteration": "weak_observable_geometry_signal_with_repeatable_direction_conditioning_gain_and_sampling_scale_tradeoffs_on_public_development_data",
     "synthetic_dataset_frozen": true,
     "distribution_match": "not_a_selection_objective",
-    "model_experiment_executed": false,
+    "model_experiment_executed": true,
     "formal_default_dataset_available": true,
     "development_dataset_frozen": true,
     "candidate_worlds_generated": 40,
@@ -25,7 +26,12 @@
     },
     "isolated_implementation_check_executed": true,
     "experiment_supervision_prepared": true,
-    "formal_training_executed": false
+    "formal_training_executed": true,
+    "completed_v1_epochs": 1,
+    "v1_continuation": "paused",
+    "geometry_analysis_executed": true,
+    "geometry_evidence": "results/geometry",
+    "geometry_conclusion": "weak_predictive_evidence_and_partial_conditioning_value_not_a_validated_anomaly_detector"
   },
   "data": {
     "normal_sources": [

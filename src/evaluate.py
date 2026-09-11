@@ -102,15 +102,45 @@ def exact_metrics(
     No score quantization is used. ROC drops the same collinear threshold nodes
     as sklearn's default roc_curve before applying the upstream strict TPR > .95.
     """
-    if any(not 0 <= limit <= 1 for limit in (fpr_limit, *fpr_limits)) or (
-        prevalence is not None and not 0 < prevalence < 1
-    ):
-        raise ValueError("invalid diagnostic prevalence or FPR limit")
     positive = sum(
         int(np.sum(ordered[start : start + chunk_size] & 1, dtype=np.int64))
         for start in range(0, len(ordered), chunk_size)
     )
     negative = len(ordered) - positive
+    return metrics_from_groups(
+        score_groups(ordered, chunk_size), positive=positive, negative=negative,
+        prevalence=prevalence, fpr_limit=fpr_limit, score_kind=score_kind,
+        observe=observe, fpr_limits=fpr_limits,
+    )
+
+
+def metrics_from_groups(
+    groups,
+    *,
+    positive,
+    negative,
+    prevalence=None,
+    fpr_limit=0.01,
+    score_kind="probability",
+    observe=None,
+    fpr_limits=(),
+):
+    """Reduce complete float32 ties without expanding their point counts.
+
+    Each block is (uint32 score bits, int64 counts, int64 positive counts).
+    Bits follow score_bits' ordering and must strictly descend across all blocks;
+    ties from separate frames must be merged before this reduction.
+    """
+    if any(not 0 <= limit <= 1 for limit in (fpr_limit, *fpr_limits)) or (
+        prevalence is not None and not 0 < prevalence < 1
+    ):
+        raise ValueError("invalid diagnostic prevalence or FPR limit")
+    if any(
+        not isinstance(count, (int, np.integer)) or count < 0
+        for count in (positive, negative)
+    ):
+        raise ValueError("class totals require nonnegative integer counts")
+    positive, negative = int(positive), int(negative)
     result = {
         "AP": None,
         "AUROC": None,
@@ -133,7 +163,23 @@ def exact_metrics(
     previous = None
     high_recall = None
     first = True
-    for bits, counts, pos in score_groups(ordered, chunk_size):
+    last_bits = None
+    for bits, counts, pos in groups:
+        bits, counts, pos = map(np.asarray, (bits, counts, pos))
+        if (
+            bits.ndim != 1 or counts.shape != bits.shape or pos.shape != bits.shape
+            or bits.dtype != np.uint32 or counts.dtype != np.int64
+            or pos.dtype != np.int64
+            or np.any(counts <= 0) or np.any(pos < 0) or np.any(pos > counts)
+        ):
+            raise ValueError("score groups require uint32 bits and valid int64 counts")
+        if not len(bits):
+            continue
+        if np.any(bits[1:] >= bits[:-1]) or (
+            last_bits is not None and bits[0] >= last_bits
+        ):
+            raise ValueError("score groups must be complete ties in descending order")
+        last_bits = bits[-1]
         neg = counts - pos
         tps = tp + np.cumsum(pos, dtype=np.int64)
         fps = fp + np.cumsum(neg, dtype=np.int64)
@@ -198,6 +244,8 @@ def exact_metrics(
         )
         tp, fp = int(tps[-1]), int(fps[-1])
         first = False
+    if tp != positive or fp != negative:
+        raise ValueError("score-group counts do not match class totals")
     if fpr95 is None:
         fpr95 = previous[3]  # The final ROC threshold is always retained.
         high_recall = previous[5]
