@@ -1,14 +1,14 @@
 {
   "format": "stu-single-frame",
   "schema_version": 1,
-  "research_question": "Using only the current scan, do observable local geometries distinguish anomaly labels from complex normal structures, and does a normal reference conditioned on sampling improve discrimination over both unconditional geometry and conditions alone?",
+  "research_question": "Using only the current scan, do observable local geometries distinguish anomaly labels from complex normal structures, does conditioning their normal reference on observable conditions improve discrimination, and can the existing synthetic training examples teach the model which differences have anomaly meaning?",
   "status": {
-    "stage": "real_geometry_analysis_completed",
+    "stage": "existing_synthetic_geometry_check_completed",
     "model_defined": true,
     "training_defined": true,
-    "active_experiment": "real_geometry_analysis",
+    "active_experiment": "existing_synthetic_geometry_check",
     "historical_model_experiment": "v1.json",
-    "iteration": "weak_observable_geometry_signal_with_repeatable_direction_conditioning_gain_and_sampling_scale_tradeoffs_on_public_development_data",
+    "iteration": "check_existing_positive_examples_original_normal_structures_retained_normal_changes_and_fixed_object_trajectories",
     "synthetic_dataset_frozen": true,
     "distribution_match": "not_a_selection_objective",
     "model_experiment_executed": true,
@@ -31,7 +31,13 @@
     "v1_continuation": "paused",
     "geometry_analysis_executed": true,
     "geometry_evidence": "results/geometry",
-    "geometry_conclusion": "weak_predictive_evidence_and_partial_conditioning_value_not_a_validated_anomaly_detector"
+    "geometry_conclusion": "weak_predictive_evidence_and_partial_conditioning_value_not_a_validated_anomaly_detector",
+    "conditioning_interpretation": "range_and_ray_z_also_encode_sensor_coordinate_height_z_equal_range_times_ray_z_not_a_pure_sampling_causal_effect",
+    "synthetic_geometry_check_scope": "existing_40_worlds_and_original_206_201_fixed_geometry_and_direction_bins_no_val_probe_expansion_world_generation_or_training",
+    "synthetic_geometry_check_executed": true,
+    "synthetic_geometry_evidence": "results/coverage/geometry",
+    "synthetic_geometry_conclusion": "nonextreme_anomalies_and_complex_original_normals_exist_insertion_changes_retained_normal_neighborhoods_and_sparse_geometry_has_condition_dependent_missingness",
+    "next_controlled_factor_candidate": "joint_existing_auxiliary_loss_strength_lambda_zero_versus_one_same_network_data_detection_loss_and_update_budget_not_executed"
   },
   "data": {
     "normal_sources": [

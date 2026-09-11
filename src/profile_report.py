@@ -650,6 +650,243 @@ def geometry_cases(output, data_root, reference=None):
     return result
 
 
+def source_geometry_cases(output, reference_root="results/geometry", data_root="/home/jasongao/Data/STU"):
+    """Describe original normal sources in fixed direction conditions, then inspect six anchors."""
+    from collections import defaultdict
+    import warnings
+
+    import matplotlib as mpl
+    mpl.use("Agg")
+    from matplotlib import pyplot as plt
+    from matplotlib.backends.backend_pdf import PdfPages
+
+    from .geometry import as_data, csv_rows
+    from .probes import _cells, fit_reference, tail_score
+    from .profile import GEOMETRY_PARAMETERS, observed_geometry
+    from .protocol import load_protocol
+    from .scene import STUSequence, LabelMode
+
+    output, reference_root = Path(output), Path(reference_root)
+    artifacts = ["normal_cases.json", "normal_cases.pdf", "tables/normal.csv",
+                 *(f"normal_{i}.png" for i in range(1, 7))]
+    if any((output / name).exists() for name in artifacts):
+        raise FileExistsError("Original-source geometry artifacts already exist")
+    output.mkdir(parents=True, exist_ok=True)
+    (output / "tables").mkdir(exist_ok=True)
+    train_paths = sorted((reference_root / "features/train/206").glob("*.npy"))
+    train_chunks = [np.load(path, allow_pickle=False, mmap_mode="r") for path in train_paths]
+    starts = np.r_[0, np.cumsum([len(chunk) for chunk in train_chunks])]
+    normal = np.concatenate(train_chunks)
+    del train_chunks
+    reference = fit_reference(as_data(normal))
+    if reference["metadata"] != json.loads((reference_root / "reference.json").read_text()):
+        raise ValueError("Original-source analysis changed the existing train/206 reference")
+    thresholds = json.loads((reference_root / "thresholds.json").read_text())["values"]
+    features = ("normal_change", "surface_residual")
+    counts, seen_frames, seen_cells = defaultdict(Counter), defaultdict(lambda: defaultdict(set)), defaultdict(lambda: defaultdict(set))
+    candidates, cache_frames = defaultdict(list), {}
+    names = ("cached", "finite", "supported", "lower", "central", "upper")
+    quantiles = {int(cell): {feature: np.quantile(fields[feature], [.1, .9])
+                            for feature in features if len(fields[feature])}
+                 for cell, fields in reference["conditional"]["direction"].items()}
+
+    def accumulate(key, values, status, cells, frame):
+        masks = (np.ones(len(values), bool), np.isfinite(values), status >= 0,
+                 status == 0, status == 1, status == 2)
+        for name, mask in zip(names, masks, strict=True):
+            number = int(mask.sum())
+            counts[key][name] += number
+            if number:
+                seen_frames[key][name].add(frame)
+                seen_cells[key][name].update(int(c) for c in np.unique(cells[mask]) if c >= 0)
+
+    for sequence, expected_frames in ((206, 449), (201, 682)):
+        if sequence == 206:
+            frames = ((int(path.stem), normal[start:end]) for path, start, end
+                      in zip(train_paths, starts[:-1], starts[1:], strict=True))
+        else:
+            paths = sorted((reference_root / "features/train/201").glob("*.npy"))
+            frames = ((int(path.stem), np.load(path, allow_pickle=False)) for path in paths)
+        visited, empty = set(), []
+        for frame, values in frames:
+            if frame in visited or np.any(values["frame"] != frame) or np.any(values["target"] != 0):
+                raise ValueError("Original normal cache has repeated frames or nonnormal labels")
+            visited.add(frame)
+            if not len(values):
+                empty.append(frame)
+                continue
+            cells = _cells(as_data(values), reference["edges"])["direction"]
+            status = {feature: np.full(len(values), -1, np.int8) for feature in features}
+            ranks = {feature: np.full(len(values), np.nan) for feature in features}
+            for cell in np.unique(cells):
+                indices = np.flatnonzero(cells == cell)
+                fields = reference["conditional"]["direction"].get(int(cell), {})
+                for feature in features:
+                    ordered = fields.get(feature, ())
+                    valid = indices[np.isfinite(values[feature][indices])]
+                    if len(ordered):
+                        observed = values[feature][valid]
+                        low, high = quantiles[int(cell)][feature]
+                        status[feature][valid] = np.where(observed < low, 0, np.where(observed > high, 2, 1))
+                        # Midranks handle ties without declaring a constant normal value extreme.
+                        ranks[feature][valid] = (np.searchsorted(ordered, observed, side="left")
+                                                + np.searchsorted(ordered, observed, side="right")) / (2 * len(ordered))
+                    accumulate((sequence, feature, int(cell)), values[feature][indices],
+                               status[feature][indices], cells[indices], frame)
+                common = indices[np.isfinite(ranks[features[0]][indices]) & np.isfinite(ranks[features[1]][indices])]
+                if not len(common):
+                    continue
+                angle, residual = (ranks[feature][common] for feature in features)
+                for kind, eligible, priority, raw in (
+                    ("low_both", (angle <= .1) & (residual <= .1), np.maximum(angle, residual), values["normal_change"][common]),
+                    ("high_normal_change", angle >= .9, -angle, -values["normal_change"][common]),
+                    ("high_surface_residual", residual >= .9, -residual, -values["surface_residual"][common]),
+                ):
+                    choices = np.flatnonzero(eligible)
+                    if not len(choices):
+                        continue
+                    chosen = choices[np.lexsort((values["source_slot"][common[choices]], raw[choices], priority[choices]))[0]]
+                    index = int(common[chosen])
+                    candidates[sequence, kind].append(dict(sequence=sequence, frame=frame,
+                        slot=int(values["source_slot"][index]), direction_cell=int(cell), kind=kind,
+                        priority=float(priority[chosen]), tie_value=float(raw[chosen]),
+                        **{feature: float(values[feature][index]) for feature in features},
+                        **{feature + "_rank": float(ranks[feature][index]) for feature in features},
+                        **{name: float(values[name][index]) for name in ("range", "ray_z", "scale")}))
+            for feature in features:
+                accumulate((sequence, feature, "all"), values[feature], status[feature], cells, frame)
+        if len(visited) != expected_frames:
+            raise ValueError("Original-source cache does not contain its complete expected frame set")
+        cache_frames[str(sequence)] = dict(total=len(visited), nonempty=len(visited) - len(empty),
+                                            empty=len(empty), empty_frames=empty)
+    del normal
+    rows = []
+    direction_bins = len(reference["edges"]["ray_z"]) - 1
+    for key in sorted(counts, key=lambda item: (item[0], item[1], str(item[2]))):
+        sequence, feature, cell = key
+        count = counts[key]
+        band = quantiles.get(cell, {}).get(feature)
+        row = dict(sequence=sequence, feature=feature, conditioning="direction", cell=cell,
+                   reference_p10=float(band[0]) if band is not None else None,
+                   reference_p90=float(band[1]) if band is not None else None,
+                   **{name + "_points": count[name] for name in names},
+                   **{name + "_frames": len(seen_frames[key][name]) for name in names},
+                   **{name + "_cells": len(seen_cells[key][name]) for name in names},
+                   geometry_missing_points=count["cached"] - count["finite"],
+                   reference_uncovered_points=count["finite"] - count["supported"],
+                   **{name + "_percent_of_supported": 100 * count[name] / count["supported"] if count["supported"] else None
+                      for name in ("lower", "central", "upper")})
+        if cell != "all" and cell >= 0:
+            r, d = divmod(cell, direction_bins)
+            row.update(range_low=float(reference["edges"]["range"][r]), range_high=float(reference["edges"]["range"][r+1]),
+                       ray_z_low=float(reference["edges"]["ray_z"][d]), ray_z_high=float(reference["edges"]["ray_z"][d+1]))
+        rows.append(row)
+    csv_rows(output / "tables/normal.csv", rows)
+    sources = {sequence: STUSequence.open(data_root, protocol=load_protocol(), partition="train",
+                                          sequence_id=sequence, label_mode=LabelMode.REQUIRED) for sequence in (206, 201)}
+    selected = []
+    for sequence in (206, 201):
+        used_frames, used_cells, used_positions = set(), set(), set()
+        for kind in ("low_both", "high_normal_change", "high_surface_residual"):
+            ranked = sorted(candidates[sequence, kind], key=lambda row: (row["priority"], row["tie_value"], row["frame"], row["slot"]))
+            available = [row for row in ranked if row["frame"] not in used_frames]
+            ordered = [row for row in available if row["direction_cell"] not in used_cells]
+            ordered += [row for row in available if row["direction_cell"] in used_cells]
+            for candidate in ordered:
+                source = sources[sequence][candidate["frame"]]
+                center = source.xyzi[candidate["slot"], :3].astype(float)
+                world = center @ source.lidar_pose[:3, :3].T + source.lidar_pose[:3, 3]
+                position = tuple(np.floor(world).astype(int))
+                if position not in used_positions:
+                    selected.append(dict(candidate, center=center.tolist(), world_cell=list(map(int, position))))
+                    used_frames.add(candidate["frame"])
+                    used_cells.add(candidate["direction_cell"])
+                    used_positions.add(position)
+                    break
+            else:
+                raise ValueError("No distinct original-source candidate satisfies a declared case type")
+    rules = dict(reference="unchanged train/206 normal reference", conditioning="range and ray_z only",
+                 selection="three cases per original source: both midranks <= .1, normal_change >= .9, surface_residual >= .9; prioritize distinct frame, then unused direction cell; rank/raw value/frame/slot order; distinct metre cells in each source's world coordinates",
+                 scope="all existing cached normal samples in 449 train/206 and 682 train/201 frames; up to 8192 range-valid slots sampled before normal-label filtering per frame, not all raw points",
+                 bands="below p10, inclusive p10-p90, above p90 of the fixed train/206 condition-specific normal reference",
+                 limitations="extreme anchors establish observed examples only; frames and world cells do not establish independent objects or environments; unseen structures may be absent from the sampled cache")
+    _atomic_json(output / "normal_cases.json", dict(rules=rules, cache_frames=cache_frames, selected=selected, rendered=False))
+    cn, en = _geometry_fonts()
+    titles = {"low_both": "法向变化与局部残差均较小", "high_normal_change": "法向变化较大", "high_surface_residual": "局部残差较大"}
+    settings = {"font.family": "Times New Roman", "pdf.fonttype": 42, "ps.fonttype": 42,
+                "axes.unicode_minus": False, "font.size": 10}
+    details = []
+    with warnings.catch_warnings(record=True) as caught, mpl.rc_context(settings), PdfPages(output / "normal_cases.pdf") as pdf:
+        warnings.simplefilter("always")
+        for number, case in enumerate(selected, 1):
+            source = sources[case["sequence"]][case["frame"]]
+            xyz, actual = source.xyzi[:, :3], source.real_slots
+            checked = observed_geometry(source.xyzi[actual], actual, query_slots=np.array([case["slot"]], np.int32), workers=1)
+            if any(float(checked[feature][0]) != case[feature] for feature in (*features, "range", "ray_z", "scale")):
+                raise ValueError("Original-source anchor geometry differs from its saved cache")
+            if load_protocol().semantic_class_map.get(int(source.labels.semantic[case["slot"]]), 255) == 255:
+                raise ValueError("Selected original anchor is no longer a valid normal point")
+            center = np.array(case["center"])
+            unique, first = np.unique(xyz[actual], axis=0, return_index=True)
+            representative = actual[first]
+            distance = np.linalg.norm(unique.astype(float) - center, axis=1)
+            valid = np.flatnonzero((distance > 0) & (distance <= GEOMETRY_PARAMETERS["radius_m"]))
+            support = valid[np.lexsort((representative[valid], distance[valid]))[:GEOMETRY_PARAMETERS["neighbors"]]]
+            if len(support) != int(checked["neighbor_count"][0]):
+                raise ValueError("Displayed original-source support differs from the authoritative neighborhood")
+            display = actual[np.all(np.abs(xyz[actual] - center) <= 3, axis=1)]
+            local = xyz[display].astype(float) - center
+            support_xyz = unique[support].astype(float)
+            support_relative = support_xyz - center
+            centered = support_xyz - support_xyz.mean(axis=0)
+            eigen, vectors = np.linalg.eigh(centered.T @ centered / len(centered))
+            fixed_probes = {}
+            for feature in features:
+                ordered = reference["conditional"]["direction"][case["direction_cell"]][feature]
+                score = float(tail_score(np.array([case[feature]], np.float32), ordered)[0])
+                threshold = thresholds[f"feature/{feature}/direction|C_direction"]
+                fixed_probes[feature] = dict(score=score, threshold=threshold,
+                                            false_positive=threshold is not None and score >= threshold)
+            fig, axes = plt.subplots(1, 3, figsize=(14.5, 5.6))
+            fig.subplots_adjust(left=.065, right=.98, bottom=.22, top=.75, wspace=.25)
+            for axis, (a, b) in zip(axes, ((0, 1), (0, 2), (1, 2)), strict=True):
+                axis.scatter(local[:, a], local[:, b], s=3, c="#999999", linewidths=0, rasterized=True, label="实际可见回波")
+                axis.scatter(support_relative[:, a], support_relative[:, b], s=20, c="#bd611d", linewidths=0,
+                             rasterized=True, label="几何支持邻域")
+                axis.scatter([0], [0], s=65, marker="x", c="#126aa4", linewidths=1.7, label="选定正常回波")
+                axis.set(xlim=(-3, 3), ylim=(-3, 3), aspect="equal")
+                axis.set_xlabel(f"{'xyz'[a]} (m)", fontproperties=en)
+                axis.set_ylabel(f"{'xyz'[b]} (m)", fontproperties=en)
+                axis.grid(alpha=.15)
+                for tick in (*axis.get_xticklabels(), *axis.get_yticklabels()):
+                    tick.set_fontproperties(en)
+            fig.suptitle(titles[case["kind"]], fontproperties=cn, fontsize=17, y=.97)
+            fig.text(.5, .875, f"{number} | train/{case['sequence']}/{case['frame']:06d} | slot={case['slot']} | cell={case['direction_cell']}", ha="center", fontproperties=en)
+            fig.text(.5, .815, f"normal_change={case['normal_change']:.6g} rad | surface_residual={case['surface_residual']:.6g} m | range={case['range']:.3f} m", ha="center", fontproperties=en)
+            handles, labels = axes[0].get_legend_handles_labels()
+            fig.legend(handles, labels, loc="lower center", bbox_to_anchor=(.5, .085), ncol=3, prop=cn, frameon=False)
+            fig.text(.5, .038, "坐标原点为选定回波；仅描述真实可见结构，候选类型不等于物体类别。", ha="center", fontproperties=cn)
+            name = f"normal_{number}.png"
+            fig.savefig(output / name, dpi=180, facecolor="white")
+            pdf.savefig(fig, facecolor="white")
+            plt.close(fig)
+            details.append(dict(case, case=number, figure=name, actual_display_returns=len(display),
+                                display_unique_positions=len(np.unique(xyz[display], axis=0)), support_positions=len(support),
+                                support_slots=representative[support].astype(int).tolist(),
+                                support_bounds_m=[support_xyz.min(axis=0).tolist(), support_xyz.max(axis=0).tolist()],
+                                support_covariance_eigenvalues_m2=eigen.tolist(), support_abs_normal_z=float(abs(vectors[2, 0])),
+                                support_plane_rms_m=float(np.sqrt(max(0., eigen[0]))),
+                                fixed_direction_probes=fixed_probes,
+                                raw_geometry_exactly_reproduced=True))
+    if any("Glyph" in str(warning.message) or "font" in str(warning.message).lower() for warning in caught):
+        raise RuntimeError("Original-source case rendering reported a missing glyph or font warning")
+    fonts = _geometry_pdf(output / "normal_cases.pdf", len(details))
+    result = dict(rules=rules, cache_frames=cache_frames, cases=details, rendered=True, pages=len(details), embedded_fonts=fonts,
+                  statistics="tables/normal.csv", source_totals=[row for row in rows if row["cell"] == "all"])
+    _atomic_json(output / "normal_cases.json", result)
+    return result
+
+
 def read_rows(path):
     return [json.loads(line) for line in path.read_text().splitlines()]
 

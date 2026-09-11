@@ -67,6 +67,48 @@ def test_conditioned_scores_reduce_to_identical_rule_for_one_cell():
     assert all(len(np.unique(value)) == 1 for value in cells.values())
 
 
+def test_existing_world_check_preserves_original_field_scores_and_missing_support(monkeypatch):
+    from src import coverage
+
+    fitted = fit_reference(points())
+    fields = coverage.GEOMETRY_FIELDS
+    conditional = {cell: {name: values[name] for name in fields}
+                   for cell, values in fitted["conditional"]["direction"].items()}
+    thresholds = {name: .99 for name in fields}
+    reference = dict(edges=fitted["edges"], conditional=conditional, thresholds=thresholds,
+                     quantiles={cell: {name: np.quantile(values[name], [.1, .9]) for name in fields}
+                                for cell, values in conditional.items()})
+    monkeypatch.setattr(coverage, "_geometry_reference", reference, raising=False)
+    sample = points(7)
+    sample["normal_change"][:] = [-1., 0., .5, 1., 2., np.nan, .5]
+    sample["surface_residual"][:] = [.2, .2, .2, .2, .2, .2, .2]
+    sample["range"][-1] = 45  # Geometry exists, but this condition has no reference.
+    actual = coverage._geometry_condition(sample)
+    _, individual, _ = score_reference(sample, fitted)
+    for name in fields:
+        expected = individual["C_direction"][name]
+        np.testing.assert_array_equal(actual[name]["covered"], np.isfinite(expected))
+        np.testing.assert_array_equal(actual[name]["hit"], expected >= thresholds[name])
+        np.testing.assert_array_equal(actual[name]["lower"] | actual[name]["central"] | actual[name]["upper"],
+                                      actual[name]["covered"])
+    assert actual["surface_residual"]["covered"][5]
+    assert not actual["normal_change"]["covered"][5]
+
+
+def test_fixed_object_trajectory_keeps_zero_outside_and_subthreshold_frames():
+    from src.coverage import geometry_selection
+
+    rows = [dict(frame=i, count=count, in_range=inside, range=distance)
+            for i, (count, inside, distance) in enumerate(((0, 0, 0), (1, 0, 60), (3, 3, 40), (8, 8, 38)))]
+    worlds = [dict(split=split, world="fixed", identity=split, height_m=.1, rows=rows,
+                   content_check_frames=[]) for split in ("train", "validation")]
+    selected, trajectories = geometry_selection(worlds)
+    assert len(selected) == 8
+    assert all(row["trajectory"] for row in selected)
+    assert {(row["split"], row["frame"]) for row in selected} == {
+        (split, frame) for split in trajectories for frame in range(4)}
+
+
 def test_descriptive_weighted_ties_have_exact_ks_and_directional_auc():
     sample = points(6)
     sample.update(sequence=np.ones(6, int), target=np.array([0, 0, 0, 1, 1, 1]),

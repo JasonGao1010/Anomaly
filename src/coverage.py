@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import argparse
-from collections import Counter
+from collections import Counter, defaultdict
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import json
 import multiprocessing as mp
@@ -289,6 +289,311 @@ def summarize_checks(records, worlds):
     return output
 
 
+GEOMETRY_FIELDS = ("surface_residual", "normal_change")
+
+
+def geometry_selection(worlds):
+    """Select existing observations before computing their local geometry."""
+    selections = select_checks(worlds, far_limit=2)
+    chosen = {(s["split"], s["world"], s["frame"]): dict(s, representative=True, trajectory=False)
+              for s in selections}
+    trajectories = {}
+    for split in ("train", "validation"):
+        candidates = [w for w in worlds if w["split"] == split]
+        world = min(candidates, key=lambda w: (
+            -sum(r["count"] > 0 and 35 <= r.get("range", -1) <= 50 for r in w["rows"]), w["world"]))
+        trajectories[split] = dict(world=world["world"], identity=world["identity"],
+                                   far_visible_frames=sum(r["count"] > 0 and 35 <= r.get("range", -1) <= 50
+                                                          for r in world["rows"]))
+        for row in world["rows"]:
+            key = (split, world["world"], row["frame"])
+            selected = chosen.setdefault(key, dict(split=split, world=world["world"], frame=row["frame"],
+                                                   reasons=[], representative=False, trajectory=False))
+            selected["trajectory"] = True
+    return [chosen[key] for key in sorted(chosen)], trajectories
+
+
+def geometry_reference(directory=Path("results/geometry")):
+    """Reuse the original train/206 fit, then retain only the two required fields."""
+    import ctypes
+    import gc
+    from .geometry import as_data
+    from .probes import fit_reference
+
+    directory = Path(directory)
+    normal = np.concatenate([np.load(p, allow_pickle=False)
+                             for p in sorted((directory / "features/train/206").glob("*.npy"))])
+    if np.any(normal["target"] != 0) or len(np.unique(normal["frame"])) != 449:
+        raise ValueError("Conditional geometry requires the unchanged train/206 normal fit")
+    fitted = fit_reference(as_data(normal))
+    metadata = json.loads((directory / "reference.json").read_text())
+    if fitted["metadata"] != metadata:
+        raise ValueError("Paired geometry reference differs from the original normal-only fit")
+    thresholds = json.loads((directory / "thresholds.json").read_text())["values"]
+    result = dict(edges=fitted["edges"], conditional={
+        cell: {field: values[field] for field in GEOMETRY_FIELDS}
+        for cell, values in fitted["conditional"]["direction"].items()},
+        thresholds={field: thresholds[f"feature/{field}/direction|C_direction"] for field in GEOMETRY_FIELDS})
+    result["quantiles"] = {cell: {field: np.quantile(values[field], [.1, .9]) if len(values[field]) else None
+                                  for field in GEOMETRY_FIELDS} for cell, values in result["conditional"].items()}
+    del normal, fitted
+    gc.collect()
+    ctypes.CDLL("libc.so.6").malloc_trim(0)
+    return result
+
+
+def _geometry_initialize(directory, data_root):
+    global _geometry_datasets, _geometry_paths
+    set_num_threads(1)
+    _geometry_datasets = {s: FrozenDataset(directory, data_root, s) for s in ("train", "validation")}
+    _geometry_paths = {s: {(p.parent.parent.name, f): (p, identity) for p, identity, f in dataset.samples}
+                       for s, dataset in _geometry_datasets.items()}
+
+
+def _geometry_condition(values):
+    """Use the original inclusive two-tail score and field-specific support."""
+    from .probes import _cells, tail_score
+
+    reference = _geometry_reference
+    cells = _cells(values, reference["edges"])["direction"]
+    result = {}
+    for field in GEOMETRY_FIELDS:
+        x = values[field]
+        score = np.full(len(x), np.nan, np.float32)
+        low, high = (np.full(len(x), np.nan) for _ in range(2))
+        for cell in np.unique(cells):
+            ordered = reference["conditional"].get(int(cell), {}).get(field)
+            if ordered is None or not len(ordered):
+                continue
+            take = cells == cell
+            score[take] = tail_score(x[take], ordered)
+            low[take], high[take] = reference["quantiles"][int(cell)][field]
+        covered = np.isfinite(score)
+        threshold = reference["thresholds"][field]
+        result[field] = dict(valid=np.isfinite(x), covered=covered,
+                             hit=covered & (score >= threshold) if threshold is not None else np.zeros(len(x), bool),
+                             lower=covered & (x < low), upper=covered & (x > high),
+                             central=covered & (x >= low) & (x <= high))
+    return result
+
+
+def _geometry_frame(job):
+    """Compute the complete original scan once, then each selected fixed-world view."""
+    from .data import FrozenFrame
+    from .profile import observed_geometry
+
+    split, frame, selections = job
+    started, cpu = time.monotonic(), time.process_time()
+    original = _geometry_datasets[split].sequence[frame]
+    original_slots = original.real_slots
+    before = observed_geometry(original.xyzi[original_slots], original_slots)
+    before_condition = _geometry_condition(before)
+    original_normal = ~original.zero_slot_mask & (original.labels.semantic_target != 255)
+    records, populations, changes = [], [], []
+    for selection in selections:
+        path, identity = _geometry_paths[split][selection["world"], frame]
+        sample = FrozenFrame.load(path, original, identity)
+        source, inserted, removed = sample.source, sample.inserted_mask, sample.occluded_original_mask
+        slots = source.real_slots
+        changed = inserted | removed
+        kept = original_normal & ~changed
+        if not (np.array_equal(original.xyzi[kept].view(np.uint32), source.xyzi[kept].view(np.uint32))
+                and np.array_equal(original.labels.packed[kept], source.labels.packed[kept])
+                and np.all(sample.anomaly_target[kept] == 0)):
+            raise ValueError("Paired normal returns changed their XYZI, labels or target")
+        after = observed_geometry(source.xyzi[slots], slots) if changed.any() else before
+        conditional = _geometry_condition(after)
+        inserted_xyz = source.xyzi[inserted, :3].astype(float)
+        removed_xyz = original.xyzi[removed, :3].astype(float)
+        distance = (cKDTree(inserted_xyz).query(source.xyzi[slots, :3], workers=1)[0]
+                    if len(inserted_xyz) else np.full(len(slots), np.inf))
+        ranges = after["range"]
+        inside = (ranges >= 2.5) & (ranges <= 50)
+        # New foreground and removed background positions both change local support.
+        changed_xyz = np.concatenate((inserted_xyz, removed_xyz))
+        kept_slots = np.flatnonzero(kept)
+        before_rows, after_rows = np.searchsorted(original_slots, kept_slots), np.searchsorted(slots, kept_slots)
+        for name in ("range", "ray_z"):
+            if not np.array_equal(before[name][before_rows], after[name][after_rows]):
+                raise ValueError("Unchanged normal return has different sensing conditions")
+        changed_distance = (cKDTree(changed_xyz).query(original.xyzi[kept_slots, :3], workers=1)[0]
+                            if len(changed_xyz) else np.full(len(kept_slots), np.inf))
+        band = np.searchsorted([.5, 1., 2., 4.], changed_distance, side="left")
+        observed = json.loads((path.parent.parent / "manifest.json").read_text())["frames"][frame]
+        if int(inserted.sum()) != observed["count"] or int(np.sum(inserted[slots] & inside)) != observed["in_range"]:
+            raise ValueError("Restored anomaly identities differ from the fixed observation metadata")
+        common = {key: selection[key] for key in ("split", "world", "frame", "representative", "trajectory")}
+        common["reasons"] = ";".join(selection["reasons"])
+        records.append(dict(common, source_sequence=original.sequence_id, world_identity=identity,
+                            anomaly_total=int(inserted.sum()), anomaly_in_range=observed["in_range"],
+                            anomaly_outside_range=int(inserted.sum())-observed["in_range"],
+                            observed_range_median=observed.get("range"), actual_returns=len(slots),
+                            kept_normal=int(kept.sum()), removed_original=int(removed.sum()),
+                            removed_normal=int(np.sum(removed & original_normal)),
+                            occluded_no_return=int(np.sum(removed & ~inserted)),
+                            inserted_original_empty=int(np.sum(inserted & original.zero_slot_mask)),
+                            source_xyzi_equal=True))
+        for population, population_mask in (("anomaly", inserted[slots]),
+                                             ("nearby_kept_normal", kept[slots] & (distance <= 2))):
+            for range_group, range_mask in (("in_range", inside), ("outside_range", ~inside)):
+                mask = population_mask & range_mask
+                for field in GEOMETRY_FIELDS:
+                    x, state = after[field], conditional[field]
+                    finite = mask & state["valid"]
+                    row = dict(common, population=population, range_group=range_group, field=field,
+                               total=int(mask.sum()), valid=int(finite.sum()),
+                               **{key: int(np.sum(mask & state[key])) for key in ("covered", "hit", "lower", "central", "upper")},
+                               hit_lower=int(np.sum(mask & state["hit"] & state["lower"])),
+                               hit_upper=int(np.sum(mask & state["hit"] & state["upper"])),
+                               value_sum=float(x[finite].sum(dtype=np.float64)),
+                               neighbor_count_sum=int(after["neighbor_count"][mask].sum()),
+                               condition_valid=int(np.sum(mask & after["condition_valid"])))
+                    quantiles = np.quantile(x[finite], [.1, .5, .9]) if finite.any() else [None]*3
+                    row.update(zip(("p10", "median", "p90"), quantiles))
+                    populations.append(row)
+        for field in GEOMETRY_FIELDS:
+            old, new = before[field][before_rows], after[field][after_rows]
+            old_valid, new_valid = np.isfinite(old), np.isfinite(new)
+            both = old_valid & new_valid
+            delta = new.astype(np.float64) - old.astype(np.float64)
+            old_covered = before_condition[field]["covered"][before_rows]
+            new_covered = conditional[field]["covered"][after_rows]
+            old_hit = before_condition[field]["hit"][before_rows]
+            new_hit = conditional[field]["hit"][after_rows]
+            shared = old_covered & new_covered
+            for group, label in enumerate(("[0,0.5]", "(0.5,1]", "(1,2]", "(2,4]", "(4,inf]")):
+                mask = band == group
+                usable = mask & both
+                absolute = np.abs(delta[usable])
+                quantiles = np.quantile(absolute, [.1, .5, .9]) if usable.any() else [None]*3
+                changes.append(dict(common, field=field, distance_group=label, total=int(mask.sum()),
+                                    both_valid=int(usable.sum()), before_only=int(np.sum(mask & old_valid & ~new_valid)),
+                                    after_only=int(np.sum(mask & ~old_valid & new_valid)),
+                                    both_missing=int(np.sum(mask & ~old_valid & ~new_valid)),
+                                    changed=int(np.sum(usable & (old != new))),
+                                    before_covered=int(np.sum(mask & old_covered)),
+                                    after_covered=int(np.sum(mask & new_covered)),
+                                    both_covered=int(np.sum(mask & shared)),
+                                    hit_before=int(np.sum(mask & old_hit)), hit_after=int(np.sum(mask & new_hit)),
+                                    new_hit=int(np.sum(mask & shared & ~old_hit & new_hit)),
+                                    lost_hit=int(np.sum(mask & shared & old_hit & ~new_hit)),
+                                    delta_sum=float(delta[usable].sum()), abs_delta_sum=float(np.abs(delta[usable]).sum()),
+                                    maximum_abs_delta=float(np.max(absolute)) if usable.any() else None,
+                                    abs_delta_p10=quantiles[0], abs_delta_median=quantiles[1], abs_delta_p90=quantiles[2]))
+            # Two nested 2 m neighborhoods cannot change beyond 4 m of every edit.
+            far = band == 4
+            if np.any(old_valid[far] != new_valid[far]) or np.any(old[far & both] != new[far & both]):
+                raise ValueError("Unchanged normal geometry changed outside its full 4 m support")
+    return dict(frames=records, features=populations, changes=changes,
+                seconds=time.monotonic()-started, cpu_seconds=time.process_time()-cpu,
+                peak_rss_bytes=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss*1024)
+
+
+def geometry_check(protocol, data_root, output, workers):
+    """Describe selected worlds and complete preselected trajectories, without refitting rules."""
+    import csv
+    from .profile import GEOMETRY_PARAMETERS
+
+    global _geometry_reference
+    output = Path(output)
+    output.mkdir(parents=True, exist_ok=True)
+    directory = Path(protocol["dataset"]["directory"])
+    _, worlds, _ = inventory(directory)
+    selections, trajectories = geometry_selection(worlds)
+    grouped = defaultdict(list)
+    for selected in selections:
+        grouped[selected["split"], selected["frame"]].append(selected)
+    jobs = [(split, frame, chosen) for (split, frame), chosen in sorted(grouped.items())]
+    disk = host_disk()
+    if disk["SizeRemaining"] - 100_000_000 < disk["reserve_bytes"]:
+        raise OSError("Compact paired geometry outputs would invade the physical E: reserve")
+    selection = dict(dataset=str(directory), geometry_parameters=GEOMETRY_PARAMETERS, trajectories=trajectories,
+                     selections=selections, source_frames=len(jobs), world_frames=len(selections),
+                     representative_frames=sum(s["representative"] for s in selections),
+                     scope="155 selected observations across 40 worlds plus two complete manifest-selected trajectories",
+                     selection_rule="maximum count of visible frames with median range in [35,50] m; world-name tie break",
+                     normal_definition="actual original return with semantic_target !=255, neither inserted nor occluded",
+                     scoring="unchanged train/206 direction-conditional inclusive two-tail rarity and per-field thresholds",
+                     neighborhoods="all actual returns; labels only identify output groups; original geometry once per source frame",
+                     missing="retain zero-return frames and each field's unavailable geometry and reference support",
+                     distance_groups="distance to union of new inserted and original removed coordinates; upper endpoints included",
+                     hit_transitions="new_hit/lost_hit use only pairs covered before and after; hit_before/after use each view's coverage",
+                     background_weighting="paired worlds share backgrounds; do not interpret world repetitions as independent source scans",
+                     peak_write_budget_bytes=100_000_000, initial_disk=disk)
+    _atomic_json(output / "selection.json", selection)
+    started = time.monotonic()
+    _geometry_reference = geometry_reference()
+    selection["thresholds"] = _geometry_reference["thresholds"]
+    _atomic_json(output / "selection.json", selection)
+    # Keep this parent free of loaded scans; fork only the small read-only reference.
+    pilot_jobs = [next(j for j in jobs if j[0] == split and
+                       any(w["rows"][j[1]]["count"] for w in worlds
+                           if w["split"] == split and any(s["world"] == w["world"] for s in j[2])))
+                  for split in ("train", "validation")]
+    with ProcessPoolExecutor(max_workers=1, mp_context=mp.get_context("fork"),
+                             initializer=_geometry_initialize, initargs=(directory, data_root)) as pool:
+        pilot = list(pool.map(_geometry_frame, pilot_jobs))
+    print(json.dumps(dict(stage="geometry_pilot", source_frames=2,
+                          seconds=[r["seconds"] for r in pilot], peak_rss_bytes=[r["peak_rss_bytes"] for r in pilot])), flush=True)
+    available = int(next(line.split()[1] for line in Path("/proc/meminfo").read_text().splitlines()
+                         if line.startswith("MemAvailable:"))) * 1024
+    peak_per_worker = max(r["peak_rss_bytes"] for r in pilot)
+    if available - workers * peak_per_worker < 3_000_000_000:
+        raise MemoryError("Pilot worker RSS leaves less than 3 GB available at requested concurrency")
+    host_disk()
+    totals, completed, cpu, peak = {}, 0, 0., 0
+    def accumulate(rows, names, numeric):
+        for row in rows:
+            for scope in ("representative", "trajectory"):
+                if not row[scope]:
+                    continue
+                key = (scope, row["split"], *[row[name] for name in names])
+                value = totals.setdefault(key, dict(scope=scope, split=row["split"],
+                                                   **{name: row[name] for name in names}, observations=0))
+                value["observations"] += 1
+                for name in numeric:
+                    value[name] = value.get(name, 0) + row[name]
+    handles, writers = {}, {}
+    try:
+        for name in ("frames", "features", "changes"):
+            handles[name] = (output / (name + ".csv")).open("w", newline="")
+        pilot_ids = {(j[0], j[1]) for j in pilot_jobs}
+        pending = [j for j in jobs if (j[0], j[1]) not in pilot_ids]
+        with ProcessPoolExecutor(max_workers=workers, mp_context=mp.get_context("fork"),
+                                 initializer=_geometry_initialize, initargs=(directory, data_root)) as pool:
+            futures = [pool.submit(_geometry_frame, job) for job in pending]
+            def results():
+                yield from pilot
+                for future in as_completed(futures):
+                    yield future.result()
+            for result in results():
+                for name in handles:
+                    if name not in writers:
+                        writers[name] = csv.DictWriter(handles[name], fieldnames=list(result[name][0]))
+                        writers[name].writeheader()
+                    writers[name].writerows(result[name])
+                accumulate(result["features"], ("population", "range_group", "field"),
+                           ("total", "valid", "covered", "hit", "hit_lower", "hit_upper", "lower", "central", "upper", "value_sum", "neighbor_count_sum", "condition_valid"))
+                accumulate(result["changes"], ("distance_group", "field"),
+                           ("total", "both_valid", "before_only", "after_only", "both_missing", "changed", "delta_sum", "abs_delta_sum",
+                            "before_covered", "after_covered", "both_covered", "hit_before", "hit_after", "new_hit", "lost_hit"))
+                completed += 1
+                cpu += result["cpu_seconds"]
+                peak = max(peak, result["peak_rss_bytes"])
+                if completed % 50 == 0 or completed == len(jobs):
+                    volume = host_disk()
+                    print(json.dumps(dict(stage="paired_geometry", completed=completed, total=len(jobs),
+                                          seconds=round(time.monotonic()-started, 2), disk_remaining=volume["SizeRemaining"])), flush=True)
+    finally:
+        for handle in handles.values():
+            handle.close()
+    _atomic_json(output / "summary.json", dict(scope=selection["scope"], trajectories=trajectories,
+                 source_frames=completed, world_frames=len(selections), seconds=time.monotonic()-started,
+                 worker_cpu_seconds=cpu, maximum_worker_rss_bytes=peak, workers=workers, library_threads=1,
+                 initial_disk=disk, final_disk=host_disk(), pilot=[{k:v for k,v in r.items() if k not in handles} for r in pilot],
+                 aggregates=list(totals.values()), thresholds=selection["thresholds"]))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--protocol", type=Path, default=Path("protocol/v1.json"))
@@ -300,13 +605,19 @@ def main():
     parser.add_argument("--threads", type=int, default=1)
     parser.add_argument("--inventory-only", action="store_true")
     parser.add_argument("--new-only", action="store_true", help="inventory the full experiment and compute supervision only for supplements")
+    parser.add_argument("--geometry", action="store_true", help="measure fixed-world geometry and paired unchanged normal returns")
     args = parser.parse_args()
     if min(args.workers, args.threads) < 1 or args.workers * args.threads > len(os.sched_getaffinity(0)):
         parser.error("workers times threads must fit the available CPUs")
     protocol = json.loads(args.protocol.read_text())
-    args.output = args.output or Path(protocol["content_coverage"]["output"])
     if args.dataset:
         protocol["dataset"]["directory"] = str(args.dataset)
+    if args.geometry:
+        if args.threads != 1:
+            parser.error("paired geometry uses one numerical-library thread per worker")
+        geometry_check(protocol, args.data_root, args.output or Path("results/coverage/geometry/inserted"), args.workers)
+        return
+    args.output = args.output or Path(protocol["content_coverage"]["output"])
     if args.far_limit is not None and args.far_limit < 1:
         parser.error("far limit must be positive")
     root, worlds, totals = inventory(Path(protocol["dataset"]["directory"]))
