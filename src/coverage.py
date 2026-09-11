@@ -18,7 +18,7 @@ from scipy.spatial import cKDTree
 
 from .data import FrozenDataset, _atomic_json, host_disk
 from .render import calibrated_ray_grid, shape_from_dict, shape_geometry
-from .supervision import (
+from .geometry import (
     ScanGeometry, boundary_targets, local_evidence, sampling_targets,
     surface_probe, surface_targets, summarize_view, thinning_pair,
 )
@@ -162,7 +162,7 @@ def _counts(values):
 
 def check_scan(selection):
     start, cpu = time.monotonic(), time.process_time()
-    dataset, config = _datasets[selection["split"]], _protocol["supervision"]
+    dataset, config = _datasets[selection["split"]], _protocol["geometry"]
     index = next(i for i, (p, _, f) in enumerate(dataset.samples)
                  if p.parent.parent.name == selection["world"] and f == selection["frame"])
     sample = dataset[index]
@@ -176,34 +176,34 @@ def check_scan(selection):
     ranges = np.linalg.norm(source.xyzi[slots, :3], axis=1)
     assert np.sum((y == 1) & (ranges >= 2.5) & (ranges <= 50)) == observed["in_range"]
     pairs = [thinning_pair(sample, original, _grid, definition["seed"], level, _protocol["seed"])
-             for level in config["C2"]["levels"]]
-    geometries = [ScanGeometry(source.xyzi[slots], slots, config["common"]["sampling_scale"], _threads)]
+             for level in config["levels"]]
+    geometries = [ScanGeometry(source.xyzi[slots], slots, config["sampling_scale"], _threads)]
     labels = [y]
     for pair in pairs:
         rows = pair["dense_row"]
         geometries.append(ScanGeometry(geometries[0].xyzi[rows], pair["sparse_source_slot"],
-                                       config["common"]["sampling_scale"], _threads))
+                                       config["sampling_scale"], _threads))
         labels.append(y[rows])
         assert np.array_equal(geometries[-1].xyzi, source.xyzi[pair["sparse_source_slot"]])
     targets = [dict(**geometries[0].scale_arrays(),
-                    **boundary_targets(geometries[0], y, config["C1"]["parameters"]))]
-    evidence = local_evidence(geometries[0], y, config["C2"]["evidence_parameters"]["radius_m"])
+                    **boundary_targets(geometries[0], y, config["boundary"]))]
+    evidence = local_evidence(geometries[0], y, config["sampling"]["radius_m"])
     for g, sy, pair in zip(geometries[1:], labels[1:], pairs):
         targets.append(dict(**g.scale_arrays(), **sampling_targets(
-            geometries[0], g, y, sy, pair, config["C2"]["evidence_parameters"], evidence)))
-    surfaces = surface_targets(original, sample, geometries, labels, pairs, config["C3"]["parameters"])
-    for target, surface in zip(targets, surfaces[config["C3"]["parameters"]["minimum_visible_support_points"]]):
+            geometries[0], g, y, sy, pair, config["sampling"], evidence)))
+    surfaces = surface_targets(original, sample, geometries, labels, pairs, config["surface"])
+    for target, surface in zip(targets, surfaces[config["surface"]["minimum_visible_support_points"]]):
         target.update(surface)
-    auxiliary = targets[0]["boundary_valid"] | targets[0]["surface_valid"]
+    available = targets[0]["boundary_valid"] | targets[0]["surface_valid"]
     for pair, target in zip(pairs, targets[1:]):
-        auxiliary[pair["dense_row"][target["sampling_consistency_valid"]]] = True
+        available[pair["dense_row"][target["sampling_consistency_valid"]]] = True
     views = [summarize_view(g, sy, target, y if v else None)
              for v, (g, sy, target) in enumerate(zip(geometries, labels, targets))]
     edges = targets[0]["boundary_edges"]
     assert np.all(sample.anomaly_target[edges[:, 0]] == 0)
     assert np.all(sample.anomaly_target[edges[:, 1]] == 1)
     # Nearby normals are queried against the full inserted object observation.
-    # Their C3 targets were computed using the complete original/current scans.
+    # Their reference-surface offsets were computed using the complete original/current scans.
     anomaly_tree = cKDTree(source.xyzi[slots[y == 1], :3].astype(float))
     distance = anomaly_tree.query(source.xyzi[slots, :3], workers=_threads)[0]
     near = (y == 0) & (distance <= 2)
@@ -226,12 +226,12 @@ def check_scan(selection):
         rows = np.flatnonzero(mask)
         if len(rows):
             row = int(rows[len(rows) // 2])
-            probe = surface_probe(source.xyzi[slots[row], :3].astype(float), original, sample, slots, config["C3"]["parameters"])
+            probe = surface_probe(source.xyzi[slots[row], :3].astype(float), original, sample, slots, config["surface"])
             assert probe["valid"] and abs(probe["offset_z_m"] - float(t["surface_offset_z"][row])) < 1e-6
             probes.append(dict(kind=name, source_slot=int(slots[row]), label=int(y[row]),
                                semantic=int(source.labels.semantic[slots[row]]), **probe))
     return dict(sample=selection, observation=observed, views=views, context=contexts,
-                base_anomaly_without_checked_auxiliary=int(np.sum((y == 1) & ~auxiliary)),
+                base_anomaly_without_checked_geometry=int(np.sum((y == 1) & ~available)),
                 anomaly_reference_positions=_counts(targets[0]["surface_reference_count"][y == 1]),
                 boundary_edges=len(edges), boundary_normal_semantics=_counts(source.labels.semantic[edges[:, 0]]),
                 actual_far_anomaly_returns=int(np.sum((y == 1) & (ranges >= 35) & (ranges <= 50))),
@@ -256,7 +256,7 @@ def summarize_checks(records, worlds):
                     chosen.append(r)
             metrics = {}
             accessors = {"boundary_edges": lambda r: r["boundary_edges"],
-                         "base_anomaly_without_checked_auxiliary": lambda r: r["base_anomaly_without_checked_auxiliary"],
+                         "base_anomaly_without_checked_geometry": lambda r: r["base_anomaly_without_checked_geometry"],
                          "actual_far_anomaly_returns": lambda r: r["actual_far_anomaly_returns"]}
             for view in range(3):
                 for label in ("normal", "anomaly"):
@@ -596,7 +596,7 @@ def geometry_check(protocol, data_root, output, workers):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--protocol", type=Path, default=Path("protocol/v1.json"))
+    parser.add_argument("--protocol", type=Path, default=Path("protocol/data.json"))
     parser.add_argument("--data-root", type=Path, default=Path("/home/jasongao/Data/STU"))
     parser.add_argument("--output", type=Path)
     parser.add_argument("--dataset", type=Path)
@@ -604,7 +604,7 @@ def main():
     parser.add_argument("--workers", type=int, default=1)
     parser.add_argument("--threads", type=int, default=1)
     parser.add_argument("--inventory-only", action="store_true")
-    parser.add_argument("--new-only", action="store_true", help="inventory the full experiment and compute supervision only for supplements")
+    parser.add_argument("--new-only", action="store_true", help="inventory the full experiment and measure geometric support only for supplements")
     parser.add_argument("--geometry", action="store_true", help="measure fixed-world geometry and paired unchanged normal returns")
     args = parser.parse_args()
     if min(args.workers, args.threads) < 1 or args.workers * args.threads > len(os.sched_getaffinity(0)):
@@ -622,15 +622,15 @@ def main():
         parser.error("far limit must be positive")
     root, worlds, totals = inventory(Path(protocol["dataset"]["directory"]))
     selections = select_checks([w for w in worlds if not args.new_only or w["origin"] == "supplement"], args.far_limit)
-    report = dict(scope="full_pool_inventory_and_targeted_scan_checks_not_full_pool_supervision_coverage",
+    report = dict(scope="full_pool_inventory_and_targeted_scan_checks_not_full_pool_geometric_support_coverage",
                   dataset=protocol["dataset"]["directory"], pool_status=root["status"],
                   local_scope="supplement_only" if args.new_only else "all_selected_worlds",
-                  supervision_parameters=dict(seed=protocol["seed"],
-                                              scale=protocol["supervision"]["common"]["sampling_scale"],
-                                              boundary=protocol["supervision"]["C1"]["parameters"],
-                                              levels=protocol["supervision"]["C2"]["levels"],
-                                              sampling=protocol["supervision"]["C2"]["evidence_parameters"],
-                                              surface=protocol["supervision"]["C3"]["parameters"]),
+                  geometry_parameters=dict(seed=protocol["seed"],
+                                              scale=protocol["geometry"]["sampling_scale"],
+                                              boundary=protocol["geometry"]["boundary"],
+                                              levels=protocol["geometry"]["levels"],
+                                              sampling=protocol["geometry"]["sampling"],
+                                              surface=protocol["geometry"]["surface"]),
                   definitions=dict(far="median recorded anomaly range in [35,50] m",
                                    eligible="at least 5 anomaly returns with sensor range in [2.5,50] m",
                                    low="whole continuous object outer local z extent <= 0.2 m, not gravity height",
@@ -638,7 +638,7 @@ def main():
                                    selection="per world: earliest maximum count; median eligible few-point frame; all far frames or equally spaced range ranks in separate 5-19 and >=20 point strata; with a limit also retain a weak far representative",
                                    far_checks_per_world_per_count_stratum=args.far_limit,
                                    nearby="normal return within 2 m Euclidean distance of an inserted return",
-                                   raised_normal="known normal with valid C3 and offset in [-0.20,-0.05] m; descriptive proxy, no curb annotation or learned difficulty claim",
+                                   raised_normal="known normal with valid reference-surface fit and offset in [-0.20,-0.05] m; descriptive proxy, no curb annotation or learned difficulty claim",
                                    counts="return observations, not distinct objects or independent trials; repeated backgrounds remain correlated"),
                   worlds=[{k: v for k, v in w.items() if k != "rows"} for w in worlds],
                   inventory=totals, selection=selections, checks=[])

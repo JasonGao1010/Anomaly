@@ -23,7 +23,7 @@ from .profile import GROUND, ground_relation, visible_shape
 from .protocol import load_protocol
 from .scene import STUSequence
 from .coverage import conditions
-from .supervision import ScanGeometry, surface_targets, surface_probe
+from .geometry import ScanGeometry, surface_targets, surface_probe
 from .render import (
     MaterialSpec,
     ObservedObstacleIndex,
@@ -449,8 +449,8 @@ def scan_normal_references(data_root, frame, config):
     identity = source_identity(source)
     sample = FrozenFrame(source, identity, empty, empty)
     slots = source.real_slots
-    geometry = ScanGeometry(source.xyzi[slots], slots, config["supervision"]["common"]["sampling_scale"])
-    parameters = config["supervision"]["C3"]["parameters"]
+    geometry = ScanGeometry(source.xyzi[slots], slots, config["geometry"]["sampling_scale"])
+    parameters = config["geometry"]["surface"]
     target = surface_targets(source, sample, [geometry], [sample.anomaly_target[slots]], [], parameters)[parameters["minimum_visible_support_points"]][0]
     ranges = np.linalg.norm(source.xyzi[slots, :3], axis=1)
     lo, hi = config["placement"]["proposal_range_m"]
@@ -630,7 +630,7 @@ def generate_candidate(data_root, output, split, index, config, identity):
         reference = placement["normal_reference"]
         original = sequence[reference["frame"]]
         sample = FrozenFrame.load(directory / "frames" / f"{original.frame_id:06d}.npz", original, world.identity)
-        purpose.update(check_normal_reference(sample, original, reference, config["supervision"]["C3"]["parameters"],
+        purpose.update(check_normal_reference(sample, original, reference, config["geometry"]["surface"],
                                               config["placement"]["minimum_reference_positions"]))
     purpose["achieved"] &= placement["geometry"]["height_m"] <= .2
     physical_reason = reason
@@ -745,7 +745,7 @@ def prepare_calibration(data_root, output, config):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data-root", type=Path, default=Path("/home/jasongao/Data/STU"))
-    parser.add_argument("--config", type=Path, default=Path("protocol/v1.json"))
+    parser.add_argument("--config", type=Path, default=Path("protocol/data.json"))
     parser.add_argument("--output", type=Path)
     parser.add_argument("--workers", type=int, required=True)
     args = parser.parse_args()
@@ -764,12 +764,12 @@ def main():
         base_entries[split] = [dict(entry, path=os.path.relpath((base_dir / entry["path"]).resolve(), output.resolve()), origin="base")
                                for entry in entries]
     science = {k: config[k] for k in ("seed", "dataset", "calibration", "placement", "shape", "qualification", "proposals")}
-    science["normal_reference_surface"] = config["supervision"]["C3"]["parameters"]
-    science["sampling_scale"] = config["supervision"]["common"]["sampling_scale"]
+    science["normal_reference_surface"] = config["geometry"]["surface"]
+    science["sampling_scale"] = config["geometry"]["sampling_scale"]
     if config["qualification"]["reference_use"] != "normal_sources_and_predeclared_content_only":
         raise ValueError("this generator does not use real-label distribution fitting")
     implementation = {name: hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
-                      for name in ("generate.py", "render.py", "data.py", "profile.py", "coverage.py", "supervision.py")}
+                      for name in ("generate.py", "render.py", "data.py", "profile.py", "coverage.py", "geometry.py")}
     identity = hashlib.sha256(json.dumps(dict(science=science, implementation=implementation, base=base_entries), sort_keys=True).encode()).hexdigest()
     manifest_path = output / "manifest.json"
     if manifest_path.exists():

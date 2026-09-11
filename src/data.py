@@ -59,7 +59,7 @@ class FrozenFrame:
         if np.any(source.labels.semantic[inserted] != 2) or np.any(
             source.labels.instance[inserted] != 60001
         ):
-            raise DataProtocolError("V1 has exactly one inserted object with ID 1")
+            raise DataProtocolError("frozen samples have exactly one inserted object with ID 1")
         missing = occluded & ~inserted
         if np.any(source.xyzi[missing] != 0) or np.any(source.labels.packed[missing]):
             raise DataProtocolError(
@@ -229,7 +229,7 @@ class FrozenDataset:
             or manifest["splits"]["validation"]["source_sequence"] != 201
         ):
             raise DataProtocolError(
-                "V1 training and validation use disjoint normal sources"
+                "frozen training and validation data use disjoint normal sources"
             )
         self.sequence = STUSequence.open(
             data_root,

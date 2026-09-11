@@ -3,15 +3,15 @@
   "schema_version": 1,
   "research_question": "Using only the current scan, do observable local geometries distinguish anomaly labels from complex normal structures, does conditioning their normal reference on observable conditions improve discrimination, and can the existing synthetic training examples teach the model which differences have anomaly meaning?",
   "status": {
-    "stage": "paired_auxiliary_supervision_evaluation_paused",
-    "model_defined": true,
-    "training_defined": true,
-    "active_experiment": "paired_auxiliary_supervision",
-    "historical_model_experiment": "v1.json",
-    "iteration": "same_V1_structure_three_views_one_epoch_each_from_shared_complete_initial_state_auxiliary_scale_one_versus_zero",
+    "stage": "existing_samples_coverage_closure_before_formal_model_design",
+    "active_work": "workspace_cleanup_completed_stopped_before_sample_coverage_or_model_design",
+    "model_defined": false,
+    "training_defined": false,
+    "formal_ajae_v1": "not_designed_or_implemented",
+    "legacy_prototype": "retired_model_training_and_run_assets_removed",
+    "data_tools": "data.json",
     "synthetic_dataset_frozen": true,
     "distribution_match": "not_a_selection_objective",
-    "model_experiment_executed": true,
     "formal_default_dataset_available": true,
     "development_dataset_frozen": true,
     "candidate_worlds_generated": 40,
@@ -24,11 +24,6 @@
       "train": 8980,
       "validation": 13640
     },
-    "isolated_implementation_check_executed": true,
-    "experiment_supervision_prepared": true,
-    "formal_training_executed": true,
-    "completed_v1_epochs": 1,
-    "v1_continuation": "paused",
     "geometry_analysis_executed": true,
     "geometry_evidence": "results/geometry",
     "geometry_conclusion": "weak_predictive_evidence_and_partial_conditioning_value_not_a_validated_anomaly_detector",
@@ -37,19 +32,7 @@
     "synthetic_geometry_check_executed": true,
     "synthetic_geometry_evidence": "results/coverage/geometry",
     "synthetic_geometry_conclusion": "nonextreme_anomalies_and_complex_original_normals_exist_insertion_changes_retained_normal_neighborhoods_and_sparse_geometry_has_condition_dependent_missingness",
-    "paired_experiment": "results/paired",
-    "paired_training_authorized": true,
-    "paired_execution": "both_arms_completed_one_epoch_evaluation_paused_by_user_during_A_no_training_or_method_changes",
-    "paired_A_training": "completed_one_epoch_8980_base_frames_26940_views_2245_successful_updates_zero_skips",
-    "paired_A_evidence": "results/paired/joint/training.json",
-    "paired_B_training": "completed_one_epoch_8980_base_frames_26940_views_2245_successful_updates_zero_skips",
-    "paired_B_evidence": "results/paired/detection/training.json",
-    "paired_evaluation": "A_synthetic_interrupted_last_logged_6200_of_13640_no_complete_metrics_B_and_comparison_not_started",
-    "paired_historical_A_reused": false,
-    "paired_failed_numerical_path": "results/paired/failed",
-    "paired_numerical_correction": "both_existing_decoder_projection_branches_keep_float32_through_normalization_then_restore_original_autocast_dtype_both_arms_restart_before_training",
-    "paired_budget": "one_epoch_per_arm_one_paired_seed_2062028_no_automatic_extension",
-    "paired_question": "effect_of_existing_auxiliary_supervision_not_a_direct_test_of_sensor_conditioned_representation"
+    "next_stage": "close_existing_sample_coverage_then_design_formal_model"
   },
   "data": {
     "normal_sources": [
@@ -246,5 +229,33 @@
     "ground_estimator": "local_plane_proxy",
     "unreliable_values": "missing",
     "model_input_use": "label_dependent_geometry_is_diagnostic_only"
+  },
+  "history": {
+    "prototype": {
+      "status": "historical_exploratory_prototype_not_formal_AJAE_V1",
+      "retained_diagnostics": "results/profile/prototype",
+      "val19_metrics_percent": {
+        "AP": 6.53210197635271,
+        "FPR95": 17.214532122945748,
+        "recall_at_1pct_FPR": 64.35159258962959
+      },
+      "normal_points": 193792470,
+      "anomaly_points": 87499,
+      "direct_workspace_recomputation_available": false,
+      "limitation": "weights_and_full_predictions_deleted;_retained_tables_figures_and_prior_verification_flags_are_historical_evidence_only"
+    },
+    "paired_auxiliary_trial": {
+      "status": "training_completed_evaluation_incomplete_voluntarily_terminated",
+      "epochs_per_arm": 1,
+      "base_frames_per_arm": 8980,
+      "views_per_arm": 26940,
+      "successful_updates_per_arm": 2245,
+      "skipped_updates_per_arm": 0,
+      "question": "existing_auxiliary_supervision_scale_1_versus_0_same_structure_not_a_direct_conditioning_test",
+      "evaluation": "A_synthetic_last_log_6200_of_13640_no_complete_metrics_B_not_started",
+      "numerical_issue": "half_precision_decoder_projection_overflow_before_normalization;_both_arms_used_same_float32_projection_normalization_correction_from_shared_pretraining_state",
+      "conclusion": "no_completed_comparison_and_no_claim_of_auxiliary_benefit_or_harm;_voluntary_termination_is_not_experiment_failure",
+      "assets": "deleted_by_explicit_user_authorization;_not_resumable"
+    }
   }
 }
