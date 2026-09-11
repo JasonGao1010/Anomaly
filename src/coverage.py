@@ -594,6 +594,182 @@ def geometry_check(protocol, data_root, output, workers):
                  aggregates=list(totals.values()), thresholds=selection["thresholds"]))
 
 
+def _coverage_cell(rows, field):
+    """Count world observations separately from unique source frames and returns."""
+    by_world = Counter()
+    for row in rows:
+        by_world[row["world"]] += int(row[field])
+    count = sum(by_world.values())
+    top = min(by_world, key=lambda w: (-by_world[w], w)) if count else None
+    frame_counts = Counter(w for w, _ in {(r["world"], int(r["frame"])) for r in rows})
+    return dict(worlds=len({r["world"] for r in rows}),
+                source_frames=len({(r["split"], int(r["frame"])) for r in rows}),
+                world_frames=len({(r["world"], int(r["frame"])) for r in rows}),
+                returns=count, return_field=field, world_ids=sorted(by_world),
+                top_world=top, top_world_share=by_world[top] / count if count else None,
+                top_world_frame_share=max(frame_counts.values()) / sum(frame_counts.values()) if frame_counts else None)
+
+
+def summarize_existing(directory, coverage):
+    """Close coverage from recorded metadata; never render or recompute geometry."""
+    import csv
+
+    root = json.loads((directory / "manifest.json").read_text())
+    previous = json.loads((coverage / "experiment.json").read_text())
+    metadata = {(w["split"], w["world"]): w for w in previous["worlds"]}
+    inserted = coverage / "geometry/inserted"
+    selection = json.loads((inserted / "selection.json").read_text())
+    if root["status"] != "frozen" or Path(previous["dataset"]).resolve() != directory.resolve():
+        raise ValueError("coverage must describe the current frozen experiment")
+    if Path(selection["dataset"]).resolve() != directory.resolve():
+        raise ValueError("geometry selection belongs to another dataset")
+    bands = ("near", "middle", "far")
+
+    def distance_band(row):
+        if not row["count"]:
+            return "no_return"
+        r = row["range"]
+        return ("below_range" if r < 2.5 else "near" if r < 10 else
+                "middle" if r < 35 else "far" if r <= 50 else "beyond_range")
+
+    worlds, observations = [], []
+    for split, part in root["splits"].items():
+        for entry in part["worlds"]:
+            path = directory / entry["path"]
+            w = metadata[split, path.name]
+            if w["source_sequence"] != part["source_sequence"]:
+                raise ValueError("world and source sequence differ from existing coverage")
+            manifest = json.loads((path / "manifest.json").read_text())
+            if w["identity"] != entry["world_identity"] or manifest["world_identity"] != w["identity"]:
+                raise ValueError("world identity differs from the retained coverage")
+            if [r["frame"] for r in manifest["frames"]] != list(range(part["samples"] // len(part["worlds"]))):
+                raise ValueError("full source-frame order is required")
+            worlds.append(w)
+            observations.extend(dict(r, split=split, world=w["world"],
+                                     band=distance_band(r)) for r in manifest["frames"])
+    if set(metadata) != {(w["split"], w["world"]) for w in worlds}:
+        raise ValueError("retained coverage has different world membership")
+
+    def read_rows(name):
+        with (inserted / (name + ".csv")).open(encoding="utf-8-sig") as handle:
+            return list(csv.DictReader(handle))
+
+    frames, features, changes = (read_rows(k) for k in ("frames", "features", "changes"))
+    frame_keys = {(r["split"], r["world"], int(r["frame"])) for r in frames}
+    selected_keys = {(r["split"], r["world"], r["frame"]) for r in selection["selections"]}
+    if len(frame_keys) != len(frames) or frame_keys != selected_keys:
+        raise ValueError("recorded geometry observations differ from their fixed selection")
+    recorded = {(r["split"], r["world"], r["frame"]): r for r in observations}
+    for row in frames:
+        source = recorded[row["split"], row["world"], int(row["frame"])]
+        if (int(row["anomaly_total"]) != source["count"] or
+                int(row["anomaly_in_range"]) != source["in_range"] or
+                int(row["removed_original"]) != source["occluded"]):
+            raise ValueError("geometry rows disagree with frozen observation counts")
+
+    report = dict(dataset=str(directory), scope="existing_pool_and_preselected_geometry_evidence_only",
+                  definitions=dict(source_frames="distinct source sequence and frame, not independent environments",
+                                   returns="world-frame return occurrences; normal backgrounds can repeat across worlds",
+                                   distance="median range of all inserted returns; near [2.5,10), middle [10,35), far [35,50] m",
+                                   in_range="individual return range in [2.5,50] m; eligible requires at least five",
+                                   dimensions="whole continuous object bounds in local axes, with original 1e-6 m padding",
+                                   low="local height <=0.2 m; not gravity height or occlusion",
+                                   small="no frozen binary definition; retain individual physical dimensions",
+                                   central="each field separately within inclusive conditional normal p10-p90",
+                                   change_neighborhood="within 2 m of inserted OR removed positions, all sensor ranges",
+                                   missing="null means unavailable or inapplicable; zero means measured absence"),
+                  sources=[str(coverage / "experiment.json"), str(directory / "manifest.json"),
+                           str(coverage / "geometry/normal_cases.json"), str(inserted / "selection.json"),
+                           *[str(inserted / (k + ".csv")) for k in ("frames", "features", "changes")]],
+                  splits={})
+    for split, part in root["splits"].items():
+        ws = [w for w in worlds if w["split"] == split]
+        rows = [r for r in observations if r["split"] == split]
+        expected = previous["inventory"][split]["all"]
+        if (len(rows) != part["samples"] or
+                sum(r["count"] for r in rows) != expected["anomaly_returns"]["total"] or
+                sum(r["in_range"] for r in rows) != expected["in_range_anomaly_returns"]["total"]):
+            raise ValueError("pool totals changed from existing coverage")
+        cells = dict(all=_coverage_cell(rows, "count"), ranges={}, low={}, shapes={}, count_distance={})
+        for band in bands:
+            chosen = [r for r in rows if r["band"] == band]
+            cells["ranges"][band] = dict(visible=_coverage_cell(chosen, "in_range"),
+                                        eligible=_coverage_cell([r for r in chosen if r["in_range"] >= 5], "in_range"))
+        low = {w["world"] for w in ws if w["height_m"] <= .2}
+        for name, ids in [("low", low), *[(s, {w["world"] for w in ws if w["shape_family"] == s})
+                                           for s in sorted({w["shape_family"] for w in ws})]]:
+            group = dict(physical_worlds=len(ids))
+            for band in ("all", *bands):
+                chosen = [r for r in rows if r["world"] in ids and r["in_range"] >= 5
+                          and (band == "all" or r["band"] == band)]
+                group[band] = _coverage_cell(chosen, "in_range")
+            if name == "low":
+                cells["low"] = group
+            else:
+                cells["shapes"][name] = group
+        states = dict(no_return=lambda r: r["count"] == 0,
+                      outside_only=lambda r: r["count"] > 0 and r["in_range"] == 0,
+                      one_to_four=lambda r: 1 <= r["in_range"] <= 4,
+                      five_to_nineteen=lambda r: 5 <= r["in_range"] <= 19,
+                      at_least_twenty=lambda r: r["in_range"] >= 20)
+        for state, predicate in states.items():
+            chosen = [r for r in rows if predicate(r)]
+            field = "count" if state in ("no_return", "outside_only") else "in_range"
+            cells["count_distance"][state] = dict(all=_coverage_cell(chosen, field),
+                **{b: None if state == "no_return" else
+                   _coverage_cell([r for r in chosen if r["band"] == b], "in_range") for b in bands})
+        if sum(c["all"]["world_frames"] for c in cells["count_distance"].values()) != len(rows):
+            raise ValueError("return-count states must partition all world frames")
+        cells["occlusion"] = dict(
+            removed_original=_coverage_cell([r for r in rows if r["occluded"] > 0], "occluded"),
+            removed_with_no_anomaly_return=_coverage_cell([r for r in rows if r["occluded"] > 0 and r["count"] == 0], "occluded"),
+            object_occlusion_fraction=None,
+            limitation="removed original returns do not measure how much of the inserted object is occluded")
+        cells["physical_worlds"] = []
+        for w in ws:
+            chosen = [r for r in rows if r["world"] == w["world"]]
+            cells["physical_worlds"].append(dict(
+                world=w["world"], shape=w["shape_family"],
+                dimensions_m=[w[k] for k in ("length_m", "width_m", "height_m")],
+                low=w["world"] in low,
+                eligible_bands={b: sum(r["band"] == b and r["in_range"] >= 5 for r in chosen) for b in bands},
+                visible_bands={b: sum(r["band"] == b for r in chosen) for b in bands}))
+        cells["all_three_eligible_bands"] = [w["world"] for w in cells["physical_worlds"] if all(w["eligible_bands"].values())]
+        cells["all_three_visible_bands"] = [w["world"] for w in cells["physical_worlds"] if all(w["visible_bands"].values())]
+        evidence = {}
+        for scope in ("representative", "trajectory"):
+            selected = [r for r in frames if r["split"] == split and r[scope] == "True"]
+            detail = dict(observations=_coverage_cell(selected, "anomaly_in_range"), fields={}, changes={})
+            for field in GEOMETRY_FIELDS:
+                populations = {}
+                for population in ("anomaly", "nearby_kept_normal"):
+                    chosen = [r for r in features if r["split"] == split and r[scope] == "True"
+                              and r["field"] == field and r["population"] == population and r["range_group"] == "in_range"]
+                    populations[population] = {k: _coverage_cell([r for r in chosen if int(r[k]) > 0], k)
+                                               for k in ("total", "valid", "central", "upper", "hit")}
+                    missing = [dict(r, missing=int(r["total"]) - int(r["valid"])) for r in chosen]
+                    populations[population]["missing"] = _coverage_cell([r for r in missing if r["missing"] > 0], "missing")
+                detail["fields"][field] = populations
+                chosen = [r for r in changes if r["split"] == split and r[scope] == "True" and r["field"] == field
+                          and r["distance_group"] in ("[0,0.5]", "(0.5,1]", "(1,2]")]
+                # Distance bins partition returns; frame identities still count once.
+                detail["changes"][field] = {k: _coverage_cell([r for r in chosen if int(r[k]) > 0], k)
+                                              for k in ("total", "both_valid", "changed", "before_only", "after_only", "new_hit")}
+            evidence[scope] = detail
+        selected = [r for r in frames if r["split"] == split]
+        evidence["union"] = _coverage_cell(selected, "anomaly_in_range")
+        evidence["trajectory_world"] = selection["trajectories"][split]["world"]
+        report["splits"][split] = dict(source_sequence=part["source_sequence"], normal_source_sequences=1,
+                                       pool=cells, geometry=evidence)
+    normal = json.loads((coverage / "geometry/normal_cases.json").read_text())
+    report["original_normals"] = dict(cache_frames=normal["cache_frames"], totals=normal["source_totals"],
+                                     cases=[{k: r[k] for k in ("sequence", "frame", "slot", "kind", "range", "ray_z", "direction_cell")}
+                                            for r in normal["cases"]],
+                                     world_count=None, per_frame_concentration=None,
+                                     limitation="original sources have no inserted world; cached totals lack per-frame tail counts; cases are six selected anchors")
+    return report
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--protocol", type=Path, default=Path("protocol/data.json"))
@@ -606,12 +782,22 @@ def main():
     parser.add_argument("--inventory-only", action="store_true")
     parser.add_argument("--new-only", action="store_true", help="inventory the full experiment and measure geometric support only for supplements")
     parser.add_argument("--geometry", action="store_true", help="measure fixed-world geometry and paired unchanged normal returns")
+    parser.add_argument("--summarize", action="store_true", help="summarize existing coverage records without reading scans or computing geometry")
     args = parser.parse_args()
     if min(args.workers, args.threads) < 1 or args.workers * args.threads > len(os.sched_getaffinity(0)):
         parser.error("workers times threads must fit the available CPUs")
     protocol = json.loads(args.protocol.read_text())
     if args.dataset:
         protocol["dataset"]["directory"] = str(args.dataset)
+    if args.summarize:
+        if args.geometry or args.inventory_only or args.new_only or args.far_limit is not None:
+            parser.error("--summarize only reads existing full-pool and fixed-selection records")
+        coverage = Path(protocol["content_coverage"]["output"]).parent
+        report = summarize_existing(Path(protocol["dataset"]["directory"]), coverage)
+        output = args.output or coverage / "summary.json"
+        _atomic_json(output, report)
+        print(json.dumps(dict(output=str(output), scope=report["scope"])), flush=True)
+        return
     if args.geometry:
         if args.threads != 1:
             parser.error("paired geometry uses one numerical-library thread per worker")

@@ -3,8 +3,8 @@
   "schema_version": 1,
   "research_question": "Using only the current scan, do observable local geometries distinguish anomaly labels from complex normal structures, does conditioning their normal reference on observable conditions improve discrimination, and can the existing synthetic training examples teach the model which differences have anomaly meaning?",
   "status": {
-    "stage": "existing_samples_coverage_closure_before_formal_model_design",
-    "active_work": "workspace_cleanup_completed_stopped_before_sample_coverage_or_model_design",
+    "stage": "existing_samples_coverage_closed_ready_for_formal_model_design",
+    "active_work": "coverage_summary_completed_stopped_before_model_design",
     "model_defined": false,
     "training_defined": false,
     "formal_ajae_v1": "not_designed_or_implemented",
@@ -32,7 +32,11 @@
     "synthetic_geometry_check_executed": true,
     "synthetic_geometry_evidence": "results/coverage/geometry",
     "synthetic_geometry_conclusion": "nonextreme_anomalies_and_complex_original_normals_exist_insertion_changes_retained_normal_neighborhoods_and_sparse_geometry_has_condition_dependent_missingness",
-    "next_stage": "close_existing_sample_coverage_then_design_formal_model"
+    "coverage_closure_completed": true,
+    "coverage_closure_evidence": "results/coverage/summary.json",
+    "coverage_decision": "use_current_frozen_dataset_for_first_method_design_no_prior_supplement_required",
+    "coverage_boundaries": "two_normal_source_sequences_not_independent_world_backgrounds;_uneven_shape_range_coverage;_no_dense_far_group;_geometry_missingness_retained;_object_occlusion_degree_unquantified;_natural_trajectories_not_single_factor_controls",
+    "next_stage": "formal_model_design_not_started"
   },
   "data": {
     "normal_sources": [
