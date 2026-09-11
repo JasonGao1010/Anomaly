@@ -540,8 +540,18 @@ class GridUnpooling(PointModule):
         inverse = point.pooling_inverse
         feat = point.feat
 
-        parent = self.proj_skip(parent)
-        parent.feat = parent.feat + self.proj(point).feat[inverse]
+        device_type = feat.device.type
+        output_dtype = (torch.get_autocast_dtype(device_type)
+                        if torch.is_autocast_enabled(device_type) else feat.dtype)
+        # Keep large projections finite until normalization; restore AMP dtype only afterward.
+        with torch.autocast(device_type=device_type, enabled=False):
+            parent.feat = parent.feat.float()
+            point.feat = point.feat.float()
+            parent = self.proj_skip(parent)
+            point = self.proj(point)
+        parent.feat = parent.feat.to(output_dtype)
+        point.feat = point.feat.to(output_dtype)
+        parent.feat = parent.feat + point.feat[inverse]
         parent.sparse_conv_feat = parent.sparse_conv_feat.replace_feature(parent.feat)
 
         if self.traceable:

@@ -3,12 +3,12 @@
   "schema_version": 1,
   "research_question": "Using only the current scan, do observable local geometries distinguish anomaly labels from complex normal structures, does conditioning their normal reference on observable conditions improve discrimination, and can the existing synthetic training examples teach the model which differences have anomaly meaning?",
   "status": {
-    "stage": "existing_synthetic_geometry_check_completed",
+    "stage": "paired_auxiliary_supervision_paused_after_A",
     "model_defined": true,
     "training_defined": true,
-    "active_experiment": "existing_synthetic_geometry_check",
+    "active_experiment": "paired_auxiliary_supervision",
     "historical_model_experiment": "v1.json",
-    "iteration": "check_existing_positive_examples_original_normal_structures_retained_normal_changes_and_fixed_object_trajectories",
+    "iteration": "same_V1_structure_three_views_one_epoch_each_from_shared_complete_initial_state_auxiliary_scale_one_versus_zero",
     "synthetic_dataset_frozen": true,
     "distribution_match": "not_a_selection_objective",
     "model_experiment_executed": true,
@@ -37,7 +37,18 @@
     "synthetic_geometry_check_executed": true,
     "synthetic_geometry_evidence": "results/coverage/geometry",
     "synthetic_geometry_conclusion": "nonextreme_anomalies_and_complex_original_normals_exist_insertion_changes_retained_normal_neighborhoods_and_sparse_geometry_has_condition_dependent_missingness",
-    "next_controlled_factor_candidate": "joint_existing_auxiliary_loss_strength_lambda_zero_versus_one_same_network_data_detection_loss_and_update_budget_not_executed"
+    "paired_experiment": "results/paired",
+    "paired_training_authorized": true,
+    "paired_execution": "paused_by_user_after_A_do_not_start_B_or_evaluation_until_resumed",
+    "paired_A_training": "completed_one_epoch_8980_base_frames_26940_views_2245_successful_updates_zero_skips",
+    "paired_A_evidence": "results/paired/joint/training.json",
+    "paired_B_training": "not_started",
+    "paired_evaluation": "not_started_for_either_arm",
+    "paired_historical_A_reused": false,
+    "paired_failed_numerical_path": "results/paired/failed",
+    "paired_numerical_correction": "both_existing_decoder_projection_branches_keep_float32_through_normalization_then_restore_original_autocast_dtype_both_arms_restart_before_training",
+    "paired_budget": "one_epoch_per_arm_one_paired_seed_2062028_no_automatic_extension",
+    "paired_question": "effect_of_existing_auxiliary_supervision_not_a_direct_test_of_sensor_conditioned_representation"
   },
   "data": {
     "normal_sources": [

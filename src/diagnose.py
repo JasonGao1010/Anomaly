@@ -1,4 +1,4 @@
-"""Attribute detection failures using saved scores; never run a model."""
+"""Exact detection diagnostics and compact evaluation of a fixed paired experiment."""
 
 from __future__ import annotations
 
@@ -16,7 +16,8 @@ from threading import local
 import numpy as np
 
 from .data import FrozenDataset, FrozenFrame, FramePrediction, _atomic_json, host_disk
-from .evaluate import APAttribution, evaluate_frames, official_frame, packed_scores, pooled_files
+from .evaluate import (APAttribution, evaluate_frames, evaluation_targets, exact_metrics,
+                       official_frame, packed_scores, pooled_files)
 from .protocol import load_protocol
 from .scene import LabelMode, STUSequence
 from vendor.stu.compute_point_level_ood import PointOODMetricsCalculator as Official
@@ -711,16 +712,590 @@ def inspect_cases(rows, summary, metrics, output):
     return cases
 
 
+def _paired_metrics(stream, count, observe=None):
+    """Sort one exact record file in place; never allocate a second pooled copy."""
+    stream.flush()
+    if stream.tell() != 8 * count:
+        raise ValueError("compact metric records lost point identities")
+    if not count:
+        return exact_metrics(np.empty(0, np.uint64), score_kind="logit", fpr_limits=LIMITS)
+    ordered = np.memmap(stream, dtype=np.uint64, mode="r+", shape=(count,))
+    ordered.sort(kind="quicksort")
+    result = exact_metrics(ordered, score_kind="logit", fpr_limits=LIMITS, observe=observe)
+    del ordered
+    return result
+
+
+def _paired_thresholds(metrics):
+    points = [metrics.get("operating_points", {}).get(f"{limit:g}", {}) for limit in LIMITS]
+    points.append(metrics.get("official_high_recall", {}))
+    return np.array([point.get("threshold") if point.get("threshold") is not None else np.inf
+                     for point in points], np.float64)
+
+
+def _paired_add(groups, scope, kind, values, score, labels, thresholds):
+    """Count every original point at this arm's own complete-tie thresholds."""
+    if not len(score):
+        return
+    if np.ndim(values) == 0:
+        count = np.zeros(10, np.int64)
+        count[:2] = np.bincount(labels, minlength=2)
+        for index, threshold in enumerate(thresholds):
+            count[2+2*index:4+2*index] = np.bincount(labels[score >= threshold], minlength=2)
+        groups.setdefault((scope, kind, str(values)), np.zeros(10, np.int64))[:] += count
+        return
+    values = np.asarray(values)
+    if values.shape != score.shape or labels.shape != score.shape:
+        raise ValueError("fixed group values must share score and label identities")
+    unique, inverse = np.unique(values, return_inverse=True)
+    count = np.zeros((len(unique), 10), np.int64)
+    for label in (0, 1):
+        selected = labels == label
+        count[:, label] = np.bincount(inverse[selected], minlength=len(unique))
+        for index, threshold in enumerate(thresholds):
+            accepted = selected & (score >= threshold)
+            count[:, 2 + 2 * index + label] = np.bincount(inverse[accepted], minlength=len(unique))
+    for value, row in zip(unique, count, strict=True):
+        key = (scope, kind, str(value))
+        groups.setdefault(key, np.zeros(10, np.int64))[:] += row
+
+
+def _paired_group_rows(groups):
+    rows = []
+    for (scope, kind, value), count in sorted(groups.items()):
+        row = dict(scope=scope, kind=kind, group=value, normal=int(count[0]), anomaly=int(count[1]))
+        for index, name in enumerate(("1", "0.1", "0.01", "95")):
+            fp, tp = map(int, count[2+2*index:4+2*index])
+            row.update({f"fp_{name}": fp, f"tp_{name}": tp,
+                        f"FPR_{name}": 100*fp/count[0] if count[0] else None,
+                        f"recall_{name}": 100*tp/count[1] if count[1] else None})
+        rows.append(row)
+    return rows
+
+
+def _paired_fixed_cases():
+    """Reuse previously inspected identities; new model scores never select a case."""
+    sources = {"synthetic": Path("results/v1/diagnosis/groups.json"),
+               "real": Path("results/v1/attribution/cases.json"),
+               "geometry": Path("results/geometry/cases.json"),
+               "normal": Path("results/coverage/geometry/normal_cases.json")}
+    return {name: json.loads(path.read_text())["cases"] for name, path in sources.items()}
+
+
+def _paired_case_mask(case, xyz, labels, kind):
+    if kind == "geometry":
+        center = np.array([case[f"centre_{axis}_m"] for axis in "xyz"])
+        return np.all(np.abs(xyz - center) <= 3, axis=1)
+    if kind == "normal":
+        return np.all(np.abs(xyz - np.asarray(case["center"])) <= 3, axis=1)
+    if kind == "synthetic":
+        return np.linalg.norm(xyz - np.asarray(case["xyz"]), axis=1) <= case["radius_m"]
+    if case["kind"] == "normal_cluster":
+        return np.linalg.norm(xyz - np.asarray(case["center"]), axis=1) <= 6
+    positive = xyz[labels == 1]
+    return np.all((xyz >= positive.min(axis=0)-2) & (xyz <= positive.max(axis=0)+2), axis=1)
+
+
+def _paired_synthetic_masks(xyz, labels, target):
+    """The existing 2 m and C3 protrusion proxies, independent of predictions."""
+    from scipy.spatial import cKDTree
+    near = np.zeros(len(labels), bool)
+    normal = np.flatnonzero(labels == 0)
+    anomaly = xyz[labels == 1].astype(np.float64)
+    if len(normal) and len(anomaly):
+        distance = cKDTree(anomaly).query(xyz[normal].astype(np.float64),
+                    distance_upper_bound=np.nextafter(2., np.inf), workers=1)[0]
+        near[normal] = distance <= 2
+    valid = np.asarray(target["surface_valid"], bool)
+    offset = np.asarray(target["surface_offset_z"])
+    raised = (labels == 0) & valid & (offset >= -.2) & (offset <= -.05)
+    return np.stack((near, raised, valid))
+
+
+def _paired_cached_synthetic(row, frozen, scores, flags):
+    """Restore compact records to the same sorted original slots used at inference."""
+    target = frozen.anomaly_target
+    slots = np.flatnonzero(target >= 0)
+    n = row["all"]["normal"] + row["all"]["anomaly"]
+    if len(slots) != n:
+        raise ValueError("compact synthetic label denominator changed")
+    scores.seek(4*row["offset"])
+    score = np.fromfile(scores, np.float32, n)
+    flags.seek(row["flag_offset"])
+    packed = np.fromfile(flags, np.uint8, 3*((n+7)//8))
+    if len(score) != n or len(packed) != 3*((n+7)//8):
+        raise ValueError("truncated compact synthetic records")
+    mask = np.unpackbits(packed.reshape(3, -1), axis=1, count=n).astype(bool)
+    scopes, distance, eligible = scope_masks(frozen.source.xyzi[slots], target[slots])
+    if eligible != row["eligible"]:
+        raise ValueError("compact synthetic observation membership changed")
+    for scope, use in zip(SCOPES, scopes, strict=True):
+        if (int(np.sum(use & (target[slots] == 0))), int(np.sum(use & (target[slots] == 1)))) != (
+                row[scope]["normal"], row[scope]["anomaly"]):
+            raise ValueError("compact synthetic scope label counts changed")
+    return slots, score, target[slots], mask, scopes, distance
+
+
+def _paired_synthetic(protocol, data_root, run, model, cases):
+    from .train import PreparedDataset, loader, predict, add_errors, finalize_errors
+    from .supervision import detection_loss
+    import torch
+
+    dataset = PreparedDataset(protocol, data_root, "validation")
+    if len(dataset) != 13640:
+        raise ValueError("paired synthetic evaluation requires all 13640 validation frames")
+    order = sorted(range(len(dataset)), key=lambda i: (dataset.frozen.samples[i][2], i))
+    settings = protocol["training"]
+    rows, errors, cache, groups = [], {}, {}, {}
+    loss_sum = np.zeros(3)
+    frame_key, reused, count = None, 0, 0
+    started = time.monotonic()
+    with tempfile.TemporaryFile(dir=run) as scores, tempfile.TemporaryFile(dir=run) as flags:
+        with tempfile.TemporaryFile(dir=run) as packed:
+            batches = loader(dataset, order, settings["loader_workers"], settings["seed"])
+            for sample in batches:
+                if sample["frame"] != frame_key:
+                    cache.clear()
+                    frame_key = sample["frame"]
+                losses, dense = [], None
+                for index, view in enumerate(sample["views"]):
+                    key = view["fingerprint"]
+                    if key in cache:
+                        output = cache[key]
+                        reused += 1
+                    else:
+                        output = predict(model, view["scan"])
+                        cache[key] = output
+                    add_errors(errors, index, output, view["target"], dense)
+                    losses.append(float(detection_loss(torch.from_numpy(output["logits"]), view["target"]["labels"])))
+                    if index == 0:
+                        dense = output["logits"]
+                loss_sum += losses
+                source = sample["source"]
+                target = sample["views"][0]["target"]
+                labels = target["labels"].numpy()
+                slots = source.real_slots
+                valid = labels >= 0
+                frame_masks, _, eligible = scope_masks(source.xyzi[slots], labels)
+                masks = _paired_synthetic_masks(source.xyzi[slots, :3], labels, target)[:, valid]
+                row = dict(index=sample["index"], world=sample["world"], world_identity=sample["identity"],
+                           frame=sample["frame"], eligible=eligible, actual_points=len(slots),
+                           offset=count, flag_offset=flags.tell(), detection_loss=float(np.mean(losses)))
+                for scope, mask in zip(SCOPES, frame_masks, strict=True):
+                    row[scope] = dict(normal=int(np.sum(mask & (labels == 0))),
+                                      anomaly=int(np.sum(mask & (labels == 1))))
+                dense[valid].astype(np.float32).tofile(scores)
+                np.packbits(masks, axis=1).tofile(flags)
+                packed_scores(dense[valid], labels[valid], score_kind="logit").tofile(packed)
+                count += int(valid.sum())
+                rows.append(row)
+                if len(rows) % 200 == 0:
+                    disk = host_disk()
+                    if disk["SizeRemaining"] < disk["reserve_bytes"]:
+                        raise OSError("compact synthetic evaluation reached the E: reserve")
+                    print(json.dumps(dict(event="paired_synthetic", frames=len(rows), total=len(dataset),
+                        reused_forwards=reused, seconds=time.monotonic()-started,
+                        temporary_bytes=scores.tell()+flags.tell()+packed.tell(), host=disk)), flush=True)
+            if len(rows) != len(dataset):
+                raise ValueError("synthetic evaluation did not visit every prescribed frame")
+            metrics = {"all": _paired_metrics(packed, count)}
+        cache.clear()
+        scores.flush()
+        flags.flush()
+        # Only compact scores and three bit masks survive inference. Replay fixed
+        # scan identities, without recomputing model inputs or auxiliary targets.
+        def frames():
+            for row in rows:
+                path, identity, frame = dataset.frozen.samples[row["index"]]
+                if (identity, frame, path.parent.parent.name) != (row["world_identity"], row["frame"], row["world"]):
+                    raise ValueError("compact synthetic score identity changed")
+                original = dataset.frozen.sequence[frame]
+                frozen = FrozenFrame.load(path, original, identity)
+                yield row, frozen, *_paired_cached_synthetic(row, frozen, scores, flags)
+
+        # The filtered sort is created only after the larger all-point sort closes.
+        for scope_index, scope in enumerate(SCOPES):
+            if scope_index:
+                with tempfile.TemporaryFile(dir=run) as packed:
+                    filtered_count = 0
+                    for row, frozen, slots, score, labels, mask, scopes, distance in frames():
+                        use = scopes[scope_index]
+                        packed_scores(score[use], labels[use], score_kind="logit").tofile(packed)
+                        filtered_count += int(use.sum())
+                    metrics[scope] = _paired_metrics(packed, filtered_count)
+            thresholds = _paired_thresholds(metrics[scope])
+            for row, frozen, slots, score, labels, mask, scopes, distance in frames():
+                use = scopes[scope_index]
+                frame_type = 2 if row["eligible"] else int(np.any(labels == 1))
+                for kind, value in (("all", "all"), ("world", row["world"]),
+                                    ("source_frame", row["frame"]), ("frame_type", frame_type)):
+                    _paired_add(groups, scope, kind, value, score[use], labels[use], thresholds)
+                for kind, value in (("distance", range_ids(distance)),
+                        ("official_membership", ((distance >= 2.5) & (distance <= 50)).astype(np.int8)+2*int(row["eligible"]))):
+                    _paired_add(groups, scope, kind, value[use], score[use], labels[use], thresholds)
+                normal = use & (labels == 0)
+                _paired_add(groups, scope, "semantic", frozen.source.labels.semantic[slots][normal],
+                            score[normal], labels[normal], thresholds)
+                for name, selected in (("nearby_kept_normal", mask[0]), ("raised_normal", mask[1]),
+                        ("nearby_raised_normal", mask[0] & mask[1]), ("surface_valid_normal", mask[2] & (labels == 0))):
+                    take = use & selected
+                    _paired_add(groups, scope, "normal_context", name, score[take], labels[take], thresholds)
+                for index, case in enumerate(cases):
+                    if case["scope"] == scope and (case["world"], case["frame"]) == (row["world"], row["frame"]):
+                        if case["world_identity"] != row["world_identity"]:
+                            raise ValueError("fixed synthetic case world changed")
+                        take = use & _paired_case_mask(case, frozen.source.xyzi[slots, :3], labels, "synthetic")
+                        _paired_add(groups, scope, "fixed_case", index+1, score[take], labels[take], thresholds)
+            expected = metrics[scope]
+            totals = groups[scope, "all", "all"]
+            if tuple(totals[:2]) != (expected["normal_count"], expected["anomaly_count"]):
+                raise ValueError("synthetic compact groups lost a label denominator")
+            for k, point in enumerate([expected["operating_points"][f"{v:g}"] for v in LIMITS] + [expected["official_high_recall"]]):
+                if tuple(totals[2+2*k:4+2*k]) != (point["fp"], point["tp"]):
+                    raise ValueError("synthetic groups disagree with complete-tie working points")
+    for row in rows:
+        for key in ("index", "offset", "flag_offset"):
+            row.pop(key)
+    return dict(scope="all 13640 existing train/201 validation world frames; synthetic labels retained",
+                metrics=metrics, frames=rows, groups=_paired_group_rows(groups),
+                detection_loss=float(loss_sum.mean()/len(rows)), detection_loss_by_view=(loss_sum/len(rows)).tolist(),
+                auxiliary=finalize_errors(errors), reused_forwards=reused, seconds=time.monotonic()-started)
+
+
+def _paired_real(protocol, data_root, run, model, cases):
+    from .train import RealDataset, loader, predict
+
+    dataset = RealDataset(protocol, data_root)
+    if len(dataset) != 8659:
+        raise ValueError("paired real evaluation requires all 8659 prescribed scans")
+    settings = protocol["training"]
+    rows, blocks, groups, sequences = [], [], {}, {}
+    reader = None
+    def labelled(sequence, frame):
+        nonlocal reader
+        if reader is None or reader.spec.sequence_id != sequence:
+            reader = STUSequence.open(data_root, protocol=load_protocol(), partition="val",
+                                      sequence_id=sequence, label_mode=LabelMode.REQUIRED)
+        return reader[frame]
+    count, started = 0, time.monotonic()
+    observer = APAttribution()
+    with tempfile.TemporaryFile(dir=run) as saved:
+        with tempfile.TemporaryFile(dir=run) as packed:
+            batches = loader(dataset, list(range(len(dataset))), settings["loader_workers"], settings["seed"])
+            for sample in batches:
+                source = sample["source"]
+                if source.labels is not None:
+                    raise ValueError("real paired model input exposed labels")
+                output = predict(model, sample["scan"])
+                # The labelled reader is accessed only after this scan's forward.
+                truth = labelled(source.sequence_id, source.frame_id)
+                if not np.array_equal(source.xyzi, truth.xyzi):
+                    raise ValueError("labelled evaluation scan differs from the model input")
+                prediction = FramePrediction(source.partition, source.sequence_id, source.frame_id,
+                                             source.real_slots, output["logits"])
+                score, target, eligible = official_frame(truth, prediction)
+                use = target >= 0
+                row = dict(sequence=source.sequence_id, frame=source.frame_id, eligible=eligible,
+                           actual_points=len(source.real_slots), normal_points=int(np.sum(target == 0)),
+                           anomaly_points=int(np.sum(target == 1)), offset=count)
+                rows.append(row)
+                if eligible:
+                    score[use].tofile(saved)
+                    packed_scores(score[use], target[use], score_kind="logit").tofile(packed)
+                    count += int(use.sum())
+                    slots = np.flatnonzero(target == 1)
+                    points = np.empty(len(slots), POINT_DTYPE)
+                    points["sequence"], points["frame"], points["slot"] = source.sequence_id, source.frame_id, slots
+                    points["score"] = score[slots]
+                    points["q_frame"] = required_frame_fpr(score[target == 0], score[slots])
+                    points["distance"] = np.linalg.norm(truth.xyzi[slots, :3], axis=1)
+                    blocks.append(points)
+                if len(rows) % 200 == 0:
+                    disk = host_disk()
+                    if disk["SizeRemaining"] < disk["reserve_bytes"]:
+                        raise OSError("compact real evaluation reached the E: reserve")
+                    print(json.dumps(dict(event="paired_real", frames=len(rows), total=len(dataset),
+                        seconds=time.monotonic()-started, temporary_bytes=saved.tell()+packed.tell(), host=disk)), flush=True)
+            if len(rows) != len(dataset):
+                raise ValueError("real evaluation did not visit every prescribed scan")
+            metrics = _paired_metrics(packed, count, observer)
+        metrics.update(frames=len(rows), eligible_frames=sum(row["eligible"] for row in rows))
+        points = np.concatenate(blocks) if blocks else np.empty(0, POINT_DTYPE)
+        if len(points) != metrics["anomaly_count"]:
+            raise ValueError("real anomaly records lost official slots")
+        points["precision"], points["q_global"] = observer.values(points["score"])
+        thresholds = _paired_thresholds(metrics)
+        saved.flush()
+        for sequence in load_protocol().public_sequence_ids:
+            sequence_rows = [row for row in rows if row["sequence"] == sequence]
+            sequence_count = 0
+            with tempfile.TemporaryFile(dir=run) as packed:
+                for row in sequence_rows:
+                    if not row["eligible"]:
+                        continue
+                    source = labelled(sequence, row["frame"])
+                    target = evaluation_targets(source.xyzi[:, :3], source.labels.semantic)
+                    slots = np.flatnonzero(target >= 0)
+                    labels = target[slots]
+                    if (int(np.sum(labels == 0)), int(np.sum(labels == 1))) != (row["normal_points"], row["anomaly_points"]):
+                        raise ValueError("real compact score membership changed")
+                    saved.seek(4*row["offset"])
+                    score = np.fromfile(saved, np.float32, len(slots))
+                    if len(score) != len(slots):
+                        raise ValueError("truncated real compact scores")
+                    packed_scores(score, labels, score_kind="logit").tofile(packed)
+                    sequence_count += len(score)
+                    for kind, value in (("all", "all"), ("sequence", sequence), ("frame", f"{sequence}/{row['frame']}")):
+                        _paired_add(groups, "official", kind, value, score, labels, thresholds)
+                    distance = np.linalg.norm(source.xyzi[slots, :3], axis=1)
+                    bins = range_ids(distance)
+                    _paired_add(groups, "official", "distance", bins, score, labels, thresholds)
+                    joint_bins = np.array([f"{sequence}/{v}" for v in range(len(RANGES))])[bins]
+                    _paired_add(groups, "official", "sequence_distance", joint_bins,
+                                score, labels, thresholds)
+                    normal = labels == 0
+                    _paired_add(groups, "official", "semantic", source.labels.semantic[slots][normal],
+                                score[normal], labels[normal], thresholds)
+                    for kind in ("real", "geometry"):
+                        for index, case in enumerate(cases[kind]):
+                            if (case["sequence"], case["frame"]) == (sequence, row["frame"]):
+                                take = _paired_case_mask(case, source.xyzi[slots, :3], labels, kind)
+                                _paired_add(groups, "official", "fixed_"+kind+"_case", index+1,
+                                            score[take], labels[take], thresholds)
+                seq_metrics = _paired_metrics(packed, sequence_count)
+            seq_points = points[points["sequence"] == sequence]
+            sequences[str(sequence)] = dict(metrics=seq_metrics, eligible_frames=sum(r["eligible"] for r in sequence_rows),
+                attribution=anomaly_summary(seq_points, len(points), thresholds[[0, 3]]))
+    totals = groups["official", "all", "all"]
+    if tuple(totals[:2]) != (metrics["normal_count"], metrics["anomaly_count"]):
+        raise ValueError("real compact group denominators differ from the official pool")
+    for k, point in enumerate([metrics["operating_points"][f"{v:g}"] for v in LIMITS] + [metrics["official_high_recall"]]):
+        if tuple(totals[2+2*k:4+2*k]) != (point["fp"], point["tp"]):
+            raise ValueError("real groups disagree with official complete-tie working points")
+    attribution = anomaly_summary(points, len(points), thresholds[[0, 3]])
+    if not np.isclose(attribution["ap_deficit_pp"], 100-metrics["AP"], atol=1e-10, rtol=0):
+        raise ValueError("positive-score precision no longer reconstructs official AP")
+    for row in rows:
+        row.pop("offset")
+        if row["eligible"]:
+            selected = (points["sequence"] == row["sequence"]) & (points["frame"] == row["frame"])
+            row["attribution"] = anomaly_summary(points[selected], len(points), thresholds[[0, 3]])
+    np.savez_compressed(run / "anomalies.npz", **{key: points[key] for key in POINT_DTYPE.names})
+    return dict(scope="all prescribed val19 scans; exact original official eligible points", metrics=metrics,
+                frames=rows, groups=_paired_group_rows(groups), sequences=sequences,
+                attribution=attribution, seconds=time.monotonic()-started, model_inputs_label_free=True)
+
+
+def _paired_original_cases(protocol, data_root, model, cases, metrics):
+    from .model import model_input
+    from .train import predict
+
+    readers, groups, rows = {}, {}, []
+    thresholds = _paired_thresholds(metrics)
+    for index, case in enumerate(cases):
+        sequence = case["sequence"]
+        if sequence not in readers:
+            readers[sequence] = STUSequence.open(data_root, protocol=load_protocol(), partition="train",
+                                               sequence_id=sequence, label_mode=LabelMode.REQUIRED)
+        source = readers[sequence][case["frame"]]
+        slots = source.real_slots
+        scan = model_input(source.xyzi[slots], slots, protocol["model"],
+                           protocol["supervision"]["common"]["sampling_scale"])
+        score = predict(model, scan)["logits"]
+        normal = source.labels.semantic_target[slots] != 255
+        labels = np.zeros(len(slots), np.int8)
+        local = normal & _paired_case_mask(case, source.xyzi[slots, :3], labels, "normal")
+        _paired_add(groups, "original_normal", "fixed_case", index+1, score[local], labels[local], thresholds)
+        anchor = np.flatnonzero(slots == case["slot"])
+        if len(anchor) != 1 or not normal[anchor[0]]:
+            raise ValueError("fixed original normal anchor lost its identity")
+        rows.append(dict(case=index+1, sequence=sequence, frame=case["frame"], slot=case["slot"],
+                         kind=case["kind"], normal=int(local.sum()), anchor_score=float(score[anchor[0]]),
+                         score_quantiles=np.quantile(score[local], [.1, .5, .9]).tolist() if local.any() else None))
+    return dict(scope="six pre-existing normal cases; 206 is training source, 201 is normal-source transfer",
+                threshold_source="this arm's complete all-label train/201 synthetic validation curve",
+                thresholds=[float(value) if np.isfinite(value) else None for value in thresholds],
+                groups=_paired_group_rows(groups), cases=rows)
+
+
+def evaluate_paired_arm(protocol, data_root, run):
+    """Evaluate one fixed checkpoint; temporary predictions disappear after reduction."""
+    from .train import load_trained, bind_predictions, seed_all
+    import torch
+
+    run = Path(run)
+    run.mkdir(parents=True, exist_ok=True)
+    seed_all(protocol["training"]["seed"])
+    torch.set_num_threads(protocol["training"]["torch_threads"])
+    if (run / "evaluation.json").exists():
+        result = json.loads((run / "evaluation.json").read_text())
+        if result["binding"] != bind_predictions(protocol, run) or not (run / "anomalies.npz").exists():
+            raise ValueError("completed compact evaluation belongs to a different run")
+        return result
+    disk = host_disk()
+    if disk["SizeRemaining"] - 13_000_000_000 < disk["reserve_bytes"]:
+        raise OSError("compact paired evaluation needs 13 GB above the physical E: reserve")
+    cases = _paired_fixed_cases()
+    model = load_trained(protocol, run)
+    started = time.monotonic()
+    synthetic = _paired_synthetic(protocol, data_root, run, model, cases["synthetic"])
+    originals = _paired_original_cases(protocol, data_root, model, cases["normal"], synthetic["metrics"]["all"])
+    real = _paired_real(protocol, data_root, run, model, cases)
+    result = dict(binding=bind_predictions(protocol, run), synthetic=synthetic, real=real, original_normal=originals,
+        fixed_cases=cases, definitions=dict(score="unmodified float32 logit", thresholds="each arm and scope uses its own curve",
+            normal_context="retained normal within 2 m of inserted return; existing C3 valid offset [-.2,-.05] m proxy",
+            group_overlap="normal-context and fixed-case groups overlap; semantic is normal-only",
+            cases="unchanged historical display regions; all scope-valid points, without geometry-validity or new-score selection",
+            detection_loss="same class-balanced BCE, averaged over each frame's three views; no auxiliary loss comparison",
+            q_frame="same-frame official normal scores >= the anomaly score, including complete ties",
+            sequence_work_points="sequence metrics use their own sequence curve; sequence group counts use the global official thresholds",
+            input_scope="model geometry sees complete scans; labels only select evaluation outputs",
+            validation="20 existing train/201 worlds remain validation only; val19 remains public development evidence"),
+        seconds=time.monotonic()-started, host_before=disk, host_after=host_disk())
+    _atomic_json(run / "evaluation.json", result)
+    return result
+
+
+def _paired_compare_points(first, second):
+    """Join anomaly scores by original slot, never by rank or floating-point value."""
+    keys = ("sequence", "frame", "slot")
+    ordered = []
+    for points in (first, second):
+        order = np.lexsort(tuple(points[key] for key in reversed(keys)))
+        points = points[order]
+        identities = np.column_stack([points[key] for key in keys])
+        if len(identities) > 1 and np.any(np.all(identities[1:] == identities[:-1], axis=1)):
+            raise ValueError("paired anomaly identities are duplicated")
+        ordered.append((points, identities))
+    (first, identities), (second, other) = ordered
+    if not np.array_equal(identities, other) or not np.array_equal(first["distance"], second["distance"]):
+        raise ValueError("paired official anomaly slot identities differ")
+    rows = []
+    for a, b in zip(first[first["sequence"] == 125], second[second["sequence"] == 125], strict=True):
+        row = {key: int(a[key]) for key in keys}
+        for field in ("q_frame", "q_global", "precision"):
+            row.update({field+"_joint_percent": 100*float(a[field]),
+                        field+"_detection_percent": 100*float(b[field]),
+                        field+"_delta_pp": 100*(float(a[field])-float(b[field]))})
+        rows.append(row)
+    return rows
+
+
+def compare_paired_runs(directory):
+    """Compare complete arms at matching identities and independently read work points."""
+    import copy
+
+    directory = Path(directory)
+    runs = [directory / name for name in ("joint", "detection")]
+    protocols = [json.loads((run / "protocol.json").read_text()) for run in runs]
+    if [p["training"].get("auxiliary_scale") for p in protocols] != [1., 0.]:
+        raise ValueError("paired comparison requires auxiliary scales one and zero")
+    common = copy.deepcopy(protocols)
+    for protocol in common:
+        protocol["training"].pop("auxiliary_scale")
+    if common[0] != common[1]:
+        raise ValueError("paired arm protocols differ beyond the auxiliary loss multiplier")
+    arms = [json.loads((run / "evaluation.json").read_text()) for run in runs]
+    if (arms[0]["binding"]["dataset_sha256"] != arms[1]["binding"]["dataset_sha256"]
+            or arms[0]["fixed_cases"] != arms[1]["fixed_cases"]
+            or arms[0]["definitions"] != arms[1]["definitions"]):
+        raise ValueError("paired evaluation data, cases or definitions differ")
+    for domain, keys in (("synthetic", ("world", "world_identity", "frame", "eligible", "actual_points", "all", "stu_filtered")),
+                         ("real", ("sequence", "frame", "eligible", "actual_points", "normal_points", "anomaly_points"))):
+        identities = [[{key: row[key] for key in keys} for row in arm[domain]["frames"]] for arm in arms]
+        if identities[0] != identities[1]:
+            raise ValueError(f"paired {domain} frame membership or point denominators differ")
+    rows = []
+    def append_metric(domain, scope, sequence, left, right):
+        if any(left[key] != right[key] for key in ("normal_count", "anomaly_count")):
+            raise ValueError("paired metric denominators differ")
+        for metric in ("AP", "AUROC", "FPR95", "R1", "FPR1"):
+            if metric in ("R1", "FPR1"):
+                key = "recall" if metric == "R1" else "FPR"
+                values = [(m.get("recall_at_fpr_limit") or {}).get(key) for m in (left, right)]
+            else:
+                values = [m[metric] for m in (left, right)]
+            rows.append(dict(domain=domain, scope=scope, sequence=sequence, kind="metric", group="all", metric=metric,
+                normal=left["normal_count"], anomaly=left["anomaly_count"], joint=values[0], detection=values[1],
+                delta_pp=values[0]-values[1] if all(v is not None for v in values) else None,
+                threshold_joint=(left.get("recall_at_fpr_limit") or {}).get("threshold") if metric in ("R1", "FPR1") else None,
+                threshold_detection=(right.get("recall_at_fpr_limit") or {}).get("threshold") if metric in ("R1", "FPR1") else None))
+    for scope in SCOPES:
+        append_metric("synthetic", scope, 201, *(arm["synthetic"]["metrics"][scope] for arm in arms))
+    append_metric("real", "official", "all", *(arm["real"]["metrics"] for arm in arms))
+    if set(arms[0]["real"]["sequences"]) != set(arms[1]["real"]["sequences"]):
+        raise ValueError("paired real sequence sets differ")
+    for sequence in arms[0]["real"]["sequences"]:
+        append_metric("real", "official", int(sequence), *(arm["real"]["sequences"][sequence]["metrics"] for arm in arms))
+    for domain in ("synthetic", "real", "original_normal"):
+        tables = [{(r["scope"], r["kind"], r["group"]): r for r in arm[domain]["groups"]} for arm in arms]
+        if tables[0].keys() != tables[1].keys():
+            raise ValueError("paired fixed group membership differs")
+        for key, left in tables[0].items():
+            right = tables[1][key]
+            if (left["normal"], left["anomaly"]) != (right["normal"], right["anomaly"]):
+                raise ValueError("paired fixed group point denominators differ")
+            for metric in ("FPR_1", "recall_1", "FPR_95", "recall_95"):
+                a, b = left[metric], right[metric]
+                rows.append(dict(domain=domain, scope=key[0], sequence="", kind=key[1], group=key[2], metric=metric,
+                    normal=left["normal"], anomaly=left["anomaly"], joint=a, detection=b,
+                    delta_pp=a-b if a is not None and b is not None else None))
+    points = []
+    for run in runs:
+        with np.load(run / "anomalies.npz", allow_pickle=False) as saved:
+            array = np.empty(len(saved["slot"]), POINT_DTYPE)
+            for name in POINT_DTYPE.names:
+                array[name] = saved[name]
+            arm = arms[len(points)]
+            if len(array) != arm["real"]["metrics"]["anomaly_count"]:
+                raise ValueError("paired anomaly table differs from the official positive denominator")
+            points.append(array)
+    paired = _paired_compare_points(*points)
+    point_summary = {}
+    for metric in ("q_frame", "q_global"):
+        delta = np.array([row[metric+"_delta_pp"] for row in paired])
+        point_summary[metric] = dict(points=len(delta), joint_lower=int(np.sum(delta < 0)),
+            joint_higher=int(np.sum(delta > 0)), equal=int(np.sum(delta == 0)),
+            mean_delta_pp=float(delta.mean()) if len(delta) else None,
+            median_delta_pp=float(np.median(delta)) if len(delta) else None)
+    result = dict(scope="one paired seed and one epoch; same official point identities and fixed diagnostic groups",
+        delta="joint minus detection; AP/R1 higher is better, FPR95 and required FPR lower is better",
+        work_points="each arm uses its own complete-tie curve threshold; subgroup FPRs need not match",
+        sequence_work_points="per-sequence metrics use sequence curves; sequence groups use global official thresholds",
+        sequence125_weighting="paired anomaly point occurrences, not equal frame weights or a mechanism attribution",
+        denominator_check=True, normal_context="overlapping fixed proxies and cases, not an exhaustive structure taxonomy",
+        frames=dict(real=len(arms[0]["real"]["frames"]), synthetic=len(arms[0]["synthetic"]["frames"])),
+        common_detection_loss={name: arm["synthetic"]["detection_loss"] for name, arm in zip(("joint", "detection"), arms)},
+        sequence125=point_summary, metric_rows=[r for r in rows if r["kind"] == "metric"],
+        binding={name: arm["binding"] for name, arm in zip(("joint", "detection"), arms)},
+        interpretation="total losses are not compared; geometric probe failures are not model predictions; val19 is development data")
+    write_table(directory / "comparison.csv", rows)
+    write_table(directory / "125.csv", paired)
+    _atomic_json(directory / "comparison.json", result)
+    return result
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dataset", type=Path, default=Path("results/synthetic/experiment"))
     parser.add_argument("--data-root", type=Path, default=Path("/home/jasongao/Data/STU"))
     parser.add_argument("--run", type=Path, default=Path("results/v1"))
-    parser.add_argument("--jobs", type=int, required=True)
+    parser.add_argument("--jobs", type=int, default=1)
     parser.add_argument("--real", action="store_true", help="attribute saved real val19 ranking and inspect six fixed cases")
+    parser.add_argument("--paired-run", type=Path, help="compactly evaluate this arm using its saved protocol.json")
+    parser.add_argument("--compare", type=Path, help="compare complete joint and detection evaluations in this directory")
     args = parser.parse_args()
     if args.jobs < 1:
         parser.error("jobs must be positive")
+    if args.paired_run and args.compare:
+        parser.error("choose one paired evaluation action")
+    if args.paired_run:
+        protocol = json.loads((args.paired_run / "protocol.json").read_text())
+        evaluate_paired_arm(protocol, args.data_root, args.paired_run)
+        return
+    if args.compare:
+        compare_paired_runs(args.compare)
+        return
     if args.real:
         diagnose_real(args)
         return

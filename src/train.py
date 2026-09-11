@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import argparse
 from collections import defaultdict
+import copy
 import hashlib
 import importlib.metadata
 import json
+import os
 from pathlib import Path
 import random
+import subprocess
 import tempfile
 import time
 
@@ -143,7 +146,7 @@ def view_losses(output, target, weights, dense=None):
     return {name: value * weights[name] for name, value in result.items()}
 
 
-def backward_sample(model, sample, scaler, coefficients, accumulation):
+def backward_sample(model, sample, scaler, coefficients, accumulation, auxiliary_scale=1.):
     dense, values = None, defaultdict(float)
     for view, weights in zip(sample["views"], loss_view_weights(sample["views"])):
         scan, target = to_device(view["scan"]), to_device(view["target"])
@@ -153,7 +156,8 @@ def backward_sample(model, sample, scaler, coefficients, accumulation):
         objective = losses["detection"]
         for name, coefficient in coefficients.items():
             if name in losses:
-                objective = objective + coefficient * losses[name]
+                # The scale changes supervision only; all heads retain detection gradients.
+                objective = objective + auxiliary_scale * coefficient * losses[name]
         if not torch.isfinite(objective):
             raise FloatingPointError(f"nonfinite loss at {sample['world']}/{sample['frame']}")
         scaler.scale(objective / accumulation).backward()
@@ -221,12 +225,25 @@ def require_space(bytes_needed):
 def execution_config(protocol):
     paths = [Path(__file__), Path(__file__).with_name("model.py")]
     paths.extend(sorted(Path("vendor/litept").rglob("*.py")))
-    return dict(model=protocol["model"], training=protocol["training"],
+    result = dict(model=protocol["model"], training=protocol["training"],
                 supervision_identity=training_identity(protocol),
                 dataset_sha256=hashlib.sha256((Path(protocol["dataset"]["directory"]) / "manifest.json").read_bytes()).hexdigest(),
                 implementation={str(path): hashlib.sha256(path.read_bytes()).hexdigest() for path in paths},
                 packages={name: importlib.metadata.version(name) for name in
                           ("torch", "spconv", "torch-scatter", "flash-attn", "numpy", "scipy", "numba")})
+    if "auxiliary_scale" in protocol["training"]:
+        result["packages"]["timm"] = importlib.metadata.version("timm")
+        result["environment"] = dict(cuda=torch.version.cuda, cudnn=torch.backends.cudnn.version(),
+            gpu=torch.cuda.get_device_name(), capability=list(torch.cuda.get_device_capability()),
+            driver=subprocess.check_output(["nvidia-smi", "--query-gpu=driver_version", "--format=csv,noheader"], text=True).strip(),
+            deterministic_algorithms=torch.are_deterministic_algorithms_enabled(),
+            cudnn_deterministic=torch.backends.cudnn.deterministic,
+            cudnn_benchmark=torch.backends.cudnn.benchmark,
+            matmul_tf32=torch.backends.cuda.matmul.allow_tf32, cudnn_tf32=torch.backends.cudnn.allow_tf32,
+            torch_threads=torch.get_num_threads(),
+            variables={key: os.environ.get(key) for key in ("CUBLAS_WORKSPACE_CONFIG", "OMP_NUM_THREADS",
+                       "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "NUMEXPR_NUM_THREADS")})
+    return result
 
 
 def save_checkpoint(path, model, optimizer, scaler, config, order, visited, successes, history):
@@ -243,9 +260,17 @@ def save_checkpoint(path, model, optimizer, scaler, config, order, visited, succ
         temporary.unlink(missing_ok=True)
 
 
-def restore_checkpoint(path, model, optimizer, scaler, config, order):
+def restore_checkpoint(path, model, optimizer, scaler, config, order, *, initial=False):
     state = torch.load(path, map_location="cpu", weights_only=False)
-    if state["configuration"] != config or state["order"] != order:
+    actual, expected = state["configuration"], config
+    if initial:
+        if (any(state[key] != 0 for key in ("visited", "successful_updates", "attempted_updates"))
+                or state["history"] or state["complete"]):
+            raise ValueError("paired initialization must precede every training update")
+        actual, expected = copy.deepcopy(actual), copy.deepcopy(expected)
+        for definition in (actual, expected):
+            definition["training"].pop("auxiliary_scale", None)
+    if actual != expected or state["order"] != order:
         raise ValueError("resume would change the scientific execution")
     model.load_state_dict(state["model"])
     optimizer.load_state_dict(state["optimizer"])
@@ -345,11 +370,13 @@ def check_resume(protocol, run, samples, indices, initial):
                 resumed_next_update=resumed)
 
 
-def train_epoch(protocol, data_root, run):
+def train_epoch(protocol, data_root, run, *, initial=None):
+    seed_all(protocol["training"]["seed"])
     config = execution_config(protocol)
-    check = json.loads((run / "check.json").read_text())
-    if check["configuration"] != config or not check["passed"]:
-        raise ValueError("the current implementation has not passed its isolated checks")
+    if initial is None:
+        check = json.loads((run / "check.json").read_text())
+        if check["configuration"] != config or not check["passed"]:
+            raise ValueError("the current implementation has not passed its isolated checks")
     auxiliary = json.loads((Path(protocol["training"]["supervision_directory"]) / "manifest.json").read_text())
     if auxiliary["status"] != "complete" or auxiliary["configuration"] != config["supervision_identity"]:
         raise ValueError("complete final-pool supervision is required before formal updates")
@@ -371,16 +398,29 @@ def train_epoch(protocol, data_root, run):
         state = restore_checkpoint(checkpoint, model, optimizer, scaler, config, order)
         visited, successes, history = state["visited"], state["successful_updates"], state["history"]
         del state
+    elif initial is not None:
+        state = restore_checkpoint(initial, model, optimizer, scaler, config, order, initial=True)
+        for actual, expected in ((model.state_dict(), state["model"]),
+                                 (optimizer.state_dict(), state["optimizer"]), (scaler.state_dict(), state["scaler"]),
+                                 (dict(python=random.getstate(), numpy=np.random.get_state(),
+                                       torch=torch.get_rng_state(), cuda=torch.cuda.get_rng_state_all()), state["rng"])):
+            assert_state_close(actual, expected)
+        _atomic_json(run / "start.json", dict(shared_initial=str(initial), state_exact=True, visited=0,
+                     auxiliary_scale=settings["auxiliary_scale"], order=order, configuration=config))
+        del state
     if visited == len(order):
-        _atomic_json(run / "training.json", dict(base_frames=visited, views=3*visited,
-                     attempted_updates=len(history), successful_updates=successes,
-                     skipped_updates=len(history)-successes, history=history, resources=runtime()))
+        if not (run / "training.json").exists():
+            _atomic_json(run / "training.json", dict(base_frames=visited, views=3*visited,
+                         attempted_updates=len(history), successful_updates=successes,
+                         skipped_updates=len(history)-successes, history=history, resources=runtime()))
         return
-    remaining = protocol["training"]["storage"]["peak_additional_bytes"] - auxiliary["bytes"]
+    remaining = (settings["storage"]["checkpoint_and_pending_write_bytes"] if initial is not None
+                 else settings["storage"]["peak_additional_bytes"] - auxiliary["bytes"])
     require_space(remaining)
     if not checkpoint.exists():
         # Check-run weights are never used: record the untouched formal initialization.
-        torch.save(dict(model=model.state_dict(), configuration=config), run / "initial.pt")
+        if initial is None:
+            torch.save(dict(model=model.state_dict(), configuration=config), run / "initial.pt")
         _atomic_json(run / "configuration.json", config)
     start = time.monotonic()
     batches = loader(dataset, order[visited:], settings["loader_workers"], settings["seed"])
@@ -391,7 +431,8 @@ def train_epoch(protocol, data_root, run):
     for sample in batches:
         if sample["index"] != order[visited]:
             raise ValueError("epoch visitation order changed")
-        values = backward_sample(model, sample, scaler, settings["loss_coefficients"], accumulation)
+        values = backward_sample(model, sample, scaler, settings["loss_coefficients"], accumulation,
+                                 settings.get("auxiliary_scale", 1.))
         for name, value in values.items():
             loss_sum[name] += value
         visited += 1
@@ -413,7 +454,55 @@ def train_epoch(protocol, data_root, run):
         raise ValueError("epoch ended with an incomplete gradient group or missing frame")
     _atomic_json(run / "training.json", dict(base_frames=visited, views=3*visited,
                  attempted_updates=len(history), successful_updates=successes,
-                 skipped_updates=len(history)-successes, history=history, resources=runtime()))
+                 skipped_updates=len(history)-successes, history=history,
+                 seconds=time.monotonic()-start, resources=runtime()))
+
+
+def paired_epochs(protocol, data_root, directory):
+    """Train both arms from one complete pretraining state, preserving every branch."""
+    protocol = copy.deepcopy(protocol)
+    settings = protocol["training"]
+    if settings["epochs_this_run"] != 1 or not all(protocol["model"]["enhancements"].values()):
+        raise ValueError("paired supervision requires one epoch and all unchanged V1 branches")
+    directory = Path(directory)
+    directory.mkdir(parents=True, exist_ok=True)
+    settings.update(run_directory=str(directory), auxiliary_scale=1.)
+    seed_all(settings["seed"])
+    config = execution_config(protocol)
+    dataset = PreparedDataset(protocol, data_root, "train")
+    if len(dataset) != settings["base_frames_per_epoch"]:
+        raise ValueError("paired epoch membership differs from the prescribed training data")
+    order = np.random.default_rng(settings["seed"]).permutation(len(dataset)).tolist()
+    initial = directory / "initial.pt"
+    if not initial.exists():
+        require_space(15_000_000_000)  # Includes both checkpoints and one streaming evaluation.
+        model = V1(protocol["model"]).cuda().train()
+        optimizer, scaler = optimizer_for(model, settings)
+        historical = torch.load(Path("results/v1/initial.pt"), map_location="cpu", weights_only=False)
+        assert_state_close(model.state_dict(), historical["model"])
+        del historical
+        save_checkpoint(initial, model, optimizer, scaler, config, order, 0, 0, [])
+        _atomic_json(directory / "experiment.json", dict(question="effect of existing auxiliary supervision",
+            arms=dict(joint=1, detection=0), seed=settings["seed"], epochs_per_arm=1,
+            initial_weights_equal_historical=True, shared_initial=str(initial),
+            original_A_reused=False, configuration=config, resources=runtime(),
+            historical_A_limitation="pretraining optimizer, scaler and complete RNG/environment were not recorded",
+            interpretation="one paired seed and one epoch; both arms retain conditional geometry and all prediction heads"))
+        del model, optimizer, scaler
+        torch.cuda.empty_cache()
+    del dataset
+    for arm, scale in (("joint", 1.), ("detection", 0.)):
+        run = directory / arm
+        run.mkdir(exist_ok=True)
+        settings["auxiliary_scale"] = scale
+        recorded = run / "protocol.json"
+        if recorded.exists() and json.loads(recorded.read_text()) != protocol:
+            raise ValueError("paired run protocol differs from the recorded arm")
+        _atomic_json(recorded, protocol)
+        print(json.dumps(dict(event="paired_arm", arm=arm, auxiliary_scale=scale)), flush=True)
+        torch.cuda.reset_peak_memory_stats()
+        train_epoch(protocol, data_root, run, initial=initial)
+        torch.cuda.empty_cache()
 
 
 @torch.inference_mode()
@@ -863,10 +952,14 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--protocol", type=Path, default=Path("protocol/v1.json"))
     parser.add_argument("--data-root", type=Path, default=Path("/home/jasongao/Data/STU"))
-    parser.add_argument("--stage", choices=("check", "train", "synthetic", "real", "evaluate", "all"), default="check")
+    parser.add_argument("--stage", choices=("check", "train", "paired", "synthetic", "real", "evaluate", "all"), default="check")
+    parser.add_argument("--paired-directory", type=Path, default=Path("results/paired"))
     args = parser.parse_args()
     protocol = json.loads(args.protocol.read_text())
     torch.set_num_threads(protocol["training"]["torch_threads"])
+    if args.stage == "paired":
+        paired_epochs(protocol, args.data_root, args.paired_directory)
+        return
     run = Path(protocol["training"]["run_directory"])
     run.mkdir(parents=True, exist_ok=True)
     if args.stage in {"check", "all"}:
