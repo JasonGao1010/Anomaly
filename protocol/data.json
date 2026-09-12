@@ -173,9 +173,9 @@
   "qualification": {
     "reference_use": "normal_sources_and_predeclared_content_only",
     "minimum_eligible_frames": 0,
-    "base_selection": "retain_every_original_world_in_order_with_original_cohort",
+    "base_selection": "existing_and_new_worlds_share_the_same_30_cell_quotas; no_protected_old_cohort; retain_complete_selected_worlds",
     "supplement_selection": "physically_legal_candidate_pool; pre-signal surface opportunities guide proposals but are not a required return gate; final selection uses actual predeclared content and whole worlds",
-    "freeze": "complete the declared candidate sweep, then select against per-cell retention quotas and unchanged scientific coverage requirements; unmet cells remain unresolved and data preparation does not pass",
+    "freeze": "completed_exact_30_cell_selection_8_train_4_validation; unchanged_scientific_coverage_checks_reported_separately; no_automatic_generation",
     "far_denser": "predeclared content target; physical-ray count, not file-slot duplication",
     "hard_frames": "retain_all_actual_returns_and_detection_labels_regardless_of_geometry_measurement_validity"
   },
@@ -199,12 +199,10 @@
       ]
     },
     "region_selection": "cycle evenly across all native-context regions with a same-source support view within 15 m; distinguish the sparse witness frame from the physical support frame; fixed source-specific new seeds",
-    "budget": "78 train proposals only; four deficient cells have 6/7/4/2 eligible worlds toward eight each; validation is full",
     "acceptance": "same physical legality; require >=5 physical in-range foreground surface rays and >=5 unchanged adjacent native positions before fixed-signal rendering; actual qualification after rendering",
     "stop": "fill exact 30-cell world counts; report scientific diagnostics separately without requiring every diagnostic to pass before selection",
     "signal_rule": "fixed shape/material/signal seed per geometry parent; inspect only deterministic physical surface competition in support selection; never select supports by stochastic return realizations, reroll returns, alter return probabilities, add points, or use model scores",
     "sampling_use": "specified separately in research_coverage; no training",
-    "basis": "918 complete candidates; original native clusters with an observed joint witness reduce impossible placement searches; generate distinct geometry parents without rerolling signals",
     "candidates_per_cell": {
       "train": 0,
       "validation": 0
@@ -315,7 +313,7 @@
     ],
     "native_surface_minimum": 5,
     "measured_contexts_only": true,
-    "status": "completed_last_generation_batch; frozen_output_is_not_regenerated"
+    "status": "historical_last_generation_recipe; batch_completed_no_pending_proposals; frozen_output_is_not_regenerated"
   },
   "research_coverage": {
     "output": "results/coverage/research",

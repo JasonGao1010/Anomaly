@@ -32,7 +32,7 @@
     "synthetic_geometry_conclusion": "nonextreme_anomalies_and_complex_original_normals_exist_insertion_changes_retained_normal_neighborhoods_and_sparse_geometry_has_condition_dependent_missingness",
     "coverage_closure_completed": false,
     "coverage_closure_evidence": "results/coverage/research/summary.json",
-    "coverage_decision": "exact_30_cells_8_train_4_validation_selected; outstanding_scientific_checks_reported_without_further_generation",
+    "coverage_decision": "balanced_selection_completed; remaining_scientific_checks_are_not_unfinished_world_quotas; no_automatic_generation_training_or_model_design",
     "coverage_boundaries": "two_normal_sources; train_far_dense_region_concentration; train_sparse_nonextreme_recurrence_shortfall; validation_near_1_4_recurrence_and_parent_concentration; geometry_missingness_and_self_occlusion_limits",
     "next_stage": "await_user_direction; no_automatic_generation_training_or_model_design",
     "data_preparation_accepted": false,
@@ -50,29 +50,6 @@
     },
     "default_dataset_readable": true,
     "balanced_selection_completed": true,
-    "storage_and_removal": {
-      "workspace_before_bytes": 24761724928,
-      "workspace_after_bytes": 23080300544,
-      "host_before": {
-        "Size": 484950659072,
-        "SizeRemaining": 53814394880,
-        "reserve_bytes": 10000000000
-      },
-      "host_after": {
-        "Size": 484950659072,
-        "SizeRemaining": 54069854208,
-        "reserve_bytes": 10000000000
-      },
-      "storage": {
-        "files": 190344,
-        "content_bytes": 803658002,
-        "allocated_file_bytes": 1210859520,
-        "allocated_directory_bytes": 9465856,
-        "scope": "referenced_worlds_and_root_provenance_and_rays_no_raw_scans_or_unused_worlds"
-      },
-      "removed_worlds": 634,
-      "removed_failed_proposals": 1214
-    },
     "remaining_scientific_checks": {
       "train": {
         "far_at_least_20": {
@@ -302,6 +279,29 @@
     "model_input_use": "label_dependent_geometry_is_diagnostic_only"
   },
   "history": {
+    "storage_and_removal": {
+      "workspace_before_bytes": 24761724928,
+      "workspace_after_bytes": 23080300544,
+      "host_before": {
+        "Size": 484950659072,
+        "SizeRemaining": 53814394880,
+        "reserve_bytes": 10000000000
+      },
+      "host_after": {
+        "Size": 484950659072,
+        "SizeRemaining": 54069854208,
+        "reserve_bytes": 10000000000
+      },
+      "storage": {
+        "files": 190344,
+        "content_bytes": 803658002,
+        "allocated_file_bytes": 1210859520,
+        "allocated_directory_bytes": 9465856,
+        "scope": "referenced_worlds_and_root_provenance_and_rays_no_raw_scans_or_unused_worlds"
+      },
+      "removed_worlds": 634,
+      "removed_failed_proposals": 1214
+    },
     "prototype": {
       "status": "historical_exploratory_prototype_not_formal_AJAE_V1",
       "retained_diagnostics": "results/profile/prototype",
