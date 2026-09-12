@@ -6,7 +6,7 @@
 
 旧模型原型完成过一轮完整合成与真实评价；随后同结构辅助监督整体开启／关闭的 A、B 各完成一轮训练，配对评价尚未完成即按用户要求主动终止。旧训练、模型、离线监督及独立诊断图表已删除，历史事实仅保留在研究协议。没有辅助监督有益或有害的受控评价结论。
 
-当前研究问题与数据边界在 [spec.json](spec.json)，由 [src/protocol.py](../src/protocol.py) 读取。[data.json](data.json) 保存现有数据生成和几何核查所需参数。其 `geometry` 中的 `sampling_scale`、`boundary`、`levels`、`sampling`、`surface` 服务于数据诊断，不规定新模型必须采用哪些输入或辅助任务。冻结清单内原有配置、路径和历史命名保持原样，它们记录当时的生成过程。
+当前研究问题与数据边界在 [spec.json](spec.json)，由 [src/protocol.py](../src/protocol.py) 读取。[data.json](data.json) 保存现有数据生成和几何核查所需参数。其 `geometry` 中的 `sampling_scale`、`boundary`、`levels`、`sampling`、`surface` 服务于数据诊断，不规定新模型必须采用哪些输入或辅助任务。冻结清单内原有生成配置和来源身份保留，用于追溯当时的生成过程；当前世界目录与读取路径采用下述命名。
 
 ## 当前数据与解释范围
 
@@ -15,6 +15,10 @@
 预定预算允许物理提案失败；停止条件是在该批及固定测量结束后，若仍没有满足原要求的完整世界选择，就报告缺口，不自动追加批次。实际生成23个训练、24个验证世界，另1个训练提案因几何可靠性检查失败被拒绝。与原360世界共同选择后，保留其中17个训练、3个验证新世界，替换同数旧世界；删除47个未选完整世界及1个失败提案目录。原始扫描与所有保留世界的帧、信号、标签和顺序均未修改。
 
 当前唯一完整入口为 `results/synthetic/manifest.json`，保留训练240个、合成验证120个完整世界，共107,760／81,840帧。旧世界与新世界共同参与选取，原80／40和原验证20世界均无额外保留配额。正常来源仍分别为206和201，完整世界及其全部源帧不跨两侧分配。全部世界实体集中在 `results/synthetic/train/` 和 `validation/`。当前样本所需的全部生成配置已合入主清单，旧批次目录及候选缓存已删除。
+
+世界目录使用英文特征加类内序号：`<structure>_<height>_<background>_<number>`，例如 `branched_low_rough_1`。结构取 `branched`（多分支）、`contacts`（多接触）、`elongated`（细长）、`sheet`（薄片）、`solid`（其余块状）；局部高度取 `low`（不超过0.2米）、`raised`（超过0.2米）；正常背景取 `smooth`（平滑）、`rough`（起伏）、`sparse`（稀疏）。30个类别分别在训练侧编号1—8、验证侧编号1—4，序号依各侧主清单原有的类内顺序确定。
+
+名称采用主清单最终分配的 `combination`，不重新分类。逐世界生成记录中的提案类别可能与最终分配类别不同，原始记录保持原样；目录改名不改变世界身份、帧文件名、内容、标签、划分、读取顺序或采样权重。覆盖记录及可视化示例使用当前目录名。
 
 | 核查项 | 修正前 | 最终360世界 | 原要求 |
 | --- | --- | --- | --- |
@@ -327,7 +331,7 @@ PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m src.scene \
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m src.view \
-  results/synthetic/train/world_47427/frames/000238.npz \
+  results/synthetic/train/contacts_raised_rough_3/frames/000238.npz \
   --output results/view/synthetic.jpg
 
 PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m src.view \

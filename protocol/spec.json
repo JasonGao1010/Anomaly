@@ -637,7 +637,7 @@
         "train": {
           "worlds": 240,
           "full_frame_references": 107760,
-          "example": "results/synthetic/train/world_47427/frames/000238.npz",
+          "example": "results/synthetic/train/contacts_raised_rough_3/frames/000238.npz",
           "inserted_file_slots": 20,
           "world_definitions_and_frame_order_checked": true
         },
@@ -649,7 +649,7 @@
         "validation": {
           "worlds": 120,
           "full_frame_references": 81840,
-          "example": "results/synthetic/validation/world_40006/frames/000159.npz",
+          "example": "results/synthetic/validation/solid_low_rough_1/frames/000159.npz",
           "inserted_file_slots": 3,
           "world_definitions_and_frame_order_checked": true
         },
