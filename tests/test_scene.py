@@ -317,7 +317,7 @@ def test_proposal_counts_true_surface_gaps_occlusion_and_the_same_signal(monkeyp
     world = WorldSpec(13, 206, (item,))
     sensor = SensorCalibration.constant(1.)
     monkeypatch.setattr(SensorCalibration, "return_chance", lambda self, beam, distance, incidence, bias: np.ones_like(distance))
-    result, foreground = ray_observation(source, world, grid, sensor, geometry)
+    result, foreground = ray_observation(source, world, grid, sensor, geometry, reference_slots=[0, 1, 2])
     assert (result["available_box_rays"], result["foreground_surface_rays"], result["final_anomaly_slots"]) == (3, 2, 2)
     rendered = render_frame(source, world, grid, sensor)
     np.testing.assert_array_equal(foreground, rendered.inserted_mask)
@@ -327,6 +327,10 @@ def test_proposal_counts_true_surface_gaps_occlusion_and_the_same_signal(monkeyp
     blocked_result, _ = ray_observation(blocked, world, grid, sensor, geometry)
     assert blocked_result["foreground_surface_rays"] == 1
     monkeypatch.setattr(SensorCalibration, "return_chance", lambda self, beam, distance, incidence, bias: np.zeros_like(distance))
-    missing, surface = ray_observation(source, world, grid, sensor, geometry)
+    missing, surface = ray_observation(source, world, grid, sensor, geometry, reference_slots=[0, 1, 2])
     assert missing["foreground_surface_rays"] == 2 and missing["final_anomaly_slots"] == 0
+    for key in ("native_joint_surface_rays", "native_joint_positions", "protected_slots"):
+        assert result[key] == missing[key]
+    assert missing["protected_slots"] == [0]
+    assert missing["native_joint_surface_rays"] == 2
     np.testing.assert_array_equal(surface, render_frame(source, world, grid, sensor).occluded_original_mask)

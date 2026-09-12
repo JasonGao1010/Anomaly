@@ -3,25 +3,19 @@
   "version": 1,
   "base_protocol": "spec.json",
   "seed": 2062026,
-  "scope": "旧世界与新候选统一参加30组合验收和240/120总量筛选，继续数据阶段；不以原80/40或候选预算完成替代验收。",
+  "scope": "30种组合每种保留8个训练世界、4个验证世界；本轮生成与筛选已完成，停止自动扩充和模型设计。",
   "dataset": {
-    "directory": "results/synthetic/expanded",
+    "directory": "results/synthetic/selected",
     "unit": "one_source_sequence_and_one_fixed_world_object",
     "input_unit": "one_current_scan_xyzi",
     "splits": {
       "train": {
         "source_sequence": 206,
-        "frames_per_world": 449,
-        "candidates": 60,
-        "base_worlds": 20,
-        "maximum_worlds": 80
+        "frames_per_world": 449
       },
       "validation": {
         "source_sequence": 201,
-        "frames_per_world": 682,
-        "candidates": 20,
-        "base_worlds": 20,
-        "maximum_worlds": 40
+        "frames_per_world": 682
       }
     },
     "all_frames": "render_once_and_freeze_including_zero_anomaly_returns",
@@ -29,17 +23,17 @@
     "anomaly_target": "inserted_returns_only",
     "normal_target": "valid_original_normal_class_map_entries",
     "split_unit": "whole_world_and_source_sequence",
-    "base_directory": "results/synthetic/pool"
+    "base_directory": "results/synthetic/selected"
   },
   "information_use": {
-    "current_pool": "现有旧世界与新增候选统一进入30组合筛选；最终240个训练、120个验证世界；没有额外保留的旧80/40配额。",
+    "current_pool": "最终240个训练和120个合成验证世界；每侧30格分别为8和4；仅206/201正常来源。",
     "generation_sources": "仅原正常206/201、既有射线与传感器标定及预定物理变化；不使用val19分布选样，不引入其他正常来源。",
-    "historical_development_pool": "results/synthetic/v1已使用val19聚合统计生成和选样；本轮完整保留，隔离于当前默认数据入口。",
-    "original_records": "冻结清单与世界定义完整保留原始配置、实现摘要和来源字段。旧源码名称是生成时的历史记录，不随工具整理重写。"
+    "historical_development_pool": "results/synthetic/v1的40个世界样本已按最终只留360世界的授权删除；生成参数和历史覆盖结果保留，不进入当前入口。",
+    "original_records": "选中世界的完整帧顺序、坐标、强度、标签及生成定义不变；旧池清单标记historical_pruned，原生成配置仍是历史来源记录。"
   },
   "content_coverage": {
     "implementation": "src/coverage.py",
-    "output": "results/coverage/expanded.json",
+    "output": "results/coverage/selected.json",
     "conditions": {
       "eligible": "当前帧在传感器距离 [2.5,50] 米内至少 5 个异常回波，遵循官方计数口径。",
       "few": "官方距离内 5–19 个异常回波。",
@@ -47,7 +41,7 @@
       "low": "整个物体在物体局部坐标中的连续几何范围高度不超过 0.2 米；包含全部基元、偏移与变形，不等同重力方向高度。",
       "far_denser": "异常中位距离在[35,50]米且官方距离内至少20个异常回波；仅作探索性内容记录，不代表删减后几何可计算。"
     },
-    "scope": "扩充池全量清单统计；原40世界的固定几何核查保持原范围，不扩展其比例。",
+    "scope": "可选的完整当前池清单统计；当前30格和科学诊断结果见results/coverage/research/summary.json。",
     "geometry_use": "边界、删减观测对应及参考表面仅服务于既有数据生成和核查，不是正式AJAE V1监督任务。"
   },
   "geometry": {
@@ -129,7 +123,7 @@
     "maximum_support_attempts": 192,
     "collision": "all_nonzero_non_ground_source_returns_in_every_frame",
     "deep_penetration_m": 0.05,
-    "support_candidates": 12,
+    "support_candidates": 48,
     "background_radius_m": 3,
     "footprint": "complete_object_local_xy_circumcircle_inside_observed_inlier_hull",
     "background": "structured_if_at_least_two_support_semantics_or_three_known_non_ground_returns_within_3m_else_ground",
@@ -187,8 +181,8 @@
   },
   "calibration_source": "results/synthetic/candidates/calibration.pt",
   "proposals": {
-    "output": "results/synthetic/balanced",
-    "seed_namespace": 5,
+    "output": "results/synthetic/selected",
+    "seed_namespace": 7,
     "shape_attempts": 3,
     "rounds": 1,
     "world_bytes_limit": 16777216,
@@ -205,12 +199,12 @@
       ]
     },
     "region_selection": "cycle evenly across all native-context regions with a same-source support view within 15 m; distinguish the sparse witness frame from the physical support frame; fixed source-specific new seeds",
-    "budget": "targeted follow-up: 336 train and 228 validation proposals (564 total); old and new candidates share unchanged final 240/120 quotas; sparse-context cells, shared-world assignment shortfalls, and far/high-support geometry only",
-    "acceptance": "physical_legality_in_all_original_frames; prefer geometric visibility without conditioning on stochastic returns; actual native-context and scientific coverage measured after complete rendering",
-    "stop": "complete the declared candidate sweep, then select against per-cell retention quotas and unchanged scientific coverage requirements; unmet cells remain unresolved and data preparation does not pass",
+    "budget": "78 train proposals only; four deficient cells have 6/7/4/2 eligible worlds toward eight each; validation is full",
+    "acceptance": "same physical legality; require >=5 physical in-range foreground surface rays and >=5 unchanged adjacent native positions before fixed-signal rendering; actual qualification after rendering",
+    "stop": "fill exact 30-cell world counts; report scientific diagnostics separately without requiring every diagnostic to pass before selection",
     "signal_rule": "fixed shape/material/signal seed per geometry parent; inspect only deterministic physical surface competition in support selection; never select supports by stochastic return realizations, reroll returns, alter return probabilities, add points, or use model scores",
     "sampling_use": "specified separately in research_coverage; no training",
-    "basis": "full 451-world measurements show sparse-context quota deficits, only three far>=20 worlds per side, and overlapping eligible worlds in validation elongated/raised cells; final quotas and scientific minima are unchanged",
+    "basis": "918 complete candidates; original native clusters with an observed joint witness reduce impossible placement searches; generate distinct geometry parents without rerolling signals",
     "candidates_per_cell": {
       "train": 0,
       "validation": 0
@@ -305,39 +299,23 @@
       "description": "full_original_scan_geometry; fixed_206_conditional_quantiles; spatially_spread_native_anchor_clusters; verify_surviving_normal_positions"
     },
     "retention": "existing and new worlds are assigned using the same actual structure, local height and verified native-context observations; each world assigned to one of 30 cells; remove redundant whole worlds only after final references are verified",
-    "index_start": 10000,
+    "index_start": 30000,
     "cell_candidates": {
       "train": {
-        "solid/low/sparse": 32,
-        "solid/raised/sparse": 32,
-        "elongated/low/sparse": 32,
-        "elongated/raised/sparse": 32,
-        "sheet/low/sparse": 32,
-        "sheet/raised/sparse": 32,
-        "branched/low/sparse": 32,
-        "branched/raised/sparse": 32,
-        "contacts/low/sparse": 32,
-        "contacts/raised/sparse": 32,
-        "solid/raised/smooth": 8,
-        "solid/raised/rough": 8
+        "solid/low/sparse": 12,
+        "elongated/low/sparse": 6,
+        "branched/low/sparse": 24,
+        "contacts/low/sparse": 36
       },
-      "validation": {
-        "solid/low/sparse": 20,
-        "solid/raised/sparse": 20,
-        "elongated/low/sparse": 20,
-        "elongated/raised/sparse": 20,
-        "sheet/low/sparse": 20,
-        "sheet/raised/sparse": 20,
-        "branched/low/sparse": 20,
-        "branched/raised/sparse": 20,
-        "contacts/low/sparse": 20,
-        "contacts/raised/sparse": 20,
-        "solid/raised/smooth": 6,
-        "solid/raised/rough": 6,
-        "elongated/raised/smooth": 8,
-        "elongated/raised/rough": 8
-      }
-    }
+      "validation": {}
+    },
+    "native_yaw_offset_rad": [
+      -0.7853981633974483,
+      0.7853981633974483
+    ],
+    "native_surface_minimum": 5,
+    "measured_contexts_only": true,
+    "status": "completed_last_generation_batch; frozen_output_is_not_regenerated"
   },
   "research_coverage": {
     "output": "results/coverage/research",

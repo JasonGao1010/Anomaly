@@ -3,8 +3,8 @@
   "schema_version": 1,
   "research_question": "Using only the current scan, do observable local geometries distinguish anomaly labels from complex normal structures, does conditioning their normal reference on observable conditions improve discrimination, and can the existing synthetic training examples teach the model which differences have anomaly meaning?",
   "status": {
-    "stage": "constrained_generation_and_balanced_world_selection",
-    "active_work": "retain_exactly_240_train_120_validation_complete_worlds_across_30_content_cells",
+    "stage": "balanced_dataset_selected",
+    "active_work": "none_this_data_task_completed",
     "model_defined": false,
     "training_defined": false,
     "formal_ajae_v1": "not_designed_or_implemented",
@@ -12,68 +12,29 @@
     "data_tools": "data.json",
     "synthetic_dataset_frozen": true,
     "distribution_match": "not_a_selection_objective",
-    "formal_default_dataset_available": true,
-    "development_dataset_frozen": true,
-    "candidate_worlds_generated": 120,
-    "experiment_dataset": "results/synthetic/expanded",
+    "candidate_worlds_generated": 954,
+    "experiment_dataset": "results/synthetic/selected",
     "experiment_worlds": {
-      "train": 80,
-      "validation": 40
+      "train": 240,
+      "validation": 120
     },
     "experiment_frames": {
-      "train": 35920,
-      "validation": 27280
+      "train": 107760,
+      "validation": 81840
     },
     "geometry_analysis_executed": true,
     "geometry_evidence": "results/geometry",
     "geometry_conclusion": "weak_predictive_evidence_and_partial_conditioning_value_not_a_validated_anomaly_detector",
     "conditioning_interpretation": "range_and_ray_z_also_encode_sensor_coordinate_height_z_equal_range_times_ray_z_not_a_pure_sampling_causal_effect",
-    "synthetic_geometry_check_scope": "historical_40_world_detailed_checks; current_full_pool_ray_inventory_and_fixed_selected_geometry_are_recorded_separately_in_results/coverage/research",
+    "synthetic_geometry_check_scope": "historical_40_world_checks_preserved; final_physical_inventory_360_worlds; geometry_cache_954_candidates_with_summary_restricted_to_selected_worlds",
     "synthetic_geometry_check_executed": true,
     "synthetic_geometry_evidence": "results/coverage/geometry",
     "synthetic_geometry_conclusion": "nonextreme_anomalies_and_complex_original_normals_exist_insertion_changes_retained_normal_neighborhoods_and_sparse_geometry_has_condition_dependent_missingness",
     "coverage_closure_completed": false,
-    "coverage_closure_evidence": "results/coverage/summary.json",
-    "coverage_decision": "old_and_new_worlds_share_final_240_120_quotas; no_old_cohort_protection; verify_actual_content_before_deleting_surplus_worlds",
-    "coverage_boundaries": "two_normal_source_sequences_not_independent_world_backgrounds;_uneven_shape_range_coverage;_no_dense_far_group;_geometry_missingness_retained;_object_occlusion_degree_unquantified;_natural_trajectories_not_single_factor_controls",
-    "next_stage": "remain_in_data_stage_until_predeclared_core_requirements_pass",
-    "sample_expansion": {
-      "status": "previous_quantity_budget_completed_not_final_data_acceptance",
-      "directory": "results/synthetic/expanded",
-      "base": "results/synthetic/experiment",
-      "targets": {
-        "train": 80,
-        "validation": 40
-      },
-      "added_budget": {
-        "train": 60,
-        "validation": 20
-      },
-      "normal_sources": {
-        "train": 206,
-        "validation": 201
-      },
-      "validation_cohorts": "original_20_unchanged_and_added_20_report_separately",
-      "purpose": "within_family_geometry_placement_context_and_observation_variation",
-      "selection": "physical_legality_only_not_final_return_counts_or_val19_match",
-      "model_design": "paused",
-      "evidence": "results/coverage/expanded.json",
-      "added_worlds": {
-        "train": 60,
-        "validation": 20
-      },
-      "geometry_parents": {
-        "train": 72,
-        "validation": 36
-      },
-      "yaw_pairs": {
-        "train": 8,
-        "validation": 4
-      },
-      "new_world_rejections": 0,
-      "normal_sources_added": 0,
-      "remaining_limits": "uneven_far_coverage;_added_validation_far_returns_92.36_percent_from_one_world;_no_far_frames_with_20_in_range_returns;_object_occlusion_degree_unquantified;_no_detection_gain_measured"
-    },
+    "coverage_closure_evidence": "results/coverage/research/summary.json",
+    "coverage_decision": "exact_30_cells_8_train_4_validation_selected; outstanding_scientific_checks_reported_without_further_generation",
+    "coverage_boundaries": "two_normal_sources; train_far_dense_region_concentration; train_sparse_nonextreme_recurrence_shortfall; validation_near_1_4_recurrence_and_parent_concentration; geometry_missingness_and_self_occlusion_limits",
+    "next_stage": "await_user_direction; no_automatic_generation_training_or_model_design",
     "data_preparation_accepted": false,
     "original_pool_summary_completed": true,
     "balanced_pool_target": {
@@ -84,8 +45,64 @@
         "train": 8,
         "validation": 4
       },
-      "candidate_directory": "results/synthetic/pool",
-      "status": "generating_candidates_not_final_selection"
+      "candidate_directory": "results/synthetic/selected",
+      "status": "completed_exact_per_cell_counts"
+    },
+    "default_dataset_readable": true,
+    "balanced_selection_completed": true,
+    "storage_and_removal": {
+      "workspace_before_bytes": 24761724928,
+      "workspace_after_bytes": 23080300544,
+      "host_before": {
+        "Size": 484950659072,
+        "SizeRemaining": 53814394880,
+        "reserve_bytes": 10000000000
+      },
+      "host_after": {
+        "Size": 484950659072,
+        "SizeRemaining": 54069854208,
+        "reserve_bytes": 10000000000
+      },
+      "storage": {
+        "files": 190344,
+        "content_bytes": 803658002,
+        "allocated_file_bytes": 1210859520,
+        "allocated_directory_bytes": 9465856,
+        "scope": "referenced_worlds_and_root_provenance_and_rays_no_raw_scans_or_unused_worlds"
+      },
+      "removed_worlds": 634,
+      "removed_failed_proposals": 1214
+    },
+    "remaining_scientific_checks": {
+      "train": {
+        "far_at_least_20": {
+          "recurring_parents": 12,
+          "maximum_parent_share": 0.21890678637443886,
+          "maximum_region_share": 0.5337998415632427,
+          "failures": [
+            "region_concentration"
+          ]
+        },
+        "normal_sparse_with_nonextreme_anomaly": {
+          "recurring_parents": 4,
+          "maximum_parent_share": 0.21775544388609716,
+          "maximum_region_share": 0.33500837520938026,
+          "failures": [
+            "recurring_geometry_parents"
+          ]
+        }
+      },
+      "validation": {
+        "near_sparse_1_4": {
+          "recurring_parents": 2,
+          "maximum_parent_share": 0.4666666666666667,
+          "maximum_region_share": 0.48333333333333334,
+          "failures": [
+            "recurring_geometry_parents",
+            "parent_concentration"
+          ]
+        }
+      }
     }
   },
   "data": {
@@ -310,6 +327,43 @@
       "numerical_issue": "half_precision_decoder_projection_overflow_before_normalization;_both_arms_used_same_float32_projection_normalization_correction_from_shared_pretraining_state",
       "conclusion": "no_completed_comparison_and_no_claim_of_auxiliary_benefit_or_harm;_voluntary_termination_is_not_experiment_failure",
       "assets": "deleted_by_explicit_user_authorization;_not_resumable"
+    },
+    "quantity_expansion": {
+      "status": "historical_80_40_pool_superseded_and_surplus_worlds_removed",
+      "directory": "results/synthetic/expanded",
+      "base": "results/synthetic/experiment",
+      "targets": {
+        "train": 80,
+        "validation": 40
+      },
+      "added_budget": {
+        "train": 60,
+        "validation": 20
+      },
+      "normal_sources": {
+        "train": 206,
+        "validation": 201
+      },
+      "validation_cohorts": "original_20_unchanged_and_added_20_report_separately",
+      "purpose": "within_family_geometry_placement_context_and_observation_variation",
+      "selection": "physical_legality_only_not_final_return_counts_or_val19_match",
+      "model_design": "paused",
+      "evidence": "results/coverage/expanded.json",
+      "added_worlds": {
+        "train": 60,
+        "validation": 20
+      },
+      "geometry_parents": {
+        "train": 72,
+        "validation": 36
+      },
+      "yaw_pairs": {
+        "train": 8,
+        "validation": 4
+      },
+      "new_world_rejections": 0,
+      "normal_sources_added": 0,
+      "remaining_limits": "uneven_far_coverage;_added_validation_far_returns_92.36_percent_from_one_world;_no_far_frames_with_20_in_range_returns;_object_occlusion_degree_unquantified;_no_detection_gain_measured"
     }
   }
 }

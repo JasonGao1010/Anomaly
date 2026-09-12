@@ -117,13 +117,15 @@ def test_expansion_geometry_parents_stay_within_source_and_budget(tmp_path):
         anchor_world_m=[10*i, 0, 0]) for s in ("train", "validation") for i in range(3)])))
     schedule = expansion_schedule(config)
     assert len({r["seed"] for r in schedule}) == len(schedule)
-    assert len(schedule) == 564
-    for split, count in (("train", 336), ("validation", 228)):
+    assert len(schedule) == 78
+    for split, count in (("train", 78), ("validation", 0)):
         groups = [r for r in schedule if r["split"] == split]
         indices = [i for r in groups for i in r["members"]]
         assert len(indices) == len(set(indices)) == count
+        if not count:
+            continue
         assert min(indices) >= config["proposals"]["index_start"]
-        assert {r["profile"]["shape"] for r in groups} == {"single", "cross", "bridge"}
+        assert {r["profile"]["shape"] for r in groups} == ({"single", "cross", "bridge"} if split == "train" else {"single"})
         assert len({tuple(r["profile"]["target_region"]) for r in groups}) == 3
         from collections import Counter
         assert Counter(r["profile"]["combination"] for r in groups) == config["proposals"]["cell_candidates"][split]

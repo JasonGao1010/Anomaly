@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import argparse
-from collections import Counter
+from collections import Counter, defaultdict
 import os
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import hashlib
@@ -239,7 +239,7 @@ def sample_support(sequence, rng, config, footprint_radius, background, rejectio
         xyz = frame.xyzi[ground_slots, :3].astype(np.float64)
         distance = np.linalg.norm(xyz, axis=1)
         choices = np.flatnonzero((distance >= config["proposal_range_m"][0]) & (distance <= config["proposal_range_m"][1]))
-        if config.get("target_region"):
+        if config.get("target_region") and reference is None:
             world_xy = (xyz[choices] @ frame.lidar_pose[:3, :3].T + frame.lidar_pose[:3, 3])[:, :2]
             region = np.floor(world_xy / config["region_grid_m"]).astype(int)
             choices = choices[np.all(region == config["target_region"], axis=1)]
@@ -373,7 +373,7 @@ def make_shape(rng, profile, config):
     return shape, geometry
 
 
-def ray_observation(source, world, grid, sensor, geometry):
+def ray_observation(source, world, grid, sensor, geometry, reference_slots=None):
     """Use the renderer's exact surface competition; signal draws never enter placement scores."""
     item = world.objects[0]
     slots, directions_sensor, directions, origins_sensor, origins, native = _frame_trace_context(source, grid)
@@ -395,13 +395,26 @@ def ray_observation(source, world, grid, sensor, geometry):
     unique = lambda mask: len(np.unique(grid.canonical_ray_by_slot[slots[mask]]))
     xyz = (origins_sensor[returned] + competition.distance_m[returned, None] * directions_sensor[returned]).astype(np.float32)
     ranges = np.linalg.norm(xyz, axis=1)
-    return dict(frame=source.frame_id,
+    record = dict(frame=source.frame_id,
                 range_m=float(np.linalg.norm(center - source.lidar_pose[:3, 3])),
                 available_box_rays=unique(box), foreground_surface_rays=unique(surface),
                 potential_new_rays=unique(surface & ~np.isfinite(native)),
                 potential_changed_native_rays=unique(surface & np.isfinite(native)),
                 final_anomaly_rays=unique(returned), final_anomaly_slots=int(returned.sum()),
-                in_range_anomaly_slots=int(np.sum((ranges >= 2.5) & (ranges <= 50)))), surface
+                in_range_anomaly_slots=int(np.sum((ranges >= 2.5) & (ranges <= 50))))
+    if reference_slots is not None:
+        # Select physical opportunities independently of stochastic signal returns.
+        points = origins_sensor[surface] + competition.distance_m[surface, None] * directions_sensor[surface]
+        distance = np.linalg.norm(points, axis=1)
+        inside = (distance >= 2.5) & (distance <= 50)
+        protected = np.asarray(reference_slots, np.int32)
+        protected = protected[~surface[protected]]
+        near = (cKDTree(points[inside]).query(source.xyzi[protected, :3])[0] <= 2
+                if inside.any() else np.zeros(len(protected), bool))
+        record.update(native_joint_surface_rays=len(np.unique(grid.canonical_ray_by_slot[slots[surface][inside]])),
+                      native_joint_positions=len(np.unique(source.xyzi[protected[near], :3], axis=0)),
+                      protected_slots=protected.tolist())
+    return record, surface
 
 
 def surface_opportunities(sequence, world, grid, sensor, geometry, config):
@@ -471,6 +484,11 @@ def make_world(sequence, seed, config, profile, grid, sensor, references=None):
         obstacles = ObservedObstacleIndex(frame.xyzi[selected, :3].astype(float) @ frame.lidar_pose[:3, :3].T + frame.lidar_pose[:3, 3],
                                          (np.uint64(frame.frame_id) << np.uint64(32)) | selected.astype(np.uint64))
         yaw = float(rng.uniform(-np.pi, np.pi))
+        if references is not None:
+            witness = sequence[support["normal_reference"]["frame"]]
+            sight = pool.anchors_world_m[0] - witness.lidar_pose[:3, 3]
+            yaw = float(np.arctan2(sight[1], sight[0]) + np.pi / 2 +
+                        rng.uniform(*config["proposals"]["native_yaw_offset_rad"]))
         worlds, placements = [], []
         try:
             for offset in profile["yaw_offsets_rad"]:
@@ -481,12 +499,13 @@ def make_world(sequence, seed, config, profile, grid, sensor, references=None):
                 world = WorldSpec(seed, sequence.spec.sequence_id, (item,))
                 if references is not None:
                     witness = sequence[support["normal_reference"]["frame"]]
-                    _, foreground = ray_observation(witness, world, grid, sensor, geometry)
-                    protected = np.asarray(support["normal_reference"]["slots"], np.int32)
-                    protected = protected[~foreground[protected]]
-                    if len(protected) < config["proposals"]["normal_context"]["minimum_positions"]:
-                        raise ValueError("too_few_native_reference_positions_survive")
-                    support = dict(support, normal_reference=dict(support["normal_reference"], slots=protected.tolist()))
+                    joint, _ = ray_observation(witness, world, grid, sensor, geometry,
+                                              support["normal_reference"]["slots"])
+                    if (joint["native_joint_positions"] < config["proposals"]["normal_context"]["minimum_positions"]
+                            or joint["native_joint_surface_rays"] < config["proposals"]["native_surface_minimum"]):
+                        raise ValueError("no_joint_native_surface_opportunity")
+                    support = dict(support, normal_reference=dict(support["normal_reference"],
+                                   slots=joint["protected_slots"]), native_surface_opportunity=joint)
                 worlds.append(world)
                 placements.append(dict(**support, placement=clean_json(placement.to_dict()),
                     support_plane=dict(anchor_world_m=pool.anchors_world_m[0].tolist(),
@@ -496,8 +515,8 @@ def make_world(sequence, seed, config, profile, grid, sensor, references=None):
                     combination=profile["combination"],
                     shape_attempt=attempt, nominal_dimensions_m={k: profile[k] for k in ("length_m", "width_m", "height_m")},
                     connectivity=shape.continuous_connectivity_certificate().state))
-        except ValueError:
-            rejections["local_collision_or_grounding"] += 1
+        except ValueError as error:
+            rejections[str(error)] += 1
             continue
         probes = surface_opportunities(sequence, worlds[0], grid, sensor, geometry, config["proposals"])
         achieved = opportunity_passes(probes, profile, config["proposals"])
@@ -638,13 +657,17 @@ def expansion_schedule(config, round_number=1, references=None, source_poses=Non
                             frame_interval=[0, item["frames_per_world"]], frame_candidates=[], yaw_offsets_rad=[0.],
                             opportunity="visible")
                         if structure == "solid" and height == "low":
-                            profile.update(length_m=[.5, 1.], width_m=[.35, .7], height_m=[.15, .195])
+                            profile.update(length_m=[1.3, 1.8], width_m=[.55, .8], height_m=[.18, .195])
                         if structure == "solid" and height == "raised":
                             profile.update(length_m=[1.5, 2.6], width_m=[.8, 1.6], height_m=[.8, 1.6])
-                        if structure == "elongated" and height == "raised":
-                            profile["height_m"] = [.25, .4]
+                        if structure == "elongated":
+                            profile.update(length_m=[2.2, 3.2], width_m=[.16, .3])
+                            if height == "raised":
+                                profile["height_m"] = [.4, .65]
                         if structure == "sheet" and height == "raised":
                             profile.update(length_m=[.7, 1.5], width_m=[.06, .12], height_m=[.5, 1.2])
+                        if height == "low" and structure in ("branched", "contacts"):
+                            profile.update(length_m=[1.5, 1.8], width_m=[.8, 1.], height_m=[.18, .195])
                         seed = int(np.random.SeedSequence([config["seed"], proposals["seed_namespace"],
                                                           item["source_sequence"], index]).generate_state(1)[0])
                         groups.append(dict(split=split, group=index, round=1, seed=seed, members=[index], profile=profile))
@@ -670,6 +693,10 @@ def generate_group(data_root, output, planned, config, identity):
                                    sequence_id=source_id, label_mode="required")
         grid, sensor = load_sensor_calibration(Path(output) / "calibration.pt")
         references = json.loads((Path(output) / "normal_reference.json").read_text())["scans"][split]
+        poses = np.array([sequence.lidar_pose(f)[:3, 3] for f in sequence.frame_ids])
+        distances = cKDTree(poses).query([r["anchor_world_m"] for r in references])[0]
+        references = [r for r, d in zip(references, distances)
+                      if d <= config["placement"]["normal_reference_support_view_range_m"][1]]
         _generation_inputs = (cache_key, sequence, grid, sensor, references)
     _, sequence, grid, sensor, references = _generation_inputs
     profile = planned["profile"]
@@ -927,6 +954,12 @@ def main():
         parser.error("workers must fit the CPU affinity")
     config = json.loads(args.config.read_text())
     output = args.output or Path(config["proposals"]["output"])
+    if (output / "manifest.json").exists() and not args.collect_only:
+        saved = json.loads((output / "manifest.json").read_text())
+        if saved.get("status") == "frozen":
+            print(json.dumps(dict(event="dataset_already_frozen", directory=str(output),
+                worlds={s: len(p["worlds"]) for s, p in saved["splits"].items()})), flush=True)
+            return
     if args.collect_only:
         manifest = json.loads((output / "manifest.json").read_text())
         if manifest["status"] not in ("building", "candidates_complete"):
@@ -942,9 +975,6 @@ def main():
         dataset = FrozenDataset(base_dir, args.data_root, split, allow_candidates=True)
         source_poses[split] = np.asarray([dataset.sequence.lidar_pose(f)[:3, 3] for f in dataset.sequence.frame_ids])
         entries = base_root["splits"][split]["worlds"]
-        original = json.loads(Path("results/synthetic/expanded/manifest.json").read_text())["splits"][split]["worlds"]
-        if [x["world_identity"] for x in entries[:len(original)]] != [x["world_identity"] for x in original]:
-            raise ValueError("existing candidates no longer contain the original world membership")
         base_entries[split] = [dict(entry, path=os.path.relpath((base_dir / entry["path"]).resolve(), output.resolve()))
                                for entry in entries]
     science = {k: config[k] for k in ("seed", "calibration", "placement", "shape", "qualification", "proposals", "research_coverage")}
@@ -1000,6 +1030,20 @@ def main():
             reference = json.loads(previous_reference.read_text())
             reference.update(configuration_identity=identity, reused_from=str(previous_reference),
                 reuse_basis="same_original_geometry_normal_reference_calibration_and_anchor_rules; every_used_source_identity_is_checked")
+            if config["proposals"].get("measured_contexts_only"):
+                # Reuse observed normal clusters, then draw new geometry parents and fixed signals.
+                for split, entries in base_entries.items():
+                    witnesses = defaultdict(list)
+                    for entry in entries:
+                        saved = json.loads((output / entry["path"] / "manifest.json").read_text())
+                        native = saved.get("normal_reference")
+                        if (saved.get("status") == "qualified" and native and native.get("unchanged")
+                                and native.get("adjacent_positions", 0) >= 5
+                                and saved["frames"][native["frame"]]["in_range"] >= 5):
+                            witnesses[native["kind"], native["frame"]].append(set(native["source_slots"]))
+                    reference["scans"][split] = [r for r in reference["scans"][split]
+                        if any(len(set(r["slots"]) & slots) >= 5 for slots in witnesses[r["kind"], r["frame"]])]
+                reference["selection"] = "original_native_clusters_with_a_previously_measured_joint_witness; new_geometry_not_signal_rerolls"
             _atomic_json(reference_path, reference)
     if reference_path.exists():
         reference = json.loads(reference_path.read_text())

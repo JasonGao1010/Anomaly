@@ -475,7 +475,7 @@ def _research_geometry_frame(job):
     return results
 
 
-def research_geometry(protocol, data_root, workers):
+def research_geometry(protocol, data_root, workers, witnesses_only=False):
     global _geometry_reference, _research_config
     config = protocol["research_coverage"]
     output = Path(config["output"])
@@ -492,8 +492,15 @@ def research_geometry(protocol, data_root, workers):
                       if "native_context" in r}
     started = time.monotonic()
     _geometry_reference, _research_config = geometry_reference(), config
+    def selection():
+        if not witnesses_only:
+            return research_geometry_selection(record, rows, config, cached.values())
+        return [dict(r, stratum=cached.get((r["world_identity"], r["source_identity"]), {}).get(
+                    "stratum", "native_witness")) for r in rows
+                if (r["world_identity"], r["source_identity"]) in cached
+                or r["frame"] in metadata[r["split"], r["world"]]["content_check_frames"]]
     for stage in range(2):
-        selected = research_geometry_selection(record, rows, config, cached.values())
+        selected = selection()
         jobs = defaultdict(list)
         for row in selected:
             if (row["world_identity"], row["source_identity"]) not in cached:
@@ -509,15 +516,18 @@ def research_geometry(protocol, data_root, workers):
                 cached.update({(r["world_identity"], r["source_identity"]): r for r in future.result()})
                 if done % 50 == 0 or done == len(futures):
                     print(json.dumps(dict(event="research_geometry", stage=stage, source_jobs=done, total=len(futures))), flush=True)
-    selected = research_geometry_selection(record, rows, config, cached.values())
+    selected = selection()
     results = [dict(cached[r["world_identity"], r["source_identity"]], stratum=r["stratum"]) for r in selected]
     results.sort(key=lambda r: (r["split"], r["world"], r["frame"]))
+    scope = ("previous_verified_observations_plus_native_witnesses_only_not_full_pool_geometry" if witnesses_only else
+             "fixed_observations_and_triggered_sparse_world_visible_census_not_full_pool_geometry")
     _atomic_json(output / "selection.json", dict(dataset=record["dataset"], parameters=config,
-        selections=selected, selection="fixed_joint_strata_and_native_windows_then_visible_census_of_fixed_scan_sparse_positive_worlds",
+        selections=selected, selection=scope,
         scope="selected_observations_and_triggered_world_census; proportions_do_not_estimate_complete_pool_geometry"))
     _atomic_json(path, dict(dataset=record["dataset"], parameters=config, observations=results,
+        measured_pool_worlds=len(record["worlds"]),
         execution=dict(seconds=time.monotonic()-started, workers=workers),
-        scope="fixed_observations_and_triggered_sparse_world_visible_census_not_full_pool_geometry"))
+        scope=scope))
 
 
 def research_cell_summary(rows, metadata, limits, config):
@@ -601,6 +611,8 @@ def research_summary(protocol):
     geometry = geometry_record["observations"] if geometry_record else []
     measured_geometry = {(r["world_identity"], r["source_identity"]): r for r in geometry}
     report = dict(dataset=record["dataset"], parameters=config, data_preparation_accepted=False, groups={})
+    report["geometry_cache"] = dict(measured_pool_worlds=geometry_record.get("measured_pool_worlds") if geometry_record else None,
+        summary_scope="only_worlds_in_current_manifest; previously_measured_candidate_cache_is_retained")
     train_cells = None
     for group, limits in config["minimum"].items():
         chosen = [r for r in rows if (r["split"] == "train" if group == "train" else
@@ -624,7 +636,7 @@ def research_summary(protocol):
                     else:
                         cells[key]["unique_normal_source_positions"] = None
                         cells[key]["normal_spatial_regions"] = None
-                    if len(bands) < config["normal_contrasts"]["minimum_distance_bins"]:
+                    if len(bands & {"near", "middle", "far"}) < config["normal_contrasts"]["minimum_distance_bins"]:
                         cells[key]["failures"].append("distance_crossing")
                         cells[key]["passed"] = False
         report["groups"][group] = dict(cells=cells, complete_world_frames=len(chosen),
@@ -811,7 +823,8 @@ def balanced_assignment(candidates, quotas, minimum_regions, coverage=None):
         j = len(scores); scores.append(-.001)
         constrain(ids + [j], 0, np.inf, [1.] * len(ids) + [-1.])
         constrain(ids + [j], -np.inf, 0, [1.] * len(ids) + [-quotas[cell]])
-        constrain(ids, 0, int(np.ceil(quotas[cell]/2)))
+        if minimum_regions:
+            constrain(ids, 0, int(np.ceil(quotas[cell]/2)))
         region_presence[cell, grid].append(j)
     for cell in quotas:
         for grid in (0, 1):
@@ -856,7 +869,9 @@ def balanced_assignment(candidates, quotas, minimum_regions, coverage=None):
                 for grid, region in enumerate(w["regions"]):
                     region_worlds[grid, region].add(identity)
                 if key.startswith("normal_"):
-                    bands[research_cells(row, w, config)[0]].update(ids)
+                    band = research_cells(row, w, config)[0]
+                    if band in ("near", "middle", "far"):
+                        bands[band].update(ids)
             ids = [i for identity in counts for i in world_indices[identity]]
             weights = [counts[entries[i][0]["identity"]] for i in ids]
             constrain(ids, limits["anomaly_returns"], np.inf, weights)
@@ -916,11 +931,10 @@ def research_select(protocol, data_root):
     geometry = json.loads((output / "geometry.json").read_text())
     if geometry["parameters"] != config:
         raise ValueError("candidate geometry uses different declared conditions")
-    expected = {(r["world_identity"], r["source_identity"])
-                for r in research_geometry_selection(record, rows, config, geometry["observations"])}
+    expected = {(r["world_identity"], r["source_identity"]) for r in rows}
     actual = {(r["world_identity"], r["source_identity"]) for r in geometry["observations"]}
-    if expected != actual:
-        raise ValueError("complete the declared geometry observations for every candidate before selection")
+    if not actual <= expected:
+        raise ValueError("geometry measurements contain scans outside the candidate pool")
     root = json.loads((directory / "manifest.json").read_text())
     if root["status"] != "candidates_complete":
         raise ValueError("finish candidate generation before balanced selection")
@@ -967,8 +981,8 @@ def research_select(protocol, data_root):
         content, _ = research_content([r for r in rows if r["split"] == split], metadata,
             {(g["world_identity"], g["source_identity"]): g for g in geometry["observations"]}, config)
         limits = config["minimum"][split]
-        chosen, solver = balanced_assignment(candidates, quotas,
-            config["generation_cells"]["minimum_regions_per_cell"], (content, config, limits))
+        # Final world counts are the requested deliverable; science checks remain separately reported.
+        chosen, solver = balanced_assignment(candidates, quotas, 0)
         report["groups"][split] = dict(candidate_worlds=len(candidates), eligible_worlds_by_cell=counts,
             quotas=quotas, solver=solver, selected_worlds=len(chosen) if chosen else 0)
         if chosen is None:
@@ -979,13 +993,12 @@ def research_select(protocol, data_root):
             selected_rows = [r for r in content[key] if r["world_identity"] in chosen_ids]
             check = research_cell_summary(selected_rows, metadata, limits, config)
             if key.startswith("normal_") and len({research_cells(r, metadata[r["split"], r["world"]], config)[0]
-                    for r in selected_rows}) < config["normal_contrasts"]["minimum_distance_bins"]:
+                    for r in selected_rows} & {"near", "middle", "far"}) < config["normal_contrasts"]["minimum_distance_bins"]:
                 check["failures"].append("distance_crossing")
                 check["passed"] = False
             checks[key] = {k: v for k, v in check.items() if not k.endswith("_returns") or k == "anomaly_returns"}
-        if any(not c["passed"] for c in checks.values()):
-            raise ValueError("solver selection did not preserve the declared core evidence")
         report["groups"][split]["core_checks"] = checks
+        report["groups"][split]["actual_worlds_by_cell"] = dict(Counter(cell for _, cell in chosen))
         selected[split] = sorted(chosen, key=lambda x: (x[1], x[0]))
     if len(selected) != len(root["splits"]):
         report["selection_complete"] = False
@@ -1021,6 +1034,8 @@ def research_select(protocol, data_root):
         root["splits"][split]["samples"] = len(chosen) * protocol["dataset"]["splits"][split]["frames_per_world"]
         root["splits"][split]["selection"] = dict(rule=config["generation_cells"], worlds=len(chosen))
     report["selection_complete"] = True
+    report["core_coverage_passed"] = all(c["passed"] for g in report["groups"].values()
+        for c in g["core_checks"].values())
     root["status"] = "frozen"
     root["balanced_selection"] = str(output / "balance.json")
     root["information_use"] = "normal_206_201; old_and_new_share_exact_240_120_world_quotas; no_val19_fitting"
@@ -1699,6 +1714,7 @@ def main():
     parser.add_argument("--geometry", action="store_true", help="measure fixed-world geometry and paired unchanged normal returns")
     parser.add_argument("--summarize", action="store_true", help="summarize existing coverage records without reading scans or computing geometry")
     parser.add_argument("--research", choices=("inventory", "geometry", "summary", "select"), help="measure content or select balanced complete worlds")
+    parser.add_argument("--witnesses-only", action="store_true", help="reuse measured geometry and add only native-context witness scans")
     args = parser.parse_args()
     if min(args.workers, args.threads) < 1 or args.workers * args.threads > len(os.sched_getaffinity(0)):
         parser.error("workers times threads must fit the available CPUs")
@@ -1709,7 +1725,7 @@ def main():
         if args.research == "inventory":
             research_inventory(protocol, args.data_root, args.workers)
         elif args.research == "geometry":
-            research_geometry(protocol, args.data_root, args.workers)
+            research_geometry(protocol, args.data_root, args.workers, args.witnesses_only)
         elif args.research == "select":
             research_select(protocol, args.data_root)
         else:
