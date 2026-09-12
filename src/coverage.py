@@ -531,6 +531,47 @@ def research_cell_summary(rows, metadata, limits, config):
     return dict(**measured, passed=not failures, failures=failures)
 
 
+def research_content(chosen, metadata, measured_geometry, config):
+    """Use identical physical and paired-normal evidence for selection and reporting."""
+    cell_rows, world_bands = defaultdict(list), defaultdict(lambda: defaultdict(set))
+    world_views, world_fragments = defaultdict(list), defaultdict(set)
+    geometry_rows = []
+    for row in chosen:
+        world = metadata[row["split"], row["world"]]
+        band, cells = research_cells(row, world, config)
+        if row["in_range_rays"] >= 5 and band in ("near", "middle", "far"):
+            world_bands[world["identity"]][band].add(row["frame"])
+        for key, active in cells.items():
+            if active:
+                cell_rows[key].append(row)
+        measured = measured_geometry.get((row["world_identity"], row["source_identity"]))
+        if measured is None:
+            continue
+        geometry_rows.append(measured)
+        if row["in_range_rays"] >= 5:
+            world_views[world["identity"]].append(measured["view_local"])
+            world_fragments[world["identity"]].add(tuple(measured["visible_octants"]))
+        for kind, contrast in measured["contrasts"].items():
+            if (contrast["normal_queries"] >= config["normal_contrasts"]["minimum_normal_queries"]
+                    and contrast["central_anomaly_queries"] >= config["normal_contrasts"]["minimum_central_anomaly_queries"]):
+                cell_rows[f"normal_{kind}_with_nonextreme_anomaly"].append(dict(row,
+                    in_range_rays=contrast["central_anomaly_queries"], normal_queries=contrast["normal_queries"],
+                    normal_source_slots=contrast.get("normal_source_slots"), normal_regions=contrast.get("normal_regions")))
+        if (row["in_range_rays"] >= 5 and measured["changed_normal_queries"] >=
+                config["normal_contrasts"]["minimum_changed_normal_queries"]):
+            cell_rows["changed_neighborhood_retained_normal"].append(dict(row, normal_queries=measured["changed_normal_queries"]))
+    longitudinal = {w for w, bands in world_bands.items()
+                    if all(len(bands[b]) >= config["minimum_frames_per_parent"] for b in ("near", "middle", "far"))}
+    # A yaw variant cannot supply a missing view to another world's trajectory.
+    longitudinal = {w for w in longitudinal if len(world_views[w]) >= 2
+                    and np.min(np.asarray(world_views[w]) @ np.asarray(world_views[w]).T)
+                    <= np.cos(np.deg2rad(config["longitudinal"]["minimum_view_span_degrees"]))
+                    and len(world_fragments[w]) >= config["longitudinal"]["minimum_visible_octant_patterns"]}
+    cell_rows["same_parent_near_middle_far"] = [r for r in chosen if r["in_range_rays"] >= 5
+                                  and r["world_identity"] in longitudinal]
+    return cell_rows, geometry_rows
+
+
 def research_summary(protocol):
     config = protocol["research_coverage"]
     output = Path(config["output"])
@@ -547,42 +588,7 @@ def research_summary(protocol):
     for group, limits in config["minimum"].items():
         chosen = [r for r in rows if (r["split"] == "train" if group == "train" else
                   r["split"] == "validation")]
-        cell_rows, world_bands = defaultdict(list), defaultdict(lambda: defaultdict(set))
-        world_views, world_fragments = defaultdict(list), defaultdict(set)
-        geometry_rows = []
-        for row in chosen:
-            world = metadata[row["split"], row["world"]]
-            band, cells = research_cells(row, world, config)
-            if row["in_range_rays"] >= 5 and band in ("near", "middle", "far"):
-                world_bands[world["identity"]][band].add(row["frame"])
-            for key, active in cells.items():
-                if active:
-                    cell_rows[key].append(row)
-            measured = measured_geometry.get((row["world_identity"], row["source_identity"]))
-            if measured is None:
-                continue
-            geometry_rows.append(measured)
-            if row["in_range_rays"] >= 5:
-                world_views[world["identity"]].append(measured["view_local"])
-                world_fragments[world["identity"]].add(tuple(measured["visible_octants"]))
-            for kind, contrast in measured["contrasts"].items():
-                if (contrast["normal_queries"] >= config["normal_contrasts"]["minimum_normal_queries"]
-                        and contrast["central_anomaly_queries"] >= config["normal_contrasts"]["minimum_central_anomaly_queries"]):
-                    cell_rows[f"normal_{kind}_with_nonextreme_anomaly"].append(dict(row,
-                        in_range_rays=contrast["central_anomaly_queries"], normal_queries=contrast["normal_queries"],
-                        normal_source_slots=contrast.get("normal_source_slots"), normal_regions=contrast.get("normal_regions")))
-            if (row["in_range_rays"] >= 5 and measured["changed_normal_queries"] >=
-                    config["normal_contrasts"]["minimum_changed_normal_queries"]):
-                cell_rows["changed_neighborhood_retained_normal"].append(dict(row, normal_queries=measured["changed_normal_queries"]))
-        longitudinal = {w for w, bands in world_bands.items()
-                        if all(len(bands[b]) >= config["minimum_frames_per_parent"] for b in ("near", "middle", "far"))}
-        # A yaw variant cannot supply a missing view to another world's trajectory.
-        longitudinal = {w for w in longitudinal if len(world_views[w]) >= 2
-                        and np.min(np.asarray(world_views[w]) @ np.asarray(world_views[w]).T)
-                        <= np.cos(np.deg2rad(config["longitudinal"]["minimum_view_span_degrees"]))
-                        and len(world_fragments[w]) >= config["longitudinal"]["minimum_visible_octant_patterns"]}
-        cell_rows["same_parent_near_middle_far"] = [r for r in chosen if r["in_range_rays"] >= 5
-                                      and r["world_identity"] in longitudinal]
+        cell_rows, geometry_rows = research_content(chosen, metadata, measured_geometry, config)
         cells = {}
         for key in config["core_cells"]:
             if not geometry and (key.startswith("normal_") or key == "changed_neighborhood_retained_normal"):
@@ -751,7 +757,7 @@ def research_sampling(rows, metadata, cells, config, output):
         weights=str(output / "sampling.npz"), scope="expected_full_scan_and_anomaly_return_exposure; not_a_model_loss_or_gradient_measure")
 
 
-def balanced_assignment(candidates, quotas, minimum_regions):
+def balanced_assignment(candidates, quotas, minimum_regions, coverage=None):
     """Assign complete worlds once, with exact cell quotas and spatial diversity."""
     from scipy.optimize import Bounds, LinearConstraint, milp
     from scipy.sparse import csc_array
@@ -798,11 +804,81 @@ def balanced_assignment(candidates, quotas, minimum_regions):
         # Complementary physical observations take priority over repeated witnesses.
         scores.append(-4. if state.startswith("far/4") else -1.)
         constrain(ids + [j], 0, np.inf, [1.] * len(ids) + [-1.])
+    continuous = []
+    if coverage is not None:
+        content, config, limits = coverage
+        metadata = {w["identity"]: w for w in candidates}
+        presences = {}
+
+        def presence(ids):
+            key = tuple(sorted(set(ids)))
+            if key in presences:
+                return presences[key]
+            ids = list(key)
+            j = len(scores); scores.append(0.)
+            constrain(ids + [j], 0, np.inf, [1.] * len(ids) + [-1.])
+            constrain(ids + [j], -np.inf, 0, [1.] * len(ids) + [-len(ids)])
+            presences[key] = j
+            return j
+
+        for key in config["core_cells"]:
+            counts, observations = Counter(), Counter()
+            parent_frames, source_frames, bands = defaultdict(set), defaultdict(set), defaultdict(set)
+            parent_worlds, region_worlds = defaultdict(set), defaultdict(set)
+            for row in content[key]:
+                identity = row["world_identity"]
+                if identity not in world_indices:
+                    continue
+                w = metadata[identity]
+                ids = world_indices[identity]
+                counts[identity] += row["in_range_rays"]
+                observations[identity] += 1
+                parent_frames[w["parent"], row["frame"]].update(ids)
+                source_frames[row["frame"]].update(ids)
+                parent_worlds[w["parent"]].add(identity)
+                for grid, region in enumerate(w["regions"]):
+                    region_worlds[grid, region].add(identity)
+                if key.startswith("normal_"):
+                    bands[research_cells(row, w, config)[0]].update(ids)
+            ids = [i for identity in counts for i in world_indices[identity]]
+            weights = [counts[entries[i][0]["identity"]] for i in ids]
+            constrain(ids, limits["anomaly_returns"], np.inf, weights)
+            total = len(scores); scores.append(0.); continuous.append(total)
+            total_scale = max(1, sum(counts.values()))
+            constrain(ids + [total], 0, 0, weights + [-total_scale])
+            constrain(ids, limits["world_frames"], np.inf,
+                      [observations[entries[i][0]["identity"]] for i in ids])
+            constrain([presence(v) for v in source_frames.values()], limits["source_frames"], np.inf)
+            recurrent = defaultdict(list)
+            for (parent, frame), frame_ids in parent_frames.items():
+                recurrent[parent].append(presence(frame_ids))
+            recurring_parents = []
+            for frame_ids in recurrent.values():
+                j = len(scores); scores.append(0.)
+                constrain(frame_ids + [j], 0, np.inf,
+                          [1.] * len(frame_ids) + [-config["minimum_frames_per_parent"]])
+                recurring_parents.append(j)
+            constrain(recurring_parents, limits["geometry_parents"], np.inf)
+            for grid in (0, 1):
+                regions = [presence(i for identity in ws for i in world_indices[identity])
+                           for (g, _), ws in region_worlds.items() if g == grid]
+                constrain(regions, limits["support_regions"], np.inf)
+            # Concentration bounds are linear after multiplying by total ray exposure.
+            for groups, maximum in ((parent_worlds, config["maximum_parent_return_share"]),
+                                    (region_worlds, config["maximum_region_return_share"])):
+                for identities in groups.values():
+                    local = [i for identity in identities for i in world_indices[identity]]
+                    constrain(local + [total], -np.inf, 0,
+                        [counts[entries[i][0]["identity"]] for i in local] + [-maximum * total_scale])
+            if key.startswith("normal_"):
+                constrain([presence(v) for v in bands.values()],
+                          config["normal_contrasts"]["minimum_distance_bins"], np.inf)
     matrix = csc_array((np.asarray(values), (np.asarray(row_ids, np.int32), np.asarray(columns, np.int32))),
                        shape=(len(lower), len(scores)))
     with warnings.catch_warnings():
         warnings.filterwarnings("ignore", message="Unrecognized options detected:.*")
-        result = milp(np.asarray(scores), integrality=np.ones(len(scores)), bounds=Bounds(0, 1),
+        integrality = np.ones(len(scores)); integrality[continuous] = 0
+        result = milp(np.asarray(scores), integrality=integrality, bounds=Bounds(0, 1),
             constraints=LinearConstraint(matrix, lower, upper),
             options=dict(time_limit=60, mip_rel_gap=1e-4, threads=1))
     if result.x is None:
@@ -869,11 +945,29 @@ def research_select(protocol, data_root):
             candidates.append(dict(meta, eligible_cells=eligible, states=sorted(states)))
         quotas = {c: config["generation_cells"]["worlds_per_cell"][split] for c in all_cells}
         counts = {cell: sum(cell in w["eligible_cells"] for w in candidates) for cell in all_cells}
-        chosen, solver = balanced_assignment(candidates, quotas, config["generation_cells"]["minimum_regions_per_cell"])
+        metadata = {(w["split"], w["world"]): w for w in candidates}
+        content, _ = research_content([r for r in rows if r["split"] == split], metadata,
+            {(g["world_identity"], g["source_identity"]): g for g in geometry["observations"]}, config)
+        limits = config["minimum"][split]
+        chosen, solver = balanced_assignment(candidates, quotas,
+            config["generation_cells"]["minimum_regions_per_cell"], (content, config, limits))
         report["groups"][split] = dict(candidate_worlds=len(candidates), eligible_worlds_by_cell=counts,
             quotas=quotas, solver=solver, selected_worlds=len(chosen) if chosen else 0)
         if chosen is None:
             continue
+        chosen_ids = {identity for identity, _ in chosen}
+        checks = {}
+        for key in config["core_cells"]:
+            selected_rows = [r for r in content[key] if r["world_identity"] in chosen_ids]
+            check = research_cell_summary(selected_rows, metadata, limits, config)
+            if key.startswith("normal_") and len({research_cells(r, metadata[r["split"], r["world"]], config)[0]
+                    for r in selected_rows}) < config["normal_contrasts"]["minimum_distance_bins"]:
+                check["failures"].append("distance_crossing")
+                check["passed"] = False
+            checks[key] = {k: v for k, v in check.items() if not k.endswith("_returns") or k == "anomaly_returns"}
+        if any(not c["passed"] for c in checks.values()):
+            raise ValueError("solver selection did not preserve the declared core evidence")
+        report["groups"][split]["core_checks"] = checks
         selected[split] = sorted(chosen, key=lambda x: (x[1], x[0]))
     if len(selected) != len(root["splits"]):
         report["selection_complete"] = False

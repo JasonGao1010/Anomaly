@@ -29,7 +29,7 @@
     "anomaly_target": "inserted_returns_only",
     "normal_target": "valid_original_normal_class_map_entries",
     "split_unit": "whole_world_and_source_sequence",
-    "base_directory": "results/synthetic/targeted"
+    "base_directory": "results/synthetic/pool"
   },
   "information_use": {
     "current_pool": "现有旧世界与新增候选统一进入30组合筛选；最终240个训练、120个验证世界；没有额外保留的旧80/40配额。",
@@ -140,7 +140,11 @@
       0.15,
       0.65
     ],
-    "normal_reference": "preserve selected native raised-normal positions; geometry is a placement-context diagnostic only"
+    "normal_reference": "preserve selected native raised-normal positions; geometry is a placement-context diagnostic only",
+    "normal_reference_support_view_range_m": [
+      5,
+      15
+    ]
   },
   "shape": {
     "exponents": [
@@ -183,8 +187,8 @@
   },
   "calibration_source": "results/synthetic/candidates/calibration.pt",
   "proposals": {
-    "output": "results/synthetic/pool",
-    "seed_namespace": 4,
+    "output": "results/synthetic/balanced",
+    "seed_namespace": 5,
     "shape_attempts": 3,
     "rounds": 1,
     "world_bytes_limit": 16777216,
@@ -200,16 +204,16 @@
         6
       ]
     },
-    "region_selection": "cycle regions containing verified native anchor clusters of the scheduled background kind; fixed source-specific seeds; no val19 sampling",
-    "budget": "30 cells, at most 24 train/12 validation candidate worlds per cell (1080 proposals); final total 8 train/4 validation worlds per cell (240/120), counting existing eligible worlds inside these quotas; 16 MiB per generated world",
-    "acceptance": "physically_legal_candidate_pool; pre-signal surface opportunities guide proposals but are not a required return gate; final selection uses actual predeclared content and whole worlds",
+    "region_selection": "cycle evenly across all native-context regions with a same-source support view within 15 m; distinguish the sparse witness frame from the physical support frame; fixed source-specific new seeds",
+    "budget": "targeted follow-up: 336 train and 228 validation proposals (564 total); old and new candidates share unchanged final 240/120 quotas; sparse-context cells, shared-world assignment shortfalls, and far/high-support geometry only",
+    "acceptance": "physical_legality_in_all_original_frames; prefer geometric visibility without conditioning on stochastic returns; actual native-context and scientific coverage measured after complete rendering",
     "stop": "complete the declared candidate sweep, then select against per-cell retention quotas and unchanged scientific coverage requirements; unmet cells remain unresolved and data preparation does not pass",
     "signal_rule": "fixed shape/material/signal seed per geometry parent; inspect only deterministic physical surface competition in support selection; never select supports by stochastic return realizations, reroll returns, alter return probabilities, add points, or use model scores",
     "sampling_use": "specified separately in research_coverage; no training",
-    "basis": "8 train worlds per cell allow at least 6 independent parents plus variation; 4 validation worlds require independent parents; 3 candidate attempts per retained place allow physical rejection and distribution selection; no guarantee of physical realizability or model performance",
+    "basis": "full 451-world measurements show sparse-context quota deficits, only three far>=20 worlds per side, and overlapping eligible worlds in validation elongated/raised cells; final quotas and scientific minima are unchanged",
     "candidates_per_cell": {
-      "train": 24,
-      "validation": 12
+      "train": 0,
+      "validation": 0
     },
     "retain_per_cell": {
       "train": 8,
@@ -300,7 +304,40 @@
       "maximum_height_above_ground_m": 3.5,
       "description": "full_original_scan_geometry; fixed_206_conditional_quantiles; spatially_spread_native_anchor_clusters; verify_surviving_normal_positions"
     },
-    "retention": "existing and new worlds are assigned using the same actual structure, local height and verified native-context observations; each world assigned to one of 30 cells; remove redundant whole worlds only after final references are verified"
+    "retention": "existing and new worlds are assigned using the same actual structure, local height and verified native-context observations; each world assigned to one of 30 cells; remove redundant whole worlds only after final references are verified",
+    "index_start": 10000,
+    "cell_candidates": {
+      "train": {
+        "solid/low/sparse": 32,
+        "solid/raised/sparse": 32,
+        "elongated/low/sparse": 32,
+        "elongated/raised/sparse": 32,
+        "sheet/low/sparse": 32,
+        "sheet/raised/sparse": 32,
+        "branched/low/sparse": 32,
+        "branched/raised/sparse": 32,
+        "contacts/low/sparse": 32,
+        "contacts/raised/sparse": 32,
+        "solid/raised/smooth": 8,
+        "solid/raised/rough": 8
+      },
+      "validation": {
+        "solid/low/sparse": 20,
+        "solid/raised/sparse": 20,
+        "elongated/low/sparse": 20,
+        "elongated/raised/sparse": 20,
+        "sheet/low/sparse": 20,
+        "sheet/raised/sparse": 20,
+        "branched/low/sparse": 20,
+        "branched/raised/sparse": 20,
+        "contacts/low/sparse": 20,
+        "contacts/raised/sparse": 20,
+        "solid/raised/smooth": 6,
+        "solid/raised/rough": 6,
+        "elongated/raised/smooth": 8,
+        "elongated/raised/rough": 8
+      }
+    }
   },
   "research_coverage": {
     "output": "results/coverage/research",

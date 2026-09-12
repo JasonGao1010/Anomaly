@@ -211,17 +211,27 @@ def sample_support(sequence, rng, config, footprint_radius, background, rejectio
                 rejections["no_native_normal_reference"] += 1
                 continue
             record = available[int(rng.integers(len(available)))]
-            frame = sequence[record["frame"]]
-            if source_identity(frame) != record["source_identity"]:
+            witness = sequence[record["frame"]]
+            if source_identity(witness) != record["source_identity"]:
                 raise ValueError("native reference source changed")
             ids = np.asarray(record["slots"], np.int32)
-            point = frame.xyzi[record["anchor_slot"], :3]
-            cluster = np.linalg.norm(frame.xyzi[ids, :3] - point, axis=1) <= config["reference_cluster_radius_m"]
+            point = witness.xyzi[record["anchor_slot"], :3]
+            cluster = np.linalg.norm(witness.xyzi[ids, :3] - point, axis=1) <= config["reference_cluster_radius_m"]
             if cluster.sum() < config["minimum_reference_positions"]:
                 rejections["normal_reference_cluster_too_small"] += 1
                 continue
-            reference = dict(frame=frame.frame_id, source_identity=record["source_identity"],
+            reference = dict(frame=witness.frame_id, source_identity=record["source_identity"],
                              slots=ids[cluster].tolist(), kind=record["kind"])
+            # Physical placement may use a denser view of the same source location.
+            point_world = point.astype(float) @ witness.lidar_pose[:3, :3].T + witness.lidar_pose[:3, 3]
+            distances = np.linalg.norm(poses[:, :3, 3] - point_world, axis=1)
+            lo, hi = config["normal_reference_support_view_range_m"]
+            support_frames = np.flatnonzero((distances >= lo) & (distances <= hi))
+            if not len(support_frames):
+                rejections["no_nearby_support_view"] += 1
+                continue
+            frame = sequence[int(rng.choice(support_frames))]
+            point = (point_world - frame.lidar_pose[:3, 3]) @ frame.lidar_pose[:3, :3]
         else:
             frames = config.get("frame_candidates")
             frame = sequence[int(rng.choice(frames)) if frames else int(rng.integers(*interval))]
@@ -470,7 +480,8 @@ def make_world(sequence, seed, config, profile, grid, sensor, references=None):
                     proposal_rows=[0], maximum_candidates=1, grounding_eligibility=grounding)
                 world = WorldSpec(seed, sequence.spec.sequence_id, (item,))
                 if references is not None:
-                    _, foreground = ray_observation(frame, world, grid, sensor, geometry)
+                    witness = sequence[support["normal_reference"]["frame"]]
+                    _, foreground = ray_observation(witness, world, grid, sensor, geometry)
                     protected = np.asarray(support["normal_reference"]["slots"], np.int32)
                     protected = protected[~foreground[protected]]
                     if len(protected) < config["proposals"]["normal_context"]["minimum_positions"]:
@@ -587,7 +598,7 @@ def content_summary(rows, placement):
     return result
 
 
-def expansion_schedule(config, round_number=1, references=None):
+def expansion_schedule(config, round_number=1, references=None, source_poses=None):
     """Enumerate the thirty constrained cells before candidate rendering."""
     proposals = config["proposals"]
     if round_number != 1:
@@ -597,28 +608,39 @@ def expansion_schedule(config, round_number=1, references=None):
     for split, item in config["dataset"]["splits"].items():
         base = [w for w in record["worlds"] if w["split"] == split]
         regions = sorted({w["regions"][0] for w in base})
-        count = proposals["candidates_per_cell"][split]
+        available = references[split] if references else None
+        if available is not None and source_poses is not None:
+            distance = cKDTree(source_poses[split]).query([r["anchor_world_m"] for r in available])[0]
+            available = [r for r, d in zip(available, distance)
+                         if d <= config["placement"]["normal_reference_support_view_range_m"][1]]
         cell = 0
         for structure, template in proposals["structures"].items():
             for height, height_range in proposals["heights"].items():
                 for background in proposals["backgrounds"]:
                     combination = f"{structure}/{height}/{background}"
+                    count = proposals.get("cell_candidates", {}).get(split, {}).get(
+                        combination, proposals["candidates_per_cell"][split])
+                    if not count:
+                        cell += 1
+                        continue
                     anchors = ({"/".join(map(str, r["region"])): r["anchor_world_m"]
-                                for r in references[split] if r["kind"] == background} if references else
+                                for r in available if r["kind"] == background} if references else
                                {w["regions"][0]: w["anchor_world_m"] for w in base})
                     available_regions = sorted(anchors) or regions
                     for repeat in range(count):
-                        index = 2000 + cell*count + repeat
-                        region = available_regions[(repeat + cell) % len(available_regions)]
+                        index = proposals.get("index_start", 2000) + cell*256 + repeat
+                        region_index = int(np.floor(repeat * len(available_regions) / count))
+                        region = available_regions[(region_index + cell) % len(available_regions)]
                         anchor = anchors.get(region, base[0]["anchor_world_m"])
                         profile = dict(template, name=combination, combination=combination, structure=structure,
                             native_context=background, background="any", height_m=height_range,
                             target_region=list(map(int, region.split("/"))), anchor_world_m=anchor,
                             frame_interval=[0, item["frames_per_world"]], frame_candidates=[], yaw_offsets_rad=[0.],
-                            opportunity="low_far" if height == "low" and structure in ("sheet", "branched") else
-                                        "far_dense" if height == "raised" and structure in ("solid", "sheet") else "visible")
+                            opportunity="visible")
                         if structure == "solid" and height == "low":
-                            profile.update(length_m=[.3, .6], width_m=[.25, .5])
+                            profile.update(length_m=[.5, 1.], width_m=[.35, .7], height_m=[.15, .195])
+                        if structure == "solid" and height == "raised":
+                            profile.update(length_m=[1.5, 2.6], width_m=[.8, 1.6], height_m=[.8, 1.6])
                         if structure == "elongated" and height == "raised":
                             profile["height_m"] = [.25, .4]
                         if structure == "sheet" and height == "raised":
@@ -850,6 +872,47 @@ def dataset_storage(directory):
                 scope="referenced_worlds_and_root_provenance_and_rays_no_raw_scans_or_unused_worlds")
 
 
+
+def complete_candidates(output, manifest, data_root, require_complete):
+    """Collect existing immutable worlds without rendering or changing their identities."""
+    config = manifest["configuration"]
+    base = Path(manifest["base_dataset"]["directory"])
+    original = json.loads((base / "manifest.json").read_text())
+    reports = {split: [] for split in config["dataset"]["splits"]}
+    for plans in manifest["planned_rounds"].values():
+        for planned in plans:
+            for index in planned["members"]:
+                path = output / planned["split"] / f"world_{index:03d}" / "manifest.json"
+                if not path.exists():
+                    if require_complete:
+                        raise ValueError(f"candidate generation is incomplete: {path}")
+                    continue
+                report = json.loads(path.read_text())
+                if report["configuration_identity"] != manifest["configuration_identity"]:
+                    raise ValueError("saved parent belongs to another generation definition")
+                reports[planned["split"]].append(report)
+    for split, item in config["dataset"]["splits"].items():
+        entries = [dict(e, path=os.path.relpath((base/e["path"]).resolve(), output.resolve()))
+                   for e in original["splits"][split]["worlds"]]
+        worlds, selection = select_worlds(entries, reports[split], split)
+        manifest["generation"][split] = [{k: v for k, v in r.items() if k not in ("frames", "histograms")}
+                                         for r in reports[split]]
+        manifest["splits"][split] = dict(source_sequence=item["source_sequence"],
+            samples=len(worlds)*item["frames_per_world"], selection=selection, worlds=worlds)
+    if require_complete:
+        manifest["completed_rounds"] = sorted(map(int, manifest["planned_rounds"]))
+        manifest["status"] = "candidates_complete"
+    _atomic_json(output / "manifest.json", manifest)
+    manifest["execution"]["storage"] = dataset_storage(output)
+    _atomic_json(output / "manifest.json", manifest)
+    if require_complete:
+        for split in reports:
+            FrozenDataset(output, data_root, split, allow_candidates=True)
+    print(json.dumps(dict(event=manifest["status"], directory=str(output),
+        worlds={s: len(x["worlds"]) for s,x in manifest["splits"].items()},
+        samples={s: x["samples"] for s,x in manifest["splits"].items()})), flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data-root", type=Path, default=Path("/home/jasongao/Data/STU"))
@@ -858,16 +921,26 @@ def main():
     parser.add_argument("--workers", type=int, required=True)
     parser.add_argument("--round", type=int, default=1)
     parser.add_argument("--pilot", action="store_true", help="run the first scheduled parent per source within the declared budget")
+    parser.add_argument("--collect-only", action="store_true", help="collect all completed candidate reports without generating any world")
     args = parser.parse_args()
     if not 1 <= args.workers <= len(os.sched_getaffinity(0)):
         parser.error("workers must fit the CPU affinity")
     config = json.loads(args.config.read_text())
     output = args.output or Path(config["proposals"]["output"])
+    if args.collect_only:
+        manifest = json.loads((output / "manifest.json").read_text())
+        if manifest["status"] not in ("building", "candidates_complete"):
+            raise ValueError("collection is only for an unfinished candidate manifest")
+        manifest["execution"]["collection"] = dict(host=host_disk(),
+            generation_restarted=False, rule="all_declared_candidate_reports_must_exist")
+        complete_candidates(output, manifest, args.data_root, True)
+        return
     base_dir = Path(config["dataset"]["base_directory"])
     base_root = json.loads((base_dir / "manifest.json").read_text())
-    base_entries = {}
+    base_entries, source_poses = {}, {}
     for split in config["dataset"]["splits"]:
-        dataset = FrozenDataset(base_dir, args.data_root, split)
+        dataset = FrozenDataset(base_dir, args.data_root, split, allow_candidates=True)
+        source_poses[split] = np.asarray([dataset.sequence.lidar_pose(f)[:3, 3] for f in dataset.sequence.frame_ids])
         entries = base_root["splits"][split]["worlds"]
         original = json.loads(Path("results/synthetic/expanded/manifest.json").read_text())["splits"][split]["worlds"]
         if [x["world_identity"] for x in entries[:len(original)]] != [x["world_identity"] for x in original]:
@@ -884,8 +957,12 @@ def main():
     identity = hashlib.sha256(json.dumps(dict(science=science, implementation=implementation, base=base_entries), sort_keys=True).encode()).hexdigest()
     manifest_path = output / "manifest.json"
     disk = host_disk()
-    maximum_worlds = sum(config["proposals"]["candidates_per_cell"].values()) * 30
-    allocation = maximum_worlds * config["proposals"]["world_bytes_limit"]
+    counts = {s: sum(config["proposals"].get("cell_candidates", {}).get(s, {}).get(
+        f"{shape}/{height}/{background}", config["proposals"]["candidates_per_cell"][s])
+        for shape in config["proposals"]["structures"] for height in config["proposals"]["heights"]
+        for background in config["proposals"]["backgrounds"]) for s in base_entries}
+    allocation = sum(n * (config["proposals"]["world_bytes_limit"] +
+        4096*(config["dataset"]["splits"][s]["frames_per_world"]+3)) for s,n in counts.items())
     active_peak = args.workers * (config["proposals"]["world_bytes_limit"] + 2 * 393216 * 32)
     peak = allocation + active_peak + 256 * 1024**2
     if disk["SizeRemaining"] - peak < disk["reserve_bytes"]:
@@ -912,6 +989,18 @@ def main():
     started = time.perf_counter()
     manifest["calibration"] = prepare_calibration(args.data_root, output, config)
     reference_path = output / "normal_reference.json"
+    previous_reference = base_dir / "normal_reference.json"
+    if not reference_path.exists() and previous_reference.exists():
+        old = base_root["configuration"]
+        unchanged = (old["calibration"] == config["calibration"]
+            and old["research_coverage"]["normal_contrasts"] == config["research_coverage"]["normal_contrasts"]
+            and old["proposals"]["normal_context"] == config["proposals"]["normal_context"]
+            and all(base_root["implementation"][k] == implementation[k] for k in ("profile.py", "native_context_types")))
+        if unchanged:
+            reference = json.loads(previous_reference.read_text())
+            reference.update(configuration_identity=identity, reused_from=str(previous_reference),
+                reuse_basis="same_original_geometry_normal_reference_calibration_and_anchor_rules; every_used_source_identity_is_checked")
+            _atomic_json(reference_path, reference)
     if reference_path.exists():
         reference = json.loads(reference_path.read_text())
         if reference["configuration_identity"] != identity:
@@ -935,7 +1024,7 @@ def main():
     print(json.dumps(dict(event="native_context_anchors", anchors={s: dict(Counter(r['kind'] for r in v))
                         for s, v in reference["scans"].items()})), flush=True)
     if key not in manifest["planned_rounds"]:
-        manifest["planned_rounds"][key] = expansion_schedule(config, args.round, reference["scans"])
+        manifest["planned_rounds"][key] = expansion_schedule(config, args.round, reference["scans"], source_poses)
         _atomic_json(manifest_path, manifest)
     schedule = manifest["planned_rounds"][key]
     pilots = {s: next((p["group"] for p in schedule if p["split"] == s), None) for s in base_entries}
@@ -944,46 +1033,23 @@ def main():
         path = output / planned["split"] / f"world_{planned['members'][0]:03d}" / "manifest.json"
         if not path.exists() and (not args.pilot or planned["group"] == pilots[planned["split"]]):
             jobs.append(planned)
+    last_host_check = time.monotonic()
     with ProcessPoolExecutor(max_workers=min(args.workers, max(1, len(jobs))), mp_context=mp.get_context("spawn")) as pool:
         futures = {pool.submit(generate_group, str(args.data_root), str(output), planned, config, identity): planned for planned in jobs}
         for future in as_completed(futures):
             planned, values = futures[future], future.result()
             print(json.dumps(dict(event="target_parent", split=planned["split"], target=planned["profile"]["name"],
                 group=planned["group"], results=[{k: v.get(k) for k in ("index", "status", "reason", "seconds", "peak_rss_bytes", "bytes_on_disk")} for v in values])), flush=True)
-            remaining = host_disk()
-            if remaining["SizeRemaining"] < remaining["reserve_bytes"] + active_peak:
-                for pending in futures:
-                    pending.cancel()
-                raise OSError("generation stopped at the physical host reserve; completed worlds retained")
-    reports = {s: [] for s in base_entries}
-    for plans in manifest["planned_rounds"].values():
-        for planned in plans:
-            for index in planned["members"]:
-                path = output / planned["split"] / f"world_{index:03d}" / "manifest.json"
-                if path.exists():
-                    report = json.loads(path.read_text())
-                    if report["configuration_identity"] != identity:
-                        raise ValueError("saved parent belongs to another generation definition")
-                    reports[planned["split"]].append(report)
-    for split, item in config["dataset"]["splits"].items():
-        worlds, selection = select_worlds(base_entries[split], reports[split], split)
-        manifest["generation"][split] = [{k: v for k, v in r.items() if k not in ("frames", "histograms")} for r in reports[split]]
-        manifest["splits"][split] = dict(source_sequence=item["source_sequence"], samples=len(worlds)*item["frames_per_world"],
-                                         selection=selection, worlds=worlds)
+            if time.monotonic() - last_host_check >= 60:
+                remaining = host_disk()
+                last_host_check = time.monotonic()
+                if remaining["SizeRemaining"] < remaining["reserve_bytes"] + active_peak:
+                    for pending in futures:
+                        pending.cancel()
+                    raise OSError("generation stopped at the physical host reserve; completed worlds retained")
     manifest["execution"]["runs"].append(dict(round=args.round, pilot=args.pilot, workers=args.workers, groups_run=len(jobs),
         seconds=time.perf_counter()-started, host_after=host_disk(), peak_budget_bytes=peak))
-    if not args.pilot:
-        manifest["completed_rounds"].append(args.round)
-        manifest["status"] = "candidates_complete"
-    _atomic_json(manifest_path, manifest)
-    manifest["execution"]["storage"] = dataset_storage(output)
-    _atomic_json(manifest_path, manifest)
-    if manifest["status"] == "candidates_complete":
-        for split in manifest["splits"]:
-            FrozenDataset(output, args.data_root, split, allow_candidates=True)
-    print(json.dumps(dict(event=manifest["status"], directory=str(output),
-                          samples={s: x["samples"] for s, x in manifest["splits"].items()},
-                          seconds=time.perf_counter()-started)), flush=True)
+    complete_candidates(output, manifest, args.data_root, not args.pilot)
 
 
 if __name__ == "__main__":

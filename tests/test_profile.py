@@ -117,15 +117,68 @@ def test_expansion_geometry_parents_stay_within_source_and_budget(tmp_path):
         anchor_world_m=[10*i, 0, 0]) for s in ("train", "validation") for i in range(3)])))
     schedule = expansion_schedule(config)
     assert len({r["seed"] for r in schedule}) == len(schedule)
-    assert len(schedule) == 1080
-    for split, count, per_cell in (("train", 720, 24), ("validation", 360, 12)):
+    assert len(schedule) == 564
+    for split, count in (("train", 336), ("validation", 228)):
         groups = [r for r in schedule if r["split"] == split]
-        assert [i for r in groups for i in r["members"]] == list(range(2000, 2000+count))
+        indices = [i for r in groups for i in r["members"]]
+        assert len(indices) == len(set(indices)) == count
+        assert min(indices) >= config["proposals"]["index_start"]
         assert {r["profile"]["shape"] for r in groups} == {"single", "cross", "bridge"}
         assert len({tuple(r["profile"]["target_region"]) for r in groups}) == 3
         from collections import Counter
-        assert set(Counter(r["profile"]["combination"] for r in groups).values()) == {per_cell}
-        assert len({r["profile"]["combination"] for r in groups}) == 30
+        assert Counter(r["profile"]["combination"] for r in groups) == config["proposals"]["cell_candidates"][split]
+
+
+def test_balanced_selection_preserves_recurring_core_evidence_and_concentration():
+    from src.coverage import balanced_assignment
+
+    candidates = [dict(identity=str(i), parent=str(i), regions=[str(i % 4), str((i+1) % 4)],
+        eligible_cells={"first": 5, "second": 5}, states=["far/4/0"] if i == 0 else []) for i in range(8)]
+    content = {"far_at_least_20": [dict(world_identity=str(i), frame=f,
+                in_range_rays=1000 if i == 0 else 30) for i in range(8) for f in (0, 1)]}
+    config = dict(core_cells=list(content), minimum_frames_per_parent=2,
+                  maximum_parent_return_share=.35, maximum_region_return_share=.5)
+    limits = dict(geometry_parents=3, support_regions=3, source_frames=2,
+                  world_frames=8, anomaly_returns=240)
+    chosen, _ = balanced_assignment(candidates, {"first": 2, "second": 2}, 2,
+                                    (content, config, limits))
+    assert chosen is not None and len(chosen) == 4
+    assert "0" not in {identity for identity, _ in chosen}
+    # Four worlds force the dominant contributor into the selection, which must fail.
+    impossible, _ = balanced_assignment(candidates[:4], {"first": 2, "second": 2}, 2,
+                                        (content, config, limits))
+    assert impossible is None
+
+
+def test_sparse_witness_can_use_another_source_view_for_physical_support():
+    from collections import Counter
+    from src.data import source_identity
+    from src.generate import sample_support
+
+    def scan(frame, xyz, pose):
+        sem = np.full(len(xyz), 40, np.uint16)
+        labels = PointLabels(sem.astype(np.uint32), sem, np.zeros(len(xyz), np.uint16), np.full(len(xyz), 8, np.uint8))
+        return make_source_frame(frame, np.c_[xyz, np.full(len(xyz), .2)].astype(np.float32), pose,
+                                 labels, partition="train", sequence_id=206)
+    witness = scan(0, np.c_[np.linspace(39.8, 40.2, 5), np.full(5, 5.), np.full(5, -1.5)], np.eye(4))
+    x, y = np.meshgrid(np.linspace(4.4, 7.6, 17), np.linspace(3.4, 6.6, 17))
+    pose = np.eye(4); pose[0, 3] = 34
+    support = scan(1, np.c_[x.ravel(), y.ravel(), np.full(x.size, -1.5)], pose)
+    class Sequence(list):
+        frame_ids = (0, 1)
+        spec = SimpleNamespace(sequence_id=206)
+        def lidar_pose(self, frame):
+            return self[frame].lidar_pose
+    sequence = Sequence([witness, support])
+    config = json.loads(Path("protocol/data.json").read_text())["placement"]
+    config.update(frame_interval=[0, 2], target_region=[4, 0], region_grid_m=10,
+                  minimum_reference_positions=5, reference_cluster_radius_m=2, reference_clearance_m=[.05, 1.5])
+    refs = [dict(frame=0, slots=list(range(5)), anchor_slot=2, kind="sparse", source_identity=source_identity(witness))]
+    pool, record = next(sample_support(sequence, np.random.default_rng(8), config, .15, "any", Counter(), refs))
+    assert pool.frames.tolist() == [1] and record["normal_reference"]["frame"] == 0
+    assert record["normal_reference"]["source_identity"] == source_identity(witness)
+    assert record["plane_support"] >= 20
+    np.testing.assert_allclose(pool.anchors_world_m[0, 2], -1.5)
 
 
 def test_target_opportunity_ignores_signal_realizations():
