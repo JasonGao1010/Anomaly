@@ -14,7 +14,7 @@
 
 预定预算允许物理提案失败；停止条件是在该批及固定测量结束后，若仍没有满足原要求的完整世界选择，就报告缺口，不自动追加批次。实际生成23个训练、24个验证世界，另1个训练提案因几何可靠性检查失败被拒绝。与原360世界共同选择后，保留其中17个训练、3个验证新世界，替换同数旧世界；删除47个未选完整世界及1个失败提案目录。原始扫描与所有保留世界的帧、信号、标签和顺序均未修改。
 
-当前唯一完整入口为 `results/synthetic/refined/manifest.json`，保留训练240个、合成验证120个完整世界，共107,760／81,840帧。旧世界与新世界共同参与选取，原80／40和原验证20世界均无额外保留配额。正常来源仍分别为206和201，完整世界及其全部源帧不跨两侧分配。`selected/manifest.json` 已标记为历史删减池，仍被引用的实际文件继续属于当前数据。
+当前唯一完整入口为 `results/synthetic/manifest.json`，保留训练240个、合成验证120个完整世界，共107,760／81,840帧。旧世界与新世界共同参与选取，原80／40和原验证20世界均无额外保留配额。正常来源仍分别为206和201，完整世界及其全部源帧不跨两侧分配。全部世界实体集中在 `results/synthetic/train/` 和 `validation/`。旧批次记录位于 `history/`，其存活成员引用当前实体，不另存一套样本。
 
 | 核查项 | 修正前 | 最终360世界 | 原要求 |
 | --- | --- | --- | --- |
@@ -57,7 +57,7 @@
 
 ### 上一轮等额保留与本轮定向修正
 
-上一轮入口为 `results/synthetic/selected/manifest.json`。当时954个候选中选取240个训练和120个验证世界，每格严格8／4个。每个世界的组合资格来自实际结构、局部完整高度及同帧异常与保留正常位置；一世界只分配到一格。两侧各30格的代表扫描读取通过，全部189,600帧引用可解析。
+上一轮清单现存于 `results/synthetic/history/selected/manifest.json`。当时954个候选中选取240个训练和120个验证世界，每格严格8／4个。每个世界的组合资格来自实际结构、局部完整高度及同帧异常与保留正常位置；一世界只分配到一格。两侧各30格的代表扫描读取通过，全部189,600帧引用可解析。
 
 | 实际结构 | 局部高度 | 原始正常背景 | 训练世界 | 验证世界 |
 | --- | --- | --- | ---: | ---: |
@@ -106,6 +106,16 @@
 ## 工作区结构与文件用途
 
 当前代码只包含数据读取、物理生成、几何分析和评价工具，正式模型与训练代码尚未实现。下表按实际文件说明用途；带有数字占位的路径表示相同格式的逐帧文件，不将它们视为重复代码。历史结果保留当时的测量范围，不能作为当前完整样本池的统计。
+
+`results/` 按用途分为五个目录：
+
+| 目录 | 当前用途 |
+| --- | --- |
+| `synthetic/` | 当前合成样本实体、唯一主清单、共用标定及生成来源记录。 |
+| `coverage/` | 合成覆盖结果、原始正常对照与明确分开的历史核查。 |
+| `geometry/` | 真实条件几何分析、正常参考、探针结果及可复用逐帧缓存。 |
+| `profile/` | 真实val19画像的记录、表格和图；`prototype/` 只保存历史原型诊断。 |
+| `view/` | 固定相机生成的四张当前示例JPG，不作为训练样本。 |
 
 根目录、标定与协议文件：
 
@@ -220,59 +230,55 @@
 | `case_1.png` 至 `case_4.png` | 4 | 几何稀有度误报的四张案例图。 |
 | `cases.pdf` | 1 | 四张几何案例的合并文档。 |
 
-合成覆盖核查位于 `results/coverage/`，共27个文件。根目录中的五份汇总和 `geometry/inserted/` 使用历史样本范围；当前360世界的汇总在 `research/summary.json`。
+合成覆盖核查位于 `results/coverage/`，共27个文件。`research/` 保存当前360世界的完整射线库存和已有几何观测；`geometry/` 保存原始正常案例；`history/` 保存旧样本范围的结果与已完成选样的执行记录。
 
 | 相对路径 | 数量 | 内容与范围 |
 | --- | ---: | --- |
-| `v1.json` | 1 | 曾使用val19统计的历史开发池覆盖记录；不用于当前选样。 |
-| `candidates.json` | 1 | 原基础32世界的内容与代表扫描诊断。 |
-| `experiment.json` | 1 | 原40世界的完整清单统计和代表扫描检查。 |
-| `expanded.json` | 1 | 原80／40扩充的全池及新增批次覆盖。 |
-| `summary.json` | 1 | 原40世界六项覆盖判断，保留当时的口径和结论。 |
+| `research/inventory.json` | 1 | 当前360世界的物理几何、身份、来源及实体路径。 |
+| `research/observations.csv` | 1 | 全部189,600世界帧的射线数、新增命中、背景替换与消失及空间分布。 |
+| `research/selection.json` | 1 | 当前43,886个几何观测的固定选样及触发的稀疏轨迹检查范围。 |
+| `research/geometry.json` | 1 | 上述观测的几何测量，按世界与源帧身份复用；不代表全池局部几何普查。 |
+| `research/summary.json` | 1 | 当前360世界的30格覆盖、核心条件、集中度和缺失。 |
+| `research/sampling.npz` | 1 | 107,760个训练世界帧的取样概率，按世界身份和源帧读取；尚未训练。 |
 | `geometry/normal_cases.json` | 1 | 原始206／201正常案例的身份、选择规则和统计。 |
 | `geometry/normal_1.png` 至 `normal_6.png` | 6 | 原始正常结构的六张案例图。 |
 | `geometry/normal_cases.pdf` | 1 | 六个正常案例的合并文档。 |
 | `geometry/tables/normal.csv` | 1 | 原始正常缓存中两项几何量的条件分布与覆盖。 |
-| `geometry/inserted/selection.json` | 1 | 原40世界155张代表扫描及两条完整轨迹的固定身份。 |
-| `geometry/inserted/frames.csv` | 1 | 上述选样的帧状态、回波及插入和遮挡计数。 |
-| `geometry/inserted/features.csv` | 1 | 异常与附近正常的两项几何量及正常参考区间。 |
-| `geometry/inserted/changes.csv` | 1 | 插入前后仍正常点的几何变化和计分变化。 |
-| `geometry/inserted/summary.json` | 1 | 分别汇总代表扫描与两条轨迹，不推广为当前全池比例。 |
-| `research/inventory.json` | 1 | 当前保留世界的物理几何、身份、来源和完整观测库存。 |
-| `research/observations.csv` | 1 | 逐世界帧实际射线数、新增命中、背景替换和消失及空间分布。 |
-| `research/selection.json` | 1 | 详细几何的固定选样与触发的稀疏轨迹检查范围。 |
-| `research/geometry.json` | 1 | 当前保留世界的固定分层、见证窗口及触发稀疏世界观测；按世界与源帧身份复用，不代表全池局部几何普查。 |
-| `research/summary.json` | 1 | 当前360世界的30格覆盖、核心条件、集中度、缺失及未满足项。 |
-| `research/balance.json` | 1 | 等额世界选择的规则、选择结果、未选候选及核心覆盖记录。 |
-| `research/sampling.npz` | 1 | 按世界身份与源帧保存的训练侧取样概率，不是训练结果。 |
-| `research/proposal.json` | 1 | 已完成的尺寸与射线机会探索；未重新确认完整足印和碰撞，不算正式补充样本。 |
+| `history/v1.json` | 1 | 曾使用val19统计的历史开发池记录，不用于当前选样。 |
+| `history/candidates.json` | 1 | 原基础32世界的内容与代表扫描诊断。 |
+| `history/experiment.json` | 1 | 原40世界的完整清单统计与代表扫描检查。 |
+| `history/expanded.json` | 1 | 原80／40扩充的全池和新增批次覆盖。 |
+| `history/summary.json` | 1 | 原40世界六项覆盖判断，保留当时口径和结论。 |
+| `history/inserted/selection.json` | 1 | 原40世界155张代表扫描和两条完整轨迹的固定身份。 |
+| `history/inserted/frames.csv` | 1 | 上述选样的帧状态、回波及插入和遮挡计数。 |
+| `history/inserted/features.csv` | 1 | 上述选样中异常与附近正常的几何量和正常参考区间。 |
+| `history/inserted/changes.csv` | 1 | 插入前后仍正常点的几何与计分变化。 |
+| `history/inserted/summary.json` | 1 | 分别汇总代表扫描与两条轨迹，不推广为当前全池比例。 |
+| `history/balance.json` | 1 | 最终240／120世界选择的规则、候选和裁决记录；其中路径保留执行时的位置，当前实体由主清单定位。 |
+| `history/proposal.json` | 1 | 已完成的尺寸和射线机会探索，未重新确认完整足印与碰撞，不算正式补充样本。 |
 
-合成样本位于 `results/synthetic/`，共190349个文件。当前唯一完整数据入口是 `refined/manifest.json`；实际世界仍位于其生成目录，不移动、不复制，也不改写来源记录。下表的“实际存放”只计本目录中的世界，不把根清单引用的其他目录再次计数。
+合成样本位于 `results/synthetic/`，共190,340个文件。唯一完整入口是根目录的 `manifest.json`；实体直接按训练和验证划分存放，每个世界只有一份。
 
-| 目录 | 实际存放训练世界 | 实际存放验证世界 | 根清单状态与用途 |
-| --- | ---: | ---: | --- |
-| `refined/` | 17 | 3 | 当前冻结清单统一引用240／120世界；本目录存放本轮保留的新世界。 |
-| `selected/` | 15 | 0 | 上一轮等额筛选目录，实际保留15个被当前池引用的世界。 |
-| `pool/` | 102 | 25 | 历史批次清单，实际保留127个被引用世界。 |
-| `balanced/` | 51 | 60 | 历史批次清单，实际保留111个被引用世界。 |
-| `data/` | 25 | 5 | 历史批次清单，实际保留30个被引用世界。 |
-| `expanded/` | 22 | 9 | 原80／40扩充目录，实际保留31个被引用世界。 |
-| `candidates/` | 4 | 7 | 原基础世界目录，实际保留11个被引用世界。 |
-| `experiment/` | 3 | 3 | 原补充世界目录，实际保留6个被选中的世界。 |
-| `targeted/` | 1 | 8 | 早期目标条件补充目录，实际保留9个被引用世界。 |
-| `v1/` | 0 | 0 | 仅历史开发配置、参考统计和标定，不含世界样本。 |
-
-除 `refined/` 外，以上根清单均为 `historical_pruned`，不能当作完整旧池重新评价；目录内被引用的实际世界仍属于当前数据。所有合成文件的格式如下：
-
-| 文件或路径模式 | 数量 | 实际内容与使用者 |
+| 路径 | 数量 | 实际内容与使用者 |
 | --- | ---: | --- |
-| `<池>/manifest.json` | 10 | 池成员、训练／验证来源、原生成配置、执行与选择记录；当前读取器从refined根清单开始。 |
-| `<池>/calibration.pt` | 10 | 射线和传感器返回概率、强度分布等标定数据，以PyTorch容器保存，内容格式为 `stu-sensor-calibration`，不含神经网络权重。 |
-| `<池>/normal_reference.json` | 8 | 原始正常扫描的背景候选位置、几何类别与身份，供受约束放置使用；candidates和v1没有此文件。 |
-| `v1/reference.json` | 1 | 历史开发池使用的val19分布与轨迹包络，不进入当前生成或选择。 |
-| `<池>/<划分>/<世界>/world.json` | 360 | 固定物体形状、尺寸、位置、朝向、材质、种子和合法放置来源。 |
-| `<池>/<划分>/<世界>/manifest.json` | 360 | 该世界全部帧的顺序、回波和遮挡计数，另含物理检查与正常参照记录。 |
-| `<池>/<划分>/<世界>/frames/<帧>.npz` | 189600 | 单帧无损差量：改变的槽位、坐标、强度、标签、插入与遮挡身份；读取时结合原始扫描还原完整输入。 |
+| `manifest.json` | 1 | 当前240／120世界的成员、顺序、组合、来源和相对路径；读取器统一从此进入。每个成员的 `generation_manifest` 指向对应生成配置。 |
+| `train/<世界>/world.json` | 240 | 训练世界的固定物体形状、尺寸、放置、朝向、材质、种子和206来源。 |
+| `train/<世界>/manifest.json` | 240 | 各世界全部449帧的顺序、回波和遮挡计数、物理检查及正常参照记录。 |
+| `train/<世界>/frames/<帧>.npz` | 107760 | 训练单帧无损差量；与原始206扫描一起还原完整点云和标签。 |
+| `validation/<世界>/world.json` | 120 | 合成验证世界定义，正常来源为201。 |
+| `validation/<世界>/manifest.json` | 120 | 各验证世界全部682帧的顺序与逐帧记录。 |
+| `validation/<世界>/frames/<帧>.npz` | 81840 | 验证单帧无损差量；与原始201扫描一起还原完整输入。 |
+| `calibration.pt` | 1 | 共用射线、返回概率和强度标定，格式为 `stu-sensor-calibration`，没有神经网络权重；原10份文件逐字节相同，合并保留此份。 |
+| `normal_reference.json` | 1 | 最近批次使用的正常背景候选位置、几何类别和身份，供受约束放置复用。 |
+| `history/<批次>/manifest.json` | 9 | 历史删减池的生成配置、执行记录和存活成员；标记 `historical_pruned`，不能当作完整旧池。 |
+| `history/<批次>/normal_reference.json` | 7 | 对应历史批次的正常背景提案参考；范围不完全相同，因此保留来源记录。 |
+| `history/v1/reference.json` | 1 | 旧开发池使用的val19统计包络，不进入当前生成和选择。 |
+
+历史批次为 `balanced`、`candidates`、`data`、`expanded`、`experiment`、`pool`、`selected`、`targeted` 和 `v1`。最近的 `refined` 批次配置直接保存在当前主清单中，不另存重复清单。所有清单中 `configuration`、提案和执行统计仍是生成时的快照；其中的旧路径描述当时的执行环境。当前成员路径和基础批次记录位置已更新，样本读取不依赖这些旧快照路径。
+
+本次集中存放只移动世界目录、更新位置索引并合并相同标定。世界名称、身份、完整帧顺序、差量内容、标签、数据划分及科学验收条件保持不变。原始STU扫描位于仓库外，合成差量不能独立替代原始扫描。
+
+整理后核验了全部189,600帧引用和360个世界的生成来源。190,320份世界定义、逐世界清单及帧文件的文件身份、大小和修改时间与移动前一致；覆盖数值、几何选样和取样概率也一致。四张示例JPG仅更新输入路径记录，解码后的全部像素保持一致。61项现有回归通过；默认生成入口仍直接报告已冻结，不启动生成。
 
 运行环境与版本管理：
 
@@ -291,7 +297,7 @@
 
 开发诊断使用 STU 公开验证集全部 19 条异常序列：125、137、138、139、140、141、142、143、144、145、146、147、148、149、150、151、152、153、169。每条序列的全部原始帧都可以产生单帧预测。
 
-当前正常数据源 `train/206` 的全部449帧用于240个训练世界，共107,760个世界帧；`train/201` 的全部682帧用于120个合成验证世界，共81,840个世界帧。两侧分别具有30种组合，每种8／4个世界，完整帧顺序及标签不变。入口为 `results/synthetic/refined/manifest.json`，清单引用的360个实际世界分布在原生成目录中；没有另外保留的80／40世界。世界及其正常源序列整体分开，不能将同一世界的前后帧分到训练与验证两侧。隐藏测试集不在当前开发范围内，原始数据保留在仓库之外，不随代码提交。
+当前正常数据源 `train/206` 的全部449帧用于240个训练世界，共107,760个世界帧；`train/201` 的全部682帧用于120个合成验证世界，共81,840个世界帧。两侧分别具有30种组合，每种8／4个世界，完整帧顺序及标签不变。入口为 `results/synthetic/manifest.json`，360个实际世界全部位于该目录下的 `train/` 和 `validation/`；没有另外保留的80／40世界。世界及其正常源序列整体分开，不能将同一世界的前后帧分到训练与验证两侧。隐藏测试集不在当前开发范围内，原始数据保留在仓库之外，不随代码提交。
 
 公开验证集已经用于开发分析，后续在此集合观察的规律和模型差异均应保留开发数据的适用边界。几何条件与失误的统计差异不能单独证明因果机制。
 
@@ -337,11 +343,11 @@ PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m src.scene \
 
 ## 固定前视广角图像
 
-[src/view.py](../src/view.py) 接受一份实际帧文件，输出按检测真值着色的 JPG。合成 `.npz` 是差量，程序根据同一世界的清单定位原始206或201扫描，经 `FrozenFrame.load` 还原整帧并检查来源身份。也可直接输入允许范围内的原始 `velodyne/<帧>.bin`。当前完整样本入口仍为 `results/synthetic/refined/manifest.json`；它引用其他目录的帧也可直接读取。
+[src/view.py](../src/view.py) 接受一份实际帧文件，输出按检测真值着色的 JPG。合成 `.npz` 是差量，程序根据同一世界的清单定位原始206或201扫描，经 `FrozenFrame.load` 还原整帧并检查来源身份。也可直接输入允许范围内的原始 `velodyne/<帧>.bin`。当前完整样本入口仍为 `results/synthetic/manifest.json`；实际帧分别位于其 `train/` 和 `validation/` 子目录，可直接读取。
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m src.view \
-  results/synthetic/refined/train/world_47427/frames/000238.npz \
+  results/synthetic/train/world_47427/frames/000238.npz \
   --output results/view/synthetic.jpg
 
 PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m src.view \
@@ -473,7 +479,7 @@ PYTHONDONTWRITEBYTECODE=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 \
 
 [src/generate.py](../src/generate.py) 只使用正常源提出固定世界，检查支持、整条轨迹的距离和已观测障碍物碰撞，再执行完整渲染。每个已渲染帧写后重新还原，核对坐标、强度、打包标签、实际回波槽位、插入和遮挡掩码。物体遮挡原始回波却没有返回信号时，对应槽位及标签清零；没有异常回波的帧仍保留。既有物理检查只能约束扫描中已观测到的背景，不能声称掌握所有未观测表面。
 
-原40世界的 [实验根清单](../results/synthetic/experiment/manifest.json) 曾按原顺序引用 [基础池](../results/synthetic/candidates/manifest.json) 的32个世界，再追加8个补充世界，两侧各20个，共22,620帧。旧池当前标记为 `historical_pruned`，只保留被最终360世界清单引用的实际样本；以下旧池统计描述原历史范围，不再具备完整工作区复算条件。每个保留帧仍采用 `stu-frozen-frame` 无损差量格式，绑定原始扫描、标签、位姿和固定世界；未改变的背景引用原始正常扫描。`FrozenDataset` 按当前根清单读取，`FrozenFrame` 按原始槽位还原完整扫描。
+原40世界的 [实验根清单](../results/synthetic/history/experiment/manifest.json) 曾按原顺序引用 [基础池](../results/synthetic/history/candidates/manifest.json) 的32个世界，再追加8个补充世界，两侧各20个，共22,620帧。旧池清单当前标记为 `historical_pruned`，存活成员引用集中存放的当前样本；以下旧池统计描述原历史范围，不再具备完整工作区复算条件。每个保留帧仍采用 `stu-frozen-frame` 无损差量格式，绑定原始扫描、标签、位姿和固定世界；未改变的背景引用原始正常扫描。`FrozenDataset` 按当前根清单读取，`FrozenFrame` 按原始槽位还原完整扫描。
 
 基础 32 世界包含 16 个单基元、4 个两部件接合、8 个弯折组合、4 个双支腿与横梁组合。全部组合通过连通性核对，完整尺寸包含所有部件、偏移及空隙。每侧有 8 个完整局部高度不超过 0.2 米的低矮物体；仅看第一部件高度可能错分低矮条件。原始背景没有因放置而平整，保留原有正常结构。
 
@@ -483,15 +489,15 @@ PYTHONDONTWRITEBYTECODE=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 \
 
 实际检查说明求交与信号确有区别：训练 `supplement_002/180` 的包围盒机会、真实表面命中、最终异常回波为 13→9→9，`supplement_001/217` 为 6→0→0；验证 `supplement_003/520` 为 249→181→180。全部 4,524 个新增帧还原后与渲染输出逐元素相同，没有提高回波概率、挪动点或重抽信号。
 
-历史开发池 `results/synthetic/v1/` 曾包含32个训练世界、8个验证世界，共19,824帧，使用过val19聚合标签统计。其40个世界样本已按最终只留360世界的授权删除；原生成参数和 [旧覆盖结果](../results/coverage/v1.json) 仍是历史开发记录，没有进入当前数据入口。当前世界的生成与选择只使用正常来源及预定内容条件，不使用val19参考包络或拟合分布差异。
+历史开发池的记录位于 `results/synthetic/history/v1/`；该池曾包含32个训练世界、8个验证世界，共19,824帧，使用过val19聚合标签统计。其40个世界样本已按最终只留360世界的授权删除；原生成参数和 [旧覆盖结果](../results/coverage/history/v1.json) 仍是历史开发记录，没有进入当前数据入口。当前世界的生成与选择只使用正常来源及预定内容条件，不使用val19参考包络或拟合分布差异。
 
-数据生成入口为 `src.generate --config protocol/data.json --workers N`。当前输出 `results/synthetic/refined/` 已冻结，默认生成入口只报告已有240／120世界，不重新执行48个历史提案。已完成批次的实际配置保留在各根清单，已有世界不会重新渲染。
+数据生成入口为 `src.generate --config protocol/data.json --workers N`。当前输出 `results/synthetic/` 已冻结，默认生成入口只报告已有240／120世界，不重新执行48个历史提案。已完成批次的实际配置保留在各根清单，已有世界不会重新渲染。
 
 ## 历史：原40世界的内容覆盖
 
 “合格”指传感器距离 [2.5,50] 米内至少 5 个异常回波；“少点”指其中 5–19 个；“远距”按清单中异常回波中位距离 [35,50] 米定义；“低矮”指物体局部完整高度不超过 0.2 米。世界数、帧数和回波出现次数分别报告，相邻帧与共享源背景不能视为独立样本。
 
-下表来自 [完整实验池覆盖结果](../results/coverage/experiment.json) 的清单汇总。回波数包含所列帧的全部异常点，帧资格在官方距离过滤后决定。
+下表来自 [完整实验池覆盖结果](../results/coverage/history/experiment.json) 的清单汇总。回波数包含所列帧的全部异常点，帧资格在官方距离过滤后决定。
 
 | 内容 | 训练：世界／帧／异常回波 | 合成验证：世界／帧／异常回波 |
 | --- | ---: | ---: |
@@ -504,7 +510,7 @@ PYTHONDONTWRITEBYTECODE=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 \
 
 全池无异常帧为训练 4,323、验证 7,598，全部保留。官方距离内异常回波分别为 402,153、275,523；合格远距帧中的距离内回波为 2,755、2,383。训练低矮远距由基础 2 世界、41 帧、224 点增加到 6 世界、207 帧、1,250 点，最大单世界贡献由 77.68% 降为 28.88%；新增前三个物体仍位于同一正常路段。较密远距尚未实现，背景多样性仍受两条正常序列限制。
 
-基础 32 世界的局部检查先于几何计算选定 134 帧，包含训练 53、验证 81 帧，结果在 [candidates.json](../results/coverage/candidates.json)。新增 8 世界只补查 41 帧，包含训练 24、验证 17 帧，结果在 [experiment.json](../results/coverage/experiment.json)。这些固定代表扫描的有效率不是全池覆盖率，也不是正式模型的可学习性结论。
+基础 32 世界的局部检查先于几何计算选定 134 帧，包含训练 53、验证 81 帧，结果在 [candidates.json](../results/coverage/history/candidates.json)。新增 8 世界只补查 41 帧，包含训练 24、验证 17 帧，结果在 [experiment.json](../results/coverage/history/experiment.json)。这些固定代表扫描的有效率不是全池覆盖率，也不是正式模型的可学习性结论。
 
 保留的几何计算位于 [src/geometry.py](../src/geometry.py)：`ScanGeometry` 从当前坐标建立不同位置的邻域；`boundary_targets` 描述依赖正常／异常标签的可观测交界距离；`thinning_pair` 保留射线删减后的原槽位对应；`sampling_targets` 检查删减后的局部支持；`surface_targets` 和 `surface_probe` 使用插入前正常表面及当前可见支持。`local_evidence` 与 `summarize_view` 提供相应可计算性检查和汇总。依赖标签或插入前表面的量只能用于数据诊断，不能冒充真实推理可得输入。历史结果中的 C1／C2／C3 名称分别对应交界、删减支持和正常表面诊断，不再规定正式模型的三项辅助任务。
 
@@ -518,7 +524,7 @@ PYTHONDONTWRITEBYTECODE=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 \
 
 ## 历史：样本扩充
 
-原40世界之后，曾按训练80、验证40世界的预算扩充；完整记录见 [扩充覆盖结果](../results/coverage/expanded.json) 和 [该批根清单](../results/synthetic/expanded/manifest.json)。新增60／20世界，使当时的不同几何定义达到72／36个，包含训练8组、验证4组相差90°的朝向配对。两侧仍分别只有206、201一个正常来源；物体数量增加不代表正常环境增加。
+原40世界之后，曾按训练80、验证40世界的预算扩充；完整记录见 [扩充覆盖结果](../results/coverage/history/expanded.json) 和 [该批根清单](../results/synthetic/history/expanded/manifest.json)。新增60／20世界，使当时的不同几何定义达到72／36个，包含训练8组、验证4组相差90°的朝向配对。两侧仍分别只有206、201一个正常来源；物体数量增加不代表正常环境增加。
 
 该轮增加了形状内部比例、部件接合、朝向和放置变化，沿用原有支撑、碰撞与返回信号规则。数量完成后，新增训练／验证的合格低矮远距回波仅为168／30个；新增验证远距回波的92.36%来自一个世界，两侧均无远距且范围内至少20点的帧。该轮没有扩展原40世界的详细几何检查。这些限制促成了后续按实际结构和观测条件构造候选，80／40不再作为当前样本总量或最终验收结论。
 
@@ -532,7 +538,7 @@ PYTHONDONTWRITEBYTECODE=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 \
 | 最后四个训练组合补充 | 78／0 | 36／0 | 576／378 |
 | 本轮条件交叉修正（以已选360世界为基础） | 24／24 | 23／24 | 263／144 |
 
-各批生成参数保存在 [pool](../results/synthetic/pool/manifest.json)、[balanced](../results/synthetic/balanced/manifest.json)、[data](../results/synthetic/data/manifest.json)、[selected](../results/synthetic/selected/manifest.json) 和 [refined](../results/synthetic/refined/manifest.json) 的根清单中；逐世界定义仍保存实际尺寸、形状、放置和源帧身份。原始提案区间、批次失败与运行开销另可查 Git 提交 `7ac5ee3`、`861872b`、`ab886ce`、`a12750d`。这些配置和记录不代表现在需要继续生成。
+各批生成参数保存在 [pool](../results/synthetic/history/pool/manifest.json)、[balanced](../results/synthetic/history/balanced/manifest.json)、[data](../results/synthetic/history/data/manifest.json)、[selected](../results/synthetic/history/selected/manifest.json) 和 [refined](../results/synthetic/manifest.json) 的根清单中；逐世界定义仍保存实际尺寸、形状、放置和源帧身份。原始提案区间、批次失败与运行开销另可查 Git 提交 `7ac5ee3`、`861872b`、`ab886ce`、`a12750d`。这些配置和记录不代表现在需要继续生成。
 
 补充过程中，将稀疏正常的见证帧与合法放置的支撑帧分开：从同一正常来源中距目标5—15米的观测确认地面支撑，仍在原见证帧检查正常与异常是否共同可见。原始稀疏见证附近可能只有7个地面点，而另一近距帧可提供足够支撑；这种区分避免了要求稀疏观测自身同时提供20个支撑点的冲突。地面拟合、完整足印、接地和全轨迹碰撞条件保持不变，跨帧信息未被定义为模型输入。
 
@@ -727,7 +733,7 @@ PYTHONDONTWRITEBYTECODE=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREA
 
 该次核查证实了正常参考中不极端的异常、复杂正常及插入影响附近仍正常的回波，也保留了远距和低支持失效边界。六个正常案例和155张代表扫描不能说明全池发生比例，也不能直接代表扩充后的360世界。当前池的测量范围见本文开头，原核查结果继续按本节历史范围引用。
 
-原始正常入口为 `src.profile_report.source_geometry_cases`，输出位于 `results/coverage/geometry/`。插入输出位于其 `inserted/` 子目录：`selection.json` 保存选样身份，`frames.csv`、`features.csv`、`changes.csv` 分别记录帧状态、两量分布及配对变化，`summary.json` 按代表观测与完整轨迹分别汇总。实际输出为 1,276 个帧记录、10,208 个特征分组、12,760 个变化分组，身份、缺失分母及四米外不变性均已核验。逐帧分位数保留为逐帧描述，汇总比例来自点数相加，没有把逐帧分位数平均后称为全点分位数。
+原始正常入口为 `src.profile_report.source_geometry_cases`，输出位于 `results/coverage/geometry/`。历史插入输出位于 `results/coverage/history/inserted/`：`selection.json` 保存选样身份，`frames.csv`、`features.csv`、`changes.csv` 分别记录帧状态、两量分布及配对变化，`summary.json` 按代表观测与完整轨迹分别汇总。实际输出为 1,276 个帧记录、10,208 个特征分组、12,760 个变化分组，身份、缺失分母及四米外不变性均已核验。逐帧分位数保留为逐帧描述，汇总比例来自点数相加，没有把逐帧分位数平均后称为全点分位数。
 
 原40世界成员已裁剪，本节仅引用保存的历史记录。对应的旧几何核查和旧覆盖汇总入口及专用实现已移除；当前条件参考与几何计算继续由现有覆盖分析复用。
 
@@ -737,11 +743,11 @@ PYTHONDONTWRITEBYTECODE=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREA
 
 提交 `a88abbd` 曾依据原20／20世界，判断已有首版实验的主要正反例，建议不先补样而进入设计。该判断没有启动模型设计，后续阶段决定已改为继续扩充和核验数据；它不再作为当前工作指令，也不能代表最终360世界已经通过全部核心条件。
 
-该轮 [覆盖汇总](../results/coverage/summary.json) 保存六类问题的世界数、唯一源帧数、回波数、集中度和证据范围。当时训练为8,980世界帧、402,153个范围内异常回波，验证为13,640世界帧、275,523个范围内异常回波。完整矩阵和原口径见 [原提交中的说明](https://github.com/JasonGao1010/Anomaly/blob/a88abbd/protocol/README.md)。原始正常缓存、155张代表扫描和两条固定轨迹各有自己的测量范围，不能将代表扫描比例推广为全池比例。
+该轮 [覆盖汇总](../results/coverage/history/summary.json) 保存六类问题的世界数、唯一源帧数、回波数、集中度和证据范围。当时训练为8,980世界帧、402,153个范围内异常回波，验证为13,640世界帧、275,523个范围内异常回波。完整矩阵和原口径见 [原提交中的说明](https://github.com/JasonGao1010/Anomaly/blob/a88abbd/protocol/README.md)。原始正常缓存、155张代表扫描和两条固定轨迹各有自己的测量范围，不能将代表扫描比例推广为全池比例。
 
 当时的主要证据是非极端异常、复杂正常、插入后仍正常但邻域改变的点，以及同一物体的跨条件观测。形状与距离不均衡、没有密集远距、弱遮挡尚未定义等限制仅描述当时范围；当前弱背景变化定义和剩余条件缺口见本文开头。保留历史观察，不据此恢复旧阶段决定。
 
-原池现为 `historical_pruned`，部分世界已经删除，依赖完整旧池的汇总入口不再适用。本节只引用现存结果，不提供旧汇总命令。当前数量与科学诊断分别由 `results/coverage/research/balance.json` 和 `results/coverage/research/summary.json` 记录。
+原池现为 `historical_pruned`，部分世界已经删除，依赖完整旧池的汇总入口不再适用。本节只引用现存结果，不提供旧汇总命令。当前数量与科学诊断分别由 `results/coverage/history/balance.json` 和 `results/coverage/research/summary.json` 记录。
 
 ## 已退出的旧模型原型
 

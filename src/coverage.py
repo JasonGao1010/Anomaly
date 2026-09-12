@@ -171,8 +171,8 @@ def _research_observation(job):
     split, frame, entries = job
     original = _research_sources[split][frame]
     grid = _research_grid
-    mapping = canonical_ray_slots_for_source(original, grid)
     identity = source_identity(original)
+    mapping = None
     rows = []
     for world, path, world_identity, observed, cached in entries:
         if cached is not None:
@@ -180,6 +180,9 @@ def _research_observation(job):
                 raise ValueError("cached physical events belong to changed source inputs")
             rows.append(cached)
             continue
+        # Reused events still verify their source; only new events need ray mapping.
+        if mapping is None:
+            mapping = canonical_ray_slots_for_source(original, grid)
         with np.load(path, allow_pickle=False) as delta:
             if str(delta["source_identity"]) != identity or str(delta["world_identity"]) != world_identity:
                 raise ValueError("visibility delta does not belong to the unchanged source and world")

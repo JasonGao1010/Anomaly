@@ -12,7 +12,7 @@
     "data_tools": "data.json",
     "synthetic_dataset_frozen": true,
     "distribution_match": "not_a_selection_objective",
-    "experiment_dataset": "results/synthetic/refined",
+    "experiment_dataset": "results/synthetic",
     "experiment_worlds": {
       "train": 240,
       "validation": 120
@@ -44,7 +44,7 @@
         "train": 8,
         "validation": 4
       },
-      "candidate_directory": "results/synthetic/refined",
+      "candidate_directory": "results/synthetic",
       "status": "completed_exact_counts_and_original_scientific_requirements"
     },
     "default_dataset_readable": true,
@@ -388,8 +388,8 @@
     },
     "quantity_expansion": {
       "status": "historical_80_40_pool_superseded_and_surplus_worlds_removed",
-      "directory": "results/synthetic/expanded",
-      "base": "results/synthetic/experiment",
+      "directory": "results/synthetic/history/expanded",
+      "base": "results/synthetic/history/experiment",
       "targets": {
         "train": 80,
         "validation": 40
@@ -406,7 +406,7 @@
       "purpose": "within_family_geometry_placement_context_and_observation_variation",
       "selection": "physical_legality_only_not_final_return_counts_or_val19_match",
       "model_design": "paused",
-      "evidence": "results/coverage/expanded.json",
+      "evidence": "results/coverage/history/expanded.json",
       "added_worlds": {
         "train": 60,
         "validation": 20
@@ -607,7 +607,7 @@
         "exact_world_quotas_passed": true,
         "sampling_exposure_passed": true,
         "selected_geometry_observations": 43886,
-        "final_dataset": "results/synthetic/refined",
+        "final_dataset": "results/synthetic",
         "model_design_started": false,
         "retained_worlds": {
           "train": 240,
@@ -639,7 +639,7 @@
         "train": {
           "worlds": 240,
           "full_frame_references": 107760,
-          "example": "results/synthetic/refined/train/world_47427/frames/000238.npz",
+          "example": "results/synthetic/train/world_47427/frames/000238.npz",
           "inserted_file_slots": 20,
           "world_definitions_and_frame_order_checked": true
         },
@@ -651,7 +651,7 @@
         "validation": {
           "worlds": 120,
           "full_frame_references": 81840,
-          "example": "results/synthetic/refined/validation/world_40006/frames/000159.npz",
+          "example": "results/synthetic/validation/world_40006/frames/000159.npz",
           "inserted_file_slots": 3,
           "world_definitions_and_frame_order_checked": true
         },

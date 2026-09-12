@@ -25,7 +25,7 @@
     }
   },
   "dataset": {
-    "directory": "results/synthetic/refined",
+    "directory": "results/synthetic",
     "unit": "one_source_sequence_and_one_fixed_world_object",
     "input_unit": "one_current_scan_xyzi",
     "splits": {
@@ -43,17 +43,17 @@
     "anomaly_target": "inserted_returns_only",
     "normal_target": "valid_original_normal_class_map_entries",
     "split_unit": "whole_world_and_source_sequence",
-    "base_directory": "results/synthetic/refined"
+    "base_directory": "results/synthetic"
   },
   "information_use": {
-    "current_pool": "当前唯一完整入口results/synthetic/refined/manifest.json；240个训练、120个合成验证世界，每侧30格分别8和4；仅206/201正常来源。",
+    "current_pool": "当前唯一完整入口results/synthetic/manifest.json；全部实体集中在train和validation目录，分别240和120世界，每侧30格分别8和4；仅206/201正常来源。",
     "generation_sources": "仅原正常206/201、既有射线与传感器标定及预定物理变化；不使用val19分布选样，不引入其他正常来源。",
-    "historical_development_pool": "results/synthetic/v1的40个世界样本已按最终只留360世界的授权删除；生成参数和历史覆盖结果保留，不进入当前入口。",
-    "original_records": "选中世界的完整帧顺序、坐标、强度、标签及生成定义不变；旧池清单标记historical_pruned，原生成配置仍是历史来源记录。"
+    "historical_development_pool": "results/synthetic/history/v1的40个世界样本已按最终只留360世界的授权删除；生成参数和历史覆盖结果保留，不进入当前入口。",
+    "original_records": "世界目录集中存放，完整帧顺序、坐标、强度、标签及生成定义不变；主清单逐世界记录generation_manifest。history内旧池清单标记historical_pruned，存活成员引用当前实体，原生成配置及执行记录保留当时路径语义。"
   },
   "content_coverage": {
     "implementation": "src/coverage.py",
-    "output": "results/coverage/selected.json",
+    "output": "results/coverage/content.json",
     "conditions": {
       "eligible": "当前帧在传感器距离 [2.5,50] 米内至少 5 个异常回波，遵循官方计数口径。",
       "few": "官方距离内 5–19 个异常回波。",
@@ -199,9 +199,9 @@
     "far_denser": "predeclared content target; physical-ray count, not file-slot duplication",
     "hard_frames": "retain_all_actual_returns_and_detection_labels_regardless_of_geometry_measurement_validity"
   },
-  "calibration_source": "results/synthetic/candidates/calibration.pt",
+  "calibration_source": "results/synthetic/calibration.pt",
   "proposals": {
-    "output": "results/synthetic/refined",
+    "output": "results/synthetic",
     "seed_namespace": 8,
     "shape_attempts": 3,
     "rounds": 1,
