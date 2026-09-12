@@ -48,8 +48,8 @@
   "information_use": {
     "current_pool": "当前唯一完整入口results/synthetic/manifest.json；全部实体集中在train和validation目录，分别240和120世界，每侧30格分别8和4；仅206/201正常来源。",
     "generation_sources": "仅原正常206/201、既有射线与传感器标定及预定物理变化；不使用val19分布选样，不引入其他正常来源。",
-    "historical_development_pool": "results/synthetic/history/v1的40个世界样本已按最终只留360世界的授权删除；生成参数和历史覆盖结果保留，不进入当前入口。",
-    "original_records": "世界目录集中存放，完整帧顺序、坐标、强度、标签及生成定义不变；主清单逐世界记录generation_manifest。history内旧池清单标记historical_pruned，存活成员引用当前实体，原生成配置及执行记录保留当时路径语义。"
+    "historical_development_pool": "曾使用val19统计的历史开发池、独立清单和分析文件均已删除，相关历史事实仅记入研究协议，不进入当前数据入口。",
+    "original_records": "完整帧顺序、坐标、强度、标签及生成定义不变；主清单逐世界记录configuration_identity，对应顶层配置或generation_configs内保留的8种生成配置。旧池成员表、历史背景候选缓存和运行记录已删除；当前样本的生成参数与实现身份完整保留。"
   },
   "content_coverage": {
     "implementation": "src/coverage.py",

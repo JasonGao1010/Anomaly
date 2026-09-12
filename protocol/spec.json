@@ -25,7 +25,7 @@
     "geometry_evidence": "results/geometry",
     "geometry_conclusion": "weak_predictive_evidence_and_partial_conditioning_value_not_a_validated_anomaly_detector",
     "conditioning_interpretation": "range_and_ray_z_also_encode_sensor_coordinate_height_z_equal_range_times_ray_z_not_a_pure_sampling_causal_effect",
-    "synthetic_geometry_check_scope": "full_physical_inventory_360_worlds_189600_frames; 43886_fixed_and_triggered_geometry_observations; historical_40_world_checks_separate",
+    "synthetic_geometry_check_scope": "full_physical_inventory_360_worlds_189600_frames; 43886_fixed_and_triggered_geometry_observations; historical_40_world_artifacts_removed_conclusions_retained_in_protocol",
     "synthetic_geometry_check_executed": true,
     "synthetic_geometry_evidence": "results/coverage/research",
     "synthetic_geometry_conclusion": "nonextreme_anomalies_and_complex_original_normals_exist_insertion_changes_retained_normal_neighborhoods_and_sparse_geometry_has_condition_dependent_missingness",
@@ -362,7 +362,7 @@
     },
     "prototype": {
       "status": "historical_exploratory_prototype_not_formal_AJAE_V1",
-      "retained_diagnostics": "results/profile/prototype",
+      "retained_diagnostics": null,
       "val19_metrics_percent": {
         "AP": 6.53210197635271,
         "FPR95": 17.214532122945748,
@@ -371,7 +371,7 @@
       "normal_points": 193792470,
       "anomaly_points": 87499,
       "direct_workspace_recomputation_available": false,
-      "limitation": "weights_and_full_predictions_deleted;_retained_tables_figures_and_prior_verification_flags_are_historical_evidence_only"
+      "limitation": "weights_full_predictions_and_diagnostic_files_deleted;_only_metrics_and_historical_conclusions_remain_in_protocol;_not_directly_recomputable"
     },
     "paired_auxiliary_trial": {
       "status": "training_completed_evaluation_incomplete_voluntarily_terminated",
@@ -388,8 +388,7 @@
     },
     "quantity_expansion": {
       "status": "historical_80_40_pool_superseded_and_surplus_worlds_removed",
-      "directory": "results/synthetic/history/expanded",
-      "base": "results/synthetic/history/experiment",
+      "result_files_removed": true,
       "targets": {
         "train": 80,
         "validation": 40
@@ -406,7 +405,6 @@
       "purpose": "within_family_geometry_placement_context_and_observation_variation",
       "selection": "physical_legality_only_not_final_return_counts_or_val19_match",
       "model_design": "paused",
-      "evidence": "results/coverage/history/expanded.json",
       "added_worlds": {
         "train": 60,
         "validation": 20
