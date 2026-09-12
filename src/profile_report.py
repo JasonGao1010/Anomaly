@@ -667,12 +667,13 @@ def source_geometry_cases(output, reference_root="results/geometry", data_root="
     from .scene import STUSequence, LabelMode
 
     output, reference_root = Path(output), Path(reference_root)
-    artifacts = ["normal_cases.json", "normal_cases.pdf", "tables/normal.csv",
+    artifacts = ["normal_cases.json", "normal_cases.pdf", "normal.csv",
                  *(f"normal_{i}.png" for i in range(1, 7))]
     if any((output / name).exists() for name in artifacts):
         raise FileExistsError("Original-source geometry artifacts already exist")
+    if any(not (reference_root / "features/train" / source).is_dir() for source in ("206", "201")):
+        raise FileNotFoundError("Original-source feature caches were removed; explicit re-extraction is required")
     output.mkdir(parents=True, exist_ok=True)
-    (output / "tables").mkdir(exist_ok=True)
     train_paths = sorted((reference_root / "features/train/206").glob("*.npy"))
     train_chunks = [np.load(path, allow_pickle=False, mmap_mode="r") for path in train_paths]
     starts = np.r_[0, np.cumsum([len(chunk) for chunk in train_chunks])]
@@ -781,7 +782,7 @@ def source_geometry_cases(output, reference_root="results/geometry", data_root="
             row.update(range_low=float(reference["edges"]["range"][r]), range_high=float(reference["edges"]["range"][r+1]),
                        ray_z_low=float(reference["edges"]["ray_z"][d]), ray_z_high=float(reference["edges"]["ray_z"][d+1]))
         rows.append(row)
-    csv_rows(output / "tables/normal.csv", rows)
+    csv_rows(output / "normal.csv", rows)
     sources = {sequence: STUSequence.open(data_root, protocol=load_protocol(), partition="train",
                                           sequence_id=sequence, label_mode=LabelMode.REQUIRED) for sequence in (206, 201)}
     selected = []
@@ -882,7 +883,7 @@ def source_geometry_cases(output, reference_root="results/geometry", data_root="
         raise RuntimeError("Original-source case rendering reported a missing glyph or font warning")
     fonts = _geometry_pdf(output / "normal_cases.pdf", len(details))
     result = dict(rules=rules, cache_frames=cache_frames, cases=details, rendered=True, pages=len(details), embedded_fonts=fonts,
-                  statistics="tables/normal.csv", source_totals=[row for row in rows if row["cell"] == "all"])
+                  statistics="normal.csv", source_totals=[row for row in rows if row["cell"] == "all"])
     _atomic_json(output / "normal_cases.json", result)
     return result
 

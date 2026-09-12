@@ -638,6 +638,8 @@ def extract_frame(job):
 
 def extract(data_root, output, workers):
     output = Path(output)
+    if (output / "summary.json").exists() and not (output / "features").exists():
+        raise FileExistsError("Geometry caches were removed; use a new --output directory for explicit recomputation")
     output.mkdir(parents=True, exist_ok=True)
     destination = output / "features"
     if destination.exists():
@@ -894,6 +896,8 @@ def csv_rows(path,rows):
 def analyze(output,workers=6):
     global REFERENCE,THRESHOLDS
     output=Path(output)
+    if not (output / "features/train/206").is_dir():
+        raise FileNotFoundError("Geometry feature caches are unavailable; retained tables are not recomputed automatically")
     config=json.loads((output/"configuration.json").read_text())
     extraction=json.loads((output/"extraction.json").read_text())
     disk=host_disk()
@@ -916,6 +920,8 @@ def analyze(output,workers=6):
     fit_groups,_=load_counts(output,"train",206)
     THRESHOLDS={key:normal_threshold(group) for key,group in fit_groups.items()}
     _atomic_json(output/"thresholds.json",dict(source="train/206 fitted normal scores",normal_fpr_limit=.01,values=THRESHOLDS))
+    from .coverage import save_geometry_reference
+    save_geometry_reference(output, REFERENCE)
     del fit_groups
     gc.collect()
     # Release allocator-retained fit/count workspaces before creating reader workers.

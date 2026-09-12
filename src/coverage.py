@@ -1227,32 +1227,33 @@ def summarize_checks(records, worlds):
 GEOMETRY_FIELDS = ("surface_residual", "normal_change")
 
 
-def geometry_reference(directory=Path("results/geometry")):
-    """Reuse the original train/206 fit, then retain only the two required fields."""
-    import ctypes
-    import gc
-    from .geometry import as_data
-    from .probes import fit_reference
-
+def save_geometry_reference(directory, fitted):
+    """Keep the exact two-field normal fit independently of per-scan caches."""
     directory = Path(directory)
-    normal = np.concatenate([np.load(p, allow_pickle=False)
-                             for p in sorted((directory / "features/train/206").glob("*.npy"))])
-    if np.any(normal["target"] != 0) or len(np.unique(normal["frame"])) != 449:
-        raise ValueError("Conditional geometry requires the unchanged train/206 normal fit")
-    fitted = fit_reference(as_data(normal))
+    metadata = fitted["metadata"]
+    if metadata["source"] != "train/206 normal" or metadata["frames"] != 449:
+        raise ValueError("Coverage reference requires the unchanged train/206 fit")
+    arrays = {f"{cell}_{field}": values[field]
+              for cell, values in fitted["conditional"]["direction"].items()
+              for field in GEOMETRY_FIELDS}
+    np.savez_compressed(directory / "reference.npz",
+        metadata=np.asarray(json.dumps(metadata, ensure_ascii=False)), **arrays)
+
+
+def geometry_reference(directory=Path("results/geometry")):
+    """Load the retained exact normal fit without any per-scan feature cache."""
+    directory = Path(directory)
     metadata = json.loads((directory / "reference.json").read_text())
-    if fitted["metadata"] != metadata:
-        raise ValueError("Paired geometry reference differs from the original normal-only fit")
+    with np.load(directory / "reference.npz", allow_pickle=False) as fitted:
+        if json.loads(fitted["metadata"].item()) != metadata:
+            raise ValueError("Retained reference differs from the original normal-only fit")
+        conditional = {int(cell): {field: fitted[f"{cell}_{field}"] for field in GEOMETRY_FIELDS}
+                       for cell in metadata["cells"]["direction"]}
     thresholds = json.loads((directory / "thresholds.json").read_text())["values"]
-    result = dict(edges=fitted["edges"], conditional={
-        cell: {field: values[field] for field in GEOMETRY_FIELDS}
-        for cell, values in fitted["conditional"]["direction"].items()},
+    result = dict(edges={k: np.asarray(v) for k, v in metadata["edges"].items()}, conditional=conditional,
         thresholds={field: thresholds[f"feature/{field}/direction|C_direction"] for field in GEOMETRY_FIELDS})
     result["quantiles"] = {cell: {field: np.quantile(values[field], [.1, .9]) if len(values[field]) else None
                                   for field in GEOMETRY_FIELDS} for cell, values in result["conditional"].items()}
-    del normal, fitted
-    gc.collect()
-    ctypes.CDLL("libc.so.6").malloc_trim(0)
     return result
 
 

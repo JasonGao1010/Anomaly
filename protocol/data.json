@@ -61,7 +61,7 @@
       "low": "整个物体在物体局部坐标中的连续几何范围高度不超过 0.2 米；包含全部基元、偏移与变形，不等同重力方向高度。",
       "far_denser": "异常中位距离在[35,50]米且官方距离内至少20个异常回波；仅作探索性内容记录，不代表删减后几何可计算。"
     },
-    "scope": "可选的完整当前池清单统计；当前30格和科学诊断结果见results/coverage/research/summary.json。",
+    "scope": "可选的完整当前池清单统计；当前30格和科学诊断结果见results/coverage/summary.json。",
     "geometry_use": "边界、删减观测对应及参考表面仅服务于既有数据生成和核查，不是正式AJAE V1监督任务。"
   },
   "geometry": {
@@ -407,7 +407,7 @@
     }
   },
   "research_coverage": {
-    "output": "results/coverage/research",
+    "output": "results/coverage",
     "scope": "predeclared_content_requirements_not_detection_scores_or_val19_distribution_fitting",
     "distance_bins_m": [
       2.5,
