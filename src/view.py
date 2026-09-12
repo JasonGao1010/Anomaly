@@ -44,7 +44,7 @@ def load_frame(path, data_root, protocol):
 
 
 def labelled_points(sample):
-    """Keep original point identities and the actual detection supervision rules."""
+    """Return every real XYZI slot with its actual detection supervision target."""
     if isinstance(sample, FrozenFrame):
         source, target = sample.source, sample.anomaly_target
     else:
@@ -62,7 +62,7 @@ def labelled_points(sample):
             raise ValueError("hidden test data is outside the visualization scope")
     slots = source.real_slots
     # Empty LiDAR slots must be removed before translating to the camera origin.
-    return source.xyzi[slots, :3], target[slots]
+    return source.xyzi[slots], target[slots]
 
 
 @dataclass(frozen=True)
@@ -111,20 +111,17 @@ class Camera:
         visible = ((camera[:, 2] > 0) & (uv[:, 0] >= 0) & (uv[:, 0] < self.width)
                    & (uv[:, 1] >= 0) & (uv[:, 1] < self.height))
         indices = np.flatnonzero(visible)
-        return indices, uv[indices], np.linalg.norm(camera[indices], axis=1)
+        return indices, uv[indices]
 
-    def rasterize(self, xyz):
-        """Resolve finite point footprints by range, independently of labels."""
-        indices, uv, ranges = self.project(xyz)
+    def rasterize(self, xyz, point_colors, background):
+        """Average all overlapping point colours; never discard a point by depth."""
+        point_colors = np.asarray(point_colors, dtype=np.float64)
+        if point_colors.shape != (len(xyz), 3) or not np.isfinite(point_colors).all():
+            raise ValueError("each input point requires a finite RGB colour")
+        indices, uv = self.project(xyz)
         pixel = np.floor(uv).astype(np.int64)
-        linear = pixel[:, 1] * self.width + pixel[:, 0]
-        order = np.lexsort((indices, ranges, linear))
-        # Same-size footprints make farther points at an identical centre redundant.
-        first = np.r_[True, np.diff(linear[order]) != 0] if len(order) else np.zeros(0, bool)
-        kept = order[first]
-        pixel, ranges, point_ids = pixel[kept], ranges[kept], indices[kept]
-        depth = np.full(self.height * self.width, np.inf)
-        owner = np.full(self.height * self.width, -1, np.int64)
+        total = np.zeros((self.height * self.width, 3), np.float64)
+        contributions = np.zeros(self.height * self.width, np.int64)
         radius = self.point_radius_px
         for dy in range(-radius, radius + 1):
             for dx in range(-radius, radius + 1):
@@ -133,13 +130,31 @@ class Camera:
                 x, y = pixel[:, 0] + dx, pixel[:, 1] + dy
                 inside = (x >= 0) & (x < self.width) & (y >= 0) & (y < self.height)
                 destination = y[inside] * self.width + x[inside]
-                distance, ids = ranges[inside], point_ids[inside]
-                # Each offset has unique destinations. Equal ranges use source-slot order.
-                nearer = ((distance < depth[destination])
-                          | ((distance == depth[destination]) & (ids < owner[destination])))
-                destination = destination[nearer]
-                depth[destination], owner[destination] = distance[nearer], ids[nearer]
-        return owner.reshape(self.height, self.width), indices
+                # Repeated indices must accumulate, including coincident source returns.
+                np.add.at(total, destination, point_colors[indices[inside]])
+                np.add.at(contributions, destination, 1)
+        occupied = contributions > 0
+        rgb = np.empty((self.height * self.width, 3), np.uint8)
+        rgb[:] = background
+        rgb[occupied] = np.rint(total[occupied] / contributions[occupied, None]).astype(np.uint8)
+        return rgb.reshape(self.height, self.width, 3), indices, contributions.reshape(self.height, self.width)
+
+
+def intensity_colors(intensity, target, colors, background, settings):
+    """Use one fixed monotonic intensity transfer for every frame and label."""
+    intensity = np.asarray(intensity, dtype=np.float64)
+    if intensity.shape != target.shape or not np.isfinite(intensity).all():
+        raise ValueError("every point requires its original finite return intensity")
+    half = settings["half_saturation"]
+    minimum = settings["minimum_darkness"]
+    if not np.isfinite(half) or half <= 0 or not 0 < minimum < 1:
+        raise ValueError("intensity half-saturation must be positive; minimum darkness must be in (0,1)")
+    positive = np.maximum(intensity, 0)
+    # No per-frame/label normalisation or clipping at 1: raw STU intensities can exceed 1.
+    darkness = minimum + (1 - minimum) * positive / (positive + half)
+    palette = np.asarray([colors[-1], colors[0], colors[1]], dtype=np.float64)
+    background = np.asarray(background, dtype=np.float64)
+    return background + darkness[:, None] * (palette[target + 1] - background)
 
 
 def _text_writer(draw, size):
@@ -172,8 +187,7 @@ def save_view(sample, frame_path, output, settings):
     if settings["projection"] != "equidistant_fisheye":
         raise ValueError("this camera uses the equidistant fisheye projection")
     camera = Camera(**settings["camera"])
-    xyz, target = labelled_points(sample)
-    owner, projected = camera.rasterize(xyz)
+    xyzi, target = labelled_points(sample)
     colors = {int(label): tuple(rgb) for label, rgb in settings["label_colors"].items()}
     if set(colors) != {-1, 0, 1} or not np.isin(target, [-1, 0, 1]).all():
         raise ValueError("detection targets must be ignore=-1, normal=0, anomaly=1")
@@ -181,17 +195,12 @@ def save_view(sample, frame_path, output, settings):
     for rgb in [background, *colors.values()]:
         if len(rgb) != 3 or any(type(c) is not int or not 0 <= c <= 255 for c in rgb):
             raise ValueError("colors must be three integer RGB channels in [0,255]")
-    rgb = np.empty((camera.height, camera.width, 3), np.uint8)
-    rgb[:] = background
-    occupied = owner >= 0
-    pixel_labels = target[owner[occupied]]
-    palette = np.array([colors[-1], colors[0], colors[1]], np.uint8)
-    rgb[occupied] = palette[pixel_labels + 1]
-    displayed = np.unique(owner[occupied])
+    point_colors = intensity_colors(xyzi[:, 3], target, colors, background, settings["intensity"])
+    rgb, projected, contributions = camera.rasterize(xyzi[:, :3], point_colors, background)
     counts = {
         scope: {str(label): int(np.count_nonzero(values == label)) for label in (-1, 0, 1)}
         for scope, values in (("scan", target), ("in_image", target[projected]),
-                              ("displayed", target[displayed]))
+                              ("drawn", target[projected]))
     }
     source = sample.source if isinstance(sample, FrozenFrame) else sample
     frame_path = Path(frame_path).resolve()
@@ -203,14 +212,14 @@ def save_view(sample, frame_path, output, settings):
     for x, label, name in ((24, 0, "正常"), (244, 1, "异常"), (464, -1, "忽略")):
         draw.rectangle((x, camera.height + 13, x + 16, camera.height + 29), fill=colors[label])
         write(x + 28, camera.height + 31, f"{name} ({label})", colors[label])
-    foreground = (222, 226, 232)
+    foreground = (40, 45, 55)
     write(760, camera.height + 31,
-          f"异常点：整帧 {counts['scan']['1']} / 画内 {counts['in_image']['1']} / 显示 {counts['displayed']['1']}", foreground)
+          f"全量点：整帧 {len(xyzi)} / 画内 {len(projected)} / 绘制 {len(projected)}", foreground)
     write(24, camera.height + 66,
-          f"来源 {source.partition}/{source.sequence_id}   世界 {world}   帧 {source.frame_id:06d}", foreground)
+          f"来源 {source.partition}/{source.sequence_id}   世界 {world}   帧 {source.frame_id:06d}   异常点：整帧 {counts['scan']['1']} / 绘制 {counts['drawn']['1']}", foreground)
     offset = ", ".join(f"{value:g}" for value in camera.offset_lidar_m)
     write(24, camera.height + 101,
-          f"等距鱼眼 · 水平视场 {camera.horizontal_fov_degrees:g}° · 固定相机位置 ({offset}) m · 点云真值投影", foreground)
+          f"等距鱼眼 · 水平视场 {camera.horizontal_fov_degrees:g}° · 固定相机位置 ({offset}) m · 强回波深色 · 全量融合", foreground)
     metadata = dict(
         input=str(frame_path), partition=source.partition, sequence=source.sequence_id,
         frame=source.frame_id, world=world,
@@ -223,8 +232,14 @@ def save_view(sample, frame_path, output, settings):
         pose_basis="assumed virtual driver position, not measured camera calibration",
         truth="frozen insertion and valid normal class map; public val uses released binary labels",
         label_colors=settings["label_colors"], background_rgb=list(background), counts=counts,
-        occupied_pixels=int(occupied.sum()), fonts=fonts,
-        visibility="nearest observed point footprint; unseen surfaces are unknown",
+        occupied_pixels=int(np.count_nonzero(contributions)), fonts=fonts,
+        overlap_pixels=int(np.count_nonzero(contributions > 1)),
+        point_pixel_contributions=int(contributions.sum()),
+        point_sampling="none; every nonzero XYZ source slot, including repeated coordinates",
+        overlap="equal contribution of all point footprints; no depth rejection or overpainting",
+        intensity=dict(settings=settings["intensity"], source="unaltered XYZI channel 3",
+                       mapping="darkness = minimum + (1 - minimum) * max(I,0) / (max(I,0) + half_saturation)",
+                       negative_returns=int(np.count_nonzero(xyzi[:, 3] < 0))),
         camera_image_size=[camera.width, camera.height], image_size=list(image.size), footer_height=112,
     )
     output = Path(output)

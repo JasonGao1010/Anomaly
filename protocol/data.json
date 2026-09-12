@@ -10,15 +10,19 @@
       "width": 1920,
       "height": 1080,
       "horizontal_fov_degrees": 120,
-      "offset_lidar_m": [-0.3, 0.35, -0.6],
+      "offset_lidar_m": [-0.3, 0, -0.6],
       "point_radius_px": 1
     },
     "label_colors": {
-      "-1": [142, 149, 160],
-      "0": [72, 167, 235],
-      "1": [255, 80, 45]
+      "-1": [110, 115, 125],
+      "0": [20, 100, 180],
+      "1": [215, 50, 30]
     },
-    "background_rgb": [12, 16, 23]
+    "background_rgb": [255, 255, 255],
+    "intensity": {
+      "half_saturation": 0.25,
+      "minimum_darkness": 0.25
+    }
   },
   "dataset": {
     "directory": "results/synthetic/refined",
