@@ -5,7 +5,7 @@
   "seed": 2062026,
   "scope": "现有240／120世界已通过预先声明的数据覆盖验收，每格8／4；模型设计继续暂停，不自动扩充或训练。",
   "visualization": {
-    "projection": "equidistant_fisheye",
+    "projection": "rectilinear_perspective",
     "camera": {
       "width": 1920,
       "height": 1080,

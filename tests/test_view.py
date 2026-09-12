@@ -9,22 +9,35 @@ from src.scene import PointLabels, make_source_frame
 from src.view import Camera, intensity_colors, labelled_points, load_frame
 
 
-def test_equidistant_projection_angles_axes_field_of_view_and_fixed_offset():
+def test_rectilinear_projection_preserves_lines_field_of_view_and_fixed_offset():
     camera = Camera(1200, 800, 120, (-0.3, 0, -0.6), 1)
     angles = np.deg2rad([0, 30, -30, 59.9, -59.9, 60.1, -60.1, 180])
     xyz = np.column_stack((10 * np.cos(angles), 10 * np.sin(angles), np.zeros(8)))
     points = xyz + camera.offset_lidar_m
     indices, uv = camera.project(points)
     np.testing.assert_array_equal(indices, [0, 1, 2, 3, 4])
-    np.testing.assert_allclose(uv[:3], [[600, 400], [300, 400], [900, 400]])
-    # The 30-degree point lies halfway from the centre to the 60-degree edge.
-    pinhole_displacement = 600 / np.tan(np.deg2rad(60)) * np.tan(np.deg2rad(30))
-    assert not np.isclose(600 - uv[1, 0], pinhole_displacement)
+    np.testing.assert_allclose(uv[:3], [[600, 400], [400, 400], [800, 400]])
     above = np.array([[10 * np.cos(np.pi / 6), 0, 10 * np.sin(np.pi / 6)]])
-    np.testing.assert_allclose(camera.project(above + camera.offset_lidar_m)[1], [[600, 100]])
+    np.testing.assert_allclose(camera.project(above + camera.offset_lidar_m)[1], [[600, 200]])
     for shift in ((0, 0, 0), (20, -5, 3)):
         moved = replace(camera, offset_lidar_m=tuple(np.asarray(camera.offset_lidar_m) + shift))
         np.testing.assert_allclose(moved.project(points + shift)[1], uv)
+    # Test off-axis horizontal/vertical lines and an oblique line with varying depth.
+    t = np.linspace(-3, 3, 31)
+    lines = [np.column_stack((np.full_like(t, 10), t, np.full_like(t, 2))),
+             np.column_stack((np.full_like(t, 10), np.full_like(t, 2), t)),
+             np.column_stack((10 + 2 * t, t, 2 + .3 * t))]
+    for line in lines:
+        indices, image_line = camera.project(line + camera.offset_lidar_m)
+        np.testing.assert_array_equal(indices, np.arange(len(t)))
+        relative = image_line - image_line[0]
+        cross = relative[:, 0] * relative[-1, 1] - relative[:, 1] * relative[-1, 0]
+        np.testing.assert_allclose(cross, 0, atol=1e-10)
+    with np.errstate(all="raise"):
+        excluded = np.array([[0, 0, 0], [0, 2, 3], [-1, 0, 0], [1e-12, 10, 10]])
+        assert camera.project(excluded + camera.offset_lidar_m)[0].size == 0
+    widescreen = replace(camera, width=1920, height=1080)
+    assert 88.5 < widescreen.vertical_fov_degrees < 88.6
 
 
 def test_all_overlapping_returns_contribute_without_depth_or_order_rejection():
@@ -42,7 +55,7 @@ def test_all_overlapping_returns_contribute_without_depth_or_order_rejection():
     np.testing.assert_array_equal(reversed_rgb, rgb)
     np.testing.assert_array_equal(reversed_count, count)
     # Different centres also accumulate in the intersection of their footprints.
-    angle = 1.2 / camera.focal_px
+    angle = np.arctan(1.2 / camera.focal_px)
     points = np.array([[5, 0, 0], [20 * np.cos(angle), -20 * np.sin(angle), 0]])
     rgb, _, count = camera.rasterize(points, colors[:2], background)
     assert count[40, 61] == 2 and count[40, 62] == 1

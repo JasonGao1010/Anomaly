@@ -1,4 +1,4 @@
-"""Project one labelled STU scan through a fixed virtual equidistant camera."""
+"""Project one labelled STU scan through a fixed rectilinear wide-angle camera."""
 
 from __future__ import annotations
 
@@ -86,7 +86,11 @@ class Camera:
 
     @property
     def focal_px(self):
-        return self.width / np.deg2rad(self.horizontal_fov_degrees)
+        return self.width / (2 * np.tan(np.deg2rad(self.horizontal_fov_degrees) / 2))
+
+    @property
+    def vertical_fov_degrees(self):
+        return float(np.rad2deg(2 * np.arctan(self.height / (2 * self.focal_px))))
 
     @property
     def lidar_to_camera(self):
@@ -102,16 +106,15 @@ class Camera:
             raise ValueError("projection requires finite xyz[N,3] actual returns")
         transform = self.lidar_to_camera
         camera = xyz @ transform[:3, :3].T + transform[:3, 3]
-        transverse = np.hypot(camera[:, 0], camera[:, 1])
-        theta = np.arctan2(transverse, camera[:, 2])
-        # Equidistant fisheye: image radius = f * theta, not f * tan(theta).
-        scale = np.divide(self.focal_px * theta, transverse,
-                          out=np.zeros_like(theta), where=transverse > 0)
-        uv = camera[:, :2] * scale[:, None] + [self.width / 2, self.height / 2]
-        visible = ((camera[:, 2] > 0) & (uv[:, 0] >= 0) & (uv[:, 0] < self.width)
-                   & (uv[:, 1] >= 0) & (uv[:, 1] < self.height))
-        indices = np.flatnonzero(visible)
-        return indices, uv[indices]
+        centre = np.array([self.width / 2, self.height / 2])
+        # Clip the viewing pyramid before division, including the camera-plane singularity.
+        limits = camera[:, 2, None] * (centre / self.focal_px)
+        indices = np.flatnonzero((camera[:, 2] > 0)
+                                 & np.all(np.abs(camera[:, :2]) <= limits, axis=1))
+        # Rectilinear perspective preserves 3D line collinearity; square pixels use fx = fy.
+        uv = self.focal_px * (camera[indices, :2] / camera[indices, 2, None]) + centre
+        inside = np.all((uv >= 0) & (uv < [self.width, self.height]), axis=1)
+        return indices[inside], uv[inside]
 
     def rasterize(self, xyz, point_colors, background):
         """Average all overlapping point colours; never discard a point by depth."""
@@ -184,8 +187,8 @@ def _text_writer(draw, size):
 
 
 def save_view(sample, frame_path, output, settings):
-    if settings["projection"] != "equidistant_fisheye":
-        raise ValueError("this camera uses the equidistant fisheye projection")
+    if settings["projection"] != "rectilinear_perspective":
+        raise ValueError("this camera uses the rectilinear perspective projection")
     camera = Camera(**settings["camera"])
     xyzi, target = labelled_points(sample)
     colors = {int(label): tuple(rgb) for label, rgb in settings["label_colors"].items()}
@@ -219,14 +222,14 @@ def save_view(sample, frame_path, output, settings):
           f"来源 {source.partition}/{source.sequence_id}   世界 {world}   帧 {source.frame_id:06d}   异常点：整帧 {counts['scan']['1']} / 绘制 {counts['drawn']['1']}", foreground)
     offset = ", ".join(f"{value:g}" for value in camera.offset_lidar_m)
     write(24, camera.height + 101,
-          f"等距鱼眼 · 水平视场 {camera.horizontal_fov_degrees:g}° · 固定相机位置 ({offset}) m · 强回波深色 · 全量融合", foreground)
+          f"广角透视 · 水平视场 {camera.horizontal_fov_degrees:g}° · 固定相机位置 ({offset}) m · 强回波深色 · 全量融合", foreground)
     metadata = dict(
         input=str(frame_path), partition=source.partition, sequence=source.sequence_id,
         frame=source.frame_id, world=world,
         world_identity=sample.world_identity if isinstance(sample, FrozenFrame) else None,
         projection=settings["projection"], camera=settings["camera"],
         focal_px=camera.focal_px, principal_point_px=[camera.width / 2, camera.height / 2],
-        vertical_centerline_fov_degrees=camera.horizontal_fov_degrees * camera.height / camera.width,
+        vertical_centerline_fov_degrees=camera.vertical_fov_degrees,
         lidar_to_camera=camera.lidar_to_camera.tolist(),
         coordinate_convention="LiDAR x forward, y left, z up; camera x right, y down, z forward",
         pose_basis="assumed virtual driver position, not measured camera calibration",
