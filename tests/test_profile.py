@@ -35,6 +35,22 @@ def test_content_coverage_uses_official_count_and_distinct_worlds():
     assert counts["top_one_share"] == 1000 / 1010
 
 
+def test_visibility_separates_replacement_loss_and_new_returns_after_ray_deduplication():
+    from src.coverage import visibility_events
+    from src.render import RayGrid
+
+    angles = np.linspace(-np.pi, np.pi, 8, endpoint=False)
+    grid = RayGrid(np.c_[np.cos(angles), np.sin(angles), np.zeros(8)],
+                   np.array([0.]), angles, beam_count=1)
+    mapping = np.array([0, 1, 2, 3, 0, 1, 2, 3], np.int32)
+    result = visibility_events([0, 1, 4, 5], [1, 2, 5, 6], mapping, grid)
+    assert result["anomaly_rays"] == 2 and result["changed_native_rays"] == 2
+    assert result["new_hit_rays"] == result["replaced_native_rays"] == result["lost_native_rays"] == 1
+    assert result["changed_overlap_fraction"] == 2 / 3
+    missing = visibility_events([], [], mapping, grid)
+    assert missing["changed_overlap_fraction"] is None and missing["changed_components"] == 0
+
+
 def test_content_selection_precedes_geometry_and_keeps_every_eligible_far_frame():
     from src.coverage import select_checks
 
@@ -49,7 +65,7 @@ def test_content_selection_precedes_geometry_and_keeps_every_eligible_far_frame(
     assert selected == select_checks([world])
 
 
-def test_expansion_preserves_base_order_without_selecting_by_final_returns():
+def test_candidate_collection_preserves_all_legal_worlds_before_balancing():
     from src.coverage import select_checks
     from src.generate import select_worlds
 
@@ -70,22 +86,58 @@ def test_expansion_preserves_base_order_without_selecting_by_final_returns():
     chosen, selection = select_worlds(base, reports, "train")
     assert chosen[:2] == base
     assert len(chosen) == 3 and chosen[-1]["path"] == "train/world_002"
-    assert chosen[-1]["cohort"] == "added"
+    assert chosen[-1]["cohort"] == "candidate"
     assert selection["accepted"] == [2]
     assert selection["rejected"] == {"0": "physical", "1": "physical"}
 
 
-def test_expansion_geometry_parents_stay_within_source_and_budget():
+def test_balanced_world_assignment_enforces_joint_quotas_without_reusing_worlds():
+    from collections import Counter
+    from src.coverage import balanced_assignment
+
+    candidates = [dict(identity=str(i), parent=str(i), regions=[str(i % 4), str((i+1) % 4)],
+        eligible_cells={"first": 5, "second": 7}, states=["near/2/0", "far/4/0"] if i == 0 else ["near/2/0"])
+        for i in range(8)]
+    chosen, _ = balanced_assignment(candidates, {"first": 4, "second": 4}, 3)
+    assert len({identity for identity, _ in chosen}) == 8
+    assert Counter(cell for _, cell in chosen) == {"first": 4, "second": 4}
+    for cell in ("first", "second"):
+        selected = [candidates[int(identity)] for identity, name in chosen if name == cell]
+        assert all(len({w["regions"][grid] for w in selected}) >= 3 for grid in (0, 1))
+    impossible, _ = balanced_assignment(candidates[:-1], {"first": 4, "second": 4}, 3)
+    assert impossible is None
+
+
+def test_expansion_geometry_parents_stay_within_source_and_budget(tmp_path):
     from src.generate import expansion_schedule
 
     config = json.loads(Path("protocol/data.json").read_text())
+    config["research_coverage"]["output"] = str(tmp_path)
+    (tmp_path / "inventory.json").write_text(json.dumps(dict(worlds=[dict(split=s, regions=[f"{i}/0"],
+        anchor_world_m=[10*i, 0, 0]) for s in ("train", "validation") for i in range(3)])))
     schedule = expansion_schedule(config)
     assert len({r["seed"] for r in schedule}) == len(schedule)
-    for split, count, pairs in (("train", 60, 8), ("validation", 20, 4)):
+    assert len(schedule) == 1080
+    for split, count, per_cell in (("train", 720, 24), ("validation", 360, 12)):
         groups = [r for r in schedule if r["split"] == split]
-        assert [i for r in groups for i in r["members"]] == list(range(count))
-        assert sum(len(r["members"]) == 2 for r in groups) == pairs
-        assert {r["profile"]["shape"] for r in groups} == {"single", "step", "elbow", "bridge"}
+        assert [i for r in groups for i in r["members"]] == list(range(2000, 2000+count))
+        assert {r["profile"]["shape"] for r in groups} == {"single", "cross", "bridge"}
+        assert len({tuple(r["profile"]["target_region"]) for r in groups}) == 3
+        from collections import Counter
+        assert set(Counter(r["profile"]["combination"] for r in groups).values()) == {per_cell}
+        assert len({r["profile"]["combination"] for r in groups}) == 30
+
+
+def test_target_opportunity_ignores_signal_realizations():
+    from src.generate import opportunity_passes
+    config = json.loads(Path("protocol/data.json").read_text())["proposals"]
+    observations = [dict(distance_band="far", foreground_surface_rays=30,
+        potential_changed_native_rays=4, final_anomaly_rays=0) for _ in range(5)]
+    assert opportunity_passes(observations, dict(opportunity="far_dense"), config)
+    for row in observations:
+        row["final_anomaly_rays"] = 10000
+    assert opportunity_passes(observations, dict(opportunity="far_dense"), config)
+    assert not opportunity_passes(observations[:4], dict(opportunity="far_dense"), config)
 
 
 def test_profile_weights_and_quantile_bounds(tmp_path):

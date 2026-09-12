@@ -3,8 +3,8 @@
   "schema_version": 1,
   "research_question": "Using only the current scan, do observable local geometries distinguish anomaly labels from complex normal structures, does conditioning their normal reference on observable conditions improve discrimination, and can the existing synthetic training examples teach the model which differences have anomaly meaning?",
   "status": {
-    "stage": "planned_sample_expansion_completed_before_formal_model_design",
-    "active_work": "expansion_and_necessary_verification_completed_stopped",
+    "stage": "constrained_generation_and_balanced_world_selection",
+    "active_work": "retain_exactly_240_train_120_validation_complete_worlds_across_30_content_cells",
     "model_defined": false,
     "training_defined": false,
     "formal_ajae_v1": "not_designed_or_implemented",
@@ -28,17 +28,17 @@
     "geometry_evidence": "results/geometry",
     "geometry_conclusion": "weak_predictive_evidence_and_partial_conditioning_value_not_a_validated_anomaly_detector",
     "conditioning_interpretation": "range_and_ray_z_also_encode_sensor_coordinate_height_z_equal_range_times_ray_z_not_a_pure_sampling_causal_effect",
-    "synthetic_geometry_check_scope": "existing_40_worlds_and_original_206_201_fixed_geometry_and_direction_bins_no_val_probe_expansion_world_generation_or_training",
+    "synthetic_geometry_check_scope": "historical_40_world_detailed_checks; current_full_pool_ray_inventory_and_fixed_selected_geometry_are_recorded_separately_in_results/coverage/research",
     "synthetic_geometry_check_executed": true,
     "synthetic_geometry_evidence": "results/coverage/geometry",
     "synthetic_geometry_conclusion": "nonextreme_anomalies_and_complex_original_normals_exist_insertion_changes_retained_normal_neighborhoods_and_sparse_geometry_has_condition_dependent_missingness",
-    "coverage_closure_completed": true,
+    "coverage_closure_completed": false,
     "coverage_closure_evidence": "results/coverage/summary.json",
-    "coverage_decision": "original_pool_supported_first_design;_authorized_diversity_expansion_completed_to_budget;_broader_geometry_and_pairings_do_not_establish_all_conditions_or_detection_gain",
+    "coverage_decision": "old_and_new_worlds_share_final_240_120_quotas; no_old_cohort_protection; verify_actual_content_before_deleting_surplus_worlds",
     "coverage_boundaries": "two_normal_source_sequences_not_independent_world_backgrounds;_uneven_shape_range_coverage;_no_dense_far_group;_geometry_missingness_retained;_object_occlusion_degree_unquantified;_natural_trajectories_not_single_factor_controls",
-    "next_stage": "formal_model_design_not_started",
+    "next_stage": "remain_in_data_stage_until_predeclared_core_requirements_pass",
     "sample_expansion": {
-      "status": "completed_and_frozen",
+      "status": "previous_quantity_budget_completed_not_final_data_acceptance",
       "directory": "results/synthetic/expanded",
       "base": "results/synthetic/experiment",
       "targets": {
@@ -73,6 +73,19 @@
       "new_world_rejections": 0,
       "normal_sources_added": 0,
       "remaining_limits": "uneven_far_coverage;_added_validation_far_returns_92.36_percent_from_one_world;_no_far_frames_with_20_in_range_returns;_object_occlusion_degree_unquantified;_no_detection_gain_measured"
+    },
+    "data_preparation_accepted": false,
+    "original_pool_summary_completed": true,
+    "balanced_pool_target": {
+      "train": 240,
+      "validation": 120,
+      "combinations": 30,
+      "per_cell": {
+        "train": 8,
+        "validation": 4
+      },
+      "candidate_directory": "results/synthetic/pool",
+      "status": "generating_candidates_not_final_selection"
     }
   },
   "data": {

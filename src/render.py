@@ -2325,6 +2325,64 @@ def shape_geometry(shape: ShapeSpec) -> dict:
                 bounds="continuous_outer_bounds_with_1e-6_m_padding")
 
 
+def primary_structure(relations):
+    """One inventory class, while retaining every nonexclusive physical relation."""
+    for key, name in (("multi_branch", "branched"), ("multiple_contact", "contacts"),
+                      ("sheet", "sheet"), ("elongated", "elongated")):
+        if relations[key] is None:
+            return None
+        if relations[key]:
+            return name
+    return "solid"
+
+
+def shape_relations(shape: ShapeSpec, parameters: dict) -> dict:
+    """Measure actual occupied geometry; template names never determine these tags."""
+    from scipy.ndimage import label
+    from scipy.signal import find_peaks
+    from scipy.spatial import ConvexHull
+
+    lower, upper = shape.tight_continuous_outer_bounds(z_slabs=256, safety_margin_m=1e-6)
+    estimates = []
+    for volume_n, n in zip((33, 49), parameters["projection_resolutions"]):
+        axes = [np.linspace(a, b, volume_n) for a, b in zip(lower, upper)]
+        volume = np.stack(np.meshgrid(*axes, indexing="ij"), axis=-1).reshape(-1, 3)
+        occupied = volume[shape.signed_distance(volume) <= 0]
+        eigen = np.maximum(np.linalg.eigvalsh(np.cov(occupied, rowvar=False)), 1e-15)
+        ratios = np.sqrt([eigen[2] / eigen[0], eigen[2] / eigen[1], eigen[0] / eigen[1]])
+        x, y = [np.linspace(a, b, n) for a, b in zip(lower[:2], upper[:2])]
+        xy = np.stack(np.meshgrid(x, y, indexing="ij"), axis=-1).reshape(-1, 2)
+        origins = np.column_stack((xy, np.full(len(xy), upper[2] + 1)))
+        directions = np.tile([0., 0., -1.], (len(xy), 1))
+        _, _, hit = shape.intersect(origins, directions)
+        projected = xy[hit]
+        area = float((x[1] - x[0]) * (y[1] - y[0]))
+        solidity = min(1., len(projected) * area / ConvexHull(projected).volume)
+        centered = projected - occupied[:, :2].mean(axis=0)
+        angles = np.mod(np.arctan2(centered[:, 1], centered[:, 0]), 2 * np.pi)
+        radial = np.zeros(360)
+        np.maximum.at(radial, np.floor(angles * 180 / np.pi).astype(int) % 360, np.linalg.norm(centered, axis=1))
+        peaks, _ = find_peaks(np.tile(radial, 3),
+            prominence=parameters["branch_min_prominence_fraction"] * radial.max(),
+            distance=parameters["branch_min_separation_degrees"])
+        branches = int(np.sum((peaks >= 360) & (peaks < 720))) if solidity <= parameters["branch_max_solidity"] else 0
+        plane = np.column_stack((xy, np.full(len(xy), lower[2] + parameters["contact_band_m"])))
+        contact = (shape.signed_distance(plane) <= 0).reshape(n, n)
+        components, _ = label(contact, np.ones((3, 3), int))
+        areas = np.bincount(components.ravel())[1:] * area
+        contacts = int(np.sum(areas >= 1e-4))
+        estimates.append(dict(compact=bool(ratios[0] <= parameters["compact_max_axis_ratio"]),
+            elongated=bool(ratios[1] >= parameters["elongated_min_length_width_ratio"]),
+            sheet=bool(ratios[2] <= parameters["sheet_max_thickness_width_ratio"]),
+            multi_branch=branches >= 3, multiple_contact=contacts >= 2,
+            contact_regions=contacts, branch_peaks=branches, solidity=solidity,
+            inertia_axis_ratios=ratios.tolist()))
+    tags = {k: estimates[0][k] if estimates[0][k] == estimates[1][k] else None
+            for k in ("compact", "elongated", "sheet", "multi_branch", "multiple_contact", "contact_regions")}
+    return dict(**tags, estimates=estimates,
+                interpretation="finite_resolution_occupied_volume_projection_and_one_cm_contact_band; null_on_resolution_disagreement")
+
+
 def sample_training_anomaly_shape(
     seed: int,
     *,

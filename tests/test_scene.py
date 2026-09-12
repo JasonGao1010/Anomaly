@@ -278,6 +278,23 @@ def test_composed_shape_bounds_grounding_and_distinct_contacts():
             assert signed[0] > 0 and (signed[1:] < 0).all()
 
 
+def test_physical_relations_measure_occupied_shape_including_angular_seam():
+    import json
+    from pathlib import Path
+    from src.render import ShapeSpec, shape_relations
+
+    parameters = json.loads(Path("protocol/data.json").read_text())["research_coverage"]["morphology"]
+    def measure(scales):
+        shape = ShapeSpec(tuple(scales), ((0., 0., 0.),) * len(scales),
+                          ((1., 1.),) * len(scales), (0.,) * len(scales), ("union",) * len(scales))
+        return shape_relations(shape, parameters)
+    sphere = measure([(.5, .5, .5)])
+    assert sphere["compact"] and not sphere["multi_branch"]
+    assert measure([(1., .12, .12)])["elongated"]
+    assert measure([(.7, .5, .05)])["sheet"]
+    assert measure([(1., .12, .1), (.12, 1., .1)])["multi_branch"]
+
+
 def test_proposal_counts_true_surface_gaps_occlusion_and_the_same_signal(monkeypatch):
     from src.generate import make_shape, ray_observation
     from src.render import MaterialSpec, ObjectSpec, RayGrid, SensorCalibration, WorldSpec, render_frame

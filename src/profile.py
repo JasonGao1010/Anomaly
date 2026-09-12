@@ -82,9 +82,7 @@ def observed_geometry(xyzi, source_slots, query_slots=None, workers=1, block_siz
     values = {name: np.full(n, np.nan) for name in names}
     normals = np.full((n, 3), np.nan)
     valid, normal_valid, change_valid = (np.zeros(n, bool) for _ in range(3))
-    for start in range(0, n, block_size):
-        stop = min(n, start + block_size)
-        selected = np.arange(start, stop)
+    def neighborhood(selected):
         # One extra candidate exposes boundary ties; original slots break them.
         _, ids = tree.query(xyz[selected], k=np.arange(1, k + 3),
                             distance_upper_bound=np.nextafter(radius, np.inf), workers=workers)
@@ -102,7 +100,21 @@ def observed_geometry(xyzi, source_slots, query_slots=None, workers=1, block_siz
             candidates, measured = candidates[keep], measured[keep]
             take = np.lexsort((representative[candidates], measured))[:k]
             ids[row, :k], distances[row, :k] = candidates[take], measured[take]
-        ids, distances = ids[:, :k], distances[:, :k]
+        return ids[:, :k], distances[:, :k]
+
+    requested = np.unique(inverse[rows])
+    fit_positions = requested
+    if len(requested) < n:
+        support = [requested]
+        for start in range(0, len(requested), block_size):
+            ids, distances = neighborhood(requested[start:start + block_size])
+            support.append(ids[np.isfinite(distances)])
+        # A queried normal change needs its neighbors' normals, each fitted on
+        # the complete scan. No further normal changes are needed recursively.
+        fit_positions = np.unique(np.concatenate(support))
+    for start in range(0, len(fit_positions), block_size):
+        selected = fit_positions[start:start + block_size]
+        ids, distances = neighborhood(selected)
         seen = np.isfinite(distances)
         counts = seen.sum(axis=1)
         neighbors[selected] = np.where(seen, ids, -1)
@@ -140,8 +152,9 @@ def observed_geometry(xyzi, source_slots, query_slots=None, workers=1, block_siz
         values["surface_residual"][chosen[reliable]] = np.abs(
             np.einsum("bi,bi->b", center[reliable], vectors[reliable, :, 0]))
     # Every neighbor normal uses its own full-scan support, including unqueried points.
-    for start in range(0, n, block_size):
-        chosen = np.flatnonzero(normal_valid[start:start + block_size]) + start
+    for start in range(0, len(requested), block_size):
+        block = requested[start:start + block_size]
+        chosen = block[normal_valid[block]]
         ids = neighbors[chosen]
         usable = (ids >= 0) & normal_valid[np.maximum(ids, 0)]
         counts = usable.sum(axis=1)

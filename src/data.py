@@ -285,6 +285,19 @@ class FrozenDataset:
         path, identity, frame = self.samples[index]
         return FrozenFrame.load(path, self.sequence[frame], identity)
 
+    def sampling_probabilities(self, path):
+        """Align declared scan probabilities by fixed world and source-frame identity."""
+        with np.load(path, allow_pickle=False) as values:
+            keys = list(zip(values["world_identity"].tolist(), values["frame"].tolist()))
+            weights = np.asarray(values["probability"], np.float64)
+        expected = [(identity, frame) for _, identity, frame in self.samples]
+        if len(set(keys)) != len(keys) or set(keys) != set(expected) or len(weights) != len(keys):
+            raise DataProtocolError("sampling probabilities do not describe this complete dataset split")
+        if not np.isfinite(weights).all() or np.any(weights <= 0) or not np.isclose(weights.sum(), 1., atol=1e-12):
+            raise DataProtocolError("every frozen scan needs positive normalized sampling probability")
+        lookup = dict(zip(keys, weights))
+        return np.array([lookup[key] for key in expected])
+
 
 def _atomic_json(path, payload):
     path = Path(path)
