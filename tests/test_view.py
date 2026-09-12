@@ -2,11 +2,12 @@ from dataclasses import replace
 import json
 
 import numpy as np
+import pytest
 
 from src.data import FrozenFrame
 from src.protocol import load_protocol
 from src.scene import PointLabels, make_source_frame
-from src.view import Camera, intensity_colors, labelled_points, load_frame
+from src.view import Camera, intensity_colors, labelled_points, load_frame, select_preview
 
 
 def test_rectilinear_projection_preserves_lines_field_of_view_and_fixed_offset():
@@ -124,3 +125,23 @@ def test_single_frame_reader_uses_frozen_truth_and_original_sensor_coordinates(t
     np.testing.assert_array_equal(points, changed[:3])
     np.testing.assert_array_equal(target, [0, 1, -1])
     assert calls[0]["partition"] == "train" and calls[0]["sequence_id"] == 206
+
+
+def test_preview_selection_requires_front_visible_anomaly_and_preserves_distance_ranking(tmp_path):
+    camera = Camera(1200, 800, 120, (-.3, 0, -.6), 1)
+    frames = tmp_path / "frames"
+    frames.mkdir()
+    rows = []
+    # The closest scan is behind the camera; the other two tie in distance.
+    for frame, distance, xyz in ((0, 42.5, [-42.5, 0, 0]),
+                                  (1, 41., [41., 0, 0]), (2, 44., [44., 0, 0])):
+        np.savez(frames / f"{frame:06d}.npz", world_identity="a" * 64,
+                 source_identity=f"source-{frame}", source_slot=np.array([7, 9]),
+                 inserted_slot=np.array([9]), xyzi=np.array([[5, 0, 0, .1], [*xyz, .2]]))
+        rows.append(dict(frame=frame, range=distance, source_identity=f"source-{frame}"))
+    chosen, reason = select_preview(rows[::-1], tmp_path, "a" * 64, camera, [35, 50])
+    assert chosen["frame"] == 1 and reason is None
+    assert select_preview(rows[:1], tmp_path, "a" * 64, camera, [35, 50]) == (None, "outside_front_view")
+    assert select_preview([], tmp_path, "a" * 64, camera, [35, 50]) == (None, "no_range_observation")
+    with pytest.raises(ValueError, match="different frozen scan"):
+        select_preview(rows[:1], tmp_path, "b" * 64, camera, [35, 50])
