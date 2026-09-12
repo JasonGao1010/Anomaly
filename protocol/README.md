@@ -119,7 +119,6 @@
 | `coverage/` | 当前合成覆盖结果、最终选择记录及原始正常对照。 |
 | `geometry/` | 真实条件几何分析、正常参考、探针结果及可复用逐帧缓存。 |
 | `profile/` | 真实val19画像的记录和表格，不含旧原型诊断。 |
-| `view/` | 固定相机生成的四张当前示例JPG，不作为训练样本。 |
 
 根目录、标定与协议文件：
 
@@ -333,15 +332,14 @@ PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m src.scene \
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m src.view \
-  results/synthetic/train/contacts_raised_rough_3/frames/000238.npz \
-  --output results/view/synthetic.jpg
+  results/synthetic/train/contacts_raised_rough_3/frames/000238.npz
 
 PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m src.view \
   /home/jasongao/Data/STU/train/206/velodyne/000238.bin \
-  --output results/view/original.jpg
+  --output results/synthetic/train/contacts_raised_rough_3/original_000238.jpg
 ```
 
-不指定 `--output` 时，图片保存到 `results/view/`，名称包含来源、世界和帧号。合成帧所需原始数据根目录默认为 `/home/jasongao/Data/STU`，可用 `--data-root` 指定。该目录中的 JPG 是可重新生成的观察图，不是模型成绩或数据覆盖验收结果。
+合成单帧不指定 `--output` 时，图片保存到其世界目录，名称为 `frame_<帧号>.jpg`，不会覆盖批量生成的四张预览。原始扫描必须指定输出文件，程序不在仓库外的原始数据目录中自动写图。合成帧所需原始数据根目录默认为 `/home/jasongao/Data/STU`，可用 `--data-root` 指定。此前独立存放的四张示例已删除，当前预览统一保留在世界目录。JPG是可重新生成的观察图，不是模型成绩或数据覆盖验收结果。
 
 批量预览复用同一程序，为当前主清单中的每个世界输出 `near.jpg`、`middle.jpg`、`far.jpg`、`original.jpg`，默认直接放在各世界目录内，与 `frames/` 同级。240个训练世界和120个验证世界各四张，共1,440张；原始帧、冻结清单与统计结果不变。命令如下：
 

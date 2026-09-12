@@ -451,7 +451,7 @@ def main():
     parser.add_argument("--dataset", type=Path, help="为清单内每世界生成远、中、近和原始背景四张图")
     parser.add_argument("--workers", type=int, default=min(16, len(os.sched_getaffinity(0))))
     parser.add_argument("--output", type=Path,
-                        help="单帧输出 JPG（默认 results/view/）；批量输出目录（默认各世界原目录）")
+                        help="单帧输出 JPG（合成帧默认同世界目录，原始帧须指定）；批量输出目录默认各世界原目录")
     parser.add_argument("--config", type=Path, default=PROJECT_ROOT / "protocol/data.json")
     parser.add_argument("--data-root", type=Path, default=Path("/home/jasongao/Data/STU"),
                         help="还原合成差量所需的原始 STU 根目录")
@@ -466,8 +466,9 @@ def main():
         return
     sample = load_frame(args.frame, args.data_root, protocol)
     source = sample.source if isinstance(sample, FrozenFrame) else sample
-    world = args.frame.parent.parent.name if isinstance(sample, FrozenFrame) else "original"
-    output = args.output or PROJECT_ROOT / "results/view" / f"{source.partition}_{source.sequence_id}_{world}_{source.frame_id:06d}.jpg"
+    if args.output is None and not isinstance(sample, FrozenFrame):
+        parser.error("original scans require --output; never write previews into the raw dataset")
+    output = args.output or args.frame.parent.parent / f"frame_{source.frame_id:06d}.jpg"
     metadata = save_view(sample, args.frame, output, config["visualization"])
     print(json.dumps(dict(output=str(output.resolve()), counts=metadata["counts"],
                           camera_image_size=metadata["camera_image_size"],
