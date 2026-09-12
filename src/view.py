@@ -1,4 +1,4 @@
-"""Project one labelled STU scan through a fixed rectilinear wide-angle camera."""
+"""Render labelled scan previews and world maps with the recorded vehicle trajectory."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 import csv
 from dataclasses import dataclass
 from functools import lru_cache
-from itertools import groupby
+from itertools import groupby, product
 import json
 import multiprocessing as mp
 import os
@@ -445,10 +445,297 @@ def batch_views(directory, data_root, config, protocol_path, output=None, worker
         seconds=time.monotonic()-started, workers=workers, host_before=disk, host_after=host_disk())
 
 
+def map_pixels(xy, bounds, size):
+    """Orthographic world XY projection: equal metre scale, world +Y upwards."""
+    bounds = np.asarray(bounds, float)
+    size = np.asarray(size, int)
+    scale = np.min(size / (bounds[1] - bounds[0]))
+    pixels = (np.asarray(xy)[..., :2] - bounds.mean(0)) * scale
+    return pixels * [1, -1] + size / 2
+
+
+def map_object(record):
+    """Use the saved physical extent only to choose a window containing the object."""
+    obj = record["world"]["objects"][0]
+    geometry = record["generation"]["geometry"]
+    corners = np.array(list(product(*zip(geometry["lower_local_m"], geometry["upper_local_m"]))))
+    rotation, centre = np.asarray(obj["rotation_world_from_local"]), np.asarray(obj["translation_world_m"])
+    return corners @ rotation.T + centre, centre
+
+
+def map_returns(directory, manifest, source):
+    """Recover all actual inserted returns; never replace a missing return with geometry."""
+    points = []
+    for row in manifest["frames"]:
+        if not row["count"]:
+            continue
+        frame = row["frame"]
+        with np.load(directory / "frames" / f"{frame:06d}.npz", allow_pickle=False) as delta:
+            inserted, slots = delta["inserted_slot"], delta["source_slot"]
+            indices = np.searchsorted(slots, inserted)
+            if (delta["world_identity"].item() != manifest["world_identity"] or len(inserted) != row["count"]
+                    or np.any(indices >= len(slots)) or not np.array_equal(slots[indices], inserted)):
+                raise ValueError("map visibility and actual frozen inserted returns disagree")
+            xyzi = delta["xyzi"][indices]
+        pose = source.lidar_pose(frame)
+        world = xyzi[:, :3].astype(float) @ pose[:3, :3].T + pose[:3, 3]
+        points.append(np.column_stack([world, xyzi[:, 3]]))
+    return np.concatenate(points) if points else np.empty((0, 4))
+
+
+def _map_background(job):
+    split, frames, bounds, shape = job
+    source, settings = _view_sources[split], _view_settings
+    count = np.zeros(shape[0] * shape[1], np.uint32)
+    total = np.zeros((len(count), 3), np.float64)
+    colors = {int(k): tuple(v) for k, v in settings["label_colors"].items()}
+    real = included = 0
+    for frame in frames:
+        scan = source[int(frame)]
+        xyzi, target = labelled_points(scan)
+        # Use raw sensor XYZ and the calibrated pose exactly once; coordinates is already transformed.
+        world = xyzi[:, :3].astype(float) @ scan.lidar_pose[:3, :3].T + scan.lidar_pose[:3, 3]
+        pixel = np.floor((world[:, :2] - bounds[0]) / .1).astype(np.int64)
+        valid = np.all((pixel >= 0) & (pixel < shape), axis=1)
+        ids = pixel[valid, 1] * shape[0] + pixel[valid, 0]
+        rgb = intensity_colors(xyzi[valid, 3], target[valid], colors,
+                               settings["background_rgb"], settings["intensity"])
+        # Every in-bounds return contributes, including coincident slots and overlapping scans.
+        np.add.at(count, ids, 1)
+        np.add.at(total, ids, rgb)
+        real += len(xyzi)
+        included += len(ids)
+    return split, count, total, real, included
+
+
+def _map_arrow(draw, a, b, color, width=4):
+    a, b = np.asarray(a, float), np.asarray(b, float)
+    length = np.linalg.norm(b - a)
+    if length < 1:
+        return
+    direction = (b - a) / length
+    side = np.array([-direction[1], direction[0]])
+    draw.line([tuple(a), tuple(b)], fill=color, width=width)
+    base = b - direction * min(14, length * .6)
+    draw.polygon([tuple(b), tuple(base + 6 * side), tuple(base - 6 * side)], fill=color)
+
+
+def _map_panel(base, raster_bounds, bounds, size, trajectory, points, centre, closest, visible):
+    # Expand world limits to match panel aspect instead of stretching the path or object.
+    scale = np.min(np.asarray(size) / np.ptp(bounds, axis=0))
+    bounds = bounds.mean(0) + np.array([-1, 1])[:, None] * np.asarray(size) / scale / 2
+    crop = ((bounds[0, 0] - raster_bounds[0, 0]) / .1,
+            (raster_bounds[1, 1] - bounds[1, 1]) / .1,
+            (bounds[1, 0] - raster_bounds[0, 0]) / .1,
+            (raster_bounds[1, 1] - bounds[0, 1]) / .1)
+    panel = base.transform(size, Image.Transform.EXTENT, crop, resample=Image.Resampling.BILINEAR,
+                           fillcolor=tuple(_view_settings["background_rgb"]))
+    draw = ImageDraw.Draw(panel)
+    write, _ = _text_writer(draw, 20)
+    positions = map_pixels(trajectory, bounds, size)
+    colors = np.where(np.asarray(visible)[:, None], [255, 218, 45], [194, 116, 255])
+    for axis in (0, 1):
+        step = 10 ** np.floor(np.log10(np.ptp(bounds, axis=0)[axis] / 5))
+        if np.ptp(bounds, axis=0)[axis] / step > 10:
+            step *= 5
+        for value in np.arange(np.ceil(bounds[0, axis] / step) * step, bounds[1, axis], step):
+            if abs(value) < 1e-9:
+                value = 0.
+            endpoints = bounds.copy()
+            endpoints[:, axis] = value
+            line = map_pixels(endpoints, bounds, size)
+            draw.line([tuple(p) for p in line], fill=(39, 48, 61), width=1)
+            if axis == 0:
+                write(min(line[0, 0] + 3, size[0] - 44), size[1] - 6, f"{value:g}", (175, 185, 200))
+            else:
+                write(5, line[0, 1] - 4, f"{value:g}", (175, 185, 200))
+    # A recorded origin owns the half-segments on either side; no unseen frame is inferred.
+    for i, p in enumerate(positions):
+        a = (positions[i-1] + p) / 2 if i else p
+        b = (p + positions[i+1]) / 2 if i+1 < len(positions) else p
+        draw.line([tuple(a), tuple(p), tuple(b)], fill=tuple(colors[i]), width=4)
+    travelled = np.r_[0., np.cumsum(np.linalg.norm(np.diff(trajectory, axis=0), axis=1))]
+    for distance in np.linspace(0, travelled[-1], 10)[1:-1]:
+        i = min(int(np.searchsorted(travelled, distance)), len(positions) - 2)
+        direction = positions[i + 1] - positions[i]
+        norm = np.linalg.norm(direction)
+        if norm > .001:
+            _map_arrow(draw, positions[i], positions[i] + direction / norm * 26, tuple(colors[i]))
+    for i, name in ((0, "起点"), (-1, "终点")):
+        x, y = positions[i]
+        marker = tuple(colors[i])
+        if 0 <= x < size[0] and 0 <= y < size[1]:
+            draw.ellipse((x-7, y-7, x+7, y+7), fill=marker, outline="white", width=2)
+            label_x = x+11 if x+165 < size[0] else x-155
+            write(max(label_x, 5), max(y-10, 52), f"{name} {i if i == 0 else len(positions)-1:06d}", marker)
+    pixel = np.floor(map_pixels(points, bounds, size)).astype(np.int64)
+    valid = np.all((pixel >= 0) & (pixel < size), axis=1)
+    ids = pixel[valid, 1] * size[0] + pixel[valid, 0]
+    settings = _view_settings
+    palette = {int(k): v for k, v in settings["label_colors"].items()}
+    rgb = intensity_colors(points[valid, 3], np.ones(valid.sum(), np.int8), palette,
+                           settings["background_rgb"], settings["intensity"])
+    count = np.zeros(size[0] * size[1], np.uint32)
+    total = np.zeros((len(count), 3))
+    np.add.at(count, ids, 1)
+    np.add.at(total, ids, rgb)
+    rendered = np.array(panel).reshape(-1, 3)
+    occupied = count > 0
+    rendered[occupied] = np.rint(total[occupied] / count[occupied, None]).astype(np.uint8)
+    panel = Image.fromarray(rendered.reshape(size[1], size[0], 3))
+    draw = ImageDraw.Draw(panel)
+    write, _ = _text_writer(draw, 20)
+    x, y = map_pixels(centre, bounds, size)
+    write(min(max(x+18, 5), size[0]-140), max(y-18, 25), "物体回波", (255, 137, 113))
+    px, py = positions[closest]
+    if 0 <= px < size[0] and 0 <= py < size[1]:
+        draw.ellipse((px-6, py-6, px+6, py+6), outline=(239, 242, 246), width=2)
+    write(size[0]-132, size[1]-30, "世界 X (m)", (211, 220, 234))
+    write(10, 28, "世界 Y (m)", (211, 220, 234))
+    return panel, bounds.tolist()
+
+
+def _world_map(job):
+    split, directory, identity, output = job
+    record = json.loads((directory / "world.json").read_text())
+    manifest = json.loads((directory / "manifest.json").read_text())
+    source = _view_sources[split]
+    if (manifest["world_identity"] != identity or record["world"]["source_sequence_id"] != source.spec.sequence_id
+            or [r["frame"] for r in manifest["frames"]] != list(source.frame_ids)):
+        raise ValueError("map source, world and full frame order must agree")
+    trajectory = np.array([source.lidar_pose(i)[:2, 3] for i in source.frame_ids])
+    visible = np.array([r["count"] > 0 for r in manifest["frames"]])
+    points = map_returns(directory, manifest, source)
+    corners, centre = map_object(record)
+    distance = np.linalg.norm(trajectory - centre[:2], axis=1)
+    closest = int(np.argmin(distance))
+    base, raster_bounds, background_counts = _map_bases[split]
+    content = np.concatenate([trajectory, corners[:, :2]])
+    full_bounds = np.array([content.min(0)-12, content.max(0)+12])
+    local = np.vstack([corners[:, :2], trajectory[closest]])
+    local_bounds = np.array([local.min(0)-5, local.max(0)+5])
+    image = Image.new("RGB", (1920, 1240), tuple(_view_settings["background_rgb"]))
+    draw = ImageDraw.Draw(image)
+    write, fonts = _text_writer(draw, 26)
+    write(45, 45, f"俯视地图 · {split} / {directory.name}", (235, 239, 245))
+    write(45, 95, "完整行驶轨迹", (211, 220, 234))
+    write(1300, 95, "物体附近放大", (211, 220, 234))
+    full, full_limits = _map_panel(base, raster_bounds, full_bounds, (1200, 990), trajectory, points, centre, closest, visible)
+    zoom, zoom_limits = _map_panel(base, raster_bounds, local_bounds, (610, 610), trajectory, points, centre, closest, visible)
+    image.paste(full, (40, 115))
+    image.paste(zoom, (1280, 115))
+    path_length = float(np.linalg.norm(np.diff(trajectory, axis=0), axis=1).sum())
+    for y, text in ((778, f"正常来源：{source.spec.sequence_id} · 全部 {len(trajectory)} 帧"),
+                    (820, f"扫到物体：{int(visible.sum())} 帧"),
+                    (862, f"平面路径长度：{path_length:.2f} m"),
+                    (904, f"物体 (X, Y)：({centre[0]:.2f}, {centre[1]:.2f}) m"),
+                    (946, f"最近位姿帧：{closest:06d}"),
+                    (988, f"至物体原点平面距离：{distance[closest]:.2f} m"),
+                    (1046, "红色点：实际扫描到的物体回波"),
+                    (1088, "黄色：扫到物体；紫色：未扫到")):
+        write(1285, y, text, (211, 220, 234))
+    write(45, 1150, "背景：原始正常序列全部回波的俯视投影；蓝色为正常，绿色为忽略，明暗取决于原始强度。", (182, 195, 213))
+    write(45, 1192, "路径采用 LiDAR 原点位姿；物体点来自各帧实际插入回波，至少一个回波即标黄。上下方向对应世界 Y，不表示地理北。", (182, 195, 213))
+    metadata = dict(projection="orthographic_world_xy", world=directory.name, world_identity=identity,
+        source_sequence=source.spec.sequence_id, source_frames=len(trajectory),
+        source_pose=str(source.sequence_dir / "poses.txt"), calibration=str(source.sequence_dir / "calib.txt"),
+        object_definition=str(directory / "world.json"), object_origin_world_m=centre.tolist(),
+        object_bounds_world_m=corners.tolist(), trajectory="all calibrated LiDAR origins in source frame order",
+        closest_frame=closest, closest_origin_xy_distance_m=float(distance[closest]), path_length_xy_m=path_length,
+        visibility=dict(visible_frames=np.flatnonzero(visible).tolist(), visible_count=int(visible.sum()),
+            invisible_count=int((~visible).sum()),
+            definition="frozen frame manifest count > 0; at least one actual inserted return in the complete scan",
+            filters="no official range/minimum-point filter; independent of the front-view camera",
+            colors=dict(visible=[255, 218, 45], invisible=[194, 116, 255]),
+            segment_rule="each recorded origin owns adjacent half-segments; midpoint transitions are display interpolation"),
+        full_bounds_xy_m=full_limits, zoom_bounds_xy_m=zoom_limits,
+        background=dict(**background_counts, grid_m=.1, bounds_xy_m=raster_bounds.tolist(),
+            source="all original scans before insertion; every actual return within map bounds contributes",
+            aggregation="mean intensity-shaded RGB; no height, depth or point-count rejection"),
+        object_display="actual frozen inserted returns from all source frames, transformed once to world XY; no box or substitute points",
+        object_return_occurrences=len(points),
+        fonts=fonts, image_size=list(image.size))
+    _save_jpeg(image, output / "map.jpg", metadata)
+    return dict(world=directory.name, split=split, bytes=(output / "map.jpg").stat().st_size)
+
+
+def batch_maps(directory, data_root, config, protocol_path, output=None, workers=8):
+    global _map_bases
+    directory = Path(directory).resolve(strict=True)
+    manifest = json.loads((directory / "manifest.json").read_text())
+    if manifest.get("format") != "stu-frozen-dataset" or manifest.get("status") != "frozen":
+        raise ValueError("maps require the current frozen world manifest")
+    if not 1 <= workers <= len(os.sched_getaffinity(0)):
+        raise ValueError("workers must fit the available CPU allocation")
+    disk, started = host_disk(), time.monotonic()
+    worlds = sum(len(s["worlds"]) for s in manifest["splits"].values())
+    if disk["SizeRemaining"] - worlds * 4_000_000 < disk["reserve_bytes"]:
+        raise OSError("world maps would enter the host E: reserve")
+    _initialize_views(data_root, protocol_path, config["visualization"], None)
+    background_jobs, jobs, accumulators = [], [], {}
+    for split, data in manifest["splits"].items():
+        source = _view_sources[split]
+        if data["source_sequence"] != source.spec.sequence_id:
+            raise ValueError("map split must keep its declared normal source")
+        content = [np.array([source.lidar_pose(i)[:2, 3] for i in source.frame_ids])]
+        for world in data["worlds"]:
+            path = directory / world["path"]
+            content.append(map_object(json.loads((path / "world.json").read_text()))[0][:, :2])
+            destination = Path(output) / split / path.name if output is not None else path
+            jobs.append((split, path, world["world_identity"], destination))
+        content = np.concatenate(content)
+        # Pad for both equal-aspect overview limits and local object windows.
+        middle = (content.min(0) + content.max(0)) / 2
+        half = max(np.ptp(content, axis=0)) * .65 + 30
+        bounds = np.array([np.floor((middle-half)*10)/10, np.ceil((middle+half)*10)/10])
+        shape = np.rint(np.ptp(bounds, axis=0) / .1).astype(int)
+        accumulators[split] = [np.zeros(np.prod(shape), np.uint32), np.zeros((np.prod(shape), 3)), bounds, shape, 0, 0]
+        for frames in np.array_split(source.frame_ids, min(workers, len(source))):
+            background_jobs.append((split, frames.tolist(), bounds, shape))
+    _map_bases = {}
+    checked = time.monotonic()
+    chunks = len(background_jobs)
+    with ProcessPoolExecutor(max_workers=workers, mp_context=mp.get_context("fork")) as pool:
+        futures = {pool.submit(_map_background, job) for job in background_jobs}
+        for future in as_completed(futures.copy()):
+            split, count, total, real, included = future.result()
+            acc = accumulators[split]
+            acc[0] += count
+            acc[1] += total
+            acc[4] += real
+            acc[5] += included
+            futures.remove(future)
+            if time.monotonic() - checked > 30:
+                host_disk()
+                checked = time.monotonic()
+            print(json.dumps(dict(event="map_background", source=split, completed_chunks=chunks-len(futures))), flush=True)
+    for split, (count, total, bounds, shape, real, included) in accumulators.items():
+        occupied = count > 0
+        rgb = np.empty((len(count), 3), np.uint8)
+        rgb[:] = config["visualization"]["background_rgb"]
+        rgb[occupied] = np.rint(total[occupied] / count[occupied, None]).astype(np.uint8)
+        _map_bases[split] = (Image.fromarray(rgb.reshape(shape[1], shape[0], 3)[::-1]), bounds,
+                             dict(actual_returns=real, projected_returns=included))
+    del accumulators, acc, count, total, future
+    results, checked = [], time.monotonic()
+    with ProcessPoolExecutor(max_workers=workers, mp_context=mp.get_context("fork")) as pool:
+        for future in as_completed([pool.submit(_world_map, job) for job in jobs]):
+            results.append(future.result())
+            if time.monotonic() - checked > 30:
+                host_disk()
+                checked = time.monotonic()
+            if len(results) % 30 == 0 or len(results) == worlds:
+                print(json.dumps(dict(event="world_maps", worlds=len(results), total=worlds,
+                                      seconds=round(time.monotonic()-started, 2))), flush=True)
+    return dict(worlds=len(results), images=len(results), bytes=sum(r["bytes"] for r in results),
+                seconds=time.monotonic()-started, workers=workers, host_before=disk, host_after=host_disk())
+
+
 def main():
-    parser = argparse.ArgumentParser(description="用固定120°广角相机绘制单帧，或生成每世界四张预览。")
+    parser = argparse.ArgumentParser(description="绘制单帧、每世界四张前视预览或俯视轨迹地图。")
     parser.add_argument("frame", type=Path, nargs="?", help="合成 frames/<帧>.npz 或原始 velodyne/<帧>.bin")
     parser.add_argument("--dataset", type=Path, help="为清单内每世界生成远、中、近和原始背景四张图")
+    parser.add_argument("--maps", action="store_true", help="与 --dataset 合用，为每世界生成俯视轨迹与物体位置 map.jpg")
     parser.add_argument("--workers", type=int, default=min(16, len(os.sched_getaffinity(0))))
     parser.add_argument("--output", type=Path,
                         help="单帧输出 JPG（合成帧默认同世界目录，原始帧须指定）；批量输出目录默认各世界原目录")
@@ -460,8 +747,11 @@ def main():
     protocol = load_protocol(args.config.parent / config["base_protocol"])
     if (args.frame is None) == (args.dataset is None):
         parser.error("provide either one frame or --dataset")
+    if args.maps and args.dataset is None:
+        parser.error("--maps requires --dataset")
     if args.dataset is not None:
-        result = batch_views(args.dataset, args.data_root, config, protocol.path, args.output, args.workers)
+        render = batch_maps if args.maps else batch_views
+        result = render(args.dataset, args.data_root, config, protocol.path, args.output, args.workers)
         print(json.dumps(result, ensure_ascii=False))
         return
     sample = load_frame(args.frame, args.data_root, protocol)

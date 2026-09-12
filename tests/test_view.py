@@ -7,7 +7,72 @@ import pytest
 from src.data import FrozenFrame
 from src.protocol import load_protocol
 from src.scene import PointLabels, make_source_frame
-from src.view import Camera, intensity_colors, labelled_points, load_frame, select_preview
+from src.view import Camera, intensity_colors, labelled_points, load_frame, map_object, map_pixels, map_returns, select_preview
+
+
+def test_world_map_uses_equal_xy_scale_and_rotated_physical_bounds():
+    bounds = np.array([[0., 0.], [10., 20.]])
+    xy = np.array([[0., 0.], [10., 20.], [5., 10.]])
+    np.testing.assert_allclose(map_pixels(xy, bounds, (100, 200)), [[0, 200], [100, 0], [50, 100]])
+    pixels = map_pixels(np.array([[5, 10], [6, 10], [5, 11]]), bounds, (300, 200))
+    np.testing.assert_allclose(pixels - pixels[0], [[0, 0], [10, 0], [0, -10]])
+    record = dict(world=dict(objects=[dict(translation_world_m=[10., 20., 30.],
+        rotation_world_from_local=[[0., -1., 0.], [1., 0., 0.], [0., 0., 1.]])]),
+        generation=dict(geometry=dict(lower_local_m=[-2., -1., -3.], upper_local_m=[2., 1., 3.])))
+    corners, centre = map_object(record)
+    np.testing.assert_allclose(centre, [10, 20, 30])
+    np.testing.assert_allclose(corners.min(0), [9, 18, 27])
+    np.testing.assert_allclose(corners.max(0), [11, 22, 33])
+
+
+def test_map_background_transforms_once_and_keeps_overlapping_returns(monkeypatch):
+    import src.view as view
+    xyz = np.array([[1., 0., 0., .25], [1., 0., 2., .5], [0., 0., 0., 1.]], np.float32)
+    packed = np.array([40, 40, 0], np.uint32)
+    labels = PointLabels(packed, packed.astype(np.uint16), np.zeros(3, np.uint16), np.array([8, 8, 255], np.uint8))
+    pose = np.array([[0., -1., 0., 2.05], [1., 0., 0., 3.05], [0., 0., 1., 0.], [0., 0., 0., 1.]])
+    sample = make_source_frame(0, xyz, pose, labels, partition="train", sequence_id=206)
+    settings = dict(label_colors={"-1":[80,210,100], "0":[72,167,235], "1":[255,80,45]},
+                    background_rgb=[12,16,23], intensity=dict(half_saturation=.25, minimum_contrast=.4))
+    monkeypatch.setattr(view, "_view_sources", {"train":{0:sample, 1:sample}}, raising=False)
+    monkeypatch.setattr(view, "_view_settings", settings, raising=False)
+    _, count, total, actual, included = view._map_background(("train", [0, 1], np.array([[0,0],[10,10]]), np.array([100,100])))
+    assert actual == included == count.sum() == 4
+    assert np.count_nonzero(count) == 1 and count[40*100+20] == 4
+    colors = intensity_colors(xyz[:2,3], np.zeros(2, np.int8),
+        {int(k):v for k,v in settings["label_colors"].items()}, settings["background_rgb"], settings["intensity"])
+    np.testing.assert_allclose(total[40*100+20] / 4, colors.mean(0))
+
+
+def test_map_returns_use_actual_inserted_slots_and_path_visibility_colors(tmp_path, monkeypatch):
+    import src.view as view
+    from types import SimpleNamespace
+    (tmp_path / "frames").mkdir()
+    xyzi = np.array([[50, 40, 30, .7], [2, 0, 1, .2], [2, 0, 1, .4]], np.float32)
+    np.savez(tmp_path / "frames/000001.npz", world_identity="a" * 64,
+             source_slot=[3, 8, 9], inserted_slot=[8, 9], xyzi=xyzi)
+    pose = np.array([[0., -1., 0., 10.], [1., 0., 0., 20.], [0., 0., 1., 0.], [0., 0., 0., 1.]])
+    source = SimpleNamespace(lidar_pose=lambda frame: pose)
+    manifest = dict(world_identity="a" * 64, frames=[dict(frame=0, count=0), dict(frame=1, count=2)])
+    points = map_returns(tmp_path, manifest, source)
+    np.testing.assert_allclose(points[:, :3], [[10, 22, 1], [10, 22, 1]])
+    np.testing.assert_array_equal(points[:, 3], xyzi[1:, 3])
+    manifest["frames"][1]["count"] = 3
+    with pytest.raises(ValueError, match="visibility"):
+        map_returns(tmp_path, manifest, source)
+    settings = dict(label_colors={"-1":[80,210,100], "0":[72,167,235], "1":[255,80,45]},
+                    background_rgb=[12,16,23], intensity=dict(half_saturation=.25, minimum_contrast=.4))
+    monkeypatch.setattr(view, "_view_settings", settings, raising=False)
+    monkeypatch.setattr(view, "_text_writer", lambda draw, size: (lambda *args: None, []))
+    monkeypatch.setattr(view, "_map_arrow", lambda *args: None)
+    bounds = np.array([[-5., -5.], [5., 5.]])
+    path = np.array([[-3., -1.], [-1., -1.], [1., -1.], [3., -1.]])
+    base = view.Image.new("RGB", (100, 100), (12,16,23))
+    panel, _ = view._map_panel(base, bounds, bounds, (400, 400), path, np.empty((0, 4)),
+                               np.array([0,4,0]), 0, np.array([False,True,False,True]))
+    pixels = map_pixels(path, bounds, (400, 400)).astype(int)
+    for (x,y), expected in zip(pixels, [(194,116,255),(255,218,45),(194,116,255),(255,218,45)]):
+        assert panel.getpixel((x,y)) == expected
 
 
 def test_rectilinear_projection_preserves_lines_field_of_view_and_fixed_offset():
