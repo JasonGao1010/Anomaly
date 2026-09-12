@@ -117,7 +117,7 @@
 | `pytest.ini` | 设置测试目录和项目导入路径。 |
 | `assets/rays.npz` | 激光束方向、束原点及槽位对应所需的标定参数，另含拟合和留出核验记录；由渲染器读取。 |
 | `protocol/spec.json` | 研究问题、当前状态、数据范围、点身份、标签和官方评价规则，另保留简短历史事实。 |
-| `protocol/data.json` | 当前样本入口、物理生成参数、几何诊断定义、30组合配额及取样预案；不定义新模型监督。 |
+| `protocol/data.json` | 当前样本入口、物理生成参数、几何诊断定义、30组合配额、取样预案及固定可视化相机参数；不定义新模型监督。 |
 | `protocol/README.md` | 研究说明、当前证据及其边界、历史结果和本功能表。 |
 
 程序文件：
@@ -127,6 +127,7 @@
 | [src/__init__.py](../src/__init__.py) | 标识 Python 程序包；只有包说明，没有实验入口。 |
 | [src/protocol.py](../src/protocol.py) | 读取并检查研究协议，限定正常来源和公开开发序列，提供统一数据与评价约定。 |
 | [src/scene.py](../src/scene.py) | 读取原始扫描、标签、位姿和标定，保留文件槽位身份，区分零占位与实际回波；是数据读取的基础。 |
+| [src/view.py](../src/view.py) | 读取任意现存合成单帧或允许范围内的原始扫描，按固定相对位姿的120°等距鱼眼相机投影，使用检测真值着色并保存 JPG；复用单帧读取器及字体定义。 |
 | [src/data.py](../src/data.py) | 保存、还原合成单帧差量，按清单读取完整世界，保存与恢复逐点预测身份，读取已声明的帧取样概率；另提供原子写入和宿主磁盘查询。 |
 | [src/render.py](../src/render.py) | 定义连续物体几何、材质和固定世界，处理射线标定、返回信号、合法放置、碰撞及前后景竞争，输出一帧物理渲染结果。 |
 | [src/generate.py](../src/generate.py) | 提出受约束的形状与放置，检查正常背景搭配，渲染全部源帧并保存世界和差量清单；当前默认入口遇到已冻结池直接返回。 |
@@ -144,6 +145,7 @@
 | 文件 | 检查的关键行为 |
 | --- | --- |
 | [tests/test_scene.py](../tests/test_scene.py) | 原始槽位、标签与预测身份，差量还原、物理遮挡、物体几何和合法结构。 |
+| [tests/test_view.py](../tests/test_view.py) | 等距投影与视场、固定相对位姿、独立于标签的近点显示，以及合成真值与零占位处理。 |
 | [tests/test_evaluate.py](../tests/test_evaluate.py) | 官方筛选、同分处理、全局指标、工作阈值及误差归属的一致性。 |
 | [tests/test_profile.py](../tests/test_profile.py) | 真实画像口径、局部几何与缺失、正常表面支持、内容选择、30格配额和稀疏正常搭配；文件覆盖画像及其直接共用的数据诊断。 |
 | [tests/test_probes.py](../tests/test_probes.py) | 正常参考边界、双尾计分、缺失参考、描述性匹配、精确计数和分组阈值。 |
@@ -332,6 +334,32 @@ PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m src.scene \
   --data-root /home/jasongao/Data/STU --partition val \
   --sequence 125 --frame 0 --labels required
 ```
+
+## 固定前视广角图像
+
+[src/view.py](../src/view.py) 接受一份实际帧文件，输出按检测真值着色的 JPG。合成 `.npz` 是差量，程序根据同一世界的清单定位原始206或201扫描，经 `FrozenFrame.load` 还原整帧并检查来源身份。也可直接输入允许范围内的原始 `velodyne/<帧>.bin`。当前完整样本入口仍为 `results/synthetic/refined/manifest.json`；它引用其他目录的帧也可直接读取。
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m src.view \
+  results/synthetic/refined/train/world_47427/frames/000238.npz \
+  --output results/view/synthetic.jpg
+
+PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m src.view \
+  /home/jasongao/Data/STU/train/206/velodyne/000238.bin \
+  --output results/view/original.jpg
+```
+
+不指定 `--output` 时，图片保存到 `results/view/`，名称包含来源、世界和帧号。合成帧所需原始数据根目录默认为 `/home/jasongao/Data/STU`，可用 `--data-root` 指定。该目录中的 JPG 是可重新生成的观察图，不是模型成绩或数据覆盖验收结果。
+
+相机参数统一保存在 `data.json` 的 `visualization` 中。默认相机中心在LiDAR后方0.3米、左侧0.35米、下方0.6米，光轴始终朝LiDAR的正前方；按LiDAR的前、左、上坐标轴，位置为 `(-0.3, 0.35, -0.6)` 米。这个位置是模拟驾驶员观察点，未将发布数据中的单位标定矩阵解释成真实驾驶员位置。程序直接使用当前传感器坐标，不按物体或当前点云范围自动转向、居中或缩放。
+
+相机画面为1920×1080像素，120°指水平中心线视场，竖直中心线视场为67.5°。采用等距鱼眼模型：若射线与光轴夹角为 θ，离图像中心的距离为 `f × θ`，其中 θ 用弧度表示，`f = 1920 / (120 × π / 180)` 像素；不是针孔模型的 `f × tan(θ)`。右、下、前相机坐标分别对应LiDAR的负左轴、负上轴和前轴。画面底部另附112像素说明栏，不计入视场。
+
+蓝色表示正常监督标签0，橙红色表示异常标签1，灰色表示忽略标签−1。合成图直接使用 `FrozenFrame.anomaly_target`：实际插入回波为异常，原始有效正常类别为正常，其余保持忽略。原始正常扫描使用相同正常类别规则，公开开发扫描使用发布的异常真值。零坐标占位在相机平移前去除；不应用官方评价距离、异常点数或几何有效性筛选。因此，少回波、无异常以及异常位于前视范围外的帧都可以生成图片。
+
+所有类别采用相同的1像素半径点标记，相互覆盖时显示离相机较近的已观测点，等距按原始槽位顺序处理。点云没有观测到的表面不进行补绘；相机偏离LiDAR后，未知表面带来的遮挡或新可见区域也无法凭这一帧恢复。图片是点云投影，不是真实彩色照片。说明栏分别报告整帧异常点、画内异常点和最终实际显示的异常点数量。
+
+JPG的 `EXIF ImageDescription` 保存输入身份、相机变换、投影参数、颜色及计数，便于确认跨帧控制变量一致。文字实际使用宋体和Times New Roman并检查字形，JPG采用高质量、无色度降采样保存；有损压缩仍可能轻微改变边缘颜色。该工具不修改原始数据、冻结样本、划分或训练定义。
 
 ## 预测身份和存储
 

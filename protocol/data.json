@@ -4,6 +4,22 @@
   "base_protocol": "spec.json",
   "seed": 2062026,
   "scope": "现有240／120世界已通过预先声明的数据覆盖验收，每格8／4；模型设计继续暂停，不自动扩充或训练。",
+  "visualization": {
+    "projection": "equidistant_fisheye",
+    "camera": {
+      "width": 1920,
+      "height": 1080,
+      "horizontal_fov_degrees": 120,
+      "offset_lidar_m": [-0.3, 0.35, -0.6],
+      "point_radius_px": 1
+    },
+    "label_colors": {
+      "-1": [142, 149, 160],
+      "0": [72, 167, 235],
+      "1": [255, 80, 45]
+    },
+    "background_rgb": [12, 16, 23]
+  },
   "dataset": {
     "directory": "results/synthetic/refined",
     "unit": "one_source_sequence_and_one_fixed_world_object",
