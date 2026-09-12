@@ -3,9 +3,9 @@
   "version": 1,
   "base_protocol": "spec.json",
   "seed": 2062026,
-  "scope": "30种组合每种保留8个训练世界、4个验证世界；本轮生成与筛选已完成，停止自动扩充和模型设计。",
+  "scope": "现有240／120世界已通过预先声明的数据覆盖验收，每格8／4；模型设计继续暂停，不自动扩充或训练。",
   "dataset": {
-    "directory": "results/synthetic/selected",
+    "directory": "results/synthetic/refined",
     "unit": "one_source_sequence_and_one_fixed_world_object",
     "input_unit": "one_current_scan_xyzi",
     "splits": {
@@ -23,10 +23,10 @@
     "anomaly_target": "inserted_returns_only",
     "normal_target": "valid_original_normal_class_map_entries",
     "split_unit": "whole_world_and_source_sequence",
-    "base_directory": "results/synthetic/selected"
+    "base_directory": "results/synthetic/refined"
   },
   "information_use": {
-    "current_pool": "最终240个训练和120个合成验证世界；每侧30格分别为8和4；仅206/201正常来源。",
+    "current_pool": "当前唯一完整入口results/synthetic/refined/manifest.json；240个训练、120个合成验证世界，每侧30格分别8和4；仅206/201正常来源。",
     "generation_sources": "仅原正常206/201、既有射线与传感器标定及预定物理变化；不使用val19分布选样，不引入其他正常来源。",
     "historical_development_pool": "results/synthetic/v1的40个世界样本已按最终只留360世界的授权删除；生成参数和历史覆盖结果保留，不进入当前入口。",
     "original_records": "选中世界的完整帧顺序、坐标、强度、标签及生成定义不变；旧池清单标记historical_pruned，原生成配置仍是历史来源记录。"
@@ -181,8 +181,8 @@
   },
   "calibration_source": "results/synthetic/candidates/calibration.pt",
   "proposals": {
-    "output": "results/synthetic/selected",
-    "seed_namespace": 7,
+    "output": "results/synthetic/refined",
+    "seed_namespace": 8,
     "shape_attempts": 3,
     "rounds": 1,
     "world_bytes_limit": 16777216,
@@ -200,7 +200,7 @@
     },
     "region_selection": "cycle evenly across all native-context regions with a same-source support view within 15 m; distinguish the sparse witness frame from the physical support frame; fixed source-specific new seeds",
     "acceptance": "same physical legality; require >=5 physical in-range foreground surface rays and >=5 unchanged adjacent native positions before fixed-signal rendering; actual qualification after rendering",
-    "stop": "fill exact 30-cell world counts; report scientific diagnostics separately without requiring every diagnostic to pass before selection",
+    "stop": "one bounded batch of 24 train and 24 validation proposals; retain exact 240/120 only if original scientific checks pass; otherwise report unresolved deficits without relaxing thresholds",
     "signal_rule": "fixed shape/material/signal seed per geometry parent; inspect only deterministic physical surface competition in support selection; never select supports by stochastic return realizations, reroll returns, alter return probabilities, add points, or use model scores",
     "sampling_use": "specified separately in research_coverage; no training",
     "candidates_per_cell": {
@@ -297,23 +297,94 @@
       "description": "full_original_scan_geometry; fixed_206_conditional_quantiles; spatially_spread_native_anchor_clusters; verify_surviving_normal_positions"
     },
     "retention": "existing and new worlds are assigned using the same actual structure, local height and verified native-context observations; each world assigned to one of 30 cells; remove redundant whole worlds only after final references are verified",
-    "index_start": 30000,
+    "index_start": 40000,
     "cell_candidates": {
       "train": {
-        "solid/low/sparse": 12,
-        "elongated/low/sparse": 6,
-        "branched/low/sparse": 24,
-        "contacts/low/sparse": 36
+        "solid/raised/sparse": 12,
+        "contacts/raised/sparse": 12
       },
-      "validation": {}
+      "validation": {
+        "solid/low/smooth": 12,
+        "solid/low/rough": 12
+      }
     },
     "native_yaw_offset_rad": [
       -0.7853981633974483,
       0.7853981633974483
     ],
     "native_surface_minimum": 5,
-    "measured_contexts_only": true,
-    "status": "historical_last_generation_recipe; batch_completed_no_pending_proposals; frozen_output_is_not_regenerated"
+    "measured_contexts_only": false,
+    "status": "targeted_batch_completed_and_selected; frozen_output_is_not_regenerated",
+    "cell_overrides": {
+      "train": {
+        "solid/raised/sparse": {
+          "opportunity": "far_dense",
+          "regions": [
+            "3/-3",
+            "5/-5",
+            "6/-7"
+          ]
+        },
+        "contacts/raised/sparse": {
+          "opportunity": "far_dense",
+          "regions": [
+            "3/-3",
+            "5/-5",
+            "6/-7"
+          ],
+          "height_m": [
+            0.8,
+            1.2
+          ]
+        }
+      },
+      "validation": {
+        "solid/low/smooth": {
+          "opportunity": "near_sparse",
+          "regions": [
+            "0/-1",
+            "1/-1",
+            "7/-3",
+            "11/-4"
+          ],
+          "length_m": [
+            0.065,
+            0.16
+          ],
+          "width_m": [
+            0.05,
+            0.075
+          ],
+          "height_m": [
+            0.07,
+            0.14
+          ],
+          "require_native_witness": false
+        },
+        "solid/low/rough": {
+          "opportunity": "near_sparse",
+          "regions": [
+            "1/-1",
+            "7/-4",
+            "11/-4",
+            "11/-5"
+          ],
+          "length_m": [
+            0.065,
+            0.16
+          ],
+          "width_m": [
+            0.05,
+            0.075
+          ],
+          "height_m": [
+            0.07,
+            0.14
+          ],
+          "require_native_witness": false
+        }
+      }
+    }
   },
   "research_coverage": {
     "output": "results/coverage/research",

@@ -981,8 +981,8 @@ def research_select(protocol, data_root):
         content, _ = research_content([r for r in rows if r["split"] == split], metadata,
             {(g["world_identity"], g["source_identity"]): g for g in geometry["observations"]}, config)
         limits = config["minimum"][split]
-        # Final world counts are the requested deliverable; science checks remain separately reported.
-        chosen, solver = balanced_assignment(candidates, quotas, 0)
+        # World-count quotas and predeclared scientific conditions must hold together.
+        chosen, solver = balanced_assignment(candidates, quotas, 0, (content, config, limits))
         report["groups"][split] = dict(candidate_worlds=len(candidates), eligible_worlds_by_cell=counts,
             quotas=quotas, solver=solver, selected_worlds=len(chosen) if chosen else 0)
         if chosen is None:
@@ -998,6 +998,8 @@ def research_select(protocol, data_root):
                 check["passed"] = False
             checks[key] = {k: v for k, v in check.items() if not k.endswith("_returns") or k == "anomaly_returns"}
         report["groups"][split]["core_checks"] = checks
+        if not all(c["passed"] for c in checks.values()):
+            raise ValueError("selected complete worlds violate a declared scientific condition")
         report["groups"][split]["actual_worlds_by_cell"] = dict(Counter(cell for _, cell in chosen))
         selected[split] = sorted(chosen, key=lambda x: (x[1], x[0]))
     if len(selected) != len(root["splits"]):

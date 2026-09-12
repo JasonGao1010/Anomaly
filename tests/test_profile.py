@@ -117,16 +117,22 @@ def test_expansion_geometry_parents_stay_within_source_and_budget(tmp_path):
         anchor_world_m=[10*i, 0, 0]) for s in ("train", "validation") for i in range(3)])))
     schedule = expansion_schedule(config)
     assert len({r["seed"] for r in schedule}) == len(schedule)
-    assert len(schedule) == 78
-    for split, count in (("train", 78), ("validation", 0)):
+    assert len(schedule) == 48
+    for split, count in (("train", 24), ("validation", 24)):
         groups = [r for r in schedule if r["split"] == split]
         indices = [i for r in groups for i in r["members"]]
         assert len(indices) == len(set(indices)) == count
         if not count:
             continue
         assert min(indices) >= config["proposals"]["index_start"]
-        assert {r["profile"]["shape"] for r in groups} == ({"single", "cross", "bridge"} if split == "train" else {"single"})
-        assert len({tuple(r["profile"]["target_region"]) for r in groups}) == 3
+        assert {r["profile"]["shape"] for r in groups} == ({"single", "bridge"} if split == "train" else {"single"})
+        assert {r["profile"]["opportunity"] for r in groups} == ({"far_dense"} if split == "train" else {"near_sparse"})
+        for group in groups:
+            profile = group["profile"]
+            declared = config["proposals"]["cell_overrides"][split][profile["combination"]]
+            assert "/".join(map(str, profile["target_region"])) in declared["regions"]
+            if split == "validation":
+                assert profile["length_m"][1] == .16 and not profile["require_native_witness"]
         from collections import Counter
         assert Counter(r["profile"]["combination"] for r in groups) == config["proposals"]["cell_candidates"][split]
 

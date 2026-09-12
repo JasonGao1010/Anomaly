@@ -642,10 +642,13 @@ def expansion_schedule(config, round_number=1, references=None, source_poses=Non
                     if not count:
                         cell += 1
                         continue
+                    overrides = proposals.get("cell_overrides", {}).get(split, {}).get(combination, {})
                     anchors = ({"/".join(map(str, r["region"])): r["anchor_world_m"]
                                 for r in available if r["kind"] == background} if references else
                                {w["regions"][0]: w["anchor_world_m"] for w in base})
-                    available_regions = sorted(anchors) or regions
+                    available_regions = overrides.get("regions", sorted(anchors) or regions)
+                    if not available_regions or (references and any(r not in anchors for r in available_regions)):
+                        raise ValueError(f"declared support regions lack native references: {split}/{combination}")
                     for repeat in range(count):
                         index = proposals.get("index_start", 2000) + cell*256 + repeat
                         region_index = int(np.floor(repeat * len(available_regions) / count))
@@ -668,6 +671,8 @@ def expansion_schedule(config, round_number=1, references=None, source_poses=Non
                             profile.update(length_m=[.7, 1.5], width_m=[.06, .12], height_m=[.5, 1.2])
                         if height == "low" and structure in ("branched", "contacts"):
                             profile.update(length_m=[1.5, 1.8], width_m=[.8, 1.], height_m=[.18, .195])
+                        # Target physical content before rendering; signal draws remain fixed.
+                        profile.update({k: v for k, v in overrides.items() if k != "regions"})
                         seed = int(np.random.SeedSequence([config["seed"], proposals["seed_namespace"],
                                                           item["source_sequence"], index]).generate_state(1)[0])
                         groups.append(dict(split=split, group=index, round=1, seed=seed, members=[index], profile=profile))
@@ -701,6 +706,9 @@ def generate_group(data_root, output, planned, config, identity):
     _, sequence, grid, sensor, references = _generation_inputs
     profile = planned["profile"]
     references = [r for r in references if r["kind"] == profile["native_context"] and r["region"] == profile["target_region"]]
+    if not profile.get("require_native_witness", True):
+        # Small visible objects need a near support search; verify their normal context after rendering.
+        references = None
     poses = np.array([sequence.lidar_pose(f)[:3, 3] for f in sequence.frame_ids])
     distance = np.linalg.norm(poses - np.asarray(profile["anchor_world_m"]), axis=1)
     profile = dict(profile, frame_candidates=np.flatnonzero((distance >= 5) & (distance <= 18)).tolist())

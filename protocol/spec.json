@@ -3,8 +3,8 @@
   "schema_version": 1,
   "research_question": "Using only the current scan, do observable local geometries distinguish anomaly labels from complex normal structures, does conditioning their normal reference on observable conditions improve discrimination, and can the existing synthetic training examples teach the model which differences have anomaly meaning?",
   "status": {
-    "stage": "balanced_dataset_selected",
-    "active_work": "none_this_data_task_completed",
+    "stage": "declared_data_coverage_accepted",
+    "active_work": "none_targeted_data_repair_completed",
     "model_defined": false,
     "training_defined": false,
     "formal_ajae_v1": "not_designed_or_implemented",
@@ -12,8 +12,7 @@
     "data_tools": "data.json",
     "synthetic_dataset_frozen": true,
     "distribution_match": "not_a_selection_objective",
-    "candidate_worlds_generated": 954,
-    "experiment_dataset": "results/synthetic/selected",
+    "experiment_dataset": "results/synthetic/refined",
     "experiment_worlds": {
       "train": 240,
       "validation": 120
@@ -26,16 +25,16 @@
     "geometry_evidence": "results/geometry",
     "geometry_conclusion": "weak_predictive_evidence_and_partial_conditioning_value_not_a_validated_anomaly_detector",
     "conditioning_interpretation": "range_and_ray_z_also_encode_sensor_coordinate_height_z_equal_range_times_ray_z_not_a_pure_sampling_causal_effect",
-    "synthetic_geometry_check_scope": "historical_40_world_checks_preserved; final_physical_inventory_360_worlds; geometry_cache_954_candidates_with_summary_restricted_to_selected_worlds",
+    "synthetic_geometry_check_scope": "full_physical_inventory_360_worlds_189600_frames; 43886_fixed_and_triggered_geometry_observations; historical_40_world_checks_separate",
     "synthetic_geometry_check_executed": true,
-    "synthetic_geometry_evidence": "results/coverage/geometry",
+    "synthetic_geometry_evidence": "results/coverage/research",
     "synthetic_geometry_conclusion": "nonextreme_anomalies_and_complex_original_normals_exist_insertion_changes_retained_normal_neighborhoods_and_sparse_geometry_has_condition_dependent_missingness",
-    "coverage_closure_completed": false,
+    "coverage_closure_completed": true,
     "coverage_closure_evidence": "results/coverage/research/summary.json",
-    "coverage_decision": "balanced_selection_completed; remaining_scientific_checks_are_not_unfinished_world_quotas; no_automatic_generation_training_or_model_design",
-    "coverage_boundaries": "two_normal_sources; train_far_dense_region_concentration; train_sparse_nonextreme_recurrence_shortfall; validation_near_1_4_recurrence_and_parent_concentration; geometry_missingness_and_self_occlusion_limits",
-    "next_stage": "await_user_direction; no_automatic_generation_training_or_model_design",
-    "data_preparation_accepted": false,
+    "coverage_decision": "all_original_core_checks_exact_30_cell_quotas_and_sampling_exposure_requirements_passed; no_model_design_or_training",
+    "coverage_boundaries": "one_normal_source_per_split; sparse_normal_nonextreme_train_region_share_0.4997728305_near_0.5_limit; selected_geometry_scope_and_missingness; weak_background_change_is_not_self_occlusion; no_universal_coverage_claim",
+    "next_stage": "await_explicit_model_design_instruction; no_automatic_generation_or_training",
+    "data_preparation_accepted": true,
     "original_pool_summary_completed": true,
     "balanced_pool_target": {
       "train": 240,
@@ -45,39 +44,98 @@
         "train": 8,
         "validation": 4
       },
-      "candidate_directory": "results/synthetic/selected",
-      "status": "completed_exact_per_cell_counts"
+      "candidate_directory": "results/synthetic/refined",
+      "status": "completed_exact_counts_and_original_scientific_requirements"
     },
     "default_dataset_readable": true,
     "balanced_selection_completed": true,
     "remaining_scientific_checks": {
+      "train": {},
+      "validation": {}
+    },
+    "verified_coverage": {
       "train": {
         "far_at_least_20": {
-          "recurring_parents": 12,
-          "maximum_parent_share": 0.21890678637443886,
-          "maximum_region_share": 0.5337998415632427,
-          "failures": [
-            "region_concentration"
-          ]
+          "recurring_parents": 23,
+          "source_frames": 259,
+          "world_frames": 734,
+          "anomaly_returns": 20206,
+          "maximum_parent_share": 0.142729882213204,
+          "maximum_region_share": 0.3034247253291102,
+          "passed": true,
+          "failures": []
         },
         "normal_sparse_with_nonextreme_anomaly": {
-          "recurring_parents": 4,
-          "maximum_parent_share": 0.21775544388609716,
-          "maximum_region_share": 0.33500837520938026,
-          "failures": [
-            "recurring_geometry_parents"
-          ]
+          "recurring_parents": 18,
+          "source_frames": 81,
+          "world_frames": 236,
+          "anomaly_returns": 2201,
+          "maximum_parent_share": 0.12358019082235347,
+          "maximum_region_share": 0.49977283053157656,
+          "passed": true,
+          "failures": []
+        },
+        "near_sparse_1_4": {
+          "recurring_parents": 11,
+          "source_frames": 126,
+          "world_frames": 203,
+          "anomaly_returns": 463,
+          "maximum_parent_share": 0.17494600431965443,
+          "maximum_region_share": 0.2613390928725702,
+          "passed": true,
+          "failures": []
+        },
+        "weak_background_visible": {
+          "recurring_parents": 114,
+          "source_frames": 370,
+          "world_frames": 2155,
+          "anomaly_returns": 19232,
+          "maximum_parent_share": 0.05834026622296173,
+          "maximum_region_share": 0.22753743760399334,
+          "passed": true,
+          "failures": []
         }
       },
       "validation": {
+        "far_at_least_20": {
+          "recurring_parents": 10,
+          "source_frames": 268,
+          "world_frames": 364,
+          "anomaly_returns": 9443,
+          "maximum_parent_share": 0.22609340252038548,
+          "maximum_region_share": 0.2981044159695012,
+          "passed": true,
+          "failures": []
+        },
+        "normal_sparse_with_nonextreme_anomaly": {
+          "recurring_parents": 15,
+          "source_frames": 133,
+          "world_frames": 193,
+          "anomaly_returns": 1632,
+          "maximum_parent_share": 0.11764705882352941,
+          "maximum_region_share": 0.25,
+          "passed": true,
+          "failures": []
+        },
         "near_sparse_1_4": {
-          "recurring_parents": 2,
-          "maximum_parent_share": 0.4666666666666667,
-          "maximum_region_share": 0.48333333333333334,
-          "failures": [
-            "recurring_geometry_parents",
-            "parent_concentration"
-          ]
+          "recurring_parents": 4,
+          "source_frames": 85,
+          "world_frames": 96,
+          "anomaly_returns": 267,
+          "maximum_parent_share": 0.3146067415730337,
+          "maximum_region_share": 0.3258426966292135,
+          "passed": true,
+          "failures": []
+        },
+        "weak_background_visible": {
+          "recurring_parents": 78,
+          "source_frames": 520,
+          "world_frames": 2091,
+          "anomaly_returns": 17674,
+          "maximum_parent_share": 0.07004639583569085,
+          "maximum_region_share": 0.23780694805929614,
+          "passed": true,
+          "failures": []
         }
       }
     }
@@ -364,6 +422,262 @@
       "new_world_rejections": 0,
       "normal_sources_added": 0,
       "remaining_limits": "uneven_far_coverage;_added_validation_far_returns_92.36_percent_from_one_world;_no_far_frames_with_20_in_range_returns;_object_occlusion_degree_unquantified;_no_detection_gain_measured"
+    },
+    "targeted_repair_start": {
+      "base_commit": "c7762d5",
+      "retained_worlds": {
+        "train": 240,
+        "validation": 120
+      },
+      "baseline_unmet_checks": {
+        "train": {
+          "far_at_least_20": {
+            "recurring_parents": 12,
+            "maximum_parent_share": 0.21890678637443886,
+            "maximum_region_share": 0.5337998415632427,
+            "failures": [
+              "region_concentration"
+            ]
+          },
+          "normal_sparse_with_nonextreme_anomaly": {
+            "recurring_parents": 4,
+            "maximum_parent_share": 0.21775544388609716,
+            "maximum_region_share": 0.33500837520938026,
+            "failures": [
+              "recurring_geometry_parents"
+            ]
+          }
+        },
+        "validation": {
+          "near_sparse_1_4": {
+            "recurring_parents": 2,
+            "maximum_parent_share": 0.4666666666666667,
+            "maximum_region_share": 0.48333333333333334,
+            "failures": [
+              "recurring_geometry_parents",
+              "parent_concentration"
+            ]
+          }
+        }
+      },
+      "missing_predeclared_geometry_observations": {
+        "train": 10022,
+        "validation": 1027
+      },
+      "proposal_budget": {
+        "train": 24,
+        "validation": 24
+      },
+      "rationale": "24 train proposals use two actual structures and three support regions outside shifted region 1/1; 24 validation proposals use small solid geometry and four regions per native context to obtain repeated natural near-sparse observations. Budget allows physical rejection and complete-world replacement; it does not guarantee acceptance.",
+      "acceptance": "original core cell thresholds, normal geometry reference, full-world 30-cell 8/4 quotas and sampling exposure criteria; no signal rerolls or point editing",
+      "stop": "after the single declared batch and fixed measurements, stop if no feasible selection; no automatic extra batch or model design",
+      "resources": {
+        "cpu_affinity": 24,
+        "memory_available_bytes": 21071683584,
+        "gpu": "RTX 5080 Laptop 16303 MiB; CPU path used",
+        "host_E_remaining_bytes": 54052028416,
+        "host_reserve_bytes": 10000000000,
+        "geometry_workers": 8,
+        "peak_additional_storage_budget_bytes": 2500000000
+      },
+      "completed_missing_measurements": {
+        "observations": 11049,
+        "current_geometry_observations": 41070,
+        "execution": {
+          "seconds": 223.8590680799971,
+          "workers": 8
+        },
+        "train_sparse_nonextreme": {
+          "recurring_parents": 10,
+          "source_frames": 74,
+          "world_frames": 150,
+          "anomaly_returns": 1007,
+          "maximum_parent_share": 0.12909632571996027,
+          "maximum_region_share": 0.3535253227408143,
+          "passed": true,
+          "failures": []
+        },
+        "interpretation": "original content supports ten repeated geometry parents once the already declared measurements are complete; no additional worlds or threshold change caused this result"
+      },
+      "proposal_preflight": "no world rendered before missing-reference-region error; reuse original selected normal clusters without reapplying joint-witness filtering; all 48 scheduled regions verified before rendering",
+      "generation_execution": [
+        {
+          "round": 1,
+          "pilot": true,
+          "workers": 2,
+          "groups_run": 2,
+          "seconds": 64.99882439398789,
+          "host_after": {
+            "Size": 484950659072,
+            "SizeRemaining": 54188343296,
+            "reserve_bytes": 10000000000
+          },
+          "peak_budget_bytes": 1269399552
+        },
+        {
+          "round": 1,
+          "pilot": false,
+          "workers": 16,
+          "groups_run": 46,
+          "seconds": 518.7081523170054,
+          "host_after": {
+            "Size": 484950659072,
+            "SizeRemaining": 54114222080,
+            "reserve_bytes": 10000000000
+          },
+          "peak_budget_bytes": 1856602112
+        }
+      ],
+      "generation_result": {
+        "train": {
+          "qualified": 23,
+          "rejected": 1
+        },
+        "validation": {
+          "qualified": 24
+        }
+      },
+      "candidate_pool_worlds": {
+        "train": 263,
+        "validation": 144
+      },
+      "rejected_proposals": [
+        {
+          "split": "train",
+          "index": 47430,
+          "reason": "bounded_shape_search_failed:{\"deterministic surface ray missed the inserted geometry\": 2, \"continuous CSG connectivity is unresolved\": 1}"
+        }
+      ],
+      "generation_execution_basis": "pilot worker peak below 1 GB; remaining 46 proposals ran with 16 single-thread workers; CPU about 67 percent, available memory at least 10 GiB, swap unchanged",
+      "candidate_measurements": {
+        "worlds": 407,
+        "world_frames": 216295,
+        "geometry_observations": 48220,
+        "new_geometry_observations": 7150,
+        "geometry_execution": {
+          "seconds": 121.04402295401087,
+          "workers": 16
+        },
+        "physical_execution": {
+          "workers": 16,
+          "seconds": 18.250315736993798,
+          "host_before": {
+            "Size": 484950659072,
+            "SizeRemaining": 54111272960,
+            "reserve_bytes": 10000000000
+          },
+          "host_after": {
+            "Size": 484950659072,
+            "SizeRemaining": 54118154240,
+            "reserve_bytes": 10000000000
+          },
+          "world_frames": 216295,
+          "reused_world_frames": 189600
+        }
+      },
+      "storage_before_pruning": {
+        "synthetic_allocated_bytes": 1413017600,
+        "host": {
+          "Size": 484950659072,
+          "SizeRemaining": 53963292672,
+          "reserve_bytes": 10000000000
+        }
+      },
+      "pruning": {
+        "removed_complete_worlds": 47,
+        "removed_failed_proposals": 1,
+        "removed_files": 26790,
+        "removed_content_bytes": 88054346,
+        "retained_new_worlds": {
+          "train": 17,
+          "validation": 3
+        },
+        "replaced_previous_worlds": {
+          "train": 17,
+          "validation": 3
+        },
+        "retained_current_worlds": {
+          "train": 240,
+          "validation": 120
+        },
+        "scope": "only_explicit_rejected_whole_worlds_after_all_final_criteria_and_references_passed; original_data_and_retained_frames_unchanged"
+      },
+      "final_result": {
+        "all_core_checks_passed": true,
+        "exact_world_quotas_passed": true,
+        "sampling_exposure_passed": true,
+        "selected_geometry_observations": 43886,
+        "final_dataset": "results/synthetic/refined",
+        "model_design_started": false,
+        "retained_worlds": {
+          "train": 240,
+          "validation": 120
+        },
+        "retained_frames": {
+          "train": 107760,
+          "validation": 81840
+        },
+        "maximum_sampling_positive_shares": {
+          "parent": 0.06068806746825304,
+          "region": 0.1775857571361008,
+          "shifted_region": 0.190198236063309,
+          "source_frame": 0.008944411248544053
+        },
+        "historical_candidates_before_this_batch": 954,
+        "actual_candidate_worlds_in_this_batch": 407,
+        "new_worlds_rendered": 47
+      },
+      "storage_after_pruning": {
+        "synthetic_allocated_bytes": 1265680384,
+        "host": {
+          "Size": 484950659072,
+          "SizeRemaining": 53992062976,
+          "reserve_bytes": 10000000000
+        }
+      },
+      "verification": {
+        "train": {
+          "worlds": 240,
+          "full_frame_references": 107760,
+          "example": "results/synthetic/refined/train/world_47427/frames/000238.npz",
+          "inserted_file_slots": 20,
+          "world_definitions_and_frame_order_checked": true
+        },
+        "sampling": {
+          "weights": 107760,
+          "all_positive": true,
+          "sum": 1.0
+        },
+        "validation": {
+          "worlds": 120,
+          "full_frame_references": 81840,
+          "example": "results/synthetic/refined/validation/world_40006/frames/000159.npz",
+          "inserted_file_slots": 3,
+          "world_definitions_and_frame_order_checked": true
+        },
+        "unchanged_science": {
+          "seed": true,
+          "calibration": true,
+          "placement": true,
+          "shape": true,
+          "qualification": true,
+          "geometry": true,
+          "research_coverage": true
+        },
+        "all_declared_core_checks_passed": 32,
+        "physical_worlds_equal_final_manifest": 360,
+        "model_design_started": false,
+        "regression_tests": {
+          "passed": 57,
+          "seconds": 19.08,
+          "scope": "data_ray_geometry_and_official_metric_regressions; not_scientific_acceptance_itself"
+        },
+        "default_generator": "dataset_already_frozen; no_regeneration",
+        "selection_readable_cells": {
+          "train": 30,
+          "validation": 30
+        }
+      }
     }
   }
 }
