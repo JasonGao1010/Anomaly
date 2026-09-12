@@ -1,28 +1,7 @@
-import argparse
-import json
-from pathlib import Path
+"""Official STU point metrics; project command-line evaluation lives in src.evaluate."""
 
 import numpy as np
 from sklearn.metrics import auc, average_precision_score, roc_curve
-from tqdm import tqdm
-
-"""
-# Example usage in a model
-metrics = PointOODMetricsCalculator()
-
-for batch in dataloader:
-    inputs, labels = preprocess(batch)
-    outputs = model(inputs)
-
-    # Assume anomaly_scores is derived from model outputs
-    anomaly_scores = compute_anomaly_scores(outputs)
-
-    # Update metrics (convert tensors to numpy if needed)
-    metrics.update(inputs.pcd.numpy(), anomaly_scores.numpy(), labels.numpy())
-
-# Get final metrics
-final_metrics = metrics.compute_metrics()
-"""
 
 
 class PointOODMetricsCalculator:
@@ -102,40 +81,3 @@ class PointOODMetricsCalculator:
                 break
 
         return roc_auc, fpr_best, optimal_threshold
-
-
-def main(args):
-    # The metric class can be imported without the upstream dataset CLI helpers.
-    from utils.common import convert_to_builtin_types, load_labels, load_point_cloud
-
-    metrics_calculator = PointOODMetricsCalculator()
-
-    for seq_path in tqdm(sorted(list(args.data_dir.glob("1[0-9][0-9]")))):
-        if seq_path.is_dir():
-            lidar_files = sorted((seq_path / "velodyne").glob("*.bin"))
-
-            for pcd_file in tqdm(lidar_files, leave=False, position=1):
-                points, _ = load_point_cloud(pcd_file)
-
-                label_file = seq_path / "labels" / f"{pcd_file.stem}.label"
-                gt_sem, _ = load_labels(label_file)
-
-                pred_file = args.pred_dir / seq_path.name / f"{pcd_file.stem}.txt"
-                metrics_calculator.update(
-                    points, np.loadtxt(pred_file).astype(np.float32), gt_sem
-                )
-
-    metrics = metrics_calculator.compute_metrics()
-    print(metrics)
-    with open(args.output, "w") as f:
-        json.dump(metrics, f, indent=4, default=convert_to_builtin_types)
-
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Calculate Detection Metrics")
-    parser.add_argument("--data-dir", type=Path, required=True)
-    parser.add_argument("--pred-dir", type=Path, required=True)
-    parser.add_argument("--output", type=Path, default="detection_metrics.json")
-
-    args = parser.parse_args()
-    main(args)

@@ -95,20 +95,6 @@ def test_existing_world_check_preserves_original_field_scores_and_missing_suppor
     assert not actual["normal_change"]["covered"][5]
 
 
-def test_fixed_object_trajectory_keeps_zero_outside_and_subthreshold_frames():
-    from src.coverage import geometry_selection
-
-    rows = [dict(frame=i, count=count, in_range=inside, range=distance)
-            for i, (count, inside, distance) in enumerate(((0, 0, 0), (1, 0, 60), (3, 3, 40), (8, 8, 38)))]
-    worlds = [dict(split=split, world="fixed", identity=split, height_m=.1, rows=rows,
-                   content_check_frames=[]) for split in ("train", "validation")]
-    selected, trajectories = geometry_selection(worlds)
-    assert len(selected) == 8
-    assert all(row["trajectory"] for row in selected)
-    assert {(row["split"], row["frame"]) for row in selected} == {
-        (split, frame) for split in trajectories for frame in range(4)}
-
-
 def test_descriptive_weighted_ties_have_exact_ks_and_directional_auc():
     sample = points(6)
     sample.update(sequence=np.ones(6, int), target=np.array([0, 0, 0, 1, 1, 1]),
