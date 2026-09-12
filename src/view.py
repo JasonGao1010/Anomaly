@@ -149,15 +149,15 @@ def intensity_colors(intensity, target, colors, background, settings):
     if intensity.shape != target.shape or not np.isfinite(intensity).all():
         raise ValueError("every point requires its original finite return intensity")
     half = settings["half_saturation"]
-    minimum = settings["minimum_darkness"]
+    minimum = settings["minimum_contrast"]
     if not np.isfinite(half) or half <= 0 or not 0 < minimum < 1:
-        raise ValueError("intensity half-saturation must be positive; minimum darkness must be in (0,1)")
+        raise ValueError("intensity half-saturation must be positive; minimum contrast must be in (0,1)")
     positive = np.maximum(intensity, 0)
     # No per-frame/label normalisation or clipping at 1: raw STU intensities can exceed 1.
-    darkness = minimum + (1 - minimum) * positive / (positive + half)
+    contrast = minimum + (1 - minimum) * positive / (positive + half)
     palette = np.asarray([colors[-1], colors[0], colors[1]], dtype=np.float64)
     background = np.asarray(background, dtype=np.float64)
-    return background + darkness[:, None] * (palette[target + 1] - background)
+    return background + contrast[:, None] * (palette[target + 1] - background)
 
 
 def _text_writer(draw, size):
@@ -215,14 +215,14 @@ def save_view(sample, frame_path, output, settings):
     for x, label, name in ((24, 0, "正常"), (244, 1, "异常"), (464, -1, "忽略")):
         draw.rectangle((x, camera.height + 13, x + 16, camera.height + 29), fill=colors[label])
         write(x + 28, camera.height + 31, f"{name} ({label})", colors[label])
-    foreground = (40, 45, 55)
+    foreground = (222, 226, 232)
     write(760, camera.height + 31,
           f"全量点：整帧 {len(xyzi)} / 画内 {len(projected)} / 绘制 {len(projected)}", foreground)
     write(24, camera.height + 66,
           f"来源 {source.partition}/{source.sequence_id}   世界 {world}   帧 {source.frame_id:06d}   异常点：整帧 {counts['scan']['1']} / 绘制 {counts['drawn']['1']}", foreground)
     offset = ", ".join(f"{value:g}" for value in camera.offset_lidar_m)
     write(24, camera.height + 101,
-          f"广角透视 · 水平视场 {camera.horizontal_fov_degrees:g}° · 固定相机位置 ({offset}) m · 强回波深色 · 全量融合", foreground)
+          f"广角透视 · 水平视场 {camera.horizontal_fov_degrees:g}° · 固定相机位置 ({offset}) m · 强回波更亮 · 全量融合", foreground)
     metadata = dict(
         input=str(frame_path), partition=source.partition, sequence=source.sequence_id,
         frame=source.frame_id, world=world,
@@ -241,7 +241,7 @@ def save_view(sample, frame_path, output, settings):
         point_sampling="none; every nonzero XYZ source slot, including repeated coordinates",
         overlap="equal contribution of all point footprints; no depth rejection or overpainting",
         intensity=dict(settings=settings["intensity"], source="unaltered XYZI channel 3",
-                       mapping="darkness = minimum + (1 - minimum) * max(I,0) / (max(I,0) + half_saturation)",
+                       mapping="contrast = minimum + (1 - minimum) * max(I,0) / (max(I,0) + half_saturation)",
                        negative_returns=int(np.count_nonzero(xyzi[:, 3] < 0))),
         camera_image_size=[camera.width, camera.height], image_size=list(image.size), footer_height=112,
     )

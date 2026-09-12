@@ -14,14 +14,14 @@
       "point_radius_px": 1
     },
     "label_colors": {
-      "-1": [110, 115, 125],
-      "0": [20, 100, 180],
-      "1": [215, 50, 30]
+      "-1": [142, 149, 160],
+      "0": [72, 167, 235],
+      "1": [255, 80, 45]
     },
-    "background_rgb": [255, 255, 255],
+    "background_rgb": [12, 16, 23],
     "intensity": {
       "half_saturation": 0.25,
-      "minimum_darkness": 0.25
+      "minimum_contrast": 0.4
     }
   },
   "dataset": {

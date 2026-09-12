@@ -45,7 +45,7 @@ def test_all_overlapping_returns_contribute_without_depth_or_order_rejection():
     # All three returns contribute, including a far point and coincident source slots.
     xyz = np.array([[20, 0, 0], [5, 0, 0], [5, 0, 0], [-5, 0, 0]])
     colors = np.array([[215, 50, 30], [20, 100, 180], [110, 115, 125], [215, 50, 30]])
-    background = (255, 255, 255)
+    background = (12, 16, 23)
     rgb, projected, count = camera.rasterize(xyz, colors, background)
     np.testing.assert_array_equal(projected, [0, 1, 2])
     assert np.count_nonzero(count) == 5
@@ -63,21 +63,22 @@ def test_all_overlapping_returns_contribute_without_depth_or_order_rejection():
     np.testing.assert_array_equal(rgb[40, 62], colors[1])
     for points in (xyz[3:], np.empty((0, 3))):
         empty, ids, count = camera.rasterize(points, colors[:len(points)], background)
-        assert np.all(empty == 255) and ids.size == 0 and count.sum() == 0
+        np.testing.assert_array_equal(empty, np.broadcast_to(background, empty.shape))
+        assert ids.size == 0 and count.sum() == 0
 
 
 def test_intensity_shading_is_fixed_monotonic_and_keeps_weak_returns_visible():
-    colors = {-1: [110, 115, 125], 0: [20, 100, 180], 1: [215, 50, 30]}
-    background = np.array([255, 255, 255])
-    settings = dict(half_saturation=.25, minimum_darkness=.25)
+    colors = {-1: [142, 149, 160], 0: [72, 167, 235], 1: [255, 80, 45]}
+    background = np.array([12, 16, 23])
+    settings = dict(half_saturation=.25, minimum_contrast=.4)
     intensity = np.array([-1, 0, .25, 1, 2])
     for label in (-1, 0, 1):
         targets = np.full(len(intensity), label)
         rgb = intensity_colors(intensity, targets, colors, background, settings)
-        np.testing.assert_allclose(rgb[0], .75 * background + .25 * np.array(colors[label]))
+        np.testing.assert_allclose(rgb[0], .6 * background + .4 * np.array(colors[label]))
         np.testing.assert_allclose(rgb[1], rgb[0])
-        assert np.all(np.diff(rgb[1:], axis=0) < 0)
-        assert np.all(rgb < background)  # Even zero intensity retains a visible mark.
+        assert np.all(np.diff(rgb[1:], axis=0) > 0)
+        assert np.all(rgb > background)  # Even zero intensity retains a visible mark.
         for i in range(len(intensity)):
             individual = intensity_colors(intensity[i:i+1], targets[i:i+1], colors, background, settings)
             np.testing.assert_array_equal(individual[0], rgb[i])
