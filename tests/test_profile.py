@@ -150,6 +150,27 @@ def test_balanced_selection_preserves_recurring_core_evidence_and_concentration(
     assert impossible is None
 
 
+def test_sparse_census_expands_only_worlds_triggered_by_fixed_observations():
+    from src.coverage import research_geometry_selection
+
+    config = json.loads(Path("protocol/data.json").read_text())["research_coverage"]
+    config["geometry"]["sparse_world_census"] = True
+    relations = {k: False for k in ("compact", "elongated", "sheet", "multi_branch", "multiple_contact")}
+    record = dict(worlds=[dict(split="train", world=w, identity=w, height_m=.1, relations=relations)
+                         for w in ("first", "second")])
+    rows = [dict(split="train", world=w, world_identity=w, source_identity=str(f), frame=f,
+                 in_range_rays=5, range=20., changed_native_rays=8)
+            for w in ("first", "second") for f in range(10)]
+    observations = [dict(world_identity=w, source_identity=str(f), anomaly_in_range=5,
+                         native_context=dict(sparse=dict(positions=5)))
+                    for w, f in (("first", 4), ("second", 3))]
+    selected = research_geometry_selection(record, rows, config, observations)
+    assert [r["frame"] for r in selected if r["world"] == "second"] == [0, 4, 9]
+    assert {r["frame"] for r in selected if r["world"] == "first"} == set(range(10))
+    config["geometry"]["sparse_world_census"] = False
+    assert len(research_geometry_selection(record, rows, config, observations)) == 6
+
+
 def test_sparse_witness_can_use_another_source_view_for_physical_support():
     from collections import Counter
     from src.data import source_identity

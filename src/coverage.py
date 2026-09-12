@@ -311,7 +311,7 @@ def research_cells(row, world, config):
     return band, result
 
 
-def research_geometry_selection(record, rows, config):
+def research_geometry_selection(record, rows, config, measured=()):
     metadata = {(w["split"], w["world"]): w for w in record["worlds"]}
     strata = defaultdict(list)
     for row in rows:
@@ -331,7 +331,19 @@ def research_geometry_selection(record, rows, config):
                 row = lookup.get((meta["split"], meta["world"], frame))
                 if row is not None:
                     selected.append(dict(row, stratum=["native_witness_window"]))
-    return list({(r["split"], r["world"], r["frame"]): r for r in selected}.values())
+    selected = {(r["world_identity"], r["source_identity"]): r for r in selected}
+    if config["geometry"].get("sparse_world_census", False):
+        minimum = config["normal_contrasts"]["minimum_central_anomaly_queries"]
+        # Only the original fixed observations trigger expansion; no recursive cherry-picking.
+        worlds = {g["world_identity"] for g in measured
+                  if (g["world_identity"], g["source_identity"]) in selected
+                  and g["anomaly_in_range"] >= minimum
+                  and g["native_context"]["sparse"]["positions"] >= config["normal_contrasts"]["minimum_normal_queries"]}
+        for row in rows:
+            if row["world_identity"] in worlds and row["in_range_rays"] >= minimum:
+                selected.setdefault((row["world_identity"], row["source_identity"]),
+                                    dict(row, stratum=["sparse_world_visible_census"]))
+    return list(selected.values())
 
 
 def native_context_types(values, reference, sparse_threshold):
@@ -468,39 +480,44 @@ def research_geometry(protocol, data_root, workers):
     config = protocol["research_coverage"]
     output = Path(config["output"])
     record, rows = research_records(output)
-    selected = research_geometry_selection(record, rows, config)
     metadata = {(w["split"], w["world"]): w for w in record["worlds"]}
     cached = {}
     path = output / "geometry.json"
     if path.exists():
         previous = json.loads(path.read_text())
-        if previous["parameters"] == config:
+        # The census changes which scans are read, never a scan's numerical features.
+        numerical = lambda p: dict(p, geometry={k: v for k, v in p["geometry"].items() if k != "sparse_world_census"})
+        if numerical(previous["parameters"]) == numerical(config):
             cached = {(r["world_identity"], r["source_identity"]): r for r in previous["observations"]
                       if "native_context" in r}
-    jobs, results = defaultdict(list), []
-    for row in selected:
-        identity = row["world_identity"], row["source_identity"]
-        if identity in cached:
-            results.append(dict(cached[identity], stratum=row["stratum"]))
-        else:
-            jobs[row["split"], row["frame"]].append((row, metadata[row["split"], row["world"]]))
     started = time.monotonic()
     _geometry_reference, _research_config = geometry_reference(), config
-    _atomic_json(output / "selection.json", dict(dataset=record["dataset"], parameters=config,
-        selections=selected, selection="three_evenly_spaced_source_frames_per_world_joint_stratum_plus_native_witness_windows",
-        scope="selected_observations_only; proportions_do_not_estimate_complete_pool_geometry"))
-    print(json.dumps(dict(event="research_geometry_start", selected=len(selected), reused=len(results), source_jobs=len(jobs))), flush=True)
-    with ProcessPoolExecutor(max_workers=workers, mp_context=mp.get_context("fork"),
-            initializer=_research_initialize, initargs=(str(data_root), protocol["calibration"]["rays"])) as pool:
-        futures = [pool.submit(_research_geometry_frame, (s, f, entries)) for (s, f), entries in sorted(jobs.items())]
-        for done, future in enumerate(as_completed(futures), 1):
-            results.extend(future.result())
-            if done % 50 == 0 or done == len(futures):
-                print(json.dumps(dict(event="research_geometry", source_jobs=done, total=len(futures))), flush=True)
+    for stage in range(2):
+        selected = research_geometry_selection(record, rows, config, cached.values())
+        jobs = defaultdict(list)
+        for row in selected:
+            if (row["world_identity"], row["source_identity"]) not in cached:
+                jobs[row["split"], row["frame"]].append((row, metadata[row["split"], row["world"]]))
+        print(json.dumps(dict(event="research_geometry_start", stage=stage, selected=len(selected),
+                              reused=len(selected)-sum(map(len, jobs.values())), source_jobs=len(jobs))), flush=True)
+        if not jobs:
+            break
+        with ProcessPoolExecutor(max_workers=workers, mp_context=mp.get_context("fork"),
+                initializer=_research_initialize, initargs=(str(data_root), protocol["calibration"]["rays"])) as pool:
+            futures = [pool.submit(_research_geometry_frame, (s, f, entries)) for (s, f), entries in sorted(jobs.items())]
+            for done, future in enumerate(as_completed(futures), 1):
+                cached.update({(r["world_identity"], r["source_identity"]): r for r in future.result()})
+                if done % 50 == 0 or done == len(futures):
+                    print(json.dumps(dict(event="research_geometry", stage=stage, source_jobs=done, total=len(futures))), flush=True)
+    selected = research_geometry_selection(record, rows, config, cached.values())
+    results = [dict(cached[r["world_identity"], r["source_identity"]], stratum=r["stratum"]) for r in selected]
     results.sort(key=lambda r: (r["split"], r["world"], r["frame"]))
+    _atomic_json(output / "selection.json", dict(dataset=record["dataset"], parameters=config,
+        selections=selected, selection="fixed_joint_strata_and_native_windows_then_visible_census_of_fixed_scan_sparse_positive_worlds",
+        scope="selected_observations_and_triggered_world_census; proportions_do_not_estimate_complete_pool_geometry"))
     _atomic_json(path, dict(dataset=record["dataset"], parameters=config, observations=results,
         execution=dict(seconds=time.monotonic()-started, workers=workers),
-        scope="systematic_joint_stratum_observations_not_a_full_pool_geometry_census"))
+        scope="fixed_observations_and_triggered_sparse_world_visible_census_not_full_pool_geometry"))
 
 
 def research_cell_summary(rows, metadata, limits, config):
@@ -614,7 +631,7 @@ def research_summary(protocol):
             invisible_frames=sum(r["anomaly_rays"] == 0 for r in chosen),
             no_unique_official_support=sum(r["in_range_rays"] < 5 for r in chosen),
             normal_source_sequences=1, selected_geometry_frames=len(geometry_rows),
-            geometry_scope="systematic_selected_observations_only", geometry_missingness={
+            geometry_scope=geometry_record["scope"] if geometry_record else "pending", geometry_missingness={
                 population: {field: {key: sum(r["populations"][population][field][key] for r in geometry_rows)
                                     for key in ("valid", "covered", "missing", "valid_without_reference")}
                              for field in GEOMETRY_FIELDS}
@@ -899,7 +916,8 @@ def research_select(protocol, data_root):
     geometry = json.loads((output / "geometry.json").read_text())
     if geometry["parameters"] != config:
         raise ValueError("candidate geometry uses different declared conditions")
-    expected = {(r["world_identity"], r["source_identity"]) for r in research_geometry_selection(record, rows, config)}
+    expected = {(r["world_identity"], r["source_identity"])
+                for r in research_geometry_selection(record, rows, config, geometry["observations"])}
     actual = {(r["world_identity"], r["source_identity"]) for r in geometry["observations"]}
     if expected != actual:
         raise ValueError("complete the declared geometry observations for every candidate before selection")

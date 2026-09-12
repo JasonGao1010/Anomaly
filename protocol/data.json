@@ -461,7 +461,8 @@
       "anomaly_queries": "all_unique_inserted_rays",
       "missingness": "report_total_valid_missing_no_reference_and_reasons_by_core_cell; do_not_remove_unmeasurable_points_or_use_old_auxiliary_validity_as_a_data_gate",
       "native_context": "all distinct retained normal positions within 2 m of actual anomaly returns, measured on the full original scan; 512 cap applies only to after-insertion diagnostic queries",
-      "witness_frames": "include existing content-check frames and their two preceding/following source frames, in addition to fixed joint-stratum selections"
+      "witness_frames": "include existing content-check frames and their two preceding/following source frames, in addition to fixed joint-stratum selections",
+      "sparse_world_census": true
     },
     "sampling": {
       "core_mixture": 0.8,
