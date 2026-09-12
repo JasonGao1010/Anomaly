@@ -68,7 +68,7 @@ def test_all_overlapping_returns_contribute_without_depth_or_order_rejection():
 
 
 def test_intensity_shading_is_fixed_monotonic_and_keeps_weak_returns_visible():
-    colors = {-1: [142, 149, 160], 0: [72, 167, 235], 1: [255, 80, 45]}
+    colors = {-1: [80, 210, 100], 0: [72, 167, 235], 1: [255, 80, 45]}
     background = np.array([12, 16, 23])
     settings = dict(half_saturation=.25, minimum_contrast=.4)
     intensity = np.array([-1, 0, .25, 1, 2])
