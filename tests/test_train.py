@@ -8,7 +8,7 @@ from torch import nn
 
 from src.model import load_config
 from src.train import (_gradient_comparison, batch_loss, keep_loss, load_checkpoint,
-                       tail_loss, Requests, evaluation_state, validate_initial_state)
+                       tail_loss, Requests, evaluation_state, validate_initial_state, validate_resume_state)
 
 
 def test_short_initialization_allows_only_sampling_scope_change():
@@ -19,13 +19,14 @@ def test_short_initialization_allows_only_sampling_scope_change():
     for altered in (dict(saved, step=256), dict(saved, optimizer=dict(state={0: {}}))):
         with pytest.raises(ValueError, match="untrained step-zero"):
             validate_initial_state(altered, config, [["world", 11]])
-    config["loss"]["keep_mode"] = "mean"
+    config["loss"]["keep_mode"] = "worst"
     with pytest.raises(ValueError, match="definition"):
         validate_initial_state(saved, config, [["world", 11]])
 
 
 def test_paired_initialization_exception_is_explicit_and_cannot_hide_other_changes():
     config = load_config()
+    config["loss"]["keep_mode"] = "worst"
     saved_config = deepcopy(config)
     saved_config["loss"]["keep_mode"] = "mean"
     saved = dict(step=0, optimizer=dict(state={}), config=saved_config, samples=[["world", 11]])
@@ -34,7 +35,7 @@ def test_paired_initialization_exception_is_explicit_and_cannot_hide_other_chang
     assert saved["config"]["loss"]["keep_mode"] == "mean"
     with pytest.raises(ValueError, match="definition"):
         validate_initial_state(saved, config, saved["samples"])
-    for section, key, value in (("loss", "tail_weight", 0), ("training", "seed", 1),
+    for section, key, value in (("loss", "tail_weight", 1), ("training", "seed", 1),
                                  ("model", "condition_modulation", False)):
         changed = deepcopy(config)
         changed[section][key] = value
@@ -57,6 +58,24 @@ def test_full_pool_requests_preserve_original_draw_stream_and_resume():
     assert [r[0] for r in actual] == expected
     assert [r[1] for r in actual] == list(range(2048))
     assert list(Requests(probabilities, config, 1024, start=256)) == actual[512:]
+    cumulative = list(Requests(probabilities, config, 8000))
+    assert list(Requests(probabilities, config, 8000, start=4000)) == cumulative[8000:]
+    assert all(r[2] for r in cumulative[8000:])
+
+
+def test_resume_rejects_partial_buffers_and_any_recipe_or_probability_change():
+    config = load_config()
+    probabilities = np.array([.25, .75])
+    saved = dict(step=4000, config=deepcopy(config), samples=[["a", 1], ["b", 2]],
+                 probabilities=torch.from_numpy(probabilities), experiment={"format": "ajae-staged-learning"})
+    assert validate_resume_state(saved, config, saved["samples"], probabilities, saved["experiment"]) == 4000
+    with pytest.raises(ValueError, match="partial failure"):
+        validate_resume_state(dict(saved, failure=""), config, saved["samples"], probabilities, saved["experiment"])
+    changed = deepcopy(config)
+    changed["loss"]["keep_mode"] = "worst"
+    for candidate, distribution in ((changed, probabilities), (config, probabilities[::-1].copy())):
+        with pytest.raises(ValueError, match="resume configuration"):
+            validate_resume_state(saved, candidate, saved["samples"], distribution, saved["experiment"])
 
 
 def test_micro_passes_balance_exactly_and_resume_keeps_draws():
@@ -126,6 +145,7 @@ def batch_fixture():
 def test_loss_details_preserve_loss_tail_selection_gradients_and_batchnorm():
     torch.manual_seed(19)
     config = load_config()
+    config["loss"].update(keep_mode="worst", tail_weight=1.)
     config["loss"]["pairs_per_tail"] = 17
     rows, model = batch_fixture(), SmallModel().train()
     reference = deepcopy(model)
@@ -162,6 +182,7 @@ def test_loss_details_preserve_loss_tail_selection_gradients_and_batchnorm():
 def test_shared_feature_diagnostics_and_mean_worst_use_the_same_forwards():
     torch.manual_seed(23)
     config, rows, model = load_config(), batch_fixture(), SmallModel().train()
+    config["loss"].update(keep_mode="worst", tail_weight=1.)
     config["loss"]["pairs_per_tail"] = 17
     _, _, observed = batch_loss(model, rows, config, 200, details=True)
     assert model.calls == 4

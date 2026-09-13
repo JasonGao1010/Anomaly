@@ -1,10 +1,10 @@
 {
   "format": "stu-single-frame",
   "schema_version": 1,
-  "research_question": "Using only the complete current scan, can scene-supported observation-conditioned relationships on original returns improve real anomaly-versus-normal ranking over the same backbone and ordinary relationships, and do retained-normal pairing and live-batch tail ranking add transferable benefits?",
+  "research_question": "Using only the complete current scan, can scene-supported observation-conditioned relationships on original returns learn transferable anomaly-versus-normal ranking? The current main method uses detection plus mean retained-normal pairing; independent mechanism attribution remains a later controlled comparison.",
   "status": {
-    "stage": "formal_v1_mean_worst_control_closed_early_by_user_full_training_paused",
-    "active_work": "none; user requested stop and closure at the existing common 512-update evaluation",
+    "stage": "formal_v1_continuous_full_pool_training_authorized",
+    "active_work": "launch one continuous mean-pairing trajectory from saved step zero; no completion or repeat of the stopped worst control required",
     "model_defined": true,
     "training_defined": true,
     "formal_ajae_v1": "context_supported_conditional_return_relationship_network",
@@ -36,7 +36,7 @@
     "coverage_closure_evidence": "results/coverage/summary.json",
     "coverage_decision": "all_original_core_checks_exact_30_cell_quotas_and_sampling_exposure_requirements_passed; data_unchanged_by_model_implementation",
     "coverage_boundaries": "one_normal_source_per_split; sparse_normal_nonextreme_train_region_share_0.4997728305_near_0.5_limit; selected_geometry_scope_and_missingness; weak_background_change_is_not_self_occlusion; no_universal_coverage_claim",
-    "next_stage": "await_user_research_decision; no_automatic_training_or_evaluation",
+    "next_stage": "4000 complete-val19 and complete-201 evaluation, then continue cumulatively to 8000,16000,32000 absent failure or substantive persistent degradation",
     "data_preparation_accepted": true,
     "original_pool_summary_completed": true,
     "balanced_pool_target": {
@@ -143,11 +143,12 @@
       }
     },
     "model_configuration": "model.json",
-    "formal_v1_full_training_ready": false,
+    "formal_v1_full_training_ready": true,
     "formal_default_full_training_executed": false,
     "full_val19_model_evaluation_executed": true,
     "finite_learning_executed": true,
-    "fixed_development_model_evaluation_executed": true
+    "fixed_development_model_evaluation_executed": true,
+    "formal_full_training_authorized": true
   },
   "data": {
     "normal_sources": [
@@ -1372,13 +1373,13 @@
     "geometry": "retain_ray_basis_physical_displacement_and_sampling_scaled_displacement; one_learned_null_alternative_per_shell; no_normal_reference_rarity_or_geometric_regression_targets",
     "score": "base_detection_logit_plus_relationship_residual; every_real_return_gets_a_finite_float32_score; no_frame_normalization_or_semantic_veto",
     "detection_loss": "0.5*mean_normal_softplus(s)+0.5*mean_anomaly_softplus(-s); an_absent_class_contributes_zero; ignore_excluded",
-    "keep_loss": "mean_max(softplus(s_before),softplus(s_after))_on_exact_retained_normal_slots; replacement_and_occlusion_excluded; mean_pair_loss_available_as_extra_normal_supervision_control",
-    "tail_loss": "two_equal_weight_live_batch_pair_losses_softplus((margin+s_normal-s_anomaly)/temperature); high_1percent_normal_and_low_10percent_anomaly; pooled_across_source_frames; sampled_4096_pairs_per_tail; no_stale_predictions_or_unbiased_metric_gradient_claim",
+    "keep_loss": "mean_of_0.5*(softplus(s_before)+softplus(s_after))_on_exact_retained_normal_slots; replacement_and_occlusion_excluded; worst retained as an unproven historical candidate",
+    "tail_loss": "disabled_in_current_mainline_weight_0; historical_live_batch_pair_ranking_implementation_retained_without_benefit_or_harm_claim",
     "sampling": "existing_results/coverage/sampling.npz_frame_probabilities; uniform_class_queries_per_draw; 8192_normal_2048_anomaly_caps; 1024_retained_normals_half_within_2m_of_changed_returns_when_available; no_resampling_return_signals",
     "paired_controls": "none_plain_conditioned_share_initial_parameter_draws; plain_vs_conditioned_changes_coordinates_normalization_and_condition_inputs_as_one_package; conditioned_with_condition_modulation_false_keeps_neighbors_ray_coordinates_sampling_normalization_width_and_heads_identical_and_zeros_only_relation_modulation_and_null_condition_inputs; mean_vs_worst_keeps_the_same_original_scan_forwards",
     "resource_strategy": "2_live_source_frames; whole_scan_and_relationship_recomputation; BatchNorm_buffers_restored_after_recomputation; 2_preparation_workers; no_persistent_geometry_cache",
     "evaluation": "real_val19_official_semantics_unchanged; synthetic_all_and_official_filtered_share_FrozenFrame.anomaly_target; filtered_adds_only_2.5_to_50m_and_at_least_5_actual_inserted_in_range_returns; exact_float32_ties_bounded_numeric_RAM_128MiB_per_counter_with_external_compressed_merge_and_shared_E_disk_reserve",
-    "interpretation": "all_hyperparameters_are_implementation_starting_values; no_real_transfer_improvement_novelty_or_metric_optimality_established",
+    "interpretation": "mean combination has positive single-run full-val19 development evidence; independent conditioning/pairing contributions, stability and hidden-test generalization remain unestablished",
     "implementation_verification": {
       "date": "2026-09-13",
       "command": "python -m src.train check",
@@ -3788,6 +3789,156 @@
       "verified": "worst is worse on both complete synthetic fixed sets at 512 updates; fewer selected normal-witness false positives accompany lower anomaly recall; worst is better on the fixed real subset at 256 updates",
       "not_established": "stable benefit or harm of worst pairing, final 1024-update real tradeoff, before/after normal protection at matched 201 FPR, or isolated conditional-modulation value",
       "decision": "retain mean as the existing learning reference; do not promote worst to a supported core mechanism; stop without additional training or evaluation"
+    }
+  },
+  "long_training": {
+    "declaration": "protocol/long.json",
+    "output": "results/train",
+    "status": "authorized_ready_to_launch",
+    "initial_checkpoint": "results/short/0.pt",
+    "maximum_updates": 32000,
+    "cumulative_nodes": [
+      4000,
+      8000,
+      16000,
+      32000
+    ],
+    "loss": {
+      "detection": true,
+      "keep_mode": "mean",
+      "keep_weight": 1.0,
+      "tail_weight": 0.0
+    },
+    "learning_rate": 0.0002,
+    "schedule": "existing warmup100/ramp100 once; no reset between cumulative nodes",
+    "sampling": "unchanged probabilities over all240 training worlds and107760 world-frames; batch2 replacement draws;64000 requests are not an epoch",
+    "full_val19_steps": [
+      4000,
+      8000,
+      16000,
+      32000
+    ],
+    "full_201_steps": [
+      4000,
+      32000
+    ],
+    "fixed_scopes": "historical diagnostics only, no micro pass gates",
+    "exposure": "actual optimized query slots, distinct world-frames/source-frames and existing core-cell observations; unknown geometry remains unknown",
+    "reference": {
+      "evidence": "results/short/global.json",
+      "AP": 39.712120839274874,
+      "AUROC": 99.59736781534919,
+      "FPR95": 1.738875096643332,
+      "normal_count": 193792470,
+      "anomaly_count": 87499,
+      "recall_at_fpr_limit": {
+        "recall": 90.88332438085007,
+        "FPR": 0.9999686778335608,
+        "threshold": 2.0476458072662354,
+        "tp": 79522,
+        "fp": 1937864
+      },
+      "official_high_recall": {
+        "threshold": 0.35063329339027405,
+        "tp": 83125,
+        "fp": 3369809,
+        "fn": 4374,
+        "tn": 190422661,
+        "recall": 95.00108572669403,
+        "FPR": 1.738875096643332
+      },
+      "exact_count_storage": {
+        "numeric_workspace_bytes": 134217728,
+        "fixed_codec_and_runtime_overhead_excluded": true,
+        "peak_temporary_bytes": 190750879,
+        "spills": 94,
+        "merges": 93,
+        "record_bytes": 20
+      },
+      "frames": 8659,
+      "eligible_frames": 1960,
+      "partition": "val",
+      "sequences": [
+        125,
+        137,
+        138,
+        139,
+        140,
+        141,
+        142,
+        143,
+        144,
+        145,
+        146,
+        147,
+        148,
+        149,
+        150,
+        151,
+        152,
+        153,
+        169
+      ],
+      "seconds": 1245.6946819389996,
+      "host_E_before": {
+        "Size": 484950659072,
+        "SizeRemaining": 65125249024,
+        "reserve_bytes": 10000000000
+      },
+      "host_E_after": {
+        "Size": 484950659072,
+        "SizeRemaining": 65119285248,
+        "reserve_bytes": 10000000000
+      },
+      "scope": "full_public_validation",
+      "checkpoint": "/home/jasongao/Study/AJAE/results/short/1024.pt"
+    },
+    "decision": "main-method resource allocation, not proof that mean dominates worst; no automatic recipe changes or budget extension",
+    "verification": {
+      "targeted_tests": 48,
+      "actual_inference_cases": [
+        {
+          "kind": "unchanged",
+          "validation_index": 77193,
+          "real_returns": 115870
+        },
+        {
+          "kind": "few_returns",
+          "validation_index": 77138,
+          "real_returns": 104430
+        },
+        {
+          "kind": "occlusion_only",
+          "validation_index": 27978,
+          "real_returns": 102871
+        },
+        {
+          "kind": "visible",
+          "validation_index": 77066,
+          "real_returns": 314775
+        }
+      ],
+      "preparation_and_repeated_scores": "bitwise equal on four actual scans; original workers8 versus workers4",
+      "weighted_counts": "identical integer ties and operating counts; metrics agree within original1e-10 tolerance; diagnostic fixture not new detection evidence",
+      "actual_queries": "first and fourth original draws match directly reused selections; global torch/numpy/python RNG unchanged",
+      "shared_initial": "effective model/loss/training configuration, input identities and full frame probabilities match saved0; only descriptive scope differs"
+    },
+    "resources": {
+      "cpu_available": 24,
+      "gpu": "NVIDIA GeForce RTX 5080 Laptop GPU",
+      "gpu_memory_mib": 16303,
+      "train_preparation_workers": 2,
+      "evaluation_preparation_workers": 4,
+      "evaluation_threads_per_worker": 4,
+      "host_E_remaining_before": 64695918592,
+      "reserve_bytes": 10000000000,
+      "swap_used_bytes": 0
+    },
+    "evaluation_reuse": {
+      "validation_world_frames": 81840,
+      "unchanged_world_frames": 44563,
+      "changed_world_frames": 37277,
+      "scope": "within one checkpoint and saved calibration; unchanged source predictions retain each worlds exact integer multiplicity; occlusion-only scans never treated as unchanged"
     }
   }
 }

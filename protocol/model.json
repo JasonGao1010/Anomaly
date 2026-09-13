@@ -40,13 +40,13 @@
   },
   "loss": {
     "keep_weight": 1.0,
-    "tail_weight": 1.0,
-    "keep_mode": "worst",
+    "tail_weight": 0.0,
+    "keep_mode": "mean",
     "normal_tail_fraction": 0.01,
     "anomaly_tail_fraction": 0.1,
     "margin": 1.0,
     "temperature": 1.0,
     "pairs_per_tail": 4096
   },
-  "scope": "Implementation starting values, not tuned or validated detection settings. Training budget must be supplied explicitly. No training has been authorized in this implementation round."
+  "scope": "Authorized main trajectory: complete conditional geometry, detection plus mean normal pairing, no tail loss or external weights. Cumulative budget and evaluations are declared in protocol/long.json."
 }

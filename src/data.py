@@ -337,6 +337,19 @@ def host_disk():
     return {**volume, "reserve_bytes": reserve}
 
 
+def runtime_resources():
+    """Record physical pressure without changing computation or power settings."""
+    memory = {line.split(":")[0]: int(line.split()[1]) * 1024
+              for line in Path("/proc/meminfo").read_text().splitlines()}
+    gpu = subprocess.run(["nvidia-smi",
+        "--query-gpu=utilization.gpu,memory.used,power.draw,power.limit,temperature.gpu",
+        "--format=csv,noheader,nounits"], check=True, capture_output=True, text=True, timeout=10)
+    return dict(cpu_load_average=list(os.getloadavg()),
+        cpu_ticks=[int(value) for value in Path("/proc/stat").read_text().splitlines()[0].split()[1:]],
+        memory_available_bytes=memory["MemAvailable"], swap_used_bytes=memory["SwapTotal"]-memory["SwapFree"],
+        gpu_fields="utilization_percent,memory_MiB,power_W,limit_W,temperature_C", gpu=gpu.stdout.strip())
+
+
 @dataclass(frozen=True, slots=True)
 class FramePrediction:
     partition: str

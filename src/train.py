@@ -11,6 +11,7 @@ import math
 import os
 from pathlib import Path
 import random
+import signal
 import time
 
 import numpy as np
@@ -20,7 +21,7 @@ from torch.nn import functional as F
 from torch.utils.data import DataLoader
 from torch.utils.checkpoint import checkpoint
 
-from .data import FrozenDataset, FrozenFrame, _atomic_json, host_disk, source_identity
+from .data import FrozenDataset, FrozenFrame, _atomic_json, host_disk, source_identity, runtime_resources
 from .model import AJAE, ScanTransform, load_config, to_device, validate_config
 from .protocol import PROJECT_ROOT
 
@@ -122,6 +123,7 @@ class TrainingFrames:
         self.transform = None
         self.originals = OrderedDict()
         self.cache, self.cache_bytes, self.cached_bytes = OrderedDict(), cache_bytes, 0
+        self.exposure_context = None
 
     def scan(self, source, key):
         # The cache belongs to one frozen dataset, config and calibration instance.
@@ -163,8 +165,13 @@ class TrainingFrames:
             before = self.originals[key]
         unchanged_scan = not (frozen.inserted_mask | frozen.occluded_original_mask).any()
         scan = before if before is not None and unchanged_scan else self.scan(frozen.source, (identity, frame))
-        return dict(scan=scan, original=before, **queries,
-            frame=frame, world=identity, draw=draw, sample=index)
+        row = dict(scan=scan, original=before, **queries,
+                   frame=frame, world=identity, draw=draw, sample=index)
+        if self.exposure_context is not None:
+            from .exposure import measure_queries
+            row["exposure"] = measure_queries(request, frozen, original, queries, *self.exposure_context)
+            row["exposure"].pop("sparse_detection_index")
+        return row
 
 
 class Requests:
@@ -304,6 +311,8 @@ def load_checkpoint(path, device="cuda"):
     saved = torch.load(path, map_location="cpu", weights_only=True)
     if saved.get("format") != "ajae-v1-checkpoint" or "preprocessing" not in saved:
         raise ValueError("checkpoint needs formal AJAE V1 weights and saved preprocessing")
+    if "failure" in saved:
+        raise ValueError("partial failure snapshots cannot be evaluated as completed updates")
     ScanTransform(saved["config"], state=saved["preprocessing"])
     model = AJAE(saved["config"]).to(device)
     model.load_state_dict(saved["model"], strict=True)
@@ -484,7 +493,7 @@ def save_checkpoint(path, payload):
 
 def load_experiment(path):
     experiment = json.loads(Path(path).read_text())
-    if experiment.get("format") not in ("ajae-micro-learning", "ajae-short-learning"):
+    if experiment.get("format") not in ("ajae-micro-learning", "ajae-short-learning", "ajae-staged-learning"):
         raise ValueError("unknown finite-learning declaration")
     if "selection_from" in experiment:
         experiment["selection"] = json.loads((PROJECT_ROOT / experiment["selection_from"]).read_text())["selection"]
@@ -507,11 +516,24 @@ def validate_initial_state(saved, config, identities, initial_changes=None):
         raise ValueError("initial model, objective, training definition or input identities changed")
 
 
+def validate_resume_state(saved, config, identities, probabilities, experiment):
+    if "failure" in saved:
+        raise ValueError("a partial failure snapshot is not a completed-update resume state")
+    same_probabilities = (saved["probabilities"] is None if probabilities is None else
+                          torch.equal(saved["probabilities"], torch.from_numpy(probabilities)))
+    if (saved["config"] != config or saved.get("experiment", saved.get("micro")) != experiment
+            or saved["samples"] != identities or not same_probabilities):
+        raise ValueError("resume configuration, input order or frame probabilities changed")
+    return saved["step"]
+
+
 def fit(config, data_root, steps, output, resume=None, *, experiment=None):
     if steps < 1:
         raise ValueError("training needs a positive explicit update budget")
     output = Path(output)
-    if output.exists() and any(output.iterdir()):
+    staged = experiment is not None and experiment["format"] == "ajae-staged-learning"
+    in_place = staged and resume is not None and Path(resume).resolve().parent == output.resolve()
+    if output.exists() and any(output.iterdir()) and not in_place:
         raise ValueError("training output is occupied; resume into an empty output directory")
     initial = PROJECT_ROOT / experiment["initial_checkpoint"] if experiment and "initial_checkpoint" in experiment else None
     state_path = resume if resume is not None else initial
@@ -533,14 +555,22 @@ def fit(config, data_root, steps, output, resume=None, *, experiment=None):
     identities = [[identity, frame] for _, identity, frame in dataset.dataset.samples]
     start = 0
     if resume is not None:
-        same_probabilities = (saved["probabilities"] is None if probabilities is None else
-                              torch.equal(saved["probabilities"], torch.from_numpy(probabilities)))
-        if (saved["config"] != config or saved.get("experiment", saved.get("micro")) != experiment
-                or saved["samples"] != identities or not same_probabilities):
-            raise ValueError("resume configuration, input order or frame probabilities changed")
-        start = saved["step"]
-        if start >= steps:
+        start = validate_resume_state(saved, config, identities, probabilities, experiment)
+        if start > steps or (start == steps and not staged):
             raise ValueError("explicit budget has no remaining updates")
+        if staged:
+            if not in_place:
+                raise ValueError("continuous training resumes in its existing output directory")
+            logged = 0
+            if (output / "loss.jsonl").exists():
+                with (output / "loss.jsonl").open() as stream:
+                    for line in stream:
+                        row = json.loads(line)
+                        if row["step"] != logged + 1:
+                            raise ValueError("training log has an incomplete update prefix")
+                        logged = row["step"]
+            if logged != start:
+                raise ValueError("resume checkpoint and completed update log differ; no automatic replay")
     elif saved is not None:
         validate_initial_state(saved, config, identities,
                                experiment.get("initial_changes") if experiment else None)
@@ -549,21 +579,33 @@ def fit(config, data_root, steps, output, resume=None, *, experiment=None):
         optimizer.load_state_dict(saved["optimizer"])
         torch.set_rng_state(saved["torch_rng"])
         torch.cuda.set_rng_state_all(saved["cuda_rng"])
+        if "python_rng" in saved:
+            random.setstate(saved["python_rng"])
+            name, values, position, has_gauss, cached = saved["numpy_rng"]
+            np.random.set_state((name, values.numpy().astype(np.uint32), position, has_gauss, cached))
     # Include retained evaluation states, an emergency state and atomic output overlap.
     disk = host_disk()
-    peak = ((7 if experiment else 2) * sum(p.numel() for p in model.parameters()) * 20 + 512_000_000
-            + (steps - start) * (512 + 20 * config["training"]["batch_frames"]))
+    checkpoint_bound = sum(p.numel() for p in model.parameters()) * 20 + 64 * 2**20
+    peak = ((8 if staged else 7 if experiment else 2) * sum(p.numel() for p in model.parameters()) * 20
+            + (2 * 2**30 if staged else 512_000_000)
+            + (steps - start) * (8192 if staged else 512 + 20 * config["training"]["batch_frames"]))
     if peak >= disk["SizeRemaining"] - disk["reserve_bytes"]:
         raise OSError("training checkpoint peak would invade the E: reserve")
     output.mkdir(parents=True, exist_ok=True)
     _atomic_json(output / "config.json", config)
-    run = dict(status="running", requested_updates=steps, start_update=start,
+    run = dict(status="running", requested_updates=steps, start_update=start, pid=os.getpid(),
         initial_checkpoint=str(initial) if initial is not None else None,
         started_unix=time.time(), host_E_before=disk, estimated_peak_new_bytes=peak,
         environment=dict(torch=torch.__version__, cuda=torch.version.cuda,
             gpu=torch.cuda.get_device_name(), gpu_bytes=torch.cuda.get_device_properties(0).total_memory,
             cpu_affinity=sorted(os.sched_getaffinity(0)), torch_threads=torch.get_num_threads(),
             preparation_workers=config["training"]["workers"], transform_cache_bytes_per_worker=dataset.cache_bytes))
+    if staged:
+        run["resources_before"] = runtime_resources()
+    if in_place:
+        previous = json.loads((output / "run.json").read_text())
+        run["previous_segments"] = previous.get("previous_segments", []) + [
+            {k: previous.get(k) for k in ("start_update", "completed_updates", "seconds", "status")}]
     _atomic_json(output / "run.json", run)
     torch.cuda.reset_peak_memory_stats()
     prepared = None
@@ -575,31 +617,72 @@ def fit(config, data_root, steps, output, resume=None, *, experiment=None):
         diagnostic_indices = prepared["indices"]["train"]
         exposure = {index: saved.get("diagnostic_exposure", {}).get(index, 0) if resume else 0
                     for index in diagnostic_indices}
+    stages = json.loads((output / "exposure.json").read_text()).get("stages", {}) if in_place else {}
+    if staged:
+        from .exposure import coverage_context, training_summary
+        wanted = {(identities[index][0], identities[index][1])
+                  for index, _, _ in Requests(probabilities, config, steps, start)}
+        dataset.exposure_context = coverage_context(config, wanted)
 
     def save_exposure():
         if prepared is not None:
             _atomic_json(output / "exposure.json", dict(
                 scope="actual inserted-world requests for the fixed 206 diagnostic set; membership does not imply exposure",
+                stages=stages,
                 records=[dict(record, sample=index, requests=exposure[index])
                     for record, index in zip(experiment["selection"]["train"], diagnostic_indices, strict=True)]))
 
-    def snapshot(step, failure=None):
+    def snapshot(step, failure=None, *, rolling=False):
+        volume = host_disk()
+        if checkpoint_bound > volume["SizeRemaining"] - volume["reserve_bytes"]:
+            raise OSError("checkpoint write would invade the host E: reserve")
+        name, values, position, has_gauss, cached = np.random.get_state()
         payload = dict(format="ajae-v1-checkpoint", config=config, model=model.state_dict(),
             preprocessing=dataset.preprocessing, optimizer=optimizer.state_dict(), step=step, samples=identities,
             probabilities=None if probabilities is None else torch.from_numpy(probabilities),
             torch_rng=torch.get_rng_state(), cuda_rng=torch.cuda.get_rng_state_all(), experiment=experiment,
+            python_rng=random.getstate(), numpy_rng=(name, torch.from_numpy(values.astype(np.int64)), position, has_gauss, cached),
             diagnostic_exposure=exposure if prepared is not None else {})
         if failure is not None:
             payload.update(failure=str(failure), gradients={name: p.grad for name, p in model.named_parameters() if p.grad is not None})
-        save_checkpoint(output / ("failure.pt" if failure is not None else f"{step}.pt" if experiment else "model.pt"), payload)
+        filename = "failure.pt" if failure is not None else "resume.pt" if rolling else f"{step}.pt" if experiment else "model.pt"
+        save_checkpoint(output / filename, payload)
+        if failure is None:
+            run["last_complete_checkpoint"] = filename
         save_exposure()
 
     def evaluate(step):
+        nonlocal evaluating
+        if stopped:
+            return
+        evaluating = True
         with evaluation_state(model):
-            result = evaluate_fixed(model, transform, prepared,
-                include_real=step in experiment["evaluation"]["real_steps"], directory=output,
-                include_pairs=step in experiment["evaluation"].get("paired_normal_steps", []))
-        _atomic_json(output / f"{step}.json", dict(step=step, checkpoint=f"{step}.pt", **result))
+            real_scores, synthetic_scores = {}, {}
+            schedule = experiment["evaluation"]
+            if staged:
+                from .evaluate import evaluate_validation, evaluate_synthetic
+                stages[str(step)] = training_summary(output / "loss.jsonl", config, step)
+                save_exposure()
+                for suffix, due, evaluator, captured in (
+                    ("val", schedule["full_val19_steps"], evaluate_validation, real_scores),
+                    ("synthetic", schedule["full_synthetic_steps"], evaluate_synthetic, synthetic_scores)):
+                    path = output / f"{step}_{suffix}.json"
+                    if step not in due or path.exists():
+                        continue
+                    if suffix == "val":
+                        captured.update({(int(key), frame): None for key, frames in experiment["selection"]["val"].items()
+                                         for frame in frames})
+                    else:
+                        captured.update({(r["identity"], r["frame"]): None for r in experiment["selection"]["validation"]})
+                    result = evaluator(data_root, checkpoint_path=output / f"{step}.pt", directory=output, capture=captured)
+                    _atomic_json(path, dict(step=step, **result))
+            if not staged or not (output / f"{step}.json").exists():
+                result = evaluate_fixed(model, transform, prepared,
+                    include_real=step in schedule["real_steps"], directory=output,
+                    include_pairs=step in schedule.get("paired_normal_steps", []),
+                    real_scores=real_scores, synthetic_scores=synthetic_scores)
+                _atomic_json(output / f"{step}.json", dict(step=step, checkpoint=f"{step}.pt", **result))
+        evaluating = False
 
     workers = config["training"]["workers"]
     loader = DataLoader(dataset, sampler=Requests(probabilities, config, steps, start, samples=selected),
@@ -609,12 +692,27 @@ def fit(config, data_root, steps, output, resume=None, *, experiment=None):
         **(dict(multiprocessing_context="spawn", prefetch_factor=1) if workers else {}))
     model.train()
     completed, rows = start, []
+    stopped, evaluating = False, False
+
+    def request_stop(signum, _):
+        nonlocal stopped
+        stopped = True
+        print(json.dumps(dict(event="stop_requested", signal=signum, completed_updates=completed)), flush=True)
+        if evaluating:
+            raise KeyboardInterrupt("user stopped evaluation at a saved update boundary")
+
+    handlers = {sig: signal.signal(sig, request_stop) for sig in (signal.SIGINT, signal.SIGTERM)} if staged else {}
     try:
         if experiment:
-            snapshot(start)
-            evaluate(start)
+            if not in_place:
+                snapshot(start)
+            if not staged or start in experiment["evaluation"]["synthetic_steps"]:
+                evaluate(start)
         with (output / "loss.jsonl").open("a") as log:
             for step, rows in enumerate(loader, start):
+                if stopped:
+                    snapshot(completed, rolling=True)
+                    break
                 started = time.perf_counter()
                 optimizer.zero_grad(set_to_none=True)
                 loss, stats = batch_loss(model, rows, config, step)
@@ -629,6 +727,8 @@ def fit(config, data_root, steps, output, resume=None, *, experiment=None):
                 stats.update(step=completed, gradient_norm=float(norm), seconds=time.perf_counter() - started,
                     samples=[r["sample"] for r in rows], draws=[r["draw"] for r in rows],
                     full_input_returns=[len(r["scan"]["xyzi"]) for r in rows])
+                if staged:
+                    stats["exposure"] = [r["exposure"] for r in rows]
                 if prepared is not None:
                     hits = dict(normal=0, anomaly=0, active_keep=0)
                     for row in rows:
@@ -646,23 +746,42 @@ def fit(config, data_root, steps, output, resume=None, *, experiment=None):
                     stats["known_sparse_witness_queries"] = hits
                 log.write(json.dumps(stats, allow_nan=False) + "\n")
                 log.flush()
-                print(json.dumps(stats), flush=True)
+                print(json.dumps({k: v for k, v in stats.items() if k != "exposure"}), flush=True)
+                run["completed_updates"] = completed
                 if completed % 32 == 0:
-                    host_disk()
+                    run["host_E_latest"] = host_disk()
+                    if run["host_E_latest"]["SizeRemaining"] < disk["reserve_bytes"] + 2 * checkpoint_bound:
+                        raise OSError("preserve the last complete update before exhausting checkpoint headroom")
+                    if staged:
+                        run["resources_latest"] = runtime_resources()
+                        print(json.dumps(dict(event="resources", step=completed, **run["resources_latest"])), flush=True)
+                    _atomic_json(output / "run.json", run)
+                if stopped:
+                    snapshot(completed, rolling=True)
+                    break
                 if experiment and completed in experiment["evaluation"]["synthetic_steps"]:
                     snapshot(completed)
                     evaluate(completed)
-                elif (experiment is None and completed % config["training"]["save_every"] == 0) or completed == steps:
-                    snapshot(completed)
+                elif ((staged or experiment is None) and completed % config["training"]["save_every"] == 0) or completed == steps:
+                    snapshot(completed, rolling=staged)
     except BaseException as error:
-        snapshot(completed, failure=error)
-        _atomic_json(output / "failure.json", dict(completed_updates=completed, error=repr(error),
-                     samples=[r["sample"] for r in rows], automatic_retry=False))
-        run.update(status="stopped", completed_updates=completed, error=repr(error))
-        raise
+        if staged and stopped and isinstance(error, KeyboardInterrupt):
+            snapshot(completed, rolling=True)
+            run.update(status="interrupted", completed_updates=completed, error=repr(error))
+        else:
+            try:
+                snapshot(completed, failure=error)
+            except OSError as storage_error:
+                run["emergency_save_error"] = str(storage_error)
+            _atomic_json(output / "failure.json", dict(completed_updates=completed, error=repr(error),
+                         samples=[r["sample"] for r in rows], automatic_retry=False))
+            run.update(status="stopped", completed_updates=completed, error=repr(error))
+            raise
     else:
-        run.update(status="completed", completed_updates=completed, host_E_after=host_disk())
+        run.update(status="interrupted" if stopped else "completed", completed_updates=completed, host_E_after=host_disk())
     finally:
+        for sig, handler in handlers.items():
+            signal.signal(sig, handler)
         run.update(seconds=time.time() - run["started_unix"],
                    peak_cuda_allocated_bytes=torch.cuda.max_memory_allocated())
         _atomic_json(output / "run.json", run)
@@ -676,7 +795,7 @@ def main():
     parser.add_argument("--steps", type=int)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--resume", type=Path)
-    parser.add_argument("--experiment", type=Path, help="finite-learning declaration; formal defaults remain unchanged")
+    parser.add_argument("--experiment", type=Path, help="declared finite or continuous learning budget and evaluation scope")
     parser.add_argument("--sample", type=int, action="append", help="fixed training manifest index for check")
     args = parser.parse_args()
     config = load_config(args.config)

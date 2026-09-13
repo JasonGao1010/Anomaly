@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import ExitStack
 import gzip
 import json
 from pathlib import Path
@@ -13,7 +14,7 @@ import time
 import numpy as np
 from numba import njit
 
-from .data import FramePrediction, FrozenDataset, _atomic_json, host_disk, source_identity
+from .data import FramePrediction, FrozenDataset, _atomic_json, host_disk, source_identity, runtime_resources
 from .protocol import PROJECT_ROOT, load_protocol
 from .scene import STUSequence, LabelMode
 from vendor.stu.compute_point_level_ood import PointOODMetricsCalculator
@@ -429,10 +430,13 @@ def synthetic_targets(frozen, *, official=False):
     return target, bool(eligible)
 
 
-def evaluate_frames(frames, *, directory=None, observe=None, check_resources=None):
+def evaluate_frames(frames, *, directory=None, observe=None, check_resources=None,
+                    per_sequence=False, capture=None):
     """Pool the complete official point set with bounded exact tie counting."""
     rows, seen = [], set()
-    with ScoreCounts(directory=directory, check_resources=_evaluation_space) as counts:
+    with ExitStack() as stack:
+        counts = stack.enter_context(ScoreCounts(directory=directory, check_resources=_evaluation_space))
+        sequences = {}
         for source, prediction in frames:
             identity = (source.partition, source.sequence_id, source.frame_id)
             if identity in seen:
@@ -450,10 +454,25 @@ def evaluate_frames(frames, *, directory=None, observe=None, check_resources=Non
             rows.append(row)
             if eligible:
                 counts.add(scores[valid], target[valid])
+                if per_sequence:
+                    key = source.sequence_id
+                    if key not in sequences:
+                        sequences[key] = stack.enter_context(ScoreCounts(
+                            max_bytes=16 * 2**20, directory=directory, check_resources=_evaluation_space))
+                    sequences[key].add(scores[valid], target[valid])
+                if capture is not None and (source.sequence_id, source.frame_id) in capture:
+                    capture[source.sequence_id, source.frame_id] = scores
             if check_resources is not None:
                 check_resources()
         result = counts.metrics(observe=observe)
         result["exact_count_storage"] = counts.storage()
+        if per_sequence:
+            threshold = (result["recall_at_fpr_limit"] or {}).get("threshold")
+            high_threshold = (result.get("official_high_recall") or {}).get("threshold")
+            result["per_sequence"] = {str(key): dict(curve=value.metrics(),
+                at_global_threshold=value.at_threshold(threshold),
+                at_global_high_recall=value.at_threshold(high_threshold))
+                for key, value in sequences.items()}
     result.update(frames=len(rows), eligible_frames=sum(r["eligible"] for r in rows))
     return result, rows
 
@@ -543,6 +562,7 @@ class ScoreCounts:
         self.capacity = max_bytes // 64
         self.block_size = max(1, min(1 << 16, max_bytes // 256))
         self.positive = self.negative = self.buffered = 0
+        self.buffer_copies = 1
         self.buffer, self.runs = [], []
         self.temporary = tempfile.TemporaryDirectory(prefix="score-counts-", dir=directory)
         self.directory = Path(self.temporary.name)
@@ -631,6 +651,8 @@ class ScoreCounts:
         ordered.sort(kind="quicksort")
         records = np.empty(len(ordered), _COUNT_DTYPE)
         used = _compress_counts(ordered, records)
+        records["count"][:used] *= self.buffer_copies
+        records["positive"][:used] *= self.buffer_copies
         del ordered
         path = self._output(used)
         with gzip.open(path, "wb", compresslevel=1) as stream:
@@ -650,9 +672,15 @@ class ScoreCounts:
         else:
             self.runs[level] = run
 
-    def add(self, scores, target):
+    def add(self, scores, target, *, copies=1):
         if self.closed:
             raise ValueError("score counter is closed")
+        if not isinstance(copies, int) or copies < 1:
+            raise ValueError("score multiplicity must be a positive integer")
+        # Identical complete scans retain every world's integer metric weight.
+        if copies != self.buffer_copies:
+            self._flush()
+            self.buffer_copies = copies
         scores, target = np.asarray(scores), np.asarray(target)
         if scores.ndim != 1 or target.shape != scores.shape:
             raise ValueError("metric records require matching one-dimensional arrays")
@@ -662,8 +690,8 @@ class ScoreCounts:
             if self.buffered + len(packed) > self.capacity:
                 self._flush()
             positive = int(np.sum(packed & 1, dtype=np.int64))
-            self.positive += positive
-            self.negative += len(packed) - positive
+            self.positive += positive * copies
+            self.negative += (len(packed) - positive) * copies
             self.buffer.append(packed)
             self.buffered += len(packed)
 
@@ -682,6 +710,17 @@ class ScoreCounts:
     def metrics(self, *, observe=None):
         return metrics_from_groups(self.groups(), positive=self.positive,
                                    negative=self.negative, score_kind="logit", observe=observe)
+
+    def at_threshold(self, threshold):
+        tp = fp = 0
+        if threshold is not None:
+            for bits, count, positive in self.groups():
+                selected = bits_score(bits, "logit") >= threshold
+                tp += int(positive[selected].sum())
+                fp += int((count[selected] - positive[selected]).sum())
+        return dict(threshold=threshold, tp=tp, fp=fp, normal=self.negative, anomaly=self.positive,
+                    FPR=100 * fp / self.negative if self.negative else None,
+                    recall=100 * tp / self.positive if self.positive else None)
 
     def storage(self):
         return dict(numeric_workspace_bytes=self.max_bytes,
@@ -730,7 +769,43 @@ def checkpoint_frames(data_root, checkpoint_path, sequence_ids, protocol):
         evaluated += int(scan is not None)
         if scan is not None and evaluated % 50 == 0:
             print(json.dumps(dict(event="full_validation", sequence=source.sequence_id, frame=source.frame_id,
-                evaluated_frames=evaluated, seconds=time.perf_counter() - started)), flush=True)
+                evaluated_frames=evaluated, seconds=time.perf_counter() - started,
+                resources=runtime_resources())), flush=True)
+
+
+def evaluate_validation(data_root, *, checkpoint_path=None, prediction_root=None,
+                        sequences=None, directory=None, capture=None):
+    protocol = load_protocol()
+    sequences = tuple(sequences) if sequences is not None else protocol.public_sequence_ids
+    if len(set(sequences)) != len(sequences):
+        raise ValueError("duplicate validation sequences")
+    for sequence in sequences:
+        protocol.sequence("val", sequence)
+    if (checkpoint_path is None) == (prediction_root is None):
+        raise ValueError("choose one checkpoint or prediction source")
+    disk = host_disk()
+    _evaluation_space(512 * 2**20)
+    if directory is not None:
+        Path(directory).mkdir(parents=True, exist_ok=True)
+    checked = 0
+
+    def check_resources():
+        nonlocal checked
+        checked += 1
+        if checked % 100 == 0:
+            host_disk()
+
+    started = time.perf_counter()
+    result, _ = evaluate_frames(
+        checkpoint_frames(data_root, checkpoint_path, sequences, protocol) if checkpoint_path is not None
+        else prediction_frames(data_root, prediction_root, sequences, protocol),
+        directory=directory, check_resources=check_resources, per_sequence=True, capture=capture)
+    result.update(partition="val", sequences=list(sequences), seconds=time.perf_counter() - started,
+        host_E_before=disk, host_E_after=host_disk(),
+        scope="full_public_validation" if set(sequences) == set(protocol.public_sequence_ids) else "development_subset",
+        **({"checkpoint": str(Path(checkpoint_path).resolve())} if checkpoint_path is not None
+           else {"prediction_root": str(Path(prediction_root).resolve())}))
+    return result
 
 
 def prepare_fixed(data_root, selection):
@@ -884,7 +959,8 @@ def evaluate_normal_pairs(model, transform, prepared, split, threshold, *, inser
     return result
 
 
-def evaluate_fixed(model, transform, prepared, *, include_real=False, directory=None, include_pairs=False):
+def evaluate_fixed(model, transform, prepared, *, include_real=False, directory=None, include_pairs=False,
+                   synthetic_scores=None, real_scores=None):
     """Fixed development scopes; callers preserve the training state around evaluation."""
     if model.training:
         raise ValueError("fixed evaluation requires inference mode")
@@ -896,7 +972,10 @@ def evaluate_fixed(model, transform, prepared, *, include_real=False, directory=
         records = prepared["selection"][split]
         for record, index in zip(records, prepared["indices"][split], strict=True):
             frozen = prepared["datasets"][split][index]
-            scores = model.predict(frozen.source, transform).restore(frozen.source)
+            key = (record["identity"], record["frame"])
+            scores = synthetic_scores.get(key) if split == "validation" and synthetic_scores is not None else None
+            if scores is None:
+                scores = model.predict(frozen.source, transform).restore(frozen.source)
             target, _ = synthetic_targets(frozen)
             row = dict(scores=scores, target=target, role=record["role"], world=record["identity"], frame=record["frame"])
             rows.append(row)
@@ -936,7 +1015,10 @@ def evaluate_fixed(model, transform, prepared, *, include_real=False, directory=
         for key, frames in prepared["selection"]["val"].items():
             for frame in frames:
                 source = prepared["sequences"][key][frame]
-                scores, target, eligible = official_frame(source, model.predict(source, transform))
+                scores = real_scores.get((int(key), frame)) if real_scores is not None else None
+                if scores is None:
+                    scores = model.predict(source, transform).restore(source)
+                target, eligible = official_targets(source)
                 if not eligible:
                     raise ValueError(f"predeclared real frame {key}/{frame} is no longer official-eligible")
                 rows.append(dict(scores=scores, target=target, sequence=int(key)))
@@ -953,44 +1035,93 @@ def evaluate_fixed(model, transform, prepared, *, include_real=False, directory=
     return result
 
 
-def evaluate_synthetic(data_root, checkpoint_path, *, directory=None):
+class SyntheticEvaluationFrames:
+    """Prepare changed full scans; an unchanged delta is exactly its source scan."""
+
+    def __init__(self, data_root, config, preprocessing):
+        self.dataset = FrozenDataset(PROJECT_ROOT / "results/synthetic", data_root, "validation")
+        self.config, self.preprocessing, self.transform = config, preprocessing, None
+
+    def __len__(self):
+        return len(self.dataset)
+
+    def __getitem__(self, index):
+        from .model import ScanTransform
+        if self.transform is None:
+            self.transform = ScanTransform(self.config, state=self.preprocessing, workers=4)
+        frozen = self.dataset[index]
+        changed = (frozen.inserted_mask | frozen.occluded_original_mask).any()
+        return frozen, self.transform(frozen.source) if changed else None
+
+
+def evaluate_synthetic(data_root, checkpoint_path, *, directory=None, capture=None):
     """Full 201 pool and official filtering, each with its own global score curve."""
     import torch
+    from torch.utils.data import DataLoader
     from .model import ScanTransform
     from .train import load_checkpoint
     _evaluation_space(0)
     torch.set_num_threads(4)
     model, saved = load_checkpoint(checkpoint_path)
     model.eval()
-    transform = ScanTransform(saved["config"], state=saved["preprocessing"], workers=8)
-    dataset = FrozenDataset(PROJECT_ROOT / "results/synthetic", data_root, "validation")
-    eligible = 0
+    transform = ScanTransform(saved["config"], state=saved["preprocessing"], workers=4)
+    dataset = SyntheticEvaluationFrames(data_root, saved["config"], saved["preprocessing"])
+    loader = DataLoader(dataset, batch_size=None, num_workers=4, prefetch_factor=1,
+        multiprocessing_context="spawn", pin_memory=True, generator=torch.Generator().manual_seed(83))
+    # This cache cannot cross checkpoint, calibration or source-dataset boundaries.
+    originals, copies = {}, {}
+    eligible = predictions = unchanged = zero_frames = few_frames = 0
+    started = time.perf_counter()
     with ScoreCounts(directory=directory, check_resources=_evaluation_space) as full, \
             ScoreCounts(directory=directory, check_resources=_evaluation_space) as official:
-        for index in range(len(dataset)):
-            frozen = dataset[index]
+        for index, (frozen, prepared) in enumerate(loader):
             source = frozen.source
-            prediction = model.predict(source, transform)
-            scores = prediction.restore(source)
             target, _ = synthetic_targets(frozen)
-            valid = target >= 0
-            full.add(scores[valid], target[valid])
-            target, accepted = synthetic_targets(frozen, official=True)
-            if accepted:
+            anomaly = int((target == 1).sum())
+            zero_frames += anomaly == 0
+            few_frames += 1 <= anomaly <= 4
+            if prepared is None:
+                key = source.frame_id
+                if key not in originals:
+                    scores = model.predict(source, transform).restore(source)
+                    originals[key] = scores, target
+                    predictions += 1
+                scores, original_target = originals[key]
+                if not np.array_equal(target, original_target):
+                    raise ValueError("unchanged-world targets differ from the cached source")
+                copies[key] = copies.get(key, 0) + 1
+                unchanged += 1
+            else:
+                scores = model.predict(source, prepared=prepared).restore(source)
+                predictions += 1
                 valid = target >= 0
-                official.add(scores[valid], target[valid])
+                full.add(scores[valid], target[valid])
+            if capture is not None and (frozen.world_identity, source.frame_id) in capture:
+                capture[frozen.world_identity, source.frame_id] = scores
+            filtered, accepted = synthetic_targets(frozen, official=True)
+            if accepted:
+                valid = filtered >= 0
+                official.add(scores[valid], filtered[valid])
                 eligible += 1
             if (index + 1) % 100 == 0:
                 _evaluation_space(0)
-                print(json.dumps(dict(synthetic_frames=index + 1)), flush=True)
+                print(json.dumps(dict(event="full_synthetic", synthetic_frames=index + 1,
+                    model_forwards=predictions, unchanged_world_frames=unchanged,
+                    seconds=time.perf_counter() - started, resources=runtime_resources())), flush=True)
+        for key, (scores, target) in originals.items():
+            valid = target >= 0
+            full.add(scores[valid], target[valid], copies=copies[key])
         full_metrics = full.metrics()
         full_storage = full.storage()
         full.close()  # Release the full-scope run before the second final merge.
         official_metrics_result = official.metrics()
         official_storage = official.storage()
     remaining_after_cleanup = host_disk()["SizeRemaining"]
-    return dict(source_sequence=201, worlds=len({identity for _, identity, _ in dataset.samples}), world_frames=len(dataset),
+    return dict(source_sequence=201, worlds=len({identity for _, identity, _ in dataset.dataset.samples}), world_frames=len(dataset),
         eligible_world_frames=eligible, full=full_metrics, official=official_metrics_result,
+        zero_anomaly_world_frames=int(zero_frames), one_to_four_anomaly_world_frames=int(few_frames),
+        model_forwards=predictions, unchanged_world_frames=unchanged, cached_source_frames=len(originals),
+        seconds=time.perf_counter() - started,
         full_point_set="all_real_inserted_returns_and_valid_original_normal_targets_without_range_or_frame_filter",
         official_point_set="same_frozen_insertion_targets_with_2.5_to_50_m_and_at_least_5_inserted_return_filter",
         exact_count_storage=dict(full=full_storage, official=official_storage,
@@ -999,7 +1130,7 @@ def evaluate_synthetic(data_root, checkpoint_path, *, directory=None):
             disk_policy="shared_host_E_free_space_checked_before_each_output; preserve_10_GB; fail_safely_if_exact_merge_cannot_fit",
             host_E_remaining_after_cleanup=remaining_after_cleanup),
         scope="synthetic_validation_with_repeated_source_backgrounds; not_real_STU_validation",
-        checkpoint=str(checkpoint_path.resolve()))
+        checkpoint=str(Path(checkpoint_path).resolve()))
 
 
 def main():
@@ -1069,43 +1200,8 @@ def main():
         _atomic_json(args.output / "synthetic.json", result)
         print(json.dumps(result, indent=2))
         return
-    protocol = load_protocol()
-    sequences = tuple(args.sequence) if args.sequence else protocol.public_sequence_ids
-    if len(set(sequences)) != len(sequences):
-        parser.error("duplicate sequences")
-    for sequence in sequences:
-        protocol.sequence("val", sequence)
-    # Reserve staging space now; every spill/merge checks its own peak output
-    # while all live inputs are still present on E:.
-    disk = host_disk()
-    _evaluation_space(512 * 2**20)
-    args.output.mkdir(parents=True, exist_ok=True)
-    last_check = [0]
-
-    def check_resources():
-        last_check[0] += 1
-        if last_check[0] % 100 == 0:
-            host_disk()
-
-    started = time.perf_counter()
-    result, _ = evaluate_frames(
-        checkpoint_frames(args.data_root, args.checkpoint, sequences, protocol)
-        if args.checkpoint is not None else prediction_frames(args.data_root, args.predictions, sequences, protocol),
-        directory=args.output,
-        check_resources=check_resources,
-    )
-    result.update(
-        partition="val",
-        sequences=list(sequences),
-        seconds=time.perf_counter() - started,
-        host_E_before=disk,
-        host_E_after=host_disk(),
-        scope="full_public_validation"
-        if set(sequences) == set(protocol.public_sequence_ids)
-        else "development_subset",
-        **({"checkpoint": str(args.checkpoint.resolve())} if args.checkpoint is not None
-           else {"prediction_root": str(args.predictions.resolve())}),
-    )
+    result = evaluate_validation(args.data_root, checkpoint_path=args.checkpoint,
+        prediction_root=args.predictions, sequences=args.sequence, directory=args.output)
     _atomic_json(args.output / "global.json", result)
     print(json.dumps(result, indent=2))
 

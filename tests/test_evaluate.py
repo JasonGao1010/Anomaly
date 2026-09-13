@@ -95,6 +95,25 @@ def test_external_exact_counts_merge_sparse_float32_ranges_and_cross_run_ties(tm
         ScoreCounts(max_bytes=1)
 
 
+def test_repeated_background_counts_equal_literal_world_copies(tmp_path):
+    from src.evaluate import ScoreCounts
+    scores = np.array([-5, -0., 0., 2, 2, 9], np.float32)
+    target = np.array([0, 0, 1, 1, 0, 1])
+    with ScoreCounts(max_bytes=4096, directory=tmp_path) as weighted, \
+            ScoreCounts(max_bytes=4096, directory=tmp_path) as literal:
+        for copies in (7, 1, 11):
+            weighted.add(scores, target, copies=copies)
+            for _ in range(copies):
+                literal.add(scores, target)
+        assert weighted.metrics() == literal.metrics()
+        for threshold in (None, -5, 0, 2, 9, 10):
+            assert weighted.at_threshold(threshold) == literal.at_threshold(threshold)
+        assert weighted.at_threshold(2)["tp"] == 38
+        assert weighted.at_threshold(2)["fp"] == 19
+        with pytest.raises(ValueError, match="positive integer"):
+            weighted.add(scores, target, copies=0)
+
+
 def test_external_count_disk_failure_cleans_runs_and_respects_host_reserve(tmp_path, monkeypatch):
     from src.evaluate import ScoreCounts, _evaluation_space
     reserve = 10_000_000_000
@@ -391,11 +410,17 @@ def test_single_scan_pooling_preserves_official_scope_and_point_identity(tmp_pat
         pairs.append((source, prediction))
         official.update(source.xyzi[:, :3], prediction.restore(source), semantic)
     observer = APAttribution()
-    result, rows = evaluate_frames(iter(pairs), directory=tmp_path, observe=observer)
+    captured = {(1, 0): None}
+    result, rows = evaluate_frames(iter(pairs), directory=tmp_path, observe=observer,
+                                  per_sequence=True, capture=captured)
     assert result["frames"] == 3 and result["eligible_frames"] == 2
     assert [r["anomaly_points"] for r in rows] == [5, 7, 4]
     for key, value in official_metrics(official).items():
         assert result[key] == pytest.approx(value, abs=1e-10)
+        assert result["per_sequence"]["1"]["curve"][key] == pytest.approx(value, abs=1e-10)
+    np.testing.assert_array_equal(captured[1, 0], pairs[0][1].restore(pairs[0][0]))
+    for key in ("tp", "fp"):
+        assert result["per_sequence"]["1"]["at_global_threshold"][key] == result["recall_at_fpr_limit"][key]
     skipped, skipped_rows = evaluate_frames(iter([*pairs[:2], (pairs[2][0], None)]), directory=tmp_path)
     assert rows == skipped_rows
     for key in ("AP", "FPR95", "AUROC", "recall_at_fpr_limit"):

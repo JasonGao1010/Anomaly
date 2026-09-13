@@ -1,0 +1,25 @@
+{
+  "format": "ajae-staged-learning",
+  "base_config": "protocol/model.json",
+  "scope": "Authorized continuous full-pool main trajectory; 4000, 8000, 16000 and 32000 cumulative updates; no recipe changes or external weights.",
+  "question": "How well can the complete conditional-geometry model learn and transfer after substantially broader exposure and optimization?",
+  "initial_checkpoint": "results/short/0.pt",
+  "selection_from": "protocol/micro.json",
+  "maximum_updates": 32000,
+  "loss_overrides": {"keep_mode": "mean", "tail_weight": 0.0},
+  "evaluation": {
+    "synthetic_steps": [4000, 8000, 16000, 32000],
+    "real_steps": [4000, 8000, 16000, 32000],
+    "paired_normal_steps": [4000, 8000, 16000, 32000],
+    "full_val19_steps": [4000, 8000, 16000, 32000],
+    "full_synthetic_steps": [4000, 32000],
+    "primary": "complete official public val19, including per-sequence curves and counts at the pooled thresholds; remains development data",
+    "synthetic": "all 120 validation worlds and all valid frozen target points; zero-anomaly and few-return frames retained; official filter secondary",
+    "fixed_scopes": "historical curves and error explanation only; never micro-stage pass requirements",
+    "reference": "results/short/global.json at 1024 mean-pairing updates"
+  },
+  "sampling": "unchanged positive probabilities over all 107760 training world-frames; two independent draws per update with replacement; 64000 requests are not an exhaustive epoch",
+  "continuation": "same model, optimizer, preprocessing, RNG and global update stream; keep-weight schedule runs once; no automatic restart or learning-rate reset",
+  "decision": "continue through the cumulative nodes without recipe selection; assess sustained joint AP/FPR95 deterioration using complete-val19 magnitude and sequence results, not one fluctuation or a small witness group",
+  "stop": "32000 updates, a numerical/resource failure, or an explicit user stop; persistent development degradation requires substantive review; no automatic parameter retry or budget extension"
+}

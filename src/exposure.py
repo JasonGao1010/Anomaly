@@ -1,4 +1,4 @@
-"""Trace frozen training queries without feature extraction, scoring or updates."""
+"""Trace proposed or actually optimized queries using existing coverage evidence."""
 
 from collections import Counter
 from concurrent.futures import ProcessPoolExecutor
@@ -35,15 +35,21 @@ def _intersection(slots, reference):
 def _measure(request):
     index, draw, need = request
     frozen, original, queries = _frames.queries(index, draw)
-    observed = _records[frozen.world_identity, original.frame_id]
+    return measure_queries(request, frozen, original, queries, _config, _records, _worlds, _geometry)
+
+
+def measure_queries(request, frozen, original, queries, config, records, worlds, geometry):
+    """Observe the actual selected slots; never resample queries or change model input."""
+    index, draw, need = request
+    observed = records[frozen.world_identity, original.frame_id]
     identity = source_identity(original)
     if observed["source_identity"] != identity:
         raise ValueError("coverage and query source identities differ")
-    world = _worlds[frozen.world_identity]
-    measured = _geometry.get((frozen.world_identity, identity))
-    _, physical = research_cells(observed, world, _config["coverage"])
+    world = worlds[frozen.world_identity]
+    measured = geometry.get((frozen.world_identity, identity))
+    _, physical = research_cells(observed, world, config["coverage"])
     flags = {name: physical[name] for name in PHYSICAL}
-    normal_rules = _config["coverage"]["normal_contrasts"]
+    normal_rules = config["coverage"]["normal_contrasts"]
     contrast = measured["contrasts"]["sparse"] if measured is not None else None
     flags[SPARSE] = None if contrast is None else (
         contrast["normal_queries"] >= normal_rules["minimum_normal_queries"]
@@ -65,7 +71,7 @@ def _measure(request):
         normal=_intersection(normal, measured["changed_normal_source_slots"]),
         keep=_intersection(kept, measured["changed_normal_source_slots"]))
     distance = np.linalg.norm(frozen.source.xyzi[anomaly, :3], axis=1)
-    return dict(sample=index, draw=draw, step=draw // _config["training"]["batch_frames"],
+    return dict(sample=index, draw=draw, step=draw // config["training"]["batch_frames"],
         world=frozen.world_identity, name=world["world"], frame=original.frame_id,
         source_identity=identity, parent=world["parent"], regions=world["regions"],
         flags=flags, geometry_measured=measured is not None,
@@ -135,6 +141,41 @@ def summarize(rows, config, steps):
     return groups
 
 
+def coverage_context(config, wanted):
+    """Read existing evidence once; retain only fields used by query exposure."""
+    record, observations = research_records(PROJECT_ROOT / "results/coverage")
+    records = {(r["world_identity"], r["frame"]): r for r in observations
+               if (r["world_identity"], r["frame"]) in wanted and r["split"] == "train"}
+    if set(records) != wanted:
+        raise ValueError("sampled frames are missing their existing physical coverage records")
+    worlds = {w["identity"]: w for w in record["worlds"] if w["split"] == "train"}
+    cached = json.loads((PROJECT_ROOT / "results/coverage/geometry.json").read_text())
+    geometry = {(r["world_identity"], r["source_identity"]): dict(
+                    contrasts={"sparse": r["contrasts"]["sparse"]},
+                    changed_normal_source_slots=r["changed_normal_source_slots"])
+                for r in cached["observations"]
+                if (r["world_identity"], r["frame"]) in wanted and r["split"] == "train"}
+    return dict(config, coverage=record["parameters"]), records, worlds, geometry
+
+
+def training_summary(path, config, steps):
+    rows = []
+    with Path(path).open() as stream:
+        for line in stream:
+            update = json.loads(line)
+            if update["step"] <= steps:
+                rows.extend(update["exposure"])
+    if [r["draw"] for r in rows] != list(range(steps * config["training"]["batch_frames"])):
+        raise ValueError("actual exposure log is not the complete optimized request prefix")
+    return dict(steps=steps, draws=len(rows),
+        unique_world_frames=len({(r["world"], r["frame"]) for r in rows}),
+        worlds=len({r["world"] for r in rows}), source_frames=len({r["source_identity"] for r in rows}),
+        geometry_known_draws=sum(r["geometry_measured"] for r in rows),
+        geometry_unknown_draws=sum(not r["geometry_measured"] for r in rows),
+        groups=summarize(rows, config, steps),
+        scope="actual completed updates; groups overlap; unknown geometry is not absent hard content; coefficient mass is not gradient influence; support regions describe placement, not normal-point locations")
+
+
 def preview(config, data_root, steps=1024, workers=8):
     if steps < 1 or workers < 1:
         raise ValueError("preview requires positive fixed step and worker budgets")
@@ -142,18 +183,9 @@ def preview(config, data_root, steps=1024, workers=8):
     frames = TrainingFrames(config, data_root)
     probabilities = frames.dataset.sampling_probabilities(PROJECT_ROOT / config["training"]["sampling"])
     requests = list(Requests(probabilities, config, steps))
-    record, observations = research_records(PROJECT_ROOT / "results/coverage")
     wanted = {(frames.dataset.samples[i][1], frames.dataset.samples[i][2]) for i, _, _ in requests}
-    records = {(r["world_identity"], r["frame"]): r for r in observations
-               if (r["world_identity"], r["frame"]) in wanted and r["split"] == "train"}
-    if set(records) != wanted:
-        raise ValueError("sampled frames are missing their existing physical coverage records")
-    worlds = {w["identity"]: w for w in record["worlds"] if w["split"] == "train"}
-    cached = json.loads((PROJECT_ROOT / "results/coverage/geometry.json").read_text())
-    geometry = {(r["world_identity"], r["source_identity"]): r for r in cached["observations"]
-                if (r["world_identity"], r["frame"]) in wanted and r["split"] == "train"}
-    del cached, observations, frames
-    worker_config = dict(config, coverage=record["parameters"])
+    worker_config, records, worlds, geometry = coverage_context(config, wanted)
+    del frames
     arguments = (worker_config, str(Path(data_root)), records, worlds, geometry)
     if workers == 1:
         _initialize(*arguments)
