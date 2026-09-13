@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import argparse
 from collections import OrderedDict
-from contextlib import contextmanager, nullcontext
+from contextlib import nullcontext
 import json
 import math
 from pathlib import Path
@@ -43,20 +43,26 @@ def keep_loss(original, inserted, mode="worst"):
     raise ValueError("unknown normal-pair objective")
 
 
-def tail_loss(scores, target, frames, config, generator):
+def tail_loss(scores, target, frames, config, generator, *, selections=None):
     """Live-batch tail approximation; no stale score queue or metric-unbiased claim."""
     normal, anomaly = torch.where(target == 0)[0], torch.where(target == 1)[0]
     if not len(normal) or not len(anomaly):
+        if selections is not None:
+            selections.update(high_normal=normal[:0], low_anomaly=anomaly[:0], pairs=[])
         return scores.sum() * 0, dict(pairs=0, cross_frame_pairs=0)
     high = normal[torch.argsort(scores[normal], descending=True, stable=True)
                   [:max(1, math.ceil(len(normal) * config["normal_tail_fraction"]))]]
     low = anomaly[torch.argsort(scores[anomaly], stable=True)
                   [:max(1, math.ceil(len(anomaly) * config["anomaly_tail_fraction"]))]]
     losses, cross = [], 0
+    if selections is not None:
+        selections.update(high_normal=high, low_anomaly=low, pairs=[])
     count = config["pairs_per_tail"]
     for apool, npool in ((anomaly, high), (low, normal)):
         a = apool[torch.randint(len(apool), (count,), generator=generator, device=scores.device)]
         n = npool[torch.randint(len(npool), (count,), generator=generator, device=scores.device)]
+        if selections is not None:
+            selections["pairs"].append((a, n))
         losses.append(F.softplus((config["margin"] + scores[n] - scores[a]) / config["temperature"]).mean())
         cross += int((frames[a] != frames[n]).sum())
     return .5 * (losses[0] + losses[1]), dict(pairs=2 * count, cross_frame_pairs=cross)
@@ -106,22 +112,27 @@ def query_rows(frozen, original, config, rng):
 
 
 class TrainingFrames:
-    def __init__(self, config, data_root):
+    def __init__(self, config, data_root, *, preprocessing=None):
         self.config = config
         self.dataset = FrozenDataset(PROJECT_ROOT / "results/synthetic", data_root, "train")
+        self.preprocessing = ScanTransform(config, state=preprocessing).state_dict()
         self.transform = None
         self.originals = OrderedDict()
+
+    def queries(self, index, draw):
+        path, identity, frame = self.dataset.samples[index]
+        original = self.dataset.sequence[frame]
+        frozen = FrozenFrame.load(path, original, identity)
+        rng = np.random.default_rng(np.random.SeedSequence([self.config["training"]["seed"], 11, draw]))
+        return frozen, original, query_rows(frozen, original, self.config["training"], rng)
 
     def __getitem__(self, request):
         index, draw, need_original = request
         if self.transform is None:
             torch.set_num_threads(1)
-            self.transform = ScanTransform(self.config, workers=1)
-        path, identity, frame = self.dataset.samples[index]
-        original = self.dataset.sequence[frame]
-        frozen = FrozenFrame.load(path, original, identity)
-        rng = np.random.default_rng(np.random.SeedSequence([self.config["training"]["seed"], 11, draw]))
-        queries = query_rows(frozen, original, self.config["training"], rng)
+            self.transform = ScanTransform(self.config, state=self.preprocessing, workers=1)
+        frozen, original, queries = self.queries(index, draw)
+        identity, frame = frozen.world_identity, frozen.source.frame_id
         before = None
         if need_original and len(queries["original_query"]):
             key = source_identity(original)
@@ -160,53 +171,76 @@ def _collate(rows):
     return rows
 
 
-@contextmanager
-def _preserve_buffers(model):
-    # Recomputed BatchNorm must not update its running statistics a second time.
-    buffers = [(value, value.clone()) for value in model.buffers()]
-    try:
-        yield
-    finally:
+class _preserve_buffers:
+    """Reusable across separate loss gradients through the same checkpoint graph."""
+    def __init__(self, model):
+        self.model, self.stack = model, []
+
+    def __enter__(self):
+        self.stack.append([(value, value.clone()) for value in self.model.buffers()])
+        return self
+
+    def __exit__(self, *_):
+        # Recomputed BatchNorm must not count the same observation again.
         with torch.no_grad():
-            for value, saved in buffers:
+            for value, saved in self.stack.pop():
                 value.copy_(saved)
 
 
-def training_forward(model, scan, query):
+def training_forward(model, scan, query, *, return_features=False):
     return checkpoint(model, scan, query, use_reentrant=False,
+                      **(dict(return_features=True) if return_features else {}),
                       context_fn=lambda: (nullcontext(), _preserve_buffers(model)))
 
 
-def batch_loss(model, rows, config, step, *, full_objective=False):
+def batch_loss(model, rows, config, step, *, full_objective=False, details=False):
     device = next(model.parameters()).device
     all_scores, all_targets, all_frames, before, after = [], [], [], [], []
+    observed = dict(scores=[], context=[], point=[], score_targets=[])
+    def forward(scan, query, target):
+        output = training_forward(model, to_device(scan, device), query.to(device), return_features=details)
+        if not details:
+            return output
+        for name in ("context", "point"):
+            observed[name].append(output[name])
+        observed["scores"].append(output["score"])
+        observed["score_targets"].append(target.to(device))
+        return output["score"]
     for row in rows:
-        scan = to_device(row["scan"], device)
-        scores = training_forward(model, scan, row["query"].to(device))
+        query_target = torch.zeros(len(row["query"]), dtype=torch.long)
+        query_target[row["detection_index"]] = row["target"]
+        scores = forward(row["scan"], row["query"], query_target)
         all_scores.append(scores[row["detection_index"].to(device)])
         all_targets.append(row["target"].to(device))
         all_frames.append(torch.full_like(all_targets[-1], row["frame"]))
         if row["original"] is not None:
-            before.append(training_forward(model, to_device(row["original"], device), row["original_query"].to(device)))
+            before.append(forward(row["original"], row["original_query"], torch.zeros(len(row["original_query"]), dtype=torch.long)))
             after.append(scores[row["keep_index"].to(device)])
     scores, target, frames = map(torch.cat, (all_scores, all_targets, all_frames))
     det = detection_loss(scores, target)
     keep = keep_loss(torch.cat(before), torch.cat(after), config["loss"]["keep_mode"]) if before else scores.sum() * 0
     generator = torch.Generator(device=device).manual_seed(config["training"]["seed"] + 31 + step)
-    tail, tail_stats = tail_loss(scores, target, frames, config["loss"], generator)
+    selections = {} if details else None
+    tail, tail_stats = tail_loss(scores, target, frames, config["loss"], generator, selections=selections)
     fraction = 1. if full_objective else auxiliary_fraction(step, config["training"])
     total = det + fraction * (config["loss"]["keep_weight"] * keep + config["loss"]["tail_weight"] * tail)
     stats = dict(total=float(total.detach()), detection=float(det.detach()), keep=float(keep.detach()),
         tail=float(tail.detach()), auxiliary_fraction=fraction, normal_queries=int((target == 0).sum()),
         anomaly_queries=int((target == 1).sum()), retained_normal_pairs=sum(len(x) for x in before),
         **tail_stats)
+    if details:
+        mean = keep_loss(torch.cat(before), torch.cat(after), "mean") if before else scores.sum() * 0
+        observed.update(components=dict(detection=det, keep=keep, tail=tail, keep_mean=mean),
+                        tail=selections, target=target)
+        return total, stats, observed
     return total, stats
 
 
 def load_checkpoint(path, device="cuda"):
     saved = torch.load(path, map_location="cpu", weights_only=True)
-    if saved.get("format") != "ajae-v1-checkpoint":
-        raise ValueError("checkpoint is not formal AJAE V1")
+    if saved.get("format") != "ajae-v1-checkpoint" or "preprocessing" not in saved:
+        raise ValueError("checkpoint needs formal AJAE V1 weights and saved preprocessing")
+    ScanTransform(saved["config"], state=saved["preprocessing"])
     model = AJAE(saved["config"]).to(device)
     model.load_state_dict(saved["model"], strict=True)
     return model, saved
@@ -255,7 +289,7 @@ def check(config, data_root, examples):
     validation = FrozenDataset(PROJECT_ROOT / "results/synthetic", data_root, "validation")[161]
     real = STUSequence.open(data_root, protocol=load_protocol(), partition="val",
                            sequence_id=125, label_mode="forbidden")[25]
-    transform = ScanTransform(config, workers=8)
+    transform = ScanTransform(config, state=dataset.preprocessing, workers=8)
     stats["evaluation_inputs"] = []
     for scope, source in (("synthetic_201_161", validation.source), ("unlabelled_val_125_25", real)):
         started = time.perf_counter()
@@ -267,13 +301,124 @@ def check(config, data_root, examples):
     return stats
 
 
+def _gradient_comparison(vectors):
+    norms = {name: float(value.double().norm()) for name, value in vectors.items()}
+    cosine = {}
+    for i, left in enumerate(vectors):
+        for right in list(vectors)[i + 1:]:
+            denominator = norms[left] * norms[right]
+            cosine[left + ":" + right] = (float(torch.dot(vectors[left].double(), vectors[right].double()))
+                                           / denominator if denominator else None)
+    return dict(norm=norms, cosine=cosine)
+
+
+def gradient_preview(config, data_root, exposure):
+    """Fixed content-selected batches at one random initialization; never update parameters."""
+    groups = ("near_sparse_1_4", "far_at_least_20", "weak_background_visible",
+              "normal_sparse_with_nonextreme_anomaly")
+    full_step = config["training"]["warmup_steps"] + config["training"]["ramp_steps"]
+    chosen = {name: next((r["step"] for r in exposure["records"]
+                         if r["step"] >= full_step and r["flags"][name] is True), None) for name in groups}
+    torch.manual_seed(config["training"]["seed"])
+    model, dataset = AJAE(config).cuda().train(), TrainingFrames(config, data_root)
+    parameters = list(model.named_parameters())
+    result = dict(selection_rule="first request step after full ramp containing each declared group; deduplicate steps",
+                  selected_steps=chosen, optimizer_steps=0, checkpoint_saved=False,
+                  scope="one unchanged random initialization, train-mode batch statistics restored between batches; not learning or transfer evidence",
+                  batches=[])
+    for step in sorted(set(chosen.values()) - {None}):
+        records = [r for r in exposure["records"] if r["step"] == step]
+        rows = [dataset[(r["sample"], r["draw"], r["keep_active"])] for r in records]
+        torch.cuda.reset_peak_memory_stats()
+        started = time.perf_counter()
+        with _preserve_buffers(model):
+            _, stats, observed = batch_loss(model, rows, config, step, details=True)
+            tensors = [p for _, p in parameters]
+            sizes = {name: len(observed[name]) for name in ("scores", "context", "point")}
+            for name in sizes:
+                tensors.extend(observed[name])
+            vectors = {name: {} for name in ("shared_parameters", "heads", *sizes)}
+            score_direction = {}
+            for component, loss in observed["components"].items():
+                gradients = torch.autograd.grad(loss, tensors, allow_unused=True, retain_graph=True)
+                if any(g is not None and not torch.isfinite(g).all() for g in gradients):
+                    raise FloatingPointError(f"nonfinite {component} diagnostic gradient")
+                def vector(pairs):
+                    return torch.cat([(g.detach().float().cpu() if g is not None else torch.zeros_like(t, device="cpu"))
+                                      .reshape(-1) for g, t in pairs])
+                for scope, is_head in (("shared_parameters", False), ("heads", True)):
+                    vectors[scope][component] = vector([(g, p) for (name, p), g in zip(parameters, gradients)
+                        if (name.startswith(("base_head.", "relation_head."))) == is_head])
+                offset = len(parameters)
+                for scope, count in sizes.items():
+                    vectors[scope][component] = vector(zip(gradients[offset:offset + count], tensors[offset:offset + count]))
+                    offset += count
+                labels, force = torch.cat(observed["score_targets"]).cpu(), vectors["scores"][component]
+                score_direction[component] = {name: dict(count=int((labels == value).sum()),
+                    norm=float(force[labels == value].double().norm()), signed_sum=float(force[labels == value].double().sum()))
+                    for name, value in (("normal", 0), ("anomaly", 1))}
+                del gradients
+            comparison = {name: _gradient_comparison(values) for name, values in vectors.items()}
+            # The mean control shares these exact forward passes, including BatchNorm observations.
+            weights = dict(detection=1., keep=config["loss"]["keep_weight"], tail=config["loss"]["tail_weight"],
+                           keep_mean=config["loss"]["keep_weight"])
+            for value in comparison.values():
+                value["weighted_norm"] = {name: norm * weights[name] for name, norm in value["norm"].items()}
+            high = observed["tail"]["high_normal"].detach().cpu().numpy()
+            low = observed["tail"]["low_anomaly"].detach().cpu().numpy()
+            selected_pairs = observed["tail"]["pairs"]
+            sampled_a, sampled_n = [np.concatenate([pair[k].detach().cpu().numpy() for pair in selected_pairs])
+                                    if selected_pairs else np.empty(0, np.int64) for k in (0, 1)]
+            tails, offset = [], 0
+            for row, record in zip(rows, records):
+                stop = offset + len(row["target"])
+                sides = record["sparse_detection_index"]
+                witness = None if sides is None else dict(
+                    high_normal=int(np.isin(high, np.asarray(sides["normal"], dtype=np.int64) + offset).sum()),
+                    low_anomaly=int(np.isin(low, np.asarray(sides["anomaly"], dtype=np.int64) + offset).sum()),
+                    sampled_normal=int(np.isin(sampled_n, np.asarray(sides["normal"], dtype=np.int64) + offset).sum()),
+                    sampled_anomaly=int(np.isin(sampled_a, np.asarray(sides["anomaly"], dtype=np.int64) + offset).sum()))
+                tails.append(dict(sample=record["sample"], draw=record["draw"], flags=record["flags"],
+                    normal_queries=int((row["target"] == 0).sum()), anomaly_queries=int((row["target"] == 1).sum()),
+                    high_normal=int(((high >= offset) & (high < stop)).sum()),
+                    low_anomaly=int(((low >= offset) & (low < stop)).sum()), sparse_witness=witness,
+                    sampled_normal=int(((sampled_n >= offset) & (sampled_n < stop)).sum()),
+                    sampled_anomaly=int(((sampled_a >= offset) & (sampled_a < stop)).sum())))
+                offset = stop
+            torch.cuda.synchronize()
+            report = dict(step=step, samples=[r["sample"] for r in records],
+                losses={k: float(v.detach()) for k, v in observed["components"].items()},
+                gradients=comparison, score_gradient_direction=score_direction,
+                input_returns=[len(r["scan"]["xyzi"]) for r in rows], tails=tails, **stats,
+                seconds=time.perf_counter() - started, peak_cuda_bytes=torch.cuda.max_memory_allocated())
+            result["batches"].append(report)
+            print(json.dumps(dict(event="gradient_preview", step=step, losses=report["losses"], seconds=report["seconds"])), flush=True)
+            del tensors, observed, vectors, loss, report
+        del rows
+    return result
+
+
+def preview(config, data_root, steps, output):
+    from .exposure import preview as exposure_preview
+    if steps < 1:
+        raise ValueError("preview needs a positive logical sampling budget; it performs no optimization")
+    exposure = exposure_preview(config, data_root, steps=steps, workers=8)
+    result = dict(format="ajae-training-preview", config=config, exposure=exposure,
+                  gradients=gradient_preview(config, data_root, exposure), optimizer_steps=0)
+    _atomic_json(output, result)
+    return result
+
+
 def fit(config, data_root, steps, output, resume=None):
     if steps < 1:
         raise ValueError("training needs a positive explicit update budget")
     output = Path(output)
     if output.exists() and any(output.iterdir()):
         raise ValueError("training output is occupied; resume into an empty output directory")
-    dataset = TrainingFrames(config, data_root)
+    saved = torch.load(resume, map_location="cpu", weights_only=True) if resume is not None else None
+    if saved is not None and (saved.get("format") != "ajae-v1-checkpoint" or "preprocessing" not in saved):
+        raise ValueError("resume requires the saved inference preprocessing state")
+    dataset = TrainingFrames(config, data_root, preprocessing=saved["preprocessing"] if saved is not None else None)
     probabilities = dataset.dataset.sampling_probabilities(PROJECT_ROOT / config["training"]["sampling"])
     torch.manual_seed(config["training"]["seed"])
     model = AJAE(config).cuda()
@@ -282,7 +427,6 @@ def fit(config, data_root, steps, output, resume=None):
     identities = [[identity, frame] for _, identity, frame in dataset.dataset.samples]
     start = 0
     if resume is not None:
-        saved = torch.load(resume, map_location="cpu", weights_only=True)
         if (saved.get("format") != "ajae-v1-checkpoint" or saved["config"] != config
                 or saved["samples"] != identities or not torch.equal(saved["probabilities"], torch.from_numpy(probabilities))):
             raise ValueError("resume configuration, input order or frame probabilities changed")
@@ -326,6 +470,7 @@ def fit(config, data_root, steps, output, resume=None):
                 host_disk()
             if (step + 1) % config["training"]["save_every"] == 0 or step + 1 == steps:
                 saved = dict(format="ajae-v1-checkpoint", config=config, model=model.state_dict(),
+                    preprocessing=dataset.preprocessing,
                     optimizer=optimizer.state_dict(), step=step + 1, samples=identities,
                     probabilities=torch.from_numpy(probabilities), torch_rng=torch.get_rng_state(),
                     cuda_rng=torch.cuda.get_rng_state_all())
@@ -339,7 +484,7 @@ def fit(config, data_root, steps, output, resume=None):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("check", "fit"))
+    parser.add_argument("command", choices=("check", "preview", "fit"))
     parser.add_argument("--config", type=Path, default=PROJECT_ROOT / "protocol/model.json")
     parser.add_argument("--data-root", type=Path, default=Path("/home/jasongao/Data/STU"))
     parser.add_argument("--steps", type=int)
@@ -355,6 +500,10 @@ def main():
         if args.steps is not None or args.output is not None or args.resume is not None:
             parser.error("check has no optimization budget, output directory or resume state")
         check(config, args.data_root, args.sample if args.sample is not None else [161, 162])
+    elif args.command == "preview":
+        if args.steps is None or args.output is None or args.sample is not None or args.resume is not None:
+            parser.error("preview requires --steps and --output; it has no fixed check samples or resume state")
+        preview(config, args.data_root, args.steps, args.output)
     else:
         if args.steps is None or args.output is None or args.sample is not None:
             parser.error("fit requires --steps and --output; fixed check samples are not training input")

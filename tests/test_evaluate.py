@@ -17,17 +17,84 @@ from src.scene import PointLabels, make_source_frame
 from vendor.stu.compute_point_level_ood import PointOODMetricsCalculator
 
 
-def test_paged_exact_counts_match_pooled_ties_and_preserve_signed_scores():
-    from src.evaluate import ScoreCounts
-    scores = np.array([-80, -4, -0., 0., 4, 80, 81, 81] * 13, np.float32)
+def test_external_exact_counts_merge_sparse_float32_ranges_and_cross_run_ties(tmp_path):
+    from src.evaluate import ScoreCounts, score_groups
+    random = np.random.default_rng(193)
+    # Thousands of unrelated exponent/mantissa pages must not allocate dense pages.
+    broad = random.integers(1, 0x7f800000, 3000, dtype=np.uint32)
+    broad[::2] |= np.uint32(0x80000000)
+    scores = np.r_[broad.view(np.float32), np.array([-80, -4, -0., 0., 4, 80, 81, 81] * 123, np.float32)]
     target = (np.arange(len(scores)) % 7 < 3).astype(np.int64)
-    counts = ScoreCounts()
-    for rows in np.array_split(np.arange(len(scores)), 7):
-        counts.add(scores[rows], target[rows])
-    assert counts.metrics() == exact_metrics(np.sort(packed_scores(scores, target, score_kind="logit")), score_kind="logit")
-    counts.add(np.array([], np.float32), np.array([], np.int64))
-    with pytest.raises(MemoryError):
-        ScoreCounts(max_bytes=1).add(scores, target)
+    ordered = np.sort(packed_scores(scores, target, score_kind="logit"))
+    expected_groups = tuple(np.concatenate(parts) for parts in zip(*score_groups(ordered), strict=True))
+    requests = []
+    with ScoreCounts(max_bytes=4096, directory=tmp_path, check_resources=requests.append) as counts:
+        for rows in np.array_split(random.permutation(len(scores)), 13):
+            counts.add(scores[rows], target[rows])
+        counts.add(np.array([], np.float32), np.array([], np.int64))
+        groups = tuple(np.concatenate(parts) for parts in zip(*counts.groups(), strict=True))
+        for actual, expected in zip(groups, expected_groups, strict=True):
+            np.testing.assert_array_equal(actual, expected)
+        actual = counts.metrics()
+        expected = exact_metrics(ordered, score_kind="logit")
+        for name in ("AP", "AUROC", "FPR95"):
+            assert actual.pop(name) == pytest.approx(expected.pop(name), abs=1e-12, rel=0)
+        assert actual == expected
+        assert counts.spills > 10 and counts.merges > 10 and len(requests) > 20
+        assert counts.disk_bytes == sum(path.stat().st_size for path in counts.directory.iterdir())
+        assert counts.peak_disk_bytes >= counts.disk_bytes > 0
+    assert not list(tmp_path.iterdir())
+    with pytest.raises(ValueError, match="4096"):
+        ScoreCounts(max_bytes=1)
+
+
+def test_external_count_disk_failure_cleans_runs_and_respects_host_reserve(tmp_path, monkeypatch):
+    from src.evaluate import ScoreCounts, _evaluation_space
+    reserve = 10_000_000_000
+    monkeypatch.setattr("src.evaluate.host_disk", lambda: dict(SizeRemaining=reserve + 2000, reserve_bytes=reserve))
+    _evaluation_space(2000)
+    with pytest.raises(OSError, match="10 GB reserve"):
+        _evaluation_space(2001)
+
+    requests = []
+    def space(required):
+        requests.append(required)
+        if len(requests) == 3:
+            raise OSError("fixture disk exhausted")
+
+    with pytest.raises(OSError, match="fixture disk"):
+        with ScoreCounts(max_bytes=4096, directory=tmp_path, check_resources=space) as counts:
+            counts.add(np.arange(500, dtype=np.float32), np.arange(500) % 2)
+    assert len(requests) == 3 and not list(tmp_path.iterdir())
+
+
+@pytest.mark.parametrize("last_distance", [50.0, 50.01])
+def test_synthetic_official_filter_preserves_insertion_and_ignore_targets(last_distance):
+    from src.data import FrozenFrame
+    from src.evaluate import official_frame, synthetic_targets
+    ranges = np.array([2.5, 50, 10, 20, 10, 10, 10, last_distance], np.float32)
+    xyzi = np.zeros((len(ranges), 4), np.float32)
+    xyzi[:, 0] = ranges
+    semantic = np.array([2, 2, 2, 2, 2, 52, 40, 2], np.uint16)
+    inserted = np.array([1, 1, 1, 1, 0, 0, 0, 1], bool)
+    instance = np.where(inserted, 60001, 0).astype(np.uint16)
+    packed = (instance.astype(np.uint32) << 16) | semantic.astype(np.uint32)
+    mapped = np.array([255, 255, 255, 255, 255, 255, 0, 255], np.uint8)
+    source = make_source_frame(0, xyzi, np.eye(4), PointLabels(packed, semantic, instance, mapped),
+                               partition="fixture", sequence_id=201)
+    frozen = FrozenFrame(source, "a" * 64, inserted, np.zeros(len(ranges), bool))
+    full, _ = synthetic_targets(frozen)
+    np.testing.assert_array_equal(full, [1, 1, 1, 1, -1, -1, 0, 1])
+    filtered, eligible = synthetic_targets(frozen, official=True)
+    expected = full.copy()
+    if last_distance > 50:
+        expected[-1] = -1
+    np.testing.assert_array_equal(filtered, expected)
+    assert eligible == (last_distance <= 50)
+    # Real validation still follows raw STU semantics, including the native class 2.
+    prediction = FramePrediction("fixture", 201, 0, source.real_slots, np.arange(len(ranges), dtype=np.float32))
+    _, real_target, real_eligible = official_frame(source, prediction)
+    assert real_target[4] == 1 and real_target[5] == 0 and real_eligible
 
 
 def test_signed_logit_pooling_preserves_unsaturated_order_and_zero_threshold(tmp_path):

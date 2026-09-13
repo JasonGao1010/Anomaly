@@ -1,4 +1,5 @@
 from copy import deepcopy
+from io import BytesIO
 
 import numpy as np
 import pytest
@@ -71,6 +72,51 @@ def test_transform_is_label_and_pose_blind_and_keeps_original_returns():
     assert (scan["sensing_scale"] > 0).all()
 
 
+def test_saved_transform_is_independent_of_current_calibration(monkeypatch, tmp_path):
+    import src.model as model_module
+
+    config, source = load_config(), scan_fixture()
+    transform = ScanTransform(config)
+    expected = transform(source)
+    stream = BytesIO()
+    torch.save(transform.state_dict(), stream)
+    stream.seek(0)
+    state = torch.load(stream, weights_only=True)
+    monkeypatch.setattr(model_module, "PROJECT_ROOT", tmp_path)
+    (tmp_path / "protocol").mkdir()
+    (tmp_path / "protocol/data.json").write_text("{}")
+
+    def forbidden_calibration(*args, **kwargs):
+        raise AssertionError("restoration must not read current ray calibration")
+
+    monkeypatch.setattr(model_module, "calibrated_ray_grid", forbidden_calibration)
+    restored = ScanTransform(config, state=state)
+    state["elevations"][0] += .01
+    exported = restored.state_dict()
+    exported["elevation_step"][0] *= 2
+    for key, value in restored(source).items():
+        torch.testing.assert_close(value, expected[key], rtol=0, atol=0)
+
+
+def test_saved_transform_rejects_invalid_calibration():
+    config = load_config()
+    state = ScanTransform(config).state_dict()
+    invalid = [dict(state, format="unknown"), dict(state, elevations=state["elevations"].float()),
+               dict(state, elevation_step=state["elevation_step"][:-1]),
+               dict(state, azimuth_step=torch.tensor([.01], dtype=torch.float64))]
+    for key, value in (("elevations", float("nan")), ("elevations", 2.), ("elevation_step", 0.)):
+        altered = deepcopy(state)
+        altered[key][0] = value
+        invalid.append(altered)
+    altered = deepcopy(state)
+    altered["elevations"][1] = altered["elevations"][0]
+    invalid.append(altered)
+    invalid.append(dict(state, azimuth_step=torch.tensor(0., dtype=torch.float64)))
+    for altered in invalid:
+        with pytest.raises(ValueError):
+            ScanTransform(config, state=altered)
+
+
 def test_relationship_chunks_null_support_and_gradients_match():
     torch.manual_seed(2)
     scan = ScanTransform(load_config())(scan_fixture())
@@ -104,6 +150,31 @@ def test_plain_relations_have_no_explicit_sensing_input():
     assert not torch.allclose(layer.part(z, h, scan, query, True), layer.part(z, h, changed, query, True))
 
 
+def test_modulation_control_preserves_coordinates_and_removes_only_direct_conditions():
+    torch.manual_seed(13)
+    scan = ScanTransform(load_config())(scan_fixture())
+    layer, z, h = RelationLayer().eval(), torch.randn(8, 64), torch.randn(8, 64)
+    query, seen = torch.arange(8), {}
+    handles = [getattr(layer, name).register_forward_pre_hook(
+        lambda module, args, name=name: seen.setdefault(name, []).append(args[0].detach().clone()))
+        for name in ("edge", "modulation", "null")]
+    on = layer.part(z, h, scan, query, True, True)
+    off = layer.part(z, h, scan, query, True, False)
+    for handle in handles:
+        handle.remove()
+    torch.testing.assert_close(seen["edge"][0], seen["edge"][1], rtol=0, atol=0)
+    assert torch.count_nonzero(seen["modulation"][1]) == 0
+    torch.testing.assert_close(seen["null"][0][:, :-8], seen["null"][1][:, :-8], rtol=0, atol=0)
+    assert torch.count_nonzero(seen["null"][1][:, -8:]) == 0
+    assert not torch.allclose(on, off)
+    changed = dict(scan, condition=scan["condition"] + 5)
+    torch.testing.assert_close(off, layer.part(z, h, changed, query, True, False), rtol=0, atol=0)
+    assert not torch.allclose(on, layer.part(z, h, changed, query, True, True))
+    # Sensing normalization remains observable when explicit modulation is disabled.
+    changed = dict(scan, sensing_scale=scan["sensing_scale"] * 3)
+    assert not torch.allclose(off, layer.part(z, h, changed, query, True, False))
+
+
 def test_original_points_in_one_voxel_can_receive_different_scores(monkeypatch):
     from types import SimpleNamespace
     from src.model import AJAE
@@ -120,8 +191,9 @@ def test_original_points_in_one_voxel_can_receive_different_scores(monkeypatch):
     config = load_config()
     scan = ScanTransform(config)(scan_fixture())
     initial = None
-    for mode in ("none", "plain", "conditioned"):
+    for mode, modulation in (("none", True), ("plain", True), ("conditioned", True), ("conditioned", False)):
         config["model"]["relation_mode"] = mode
+        config["model"]["condition_modulation"] = modulation
         torch.manual_seed(12)
         model = AJAE(config).eval()
         if initial is None:
@@ -132,6 +204,22 @@ def test_original_points_in_one_voxel_can_receive_different_scores(monkeypatch):
         assert len(scores) == 8 and torch.isfinite(scores).all()
         assert scan["voxel_inverse"][0] == scan["voxel_inverse"][1]
         assert scores[0] != scores[1]
+        query = torch.tensor([0, 5])
+        diagnostics = model(scan, query, return_features=True)
+        torch.testing.assert_close(diagnostics["score"], model(scan, query), rtol=0, atol=0)
+        torch.testing.assert_close(diagnostics["point"],
+            model.point(torch.cat((scan["xyzi"], scan["point_offset"]), -1)), rtol=0, atol=0)
+        shared = tuple(diagnostics[name] for name in ("context", "point"))
+        gradients = torch.autograd.grad(diagnostics["score"].sum(), shared)
+        for representation, gradient in zip(shared, gradients, strict=True):
+            assert representation.shape == (8, 64) and gradient.shape == representation.shape
+            assert torch.isfinite(gradient).all() and gradient.norm() > 0
+        assert model(scan, query[:0]).shape == (0,)
+        with pytest.raises(ValueError, match="nonempty"):
+            model(scan, query[:0], return_features=True)
+        if mode == "conditioned" and not modulation:
+            changed = dict(scan, condition=scan["condition"] + 5)
+            assert not torch.allclose(scores, model(changed))  # Heads retain the same conditions.
 
 
 def test_pointrope_matches_upstream_table_and_preserves_shared_inputs():

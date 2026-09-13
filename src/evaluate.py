@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import argparse
+import gzip
 import json
 from pathlib import Path
+import shutil
 import tempfile
 
 import numpy as np
+from numba import njit
 
 from .data import FramePrediction, FrozenDataset, _atomic_json, host_disk
 from .protocol import PROJECT_ROOT, load_protocol
@@ -403,6 +406,20 @@ def official_frame(source, prediction):
     return scores, target, eligible
 
 
+def synthetic_targets(frozen, *, official=False):
+    """Filter frozen insertion labels without reinterpreting native semantics."""
+    target = frozen.anomaly_target
+    if not official:
+        return target, True
+    distance = np.linalg.norm(frozen.source.xyzi[:, :3], axis=1)
+    inside = (distance >= PointOODMetricsCalculator.min_eval_distance) & (
+        distance <= PointOODMetricsCalculator.max_eval_distance
+    )
+    target = np.where(inside, target, -1).astype(np.int8)
+    eligible = np.count_nonzero(target == 1) >= PointOODMetricsCalculator.min_num_points_to_eval
+    return target, bool(eligible)
+
+
 def evaluate_frames(frames, *, directory=None, observe=None, check_resources=None):
     """Pool eligible points exactly, sorting one temporary file in place."""
     rows, count, seen = [], 0, set()
@@ -460,45 +477,216 @@ def prediction_frames(data_root, prediction_root, sequence_ids, protocol=None):
             yield frame, FramePrediction.load(path, frame)
 
 
-class ScoreCounts:
-    """Sparse pages of exact float32 ties; memory depends on score range, not point count."""
+_COUNT_DTYPE = np.dtype([("bits", "<u4"), ("count", "<i8"), ("positive", "<i8")])
 
-    def __init__(self, max_bytes=4 * 2**30):
-        self.pages, self.positive, self.negative = {}, 0, 0
+
+@njit
+def _compress_counts(ordered, records):
+    """Collapse complete ties in a sorted packed block; no floating arithmetic."""
+    used = 0
+    for index in range(len(ordered) - 1, -1, -1):
+        key = np.uint32(ordered[index] >> 1)
+        positive = np.int64(ordered[index] & 1)
+        if used and records[used - 1]["bits"] == key:
+            records[used - 1]["count"] += 1
+            records[used - 1]["positive"] += positive
+        else:
+            records[used]["bits"] = key
+            records[used]["count"] = 1
+            records[used]["positive"] = positive
+            used += 1
+    return used
+
+
+@njit
+def _merge_counts(left, right, output):
+    """Merge descending runs, stopping before either unread suffix is needed."""
+    i = j = used = 0
+    while i < len(left) and j < len(right):
+        a, b = left[i]["bits"], right[j]["bits"]
+        if a >= b:
+            output[used] = left[i]
+            i += 1
+            if a == b:
+                output[used]["count"] += right[j]["count"]
+                output[used]["positive"] += right[j]["positive"]
+                j += 1
+        else:
+            output[used] = right[j]
+            j += 1
+        used += 1
+    return i, j, used
+
+
+def _evaluation_space(additional_bytes):
+    # Existing runs are already reflected in SizeRemaining; only reserve the new output.
+    volume = host_disk()
+    if additional_bytes > volume["SizeRemaining"] - volume["reserve_bytes"]:
+        raise OSError("exact evaluation merge would invade the host E: 10 GB reserve")
+
+
+class ScoreCounts:
+    """Exact sorted tie counts with bounded RAM and compressed external merges.
+
+    The numeric workspace is bounded by max_bytes, plus fixed codec/runtime
+    overhead and caller-owned inputs. Every record is a uint32 score key and two
+    int64 counts (20 bytes), independent of empty float32 score regions. Full
+    input predictions are never retained. Before each spill or merge, reserve
+    the worst-case compressed output while both input runs still exist.
+    """
+
+    def __init__(self, max_bytes=128 * 2**20, *, directory=None, check_resources=None):
+        if not isinstance(max_bytes, int) or max_bytes < 4096:
+            raise ValueError("exact counting workspace must be at least 4096 bytes")
         self.max_bytes = max_bytes
+        self.capacity = max_bytes // 64
+        self.block_size = max(1, min(1 << 16, max_bytes // 256))
+        self.positive = self.negative = self.buffered = 0
+        self.buffer, self.runs = [], []
+        self.temporary = tempfile.TemporaryDirectory(prefix="score-counts-", dir=directory)
+        self.directory = Path(self.temporary.name)
+        self.check_resources = check_resources
+        self.serial = self.spills = self.merges = self.disk_bytes = self.peak_disk_bytes = 0
+        self.closed = False
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exception):
+        self.close()
+
+    def close(self):
+        self.buffer.clear()
+        self.runs.clear()
+        self.temporary.cleanup()
+        self.closed = True
+
+    def _output(self, rows):
+        # gzip's deflate overhead is below this conservative bound, including headers.
+        raw = rows * _COUNT_DTYPE.itemsize
+        required = raw + raw // 1000 + 1024
+        if self.check_resources is not None:
+            self.check_resources(required)
+        elif self.disk_bytes + required >= 2**30:
+            _evaluation_space(required)
+        if required > shutil.disk_usage(self.directory).free:
+            raise OSError("insufficient temporary storage for exact score-count merge")
+        self.serial += 1
+        return self.directory / f"{self.serial}.gz"
+
+    def _record_output(self, path, rows):
+        size = path.stat().st_size
+        self.disk_bytes += size
+        self.peak_disk_bytes = max(self.peak_disk_bytes, self.disk_bytes)
+        return path, rows, size
+
+    def _blocks(self, run):
+        with gzip.open(run[0], "rb") as stream:
+            while block := stream.read(self.block_size * _COUNT_DTYPE.itemsize):
+                if len(block) % _COUNT_DTYPE.itemsize:
+                    raise ValueError("truncated exact score-count run")
+                yield np.frombuffer(block, _COUNT_DTYPE)
+
+    def _merge(self, left, right):
+        path = self._output(left[1] + right[1])
+        output = np.empty(self.block_size * 2, _COUNT_DTYPE)
+        empty = np.empty(0, _COUNT_DTYPE)
+        rows = 0
+        a, b = self._blocks(left), self._blocks(right)
+        x, y = next(a, empty), next(b, empty)
+        try:
+            with gzip.open(path, "wb", compresslevel=1) as stream:
+                while len(x) and len(y):
+                    i, j, used = _merge_counts(x, y, output)
+                    stream.write(output[:used].tobytes())
+                    rows += used
+                    x, y = x[i:], y[j:]
+                    if not len(x):
+                        x = next(a, empty)
+                    if not len(y):
+                        y = next(b, empty)
+                for current, blocks in ((x, a), (y, b)):
+                    stream.write(current.tobytes())
+                    rows += len(current)
+                    for block in blocks:
+                        stream.write(block.tobytes())
+                        rows += len(block)
+        finally:
+            a.close()
+            b.close()
+        result = self._record_output(path, rows)
+        for source in (left, right):
+            source[0].unlink()
+            self.disk_bytes -= source[2]
+        self.merges += 1
+        return result
+
+    def _flush(self):
+        if not self.buffered:
+            return
+        ordered = np.concatenate(self.buffer)
+        self.buffer.clear()
+        self.buffered = 0
+        ordered.sort(kind="quicksort")
+        records = np.empty(len(ordered), _COUNT_DTYPE)
+        used = _compress_counts(ordered, records)
+        del ordered
+        path = self._output(used)
+        with gzip.open(path, "wb", compresslevel=1) as stream:
+            for start in range(0, used, self.block_size):
+                stream.write(records[start:min(used, start + self.block_size)].tobytes())
+        del records
+        run = self._record_output(path, used)
+        self.spills += 1
+        # Binary levels limit the number of live runs and avoid a full-pool rewrite per frame.
+        level = 0
+        while level < len(self.runs) and self.runs[level] is not None:
+            run = self._merge(self.runs[level], run)
+            self.runs[level] = None
+            level += 1
+        if level == len(self.runs):
+            self.runs.append(run)
+        else:
+            self.runs[level] = run
 
     def add(self, scores, target):
-        packed = packed_scores(scores, target, score_kind="logit")
-        bits = (packed >> 1).astype(np.uint32)
-        pages = bits >> 16
-        order = np.argsort(pages, kind="stable")
-        pages, bits, labels = pages[order], bits[order], (packed[order] & 1).astype(np.int64)
-        starts = np.r_[0, np.flatnonzero(pages[1:] != pages[:-1]) + 1, len(pages)]
-        needed = set(map(int, pages[starts[:-1]])) if len(pages) else set()
-        if len(set(self.pages) | needed) * 65536 * 16 > self.max_bytes:
-            raise MemoryError("exact score counts exceed the declared RAM bound; no scores were quantized")
-        for a, b in zip(starts[:-1], starts[1:], strict=True):
-            if a == b:
-                continue
-            key = int(pages[a])
-            if key not in self.pages:
-                self.pages[key] = np.zeros((2, 65536), np.int64)
-            page = self.pages[key]
-            low = bits[a:b] & 65535
-            np.add.at(page[0], low, 1)
-            np.add.at(page[1], low, labels[a:b])
-        self.positive += int(labels.sum())
-        self.negative += len(labels) - int(labels.sum())
+        if self.closed:
+            raise ValueError("score counter is closed")
+        scores, target = np.asarray(scores), np.asarray(target)
+        if scores.ndim != 1 or target.shape != scores.shape:
+            raise ValueError("metric records require matching one-dimensional arrays")
+        for start in range(0, len(scores), self.block_size):
+            packed = packed_scores(scores[start:start + self.block_size],
+                                   target[start:start + self.block_size], score_kind="logit")
+            if self.buffered + len(packed) > self.capacity:
+                self._flush()
+            positive = int(np.sum(packed & 1, dtype=np.int64))
+            self.positive += positive
+            self.negative += len(packed) - positive
+            self.buffer.append(packed)
+            self.buffered += len(packed)
 
     def groups(self):
-        for key in sorted(self.pages, reverse=True):
-            page = self.pages[key]
-            occupied = np.flatnonzero(page[0])[::-1]
-            yield ((np.uint32(key) << np.uint32(16)) | occupied.astype(np.uint32),
-                   page[0, occupied], page[1, occupied])
+        self._flush()
+        present = [run for run in self.runs if run is not None]
+        if not present:
+            return
+        merged = present[0]
+        for run in present[1:]:
+            merged = self._merge(merged, run)
+        self.runs = [merged]
+        for records in self._blocks(merged):
+            yield records["bits"], records["count"], records["positive"]
 
     def metrics(self):
-        return metrics_from_groups(self.groups(), positive=self.positive, negative=self.negative, score_kind="logit")
+        return metrics_from_groups(self.groups(), positive=self.positive,
+                                   negative=self.negative, score_kind="logit")
+
+    def storage(self):
+        return dict(numeric_workspace_bytes=self.max_bytes,
+                    fixed_codec_and_runtime_overhead_excluded=True,
+                    peak_temporary_bytes=self.peak_disk_bytes, spills=self.spills,
+                    merges=self.merges, record_bytes=_COUNT_DTYPE.itemsize)
 
 
 def checkpoint_frames(data_root, checkpoint_path, sequence_ids, protocol):
@@ -508,7 +696,7 @@ def checkpoint_frames(data_root, checkpoint_path, sequence_ids, protocol):
     torch.set_num_threads(4)
     model, saved = load_checkpoint(checkpoint_path)
     model.eval()
-    transform = ScanTransform(saved["config"], workers=8)
+    transform = ScanTransform(saved["config"], state=saved["preprocessing"], workers=8)
     for identifier in sequence_ids:
         sequence = STUSequence.open(data_root, protocol=protocol, partition="val",
                                     sequence_id=identifier, label_mode=LabelMode.REQUIRED)
@@ -516,36 +704,51 @@ def checkpoint_frames(data_root, checkpoint_path, sequence_ids, protocol):
             yield source, model.predict(source, transform)
 
 
-def evaluate_synthetic(data_root, checkpoint_path):
+def evaluate_synthetic(data_root, checkpoint_path, *, directory=None):
     """Full 201 pool and official filtering, each with its own global score curve."""
     import torch
     from .model import ScanTransform
     from .train import load_checkpoint
+    _evaluation_space(0)
     torch.set_num_threads(4)
     model, saved = load_checkpoint(checkpoint_path)
     model.eval()
-    transform = ScanTransform(saved["config"], workers=8)
+    transform = ScanTransform(saved["config"], state=saved["preprocessing"], workers=8)
     dataset = FrozenDataset(PROJECT_ROOT / "results/synthetic", data_root, "validation")
-    full, official, eligible = ScoreCounts(), ScoreCounts(), 0
-    for index in range(len(dataset)):
-        frozen = dataset[index]
-        source = frozen.source
-        prediction = model.predict(source, transform)
-        scores = prediction.restore(source)
-        target = frozen.anomaly_target
-        valid = target >= 0
-        full.add(scores[valid], target[valid])
-        _, target, accepted = official_frame(source, prediction)
-        if accepted:
+    eligible = 0
+    with ScoreCounts(directory=directory, check_resources=_evaluation_space) as full, \
+            ScoreCounts(directory=directory, check_resources=_evaluation_space) as official:
+        for index in range(len(dataset)):
+            frozen = dataset[index]
+            source = frozen.source
+            prediction = model.predict(source, transform)
+            scores = prediction.restore(source)
+            target, _ = synthetic_targets(frozen)
             valid = target >= 0
-            official.add(scores[valid], target[valid])
-            eligible += 1
-        if (index + 1) % 100 == 0:
-            print(json.dumps(dict(synthetic_frames=index + 1)), flush=True)
+            full.add(scores[valid], target[valid])
+            target, accepted = synthetic_targets(frozen, official=True)
+            if accepted:
+                valid = target >= 0
+                official.add(scores[valid], target[valid])
+                eligible += 1
+            if (index + 1) % 100 == 0:
+                _evaluation_space(0)
+                print(json.dumps(dict(synthetic_frames=index + 1)), flush=True)
+        full_metrics = full.metrics()
+        full_storage = full.storage()
+        full.close()  # Release the full-scope run before the second final merge.
+        official_metrics_result = official.metrics()
+        official_storage = official.storage()
+    remaining_after_cleanup = host_disk()["SizeRemaining"]
     return dict(source_sequence=201, worlds=len({identity for _, identity, _ in dataset.samples}), world_frames=len(dataset),
-        eligible_world_frames=eligible, full=full.metrics(), official=official.metrics(),
+        eligible_world_frames=eligible, full=full_metrics, official=official_metrics_result,
         full_point_set="all_real_inserted_returns_and_valid_original_normal_targets_without_range_or_frame_filter",
-        official_point_set="official_semantic_distance_and_minimum_anomaly_count_filter",
+        official_point_set="same_frozen_insertion_targets_with_2.5_to_50_m_and_at_least_5_inserted_return_filter",
+        exact_count_storage=dict(full=full_storage, official=official_storage,
+            algorithm="compressed_sorted_float32_tie_counts_with_bounded_RAM_and_external_merges",
+            new_output_bound="20_bytes_per_input_tie_record_plus_conservative_gzip_overhead; input_runs_retained_until_merge_succeeds",
+            disk_policy="shared_host_E_free_space_checked_before_each_output; preserve_10_GB; fail_safely_if_exact_merge_cannot_fit",
+            host_E_remaining_after_cleanup=remaining_after_cleanup),
         scope="synthetic_validation_with_repeated_source_backgrounds; not_real_STU_validation",
         checkpoint=str(checkpoint_path.resolve()))
 
@@ -563,7 +766,8 @@ def main():
     if args.synthetic:
         if args.checkpoint is None or args.sequence is not None:
             parser.error("--synthetic requires --checkpoint and uses the fixed 201 world split")
-        result = evaluate_synthetic(args.data_root, args.checkpoint)
+        args.output.mkdir(parents=True, exist_ok=True)
+        result = evaluate_synthetic(args.data_root, args.checkpoint, directory=args.output)
         _atomic_json(args.output / "synthetic.json", result)
         print(json.dumps(result, indent=2))
         return

@@ -6,6 +6,7 @@
     "channels": 64,
     "relation_layers": 2,
     "relation_mode": "conditioned",
+    "condition_modulation": true,
     "voxel_m": 0.05,
     "radii_m": [0.25, 0.75, 2.0],
     "neighbors_per_shell": 16,

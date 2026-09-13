@@ -4,7 +4,7 @@
   "research_question": "Using only the complete current scan, can scene-supported observation-conditioned relationships on original returns improve real anomaly-versus-normal ranking over the same backbone and ordinary relationships, and do retained-normal pairing and live-batch tail ranking add transferable benefits?",
   "status": {
     "stage": "formal_v1_implemented_not_trained",
-    "active_work": "implementation_validation_complete_training_requires_user_instruction",
+    "active_work": "review_repairs_and_zero_update_diagnostics_complete; resolve_query_exposure_initialization_and_limited_learning_design_before_authorized_training",
     "model_defined": true,
     "training_defined": true,
     "formal_ajae_v1": "context_supported_conditional_return_relationship_network",
@@ -36,7 +36,7 @@
     "coverage_closure_evidence": "results/coverage/summary.json",
     "coverage_decision": "all_original_core_checks_exact_30_cell_quotas_and_sampling_exposure_requirements_passed; data_unchanged_by_model_implementation",
     "coverage_boundaries": "one_normal_source_per_split; sparse_normal_nonextreme_train_region_share_0.4997728305_near_0.5_limit; selected_geometry_scope_and_missingness; weak_background_change_is_not_self_occlusion; no_universal_coverage_claim",
-    "next_stage": "await_explicit_training_budget_and_initialization_decision; no_automatic_training_or_external_weights",
+    "next_stage": "resolve_query_exposure_and_explicit_initialization_choice_then_authorized_limited_learning_and_transfer; no_full_training_release",
     "data_preparation_accepted": true,
     "original_pool_summary_completed": true,
     "balanced_pool_target": {
@@ -144,7 +144,8 @@
     },
     "formal_v1_training_executed": false,
     "formal_v1_evaluation_executed": false,
-    "model_configuration": "model.json"
+    "model_configuration": "model.json",
+    "formal_v1_full_training_ready": false
   },
   "data": {
     "normal_sources": [
@@ -699,9 +700,9 @@
     "keep_loss": "mean_max(softplus(s_before),softplus(s_after))_on_exact_retained_normal_slots; replacement_and_occlusion_excluded; mean_pair_loss_available_as_extra_normal_supervision_control",
     "tail_loss": "two_equal_weight_live_batch_pair_losses_softplus((margin+s_normal-s_anomaly)/temperature); high_1percent_normal_and_low_10percent_anomaly; pooled_across_source_frames; sampled_4096_pairs_per_tail; no_stale_predictions_or_unbiased_metric_gradient_claim",
     "sampling": "existing_results/coverage/sampling.npz_frame_probabilities; uniform_class_queries_per_draw; 8192_normal_2048_anomaly_caps; 1024_retained_normals_half_within_2m_of_changed_returns_when_available; no_resampling_return_signals",
-    "paired_controls": "none_plain_conditioned_share_initial_parameter_draws; plain_uses_cartesian_displacements_and_first_8_learned_point_channels_instead_of_explicit_sensing_inputs; base_head_receives_conditions_in_all_variants; loss_switches_preserve_world_frame_and_query_random_streams",
+    "paired_controls": "none_plain_conditioned_share_initial_parameter_draws; plain_vs_conditioned_changes_coordinates_normalization_and_condition_inputs_as_one_package; conditioned_with_condition_modulation_false_keeps_neighbors_ray_coordinates_sampling_normalization_width_and_heads_identical_and_zeros_only_relation_modulation_and_null_condition_inputs; mean_vs_worst_keeps_the_same_original_scan_forwards",
     "resource_strategy": "2_live_source_frames; whole_scan_and_relationship_recomputation; BatchNorm_buffers_restored_after_recomputation; 2_preparation_workers; no_persistent_geometry_cache",
-    "evaluation": "same_official_val19_point_pool_and_exact_float32_ties; own_global_thresholds; 201_full_and_official_filtered_results_reported_separately; no_geometry_reliability_filter",
+    "evaluation": "real_val19_official_semantics_unchanged; synthetic_all_and_official_filtered_share_FrozenFrame.anomaly_target; filtered_adds_only_2.5_to_50m_and_at_least_5_actual_inserted_in_range_returns; exact_float32_ties_bounded_numeric_RAM_128MiB_per_counter_with_external_compressed_merge_and_shared_E_disk_reserve",
     "interpretation": "all_hyperparameters_are_implementation_starting_values; no_real_transfer_improvement_novelty_or_metric_optimality_established",
     "implementation_verification": {
       "date": "2026-09-13",
@@ -757,6 +758,364 @@
         "seconds": 26.09,
         "warning": "third_party_ccimport_locale.getdefaultlocale_deprecation; no_font_or_numeric_warning"
       }
+    },
+    "preprocessing_state": "checkpoint stores actual float64 elevations,elevation_step,azimuth_step; inference and resume restore these without reading current data.json or ray file",
+    "keep_loss_interpretation": "targeted_normal_pairs_change_the_effective_normal_distribution_and_may_change_ranking_not_just_score_intercept; equal_loss_weights_do_not_imply_equal_gradients; keep_on_vs_off_also_changes_BatchNorm_observations; mean_vs_worst_does_not",
+    "review_revision": {
+      "reviewed_commit": "16ad26f",
+      "data_unchanged": true,
+      "optimizer_steps": 0,
+      "synthetic_denominators": {
+        "train": {
+          "worlds": 240,
+          "world_frames": 107760,
+          "eligible_frames_old": 40169,
+          "eligible_frames_correct": 40169,
+          "old_official": {
+            "normal_count": 4873154384,
+            "anomaly_count": 5357340
+          },
+          "correct_synthetic_official": {
+            "normal_count": 4727246342,
+            "anomaly_count": 5357340
+          },
+          "ignored_points_previously_miscounted_as_normal": 145908042,
+          "eligible_world_frames_with_label_denominator_difference": 40169,
+          "delta_files_read": 40169
+        },
+        "validation": {
+          "worlds": 120,
+          "world_frames": 81840,
+          "eligible_frames_old": 20234,
+          "eligible_frames_correct": 20234,
+          "old_official": {
+            "normal_count": 1826673007,
+            "anomaly_count": 1822742
+          },
+          "correct_synthetic_official": {
+            "normal_count": 1823699590,
+            "anomaly_count": 1822742
+          },
+          "ignored_points_previously_miscounted_as_normal": 2973417,
+          "eligible_world_frames_with_label_denominator_difference": 19851,
+          "delta_files_read": 20234
+        }
+      },
+      "denominator_scope": "current 240 train / 120 validation complete worlds; official 2.5 <= float32 L2 range <= 50, actual inserted anomaly count >= 5; native semantic 2 absent in both sources",
+      "denominator_execution": {
+        "source_scans_and_labels": 1131,
+        "eligible_delta_source_slot_arrays": 60403,
+        "representative_full_delta_checks": 18,
+        "workers": 8,
+        "seconds": 22.9883214329966,
+        "peak_resident_bytes": 659091456
+      },
+      "score_counter_pressure_check": {
+        "finite_float32_scores": 250000,
+        "old_pages": 63851,
+        "numeric_workspace_bytes": 1048576,
+        "spills": 16,
+        "merges": 15,
+        "peak_temporary_bytes": 2186248,
+        "seconds": 0.351,
+        "AP_and_FPR95_absolute_difference_percentage_points": 0,
+        "AUROC_absolute_difference_percentage_points": 7.1e-15,
+        "thresholds_and_counts_exact": true
+      },
+      "preview_plan": {
+        "logical_steps": 1024,
+        "frame_draws": 2048,
+        "frame_probabilities_and_random_streams": "unchanged",
+        "cpu_workers": 8,
+        "gradient_batches": "first step at or after full ramp for each of near_sparse_1_4,far_at_least_20,weak_background_visible,normal_sparse_with_nonextreme_anomaly; deduplicate at most four batches before scores",
+        "initialization": "one unchanged random initialization; no_optimizer; restore_batchnorm_buffers_between_batches",
+        "artifact": "results/coverage/training.json"
+      },
+      "scientific_limits": [
+        "data_acceptance_is_retained",
+        "zero_update_diagnostics_do_not_establish_learning_or_real_transfer",
+        "base_detection_optimal_likelihood_ratio_is_not_a_theorem_for_the_full_objective",
+        "no_strong_baseline_performance_floor_or_novelty_claim",
+        "pretrained_initialization_and_finite_learning_budget_remain_unresolved"
+      ],
+      "preview_executed": true,
+      "preview_summary": {
+        "steps": 1024,
+        "draws": 2048,
+        "seed": 20260913,
+        "workers": 8,
+        "seconds": 27.03997757099569,
+        "geometry_known_draws": 1104,
+        "geometry_unknown_draws": 944,
+        "tail": "query_candidates_only; no_scores_or_tail_membership_computed",
+        "scope": "fixed_training_prefix; no_parameter_updates; cached_geometry_only; unknown_is_not_zero; cached_contrast_sides_do_not_store_pairwise_edges; coefficient_mass_is_not_gradient_influence; groups_overlap; support_regions_describe_world_placement_not_normal_point_locations",
+        "groups": {
+          "near_sparse_1_4": {
+            "draws": 79,
+            "unique_world_frames": 50,
+            "worlds": 43,
+            "parents": 43,
+            "source_frames": 47,
+            "world_support_regions": [
+              16,
+              14
+            ],
+            "queries": {
+              "normal": 647168,
+              "anomaly": 188,
+              "keep": 80896
+            },
+            "active_keep_queries": 74752,
+            "matched_sides_both_queried": null,
+            "mean_coefficient_mass_per_step": {
+              "normal": 0.019287109375,
+              "anomaly": 0.01587030890394616,
+              "keep": 0.0337548828125
+            }
+          },
+          "far_at_least_20": {
+            "draws": 47,
+            "unique_world_frames": 40,
+            "worlds": 16,
+            "parents": 16,
+            "source_frames": 36,
+            "world_support_regions": [
+              7,
+              9
+            ],
+            "queries": {
+              "normal": 385024,
+              "anomaly": 1106,
+              "keep": 48128
+            },
+            "active_keep_queries": 47104,
+            "matched_sides_both_queried": null,
+            "mean_coefficient_mass_per_step": {
+              "normal": 0.011474609375,
+              "anomaly": 0.016351291728972765,
+              "keep": 0.020615234375
+            }
+          },
+          "weak_background_visible": {
+            "draws": 354,
+            "unique_world_frames": 249,
+            "worlds": 116,
+            "parents": 115,
+            "source_frames": 147,
+            "world_support_regions": [
+              25,
+              22
+            ],
+            "queries": {
+              "normal": 2899968,
+              "anomaly": 4152,
+              "keep": 362496
+            },
+            "active_keep_queries": 324608,
+            "matched_sides_both_queried": null,
+            "mean_coefficient_mass_per_step": {
+              "normal": 0.08642578125,
+              "anomaly": 0.1004333428036871,
+              "keep": 0.1457861328125
+            }
+          },
+          "normal_sparse_with_nonextreme_anomaly": {
+            "draws": 20,
+            "unique_world_frames": 15,
+            "worlds": 14,
+            "parents": 14,
+            "source_frames": 12,
+            "world_support_regions": [
+              7,
+              8
+            ],
+            "queries": {
+              "normal": 5,
+              "anomaly": 146,
+              "keep": 117
+            },
+            "active_keep_queries": 101,
+            "matched_sides_both_queried": 5,
+            "mean_coefficient_mass_per_step": {
+              "normal": 1.4901161193847656e-07,
+              "anomaly": 0.003427538333536535,
+              "keep": 4.6586990356445314e-05
+            }
+          }
+        }
+      },
+      "gradient_preview": {
+        "selection_rule": "first request step after full ramp containing each declared group; deduplicate steps",
+        "selected_steps": {
+          "near_sparse_1_4": 204,
+          "far_at_least_20": 223,
+          "weak_background_visible": 200,
+          "normal_sparse_with_nonextreme_anomaly": 275
+        },
+        "optimizer_steps": 0,
+        "checkpoint_saved": false,
+        "scope": "one unchanged random initialization, train-mode batch statistics restored between batches; not learning or transfer evidence",
+        "batches": [
+          {
+            "step": 200,
+            "samples": [
+              24426,
+              17680
+            ],
+            "input_returns": [
+              126964,
+              126904
+            ],
+            "shared_parameter_gradients": {
+              "norm": {
+                "detection": 1.8644858117197272,
+                "keep": 1.0103110128402406,
+                "tail": 8.32258356904257,
+                "keep_mean": 1.0087331549892198
+              },
+              "cosine": {
+                "detection:keep": -0.03376203596691727,
+                "detection:tail": 0.745512784097893,
+                "detection:keep_mean": -0.030623355541415653,
+                "keep:tail": -0.04855114613449394,
+                "keep:keep_mean": 0.998805715680571,
+                "tail:keep_mean": -0.04683832827198638
+              },
+              "weighted_norm": {
+                "detection": 1.8644858117197272,
+                "keep": 1.0103110128402406,
+                "tail": 8.32258356904257,
+                "keep_mean": 1.0087331549892198
+              }
+            },
+            "seconds": 29.369934201000433,
+            "peak_cuda_bytes": 5810064896
+          },
+          {
+            "step": 204,
+            "samples": [
+              33797,
+              45329
+            ],
+            "input_returns": [
+              126694,
+              123542
+            ],
+            "shared_parameter_gradients": {
+              "norm": {
+                "detection": 6.691663794746651,
+                "keep": 0.7143554206107573,
+                "tail": 20.702559806876685,
+                "keep_mean": 0.7139190845227876
+              },
+              "cosine": {
+                "detection:keep": 0.007560184405410005,
+                "detection:tail": 0.9581093869207132,
+                "detection:keep_mean": 0.0038442420252566985,
+                "keep:tail": 0.011859221348336509,
+                "keep:keep_mean": 0.9997913231960238,
+                "tail:keep_mean": 0.007988170763862233
+              },
+              "weighted_norm": {
+                "detection": 6.691663794746651,
+                "keep": 0.7143554206107573,
+                "tail": 20.702559806876685,
+                "keep_mean": 0.7139190845227876
+              }
+            },
+            "seconds": 21.94269156700466,
+            "peak_cuda_bytes": 5160978944
+          },
+          {
+            "step": 223,
+            "samples": [
+              41674,
+              43396
+            ],
+            "input_returns": [
+              126597,
+              126598
+            ],
+            "shared_parameter_gradients": {
+              "norm": {
+                "detection": 2.0856180259795742,
+                "keep": 0.6891981058624242,
+                "tail": 7.107703052954048,
+                "keep_mean": 0.6897078361505915
+              },
+              "cosine": {
+                "detection:keep": -0.14218924696307972,
+                "detection:tail": 0.6808995408877739,
+                "detection:keep_mean": -0.1424717661716856,
+                "keep:tail": -0.0678412465781344,
+                "keep:keep_mean": 0.999822866964623,
+                "tail:keep_mean": -0.06351736191338073
+              },
+              "weighted_norm": {
+                "detection": 2.0856180259795742,
+                "keep": 0.6891981058624242,
+                "tail": 7.107703052954048,
+                "keep_mean": 0.6897078361505915
+              }
+            },
+            "seconds": 23.911106390994973,
+            "peak_cuda_bytes": 6250696192
+          },
+          {
+            "step": 275,
+            "samples": [
+              18447,
+              29357
+            ],
+            "input_returns": [
+              120521,
+              126692
+            ],
+            "shared_parameter_gradients": {
+              "norm": {
+                "detection": 2.693535033937534,
+                "keep": 0.6383548189192099,
+                "tail": 11.18260359001739,
+                "keep_mean": 0.6383936105325103
+              },
+              "cosine": {
+                "detection:keep": -0.06211708403800819,
+                "detection:tail": 0.7341358923154169,
+                "detection:keep_mean": -0.061105494806950746,
+                "keep:tail": -0.057506079190311324,
+                "keep:keep_mean": 0.9999279774657304,
+                "tail:keep_mean": -0.05665039681159911
+              },
+              "weighted_norm": {
+                "detection": 2.693535033937534,
+                "keep": 0.6383548189192099,
+                "tail": 11.18260359001739,
+                "keep_mean": 0.6383936105325103
+              }
+            },
+            "seconds": 22.441296346994932,
+            "peak_cuda_bytes": 5557544448
+          }
+        ],
+        "query_score_effect": "keep_and_keep_mean_have_zero_direct_anomaly_score_gradient; normal_score_gradient_is_nonnegative; detection_and_tail_anomaly_score_gradients_are_nonpositive_in_all_four_batches",
+        "sparse_witness_tail_step_275": {
+          "detection_normal_queries": 1,
+          "detection_anomaly_queries": 4,
+          "keep_queries": 5,
+          "high_normal": 0,
+          "low_anomaly": 0,
+          "sampled_normal": 0,
+          "sampled_anomaly": 1634
+        }
+      },
+      "regression": {
+        "command": "python -m pytest -q -p no:cacheprovider",
+        "passed": 88,
+        "seconds": 26.15,
+        "warning": "third_party_ccimport_locale.getdefaultlocale_deprecation"
+      },
+      "diagnostic_issue_resolved": "same checkpoint graph reused a one-shot generator context during separate autograd.grad calls; replaced with reusable buffer-restoring context, then verified CPU and all four real batches",
+      "interpretation": "known sparse-normal witnesses enter basic detection queries rarely (5 cumulative hits vs 101 active keep hits); unknown geometry remains unknown; initial tail shared-parameter gradients 3.09 to 4.46 times detection; keep/detection shared-parameter cosines negative in 3 of 4 batches; no learning/transfer/harm determination"
     }
   }
 }

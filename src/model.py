@@ -27,6 +27,7 @@ def validate_config(config):
         raise ValueError("expected the current AJAE V1 configuration without external weights")
     m, t, loss = config["model"], config["training"], config["loss"]
     if (m["backbone"] != "LitePT-S" or m["relation_mode"] not in {"none", "plain", "conditioned"}
+            or not isinstance(m.get("condition_modulation"), bool)
             or m["radii_m"] != [0.25, 0.75, 2.0]
             or m["channels"] != 64 or m["relation_layers"] != 2
             or m["neighbors_per_shell"] < 1 or m["relation_chunk"] < 1
@@ -132,15 +133,39 @@ def shell_neighbors(xyz, first, radii, k):
 class ScanTransform:
     """Label-free preprocessing; every nonzero source return retains its own output row."""
 
-    def __init__(self, config, *, workers=1):
+    def __init__(self, config, *, state=None, workers=1):
         self.config, self.workers = deepcopy(config["model"]), workers
         set_num_threads(workers)
-        data = json.loads((PROJECT_ROOT / "protocol/data.json").read_text())
-        grid = calibrated_ray_grid(PROJECT_ROOT / data["calibration"]["rays"])
-        elevations = np.unique(np.sort(grid.beam_elevation_rad))
-        self.elevations = elevations
-        self.elevation_step = np.gradient(elevations)
-        self.azimuth_step = 2 * np.pi / grid.columns
+        if state is None:
+            data = json.loads((PROJECT_ROOT / "protocol/data.json").read_text())
+            grid = calibrated_ray_grid(PROJECT_ROOT / data["calibration"]["rays"])
+            elevations = np.unique(np.sort(grid.beam_elevation_rad))
+            state = dict(format="ajae-scan-transform-v1",
+                elevations=torch.tensor(elevations, dtype=torch.float64),
+                elevation_step=torch.tensor(np.gradient(elevations), dtype=torch.float64),
+                azimuth_step=torch.tensor(2 * np.pi / grid.columns, dtype=torch.float64))
+        if (not isinstance(state, dict)
+                or set(state) != {"format", "elevations", "elevation_step", "azimuth_step"}
+                or state["format"] != "ajae-scan-transform-v1"
+                or any(not isinstance(state[key], torch.Tensor) or state[key].dtype != torch.float64
+                       for key in ("elevations", "elevation_step", "azimuth_step"))):
+            raise ValueError("invalid saved scan-transform state")
+        elevations, steps, azimuth = (state[key].detach().cpu().numpy().copy()
+            for key in ("elevations", "elevation_step", "azimuth_step"))
+        if (elevations.ndim != 1 or len(elevations) < 2 or steps.shape != elevations.shape
+                or azimuth.ndim != 0 or not np.isfinite(elevations).all()
+                or not np.isfinite(steps).all() or not np.isfinite(azimuth)
+                or np.any(np.diff(elevations) <= 0) or np.any(np.abs(elevations) > np.pi / 2)
+                or np.any((steps <= 0) | (steps > np.pi)) or not 0 < azimuth <= 2 * np.pi):
+            raise ValueError("invalid saved ray angles or sampling intervals")
+        # A restored model uses its actual angular calibration, never the current data files.
+        self.elevations, self.elevation_step, self.azimuth_step = elevations, steps, float(azimuth)
+
+    def state_dict(self):
+        return dict(format="ajae-scan-transform-v1",
+            elevations=torch.tensor(self.elevations, dtype=torch.float64),
+            elevation_step=torch.tensor(self.elevation_step, dtype=torch.float64),
+            azimuth_step=torch.tensor(self.azimuth_step, dtype=torch.float64))
 
     def __call__(self, source):
         slots = source.real_slots.copy()
@@ -210,7 +235,7 @@ class RelationLayer(nn.Module):
         self.null = _mlp(2 * channels + 8, channels, 3)
         self.update = _mlp(5 * channels, 2 * channels, channels)
 
-    def part(self, z, h, scan, query, conditioned):
+    def part(self, z, h, scan, query, conditioned, condition_modulation=True):
         ids = scan["neighbors"][scan["geometry_inverse"][query]].long()
         valid = ids >= 0
         ids = ids.clamp_min(0)
@@ -221,6 +246,9 @@ class RelationLayer(nn.Module):
         if conditioned:
             physical = torch.einsum("nkj,njl->nkl", difference, scan["basis"][query])
             sensing = physical / scan["sensing_scale"][query, None]
+            if not condition_modulation:
+                # Keep the sensing coordinates; remove only direct condition-dependent modulation.
+                ci, cj = torch.zeros_like(ci), torch.zeros_like(cj)
         else:
             physical = sensing = difference
             # Same-sized ordinary relation uses learned point features, not sensing descriptors.
@@ -239,11 +267,11 @@ class RelationLayer(nn.Module):
         evidence = (alpha[..., None] * values).sum(2).flatten(1)
         return z[query] + self.update(torch.cat((hi, zi, evidence), -1))
 
-    def forward(self, z, h, scan, query, *, conditioned, chunk, recompute):
+    def forward(self, z, h, scan, query, *, conditioned, chunk, recompute, condition_modulation=True):
         parts = []
         for q in query.split(chunk):
             def compute(z, h, q):
-                return self.part(z, h, scan, q, conditioned)
+                return self.part(z, h, scan, q, conditioned, condition_modulation)
             parts.append(checkpoint(compute, z, h, q, use_reentrant=False)
                          if recompute and self.training and torch.is_grad_enabled()
                          else compute(z, h, q))
@@ -265,29 +293,35 @@ class AJAE(nn.Module):
         self.base_head = _mlp(2 * c + 8, 128, 1)
         self.relation_head = _mlp(2 * c + 8, 128, 1)
 
-    def forward(self, scan, query=None):
+    def forward(self, scan, query=None, *, return_features=False):
         n, m = len(scan["xyzi"]), self.config
         all_rows = torch.arange(n, device=scan["xyzi"].device)
         query = all_rows if query is None else query
         if query.ndim != 1 or query.dtype != torch.long or torch.any((query < 0) | (query >= n)):
             raise ValueError("query rows must address real returns in this complete scan")
         if not n or not len(query):
+            if return_features:
+                raise ValueError("shared-feature diagnostics require a nonempty real-point query")
             return scan["xyzi"][:0, 0] + self.base_head[-1].weight.sum() * 0
         voxels = scan["voxel_xyzi"]
         encoded = self.backbone(dict(feat=voxels, coord=voxels[:, :3], grid_coord=scan["grid_coord"],
             offset=torch.tensor([len(voxels)], dtype=torch.long, device=voxels.device)))
         h = self.context(encoded.feat)[scan["voxel_inverse"]]
         z = self.point(torch.cat((scan["xyzi"], scan["point_offset"]), -1))
+        # Expose the shared graph nodes before relation updates, without detaching them.
+        features = dict(context=h, point=z) if return_features else None
         base = self.base_head(torch.cat((h[query], z[query], scan["condition"][query]), -1)).squeeze(-1)
         if m["relation_mode"] == "none":
-            return base.float()
+            score = base.float()
+            return dict(score=score, **features) if return_features else score
         for index, layer in enumerate(self.relations):
             # First-layer support is updated for the full scan, even for sampled loss queries.
             z = layer(z, h, scan, query if index == len(self.relations) - 1 else all_rows,
                 conditioned=m["relation_mode"] == "conditioned", chunk=m["relation_chunk"],
-                recompute=m["checkpoint_relations"])
+                recompute=m["checkpoint_relations"], condition_modulation=m["condition_modulation"])
         correction = self.relation_head(torch.cat((h[query], z, scan["condition"][query]), -1)).squeeze(-1)
-        return (base + correction).float()
+        score = (base + correction).float()
+        return dict(score=score, **features) if return_features else score
 
     @torch.no_grad()
     def predict(self, source, transform):
