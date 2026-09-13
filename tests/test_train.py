@@ -24,6 +24,28 @@ def test_short_initialization_allows_only_sampling_scope_change():
         validate_initial_state(saved, config, [["world", 11]])
 
 
+def test_paired_initialization_exception_is_explicit_and_cannot_hide_other_changes():
+    config = load_config()
+    saved_config = deepcopy(config)
+    saved_config["loss"]["keep_mode"] = "mean"
+    saved = dict(step=0, optimizer=dict(state={}), config=saved_config, samples=[["world", 11]])
+    changes = {"loss.keep_mode": {"from": "mean", "to": "worst"}}
+    validate_initial_state(saved, config, saved["samples"], changes)
+    assert saved["config"]["loss"]["keep_mode"] == "mean"
+    with pytest.raises(ValueError, match="definition"):
+        validate_initial_state(saved, config, saved["samples"])
+    for section, key, value in (("loss", "tail_weight", 0), ("training", "seed", 1),
+                                 ("model", "condition_modulation", False)):
+        changed = deepcopy(config)
+        changed[section][key] = value
+        with pytest.raises(ValueError, match="definition"):
+            validate_initial_state(saved, changed, saved["samples"], changes)
+    with pytest.raises(ValueError, match="only the declared"):
+        validate_initial_state(saved, config, saved["samples"], dict(changes, seed=1))
+    with pytest.raises(ValueError, match="untrained step-zero"):
+        validate_initial_state(dict(saved, step=1024), config, saved["samples"], changes)
+
+
 def test_full_pool_requests_preserve_original_draw_stream_and_resume():
     config = load_config()
     probabilities = np.array([.03, .11, .36, .5])

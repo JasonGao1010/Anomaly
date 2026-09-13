@@ -396,6 +396,12 @@ def test_single_scan_pooling_preserves_official_scope_and_point_identity(tmp_pat
     assert [r["anomaly_points"] for r in rows] == [5, 7, 4]
     for key, value in official_metrics(official).items():
         assert result[key] == pytest.approx(value, abs=1e-10)
+    skipped, skipped_rows = evaluate_frames(iter([*pairs[:2], (pairs[2][0], None)]), directory=tmp_path)
+    assert rows == skipped_rows
+    for key in ("AP", "FPR95", "AUROC", "recall_at_fpr_limit"):
+        assert skipped[key] == result[key]
+    with pytest.raises(ValueError, match="eligible scan requires"):
+        evaluate_frames(iter([(pairs[0][0], None)]), directory=tmp_path)
     all_scores = np.concatenate(official.all_scores)
     all_labels = np.concatenate(official.all_labels)
     anomaly_scores = all_scores[all_labels == 1]

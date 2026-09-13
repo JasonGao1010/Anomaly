@@ -3,8 +3,8 @@
   "schema_version": 1,
   "research_question": "Using only the complete current scan, can scene-supported observation-conditioned relationships on original returns improve real anomaly-versus-normal ranking over the same backbone and ordinary relationships, and do retained-normal pairing and live-batch tail ranking add transferable benefits?",
   "status": {
-    "stage": "formal_v1_finite_short_learning_completed_full_training_paused",
-    "active_work": "1024_update_short_learning_and_all_declared_evaluations_completed; report_and_stop",
+    "stage": "formal_v1_mean_worst_control_closed_early_by_user_full_training_paused",
+    "active_work": "none; user requested stop and closure at the existing common 512-update evaluation",
     "model_defined": true,
     "training_defined": true,
     "formal_ajae_v1": "context_supported_conditional_return_relationship_network",
@@ -36,7 +36,7 @@
     "coverage_closure_evidence": "results/coverage/summary.json",
     "coverage_decision": "all_original_core_checks_exact_30_cell_quotas_and_sampling_exposure_requirements_passed; data_unchanged_by_model_implementation",
     "coverage_boundaries": "one_normal_source_per_split; sparse_normal_nonextreme_train_region_share_0.4997728305_near_0.5_limit; selected_geometry_scope_and_missingness; weak_background_change_is_not_self_occlusion; no_universal_coverage_claim",
-    "next_stage": "user_decision_on_controlled_mean_versus_worst_normal_pairing; no_automatic_training_extension",
+    "next_stage": "await_user_research_decision; no_automatic_training_or_evaluation",
     "data_preparation_accepted": true,
     "original_pool_summary_completed": true,
     "balanced_pool_target": {
@@ -145,7 +145,7 @@
     "model_configuration": "model.json",
     "formal_v1_full_training_ready": false,
     "formal_default_full_training_executed": false,
-    "full_val19_model_evaluation_executed": false,
+    "full_val19_model_evaluation_executed": true,
     "finite_learning_executed": true,
     "fixed_development_model_evaluation_executed": true
   },
@@ -2996,5 +2996,798 @@
     },
     "conclusion": "Broad-pool short learning yields better 201 and real fixed-scope AP/FPR95 than micro 256. At equal 256 updates real ranking improves while 201 worsens; 1024 also increases update budget, so its gains cannot be attributed solely to coverage. Difficult-normal protection remains mixed: 201 sparse false positives decrease, rough and changed-neighborhood false positives increase, and 49 unchanged normals cross upward after insertion at the same checkpoint threshold. This is not a loss or conditioning ablation and does not establish full-val19 performance.",
     "decision": "Stop at 1024 updates with all evaluations complete. The next bounded mechanism question is mean versus worst retained-normal pairing with identical initialization, requests, budget and scopes, checking normal protection together with recall. Do not automatically execute it or release full formal training."
+  },
+  "pairing_control": {
+    "declaration": "protocol/worst.json",
+    "status": "closed_by_user_after_710_updates; original_1024_update_comparison_incomplete",
+    "question": "Does worst retained-normal pairing add overall ranking and normal-protection value over mean pairing?",
+    "arms": {
+      "mean": "results/short",
+      "worst": "results/worst"
+    },
+    "initial_checkpoint": "results/short/0.pt",
+    "only_scientific_change": {
+      "loss.keep_mode": {
+        "from": "mean",
+        "to": "worst"
+      }
+    },
+    "preexecution": {
+      "same_frame_probabilities": true,
+      "same_runtime_torch_cuda_gpu": true,
+      "targeted_tests_passed": 44,
+      "full_evaluation": {
+        "exact_ties_on_real_points": 292658,
+        "maximum_metric_abs_difference": 5.551115123125783e-17,
+        "original_tolerance": 1e-10,
+        "parallel_preparation_tensors_and_scores_exact": true,
+        "preparation_workers": 4,
+        "threads_per_worker": 4,
+        "prefetch_per_worker": 1,
+        "initial_serial_evaluation_stopped_for_underutilization": true,
+        "host_E_remaining_before_parallel_evaluation": 65126887424,
+        "conservative_peak_new_bytes": 9000000000
+      },
+      "same_saved_fixed_identities_and_evaluation_steps": true,
+      "newly_saved_initial_state_exact_fields": [
+        "model",
+        "optimizer",
+        "torch_rng",
+        "cuda_rng",
+        "preprocessing",
+        "samples",
+        "probabilities"
+      ],
+      "same_planned_2048_frame_requests": true
+    },
+    "boundary": "one shared initialization; descriptive comparison at common 512-update synthetic checkpoints and 256-update fixed-real checkpoints; early closure chosen after intermediate results were available; preheat numerical trajectory variation; original final mechanism comparison incomplete; full val19 remains development; no formal full-training release",
+    "mean_full_val19": {
+      "evidence": "results/short/global.json",
+      "AP": 39.712120839274874,
+      "AUROC": 99.59736781534919,
+      "FPR95": 1.738875096643332,
+      "normal_count": 193792470,
+      "anomaly_count": 87499,
+      "recall_at_fpr_limit": {
+        "recall": 90.88332438085007,
+        "FPR": 0.9999686778335608,
+        "threshold": 2.0476458072662354,
+        "tp": 79522,
+        "fp": 1937864
+      },
+      "official_high_recall": {
+        "threshold": 0.35063329339027405,
+        "tp": 83125,
+        "fp": 3369809,
+        "fn": 4374,
+        "tn": 190422661,
+        "recall": 95.00108572669403,
+        "FPR": 1.738875096643332
+      },
+      "exact_count_storage": {
+        "numeric_workspace_bytes": 134217728,
+        "fixed_codec_and_runtime_overhead_excluded": true,
+        "peak_temporary_bytes": 190750879,
+        "spills": 94,
+        "merges": 93,
+        "record_bytes": 20
+      },
+      "frames": 8659,
+      "eligible_frames": 1960,
+      "partition": "val",
+      "sequences": [
+        125,
+        137,
+        138,
+        139,
+        140,
+        141,
+        142,
+        143,
+        144,
+        145,
+        146,
+        147,
+        148,
+        149,
+        150,
+        151,
+        152,
+        153,
+        169
+      ],
+      "seconds": 1245.6946819389996,
+      "host_E_before": {
+        "Size": 484950659072,
+        "SizeRemaining": 65125249024,
+        "reserve_bytes": 10000000000
+      },
+      "host_E_after": {
+        "Size": 484950659072,
+        "SizeRemaining": 65119285248,
+        "reserve_bytes": 10000000000
+      },
+      "scope": "full_public_validation",
+      "checkpoint": "/home/jasongao/Study/AJAE/results/short/1024.pt"
+    },
+    "interruption_before_updates": {
+      "prior_start": {
+        "status": "running",
+        "requested_updates": 1024,
+        "start_update": 0,
+        "initial_checkpoint": "/home/jasongao/Study/AJAE/results/short/0.pt",
+        "started_unix": 1789308908.6932588,
+        "host_E_before": {
+          "Size": 484950659072,
+          "SizeRemaining": 65140191232,
+          "reserve_bytes": 10000000000
+        },
+        "estimated_peak_new_bytes": 2322916168,
+        "environment": {
+          "torch": "2.12.0+cu130",
+          "cuda": "13.0",
+          "gpu": "NVIDIA GeForce RTX 5080 Laptop GPU",
+          "gpu_bytes": 17066033152,
+          "cpu_affinity": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23
+          ],
+          "torch_threads": 4,
+          "preparation_workers": 2,
+          "transform_cache_bytes_per_worker": 0
+        }
+      },
+      "observed_state": "process_absent_after_environment_restart; no_completed_initial_evaluation_or_update_log",
+      "system_started_local": "2026-09-14 00:30:29",
+      "verified_step": 0,
+      "optimizer_empty": true,
+      "exact_shared_state_fields": [
+        "model",
+        "optimizer",
+        "torch_rng",
+        "cuda_rng",
+        "preprocessing",
+        "samples",
+        "probabilities"
+      ],
+      "configuration_and_declaration_unchanged": true,
+      "recovery": "replace_only_the_five_redundant_initial_output_files; reuse_preserved_results/short/0.pt; same_1024_update_budget; no_numerical_parameter_retry"
+    },
+    "initial_evaluation_differences": {
+      "train": {
+        "detection_loss": 2.5746316412167403e-08,
+        "AP": -6.660774472602715e-08,
+        "FPR95": -5.2490352274503493e-05
+      },
+      "validation": {
+        "detection_loss": 2.0801838807038564e-08,
+        "AP": -2.4679690468348836e-08,
+        "FPR95": 0.00014233512877126486
+      },
+      "val": {
+        "detection_loss": -1.323195109037556e-08,
+        "AP": 1.5073835082923814e-08,
+        "FPR95": 4.74397254492942e-05
+      }
+    },
+    "initial_evaluation_scope": "same exact saved initial state and point counts; observed prediction metrics are not bitwise identical; do not claim bitwise numerical reproduction",
+    "shared_preheat_observation": {
+      "same_target_updates": 101,
+      "max_detection_abs_difference": 0.06785672903060913,
+      "mean_detection_abs_difference": 0.006376685851281232,
+      "max_difference_step": 76,
+      "input_and_query_counts_match": true,
+      "interpretation": "same objective before pairing starts still has numerical trajectory variation; one run cannot quantify between-run uncertainty"
+    },
+    "observed_runtime_power": {
+      "observed_local": "2026-09-14 00:55:09",
+      "driver": "616.92",
+      "performance_state": "P4",
+      "current_power_limit_W": 55.43,
+      "default_power_limit_W": 80.0,
+      "software_power_cap_active": true,
+      "A_power_state_recorded": false,
+      "scope": "wall-clock conditions are not fully matched; documented PyTorch/CUDA runtime/device and scientific configurations are matched; no system power setting changed by this experiment",
+      "user_confirmed_mode": "quiet",
+      "timing_interpretation": "do_not_attribute_wall_clock_difference_to_pairing_objective; user stopped at 710 updates in quiet mode"
+    },
+    "planned_maximum_updates": 1024,
+    "original_evaluation_plan": "same fixed scopes and steps; both final checkpoints on complete official val19; witness pairs at transferred 206 threshold and own pooled 201 <=1% FPR threshold",
+    "termination": {
+      "reason": "explicit_user_request_to_stop_and_close_using_existing_common_512_update_results",
+      "completed_updates": 710,
+      "original_plan_completed": false,
+      "numerical_failure_observed": false,
+      "complete_checkpoints": [
+        0,
+        256,
+        512
+      ],
+      "complete_synthetic_evaluations": [
+        0,
+        256,
+        512
+      ],
+      "complete_fixed_real_evaluations": [
+        0,
+        256
+      ],
+      "emergency_snapshot": "results/worst/failure.pt",
+      "raw_interruption_record": "results/worst/failure.json",
+      "raw_exception": "KeyboardInterrupt()",
+      "interrupted_during": "forward computation of update 711 after 710 completed optimizer updates",
+      "snapshot_optimizer_steps": [
+        710
+      ],
+      "snapshot_batchnorm_counts": [
+        2638,
+        2639
+      ],
+      "complete_update_710_batchnorm_count": 2638,
+      "emergency_scope": "finite interruption scene with partially advanced forward buffers; not a complete 710-step evaluation or exact-resume checkpoint; retain complete 512.pt for comparison",
+      "not_executed": [
+        "worst updates 711-1024",
+        "worst final fixed evaluations and before/after normal witnesses",
+        "worst full val19 evaluation",
+        "paired final 201 own-1pct normal-transition comparison"
+      ],
+      "automatic_resume": false,
+      "training_process_exited": true
+    },
+    "verified_execution": {
+      "matching_update_prefix": 710,
+      "matching_frame_requests": 1420,
+      "matching_fields": [
+        "samples",
+        "draws",
+        "full_input_returns",
+        "normal_queries",
+        "anomaly_queries",
+        "retained_normal_pairs",
+        "auxiliary_fraction"
+      ],
+      "checkpoints_with_equal_cpu_cuda_rng": [
+        0,
+        256,
+        512
+      ],
+      "batchnorm_forward_counts": {
+        "0": 0,
+        "256": 822,
+        "512": 1846
+      },
+      "all_checked_parameters_finite": true,
+      "same_fixed_point_counts": true
+    },
+    "fixed_curve_columns": [
+      "update",
+      "detection_loss",
+      "AP_percent",
+      "FPR95_percent",
+      "recall_at_1pct_FPR_percent"
+    ],
+    "fixed_curves": {
+      "mean": {
+        "train": [
+          [
+            0,
+            0.7054519446675527,
+            0.021860394340640788,
+            94.3828761773586,
+            1.1135857461024499
+          ],
+          [
+            256,
+            0.7215309916249953,
+            0.7637518675978316,
+            26.65195012156766,
+            34.075723830734965
+          ],
+          [
+            512,
+            0.4583240955787591,
+            2.3467483451796145,
+            15.327655276960094,
+            58.35189309576837
+          ]
+        ],
+        "validation": [
+          [
+            0,
+            0.696356216101793,
+            0.029226553722922263,
+            86.7755364344125,
+            0.7237635705669482
+          ],
+          [
+            256,
+            0.9948125789633075,
+            0.14035688963550025,
+            55.48643208176869,
+            8.443908323281061
+          ],
+          [
+            512,
+            0.34300356273888694,
+            0.7739042123830479,
+            9.344158868777331,
+            34.86127864897467
+          ]
+        ],
+        "val": [
+          [
+            0,
+            0.6908543203772035,
+            0.03790781707234365,
+            89.97583691469376,
+            1.116751269035533
+          ],
+          [
+            256,
+            0.5382662673091295,
+            2.8963368499490465,
+            18.333142896721142,
+            52.81218274111675
+          ]
+        ]
+      },
+      "worst": {
+        "train": [
+          [
+            0,
+            0.7054519704138691,
+            0.021860327732896062,
+            94.38282368700632,
+            1.1135857461024499
+          ],
+          [
+            256,
+            0.4753915090828296,
+            1.2315482073913813,
+            17.858530102167222,
+            39.42093541202672
+          ],
+          [
+            512,
+            0.6305332142867256,
+            0.8419015015811947,
+            26.07054073461298,
+            35.52338530066815
+          ]
+        ],
+        "validation": [
+          [
+            0,
+            0.6963562369036318,
+            0.029226529043231794,
+            86.77567876954127,
+            0.7237635705669482
+          ],
+          [
+            256,
+            0.6231071142929816,
+            0.1740242521901297,
+            29.599657541680173,
+            6.031363088057901
+          ],
+          [
+            512,
+            0.5977779972646813,
+            0.5649696701186809,
+            26.40131603060063,
+            27.864897466827504
+          ]
+        ],
+        "val": [
+          [
+            0,
+            0.6908543071452524,
+            0.03790783214617873,
+            89.97588435441921,
+            1.116751269035533
+          ],
+          [
+            256,
+            0.30608567028157224,
+            4.364598909919129,
+            12.092047163761798,
+            56.30456852791879
+          ]
+        ]
+      }
+    },
+    "fixed_point_counts": {
+      "train": {
+        "normal_count": 3810224,
+        "anomaly_count": 898
+      },
+      "validation": {
+        "normal_count": 2810269,
+        "anomaly_count": 829
+      },
+      "val": {
+        "normal_count": 14755566,
+        "anomaly_count": 4925
+      }
+    },
+    "comparison_512": {
+      "train": {
+        "evidence": [
+          "results/short/512.json",
+          "results/worst/512.json"
+        ],
+        "B_minus_A": {
+          "detection_loss": 0.1722091187079665,
+          "AP": -1.5048468435984197,
+          "FPR95": 10.742885457652886
+        },
+        "recall_at_1pct_FPR_difference_pp": -22.828507795100215,
+        "own_operating_points": {
+          "mean": {
+            "recall": 58.35189309576837,
+            "FPR": 0.9985502164702127,
+            "threshold": 0.9145848155021667,
+            "tp": 524,
+            "fp": 38047
+          },
+          "worst": {
+            "recall": 35.52338530066815,
+            "FPR": 0.9981302936520267,
+            "threshold": 0.92605060338974,
+            "tp": 319,
+            "fp": 38031
+          }
+        }
+      },
+      "validation": {
+        "evidence": [
+          "results/short/512.json",
+          "results/worst/512.json"
+        ],
+        "B_minus_A": {
+          "detection_loss": 0.25477443452579435,
+          "AP": -0.20893454226436692,
+          "FPR95": 17.057157161823298
+        },
+        "recall_at_1pct_FPR_difference_pp": -6.996381182147164,
+        "own_operating_points": {
+          "mean": {
+            "recall": 34.86127864897467,
+            "FPR": 0.9839627452033952,
+            "threshold": 3.8300859928131104,
+            "tp": 289,
+            "fp": 27652
+          },
+          "worst": {
+            "recall": 27.864897466827504,
+            "FPR": 0.9857063505308566,
+            "threshold": 2.474653482437134,
+            "tp": 231,
+            "fp": 27701
+          }
+        }
+      }
+    },
+    "normal_diagnosis_512": {
+      "scope": "inserted-frame witnesses only; no before/after transitions for these checkpoints; use each arm 206 global threshold; 201 transferred operating FPR differs",
+      "witness_columns": [
+        "group",
+        "normal_count",
+        "mean_fp",
+        "worst_fp",
+        "anomaly_count",
+        "mean_tp",
+        "worst_tp"
+      ],
+      "train": {
+        "operating_points": {
+          "mean": {
+            "tp": 524,
+            "fp": 38047,
+            "normal": 3810224,
+            "anomaly": 898,
+            "threshold": 0.9145848155021667,
+            "FPR": 0.9985502164702128,
+            "recall": 58.351893095768375
+          },
+          "worst": {
+            "tp": 319,
+            "fp": 38031,
+            "normal": 3810224,
+            "anomaly": 898,
+            "threshold": 0.92605060338974,
+            "FPR": 0.9981302936520268,
+            "recall": 35.52338530066815
+          }
+        },
+        "zero_anomaly": {
+          "mean": {
+            "tp": 0,
+            "fp": 11467,
+            "normal": 961734,
+            "anomaly": 0,
+            "threshold": 0.9145848155021667,
+            "FPR": 1.1923255286804875,
+            "recall": null
+          },
+          "worst": {
+            "tp": 0,
+            "fp": 10956,
+            "normal": 961734,
+            "anomaly": 0,
+            "threshold": 0.92605060338974,
+            "FPR": 1.139192333846989,
+            "recall": null
+          }
+        },
+        "witnesses": [
+          [
+            "smooth",
+            20,
+            0,
+            0,
+            47,
+            33,
+            21
+          ],
+          [
+            "rough",
+            50,
+            19,
+            8,
+            271,
+            190,
+            83
+          ],
+          [
+            "sparse",
+            50,
+            37,
+            18,
+            93,
+            43,
+            13
+          ],
+          [
+            "changed_normal",
+            912,
+            59,
+            37,
+            0,
+            0,
+            0
+          ]
+        ]
+      },
+      "validation": {
+        "operating_points": {
+          "mean": {
+            "tp": 522,
+            "fp": 99600,
+            "normal": 2810269,
+            "anomaly": 829,
+            "threshold": 0.9145848155021667,
+            "FPR": 3.5441447064320175,
+            "recall": 62.96743063932449
+          },
+          "worst": {
+            "tp": 350,
+            "fp": 71484,
+            "normal": 2810269,
+            "anomaly": 829,
+            "threshold": 0.92605060338974,
+            "FPR": 2.5436710862910274,
+            "recall": 42.21954161640531
+          }
+        },
+        "zero_anomaly": {
+          "mean": {
+            "tp": 0,
+            "fp": 23653,
+            "normal": 593718,
+            "anomaly": 0,
+            "threshold": 0.9145848155021667,
+            "FPR": 3.9838778679440408,
+            "recall": null
+          },
+          "worst": {
+            "tp": 0,
+            "fp": 16122,
+            "normal": 593718,
+            "anomaly": 0,
+            "threshold": 0.92605060338974,
+            "FPR": 2.715430557941649,
+            "recall": null
+          }
+        },
+        "witnesses": [
+          [
+            "smooth",
+            162,
+            0,
+            0,
+            245,
+            170,
+            96
+          ],
+          [
+            "rough",
+            36,
+            6,
+            4,
+            151,
+            135,
+            107
+          ],
+          [
+            "sparse",
+            47,
+            28,
+            19,
+            108,
+            37,
+            8
+          ],
+          [
+            "changed_normal",
+            922,
+            111,
+            97,
+            0,
+            0,
+            0
+          ]
+        ]
+      }
+    },
+    "mean_1024_threshold_diagnostic": {
+      "evidence": "results/short/1024_thresholds.json",
+      "scope": "completed mean-arm-only retrospective diagnostic, not a mean/worst comparison",
+      "validation_at_own_1pct": {
+        "operating_point": {
+          "recall": 65.86248492159228,
+          "FPR": 0.9968084905751015,
+          "threshold": 3.916396141052246,
+          "tp": 546,
+          "fp": 28013,
+          "normal": 2810269,
+          "anomaly": 829
+        },
+        "groups": {
+          "sparse": {
+            "frames": 10,
+            "normal": 47,
+            "threshold": 3.916396141052246,
+            "before_fp": 11,
+            "after_fp": 11,
+            "both_high": 11,
+            "low_to_high": 0,
+            "high_to_low": 0,
+            "both_low": 36,
+            "mean_before": 0.7038098748059983,
+            "mean_after": 0.04566331683321202,
+            "delta": {
+              "mean": -0.6581465579727863,
+              "median": -0.4641348123550415,
+              "p10": -1.5059419512748717,
+              "p90": -0.06677136421203614
+            }
+          },
+          "changed_normal": {
+            "frames": 16,
+            "normal": 922,
+            "threshold": 3.916396141052246,
+            "before_fp": 83,
+            "after_fp": 94,
+            "both_high": 80,
+            "low_to_high": 14,
+            "high_to_low": 3,
+            "both_low": 825,
+            "mean_before": -2.690526280317803,
+            "mean_after": -2.047506197333465,
+            "delta": {
+              "mean": 0.6430200829843379,
+              "median": 0.025453686714172363,
+              "p10": -0.26204652786254884,
+              "p90": 2.6446374237537364
+            }
+          }
+        }
+      }
+    },
+    "runtime": {
+      "status": "stopped",
+      "requested_updates": 1024,
+      "start_update": 0,
+      "initial_checkpoint": "/home/jasongao/Study/AJAE/results/short/0.pt",
+      "started_unix": 1789317405.1289668,
+      "host_E_before": {
+        "Size": 484950659072,
+        "SizeRemaining": 65151524864,
+        "reserve_bytes": 10000000000
+      },
+      "estimated_peak_new_bytes": 2322916168,
+      "environment": {
+        "torch": "2.12.0+cu130",
+        "cuda": "13.0",
+        "gpu": "NVIDIA GeForce RTX 5080 Laptop GPU",
+        "gpu_bytes": 17066033152,
+        "cpu_affinity": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          21,
+          22,
+          23
+        ],
+        "torch_threads": 4,
+        "preparation_workers": 2,
+        "transform_cache_bytes_per_worker": 0
+      },
+      "completed_updates": 710,
+      "error": "KeyboardInterrupt()",
+      "seconds": 7614.489971876144,
+      "peak_cuda_allocated_bytes": 5855668224,
+      "host_E_after_user_stop": {
+        "Size": 484950659072,
+        "SizeRemaining": 64703586304,
+        "reserve_bytes": 10000000000
+      },
+      "artifact_sizes": {
+        "mean": {
+          "files": 15,
+          "bytes": 529530281
+        },
+        "worst": {
+          "files": 13,
+          "bytes": 529157118
+        }
+      }
+    },
+    "conclusion": {
+      "verified": "worst is worse on both complete synthetic fixed sets at 512 updates; fewer selected normal-witness false positives accompany lower anomaly recall; worst is better on the fixed real subset at 256 updates",
+      "not_established": "stable benefit or harm of worst pairing, final 1024-update real tradeoff, before/after normal protection at matched 201 FPR, or isolated conditional-modulation value",
+      "decision": "retain mean as the existing learning reference; do not promote worst to a supported core mechanism; stop without additional training or evaluation"
+    }
   }
 }

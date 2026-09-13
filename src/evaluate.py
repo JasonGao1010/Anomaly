@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 import shutil
 import tempfile
+import time
 
 import numpy as np
 from numba import njit
@@ -393,16 +394,24 @@ class APAttribution:
         return precision[indexes], required[indexes]
 
 
-def official_frame(source, prediction):
-    """Return complete file-slot scores and official targets for this one scan."""
+def official_targets(source):
+    """Official frame eligibility depends only on the unchanged public labels."""
     if source.labels is None:
         raise ValueError("official evaluation requires semantic labels")
-    scores = prediction.restore(source)
     target = evaluation_targets(source.xyzi[:, :3], source.labels.semantic)
     eligible = (
         int(np.count_nonzero(target == 1))
         >= PointOODMetricsCalculator.min_num_points_to_eval
     )
+    return target, eligible
+
+
+def official_frame(source, prediction):
+    """Allow omitted inference only when the official rule excludes the whole frame."""
+    target, eligible = official_targets(source)
+    if prediction is None and eligible:
+        raise ValueError("official-eligible scan requires complete predictions")
+    scores = prediction.restore(source) if prediction is not None else None
     return scores, target, eligible
 
 
@@ -421,9 +430,9 @@ def synthetic_targets(frozen, *, official=False):
 
 
 def evaluate_frames(frames, *, directory=None, observe=None, check_resources=None):
-    """Pool eligible points exactly, sorting one temporary file in place."""
-    rows, count, seen = [], 0, set()
-    with tempfile.TemporaryFile(dir=directory) as stream:
+    """Pool the complete official point set with bounded exact tie counting."""
+    rows, seen = [], set()
+    with ScoreCounts(directory=directory, check_resources=_evaluation_space) as counts:
         for source, prediction in frames:
             identity = (source.partition, source.sequence_id, source.frame_id)
             if identity in seen:
@@ -440,19 +449,11 @@ def evaluate_frames(frames, *, directory=None, observe=None, check_resources=Non
             )
             rows.append(row)
             if eligible:
-                packed = packed_scores(scores[valid], target[valid], score_kind="logit")
-                packed.tofile(stream)
-                count += len(packed)
+                counts.add(scores[valid], target[valid])
             if check_resources is not None:
                 check_resources()
-        stream.flush()
-        if count:
-            ordered = np.memmap(stream, dtype=np.uint64, mode="r+", shape=(count,))
-            ordered.sort(kind="quicksort")
-            result = exact_metrics(ordered, score_kind="logit", observe=observe)
-            del ordered
-        else:
-            result = exact_metrics(np.empty(0, np.uint64), score_kind="logit")
+        result = counts.metrics(observe=observe)
+        result["exact_count_storage"] = counts.storage()
     result.update(frames=len(rows), eligible_frames=sum(r["eligible"] for r in rows))
     return result, rows
 
@@ -678,9 +679,9 @@ class ScoreCounts:
         for records in self._blocks(merged):
             yield records["bits"], records["count"], records["positive"]
 
-    def metrics(self):
+    def metrics(self, *, observe=None):
         return metrics_from_groups(self.groups(), positive=self.positive,
-                                   negative=self.negative, score_kind="logit")
+                                   negative=self.negative, score_kind="logit", observe=observe)
 
     def storage(self):
         return dict(numeric_workspace_bytes=self.max_bytes,
@@ -689,19 +690,47 @@ class ScoreCounts:
                     merges=self.merges, record_bytes=_COUNT_DTYPE.itemsize)
 
 
+class EvaluationFrames:
+    """Bounded worker preparation; ordered loading preserves complete scan identity."""
+
+    def __init__(self, data_root, sequence_ids, protocol, config, preprocessing):
+        self.sequences = {identifier: STUSequence.open(data_root, protocol=protocol, partition="val",
+            sequence_id=identifier, label_mode=LabelMode.REQUIRED) for identifier in sequence_ids}
+        self.samples = [(identifier, frame) for identifier, sequence in self.sequences.items()
+                        for frame in sequence.frame_ids]
+        self.config, self.preprocessing, self.transform = config, preprocessing, None
+
+    def __len__(self):
+        return len(self.samples)
+
+    def __getitem__(self, index):
+        from .model import ScanTransform
+        if self.transform is None:
+            self.transform = ScanTransform(self.config, state=self.preprocessing, workers=4)
+        identifier, frame = self.samples[index]
+        source = self.sequences[identifier][frame]
+        _, eligible = official_targets(source)
+        return source, self.transform(source) if eligible else None
+
+
 def checkpoint_frames(data_root, checkpoint_path, sequence_ids, protocol):
     import torch
-    from .model import ScanTransform
+    from torch.utils.data import DataLoader
     from .train import load_checkpoint
     torch.set_num_threads(4)
     model, saved = load_checkpoint(checkpoint_path)
     model.eval()
-    transform = ScanTransform(saved["config"], state=saved["preprocessing"], workers=8)
-    for identifier in sequence_ids:
-        sequence = STUSequence.open(data_root, protocol=protocol, partition="val",
-                                    sequence_id=identifier, label_mode=LabelMode.REQUIRED)
-        for source in sequence:
-            yield source, model.predict(source, transform)
+    dataset = EvaluationFrames(data_root, sequence_ids, protocol, saved["config"], saved["preprocessing"])
+    loader = DataLoader(dataset, batch_size=None, num_workers=4, prefetch_factor=1,
+        multiprocessing_context="spawn", pin_memory=True,
+        generator=torch.Generator().manual_seed(83))
+    started, evaluated = time.perf_counter(), 0
+    for source, scan in loader:
+        yield source, model.predict(source, prepared=scan) if scan is not None else None
+        evaluated += int(scan is not None)
+        if scan is not None and evaluated % 50 == 0:
+            print(json.dumps(dict(event="full_validation", sequence=source.sequence_id, frame=source.frame_id,
+                evaluated_frames=evaluated, seconds=time.perf_counter() - started)), flush=True)
 
 
 def prepare_fixed(data_root, selection):
@@ -800,6 +829,26 @@ def paired_normal_summary(records, threshold):
         mean_after=float(after.mean()) if len(after) else None,
         delta=dict(mean=float(delta.mean()), median=float(np.median(delta)),
             p10=float(np.quantile(delta, .1)), p90=float(np.quantile(delta, .9))) if len(delta) else None)
+
+
+def paired_operating_points(fixed):
+    """Reuse identical witness scores at transferred and own pooled thresholds."""
+    transfer = {}
+    threshold = fixed["train"]["full"]["recall_at_fpr_limit"]["threshold"]
+    for split in ("train", "validation"):
+        row = fixed[split]
+        if row["at_training_threshold"]["threshold"] != threshold:
+            raise ValueError("fixed result did not transfer the same 206 threshold")
+        transfer[split] = dict(operating_point=row["at_training_threshold"], groups={
+            name: paired_normal_summary(row["paired_normals"][name]["records"], threshold)
+            for name in ("sparse", "changed_normal")})
+    full = fixed["validation"]["full"]
+    own = full["recall_at_fpr_limit"]
+    return dict(threshold_transfer=transfer, validation_at_own_1pct=dict(
+        operating_point=dict(own, normal=full["normal_count"], anomaly=full["anomaly_count"]),
+        groups={name: paired_normal_summary(fixed["validation"]["paired_normals"][name]["records"], own["threshold"])
+                for name in ("sparse", "changed_normal")}),
+        scope="own 201 pooled <=1% FPR is retrospective ranking diagnosis; identical witness slots and scores; no subgroup threshold fitting; unchanged threshold before and after insertion")
 
 
 def evaluate_normal_pairs(model, transform, prepared, split, threshold, *, inserted_scores=None):
@@ -955,16 +1004,29 @@ def evaluate_synthetic(data_root, checkpoint_path, *, directory=None):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--data-root", type=Path, required=True)
+    parser.add_argument("--data-root", type=Path)
     inputs = parser.add_mutually_exclusive_group(required=True)
     inputs.add_argument("--predictions", type=Path)
     inputs.add_argument("--checkpoint", type=Path)
+    inputs.add_argument("--pair-thresholds", type=Path, help="reuse a fixed result's saved paired scores at both pooled operating thresholds")
     parser.add_argument("--synthetic", action="store_true", help="evaluate complete frozen 201 validation worlds")
     parser.add_argument("--fixed", type=Path, help="evaluate a declared finite-learning checkpoint scope")
     parser.add_argument("--pairs", type=Path, help="only paired normal witnesses; reuse the threshold from this checkpoint's fixed result")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--sequence", type=int, action="append")
     args = parser.parse_args()
+    if args.pair_thresholds is not None:
+        if args.synthetic or args.fixed is not None or args.pairs is not None or args.sequence is not None:
+            parser.error("--pair-thresholds only reuses one completed fixed result")
+        fixed = json.loads(args.pair_thresholds.read_text())
+        result = paired_operating_points(fixed)
+        args.output.mkdir(parents=True, exist_ok=True)
+        _atomic_json(args.output / f'{fixed["step"]}_thresholds.json', dict(
+            step=fixed["step"], checkpoint=str((args.pair_thresholds.parent / fixed["checkpoint"]).resolve()),
+            reference_metrics=str(args.pair_thresholds.resolve()), **result))
+        return
+    if args.data_root is None:
+        parser.error("prediction evaluation requires --data-root")
     if args.fixed is not None:
         if args.checkpoint is None or args.synthetic or args.sequence is not None:
             parser.error("--fixed requires --checkpoint and its declared development selection")
@@ -1013,24 +1075,19 @@ def main():
         parser.error("duplicate sequences")
     for sequence in sequences:
         protocol.sequence("val", sequence)
-    # File-size bounds include every raw slot; the actual official subset is smaller.
-    upper = sum(
-        p.stat().st_size // 2
-        for sequence in sequences
-        for p in (args.data_root / "val" / str(sequence) / "velodyne").glob("*.bin")
-    )
-    if upper >= 2**30:
-        disk = host_disk()
-        if upper > disk["SizeRemaining"] - disk["reserve_bytes"]:
-            raise OSError("evaluation temporary storage would invade the E: reserve")
+    # Reserve staging space now; every spill/merge checks its own peak output
+    # while all live inputs are still present on E:.
+    disk = host_disk()
+    _evaluation_space(512 * 2**20)
     args.output.mkdir(parents=True, exist_ok=True)
     last_check = [0]
 
     def check_resources():
         last_check[0] += 1
-        if upper >= 2**30 and last_check[0] % 100 == 0:
+        if last_check[0] % 100 == 0:
             host_disk()
 
+    started = time.perf_counter()
     result, _ = evaluate_frames(
         checkpoint_frames(args.data_root, args.checkpoint, sequences, protocol)
         if args.checkpoint is not None else prediction_frames(args.data_root, args.predictions, sequences, protocol),
@@ -1040,6 +1097,9 @@ def main():
     result.update(
         partition="val",
         sequences=list(sequences),
+        seconds=time.perf_counter() - started,
+        host_E_before=disk,
+        host_E_after=host_disk(),
         scope="full_public_validation"
         if set(sequences) == set(protocol.public_sequence_ids)
         else "development_subset",

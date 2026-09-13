@@ -324,10 +324,15 @@ class AJAE(nn.Module):
         return dict(score=score, **features) if return_features else score
 
     @torch.no_grad()
-    def predict(self, source, transform):
+    def predict(self, source, transform=None, *, prepared=None):
         if self.training:
             raise ValueError("prediction requires model.eval()")
-        scan = to_device(transform(source), next(self.parameters()).device)
+        if prepared is None:
+            prepared = transform(source)
+        elif (not np.array_equal(prepared["source_slot"], source.real_slots)
+              or not np.array_equal(prepared["xyzi"], source.xyzi[source.real_slots])):
+            raise ValueError("prepared inference input differs from the complete source returns")
+        scan = to_device(prepared, next(self.parameters()).device)
         scores = self(scan).cpu().numpy()
         result = FramePrediction(source.partition, source.sequence_id, source.frame_id,
                                  source.real_slots, scores)

@@ -491,12 +491,18 @@ def load_experiment(path):
     return experiment
 
 
-def validate_initial_state(saved, config, identities):
-    # Only the descriptive scope and the explicitly declared sampling may differ.
+def validate_initial_state(saved, config, identities, initial_changes=None):
+    # A fresh paired arm may change only the declared mean-to-worst objective.
+    # Real resume still compares the complete configuration without exceptions.
     actual = {k: v for k, v in config.items() if k != "scope"}
-    expected = {k: v for k, v in saved["config"].items() if k != "scope"}
+    expected = deepcopy({k: v for k, v in saved["config"].items() if k != "scope"})
     if saved["step"] != 0 or saved["optimizer"]["state"]:
         raise ValueError("fresh learning requires an untrained step-zero state")
+    if initial_changes is not None:
+        if (initial_changes != {"loss.keep_mode": {"from": "mean", "to": "worst"}}
+                or expected["loss"]["keep_mode"] != "mean" or actual["loss"]["keep_mode"] != "worst"):
+            raise ValueError("initial exception permits only the declared mean-to-worst change")
+        expected["loss"]["keep_mode"] = "worst"
     if actual != expected or saved["samples"] != identities:
         raise ValueError("initial model, objective, training definition or input identities changed")
 
@@ -536,7 +542,8 @@ def fit(config, data_root, steps, output, resume=None, *, experiment=None):
         if start >= steps:
             raise ValueError("explicit budget has no remaining updates")
     elif saved is not None:
-        validate_initial_state(saved, config, identities)
+        validate_initial_state(saved, config, identities,
+                               experiment.get("initial_changes") if experiment else None)
     if saved is not None:
         model.load_state_dict(saved["model"], strict=True)
         optimizer.load_state_dict(saved["optimizer"])

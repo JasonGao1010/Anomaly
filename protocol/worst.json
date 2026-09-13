@@ -1,0 +1,29 @@
+{
+  "format": "ajae-short-learning",
+  "base_config": "protocol/model.json",
+  "scope": "Authorized mean-versus-worst paired-normal control; at most 1024 updates; no external weights or automatic budget extension.",
+  "question": "Does worst pairing improve official real ranking and retained-normal protection at matched overall false-positive requirements relative to mean pairing?",
+  "reference_run": "results/short",
+  "initial_checkpoint": "results/short/0.pt",
+  "initial_changes": {
+    "loss.keep_mode": {"from": "mean", "to": "worst"}
+  },
+  "selection_from": "protocol/micro.json",
+  "sampling": "same 240-world probabilities, SeedSequence([seed,7,draw]) frame requests, SeedSequence([seed,11,draw]) queries and original-forward order as results/short; two complete scans per update",
+  "maximum_updates": 1024,
+  "loss_overrides": {"keep_mode": "worst", "tail_weight": 0},
+  "evaluation": {
+    "synthetic_steps": [0, 256, 512, 1024],
+    "real_steps": [0, 256, 1024],
+    "paired_normal_steps": [1024],
+    "train_scope": "same fixed 206 training-source diagnostic set; report actual world-frame requests",
+    "synthetic_targets": "all valid frozen labels including zero-anomaly and fewer-than-five-return frames; official filter secondary",
+    "thresholds": "retain each arm's 206 pooled 1% FPR threshold transferred to 201; additionally reuse paired scores at that arm's own complete 201 pooled <=1% FPR point; no witness-specific thresholds; same threshold before and after insertion",
+    "full_val19_steps": [1024],
+    "full_val19_arms": ["results/short/1024.pt", "results/worst/1024.pt"],
+    "full_val19_scope": "all complete official point sets across the 19 public development sequences; remains development evidence, not an independent test",
+    "interpretation": "compare AP, FPR95 and recall at <=1% FPR; report actual 201 operating FPR and anomaly recall beside normal transitions; do not compare unequal keep-loss definitions as detection performance"
+  },
+  "decision": "Worst pairing is useful only if normal protection accompanies a better overall AP/FPR95 tradeoff without sacrificing anomaly recall. Case-only gains cannot establish a core contribution. If unsupported, retain mean; no automatic tuning or budget extension.",
+  "stop": "after 1024 updates and both final full-val19 evaluations, or immediately on numerical failure; preserve state; no automatic parameter retry; formal full training remains paused"
+}
