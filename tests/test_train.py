@@ -8,7 +8,33 @@ from torch import nn
 
 from src.model import load_config
 from src.train import (_gradient_comparison, batch_loss, keep_loss, load_checkpoint,
-                       tail_loss, Requests, evaluation_state)
+                       tail_loss, Requests, evaluation_state, validate_initial_state)
+
+
+def test_short_initialization_allows_only_sampling_scope_change():
+    config = load_config()
+    saved = dict(step=0, optimizer=dict(state={}), config=deepcopy(config), samples=[["world", 11]])
+    config["scope"] = "finite full-pool learning"
+    validate_initial_state(saved, config, [["world", 11]])
+    for altered in (dict(saved, step=256), dict(saved, optimizer=dict(state={0: {}}))):
+        with pytest.raises(ValueError, match="untrained step-zero"):
+            validate_initial_state(altered, config, [["world", 11]])
+    config["loss"]["keep_mode"] = "mean"
+    with pytest.raises(ValueError, match="definition"):
+        validate_initial_state(saved, config, [["world", 11]])
+
+
+def test_full_pool_requests_preserve_original_draw_stream_and_resume():
+    config = load_config()
+    probabilities = np.array([.03, .11, .36, .5])
+    actual = list(Requests(probabilities, config, 1024))
+    cdf = np.cumsum(probabilities)
+    expected = [int(np.searchsorted(cdf, np.random.default_rng(
+        np.random.SeedSequence([config["training"]["seed"], 7, draw])).random(), side="right"))
+        for draw in range(2048)]
+    assert [r[0] for r in actual] == expected
+    assert [r[1] for r in actual] == list(range(2048))
+    assert list(Requests(probabilities, config, 1024, start=256)) == actual[512:]
 
 
 def test_micro_passes_balance_exactly_and_resume_keeps_draws():

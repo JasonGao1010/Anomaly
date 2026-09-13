@@ -766,7 +766,76 @@ def threshold_counts(rows, threshold):
         recall=100 * counts["tp"] / counts["anomaly"] if counts["anomaly"] else None)
 
 
-def evaluate_fixed(model, transform, prepared, *, include_real=False, directory=None):
+def retained_witness_slots(frozen, original, measured):
+    groups = dict(sparse=measured["contrasts"]["sparse"]["normal_source_slots"],
+                  changed_normal=measured["changed_normal_source_slots"])
+    groups = {key: np.unique(np.asarray(value, np.int64)) for key, value in groups.items()}
+    slots = np.union1d(*groups.values())
+    if np.any((slots < 0) | (slots >= original.slot_count)):
+        raise ValueError("normal witness slot is outside the original scan")
+    if (frozen.source.slot_count != original.slot_count
+            or np.any(frozen.inserted_mask[slots] | frozen.occluded_original_mask[slots]
+                      | original.zero_slot_mask[slots] | (frozen.anomaly_target[slots] != 0))
+            or np.any(original.labels.semantic_target[slots] == 255)
+            or not np.array_equal(original.xyzi[slots], frozen.source.xyzi[slots])
+            or not np.array_equal(original.labels.packed[slots], frozen.source.labels.packed[slots])):
+        raise ValueError("normal witness changed physical return or valid normal label")
+    return groups
+
+
+def paired_normal_summary(records, threshold):
+    """Four transitions use one checkpoint's same pooled threshold on both scans."""
+    before = np.concatenate([r["before"] for r in records]) if records else np.empty(0)
+    after = np.concatenate([r["after"] for r in records]) if records else np.empty(0)
+    if not (np.isfinite(before).all() and np.isfinite(after).all()):
+        raise FloatingPointError("nonfinite paired-normal score")
+    high0 = before >= threshold if threshold is not None else np.zeros(len(before), bool)
+    high1 = after >= threshold if threshold is not None else np.zeros(len(after), bool)
+    delta = after - before
+    return dict(frames=len(records), normal=len(before), threshold=threshold,
+        before_fp=int(high0.sum()), after_fp=int(high1.sum()),
+        both_high=int((high0 & high1).sum()), low_to_high=int((~high0 & high1).sum()),
+        high_to_low=int((high0 & ~high1).sum()), both_low=int((~high0 & ~high1).sum()),
+        mean_before=float(before.mean()) if len(before) else None,
+        mean_after=float(after.mean()) if len(after) else None,
+        delta=dict(mean=float(delta.mean()), median=float(np.median(delta)),
+            p10=float(np.quantile(delta, .1)), p90=float(np.quantile(delta, .9))) if len(delta) else None)
+
+
+def evaluate_normal_pairs(model, transform, prepared, split, threshold, *, inserted_scores=None):
+    """Reuse frozen witness identities; save only the small paired score lists."""
+    if model.training:
+        raise ValueError("paired evaluation requires inference mode")
+    records = dict(sparse=[], changed_normal=[])
+    dataset = prepared["datasets"][split]
+    for record, index in zip(prepared["selection"][split], prepared["indices"][split], strict=True):
+        key = (record["identity"], record["frame"])
+        measured = prepared["geometry"].get(key)
+        if measured is None:
+            continue
+        original, frozen = dataset.sequence[record["frame"]], dataset[index]
+        if source_identity(original) != record["source_identity"]:
+            raise ValueError("paired-normal original scan identity changed")
+        groups = retained_witness_slots(frozen, original, measured)
+        if not any(len(slots) for slots in groups.values()):
+            continue
+        before = model.predict(original, transform).restore(original)
+        after = (inserted_scores[key] if inserted_scores is not None else
+                 model.predict(frozen.source, transform).restore(frozen.source))
+        for name, slots in groups.items():
+            if len(slots):
+                records[name].append(dict(world=record["identity"], frame=record["frame"],
+                    source_identity=record["source_identity"], slots=slots.tolist(),
+                    before=before[slots].astype(np.float64).tolist(), after=after[slots].astype(np.float64).tolist()))
+    result = {name: dict(summary=paired_normal_summary(rows, threshold), records=rows)
+              for name, rows in records.items()}
+    result["scope"] = "same unchanged valid normal file slots; full original and inserted inference; existing partial witness lists may overlap; one 206 threshold for both scans and both splits"
+    print(json.dumps(dict(event="paired_normal_evaluation", split=split,
+                         groups={name: result[name]["summary"] for name in records})), flush=True)
+    return result
+
+
+def evaluate_fixed(model, transform, prepared, *, include_real=False, directory=None, include_pairs=False):
     """Fixed development scopes; callers preserve the training state around evaluation."""
     if model.training:
         raise ValueError("fixed evaluation requires inference mode")
@@ -808,6 +877,9 @@ def evaluate_fixed(model, transform, prepared, *, include_real=False, directory=
                 at_training_threshold=threshold_counts(group, train_threshold)) for name, group in witness.items()},
             scope="full valid synthetic labels include zero-anomaly and fewer-than-five-return frames; role curves use their own point pools; all reported group counts use the same 206 full-pool threshold",
             witness_scope="existing measured slot lists only; not all complex normals; absent geometry is unmeasured")
+        if include_pairs:
+            result[split]["paired_normals"] = evaluate_normal_pairs(model, transform, prepared, split, train_threshold,
+                inserted_scores={(r["world"], r["frame"]): r["scores"] for r in rows})
         print(json.dumps(dict(event="fixed_evaluation", split=split, detection_loss=full["detection_loss"],
             AP=full["AP"], FPR95=full["FPR95"], frames=len(rows))), flush=True)
     if include_real:
@@ -888,7 +960,8 @@ def main():
     inputs.add_argument("--predictions", type=Path)
     inputs.add_argument("--checkpoint", type=Path)
     parser.add_argument("--synthetic", action="store_true", help="evaluate complete frozen 201 validation worlds")
-    parser.add_argument("--fixed", type=Path, help="evaluate a declared micro-learning checkpoint scope")
+    parser.add_argument("--fixed", type=Path, help="evaluate a declared finite-learning checkpoint scope")
+    parser.add_argument("--pairs", type=Path, help="only paired normal witnesses; reuse the threshold from this checkpoint's fixed result")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--sequence", type=int, action="append")
     args = parser.parse_args()
@@ -897,21 +970,35 @@ def main():
             parser.error("--fixed requires --checkpoint and its declared development selection")
         import torch
         from .model import ScanTransform
-        from .train import load_checkpoint, evaluation_state
-        declaration = json.loads(args.fixed.read_text())
+        from .train import load_checkpoint, load_experiment, evaluation_state
+        declaration = load_experiment(args.fixed)
         torch.set_num_threads(4)
         model, saved = load_checkpoint(args.checkpoint)
-        if saved.get("micro") != declaration:
+        if saved.get("experiment", saved.get("micro")) != declaration:
             parser.error("fixed evaluation declaration differs from the saved experiment")
         prepared = prepare_fixed(args.data_root, declaration["selection"])
         transform = ScanTransform(saved["config"], state=saved["preprocessing"], workers=8)
         args.output.mkdir(parents=True, exist_ok=True)
         with evaluation_state(model):
-            result = evaluate_fixed(model, transform, prepared, directory=args.output,
-                include_real=saved["step"] in declaration["evaluation"]["real_steps"])
-        _atomic_json(args.output / f'{saved["step"]}.json',
+            if args.pairs is not None:
+                reference = json.loads(args.pairs.read_text())
+                if (reference["step"] != saved["step"]
+                        or (args.pairs.parent / reference["checkpoint"]).resolve() != args.checkpoint.resolve()):
+                    parser.error("paired threshold result must refer to this same checkpoint")
+                threshold = reference["train"]["full"]["recall_at_fpr_limit"]["threshold"]
+                result = {split: evaluate_normal_pairs(model, transform, prepared, split, threshold)
+                          for split in ("train", "validation")}
+                result["reference_metrics"] = str(args.pairs.resolve())
+            else:
+                result = evaluate_fixed(model, transform, prepared, directory=args.output,
+                    include_real=saved["step"] in declaration["evaluation"]["real_steps"],
+                    include_pairs=saved["step"] in declaration["evaluation"].get("paired_normal_steps", []))
+        name = f'{saved["step"]}_pairs.json' if args.pairs is not None else f'{saved["step"]}.json'
+        _atomic_json(args.output / name,
             dict(step=saved["step"], checkpoint=str(args.checkpoint.resolve()), **result))
         return
+    if args.pairs is not None:
+        parser.error("--pairs requires --fixed and --checkpoint")
     if args.synthetic:
         if args.checkpoint is None or args.sequence is not None:
             parser.error("--synthetic requires --checkpoint and uses the fixed 201 world split")

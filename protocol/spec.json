@@ -3,8 +3,8 @@
   "schema_version": 1,
   "research_question": "Using only the complete current scan, can scene-supported observation-conditioned relationships on original returns improve real anomaly-versus-normal ranking over the same backbone and ordinary relationships, and do retained-normal pairing and live-batch tail ranking add transferable benefits?",
   "status": {
-    "stage": "formal_v1_micro_learning_completed_full_training_paused",
-    "active_work": "256_update_micro_learning_and_all_declared_evaluations_completed; report_only; no_1024_step_short_training",
+    "stage": "formal_v1_finite_short_learning_completed_full_training_paused",
+    "active_work": "1024_update_short_learning_and_all_declared_evaluations_completed; report_and_stop",
     "model_defined": true,
     "training_defined": true,
     "formal_ajae_v1": "context_supported_conditional_return_relationship_network",
@@ -36,7 +36,7 @@
     "coverage_closure_evidence": "results/coverage/summary.json",
     "coverage_decision": "all_original_core_checks_exact_30_cell_quotas_and_sampling_exposure_requirements_passed; data_unchanged_by_model_implementation",
     "coverage_boundaries": "one_normal_source_per_split; sparse_normal_nonextreme_train_region_share_0.4997728305_near_0.5_limit; selected_geometry_scope_and_missingness; weak_background_change_is_not_self_occlusion; no_universal_coverage_claim",
-    "next_stage": "user_decision_on_fresh_initialization_1024_step_short_learning; no_automatic_training_release",
+    "next_stage": "user_decision_on_controlled_mean_versus_worst_normal_pairing; no_automatic_training_extension",
     "data_preparation_accepted": true,
     "original_pool_summary_completed": true,
     "balanced_pool_target": {
@@ -142,10 +142,12 @@
         }
       }
     },
-    "formal_v1_training_executed": false,
-    "formal_v1_evaluation_executed": false,
     "model_configuration": "model.json",
-    "formal_v1_full_training_ready": false
+    "formal_v1_full_training_ready": false,
+    "formal_default_full_training_executed": false,
+    "full_val19_model_evaluation_executed": false,
+    "finite_learning_executed": true,
+    "fixed_development_model_evaluation_executed": true
   },
   "data": {
     "normal_sources": [
@@ -696,7 +698,6 @@
     "interpretation": "task_learning_check_not_loss_ablation; step_64_detection_only_step_128_keep_ramping_step_256_full_keep; compare_each_domain_to_its_own_initial_state",
     "stop": "after_micro_report_or_immediately_on_numerical_failure; preserve_state; no_automatic_parameter_retry_or_1024_step_training",
     "optimizer_updates": 256,
-    "short_training_executed": false,
     "formal_defaults_changed": false,
     "results": {
       "0": {
@@ -1355,8 +1356,9 @@
       "AP": 19,
       "FPR95": 19
     },
-    "conclusion": "Full-training-pool ranking learning is demonstrated and includes few-return and sparse-normal-paired anomalies. Relative-to-initial ranking transfer exists on fixed 201 and real development scopes, with all 19 sequence curves improving AP and FPR95. Transfer detection loss increases and complex-normal false positives remain high. This is one random seed and a micro subset, not evidence isolating mean pairing or sensor conditioning, nor release of full training.",
-    "decision": "There is a basis to discuss a potential 1024-update short-learning stage, requiring a separate user decision and a fresh copy of the saved random initial state. It is not authorized or executed. Stop after this micro report."
+    "conclusion": "Full-point ranking learning on the micro training subset is demonstrated and includes few-return and sparse-normal-paired anomalies. Relative-to-initial ranking transfer exists on fixed 201 and real development scopes, with all 19 sequence curves improving AP and FPR95. Transfer detection loss increases and complex-normal false positives remain high. This is one random seed and a micro subset, not evidence isolating mean pairing or sensor conditioning, nor release of full training.",
+    "decision": "The micro stage stopped at 256 updates with a basis to discuss fresh-initial-state short learning. No short training was executed within that stage; the subsequent separate authorization and completed run are recorded in short_learning.",
+    "short_training_executed_during_micro_stage": false
   },
   "method": {
     "implementation": "src/model.py; src/train.py; src/evaluate.py",
@@ -1790,5 +1792,1209 @@
       "diagnostic_issue_resolved": "same checkpoint graph reused a one-shot generator context during separate autograd.grad calls; replaced with reusable buffer-restoring context, then verified CPU and all four real batches",
       "interpretation": "known sparse-normal witnesses enter basic detection queries rarely (5 cumulative hits vs 101 active keep hits); unknown geometry remains unknown; initial tail shared-parameter gradients 3.09 to 4.46 times detection; keep/detection shared-parameter cosines negative in 3 of 4 batches; no learning/transfer/harm determination"
     }
+  },
+  "short_learning": {
+    "declaration": "protocol/short.json",
+    "output": "results/short",
+    "status": "completed",
+    "initial_checkpoint": "results/micro/0.pt",
+    "maximum_updates": 1024,
+    "fixed_scope": "same_206_32_201_32_and_real_152_as_protocol/micro.json",
+    "question": "Does broader existing training exposure improve development ranking and difficult-normal protection beyond micro learning?",
+    "full_training_released": false,
+    "initial_state_verified": "exact equality to micro 0 model buffers preprocessing optimizer CPU/CUDA RNG and full sample identities; formal frame probabilities restored",
+    "micro_pair_reference": "results/micro/256_pairs.json",
+    "execution_verification": {
+      "updates": 1024,
+      "requests": 2048,
+      "request_stream_exact": true,
+      "unique_world_frames": 1754,
+      "unique_worlds": 240,
+      "unique_source_frames": 436,
+      "maximum_world_requests": 21,
+      "maximum_source_frame_requests": 22,
+      "checkpoints": {
+        "0": {
+          "batchnorm_forward_count": 0,
+          "diagnostic_scans_used": 0,
+          "diagnostic_requests": 0
+        },
+        "256": {
+          "batchnorm_forward_count": 822,
+          "diagnostic_scans_used": 1,
+          "diagnostic_requests": 1
+        },
+        "512": {
+          "batchnorm_forward_count": 1846,
+          "diagnostic_scans_used": 1,
+          "diagnostic_requests": 1
+        },
+        "1024": {
+          "batchnorm_forward_count": 3894,
+          "diagnostic_scans_used": 1,
+          "diagnostic_requests": 1
+        }
+      },
+      "query_totals": {
+        "normal_queries": 16777216,
+        "anomaly_queries": 70320,
+        "retained_normal_pairs": 1890304
+      },
+      "fixed_sparse_witness_queries": {
+        "normal": 0,
+        "anomaly": 0,
+        "active_keep": 0
+      },
+      "query_witness_scope": "only existing sparse records in the fixed diagnostic selection; not whole-pool difficult-normal exposure",
+      "diagnostic_nonzero": [
+        {
+          "world": "solid_low_rough_6",
+          "frame": 154,
+          "role": "near_1_4",
+          "requests": 1
+        }
+      ],
+      "diagnostic_source_reuse": {
+        "source_frames_seen": 32,
+        "source_requests": 157,
+        "minimum": 1,
+        "maximum": 22,
+        "scope": "same original 206 source frame across all inserted worlds; not the same modified scan"
+      },
+      "host_E_now": {
+        "Size": 484950659072,
+        "SizeRemaining": 65175777280,
+        "reserve_bytes": 10000000000
+      }
+    },
+    "optimizer_updates": 1024,
+    "formal_defaults_changed": false,
+    "scope": "one shared random initialization; original full-pool probabilities; fixed 206/201 32-frame diagnostics and real 152-frame development subset; not full val19 or an independent test",
+    "results": {
+      "0": {
+        "train": {
+          "full": {
+            "frames": 32,
+            "normal_count": 3810224,
+            "anomaly_count": 898,
+            "detection_loss": 0.7054519446675527,
+            "normal_loss": 0.6296988123953425,
+            "anomaly_loss": 0.7812050769397627,
+            "AP": 0.021860394340640788,
+            "FPR95": 94.3828761773586,
+            "recall_at_fpr_limit": {
+              "recall": 1.1135857461024499,
+              "FPR": 0.8728095775996372,
+              "threshold": 0.2025090456008911,
+              "tp": 10,
+              "fp": 33256
+            },
+            "mean_score": {
+              "normal": -0.1399888066004926,
+              "anomaly": -0.16130703888451867
+            }
+          },
+          "at_training_threshold": {
+            "tp": 10,
+            "fp": 33256,
+            "normal": 3810224,
+            "anomaly": 898,
+            "threshold": 0.2025090456008911,
+            "FPR": 0.8728095775996372,
+            "recall": 1.1135857461024499
+          },
+          "zero_anomaly": {
+            "tp": 0,
+            "fp": 8216,
+            "normal": 961734,
+            "anomaly": 0,
+            "threshold": 0.2025090456008911,
+            "FPR": 0.8542902715303816,
+            "recall": null
+          }
+        },
+        "validation": {
+          "full": {
+            "frames": 32,
+            "normal_count": 2810269,
+            "anomaly_count": 829,
+            "detection_loss": 0.696356216101793,
+            "normal_loss": 0.6202980460889178,
+            "anomaly_loss": 0.7724143861146682,
+            "AP": 0.029226553722922263,
+            "FPR95": 86.7755364344125,
+            "recall_at_fpr_limit": {
+              "recall": 0.7237635705669482,
+              "FPR": 0.4550098229030744,
+              "threshold": 0.22239698469638824,
+              "tp": 6,
+              "fp": 12787
+            },
+            "mean_score": {
+              "normal": -0.16061816490442832,
+              "anomaly": -0.1468461316227194
+            }
+          },
+          "at_training_threshold": {
+            "tp": 6,
+            "fp": 21273,
+            "normal": 2810269,
+            "anomaly": 829,
+            "threshold": 0.2025090456008911,
+            "FPR": 0.7569737985936578,
+            "recall": 0.7237635705669482
+          },
+          "zero_anomaly": {
+            "tp": 0,
+            "fp": 5013,
+            "normal": 593718,
+            "anomaly": 0,
+            "threshold": 0.2025090456008911,
+            "FPR": 0.8443402423372712,
+            "recall": null
+          }
+        },
+        "val": {
+          "full": {
+            "frames": 152,
+            "normal_count": 14755566,
+            "anomaly_count": 4925,
+            "detection_loss": 0.6908543203772035,
+            "normal_loss": 0.6281978924937128,
+            "anomaly_loss": 0.7535107482606943,
+            "AP": 0.03790781707234365,
+            "FPR95": 89.97583691469376,
+            "recall_at_fpr_limit": {
+              "recall": 1.116751269035533,
+              "FPR": 0.9749473520703983,
+              "threshold": 0.19226685166358948,
+              "tp": 55,
+              "fp": 143859
+            },
+            "mean_score": {
+              "normal": -0.14306854942410588,
+              "anomaly": -0.11090121051079126
+            }
+          },
+          "at_training_threshold": {
+            "tp": 45,
+            "fp": 111196,
+            "normal": 14755566,
+            "anomaly": 4925,
+            "threshold": 0.2025090456008911,
+            "FPR": 0.7535868159852357,
+            "recall": 0.9137055837563451
+          }
+        }
+      },
+      "256": {
+        "train": {
+          "full": {
+            "frames": 32,
+            "normal_count": 3810224,
+            "anomaly_count": 898,
+            "detection_loss": 0.7215309916249953,
+            "normal_loss": 0.05788655990213916,
+            "anomaly_loss": 1.3851754233478515,
+            "AP": 0.7637518675978316,
+            "FPR95": 26.65195012156766,
+            "recall_at_fpr_limit": {
+              "recall": 34.075723830734965,
+              "FPR": 0.9993375717543116,
+              "threshold": 0.7054499983787537,
+              "tp": 306,
+              "fp": 38077
+            },
+            "mean_score": {
+              "normal": -5.348858552013326,
+              "anomaly": -0.338195515717722
+            }
+          },
+          "at_training_threshold": {
+            "tp": 306,
+            "fp": 38077,
+            "normal": 3810224,
+            "anomaly": 898,
+            "threshold": 0.7054499983787537,
+            "FPR": 0.9993375717543116,
+            "recall": 34.075723830734965
+          },
+          "zero_anomaly": {
+            "tp": 0,
+            "fp": 10482,
+            "normal": 961734,
+            "anomaly": 0,
+            "threshold": 0.7054499983787537,
+            "FPR": 1.089906356643313,
+            "recall": null
+          }
+        },
+        "validation": {
+          "full": {
+            "frames": 32,
+            "normal_count": 2810269,
+            "anomaly_count": 829,
+            "detection_loss": 0.9948125789633075,
+            "normal_loss": 0.12278113082419403,
+            "anomaly_loss": 1.8668440271024211,
+            "AP": 0.14035688963550025,
+            "FPR95": 55.48643208176869,
+            "recall_at_fpr_limit": {
+              "recall": 8.443908323281061,
+              "FPR": 0.9735722808030121,
+              "threshold": 1.930532455444336,
+              "tp": 70,
+              "fp": 27360
+            },
+            "mean_score": {
+              "normal": -3.7806107075525386,
+              "anomaly": -1.2659552047395375
+            }
+          },
+          "at_training_threshold": {
+            "tp": 149,
+            "fp": 72073,
+            "normal": 2810269,
+            "anomaly": 829,
+            "threshold": 0.7054499983787537,
+            "FPR": 2.564629934002759,
+            "recall": 17.973462002412546
+          },
+          "zero_anomaly": {
+            "tp": 0,
+            "fp": 13609,
+            "normal": 593718,
+            "anomaly": 0,
+            "threshold": 0.7054499983787537,
+            "FPR": 2.2921656409271742,
+            "recall": null
+          }
+        },
+        "val": {
+          "full": {
+            "frames": 152,
+            "normal_count": 14755566,
+            "anomaly_count": 4925,
+            "detection_loss": 0.5382662673091295,
+            "normal_loss": 0.049379110646614696,
+            "anomaly_loss": 1.0271534239716444,
+            "AP": 2.8963368499490465,
+            "FPR95": 18.333142896721142,
+            "recall_at_fpr_limit": {
+              "recall": 52.81218274111675,
+              "FPR": 0.9999819729043263,
+              "threshold": 0.8835062980651855,
+              "tp": 2601,
+              "fp": 147553
+            },
+            "mean_score": {
+              "normal": -6.572943705344469,
+              "anomaly": 0.5946705901728668
+            }
+          },
+          "at_training_threshold": {
+            "tp": 2721,
+            "fp": 166108,
+            "normal": 14755566,
+            "anomaly": 4925,
+            "threshold": 0.7054499983787537,
+            "FPR": 1.125731130883085,
+            "recall": 55.24873096446701
+          }
+        }
+      },
+      "512": {
+        "train": {
+          "full": {
+            "frames": 32,
+            "normal_count": 3810224,
+            "anomaly_count": 898,
+            "detection_loss": 0.4583240955787591,
+            "normal_loss": 0.04566016515058529,
+            "anomaly_loss": 0.8709880260069329,
+            "AP": 2.3467483451796145,
+            "FPR95": 15.327655276960094,
+            "recall_at_fpr_limit": {
+              "recall": 58.35189309576837,
+              "FPR": 0.9985502164702127,
+              "threshold": 0.9145848155021667,
+              "tp": 524,
+              "fp": 38047
+            },
+            "mean_score": {
+              "normal": -5.790885695610242,
+              "anomaly": 1.4057357896260403
+            }
+          },
+          "at_training_threshold": {
+            "tp": 524,
+            "fp": 38047,
+            "normal": 3810224,
+            "anomaly": 898,
+            "threshold": 0.9145848155021667,
+            "FPR": 0.9985502164702128,
+            "recall": 58.351893095768375
+          },
+          "zero_anomaly": {
+            "tp": 0,
+            "fp": 11467,
+            "normal": 961734,
+            "anomaly": 0,
+            "threshold": 0.9145848155021667,
+            "FPR": 1.1923255286804875,
+            "recall": null
+          }
+        },
+        "validation": {
+          "full": {
+            "frames": 32,
+            "normal_count": 2810269,
+            "anomaly_count": 829,
+            "detection_loss": 0.34300356273888694,
+            "normal_loss": 0.1424046915022276,
+            "anomaly_loss": 0.5436024339755463,
+            "AP": 0.7739042123830479,
+            "FPR95": 9.344158868777331,
+            "recall_at_fpr_limit": {
+              "recall": 34.86127864897467,
+              "FPR": 0.9839627452033952,
+              "threshold": 3.8300859928131104,
+              "tp": 289,
+              "fp": 27652
+            },
+            "mean_score": {
+              "normal": -4.78198100128264,
+              "anomaly": 2.058894310708285
+            }
+          },
+          "at_training_threshold": {
+            "tp": 522,
+            "fp": 99600,
+            "normal": 2810269,
+            "anomaly": 829,
+            "threshold": 0.9145848155021667,
+            "FPR": 3.5441447064320175,
+            "recall": 62.96743063932449
+          },
+          "zero_anomaly": {
+            "tp": 0,
+            "fp": 23653,
+            "normal": 593718,
+            "anomaly": 0,
+            "threshold": 0.9145848155021667,
+            "FPR": 3.9838778679440408,
+            "recall": null
+          }
+        }
+      },
+      "1024": {
+        "train": {
+          "full": {
+            "frames": 32,
+            "normal_count": 3810224,
+            "anomaly_count": 898,
+            "detection_loss": 0.15689481754497434,
+            "normal_loss": 0.04056140464261087,
+            "anomaly_loss": 0.2732282304473378,
+            "AP": 12.712871080001161,
+            "FPR95": 2.9661773166092074,
+            "recall_at_fpr_limit": {
+              "recall": 86.30289532293986,
+              "FPR": 0.9878159394303327,
+              "threshold": 0.5989989042282104,
+              "tp": 775,
+              "fp": 37638
+            },
+            "mean_score": {
+              "normal": -7.2790276214089005,
+              "anomaly": 4.10574889448544
+            }
+          },
+          "at_training_threshold": {
+            "tp": 775,
+            "fp": 37638,
+            "normal": 3810224,
+            "anomaly": 898,
+            "threshold": 0.5989989042282104,
+            "FPR": 0.9878159394303327,
+            "recall": 86.30289532293986
+          },
+          "zero_anomaly": {
+            "tp": 0,
+            "fp": 9847,
+            "normal": 961734,
+            "anomaly": 0,
+            "threshold": 0.5989989042282104,
+            "FPR": 1.023879783807165,
+            "recall": null
+          }
+        },
+        "validation": {
+          "full": {
+            "frames": 32,
+            "normal_count": 2810269,
+            "anomaly_count": 829,
+            "detection_loss": 0.1691816725216686,
+            "normal_loss": 0.12249654465072925,
+            "anomaly_loss": 0.21586680039260794,
+            "AP": 4.771188948773283,
+            "FPR95": 5.131821900323421,
+            "recall_at_fpr_limit": {
+              "recall": 65.86248492159228,
+              "FPR": 0.9968084905751015,
+              "threshold": 3.916396141052246,
+              "tp": 546,
+              "fp": 28013
+            },
+            "mean_score": {
+              "normal": -5.95645769974014,
+              "anomaly": 4.292808421980702
+            }
+          },
+          "at_training_threshold": {
+            "tp": 743,
+            "fp": 88748,
+            "normal": 2810269,
+            "anomaly": 829,
+            "threshold": 0.5989989042282104,
+            "FPR": 3.1579895020725774,
+            "recall": 89.62605548854042
+          },
+          "zero_anomaly": {
+            "tp": 0,
+            "fp": 19260,
+            "normal": 593718,
+            "anomaly": 0,
+            "threshold": 0.5989989042282104,
+            "FPR": 3.243964306286823,
+            "recall": null
+          }
+        },
+        "val": {
+          "full": {
+            "frames": 152,
+            "normal_count": 14755566,
+            "anomaly_count": 4925,
+            "detection_loss": 0.09266903998728071,
+            "normal_loss": 0.06859193989647107,
+            "anomaly_loss": 0.11674614007809034,
+            "AP": 33.31051846236071,
+            "FPR95": 2.0439202399962157,
+            "recall_at_fpr_limit": {
+              "recall": 89.36040609137056,
+              "FPR": 0.9982538114769709,
+              "threshold": 2.3864710330963135,
+              "tp": 4401,
+              "fp": 147298
+            },
+            "mean_score": {
+              "normal": -7.553721239196252,
+              "anomaly": 5.704237955389591
+            }
+          },
+          "at_training_threshold": {
+            "tp": 4621,
+            "fp": 262933,
+            "normal": 14755566,
+            "anomaly": 4925,
+            "threshold": 0.5989989042282104,
+            "FPR": 1.7819241905054675,
+            "recall": 93.8274111675127
+          }
+        }
+      }
+    },
+    "final_official_synthetic": {
+      "train": {
+        "frames": 19,
+        "normal_count": 2254222,
+        "anomaly_count": 881,
+        "AP": 17.302039969618573,
+        "FPR95": 2.8571276475875047,
+        "recall_at_fpr_limit": {
+          "recall": 86.37911464245175,
+          "FPR": 0.988589411335707,
+          "threshold": 0.5211002230644226,
+          "tp": 761,
+          "fp": 22285
+        }
+      },
+      "validation": {
+        "frames": 20,
+        "normal_count": 1848520,
+        "anomaly_count": 822,
+        "AP": 7.42764538185564,
+        "FPR95": 4.980903641832385,
+        "recall_at_fpr_limit": {
+          "recall": 66.66666666666666,
+          "FPR": 0.9973925086014758,
+          "threshold": 3.8873519897460938,
+          "tp": 548,
+          "fp": 18437
+        }
+      }
+    },
+    "final_roles": {
+      "train": {
+        "far_20_plus": {
+          "tp": 97,
+          "fp": 4567,
+          "normal": 477248,
+          "anomaly": 126,
+          "threshold": 0.5989989042282104,
+          "FPR": 0.9569448169505163,
+          "recall": 76.98412698412699
+        },
+        "middle_20_plus": {
+          "tp": 584,
+          "fp": 10531,
+          "normal": 963569,
+          "anomaly": 641,
+          "threshold": 0.5989989042282104,
+          "FPR": 1.0929160236578803,
+          "recall": 91.10764430577223
+        },
+        "near_1_4": {
+          "tp": 13,
+          "fp": 5246,
+          "normal": 483110,
+          "anomaly": 13,
+          "threshold": 0.5989989042282104,
+          "FPR": 1.0858810622839519,
+          "recall": 100.0
+        },
+        "sparse_normal": {
+          "tp": 81,
+          "fp": 7447,
+          "normal": 924563,
+          "anomaly": 118,
+          "threshold": 0.5989989042282104,
+          "FPR": 0.8054616072674333,
+          "recall": 68.64406779661017
+        },
+        "zero_anomaly": {
+          "tp": 0,
+          "fp": 9847,
+          "normal": 961734,
+          "anomaly": 0,
+          "threshold": 0.5989989042282104,
+          "FPR": 1.023879783807165,
+          "recall": null
+        }
+      },
+      "validation": {
+        "far_20_plus": {
+          "tp": 90,
+          "fp": 13192,
+          "normal": 334540,
+          "anomaly": 126,
+          "threshold": 0.5989989042282104,
+          "FPR": 3.943325162910265,
+          "recall": 71.42857142857143
+        },
+        "middle_20_plus": {
+          "tp": 596,
+          "fp": 22351,
+          "normal": 795630,
+          "anomaly": 612,
+          "threshold": 0.5989989042282104,
+          "FPR": 2.8092203662506443,
+          "recall": 97.38562091503267
+        },
+        "near_1_4": {
+          "tp": 7,
+          "fp": 12907,
+          "normal": 368031,
+          "anomaly": 7,
+          "threshold": 0.5989989042282104,
+          "FPR": 3.507041526393157,
+          "recall": 100.0
+        },
+        "sparse_normal": {
+          "tp": 50,
+          "fp": 21038,
+          "normal": 718350,
+          "anomaly": 84,
+          "threshold": 0.5989989042282104,
+          "FPR": 2.928655947657827,
+          "recall": 59.523809523809526
+        },
+        "zero_anomaly": {
+          "tp": 0,
+          "fp": 19260,
+          "normal": 593718,
+          "anomaly": 0,
+          "threshold": 0.5989989042282104,
+          "FPR": 3.243964306286823,
+          "recall": null
+        }
+      }
+    },
+    "final_normal_witnesses": {
+      "train": {
+        "smooth": {
+          "tp": 47,
+          "fp": 0,
+          "normal": 20,
+          "anomaly": 47,
+          "threshold": 0.5989989042282104,
+          "FPR": 0.0,
+          "recall": 100.0
+        },
+        "rough": {
+          "tp": 240,
+          "fp": 15,
+          "normal": 50,
+          "anomaly": 271,
+          "threshold": 0.5989989042282104,
+          "FPR": 30.0,
+          "recall": 88.56088560885608
+        },
+        "sparse": {
+          "tp": 60,
+          "fp": 32,
+          "normal": 50,
+          "anomaly": 93,
+          "threshold": 0.5989989042282104,
+          "FPR": 64.0,
+          "recall": 64.51612903225806
+        },
+        "changed_normal": {
+          "tp": 0,
+          "fp": 219,
+          "normal": 912,
+          "anomaly": 0,
+          "threshold": 0.5989989042282104,
+          "FPR": 24.013157894736842,
+          "recall": null
+        }
+      },
+      "validation": {
+        "smooth": {
+          "tp": 245,
+          "fp": 4,
+          "normal": 162,
+          "anomaly": 245,
+          "threshold": 0.5989989042282104,
+          "FPR": 2.4691358024691357,
+          "recall": 100.0
+        },
+        "rough": {
+          "tp": 150,
+          "fp": 13,
+          "normal": 36,
+          "anomaly": 151,
+          "threshold": 0.5989989042282104,
+          "FPR": 36.111111111111114,
+          "recall": 99.33774834437087
+        },
+        "sparse": {
+          "tp": 68,
+          "fp": 11,
+          "normal": 47,
+          "anomaly": 108,
+          "threshold": 0.5989989042282104,
+          "FPR": 23.404255319148938,
+          "recall": 62.96296296296296
+        },
+        "changed_normal": {
+          "tp": 0,
+          "fp": 205,
+          "normal": 922,
+          "anomaly": 0,
+          "threshold": 0.5989989042282104,
+          "FPR": 22.234273318872017,
+          "recall": null
+        }
+      }
+    },
+    "paired_normals": {
+      "micro_256": {
+        "train": {
+          "sparse": {
+            "frames": 9,
+            "normal": 50,
+            "threshold": -4.007288455963135,
+            "before_fp": 38,
+            "after_fp": 38,
+            "both_high": 38,
+            "low_to_high": 0,
+            "high_to_low": 0,
+            "both_low": 12,
+            "mean_before": -2.2539485919475557,
+            "mean_after": -2.1640528136491777,
+            "delta": {
+              "mean": 0.08989577829837798,
+              "median": -0.06534695625305176,
+              "p10": -0.23764023780822754,
+              "p90": 0.08726348876953129
+            }
+          },
+          "changed_normal": {
+            "frames": 15,
+            "normal": 912,
+            "threshold": -4.007288455963135,
+            "before_fp": 383,
+            "after_fp": 385,
+            "both_high": 366,
+            "low_to_high": 19,
+            "high_to_low": 17,
+            "both_low": 510,
+            "mean_before": -4.984825313875549,
+            "mean_after": -4.946586940543758,
+            "delta": {
+              "mean": 0.038238373331790955,
+              "median": -0.005459308624267578,
+              "p10": -0.2023961901664734,
+              "p90": 0.4080911159515378
+            }
+          }
+        },
+        "validation": {
+          "sparse": {
+            "frames": 10,
+            "normal": 47,
+            "threshold": -4.007288455963135,
+            "before_fp": 35,
+            "after_fp": 28,
+            "both_high": 28,
+            "low_to_high": 0,
+            "high_to_low": 7,
+            "both_low": 12,
+            "mean_before": -3.325082466957417,
+            "mean_after": -3.5776574484845427,
+            "delta": {
+              "mean": -0.2525749815271256,
+              "median": -0.15083646774291992,
+              "p10": -0.542875862121582,
+              "p90": -0.06529707908630372
+            }
+          },
+          "changed_normal": {
+            "frames": 16,
+            "normal": 922,
+            "threshold": -4.007288455963135,
+            "before_fp": 86,
+            "after_fp": 85,
+            "both_high": 83,
+            "low_to_high": 2,
+            "high_to_low": 3,
+            "both_low": 834,
+            "mean_before": -7.385073158639502,
+            "mean_after": -7.434983921817094,
+            "delta": {
+              "mean": -0.04991076317759243,
+              "median": -0.010044574737548828,
+              "p10": -0.33558063507080077,
+              "p90": 0.1359364509582519
+            }
+          }
+        }
+      },
+      "short_1024": {
+        "train": {
+          "sparse": {
+            "frames": 9,
+            "normal": 50,
+            "threshold": 0.5989989042282104,
+            "before_fp": 31,
+            "after_fp": 32,
+            "both_high": 31,
+            "low_to_high": 1,
+            "high_to_low": 0,
+            "both_low": 18,
+            "mean_before": 2.7924496483802796,
+            "mean_after": 2.330792620331049,
+            "delta": {
+              "mean": -0.4616570280492306,
+              "median": -0.2960700988769531,
+              "p10": -1.346748203039169,
+              "p90": 0.04712152481079104
+            }
+          },
+          "changed_normal": {
+            "frames": 15,
+            "normal": 912,
+            "threshold": 0.5989989042282104,
+            "before_fp": 221,
+            "after_fp": 219,
+            "both_high": 205,
+            "low_to_high": 14,
+            "high_to_low": 16,
+            "both_low": 677,
+            "mean_before": -1.9878252362178868,
+            "mean_after": -2.0552404844610574,
+            "delta": {
+              "mean": -0.06741524824317087,
+              "median": -0.009014129638671875,
+              "p10": -0.7431754529476166,
+              "p90": 0.48030614852905273
+            }
+          }
+        },
+        "validation": {
+          "sparse": {
+            "frames": 10,
+            "normal": 47,
+            "threshold": 0.5989989042282104,
+            "before_fp": 16,
+            "after_fp": 11,
+            "both_high": 11,
+            "low_to_high": 0,
+            "high_to_low": 5,
+            "both_low": 31,
+            "mean_before": 0.7038098748059983,
+            "mean_after": 0.04566331683321202,
+            "delta": {
+              "mean": -0.6581465579727863,
+              "median": -0.4641348123550415,
+              "p10": -1.5059419512748717,
+              "p90": -0.06677136421203614
+            }
+          },
+          "changed_normal": {
+            "frames": 16,
+            "normal": 922,
+            "threshold": 0.5989989042282104,
+            "before_fp": 160,
+            "after_fp": 205,
+            "both_high": 156,
+            "low_to_high": 49,
+            "high_to_low": 4,
+            "both_low": 713,
+            "mean_before": -2.690526280317803,
+            "mean_after": -2.047506197333465,
+            "delta": {
+              "mean": 0.6430200829843379,
+              "median": 0.025453686714172363,
+              "p10": -0.26204652786254884,
+              "p90": 2.6446374237537364
+            }
+          }
+        }
+      }
+    },
+    "paired_scope": "same unchanged valid normal physical returns; original and inserted complete scans; same checkpoint 206 threshold on both sides; partial overlapping witness lists; cross-checkpoint score scales differ",
+    "real_sequence_curves": {
+      "125": {
+        "AP": 22.401025290494488,
+        "FPR95": 3.374748524307475,
+        "at_global_real_threshold": {
+          "tp": 850,
+          "fp": 5442,
+          "normal": 814194,
+          "anomaly": 1005,
+          "threshold": 2.3864710330963135,
+          "FPR": 0.6683910714154121,
+          "recall": 84.57711442786069
+        }
+      },
+      "137": {
+        "AP": 6.801115931294503,
+        "FPR95": 3.2684567842210037,
+        "at_global_real_threshold": {
+          "tp": 78,
+          "fp": 5863,
+          "normal": 805273,
+          "anomaly": 124,
+          "threshold": 2.3864710330963135,
+          "FPR": 0.7280760686127562,
+          "recall": 62.903225806451616
+        }
+      },
+      "138": {
+        "AP": 69.00945005777211,
+        "FPR95": 0.7254517533871168,
+        "at_global_real_threshold": {
+          "tp": 184,
+          "fp": 5171,
+          "normal": 785993,
+          "anomaly": 195,
+          "threshold": 2.3864710330963135,
+          "FPR": 0.6578938998184463,
+          "recall": 94.35897435897436
+        }
+      },
+      "139": {
+        "AP": 60.271394052716445,
+        "FPR95": 0.8852641680308455,
+        "at_global_real_threshold": {
+          "tp": 148,
+          "fp": 9405,
+          "normal": 814898,
+          "anomaly": 152,
+          "threshold": 2.3864710330963135,
+          "FPR": 1.1541321735971863,
+          "recall": 97.36842105263158
+        }
+      },
+      "140": {
+        "AP": 65.06999927152474,
+        "FPR95": 0.25482521193970437,
+        "at_global_real_threshold": {
+          "tp": 147,
+          "fp": 6645,
+          "normal": 844108,
+          "anomaly": 148,
+          "threshold": 2.3864710330963135,
+          "FPR": 0.7872215403716112,
+          "recall": 99.32432432432432
+        }
+      },
+      "141": {
+        "AP": 48.068705065334704,
+        "FPR95": 1.1101265551418833,
+        "at_global_real_threshold": {
+          "tp": 232,
+          "fp": 4617,
+          "normal": 839634,
+          "anomaly": 255,
+          "threshold": 2.3864710330963135,
+          "FPR": 0.5498824487812547,
+          "recall": 90.98039215686275
+        }
+      },
+      "142": {
+        "AP": 1.1760837498397139,
+        "FPR95": 2.991583119549137,
+        "at_global_real_threshold": {
+          "tp": 49,
+          "fp": 4481,
+          "normal": 788178,
+          "anomaly": 112,
+          "threshold": 2.3864710330963135,
+          "FPR": 0.5685263988591409,
+          "recall": 43.75
+        }
+      },
+      "143": {
+        "AP": 77.080810448037,
+        "FPR95": 0.4569299304717099,
+        "at_global_real_threshold": {
+          "tp": 160,
+          "fp": 4905,
+          "normal": 672532,
+          "anomaly": 166,
+          "threshold": 2.3864710330963135,
+          "FPR": 0.7293333254031035,
+          "recall": 96.3855421686747
+        }
+      },
+      "144": {
+        "AP": 70.54927772062757,
+        "FPR95": 0.620264918130626,
+        "at_global_real_threshold": {
+          "tp": 445,
+          "fp": 4740,
+          "normal": 750647,
+          "anomaly": 468,
+          "threshold": 2.3864710330963135,
+          "FPR": 0.6314552645917455,
+          "recall": 95.08547008547009
+        }
+      },
+      "145": {
+        "AP": 64.95518833343186,
+        "FPR95": 1.0011376876532756,
+        "at_global_real_threshold": {
+          "tp": 315,
+          "fp": 4969,
+          "normal": 728671,
+          "anomaly": 344,
+          "threshold": 2.3864710330963135,
+          "FPR": 0.681926411233602,
+          "recall": 91.56976744186046
+        }
+      },
+      "146": {
+        "AP": 47.55598277187694,
+        "FPR95": 2.6559744268077603,
+        "at_global_real_threshold": {
+          "tp": 197,
+          "fp": 6266,
+          "normal": 725760,
+          "anomaly": 230,
+          "threshold": 2.3864710330963135,
+          "FPR": 0.863370811287478,
+          "recall": 85.65217391304348
+        }
+      },
+      "147": {
+        "AP": 68.56735047702841,
+        "FPR95": 0.22893551044139734,
+        "at_global_real_threshold": {
+          "tp": 178,
+          "fp": 6931,
+          "normal": 743004,
+          "anomaly": 183,
+          "threshold": 2.3864710330963135,
+          "FPR": 0.9328348165016608,
+          "recall": 97.26775956284153
+        }
+      },
+      "148": {
+        "AP": 68.24807387394382,
+        "FPR95": 0.24356522798650257,
+        "at_global_real_threshold": {
+          "tp": 200,
+          "fp": 6733,
+          "normal": 804302,
+          "anomaly": 203,
+          "threshold": 2.3864710330963135,
+          "FPR": 0.8371233690827574,
+          "recall": 98.52216748768473
+        }
+      },
+      "149": {
+        "AP": 54.36227888004231,
+        "FPR95": 2.3102272306511766,
+        "at_global_real_threshold": {
+          "tp": 105,
+          "fp": 8702,
+          "normal": 783213,
+          "anomaly": 117,
+          "threshold": 2.3864710330963135,
+          "FPR": 1.1110642954087842,
+          "recall": 89.74358974358974
+        }
+      },
+      "150": {
+        "AP": 58.89389444849633,
+        "FPR95": 1.3461828450793043,
+        "at_global_real_threshold": {
+          "tp": 263,
+          "fp": 7955,
+          "normal": 802417,
+          "anomaly": 284,
+          "threshold": 2.3864710330963135,
+          "FPR": 0.9913797937979878,
+          "recall": 92.6056338028169
+        }
+      },
+      "151": {
+        "AP": 74.80873223986842,
+        "FPR95": 0.23196106628967914,
+        "at_global_real_threshold": {
+          "tp": 169,
+          "fp": 5242,
+          "normal": 738486,
+          "anomaly": 173,
+          "threshold": 2.3864710330963135,
+          "FPR": 0.7098306535262686,
+          "recall": 97.6878612716763
+        }
+      },
+      "152": {
+        "AP": 30.905348998110753,
+        "FPR95": 5.264956203019197,
+        "at_global_real_threshold": {
+          "tp": 87,
+          "fp": 5639,
+          "normal": 772656,
+          "anomaly": 117,
+          "threshold": 2.3864710330963135,
+          "FPR": 0.7298202563624692,
+          "recall": 74.35897435897436
+        }
+      },
+      "153": {
+        "AP": 79.50387758699748,
+        "FPR95": 1.4550905753954355,
+        "at_global_real_threshold": {
+          "tp": 357,
+          "fp": 4261,
+          "normal": 713770,
+          "anomaly": 380,
+          "threshold": 2.3864710330963135,
+          "FPR": 0.5969710130714376,
+          "recall": 93.94736842105263
+        }
+      },
+      "169": {
+        "AP": 1.60111710723325,
+        "FPR95": 7.434618218716403,
+        "at_global_real_threshold": {
+          "tp": 237,
+          "fp": 39331,
+          "normal": 827830,
+          "anomaly": 269,
+          "threshold": 2.3864710330963135,
+          "FPR": 4.7510962395660945,
+          "recall": 88.10408921933086
+        }
+      }
+    },
+    "real_sequence_comparison_vs_micro_256": {
+      "256": {
+        "AP": 17,
+        "FPR95": 19
+      },
+      "1024": {
+        "AP": 19,
+        "FPR95": 19
+      }
+    },
+    "validation_checks": "30 targeted tests passed before execution; all declared point denominators and checkpoint scopes verified; identical initial metric dictionaries; exact request stream; paired identities and transition counts verified; pooled real counts equal sums at the same global threshold; no numerical stop or parameter retry",
+    "resources": {
+      "status": "completed",
+      "requested_updates": 1024,
+      "start_update": 0,
+      "initial_checkpoint": "/home/jasongao/Study/AJAE/results/micro/0.pt",
+      "started_unix": 1789296536.9152694,
+      "host_E_before": {
+        "Size": 484950659072,
+        "SizeRemaining": 65606283264,
+        "reserve_bytes": 10000000000
+      },
+      "estimated_peak_new_bytes": 2322916168,
+      "environment": {
+        "torch": "2.12.0+cu130",
+        "cuda": "13.0",
+        "gpu": "NVIDIA GeForce RTX 5080 Laptop GPU",
+        "gpu_bytes": 17066033152,
+        "cpu_affinity": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          21,
+          22,
+          23
+        ],
+        "torch_threads": 4,
+        "preparation_workers": 2,
+        "transform_cache_bytes_per_worker": 0
+      },
+      "completed_updates": 1024,
+      "host_E_after": {
+        "Size": 484950659072,
+        "SizeRemaining": 65175318528,
+        "reserve_bytes": 10000000000
+      },
+      "seconds": 7402.694240093231,
+      "peak_cuda_allocated_bytes": 5855625216,
+      "output_bytes": 529524286,
+      "output_files": 13,
+      "micro_pair_reference_bytes": 179882
+    },
+    "conclusion": "Broad-pool short learning yields better 201 and real fixed-scope AP/FPR95 than micro 256. At equal 256 updates real ranking improves while 201 worsens; 1024 also increases update budget, so its gains cannot be attributed solely to coverage. Difficult-normal protection remains mixed: 201 sparse false positives decrease, rough and changed-neighborhood false positives increase, and 49 unchanged normals cross upward after insertion at the same checkpoint threshold. This is not a loss or conditioning ablation and does not establish full-val19 performance.",
+    "decision": "Stop at 1024 updates with all evaluations complete. The next bounded mechanism question is mean versus worst retained-normal pairing with identical initialization, requests, budget and scopes, checking normal protection together with recall. Do not automatically execute it or release full formal training."
   }
 }

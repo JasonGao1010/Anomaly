@@ -17,6 +17,34 @@ from src.scene import PointLabels, make_source_frame
 from vendor.stu.compute_point_level_ood import PointOODMetricsCalculator
 
 
+def test_normal_pairs_use_unchanged_slots_and_one_threshold():
+    from src.data import FrozenFrame
+    from src.evaluate import retained_witness_slots, paired_normal_summary
+    xyzi = np.array([[1, 0, 0, .2], [2, 0, 0, .3], [3, 0, 0, .4], [4, 0, 0, .5]], np.float32)
+    semantic = np.full(4, 40, np.uint16)
+    labels = PointLabels(semantic.astype(np.uint32), semantic, np.zeros(4, np.uint16), np.zeros(4, np.uint8))
+    original = make_source_frame(11, xyzi, np.eye(4), labels, partition="train", sequence_id=206)
+    frozen = FrozenFrame(original, "a" * 64, np.zeros(4, bool), np.zeros(4, bool))
+    measured = dict(contrasts=dict(sparse=dict(normal_source_slots=[0, 1, 1])), changed_normal_source_slots=[1, 2, 3])
+    groups = retained_witness_slots(frozen, original, measured)
+    np.testing.assert_array_equal(groups["sparse"], [0, 1])
+    altered = xyzi.copy()
+    altered[1, 3] += .1
+    changed = make_source_frame(11, altered, np.eye(4), labels, partition="train", sequence_id=206)
+    with pytest.raises(ValueError, match="physical return"):
+        retained_witness_slots(FrozenFrame(changed, "a" * 64, np.zeros(4, bool), np.zeros(4, bool)), original, measured)
+    rows = [dict(before=[-2., -1., 0., 1.], after=[-1., 1., -2., 2.])]
+    result = paired_normal_summary(rows, 0.)
+    assert {k: result[k] for k in ("both_low", "low_to_high", "high_to_low", "both_high")} == dict.fromkeys(
+        ("both_low", "low_to_high", "high_to_low", "both_high"), 1)
+    assert result["before_fp"] == result["after_fp"] == 2
+    assert result["delta"]["mean"] == .5
+    assert paired_normal_summary(rows, None)["both_low"] == 4
+    assert paired_normal_summary([], 0.)["delta"] is None
+    with pytest.raises(FloatingPointError):
+        paired_normal_summary([dict(before=[0.], after=[float("nan")])], 0.)
+
+
 def test_fixed_full_labels_keep_zero_and_few_return_frames_and_reuse_threshold(tmp_path, monkeypatch):
     from src.evaluate import fixed_summary, threshold_counts
     monkeypatch.setattr("src.evaluate._evaluation_space", lambda required: None)

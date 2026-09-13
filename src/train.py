@@ -482,21 +482,43 @@ def save_checkpoint(path, payload):
         temporary.unlink(missing_ok=True)
 
 
-def fit(config, data_root, steps, output, resume=None, *, micro=None):
+def load_experiment(path):
+    experiment = json.loads(Path(path).read_text())
+    if experiment.get("format") not in ("ajae-micro-learning", "ajae-short-learning"):
+        raise ValueError("unknown finite-learning declaration")
+    if "selection_from" in experiment:
+        experiment["selection"] = json.loads((PROJECT_ROOT / experiment["selection_from"]).read_text())["selection"]
+    return experiment
+
+
+def validate_initial_state(saved, config, identities):
+    # Only the descriptive scope and the explicitly declared sampling may differ.
+    actual = {k: v for k, v in config.items() if k != "scope"}
+    expected = {k: v for k, v in saved["config"].items() if k != "scope"}
+    if saved["step"] != 0 or saved["optimizer"]["state"]:
+        raise ValueError("fresh learning requires an untrained step-zero state")
+    if actual != expected or saved["samples"] != identities:
+        raise ValueError("initial model, objective, training definition or input identities changed")
+
+
+def fit(config, data_root, steps, output, resume=None, *, experiment=None):
     if steps < 1:
         raise ValueError("training needs a positive explicit update budget")
     output = Path(output)
     if output.exists() and any(output.iterdir()):
         raise ValueError("training output is occupied; resume into an empty output directory")
-    saved = torch.load(resume, map_location="cpu", weights_only=True) if resume is not None else None
+    initial = PROJECT_ROOT / experiment["initial_checkpoint"] if experiment and "initial_checkpoint" in experiment else None
+    state_path = resume if resume is not None else initial
+    saved = torch.load(state_path, map_location="cpu", weights_only=True) if state_path is not None else None
     if saved is not None and (saved.get("format") != "ajae-v1-checkpoint" or "preprocessing" not in saved):
         raise ValueError("resume requires the saved inference preprocessing state")
-    if micro is not None and not 1 <= steps <= micro["maximum_updates"]:
-        raise ValueError("micro learning cannot exceed its declared update budget")
+    if experiment is not None and not 1 <= steps <= experiment["maximum_updates"]:
+        raise ValueError("finite learning cannot exceed its declared update budget")
+    fixed_passes = experiment is not None and experiment["format"] == "ajae-micro-learning"
     dataset = TrainingFrames(config, data_root, preprocessing=saved["preprocessing"] if saved is not None else None,
-                             cache_bytes=2 * 2**30 if micro else 0)
-    selected = select_samples(dataset.dataset, micro["selection"]["train"]) if micro else None
-    probabilities = (None if micro else
+                             cache_bytes=2 * 2**30 if fixed_passes else 0)
+    selected = select_samples(dataset.dataset, experiment["selection"]["train"]) if fixed_passes else None
+    probabilities = (None if fixed_passes else
         dataset.dataset.sampling_probabilities(PROJECT_ROOT / config["training"]["sampling"]))
     torch.manual_seed(config["training"]["seed"])
     model = AJAE(config).cuda()
@@ -507,25 +529,29 @@ def fit(config, data_root, steps, output, resume=None, *, micro=None):
     if resume is not None:
         same_probabilities = (saved["probabilities"] is None if probabilities is None else
                               torch.equal(saved["probabilities"], torch.from_numpy(probabilities)))
-        if (saved["config"] != config or saved.get("micro") != micro
+        if (saved["config"] != config or saved.get("experiment", saved.get("micro")) != experiment
                 or saved["samples"] != identities or not same_probabilities):
             raise ValueError("resume configuration, input order or frame probabilities changed")
+        start = saved["step"]
+        if start >= steps:
+            raise ValueError("explicit budget has no remaining updates")
+    elif saved is not None:
+        validate_initial_state(saved, config, identities)
+    if saved is not None:
         model.load_state_dict(saved["model"], strict=True)
         optimizer.load_state_dict(saved["optimizer"])
         torch.set_rng_state(saved["torch_rng"])
         torch.cuda.set_rng_state_all(saved["cuda_rng"])
-        start = saved["step"]
-        if start >= steps:
-            raise ValueError("explicit budget has no remaining updates")
     # Include retained evaluation states, an emergency state and atomic output overlap.
     disk = host_disk()
-    peak = ((7 if micro else 2) * sum(p.numel() for p in model.parameters()) * 20 + 512_000_000
+    peak = ((7 if experiment else 2) * sum(p.numel() for p in model.parameters()) * 20 + 512_000_000
             + (steps - start) * (512 + 20 * config["training"]["batch_frames"]))
     if peak >= disk["SizeRemaining"] - disk["reserve_bytes"]:
         raise OSError("training checkpoint peak would invade the E: reserve")
     output.mkdir(parents=True, exist_ok=True)
     _atomic_json(output / "config.json", config)
     run = dict(status="running", requested_updates=steps, start_update=start,
+        initial_checkpoint=str(initial) if initial is not None else None,
         started_unix=time.time(), host_E_before=disk, estimated_peak_new_bytes=peak,
         environment=dict(torch=torch.__version__, cuda=torch.version.cuda,
             gpu=torch.cuda.get_device_name(), gpu_bytes=torch.cuda.get_device_properties(0).total_memory,
@@ -534,37 +560,50 @@ def fit(config, data_root, steps, output, resume=None, *, micro=None):
     _atomic_json(output / "run.json", run)
     torch.cuda.reset_peak_memory_stats()
     prepared = None
-    if micro:
+    if experiment:
         from .evaluate import prepare_fixed, evaluate_fixed
-        _atomic_json(output / "selection.json", micro)
-        prepared = prepare_fixed(data_root, micro["selection"])
+        _atomic_json(output / "selection.json", experiment)
+        prepared = prepare_fixed(data_root, experiment["selection"])
         transform = ScanTransform(config, state=dataset.preprocessing, workers=8)
+        diagnostic_indices = prepared["indices"]["train"]
+        exposure = {index: saved.get("diagnostic_exposure", {}).get(index, 0) if resume else 0
+                    for index in diagnostic_indices}
+
+    def save_exposure():
+        if prepared is not None:
+            _atomic_json(output / "exposure.json", dict(
+                scope="actual inserted-world requests for the fixed 206 diagnostic set; membership does not imply exposure",
+                records=[dict(record, sample=index, requests=exposure[index])
+                    for record, index in zip(experiment["selection"]["train"], diagnostic_indices, strict=True)]))
 
     def snapshot(step, failure=None):
         payload = dict(format="ajae-v1-checkpoint", config=config, model=model.state_dict(),
             preprocessing=dataset.preprocessing, optimizer=optimizer.state_dict(), step=step, samples=identities,
             probabilities=None if probabilities is None else torch.from_numpy(probabilities),
-            torch_rng=torch.get_rng_state(), cuda_rng=torch.cuda.get_rng_state_all(), micro=micro)
+            torch_rng=torch.get_rng_state(), cuda_rng=torch.cuda.get_rng_state_all(), experiment=experiment,
+            diagnostic_exposure=exposure if prepared is not None else {})
         if failure is not None:
             payload.update(failure=str(failure), gradients={name: p.grad for name, p in model.named_parameters() if p.grad is not None})
-        save_checkpoint(output / ("failure.pt" if failure is not None else f"{step}.pt" if micro else "model.pt"), payload)
+        save_checkpoint(output / ("failure.pt" if failure is not None else f"{step}.pt" if experiment else "model.pt"), payload)
+        save_exposure()
 
     def evaluate(step):
         with evaluation_state(model):
             result = evaluate_fixed(model, transform, prepared,
-                include_real=step in micro["evaluation"]["real_steps"], directory=output)
+                include_real=step in experiment["evaluation"]["real_steps"], directory=output,
+                include_pairs=step in experiment["evaluation"].get("paired_normal_steps", []))
         _atomic_json(output / f"{step}.json", dict(step=step, checkpoint=f"{step}.pt", **result))
 
     workers = config["training"]["workers"]
     loader = DataLoader(dataset, sampler=Requests(probabilities, config, steps, start, samples=selected),
         batch_size=config["training"]["batch_frames"], num_workers=workers,
         collate_fn=_collate, pin_memory=True, persistent_workers=bool(workers),
-        generator=torch.Generator().manual_seed(config["training"]["seed"] + 83) if micro else None,
+        generator=torch.Generator().manual_seed(config["training"]["seed"] + 83) if experiment else None,
         **(dict(multiprocessing_context="spawn", prefetch_factor=1) if workers else {}))
     model.train()
     completed, rows = start, []
     try:
-        if micro:
+        if experiment:
             snapshot(start)
             evaluate(start)
         with (output / "loss.jsonl").open("a") as log:
@@ -586,6 +625,8 @@ def fit(config, data_root, steps, output, resume=None, *, micro=None):
                 if prepared is not None:
                     hits = dict(normal=0, anomaly=0, active_keep=0)
                     for row in rows:
+                        if row["sample"] in exposure:
+                            exposure[row["sample"]] += 1
                         measured = prepared["geometry"].get((row["world"], row["frame"]))
                         if measured is None:
                             continue
@@ -601,10 +642,10 @@ def fit(config, data_root, steps, output, resume=None, *, micro=None):
                 print(json.dumps(stats), flush=True)
                 if completed % 32 == 0:
                     host_disk()
-                if micro and completed in micro["evaluation"]["synthetic_steps"]:
+                if experiment and completed in experiment["evaluation"]["synthetic_steps"]:
                     snapshot(completed)
                     evaluate(completed)
-                elif completed % config["training"]["save_every"] == 0 or completed == steps:
+                elif (experiment is None and completed % config["training"]["save_every"] == 0) or completed == steps:
                     snapshot(completed)
     except BaseException as error:
         snapshot(completed, failure=error)
@@ -628,17 +669,17 @@ def main():
     parser.add_argument("--steps", type=int)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--resume", type=Path)
-    parser.add_argument("--micro", type=Path, help="fixed micro-learning selection; formal defaults remain unchanged")
+    parser.add_argument("--experiment", type=Path, help="finite-learning declaration; formal defaults remain unchanged")
     parser.add_argument("--sample", type=int, action="append", help="fixed training manifest index for check")
     args = parser.parse_args()
     config = load_config(args.config)
-    micro = json.loads(args.micro.read_text()) if args.micro is not None else None
-    if micro is not None:
-        if args.command != "fit" or micro.get("format") != "ajae-micro-learning":
-            parser.error("--micro only supports a declared micro-learning fit")
+    experiment = load_experiment(args.experiment) if args.experiment is not None else None
+    if experiment is not None:
+        if args.command != "fit":
+            parser.error("--experiment only supports a declared finite-learning fit")
         config = deepcopy(config)
-        config["loss"].update(micro["loss_overrides"])
-        config["scope"] = "Authorized micro task learning; at most 256 updates; no short training or external weights."
+        config["loss"].update(experiment["loss_overrides"])
+        config["scope"] = experiment.get("scope", "Authorized micro task learning; at most 256 updates; no short training or external weights.")
         validate_config(config)
     torch.set_num_threads(4)
     if not torch.cuda.is_available():
@@ -654,7 +695,7 @@ def main():
     else:
         if args.steps is None or args.output is None or args.sample is not None:
             parser.error("fit requires --steps and --output; fixed check samples are not training input")
-        fit(config, args.data_root, args.steps, args.output, args.resume, micro=micro)
+        fit(config, args.data_root, args.steps, args.output, args.resume, experiment=experiment)
 
 
 if __name__ == "__main__":

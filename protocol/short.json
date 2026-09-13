@@ -1,0 +1,26 @@
+{
+  "format": "ajae-short-learning",
+  "base_config": "protocol/model.json",
+  "scope": "Authorized full-pool short learning; at most 1024 updates; no external weights or automatic budget extension.",
+  "question": "Does broader existing training exposure improve fixed development ranking and difficult-normal protection beyond micro learning?",
+  "initial_checkpoint": "results/micro/0.pt",
+  "selection_from": "protocol/micro.json",
+  "sampling": "original 240-world probabilities in results/coverage/sampling.npz; SeedSequence([seed,7,draw]); two complete scans per update",
+  "maximum_updates": 1024,
+  "loss_overrides": {
+    "keep_mode": "mean",
+    "tail_weight": 0
+  },
+  "evaluation": {
+    "synthetic_steps": [0, 256, 512, 1024],
+    "real_steps": [0, 256, 1024],
+    "paired_normal_steps": [1024],
+    "train_scope": "fixed training-source diagnostic set; exact world-frame request counts reported; membership does not imply exposure",
+    "synthetic_targets": "all valid frozen labels including zero-anomaly and fewer-than-five-return frames; official filter secondary",
+    "thresholds": "each checkpoint's complete 206 diagnostic pool chooses the 1% FPR threshold; apply it unchanged to 201, zero-anomaly frames and both scans of each normal pair; real subgroup counts use that checkpoint's pooled real threshold",
+    "paired_reference": "results/micro/256.pt evaluated on the same existing sparse and changed-neighborhood normal witness slots; threshold from results/micro/256.json",
+    "interpretation": "compare short 256 with micro 256 at equal updates; short 1024 changes both sampling exposure and update budget; fixed real 152 is a development subset, not full val19"
+  },
+  "decision": "Evaluate 201 and real AP/FPR95 tradeoffs against micro 256, difficult-normal transitions, 201 middle-return anomalies and real 125. Do not infer useful transfer from training gains alone or automatically extend a stalled development result.",
+  "stop": "after 1024 updates and declared evaluations, or immediately on numerical failure; preserve state; no automatic parameter retry"
+}
