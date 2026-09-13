@@ -1,1 +1,1 @@
-"""Single-scan STU data, evaluation, geometry, and rendering."""
+"""Single-scan STU anomaly detection, data, evaluation, geometry, and rendering."""

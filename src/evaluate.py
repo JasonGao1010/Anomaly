@@ -9,8 +9,8 @@ import tempfile
 
 import numpy as np
 
-from .data import FramePrediction, _atomic_json, host_disk
-from .protocol import load_protocol
+from .data import FramePrediction, FrozenDataset, _atomic_json, host_disk
+from .protocol import PROJECT_ROOT, load_protocol
 from .scene import STUSequence, LabelMode
 from vendor.stu.compute_point_level_ood import PointOODMetricsCalculator
 
@@ -460,13 +460,113 @@ def prediction_frames(data_root, prediction_root, sequence_ids, protocol=None):
             yield frame, FramePrediction.load(path, frame)
 
 
+class ScoreCounts:
+    """Sparse pages of exact float32 ties; memory depends on score range, not point count."""
+
+    def __init__(self, max_bytes=4 * 2**30):
+        self.pages, self.positive, self.negative = {}, 0, 0
+        self.max_bytes = max_bytes
+
+    def add(self, scores, target):
+        packed = packed_scores(scores, target, score_kind="logit")
+        bits = (packed >> 1).astype(np.uint32)
+        pages = bits >> 16
+        order = np.argsort(pages, kind="stable")
+        pages, bits, labels = pages[order], bits[order], (packed[order] & 1).astype(np.int64)
+        starts = np.r_[0, np.flatnonzero(pages[1:] != pages[:-1]) + 1, len(pages)]
+        needed = set(map(int, pages[starts[:-1]])) if len(pages) else set()
+        if len(set(self.pages) | needed) * 65536 * 16 > self.max_bytes:
+            raise MemoryError("exact score counts exceed the declared RAM bound; no scores were quantized")
+        for a, b in zip(starts[:-1], starts[1:], strict=True):
+            if a == b:
+                continue
+            key = int(pages[a])
+            if key not in self.pages:
+                self.pages[key] = np.zeros((2, 65536), np.int64)
+            page = self.pages[key]
+            low = bits[a:b] & 65535
+            np.add.at(page[0], low, 1)
+            np.add.at(page[1], low, labels[a:b])
+        self.positive += int(labels.sum())
+        self.negative += len(labels) - int(labels.sum())
+
+    def groups(self):
+        for key in sorted(self.pages, reverse=True):
+            page = self.pages[key]
+            occupied = np.flatnonzero(page[0])[::-1]
+            yield ((np.uint32(key) << np.uint32(16)) | occupied.astype(np.uint32),
+                   page[0, occupied], page[1, occupied])
+
+    def metrics(self):
+        return metrics_from_groups(self.groups(), positive=self.positive, negative=self.negative, score_kind="logit")
+
+
+def checkpoint_frames(data_root, checkpoint_path, sequence_ids, protocol):
+    import torch
+    from .model import ScanTransform
+    from .train import load_checkpoint
+    torch.set_num_threads(4)
+    model, saved = load_checkpoint(checkpoint_path)
+    model.eval()
+    transform = ScanTransform(saved["config"], workers=8)
+    for identifier in sequence_ids:
+        sequence = STUSequence.open(data_root, protocol=protocol, partition="val",
+                                    sequence_id=identifier, label_mode=LabelMode.REQUIRED)
+        for source in sequence:
+            yield source, model.predict(source, transform)
+
+
+def evaluate_synthetic(data_root, checkpoint_path):
+    """Full 201 pool and official filtering, each with its own global score curve."""
+    import torch
+    from .model import ScanTransform
+    from .train import load_checkpoint
+    torch.set_num_threads(4)
+    model, saved = load_checkpoint(checkpoint_path)
+    model.eval()
+    transform = ScanTransform(saved["config"], workers=8)
+    dataset = FrozenDataset(PROJECT_ROOT / "results/synthetic", data_root, "validation")
+    full, official, eligible = ScoreCounts(), ScoreCounts(), 0
+    for index in range(len(dataset)):
+        frozen = dataset[index]
+        source = frozen.source
+        prediction = model.predict(source, transform)
+        scores = prediction.restore(source)
+        target = frozen.anomaly_target
+        valid = target >= 0
+        full.add(scores[valid], target[valid])
+        _, target, accepted = official_frame(source, prediction)
+        if accepted:
+            valid = target >= 0
+            official.add(scores[valid], target[valid])
+            eligible += 1
+        if (index + 1) % 100 == 0:
+            print(json.dumps(dict(synthetic_frames=index + 1)), flush=True)
+    return dict(source_sequence=201, worlds=len({identity for _, identity, _ in dataset.samples}), world_frames=len(dataset),
+        eligible_world_frames=eligible, full=full.metrics(), official=official.metrics(),
+        full_point_set="all_real_inserted_returns_and_valid_original_normal_targets_without_range_or_frame_filter",
+        official_point_set="official_semantic_distance_and_minimum_anomaly_count_filter",
+        scope="synthetic_validation_with_repeated_source_backgrounds; not_real_STU_validation",
+        checkpoint=str(checkpoint_path.resolve()))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data-root", type=Path, required=True)
-    parser.add_argument("--predictions", type=Path, required=True)
+    inputs = parser.add_mutually_exclusive_group(required=True)
+    inputs.add_argument("--predictions", type=Path)
+    inputs.add_argument("--checkpoint", type=Path)
+    parser.add_argument("--synthetic", action="store_true", help="evaluate complete frozen 201 validation worlds")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--sequence", type=int, action="append")
     args = parser.parse_args()
+    if args.synthetic:
+        if args.checkpoint is None or args.sequence is not None:
+            parser.error("--synthetic requires --checkpoint and uses the fixed 201 world split")
+        result = evaluate_synthetic(args.data_root, args.checkpoint)
+        _atomic_json(args.output / "synthetic.json", result)
+        print(json.dumps(result, indent=2))
+        return
     protocol = load_protocol()
     sequences = tuple(args.sequence) if args.sequence else protocol.public_sequence_ids
     if len(set(sequences)) != len(sequences):
@@ -492,7 +592,8 @@ def main():
             host_disk()
 
     result, _ = evaluate_frames(
-        prediction_frames(args.data_root, args.predictions, sequences, protocol),
+        checkpoint_frames(args.data_root, args.checkpoint, sequences, protocol)
+        if args.checkpoint is not None else prediction_frames(args.data_root, args.predictions, sequences, protocol),
         directory=args.output,
         check_resources=check_resources,
     )
@@ -502,7 +603,8 @@ def main():
         scope="full_public_validation"
         if set(sequences) == set(protocol.public_sequence_ids)
         else "development_subset",
-        prediction_root=str(args.predictions.resolve()),
+        **({"checkpoint": str(args.checkpoint.resolve())} if args.checkpoint is not None
+           else {"prediction_root": str(args.predictions.resolve())}),
     )
     _atomic_json(args.output / "global.json", result)
     print(json.dumps(result, indent=2))

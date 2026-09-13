@@ -1,0 +1,301 @@
+"""AJAE V1: full-scan context and original-return conditional relationships."""
+
+from __future__ import annotations
+
+from copy import deepcopy
+import json
+from pathlib import Path
+
+import numpy as np
+from numba import njit, prange, set_num_threads
+from scipy.spatial import cKDTree
+import torch
+from torch import nn
+from torch.utils.checkpoint import checkpoint
+
+from .data import FramePrediction
+from .protocol import PROJECT_ROOT
+from .render import calibrated_ray_grid
+
+
+def load_config(path=PROJECT_ROOT / "protocol/model.json"):
+    return validate_config(json.loads(Path(path).read_text()))
+
+
+def validate_config(config):
+    if config.get("format") != "ajae-v1" or config["initialization"] != "random_no_external_weights":
+        raise ValueError("expected the current AJAE V1 configuration without external weights")
+    m, t, loss = config["model"], config["training"], config["loss"]
+    if (m["backbone"] != "LitePT-S" or m["relation_mode"] not in {"none", "plain", "conditioned"}
+            or m["radii_m"] != [0.25, 0.75, 2.0]
+            or m["channels"] != 64 or m["relation_layers"] != 2
+            or m["neighbors_per_shell"] < 1 or m["relation_chunk"] < 1
+            or m["backbone_drop_path"] != 0 or m["backbone_shuffle_orders"]):
+        raise ValueError("invalid V1 structure or stochastic paired-scan encoder")
+    if (min(m["voxel_m"], m["radial_scale_m"], m["minimum_sampling_m"]) <= 0
+            or not 1 <= m["scale_minimum_neighbors"] <= m["scale_neighbors"] <= m["neighbors_per_shell"]
+            or not m["radii_m"][0] <= m["scale_radius_m"] <= m["radii_m"][1]):
+        raise ValueError("invalid physical geometry scales")
+    if (t["batch_frames"] < 2 or t["workers"] < 0
+            or min(t[k] for k in ("normal_queries", "anomaly_queries", "keep_queries", "save_every")) < 1
+            or min(t[k] for k in ("learning_rate", "keep_near_m", "gradient_clip")) <= 0
+            or not 0 <= t["keep_near_fraction"] <= 1
+            or t["warmup_steps"] < 0 or t["ramp_steps"] < 1
+            or t["augmentation"] != "none_preserve_physical_sensor_conditions"):
+        raise ValueError("invalid sampling or optimization configuration")
+    if (loss["keep_mode"] not in {"worst", "mean"}
+            or min(loss["keep_weight"], loss["tail_weight"], loss["margin"]) < 0
+            or loss["temperature"] <= 0 or loss["pairs_per_tail"] < 1
+            or any(not 0 < loss[k] <= 1 for k in ("normal_tail_fraction", "anomaly_tail_fraction"))):
+        raise ValueError("invalid task-loss configuration")
+    return config
+
+
+@njit(parallel=True)
+def _shell_neighbors(xyz, first, lower, upper, nodes, permutation, radii2, k):
+    """Exact annular nearest neighbors: prune both outside and fully inside a shell."""
+    n, shells = len(xyz), len(radii2)
+    indices = np.full((n, shells * k), -1, np.int32)
+    distances = np.full((n, shells * k), np.inf)
+    for row in prange(n):
+        stack = np.empty(64, np.int32)
+        stack[0], pending = 0, 1
+        while pending:
+            pending -= 1
+            node = stack[pending]
+            minimum, maximum = 0., 0.
+            for axis in range(3):
+                a, b = lower[node, axis] - xyz[row, axis], upper[node, axis] - xyz[row, axis]
+                minimum += max(a, -b, 0.) ** 2
+                maximum += max(a * a, b * b)
+            possible, inner = False, 0.
+            for shell in range(shells):
+                cap = min(radii2[shell], distances[row, (shell + 1) * k - 1])
+                # A tiny bound cushion avoids pruning an equal-distance tie by roundoff.
+                possible |= minimum <= cap + 1e-12 and maximum + 1e-12 > inner
+                inner = radii2[shell]
+            if not possible:
+                continue
+            left, right, begin, end = nodes[node]
+            if left >= 0:
+                near_left, near_right = 0., 0.
+                for axis in range(3):
+                    near_left += max(lower[left, axis] - xyz[row, axis], xyz[row, axis] - upper[left, axis], 0.) ** 2
+                    near_right += max(lower[right, axis] - xyz[row, axis], xyz[row, axis] - upper[right, axis], 0.) ** 2
+                stack[pending] = right if near_left <= near_right else left
+                stack[pending + 1] = left if near_left <= near_right else right
+                pending += 2
+                continue
+            for pos in range(begin, end):
+                j = permutation[pos]
+                d2 = 0.
+                for axis in range(3):
+                    d2 += (xyz[j, axis] - xyz[row, axis]) ** 2
+                if d2 == 0 or d2 > radii2[-1]:
+                    continue
+                shell = 0
+                while d2 > radii2[shell]:
+                    shell += 1
+                lo, hi, slot = shell * k, (shell + 1) * k - 1, first[j]
+                if d2 > distances[row, hi] or (d2 == distances[row, hi] and slot >= indices[row, hi]):
+                    continue
+                while hi > lo and (d2 < distances[row, hi - 1]
+                                   or (d2 == distances[row, hi - 1] and slot < indices[row, hi - 1])):
+                    distances[row, hi] = distances[row, hi - 1]
+                    indices[row, hi] = indices[row, hi - 1]
+                    hi -= 1
+                distances[row, hi], indices[row, hi] = d2, slot
+    return indices, np.sqrt(distances)
+
+
+def shell_neighbors(xyz, first, radii, k):
+    tree = cKDTree(xyz)
+    lower, upper, nodes = [], [], []
+
+    def visit(node):
+        index = len(nodes)
+        points = xyz[tree.indices[node.start_idx:node.end_idx]]
+        lower.append(points.min(0))
+        upper.append(points.max(0))
+        nodes.append([-1, -1, node.start_idx, node.end_idx])
+        if node.split_dim >= 0:
+            nodes[index][:2] = [visit(node.lesser), visit(node.greater)]
+        return index
+
+    if not len(xyz):
+        return np.empty((0, len(radii) * k), np.int32), np.empty((0, len(radii) * k))
+    visit(tree.tree)
+    return _shell_neighbors(xyz, first.astype(np.int32), np.array(lower), np.array(upper),
+                            np.array(nodes, np.int32), tree.indices, np.square(radii), k)
+
+
+class ScanTransform:
+    """Label-free preprocessing; every nonzero source return retains its own output row."""
+
+    def __init__(self, config, *, workers=1):
+        self.config, self.workers = deepcopy(config["model"]), workers
+        set_num_threads(workers)
+        data = json.loads((PROJECT_ROOT / "protocol/data.json").read_text())
+        grid = calibrated_ray_grid(PROJECT_ROOT / data["calibration"]["rays"])
+        elevations = np.unique(np.sort(grid.beam_elevation_rad))
+        self.elevations = elevations
+        self.elevation_step = np.gradient(elevations)
+        self.azimuth_step = 2 * np.pi / grid.columns
+
+    def __call__(self, source):
+        slots = source.real_slots.copy()
+        xyzi = source.xyzi[slots].copy()
+        xyz = xyzi[:, :3].astype(np.float64)
+        m, n = self.config, len(xyz)
+        unique, first, inverse = np.unique(xyz, axis=0, return_index=True, return_inverse=True)
+        indices, distances = shell_neighbors(unique, first, m["radii_m"], m["neighbors_per_shell"])
+        close = np.sort(np.where(distances <= m["scale_radius_m"], distances, np.inf), axis=1)
+        close = close[:, :m["scale_neighbors"]]
+        count = np.isfinite(close).sum(axis=1)
+        valid = count >= m["scale_minimum_neighbors"]
+        delta = np.zeros(len(unique))
+        for k in range(m["scale_minimum_neighbors"], m["scale_neighbors"] + 1):
+            take = count == k
+            delta[take] = np.median(close[take, :k], axis=1)
+
+        r = np.linalg.norm(xyz, axis=1)
+        u = xyz / r[:, None]
+        rho = np.linalg.norm(u[:, :2], axis=1)
+        az = np.column_stack((-u[:, 1], u[:, 0], np.zeros(n))) / np.maximum(rho[:, None], 1e-12)
+        az[rho < 1e-12] = [0, 1, 0]
+        basis = np.stack((u, az, np.cross(u, az)), axis=2)
+        theta = np.arcsin(np.clip(u[:, 2], -1, 1))
+        beam = np.abs(theta[:, None] - self.elevations).argmin(axis=1)
+        az_m = np.maximum(r * rho * self.azimuth_step, m["minimum_sampling_m"])
+        el_m = np.maximum(r * self.elevation_step[beam], m["minimum_sampling_m"])
+        scales = np.column_stack((np.full(n, m["radial_scale_m"]), az_m, el_m))
+        conditions = np.column_stack((np.log(r), u, np.log(az_m), np.log(el_m), delta[inverse], valid[inverse]))
+
+        grid = np.floor(xyz / m["voxel_m"]).astype(np.int64)
+        cells, voxel_inverse, counts = np.unique(grid, axis=0, return_inverse=True, return_counts=True)
+        voxel_xyzi = np.zeros((len(cells), 4), np.float64)
+        np.add.at(voxel_xyzi, voxel_inverse, xyzi)
+        voxel_xyzi /= counts[:, None]
+        offset = xyz - (grid + .5) * m["voxel_m"]
+        # Shift by a multiple of the entire pooling stride, preserving voxel membership.
+        if len(cells):
+            cells = cells - np.floor_divide(cells.min(axis=0), 16) * 16
+        if np.any(cells >= 65536):
+            raise ValueError("complete scan exceeds LitePT serialization extent; no points were discarded")
+        arrays = dict(xyzi=xyzi, source_slot=slots, point_offset=offset.astype(np.float32),
+            condition=conditions.astype(np.float32), basis=basis.astype(np.float32),
+            sensing_scale=scales.astype(np.float32), neighbors=indices,
+            geometry_inverse=inverse, voxel_inverse=voxel_inverse,
+            voxel_xyzi=voxel_xyzi.astype(np.float32), grid_coord=cells.astype(np.int32))
+        return {k: torch.from_numpy(np.ascontiguousarray(v)) for k, v in arrays.items()}
+
+
+def to_device(scan, device):
+    return {key: value.to(device, non_blocking=True) for key, value in scan.items()}
+
+
+def _mlp(inputs, hidden, outputs):
+    return nn.Sequential(nn.Linear(inputs, hidden), nn.GELU(), nn.Linear(hidden, outputs))
+
+
+class RelationLayer(nn.Module):
+    def __init__(self, channels=64):
+        super().__init__()
+        self.norm = nn.LayerNorm(channels)
+        self.query = nn.Linear(2 * channels, channels)
+        self.key = nn.Linear(2 * channels, channels)
+        self.edge = _mlp(channels + 7, channels, channels)
+        self.modulation = _mlp(16, channels, 2 * channels)
+        self.bias = nn.Linear(channels, 1)
+        self.null = _mlp(2 * channels + 8, channels, 3)
+        self.update = _mlp(5 * channels, 2 * channels, channels)
+
+    def part(self, z, h, scan, query, conditioned):
+        ids = scan["neighbors"][scan["geometry_inverse"][query]].long()
+        valid = ids >= 0
+        ids = ids.clamp_min(0)
+        zi, zj = self.norm(z[query]), self.norm(z[ids])
+        hi, hj = h[query], h[ids]
+        difference = scan["xyzi"][ids, :3] - scan["xyzi"][query, None, :3]
+        ci, cj = scan["condition"][query], scan["condition"][ids]
+        if conditioned:
+            physical = torch.einsum("nkj,njl->nkl", difference, scan["basis"][query])
+            sensing = physical / scan["sensing_scale"][query, None]
+        else:
+            physical = sensing = difference
+            # Same-sized ordinary relation uses learned point features, not sensing descriptors.
+            ci, cj = zi[:, :8], zj[..., :8]
+        intensity = scan["xyzi"][ids, 3:4] - scan["xyzi"][query, None, 3:4]
+        edge = self.edge(torch.cat((physical, sensing, intensity, zj - zi[:, None]), dim=-1))
+        gamma, beta = self.modulation(torch.cat((ci[:, None].expand_as(cj), cj), dim=-1)).chunk(2, dim=-1)
+        values = torch.nn.functional.gelu(edge * (1 + gamma.tanh()) + beta)
+        q, k = self.query(torch.cat((zi, hi), -1)), self.key(torch.cat((zj, hj), -1))
+        scores = (q[:, None] * k).sum(-1) / z.shape[1]**.5 + self.bias(values).squeeze(-1)
+        scores = scores.masked_fill(~valid, -torch.inf).reshape(len(query), 3, -1)
+        null = self.null(torch.cat((zi, hi, ci), -1)).unsqueeze(-1)
+        # Every shell has a finite null logit, including completely unsupported queries.
+        alpha = torch.softmax(torch.cat((scores, null), -1).float(), -1)[..., :-1]
+        values = values.reshape(len(query), 3, -1, z.shape[1])
+        evidence = (alpha[..., None] * values).sum(2).flatten(1)
+        return z[query] + self.update(torch.cat((hi, zi, evidence), -1))
+
+    def forward(self, z, h, scan, query, *, conditioned, chunk, recompute):
+        parts = []
+        for q in query.split(chunk):
+            def compute(z, h, q):
+                return self.part(z, h, scan, q, conditioned)
+            parts.append(checkpoint(compute, z, h, q, use_reentrant=False)
+                         if recompute and self.training and torch.is_grad_enabled()
+                         else compute(z, h, q))
+        return torch.cat(parts) if parts else z[:0]
+
+
+class AJAE(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        validate_config(config)
+        from vendor.litept.model import LitePT
+        self.config = deepcopy(config["model"])
+        m, c = self.config, self.config["channels"]
+        self.backbone = LitePT(in_channels=4, drop_path=m["backbone_drop_path"],
+                               shuffle_orders=m["backbone_shuffle_orders"])
+        self.context = nn.Sequential(nn.Linear(72, c), nn.LayerNorm(c), nn.GELU())
+        self.point = nn.Sequential(nn.Linear(7, c), nn.LayerNorm(c), nn.GELU())
+        self.relations = nn.ModuleList([RelationLayer(c) for _ in range(m["relation_layers"])])
+        self.base_head = _mlp(2 * c + 8, 128, 1)
+        self.relation_head = _mlp(2 * c + 8, 128, 1)
+
+    def forward(self, scan, query=None):
+        n, m = len(scan["xyzi"]), self.config
+        all_rows = torch.arange(n, device=scan["xyzi"].device)
+        query = all_rows if query is None else query
+        if query.ndim != 1 or query.dtype != torch.long or torch.any((query < 0) | (query >= n)):
+            raise ValueError("query rows must address real returns in this complete scan")
+        if not n or not len(query):
+            return scan["xyzi"][:0, 0] + self.base_head[-1].weight.sum() * 0
+        voxels = scan["voxel_xyzi"]
+        encoded = self.backbone(dict(feat=voxels, coord=voxels[:, :3], grid_coord=scan["grid_coord"],
+            offset=torch.tensor([len(voxels)], dtype=torch.long, device=voxels.device)))
+        h = self.context(encoded.feat)[scan["voxel_inverse"]]
+        z = self.point(torch.cat((scan["xyzi"], scan["point_offset"]), -1))
+        base = self.base_head(torch.cat((h[query], z[query], scan["condition"][query]), -1)).squeeze(-1)
+        if m["relation_mode"] == "none":
+            return base.float()
+        for index, layer in enumerate(self.relations):
+            # First-layer support is updated for the full scan, even for sampled loss queries.
+            z = layer(z, h, scan, query if index == len(self.relations) - 1 else all_rows,
+                conditioned=m["relation_mode"] == "conditioned", chunk=m["relation_chunk"],
+                recompute=m["checkpoint_relations"])
+        correction = self.relation_head(torch.cat((h[query], z, scan["condition"][query]), -1)).squeeze(-1)
+        return (base + correction).float()
+
+    @torch.no_grad()
+    def predict(self, source, transform):
+        if self.training:
+            raise ValueError("prediction requires model.eval()")
+        scan = to_device(transform(source), next(self.parameters()).device)
+        scores = self(scan).cpu().numpy()
+        result = FramePrediction(source.partition, source.sequence_id, source.frame_id,
+                                 source.real_slots, scores)
+        result.validate(source)
+        return result

@@ -1,0 +1,51 @@
+{
+  "format": "ajae-v1",
+  "initialization": "random_no_external_weights",
+  "model": {
+    "backbone": "LitePT-S",
+    "channels": 64,
+    "relation_layers": 2,
+    "relation_mode": "conditioned",
+    "voxel_m": 0.05,
+    "radii_m": [0.25, 0.75, 2.0],
+    "neighbors_per_shell": 16,
+    "radial_scale_m": 0.25,
+    "minimum_sampling_m": 0.001,
+    "scale_neighbors": 6,
+    "scale_radius_m": 0.5,
+    "scale_minimum_neighbors": 3,
+    "relation_chunk": 2048,
+    "checkpoint_relations": true,
+    "backbone_drop_path": 0.0,
+    "backbone_shuffle_orders": false
+  },
+  "training": {
+    "seed": 20260913,
+    "batch_frames": 2,
+    "workers": 2,
+    "learning_rate": 0.0002,
+    "weight_decay": 0.01,
+    "gradient_clip": 1.0,
+    "normal_queries": 8192,
+    "anomaly_queries": 2048,
+    "keep_queries": 1024,
+    "keep_near_fraction": 0.5,
+    "keep_near_m": 2.0,
+    "warmup_steps": 100,
+    "ramp_steps": 100,
+    "save_every": 1000,
+    "sampling": "results/coverage/sampling.npz",
+    "augmentation": "none_preserve_physical_sensor_conditions"
+  },
+  "loss": {
+    "keep_weight": 1.0,
+    "tail_weight": 1.0,
+    "keep_mode": "worst",
+    "normal_tail_fraction": 0.01,
+    "anomaly_tail_fraction": 0.1,
+    "margin": 1.0,
+    "temperature": 1.0,
+    "pairs_per_tail": 4096
+  },
+  "scope": "Implementation starting values, not tuned or validated detection settings. Training budget must be supplied explicitly. No training has been authorized in this implementation round."
+}

@@ -1,13 +1,13 @@
 {
   "format": "stu-single-frame",
   "schema_version": 1,
-  "research_question": "Using only the current scan, do observable local geometries distinguish anomaly labels from complex normal structures, does conditioning their normal reference on observable conditions improve discrimination, and can the existing synthetic training examples teach the model which differences have anomaly meaning?",
+  "research_question": "Using only the complete current scan, can scene-supported observation-conditioned relationships on original returns improve real anomaly-versus-normal ranking over the same backbone and ordinary relationships, and do retained-normal pairing and live-batch tail ranking add transferable benefits?",
   "status": {
-    "stage": "declared_data_coverage_accepted",
-    "active_work": "none_targeted_data_repair_completed",
-    "model_defined": false,
-    "training_defined": false,
-    "formal_ajae_v1": "not_designed_or_implemented",
+    "stage": "formal_v1_implemented_not_trained",
+    "active_work": "implementation_validation_complete_training_requires_user_instruction",
+    "model_defined": true,
+    "training_defined": true,
+    "formal_ajae_v1": "context_supported_conditional_return_relationship_network",
     "legacy_prototype": "retired_model_training_and_run_assets_removed",
     "data_tools": "data.json",
     "synthetic_dataset_frozen": true,
@@ -34,9 +34,9 @@
     "synthetic_geometry_conclusion": "nonextreme_anomalies_and_complex_original_normals_exist_insertion_changes_retained_normal_neighborhoods_and_sparse_geometry_has_condition_dependent_missingness",
     "coverage_closure_completed": true,
     "coverage_closure_evidence": "results/coverage/summary.json",
-    "coverage_decision": "all_original_core_checks_exact_30_cell_quotas_and_sampling_exposure_requirements_passed; no_model_design_or_training",
+    "coverage_decision": "all_original_core_checks_exact_30_cell_quotas_and_sampling_exposure_requirements_passed; data_unchanged_by_model_implementation",
     "coverage_boundaries": "one_normal_source_per_split; sparse_normal_nonextreme_train_region_share_0.4997728305_near_0.5_limit; selected_geometry_scope_and_missingness; weak_background_change_is_not_self_occlusion; no_universal_coverage_claim",
-    "next_stage": "await_explicit_model_design_instruction; no_automatic_generation_or_training",
+    "next_stage": "await_explicit_training_budget_and_initialization_decision; no_automatic_training_or_external_weights",
     "data_preparation_accepted": true,
     "original_pool_summary_completed": true,
     "balanced_pool_target": {
@@ -141,7 +141,10 @@
           "failures": []
         }
       }
-    }
+    },
+    "formal_v1_training_executed": false,
+    "formal_v1_evaluation_executed": false,
+    "model_configuration": "model.json"
   },
   "data": {
     "normal_sources": [
@@ -678,6 +681,81 @@
           "train": 30,
           "validation": 30
         }
+      }
+    }
+  },
+  "method": {
+    "implementation": "src/model.py; src/train.py; src/evaluate.py",
+    "configuration": "protocol/model.json",
+    "initialization": "random_only; no_external_pretrained_weights_downloaded_or_used",
+    "input": "complete_current_sensor_XYZI; labels_poses_original_normal_scan_and_insertion_masks_do_not_enter_inference",
+    "context": "LitePT-S_at_0.05m_voxels; every_real_return_contributes_to_voxel_mean; context_72_to_64",
+    "original_returns": "XYZI_and_offset_from_fixed_voxel_cell_center_to_64; original_rows_retained_even_for_duplicate_coordinates",
+    "relationships": "two_64_channel_layers; nearest_16_distinct_positions_in_each_disjoint_shell_(0,0.25]_(0.25,0.75]_(0.75,2]m; same_distance_ties_use_first_source_row; all_scan_support_even_for_sampled_loss_queries",
+    "conditions": "log_range_ray_unit_direction_log_nominal_azimuth_and_elevation_spacing_empirical_neighbor_median_and_validity; nominal_angles_from_fixed_206_ray_calibration",
+    "geometry": "retain_ray_basis_physical_displacement_and_sampling_scaled_displacement; one_learned_null_alternative_per_shell; no_normal_reference_rarity_or_geometric_regression_targets",
+    "score": "base_detection_logit_plus_relationship_residual; every_real_return_gets_a_finite_float32_score; no_frame_normalization_or_semantic_veto",
+    "detection_loss": "0.5*mean_normal_softplus(s)+0.5*mean_anomaly_softplus(-s); an_absent_class_contributes_zero; ignore_excluded",
+    "keep_loss": "mean_max(softplus(s_before),softplus(s_after))_on_exact_retained_normal_slots; replacement_and_occlusion_excluded; mean_pair_loss_available_as_extra_normal_supervision_control",
+    "tail_loss": "two_equal_weight_live_batch_pair_losses_softplus((margin+s_normal-s_anomaly)/temperature); high_1percent_normal_and_low_10percent_anomaly; pooled_across_source_frames; sampled_4096_pairs_per_tail; no_stale_predictions_or_unbiased_metric_gradient_claim",
+    "sampling": "existing_results/coverage/sampling.npz_frame_probabilities; uniform_class_queries_per_draw; 8192_normal_2048_anomaly_caps; 1024_retained_normals_half_within_2m_of_changed_returns_when_available; no_resampling_return_signals",
+    "paired_controls": "none_plain_conditioned_share_initial_parameter_draws; plain_uses_cartesian_displacements_and_first_8_learned_point_channels_instead_of_explicit_sensing_inputs; base_head_receives_conditions_in_all_variants; loss_switches_preserve_world_frame_and_query_random_streams",
+    "resource_strategy": "2_live_source_frames; whole_scan_and_relationship_recomputation; BatchNorm_buffers_restored_after_recomputation; 2_preparation_workers; no_persistent_geometry_cache",
+    "evaluation": "same_official_val19_point_pool_and_exact_float32_ties; own_global_thresholds; 201_full_and_official_filtered_results_reported_separately; no_geometry_reliability_filter",
+    "interpretation": "all_hyperparameters_are_implementation_starting_values; no_real_transfer_improvement_novelty_or_metric_optimality_established",
+    "implementation_verification": {
+      "date": "2026-09-13",
+      "command": "python -m src.train check",
+      "optimizer_steps": 0,
+      "checkpoint_saved": false,
+      "train_frames": [
+        161,
+        162
+      ],
+      "world": "train/branched_low_rough_1",
+      "full_input_returns": [
+        126132,
+        126280
+      ],
+      "normal_queries": 16384,
+      "anomaly_queries": 98,
+      "retained_normal_pairs": 2048,
+      "tail_pairs": 8192,
+      "cross_frame_tail_pairs": 4113,
+      "parameters": 12931078,
+      "parameters_with_finite_gradients": 12931078,
+      "forward_backward_seconds_warm": 18.4632551639952,
+      "peak_cuda_allocated_bytes": 4666688000,
+      "all_point_vs_query_subset_max_absolute_error": 1.1920928955078125e-07,
+      "synthetic_201_161_input_and_output_returns": 118724,
+      "unlabelled_val_125_25_input_and_output_returns": 125511,
+      "evaluation_scope": "finite_full_scan_prediction_and_identity_only; no_detection_metrics_or_training",
+      "preparation_seconds_cold": 2.3231892969997716,
+      "preparation_seconds_warm": 0.6198681159949047,
+      "preparation_cpu_workers": 12,
+      "worker_check": "2_spawn_workers_and_serial_loading_produced_identical_query_and_slot_sets_for_training_samples_86396_and_66086; probabilities_sum_1.0",
+      "device": "NVIDIA GeForce RTX 5080 Laptop GPU, 16 GB",
+      "torch": "2.12.0+cu130",
+      "spconv": "2.3.8",
+      "flash_attn": "2.8.3.post1",
+      "torch_scatter": "2.1.2+pt212cu130",
+      "numerical_limit": "sparse_GPU_reductions_are_not_claimed_bitwise_reproducible_across_runs_or_environments",
+      "issues_resolved": [
+        "installed_native_PointROPE_has_no_SM120_kernel; use_upstream_pure_PyTorch_rotation_formula",
+        "all_radius_candidate_enumeration_was_slow; exact_annular_KD_tree_pruning_matches_exhaustive_reference",
+        "four_retained_forward_graphs_approached_16GB_device_capacity; interrupted_dry_check_and_added_mathematically_equivalent_recomputation"
+      ],
+      "not_executed": [
+        "optimizer_updates",
+        "training_resume_run",
+        "full_synthetic_or_val19_model_evaluation",
+        "external_pretraining"
+      ],
+      "regression": {
+        "command": "python -m pytest -q -p no:cacheprovider",
+        "passed": 76,
+        "seconds": 26.09,
+        "warning": "third_party_ccimport_locale.getdefaultlocale_deprecation; no_font_or_numeric_warning"
       }
     }
   }

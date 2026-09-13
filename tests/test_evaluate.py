@@ -17,6 +17,19 @@ from src.scene import PointLabels, make_source_frame
 from vendor.stu.compute_point_level_ood import PointOODMetricsCalculator
 
 
+def test_paged_exact_counts_match_pooled_ties_and_preserve_signed_scores():
+    from src.evaluate import ScoreCounts
+    scores = np.array([-80, -4, -0., 0., 4, 80, 81, 81] * 13, np.float32)
+    target = (np.arange(len(scores)) % 7 < 3).astype(np.int64)
+    counts = ScoreCounts()
+    for rows in np.array_split(np.arange(len(scores)), 7):
+        counts.add(scores[rows], target[rows])
+    assert counts.metrics() == exact_metrics(np.sort(packed_scores(scores, target, score_kind="logit")), score_kind="logit")
+    counts.add(np.array([], np.float32), np.array([], np.int64))
+    with pytest.raises(MemoryError):
+        ScoreCounts(max_bytes=1).add(scores, target)
+
+
 def test_signed_logit_pooling_preserves_unsaturated_order_and_zero_threshold(tmp_path):
     from sklearn.metrics import average_precision_score, roc_auc_score
     from src.evaluate import bits_score

@@ -3,7 +3,7 @@
   "version": 1,
   "base_protocol": "spec.json",
   "seed": 2062026,
-  "scope": "现有240／120世界已通过预先声明的数据覆盖验收，每格8／4；模型设计继续暂停，不自动扩充或训练。",
+  "scope": "现有240／120世界已通过预先声明的数据覆盖验收，每格8／4；本文件只定义数据与诊断。正式模型及任务损失见model.json，尚未训练；不自动扩充样本。",
   "visualization": {
     "projection": "rectilinear_perspective",
     "camera": {
