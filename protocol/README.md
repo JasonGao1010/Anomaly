@@ -35,7 +35,7 @@ PYTHONDONTWRITEBYTECODE=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREA
   .venv/bin/python -m src.train fit --experiment protocol/long.json --steps 32000 --output results/train
 ```
 
-实际运行及阶段完成状态以 `results/train/run.json` 和对应步数结果为准，不能将声明中的未来节点视为已完成实验。
+长训已从共同0步状态启动并真实更新，执行代码提交为 `95f68d8`。新0步参数、缓冲、空优化器、CPU／GPU随机状态及样本概率与共同初态一致。实际运行及阶段完成状态以 `results/train/run.json`、`loss.jsonl` 和对应步数结果为准；进度日志为 `run.log`，不能将未来节点视为已完成实验。
 
 ## 平均与最差正常配对对照（历史，按用户要求提前收口）
 

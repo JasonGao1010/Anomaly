@@ -3,8 +3,8 @@
   "schema_version": 1,
   "research_question": "Using only the complete current scan, can scene-supported observation-conditioned relationships on original returns learn transferable anomaly-versus-normal ranking? The current main method uses detection plus mean retained-normal pairing; independent mechanism attribution remains a later controlled comparison.",
   "status": {
-    "stage": "formal_v1_continuous_full_pool_training_authorized",
-    "active_work": "launch one continuous mean-pairing trajectory from saved step zero; no completion or repeat of the stopped worst control required",
+    "stage": "formal_v1_continuous_full_pool_training_running",
+    "active_work": "one authorized mean-pairing trajectory running from the common step-zero state; complete evaluation at4000/8000/16000/32000",
     "model_defined": true,
     "training_defined": true,
     "formal_ajae_v1": "context_supported_conditional_return_relationship_network",
@@ -144,11 +144,12 @@
     },
     "model_configuration": "model.json",
     "formal_v1_full_training_ready": true,
-    "formal_default_full_training_executed": false,
+    "formal_default_full_training_executed": true,
     "full_val19_model_evaluation_executed": true,
     "finite_learning_executed": true,
     "fixed_development_model_evaluation_executed": true,
-    "formal_full_training_authorized": true
+    "formal_full_training_authorized": true,
+    "formal_full_training_completed": false
   },
   "data": {
     "normal_sources": [
@@ -3794,7 +3795,7 @@
   "long_training": {
     "declaration": "protocol/long.json",
     "output": "results/train",
-    "status": "authorized_ready_to_launch",
+    "status": "running",
     "initial_checkpoint": "results/short/0.pt",
     "maximum_updates": 32000,
     "cumulative_nodes": [
@@ -3921,7 +3922,9 @@
       "preparation_and_repeated_scores": "bitwise equal on four actual scans; original workers8 versus workers4",
       "weighted_counts": "identical integer ties and operating counts; metrics agree within original1e-10 tolerance; diagnostic fixture not new detection evidence",
       "actual_queries": "first and fourth original draws match directly reused selections; global torch/numpy/python RNG unchanged",
-      "shared_initial": "effective model/loss/training configuration, input identities and full frame probabilities match saved0; only descriptive scope differs"
+      "shared_initial": "effective model/loss/training configuration, input identities and full frame probabilities match saved0; only descriptive scope differs",
+      "saved_initial_state": "new0.pt compared with short/0.pt: every parameter and buffer, empty optimizer, CPU/CUDA RNG, samples and probabilities identical; effective mean/tail0 confirmed",
+      "observed_launch": "finite actual updates recorded; this validates launch only, not the eventual32k scientific result"
     },
     "resources": {
       "cpu_available": 24,
@@ -3939,6 +3942,14 @@
       "unchanged_world_frames": 44563,
       "changed_world_frames": 37277,
       "scope": "within one checkpoint and saved calibration; unchanged source predictions retain each worlds exact integer multiplicity; occlusion-only scans never treated as unchanged"
-    }
+    },
+    "execution_commit": "95f68d8",
+    "pid": 50525,
+    "started_utc": "2026-09-13T19:39:41.563046+00:00",
+    "launch_verified_updates": 21,
+    "completed": false,
+    "live_status": "results/train/run.json; exact last optimized step and draws in results/train/loss.jsonl",
+    "runtime_log": "results/train/run.log",
+    "planned_checkpoint_and_staging_peak_bytes": 4478600128
   }
 }
