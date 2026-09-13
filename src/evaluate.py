@@ -12,7 +12,7 @@ import tempfile
 import numpy as np
 from numba import njit
 
-from .data import FramePrediction, FrozenDataset, _atomic_json, host_disk
+from .data import FramePrediction, FrozenDataset, _atomic_json, host_disk, source_identity
 from .protocol import PROJECT_ROOT, load_protocol
 from .scene import STUSequence, LabelMode
 from vendor.stu.compute_point_level_ood import PointOODMetricsCalculator
@@ -704,6 +704,134 @@ def checkpoint_frames(data_root, checkpoint_path, sequence_ids, protocol):
             yield source, model.predict(source, transform)
 
 
+def prepare_fixed(data_root, selection):
+    """Resolve the declared frames and reuse only existing geometric witness records."""
+    from .train import select_samples
+    datasets, indices = {}, {}
+    for split in ("train", "validation"):
+        datasets[split] = FrozenDataset(PROJECT_ROOT / "results/synthetic", data_root, split)
+        indices[split] = select_samples(datasets[split], selection[split])
+        for record in selection[split]:
+            if source_identity(datasets[split].sequence[record["frame"]]) != record["source_identity"]:
+                raise ValueError("fixed synthetic selection refers to a changed original scan")
+    wanted = {(r["identity"], r["source_identity"]) for split in datasets for r in selection[split]}
+    cached = json.loads((PROJECT_ROOT / "results/coverage/geometry.json").read_text())
+    measured = {(r["world_identity"], r["source_identity"]): r for r in cached["observations"]
+                if (r["world_identity"], r["source_identity"]) in wanted}
+    geometry = {(r["identity"], r["frame"]): measured[(r["identity"], r["source_identity"])]
+                for split in datasets for r in selection[split]
+                if (r["identity"], r["source_identity"]) in measured}
+    protocol = load_protocol()
+    sequences = {key: STUSequence.open(data_root, protocol=protocol, partition="val",
+        sequence_id=int(key), label_mode=LabelMode.REQUIRED) for key in selection["val"]}
+    for key, frames in selection["val"].items():
+        if len(set(frames)) != len(frames) or any(frame not in sequences[key].frame_ids for frame in frames):
+            raise ValueError("fixed real selection contains duplicate or nonexistent frames")
+    return dict(selection=selection, datasets=datasets, indices=indices, geometry=geometry, sequences=sequences)
+
+
+def fixed_summary(rows, *, directory=None):
+    """Pool complete valid labels; report the common half-weighted detection objective."""
+    sums, totals, logits = np.zeros(2), np.zeros(2, np.int64), np.zeros(2)
+    with ScoreCounts(directory=directory, check_resources=_evaluation_space) as counts:
+        for row in rows:
+            scores, target = row["scores"], row["target"]
+            valid = target >= 0
+            counts.add(scores[valid], target[valid])
+            for label in (0, 1):
+                values = scores[target == label].astype(np.float64)
+                totals[label] += len(values)
+                logits[label] += values.sum()
+                sums[label] += np.logaddexp(0., (1 - 2 * label) * values).sum()
+        result = counts.metrics()
+    means = [sums[k] / totals[k] if totals[k] else 0. for k in (0, 1)]
+    result.update(detection_loss=.5 * sum(means), normal_loss=means[0], anomaly_loss=means[1],
+        mean_score={name: float(logits[k] / totals[k]) if totals[k] else None
+                    for k, name in enumerate(("normal", "anomaly"))}, frames=len(rows))
+    return result
+
+
+def threshold_counts(rows, threshold):
+    """A missing pooled operating threshold means no positive predictions."""
+    counts = dict(tp=0, fp=0, normal=0, anomaly=0)
+    for row in rows:
+        target, scores = row["target"], row["scores"]
+        positive = scores >= threshold if threshold is not None else np.zeros(len(scores), bool)
+        counts["tp"] += int(((target == 1) & positive).sum())
+        counts["fp"] += int(((target == 0) & positive).sum())
+        counts["normal"] += int((target == 0).sum())
+        counts["anomaly"] += int((target == 1).sum())
+    return dict(counts, threshold=threshold,
+        FPR=100 * counts["fp"] / counts["normal"] if counts["normal"] else None,
+        recall=100 * counts["tp"] / counts["anomaly"] if counts["anomaly"] else None)
+
+
+def evaluate_fixed(model, transform, prepared, *, include_real=False, directory=None):
+    """Fixed development scopes; callers preserve the training state around evaluation."""
+    if model.training:
+        raise ValueError("fixed evaluation requires inference mode")
+    import time
+    started = time.perf_counter()
+    result, train_threshold = {}, None
+    for split in ("train", "validation"):
+        rows, official, witness = [], [], {name: [] for name in ("smooth", "rough", "sparse", "changed_normal")}
+        records = prepared["selection"][split]
+        for record, index in zip(records, prepared["indices"][split], strict=True):
+            frozen = prepared["datasets"][split][index]
+            scores = model.predict(frozen.source, transform).restore(frozen.source)
+            target, _ = synthetic_targets(frozen)
+            row = dict(scores=scores, target=target, role=record["role"], world=record["identity"], frame=record["frame"])
+            rows.append(row)
+            filtered, eligible = synthetic_targets(frozen, official=True)
+            if eligible:
+                official.append(dict(row, target=filtered))
+            measured = prepared["geometry"].get((record["identity"], record["frame"]))
+            if measured is not None:
+                for name in witness:
+                    slots = (measured["changed_normal_source_slots"] if name == "changed_normal" else
+                        measured["contrasts"][name]["normal_source_slots"] + measured["contrasts"][name]["central_anomaly_slots"])
+                    slots = np.unique(np.asarray(slots, np.int64))
+                    if len(slots):
+                        witness[name].append(dict(scores=scores[slots], target=target[slots]))
+        full = fixed_summary(rows, directory=directory)
+        if split == "train":
+            train_threshold = full["recall_at_fpr_limit"]["threshold"]
+        roles = {}
+        for role in sorted({r["role"] for r in rows}):
+            group = [r for r in rows if r["role"] == role]
+            roles[role] = dict(curve=fixed_summary(group, directory=directory),
+                              at_training_threshold=threshold_counts(group, train_threshold))
+        result[split] = dict(full=full, official=fixed_summary(official, directory=directory),
+            at_training_threshold=threshold_counts(rows, train_threshold),
+            zero_anomaly=threshold_counts([r for r in rows if not np.any(r["target"] == 1)], train_threshold),
+            roles=roles, witnesses={name: dict(curve=fixed_summary(group, directory=directory),
+                at_training_threshold=threshold_counts(group, train_threshold)) for name, group in witness.items()},
+            scope="full valid synthetic labels include zero-anomaly and fewer-than-five-return frames; role curves use their own point pools; all reported group counts use the same 206 full-pool threshold",
+            witness_scope="existing measured slot lists only; not all complex normals; absent geometry is unmeasured")
+        print(json.dumps(dict(event="fixed_evaluation", split=split, detection_loss=full["detection_loss"],
+            AP=full["AP"], FPR95=full["FPR95"], frames=len(rows))), flush=True)
+    if include_real:
+        rows = []
+        for key, frames in prepared["selection"]["val"].items():
+            for frame in frames:
+                source = prepared["sequences"][key][frame]
+                scores, target, eligible = official_frame(source, model.predict(source, transform))
+                if not eligible:
+                    raise ValueError(f"predeclared real frame {key}/{frame} is no longer official-eligible")
+                rows.append(dict(scores=scores, target=target, sequence=int(key)))
+        full = fixed_summary(rows, directory=directory)
+        own_threshold = full["recall_at_fpr_limit"]["threshold"]
+        result["val"] = dict(full=full, at_training_threshold=threshold_counts(rows, train_threshold),
+            sequences={key: dict(curve=fixed_summary([r for r in rows if r["sequence"] == int(key)], directory=directory),
+                at_global_real_threshold=threshold_counts([r for r in rows if r["sequence"] == int(key)], own_threshold))
+                for key in prepared["selection"]["val"]},
+            scope="predeclared 152-frame development subset; each complete official point pool retained; not full val19")
+        print(json.dumps(dict(event="fixed_evaluation", split="val", detection_loss=full["detection_loss"],
+            AP=full["AP"], FPR95=full["FPR95"], frames=len(rows))), flush=True)
+    result["seconds"] = time.perf_counter() - started
+    return result
+
+
 def evaluate_synthetic(data_root, checkpoint_path, *, directory=None):
     """Full 201 pool and official filtering, each with its own global score curve."""
     import torch
@@ -760,9 +888,30 @@ def main():
     inputs.add_argument("--predictions", type=Path)
     inputs.add_argument("--checkpoint", type=Path)
     parser.add_argument("--synthetic", action="store_true", help="evaluate complete frozen 201 validation worlds")
+    parser.add_argument("--fixed", type=Path, help="evaluate a declared micro-learning checkpoint scope")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--sequence", type=int, action="append")
     args = parser.parse_args()
+    if args.fixed is not None:
+        if args.checkpoint is None or args.synthetic or args.sequence is not None:
+            parser.error("--fixed requires --checkpoint and its declared development selection")
+        import torch
+        from .model import ScanTransform
+        from .train import load_checkpoint, evaluation_state
+        declaration = json.loads(args.fixed.read_text())
+        torch.set_num_threads(4)
+        model, saved = load_checkpoint(args.checkpoint)
+        if saved.get("micro") != declaration:
+            parser.error("fixed evaluation declaration differs from the saved experiment")
+        prepared = prepare_fixed(args.data_root, declaration["selection"])
+        transform = ScanTransform(saved["config"], state=saved["preprocessing"], workers=8)
+        args.output.mkdir(parents=True, exist_ok=True)
+        with evaluation_state(model):
+            result = evaluate_fixed(model, transform, prepared, directory=args.output,
+                include_real=saved["step"] in declaration["evaluation"]["real_steps"])
+        _atomic_json(args.output / f'{saved["step"]}.json',
+            dict(step=saved["step"], checkpoint=str(args.checkpoint.resolve()), **result))
+        return
     if args.synthetic:
         if args.checkpoint is None or args.sequence is not None:
             parser.error("--synthetic requires --checkpoint and uses the fixed 201 world split")

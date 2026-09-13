@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import argparse
 from collections import OrderedDict
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
+from copy import deepcopy
 import json
 import math
+import os
 from pathlib import Path
+import random
 import time
 
 import numpy as np
@@ -18,7 +21,7 @@ from torch.utils.data import DataLoader
 from torch.utils.checkpoint import checkpoint
 
 from .data import FrozenDataset, FrozenFrame, _atomic_json, host_disk, source_identity
-from .model import AJAE, ScanTransform, load_config, to_device
+from .model import AJAE, ScanTransform, load_config, to_device, validate_config
 from .protocol import PROJECT_ROOT
 
 
@@ -112,12 +115,28 @@ def query_rows(frozen, original, config, rng):
 
 
 class TrainingFrames:
-    def __init__(self, config, data_root, *, preprocessing=None):
+    def __init__(self, config, data_root, *, preprocessing=None, cache_bytes=0):
         self.config = config
         self.dataset = FrozenDataset(PROJECT_ROOT / "results/synthetic", data_root, "train")
         self.preprocessing = ScanTransform(config, state=preprocessing).state_dict()
         self.transform = None
         self.originals = OrderedDict()
+        self.cache, self.cache_bytes, self.cached_bytes = OrderedDict(), cache_bytes, 0
+
+    def scan(self, source, key):
+        # The cache belongs to one frozen dataset, config and calibration instance.
+        if key in self.cache:
+            self.cache.move_to_end(key)
+            return self.cache[key]
+        result = self.transform(source)
+        size = sum(t.numel() * t.element_size() for t in result.values())
+        if size <= self.cache_bytes:
+            while self.cached_bytes + size > self.cache_bytes:
+                _, old = self.cache.popitem(last=False)
+                self.cached_bytes -= sum(t.numel() * t.element_size() for t in old.values())
+            self.cache[key] = result
+            self.cached_bytes += size
+        return result
 
     def queries(self, index, draw):
         path, identity, frame = self.dataset.samples[index]
@@ -137,31 +156,47 @@ class TrainingFrames:
         if need_original and len(queries["original_query"]):
             key = source_identity(original)
             if key not in self.originals:
-                self.originals[key] = self.transform(original)
+                self.originals[key] = self.scan(original, ("original", key))
                 if len(self.originals) > 2:
                     self.originals.popitem(last=False)
             self.originals.move_to_end(key)
             before = self.originals[key]
         unchanged_scan = not (frozen.inserted_mask | frozen.occluded_original_mask).any()
-        scan = before if before is not None and unchanged_scan else self.transform(frozen.source)
+        scan = before if before is not None and unchanged_scan else self.scan(frozen.source, (identity, frame))
         return dict(scan=scan, original=before, **queries,
             frame=frame, world=identity, draw=draw, sample=index)
 
 
 class Requests:
-    def __init__(self, probabilities, config, steps, start=0):
-        self.cdf = np.cumsum(probabilities)
-        self.cdf[-1] = 1.
+    def __init__(self, probabilities, config, steps, start=0, *, samples=None):
+        self.samples = None if samples is None else np.asarray(samples, dtype=np.int64)
+        if self.samples is not None and (not len(self.samples) or len(set(self.samples)) != len(self.samples)
+                or len(self.samples) % config["training"]["batch_frames"]):
+            raise ValueError("fixed sampling needs unique complete batches")
+        self.cdf = None if samples is not None else np.cumsum(probabilities)
+        if self.cdf is not None:
+            self.cdf[-1] = 1.
         self.config, self.steps, self.start = config, steps, start
 
     def __iter__(self):
         t, loss = self.config["training"], self.config["loss"]
+        epoch, order = None, None
         for step in range(self.start, self.steps):
             need = loss["keep_weight"] > 0 and auxiliary_fraction(step, t) > 0
+            if self.samples is not None:
+                current = step * t["batch_frames"] // len(self.samples)
+                if current != epoch:
+                    epoch = current
+                    rng = np.random.default_rng(np.random.SeedSequence([t["seed"], 79, epoch]))
+                    order = rng.permutation(self.samples)
             for offset in range(t["batch_frames"]):
                 draw = step * t["batch_frames"] + offset
-                rng = np.random.default_rng(np.random.SeedSequence([t["seed"], 7, draw]))
-                yield int(np.searchsorted(self.cdf, rng.random(), side="right")), draw, need
+                if order is None:
+                    rng = np.random.default_rng(np.random.SeedSequence([t["seed"], 7, draw]))
+                    sample = int(np.searchsorted(self.cdf, rng.random(), side="right"))
+                else:
+                    sample = int(order[draw % len(order)])
+                yield sample, draw, need
 
     def __len__(self):
         return (self.steps - self.start) * self.config["training"]["batch_frames"]
@@ -169,6 +204,14 @@ class Requests:
 
 def _collate(rows):
     return rows
+
+
+def select_samples(dataset, records):
+    lookup = {(world, frame): i for i, (_, world, frame) in enumerate(dataset.samples)}
+    keys = [(r["identity"], r["frame"]) for r in records]
+    if len(set(keys)) != len(keys) or any(k not in lookup for k in keys):
+        raise ValueError("fixed sample identities must uniquely belong to this frozen split")
+    return [lookup[k] for k in keys]
 
 
 class _preserve_buffers:
@@ -191,6 +234,24 @@ def training_forward(model, scan, query, *, return_features=False):
     return checkpoint(model, scan, query, use_reentrant=False,
                       **(dict(return_features=True) if return_features else {}),
                       context_fn=lambda: (nullcontext(), _preserve_buffers(model)))
+
+
+@contextmanager
+def evaluation_state(model):
+    mode = model.training
+    cpu, cuda = torch.get_rng_state(), torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None
+    numpy, python = np.random.get_state(), random.getstate()
+    try:
+        with _preserve_buffers(model), torch.no_grad():
+            model.eval()
+            yield
+    finally:
+        model.train(mode)
+        torch.set_rng_state(cpu)
+        if cuda is not None:
+            torch.cuda.set_rng_state_all(cuda)
+        np.random.set_state(numpy)
+        random.setstate(python)
 
 
 def batch_loss(model, rows, config, step, *, full_objective=False, details=False):
@@ -221,7 +282,10 @@ def batch_loss(model, rows, config, step, *, full_objective=False, details=False
     keep = keep_loss(torch.cat(before), torch.cat(after), config["loss"]["keep_mode"]) if before else scores.sum() * 0
     generator = torch.Generator(device=device).manual_seed(config["training"]["seed"] + 31 + step)
     selections = {} if details else None
-    tail, tail_stats = tail_loss(scores, target, frames, config["loss"], generator, selections=selections)
+    if config["loss"]["tail_weight"] > 0 or details:
+        tail, tail_stats = tail_loss(scores, target, frames, config["loss"], generator, selections=selections)
+    else:
+        tail, tail_stats = scores.sum() * 0, dict(pairs=0, cross_frame_pairs=0)
     fraction = 1. if full_objective else auxiliary_fraction(step, config["training"])
     total = det + fraction * (config["loss"]["keep_weight"] * keep + config["loss"]["tail_weight"] * tail)
     stats = dict(total=float(total.detach()), detection=float(det.detach()), keep=float(keep.detach()),
@@ -409,7 +473,16 @@ def preview(config, data_root, steps, output):
     return result
 
 
-def fit(config, data_root, steps, output, resume=None):
+def save_checkpoint(path, payload):
+    temporary = path.with_suffix(".tmp")
+    try:
+        torch.save(payload, temporary)
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def fit(config, data_root, steps, output, resume=None, *, micro=None):
     if steps < 1:
         raise ValueError("training needs a positive explicit update budget")
     output = Path(output)
@@ -418,8 +491,13 @@ def fit(config, data_root, steps, output, resume=None):
     saved = torch.load(resume, map_location="cpu", weights_only=True) if resume is not None else None
     if saved is not None and (saved.get("format") != "ajae-v1-checkpoint" or "preprocessing" not in saved):
         raise ValueError("resume requires the saved inference preprocessing state")
-    dataset = TrainingFrames(config, data_root, preprocessing=saved["preprocessing"] if saved is not None else None)
-    probabilities = dataset.dataset.sampling_probabilities(PROJECT_ROOT / config["training"]["sampling"])
+    if micro is not None and not 1 <= steps <= micro["maximum_updates"]:
+        raise ValueError("micro learning cannot exceed its declared update budget")
+    dataset = TrainingFrames(config, data_root, preprocessing=saved["preprocessing"] if saved is not None else None,
+                             cache_bytes=2 * 2**30 if micro else 0)
+    selected = select_samples(dataset.dataset, micro["selection"]["train"]) if micro else None
+    probabilities = (None if micro else
+        dataset.dataset.sampling_probabilities(PROJECT_ROOT / config["training"]["sampling"]))
     torch.manual_seed(config["training"]["seed"])
     model = AJAE(config).cuda()
     optimizer = torch.optim.AdamW(model.parameters(), lr=config["training"]["learning_rate"],
@@ -427,8 +505,10 @@ def fit(config, data_root, steps, output, resume=None):
     identities = [[identity, frame] for _, identity, frame in dataset.dataset.samples]
     start = 0
     if resume is not None:
-        if (saved.get("format") != "ajae-v1-checkpoint" or saved["config"] != config
-                or saved["samples"] != identities or not torch.equal(saved["probabilities"], torch.from_numpy(probabilities))):
+        same_probabilities = (saved["probabilities"] is None if probabilities is None else
+                              torch.equal(saved["probabilities"], torch.from_numpy(probabilities)))
+        if (saved["config"] != config or saved.get("micro") != micro
+                or saved["samples"] != identities or not same_probabilities):
             raise ValueError("resume configuration, input order or frame probabilities changed")
         model.load_state_dict(saved["model"], strict=True)
         optimizer.load_state_dict(saved["optimizer"])
@@ -437,49 +517,107 @@ def fit(config, data_root, steps, output, resume=None):
         start = saved["step"]
         if start >= steps:
             raise ValueError("explicit budget has no remaining updates")
-    # Two atomic checkpoint copies plus optimizer states and bounded logs are reserved.
+    # Include retained evaluation states, an emergency state and atomic output overlap.
     disk = host_disk()
-    peak = (2 * sum(p.numel() for p in model.parameters()) * 16 + 256_000_000
+    peak = ((7 if micro else 2) * sum(p.numel() for p in model.parameters()) * 20 + 512_000_000
             + (steps - start) * (512 + 20 * config["training"]["batch_frames"]))
     if peak >= disk["SizeRemaining"] - disk["reserve_bytes"]:
         raise OSError("training checkpoint peak would invade the E: reserve")
     output.mkdir(parents=True, exist_ok=True)
     _atomic_json(output / "config.json", config)
+    run = dict(status="running", requested_updates=steps, start_update=start,
+        started_unix=time.time(), host_E_before=disk, estimated_peak_new_bytes=peak,
+        environment=dict(torch=torch.__version__, cuda=torch.version.cuda,
+            gpu=torch.cuda.get_device_name(), gpu_bytes=torch.cuda.get_device_properties(0).total_memory,
+            cpu_affinity=sorted(os.sched_getaffinity(0)), torch_threads=torch.get_num_threads(),
+            preparation_workers=config["training"]["workers"], transform_cache_bytes_per_worker=dataset.cache_bytes))
+    _atomic_json(output / "run.json", run)
+    torch.cuda.reset_peak_memory_stats()
+    prepared = None
+    if micro:
+        from .evaluate import prepare_fixed, evaluate_fixed
+        _atomic_json(output / "selection.json", micro)
+        prepared = prepare_fixed(data_root, micro["selection"])
+        transform = ScanTransform(config, state=dataset.preprocessing, workers=8)
+
+    def snapshot(step, failure=None):
+        payload = dict(format="ajae-v1-checkpoint", config=config, model=model.state_dict(),
+            preprocessing=dataset.preprocessing, optimizer=optimizer.state_dict(), step=step, samples=identities,
+            probabilities=None if probabilities is None else torch.from_numpy(probabilities),
+            torch_rng=torch.get_rng_state(), cuda_rng=torch.cuda.get_rng_state_all(), micro=micro)
+        if failure is not None:
+            payload.update(failure=str(failure), gradients={name: p.grad for name, p in model.named_parameters() if p.grad is not None})
+        save_checkpoint(output / ("failure.pt" if failure is not None else f"{step}.pt" if micro else "model.pt"), payload)
+
+    def evaluate(step):
+        with evaluation_state(model):
+            result = evaluate_fixed(model, transform, prepared,
+                include_real=step in micro["evaluation"]["real_steps"], directory=output)
+        _atomic_json(output / f"{step}.json", dict(step=step, checkpoint=f"{step}.pt", **result))
+
     workers = config["training"]["workers"]
-    loader = DataLoader(dataset, sampler=Requests(probabilities, config, steps, start),
+    loader = DataLoader(dataset, sampler=Requests(probabilities, config, steps, start, samples=selected),
         batch_size=config["training"]["batch_frames"], num_workers=workers,
-        collate_fn=_collate, pin_memory=True,
+        collate_fn=_collate, pin_memory=True, persistent_workers=bool(workers),
+        generator=torch.Generator().manual_seed(config["training"]["seed"] + 83) if micro else None,
         **(dict(multiprocessing_context="spawn", prefetch_factor=1) if workers else {}))
     model.train()
-    with (output / "loss.jsonl").open("a") as log:
-        for step, rows in enumerate(loader, start):
-            started = time.perf_counter()
-            optimizer.zero_grad(set_to_none=True)
-            loss, stats = batch_loss(model, rows, config, step)
-            if not torch.isfinite(loss):
-                raise FloatingPointError(f"nonfinite task loss at update {step}")
-            loss.backward()
-            norm = torch.nn.utils.clip_grad_norm_(model.parameters(), config["training"]["gradient_clip"], error_if_nonfinite=True)
-            optimizer.step()
-            stats.update(step=step + 1, gradient_norm=float(norm), seconds=time.perf_counter() - started,
-                         samples=[r["sample"] for r in rows])
-            log.write(json.dumps(stats, allow_nan=False) + "\n")
-            log.flush()
-            print(json.dumps(stats), flush=True)
-            if (step + 1) % 100 == 0:
-                host_disk()
-            if (step + 1) % config["training"]["save_every"] == 0 or step + 1 == steps:
-                saved = dict(format="ajae-v1-checkpoint", config=config, model=model.state_dict(),
-                    preprocessing=dataset.preprocessing,
-                    optimizer=optimizer.state_dict(), step=step + 1, samples=identities,
-                    probabilities=torch.from_numpy(probabilities), torch_rng=torch.get_rng_state(),
-                    cuda_rng=torch.cuda.get_rng_state_all())
-                temporary = output / "model.tmp"
-                try:
-                    torch.save(saved, temporary)
-                    temporary.replace(output / "model.pt")
-                finally:
-                    temporary.unlink(missing_ok=True)
+    completed, rows = start, []
+    try:
+        if micro:
+            snapshot(start)
+            evaluate(start)
+        with (output / "loss.jsonl").open("a") as log:
+            for step, rows in enumerate(loader, start):
+                started = time.perf_counter()
+                optimizer.zero_grad(set_to_none=True)
+                loss, stats = batch_loss(model, rows, config, step)
+                if not torch.isfinite(loss):
+                    raise FloatingPointError(f"nonfinite task loss at update {step}")
+                loss.backward()
+                norm = torch.nn.utils.clip_grad_norm_(model.parameters(), config["training"]["gradient_clip"], error_if_nonfinite=True)
+                optimizer.step()
+                if any(not torch.isfinite(p).all() for p in model.parameters()):
+                    raise FloatingPointError(f"nonfinite parameter after update {step + 1}")
+                completed = step + 1
+                stats.update(step=completed, gradient_norm=float(norm), seconds=time.perf_counter() - started,
+                    samples=[r["sample"] for r in rows], draws=[r["draw"] for r in rows],
+                    full_input_returns=[len(r["scan"]["xyzi"]) for r in rows])
+                if prepared is not None:
+                    hits = dict(normal=0, anomaly=0, active_keep=0)
+                    for row in rows:
+                        measured = prepared["geometry"].get((row["world"], row["frame"]))
+                        if measured is None:
+                            continue
+                        contrast = measured["contrasts"]["sparse"]
+                        slots = row["scan"]["source_slot"][row["query"][row["detection_index"]]].numpy()
+                        for name, label, field in (("normal", 0, "normal_source_slots"), ("anomaly", 1, "central_anomaly_slots")):
+                            hits[name] += int(np.isin(slots[row["target"].numpy() == label], contrast[field]).sum())
+                        if row["original"] is not None:
+                            hits["active_keep"] += int(np.isin(row["keep_slot"], contrast["normal_source_slots"]).sum())
+                    stats["known_sparse_witness_queries"] = hits
+                log.write(json.dumps(stats, allow_nan=False) + "\n")
+                log.flush()
+                print(json.dumps(stats), flush=True)
+                if completed % 32 == 0:
+                    host_disk()
+                if micro and completed in micro["evaluation"]["synthetic_steps"]:
+                    snapshot(completed)
+                    evaluate(completed)
+                elif completed % config["training"]["save_every"] == 0 or completed == steps:
+                    snapshot(completed)
+    except BaseException as error:
+        snapshot(completed, failure=error)
+        _atomic_json(output / "failure.json", dict(completed_updates=completed, error=repr(error),
+                     samples=[r["sample"] for r in rows], automatic_retry=False))
+        run.update(status="stopped", completed_updates=completed, error=repr(error))
+        raise
+    else:
+        run.update(status="completed", completed_updates=completed, host_E_after=host_disk())
+    finally:
+        run.update(seconds=time.time() - run["started_unix"],
+                   peak_cuda_allocated_bytes=torch.cuda.max_memory_allocated())
+        _atomic_json(output / "run.json", run)
 
 
 def main():
@@ -490,9 +628,18 @@ def main():
     parser.add_argument("--steps", type=int)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--resume", type=Path)
+    parser.add_argument("--micro", type=Path, help="fixed micro-learning selection; formal defaults remain unchanged")
     parser.add_argument("--sample", type=int, action="append", help="fixed training manifest index for check")
     args = parser.parse_args()
     config = load_config(args.config)
+    micro = json.loads(args.micro.read_text()) if args.micro is not None else None
+    if micro is not None:
+        if args.command != "fit" or micro.get("format") != "ajae-micro-learning":
+            parser.error("--micro only supports a declared micro-learning fit")
+        config = deepcopy(config)
+        config["loss"].update(micro["loss_overrides"])
+        config["scope"] = "Authorized micro task learning; at most 256 updates; no short training or external weights."
+        validate_config(config)
     torch.set_num_threads(4)
     if not torch.cuda.is_available():
         parser.error("the LitePT sparse-convolution implementation requires CUDA")
@@ -507,7 +654,7 @@ def main():
     else:
         if args.steps is None or args.output is None or args.sample is not None:
             parser.error("fit requires --steps and --output; fixed check samples are not training input")
-        fit(config, args.data_root, args.steps, args.output, args.resume)
+        fit(config, args.data_root, args.steps, args.output, args.resume, micro=micro)
 
 
 if __name__ == "__main__":

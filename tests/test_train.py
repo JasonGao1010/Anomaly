@@ -1,12 +1,46 @@
 from copy import deepcopy
+import random
 
+import numpy as np
 import pytest
 import torch
 from torch import nn
 
 from src.model import load_config
 from src.train import (_gradient_comparison, batch_loss, keep_loss, load_checkpoint,
-                       tail_loss)
+                       tail_loss, Requests, evaluation_state)
+
+
+def test_micro_passes_balance_exactly_and_resume_keeps_draws():
+    config = load_config()
+    samples = np.arange(32) * 13
+    requests = list(Requests(None, config, 256, samples=samples))
+    assert len(requests) == 512
+    for start in range(0, len(requests), 32):
+        assert sorted(r[0] for r in requests[start:start + 32]) == list(samples)
+    assert all(sum(r[0] == sample for r in requests) == 16 for sample in samples)
+    assert [r[1] for r in requests] == list(range(512))
+    assert not any(r[2] for r in requests[:202])
+    assert all(r[2] for r in requests[202:])
+    assert list(Requests(None, config, 256, start=117, samples=samples)) == requests[234:]
+
+
+def test_evaluation_restores_random_streams_buffers_and_training_mode():
+    model = nn.BatchNorm1d(2).train()
+    cpu, numpy, python = torch.get_rng_state(), np.random.get_state(), random.getstate()
+    buffers = [b.clone() for b in model.buffers()]
+    with pytest.raises(RuntimeError, match="evaluation interrupted"):
+        with evaluation_state(model):
+            assert not model.training and not torch.is_grad_enabled()
+            model.running_mean.add_(7)
+            torch.rand(3), np.random.rand(3), random.random()
+            raise RuntimeError("evaluation interrupted")
+    assert model.training
+    torch.testing.assert_close(torch.get_rng_state(), cpu, rtol=0, atol=0)
+    np.testing.assert_equal(np.random.get_state(), numpy)
+    assert random.getstate() == python
+    for actual, expected in zip(model.buffers(), buffers, strict=True):
+        torch.testing.assert_close(actual, expected, rtol=0, atol=0)
 
 
 class SmallModel(nn.Module):
@@ -118,3 +152,19 @@ def test_checkpoint_rejects_missing_preprocessing_before_model_construction(tmp_
     torch.save(dict(format="ajae-v1-checkpoint"), path)
     with pytest.raises(ValueError, match="saved preprocessing"):
         load_checkpoint(path, device="cpu")
+
+
+def test_disabled_tail_preserves_mean_objective_and_gradients():
+    torch.manual_seed(91)
+    config, rows, model = load_config(), batch_fixture(), SmallModel().train()
+    config["loss"].update(keep_mode="mean", tail_weight=0.)
+    reference = deepcopy(model)
+    expected, _, observed = batch_loss(reference, rows, config, 128, details=True)
+    actual, stats = batch_loss(model, rows, config, 128)
+    torch.testing.assert_close(actual, observed["components"]["detection"]
+        + .28 * observed["components"]["keep_mean"], rtol=0, atol=0)
+    assert stats["pairs"] == 0 and stats["tail"] == 0
+    actual.backward()
+    expected.backward()
+    for actual_parameter, expected_parameter in zip(model.parameters(), reference.parameters(), strict=True):
+        torch.testing.assert_close(actual_parameter.grad, expected_parameter.grad, rtol=0, atol=0)

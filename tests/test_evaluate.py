@@ -17,6 +17,25 @@ from src.scene import PointLabels, make_source_frame
 from vendor.stu.compute_point_level_ood import PointOODMetricsCalculator
 
 
+def test_fixed_full_labels_keep_zero_and_few_return_frames_and_reuse_threshold(tmp_path, monkeypatch):
+    from src.evaluate import fixed_summary, threshold_counts
+    monkeypatch.setattr("src.evaluate._evaluation_space", lambda required: None)
+    zero = dict(scores=np.array([-4., -2., 99.], np.float32), target=np.array([0, 0, -1], np.int8))
+    few = dict(scores=np.array([-3., 2., 3.], np.float32), target=np.array([0, 1, 1], np.int8))
+    summary = fixed_summary([zero, few], directory=tmp_path)
+    assert summary["frames"] == 2
+    assert (summary["normal_count"], summary["anomaly_count"]) == (3, 2)
+    assert summary["AP"] == 100. and summary["FPR95"] == 0.
+    expected = .5 * (np.logaddexp(0., [-4., -2., -3.]).mean() + np.logaddexp(0., [-2., -3.]).mean())
+    assert summary["detection_loss"] == pytest.approx(expected)
+    threshold = summary["recall_at_fpr_limit"]["threshold"]
+    shifted_zero = dict(zero, scores=zero["scores"] + 5)
+    counts = threshold_counts([shifted_zero], threshold)
+    assert counts["anomaly"] == 0 and counts["recall"] is None
+    assert counts["fp"] == 1 and counts["FPR"] == 50.
+    assert threshold_counts([few], None)["tp"] == 0
+
+
 def test_external_exact_counts_merge_sparse_float32_ranges_and_cross_run_ties(tmp_path):
     from src.evaluate import ScoreCounts, score_groups
     random = np.random.default_rng(193)
