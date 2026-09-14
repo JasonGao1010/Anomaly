@@ -4509,6 +4509,135 @@
       "swap_used_bytes": 0,
       "full_val19_evaluated": false,
       "interpretation": "startup observation only; before keep-loss activation, not learned detection evidence; ongoing counts belong to live logs"
+    },
+    "efficiency_validation": {
+      "status": "completed_not_admitted",
+      "date": "2026-09-15",
+      "reference_revision": "3b1b227",
+      "candidate_revision": "7e59c8b",
+      "formal_model_restored_to_reference": true,
+      "formal_updates": 0,
+      "checkpoint": "results/finetune/resume.pt",
+      "checkpoint_step": 3424,
+      "requests": [
+        [
+          30214,
+          6848,
+          true
+        ],
+        [
+          80007,
+          6849,
+          true
+        ]
+      ],
+      "scope": "one real next-update batch; two inserted scans and both full original scans, original forward order, mean pairing, no tail; same checkpoint model, optimizer, preprocessing, all RNG, queries, labels and frozen sampling",
+      "candidate": "reuse per-layer pointwise normalization and neighbor key projection; materialize first-layer S=Q union N(Q), reading full initial T=S union N(S); row identities and masked row-zero reads preserved; backbone, precision and checkpoint recomputation strategy unchanged",
+      "main_result": "results/finetune/efficiency_paired.json",
+      "reference_result": "results/finetune/efficiency_paired_reference.json",
+      "self_repeat_result": "results/finetune/efficiency_paired_control.json",
+      "timing": {
+        "design": "original, candidate, original in one CUDA process; each arm resets all saved state for each of 2 warmup, 5 measured and 1 untimed capture updates; no simultaneous GPU workload",
+        "included": "four complete forwards, in-model S/T construction, deduplication, remapping, projection cache allocation, GPU transfer, all active loss terms, backward, gradient clipping, AdamW, parameter-finiteness checks and device synchronization",
+        "excluded_equally": "CPU frame preparation, restoring saved state, extra numerical-capture tensor copies; not an end-to-end data-loader or checkpoint-writing throughput estimate",
+        "original_before_median_seconds": 6.611974936997285,
+        "candidate_median_seconds": 3.8137321480026003,
+        "original_after_median_seconds": 6.5317113759956555,
+        "time_reduction_against_average_original_medians": 0.4196860671830538,
+        "original_before_peak_allocated_cuda_bytes": 5288802816,
+        "candidate_peak_allocated_cuda_bytes": 5656781312,
+        "original_after_peak_allocated_cuda_bytes": 5289437184,
+        "generalization": "fixed batch and reset state only; no whole-pool, quiet-mode long-run or future-checkpoint speed guarantee"
+      },
+      "dependency_sizes": [
+        {
+          "points": 126490,
+          "queries": 9182,
+          "S": 118847,
+          "T": 125286
+        },
+        {
+          "points": 126490,
+          "queries": 1024,
+          "S": 33890,
+          "T": 111493
+        },
+        {
+          "points": 119481,
+          "queries": 9149,
+          "S": 111146,
+          "T": 117689
+        },
+        {
+          "points": 119474,
+          "queries": 1024,
+          "S": 21589,
+          "T": 91175
+        }
+      ],
+      "query_counts": {
+        "normal_queries": 16384,
+        "anomaly_queries": 32,
+        "retained_normal_pairs": 2048
+      },
+      "numerical": {
+        "rtol": 2e-05,
+        "atol": 2e-06,
+        "tolerance_source": "existing relation output/gradient regression; not relaxed for GPU performance",
+        "input_and_dependency_elements_exact": 41913287,
+        "actual_candidate_dependency_sets_exact": true,
+        "loss_scalars_exact": true,
+        "training_scores_elements": 20379,
+        "training_score_max_absolute_difference": 2.86102294921875e-06,
+        "full_and_partial_eval_score_elements": 512314,
+        "full_and_partial_eval_max_absolute_difference": 1.9073486328125e-06,
+        "eval_scope": "same saved 3424 weights, four complete training-source scans and their partial queries; not full val19",
+        "all_score_elements_within_tolerance": true,
+        "gradient_elements": 12931078,
+        "candidate_gradient_elements_outside_tolerance": 36,
+        "candidate_gradient_tensors_outside_tolerance": 11,
+        "candidate_max_absolute_gradient_difference": 4.698522388935089e-06,
+        "original_self_gradient_elements_outside_tolerance": 9,
+        "original_self_gradient_tensors_outside_tolerance": 4,
+        "original_self_max_absolute_gradient_difference": 3.952533006668091e-06,
+        "gradient_failures_location": "backbone parameters; none in AJAE added modules",
+        "clipping": "norm approximately0.157 below fixed clip1; clipped-gradient failures repeat the same36 and9 elements and are not additional independent failures",
+        "parameter_model_optimizer_elements_within_original_absolute_relative_tolerance": true,
+        "actual_update_max_absolute_difference": 2.1979212760925293e-07,
+        "actual_update_largest_tensor_relative_l2_difference": 0.22536067854900638,
+        "original_self_update_largest_tensor_relative_l2_difference": 0.25575773525576884,
+        "largest_relative_update_tensor": "backbone.enc.enc1.block1.conv.2.bias",
+        "update_interpretation": "passing an absolute-dominated update tolerance does not establish negligible relative change to very small updates; report actual update norms rather than only post-update parameter agreement",
+        "batchnorm_buffers_and_all_rng_exact": true,
+        "isolated_model_restored_exactly_after_checks": true,
+        "compatible": false,
+        "full_val19_compatibility_performed": false
+      },
+      "attempts": [
+        "Initial separate-process real GPU runs completed; safe loading of reference comparison tensors failed on a NumPy value. Fixed the producer to store tensors/scalars. No formal state changed.",
+        "Repeated separate-process comparison failed, including forward differences and changed buffers in the untouched backbone. These reports remain as failed, execution-environment-confounded evidence, not admission evidence.",
+        "Final same-process original/candidate/original comparison removed forward and BN discrepancies beyond tolerance, but candidate and original self-repeat both retained backward differences. Exact kernel cause was not localized and the frozen tolerance was not changed."
+      ],
+      "total_disposable_updates_including_prior_attempts": 56,
+      "decision": "do not admit the candidate; restore the original sole production model implementation; retain candidate code in Git history and numerical evidence locally; keep formal3424 checkpoint paused and untouched",
+      "next_uncertainty": "separate GPU backward repeatability and reordered gradient accumulation within the existing tolerance before a candidate can be admitted; only then check complete official val19 compatibility; no new data/model mechanism or automatic formal resume",
+      "final_verification": {
+        "production_model_and_vendor_and_effective_configs_equal_pause_revision": true,
+        "preexisting_training_loss_schedule_and_restore_functions_unchanged": true,
+        "only_existing_cli_dispatch_and_isolated_diagnostic_added": true,
+        "existing_continuation_and_state_restore_regressions_passed": 3,
+        "checkpoint_bytes": 158097469,
+        "checkpoint_modification_time": "2026-09-15T01:50:20.636831+08:00",
+        "checkpoint_optimizer_steps_and_consecutive_log_equal": 3424,
+        "model_and_optimizer_tensors_finite": true,
+        "active_training_or_gpu_diagnostic_processes": 0,
+        "host_E_remaining_bytes_after_cleanup": 63061123072,
+        "obsolete_separate_process_tensor_reference_removed_bytes": 539638973,
+        "current_reference_tensors_retained": "results/finetune/efficiency_paired_reference.pt",
+        "temporary_reference_worktree_removed": true,
+        "host_space_reclamation_confirmed": false,
+        "host_disk_compaction_performed": false
+      }
     }
   }
 }
