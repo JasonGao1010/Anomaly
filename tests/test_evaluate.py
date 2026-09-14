@@ -45,6 +45,31 @@ def test_normal_pairs_use_unchanged_slots_and_one_threshold():
         paired_normal_summary([dict(before=[0.], after=[float("nan")])], 0.)
 
 
+def test_fixed_training_only_does_not_access_201(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from src.data import FrozenFrame
+    from src.evaluate import evaluate_fixed
+    monkeypatch.setattr("src.evaluate._evaluation_space", lambda required: None)
+    xyzi = np.array([[10, 0, 0, .2], [11, 0, 0, .3], [12, 0, 0, .4]], np.float32)
+    semantic = np.array([40, 40, 2], np.uint16)
+    instance = np.array([0, 0, 60001], np.uint16)
+    labels = PointLabels((instance.astype(np.uint32) << 16) | semantic, semantic, instance,
+                         np.array([0, 0, 255], np.uint8))
+    source = make_source_frame(11, xyzi, np.eye(4), labels, partition="train", sequence_id=206)
+    frozen = FrozenFrame(source, "a" * 64, np.array([False, False, True]), np.zeros(3, bool))
+    record = dict(identity="a" * 64, frame=11, role="few_returns")
+    prepared = dict(datasets={"train": [frozen]}, selection={"train": [record]},
+                    indices={"train": [0]}, geometry={})
+    scores = np.array([-3., -2., 2.], np.float32)
+    model = SimpleNamespace(training=False, predict=lambda scan, transform: SimpleNamespace(restore=lambda scan: scores))
+    result = evaluate_fixed(model, None, prepared, directory=tmp_path)
+    assert "validation" not in result
+    assert result["train"]["full"]["normal_count"] == 2
+    assert result["train"]["full"]["anomaly_count"] == 1
+    assert result["train"]["full"]["AP"] == 100.
+    assert result["train"]["official"]["frames"] == 0
+
+
 def test_fixed_full_labels_keep_zero_and_few_return_frames_and_reuse_threshold(tmp_path, monkeypatch):
     from src.evaluate import fixed_summary, threshold_counts
     monkeypatch.setattr("src.evaluate._evaluation_space", lambda required: None)

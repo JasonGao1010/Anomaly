@@ -808,11 +808,13 @@ def evaluate_validation(data_root, *, checkpoint_path=None, prediction_root=None
     return result
 
 
-def prepare_fixed(data_root, selection):
+def prepare_fixed(data_root, selection, *, synthetic_splits=("train", "validation")):
     """Resolve the declared frames and reuse only existing geometric witness records."""
     from .train import select_samples
+    if list(synthetic_splits) not in (["train"], ["train", "validation"]):
+        raise ValueError("fixed scopes require train first, with optional validation")
     datasets, indices = {}, {}
-    for split in ("train", "validation"):
+    for split in synthetic_splits:
         datasets[split] = FrozenDataset(PROJECT_ROOT / "results/synthetic", data_root, split)
         indices[split] = select_samples(datasets[split], selection[split])
         for record in selection[split]:
@@ -967,7 +969,7 @@ def evaluate_fixed(model, transform, prepared, *, include_real=False, directory=
     import time
     started = time.perf_counter()
     result, train_threshold = {}, None
-    for split in ("train", "validation"):
+    for split in prepared["datasets"]:
         rows, official, witness = [], [], {name: [] for name in ("smooth", "rough", "sparse", "changed_normal")}
         records = prepared["selection"][split]
         for record, index in zip(records, prepared["indices"][split], strict=True):
@@ -1169,7 +1171,8 @@ def main():
         model, saved = load_checkpoint(args.checkpoint)
         if saved.get("experiment", saved.get("micro")) != declaration:
             parser.error("fixed evaluation declaration differs from the saved experiment")
-        prepared = prepare_fixed(args.data_root, declaration["selection"])
+        prepared = prepare_fixed(args.data_root, declaration["selection"],
+            synthetic_splits=declaration["evaluation"].get("synthetic_splits", ["train", "validation"]))
         transform = ScanTransform(saved["config"], state=saved["preprocessing"], workers=8)
         args.output.mkdir(parents=True, exist_ok=True)
         with evaluation_state(model):
@@ -1180,7 +1183,7 @@ def main():
                     parser.error("paired threshold result must refer to this same checkpoint")
                 threshold = reference["train"]["full"]["recall_at_fpr_limit"]["threshold"]
                 result = {split: evaluate_normal_pairs(model, transform, prepared, split, threshold)
-                          for split in ("train", "validation")}
+                          for split in prepared["datasets"]}
                 result["reference_metrics"] = str(args.pairs.resolve())
             else:
                 result = evaluate_fixed(model, transform, prepared, directory=args.output,

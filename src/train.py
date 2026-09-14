@@ -516,23 +516,35 @@ def validate_initial_state(saved, config, identities, initial_changes=None):
         raise ValueError("initial model, objective, training definition or input identities changed")
 
 
-def validate_resume_state(saved, config, identities, probabilities, experiment):
+def validate_resume_state(saved, config, identities, probabilities, experiment, *, without_201=False):
     if "failure" in saved:
         raise ValueError("a partial failure snapshot is not a completed-update resume state")
+    expected = deepcopy(saved.get("experiment", saved.get("micro")))
+    if without_201:
+        if (not expected or not experiment or expected.get("format") != "ajae-staged-learning"
+                or experiment.get("format") != "ajae-staged-learning"
+                or experiment.get("evaluation", {}).get("synthetic_splits") != ["train"]
+                or experiment["evaluation"].get("full_synthetic_steps") != []):
+            raise ValueError("201 removal requires a staged declaration with no 201 evaluation")
+        # This explicit resume option changes only 201 evaluation, never training or val19.
+        expected["evaluation"].update(synthetic_splits=["train"], full_synthetic_steps=[],
+                                      synthetic=experiment["evaluation"]["synthetic"])
     same_probabilities = (saved["probabilities"] is None if probabilities is None else
                           torch.equal(saved["probabilities"], torch.from_numpy(probabilities)))
-    if (saved["config"] != config or saved.get("experiment", saved.get("micro")) != experiment
+    if (saved["config"] != config or expected != experiment
             or saved["samples"] != identities or not same_probabilities):
         raise ValueError("resume configuration, input order or frame probabilities changed")
     return saved["step"]
 
 
-def fit(config, data_root, steps, output, resume=None, *, experiment=None):
+def fit(config, data_root, steps, output, resume=None, *, experiment=None, resume_without_201=False):
     if steps < 1:
         raise ValueError("training needs a positive explicit update budget")
     output = Path(output)
     staged = experiment is not None and experiment["format"] == "ajae-staged-learning"
     in_place = staged and resume is not None and Path(resume).resolve().parent == output.resolve()
+    if resume_without_201 and not in_place:
+        raise ValueError("201 removal requires resuming the same staged output directory")
     if output.exists() and any(output.iterdir()) and not in_place:
         raise ValueError("training output is occupied; resume into an empty output directory")
     initial = PROJECT_ROOT / experiment["initial_checkpoint"] if experiment and "initial_checkpoint" in experiment else None
@@ -555,7 +567,8 @@ def fit(config, data_root, steps, output, resume=None, *, experiment=None):
     identities = [[identity, frame] for _, identity, frame in dataset.dataset.samples]
     start = 0
     if resume is not None:
-        start = validate_resume_state(saved, config, identities, probabilities, experiment)
+        start = validate_resume_state(saved, config, identities, probabilities, experiment,
+                                      without_201=resume_without_201)
         if start > steps or (start == steps and not staged):
             raise ValueError("explicit budget has no remaining updates")
         if staged:
@@ -606,13 +619,17 @@ def fit(config, data_root, steps, output, resume=None, *, experiment=None):
         previous = json.loads((output / "run.json").read_text())
         run["previous_segments"] = previous.get("previous_segments", []) + [
             {k: previous.get(k) for k in ("start_update", "completed_updates", "seconds", "status")}]
+    if resume_without_201:
+        run["evaluation_change"] = dict(step=start, reason="user_cancelled_201_evaluation",
+            previous=saved["experiment"]["evaluation"], current=experiment["evaluation"])
     _atomic_json(output / "run.json", run)
     torch.cuda.reset_peak_memory_stats()
     prepared = None
     if experiment:
         from .evaluate import prepare_fixed, evaluate_fixed
         _atomic_json(output / "selection.json", experiment)
-        prepared = prepare_fixed(data_root, experiment["selection"])
+        prepared = prepare_fixed(data_root, experiment["selection"],
+            synthetic_splits=experiment["evaluation"].get("synthetic_splits", ["train", "validation"]))
         transform = ScanTransform(config, state=dataset.preprocessing, workers=8)
         diagnostic_indices = prepared["indices"]["train"]
         exposure = {index: saved.get("diagnostic_exposure", {}).get(index, 0) if resume else 0
@@ -795,9 +812,13 @@ def main():
     parser.add_argument("--steps", type=int)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--resume", type=Path)
+    parser.add_argument("--resume-without-201", action="store_true",
+                        help="explicitly remove only 201 evaluation when resuming the staged run")
     parser.add_argument("--experiment", type=Path, help="declared finite or continuous learning budget and evaluation scope")
     parser.add_argument("--sample", type=int, action="append", help="fixed training manifest index for check")
     args = parser.parse_args()
+    if args.resume_without_201 and (args.command != "fit" or args.resume is None or args.experiment is None):
+        parser.error("--resume-without-201 requires a staged --experiment and --resume")
     config = load_config(args.config)
     experiment = load_experiment(args.experiment) if args.experiment is not None else None
     if experiment is not None:
@@ -821,7 +842,8 @@ def main():
     else:
         if args.steps is None or args.output is None or args.sample is not None:
             parser.error("fit requires --steps and --output; fixed check samples are not training input")
-        fit(config, args.data_root, args.steps, args.output, args.resume, experiment=experiment)
+        fit(config, args.data_root, args.steps, args.output, args.resume, experiment=experiment,
+            resume_without_201=args.resume_without_201)
 
 
 if __name__ == "__main__":

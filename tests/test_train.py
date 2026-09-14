@@ -78,6 +78,34 @@ def test_resume_rejects_partial_buffers_and_any_recipe_or_probability_change():
             validate_resume_state(saved, candidate, saved["samples"], distribution, saved["experiment"])
 
 
+def test_resume_201_removal_is_explicit_and_cannot_change_training_or_val19():
+    config = load_config()
+    probabilities = np.array([.25, .75])
+    declaration = dict(format="ajae-staged-learning", maximum_updates=32000,
+        evaluation=dict(full_synthetic_steps=[4000, 32000], full_val19_steps=[4000, 8000, 16000, 32000],
+                        real_steps=[4000, 8000, 16000, 32000], synthetic="all 201 worlds"))
+    saved = dict(step=4000, config=deepcopy(config), samples=[["a", 1], ["b", 2]],
+                 probabilities=torch.from_numpy(probabilities), experiment=declaration)
+    requested = deepcopy(declaration)
+    requested["evaluation"].update(full_synthetic_steps=[], synthetic_splits=["train"], synthetic="206 only")
+    with pytest.raises(ValueError, match="resume configuration"):
+        validate_resume_state(saved, config, saved["samples"], probabilities, requested)
+    assert validate_resume_state(saved, config, saved["samples"], probabilities, requested, without_201=True) == 4000
+    assert saved["experiment"] == declaration and "synthetic_splits" not in declaration["evaluation"]
+    for key, value in (("full_val19_steps", [8000]), ("real_steps", []), ("threshold", .5)):
+        changed = deepcopy(requested)
+        changed["evaluation"][key] = value
+        with pytest.raises(ValueError, match="resume configuration"):
+            validate_resume_state(saved, config, saved["samples"], probabilities, changed, without_201=True)
+    changed_config = deepcopy(config)
+    changed_config["loss"]["keep_mode"] = "worst"
+    for candidate, distribution in ((changed_config, probabilities), (config, probabilities[::-1].copy())):
+        with pytest.raises(ValueError, match="resume configuration"):
+            validate_resume_state(saved, candidate, saved["samples"], distribution, requested, without_201=True)
+    with pytest.raises(ValueError, match="no 201 evaluation"):
+        validate_resume_state(saved, config, saved["samples"], probabilities, declaration, without_201=True)
+
+
 def test_micro_passes_balance_exactly_and_resume_keeps_draws():
     config = load_config()
     samples = np.arange(32) * 13

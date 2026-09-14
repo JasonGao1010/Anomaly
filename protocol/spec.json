@@ -3819,11 +3819,42 @@
       16000,
       32000
     ],
-    "full_201_steps": [
-      4000,
-      32000
-    ],
-    "fixed_scopes": "historical diagnostics only, no micro pass gates",
+    "full_201_steps": [],
+    "fixed_scopes": "206 training-source32 and real152 plus existing206 normal pairs; historical diagnostics only, no micro pass gates; 201 omitted by user",
+    "evaluation_change": {
+      "date": "2026-09-14",
+      "decision": "user cancelled all full and fixed201 evaluation after4000 fullval19 completed; concentrate long-run decisions on complete publicval19",
+      "full_201_status": "actively_terminated_without_complete_metrics",
+      "last_logged_world_frames": 3700,
+      "planned_world_frames_before_cancellation": 81840,
+      "saved_update": 4000,
+      "state_verification": "every field of graceful resume.pt exactly equals4000.pt, including model buffers, optimizer, preprocessing, probabilities and all saved RNG states; temporary score-count directories released",
+      "preserved": "201 data, split, tools and historical results; all training configuration and fullval19 evaluation unchanged",
+      "limitation": "no continuing full synthetic cross-source transfer comparison; val19 remains development data"
+    },
+    "completed_val19": {
+      "4000": {
+        "evidence": "results/train/4000_val.json",
+        "AP": 32.70254748297126,
+        "FPR95": 2.295250687500913,
+        "recall_at_1pct_FPR": 90.35874695710808,
+        "actual_FPR": 0.9994686584055614,
+        "threshold": 2.1000728607177734,
+        "normal_count": 193792470,
+        "anomaly_count": 87499,
+        "tp": 79063,
+        "fp": 1936895,
+        "frames": 8659,
+        "eligible_frames": 1960,
+        "seconds": 3293.9991395079996,
+        "delta_vs_historical_1024_percentage_points": {
+          "AP": -7.009573356303612,
+          "FPR95": 0.556375590857581,
+          "recall_at_1pct_FPR": -0.52457742374199
+        },
+        "interpretation": "weaker than separate historical1024 run; not an intra-trajectory1024-to4000 curve; one complete node does not establish sustained degradation; continue original cumulative budget"
+      }
+    },
     "exposure": "actual optimized query slots, distinct world-frames/source-frames and existing core-cell observations; unknown geometry remains unknown",
     "reference": {
       "evidence": "results/short/global.json",
@@ -3943,8 +3974,8 @@
       "changed_world_frames": 37277,
       "scope": "within one checkpoint and saved calibration; unchanged source predictions retain each worlds exact integer multiplicity; occlusion-only scans never treated as unchanged"
     },
-    "execution_commit": "95f68d8",
-    "pid": 50525,
+    "initial_execution_commit": "95f68d8",
+    "initial_pid": 50525,
     "started_utc": "2026-09-13T19:39:41.563046+00:00",
     "launch_verified_updates": 21,
     "completed": false,

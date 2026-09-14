@@ -12,9 +12,10 @@
     "real_steps": [4000, 8000, 16000, 32000],
     "paired_normal_steps": [4000, 8000, 16000, 32000],
     "full_val19_steps": [4000, 8000, 16000, 32000],
-    "full_synthetic_steps": [4000, 32000],
+    "full_synthetic_steps": [],
+    "synthetic_splits": ["train"],
     "primary": "complete official public val19, including per-sequence curves and counts at the pooled thresholds; remains development data",
-    "synthetic": "all 120 validation worlds and all valid frozen target points; zero-anomaly and few-return frames retained; official filter secondary",
+    "synthetic": "206 fixed training-source diagnostics only; user cancelled both full and fixed 201 evaluation after the completed 4000-step val19 result; preserve 201 data and historical results",
     "fixed_scopes": "historical curves and error explanation only; never micro-stage pass requirements",
     "reference": "results/short/global.json at 1024 mean-pairing updates"
   },
