@@ -137,6 +137,17 @@ def test_relationship_chunks_null_support_and_gradients_match():
     assert torch.isfinite(actual).all()
     # Isolated points continue through the residual update and have a task gradient.
     assert torch.count_nonzero(z.grad[6:]) > 0
+    traced = {}
+    def observe(name, value):
+        traced.setdefault(name, []).append(value.detach().clone())
+    for p in [z, h, *layer.parameters()]:
+        p.grad = None
+    observed = layer(z, h, scan, rows, conditioned=True, chunk=8, recompute=False, trace=observe)
+    observed.sum().backward()
+    torch.testing.assert_close(observed, expected, rtol=0, atol=0)
+    for p, gradient in zip([z, h, *layer.parameters()], gradients, strict=True):
+        torch.testing.assert_close(p.grad, gradient, rtol=0, atol=0)
+    assert {"attention_scores", "residual", "output"} <= traced.keys()
 
 
 def test_plain_relations_have_no_explicit_sensing_input():

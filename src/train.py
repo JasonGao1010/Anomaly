@@ -237,9 +237,10 @@ class _preserve_buffers:
                 value.copy_(saved)
 
 
-def training_forward(model, scan, query, *, return_features=False):
+def training_forward(model, scan, query, *, return_features=False, trace=None):
     return checkpoint(model, scan, query, use_reentrant=False,
                       **(dict(return_features=True) if return_features else {}),
+                      **(dict(trace=trace) if trace is not None else {}),
                       context_fn=lambda: (nullcontext(), _preserve_buffers(model)))
 
 
@@ -261,12 +262,12 @@ def evaluation_state(model):
         random.setstate(python)
 
 
-def batch_loss(model, rows, config, step, *, full_objective=False, details=False):
+def batch_loss(model, rows, config, step, *, full_objective=False, details=False, trace=None):
     device = next(model.parameters()).device
     all_scores, all_targets, all_frames, before, after = [], [], [], [], []
     observed = dict(scores=[], context=[], point=[], score_targets=[])
     def forward(scan, query, target):
-        output = training_forward(model, to_device(scan, device), query.to(device), return_features=details)
+        output = training_forward(model, to_device(scan, device), query.to(device), return_features=details, trace=trace)
         if not details:
             return output
         for name in ("context", "point"):
@@ -480,6 +481,272 @@ def preview(config, data_root, steps, output):
                   gradients=gradient_preview(config, data_root, exposure), optimizer_steps=0)
     _atomic_json(output, result)
     return result
+
+
+def optimization_log_summary(records):
+    """Describe completed updates, without treating correlated batches as independent trials."""
+    from scipy.stats import spearmanr
+    def summarize(rows):
+        if not rows:
+            return dict(updates=0)
+        count = np.array([r["anomaly_queries"] for r in rows])
+        gradient = np.array([r["gradient_norm"] for r in rows])
+        return dict(updates=len(rows), zero_anomaly=int((count == 0).sum()),
+            anomaly_mean=float(count.mean()),
+            anomaly_quantiles=dict(zip(("min", "q25", "median", "q75", "q95", "q99", "max"),
+                np.quantile(count, [0, .25, .5, .75, .95, .99, 1]).tolist())),
+            gradient_median=float(np.median(gradient)), gradient_p95=float(np.quantile(gradient, .95)),
+            gradient_max=float(gradient.max()), clipped=int((gradient > 1).sum()),
+            over_100=int((gradient > 100).sum()), over_1000=int((gradient > 1000).sum()),
+            count_gradient_spearman=float(spearmanr(count, gradient).statistic)
+                if np.ptp(count) > 0 and np.ptp(gradient) > 0 else None)
+    active = [r for r in records if r["auxiliary_fraction"] == 1]
+    return dict(all=summarize(records), full_keep=summarize(active),
+        by_anomaly_count={name: summarize([r for r in active if lo <= r["anomaly_queries"] < hi])
+            for name, lo, hi in (("zero", 0, 1), ("1_4", 1, 5), ("5_19", 5, 20),
+                                ("20_99", 20, 100), ("100_499", 100, 500), ("500_plus", 500, math.inf))})
+
+
+def diagnostic_batches(records, checkpoint_step):
+    """Choose before new predictions: historical peaks, denominator controls and the next saved-state update."""
+    active = [r for r in records if r["step"] <= checkpoint_step and r["auxiliary_fraction"] == 1]
+    chosen = {}
+    def add(row, reason):
+        if row is not None:
+            chosen.setdefault(row["step"], dict(record=row, reasons=[]))["reasons"].append(reason)
+    def median(rows):
+        return sorted(rows, key=lambda r: (r["gradient_norm"], r["step"]))[len(rows) // 2] if rows else None
+    for row in sorted(active, key=lambda r: (-r["gradient_norm"], r["step"]))[:3]:
+        add(row, "top_three_historical_gradient_inputs_at_new_weights")
+    keep = [r for r in active if r["keep"] > r["detection"]]
+    add(max(keep, key=lambda r: r["gradient_norm"]) if keep else None, "largest_peak_with_keep_loss_above_detection")
+    add(median(active), "median_gradient_control")
+    add(median([r for r in active if r["anomaly_queries"] == 0]), "zero_anomaly_control")
+    add(median([r for r in active if 1 <= r["anomaly_queries"] <= 4]), "few_anomaly_control")
+    add(next((r for r in records if r["step"] == checkpoint_step + 1), None), "next_update_with_saved_preupdate_state")
+    return [chosen[k] for k in sorted(chosen)]
+
+
+class _Numerics:
+    """Detached reductions only; do not retain activations or change the forward graph."""
+    def __init__(self, model):
+        self.model, self.values, self.handles, self.enabled = model, {}, [], True
+
+    def __call__(self, name, value):
+        if not self.enabled or not value.numel():
+            return
+        x = value.detach().double()
+        summary = torch.stack((x.new_tensor(x.numel()), x.square().sum(), x.abs().max(), x.min(), x.max()))
+        if name in self.values:
+            old = self.values[name]
+            summary = torch.stack((old[0] + summary[0], old[1] + summary[1],
+                torch.maximum(old[2], summary[2]), torch.minimum(old[3], summary[3]), torch.maximum(old[4], summary[4])))
+        self.values[name] = summary
+
+    def __enter__(self):
+        def normalization(name, module, args):
+            if not self.enabled:
+                return
+            x = args[0].detach().float()
+            dims = (0,) if isinstance(module, torch.nn.BatchNorm1d) else tuple(range(-len(module.normalized_shape), 0))
+            variance = x.var(dims, unbiased=False)
+            self(name + ".input_variance", variance)
+            # This scale is a sensitivity clue, not the full normalization Jacobian.
+            gain = module.weight.detach().abs() if isinstance(module, torch.nn.BatchNorm1d) else module.weight.detach().abs().max()
+            self(name + ".scale_bound", gain / (variance + module.eps).sqrt())
+        def output(name, module, args, value):
+            if self.enabled:
+                self(name + ".output", value if isinstance(value, torch.Tensor) else value.feat)
+        for name, module in self.model.named_modules():
+            if isinstance(module, (torch.nn.BatchNorm1d, torch.nn.LayerNorm)):
+                self.handles.append(module.register_forward_pre_hook(lambda m, a, n=name: normalization(n, m, a)))
+            if name in ("backbone", "context", "point", "base_head", "relation_head"):
+                self.handles.append(module.register_forward_hook(lambda m, a, v, n=name: output(n, m, a, v)))
+        return self
+
+    def __exit__(self, *_):
+        for handle in self.handles:
+            handle.remove()
+
+    def summary(self):
+        result = {}
+        for name, value in self.values.items():
+            n, square, absolute, low, high = value.cpu().tolist()
+            if not all(math.isfinite(v) for v in (n, square, absolute, low, high)):
+                raise FloatingPointError(f"nonfinite diagnostic intermediate: {name}")
+            result[name] = dict(elements=int(n), rms=math.sqrt(square / n), absolute_max=absolute, min=low, max=high)
+        return result
+
+
+@contextmanager
+def normalization_mode(model, current_scan=False):
+    """Only BatchNorm changes mode; every scan restores the saved running buffers."""
+    with evaluation_state(model):
+        if current_scan:
+            for module in model.modules():
+                if isinstance(module, torch.nn.BatchNorm1d):
+                    module.train()
+        yield
+
+
+def diagnose(checkpoint_path, data_root, log_path, output):
+    """Trained-state localization; disposable optimizer probes never enter the formal trajectory."""
+    from .evaluate import prepare_fixed, fixed_summary, synthetic_targets, threshold_counts
+    output = Path(output)
+    if output.exists():
+        raise ValueError("diagnostic output already exists")
+    records = [json.loads(line) for line in Path(log_path).read_text().splitlines() if line.strip()]
+    if [r["step"] for r in records] != list(range(1, len(records) + 1)):
+        raise ValueError("diagnostics require a complete logged update prefix")
+    model, saved = load_checkpoint(checkpoint_path)
+    config, step = saved["config"], saved["step"]
+    if config["loss"]["keep_mode"] != "mean" or config["loss"]["tail_weight"] != 0:
+        raise ValueError("this diagnostic compares the declared detection-plus-mean objective")
+    chosen = diagnostic_batches(records, step)
+    selection = dict(train=saved["experiment"]["selection"]["train"], val={})
+    report = dict(format="ajae-optimization-diagnostic", checkpoint=str(checkpoint_path), checkpoint_step=step,
+        formal_optimizer_updates=0, disposable_optimizer_steps=0, status="running",
+        scope="206 only; saved trained state; historical inputs at new weights are not historical peak reproduction; no calibration or recipe changes",
+        log_prefix=len(records), log_summary=optimization_log_summary(records),
+        evaluated_prefix_summary=optimization_log_summary(records[:step]), selection=selection,
+        batch_selection=[dict(step=c["record"]["step"], samples=c["record"]["samples"], draws=c["record"]["draws"],
+                              reasons=c["reasons"]) for c in chosen],
+        batches=[], normalization={}, host_E_before=host_disk(), resources_before=runtime_resources())
+    _atomic_json(output, report)
+    dataset = TrainingFrames(config, data_root, preprocessing=saved["preprocessing"])
+    parameters = list(model.named_parameters())
+    scopes = {name: ".".join(name.split(".")[:2]) if name.startswith("relations.") else name.split(".")[0]
+              for name, _ in parameters}
+    optimizer = torch.optim.AdamW(model.parameters(), lr=config["training"]["learning_rate"],
+                                  weight_decay=config["training"]["weight_decay"])
+    def restore():
+        model.load_state_dict(saved["model"], strict=True)
+        optimizer.load_state_dict(deepcopy(saved["optimizer"]))
+        optimizer.zero_grad(set_to_none=True)
+        torch.set_rng_state(saved["torch_rng"])
+        torch.cuda.set_rng_state_all(saved["cuda_rng"])
+    started = time.perf_counter()
+    torch.cuda.reset_peak_memory_stats()
+    try:
+        for choice in chosen:
+            reference = choice["record"]
+            prepared_at = time.perf_counter()
+            rows = [dataset[(index, draw, True)] for index, draw in zip(reference["samples"], reference["draws"], strict=True)]
+            if sum(int((r["target"] == 1).sum()) for r in rows) != reference["anomaly_queries"]:
+                raise ValueError("reconstructed queries do not match the recorded anomaly denominator")
+            preparation_seconds = time.perf_counter() - prepared_at
+            torch.set_num_threads(4)
+            restore()
+            model.train()
+            with _Numerics(model) as trace:
+                total, stats, observed = batch_loss(model, rows, config, step, details=True, trace=trace)
+                if not torch.isfinite(total):
+                    raise FloatingPointError("nonfinite diagnostic objective")
+                trace.enabled = False
+                scores = torch.cat([observed["scores"][2 * i][r["detection_index"].cuda()] for i, r in enumerate(rows)])
+                anomaly = scores[observed["target"] == 1]
+                components = dict(detection=observed["components"]["detection"], keep=observed["components"]["keep"],
+                    detection_anomaly=.5 * F.softplus(-anomaly).mean() if len(anomaly) else scores.sum() * 0)
+                tensors = [p for _, p in parameters] + observed["context"] + observed["point"] + observed["scores"]
+                gradients = {}
+                for name, loss in components.items():
+                    values = torch.autograd.grad(loss, tensors, allow_unused=True, retain_graph=True)
+                    gradients[name] = [(g.detach().cpu() if g is not None else torch.zeros_like(t, device="cpu"))
+                                       for g, t in zip(values, tensors, strict=True)]
+                    if any(not torch.isfinite(g).all() for g in gradients[name]):
+                        raise FloatingPointError(f"nonfinite {name} diagnostic gradient")
+                    del values
+                groups = {scope: [i for i, (name, _) in enumerate(parameters) if scopes[name] == scope]
+                          for scope in sorted(set(scopes.values()))}
+                groups["all_parameters"] = list(range(len(parameters)))
+                offset = len(parameters)
+                for name in ("context", "point", "scores"):
+                    groups["shared_" + name] = list(range(offset, offset + len(observed[name])))
+                    offset += len(observed[name])
+                compared = {scope: _gradient_comparison({name: torch.cat([value[i].reshape(-1) for i in indices])
+                                for name, value in gradients.items()}) for scope, indices in groups.items()}
+                score_l1 = sum(float((gradients["detection"][i] + config["loss"]["keep_weight"] * gradients["keep"][i]).double().abs().sum())
+                               for i in groups["shared_scores"])
+                total.backward()
+                additive, largest = {}, []
+                for i, (name, parameter) in enumerate(parameters):
+                    actual = parameter.grad.detach().cpu().double() if parameter.grad is not None else torch.zeros_like(parameter, device="cpu", dtype=torch.float64)
+                    expected = gradients["detection"][i].double() + config["loss"]["keep_weight"] * gradients["keep"][i].double()
+                    value = additive.setdefault(scopes[name], dict(error_squared=0., gradient_squared=0., absolute_max=0.))
+                    value["error_squared"] += float((actual - expected).square().sum())
+                    value["gradient_squared"] += float(actual.square().sum())
+                    value["absolute_max"] = max(value["absolute_max"], float((actual - expected).abs().max()))
+                    largest.append(dict(parameter=name, gradient_norm=float(actual.norm())))
+                additive = {name: dict(relative_l2_error=math.sqrt(v["error_squared"] / max(v["gradient_squared"], 1e-30)),
+                                      absolute_max=v["absolute_max"]) for name, v in additive.items()}
+                norm = torch.nn.utils.clip_grad_norm_(model.parameters(), config["training"]["gradient_clip"], error_if_nonfinite=True)
+                optimizer.step()
+                changes, anomaly_linear_change = {}, 0.
+                for i, (name, parameter) in enumerate(parameters):
+                    actual = parameter.detach().cpu().double()
+                    if not torch.isfinite(actual).all():
+                        raise FloatingPointError("nonfinite disposable AdamW update")
+                    before = saved["model"][name].double()
+                    delta = actual - before
+                    values = changes.setdefault(scopes[name], dict(parameter_squared=0., update_squared=0.))
+                    values["parameter_squared"] += float(before.square().sum())
+                    values["update_squared"] += float(delta.square().sum())
+                    anomaly_linear_change += float((delta * gradients["detection_anomaly"][i].double()).sum())
+                changes = {name: dict(parameter_norm=math.sqrt(v["parameter_squared"]), update_norm=math.sqrt(v["update_squared"]),
+                    relative_update=math.sqrt(v["update_squared"]) / (math.sqrt(v["parameter_squared"]) + 1e-12))
+                    for name, v in changes.items()}
+                report["batches"].append(dict(input_log_step=reference["step"], parameter_step=step, reasons=choice["reasons"],
+                    historical_gradient=reference["gradient_norm"], historical_detection=reference["detection"],
+                    historical_keep=reference["keep"], stats=stats, gradients=compared, score_gradient_l1=score_l1,
+                    combined_gradient_before_clip=float(norm), updates=changes,
+                    gradient_additivity=additive, largest_parameter_gradients=sorted(largest, key=lambda v: -v["gradient_norm"])[:10],
+                    anomaly_loss_first_order_update_estimate=anomaly_linear_change, numerics=trace.summary(),
+                    preparation_seconds=preparation_seconds, total_seconds=time.perf_counter() - prepared_at))
+                report["disposable_optimizer_steps"] += 1
+                _atomic_json(output, report)
+                print(json.dumps(dict(event="trained_gradient_diagnostic", input_step=reference["step"],
+                    parameter_step=step, gradient=float(norm), seconds=report["batches"][-1]["total_seconds"])), flush=True)
+                del total, observed, tensors, components, gradients, scores, anomaly, loss, trace
+            del rows
+        restore()
+        prepared = prepare_fixed(data_root, selection, synthetic_splits=["train"])
+        transform = ScanTransform(config, state=saved["preprocessing"], workers=4)
+        modes = {"saved_running_statistics": [], "current_scan_statistics": []}
+        differences = []
+        for record, index in zip(selection["train"], prepared["indices"]["train"], strict=True):
+            frozen = prepared["datasets"]["train"][index]
+            scan = transform(frozen.source)
+            target, _ = synthetic_targets(frozen)
+            outputs = []
+            for name, rows in modes.items():
+                with normalization_mode(model, name == "current_scan_statistics"):
+                    scores = model.predict(frozen.source, prepared=scan).restore(frozen.source)
+                rows.append(dict(scores=scores, target=target, role=record["role"]))
+                outputs.append(scores)
+            differences.append(dict(identity=record["identity"], frame=record["frame"], role=record["role"],
+                by_label={str(label): dict(count=int((target == label).sum()),
+                    mean=float((outputs[1][target == label] - outputs[0][target == label]).astype(np.float64).mean()),
+                    absolute_mean=float(np.abs(outputs[1][target == label] - outputs[0][target == label]).astype(np.float64).mean()))
+                    for label in (0, 1) if np.any(target == label)}))
+            print(json.dumps(dict(event="normalization_diagnostic", frame=record["frame"], completed_frames=len(differences))), flush=True)
+        for name, rows in modes.items():
+            full = fixed_summary(rows, directory=output.parent)
+            threshold = full["recall_at_fpr_limit"]["threshold"]
+            report["normalization"][name] = dict(full=full,
+                roles={role: threshold_counts([r for r in rows if r["role"] == role], threshold)
+                       for role in sorted({r["role"] for r in rows})})
+        report["normalization"]["score_changes"] = differences
+        report["state_restored"] = all(torch.equal(v.cpu(), saved["model"][k]) for k, v in model.state_dict().items())
+        if not report["state_restored"] or any(float(v["step"]) != step for v in saved["optimizer"]["state"].values()):
+            raise ValueError("diagnostics changed the saved reference state")
+        report["status"] = "completed"
+    except BaseException as error:
+        report.update(status="stopped", error=repr(error), automatic_retry=False)
+        raise
+    finally:
+        report.update(seconds=time.perf_counter() - started, peak_cuda_bytes=torch.cuda.max_memory_allocated(), host_E_after=host_disk())
+        _atomic_json(output, report)
+    return report
 
 
 def save_checkpoint(path, payload):
@@ -806,12 +1073,14 @@ def fit(config, data_root, steps, output, resume=None, *, experiment=None, resum
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("check", "preview", "fit"))
+    parser.add_argument("command", choices=("check", "preview", "diagnose", "fit"))
     parser.add_argument("--config", type=Path, default=PROJECT_ROOT / "protocol/model.json")
     parser.add_argument("--data-root", type=Path, default=Path("/home/jasongao/Data/STU"))
     parser.add_argument("--steps", type=int)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--resume", type=Path)
+    parser.add_argument("--checkpoint", type=Path, help="completed trained state for isolated optimization diagnosis")
+    parser.add_argument("--log", type=Path, help="completed update log for diagnosis")
     parser.add_argument("--resume-without-201", action="store_true",
                         help="explicitly remove only 201 evaluation when resuming the staged run")
     parser.add_argument("--experiment", type=Path, help="declared finite or continuous learning budget and evaluation scope")
@@ -819,6 +1088,8 @@ def main():
     args = parser.parse_args()
     if args.resume_without_201 and (args.command != "fit" or args.resume is None or args.experiment is None):
         parser.error("--resume-without-201 requires a staged --experiment and --resume")
+    if args.command != "diagnose" and (args.checkpoint is not None or args.log is not None):
+        parser.error("--checkpoint and --log are diagnosis inputs, not training initialization")
     config = load_config(args.config)
     experiment = load_experiment(args.experiment) if args.experiment is not None else None
     if experiment is not None:
@@ -831,7 +1102,12 @@ def main():
     torch.set_num_threads(4)
     if not torch.cuda.is_available():
         parser.error("the LitePT sparse-convolution implementation requires CUDA")
-    if args.command == "check":
+    if args.command == "diagnose":
+        if (args.checkpoint is None or args.log is None or args.output is None
+                or args.steps is not None or args.sample is not None or args.resume is not None):
+            parser.error("diagnose requires --checkpoint, --log and --output; no formal updates or resume")
+        diagnose(args.checkpoint, args.data_root, args.log, args.output)
+    elif args.command == "check":
         if args.steps is not None or args.output is not None or args.resume is not None:
             parser.error("check has no optimization budget, output directory or resume state")
         check(config, args.data_root, args.sample if args.sample is not None else [161, 162])

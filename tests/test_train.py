@@ -238,6 +238,53 @@ def test_gradient_comparison_has_no_direction_for_zero_vectors():
     assert result["cosine"] == {"zero:a": None, "zero:opposite": None, "a:opposite": -1.}
 
 
+def test_normalization_control_changes_only_batchnorm_and_restores_state():
+    from src.train import normalization_mode
+    model = nn.Sequential(nn.BatchNorm1d(2), nn.Dropout(.8)).eval()
+    saved = deepcopy(model.state_dict())
+    x = torch.tensor([[5., 8.], [7., 12.], [9., 16.]])
+    with normalization_mode(model):
+        ordinary = model(x)
+    with normalization_mode(model, current_scan=True):
+        assert not model.training and model[0].training and not model[1].training
+        current = model(x)
+    assert not torch.allclose(ordinary, current)
+    torch.testing.assert_close(current.mean(0), torch.zeros(2), atol=1e-6, rtol=0)
+    for name, value in model.state_dict().items():
+        torch.testing.assert_close(value, saved[name], rtol=0, atol=0)
+
+
+def test_detached_numerics_do_not_change_gradients_or_count_recomputation():
+    from src.train import _Numerics
+    torch.manual_seed(53)
+    model = SmallModel().train()
+    reference = deepcopy(model)
+    rows, config = batch_fixture(), load_config()
+    expected, _ = batch_loss(reference, rows, config, 201)
+    expected.backward()
+    with _Numerics(model) as trace:
+        actual, _ = batch_loss(model, rows, config, 201)
+        trace.enabled = False
+        before = trace.summary()
+        actual.backward()
+        assert trace.summary() == before
+    torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+    for a, b in zip(model.parameters(), reference.parameters(), strict=True):
+        torch.testing.assert_close(a.grad, b.grad, rtol=0, atol=0)
+
+
+def test_diagnostic_selection_keeps_saved_state_and_log_scopes_separate():
+    from src.train import diagnostic_batches, optimization_log_summary
+    rows = [dict(step=i + 1, auxiliary_fraction=1., gradient_norm=float(i + 1),
+                 anomaly_queries=0 if i == 0 else i, detection=.1, keep=.2)
+            for i in range(10)]
+    selected = diagnostic_batches(rows, 8)
+    assert max(c["record"]["step"] for c in selected) == 9
+    assert all(c["record"]["step"] != 10 for c in selected)
+    assert selected[-1]["reasons"] == ["next_update_with_saved_preupdate_state"]
+    assert optimization_log_summary(rows)["by_anomaly_count"]["zero"]["count_gradient_spearman"] is None
+
+
 def test_checkpoint_rejects_missing_preprocessing_before_model_construction(tmp_path, monkeypatch):
     import src.train as train
 

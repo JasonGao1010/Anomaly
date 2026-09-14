@@ -3795,7 +3795,65 @@
   "long_training": {
     "declaration": "protocol/long.json",
     "output": "results/train",
-    "status": "running",
+    "status": "paused_for_optimization_diagnosis",
+    "completed_updates": 4781,
+    "pause": {
+      "date": "2026-09-14",
+      "reason": "user authorized a complete-state pause for concentrated gradient, normalization-mode and supervision-weight diagnosis before deciding continuation",
+      "checkpoint": "results/train/resume.pt",
+      "verified": "checkpoint and optimizer steps equal4781; complete logged prefix; all four RNG states saved; training process exited; no numerical failure",
+      "automatic_resume": false
+    },
+    "optimization_diagnostic": {
+      "evidence": "results/train/diagnostic.json",
+      "status": "completed",
+      "checkpoint_step": 4000,
+      "formal_updates": 0,
+      "disposable_one_step_probes": 8,
+      "scope": "saved4000 state,8 preselected206 batches and unchanged fixed20632 complete valid point sets; no201 or newval19 predictions; no recalibration or recipe change",
+      "historical_input_steps": [1068, 1410, 2331, 2399, 2616, 2863, 2885, 4001],
+      "log_updates": 4781,
+      "clipped_updates": 3852,
+      "gradient_median": 5.127111911773682,
+      "gradient_maximum": 114512.9609375,
+      "zero_anomaly_batches": 135,
+      "anomaly_queries_median": 17,
+      "full_keep_201_to_4000_count_gradient_spearman": 0.1277375034907344,
+      "current_probe_gradient_range": [0.32238516211509705, 92.21736145019531],
+      "largest_probe": {
+        "input_step": 2863,
+        "detection_norm": 97.51279476043216,
+        "keep_norm": 4.440605560550996,
+        "cosine": -0.9954123970059954,
+        "backbone_detection_norm": 97.48514804329083,
+        "dominant_parameter": "backbone.embedding.stem.conv.weight"
+      },
+      "module_relative_update_percent_range": [0.010382293289569853, 0.13948594479076004],
+      "normalization": {
+        "frames": 32,
+        "normal_count": 3810224,
+        "anomaly_count": 898,
+        "saved_running_statistics": {
+          "detection_loss": 0.5086908592017506,
+          "AP": 3.517376888545374,
+          "FPR95": 4.50768773699394,
+          "recall_at_1pct_FPR": 65.36748329621382,
+          "actual_FPR": 0.9982877647088465
+        },
+        "current_scan_statistics": {
+          "detection_loss": 0.3729396986987513,
+          "AP": 15.393160334009877,
+          "FPR95": 1.9825343601845982,
+          "recall_at_1pct_FPR": 84.52115812917594,
+          "actual_FPR": 0.990886625038318
+        },
+        "interpretation": "changing only BatchNorm statistical mode improves fixed206 ordering; not proof of val19 gain or effectiveness of training-only recalibration"
+      },
+      "verification": "original inference complete metrics exactly equal4000.json; update4001 loss components, queries and combined gradient exactly equal original log; diagnostic model and buffers restored; original optimizer state unchanged",
+      "execution_note": "all calculations and saved-state checks completed before a final return-name NameError; source return corrected without changing saved numerical results",
+      "limits": "original ten-thousand-to-hundred-thousand gradient events not reproduced without their historical states; local gradient conflicts do not establish keep harm; disposable updates are not added training; BF16 backbone gradient additivity differs by up to0.95448percent",
+      "decision": "remain paused; prioritize normalization behavior for the next initialization/finetuning plan; no automatic scheduler, loss, sampling or backbone change"
+    },
     "initial_checkpoint": "results/short/0.pt",
     "maximum_updates": 32000,
     "cumulative_nodes": [
@@ -3852,7 +3910,7 @@
           "FPR95": 0.556375590857581,
           "recall_at_1pct_FPR": -0.52457742374199
         },
-        "interpretation": "weaker than separate historical1024 run; not an intra-trajectory1024-to4000 curve; one complete node does not establish sustained degradation; continue original cumulative budget"
+        "interpretation": "weaker than separate historical1024 run; not an intra-trajectory1024-to4000 curve; one complete node does not establish sustained degradation; subsequently paused by user for concentrated optimization diagnosis"
       }
     },
     "exposure": "actual optimized query slots, distinct world-frames/source-frames and existing core-cell observations; unknown geometry remains unknown",

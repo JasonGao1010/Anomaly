@@ -235,7 +235,7 @@ class RelationLayer(nn.Module):
         self.null = _mlp(2 * channels + 8, channels, 3)
         self.update = _mlp(5 * channels, 2 * channels, channels)
 
-    def part(self, z, h, scan, query, conditioned, condition_modulation=True):
+    def part(self, z, h, scan, query, conditioned, condition_modulation=True, trace=None):
         ids = scan["neighbors"][scan["geometry_inverse"][query]].long()
         valid = ids >= 0
         ids = ids.clamp_min(0)
@@ -259,19 +259,30 @@ class RelationLayer(nn.Module):
         values = torch.nn.functional.gelu(edge * (1 + gamma.tanh()) + beta)
         q, k = self.query(torch.cat((zi, hi), -1)), self.key(torch.cat((zj, hj), -1))
         scores = (q[:, None] * k).sum(-1) / z.shape[1]**.5 + self.bias(values).squeeze(-1)
+        if trace is not None:
+            trace("sensing", sensing[valid])
+            trace("values", values[valid])
+            trace("attention_scores", scores[valid])
         scores = scores.masked_fill(~valid, -torch.inf).reshape(len(query), 3, -1)
         null = self.null(torch.cat((zi, hi, ci), -1)).unsqueeze(-1)
         # Every shell has a finite null logit, including completely unsupported queries.
         alpha = torch.softmax(torch.cat((scores, null), -1).float(), -1)[..., :-1]
         values = values.reshape(len(query), 3, -1, z.shape[1])
         evidence = (alpha[..., None] * values).sum(2).flatten(1)
-        return z[query] + self.update(torch.cat((hi, zi, evidence), -1))
+        residual = self.update(torch.cat((hi, zi, evidence), -1))
+        result = z[query] + residual
+        if trace is not None:
+            trace("null_scores", null)
+            trace("attention_weights", alpha)
+            trace("residual", residual)
+            trace("output", result)
+        return result
 
-    def forward(self, z, h, scan, query, *, conditioned, chunk, recompute, condition_modulation=True):
+    def forward(self, z, h, scan, query, *, conditioned, chunk, recompute, condition_modulation=True, trace=None):
         parts = []
         for q in query.split(chunk):
             def compute(z, h, q):
-                return self.part(z, h, scan, q, conditioned, condition_modulation)
+                return self.part(z, h, scan, q, conditioned, condition_modulation, trace)
             parts.append(checkpoint(compute, z, h, q, use_reentrant=False)
                          if recompute and self.training and torch.is_grad_enabled()
                          else compute(z, h, q))
@@ -293,7 +304,7 @@ class AJAE(nn.Module):
         self.base_head = _mlp(2 * c + 8, 128, 1)
         self.relation_head = _mlp(2 * c + 8, 128, 1)
 
-    def forward(self, scan, query=None, *, return_features=False):
+    def forward(self, scan, query=None, *, return_features=False, trace=None):
         n, m = len(scan["xyzi"]), self.config
         all_rows = torch.arange(n, device=scan["xyzi"].device)
         query = all_rows if query is None else query
@@ -318,7 +329,8 @@ class AJAE(nn.Module):
             # First-layer support is updated for the full scan, even for sampled loss queries.
             z = layer(z, h, scan, query if index == len(self.relations) - 1 else all_rows,
                 conditioned=m["relation_mode"] == "conditioned", chunk=m["relation_chunk"],
-                recompute=m["checkpoint_relations"], condition_modulation=m["condition_modulation"])
+                recompute=m["checkpoint_relations"], condition_modulation=m["condition_modulation"],
+                trace=(lambda name, value, i=index: trace(f"relations.{i}.{name}", value)) if trace is not None else None)
         correction = self.relation_head(torch.cat((h[query], z, scan["condition"][query]), -1)).squeeze(-1)
         score = (base + correction).float()
         return dict(score=score, **features) if return_features else score
