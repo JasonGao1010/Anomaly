@@ -1,0 +1,71 @@
+{
+  "format": "ajae-v1",
+  "initialization": "nuscenes_litept_s",
+  "model": {
+    "backbone": "LitePT-S",
+    "channels": 64,
+    "relation_layers": 2,
+    "relation_mode": "conditioned",
+    "condition_modulation": true,
+    "voxel_m": 0.05,
+    "radii_m": [
+      0.25,
+      0.75,
+      2.0
+    ],
+    "neighbors_per_shell": 16,
+    "radial_scale_m": 0.25,
+    "minimum_sampling_m": 0.001,
+    "scale_neighbors": 6,
+    "scale_radius_m": 0.5,
+    "scale_minimum_neighbors": 3,
+    "relation_chunk": 2048,
+    "checkpoint_relations": true,
+    "backbone_drop_path": 0.0,
+    "backbone_shuffle_orders": false,
+    "intensity_transform": "identity_raw_stu_no_clip",
+    "backbone_batchnorm": "train_batch_eval_running"
+  },
+  "training": {
+    "seed": 20260913,
+    "batch_frames": 2,
+    "workers": 2,
+    "learning_rate": 0.0002,
+    "weight_decay": 0.01,
+    "gradient_clip": 1.0,
+    "normal_queries": 8192,
+    "anomaly_queries": 2048,
+    "keep_queries": 1024,
+    "keep_near_fraction": 0.5,
+    "keep_near_m": 2.0,
+    "warmup_steps": 100,
+    "ramp_steps": 100,
+    "save_every": 1000,
+    "sampling": "results/coverage/sampling.npz",
+    "augmentation": "none_preserve_physical_sensor_conditions",
+    "backbone_learning_rate": 2e-05
+  },
+  "loss": {
+    "keep_weight": 1.0,
+    "tail_weight": 0.0,
+    "keep_mode": "mean",
+    "normal_tail_fraction": 0.01,
+    "anomaly_tail_fraction": 0.1,
+    "margin": 1.0,
+    "temperature": 1.0,
+    "pairs_per_tail": 4096
+  },
+  "scope": "Pretrained performance candidate: actual initialization and no-update diagnostics authorized; no training budget authorized in this preparation round. Old random trajectory remains paused at4781.",
+  "pretrained": {
+    "repository": "prs-eth/LitePT",
+    "revision": "a8e76e92efbb2061639f5c683968bc5d248ee002",
+    "filename": "nuscenes-semseg-litept-small-v1m1/model/model_best.pth",
+    "sha256": "95f151f6edcfbf315cd06df6afd261f2a2fde300d3c693dd26b1305d642ecc30",
+    "local_path": "results/pretrain/nuscenes.pth",
+    "dataset": "nuScenes lidarseg",
+    "input": "official XYZ plus raw intensity divided by255; AJAE keeps native STU intensity and voxel means",
+    "new_modules": "random initialization using the declared seed; only the complete backbone is inherited",
+    "batchnorm": "inherit parameters and running buffers; training adapts running statistics at existing momentum0.01, evaluation uses saved running statistics; no permanent freeze",
+    "external_information": "16 semantic classes include traffic_cone and barrier; no claim of universal unseen anomaly categories"
+  }
+}

@@ -3,8 +3,8 @@
   "schema_version": 1,
   "research_question": "Using only the complete current scan, can scene-supported observation-conditioned relationships on original returns learn transferable anomaly-versus-normal ranking? The current main method uses detection plus mean retained-normal pairing; independent mechanism attribution remains a later controlled comparison.",
   "status": {
-    "stage": "formal_v1_continuous_full_pool_training_running",
-    "active_work": "one authorized mean-pairing trajectory running from the common step-zero state; complete evaluation at4000/8000/16000/32000",
+    "stage": "pretrained_initialization_and_no_update_diagnostics_completed",
+    "active_work": "actual official nuScenes backbone loaded into separate saved zero state; no new training; previous random trajectory remains paused at4781",
     "model_defined": true,
     "training_defined": true,
     "formal_ajae_v1": "context_supported_conditional_return_relationship_network",
@@ -36,7 +36,7 @@
     "coverage_closure_evidence": "results/coverage/summary.json",
     "coverage_decision": "all_original_core_checks_exact_30_cell_quotas_and_sampling_exposure_requirements_passed; data_unchanged_by_model_implementation",
     "coverage_boundaries": "one_normal_source_per_split; sparse_normal_nonextreme_train_region_share_0.4997728305_near_0.5_limit; selected_geometry_scope_and_missingness; weak_background_change_is_not_self_occlusion; no_universal_coverage_claim",
-    "next_stage": "4000 complete-val19 and complete-201 evaluation, then continue cumulatively to 8000,16000,32000 absent failure or substantive persistent degradation",
+    "next_stage": "review the prepared fine-tuning candidate and declare its separate full-pool budget and learning-rate schedule; complete val19 remains the primary development evaluation",
     "data_preparation_accepted": true,
     "original_pool_summary_completed": true,
     "balanced_pool_target": {
@@ -142,14 +142,15 @@
         }
       }
     },
-    "model_configuration": "model.json",
-    "formal_v1_full_training_ready": true,
+    "model_configuration": "pretrain.json",
+    "formal_v1_full_training_ready": false,
     "formal_default_full_training_executed": true,
     "full_val19_model_evaluation_executed": true,
     "finite_learning_executed": true,
     "fixed_development_model_evaluation_executed": true,
-    "formal_full_training_authorized": true,
-    "formal_full_training_completed": false
+    "formal_full_training_authorized": false,
+    "formal_full_training_completed": false,
+    "pretrained_training_executed": false
   },
   "data": {
     "normal_sources": [
@@ -1364,8 +1365,8 @@
   },
   "method": {
     "implementation": "src/model.py; src/train.py; src/evaluate.py",
-    "configuration": "protocol/model.json",
-    "initialization": "random_only; no_external_pretrained_weights_downloaded_or_used",
+    "configuration": "protocol/pretrain.json is the untrained performance candidate; protocol/model.json preserves the paused random trajectory",
+    "initialization": "candidate: complete official nuScenes LitePT-S backbone plus fresh AJAE modules; previous measured AJAE trajectories used random initialization",
     "input": "complete_current_sensor_XYZI; labels_poses_original_normal_scan_and_insertion_masks_do_not_enter_inference",
     "context": "LitePT-S_at_0.05m_voxels; every_real_return_contributes_to_voxel_mean; context_72_to_64",
     "original_returns": "XYZI_and_offset_from_fixed_voxel_cell_center_to_64; original_rows_retained_even_for_duplicate_coordinates",
@@ -1380,7 +1381,7 @@
     "paired_controls": "none_plain_conditioned_share_initial_parameter_draws; plain_vs_conditioned_changes_coordinates_normalization_and_condition_inputs_as_one_package; conditioned_with_condition_modulation_false_keeps_neighbors_ray_coordinates_sampling_normalization_width_and_heads_identical_and_zeros_only_relation_modulation_and_null_condition_inputs; mean_vs_worst_keeps_the_same_original_scan_forwards",
     "resource_strategy": "2_live_source_frames; whole_scan_and_relationship_recomputation; BatchNorm_buffers_restored_after_recomputation; 2_preparation_workers; no_persistent_geometry_cache",
     "evaluation": "real_val19_official_semantics_unchanged; synthetic_all_and_official_filtered_share_FrozenFrame.anomaly_target; filtered_adds_only_2.5_to_50m_and_at_least_5_actual_inserted_in_range_returns; exact_float32_ties_bounded_numeric_RAM_128MiB_per_counter_with_external_compressed_merge_and_shared_E_disk_reserve",
-    "interpretation": "mean combination has positive single-run full-val19 development evidence; independent conditioning/pairing contributions, stability and hidden-test generalization remain unestablished",
+    "interpretation": "actual pretrained initialization and bounded no-update numerical checks are complete; pretrained task benefit is unknown; historical random-initialized full-val19 results retain their scope; independent conditioning/pairing contributions remain unestablished",
     "implementation_verification": {
       "date": "2026-09-13",
       "command": "python -m src.train check",
@@ -4040,5 +4041,346 @@
     "live_status": "results/train/run.json; exact last optimized step and draws in results/train/loss.jsonl",
     "runtime_log": "results/train/run.log",
     "planned_checkpoint_and_staging_peak_bytes": 4478600128
+  },
+  "pretrained_initialization": {
+    "status": "completed",
+    "date": "2026-09-14",
+    "configuration": "protocol/pretrain.json",
+    "evidence": "results/pretrain/diagnostic.json",
+    "checkpoint": "results/pretrain/0.pt",
+    "source": {
+      "repository": "prs-eth/LitePT",
+      "revision": "a8e76e92efbb2061639f5c683968bc5d248ee002",
+      "filename": "nuscenes-semseg-litept-small-v1m1/model/model_best.pth",
+      "sha256": "95f151f6edcfbf315cd06df6afd261f2a2fde300d3c693dd26b1305d642ecc30",
+      "local_path": "results/pretrain/nuscenes.pth",
+      "dataset": "nuScenes lidarseg",
+      "input": "official XYZ plus raw intensity divided by255; AJAE keeps native STU intensity and voxel means",
+      "new_modules": "random initialization using the declared seed; only the complete backbone is inherited",
+      "batchnorm": "inherit parameters and running buffers; training adapts running statistics at existing momentum0.01, evaluation uses saved running statistics; no permanent freeze",
+      "external_information": "16 semantic classes include traffic_cone and barrier; no claim of universal unseen anomaly categories"
+    },
+    "source_code_commit": "436d04801c8151faebe66a1b2d368a9711e7e6aa",
+    "license": "MIT per official source and Hugging Face model card",
+    "source_file_bytes": 152723619,
+    "official_weight_sha256_verified": true,
+    "backbone_loaded_keys": 238,
+    "backbone_parameters": 12703932,
+    "backbone_buffers": 39,
+    "backbone_tensor_equality": true,
+    "missing_keys": [],
+    "unexpected_backbone_keys": [],
+    "shape_mismatches": [],
+    "discarded_classifier": {
+      "module.seg_head.weight": [
+        16,
+        72
+      ],
+      "module.seg_head.bias": [
+        16
+      ]
+    },
+    "discarded_training_state": [
+      "optimizer",
+      "scheduler",
+      "scaler",
+      "epoch",
+      "best_metric_value"
+    ],
+    "new_module_parameters": 227146,
+    "new_modules_equal_same_seed_original_zero": true,
+    "optimizer_groups": [
+      {
+        "name": "backbone",
+        "learning_rate": 2e-05,
+        "weight_decay": 0.01,
+        "parameters": 12703932
+      },
+      {
+        "name": "new_modules",
+        "learning_rate": 0.0002,
+        "weight_decay": 0.01,
+        "parameters": 227146
+      }
+    ],
+    "optimizer_state_entries": 0,
+    "optimizer_updates": 0,
+    "training_authorized": false,
+    "input_intensity": {
+      "source": "raw_train_206",
+      "frames": 449,
+      "returns": 56196767,
+      "min": 0.0011428571306169033,
+      "max": 1.6368571519851685,
+      "mean": 0.2501877886626173,
+      "quantiles": {
+        "q01": 0.011142857372760773,
+        "q25": 0.0965714305639267,
+        "q50": 0.19285714626312256,
+        "q75": 0.35199999809265137,
+        "q95": 0.6545714139938354,
+        "q99": 0.8825713992118835,
+        "q999": 1.5508571863174438
+      },
+      "above_1": 264862,
+      "above_255": 0,
+      "negative": 0,
+      "nonfinite": 0,
+      "rule": "identity_raw_stu_no_clip",
+      "physical_cross_sensor_calibration_verified": false
+    },
+    "batchnorm_policy": "inherit13 running states; training uses per-scan statistics with existing momentum0.01; inference uses saved running states; no permanent freezing; diagnostic mutations restored",
+    "batchnorm_running_variance_minimum": 0.7332541942596436,
+    "selection_rule": "first two sparse_normal, first two near_1_4, first far_20_plus plus first middle_20_plus, first two zero_anomaly from existing micro train identities; fixed before predictions",
+    "scope": "206 only; fixed existing identities; unchanged pretrained step zero; gradients with full mean weight are prospective diagnostics, not post-warmup evidence; no task or transfer evaluation",
+    "batches": [
+      {
+        "batch": 0,
+        "samples": [
+          105054,
+          51416
+        ],
+        "full_input_returns": [
+          123469,
+          128900
+        ],
+        "anomaly_queries": 18,
+        "normal_queries": 16384,
+        "retained_normal_pairs": 2048,
+        "detection": 0.7211048603057861,
+        "keep": 0.6714432239532471,
+        "gradient_norm": 3.6661011604456113,
+        "gradient_norms": {
+          "backbone": 2.3487744413598937,
+          "context": 0.7831414443455937,
+          "point": 0.21042542045779455,
+          "relations": 0.32763002377409184,
+          "base_head": 1.9142292583909897,
+          "relation_head": 1.8693185594355777
+        }
+      },
+      {
+        "batch": 1,
+        "samples": [
+          80004,
+          26855
+        ],
+        "full_input_returns": [
+          118846,
+          126397
+        ],
+        "anomaly_queries": 7,
+        "normal_queries": 16384,
+        "retained_normal_pairs": 2048,
+        "detection": 0.6614280939102173,
+        "keep": 0.6888870000839233,
+        "gradient_norm": 2.4838138715506557,
+        "gradient_norms": {
+          "backbone": 0.6174826524771557,
+          "context": 0.5296444872167583,
+          "point": 0.16394524487573733,
+          "relations": 0.24574159880397556,
+          "base_head": 1.671395354632476,
+          "relation_head": 1.6207078180137875
+        }
+      },
+      {
+        "batch": 2,
+        "samples": [
+          100324,
+          15718
+        ],
+        "full_input_returns": [
+          126447,
+          123877
+        ],
+        "anomaly_queries": 221,
+        "normal_queries": 16384,
+        "retained_normal_pairs": 2048,
+        "detection": 0.636107325553894,
+        "keep": 0.6959385871887207,
+        "gradient_norm": 2.5848693299399814,
+        "gradient_norms": {
+          "backbone": 0.5470618017231882,
+          "context": 0.5930161664985368,
+          "point": 0.1765361825471316,
+          "relations": 0.25499583720384295,
+          "base_head": 1.748216918034656,
+          "relation_head": 1.6965124140391465
+        }
+      },
+      {
+        "batch": 3,
+        "samples": [
+          76345,
+          31881
+        ],
+        "full_input_returns": [
+          125019,
+          123532
+        ],
+        "anomaly_queries": 0,
+        "normal_queries": 16384,
+        "retained_normal_pairs": 2048,
+        "detection": 0.33752548694610596,
+        "keep": 0.6744973659515381,
+        "gradient_norm": 3.3665287706234226,
+        "gradient_norms": {
+          "backbone": 0.26892449307569055,
+          "context": 0.6554514232135417,
+          "point": 0.2337518786498962,
+          "relations": 0.33432146045207534,
+          "base_head": 2.338710207606418,
+          "relation_head": 2.2793864958389483
+        }
+      }
+    ],
+    "normalization_original_frames": [
+      437,
+      230,
+      82,
+      364,
+      197,
+      3,
+      15,
+      2
+    ],
+    "normalization_original_returns": 996453,
+    "normalization_ranges": {
+      "pretrained_running": {
+        "backbone.output": {
+          "rms": [
+            0.8594533223271112,
+            0.9831495277858655
+          ],
+          "absolute_max": [
+            8.685136795043945,
+            26.212350845336914
+          ]
+        },
+        "context.output": {
+          "rms": [
+            0.6426704483371678,
+            0.6544080798379871
+          ],
+          "absolute_max": [
+            4.059817314147949,
+            4.281741142272949
+          ]
+        },
+        "scores": {
+          "rms": [
+            0.15216044242898488,
+            0.17328703186639088
+          ],
+          "absolute_max": [
+            0.45229408144950867,
+            0.5118779540061951
+          ]
+        }
+      },
+      "current_scan": {
+        "backbone.output": {
+          "rms": [
+            0.957277729858639,
+            0.9915055871038453
+          ],
+          "absolute_max": [
+            12.589815139770508,
+            29.57285499572754
+          ]
+        },
+        "context.output": {
+          "rms": [
+            0.6475371134115028,
+            0.6560031846894591
+          ],
+          "absolute_max": [
+            3.968905448913574,
+            4.2349772453308105
+          ]
+        },
+        "scores": {
+          "rms": [
+            0.17075448748144528,
+            0.20027946338020086
+          ],
+          "absolute_max": [
+            0.5343582034111023,
+            0.5839280486106873
+          ]
+        }
+      }
+    },
+    "score_difference_rms_range": [
+      0.07372620375492436,
+      0.08543921262440299
+    ],
+    "score_difference_absolute_max": 0.40857023000717163,
+    "state_unchanged": true,
+    "verification": "existing checkpoint loader reads the saved state; complete107760 sample identities and probabilities match; fresh optimizer has two declared rates; old resume and optimizer remain4781",
+    "seconds": 80.36657058799756,
+    "peak_cuda_bytes": 5779117568,
+    "host_E_before": {
+      "Size": 484950659072,
+      "SizeRemaining": 64192339968,
+      "reserve_bytes": 10000000000
+    },
+    "host_E_after": {
+      "Size": 484950659072,
+      "SizeRemaining": 64147709952,
+      "reserve_bytes": 10000000000
+    },
+    "external_information": {
+      "nuscenes_classes": [
+        "barrier",
+        "bicycle",
+        "bus",
+        "car",
+        "construction_vehicle",
+        "motorcycle",
+        "pedestrian",
+        "traffic_cone",
+        "trailer",
+        "truck",
+        "driveable_surface",
+        "other_flat",
+        "sidewalk",
+        "terrain",
+        "manmade",
+        "vegetation"
+      ],
+      "stu_public_examples": [
+        "bucket",
+        "indoor garbage bin",
+        "broom",
+        "chair",
+        "pot",
+        "stuffed animal",
+        "balloon",
+        "ball",
+        "backpack",
+        "bag",
+        "pillow",
+        "shoe",
+        "umbrella",
+        "hat",
+        "yoga mat",
+        "helmet",
+        "swimming noodle",
+        "tissue box",
+        "ladder",
+        "car seat",
+        "sleeping bag",
+        "bottle"
+      ],
+      "stu_examples_source": "https://arxiv.org/html/2505.02148v1#S7",
+      "interpretation": "no direct category-name intersection in these22 public examples; examples are not an exhaustive per-val19-instance taxonomy;16 supervised names do not enumerate every visible pretraining object",
+      "stu_anomaly_labels_used_for_training": false,
+      "exhaustive_cross_dataset_instance_or_scan_overlap_verified": false,
+      "all_anomaly_categories_unseen_claim": false
+    },
+    "conclusion": "complete transfer and finite no-update computation established on declared206 inputs; statistical modes differ; no pretrained AP result, sustained optimization claim or causal explanation of old degradation",
+    "next_action": "a separately authorized full-pool fine-tuning trajectory from this0 state, with declared learning-rate schedule and full-val19 evaluation; do not resume old optimizer or201 evaluation"
   }
 }

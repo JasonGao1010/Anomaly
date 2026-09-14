@@ -11,6 +11,67 @@ from src.train import (_gradient_comparison, batch_loss, keep_loss, load_checkpo
                        tail_loss, Requests, evaluation_state, validate_initial_state, validate_resume_state)
 
 
+def test_pretrained_transfer_is_complete_and_does_not_touch_new_modules():
+    from src.model import transfer_backbone
+    model = nn.Module()
+    model.backbone = nn.Sequential(nn.Linear(4, 72), nn.BatchNorm1d(72))
+    model.head = nn.Linear(72, 1)
+    fresh = deepcopy(model.head.state_dict())
+    weights = {"module.backbone." + k: v.clone() + 1 for k, v in model.backbone.state_dict().items()}
+    weights.update({"module.seg_head.weight": torch.ones(16, 72), "module.seg_head.bias": torch.ones(16)})
+    report = transfer_backbone(model, weights)
+    assert report["exact_tensor_equality"] and report["loaded_keys"] == len(model.backbone.state_dict())
+    for name, value in model.backbone.state_dict().items():
+        torch.testing.assert_close(value, weights["module.backbone." + name], rtol=0, atol=0)
+    for name, value in model.head.state_dict().items():
+        torch.testing.assert_close(value, fresh[name], rtol=0, atol=0)
+    missing = dict(weights)
+    missing.pop("module.backbone.1.running_mean")
+    with pytest.raises(ValueError, match="state keys differ"):
+        transfer_backbone(model, missing)
+    with pytest.raises(ValueError, match="state keys differ"):
+        transfer_backbone(model, dict(weights, extra=torch.ones(1)))
+    invalid = dict(weights)
+    invalid["module.backbone.0.weight"] = torch.zeros(72, 5)
+    with pytest.raises(ValueError, match="invalid official tensor"):
+        transfer_backbone(model, invalid)
+
+
+def test_pretrained_optimizer_starts_empty_with_disjoint_learning_rates():
+    from src.train import make_optimizer
+    from src.model import validate_config
+    model = nn.Module()
+    model.backbone, model.head = nn.Linear(4, 72), nn.Linear(72, 1)
+    config = load_config("protocol/pretrain.json")
+    optimizer = make_optimizer(model, config)
+    assert not optimizer.state
+    assert [g["lr"] for g in optimizer.param_groups] == [2e-5, 2e-4]
+    grouped = [id(p) for g in optimizer.param_groups for p in g["params"]]
+    assert len(grouped) == len(set(grouped)) and set(grouped) == {id(p) for p in model.parameters()}
+    assert all(p.requires_grad for p in model.parameters())
+    assert len(make_optimizer(model, load_config()).param_groups) == 1
+    config["model"]["intensity_transform"] = "divide_by_255"
+    with pytest.raises(ValueError, match="input rule"):
+        validate_config(config)
+
+
+def test_raw_intensity_statistics_keep_values_above_one_and_ignore_labels():
+    from types import SimpleNamespace
+    from src.train import intensity_summary
+    values = np.array([.1, .2, 1.6, .4], dtype=np.float32)
+    sequence = [SimpleNamespace(xyzi=np.column_stack((np.ones((4, 3)), values)), real_slots=np.arange(4), frame_id=7)]
+    result = intensity_summary(sequence)
+    assert result["returns"] == 4 and result["above_1"] == 1
+    assert result["max"] == float(values.max())
+    assert result["quantiles"]["q50"] == np.quantile(values.astype(np.float64), .5)
+
+
+def test_pretrained_fit_cannot_silently_start_from_random_weights(tmp_path):
+    from src.train import fit
+    with pytest.raises(ValueError, match="saved initialized state"):
+        fit(load_config("protocol/pretrain.json"), tmp_path / "no_data", 1, tmp_path / "run")
+
+
 def test_short_initialization_allows_only_sampling_scope_change():
     config = load_config()
     saved = dict(step=0, optimizer=dict(state={}), config=deepcopy(config), samples=[["world", 11]])

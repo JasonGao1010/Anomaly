@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import hashlib
 import json
 from pathlib import Path
 
@@ -23,9 +24,22 @@ def load_config(path=PROJECT_ROOT / "protocol/model.json"):
 
 
 def validate_config(config):
-    if config.get("format") != "ajae-v1" or config["initialization"] != "random_no_external_weights":
-        raise ValueError("expected the current AJAE V1 configuration without external weights")
+    if (config.get("format") != "ajae-v1"
+            or config["initialization"] not in {"random_no_external_weights", "nuscenes_litept_s"}):
+        raise ValueError("expected a declared AJAE V1 initialization")
     m, t, loss = config["model"], config["training"], config["loss"]
+    if config["initialization"] == "nuscenes_litept_s":
+        source = config.get("pretrained", {})
+        if (source.get("repository") != "prs-eth/LitePT"
+                or source.get("revision") != "a8e76e92efbb2061639f5c683968bc5d248ee002"
+                or source.get("filename") != "nuscenes-semseg-litept-small-v1m1/model/model_best.pth"
+                or source.get("sha256") != "95f151f6edcfbf315cd06df6afd261f2a2fde300d3c693dd26b1305d642ecc30"
+                or m.get("intensity_transform") != "identity_raw_stu_no_clip"
+                or m.get("backbone_batchnorm") != "train_batch_eval_running"
+                or not 0 < t.get("backbone_learning_rate", 0) <= t["learning_rate"]):
+            raise ValueError("incomplete pretrained source, input rule or fine-tuning configuration")
+    elif "pretrained" in config or "backbone_learning_rate" in t:
+        raise ValueError("random initialization cannot silently inherit a pretrained recipe")
     if (m["backbone"] != "LitePT-S" or m["relation_mode"] not in {"none", "plain", "conditioned"}
             or not isinstance(m.get("condition_modulation"), bool)
             or m["radii_m"] != [0.25, 0.75, 2.0]
@@ -50,6 +64,51 @@ def validate_config(config):
             or any(not 0 < loss[k] <= 1 for k in ("normal_tail_fraction", "anomaly_tail_fraction"))):
         raise ValueError("invalid task-loss configuration")
     return config
+
+
+def inherit_backbone(model, config, path):
+    """Transfer every backbone tensor; no official optimizer, schedule or classifier survives."""
+    validate_config(config)
+    if config["initialization"] != "nuscenes_litept_s":
+        raise ValueError("external weights require their declared initialization")
+    with Path(path).open("rb") as stream:
+        digest = hashlib.file_digest(stream, "sha256").hexdigest()
+    if digest != config["pretrained"]["sha256"]:
+        raise ValueError("checkpoint does not match the pinned official weight file")
+    # The official training file contains scheduler and NumPy scalar metadata.
+    # Use a limited unpickler allowlist only after verifying its published content digest.
+    allowed = [getattr, torch.optim.lr_scheduler.OneCycleLR,
+        (np._core.multiarray.scalar, "numpy.core.multiarray.scalar"), np.dtype,
+        type(np.dtype("float64"))]
+    with torch.serialization.safe_globals(allowed):
+        saved = torch.load(path, map_location="cpu", weights_only=True)
+    weights = saved["state_dict"]
+    return transfer_backbone(model, weights)
+
+
+def transfer_backbone(model, weights):
+    prefix = "module.backbone."
+    target = model.backbone.state_dict()
+    expected = {prefix + name for name in target} | {"module.seg_head.weight", "module.seg_head.bias"}
+    if set(weights) != expected:
+        raise ValueError(f"official state keys differ: missing={sorted(expected - set(weights))}, "
+                         f"unexpected={sorted(set(weights) - expected)}")
+    selected = {name: weights[prefix + name] for name in target}
+    shapes = {"module.seg_head.weight": (16, 72), "module.seg_head.bias": (16,)}
+    for name, tensor in weights.items():
+        expected_shape = target[name[len(prefix):]].shape if name.startswith(prefix) else shapes[name]
+        if not isinstance(tensor, torch.Tensor) or tensor.shape != expected_shape or not torch.isfinite(tensor).all():
+            raise ValueError(f"invalid official tensor: {name}")
+        if name.startswith(prefix) and tensor.dtype != target[name[len(prefix):]].dtype:
+            raise ValueError(f"official tensor dtype differs: {name}")
+    model.backbone.load_state_dict(selected, strict=True)
+    if any(not torch.equal(value.cpu(), selected[name]) for name, value in model.backbone.state_dict().items()):
+        raise ValueError("loaded backbone differs from the official tensors")
+    return dict(loaded_keys=len(target), parameters=sum(p.numel() for p in model.backbone.parameters()),
+        missing_keys=[], unexpected_keys=[], shape_mismatches=[], exact_tensor_equality=True,
+        tensors={name: dict(shape=list(value.shape), dtype=str(value.dtype)) for name, value in selected.items()},
+        discarded_classifier={name: list(shape) for name, shape in shapes.items()},
+        discarded_training_state=["optimizer", "scheduler", "scaler", "epoch", "best_metric_value"])
 
 
 @njit(parallel=True)
@@ -314,6 +373,8 @@ class AJAE(nn.Module):
             if return_features:
                 raise ValueError("shared-feature diagnostics require a nonempty real-point query")
             return scan["xyzi"][:0, 0] + self.base_head[-1].weight.sum() * 0
+        # Both declared recipes preserve STU intensity, including values above one.
+        # Pretraining changes initialization, not the frozen raw-return representation.
         voxels = scan["voxel_xyzi"]
         encoded = self.backbone(dict(feat=voxels, coord=voxels[:, :3], grid_coord=scan["grid_coord"],
             offset=torch.tensor([len(voxels)], dtype=torch.long, device=voxels.device)))

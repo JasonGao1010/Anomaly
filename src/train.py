@@ -22,7 +22,7 @@ from torch.utils.data import DataLoader
 from torch.utils.checkpoint import checkpoint
 
 from .data import FrozenDataset, FrozenFrame, _atomic_json, host_disk, source_identity, runtime_resources
-from .model import AJAE, ScanTransform, load_config, to_device, validate_config
+from .model import AJAE, ScanTransform, inherit_backbone, load_config, to_device, validate_config
 from .protocol import PROJECT_ROOT
 
 
@@ -617,8 +617,7 @@ def diagnose(checkpoint_path, data_root, log_path, output):
     parameters = list(model.named_parameters())
     scopes = {name: ".".join(name.split(".")[:2]) if name.startswith("relations.") else name.split(".")[0]
               for name, _ in parameters}
-    optimizer = torch.optim.AdamW(model.parameters(), lr=config["training"]["learning_rate"],
-                                  weight_decay=config["training"]["weight_decay"])
+    optimizer = make_optimizer(model, config)
     def restore():
         model.load_state_dict(saved["model"], strict=True)
         optimizer.load_state_dict(deepcopy(saved["optimizer"]))
@@ -758,6 +757,165 @@ def save_checkpoint(path, payload):
         temporary.unlink(missing_ok=True)
 
 
+def make_optimizer(model, config):
+    t = config["training"]
+    parameters = model.parameters()
+    if config["initialization"] == "nuscenes_litept_s":
+        parameters = [dict(name="backbone", params=list(model.backbone.parameters()), lr=t["backbone_learning_rate"]),
+            dict(name="new_modules", params=[p for name, p in model.named_parameters()
+                                           if not name.startswith("backbone.")], lr=t["learning_rate"])]
+    return torch.optim.AdamW(parameters, lr=t["learning_rate"], weight_decay=t["weight_decay"])
+
+
+def intensity_summary(sequence):
+    """Exact raw-return quantiles from the one normal training source, without label conditioning."""
+    histogram, frames = {}, []
+    for index in range(len(sequence)):
+        source = sequence[index]
+        values = source.xyzi[source.real_slots, 3]
+        if not np.isfinite(values).all():
+            raise FloatingPointError("nonfinite raw training intensity")
+        levels, counts = np.unique(values, return_counts=True)
+        for level, count in zip(levels, counts):
+            histogram[float(level)] = histogram.get(float(level), 0) + int(count)
+        frames.append(dict(frame=source.frame_id, returns=len(values), min=float(values.min()),
+                           max=float(values.max()), above_1=int((values > 1).sum())))
+    levels = np.array(sorted(histogram))
+    counts = np.array([histogram[level] for level in levels], dtype=np.int64)
+    cumulative, n = counts.cumsum(), int(counts.sum())
+    quantiles = {}
+    for name, q in (("q01", .01), ("q25", .25), ("q50", .5), ("q75", .75),
+                    ("q95", .95), ("q99", .99), ("q999", .999)):
+        position = q * (n - 1)
+        lo, hi = math.floor(position), math.ceil(position)
+        left, right = levels[np.searchsorted(cumulative, [lo, hi], side="right")]
+        quantiles[name] = float(left + (position - lo) * (right - left))
+    return dict(source="raw_train_206", frames=len(frames), returns=n, min=float(levels[0]), max=float(levels[-1]),
+        mean=float(np.dot(levels, counts) / n), quantiles=quantiles,
+        above_1=int(counts[levels > 1].sum()), above_255=int(counts[levels > 255].sum()),
+        negative=int(counts[levels < 0].sum()), nonfinite=0, per_frame=frames,
+        rule="identity_raw_stu_no_clip", physical_cross_sensor_calibration_verified=False)
+
+
+def initialize(config, data_root, weights, output):
+    """Save a new pretrained step zero and inspect real inputs; never call optimizer.step()."""
+    if config["initialization"] != "nuscenes_litept_s":
+        raise ValueError("initialize requires the explicit pretrained candidate configuration")
+    output = Path(output)
+    if any((output / name).exists() for name in ("0.pt", "diagnostic.json")):
+        raise ValueError("pretrained initialization output already exists")
+    disk, resources = host_disk(), runtime_resources()
+    if disk["SizeRemaining"] - disk["reserve_bytes"] < 512 * 2**20:
+        raise OSError("pretrained initialization would invade the E: reserve")
+    seed = config["training"]["seed"]
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    dataset = TrainingFrames(config, data_root)
+    probabilities = dataset.dataset.sampling_probabilities(PROJECT_ROOT / config["training"]["sampling"])
+    model = AJAE(config).cuda()
+    fresh = {name: value.cpu().clone() for name, value in model.state_dict().items() if not name.startswith("backbone.")}
+    loading = inherit_backbone(model, config, weights)
+    if any(not torch.equal(model.state_dict()[name].cpu(), value) for name, value in fresh.items()):
+        raise ValueError("pretrained loading changed new AJAE modules")
+    optimizer = make_optimizer(model, config)
+    selection = json.loads((PROJECT_ROOT / "protocol/micro.json").read_text())["selection"]["train"]
+    # Reuse prior fixed identities; select by physical roles before seeing new scores.
+    roles = (("sparse_normal", "sparse_normal"), ("near_1_4", "near_1_4"),
+             ("far_20_plus", "middle_20_plus"), ("zero_anomaly", "zero_anomaly"))
+    chosen, used = [], set()
+    for pair in roles:
+        batch = []
+        for role in pair:
+            index = next(i for i, row in enumerate(selection) if row["role"] == role and i not in used)
+            used.add(index)
+            batch.append(selection[index])
+        chosen.append(batch)
+    name, values, position, has_gauss, cached = np.random.get_state()
+    payload = dict(format="ajae-v1-checkpoint", config=config,
+        model={name: value.cpu().clone() for name, value in model.state_dict().items()},
+        preprocessing=dataset.preprocessing, optimizer=optimizer.state_dict(), step=0,
+        samples=[[identity, frame] for _, identity, frame in dataset.dataset.samples],
+        probabilities=torch.from_numpy(probabilities), torch_rng=torch.get_rng_state(),
+        cuda_rng=torch.cuda.get_rng_state_all(), python_rng=random.getstate(),
+        numpy_rng=(name, torch.from_numpy(values.astype(np.int64)), position, has_gauss, cached),
+        experiment=None, initialization_source=deepcopy(config["pretrained"]))
+    output.mkdir(parents=True, exist_ok=True)
+    save_checkpoint(output / "0.pt", payload)
+    bn = {name: module for name, module in model.named_modules() if isinstance(module, torch.nn.BatchNorm1d)}
+    report = dict(format="ajae-pretrained-initialization", status="running", config=config, checkpoint="0.pt",
+        optimizer_steps=0, loading=loading, new_modules_unchanged=True,
+        new_module_parameters=sum(p.numel() for name, p in model.named_parameters() if not name.startswith("backbone.")),
+        optimizer_groups=[dict(name=g["name"], learning_rate=g["lr"], weight_decay=g["weight_decay"],
+                               parameters=sum(p.numel() for p in g["params"])) for g in optimizer.param_groups],
+        optimizer_state_entries=len(optimizer.state), trainable_backbone=all(p.requires_grad for p in model.backbone.parameters()),
+        batchnorm={name: dict(epsilon=m.eps, momentum=m.momentum, running_variance_min=float(m.running_var.min()),
+                             batches_tracked=int(m.num_batches_tracked)) for name, m in bn.items()},
+        scope="206 only; fixed existing identities; unchanged pretrained step zero; gradients with full mean weight are prospective diagnostics, not post-warmup evidence; no task or transfer evaluation",
+        selection=chosen, batches=[], normalization=[], host_E_before=disk, resources_before=resources,
+        environment=dict(torch=str(torch.__version__), cuda=torch.version.cuda, gpu=torch.cuda.get_device_name(),
+            gpu_bytes=torch.cuda.get_device_properties(0).total_memory, cpu_affinity=sorted(os.sched_getaffinity(0)),
+            torch_threads=torch.get_num_threads(), preparation_workers=0, transform_threads=1))
+    _atomic_json(output / "diagnostic.json", report)
+    started = time.perf_counter()
+    torch.cuda.reset_peak_memory_stats()
+    try:
+        report["intensity"] = intensity_summary(dataset.dataset.sequence)
+        for batch_index, records in enumerate(chosen):
+            indices = select_samples(dataset.dataset, records)
+            rows = [dataset[(index, batch_index * 2 + offset, True)] for offset, index in enumerate(indices)]
+            model.train()
+            with _preserve_buffers(model), _Numerics(model) as numerics:
+                loss, stats = batch_loss(model, rows, config, 0, full_objective=True, trace=numerics)
+                if not torch.isfinite(loss):
+                    raise FloatingPointError("nonfinite pretrained diagnostic loss")
+                numerics.enabled = False
+                loss.backward()
+                norms = {}
+                for name, parameter in model.named_parameters():
+                    if parameter.grad is None:
+                        raise ValueError(f"task gradient is absent from {name}")
+                    if not torch.isfinite(parameter.grad).all():
+                        raise FloatingPointError(f"nonfinite pretrained diagnostic gradient: {name}")
+                    group = name.split(".")[0]
+                    norms[group] = norms.get(group, 0.) + float(parameter.grad.double().square().sum())
+                report["batches"].append(dict(batch=batch_index, samples=indices,
+                    full_input_returns=[len(r["scan"]["xyzi"]) for r in rows], **stats,
+                    gradient_norms={k: math.sqrt(v) for k, v in norms.items()},
+                    gradient_norm=math.sqrt(sum(norms.values())), numerics=numerics.summary()))
+            model.zero_grad(set_to_none=True)
+            for row in rows:
+                scan = to_device(row["original"], "cuda")
+                controls, scores = {}, {}
+                for mode, current in (("pretrained_running", False), ("current_scan", True)):
+                    with normalization_mode(model, current), _Numerics(model) as numerics:
+                        value = model(scan, trace=numerics)
+                        numerics("scores", value)
+                        scores[mode] = value.cpu()
+                        controls[mode] = numerics.summary()
+                delta = scores["current_scan"].double() - scores["pretrained_running"].double()
+                report["normalization"].append(dict(frame=row["frame"], source_returns=len(delta),
+                    input="original_uninserted_206", controls=controls,
+                    score_difference=dict(mean=float(delta.mean()), rms=float(delta.square().mean().sqrt()),
+                                          absolute_max=float(delta.abs().max()))))
+            _atomic_json(output / "diagnostic.json", report)
+            print(json.dumps(dict(event="pretrained_no_update_batch", batch=batch_index,
+                samples=indices, loss=stats["total"], gradient_norm=report["batches"][-1]["gradient_norm"])), flush=True)
+        # This compares all parameters and buffers, not just the optimizer step counter.
+        report["state_unchanged"] = all(torch.equal(value.cpu(), payload["model"][name])
+                                         for name, value in model.state_dict().items())
+        if not report["state_unchanged"] or optimizer.state:
+            raise ValueError("no-update diagnostics changed the saved initialization")
+        report.update(status="completed", host_E_after=host_disk())
+    except BaseException as error:
+        report.update(status="stopped", error=repr(error), automatic_retry=False)
+        raise
+    finally:
+        report.update(seconds=time.perf_counter() - started, peak_cuda_bytes=torch.cuda.max_memory_allocated())
+        _atomic_json(output / "diagnostic.json", report)
+    return report
+
+
 def load_experiment(path):
     experiment = json.loads(Path(path).read_text())
     if experiment.get("format") not in ("ajae-micro-learning", "ajae-short-learning", "ajae-staged-learning"):
@@ -817,6 +975,8 @@ def fit(config, data_root, steps, output, resume=None, *, experiment=None, resum
     initial = PROJECT_ROOT / experiment["initial_checkpoint"] if experiment and "initial_checkpoint" in experiment else None
     state_path = resume if resume is not None else initial
     saved = torch.load(state_path, map_location="cpu", weights_only=True) if state_path is not None else None
+    if config["initialization"] == "nuscenes_litept_s" and saved is None:
+        raise ValueError("pretrained training must start from its saved initialized state")
     if saved is not None and (saved.get("format") != "ajae-v1-checkpoint" or "preprocessing" not in saved):
         raise ValueError("resume requires the saved inference preprocessing state")
     if experiment is not None and not 1 <= steps <= experiment["maximum_updates"]:
@@ -829,8 +989,7 @@ def fit(config, data_root, steps, output, resume=None, *, experiment=None, resum
         dataset.dataset.sampling_probabilities(PROJECT_ROOT / config["training"]["sampling"]))
     torch.manual_seed(config["training"]["seed"])
     model = AJAE(config).cuda()
-    optimizer = torch.optim.AdamW(model.parameters(), lr=config["training"]["learning_rate"],
-                                 weight_decay=config["training"]["weight_decay"])
+    optimizer = make_optimizer(model, config)
     identities = [[identity, frame] for _, identity, frame in dataset.dataset.samples]
     start = 0
     if resume is not None:
@@ -854,6 +1013,10 @@ def fit(config, data_root, steps, output, resume=None, *, experiment=None, resum
     elif saved is not None:
         validate_initial_state(saved, config, identities,
                                experiment.get("initial_changes") if experiment else None)
+        if (config["initialization"] == "nuscenes_litept_s"
+                and (probabilities is None or saved["probabilities"] is None
+                     or not torch.equal(saved["probabilities"], torch.from_numpy(probabilities)))):
+            raise ValueError("pretrained initialization and current frame probabilities differ")
     if saved is not None:
         model.load_state_dict(saved["model"], strict=True)
         optimizer.load_state_dict(saved["optimizer"])
@@ -1073,7 +1236,7 @@ def fit(config, data_root, steps, output, resume=None, *, experiment=None, resum
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("check", "preview", "diagnose", "fit"))
+    parser.add_argument("command", choices=("check", "preview", "diagnose", "initialize", "fit"))
     parser.add_argument("--config", type=Path, default=PROJECT_ROOT / "protocol/model.json")
     parser.add_argument("--data-root", type=Path, default=Path("/home/jasongao/Data/STU"))
     parser.add_argument("--steps", type=int)
@@ -1081,6 +1244,7 @@ def main():
     parser.add_argument("--resume", type=Path)
     parser.add_argument("--checkpoint", type=Path, help="completed trained state for isolated optimization diagnosis")
     parser.add_argument("--log", type=Path, help="completed update log for diagnosis")
+    parser.add_argument("--weights", type=Path, help="official source weights for initialize only")
     parser.add_argument("--resume-without-201", action="store_true",
                         help="explicitly remove only 201 evaluation when resuming the staged run")
     parser.add_argument("--experiment", type=Path, help="declared finite or continuous learning budget and evaluation scope")
@@ -1090,7 +1254,11 @@ def main():
         parser.error("--resume-without-201 requires a staged --experiment and --resume")
     if args.command != "diagnose" and (args.checkpoint is not None or args.log is not None):
         parser.error("--checkpoint and --log are diagnosis inputs, not training initialization")
+    if args.weights is not None and args.command != "initialize":
+        parser.error("--weights only initializes a fresh trajectory; it cannot modify a resume state")
     config = load_config(args.config)
+    if config["initialization"] != "random_no_external_weights" and args.command in ("check", "preview"):
+        parser.error("use initialize to inspect the actual pretrained state")
     experiment = load_experiment(args.experiment) if args.experiment is not None else None
     if experiment is not None:
         if args.command != "fit":
@@ -1102,7 +1270,12 @@ def main():
     torch.set_num_threads(4)
     if not torch.cuda.is_available():
         parser.error("the LitePT sparse-convolution implementation requires CUDA")
-    if args.command == "diagnose":
+    if args.command == "initialize":
+        if (args.weights is None or args.output is None or args.steps is not None
+                or args.sample is not None or args.resume is not None):
+            parser.error("initialize requires --weights and --output; no updates or resume")
+        initialize(config, args.data_root, args.weights, args.output)
+    elif args.command == "diagnose":
         if (args.checkpoint is None or args.log is None or args.output is None
                 or args.steps is not None or args.sample is not None or args.resume is not None):
             parser.error("diagnose requires --checkpoint, --log and --output; no formal updates or resume")
