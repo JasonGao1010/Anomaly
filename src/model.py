@@ -290,6 +290,14 @@ def _mlp(inputs, hidden, outputs):
     return nn.Sequential(nn.Linear(inputs, hidden), nn.GELU(), nn.Linear(hidden, outputs))
 
 
+def _required_rows(n, query, neighbors):
+    # Deduplicate return identities, not coordinates; retain the existing masked row-zero reads.
+    used = torch.zeros(n, dtype=torch.bool, device=query.device)
+    used.index_fill_(0, query, True)
+    used.index_fill_(0, neighbors.clamp_min(0).flatten(), True)
+    return used.nonzero().flatten()
+
+
 class RelationLayer(nn.Module):
     def __init__(self, channels=64):
         super().__init__()
@@ -302,12 +310,12 @@ class RelationLayer(nn.Module):
         self.null = _mlp(2 * channels + 8, channels, 3)
         self.update = _mlp(5 * channels, 2 * channels, channels)
 
-    def part(self, z, h, scan, query, conditioned, condition_modulation=True, trace=None):
-        ids = scan["neighbors"][scan["geometry_inverse"][query]].long()
+    def part(self, z, h, normalized, keys, scan, query, ids, query_rows, neighbor_rows,
+             conditioned, condition_modulation=True, trace=None):
         valid = ids >= 0
         ids = ids.clamp_min(0)
-        zi, zj = self.norm(z[query]), self.norm(z[ids])
-        hi, hj = h[query], h[ids]
+        zi, zj = normalized[query_rows], normalized[neighbor_rows]
+        hi = h[query_rows]
         difference = scan["xyzi"][ids, :3] - scan["xyzi"][query, None, :3]
         ci, cj = scan["condition"][query], scan["condition"][ids]
         if conditioned:
@@ -324,7 +332,7 @@ class RelationLayer(nn.Module):
         edge = self.edge(torch.cat((physical, sensing, intensity, zj - zi[:, None]), dim=-1))
         gamma, beta = self.modulation(torch.cat((ci[:, None].expand_as(cj), cj), dim=-1)).chunk(2, dim=-1)
         values = torch.nn.functional.gelu(edge * (1 + gamma.tanh()) + beta)
-        q, k = self.query(torch.cat((zi, hi), -1)), self.key(torch.cat((zj, hj), -1))
+        q, k = self.query(torch.cat((zi, hi), -1)), keys[neighbor_rows]
         scores = (q[:, None] * k).sum(-1) / z.shape[1]**.5 + self.bias(values).squeeze(-1)
         if trace is not None:
             trace("sensing", sensing[valid])
@@ -337,7 +345,7 @@ class RelationLayer(nn.Module):
         values = values.reshape(len(query), 3, -1, z.shape[1])
         evidence = (alpha[..., None] * values).sum(2).flatten(1)
         residual = self.update(torch.cat((hi, zi, evidence), -1))
-        result = z[query] + residual
+        result = z[query_rows] + residual
         if trace is not None:
             trace("null_scores", null)
             trace("attention_weights", alpha)
@@ -346,14 +354,32 @@ class RelationLayer(nn.Module):
         return result
 
     def forward(self, z, h, scan, query, *, conditioned, chunk, recompute, condition_modulation=True, trace=None):
+        if not len(query):
+            return z[:0]
+        neighbors = scan["neighbors"][scan["geometry_inverse"][query]].long()
+        support = _required_rows(len(z), query, neighbors)
+        lookup = torch.empty(len(z), dtype=torch.long, device=z.device)
+        lookup[support] = torch.arange(len(support), device=z.device)
+        query_rows, neighbor_rows = lookup[query], lookup[neighbors.clamp_min(0)]
+        z, h = z[support], h[support]
+        # These row-wise quantities belong to this layer and graph; edge quantities remain pairwise.
+        normalized = self.norm(z)
+        keys = self.key(torch.cat((normalized, h), -1))
+        if trace is not None:
+            trace("input_rows", support)
+            trace("output_rows", query)
         parts = []
-        for q in query.split(chunk):
-            def compute(z, h, q):
-                return self.part(z, h, scan, q, conditioned, condition_modulation, trace)
-            parts.append(checkpoint(compute, z, h, q, use_reentrant=False)
+        for start in range(0, len(query), chunk):
+            selection = slice(start, start + chunk)
+            def compute(z, h, normalized, keys, q, ids, qi, ni):
+                return self.part(z, h, normalized, keys, scan, q, ids, qi, ni,
+                                 conditioned, condition_modulation, trace)
+            args = (z, h, normalized, keys, query[selection], neighbors[selection],
+                    query_rows[selection], neighbor_rows[selection])
+            parts.append(checkpoint(compute, *args, use_reentrant=False)
                          if recompute and self.training and torch.is_grad_enabled()
-                         else compute(z, h, q))
-        return torch.cat(parts) if parts else z[:0]
+                         else compute(*args))
+        return torch.cat(parts)
 
 
 class AJAE(nn.Module):
@@ -394,12 +420,16 @@ class AJAE(nn.Module):
         if m["relation_mode"] == "none":
             score = base.float()
             return dict(score=score, **features) if return_features else score
+        neighbors = scan["neighbors"][scan["geometry_inverse"][query]].long()
+        support = _required_rows(n, query, neighbors)
         for index, layer in enumerate(self.relations):
-            # First-layer support is updated for the full scan, even for sampled loss queries.
-            z = layer(z, h, scan, query if index == len(self.relations) - 1 else all_rows,
+            rows = query if index == len(self.relations) - 1 else support
+            updated = layer(z, h, scan, rows,
                 conditioned=m["relation_mode"] == "conditioned", chunk=m["relation_chunk"],
                 recompute=m["checkpoint_relations"], condition_modulation=m["condition_modulation"],
                 trace=(lambda name, value, i=index: trace(f"relations.{i}.{name}", value)) if trace is not None else None)
+            # Preserve global row addressing. Unmaterialized rows are never read by the next layer.
+            z = updated if index == len(self.relations) - 1 else z.new_zeros(z.shape).index_copy(0, rows, updated)
         correction = self.relation_head(torch.cat((h[query], z, scan["condition"][query]), -1)).squeeze(-1)
         score = (base + correction).float()
         return dict(score=score, **features) if return_features else score

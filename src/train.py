@@ -594,6 +594,198 @@ def normalization_mode(model, current_scan=False):
         yield
 
 
+def efficiency(checkpoint_path, data_root, output, reference=None, *, model_class=AJAE):
+    """Compare a disposable complete update; never append to the training trajectory."""
+    import hashlib
+    import inspect
+    output = Path(output)
+    if output.exists() or output.with_suffix(".pt").exists():
+        raise ValueError("efficiency output already exists")
+    disk = host_disk()
+    if disk["SizeRemaining"] - disk["reserve_bytes"] < 4 * 2**30:
+        raise OSError("reserve space for bounded comparison tensors and atomic writes")
+    saved = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
+    if saved.get("format") != "ajae-v1-checkpoint" or "failure" in saved:
+        raise ValueError("efficiency comparison requires a complete-update checkpoint")
+    ScanTransform(saved["config"], state=saved["preprocessing"])
+    model = model_class(saved["config"]).cuda()
+    model.load_state_dict(saved["model"], strict=True)
+    config, step = saved["config"], saved["step"]
+    if config["loss"]["keep_mode"] != "mean" or config["loss"]["tail_weight"] != 0:
+        raise ValueError("efficiency comparison requires the unchanged mean/no-tail recipe")
+    dataset = TrainingFrames(config, data_root, preprocessing=saved["preprocessing"])
+    probabilities = dataset.dataset.sampling_probabilities(PROJECT_ROOT / config["training"]["sampling"])
+    identities = [[identity, frame] for _, identity, frame in dataset.dataset.samples]
+    validate_resume_state(saved, config, identities, probabilities, saved["experiment"])
+    requests = list(Requests(probabilities, config, step + 1, start=step))
+    rows = [dataset[request] for request in requests]
+    if len(rows) != 2 or any(row["original"] is None for row in rows):
+        raise ValueError("comparison must contain the declared four full-scan forwards")
+    torch.set_num_threads(4)
+    def cpu(value):
+        if isinstance(value, torch.Tensor):
+            return value.detach().cpu().clone()
+        if isinstance(value, np.ndarray):
+            return torch.from_numpy(value.copy())
+        if isinstance(value, np.generic):
+            return value.item()
+        if isinstance(value, dict):
+            return {key: cpu(item) for key, item in value.items()}
+        if isinstance(value, (tuple, list)):
+            return type(value)(cpu(item) for item in value)
+        return value
+    def pin(value):
+        if isinstance(value, torch.Tensor):
+            return value.pin_memory()
+        if isinstance(value, dict):
+            return {key: pin(item) for key, item in value.items()}
+        return value
+    scans = [(row[key], row[query]) for row in rows
+             for key, query in (("scan", "query"), ("original", "original_query"))]
+    dependencies = []
+    for scan, query in scans:
+        ids = scan["neighbors"][scan["geometry_inverse"][query]].long()
+        support = torch.unique(torch.cat((query, ids.clamp_min(0).flatten())), sorted=True)
+        second = scan["neighbors"][scan["geometry_inverse"][support]].long()
+        inputs = torch.unique(torch.cat((support, second.clamp_min(0).flatten())), sorted=True)
+        dependencies.append(dict(S=support, T=inputs, queries=query))
+    inputs = cpu(rows)
+    rows = [pin(row) for row in rows]
+    parameters = list(model.named_parameters())
+    optimizer = make_optimizer(model, config)
+    def restore():
+        model.load_state_dict(saved["model"], strict=True)
+        optimizer.load_state_dict(deepcopy(saved["optimizer"]))
+        optimizer.zero_grad(set_to_none=True)
+        torch.set_rng_state(saved["torch_rng"])
+        torch.cuda.set_rng_state_all(saved["cuda_rng"])
+        random.setstate(saved["python_rng"])
+        name, values, position, has_gauss, cached = saved["numpy_rng"]
+        np.random.set_state((name, values.numpy().astype(np.uint32), position, has_gauss, cached))
+        model.train()
+    def update(capture=False):
+        restore()
+        scores, dependency_trace = [], {}
+        def observe(name, value):
+            if name.endswith((".input_rows", ".output_rows")):
+                records = dependency_trace.setdefault(name, [])
+                if len(records) < 4:
+                    records.append(cpu(value))
+        def score_hook(_module, _args, value):
+            if len(scores) < 4:
+                scores.append(value.detach().clone())
+        handle = model.register_forward_hook(score_hook) if capture else None
+        torch.cuda.synchronize()
+        torch.cuda.reset_peak_memory_stats()
+        started = time.perf_counter()
+        set_learning_rates(optimizer, config, step + 1)
+        before_forward = forward_state(model)  # Include the formal trainer's pre-forward snapshot cost.
+        optimizer.zero_grad(set_to_none=True)
+        loss, stats = batch_loss(model, rows, config, step, trace=observe if capture else None)
+        if not torch.isfinite(loss):
+            raise FloatingPointError("nonfinite disposable task loss")
+        loss.backward()
+        gradients = {name: cpu(p.grad) for name, p in parameters} if capture else None
+        norm = torch.nn.utils.get_total_norm([p.grad for _, p in parameters if p.grad is not None], error_if_nonfinite=True)
+        extreme = float(norm) >= saved["experiment"]["optimization_monitor"]["gradient_alert"]
+        torch.nn.utils.clip_grads_with_norm_([p for _, p in parameters], config["training"]["gradient_clip"], norm)
+        clipped = {name: cpu(p.grad) for name, p in parameters} if capture else None
+        optimizer.step()
+        if any(not torch.isfinite(p).all() for _, p in parameters):
+            raise FloatingPointError("nonfinite disposable parameter update")
+        torch.cuda.synchronize()
+        elapsed, peak = time.perf_counter() - started, torch.cuda.max_memory_allocated()
+        if handle is not None:
+            handle.remove()
+        result = dict(seconds=elapsed, peak_cuda_bytes=peak, gradient_norm=float(norm), gradient_alert=extreme, stats=stats)
+        if capture:
+            state = cpu(model.state_dict())
+            result["tensors"] = dict(scores=cpu(scores), gradients=gradients, clipped_gradients=clipped,
+                model=state, optimizer=cpu(optimizer.state_dict()),
+                updates={name: state[name].double() - saved["model"][name].double() for name, _ in parameters},
+                rng=cpu(forward_state(model)), dependency_trace=dependency_trace)
+        return result
+    report = dict(format="ajae-efficiency-comparison", checkpoint=str(Path(checkpoint_path).resolve()),
+        checkpoint_step=step, next_update=step + 1, formal_updates=0,
+        reference=str(reference) if reference is not None else None,
+        requests=requests, tolerance=dict(rtol=2e-5, atol=2e-6),
+        source_model_sha256=hashlib.sha256(Path(inspect.getfile(model_class)).read_bytes()).hexdigest(),
+        host_E_before=disk, resources_before=runtime_resources(),
+        scope="next frozen training batch, four forwards in original order; full input evaluation also checked; no recipe or checkpoint changes",
+        timing="two warmups then five isolated reset-state updates; synchronized wall time includes GPU transfer and all in-model dependency/cache construction; preparation, reset and tensor capture excluded equally",
+        dependency_sizes=[dict(points=len(scan["xyzi"]), queries=len(query), S=len(d["S"]), T=len(d["T"]))
+                          for (scan, query), d in zip(scans, dependencies, strict=True)])
+    _atomic_json(output, report)
+    for _ in range(2):
+        update()
+    trials = []
+    for repeat in range(5):
+        trials.append(update())
+        print(json.dumps(dict(event="efficiency_update", repeat=repeat, **trials[-1])), flush=True)
+    captured = update(capture=True)
+    restore()
+    evaluation = []
+    with evaluation_state(model):
+        for scan, query in scans:
+            device_scan = to_device(scan, "cuda")
+            full = model(device_scan)
+            partial = model(device_scan, query.to("cuda"))
+            evaluation.append(dict(full=cpu(full), partial=cpu(partial)))
+            del device_scan, full, partial
+    bundle = dict(inputs=inputs, dependencies=dependencies, evaluation=evaluation,
+                  stats=captured["stats"], gradient_norm=captured["gradient_norm"], **captured["tensors"])
+    report.update(trials=trials, median_seconds=float(np.median([r["seconds"] for r in trials])),
+        peak_cuda_bytes=max(r["peak_cuda_bytes"] for r in trials),
+        disposable_updates=8, captured_stats=captured["stats"],
+        dependency_trace_present=bool(bundle.pop("dependency_trace")))
+    _atomic_json(output, report)
+    trace = captured["tensors"]["dependency_trace"]
+    if trace:
+        for name, expected in (("relations.0.output_rows", "S"), ("relations.0.input_rows", "T"),
+                               ("relations.1.output_rows", "queries"), ("relations.1.input_rows", "S")):
+            if len(trace.get(name, [])) != 4 or any(not torch.equal(a,b[expected]) for a,b in zip(trace[name],dependencies,strict=True)):
+                raise ValueError(f"actual relationship dependencies differ: {name}")
+    if reference is None:
+        save_checkpoint(output.with_suffix(".pt"), bundle)
+        report["comparison_tensors"] = str(output.with_suffix(".pt"))
+    else:
+        expected = torch.load(reference, map_location="cpu", weights_only=True, mmap=True)
+        comparisons = {}
+        def compare(actual, wanted, name):
+            if isinstance(wanted, torch.Tensor):
+                if actual.shape != wanted.shape or actual.dtype != wanted.dtype:
+                    raise ValueError(f"tensor identity changed: {name}")
+                exact = name.lstrip(".").startswith(("inputs", "dependencies", "rng")) or not wanted.is_floating_point()
+                difference = (actual.double() - wanted.double()).abs()
+                limit = torch.zeros_like(difference) if exact else 2e-6 + 2e-5 * wanted.double().abs()
+                comparisons[name] = dict(elements=actual.numel(), exact=exact,
+                    bitwise_equal=torch.equal(actual,wanted),
+                    outside_tolerance=int((~torch.isfinite(difference) | (difference > limit)).sum()),
+                    max_absolute=float(difference.max()) if difference.numel() else 0.,
+                    relative_l2=float(difference.norm() / wanted.double().norm().clamp_min(1e-30)))
+            elif isinstance(wanted, dict):
+                if actual.keys()!=wanted.keys(): raise ValueError(f"comparison keys differ: {name}")
+                for key in wanted: compare(actual[key],wanted[key],f"{name}.{key}")
+            elif isinstance(wanted, (list,tuple)):
+                if len(actual)!=len(wanted): raise ValueError(f"comparison length differs: {name}")
+                for i,(a,b) in enumerate(zip(actual,wanted,strict=True)): compare(a,b,f"{name}.{i}")
+            elif isinstance(wanted,float):
+                if actual is None or not math.isfinite(actual): raise ValueError(f"invalid scalar: {name}")
+                limit = 0. if name.startswith(".optimizer.param_groups") else 2e-6+2e-5*abs(wanted)
+                comparisons[name]=dict(outside_tolerance=int(abs(actual-wanted)>limit),max_absolute=abs(actual-wanted))
+            elif actual != wanted:
+                raise ValueError(f"comparison identity differs: {name}")
+        compare(bundle,expected,"")
+        report["comparisons"] = comparisons
+        report["outside_tolerance"] = {k:v for k,v in comparisons.items() if v["outside_tolerance"]}
+        report["compatible"] = not report["outside_tolerance"]
+    restore()
+    report.update(status="completed", resources_after=runtime_resources(), host_E_after=host_disk(),
+        saved_reference_state_restored=all(torch.equal(v.cpu(),saved["model"][k]) for k,v in model.state_dict().items()))
+    _atomic_json(output, report)
+    return report
+
+
 def diagnose(checkpoint_path, data_root, log_path, output):
     """Trained-state localization; disposable optimizer probes never enter the formal trajectory."""
     from .evaluate import prepare_fixed, evaluate_fixed
@@ -1372,12 +1564,21 @@ def main():
     parser.add_argument("--resume", type=Path)
     parser.add_argument("--checkpoint", type=Path, help="completed trained state for isolated optimization diagnosis")
     parser.add_argument("--log", type=Path, help="completed update log for diagnosis")
+    parser.add_argument("--efficiency", action="store_true", help="isolated complete-update numerical and timing comparison")
+    parser.add_argument("--reference", type=Path, help="saved comparison tensors for --efficiency")
+    parser.add_argument("--reference-code", type=Path, help="original model.py from a Git worktree; compare sequentially in one CUDA process")
     parser.add_argument("--weights", type=Path, help="official source weights for initialize only")
     parser.add_argument("--resume-without-201", action="store_true",
                         help="explicitly remove only 201 evaluation when resuming the staged run")
     parser.add_argument("--experiment", type=Path, help="declared finite or continuous learning budget and evaluation scope")
     parser.add_argument("--sample", type=int, action="append", help="fixed training manifest index for check")
     args = parser.parse_args()
+    if (args.efficiency or args.reference is not None or args.reference_code is not None) and args.command != "diagnose":
+        parser.error("efficiency comparison uses the existing diagnose entry")
+    if (args.reference is not None or args.reference_code is not None) and not args.efficiency:
+        parser.error("reference inputs require --efficiency")
+    if args.reference is not None and args.reference_code is not None:
+        parser.error("choose saved tensors or a sequential original-code comparison")
     if args.resume_without_201 and (args.command != "fit" or args.resume is None or args.experiment is None):
         parser.error("--resume-without-201 requires a staged --experiment and --resume")
     if args.command != "diagnose" and (args.checkpoint is not None or args.log is not None):
@@ -1399,10 +1600,39 @@ def main():
             parser.error("initialize requires --weights and --output; no updates or resume")
         initialize(config, args.data_root, args.weights, args.output)
     elif args.command == "diagnose":
-        if (args.checkpoint is None or args.log is None or args.output is None
+        if (args.checkpoint is None or (args.log is None and not args.efficiency) or args.output is None
                 or args.steps is not None or args.sample is not None or args.resume is not None):
             parser.error("diagnose requires --checkpoint, --log and --output; no formal updates or resume")
-        diagnose(args.checkpoint, args.data_root, args.log, args.output)
+        if args.efficiency:
+            try:
+                if args.reference_code is None:
+                    efficiency(args.checkpoint, args.data_root, args.output, args.reference)
+                else:
+                    # Both classes use the same loaded CUDA libraries and algorithm caches; no live class is patched.
+                    import importlib.util
+                    import sys
+                    spec = importlib.util.spec_from_file_location("src._efficiency_reference", args.reference_code)
+                    original = importlib.util.module_from_spec(spec)
+                    sys.modules[spec.name] = original
+                    spec.loader.exec_module(original)
+                    reference_path = args.output.with_name(args.output.stem + "_reference.json")
+                    control_path = args.output.with_name(args.output.stem + "_control.json")
+                    baseline = efficiency(args.checkpoint, args.data_root, reference_path, model_class=original.AJAE)
+                    candidate = efficiency(args.checkpoint, args.data_root, args.output, reference_path.with_suffix(".pt"))
+                    control = efficiency(args.checkpoint, args.data_root, control_path, reference_path.with_suffix(".pt"), model_class=original.AJAE)
+                    candidate.update(reference_median_seconds=baseline["median_seconds"],
+                        reference_repeat_median_seconds=control["median_seconds"],
+                        reference_repeat_compatible=control["compatible"],
+                        comparison_scope="original, candidate, original in one CUDA process; same frozen batch and reset state; no kernel/precision setting changed")
+                    _atomic_json(args.output, candidate)
+            except BaseException as error:
+                if args.output.exists():
+                    report = json.loads(args.output.read_text())
+                    report.update(status="stopped", error=repr(error), automatic_retry=False)
+                    _atomic_json(args.output, report)
+                raise
+        else:
+            diagnose(args.checkpoint, args.data_root, args.log, args.output)
     elif args.command == "check":
         if args.steps is not None or args.output is not None or args.resume is not None:
             parser.error("check has no optimization budget, output directory or resume state")
