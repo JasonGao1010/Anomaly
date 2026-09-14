@@ -3,8 +3,8 @@
   "schema_version": 1,
   "research_question": "Using only the complete current scan, can scene-supported observation-conditioned relationships on original returns learn transferable anomaly-versus-normal ranking? The current main method uses detection plus mean retained-normal pairing; independent mechanism attribution remains a later controlled comparison.",
   "status": {
-    "stage": "pretrained_full_pool_finetuning_authorized_and_ready",
-    "active_work": "continuous pretrained32000-update trajectory declared and verified; preparing background launch from results/pretrain/0.pt; old random4781 remains paused",
+    "stage": "pretrained_full_pool_finetuning_running",
+    "active_work": "independent pretrained continuous32000-update trajectory is running in results/finetune; first learned full-val19 observation at1024; old random4781 remains paused",
     "model_defined": true,
     "training_defined": true,
     "formal_ajae_v1": "context_supported_conditional_return_relationship_network",
@@ -150,7 +150,7 @@
     "fixed_development_model_evaluation_executed": true,
     "formal_full_training_authorized": true,
     "formal_full_training_completed": false,
-    "pretrained_training_executed": false,
+    "pretrained_training_executed": true,
     "training_declaration": "finetune.json"
   },
   "data": {
@@ -1382,7 +1382,7 @@
     "paired_controls": "none_plain_conditioned_share_initial_parameter_draws; plain_vs_conditioned_changes_coordinates_normalization_and_condition_inputs_as_one_package; conditioned_with_condition_modulation_false_keeps_neighbors_ray_coordinates_sampling_normalization_width_and_heads_identical_and_zeros_only_relation_modulation_and_null_condition_inputs; mean_vs_worst_keeps_the_same_original_scan_forwards",
     "resource_strategy": "2_live_source_frames; whole_scan_and_relationship_recomputation; BatchNorm_buffers_restored_after_recomputation; 2_preparation_workers; no_persistent_geometry_cache",
     "evaluation": "real_val19_official_semantics_unchanged; synthetic_all_and_official_filtered_share_FrozenFrame.anomaly_target; filtered_adds_only_2.5_to_50m_and_at_least_5_actual_inserted_in_range_returns; exact_float32_ties_bounded_numeric_RAM_128MiB_per_counter_with_external_compressed_merge_and_shared_E_disk_reserve",
-    "interpretation": "actual pretrained initialization and bounded no-update numerical checks are complete; pretrained task benefit is unknown; historical random-initialized full-val19 results retain their scope; independent conditioning/pairing contributions remain unestablished",
+    "interpretation": "actual pretrained full-pool fine-tuning has started; initial updates and saved-state consistency verified, no new full-val19 result yet; historical random results retain their own scopes; independent mechanism contributions and sustained stability remain unestablished",
     "implementation_verification": {
       "date": "2026-09-13",
       "command": "python -m src.train check",
@@ -4400,7 +4400,7 @@
     "next_action": "a separately authorized full-pool fine-tuning trajectory from this0 state, with declared learning-rate schedule and full-val19 evaluation; do not resume old optimizer or201 evaluation"
   },
   "pretrained_finetuning": {
-    "status": "authorized_ready_to_launch",
+    "status": "running",
     "declaration": "protocol/finetune.json",
     "initial_checkpoint": "results/pretrain/0.pt",
     "output": "results/finetune",
@@ -4471,6 +4471,33 @@
       "training_workers": 2,
       "training_main_threads": 4
     },
-    "interpretation": "authorized continuous full-pool training; implementation readiness is established, new learned metrics and sustained stability are still unknown; pretrained scheme differences are not individual mechanism attribution"
+    "interpretation": "actual authorized continuous full-pool updates started; new learned metrics and sustained stability are still unknown; pretrained scheme differences are not individual mechanism attribution",
+    "startup_observation": {
+      "at": "2026-09-14T18:30:15+08:00",
+      "completed_updates": 32,
+      "pid": 237276,
+      "source_commit": "90b0ed9",
+      "run_status_file": "results/finetune/run.json",
+      "update_log": "results/finetune/loss.jsonl",
+      "progress_log": "results/finetune/run.log",
+      "estimated_peak_new_bytes": 6318392736,
+      "new_zero_model_buffers_preprocessing_all_rng_samples_and_probabilities_equal_original": true,
+      "new_zero_optimizer_empty": true,
+      "learning_rates_follow_declared_schedule": true,
+      "step32_learning_rates": {
+        "backbone": 4.804020100502513e-06,
+        "new_modules": 4.804020100502513e-05
+      },
+      "step32_preclip_gradient_norm": 1.1345062255859375,
+      "host_E_remaining_bytes": 64096067584,
+      "gpu_utilization_percent": 98,
+      "gpu_memory_MiB": 7599,
+      "gpu_power_W": 89.96,
+      "gpu_temperature_C": 66,
+      "memory_available_bytes": 15398510592,
+      "swap_used_bytes": 0,
+      "full_val19_evaluated": false,
+      "interpretation": "startup observation only; before keep-loss activation, not learned detection evidence; ongoing counts belong to live logs"
+    }
   }
 }
