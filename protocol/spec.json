@@ -3,8 +3,8 @@
   "schema_version": 1,
   "research_question": "Using only the complete current scan, can scene-supported observation-conditioned relationships on original returns learn transferable anomaly-versus-normal ranking? The current main method uses detection plus mean retained-normal pairing; independent mechanism attribution remains a later controlled comparison.",
   "status": {
-    "stage": "pretrained_full_pool_finetuning_running",
-    "active_work": "independent pretrained continuous32000-update trajectory is running in results/finetune; first learned full-val19 observation at1024; old random4781 remains paused",
+    "stage": "pretrained_full_pool_finetuning_paused_for_efficiency",
+    "active_work": "user-requested safe pause after3424 complete updates; results/finetune/resume.pt is verified for continuation at3425; prepare execution-efficiency optimization with scientific definitions and training state unchanged; no automatic resume; old random4781 remains paused",
     "model_defined": true,
     "training_defined": true,
     "formal_ajae_v1": "context_supported_conditional_return_relationship_network",
@@ -1366,7 +1366,7 @@
   },
   "method": {
     "implementation": "src/model.py; src/train.py; src/evaluate.py",
-    "configuration": "protocol/finetune.json declares the active pretrained fine-tuning schedule over protocol/pretrain.json; protocol/model.json preserves the paused random trajectory",
+    "configuration": "protocol/finetune.json preserves the paused pretrained fine-tuning schedule over protocol/pretrain.json; protocol/model.json preserves the paused random trajectory",
     "initialization": "complete official nuScenes LitePT-S backbone plus fresh AJAE modules from results/pretrain/0.pt; new optimizer trajectory; previous measured AJAE trajectories used random initialization",
     "input": "complete_current_sensor_XYZI; labels_poses_original_normal_scan_and_insertion_masks_do_not_enter_inference",
     "context": "LitePT-S_at_0.05m_voxels; every_real_return_contributes_to_voxel_mean; context_72_to_64",
@@ -1382,7 +1382,7 @@
     "paired_controls": "none_plain_conditioned_share_initial_parameter_draws; plain_vs_conditioned_changes_coordinates_normalization_and_condition_inputs_as_one_package; conditioned_with_condition_modulation_false_keeps_neighbors_ray_coordinates_sampling_normalization_width_and_heads_identical_and_zeros_only_relation_modulation_and_null_condition_inputs; mean_vs_worst_keeps_the_same_original_scan_forwards",
     "resource_strategy": "2_live_source_frames; whole_scan_and_relationship_recomputation; BatchNorm_buffers_restored_after_recomputation; 2_preparation_workers; no_persistent_geometry_cache",
     "evaluation": "real_val19_official_semantics_unchanged; synthetic_all_and_official_filtered_share_FrozenFrame.anomaly_target; filtered_adds_only_2.5_to_50m_and_at_least_5_actual_inserted_in_range_returns; exact_float32_ties_bounded_numeric_RAM_128MiB_per_counter_with_external_compressed_merge_and_shared_E_disk_reserve",
-    "interpretation": "actual pretrained full-pool fine-tuning has started; initial updates and saved-state consistency verified, no new full-val19 result yet; historical random results retain their own scopes; independent mechanism contributions and sustained stability remain unestablished",
+    "interpretation": "pretrained full-pool fine-tuning completed3424 updates before the user-requested efficiency pause; full-val19 evaluation at1024 is available, later nodes remain unevaluated; historical random results retain their own scopes; independent mechanism contributions and sustained stability remain unestablished",
     "implementation_verification": {
       "date": "2026-09-13",
       "command": "python -m src.train check",
@@ -4400,7 +4400,18 @@
     "next_action": "a separately authorized full-pool fine-tuning trajectory from this0 state, with declared learning-rate schedule and full-val19 evaluation; do not resume old optimizer or201 evaluation"
   },
   "pretrained_finetuning": {
-    "status": "running",
+    "status": "paused_by_user_for_efficiency_optimization",
+    "pause": {
+      "checkpoint_saved_at": "2026-09-15T01:50:20+08:00",
+      "completed_updates": 3424,
+      "checkpoint": "results/finetune/resume.pt",
+      "next_update": 3425,
+      "reason": "user requested a safe complete-update stop to prepare execution-efficiency optimization",
+      "verification": "checkpoint, consecutive log and all optimizer steps equal3424; finite model/optimizer tensors; strict resume configuration, actual107760 identities and frozen probabilities match; all6848 completed requests match the declared stream; original preprocessing retained; CPU, CUDA, Python and NumPy RNG restoration verified without model forward or optimizer update",
+      "training_process_exited": true,
+      "efficiency_changes_applied": false,
+      "automatic_resume": false
+    },
     "declaration": "protocol/finetune.json",
     "initial_checkpoint": "results/pretrain/0.pt",
     "output": "results/finetune",
@@ -4471,7 +4482,7 @@
       "training_workers": 2,
       "training_main_threads": 4
     },
-    "interpretation": "actual authorized continuous full-pool updates started; new learned metrics and sustained stability are still unknown; pretrained scheme differences are not individual mechanism attribution",
+    "interpretation": "3424 complete updates retained during an intentional efficiency pause, not a numerical failure; results/finetune/1024_val.json contains the completed full development evaluation;4000 and later nodes remain pending; no architecture or training-recipe change has been applied, and independent mechanism attribution and sustained stability remain unestablished",
     "startup_observation": {
       "at": "2026-09-14T18:30:15+08:00",
       "completed_updates": 32,
