@@ -962,7 +962,7 @@ def evaluate_normal_pairs(model, transform, prepared, split, threshold, *, inser
 
 
 def evaluate_fixed(model, transform, prepared, *, include_real=False, directory=None, include_pairs=False,
-                   synthetic_scores=None, real_scores=None):
+                   synthetic_scores=None, real_scores=None, include_normalization=False):
     """Fixed development scopes; callers preserve the training state around evaluation."""
     if model.training:
         raise ValueError("fixed evaluation requires inference mode")
@@ -971,16 +971,31 @@ def evaluate_fixed(model, transform, prepared, *, include_real=False, directory=
     result, train_threshold = {}, None
     for split in prepared["datasets"]:
         rows, official, witness = [], [], {name: [] for name in ("smooth", "rough", "sparse", "changed_normal")}
+        scan_rows, differences = [], []
+        compare_statistics = include_normalization and split == "train"
         records = prepared["selection"][split]
         for record, index in zip(records, prepared["indices"][split], strict=True):
             frozen = prepared["datasets"][split][index]
             key = (record["identity"], record["frame"])
             scores = synthetic_scores.get(key) if split == "validation" and synthetic_scores is not None else None
+            scan = transform(frozen.source) if compare_statistics else None
             if scores is None:
-                scores = model.predict(frozen.source, transform).restore(frozen.source)
+                prediction = model.predict(frozen.source, prepared=scan) if compare_statistics else model.predict(frozen.source, transform)
+                scores = prediction.restore(frozen.source)
             target, _ = synthetic_targets(frozen)
             row = dict(scores=scores, target=target, role=record["role"], world=record["identity"], frame=record["frame"])
             rows.append(row)
+            if compare_statistics:
+                from .train import normalization_mode
+                # Reuse exact geometry and keep the parent model in inference mode; restore BN buffers per scan.
+                with normalization_mode(model, current_scan=True):
+                    current = model.predict(frozen.source, prepared=scan).restore(frozen.source)
+                scan_rows.append(dict(row, scores=current))
+                differences.append(dict(identity=record["identity"], frame=record["frame"], role=record["role"],
+                    by_label={str(label): dict(count=int((target == label).sum()),
+                        mean=float((current[target == label] - scores[target == label]).astype(np.float64).mean()),
+                        absolute_mean=float(np.abs(current[target == label] - scores[target == label]).astype(np.float64).mean()))
+                        for label in (0, 1) if np.any(target == label)}))
             filtered, eligible = synthetic_targets(frozen, official=True)
             if eligible:
                 official.append(dict(row, target=filtered))
@@ -1007,6 +1022,14 @@ def evaluate_fixed(model, transform, prepared, *, include_real=False, directory=
                 at_training_threshold=threshold_counts(group, train_threshold)) for name, group in witness.items()},
             scope="full valid synthetic labels include zero-anomaly and fewer-than-five-return frames; role curves use their own point pools; all reported group counts use the same 206 full-pool threshold",
             witness_scope="existing measured slot lists only; not all complex normals; absent geometry is unmeasured")
+        if compare_statistics:
+            controls = {}
+            for name, group in (("saved_running_statistics", rows), ("current_scan_statistics", scan_rows)):
+                summary = full if group is rows else fixed_summary(group, directory=directory)
+                threshold = summary["recall_at_fpr_limit"]["threshold"]
+                controls[name] = dict(full=summary,
+                    roles={role: threshold_counts([r for r in group if r["role"] == role], threshold) for role in roles})
+            result[split]["normalization"] = dict(controls, score_changes=differences)
         if include_pairs:
             result[split]["paired_normals"] = evaluate_normal_pairs(model, transform, prepared, split, train_threshold,
                 inserted_scores={(r["world"], r["frame"]): r["scores"] for r in rows})

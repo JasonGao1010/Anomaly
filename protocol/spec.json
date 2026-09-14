@@ -3,8 +3,8 @@
   "schema_version": 1,
   "research_question": "Using only the complete current scan, can scene-supported observation-conditioned relationships on original returns learn transferable anomaly-versus-normal ranking? The current main method uses detection plus mean retained-normal pairing; independent mechanism attribution remains a later controlled comparison.",
   "status": {
-    "stage": "pretrained_initialization_and_no_update_diagnostics_completed",
-    "active_work": "actual official nuScenes backbone loaded into separate saved zero state; no new training; previous random trajectory remains paused at4781",
+    "stage": "pretrained_full_pool_finetuning_authorized_and_ready",
+    "active_work": "continuous pretrained32000-update trajectory declared and verified; preparing background launch from results/pretrain/0.pt; old random4781 remains paused",
     "model_defined": true,
     "training_defined": true,
     "formal_ajae_v1": "context_supported_conditional_return_relationship_network",
@@ -36,7 +36,7 @@
     "coverage_closure_evidence": "results/coverage/summary.json",
     "coverage_decision": "all_original_core_checks_exact_30_cell_quotas_and_sampling_exposure_requirements_passed; data_unchanged_by_model_implementation",
     "coverage_boundaries": "one_normal_source_per_split; sparse_normal_nonextreme_train_region_share_0.4997728305_near_0.5_limit; selected_geometry_scope_and_missingness; weak_background_change_is_not_self_occlusion; no_universal_coverage_claim",
-    "next_stage": "review the prepared fine-tuning candidate and declare its separate full-pool budget and learning-rate schedule; complete val19 remains the primary development evaluation",
+    "next_stage": "execute the authorized continuous fine-tuning trajectory with full-val19 observations at1024,4000,8000,16000,32000; no201 evaluation or micro-stage gate",
     "data_preparation_accepted": true,
     "original_pool_summary_completed": true,
     "balanced_pool_target": {
@@ -143,14 +143,15 @@
       }
     },
     "model_configuration": "pretrain.json",
-    "formal_v1_full_training_ready": false,
+    "formal_v1_full_training_ready": true,
     "formal_default_full_training_executed": true,
     "full_val19_model_evaluation_executed": true,
     "finite_learning_executed": true,
     "fixed_development_model_evaluation_executed": true,
-    "formal_full_training_authorized": false,
+    "formal_full_training_authorized": true,
     "formal_full_training_completed": false,
-    "pretrained_training_executed": false
+    "pretrained_training_executed": false,
+    "training_declaration": "finetune.json"
   },
   "data": {
     "normal_sources": [
@@ -1365,8 +1366,8 @@
   },
   "method": {
     "implementation": "src/model.py; src/train.py; src/evaluate.py",
-    "configuration": "protocol/pretrain.json is the untrained performance candidate; protocol/model.json preserves the paused random trajectory",
-    "initialization": "candidate: complete official nuScenes LitePT-S backbone plus fresh AJAE modules; previous measured AJAE trajectories used random initialization",
+    "configuration": "protocol/finetune.json declares the active pretrained fine-tuning schedule over protocol/pretrain.json; protocol/model.json preserves the paused random trajectory",
+    "initialization": "complete official nuScenes LitePT-S backbone plus fresh AJAE modules from results/pretrain/0.pt; new optimizer trajectory; previous measured AJAE trajectories used random initialization",
     "input": "complete_current_sensor_XYZI; labels_poses_original_normal_scan_and_insertion_masks_do_not_enter_inference",
     "context": "LitePT-S_at_0.05m_voxels; every_real_return_contributes_to_voxel_mean; context_72_to_64",
     "original_returns": "XYZI_and_offset_from_fixed_voxel_cell_center_to_64; original_rows_retained_even_for_duplicate_coordinates",
@@ -3812,7 +3813,16 @@
       "formal_updates": 0,
       "disposable_one_step_probes": 8,
       "scope": "saved4000 state,8 preselected206 batches and unchanged fixed20632 complete valid point sets; no201 or newval19 predictions; no recalibration or recipe change",
-      "historical_input_steps": [1068, 1410, 2331, 2399, 2616, 2863, 2885, 4001],
+      "historical_input_steps": [
+        1068,
+        1410,
+        2331,
+        2399,
+        2616,
+        2863,
+        2885,
+        4001
+      ],
       "log_updates": 4781,
       "clipped_updates": 3852,
       "gradient_median": 5.127111911773682,
@@ -3820,7 +3830,10 @@
       "zero_anomaly_batches": 135,
       "anomaly_queries_median": 17,
       "full_keep_201_to_4000_count_gradient_spearman": 0.1277375034907344,
-      "current_probe_gradient_range": [0.32238516211509705, 92.21736145019531],
+      "current_probe_gradient_range": [
+        0.32238516211509705,
+        92.21736145019531
+      ],
       "largest_probe": {
         "input_step": 2863,
         "detection_norm": 97.51279476043216,
@@ -3829,7 +3842,10 @@
         "backbone_detection_norm": 97.48514804329083,
         "dominant_parameter": "backbone.embedding.stem.conv.weight"
       },
-      "module_relative_update_percent_range": [0.010382293289569853, 0.13948594479076004],
+      "module_relative_update_percent_range": [
+        0.010382293289569853,
+        0.13948594479076004
+      ],
       "normalization": {
         "frames": 32,
         "normal_count": 3810224,
@@ -4382,5 +4398,79 @@
     },
     "conclusion": "complete transfer and finite no-update computation established on declared206 inputs; statistical modes differ; no pretrained AP result, sustained optimization claim or causal explanation of old degradation",
     "next_action": "a separately authorized full-pool fine-tuning trajectory from this0 state, with declared learning-rate schedule and full-val19 evaluation; do not resume old optimizer or201 evaluation"
+  },
+  "pretrained_finetuning": {
+    "status": "authorized_ready_to_launch",
+    "declaration": "protocol/finetune.json",
+    "initial_checkpoint": "results/pretrain/0.pt",
+    "output": "results/finetune",
+    "maximum_updates": 32000,
+    "learning_rate": {
+      "backbone_peak": 2e-05,
+      "new_modules_peak": 0.0002,
+      "kind": "linear_warmup_cosine",
+      "warmup_updates": 200,
+      "total_updates": 32000,
+      "start_factor": 0.1,
+      "end_factor": 0.1,
+      "numbering": "one-based update1=floor, update200=peak, update32000=floor; saved rates correspond to completed update; no restart on resume"
+    },
+    "loss": {
+      "detection": true,
+      "keep_mode": "mean",
+      "keep_weight": 1.0,
+      "keep_warmup_steps": 100,
+      "keep_ramp_steps": 100,
+      "tail_weight": 0.0
+    },
+    "evaluation": {
+      "full_val19_steps": [
+        1024,
+        4000,
+        8000,
+        16000,
+        32000
+      ],
+      "fixed_206_and_152_and_normal_pairs": [
+        1024,
+        4000,
+        8000,
+        16000,
+        32000
+      ],
+      "normalization_206_only_steps": [
+        1024
+      ],
+      "synthetic_201": false
+    },
+    "optimization_monitor": {
+      "every_updates": 32,
+      "gradient_alert": 1000.0,
+      "retained_alerts": 3,
+      "alert_action": "record pre-forward buffers/RNG and pre-update parameters/optimizer; do not skip or change finite updates",
+      "retention": "three largest finite pre-clip norms; alert states are not completed-update checkpoints"
+    },
+    "verification": {
+      "relevant_tests_passed": 61,
+      "initial_step": 0,
+      "initial_optimizer_empty": true,
+      "training_worlds": 240,
+      "training_world_frames": 107760,
+      "identities_and_probabilities_match": true,
+      "original_pretrained_initial_file_unchanged": true,
+      "old_random_step": 4781,
+      "old_random_optimizer_step": 4781
+    },
+    "resource_preflight": {
+      "available_cpu_cores": 24,
+      "gpu": "NVIDIA GeForce RTX5080 Laptop GPU",
+      "memory_available_bytes": 21029715968,
+      "swap_used_bytes": 0,
+      "host_E_remaining_bytes": 64143581184,
+      "host_E_reserve_bytes": 10000000000,
+      "training_workers": 2,
+      "training_main_threads": 4
+    },
+    "interpretation": "authorized continuous full-pool training; implementation readiness is established, new learned metrics and sustained stability are still unknown; pretrained scheme differences are not individual mechanism attribution"
   }
 }

@@ -55,6 +55,122 @@ def test_pretrained_optimizer_starts_empty_with_disjoint_learning_rates():
         validate_config(config)
 
 
+def test_finetuning_schedule_boundaries_and_strict_continuation():
+    from src.train import (experiment_config, learning_rate_factor, learning_rates, load_experiment,
+                           make_optimizer, schedule_state, set_learning_rates)
+    experiment = load_experiment("protocol/finetune.json")
+    config = experiment_config(experiment)
+    schedule = config["training"]["learning_rate_schedule"]
+    assert learning_rate_factor(1, schedule) == .1
+    assert learning_rate_factor(200, schedule) == 1.
+    assert learning_rate_factor(32000, schedule) == .1
+    rates = np.array([learning_rates(config, update) for update in range(1, 32001)])
+    assert np.all(np.diff(rates[:200, 0]) > 0) and np.all(np.diff(rates[199:, 0]) < 0)
+    np.testing.assert_allclose(rates[:, 0] / rates[:, 1], .1, rtol=1e-15)
+    with pytest.raises(ValueError, match="outside"):
+        learning_rate_factor(32001, schedule)
+
+    model = nn.Module()
+    model.backbone, model.head = nn.Linear(1, 1), nn.Linear(1, 1)
+    reference = deepcopy(model)
+    optimizer, uninterrupted = make_optimizer(model, config), make_optimizer(reference, config)
+    identities, probabilities = [["a", 1]], np.array([1.])
+    for update in range(1, 4002):
+        for module, opt in ((model, optimizer), (reference, uninterrupted)):
+            set_learning_rates(opt, config, update)
+            opt.zero_grad()
+            sum(p.square().sum() for p in module.parameters()).backward()
+            opt.step()
+        if update in (199, 4000):
+            saved = dict(config=config, experiment=experiment, step=update, samples=identities,
+                probabilities=torch.from_numpy(probabilities), optimizer=deepcopy(optimizer.state_dict()),
+                scheduler_state=schedule_state(optimizer, config, update))
+            assert validate_resume_state(saved, config, identities, probabilities, experiment) == update
+            optimizer = make_optimizer(model, config)
+            optimizer.load_state_dict(saved["optimizer"])
+            broken = deepcopy(saved)
+            broken["optimizer"]["param_groups"][0]["lr"] = 2e-5
+            with pytest.raises(ValueError, match="global update"):
+                validate_resume_state(broken, config, identities, probabilities, experiment)
+    for actual, expected in zip(model.parameters(), reference.parameters(), strict=True):
+        torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+
+
+def test_pretrained_schedule_exception_cannot_modify_initial_weights_recipe_or_resume():
+    from src.train import experiment_config, load_experiment
+    experiment = load_experiment("protocol/finetune.json")
+    config = experiment_config(experiment)
+    saved = dict(config=load_config("protocol/pretrain.json"), step=0,
+                 optimizer=dict(state={}), samples=[["a", 1]])
+    before = deepcopy(saved)
+    validate_initial_state(saved, config, saved["samples"], experiment["initial_changes"])
+    assert saved == before
+    with pytest.raises(ValueError, match="definition"):
+        validate_initial_state(saved, config, saved["samples"])
+    for section, key, value in (("training", "learning_rate", 1e-3), ("loss", "keep_mode", "worst"),
+                                 ("model", "condition_modulation", False)):
+        candidate = deepcopy(config)
+        candidate[section][key] = value
+        with pytest.raises(ValueError, match="definition"):
+            validate_initial_state(saved, candidate, saved["samples"], experiment["initial_changes"])
+    with pytest.raises(ValueError, match="untrained step-zero"):
+        validate_initial_state(dict(saved, step=1), config, saved["samples"], experiment["initial_changes"])
+
+
+def test_optimization_records_preserve_clipping_updates_and_pre_forward_evidence(tmp_path):
+    from src.train import forward_state, gradient_groups, parameter_change, make_optimizer
+    torch.manual_seed(83)
+    model = nn.Module()
+    model.backbone = nn.Sequential(nn.Linear(3, 3), nn.BatchNorm1d(3), nn.Dropout(.2))
+    model.head = nn.Linear(3, 1)
+    reference = deepcopy(model)
+    x = torch.randn(8, 3)
+    config = load_config("protocol/pretrain.json")
+    opt, old_opt = make_optimizer(model, config), make_optimizer(reference, config)
+    state = forward_state(model)
+    before = deepcopy(model.state_dict())
+    initial_rng = torch.get_rng_state()
+    loss = model.head(model.backbone(x)).square().mean()
+    loss.backward()
+    norm = torch.nn.utils.get_total_norm([p.grad for p in model.parameters()], error_if_nonfinite=True)
+    observed = gradient_groups(model)
+    assert set(observed) == {"backbone", "new_modules"}
+    # Parameters have not changed, but BN buffers have; the captured prefix restores the actual forward input state.
+    alert = dict(model=model.state_dict(), **{k: v for k, v in state.items() if k != "buffers"})
+    alert["model"].update(state["buffers"])
+    torch.save(alert, tmp_path / "alert.pt")
+    loaded = torch.load(tmp_path / "alert.pt", weights_only=True)
+    for key, value in before.items():
+        torch.testing.assert_close(loaded["model"][key], value, rtol=0, atol=0)
+    before_parameters = {name: p.detach().clone() for name, p in model.named_parameters()}
+    torch.nn.utils.clip_grads_with_norm_(model.parameters(), 1., norm)
+    opt.step()
+    change = parameter_change(model, before_parameters)
+    assert all(0 < v["relative_update"] < .1 for v in change.values())
+    measured_rng = torch.get_rng_state()
+    torch.testing.assert_close(loaded["torch_rng"], initial_rng, rtol=0, atol=0)
+    torch.set_rng_state(loaded["torch_rng"])
+    expected = reference.head(reference.backbone(x)).square().mean()
+    expected.backward()
+    old_norm = torch.nn.utils.clip_grad_norm_(reference.parameters(), 1., error_if_nonfinite=True)
+    old_opt.step()
+    torch.testing.assert_close(loss, expected, rtol=0, atol=0)
+    torch.testing.assert_close(norm, old_norm, rtol=0, atol=0)
+    torch.testing.assert_close(torch.get_rng_state(), measured_rng, rtol=0, atol=0)
+    for key, value in model.state_dict().items():
+        torch.testing.assert_close(value, reference.state_dict()[key], rtol=0, atol=0)
+
+
+def test_detection_class_records_keep_missing_anomalies_distinct_from_zero_loss():
+    from src.train import detection_loss
+    scores = torch.tensor([-2., 1.], requires_grad=True)
+    target = torch.zeros(2, dtype=torch.long)
+    loss, details = detection_loss(scores, target, details=True)
+    assert details["anomaly_loss"] is None
+    assert float(loss.detach()) == .5 * details["normal_loss"]
+    torch.testing.assert_close(loss, .5 * torch.nn.functional.softplus(scores).mean(), rtol=0, atol=0)
+
+
 def test_raw_intensity_statistics_keep_values_above_one_and_ignore_labels():
     from types import SimpleNamespace
     from src.train import intensity_summary

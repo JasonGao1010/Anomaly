@@ -1,0 +1,50 @@
+{
+  "format": "ajae-staged-learning",
+  "base_config": "protocol/pretrain.json",
+  "scope": "Authorized independent pretrained full-pool fine-tuning, at most32000 continuous updates; the old random4781 trajectory remains paused. Detection plus mean pairing, no tail or input/data changes.",
+  "question": "Does sustained full-pool fine-tuning of the pretrained conditional-geometry model improve complete val19 ranking and optimization stability? Mechanism attribution requires later matched controls.",
+  "initial_checkpoint": "results/pretrain/0.pt",
+  "selection_from": "protocol/micro.json",
+  "maximum_updates": 32000,
+  "loss_overrides": {"keep_mode": "mean", "tail_weight": 0.0},
+  "training_overrides": {
+    "learning_rate_schedule": {
+      "kind": "linear_warmup_cosine",
+      "warmup_updates": 200,
+      "total_updates": 32000,
+      "start_factor": 0.1,
+      "end_factor": 0.1
+    }
+  },
+  "initial_changes": {
+    "training.learning_rate_schedule": {
+      "from": null,
+      "to": {
+        "kind": "linear_warmup_cosine",
+        "warmup_updates": 200,
+        "total_updates": 32000,
+        "start_factor": 0.1,
+        "end_factor": 0.1
+      }
+    }
+  },
+  "evaluation": {
+    "synthetic_steps": [1024, 4000, 8000, 16000, 32000],
+    "real_steps": [1024, 4000, 8000, 16000, 32000],
+    "paired_normal_steps": [1024, 4000, 8000, 16000, 32000],
+    "normalization_steps": [1024],
+    "full_val19_steps": [1024, 4000, 8000, 16000, 32000],
+    "full_synthetic_steps": [],
+    "synthetic_splits": ["train"],
+    "primary": "complete official public val19 AP, FPR95, R at FPR<=1%, per-sequence curves and pooled-threshold counts; remains development data",
+    "synthetic": "existing206 fixed32 full-valid-label diagnostics and retained-normal witnesses;201 evaluation remains cancelled",
+    "normalization": "at1024, compare saved-running versus current-scan BN on the same206 full scans; reuse geometry and baseline scores, restore buffers and RNG, do not recalibrate using val19 or alter main inference",
+    "reference": "results/short/global.json at1024 and results/train/4000_val.json are separate historical random-initialized trajectories, not a shared learning curve"
+  },
+  "optimization_monitor": {"every_updates": 32, "gradient_alert": 1000.0, "retained_alerts": 3},
+  "optimization_records": "actual group learning rates, pre-clip norm, normal/anomaly detection means each update; group gradient norms and actual relative parameter changes every32 updates, first update and alerts. Keep the three largest finite alerts with pre-forward buffers/RNG and pre-update model/optimizer; alerts record only, never skip or modify finite updates.",
+  "sampling": "unchanged240 worlds and107760 frame probabilities, two independent draws per update with replacement; report distinct world-frames/source frames and core-condition exposure at each node, not an exhaustive epoch",
+  "continuation": "one-based update1 uses0.1 of peak, update200 uses peak, update32000 uses0.1; resume from saved optimizer/RNG/global step without repeating warmup or cosine. Keep-loss warm100/ramp100 remains separate. Original pretrained0.pt is unchanged.",
+  "decision": "follow the declared cumulative nodes; primary evidence is full-val19 AP/FPR95 tradeoff and sequence results, with normal protection and missed-anomaly explanation. No micro-stage gates or recipe selection from isolated cases.",
+  "stop": "32000 updates, numerical/resource failure or explicit user stop; sustained substantive development degradation calls for review, not an automatic parameter retry or budget extension"
+}

@@ -68,6 +68,39 @@ def test_fixed_training_only_does_not_access_201(tmp_path, monkeypatch):
     assert result["train"]["full"]["anomaly_count"] == 1
     assert result["train"]["full"]["AP"] == 100.
     assert result["train"]["official"]["frames"] == 0
+    import torch
+    from torch import nn
+
+    class Model(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.bn = nn.BatchNorm1d(1)
+            self.seen = []
+
+        def predict(self, source, transform=None, *, prepared=None):
+            self.seen.append(prepared)
+            values = self.bn(prepared).detach().numpy()[:, 0]
+            return SimpleNamespace(restore=lambda source: values)
+
+    scans = []
+
+    def transform(source):
+        scans.append(source)
+        return torch.from_numpy(scores.copy()).reshape(-1, 1)
+
+    model = Model().eval()
+    before = {key: value.clone() for key, value in model.state_dict().items()}
+    state = torch.get_rng_state()
+    result = evaluate_fixed(model, transform, prepared, directory=tmp_path, include_normalization=True)
+    assert len(scans) == 1 and len(model.seen) == 2 and model.seen[0] is model.seen[1]
+    controls = result["train"]["normalization"]
+    for mode in ("saved_running_statistics", "current_scan_statistics"):
+        assert controls[mode]["full"]["normal_count"] == 2 and controls[mode]["full"]["anomaly_count"] == 1
+    assert controls["saved_running_statistics"]["full"] is result["train"]["full"]
+    assert controls["score_changes"][0]["by_label"]["0"]["absolute_mean"] > 0
+    for key, value in model.state_dict().items():
+        torch.testing.assert_close(value, before[key], rtol=0, atol=0)
+    torch.testing.assert_close(torch.get_rng_state(), state, rtol=0, atol=0)
 
 
 def test_fixed_full_labels_keep_zero_and_few_return_frames_and_reuse_threshold(tmp_path, monkeypatch):

@@ -58,6 +58,14 @@ def validate_config(config):
             or t["warmup_steps"] < 0 or t["ramp_steps"] < 1
             or t["augmentation"] != "none_preserve_physical_sensor_conditions"):
         raise ValueError("invalid sampling or optimization configuration")
+    schedule = t.get("learning_rate_schedule")
+    if schedule is not None and (
+            set(schedule) != {"kind", "warmup_updates", "total_updates", "start_factor", "end_factor"}
+            or schedule["kind"] != "linear_warmup_cosine"
+            or not isinstance(schedule["warmup_updates"], int) or not isinstance(schedule["total_updates"], int)
+            or not 2 <= schedule["warmup_updates"] < schedule["total_updates"]
+            or not 0 < schedule["start_factor"] <= 1 or not 0 < schedule["end_factor"] <= 1):
+        raise ValueError("invalid continuous learning-rate schedule")
     if (loss["keep_mode"] not in {"worst", "mean"}
             or min(loss["keep_weight"], loss["tail_weight"], loss["margin"]) < 0
             or loss["temperature"] <= 0 or loss["pairs_per_tail"] < 1

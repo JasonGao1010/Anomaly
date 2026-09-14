@@ -26,12 +26,17 @@ from .model import AJAE, ScanTransform, inherit_backbone, load_config, to_device
 from .protocol import PROJECT_ROOT
 
 
-def detection_loss(scores, target):
+def detection_loss(scores, target, *, details=False):
     """Each present class retains its declared half weight, even in zero-anomaly batches."""
     zero = scores.sum() * 0
     normal, anomaly = scores[target == 0], scores[target == 1]
-    return .5 * ((F.softplus(normal).mean() if len(normal) else zero)
-                 + (F.softplus(-anomaly).mean() if len(anomaly) else zero))
+    normal_term = F.softplus(normal).mean() if len(normal) else zero
+    anomaly_term = F.softplus(-anomaly).mean() if len(anomaly) else zero
+    loss = .5 * (normal_term + anomaly_term)
+    if details:
+        return loss, dict(normal_loss=float(normal_term.detach()) if len(normal) else None,
+                          anomaly_loss=float(anomaly_term.detach()) if len(anomaly) else None)
+    return loss
 
 
 def keep_loss(original, inserted, mode="worst"):
@@ -286,7 +291,7 @@ def batch_loss(model, rows, config, step, *, full_objective=False, details=False
             before.append(forward(row["original"], row["original_query"], torch.zeros(len(row["original_query"]), dtype=torch.long)))
             after.append(scores[row["keep_index"].to(device)])
     scores, target, frames = map(torch.cat, (all_scores, all_targets, all_frames))
-    det = detection_loss(scores, target)
+    det, class_losses = detection_loss(scores, target, details=True)
     keep = keep_loss(torch.cat(before), torch.cat(after), config["loss"]["keep_mode"]) if before else scores.sum() * 0
     generator = torch.Generator(device=device).manual_seed(config["training"]["seed"] + 31 + step)
     selections = {} if details else None
@@ -299,7 +304,7 @@ def batch_loss(model, rows, config, step, *, full_objective=False, details=False
     stats = dict(total=float(total.detach()), detection=float(det.detach()), keep=float(keep.detach()),
         tail=float(tail.detach()), auxiliary_fraction=fraction, normal_queries=int((target == 0).sum()),
         anomaly_queries=int((target == 1).sum()), retained_normal_pairs=sum(len(x) for x in before),
-        **tail_stats)
+        **tail_stats, **class_losses)
     if details:
         mean = keep_loss(torch.cat(before), torch.cat(after), "mean") if before else scores.sum() * 0
         observed.update(components=dict(detection=det, keep=keep, tail=tail, keep_mean=mean),
@@ -591,7 +596,7 @@ def normalization_mode(model, current_scan=False):
 
 def diagnose(checkpoint_path, data_root, log_path, output):
     """Trained-state localization; disposable optimizer probes never enter the formal trajectory."""
-    from .evaluate import prepare_fixed, fixed_summary, synthetic_targets, threshold_counts
+    from .evaluate import prepare_fixed, evaluate_fixed
     output = Path(output)
     if output.exists():
         raise ValueError("diagnostic output already exists")
@@ -710,31 +715,9 @@ def diagnose(checkpoint_path, data_root, log_path, output):
         restore()
         prepared = prepare_fixed(data_root, selection, synthetic_splits=["train"])
         transform = ScanTransform(config, state=saved["preprocessing"], workers=4)
-        modes = {"saved_running_statistics": [], "current_scan_statistics": []}
-        differences = []
-        for record, index in zip(selection["train"], prepared["indices"]["train"], strict=True):
-            frozen = prepared["datasets"]["train"][index]
-            scan = transform(frozen.source)
-            target, _ = synthetic_targets(frozen)
-            outputs = []
-            for name, rows in modes.items():
-                with normalization_mode(model, name == "current_scan_statistics"):
-                    scores = model.predict(frozen.source, prepared=scan).restore(frozen.source)
-                rows.append(dict(scores=scores, target=target, role=record["role"]))
-                outputs.append(scores)
-            differences.append(dict(identity=record["identity"], frame=record["frame"], role=record["role"],
-                by_label={str(label): dict(count=int((target == label).sum()),
-                    mean=float((outputs[1][target == label] - outputs[0][target == label]).astype(np.float64).mean()),
-                    absolute_mean=float(np.abs(outputs[1][target == label] - outputs[0][target == label]).astype(np.float64).mean()))
-                    for label in (0, 1) if np.any(target == label)}))
-            print(json.dumps(dict(event="normalization_diagnostic", frame=record["frame"], completed_frames=len(differences))), flush=True)
-        for name, rows in modes.items():
-            full = fixed_summary(rows, directory=output.parent)
-            threshold = full["recall_at_fpr_limit"]["threshold"]
-            report["normalization"][name] = dict(full=full,
-                roles={role: threshold_counts([r for r in rows if r["role"] == role], threshold)
-                       for role in sorted({r["role"] for r in rows})})
-        report["normalization"]["score_changes"] = differences
+        with evaluation_state(model):
+            report["normalization"] = evaluate_fixed(model, transform, prepared, directory=output.parent,
+                include_normalization=True)["train"]["normalization"]
         report["state_restored"] = all(torch.equal(v.cpu(), saved["model"][k]) for k, v in model.state_dict().items())
         if not report["state_restored"] or any(float(v["step"]) != step for v in saved["optimizer"]["state"].values()):
             raise ValueError("diagnostics changed the saved reference state")
@@ -765,6 +748,72 @@ def make_optimizer(model, config):
             dict(name="new_modules", params=[p for name, p in model.named_parameters()
                                            if not name.startswith("backbone.")], lr=t["learning_rate"])]
     return torch.optim.AdamW(parameters, lr=t["learning_rate"], weight_decay=t["weight_decay"])
+
+
+def learning_rate_factor(update, schedule):
+    """One-based update: first uses the floor, warmup's last uses the peak, final uses the floor."""
+    if not 1 <= update <= schedule["total_updates"]:
+        raise ValueError("update lies outside the declared learning-rate cycle")
+    warmup = schedule["warmup_updates"]
+    if update <= warmup:
+        return schedule["start_factor"] + (1 - schedule["start_factor"]) * (update - 1) / (warmup - 1)
+    phase = (update - warmup) / (schedule["total_updates"] - warmup)
+    return schedule["end_factor"] + (1 - schedule["end_factor"]) * .5 * (1 + math.cos(math.pi * phase))
+
+
+def learning_rates(config, update):
+    t = config["training"]
+    factor = learning_rate_factor(update, t["learning_rate_schedule"]) if "learning_rate_schedule" in t else 1.
+    return [factor * t["backbone_learning_rate"], factor * t["learning_rate"]] if "backbone_learning_rate" in t else [factor * t["learning_rate"]]
+
+
+def set_learning_rates(optimizer, config, update):
+    rates = learning_rates(config, update)
+    if len(rates) != len(optimizer.param_groups):
+        raise ValueError("optimizer groups differ from the declared learning rates")
+    for group, rate in zip(optimizer.param_groups, rates, strict=True):
+        group["lr"] = rate
+    return {group.get("name", "all_parameters"): rate for group, rate in zip(optimizer.param_groups, rates, strict=True)}
+
+
+def schedule_state(optimizer, config, completed):
+    if "learning_rate_schedule" not in config["training"]:
+        return None
+    # Checkpoints retain the last applied rate; the next update derives its own rate from the global index.
+    return dict(completed_updates=completed, learning_rates=[g["lr"] for g in optimizer.param_groups])
+
+
+def parameter_change(model, before):
+    """Detached two-group L2 changes; no rescaling of the actual optimization step."""
+    sums = {}
+    for name, parameter in model.named_parameters():
+        group = "backbone" if name.startswith("backbone.") else "new_modules"
+        previous = before[name].double()
+        values = torch.stack((previous.square().sum(), (parameter.detach().double() - previous).square().sum()))
+        sums[group] = sums.get(group, 0) + values
+    result = {}
+    for group, values in sums.items():
+        magnitude, delta = values.sqrt().cpu().tolist()
+        result[group] = dict(parameter_norm=magnitude, update_norm=delta, relative_update=delta / (magnitude + 1e-12))
+    return result
+
+
+def gradient_groups(model):
+    sums = {}
+    for name, parameter in model.named_parameters():
+        if parameter.grad is not None:
+            group = "backbone" if name.startswith("backbone.") else "new_modules"
+            sums[group] = sums.get(group, 0) + parameter.grad.detach().double().square().sum()
+    return {name: float(value.sqrt()) for name, value in sums.items()}
+
+
+def forward_state(model):
+    """Only buffers and RNG change before the optimizer; parameters need no per-step copy."""
+    name, values, position, has_gauss, cached = np.random.get_state()
+    return dict(buffers={name: value.detach().clone() for name, value in model.named_buffers()},
+        torch_rng=torch.get_rng_state(), cuda_rng=torch.cuda.get_rng_state_all(),
+        python_rng=random.getstate(),
+        numpy_rng=(name, torch.from_numpy(values.astype(np.int64)), position, has_gauss, cached))
 
 
 def intensity_summary(sequence):
@@ -925,18 +974,35 @@ def load_experiment(path):
     return experiment
 
 
+def experiment_config(experiment, path=None):
+    config = load_config(path or (PROJECT_ROOT / experiment["base_config"] if experiment else PROJECT_ROOT / "protocol/model.json"))
+    if experiment is not None:
+        config["loss"].update(experiment["loss_overrides"])
+        config["training"].update(experiment.get("training_overrides", {}))
+        config["scope"] = experiment.get("scope", config.get("scope", ""))
+    return validate_config(config)
+
+
 def validate_initial_state(saved, config, identities, initial_changes=None):
-    # A fresh paired arm may change only the declared mean-to-worst objective.
+    # Fresh starts permit only the explicitly declared objective or pretrained LR schedule change.
     # Real resume still compares the complete configuration without exceptions.
     actual = {k: v for k, v in config.items() if k != "scope"}
     expected = deepcopy({k: v for k, v in saved["config"].items() if k != "scope"})
     if saved["step"] != 0 or saved["optimizer"]["state"]:
         raise ValueError("fresh learning requires an untrained step-zero state")
     if initial_changes is not None:
-        if (initial_changes != {"loss.keep_mode": {"from": "mean", "to": "worst"}}
-                or expected["loss"]["keep_mode"] != "mean" or actual["loss"]["keep_mode"] != "worst"):
-            raise ValueError("initial exception permits only the declared mean-to-worst change")
-        expected["loss"]["keep_mode"] = "worst"
+        if (initial_changes == {"loss.keep_mode": {"from": "mean", "to": "worst"}}
+                and expected["loss"]["keep_mode"] == "mean" and actual["loss"]["keep_mode"] == "worst"):
+            expected["loss"]["keep_mode"] = "worst"
+        elif (actual["initialization"] == expected["initialization"] == "nuscenes_litept_s"
+                and "learning_rate_schedule" not in expected["training"]
+                and "learning_rate_schedule" in actual["training"]
+                and initial_changes == {"training.learning_rate_schedule": {
+                    "from": None, "to": actual["training"]["learning_rate_schedule"]}}):
+            validate_config(config)
+            expected["training"]["learning_rate_schedule"] = deepcopy(actual["training"]["learning_rate_schedule"])
+        else:
+            raise ValueError("initial exception permits only the declared mean-to-worst change or new pretrained schedule")
     if actual != expected or saved["samples"] != identities:
         raise ValueError("initial model, objective, training definition or input identities changed")
 
@@ -959,6 +1025,11 @@ def validate_resume_state(saved, config, identities, probabilities, experiment, 
     if (saved["config"] != config or expected != experiment
             or saved["samples"] != identities or not same_probabilities):
         raise ValueError("resume configuration, input order or frame probabilities changed")
+    if "learning_rate_schedule" in config["training"]:
+        rates = learning_rates(config, max(1, saved["step"]))
+        if (saved.get("scheduler_state") != dict(completed_updates=saved["step"], learning_rates=rates)
+                or [group["lr"] for group in saved["optimizer"]["param_groups"]] != rates):
+            raise ValueError("saved learning rates do not match the completed global update")
     return saved["step"]
 
 
@@ -981,6 +1052,8 @@ def fit(config, data_root, steps, output, resume=None, *, experiment=None, resum
         raise ValueError("resume requires the saved inference preprocessing state")
     if experiment is not None and not 1 <= steps <= experiment["maximum_updates"]:
         raise ValueError("finite learning cannot exceed its declared update budget")
+    if steps > config["training"].get("learning_rate_schedule", {}).get("total_updates", steps):
+        raise ValueError("training budget exceeds the declared learning-rate cycle")
     fixed_passes = experiment is not None and experiment["format"] == "ajae-micro-learning"
     dataset = TrainingFrames(config, data_root, preprocessing=saved["preprocessing"] if saved is not None else None,
                              cache_bytes=2 * 2**30 if fixed_passes else 0)
@@ -1026,10 +1099,14 @@ def fit(config, data_root, steps, output, resume=None, *, experiment=None, resum
             random.setstate(saved["python_rng"])
             name, values, position, has_gauss, cached = saved["numpy_rng"]
             np.random.set_state((name, values.numpy().astype(np.uint32), position, has_gauss, cached))
+    if resume is None:
+        set_learning_rates(optimizer, config, 1)
+    monitor = experiment.get("optimization_monitor", {}) if experiment else {}
     # Include retained evaluation states, an emergency state and atomic output overlap.
     disk = host_disk()
     checkpoint_bound = sum(p.numel() for p in model.parameters()) * 20 + 64 * 2**20
-    peak = ((8 if staged else 7 if experiment else 2) * sum(p.numel() for p in model.parameters()) * 20
+    retained = (len(experiment["evaluation"]["synthetic_steps"]) + 4 if staged else 7 if experiment else 2)
+    peak = ((retained + monitor.get("retained_alerts", 0)) * checkpoint_bound
             + (2 * 2**30 if staged else 512_000_000)
             + (steps - start) * (8192 if staged else 512 + 20 * config["training"]["batch_frames"]))
     if peak >= disk["SizeRemaining"] - disk["reserve_bytes"]:
@@ -1049,6 +1126,9 @@ def fit(config, data_root, steps, output, resume=None, *, experiment=None, resum
         previous = json.loads((output / "run.json").read_text())
         run["previous_segments"] = previous.get("previous_segments", []) + [
             {k: previous.get(k) for k in ("start_update", "completed_updates", "seconds", "status")}]
+    if monitor:
+        run["optimization_monitor"] = monitor
+        run["retained_alerts"] = previous.get("retained_alerts", []) if in_place else []
     if resume_without_201:
         run["evaluation_change"] = dict(step=start, reason="user_cancelled_201_evaluation",
             previous=saved["experiment"]["evaluation"], current=experiment["evaluation"])
@@ -1079,17 +1159,21 @@ def fit(config, data_root, steps, output, resume=None, *, experiment=None, resum
                 records=[dict(record, sample=index, requests=exposure[index])
                     for record, index in zip(experiment["selection"]["train"], diagnostic_indices, strict=True)]))
 
-    def snapshot(step, failure=None, *, rolling=False):
-        volume = host_disk()
-        if checkpoint_bound > volume["SizeRemaining"] - volume["reserve_bytes"]:
-            raise OSError("checkpoint write would invade the host E: reserve")
+    def checkpoint_payload(step):
         name, values, position, has_gauss, cached = np.random.get_state()
-        payload = dict(format="ajae-v1-checkpoint", config=config, model=model.state_dict(),
+        return dict(format="ajae-v1-checkpoint", config=config, model=model.state_dict(),
             preprocessing=dataset.preprocessing, optimizer=optimizer.state_dict(), step=step, samples=identities,
             probabilities=None if probabilities is None else torch.from_numpy(probabilities),
             torch_rng=torch.get_rng_state(), cuda_rng=torch.cuda.get_rng_state_all(), experiment=experiment,
             python_rng=random.getstate(), numpy_rng=(name, torch.from_numpy(values.astype(np.int64)), position, has_gauss, cached),
+            scheduler_state=schedule_state(optimizer, config, step),
             diagnostic_exposure=exposure if prepared is not None else {})
+
+    def snapshot(step, failure=None, *, rolling=False):
+        volume = host_disk()
+        if checkpoint_bound > volume["SizeRemaining"] - volume["reserve_bytes"]:
+            raise OSError("checkpoint write would invade the host E: reserve")
+        payload = checkpoint_payload(step)
         if failure is not None:
             payload.update(failure=str(failure), gradients={name: p.grad for name, p in model.named_parameters() if p.grad is not None})
         filename = "failure.pt" if failure is not None else "resume.pt" if rolling else f"{step}.pt" if experiment else "model.pt"
@@ -1097,6 +1181,33 @@ def fit(config, data_root, steps, output, resume=None, *, experiment=None, resum
         if failure is None:
             run["last_complete_checkpoint"] = filename
         save_exposure()
+
+    def record_alert(step, norm, state, rows):
+        retained = run["retained_alerts"]
+        smallest = min(retained, key=lambda item: item["gradient_norm"]) if retained else None
+        full = len(retained) >= monitor["retained_alerts"]
+        alert = dict(step=step + 1, gradient_norm=norm, saved=False)
+        if full and norm <= smallest["gradient_norm"]:
+            return alert
+        volume = host_disk()
+        if checkpoint_bound > volume["SizeRemaining"] - volume["reserve_bytes"]:
+            raise OSError("optimizer alert would invade the host E: reserve")
+        payload = checkpoint_payload(step)
+        # Parameters and optimizer are still pre-update; restore buffers/RNG to pre-forward.
+        payload["model"].update(state["buffers"])
+        payload.update({key: value for key, value in state.items() if key != "buffers"})
+        payload.pop("scheduler_state")
+        payload.update(format="ajae-v1-optimizer-alert", phase="before_forward", update=step + 1,
+            gradient_norm=norm, batch_samples=[row["sample"] for row in rows],
+            batch_draws=[row["draw"] for row in rows], learning_rates_for_update=[g["lr"] for g in optimizer.param_groups])
+        filename = f"alert_{step + 1}.pt"
+        save_checkpoint(output / filename, payload)
+        if full:
+            (output / smallest["checkpoint"]).unlink()
+            retained.remove(smallest)
+        alert.update(saved=True, checkpoint=filename)
+        retained.append(alert)
+        return alert
 
     def evaluate(step):
         nonlocal evaluating
@@ -1127,6 +1238,7 @@ def fit(config, data_root, steps, output, resume=None, *, experiment=None, resum
                 result = evaluate_fixed(model, transform, prepared,
                     include_real=step in schedule["real_steps"], directory=output,
                     include_pairs=step in schedule.get("paired_normal_steps", []),
+                    include_normalization=step in schedule.get("normalization_steps", []),
                     real_scores=real_scores, synthetic_scores=synthetic_scores)
                 _atomic_json(output / f"{step}.json", dict(step=step, checkpoint=f"{step}.pt", **result))
         evaluating = False
@@ -1161,17 +1273,33 @@ def fit(config, data_root, steps, output, resume=None, *, experiment=None, resum
                     snapshot(completed, rolling=True)
                     break
                 started = time.perf_counter()
+                rates = set_learning_rates(optimizer, config, step + 1)
+                before_forward = forward_state(model) if monitor else None
                 optimizer.zero_grad(set_to_none=True)
                 loss, stats = batch_loss(model, rows, config, step)
                 if not torch.isfinite(loss):
                     raise FloatingPointError(f"nonfinite task loss at update {step}")
                 loss.backward()
-                norm = torch.nn.utils.clip_grad_norm_(model.parameters(), config["training"]["gradient_clip"], error_if_nonfinite=True)
+                parameters = list(model.parameters())
+                norm = torch.nn.utils.get_total_norm([p.grad for p in parameters if p.grad is not None], error_if_nonfinite=True)
+                extreme = bool(monitor) and float(norm) >= monitor["gradient_alert"]
+                measured = bool(monitor) and (step == 0 or (step + 1) % monitor["every_updates"] == 0 or extreme)
+                if extreme:
+                    stats["gradient_alert"] = record_alert(step, float(norm), before_forward, rows)
+                if measured:
+                    stats["gradient_groups_before_clip"] = gradient_groups(model)
+                    before_parameters = {name: p.detach().clone() for name, p in model.named_parameters()}
+                # This is exactly the second half of PyTorch's clip_grad_norm_, with the same norm.
+                torch.nn.utils.clip_grads_with_norm_(parameters, config["training"]["gradient_clip"], norm)
                 optimizer.step()
+                if measured:
+                    stats["parameter_changes"] = parameter_change(model, before_parameters)
+                    del before_parameters
                 if any(not torch.isfinite(p).all() for p in model.parameters()):
                     raise FloatingPointError(f"nonfinite parameter after update {step + 1}")
                 completed = step + 1
-                stats.update(step=completed, gradient_norm=float(norm), seconds=time.perf_counter() - started,
+                stats.update(step=completed, gradient_norm=float(norm), learning_rates=rates,
+                    seconds=time.perf_counter() - started,
                     samples=[r["sample"] for r in rows], draws=[r["draw"] for r in rows],
                     full_input_returns=[len(r["scan"]["xyzi"]) for r in rows])
                 if staged:
@@ -1237,7 +1365,7 @@ def fit(config, data_root, steps, output, resume=None, *, experiment=None, resum
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=("check", "preview", "diagnose", "initialize", "fit"))
-    parser.add_argument("--config", type=Path, default=PROJECT_ROOT / "protocol/model.json")
+    parser.add_argument("--config", type=Path, help="defaults to the experiment's base configuration, or model.json")
     parser.add_argument("--data-root", type=Path, default=Path("/home/jasongao/Data/STU"))
     parser.add_argument("--steps", type=int)
     parser.add_argument("--output", type=Path)
@@ -1256,17 +1384,12 @@ def main():
         parser.error("--checkpoint and --log are diagnosis inputs, not training initialization")
     if args.weights is not None and args.command != "initialize":
         parser.error("--weights only initializes a fresh trajectory; it cannot modify a resume state")
-    config = load_config(args.config)
+    experiment = load_experiment(args.experiment) if args.experiment is not None else None
+    if experiment is not None and args.command != "fit":
+        parser.error("--experiment only supports a declared finite-learning fit")
+    config = experiment_config(experiment, args.config)
     if config["initialization"] != "random_no_external_weights" and args.command in ("check", "preview"):
         parser.error("use initialize to inspect the actual pretrained state")
-    experiment = load_experiment(args.experiment) if args.experiment is not None else None
-    if experiment is not None:
-        if args.command != "fit":
-            parser.error("--experiment only supports a declared finite-learning fit")
-        config = deepcopy(config)
-        config["loss"].update(experiment["loss_overrides"])
-        config["scope"] = experiment.get("scope", "Authorized micro task learning; at most 256 updates; no short training or external weights.")
-        validate_config(config)
     torch.set_num_threads(4)
     if not torch.cuda.is_available():
         parser.error("the LitePT sparse-convolution implementation requires CUDA")
