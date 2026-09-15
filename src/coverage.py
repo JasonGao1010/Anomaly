@@ -16,7 +16,8 @@ import numpy as np
 from numba import set_num_threads
 from scipy.spatial import cKDTree
 
-from .data import FrozenDataset, _atomic_json, host_disk, source_identity
+from .data import (FrozenDataset, FrozenFrame, _atomic_json, host_disk, low_support_slots,
+                   retained_normal_slots, source_identity)
 from .render import calibrated_ray_grid, shape_from_dict, shape_geometry, shape_relations, primary_structure, canonical_ray_slots_for_source
 from .geometry import (
     ScanGeometry, boundary_targets, local_evidence, sampling_targets,
@@ -706,7 +707,10 @@ def generation_matrix(rows, metadata, measured, config):
                 geometry_parents=len({metadata[split, r["world"]]["parent"] for r in rs}),
                 source_frames=len({r["frame"] for r in rs}), world_frames=len(rs),
                 in_range_anomaly_rays=sum(r["in_range_rays"] for r in rs))
+        region_requirement = all(len(r) >= config["generation_cells"]["minimum_regions_per_cell"] for r in regions)
+        result["quotas_satisfied"] &= region_requirement
         result["groups"].setdefault(split, {})[cell] = dict(worlds=len(worlds), geometry_parents=len(parents),
+            region_requirement_satisfied=region_requirement,
             support_regions=[len(r) for r in regions], source_frames=len({r["frame"] for r in observations}),
             complete_world_frames=len(observations), in_range_anomaly_rays=sum(parents.values()),
             maximum_parent_return_share=concentration(parents)["top_one_share"],
@@ -719,6 +723,194 @@ def generation_matrix(rows, metadata, measured, config):
     return result
 
 
+def distribute_frames(chosen, metadata, mass, balanced_counts):
+    """Distribute region -> geometry parent -> world -> frame, with optional return balancing."""
+    regions = defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
+    for row in chosen:
+        meta = metadata[row["split"], row["world"]]
+        regions[meta["regions"][0]][meta["parent"]][row["world_identity"]].append(row)
+    for parents in regions.values():
+        means = {p: np.mean([r["in_range_rays"] for rs in worlds.values() for r in rs])
+                 for p, worlds in parents.items()}
+        weights = {p: 1 / np.sqrt(max(1, means[p])) if balanced_counts else 1 for p in parents}
+        for parent, worlds in parents.items():
+            pmass = mass / len(regions) * weights[parent] / sum(weights.values())
+            for rs in worlds.values():
+                for row in rs:
+                    yield row, pmass / len(worlds) / len(rs)
+
+
+def condition_probabilities(rows, metadata, baseline, selected, mixture):
+    """Retain the full old distribution; empty H falls back within its own cell."""
+    indices = {(r["world_identity"], r["frame"]): i for i, r in enumerate(rows)}
+    cells = defaultdict(list)
+    for r in rows:
+        cells[metadata[r["split"], r["world"]]["assigned_cell"]].append(r)
+    probability, report = (1 - mixture) * baseline, {}
+    for cell, members in sorted(cells.items()):
+        ids = [indices[r["world_identity"], r["frame"]] for r in members]
+        if not np.isclose(baseline[ids].sum(), 1 / len(cells), rtol=0, atol=1e-12):
+            raise ValueError("V2 baseline must give each generation cell equal probability")
+        hard = [r for r in members if selected[indices[r["world_identity"], r["frame"]]]]
+        if hard:
+            for r, weight in distribute_frames(hard, metadata, mixture / len(cells), True):
+                probability[indices[r["world_identity"], r["frame"]]] += weight
+        else:
+            probability[ids] = baseline[ids]
+        report[cell] = dict(world_frames=len(members), H_frames=len(hard),
+            probability=float(probability[ids].sum()), empty_H_fallback=not hard)
+    if not np.all(probability > 0) or not np.isclose(probability.sum(), 1., rtol=0, atol=1e-12):
+        raise ValueError("V2 must preserve every original frame with positive normalized probability")
+    return probability, report
+
+
+def _condition_initialize(data_root, rays, parameters, worlds, penetration_m):
+    from .render import ObjectSpec
+    _research_initialize(data_root, rays)
+    global _condition_parameters, _condition_worlds, _condition_penetration
+    _condition_parameters, _condition_penetration = parameters, penetration_m
+    _condition_worlds = {key: (ObjectSpec.from_dict(obj), (np.asarray(bounds[0]), np.asarray(bounds[1])))
+                         for key, (obj, bounds) in worlds.items()}
+
+
+def _condition_frame(job):
+    from .render import GROUND_SEMANTIC_IDS, ObservedObstacleIndex, observed_normal_collision
+    started = time.perf_counter()
+    split, frame, entries = job
+    original = _research_sources[split][frame]
+    identity, parameters = source_identity(original), _condition_parameters
+    sparse = (low_support_slots(original, parameters["radius_m"], parameters["minimum_neighbors"])
+              if split == "train" else np.empty(0, np.int32))
+    mapping = canonical_ray_slots_for_source(original, _research_grid) if split == "train" else None
+    slots = original.real_slots
+    slots = slots[(original.labels.semantic[slots] != 0) & ~np.isin(original.labels.semantic[slots], GROUND_SEMANTIC_IDS)]
+    obstacles = None
+    if len(slots):
+        xyz = original.xyzi[slots, :3].astype(np.float64) @ original.lidar_pose[:3, :3].T + original.lidar_pose[:3, 3]
+        obstacles = ObservedObstacleIndex(xyz, (np.uint64(frame) << np.uint64(32)) | slots.astype(np.uint64))
+    selected, uncertified, checked_interiors = [], [], 0
+    for index, path, world_identity, expected_source, expected_rays in entries:
+        if expected_source != identity:
+            raise ValueError("V2 coverage source contents changed")
+        item, bounds = _condition_worlds[world_identity]
+        if obstacles is not None:
+            rejected, level, ids = observed_normal_collision(item, obstacles,
+                penetration_m=_condition_penetration, local_bounds=bounds)
+            checked_interiors += int(level < 0)
+            if rejected:
+                uncertified.append(dict(world_identity=world_identity, frame=frame,
+                    minimum_implicit_value_m=level, candidate_slots=(ids & np.uint64(0xffffffff)).astype(int).tolist()))
+        if split != "train":
+            continue
+        # Use the authoritative lossless delta reader, including its original-label checks.
+        frozen = FrozenFrame.load(path, original, world_identity)
+        inserted = np.flatnonzero(frozen.inserted_mask)
+        first = np.unique(mapping[inserted], return_index=True)[1]
+        xyz = frozen.source.xyzi[inserted[first], :3]
+        distance = np.linalg.norm(xyz, axis=1)
+        lo, hi = parameters["anomaly_range_m"]
+        xyz = xyz[(distance >= lo) & (distance <= hi)]
+        if len(xyz) != expected_rays:
+            raise ValueError("V2 physical anomaly ray counts disagree with frozen deltas")
+        if len(xyz) < parameters["minimum_anomaly_rays"]:
+            continue
+        kept = np.intersect1d(retained_normal_slots(frozen, original), sparse)
+        positions = np.unique(original.xyzi[kept, :3], axis=0)
+        if len(positions) and np.count_nonzero(cKDTree(xyz).query(positions, workers=1)[0]
+                <= parameters["radius_m"]) >= parameters["minimum_normal_positions"]:
+            selected.append(index)
+    return dict(split=split, frame=frame, source_identity=identity, sparse_slot=sparse,
+                H=selected, uncertified=uncertified, world_frames=len(entries),
+                interior_world_frames=checked_interiors, seconds=time.perf_counter() - started,
+                peak_rss_bytes=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024)
+
+
+def prepare_conditions(protocol, experiment_path, data_root, workers):
+    """Build the full-source V2 index and inspect existing placements without rewriting worlds."""
+    from .train import experiment_config, load_experiment
+    experiment = load_experiment(experiment_path)
+    if experiment["format"] != "ajae-v2-learning":
+        raise ValueError("condition preparation requires the V2 experiment")
+    config = experiment_config(experiment)
+    parameters = config["training"]["conditions"]
+    output = Path(config["training"]["sampling"])
+    record, observations = research_records(protocol["research_coverage"]["output"])
+    metadata = {(w["split"], w["world"]): w for w in record["worlds"]}
+    by_world = {w["identity"]: w for w in record["worlds"]}
+    by_frame = {(r["world_identity"], r["frame"]): r for r in observations}
+    worlds, jobs, train_rows = {}, [], []
+    region_counts = {}
+    for split in ("train", "validation"):
+        dataset = FrozenDataset(protocol["dataset"]["directory"], data_root, split)
+        grouped = defaultdict(list)
+        for index, (path, world, frame) in enumerate(dataset.samples):
+            meta, row = by_world[world], by_frame[world, frame]
+            if world not in worlds:
+                definition = json.loads((path.parent.parent / "world.json").read_text())
+                geometry = definition["generation"]["geometry"]
+                worlds[world] = (definition["world"]["objects"][0],
+                                 (geometry["lower_local_m"], geometry["upper_local_m"]))
+            grouped[frame].append((index, str(path), world, row["source_identity"], row["in_range_rays"]))
+            if split == "train":
+                train_rows.append(row)
+        current_worlds = {world for _, world, _ in dataset.samples}
+        members = [by_world[w] for w in current_worlds]
+        region_counts[split] = {cell: [len({w["regions"][g] for w in members if w["assigned_cell"] == cell})
+            for g in (0, 1)] for cell in sorted({w["assigned_cell"] for w in members})}
+        jobs.extend((split, frame, entries) for frame, entries in sorted(grouped.items()))
+        if split == "train":
+            baseline_path = json.loads(Path(experiment["base_config"]).read_text())["training"]["sampling"]
+            baseline = dataset.sampling_probabilities(baseline_path)
+    started, disk = time.perf_counter(), host_disk()
+    arguments = (data_root, protocol["calibration"]["rays"], parameters, worlds, protocol["placement"]["deep_penetration_m"])
+    results = []
+    with ProcessPoolExecutor(workers, mp_context=mp.get_context("spawn"),
+                             initializer=_condition_initialize, initargs=arguments) as pool:
+        futures = [pool.submit(_condition_frame, job) for job in jobs]
+        for future in as_completed(futures):
+            results.append(future.result())
+            if len(results) % 32 == 0 or len(results) == len(jobs):
+                print(json.dumps(dict(source_frames=len(results), total=len(jobs),
+                    seconds=round(time.perf_counter() - started, 1))), flush=True)
+    sources = sorted((r for r in results if r["split"] == "train"), key=lambda r: r["frame"])
+    selected = np.zeros(len(train_rows), bool)
+    for r in sources:
+        selected[r["H"]] = True
+    probabilities, cells = condition_probabilities(train_rows, metadata, baseline, selected, parameters["mixture"])
+    unresolved = [dict(split=r["split"], **v) for r in results for v in r["uncertified"]]
+    minimum_regions = protocol["research_coverage"]["generation_cells"]["minimum_regions_per_cell"]
+    regions_satisfied = all(len(cells) == 30 and all(min(r) >= minimum_regions for r in cells.values())
+                            for cells in region_counts.values())
+    offsets = np.r_[0, np.cumsum([len(r["sparse_slot"]) for r in sources])]
+    output.parent.mkdir(parents=True, exist_ok=True)
+    temporary = output.with_suffix(".tmp")
+    try:
+        with temporary.open("wb") as stream:
+            np.savez_compressed(stream, format=np.asarray("ajae-v2-conditions"),
+                parameters=np.asarray(json.dumps(parameters, sort_keys=True)),
+                world_identity=np.array([r["world_identity"] for r in train_rows]),
+                frame=np.array([r["frame"] for r in train_rows], np.int32),
+                probability=probabilities, baseline_probability=baseline, H=selected,
+                source_frame=np.array([r["frame"] for r in sources], np.int32),
+                source_identity=np.array([r["source_identity"] for r in sources]),
+                sparse_offsets=offsets, sparse_slot=np.concatenate([r["sparse_slot"] for r in sources]))
+        temporary.replace(output)
+    finally:
+        temporary.unlink(missing_ok=True)
+    report = dict(training_executed=False, parameters=parameters, source_frames=len(sources),
+        sparse_slots=int(offsets[-1]), H_frames=int(selected.sum()), cells=cells,
+        region_counts=region_counts, regions_satisfied=regions_satisfied,
+        collision=dict(worlds=len(worlds), world_frames=sum(r["world_frames"] for r in results),
+            interior_world_frames=sum(r["interior_world_frames"] for r in results),
+            uncertified=unresolved, certified=not unresolved,
+            interpretation="exterior-witness certificate for observed non-ground returns; unresolved is not proven deep penetration; no unobserved-surface guarantee"),
+        seconds=time.perf_counter() - started, workers=workers,
+        maximum_worker_rss_bytes=max(r["peak_rss_bytes"] for r in results),
+        host_E_before=disk, host_E_after=host_disk())
+    _atomic_json(output.with_suffix(".json"), report)
+    return report
+
+
 def research_sampling(rows, metadata, cells, config, output):
     """Inspect the exact probability of every full input scan, without training."""
     train = [r for r in rows if r["split"] == "train"]
@@ -727,19 +919,8 @@ def research_sampling(rows, metadata, cells, config, output):
     probabilities = np.zeros(len(train))
 
     def distribute(chosen, mass, balanced_counts):
-        regions = defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
-        for row in chosen:
-            meta = metadata[row["split"], row["world"]]
-            regions[meta["regions"][0]][meta["parent"]][row["world_identity"]].append(row)
-        for parents in regions.values():
-            means = {p: np.mean([count[indices[r["world_identity"], r["frame"]]] for rs in worlds.values() for r in rs])
-                     for p, worlds in parents.items()}
-            weights = {p: 1 / np.sqrt(max(1, means[p])) if balanced_counts else 1 for p in parents}
-            for parent, worlds in parents.items():
-                pmass = mass / len(regions) * weights[parent] / sum(weights.values())
-                for rs in worlds.values():
-                    for row in rs:
-                        probabilities[indices[row["world_identity"], row["frame"]]] += pmass / len(worlds) / len(rs)
+        for row, weight in distribute_frames(chosen, metadata, mass, balanced_counts):
+            probabilities[indices[row["world_identity"], row["frame"]]] += weight
 
     assignments = {metadata[r["split"], r["world"]].get("assigned_cell") for r in train}
     if None not in assignments:
@@ -985,12 +1166,19 @@ def research_select(protocol, data_root):
             {(g["world_identity"], g["source_identity"]): g for g in geometry["observations"]}, config)
         limits = config["minimum"][split]
         # World-count quotas and predeclared scientific conditions must hold together.
-        chosen, solver = balanced_assignment(candidates, quotas, 0, (content, config, limits))
+        minimum_regions = config["generation_cells"]["minimum_regions_per_cell"]
+        chosen, solver = balanced_assignment(candidates, quotas, minimum_regions, (content, config, limits))
         report["groups"][split] = dict(candidate_worlds=len(candidates), eligible_worlds_by_cell=counts,
             quotas=quotas, solver=solver, selected_worlds=len(chosen) if chosen else 0)
         if chosen is None:
             continue
         chosen_ids = {identity for identity, _ in chosen}
+        by_identity = {w["identity"]: w for w in candidates}
+        actual_regions = {cell: [len({by_identity[identity]["regions"][grid]
+            for identity, assigned in chosen if assigned == cell}) for grid in (0, 1)] for cell in quotas}
+        if any(min(regions) < minimum_regions for regions in actual_regions.values()):
+            raise ValueError("selected worlds violate the per-cell region requirement")
+        report["groups"][split]["actual_regions_by_cell"] = actual_regions
         checks = {}
         for key in config["core_cells"]:
             selected_rows = [r for r in content[key] if r["world_identity"] in chosen_ids]
@@ -1294,7 +1482,8 @@ def main():
     parser.add_argument("--workers", type=int, default=1)
     parser.add_argument("--threads", type=int, default=1)
     parser.add_argument("--inventory-only", action="store_true")
-    parser.add_argument("--research", choices=("inventory", "geometry", "summary", "select"), help="measure content or select balanced complete worlds")
+    parser.add_argument("--research", choices=("inventory", "geometry", "summary", "select", "conditions"), help="measure content or select balanced complete worlds")
+    parser.add_argument("--experiment", type=Path, default=Path("protocol/v2.json"), help="V2 definition for condition preparation")
     parser.add_argument("--witnesses-only", action="store_true", help="reuse measured geometry and add only native-context witness scans")
     args = parser.parse_args()
     if min(args.workers, args.threads) < 1 or args.workers * args.threads > len(os.sched_getaffinity(0)):
@@ -1303,7 +1492,9 @@ def main():
     if args.dataset:
         protocol["dataset"]["directory"] = str(args.dataset)
     if args.research:
-        if args.research == "inventory":
+        if args.research == "conditions":
+            prepare_conditions(protocol, args.experiment, args.data_root, args.workers)
+        elif args.research == "inventory":
             research_inventory(protocol, args.data_root, args.workers)
         elif args.research == "geometry":
             research_geometry(protocol, args.data_root, args.workers, args.witnesses_only)

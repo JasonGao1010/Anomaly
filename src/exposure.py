@@ -71,7 +71,7 @@ def measure_queries(request, frozen, original, queries, config, records, worlds,
         normal=_intersection(normal, measured["changed_normal_source_slots"]),
         keep=_intersection(kept, measured["changed_normal_source_slots"]))
     distance = np.linalg.norm(frozen.source.xyzi[anomaly, :3], axis=1)
-    return dict(sample=index, draw=draw, step=draw // config["training"]["batch_frames"],
+    result = dict(sample=index, draw=draw, step=draw // config["training"]["batch_frames"],
         world=frozen.world_identity, name=world["world"], frame=original.frame_id,
         source_identity=identity, parent=world["parent"], regions=world["regions"],
         flags=flags, geometry_measured=measured is not None,
@@ -83,6 +83,41 @@ def measure_queries(request, frozen, original, queries, config, records, worlds,
         anomaly_queries_far=int(((distance >= 35) & (distance <= 50)).sum()),
         physical={name: observed[name] for name in
                   ("range", "in_range_rays", "anomaly_rays", "changed_native_rays")})
+    if "condition_exposure" in queries:
+        conditions = queries["condition_exposure"]
+        result["conditions"] = {k: v for k, v in conditions.items() if not k.endswith("_mask")}
+        union_slots = frozen.source.real_slots[queries["query"].numpy()]
+        coefficients = {}
+        for kind, identity_slots in (("normal", union_slots), ("keep", kept)):
+            mass = np.zeros(len(identity_slots), np.float64)
+            for group, weight in zip(queries[kind + "_groups"], queries[kind + "_weights"], strict=True):
+                if len(group):
+                    mass[group.numpy()] += weight / len(group)
+            coefficients[kind] = mass
+            result["conditions"][kind + "_condition_mass"] = {
+                name: float(mass[conditions[kind + "_" + name + "_mask"]].sum()) for name in ("sparse", "changed")}
+            sparse_mask = conditions[kind + "_sparse_mask"] & (mass > 0)
+            result["conditions"][kind + "_sparse_slots"] = identity_slots[sparse_mask].tolist()
+            # Distance and nominal angular sampling both grow with range; report the actual queried mass.
+            distance = np.linalg.norm(frozen.source.xyzi[identity_slots, :3], axis=1)
+            bands = np.searchsorted([2.5, 10., 35., 50.], distance, side="right")
+            result["conditions"][kind + "_range_mass"] = [float(mass[bands == b].sum()) for b in range(5)]
+        # Historical geometry groups retain their own meanings under the new point coefficients.
+        coefficient_mass = {}
+        for name in CELLS:
+            if flags[name] is not True:
+                continue
+            if name == SPARSE:
+                normal_mask = np.isin(union_slots, contrast["normal_source_slots"])
+                keep_mask = np.isin(kept, contrast["normal_source_slots"])
+                positive_fraction = sides["anomaly"] / len(anomaly) if len(anomaly) else 0.
+            else:
+                normal_mask, keep_mask = np.ones(len(union_slots), bool), np.ones(len(kept), bool)
+                positive_fraction = float(bool(len(anomaly)))
+            coefficient_mass[name] = dict(normal=float(coefficients["normal"][normal_mask].sum()),
+                keep=float(coefficients["keep"][keep_mask].sum()), anomaly=positive_fraction)
+        result["frame_risk_mass"] = coefficient_mass
+    return result
 
 
 def _share(counter):
@@ -104,11 +139,18 @@ def summarize(rows, config, steps):
             for name in CELLS:
                 if row["flags"][name] is not True:
                     continue
-                counts = row["sparse_sides"] if name == SPARSE else row
-                mass = {kind: .5 * counts[kind] / totals[kind] if totals[kind] else 0.
-                        for kind in ("normal", "anomaly")}
-                mass["keep"] = (fraction * config["loss"]["keep_weight"] * counts["keep"]
-                                / totals["keep"] if row["keep_active"] and totals["keep"] else 0.)
+                if "frame_risk_mass" in row:
+                    counts = row["frame_risk_mass"][name]
+                    positives = sum(r["anomaly"] > 0 for r in batch)
+                    mass = dict(normal=.5 * counts["normal"] / batch_size,
+                        anomaly=.5 * counts["anomaly"] / max(positives, 1),
+                        keep=counts["keep"] / batch_size if row["keep_active"] else 0.)
+                else:
+                    counts = row["sparse_sides"] if name == SPARSE else row
+                    mass = {kind: .5 * counts[kind] / totals[kind] if totals[kind] else 0.
+                            for kind in ("normal", "anomaly")}
+                    mass["keep"] = (fraction * config["loss"]["keep_weight"] * counts["keep"]
+                                    / totals["keep"] if row["keep_active"] and totals["keep"] else 0.)
                 row["coefficient_mass"][name] = mass
     groups = {}
     for name in CELLS:
@@ -138,7 +180,33 @@ def summarize(rows, config, steps):
                                         if name == SPARSE else None),
             coefficient_mass=mass, mean_coefficient_mass_per_step={k: v / steps for k, v in mass.items()},
             concentration=concentrations)
+    if "group_queries" in config["training"]:
+        groups["v2_conditions"] = condition_summary(rows, steps, batch_size)
     return groups
+
+
+def condition_summary(rows, steps, batch_size):
+    """Actual group exposure, including overlap and repeated source slots; never gradient influence."""
+    output = {}
+    for kind, scale in (("normal", .5 / batch_size), ("keep", 1. / batch_size)):
+        active = [r for r in rows if kind == "normal" or r["keep_active"]]
+        sources, sparse_slots = Counter(), Counter()
+        mass = Counter()
+        ranges = np.zeros(5)
+        for row in active:
+            item = row["conditions"]
+            sources[row["source_identity"]] += 1
+            sparse_slots.update((row["source_identity"], s) for s in item[kind + "_sparse_slots"])
+            mass.update({k: scale * v for k, v in item[kind + "_condition_mass"].items()})
+            ranges += scale * np.asarray(item[kind + "_range_mass"])
+        output[kind] = dict(group_query_seats=np.sum([r["conditions"][kind + "_group_queries"] for r in active], axis=0).tolist() if active else [0, 0, 0],
+            condition_coefficient_mass=dict(mass), mean_condition_mass_per_update={k: v / steps for k, v in mass.items()},
+            range_coefficient_mass=ranges.tolist(), source_frames=len(sources),
+            maximum_source_frame_draw_share=_share(sources), unique_queried_sparse_slots=len(sparse_slots),
+            sparse_slot_visits=sum(sparse_slots.values()), maximum_sparse_slot_visits=max(sparse_slots.values(), default=0))
+    output["range_bins_m"] = ["below2.5", "2.5_to10", "10_to35", "35_to50", "at_least50"]
+    output["scope"] = "actual source-slot exposure; conditions overlap; nominal coefficient mass is not gradient influence"
+    return output
 
 
 def coverage_context(config, wanted):

@@ -11,6 +11,165 @@ from src.train import (_gradient_comparison, batch_loss, keep_loss, load_checkpo
                        tail_loss, Requests, evaluation_state, validate_initial_state, validate_resume_state)
 
 
+def test_group_queries_separate_spare_seats_empty_weights_and_overlap():
+    from src.train import grouped_queries
+    rng = np.random.default_rng(21)
+    base, small, empty = np.arange(20), np.array([0]), np.array([], dtype=int)
+    groups, weights = grouped_queries(base, small, empty, [4, 2, 2], [.5, .25, .25], rng)
+    assert list(map(len, groups)) == [7, 1, 0] and weights == [.75, .25, 0.]
+    groups, weights = grouped_queries(np.arange(3), np.array([0]), np.array([0]),
+                                      [4, 2, 2], [.5, .25, .25], rng)
+    assert list(map(len, groups)) == [3, 1, 1] and weights == [.5, .25, .25]
+    assert [g.tolist().count(0) for g in groups] == [1, 1, 1]
+    groups, weights = grouped_queries(empty, empty, empty, [4, 2, 2], [.5, .25, .25], rng)
+    assert not any(map(len, groups)) and weights == [0., 0., 0.]
+
+
+@pytest.mark.parametrize("positive_counts", [(2, 0), (1, 3), (0, 0)])
+def test_v2_frame_risk_and_gradients_match_explicit_formula(positive_counts):
+    from src.train import experiment_config, load_experiment
+    config = experiment_config(load_experiment("protocol/v2.json"))
+    rows = batch_fixture()
+    for row, count in zip(rows, positive_counts, strict=True):
+        row["target"][:] = 0
+        row["target"][torch.tensor([1, 2, 3])[:count]] = 1
+        normal = row["detection_index"][row["target"] == 0]
+        row.update(normal_groups=[normal, normal[:1], normal[:0]], normal_weights=[.75, .25, 0.],
+                   keep_groups=[torch.tensor([0, 1]), torch.tensor([0]), torch.tensor([0])],
+                   keep_weights=[.5, .25, .25])
+    torch.manual_seed(39)
+    model = SmallModel().double().train()
+    for row in rows:
+        row["scan"]["xyzi"] = row["scan"]["xyzi"].double()
+        row["original"]["xyzi"] = row["original"]["xyzi"].double()
+    loss, stats, details = batch_loss(model, rows, config, 0, details=True)
+    assert model.calls == 4 and stats["positive_frames"] == sum(n > 0 for n in positive_counts)
+    assert stats["auxiliary_fraction"] == 1.
+    score = details["scores"]
+    normal = []
+    kept = []
+    for row, after, before in zip(rows, score[::2], score[1::2], strict=True):
+        values = torch.nn.functional.softplus(after)
+        normal.append(.75 * values[row["normal_groups"][0]].mean() + .25 * values[row["normal_groups"][1]].mean())
+        pairs = .5 * (torch.nn.functional.softplus(before) + values[row["keep_index"]])
+        kept.append(.5 * pairs.mean() + .5 * pairs[0])
+    positives = [torch.nn.functional.softplus(-after[row['detection_index']][row['target'] == 1]).mean()
+                 for row, after in zip(rows, score[::2], strict=True) if (row['target'] == 1).any()]
+    anomaly = sum(positives) / len(positives) if positives else score[0].sum() * 0
+    expected = .25 * sum(normal) + .5 * anomaly + .5 * sum(kept)
+    torch.testing.assert_close(loss, expected, rtol=0, atol=1e-14)
+    parameters = list(model.parameters())
+    actual_grad = torch.autograd.grad(loss, parameters, retain_graph=True)
+    reference_grad = torch.autograd.grad(expected, parameters)
+    for actual, reference in zip(actual_grad, reference_grad, strict=True):
+        torch.testing.assert_close(actual, reference, rtol=0, atol=1e-14)
+
+
+def test_v2_schedule_and_request_resume_use_local_updates():
+    from src.train import auxiliary_fraction, experiment_config, learning_rate_factor, load_experiment
+    config = experiment_config(load_experiment("protocol/v2.json"))
+    schedule = config["training"]["learning_rate_schedule"]
+    assert [learning_rate_factor(i, schedule) for i in (1, 50, 2048)] == [.1, 1., .1]
+    probabilities = np.array([.2, .3, .5])
+    whole = list(Requests(probabilities, config, 2048))
+    assert whole[2048:] == list(Requests(probabilities, config, 2048, start=1024))
+    assert all(need for _, _, need in whole) and auxiliary_fraction(0, config["training"]) == 1.
+
+
+def test_v2_queries_keep_identity_overlap_and_missing_return_neighborhood():
+    from src.data import FrozenFrame, low_support_slots
+    from src.scene import PointLabels, make_source_frame
+    from src.train import experiment_config, load_experiment, query_rows
+    xyzi = np.zeros((13, 4), np.float32)
+    xyzi[:, 0], xyzi[:, 3] = np.arange(10, 23), .3
+    xyzi[1] = xyzi[0]
+    xyzi[12, :3] = 0
+    packed = np.full(13, 40, np.uint32)
+    targets = np.full(13, 8, np.uint8)
+    targets[[11, 12]] = 255
+    def source(points, labels, target):
+        return make_source_frame(7, points, np.eye(4), PointLabels(labels,
+            (labels & 65535).astype(np.uint16), (labels >> 16).astype(np.uint16), target),
+            partition="train", sequence_id=206)
+    original = source(xyzi, packed, targets)
+    current, labels, current_target = xyzi.copy(), packed.copy(), targets.copy()
+    current[[2, 3], 0] = [11., 11.5]
+    labels[[2, 3]] = 2 | (60001 << 16)
+    current[4], labels[4], current_target[[2, 3, 4]] = 0, 0, 255
+    inserted, occluded = np.zeros(13, bool), np.zeros(13, bool)
+    inserted[[2, 3]], occluded[[2, 3, 4]] = True, True
+    frozen = FrozenFrame(source(current, labels, current_target), 'a' * 64, inserted, occluded)
+    t = experiment_config(load_experiment('protocol/v2.json'))['training']
+    sparse = low_support_slots(original, 2., 8)
+    queries = query_rows(frozen, original, t, np.random.default_rng(5), sparse_slots=sparse)
+    slots = frozen.source.real_slots[queries['query'].numpy()]
+    assert len(slots) == len(set(slots)) and 12 not in slots and 11 not in slots
+    np.testing.assert_array_equal(slots[queries['detection_index']][queries['target'] == 1], [2, 3])
+    assert 5 in slots[queries['normal_groups'][2]]  # Its nearby changed point is the lost return at slot4.
+    for idx in queries['normal_groups']:
+        assert np.all(frozen.anomaly_target[slots[idx]] == 0)
+    np.testing.assert_array_equal(original.real_slots[queries['original_query']], queries['keep_slot'])
+    np.testing.assert_array_equal(slots[queries['keep_index']], queries['keep_slot'])
+    assert 0 in slots[queries['normal_groups'][0]] and 0 in slots[queries['normal_groups'][1]]
+    assert queries['normal_weights'] == [.5, .25, .25]
+
+
+def test_v2_resume_rejects_changed_condition_slots_and_parent_recipe(monkeypatch):
+    from src.train import (experiment_config, initialize_stage, load_experiment,
+                           make_optimizer, schedule_state, set_learning_rates)
+    experiment = load_experiment('protocol/v2.json')
+    config = experiment_config(experiment)
+    parent = experiment_config(load_experiment('protocol/finetune.json'))
+    parent_experiment = load_experiment('protocol/keep.json', 'mean')
+    model = nn.Module()
+    model.backbone = nn.Sequential(nn.Linear(1, 2), nn.BatchNorm1d(2))
+    model.head = nn.Linear(2, 1)
+    optimizer = make_optimizer(model, parent)
+    set_learning_rates(optimizer, parent, 1152)
+    identities, probabilities = [['a', 1]], np.array([1.])
+    saved = dict(format='ajae-v1-checkpoint', step=1152, config=parent, experiment=parent_experiment,
+        model=deepcopy(model.state_dict()), optimizer=optimizer.state_dict(), samples=identities,
+        probabilities=torch.from_numpy(probabilities), preprocessing={},
+        scheduler_state=schedule_state(optimizer, parent, 1152))
+    # Calibration validation is covered by the real parent check; this fixture isolates inheritance.
+    monkeypatch.setattr('src.train.ScanTransform', lambda *args, **kwargs: None)
+    fresh = initialize_stage(model, saved, config, experiment)
+    assert not fresh.state and [g['lr'] for g in fresh.param_groups] == pytest.approx([5e-7, 5e-6])
+    for key, value in model.state_dict().items():
+        torch.testing.assert_close(value, saved['model'][key], rtol=0, atol=0)
+    conditions = {'1': ['source', [1, 3]]}
+    local = dict(config=config, step=0, optimizer=fresh.state_dict(), experiment=experiment, samples=identities,
+        probabilities=torch.from_numpy(probabilities), condition_sources=conditions,
+        scheduler_state=schedule_state(fresh, config, 0))
+    assert validate_resume_state(local, config, identities, probabilities, experiment, condition_sources=conditions) == 0
+    with pytest.raises(ValueError, match='slot sets changed'):
+        validate_resume_state(local, config, identities, probabilities, experiment, condition_sources={'1': ['source', [1]]})
+    changed = deepcopy(config)
+    changed['model']['condition_modulation'] = False
+    with pytest.raises(ValueError, match='only its declared'):
+        initialize_stage(model, saved, changed, experiment)
+    with pytest.raises(ValueError, match='mean1152'):
+        initialize_stage(model, dict(saved, step=1024), config, experiment)
+
+
+def test_v2_fit_rejects_unresolved_physical_pool_before_creating_model(tmp_path, monkeypatch):
+    import json
+    from src.train import experiment_config, fit, load_experiment
+    experiment = load_experiment('protocol/v2.json')
+    config = experiment_config(experiment)
+    config['training']['sampling'] = str(tmp_path / 'conditions.npz')
+    (tmp_path / 'conditions.json').write_text(json.dumps(dict(parameters=config['training']['conditions'],
+        regions_satisfied=True, collision=dict(certified=False))))
+    monkeypatch.setattr('src.train.TrainingFrames', lambda *a, **kw: None)
+    monkeypatch.setattr('src.train.torch.load', lambda *a, **kw: dict(format='ajae-v1-checkpoint', preprocessing={}))
+    def forbidden_model(*a, **kw):
+        raise AssertionError('invalid physical pool reached model construction')
+    monkeypatch.setattr('src.train.AJAE', forbidden_model)
+    with pytest.raises(ValueError, match='unresolved Euclidean placement'):
+        fit(config, tmp_path, 2048, tmp_path / 'fit', experiment=experiment)
+    assert not (tmp_path / 'fit').exists()
+
+
 def test_pretrained_transfer_is_complete_and_does_not_touch_new_modules():
     from src.model import transfer_backbone
     model = nn.Module()

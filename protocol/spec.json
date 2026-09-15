@@ -2,9 +2,76 @@
   "format": "stu-single-frame",
   "schema_version": 1,
   "research_question": "Using only the complete current scan, can scene-supported observation-conditioned relationships on original returns learn transferable anomaly-versus-normal ranking? The current main method uses detection plus mean retained-normal pairing; independent mechanism attribution remains a later controlled comparison.",
+  "v2": {
+    "configuration": "protocol/v2.json",
+    "authorization": "implement code and necessary validation only; no training",
+    "implementation_validated": true,
+    "training_executed": false,
+    "optimizer_updates": 0,
+    "regression_tests_passed": 125,
+    "parent_checkpoint": "results/keep/mean/1152.pt",
+    "parent_step": 1152,
+    "new_stage_step": 0,
+    "condition_index": "results/coverage/v2.npz",
+    "preparation_results": "results/coverage/v2.json",
+    "source_frames": 449,
+    "native_low_support_slots": 237615,
+    "H_world_frames": 432,
+    "nonempty_H_cells": 19,
+    "H_original_probability": 0.012706797396075057,
+    "H_candidate_probability": 0.13683210458352674,
+    "original_sampling_recomputation_max_error": 0.0,
+    "all_60_cells_meet_minimum_regions": true,
+    "preparation_seconds": 327.4764902210154,
+    "preparation_workers": 8,
+    "maximum_preparation_worker_rss_bytes": 1143296000,
+    "no_update_check": {
+      "samples": [7414, 0],
+      "source_frames": [230, 0],
+      "input_returns": [128900, 123181],
+      "normal_queries": 16348,
+      "anomaly_queries": 5,
+      "normal_pairs": 2038,
+      "parameters_with_finite_gradient": 12931078,
+      "all_parent_model_and_buffer_tensors_equal_after_check": true,
+      "optimizer_state_entries": 0,
+      "full_vs_query_max_absolute_error": 1.9073486328125e-6,
+      "existing_absolute_and_relative_tolerance": 2e-5,
+      "forward_backward_seconds": 12.778993363986956,
+      "peak_cuda_bytes": 5069218304,
+      "checkpoint_saved": false
+    },
+    "placement_review": {
+      "worlds": 360,
+      "world_frames": 189600,
+      "fast_check_rejected_worlds": 10,
+      "fast_check_rejected_world_frames": 61,
+      "fast_check_rejected_return_observations": 99,
+      "independent_interval_ball_check": {
+        "deep_return_observations": 91,
+        "exterior_witnesses_found": 8,
+        "unresolved": 0,
+        "method": "cover the closed0.05m ball by axis-bisected boxes; use ShapeSpec._implicit_interval; discard only boxes whose squared minimum distance exceeds radius_squared*(1+1e-12); certify interior only for final implicit upper<-1e-10; exterior witness requires distance<0.05*(1-1e-8) and level>1e-10; at most37 levels, stop pending search after200000 evaluated boxes or65536 pending boxes",
+        "seconds": 1.3444905840151478,
+        "scope": "independent read-only numerical verification of the99 fast-check interiors; no model or world modification; counts are return observations, not independent objects"
+      },
+      "confirmed_affected_train_worlds": [
+        "sheet_low_smooth_6", "contacts_low_smooth_1", "branched_raised_rough_2", "branched_raised_rough_7",
+        "contacts_raised_rough_8", "solid_raised_sparse_1", "contacts_low_rough_7", "solid_raised_sparse_4"
+      ],
+      "confirmed_affected_validation_worlds": ["sheet_low_sparse_4", "contacts_low_rough_4"],
+      "affected_fixed206_diagnostic_records": [
+        {"world": "solid_raised_sparse_4", "frame": 370, "identity": "42359e42bbcfa500fd27cb891462b7ac70e69578727775bed811661b3b445ede"},
+        {"world": "solid_raised_sparse_1", "frame": 57, "identity": "0a83678eb5223768c1a09dd5efe0634a1dde1c81429137076ca5f4a42b2f4ef6"}
+      ],
+      "decision": "all10 flagged worlds contain confirmed >5cm penetration; preserve existing worlds and historical metrics in this code-only task; V2 fit rejects the uncorrected preparation result before model construction; repair affected placements and recompute affected data/conditions before future training",
+      "limits": "does not identify the cause of late training deterioration; no unobserved-surface guarantee; saved fast-check preparation remains conservative and is not a nearest-distance measurement"
+    },
+    "scientific_conclusion": "V2 risk and state handling are implemented and numerically checked; no V2 performance, mechanism or generalization conclusion exists"
+  },
   "status": {
-    "stage": "mean_1152_full_validation_completed",
-    "active_work": "Complete val19 evaluation confirms pooled AP, FPR95 and low-FPR recall improvements for mean1152; adopt it as the improved starting point while recording nonuniform sequence changes; execution stopped",
+    "stage": "v2_code_validated_pool_requires_placement_repair",
+    "active_work": "V2 code and no-update checks completed; mean1152 remains the best evaluated state;10 frozen worlds have confirmed Euclidean penetration violations; no training or data rewriting in this task",
     "model_defined": true,
     "training_defined": true,
     "formal_ajae_v1": "context_supported_conditional_return_relationship_network",
@@ -34,10 +101,10 @@
     "synthetic_geometry_conclusion": "nonextreme_anomalies_and_complex_original_normals_exist_insertion_changes_retained_normal_neighborhoods_and_sparse_geometry_has_condition_dependent_missingness",
     "coverage_closure_completed": true,
     "coverage_closure_evidence": "results/coverage/summary.json",
-    "coverage_decision": "all_original_core_checks_exact_30_cell_quotas_and_sampling_exposure_requirements_passed; data_unchanged_by_model_implementation",
+    "coverage_decision": "original content checks,30-cell quotas and probability records retain their measured scope; per-cell region counts independently satisfy3; V2 Euclidean placement review invalidates the old pool-wide5cm legality claim",
     "coverage_boundaries": "one_normal_source_per_split; sparse_normal_nonextreme_train_region_share_0.4997728305_near_0.5_limit; selected_geometry_scope_and_missingness; weak_background_change_is_not_self_occlusion; no_universal_coverage_claim",
-    "next_stage": "Use mean1152 as the new improved starting point and retain1024 as the historical reference; keep increase protection outside the current method; further performance and mechanism experiments need a separately defined scope; no automatic training",
-    "data_preparation_accepted": true,
+    "next_stage": "Repair the10 affected frozen-world placements and recompute their data and V2 preparation under a separately authorized data-change scope; retain mean1152 as the parent; no automatic training",
+    "data_preparation_accepted": false,
     "original_pool_summary_completed": true,
     "balanced_pool_target": {
       "train": 240,
@@ -48,13 +115,13 @@
         "validation": 4
       },
       "candidate_directory": "results/synthetic",
-      "status": "completed_exact_counts_and_original_scientific_requirements"
+      "status": "world_counts_and_regions_verified; Euclidean_placement_requires_repair"
     },
     "default_dataset_readable": true,
     "balanced_selection_completed": true,
     "remaining_scientific_checks": {
-      "train": {},
-      "validation": {}
+      "train": {"Euclidean_placement": "8 worlds contain confirmed >5cm penetration; repair pending"},
+      "validation": {"Euclidean_placement": "2 worlds contain confirmed >5cm penetration; repair pending"}
     },
     "verified_coverage": {
       "train": {
@@ -5323,16 +5390,19 @@
         "reference1024": {
           "AP": 74.92273548300908,
           "FPR95": 0.2385892496235793,
+          "AUROC": 99.92104516284115,
           "recall_at_1pct_FPR": 98.41941050754866
         },
         "mean1152": {
           "AP": 76.43509952215777,
           "FPR95": 0.21271569530023535,
+          "AUROC": 99.9406557041869,
           "recall_at_1pct_FPR": 98.87312997862833
         },
         "delta_percentage_points": {
           "AP": 1.512364039148693,
           "FPR95": -0.025873554323343956,
+          "AUROC": 0.01961054134574769,
           "recall_at_1pct_FPR": 0.4537194710796655
         }
       },

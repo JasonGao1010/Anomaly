@@ -541,3 +541,16 @@ def test_visible_minimum_is_independent_of_reference_and_checks_remaining_geomet
     too_few_inliers = _surface_chunk(np.array([[0., 0., -.9]]), reference, np.ones((22, 1), bool),
                                      np.array([0, 22]), np.arange(22), np.ones((1, 1), bool), p, np.array([20, 10]))
     assert too_few_inliers[2][0] == 18 and np.all(too_few_inliers[1] == 8)
+def test_v2_frame_probabilities_preserve_empty_cell_baseline_and_balance_H():
+    from src.coverage import condition_probabilities
+    rows, metadata = [], {}
+    for index, (cell, region, count) in enumerate((('a', 'r1', 4), ('a', 'r1', 16),
+                                                ('b', 'r2', 4), ('b', 'r3', 16))):
+        name = str(index)
+        rows.append(dict(split='train', world=name, world_identity=name, frame=0, in_range_rays=count))
+        metadata['train', name] = dict(assigned_cell=cell, regions=[region, region], parent=name)
+    baseline = np.array([.1, .4, .2, .3])
+    probability, cells = condition_probabilities(rows, metadata, baseline, np.array([True, True, False, False]), .2)
+    np.testing.assert_allclose(probability, [.08 + .1 * 2 / 3, .32 + .1 / 3, .2, .3], rtol=0, atol=1e-15)
+    assert cells['b']['empty_H_fallback'] and not cells['a']['empty_H_fallback']
+    assert all(v['probability'] == pytest.approx(.5) for v in cells.values())

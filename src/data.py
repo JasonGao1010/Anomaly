@@ -11,6 +11,7 @@ import subprocess
 import tempfile
 
 import numpy as np
+from scipy.spatial import cKDTree
 
 from .scene import PointLabels, SourceFrame, STUSequence, make_source_frame
 from .protocol import load_protocol
@@ -297,6 +298,73 @@ class FrozenDataset:
             raise DataProtocolError("every frozen scan needs positive normalized sampling probability")
         lookup = dict(zip(keys, weights))
         return np.array([lookup[key] for key in expected])
+
+
+def low_support_slots(source, radius_m, minimum_neighbors, *, workers=1):
+    """Count distinct positions in the complete original scan, before label filtering."""
+    xyz, inverse = np.unique(source.xyzi[source.real_slots, :3].astype(np.float64),
+                             axis=0, return_inverse=True)
+    if not len(xyz):
+        return np.empty(0, np.int32)
+    # Self occupies rank one; rank k+1 decides whether at least k neighbors exist.
+    distance = cKDTree(xyz).query(xyz, k=[minimum_neighbors + 1], workers=workers)[0][:, 0]
+    return source.real_slots[(distance > radius_m)[inverse]].astype(np.int32)
+
+
+def retained_normal_slots(frozen, original):
+    retained = np.flatnonzero(~frozen.inserted_mask & ~frozen.occluded_original_mask
+        & ~original.zero_slot_mask & (original.labels.semantic_target != 255))
+    if not (np.array_equal(original.xyzi[retained], frozen.source.xyzi[retained])
+            and np.array_equal(original.labels.packed[retained], frozen.source.labels.packed[retained])
+            and np.all(frozen.anomaly_target[retained] == 0)):
+        raise DataProtocolError("retained-normal pairing changed the original physical return or label")
+    return retained
+
+
+def normal_conditions(frozen, original, sparse_slots, radius_m):
+    """S is native low support; C is proximity to any changed return, including missing returns."""
+    kept = retained_normal_slots(frozen, original)
+    sparse = np.intersect1d(kept, sparse_slots)
+    changed = np.concatenate((frozen.source.xyzi[frozen.inserted_mask, :3],
+                              original.xyzi[frozen.occluded_original_mask, :3]))
+    near = np.empty(0, dtype=kept.dtype)
+    if len(changed) and len(kept):
+        near = kept[cKDTree(changed).query(original.xyzi[kept, :3], workers=1)[0] <= radius_m]
+    return kept, sparse, near
+
+
+class ConditionIndex:
+    """Read native slot sets bound to complete source contents and one world-frame pool."""
+
+    def __init__(self, path, dataset, parameters):
+        with np.load(path, allow_pickle=False) as saved:
+            if (saved["format"].item() != "ajae-v2-conditions"
+                    or json.loads(saved["parameters"].item()) != parameters):
+                raise DataProtocolError("condition index uses different scientific parameters")
+            keys = list(zip(saved["world_identity"].tolist(), saved["frame"].tolist()))
+            expected = [(world, frame) for _, world, frame in dataset.samples]
+            if keys != expected:
+                raise DataProtocolError("condition index belongs to another frozen world-frame pool")
+            frames, identities = saved["source_frame"], saved["source_identity"]
+            offsets, slots = saved["sparse_offsets"], saved["sparse_slot"]
+            if (frames.tolist() != list(dataset.sequence.frame_ids) or len(identities) != len(frames)
+                    or len(offsets) != len(frames) + 1 or offsets[0] != 0
+                    or offsets[-1] != len(slots) or np.any(np.diff(offsets) < 0)):
+                raise DataProtocolError("condition index does not cover the complete training source")
+            self.sources = {int(frame): (str(identity), slots[offsets[i]:offsets[i + 1]].copy())
+                for i, (frame, identity) in enumerate(zip(frames, identities, strict=True))}
+        for _, slots in self.sources.values():
+            if slots.dtype != np.int32 or np.any(slots < 0) or np.any(np.diff(slots) <= 0):
+                raise DataProtocolError("low-support slots must be sorted and unique")
+
+    def slots(self, original):
+        identity, slots = self.sources[original.frame_id]
+        if source_identity(original) != identity or np.any(slots >= original.slot_count):
+            raise DataProtocolError("low-support index source contents changed")
+        return slots
+
+    def state_dict(self):
+        return {str(frame): [identity, slots.tolist()] for frame, (identity, slots) in self.sources.items()}
 
 
 def _atomic_json(path, payload):

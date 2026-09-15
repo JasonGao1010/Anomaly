@@ -316,7 +316,7 @@ def nearby_obstacles(source, item):
     slots = source.real_slots
     xyz = source.xyzi[slots, :3].astype(np.float64)
     semantic = source.labels.semantic[slots]
-    # A bounding sphere is conservative; the existing exact signed-distance test decides collision.
+    # The sphere only selects candidates; Euclidean exterior witnesses certify shallow interiors.
     chosen = (
         (semantic != 0)
         & ~np.isin(semantic, GROUND)
@@ -533,7 +533,7 @@ def make_world(sequence, seed, config, profile, grid, sensor, references=None):
                     hit, minimum, _ = observed_normal_collision(world.objects[0], nearby,
                         penetration_m=config["placement"]["deep_penetration_m"], local_bounds=bounds)
                     if hit:
-                        collision = dict(frame=original.frame_id, minimum_sdf_m=minimum)
+                        collision = dict(frame=original.frame_id, minimum_implicit_value_m=minimum)
                         break
             if collision:
                 break
@@ -543,7 +543,7 @@ def make_world(sequence, seed, config, profile, grid, sensor, references=None):
         for world, placement in zip(worlds, placements):
             placement.update(ray_observations=probes, support_rejections=dict(rejections),
                              proposal_opportunities_met=achieved,
-                             physical_check="no_deep_penetration_in_any_original_source_frame")
+                             physical_check="all_checked_observed_interiors_have_exterior_witness_within_penetration_allowance")
         return worlds, placements
     raise ValueError("bounded_physical_support_search_failed:" + json.dumps(dict(rejections)))
 

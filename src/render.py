@@ -1135,7 +1135,7 @@ class ShapeSpec:
         return implicit * min(scale)
 
     def signed_distance(self, points_local: np.ndarray) -> np.ndarray:
-        """Return a finite implicit signed-distance approximation in metres."""
+        """Return a finite metre-scaled implicit level; its magnitude is not Euclidean distance."""
 
         points = np.asarray(points_local, dtype=np.float64)
         if points.ndim < 1 or points.shape[-1] != 3 or not np.isfinite(points).all():
@@ -2617,7 +2617,7 @@ class WorldSpec:
 
 @dataclass(frozen=True, slots=True)
 class PlacementRecord:
-    """Reproduce one accepted entity and every rejected support proposal."""
+    """Reproduce placement; legacy *_sdf_m fields hold implicit levels, not Euclidean distances."""
 
     object_id: int
     label: ObjectLabel
@@ -4579,6 +4579,42 @@ def _grounded_object(
     )
 
 
+def uncertified_penetration(shape, points, penetration_m):
+    """Reject interior points lacking an exterior witness within the Euclidean allowance.
+
+    A positive final implicit level certifies a boundary crossing along the segment.
+    Failure to find that witness is conservative uncertainty, not a distance estimate.
+    """
+    threshold = _finite_scalar("penetration_m", penetration_m)
+    if threshold < 0:
+        raise ValueError("penetration allowance must be nonnegative")
+    points = np.asarray(points, np.float64)
+    values = shape.signed_distance(points)
+    unresolved = values < 0
+    if threshold == 0 or not np.any(unresolved):
+        return unresolved, values
+    directions = np.array([(x, y, z) for x in (-1., 0., 1.) for y in (-1., 0., 1.)
+                           for z in (-1., 0., 1.) if x or y or z])
+    directions /= np.linalg.norm(directions, axis=1, keepdims=True)
+    # Keep witness coordinates strictly inside the physical allowance despite rounding.
+    length, difference = threshold * (1 - 1e-6), max(1e-7, threshold * 1e-4)
+    indices = np.flatnonzero(unresolved)
+    for start in range(0, len(indices), 2048):
+        ids = indices[start:start + 2048]
+        local = points[ids]
+        offsets = difference * np.eye(3)
+        gradient = (shape.signed_distance(local[:, None] + offsets)
+                    - shape.signed_distance(local[:, None] - offsets))
+        norm = np.linalg.norm(gradient, axis=1, keepdims=True)
+        gradient = np.divide(gradient, norm, out=np.zeros_like(gradient), where=norm > 0)
+        probes = local[:, None] + length * np.concatenate((
+            np.broadcast_to(directions, (len(local), len(directions), 3)), gradient[:, None]), axis=1)
+        exterior = shape.signed_distance(probes) > 0
+        within = np.linalg.norm(probes - local[:, None], axis=-1) <= threshold
+        unresolved[ids] = ~np.any(exterior & within, axis=1)
+    return unresolved, values
+
+
 def observed_normal_collision(
     proposed: ObjectSpec,
     obstacles: ObservedObstacleIndex,
@@ -4586,7 +4622,10 @@ def observed_normal_collision(
     penetration_m: float = 0.05,
     local_bounds: tuple[np.ndarray, np.ndarray] | None = None,
 ) -> tuple[bool, float, np.ndarray]:
-    """Reject iff an actually observed return lies more than 5 cm inside."""
+    """Conservatively reject observed interiors without a <=5 cm exterior witness.
+
+    The second return is the minimum implicit level, never a penetration distance.
+    """
 
     threshold = _finite_scalar("penetration_m", penetration_m)
     rotation = np.asarray(proposed.rotation_world_from_local, dtype=np.float64)
@@ -4602,10 +4641,8 @@ def observed_normal_collision(
     if points.size == 0:
         return False, math.inf, identities
     local = (points - translation) @ rotation
-    distance = proposed.shape.signed_distance(local)
-    minimum = float(np.min(distance))
-    deep = distance < -threshold
-    return bool(np.any(deep)), minimum, identities
+    unresolved, values = uncertified_penetration(proposed.shape, local, threshold)
+    return bool(np.any(unresolved)), float(np.min(values)), identities
 
 
 def _fibonacci_surface_points(shape: InsertShape, count: int = 8192) -> np.ndarray:
@@ -4682,7 +4719,7 @@ def obvious_pair_penetration(
     penetration_m: float = 0.05,
     witness_cache: dict[int, np.ndarray] | None = None,
 ) -> tuple[bool, float]:
-    """Use AABB only as a broad phase, then test bidirectional real witnesses."""
+    """Check both sampled sides conservatively; return an implicit level, not a distance."""
 
     threshold = _finite_scalar("penetration_m", penetration_m)
     left_rotation = np.asarray(left.rotation_world_from_local, dtype=np.float64)
@@ -4704,9 +4741,9 @@ def obvious_pair_penetration(
     ):
         points = _pair_witnesses(source, witness_cache)
         local = (points - translation) @ rotation
-        distance = target.shape.signed_distance(local)
-        minimum = min(minimum, float(np.min(distance)))
-        if bool(np.any(distance < -threshold)):
+        unresolved, values = uncertified_penetration(target.shape, local, threshold)
+        minimum = min(minimum, float(np.min(values)))
+        if bool(np.any(unresolved)):
             return True, minimum
     return False, minimum
 
@@ -4826,7 +4863,7 @@ def place_object(
         )
         proposal_minimum_sdf.append(minimum_sdf)
         if collision:
-            rejections.append("observed_normal_deep_penetration")
+            rejections.append("observed_normal_clearance_uncertified")
             continue
         pair_collision = False
         for other in existing_objects:
@@ -4836,7 +4873,7 @@ def place_object(
                 pair_collision = True
                 break
         if pair_collision:
-            rejections.append("obvious_pair_penetration")
+            rejections.append("pair_clearance_uncertified")
             continue
         if post_placement_rejection is not None:
             rejection = post_placement_rejection(proposed, patch)

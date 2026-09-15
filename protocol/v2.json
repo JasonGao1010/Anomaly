@@ -1,0 +1,54 @@
+{
+  "format": "ajae-v2-learning",
+  "base_config": "protocol/pretrain.json",
+  "scope": "V2 implementation candidate on the existing206 source; no training authorized by code preparation. Separate model inheritance from an unchanged strict resume.",
+  "question": "Can explicit native-low-support and disturbed-normal risk, equal positive-frame risk and a complete short decay improve the mean1152 development baseline?",
+  "warm_start": {"checkpoint": "results/keep/mean/1152.pt", "step": 1152},
+  "selection_from": "protocol/micro.json",
+  "maximum_updates": 2048,
+  "checkpoint_steps": [512, 1024, 1536, 2048],
+  "loss_overrides": {"keep_mode": "mean", "keep_weight": 1.0, "tail_weight": 0.0},
+  "training_overrides": {
+    "seed": 20260915,
+    "workers": 4,
+    "backbone_learning_rate": 0.000005,
+    "learning_rate": 0.00005,
+    "save_every": 512,
+    "sampling": "results/coverage/v2.npz",
+    "conditions": {
+      "radius_m": 2.0,
+      "minimum_neighbors": 8,
+      "minimum_anomaly_rays": 5,
+      "minimum_normal_positions": 5,
+      "anomaly_range_m": [2.5, 50.0],
+      "mixture": 0.2
+    },
+    "group_queries": {
+      "normal": [4096, 2048, 2048],
+      "keep": [512, 256, 256],
+      "weights": [0.5, 0.25, 0.25]
+    },
+    "learning_rate_schedule": {
+      "kind": "linear_warmup_cosine",
+      "warmup_updates": 50,
+      "total_updates": 2048,
+      "start_factor": 0.1,
+      "end_factor": 0.1
+    }
+  },
+  "evaluation": {
+    "synthetic_steps": [1024, 2048],
+    "real_steps": [1024, 2048],
+    "paired_normal_steps": [1024, 2048],
+    "synthetic_splits": ["train"],
+    "full_val19_steps": [2048],
+    "full_synthetic_steps": [],
+    "normalization_steps": [],
+    "primary": "Prespecified local2048 endpoint versus mean1152 on complete val19 AP,FPR95,AUROC and recall at FPR<=1%; fixed206_32 and real152 are development diagnostics. No201 or hidden test."
+  },
+  "optimization_monitor": {"every_updates": 32, "gradient_alert": 1000.0, "retained_alerts": 3},
+  "initialization": "Inherit exact model, BatchNorm buffers and preprocessing from1152; reset AdamW and random streams to seed20260915; local update0, parent step1152. Keep protection is full weight from the first update.",
+  "risk": "0.5*mean_frames(R_normal)+0.5*mean_positive_frames(R_anomaly)+mean_frames(R_keep); empty frame risks are zero; overlapping group contributions add, each union point is scored once; spare query seats do not transfer risk weight unless the group is empty.",
+  "sampling": "p2=0.8*p0+0.2*q_H within each of30 equally weighted cells; empty H falls back to that cell's p0; independent with-replacement frame draws; no importance correction.",
+  "stop": "Implementation and validation do not start training. Once separately authorized, run the declared2048 updates without automatic extension; an intermediate checkpoint selected using results is a development choice."
+}

@@ -14,6 +14,45 @@ from src.scene import (
 )
 
 
+def test_euclidean_clearance_rejects_ellipsoid_level_set_counterexample(monkeypatch):
+    import src.render as render
+    from scipy.optimize import minimize_scalar
+    shape = render.ShapeSpec(((1., .1, .1),), ((0., 0., 0.),), ((1., 1.),), (0.,), ("union",))
+    point = np.array([[.8, 0., 0.]])
+    exact = minimize_scalar(lambda theta: (np.cos(theta) - .8)**2 + (.1 * np.sin(theta))**2,
+                            bounds=(0, np.pi), method="bounded")
+    assert np.sqrt(exact.fun) == pytest.approx(.059458839, abs=1e-8)
+    np.testing.assert_allclose(shape.signed_distance(point), [-.02])
+    item = render.ObjectSpec(1, "anomaly-proxy", shape, render.MaterialSpec(.5, .5),
+                             (0., 0., 0.), tuple(map(tuple, np.eye(3))))
+    obstacles = render.ObservedObstacleIndex(point, np.array([7], np.uint64))
+    rejected, value, ids = render.observed_normal_collision(item, obstacles)
+    assert rejected and value == pytest.approx(-.02) and ids.tolist() == [7]
+    unresolved, _ = render.uncertified_penetration(shape, np.array([[.9, 0, 0], [1.1, 0, 0], [0, 0, 0]]), .05)
+    np.testing.assert_array_equal(unresolved, [False, False, True])
+    monkeypatch.setattr(render, "_pair_witnesses", lambda *args: point)
+    assert render.obvious_pair_penetration(item, item)[0]
+    with pytest.raises(ValueError, match="nonnegative"):
+        render.uncertified_penetration(shape, point, -.05)
+
+
+def test_low_support_uses_distinct_complete_geometry_and_preserves_slot_aliases():
+    from src.data import low_support_slots
+    xyz = np.array([[10., 0, 0], [10., 0, 0]] + [[10., 0, k / 4] for k in range(1, 9)]
+                   + [[30., 0, 0], [0., 0, 0]], np.float32)
+    source = make_source_frame(0, np.column_stack((xyz, np.ones(len(xyz), np.float32))), np.eye(4),
+                              partition="train", sequence_id=206)
+    # Exactly eight distinct neighbors within 2m includes the endpoint; duplicates add no support.
+    np.testing.assert_array_equal(low_support_slots(source, 2., 8), [10])
+    expected = []
+    unique = np.unique(xyz[source.real_slots], axis=0)
+    for slot in source.real_slots:
+        distance = np.linalg.norm(unique - xyz[slot], axis=1)
+        if np.count_nonzero((distance > 0) & (distance <= 1.99)) < 8:
+            expected.append(slot)
+    np.testing.assert_array_equal(low_support_slots(source, 1.99, 8), expected)
+
+
 def test_source_scan_preserves_slots_labels_and_official_arrays(tmp_path):
     directory = tmp_path / "val" / "125"
     (directory / "velodyne").mkdir(parents=True)

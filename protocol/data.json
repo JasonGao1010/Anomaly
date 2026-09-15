@@ -141,7 +141,7 @@
     "minimum_trajectory_clearance_m": 3,
     "maximum_closest_trajectory_distance_m": 12,
     "maximum_support_attempts": 192,
-    "collision": "all_nonzero_non_ground_source_returns_in_every_frame",
+    "collision": "all_nonzero_non_ground_source_returns_in_every_frame; interior points need an exterior witness within the Euclidean deep_penetration_m allowance; absence of a witness is conservative rejection, not a measured depth; stored legacy sdf fields are implicit levels",
     "deep_penetration_m": 0.05,
     "support_candidates": 48,
     "background_radius_m": 3,

@@ -21,7 +21,8 @@ from torch.nn import functional as F
 from torch.utils.data import DataLoader
 from torch.utils.checkpoint import checkpoint
 
-from .data import FrozenDataset, FrozenFrame, _atomic_json, host_disk, source_identity, runtime_resources
+from .data import (ConditionIndex, FrozenDataset, FrozenFrame, _atomic_json, host_disk,
+                   normal_conditions, retained_normal_slots, source_identity, runtime_resources)
 from .model import AJAE, ScanTransform, inherit_backbone, load_config, to_device, validate_config
 from .protocol import PROJECT_ROOT
 
@@ -82,6 +83,8 @@ def tail_loss(scores, target, frames, config, generator, *, selections=None):
 
 
 def auxiliary_fraction(step, config):
+    if "group_queries" in config:
+        return 1.
     return min(1., max(0., (step - config["warmup_steps"]) / config["ramp_steps"]))
 
 
@@ -89,19 +92,59 @@ def _take(rows, count, rng):
     return rows if len(rows) <= count else np.sort(rng.choice(rows, count, replace=False))
 
 
-def query_rows(frozen, original, config, rng):
+def grouped_queries(base, sparse, changed, budgets, weights, rng):
+    """Independent uniform group draws; spare seats and risk coefficients have separate fallbacks."""
+    selected = [_take(pool, budget, rng) for pool, budget in zip((sparse, changed), budgets[1:], strict=True)]
+    spare = sum(budgets[1:]) - sum(map(len, selected))
+    selected.insert(0, _take(base, budgets[0] + spare, rng))
+    mass = np.asarray(weights, np.float64).copy()
+    for i in (1, 2):
+        if not len(selected[i]):
+            mass[0] += mass[i]
+            mass[i] = 0.
+    if not len(base):
+        mass[:] = 0.
+    return selected, mass.tolist()
+
+
+def query_rows(frozen, original, config, rng, *, sparse_slots=None):
     """Labels select loss queries only; all neighborhood inputs remain label-blind."""
     slots, target = frozen.source.real_slots, frozen.anomaly_target[frozen.source.real_slots]
+    if "group_queries" in config:
+        if sparse_slots is None:
+            raise ValueError("V2 queries require the source-bound low-support index")
+        kept, sparse, near = normal_conditions(frozen, original, sparse_slots, config["conditions"]["radius_m"])
+        groups = config["group_queries"]
+        normal_slots = slots[target == 0]
+        normal_groups, normal_weights = grouped_queries(normal_slots, sparse, near,
+            groups["normal"], groups["weights"], rng)
+        keep_groups, keep_weights = grouped_queries(kept, sparse, near,
+            groups["keep"], groups["weights"], rng)
+        normal = np.searchsorted(slots, np.unique(np.concatenate(normal_groups)))
+        kept_slots = np.unique(np.concatenate(keep_groups))
+        anomaly = _take(np.flatnonzero(target == 1), config["anomaly_queries"], rng)
+        detection = np.sort(np.r_[normal, anomaly])
+        union = np.union1d(detection, np.searchsorted(slots, kept_slots))
+        normal_indices = [torch.from_numpy(np.searchsorted(union, np.searchsorted(slots, g))) for g in normal_groups]
+        keep_indices = [torch.from_numpy(np.searchsorted(kept_slots, g)) for g in keep_groups]
+        return dict(query=torch.from_numpy(union),
+            detection_index=torch.from_numpy(np.searchsorted(union, detection)),
+            target=torch.from_numpy(target[detection].astype(np.int64)),
+            keep_index=torch.from_numpy(np.searchsorted(union, np.searchsorted(slots, kept_slots))),
+            original_query=torch.from_numpy(np.searchsorted(original.real_slots, kept_slots)),
+            keep_slot=kept_slots, near_pairs=int(np.isin(kept_slots, near).sum()),
+            normal_groups=normal_indices, normal_weights=normal_weights,
+            keep_groups=keep_indices, keep_weights=keep_weights,
+            condition_exposure=dict(
+                population=dict(normal=len(normal_slots), sparse=len(sparse), changed=len(near), keep=len(kept)),
+                normal_group_queries=list(map(len, normal_groups)), keep_group_queries=list(map(len, keep_groups)),
+                normal_weights=normal_weights, keep_weights=keep_weights,
+                normal_sparse_mask=np.isin(slots[union], sparse), normal_changed_mask=np.isin(slots[union], near),
+                keep_sparse_mask=np.isin(kept_slots, sparse), keep_changed_mask=np.isin(kept_slots, near)))
     normal = _take(np.flatnonzero(target == 0), config["normal_queries"], rng)
     anomaly = _take(np.flatnonzero(target == 1), config["anomaly_queries"], rng)
     detection = np.sort(np.r_[normal, anomaly])
-    unchanged = (~frozen.inserted_mask & ~frozen.occluded_original_mask
-                 & ~original.zero_slot_mask & (original.labels.semantic_target != 255))
-    candidates = np.flatnonzero(unchanged)
-    if not (np.array_equal(original.xyzi[candidates], frozen.source.xyzi[candidates])
-            and np.array_equal(original.labels.packed[candidates], frozen.source.labels.packed[candidates])
-            and np.all(frozen.anomaly_target[candidates] == 0)):
-        raise ValueError("retained-normal pairing changed the original physical return or label")
+    candidates = retained_normal_slots(frozen, original)
     # Near changed returns, including an opaque occlusion without an inserted return.
     changed = np.concatenate((frozen.source.xyzi[frozen.inserted_mask, :3],
                              original.xyzi[frozen.occluded_original_mask, :3]))
@@ -133,6 +176,8 @@ class TrainingFrames:
         self.originals = OrderedDict()
         self.cache, self.cache_bytes, self.cached_bytes = OrderedDict(), cache_bytes, 0
         self.exposure_context = None
+        self.conditions = (ConditionIndex(PROJECT_ROOT / config["training"]["sampling"], self.dataset,
+            config["training"]["conditions"]) if "group_queries" in config["training"] else None)
 
     def scan(self, source, key):
         # The cache belongs to one frozen dataset, config and calibration instance.
@@ -154,7 +199,8 @@ class TrainingFrames:
         original = self.dataset.sequence[frame]
         frozen = FrozenFrame.load(path, original, identity)
         rng = np.random.default_rng(np.random.SeedSequence([self.config["training"]["seed"], 11, draw]))
-        return frozen, original, query_rows(frozen, original, self.config["training"], rng)
+        sparse = self.conditions.slots(original) if self.conditions is not None else None
+        return frozen, original, query_rows(frozen, original, self.config["training"], rng, sparse_slots=sparse)
 
     def __getitem__(self, request):
         index, draw, need_original = request
@@ -271,9 +317,17 @@ def evaluation_state(model):
         random.setstate(python)
 
 
+def grouped_risk(values, groups, weights):
+    """Overlapping identities add their group coefficients without another model forward."""
+    return sum((weight * values[index.to(values.device)].mean()
+                for index, weight in zip(groups, weights, strict=True) if len(index)), values.sum() * 0)
+
+
 def batch_loss(model, rows, config, step, *, full_objective=False, details=False, trace=None):
     device = next(model.parameters()).device
     all_scores, all_targets, all_frames, before, after = [], [], [], [], []
+    grouped = "group_queries" in config["training"]
+    normal_risks, anomaly_risks, keep_risks = [], [], []
     observed = dict(scores=[], context=[], point=[], score_targets=[])
     def forward(scan, query, target):
         output = training_forward(model, to_device(scan, device), query.to(device), return_features=details, trace=trace)
@@ -291,15 +345,32 @@ def batch_loss(model, rows, config, step, *, full_objective=False, details=False
         all_scores.append(scores[row["detection_index"].to(device)])
         all_targets.append(row["target"].to(device))
         all_frames.append(torch.full_like(all_targets[-1], row["frame"]))
+        if grouped:
+            normal_risks.append(grouped_risk(F.softplus(scores), row["normal_groups"], row["normal_weights"]))
+            positive = all_scores[-1][all_targets[-1] == 1]
+            if len(positive):
+                anomaly_risks.append(F.softplus(-positive).mean())
+            keep_risks.append(scores.sum() * 0)
         if row["original"] is not None:
             before.append(forward(row["original"], row["original_query"], torch.zeros(len(row["original_query"]), dtype=torch.long)))
             after.append(scores[row["keep_index"].to(device)])
+            if grouped:
+                keep_risks[-1] = grouped_risk(.5 * (F.softplus(before[-1]) + F.softplus(after[-1])),
+                    row["keep_groups"], row["keep_weights"])
     scores, target, frames = map(torch.cat, (all_scores, all_targets, all_frames))
-    det, class_losses = detection_loss(scores, target, details=True)
-    keep = keep_loss(torch.cat(before), torch.cat(after), config["loss"]["keep_mode"]) if before else scores.sum() * 0
+    if grouped:
+        normal = torch.stack(normal_risks).mean()
+        anomaly = torch.stack(anomaly_risks).mean() if anomaly_risks else scores.sum() * 0
+        det, keep = .5 * (normal + anomaly), torch.stack(keep_risks).mean()
+        class_losses = dict(normal_loss=float(normal.detach()),
+                           anomaly_loss=float(anomaly.detach()) if anomaly_risks else None,
+                           positive_frames=len(anomaly_risks))
+    else:
+        det, class_losses = detection_loss(scores, target, details=True)
+        keep = keep_loss(torch.cat(before), torch.cat(after), config["loss"]["keep_mode"]) if before else scores.sum() * 0
     generator = torch.Generator(device=device).manual_seed(config["training"]["seed"] + 31 + step)
     selections = {} if details else None
-    if config["loss"]["tail_weight"] > 0 or details:
+    if config["loss"]["tail_weight"] > 0 or (details and not grouped):
         tail, tail_stats = tail_loss(scores, target, frames, config["loss"], generator, selections=selections)
     else:
         tail, tail_stats = scores.sum() * 0, dict(pairs=0, cross_frame_pairs=0)
@@ -310,7 +381,7 @@ def batch_loss(model, rows, config, step, *, full_objective=False, details=False
         anomaly_queries=int((target == 1).sum()), retained_normal_pairs=sum(len(x) for x in before),
         **tail_stats, **class_losses)
     if details:
-        mean = keep_loss(torch.cat(before), torch.cat(after), "mean") if before else scores.sum() * 0
+        mean = keep if grouped else keep_loss(torch.cat(before), torch.cat(after), "mean") if before else scores.sum() * 0
         observed.update(components=dict(detection=det, keep=keep, tail=tail, keep_mean=mean),
                         tail=selections, target=target)
         return total, stats, observed
@@ -329,18 +400,32 @@ def load_checkpoint(path, device="cuda"):
     return model, saved
 
 
-def check(config, data_root, examples):
-    """Full real scans, task gradients and identity checks; no optimizer is created."""
+def check(config, data_root, examples, *, experiment=None):
+    """Full real scans and task gradients; V2 also checks inherited state without any update."""
     torch.manual_seed(config["training"]["seed"])
-    dataset = TrainingFrames(config, data_root)
+    saved = (torch.load(PROJECT_ROOT / experiment["warm_start"]["checkpoint"], map_location="cpu", weights_only=True)
+             if experiment else None)
+    dataset = TrainingFrames(config, data_root, preprocessing=saved["preprocessing"] if saved else None)
     rows = [dataset[(index, draw, True)] for draw, index in enumerate(examples)]
     model = AJAE(config).cuda()
+    if experiment:
+        if len(rows) != config["training"]["batch_frames"]:
+            raise ValueError("V2 check requires exactly one complete two-frame batch")
+        identities = [[identity, frame] for _, identity, frame in dataset.dataset.samples]
+        optimizer = initialize_stage(model, saved, config, experiment)
+        conditions = dataset.conditions.state_dict()
+        probabilities = dataset.dataset.sampling_probabilities(PROJECT_ROOT / config["training"]["sampling"])
+        local = dict(format="ajae-v1-checkpoint", step=0, config=config, experiment=experiment,
+            samples=identities, probabilities=torch.from_numpy(probabilities), optimizer=optimizer.state_dict(),
+            scheduler_state=schedule_state(optimizer, config, 0), condition_sources=conditions)
+        validate_resume_state(local, config, identities, probabilities, experiment, condition_sources=conditions)
     torch.cuda.reset_peak_memory_stats()
     started = time.perf_counter()
-    loss, stats = batch_loss(model, rows, config, 0, full_objective=True)
-    if not torch.isfinite(loss):
-        raise FloatingPointError("nonfinite real-scan task loss")
-    loss.backward()
+    with (_preserve_buffers(model) if experiment else nullcontext()):
+        loss, stats = batch_loss(model, rows, config, 0, full_objective=True)
+        if not torch.isfinite(loss):
+            raise FloatingPointError("nonfinite real-scan task loss")
+        loss.backward()
     gradients = {name: p.grad for name, p in model.named_parameters() if p.grad is not None}
     if any(not torch.isfinite(g).all() for g in gradients.values()):
         raise FloatingPointError("nonfinite real-scan task gradient")
@@ -356,6 +441,13 @@ def check(config, data_root, examples):
     torch.cuda.synchronize()
     stats.update(forward_backward_seconds=time.perf_counter() - started,
                  peak_cuda_bytes=torch.cuda.max_memory_allocated())
+    if experiment:
+        equal = all(torch.equal(value.cpu(), saved["model"][name]) for name, value in model.state_dict().items())
+        if not equal or optimizer.state:
+            raise ValueError("V2 check altered parent weights, buffers or optimizer state")
+        stats["warm_start"] = dict(parent_step=saved["step"], local_step=0, all_model_tensors_equal=equal,
+            optimizer_state_entries=len(optimizer.state), strict_local_resume=True,
+            learning_rates={str(u): learning_rates(config, u) for u in (1, 50, 2048)})
     model.zero_grad(set_to_none=True)
     model.eval()
     with torch.no_grad():
@@ -367,6 +459,12 @@ def check(config, data_root, examples):
         if not torch.allclose(full[rows[0]["query"].cuda()], subset, rtol=2e-5, atol=2e-5):
             raise ValueError("loss-query restriction changes full-scan scores")
         stats.update(predicted_real_returns=len(full), subset_max_absolute_error=error)
+    if experiment:
+        stats["group_query_seats"] = [dict(normal=[len(g) for g in row["normal_groups"]],
+            keep=[len(g) for g in row["keep_groups"]], union=len(row["query"]),
+            normal_weights=row["normal_weights"], keep_weights=row["keep_weights"]) for row in rows]
+        print(json.dumps(stats, indent=2, allow_nan=False), flush=True)
+        return stats
     from .protocol import load_protocol
     from .scene import STUSequence
     validation = FrozenDataset(PROJECT_ROOT / "results/synthetic", data_root, "validation")[161]
@@ -1163,7 +1261,7 @@ def initialize(config, data_root, weights, output):
 
 def load_experiment(path, arm=None):
     experiment = json.loads(Path(path).read_text())
-    if experiment.get("format") not in ("ajae-micro-learning", "ajae-short-learning", "ajae-staged-learning"):
+    if experiment.get("format") not in ("ajae-micro-learning", "ajae-short-learning", "ajae-staged-learning", "ajae-v2-learning"):
         raise ValueError("unknown finite-learning declaration")
     if "selection_from" in experiment:
         experiment["selection"] = json.loads((PROJECT_ROOT / experiment["selection_from"]).read_text())["selection"]
@@ -1211,7 +1309,8 @@ def validate_initial_state(saved, config, identities, initial_changes=None):
         raise ValueError("initial model, objective, training definition or input identities changed")
 
 
-def validate_resume_state(saved, config, identities, probabilities, experiment, *, without_201=False):
+def validate_resume_state(saved, config, identities, probabilities, experiment, *, without_201=False,
+                          condition_sources=None):
     if "failure" in saved:
         raise ValueError("a partial failure snapshot is not a completed-update resume state")
     expected = deepcopy(saved.get("experiment", saved.get("micro")))
@@ -1229,6 +1328,9 @@ def validate_resume_state(saved, config, identities, probabilities, experiment, 
     if (saved["config"] != config or expected != experiment
             or saved["samples"] != identities or not same_probabilities):
         raise ValueError("resume configuration, input order or frame probabilities changed")
+    if "group_queries" in config["training"] and (condition_sources is None
+            or saved.get("condition_sources") != condition_sources):
+        raise ValueError("resume native-low-support identities or slot sets changed")
     if "learning_rate_schedule" in config["training"]:
         rates = learning_rates(config, max(1, saved["step"]))
         if (saved.get("scheduler_state") != dict(completed_updates=saved["step"], learning_rates=rates)
@@ -1270,11 +1372,44 @@ def validate_branch_state(saved, config, identities, probabilities, experiment):
     return start
 
 
+def initialize_stage(model, saved, config, experiment):
+    """Inherit a compatible trained model, but start the declared V2 optimizer and RNG at zero."""
+    if (experiment.get("format") != "ajae-v2-learning" or experiment["warm_start"]["step"] != 1152
+            or saved.get("step") != 1152 or saved.get("format") != "ajae-v1-checkpoint"
+            or "group_queries" not in config["training"] or "preprocessing" not in saved
+            or saved["config"]["loss"]["keep_mode"] != "mean"
+            or saved["config"]["loss"]["tail_weight"] != 0.
+            or saved.get("experiment", {}).get("selection") != experiment["selection"]):
+        raise ValueError("V2 must inherit the declared mean1152 model and fixed evaluation selection")
+    probabilities = saved["probabilities"].numpy() if saved["probabilities"] is not None else None
+    # Validate the parent's own completed history; repaired worlds belong to the new stage.
+    validate_resume_state(saved, saved["config"], saved["samples"], probabilities, saved["experiment"])
+    expected = deepcopy(saved["config"])
+    expected["training"].update(experiment["training_overrides"])
+    expected["loss"].update(experiment["loss_overrides"])
+    expected["scope"] = experiment["scope"]
+    if config != expected:
+        raise ValueError("V2 may change only its declared risk, sampling and optimization settings")
+    ScanTransform(config, state=saved["preprocessing"])
+    if any(not torch.isfinite(value).all() for value in saved["model"].values()):
+        raise ValueError("V2 parent model contains nonfinite tensors")
+    model.load_state_dict(saved["model"], strict=True)
+    seed = config["training"]["seed"]
+    torch.manual_seed(seed)
+    random.seed(seed)
+    np.random.seed(seed)
+    optimizer = make_optimizer(model, config)
+    set_learning_rates(optimizer, config, 1)
+    return optimizer
+
+
 def fit(config, data_root, steps, output, resume=None, *, experiment=None, resume_without_201=False):
     if steps < 1:
         raise ValueError("training needs a positive explicit update budget")
     output = Path(output)
-    staged = experiment is not None and experiment["format"] == "ajae-staged-learning"
+    v2 = experiment is not None and experiment["format"] == "ajae-v2-learning"
+    staged = experiment is not None and experiment["format"] in {"ajae-staged-learning", "ajae-v2-learning"}
+    warm_starting = v2 and resume is None
     controlled = experiment is not None and "branch" in experiment
     branch_start = controlled and resume is None
     in_place = (staged or controlled) and resume is not None and Path(resume).resolve().parent == output.resolve()
@@ -1283,6 +1418,8 @@ def fit(config, data_root, steps, output, resume=None, *, experiment=None, resum
     if output.exists() and any(output.iterdir()) and not in_place:
         raise ValueError("training output is occupied; resume into an empty output directory")
     initial = PROJECT_ROOT / experiment["initial_checkpoint"] if experiment and "initial_checkpoint" in experiment else None
+    if v2:
+        initial = PROJECT_ROOT / experiment["warm_start"]["checkpoint"]
     if controlled:
         if "initial_checkpoint" in experiment or steps != experiment["maximum_updates"]:
             raise ValueError("protection control starts from its trained branch state and ends at the declared1152 update")
@@ -1300,6 +1437,11 @@ def fit(config, data_root, steps, output, resume=None, *, experiment=None, resum
     fixed_passes = experiment is not None and experiment["format"] == "ajae-micro-learning"
     dataset = TrainingFrames(config, data_root, preprocessing=saved["preprocessing"] if saved is not None else None,
                              cache_bytes=2 * 2**30 if fixed_passes else 0)
+    if v2:
+        preparation = json.loads((PROJECT_ROOT / config["training"]["sampling"]).with_suffix(".json").read_text())
+        if (preparation["parameters"] != config["training"]["conditions"]
+                or not preparation["regions_satisfied"] or not preparation["collision"]["certified"]):
+            raise ValueError("V2 frozen pool has unresolved Euclidean placement or region requirements; resolve the affected worlds before training")
     selected = select_samples(dataset.dataset, experiment["selection"]["train"]) if fixed_passes else None
     probabilities = (None if fixed_passes else
         dataset.dataset.sampling_probabilities(PROJECT_ROOT / config["training"]["sampling"]))
@@ -1307,10 +1449,11 @@ def fit(config, data_root, steps, output, resume=None, *, experiment=None, resum
     model = AJAE(config).cuda()
     optimizer = make_optimizer(model, config)
     identities = [[identity, frame] for _, identity, frame in dataset.dataset.samples]
+    condition_sources = dataset.conditions.state_dict() if dataset.conditions is not None else None
     start = 0
     if resume is not None:
         start = validate_resume_state(saved, config, identities, probabilities, experiment,
-                                      without_201=resume_without_201)
+                                      without_201=resume_without_201, condition_sources=condition_sources)
         if start > steps or (start == steps and not staged):
             raise ValueError("explicit budget has no remaining updates")
         if staged or controlled:
@@ -1328,6 +1471,8 @@ def fit(config, data_root, steps, output, resume=None, *, experiment=None, resum
                 raise ValueError("resume checkpoint and completed update log differ; no automatic replay")
     elif branch_start:
         start = validate_branch_state(saved, config, identities, probabilities, experiment)
+    elif warm_starting:
+        optimizer = initialize_stage(model, saved, config, experiment)
     elif saved is not None:
         validate_initial_state(saved, config, identities,
                                experiment.get("initial_changes") if experiment else None)
@@ -1335,7 +1480,7 @@ def fit(config, data_root, steps, output, resume=None, *, experiment=None, resum
                 and (probabilities is None or saved["probabilities"] is None
                      or not torch.equal(saved["probabilities"], torch.from_numpy(probabilities)))):
             raise ValueError("pretrained initialization and current frame probabilities differ")
-    if saved is not None:
+    if saved is not None and not warm_starting:
         model.load_state_dict(saved["model"], strict=True)
         optimizer.load_state_dict(saved["optimizer"])
         torch.set_rng_state(saved["torch_rng"])
@@ -1368,6 +1513,9 @@ def fit(config, data_root, steps, output, resume=None, *, experiment=None, resum
     if controlled:
         run["branch"] = dict(experiment["branch"], arm=experiment["arm"],
                              inherited="model, buffers, AdamW moments, preprocessing, all RNG and global update")
+    if v2:
+        run["parent"] = dict(experiment["warm_start"],
+            inherited="model, BatchNorm buffers, preprocessing; new optimizer and local random streams")
     if staged or controlled:
         run["resources_before"] = runtime_resources()
     if in_place:
@@ -1415,7 +1563,8 @@ def fit(config, data_root, steps, output, resume=None, *, experiment=None, resum
             torch_rng=torch.get_rng_state(), cuda_rng=torch.cuda.get_rng_state_all(), experiment=experiment,
             python_rng=random.getstate(), numpy_rng=(name, torch.from_numpy(values.astype(np.int64)), position, has_gauss, cached),
             scheduler_state=schedule_state(optimizer, config, step),
-            diagnostic_exposure=exposure if prepared is not None else {})
+            diagnostic_exposure=exposure if prepared is not None else {},
+            **(dict(parent=experiment["warm_start"], condition_sources=condition_sources) if v2 else {}))
 
     def snapshot(step, failure=None, *, rolling=False):
         volume = host_disk()
@@ -1585,6 +1734,8 @@ def fit(config, data_root, steps, output, resume=None, *, experiment=None, resum
                 if experiment and completed in experiment["evaluation"]["synthetic_steps"]:
                     snapshot(completed)
                     evaluate(completed)
+                elif experiment and completed in experiment.get("checkpoint_steps", []):
+                    snapshot(completed)
                 elif ((staged or experiment is None) and completed % config["training"]["save_every"] == 0) or completed == steps:
                     snapshot(completed, rolling=staged)
     except BaseException as error:
@@ -1645,10 +1796,11 @@ def main():
     if args.arm is not None and (args.command != "fit" or args.experiment is None):
         parser.error("--arm requires a declared --experiment fit")
     experiment = load_experiment(args.experiment, args.arm) if args.experiment is not None else None
-    if experiment is not None and args.command != "fit":
-        parser.error("--experiment only supports a declared finite-learning fit")
+    if experiment is not None and args.command != "fit" and not (
+            args.command == "check" and experiment["format"] == "ajae-v2-learning"):
+        parser.error("--experiment supports a declared fit or a V2 no-update check")
     config = experiment_config(experiment, args.config)
-    if config["initialization"] != "random_no_external_weights" and args.command in ("check", "preview"):
+    if config["initialization"] != "random_no_external_weights" and args.command in ("check", "preview") and not experiment:
         parser.error("use initialize to inspect the actual pretrained state")
     torch.set_num_threads(4)
     if not torch.cuda.is_available():
@@ -1695,7 +1847,7 @@ def main():
     elif args.command == "check":
         if args.steps is not None or args.output is not None or args.resume is not None:
             parser.error("check has no optimization budget, output directory or resume state")
-        check(config, args.data_root, args.sample if args.sample is not None else [161, 162])
+        check(config, args.data_root, args.sample if args.sample is not None else [161, 162], experiment=experiment)
     elif args.command == "preview":
         if args.steps is None or args.output is None or args.sample is not None or args.resume is not None:
             parser.error("preview requires --steps and --output; it has no fixed check samples or resume state")

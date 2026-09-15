@@ -71,6 +71,15 @@ def validate_config(config):
             or loss["temperature"] <= 0 or loss["pairs_per_tail"] < 1
             or any(not 0 < loss[k] <= 1 for k in ("normal_tail_fraction", "anomaly_tail_fraction"))):
         raise ValueError("invalid task-loss configuration")
+    if "group_queries" in t or "conditions" in t:
+        groups, conditions = t.get("group_queries", {}), t.get("conditions", {})
+        if (groups != dict(normal=[4096, 2048, 2048], keep=[512, 256, 256], weights=[.5, .25, .25])
+                or conditions != dict(radius_m=2., minimum_neighbors=8, minimum_anomaly_rays=5,
+                    minimum_normal_positions=5, anomaly_range_m=[2.5, 50.], mixture=.2)
+                or t["batch_frames"] != 2 or t["normal_queries"] != 8192
+                or t["keep_queries"] != 1024 or t["anomaly_queries"] != 2048
+                or loss["keep_mode"] != "mean" or loss["keep_weight"] != 1. or loss["tail_weight"] != 0.):
+            raise ValueError("V2 requires the declared groups, conditions and full mean protection")
     return config
 
 
