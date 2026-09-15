@@ -240,6 +240,79 @@ def test_full_pool_requests_preserve_original_draw_stream_and_resume():
     assert all(r[2] for r in cumulative[8000:])
 
 
+def test_insertion_protection_keeps_baseline_gradient_and_gates_only_after():
+    before = torch.tensor([-2., 1., 0., -40.], dtype=torch.float64, requires_grad=True)
+    after = torch.tensor([1., -2., 0., -30.], dtype=torch.float64, requires_grad=True)
+    loss = keep_loss(before, after, "increase")
+    expected = .5 * torch.maximum(torch.nn.functional.softplus(before),
+                                  torch.nn.functional.softplus(after)).mean()
+    torch.testing.assert_close(loss, expected, rtol=0, atol=0)
+    original_grad, inserted_grad = torch.autograd.grad(loss, (before, after))
+    torch.testing.assert_close(original_grad, .5 * before.sigmoid() / len(before))
+    torch.testing.assert_close(inserted_grad, .5 * after.sigmoid() * (after > before) / len(before))
+    mean_grad = torch.autograd.grad(keep_loss(before, after, "mean"), (before, after))
+    torch.testing.assert_close(original_grad, mean_grad[0])
+    torch.testing.assert_close(inserted_grad[[0, 3]], mean_grad[1][[0, 3]])
+    assert inserted_grad[1] == inserted_grad[2] == 0
+    assert 0 < inserted_grad[3] < 1e-12
+    # Detaching the whole baseline would lose its supervision; a maximum cancels it when after is worse.
+    maximum_grad = torch.autograd.grad(expected, before)[0]
+    assert maximum_grad[0] == 0 and original_grad[0] > 0
+    empty = torch.empty(0, requires_grad=True)
+    keep_loss(empty, empty, "increase").backward()
+    assert empty.grad is not None and empty.grad.numel() == 0
+
+
+def test_protection_branch_preserves_resume_rules_and_draws():
+    from src.train import (experiment_config, load_experiment, make_optimizer, schedule_state,
+                           set_learning_rates, validate_branch_state)
+    source_experiment = load_experiment("protocol/finetune.json")
+    config = experiment_config(source_experiment)
+    model = nn.Module()
+    model.backbone, model.head = nn.Linear(1, 1), nn.Linear(1, 1)
+    optimizer = make_optimizer(model, config)
+    sum(p.square().sum() for p in model.parameters()).backward()
+    optimizer.step()
+    # This small fixture checks state validation, not real trained-model compatibility.
+    for state in optimizer.state.values():
+        state["step"].fill_(1024)
+    set_learning_rates(optimizer, config, 1024)
+    identities, probabilities = [["a", 1], ["b", 2]], np.array([.3, .7])
+    saved = dict(step=1024, config=config, experiment=source_experiment, samples=identities,
+        probabilities=torch.from_numpy(probabilities), optimizer=optimizer.state_dict(),
+        scheduler_state=schedule_state(optimizer, config, 1024), model=model.state_dict(),
+        preprocessing={}, torch_rng=torch.get_rng_state(), cuda_rng=[],
+        python_rng=random.getstate(), numpy_rng=np.random.get_state())
+    expected_requests = list(Requests(probabilities, config, 1152, start=1024))
+    assert len(expected_requests) == 256 and [r[1] for r in expected_requests] == list(range(2048, 2304))
+    for arm in ("mean", "increase"):
+        experiment = load_experiment("protocol/keep.json", arm)
+        candidate = deepcopy(config)
+        candidate["scope"] = experiment["scope"]
+        candidate["loss"].update(experiment["loss_overrides"])
+        assert validate_branch_state(saved, candidate, identities, probabilities, experiment) == 1024
+        assert list(Requests(probabilities, candidate, 1152, start=1024)) == expected_requests
+        with pytest.raises(ValueError, match="resume configuration"):
+            validate_resume_state(saved, candidate, identities, probabilities, experiment)
+        for section, key, value in (("training", "learning_rate", 1e-3), ("loss", "keep_weight", .5),
+                                    ("model", "condition_modulation", False)):
+            changed = deepcopy(candidate)
+            changed[section][key] = value
+            with pytest.raises(ValueError, match="only loss.keep_mode"):
+                validate_branch_state(saved, changed, identities, probabilities, experiment)
+        changed = deepcopy(experiment)
+        changed["evaluation"]["full_val19_steps"] = [1152]
+        with pytest.raises(ValueError, match="fixed206/152"):
+            validate_branch_state(saved, candidate, identities, probabilities, changed)
+        incomplete = dict(saved)
+        incomplete.pop("cuda_rng")
+        with pytest.raises(ValueError, match="complete trained state"):
+            validate_branch_state(incomplete, candidate, identities, probabilities, experiment)
+    assert saved["config"]["loss"]["keep_mode"] == "mean"
+    with pytest.raises(ValueError, match="choose an explicitly declared"):
+        load_experiment("protocol/keep.json")
+
+
 def test_resume_rejects_partial_buffers_and_any_recipe_or_probability_change():
     config = load_config()
     probabilities = np.array([.25, .75])
@@ -345,6 +418,29 @@ def batch_fixture():
             target=torch.tensor([0, 1, 0, 1]), keep_index=torch.tensor([0, 4]),
             original_query=torch.tensor([0, 7]), frame=frame))
     return rows
+
+
+def test_protection_control_keeps_four_forwards_and_normalization_inputs():
+    torch.manual_seed(73)
+    rows, model = batch_fixture(), SmallModel().train()
+    config = load_config()
+    config["loss"].update(keep_mode="mean", tail_weight=0.)
+    candidate = deepcopy(model)
+    reference_loss, reference_stats, reference = batch_loss(model, rows, config, 1024, details=True)
+    random_state = torch.get_rng_state()
+    config["loss"]["keep_mode"] = "increase"
+    loss, stats, actual = batch_loss(candidate, rows, config, 1024, details=True)
+    assert model.calls == candidate.calls == 4
+    for observed, expected in zip(actual["scores"], reference["scores"], strict=True):
+        torch.testing.assert_close(observed, expected, rtol=0, atol=0)
+    torch.testing.assert_close(actual["components"]["detection"], reference["components"]["detection"], rtol=0, atol=0)
+    reference_loss.backward()
+    loss.backward()
+    for observed, expected in zip(candidate.buffers(), model.buffers(), strict=True):
+        torch.testing.assert_close(observed, expected, rtol=0, atol=0)
+    torch.testing.assert_close(torch.get_rng_state(), random_state, rtol=0, atol=0)
+    assert candidate.context[1].num_batches_tracked == 4
+    assert all(p.grad is not None and torch.isfinite(p.grad).all() for p in candidate.parameters())
 
 
 def test_loss_details_preserve_loss_tail_selection_gradients_and_batchnorm():

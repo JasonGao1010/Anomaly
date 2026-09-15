@@ -1,0 +1,30 @@
+{
+  "format": "ajae-short-learning",
+  "base_config": "results/finetune/config.json",
+  "scope": "Authorized128-update normal-protection control from the complete pretrained1024 state; unchanged network, running-stat inference, LR, data and four forwards; no automatic extension.",
+  "question": "Can original-normal supervision plus protection against insertion-induced classification-loss increases improve AP/FPR95/low-FPR recall beyond the common1024 state and mean-pairing control?",
+  "branch": {"checkpoint": "results/finetune/1024.pt", "step": 1024},
+  "selection_from": "protocol/micro.json",
+  "maximum_updates": 1152,
+  "loss_overrides": {},
+  "arms": {
+    "mean": {"keep_mode": "mean"},
+    "increase": {"keep_mode": "increase"}
+  },
+  "candidate": "0.5*mean(softplus(before)+relu(softplus(after)-stop_gradient(softplus(before)))); baseline term retains its gradient; ReLU has zero derivative at equality; original keep weight1 and completed warmup/ramp retained; tail0",
+  "sampling": "original frozen240-world probabilities and requests for global updates1025 through1152; two scans per update; same query and retained-normal identities; no new sampling stream",
+  "evaluation": {
+    "synthetic_steps": [1152],
+    "real_steps": [1152],
+    "paired_normal_steps": [1152],
+    "synthetic_splits": ["train"],
+    "full_val19_steps": [],
+    "full_synthetic_steps": [],
+    "normalization_steps": [],
+    "scope": "existing206_32 full-valid-label scans and real152 complete official point sets; no201; no initial or intermediate evaluation",
+    "reference": "results/finetune/1024.json with its existing normal-pair records; compare each scope only against itself",
+    "thresholds": "pooled curves per checkpoint; group counts use corresponding global thresholds; same threshold before/after insertion; report achieved FPR and recall"
+  },
+  "decision": "compare both arms to the shared1024 start; merely outperforming a degraded control is not an improvement; jointly inspect anomaly misses and retained-normal transitions; no claim isolating the cause of degradation",
+  "stop": "after128 updates per arm and the declared fixed evaluations; stop and retain the scene on numerical failure; no automatic retries, extra updates or full-val19 evaluation"
+}

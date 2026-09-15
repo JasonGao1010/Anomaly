@@ -49,6 +49,10 @@ def keep_loss(original, inserted, mode="worst"):
         return torch.maximum(before, after).mean()
     if mode == "mean":
         return .5 * (before.mean() + after.mean())
+    if mode == "increase":
+        # Keep baseline supervision; detach only the hinge reference, not the baseline term.
+        # A half-scaled maximum has the same value but the wrong baseline gradient.
+        return .5 * (before + F.relu(after - before.detach())).mean()
     raise ValueError("unknown normal-pair objective")
 
 
@@ -1157,12 +1161,20 @@ def initialize(config, data_root, weights, output):
     return report
 
 
-def load_experiment(path):
+def load_experiment(path, arm=None):
     experiment = json.loads(Path(path).read_text())
     if experiment.get("format") not in ("ajae-micro-learning", "ajae-short-learning", "ajae-staged-learning"):
         raise ValueError("unknown finite-learning declaration")
     if "selection_from" in experiment:
         experiment["selection"] = json.loads((PROJECT_ROOT / experiment["selection_from"]).read_text())["selection"]
+    if "arms" in experiment:
+        arms = experiment.pop("arms")
+        if arm not in arms:
+            raise ValueError("choose an explicitly declared experiment arm")
+        experiment["loss_overrides"].update(arms[arm])
+        experiment["arm"] = arm
+    elif arm is not None:
+        raise ValueError("this experiment does not declare multiple arms")
     return experiment
 
 
@@ -1225,17 +1237,56 @@ def validate_resume_state(saved, config, identities, probabilities, experiment, 
     return saved["step"]
 
 
+def validate_branch_state(saved, config, identities, probabilities, experiment):
+    """Only the declared mean/increase protection experiment may fork a trained state."""
+    branch, evaluation = experiment["branch"], experiment["evaluation"]
+    start = validate_resume_state(saved, saved["config"], identities, probabilities, saved["experiment"])
+    expected = deepcopy(saved["config"])
+    if (experiment["format"] != "ajae-short-learning" or start != branch["step"] or start != 1024
+            or experiment["maximum_updates"] != start + 128
+            or experiment.get("arm") not in {"mean", "increase"}
+            or config["loss"]["keep_mode"] != experiment["arm"]
+            or expected["loss"]["keep_mode"] != "mean"
+            or experiment["selection"] != saved["experiment"]["selection"]
+            or any(evaluation.get(key) != [start + 128]
+                   for key in ("synthetic_steps", "real_steps", "paired_normal_steps"))
+            or evaluation.get("synthetic_splits") != ["train"]
+            or any(evaluation.get(key, []) for key in
+                   ("full_val19_steps", "full_synthetic_steps", "normalization_steps"))):
+        raise ValueError("protection branch requires the declared1024-to1152 mean/increase control and fixed206/152 evaluation")
+    expected["scope"] = config["scope"]
+    expected["loss"]["keep_mode"] = experiment["arm"]
+    if expected != config:
+        raise ValueError("protection branch may change only loss.keep_mode and its description")
+    required = ("model", "optimizer", "preprocessing", "torch_rng", "cuda_rng", "python_rng", "numpy_rng")
+    if any(key not in saved for key in required) or not saved["optimizer"]["state"]:
+        raise ValueError("protection branch requires the complete trained state")
+    for state in saved["optimizer"]["state"].values():
+        if int(state["step"]) != start or any(not torch.isfinite(value).all()
+                for value in state.values() if isinstance(value, torch.Tensor)):
+            raise ValueError("source optimizer is nonfinite or has inconsistent update counts")
+    if any(not torch.isfinite(value).all() for value in saved["model"].values()):
+        raise ValueError("source model contains nonfinite values")
+    return start
+
+
 def fit(config, data_root, steps, output, resume=None, *, experiment=None, resume_without_201=False):
     if steps < 1:
         raise ValueError("training needs a positive explicit update budget")
     output = Path(output)
     staged = experiment is not None and experiment["format"] == "ajae-staged-learning"
-    in_place = staged and resume is not None and Path(resume).resolve().parent == output.resolve()
+    controlled = experiment is not None and "branch" in experiment
+    branch_start = controlled and resume is None
+    in_place = (staged or controlled) and resume is not None and Path(resume).resolve().parent == output.resolve()
     if resume_without_201 and not in_place:
         raise ValueError("201 removal requires resuming the same staged output directory")
     if output.exists() and any(output.iterdir()) and not in_place:
         raise ValueError("training output is occupied; resume into an empty output directory")
     initial = PROJECT_ROOT / experiment["initial_checkpoint"] if experiment and "initial_checkpoint" in experiment else None
+    if controlled:
+        if "initial_checkpoint" in experiment or steps != experiment["maximum_updates"]:
+            raise ValueError("protection control starts from its trained branch state and ends at the declared1152 update")
+        initial = PROJECT_ROOT / experiment["branch"]["checkpoint"]
     state_path = resume if resume is not None else initial
     saved = torch.load(state_path, map_location="cpu", weights_only=True) if state_path is not None else None
     if config["initialization"] == "nuscenes_litept_s" and saved is None:
@@ -1262,10 +1313,10 @@ def fit(config, data_root, steps, output, resume=None, *, experiment=None, resum
                                       without_201=resume_without_201)
         if start > steps or (start == steps and not staged):
             raise ValueError("explicit budget has no remaining updates")
-        if staged:
+        if staged or controlled:
             if not in_place:
                 raise ValueError("continuous training resumes in its existing output directory")
-            logged = 0
+            logged = experiment["branch"]["step"] if controlled else 0
             if (output / "loss.jsonl").exists():
                 with (output / "loss.jsonl").open() as stream:
                     for line in stream:
@@ -1275,6 +1326,8 @@ def fit(config, data_root, steps, output, resume=None, *, experiment=None, resum
                         logged = row["step"]
             if logged != start:
                 raise ValueError("resume checkpoint and completed update log differ; no automatic replay")
+    elif branch_start:
+        start = validate_branch_state(saved, config, identities, probabilities, experiment)
     elif saved is not None:
         validate_initial_state(saved, config, identities,
                                experiment.get("initial_changes") if experiment else None)
@@ -1291,7 +1344,7 @@ def fit(config, data_root, steps, output, resume=None, *, experiment=None, resum
             random.setstate(saved["python_rng"])
             name, values, position, has_gauss, cached = saved["numpy_rng"]
             np.random.set_state((name, values.numpy().astype(np.uint32), position, has_gauss, cached))
-    if resume is None:
+    if resume is None and not branch_start:
         set_learning_rates(optimizer, config, 1)
     monitor = experiment.get("optimization_monitor", {}) if experiment else {}
     # Include retained evaluation states, an emergency state and atomic output overlap.
@@ -1312,7 +1365,10 @@ def fit(config, data_root, steps, output, resume=None, *, experiment=None, resum
             gpu=torch.cuda.get_device_name(), gpu_bytes=torch.cuda.get_device_properties(0).total_memory,
             cpu_affinity=sorted(os.sched_getaffinity(0)), torch_threads=torch.get_num_threads(),
             preparation_workers=config["training"]["workers"], transform_cache_bytes_per_worker=dataset.cache_bytes))
-    if staged:
+    if controlled:
+        run["branch"] = dict(experiment["branch"], arm=experiment["arm"],
+                             inherited="model, buffers, AdamW moments, preprocessing, all RNG and global update")
+    if staged or controlled:
         run["resources_before"] = runtime_resources()
     if in_place:
         previous = json.loads((output / "run.json").read_text())
@@ -1334,7 +1390,7 @@ def fit(config, data_root, steps, output, resume=None, *, experiment=None, resum
             synthetic_splits=experiment["evaluation"].get("synthetic_splits", ["train", "validation"]))
         transform = ScanTransform(config, state=dataset.preprocessing, workers=8)
         diagnostic_indices = prepared["indices"]["train"]
-        exposure = {index: saved.get("diagnostic_exposure", {}).get(index, 0) if resume else 0
+        exposure = {index: saved.get("diagnostic_exposure", {}).get(index, 0) if resume or branch_start else 0
                     for index in diagnostic_indices}
     stages = json.loads((output / "exposure.json").read_text()).get("stages", {}) if in_place else {}
     if staged:
@@ -1452,12 +1508,12 @@ def fit(config, data_root, steps, output, resume=None, *, experiment=None, resum
         if evaluating:
             raise KeyboardInterrupt("user stopped evaluation at a saved update boundary")
 
-    handlers = {sig: signal.signal(sig, request_stop) for sig in (signal.SIGINT, signal.SIGTERM)} if staged else {}
+    handlers = {sig: signal.signal(sig, request_stop) for sig in (signal.SIGINT, signal.SIGTERM)} if staged or controlled else {}
     try:
         if experiment:
             if not in_place:
                 snapshot(start)
-            if not staged or start in experiment["evaluation"]["synthetic_steps"]:
+            if (not staged and not controlled) or start in experiment["evaluation"]["synthetic_steps"]:
                 evaluate(start)
         with (output / "loss.jsonl").open("a") as log:
             for step, rows in enumerate(loader, start):
@@ -1519,7 +1575,7 @@ def fit(config, data_root, steps, output, resume=None, *, experiment=None, resum
                     run["host_E_latest"] = host_disk()
                     if run["host_E_latest"]["SizeRemaining"] < disk["reserve_bytes"] + 2 * checkpoint_bound:
                         raise OSError("preserve the last complete update before exhausting checkpoint headroom")
-                    if staged:
+                    if staged or controlled:
                         run["resources_latest"] = runtime_resources()
                         print(json.dumps(dict(event="resources", step=completed, **run["resources_latest"])), flush=True)
                     _atomic_json(output / "run.json", run)
@@ -1532,7 +1588,7 @@ def fit(config, data_root, steps, output, resume=None, *, experiment=None, resum
                 elif ((staged or experiment is None) and completed % config["training"]["save_every"] == 0) or completed == steps:
                     snapshot(completed, rolling=staged)
     except BaseException as error:
-        if staged and stopped and isinstance(error, KeyboardInterrupt):
+        if (staged or controlled) and stopped and isinstance(error, KeyboardInterrupt):
             snapshot(completed, rolling=True)
             run.update(status="interrupted", completed_updates=completed, error=repr(error))
         else:
@@ -1571,6 +1627,7 @@ def main():
     parser.add_argument("--resume-without-201", action="store_true",
                         help="explicitly remove only 201 evaluation when resuming the staged run")
     parser.add_argument("--experiment", type=Path, help="declared finite or continuous learning budget and evaluation scope")
+    parser.add_argument("--arm", choices=("mean", "increase"), help="arm of the declared normal-protection control")
     parser.add_argument("--sample", type=int, action="append", help="fixed training manifest index for check")
     args = parser.parse_args()
     if (args.efficiency or args.reference is not None or args.reference_code is not None) and args.command != "diagnose":
@@ -1585,7 +1642,9 @@ def main():
         parser.error("--checkpoint and --log are diagnosis inputs, not training initialization")
     if args.weights is not None and args.command != "initialize":
         parser.error("--weights only initializes a fresh trajectory; it cannot modify a resume state")
-    experiment = load_experiment(args.experiment) if args.experiment is not None else None
+    if args.arm is not None and (args.command != "fit" or args.experiment is None):
+        parser.error("--arm requires a declared --experiment fit")
+    experiment = load_experiment(args.experiment, args.arm) if args.experiment is not None else None
     if experiment is not None and args.command != "fit":
         parser.error("--experiment only supports a declared finite-learning fit")
     config = experiment_config(experiment, args.config)

@@ -66,7 +66,7 @@ def validate_config(config):
             or not 2 <= schedule["warmup_updates"] < schedule["total_updates"]
             or not 0 < schedule["start_factor"] <= 1 or not 0 < schedule["end_factor"] <= 1):
         raise ValueError("invalid continuous learning-rate schedule")
-    if (loss["keep_mode"] not in {"worst", "mean"}
+    if (loss["keep_mode"] not in {"worst", "mean", "increase"}
             or min(loss["keep_weight"], loss["tail_weight"], loss["margin"]) < 0
             or loss["temperature"] <= 0 or loss["pairs_per_tail"] < 1
             or any(not 0 < loss[k] <= 1 for k in ("normal_tail_fraction", "anomaly_tail_fraction"))):

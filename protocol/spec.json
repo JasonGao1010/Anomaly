@@ -3,8 +3,8 @@
   "schema_version": 1,
   "research_question": "Using only the complete current scan, can scene-supported observation-conditioned relationships on original returns learn transferable anomaly-versus-normal ranking? The current main method uses detection plus mean retained-normal pairing; independent mechanism attribution remains a later controlled comparison.",
   "status": {
-    "stage": "pretrained_8000_score_diagnosis_completed",
-    "active_work": "8000 training and scheduled full-val19 evaluation completed and stopped; checkpoint1024/8000 score decomposition and8000 current-scan BN diagnosis completed on fixed206_32 and real152; no training or inference-recipe replacement; pending decision on a128-update normal-protection control",
+    "stage": "normal_protection_control_completed",
+    "active_work": "Both arms completed128 updates from the complete pretrained1024 state and fixed206_32/real152 evaluation at1152; mean improved the pooled real metrics, increase did not outperform mean or the start in AP/FPR95; no further training running",
     "model_defined": true,
     "training_defined": true,
     "formal_ajae_v1": "context_supported_conditional_return_relationship_network",
@@ -36,7 +36,7 @@
     "coverage_closure_evidence": "results/coverage/summary.json",
     "coverage_decision": "all_original_core_checks_exact_30_cell_quotas_and_sampling_exposure_requirements_passed; data_unchanged_by_model_implementation",
     "coverage_boundaries": "one_normal_source_per_split; sparse_normal_nonextreme_train_region_share_0.4997728305_near_0.5_limit; selected_geometry_scope_and_missingness; weak_background_change_is_not_self_occlusion; no_universal_coverage_claim",
-    "next_stage": "use completed no-update evidence to select a focused repair; no automatic16000 continuation, no data changes or efficiency refactor",
+    "next_stage": "Retain mean for now; no evidence to extend this increase-protection candidate; no automatic full-val19 evaluation, budget increase or inference/model/data change",
     "data_preparation_accepted": true,
     "original_pool_summary_completed": true,
     "balanced_pool_target": {
@@ -4953,5 +4953,348 @@
       ],
       "scope": "Git source comparisons and saved run chronology; diagnostic score readout added only after training completed; rejected efficiency candidate not admitted"
     }
+  },
+  "protection_control": {
+    "status": "completed_not_adopted",
+    "declaration": "keep.json",
+    "source_checkpoint": "results/finetune/1024.pt",
+    "output": "results/keep",
+    "start_step": 1024,
+    "end_step": 1152,
+    "updates_per_arm": 128,
+    "objective": "mean versus0.5*mean(softplus(before)+relu(softplus(after)-stop_gradient(softplus(before)))); original-side gradient always retained",
+    "scope": {
+      "train_frames": 32,
+      "train_normal": 3810224,
+      "train_anomaly": 898,
+      "real_frames": 152,
+      "real_normal": 14755566,
+      "real_anomaly": 4925,
+      "interpretation": "fixed development subsets, not complete val19; no201 or additional model-selection frames"
+    },
+    "metrics": {
+      "start": {
+        "train": {
+          "AP": 85.0741053525718,
+          "FPR95": 0.06794876101772494,
+          "detection_loss": 0.07342211465964614,
+          "normal_loss": 0.00480607929403024,
+          "anomaly_loss": 0.14203815002526204,
+          "recall_at_1pct": 98.21826280623608,
+          "actual_FPR": 0.9724887565665431,
+          "tp_at_1pct": 882,
+          "fp_at_1pct": 37054,
+          "fp_at_95recall": 2589
+        },
+        "val": {
+          "AP": 74.21176404476391,
+          "FPR95": 0.19633269235487136,
+          "detection_loss": 0.0566764048640089,
+          "normal_loss": 0.010276510328979416,
+          "anomaly_loss": 0.10307629939903838,
+          "recall_at_1pct": 98.7005076142132,
+          "actual_FPR": 0.9771024710268654,
+          "tp_at_1pct": 4861,
+          "fp_at_1pct": 144177,
+          "fp_at_95recall": 28970
+        }
+      },
+      "mean": {
+        "train": {
+          "AP": 84.67971876780696,
+          "FPR95": 0.034118728977613914,
+          "detection_loss": 0.04137290416201205,
+          "normal_loss": 0.004853586430830428,
+          "anomaly_loss": 0.07789222189319367,
+          "recall_at_1pct": 99.77728285077951,
+          "actual_FPR": 0.7582231385871276,
+          "tp_at_1pct": 896,
+          "fp_at_1pct": 28890,
+          "fp_at_95recall": 1300
+        },
+        "val": {
+          "AP": 75.0679512569699,
+          "FPR95": 0.1822227625832855,
+          "detection_loss": 0.047859142283042444,
+          "normal_loss": 0.011773090956634808,
+          "anomaly_loss": 0.08394519360945008,
+          "recall_at_1pct": 98.86294416243655,
+          "actual_FPR": 0.9598615193751294,
+          "tp_at_1pct": 4869,
+          "fp_at_1pct": 141633,
+          "fp_at_95recall": 26888
+        }
+      },
+      "increase": {
+        "train": {
+          "AP": 84.14245202847745,
+          "FPR95": 0.039236538324256,
+          "detection_loss": 0.04189368028986015,
+          "normal_loss": 0.005341360191541293,
+          "anomaly_loss": 0.07844600038817902,
+          "recall_at_1pct": 99.77728285077951,
+          "actual_FPR": 0.823206194701414,
+          "tp_at_1pct": 896,
+          "fp_at_1pct": 31366,
+          "fp_at_95recall": 1495
+        },
+        "val": {
+          "AP": 73.78366510496794,
+          "FPR95": 0.2008055807550859,
+          "detection_loss": 0.049589709252293994,
+          "normal_loss": 0.012516675269813796,
+          "anomaly_loss": 0.08666274323477419,
+          "recall_at_1pct": 98.82233502538071,
+          "actual_FPR": 0.9869834881291575,
+          "tp_at_1pct": 4867,
+          "fp_at_1pct": 145635,
+          "fp_at_95recall": 29630
+        }
+      }
+    },
+    "paired_normals": {
+      "start": {
+        "recall_at_fpr_limit": {
+          "operating_point": {
+            "recall": 98.21826280623608,
+            "FPR": 0.9724887565665431,
+            "threshold": -3.8557450771331787,
+            "tp": 882,
+            "fp": 37054
+          },
+          "groups": {
+            "sparse": {
+              "normal": 50,
+              "before_fp": 42,
+              "after_fp": 45,
+              "both_high": 42,
+              "low_to_high": 3,
+              "high_to_low": 0
+            },
+            "changed_normal": {
+              "normal": 912,
+              "before_fp": 108,
+              "after_fp": 186,
+              "both_high": 99,
+              "low_to_high": 87,
+              "high_to_low": 9
+            }
+          }
+        },
+        "official_high_recall": {
+          "operating_point": {
+            "threshold": 1.7094991207122803,
+            "tp": 854,
+            "fp": 2589,
+            "fn": 44,
+            "tn": 3807635,
+            "recall": 95.10022271714922,
+            "FPR": 0.06794876101772494
+          },
+          "groups": {
+            "sparse": {
+              "normal": 50,
+              "before_fp": 13,
+              "after_fp": 12,
+              "both_high": 12,
+              "low_to_high": 0,
+              "high_to_low": 1
+            },
+            "changed_normal": {
+              "normal": 912,
+              "before_fp": 21,
+              "after_fp": 40,
+              "both_high": 12,
+              "low_to_high": 28,
+              "high_to_low": 9
+            }
+          }
+        }
+      },
+      "mean": {
+        "recall_at_fpr_limit": {
+          "operating_point": {
+            "recall": 99.77728285077951,
+            "FPR": 0.7582231385871276,
+            "threshold": -3.5989906787872314,
+            "tp": 896,
+            "fp": 28890
+          },
+          "groups": {
+            "sparse": {
+              "normal": 50,
+              "before_fp": 42,
+              "after_fp": 44,
+              "both_high": 42,
+              "low_to_high": 2,
+              "high_to_low": 0
+            },
+            "changed_normal": {
+              "normal": 912,
+              "before_fp": 59,
+              "after_fp": 136,
+              "both_high": 52,
+              "low_to_high": 84,
+              "high_to_low": 7
+            }
+          }
+        },
+        "official_high_recall": {
+          "operating_point": {
+            "threshold": 3.6955156326293945,
+            "tp": 854,
+            "fp": 1300,
+            "fn": 44,
+            "tn": 3808924,
+            "recall": 95.10022271714922,
+            "FPR": 0.034118728977613914
+          },
+          "groups": {
+            "sparse": {
+              "normal": 50,
+              "before_fp": 11,
+              "after_fp": 15,
+              "both_high": 11,
+              "low_to_high": 4,
+              "high_to_low": 0
+            },
+            "changed_normal": {
+              "normal": 912,
+              "before_fp": 11,
+              "after_fp": 14,
+              "both_high": 2,
+              "low_to_high": 12,
+              "high_to_low": 9
+            }
+          }
+        }
+      },
+      "increase": {
+        "recall_at_fpr_limit": {
+          "operating_point": {
+            "recall": 99.77728285077951,
+            "FPR": 0.823206194701414,
+            "threshold": -3.6625449657440186,
+            "tp": 896,
+            "fp": 31366
+          },
+          "groups": {
+            "sparse": {
+              "normal": 50,
+              "before_fp": 43,
+              "after_fp": 45,
+              "both_high": 43,
+              "low_to_high": 2,
+              "high_to_low": 0
+            },
+            "changed_normal": {
+              "normal": 912,
+              "before_fp": 63,
+              "after_fp": 142,
+              "both_high": 56,
+              "low_to_high": 86,
+              "high_to_low": 7
+            }
+          }
+        },
+        "official_high_recall": {
+          "operating_point": {
+            "threshold": 3.6858363151550293,
+            "tp": 854,
+            "fp": 1495,
+            "fn": 44,
+            "tn": 3808729,
+            "recall": 95.10022271714922,
+            "FPR": 0.039236538324256
+          },
+          "groups": {
+            "sparse": {
+              "normal": 50,
+              "before_fp": 11,
+              "after_fp": 15,
+              "both_high": 11,
+              "low_to_high": 4,
+              "high_to_low": 0
+            },
+            "changed_normal": {
+              "normal": 912,
+              "before_fp": 14,
+              "after_fp": 16,
+              "both_high": 3,
+              "low_to_high": 13,
+              "high_to_low": 11
+            }
+          }
+        }
+      }
+    },
+    "sequence_comparisons": {
+      "mean_versus_start": {
+        "AP_better": 7,
+        "FPR95_better": 6,
+        "both_better": 4
+      },
+      "increase_versus_start": {
+        "AP_better": 5,
+        "FPR95_better": 4,
+        "both_better": 3
+      },
+      "increase_versus_mean": {
+        "AP_better": 2,
+        "FPR95_better": 2,
+        "both_better": 1
+      }
+    },
+    "exposure": {
+      "requests_per_arm": 256,
+      "unique_world_frames": 248,
+      "unique_worlds": 153,
+      "unique_source_frames": 184,
+      "fixed_diagnostic_extra_requests": 0,
+      "known_sparse_detection_queries": 0,
+      "known_sparse_keep_queries": 0,
+      "boundary": "zero refers only to existing registered witnesses; other difficult-normal supervision is not enumerated here"
+    },
+    "verification": {
+      "related_tests_passed": 49,
+      "complete_initial_state_exact": true,
+      "source_model_tensors": 302,
+      "source_optimizer_parameters": 263,
+      "actual128_update_requests_query_counts_pairs_and_learning_rates_equal": true,
+      "all_checkpoint_and_optimizer_tensors_finite": true,
+      "final_optimizer_steps": 1152,
+      "evaluation_identities_denominators_pooled_counts_and_witness_slots_checked": true,
+      "model_computation_and_query_optimizer_learning_rate_code_unchanged": true,
+      "historical_checkpoints_unchanged": true
+    },
+    "runs": {
+      "mean": {
+        "status": "completed",
+        "new_updates": 128,
+        "training_seconds": 818.8504088510817,
+        "evaluation_seconds": 276.1960985669866,
+        "total_seconds": 1119.379160642624,
+        "peak_cuda_allocated_bytes": 5839917056,
+        "maximum_gradient_before_clip": 106.5721206665039,
+        "clipped_updates": 56,
+        "checkpoint": "results/keep/mean/1152.pt",
+        "results": "results/keep/mean/1152.json"
+      },
+      "increase": {
+        "status": "completed",
+        "new_updates": 128,
+        "training_seconds": 834.9004261558002,
+        "evaluation_seconds": 274.51363704699907,
+        "total_seconds": 1132.4759194850922,
+        "peak_cuda_allocated_bytes": 5839917056,
+        "maximum_gradient_before_clip": 102.12971496582031,
+        "clipped_updates": 52,
+        "checkpoint": "results/keep/increase/1152.pt",
+        "results": "results/keep/increase/1152.json"
+      }
+    },
+    "conclusion": "At this paired128-update budget, increase protection does not add a favorable ranking/protection tradeoff: real AP/FPR95 are worse than both mean and the shared start, and low-FPR recall is worse than mean but slightly better than the start. At the same20695%-recall target, changed-normal false positives are14 for mean and16 for increase, with12 versus13 insertion-induced new false positives; sparse errors are15 for both. No universal ineffectiveness or cause-of8000-degradation claim.",
+    "interpretation": "Mean improves pooled real AP/FPR95/low-FPR recall over1024 but only7/19 sequence APs and6/19 sequence FPR95s improve; both arms worsen some far/normal-sparse synthetic role curves despite high recall. Slightly smaller average insertion score increases do not establish improved normal protection.",
+    "decision": "Stop both arms at1152 with fixed evaluation completed. Keep the mean recipe, do not extend increase or run full val19 automatically. A matched one-seed short continuation cannot establish long-term mechanism benefit or resolve late degradation."
   }
 }
