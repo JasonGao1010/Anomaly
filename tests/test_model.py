@@ -218,6 +218,14 @@ def test_original_points_in_one_voxel_can_receive_different_scores(monkeypatch):
         query = torch.tensor([0, 5])
         diagnostics = model(scan, query, return_features=True)
         torch.testing.assert_close(diagnostics["score"], model(scan, query), rtol=0, atol=0)
+        torch.testing.assert_close(diagnostics["score"],
+            diagnostics["base_score"] + diagnostics["relation_score"], rtol=0, atol=0)
+        if mode == "none":
+            assert torch.count_nonzero(diagnostics["relation_score"]) == 0
+        components = model.predict(scan_fixture(), prepared=scan, components=True)
+        np.testing.assert_array_equal(components["final"].restore(scan_fixture())[scan_fixture().real_slots],
+                                      scores.detach().numpy())
+        assert all(np.array_equal(value.source_slot, scan_fixture().real_slots) for value in components.values())
         torch.testing.assert_close(diagnostics["point"],
             model.point(torch.cat((scan["xyzi"], scan["point_offset"]), -1)), rtol=0, atol=0)
         shared = tuple(diagnostics[name] for name in ("context", "point"))

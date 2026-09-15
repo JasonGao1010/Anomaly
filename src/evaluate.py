@@ -1060,6 +1060,97 @@ def evaluate_fixed(model, transform, prepared, *, include_real=False, directory=
     return result
 
 
+def evaluate_scores(model, transform, prepared, *, directory=None, include_normalization=False):
+    """Same-forward score decomposition, optionally paired with per-scan BN statistics."""
+    from .train import normalization_mode
+    if model.training or list(prepared["datasets"]) != ["train"]:
+        raise ValueError("score diagnosis requires inference mode and the fixed 206/real scope")
+    modes = ["saved_running_statistics"]
+    if include_normalization:
+        modes.append("current_scan_statistics")
+    started = time.perf_counter()
+    results, training_thresholds = {}, {}
+
+    def frames(split):
+        if split == "train":
+            for record, index in zip(prepared["selection"][split], prepared["indices"][split], strict=True):
+                frozen = prepared["datasets"][split][index]
+                target, _ = synthetic_targets(frozen)
+                measured = prepared["geometry"].get((record["identity"], record["frame"]))
+                witnesses = {}
+                if measured is not None:
+                    original = prepared["datasets"][split].sequence[record["frame"]]
+                    witnesses = retained_witness_slots(frozen, original, measured)
+                yield frozen.source, target, dict(world=record["identity"], frame=record["frame"],
+                    source_identity=record["source_identity"], group=record["role"], witnesses=witnesses)
+        else:
+            for key, ids in prepared["selection"]["val"].items():
+                for frame in ids:
+                    source = prepared["sequences"][key][frame]
+                    target, eligible = official_targets(source)
+                    if not eligible:
+                        raise ValueError(f"predeclared real frame {key}/{frame} is no longer official-eligible")
+                    yield source, target, dict(sequence=int(key), frame=frame,
+                        source_identity=source_identity(source), group=key, witnesses={})
+
+    forwards, identities = 0, {}
+    for split in ("train", "val"):
+        rows = {mode: {name: [] for name in ("base", "relation", "final")} for mode in modes}
+        identities[split] = []
+        for index, (source, target, record) in enumerate(frames(split), 1):
+            scan = transform(source)
+            identities[split].append({key: value for key, value in record.items() if key != "witnesses"})
+            for mode in modes:
+                # Only BN uses scan statistics; no labels enter the forward, and no state accumulates across scans.
+                with normalization_mode(model, current_scan=mode == "current_scan_statistics"):
+                    output = model.predict(source, prepared=scan, components=True)
+                scores = {key: value.restore(source) for key, value in output.items()}
+                valid = ~source.zero_slot_mask
+                if not np.array_equal((scores["base"] + scores["relation"])[valid], scores["final"][valid]):
+                    raise ValueError("same-forward score decomposition changed the final score")
+                for name, values in scores.items():
+                    rows[mode][name].append(dict(record, scores=values, target=target))
+                forwards += 1
+            if index % 8 == 0:
+                print(json.dumps(dict(event="score_diagnosis", split=split, frames=index,
+                    model_forwards=forwards, seconds=time.perf_counter() - started)), flush=True)
+        results[split] = {}
+        for mode, components in rows.items():
+            results[split][mode] = {}
+            for name, group in components.items():
+                full = fixed_summary(group, directory=directory)
+                threshold = full["recall_at_fpr_limit"]["threshold"]
+                if split == "train":
+                    training_thresholds[mode, name] = threshold
+                groups = {}
+                for key in sorted({row["group"] for row in group}):
+                    subset = [row for row in group if row["group"] == key]
+                    groups[key] = dict(curve=fixed_summary(subset, directory=directory),
+                        at_global_threshold=threshold_counts(subset, threshold))
+                result = dict(full=full, groups=groups,
+                    at_training_threshold=threshold_counts(group, training_thresholds[mode, name]))
+                if split == "train":
+                    result["zero_anomaly"] = threshold_counts(
+                        [row for row in group if not np.any(row["target"] == 1)], threshold)
+                    result["witnesses"] = {}
+                    for witness in ("sparse", "changed_normal"):
+                        subset = []
+                        for row in group:
+                            slots = row["witnesses"].get(witness, np.empty(0, np.int64))
+                            if len(slots):
+                                subset.append(dict(scores=row["scores"][slots], target=row["target"][slots]))
+                        result["witnesses"][witness] = threshold_counts(subset, threshold)
+                results[split][mode][name] = result
+                print(json.dumps(dict(event="score_metrics", split=split, normalization=mode,
+                    component=name, **full)), flush=True)
+    return dict(results, identities=identities, model_forwards=forwards,
+        seconds=time.perf_counter() - started,
+        scope="fixed 206 complete valid synthetic labels and fixed real152 complete official labels; no201; not full val19",
+        interpretation="base and relation are post-hoc components of one jointly trained model, not training ablations; relation alone is an uncalibrated logit correction",
+        normalization="saved running statistics versus unlabeled current-scan BatchNorm only; restore buffers and RNG after each scan; all other modules stay in inference mode",
+        operating_points="each component and mode has its own pooled curve; group counts use that scope's global threshold; no subgroup threshold fitting")
+
+
 class SyntheticEvaluationFrames:
     """Prepare changed full scans; an unchanged delta is exactly its source scan."""
 
@@ -1168,9 +1259,14 @@ def main():
     parser.add_argument("--synthetic", action="store_true", help="evaluate complete frozen 201 validation worlds")
     parser.add_argument("--fixed", type=Path, help="evaluate a declared finite-learning checkpoint scope")
     parser.add_argument("--pairs", type=Path, help="only paired normal witnesses; reuse the threshold from this checkpoint's fixed result")
+    parser.add_argument("--scores", action="store_true", help="same-forward base, relation and final scores on the declared 206/real scope")
+    parser.add_argument("--scan-statistics", action="store_true", help="with --scores, also compare per-scan BatchNorm statistics")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--sequence", type=int, action="append")
     args = parser.parse_args()
+    if ((args.scores and (args.fixed is None or args.checkpoint is None or args.pairs is not None))
+            or (args.scan_statistics and not args.scores)):
+        parser.error("--scores requires --fixed and --checkpoint without --pairs; --scan-statistics requires --scores")
     if args.pair_thresholds is not None:
         if args.synthetic or args.fixed is not None or args.pairs is not None or args.sequence is not None:
             parser.error("--pair-thresholds only reuses one completed fixed result")
@@ -1198,8 +1294,23 @@ def main():
             synthetic_splits=declaration["evaluation"].get("synthetic_splits", ["train", "validation"]))
         transform = ScanTransform(saved["config"], state=saved["preprocessing"], workers=8)
         args.output.mkdir(parents=True, exist_ok=True)
+        if args.scores:
+            from .train import forward_state
+            initial_state = forward_state(model)
+            torch.cuda.reset_peak_memory_stats()
+            print(json.dumps(dict(event="score_diagnosis_start", checkpoint=str(args.checkpoint),
+                step=saved["step"], scan_statistics=args.scan_statistics,
+                resources=runtime_resources())), flush=True)
         with evaluation_state(model):
-            if args.pairs is not None:
+            if args.scores:
+                result = evaluate_scores(model, transform, prepared, directory=args.output,
+                    include_normalization=args.scan_statistics)
+                if any(not torch.equal(value.cpu(), saved["model"][key])
+                       for key, value in model.state_dict().items()):
+                    raise ValueError("score diagnosis changed saved model parameters or buffers")
+                result["model_and_buffers_unchanged"] = True
+                result["peak_cuda_allocated_bytes"] = torch.cuda.max_memory_allocated()
+            elif args.pairs is not None:
                 reference = json.loads(args.pairs.read_text())
                 if (reference["step"] != saved["step"]
                         or (args.pairs.parent / reference["checkpoint"]).resolve() != args.checkpoint.resolve()):
@@ -1212,7 +1323,18 @@ def main():
                 result = evaluate_fixed(model, transform, prepared, directory=args.output,
                     include_real=saved["step"] in declaration["evaluation"]["real_steps"],
                     include_pairs=saved["step"] in declaration["evaluation"].get("paired_normal_steps", []))
-        name = f'{saved["step"]}_pairs.json' if args.pairs is not None else f'{saved["step"]}.json'
+        if args.scores:
+            after = forward_state(model)
+            for key in ("buffers", "torch_rng", "cuda_rng"):
+                torch.testing.assert_close(after[key], initial_state[key], rtol=0, atol=0)
+            left, right = after["numpy_rng"], initial_state["numpy_rng"]
+            if (after["python_rng"] != initial_state["python_rng"] or left[0] != right[0]
+                    or left[2:] != right[2:] or not torch.equal(left[1], right[1])):
+                raise ValueError("score diagnosis changed a Python or NumPy random stream")
+            result["buffers_and_all_rng_restored"] = True
+            result["resources_after"] = runtime_resources()
+        suffix = "_scores" if args.scores else "_pairs" if args.pairs is not None else ""
+        name = f'{saved["step"]}{suffix}.json'
         _atomic_json(args.output / name,
             dict(step=saved["step"], checkpoint=str(args.checkpoint.resolve()), **result))
         return

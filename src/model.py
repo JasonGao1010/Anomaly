@@ -393,7 +393,8 @@ class AJAE(nn.Module):
         base = self.base_head(torch.cat((h[query], z[query], scan["condition"][query]), -1)).squeeze(-1)
         if m["relation_mode"] == "none":
             score = base.float()
-            return dict(score=score, **features) if return_features else score
+            return dict(score=score, base_score=score, relation_score=torch.zeros_like(score),
+                        **features) if return_features else score
         for index, layer in enumerate(self.relations):
             # First-layer support is updated for the full scan, even for sampled loss queries.
             z = layer(z, h, scan, query if index == len(self.relations) - 1 else all_rows,
@@ -402,10 +403,11 @@ class AJAE(nn.Module):
                 trace=(lambda name, value, i=index: trace(f"relations.{i}.{name}", value)) if trace is not None else None)
         correction = self.relation_head(torch.cat((h[query], z, scan["condition"][query]), -1)).squeeze(-1)
         score = (base + correction).float()
-        return dict(score=score, **features) if return_features else score
+        return dict(score=score, base_score=base.float(), relation_score=correction.float(),
+                    **features) if return_features else score
 
     @torch.no_grad()
-    def predict(self, source, transform=None, *, prepared=None):
+    def predict(self, source, transform=None, *, prepared=None, components=False):
         if self.training:
             raise ValueError("prediction requires model.eval()")
         if prepared is None:
@@ -414,8 +416,14 @@ class AJAE(nn.Module):
               or not np.array_equal(prepared["xyzi"], source.xyzi[source.real_slots])):
             raise ValueError("prepared inference input differs from the complete source returns")
         scan = to_device(prepared, next(self.parameters()).device)
-        scores = self(scan).cpu().numpy()
-        result = FramePrediction(source.partition, source.sequence_id, source.frame_id,
-                                 source.real_slots, scores)
-        result.validate(source)
-        return result
+        output = self(scan, return_features=components)
+        # Components share one complete forward and the same physical return identities.
+        scores = ({name: output[key] for name, key in
+                   (("base", "base_score"), ("relation", "relation_score"), ("final", "score"))}
+                  if components else {"final": output})
+        result = {}
+        for name, values in scores.items():
+            result[name] = FramePrediction(source.partition, source.sequence_id, source.frame_id,
+                                           source.real_slots, values.cpu().numpy())
+            result[name].validate(source)
+        return result if components else result["final"]

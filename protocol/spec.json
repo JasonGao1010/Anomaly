@@ -3,8 +3,8 @@
   "schema_version": 1,
   "research_question": "Using only the complete current scan, can scene-supported observation-conditioned relationships on original returns learn transferable anomaly-versus-normal ranking? The current main method uses detection plus mean retained-normal pairing; independent mechanism attribution remains a later controlled comparison.",
   "status": {
-    "stage": "pretrained_full_pool_finetuning_paused_for_efficiency",
-    "active_work": "user-requested safe pause after3424 complete updates; results/finetune/resume.pt is verified for continuation at3425; prepare execution-efficiency optimization with scientific definitions and training state unchanged; no automatic resume; old random4781 remains paused",
+    "stage": "pretrained_8000_score_diagnosis_completed",
+    "active_work": "8000 training and scheduled full-val19 evaluation completed and stopped; checkpoint1024/8000 score decomposition and8000 current-scan BN diagnosis completed on fixed206_32 and real152; no training or inference-recipe replacement; pending decision on a128-update normal-protection control",
     "model_defined": true,
     "training_defined": true,
     "formal_ajae_v1": "context_supported_conditional_return_relationship_network",
@@ -36,7 +36,7 @@
     "coverage_closure_evidence": "results/coverage/summary.json",
     "coverage_decision": "all_original_core_checks_exact_30_cell_quotas_and_sampling_exposure_requirements_passed; data_unchanged_by_model_implementation",
     "coverage_boundaries": "one_normal_source_per_split; sparse_normal_nonextreme_train_region_share_0.4997728305_near_0.5_limit; selected_geometry_scope_and_missingness; weak_background_change_is_not_self_occlusion; no_universal_coverage_claim",
-    "next_stage": "execute the authorized continuous fine-tuning trajectory with full-val19 observations at1024,4000,8000,16000,32000; no201 evaluation or micro-stage gate",
+    "next_stage": "use completed no-update evidence to select a focused repair; no automatic16000 continuation, no data changes or efficiency refactor",
     "data_preparation_accepted": true,
     "original_pool_summary_completed": true,
     "balanced_pool_target": {
@@ -1366,7 +1366,7 @@
   },
   "method": {
     "implementation": "src/model.py; src/train.py; src/evaluate.py",
-    "configuration": "protocol/finetune.json preserves the paused pretrained fine-tuning schedule over protocol/pretrain.json; protocol/model.json preserves the paused random trajectory",
+    "configuration": "protocol/finetune.json records the completed-to8000 pretrained trajectory over protocol/pretrain.json; protocol/model.json preserves the paused random trajectory",
     "initialization": "complete official nuScenes LitePT-S backbone plus fresh AJAE modules from results/pretrain/0.pt; new optimizer trajectory; previous measured AJAE trajectories used random initialization",
     "input": "complete_current_sensor_XYZI; labels_poses_original_normal_scan_and_insertion_masks_do_not_enter_inference",
     "context": "LitePT-S_at_0.05m_voxels; every_real_return_contributes_to_voxel_mean; context_72_to_64",
@@ -1382,7 +1382,7 @@
     "paired_controls": "none_plain_conditioned_share_initial_parameter_draws; plain_vs_conditioned_changes_coordinates_normalization_and_condition_inputs_as_one_package; conditioned_with_condition_modulation_false_keeps_neighbors_ray_coordinates_sampling_normalization_width_and_heads_identical_and_zeros_only_relation_modulation_and_null_condition_inputs; mean_vs_worst_keeps_the_same_original_scan_forwards",
     "resource_strategy": "2_live_source_frames; whole_scan_and_relationship_recomputation; BatchNorm_buffers_restored_after_recomputation; 2_preparation_workers; no_persistent_geometry_cache",
     "evaluation": "real_val19_official_semantics_unchanged; synthetic_all_and_official_filtered_share_FrozenFrame.anomaly_target; filtered_adds_only_2.5_to_50m_and_at_least_5_actual_inserted_in_range_returns; exact_float32_ties_bounded_numeric_RAM_128MiB_per_counter_with_external_compressed_merge_and_shared_E_disk_reserve",
-    "interpretation": "pretrained full-pool fine-tuning completed3424 updates before the user-requested efficiency pause; full-val19 evaluation at1024 is available, later nodes remain unevaluated; historical random results retain their own scopes; independent mechanism contributions and sustained stability remain unestablished",
+    "interpretation": "full-val19 results at1024,4000,8000 show real ranking deterioration after1024; current score-component and BatchNorm diagnosis does not isolate a training mechanism; historical random results retain their own scopes",
     "implementation_verification": {
       "date": "2026-09-13",
       "command": "python -m src.train check",
@@ -4400,18 +4400,7 @@
     "next_action": "a separately authorized full-pool fine-tuning trajectory from this0 state, with declared learning-rate schedule and full-val19 evaluation; do not resume old optimizer or201 evaluation"
   },
   "pretrained_finetuning": {
-    "status": "paused_by_user_for_efficiency_optimization",
-    "pause": {
-      "checkpoint_saved_at": "2026-09-15T01:50:20+08:00",
-      "completed_updates": 3424,
-      "checkpoint": "results/finetune/resume.pt",
-      "next_update": 3425,
-      "reason": "user requested a safe complete-update stop to prepare execution-efficiency optimization",
-      "verification": "checkpoint, consecutive log and all optimizer steps equal3424; finite model/optimizer tensors; strict resume configuration, actual107760 identities and frozen probabilities match; all6848 completed requests match the declared stream; original preprocessing retained; CPU, CUDA, Python and NumPy RNG restoration verified without model forward or optimizer update",
-      "training_process_exited": true,
-      "efficiency_changes_applied": false,
-      "automatic_resume": false
-    },
+    "status": "completed_to8000_no_update_score_diagnosis_completed",
     "declaration": "protocol/finetune.json",
     "initial_checkpoint": "results/pretrain/0.pt",
     "output": "results/finetune",
@@ -4482,7 +4471,7 @@
       "training_workers": 2,
       "training_main_threads": 4
     },
-    "interpretation": "3424 complete updates retained during an intentional efficiency pause, not a numerical failure; results/finetune/1024_val.json contains the completed full development evaluation;4000 and later nodes remain pending; no architecture or training-recipe change has been applied, and independent mechanism attribution and sustained stability remain unestablished",
+    "interpretation": "8000 updates and all requested observations completed, then stopped; full-val19 AP/FPR95/R@1% all worse than1024 and4000; no causal attribution to LR, normalization or pairing from this trajectory alone; no implementation-efficiency candidate admitted",
     "startup_observation": {
       "at": "2026-09-14T18:30:15+08:00",
       "completed_updates": 32,
@@ -4638,6 +4627,331 @@
         "host_space_reclamation_confirmed": false,
         "host_disk_compaction_performed": false
       }
+    },
+    "historical_efficiency_pause": {
+      "checkpoint_saved_at": "2026-09-15T01:50:20+08:00",
+      "completed_updates": 3424,
+      "checkpoint": "results/finetune/resume.pt",
+      "next_update": 3425,
+      "reason": "user requested a safe complete-update stop to prepare execution-efficiency optimization",
+      "verification": "checkpoint, consecutive log and all optimizer steps equal3424; finite model/optimizer tensors; strict resume configuration, actual107760 identities and frozen probabilities match; all6848 completed requests match the declared stream; original preprocessing retained; CPU, CUDA, Python and NumPy RNG restoration verified without model forward or optimizer update",
+      "training_process_exited": true,
+      "efficiency_changes_applied": false,
+      "automatic_resume": false
+    },
+    "completed_updates": 8000,
+    "completed_checkpoint": "results/finetune/8000.pt",
+    "periodic_resume_checkpoint": "results/finetune/resume.pt records7000, not8000",
+    "automatic_continuation": false,
+    "completed_evaluations": {
+      "1024": {
+        "AP": 74.92273548300908,
+        "FPR95": 0.2385892496235793,
+        "recall_at_fpr_limit": {
+          "recall": 98.41941050754866,
+          "FPR": 0.9982513768465824,
+          "threshold": -3.1625401973724365,
+          "tp": 86116,
+          "fp": 1934536
+        },
+        "normal_count": 193792470,
+        "anomaly_count": 87499,
+        "official_high_recall": {
+          "threshold": 1.1263949871063232,
+          "tp": 83125,
+          "fp": 462368,
+          "fn": 4374,
+          "tn": 193330102,
+          "recall": 95.00108572669403,
+          "FPR": 0.2385892496235793
+        },
+        "frames": 8659,
+        "eligible_frames": 1960,
+        "file": "results/finetune/1024_val.json"
+      },
+      "4000": {
+        "AP": 62.60887264882074,
+        "FPR95": 0.4213120354985929,
+        "recall_at_fpr_limit": {
+          "recall": 98.54855484062675,
+          "FPR": 0.999662680392071,
+          "threshold": -5.845553874969482,
+          "tp": 86229,
+          "fp": 1937271
+        },
+        "normal_count": 193792470,
+        "anomaly_count": 87499,
+        "official_high_recall": {
+          "threshold": -2.4565305709838867,
+          "tp": 83125,
+          "fp": 816471,
+          "fn": 4374,
+          "tn": 192975999,
+          "recall": 95.00108572669403,
+          "FPR": 0.4213120354985929
+        },
+        "frames": 8659,
+        "eligible_frames": 1960,
+        "file": "results/finetune/4000_val.json"
+      },
+      "8000": {
+        "AP": 61.45712672488227,
+        "FPR95": 0.5267026113037312,
+        "recall_at_fpr_limit": {
+          "recall": 97.49025703150893,
+          "FPR": 0.9995899221471298,
+          "threshold": -5.097254753112793,
+          "tp": 85303,
+          "fp": 1937130
+        },
+        "normal_count": 193792470,
+        "anomaly_count": 87499,
+        "official_high_recall": {
+          "threshold": -2.047149181365967,
+          "tp": 83125,
+          "fp": 1020710,
+          "fn": 4374,
+          "tn": 192771760,
+          "recall": 95.00108572669403,
+          "FPR": 0.5267026113037312
+        },
+        "frames": 8659,
+        "eligible_frames": 1960,
+        "file": "results/finetune/8000_val.json"
+      }
+    },
+    "score_diagnosis": {
+      "status": "completed_no_optimizer_updates",
+      "checkpoints": [
+        1024,
+        8000
+      ],
+      "source_scope": "fixed206_32 complete valid synthetic labels and fixed real152 complete official labels; no201",
+      "views": [
+        "base",
+        "relation",
+        "final"
+      ],
+      "same_forward_components": true,
+      "normalization_comparison_step": 8000,
+      "intervention": "current-scan BatchNorm only; saved buffers and all RNG restored per scan; full unlabeled scan; other modules in inference mode",
+      "training_candidate_executed": false,
+      "fast_decay_branch_executed": false,
+      "interpretation": "post-hoc diagnostic components of jointly trained checkpoints; not separately trained ablations",
+      "results_8000": "results/finetune/8000_scores.json",
+      "check_8000": {
+        "model_forwards": 368,
+        "seconds": 594.9201332580124,
+        "model_and_buffers_unchanged": true,
+        "buffers_and_all_rng_restored": true,
+        "peak_cuda_allocated_bytes": 730349056
+      },
+      "real_sequence_BN_changes": {
+        "AP_improved": 12,
+        "FPR95_improved": 15,
+        "both_improved": 12,
+        "total": 19,
+        "existing_failure_125_AP": [
+          74.18506935159064,
+          57.047253181387006
+        ],
+        "existing_failure_143_AP": [
+          10.706181777541026,
+          4.612882159482742
+        ],
+        "scope": "same fixed8 frames per sequence; not full sequence; global thresholds and sequence curves kept separate"
+      },
+      "point_sets": {
+        "train": {
+          "frames": 32,
+          "normal_count": 3810224,
+          "anomaly_count": 898
+        },
+        "val": {
+          "frames": 152,
+          "normal_count": 14755566,
+          "anomaly_count": 4925
+        }
+      },
+      "metrics": {
+        "8000": {
+          "train": {
+            "saved_running_statistics": {
+              "base": {
+                "AP": 88.67818473857376,
+                "FPR95": 0.0595503046540046,
+                "R_at_1pct_FPR": 99.77728285077951
+              },
+              "relation": {
+                "AP": 88.92449620740818,
+                "FPR95": 0.08453571233607263,
+                "R_at_1pct_FPR": 99.77728285077951
+              },
+              "final": {
+                "AP": 89.63234165110799,
+                "FPR95": 0.06868362594955048,
+                "R_at_1pct_FPR": 99.77728285077951
+              }
+            },
+            "current_scan_statistics": {
+              "base": {
+                "AP": 87.13785005837568,
+                "FPR95": 0.16038427137092204,
+                "R_at_1pct_FPR": 99.77728285077951
+              },
+              "relation": {
+                "AP": 88.07919243642831,
+                "FPR95": 0.25263606549116274,
+                "R_at_1pct_FPR": 99.55456570155901
+              },
+              "final": {
+                "AP": 88.46387622605444,
+                "FPR95": 0.1993058675815385,
+                "R_at_1pct_FPR": 99.88864142538975
+              }
+            }
+          },
+          "val": {
+            "saved_running_statistics": {
+              "base": {
+                "AP": 47.01903407157319,
+                "FPR95": 0.6921659257259261,
+                "R_at_1pct_FPR": 96.67005076142132
+              },
+              "relation": {
+                "AP": 57.18029704341971,
+                "FPR95": 0.5457940413807237,
+                "R_at_1pct_FPR": 97.46192893401016
+              },
+              "final": {
+                "AP": 58.572082651376746,
+                "FPR95": 0.5275094157689376,
+                "R_at_1pct_FPR": 97.46192893401016
+              }
+            },
+            "current_scan_statistics": {
+              "base": {
+                "AP": 52.17487636295888,
+                "FPR95": 0.4437037521976453,
+                "R_at_1pct_FPR": 97.34010152284263
+              },
+              "relation": {
+                "AP": 58.298870891319545,
+                "FPR95": 0.3331149750541592,
+                "R_at_1pct_FPR": 98.25380710659898
+              },
+              "final": {
+                "AP": 60.06179375236377,
+                "FPR95": 0.3240810959064532,
+                "R_at_1pct_FPR": 98.35532994923858
+              }
+            }
+          }
+        },
+        "1024": {
+          "train": {
+            "saved_running_statistics": {
+              "base": {
+                "AP": 77.64651327787705,
+                "FPR95": 0.1496762395071786,
+                "R_at_1pct_FPR": 97.9955456570156
+              },
+              "relation": {
+                "AP": 84.70941055849414,
+                "FPR95": 0.06498305611428619,
+                "R_at_1pct_FPR": 98.21826280623608
+              },
+              "final": {
+                "AP": 85.0741053525718,
+                "FPR95": 0.06794876101772494,
+                "R_at_1pct_FPR": 98.21826280623608
+              }
+            }
+          },
+          "val": {
+            "saved_running_statistics": {
+              "base": {
+                "AP": 54.66726766826344,
+                "FPR95": 0.2939500931377353,
+                "R_at_1pct_FPR": 98.1725888324873
+              },
+              "relation": {
+                "AP": 73.67944270964641,
+                "FPR95": 0.19574986144211612,
+                "R_at_1pct_FPR": 98.74111675126903
+              },
+              "final": {
+                "AP": 74.21176404476391,
+                "FPR95": 0.19633269235487136,
+                "R_at_1pct_FPR": 98.7005076142132
+              }
+            }
+          }
+        }
+      },
+      "execution_issue": "Initial1024 inference and metrics completed but JSON finalization failed on a NumPy RNG algorithm-name string in the generic tensor comparator. Separate scalar/string and tensor comparisons fixed the issue; the complete1024 scope was rerun and saved. Both scopes reproduced the initial1024 metrics exactly. No optimizer was created or checkpoint written.",
+      "decision": "no direct removal of relation correction; current-scan BN improves the pooled real subset only partially and harms206 and several existing real groups; do not silently replace inference; next candidate is a128-update controlled normal-protection experiment, not implemented or run in this diagnosis",
+      "baseline_replay_difference": {
+        "1024": {
+          "train": {
+            "AP": 0.0,
+            "FPR95": 0.0,
+            "R_at_1pct_FPR": 0.0
+          },
+          "val": {
+            "AP": 0.0,
+            "FPR95": 0.0,
+            "R_at_1pct_FPR": 0.0
+          }
+        },
+        "8000": {
+          "train": {
+            "AP": 0.07562054771004512,
+            "FPR95": -0.004015511948903788,
+            "R_at_1pct_FPR": 0.0
+          },
+          "val": {
+            "AP": -0.03226925131581737,
+            "FPR95": 0.0020060226764598843,
+            "R_at_1pct_FPR": 0.020304568527919287
+          }
+        }
+      },
+      "results_1024": "results/finetune/1024_scores.json",
+      "check_1024": {
+        "seconds": 359.071084996016,
+        "model_forwards": 184,
+        "model_and_buffers_unchanged": true,
+        "buffers_and_all_rng_restored": true,
+        "peak_cuda_allocated_bytes": 730349056
+      },
+      "verification": "identical32 synthetic and152 real identities in both files; all score views retain identical point denominators; same-forward base+relation equals final on every return; full model/buffer and all-RNG restoration checked;25 relevant regressions passed; historical8000 replay differences retained rather than overwritten"
+    },
+    "execution_code_check": {
+      "original_start_commit": "90b0ed9",
+      "restored_commit": "91911f2",
+      "rejected_candidate_commit": "7e59c8b",
+      "restored_at": "2026-09-15T02:37:53+08:00",
+      "resumed_at": "2026-09-15T02:43:07.646023+08:00",
+      "model_and_vendor_litept_no_source_diff": true,
+      "training_definitions_unchanged": [
+        "TrainingFrames",
+        "Requests",
+        "keep_loss",
+        "batch_loss",
+        "training_forward",
+        "_preserve_buffers",
+        "make_optimizer",
+        "learning_rates",
+        "set_learning_rates",
+        "validate_resume_state",
+        "fit"
+      ],
+      "completed_segment": [
+        3425,
+        8000
+      ],
+      "scope": "Git source comparisons and saved run chronology; diagnostic score readout added only after training completed; rejected efficiency candidate not admitted"
     }
   }
 }
