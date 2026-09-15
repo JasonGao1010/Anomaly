@@ -4,42 +4,54 @@
   "research_question": "Using only the complete current scan, can scene-supported observation-conditioned relationships on original returns learn transferable anomaly-versus-normal ranking? The current main method uses detection plus mean retained-normal pairing; independent mechanism attribution remains a later controlled comparison.",
   "v2": {
     "configuration": "protocol/v2.json",
-    "authorization": "implement code and necessary validation only; no training",
+    "authorization": "repair the10 affected worlds, validate, then prepare1024/2048/4096 training and full evaluations; paused at local4 by user; commit and push before handing over the terminal command",
     "implementation_validated": true,
-    "training_executed": false,
-    "optimizer_updates": 0,
-    "regression_tests_passed": 125,
+    "training_executed": true,
+    "optimizer_updates": 4,
+    "regression_tests_passed": 130,
     "parent_checkpoint": "results/keep/mean/1152.pt",
     "parent_step": 1152,
-    "new_stage_step": 0,
+    "new_stage_step": 4,
     "condition_index": "results/coverage/v2.npz",
     "preparation_results": "results/coverage/v2.json",
     "source_frames": 449,
     "native_low_support_slots": 237615,
-    "H_world_frames": 432,
+    "H_world_frames": 431,
     "nonempty_H_cells": 19,
-    "H_original_probability": 0.012706797396075057,
-    "H_candidate_probability": 0.13683210458352674,
+    "H_original_probability": 0.012583760329073393,
+    "H_candidate_probability": 0.13673367492992536,
     "original_sampling_recomputation_max_error": 0.0,
     "all_60_cells_meet_minimum_regions": true,
-    "preparation_seconds": 327.4764902210154,
+    "preparation_seconds": 323.532800312998,
     "preparation_workers": 8,
-    "maximum_preparation_worker_rss_bytes": 1143296000,
+    "maximum_preparation_worker_rss_bytes": 1145561088,
     "no_update_check": {
-      "samples": [7414, 0],
-      "source_frames": [230, 0],
-      "input_returns": [128900, 123181],
-      "normal_queries": 16348,
-      "anomaly_queries": 5,
-      "normal_pairs": 2038,
+      "result": "results/v2_ref/check.json",
+      "samples": [
+        105885,
+        104225
+      ],
+      "source_frames": [
+        370,
+        57
+      ],
+      "input_returns": [
+        126533,
+        119040
+      ],
+      "normal_queries": 16317,
+      "anomaly_queries": 114,
+      "normal_pairs": 2043,
       "parameters_with_finite_gradient": 12931078,
       "all_parent_model_and_buffer_tensors_equal_after_check": true,
       "optimizer_state_entries": 0,
-      "full_vs_query_max_absolute_error": 1.9073486328125e-6,
-      "existing_absolute_and_relative_tolerance": 2e-5,
-      "forward_backward_seconds": 12.778993363986956,
-      "peak_cuda_bytes": 5069218304,
-      "checkpoint_saved": false
+      "optimizer_updates": 0,
+      "checkpoint_saved": false,
+      "full_vs_query_max_absolute_error": 1.9073486328125e-06,
+      "existing_absolute_and_relative_tolerance": 2e-05,
+      "forward_backward_seconds": 14.188566910976078,
+      "peak_cuda_bytes": 5675461120,
+      "scope": "repaired fixed worlds370/57 under the original2048 declaration; no-update batch semantics and warmup are unchanged by the4096 extension"
     },
     "placement_review": {
       "worlds": 360,
@@ -56,22 +68,172 @@
         "scope": "independent read-only numerical verification of the99 fast-check interiors; no model or world modification; counts are return observations, not independent objects"
       },
       "confirmed_affected_train_worlds": [
-        "sheet_low_smooth_6", "contacts_low_smooth_1", "branched_raised_rough_2", "branched_raised_rough_7",
-        "contacts_raised_rough_8", "solid_raised_sparse_1", "contacts_low_rough_7", "solid_raised_sparse_4"
+        "sheet_low_smooth_6",
+        "contacts_low_smooth_1",
+        "branched_raised_rough_2",
+        "branched_raised_rough_7",
+        "contacts_raised_rough_8",
+        "solid_raised_sparse_1",
+        "contacts_low_rough_7",
+        "solid_raised_sparse_4"
       ],
-      "confirmed_affected_validation_worlds": ["sheet_low_sparse_4", "contacts_low_rough_4"],
+      "confirmed_affected_validation_worlds": [
+        "sheet_low_sparse_4",
+        "contacts_low_rough_4"
+      ],
       "affected_fixed206_diagnostic_records": [
-        {"world": "solid_raised_sparse_4", "frame": 370, "identity": "42359e42bbcfa500fd27cb891462b7ac70e69578727775bed811661b3b445ede"},
-        {"world": "solid_raised_sparse_1", "frame": 57, "identity": "0a83678eb5223768c1a09dd5efe0634a1dde1c81429137076ca5f4a42b2f4ef6"}
+        {
+          "world": "solid_raised_sparse_4",
+          "frame": 370,
+          "identity": "42359e42bbcfa500fd27cb891462b7ac70e69578727775bed811661b3b445ede"
+        },
+        {
+          "world": "solid_raised_sparse_1",
+          "frame": 57,
+          "identity": "0a83678eb5223768c1a09dd5efe0634a1dde1c81429137076ca5f4a42b2f4ef6"
+        }
       ],
-      "decision": "all10 flagged worlds contain confirmed >5cm penetration; preserve existing worlds and historical metrics in this code-only task; V2 fit rejects the uncorrected preparation result before model construction; repair affected placements and recompute affected data/conditions before future training",
+      "decision": "historical pre-repair finding: all10 flagged worlds contained confirmed >5cm observed-return penetration; all10 were subsequently relocated and their4956 frames regenerated; historical1152 model metrics remain valid within their respective point pools",
       "limits": "does not identify the cause of late training deterioration; no unobserved-surface guarantee; saved fast-check preparation remains conservative and is not a nearest-distance measurement"
     },
-    "scientific_conclusion": "V2 risk and state handling are implemented and numerically checked; no V2 performance, mechanism or generalization conclusion exists"
+    "scientific_conclusion": "placement repair, V2 risk and state handling are validated; four completed updates have no evaluated V2 performance result; improvement over mean1152 remains unknown until the declared development evaluations",
+    "maximum_updates": 4096,
+    "evaluation_steps": [
+      1024,
+      2048,
+      4096
+    ],
+    "reused_native_sources": 449,
+    "placement_repair": {
+      "worlds": 10,
+      "frames": 4956,
+      "workers": 4,
+      "host_before": {
+        "Size": 484950659072,
+        "SizeRemaining": 62659518464,
+        "reserve_bytes": 10000000000
+      },
+      "host_after": {
+        "Size": 484950659072,
+        "SizeRemaining": 62659518464,
+        "reserve_bytes": 10000000000
+      },
+      "previous_dataset_identity": "53a5c33ad04076e5fadeee5ed3677df8dda061307c07a1a7b1ee3ec114792d5d",
+      "reused_worlds": 350,
+      "replacements": {
+        "65e6bfc2c21d190f801b10e6323faa42d299991e58a25f12aea78126f7687523": {
+          "identity": "ac6ee25e63441bab912f35f2d77fe404496a810d7bd220df6d7a0f9afd0dc6d3",
+          "path": "train/branched_raised_rough_2"
+        },
+        "c41cc149ef996f2224dfa61aa99969db6cfae2ceca44267e4eb4c93cabed4519": {
+          "identity": "a20a545bb42d09235440f8ea31b50d26f7096e3faa879b7cb9f301324fcc72fb",
+          "path": "train/branched_raised_rough_7"
+        },
+        "c29c1e9fb1fd60a567706b091c3a6104256e3d0361017d515c708bddfb3c27f5": {
+          "identity": "8b6bbe26f00273cbb4ce2abf0c80cc5d782b958fbb2e2ec9d9953621551cd6f9",
+          "path": "train/contacts_low_rough_7"
+        },
+        "3b6436f94f9e3723d3f57c198991e106e528cce1adb6405a3e141efc2ab813f7": {
+          "identity": "bdb8730119d959739a79fd9b74f708a9f434750fb174964db713d7694dc8a593",
+          "path": "train/contacts_low_smooth_1"
+        },
+        "ed360e62e20e44b436832d4d49e27f15f09009873462c6ee1ea0da2c151656f9": {
+          "identity": "c9fdc457f798353c9b3f00957fc88d79043eb5aa7f70d20a9fae0bca03c542b1",
+          "path": "train/contacts_raised_rough_8"
+        },
+        "9e3d0c0d1bb4e6e503ee38ffc844b841a9a5dc1a997a6a1a429422cdba20343c": {
+          "identity": "374daaea552bf9d6c317c70ca283fc7434b614ba3c4bce141693e8ba3fac6c66",
+          "path": "train/sheet_low_smooth_6"
+        },
+        "0a83678eb5223768c1a09dd5efe0634a1dde1c81429137076ca5f4a42b2f4ef6": {
+          "identity": "5da879897612e8f74bd1e94264fb2d79cefdf0d828dacd12d044af6a671c1009",
+          "path": "train/solid_raised_sparse_1"
+        },
+        "42359e42bbcfa500fd27cb891462b7ac70e69578727775bed811661b3b445ede": {
+          "identity": "26b45540ad8a07fe8b67b602841142285851c50c62381f6ce3a1425c31a24dd7",
+          "path": "train/solid_raised_sparse_4"
+        },
+        "ea2a8fe8e96586d7bc5c5ce2e87543b5b2f112589a165cf7fbb9b701a8318a8c": {
+          "identity": "bebff34190680ad3c18ebabf99a1270cb160f9abddd01d5444628fac989b47dc",
+          "path": "validation/contacts_low_rough_4"
+        },
+        "a7015f12c784843f35924499cbad9880b62519770f557c0ec759cf2e117a7246": {
+          "identity": "cf6d0bc447f1eafd06084c44f105ab24f7978f9fc2b25f89ab81032cf33d7060",
+          "path": "validation/sheet_low_sparse_4"
+        }
+      },
+      "preserved": "shape, material, object label, yaw, random seeds, assigned generation cell, source scans and trajectory",
+      "changed": "local translation and ground-support tilt; complete rerender of every affected trajectory",
+      "full_frame_readback_equal": true,
+      "all_60_cells_meet_minimum_regions": true,
+      "current_collision": {
+        "worlds": 360,
+        "world_frames": 189600,
+        "interior_world_frames": 433,
+        "uncertified": [],
+        "certified": true,
+        "interpretation": "exterior-witness certificate for observed non-ground returns; unresolved is not proven deep penetration; no unobserved-surface guarantee"
+      },
+      "dataset_summary_accepted": true
+    },
+    "fixed32_parent_reference": {
+      "result": "results/v2_ref/1152.json",
+      "source_frame_selection_preserved": true,
+      "replaced_diagnostic_worlds": 2,
+      "full": {
+        "AP": 84.30937922013683,
+        "AUROC": 99.98166967289616,
+        "FPR95": 0.03409249274911206,
+        "normal_count": 3810223,
+        "anomaly_count": 896,
+        "recall_at_fpr_limit": {
+          "recall": 99.77678571428571,
+          "FPR": 0.7586432605125737,
+          "threshold": -3.5989906787872314,
+          "tp": 894,
+          "fp": 28906
+        },
+        "official_high_recall": {
+          "threshold": 3.6955156326293945,
+          "tp": 852,
+          "fp": 1299,
+          "fn": 44,
+          "tn": 3808924,
+          "recall": 95.08928571428571,
+          "FPR": 0.03409249274911206
+        },
+        "detection_loss": 0.041451329749922286,
+        "normal_loss": 0.004855182271503499,
+        "anomaly_loss": 0.07804747722834107,
+        "mean_score": {
+          "normal": -10.040253221824903,
+          "anomaly": 7.316790576140712
+        },
+        "frames": 32
+      },
+      "historical_real152": "results/keep/mean/1152.json",
+      "historical_full_val19": "results/keep/mean/global.json"
+    },
+    "resume": {
+      "checkpoint": "results/v2/resume.pt",
+      "run": "results/v2/run.json",
+      "status": "interrupted",
+      "completed_updates": 4,
+      "remaining_updates": 4092,
+      "old_budget": 2048,
+      "requested_budget": 4096,
+      "validation": "read-only actual checkpoint validation against current107760 world-frame identities, probabilities, native-low-support slots, complete4-update log and draw prefix; all263 optimizer states are at4",
+      "extension_flag": "--extend-warmup",
+      "completed_learning_rates_unchanged": true,
+      "new_learning_rate_cycle": "50 warmup updates then cosine decay to10percent at4096",
+      "additional_updates_during_handover": 0,
+      "evaluation": "fixed206_32, paired normals, real152 and complete val19 at1024,2048,4096; reuse fixed real scores from the complete pass; exit after4096 evaluation",
+      "terminal": "short single-line training progress and metric results; full precision remains in result JSON and loss.jsonl"
+    }
   },
   "status": {
-    "stage": "v2_code_validated_pool_requires_placement_repair",
-    "active_work": "V2 code and no-update checks completed; mean1152 remains the best evaluated state;10 frozen worlds have confirmed Euclidean penetration violations; no training or data rewriting in this task",
+    "stage": "v2_repaired_validated_paused4_ready4096",
+    "active_work": "all10 worlds repaired;4956 frames regenerated; corrected fixed32 parent reference and130 tests completed; V2 paused at4; prepare code handover and terminal continuation to4096 with full evaluation at1024/2048/4096",
     "model_defined": true,
     "training_defined": true,
     "formal_ajae_v1": "context_supported_conditional_return_relationship_network",
@@ -101,10 +263,10 @@
     "synthetic_geometry_conclusion": "nonextreme_anomalies_and_complex_original_normals_exist_insertion_changes_retained_normal_neighborhoods_and_sparse_geometry_has_condition_dependent_missingness",
     "coverage_closure_completed": true,
     "coverage_closure_evidence": "results/coverage/summary.json",
-    "coverage_decision": "original content checks,30-cell quotas and probability records retain their measured scope; per-cell region counts independently satisfy3; V2 Euclidean placement review invalidates the old pool-wide5cm legality claim",
-    "coverage_boundaries": "one_normal_source_per_split; sparse_normal_nonextreme_train_region_share_0.4997728305_near_0.5_limit; selected_geometry_scope_and_missingness; weak_background_change_is_not_self_occlusion; no_universal_coverage_claim",
-    "next_stage": "Repair the10 affected frozen-world placements and recompute their data and V2 preparation under a separately authorized data-change scope; retain mean1152 as the parent; no automatic training",
-    "data_preparation_accepted": false,
+    "coverage_decision": "repaired360-world pool passes the current content requirements, observed-return5cm exterior-witness checks,30-cell quotas and minimum regions; old invalid placements have been replaced",
+    "coverage_boundaries": "one_normal_source_per_split; sparse_normal_nonextreme_train_region_share_0.4979628791_near_0.5_limit; selected_geometry_scope_and_missingness; observed-return_placement_not_unobserved_surfaces; weak_background_change_is_not_self_occlusion; no_universal_coverage_claim",
+    "next_stage": "user-run terminal command resumes the unchanged4-update prefix to4096; evaluate fixed32, real152, paired normals and full val19 at1024,2048,4096 then exit",
+    "data_preparation_accepted": true,
     "original_pool_summary_completed": true,
     "balanced_pool_target": {
       "train": 240,
@@ -115,53 +277,53 @@
         "validation": 4
       },
       "candidate_directory": "results/synthetic",
-      "status": "world_counts_and_regions_verified; Euclidean_placement_requires_repair"
+      "status": "world_counts_regions_content_and_observed_return_placement_verified_after10_world_repair"
     },
     "default_dataset_readable": true,
     "balanced_selection_completed": true,
     "remaining_scientific_checks": {
-      "train": {"Euclidean_placement": "8 worlds contain confirmed >5cm penetration; repair pending"},
-      "validation": {"Euclidean_placement": "2 worlds contain confirmed >5cm penetration; repair pending"}
+      "train": {},
+      "validation": {}
     },
     "verified_coverage": {
       "train": {
         "far_at_least_20": {
           "recurring_parents": 23,
           "source_frames": 259,
-          "world_frames": 734,
-          "anomaly_returns": 20206,
-          "maximum_parent_share": 0.142729882213204,
-          "maximum_region_share": 0.3034247253291102,
+          "world_frames": 735,
+          "anomaly_returns": 20268,
+          "maximum_parent_share": 0.145352279455299,
+          "maximum_region_share": 0.30521018354055657,
           "passed": true,
           "failures": []
         },
         "normal_sparse_with_nonextreme_anomaly": {
           "recurring_parents": 18,
-          "source_frames": 81,
-          "world_frames": 236,
-          "anomaly_returns": 2201,
-          "maximum_parent_share": 0.12358019082235347,
-          "maximum_region_share": 0.49977283053157656,
+          "source_frames": 82,
+          "world_frames": 235,
+          "anomaly_returns": 2209,
+          "maximum_parent_share": 0.1231326392032594,
+          "maximum_region_share": 0.49796287913082843,
           "passed": true,
           "failures": []
         },
         "near_sparse_1_4": {
           "recurring_parents": 11,
-          "source_frames": 126,
-          "world_frames": 203,
-          "anomaly_returns": 463,
-          "maximum_parent_share": 0.17494600431965443,
-          "maximum_region_share": 0.2613390928725702,
+          "source_frames": 125,
+          "world_frames": 202,
+          "anomaly_returns": 460,
+          "maximum_parent_share": 0.17608695652173914,
+          "maximum_region_share": 0.26304347826086955,
           "passed": true,
           "failures": []
         },
         "weak_background_visible": {
           "recurring_parents": 114,
           "source_frames": 370,
-          "world_frames": 2155,
-          "anomaly_returns": 19232,
-          "maximum_parent_share": 0.05834026622296173,
-          "maximum_region_share": 0.22753743760399334,
+          "world_frames": 2157,
+          "anomaly_returns": 19245,
+          "maximum_parent_share": 0.05830085736554949,
+          "maximum_region_share": 0.22894258248895816,
           "passed": true,
           "failures": []
         }
@@ -178,12 +340,12 @@
           "failures": []
         },
         "normal_sparse_with_nonextreme_anomaly": {
-          "recurring_parents": 15,
+          "recurring_parents": 16,
           "source_frames": 133,
-          "world_frames": 193,
-          "anomaly_returns": 1632,
-          "maximum_parent_share": 0.11764705882352941,
-          "maximum_region_share": 0.25,
+          "world_frames": 194,
+          "anomaly_returns": 1636,
+          "maximum_parent_share": 0.11735941320293398,
+          "maximum_region_share": 0.24938875305623473,
           "passed": true,
           "failures": []
         },
@@ -200,10 +362,10 @@
         "weak_background_visible": {
           "recurring_parents": 78,
           "source_frames": 520,
-          "world_frames": 2091,
-          "anomaly_returns": 17674,
-          "maximum_parent_share": 0.07004639583569085,
-          "maximum_region_share": 0.23780694805929614,
+          "world_frames": 2089,
+          "anomaly_returns": 17664,
+          "maximum_parent_share": 0.07008605072463768,
+          "maximum_region_share": 0.2379415760869565,
           "passed": true,
           "failures": []
         }
@@ -218,7 +380,7 @@
     "formal_full_training_authorized": true,
     "formal_full_training_completed": false,
     "pretrained_training_executed": true,
-    "training_declaration": "finetune.json"
+    "training_declaration": "v2.json"
   },
   "data": {
     "normal_sources": [

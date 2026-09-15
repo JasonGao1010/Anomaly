@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter, defaultdict
+from dataclasses import replace
 import os
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import hashlib
@@ -200,7 +201,8 @@ def observation(rendered):
 def sample_support(sequence, rng, config, footprint_radius, background, rejections, references=None):
     poses = np.stack([sequence.lidar_pose(f) for f in sequence.frame_ids])
     accepted = 0
-    for attempt in range(config["maximum_support_attempts"]):
+    centers = config.get("support_centers")
+    for attempt in range(len(centers) if centers is not None else config["maximum_support_attempts"]):
         reference = None
         # Prefer the scheduled trajectory quarter, then use the remaining bounded draws globally.
         interval = config.get("frame_interval", (0, len(sequence))) if attempt < config["maximum_support_attempts"] // 2 else (0, len(sequence))
@@ -234,7 +236,8 @@ def sample_support(sequence, rng, config, footprint_radius, background, rejectio
             point = (point_world - frame.lidar_pose[:3, 3]) @ frame.lidar_pose[:3, :3]
         else:
             frames = config.get("frame_candidates")
-            frame = sequence[int(rng.choice(frames)) if frames else int(rng.integers(*interval))]
+            frame = sequence[centers[attempt][0] if centers is not None else
+                             int(rng.choice(frames)) if frames else int(rng.integers(*interval))]
         ground_slots = frame.real_slots[np.isin(frame.labels.semantic[frame.real_slots], config["semantics"])]
         xyz = frame.xyzi[ground_slots, :3].astype(np.float64)
         distance = np.linalg.norm(xyz, axis=1)
@@ -250,8 +253,13 @@ def sample_support(sequence, rng, config, footprint_radius, background, rejectio
         if not len(choices):
             rejections["no_ground_in_proposal_range"] += 1
             continue
-        selected = int(rng.choice(choices))
-        center = xyz[selected, :2]
+        if centers is None:
+            selected = int(rng.choice(choices))
+            center = xyz[selected, :2]
+        else:
+            # Local repairs keep the source view and try support centers in distance order.
+            center = ((np.asarray(centers[attempt][1]) - frame.lidar_pose[:3, 3]) @ frame.lidar_pose[:3, :3])[:2]
+            selected = int(choices[np.argmin(np.linalg.norm(xyz[choices, :2] - center, axis=1))])
         points = xyz[np.linalg.norm(xyz[:, :2] - center, axis=1) <= config["plane_radius_m"]]
         if len(points) < config["minimum_ground_points"]:
             rejections["insufficient_ground"] += 1
@@ -724,6 +732,12 @@ def generate_group(data_root, output, planned, config, identity):
         for directory, report in zip(directories, reports):
             _atomic_json(directory / "manifest.json", report)
         return reports
+    return freeze_worlds(sequence, worlds, placements, directories, common, planned["members"],
+                         config, grid, sensor, references, started)
+
+
+def freeze_worlds(sequence, worlds, placements, directories, common, indices, config, grid, sensor, references, started):
+    """Render complete trajectories and verify every lossless reconstruction."""
     for directory, world, placement in zip(directories, worlds, placements):
         path = directory / "world.json"
         definition = dict(world=world.to_dict(), generation=placement)
@@ -776,7 +790,7 @@ def generate_group(data_root, output, planned, config, identity):
             if not context["unchanged"]:
                 raise ValueError("protected native context changed during rendering")
         stats, hist = distributions(observed)
-        report = dict(common, index=planned["members"][member], variant=member, status="qualified", reason=None,
+        report = dict(common, index=indices[member], variant=member, status="qualified", reason=None,
                       world_identity=world.identity, frames=observed, trajectory=stats, histograms=hist,
                       content=content_summary(observed, placement), normal_reference=context,
                       geometry=placement["geometry"], background=placement["background"],
@@ -802,6 +816,179 @@ def select_worlds(base, reports, split):
     return worlds, dict(original_worlds=len(base), accepted=[r["index"] for r in accepted],
                         rejected={str(r["index"]): r["reason"] for r in reports if r["status"] != "qualified"},
                         rule="all_existing_and_physically_legal_new_candidates_pending_balanced_selection")
+
+
+def relocate_world(data_root, output, entry, config, witnesses, other_regions):
+    """Move one existing object locally, preserving geometry, material and signal streams."""
+    started = time.perf_counter()
+    directory = Path(output) / entry["path"]
+    staging = directory.with_name(directory.name + ".repair")
+    previous = json.loads((directory / "world.json").read_text())
+    old = WorldSpec.from_dict(previous["world"])
+    report = json.loads((directory / "manifest.json").read_text())
+    if old.identity != entry["world_identity"] or len(old.objects) != 1:
+        raise ValueError("placement repair must address the exact declared single-object world")
+    if (staging / "manifest.json").exists():
+        repaired = json.loads((staging / "world.json").read_text())
+        if repaired["generation"]["relocation"]["previous_world"] != old.to_dict():
+            raise ValueError("completed repair belongs to another source world")
+        return json.loads((staging / "manifest.json").read_text())
+    sequence = STUSequence.open(data_root, protocol=load_protocol(), partition="train",
+                               sequence_id=old.source_sequence_id, label_mode="required")
+    grid, sensor = load_sensor_calibration(Path(output) / "calibration.pt")
+    item, generation = old.objects[0], previous["generation"]
+    anchor = np.asarray(generation["support_plane"]["anchor_world_m"])
+    region_config = config["research_coverage"]["regions"]
+    region = lambda xyz: np.floor((np.asarray(xyz)[:2] + np.asarray(region_config["xy_shifts_m"])) /
+                                 region_config["grid_m"]).astype(int)
+    xyz, ids = [], []
+    # The 3 m envelope covers every allowed candidate and all original trajectory returns.
+    for original in sequence:
+        slots = original.real_slots
+        slots = slots[(original.labels.semantic[slots] != 0) & ~np.isin(original.labels.semantic[slots], GROUND)]
+        world_xyz = original.xyzi[slots, :3].astype(float) @ original.lidar_pose[:3, :3].T + original.lidar_pose[:3, 3]
+        chosen = np.linalg.norm(world_xyz - item.translation_world_m, axis=1) <= item.bounding_radius_m + 3.05
+        xyz.append(world_xyz[chosen])
+        ids.append((np.uint64(original.frame_id) << np.uint64(32)) | slots[chosen].astype(np.uint64))
+    obstacles = ObservedObstacleIndex(np.concatenate(xyz), np.concatenate(ids))
+    grounding = qualify_grounding(item.shape)
+    angles = np.arange(32) * (2 * np.pi / 32)
+    centers = [anchor.tolist()]
+    centers.extend((anchor + [radius * np.cos(a), radius * np.sin(a), 0]).tolist()
+                   for radius in (.05, .10, .15, .20, .30, .40, .50, .75, 1., 1.5, 2.) for a in angles)
+    support_frames = [generation["placement"]["support_frame"]]
+    distance = np.array([np.linalg.norm(sequence.lidar_pose(f)[:3, 3] - anchor) for f in sequence.frame_ids])
+    for frame in np.argsort(distance):
+        if 5 <= distance[frame] <= 18 and all(abs(int(frame) - previous) >= 10 for previous in support_frames):
+            support_frames.append(int(frame))
+            if len(support_frames) == 6:
+                break
+    centers = [(frame, center) for frame in support_frames for center in centers]
+    support_config = dict(config["placement"], support_centers=centers, support_candidates=len(centers))
+    rng = np.random.default_rng(np.random.SeedSequence([old.seed, 20]))
+    rejections = Counter()
+    if (staging / "world.json").exists():
+        definition = json.loads((staging / "world.json").read_text())
+        world, placement = WorldSpec.from_dict(definition["world"]), definition["generation"]
+        if placement["relocation"]["previous_world"] != old.to_dict():
+            raise ValueError("unfinished repair belongs to another source world")
+    else:
+        for pool, support in sample_support(sequence, rng, support_config,
+                generation["geometry"]["footprint_radius_m"], "any", rejections):
+            proposed_regions = region(pool.anchors_world_m[0])
+            if any(len(set(other_regions[g]) | {"/".join(map(str, proposed_regions[g]))}) <
+                   config["research_coverage"]["generation_cells"]["minimum_regions_per_cell"] for g in (0, 1)):
+                rejections["insufficient_cell_regions"] += 1
+                continue
+            try:
+                candidate, placed = place_object(item.shape, item.material, pool, obstacles,
+                    object_id=item.object_id, label=item.label, proposal_namespace=f"placement-repair/{old.identity}",
+                    proposal_stream=0, yaw_rad=generation["yaw_rad"],
+                    material_seed=old.seed, yaw_seed=old.seed, shape_seed=old.seed,
+                    shape_generation_report=item.shape_generation_report, proposal_rows=[0], maximum_candidates=1,
+                    grounding_eligibility=grounding)
+            except ValueError as error:
+                rejections[type(error).__name__] += 1
+                continue
+            if np.linalg.norm(np.asarray(candidate.translation_world_m) - item.translation_world_m) > 3:
+                rejections["outside_checked_obstacle_envelope"] += 1
+                continue
+            world = replace(old, objects=(candidate,))
+            reference = None
+            for witness in witnesses:
+                source = sequence[witness["frame"]]
+                probe, _ = ray_observation(source, world, grid, sensor, generation["geometry"], witness["slots"])
+                if probe["native_joint_positions"] < 5 or probe["native_joint_surface_rays"] < 5:
+                    continue
+                rendered = render_frame(source, world, grid, sensor)
+                sample = FrozenFrame(rendered.source, world.identity, rendered.inserted_mask, rendered.occluded_original_mask)
+                proposed_reference = dict(witness, slots=probe["protected_slots"])
+                checked = check_normal_reference(sample, source, proposed_reference)
+                if checked["unchanged"] and checked["adjacent_positions"] >= 5 and observation(sample)["in_range"] >= 5:
+                    reference = proposed_reference
+                    break
+            if reference is None:
+                rejections["lost_assigned_native_context"] += 1
+                continue
+            placement = dict(generation, **support)
+            placement.update(placement=clean_json(placed.to_dict()),
+                support_plane=dict(anchor_world_m=pool.anchors_world_m[0].tolist(),
+                    normal_world=pool.normals_world[0].tolist(), offset=float(pool.offsets[0])),
+                normal_reference=reference, ray_observations=[], support_rejections=dict(rejections),
+                physical_check="complete_original_trajectory_exterior_witness_within_0.05m",
+                relocation=dict(previous_world=old.to_dict(), previous_identity=old.identity,
+                    displacement_m=float(np.linalg.norm(np.asarray(candidate.translation_world_m) - item.translation_world_m)),
+                    support_regions_before=region(anchor).tolist(), support_regions_after=proposed_regions.tolist(),
+                    unchanged="shape, material, object label, seed, yaw, source trajectory and assigned cell"))
+            break
+        else:
+            raise ValueError(f"local placement repair exhausted for {entry['path']}: {dict(rejections)}")
+    common = {k: report[k] for k in ("seed", "source_sequence", "configuration_identity",
+              "candidate_category", "shape_family")}
+    common.update({key: entry[key] for key in ("family_id", "paired") if key in entry})
+    common["combination"] = entry["combination"]
+    reports = freeze_worlds(sequence, [world], [placement], [staging], common, [report["index"]],
+                            config, grid, sensor, [placement["normal_reference"]], started)
+    print(json.dumps(dict(event="world_repaired", world=entry["path"], seconds=time.perf_counter()-started,
+        displacement_m=placement["relocation"]["displacement_m"], frames=len(sequence))), flush=True)
+    return reports[0]
+
+
+def repair_placements(config, data_root, workers, condition_report):
+    """Replace only explicitly flagged worlds after complete regenerated trajectories exist."""
+    output = Path(config["dataset"]["directory"])
+    root_path = output / "manifest.json"
+    root = json.loads(root_path.read_text())
+    flagged = {r["world_identity"] for r in json.loads(Path(condition_report).read_text())["collision"]["uncertified"]}
+    entries = [e for part in root["splits"].values() for e in part["worlds"] if e["world_identity"] in flagged]
+    if not entries or len(entries) != len(flagged):
+        raise ValueError("repair report must identify current frozen worlds exactly once")
+    measured = json.loads(Path(config["research_coverage"]["output"], "geometry.json").read_text())["observations"]
+    metadata = json.loads(Path(config["research_coverage"]["output"], "inventory.json").read_text())["worlds"]
+    witnesses = {}
+    for entry in entries:
+        kind = entry["combination"].rsplit("/", 1)[1]
+        candidates = [r for r in measured if r["world_identity"] == entry["world_identity"]
+                      and r["anomaly_in_range"] >= 5 and r["native_context"][kind]["positions"] >= 5]
+        candidates.sort(key=lambda r: (-r["native_context"][kind]["positions"], r["frame"]))
+        witnesses[entry["world_identity"]] = [dict(frame=r["frame"], source_identity=r["source_identity"],
+            slots=r["native_context"][kind]["source_slots"], kind=kind) for r in candidates]
+        if not candidates:
+            raise ValueError(f"no existing assigned-cell witness for {entry['path']}")
+    disk = host_disk()
+    peak = (len(entries) + workers) * config["proposals"]["world_bytes_limit"] + 256 * 2**20
+    if disk["SizeRemaining"] - peak < disk["reserve_bytes"]:
+        raise OSError("complete placement repair would enter the E: reserve")
+    results = {}
+    with ProcessPoolExecutor(workers, mp_context=mp.get_context("spawn")) as pool:
+        futures = {pool.submit(relocate_world, str(data_root), str(output), e, config,
+                              witnesses[e["world_identity"]],
+                              [[w["regions"][g] for w in metadata if w["split"] == e["path"].split("/")[0]
+                                and w["assigned_cell"] == e["combination"] and w["identity"] != e["world_identity"]]
+                               for g in (0, 1)]): e for e in entries}
+        for future in as_completed(futures):
+            entry = futures[future]
+            results[entry["world_identity"]] = future.result()
+            volume = host_disk()
+            if volume["SizeRemaining"] < volume["reserve_bytes"] + workers * config["proposals"]["world_bytes_limit"]:
+                raise OSError("repair stopped with resumable worlds before the E: reserve")
+    replacements = root.setdefault("world_replacements", {})
+    for entry in entries:
+        previous = entry["world_identity"]
+        directory = output / entry["path"]
+        staging = directory.with_name(directory.name + ".repair")
+        report = results[previous]
+        replacements[previous] = dict(identity=report["world_identity"], path=entry["path"])
+        shutil.rmtree(directory)
+        staging.rename(directory)
+        entry["world_identity"] = report["world_identity"]
+    root["placement_repair"] = dict(worlds=len(entries), frames=sum(len(r["frames"]) for r in results.values()),
+        workers=workers, host_before=disk, host_after=host_disk(), previous_dataset_identity=root["configuration_identity"])
+    root["configuration_identity"] = hashlib.sha256(json.dumps(root["splits"], sort_keys=True).encode()).hexdigest()
+    _atomic_json(root_path, root)
+    for split in root["splits"]:
+        FrozenDataset(output, data_root, split)
+    print(json.dumps(dict(event="placement_repair_complete", **root["placement_repair"])), flush=True)
 
 
 def prepare_calibration(data_root, output, config):
@@ -957,11 +1144,17 @@ def main():
     parser.add_argument("--round", type=int, default=1)
     parser.add_argument("--pilot", action="store_true", help="run the first scheduled parent per source within the declared budget")
     parser.add_argument("--collect-only", action="store_true", help="collect all completed candidate reports without generating any world")
+    parser.add_argument("--repair", type=Path, help="relocate only worlds flagged by this condition report, then regenerate their full trajectories")
     args = parser.parse_args()
     if not 1 <= args.workers <= len(os.sched_getaffinity(0)):
         parser.error("workers must fit the CPU affinity")
     config = json.loads(args.config.read_text())
     output = args.output or Path(config["proposals"]["output"])
+    if args.repair is not None:
+        if args.pilot or args.collect_only or args.output is not None:
+            parser.error("placement repair uses the current dataset and complete trajectories")
+        repair_placements(config, args.data_root, args.workers, args.repair)
+        return
     if (output / "manifest.json").exists() and not args.collect_only:
         saved = json.loads((output / "manifest.json").read_text())
         if saved.get("status") == "frozen":

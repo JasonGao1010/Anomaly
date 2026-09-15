@@ -764,13 +764,14 @@ def checkpoint_frames(data_root, checkpoint_path, sequence_ids, protocol):
         multiprocessing_context="spawn", pin_memory=True,
         generator=torch.Generator().manual_seed(83))
     started, evaluated = time.perf_counter(), 0
-    for source, scan in loader:
+    for index, (source, scan) in enumerate(loader, 1):
         yield source, model.predict(source, prepared=scan) if scan is not None else None
         evaluated += int(scan is not None)
-        if scan is not None and evaluated % 50 == 0:
-            print(json.dumps(dict(event="full_validation", sequence=source.sequence_id, frame=source.frame_id,
-                evaluated_frames=evaluated, seconds=time.perf_counter() - started,
-                resources=runtime_resources())), flush=True)
+        if scan is not None and evaluated % 25 == 0:
+            resources = runtime_resources()
+            print(f"完整val19 扫描 {index}/{len(dataset)} 有效帧={evaluated} "
+                  f"耗时={(time.perf_counter() - started) / 60:.1f}min "
+                  f"可用内存={resources['memory_available_bytes'] / 1e9:.1f}GB", flush=True)
 
 
 def evaluate_validation(data_root, *, checkpoint_path=None, prediction_root=None,
@@ -855,6 +856,15 @@ def fixed_summary(rows, *, directory=None):
         mean_score={name: float(logits[k] / totals[k]) if totals[k] else None
                     for k, name in enumerate(("normal", "anomaly"))}, frames=len(rows))
     return result
+
+
+def print_metrics(label, result):
+    """Keep console metrics short; full precision and point counts remain in JSON outputs."""
+    metrics = [(key, result[key], 5 if key == "FPR95" else 3) for key in ("AP", "FPR95", "AUROC")]
+    metrics.append(("R@1%", result["recall_at_fpr_limit"]["recall"], 3))
+    values = " ".join(f"{key}={value:.{digits}f}%" if value is not None else f"{key}=无定义"
+                      for key, value, digits in metrics)
+    print(f"{label} {values}", flush=True)
 
 
 def threshold_counts(rows, threshold):
@@ -956,8 +966,10 @@ def evaluate_normal_pairs(model, transform, prepared, split, threshold, *, inser
     result = {name: dict(summary=paired_normal_summary(rows, threshold), records=rows)
               for name, rows in records.items()}
     result["scope"] = "same unchanged valid normal file slots; full original and inserted inference; existing partial witness lists may overlap; one 206 threshold for both scans and both splits"
-    print(json.dumps(dict(event="paired_normal_evaluation", split=split,
-                         groups={name: result[name]["summary"] for name in records})), flush=True)
+    for name in records:
+        summary = result[name]["summary"]
+        print(f"正常配对 {split}/{name} n={summary['normal']} "
+              f"误报={summary['before_fp']}→{summary['after_fp']}", flush=True)
     return result
 
 
@@ -985,6 +997,8 @@ def evaluate_fixed(model, transform, prepared, *, include_real=False, directory=
             target, _ = synthetic_targets(frozen)
             row = dict(scores=scores, target=target, role=record["role"], world=record["identity"], frame=record["frame"])
             rows.append(row)
+            if len(rows) % 8 == 0 or len(rows) == len(records):
+                print(f"合成评价 {split} {len(rows)}/{len(records)}", flush=True)
             if compare_statistics:
                 from .train import normalization_mode
                 # Reuse exact geometry and keep the parent model in inference mode; restore BN buffers per scan.
@@ -1033,8 +1047,7 @@ def evaluate_fixed(model, transform, prepared, *, include_real=False, directory=
         if include_pairs:
             result[split]["paired_normals"] = evaluate_normal_pairs(model, transform, prepared, split, train_threshold,
                 inserted_scores={(r["world"], r["frame"]): r["scores"] for r in rows})
-        print(json.dumps(dict(event="fixed_evaluation", split=split, detection_loss=full["detection_loss"],
-            AP=full["AP"], FPR95=full["FPR95"], frames=len(rows))), flush=True)
+        print_metrics(f"合成{len(rows)}帧 {split}", full)
     if include_real:
         rows = []
         for key, frames in prepared["selection"]["val"].items():
@@ -1047,6 +1060,7 @@ def evaluate_fixed(model, transform, prepared, *, include_real=False, directory=
                 if not eligible:
                     raise ValueError(f"predeclared real frame {key}/{frame} is no longer official-eligible")
                 rows.append(dict(scores=scores, target=target, sequence=int(key)))
+            print(f"真实子集 {len(rows)}/{sum(map(len, prepared['selection']['val'].values()))}", flush=True)
         full = fixed_summary(rows, directory=directory)
         own_threshold = full["recall_at_fpr_limit"]["threshold"]
         result["val"] = dict(full=full, at_training_threshold=threshold_counts(rows, train_threshold),
@@ -1054,8 +1068,7 @@ def evaluate_fixed(model, transform, prepared, *, include_real=False, directory=
                 at_global_real_threshold=threshold_counts([r for r in rows if r["sequence"] == int(key)], own_threshold))
                 for key in prepared["selection"]["val"]},
             scope="predeclared 152-frame development subset; each complete official point pool retained; not full val19")
-        print(json.dumps(dict(event="fixed_evaluation", split="val", detection_loss=full["detection_loss"],
-            AP=full["AP"], FPR95=full["FPR95"], frames=len(rows))), flush=True)
+        print_metrics(f"真实{len(rows)}帧", full)
     result["seconds"] = time.perf_counter() - started
     return result
 
@@ -1258,12 +1271,15 @@ def main():
     inputs.add_argument("--pair-thresholds", type=Path, help="reuse a fixed result's saved paired scores at both pooled operating thresholds")
     parser.add_argument("--synthetic", action="store_true", help="evaluate complete frozen 201 validation worlds")
     parser.add_argument("--fixed", type=Path, help="evaluate a declared finite-learning checkpoint scope")
+    parser.add_argument("--parent-reference", action="store_true", help="evaluate the declared V2 parent on repaired fixed synthetic frames")
     parser.add_argument("--pairs", type=Path, help="only paired normal witnesses; reuse the threshold from this checkpoint's fixed result")
     parser.add_argument("--scores", action="store_true", help="same-forward base, relation and final scores on the declared 206/real scope")
     parser.add_argument("--scan-statistics", action="store_true", help="with --scores, also compare per-scan BatchNorm statistics")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--sequence", type=int, action="append")
     args = parser.parse_args()
+    if args.parent_reference and (args.fixed is None or args.checkpoint is None or args.scores or args.pairs is not None):
+        parser.error("--parent-reference requires only --fixed and its declared parent checkpoint")
     if ((args.scores and (args.fixed is None or args.checkpoint is None or args.pairs is not None))
             or (args.scan_statistics and not args.scores)):
         parser.error("--scores requires --fixed and --checkpoint without --pairs; --scan-statistics requires --scores")
@@ -1284,11 +1300,15 @@ def main():
             parser.error("--fixed requires --checkpoint and its declared development selection")
         import torch
         from .model import ScanTransform
-        from .train import load_checkpoint, load_experiment, evaluation_state
+        from .train import load_checkpoint, load_experiment, evaluation_state, experiment_config, validate_stage_parent
         declaration = load_experiment(args.fixed)
         torch.set_num_threads(4)
         model, saved = load_checkpoint(args.checkpoint)
-        if saved.get("experiment", saved.get("micro")) != declaration:
+        if args.parent_reference:
+            if args.checkpoint.resolve() != (PROJECT_ROOT / declaration["warm_start"]["checkpoint"]).resolve():
+                parser.error("parent reference requires the declared warm-start checkpoint")
+            validate_stage_parent(saved, experiment_config(declaration), declaration)
+        elif saved.get("experiment", saved.get("micro")) != declaration:
             parser.error("fixed evaluation declaration differs from the saved experiment")
         prepared = prepare_fixed(args.data_root, declaration["selection"],
             synthetic_splits=declaration["evaluation"].get("synthetic_splits", ["train", "validation"]))
@@ -1321,8 +1341,13 @@ def main():
                 result["reference_metrics"] = str(args.pairs.resolve())
             else:
                 result = evaluate_fixed(model, transform, prepared, directory=args.output,
-                    include_real=saved["step"] in declaration["evaluation"]["real_steps"],
-                    include_pairs=saved["step"] in declaration["evaluation"].get("paired_normal_steps", []))
+                    include_real=not args.parent_reference and saved["step"] in declaration["evaluation"]["real_steps"],
+                    include_pairs=args.parent_reference or saved["step"] in declaration["evaluation"].get("paired_normal_steps", []))
+            if args.parent_reference:
+                if any(not torch.equal(value.cpu(), saved["model"][key]) for key, value in model.state_dict().items()):
+                    raise ValueError("parent reference changed model parameters or buffers")
+                result.update(reference_for=declaration, model_and_buffers_unchanged=True,
+                              scope="mean1152 on repaired fixed206 source-frame choices; real152 and full val19 retain historical references")
         if args.scores:
             after = forward_state(model)
             for key in ("buffers", "torch_rng", "cuda_rng"):

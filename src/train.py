@@ -1259,12 +1259,38 @@ def initialize(config, data_root, weights, output):
     return report
 
 
+def repaired_selection(selection, replacements):
+    """Retain every source-frame choice; only explicit old-to-new world identities may change."""
+    selected = deepcopy(selection)
+    values = list(replacements.values())
+    if (len(set(values)) != len(values) or set(replacements) & set(values)
+            or any(len(key) != 64 for key in [*replacements, *values])):
+        raise ValueError("world replacements must be one-to-one, nonchained identities")
+    for split in ("train", "validation"):
+        for record in selected[split]:
+            if record["identity"] in replacements:
+                # Selection-time counts remain historical; evaluation reads the new full scan.
+                record["selection_world_identity"] = record["identity"]
+                record["identity"] = replacements[record["identity"]]
+    return selected
+
+
 def load_experiment(path, arm=None):
     experiment = json.loads(Path(path).read_text())
     if experiment.get("format") not in ("ajae-micro-learning", "ajae-short-learning", "ajae-staged-learning", "ajae-v2-learning"):
         raise ValueError("unknown finite-learning declaration")
     if "selection_from" in experiment:
         experiment["selection"] = json.loads((PROJECT_ROOT / experiment["selection_from"]).read_text())["selection"]
+    if "replacements_from" in experiment:
+        if experiment["format"] != "ajae-v2-learning":
+            raise ValueError("world replacement is an explicit new-stage operation")
+        root = json.loads((PROJECT_ROOT / experiment["replacements_from"]).read_text())
+        current = {e["world_identity"]: e["path"] for s in root["splits"].values() for e in s["worlds"]}
+        replacements = root.get("world_replacements", {})
+        if any(current.get(r["identity"]) != r["path"] for r in replacements.values()):
+            raise ValueError("world replacement target is absent from the current pool")
+        experiment["world_replacements"] = {key: r["identity"] for key, r in replacements.items()}
+        experiment["selection"] = repaired_selection(experiment["selection"], experiment["world_replacements"])
     if "arms" in experiment:
         arms = experiment.pop("arms")
         if arm not in arms:
@@ -1287,7 +1313,7 @@ def experiment_config(experiment, path=None):
 
 def validate_initial_state(saved, config, identities, initial_changes=None):
     # Fresh starts permit only the explicitly declared objective or pretrained LR schedule change.
-    # Real resume still compares the complete configuration without exceptions.
+    # Resume changes require their own explicit validator and an unchanged completed history.
     actual = {k: v for k, v in config.items() if k != "scope"}
     expected = deepcopy({k: v for k, v in saved["config"].items() if k != "scope"})
     if saved["step"] != 0 or saved["optimizer"]["state"]:
@@ -1310,10 +1336,35 @@ def validate_initial_state(saved, config, identities, initial_changes=None):
 
 
 def validate_resume_state(saved, config, identities, probabilities, experiment, *, without_201=False,
-                          condition_sources=None):
+                          condition_sources=None, extend_warmup=False):
     if "failure" in saved:
         raise ValueError("a partial failure snapshot is not a completed-update resume state")
     expected = deepcopy(saved.get("experiment", saved.get("micro")))
+    expected_config = deepcopy(saved["config"])
+    if extend_warmup and (expected_config != config or expected != experiment):
+        old = expected_config["training"].get("learning_rate_schedule", {})
+        new = config["training"].get("learning_rate_schedule", {})
+        if (not expected or not experiment or expected.get("format") != "ajae-v2-learning"
+                or experiment.get("format") != "ajae-v2-learning"
+                or old.get("kind") != "linear_warmup_cosine"
+                or not 0 <= saved["step"] <= old.get("warmup_updates", -1)
+                or new.get("total_updates", 0) <= old["total_updates"]
+                or expected["maximum_updates"] != old["total_updates"]
+                or experiment["maximum_updates"] != new["total_updates"]):
+            raise ValueError("budget extension requires a V2 checkpoint within the unchanged warmup")
+        # A longer cosine cycle may only replace the future, never the applied LR prefix.
+        if any(learning_rates(saved["config"], update) != learning_rates(config, update)
+               for update in range(1, max(1, saved["step"]) + 1)):
+            raise ValueError("budget extension changed a completed update's learning rates")
+        old["total_updates"] = new["total_updates"]
+        expected_config["scope"] = config["scope"]
+        expected_config["training"]["save_every"] = config["training"]["save_every"]
+        expected["training_overrides"]["learning_rate_schedule"]["total_updates"] = new["total_updates"]
+        expected["training_overrides"]["save_every"] = config["training"]["save_every"]
+        for key in ("scope", "maximum_updates", "checkpoint_steps", "stop"):
+            expected[key] = deepcopy(experiment[key])
+        for key in ("synthetic_steps", "real_steps", "paired_normal_steps", "full_val19_steps", "primary"):
+            expected["evaluation"][key] = deepcopy(experiment["evaluation"][key])
     if without_201:
         if (not expected or not experiment or expected.get("format") != "ajae-staged-learning"
                 or experiment.get("format") != "ajae-staged-learning"
@@ -1325,7 +1376,7 @@ def validate_resume_state(saved, config, identities, probabilities, experiment, 
                                       synthetic=experiment["evaluation"]["synthetic"])
     same_probabilities = (saved["probabilities"] is None if probabilities is None else
                           torch.equal(saved["probabilities"], torch.from_numpy(probabilities)))
-    if (saved["config"] != config or expected != experiment
+    if (expected_config != config or expected != experiment
             or saved["samples"] != identities or not same_probabilities):
         raise ValueError("resume configuration, input order or frame probabilities changed")
     if "group_queries" in config["training"] and (condition_sources is None
@@ -1372,14 +1423,15 @@ def validate_branch_state(saved, config, identities, probabilities, experiment):
     return start
 
 
-def initialize_stage(model, saved, config, experiment):
-    """Inherit a compatible trained model, but start the declared V2 optimizer and RNG at zero."""
+def validate_stage_parent(saved, config, experiment):
+    """Validate historical parent state independently of explicitly repaired diagnostic worlds."""
     if (experiment.get("format") != "ajae-v2-learning" or experiment["warm_start"]["step"] != 1152
             or saved.get("step") != 1152 or saved.get("format") != "ajae-v1-checkpoint"
             or "group_queries" not in config["training"] or "preprocessing" not in saved
             or saved["config"]["loss"]["keep_mode"] != "mean"
             or saved["config"]["loss"]["tail_weight"] != 0.
-            or saved.get("experiment", {}).get("selection") != experiment["selection"]):
+            or repaired_selection(saved.get("experiment", {}).get("selection", {}),
+                                  experiment.get("world_replacements", {})) != experiment["selection"]):
         raise ValueError("V2 must inherit the declared mean1152 model and fixed evaluation selection")
     probabilities = saved["probabilities"].numpy() if saved["probabilities"] is not None else None
     # Validate the parent's own completed history; repaired worlds belong to the new stage.
@@ -1393,6 +1445,11 @@ def initialize_stage(model, saved, config, experiment):
     ScanTransform(config, state=saved["preprocessing"])
     if any(not torch.isfinite(value).all() for value in saved["model"].values()):
         raise ValueError("V2 parent model contains nonfinite tensors")
+
+
+def initialize_stage(model, saved, config, experiment):
+    """Inherit a compatible trained model, but start the declared V2 optimizer and RNG at zero."""
+    validate_stage_parent(saved, config, experiment)
     model.load_state_dict(saved["model"], strict=True)
     seed = config["training"]["seed"]
     torch.manual_seed(seed)
@@ -1403,7 +1460,8 @@ def initialize_stage(model, saved, config, experiment):
     return optimizer
 
 
-def fit(config, data_root, steps, output, resume=None, *, experiment=None, resume_without_201=False):
+def fit(config, data_root, steps, output, resume=None, *, experiment=None, resume_without_201=False,
+        extend_warmup=False):
     if steps < 1:
         raise ValueError("training needs a positive explicit update budget")
     output = Path(output)
@@ -1415,6 +1473,8 @@ def fit(config, data_root, steps, output, resume=None, *, experiment=None, resum
     in_place = (staged or controlled) and resume is not None and Path(resume).resolve().parent == output.resolve()
     if resume_without_201 and not in_place:
         raise ValueError("201 removal requires resuming the same staged output directory")
+    if extend_warmup and (not v2 or not in_place):
+        raise ValueError("warmup budget extension requires resuming the same V2 output directory")
     if output.exists() and any(output.iterdir()) and not in_place:
         raise ValueError("training output is occupied; resume into an empty output directory")
     initial = PROJECT_ROOT / experiment["initial_checkpoint"] if experiment and "initial_checkpoint" in experiment else None
@@ -1453,7 +1513,7 @@ def fit(config, data_root, steps, output, resume=None, *, experiment=None, resum
     start = 0
     if resume is not None:
         start = validate_resume_state(saved, config, identities, probabilities, experiment,
-                                      without_201=resume_without_201, condition_sources=condition_sources)
+            without_201=resume_without_201, condition_sources=condition_sources, extend_warmup=extend_warmup)
         if start > steps or (start == steps and not staged):
             raise ValueError("explicit budget has no remaining updates")
         if staged or controlled:
@@ -1521,13 +1581,16 @@ def fit(config, data_root, steps, output, resume=None, *, experiment=None, resum
     if in_place:
         previous = json.loads((output / "run.json").read_text())
         run["previous_segments"] = previous.get("previous_segments", []) + [
-            {k: previous.get(k) for k in ("start_update", "completed_updates", "seconds", "status")}]
+            {k: previous.get(k) for k in ("start_update", "completed_updates", "seconds", "status", "budget_extension")}]
     if monitor:
         run["optimization_monitor"] = monitor
         run["retained_alerts"] = previous.get("retained_alerts", []) if in_place else []
     if resume_without_201:
         run["evaluation_change"] = dict(step=start, reason="user_cancelled_201_evaluation",
             previous=saved["experiment"]["evaluation"], current=experiment["evaluation"])
+    if extend_warmup and saved["experiment"] != experiment:
+        run["budget_extension"] = dict(step=start, previous=saved["experiment"], current=experiment,
+                                       completed_learning_rates_unchanged=True)
     _atomic_json(output / "run.json", run)
     torch.cuda.reset_peak_memory_stats()
     prepared = None
@@ -1611,6 +1674,7 @@ def fit(config, data_root, steps, output, resume=None, *, experiment=None, resum
         if stopped:
             return
         evaluating = True
+        print(f"评价 {step}/{steps} 开始", flush=True)
         with evaluation_state(model):
             real_scores, synthetic_scores = {}, {}
             schedule = experiment["evaluation"]
@@ -1631,6 +1695,8 @@ def fit(config, data_root, steps, output, resume=None, *, experiment=None, resum
                         captured.update({(r["identity"], r["frame"]): None for r in experiment["selection"]["validation"]})
                     result = evaluator(data_root, checkpoint_path=output / f"{step}.pt", directory=output, capture=captured)
                     _atomic_json(path, dict(step=step, **result))
+                    from .evaluate import print_metrics
+                    print_metrics("完整val19" if suffix == "val" else "完整合成集", result)
             if not staged or not (output / f"{step}.json").exists():
                 result = evaluate_fixed(model, transform, prepared,
                     include_real=step in schedule["real_steps"], directory=output,
@@ -1639,6 +1705,7 @@ def fit(config, data_root, steps, output, resume=None, *, experiment=None, resum
                     real_scores=real_scores, synthetic_scores=synthetic_scores)
                 _atomic_json(output / f"{step}.json", dict(step=step, checkpoint=f"{step}.pt", **result))
         evaluating = False
+        print(f"评价 {step}/{steps} 完成", flush=True)
 
     workers = config["training"]["workers"]
     loader = DataLoader(dataset, sampler=Requests(probabilities, config, steps, start, samples=selected),
@@ -1653,12 +1720,13 @@ def fit(config, data_root, steps, output, resume=None, *, experiment=None, resum
     def request_stop(signum, _):
         nonlocal stopped
         stopped = True
-        print(json.dumps(dict(event="stop_requested", signal=signum, completed_updates=completed)), flush=True)
+        print(f"暂停请求：完成当前更新后保存，已完成 {completed}/{steps}", flush=True)
         if evaluating:
             raise KeyboardInterrupt("user stopped evaluation at a saved update boundary")
 
     handlers = {sig: signal.signal(sig, request_stop) for sig in (signal.SIGINT, signal.SIGTERM)} if staged or controlled else {}
     try:
+        print(f"训练 {start}/{steps} 就绪，目标 {steps} 步及其评价完成后退出", flush=True)
         if experiment:
             if not in_place:
                 snapshot(start)
@@ -1718,7 +1786,9 @@ def fit(config, data_root, steps, output, resume=None, *, experiment=None, resum
                     stats["known_sparse_witness_queries"] = hits
                 log.write(json.dumps(stats, allow_nan=False) + "\n")
                 log.flush()
-                print(json.dumps({k: v for k, v in stats.items() if k != "exposure"}), flush=True)
+                rates_text = "/".join(f"{rate:.2e}" for rate in rates.values())
+                print(f"训练 {completed:4d}/{steps} loss={stats['total']:.5f} grad={float(norm):.3g} "
+                      f"lr={rates_text} {stats['seconds']:.1f}s", flush=True)
                 run["completed_updates"] = completed
                 if completed % 32 == 0:
                     run["host_E_latest"] = host_disk()
@@ -1726,7 +1796,6 @@ def fit(config, data_root, steps, output, resume=None, *, experiment=None, resum
                         raise OSError("preserve the last complete update before exhausting checkpoint headroom")
                     if staged or controlled:
                         run["resources_latest"] = runtime_resources()
-                        print(json.dumps(dict(event="resources", step=completed, **run["resources_latest"])), flush=True)
                     _atomic_json(output / "run.json", run)
                 if stopped:
                     snapshot(completed, rolling=True)
@@ -1759,6 +1828,8 @@ def fit(config, data_root, steps, output, resume=None, *, experiment=None, resum
         run.update(seconds=time.time() - run["started_unix"],
                    peak_cuda_allocated_bytes=torch.cuda.max_memory_allocated())
         _atomic_json(output / "run.json", run)
+        label = {"completed": "训练及评价完成", "interrupted": "已暂停"}.get(run["status"], "故障停止")
+        print(f"{label} {completed}/{steps}，记录：{output}", flush=True)
 
 
 def main():
@@ -1777,6 +1848,8 @@ def main():
     parser.add_argument("--weights", type=Path, help="official source weights for initialize only")
     parser.add_argument("--resume-without-201", action="store_true",
                         help="explicitly remove only 201 evaluation when resuming the staged run")
+    parser.add_argument("--extend-warmup", action="store_true",
+                        help="extend a V2 budget during unchanged warmup; preserve every completed update's recipe")
     parser.add_argument("--experiment", type=Path, help="declared finite or continuous learning budget and evaluation scope")
     parser.add_argument("--arm", choices=("mean", "increase"), help="arm of the declared normal-protection control")
     parser.add_argument("--sample", type=int, action="append", help="fixed training manifest index for check")
@@ -1789,6 +1862,8 @@ def main():
         parser.error("choose saved tensors or a sequential original-code comparison")
     if args.resume_without_201 and (args.command != "fit" or args.resume is None or args.experiment is None):
         parser.error("--resume-without-201 requires a staged --experiment and --resume")
+    if args.extend_warmup and (args.command != "fit" or args.resume is None or args.experiment is None):
+        parser.error("--extend-warmup requires a V2 --experiment and --resume")
     if args.command != "diagnose" and (args.checkpoint is not None or args.log is not None):
         parser.error("--checkpoint and --log are diagnosis inputs, not training initialization")
     if args.weights is not None and args.command != "initialize":
@@ -1856,7 +1931,7 @@ def main():
         if args.steps is None or args.output is None or args.sample is not None:
             parser.error("fit requires --steps and --output; fixed check samples are not training input")
         fit(config, args.data_root, args.steps, args.output, args.resume, experiment=experiment,
-            resume_without_201=args.resume_without_201)
+            resume_without_201=args.resume_without_201, extend_warmup=args.extend_warmup)
 
 
 if __name__ == "__main__":

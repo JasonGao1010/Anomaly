@@ -67,13 +67,75 @@ def test_v2_frame_risk_and_gradients_match_explicit_formula(positive_counts):
 
 def test_v2_schedule_and_request_resume_use_local_updates():
     from src.train import auxiliary_fraction, experiment_config, learning_rate_factor, load_experiment
-    config = experiment_config(load_experiment("protocol/v2.json"))
+    experiment = load_experiment("protocol/v2.json")
+    config = experiment_config(experiment)
     schedule = config["training"]["learning_rate_schedule"]
-    assert [learning_rate_factor(i, schedule) for i in (1, 50, 2048)] == [.1, 1., .1]
+    assert [learning_rate_factor(i, schedule) for i in (1, 50, 4096)] == [.1, 1., .1]
+    assert experiment['maximum_updates'] == 4096
+    assert experiment['checkpoint_steps'] == [1024, 2048, 4096]
+    for key in ('synthetic_steps', 'real_steps', 'paired_normal_steps', 'full_val19_steps'):
+        assert experiment['evaluation'][key] == [1024, 2048, 4096]
+    with pytest.raises(ValueError, match='outside'):
+        learning_rate_factor(4097, schedule)
     probabilities = np.array([.2, .3, .5])
-    whole = list(Requests(probabilities, config, 2048))
-    assert whole[2048:] == list(Requests(probabilities, config, 2048, start=1024))
+    whole = list(Requests(probabilities, config, 4096))
+    assert len(whole) == 8192
+    for start in (4, 1024, 2048, 4096):
+        assert whole[2 * start:] == list(Requests(probabilities, config, 4096, start=start))
     assert all(need for _, _, need in whole) and auxiliary_fraction(0, config["training"]) == 1.
+
+
+@pytest.mark.parametrize('step', [0, 4, 50, 51])
+def test_v2_budget_extension_preserves_completed_history(step):
+    from src.train import experiment_config, learning_rates, load_experiment
+    experiment = load_experiment('protocol/v2.json')
+    config = experiment_config(experiment)
+    old_experiment = deepcopy(experiment)
+    old_experiment.update(maximum_updates=2048, checkpoint_steps=[512, 1024, 1536, 2048],
+                          scope='previous2048', stop='stop2048')
+    old_experiment['training_overrides']['learning_rate_schedule']['total_updates'] = 2048
+    old_experiment['training_overrides']['save_every'] = 512
+    for key in ('synthetic_steps', 'real_steps', 'paired_normal_steps'):
+        old_experiment['evaluation'][key] = [1024, 2048]
+    old_experiment['evaluation'].update(full_val19_steps=[2048], primary='previous2048')
+    old_config = experiment_config(old_experiment)
+    identities, probabilities, conditions = [['a', 1]], np.array([1.]), {'1': ['source', [1, 3]]}
+    rates = learning_rates(old_config, max(1, step))
+    saved = dict(config=old_config, experiment=old_experiment, step=step, samples=identities,
+        probabilities=torch.from_numpy(probabilities), condition_sources=conditions,
+        optimizer=dict(param_groups=[dict(lr=rate) for rate in rates]),
+        scheduler_state=dict(completed_updates=step, learning_rates=rates))
+    assert validate_resume_state(saved, old_config, identities, probabilities, old_experiment,
+                                 condition_sources=conditions, extend_warmup=True) == step
+    with pytest.raises(ValueError, match='resume configuration'):
+        validate_resume_state(saved, config, identities, probabilities, experiment, condition_sources=conditions)
+    if step > 50:
+        with pytest.raises(ValueError, match='unchanged warmup'):
+            validate_resume_state(saved, config, identities, probabilities, experiment,
+                                  condition_sources=conditions, extend_warmup=True)
+        return
+    assert validate_resume_state(saved, config, identities, probabilities, experiment,
+                                 condition_sources=conditions, extend_warmup=True) == step
+    assert old_config['training']['learning_rate_schedule']['total_updates'] == 2048
+    assert old_experiment['maximum_updates'] == 2048
+    for section, key, value in (('loss', 'keep_weight', .5), ('training', 'seed', 1),
+                                ('training', 'learning_rate', 1e-4)):
+        changed = deepcopy(config)
+        changed[section][key] = value
+        with pytest.raises(ValueError):
+            validate_resume_state(saved, changed, identities, probabilities, experiment,
+                                  condition_sources=conditions, extend_warmup=True)
+    for ids, probs, cond in (([['b', 1]], probabilities, conditions),
+                            (identities, np.array([.9]), conditions),
+                            (identities, probabilities, {'1': ['source', [1]]})):
+        with pytest.raises(ValueError):
+            validate_resume_state(saved, config, ids, probs, experiment,
+                                  condition_sources=cond, extend_warmup=True)
+    changed = deepcopy(experiment)
+    changed['selection']['train'][0]['frame'] += 1
+    with pytest.raises(ValueError, match='resume configuration'):
+        validate_resume_state(saved, config, identities, probabilities, changed,
+                              condition_sources=conditions, extend_warmup=True)
 
 
 def test_v2_queries_keep_identity_overlap_and_missing_return_neighborhood():
@@ -150,6 +212,24 @@ def test_v2_resume_rejects_changed_condition_slots_and_parent_recipe(monkeypatch
         initialize_stage(model, saved, changed, experiment)
     with pytest.raises(ValueError, match='mean1152'):
         initialize_stage(model, dict(saved, step=1024), config, experiment)
+    changed_selection = deepcopy(experiment)
+    changed_selection['selection']['train'][0]['frame'] += 1
+    with pytest.raises(ValueError, match='fixed evaluation selection'):
+        initialize_stage(model, saved, config, changed_selection)
+
+
+def test_repaired_selection_changes_only_explicit_world_identity():
+    from src.train import repaired_selection
+    old, new = 'a' * 64, 'b' * 64
+    selection = dict(train=[dict(identity=old, frame=7, source_identity='source', anomaly_rays=9)],
+                     validation=[], val={'1': [3, 8]})
+    changed = repaired_selection(selection, {old: new})
+    assert changed['train'] == [dict(identity=new, frame=7, source_identity='source',
+                                    anomaly_rays=9, selection_world_identity=old)]
+    assert changed['val'] == selection['val'] and selection['train'][0]['identity'] == old
+    for invalid in ({old: new, 'c' * 64: new}, {old: new, new: 'c' * 64}):
+        with pytest.raises(ValueError, match='one-to-one'):
+            repaired_selection(selection, invalid)
 
 
 def test_v2_fit_rejects_unresolved_physical_pool_before_creating_model(tmp_path, monkeypatch):

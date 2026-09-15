@@ -479,7 +479,7 @@ def _research_geometry_frame(job):
     return results
 
 
-def research_geometry(protocol, data_root, workers, witnesses_only=False):
+def research_geometry(protocol, data_root, workers, witnesses_only=False, fixed=()):
     global _geometry_reference, _research_config
     config = protocol["research_coverage"]
     output = Path(config["output"])
@@ -498,11 +498,18 @@ def research_geometry(protocol, data_root, workers, witnesses_only=False):
     _geometry_reference, _research_config = geometry_reference(), config
     def selection():
         if not witnesses_only:
-            return research_geometry_selection(record, rows, config, cached.values())
-        return [dict(r, stratum=cached.get((r["world_identity"], r["source_identity"]), {}).get(
+            chosen = research_geometry_selection(record, rows, config, cached.values())
+        else:
+            chosen = [dict(r, stratum=cached.get((r["world_identity"], r["source_identity"]), {}).get(
                     "stratum", "native_witness")) for r in rows
                 if (r["world_identity"], r["source_identity"]) in cached
                 or r["frame"] in metadata[r["split"], r["world"]]["content_check_frames"]]
+        chosen = {(r["world_identity"], r["frame"]): r for r in chosen}
+        for row in rows:
+            key = row["world_identity"], row["frame"]
+            if key in fixed:
+                chosen.setdefault(key, dict(row, stratum=["fixed_diagnostic"]))
+        return list(chosen.values())
     for stage in range(2):
         selected = selection()
         jobs = defaultdict(list)
@@ -764,11 +771,12 @@ def condition_probabilities(rows, metadata, baseline, selected, mixture):
     return probability, report
 
 
-def _condition_initialize(data_root, rays, parameters, worlds, penetration_m):
+def _condition_initialize(data_root, rays, parameters, worlds, penetration_m, source_cache=None):
     from .render import ObjectSpec
     _research_initialize(data_root, rays)
-    global _condition_parameters, _condition_worlds, _condition_penetration
+    global _condition_parameters, _condition_worlds, _condition_penetration, _condition_sources
     _condition_parameters, _condition_penetration = parameters, penetration_m
+    _condition_sources = source_cache or {}
     _condition_worlds = {key: (ObjectSpec.from_dict(obj), (np.asarray(bounds[0]), np.asarray(bounds[1])))
                          for key, (obj, bounds) in worlds.items()}
 
@@ -779,7 +787,9 @@ def _condition_frame(job):
     split, frame, entries = job
     original = _research_sources[split][frame]
     identity, parameters = source_identity(original), _condition_parameters
-    sparse = (low_support_slots(original, parameters["radius_m"], parameters["minimum_neighbors"])
+    cached = _condition_sources.get(frame) if split == "train" else None
+    sparse = (cached[1] if cached is not None and cached[0] == identity else
+              low_support_slots(original, parameters["radius_m"], parameters["minimum_neighbors"])
               if split == "train" else np.empty(0, np.int32))
     mapping = canonical_ray_slots_for_source(original, _research_grid) if split == "train" else None
     slots = original.real_slots
@@ -834,6 +844,14 @@ def prepare_conditions(protocol, experiment_path, data_root, workers):
     config = experiment_config(experiment)
     parameters = config["training"]["conditions"]
     output = Path(config["training"]["sampling"])
+    source_cache = {}
+    if output.exists():
+        with np.load(output, allow_pickle=False) as saved:
+            if saved["format"].item() == "ajae-v2-conditions" and json.loads(saved["parameters"].item()) == parameters:
+                offsets = saved["sparse_offsets"]
+                slots = saved["sparse_slot"]
+                source_cache = {int(frame): (str(identity), slots[offsets[i]:offsets[i+1]])
+                    for i, (frame, identity) in enumerate(zip(saved["source_frame"], saved["source_identity"], strict=True))}
     record, observations = research_records(protocol["research_coverage"]["output"])
     metadata = {(w["split"], w["world"]): w for w in record["worlds"]}
     by_world = {w["identity"]: w for w in record["worlds"]}
@@ -862,7 +880,8 @@ def prepare_conditions(protocol, experiment_path, data_root, workers):
             baseline_path = json.loads(Path(experiment["base_config"]).read_text())["training"]["sampling"]
             baseline = dataset.sampling_probabilities(baseline_path)
     started, disk = time.perf_counter(), host_disk()
-    arguments = (data_root, protocol["calibration"]["rays"], parameters, worlds, protocol["placement"]["deep_penetration_m"])
+    arguments = (data_root, protocol["calibration"]["rays"], parameters, worlds,
+                 protocol["placement"]["deep_penetration_m"], source_cache)
     results = []
     with ProcessPoolExecutor(workers, mp_context=mp.get_context("spawn"),
                              initializer=_condition_initialize, initargs=arguments) as pool:
@@ -898,6 +917,7 @@ def prepare_conditions(protocol, experiment_path, data_root, workers):
     finally:
         temporary.unlink(missing_ok=True)
     report = dict(training_executed=False, parameters=parameters, source_frames=len(sources),
+        reused_native_sources=sum(r["frame"] in source_cache and source_cache[r["frame"]][0] == r["source_identity"] for r in sources),
         sparse_slots=int(offsets[-1]), H_frames=int(selected.sum()), cells=cells,
         region_counts=region_counts, regions_satisfied=regions_satisfied,
         collision=dict(worlds=len(worlds), world_frames=sum(r["world_frames"] for r in results),
@@ -1497,7 +1517,10 @@ def main():
         elif args.research == "inventory":
             research_inventory(protocol, args.data_root, args.workers)
         elif args.research == "geometry":
-            research_geometry(protocol, args.data_root, args.workers, args.witnesses_only)
+            from .train import load_experiment
+            selection = load_experiment(args.experiment)["selection"]
+            fixed = {(r["identity"], r["frame"]) for split in ("train", "validation") for r in selection[split]}
+            research_geometry(protocol, args.data_root, args.workers, args.witnesses_only, fixed)
         elif args.research == "select":
             research_select(protocol, args.data_root)
         else:
