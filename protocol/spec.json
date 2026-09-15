@@ -3,8 +3,8 @@
   "schema_version": 1,
   "research_question": "Using only the complete current scan, can scene-supported observation-conditioned relationships on original returns learn transferable anomaly-versus-normal ranking? The current main method uses detection plus mean retained-normal pairing; independent mechanism attribution remains a later controlled comparison.",
   "status": {
-    "stage": "normal_protection_control_completed",
-    "active_work": "Both arms completed128 updates from the complete pretrained1024 state and fixed206_32/real152 evaluation at1152; mean improved the pooled real metrics, increase did not outperform mean or the start in AP/FPR95; no further training running",
+    "stage": "mean_1152_full_validation_completed",
+    "active_work": "Complete val19 evaluation confirms pooled AP, FPR95 and low-FPR recall improvements for mean1152; adopt it as the improved starting point while recording nonuniform sequence changes; execution stopped",
     "model_defined": true,
     "training_defined": true,
     "formal_ajae_v1": "context_supported_conditional_return_relationship_network",
@@ -36,7 +36,7 @@
     "coverage_closure_evidence": "results/coverage/summary.json",
     "coverage_decision": "all_original_core_checks_exact_30_cell_quotas_and_sampling_exposure_requirements_passed; data_unchanged_by_model_implementation",
     "coverage_boundaries": "one_normal_source_per_split; sparse_normal_nonextreme_train_region_share_0.4997728305_near_0.5_limit; selected_geometry_scope_and_missingness; weak_background_change_is_not_self_occlusion; no_universal_coverage_claim",
-    "next_stage": "Retain mean for now; no evidence to extend this increase-protection candidate; no automatic full-val19 evaluation, budget increase or inference/model/data change",
+    "next_stage": "Use mean1152 as the new improved starting point and retain1024 as the historical reference; keep increase protection outside the current method; further performance and mechanism experiments need a separately defined scope; no automatic training",
     "data_preparation_accepted": true,
     "original_pool_summary_completed": true,
     "balanced_pool_target": {
@@ -5295,6 +5295,222 @@
     },
     "conclusion": "At this paired128-update budget, increase protection does not add a favorable ranking/protection tradeoff: real AP/FPR95 are worse than both mean and the shared start, and low-FPR recall is worse than mean but slightly better than the start. At the same20695%-recall target, changed-normal false positives are14 for mean and16 for increase, with12 versus13 insertion-induced new false positives; sparse errors are15 for both. No universal ineffectiveness or cause-of8000-degradation claim.",
     "interpretation": "Mean improves pooled real AP/FPR95/low-FPR recall over1024 but only7/19 sequence APs and6/19 sequence FPR95s improve; both arms worsen some far/normal-sparse synthetic role curves despite high recall. Slightly smaller average insertion score increases do not establish improved normal protection.",
-    "decision": "Stop both arms at1152 with fixed evaluation completed. Keep the mean recipe, do not extend increase or run full val19 automatically. A matched one-seed short continuation cannot establish long-term mechanism benefit or resolve late degradation."
+    "decision": "Stop both arms at1152 with fixed evaluation completed. Keep the mean recipe, do not extend increase or run full val19 automatically. A matched one-seed short continuation cannot establish long-term mechanism benefit or resolve late degradation.",
+    "mean_full_validation": {
+      "status": "completed",
+      "checkpoint": "results/keep/mean/1152.pt",
+      "results": "results/keep/mean/global.json",
+      "reference": "results/finetune/1024_val.json",
+      "scope": "all19 public development sequences with unchanged official eligible-frame and point rules; no201 or hidden test",
+      "decision_rule": "AP greater than74.92273548300908, FPR95 less than0.2385892496235793, and recall_at_1pct greater than98.41941050754866; require all three before naming1152 the improved starting point",
+      "command": "PYTHONDONTWRITEBYTECODE=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 .venv/bin/python -u -m src.evaluate --data-root /home/jasongao/Data/STU --checkpoint results/keep/mean/1152.pt --output results/keep/mean",
+      "reference_boundary": "complete public development evidence, not an independent test or a mechanism ablation",
+      "preflight": {
+        "cpu_affinity": 24,
+        "preparation_workers": 4,
+        "threads_per_preparation": 4,
+        "torch_threads": 4,
+        "memory_available_bytes": 20999585792,
+        "swap_used_bytes": 0,
+        "host_E_remaining_bytes": 62769160192,
+        "host_E_reserve_bytes": 10000000000,
+        "gpu": "NVIDIA GeForce RTX5080 Laptop GPU,16GiB",
+        "competing_experiments": false
+      },
+      "step": 1152,
+      "completed_at": "2026-09-15T19:33:38+08:00",
+      "metrics_percent": {
+        "reference1024": {
+          "AP": 74.92273548300908,
+          "FPR95": 0.2385892496235793,
+          "recall_at_1pct_FPR": 98.41941050754866
+        },
+        "mean1152": {
+          "AP": 76.43509952215777,
+          "FPR95": 0.21271569530023535,
+          "recall_at_1pct_FPR": 98.87312997862833
+        },
+        "delta_percentage_points": {
+          "AP": 1.512364039148693,
+          "FPR95": -0.025873554323343956,
+          "recall_at_1pct_FPR": 0.4537194710796655
+        }
+      },
+      "scope_verification": {
+        "frames": 8659,
+        "eligible_frames": 1960,
+        "normal_count": 193792470,
+        "anomaly_count": 87499,
+        "sequences": [
+          125,
+          137,
+          138,
+          139,
+          140,
+          141,
+          142,
+          143,
+          144,
+          145,
+          146,
+          147,
+          148,
+          149,
+          150,
+          151,
+          152,
+          153,
+          169
+        ],
+        "same_as_full1024": true,
+        "all_sequence_denominators_match": true,
+        "global_counts_reconcile_with_sequences": true,
+        "per_model_global_thresholds_used_without_subgroup_retuning": true
+      },
+      "workpoints": {
+        "reference1024": {
+          "recall_at_fpr_limit": {
+            "recall": 98.41941050754866,
+            "FPR": 0.9982513768465824,
+            "threshold": -3.1625401973724365,
+            "tp": 86116,
+            "fp": 1934536
+          },
+          "official_high_recall": {
+            "threshold": 1.1263949871063232,
+            "tp": 83125,
+            "fp": 462368,
+            "fn": 4374,
+            "tn": 193330102,
+            "recall": 95.00108572669403,
+            "FPR": 0.2385892496235793
+          }
+        },
+        "mean1152": {
+          "recall_at_fpr_limit": {
+            "recall": 98.87312997862833,
+            "FPR": 0.9991084792923068,
+            "threshold": -3.2009737491607666,
+            "tp": 86513,
+            "fp": 1936197
+          },
+          "official_high_recall": {
+            "threshold": 1.980156660079956,
+            "tp": 83125,
+            "fp": 412227,
+            "fn": 4374,
+            "tn": 193380243,
+            "recall": 95.00108572669403,
+            "FPR": 0.21271569530023535
+          }
+        }
+      },
+      "sequence_curve_changes": {
+        "AP_improved": [
+          141,
+          142,
+          143,
+          148
+        ],
+        "AP_decreased_count": 15,
+        "FPR95_improved": [
+          137,
+          138,
+          141,
+          142,
+          143,
+          152,
+          169
+        ],
+        "FPR95_worsened_count": 12,
+        "AP_and_FPR95_improved": [
+          141,
+          142,
+          143
+        ],
+        "own_low_FPR_recall_improved": [
+          125,
+          137,
+          139,
+          141,
+          142,
+          147,
+          149,
+          150,
+          151,
+          152,
+          169
+        ],
+        "own_low_FPR_recall_decreased": [
+          143,
+          146
+        ],
+        "own_low_FPR_recall_unchanged_count": 6
+      },
+      "global_workpoint_explanation": {
+        "normal_FP_at_95_recall_change": -50141,
+        "normal_FP_at_95_recall_relative_reduction_percent": 10.844392345491038,
+        "anomaly_TP_at_95_recall_unchanged": 83125,
+        "low_FPR_anomaly_FN_before_after": [
+          1383,
+          986
+        ],
+        "low_FPR_normal_FP_change": 1661,
+        "low_FPR_TP_change_by_sequence": {
+          "125": 260,
+          "137": 8,
+          "138": 0,
+          "139": 0,
+          "140": 0,
+          "141": 4,
+          "142": 71,
+          "143": -4,
+          "144": 0,
+          "145": 0,
+          "146": -5,
+          "147": 1,
+          "148": 0,
+          "149": 9,
+          "150": 3,
+          "151": 0,
+          "152": 26,
+          "153": 0,
+          "169": 24
+        },
+        "global95_FP_increased": {
+          "125": 9813,
+          "169": 17448
+        },
+        "global95_FP_decreased_sequence_count": 17,
+        "boundary": "Counts use each model's pooled thresholds. Per-sequence curve thresholds are different; pooled AP is not a sequence-average AP. No attribution of pooled AP gain to specific sequences from these summaries alone."
+      },
+      "execution": {
+        "exit_code": 0,
+        "seconds": 3400.7690254859917,
+        "training_updates_this_task": 0,
+        "model_training_or_evaluation_code_changed": false,
+        "source_checkpoints_unchanged_size_and_mtime": true,
+        "exact_count_storage": {
+          "numeric_workspace_bytes": 134217728,
+          "fixed_codec_and_runtime_overhead_excluded": true,
+          "peak_temporary_bytes": 141171649,
+          "spills": 94,
+          "merges": 93,
+          "record_bytes": 20
+        },
+        "host_E_before": {
+          "Size": 484950659072,
+          "SizeRemaining": 62768373760,
+          "reserve_bytes": 10000000000
+        },
+        "host_E_after": {
+          "Size": 484950659072,
+          "SizeRemaining": 62547582976,
+          "reserve_bytes": 10000000000
+        }
+      },
+      "decision": "All three complete-val19 metrics improved. Adopt mean1152 as the new improved starting point, retain1024 as the historical reference, exclude increase protection from the current method, and stop this task without further training or evaluation.",
+      "interpretation": "A full-development improvement after128 additional mean-recipe updates is verified, but only4/19 sequence APs and7/19 sequence FPR95s improve. This is not uniform scene improvement, an independent test, proof of either mechanism, or resolution of late-training degradation. Existing difficult-normal paired findings retain their fixed32-frame scope."
+    }
   }
 }
