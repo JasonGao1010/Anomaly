@@ -9,6 +9,22 @@ import src.exposure as exposure
 from src.exposure import CELLS, SPARSE, summarize
 
 
+def test_point_reduction_exposure_weights_positive_queries_without_changing_normals():
+    config = dict(training=dict(batch_frames=2, warmup_steps=0, ramp_steps=1), loss=dict(keep_weight=1.))
+    base = dict(step=1, world="a", frame=1, source_identity="source", parent="p", regions=["a", "b"],
+        flags={name: True for name in CELLS}, normal=4, anomaly=1, keep=2, keep_active=True,
+        sparse_sides=dict(normal=1, anomaly=1, keep=1),
+        frame_risk_mass={name: dict(normal=1., anomaly=.5, keep=1.) for name in CELLS})
+    rows = [deepcopy(base), dict(deepcopy(base), anomaly=3)]
+    summarize(rows, config, 1)
+    original = [deepcopy(row["coefficient_mass"]) for row in rows]
+    config["loss"]["anomaly_reduction"] = "point"
+    summarize(rows, config, 1)
+    for row, old, expected in zip(rows, original, (.0625, .1875), strict=True):
+        for name in CELLS:
+            assert row["coefficient_mass"][name] == dict(old[name], anomaly=expected)
+
+
 def test_exposure_respects_class_means_warmup_and_unknown_geometry():
     config = dict(training=dict(batch_frames=2, warmup_steps=0, ramp_steps=2),
                   loss=dict(keep_weight=2.))

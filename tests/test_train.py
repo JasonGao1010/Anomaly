@@ -46,10 +46,12 @@ def test_group_queries_separate_spare_seats_empty_weights_and_overlap():
     assert not any(map(len, groups)) and weights == [0., 0., 0.]
 
 
-@pytest.mark.parametrize("positive_counts", [(2, 0), (1, 3), (0, 0)])
-def test_v2_frame_risk_and_gradients_match_explicit_formula(positive_counts):
+@pytest.mark.parametrize("reduction", ["frame", "point"])
+@pytest.mark.parametrize("positive_counts", [(2, 0), (1, 3), (2, 2), (0, 0)])
+def test_v2_frame_risk_and_gradients_match_explicit_formula(positive_counts, reduction):
     from src.train import experiment_config, load_experiment
     config = experiment_config(load_experiment("protocol/v2.json"))
+    config["loss"]["anomaly_reduction"] = reduction
     rows = batch_fixture()
     for row, count in zip(rows, positive_counts, strict=True):
         row["target"][:] = 0
@@ -74,9 +76,12 @@ def test_v2_frame_risk_and_gradients_match_explicit_formula(positive_counts):
         normal.append(.75 * values[row["normal_groups"][0]].mean() + .25 * values[row["normal_groups"][1]].mean())
         pairs = .5 * (torch.nn.functional.softplus(before) + values[row["keep_index"]])
         kept.append(.5 * pairs.mean() + .5 * pairs[0])
-    positives = [torch.nn.functional.softplus(-after[row['detection_index']][row['target'] == 1]).mean()
+    positives = [torch.nn.functional.softplus(-after[row['detection_index']][row['target'] == 1])
                  for row, after in zip(rows, score[::2], strict=True) if (row['target'] == 1).any()]
-    anomaly = sum(positives) / len(positives) if positives else score[0].sum() * 0
+    anomaly = score[0].sum() * 0
+    if positives:
+        anomaly = (sum(values.mean() for values in positives) / len(positives)
+                   if reduction == "frame" else sum(values.sum() for values in positives) / sum(map(len, positives)))
     expected = .25 * sum(normal) + .5 * anomaly + .5 * sum(kept)
     torch.testing.assert_close(loss, expected, rtol=0, atol=1e-14)
     parameters = list(model.parameters())
@@ -84,6 +89,55 @@ def test_v2_frame_risk_and_gradients_match_explicit_formula(positive_counts):
     reference_grad = torch.autograd.grad(expected, parameters)
     for actual, reference in zip(actual_grad, reference_grad, strict=True):
         torch.testing.assert_close(actual, reference, rtol=0, atol=1e-14)
+
+
+def test_controls_change_one_factor_and_keep_full_schedule_prefix():
+    from src.train import experiment_config, load_experiment, learning_rates
+    original = experiment_config(load_experiment("protocol/v2.json"))
+    for arm in "ABC":
+        experiment = load_experiment("protocol/control.json", arm)
+        config = experiment_config(experiment)
+        expected = deepcopy(original)
+        expected["scope"] = config["scope"]
+        if arm == "B":
+            expected["model"]["backbone_batchnorm"] = "fixed_parent_running"
+        if arm == "C":
+            expected["loss"]["anomaly_reduction"] = "point"
+        assert config == expected and experiment["maximum_updates"] == 1024
+        assert experiment["evaluation"]["full_val19_steps"] == [1024]
+        assert all(learning_rates(config, step) == learning_rates(original, step) for step in range(1, 1025))
+
+
+def test_fixed_parent_bn_survives_backward_and_eval_but_affine_learns():
+    from src.model import AJAE
+    from src.train import training_forward
+
+    class Model(AJAE):
+        def __init__(self):
+            nn.Module.__init__(self)
+            self.config = dict(backbone_batchnorm="fixed_parent_running")
+            self.bn = nn.BatchNorm1d(2)
+
+        def forward(self, scan, query):
+            return self.bn(scan)[query]
+
+    model = Model().train()
+    with torch.no_grad():
+        model.bn.running_mean.fill_(2.)
+        model.bn.running_var.fill_(4.)
+        model.bn.num_batches_tracked.fill_(19)
+    before = deepcopy(model.state_dict())
+    optimizer = torch.optim.SGD(model.parameters(), lr=.1)
+    values = training_forward(model, torch.tensor([[4., 6.], [8., 10.]]), torch.arange(2))
+    values.square().mean().backward()
+    optimizer.step()
+    with evaluation_state(model):
+        assert not model.bn.training
+    assert model.training and not model.bn.training
+    for key in ("running_mean", "running_var", "num_batches_tracked"):
+        assert torch.equal(model.state_dict()["bn." + key], before["bn." + key])
+    assert not torch.equal(model.bn.weight, before["bn.weight"])
+    assert not torch.equal(model.bn.bias, before["bn.bias"])
 
 
 def test_v2_schedule_and_request_resume_use_local_updates():

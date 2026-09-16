@@ -327,6 +327,7 @@ def batch_loss(model, rows, config, step, *, full_objective=False, details=False
     device = next(model.parameters()).device
     all_scores, all_targets, all_frames, before, after = [], [], [], [], []
     grouped = "group_queries" in config["training"]
+    point_anomaly = config["loss"].get("anomaly_reduction", "frame") == "point"
     normal_risks, anomaly_risks, keep_risks = [], [], []
     observed = dict(scores=[], context=[], point=[], score_targets=[])
     def forward(scan, query, target):
@@ -349,7 +350,8 @@ def batch_loss(model, rows, config, step, *, full_objective=False, details=False
             normal_risks.append(grouped_risk(F.softplus(scores), row["normal_groups"], row["normal_weights"]))
             positive = all_scores[-1][all_targets[-1] == 1]
             if len(positive):
-                anomaly_risks.append(F.softplus(-positive).mean())
+                values = F.softplus(-positive)
+                anomaly_risks.append(values if point_anomaly else values.mean())
             keep_risks.append(scores.sum() * 0)
         if row["original"] is not None:
             before.append(forward(row["original"], row["original_query"], torch.zeros(len(row["original_query"]), dtype=torch.long)))
@@ -360,7 +362,13 @@ def batch_loss(model, rows, config, step, *, full_objective=False, details=False
     scores, target, frames = map(torch.cat, (all_scores, all_targets, all_frames))
     if grouped:
         normal = torch.stack(normal_risks).mean()
-        anomaly = torch.stack(anomaly_risks).mean() if anomaly_risks else scores.sum() * 0
+        if not anomaly_risks:
+            anomaly = scores.sum() * 0
+        elif point_anomaly:
+            # Every queried positive has equal weight across the complete batch.
+            anomaly = torch.cat(anomaly_risks).mean()
+        else:
+            anomaly = torch.stack(anomaly_risks).mean()
         det, keep = .5 * (normal + anomaly), torch.stack(keep_risks).mean()
         class_losses = dict(normal_loss=float(normal.detach()),
                            anomaly_loss=float(anomaly.detach()) if anomaly_risks else None,
@@ -1292,6 +1300,11 @@ def repaired_selection(selection, replacements):
 
 def load_experiment(path, arm=None):
     experiment = json.loads(Path(path).read_text())
+    if "control_of" in experiment:
+        reference = json.loads((PROJECT_ROOT / experiment["control_of"]).read_text())
+        if reference.get("format") != "ajae-v2-learning" or "control_of" in reference:
+            raise ValueError("short controls require the original V2 declaration")
+        experiment = reference | experiment
     if experiment.get("format") not in ("ajae-micro-learning", "ajae-short-learning", "ajae-staged-learning", "ajae-v2-learning"):
         raise ValueError("unknown finite-learning declaration")
     if "selection_from" in experiment:
@@ -1310,7 +1323,10 @@ def load_experiment(path, arm=None):
         arms = experiment.pop("arms")
         if arm not in arms:
             raise ValueError("choose an explicitly declared experiment arm")
-        experiment["loss_overrides"].update(arms[arm])
+        for section, changes in arms[arm].items():
+            if section not in {"model", "loss", "training"}:
+                raise ValueError("arm changes must name a configuration section")
+            experiment.setdefault(section + "_overrides", {}).update(changes)
         experiment["arm"] = arm
     elif arm is not None:
         raise ValueError("this experiment does not declare multiple arms")
@@ -1320,6 +1336,7 @@ def load_experiment(path, arm=None):
 def experiment_config(experiment, path=None):
     config = load_config(path or (PROJECT_ROOT / experiment["base_config"] if experiment else PROJECT_ROOT / "protocol/model.json"))
     if experiment is not None:
+        config["model"].update(experiment.get("model_overrides", {}))
         config["loss"].update(experiment["loss_overrides"])
         config["training"].update(experiment.get("training_overrides", {}))
         config["scope"] = experiment.get("scope", config.get("scope", ""))
@@ -1452,11 +1469,12 @@ def validate_stage_parent(saved, config, experiment):
     # Validate the parent's own completed history; repaired worlds belong to the new stage.
     validate_resume_state(saved, saved["config"], saved["samples"], probabilities, saved["experiment"])
     expected = deepcopy(saved["config"])
+    expected["model"].update(experiment.get("model_overrides", {}))
     expected["training"].update(experiment["training_overrides"])
     expected["loss"].update(experiment["loss_overrides"])
     expected["scope"] = experiment["scope"]
     if config != expected:
-        raise ValueError("V2 may change only its declared risk, sampling and optimization settings")
+        raise ValueError("V2 may change only its declared risk, normalization, sampling and optimization settings")
     ScanTransform(config, state=saved["preprocessing"])
     if any(not torch.isfinite(value).all() for value in saved["model"].values()):
         raise ValueError("V2 parent model contains nonfinite tensors")
@@ -1706,12 +1724,19 @@ def fit(config, data_root, steps, output, resume=None, *, experiment=None, resum
                     if suffix == "val":
                         captured.update({(int(key), frame): None for key, frames in experiment["selection"]["val"].items()
                                          for frame in frames})
+                        if "diagnostic_from" in experiment:
+                            diagnostic = json.loads((PROJECT_ROOT / experiment["diagnostic_from"] / "selection.json").read_text())
+                            captured.update({(r["sequence"], r["frame"]): None for r in diagnostic["frames"]})
                     else:
                         captured.update({(r["identity"], r["frame"]): None for r in experiment["selection"]["validation"]})
                     result = evaluator(data_root, checkpoint_path=output / f"{step}.pt", directory=output, capture=captured)
                     _atomic_json(path, dict(step=step, **result))
                     from .evaluate import print_metrics
                     print_metrics("完整val19" if suffix == "val" else "完整合成集", result)
+                if "diagnostic_from" in experiment:
+                    from .evaluate import evaluate_diagnostic
+                    evaluate_diagnostic(data_root, output / f"{step}.pt", PROJECT_ROOT / experiment["diagnostic_from"],
+                        output, capture=real_scores, reference=PROJECT_ROOT / experiment["reference_checkpoint"])
             if not staged or not (output / f"{step}.json").exists():
                 result = evaluate_fixed(model, transform, prepared,
                     include_real=step in schedule["real_steps"], directory=output,
@@ -1866,7 +1891,7 @@ def main():
     parser.add_argument("--extend-warmup", action="store_true",
                         help="extend a V2 budget during unchanged warmup; preserve every completed update's recipe")
     parser.add_argument("--experiment", type=Path, help="declared finite or continuous learning budget and evaluation scope")
-    parser.add_argument("--arm", choices=("mean", "increase"), help="arm of the declared normal-protection control")
+    parser.add_argument("--arm", help="arm explicitly listed in the experiment declaration")
     parser.add_argument("--sample", type=int, action="append", help="fixed training manifest index for check")
     args = parser.parse_args()
     if (args.efficiency or args.reference is not None or args.reference_code is not None) and args.command != "diagnose":
@@ -1883,8 +1908,8 @@ def main():
         parser.error("--checkpoint and --log are diagnosis inputs, not training initialization")
     if args.weights is not None and args.command != "initialize":
         parser.error("--weights only initializes a fresh trajectory; it cannot modify a resume state")
-    if args.arm is not None and (args.command != "fit" or args.experiment is None):
-        parser.error("--arm requires a declared --experiment fit")
+    if args.arm is not None and (args.command not in {"fit", "check"} or args.experiment is None):
+        parser.error("--arm requires a declared --experiment fit or check")
     experiment = load_experiment(args.experiment, args.arm) if args.experiment is not None else None
     if experiment is not None and args.command != "fit" and not (
             args.command == "check" and experiment["format"] == "ajae-v2-learning"):

@@ -100,9 +100,27 @@
     "diagnosis": {
       "result": "results/v2_diagnosis/comparison.json",
       "training_support": "results/v2_diagnosis/support.json",
-      "sequences": [125, 141, 139, 152],
+      "sequences": [
+        125,
+        141,
+        139,
+        152
+      ],
       "initial_frames": 96,
-      "additional_141_frames": [353, 360, 367, 374, 379, 382, 457, 461, 462, 467, 472, 478],
+      "additional_141_frames": [
+        353,
+        360,
+        367,
+        374,
+        379,
+        382,
+        457,
+        461,
+        462,
+        467,
+        472,
+        478
+      ],
       "additional_reason": "initial equal-time subset represented only2 of52 eligible141 frames with at least100 anomalies; add five equally spaced frames and the maximum-count frame in each dense interval, before observing added predictions",
       "frames": 108,
       "normal_points": 11012518,
@@ -112,12 +130,27 @@
       "inference_seconds": 256.72676820197375,
       "model_and_buffers_unchanged": true,
       "new_optimizer_updates": 0,
-      "modes": ["parent1152", "V2_4096", "V2_4096_with_parent_BN_buffers_only"],
-      "AP": [82.46006128346835, 76.6440270298261, 78.59761946513623],
-      "FPR95": [0.13259456193397368, 0.26242862894753044, 0.19301671061967846],
+      "modes": [
+        "parent1152",
+        "V2_4096",
+        "V2_4096_with_parent_BN_buffers_only"
+      ],
+      "AP": [
+        82.46006128346835,
+        76.6440270298261,
+        78.59761946513623
+      ],
+      "FPR95": [
+        0.13259456193397368,
+        0.26242862894753044,
+        0.19301671061967846
+      ],
       "new_normal_FP_at_historical_full95_thresholds": 11080,
       "removed_normal_FP_at_historical_full95_thresholds": 3959,
-      "low_support_normal_added_removed_FP": [5, 474],
+      "low_support_normal_added_removed_FP": [
+        5,
+        474
+      ],
       "anomaly_queries_verified": 270725,
       "capped_query_replays": 14,
       "near_dense_queries": 151278,
@@ -125,7 +158,10 @@
       "same_draw_point_pooled_mass_fraction": 0.08477984651893014,
       "near_dense_low_intensity_queries": 16120,
       "near_dense_low_intensity_positive_mass_fraction": 0.0045079098171103655,
-      "next_control_candidates": ["fixed parent BN statistics during training and evaluation", "only restore anomaly risk to a within-batch point mean"],
+      "next_control_candidates": [
+        "fixed parent BN statistics during training and evaluation",
+        "only restore anomaly risk to a within-batch point mean"
+      ],
       "limits": "selected public-development diagnosis with repeated object observations; score components are not independently trained ablations; coefficient mass is not gradient influence; no V3 architecture or training decision yet"
     },
     "maximum_updates": 4096,
@@ -265,8 +301,8 @@
     }
   },
   "status": {
-    "stage": "v2_completed_regression_diagnosed",
-    "active_work": "V2 completed4096 updates and all evaluations;108-frame paired diagnosis and actual query-support analysis completed without updates; retain mean1152 as strongest evaluated model; next are targeted short controls before choosing V3",
+    "stage": "targeted_controls_prepared",
+    "active_work": "V2 regression diagnosed; A/B/C1024 control implementation and required checks completed, including fresh-A decision. Prepare to execute all three without architecture or learning-rate-cycle changes.",
     "model_defined": true,
     "training_defined": true,
     "formal_ajae_v1": "context_supported_conditional_return_relationship_network",
@@ -5777,5 +5813,55 @@
       "decision": "All three complete-val19 metrics improved. Adopt mean1152 as the new improved starting point, retain1024 as the historical reference, exclude increase protection from the current method, and stop this task without further training or evaluation.",
       "interpretation": "A full-development improvement after128 additional mean-recipe updates is verified, but only4/19 sequence APs and7/19 sequence FPR95s improve. This is not uniform scene improvement, an independent test, proof of either mechanism, or resolution of late-training degradation. Existing difficult-normal paired findings retain their fixed32-frame scope."
     }
+  },
+  "controls": {
+    "configuration": "protocol/control.json",
+    "authorization": "three separate same-budget controls; unchanged architecture and original V2 LR prefix; no B+C combination",
+    "status": "implemented_and_verified_before_training",
+    "goal": "retain difficult-normal improvements while recovering real-anomaly ranking",
+    "updates_per_arm": 1024,
+    "arms": {
+      "A": "unchanged V2 recipe, fresh trajectory",
+      "B": "only fixed parent BN statistics in training and evaluation, affine parameters train",
+      "C": "only anomaly loss reduction changes from positive-frame mean to batch-positive-point mean"
+    },
+    "common_parent": "results/keep/mean/1152.pt",
+    "learning_rate_total_updates": 4096,
+    "seed": 20260915,
+    "unchanged": [
+      "model architecture",
+      "physical data",
+      "frame probabilities",
+      "native condition slots",
+      "request and query random streams",
+      "normal risk",
+      "keep risk",
+      "optimizer settings",
+      "learning-rate prefix",
+      "evaluation point sets and metrics"
+    ],
+    "reference_verification": "results/control/reference.json",
+    "reuse_historical_A": false,
+    "reference_limitation": "Initial tensors, preprocessing, RNG, all2048 draws and1024 learning rates agree. First loss components equal historical values exactly, but original-code repetition and original/current gradient comparisons exceed the existing elementwise tolerance; do not claim bitwise replay or relax tolerance. Run fresh A.",
+    "validation": {
+      "regression_tests": 141,
+      "real_isolated_updates": 8,
+      "parent_BN_buffers_fixed_in_B": true,
+      "BN_affine_tensors_updated": 26,
+      "formal_updates": 0
+    },
+    "evaluation": [
+      "full val19:1960 eligible frames",
+      "same fixed108 real diagnosis, captured in full pass",
+      "fixed real152, captured in full pass",
+      "repaired fixed synthetic32",
+      "paired normals"
+    ],
+    "planned_outputs": {
+      "A": "results/control/A",
+      "B": "results/control/B",
+      "C": "results/control/C"
+    },
+    "scientific_result": null
   }
 }

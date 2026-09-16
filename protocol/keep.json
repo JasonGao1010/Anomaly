@@ -8,8 +8,8 @@
   "maximum_updates": 1152,
   "loss_overrides": {},
   "arms": {
-    "mean": {"keep_mode": "mean"},
-    "increase": {"keep_mode": "increase"}
+    "mean": {"loss": {"keep_mode": "mean"}},
+    "increase": {"loss": {"keep_mode": "increase"}}
   },
   "candidate": "0.5*mean(softplus(before)+relu(softplus(after)-stop_gradient(softplus(before)))); baseline term retains its gradient; ReLU has zero derivative at equality; original keep weight1 and completed warmup/ramp retained; tail0",
   "sampling": "original frozen240-world probabilities and requests for global updates1025 through1152; two scans per update; same query and retained-normal identities; no new sampling stream",

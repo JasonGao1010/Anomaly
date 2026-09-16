@@ -35,7 +35,7 @@ def validate_config(config):
                 or source.get("filename") != "nuscenes-semseg-litept-small-v1m1/model/model_best.pth"
                 or source.get("sha256") != "95f151f6edcfbf315cd06df6afd261f2a2fde300d3c693dd26b1305d642ecc30"
                 or m.get("intensity_transform") != "identity_raw_stu_no_clip"
-                or m.get("backbone_batchnorm") != "train_batch_eval_running"
+                or m.get("backbone_batchnorm") not in {"train_batch_eval_running", "fixed_parent_running"}
                 or not 0 < t.get("backbone_learning_rate", 0) <= t["learning_rate"]):
             raise ValueError("incomplete pretrained source, input rule or fine-tuning configuration")
     elif "pretrained" in config or "backbone_learning_rate" in t:
@@ -67,6 +67,7 @@ def validate_config(config):
             or not 0 < schedule["start_factor"] <= 1 or not 0 < schedule["end_factor"] <= 1):
         raise ValueError("invalid continuous learning-rate schedule")
     if (loss["keep_mode"] not in {"worst", "mean", "increase"}
+            or loss.get("anomaly_reduction", "frame") not in {"frame", "point"}
             or min(loss["keep_weight"], loss["tail_weight"], loss["margin"]) < 0
             or loss["temperature"] <= 0 or loss["pairs_per_tail"] < 1
             or any(not 0 < loss[k] <= 1 for k in ("normal_tail_fraction", "anomaly_tail_fraction"))):
@@ -379,6 +380,16 @@ class AJAE(nn.Module):
         self.relations = nn.ModuleList([RelationLayer(c) for _ in range(m["relation_layers"])])
         self.base_head = _mlp(2 * c + 8, 128, 1)
         self.relation_head = _mlp(2 * c + 8, 128, 1)
+        self.train()
+
+    def train(self, mode=True):
+        super().train(mode)
+        if self.config.get("backbone_batchnorm") == "fixed_parent_running":
+            # Freeze inherited statistics in every forward; affine parameters still learn.
+            for module in self.modules():
+                if isinstance(module, nn.modules.batchnorm._BatchNorm):
+                    module.eval()
+        return self
 
     def forward(self, scan, query=None, *, return_features=False, trace=None):
         n, m = len(scan["xyzi"]), self.config

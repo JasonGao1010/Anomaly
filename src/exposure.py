@@ -26,7 +26,7 @@ def failure_support(log_path, data_root):
     log_path = Path(log_path)
     config = json.loads((log_path.parent / "config.json").read_text())
     if "group_queries" not in config["training"]:
-        raise ValueError("failure support requires the V2 frame-weighted query definition")
+        raise ValueError("failure support requires the V2 grouped query definition")
     dataset = TrainingFrames(config, data_root)
     inventory = json.loads((PROJECT_ROOT / "results/coverage/inventory.json").read_text())
     worlds = {row["identity"]: row for row in inventory["worlds"]}
@@ -86,7 +86,8 @@ def failure_support(log_path, data_root):
                     or int(((distance >= 35) & (distance <= 50)).sum()) != row["anomaly_queries_far"]
                     or int(((distance >= 2.5) & (distance <= 50)).sum()) != row["anomaly_queries_in_range"]):
                 raise ValueError("actual positive queries disagree with saved exposure counts")
-            actual, pooled = .5 / positives, .5 * n / queries
+            pooled = .5 * n / queries
+            actual = pooled if config["loss"].get("anomaly_reduction", "frame") == "point" else .5 / positives
             group = counts[list(counts)[int(np.searchsorted([5, 20, 100, 500], n, side="right"))]]
             group["draws"] += 1
             group["queries"] += n
@@ -126,7 +127,8 @@ def failure_support(log_path, data_root):
         normal_sparse_risk_fraction=sparse_mass / (steps * config["training"]["batch_frames"]),
         seconds=time.perf_counter()-started,
         definitions="near=[2.5,10)m; middle=[10,20)m; dense=at least100 actual inserted returns in[2.5,50]m; dark=raw intensity<0.05",
-        limits="coarse observed-return support, not semantic equivalence or gradient influence; point-pooled masses are a mathematical counterfactual on identical draws, not an executed training control")
+        anomaly_reduction=config["loss"].get("anomaly_reduction", "frame"),
+        limits="coarse observed-return support, not semantic equivalence or gradient influence; point-pooled masses describe the same queries and are actual only for the point-reduction arm")
 
 
 def _initialize(config, data_root, records, worlds, geometry):
@@ -250,8 +252,10 @@ def summarize(rows, config, steps):
                 if "frame_risk_mass" in row:
                     counts = row["frame_risk_mass"][name]
                     positives = sum(r["anomaly"] > 0 for r in batch)
+                    positive_weight = (row["anomaly"] / max(totals["anomaly"], 1)
+                        if config["loss"].get("anomaly_reduction", "frame") == "point" else 1 / max(positives, 1))
                     mass = dict(normal=.5 * counts["normal"] / batch_size,
-                        anomaly=.5 * counts["anomaly"] / max(positives, 1),
+                        anomaly=.5 * counts["anomaly"] * positive_weight,
                         keep=counts["keep"] / batch_size if row["keep_active"] else 0.)
                 else:
                     counts = row["sparse_sides"] if name == SPARSE else row

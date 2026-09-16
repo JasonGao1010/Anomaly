@@ -17,6 +17,39 @@ from src.scene import PointLabels, make_source_frame
 from vendor.stu.compute_point_level_ood import PointOODMetricsCalculator
 
 
+def test_control_diagnostic_reuses_full_prediction_with_exact_point_identity(tmp_path, monkeypatch):
+    import json
+    from src.data import source_identity
+    from src.evaluate import evaluate_diagnostic
+    reference, output = tmp_path / "source", tmp_path / "candidate"
+    reference.mkdir()
+    output.mkdir()
+    xyzi = np.tile(np.array([10., 0., 0., .2], np.float32), (7, 1))
+    semantic = np.array([40, 40, 2, 2, 2, 2, 2], np.uint16)
+    labels = PointLabels(semantic.astype(np.uint32), semantic, np.zeros(7, np.uint16), np.zeros(7, np.uint8))
+    source = make_source_frame(0, xyzi, np.eye(4), labels, partition="val", sequence_id=125)
+    frames = [dict(sequence=125, frame=0, file="125_0.npz", source_identity=source_identity(source))]
+    manifest = dict(frames=frames, full_validation_thresholds=[1., 1.])
+    (reference / "selection.json").write_text(json.dumps(manifest))
+    original = np.array([-3, 1, 1, 2, 3, 4, 5], np.float32)
+    np.savez_compressed(reference / "125_0.npz", scores=np.tile(original, (3, 3, 1)),
+        target=(semantic == 2).astype(np.int8), source_slot=np.arange(7), shell_counts=np.full((7, 3), 8))
+    checkpoint = output / "1024.pt"
+    checkpoint.touch()
+    (output / "1024_val.json").write_text(json.dumps(dict(checkpoint=str(checkpoint),
+        official_high_recall=dict(threshold=-9.))))
+    monkeypatch.setattr("src.evaluate.STUSequence.open", lambda *args, **kwargs: {0: source})
+    monkeypatch.setattr("src.train.load_checkpoint", lambda *args: pytest.fail("captured frames need no inference"))
+    result = evaluate_diagnostic(tmp_path, checkpoint, reference, output, capture={(125, 0): original - 10})
+    assert result["model_forwards"] == 0 and result["reused_frames"] == 1
+    assert result["curves"]["all"]["parent"]["AP"] == result["curves"]["all"]["candidate"]["AP"]
+    assert result["groups"]["all"]["comparisons"]["parent"]["AP_change_pp"] == 0
+    frames[0]["source_identity"] = "changed"
+    (reference / "selection.json").write_text(json.dumps(manifest))
+    with pytest.raises(ValueError, match="identities changed"):
+        evaluate_diagnostic(tmp_path, checkpoint, reference, output, capture={(125, 0): original})
+
+
 def test_paired_scores_preserve_ties_and_ignore_uniform_logit_shift(tmp_path):
     from src.evaluate import paired_score_summary, paired_transitions
     target = np.array([0, 0, 1, 1], np.int8)

@@ -1217,6 +1217,129 @@ def paired_score_summary(directory, manifest):
         boundary="targeted development diagnosis; cannot attribute the full-val19 AP loss or identify a training cause by itself")
 
 
+def evaluate_diagnostic(data_root, checkpoint, source_directory, directory, *, capture=None, reference=None):
+    """Reuse fixed diagnostic identities and parent scores; retain only new final scores."""
+    from .model import ScanTransform
+    from .train import load_checkpoint, evaluation_state
+    checkpoint, source_directory, directory = map(Path, (checkpoint, source_directory, directory))
+    reference = Path(reference).resolve() if reference is not None else None
+    if reference == checkpoint.resolve():
+        reference = None
+    manifest = json.loads((source_directory / "selection.json").read_text())
+    frames = manifest["frames"]
+    result_path = directory / f"{checkpoint.stem}_diagnostic.json"
+    score_path = result_path.with_suffix(".npz")
+    if result_path.exists():
+        result = json.loads(result_path.read_text())
+        if (result["frames"] != frames or Path(result["checkpoint"]).resolve() != checkpoint.resolve()
+                or result["reference"] != (str(reference) if reference is not None else None)
+                or Path(result["source_directory"]).resolve() != source_directory.resolve()
+                or checkpoint.stat().st_mtime_ns > result_path.stat().st_mtime_ns):
+            raise ValueError("cached diagnostic checkpoint or source identities changed")
+        return result
+    directory.mkdir(parents=True, exist_ok=True)
+    readers = {key: STUSequence.open(data_root, protocol=load_protocol(), partition="val",
+        sequence_id=key, label_mode=LabelMode.REQUIRED) for key in {r["sequence"] for r in frames}}
+    capture = {} if capture is None else capture
+    missing = any(capture.get((r["sequence"], r["frame"])) is None for r in frames)
+    model, saved = load_checkpoint(checkpoint) if missing else (None, None)
+    transform = ScanTransform(saved["config"], state=saved["preprocessing"], workers=4) if missing else None
+    scores, labels, sparse, parent_scores = [], [], [], []
+    forwards, started = 0, time.perf_counter()
+    for i, record in enumerate(frames, 1):
+        source = readers[record["sequence"]][record["frame"]]
+        if source_identity(source) != record["source_identity"]:
+            raise ValueError("diagnostic source differs from the original fixed frame")
+        target, eligible = official_targets(source)
+        valid = target >= 0
+        if not eligible:
+            raise ValueError("fixed diagnostic frame is no longer eligible")
+        values = capture.get((record["sequence"], record["frame"]))
+        if values is None:
+            with evaluation_state(model):
+                values, _, _ = official_frame(source, model.predict(source, transform))
+            forwards += 1
+        with np.load(source_directory / record["file"], allow_pickle=False) as original:
+            if (not np.array_equal(np.flatnonzero(valid), original["source_slot"])
+                    or not np.array_equal(target[valid], original["target"])):
+                raise ValueError("diagnostic labels or return slots differ from the paired reference")
+            parent_scores.append(original["scores"][0, 2].copy())
+            sparse.append(original["shell_counts"].sum(axis=1) < 8)
+        scores.append(np.asarray(values[valid], dtype=np.float32))
+        labels.append(target[valid])
+        if i % 24 == 0 or i == len(frames):
+            print(f"固定诊断 {i}/{len(frames)} 新推理={forwards} 用时={time.perf_counter()-started:.1f}s", flush=True)
+    target, support = np.concatenate(labels), np.concatenate(sparse)
+    index = np.concatenate([np.full(len(row), i, np.int16) for i, row in enumerate(labels)])
+    scores = np.concatenate(scores)
+    modes = dict(parent=np.concatenate(parent_scores))
+    thresholds = [manifest["full_validation_thresholds"][0]]
+    if reference is not None and Path(reference).resolve() != checkpoint.resolve():
+        reference_path = Path(reference).with_name(Path(reference).stem + "_diagnostic.json")
+        baseline = json.loads(reference_path.read_text())
+        if (baseline["frames"] != frames or Path(baseline["checkpoint"]).resolve() != Path(reference).resolve()
+                or Path(reference).stat().st_mtime_ns > reference_path.stat().st_mtime_ns):
+            raise ValueError("control reference changed its checkpoint or fixed point identities")
+        with np.load(reference_path.with_suffix(".npz"), allow_pickle=False) as original:
+            modes["A"] = original["scores"]
+        thresholds.append(baseline["full_validation_thresholds"][-1])
+    modes["candidate"] = scores
+    full = json.loads(checkpoint.with_name(checkpoint.stem + "_val.json").read_text())
+    if Path(full["checkpoint"]).resolve() != checkpoint.resolve():
+        raise ValueError("diagnostic threshold does not belong to this complete validation result")
+    thresholds.append(full["official_high_recall"]["threshold"])
+    sequence = np.array([r["sequence"] for r in frames])[index]
+    positive = target == 1
+    groups = {"all": np.ones(len(target), bool)}
+    groups.update({str(key): sequence == key for key in sorted(set(sequence))})
+    curves, precision, overtakes = {}, {}, {}
+    for group, use in groups.items():
+        curves[group] = {}
+        for name, values in modes.items():
+            observer = APAttribution()
+            curve = exact_metrics(np.sort(packed_scores(values[use], target[use], score_kind="logit")),
+                score_kind="logit", observe=observer)
+            for label, kind in ((0, "normal"), (1, "anomaly")):
+                selected = values[use & (target == label)].astype(np.float64)
+                curve[kind + "_loss"] = float(np.logaddexp(0., (1 - 2 * label) * selected).mean())
+            curves[group][name] = curve
+            if group == "all":
+                precision[name], rate = observer.values(values[positive])
+                overtakes[name] = rate * (target == 0).sum()
+            if name == "candidate":
+                print_metrics(f"固定诊断 {group}", curve)
+    # Subgroup attribution uses the same complete diagnostic ranking, not subgroup AP.
+    counts = np.bincount(index[positive], minlength=len(frames))[index]
+    groups.update(normal_support_below8=support, normal_support_at_least8=~support)
+    for key in sorted(set(sequence)):
+        for low, high in ((5, 20), (20, 100), (100, np.inf)):
+            groups[f"{key}/frame_anomaly_count/{low}-{high}"] = (sequence == key) & (counts >= low) & (counts < high)
+    details = {}
+    for group, use in groups.items():
+        pos = use[positive]
+        item = dict(normal_points=int((use & ~positive).sum()), anomaly_points=int(pos.sum()), comparisons={})
+        for i, name in enumerate(modes):
+            if name == "candidate":
+                continue
+            item["comparisons"][name] = dict(
+                full95=paired_transitions(target[use], modes[name][use], scores[use], [thresholds[i], thresholds[-1]]),
+                diagnostic95=paired_transitions(target[use], modes[name][use], scores[use],
+                    [curves["all"][name]["official_high_recall"]["threshold"], curves["all"]["candidate"]["official_high_recall"]["threshold"]]),
+                AP_change_pp=float(100 * (precision["candidate"][pos] - precision[name][pos]).sum() / positive.sum()))
+        if pos.any():
+            item["mean_normal_overtakes"] = {name: float(values[pos].mean()) for name, values in overtakes.items()}
+        details[group] = item
+    np.savez_compressed(score_path, scores=scores)
+    result = dict(checkpoint=str(checkpoint.resolve()), reference=str(reference) if reference is not None else None,
+        source_directory=str(source_directory.resolve()), frames=frames, curves=curves, groups=details,
+        modes=list(modes), full_validation_thresholds=thresholds, model_forwards=forwards,
+        reused_frames=len(frames)-forwards, seconds=time.perf_counter()-started,
+        normal_count=int((target == 0).sum()), anomaly_count=int(positive.sum()),
+        boundary="fixed real development diagnosis; subgroup precision contributions use the same pooled ranking; full-val19 decides whether the checkpoint improves on1152")
+    _atomic_json(result_path, result)
+    return result
+
+
 def compare_scores(data_root, checkpoint, reference, declaration, sequences, extra_frames, directory, *, additional=()):
     """Compare the declared parent, V2, and V2 with only parent BN buffers."""
     import torch
@@ -1551,6 +1674,7 @@ def main():
     inputs.add_argument("--pair-thresholds", type=Path, help="reuse a fixed result's saved paired scores at both pooled operating thresholds")
     parser.add_argument("--synthetic", action="store_true", help="evaluate complete frozen 201 validation worlds")
     parser.add_argument("--fixed", type=Path, help="evaluate a declared finite-learning checkpoint scope")
+    parser.add_argument("--arm", help="arm explicitly listed in the fixed experiment declaration")
     parser.add_argument("--parent-reference", action="store_true", help="evaluate the declared V2 parent on repaired fixed synthetic frames")
     parser.add_argument("--pairs", type=Path, help="only paired normal witnesses; reuse the threshold from this checkpoint's fixed result")
     parser.add_argument("--scores", action="store_true", help="same-forward base, relation and final scores on the declared 206/real scope")
@@ -1558,9 +1682,12 @@ def main():
     parser.add_argument("--compare", type=Path, help="with --scores, compare this stage's parent and a parent-BN-only intervention on explicit real sequences")
     parser.add_argument("--extra-frames", type=int, default=16, help="additional equally spaced eligible frames per comparison sequence")
     parser.add_argument("--frame", action="append", default=[], help="explicit sequence/frame to add to an existing paired comparison")
+    parser.add_argument("--diagnostic-from", type=Path, help="reuse this paired diagnosis's fixed frames and parent scores")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--sequence", type=int, action="append")
     args = parser.parse_args()
+    if args.arm is not None and args.fixed is None:
+        parser.error("--arm requires --fixed")
     if args.parent_reference and (args.fixed is None or args.checkpoint is None or args.scores or args.pairs is not None):
         parser.error("--parent-reference requires only --fixed and its declared parent checkpoint")
     if ((args.scores and (args.fixed is None or args.checkpoint is None or args.pairs is not None))
@@ -1578,6 +1705,14 @@ def main():
         return
     if args.data_root is None:
         parser.error("prediction evaluation requires --data-root")
+    if args.diagnostic_from is not None:
+        if (args.checkpoint is None or args.fixed is not None or args.synthetic or args.scores
+                or args.compare is not None or args.sequence is not None or args.pairs is not None):
+            parser.error("--diagnostic-from requires only a checkpoint and existing fixed diagnosis")
+        import torch
+        torch.set_num_threads(4)
+        evaluate_diagnostic(args.data_root, args.checkpoint, args.diagnostic_from, args.output)
+        return
     if args.compare is not None:
         if not args.scores or args.scan_statistics or args.synthetic or args.parent_reference or not args.sequence:
             parser.error("--compare requires --scores --fixed --checkpoint and explicit --sequence values")
@@ -1590,7 +1725,7 @@ def main():
                 raise ValueError
         except ValueError:
             parser.error("--frame must be sequence/frame")
-        compare_scores(args.data_root, args.checkpoint, args.compare, load_experiment(args.fixed),
+        compare_scores(args.data_root, args.checkpoint, args.compare, load_experiment(args.fixed, args.arm),
                        args.sequence, args.extra_frames, args.output, additional=additional)
         return
     if args.frame:
@@ -1601,7 +1736,7 @@ def main():
         import torch
         from .model import ScanTransform
         from .train import load_checkpoint, load_experiment, evaluation_state, experiment_config, validate_stage_parent
-        declaration = load_experiment(args.fixed)
+        declaration = load_experiment(args.fixed, args.arm)
         torch.set_num_threads(4)
         model, saved = load_checkpoint(args.checkpoint)
         if args.parent_reference:

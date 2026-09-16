@@ -1,0 +1,27 @@
+{
+  "control_of": "protocol/v2.json",
+  "scope": "Independent1024-update controls from mean1152; retain difficult-normal improvements and recover real-anomaly ranking, without architecture changes.",
+  "question": "Does fixing parent BN statistics or point-pooling only the anomalous loss help under the identical original V2 schedule prefix?",
+  "maximum_updates": 1024,
+  "checkpoint_steps": [1024],
+  "arms": {
+    "A": {},
+    "B": {"model": {"backbone_batchnorm": "fixed_parent_running"}},
+    "C": {"loss": {"anomaly_reduction": "point"}}
+  },
+  "reference_checkpoint": "results/control/A/1024.pt",
+  "diagnostic_from": "results/v2_diagnosis",
+  "evaluation": {
+    "synthetic_steps": [1024],
+    "real_steps": [1024],
+    "paired_normal_steps": [1024],
+    "synthetic_splits": ["train"],
+    "full_val19_steps": [1024],
+    "full_synthetic_steps": [],
+    "normalization_steps": [],
+    "primary": "Complete val19 against both A1024 and parent1152; fixed108 real frames diagnose factor effects, while fixed206_32, normal pairs and real152 retain their original scopes."
+  },
+  "initialization": "All arms inherit the exact mean1152 parameters, BN buffers and preprocessing, then reset optimizer and random streams identically; B keeps parent BN buffers fixed but trains affine parameters.",
+  "risk": "A/B retain V2 frame means. C changes only anomaly risk to mean across all queried positives in the two-frame batch; empty-positive batches contribute zero. Normal and keep terms are unchanged.",
+  "stop": "Run all three arms for1024 local updates and all declared evaluations; schedule total_updates remains4096. Historical A has identical recipe and draws, but CUDA gradient replay did not satisfy the original elementwise tolerance, including original-code repetition; use a fresh A. No B+C combination or automatic extension."
+}
