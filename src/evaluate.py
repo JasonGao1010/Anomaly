@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 from contextlib import ExitStack
+import csv
 import gzip
 import json
 from pathlib import Path
@@ -1073,6 +1074,285 @@ def evaluate_fixed(model, transform, prepared, *, include_real=False, directory=
     return result
 
 
+def paired_transitions(target, left, right, thresholds):
+    """Count decisions on identical slots; each model uses its declared threshold."""
+    accepted = [values >= threshold if threshold is not None else np.zeros(len(target), bool)
+                for values, threshold in zip((left, right), thresholds, strict=True)]
+    result = {}
+    for label, name in ((0, "normal"), (1, "anomaly")):
+        use = target == label
+        a, b = (value[use] for value in accepted)
+        result[name] = dict(points=int(use.sum()), both=int((a & b).sum()),
+            added=int((~a & b).sum()), removed=int((a & ~b).sum()), neither=int((~a & ~b).sum()))
+    return result
+
+
+def paired_point_details(arrays, index, manifest, precision, required):
+    """Localize ranking and decision changes without another model forward."""
+    scores, target, xyzi = (arrays[key] for key in ("scores", "target", "xyzi"))
+    anomaly, normal = target == 1, target == 0
+    distance = np.linalg.norm(xyzi[:, :3], axis=1)
+    # A shell cap of 16 cannot change the predicate 'fewer than 8 in all shells'.
+    sparse = arrays["shell_counts"].sum(axis=1) < 8
+    sequence = np.array([r["sequence"] for r in manifest["frames"]])[index]
+    count = np.bincount(index[anomaly], minlength=len(manifest["frames"]))[index]
+    groups = {"all": np.ones(len(target), bool)}
+    for seq in sorted(set(sequence)):
+        own = sequence == seq
+        groups[str(seq)] = own
+        for low, high in ((2.5, 10), (10, 20), (20, 35), (35, 50.00001)):
+            groups[f"{seq}/range/{low}-{high}"] = own & (distance >= low) & (distance < high)
+        groups[f"{seq}/support/below8"] = own & sparse
+        groups[f"{seq}/support/at_least8"] = own & ~sparse
+        groups[f"{seq}/intensity/below0.05"] = own & (xyzi[:, 3] < .05)
+        groups[f"{seq}/intensity/at_least0.05"] = own & (xyzi[:, 3] >= .05)
+        groups[f"{seq}/frame_anomaly_count/at_least100"] = own & (count >= 100)
+    thresholds = manifest["full_validation_thresholds"]
+    added = normal & (scores[0, 2] < thresholds[0]) & (scores[1, 2] >= thresholds[1])
+    groups["new_normal_false_positives"] = added
+    result = {}
+    for name, use in groups.items():
+        pos, neg = use[anomaly], use & normal
+        item = dict(decisions=paired_transitions(target[use], scores[0, 2, use], scores[1, 2, use], thresholds))
+        if pos.any():
+            item["anomaly"] = dict(points=int(pos.sum()),
+                AP_change_pp=float(100 * (precision[1, 2, pos] - precision[0, 2, pos]).sum() / anomaly.sum()),
+                mean_precision=[float(precision[i, 2, pos].mean()) for i in range(3)],
+                mean_normal_overtakes=[float(required[i, 2, pos].mean() * normal.sum()) for i in range(3)],
+                mean_scores=scores[:, :, use & anomaly].mean(axis=2, dtype=np.float64).tolist())
+        if neg.any():
+            item["normal"] = dict(points=int(neg.sum()), mean_scores=scores[:, :, neg].mean(axis=2, dtype=np.float64).tolist())
+        result[name] = item
+    cases = []
+    positive_rows = np.flatnonzero(anomaly)
+    for k, record in enumerate(manifest["frames"]):
+        candidates = positive_rows[index[anomaly] == k]
+        delta = (precision[1, 2] - precision[0, 2])[index[anomaly] == k]
+        selected = [("anomaly_rank_loss", candidates[int(np.argmin(delta))])]
+        false_positives = np.flatnonzero((index == k) & added)
+        if len(false_positives):
+            selected.append(("new_normal_false_positive", false_positives[np.argmax(scores[1, 2, false_positives])]))
+        for kind, row in selected:
+            cases.append(dict(kind=kind, sequence=record["sequence"], frame=record["frame"],
+                source_slot=int(arrays["source_slot"][row]), instance=int(arrays["instance"][row]),
+                semantic=int(arrays["semantic"][row]), xyzi=xyzi[row].tolist(), range_m=float(distance[row]),
+                shell_counts=arrays["shell_counts"][row].tolist(), scores=scores[:, :, row].tolist()))
+    return dict(groups=result, cases=cases,
+        definitions="official point range; full-scan distinct-position support at 2m; intensity0.05 and count100 are descriptive diagnostic cuts, not new model thresholds")
+
+
+def paired_score_summary(directory, manifest):
+    """Reuse bounded, lossless scores; attribute AP changes to the same anomalies."""
+    directory = Path(directory)
+    frames = []
+    for record in manifest["frames"]:
+        with np.load(directory / record["file"], allow_pickle=False) as saved:
+            frames.append({key: saved[key] for key in saved.files})
+    arrays = {key: np.concatenate([row[key] for row in frames], axis=2 if key == "scores" else 0)
+              for key in frames[0]}
+    index = np.concatenate([np.full(len(row["target"]), i, np.int16) for i, row in enumerate(frames)])
+    del frames
+    scores, target = arrays["scores"], arrays["target"]
+    positive = target == 1
+    sequence = np.array([r["sequence"] for r in manifest["frames"]])[index]
+    old = np.array([r["historical"] for r in manifest["frames"]])[index]
+    modes, components = manifest["modes"], manifest["components"]
+    groups = {"all": np.ones(len(target), bool), "historical": old, "additional": ~old}
+    groups.update({str(key): sequence == key for key in sorted(set(sequence))})
+    results, precision, required = {}, np.empty((3, 3, int(positive.sum()))), np.empty((3, 3, int(positive.sum())))
+    local_precision = np.empty((3, int(positive.sum())))
+    for group, use in groups.items():
+        if not use.any():
+            continue
+        results[group] = {}
+        for i, mode in enumerate(modes):
+            results[group][mode] = {}
+            for j, component in enumerate(components):
+                values, labels = scores[i, j, use], target[use]
+                observer = APAttribution()
+                curve = exact_metrics(np.sort(packed_scores(values, labels, score_kind="logit")),
+                    score_kind="logit", observe=observer)
+                curve["mean_score"] = {name: float(values[labels == label].mean(dtype=np.float64))
+                                       for label, name in ((0, "normal"), (1, "anomaly"))}
+                for label, name in ((0, "normal"), (1, "anomaly")):
+                    curve[name + "_loss"] = float(np.logaddexp(0., (1 - 2 * label) *
+                        values[labels == label].astype(np.float64)).mean())
+                results[group][mode][component] = curve
+                if group == "all":
+                    precision[i, j], required[i, j] = observer.values(values[labels == 1])
+                elif group not in ("historical", "additional") and component == "final":
+                    local_precision[i, use[positive]] = observer.values(values[labels == 1])[0]
+            print_metrics(f"配对诊断 {group} {mode}", results[group][mode]["final"])
+    # Mean precision at each complete positive-score tie is exactly pooled AP.
+    for i, mode in enumerate(modes):
+        for j, component in enumerate(components):
+            if not np.isclose(100 * precision[i, j].mean(), results["all"][mode][component]["AP"], atol=1e-10, rtol=0):
+                raise ValueError("point attribution does not reproduce exact pooled AP")
+    np.savez_compressed(directory / "anomalies.npz", frame_index=index[positive],
+        source_slot=arrays["source_slot"][positive], sequence=sequence[positive],
+        instance=arrays["instance"][positive], xyzi=arrays["xyzi"][positive],
+        precision=precision, required_fpr=required, within_sequence_precision=local_precision)
+    thresholds = manifest["full_validation_thresholds"]
+    local_thresholds = [results["all"][mode]["final"]["official_high_recall"]["threshold"] for mode in modes]
+    transitions = {}
+    for group, use in groups.items():
+        if not use.any():
+            continue
+        transitions[group] = dict(
+            historical_global95=paired_transitions(target[use], scores[0, 2, use], scores[1, 2, use], thresholds),
+            diagnostic95=paired_transitions(target[use], scores[0, 2, use], scores[1, 2, use], local_thresholds[:2]),
+            diagnostic95_bn=paired_transitions(target[use], scores[1, 2, use], scores[2, 2, use], local_thresholds[1:]))
+    frame_results = []
+    for k, record in enumerate(manifest["frames"]):
+        use, anomaly_use = index == k, index[positive] == k
+        frame_results.append(dict(record,
+            decisions=paired_transitions(target[use], scores[0, 2, use], scores[1, 2, use], thresholds),
+            AP_change_pp=float(100 * (precision[1, 2, anomaly_use] - precision[0, 2, anomaly_use]).sum() / positive.sum()),
+            normal_overtakes_mean=[float(required[i, 2, anomaly_use].mean() * (target == 0).sum()) for i in range(3)]))
+    return dict(curves=results, transitions=transitions, frames=frame_results,
+        points=paired_point_details(arrays, index, manifest, precision, required),
+        normal_count=int((target == 0).sum()), anomaly_count=int(positive.sum()),
+        diagnostic95_thresholds=local_thresholds,
+        attribution="mean complete-tie precision equals AP; required_fpr counts same-pool normals scoring at least each anomaly",
+        boundary="targeted development diagnosis; cannot attribute the full-val19 AP loss or identify a training cause by itself")
+
+
+def compare_scores(data_root, checkpoint, reference, declaration, sequences, extra_frames, directory, *, additional=()):
+    """Compare the declared parent, V2, and V2 with only parent BN buffers."""
+    import torch
+    from .model import ScanTransform
+    from .train import load_checkpoint, evaluation_state, normalization_mode, validate_stage_parent, experiment_config
+    if not sequences or len(set(sequences)) != len(sequences) or extra_frames < 0:
+        raise ValueError("comparison needs distinct explicit sequences and a nonnegative extra-frame count")
+    directory = Path(directory)
+    previous = None
+    if directory.exists() and any(directory.iterdir()):
+        if not additional:
+            raise ValueError("comparison exists; reuse its scores or explicitly add diagnostic frames")
+        previous = json.loads((directory / "selection.json").read_text())
+        for key, path in (("checkpoint", checkpoint), ("reference", reference)):
+            if (Path(previous[key]).resolve() != Path(path).resolve()
+                    or Path(path).stat().st_mtime_ns > (directory / "selection.json").stat().st_mtime_ns):
+                raise ValueError("cached comparison checkpoint changed")
+    model, saved = load_checkpoint(checkpoint)
+    parent, historical = load_checkpoint(reference)
+    if saved.get("experiment", saved.get("micro")) != declaration:
+        raise ValueError("comparison declaration differs from the evaluated checkpoint")
+    if Path(reference).resolve() != (PROJECT_ROOT / declaration["warm_start"]["checkpoint"]).resolve():
+        raise ValueError("comparison reference is not the declared stage parent")
+    validate_stage_parent(historical, experiment_config(declaration), declaration)
+    if saved["config"]["model"] != historical["config"]["model"]:
+        raise ValueError("shared preprocessing requires identical model input configuration")
+    for key, value in saved["preprocessing"].items():
+        other = historical["preprocessing"][key]
+        if not (torch.equal(value, other) if isinstance(value, torch.Tensor) else value == other):
+            raise ValueError(f"parent and evaluated preprocessing differ: {key}")
+    with (PROJECT_ROOT / "results/profile/tables/frames.csv").open(encoding="utf-8-sig") as stream:
+        eligible = list(csv.DictReader(stream))
+    frames = []
+    for sequence in sequences:
+        original = declaration["selection"]["val"][str(sequence)]
+        remaining = sorted(int(row["frame"]) for row in eligible
+                           if int(row["sequence"]) == sequence and int(row["state"]) == 3
+                           and int(row["frame"]) not in original)
+        extra = [remaining[i] for i in np.linspace(0, len(remaining) - 1,
+                 min(extra_frames, len(remaining))).astype(int)] if remaining else []
+        frames.extend(dict(sequence=sequence, frame=frame, historical=frame in original,
+            file=f"{sequence}_{frame}.npz") for frame in sorted(original + extra))
+    cached = {(r["sequence"], r["frame"]): r for r in previous["frames"]} if previous else {}
+    if previous and not {(r["sequence"], r["frame"]) for r in frames}.issubset(cached):
+        raise ValueError("extension changed the original diagnostic selection")
+    if previous:
+        frames = list(previous["frames"])
+    for sequence, frame in additional:
+        if sequence not in sequences:
+            raise ValueError("additional frame is outside the explicit diagnostic sequences")
+        if not any(r["sequence"] == sequence and r["frame"] == frame for r in frames):
+            frames.append(dict(sequence=sequence, frame=frame, historical=False, file=f"{sequence}_{frame}.npz"))
+    # Scores, point identities and geometry stay below a conservative per-slot bound.
+    volume = host_disk()
+    peak_bytes = len(frames) * 131072 * 96 + 2**30
+    if peak_bytes > volume["SizeRemaining"] - volume["reserve_bytes"]:
+        raise OSError("paired scores and metric workspaces would invade the host E: reserve")
+    metric_paths = [Path(reference).parent / "global.json", Path(checkpoint).with_name(Path(checkpoint).stem + "_val.json")]
+    metrics = [json.loads(path.read_text()) for path in metric_paths]
+    for path, record, expected in zip(metric_paths, metrics, (reference, checkpoint), strict=True):
+        if Path(record["checkpoint"]).resolve() != Path(expected).resolve():
+            raise ValueError(f"historical threshold checkpoint differs: {path}")
+    manifest = dict(checkpoint=str(Path(checkpoint).resolve()), reference=str(Path(reference).resolve()),
+        steps=[historical["step"], saved["step"]], frames=frames,
+        selection="retain historical eight per sequence; add equally spaced eligible frame indices excluding them; chosen before inference",
+        modes=["parent", "v2", "v2_parent_bn"], components=["base", "relation", "final"],
+        full_validation_metrics=[str(path) for path in metric_paths],
+        full_validation_thresholds=[record["official_high_recall"]["threshold"] for record in metrics],
+        host_E_before=volume, peak_write_budget_bytes=peak_bytes, resources_before=runtime_resources())
+    if previous:
+        manifest["previous_scope"] = dict(frames=len(previous["frames"]),
+            model_forwards=previous["model_forwards"], inference_seconds=previous["inference_seconds"],
+            curves=json.loads((directory / "comparison.json").read_text())["curves"])
+        manifest["pilot"] = previous["pilot"]
+        manifest["additional_frames"] = [list(pair) for pair in additional]
+    directory.mkdir(parents=True, exist_ok=True)
+    _atomic_json(directory / "selection.json", manifest)
+    transform = ScanTransform(saved["config"], state=saved["preprocessing"], workers=4)
+    readers = {key: STUSequence.open(data_root, protocol=load_protocol(), partition="val",
+               sequence_id=key, label_mode=LabelMode.REQUIRED) for key in sequences}
+    started = time.perf_counter()
+    forwards = 0
+    torch.cuda.reset_peak_memory_stats()
+    with evaluation_state(parent), evaluation_state(model):
+        for k, record in enumerate(frames, 1):
+            source = readers[record["sequence"]][record["frame"]]
+            target, valid_frame = official_targets(source)
+            if not valid_frame:
+                raise ValueError("selected diagnostic frame no longer satisfies official eligibility")
+            if (record["sequence"], record["frame"]) in cached:
+                if source_identity(source) != record["source_identity"]:
+                    raise ValueError("cached diagnostic source changed")
+                continue
+            scan, valid = transform(source), target >= 0
+            record["source_identity"] = source_identity(source)
+            scores = []
+            for evaluated, buffers in ((parent, None), (model, None), (model, parent)):
+                with normalization_mode(evaluated, reference=buffers):
+                    output = evaluated.predict(source, prepared=scan, components=True)
+                parts = np.stack([output[name].restore(source)[valid] for name in manifest["components"]])
+                if not np.array_equal(parts[0] + parts[1], parts[2]):
+                    raise ValueError("same-forward components do not reconstruct the final float32 scores")
+                scores.append(parts)
+                forwards += 1
+            if "pilot" not in manifest:
+                plain = model.predict(source, prepared=scan).restore(source)[valid]
+                if not np.array_equal(plain, scores[1][2]):
+                    raise ValueError("component capture differs from the authoritative prediction")
+                manifest["pilot"] = dict(sequence=record["sequence"], frame=record["frame"],
+                    ordinary_prediction_exactly_equal=True, extra_forwards=1,
+                    elapsed_seconds=time.perf_counter() - started, resources=runtime_resources())
+                forwards += 1
+            real_valid = valid[source.real_slots]
+            neighbors = scan["neighbors"][scan["geometry_inverse"]][real_valid].numpy()
+            shells = (neighbors.reshape(len(neighbors), 3, -1) >= 0).sum(axis=2).astype(np.uint8)
+            np.savez_compressed(directory / record["file"], scores=np.stack(scores),
+                target=target[valid].astype(np.int8), source_slot=np.flatnonzero(valid).astype(np.int32),
+                xyzi=source.xyzi[valid], semantic=source.labels.semantic[valid], instance=source.labels.instance[valid],
+                shell_counts=shells, condition=scan["condition"][real_valid].numpy())
+            print(f"配对推理 {k}/{len(frames)} 序列={record['sequence']} 帧={record['frame']} 本次前向={forwards} 用时={time.perf_counter()-started:.1f}s", flush=True)
+            if k % 24 == 0:
+                host_disk()
+        for evaluated, state in ((parent, historical), (model, saved)):
+            if any(not torch.equal(value.cpu(), state["model"][key]) for key, value in evaluated.state_dict().items()):
+                raise ValueError("paired inference changed checkpoint parameters or buffers")
+    manifest.update(inference_seconds=time.perf_counter() - started + (previous["inference_seconds"] if previous else 0),
+                    model_forwards=forwards + (previous["model_forwards"] if previous else 0), reused_frames=len(cached),
+                    peak_cuda_allocated_bytes=torch.cuda.max_memory_allocated(), model_and_buffers_unchanged=True)
+    _atomic_json(directory / "selection.json", manifest)
+    result = paired_score_summary(directory, manifest)
+    result.update(inference=manifest, seconds=time.perf_counter() - started,
+                  host_E_after=host_disk(), resources_after=runtime_resources())
+    _atomic_json(directory / "comparison.json", result)
+    return result
+
+
 def evaluate_scores(model, transform, prepared, *, directory=None, include_normalization=False):
     """Same-forward score decomposition, optionally paired with per-scan BN statistics."""
     from .train import normalization_mode
@@ -1275,6 +1555,9 @@ def main():
     parser.add_argument("--pairs", type=Path, help="only paired normal witnesses; reuse the threshold from this checkpoint's fixed result")
     parser.add_argument("--scores", action="store_true", help="same-forward base, relation and final scores on the declared 206/real scope")
     parser.add_argument("--scan-statistics", action="store_true", help="with --scores, also compare per-scan BatchNorm statistics")
+    parser.add_argument("--compare", type=Path, help="with --scores, compare this stage's parent and a parent-BN-only intervention on explicit real sequences")
+    parser.add_argument("--extra-frames", type=int, default=16, help="additional equally spaced eligible frames per comparison sequence")
+    parser.add_argument("--frame", action="append", default=[], help="explicit sequence/frame to add to an existing paired comparison")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--sequence", type=int, action="append")
     args = parser.parse_args()
@@ -1295,6 +1578,23 @@ def main():
         return
     if args.data_root is None:
         parser.error("prediction evaluation requires --data-root")
+    if args.compare is not None:
+        if not args.scores or args.scan_statistics or args.synthetic or args.parent_reference or not args.sequence:
+            parser.error("--compare requires --scores --fixed --checkpoint and explicit --sequence values")
+        import torch
+        from .train import load_experiment
+        torch.set_num_threads(4)
+        try:
+            additional = [tuple(map(int, value.split("/"))) for value in args.frame]
+            if any(len(pair) != 2 for pair in additional):
+                raise ValueError
+        except ValueError:
+            parser.error("--frame must be sequence/frame")
+        compare_scores(args.data_root, args.checkpoint, args.compare, load_experiment(args.fixed),
+                       args.sequence, args.extra_frames, args.output, additional=additional)
+        return
+    if args.frame:
+        parser.error("--frame requires --compare")
     if args.fixed is not None:
         if args.checkpoint is None or args.synthetic or args.sequence is not None:
             parser.error("--fixed requires --checkpoint and its declared development selection")

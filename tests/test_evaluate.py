@@ -17,6 +17,33 @@ from src.scene import PointLabels, make_source_frame
 from vendor.stu.compute_point_level_ood import PointOODMetricsCalculator
 
 
+def test_paired_scores_preserve_ties_and_ignore_uniform_logit_shift(tmp_path):
+    from src.evaluate import paired_score_summary, paired_transitions
+    target = np.array([0, 0, 1, 1], np.int8)
+    base = np.array([-3, 1, 1, 2], np.float32)
+    modes = ["parent", "v2", "v2_parent_bn"]
+    frames = []
+    for i in range(2):
+        file = f"{i}.npz"
+        parts = np.array([[base, np.zeros(4), base],
+                          [base - 10, np.zeros(4), base - 10],
+                          [base, np.zeros(4), base]], np.float32)
+        np.savez_compressed(tmp_path / file, scores=parts, target=target,
+            source_slot=np.arange(4, dtype=np.int32), instance=target.astype(np.uint16),
+            xyzi=np.ones((4, 4), np.float32), semantic=np.where(target, 2, 40).astype(np.uint16),
+            shell_counts=np.full((4, 3), 8, np.uint8))
+        frames.append(dict(sequence=125, frame=i, file=file, historical=i == 0))
+    manifest = dict(frames=frames, modes=modes, components=["base", "relation", "final"],
+                    full_validation_thresholds=[1., -9.])
+    result = paired_score_summary(tmp_path, manifest)
+    assert result["curves"]["all"]["parent"]["final"]["AP"] == pytest.approx(5 / 6 * 100)
+    for row in result["frames"]:
+        assert row["AP_change_pp"] == 0
+        assert row["decisions"]["normal"]["added"] == row["decisions"]["normal"]["removed"] == 0
+    transitions = paired_transitions(target, base, base[::-1], [1, 1])
+    assert transitions["normal"]["added"] == transitions["anomaly"]["removed"] == 1
+
+
 def test_normal_pairs_use_unchanged_slots_and_one_threshold():
     from src.data import FrozenFrame
     from src.evaluate import retained_witness_slots, paired_normal_summary

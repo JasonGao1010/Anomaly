@@ -21,6 +21,114 @@ SPARSE = "normal_sparse_with_nonextreme_anomaly"
 CELLS = (*PHYSICAL, SPARSE)
 
 
+def failure_support(log_path, data_root):
+    """Replay only capped positive queries; inspect actual near, dense and dark support."""
+    log_path = Path(log_path)
+    config = json.loads((log_path.parent / "config.json").read_text())
+    if "group_queries" not in config["training"]:
+        raise ValueError("failure support requires the V2 frame-weighted query definition")
+    dataset = TrainingFrames(config, data_root)
+    inventory = json.loads((PROJECT_ROOT / "results/coverage/inventory.json").read_text())
+    worlds = {row["identity"]: row for row in inventory["worlds"]}
+    names = ("near", "near_dense", "near_dark", "near_dark_dense", "near_bright_dense", "middle_dense")
+    groups = {name: dict(draws=0, queries=0, actual_positive_mass=0., point_pooled_mass=0.,
+        samples=set(), worlds=set(), parents=set(), source_frames=set(), cells=Counter(), world_mass=Counter(),
+        intensity=[]) for name in names}
+    counts = {key: dict(draws=0, queries=0, actual_positive_mass=0., point_pooled_mass=0.)
+              for key in ("1-4", "5-19", "20-99", "100-499", "500+")}
+    cache, capped, steps, queries_total, positive_mass, sparse_mass = {}, 0, 0, 0, 0., 0.
+    started = time.perf_counter()
+    for line in log_path.open():
+        batch = json.loads(line)
+        if batch["step"] != steps + 1:
+            raise ValueError("training log is not a complete ordered update prefix")
+        rows = batch["exposure"]
+        positives, queries = sum(row["anomaly"] > 0 for row in rows), sum(row["anomaly"] for row in rows)
+        steps += 1
+        queries_total += queries
+        positive_mass += .5 * bool(positives)
+        for row in rows:
+            sparse_mass += row["conditions"]["normal_condition_mass"]["sparse"]
+            n = row["anomaly"]
+            if not n:
+                continue
+            sample, draw = row["sample"], row["draw"]
+            path, world, frame = dataset.dataset.samples[sample]
+            if world != row["world"] or frame != row["frame"]:
+                raise ValueError("logged query no longer addresses its original world/frame")
+            if sample not in cache:
+                with np.load(path, allow_pickle=False) as values:
+                    if values["world_identity"].item() != world or values["source_identity"].item() != row["source_identity"]:
+                        raise ValueError("stored positive returns differ from the logged source identity")
+                    slots, inserted = values["source_slot"], values["inserted_slot"]
+                    positions = np.searchsorted(slots, inserted)
+                    if not np.array_equal(slots[positions], inserted):
+                        raise ValueError("inserted slots are absent from the stored physical difference")
+                    cache[sample] = values["xyzi"][positions]
+            full = cache[sample]
+            full_range = np.linalg.norm(full[:, :3], axis=1)
+            dense = np.count_nonzero((full_range >= 2.5) & (full_range <= 50)) >= 100
+            if len(full) > config["training"]["anomaly_queries"]:
+                frozen, _, selected = dataset.queries(sample, draw)
+                detection = selected["query"][selected["detection_index"]].numpy()
+                mask = selected["target"].numpy() == 1
+                xyzi = frozen.source.xyzi[frozen.source.real_slots[detection[mask]]]
+                if int((~mask).sum()) != row["normal"] or len(selected["keep_slot"]) != row["keep"]:
+                    raise ValueError("replayed query stream disagrees with logged normal or keep queries")
+                capped += 1
+            else:
+                xyzi = full
+            distance = np.linalg.norm(xyzi[:, :3], axis=1)
+            near = (distance >= 2.5) & (distance < 10)
+            middle = (distance >= 10) & (distance < 20)
+            dark = xyzi[:, 3] < .05
+            if (len(xyzi) != n or int(near.sum()) != row["anomaly_queries_near"]
+                    or int(((distance >= 35) & (distance <= 50)).sum()) != row["anomaly_queries_far"]
+                    or int(((distance >= 2.5) & (distance <= 50)).sum()) != row["anomaly_queries_in_range"]):
+                raise ValueError("actual positive queries disagree with saved exposure counts")
+            actual, pooled = .5 / positives, .5 * n / queries
+            group = counts[list(counts)[int(np.searchsorted([5, 20, 100, 500], n, side="right"))]]
+            group["draws"] += 1
+            group["queries"] += n
+            group["actual_positive_mass"] += actual
+            group["point_pooled_mass"] += pooled
+            masks = (near, near & dense, near & dark, near & dark & dense, near & ~dark & dense, middle & dense)
+            for name, mask in zip(names, masks, strict=True):
+                selected_n = int(mask.sum())
+                if not selected_n:
+                    continue
+                group = groups[name]
+                group["draws"] += 1
+                group["queries"] += selected_n
+                group["actual_positive_mass"] += actual * selected_n / n
+                group["point_pooled_mass"] += pooled * selected_n / n
+                group["samples"].add(sample)
+                group["worlds"].add(world)
+                group["parents"].add(row["parent"])
+                group["source_frames"].add(frame)
+                group["cells"][worlds[world]["assigned_cell"]] += selected_n
+                group["world_mass"][world] += actual * selected_n / n
+                group["intensity"].append(xyzi[mask, 3])
+        if steps % 1024 == 0:
+            print(f"支持核对 更新={steps} 异常查询={queries_total} 查询重放={capped} 用时={time.perf_counter()-started:.1f}s", flush=True)
+    for group in groups.values():
+        for name in ("samples", "worlds", "parents", "source_frames"):
+            group[name] = len(group[name])
+        group["maximum_world_mass_share"] = max(group["world_mass"].values(), default=0) / (group["actual_positive_mass"] or 1)
+        del group["world_mass"]
+        values = np.concatenate(group.pop("intensity")) if group["queries"] else np.empty(0)
+        group["intensity_quantiles_10_50_90"] = np.quantile(values, [.1, .5, .9]).tolist() if len(values) else None
+    for group in (*groups.values(), *counts.values()):
+        group["actual_positive_mass_fraction"] = group["actual_positive_mass"] / positive_mass
+        group["point_pooled_mass_fraction"] = group["point_pooled_mass"] / positive_mass
+    return dict(log=str(log_path), steps=steps, anomaly_queries=queries_total, groups=groups,
+        frame_query_counts=counts, capped_query_replays=capped,
+        normal_sparse_risk_fraction=sparse_mass / (steps * config["training"]["batch_frames"]),
+        seconds=time.perf_counter()-started,
+        definitions="near=[2.5,10)m; middle=[10,20)m; dense=at least100 actual inserted returns in[2.5,50]m; dark=raw intensity<0.05",
+        limits="coarse observed-return support, not semantic equivalence or gradient influence; point-pooled masses are a mathematical counterfactual on identical draws, not an executed training control")
+
+
 def _initialize(config, data_root, records, worlds, geometry):
     global _frames, _records, _worlds, _geometry, _config
     torch.set_num_threads(1)

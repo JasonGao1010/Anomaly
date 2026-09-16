@@ -686,13 +686,28 @@ class _Numerics:
 
 
 @contextmanager
-def normalization_mode(model, current_scan=False):
-    """Only BatchNorm changes mode; every scan restores the saved running buffers."""
+def normalization_mode(model, current_scan=False, *, reference=None):
+    """Change only BN statistics; restore buffers, modes and RNG even on failure."""
+    if current_scan and reference is not None:
+        raise ValueError("choose current-scan or reference BN statistics, not both")
     with evaluation_state(model):
         if current_scan:
             for module in model.modules():
                 if isinstance(module, torch.nn.BatchNorm1d):
                     module.train()
+        elif reference is not None:
+            source = dict(reference.named_modules())
+            for name, module in model.named_modules():
+                if isinstance(module, torch.nn.BatchNorm1d):
+                    other = source.get(name)
+                    if not isinstance(other, torch.nn.BatchNorm1d):
+                        raise ValueError(f"reference lacks matching BatchNorm: {name}")
+                    # Affine parameters remain those of the evaluated model.
+                    for key in ("running_mean", "running_var", "num_batches_tracked"):
+                        value, replacement = getattr(module, key), getattr(other, key)
+                        if value is None or replacement is None or value.shape != replacement.shape:
+                            raise ValueError(f"incompatible BatchNorm buffer: {name}.{key}")
+                        value.copy_(replacement)
         yield
 
 

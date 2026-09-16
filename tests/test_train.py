@@ -11,6 +11,27 @@ from src.train import (_gradient_comparison, batch_loss, keep_loss, load_checkpo
                        tail_loss, Requests, evaluation_state, validate_initial_state, validate_resume_state)
 
 
+def test_parent_bn_intervention_keeps_affine_parameters_and_restores_on_failure():
+    from src.train import normalization_mode
+    parent, model = nn.Sequential(nn.BatchNorm1d(2)), nn.Sequential(nn.BatchNorm1d(2))
+    with torch.no_grad():
+        parent[0].running_mean.fill_(4)
+        parent[0].running_var.fill_(9)
+        parent[0].num_batches_tracked.fill_(17)
+        model[0].weight.fill_(2)
+        model[0].bias.fill_(1)
+    before = deepcopy(model.state_dict())
+    with pytest.raises(RuntimeError, match="deliberate"):
+        with normalization_mode(model, reference=parent):
+            torch.testing.assert_close(model(torch.tensor([[7., 7.]])),
+                                       torch.full((1, 2), 3.), atol=2e-6, rtol=0)
+            assert not model.training and int(model[0].num_batches_tracked) == 17
+            torch.testing.assert_close(model[0].weight, before["0.weight"], rtol=0, atol=0)
+            raise RuntimeError("deliberate")
+    assert model.training
+    torch.testing.assert_close(model.state_dict(), before, rtol=0, atol=0)
+
+
 def test_group_queries_separate_spare_seats_empty_weights_and_overlap():
     from src.train import grouped_queries
     rng = np.random.default_rng(21)
