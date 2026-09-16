@@ -21,6 +21,46 @@ class DataProtocolError(ValueError):
     """Report scores that cannot be assigned to the declared source returns."""
 
 
+def detection_range(points):
+    """Use the official input dtype and inclusive distance rule before augmentation."""
+    distance = np.linalg.norm(points, axis=1)
+    return (distance >= 2.5) & (distance <= 50.)
+
+
+def binary_target(source, inserted=None):
+    """V3 binary view: official point support, with native anomalies quarantined."""
+    if source.labels is None:
+        raise DataProtocolError("binary supervision requires raw point labels")
+    target = np.full(source.slot_count, -1, np.int8)
+    raw = source.labels.semantic
+    target[~source.zero_slot_mask & (raw != 0) & (raw != 2)] = 0
+    if inserted is not None:
+        inserted = np.asarray(inserted)
+        if inserted.dtype != np.bool_ or inserted.shape != target.shape or np.any(inserted & source.zero_slot_mask):
+            raise DataProtocolError("inserted labels must identify actual return slots")
+        target[inserted] = 1
+    target[~detection_range(source.xyzi[:, :3])] = -1
+    return target
+
+
+def binary_normal_groups(frozen, original, sparse_slots, radius_m=2.):
+    """Bind both normal populations to pre-augmentation slots, including occluded raw points."""
+    post = np.flatnonzero(binary_target(frozen.source, frozen.inserted_mask) == 0)
+    raw = np.flatnonzero(binary_target(original) == 0)
+    kept = ~frozen.inserted_mask & ~frozen.occluded_original_mask & ~original.zero_slot_mask
+    post_sparse = np.intersect1d(post[kept[post]], sparse_slots)
+    raw_sparse = np.intersect1d(raw, sparse_slots)
+    changed = np.concatenate((frozen.source.xyzi[frozen.inserted_mask, :3],
+                              original.xyzi[frozen.occluded_original_mask, :3])).astype(np.float64)
+    tree = cKDTree(changed) if len(changed) else None
+    groups = []
+    for source, normal, sparse in ((frozen.source, post, post_sparse), (original, raw, raw_sparse)):
+        near = (normal[tree.query(source.xyzi[normal, :3].astype(np.float64), workers=1)[0] <= radius_m]
+                if tree is not None and len(normal) else normal[:0])
+        groups.append((normal, sparse, near))
+    return groups
+
+
 def source_identity(source):
     """Bind a lossless delta to the exact scan, labels, pose and file identity."""
     if source.labels is None:
@@ -338,13 +378,17 @@ class ConditionIndex:
 
     def __init__(self, path, dataset, parameters):
         with np.load(path, allow_pickle=False) as saved:
-            if (saved["format"].item() != "ajae-v2-conditions"
+            if (saved["format"].item() not in {"ajae-v2-conditions", "ajae-v3-populations"}
                     or json.loads(saved["parameters"].item()) != parameters):
                 raise DataProtocolError("condition index uses different scientific parameters")
             keys = list(zip(saved["world_identity"].tolist(), saved["frame"].tolist()))
             expected = [(world, frame) for _, world, frame in dataset.samples]
             if keys != expected:
                 raise DataProtocolError("condition index belongs to another frozen world-frame pool")
+            if saved["format"].item() == "ajae-v3-populations":
+                self.counts = saved["counts"].copy()
+                self.cells = saved["cell"].copy()
+                self.population = saved["population"].copy()
             frames, identities = saved["source_frame"], saved["source_identity"]
             offsets, slots = saved["sparse_offsets"], saved["sparse_slot"]
             if (frames.tolist() != list(dataset.sequence.frame_ids) or len(identities) != len(frames)

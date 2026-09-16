@@ -9,6 +9,34 @@ import src.exposure as exposure
 from src.exposure import CELLS, SPARSE, summarize
 
 
+def test_v3_dynamic_coverage_expectation_and_prefetch_recovery():
+    from src.coverage import CoverageRequests, population_distributions
+    counts = np.array([[0, 4, 5], [2, 3, 5], [7, 6, 8]])
+    population = population_distributions(counts, [0, 0, 1])
+    np.testing.assert_allclose(population[:, 2], [5/26, 5/26, 8/13])
+    arguments = (population, ["a", "a", "b"], counts[:, 0], 17, 32)
+    producer, consumed = CoverageRequests(*arguments), CoverageRequests(*arguments)
+    losses = np.arange(9).reshape(3, 3) / 7
+    expected = (population * [.5, .25, .25] * losses).sum()
+    for _ in range(12):
+        h = np.array([producer.coverage_probability(i) for i in range(3)])
+        q = .8 * producer.risk + .2 * h
+        assert h.sum() == pytest.approx(1.)
+        coefficients = population * [.5, .25, .25] / q[:, None]
+        assert coefficients.sum(1).max() <= 1.25 + 1e-12
+        assert (q[:, None] * coefficients * losses).sum() == pytest.approx(expected, abs=1e-15)
+        request = producer.take()
+        if request["sample"] == 0:
+            assert request["coefficients"][0] == 0
+        if request["draw"] < 8:
+            consumed.consume(request)
+    state = consumed.state_dict()
+    assert state["consumed_requests"] == 8 and producer.draw == 12
+    resumed = list(CoverageRequests(*arguments, state=state))
+    assert resumed == list(CoverageRequests(*arguments))[8:]
+    assert all(producer.visited)  # Exhausted bins fall back to all members without resetting history.
+
+
 def test_point_reduction_exposure_weights_positive_queries_without_changing_normals():
     config = dict(training=dict(batch_frames=2, warmup_steps=0, ramp_steps=1), loss=dict(keep_weight=1.))
     base = dict(step=1, world="a", frame=1, source_identity="source", parent="p", regions=["a", "b"],

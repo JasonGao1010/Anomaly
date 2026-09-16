@@ -17,6 +17,83 @@ from src.scene import PointLabels, make_source_frame
 from vendor.stu.compute_point_level_ood import PointOODMetricsCalculator
 
 
+def test_v3_binary_support_matches_official_before_rotation_and_keeps_occluded_raw():
+    from src.data import FrozenFrame, binary_target, binary_normal_groups
+    from src.evaluate import evaluation_targets
+    from src.train import experiment_config, load_experiment, query_rows
+    from src.model import ScanTransform
+    xyzi = np.array([[0,0,0,0],[2.5,0,0,.1],[np.nextafter(np.float32(30),np.float32(np.inf)),40,0,.2],
+        [10,0,0,.3],[51,0,0,.4],[10,1,0,.5],[11,0,0,.6],[9,0,0,.7],[8,0,0,.8]],np.float32)
+    raw = np.array([0,1,52,99,40,2,0,40,40],np.uint16)
+    mapped = np.array([255,255,255,255,8,255,255,8,8],np.uint8)
+    labels = PointLabels(raw.astype(np.uint32),raw,np.zeros(len(raw),np.uint16),mapped)
+    source = make_source_frame(0,xyzi,np.eye(4),labels,partition="train",sequence_id=206)
+    expected = evaluation_targets(source.xyzi[:,:3],raw); expected[raw==2]=-1
+    np.testing.assert_array_equal(binary_target(source),expected)
+    assert binary_target(source)[2] == 0  # float32 official norm includes this50m boundary.
+    packed = labels.packed.copy(); post = xyzi.copy(); packed[7] = 0; post[7] = 0
+    packed[8] = 2 | (60001 << 16)
+    altered = PointLabels(packed,(packed&65535).astype(np.uint16),(packed>>16).astype(np.uint16),mapped)
+    inserted,occluded=np.zeros(len(raw),bool),np.zeros(len(raw),bool);inserted[8]=True;occluded[[7,8]]=True
+    frozen=FrozenFrame(make_source_frame(0,post,np.eye(4),altered,partition="train",sequence_id=206),"f"*64,inserted,occluded)
+    groups=binary_normal_groups(frozen,source,np.arange(len(raw)))
+    assert 7 in groups[1][0] and 7 in groups[1][2] and 7 not in groups[0][0]
+    config=experiment_config(load_experiment("protocol/v3.json"))
+    query=query_rows(frozen,source,config["training"],np.random.default_rng(1),sparse_slots=np.arange(len(raw)))
+    rotated=ScanTransform(config)(source,yaw=.731)
+    np.testing.assert_array_equal(rotated["source_slot"],source.real_slots)
+    np.testing.assert_array_equal(rotated["xyzi"][:,3],source.xyzi[source.real_slots,3])
+    assert 7 in source.real_slots[query["original_query"]]
+    assert query["population_counts"] == [1,3,5]
+
+
+def test_v3_persisted_real_scores_keep_ignored_return_identities(tmp_path,monkeypatch):
+    from src.evaluate import captured_scores
+    xyzi=np.array([[0,0,0,0],[10,0,0,.2],[12,0,0,.3]],np.float32)
+    raw=np.array([0,0,40],np.uint16)
+    labels=PointLabels(raw.astype(np.uint32),raw,np.zeros(3,np.uint16),np.zeros(3,np.uint8))
+    source=make_source_frame(0,xyzi,np.eye(4),labels,partition="val",sequence_id=125)
+    monkeypatch.setattr("src.evaluate.STUSequence.open",lambda *args,**kwargs:{0:source})
+    original=np.array([np.nan,1.5,-2.],np.float32);path=tmp_path/'scores.npz'
+    captured_scores(tmp_path,path,capture={(125,0):original})
+    restored=captured_scores(tmp_path,path)[125,0]
+    np.testing.assert_array_equal(restored[source.real_slots],original[source.real_slots])
+    assert restored[0] == 0  # Missing slots use FramePrediction's existing restoration value.
+
+
+def test_v3_normal201_uses_transferred_threshold_and_no_anomaly_metrics(monkeypatch):
+    from types import SimpleNamespace
+    from src.evaluate import evaluate_normal_source
+    xyzi=np.tile(np.array([10.,0.,0.,.2],np.float32),(5,1))
+    raw=np.array([0,1,52,99,2],np.uint16)
+    labels=PointLabels(raw.astype(np.uint32),raw,np.zeros(5,np.uint16),np.full(5,255,np.uint8))
+    source=make_source_frame(0,xyzi,np.eye(4),labels,partition='train',sequence_id=201)
+    values=np.array([100.,0.,1.,2.,3.],np.float32)
+    model=SimpleNamespace(training=False,config={},predict=lambda source,prepared:FramePrediction('train',201,0,source.real_slots,values))
+    transform=SimpleNamespace(state_dict=lambda:{})
+    monkeypatch.setattr('src.evaluate.EvaluationFrames',lambda *args,**kwargs:[(source,{})])
+    monkeypatch.setattr('torch.utils.data.DataLoader',lambda dataset,**kwargs:dataset)
+    monkeypatch.setattr('src.evaluate.host_disk',lambda:{})
+    capture={(201,0):None}
+    result=evaluate_normal_source(model,transform,'unused',1.,capture=capture)
+    assert result['normal_count']==3 and result['fp']==2 and result['FPR']==pytest.approx(200/3)
+    assert result['native_raw2']==dict(points=1,above_threshold=1)
+    assert not {'AP','FPR95','AUROC'} & result.keys()
+    np.testing.assert_array_equal(capture[201,0],values)
+
+
+def test_v3_candidate_selection_requires_joint_improvement_over_parent(tmp_path):
+    import json
+    from src.evaluate import model_selection
+    parent=dict(AP=76.,FPR95=.2,AUROC=99.,normal_count=100,anomaly_count=10,recall_at_fpr_limit=dict(recall=98.))
+    for step,ap,fpr,recall in ((256,77.,.19,98.),(512,80.,.21,99.),(1024,78.,.18,98.5)):
+        (tmp_path/f'{step}_val.json').write_text(json.dumps(dict(parent,AP=ap,FPR95=fpr,recall_at_fpr_limit=dict(recall=recall))))
+    result=model_selection(tmp_path,parent)
+    assert result['preferred']['step']==1024
+    assert [r['step'] for r in result['jointly_improved']]==[1024,256]
+    assert [r['step'] for r in result['nondominated_tradeoffs']]==[512]
+
+
 def test_control_diagnostic_reuses_full_prediction_with_exact_point_identity(tmp_path, monkeypatch):
     import json
     from src.data import source_identity

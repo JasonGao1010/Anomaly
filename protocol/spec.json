@@ -1,7 +1,188 @@
 {
   "format": "stu-single-frame",
   "schema_version": 1,
-  "research_question": "Using only the complete current scan, can scene-supported observation-conditioned relationships on original returns learn transferable anomaly-versus-normal ranking? The current main method uses detection plus mean retained-normal pairing; independent mechanism attribution remains a later controlled comparison.",
+  "research_question": "Using only the complete current scan, can observable sensor conditions and all-return multiscale relationships improve real anomaly ranking while preserving difficult-normal performance? V3 learns one paired binary population risk with importance-corrected coverage and queries; it is implemented but has not been trained or evaluated for performance.",
+  "v3": {
+    "configuration": "protocol/v3.json",
+    "authorization": "Implement the complete2026-09-16 all-return multiscale V3 design and necessary validation; do not start training.",
+    "status": "implemented_and_verified_not_trained",
+    "implementation_validated": true,
+    "training_executed": false,
+    "optimizer_updates": 0,
+    "training_checkpoint_saved": false,
+    "full_val19_evaluation_executed": false,
+    "parent_checkpoint": "results/keep/mean/1152.pt",
+    "parent_step0_function_preserved": false,
+    "output_for_future_training": "results/v3/run",
+    "supersedes": "Prior A/B/C short-control proposal; A1024 completed, B491 paused and C unstarted remain historical; no automatic continuation.",
+    "population_preparation": {
+      "format": "ajae-v3-populations",
+      "source_sequence": 206,
+      "source_frames": 449,
+      "world_frames": 107760,
+      "worlds": 240,
+      "generation_cells": 30,
+      "population_totals": {
+        "anomaly": 5378851,
+        "post_normal": 13106090543,
+        "unique_source_raw_normal": 54631044
+      },
+      "added_normal": {
+        "unique_source_raw": 1589614,
+        "post": 381269427
+      },
+      "parameters": {
+        "radius_m": 2.0,
+        "minimum_neighbors": 8
+      },
+      "sparse_reused": 449,
+      "workers": 8,
+      "seconds": 16.036628747009672,
+      "host_E_before": {
+        "Size": 484950659072,
+        "SizeRemaining": 61240008704,
+        "reserve_bytes": 10000000000
+      },
+      "host_E_after": {
+        "Size": 484950659072,
+        "SizeRemaining": 61240008704,
+        "reserve_bytes": 10000000000
+      },
+      "scope": "V3 binary2.5-50m view; native raw2 quarantined; only206 read; no201 statistics and no rendering"
+    },
+    "population_index": "results/v3/populations.npz",
+    "population_report": "results/v3/populations.json",
+    "added_raw_normal_by_label": {
+      "99": 1150850,
+      "52": 123926,
+      "1": 314838
+    },
+    "native_raw2": {
+      "all_actual_returns": 0,
+      "in_detection_range": 0
+    },
+    "training_budget": {
+      "optimizer_updates": 1024,
+      "physical_pairs": 2,
+      "accumulation_steps": 4,
+      "requests": 8192,
+      "scan_views": 16384,
+      "seed": 20260916,
+      "frozen_encoder_updates": [
+        1,
+        128
+      ],
+      "joint_updates": [
+        129,
+        1024
+      ],
+      "checkpoint_every": 128,
+      "full_val19_steps": [
+        256,
+        512,
+        1024
+      ],
+      "stop_after_last_evaluation": true
+    },
+    "recovery": "Complete accumulation boundaries save per-family actual AdamW counts and consumed coverage history; independent counter-based query/yaw streams and full model RNG retained. Pre-optimizer accumulation failure discards gradients and restores the preceding complete update. An optimizer-internal failure is not a valid completed checkpoint.",
+    "no_update_verification": {
+      "result": "results/v3/check.json",
+      "regression_tests_passed": 155,
+      "test_seconds": 31.82,
+      "warnings": [
+        "Existing ccimport locale.getdefaultlocale deprecation"
+      ],
+      "optimizer_updates": 0,
+      "checkpoint_saved": false,
+      "all_parameters_and_BN_unchanged": true,
+      "scans": [
+        {
+          "scope": "ordinary",
+          "sequence": 152,
+          "frame": 371,
+          "source_identity": "8e353fe2d5cbdfc4806bba8f43bdc7fbb8d37c35eb9c7e27ff8713e9ad4aa417",
+          "returns": 117937,
+          "queries": 10240,
+          "support_cells": [
+            78710,
+            24128,
+            4606
+          ],
+          "preparation_seconds": 0.5969628849998116,
+          "full_inference_seconds": 2.8443534440011717,
+          "query_forward_backward_seconds": 6.299813632998848,
+          "peak_cuda_bytes": 4370298880,
+          "gradients_finite": true,
+          "score_max_error": 0.0,
+          "relation_max_error": 4.76837158203125e-07,
+          "new_head_columns_gradient_norm": 3.5942323207855225
+        },
+        {
+          "scope": "dense",
+          "sequence": 125,
+          "frame": 226,
+          "source_identity": "67d20cd89f8b69f370c1f8a786f587af51a912799eb5083ee9277a0d79447705",
+          "returns": 126179,
+          "queries": 10240,
+          "support_cells": [
+            67239,
+            19219,
+            3879
+          ],
+          "preparation_seconds": 0.6048435459961183,
+          "full_inference_seconds": 1.134038040006999,
+          "query_forward_backward_seconds": 3.3621774329803884,
+          "peak_cuda_bytes": 3904662016,
+          "gradients_finite": true,
+          "score_max_error": 0.0,
+          "relation_max_error": 4.76837158203125e-07,
+          "new_head_columns_gradient_norm": 4.048128604888916
+        }
+      ],
+      "paired_risk": {
+        "total": 0.34715627012345607,
+        "detection": 0.34715627012345607,
+        "risk_anomaly": 0.18042922179471538,
+        "risk_post_normal": 0.08375195627148034,
+        "risk_raw_normal": 0.08297509205726034,
+        "anomaly_queries": 709,
+        "normal_queries": 16235,
+        "raw_normal_queries": 8148,
+        "optimizer_steps": 0,
+        "scans": 4,
+        "seconds": 19.946044091018848,
+        "peak_cuda_bytes": 6406251520
+      },
+      "actual_boundary_samples": [
+        {
+          "sample": 100933,
+          "source_frame": 357,
+          "anomaly_population": 4059,
+          "anomaly_queries": 2048,
+          "post_normal_population": 121414,
+          "raw_normal_population": 125428,
+          "occluded_raw_normals_in_disturbed_group": 4014
+        },
+        {
+          "sample": 100937,
+          "source_frame": 361,
+          "anomaly_population": 1785,
+          "anomaly_queries": 1785,
+          "post_normal_population": 121006,
+          "raw_normal_population": 125138,
+          "occluded_raw_normals_in_disturbed_group": 4132
+        }
+      ],
+      "scope": "Real scans backward against an unlabeled numerical probe; two physical paired requests use the new risk without an optimizer. Toy optimizer updates test scheduling/accumulation only; no real V3 parameter update."
+    },
+    "parent_new_label_reference": {
+      "directory": "results/v3/reference",
+      "code_implemented": true,
+      "executed": false,
+      "scope": "Independent1152 on V3 binary206 repaired32 and201 synthetic32, normal pairs, and all682 original201; unchanged historical complete-val19 reused; generated once at the first authorized evaluation."
+    },
+    "scientific_conclusion": "Binary support, fixed-population estimators, all-return geometric coverage, query equivalence and recoverable update semantics have implementation evidence. V3 superiority over1152, real transfer and mechanism effects remain unknown until authorized experiments."
+  },
   "v2": {
     "configuration": "protocol/v2.json",
     "authorization": "completed authorized4096 updates and all three evaluation nodes; subsequently authorized bounded same-point diagnosis, parent BN-buffer intervention and actual training-support analysis; no V3 training executed",
@@ -301,8 +482,8 @@
     }
   },
   "status": {
-    "stage": "targeted_controls_paused_by_user",
-    "active_work": "Paused by user: A completed1024 updates and all evaluations; B saved491 updates to results/control/B/resume.pt and exited; C not started. Queue cancelled; no automatic continuation.",
+    "stage": "v3_implemented_verified_not_trained",
+    "active_work": "V3 code,206-only population preparation and no-update checks completed; no training or full V3 evaluation. Historical A completed, B491 paused, C not started.",
     "model_defined": true,
     "training_defined": true,
     "formal_ajae_v1": "context_supported_conditional_return_relationship_network",
@@ -334,7 +515,7 @@
     "coverage_closure_evidence": "results/coverage/summary.json",
     "coverage_decision": "repaired360-world pool passes the current content requirements, observed-return5cm exterior-witness checks,30-cell quotas and minimum regions; old invalid placements have been replaced",
     "coverage_boundaries": "one_normal_source_per_split; sparse_normal_nonextreme_train_region_share_0.4979628791_near_0.5_limit; selected_geometry_scope_and_missingness; observed-return_placement_not_unobserved_surfaces; weak_background_change_is_not_self_occlusion; no_universal_coverage_claim",
-    "next_stage": "Wait for user instruction; any continuation uses the saved B491 state and unchanged original V2 schedule prefix. Independent control results are incomplete.",
+    "next_stage": "Wait for explicit V3 training authorization; the next experiment is the declared1024-update trajectory with complete-val19 at256/512/1024. Do not resume the superseded short controls automatically.",
     "data_preparation_accepted": true,
     "original_pool_summary_completed": true,
     "balanced_pool_target": {
@@ -440,16 +621,16 @@
         }
       }
     },
-    "model_configuration": "pretrain.json",
+    "model_configuration": "v3.json",
     "formal_v1_full_training_ready": true,
-    "formal_default_full_training_executed": true,
-    "full_val19_model_evaluation_executed": true,
-    "finite_learning_executed": true,
-    "fixed_development_model_evaluation_executed": true,
-    "formal_full_training_authorized": true,
+    "full_val19_model_evaluation_executed": false,
+    "fixed_development_model_evaluation_executed": false,
+    "formal_full_training_authorized": false,
     "formal_full_training_completed": false,
-    "pretrained_training_executed": true,
-    "training_declaration": "v2.json"
+    "training_declaration": "v3.json",
+    "implementation_validated": true,
+    "training_executed": false,
+    "model_result_scope": "Current execution flags describe V3; all completed V1/V2/parent/control results retain their separate historical sections."
   },
   "data": {
     "normal_sources": [
@@ -1662,7 +1843,7 @@
     "decision": "The micro stage stopped at 256 updates with a basis to discuss fresh-initial-state short learning. No short training was executed within that stage; the subsequent separate authorization and completed run are recorded in short_learning.",
     "short_training_executed_during_micro_stage": false
   },
-  "method": {
+  "v1_method": {
     "implementation": "src/model.py; src/train.py; src/evaluate.py",
     "configuration": "protocol/finetune.json records the completed-to8000 pretrained trajectory over protocol/pretrain.json; protocol/model.json preserves the paused random trajectory",
     "initialization": "complete official nuScenes LitePT-S backbone plus fresh AJAE modules from results/pretrain/0.pt; new optimizer trajectory; previous measured AJAE trajectories used random initialization",
@@ -2093,7 +2274,23 @@
       },
       "diagnostic_issue_resolved": "same checkpoint graph reused a one-shot generator context during separate autograd.grad calls; replaced with reusable buffer-restoring context, then verified CPU and all four real batches",
       "interpretation": "known sparse-normal witnesses enter basic detection queries rarely (5 cumulative hits vs 101 active keep hits); unknown geometry remains unknown; initial tail shared-parameter gradients 3.09 to 4.46 times detection; keep/detection shared-parameter cosines negative in 3 of 4 batches; no learning/transfer/harm determination"
-    }
+    },
+    "scope": "Historical V1 implementation and completed validation evidence; current V3 method is recorded in method and v3. Historical prediction remains available for independent parent1152 comparisons."
+  },
+  "method": {
+    "configuration": "protocol/v3.json",
+    "implementation": "src/data.py; src/coverage.py; src/model.py; src/train.py; src/evaluate.py",
+    "initialization": "Transfer compatible LitePT-S/context/point weights and named parent base_head columns from mean1152; new head columns zero, relations nonzero; historical nuScenes semantic pretraining disclosed; step0 does not preserve the parent final function.",
+    "input": "Complete current scan with every actual XYZI return; duplicate XYZ does not collapse outputs; no labels, poses, insertion masks or paired original scans at inference.",
+    "context": "Inherited LitePT-S on0.05m XYZI mean voxels;72-to64 context projection; original XYZI plus5cm local offset encoded to64.",
+    "relationships": "Two64-channel layers; each0.05/0.20/0.80m scale pools all returns directly with learnable mean/max and geometry/intensity moments;27/27/cell-ball-filtered343 candidates; no top-k point cap;4 attention heads and a finite zero-value null per scale/head.",
+    "conditions": "Sensor range/direction/calibrated angular intervals/physical sampling scales separated from observational counts, moments, and delta/validity; physical and sensor-basis normalized displacements both retained.",
+    "score": "One242-to128-to1 MLP reads h,z0,z2,9 sensor and41 observation features; no V3 base-plus-relation second scoring branch.",
+    "normalization": "Parent running means/variances/counters fixed during training/recomputation/evaluation; affine parameters learn after encoder unfreezing; new relations use LayerNorm.",
+    "risk": "0.5 anomaly-world-point population +0.25 post-normal-world-point population +0.25 unique-source-normal-point population, averaged over synchronized uniform yaw; no keep/tail/teacher/semantic auxiliary term.",
+    "sampling": "q_t=0.8*(0.5*a_A+0.25*a_post+0.25*a_raw)+0.2*h_t; dynamic30-cell/nonempty-count-bin/unvisited-member coverage; exact pre-draw mixture probabilities; frame coefficient sum<=1.25; overlapping-normal point correction<=2.",
+    "evaluation": "Full official val19 at256/512/1024 with identical pooled labels; saved full-return predictions reused for152/108; original201 all682 at each model full-val95 threshold; new binary synthetic32 per split plus pairs and joint-metric selection.",
+    "limitations": "Implementation and numerical checks are not performance evidence; spatial summaries remain lossy; coarse intersecting cells may contain outside-ball points; shared449 source scans do not provide107760 independent environments; no trained V3 or mechanism result."
   },
   "short_learning": {
     "declaration": "protocol/short.json",
@@ -5817,7 +6014,7 @@
   "controls": {
     "configuration": "protocol/control.json",
     "authorization": "three separate same-budget controls; unchanged architecture and original V2 LR prefix; no B+C combination",
-    "status": "paused_by_user_A_completed_B491_C_not_started",
+    "status": "superseded_by_multiscale_V3_A_completed_B491_paused_C_not_started",
     "goal": "retain difficult-normal improvements while recovering real-anomaly ranking",
     "updates_per_arm": 1024,
     "arms": {
@@ -6030,6 +6227,7 @@
       "step": 491,
       "automatic_continuation": false,
       "active_training_or_evaluation_processes": 0
-    }
+    },
+    "superseded_by": "protocol/v3.json; preserve independent historical evidence and B491 state; no automatic continuation"
   }
 }

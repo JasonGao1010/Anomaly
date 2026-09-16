@@ -21,9 +21,9 @@ from torch.nn import functional as F
 from torch.utils.data import DataLoader
 from torch.utils.checkpoint import checkpoint
 
-from .data import (ConditionIndex, FrozenDataset, FrozenFrame, _atomic_json, host_disk,
+from .data import (ConditionIndex, FrozenDataset, FrozenFrame, _atomic_json, binary_target, binary_normal_groups, host_disk,
                    normal_conditions, retained_normal_slots, source_identity, runtime_resources)
-from .model import AJAE, ScanTransform, inherit_backbone, load_config, to_device, validate_config
+from .model import AJAE, ScanTransform, inherit_backbone, transfer_parent, load_config, to_device, validate_config
 from .protocol import PROJECT_ROOT
 
 
@@ -107,8 +107,50 @@ def grouped_queries(base, sparse, changed, budgets, weights, rng):
     return selected, mass.tolist()
 
 
+def normal_query_weights(pools, budgets, weights, rng):
+    """Balance-heuristic correction targets all normals despite overlapping proposal groups."""
+    groups, mass = grouped_queries(*pools, budgets, weights, rng)
+    slots = np.unique(np.concatenate(groups))
+    correction = np.zeros(len(slots), np.float64)
+    if len(pools[0]):
+        density = sum(alpha * np.isin(slots, pool) / len(pool) for alpha, pool in zip(mass, pools, strict=True) if len(pool))
+        ratio = 1 / (len(pools[0]) * density)
+        if np.any(ratio > 2. + 1e-12):
+            raise ValueError("normal query correction exceeds its bound")
+        for group, alpha in zip(groups, mass, strict=True):
+            if len(group):
+                index = np.searchsorted(slots, group)
+                correction[index] += alpha * ratio[index] / len(group)
+    return slots, correction, dict(populations=list(map(len, pools)), queries=list(map(len, groups)), mixture=mass)
+
+
+def binary_queries(frozen, original, config, rng, sparse_slots):
+    if sparse_slots is None:
+        raise ValueError("V3 requires source-bound native low-support positions")
+    post_groups, raw_groups = binary_normal_groups(frozen, original, sparse_slots)
+    budgets = config["group_queries"]
+    post, post_weight, post_info = normal_query_weights(post_groups, budgets["normal"], budgets["weights"], rng)
+    raw, raw_weight, raw_info = normal_query_weights(raw_groups, budgets["raw"], budgets["weights"], rng)
+    target = binary_target(frozen.source, frozen.inserted_mask)
+    positives = np.flatnonzero(target == 1)
+    anomaly = _take(positives, config["anomaly_queries"], rng)
+    slots = np.union1d(post, anomaly)
+    weight = np.zeros(len(slots), np.float64)
+    weight[np.searchsorted(slots, post)] = post_weight
+    return dict(query=torch.from_numpy(np.searchsorted(frozen.source.real_slots, slots)),
+        original_query=torch.from_numpy(np.searchsorted(original.real_slots, raw)),
+        normal_weight=torch.from_numpy(weight), raw_weight=torch.from_numpy(raw_weight),
+        anomaly_index=torch.from_numpy(np.searchsorted(slots, anomaly)),
+        target=torch.from_numpy(target[slots].astype(np.int64)),
+        population_counts=[len(positives), len(post_groups[0]), len(raw_groups[0])],
+        query_groups=dict(post=post_info, raw=raw_info),
+        normal_queries=len(post), raw_queries=len(raw), anomaly_queries=len(anomaly))
+
+
 def query_rows(frozen, original, config, rng, *, sparse_slots=None):
     """Labels select loss queries only; all neighborhood inputs remain label-blind."""
+    if config.get("binary_view") == "official_range_v3":
+        return binary_queries(frozen, original, config, rng, sparse_slots)
     slots, target = frozen.source.real_slots, frozen.anomaly_target[frozen.source.real_slots]
     if "group_queries" in config:
         if sparse_slots is None:
@@ -203,12 +245,19 @@ class TrainingFrames:
         return frozen, original, query_rows(frozen, original, self.config["training"], rng, sparse_slots=sparse)
 
     def __getitem__(self, request):
-        index, draw, need_original = request
+        v3 = isinstance(request, dict)
+        index, draw, need_original = (request["sample"], request["draw"], True) if v3 else request
         if self.transform is None:
             torch.set_num_threads(1)
             self.transform = ScanTransform(self.config, state=self.preprocessing, workers=1)
         frozen, original, queries = self.queries(index, draw)
         identity, frame = frozen.world_identity, frozen.source.frame_id
+        if v3:
+            if queries["population_counts"] != self.conditions.counts[index].tolist():
+                raise ValueError("actual binary populations differ from the sampling denominators")
+            yaw = float(np.random.default_rng(np.random.SeedSequence([self.config["training"]["seed"], 13, draw])).uniform(0, 2 * np.pi))
+            return dict(scan=self.transform(frozen.source, yaw=yaw), original=self.transform(original, yaw=yaw),
+                **queries, frame=frame, world=identity, draw=draw, sample=index, request=request, yaw=yaw)
         before = None
         if need_original and len(queries["original_query"]):
             key = source_identity(original)
@@ -323,7 +372,31 @@ def grouped_risk(values, groups, weights):
                 for index, weight in zip(groups, weights, strict=True) if len(index)), values.sum() * 0)
 
 
+def population_loss(model, rows, trace=None):
+    """One request uses its exact mixture probability; no random batch-size renormalization."""
+    device = next(model.parameters()).device
+    components, counts = [], np.zeros(3, np.int64)
+    for row in rows:
+        post = training_forward(model, to_device(row["scan"], device), row["query"].to(device), trace=trace)
+        raw = training_forward(model, to_device(row["original"], device), row["original_query"].to(device), trace=trace)
+        positive = post[row["anomaly_index"].to(device)]
+        anomaly = F.softplus(-positive).double().mean() if len(positive) else post.sum().double() * 0
+        normal = (F.softplus(post).double() * row["normal_weight"].to(device)).sum()
+        original = (F.softplus(raw).double() * row["raw_weight"].to(device)).sum()
+        terms = torch.stack((anomaly, normal, original)) * torch.tensor(row["request"]["coefficients"], device=device, dtype=torch.float64)
+        components.append(terms)
+        counts += [row["anomaly_queries"], row["normal_queries"], row["raw_queries"]]
+    risks = torch.stack(components).mean(0)
+    loss = risks.sum()
+    return loss, dict(total=float(loss.detach()), detection=float(loss.detach()),
+        risk_anomaly=float(risks[0].detach()), risk_post_normal=float(risks[1].detach()),
+        risk_raw_normal=float(risks[2].detach()), anomaly_queries=int(counts[0]),
+        normal_queries=int(counts[1]), raw_normal_queries=int(counts[2]))
+
+
 def batch_loss(model, rows, config, step, *, full_objective=False, details=False, trace=None):
+    if config.get("format") == "ajae-v3":
+        return population_loss(model, rows, trace)
     device = next(model.parameters()).device
     all_scores, all_targets, all_frames, before, after = [], [], [], [], []
     grouped = "group_queries" in config["training"]
@@ -396,10 +469,29 @@ def batch_loss(model, rows, config, step, *, full_objective=False, details=False
     return total, stats
 
 
+def accumulate_batches(model, batches, config, step):
+    """Backpropagate each physical microbatch; the caller clips and updates exactly once."""
+    accumulation = config["training"].get("accumulation_steps", 1)
+    rows, stats = [], {}
+    for _ in range(accumulation):
+        batch = next(batches)
+        loss, current = batch_loss(model, batch, config, step)
+        if not torch.isfinite(loss):
+            raise FloatingPointError(f"nonfinite task loss at update {step}")
+        (loss / accumulation).backward()
+        rows.extend(batch)
+        if config.get("format") != "ajae-v3":
+            stats = current
+        else:
+            for key, value in current.items():
+                stats[key] = stats.get(key, 0) + (value if key.endswith("queries") else value / accumulation)
+    return rows, stats
+
+
 def load_checkpoint(path, device="cuda"):
     saved = torch.load(path, map_location="cpu", weights_only=True)
-    if saved.get("format") != "ajae-v1-checkpoint" or "preprocessing" not in saved:
-        raise ValueError("checkpoint needs formal AJAE V1 weights and saved preprocessing")
+    if saved.get("format") not in {"ajae-v1-checkpoint", "ajae-v3-checkpoint"} or "preprocessing" not in saved:
+        raise ValueError("checkpoint needs formal AJAE weights and saved preprocessing")
     if "failure" in saved:
         raise ValueError("partial failure snapshots cannot be evaluated as completed updates")
     ScanTransform(saved["config"], state=saved["preprocessing"])
@@ -410,6 +502,8 @@ def load_checkpoint(path, device="cuda"):
 
 def check(config, data_root, examples, *, experiment=None):
     """Full real scans and task gradients; V2 also checks inherited state without any update."""
+    if config.get("format") == "ajae-v3":
+        return check_multiscale(config, data_root, experiment)
     torch.manual_seed(config["training"]["seed"])
     saved = (torch.load(PROJECT_ROOT / experiment["warm_start"]["checkpoint"], map_location="cpu", weights_only=True)
              if experiment else None)
@@ -487,6 +581,106 @@ def check(config, data_root, examples, *, experiment=None):
             output_scores=len(prediction.anomaly_score), all_finite=bool(np.isfinite(prediction.anomaly_score).all()),
             seconds=time.perf_counter() - started))
     print(json.dumps(stats, indent=2, allow_nan=False), flush=True)
+    return stats
+
+
+def check_multiscale(config, data_root, experiment):
+    """Two real scans, full/query equivalence and backward only; no optimizer is created."""
+    import csv
+    from .protocol import load_protocol
+    from .scene import STUSequence
+    torch.manual_seed(config["training"]["seed"])
+    saved = torch.load(PROJECT_ROOT / experiment["warm_start"]["checkpoint"], map_location="cpu", weights_only=True)
+    validate_stage_parent(saved, config, experiment)
+    model = AJAE(config).cuda()
+    migration = transfer_parent(model, saved)
+    original_state = {name: value.detach().cpu().clone() for name, value in model.state_dict().items()}
+    transform = ScanTransform(config, state=saved["preprocessing"], workers=4)
+    with (PROJECT_ROOT / "results/profile/tables/frames.csv").open(encoding="utf-8-sig") as stream:
+        frames = sorted([r for r in csv.DictReader(stream) if int(r["state"]) == 3],
+                        key=lambda r: (int(r["visible"]), int(r["sequence"]), int(r["frame"])))
+    selected = [("ordinary", frames[len(frames) // 2]), ("dense", frames[-1])]
+    report = dict(optimizer_steps=0, checkpoint_saved=False, migration=migration,
+                  host_E_before=host_disk(), resources_before=runtime_resources(), scans=[])
+    for scope, record in selected:
+        source = STUSequence.open(data_root, protocol=load_protocol(), partition="val",
+            sequence_id=int(record["sequence"]), label_mode="required")[int(record["frame"])]
+        started = time.perf_counter()
+        prepared = transform(source)
+        preparation_seconds = time.perf_counter() - started
+        scan = to_device(prepared, "cuda")
+        query = torch.from_numpy(np.linspace(0, source.real_count - 1, min(10240, source.real_count), dtype=np.int64)).cuda()
+        model.zero_grad(set_to_none=True)
+        model.eval()
+        torch.cuda.reset_peak_memory_stats()
+        torch.cuda.synchronize()
+        started = time.perf_counter()
+        with torch.no_grad():
+            output = model(scan, return_features=True)
+            full_score, full_relation = output["score"][query].cpu(), output["relation"][query].cpu()
+            if len(output["score"]) != source.real_count or not torch.isfinite(output["score"]).all():
+                raise ValueError("V3 full scan lost a physical return or produced nonfinite scores")
+            del output
+        torch.cuda.synchronize()
+        inference_seconds = time.perf_counter() - started
+        model.train()
+        set_trainable(model, config, 129)
+        torch.cuda.synchronize()
+        started = time.perf_counter()
+        output = training_forward(model, scan, query, return_features=True)
+        torch.testing.assert_close(output["score"].detach().cpu(), full_score, rtol=2e-5, atol=2e-5)
+        torch.testing.assert_close(output["relation"].detach().cpu(), full_relation, rtol=2e-5, atol=2e-5)
+        # An unlabeled numerical probe checks derivatives without training on development labels.
+        output["score"].square().mean().backward()
+        if any(not torch.isfinite(p.grad).all() for p in model.parameters() if p.grad is not None):
+            raise FloatingPointError("V3 real-scan backward produced a nonfinite gradient")
+        torch.cuda.synchronize()
+        item = dict(scope=scope, sequence=source.sequence_id, frame=source.frame_id,
+            source_identity=source_identity(source), returns=source.real_count, queries=len(query),
+            support_cells=[len(scan[f"cell_{i}_count"]) for i in range(3)],
+            preparation_seconds=preparation_seconds, full_inference_seconds=inference_seconds,
+            query_forward_backward_seconds=time.perf_counter() - started,
+            peak_cuda_bytes=torch.cuda.max_memory_allocated(), gradients_finite=True,
+            score_max_error=float((output["score"].detach().cpu() - full_score).abs().max()),
+            relation_max_error=float((output["relation"].detach().cpu() - full_relation).abs().max()),
+            new_head_columns_gradient_norm=float(model.head[0].weight.grad[:, 128:192].norm()))
+        if item["new_head_columns_gradient_norm"] == 0:
+            raise ValueError("zero-initialized new score columns cannot begin learning")
+        report["scans"].append(item)
+        print(f"V3核验 {scope} {source.sequence_id}/{source.frame_id} 点={source.real_count} "
+              f"前向={inference_seconds:.2f}s 前反向={item['query_forward_backward_seconds']:.2f}s "
+              f"显存={item['peak_cuda_bytes']/2**30:.2f}GiB", flush=True)
+        del output, scan, prepared
+    report["paired_risk"] = check_population(model, config, data_root, saved["preprocessing"])
+    if any(not torch.equal(value.cpu(), original_state[name]) for name, value in model.state_dict().items()):
+        raise ValueError("no-update V3 verification changed parameters or BN buffers")
+    report.update(all_parameters_and_BN_unchanged=True, resources_after=runtime_resources(), host_E_after=host_disk())
+    return report
+
+
+def check_population(model, config, data_root, preprocessing):
+    """Exercise two real frozen requests through augmentation and the new risk, without updates."""
+    from .coverage import CoverageRequests
+    dataset = TrainingFrames(config, data_root, preprocessing=preprocessing)
+    requests = CoverageRequests(dataset.conditions.population, dataset.conditions.cells,
+        dataset.conditions.counts[:, 0], config["training"]["seed"], 8192)
+    rows = [dataset[requests.take()] for _ in range(2)]
+    torch.set_num_threads(4)
+    model.train()
+    set_trainable(model, config, 129)
+    model.zero_grad(set_to_none=True)
+    torch.cuda.reset_peak_memory_stats()
+    started = time.perf_counter()
+    loss, stats = batch_loss(model, rows, config, 0)
+    loss.backward()
+    if not torch.isfinite(loss) or any(not torch.isfinite(p.grad).all() for p in model.parameters() if p.grad is not None):
+        raise FloatingPointError("V3 augmented physical-pair risk or gradient is nonfinite")
+    torch.cuda.synchronize()
+    stats.update(optimizer_steps=0, scans=4, seconds=time.perf_counter()-started,
+        peak_cuda_bytes=torch.cuda.max_memory_allocated(), requests=[dict(r["request"],
+            world=r["world"], frame=r["frame"], yaw=r["yaw"], population_counts=r["population_counts"],
+            query_groups=r["query_groups"]) for r in rows])
+    print(f"V3配对风险核验 请求=2 扫描=4 loss={stats['total']:.5f} 前反向={stats['seconds']:.2f}s 更新=0", flush=True)
     return stats
 
 
@@ -1059,12 +1253,33 @@ def save_checkpoint(path, payload):
 
 def make_optimizer(model, config):
     t = config["training"]
+    if config.get("format") == "ajae-v3":
+        groups = []
+        for name, rate in (("backbone", t["backbone_learning_rate"]),
+                           ("inherited", t["inherited_learning_rate"]), ("new_modules", t["learning_rate"])):
+            for decay in (True, False):
+                parameters = [p for key, p in model.named_parameters()
+                    if parameter_family(key) == name and (p.ndim >= 2) == decay]
+                groups.append(dict(name=name + ("_decay" if decay else "_no_decay"), params=parameters,
+                                   lr=rate, weight_decay=t["weight_decay"] if decay else 0.))
+        return torch.optim.AdamW(groups, lr=t["learning_rate"], betas=(.9, .999), eps=1e-8)
     parameters = model.parameters()
     if config["initialization"] == "nuscenes_litept_s":
         parameters = [dict(name="backbone", params=list(model.backbone.parameters()), lr=t["backbone_learning_rate"]),
             dict(name="new_modules", params=[p for name, p in model.named_parameters()
                                            if not name.startswith("backbone.")], lr=t["learning_rate"])]
     return torch.optim.AdamW(parameters, lr=t["learning_rate"], weight_decay=t["weight_decay"])
+
+
+def parameter_family(name):
+    return "backbone" if name.startswith("backbone.") else "inherited" if name.startswith(("context.", "point.")) else "new_modules"
+
+
+def set_trainable(model, config, update):
+    if config.get("format") == "ajae-v3":
+        for name, parameter in model.named_parameters():
+            parameter.requires_grad_(update > config["training"]["learning_rate_schedule"]["freeze_updates"]
+                                     or parameter_family(name) == "new_modules")
 
 
 def learning_rate_factor(update, schedule):
@@ -1080,6 +1295,18 @@ def learning_rate_factor(update, schedule):
 
 def learning_rates(config, update):
     t = config["training"]
+    if config.get("format") == "ajae-v3":
+        schedule = t["learning_rate_schedule"]
+        if not 1 <= update <= schedule["total_updates"]:
+            raise ValueError("V3 update lies outside the declared1024-update schedule")
+        warmup, freeze, decay = (schedule[k] for k in ("warmup_updates", "freeze_updates", "decay_start"))
+        if update <= decay:
+            new = .1 + .9 * min(update - 1, warmup - 1) / (warmup - 1)
+            inherited = 0. if update <= freeze else .1 + .9 * (update - freeze - 1) / (warmup - 1)
+        else:
+            new = inherited = .1 + .9 * .5 * (1 + math.cos(math.pi * (update - decay) / (schedule["total_updates"] - decay)))
+        return [factor * peak for peak, factor in ((t["backbone_learning_rate"], inherited),
+            (t["inherited_learning_rate"], inherited), (t["learning_rate"], new)) for _ in range(2)]
     factor = learning_rate_factor(update, t["learning_rate_schedule"]) if "learning_rate_schedule" in t else 1.
     return [factor * t["backbone_learning_rate"], factor * t["learning_rate"]] if "backbone_learning_rate" in t else [factor * t["learning_rate"]]
 
@@ -1097,14 +1324,20 @@ def schedule_state(optimizer, config, completed):
     if "learning_rate_schedule" not in config["training"]:
         return None
     # Checkpoints retain the last applied rate; the next update derives its own rate from the global index.
-    return dict(completed_updates=completed, learning_rates=[g["lr"] for g in optimizer.param_groups])
+    result = dict(completed_updates=completed, learning_rates=[g["lr"] for g in optimizer.param_groups])
+    if config.get("format") == "ajae-v3":
+        result.update(phase="adapt" if completed <= 128 else "joint", accumulation_boundary=0,
+            parameter_updates={g["name"]: sorted({int(optimizer.state.get(p, {}).get("step", 0)) for p in g["params"]})
+                               for g in optimizer.param_groups})
+    return result
 
 
 def parameter_change(model, before):
-    """Detached two-group L2 changes; no rescaling of the actual optimization step."""
+    """Detached parameter-family L2 changes; no rescaling of the actual optimization step."""
     sums = {}
     for name, parameter in model.named_parameters():
-        group = "backbone" if name.startswith("backbone.") else "new_modules"
+        group = (parameter_family(name) if getattr(model, "config", {}).get("relation_mode") == "multiscale" else
+                 "backbone" if name.startswith("backbone.") else "new_modules")
         previous = before[name].double()
         values = torch.stack((previous.square().sum(), (parameter.detach().double() - previous).square().sum()))
         sums[group] = sums.get(group, 0) + values
@@ -1119,7 +1352,8 @@ def gradient_groups(model):
     sums = {}
     for name, parameter in model.named_parameters():
         if parameter.grad is not None:
-            group = "backbone" if name.startswith("backbone.") else "new_modules"
+            group = (parameter_family(name) if getattr(model, "config", {}).get("relation_mode") == "multiscale" else
+                     "backbone" if name.startswith("backbone.") else "new_modules")
             sums[group] = sums.get(group, 0) + parameter.grad.detach().double().square().sum()
     return {name: float(value.sqrt()) for name, value in sums.items()}
 
@@ -1131,6 +1365,19 @@ def forward_state(model):
         torch_rng=torch.get_rng_state(), cuda_rng=torch.cuda.get_rng_state_all(),
         python_rng=random.getstate(),
         numpy_rng=(name, torch.from_numpy(values.astype(np.int64)), position, has_gauss, cached))
+
+
+def restore_forward_state(model, state):
+    """Discard an interrupted accumulation while parameters and optimizer are still unchanged."""
+    with torch.no_grad():
+        for name, value in model.named_buffers():
+            value.copy_(state["buffers"][name])
+    torch.set_rng_state(state["torch_rng"])
+    torch.cuda.set_rng_state_all(state["cuda_rng"])
+    random.setstate(state["python_rng"])
+    name, values, position, has_gauss, cached = state["numpy_rng"]
+    np.random.set_state((name, values.numpy().astype(np.uint32), position, has_gauss, cached))
+    model.zero_grad(set_to_none=True)
 
 
 def intensity_summary(sequence):
@@ -1305,12 +1552,12 @@ def load_experiment(path, arm=None):
         if reference.get("format") != "ajae-v2-learning" or "control_of" in reference:
             raise ValueError("short controls require the original V2 declaration")
         experiment = reference | experiment
-    if experiment.get("format") not in ("ajae-micro-learning", "ajae-short-learning", "ajae-staged-learning", "ajae-v2-learning"):
+    if experiment.get("format") not in ("ajae-micro-learning", "ajae-short-learning", "ajae-staged-learning", "ajae-v2-learning", "ajae-v3-learning"):
         raise ValueError("unknown finite-learning declaration")
     if "selection_from" in experiment:
         experiment["selection"] = json.loads((PROJECT_ROOT / experiment["selection_from"]).read_text())["selection"]
     if "replacements_from" in experiment:
-        if experiment["format"] != "ajae-v2-learning":
+        if experiment["format"] not in {"ajae-v2-learning", "ajae-v3-learning"}:
             raise ValueError("world replacement is an explicit new-stage operation")
         root = json.loads((PROJECT_ROOT / experiment["replacements_from"]).read_text())
         current = {e["world_identity"]: e["path"] for s in root["splits"].values() for e in s["worlds"]}
@@ -1336,9 +1583,14 @@ def load_experiment(path, arm=None):
 def experiment_config(experiment, path=None):
     config = load_config(path or (PROJECT_ROOT / experiment["base_config"] if experiment else PROJECT_ROOT / "protocol/model.json"))
     if experiment is not None:
-        config["model"].update(experiment.get("model_overrides", {}))
-        config["loss"].update(experiment["loss_overrides"])
-        config["training"].update(experiment.get("training_overrides", {}))
+        if experiment["format"] == "ajae-v3-learning":
+            config["format"] = "ajae-v3"
+            for key in ("model", "training", "loss"):
+                config[key] = deepcopy(experiment[key])
+        else:
+            config["model"].update(experiment.get("model_overrides", {}))
+            config["loss"].update(experiment["loss_overrides"])
+            config["training"].update(experiment.get("training_overrides", {}))
         config["scope"] = experiment.get("scope", config.get("scope", ""))
     return validate_config(config)
 
@@ -1416,7 +1668,24 @@ def validate_resume_state(saved, config, identities, probabilities, experiment, 
         raise ValueError("resume native-low-support identities or slot sets changed")
     if "learning_rate_schedule" in config["training"]:
         rates = learning_rates(config, max(1, saved["step"]))
-        if (saved.get("scheduler_state") != dict(completed_updates=saved["step"], learning_rates=rates)
+        expected_schedule = dict(completed_updates=saved["step"], learning_rates=rates)
+        if config.get("format") == "ajae-v3":
+            counts = {}
+            for group in saved["optimizer"]["param_groups"]:
+                values = [saved["optimizer"]["state"].get(p, {}) for p in group["params"]]
+                actual = sorted({int(v.get("step", 0)) for v in values})
+                expected_count = saved["step"] if group["name"].startswith("new_modules") else max(0, saved["step"] - 128)
+                if actual != [expected_count] or any(not torch.isfinite(x).all() for v in values for x in v.values() if isinstance(x, torch.Tensor)):
+                    raise ValueError("V3 parameter group has inconsistent actual optimizer updates")
+                counts[group["name"]] = actual
+            expected_schedule.update(phase="adapt" if saved["step"] <= 128 else "joint",
+                                     accumulation_boundary=0, parameter_updates=counts)
+            requests = saved["step"] * config["training"]["batch_frames"] * config["training"]["accumulation_steps"]
+            expected_streams = {name: dict(seed=config["training"]["seed"], stream=tag, next_draw=requests)
+                                for name, tag in (("query", 11), ("augmentation", 13))}
+            if saved["request_state"]["consumed_requests"] != requests or saved["streams"] != expected_streams:
+                raise ValueError("V3 recovery must bind RNG and coverage to the consumed accumulation boundary")
+        if (saved.get("scheduler_state") != expected_schedule
                 or [group["lr"] for group in saved["optimizer"]["param_groups"]] != rates):
             raise ValueError("saved learning rates do not match the completed global update")
     return saved["step"]
@@ -1457,17 +1726,24 @@ def validate_branch_state(saved, config, identities, probabilities, experiment):
 
 def validate_stage_parent(saved, config, experiment):
     """Validate historical parent state independently of explicitly repaired diagnostic worlds."""
-    if (experiment.get("format") != "ajae-v2-learning" or experiment["warm_start"]["step"] != 1152
+    if (experiment.get("format") not in {"ajae-v2-learning", "ajae-v3-learning"} or experiment["warm_start"]["step"] != 1152
             or saved.get("step") != 1152 or saved.get("format") != "ajae-v1-checkpoint"
             or "group_queries" not in config["training"] or "preprocessing" not in saved
             or saved["config"]["loss"]["keep_mode"] != "mean"
             or saved["config"]["loss"]["tail_weight"] != 0.
             or repaired_selection(saved.get("experiment", {}).get("selection", {}),
                                   experiment.get("world_replacements", {})) != experiment["selection"]):
-        raise ValueError("V2 must inherit the declared mean1152 model and fixed evaluation selection")
+        raise ValueError("the new stage must inherit the declared mean1152 model and fixed evaluation selection")
     probabilities = saved["probabilities"].numpy() if saved["probabilities"] is not None else None
     # Validate the parent's own completed history; repaired worlds belong to the new stage.
     validate_resume_state(saved, saved["config"], saved["samples"], probabilities, saved["experiment"])
+    if experiment["format"] == "ajae-v3-learning":
+        if config != experiment_config(experiment):
+            raise ValueError("V3 initialization differs from its complete declaration")
+        ScanTransform(config, state=saved["preprocessing"])
+        if any(not torch.isfinite(value).all() for value in saved["model"].values()):
+            raise ValueError("V3 parent contains nonfinite tensors")
+        return
     expected = deepcopy(saved["config"])
     expected["model"].update(experiment.get("model_overrides", {}))
     expected["training"].update(experiment["training_overrides"])
@@ -1481,9 +1757,12 @@ def validate_stage_parent(saved, config, experiment):
 
 
 def initialize_stage(model, saved, config, experiment):
-    """Inherit a compatible trained model, but start the declared V2 optimizer and RNG at zero."""
+    """Inherit compatible weights and start the declared new-stage optimizer and RNG at zero."""
     validate_stage_parent(saved, config, experiment)
-    model.load_state_dict(saved["model"], strict=True)
+    if config.get("format") == "ajae-v3":
+        transfer_parent(model, saved)
+    else:
+        model.load_state_dict(saved["model"], strict=True)
     seed = config["training"]["seed"]
     torch.manual_seed(seed)
     random.seed(seed)
@@ -1498,9 +1777,10 @@ def fit(config, data_root, steps, output, resume=None, *, experiment=None, resum
     if steps < 1:
         raise ValueError("training needs a positive explicit update budget")
     output = Path(output)
+    v3 = experiment is not None and experiment["format"] == "ajae-v3-learning"
     v2 = experiment is not None and experiment["format"] == "ajae-v2-learning"
-    staged = experiment is not None and experiment["format"] in {"ajae-staged-learning", "ajae-v2-learning"}
-    warm_starting = v2 and resume is None
+    staged = experiment is not None and experiment["format"] in {"ajae-staged-learning", "ajae-v2-learning", "ajae-v3-learning"}
+    warm_starting = (v2 or v3) and resume is None
     controlled = experiment is not None and "branch" in experiment
     branch_start = controlled and resume is None
     in_place = (staged or controlled) and resume is not None and Path(resume).resolve().parent == output.resolve()
@@ -1511,7 +1791,7 @@ def fit(config, data_root, steps, output, resume=None, *, experiment=None, resum
     if output.exists() and any(output.iterdir()) and not in_place:
         raise ValueError("training output is occupied; resume into an empty output directory")
     initial = PROJECT_ROOT / experiment["initial_checkpoint"] if experiment and "initial_checkpoint" in experiment else None
-    if v2:
+    if v2 or v3:
         initial = PROJECT_ROOT / experiment["warm_start"]["checkpoint"]
     if controlled:
         if "initial_checkpoint" in experiment or steps != experiment["maximum_updates"]:
@@ -1521,7 +1801,7 @@ def fit(config, data_root, steps, output, resume=None, *, experiment=None, resum
     saved = torch.load(state_path, map_location="cpu", weights_only=True) if state_path is not None else None
     if config["initialization"] == "nuscenes_litept_s" and saved is None:
         raise ValueError("pretrained training must start from its saved initialized state")
-    if saved is not None and (saved.get("format") != "ajae-v1-checkpoint" or "preprocessing" not in saved):
+    if saved is not None and (saved.get("format") not in {"ajae-v1-checkpoint", "ajae-v3-checkpoint"} or "preprocessing" not in saved):
         raise ValueError("resume requires the saved inference preprocessing state")
     if experiment is not None and not 1 <= steps <= experiment["maximum_updates"]:
         raise ValueError("finite learning cannot exceed its declared update budget")
@@ -1584,11 +1864,22 @@ def fit(config, data_root, steps, output, resume=None, *, experiment=None, resum
             np.random.set_state((name, values.numpy().astype(np.uint32), position, has_gauss, cached))
     if resume is None and not branch_start:
         set_learning_rates(optimizer, config, 1)
+    accumulation = config["training"].get("accumulation_steps", 1)
+    consumed = None
+    if v3:
+        from .coverage import CoverageRequests
+        request_state = saved["request_state"] if resume else None
+        arguments = (dataset.conditions.population, dataset.conditions.cells, dataset.conditions.counts[:, 0],
+                     config["training"]["seed"], steps * config["training"]["batch_frames"] * accumulation)
+        consumed = CoverageRequests(*arguments, state=request_state, mixture=experiment["coverage_mixture"])
+        sampler = CoverageRequests(*arguments, state=request_state, mixture=experiment["coverage_mixture"])
+    else:
+        sampler = Requests(probabilities, config, steps, start, samples=selected)
     monitor = experiment.get("optimization_monitor", {}) if experiment else {}
     # Include retained evaluation states, an emergency state and atomic output overlap.
     disk = host_disk()
     checkpoint_bound = sum(p.numel() for p in model.parameters()) * 20 + 64 * 2**20
-    retained = (len(experiment["evaluation"]["synthetic_steps"]) + 4 if staged else 7 if experiment else 2)
+    retained = (len(experiment["checkpoint_steps"]) + 4 if v3 else len(experiment["evaluation"]["synthetic_steps"]) + 4 if staged else 7 if experiment else 2)
     peak = ((retained + monitor.get("retained_alerts", 0)) * checkpoint_bound
             + (2 * 2**30 if staged else 512_000_000)
             + (steps - start) * (8192 if staged else 512 + 20 * config["training"]["batch_frames"]))
@@ -1606,9 +1897,9 @@ def fit(config, data_root, steps, output, resume=None, *, experiment=None, resum
     if controlled:
         run["branch"] = dict(experiment["branch"], arm=experiment["arm"],
                              inherited="model, buffers, AdamW moments, preprocessing, all RNG and global update")
-    if v2:
+    if v2 or v3:
         run["parent"] = dict(experiment["warm_start"],
-            inherited="model, BatchNorm buffers, preprocessing; new optimizer and local random streams")
+            inherited="compatible encoders and named base-head columns" if v3 else "model, BatchNorm buffers, preprocessing; new optimizer and local random streams")
     if staged or controlled:
         run["resources_before"] = runtime_resources()
     if in_place:
@@ -1631,13 +1922,14 @@ def fit(config, data_root, steps, output, resume=None, *, experiment=None, resum
         from .evaluate import prepare_fixed, evaluate_fixed
         _atomic_json(output / "selection.json", experiment)
         prepared = prepare_fixed(data_root, experiment["selection"],
-            synthetic_splits=experiment["evaluation"].get("synthetic_splits", ["train", "validation"]))
+            synthetic_splits=experiment["evaluation"].get("synthetic_splits", ["train", "validation"]),
+            binary_view=experiment["evaluation"].get("binary_view"))
         transform = ScanTransform(config, state=dataset.preprocessing, workers=8)
         diagnostic_indices = prepared["indices"]["train"]
         exposure = {index: saved.get("diagnostic_exposure", {}).get(index, 0) if resume or branch_start else 0
                     for index in diagnostic_indices}
     stages = json.loads((output / "exposure.json").read_text()).get("stages", {}) if in_place else {}
-    if staged:
+    if staged and not v3:
         from .exposure import coverage_context, training_summary
         wanted = {(identities[index][0], identities[index][1])
                   for index, _, _ in Requests(probabilities, config, steps, start)}
@@ -1653,14 +1945,20 @@ def fit(config, data_root, steps, output, resume=None, *, experiment=None, resum
 
     def checkpoint_payload(step):
         name, values, position, has_gauss, cached = np.random.get_state()
-        return dict(format="ajae-v1-checkpoint", config=config, model=model.state_dict(),
+        extra = {}
+        if v3:
+            state = consumed.state_dict()
+            state["visited"] = torch.from_numpy(state["visited"])
+            extra = dict(request_state=state, streams={name: dict(seed=config["training"]["seed"], stream=tag,
+                next_draw=consumed.draw) for name, tag in (("query", 11), ("augmentation", 13))})
+        return dict(format="ajae-v3-checkpoint" if v3 else "ajae-v1-checkpoint", config=config, model=model.state_dict(),
             preprocessing=dataset.preprocessing, optimizer=optimizer.state_dict(), step=step, samples=identities,
             probabilities=None if probabilities is None else torch.from_numpy(probabilities),
             torch_rng=torch.get_rng_state(), cuda_rng=torch.cuda.get_rng_state_all(), experiment=experiment,
             python_rng=random.getstate(), numpy_rng=(name, torch.from_numpy(values.astype(np.int64)), position, has_gauss, cached),
             scheduler_state=schedule_state(optimizer, config, step),
             diagnostic_exposure=exposure if prepared is not None else {},
-            **(dict(parent=experiment["warm_start"], condition_sources=condition_sources) if v2 else {}))
+            **(dict(parent=experiment["warm_start"], condition_sources=condition_sources) if v2 or v3 else {}), **extra)
 
     def snapshot(step, failure=None, *, rolling=False):
         volume = host_disk()
@@ -1710,16 +2008,29 @@ def fit(config, data_root, steps, output, resume=None, *, experiment=None, resum
         print(f"评价 {step}/{steps} 开始", flush=True)
         with evaluation_state(model):
             real_scores, synthetic_scores = {}, {}
+            raw_scores, real_threshold = {}, None
             schedule = experiment["evaluation"]
             if staged:
                 from .evaluate import evaluate_validation, evaluate_synthetic
-                stages[str(step)] = training_summary(output / "loss.jsonl", config, step)
+                if v3:
+                    from .evaluate import prepare_reference
+                    prepare_reference(data_root, experiment)
+                if not v3:
+                    stages[str(step)] = training_summary(output / "loss.jsonl", config, step)
+                else:
+                    stages[str(step)] = dict(updates=step, consumed_requests=consumed.draw,
+                        unique_world_frames=int(consumed.visited.sum()), binary_view=config["training"]["binary_view"])
                 save_exposure()
                 for suffix, due, evaluator, captured in (
                     ("val", schedule["full_val19_steps"], evaluate_validation, real_scores),
                     ("synthetic", schedule["full_synthetic_steps"], evaluate_synthetic, synthetic_scores)):
                     path = output / f"{step}_{suffix}.json"
-                    if step not in due or path.exists():
+                    if step not in due:
+                        continue
+                    if path.exists():
+                        if v3 and suffix == "val":
+                            from .evaluate import captured_scores
+                            captured.update(captured_scores(data_root, output / f"{step}_real.npz"))
                         continue
                     if suffix == "val":
                         captured.update({(int(key), frame): None for key, frames in experiment["selection"]["val"].items()
@@ -1729,32 +2040,46 @@ def fit(config, data_root, steps, output, resume=None, *, experiment=None, resum
                             captured.update({(r["sequence"], r["frame"]): None for r in diagnostic["frames"]})
                     else:
                         captured.update({(r["identity"], r["frame"]): None for r in experiment["selection"]["validation"]})
-                    result = evaluator(data_root, checkpoint_path=output / f"{step}.pt", directory=output, capture=captured)
+                    result = evaluator(data_root, checkpoint_path=output / f"{step}.pt", directory=output, capture=captured,
+                                       **(dict(save_capture=True) if v3 and suffix == "val" else {}))
                     _atomic_json(path, dict(step=step, **result))
                     from .evaluate import print_metrics
                     print_metrics("完整val19" if suffix == "val" else "完整合成集", result)
                 if "diagnostic_from" in experiment:
                     from .evaluate import evaluate_diagnostic
                     evaluate_diagnostic(data_root, output / f"{step}.pt", PROJECT_ROOT / experiment["diagnostic_from"],
-                        output, capture=real_scores, reference=PROJECT_ROOT / experiment["reference_checkpoint"])
+                        output, capture=real_scores, reference=PROJECT_ROOT / experiment["reference_checkpoint"] if "reference_checkpoint" in experiment else None)
+                if v3:
+                    from .evaluate import evaluate_normal_source, model_selection
+                    full = json.loads((output / f"{step}_val.json").read_text())
+                    real_threshold = full["official_high_recall"]["threshold"]
+                    raw_scores = {(201, r["frame"]): None for r in experiment["selection"]["validation"]}
+                    path = output / f"{step}_normal201.json"
+                    if not path.exists():
+                        result = evaluate_normal_source(model, transform, data_root, real_threshold, capture=raw_scores)
+                        _atomic_json(path, dict(step=step, checkpoint=str((output / f"{step}.pt").resolve()), **result))
+                    parent = json.loads((PROJECT_ROOT / "results/keep/mean/global.json").read_text())
+                    run["model_selection"] = model_selection(output, parent)
             if not staged or not (output / f"{step}.json").exists():
                 result = evaluate_fixed(model, transform, prepared,
                     include_real=step in schedule["real_steps"], directory=output,
                     include_pairs=step in schedule.get("paired_normal_steps", []),
                     include_normalization=step in schedule.get("normalization_steps", []),
-                    real_scores=real_scores, synthetic_scores=synthetic_scores)
+                    real_scores=real_scores, synthetic_scores=synthetic_scores, raw_scores=raw_scores,
+                    real_threshold=real_threshold)
                 _atomic_json(output / f"{step}.json", dict(step=step, checkpoint=f"{step}.pt", **result))
         evaluating = False
         print(f"评价 {step}/{steps} 完成", flush=True)
 
     workers = config["training"]["workers"]
-    loader = DataLoader(dataset, sampler=Requests(probabilities, config, steps, start, samples=selected),
+    loader = DataLoader(dataset, sampler=sampler,
         batch_size=config["training"]["batch_frames"], num_workers=workers,
         collate_fn=_collate, pin_memory=True, persistent_workers=bool(workers),
         generator=torch.Generator().manual_seed(config["training"]["seed"] + 83) if experiment else None,
         **(dict(multiprocessing_context="spawn", prefetch_factor=1) if workers else {}))
     model.train()
     completed, rows = start, []
+    before_forward, pending_update = None, False
     stopped, evaluating = False, False
 
     def request_stop(signum, _):
@@ -1773,18 +2098,18 @@ def fit(config, data_root, steps, output, resume=None, *, experiment=None, resum
             if (not staged and not controlled) or start in experiment["evaluation"]["synthetic_steps"]:
                 evaluate(start)
         with (output / "loss.jsonl").open("a") as log:
-            for step, rows in enumerate(loader, start):
+            batches = iter(loader)
+            for step in range(start, steps):
                 if stopped:
                     snapshot(completed, rolling=True)
                     break
                 started = time.perf_counter()
                 rates = set_learning_rates(optimizer, config, step + 1)
-                before_forward = forward_state(model) if monitor else None
+                set_trainable(model, config, step + 1)
+                before_forward = forward_state(model) if monitor or v3 else None
+                rows, pending_update = [], True
                 optimizer.zero_grad(set_to_none=True)
-                loss, stats = batch_loss(model, rows, config, step)
-                if not torch.isfinite(loss):
-                    raise FloatingPointError(f"nonfinite task loss at update {step}")
-                loss.backward()
+                rows, stats = accumulate_batches(model, batches, config, step)
                 parameters = list(model.parameters())
                 norm = torch.nn.utils.get_total_norm([p.grad for p in parameters if p.grad is not None], error_if_nonfinite=True)
                 extreme = bool(monitor) and float(norm) >= monitor["gradient_alert"]
@@ -1796,7 +2121,11 @@ def fit(config, data_root, steps, output, resume=None, *, experiment=None, resum
                     before_parameters = {name: p.detach().clone() for name, p in model.named_parameters()}
                 # This is exactly the second half of PyTorch's clip_grad_norm_, with the same norm.
                 torch.nn.utils.clip_grads_with_norm_(parameters, config["training"]["gradient_clip"], norm)
+                pending_update = False  # A failed optimizer step may have partially changed parameters.
                 optimizer.step()
+                if v3:
+                    for row in rows:
+                        consumed.consume(row["request"])
                 if measured:
                     stats["parameter_changes"] = parameter_change(model, before_parameters)
                     del before_parameters
@@ -1807,9 +2136,18 @@ def fit(config, data_root, steps, output, resume=None, *, experiment=None, resum
                     seconds=time.perf_counter() - started,
                     samples=[r["sample"] for r in rows], draws=[r["draw"] for r in rows],
                     full_input_returns=[len(r["scan"]["xyzi"]) for r in rows])
-                if staged:
+                if staged and not v3:
                     stats["exposure"] = [r["exposure"] for r in rows]
-                if prepared is not None:
+                if v3:
+                    stats.update(accumulation_steps=accumulation, consumed_requests=consumed.draw,
+                        phase="adapt" if completed <= 128 else "joint",
+                        requests=[dict(r["request"], world=r["world"], frame=r["frame"], yaw=r["yaw"],
+                            population_counts=r["population_counts"], query_groups=r["query_groups"],
+                            anomaly_queries=r["anomaly_queries"]) for r in rows])
+                    for row in rows:
+                        if row["sample"] in exposure:
+                            exposure[row["sample"]] += 1
+                elif prepared is not None:
                     hits = dict(normal=0, anomaly=0, active_keep=0)
                     for row in rows:
                         if row["sample"] in exposure:
@@ -1826,7 +2164,8 @@ def fit(config, data_root, steps, output, resume=None, *, experiment=None, resum
                     stats["known_sparse_witness_queries"] = hits
                 log.write(json.dumps(stats, allow_nan=False) + "\n")
                 log.flush()
-                rates_text = "/".join(f"{rate:.2e}" for rate in rates.values())
+                displayed_rates = [g["lr"] for g in optimizer.param_groups[::2]] if v3 else rates.values()
+                rates_text = "/".join(f"{rate:.2e}" for rate in displayed_rates)
                 print(f"训练 {completed:4d}/{steps} loss={stats['total']:.5f} grad={float(norm):.3g} "
                       f"lr={rates_text} {stats['seconds']:.1f}s", flush=True)
                 run["completed_updates"] = completed
@@ -1853,7 +2192,13 @@ def fit(config, data_root, steps, output, resume=None, *, experiment=None, resum
             run.update(status="interrupted", completed_updates=completed, error=repr(error))
         else:
             try:
-                snapshot(completed, failure=error)
+                if v3 and pending_update:
+                    restore_forward_state(model, before_forward)
+                    set_learning_rates(optimizer, config, max(1, completed))
+                    snapshot(completed, rolling=True)
+                    run["recovery"] = "discarded partial gradients; saved model/RNG and consumed requests at the preceding complete update"
+                else:
+                    snapshot(completed, failure=error)
             except OSError as storage_error:
                 run["emergency_save_error"] = str(storage_error)
             _atomic_json(output / "failure.json", dict(completed_updates=completed, error=repr(error),
@@ -1912,8 +2257,8 @@ def main():
         parser.error("--arm requires a declared --experiment fit or check")
     experiment = load_experiment(args.experiment, args.arm) if args.experiment is not None else None
     if experiment is not None and args.command != "fit" and not (
-            args.command == "check" and experiment["format"] == "ajae-v2-learning"):
-        parser.error("--experiment supports a declared fit or a V2 no-update check")
+            args.command == "check" and experiment["format"] in {"ajae-v2-learning", "ajae-v3-learning"}):
+        parser.error("--experiment supports a declared fit or a V2/V3 no-update check")
     config = experiment_config(experiment, args.config)
     if config["initialization"] != "random_no_external_weights" and args.command in ("check", "preview") and not experiment:
         parser.error("use initialize to inspect the actual pretrained state")
@@ -1960,9 +2305,11 @@ def main():
         else:
             diagnose(args.checkpoint, args.data_root, args.log, args.output)
     elif args.command == "check":
-        if args.steps is not None or args.output is not None or args.resume is not None:
+        if args.steps is not None or (args.output is not None and config.get("format") != "ajae-v3") or args.resume is not None:
             parser.error("check has no optimization budget, output directory or resume state")
-        check(config, args.data_root, args.sample if args.sample is not None else [161, 162], experiment=experiment)
+        result = check(config, args.data_root, args.sample if args.sample is not None else [161, 162], experiment=experiment)
+        if args.output is not None:
+            _atomic_json(args.output, result)
     elif args.command == "preview":
         if args.steps is None or args.output is None or args.sample is not None or args.resume is not None:
             parser.error("preview requires --steps and --output; it has no fixed check samples or resume state")

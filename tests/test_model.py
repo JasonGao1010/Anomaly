@@ -15,6 +15,83 @@ from src.train import (Requests, auxiliary_fraction, detection_loss, keep_loss,
 from vendor.litept.pointrope import PointROPE
 
 
+def test_v3_cells_keep_duplicates_counts_moments_and_all_two_meter_support():
+    from src.model import support_cells
+    rng = np.random.default_rng(31)
+    xyz = np.r_[np.array([[10.399999, 0., 0.]]), [10.4, 0., 0.] + rng.uniform(-1.9, 1.9, (80, 3))]
+    xyz = np.r_[xyz, xyz[[0]]]
+    xyzi = np.column_stack((xyz, np.linspace(.1, 1.1, len(xyz)))).astype(np.float32)
+    _, first = np.unique(xyzi[:, :3], axis=0, return_index=True)
+    cells = support_cells(xyzi, [.05, .2, .8], first)
+    for scale in range(3):
+        assert cells[f"cell_{scale}_count"].sum() == len(xyzi)
+        assert cells[f"cell_{scale}_positions"].sum() == len(first)
+        for i in range(len(cells[f"cell_{scale}_count"])):
+            points = xyzi[cells[f"cell_{scale}_inverse"] == i]
+            np.testing.assert_allclose(cells[f"cell_{scale}_centroid"][i], points[:, :3].astype(np.float64).mean(0), atol=1e-6)
+            np.testing.assert_allclose(cells[f"cell_{scale}_statistics"][i, -2:],
+                [points[:, 3].astype(np.float64).mean(), points[:, 3].astype(np.float64).var()], atol=1e-7)
+    for i, point in enumerate(xyzi[:, :3].astype(np.float64)):
+        inside = np.linalg.norm(xyzi[:, :3].astype(np.float64) - point, axis=1) <= 2
+        own = cells["cell_2_inverse"][i]
+        assert set(cells["cell_2_inverse"][inside]) <= set(cells["cell_2_adjacent"][own])
+
+
+def test_v3_relation_has_uncapped_gradient_path_and_zero_value_null():
+    from src.model import MultiscaleRelation
+    from src.train import experiment_config, load_experiment
+    config = experiment_config(load_experiment("protocol/v3.json"))
+    source = scan_fixture()
+    scan = ScanTransform(config)(source)
+    z = torch.randn(len(source.real_slots), 64, requires_grad=True)
+    h = torch.randn_like(z)
+    layer = MultiscaleRelation()
+    query = torch.tensor([1, 3])
+    full = layer(z, h, scan, torch.arange(len(z)), chunk=3, recompute=True)
+    part = layer(z, h, scan, query, chunk=1, recompute=False)
+    torch.testing.assert_close(part, full[query], rtol=2e-5, atol=2e-5)
+    part.square().mean().backward()
+    assert all(torch.isfinite(p.grad).all() for p in layer.parameters() if p.grad is not None)
+    unsupported = {k: v.clone() for k, v in scan.items()}
+    for scale in range(3): unsupported[f"cell_{scale}_adjacent"].fill_(-1)
+    evidence = []
+    out = layer(z.detach(), h, unsupported, query, chunk=3, recompute=False,
+                trace=lambda name, value: evidence.append(value) if name.endswith("evidence") else None)
+    assert torch.isfinite(out).all() and all(torch.count_nonzero(value) == 0 for value in evidence)
+    # More than16 distinct nearby returns all enter cell means, including a late return.
+    xyz = np.column_stack((10 + np.arange(40) * .002, np.zeros(40), np.zeros(40), np.ones(40))).astype(np.float32)
+    packed = np.full(40, 40, np.uint32)
+    labels = PointLabels(packed, packed.astype(np.uint16), np.zeros(40, np.uint16), np.zeros(40, np.uint8))
+    dense = make_source_frame(1, xyz, np.eye(4), labels, partition="train", sequence_id=206)
+    scan = ScanTransform(config)(dense)
+    z = torch.randn(40, 64, requires_grad=True)
+    layer(z, torch.zeros_like(z), scan, torch.tensor([0]), chunk=1, recompute=False).square().sum().backward()
+    assert z.grad[39].norm() > 0
+
+
+def test_v3_named_head_migration_and_later_relation_gradient_path():
+    from src.model import transfer_parent, SENSOR_CONDITIONS, OBSERVATION_CONDITIONS, _mlp
+    parent, model = nn.Module(), nn.Module()
+    for name in ("backbone", "context", "point"):
+        setattr(parent, name, nn.Linear(2, 2))
+        setattr(model, name, nn.Linear(2, 2))
+    parent.base_head = _mlp(136, 128, 1)
+    model.head = _mlp(192 + len(SENSOR_CONDITIONS) + len(OBSERVATION_CONDITIONS), 128, 1)
+    model.config = dict(relation_mode="multiscale")
+    info = transfer_parent(model, dict(step=1152, model=parent.state_dict()))
+    h, z0, relation = torch.randn(4, 64), torch.randn(4, 64), nn.Linear(64, 64)
+    sensor, observed = torch.randn(4, len(SENSOR_CONDITIONS)), torch.randn(4, len(OBSERVATION_CONDITIONS))
+    def score(): return model.head(torch.cat((h, z0, relation(z0), sensor, observed), -1))
+    expected = parent.base_head(torch.cat((h, z0, sensor[:, :6], observed[:, :2]), -1))
+    torch.testing.assert_close(score(), expected, atol=1e-6, rtol=1e-6)
+    score().sum().backward()
+    assert relation.weight.grad.norm() == 0 and model.head[0].weight.grad[:, 128:192].norm() > 0
+    with torch.no_grad(): model.head[0].weight[:, 128:192].fill_(.001)
+    relation.zero_grad(); score().sum().backward()
+    assert relation.weight.grad.norm() > 0
+    assert info["head_condition_columns"]["delta"] == 192 + len(SENSOR_CONDITIONS)
+
+
 def scan_fixture():
     xyz = np.array([[0, 0, 0], [10, 0, 0], [10.02, 0, 0], [10.02, 0, 0],
                     [10.1, .01, 0], [10.3, .1, 0], [11, .2, .05], [30, 0, 0],

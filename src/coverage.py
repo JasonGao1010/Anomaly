@@ -16,7 +16,7 @@ import numpy as np
 from numba import set_num_threads
 from scipy.spatial import cKDTree
 
-from .data import (FrozenDataset, FrozenFrame, _atomic_json, host_disk, low_support_slots,
+from .data import (FrozenDataset, FrozenFrame, _atomic_json, binary_target, detection_range, host_disk, low_support_slots,
                    retained_normal_slots, source_identity)
 from .render import calibrated_ray_grid, shape_from_dict, shape_geometry, shape_relations, primary_structure, canonical_ray_slots_for_source
 from .geometry import (
@@ -835,10 +835,230 @@ def _condition_frame(job):
                 peak_rss_bytes=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024)
 
 
+def population_distributions(counts, source_frames):
+    """Post populations count world-frame points; raw risk counts each source only once."""
+    counts = np.asarray(counts, np.int64)
+    frames, inverse, copies = np.unique(source_frames, return_inverse=True, return_counts=True)
+    if counts.shape != (len(source_frames), 3) or np.any(counts < 0):
+        raise ValueError("population counts must be nonnegative [frame, anomaly/post/raw]")
+    raw = np.array([counts[np.flatnonzero(inverse == i)[0], 2] for i in range(len(frames))])
+    if not np.array_equal(counts[:, 2], raw[inverse]):
+        raise ValueError("copies of a source disagree on the complete raw normal population")
+    totals = np.array([counts[:, 0].sum(), counts[:, 1].sum(), raw.sum()], np.float64)
+    if np.any(totals <= 0):
+        raise ValueError("the declared training pool needs all three nonempty populations")
+    population = counts / totals
+    population[:, 2] /= copies[inverse]
+    if not np.allclose(population.sum(0), 1., rtol=0, atol=1e-12):
+        raise ValueError("population probabilities do not normalize")
+    return population
+
+
+class CoverageRequests:
+    """History-conditional mixture; production and consumed histories are separate copies."""
+
+    def __init__(self, population, cells, anomaly_counts, seed, requests, *, state=None, mixture=.2):
+        self.population = np.asarray(population, np.float64)
+        self.risk = self.population @ np.array([.5, .25, .25])
+        if (self.population.ndim != 2 or self.population.shape[1] != 3
+                or np.any(self.population < 0) or not np.isfinite(self.population).all()
+                or not np.allclose(self.population.sum(0), 1., atol=1e-12, rtol=0)
+                or mixture != .2):
+            raise ValueError("coverage requires the three fixed normalized populations and20% mixture")
+        self.seed, self.requests, self.mixture = int(seed), int(requests), mixture
+        self.cells = np.asarray(cells)
+        bins = np.searchsorted([1, 5, 20, 100], anomaly_counts, side="right")
+        self.groups, self.cell_groups = [], []
+        self.membership = np.empty(len(self.risk), np.int64)
+        for cell in sorted(set(self.cells.tolist())):
+            groups = []
+            for band in range(5):
+                members = np.flatnonzero((self.cells == cell) & (bins == band))
+                if len(members):
+                    groups.append(len(self.groups))
+                    self.membership[members] = len(self.groups)
+                    self.groups.append(members)
+            self.cell_groups.append(groups)
+        self.group_mass = np.zeros(len(self.groups))
+        for groups in self.cell_groups:
+            self.group_mass[groups] = 1 / (len(self.cell_groups) * len(groups))
+        self.cdf = np.cumsum(self.risk)
+        self.cdf[-1] = 1.
+        self.visited = np.zeros(len(self.risk), bool)
+        self.draw = 0
+        if state is not None:
+            if (state["seed"] != self.seed or state["stream"] != 7
+                    or state["visited"].shape != self.visited.shape):
+                raise ValueError("coverage state belongs to another request stream")
+            self.draw = int(state["consumed_requests"])
+            self.visited[:] = np.asarray(state["visited"], bool)
+        if not 0 <= self.draw <= self.requests:
+            raise ValueError("saved requests exceed the declared budget")
+
+    def state_dict(self):
+        return dict(seed=self.seed, stream=7, consumed_requests=self.draw, visited=self.visited.copy())
+
+    def coverage_probability(self, sample):
+        group = self.membership[sample]
+        members = self.groups[group]
+        remaining = int((~self.visited[members]).sum())
+        return (0. if self.visited[sample] else self.group_mass[group] / remaining) if remaining else self.group_mass[group] / len(members)
+
+    def take(self):
+        if self.draw >= self.requests:
+            raise StopIteration
+        # Counter-based streams make worker prefetch independent of augmentation/query randomness.
+        rng = np.random.default_rng(np.random.SeedSequence([self.seed, 7, self.draw]))
+        coverage = rng.random() < self.mixture
+        if coverage:
+            groups = self.cell_groups[int(rng.integers(len(self.cell_groups)))]
+            members = self.groups[groups[int(rng.integers(len(groups)))]]
+            unvisited = members[~self.visited[members]]
+            choices = unvisited if len(unvisited) else members
+            sample = int(choices[int(rng.integers(len(choices)))])
+        else:
+            sample = int(np.searchsorted(self.cdf, rng.random(), side="right"))
+        h = float(self.coverage_probability(sample))
+        q = float((1 - self.mixture) * self.risk[sample] + self.mixture * h)
+        coefficients = self.population[sample] * np.array([.5, .25, .25]) / q
+        if coefficients.sum() > 1.25 + 1e-12:
+            raise ValueError("request importance correction exceeded its mathematical bound")
+        request = dict(sample=sample, draw=self.draw, probability=q, coverage_probability=h,
+                       coverage_branch=coverage, coefficients=coefficients.tolist())
+        self.visited[sample] = True
+        self.draw += 1
+        return request
+
+    def consume(self, request):
+        expected = self.take()
+        if expected != request:
+            raise ValueError("consumed request differs from its pre-draw coverage history")
+
+    def __iter__(self):
+        while self.draw < self.requests:
+            yield self.take()
+
+    def __len__(self):
+        return self.requests - self.draw
+
+
+def _population_initialize(data_root, sparse_cache):
+    global _population_source, _population_sparse
+    from .scene import STUSequence
+    from .protocol import load_protocol
+    _population_source = STUSequence.open(data_root, protocol=load_protocol(), partition="train",
+                                         sequence_id=206, label_mode="required")
+    _population_sparse = sparse_cache
+    set_num_threads(1)
+
+
+def _population_frame(job):
+    frame, entries = job
+    original = _population_source[frame]
+    identity = source_identity(original)
+    normal = binary_target(original) == 0
+    added = normal & (original.labels.semantic_target == 255)
+    n_normal, n_added = int(normal.sum()), int(added.sum())
+    inside = detection_range(original.xyzi[:, :3])
+    native = ~original.zero_slot_mask & (original.labels.semantic == 2)
+    cached = _population_sparse.get(frame)
+    sparse = cached[1] if cached is not None and cached[0] == identity else low_support_slots(original, 2., 8)
+    counts, added_post = [], []
+    for index, path, world in entries:
+        with np.load(path, allow_pickle=False) as delta:
+            if (delta["format"].item() != "stu-frozen-frame" or delta["source_identity"].item() != identity
+                    or delta["world_identity"].item() != world):
+                raise ValueError("population count encountered a changed physical source")
+            slots, inserted = delta["source_slot"], delta["inserted_slot"]
+            rows = np.searchsorted(slots, inserted)
+            if (not np.array_equal(slots[rows], inserted)
+                    or np.any((delta["packed_labels"] != 0) & ~np.isin(slots, inserted))):
+                raise ValueError("delta introduces a return outside the declared inserted slots")
+            n_anomaly = int(detection_range(delta["xyzi"][rows, :3]).sum())
+            counts.append((index, n_anomaly, int(n_normal - normal[slots].sum()), n_normal))
+            added_post.append((index, int(n_added - added[slots].sum())))
+    raw_counts = Counter(map(int, original.labels.semantic[added]))
+    return dict(frame=frame, identity=identity, sparse=sparse, counts=counts, added_post=added_post,
+        added_raw=n_added, added_by_raw_label=dict(raw_counts), raw_normal=n_normal,
+        native_anomaly=int(native.sum()), native_anomaly_in_range=int((native & inside).sum()),
+        sparse_reused=cached is not None and cached[0] == identity)
+
+
+def prepare_populations(protocol, experiment, data_root, workers):
+    """Read only206 and existing sparse deltas; never re-render or fit on201."""
+    from .train import experiment_config
+    config = experiment_config(experiment)
+    output = Path(config["training"]["sampling"])
+    if output.exists():
+        raise ValueError("V3 population index already exists; use its source-bound counts")
+    dataset = FrozenDataset(protocol["dataset"]["directory"], data_root, "train")
+    root = json.loads((dataset.directory / "manifest.json").read_text())
+    cells = {row["world_identity"]: row["combination"] for row in root["splits"]["train"]["worlds"]}
+    if len(set(cells.values())) != 30 or len(dataset.sequence.frame_ids) != 449 or len(dataset) != 107760:
+        raise ValueError("V3 requires the declared206 pool and30 generation cells")
+    source_cache = {}
+    previous = Path("results/coverage/v2.npz")
+    if previous.exists():
+        with np.load(previous, allow_pickle=False) as old:
+            parameters = json.loads(old["parameters"].item())
+            if parameters["radius_m"] == 2. and parameters["minimum_neighbors"] == 8:
+                source_cache = {int(f): (str(identity), old["sparse_slot"][old["sparse_offsets"][i]:old["sparse_offsets"][i+1]].copy())
+                    for i, (f, identity) in enumerate(zip(old["source_frame"], old["source_identity"], strict=True))}
+    grouped = defaultdict(list)
+    for i, (path, world, frame) in enumerate(dataset.samples):
+        grouped[frame].append((i, str(path), world))
+    started, disk = time.perf_counter(), host_disk()
+    results = []
+    with ProcessPoolExecutor(workers, mp_context=mp.get_context("spawn"),
+            initializer=_population_initialize, initargs=(data_root, source_cache)) as pool:
+        for result in pool.map(_population_frame, sorted(grouped.items())):
+            results.append(result)
+            if len(results) % 32 == 0 or len(results) == len(grouped):
+                print(f"V3总体计数 {len(results)}/{len(grouped)} 源帧 用时={time.perf_counter()-started:.1f}s", flush=True)
+    counts = np.zeros((len(dataset), 3), np.int64)
+    added_post = np.zeros(len(dataset), np.int64)
+    for result in results:
+        for i, *values in result["counts"]:
+            counts[i] = values
+        for i, value in result["added_post"]:
+            added_post[i] = value
+    frames = np.array([frame for _, _, frame in dataset.samples], np.int32)
+    population = population_distributions(counts, frames)
+    offsets = np.r_[0, np.cumsum([len(r["sparse"]) for r in results])]
+    output.parent.mkdir(parents=True, exist_ok=True)
+    temporary = output.with_suffix(".tmp")
+    try:
+        with temporary.open("wb") as stream:
+            np.savez_compressed(stream, format=np.asarray("ajae-v3-populations"),
+                parameters=np.asarray(json.dumps(config["training"]["conditions"], sort_keys=True)),
+                world_identity=np.array([world for _, world, _ in dataset.samples]), frame=frames,
+                cell=np.array([cells[world] for _, world, _ in dataset.samples]), counts=counts,
+                population=population, probability=population @ np.array([.5, .25, .25]),
+                added_post_normal=added_post, source_frame=np.array([r["frame"] for r in results], np.int32),
+                source_identity=np.array([r["identity"] for r in results]), sparse_offsets=offsets,
+                sparse_slot=np.concatenate([r["sparse"] for r in results]))
+        temporary.replace(output)
+    finally:
+        temporary.unlink(missing_ok=True)
+    report = dict(format="ajae-v3-populations", training_executed=False, source_sequence=206,
+        source_frames=len(results), world_frames=len(dataset), worlds=len(cells), generation_cells=30,
+        population_totals=dict(anomaly=int(counts[:, 0].sum()), post_normal=int(counts[:, 1].sum()),
+                               unique_source_raw_normal=sum(r["raw_normal"] for r in results)),
+        added_normal=dict(unique_source_raw=sum(r["added_raw"] for r in results), post=int(added_post.sum())),
+        sources=[{k: v for k, v in r.items() if k not in {"counts", "added_post", "sparse"}} for r in results],
+        parameters=config["training"]["conditions"], sparse_reused=sum(r["sparse_reused"] for r in results),
+        workers=workers, seconds=time.perf_counter()-started, host_E_before=disk, host_E_after=host_disk(),
+        scope="V3 binary2.5-50m view; native raw2 quarantined; only206 read; no201 statistics and no rendering")
+    _atomic_json(output.with_suffix(".json"), report)
+    return report
+
+
 def prepare_conditions(protocol, experiment_path, data_root, workers):
     """Build the full-source V2 index and inspect existing placements without rewriting worlds."""
     from .train import experiment_config, load_experiment
     experiment = load_experiment(experiment_path)
+    if experiment["format"] == "ajae-v3-learning":
+        return prepare_populations(protocol, experiment, data_root, workers)
     if experiment["format"] != "ajae-v2-learning":
         raise ValueError("condition preparation requires the V2 experiment")
     config = experiment_config(experiment)

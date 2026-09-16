@@ -11,6 +11,128 @@ from src.train import (_gradient_comparison, batch_loss, keep_loss, load_checkpo
                        tail_loss, Requests, evaluation_state, validate_initial_state, validate_resume_state)
 
 
+def test_v3_interrupted_accumulation_restores_complete_forward_boundary():
+    from src.train import forward_state, restore_forward_state
+    model = nn.Sequential(nn.BatchNorm1d(3), nn.Dropout(.4), nn.Linear(3, 1)).train()
+    optimizer = torch.optim.AdamW(model.parameters())
+    parameters = {name: value.detach().clone() for name, value in model.named_parameters()}
+    before = forward_state(model)
+    def partial_accumulation():
+        random_values = (random.random(), np.random.random(), torch.rand(3))
+        output = model(torch.randn(8, 3))
+        (output.square().mean() / 4).backward()
+        return random_values, output.detach()
+    expected, expected_output = partial_accumulation()
+    restore_forward_state(model, before)
+    assert not optimizer.state and all(p.grad is None for p in model.parameters())
+    for name, buffer in model.named_buffers():
+        torch.testing.assert_close(buffer, before["buffers"][name], rtol=0, atol=0)
+    for name, parameter in model.named_parameters():
+        torch.testing.assert_close(parameter, parameters[name], rtol=0, atol=0)
+    actual, actual_output = partial_accumulation()
+    assert actual[:2] == expected[:2]
+    torch.testing.assert_close(actual[2], expected[2], rtol=0, atol=0)
+    torch.testing.assert_close(actual_output, expected_output, rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("sparse,changed", [([0, 1], [1, 2]), ([], [1, 2]), ([0], [])])
+def test_v3_overlap_query_expectation_is_the_full_normal_mean(sparse, changed):
+    from itertools import combinations, product
+    from src.train import normal_query_weights
+    pools = (np.arange(4), np.array(sparse, dtype=int), np.array(changed, dtype=int))
+    values = np.array([.1, 3., .5, 9.])
+    ordered = (pools[1], pools[2], pools[0])
+    sizes = (min(1, len(sparse)), min(1, len(changed)), 1 + int(not len(sparse)) + int(not len(changed)))
+    choices = [list(combinations(pool, size)) for pool, size in zip(ordered, sizes, strict=True)]
+    estimates = []
+    for selected in product(*choices):
+        class RNG:
+            def __init__(self):
+                self.selected = iter(np.array(x) for x, pool in zip(selected, ordered, strict=True) if len(x) < len(pool))
+
+            def choice(self, pool, count, replace):
+                result = next(self.selected)
+                assert len(result) == count and not replace
+                return result
+        slots, weights, _ = normal_query_weights(pools, [1, 1, 1], [.5, .25, .25], RNG())
+        estimates.append(weights @ values[slots])
+    assert np.mean(estimates) == pytest.approx(values.mean(), abs=1e-14)
+    slots, weights, info = normal_query_weights(pools, [9, 9, 9], [.5, .25, .25], np.random.default_rng(1))
+    np.testing.assert_allclose(weights, np.full(4, .25), rtol=0, atol=1e-15)
+    assert weights @ values[slots] == pytest.approx(values.mean())
+    empty = np.empty(0, int)
+    assert len(normal_query_weights((empty, empty, empty), [1, 1, 1], [.5, .25, .25], np.random.default_rng(1))[0]) == 0
+
+
+def test_v3_population_loss_four_microbatches_match_eight_requests():
+    from src.train import accumulate_batches, experiment_config, load_experiment
+    from torch.nn import functional as F
+    class Model(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.weight = nn.Parameter(torch.tensor(.3, dtype=torch.float64))
+
+        def forward(self, scan, query):
+            return self.weight * scan["xyzi"][query, 0]
+    model, reference = Model(), Model()
+    config = experiment_config(load_experiment("protocol/v3.json"))
+    rows, explicit = [], []
+    for i in range(8):
+        x = torch.tensor([[i/10], [1.], [2.]], dtype=torch.float64)
+        positive = torch.tensor([2]) if i % 2 else torch.empty(0, dtype=torch.long)
+        weight = torch.tensor([.25, .75, 0.], dtype=torch.float64)
+        raw_weight = torch.tensor([1/3, 1/3, 1/3], dtype=torch.float64)
+        coefficients = [.3 if len(positive) else 0., .2, .4]
+        rows.append(dict(scan=dict(xyzi=x), original=dict(xyzi=x + .2), query=torch.arange(3),
+            original_query=torch.arange(3), anomaly_index=positive, normal_weight=weight, raw_weight=raw_weight,
+            request=dict(coefficients=coefficients), anomaly_queries=len(positive), normal_queries=2, raw_queries=3))
+        s, raw = reference.weight * x[:, 0], reference.weight * (x[:, 0] + .2)
+        explicit.append(coefficients[0] * (F.softplus(-s[positive]).mean() if len(positive) else s.sum() * 0)
+                        + .2 * (F.softplus(s) * weight).sum() + .4 * F.softplus(raw).mean())
+    expected = torch.stack(explicit).mean()
+    expected.backward()
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
+    _, stats = accumulate_batches(model, iter([rows[i:i+2] for i in range(0, 8, 2)]), config, 0)
+    assert not optimizer.state
+    torch.testing.assert_close(model.weight.grad, reference.weight.grad, atol=1e-14, rtol=0)
+    assert stats["total"] == pytest.approx(float(expected.detach()), abs=1e-14)
+    optimizer.step()
+    assert int(optimizer.state[model.weight]["step"]) == 1
+
+
+def test_v3_delayed_encoder_adam_state_and_resume_counts():
+    from src.train import (experiment_config, load_experiment, make_optimizer, set_trainable,
+                           set_learning_rates, schedule_state, learning_rates)
+    config = experiment_config(load_experiment("protocol/v3.json"))
+    model = nn.Module()
+    for name in ("backbone", "context", "point", "head"):
+        setattr(model, name, nn.Linear(2, 2))
+    initial = deepcopy(model.backbone.state_dict())
+    optimizer = make_optimizer(model, config)
+    for step in range(1, 130):
+        set_trainable(model, config, step); set_learning_rates(optimizer, config, step)
+        optimizer.zero_grad(set_to_none=True)
+        sum(p.square().sum() for p in model.parameters() if p.requires_grad).backward()
+        optimizer.step()
+        if step == 128:
+            torch.testing.assert_close(model.backbone.state_dict(), initial, atol=0, rtol=0)
+            assert all(p not in optimizer.state for p in model.backbone.parameters())
+    assert learning_rates(config, 1) == pytest.approx([0, 0, 0, 0, 1e-5, 1e-5])
+    assert learning_rates(config, 129)[:4] == pytest.approx([2e-7, 2e-7, 5e-7, 5e-7])
+    assert learning_rates(config, 160) == pytest.approx([2e-6, 2e-6, 5e-6, 5e-6, 1e-4, 1e-4])
+    assert learning_rates(config, 1024) == pytest.approx([2e-7, 2e-7, 5e-7, 5e-7, 1e-5, 1e-5])
+    state = dict(config=config, step=129, samples=[], probabilities=None, experiment={},
+        optimizer=optimizer.state_dict(), scheduler_state=schedule_state(optimizer, config, 129),
+        condition_sources={}, request_state=dict(consumed_requests=1032),
+        streams={name:dict(seed=20260916,stream=tag,next_draw=1032) for name,tag in (("query",11),("augmentation",13))})
+    assert validate_resume_state(state, config, [], None, {}, condition_sources={}) == 129
+    assert state["scheduler_state"]["parameter_updates"]["backbone_decay"] == [1]
+    assert state["scheduler_state"]["parameter_updates"]["new_modules_decay"] == [129]
+    state["request_state"]["consumed_requests"] += 1
+    with pytest.raises(ValueError, match="consumed accumulation boundary"):
+        validate_resume_state(state, config, [], None, {}, condition_sources={})
+
+
 def test_parent_bn_intervention_keeps_affine_parameters_and_restores_on_failure():
     from src.train import normalization_mode
     parent, model = nn.Sequential(nn.BatchNorm1d(2)), nn.Sequential(nn.BatchNorm1d(2))

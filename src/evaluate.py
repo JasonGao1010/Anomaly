@@ -15,7 +15,8 @@ import time
 import numpy as np
 from numba import njit
 
-from .data import FramePrediction, FrozenDataset, _atomic_json, host_disk, source_identity, runtime_resources
+from .data import (FramePrediction, FrozenDataset, _atomic_json, binary_target, binary_normal_groups,
+                   detection_range, low_support_slots, host_disk, source_identity, runtime_resources)
 from .protocol import PROJECT_ROOT, load_protocol
 from .scene import STUSequence, LabelMode
 from vendor.stu.compute_point_level_ood import PointOODMetricsCalculator
@@ -334,10 +335,7 @@ def pooled_files(
 
 def evaluation_targets(points, semantic):
     """The official point filter, without its anomaly-frame eligibility gate."""
-    distance = np.linalg.norm(points, axis=1)
-    inside = (distance >= PointOODMetricsCalculator.min_eval_distance) & (
-        distance <= PointOODMetricsCalculator.max_eval_distance
-    )
+    inside = detection_range(points)
     target = np.where(semantic == 0, -1, np.where(semantic == 2, 1, 0))
     return np.where(inside, target, -1)
 
@@ -417,9 +415,9 @@ def official_frame(source, prediction):
     return scores, target, eligible
 
 
-def synthetic_targets(frozen, *, official=False):
-    """Filter frozen insertion labels without reinterpreting native semantics."""
-    target = frozen.anomaly_target
+def synthetic_targets(frozen, *, official=False, binary_view=None):
+    """Keep historical labels separate from the explicitly requested V3 binary view."""
+    target = binary_target(frozen.source, frozen.inserted_mask) if binary_view == "official_range_v3" else frozen.anomaly_target
     if not official:
         return target, True
     distance = np.linalg.norm(frozen.source.xyzi[:, :3], axis=1)
@@ -733,8 +731,9 @@ class ScoreCounts:
 class EvaluationFrames:
     """Bounded worker preparation; ordered loading preserves complete scan identity."""
 
-    def __init__(self, data_root, sequence_ids, protocol, config, preprocessing):
-        self.sequences = {identifier: STUSequence.open(data_root, protocol=protocol, partition="val",
+    def __init__(self, data_root, sequence_ids, protocol, config, preprocessing, *, normal_source=False):
+        self.normal_source = normal_source
+        self.sequences = {identifier: STUSequence.open(data_root, protocol=protocol, partition="train" if normal_source else "val",
             sequence_id=identifier, label_mode=LabelMode.REQUIRED) for identifier in sequence_ids}
         self.samples = [(identifier, frame) for identifier, sequence in self.sequences.items()
                         for frame in sequence.frame_ids]
@@ -749,7 +748,7 @@ class EvaluationFrames:
             self.transform = ScanTransform(self.config, state=self.preprocessing, workers=4)
         identifier, frame = self.samples[index]
         source = self.sequences[identifier][frame]
-        _, eligible = official_targets(source)
+        eligible = True if self.normal_source else official_targets(source)[1]
         return source, self.transform(source) if eligible else None
 
 
@@ -776,7 +775,7 @@ def checkpoint_frames(data_root, checkpoint_path, sequence_ids, protocol):
 
 
 def evaluate_validation(data_root, *, checkpoint_path=None, prediction_root=None,
-                        sequences=None, directory=None, capture=None):
+                        sequences=None, directory=None, capture=None, save_capture=False):
     protocol = load_protocol()
     sequences = tuple(sequences) if sequences is not None else protocol.public_sequence_ids
     if len(set(sequences)) != len(sequences):
@@ -807,10 +806,140 @@ def evaluate_validation(data_root, *, checkpoint_path=None, prediction_root=None
         scope="full_public_validation" if set(sequences) == set(protocol.public_sequence_ids) else "development_subset",
         **({"checkpoint": str(Path(checkpoint_path).resolve())} if checkpoint_path is not None
            else {"prediction_root": str(Path(prediction_root).resolve())}))
+    if save_capture:
+        if checkpoint_path is None or capture is None:
+            raise ValueError("persisted fixed predictions require a checkpoint and explicit frame identities")
+        path = Path(checkpoint_path).with_name(Path(checkpoint_path).stem + "_real.npz")
+        captured_scores(data_root, path, capture=capture)
+        result["fixed_predictions"] = str(path.resolve())
     return result
 
 
-def prepare_fixed(data_root, selection, *, synthetic_splits=("train", "validation")):
+def captured_scores(data_root, path, *, capture=None):
+    """Persist/recover fixed full-return scores with physical identities, never score components."""
+    path = Path(path)
+    saved = np.load(path, allow_pickle=False) if capture is None else None
+    try:
+        frames = np.array(sorted(capture), np.int32) if capture is not None else saved["frames"]
+        readers = {int(key): STUSequence.open(data_root, protocol=load_protocol(), partition="val",
+            sequence_id=int(key), label_mode=LabelMode.REQUIRED) for key in set(frames[:, 0])}
+        identities, slots, scores, result = [], [], [], {}
+        for i, (key, frame) in enumerate(frames):
+            source = readers[int(key)][int(frame)]
+            identity = source_identity(source)
+            if capture is None:
+                begin, end = saved["offsets"][i:i + 2]
+                rows = saved["source_slot"][begin:end]
+                if identity != saved["source_identity"][i] or not np.array_equal(rows, source.real_slots):
+                    raise ValueError("saved fixed predictions no longer identify the same physical returns")
+                result[int(key), int(frame)] = FramePrediction("val", int(key), int(frame), rows,
+                    saved["scores"][begin:end]).restore(source)
+            else:
+                values = capture[int(key), int(frame)]
+                if values is None or not np.isfinite(values[source.real_slots]).all():
+                    raise ValueError("complete evaluation did not capture all declared real returns")
+                identities.append(identity)
+                slots.append(source.real_slots.astype(np.int32))
+                scores.append(values[source.real_slots].astype(np.float32))
+        if capture is None:
+            return result
+        np.savez_compressed(path, frames=frames, source_identity=np.array(identities),
+            offsets=np.r_[0, np.cumsum(list(map(len, slots)))], source_slot=np.concatenate(slots), scores=np.concatenate(scores))
+    finally:
+        if saved is not None:
+            saved.close()
+
+
+def evaluate_normal_source(model, transform, data_root, threshold, *, capture=None):
+    """201 is a pure-normal transfer check at this model's complete-val19 threshold."""
+    import torch
+    from torch.utils.data import DataLoader
+    if model.training or threshold is None or not np.isfinite(threshold):
+        raise ValueError("normal-source evaluation requires inference and a finite transferred threshold")
+    dataset = EvaluationFrames(data_root, [201], load_protocol(), dict(model=model.config),
+                               transform.state_dict(), normal_source=True)
+    loader = DataLoader(dataset, batch_size=None, num_workers=4, prefetch_factor=1,
+        multiprocessing_context="spawn", pin_memory=True, generator=torch.Generator().manual_seed(83))
+    normal, false_positive, native, native_high = 0, 0, 0, 0
+    frames, started = [], time.perf_counter()
+    for i, (source, scan) in enumerate(loader, 1):
+        scores = model.predict(source, prepared=scan).restore(source)
+        target = binary_target(source)
+        use = target == 0
+        raw2 = ~source.zero_slot_mask & (source.labels.semantic == 2) & detection_range(source.xyzi[:, :3])
+        n, fp = int(use.sum()), int((scores[use] >= threshold).sum())
+        normal += n
+        false_positive += fp
+        native += int(raw2.sum())
+        native_high += int((scores[raw2] >= threshold).sum())
+        frames.append(dict(frame=source.frame_id, source_identity=source_identity(source), normal=n, fp=fp))
+        if capture is not None and (201, source.frame_id) in capture:
+            capture[201, source.frame_id] = scores.copy()
+        if i % 25 == 0 or i == len(dataset):
+            host_disk()
+            print(f"原始201 {i}/{len(dataset)} 正常={normal} FP={false_positive} 用时={(time.perf_counter()-started)/60:.1f}min", flush=True)
+    return dict(sequence=201, frames=frames, frame_count=len(frames), normal_count=normal,
+        fp=false_positive, FPR=100 * false_positive / normal if normal else None, threshold=threshold,
+        native_raw2=dict(points=native, above_threshold=native_high), seconds=time.perf_counter()-started,
+        scope="all682 original201 frames; raw0 ignored, native raw2 separately reported, other actual returns normal within2.5-50m; no AP/AUROC/FPR95 or201 threshold fitting")
+
+
+def model_selection(directory, parent):
+    """Select only joint improvements; retain and disclose other non-dominated tradeoffs."""
+    rows = []
+    for step in (256, 512, 1024):
+        path = Path(directory) / f"{step}_val.json"
+        if path.exists():
+            value = json.loads(path.read_text())
+            if (value["normal_count"], value["anomaly_count"]) != (parent["normal_count"], parent["anomaly_count"]):
+                raise ValueError("candidate and parent evaluation denominators differ")
+            rows.append(dict(step=step, AP=value["AP"], FPR95=value["FPR95"],
+                recall=value["recall_at_fpr_limit"]["recall"], AUROC=value["AUROC"]))
+    baseline = dict(step=1152, AP=parent["AP"], FPR95=parent["FPR95"],
+                    recall=parent["recall_at_fpr_limit"]["recall"], AUROC=parent["AUROC"])
+    def dominates(a, b):
+        good = (a["AP"] >= b["AP"], a["FPR95"] <= b["FPR95"], a["recall"] >= b["recall"])
+        return all(good) and any(a[k] != b[k] for k in ("AP", "FPR95", "recall"))
+    joint = sorted([r for r in rows if dominates(r, baseline)], key=lambda r: (-r["AP"], r["FPR95"], -r["recall"]))
+    return dict(parent=baseline, evaluated=rows, jointly_improved=joint, preferred=joint[0] if joint else None,
+        nondominated_tradeoffs=[r for r in rows if not dominates(r, baseline) and
+                               not any(dominates(other, r) for other in [baseline] + rows)])
+
+
+def prepare_reference(data_root, declaration, directory=None):
+    """Establish the parent on V3 label support once; historical result files stay untouched."""
+    import torch
+    from .train import load_checkpoint, evaluation_state, validate_stage_parent, experiment_config
+    from .model import ScanTransform
+    directory = Path(directory) if directory is not None else PROJECT_ROOT / declaration["reference_directory"]
+    path = directory / "1152.json"
+    if path.exists():
+        result = json.loads(path.read_text())
+        if result["reference_for"] != declaration or result["binary_view"] != "official_range_v3":
+            raise ValueError("parent reference uses another V3 declaration or binary view")
+        return result
+    model, saved = load_checkpoint(PROJECT_ROOT / declaration["warm_start"]["checkpoint"])
+    validate_stage_parent(saved, experiment_config(declaration), declaration)
+    transform = ScanTransform(saved["config"], state=saved["preprocessing"], workers=4)
+    prepared = prepare_fixed(data_root, declaration["selection"], binary_view="official_range_v3")
+    parent = json.loads((PROJECT_ROOT / "results/keep/mean/global.json").read_text())
+    threshold = parent["official_high_recall"]["threshold"]
+    raw_scores = {(201, r["frame"]): None for r in declaration["selection"]["validation"]}
+    directory.mkdir(parents=True, exist_ok=True)
+    with evaluation_state(model):
+        normal = evaluate_normal_source(model, transform, data_root, threshold, capture=raw_scores)
+        result = evaluate_fixed(model, transform, prepared, include_pairs=True, directory=directory,
+                                raw_scores=raw_scores, real_threshold=threshold)
+    if any(not torch.equal(value.cpu(), saved["model"][key]) for key, value in model.state_dict().items()):
+        raise ValueError("V3 parent reference changed historical model tensors")
+    result.update(step=1152, checkpoint=str((PROJECT_ROOT / declaration["warm_start"]["checkpoint"]).resolve()),
+        reference_for=declaration, binary_view="official_range_v3", normal201=normal, full_val19=parent,
+        model_and_buffers_unchanged=True, scope="independent parent1152 on new binary synthetic support and original201; complete val19 reuses its unchanged historical reference")
+    _atomic_json(path, result)
+    return result
+
+
+def prepare_fixed(data_root, selection, *, synthetic_splits=("train", "validation"), binary_view=None):
     """Resolve the declared frames and reuse only existing geometric witness records."""
     from .train import select_samples
     if list(synthetic_splits) not in (["train"], ["train", "validation"]):
@@ -835,7 +964,7 @@ def prepare_fixed(data_root, selection, *, synthetic_splits=("train", "validatio
     for key, frames in selection["val"].items():
         if len(set(frames)) != len(frames) or any(frame not in sequences[key].frame_ids for frame in frames):
             raise ValueError("fixed real selection contains duplicate or nonexistent frames")
-    return dict(selection=selection, datasets=datasets, indices=indices, geometry=geometry, sequences=sequences)
+    return dict(selection=selection, datasets=datasets, indices=indices, geometry=geometry, sequences=sequences, binary_view=binary_view)
 
 
 def fixed_summary(rows, *, directory=None):
@@ -939,24 +1068,32 @@ def paired_operating_points(fixed):
         scope="own 201 pooled <=1% FPR is retrospective ranking diagnosis; identical witness slots and scores; no subgroup threshold fitting; unchanged threshold before and after insertion")
 
 
-def evaluate_normal_pairs(model, transform, prepared, split, threshold, *, inserted_scores=None):
+def evaluate_normal_pairs(model, transform, prepared, split, threshold, *, inserted_scores=None, raw_scores=None):
     """Reuse frozen witness identities; save only the small paired score lists."""
     if model.training:
         raise ValueError("paired evaluation requires inference mode")
     records = dict(sparse=[], changed_normal=[])
+    raw_scores = {} if raw_scores is None else raw_scores
     dataset = prepared["datasets"][split]
     for record, index in zip(prepared["selection"][split], prepared["indices"][split], strict=True):
         key = (record["identity"], record["frame"])
         measured = prepared["geometry"].get(key)
-        if measured is None:
+        if measured is None and prepared.get("binary_view") != "official_range_v3":
             continue
         original, frozen = dataset.sequence[record["frame"]], dataset[index]
         if source_identity(original) != record["source_identity"]:
             raise ValueError("paired-normal original scan identity changed")
-        groups = retained_witness_slots(frozen, original, measured)
+        if prepared.get("binary_view") == "official_range_v3":
+            normal, sparse, changed = fixed_binary_groups(prepared, frozen, original)
+            groups = dict(sparse=sparse, changed_normal=changed)
+        else:
+            groups = retained_witness_slots(frozen, original, measured)
         if not any(len(slots) for slots in groups.values()):
             continue
-        before = model.predict(original, transform).restore(original)
+        raw_key = (original.sequence_id, original.frame_id)
+        if raw_scores.get(raw_key) is None:
+            raw_scores[raw_key] = model.predict(original, transform).restore(original)
+        before = raw_scores[raw_key]
         after = (inserted_scores[key] if inserted_scores is not None else
                  model.predict(frozen.source, transform).restore(frozen.source))
         for name, slots in groups.items():
@@ -966,7 +1103,8 @@ def evaluate_normal_pairs(model, transform, prepared, split, threshold, *, inser
                     before=before[slots].astype(np.float64).tolist(), after=after[slots].astype(np.float64).tolist()))
     result = {name: dict(summary=paired_normal_summary(rows, threshold), records=rows)
               for name, rows in records.items()}
-    result["scope"] = "same unchanged valid normal file slots; full original and inserted inference; existing partial witness lists may overlap; one 206 threshold for both scans and both splits"
+    result["scope"] = ("all V3 low-support and disturbed retained normal slots; identical physical return before/after; same supplied threshold" if prepared.get("binary_view") == "official_range_v3" else
+        "same unchanged valid normal file slots; full original and inserted inference; existing partial witness lists may overlap; one 206 threshold for both scans and both splits")
     for name in records:
         summary = result[name]["summary"]
         print(f"正常配对 {split}/{name} n={summary['normal']} "
@@ -974,14 +1112,29 @@ def evaluate_normal_pairs(model, transform, prepared, split, threshold, *, inser
     return result
 
 
+def fixed_binary_groups(prepared, frozen, original):
+    cache = prepared.setdefault("binary_groups", {})
+    key = (frozen.world_identity, original.frame_id)
+    if key not in cache:
+        identity = source_identity(original)
+        native = prepared.setdefault("native_sparse", {})
+        if identity not in native:
+            native[identity] = low_support_slots(original, 2., 8, workers=4)
+        cache[key] = binary_normal_groups(frozen, original, native[identity])[0]
+    return cache[key]
+
+
 def evaluate_fixed(model, transform, prepared, *, include_real=False, directory=None, include_pairs=False,
-                   synthetic_scores=None, real_scores=None, include_normalization=False):
+                   synthetic_scores=None, real_scores=None, include_normalization=False, raw_scores=None,
+                   real_threshold=None):
     """Fixed development scopes; callers preserve the training state around evaluation."""
     if model.training:
         raise ValueError("fixed evaluation requires inference mode")
     import time
     started = time.perf_counter()
     result, train_threshold = {}, None
+    binary_view = prepared.get("binary_view")
+    raw_scores = {} if raw_scores is None else raw_scores
     for split in prepared["datasets"]:
         rows, official, witness = [], [], {name: [] for name in ("smooth", "rough", "sparse", "changed_normal")}
         scan_rows, differences = [], []
@@ -995,7 +1148,7 @@ def evaluate_fixed(model, transform, prepared, *, include_real=False, directory=
             if scores is None:
                 prediction = model.predict(frozen.source, prepared=scan) if compare_statistics else model.predict(frozen.source, transform)
                 scores = prediction.restore(frozen.source)
-            target, _ = synthetic_targets(frozen)
+            target, _ = synthetic_targets(frozen, binary_view=binary_view)
             row = dict(scores=scores, target=target, role=record["role"], world=record["identity"], frame=record["frame"])
             rows.append(row)
             if len(rows) % 8 == 0 or len(rows) == len(records):
@@ -1011,17 +1164,24 @@ def evaluate_fixed(model, transform, prepared, *, include_real=False, directory=
                         mean=float((current[target == label] - scores[target == label]).astype(np.float64).mean()),
                         absolute_mean=float(np.abs(current[target == label] - scores[target == label]).astype(np.float64).mean()))
                         for label in (0, 1) if np.any(target == label)}))
-            filtered, eligible = synthetic_targets(frozen, official=True)
+            filtered, eligible = synthetic_targets(frozen, official=True, binary_view=binary_view)
             if eligible:
                 official.append(dict(row, target=filtered))
             measured = prepared["geometry"].get((record["identity"], record["frame"]))
             if measured is not None:
                 for name in witness:
+                    if binary_view == "official_range_v3" and name in {"sparse", "changed_normal"}:
+                        continue
                     slots = (measured["changed_normal_source_slots"] if name == "changed_normal" else
                         measured["contrasts"][name]["normal_source_slots"] + measured["contrasts"][name]["central_anomaly_slots"])
                     slots = np.unique(np.asarray(slots, np.int64))
                     if len(slots):
                         witness[name].append(dict(scores=scores[slots], target=target[slots]))
+            if binary_view == "official_range_v3":
+                original = prepared["datasets"][split].sequence[record["frame"]]
+                _, sparse, changed = fixed_binary_groups(prepared, frozen, original)
+                for name, slots in (("sparse", sparse), ("changed_normal", changed)):
+                    witness[name].append(dict(scores=scores[slots], target=target[slots]))
         full = fixed_summary(rows, directory=directory)
         if split == "train":
             train_threshold = full["recall_at_fpr_limit"]["threshold"]
@@ -1047,7 +1207,23 @@ def evaluate_fixed(model, transform, prepared, *, include_real=False, directory=
             result[split]["normalization"] = dict(controls, score_changes=differences)
         if include_pairs:
             result[split]["paired_normals"] = evaluate_normal_pairs(model, transform, prepared, split, train_threshold,
-                inserted_scores={(r["world"], r["frame"]): r["scores"] for r in rows})
+                inserted_scores={(r["world"], r["frame"]): r["scores"] for r in rows}, raw_scores=raw_scores)
+        if binary_view == "official_range_v3":
+            result[split].update(binary_view=binary_view,
+                scope="V3 binary labels within2.5-50m; every actual nonzero/non2 raw label normal; inserted returns anomalous; no frame eligibility gate in full pool",
+                witness_scope="complete low-support and disturbed post-normal groups; other historical geometry witnesses retain their own identities",
+                anomaly_count_groups={f"{low}-{high}": fixed_summary([r for r in rows
+                    if low <= np.count_nonzero(r["target"] == 1) < high], directory=directory)
+                    for low, high in ((0, 1), (1, 5), (5, 20), (20, 100), (100, np.inf))})
+            if real_threshold is not None:
+                result[split]["at_real95"] = dict(overall=threshold_counts(rows, real_threshold),
+                    normals={name: threshold_counts(witness[name], real_threshold) for name in ("sparse", "changed_normal")},
+                    anomaly_count_groups={f"{low}-{high}": threshold_counts([r for r in rows
+                        if low <= np.count_nonzero(r["target"] == 1) < high], real_threshold)
+                        for low, high in ((0, 1), (1, 5), (5, 20), (20, 100), (100, np.inf))})
+                if include_pairs:
+                    result[split]["at_real95"]["paired_normals"] = {name: paired_normal_summary(
+                        result[split]["paired_normals"][name]["records"], real_threshold) for name in ("sparse", "changed_normal")}
         print_metrics(f"合成{len(rows)}帧 {split}", full)
     if include_real:
         rows = []
@@ -1596,6 +1772,7 @@ def evaluate_synthetic(data_root, checkpoint_path, *, directory=None, capture=No
     torch.set_num_threads(4)
     model, saved = load_checkpoint(checkpoint_path)
     model.eval()
+    binary_view = saved["config"]["training"].get("binary_view")
     transform = ScanTransform(saved["config"], state=saved["preprocessing"], workers=4)
     dataset = SyntheticEvaluationFrames(data_root, saved["config"], saved["preprocessing"])
     loader = DataLoader(dataset, batch_size=None, num_workers=4, prefetch_factor=1,
@@ -1608,7 +1785,7 @@ def evaluate_synthetic(data_root, checkpoint_path, *, directory=None, capture=No
             ScoreCounts(directory=directory, check_resources=_evaluation_space) as official:
         for index, (frozen, prepared) in enumerate(loader):
             source = frozen.source
-            target, _ = synthetic_targets(frozen)
+            target, _ = synthetic_targets(frozen, binary_view=binary_view)
             anomaly = int((target == 1).sum())
             zero_frames += anomaly == 0
             few_frames += 1 <= anomaly <= 4
@@ -1630,7 +1807,7 @@ def evaluate_synthetic(data_root, checkpoint_path, *, directory=None, capture=No
                 full.add(scores[valid], target[valid])
             if capture is not None and (frozen.world_identity, source.frame_id) in capture:
                 capture[frozen.world_identity, source.frame_id] = scores
-            filtered, accepted = synthetic_targets(frozen, official=True)
+            filtered, accepted = synthetic_targets(frozen, official=True, binary_view=binary_view)
             if accepted:
                 valid = filtered >= 0
                 official.add(scores[valid], filtered[valid])
@@ -1654,7 +1831,9 @@ def evaluate_synthetic(data_root, checkpoint_path, *, directory=None, capture=No
         zero_anomaly_world_frames=int(zero_frames), one_to_four_anomaly_world_frames=int(few_frames),
         model_forwards=predictions, unchanged_world_frames=unchanged, cached_source_frames=len(originals),
         seconds=time.perf_counter() - started,
-        full_point_set="all_real_inserted_returns_and_valid_original_normal_targets_without_range_or_frame_filter",
+        binary_view=binary_view,
+        full_point_set=("V3_binary_actual_returns_within2.5-50m_without_frame_filter" if binary_view == "official_range_v3" else
+                        "all_real_inserted_returns_and_valid_original_normal_targets_without_range_or_frame_filter"),
         official_point_set="same_frozen_insertion_targets_with_2.5_to_50_m_and_at_least_5_inserted_return_filter",
         exact_count_storage=dict(full=full_storage, official=official_storage,
             algorithm="compressed_sorted_float32_tie_counts_with_bounded_RAM_and_external_merges",
@@ -1675,7 +1854,7 @@ def main():
     parser.add_argument("--synthetic", action="store_true", help="evaluate complete frozen 201 validation worlds")
     parser.add_argument("--fixed", type=Path, help="evaluate a declared finite-learning checkpoint scope")
     parser.add_argument("--arm", help="arm explicitly listed in the fixed experiment declaration")
-    parser.add_argument("--parent-reference", action="store_true", help="evaluate the declared V2 parent on repaired fixed synthetic frames")
+    parser.add_argument("--parent-reference", action="store_true", help="evaluate the declared parent on the stage's repaired frames and binary view")
     parser.add_argument("--pairs", type=Path, help="only paired normal witnesses; reuse the threshold from this checkpoint's fixed result")
     parser.add_argument("--scores", action="store_true", help="same-forward base, relation and final scores on the declared 206/real scope")
     parser.add_argument("--scan-statistics", action="store_true", help="with --scores, also compare per-scan BatchNorm statistics")
@@ -1738,6 +1917,11 @@ def main():
         from .train import load_checkpoint, load_experiment, evaluation_state, experiment_config, validate_stage_parent
         declaration = load_experiment(args.fixed, args.arm)
         torch.set_num_threads(4)
+        if args.parent_reference and declaration["format"] == "ajae-v3-learning":
+            if args.checkpoint.resolve() != (PROJECT_ROOT / declaration["warm_start"]["checkpoint"]).resolve():
+                parser.error("V3 parent reference requires its declared1152 checkpoint")
+            prepare_reference(args.data_root, declaration, args.output)
+            return
         model, saved = load_checkpoint(args.checkpoint)
         if args.parent_reference:
             if args.checkpoint.resolve() != (PROJECT_ROOT / declaration["warm_start"]["checkpoint"]).resolve():
@@ -1746,7 +1930,8 @@ def main():
         elif saved.get("experiment", saved.get("micro")) != declaration:
             parser.error("fixed evaluation declaration differs from the saved experiment")
         prepared = prepare_fixed(args.data_root, declaration["selection"],
-            synthetic_splits=declaration["evaluation"].get("synthetic_splits", ["train", "validation"]))
+            synthetic_splits=declaration["evaluation"].get("synthetic_splits", ["train", "validation"]),
+            binary_view=declaration["evaluation"].get("binary_view"))
         transform = ScanTransform(saved["config"], state=saved["preprocessing"], workers=8)
         args.output.mkdir(parents=True, exist_ok=True)
         if args.scores:
@@ -1770,14 +1955,29 @@ def main():
                 if (reference["step"] != saved["step"]
                         or (args.pairs.parent / reference["checkpoint"]).resolve() != args.checkpoint.resolve()):
                     parser.error("paired threshold result must refer to this same checkpoint")
-                threshold = reference["train"]["full"]["recall_at_fpr_limit"]["threshold"]
+                threshold = (reference["train"]["at_real95"]["overall"]["threshold"] if declaration["format"] == "ajae-v3-learning" else
+                             reference["train"]["full"]["recall_at_fpr_limit"]["threshold"])
                 result = {split: evaluate_normal_pairs(model, transform, prepared, split, threshold)
                           for split in prepared["datasets"]}
+                if declaration["format"] == "ajae-v3-learning":
+                    result["overall_operating_points"] = {split: reference[split]["at_real95"]["overall"]
+                                                          for split in prepared["datasets"]}
                 result["reference_metrics"] = str(args.pairs.resolve())
             else:
+                raw_scores, real_threshold, normal201 = {}, None, None
+                if declaration["format"] == "ajae-v3-learning":
+                    full = json.loads(args.checkpoint.with_name(args.checkpoint.stem + "_val.json").read_text())
+                    real_threshold = full["official_high_recall"]["threshold"]
+                    raw_scores = {(201, r["frame"]): None for r in declaration["selection"]["validation"]}
+                    normal201 = evaluate_normal_source(model, transform, args.data_root, real_threshold, capture=raw_scores)
                 result = evaluate_fixed(model, transform, prepared, directory=args.output,
                     include_real=not args.parent_reference and saved["step"] in declaration["evaluation"]["real_steps"],
-                    include_pairs=args.parent_reference or saved["step"] in declaration["evaluation"].get("paired_normal_steps", []))
+                    include_pairs=args.parent_reference or saved["step"] in declaration["evaluation"].get("paired_normal_steps", []),
+                    raw_scores=raw_scores, real_threshold=real_threshold,
+                    real_scores=captured_scores(args.data_root, args.checkpoint.with_name(args.checkpoint.stem + "_real.npz"))
+                        if declaration["format"] == "ajae-v3-learning" else None)
+                if normal201 is not None:
+                    result["normal201"] = normal201
             if args.parent_reference:
                 if any(not torch.equal(value.cpu(), saved["model"][key]) for key, value in model.state_dict().items()):
                     raise ValueError("parent reference changed model parameters or buffers")
