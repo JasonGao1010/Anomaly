@@ -4,7 +4,7 @@
   "research_question": "Using only the complete current scan, can observable sensor conditions and all-return multiscale relationships improve real anomaly ranking while preserving difficult-normal performance? V3 learns one paired binary population risk with importance-corrected coverage and queries; it is implemented but has not been trained or evaluated for performance.",
   "v3": {
     "configuration": "protocol/v3.json",
-    "authorization": "Implement the complete2026-09-16 all-return multiscale V3 design and necessary validation; do not start training.",
+    "authorization": "Implement the complete2026-09-16 all-return multiscale V3 design and necessary validation; subsequently complete real-instance and original201 grouped evaluation plus corresponding1152 references, reusing cached scores and inferring only missing scopes. Do not start training or change the model, risk or schedule.",
     "status": "implemented_and_verified_not_trained",
     "implementation_validated": true,
     "training_executed": false,
@@ -178,8 +178,45 @@
     "parent_new_label_reference": {
       "directory": "results/v3/reference",
       "code_implemented": true,
-      "executed": false,
-      "scope": "Independent1152 on V3 binary206 repaired32 and201 synthetic32, normal pairs, and all682 original201; unchanged historical complete-val19 reused; generated once at the first authorized evaluation."
+      "executed": true,
+      "result": "results/v3/reference/1152.json",
+      "model_and_buffers_unchanged": true,
+      "synthetic206": {"frames": 32, "normal_count": 3911387, "anomaly_count": 896, "AP": 27.340382471267272, "FPR95": 0.5712807247147879},
+      "synthetic201": {"frames": 32, "normal_count": 2814489, "anomaly_count": 829, "AP": 14.247723314827757, "FPR95": 6.320223671153094},
+      "fixed_seconds": 161.5914605910075,
+      "scope": "Independent1152 on V3 binary206 repaired32 and201 synthetic32, normal pairs, and all682 original201. Historical complete-val19 metrics and thresholds remain unchanged; new binary synthetic denominators cannot be compared directly with historical old-label scores."
+    },
+    "real_group_evaluation": {
+      "format": "instance_observations_v1",
+      "regression_tests_passed": 158,
+      "final_evaluation_tests_passed": 32,
+      "definitions": "src/evaluate.py:real_group_definition",
+      "anomaly_output": "*_val.json:weak_anomaly",
+      "normal201_output": "*_normal201.json:groups",
+      "anomaly_cache": "results/v3/reference/1152_weak.npz",
+      "eligible_frames": 1960,
+      "anomaly_points": 87499,
+      "known_instance_observations": 2992,
+      "unknown_instance_points": 1,
+      "cached_parent_frames_reused": 108,
+      "missing_parent_frame_forwards": 1852,
+      "anomaly_seconds": 968.5230675900239,
+      "historical_thresholds": [1.980156660079956, -3.2009737491607666],
+      "true_positives_at_thresholds": [83125, 86513],
+      "instance_equal_point_recall_at_thresholds": [95.7396440993514, 99.14119591946454],
+      "normal201": {
+        "frames": 682,
+        "normal_count": 49796777,
+        "fp": 373367,
+        "FPR": 0.7497814567396601,
+        "threshold": 1.980156660079956,
+        "low_support": {"normal": 162378, "fp": 17984, "FPR": 11.07539198659917},
+        "adequate_support": {"normal": 49634399, "fp": 355383, "FPR": 0.7160014166787836},
+        "seconds": 411.2984183450171
+      },
+      "validated": "Official point and frame denominators retained; source/slot/instance identity checked before cache reuse; both historical global TP totals exact; independent per-instance recall accumulation agrees; normal support, distance and cross-group point/FP sums equal complete201 totals; cached arrays read back exactly.",
+      "interpretation": "Instance-equal point recall is not object detection rate. Sequence-frame-instance counts are instance observations, not cross-frame unique objects. ID0 is separate and excluded from instance weighting. Distance/support are point memberships, so instance observation counts may overlap between these groups. Official frames with fewer than5 anomalies remain excluded.",
+      "candidate_evaluation": "Same-forward V3 anomaly scores and source-bound parent geometry; identical group definitions and denominators; each model's pre-existing complete-val19 operating points shared across groups. No V3 performance result yet."
     },
     "scientific_conclusion": "Binary support, fixed-population estimators, all-return geometric coverage, query equivalence and recoverable update semantics have implementation evidence. V3 superiority over1152, real transfer and mechanism effects remain unknown until authorized experiments."
   },
@@ -483,7 +520,7 @@
   },
   "status": {
     "stage": "v3_implemented_verified_not_trained",
-    "active_work": "V3 code,206-only population preparation and no-update checks completed; no training or full V3 evaluation. Historical A completed, B491 paused, C not started.",
+    "active_work": "V3 code,206-only population preparation and no-update checks completed; real-instance and original201 grouped acceptance plus independent1152 references now completed. No V3 training or full V3 evaluation. Historical A completed, B491 paused, C not started.",
     "model_defined": true,
     "training_defined": true,
     "formal_ajae_v1": "context_supported_conditional_return_relationship_network",

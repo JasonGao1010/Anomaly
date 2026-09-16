@@ -429,8 +429,174 @@ def synthetic_targets(frozen, *, official=False, binary_view=None):
     return target, bool(eligible)
 
 
+REAL_GROUPS = "instance_observations_v1"
+DISTANCE_GROUPS = ("2.5-10", "10-20", "20-35", "35-50")
+SUPPORT_GROUPS = ("low_lt8", "adequate_ge8")
+INSTANCE_GROUPS = ("1-4", "5-19", "20-99", "100+", "unknown_id0")
+ANOMALY_FIELDS = ("source_slot", "instance", "instance_returns", "distance_m", "low_support", "scores")
+
+
+def real_group_definition():
+    return dict(format=REAL_GROUPS, distance_m=[2.5, 10., 20., 35., 50.],
+        distance_intervals="left-closed/right-open;50m included", instance_returns=[1, 5, 20, 100],
+        support=dict(radius_m=2., minimum_other_distinct_positions=8, input="complete actual scan before label/range filtering"),
+        instance_unit="sequence-frame-nonzero_instance: instance observations, not cross-frame unique objects",
+        instance_equal_point_recall="mean of each represented known instance observation's point recall within the selected group; not object detection rate",
+        unknown_id0="included in point recall and a separate count group; excluded from instance counts and instance-equal recall",
+        point_grouping="instance size counts official-range returns; distance/support belong to each point; one observation may span distance/support groups",
+        frame_scope="official eligible frames only; no additional frames with fewer than5 in-range anomalies")
+
+
+def anomaly_record(source, scores, *, geometry=None):
+    """Bind scores and all group memberships to the same official anomaly slots."""
+    target, eligible = official_targets(source)
+    if not eligible:
+        raise ValueError("weak-anomaly groups require an official-eligible frame")
+    slots = np.flatnonzero(target == 1).astype(np.int32)
+    identity = source_identity(source)
+    if geometry is not None:
+        if (geometry["source_identity"] != identity or not np.array_equal(geometry["source_slot"], slots)
+                or not np.array_equal(geometry["instance"], source.labels.instance[slots])):
+            raise ValueError("anomaly geometry cache changed source, labels or physical slots")
+        result = {key: value for key, value in geometry.items() if key != "scores"}
+    else:
+        instance = source.labels.instance[slots]
+        _, inverse, counts = np.unique(instance, return_inverse=True, return_counts=True)
+        result = dict(sequence=source.sequence_id, frame=source.frame_id, source_identity=identity,
+            source_slot=slots, instance=instance.copy(), instance_returns=np.where(instance > 0, counts[inverse], -1).astype(np.int32),
+            distance_m=np.linalg.norm(source.xyzi[slots, :3], axis=1),
+            low_support=np.isin(slots, low_support_slots(source, 2., 8, workers=1, query_slots=slots)))
+    values = np.asarray(scores, np.float32)
+    if values.shape != slots.shape or not np.isfinite(values).all():
+        raise ValueError("weak-anomaly scores must cover every official anomaly exactly once")
+    return dict(result, scores=values.copy())
+
+
+def anomaly_cache(path, checkpoint, *, records=None):
+    """Small resumable cache of anomaly scores and source-bound geometric groups."""
+    path, checkpoint = Path(path), Path(checkpoint).resolve()
+    stamp = checkpoint.stat().st_mtime_ns
+    if records is None:
+        if not path.exists():
+            return {}
+        with np.load(path, allow_pickle=False) as saved:
+            if (saved["format"].item() != REAL_GROUPS or saved["checkpoint"].item() != str(checkpoint)
+                    or int(saved["checkpoint_mtime_ns"]) != stamp):
+                raise ValueError("anomaly cache belongs to different weights or grouping rules")
+            arrays = {key: saved[key] for key in ANOMALY_FIELDS}
+            offsets, identities = saved["offsets"], saved["source_identity"]
+            result = {}
+            for i, (sequence, frame) in enumerate(saved["frames"]):
+                begin, end = offsets[i:i + 2]
+                result[int(sequence), int(frame)] = dict(sequence=int(sequence), frame=int(frame),
+                    source_identity=str(identities[i]),
+                    **{key: arrays[key][begin:end].copy() for key in ANOMALY_FIELDS})
+            return result
+    rows = sorted(records, key=lambda row: (row["sequence"], row["frame"]))
+    if not rows:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(".tmp")
+    try:
+        with temporary.open("wb") as stream:
+            np.savez_compressed(stream, format=np.asarray(REAL_GROUPS), checkpoint=np.asarray(str(checkpoint)),
+                checkpoint_mtime_ns=np.int64(stamp), frames=np.array([(r["sequence"], r["frame"]) for r in rows], np.int32),
+                source_identity=np.array([r["source_identity"] for r in rows]),
+                offsets=np.r_[0, np.cumsum([len(r["scores"]) for r in rows])],
+                **{key: np.concatenate([r[key] for r in rows]) for key in ANOMALY_FIELDS})
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def weak_anomaly_metrics(records, full):
+    """Pool points, then average within-instance recalls without inventing an object detector."""
+    rows = sorted(records, key=lambda row: (row["sequence"], row["frame"]))
+    if len({(r["sequence"], r["frame"]) for r in rows}) != len(rows):
+        raise ValueError("duplicate frame in weak-anomaly evaluation")
+    values = {key: np.concatenate([r[key] for r in rows]) if rows else np.empty(0) for key in ANOMALY_FIELDS}
+    frame_index = np.repeat(np.arange(len(rows)), [len(r["scores"]) for r in rows])
+    known = values["instance"] > 0
+    instance_index = np.full(len(known), -1, np.int32)
+    observations, instance_index[known] = np.unique(np.column_stack((frame_index[known], values["instance"][known])),
+                                                   axis=0, return_inverse=True)
+    masks = {"all": np.ones(len(known), bool)}
+    count_bin = np.searchsorted([5, 20, 100], values["instance_returns"], side="right")
+    distance_bin = np.searchsorted([10, 20, 35], values["distance_m"], side="right")
+    masks.update({f"instance_returns/{name}": known & (count_bin == i) for i, name in enumerate(INSTANCE_GROUPS[:4])})
+    masks["instance_returns/unknown_id0"] = ~known
+    masks.update({f"distance/{name}": distance_bin == i for i, name in enumerate(DISTANCE_GROUPS)})
+    masks.update({f"support/{name}": values["low_support"] == (i == 0) for i, name in enumerate(SUPPORT_GROUPS)})
+    points = len(known)
+    if points != full["anomaly_count"] or len(rows) != full["eligible_frames"]:
+        raise ValueError("weak-anomaly denominator differs from the complete official evaluation")
+    operating = {}
+    for name in ("official_high_recall", "recall_at_fpr_limit"):
+        if full.get(name) is None:
+            operating[name] = None
+            continue
+        threshold = full[name]["threshold"]
+        high = values["scores"] >= threshold if threshold is not None else np.zeros(points, bool)
+        groups = {}
+        for key, use in masks.items():
+            selected = use & known
+            total = np.bincount(instance_index[selected], minlength=len(observations))
+            hit = np.bincount(instance_index[selected & high], minlength=len(observations))
+            represented = total > 0
+            n, tp = int(use.sum()), int((use & high).sum())
+            groups[key] = dict(points=n, tp=tp, fn=n-tp, point_recall=100*tp/n if n else None,
+                unknown_instance_points=int((use & ~known).sum()), instance_observations=int(represented.sum()),
+                instance_equal_point_recall=float(100*np.mean(hit[represented]/total[represented])) if represented.any() else None)
+        if groups["all"]["tp"] != full[name]["tp"]:
+            raise ValueError("weak-anomaly decisions differ from the saved global operating point")
+        operating[name] = dict(threshold=threshold, global_operating_point=full[name], groups=groups)
+    return dict(definition=real_group_definition(), eligible_frames=len(rows), anomaly_points=points,
+        instance_observations=len(observations), unknown_instance_points=int((~known).sum()), operating_points=operating)
+
+
+def normal_group_counts(source, scores, threshold):
+    """All normal groups share the full scan's support and one transferred global threshold."""
+    slots = np.flatnonzero(binary_target(source) == 0)
+    sparse = np.isin(slots, low_support_slots(source, 2., 8, workers=1, query_slots=slots))
+    distance = np.searchsorted([10, 20, 35], np.linalg.norm(source.xyzi[slots, :3], axis=1), side="right")
+    high = scores[slots] >= threshold
+    groups = {"all": np.ones(len(slots), bool)}
+    for i, name in enumerate(SUPPORT_GROUPS):
+        groups[f"support/{name}"] = sparse == (i == 0)
+    for j, name in enumerate(DISTANCE_GROUPS):
+        groups[f"distance/{name}"] = distance == j
+        for i, support in enumerate(SUPPORT_GROUPS):
+            groups[f"support_distance/{support}/{name}"] = (distance == j) & (sparse == (i == 0))
+    return {name: np.array([use.sum(), (use & high).sum()], np.int64) for name, use in groups.items()}
+
+
+def compare_group_metrics(candidate, reference, *, normal=False):
+    """Only compare identical scientific groups and their complete point/observation denominators."""
+    if candidate["definition"] != reference["definition"]:
+        raise ValueError("candidate and1152 use different group definitions")
+    if normal:
+        pairs = [("normal201", candidate["groups"], reference["groups"])]
+        counts, metrics = ("normal",), ("FPR",)
+    else:
+        if (candidate["operating_points"].keys() != reference["operating_points"].keys()
+                or any((value is None) != (reference["operating_points"][name] is None)
+                       for name, value in candidate["operating_points"].items())):
+            raise ValueError("candidate and1152 global operating points have different support")
+        pairs = [(name, value["groups"], reference["operating_points"][name]["groups"])
+                 for name, value in candidate["operating_points"].items() if value is not None]
+        counts, metrics = ("points", "unknown_instance_points", "instance_observations"), ("point_recall", "instance_equal_point_recall")
+    result = {}
+    for name, left, right in pairs:
+        if left.keys() != right.keys() or any(left[key][count] != right[key][count] for key in left for count in counts):
+            raise ValueError("candidate and1152 grouped denominators differ")
+        result[name] = {key: {metric + "_change_pp": left[key][metric] - right[key][metric]
+                             if left[key][metric] is not None and right[key][metric] is not None else None
+                             for metric in metrics} for key in left}
+    return result
+
+
 def evaluate_frames(frames, *, directory=None, observe=None, check_resources=None,
-                    per_sequence=False, capture=None):
+                    per_sequence=False, capture=None, anomaly_records=None, anomaly_geometry=None):
     """Pool the complete official point set with bounded exact tie counting."""
     rows, seen = [], set()
     with ExitStack() as stack:
@@ -461,6 +627,13 @@ def evaluate_frames(frames, *, directory=None, observe=None, check_resources=Non
                     sequences[key].add(scores[valid], target[valid])
                 if capture is not None and (source.sequence_id, source.frame_id) in capture:
                     capture[source.sequence_id, source.frame_id] = scores
+                if anomaly_records is not None:
+                    geometry = None
+                    if anomaly_geometry is not None:
+                        geometry = anomaly_geometry.get((source.sequence_id, source.frame_id))
+                        if geometry is None:
+                            raise ValueError("1152 reference lacks this eligible frame's anomaly geometry")
+                    anomaly_records.append(anomaly_record(source, scores[target == 1], geometry=geometry))
             if check_resources is not None:
                 check_resources()
         result = counts.metrics(observe=observe)
@@ -731,8 +904,9 @@ class ScoreCounts:
 class EvaluationFrames:
     """Bounded worker preparation; ordered loading preserves complete scan identity."""
 
-    def __init__(self, data_root, sequence_ids, protocol, config, preprocessing, *, normal_source=False):
+    def __init__(self, data_root, sequence_ids, protocol, config, preprocessing, *, normal_source=False, skip_frames=()):
         self.normal_source = normal_source
+        self.skip_frames = set(skip_frames)
         self.sequences = {identifier: STUSequence.open(data_root, protocol=protocol, partition="train" if normal_source else "val",
             sequence_id=identifier, label_mode=LabelMode.REQUIRED) for identifier in sequence_ids}
         self.samples = [(identifier, frame) for identifier, sequence in self.sequences.items()
@@ -749,7 +923,7 @@ class EvaluationFrames:
         identifier, frame = self.samples[index]
         source = self.sequences[identifier][frame]
         eligible = True if self.normal_source else official_targets(source)[1]
-        return source, self.transform(source) if eligible else None
+        return source, self.transform(source) if eligible and (identifier, frame) not in self.skip_frames else None
 
 
 def checkpoint_frames(data_root, checkpoint_path, sequence_ids, protocol):
@@ -775,7 +949,8 @@ def checkpoint_frames(data_root, checkpoint_path, sequence_ids, protocol):
 
 
 def evaluate_validation(data_root, *, checkpoint_path=None, prediction_root=None,
-                        sequences=None, directory=None, capture=None, save_capture=False):
+                        sequences=None, directory=None, capture=None, save_capture=False,
+                        real_groups=False, reference=None):
     protocol = load_protocol()
     sequences = tuple(sequences) if sequences is not None else protocol.public_sequence_ids
     if len(set(sequences)) != len(sequences):
@@ -797,15 +972,26 @@ def evaluate_validation(data_root, *, checkpoint_path=None, prediction_root=None
             host_disk()
 
     started = time.perf_counter()
+    anomalies = [] if real_groups else None
+    geometry = anomaly_cache(reference["weak_prediction_cache"], reference["checkpoint"]) if real_groups and reference else None
     result, _ = evaluate_frames(
         checkpoint_frames(data_root, checkpoint_path, sequences, protocol) if checkpoint_path is not None
         else prediction_frames(data_root, prediction_root, sequences, protocol),
-        directory=directory, check_resources=check_resources, per_sequence=True, capture=capture)
+        directory=directory, check_resources=check_resources, per_sequence=True, capture=capture,
+        anomaly_records=anomalies, anomaly_geometry=geometry)
     result.update(partition="val", sequences=list(sequences), seconds=time.perf_counter() - started,
         host_E_before=disk, host_E_after=host_disk(),
         scope="full_public_validation" if set(sequences) == set(protocol.public_sequence_ids) else "development_subset",
         **({"checkpoint": str(Path(checkpoint_path).resolve())} if checkpoint_path is not None
            else {"prediction_root": str(Path(prediction_root).resolve())}))
+    if real_groups:
+        result["weak_anomaly"] = weak_anomaly_metrics(anomalies, result)
+        if reference is not None:
+            result["weak_anomaly"]["versus1152"] = compare_group_metrics(result["weak_anomaly"], reference["weak_anomaly"])
+        if checkpoint_path is not None:
+            path = Path(checkpoint_path).with_name(Path(checkpoint_path).stem + "_weak.npz")
+            anomaly_cache(path, checkpoint_path, records=anomalies)
+            result["weak_prediction_cache"] = str(path.resolve())
     if save_capture:
         if checkpoint_path is None or capture is None:
             raise ValueError("persisted fixed predictions require a checkpoint and explicit frame identities")
@@ -850,7 +1036,7 @@ def captured_scores(data_root, path, *, capture=None):
             saved.close()
 
 
-def evaluate_normal_source(model, transform, data_root, threshold, *, capture=None):
+def evaluate_normal_source(model, transform, data_root, threshold, *, capture=None, reference=None):
     """201 is a pure-normal transfer check at this model's complete-val19 threshold."""
     import torch
     from torch.utils.data import DataLoader
@@ -861,27 +1047,42 @@ def evaluate_normal_source(model, transform, data_root, threshold, *, capture=No
     loader = DataLoader(dataset, batch_size=None, num_workers=4, prefetch_factor=1,
         multiprocessing_context="spawn", pin_memory=True, generator=torch.Generator().manual_seed(83))
     normal, false_positive, native, native_high = 0, 0, 0, 0
-    frames, started = [], time.perf_counter()
+    frames, grouped, started = [], {}, time.perf_counter()
     for i, (source, scan) in enumerate(loader, 1):
         scores = model.predict(source, prepared=scan).restore(source)
         target = binary_target(source)
         use = target == 0
         raw2 = ~source.zero_slot_mask & (source.labels.semantic == 2) & detection_range(source.xyzi[:, :3])
         n, fp = int(use.sum()), int((scores[use] >= threshold).sum())
+        groups = normal_group_counts(source, scores, threshold)
+        for name, counts in groups.items():
+            grouped[name] = grouped.get(name, np.zeros(2, np.int64)) + counts
         normal += n
         false_positive += fp
         native += int(raw2.sum())
         native_high += int((scores[raw2] >= threshold).sum())
-        frames.append(dict(frame=source.frame_id, source_identity=source_identity(source), normal=n, fp=fp))
+        frames.append(dict(frame=source.frame_id, source_identity=source_identity(source), normal=n, fp=fp,
+                           groups={key: dict(normal=int(value[0]), fp=int(value[1])) for key, value in groups.items()}))
         if capture is not None and (201, source.frame_id) in capture:
             capture[201, source.frame_id] = scores.copy()
         if i % 25 == 0 or i == len(dataset):
             host_disk()
             print(f"原始201 {i}/{len(dataset)} 正常={normal} FP={false_positive} 用时={(time.perf_counter()-started)/60:.1f}min", flush=True)
-    return dict(sequence=201, frames=frames, frame_count=len(frames), normal_count=normal,
+    result = dict(sequence=201, frames=frames, frame_count=len(frames), normal_count=normal,
         fp=false_positive, FPR=100 * false_positive / normal if normal else None, threshold=threshold,
+        definition=dict(real_group_definition(), frame_scope="all682 original201 frames; no anomaly-count eligibility gate"),
+        groups={name: dict(normal=int(n), fp=int(fp), FPR=100*int(fp)/int(n) if n else None)
+                for name, (n, fp) in grouped.items()},
         native_raw2=dict(points=native, above_threshold=native_high), seconds=time.perf_counter()-started,
         scope="all682 original201 frames; raw0 ignored, native raw2 separately reported, other actual returns normal within2.5-50m; no AP/AUROC/FPR95 or201 threshold fitting")
+    if result["groups"]["all"] != dict(normal=normal, fp=false_positive, FPR=result["FPR"]):
+        raise ValueError("normal201 grouped counts differ from its complete binary point set")
+    if reference is not None:
+        identities = lambda rows: [(r["frame"], r["source_identity"]) for r in rows]
+        if identities(frames) != identities(reference["frames"]):
+            raise ValueError("normal201 and1152 source identities differ")
+        result["versus1152"] = compare_group_metrics(result, reference, normal=True)
+    return result
 
 
 def model_selection(directory, parent):
@@ -906,6 +1107,70 @@ def model_selection(directory, parent):
                                not any(dominates(other, r) for other in [baseline] + rows)])
 
 
+def evaluate_parent_anomalies(model, saved, data_root, declaration, full, path):
+    """Reuse same-point parent logits first; infer each missing eligible scan only once."""
+    import torch
+    from torch.utils.data import DataLoader
+    checkpoint = PROJECT_ROOT / declaration["warm_start"]["checkpoint"]
+    if model.training or Path(full["checkpoint"]).resolve() != checkpoint.resolve():
+        raise ValueError("parent groups require inference and its historical complete-val19 reference")
+    cached = anomaly_cache(path, checkpoint)
+    directory = PROJECT_ROOT / declaration["diagnostic_from"]
+    manifest_path = directory / "selection.json"
+    legacy, mode, component = {}, None, None
+    if manifest_path.exists():
+        manifest = json.loads(manifest_path.read_text())
+        if (Path(manifest["reference"]).resolve() != checkpoint.resolve()
+                or checkpoint.stat().st_mtime_ns > manifest_path.stat().st_mtime_ns):
+            raise ValueError("diagnostic scores no longer identify the historical1152 weights")
+        mode, component = manifest["modes"].index("parent"), manifest["components"].index("final")
+        legacy = {(r["sequence"], r["frame"]): r for r in manifest["frames"] if (directory / r["file"]).exists()}
+    dataset = EvaluationFrames(data_root, full["sequences"], load_protocol(), saved["config"], saved["preprocessing"],
+                               skip_frames=set(cached) | set(legacy))
+    loader = DataLoader(dataset, batch_size=None, num_workers=4, prefetch_factor=1,
+        multiprocessing_context="spawn", pin_memory=True, generator=torch.Generator().manual_seed(83))
+    rows, reused, inferred, started = [], dict(anomaly_cache=0, diagnostic_cache=0), 0, time.perf_counter()
+    try:
+        for source, scan in loader:
+            target, eligible = official_targets(source)
+            if not eligible:
+                continue
+            key = (source.sequence_id, source.frame_id)
+            if key in cached:
+                record = anomaly_record(source, cached[key]["scores"], geometry=cached[key])
+                reused["anomaly_cache"] += 1
+            elif key in legacy:
+                item = legacy[key]
+                valid = np.flatnonzero(target >= 0)
+                with np.load(directory / item["file"], allow_pickle=False) as values:
+                    if (item["source_identity"] != source_identity(source)
+                            or not np.array_equal(values["source_slot"], valid)
+                            or not np.array_equal(values["target"], target[valid])
+                            or not np.array_equal(values["instance"], source.labels.instance[valid])):
+                        raise ValueError("diagnostic parent scores changed source, official labels or point identities")
+                    scores = values["scores"][mode, component, values["target"] == 1]
+                record = anomaly_record(source, scores)
+                reused["diagnostic_cache"] += 1
+            else:
+                # Retain the historical full-query path, including exact threshold-boundary logits.
+                scores = model.predict(source, prepared=scan).restore(source)
+                record = anomaly_record(source, scores[target == 1])
+                inferred += 1
+            cached[key] = record
+            rows.append(record)
+            if len(rows) % 128 == 0:
+                anomaly_cache(path, checkpoint, records=cached.values())
+                host_disk()
+            if len(rows) % 25 == 0 or len(rows) == full["eligible_frames"]:
+                print(f"1152真实分组 {len(rows)}/{full['eligible_frames']} 复用={sum(reused.values())} "
+                      f"补推理={inferred} 用时={(time.perf_counter()-started)/60:.1f}min", flush=True)
+    finally:
+        anomaly_cache(path, checkpoint, records=cached.values())
+    result = weak_anomaly_metrics(rows, full)
+    result.update(reused_frames=reused, model_forwards=inferred, seconds=time.perf_counter()-started)
+    return result
+
+
 def prepare_reference(data_root, declaration, directory=None):
     """Establish the parent on V3 label support once; historical result files stay untouched."""
     import torch
@@ -918,6 +1183,7 @@ def prepare_reference(data_root, declaration, directory=None):
         if result["reference_for"] != declaration or result["binary_view"] != "official_range_v3":
             raise ValueError("parent reference uses another V3 declaration or binary view")
         return result
+    _evaluation_space(512 * 2**20)
     model, saved = load_checkpoint(PROJECT_ROOT / declaration["warm_start"]["checkpoint"])
     validate_stage_parent(saved, experiment_config(declaration), declaration)
     transform = ScanTransform(saved["config"], state=saved["preprocessing"], workers=4)
@@ -927,6 +1193,8 @@ def prepare_reference(data_root, declaration, directory=None):
     raw_scores = {(201, r["frame"]): None for r in declaration["selection"]["validation"]}
     directory.mkdir(parents=True, exist_ok=True)
     with evaluation_state(model):
+        weak_path = directory / "1152_weak.npz"
+        weak = evaluate_parent_anomalies(model, saved, data_root, declaration, parent, weak_path)
         normal = evaluate_normal_source(model, transform, data_root, threshold, capture=raw_scores)
         result = evaluate_fixed(model, transform, prepared, include_pairs=True, directory=directory,
                                 raw_scores=raw_scores, real_threshold=threshold)
@@ -934,7 +1202,8 @@ def prepare_reference(data_root, declaration, directory=None):
         raise ValueError("V3 parent reference changed historical model tensors")
     result.update(step=1152, checkpoint=str((PROJECT_ROOT / declaration["warm_start"]["checkpoint"]).resolve()),
         reference_for=declaration, binary_view="official_range_v3", normal201=normal, full_val19=parent,
-        model_and_buffers_unchanged=True, scope="independent parent1152 on new binary synthetic support and original201; complete val19 reuses its unchanged historical reference")
+        weak_anomaly=weak, weak_prediction_cache=str(weak_path.resolve()),
+        model_and_buffers_unchanged=True, scope="independent parent1152 on new binary synthetic support and original201; real groups reuse point caches and infer missing eligible scans, keeping historical complete-val19 metrics and thresholds")
     _atomic_json(path, result)
     return result
 
@@ -1969,7 +2238,9 @@ def main():
                     full = json.loads(args.checkpoint.with_name(args.checkpoint.stem + "_val.json").read_text())
                     real_threshold = full["official_high_recall"]["threshold"]
                     raw_scores = {(201, r["frame"]): None for r in declaration["selection"]["validation"]}
-                    normal201 = evaluate_normal_source(model, transform, args.data_root, real_threshold, capture=raw_scores)
+                    reference = prepare_reference(args.data_root, declaration)
+                    normal201 = evaluate_normal_source(model, transform, args.data_root, real_threshold, capture=raw_scores,
+                                                       reference=reference["normal201"])
                 result = evaluate_fixed(model, transform, prepared, directory=args.output,
                     include_real=not args.parent_reference and saved["step"] in declaration["evaluation"]["real_steps"],
                     include_pairs=args.parent_reference or saved["step"] in declaration["evaluation"].get("paired_normal_steps", []),
@@ -2009,7 +2280,7 @@ def main():
         print(json.dumps(result, indent=2))
         return
     result = evaluate_validation(args.data_root, checkpoint_path=args.checkpoint,
-        prediction_root=args.predictions, sequences=args.sequence, directory=args.output)
+        prediction_root=args.predictions, sequences=args.sequence, directory=args.output, real_groups=True)
     _atomic_json(args.output / "global.json", result)
     print(json.dumps(result, indent=2))
 

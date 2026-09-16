@@ -17,6 +17,117 @@ from src.scene import PointLabels, make_source_frame
 from vendor.stu.compute_point_level_ood import PointOODMetricsCalculator
 
 
+def _instance_source(frame, instance, distance):
+    instance = np.asarray(instance, np.uint16)
+    xyzi = np.zeros((len(instance), 4), np.float32)
+    xyzi[:, 0], xyzi[:, 3] = distance, .2
+    raw = np.full(len(instance), 2, np.uint16)
+    labels = PointLabels(raw.astype(np.uint32) | (instance.astype(np.uint32) << 16),
+                         raw, instance, np.full(len(instance), 255, np.uint8))
+    return make_source_frame(frame, xyzi, np.eye(4), labels, partition="val", sequence_id=125)
+
+
+def test_real_instances_use_in_frame_counts_and_equal_weight_known_observations(tmp_path):
+    from src.evaluate import anomaly_record, weak_anomaly_metrics, compare_group_metrics
+    first = _instance_source(0, [4]*93 + [5]*7 + [4], [10.]*93 + [20.]*7 + [51.])
+    second = _instance_source(1, [4]*5 + [0], [35.]*5 + [50.])
+    records = [anomaly_record(first, np.r_[np.ones(93), np.zeros(7)]), anomaly_record(second, np.ones(6))]
+    full = dict(anomaly_count=106, eligible_frames=2,
+                official_high_recall=dict(threshold=1., tp=99), recall_at_fpr_limit=dict(threshold=0., tp=106))
+    result = weak_anomaly_metrics(records, full)
+    groups = result["operating_points"]["official_high_recall"]["groups"]
+    assert result["instance_observations"] == 3  # The same ID in two frames is two observations.
+    assert groups["all"]["point_recall"] == pytest.approx(9900/106)
+    assert groups["all"]["instance_equal_point_recall"] == pytest.approx(200/3)
+    assert groups["instance_returns/5-19"]["points"] == 12
+    assert groups["instance_returns/5-19"]["instance_equal_point_recall"] == 50
+    assert groups["instance_returns/20-99"]["points"] == 93
+    assert records[0]["instance_returns"][0] == 93  # The out-of-range return cannot change the group.
+    unknown = groups["instance_returns/unknown_id0"]
+    assert unknown["points"] == unknown["tp"] == 1
+    assert unknown["instance_observations"] == 0 and unknown["instance_equal_point_recall"] is None
+    assert groups["distance/35-50"]["points"] == 6  # Includes the official50m boundary.
+    assert compare_group_metrics(result, result)["official_high_recall"]["all"]["point_recall_change_pp"] == 0
+    with pytest.raises(ValueError, match="denominator"):
+        weak_anomaly_metrics(records, dict(full, anomaly_count=107))
+    # Collecting groups does not alter the official frame gate or pooled metric calculation.
+    frames = [(source, FramePrediction("val", 125, source.frame_id, source.real_slots,
+               np.pad(record["scores"], (0, source.slot_count-len(record["scores"])), constant_values=100)))
+              for source, record in zip((first, second), records)]
+    frames.append((_instance_source(2, [1]*4, [10.]*4), None))
+    captured = []
+    plain, _ = evaluate_frames(frames, directory=tmp_path)
+    grouped, _ = evaluate_frames(frames, directory=tmp_path, anomaly_records=captured)
+    assert grouped == plain and len(captured) == 2
+    assert weak_anomaly_metrics(captured, grouped)["operating_points"] == dict(
+        official_high_recall=None, recall_at_fpr_limit=None)  # A single-class pool defines neither working point.
+
+
+def test_normal_support_distance_groups_use_full_scan_and_one_threshold():
+    from src.data import binary_target, low_support_slots
+    from src.evaluate import normal_group_counts
+    distance = [10., 20., 35., 50., 10., 49., 49.2, 49.4, 49.6, 50.4, 50.6, 50.8, 52., 40., 0.]
+    xyzi = np.zeros((len(distance), 4), np.float32)
+    xyzi[:, 0] = distance; xyzi[:-1, 3] = .2
+    raw = np.array([1, 52, 99, 40, 1] + [0]*8 + [2, 40], np.uint16)
+    labels = PointLabels(raw.astype(np.uint32), raw, np.zeros(len(raw), np.uint16), np.full(len(raw), 255, np.uint8))
+    source = make_source_frame(0, xyzi, np.eye(4), labels, partition="train", sequence_id=201)
+    slots = np.flatnonzero(binary_target(source) == 0)
+    expected = np.intersect1d(slots, low_support_slots(source, 2., 8))
+    np.testing.assert_array_equal(low_support_slots(source, 2., 8, query_slots=slots), expected)
+    assert expected.tolist() == [0, 1, 2, 4]  # Duplicates add returns, not independent neighbors.
+    scores = np.r_[[1., .9, 1., 1., 0.], np.full(len(raw)-5, 100.)]
+    groups = normal_group_counts(source, scores, 1.)
+    np.testing.assert_array_equal(groups["all"], [5, 3])
+    np.testing.assert_array_equal(groups["support/adequate_ge8"], [1, 1])
+    # Ignored and out-of-range points still provide support; a neighbor exactly2m away counts.
+    np.testing.assert_array_equal(groups["distance/2.5-10"], [0, 0])
+    np.testing.assert_array_equal(groups["distance/10-20"], [2, 1])
+    for prefix in ("support/", "distance/", "support_distance/"):
+        np.testing.assert_array_equal(sum(value for key, value in groups.items() if key.startswith(prefix)), [5, 3])
+
+
+def test_parent_groups_reuse_bound_scores_and_infer_only_missing_eligible_frames(tmp_path, monkeypatch):
+    import json
+    from types import SimpleNamespace
+    from src.data import source_identity
+    from src.evaluate import evaluate_parent_anomalies, anomaly_cache, anomaly_record
+    checkpoint = tmp_path / "1152.pt"; checkpoint.touch()
+    directory = tmp_path / "diagnosis"; directory.mkdir()
+    sources = [_instance_source(i, [1]*(5 if i < 2 else 4), [10.]*(5 if i < 2 else 4)) for i in range(3)]
+    np.savez_compressed(directory / "125_0.npz", source_slot=np.arange(5), target=np.ones(5, np.int8),
+                        instance=np.ones(5, np.uint16), scores=np.ones((1, 1, 5), np.float32))
+    (directory / "selection.json").write_text(json.dumps(dict(reference=str(checkpoint), modes=["parent"],
+        components=["final"], frames=[dict(sequence=125, frame=0, file="125_0.npz", source_identity=source_identity(sources[0]))])))
+    calls = []
+    def predict(source, prepared):
+        calls.append(source.frame_id)
+        return FramePrediction("val", 125, source.frame_id, source.real_slots, np.zeros(source.slot_count, np.float32))
+    def dataset(*args, **kwargs):
+        assert (125, 0) in kwargs["skip_frames"]
+        return [(source, None if (125, source.frame_id) in kwargs["skip_frames"] else {}) for source in sources]
+    monkeypatch.setattr("src.evaluate.PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr("src.evaluate.EvaluationFrames", dataset)
+    monkeypatch.setattr("torch.utils.data.DataLoader", lambda dataset, **kwargs: dataset)
+    monkeypatch.setattr("src.evaluate.host_disk", lambda: {})
+    model = SimpleNamespace(training=False, predict=predict)
+    declaration = dict(warm_start=dict(checkpoint="1152.pt"), diagnostic_from="diagnosis")
+    full = dict(checkpoint=str(checkpoint), sequences=[125], anomaly_count=10, eligible_frames=2,
+        official_high_recall=dict(threshold=1., tp=5), recall_at_fpr_limit=dict(threshold=0., tp=10))
+    path = tmp_path / "weak.npz"
+    result = evaluate_parent_anomalies(model, dict(config={}, preprocessing={}), tmp_path, declaration, full, path)
+    assert calls == [1] and result["model_forwards"] == 1
+    assert result["reused_frames"] == dict(anomaly_cache=0, diagnostic_cache=1)
+    again = evaluate_parent_anomalies(model, dict(config={}, preprocessing={}), tmp_path, declaration, full, path)
+    assert calls == [1] and again["reused_frames"]["anomaly_cache"] == 2
+    record = anomaly_cache(path, checkpoint)[125, 0]
+    with pytest.raises(ValueError, match="cache changed"):
+        anomaly_record(_instance_source(0, [1]*5, [11.]*5), np.ones(5), geometry=record)
+    checkpoint.write_text("changed weights")
+    with pytest.raises(ValueError, match="different weights"):
+        anomaly_cache(path, checkpoint)
+
+
 def test_v3_binary_support_matches_official_before_rotation_and_keeps_occluded_raw():
     from src.data import FrozenFrame, binary_target, binary_normal_groups
     from src.evaluate import evaluation_targets
@@ -78,8 +189,15 @@ def test_v3_normal201_uses_transferred_threshold_and_no_anomaly_metrics(monkeypa
     result=evaluate_normal_source(model,transform,'unused',1.,capture=capture)
     assert result['normal_count']==3 and result['fp']==2 and result['FPR']==pytest.approx(200/3)
     assert result['native_raw2']==dict(points=1,above_threshold=1)
+    assert result['groups']['all'] == dict(normal=3, fp=2, FPR=pytest.approx(200/3))
+    assert result['groups']['support_distance/low_lt8/10-20']['normal'] == 3
     assert not {'AP','FPR95','AUROC'} & result.keys()
     np.testing.assert_array_equal(capture[201,0],values)
+    compared = evaluate_normal_source(model,transform,'unused',1.,reference=result)
+    assert compared['versus1152']['normal201']['all']['FPR_change_pp'] == 0
+    result['groups']['all']['normal'] += 1
+    with pytest.raises(ValueError, match='denominators differ'):
+        evaluate_normal_source(model,transform,'unused',1.,reference=result)
 
 
 def test_v3_candidate_selection_requires_joint_improvement_over_parent(tmp_path):

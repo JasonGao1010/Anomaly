@@ -2014,7 +2014,7 @@ def fit(config, data_root, steps, output, resume=None, *, experiment=None, resum
                 from .evaluate import evaluate_validation, evaluate_synthetic
                 if v3:
                     from .evaluate import prepare_reference
-                    prepare_reference(data_root, experiment)
+                    parent_reference = prepare_reference(data_root, experiment)
                 if not v3:
                     stages[str(step)] = training_summary(output / "loss.jsonl", config, step)
                 else:
@@ -2041,7 +2041,8 @@ def fit(config, data_root, steps, output, resume=None, *, experiment=None, resum
                     else:
                         captured.update({(r["identity"], r["frame"]): None for r in experiment["selection"]["validation"]})
                     result = evaluator(data_root, checkpoint_path=output / f"{step}.pt", directory=output, capture=captured,
-                                       **(dict(save_capture=True) if v3 and suffix == "val" else {}))
+                                       **(dict(save_capture=True, real_groups=True, reference=parent_reference)
+                                          if v3 and suffix == "val" else {}))
                     _atomic_json(path, dict(step=step, **result))
                     from .evaluate import print_metrics
                     print_metrics("完整val19" if suffix == "val" else "完整合成集", result)
@@ -2056,7 +2057,8 @@ def fit(config, data_root, steps, output, resume=None, *, experiment=None, resum
                     raw_scores = {(201, r["frame"]): None for r in experiment["selection"]["validation"]}
                     path = output / f"{step}_normal201.json"
                     if not path.exists():
-                        result = evaluate_normal_source(model, transform, data_root, real_threshold, capture=raw_scores)
+                        result = evaluate_normal_source(model, transform, data_root, real_threshold, capture=raw_scores,
+                                                        reference=parent_reference["normal201"])
                         _atomic_json(path, dict(step=step, checkpoint=str((output / f"{step}.pt").resolve()), **result))
                     parent = json.loads((PROJECT_ROOT / "results/keep/mean/global.json").read_text())
                     run["model_selection"] = model_selection(output, parent)

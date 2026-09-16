@@ -340,15 +340,23 @@ class FrozenDataset:
         return np.array([lookup[key] for key in expected])
 
 
-def low_support_slots(source, radius_m, minimum_neighbors, *, workers=1):
+def low_support_slots(source, radius_m, minimum_neighbors, *, workers=1, query_slots=None):
     """Count distinct positions in the complete original scan, before label filtering."""
     xyz, inverse = np.unique(source.xyzi[source.real_slots, :3].astype(np.float64),
                              axis=0, return_inverse=True)
     if not len(xyz):
         return np.empty(0, np.int32)
     # Self occupies rank one; rank k+1 decides whether at least k neighbors exist.
-    distance = cKDTree(xyz).query(xyz, k=[minimum_neighbors + 1], workers=workers)[0][:, 0]
-    return source.real_slots[(distance > radius_m)[inverse]].astype(np.int32)
+    if query_slots is None:
+        distance = cKDTree(xyz).query(xyz, k=[minimum_neighbors + 1], workers=workers)[0][:, 0]
+        return source.real_slots[(distance > radius_m)[inverse]].astype(np.int32)
+    slots = np.asarray(query_slots)
+    if (slots.ndim != 1 or not np.issubdtype(slots.dtype, np.integer)
+            or np.any((slots < 0) | (slots >= source.slot_count)) or np.any(source.zero_slot_mask[slots])):
+        raise DataProtocolError("support queries must address actual source returns")
+    distance = cKDTree(xyz).query(source.xyzi[slots, :3].astype(np.float64),
+                                k=[minimum_neighbors + 1], workers=workers)[0][:, 0]
+    return slots[distance > radius_m].astype(np.int32)
 
 
 def retained_normal_slots(frozen, original):
