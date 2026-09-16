@@ -735,6 +735,7 @@ class LitePT(PointModule):
         self.order = [order] if isinstance(order, str) else order
         self.enc_mode = enc_mode
         self.shuffle_orders = shuffle_orders
+        self.stride = tuple(stride)
 
         self.enc_conv = enc_conv
         self.enc_attn = enc_attn
@@ -865,7 +866,7 @@ class LitePT(PointModule):
                     )
                 self.dec.add(module=dec, name=f"dec{s}")
 
-    def forward(self, data_dict):
+    def forward(self, data_dict, *, embedding_residual=None, return_pyramid=False):
         """
         data_dict is the batched input point cloud, it should contain as least:
         1. feat [N, input_dim]: input feature for the point cloud
@@ -882,9 +883,30 @@ class LitePT(PointModule):
         point.sparsify()
 
         point = self.embedding(point)
-        point = self.enc(point)
+        if embedding_residual is not None:
+            if embedding_residual.shape != point.feat.shape:
+                raise ValueError("detail residual must match the embedded voxel features")
+            point.feat = point.feat + embedding_residual
+            point.sparse_conv_feat = point.sparse_conv_feat.replace_feature(point.feat)
 
+        if not return_pyramid:
+            point = self.enc(point)
+            if not self.enc_mode:
+                point = self.dec(point)
+            return point
+
+        levels, stride = [], 1
+        for index, stage in enumerate(self.enc.children()):
+            point = stage(point)
+            if index:
+                stride *= self.stride[index - 1]
+            # Save tensors before unpooling mutates parents and consumes their links.
+            level = dict(feat=point.feat, coord=point.coord, grid_coord=point.grid_coord, stride=stride)
+            if index:
+                level["pooling_inverse"] = point.pooling_inverse
+            levels.append(level)
         if not self.enc_mode:
-            point = self.dec(point)
-
-        return point
+            for index, stage in zip(reversed(range(len(levels) - 1)), self.dec.children()):
+                point = stage(point)
+                levels[index]["feat"] = point.feat
+        return point, levels

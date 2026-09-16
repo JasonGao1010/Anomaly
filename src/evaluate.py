@@ -1062,6 +1062,7 @@ def evaluate_normal_source(model, transform, data_root, threshold, *, capture=No
         native += int(raw2.sum())
         native_high += int((scores[raw2] >= threshold).sum())
         frames.append(dict(frame=source.frame_id, source_identity=source_identity(source), normal=n, fp=fp,
+                           internal_returns=len(scan["xyzi"]) if "xyzi" in scan else source.real_count,
                            groups={key: dict(normal=int(value[0]), fp=int(value[1])) for key, value in groups.items()}))
         if capture is not None and (201, source.frame_id) in capture:
             capture[201, source.frame_id] = scores.copy()
@@ -1069,6 +1070,7 @@ def evaluate_normal_source(model, transform, data_root, threshold, *, capture=No
             host_disk()
             print(f"原始201 {i}/{len(dataset)} 正常={normal} FP={false_positive} 用时={(time.perf_counter()-started)/60:.1f}min", flush=True)
     result = dict(sequence=201, frames=frames, frame_count=len(frames), normal_count=normal,
+        input_representation=model.config.get("duplicate_records", "all_released_records"),
         fp=false_positive, FPR=100 * false_positive / normal if normal else None, threshold=threshold,
         definition=dict(real_group_definition(), frame_scope="all682 original201 frames; no anomaly-count eligibility gate"),
         groups={name: dict(normal=int(n), fp=int(fp), FPR=100*int(fp)/int(n) if n else None)
@@ -1082,6 +1084,8 @@ def evaluate_normal_source(model, transform, data_root, threshold, *, capture=No
         if identities(frames) != identities(reference["frames"]):
             raise ValueError("normal201 and1152 source identities differ")
         result["versus1152"] = compare_group_metrics(result, reference, normal=True)
+        result["reference_input_representation"] = reference.get("input_representation", "all_released_records")
+        result["same_input_representation"] = result["input_representation"] == result["reference_input_representation"]
     return result
 
 

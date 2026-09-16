@@ -167,7 +167,7 @@ def test_v3_paired_training_preserves_orientation_official_support_and_occluded_
             scan=row[name]; xyz=physical.xyzi[physical.real_slots,:3].astype(np.float64)
             np.testing.assert_array_equal(scan["source_slot"],physical.real_slots)
             np.testing.assert_array_equal(scan["xyzi"],physical.xyzi[physical.real_slots])
-            np.testing.assert_array_equal(scan["sensor_condition"][:,1:4],(xyz/np.linalg.norm(xyz,axis=1)[:,None]).astype(np.float32))
+            np.testing.assert_array_equal(scan["condition"][:,1:4],(xyz/np.linalg.norm(xyz,axis=1)[:,None]).astype(np.float32))
             for key in scan:
                 np.testing.assert_array_equal(scan[key],rows[0][name][key])
         assert 7 not in row["scan"]["source_slot"] and 7 in row["original"]["source_slot"]

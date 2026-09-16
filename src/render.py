@@ -4050,28 +4050,24 @@ class RenderedFrame:
         return self.source.real_slots
 
 
-def canonical_ray_slots_for_source(
-    source: SourceFrame,
-    ray_grid: RayGrid,
-) -> np.ndarray:
-    """Map retained file slots to calibrated rays, including the known 201 prefix."""
-
+def duplicate_prefix_slots(source: SourceFrame) -> np.ndarray | None:
+    """Recognize only the released 201 copies using layout and XYZI, never labels."""
     count = source.slot_count
-    if count == ray_grid.slot_count:
-        return _freeze(np.arange(count, dtype=np.int32))
     layout = DUPLICATE_201_RAY_LAYOUT.get(source.frame_id)
     if (
         source.partition != "train"
         or source.sequence_id != 201
-        or ray_grid.slot_count != 131072
         or layout is None
+        or count == 131072
     ):
-        raise RenderError("source frame has no frozen file-slot to ray mapping")
+        return None
     template_start, runs = layout
+    if sum(length for _, length, _ in runs) != count:
+        return None
     mapping = np.empty(count, dtype=np.int32)
     cursor = 0
     for file_start, length, canonical_start in runs:
-        if file_start != cursor or canonical_start + length > ray_grid.slot_count:
+        if file_start != cursor or canonical_start + length > 131072:
             raise RenderError(
                 "duplicate-prefix ray runs are not contiguous or in range"
             )
@@ -4081,13 +4077,25 @@ def canonical_ray_slots_for_source(
             dtype=np.int32,
         )
         cursor += length
-    if cursor != count or template_start + ray_grid.slot_count > count:
-        raise RenderError("duplicate-prefix ray runs do not cover the released frame")
-    template = source.xyzi[template_start : template_start + ray_grid.slot_count]
+    if cursor != count or template_start + 131072 > count:
+        return None
+    template = source.xyzi[template_start : template_start + 131072]
     if not np.array_equal(source.xyzi, template[mapping]):
-        raise RenderError(
-            "released duplicate-prefix xyzi does not match its frozen layout"
-        )
+        return None
+    return _freeze(mapping)
+
+
+def canonical_ray_slots_for_source(
+    source: SourceFrame,
+    ray_grid: RayGrid,
+) -> np.ndarray:
+    """Map retained file slots to calibrated rays, including the known 201 prefix."""
+    if source.slot_count == ray_grid.slot_count:
+        return _freeze(np.arange(source.slot_count, dtype=np.int32))
+    mapping = duplicate_prefix_slots(source) if ray_grid.slot_count == 131072 else None
+    if mapping is None:
+        raise RenderError("source frame has no matching frozen file-slot to ray mapping")
+    template_start = DUPLICATE_201_RAY_LAYOUT[source.frame_id][0]
     if source.labels is not None:
         label_template = source.labels.packed[
             template_start : template_start + ray_grid.slot_count

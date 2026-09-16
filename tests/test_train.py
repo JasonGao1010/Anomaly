@@ -105,7 +105,7 @@ def test_v3_delayed_encoder_adam_state_and_resume_counts():
                            set_learning_rates, schedule_state, learning_rates)
     config = experiment_config(load_experiment("protocol/v3.json"))
     model = nn.Module()
-    for name in ("backbone", "context", "point", "head"):
+    for name in ("backbone", "context", "point", "detail", "head"):
         setattr(model, name, nn.Linear(2, 2))
     initial = deepcopy(model.backbone.state_dict())
     optimizer = make_optimizer(model, config)
@@ -117,6 +117,7 @@ def test_v3_delayed_encoder_adam_state_and_resume_counts():
         if step == 128:
             torch.testing.assert_close(model.backbone.state_dict(), initial, atol=0, rtol=0)
             assert all(p not in optimizer.state for p in model.backbone.parameters())
+            assert all(int(optimizer.state[p]["step"]) == 128 for p in model.detail.parameters())
     assert learning_rates(config, 1) == pytest.approx([0, 0, 0, 0, 1e-5, 1e-5])
     assert learning_rates(config, 129)[:4] == pytest.approx([2e-7, 2e-7, 5e-7, 5e-7])
     assert learning_rates(config, 160) == pytest.approx([2e-6, 2e-6, 5e-6, 5e-6, 1e-4, 1e-4])

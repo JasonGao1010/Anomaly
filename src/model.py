@@ -1,4 +1,4 @@
-"""Full-scan context and original-return relationships, with independent historical inference."""
+"""Point detail and backbone-scale context, with independent historical inference."""
 
 from __future__ import annotations
 
@@ -16,11 +16,10 @@ from torch.utils.checkpoint import checkpoint
 
 from .data import FramePrediction
 from .protocol import PROJECT_ROOT
-from .render import calibrated_ray_grid
+from .render import calibrated_ray_grid, duplicate_prefix_slots
 
 SENSOR_CONDITIONS = ("log_range", "ray_x", "ray_y", "ray_z", "log_azimuth_scale",
     "log_elevation_scale", "log_azimuth_step", "log_elevation_step", "log_radial_scale")
-LEGACY_CONDITIONS = SENSOR_CONDITIONS[:6] + ("delta", "delta_valid")
 CELL_STATISTICS = ("log_returns", "log_positions", "centroid_x", "centroid_y", "centroid_z",
     "cov_xx", "cov_xy", "cov_xz", "cov_yy", "cov_yz", "cov_zz", "intensity_mean", "intensity_variance")
 OBSERVATION_CONDITIONS = ("delta", "delta_valid") + tuple(
@@ -50,7 +49,21 @@ def validate_config(config):
     elif "pretrained" in config or "backbone_learning_rate" in t:
         raise ValueError("random initialization cannot silently inherit a pretrained recipe")
     if v3:
-        if (config["initialization"] != "nuscenes_litept_s"
+        pyramid = m["relation_mode"] == "pyramid"
+        if pyramid:
+            obsolete = {"relation_layers", "cell_sizes_m", "context_radius_m", "radial_scale_m",
+                "minimum_sampling_m", "scale_neighbors", "scale_radius_m", "scale_minimum_neighbors",
+                "relation_chunk", "checkpoint_relations", "neighbors_per_shell", "condition_modulation"}
+            if (config["initialization"] != "nuscenes_litept_s"
+                    or m["backbone"] != "LitePT-S" or m["channels"] != 64
+                    or m["attention_heads"] != 4 or m["voxel_m"] != .05
+                    or m["query_chunk"] < 1 or not isinstance(m["checkpoint_fusion"], bool)
+                    or m["duplicate_records"] != "verified_201_prefix"
+                    or m["backbone_batchnorm"] != "fixed_parent_running"
+                    or m["backbone_drop_path"] != 0 or m["backbone_shuffle_orders"]
+                    or obsolete.intersection(m)):
+                raise ValueError("invalid V3 backbone pyramid or inherited normalization")
+        elif (config["initialization"] != "nuscenes_litept_s"
                 or m["backbone"] != "LitePT-S" or m["channels"] != 64
                 or m["relation_layers"] != 2 or m["relation_mode"] != "multiscale"
                 or m["cell_sizes_m"] != [.05, .2, .8] or m["attention_heads"] != 4
@@ -164,28 +177,15 @@ def transfer_backbone(model, weights):
 
 
 def transfer_parent(model, saved):
-    """Migrate compatible encoders and named base-head columns, never the old final function."""
-    if model.config["relation_mode"] != "multiscale" or saved["step"] != 1152:
-        raise ValueError("V3 transfer requires the declared1152 parent")
+    """Inherit representations; the detail adapter, fusion and score head remain new."""
+    if model.config["relation_mode"] != "pyramid" or saved["step"] != 1152:
+        raise ValueError("new V3 transfer requires the declared1152 parent")
     weights = saved["model"]
     for name in ("backbone", "context", "point"):
         prefix = name + "."
         getattr(model, name).load_state_dict({k[len(prefix):]: v for k, v in weights.items() if k.startswith(prefix)}, strict=True)
-    with torch.no_grad():
-        model.head[0].weight.zero_()
-        old = weights["base_head.0.weight"]
-        model.head[0].weight[:, :128].copy_(old[:, :128])
-        columns = {}
-        for index, name in enumerate(LEGACY_CONDITIONS):
-            column = (192 + SENSOR_CONDITIONS.index(name) if name in SENSOR_CONDITIONS
-                      else 192 + len(SENSOR_CONDITIONS) + OBSERVATION_CONDITIONS.index(name))
-            model.head[0].weight[:, column].copy_(old[:, 128 + index])
-            columns[name] = column
-        model.head[0].bias.copy_(weights["base_head.0.bias"])
-        model.head[2].weight.copy_(weights["base_head.2.weight"])
-        model.head[2].bias.copy_(weights["base_head.2.bias"])
-    return dict(encoders=["backbone", "context", "point"], head_condition_columns=columns,
-                inherited_base_columns=136, new_columns_zero=True, final_parent_score_preserved=False)
+    return dict(encoders=["backbone", "context", "point"], score_head_inherited=False,
+                final_parent_score_preserved=False)
 
 
 @njit(parallel=True)
@@ -348,11 +348,44 @@ class ScanTransform:
 
     def __call__(self, source):
         slots = source.real_slots.copy()
+        m = self.config
+        record_inverse = np.arange(len(slots), dtype=np.int64)
+        internal_slots = slots
+        if m["relation_mode"] == "pyramid":
+            mapping = duplicate_prefix_slots(source)
+            if mapping is not None:
+                _, first_record, record_inverse = np.unique(mapping[slots], return_index=True, return_inverse=True)
+                internal_slots = slots[first_record]
         # Preserve the physical sensor axes in both coordinates and directional conditions.
-        xyzi = source.xyzi[slots].copy()
+        xyzi = source.xyzi[internal_slots].copy()
         xyz = xyzi[:, :3].astype(np.float64)
-        m, n = self.config, len(xyz)
+        n = len(xyz)
         unique, first, inverse = np.unique(xyz, axis=0, return_index=True, return_inverse=True)
+        grid = np.floor(xyz / m["voxel_m"]).astype(np.int64)
+        cells, voxel_inverse, counts = np.unique(grid, axis=0, return_inverse=True, return_counts=True)
+        voxel_xyzi = np.zeros((len(cells), 4), np.float64)
+        np.add.at(voxel_xyzi, voxel_inverse, xyzi)
+        voxel_xyzi /= counts[:, None]
+        offset = xyz - (grid + .5) * m["voxel_m"]
+        # Shift by a multiple of the entire pooling stride, preserving voxel membership.
+        if len(cells):
+            cells = cells - np.floor_divide(cells.min(axis=0), 16) * 16
+        if np.any(cells >= 65536):
+            raise ValueError("complete scan exceeds LitePT serialization extent; no points were discarded")
+        arrays = dict(xyzi=xyzi, source_slot=slots, point_offset=offset.astype(np.float32),
+            voxel_inverse=voxel_inverse, voxel_xyzi=voxel_xyzi.astype(np.float32), grid_coord=cells.astype(np.int32))
+        r = np.linalg.norm(xyz, axis=1)
+        u = xyz / r[:, None]
+        theta = np.arcsin(np.clip(u[:, 2], -1, 1))
+        beam = np.abs(theta[:, None] - self.elevations).argmin(axis=1)
+        if m["relation_mode"] == "pyramid":
+            arrays.update(record_inverse=record_inverse, voxel_count=counts.astype(np.float32),
+                voxel_positions=np.bincount(voxel_inverse[first], minlength=len(cells)).astype(np.float32),
+                condition=np.column_stack((np.log1p(r), u, np.full(n, self.azimuth_step),
+                                           self.elevation_step[beam])).astype(np.float32))
+            return {k: torch.from_numpy(np.ascontiguousarray(v)) for k, v in arrays.items()}
+
+        # Historical inference retains its original physical statistics and support rules.
         if m["relation_mode"] == "multiscale":
             # This capped query defines delta only; relation support has no point-count cap.
             close = cKDTree(unique).query(unique, k=list(range(2, m["scale_neighbors"] + 2)), workers=self.workers)[0]
@@ -368,35 +401,17 @@ class ScanTransform:
             take = count == k
             delta[take] = np.median(close[take, :k], axis=1)
 
-        r = np.linalg.norm(xyz, axis=1)
-        u = xyz / r[:, None]
         rho = np.linalg.norm(u[:, :2], axis=1)
         az = np.column_stack((-u[:, 1], u[:, 0], np.zeros(n))) / np.maximum(rho[:, None], 1e-12)
         az[rho < 1e-12] = [0, 1, 0]
         basis = np.stack((u, az, np.cross(u, az)), axis=2)
-        theta = np.arcsin(np.clip(u[:, 2], -1, 1))
-        beam = np.abs(theta[:, None] - self.elevations).argmin(axis=1)
         az_m = np.maximum(r * rho * self.azimuth_step, m["minimum_sampling_m"])
         el_m = np.maximum(r * self.elevation_step[beam], m["minimum_sampling_m"])
         scales = np.column_stack((np.full(n, m["radial_scale_m"]), az_m, el_m))
         conditions = np.column_stack((np.log(r), u, np.log(az_m), np.log(el_m), delta[inverse], valid[inverse]))
 
-        grid = np.floor(xyz / m["voxel_m"]).astype(np.int64)
-        cells, voxel_inverse, counts = np.unique(grid, axis=0, return_inverse=True, return_counts=True)
-        voxel_xyzi = np.zeros((len(cells), 4), np.float64)
-        np.add.at(voxel_xyzi, voxel_inverse, xyzi)
-        voxel_xyzi /= counts[:, None]
-        offset = xyz - (grid + .5) * m["voxel_m"]
-        # Shift by a multiple of the entire pooling stride, preserving voxel membership.
-        if len(cells):
-            cells = cells - np.floor_divide(cells.min(axis=0), 16) * 16
-        if np.any(cells >= 65536):
-            raise ValueError("complete scan exceeds LitePT serialization extent; no points were discarded")
-        arrays = dict(xyzi=xyzi, source_slot=slots, point_offset=offset.astype(np.float32),
-            condition=conditions.astype(np.float32), basis=basis.astype(np.float32),
-            sensing_scale=scales.astype(np.float32),
-            geometry_inverse=inverse, voxel_inverse=voxel_inverse,
-            voxel_xyzi=voxel_xyzi.astype(np.float32), grid_coord=cells.astype(np.int32))
+        arrays.update(condition=conditions.astype(np.float32), basis=basis.astype(np.float32),
+                      sensing_scale=scales.astype(np.float32), geometry_inverse=inverse)
         if m["relation_mode"] == "multiscale":
             arrays.update(support_cells(xyzi, m["cell_sizes_m"], first))
             arrays["sensor_condition"] = np.column_stack((conditions[:, :6], np.full(n, np.log(self.azimuth_step)),
@@ -566,6 +581,36 @@ class MultiscaleRelation(nn.Module):
         return z[query] + torch.cat(parts) if parts else z[:0]
 
 
+class ScaleFusion(nn.Module):
+    """Choose among backbone levels; their features already contain spatial context."""
+
+    def __init__(self, channels=64, heads=4):
+        super().__init__()
+        self.heads = heads
+        self.position = _mlp(4, 32, channels)
+        self.query = nn.Linear(2 * channels + 16, channels)
+        self.key = nn.Linear(channels, channels)
+        self.value = nn.Linear(channels, channels)
+        self.output = nn.Linear(channels, channels)
+
+    def forward(self, point, finest, condition, xyz, indices, levels, keys, values, voxel_m, trace=None):
+        count = len(point)
+        query = self.query(torch.cat((point, finest, condition), -1)).reshape(count, self.heads, -1)
+        selected_keys, selected_values = [], []
+        for index, level, key, value in zip(indices, levels, keys, values, strict=True):
+            relative = (xyz - level["coord"][index]) / (voxel_m * level["stride"])
+            position = self.position(torch.cat((relative, relative.new_full((count, 1), np.log2(level["stride"]))), -1))
+            # W_k(g + e) = (W_k g + b_k) + W_k e; count the bias exactly once.
+            selected_keys.append(key[index] + nn.functional.linear(position, self.key.weight))
+            selected_values.append(value[index])
+        key = torch.stack(selected_keys, 1).reshape(count, len(levels), self.heads, -1)
+        value = torch.stack(selected_values, 1).reshape_as(key)
+        weights = torch.softmax((query[:, None] * key).sum(-1) / query.shape[-1] ** .5, dim=1)
+        if trace is not None:
+            trace("scale_weights", weights)
+        return self.output((weights[..., None] * value).sum(1).flatten(1))
+
+
 class AJAE(nn.Module):
     def __init__(self, config):
         super().__init__()
@@ -577,7 +622,18 @@ class AJAE(nn.Module):
                                shuffle_orders=m["backbone_shuffle_orders"])
         self.context = nn.Sequential(nn.Linear(72, c), nn.LayerNorm(c), nn.GELU())
         self.point = nn.Sequential(nn.Linear(7, c), nn.LayerNorm(c), nn.GELU())
-        if m["relation_mode"] == "multiscale":
+        if m["relation_mode"] == "pyramid":
+            # Keep new parameters outside the inherited backbone's optimizer family.
+            self.detail = nn.Sequential(nn.Linear(2 * c + 1, c), nn.LayerNorm(c), nn.GELU(), nn.Linear(c, 36))
+            nn.init.zeros_(self.detail[-1].weight)
+            nn.init.zeros_(self.detail[-1].bias)
+            self.scales = nn.ModuleList([nn.Sequential(nn.Linear(width, c), nn.LayerNorm(c), nn.GELU())
+                                        for width in (72, 144, 252, 504)])
+            self.condition = nn.Sequential(nn.Linear(6, 16), nn.LayerNorm(16), nn.GELU())
+            self.fusion = ScaleFusion(c, m["attention_heads"])
+            self.head = _mlp(3 * c + 16, 128, 1)
+            nn.init.zeros_(self.head[-1].bias)
+        elif m["relation_mode"] == "multiscale":
             self.relations = nn.ModuleList([MultiscaleRelation(c, m["attention_heads"]) for _ in range(m["relation_layers"])])
             self.head = _mlp(3 * c + len(SENSOR_CONDITIONS) + len(OBSERVATION_CONDITIONS), 128, 1)
         else:
@@ -597,7 +653,7 @@ class AJAE(nn.Module):
         return self
 
     def forward(self, scan, query=None, *, return_features=False, trace=None):
-        n, m = len(scan["xyzi"]), self.config
+        n, m = len(scan["source_slot"]), self.config
         all_rows = torch.arange(n, device=scan["xyzi"].device)
         query = all_rows if query is None else query
         if query.ndim != 1 or query.dtype != torch.long or torch.any((query < 0) | (query >= n)):
@@ -605,8 +661,10 @@ class AJAE(nn.Module):
         if not n or not len(query):
             if return_features:
                 raise ValueError("shared-feature diagnostics require a nonempty real-point query")
-            head = self.head if m["relation_mode"] == "multiscale" else self.base_head
+            head = self.head if m["relation_mode"] in {"pyramid", "multiscale"} else self.base_head
             return scan["xyzi"][:0, 0] + head[-1].weight.sum() * 0
+        if m["relation_mode"] == "pyramid":
+            return self.pyramid_forward(scan, query, return_features=return_features, trace=trace)
         # Both declared recipes preserve STU intensity, including values above one.
         # Pretraining changes initialization, not the frozen raw-return representation.
         voxels = scan["voxel_xyzi"]
@@ -640,16 +698,61 @@ class AJAE(nn.Module):
         return dict(score=score, base_score=base.float(), relation_score=correction.float(),
                     **features) if return_features else score
 
+    def pyramid_forward(self, scan, query, *, return_features=False, trace=None):
+        m = self.config
+        # Queries address released records; only verified copies share internal computation.
+        restore = None
+        query = scan["record_inverse"][query]
+        if len(scan["record_inverse"]) != len(scan["xyzi"]):
+            query, restore = torch.unique(query, sorted=True, return_inverse=True)
+        point = self.point(torch.cat((scan["xyzi"], scan["point_offset"]), -1))
+        inverse, count = scan["voxel_inverse"], scan["voxel_count"]
+        total = point.new_zeros((len(count), point.shape[1])).index_add(0, inverse, point)
+        maximum = point.new_full(total.shape, -torch.inf).scatter_reduce(
+            0, inverse[:, None].expand_as(point), point, reduce="amax", include_self=True)
+        detail = self.detail(torch.cat((total / count[:, None], maximum, scan["voxel_positions"].log1p()[:, None]), -1))
+        voxels = scan["voxel_xyzi"]
+        _, levels = self.backbone(dict(feat=voxels, coord=voxels[:, :3], grid_coord=scan["grid_coord"],
+            offset=torch.tensor([len(voxels)], dtype=torch.long, device=voxels.device)),
+            embedding_residual=detail, return_pyramid=True)
+        units = [self.context(levels[0]["feat"])] + [projection(level["feat"])
+            for projection, level in zip(self.scales, levels[1:], strict=True)]
+        indices = [inverse]
+        for level in levels[1:]:
+            indices.append(level["pooling_inverse"][indices[-1]])
+        context = units[0][inverse]
+        condition = self.condition(scan["condition"])
+        keys, values = [self.fusion.key(g) for g in units], [self.fusion.value(g) for g in units]
+
+        def compute(rows):
+            p, h, c = point[rows], context[rows], condition[rows]
+            fused = self.fusion(p, h, c, scan["xyzi"][rows, :3], [ids[rows] for ids in indices],
+                                levels, keys, values, m["voxel_m"], trace)
+            score = self.head(torch.cat((h, p, fused, c), -1)).squeeze(-1).float()
+            return (score, fused) if return_features else score
+
+        parts = [checkpoint(compute, rows, use_reentrant=False)
+                 if m["checkpoint_fusion"] and self.training and torch.is_grad_enabled() else compute(rows)
+                 for rows in query.split(m["query_chunk"])]
+        score = torch.cat([part[0] for part in parts] if return_features else parts)
+        if restore is not None:
+            score = score[restore]
+        if return_features:
+            fused = torch.cat([part[1] for part in parts])
+            return dict(score=score, fusion=fused if restore is None else fused[restore], context=context, point=point)
+        return score
+
     @torch.no_grad()
     def predict(self, source, transform=None, *, prepared=None, components=False):
         if self.training:
             raise ValueError("prediction requires model.eval()")
-        if components and self.config["relation_mode"] == "multiscale":
+        if components and self.config["relation_mode"] in {"pyramid", "multiscale"}:
             raise ValueError("V3 has one unified score; legacy base/relation components do not exist")
         if prepared is None:
             prepared = transform(source)
         elif (not np.array_equal(prepared["source_slot"], source.real_slots)
-              or not np.array_equal(prepared["xyzi"], source.xyzi[source.real_slots])):
+              or not np.array_equal(prepared["xyzi"][prepared["record_inverse"]] if "record_inverse" in prepared
+                                    else prepared["xyzi"], source.xyzi[source.real_slots])):
             raise ValueError("prepared inference input differs from the complete source returns")
         scan = to_device(prepared, next(self.parameters()).device)
         output = self(scan, return_features=components)

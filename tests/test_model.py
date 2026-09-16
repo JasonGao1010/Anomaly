@@ -15,7 +15,7 @@ from src.train import (Requests, auxiliary_fraction, detection_loss, keep_loss,
 from vendor.litept.pointrope import PointROPE
 
 
-def test_v3_cells_keep_duplicates_counts_moments_and_all_two_meter_support():
+def test_historical_cells_keep_duplicates_counts_moments_and_all_two_meter_support():
     from src.model import support_cells
     rng = np.random.default_rng(31)
     xyz = np.r_[np.array([[10.399999, 0., 0.]]), [10.4, 0., 0.] + rng.uniform(-1.9, 1.9, (80, 3))]
@@ -37,10 +37,10 @@ def test_v3_cells_keep_duplicates_counts_moments_and_all_two_meter_support():
         assert set(cells["cell_2_inverse"][inside]) <= set(cells["cell_2_adjacent"][own])
 
 
-def test_v3_relation_has_uncapped_gradient_path_and_zero_value_null():
+def test_historical_relation_has_uncapped_gradient_path_and_zero_value_null():
     from src.model import MultiscaleRelation
-    from src.train import experiment_config, load_experiment
-    config = experiment_config(load_experiment("protocol/v3.json"))
+    config = load_config()
+    config["model"].update(relation_mode="multiscale", cell_sizes_m=[.05, .2, .8])
     source = scan_fixture()
     scan = ScanTransform(config)(source)
     z = torch.randn(len(source.real_slots), 64, requires_grad=True)
@@ -69,27 +69,107 @@ def test_v3_relation_has_uncapped_gradient_path_and_zero_value_null():
     assert z.grad[39].norm() > 0
 
 
-def test_v3_named_head_migration_and_later_relation_gradient_path():
-    from src.model import transfer_parent, SENSOR_CONDITIONS, OBSERVATION_CONDITIONS, _mlp
+def test_v3_inherits_only_compatible_encoders():
+    from src.model import transfer_parent, _mlp
     parent, model = nn.Module(), nn.Module()
     for name in ("backbone", "context", "point"):
         setattr(parent, name, nn.Linear(2, 2))
         setattr(model, name, nn.Linear(2, 2))
     parent.base_head = _mlp(136, 128, 1)
-    model.head = _mlp(192 + len(SENSOR_CONDITIONS) + len(OBSERVATION_CONDITIONS), 128, 1)
-    model.config = dict(relation_mode="multiscale")
+    model.head = _mlp(208, 128, 1)
+    before = deepcopy(model.head.state_dict())
+    model.config = dict(relation_mode="pyramid")
     info = transfer_parent(model, dict(step=1152, model=parent.state_dict()))
-    h, z0, relation = torch.randn(4, 64), torch.randn(4, 64), nn.Linear(64, 64)
-    sensor, observed = torch.randn(4, len(SENSOR_CONDITIONS)), torch.randn(4, len(OBSERVATION_CONDITIONS))
-    def score(): return model.head(torch.cat((h, z0, relation(z0), sensor, observed), -1))
-    expected = parent.base_head(torch.cat((h, z0, sensor[:, :6], observed[:, :2]), -1))
-    torch.testing.assert_close(score(), expected, atol=1e-6, rtol=1e-6)
-    score().sum().backward()
-    assert relation.weight.grad.norm() == 0 and model.head[0].weight.grad[:, 128:192].norm() > 0
-    with torch.no_grad(): model.head[0].weight[:, 128:192].fill_(.001)
-    relation.zero_grad(); score().sum().backward()
-    assert relation.weight.grad.norm() > 0
-    assert info["head_condition_columns"]["delta"] == 192 + len(SENSOR_CONDITIONS)
+    torch.testing.assert_close(model.head.state_dict(), before, atol=0, rtol=0)
+    for name in ("backbone", "context", "point"):
+        torch.testing.assert_close(getattr(model, name).state_dict(), getattr(parent, name).state_dict(), atol=0, rtol=0)
+    assert not info["score_head_inherited"] and not info["final_parent_score_preserved"]
+
+
+@pytest.mark.parametrize("frame", [0, 1, 2, 3])
+def test_v3_verified_copy_mapping_is_label_blind_and_preserves_distinct_returns(frame):
+    from src.render import DUPLICATE_201_RAY_LAYOUT
+    from src.train import experiment_config, load_experiment
+    config = experiment_config(load_experiment("protocol/v3.json"))
+    template = np.zeros((131072, 4), np.float32)
+    template[:3] = [[10, 0, 0, .1], [10.02, 0, 0, .2], [10.02, 0, 0, .9]]
+    runs = DUPLICATE_201_RAY_LAYOUT[frame][1]
+    xyzi = np.concatenate([template[start:start + length] for _, length, start in runs])
+    source = make_source_frame(frame, xyzi, np.eye(4), partition="train", sequence_id=201)
+    transform = ScanTransform(config)
+    scan = transform(source)
+    assert len(scan["xyzi"]) == 3
+    np.testing.assert_array_equal(scan["xyzi"][scan["record_inverse"]], xyzi[source.real_slots])
+    assert scan["voxel_count"].sum() == 3 and scan["voxel_positions"].sum() == 2
+    assert set(scan) == {"xyzi", "source_slot", "point_offset", "voxel_inverse", "voxel_xyzi", "grid_coord",
+                         "record_inverse", "voxel_count", "voxel_positions", "condition"}
+    packed = np.arange(len(xyzi), dtype=np.uint32) % 53
+    labels = PointLabels(packed, packed.astype(np.uint16), np.zeros(len(xyzi), np.uint16), np.zeros(len(xyzi), np.uint8))
+    labeled = make_source_frame(frame, xyzi, np.eye(4), labels, partition="train", sequence_id=201)
+    torch.testing.assert_close(scan, transform(labeled), atol=0, rtol=0)
+    xyzi[-131072, 3] += 1
+    changed = make_source_frame(frame, xyzi, np.eye(4), partition="train", sequence_id=201)
+    assert len(transform(changed)["xyzi"]) == changed.real_count
+    ordinary = make_source_frame(frame, source.xyzi, np.eye(4), partition="train", sequence_id=206)
+    assert len(transform(ordinary)["xyzi"]) == source.real_count
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="LitePT requires CUDA sparse convolution")
+def test_v3_backbone_levels_point_paths_chunks_and_adaptation_gradients():
+    from src.model import AJAE, to_device
+    from src.train import experiment_config, load_experiment, set_trainable, parameter_family, _Numerics
+    config = experiment_config(load_experiment("protocol/v3.json"))
+    torch.manual_seed(53)
+    model = AJAE(config).cuda().eval()
+    scan = to_device(ScanTransform(config)(scan_fixture()), "cuda")
+    voxels = scan["voxel_xyzi"]
+    inputs = dict(feat=voxels, coord=voxels[:, :3], grid_coord=scan["grid_coord"],
+                  offset=torch.tensor([len(voxels)], device="cuda"))
+    with torch.no_grad():
+        plain = model.backbone(inputs).feat
+        output, levels = model.backbone(inputs, embedding_residual=voxels.new_zeros((len(voxels), 36)), return_pyramid=True)
+        torch.testing.assert_close(plain, output.feat, atol=0, rtol=0)
+        assert [level["feat"].shape[1] for level in levels] == [72, 72, 144, 252, 504]
+        index = scan["voxel_inverse"]
+        for level in levels:
+            if "pooling_inverse" in level:
+                index = level["pooling_inverse"][index]
+            torch.testing.assert_close(level["grid_coord"][index],
+                (scan["grid_coord"][scan["voxel_inverse"]] // level["stride"]).to(level["grid_coord"].dtype), atol=0, rtol=0)
+        full = model(scan)
+        query = torch.tensor([3, 0, 5, 0], device="cuda")
+        model.config["query_chunk"] = 1
+        torch.testing.assert_close(model(scan, query), full[query], atol=2e-5, rtol=2e-5)
+        assert full[0] != full[1] and full[1] != full[2]
+    model.train()
+    before = {k: v.detach().clone() for k, v in model.state_dict().items()}
+    for step in (128, 129):
+        set_trainable(model, config, step)
+        model.zero_grad(set_to_none=True)
+        with _Numerics(model) as trace:
+            training_forward(model, scan, query, trace=trace).square().mean().backward()
+        assert "head.output" in trace.summary()
+        assert model.detail[-1].weight.grad.norm() > 0
+        assert torch.count_nonzero(model.detail[0].weight.grad) == 0
+        for name, parameter in model.named_parameters():
+            if step == 128 and parameter_family(name) != "new_modules":
+                assert parameter.grad is None
+            elif parameter.grad is not None:
+                assert torch.isfinite(parameter.grad).all()
+        if step == 129:
+            assert model.backbone.embedding.stem.conv.weight.grad.norm() > 0
+    torch.testing.assert_close(model.state_dict(), before, atol=0, rtol=0)
+    # Nonzero detail must reach both the dense and sparse representations at stage zero.
+    with torch.no_grad():
+        model.detail[-1].bias.fill_(.01)
+    def consistent(_module, args):
+        torch.testing.assert_close(args[0].feat, args[0].sparse_conv_feat.features, atol=0, rtol=0)
+    hook = model.backbone.enc.enc0.register_forward_pre_hook(consistent)
+    try:
+        with torch.no_grad():
+            assert torch.isfinite(model(scan)).all()
+    finally:
+        hook.remove()
 
 
 def scan_fixture():

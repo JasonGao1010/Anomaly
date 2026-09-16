@@ -504,7 +504,7 @@ def load_checkpoint(path, device="cuda"):
 def check(config, data_root, examples, *, experiment=None):
     """Full real scans and task gradients; V2 also checks inherited state without any update."""
     if config.get("format") == "ajae-v3":
-        return check_multiscale(config, data_root, experiment)
+        return check_pyramid(config, data_root, experiment)
     torch.manual_seed(config["training"]["seed"])
     saved = (torch.load(PROJECT_ROOT / experiment["warm_start"]["checkpoint"], map_location="cpu", weights_only=True)
              if experiment else None)
@@ -585,8 +585,8 @@ def check(config, data_root, examples, *, experiment=None):
     return stats
 
 
-def check_multiscale(config, data_root, experiment):
-    """Two real scans, full/query equivalence and backward only; no optimizer is created."""
+def check_pyramid(config, data_root, experiment):
+    """Real scans, layer identities and both gradient phases; never update model weights."""
     import csv
     from .protocol import load_protocol
     from .scene import STUSequence
@@ -601,7 +601,7 @@ def check_multiscale(config, data_root, experiment):
         frames = sorted([r for r in csv.DictReader(stream) if int(r["state"]) == 3],
                         key=lambda r: (int(r["visible"]), int(r["sequence"]), int(r["frame"])))
     selected = [("ordinary", frames[len(frames) // 2]), ("dense", frames[-1])]
-    report = dict(optimizer_steps=0, checkpoint_saved=False, migration=migration,
+    report = dict(architecture=config["model"], optimizer_steps=0, checkpoint_saved=False, migration=migration,
                   host_E_before=host_disk(), resources_before=runtime_resources(), scans=[])
     for scope, record in selected:
         source = STUSequence.open(data_root, protocol=load_protocol(), partition="val",
@@ -617,41 +617,99 @@ def check_multiscale(config, data_root, experiment):
         torch.cuda.synchronize()
         started = time.perf_counter()
         with torch.no_grad():
-            output = model(scan, return_features=True)
-            full_score, full_relation = output["score"][query].cpu(), output["relation"][query].cpu()
+            captured = {}
+            def capture(_module, _args, result):
+                captured["levels"] = result[1]
+            hook = model.backbone.register_forward_hook(capture)
+            try:
+                output = model(scan, return_features=True)
+            finally:
+                hook.remove()
+            full_score, full_fusion = output["score"][query].cpu(), output["fusion"][query].cpu()
+            torch.cuda.synchronize()
+            inference_seconds = time.perf_counter() - started
+            started = time.perf_counter()
             if len(output["score"]) != source.real_count or not torch.isfinite(output["score"]).all():
                 raise ValueError("V3 full scan lost a physical return or produced nonfinite scores")
+            levels = captured["levels"]
+            if [level["feat"].shape[1] for level in levels] != [72, 72, 144, 252, 504]:
+                raise ValueError("V3 extracted projected unpooling state instead of the five declared outputs")
+            index = scan["voxel_inverse"]
+            for level in levels:
+                if "pooling_inverse" in level:
+                    index = level["pooling_inverse"][index]
+                torch.testing.assert_close(level["grid_coord"][index],
+                    (scan["grid_coord"][scan["voxel_inverse"]] // level["stride"]).to(level["grid_coord"].dtype), rtol=0, atol=0)
+            voxels = scan["voxel_xyzi"]
+            plain = model.backbone(dict(feat=voxels, coord=voxels[:, :3], grid_coord=scan["grid_coord"],
+                offset=torch.tensor([len(voxels)], device=voxels.device))).feat
+            torch.testing.assert_close(levels[0]["feat"], plain, rtol=0, atol=0)
+            level_sizes = [len(level["feat"]) for level in levels]
+            del captured, levels, level, plain
             del output
         torch.cuda.synchronize()
-        inference_seconds = time.perf_counter() - started
+        backbone_check_seconds = time.perf_counter() - started
         model.train()
-        set_trainable(model, config, 129)
-        torch.cuda.synchronize()
-        started = time.perf_counter()
-        output = training_forward(model, scan, query, return_features=True)
-        torch.testing.assert_close(output["score"].detach().cpu(), full_score, rtol=2e-5, atol=2e-5)
-        torch.testing.assert_close(output["relation"].detach().cpu(), full_relation, rtol=2e-5, atol=2e-5)
-        # An unlabeled numerical probe checks derivatives without training on development labels.
-        output["score"].square().mean().backward()
-        if any(not torch.isfinite(p.grad).all() for p in model.parameters() if p.grad is not None):
-            raise FloatingPointError("V3 real-scan backward produced a nonfinite gradient")
-        torch.cuda.synchronize()
+        phases = []
+        for update in (128, 129):
+            set_trainable(model, config, update)
+            model.zero_grad(set_to_none=True)
+            torch.cuda.synchronize()
+            started = time.perf_counter()
+            output = training_forward(model, scan, query, return_features=True)
+            torch.testing.assert_close(output["score"].detach().cpu(), full_score, rtol=2e-5, atol=2e-5)
+            torch.testing.assert_close(output["fusion"].detach().cpu(), full_fusion, rtol=2e-5, atol=2e-5)
+            # Development labels never enter this numerical derivative check.
+            output["score"].square().mean().backward()
+            if any(not torch.isfinite(p.grad).all() for p in model.parameters() if p.grad is not None):
+                raise FloatingPointError("V3 real-scan backward produced a nonfinite gradient")
+            adapter_gradient = float(model.detail[-1].weight.grad.norm())
+            if adapter_gradient == 0:
+                raise ValueError("detail adapter cannot receive gradients through the backbone")
+            if update == 128 and any(p.grad is not None for name, p in model.named_parameters()
+                                    if parameter_family(name) != "new_modules"):
+                raise ValueError("adaptation unexpectedly differentiates inherited parameters")
+            if update == 129 and model.backbone.embedding.stem.conv.weight.grad.norm() == 0:
+                raise ValueError("joint stage cannot update the inherited backbone")
+            torch.cuda.synchronize()
+            phases.append(dict(phase="adapt" if update == 128 else "joint",
+                query_forward_backward_seconds=time.perf_counter() - started,
+                score_max_error=float((output["score"].detach().cpu() - full_score).abs().max()),
+                fusion_max_error=float((output["fusion"].detach().cpu() - full_fusion).abs().max()),
+                detail_output_gradient_norm=adapter_gradient, gradient_groups=gradient_groups(model)))
+            del output
         item = dict(scope=scope, sequence=source.sequence_id, frame=source.frame_id,
             source_identity=source_identity(source), returns=source.real_count, queries=len(query),
-            support_cells=[len(scan[f"cell_{i}_count"]) for i in range(3)],
+            pyramid_cells=level_sizes, exact_pooling_membership=True, zero_detail_preserves_backbone=True,
             preparation_seconds=preparation_seconds, full_inference_seconds=inference_seconds,
-            query_forward_backward_seconds=time.perf_counter() - started,
-            peak_cuda_bytes=torch.cuda.max_memory_allocated(), gradients_finite=True,
-            score_max_error=float((output["score"].detach().cpu() - full_score).abs().max()),
-            relation_max_error=float((output["relation"].detach().cpu() - full_relation).abs().max()),
-            new_head_columns_gradient_norm=float(model.head[0].weight.grad[:, 128:192].norm()))
-        if item["new_head_columns_gradient_norm"] == 0:
-            raise ValueError("zero-initialized new score columns cannot begin learning")
+            backbone_check_seconds=backbone_check_seconds,
+            peak_cuda_bytes=torch.cuda.max_memory_allocated(), gradients_finite=True, phases=phases)
         report["scans"].append(item)
         print(f"V3核验 {scope} {source.sequence_id}/{source.frame_id} 点={source.real_count} "
-              f"前向={inference_seconds:.2f}s 前反向={item['query_forward_backward_seconds']:.2f}s "
+              f"前向={inference_seconds:.2f}s 联合前反向={phases[-1]['query_forward_backward_seconds']:.2f}s "
               f"显存={item['peak_cuda_bytes']/2**30:.2f}GiB", flush=True)
-        del output, scan, prepared
+        del scan, prepared
+    report["verified_copies"] = []
+    model.eval()
+    model.zero_grad(set_to_none=True)
+    sequence = STUSequence.open(data_root, protocol=load_protocol(), partition="train", sequence_id=201, label_mode="forbidden")
+    for frame in range(4):
+        source = sequence[frame]
+        prepared = transform(source)
+        inverse = prepared["record_inverse"].numpy()
+        np.testing.assert_array_equal(prepared["xyzi"].numpy()[inverse], source.xyzi[source.real_slots])
+        prediction = model.predict(source, prepared=prepared)
+        scores = prediction.restore(source)[source.real_slots]
+        _, first = np.unique(inverse, return_index=True)
+        np.testing.assert_array_equal(scores, scores[first][inverse])
+        query = torch.from_numpy(np.linspace(0, source.real_count - 1, 1024, dtype=np.int64)).cuda()
+        with torch.no_grad():
+            torch.testing.assert_close(model(to_device(prepared, "cuda"), query).cpu(),
+                                       torch.from_numpy(scores[query.cpu().numpy()]), rtol=2e-5, atol=2e-5)
+        report["verified_copies"].append(dict(frame=frame, released_returns=source.real_count,
+            internal_returns=len(prepared["xyzi"]), original_output_slots_preserved=True,
+            identical_copy_scores=True, labels_loaded=False))
+    print("V3复制记录核验 原始201前4帧输出槽位及复制分数一致，未加载标签", flush=True)
     report["paired_risk"] = check_population(model, config, data_root, saved["preprocessing"])
     if any(not torch.equal(value.cpu(), original_state[name]) for name, value in model.state_dict().items()):
         raise ValueError("no-update V3 verification changed parameters or BN buffers")
@@ -866,11 +924,13 @@ class _Numerics:
             self(name + ".scale_bound", gain / (variance + module.eps).sqrt())
         def output(name, module, args, value):
             if self.enabled:
+                if isinstance(value, tuple):
+                    value = value[0]
                 self(name + ".output", value if isinstance(value, torch.Tensor) else value.feat)
         for name, module in self.model.named_modules():
             if isinstance(module, (torch.nn.BatchNorm1d, torch.nn.LayerNorm)):
                 self.handles.append(module.register_forward_pre_hook(lambda m, a, n=name: normalization(n, m, a)))
-            if name in ("backbone", "context", "point", "base_head", "relation_head"):
+            if name in ("backbone", "context", "point", "detail", "condition", "fusion", "head", "base_head", "relation_head"):
                 self.handles.append(module.register_forward_hook(lambda m, a, v, n=name: output(n, m, a, v)))
         return self
 
@@ -1273,6 +1333,7 @@ def make_optimizer(model, config):
 
 
 def parameter_family(name):
+    # The detail adapter lives at the model root and remains trainable during adaptation.
     return "backbone" if name.startswith("backbone.") else "inherited" if name.startswith(("context.", "point.")) else "new_modules"
 
 
@@ -1337,7 +1398,7 @@ def parameter_change(model, before):
     """Detached parameter-family L2 changes; no rescaling of the actual optimization step."""
     sums = {}
     for name, parameter in model.named_parameters():
-        group = (parameter_family(name) if getattr(model, "config", {}).get("relation_mode") == "multiscale" else
+        group = (parameter_family(name) if getattr(model, "config", {}).get("relation_mode") in {"pyramid", "multiscale"} else
                  "backbone" if name.startswith("backbone.") else "new_modules")
         previous = before[name].double()
         values = torch.stack((previous.square().sum(), (parameter.detach().double() - previous).square().sum()))
@@ -1353,7 +1414,7 @@ def gradient_groups(model):
     sums = {}
     for name, parameter in model.named_parameters():
         if parameter.grad is not None:
-            group = (parameter_family(name) if getattr(model, "config", {}).get("relation_mode") == "multiscale" else
+            group = (parameter_family(name) if getattr(model, "config", {}).get("relation_mode") in {"pyramid", "multiscale"} else
                      "backbone" if name.startswith("backbone.") else "new_modules")
             sums[group] = sums.get(group, 0) + parameter.grad.detach().double().square().sum()
     return {name: float(value.sqrt()) for name, value in sums.items()}
@@ -1899,7 +1960,7 @@ def fit(config, data_root, steps, output, resume=None, *, experiment=None, resum
                              inherited="model, buffers, AdamW moments, preprocessing, all RNG and global update")
     if v2 or v3:
         run["parent"] = dict(experiment["warm_start"],
-            inherited="compatible encoders and named base-head columns" if v3 else "model, BatchNorm buffers, preprocessing; new optimizer and local random streams")
+            inherited="backbone, context and point encoders only; new detail, fusion and score head" if v3 else "model, BatchNorm buffers, preprocessing; new optimizer and local random streams")
     if staged or controlled:
         run["resources_before"] = runtime_resources()
     if in_place:
