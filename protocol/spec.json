@@ -301,8 +301,8 @@
     }
   },
   "status": {
-    "stage": "targeted_controls_prepared",
-    "active_work": "V2 regression diagnosed; A/B/C1024 control implementation and required checks completed, including fresh-A decision. Prepare to execute all three without architecture or learning-rate-cycle changes.",
+    "stage": "targeted_controls_paused_by_user",
+    "active_work": "Paused by user: A completed1024 updates and all evaluations; B saved491 updates to results/control/B/resume.pt and exited; C not started. Queue cancelled; no automatic continuation.",
     "model_defined": true,
     "training_defined": true,
     "formal_ajae_v1": "context_supported_conditional_return_relationship_network",
@@ -334,7 +334,7 @@
     "coverage_closure_evidence": "results/coverage/summary.json",
     "coverage_decision": "repaired360-world pool passes the current content requirements, observed-return5cm exterior-witness checks,30-cell quotas and minimum regions; old invalid placements have been replaced",
     "coverage_boundaries": "one_normal_source_per_split; sparse_normal_nonextreme_train_region_share_0.4979628791_near_0.5_limit; selected_geometry_scope_and_missingness; observed-return_placement_not_unobserved_surfaces; weak_background_change_is_not_self_occlusion; no_universal_coverage_claim",
-    "next_stage": "user-run terminal command resumes the unchanged4-update prefix to4096; evaluate fixed32, real152, paired normals and full val19 at1024,2048,4096 then exit",
+    "next_stage": "Wait for user instruction; any continuation uses the saved B491 state and unchanged original V2 schedule prefix. Independent control results are incomplete.",
     "data_preparation_accepted": true,
     "original_pool_summary_completed": true,
     "balanced_pool_target": {
@@ -5817,7 +5817,7 @@
   "controls": {
     "configuration": "protocol/control.json",
     "authorization": "three separate same-budget controls; unchanged architecture and original V2 LR prefix; no B+C combination",
-    "status": "implemented_and_verified_before_training",
+    "status": "paused_by_user_A_completed_B491_C_not_started",
     "goal": "retain difficult-normal improvements while recovering real-anomaly ranking",
     "updates_per_arm": 1024,
     "arms": {
@@ -5848,7 +5848,27 @@
       "real_isolated_updates": 8,
       "parent_BN_buffers_fixed_in_B": true,
       "BN_affine_tensors_updated": 26,
-      "formal_updates": 0
+      "formal_updates": 1515,
+      "formal_checks": {
+        "A_final_finite": true,
+        "A_optimizer_states_at1024": 263,
+        "A_initial_parent_tensors_equal": 302,
+        "A_unchanged_data_preprocessing": true,
+        "A_B_initial_tensors_inputs_rng_optimizer_equal": true,
+        "A_BN_buffers_updated": 39,
+        "A_BN_counter_deltas": [
+          4096
+        ],
+        "B_pause": {
+          "step": 491,
+          "optimizer_states": 263,
+          "all_finite": true,
+          "parent_BN_buffers_unchanged": 39,
+          "recorded_updates": 491,
+          "recorded_draws": 982,
+          "rng_and_scheduler_saved": true
+        }
+      }
     },
     "evaluation": [
       "full val19:1960 eligible frames",
@@ -5862,6 +5882,154 @@
       "B": "results/control/B",
       "C": "results/control/C"
     },
-    "scientific_result": null
+    "scientific_result": {
+      "A": {
+        "full_val19": {
+          "AP": 73.24663519364624,
+          "FPR95": 0.25957045699453646,
+          "AUROC": 99.93055468226663,
+          "normal_count": 193792470,
+          "anomaly_count": 87499,
+          "official_high_recall": {
+            "threshold": -0.799855649471283,
+            "tp": 83125,
+            "fp": 503028,
+            "fn": 4374,
+            "tn": 193289442,
+            "recall": 95.00108572669403,
+            "FPR": 0.25957045699453646
+          }
+        },
+        "fixed32": {
+          "AP": 88.42124331018293,
+          "AUROC": 99.99030826317214,
+          "FPR95": 0.033672569820716536,
+          "normal_count": 3810223,
+          "anomaly_count": 896,
+          "recall_at_fpr_limit": {
+            "recall": 100.0,
+            "FPR": 0.7591156738070186,
+            "threshold": -4.665884971618652,
+            "tp": 896,
+            "fp": 28924
+          },
+          "official_high_recall": {
+            "threshold": 0.9826279878616333,
+            "tp": 852,
+            "fp": 1283,
+            "fn": 44,
+            "tn": 3808940,
+            "recall": 95.08928571428571,
+            "FPR": 0.033672569820716536
+          },
+          "detection_loss": 0.04809088880743393,
+          "normal_loss": 0.0019233567407642295,
+          "anomaly_loss": 0.09425842087410363,
+          "mean_score": {
+            "normal": -10.401023315197175,
+            "anomaly": 7.421240599343686
+          },
+          "frames": 32
+        },
+        "real152": {
+          "AP": 74.20712341361661,
+          "AUROC": 99.93263056447415,
+          "FPR95": 0.1835714062069866,
+          "normal_count": 14755566,
+          "anomaly_count": 4925,
+          "recall_at_fpr_limit": {
+            "recall": 98.96446700507614,
+            "FPR": 0.9853095435308955,
+            "threshold": -4.406052589416504,
+            "tp": 4874,
+            "fp": 145388
+          },
+          "official_high_recall": {
+            "threshold": -0.0606423020362854,
+            "tp": 4679,
+            "fp": 27087,
+            "fn": 246,
+            "tn": 14728479,
+            "recall": 95.00507614213198,
+            "FPR": 0.1835714062069866
+          },
+          "detection_loss": 0.08492177530599197,
+          "normal_loss": 0.006474873085300079,
+          "anomaly_loss": 0.16336867752668385,
+          "mean_score": {
+            "normal": -11.167433853852785,
+            "anomaly": 7.559847849318522
+          },
+          "frames": 152
+        },
+        "diagnostic108": {
+          "AP": 80.54104523350554,
+          "AUROC": 99.94426764689285,
+          "FPR95": 0.23138214166823612,
+          "normal_count": 11012518,
+          "anomaly_count": 7708,
+          "recall_at_fpr_limit": {
+            "recall": 99.02698495070057,
+            "FPR": 0.9931788533739513,
+            "threshold": -4.74068021774292,
+            "tp": 7633,
+            "fp": 109374
+          },
+          "official_high_recall": {
+            "threshold": -1.2093608379364014,
+            "tp": 7323,
+            "fp": 25481,
+            "fn": 385,
+            "tn": 10987037,
+            "recall": 95.00518941359626,
+            "FPR": 0.23138214166823612
+          },
+          "normal_loss": 0.006045362720969121,
+          "anomaly_loss": 0.19797544277023207
+        },
+        "diagnostic_model_forwards": 0
+      },
+      "interpretation": "Fresh A remains below parent1152. B has no endpoint evaluation; C has not run. Independent factor effects and a new starting point are not established."
+    },
+    "execution_started_unix": 1789548793.0732179,
+    "source_revision": "f250dc3",
+    "initial_host_E_free_bytes": 61673725952,
+    "estimated_peak_new_bytes_per_arm": 4761715648,
+    "run_state": {
+      "A": {
+        "status": "completed",
+        "completed_updates": 1024,
+        "last_complete_checkpoint": "1024.pt",
+        "seconds": 10309.693410634995,
+        "host_E_after": {
+          "Size": 484950659072,
+          "SizeRemaining": 61436747776,
+          "reserve_bytes": 10000000000
+        }
+      },
+      "B": {
+        "status": "interrupted",
+        "completed_updates": 491,
+        "last_complete_checkpoint": "resume.pt",
+        "seconds": 3124.530824661255,
+        "host_E_after": {
+          "Size": 484950659072,
+          "SizeRemaining": 61384712192,
+          "reserve_bytes": 10000000000
+        }
+      },
+      "C": {
+        "status": "not_started",
+        "completed_updates": 0
+      }
+    },
+    "pause": {
+      "requested_by": "user",
+      "queue_cancelled": true,
+      "checkpoint": "results/control/B/resume.pt",
+      "step": 491,
+      "automatic_continuation": false,
+      "active_training_or_evaluation_processes": 0
+    }
   }
 }
