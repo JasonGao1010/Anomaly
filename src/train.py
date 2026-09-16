@@ -252,12 +252,14 @@ class TrainingFrames:
             self.transform = ScanTransform(self.config, state=self.preprocessing, workers=1)
         frozen, original, queries = self.queries(index, draw)
         identity, frame = frozen.world_identity, frozen.source.frame_id
+        unchanged_scan = not (frozen.inserted_mask | frozen.occluded_original_mask).any()
         if v3:
             if queries["population_counts"] != self.conditions.counts[index].tolist():
                 raise ValueError("actual binary populations differ from the sampling denominators")
-            yaw = float(np.random.default_rng(np.random.SeedSequence([self.config["training"]["seed"], 13, draw])).uniform(0, 2 * np.pi))
-            return dict(scan=self.transform(frozen.source, yaw=yaw), original=self.transform(original, yaw=yaw),
-                **queries, frame=frame, world=identity, draw=draw, sample=index, request=request, yaw=yaw)
+            before = self.scan(original, ("original", source_identity(original)))
+            scan = before if unchanged_scan else self.scan(frozen.source, (identity, frame))
+            return dict(scan=scan, original=before,
+                **queries, frame=frame, world=identity, draw=draw, sample=index, request=request)
         before = None
         if need_original and len(queries["original_query"]):
             key = source_identity(original)
@@ -267,7 +269,6 @@ class TrainingFrames:
                     self.originals.popitem(last=False)
             self.originals.move_to_end(key)
             before = self.originals[key]
-        unchanged_scan = not (frozen.inserted_mask | frozen.occluded_original_mask).any()
         scan = before if before is not None and unchanged_scan else self.scan(frozen.source, (identity, frame))
         row = dict(scan=scan, original=before, **queries,
                    frame=frame, world=identity, draw=draw, sample=index)
@@ -659,7 +660,7 @@ def check_multiscale(config, data_root, experiment):
 
 
 def check_population(model, config, data_root, preprocessing):
-    """Exercise two real frozen requests through augmentation and the new risk, without updates."""
+    """Exercise two real frozen requests in their original sensor orientation, without updates."""
     from .coverage import CoverageRequests
     dataset = TrainingFrames(config, data_root, preprocessing=preprocessing)
     requests = CoverageRequests(dataset.conditions.population, dataset.conditions.cells,
@@ -674,11 +675,11 @@ def check_population(model, config, data_root, preprocessing):
     loss, stats = batch_loss(model, rows, config, 0)
     loss.backward()
     if not torch.isfinite(loss) or any(not torch.isfinite(p.grad).all() for p in model.parameters() if p.grad is not None):
-        raise FloatingPointError("V3 augmented physical-pair risk or gradient is nonfinite")
+        raise FloatingPointError("V3 physical-pair risk or gradient is nonfinite")
     torch.cuda.synchronize()
     stats.update(optimizer_steps=0, scans=4, seconds=time.perf_counter()-started,
         peak_cuda_bytes=torch.cuda.max_memory_allocated(), requests=[dict(r["request"],
-            world=r["world"], frame=r["frame"], yaw=r["yaw"], population_counts=r["population_counts"],
+            world=r["world"], frame=r["frame"], population_counts=r["population_counts"],
             query_groups=r["query_groups"]) for r in rows])
     print(f"V3配对风险核验 请求=2 扫描=4 loss={stats['total']:.5f} 前反向={stats['seconds']:.2f}s 更新=0", flush=True)
     return stats
@@ -1681,8 +1682,7 @@ def validate_resume_state(saved, config, identities, probabilities, experiment, 
             expected_schedule.update(phase="adapt" if saved["step"] <= 128 else "joint",
                                      accumulation_boundary=0, parameter_updates=counts)
             requests = saved["step"] * config["training"]["batch_frames"] * config["training"]["accumulation_steps"]
-            expected_streams = {name: dict(seed=config["training"]["seed"], stream=tag, next_draw=requests)
-                                for name, tag in (("query", 11), ("augmentation", 13))}
+            expected_streams = dict(query=dict(seed=config["training"]["seed"], stream=11, next_draw=requests))
             if saved["request_state"]["consumed_requests"] != requests or saved["streams"] != expected_streams:
                 raise ValueError("V3 recovery must bind RNG and coverage to the consumed accumulation boundary")
         if (saved.get("scheduler_state") != expected_schedule
@@ -1949,8 +1949,8 @@ def fit(config, data_root, steps, output, resume=None, *, experiment=None, resum
         if v3:
             state = consumed.state_dict()
             state["visited"] = torch.from_numpy(state["visited"])
-            extra = dict(request_state=state, streams={name: dict(seed=config["training"]["seed"], stream=tag,
-                next_draw=consumed.draw) for name, tag in (("query", 11), ("augmentation", 13))})
+            extra = dict(request_state=state, streams=dict(query=dict(seed=config["training"]["seed"], stream=11,
+                                                                     next_draw=consumed.draw)))
         return dict(format="ajae-v3-checkpoint" if v3 else "ajae-v1-checkpoint", config=config, model=model.state_dict(),
             preprocessing=dataset.preprocessing, optimizer=optimizer.state_dict(), step=step, samples=identities,
             probabilities=None if probabilities is None else torch.from_numpy(probabilities),
@@ -2143,7 +2143,7 @@ def fit(config, data_root, steps, output, resume=None, *, experiment=None, resum
                 if v3:
                     stats.update(accumulation_steps=accumulation, consumed_requests=consumed.draw,
                         phase="adapt" if completed <= 128 else "joint",
-                        requests=[dict(r["request"], world=r["world"], frame=r["frame"], yaw=r["yaw"],
+                        requests=[dict(r["request"], world=r["world"], frame=r["frame"],
                             population_counts=r["population_counts"], query_groups=r["query_groups"],
                             anomaly_queries=r["anomaly_queries"]) for r in rows])
                     for row in rows:

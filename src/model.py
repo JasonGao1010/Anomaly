@@ -64,7 +64,7 @@ def validate_config(config):
             raise ValueError("invalid V3 multiscale structure or inherited normalization")
         if (t["batch_frames"] != 2 or t["accumulation_steps"] != 4 or t["workers"] < 0
                 or t["binary_view"] != "official_range_v3" or t["anomaly_queries"] != 2048
-                or t["augmentation"] != "synchronized_uniform_yaw"
+                or t["augmentation"] != "none_preserve_physical_sensor_conditions"
                 or t["conditions"] != dict(radius_m=2., minimum_neighbors=8)
                 or t["group_queries"] != dict(normal=[4096, 2048, 2048], raw=[2048, 1024, 1024], weights=[.5, .25, .25])
                 or t["learning_rate_schedule"] != dict(kind="v3_adapt_joint", freeze_updates=128,
@@ -346,14 +346,10 @@ class ScanTransform:
             elevation_step=torch.tensor(self.elevation_step, dtype=torch.float64),
             azimuth_step=torch.tensor(self.azimuth_step, dtype=torch.float64))
 
-    def __call__(self, source, *, yaw=None):
+    def __call__(self, source):
         slots = source.real_slots.copy()
+        # Preserve the physical sensor axes in both coordinates and directional conditions.
         xyzi = source.xyzi[slots].copy()
-        if yaw is not None:
-            if self.config["relation_mode"] != "multiscale" or not np.isfinite(yaw):
-                raise ValueError("synchronized yaw is defined only for the V3 scan view")
-            cosine, sine = np.cos(yaw), np.sin(yaw)
-            xyzi[:, :2] = xyzi[:, :2].astype(np.float64) @ np.array([[cosine, sine], [-sine, cosine]])
         xyz = xyzi[:, :3].astype(np.float64)
         m, n = self.config, len(xyz)
         unique, first, inverse = np.unique(xyz, axis=0, return_index=True, return_inverse=True)

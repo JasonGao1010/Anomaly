@@ -22,7 +22,7 @@ class DataProtocolError(ValueError):
 
 
 def detection_range(points):
-    """Use the official input dtype and inclusive distance rule before augmentation."""
+    """Use the official input dtype and inclusive distance rule in sensor coordinates."""
     distance = np.linalg.norm(points, axis=1)
     return (distance >= 2.5) & (distance <= 50.)
 
@@ -44,7 +44,7 @@ def binary_target(source, inserted=None):
 
 
 def binary_normal_groups(frozen, original, sparse_slots, radius_m=2.):
-    """Bind both normal populations to pre-augmentation slots, including occluded raw points."""
+    """Bind both normal populations to source slots, including occluded raw points."""
     post = np.flatnonzero(binary_target(frozen.source, frozen.inserted_mask) == 0)
     raw = np.flatnonzero(binary_target(original) == 0)
     kept = ~frozen.inserted_mask & ~frozen.occluded_original_mask & ~original.zero_slot_mask

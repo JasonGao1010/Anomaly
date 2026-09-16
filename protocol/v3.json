@@ -44,7 +44,7 @@
     "conditions": {"radius_m": 2.0, "minimum_neighbors": 8},
     "group_queries": {"normal": [4096, 2048, 2048], "raw": [2048, 1024, 1024], "weights": [0.5, 0.25, 0.25]},
     "anomaly_queries": 2048,
-    "augmentation": "synchronized_uniform_yaw",
+    "augmentation": "none_preserve_physical_sensor_conditions",
     "learning_rate_schedule": {"kind": "v3_adapt_joint", "freeze_updates": 128, "warmup_updates": 32, "decay_start": 160, "total_updates": 1024, "start_factor": 0.1, "end_factor": 0.1}
   },
   "loss": {"kind": "paired_binary_population", "coefficients": [0.5, 0.25, 0.25]},
@@ -66,5 +66,5 @@
   "optimization_monitor": {"every_updates": 32, "gradient_alert": 1000.0, "retained_alerts": 3},
   "stop": "1024 optimizer updates,8192 world-frame requests,16384 scan views; evaluate256/512/1024 and stop. No automatic training during implementation.",
   "initialization": "Transfer LitePT/context/point and named columns of parent base_head into the unified head; new columns zero, new relations nonzero. Fixed parent BN buffers; parent final scores are not preserved. Historical nuScenes semantic pretraining is disclosed.",
-  "risk": "0.5 anomaly population +0.25 post normal population +0.25 unique-source raw normal population, averaged over synchronized yaw. Exact dynamic mixture probabilities and overlapping-query importance correction; no keep, tail, teacher or semantic auxiliary loss."
+  "risk": "0.5 anomaly population +0.25 post normal population +0.25 unique-source raw normal population in the original sensor orientation. Exact dynamic mixture probabilities and overlapping-query importance correction; no keep, tail, teacher or semantic auxiliary loss."
 }

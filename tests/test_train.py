@@ -124,7 +124,7 @@ def test_v3_delayed_encoder_adam_state_and_resume_counts():
     state = dict(config=config, step=129, samples=[], probabilities=None, experiment={},
         optimizer=optimizer.state_dict(), scheduler_state=schedule_state(optimizer, config, 129),
         condition_sources={}, request_state=dict(consumed_requests=1032),
-        streams={name:dict(seed=20260916,stream=tag,next_draw=1032) for name,tag in (("query",11),("augmentation",13))})
+        streams=dict(query=dict(seed=20260916,stream=11,next_draw=1032)))
     assert validate_resume_state(state, config, [], None, {}, condition_sources={}) == 129
     assert state["scheduler_state"]["parameter_updates"]["backbone_decay"] == [1]
     assert state["scheduler_state"]["parameter_updates"]["new_modules_decay"] == [129]

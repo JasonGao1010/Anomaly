@@ -128,10 +128,12 @@ def test_parent_groups_reuse_bound_scores_and_infer_only_missing_eligible_frames
         anomaly_cache(path, checkpoint)
 
 
-def test_v3_binary_support_matches_official_before_rotation_and_keeps_occluded_raw():
+def test_v3_paired_training_preserves_orientation_official_support_and_occluded_raw():
+    from collections import OrderedDict
+    from types import SimpleNamespace
     from src.data import FrozenFrame, binary_target, binary_normal_groups
     from src.evaluate import evaluation_targets
-    from src.train import experiment_config, load_experiment, query_rows
+    from src.train import TrainingFrames, experiment_config, load_experiment, query_rows
     from src.model import ScanTransform
     xyzi = np.array([[0,0,0,0],[2.5,0,0,.1],[np.nextafter(np.float32(30),np.float32(np.inf)),40,0,.2],
         [10,0,0,.3],[51,0,0,.4],[10,1,0,.5],[11,0,0,.6],[9,0,0,.7],[8,0,0,.8]],np.float32)
@@ -151,11 +153,51 @@ def test_v3_binary_support_matches_official_before_rotation_and_keeps_occluded_r
     assert 7 in groups[1][0] and 7 in groups[1][2] and 7 not in groups[0][0]
     config=experiment_config(load_experiment("protocol/v3.json"))
     query=query_rows(frozen,source,config["training"],np.random.default_rng(1),sparse_slots=np.arange(len(raw)))
-    rotated=ScanTransform(config)(source,yaw=.731)
-    np.testing.assert_array_equal(rotated["source_slot"],source.real_slots)
-    np.testing.assert_array_equal(rotated["xyzi"][:,3],source.xyzi[source.real_slots,3])
     assert 7 in source.real_slots[query["original_query"]]
     assert query["population_counts"] == [1,3,5]
+    dataset=TrainingFrames.__new__(TrainingFrames)
+    dataset.config, dataset.transform = config, ScanTransform(config)
+    dataset.conditions=SimpleNamespace(counts=np.array([[1,3,5]]))
+    dataset.cache, dataset.cache_bytes, dataset.cached_bytes = OrderedDict(), 2**20, 0
+    dataset.queries=lambda index,draw:(frozen,source,query)
+    rows=[dataset[dict(sample=0,draw=draw)] for draw in (0,137)]
+    for row in rows:
+        assert "yaw" not in row
+        for name, physical in (("scan",frozen.source),("original",source)):
+            scan=row[name]; xyz=physical.xyzi[physical.real_slots,:3].astype(np.float64)
+            np.testing.assert_array_equal(scan["source_slot"],physical.real_slots)
+            np.testing.assert_array_equal(scan["xyzi"],physical.xyzi[physical.real_slots])
+            np.testing.assert_array_equal(scan["sensor_condition"][:,1:4],(xyz/np.linalg.norm(xyz,axis=1)[:,None]).astype(np.float32))
+            for key in scan:
+                np.testing.assert_array_equal(scan[key],rows[0][name][key])
+        assert 7 not in row["scan"]["source_slot"] and 7 in row["original"]["source_slot"]
+    assert rows[0]["scan"] is rows[1]["scan"] and rows[0]["original"] is rows[1]["original"]
+    empty=FrozenFrame(source,"e"*64,np.zeros(len(raw),bool),np.zeros(len(raw),bool))
+    dataset.conditions.counts=np.array([[0,5,5]])
+    dataset.queries=lambda index,draw:(empty,source,dict(population_counts=[0,5,5]))
+    unchanged=dataset[dict(sample=0,draw=138)]
+    assert unchanged["scan"] is unchanged["original"]  # Reuse identical observed scans without losing either supervision view.
+
+
+def test_parent_reference_reuses_original_orientation_after_training_augmentation_changes(tmp_path,monkeypatch):
+    import json
+    from copy import deepcopy
+    from src.evaluate import prepare_reference,real_group_definition
+    from src.train import load_experiment
+    declaration=load_experiment("protocol/v3.json")
+    historical=deepcopy(declaration)
+    historical["training"]["augmentation"]="synchronized_uniform_yaw"
+    historical["risk"]="historical risk averaged over synchronized yaw"
+    result=dict(reference_for=historical,binary_view="official_range_v3",
+                weak_anomaly=dict(definition=real_group_definition()))
+    path=tmp_path/"1152.json";path.write_text(json.dumps(result));before=path.read_bytes()
+    monkeypatch.setattr("src.train.load_checkpoint",lambda *args:pytest.fail("unchanged parent evaluation requires no inference"))
+    assert prepare_reference("unused",declaration,tmp_path)==result
+    assert path.read_bytes()==before
+    for field in ("warm_start","selection"):
+        changed=deepcopy(declaration);changed[field]={}
+        with pytest.raises(ValueError,match="different weights, samples"):
+            prepare_reference("unused",changed,tmp_path)
 
 
 def test_v3_persisted_real_scores_keep_ignored_return_identities(tmp_path,monkeypatch):

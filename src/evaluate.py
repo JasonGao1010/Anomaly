@@ -1180,8 +1180,12 @@ def prepare_reference(data_root, declaration, directory=None):
     path = directory / "1152.json"
     if path.exists():
         result = json.loads(path.read_text())
-        if result["reference_for"] != declaration or result["binary_view"] != "official_range_v3":
-            raise ValueError("parent reference uses another V3 declaration or binary view")
+        # Parent inference uses original scans; candidate training augmentation is not an input.
+        if (any(result["reference_for"][key] != declaration[key] for key in ("warm_start", "selection"))
+                or result["binary_view"] != declaration["evaluation"]["binary_view"]
+                or result["binary_view"] != "official_range_v3"
+                or result["weak_anomaly"]["definition"] != real_group_definition()):
+            raise ValueError("parent reference uses different weights, samples, binary view or real groups")
         return result
     _evaluation_space(512 * 2**20)
     model, saved = load_checkpoint(PROJECT_ROOT / declaration["warm_start"]["checkpoint"])

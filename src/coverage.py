@@ -907,7 +907,7 @@ class CoverageRequests:
     def take(self):
         if self.draw >= self.requests:
             raise StopIteration
-        # Counter-based streams make worker prefetch independent of augmentation/query randomness.
+        # Counter-based streams make worker prefetch independent of query randomness.
         rng = np.random.default_rng(np.random.SeedSequence([self.seed, 7, self.draw]))
         coverage = rng.random() < self.mixture
         if coverage:

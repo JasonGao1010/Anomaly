@@ -4,7 +4,7 @@
   "research_question": "Using only the complete current scan, can observable sensor conditions and all-return multiscale relationships improve real anomaly ranking while preserving difficult-normal performance? V3 learns one paired binary population risk with importance-corrected coverage and queries; it is implemented but has not been trained or evaluated for performance.",
   "v3": {
     "configuration": "protocol/v3.json",
-    "authorization": "Implement the complete2026-09-16 all-return multiscale V3 design and necessary validation; subsequently complete real-instance and original201 grouped evaluation plus corresponding1152 references, reusing cached scores and inferring only missing scopes. Do not start training or change the model, risk or schedule.",
+    "authorization": "Implement V3 and grouped acceptance with corresponding1152 references; the final data decision now removes random rotation and preserves original sensor orientation. Do not start training or change the architecture, loss coefficients or update schedule.",
     "status": "implemented_and_verified_not_trained",
     "implementation_validated": true,
     "training_executed": false,
@@ -14,6 +14,26 @@
     "parent_checkpoint": "results/keep/mean/1152.pt",
     "parent_step0_function_preserved": false,
     "output_for_future_training": "results/v3/run",
+    "final_data_rule": "Fixed repaired206 pool:449 sources,240 worlds,107760 world-frames sharing backgrounds; original201 only for normal transfer evaluation and never training statistics; val19 official development evaluation. Paired before/after scans retain actual returns only. Binary normal/anomaly labels with overlapping low-support and potentially-affected flags; raw0 ignored, native raw2 quarantined, supervision2.5-50m without a training frame-eligibility gate. Source/slot identity pairs only retained normal returns, never an inserted replacement with the original return occupying that slot. No explicit before/after comparison loss is added by this data decision.",
+    "original_orientation_verification": {
+      "augmentation": "none_preserve_physical_sensor_conditions",
+      "rotation_interface_and_stream_removed": true,
+      "related_regression_tests_passed": 102,
+      "samples": [0, 45, 100937],
+      "source_frames": [0, 45, 361],
+      "source_returns": [123181, 119422, 126380],
+      "post_returns": [123181, 119423, 126457],
+      "supervised_anomalies": [0, 1, 1785],
+      "occluded_normal_points_in_last_sample": 4132,
+      "occluded_normals_in_post_normal": 0,
+      "xyzi_and_ray_direction_exact": true,
+      "query_replay_exact": true,
+      "preprocessing_and_reference_reuse_seconds": 6.61833831097465,
+      "parent_reference_reused_without_changes": true,
+      "model_forwards": 0,
+      "optimizer_updates": 0,
+      "scope": "CPU preprocessing of three actual paired samples at original orientation; no model inference, backward, training, pool expansion or rerendering. Original1152 evaluation remains valid because it already used original sensor axes."
+    },
     "supersedes": "Prior A/B/C short-control proposal; A1024 completed, B491 paused and C unstarted remain historical; no automatic continuation.",
     "population_preparation": {
       "format": "ajae-v3-populations",
@@ -84,7 +104,7 @@
       ],
       "stop_after_last_evaluation": true
     },
-    "recovery": "Complete accumulation boundaries save per-family actual AdamW counts and consumed coverage history; independent counter-based query/yaw streams and full model RNG retained. Pre-optimizer accumulation failure discards gradients and restores the preceding complete update. An optimizer-internal failure is not a valid completed checkpoint.",
+    "recovery": "Complete accumulation boundaries save per-family actual AdamW counts and consumed coverage history; independent counter-based query stream and full model RNG retained; no augmentation stream. Pre-optimizer accumulation failure discards gradients and restores the preceding complete update. An optimizer-internal failure is not a valid completed checkpoint.",
     "no_update_verification": {
       "result": "results/v3/check.json",
       "regression_tests_passed": 155,
@@ -173,7 +193,7 @@
           "occluded_raw_normals_in_disturbed_group": 4132
         }
       ],
-      "scope": "Real scans backward against an unlabeled numerical probe; two physical paired requests use the new risk without an optimizer. Toy optimizer updates test scheduling/accumulation only; no real V3 parameter update."
+      "scope": "Historical initial V3 no-update checks: real unrotated scans backward against an unlabeled numerical probe; two physical pairs used the then-declared random rotation. Their paired loss/timing do not represent the later original-orientation inputs. Toy optimizer updates test scheduling/accumulation only; no real V3 parameter update."
     },
     "parent_new_label_reference": {
       "directory": "results/v3/reference",
@@ -520,7 +540,7 @@
   },
   "status": {
     "stage": "v3_implemented_verified_not_trained",
-    "active_work": "V3 code,206-only population preparation and no-update checks completed; real-instance and original201 grouped acceptance plus independent1152 references now completed. No V3 training or full V3 evaluation. Historical A completed, B491 paused, C not started.",
+    "active_work": "V3 data now preserve original sensor orientation; rotation code and stream removed and actual paired inputs checked. Existing206 populations, grouped acceptance and original-orientation1152 references retained. No V3 training or full V3 evaluation. Historical A completed, B491 paused, C not started.",
     "model_defined": true,
     "training_defined": true,
     "formal_ajae_v1": "context_supported_conditional_return_relationship_network",
@@ -2324,7 +2344,7 @@
     "conditions": "Sensor range/direction/calibrated angular intervals/physical sampling scales separated from observational counts, moments, and delta/validity; physical and sensor-basis normalized displacements both retained.",
     "score": "One242-to128-to1 MLP reads h,z0,z2,9 sensor and41 observation features; no V3 base-plus-relation second scoring branch.",
     "normalization": "Parent running means/variances/counters fixed during training/recomputation/evaluation; affine parameters learn after encoder unfreezing; new relations use LayerNorm.",
-    "risk": "0.5 anomaly-world-point population +0.25 post-normal-world-point population +0.25 unique-source-normal-point population, averaged over synchronized uniform yaw; no keep/tail/teacher/semantic auxiliary term.",
+    "risk": "0.5 anomaly-world-point population +0.25 post-normal-world-point population +0.25 unique-source-normal-point population in original sensor orientation; no rotation augmentation or keep/tail/teacher/semantic auxiliary term.",
     "sampling": "q_t=0.8*(0.5*a_A+0.25*a_post+0.25*a_raw)+0.2*h_t; dynamic30-cell/nonempty-count-bin/unvisited-member coverage; exact pre-draw mixture probabilities; frame coefficient sum<=1.25; overlapping-normal point correction<=2.",
     "evaluation": "Full official val19 at256/512/1024 with identical pooled labels; saved full-return predictions reused for152/108; original201 all682 at each model full-val95 threshold; new binary synthetic32 per split plus pairs and joint-metric selection.",
     "limitations": "Implementation and numerical checks are not performance evidence; spatial summaries remain lossy; coarse intersecting cells may contain outside-ball points; shared449 source scans do not provide107760 independent environments; no trained V3 or mechanism result."
