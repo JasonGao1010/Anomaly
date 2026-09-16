@@ -16,7 +16,7 @@ from torch.utils.checkpoint import checkpoint
 
 from .data import FramePrediction
 from .protocol import PROJECT_ROOT
-from .render import calibrated_ray_grid, duplicate_prefix_slots
+from .render import calibrated_ray_grid
 
 SENSOR_CONDITIONS = ("log_range", "ray_x", "ray_y", "ray_z", "log_azimuth_scale",
     "log_elevation_scale", "log_azimuth_step", "log_elevation_step", "log_radial_scale")
@@ -58,7 +58,6 @@ def validate_config(config):
                     or m["backbone"] != "LitePT-S" or m["channels"] != 64
                     or m["attention_heads"] != 4 or m["voxel_m"] != .05
                     or m["query_chunk"] < 1 or not isinstance(m["checkpoint_fusion"], bool)
-                    or m["duplicate_records"] != "verified_201_prefix"
                     or m["backbone_batchnorm"] != "fixed_parent_running"
                     or m["backbone_drop_path"] != 0 or m["backbone_shuffle_orders"]
                     or obsolete.intersection(m)):
@@ -347,17 +346,10 @@ class ScanTransform:
             azimuth_step=torch.tensor(self.azimuth_step, dtype=torch.float64))
 
     def __call__(self, source):
-        slots = source.real_slots.copy()
+        slots = source.observation_slots.copy()
         m = self.config
-        record_inverse = np.arange(len(slots), dtype=np.int64)
-        internal_slots = slots
-        if m["relation_mode"] == "pyramid":
-            mapping = duplicate_prefix_slots(source)
-            if mapping is not None:
-                _, first_record, record_inverse = np.unique(mapping[slots], return_index=True, return_inverse=True)
-                internal_slots = slots[first_record]
         # Preserve the physical sensor axes in both coordinates and directional conditions.
-        xyzi = source.xyzi[internal_slots].copy()
+        xyzi = source.xyzi[slots].copy()
         xyz = xyzi[:, :3].astype(np.float64)
         n = len(xyz)
         unique, first, inverse = np.unique(xyz, axis=0, return_index=True, return_inverse=True)
@@ -372,14 +364,15 @@ class ScanTransform:
             cells = cells - np.floor_divide(cells.min(axis=0), 16) * 16
         if np.any(cells >= 65536):
             raise ValueError("complete scan exceeds LitePT serialization extent; no points were discarded")
-        arrays = dict(xyzi=xyzi, source_slot=slots, point_offset=offset.astype(np.float32),
+        arrays = dict(xyzi=xyzi, source_slot=slots, record_inverse=source.record_inverse.copy(),
+            point_offset=offset.astype(np.float32),
             voxel_inverse=voxel_inverse, voxel_xyzi=voxel_xyzi.astype(np.float32), grid_coord=cells.astype(np.int32))
         r = np.linalg.norm(xyz, axis=1)
         u = xyz / r[:, None]
         theta = np.arcsin(np.clip(u[:, 2], -1, 1))
         beam = np.abs(theta[:, None] - self.elevations).argmin(axis=1)
         if m["relation_mode"] == "pyramid":
-            arrays.update(record_inverse=record_inverse, voxel_count=counts.astype(np.float32),
+            arrays.update(voxel_count=counts.astype(np.float32),
                 voxel_positions=np.bincount(voxel_inverse[first], minlength=len(cells)).astype(np.float32),
                 condition=np.column_stack((np.log1p(r), u, np.full(n, self.azimuth_step),
                                            self.elevation_step[beam])).astype(np.float32))
@@ -700,11 +693,6 @@ class AJAE(nn.Module):
 
     def pyramid_forward(self, scan, query, *, return_features=False, trace=None):
         m = self.config
-        # Queries address released records; only verified copies share internal computation.
-        restore = None
-        query = scan["record_inverse"][query]
-        if len(scan["record_inverse"]) != len(scan["xyzi"]):
-            query, restore = torch.unique(query, sorted=True, return_inverse=True)
         point = self.point(torch.cat((scan["xyzi"], scan["point_offset"]), -1))
         inverse, count = scan["voxel_inverse"], scan["voxel_count"]
         total = point.new_zeros((len(count), point.shape[1])).index_add(0, inverse, point)
@@ -735,11 +723,9 @@ class AJAE(nn.Module):
                  if m["checkpoint_fusion"] and self.training and torch.is_grad_enabled() else compute(rows)
                  for rows in query.split(m["query_chunk"])]
         score = torch.cat([part[0] for part in parts] if return_features else parts)
-        if restore is not None:
-            score = score[restore]
         if return_features:
             fused = torch.cat([part[1] for part in parts])
-            return dict(score=score, fusion=fused if restore is None else fused[restore], context=context, point=point)
+            return dict(score=score, fusion=fused, context=context, point=point)
         return score
 
     @torch.no_grad()
@@ -750,9 +736,9 @@ class AJAE(nn.Module):
             raise ValueError("V3 has one unified score; legacy base/relation components do not exist")
         if prepared is None:
             prepared = transform(source)
-        elif (not np.array_equal(prepared["source_slot"], source.real_slots)
-              or not np.array_equal(prepared["xyzi"][prepared["record_inverse"]] if "record_inverse" in prepared
-                                    else prepared["xyzi"], source.xyzi[source.real_slots])):
+        elif (not np.array_equal(prepared["source_slot"], source.observation_slots)
+              or not np.array_equal(prepared["record_inverse"], source.record_inverse)
+              or not np.array_equal(prepared["xyzi"], source.xyzi[source.observation_slots])):
             raise ValueError("prepared inference input differs from the complete source returns")
         scan = to_device(prepared, next(self.parameters()).device)
         output = self(scan, return_features=components)
@@ -762,7 +748,8 @@ class AJAE(nn.Module):
                   if components else {"final": output})
         result = {}
         for name, values in scores.items():
+            # Expand only at the I/O boundary; all model statistics see one complete scan.
             result[name] = FramePrediction(source.partition, source.sequence_id, source.frame_id,
-                                           source.real_slots, values.cpu().numpy())
+                                           source.real_slots, values.cpu().numpy()[source.record_inverse])
             result[name].validate(source)
         return result if components else result["final"]

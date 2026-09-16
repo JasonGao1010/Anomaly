@@ -15,7 +15,6 @@
     "voxel_m": 0.05,
     "query_chunk": 2048,
     "checkpoint_fusion": true,
-    "duplicate_records": "verified_201_prefix",
     "backbone_drop_path": 0.0,
     "backbone_shuffle_orders": false,
     "intensity_transform": "identity_raw_stu_no_clip",

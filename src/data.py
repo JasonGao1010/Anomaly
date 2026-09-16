@@ -13,7 +13,7 @@ import tempfile
 import numpy as np
 from scipy.spatial import cKDTree
 
-from .scene import PointLabels, SourceFrame, STUSequence, make_source_frame
+from .scene import OBSERVATION_INPUT, PointLabels, SourceFrame, STUSequence, make_source_frame
 from .protocol import load_protocol
 
 
@@ -91,6 +91,7 @@ class FrozenFrame:
             value = np.asarray(getattr(self, name))
             if value.dtype != np.bool_ or value.shape != (source.slot_count,):
                 raise DataProtocolError(f"{name} must be bool[original file slot]")
+            source.validate_duplicate_values(value, name)
             value = value.copy()
             value.setflags(write=False)
             object.__setattr__(self, name, value)
@@ -538,6 +539,7 @@ class FramePrediction:
                 np.savez(
                     stream,
                     format=np.asarray("stu-frame-prediction"),
+                    input_representation=np.asarray(OBSERVATION_INPUT),
                     partition=np.asarray(self.partition),
                     sequence_id=np.asarray(self.sequence_id),
                     frame_id=np.asarray(self.frame_id),
@@ -562,10 +564,14 @@ class FramePrediction:
                 "anomaly_score",
             }
             if (
-                set(saved.files) != expected
+                set(saved.files) not in (expected, expected | {"input_representation"})
                 or saved["format"].item() != "stu-frame-prediction"
             ):
                 raise DataProtocolError("not a single-scan prediction")
+            if (source.duplicate_ray_slots is not None
+                    and ("input_representation" not in saved
+                         or saved["input_representation"].item() != OBSERVATION_INPUT)):
+                raise DataProtocolError("201 prediction predates duplicate-block correction; recompute scores")
             result = cls(
                 saved["partition"].item(),
                 saved["sequence_id"].item(),

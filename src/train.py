@@ -588,8 +588,9 @@ def check(config, data_root, examples, *, experiment=None):
 def check_pyramid(config, data_root, experiment):
     """Real scans, layer identities and both gradient phases; never update model weights."""
     import csv
+    from dataclasses import replace
     from .protocol import load_protocol
-    from .scene import STUSequence
+    from .scene import OBSERVATION_INPUT, DUPLICATE_201_RAY_LAYOUT, PointLabels, STUSequence
     torch.manual_seed(config["training"]["seed"])
     saved = torch.load(PROJECT_ROOT / experiment["warm_start"]["checkpoint"], map_location="cpu", weights_only=True)
     validate_stage_parent(saved, config, experiment)
@@ -692,24 +693,47 @@ def check_pyramid(config, data_root, experiment):
     report["verified_copies"] = []
     model.eval()
     model.zero_grad(set_to_none=True)
-    sequence = STUSequence.open(data_root, protocol=load_protocol(), partition="train", sequence_id=201, label_mode="forbidden")
-    for frame in range(4):
-        source = sequence[frame]
-        prepared = transform(source)
-        inverse = prepared["record_inverse"].numpy()
-        np.testing.assert_array_equal(prepared["xyzi"].numpy()[inverse], source.xyzi[source.real_slots])
-        prediction = model.predict(source, prepared=prepared)
-        scores = prediction.restore(source)[source.real_slots]
-        _, first = np.unique(inverse, return_index=True)
-        np.testing.assert_array_equal(scores, scores[first][inverse])
-        query = torch.from_numpy(np.linspace(0, source.real_count - 1, 1024, dtype=np.int64)).cuda()
-        with torch.no_grad():
-            torch.testing.assert_close(model(to_device(prepared, "cuda"), query).cpu(),
-                                       torch.from_numpy(scores[query.cpu().numpy()]), rtol=2e-5, atol=2e-5)
-        report["verified_copies"].append(dict(frame=frame, released_returns=source.real_count,
-            internal_returns=len(prepared["xyzi"]), original_output_slots_preserved=True,
-            identical_copy_scores=True, labels_loaded=False))
-    print("V3复制记录核验 原始201前4帧输出槽位及复制分数一致，未加载标签", flush=True)
+    sequence = STUSequence.open(data_root, protocol=load_protocol(), partition="train", sequence_id=201, label_mode="required")
+    originals = {frame: sequence[frame] for frame in DUPLICATE_201_RAY_LAYOUT}
+    dataset = FrozenDataset(PROJECT_ROOT / "results/synthetic", data_root, "validation")
+    synthetic, inspected, inserted = {}, 0, 0
+    for path, identity, frame in dataset.samples:
+        if frame in originals:
+            # Loading validates rendered XYZI, labels and both masks, never just the raw mapping.
+            frozen = FrozenFrame.load(path, originals[frame], identity)
+            inspected += 1
+            inserted += bool(frozen.inserted_mask.any())
+            if frozen.inserted_mask.any() and frame not in synthetic:
+                synthetic[frame] = (frozen.source, identity)
+    report["synthetic_copy_check"] = dict(frames=inspected, frames_with_insertions=inserted,
+        xyzi_labels_and_masks_exact=True)
+    parent = AJAE(saved["config"]).cuda()
+    parent.load_state_dict(saved["model"], strict=True)
+    parent.eval()
+    parent_transform = ScanTransform(saved["config"], state=saved["preprocessing"], workers=4)
+    for source, identity in [(s, None) for s in originals.values()] + list(synthetic.values()):
+        start = DUPLICATE_201_RAY_LAYOUT[source.frame_id][0]
+        block = slice(start, start + 131072)
+        labels = source.labels
+        single = replace(source, xyzi=source.xyzi[block], labels=PointLabels(labels.packed[block],
+            labels.semantic[block], labels.instance[block], labels.semantic_target[block]))
+        for name, network, preparation in (("parent1152", parent, parent_transform), ("V3_untrained", model, transform)):
+            prepared = preparation(source)
+            inverse = source.record_inverse
+            np.testing.assert_array_equal(prepared["xyzi"].numpy()[inverse], source.xyzi[source.real_slots])
+            scores = network.predict(source, prepared=prepared).restore(source)
+            single_scores = network.predict(single, preparation).restore(single)
+            np.testing.assert_array_equal(scores, single_scores[source.duplicate_ray_slots])
+            np.testing.assert_array_equal(source.labels.packed, single.labels.packed[source.duplicate_ray_slots])
+            report["verified_copies"].append(dict(model=name, frame=source.frame_id, world=identity,
+                released_returns=source.real_count, internal_returns=len(prepared["xyzi"]),
+                source_identity=source_identity(source), original_output_slots_preserved=True,
+                single_scan_score_max_error=0., labels_and_scores_aligned=True))
+    if any(not torch.equal(value.cpu(), saved["model"][key]) for key, value in parent.state_dict().items()):
+        raise ValueError("duplicate-block verification changed parent parameters or buffers")
+    del parent
+    report["input_representation"] = OBSERVATION_INPUT
+    print(f"201复制记录核验 合成帧={inspected}；父模型与V3在原始及含插入扫描上与单份完整块逐点一致", flush=True)
     report["paired_risk"] = check_population(model, config, data_root, saved["preprocessing"])
     if any(not torch.equal(value.cpu(), original_state[name]) for name, value in model.state_dict().items()):
         raise ValueError("no-update V3 verification changed parameters or BN buffers")
@@ -2117,9 +2141,14 @@ def fit(config, data_root, steps, output, resume=None, *, experiment=None, resum
                     real_threshold = full["official_high_recall"]["threshold"]
                     raw_scores = {(201, r["frame"]): None for r in experiment["selection"]["validation"]}
                     path = output / f"{step}_normal201.json"
-                    if not path.exists():
+                    from .scene import OBSERVATION_INPUT
+                    previous_normal = json.loads(path.read_text()) if path.exists() else None
+                    if previous_normal is None or previous_normal.get("input_representation") != OBSERVATION_INPUT:
+                        if previous_normal is not None and (previous_normal["step"] != step
+                                or Path(previous_normal["checkpoint"]).resolve() != (output / f"{step}.pt").resolve()):
+                            raise ValueError("normal201 cache belongs to another checkpoint")
                         result = evaluate_normal_source(model, transform, data_root, real_threshold, capture=raw_scores,
-                                                        reference=parent_reference["normal201"])
+                                                        reference=parent_reference["normal201"], previous=previous_normal)
                         _atomic_json(path, dict(step=step, checkpoint=str((output / f"{step}.pt").resolve()), **result))
                     parent = json.loads((PROJECT_ROOT / "results/keep/mean/global.json").read_text())
                     run["model_selection"] = model_selection(output, parent)

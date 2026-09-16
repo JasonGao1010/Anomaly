@@ -87,8 +87,9 @@ def test_v3_inherits_only_compatible_encoders():
 
 
 @pytest.mark.parametrize("frame", [0, 1, 2, 3])
-def test_v3_verified_copy_mapping_is_label_blind_and_preserves_distinct_returns(frame):
-    from src.render import DUPLICATE_201_RAY_LAYOUT
+def test_verified_blocks_use_complete_scan_for_every_model_and_restore_predictions(frame):
+    from src.model import AJAE
+    from src.scene import DUPLICATE_201_RAY_LAYOUT, SceneDataError
     from src.train import experiment_config, load_experiment
     config = experiment_config(load_experiment("protocol/v3.json"))
     template = np.zeros((131072, 4), np.float32)
@@ -103,13 +104,44 @@ def test_v3_verified_copy_mapping_is_label_blind_and_preserves_distinct_returns(
     assert scan["voxel_count"].sum() == 3 and scan["voxel_positions"].sum() == 2
     assert set(scan) == {"xyzi", "source_slot", "point_offset", "voxel_inverse", "voxel_xyzi", "grid_coord",
                          "record_inverse", "voxel_count", "voxel_positions", "condition"}
-    packed = np.arange(len(xyzi), dtype=np.uint32) % 53
+    start = DUPLICATE_201_RAY_LAYOUT[frame][0]
+    np.testing.assert_array_equal(scan["source_slot"], start + np.arange(3))
+    packed = np.concatenate([np.arange(131072, dtype=np.uint32)[s:s + n] % 53 for _, n, s in runs])
     labels = PointLabels(packed, packed.astype(np.uint16), np.zeros(len(xyzi), np.uint16), np.zeros(len(xyzi), np.uint8))
     labeled = make_source_frame(frame, xyzi, np.eye(4), labels, partition="train", sequence_id=201)
     torch.testing.assert_close(scan, transform(labeled), atol=0, rtol=0)
+    single = make_source_frame(frame, template, np.eye(4), partition="train", sequence_id=201)
+    parent_config = load_config()
+    historical_config = deepcopy(parent_config)
+    historical_config["model"].update(relation_mode="multiscale", cell_sizes_m=[.05, .2, .8])
+    for recipe in (config, parent_config, historical_config):
+        preparation = ScanTransform(recipe)
+        actual, expected = preparation(labeled), preparation(single)
+        for key in set(actual) - {"source_slot", "record_inverse"}:
+            torch.testing.assert_close(actual[key], expected[key], atol=0, rtol=0)
+        # Exercise the real prediction boundary while recording its internal forward size.
+        class Scorer(nn.Module):
+            predict = AJAE.predict
+            def __init__(self):
+                super().__init__()
+                self.weight = nn.Parameter(torch.tensor(1.))
+                self.config = recipe["model"]
+            def forward(self, prepared, **kwargs):
+                assert len(prepared["xyzi"]) == 3
+                return prepared["xyzi"][:, 3] * self.weight
+        model = Scorer().eval()
+        restored = model.predict(labeled, prepared=actual).restore(labeled)
+        np.testing.assert_array_equal(restored, model.predict(single, preparation).restore(single)[source.duplicate_ray_slots])
+        assert restored[start + 1] != restored[start + 2]  # Same XYZ, different intensity.
+        np.testing.assert_array_equal(labeled.labels.packed, packed)
+    wrong_labels = packed.copy()
+    wrong_labels[-131072] += 1
+    labels = PointLabels(wrong_labels, wrong_labels.astype(np.uint16), np.zeros(len(xyzi), np.uint16))
+    with pytest.raises(SceneDataError, match="packed labels"):
+        make_source_frame(frame, xyzi, np.eye(4), labels, partition="train", sequence_id=201)
     xyzi[-131072, 3] += 1
-    changed = make_source_frame(frame, xyzi, np.eye(4), partition="train", sequence_id=201)
-    assert len(transform(changed)["xyzi"]) == changed.real_count
+    with pytest.raises(SceneDataError, match="XYZI"):
+        make_source_frame(frame, xyzi, np.eye(4), partition="train", sequence_id=201)
     ordinary = make_source_frame(frame, source.xyzi, np.eye(4), partition="train", sequence_id=206)
     assert len(transform(ordinary)["xyzi"]) == source.real_count
 

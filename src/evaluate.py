@@ -18,7 +18,7 @@ from numba import njit
 from .data import (FramePrediction, FrozenDataset, _atomic_json, binary_target, binary_normal_groups,
                    detection_range, low_support_slots, host_disk, source_identity, runtime_resources)
 from .protocol import PROJECT_ROOT, load_protocol
-from .scene import STUSequence, LabelMode
+from .scene import OBSERVATION_INPUT, DUPLICATE_201_RAY_LAYOUT, STUSequence, LabelMode
 from vendor.stu.compute_point_level_ood import PointOODMetricsCalculator
 
 
@@ -1036,49 +1036,77 @@ def captured_scores(data_root, path, *, capture=None):
             saved.close()
 
 
-def evaluate_normal_source(model, transform, data_root, threshold, *, capture=None, reference=None):
+def evaluate_normal_source(model, transform, data_root, threshold, *, capture=None, reference=None, previous=None):
     """201 is a pure-normal transfer check at this model's complete-val19 threshold."""
     import torch
     from torch.utils.data import DataLoader
     if model.training or threshold is None or not np.isfinite(threshold):
         raise ValueError("normal-source evaluation requires inference and a finite transferred threshold")
+    if reference is not None and reference.get("input_representation") != OBSERVATION_INPUT:
+        raise ValueError("normal201 reference predates duplicate-block correction; recompute it first")
+    definition = dict(real_group_definition(), frame_scope="all682 original201 frames; no anomaly-count eligibility gate")
+    reused = {}
+    if previous is not None:
+        if previous["threshold"] != threshold or previous["definition"] != definition:
+            raise ValueError("normal201 reuse requires unchanged threshold and point groups")
+        # Legacy rows lack raw2 counts; zero in the complete set establishes zero in every frame.
+        reused = {r["frame"]: r for r in previous["frames"] if r["frame"] not in DUPLICATE_201_RAY_LAYOUT
+                  and (capture is None or (201, r["frame"]) not in capture)
+                  and ("native_raw2" in r or previous["native_raw2"]["points"] == 0)}
     dataset = EvaluationFrames(data_root, [201], load_protocol(), dict(model=model.config),
-                               transform.state_dict(), normal_source=True)
+                               transform.state_dict(), normal_source=True, skip_frames={(201, f) for f in reused})
     loader = DataLoader(dataset, batch_size=None, num_workers=4, prefetch_factor=1,
         multiprocessing_context="spawn", pin_memory=True, generator=torch.Generator().manual_seed(83))
     normal, false_positive, native, native_high = 0, 0, 0, 0
-    frames, grouped, started = [], {}, time.perf_counter()
+    frames, grouped, recomputed, started = [], {}, [], time.perf_counter()
     for i, (source, scan) in enumerate(loader, 1):
-        scores = model.predict(source, prepared=scan).restore(source)
-        target = binary_target(source)
-        use = target == 0
-        raw2 = ~source.zero_slot_mask & (source.labels.semantic == 2) & detection_range(source.xyzi[:, :3])
-        n, fp = int(use.sum()), int((scores[use] >= threshold).sum())
-        groups = normal_group_counts(source, scores, threshold)
-        for name, counts in groups.items():
-            grouped[name] = grouped.get(name, np.zeros(2, np.int64)) + counts
-        normal += n
-        false_positive += fp
-        native += int(raw2.sum())
-        native_high += int((scores[raw2] >= threshold).sum())
-        frames.append(dict(frame=source.frame_id, source_identity=source_identity(source), normal=n, fp=fp,
-                           internal_returns=len(scan["xyzi"]) if "xyzi" in scan else source.real_count,
-                           groups={key: dict(normal=int(value[0]), fp=int(value[1])) for key, value in groups.items()}))
-        if capture is not None and (201, source.frame_id) in capture:
-            capture[201, source.frame_id] = scores.copy()
+        identity = source_identity(source)
+        if source.frame_id in reused:
+            row = dict(reused[source.frame_id])
+            if row["source_identity"] != identity:
+                raise ValueError("normal201 cached frame source identity changed")
+            row.setdefault("native_raw2", dict(points=0, above_threshold=0))
+        else:
+            scores = model.predict(source, prepared=scan).restore(source)
+            use = binary_target(source) == 0
+            raw2 = ~source.zero_slot_mask & (source.labels.semantic == 2) & detection_range(source.xyzi[:, :3])
+            groups = normal_group_counts(source, scores, threshold)
+            row = dict(frame=source.frame_id, source_identity=identity,
+                normal=int(use.sum()), fp=int((scores[use] >= threshold).sum()),
+                native_raw2=dict(points=int(raw2.sum()), above_threshold=int((scores[raw2] >= threshold).sum())),
+                groups={key: dict(normal=int(value[0]), fp=int(value[1])) for key, value in groups.items()})
+            if capture is not None and (201, source.frame_id) in capture:
+                capture[201, source.frame_id] = scores.copy()
+            recomputed.append(source.frame_id)
+        row["internal_returns"] = len(source.observation_slots)
+        for name, counts in row["groups"].items():
+            grouped[name] = grouped.get(name, np.zeros(2, np.int64)) + [counts["normal"], counts["fp"]]
+        normal += row["normal"]
+        false_positive += row["fp"]
+        native += row["native_raw2"]["points"]
+        native_high += row["native_raw2"]["above_threshold"]
+        frames.append(row)
         if i % 25 == 0 or i == len(dataset):
             host_disk()
             print(f"原始201 {i}/{len(dataset)} 正常={normal} FP={false_positive} 用时={(time.perf_counter()-started)/60:.1f}min", flush=True)
     result = dict(sequence=201, frames=frames, frame_count=len(frames), normal_count=normal,
-        input_representation=model.config.get("duplicate_records", "all_released_records"),
+        input_representation=OBSERVATION_INPUT,
         fp=false_positive, FPR=100 * false_positive / normal if normal else None, threshold=threshold,
-        definition=dict(real_group_definition(), frame_scope="all682 original201 frames; no anomaly-count eligibility gate"),
+        definition=definition,
         groups={name: dict(normal=int(n), fp=int(fp), FPR=100*int(fp)/int(n) if n else None)
                 for name, (n, fp) in grouped.items()},
         native_raw2=dict(points=native, above_threshold=native_high), seconds=time.perf_counter()-started,
         scope="all682 original201 frames; raw0 ignored, native raw2 separately reported, other actual returns normal within2.5-50m; no AP/AUROC/FPR95 or201 threshold fitting")
     if result["groups"]["all"] != dict(normal=normal, fp=false_positive, FPR=result["FPR"]):
         raise ValueError("normal201 grouped counts differ from its complete binary point set")
+    if previous is not None:
+        if [(r["frame"], r["source_identity"]) for r in frames] != [(r["frame"], r["source_identity"]) for r in previous["frames"]]:
+            raise ValueError("normal201 correction requires the same complete source-frame set")
+        if normal != previous["normal_count"]:
+            raise ValueError("duplicate-block correction changed the original evaluation denominator")
+        result["input_correction"] = dict(previous_representation=previous.get("input_representation", "all_released_records"),
+            previous_fp=previous["fp"], previous_FPR=previous["FPR"], recomputed_frames=recomputed,
+            reused_frames=len(frames) - len(recomputed))
     if reference is not None:
         identities = lambda rows: [(r["frame"], r["source_identity"]) for r in rows]
         if identities(frames) != identities(reference["frames"]):
@@ -1182,6 +1210,7 @@ def prepare_reference(data_root, declaration, directory=None):
     from .model import ScanTransform
     directory = Path(directory) if directory is not None else PROJECT_ROOT / declaration["reference_directory"]
     path = directory / "1152.json"
+    result = None
     if path.exists():
         result = json.loads(path.read_text())
         # Parent inference uses original scans; candidate training augmentation is not an input.
@@ -1190,22 +1219,28 @@ def prepare_reference(data_root, declaration, directory=None):
                 or result["binary_view"] != "official_range_v3"
                 or result["weak_anomaly"]["definition"] != real_group_definition()):
             raise ValueError("parent reference uses different weights, samples, binary view or real groups")
-        return result
+        if result["normal201"].get("input_representation") == OBSERVATION_INPUT:
+            return result
     _evaluation_space(512 * 2**20)
     model, saved = load_checkpoint(PROJECT_ROOT / declaration["warm_start"]["checkpoint"])
     validate_stage_parent(saved, experiment_config(declaration), declaration)
     transform = ScanTransform(saved["config"], state=saved["preprocessing"], workers=4)
-    prepared = prepare_fixed(data_root, declaration["selection"], binary_view="official_range_v3")
+    refresh_fixed = result is None or any(r["frame"] in DUPLICATE_201_RAY_LAYOUT
+                                        for r in declaration["selection"]["validation"])
+    prepared = prepare_fixed(data_root, declaration["selection"], binary_view="official_range_v3") if refresh_fixed else None
     parent = json.loads((PROJECT_ROOT / "results/keep/mean/global.json").read_text())
     threshold = parent["official_high_recall"]["threshold"]
-    raw_scores = {(201, r["frame"]): None for r in declaration["selection"]["validation"]}
+    raw_scores = {(201, r["frame"]): None for r in declaration["selection"]["validation"]} if refresh_fixed else None
     directory.mkdir(parents=True, exist_ok=True)
     with evaluation_state(model):
         weak_path = directory / "1152_weak.npz"
-        weak = evaluate_parent_anomalies(model, saved, data_root, declaration, parent, weak_path)
-        normal = evaluate_normal_source(model, transform, data_root, threshold, capture=raw_scores)
-        result = evaluate_fixed(model, transform, prepared, include_pairs=True, directory=directory,
-                                raw_scores=raw_scores, real_threshold=threshold)
+        weak = (result["weak_anomaly"] if result is not None else
+                evaluate_parent_anomalies(model, saved, data_root, declaration, parent, weak_path))
+        normal = evaluate_normal_source(model, transform, data_root, threshold, capture=raw_scores,
+                                        previous=result["normal201"] if result is not None else None)
+        if refresh_fixed:
+            result = evaluate_fixed(model, transform, prepared, include_pairs=True, directory=directory,
+                                    raw_scores=raw_scores, real_threshold=threshold)
     if any(not torch.equal(value.cpu(), saved["model"][key]) for key, value in model.state_dict().items()):
         raise ValueError("V3 parent reference changed historical model tensors")
     result.update(step=1152, checkpoint=str((PROJECT_ROOT / declaration["warm_start"]["checkpoint"]).resolve()),

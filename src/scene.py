@@ -27,6 +27,14 @@ SOURCE_FRAME_CACHE_SIZE = 1
 ANOMALY_IGNORE = np.int8(-1)
 ANOMALY_NORMAL = np.int8(0)
 ANOMALY_POSITIVE = np.int8(1)
+OBSERVATION_INPUT = "verified_201_blocks_v1"
+# Released train/201 copies are file-layout aliases, not a coordinate deduplication rule.
+DUPLICATE_201_RAY_LAYOUT = {
+    0: (0, ((0, 131072, 0), (131072, 131072, 0), (262144, 131072, 0))),
+    1: (0, ((0, 131072, 0), (131072, 131072, 0), (262144, 131072, 0))),
+    2: (29184, ((0, 29184, 0), (29184, 131072, 0), (160256, 131072, 0))),
+    3: (0, ((0, 131072, 0), (131072, 131072, 0))),
+}
 
 
 class SceneDataError(ValueError):
@@ -197,6 +205,9 @@ class SourceFrame:
     features: np.ndarray = field(init=False)
     zero_slot_mask: np.ndarray = field(init=False)
     real_slots: np.ndarray = field(init=False)
+    duplicate_ray_slots: np.ndarray | None = field(init=False)
+    observation_slots: np.ndarray = field(init=False)
+    record_inverse: np.ndarray = field(init=False)
     labels: PointLabels | None
 
     def __post_init__(self) -> None:
@@ -225,6 +236,30 @@ class SourceFrame:
         _finite("official STU features", self.features)
         if self.labels is not None and self.labels.packed.size != count:
             raise SceneDataError("scan and label slot counts differ")
+        mapping = None
+        if (self.partition == "train" and self.sequence_id == 201
+                and self.frame_id in DUPLICATE_201_RAY_LAYOUT and count > 131072):
+            start, runs = DUPLICATE_201_RAY_LAYOUT[self.frame_id]
+            if sum(length for _, length, _ in runs) != count:
+                raise SceneDataError("201 duplicate-block slot count differs from its known layout")
+            mapping = np.concatenate([np.arange(ray, ray + length, dtype=np.int32)
+                                      for _, length, ray in runs])
+        object.__setattr__(self, "duplicate_ray_slots", mapping)
+        self.validate_duplicate_values(self.xyzi, "XYZI")
+        if self.labels is not None:
+            self.validate_duplicate_values(self.labels.packed, "packed labels")
+            if self.labels.semantic_target is not None:
+                self.validate_duplicate_values(self.labels.semantic_target, "semantic targets")
+        if mapping is None:
+            slots, inverse = self.real_slots, np.arange(self.real_count, dtype=np.int64)
+        else:
+            # Frame 2 starts with a partial copy; always select its following complete block.
+            rays = np.flatnonzero(~zero[start:start + 131072]).astype(np.int32)
+            slots = start + rays
+            inverse = np.searchsorted(rays, mapping[self.real_slots])
+            mapping.setflags(write=False)
+        object.__setattr__(self, "observation_slots", _freeze(slots))
+        object.__setattr__(self, "record_inverse", _freeze(inverse))
         for array in (
             self.xyzi,
             self.lidar_pose,
@@ -242,6 +277,13 @@ class SourceFrame:
     @property
     def real_count(self) -> int:
         return int(self.real_slots.size)
+
+    def validate_duplicate_values(self, values: np.ndarray, name: str) -> None:
+        """Check actual raw or rendered contents before sharing any observation."""
+        if self.duplicate_ray_slots is not None:
+            start = DUPLICATE_201_RAY_LAYOUT[self.frame_id][0]
+            if not np.array_equal(values, values[start:start + 131072][self.duplicate_ray_slots]):
+                raise SceneDataError(f"201 duplicate-block {name} differ from the complete block")
 
     def restore_real(self, values: np.ndarray) -> np.ndarray:
         """Restore visible-return values to this frame's complete file-slot order."""

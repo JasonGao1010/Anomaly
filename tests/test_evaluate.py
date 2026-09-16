@@ -184,12 +184,14 @@ def test_parent_reference_reuses_original_orientation_after_training_augmentatio
     from copy import deepcopy
     from src.evaluate import prepare_reference,real_group_definition
     from src.train import load_experiment
+    from src.scene import OBSERVATION_INPUT
     declaration=load_experiment("protocol/v3.json")
     historical=deepcopy(declaration)
     historical["training"]["augmentation"]="synchronized_uniform_yaw"
     historical["risk"]="historical risk averaged over synchronized yaw"
     result=dict(reference_for=historical,binary_view="official_range_v3",
-                weak_anomaly=dict(definition=real_group_definition()))
+                weak_anomaly=dict(definition=real_group_definition()),
+                normal201=dict(input_representation=OBSERVATION_INPUT))
     path=tmp_path/"1152.json";path.write_text(json.dumps(result));before=path.read_bytes()
     monkeypatch.setattr("src.train.load_checkpoint",lambda *args:pytest.fail("unchanged parent evaluation requires no inference"))
     assert prepare_reference("unused",declaration,tmp_path)==result
@@ -237,9 +239,46 @@ def test_v3_normal201_uses_transferred_threshold_and_no_anomaly_metrics(monkeypa
     np.testing.assert_array_equal(capture[201,0],values)
     compared = evaluate_normal_source(model,transform,'unused',1.,reference=result)
     assert compared['versus1152']['normal201']['all']['FPR_change_pp'] == 0
+    with pytest.raises(ValueError, match='predates duplicate-block'):
+        evaluate_normal_source(model,transform,'unused',1.,reference=dict(result,input_representation='all_released_records'))
     result['groups']['all']['normal'] += 1
     with pytest.raises(ValueError, match='denominators differ'):
         evaluate_normal_source(model,transform,'unused',1.,reference=result)
+
+
+def test_normal201_correction_recomputes_affected_frames_and_reuses_identical_sources(monkeypatch):
+    from dataclasses import replace
+    from types import SimpleNamespace
+    from src.evaluate import evaluate_normal_source
+    raw = np.array([0, 1, 52, 99, 2], np.uint16)
+    labels = PointLabels(raw.astype(np.uint32), raw, np.zeros(5, np.uint16), np.full(5, 255, np.uint8))
+    source = make_source_frame(0, np.tile(np.array([10., 0, 0, .2], np.float32), (5, 1)),
+                               np.eye(4), labels, partition="train", sequence_id=201)
+    frames, calls = [source, replace(source, frame_id=4)], []
+    scores = np.array([100., 0., 1., 2., 3.], np.float32)
+    def predict(source, prepared):
+        calls.append(source.frame_id)
+        assert prepared is not None
+        return FramePrediction("train", 201, source.frame_id, source.real_slots, scores)
+    model = SimpleNamespace(training=False, config={}, predict=predict)
+    monkeypatch.setattr("src.evaluate.EvaluationFrames", lambda *args, skip_frames=(), **kwargs:
+                        [(s, None if (201, s.frame_id) in skip_frames else {}) for s in frames])
+    monkeypatch.setattr("torch.utils.data.DataLoader", lambda dataset, **kwargs: dataset)
+    monkeypatch.setattr("src.evaluate.host_disk", lambda: {})
+    transform = SimpleNamespace(state_dict=lambda: {})
+    old = evaluate_normal_source(model, transform, "unused", 1.)
+    old["input_representation"] = "all_released_records"
+    calls.clear()
+    scores.fill(0)
+    corrected = evaluate_normal_source(model, transform, "unused", 1., previous=old)
+    assert calls == [0]
+    assert corrected["normal_count"] == old["normal_count"] == 6
+    assert old["fp"] == 4 and corrected["fp"] == 2
+    assert corrected["frames"][1] == old["frames"][1]
+    assert corrected["input_correction"]["recomputed_frames"] == [0]
+    old["frames"][1]["source_identity"] = "changed"
+    with pytest.raises(ValueError, match="source identity changed"):
+        evaluate_normal_source(model, transform, "unused", 1., previous=old)
 
 
 def test_v3_candidate_selection_requires_joint_improvement_over_parent(tmp_path):

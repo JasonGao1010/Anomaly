@@ -152,6 +152,37 @@ def test_frame_predictions_assign_scores_by_complete_source_slot_identity(tmp_pa
         FramePrediction.load(tmp_path / "wrong.npz", source)
 
 
+def test_201_rendered_masks_and_prediction_cache_require_verified_observations(tmp_path):
+    from src.render import canonical_ray_slots_for_source
+    from types import SimpleNamespace
+    template = np.zeros((131072, 4), np.float32)
+    template[0] = [10, 0, 0, .7]
+    xyzi = np.concatenate((template[:29184], template, template))
+    packed = np.zeros(len(xyzi), np.uint32)
+    inserted = xyzi[:, 0] != 0
+    packed[inserted] = 2 + (60001 << 16)
+    labels = PointLabels(packed, (packed & 65535).astype(np.uint16), (packed >> 16).astype(np.uint16))
+    source = make_source_frame(2, xyzi, np.eye(4), labels, partition="train", sequence_id=201)
+    np.testing.assert_array_equal(canonical_ray_slots_for_source(source, SimpleNamespace(slot_count=131072)),
+                                  source.duplicate_ray_slots)
+    FrozenFrame(source, "a" * 64, inserted, np.zeros(len(xyzi), bool))
+    wrong = inserted.copy()
+    wrong[0] = False
+    with pytest.raises(SceneDataError, match="inserted_mask"):
+        FrozenFrame(source, "a" * 64, wrong, np.zeros(len(xyzi), bool))
+    with pytest.raises(SceneDataError, match="slot count"):
+        make_source_frame(2, xyzi[:-1], np.eye(4), partition="train", sequence_id=201)
+    prediction = FramePrediction("train", 201, 2, source.real_slots, np.full(source.real_count, .5, np.float32))
+    path = tmp_path / "corrected.npz"
+    prediction.save(path, source)
+    np.testing.assert_array_equal(FramePrediction.load(path, source).restore(source), prediction.restore(source))
+    with np.load(path) as saved:
+        legacy = {k: saved[k] for k in saved.files if k != "input_representation"}
+    np.savez(tmp_path / "old.npz", **legacy)
+    with pytest.raises(DataProtocolError, match="recompute scores"):
+        FramePrediction.load(tmp_path / "old.npz", source)
+
+
 def test_active_protocol_keeps_test_outside_development():
     protocol = load_protocol()
     assert len(protocol.public_sequence_ids) == 19
