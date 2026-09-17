@@ -1,64 +1,27 @@
-"""Single-scan prediction and frozen synthetic sample storage."""
+"""Restore synthetic scans from saved deltas and the original STU data.
+
+The reader returns raw XYZI, source labels, and insertion/occlusion masks.
+It does not choose a model, training target, sampler, or evaluation rule.
+"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+import argparse
 import hashlib
 import json
-import os
 from pathlib import Path
-import subprocess
-import tempfile
 
 import numpy as np
-from scipy.spatial import cKDTree
 
-from .scene import OBSERVATION_INPUT, PointLabels, SourceFrame, STUSequence, make_source_frame
-from .protocol import load_protocol
+from .scene import PointLabels, SourceFrame, STUSequence, make_source_frame
+
+
+DEFAULT_SAMPLES = Path(__file__).resolve().parents[1] / "samples"
 
 
 class DataProtocolError(ValueError):
-    """Report scores that cannot be assigned to the declared source returns."""
-
-
-def detection_range(points):
-    """Use the official input dtype and inclusive distance rule in sensor coordinates."""
-    distance = np.linalg.norm(points, axis=1)
-    return (distance >= 2.5) & (distance <= 50.)
-
-
-def binary_target(source, inserted=None):
-    """V3 binary view: official point support, with native anomalies quarantined."""
-    if source.labels is None:
-        raise DataProtocolError("binary supervision requires raw point labels")
-    target = np.full(source.slot_count, -1, np.int8)
-    raw = source.labels.semantic
-    target[~source.zero_slot_mask & (raw != 0) & (raw != 2)] = 0
-    if inserted is not None:
-        inserted = np.asarray(inserted)
-        if inserted.dtype != np.bool_ or inserted.shape != target.shape or np.any(inserted & source.zero_slot_mask):
-            raise DataProtocolError("inserted labels must identify actual return slots")
-        target[inserted] = 1
-    target[~detection_range(source.xyzi[:, :3])] = -1
-    return target
-
-
-def binary_normal_groups(frozen, original, sparse_slots, radius_m=2.):
-    """Bind both normal populations to source slots, including occluded raw points."""
-    post = np.flatnonzero(binary_target(frozen.source, frozen.inserted_mask) == 0)
-    raw = np.flatnonzero(binary_target(original) == 0)
-    kept = ~frozen.inserted_mask & ~frozen.occluded_original_mask & ~original.zero_slot_mask
-    post_sparse = np.intersect1d(post[kept[post]], sparse_slots)
-    raw_sparse = np.intersect1d(raw, sparse_slots)
-    changed = np.concatenate((frozen.source.xyzi[frozen.inserted_mask, :3],
-                              original.xyzi[frozen.occluded_original_mask, :3])).astype(np.float64)
-    tree = cKDTree(changed) if len(changed) else None
-    groups = []
-    for source, normal, sparse in ((frozen.source, post, post_sparse), (original, raw, raw_sparse)):
-        near = (normal[tree.query(source.xyzi[normal, :3].astype(np.float64), workers=1)[0] <= radius_m]
-                if tree is not None and len(normal) else normal[:0])
-        groups.append((normal, sparse, near))
-    return groups
+    """Report a saved sample that disagrees with its source scan or world."""
 
 
 def source_identity(source):
@@ -108,69 +71,6 @@ class FrozenFrame:
                 "opaque occlusion without a return must clear the slot"
             )
 
-    @property
-    def anomaly_target(self):
-        """Original ignored semantics stay ignored; only inserted returns are positive."""
-        labels = self.source.labels
-        if labels.semantic_target is None:
-            raise DataProtocolError("normal supervision requires the train class map")
-        target = np.full(self.source.slot_count, -1, np.int8)
-        target[(labels.semantic_target != 255) & ~self.source.zero_slot_mask] = 0
-        target[self.inserted_mask] = 1
-        return target
-
-    def save(self, path, original):
-        source = self.source
-        if (
-            (source.partition, source.sequence_id, source.frame_id)
-            != (original.partition, original.sequence_id, original.frame_id)
-            or source.slot_count != original.slot_count
-            or not np.array_equal(source.lidar_pose, original.lidar_pose)
-        ):
-            raise DataProtocolError(
-                "frozen delta and original identify different scans"
-            )
-        changed = self.inserted_mask | self.occluded_original_mask
-        if original.labels.semantic_target is None:
-            raise DataProtocolError("normal supervision requires the train class map")
-        expected_target = original.labels.semantic_target.copy()
-        expected_target[changed] = 255
-        if not np.array_equal(source.labels.semantic_target, expected_target):
-            raise DataProtocolError(
-                "rendered normal class targets disagree with insertion masks"
-            )
-        if not np.array_equal(
-            source.xyzi[~changed], original.xyzi[~changed]
-        ) or not np.array_equal(
-            source.labels.packed[~changed], original.labels.packed[~changed]
-        ):
-            raise DataProtocolError("unrecorded changes outside the rendered slots")
-        if np.any(self.occluded_original_mask & original.zero_slot_mask):
-            raise DataProtocolError("an originally empty slot cannot be occluded")
-        slots = np.flatnonzero(changed).astype(np.int32)
-        path = Path(path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = None
-        try:
-            with tempfile.NamedTemporaryFile(dir=path.parent, delete=False) as stream:
-                temporary = Path(stream.name)
-                np.savez_compressed(
-                    stream,
-                    format=np.asarray("stu-frozen-frame"),
-                    source_identity=np.asarray(source_identity(original)),
-                    world_identity=np.asarray(self.world_identity),
-                    source_slot=slots,
-                    xyzi=source.xyzi[slots],
-                    packed_labels=source.labels.packed[slots],
-                    inserted_slot=np.flatnonzero(self.inserted_mask).astype(np.int32),
-                    occluded_slot=np.flatnonzero(self.occluded_original_mask).astype(
-                        np.int32
-                    ),
-                )
-            os.link(temporary, path)
-        finally:
-            if temporary is not None:
-                temporary.unlink(missing_ok=True)
 
     @classmethod
     def load(cls, path, original, world_identity):
@@ -255,12 +155,12 @@ class FrozenFrame:
 class FrozenDataset:
     """Read complete frozen worlds as independent scans without importing a renderer."""
 
-    def __init__(self, directory, data_root, split, *, allow_candidates=False):
+    def __init__(self, directory, data_root, split):
         self.directory = Path(directory)
         manifest = json.loads((self.directory / "manifest.json").read_text())
         if (
             manifest.get("format") != "stu-frozen-dataset"
-            or manifest.get("status") not in ({"frozen", "candidates_complete"} if allow_candidates else {"frozen"})
+            or manifest.get("status") != "frozen"
         ):
             raise DataProtocolError("dataset has not completed full-sequence freezing")
         if split not in {"train", "validation"}:
@@ -273,13 +173,7 @@ class FrozenDataset:
             raise DataProtocolError(
                 "frozen training and validation data use disjoint normal sources"
             )
-        self.sequence = STUSequence.open(
-            data_root,
-            protocol=load_protocol(),
-            partition="train",
-            sequence_id=sequence,
-            label_mode="required",
-        )
+        self.sequence = STUSequence(data_root, sequence)
         self.samples = []
         identities = set()
         for entry in manifest["splits"][split]["worlds"]:
@@ -327,257 +221,28 @@ class FrozenDataset:
         path, identity, frame = self.samples[index]
         return FrozenFrame.load(path, self.sequence[frame], identity)
 
-    def sampling_probabilities(self, path):
-        """Align declared scan probabilities by fixed world and source-frame identity."""
-        with np.load(path, allow_pickle=False) as values:
-            keys = list(zip(values["world_identity"].tolist(), values["frame"].tolist()))
-            weights = np.asarray(values["probability"], np.float64)
-        expected = [(identity, frame) for _, identity, frame in self.samples]
-        if len(set(keys)) != len(keys) or set(keys) != set(expected) or len(weights) != len(keys):
-            raise DataProtocolError("sampling probabilities do not describe this complete dataset split")
-        if not np.isfinite(weights).all() or np.any(weights <= 0) or not np.isclose(weights.sum(), 1., atol=1e-12):
-            raise DataProtocolError("every frozen scan needs positive normalized sampling probability")
-        lookup = dict(zip(keys, weights))
-        return np.array([lookup[key] for key in expected])
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--samples", type=Path, default=DEFAULT_SAMPLES)
+    parser.add_argument("--data-root", type=Path, default=Path("/home/jasongao/Data/STU"))
+    parser.add_argument("--split", choices=("train", "validation"), default="train")
+    parser.add_argument("--index", type=int, default=0)
+    args = parser.parse_args()
+    dataset = FrozenDataset(args.samples, args.data_root, args.split)
+    sample = dataset[args.index]
+    print(json.dumps({
+        "split": args.split,
+        "samples": len(dataset),
+        "index": args.index,
+        "source_sequence": sample.source.sequence_id,
+        "source_frame": sample.source.frame_id,
+        "file_slots": sample.source.slot_count,
+        "actual_returns": sample.source.real_count,
+        "inserted_slots": int(sample.inserted_mask.sum()),
+        "occluded_original_slots": int(sample.occluded_original_mask.sum()),
+    }, indent=2))
 
 
-def low_support_slots(source, radius_m, minimum_neighbors, *, workers=1, query_slots=None):
-    """Count distinct positions in the complete original scan, before label filtering."""
-    xyz, inverse = np.unique(source.xyzi[source.real_slots, :3].astype(np.float64),
-                             axis=0, return_inverse=True)
-    if not len(xyz):
-        return np.empty(0, np.int32)
-    # Self occupies rank one; rank k+1 decides whether at least k neighbors exist.
-    if query_slots is None:
-        distance = cKDTree(xyz).query(xyz, k=[minimum_neighbors + 1], workers=workers)[0][:, 0]
-        return source.real_slots[(distance > radius_m)[inverse]].astype(np.int32)
-    slots = np.asarray(query_slots)
-    if (slots.ndim != 1 or not np.issubdtype(slots.dtype, np.integer)
-            or np.any((slots < 0) | (slots >= source.slot_count)) or np.any(source.zero_slot_mask[slots])):
-        raise DataProtocolError("support queries must address actual source returns")
-    distance = cKDTree(xyz).query(source.xyzi[slots, :3].astype(np.float64),
-                                k=[minimum_neighbors + 1], workers=workers)[0][:, 0]
-    return slots[distance > radius_m].astype(np.int32)
-
-
-def retained_normal_slots(frozen, original):
-    retained = np.flatnonzero(~frozen.inserted_mask & ~frozen.occluded_original_mask
-        & ~original.zero_slot_mask & (original.labels.semantic_target != 255))
-    if not (np.array_equal(original.xyzi[retained], frozen.source.xyzi[retained])
-            and np.array_equal(original.labels.packed[retained], frozen.source.labels.packed[retained])
-            and np.all(frozen.anomaly_target[retained] == 0)):
-        raise DataProtocolError("retained-normal pairing changed the original physical return or label")
-    return retained
-
-
-def normal_conditions(frozen, original, sparse_slots, radius_m):
-    """S is native low support; C is proximity to any changed return, including missing returns."""
-    kept = retained_normal_slots(frozen, original)
-    sparse = np.intersect1d(kept, sparse_slots)
-    changed = np.concatenate((frozen.source.xyzi[frozen.inserted_mask, :3],
-                              original.xyzi[frozen.occluded_original_mask, :3]))
-    near = np.empty(0, dtype=kept.dtype)
-    if len(changed) and len(kept):
-        near = kept[cKDTree(changed).query(original.xyzi[kept, :3], workers=1)[0] <= radius_m]
-    return kept, sparse, near
-
-
-class ConditionIndex:
-    """Read native slot sets bound to complete source contents and one world-frame pool."""
-
-    def __init__(self, path, dataset, parameters):
-        with np.load(path, allow_pickle=False) as saved:
-            if (saved["format"].item() not in {"ajae-v2-conditions", "ajae-v3-populations"}
-                    or json.loads(saved["parameters"].item()) != parameters):
-                raise DataProtocolError("condition index uses different scientific parameters")
-            keys = list(zip(saved["world_identity"].tolist(), saved["frame"].tolist()))
-            expected = [(world, frame) for _, world, frame in dataset.samples]
-            if keys != expected:
-                raise DataProtocolError("condition index belongs to another frozen world-frame pool")
-            if saved["format"].item() == "ajae-v3-populations":
-                self.counts = saved["counts"].copy()
-                self.cells = saved["cell"].copy()
-                self.population = saved["population"].copy()
-            frames, identities = saved["source_frame"], saved["source_identity"]
-            offsets, slots = saved["sparse_offsets"], saved["sparse_slot"]
-            if (frames.tolist() != list(dataset.sequence.frame_ids) or len(identities) != len(frames)
-                    or len(offsets) != len(frames) + 1 or offsets[0] != 0
-                    or offsets[-1] != len(slots) or np.any(np.diff(offsets) < 0)):
-                raise DataProtocolError("condition index does not cover the complete training source")
-            self.sources = {int(frame): (str(identity), slots[offsets[i]:offsets[i + 1]].copy())
-                for i, (frame, identity) in enumerate(zip(frames, identities, strict=True))}
-        for _, slots in self.sources.values():
-            if slots.dtype != np.int32 or np.any(slots < 0) or np.any(np.diff(slots) <= 0):
-                raise DataProtocolError("low-support slots must be sorted and unique")
-
-    def slots(self, original):
-        identity, slots = self.sources[original.frame_id]
-        if source_identity(original) != identity or np.any(slots >= original.slot_count):
-            raise DataProtocolError("low-support index source contents changed")
-        return slots
-
-    def state_dict(self):
-        return {str(frame): [identity, slots.tolist()] for frame, (identity, slots) in self.sources.items()}
-
-
-def _atomic_json(path, payload):
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            mode="w", encoding="utf-8", dir=path.parent, delete=False
-        ) as stream:
-            temporary = Path(stream.name)
-            json.dump(payload, stream, ensure_ascii=False, indent=2, allow_nan=False)
-            stream.write("\n")
-        temporary.replace(path)
-    finally:
-        if temporary is not None:
-            temporary.unlink(missing_ok=True)
-
-
-def host_disk():
-    """Query the physical E: volume backing this WSL installation."""
-    result = subprocess.run(
-        [
-            "powershell.exe",
-            "-NoProfile",
-            "-Command",
-            "Get-Volume -DriveLetter E | Select-Object Size,SizeRemaining | ConvertTo-Json -Compress",
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-        timeout=20,
-    )
-    volume = json.loads(result.stdout)
-    reserve = 10_000_000_000
-    if volume["SizeRemaining"] <= reserve:
-        raise OSError("host E: has reached the required 10 GB reserve")
-    return {**volume, "reserve_bytes": reserve}
-
-
-def runtime_resources():
-    """Record physical pressure without changing computation or power settings."""
-    memory = {line.split(":")[0]: int(line.split()[1]) * 1024
-              for line in Path("/proc/meminfo").read_text().splitlines()}
-    gpu = subprocess.run(["nvidia-smi",
-        "--query-gpu=utilization.gpu,memory.used,power.draw,power.limit,temperature.gpu",
-        "--format=csv,noheader,nounits"], check=True, capture_output=True, text=True, timeout=10)
-    return dict(cpu_load_average=list(os.getloadavg()),
-        cpu_ticks=[int(value) for value in Path("/proc/stat").read_text().splitlines()[0].split()[1:]],
-        memory_available_bytes=memory["MemAvailable"], swap_used_bytes=memory["SwapTotal"]-memory["SwapFree"],
-        gpu_fields="utilization_percent,memory_MiB,power_W,limit_W,temperature_C", gpu=gpu.stdout.strip())
-
-
-@dataclass(frozen=True, slots=True)
-class FramePrediction:
-    partition: str
-    sequence_id: int
-    frame_id: int
-    source_slot: np.ndarray
-    anomaly_score: np.ndarray
-
-    def __post_init__(self):
-        if self.partition not in {"train", "val", "test", "fixture"}:
-            raise DataProtocolError("invalid prediction partition")
-        for name in ("sequence_id", "frame_id"):
-            if type(getattr(self, name)) is not int or getattr(self, name) < 0:
-                raise DataProtocolError(f"{name} must be a nonnegative integer")
-        slots, scores = np.asarray(self.source_slot), np.asarray(self.anomaly_score)
-        if slots.ndim != 1 or not np.issubdtype(slots.dtype, np.integer):
-            raise DataProtocolError(
-                "source_slot must be a one-dimensional integer array"
-            )
-        if np.any(slots < 0) or np.any(slots > np.iinfo(np.int32).max):
-            raise DataProtocolError("source slots are outside the supported file range")
-        if len(np.unique(slots)) != len(slots):
-            raise DataProtocolError("duplicate source slots")
-        # Require an explicit float32 conversion at the producer, never round on save.
-        if (
-            scores.dtype != np.float32
-            or scores.shape != slots.shape
-            or not np.isfinite(scores).all()
-        ):
-            raise DataProtocolError(
-                "anomaly_score must be finite float32 with one value per slot"
-            )
-        slots, scores = slots.astype(np.int32, copy=True), scores.copy()
-        slots.setflags(write=False)
-        scores.setflags(write=False)
-        object.__setattr__(self, "source_slot", slots)
-        object.__setattr__(self, "anomaly_score", scores)
-
-    def validate(self, source: SourceFrame):
-        if (self.partition, self.sequence_id, self.frame_id) != (
-            source.partition,
-            source.sequence_id,
-            source.frame_id,
-        ):
-            raise DataProtocolError("prediction and source identify different scans")
-        if not np.array_equal(np.sort(self.source_slot), source.real_slots):
-            raise DataProtocolError(
-                "source_slot must cover exactly SourceFrame.real_slots"
-            )
-
-    def restore(self, source: SourceFrame):
-        """Assign by file slot, so producer row order cannot change point identity."""
-        self.validate(source)
-        scores = np.zeros(source.slot_count, np.float32)
-        scores[self.source_slot] = self.anomaly_score
-        return scores
-
-    def save(self, path, source: SourceFrame):
-        self.validate(source)
-        path = Path(path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = None
-        try:
-            with tempfile.NamedTemporaryFile(dir=path.parent, delete=False) as stream:
-                temporary = Path(stream.name)
-                np.savez(
-                    stream,
-                    format=np.asarray("stu-frame-prediction"),
-                    input_representation=np.asarray(OBSERVATION_INPUT),
-                    partition=np.asarray(self.partition),
-                    sequence_id=np.asarray(self.sequence_id),
-                    frame_id=np.asarray(self.frame_id),
-                    source_slot=self.source_slot,
-                    anomaly_score=self.anomaly_score,
-                )
-            # A complete file appears at once; an existing prediction is never overwritten.
-            os.link(temporary, path)
-        finally:
-            if temporary is not None:
-                temporary.unlink(missing_ok=True)
-
-    @classmethod
-    def load(cls, path, source: SourceFrame):
-        with np.load(path, allow_pickle=False) as saved:
-            expected = {
-                "format",
-                "partition",
-                "sequence_id",
-                "frame_id",
-                "source_slot",
-                "anomaly_score",
-            }
-            if (
-                set(saved.files) not in (expected, expected | {"input_representation"})
-                or saved["format"].item() != "stu-frame-prediction"
-            ):
-                raise DataProtocolError("not a single-scan prediction")
-            if (source.duplicate_ray_slots is not None
-                    and ("input_representation" not in saved
-                         or saved["input_representation"].item() != OBSERVATION_INPUT)):
-                raise DataProtocolError("201 prediction predates duplicate-block correction; recompute scores")
-            result = cls(
-                saved["partition"].item(),
-                saved["sequence_id"].item(),
-                saved["frame_id"].item(),
-                saved["source_slot"],
-                saved["anomaly_score"],
-            )
-        result.validate(source)
-        return result
+if __name__ == "__main__":
+    main()

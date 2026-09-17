@@ -1,1 +1,1 @@
-"""Single-scan STU anomaly detection, data, evaluation, geometry, and rendering."""
+"""Read the existing synthetic STU samples."""
