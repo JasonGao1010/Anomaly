@@ -42,6 +42,16 @@ OBSERVATION_FIELDS = [
     "gap_frames", "centroid_displacement_m", "nn_world_median_m",
     "nn_world_p95_m",
 ]
+# Exploratory examples: one inclusive segment per independent structure, not
+# population strata or acceptance thresholds for subsequent anomaly placement.
+REFERENCE_SEGMENTS = (
+    (10, 78, 164, 240, "随距离增加逐渐稀疏",
+     "取远离阶段，从几十个回波降至个位数，保留其中的 1—4 回波帧；近处数千回波阶段仍留在完整观测表中。"),
+    (11, 1, 293, 316, "持续少回波",
+     "取一段连续有观测、始终只有少量回波的片段；不要求该结构先经历丰富回波阶段。"),
+    (15, 6, 45, 85, "距离相近但回波明显变化",
+     "保留距离变化较小、回波减少后又恢复的完整片段，包括第 75 帧的四个回波；不把变化归因于单一因素。"),
+)
 
 
 def structure_id(semantic, instance):
@@ -292,12 +302,124 @@ def census(root, output, workers):
     return summary
 
 
+def references(root, output, workers):
+    """Recheck the selected raw scans and export a small structure-based list."""
+    if workers < 1:
+        raise ValueError("workers must be positive")
+    output = Path(output)
+    with (output / "observations.csv").open(encoding="utf-8-sig", newline="") as stream:
+        saved = {(row["structure_id"], int(row["frame"])): row
+                 for row in csv.DictReader(stream)}
+    frames = sorted({frame for _, _, start, end, _, _ in REFERENCE_SEGMENTS
+                     for frame in range(start, end + 1)})
+    if workers == 1:
+        sequence = STUSequence(root, 206)
+        scanned = [frame_statistics(sequence[frame]) for frame in frames]
+    else:
+        with ProcessPoolExecutor(workers, initializer=_init_worker, initargs=(root,)) as pool:
+            scanned = list(pool.map(_read_frame, frames, chunksize=4))
+    scanned = {frame["frame"]: frame["objects"] for frame in scanned}
+    segments = []
+    for raw, identity, start, end, kind, reason in REFERENCE_SEGMENTS:
+        observations = [scanned[frame][raw, identity] for frame in range(start, end + 1)]
+        # The selection must describe the same real observations as the census.
+        # CSV floats were rounded to eight decimals; counts must match exactly.
+        for row, _ in observations:
+            previous = saved[row["structure_id"], row["frame"]]
+            for field, value in row.items():
+                if isinstance(value, float):
+                    matches = abs(float(previous[field]) - value) <= 1e-7
+                else:
+                    matches = previous[field] == ("" if value is None else str(value))
+                if not matches:
+                    raise ValueError(f"raw scan differs from census: {row['structure_id']} "
+                                     f"frame {row['frame']} field {field}")
+        track = summarize_track((raw, identity), observations)
+        rows, clouds = zip(*observations)
+        points = np.concatenate(clouds)
+        frame_ids = np.concatenate([np.full(len(cloud), row["frame"])
+                                    for row, cloud in observations])
+        support = []
+        for row, cloud in observations:
+            # A sparse view may hit another part of the same object. Exclude
+            # its own frame when checking support from the remaining views.
+            distances = cKDTree(points[frame_ids != row["frame"]]).query(cloud, workers=1)[0]
+            support.append(dict(frame=row["frame"], returns=row["returns_all"],
+                                median_m=float(np.median(distances)),
+                                p95_m=float(np.quantile(distances, 0.95)),
+                                max_m=float(distances.max())))
+        n = np.array([row["returns_all"] for row in rows])
+        distance = np.array([row["range_median_m"] for row in rows])
+        thirds = []
+        for indices in np.array_split(np.arange(len(rows)), 3):
+            thirds.append(dict(
+                frame_start=rows[indices[0]]["frame"], frame_end=rows[indices[-1]]["frame"],
+                returns_median=float(np.median(n[indices])),
+                range_median_m=float(np.median(distance[indices])),
+            ))
+        key_indices = sorted({0, len(rows) // 2, len(rows) - 1,
+                              int(np.argmin(n)), int(np.argmax(n))})
+        segments.append(dict(
+            structure_id=track["structure_id"], category=LABELS[raw], reference_type=kind,
+            frame_start=start, frame_end=end, observed_frames=len(rows),
+            zero_return_frames=[], selection_reason=reason,
+            range_median_m=dict(first=float(distance[0]), last=float(distance[-1]),
+                                min=float(distance.min()), max=float(distance.max())),
+            returns=dict(first=int(n[0]), last=int(n[-1]), min=int(n.min()),
+                         median=float(np.median(n)), max=int(n.max())),
+            all_returns_in_2p5_50m=all(row["returns_all"] == row["returns_2p5_50m"] for row in rows),
+            frames_with_1_to_4_returns=int((n <= 4).sum()),
+            world_azimuth_deg=dict(first=rows[0]["azimuth_world_deg"],
+                                   last=rows[-1]["azimuth_world_deg"]),
+            temporal_thirds=thirds,
+            key_observations=[{key: rows[i][key] for key in (
+                "frame", "returns_all", "returns_2p5_50m", "range_median_m", "azimuth_world_deg"
+            )} for i in key_indices],
+            geometry=dict(
+                world_extent_m=track["world_extent_m"],
+                consecutive_observations_nn_median_m=track["consecutive_observations_nn_median_m"],
+                temporal_thirds=track["temporal_thirds"],
+                other_frames_nn_p95_m=quantiles([row["p95_m"] for row in support]),
+                worst_other_frames_support=max(support, key=lambda row: row["p95_m"]),
+                support_for_1_to_4_returns=[row for row in support if row["returns"] <= 4],
+            ),
+        ))
+    report = dict(
+        source="STU/train/206", full_observations="observations.csv",
+        selection_unit="一个正常结构的一段可信观测；三个结构各一段，同等参照地位，不按帧数或回波总数增加结构权重。",
+        scope="探索性放置试验的参照片段；原始回波和世界几何已回查，异常放置尚未执行。",
+        definitions={
+            "frames": "原始零起点帧号，起止均包含；区间内逐帧保留，不删去 1—4 回波帧。完整曲线继续保存在 observations.csv。",
+            "range_and_returns": "距离为本帧实例有效回波到雷达的距离中位数，单位米；总回波按原始独立文件槽计数，不裁剪距离。另列片段回波是否全部位于既有 2.5—50 米范围内。",
+            "thirds": "将片段按帧序等分三段，分别描述距离和回波数中位数；仅用于描述整体变化，不是匹配阈值。",
+            "geometry": "沿用清点的世界坐标变换与双向几何距离，不另做配准。另对每帧点查询同片段其他帧同身份点的最近距离，排除本帧自身后计算 95 分位；这提供跨视角表面支持，不能单独证明绝对静止或身份真值。",
+            "matching_intent": "后续只尝试自然形成相近的回波数与距离联合变化；不逐帧强制等数，不按汽车尺寸复制异常，不通过事后删点匹配。所列数值均为真实观测描述，不设合成数量、尺寸或硬匹配阈值。",
+            "coverage": "三个片段是有目的选择的独立结构实例，不能估计总体分布。杆状物、树干等保留既有正常点监督，尚未提供实例级参照；本次不修改训练数据或监督。",
+        },
+        independent_structures=len({s["structure_id"] for s in segments}),
+        observed_instance_frames=sum(s["observed_frames"] for s in segments),
+        segments=segments,
+    )
+    (output / "references.json").write_text(
+        json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+    return report
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data-root", type=Path, required=True)
     parser.add_argument("--output", type=Path, default=Path("results/normal206"))
     parser.add_argument("--workers", type=int, required=True)
+    parser.add_argument("--references", action="store_true",
+                        help="check the selected raw segments against the existing census")
     args = parser.parse_args()
+    if args.references:
+        report = references(args.data_root, args.output, args.workers)
+        print(json.dumps({key: report[key] for key in (
+            "source", "independent_structures", "observed_instance_frames", "scope",
+        )}, ensure_ascii=False, indent=2))
+        return
     summary = census(args.data_root, args.output, args.workers)
     print(json.dumps({key: summary[key] for key in (
         "source", "frames", "independent_returns", "instance_identities",
