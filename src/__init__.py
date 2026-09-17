@@ -1,1 +1,1 @@
-"""Read the existing synthetic STU samples."""
+"""V3 single-scan anomaly segmentation, training, and evaluation."""

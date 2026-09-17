@@ -64,13 +64,14 @@ class FrozenFrame:
         if np.any(source.labels.semantic[inserted] != 2) or np.any(
             source.labels.instance[inserted] != 60001
         ):
-            raise DataProtocolError("frozen samples have exactly one inserted object with ID 1")
+            raise DataProtocolError(
+                "frozen samples have exactly one inserted object with ID 1"
+            )
         missing = occluded & ~inserted
         if np.any(source.xyzi[missing] != 0) or np.any(source.labels.packed[missing]):
             raise DataProtocolError(
                 "opaque occlusion without a return must clear the slot"
             )
-
 
     @classmethod
     def load(cls, path, original, world_identity):
@@ -165,6 +166,9 @@ class FrozenDataset:
             raise DataProtocolError("dataset has not completed full-sequence freezing")
         if split not in {"train", "validation"}:
             raise DataProtocolError("synthetic split must be train or validation")
+        expected_worlds = 240 if split == "train" else 120
+        if len(manifest["splits"][split]["worlds"]) != expected_worlds:
+            raise DataProtocolError("V3 uses the complete fixed 240/120-world pool")
         sequence = manifest["splits"][split]["source_sequence"]
         if (
             manifest["splits"]["train"]["source_sequence"] != 206
@@ -174,7 +178,9 @@ class FrozenDataset:
                 "frozen training and validation data use disjoint normal sources"
             )
         self.sequence = STUSequence(data_root, sequence)
+        self.split = split
         self.samples = []
+        self.worlds = []
         identities = set()
         for entry in manifest["splits"][split]["worlds"]:
             world_dir = self.directory / entry["path"]
@@ -197,6 +203,10 @@ class FrozenDataset:
                 raise DataProtocolError(
                     "fixed world definition changed after rendering"
                 )
+            if definition["objects"][0]["object_id"] != 1:
+                raise DataProtocolError(
+                    "stored ID 60001 must denote generated object 1"
+                )
             if identity in identities or world["world_identity"] != identity:
                 raise DataProtocolError("world identity is duplicated or mismatched")
             identities.add(identity)
@@ -211,6 +221,15 @@ class FrozenDataset:
                 (world_dir / "frames" / f"{r['frame']:06d}.npz", identity, r["frame"])
                 for r in frames
             )
+            self.worlds.append(
+                dict(
+                    identity=identity,
+                    path=world_dir,
+                    height_m=world.get("geometry", {}).get("height_m"),
+                    height_source="generator_object_local_bounds",
+                    frames=frames,
+                )
+            )
         if len(self.samples) != manifest["splits"][split]["samples"]:
             raise DataProtocolError("manifest sample count disagrees with full worlds")
 
@@ -221,27 +240,80 @@ class FrozenDataset:
         path, identity, frame = self.samples[index]
         return FrozenFrame.load(path, self.sequence[frame], identity)
 
+    def pair(self, index):
+        """Original and inserted scans share slots, never inserted-return identities."""
+        path, identity, frame = self.samples[index]
+        original = self.sequence[frame]
+        return original, FrozenFrame.load(path, original, identity)
+
+
+def detection_targets(source, *, inserted=None, real_anomalies=False, records=False):
+    """Range limits supervision only; callers still pass every observed return."""
+    if source.labels is None:
+        raise DataProtocolError("detection supervision requires raw labels")
+    slots = source.real_slots if records else source.observation_slots
+    raw = source.labels.semantic[slots]
+    radius = np.linalg.norm(source.xyzi[slots, :3], axis=1)
+    valid = (radius >= 2.5) & (radius <= 50.0)
+    target = np.full(len(slots), -1, np.int8)
+    target[valid & (raw != 0) & (raw != 2)] = 0
+    anomaly = (raw == 2) if real_anomalies else np.zeros(len(slots), bool)
+    if inserted is not None:
+        anomaly = inserted[slots]
+    target[valid & anomaly] = 1
+    return target
+
+
+def read_real_frame(data_root, sequence, frame):
+    """Read val19 without fitting statistics or guessing object geometry."""
+    directory = Path(data_root) / "val" / str(sequence)
+    xyzi = np.fromfile(directory / "velodyne" / f"{frame:06d}.bin", dtype="<f4")
+    if xyzi.size % 4:
+        raise DataProtocolError("real scan is not XYZI")
+    packed = np.fromfile(directory / "labels" / f"{frame:06d}.label", dtype="<u4")
+    labels = PointLabels(
+        packed,
+        (packed & 65535).astype(np.uint16),
+        (packed >> 16).astype(np.uint16),
+        None,
+    )
+    return make_source_frame(
+        frame,
+        xyzi.reshape(-1, 4),
+        np.eye(4, dtype=np.float64),
+        labels,
+        partition="val",
+        sequence_id=int(sequence),
+    )
+
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--samples", type=Path, default=DEFAULT_SAMPLES)
-    parser.add_argument("--data-root", type=Path, default=Path("/home/jasongao/Data/STU"))
+    parser.add_argument(
+        "--data-root", type=Path, default=Path("/home/jasongao/Data/STU")
+    )
     parser.add_argument("--split", choices=("train", "validation"), default="train")
     parser.add_argument("--index", type=int, default=0)
     args = parser.parse_args()
     dataset = FrozenDataset(args.samples, args.data_root, args.split)
     sample = dataset[args.index]
-    print(json.dumps({
-        "split": args.split,
-        "samples": len(dataset),
-        "index": args.index,
-        "source_sequence": sample.source.sequence_id,
-        "source_frame": sample.source.frame_id,
-        "file_slots": sample.source.slot_count,
-        "actual_returns": sample.source.real_count,
-        "inserted_slots": int(sample.inserted_mask.sum()),
-        "occluded_original_slots": int(sample.occluded_original_mask.sum()),
-    }, indent=2))
+    print(
+        json.dumps(
+            {
+                "split": args.split,
+                "samples": len(dataset),
+                "index": args.index,
+                "source_sequence": sample.source.sequence_id,
+                "source_frame": sample.source.frame_id,
+                "file_slots": sample.source.slot_count,
+                "actual_returns": sample.source.real_count,
+                "inserted_slots": int(sample.inserted_mask.sum()),
+                "occluded_original_slots": int(sample.occluded_original_mask.sum()),
+            },
+            indent=2,
+        )
+    )
 
 
 if __name__ == "__main__":

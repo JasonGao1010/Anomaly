@@ -1,0 +1,11 @@
+# Use a torch-scatter build matching the installed PyTorch/CUDA pair.
+torch>=2.4
+numpy>=2.0
+scipy>=1.13
+spconv-cu126==2.3.8
+torch-scatter>=2.1.2
+addict==2.4.0
+timm>=1.0
+psutil>=6
+pytest>=8
+scikit-learn>=1.5
