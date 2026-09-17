@@ -516,13 +516,13 @@ def low_support(source):
     return (np.isfinite(distances).sum(1)[inverse] - 1 < 8)[source.record_inverse]
 
 
-def prediction_inputs(sources, workers):
+def prediction_inputs(sources, workers, include_support=True):
     """Overlap bounded CPU geometry work; retain source order and GPU call order."""
     from .model import prepare_scan
 
     def prepare(source):
         scan = prepare_scan(source.xyzi[source.observation_slots])
-        return source, scan, low_support(source)
+        return source, scan, low_support(source) if include_support else None
 
     # Read sources in the consumer thread: STUSequence's LRU is not thread-safe.
     sources = iter(sources)
@@ -694,6 +694,570 @@ def instance_predictions(predictions, thresholds):
                 )
             )
     return records
+
+
+def normal_rank(values, normal):
+    """Probability of outranking a normal point; exact score ties receive half credit."""
+    normal = np.sort(np.asarray(normal))
+    if not len(normal):
+        raise ValueError("relative score ranks require a nonempty normal reference")
+    lower = np.searchsorted(normal, values, side="left")
+    upper = np.searchsorted(normal, values, side="right")
+    return (lower + upper) / (2.0 * len(normal))
+
+
+def relation_rows(source, scan, outputs, thresholds):
+    """Measure the actual decoder graph; labels enter diagnostics, never the model."""
+    target = detection_targets(source, real_anomalies=True)
+    slots = source.observation_slots
+    raw, identity = source.labels.semantic[slots], source.labels.instance[slots]
+    xyz = source.xyzi[slots, :3].astype(np.float64)
+    record_index = np.searchsorted(source.real_slots, slots)
+    reference = next(iter(outputs.values()))[0]
+    frame_ranks = {}
+    for name, (prediction, scores) in outputs.items():
+        if (
+            prediction.rows != reference.rows
+            or not np.array_equal(prediction.target, reference.target)
+            or not np.array_equal(prediction.instance, reference.instance)
+        ):
+            raise ValueError("paired diagnostic point or instance identities differ")
+        positive = prediction.target == 1
+        frame_ranks[name] = np.zeros(len(prediction.target), np.float64)
+        frame_ranks[name][positive] = normal_rank(
+            prediction.scores[positive], prediction.scores[prediction.target == 0]
+        )
+    rows = []
+    for row in reference.rows:
+        query = np.flatnonzero((target == 1) & (identity == row["instance"]))
+        neighbors = scan.neighbors[query, 1:]
+        if not np.array_equal(scan.neighbors[query, 0], query):
+            raise ValueError("decoder neighbor zero must be the query itself")
+        normal = (raw[neighbors] != 0) & (raw[neighbors] != 2)
+        normal_count = normal.sum(1)
+        supported = normal_count > 0
+        radii = np.linalg.norm(xyz[neighbors] - xyz[query, None, :], axis=2).max(1)
+        record_mask = (reference.target == 1) & (reference.instance == row["instance"])
+        if (
+            len(query) != row["observed_returns"]
+            or int(record_mask.sum()) != row["points"]
+        ):
+            raise ValueError("diagnostic query and metric record counts differ")
+        labels, counts = np.unique(raw[neighbors][normal], return_counts=True)
+        models = {}
+        for name, (prediction, scores) in outputs.items():
+            observed_scores = scores[record_index]
+            # Average within each query first, then across queries with normal neighbors.
+            wins = observed_scores[query, None] > observed_scores[neighbors]
+            ties = observed_scores[query, None] == observed_scores[neighbors]
+            local = ((wins + 0.5 * ties) * normal).sum(1)
+            detected = {
+                point: int(
+                    (prediction.scores[record_mask].astype(np.float64) >= tau).sum()
+                )
+                for point, tau in thresholds[name].items()
+            }
+            models[name] = dict(
+                detected=detected,
+                frame_normal_rank=float(frame_ranks[name][record_mask].mean()),
+                neighbor_normal_rank=float(
+                    (local[supported] / normal_count[supported]).mean()
+                )
+                if supported.any()
+                else None,
+            )
+        rows.append(
+            dict(
+                sequence=source.sequence_id,
+                frame=source.frame_id,
+                **row,
+                radius_median_m=float(np.median(radii)),
+                radius_p90_m=float(np.quantile(radii, 0.9)),
+                normal_neighbor_fraction=float(normal.mean()),
+                unlabeled_neighbor_fraction=float((raw[neighbors] == 0).mean()),
+                other_anomaly_neighbor_fraction=float(
+                    (
+                        (raw[neighbors] == 2) & (identity[neighbors] != row["instance"])
+                    ).mean()
+                ),
+                normal_neighbor_edges=int(normal.sum()),
+                queries_with_normal_neighbors=int(supported.sum()),
+                normal_neighbor_labels={
+                    str(int(k)): int(v) for k, v in zip(labels, counts)
+                },
+                models=models,
+            )
+        )
+    return rows
+
+
+def within_stratum_fit(x, y, groups, weights):
+    """Weighted fixed-stratum least squares; slopes describe associations, not causes."""
+    count = np.bincount(groups, weights=weights)
+    values = np.column_stack((x, y))
+    sums = np.column_stack(
+        [
+            np.bincount(groups, weights=weights * column, minlength=len(count))
+            for column in values.T
+        ]
+    )
+    means = sums / np.maximum(count[:, None], 1)
+    centered = values - means[groups]
+    design, response = centered[:, : x.shape[1]], centered[:, x.shape[1] :]
+    gram = design.T @ (weights[:, None] * design)
+    cross = design.T @ (weights[:, None] * response)
+    if np.linalg.matrix_rank(gram) < x.shape[1]:
+        return np.full((x.shape[1], y.shape[1]), np.nan)
+    return np.linalg.solve(gram, cross)
+
+
+def relation_strata(rows, width=2.5, same_sequence=False, bootstrap=2000, seed=SEED):
+    """Control distance and return count before comparing measured neighborhood context."""
+    features = ("radius_median_m", "normal_neighbor_fraction")
+    metrics = [
+        f"{kind}/{p}" for kind in ("extra_miss", "recall_loss") for p in WORKPOINTS
+    ]
+    metrics += ["frame_rank_loss", "neighbor_rank_loss"]
+    cells = {}
+    outcomes = []
+    for index, row in enumerate(rows):
+        returns = row["observed_returns"]
+        lower = max(20, 2 ** int(np.log2(returns))) if returns >= 20 else returns
+        upper = 2 ** (int(np.log2(returns)) + 1) - 1 if returns >= 20 else returns
+        distance = int(min(row["distance_m"], np.nextafter(50.0, 0.0)) // width)
+        key = ((row["sequence"],) if same_sequence else ()) + (distance, lower, upper)
+        cells.setdefault(key, []).append(index)
+        a, b = row["models"]["D1"], row["models"]["D3"]
+        values = [
+            int(a["detected"][p] > 0) - int(b["detected"][p] > 0) for p in WORKPOINTS
+        ]
+        values += [
+            (a["detected"][p] - b["detected"][p]) / row["points"] for p in WORKPOINTS
+        ]
+        values += [
+            a["frame_normal_rank"] - b["frame_normal_rank"],
+            a["neighbor_normal_rank"] - b["neighbor_normal_rank"]
+            if a["neighbor_normal_rank"] is not None
+            and b["neighbor_normal_rank"] is not None
+            else np.nan,
+        ]
+        outcomes.append(values)
+    y = np.array(outcomes, dtype=np.float64)
+    x = np.array([[r[f] for f in features] for r in rows], dtype=np.float64)
+    groups = np.zeros(len(rows), np.int64)
+    contrasts, table = {}, []
+    for number, (key, indices) in enumerate(sorted(cells.items())):
+        groups[indices] = number
+        table.append(
+            dict(
+                sequence=key[0] if same_sequence else None,
+                distance_m=[key[-3] * width, min(50.0, (key[-3] + 1) * width)],
+                returns=[key[-2], key[-1]],
+                observations=len(indices),
+                radius_range_m=[float(x[indices, 0].min()), float(x[indices, 0].max())],
+                normal_fraction_range=[
+                    float(x[indices, 1].min()),
+                    float(x[indices, 1].max()),
+                ],
+            )
+        )
+    for column, feature in enumerate(features):
+        totals = np.zeros((len(metrics), 4), np.float64)
+        details = []
+        for key, indices in sorted(cells.items()):
+            values, response = x[indices, column], y[indices]
+            cut = np.median(values)
+            high = values > cut
+            if not high.any() or high.all():
+                continue
+            pairs = {}
+            for j, metric in enumerate(metrics):
+                valid = np.isfinite(response[:, j])
+                low_values, high_values = (
+                    response[valid & ~high, j],
+                    response[valid & high, j],
+                )
+                if not len(low_values) or not len(high_values):
+                    continue
+                n = int(valid.sum())
+                totals[j] += [n * low_values.mean(), n * high_values.mean(), n, 1]
+                pairs[metric] = dict(
+                    low=float(low_values.mean()), high=float(high_values.mean())
+                )
+            details.append(
+                dict(
+                    stratum=list(key),
+                    median_cut=float(cut),
+                    low_count=int((~high).sum()),
+                    high_count=int(high.sum()),
+                    low_feature_mean=float(values[~high].mean()),
+                    high_feature_mean=float(values[high].mean()),
+                    outcomes=pairs,
+                )
+            )
+        contrasts[feature] = dict(
+            rule="within-stratum > median versus <= median; identical values are never split; both sides receive the same stratum-size weights",
+            feature_means={
+                side: float(
+                    np.average(
+                        [r[side + "_feature_mean"] for r in details],
+                        weights=[r["low_count"] + r["high_count"] for r in details],
+                    )
+                )
+                for side in ("low", "high")
+            }
+            if details
+            else None,
+            metrics={
+                metric: dict(
+                    low=float(a / n),
+                    high=float(b / n),
+                    high_minus_low=float((b - a) / n),
+                    observations=int(n),
+                    strata=int(k),
+                )
+                if n
+                else None
+                for metric, (a, b, n, k) in zip(metrics, totals)
+            },
+            cells=details,
+        )
+    # Radius doubling and a 10-percentage-point normal-fraction increase are readable units.
+    usable = x[:, 0] > 0
+    predictors = np.column_stack((np.log2(x[usable, 0]), x[usable, 1] / 0.1))
+    sequences, sequence_index = np.unique(
+        [r["sequence"] for r in rows], return_inverse=True
+    )
+    rng = np.random.default_rng(seed)
+    draws = rng.multinomial(
+        len(sequences), np.full(len(sequences), 1 / len(sequences)), size=bootstrap
+    )
+    joint = {}
+    for columns in (list(range(len(metrics) - 1)), [len(metrics) - 1]):
+        valid = np.isfinite(y[usable][:, columns]).all(1)
+        design, response = predictors[valid], y[usable][valid][:, columns]
+        strata, cluster = groups[usable][valid], sequence_index[usable][valid]
+        if not len(design):
+            continue
+        coefficients = within_stratum_fit(
+            design, response, strata, np.ones(len(design))
+        )
+        resampled = np.array(
+            [within_stratum_fit(design, response, strata, w[cluster]) for w in draws]
+        )
+        for i, metric_index in enumerate(columns):
+            slopes = {}
+            for j, name in enumerate(("radius_doubling", "normal_fraction_plus_10pp")):
+                values = resampled[:, j, i] if bootstrap else np.array([])
+                values = values[np.isfinite(values)]
+                slopes[name] = dict(
+                    estimate=float(coefficients[j, i])
+                    if np.isfinite(coefficients[j, i])
+                    else None,
+                    interval95=np.quantile(values, [0.025, 0.975]).tolist()
+                    if len(values)
+                    else None,
+                    valid_bootstraps=len(values),
+                )
+            joint[metrics[metric_index]] = dict(observations=len(design), slopes=slopes)
+    return dict(
+        distance_width_m=width,
+        same_sequence=same_sequence,
+        observations=len(rows),
+        strata=len(cells),
+        nonsingleton_observations=sum(len(v) for v in cells.values() if len(v) > 1),
+        zero_radius_observations=int((~usable).sum()),
+        cell_geometry=table,
+        contrasts=contrasts,
+        joint=joint,
+        bootstrap=bootstrap,
+        outcome_direction="positive means D3 worse: extra complete miss, D1 minus D3 point recall, or D1 minus D3 normal rank",
+        joint_model="both log2(radius) and normal fraction / 0.1, with a separate intercept for each distance/return-count stratum",
+        interval_scope="paired sequence-cluster bootstrap, refitting stratum means; conditional on these models, strata and fitted thresholds; no multiplicity correction or training-seed inference",
+    )
+
+
+def relation_summary(rows):
+    populations = {
+        "official": [r for r in rows if r["scope"] == "official"],
+        "few_returns": [
+            r for r in rows if r["scope"] == "official" and r["observed_returns"] < 20
+        ],
+        "returns_1_4": [
+            r for r in rows if r["scope"] == "official" and r["observed_returns"] < 5
+        ],
+        "returns_5_19": [
+            r
+            for r in rows
+            if r["scope"] == "official" and 5 <= r["observed_returns"] < 20
+        ],
+        "richer_returns": [
+            r for r in rows if r["scope"] == "official" and r["observed_returns"] >= 20
+        ],
+        "tiny_supplement": [r for r in rows if r["scope"] == "tiny_supplement"],
+    }
+    result = {}
+    for name, selected in populations.items():
+        if not selected:
+            continue
+        models = {}
+        for model in ("D1", "D3"):
+            local = [
+                r["models"][model]["neighbor_normal_rank"]
+                for r in selected
+                if r["models"][model]["neighbor_normal_rank"] is not None
+            ]
+            models[model] = dict(
+                frame_normal_rank=float(
+                    np.mean([r["models"][model]["frame_normal_rank"] for r in selected])
+                ),
+                neighbor_normal_rank=float(np.mean(local)) if local else None,
+                local_rank_observations=len(local),
+                workpoints={
+                    p: dict(
+                        complete_miss_rate=float(
+                            np.mean(
+                                [
+                                    r["models"][model]["detected"][p] == 0
+                                    for r in selected
+                                ]
+                            )
+                        ),
+                        instance_mean_point_recall=float(
+                            np.mean(
+                                [
+                                    r["models"][model]["detected"][p] / r["points"]
+                                    for r in selected
+                                ]
+                            )
+                        ),
+                    )
+                    for p in WORKPOINTS
+                },
+            )
+        result[name] = dict(
+            observations=len(selected),
+            sequences=len({r["sequence"] for r in selected}),
+            models=models,
+            disagreements={
+                point: {
+                    label: sum(
+                        (
+                            r["models"]["D1"]["detected"][point] > 0,
+                            r["models"]["D3"]["detected"][point] > 0,
+                        )
+                        == state
+                        for r in selected
+                    )
+                    for label, state in (
+                        ("D1_only", (True, False)),
+                        ("D3_only", (False, True)),
+                        ("both_detected", (True, True)),
+                        ("both_missed", (False, False)),
+                    )
+                }
+                for point in WORKPOINTS
+            },
+            primary=relation_strata(selected),
+            sensitivity={
+                "distance_1.25m": relation_strata(selected, width=1.25, bootstrap=0),
+                "distance_5m": relation_strata(selected, width=5.0, bootstrap=0),
+                "same_sequence": relation_strata(selected, same_sequence=True),
+            },
+        )
+    return result
+
+
+def diagnose_relations(checkpoints, reports, panels, data_root, workers=4):
+    """Replay fixed models once per scan, retaining only matched instance diagnostics."""
+    import torch
+    import psutil
+    from .model import V3, METHOD, configure_runtime
+
+    if len(checkpoints) != 2 or len(reports) != 2:
+        raise ValueError(
+            "relation diagnosis requires paired D1/D3 checkpoints and full reports"
+        )
+    configure_runtime()
+    models, baselines, identities = {}, {}, []
+    for checkpoint, path in zip(checkpoints, reports):
+        saved = torch.load(checkpoint, map_location="cpu", weights_only=True)
+        report = json.loads(Path(path).read_text())
+        candidate = dict(
+            route=saved["route"],
+            mechanism=saved["mechanism"],
+            seed=saved["seed"],
+            update=saved["step"],
+            tail_weight=saved["recipe"]["tail_weight"],
+        )
+        if (
+            saved.get("format") != METHOD
+            or report.get("method") != METHOD
+            or report.get("kind") != "full"
+            or report["candidate"] != candidate
+            or saved["panels"] != panels
+        ):
+            raise ValueError(
+                "diagnostic checkpoint, full report, or fixed population differs"
+            )
+        name = saved["mechanism"]
+        if name in models:
+            raise ValueError("duplicate diagnostic mechanism")
+        model = V3(name, saved["seed"]).cuda().eval()
+        model.load_state_dict(saved["model"], strict=True)
+        models[name], baselines[name] = model, report
+        identities.append(
+            (
+                saved["route"],
+                saved["seed"],
+                saved["step"],
+                saved["recipe"],
+                saved["initialization"],
+            )
+        )
+        del saved
+    if set(models) != {"D1", "D3"} or identities[0] != identities[1]:
+        raise ValueError(
+            "diagnostic candidates must share initialization route, seed, budget, and recipe"
+        )
+    if baselines["D1"]["official_population"] != baselines["D3"]["official_population"]:
+        raise ValueError("diagnostic full-report populations differ")
+    thresholds = {
+        name: r["official_ranking"]["thresholds"] for name, r in baselines.items()
+    }
+    expected = {
+        name: {
+            (r["sequence"], r["frame"], r["instance"]): r
+            for r in report["official_instances"]
+        }
+        for name, report in baselines.items()
+    }
+    catalog = {
+        (r["sequence"], r["frame"]): r for r in panels["catalog"] if r["anomaly_points"]
+    }
+    official_population = []
+    totals = {
+        name: {
+            scope: {point: dict(TP=0, FP=0, FN=0, TN=0) for point in WORKPOINTS}
+            for scope in ("official", "tiny_supplement")
+        }
+        for name in models
+    }
+    workers = min(
+        workers,
+        max(1, len(os.sched_getaffinity(0)) // 4),
+        max(1, psutil.virtual_memory().available // 500_000_000),
+    )
+    start, rows = time.perf_counter(), []
+    torch.cuda.reset_peak_memory_stats()
+    annotations = panels.get("annotations", {}).get("observations", {})
+    sources = (read_real_frame(data_root, *key) for key in sorted(catalog))
+    peak_rss = 0
+    for number, (source, scan, _) in enumerate(
+        prediction_inputs(sources, workers, False), 1
+    ):
+        key = source.sequence_id, source.frame_id
+        scope = "official" if catalog[key]["anomaly_points"] >= 5 else "tiny_supplement"
+        outputs = {
+            name: predict(
+                model, source, annotations.get(f"{key[0]}/{key[1]}"), prepared=scan
+            )
+            for name, model in models.items()
+        }
+        p = next(iter(outputs.values()))[0]
+        if int((p.target == 1).sum()) != catalog[key]["anomaly_points"]:
+            raise ValueError("diagnostic GT population changed")
+        if scope == "official":
+            official_population.append(
+                [*key, len(p.target), int((p.target == 1).sum())]
+            )
+        current = relation_rows(source, scan, outputs, thresholds)
+        for row in current:
+            row["scope"] = scope
+            if scope == "official":
+                identity = (*key, row["instance"])
+                for name in models:
+                    baseline = expected[name].pop(identity)
+                    if (
+                        any(
+                            row[field] != baseline[field]
+                            for field in baseline
+                            if field != "detected"
+                        )
+                        or row["models"][name]["detected"] != baseline["detected"]
+                    ):
+                        raise ValueError(
+                            "replayed per-instance counts differ from the full report"
+                        )
+        rows.extend(current)
+        for name, (p, _) in outputs.items():
+            for point, tau in thresholds[name].items():
+                positive, anomaly = p.scores.astype(np.float64) >= tau, p.target == 1
+                for field, count in dict(
+                    TP=(positive & anomaly).sum(),
+                    FP=(positive & ~anomaly).sum(),
+                    FN=(~positive & anomaly).sum(),
+                    TN=(~positive & ~anomaly).sum(),
+                ).items():
+                    totals[name][scope][point][field] += int(count)
+        peak_rss = max(peak_rss, psutil.Process().memory_info().rss)
+        if number % 128 == 0 or number == len(catalog):
+            print(
+                json.dumps(
+                    dict(
+                        diagnosis="relations",
+                        frames=number,
+                        total=len(catalog),
+                        seconds=time.perf_counter() - start,
+                        rss_bytes=peak_rss,
+                    )
+                ),
+                flush=True,
+            )
+    for name, report in baselines.items():
+        if expected[name] or official_population != report["official_population"]:
+            raise ValueError("diagnostic replay omitted official observations")
+        for scope in totals[name]:
+            for point, counts in totals[name][scope].items():
+                if any(
+                    counts[field] != report[scope][point]["segmentation"][field]
+                    for field in counts
+                ):
+                    raise ValueError(
+                        "replayed segmentation counts differ from the full report"
+                    )
+    seconds = time.perf_counter() - start
+    summary = relation_summary(rows)
+    summary_seconds = time.perf_counter() - start - seconds
+    return dict(
+        method=METHOD,
+        kind="relation_diagnosis",
+        units="fraction",
+        checkpoints=[str(p) for p in checkpoints],
+        reports=[str(p) for p in reports],
+        candidates={name: r["candidate"] for name, r in baselines.items()},
+        official_ranking={name: r["official_ranking"] for name, r in baselines.items()},
+        thresholds=thresholds,
+        replayed_counts=totals,
+        definitions=dict(
+            observation="one sequence/frame/GT-instance observation, not an independent physical object",
+            radius="median across valid anomaly queries of the maximum distance to their actual 31 other decoder neighbors, in meters",
+            normal_fraction="normal-labeled edges / all 31 non-self edges, using full observed scan context including outside the metric range",
+            frame_rank="mean P(anomaly score > same-frame valid normal score) + half ties; metric-record weighted within each instance",
+            neighbor_rank="mean per-query win fraction against its actual normal neighbors, half ties; queries with no normal neighbor are excluded and counted",
+            labels="raw 0 ignored, raw 2 anomaly, other raw classes normal; these observed quantities do not label physical height or occlusion",
+            thresholds="reuse each checkpoint's already fitted full-official normal thresholds; no subgroup fitting",
+        ),
+        limitations="observational associations conditional on two fixed single-seed models and fitted thresholds; val19 is development data; no causal or across-seed inference",
+        rows=rows,
+        strata=summary,
+        frames=len(catalog),
+        seconds=seconds,
+        summary_seconds=summary_seconds,
+        preparation_workers=workers,
+        peak_rss_bytes=peak_rss,
+        peak_cuda_bytes=torch.cuda.max_memory_allocated(),
+    )
 
 
 def coverage_status(exposure, plan, step):
@@ -900,7 +1464,13 @@ def compare_reports(paths, seed=SEED):
                     if len(seeds) > 1
                     else None,
                 )
-                for metric in ("AP", "AUROC", "FPR95", "R_at_0.1pct_FPR", "R_at_1pct_FPR")
+                for metric in (
+                    "AP",
+                    "AUROC",
+                    "FPR95",
+                    "R_at_0.1pct_FPR",
+                    "R_at_1pct_FPR",
+                )
             },
         )
     return dict(
@@ -1188,7 +1758,7 @@ def evaluate(model, panels, data_root, samples, kind):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("prepare", "run", "compare"))
+    parser.add_argument("command", choices=("prepare", "run", "compare", "diagnose"))
     parser.add_argument(
         "--data-root", type=Path, default=Path("/home/jasongao/Data/STU")
     )
@@ -1197,6 +1767,7 @@ def main():
     parser.add_argument("--annotations", type=Path)
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--checkpoint", type=Path)
+    parser.add_argument("--checkpoints", nargs="+", type=Path)
     parser.add_argument("--kind", choices=("micro", "panel", "full"), default="full")
     parser.add_argument("--output", type=Path)
     parser.add_argument("--reports", nargs="+", type=Path)
@@ -1210,6 +1781,19 @@ def main():
         if args.reports is None or args.output is None:
             parser.error("compare requires --reports and --output")
         write_json(args.output, compare_reports(args.reports))
+    elif args.command == "diagnose":
+        if args.checkpoints is None or args.reports is None or args.output is None:
+            parser.error("diagnose requires --checkpoints, --reports, and --output")
+        write_json(
+            args.output,
+            diagnose_relations(
+                args.checkpoints,
+                args.reports,
+                json.loads(args.panels.read_text()),
+                args.data_root,
+                args.workers,
+            ),
+        )
     else:
         import torch
         from .model import V3, METHOD, configure_runtime

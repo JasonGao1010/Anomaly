@@ -25,6 +25,10 @@ from src.evaluate import (
     rank_metrics,
     prediction_inputs,
     low_support,
+    normal_rank,
+    relation_rows,
+    relation_strata,
+    within_stratum_fit,
     stratified,
     summarize,
 )
@@ -496,6 +500,111 @@ def test_groups_use_instances_and_target_union_never_double_counts():
         "20-99",
         "100+",
     ]
+
+
+def test_relation_diagnostic_ranks_use_labels_and_actual_neighbor_context():
+    values, normal = np.array([1.0, 2.0, 3.0]), np.array([1.0, 1.0, 2.0])
+    np.testing.assert_allclose(normal_rank(values, normal), [1 / 3, 5 / 6, 1])
+    np.testing.assert_array_equal(
+        normal_rank(values, normal), normal_rank(3 * values + 8, 3 * normal + 8)
+    )
+    with pytest.raises(ValueError, match="nonempty normal"):
+        normal_rank(values, [])
+    frame = source(
+        [[3, 0, 0, 1], [3.1, 0, 0, 1], [4, 0, 0, 1], [51, 0, 0, 1], [5, 0, 0, 1]],
+        [2, 2, 40, 80, 0],
+        [7, 7, 0, 0, 0],
+        sequence=137,
+    )
+    target = detection_targets(frame, real_anomalies=True, records=True)
+    valid = target >= 0
+    scores = np.array([3, 1, 3, 0, -9], np.float32)
+    p = Prediction(
+        137,
+        0,
+        scores[valid],
+        target[valid],
+        frame.labels.instance[valid],
+        instance_rows(frame, target, records=True),
+        {},
+    )
+    shifted = deepcopy(p)
+    shifted.scores += 10
+    rows = relation_rows(
+        frame,
+        prepare_scan(frame.xyzi[frame.observation_slots]),
+        {"D1": (p, scores), "D3": (shifted, scores + 10)},
+        {"D1": {"1pct": 3.0}, "D3": {"1pct": 13.0}},
+    )
+    assert len(rows) == 1
+    row = rows[0]
+    assert (row["sequence"], row["frame"], row["instance"]) == (137, 0, 7)
+    assert row["normal_neighbor_fraction"] == 0.5
+    assert row["unlabeled_neighbor_fraction"] == 0.25
+    assert row["normal_neighbor_labels"] == {"40": 2, "80": 2}
+    assert row["radius_median_m"] == pytest.approx(47.95)
+    # The out-of-range normal is context only, not part of the frame metric reference.
+    assert (
+        row["models"]["D1"]
+        == row["models"]["D3"]
+        == dict(
+            detected={"1pct": 1}, frame_normal_rank=0.25, neighbor_normal_rank=0.625
+        )
+    )
+
+
+def test_stratum_fit_removes_between_group_offsets_and_preserves_cluster_weights():
+    x = np.array(
+        [[1, 0], [2, 0], [1, 1], [2, 1], [4, 0], [6, 0], [4, 3], [6, 3]], float
+    )
+    groups = np.repeat([0, 1], 4)
+    slopes = np.array([[0.25, -0.1], [-0.5, 0.3]])
+    y = x @ slopes + np.array([20.0, -80.0])[groups, None]
+    weights = np.array([1.0, 3.0, 1.0, 3.0, 2.0, 0.0, 2.0, 0.0])
+    np.testing.assert_allclose(
+        within_stratum_fit(x, y, groups, weights), slopes, atol=1e-12
+    )
+    # Cluster multiplicities must equal explicitly repeating the paired observations.
+    repeat = np.repeat(np.arange(len(x)), weights.astype(int))
+    np.testing.assert_allclose(
+        within_stratum_fit(x[repeat], y[repeat], groups[repeat], np.ones(len(repeat))),
+        slopes,
+        atol=1e-12,
+    )
+    assert np.isnan(
+        within_stratum_fit(np.ones_like(x), y, groups, np.ones(len(x)))
+    ).all()
+
+    rows = []
+    for i, (returns, radius, a, b) in enumerate(
+        [(4, 1, 1, 1), (4, 2, 1, 0), (5, 1, 0, 0), (5, 2, 0, 0), (6, 3, 1, 0)]
+    ):
+        rows.append(
+            dict(
+                sequence=i // 2,
+                distance_m=10.1,
+                observed_returns=returns,
+                points=returns,
+                radius_median_m=radius,
+                normal_neighbor_fraction=radius / 10,
+                models={
+                    name: dict(
+                        detected={p: detected for p in WORKPOINTS},
+                        frame_normal_rank=0.9,
+                        neighbor_normal_rank=None,
+                    )
+                    for name, detected in (("D1", a), ("D3", b))
+                },
+            )
+        )
+    result = relation_strata(rows, bootstrap=0)
+    contrast = result["contrasts"]["radius_median_m"]["metrics"]["extra_miss/0.1pct"]
+    assert contrast == dict(
+        low=0.0, high=0.5, high_minus_low=0.5, observations=4, strata=2
+    )
+    assert (
+        result["contrasts"]["radius_median_m"]["metrics"]["neighbor_rank_loss"] is None
+    )
 
 
 def test_sampling_continuation_and_evaluation_scopes():
