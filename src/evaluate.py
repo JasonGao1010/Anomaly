@@ -673,6 +673,29 @@ def summarize_at(predictions, thresholds):
     return {name: summarize(predictions, tau) for name, tau in thresholds.items()}
 
 
+def instance_predictions(predictions, thresholds):
+    """Retain matched GT identities and counts for symmetric win/loss diagnostics."""
+    records = []
+    for prediction in predictions:
+        for row in prediction.rows:
+            mask = (prediction.target == 1) & (prediction.instance == row["instance"])
+            values = prediction.scores[mask].astype(np.float64)
+            if len(values) != row["points"]:
+                raise ValueError("instance diagnostic and metric point identities differ")
+            records.append(
+                dict(
+                    sequence=prediction.sequence,
+                    frame=prediction.frame,
+                    **row,
+                    detected={
+                        name: int((values >= tau).sum())
+                        for name, tau in thresholds.items()
+                    },
+                )
+            )
+    return records
+
+
 def coverage_status(exposure, plan, step):
     """Selection requires actual distinct observations AND the predeclared rounded node."""
     conditions, reasons = {}, []
@@ -979,6 +1002,7 @@ def evaluate(model, panels, data_root, samples, kind):
             formal_thresholds = result["official_ranking"]["thresholds"]
             formal_high = result["official_ranking"]["tau_95"]
             result["official"] = summarize_at(formal, formal_thresholds)
+            result["official_instances"] = instance_predictions(formal, formal_thresholds)
             result["official_high_recall"] = summarize(formal, formal_high)
             result["tiny_supplement"] = summarize_at(
                 [real[k] for k in sorted(tiny_keys)], formal_thresholds

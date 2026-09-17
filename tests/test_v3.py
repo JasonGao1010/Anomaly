@@ -20,6 +20,7 @@ from src.evaluate import (
     distance_bin,
     evaluation_kind,
     instance_rows,
+    instance_predictions,
     operating_threshold,
     rank_metrics,
     prediction_inputs,
@@ -462,6 +463,14 @@ def test_groups_use_instances_and_target_union_never_double_counts():
         {},
     )
     result = summarize([p], 0.0)
+    diagnostic = instance_predictions([p], {"0.1pct": 2.0, "1pct": -1.0})
+    assert [(r["sequence"], r["frame"], r["instance"]) for r in diagnostic] == [
+        (125, 1, 1), (125, 1, 2)
+    ]
+    assert [r["detected"] for r in diagnostic] == [
+        {"0.1pct": 1, "1pct": 1}, {"0.1pct": 1, "1pct": 3}
+    ]
+    assert sum(r["detected"]["0.1pct"] for r in diagnostic) == result["detected_points"]
     group = result["anomaly_groups"]["target_union"]
     assert group["instance_observations"] == 2
     assert group["points"] == 4 and group["point_recall"] == 0.5
