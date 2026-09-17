@@ -11,6 +11,7 @@ __pycache__/
 !/results/**/*.jsonl
 !/results/relations/*.pdf
 !/results/relations/*.png
+!/results/normal206/*.csv
 
 # Superseded plots and temporary evaluation/figure exports stay local.
 /results/relations/curves.pdf
