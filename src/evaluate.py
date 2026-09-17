@@ -738,7 +738,7 @@ def evaluation_kind(step, final=False, exposure_node=None):
 
 
 def compare_reports(paths, seed=SEED):
-    """Keep both operating points and coverage limits visible; no weighted score."""
+    """Report all three official metrics, with separate diagnostic groups and limits."""
     from .model import METHOD
 
     reports = [json.loads(Path(path).read_text()) for path in paths]
@@ -776,7 +776,7 @@ def compare_reports(paths, seed=SEED):
     values, rows = [], []
     for path, report in zip(paths, reports):
         official = report["official_ranking"]
-        vector = [official["AP"], -official["FPR95"]]
+        vector = [official["AP"], official["AUROC"], -official["FPR95"]]
         intervals, recalls, false_positive = {}, {}, {}
         for point in WORKPOINTS:
             false_positive[point] = report["normal201"][point]["normal_groups"]["all"][
@@ -849,6 +849,7 @@ def compare_reports(paths, seed=SEED):
                 file=str(path),
                 candidate=report["candidate"],
                 AP=official["AP"],
+                AUROC=official["AUROC"],
                 FPR95=official["FPR95"],
                 **{
                     f"R_at_{point}_FPR": official[f"R_at_{point}_FPR"]
@@ -899,7 +900,7 @@ def compare_reports(paths, seed=SEED):
                     if len(seeds) > 1
                     else None,
                 )
-                for metric in ("AP", "FPR95", "R_at_0.1pct_FPR", "R_at_1pct_FPR")
+                for metric in ("AP", "AUROC", "FPR95", "R_at_0.1pct_FPR", "R_at_1pct_FPR")
             },
         )
     return dict(
@@ -907,7 +908,7 @@ def compare_reports(paths, seed=SEED):
         seed_summary=seed_summary,
         compared_groups=target_groups,
         uncertainty_scope="sequence-cluster bootstrap conditional on fitted full-val19 thresholds; threshold-fitting uncertainty excluded; object repeats tracked only when annotated",
-        selection_scope="observed full-real non-dominance at both workpoints; insufficient exposure retains candidates; missing real height/visibility annotations remain unevaluable; numerical dominance alone does not establish improvement beyond uncertainty",
+        selection_scope="observed non-dominance across official AP/AUROC/FPR95 and supplemental metrics at both workpoints; insufficient exposure retains candidates; missing real height/visibility annotations remain unevaluable; numerical dominance alone does not establish improvement beyond uncertainty",
     )
 
 

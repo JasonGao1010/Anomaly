@@ -589,6 +589,7 @@ def test_candidate_comparison_preserves_tradeoffs_and_insufficient_exposure(tmp_
                 points=1000,
                 anomaly_points=20,
                 AP=ap,
+                AUROC=0.98 if route == "P" else 0.97,
                 FPR95=0.1,
                 R_at_1pct_FPR=0.5,
                 **{"R_at_0.1pct_FPR": 0.4},
@@ -605,6 +606,10 @@ def test_candidate_comparison_preserves_tradeoffs_and_insufficient_exposure(tmp_
         paths.append(path)
     compared = compare_reports(paths)
     assert all(not row["dominated_by"] for row in compared["candidates"])
+    assert [r["AUROC"] for r in compared["candidates"]] == [0.98, 0.97]
+    assert compared["seed_summary"]["P/D3/lambda=0.5/128"]["metrics"]["AUROC"] == {
+        "mean": 0.98, "std": None
+    }
     assert (
         compared["candidates"][0]["conditional_sequence_intervals"]["1pct"][
             "returns/1-4"
@@ -614,6 +619,11 @@ def test_candidate_comparison_preserves_tradeoffs_and_insufficient_exposure(tmp_
     assert not compared["seed_summary"]["P/D3/lambda=0.5/128"]["at_least_three_seeds"]
     report["official_ranking"]["AP"] = 0.9
     report["coverage_plan"]["groups"]["few_returns"]["node"] = 256
+    paths[1].write_text(json.dumps(report))
+    compared = compare_reports(paths)
+    # Better AP and target recall cannot dominate a candidate with higher AUROC.
+    assert not compared["candidates"][0]["observed_dominated_by"]
+    report["official_ranking"]["AUROC"] = 0.99
     paths[1].write_text(json.dumps(report))
     compared = compare_reports(paths)
     assert compared["candidates"][0]["observed_dominated_by"] == [str(paths[1])]
