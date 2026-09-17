@@ -527,6 +527,7 @@ def run_update(
         },
         score_distribution=score_summary,
         peak_cuda_bytes=torch.cuda.max_memory_allocated(),
+        peak_cuda_reserved_bytes=torch.cuda.max_memory_reserved(),
         peak_rss_bytes=psutil.Process().memory_info().rss,
     )
 
@@ -805,6 +806,9 @@ def train(args):
             stats = run_update(
                 model, opt, pairs, update, args.halve_at, args.balance, args.tail_weight
             )
+            # Release unused blocks before WDDM starts paging a growing cache.
+            # Model tensors, gradients, optimizer state and the RNG remain intact.
+            torch.cuda.empty_cache()
             for pair in pairs:
                 record_conditions(exposure, pair.frame, pair.world, pair.groups)
                 sources.add(pair.frame)

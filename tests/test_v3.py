@@ -22,6 +22,8 @@ from src.evaluate import (
     instance_rows,
     operating_threshold,
     rank_metrics,
+    prediction_inputs,
+    low_support,
     stratified,
     summarize,
 )
@@ -126,6 +128,28 @@ def test_targets_include_all_normal_labels_and_isolate_native_anomaly():
         -1,
         1,
     ]
+
+
+def test_parallel_preparation_preserves_order_geometry_and_bounded_lookahead():
+    scans = [
+        source([[3 + i, 0, 0, 1], [4 + i, 0, 0, 2]], [40, 40], frame=i)
+        for i in range(6)
+    ]
+    consumed = []
+
+    def inputs():
+        for scan in scans:
+            consumed.append(scan.frame_id)
+            yield scan
+
+    for i, (scan, prepared, support) in enumerate(prediction_inputs(inputs(), 2)):
+        assert scan is scans[i]
+        assert len(consumed) <= i + 3
+        reference = prepare_scan(scan.xyzi[scan.observation_slots])
+        for key in vars(reference):
+            assert np.array_equal(getattr(reference, key), getattr(prepared, key))
+        assert np.array_equal(support, low_support(scan))
+    assert consumed == list(range(6))
 
 
 def test_known_201_aliases_preserve_denominator_and_distinct_intensities():

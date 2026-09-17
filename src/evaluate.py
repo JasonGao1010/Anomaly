@@ -1,10 +1,13 @@
 """Fixed V3 panels, shared empirical thresholds, and source-separated evaluation."""
 
 import argparse
-from concurrent.futures import ProcessPoolExecutor
+from collections import deque
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from dataclasses import dataclass
+from itertools import islice
 import json
 import math
+import os
 from pathlib import Path
 import time
 
@@ -455,18 +458,16 @@ class Prediction:
     normal: dict
 
 
-def predict(model, source, metadata=None, inserted=None):
+def predict(model, source, metadata=None, inserted=None, prepared=None):
     import torch
     from .model import prepare_scan
 
     if model.training:
         raise ValueError("evaluation must not update training BN statistics")
+    if prepared is None:
+        prepared = prepare_scan(source.xyzi[source.observation_slots])
     with torch.inference_mode():
-        values = (
-            model([prepare_scan(source.xyzi[source.observation_slots])])[0]
-            .cpu()
-            .numpy()
-        )
+        values = model([prepared])[0].cpu().numpy()
     # Restore known duplicate file records only after one computation per observation.
     scores = values[source.record_inverse]
     target = detection_targets(
@@ -513,6 +514,26 @@ def low_support(source):
         positions, k=9, distance_upper_bound=np.nextafter(2.0, np.inf), workers=1
     )
     return (np.isfinite(distances).sum(1)[inverse] - 1 < 8)[source.record_inverse]
+
+
+def prediction_inputs(sources, workers):
+    """Overlap bounded CPU geometry work; retain source order and GPU call order."""
+    from .model import prepare_scan
+
+    def prepare(source):
+        scan = prepare_scan(source.xyzi[source.observation_slots])
+        return source, scan, low_support(source)
+
+    # Read sources in the consumer thread: STUSequence's LRU is not thread-safe.
+    sources = iter(sources)
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        pending = deque(pool.submit(prepare, s) for s in islice(sources, workers))
+        while pending:
+            result = pending.popleft().result()
+            source = next(sources, None)
+            if source is not None:
+                pending.append(pool.submit(prepare, source))
+            yield result
 
 
 def summarize(predictions, threshold):
@@ -869,6 +890,7 @@ def compare_reports(paths, seed=SEED):
 
 def evaluate(model, panels, data_root, samples, kind):
     import torch
+    import psutil
     from .model import METHOD
 
     if kind not in {"micro", "panel", "full"}:
@@ -893,17 +915,29 @@ def evaluate(model, panels, data_root, samples, kind):
     if kind == "full":
         keys |= official_keys | tiny_keys
     real = {}
+    # Each neighbor search uses four threads. Bound concurrent scans by live resources.
+    workers = min(
+        4,
+        max(1, len(os.sched_getaffinity(0)) // 4),
+        max(1, psutil.virtual_memory().available // 500_000_000),
+    )
     try:
-        for sequence, frame in sorted(keys):
-            source = read_real_frame(data_root, sequence, frame)
+        sources = (read_real_frame(data_root, *key) for key in sorted(keys))
+        for source, scan, support in prediction_inputs(sources, workers):
+            sequence, frame = source.sequence_id, source.frame_id
             prediction, _ = predict(
-                model, source, annotations.get(f"{sequence}/{frame}")
+                model, source, annotations.get(f"{sequence}/{frame}"), prepared=scan
             )
             valid = detection_targets(source, real_anomalies=True, records=True) >= 0
-            prediction.normal["low_support"] = (prediction.target == 0) & low_support(
-                source
-            )[valid]
+            prediction.normal["low_support"] = (prediction.target == 0) & support[valid]
             real[(sequence, frame)] = prediction
+            if kind == "full" and (len(real) % 128 == 0 or len(real) == len(keys)):
+                print(
+                    json.dumps(
+                        dict(evaluation="real", frames=len(real), total=len(keys))
+                    ),
+                    flush=True,
+                )
 
         def combined(items):
             return np.concatenate([p.scores for p in items]), np.concatenate(
@@ -925,6 +959,7 @@ def evaluate(model, panels, data_root, samples, kind):
             panel_threshold_source="micro_G" if kind == "micro" else "G",
             G_ranking=rank_metrics(scores, labels),
             gaps=panels["gaps"],
+            preparation_workers=workers,
         )
         for name in ("G", "H"):
             predictions = [real[tuple(key)] for key in chosen[name]]
@@ -961,14 +996,30 @@ def evaluate(model, panels, data_root, samples, kind):
         if kind == "full":
             normal_frames.update(normal_source.frame_ids)
         normals, paired_originals = {}, {}
-        for frame in sorted(normal_frames):
-            source = normal_source[frame]
-            p, raw_scores = predict(model, source, annotations.get(f"201/{frame}"))
+        sources = (normal_source[frame] for frame in sorted(normal_frames))
+        for source, scan, support in prediction_inputs(sources, workers):
+            frame = source.frame_id
+            p, raw_scores = predict(
+                model, source, annotations.get(f"201/{frame}"), prepared=scan
+            )
             valid = detection_targets(source, records=True) >= 0
-            p.normal["low_support"] = (p.target == 0) & low_support(source)[valid]
+            p.normal["low_support"] = (p.target == 0) & support[valid]
             normals[frame] = p
             if frame in paired_frames:
                 paired_originals[frame] = (p, raw_scores)
+            if kind == "full" and (
+                len(normals) % 128 == 0 or len(normals) == len(normal_frames)
+            ):
+                print(
+                    json.dumps(
+                        dict(
+                            evaluation="normal201",
+                            frames=len(normals),
+                            total=len(normal_frames),
+                        )
+                    ),
+                    flush=True,
+                )
         for name in ("N_temporal", "N_hard"):
             selected = [normals[f] for f in chosen[name]]
             result[name] = summarize_at(selected, thresholds)
