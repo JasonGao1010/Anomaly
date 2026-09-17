@@ -9,11 +9,23 @@ import numpy as np
 import torch
 from torch import nn
 import torch_scatter
+from scipy.spatial import cKDTree
+from torch.utils.checkpoint import checkpoint
 
-from vendor.litept.model import LitePT, PointROPEAttention
+from vendor.litept.model import LitePT
 
 
 SEED = 20260917
+METHOD = "ajae-v3-original-point-relations"
+LOSS_TERMS = (
+    "anomaly",
+    "inserted_normal",
+    "original_normal",
+    "inserted_mean",
+    "inserted_tail",
+    "original_mean",
+    "original_tail",
+)
 
 
 def configure_runtime():
@@ -31,6 +43,34 @@ class ScanInput:
     inverse: np.ndarray
     order: np.ndarray
     ptr: np.ndarray
+    neighbors: np.ndarray
+
+
+def nearest_returns(xyz, workers=4):
+    """Self plus 31 other returns; file-order identities break exact distance ties."""
+    xyz = np.asarray(xyz, dtype=np.float64)
+    count, width = len(xyz), min(32, len(xyz))
+    tree = cKDTree(xyz)
+    distances, indices = tree.query(xyz, k=min(width + 1, count), workers=workers)
+    if count == 1:
+        return np.zeros((1, 1), dtype=np.int32)
+    # One extra candidate reveals ties crossing the 31-neighbor boundary.
+    distances[indices == np.arange(count)[:, None]] = np.inf
+    order = np.lexsort((indices, distances), axis=1)
+    indices = np.take_along_axis(indices, order, axis=1)
+    distances = np.take_along_axis(distances, order, axis=1)
+    other = indices[:, : width - 1].copy()
+    if count > width:
+        tied = np.flatnonzero(distances[:, width - 2] == distances[:, width - 1])
+        candidates = tree.query_ball_point(
+            xyz[tied], np.nextafter(distances[tied, width - 2], np.inf), workers=workers
+        )
+        for row, candidate in zip(tied, candidates):
+            candidate = np.asarray(candidate, dtype=np.int64)
+            candidate = candidate[candidate != row]
+            distance = np.square(xyz[candidate] - xyz[row]).sum(1)
+            other[row] = candidate[np.lexsort((candidate, distance))[: width - 1]]
+    return np.column_stack((np.arange(count), other)).astype(np.int32)
 
 
 def prepare_scan(xyzi):
@@ -62,32 +102,103 @@ def prepare_scan(xyzi):
         inverse,
         order,
         ptr,
+        nearest_returns(xyzi[:, :3]),
     )
 
 
-class V3(nn.Module):
-    def __init__(self, mechanism="A", seed=SEED):
+class RelationDecoder(nn.Module):
+    """One raw-return block. Query chunks always read keys from the entire scan."""
+
+    def __init__(self, mechanism, chunk_size=2048):
         super().__init__()
-        if mechanism not in {"A", "B", "C"}:
-            raise ValueError(
-                "mechanism must be A (position), B (plain), or C (constant)"
+        self.mechanism, self.chunk_size = mechanism, chunk_size
+        self.recompute = True
+        self.norm = nn.LayerNorm(128)
+        if mechanism == "D0":
+            self.mlp = nn.Sequential(
+                nn.Linear(128, 512), nn.GELU(), nn.Linear(512, 128)
             )
+        else:
+            self.qkv = nn.Linear(128, 384, bias=False)
+            self.phi = nn.Sequential(
+                nn.Linear(6, 32), nn.GELU(), nn.Linear(32, 128, bias=False)
+            )
+            self.proj = nn.Linear(128, 128, bias=False)
+            self.norm2 = nn.LayerNorm(128)
+            self.ffn = nn.Sequential(
+                nn.Linear(128, 256), nn.GELU(), nn.Linear(256, 128)
+            )
+
+    def message(self, query, key, value, xyz, center, neighbors):
+        delta = xyz[neighbors] - center[:, None, :]
+        position = center / 50.0
+        condition = position if self.mechanism == "D3" else torch.zeros_like(position)
+        geometry = self.phi(
+            torch.cat((condition[:, None, :].expand_as(delta), delta), -1)
+        )
+        # Neighbor zero is self: reuse its phi(c, 0) and make e_ii exactly zero.
+        origin = geometry[:, 0]
+        geometry = (geometry - origin[:, None, :]).reshape(len(center), -1, 4, 32)
+        keys = key[neighbors].reshape_as(geometry) + geometry
+        logits = (query.reshape(-1, 1, 4, 32) * keys).sum(-1) / 32**0.5
+        weights = logits.softmax(dim=1)
+        message = (
+            weights[..., None] * (value[neighbors].reshape_as(geometry) + geometry)
+        ).sum(1)
+        message = message.flatten(1)
+        if self.mechanism == "D2":
+            message = (
+                message
+                + self.phi(torch.cat((position, torch.zeros_like(position)), -1))
+                - origin
+            )
+        return message
+
+    def forward(self, features, xyz, neighbors):
+        normalized = self.norm(features)
+        if self.mechanism == "D0":
+            return features + self.mlp(normalized)
+        query, key, value = self.qkv(normalized).chunk(3, -1)
+        messages = []
+        for start in range(0, len(features), self.chunk_size):
+            stop = start + self.chunk_size
+            args = (
+                query[start:stop],
+                key,
+                value,
+                xyz,
+                xyz[start:stop],
+                neighbors[start:stop],
+            )
+            message = (
+                checkpoint(
+                    self.message, *args, use_reentrant=False, preserve_rng_state=False
+                )
+                if self.recompute and self.training and torch.is_grad_enabled()
+                else self.message(*args)
+            )
+            messages.append(message)
+        updated = features + self.proj(torch.cat(messages))
+        return updated + self.ffn(self.norm2(updated))
+
+
+class V3(nn.Module):
+    def __init__(self, mechanism="D3", seed=SEED):
+        super().__init__()
+        if mechanism not in {"D0", "D1", "D2", "D3"}:
+            raise ValueError("mechanism must be D0, D1, D2, or D3")
         self.mechanism, self.seed = mechanism, seed
-        # Construct the same tensors before removing B's condition modules. This keeps
-        # every shared A/B/C tensor identical without relying on RNG call-count accidents.
+        # Build common modules first: D0's different parameter count cannot shift them.
         with torch.random.fork_rng(devices=[]):
             torch.random.default_generator.manual_seed(seed)
             self.point = nn.Sequential(nn.Linear(7, 64), nn.LayerNorm(64), nn.GELU())
-            self.backbone = LitePT(
-                condition_mode="constant" if mechanism == "C" else "position"
-            )
+            self.backbone = LitePT()
             self.context = nn.Sequential(nn.Linear(72, 64), nn.LayerNorm(64), nn.GELU())
-            self.head = nn.Sequential(nn.Linear(128, 128), nn.GELU(), nn.Linear(128, 1))
-            nn.init.zeros_(self.head[-1].bias)
-        if mechanism == "B":
-            for module in self.modules():
-                if isinstance(module, PointROPEAttention):
-                    module.condition = None
+            self.fusion = nn.Sequential(
+                nn.Linear(128, 128), nn.LayerNorm(128), nn.GELU()
+            )
+            self.head = nn.Sequential(nn.LayerNorm(128), nn.Linear(128, 1))
+            self.decoder = RelationDecoder(mechanism)
 
     def forward(self, scans):
         device = next(self.parameters()).device
@@ -116,17 +227,20 @@ class V3(nn.Module):
             )
         )
         context = self.context(point.feat)
-        return [
-            self.head(torch.cat((detail, context[inverse]), dim=1)).squeeze(-1)
-            for detail, inverse in zip(details, inverses)
-        ]
+        scores = []
+        for scan, detail, inverse in zip(scans, details, inverses):
+            fused = self.fusion(torch.cat((detail, context[inverse]), dim=1))
+            decoded = self.decoder(
+                fused,
+                torch.as_tensor(scan.features[:, :3], device=device),
+                torch.as_tensor(scan.neighbors, device=device, dtype=torch.long),
+            )
+            scores.append(self.head(decoded).squeeze(-1))
+        return scores
 
 
 def compatible_parameter(name):
-    return (
-        name.startswith(("backbone.enc.", "backbone.dec."))
-        and ".condition." not in name
-    )
+    return name.startswith(("backbone.enc.", "backbone.dec."))
 
 
 def transfer(model, path, route):
@@ -222,8 +336,36 @@ def lr_factor(update, halvings=()):
     return warmup * 0.5 ** sum(update >= step for step in halvings)
 
 
+def tail_weights(losses, alpha=0.01):
+    """Empirical upper-tail mass, including fractional and equal-boundary weights."""
+    if not 0 < alpha <= 1:
+        raise ValueError("tail fraction must lie in (0,1]")
+    if not len(losses):
+        return torch.zeros_like(losses)
+    mass = max(1.0, alpha * len(losses))
+    boundary = losses.detach().topk(int(np.ceil(mass)), sorted=False).values.min()
+    above, tied = losses.detach() > boundary, losses.detach() == boundary
+    remaining = mass - above.sum()
+    return (above.to(losses.dtype) + tied * (remaining / tied.sum())) / mass
+
+
+def normal_risk(scores, tail_weight=0.5):
+    if not 0 <= tail_weight <= 1:
+        raise ValueError("normal tail weight must lie in [0,1]")
+    losses = nn.functional.softplus(scores)
+    mean = losses.mean() if len(losses) else scores.sum() * 0
+    tail = (losses * tail_weights(losses)).sum()
+    return (1 - tail_weight) * mean + tail_weight * tail, mean, tail
+
+
 def paired_loss(
-    positive, negative, positive_target, negative_target, instance, balance="instance"
+    positive,
+    negative,
+    positive_target,
+    negative_target,
+    instance,
+    balance="instance",
+    tail_weight=0.5,
 ):
     """Per-request risk; empty terms stay zero and never redistribute their weights."""
     if balance not in {"instance", "frame"}:
@@ -246,12 +388,12 @@ def paired_loss(
             ).mean()
         else:
             a = nn.functional.softplus(-positive[anomaly]).mean()
-    normal = positive_target == 0
-    nplus = nn.functional.softplus(positive[normal]).mean() if normal.any() else zero
-    normal = negative_target == 0
-    nminus = (
-        nn.functional.softplus(negative[normal]).mean()
-        if normal.any()
-        else negative.sum() * 0
+    nplus, mean_plus, tail_plus = normal_risk(
+        positive[positive_target == 0], tail_weight
     )
-    return 0.5 * a + 0.25 * nplus + 0.25 * nminus, torch.stack((a, nplus, nminus))
+    nminus, mean_minus, tail_minus = normal_risk(
+        negative[negative_target == 0], tail_weight
+    )
+    return 0.5 * a + 0.25 * nplus + 0.25 * nminus, torch.stack(
+        (a, nplus, nminus, mean_plus, tail_plus, mean_minus, tail_minus)
+    )

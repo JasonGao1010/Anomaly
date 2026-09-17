@@ -1,7 +1,7 @@
 """Train V3 with source-uniform paired requests and fixed development panels."""
 
 import argparse
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from dataclasses import dataclass
 import json
 import os
@@ -15,16 +15,28 @@ import torch
 from torch import nn
 
 from .data import DEFAULT_SAMPLES, FrozenDataset, detection_targets
-from .evaluate import evaluate, evaluation_kind, instance_rows, write_json
+from .evaluate import (
+    EXPOSURE_GROUPS,
+    coverage_status,
+    disappeared,
+    evaluate,
+    evaluation_kind,
+    instance_rows,
+    write_json,
+)
 from .model import (
     V3,
     SEED,
+    METHOD,
+    LOSS_TERMS,
     configure_runtime,
+    compatible_parameter,
     lr_factor,
     optimizer,
     paired_loss,
     prepare_scan,
     transfer,
+    tail_weights,
 )
 
 
@@ -37,27 +49,52 @@ class PairInput:
     frame: int
     world: str
     groups: list
+    raw_labels: tuple
+    neighborhoods: tuple
+
+
+def pair_rows(dataset, index, original, rendered, target):
+    world = dataset.worlds[index // len(dataset.sequence)]
+    metadata = {
+        "60001": dict(
+            height_m=world["height_m"],
+            height_source=world["height_source"],
+            object_id=world["identity"],
+        )
+    }
+    rows = instance_rows(rendered.source, target, metadata)
+    # The frozen pool has one verified object; only then can frame D be assigned to it.
+    count = disappeared(original, rendered)
+    for row in rows:
+        row["disappeared"] = count
+    return rows
 
 
 def prepare_pair(dataset, index):
     original, rendered = dataset.pair(int(index))
     positive = rendered.source
     target = detection_targets(positive, inserted=rendered.inserted_mask)
-    world = dataset.worlds[index // len(dataset.sequence)]
-    metadata = {
-        "60001": dict(height_m=world["height_m"], height_source=world["height_source"])
-    }
+    negative_target = detection_targets(original)
+    scans = (
+        prepare_scan(original.xyzi[original.observation_slots]),
+        prepare_scan(positive.xyzi[positive.observation_slots]),
+    )
     return PairInput(
-        (
-            prepare_scan(original.xyzi[original.observation_slots]),
-            prepare_scan(positive.xyzi[positive.observation_slots]),
-        ),
+        scans,
         target,
-        detection_targets(original),
+        negative_target,
         positive.labels.instance[positive.observation_slots],
         original.frame_id,
         rendered.world_identity,
-        instance_rows(positive, target, metadata),
+        pair_rows(dataset, index, original, rendered, target),
+        (
+            original.labels.semantic[original.observation_slots],
+            positive.labels.semantic[positive.observation_slots],
+        ),
+        tuple(
+            neighborhood_summary(scan, labels)
+            for scan, labels in zip(scans, (negative_target, target))
+        ),
     )
 
 
@@ -109,6 +146,175 @@ def request_at(seed, update, count, worlds, frames):
     return world * frames + source
 
 
+def condition_flags(row):
+    return dict(
+        few_returns=1 <= row["observed_returns"] <= 4,
+        low_height=None if row["height_m"] is None else row["height_m"] <= 0.30,
+        far_range=35 <= row["distance_m"] <= 50,
+        weak_disappearance=None
+        if row.get("disappeared") is None
+        else row["disappeared"] <= 4,
+    )
+
+
+def record_conditions(exposure, frame, world, rows):
+    groups = exposure.setdefault("conditions", {})
+    unknown = exposure.setdefault("unknown", {name: 0 for name in EXPOSURE_GROUPS})
+    intersections = exposure.setdefault("intersections", {})
+    for row in rows:
+        flags = condition_flags(row)
+        tags = []
+        for name, value in flags.items():
+            group = groups.setdefault(name, dict(requests=[], sources=[], objects=[]))
+            if value is None:
+                unknown[name] += 1
+            elif value:
+                tags.append(name)
+                group["requests"] = sorted(
+                    {tuple(v) for v in group["requests"]} | {(world, frame)}
+                )
+                group["sources"] = sorted(set(group["sources"]) | {frame})
+                if row["object_id"] is not None:
+                    group["objects"] = sorted(
+                        {tuple(v) for v in group["objects"]}
+                        | {(world, row["instance"])}
+                    )
+        if tags:
+            key = "+".join(tags)
+            intersections[key] = intersections.get(key, 0) + 1
+
+
+def _coverage_metadata(request):
+    samples, data_root, indices = request
+    dataset = FrozenDataset(samples, data_root, "train")
+    rows = {}
+    for index in indices:
+        original, rendered = dataset.pair(index)
+        target = detection_targets(rendered.source, inserted=rendered.inserted_mask)
+        rows[index] = pair_rows(dataset, index, original, rendered, target)
+    return rows
+
+
+def prepare_coverage(dataset, data_root, seed, output, workers):
+    """Inspect the unchanged 1024-step request prefix; no model or resampling is used."""
+    requests = [
+        request_at(seed, step, 8, len(dataset.worlds), len(dataset.sequence)).tolist()
+        for step in range(1, 1025)
+    ]
+    indices = sorted(set(sum(requests, [])))
+    # Bind reused metadata to the exact frozen inputs and source file revisions.
+    files = [dataset.samples[i][0] for i in indices]
+    files += sorted(dataset.sequence.sequence_dir.rglob("*.bin"))
+    files += sorted(dataset.sequence.sequence_dir.rglob("*.label"))
+    files += [
+        dataset.sequence.sequence_dir / name for name in ("poses.txt", "calib.txt")
+    ]
+    files += [world["path"] / "manifest.json" for world in dataset.worlds]
+    identity = dict(
+        worlds=[w["identity"] for w in dataset.worlds],
+        files=[
+            [str(p.resolve()), p.stat().st_size, p.stat().st_mtime_ns] for p in files
+        ],
+    )
+    output = Path(output)
+    if output.exists():
+        saved = json.loads(output.read_text())
+        if (
+            saved.get("method") != METHOD
+            or saved["seed"] != seed
+            or saved["inputs"] != identity
+        ):
+            raise ValueError(
+                "coverage metadata belongs to different inputs or seed; use a separate coverage path"
+            )
+        return saved
+    start = time.perf_counter()
+    # Keep all requests for one source in a worker to reuse the existing one-frame cache.
+    buckets = [[] for _ in range(workers)]
+    for frame in dataset.sequence.frame_ids:
+        buckets[frame % workers].extend(
+            i for i in indices if i % len(dataset.sequence) == frame
+        )
+    with ProcessPoolExecutor(max_workers=workers) as pool:
+        records = {}
+        for part in pool.map(
+            _coverage_metadata, [(dataset.directory, data_root, b) for b in buckets]
+        ):
+            records.update(part)
+    exposure, groups = (
+        {},
+        {name: dict(first_update=None, node=None) for name in EXPOSURE_GROUPS},
+    )
+    snapshots = {}
+    for step, selected in enumerate(requests, 1):
+        for index in selected:
+            world = dataset.worlds[index // len(dataset.sequence)]["identity"]
+            record_conditions(
+                exposure, index % len(dataset.sequence), world, records[index]
+            )
+        for name, entry in groups.items():
+            count = exposure.get("conditions", {}).get(name, {})
+            if entry["first_update"] is None and all(
+                len(count.get(key, [])) >= minimum
+                for key, minimum in (("requests", 20), ("sources", 5), ("objects", 5))
+            ):
+                entry.update(first_update=step, node=128 * ((step + 127) // 128))
+        if step % 128 == 0:
+            snapshots[str(step)] = coverage_status(exposure, dict(groups=groups), step)
+    nodes = [group["node"] for group in groups.values()]
+    result = dict(
+        method=METHOD,
+        seed=seed,
+        requests_per_update=8,
+        max_updates=1024,
+        inputs=identity,
+        groups=groups,
+        common_node=max(nodes) if all(n is not None for n in nodes) else None,
+        snapshots=snapshots,
+        unknown=exposure.get("unknown", {}),
+        intersections=exposure.get("intersections", {}),
+        scope="observed request prefix only; insufficient prefix support never asserts absence from the pool",
+        seconds=time.perf_counter() - start,
+    )
+    write_json(output, result)
+    return result
+
+
+def neighborhood_summary(scan, target):
+    distances, same, mixed, labeled = [], 0, 0, 0
+    edges = 0
+    for start in range(0, len(target), 8192):
+        neighbor = scan.neighbors[start : start + 8192, 1:]
+        center = scan.features[start : start + len(neighbor), :3]
+        distance = np.linalg.norm(
+            scan.features[neighbor, :3] - center[:, None, :], axis=-1
+        )
+        if distance.shape[1]:
+            distances.append(distance[:, -1])
+        same += int(
+            (
+                scan.inverse[neighbor]
+                == scan.inverse[start : start + len(neighbor), None]
+            ).sum()
+        )
+        query = target[start : start + len(neighbor), None]
+        valid = (query >= 0) & (target[neighbor] >= 0)
+        mixed += int((valid & (query != target[neighbor])).sum())
+        labeled += int(valid.sum())
+        edges += neighbor.size
+    return dict(
+        other_edges=edges,
+        same_voxel_fraction=same / edges if edges else None,
+        labeled_edges=labeled,
+        anomaly_normal_edge_fraction=mixed / labeled if labeled else None,
+        farthest_neighbor_m_quantiles=np.quantile(
+            np.concatenate(distances), [0, 0.5, 0.95, 1]
+        ).tolist()
+        if distances
+        else [],
+    )
+
+
 def bn_state(model):
     return {
         name: torch.cat(
@@ -119,7 +325,9 @@ def bn_state(model):
     }
 
 
-def run_update(model, opt, pairs, update, halvings=(), balance="instance"):
+def run_update(
+    model, opt, pairs, update, halvings=(), balance="instance", tail_weight=0.5
+):
     if len(pairs) != 8:
         raise ValueError("one V3 update is exactly 8 requests, in 4 batches of 2 pairs")
     model.train()
@@ -132,7 +340,10 @@ def run_update(model, opt, pairs, update, halvings=(), balance="instance"):
         for group in opt.param_groups
     ]
     bn_before = bn_state(model)
-    terms, scores, grouped = [], [], {}
+    terms, scores, grouped, tail_concentration, neighborhoods = [], [], {}, [], []
+    relation_before = torch.cat(
+        [p.detach().flatten() for p in model.decoder.parameters()]
+    ).clone()
     for group in opt.param_groups:
         group["lr"] = group["peak_lr"] * lr_factor(update, halvings)
     for offset in range(0, 8, 2):
@@ -143,7 +354,9 @@ def run_update(model, opt, pairs, update, halvings=(), balance="instance"):
             pt = torch.as_tensor(pair.positive_target, device=device)
             nt = torch.as_tensor(pair.negative_target, device=device)
             identity = torch.as_tensor(pair.instance.astype(np.int64), device=device)
-            loss, parts = paired_loss(positive, negative, pt, nt, identity, balance)
+            loss, parts = paired_loss(
+                positive, negative, pt, nt, identity, balance, tail_weight
+            )
             losses.append(loss)
             terms.append(parts.detach())
             for role, values, target in (
@@ -163,6 +376,46 @@ def run_update(model, opt, pairs, update, halvings=(), balance="instance"):
                                 chosen.max(),
                             )
                         )
+            for view, values, target, scan, raw, neighborhood in zip(
+                ("original", "inserted"),
+                (negative, positive),
+                (nt, pt),
+                pair.scans,
+                pair.raw_labels,
+                pair.neighborhoods,
+            ):
+                with torch.no_grad():
+                    normal = target == 0
+                    weights = (
+                        tail_weights(nn.functional.softplus(values[normal]))
+                        .cpu()
+                        .numpy()
+                    )
+                normal_mask = normal.cpu().numpy()
+                semantic = raw[normal_mask]
+                radius = np.linalg.norm(scan.features[normal_mask, :3], axis=1)
+                tail_concentration.append(
+                    dict(
+                        world=pair.world,
+                        frame=pair.frame,
+                        view=view,
+                        normal_points=len(weights),
+                        tail_points=int((weights > 0).sum()),
+                        semantic_mass={
+                            str(int(label)): float(weights[semantic == label].sum())
+                            for label in np.unique(semantic)
+                        },
+                        far_mass=float(weights[radius >= 35].sum()),
+                    )
+                )
+                neighborhoods.append(
+                    dict(
+                        world=pair.world,
+                        frame=pair.frame,
+                        view=view,
+                        **neighborhood,
+                    )
+                )
             for row in pair.groups:
                 mask = (pt == 1) & (identity == row["instance"])
                 value = nn.functional.softplus(-positive[mask]).detach().mean()
@@ -185,22 +438,20 @@ def run_update(model, opt, pairs, update, halvings=(), balance="instance"):
             .sqrt()
         )
         grad_groups.append(float(norm))
+    relation_gradient = float(
+        torch.stack(
+            [
+                p.grad.square().sum()
+                for p in model.decoder.parameters()
+                if p.grad is not None
+            ]
+        )
+        .sum()
+        .sqrt()
+    )
     gradient = nn.utils.clip_grad_norm_(
         model.parameters(), 1.0, error_if_nonfinite=True
     )
-    conditions = {}
-    for name, module in model.named_modules():
-        if hasattr(module, "condition") and module.condition is not None:
-            conditions[name] = dict(
-                delta_rms=float(module.diagnostics["delta_rms"]),
-                gradient_norm=float(
-                    torch.stack(
-                        [p.grad.square().sum() for p in module.condition.parameters()]
-                    )
-                    .sum()
-                    .sqrt()
-                ),
-            )
     opt.step()
     parameter_groups = []
     for old, grad, group in zip(previous, grad_groups, opt.param_groups):
@@ -237,13 +488,13 @@ def run_update(model, opt, pairs, update, halvings=(), balance="instance"):
         seconds=time.perf_counter() - start,
         loss_terms=dict(
             zip(
-                ("anomaly", "inserted_normal", "original_normal"),
+                LOSS_TERMS,
                 loss_terms.mean(0).tolist(),
             )
         ),
         loss_term_std=dict(
             zip(
-                ("anomaly", "inserted_normal", "original_normal"),
+                LOSS_TERMS,
                 loss_terms.std(0).tolist(),
             )
         ),
@@ -256,7 +507,20 @@ def run_update(model, opt, pairs, update, halvings=(), balance="instance"):
         parameter_groups=parameter_groups,
         gradient_norm=float(gradient),
         clipped=bool(gradient > 1),
-        conditions=conditions,
+        relation_update=dict(
+            gradient_norm=relation_gradient,
+            relative_update=float(
+                (
+                    torch.cat(
+                        [p.detach().flatten() for p in model.decoder.parameters()]
+                    )
+                    - relation_before
+                ).norm()
+                / relation_before.norm().clamp_min(1e-12)
+            ),
+        ),
+        tail_concentration=tail_concentration,
+        neighborhoods=neighborhoods,
         bn_change={
             name: float((value - bn_before[name]).norm())
             for name, value in bn_state(model).items()
@@ -272,7 +536,7 @@ def save_checkpoint(path, model, opt, step, metadata, exposure):
     path = Path(path)
     temporary = path.with_suffix(".tmp")
     payload = dict(
-        format="ajae-v3",
+        format=METHOD,
         mechanism=model.mechanism,
         seed=model.seed,
         model=model.state_dict(),
@@ -312,17 +576,21 @@ def train(args):
         )
         if fixed != expected:
             raise ValueError(
-                "A/B/C must use exactly the shared recipe's seed, initialization, risk, rates, and budget"
+                "D0-D3 and risk controls must use exactly the shared recipe's seed, initialization, risk, rates, and budget"
             )
     if args.halve_at and (
-        not args.reason or args.mechanism != "A" and not args.fixed_recipe
+        not args.reason or args.mechanism != "D3" and not args.fixed_recipe
     ):
         raise ValueError(
             "record the decay reason; mechanism controls require a common fixed recipe"
         )
-    if args.mechanism != "A" and not args.fixed_recipe:
+    if args.mechanism != "D3" and args.tail_weight != 0.5:
         raise ValueError(
-            "A/B/C controls require the same predeclared budget and learning-rate trajectory"
+            "structure controls keep lambda=0.5; vary normal risk only on D3"
+        )
+    if (args.mechanism != "D3" or args.tail_weight != 0.5) and not args.fixed_recipe:
+        raise ValueError(
+            "D0-D3 controls require the same predeclared budget and learning-rate trajectory"
         )
     lr_factor(1, args.halve_at)
     checkpoints = sum(evaluation_kind(i) is not None for i in range(args.steps + 1)) + 1
@@ -330,9 +598,28 @@ def train(args):
     configure_runtime()
     torch.manual_seed(args.seed)
     dataset = FrozenDataset(args.samples, args.data_root, "train")
+    workers = min(
+        8,
+        max(1, snapshot["logical_cpus"] // 2),
+        max(1, snapshot["memory_available"] // 500_000_000),
+    )
+    coverage_plan = prepare_coverage(
+        dataset, args.data_root, args.seed, args.coverage, workers
+    )
+    print(
+        json.dumps(
+            dict(
+                coverage_nodes=coverage_plan["groups"],
+                common_node=coverage_plan["common_node"],
+                unresolved=coverage_plan["snapshots"]["1024"]["reasons"],
+            )
+        ),
+        flush=True,
+    )
     model = V3(args.mechanism, args.seed)
     recipe = dict(
         balance=args.balance,
+        tail_weight=args.tail_weight,
         backbone_lr=args.backbone_lr,
         new_lr=args.new_lr,
         halve_at=args.halve_at,
@@ -348,9 +635,21 @@ def train(args):
         few_return_instances=0,
         visible_instances=0,
         clipped_updates=0,
+        training_seconds=0.0,
     )
     metadata = dict(
+        method=METHOD,
         route=args.route,
+        parameter_counts=dict(
+            total=sum(p.numel() for p in model.parameters()),
+            transferred_scope=sum(
+                p.numel()
+                for name, p in model.named_parameters()
+                if compatible_parameter(name)
+            ),
+            decoder=sum(p.numel() for p in model.decoder.parameters()),
+        ),
+        coverage_plan=coverage_plan,
         panels=panels,
         recipe=recipe,
         initialization=None,
@@ -365,13 +664,19 @@ def train(args):
         numerics=dict(
             dtype="float32",
             tf32=False,
-            activation_recomputation="BN-free blocks",
+            activation_recomputation="BN-free backbone blocks and complete-scan-key decoder query chunks",
+            neighbor_count=32,
+            decoder_chunk_size=model.decoder.chunk_size,
             torch=str(torch.__version__),
         ),
     )
     step = 0
     if args.resume:
         saved = torch.load(args.resume, map_location="cpu", weights_only=True)
+        if saved.get("format") != METHOD:
+            raise ValueError(
+                "cannot resume an earlier method as the refined original-point model"
+            )
         if any(
             saved[key] != value
             for key, value in (
@@ -379,6 +684,7 @@ def train(args):
                 ("seed", args.seed),
                 ("route", args.route),
                 ("panels", panels),
+                ("coverage_plan", coverage_plan),
             )
         ):
             raise ValueError(
@@ -387,7 +693,13 @@ def train(args):
         old_recipe = saved["recipe"]
         if any(
             old_recipe[key] != recipe[key]
-            for key in ("balance", "backbone_lr", "new_lr", "fixed_recipe")
+            for key in (
+                "balance",
+                "tail_weight",
+                "backbone_lr",
+                "new_lr",
+                "fixed_recipe",
+            )
         ):
             raise ValueError(
                 "changing the training risk or base rates requires a new route"
@@ -443,7 +755,11 @@ def train(args):
                 mechanism=args.mechanism,
                 seed=args.seed,
                 update=update,
+                tail_weight=args.tail_weight,
             ),
+            exposure=exposure,
+            coverage_plan=coverage_plan,
+            training_seconds=exposure.get("training_seconds"),
             **result,
         )
 
@@ -469,8 +785,11 @@ def train(args):
             pairs = pending.result()
             if update < args.steps:
                 pending = loader.submit(load_update, update + 1)
-            stats = run_update(model, opt, pairs, update, args.halve_at, args.balance)
+            stats = run_update(
+                model, opt, pairs, update, args.halve_at, args.balance, args.tail_weight
+            )
             for pair in pairs:
+                record_conditions(exposure, pair.frame, pair.world, pair.groups)
                 sources.add(pair.frame)
                 worlds.add(pair.world)
                 world_frames.add((pair.world, pair.frame))
@@ -490,6 +809,8 @@ def train(args):
                 instance_observations=sorted(instances),
                 requests=update * 8,
                 clipped_updates=exposure["clipped_updates"] + stats["clipped"],
+                training_seconds=exposure.get("training_seconds", 0.0)
+                + stats["seconds"],
             )
             stats["coverage"] = dict(
                 sources=len(sources),
@@ -502,7 +823,12 @@ def train(args):
                 nonempty_request_fraction=1
                 - exposure["zero_anomaly_requests"] / (update * 8),
             )
+            stats["target_exposure"] = coverage_status(exposure, coverage_plan, update)
             stats["elapsed_seconds"] = time.perf_counter() - start
+            stats["elapsed_scope"] = (
+                "current invocation, including loading and evaluation"
+            )
+            stats["cumulative_training_seconds"] = exposure["training_seconds"]
             log.write(json.dumps(stats, allow_nan=False) + "\n")
             log.flush()
             print(
@@ -515,7 +841,11 @@ def train(args):
                 ),
                 flush=True,
             )
-            kind = evaluation_kind(update, final=args.final and update == args.steps)
+            kind = evaluation_kind(
+                update,
+                final=args.final and update == args.steps,
+                exposure_node=coverage_plan["common_node"],
+            )
             if kind or update == args.steps:
                 save_checkpoint(
                     output / f"{update}.pt", model, opt, update, metadata, exposure
@@ -542,7 +872,11 @@ def main():
     parser.add_argument("--panels", type=Path, default=Path("results/panels.json"))
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--route", choices=("P", "T", "R"), default="P")
-    parser.add_argument("--mechanism", choices=("A", "B", "C"), default="A")
+    parser.add_argument("--mechanism", choices=("D0", "D1", "D2", "D3"), default="D3")
+    parser.add_argument(
+        "--tail-weight", type=float, choices=(0.0, 0.25, 0.5), default=0.5
+    )
+    parser.add_argument("--coverage", type=Path, default=Path("results/coverage.json"))
     parser.add_argument("--weights", type=Path)
     parser.add_argument("--resume", type=Path)
     parser.add_argument("--steps", type=int, default=128)
@@ -555,7 +889,7 @@ def main():
     parser.add_argument(
         "--fixed-recipe",
         type=Path,
-        help="shared A/B/C recipe JSON, including steps and LR trajectory",
+        help="shared D0-D3/risk-control recipe JSON, including steps and LR trajectory",
     )
     parser.add_argument(
         "--final",

@@ -38,6 +38,8 @@ VAL19 = (
 )
 SEED = 20260917
 NORMAL_LABELS = {"pole": (80,), "vegetation": (70,), "trunk": (71,)}
+WORKPOINTS = {"0.1pct": 0.001, "1pct": 0.01}
+EXPOSURE_GROUPS = ("few_returns", "low_height", "far_range", "weak_disappearance")
 
 
 def write_json(path, value):
@@ -393,7 +395,13 @@ def rank_metrics(scores, labels):
         raise ValueError("ranking requires finite scores and binary valid labels")
     positive, negative = int(labels.sum()), int((labels == 0).sum())
     if not positive or not negative:
-        return {"AP": None, "AUROC": None, "FPR95": None, "R_at_1pct_FPR": None}
+        return {
+            "AP": None,
+            "AUROC": None,
+            "FPR95": None,
+            "R_at_0.1pct_FPR": None,
+            "R_at_1pct_FPR": None,
+        }
     order = np.argsort(-scores, kind="stable")
     sorted_scores, sorted_labels = scores[order], labels[order]
     ends = np.r_[
@@ -406,13 +414,26 @@ def rank_metrics(scores, labels):
     auc = np.trapezoid(np.r_[0.0, recall], np.r_[0.0, fpr])
     # Official STU uses the first empirical point strictly above 95% recall.
     index95 = np.flatnonzero(recall > 0.95)[0]
-    low = operating_threshold(scores, labels)
+    low = {
+        name: operating_threshold(scores, labels, rate)
+        for name, rate in WORKPOINTS.items()
+    }
+    normal = scores[labels == 0]
     return dict(
         AP=float(ap),
         AUROC=float(auc),
         FPR95=float(fpr[index95]),
-        R_at_1pct_FPR=float(np.mean(scores[labels == 1].astype(np.float64) >= low)),
-        tau_1pct=low,
+        **{
+            f"R_at_{name}_FPR": float(
+                np.mean(scores[labels == 1].astype(np.float64) >= tau)
+            )
+            for name, tau in low.items()
+        },
+        thresholds=low,
+        threshold_boundary_ties={
+            name: int((normal == np.nextafter(tau, -np.inf)).sum())
+            for name, tau in low.items()
+        },
         tau_95=float(sorted_scores[ends[index95]]),
         achieved_recall95=float(recall[index95]),
         recall95_rule="first empirical recall strictly above 0.95, as in official STU",
@@ -601,8 +622,19 @@ def summarize(predictions, threshold):
                 minimum=min(float(value.min()) for value in values if len(value)),
                 maximum=max(float(value.max()) for value in values if len(value)),
             )
+    fp = normal.get("all", {}).get("false_positives", 0)
+    negative = normal.get("all", {}).get("points", 0)
     return dict(
         threshold=threshold,
+        segmentation=dict(
+            TP=detected,
+            FP=fp,
+            FN=total - detected,
+            TN=negative - fp,
+            Precision=detected / (detected + fp) if detected + fp else None,
+            Recall=detected / total if total else None,
+            IoU=detected / (total + fp) if total + fp else None,
+        ),
         anomaly_points=total,
         detected_points=detected,
         point_recall=detected / total if total else None,
@@ -616,8 +648,43 @@ def summarize(predictions, threshold):
     )
 
 
-def evaluation_kind(step, final=False):
-    if final or step in (128, 256, 512, 1024):
+def summarize_at(predictions, thresholds):
+    return {name: summarize(predictions, tau) for name, tau in thresholds.items()}
+
+
+def coverage_status(exposure, plan, step):
+    """Selection requires actual distinct observations AND the predeclared rounded node."""
+    conditions, reasons = {}, []
+    for name in EXPOSURE_GROUPS:
+        group = exposure.get("conditions", {}).get(name, {})
+        counts = {
+            key: len(
+                {tuple(v) if isinstance(v, list) else v for v in group.get(key, [])}
+            )
+            for key in ("requests", "sources", "objects")
+        }
+        node = plan.get("groups", {}).get(name, {}).get("node")
+        eligible = (
+            counts["requests"] >= 20
+            and counts["sources"] >= 5
+            and counts["objects"] >= 5
+        )
+        eligible = eligible and node is not None and step >= node
+        conditions[name] = dict(
+            **counts,
+            node=node,
+            eligible=eligible,
+            unknown_observations=exposure.get("unknown", {}).get(name, 0),
+        )
+        if not eligible:
+            reasons.append(
+                f"{name}: actual support or predeclared exposure node not reached"
+            )
+    return dict(groups=conditions, eligible=not reasons, reasons=reasons)
+
+
+def evaluation_kind(step, final=False, exposure_node=None):
+    if final or step in (128, 256, 512, 1024) or step == exposure_node:
         return "full"
     if step in (0, 8):
         return "micro"
@@ -627,105 +694,156 @@ def evaluation_kind(step, final=False):
 
 
 def compare_reports(paths, seed=SEED):
-    """Keep metric tradeoffs explicit; never fit a weighted winner score."""
+    """Keep both operating points and coverage limits visible; no weighted score."""
+    from .model import METHOD
+
     reports = [json.loads(Path(path).read_text()) for path in paths]
     if not reports or any(r.get("kind") != "full" for r in reports):
         raise ValueError("candidate comparison requires complete real evaluations")
+    if any(r.get("method") != METHOD for r in reports):
+        raise ValueError(
+            "candidate comparison requires the refined original-point method"
+        )
     denominator = [
         (
             r["official_ranking"]["points"],
             r["official_ranking"]["anomaly_points"],
-            r["normal201"]["normal_groups"]["all"]["points"],
+            r["normal201"]["1pct"]["normal_groups"]["all"]["points"],
+            tuple(tuple(row) for row in r["official_population"]),
         )
         for r in reports
     ]
     if len(set(denominator)) != 1:
         raise ValueError("candidate point populations differ")
-    groups = sorted(
-        set.intersection(*(set(r["official"]["anomaly_groups"]) for r in reports))
-    )
+    groups = sorted(reports[0]["official"]["1pct"]["anomaly_groups"])
+    if any(sorted(r["official"]["1pct"]["anomaly_groups"]) != groups for r in reports):
+        raise ValueError(
+            "candidate GT groups differ; reevaluate with common annotations"
+        )
     target_groups = [
         key for key in groups if key.startswith(("returns/", "distance/", "height/"))
     ]
+    normal_groups = sorted(reports[0]["official"]["1pct"]["normal_groups"])
+    if any(
+        sorted(r["official"]["1pct"]["normal_groups"]) != normal_groups for r in reports
+    ):
+        raise ValueError("candidate normal-region definitions differ")
+    common_budget = len({r["candidate"]["update"] for r in reports}) == 1
     values, rows = [], []
     for path, report in zip(paths, reports):
         official = report["official_ranking"]
-        false_positive = report["normal201"]["normal_groups"]["all"]["fpr"]
-        recalls = {
-            key: report["official"]["anomaly_groups"][key]["instance_mean_point_recall"]
-            for key in target_groups
-        }
-        vector = [
-            official["AP"],
-            -official["FPR95"],
-            official["R_at_1pct_FPR"],
-            -false_positive,
-            *recalls.values(),
-        ]
-        values.append(vector)
-        intervals = {}
-        for key in target_groups:
-            sequence_groups = [
-                report["sequences"][str(seq)]["anomaly_groups"].get(key)
-                for seq in VAL19
+        vector = [official["AP"], -official["FPR95"]]
+        intervals, recalls, false_positive = {}, {}, {}
+        for point in WORKPOINTS:
+            false_positive[point] = report["normal201"][point]["normal_groups"]["all"][
+                "fpr"
             ]
-            counts = np.array(
-                [g["instance_observations"] if g else 0 for g in sequence_groups]
-            )
-            totals = np.array(
+            recalls[point] = {
+                key: report["official"][point]["anomaly_groups"][key][
+                    "instance_mean_point_recall"
+                ]
+                for key in target_groups
+            }
+            vector.extend(
                 [
-                    g["instance_mean_point_recall"] * g["instance_observations"]
-                    if g
-                    else 0
-                    for g in sequence_groups
+                    official[f"R_at_{point}_FPR"],
+                    -false_positive[point],
+                    *recalls[point].values(),
                 ]
             )
-            rng = np.random.default_rng(seed)
-            indices = rng.integers(len(VAL19), size=(2000, len(VAL19)))
-            support = counts[indices].sum(1)
-            bootstrap = totals[indices].sum(1)[support > 0] / support[support > 0]
-            intervals[key] = dict(
-                sequences=int((counts > 0).sum()),
-                instance_observations=int(counts.sum()),
-                interval95=(
-                    np.quantile(bootstrap, [0.025, 0.975]).tolist()
+            vector.extend(
+                -report["official"][point]["normal_groups"][key]["fpr"]
+                for key in normal_groups
+                if report["official"][point]["normal_groups"][key]["points"]
+            )
+            intervals[point] = {}
+            for key in target_groups:
+                entries = [
+                    report["sequences"][str(seq)][point]["anomaly_groups"].get(key)
+                    for seq in VAL19
+                ]
+                counts = np.array(
+                    [g["instance_observations"] if g else 0 for g in entries]
+                )
+                totals = np.array(
+                    [
+                        g["instance_mean_point_recall"] * g["instance_observations"]
+                        if g
+                        else 0
+                        for g in entries
+                    ]
+                )
+                indices = np.random.default_rng(seed).integers(
+                    len(VAL19), size=(2000, len(VAL19))
+                )
+                support = counts[indices].sum(1)
+                bootstrap = totals[indices].sum(1)[support > 0] / support[support > 0]
+                intervals[point][key] = dict(
+                    sequences=int((counts > 0).sum()),
+                    instance_observations=int(counts.sum()),
+                    interval95=np.quantile(bootstrap, [0.025, 0.975]).tolist()
                     if (counts > 0).sum() >= 2
-                    else None
-                ),
+                    else None,
+                )
+        values.append(vector)
+        coverage = coverage_status(
+            report.get("exposure", {}),
+            report.get("coverage_plan", {}),
+            report["candidate"]["update"],
+        )
+        reasons = list(coverage["reasons"])
+        if not common_budget:
+            reasons.append(
+                "candidates have not reached a common complete-evaluation budget"
+            )
+        if report["candidate"]["route"] == "R" and report["candidate"]["update"] <= 128:
+            reasons.append(
+                "random initialization cannot be rejected by the 128-step adaptation comparison"
             )
         rows.append(
             dict(
                 file=str(path),
-                candidate=report.get("candidate"),
+                candidate=report["candidate"],
                 AP=official["AP"],
                 FPR95=official["FPR95"],
-                R_at_1pct_FPR=official["R_at_1pct_FPR"],
+                **{
+                    f"R_at_{point}_FPR": official[f"R_at_{point}_FPR"]
+                    for point in WORKPOINTS
+                },
                 normal201_fpr=false_positive,
                 instance_recalls=recalls,
                 conditional_sequence_intervals=intervals,
+                coverage=coverage,
+                evidence_gaps=report.get("gaps", {}),
+                selection_eligible=not reasons,
+                retention_reasons=reasons,
             )
         )
     matrix = np.asarray(values)
     for index, row in enumerate(rows):
-        row["dominated_by"] = [
-            str(paths[j])
+        observed = [
+            j
             for j in range(len(rows))
             if j != index
             and np.all(matrix[j] >= matrix[index])
             and np.any(matrix[j] > matrix[index])
         ]
+        row["observed_dominated_by"] = [str(paths[j]) for j in observed]
+        row["dominated_by"] = [
+            str(paths[j])
+            for j in observed
+            if row["selection_eligible"] and rows[j]["selection_eligible"]
+        ]
     seed_summary = {}
     for row in rows:
         candidate = row["candidate"]
-        if candidate is None:
-            continue
-        key = f"{candidate['route']}/{candidate['mechanism']}/{candidate['update']}"
+        key = f"{candidate['route']}/{candidate['mechanism']}/lambda={candidate['tail_weight']}/{candidate['update']}"
         seed_summary.setdefault(key, []).append(row)
     for key, selected in seed_summary.items():
         seeds = [r["candidate"]["seed"] for r in selected]
         if len(set(seeds)) != len(seeds):
             raise ValueError(
-                "a training seed must occur once per route/mechanism/update"
+                "a training seed must occur once per route/mechanism/risk/update"
             )
         seed_summary[key] = dict(
             seeds=seeds,
@@ -737,20 +855,21 @@ def compare_reports(paths, seed=SEED):
                     if len(seeds) > 1
                     else None,
                 )
-                for metric in ("AP", "FPR95", "R_at_1pct_FPR", "normal201_fpr")
+                for metric in ("AP", "FPR95", "R_at_0.1pct_FPR", "R_at_1pct_FPR")
             },
         )
     return dict(
         candidates=rows,
         seed_summary=seed_summary,
         compared_groups=target_groups,
-        uncertainty_scope="sequence-cluster bootstrap at the fitted full-val19 threshold; threshold-fitting uncertainty excluded; object repeats tracked only when annotated",
-        selection_scope="non-dominance on observed full-real metrics only; absent height/visibility evidence remains absent",
+        uncertainty_scope="sequence-cluster bootstrap conditional on fitted full-val19 thresholds; threshold-fitting uncertainty excluded; object repeats tracked only when annotated",
+        selection_scope="observed full-real non-dominance at both workpoints; insufficient exposure retains candidates; missing real height/visibility annotations remain unevaluable; numerical dominance alone does not establish improvement beyond uncertainty",
     )
 
 
 def evaluate(model, panels, data_root, samples, kind):
     import torch
+    from .model import METHOD
 
     if kind not in {"micro", "panel", "full"}:
         raise ValueError("invalid evaluation scope")
@@ -793,39 +912,46 @@ def evaluate(model, panels, data_root, samples, kind):
 
         g = [real[tuple(key)] for key in chosen["G"]]
         scores, labels = combined(g)
-        tau, high = (
-            operating_threshold(scores, labels),
-            recall_threshold(scores, labels),
-        )
+        thresholds = {
+            name: operating_threshold(scores, labels, rate)
+            for name, rate in WORKPOINTS.items()
+        }
+        high = recall_threshold(scores, labels)
         result = dict(
+            method=METHOD,
             kind=kind,
             units="fraction",
+            panel_thresholds=thresholds,
             panel_threshold_source="micro_G" if kind == "micro" else "G",
             G_ranking=rank_metrics(scores, labels),
             gaps=panels["gaps"],
         )
         for name in ("G", "H"):
             predictions = [real[tuple(key)] for key in chosen[name]]
-            result[name] = summarize(predictions, tau)
+            result[name] = summarize_at(predictions, thresholds)
             result[name + "_high_recall"] = (
                 summarize(predictions, high) if high is not None else None
             )
-        formal_tau, formal_high = tau, high
+        formal_thresholds, formal_high = thresholds, high
         if kind == "full":
             formal = [real[key] for key in sorted(official_keys)]
             scores, labels = combined(formal)
             result["official_ranking"] = rank_metrics(scores, labels)
-            formal_tau = result["official_ranking"]["tau_1pct"]
+            result["official_population"] = [
+                [p.sequence, p.frame, len(p.target), int((p.target == 1).sum())]
+                for p in formal
+            ]
+            formal_thresholds = result["official_ranking"]["thresholds"]
             formal_high = result["official_ranking"]["tau_95"]
-            result["official"] = summarize(formal, formal_tau)
+            result["official"] = summarize_at(formal, formal_thresholds)
             result["official_high_recall"] = summarize(formal, formal_high)
-            result["tiny_supplement"] = summarize(
-                [real[k] for k in sorted(tiny_keys)], formal_tau
+            result["tiny_supplement"] = summarize_at(
+                [real[k] for k in sorted(tiny_keys)], formal_thresholds
             )
             # Sequence records are the cluster units for later seed/uncertainty analyses.
             result["sequences"] = {
-                str(seq): summarize(
-                    [p for p in formal if p.sequence == seq], formal_tau
+                str(seq): summarize_at(
+                    [p for p in formal if p.sequence == seq], formal_thresholds
                 )
                 for seq in VAL19
             }
@@ -845,12 +971,14 @@ def evaluate(model, panels, data_root, samples, kind):
                 paired_originals[frame] = (p, raw_scores)
         for name in ("N_temporal", "N_hard"):
             selected = [normals[f] for f in chosen[name]]
-            result[name] = summarize(selected, tau)
+            result[name] = summarize_at(selected, thresholds)
             result[name + "_high_recall"] = (
                 summarize(selected, high) if high is not None else None
             )
         if kind == "full":
-            result["normal201"] = summarize(list(normals.values()), formal_tau)
+            result["normal201"] = summarize_at(
+                list(normals.values()), formal_thresholds
+            )
             result["normal201_high_recall"] = summarize(
                 list(normals.values()), formal_high
             )
@@ -921,45 +1049,58 @@ def evaluate(model, panels, data_root, samples, kind):
                     )[0]
                     <= 2.0
                 )
-            paired = {}
-            for name, mask in (
-                ("retained_normal", np.ones(len(affected), bool)),
-                ("affected_normal", affected),
-            ):
-                n = int(mask.sum())
-                paired[name] = dict(
-                    points=n,
-                    before_false_positives=int(
-                        (
-                            before_scores[before_mask][mask].astype(np.float64)
-                            >= formal_tau
-                        ).sum()
-                    ),
-                    after_false_positives=int(
-                        (
-                            after_scores[after_mask][mask].astype(np.float64)
-                            >= formal_tau
-                        ).sum()
-                    ),
-                )
-                paired[name]["before_fpr"] = (
-                    paired[name]["before_false_positives"] / n if n else None
-                )
-                paired[name]["after_fpr"] = (
-                    paired[name]["after_false_positives"] / n if n else None
-                )
-            result["S"].append(
-                dict(
-                    **request,
-                    threshold_source="val19"
-                    if kind == "full"
-                    else result["panel_threshold_source"],
-                    anomaly=summarize([after], formal_tau),
-                    original=summarize([before], formal_tau),
-                    paired=paired,
-                )
+
+            def paired_at(shared):
+                output = {}
+                for point, threshold in shared.items():
+                    paired = {}
+                    for name, mask in (
+                        ("retained_normal", np.ones(len(affected), bool)),
+                        ("affected_normal", affected),
+                    ):
+                        n = int(mask.sum())
+                        fp_before = int(
+                            (
+                                before_scores[before_mask][mask].astype(np.float64)
+                                >= threshold
+                            ).sum()
+                        )
+                        fp_after = int(
+                            (
+                                after_scores[after_mask][mask].astype(np.float64)
+                                >= threshold
+                            ).sum()
+                        )
+                        paired[name] = dict(
+                            points=n,
+                            before_false_positives=fp_before,
+                            after_false_positives=fp_after,
+                            before_fpr=fp_before / n if n else None,
+                            after_fpr=fp_after / n if n else None,
+                        )
+                    output[point] = paired
+                return output
+
+            entry = dict(
+                **request,
+                threshold_source=result["panel_threshold_source"],
+                anomaly=summarize_at([after], thresholds),
+                original=summarize_at([before], thresholds),
+                paired=paired_at(thresholds),
             )
-        result["synthetic_groups"] = summarize(synthetic_predictions, formal_tau)
+            if kind == "full":
+                entry["formal"] = dict(
+                    threshold_source="full_val19",
+                    anomaly=summarize_at([after], formal_thresholds),
+                    original=summarize_at([before], formal_thresholds),
+                    paired=paired_at(formal_thresholds),
+                )
+            result["S"].append(entry)
+        result["synthetic_groups"] = summarize_at(synthetic_predictions, thresholds)
+        if kind == "full":
+            result["synthetic_groups_formal"] = summarize_at(
+                synthetic_predictions, formal_thresholds
+            )
         result["seconds"] = time.perf_counter() - start
         result["peak_cuda_bytes"] = (
             torch.cuda.max_memory_allocated() if torch.cuda.is_available() else 0
@@ -995,11 +1136,13 @@ def main():
         write_json(args.output, compare_reports(args.reports))
     else:
         import torch
-        from .model import V3, configure_runtime
+        from .model import V3, METHOD, configure_runtime
 
         if args.checkpoint is None or args.output is None:
             parser.error("run requires --checkpoint and --output")
         saved = torch.load(args.checkpoint, map_location="cpu", weights_only=True)
+        if saved.get("format") != METHOD:
+            raise ValueError("checkpoint is not the refined original-point method")
         configure_runtime()
         model = V3(saved["mechanism"], saved["seed"]).cuda()
         model.load_state_dict(saved["model"], strict=True)
@@ -1014,7 +1157,10 @@ def main():
                     mechanism=saved["mechanism"],
                     seed=saved["seed"],
                     update=saved["step"],
+                    tail_weight=saved["recipe"]["tail_weight"],
                 ),
+                exposure=saved["exposure"],
+                coverage_plan=saved["coverage_plan"],
                 **evaluate(model, panels, args.data_root, args.samples, args.kind),
             ),
         )

@@ -1,4 +1,4 @@
-"""Checks of V3's scientific identities, risk, query equation, and metric scope."""
+"""Checks of V3's scientific identities, risk, relation equation, and metric scope."""
 
 from copy import deepcopy
 import json
@@ -11,6 +11,9 @@ from sklearn.metrics import average_precision_score, roc_auc_score, roc_curve
 from src.data import detection_targets
 from src.evaluate import (
     Prediction,
+    WORKPOINTS,
+    EXPOSURE_GROUPS,
+    coverage_status,
     VAL19,
     compare_reports,
     count_bin,
@@ -22,9 +25,20 @@ from src.evaluate import (
     stratified,
     summarize,
 )
-from src.model import V3, lr_factor, optimizer, paired_loss, prepare_scan
+from src.model import (
+    METHOD,
+    RelationDecoder,
+    V3,
+    lr_factor,
+    optimizer,
+    paired_loss,
+    prepare_scan,
+    nearest_returns,
+    normal_risk,
+    tail_weights,
+)
 from src.scene import PointLabels, make_source_frame
-from src.train import request_at
+from src.train import request_at, record_conditions
 from vendor.litept.model import Block, Point, PointROPEAttention
 
 
@@ -144,28 +158,25 @@ def test_instance_risk_and_zero_anomaly_request_mean():
 
 
 def test_initialization_mechanisms_share_every_common_tensor_and_optimizer_roles():
-    a, b, c = V3("A"), V3("B"), V3("C")
-    assert all(
-        torch.equal(value, b.state_dict()[name])
-        for name, value in a.state_dict().items()
-        if ".condition." not in name
-    )
-    assert all(
-        torch.equal(value, c.state_dict()[name])
-        for name, value in a.state_dict().items()
-    )
-    assert len([m for m in a.modules() if isinstance(m, PointROPEAttention)]) == 8
-    assert (
-        a.head[-1].weight.count_nonzero() > 0 and a.head[-1].bias.count_nonzero() == 0
-    )
-    for name, value in a.named_parameters():
-        if ".condition.2.weight" in name:
-            assert value.count_nonzero() == 0
-    groups = optimizer(a).param_groups
+    models = [V3(mode) for mode in ("D0", "D1", "D2", "D3")]
+    reference = models[-1].state_dict()
+    for model in models:
+        for name, value in model.state_dict().items():
+            if name in reference:
+                assert torch.equal(value, reference[name]), name
+        assert not any("condition" in name for name, _ in model.named_parameters())
+        assert (
+            len([m for m in model.modules() if isinstance(m, PointROPEAttention)]) == 8
+        )
+    assert models[-1].decoder.phi[-1].weight.count_nonzero() > 0
+    assert models[-1].decoder.proj.weight.count_nonzero() > 0
+    assert len({sum(p.numel() for p in m.parameters()) for m in models[1:]}) == 1
+    assert not hasattr(models[0].decoder, "qkv")
+    groups = optimizer(models[-1]).param_groups
     for group in groups:
         for name, parameter in zip(group["names"], group["params"]):
             assert group["weight_decay"] == (0.01 if parameter.ndim > 1 else 0)
-            if ".condition." in name or "embedding" in name:
+            if name.startswith(("decoder.", "fusion.", "head.")) or "embedding" in name:
                 assert group["peak_lr"] == 1e-4
     assert [lr_factor(n) for n in (1, 16, 128, 256)] == [0.1, 1.0, 1.0, 1.0]
     assert lr_factor(300, (257,)) == 0.5
@@ -173,16 +184,14 @@ def test_initialization_mechanisms_share_every_common_tensor_and_optimizer_roles
         lr_factor(1, (128,))
 
 
-def test_conditional_query_matches_equation_before_rope_with_gradients():
+def test_backbone_attention_restores_unconditioned_rope_equation():
     torch.manual_seed(3)
     block = PointROPEAttention(18, 1, 8, 100.0)
-    torch.nn.init.normal_(block.condition[-1].weight, std=0.1)
     features = torch.randn(5, 18, requires_grad=True)
-    coord = torch.randn(5, 3) * 20
     grid = torch.tensor([[1, 0, 0], [2, 1, 0], [4, 1, 1], [2, 4, 5], [0, 2, 3]])
     point = Point(
         feat=features,
-        coord=coord,
+        coord=torch.randn(5, 3) * 20,
         grid_coord=grid,
         offset=torch.tensor([5]),
         serialized_order=torch.arange(5)[None],
@@ -190,8 +199,6 @@ def test_conditional_query_matches_equation_before_rope_with_gradients():
     )
     actual = block(point).feat
     q, k, v = block.qkv(features).chunk(3, dim=-1)
-    q = q + block.condition(coord / 50.0)
-    # Independent axis matrices check the condition/rotation order and sqrt(18).
     matrices = []
     for position in grid:
         rotation = torch.zeros(18, 18)
@@ -207,9 +214,96 @@ def test_conditional_query_matches_equation_before_rope_with_gradients():
     rk = torch.einsum("nij,nj->ni", rotation, k)
     expected = block.proj(torch.softmax(rq @ rk.T / np.sqrt(18), dim=-1) @ v)
     torch.testing.assert_close(actual, expected, atol=2e-6, rtol=2e-6)
-    actual.square().sum().backward()
-    assert features.grad.abs().sum() > 0
-    assert block.condition[-1].weight.grad.abs().sum() > 0
+
+
+def test_neighbors_use_distinct_returns_self_and_fixed_identity_ties():
+    xyz = np.r_[np.zeros((40, 3)), [[100, 0, 0], [-100, 0, 0], [0, 100, 0]]]
+    index = nearest_returns(xyz)
+    assert index.shape == (43, 32)
+    for i in range(len(xyz)):
+        candidates = [j for j in range(len(xyz)) if j != i]
+        candidates.sort(key=lambda j: (float(np.square(xyz[j] - xyz[i]).sum()), j))
+        assert index[i].tolist() == [i] + candidates[:31]
+    for n in (1, 2, 7, 32):
+        small = nearest_returns(xyz[:n])
+        assert small.shape == (n, n)
+        assert all(len(set(row)) == n for row in small)
+    assert index[-1, 1] == 0  # No radius cap: 100-meter neighbors remain available.
+
+
+@pytest.mark.parametrize("mode", ["D0", "D1", "D2", "D3"])
+def test_relation_decoder_equations_and_chunked_gradients(mode):
+    torch.manual_seed(42)
+    decoder = RelationDecoder(mode, chunk_size=3).double()
+    reference = deepcopy(decoder)
+    features = torch.randn(7, 128, dtype=torch.float64, requires_grad=True)
+    other = features.detach().clone().requires_grad_(True)
+    xyz = torch.randn(7, 3, dtype=torch.float64) * 40
+    index = torch.tensor(nearest_returns(xyz.numpy()).astype(np.int64))
+    actual = decoder(features, xyz, index)
+    normalized = reference.norm(other)
+    if mode == "D0":
+        expected = other + reference.mlp(normalized)
+    else:
+        q, k, v = reference.qkv(normalized).reshape(7, 3, 4, 32).unbind(1)
+        messages = []
+        for i in range(7):
+            condition = (
+                xyz[i] / 50 if mode == "D3" else torch.zeros(3, dtype=torch.float64)
+            )
+            base = reference.phi(torch.cat((condition, torch.zeros_like(condition))))
+            geometry = torch.stack(
+                [
+                    reference.phi(torch.cat((condition, xyz[j] - xyz[i]))) - base
+                    for j in index[i]
+                ]
+            )
+            assert geometry[0].count_nonzero() == 0
+            heads = []
+            for h in range(4):
+                e = geometry[:, h * 32 : (h + 1) * 32]
+                weight = ((k[index[i], h] + e) @ q[i, h] / np.sqrt(32)).softmax(0)
+                heads.append(weight @ (v[index[i], h] + e))
+            message = torch.cat(heads)
+            if mode == "D2":
+                zero = torch.zeros(3, dtype=torch.float64)
+                message = (
+                    message
+                    + reference.phi(torch.cat((xyz[i] / 50, zero)))
+                    - reference.phi(torch.cat((zero, zero)))
+                )
+            messages.append(message)
+        updated = other + reference.proj(torch.stack(messages))
+        expected = updated + reference.ffn(reference.norm2(updated))
+    torch.testing.assert_close(actual, expected, atol=1e-12, rtol=1e-12)
+    actual.square().mean().backward()
+    expected.square().mean().backward()
+    torch.testing.assert_close(features.grad, other.grad, atol=1e-12, rtol=1e-12)
+    for left, right in zip(decoder.parameters(), reference.parameters()):
+        torch.testing.assert_close(left.grad, right.grad, atol=1e-12, rtol=1e-12)
+
+
+def test_fractional_normal_tail_and_tied_boundary_share_gradient_mass():
+    losses = torch.tensor([5.0, 4.0, 4.0, 1.0, 0.0], requires_grad=True)
+    weight = tail_weights(losses, alpha=0.5)
+    torch.testing.assert_close(weight, torch.tensor([0.4, 0.3, 0.3, 0.0, 0.0]))
+    (losses * weight).sum().backward()
+    torch.testing.assert_close(losses.grad, weight)
+    torch.testing.assert_close(
+        tail_weights(torch.tensor([9.0, 9.0, 1.0])), torch.tensor([0.5, 0.5, 0.0])
+    )
+    scores = torch.linspace(-3, 3, 1000, requires_grad=True)
+    risk, mean, tail = normal_risk(scores)
+    all_losses = torch.nn.functional.softplus(scores)
+    torch.testing.assert_close(tail, all_losses[-10:].mean())
+    torch.testing.assert_close(risk, (all_losses.mean() + all_losses[-10:].mean()) / 2)
+    risk.backward()
+    expected = scores.detach().sigmoid() * 0.5 / 1000
+    expected[-10:] += scores.detach()[-10:].sigmoid() * 0.5 / 10
+    torch.testing.assert_close(scores.grad, expected)
+    torch.testing.assert_close(normal_risk(scores, 0)[0], mean)
+    empty = torch.empty(0, requires_grad=True)
+    assert all(float(x.detach()) == 0 for x in normal_risk(empty))
 
 
 def test_recomputed_attention_preserves_values_gradients_and_scan_boundaries():
@@ -259,7 +353,7 @@ def test_threshold_ties_are_conservative_and_global_metrics_match_independent_re
     assert threshold > 3.0
     assert np.sum(scores[labels == 0].astype(np.float64) >= threshold) == 0
     result = rank_metrics(scores, labels)
-    assert result["R_at_1pct_FPR"] == 0.25
+    assert result["R_at_1pct_FPR"] == result["R_at_0.1pct_FPR"] == 0.25
     rng = np.random.default_rng(7)
     scores, labels = rng.integers(-5, 8, 300), rng.integers(0, 2, 300)
     result = rank_metrics(scores, labels)
@@ -309,6 +403,9 @@ def test_groups_use_instances_and_target_union_never_double_counts():
     assert group["instance_mean_point_recall"] == pytest.approx(2 / 3)
     assert group["distinct_objects"] is None
     assert result["normal_groups"]["all"]["false_positives_median"] == 1
+    assert result["segmentation"] == dict(
+        TP=2, FP=1, FN=2, TN=0, Precision=2 / 3, Recall=0.5, IoU=0.4
+    )
     assert [distance_bin(x) for x in [2.5, 10, 20, 35, 50]] == [
         "2.5-10",
         "10-20",
@@ -351,21 +448,83 @@ def test_sampling_continuation_and_evaluation_scopes():
     assert stratified([0, 100, 101, 900], 3, np.random.default_rng(1))[-1] == 900
 
 
-def test_candidate_comparison_preserves_tradeoffs_and_sequence_units(tmp_path):
+def test_coverage_requires_four_conditions_and_distinct_support_at_rounded_node():
+    exposure = {}
+    plan = dict(groups={name: dict(node=256) for name in EXPOSURE_GROUPS})
+    row = dict(
+        instance=60001,
+        observed_returns=4,
+        height_m=0.30,
+        distance_m=50.0,
+        disappeared=4,
+        object_id="known",
+    )
+    for i in range(20):
+        record_conditions(exposure, i % 5, f"world{i}", [row])
+    assert not coverage_status(exposure, plan, 128)["eligible"]
+    assert coverage_status(exposure, plan, 256)["eligible"]
+    record_conditions(exposure, 0, "world0", [row])
+    assert (
+        coverage_status(exposure, plan, 256)["groups"]["few_returns"]["requests"] == 20
+    )
+    unknown = dict(row, height_m=None, disappeared=None)
+    record_conditions(exposure, 99, "unknown", [unknown])
+    assert (
+        exposure["unknown"]["low_height"]
+        == exposure["unknown"]["weak_disappearance"]
+        == 1
+    )
+    assert (
+        coverage_status(exposure, plan, 256)["groups"]["low_height"]["requests"] == 20
+    )
+
+
+def test_candidate_comparison_preserves_tradeoffs_and_insufficient_exposure(tmp_path):
     paths = []
+    exposure = {}
+    observation = dict(
+        instance=1,
+        observed_returns=1,
+        height_m=0.2,
+        distance_m=40.0,
+        disappeared=0,
+        object_id="known",
+    )
+    for i in range(20):
+        record_conditions(exposure, i % 5, str(i), [observation])
+    plan = dict(groups={name: dict(node=128) for name in EXPOSURE_GROUPS})
     for route, ap, recall in (("P", 0.8, 0.6), ("T", 0.7, 0.8)):
         group = dict(instance_observations=2, instance_mean_point_recall=recall)
+        groups = {
+            point: dict(
+                anomaly_groups={"returns/1-4": group},
+                normal_groups={"all": dict(points=980, fpr=0.01)},
+            )
+            for point in WORKPOINTS
+        }
         report = dict(
+            method=METHOD,
             kind="full",
-            candidate=dict(route=route, mechanism="A", seed=1, update=128),
-            official_ranking=dict(
-                points=1000, anomaly_points=20, AP=ap, FPR95=0.1, R_at_1pct_FPR=0.5
+            exposure=exposure,
+            coverage_plan=plan,
+            official_population=[[125, 1, 1000, 20]],
+            candidate=dict(
+                route=route, mechanism="D3", tail_weight=0.5, seed=1, update=128
             ),
-            official=dict(anomaly_groups={"returns/1-4": group}),
-            normal201=dict(normal_groups={"all": dict(points=10000, fpr=0.02)}),
-            sequences={
-                str(seq): dict(anomaly_groups={"returns/1-4": group}) for seq in VAL19
+            official_ranking=dict(
+                points=1000,
+                anomaly_points=20,
+                AP=ap,
+                FPR95=0.1,
+                R_at_1pct_FPR=0.5,
+                **{"R_at_0.1pct_FPR": 0.4},
+            ),
+            official=groups,
+            normal201={
+                point: dict(normal_groups={"all": dict(points=10000, fpr=0.02)})
+                for point in WORKPOINTS
             },
+            sequences={str(seq): groups for seq in VAL19},
         )
         path = tmp_path / f"{route}.json"
         path.write_text(json.dumps(report))
@@ -373,12 +532,23 @@ def test_candidate_comparison_preserves_tradeoffs_and_sequence_units(tmp_path):
     compared = compare_reports(paths)
     assert all(not row["dominated_by"] for row in compared["candidates"])
     assert (
-        compared["candidates"][0]["conditional_sequence_intervals"]["returns/1-4"][
-            "sequences"
-        ]
+        compared["candidates"][0]["conditional_sequence_intervals"]["1pct"][
+            "returns/1-4"
+        ]["sequences"]
         == 19
     )
-    assert not compared["seed_summary"]["P/A/128"]["at_least_three_seeds"]
+    assert not compared["seed_summary"]["P/D3/lambda=0.5/128"]["at_least_three_seeds"]
+    report["official_ranking"]["AP"] = 0.9
+    report["coverage_plan"]["groups"]["few_returns"]["node"] = 256
+    paths[1].write_text(json.dumps(report))
+    compared = compare_reports(paths)
+    assert compared["candidates"][0]["observed_dominated_by"] == [str(paths[1])]
+    assert not compared["candidates"][0]["dominated_by"]
+    assert not compared["candidates"][1]["selection_eligible"]
+    report["official_population"][0][1] = 2
+    paths[1].write_text(json.dumps(report))
+    with pytest.raises(ValueError, match="populations differ"):
+        compare_reports(paths)
     report["kind"] = "panel"
     paths[1].write_text(json.dumps(report))
     with pytest.raises(ValueError, match="complete real"):
