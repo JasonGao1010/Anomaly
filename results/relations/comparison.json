@@ -1,0 +1,542 @@
+{
+  "candidates": [
+    {
+      "file": "results/relations/D1/128.json",
+      "candidate": {
+        "route": "P",
+        "mechanism": "D1",
+        "seed": 20260917,
+        "update": 128,
+        "tail_weight": 0.5
+      },
+      "AP": 0.06798256498492858,
+      "AUROC": 0.9901652669848493,
+      "FPR95": 0.04327076795089097,
+      "R_at_0.1pct_FPR": 0.26105441205042346,
+      "R_at_1pct_FPR": 0.7540657607515514,
+      "normal201_fpr": {
+        "0.1pct": 0.0008734701846266075,
+        "1pct": 0.010910304496212676
+      },
+      "instance_recalls": {
+        "0.1pct": {
+          "distance/10-20": 0.4317208096487445,
+          "distance/2.5-10": 0.2835992156174782,
+          "distance/20-35": 0.33551021907780537,
+          "distance/35-50": 0.4735185185185186,
+          "returns/1-4": 0.375177304964539,
+          "returns/100+": 0.14026559007939285,
+          "returns/20-99": 0.3484545862898449,
+          "returns/5-19": 0.3886842015907887
+        },
+        "1pct": {
+          "distance/10-20": 0.8924008556077578,
+          "distance/2.5-10": 0.6953616975320589,
+          "distance/20-35": 0.8031595994401304,
+          "distance/35-50": 0.8333641975308642,
+          "returns/1-4": 0.8612293144208039,
+          "returns/100+": 0.720432161589662,
+          "returns/20-99": 0.7815806778792225,
+          "returns/5-19": 0.7939778976231802
+        }
+      },
+      "conditional_sequence_intervals": {
+        "0.1pct": {
+          "distance/10-20": {
+            "sequences": 19,
+            "instance_observations": 1133,
+            "interval95": [
+              0.3435974415420696,
+              0.5257687014184773
+            ]
+          },
+          "distance/2.5-10": {
+            "sequences": 19,
+            "instance_observations": 1002,
+            "interval95": [
+              0.19742277701710378,
+              0.36528400645797837
+            ]
+          },
+          "distance/20-35": {
+            "sequences": 16,
+            "instance_observations": 767,
+            "interval95": [
+              0.2639491298743238,
+              0.4724017759915478
+            ]
+          },
+          "distance/35-50": {
+            "sequences": 5,
+            "instance_observations": 90,
+            "interval95": [
+              0.39821428571428574,
+              0.5555555555555556
+            ]
+          },
+          "returns/1-4": {
+            "sequences": 8,
+            "instance_observations": 705,
+            "interval95": [
+              0.2986653542660693,
+              0.46837817736807696
+            ]
+          },
+          "returns/100+": {
+            "sequences": 11,
+            "instance_observations": 192,
+            "interval95": [
+              0.1008688377852323,
+              0.31140334081934745
+            ]
+          },
+          "returns/20-99": {
+            "sequences": 19,
+            "instance_observations": 807,
+            "interval95": [
+              0.27007594219487807,
+              0.4335815570857823
+            ]
+          },
+          "returns/5-19": {
+            "sequences": 19,
+            "instance_observations": 1288,
+            "interval95": [
+              0.3155009287212794,
+              0.4719128818632225
+            ]
+          }
+        },
+        "1pct": {
+          "distance/10-20": {
+            "sequences": 19,
+            "instance_observations": 1133,
+            "interval95": [
+              0.8259053055124227,
+              0.9353913194100155
+            ]
+          },
+          "distance/2.5-10": {
+            "sequences": 19,
+            "instance_observations": 1002,
+            "interval95": [
+              0.6061031426079766,
+              0.782506438737683
+            ]
+          },
+          "distance/20-35": {
+            "sequences": 16,
+            "instance_observations": 767,
+            "interval95": [
+              0.738869958690817,
+              0.9155332335548694
+            ]
+          },
+          "distance/35-50": {
+            "sequences": 5,
+            "instance_observations": 90,
+            "interval95": [
+              0.6799999999999999,
+              1.0
+            ]
+          },
+          "returns/1-4": {
+            "sequences": 8,
+            "instance_observations": 705,
+            "interval95": [
+              0.8194436498855835,
+              0.9082219699939493
+            ]
+          },
+          "returns/100+": {
+            "sequences": 11,
+            "instance_observations": 192,
+            "interval95": [
+              0.6084606634080414,
+              0.8801160317833744
+            ]
+          },
+          "returns/20-99": {
+            "sequences": 19,
+            "instance_observations": 807,
+            "interval95": [
+              0.6949876301820905,
+              0.8446850628289029
+            ]
+          },
+          "returns/5-19": {
+            "sequences": 19,
+            "instance_observations": 1288,
+            "interval95": [
+              0.7215204159737503,
+              0.8673841146765812
+            ]
+          }
+        }
+      },
+      "coverage": {
+        "groups": {
+          "few_returns": {
+            "requests": 76,
+            "sources": 66,
+            "objects": 60,
+            "node": 128,
+            "eligible": true,
+            "unknown_observations": 0
+          },
+          "low_height": {
+            "requests": 222,
+            "sources": 171,
+            "objects": 109,
+            "node": 128,
+            "eligible": true,
+            "unknown_observations": 0
+          },
+          "far_range": {
+            "requests": 76,
+            "sources": 69,
+            "objects": 59,
+            "node": 128,
+            "eligible": true,
+            "unknown_observations": 0
+          },
+          "weak_disappearance": {
+            "requests": 104,
+            "sources": 89,
+            "objects": 77,
+            "node": 128,
+            "eligible": true,
+            "unknown_observations": 0
+          }
+        },
+        "eligible": true,
+        "reasons": []
+      },
+      "evidence_gaps": {
+        "real_height_observations": 0,
+        "unknown_instance_points": 1,
+        "real_occlusion": "unavailable: no paired real background",
+        "synthetic_occlusion_denominator": "unavailable: affected-ray opportunities were not saved",
+        "G_requested": 57,
+        "G_available": 57,
+        "H_requested_max": 48,
+        "H_available": 48,
+        "N_temporal_requested": 32,
+        "N_temporal_available": 32,
+        "N_hard_requested": 16,
+        "N_hard_available": 16,
+        "S_requested": 16,
+        "S_available": 16,
+        "micro_frames_available": 1120
+      },
+      "selection_eligible": true,
+      "retention_reasons": [],
+      "observed_dominated_by": [],
+      "dominated_by": []
+    },
+    {
+      "file": "results/relations/D3/128.json",
+      "candidate": {
+        "route": "P",
+        "mechanism": "D3",
+        "seed": 20260917,
+        "update": 128,
+        "tail_weight": 0.5
+      },
+      "AP": 0.07690748745572454,
+      "AUROC": 0.9889663473142137,
+      "FPR95": 0.05070170683102393,
+      "R_at_0.1pct_FPR": 0.2849975428290609,
+      "R_at_1pct_FPR": 0.7701802306312072,
+      "normal201_fpr": {
+        "0.1pct": 0.0010535621612619628,
+        "1pct": 0.011592778384030758
+      },
+      "instance_recalls": {
+        "0.1pct": {
+          "distance/10-20": 0.42223355591379547,
+          "distance/2.5-10": 0.31346460554153016,
+          "distance/20-35": 0.2976179820038159,
+          "distance/35-50": 0.5232098765432098,
+          "returns/1-4": 0.358628841607565,
+          "returns/100+": 0.17486791087503364,
+          "returns/20-99": 0.3809466508699546,
+          "returns/5-19": 0.36802182858335875
+        },
+        "1pct": {
+          "distance/10-20": 0.893281429855306,
+          "distance/2.5-10": 0.7542897027580674,
+          "distance/20-35": 0.7503195913774703,
+          "distance/35-50": 0.8697839506172841,
+          "returns/1-4": 0.849645390070922,
+          "returns/100+": 0.7169241287919353,
+          "returns/20-99": 0.8346424612244299,
+          "returns/5-19": 0.7852918675431318
+        }
+      },
+      "conditional_sequence_intervals": {
+        "0.1pct": {
+          "distance/10-20": {
+            "sequences": 19,
+            "instance_observations": 1133,
+            "interval95": [
+              0.3335040849884355,
+              0.5169380207619998
+            ]
+          },
+          "distance/2.5-10": {
+            "sequences": 19,
+            "instance_observations": 1002,
+            "interval95": [
+              0.21736199519894842,
+              0.4006111026571899
+            ]
+          },
+          "distance/20-35": {
+            "sequences": 16,
+            "instance_observations": 767,
+            "interval95": [
+              0.2292880497679522,
+              0.4255544471951095
+            ]
+          },
+          "distance/35-50": {
+            "sequences": 5,
+            "instance_observations": 90,
+            "interval95": [
+              0.3958333333333333,
+              0.5763374485596708
+            ]
+          },
+          "returns/1-4": {
+            "sequences": 8,
+            "instance_observations": 705,
+            "interval95": [
+              0.27071177996806683,
+              0.45168766677199634
+            ]
+          },
+          "returns/100+": {
+            "sequences": 11,
+            "instance_observations": 192,
+            "interval95": [
+              0.10866175437084491,
+              0.44221096889511213
+            ]
+          },
+          "returns/20-99": {
+            "sequences": 19,
+            "instance_observations": 807,
+            "interval95": [
+              0.2955762611764338,
+              0.4747711474345124
+            ]
+          },
+          "returns/5-19": {
+            "sequences": 19,
+            "instance_observations": 1288,
+            "interval95": [
+              0.29443005561742114,
+              0.4546941475933338
+            ]
+          }
+        },
+        "1pct": {
+          "distance/10-20": {
+            "sequences": 19,
+            "instance_observations": 1133,
+            "interval95": [
+              0.8317325369182645,
+              0.933037999954766
+            ]
+          },
+          "distance/2.5-10": {
+            "sequences": 19,
+            "instance_observations": 1002,
+            "interval95": [
+              0.6504655526592295,
+              0.8393466083534146
+            ]
+          },
+          "distance/20-35": {
+            "sequences": 16,
+            "instance_observations": 767,
+            "interval95": [
+              0.6713257704874659,
+              0.8866876848105736
+            ]
+          },
+          "distance/35-50": {
+            "sequences": 5,
+            "instance_observations": 90,
+            "interval95": [
+              0.7148235294117649,
+              1.0
+            ]
+          },
+          "returns/1-4": {
+            "sequences": 8,
+            "instance_observations": 705,
+            "interval95": [
+              0.8139256813881396,
+              0.9023444444444443
+            ]
+          },
+          "returns/100+": {
+            "sequences": 11,
+            "instance_observations": 192,
+            "interval95": [
+              0.5850871642045264,
+              0.9412535015002128
+            ]
+          },
+          "returns/20-99": {
+            "sequences": 19,
+            "instance_observations": 807,
+            "interval95": [
+              0.7522971033527155,
+              0.8934720340849348
+            ]
+          },
+          "returns/5-19": {
+            "sequences": 19,
+            "instance_observations": 1288,
+            "interval95": [
+              0.7078687262744324,
+              0.8604266720919551
+            ]
+          }
+        }
+      },
+      "coverage": {
+        "groups": {
+          "few_returns": {
+            "requests": 76,
+            "sources": 66,
+            "objects": 60,
+            "node": 128,
+            "eligible": true,
+            "unknown_observations": 0
+          },
+          "low_height": {
+            "requests": 222,
+            "sources": 171,
+            "objects": 109,
+            "node": 128,
+            "eligible": true,
+            "unknown_observations": 0
+          },
+          "far_range": {
+            "requests": 76,
+            "sources": 69,
+            "objects": 59,
+            "node": 128,
+            "eligible": true,
+            "unknown_observations": 0
+          },
+          "weak_disappearance": {
+            "requests": 104,
+            "sources": 89,
+            "objects": 77,
+            "node": 128,
+            "eligible": true,
+            "unknown_observations": 0
+          }
+        },
+        "eligible": true,
+        "reasons": []
+      },
+      "evidence_gaps": {
+        "real_height_observations": 0,
+        "unknown_instance_points": 1,
+        "real_occlusion": "unavailable: no paired real background",
+        "synthetic_occlusion_denominator": "unavailable: affected-ray opportunities were not saved",
+        "G_requested": 57,
+        "G_available": 57,
+        "H_requested_max": 48,
+        "H_available": 48,
+        "N_temporal_requested": 32,
+        "N_temporal_available": 32,
+        "N_hard_requested": 16,
+        "N_hard_available": 16,
+        "S_requested": 16,
+        "S_available": 16,
+        "micro_frames_available": 1120
+      },
+      "selection_eligible": true,
+      "retention_reasons": [],
+      "observed_dominated_by": [],
+      "dominated_by": []
+    }
+  ],
+  "seed_summary": {
+    "P/D1/lambda=0.5/128": {
+      "seeds": [
+        20260917
+      ],
+      "at_least_three_seeds": false,
+      "metrics": {
+        "AP": {
+          "mean": 0.06798256498492858,
+          "std": null
+        },
+        "AUROC": {
+          "mean": 0.9901652669848493,
+          "std": null
+        },
+        "FPR95": {
+          "mean": 0.04327076795089097,
+          "std": null
+        },
+        "R_at_0.1pct_FPR": {
+          "mean": 0.26105441205042346,
+          "std": null
+        },
+        "R_at_1pct_FPR": {
+          "mean": 0.7540657607515514,
+          "std": null
+        }
+      }
+    },
+    "P/D3/lambda=0.5/128": {
+      "seeds": [
+        20260917
+      ],
+      "at_least_three_seeds": false,
+      "metrics": {
+        "AP": {
+          "mean": 0.07690748745572454,
+          "std": null
+        },
+        "AUROC": {
+          "mean": 0.9889663473142137,
+          "std": null
+        },
+        "FPR95": {
+          "mean": 0.05070170683102393,
+          "std": null
+        },
+        "R_at_0.1pct_FPR": {
+          "mean": 0.2849975428290609,
+          "std": null
+        },
+        "R_at_1pct_FPR": {
+          "mean": 0.7701802306312072,
+          "std": null
+        }
+      }
+    }
+  },
+  "compared_groups": [
+    "distance/10-20",
+    "distance/2.5-10",
+    "distance/20-35",
+    "distance/35-50",
+    "returns/1-4",
+    "returns/100+",
+    "returns/20-99",
+    "returns/5-19"
+  ],
+  "uncertainty_scope": "sequence-cluster bootstrap conditional on fitted full-val19 thresholds; threshold-fitting uncertainty excluded; object repeats tracked only when annotated",
+  "selection_scope": "observed non-dominance across official AP/AUROC/FPR95 and supplemental metrics at both workpoints; insufficient exposure retains candidates; missing real height/visibility annotations remain unevaluable; numerical dominance alone does not establish improvement beyond uncertainty"
+}
