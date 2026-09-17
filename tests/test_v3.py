@@ -38,7 +38,7 @@ from src.model import (
     tail_weights,
 )
 from src.scene import PointLabels, make_source_frame
-from src.train import request_at, record_conditions
+from src.train import request_at, record_conditions, validate_continuation_recipe
 from vendor.litept.model import Block, Point, PointROPEAttention
 
 
@@ -56,6 +56,47 @@ def source(xyzi, raw, instance=None, sequence=206, frame=0):
         partition="train",
         sequence_id=sequence,
     )
+
+
+def test_shared_budget_extension_preserves_scientific_settings_and_past_rates():
+    fixed = dict(
+        steps=128,
+        seed=20260917,
+        route="P",
+        balance="instance",
+        backbone_lr=1e-5,
+        new_lr=1e-4,
+        halve_at=[],
+    )
+    old = dict(
+        balance="instance",
+        tail_weight=0.5,
+        backbone_lr=1e-5,
+        new_lr=1e-4,
+        halve_at=[],
+        fixed_recipe=fixed,
+    )
+    new = deepcopy(old)
+    new["fixed_recipe"]["steps"] = 256
+    validate_continuation_recipe(old, new, 128, 256)
+    assert old["fixed_recipe"]["steps"] == 128
+    for key, value in (("tail_weight", 0.25), ("backbone_lr", 2e-5)):
+        changed = deepcopy(new)
+        changed[key] = value
+        with pytest.raises(ValueError, match="risk or base rates"):
+            validate_continuation_recipe(old, changed, 128, 256)
+    changed = deepcopy(new)
+    changed["fixed_recipe"]["seed"] += 1
+    with pytest.raises(ValueError, match="scientific settings"):
+        validate_continuation_recipe(old, changed, 128, 256)
+    changed["fixed_recipe"] = dict(fixed, steps=64)
+    with pytest.raises(ValueError, match="reduce"):
+        validate_continuation_recipe(old, changed, 32, 64)
+    new["fixed_recipe"].update(steps=512, halve_at=[257])
+    new["halve_at"] = [257]
+    validate_continuation_recipe(old, new, 128, 512)
+    with pytest.raises(ValueError, match="past learning rates"):
+        validate_continuation_recipe(old, new, 300, 512)
 
 
 def test_targets_include_all_normal_labels_and_isolate_native_anomaly():

@@ -551,6 +551,35 @@ def save_checkpoint(path, model, opt, step, metadata, exposure):
     temporary.replace(path)
 
 
+def validate_continuation_recipe(old, new, step, budget):
+    for key in ("balance", "tail_weight", "backbone_lr", "new_lr"):
+        if old[key] != new[key]:
+            raise ValueError(
+                "changing the training risk or base rates requires a new route"
+            )
+    previous, current = old["fixed_recipe"], new["fixed_recipe"]
+    if (previous is None) != (current is None):
+        raise ValueError("continuation must retain the shared recipe")
+    if previous is not None:
+        # Only future budget and decay decisions may change; the request stream is
+        # indexed by seed and update, independently of the planned final budget.
+        def immutable(recipe):
+            return {k: v for k, v in recipe.items() if k not in {"steps", "halve_at"}}
+
+        if immutable(previous) != immutable(current):
+            raise ValueError(
+                "continuation cannot change the shared scientific settings"
+            )
+        if current["steps"] < previous["steps"]:
+            raise ValueError("continuation cannot reduce the shared budget")
+    if [v for v in new["halve_at"] if v <= step] != [
+        v for v in old["halve_at"] if v <= step
+    ]:
+        raise ValueError("a continuation cannot rewrite past learning rates")
+    if budget <= step:
+        raise ValueError("continuation must extend beyond the saved update")
+
+
 def train(args):
     panels = json.loads(args.panels.read_text())
     if panels.get("format") != "ajae-v3-panels":
@@ -658,6 +687,7 @@ def train(args):
                 from_step=0,
                 to_step=args.steps,
                 reason=args.reason or "first V3 exploration budget",
+                halve_at=args.halve_at,
             )
         ],
         resources=snapshot,
@@ -690,24 +720,7 @@ def train(args):
             raise ValueError(
                 "resume would change the scientific route, seed, or fixed panels"
             )
-        old_recipe = saved["recipe"]
-        if any(
-            old_recipe[key] != recipe[key]
-            for key in (
-                "balance",
-                "tail_weight",
-                "backbone_lr",
-                "new_lr",
-                "fixed_recipe",
-            )
-        ):
-            raise ValueError(
-                "changing the training risk or base rates requires a new route"
-            )
-        if [v for v in args.halve_at if v <= saved["step"]] != [
-            v for v in old_recipe["halve_at"] if v <= saved["step"]
-        ]:
-            raise ValueError("a continuation cannot rewrite past learning rates")
+        validate_continuation_recipe(saved["recipe"], recipe, saved["step"], args.steps)
         if not args.reason:
             raise ValueError(
                 "record the scientific reason for extending or resuming training"
@@ -715,11 +728,15 @@ def train(args):
         model.load_state_dict(saved["model"], strict=True)
         metadata["initialization"] = saved["initialization"]
         metadata["decisions"] = saved["decisions"] + [
-            dict(from_step=saved["step"], to_step=args.steps, reason=args.reason)
+            dict(
+                from_step=saved["step"],
+                previous_budget=saved["decisions"][-1]["to_step"],
+                to_step=args.steps,
+                reason=args.reason,
+                halve_at=args.halve_at,
+            )
         ]
         exposure, step = saved["exposure"], saved["step"]
-        if args.steps <= step:
-            raise ValueError("continuation must extend beyond the saved update")
     elif args.route in {"P", "T"}:
         if args.weights is None:
             raise ValueError(
