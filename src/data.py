@@ -5,6 +5,7 @@ uses AJAE/assets/rays.npz and the formula already measured in the 206 analysis.
 """
 
 from dataclasses import dataclass, field
+import hashlib
 from pathlib import Path
 import math
 
@@ -178,6 +179,81 @@ def supervision(frame):
         targets.fill(-1)
     # No per-object threshold: 1-4 point objects stay anomalous in eligible frames.
     return Supervision(readonly(targets), normal, anomaly)
+
+
+def legacy_source_identity(frame):
+    """Reproduce the source binding already stored in AJAE/V3 delta files.
+
+    The old 19-class map is storage metadata only, never a V4 learning target.
+    """
+    groups = ((10, 252), (11,), (15,), (18, 258), (13, 16, 20, 256, 257, 259),
+              (30, 254), (31, 253), (32, 255), (40, 60), (44,), (48,), (49,),
+              (50,), (51,), (70,), (71,), (72,), (80,), (81,))
+    mapping = np.full(65536, 255, np.uint8)
+    for target, raw in enumerate(groups):
+        mapping[list(raw)] = target
+    digest = hashlib.sha256(f"{frame.partition}/{frame.sequence_id}/{frame.frame_id}".encode())
+    for values in (frame.xyzi, frame.labels, frame.pose, mapping[frame.semantic]):
+        digest.update(values.tobytes())
+    return digest.hexdigest()
+
+
+def read_delta(path):
+    """Read an existing one-object delta without constructing or filtering a scan."""
+    fields = {"format", "source_identity", "world_identity", "source_slot", "xyzi",
+              "packed_labels", "inserted_slot", "occluded_slot"}
+    with np.load(path, allow_pickle=False) as saved:
+        if set(saved.files) != fields or saved["format"].item() != "stu-frozen-frame":
+            raise ValueError("unrecognized saved scan delta")
+        delta = {name: saved[name] for name in fields - {"format"}}
+    for name in ("source_identity", "world_identity"):
+        delta[name] = str(delta[name].item())
+    for name in ("source_slot", "inserted_slot", "occluded_slot"):
+        slots = delta[name]
+        if slots.dtype != np.int32 or slots.ndim != 1 or np.any(slots < 0) or np.any(np.diff(slots) <= 0):
+            raise ValueError(f"invalid sorted slot set: {name}")
+    slots, inserted, occluded = (delta[name] for name in ("source_slot", "inserted_slot", "occluded_slot"))
+    if not np.array_equal(slots, np.union1d(inserted, occluded)):
+        raise ValueError("changed slots do not equal inserted/occluded slots")
+    xyzi, packed = delta["xyzi"], delta["packed_labels"]
+    if xyzi.dtype != np.float32 or xyzi.shape != (len(slots), 4) or not np.isfinite(xyzi).all():
+        raise ValueError("invalid saved XYZI")
+    if packed.dtype != np.uint32 or packed.shape != (len(slots),):
+        raise ValueError("invalid saved labels")
+    selected = np.isin(slots, inserted, assume_unique=True)
+    if np.any(~np.any(xyzi[selected, :3] != 0, axis=1)) or np.any(packed[selected] != (np.uint32(60001) << np.uint32(16) | np.uint32(2))):
+        raise ValueError("saved anomaly returns/labels disagree")
+    if np.any(xyzi[~selected] != 0) or np.any(packed[~selected] != 0):
+        raise ValueError("opaque occlusion without return must clear XYZI and labels")
+    return delta
+
+
+def validate_delta(delta, original, world_identity, *, source_identity=None):
+    """Bind delta rows to their original scan and fixed world before using them.
+
+    Analysis may reuse the source binding computed once for this exact Frame.
+    """
+    identity = legacy_source_identity(original) if source_identity is None else source_identity
+    if delta["source_identity"] != identity or delta["world_identity"] != world_identity:
+        raise ValueError("saved delta belongs to a different source or world")
+    slots, inserted, occluded = (delta[name] for name in ("source_slot", "inserted_slot", "occluded_slot"))
+    if len(slots) and slots[-1] >= len(original.xyzi):
+        raise ValueError("saved delta slot exceeds the original scan")
+    if np.any(~original.actual[occluded]):
+        raise ValueError("an originally empty slot cannot be occluded")
+    if not np.array_equal(inserted[original.actual[inserted]], np.intersect1d(inserted, occluded, assume_unique=True)):
+        raise ValueError("inserted returns over original returns must record occlusion")
+
+
+def restore_delta(path, original, world_identity):
+    """Restore full XYZI and raw labels; the caller applies the common supervision rule."""
+    delta = read_delta(path)
+    validate_delta(delta, original, world_identity)
+    xyzi, labels = original.xyzi.copy(), original.labels.copy()
+    xyzi[delta["source_slot"]] = delta["xyzi"]
+    labels[delta["source_slot"]] = delta["packed_labels"]
+    return Frame(original.frame_id, xyzi, original.pose, labels,
+                 sequence_id=original.sequence_id, partition=original.partition)
 
 
 @dataclass(frozen=True, slots=True)

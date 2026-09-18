@@ -1,6 +1,7 @@
 """Diagnostic fixtures only: these choices are NOT V4 generation parameters."""
 
 from dataclasses import replace
+import json
 import math
 import os
 from pathlib import Path
@@ -8,7 +9,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from src.data import Frame, Rays, STUSequence, point_targets, read_rays, supervision
+from src.data import (Frame, Rays, STUSequence, point_targets, read_delta, read_rays,
+                      restore_delta, supervision, validate_delta)
 from src.shape import Shape, Trace, unresolved_penetration
 from src.render import (Material, Object, Response, World, check_grounding,
                         ground_object, observed_collision, pair_collision, render_frame)
@@ -65,6 +67,39 @@ def test_frame_selection_and_full_input(count):
     xyzi[0] = 0
     assert frame.xyzi[0, 0] == 3
     assert not frame.xyzi.flags.writeable
+
+
+@pytest.mark.parametrize("eligible", [False, True])
+def test_saved_206_reuse_preserves_full_scan_and_selection(eligible):
+    data_root = Path(os.environ.get("STU_DATA_ROOT", "/home/jasongao/Data/STU"))
+    pool = Path(os.environ.get("AJAE_SAMPLES_ROOT", Path(__file__).resolve().parents[2] / "AJAE/results/synthetic"))
+    if not (data_root / "train/206").is_dir() or not (pool / "manifest.json").is_file():
+        pytest.skip("real STU/206 and existing AJAE samples are required")
+    entry = json.loads((pool / "manifest.json").read_text())["splits"]["train"]["worlds"][0]
+    saved = json.loads((pool / entry["path"] / "manifest.json").read_text())
+    record = next(row for row in saved["frames"] if row["in_range"] >= 5) if eligible else next(
+        row for row in saved["frames"] if 1 <= row["in_range"] <= 4)
+    original = STUSequence(data_root)[record["frame"]]
+    path = pool / entry["path"] / "frames" / f"{record['frame']:06d}.npz"
+    frame = restore_delta(path, original, entry["world_identity"])
+    selected = supervision(frame)
+    assert len(frame.xyzi) == len(original.xyzi) == 131072
+    assert selected.anomaly_count == record["in_range"]
+    assert selected.eligible == eligible
+    delta = read_delta(path)
+    untouched = np.ones(len(frame.xyzi), bool)
+    untouched[delta["source_slot"]] = False
+    np.testing.assert_array_equal(frame.xyzi[untouched], original.xyzi[untouched])
+    np.testing.assert_array_equal(frame.labels[untouched], original.labels[untouched])
+    assert selected.normal_count == int((point_targets(original) == 0).sum()) - int(
+        (point_targets(original)[delta["occluded_slot"]] == 0).sum())
+    if not eligible:
+        assert np.all(selected.targets == -1)
+    # Same-shaped data from another source must never be accepted as this scan.
+    changed = original.xyzi.copy()
+    changed[0, 3] += 1
+    with pytest.raises(ValueError, match="different source or world"):
+        validate_delta(delta, replace(original, xyzi=changed), entry["world_identity"])
 
 
 def test_ellipsoid_intersection_matches_analytic_roots():
