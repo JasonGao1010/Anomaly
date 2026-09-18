@@ -192,9 +192,9 @@
       "frames_5_19": 1113
     }
   ],
-  "seconds": 17.775931221956853,
+  "seconds": 23.506905792979524,
   "workers": 6,
-  "worker_peak_rss_bytes": 194084864,
+  "worker_peak_rss_bytes": 191795200,
   "main_root": "/home/jasongao/Study/AJAE/results/synthetic",
   "mirror_root": "/home/jasongao/Study/AJAE-v3/samples",
   "data_root": "/home/jasongao/Data/STU",
@@ -290,5 +290,8 @@
       "joint_range_candidate_scans": 272,
       "joint_range_candidate_worlds": 109
     }
-  ]
+  ],
+  "normal_observations": 7150,
+  "preserved_normal_observations": 7150,
+  "normal_structures": 66
 }

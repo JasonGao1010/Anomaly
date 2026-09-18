@@ -22,8 +22,82 @@ from scipy.spatial import cKDTree
 
 from .analyze import REFERENCES, quantiles, write_csv
 from .data import (STUSequence, legacy_source_identity, point_targets, read_delta,
-                   read_rays, validate_delta)
+                   read_rays, restore_delta, validate_delta)
 from .shape import Shape, unresolved_penetration
+
+
+def local_geometry(xyzi):
+    """Describe a selected observation; these summaries do not certify ambiguity."""
+    xyz = xyzi[:, :3].astype(float)
+    centered = xyz - xyz.mean(axis=0)
+    eigen, axes = np.linalg.eigh(centered.T @ centered / len(xyz))
+    eigen = np.maximum(eigen[::-1], 0)
+    spans = np.ptp(centered @ axes[:, ::-1], axis=0)
+    return dict(spread_m=float(np.sqrt(eigen.sum())), axis1_span_m=float(spans[0]),
+                axis2_span_m=float(spans[1]), axis3_span_m=float(spans[2]),
+                linearity=float((eigen[0]-eigen[1])/eigen[0]) if eigen[0] else 0.,
+                planarity=float((eigen[1]-eigen[2])/eigen[0]) if eigen[0] else 0.,
+                scattering=float(eigen[2]/eigen[0]) if eigen[0] else 0.,
+                neighbor_m=float(np.median(cKDTree(xyz).query(xyz, k=2)[0][:, 1])),
+                intensity=float(np.median(xyzi[:, 3])))
+
+
+def region_context(frame, slots, excluded):
+    """Measure actual surroundings; 0.5/2 m reuse historical descriptive scales."""
+    xyz = frame.xyzi[slots, :3].astype(float)
+    keep = frame.actual.copy()
+    keep[excluded] = False
+    tree = cKDTree(frame.xyzi[keep, :3])
+    distances = tree.query(xyz)[0]
+    # Existing normal structure, excluding the synthetic object, is the comparison.
+    nonground = keep & ~np.isin(frame.semantic, (0, 2, 40, 44, 48, 49, 60))
+    if nonground.any():
+        gaps, nearest = cKDTree(frame.xyzi[nonground, :3]).query(xyz)
+        neighbor_semantic = int(frame.semantic[nonground][nearest[np.argmin(gaps)]])
+    else:
+        gaps, neighbor_semantic = np.array([np.nan]), None
+    result = local_geometry(frame.xyzi[slots])
+    result.update(other_nearest_m=float(distances.min()),
+                  nonground_nearest_m=float(gaps.min()),
+                  nonground_nearest_semantic=neighbor_semantic,
+                  neighbors_0p5_m=float(np.median(tree.query_ball_point(xyz, .5, return_length=True))),
+                  neighbors_2_m=float(np.median(tree.query_ball_point(xyz, 2., return_length=True))))
+    return result
+
+
+def analyze_pair(task):
+    kind, identity, normal_world, normal_frame, native_slots, anomaly_world, anomaly_frame = task
+    original = _sequence[normal_frame]
+    n_world = next(w for w in _worlds if w["path"] == normal_world)
+    normal = restore_delta(_root / normal_world / "frames" / f"{normal_frame:06d}.npz", original, n_world["world_id"])
+    if native_slots is None:
+        _, semantic, instance = map(int, identity.split(":"))
+        excluded = np.flatnonzero((normal.semantic == semantic) & (normal.instance == instance))
+        slots = excluded[point_targets(normal)[excluded] == 0]
+    else:
+        excluded = np.asarray(native_slots, int)
+        slots = excluded[point_targets(normal)[excluded] == 0]
+    if len(slots) < 5:
+        return None
+    a_world = next(w for w in _worlds if w["path"] == anomaly_world)
+    anomaly = restore_delta(_root / anomaly_world / "frames" / f"{anomaly_frame:06d}.npz", _sequence[anomaly_frame], a_world["world_id"])
+    a_slots = np.flatnonzero(point_targets(anomaly) == 1)
+    if len(a_slots) < 5:
+        return None
+    n, a = region_context(normal, slots, excluded), region_context(anomaly, a_slots, np.flatnonzero(anomaly.semantic == 2))
+    n_center, a_center = normal.xyzi[slots, :3].mean(axis=0), anomaly.xyzi[a_slots, :3].mean(axis=0)
+    result = dict(kind=kind, reference=identity, normal_world=normal_world, normal_frame=normal_frame,
+                  anomaly_world=anomaly_world, anomaly_frame=anomaly_frame,
+                  normal_points=len(slots), anomaly_points=len(a_slots),
+                  normal_range_m=float(np.median(normal.range_m[slots])), anomaly_range_m=float(np.median(anomaly.range_m[a_slots])),
+                  sensor_xy_separation_m=float(np.linalg.norm(n_center[:2]-a_center[:2])),
+                  normal_majority_semantic=int(np.bincount(normal.semantic[slots]).argmax()))
+    result.update({f"normal_{k}": v for k, v in n.items()})
+    result.update({f"anomaly_{k}": v for k, v in a.items()})
+    result.update(spread_ratio=max(n["spread_m"], a["spread_m"])/min(n["spread_m"], a["spread_m"]),
+                  shape_difference=max(abs(n[k]-a[k]) for k in ("linearity", "planarity", "scattering")),
+                  range_difference_m=abs(result["normal_range_m"]-result["anomaly_range_m"]))
+    return result
 
 
 def load_worlds(root, mirror):
@@ -126,6 +200,10 @@ def analyze_frame(frame_id):
     instance_keys = (source.semantic.astype(np.uint32) << np.uint32(16)) | source.instance
     groups = {int(key): np.flatnonzero(normal & (instance_keys == key))
               for key in np.unique(instance_keys[normal & (source.instance != 0)])}
+    normal_rows = {key: dict(structure=f"206:{key >> 16}:{key & 65535}", frame=frame_id,
+                    points=len(slots), range_m=float(np.median(source.range_m[slots])),
+                    preserved_world=None, **local_geometry(source.xyzi[slots]))
+                   for key, slots in groups.items() if len(slots) >= 5}
     obstacles = np.flatnonzero(source.actual & (source.semantic != 0) & ~np.isin(source.semantic, (40, 44, 48, 49, 60)))
     world_points = source.xyzi[obstacles, :3].astype(float) @ source.pose[:3, :3].T + source.pose[:3, 3]
     tree = cKDTree(world_points)
@@ -196,6 +274,8 @@ def analyze_frame(frame_id):
             matches = []
             for key, slots in groups.items():
                 kept = slots[~np.isin(slots, occluded, assume_unique=True)]
+                if key in normal_rows and normal_rows[key]["preserved_world"] is None and len(kept) == len(slots):
+                    normal_rows[key]["preserved_world"] = w["path"]
                 if len(kept) == count:
                     median = float(np.median(source.range_m[kept]))
                     matches.append((abs(median - row["range_median_m"]), key, median))
@@ -209,7 +289,7 @@ def analyze_frame(frame_id):
             row["historical_reference_changed_points"] = int(np.isin(slots, delta["source_slot"]).sum())
             row["historical_reference_valid_points"] = int(normal[slots].sum())
         rows.append(row)
-    return rows, resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024
+    return rows, list(normal_rows.values()), resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024
 
 
 def summarize(rows, worlds, inventory, allowance, seconds, workers, rss):
@@ -355,11 +435,12 @@ def run(args):
     frames = list(range(449)) if args.frames is None else args.frames
     if args.output.exists() and any(args.output.iterdir()) and args.frames is not None:
         raise ValueError("pilot must not overwrite a full analysis")
-    rows, peak = [], 0
+    rows, normals, peak = [], [], 0
     with ProcessPoolExecutor(args.workers, initializer=initialize,
                              initargs=(args.root, args.mirror, args.data_root, worlds, allowance)) as pool:
-        for i, (part, rss) in enumerate(pool.map(analyze_frame, frames), 1):
+        for i, (part, native, rss) in enumerate(pool.map(analyze_frame, frames), 1):
             rows.extend(part)
+            normals.extend(native)
             peak = max(peak, rss)
             if i % 25 == 0 or i == len(frames):
                 print(f"source_frames={i}/{len(frames)} saved_samples={len(rows)} seconds={time.monotonic()-started:.1f}", flush=True)
@@ -370,12 +451,26 @@ def run(args):
     matches = []
     if args.frames is None:
         matches, summary["reference_comparison"] = compare_references(rows, args.data_root, args.root)
+        tasks = [("count_range", r["reference"], r["normal_sample_world"], r["normal_frame"], None,
+                  r["anomaly_world"], r["anomaly_frame"]) for r in matches if r["normal_sample_world"] and r["anomaly_world"]]
+        for world in worlds:
+            ref = world["generation"].get("normal_reference")
+            if ref and world["frames"][ref["frame"]]["in_range"] >= 5:
+                tasks.append(("legacy_neighbor", world["path"], world["path"], ref["frame"], ref["slots"], world["path"], ref["frame"]))
+        with ProcessPoolExecutor(args.workers, initializer=initialize,
+                                 initargs=(args.root, args.mirror, args.data_root, worlds, allowance)) as pool:
+            pairs = [r for r in pool.map(analyze_pair, tasks) if r is not None]
+        summary["normal_observations"] = len(normals)
+        summary["preserved_normal_observations"] = sum(r["preserved_world"] is not None for r in normals)
+        summary["normal_structures"] = len({r["structure"] for r in normals})
         summary["seconds"] = time.monotonic() - started
     args.output.mkdir(parents=True, exist_ok=True)
     write_csv(args.output / "frames.csv", rows)
     write_csv(args.output / "worlds.csv", inventory)
+    write_csv(args.output / "normals.csv", normals)
     if matches:
         write_csv(args.output / "matches.csv", matches)
+        write_csv(args.output / "pairs.csv", pairs)
     (args.output / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2) + "\n")
     print(json.dumps({k: summary[k] for k in ("read_frames", "eligible_frames", "metadata_count_mismatches", "ray_roundoff_violations", "foreground_order_violations", "surface_level_abs_max", "historical_collision_unresolved", "same_count_normal_frames", "seconds", "worker_peak_rss_bytes")}), flush=True)
 
