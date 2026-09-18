@@ -192,9 +192,9 @@
       "frames_5_19": 1113
     }
   ],
-  "seconds": 46.48462060501333,
+  "seconds": 17.775931221956853,
   "workers": 6,
-  "worker_peak_rss_bytes": 194215936,
+  "worker_peak_rss_bytes": 194084864,
   "main_root": "/home/jasongao/Study/AJAE/results/synthetic",
   "mirror_root": "/home/jasongao/Study/AJAE-v3/samples",
   "data_root": "/home/jasongao/Data/STU",
@@ -204,17 +204,17 @@
       "reference": "206:10:78",
       "start_frame": 164,
       "end_frame": 240,
-      "normal_observations": 77,
+      "normal_observations": 69,
       "normal_count_range": [
-        1,
+        5,
         47
       ],
       "normal_distance_range_m": [
         18.112417221069336,
         34.467552185058594
       ],
-      "normal_one_to_four": 8,
-      "normal_preserved_in_eligible_scan": 77,
+      "minimum_observation_points": 5,
+      "normal_preserved_in_eligible_scan": 69,
       "exact_count_nearest_observations": 69,
       "nearest_range_gap_m": {
         "min": 0.0008335113525390625,
@@ -234,17 +234,17 @@
       "reference": "206:11:1",
       "start_frame": 293,
       "end_frame": 316,
-      "normal_observations": 24,
+      "normal_observations": 14,
       "normal_count_range": [
-        1,
+        5,
         12
       ],
       "normal_distance_range_m": [
-        21.927101135253906,
-        24.02665138244629
+        22.155363082885742,
+        23.20261573791504
       ],
-      "normal_one_to_four": 10,
-      "normal_preserved_in_eligible_scan": 24,
+      "minimum_observation_points": 5,
+      "normal_preserved_in_eligible_scan": 14,
       "exact_count_nearest_observations": 14,
       "nearest_range_gap_m": {
         "min": 4.00543212890625e-05,
@@ -257,24 +257,24 @@
         "max": 0.03367042541503906
       },
       "unique_nearest_scans": 13,
-      "joint_range_candidate_scans": 676,
-      "joint_range_candidate_worlds": 108
+      "joint_range_candidate_scans": 317,
+      "joint_range_candidate_worlds": 95
     },
     {
       "reference": "206:15:6",
       "start_frame": 45,
       "end_frame": 85,
-      "normal_observations": 41,
+      "normal_observations": 40,
       "normal_count_range": [
-        4,
+        5,
         25
       ],
       "normal_distance_range_m": [
         28.639610290527344,
         29.231830596923828
       ],
-      "normal_one_to_four": 1,
-      "normal_preserved_in_eligible_scan": 41,
+      "minimum_observation_points": 5,
+      "normal_preserved_in_eligible_scan": 40,
       "exact_count_nearest_observations": 40,
       "nearest_range_gap_m": {
         "min": 0.00029754638671875,

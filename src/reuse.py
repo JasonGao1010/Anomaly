@@ -309,7 +309,8 @@ def compare_references(rows, data_root, root):
             original = sequence[frame_id]
             slots = np.flatnonzero((point_targets(original) == 0) &
                                   (original.semantic == semantic) & (original.instance == instance))
-            if not len(slots):
+            # The user excludes 1-4 return objects from the targeted data objective.
+            if len(slots) < 5:
                 continue
             median = float(np.median(original.range_m[slots]))
             result = dict(reference=f"206:{semantic}:{instance}", normal_frame=frame_id,
@@ -337,7 +338,7 @@ def compare_references(rows, data_root, root):
         summaries.append(dict(reference=f"206:{semantic}:{instance}", start_frame=start, end_frame=end,
                               normal_observations=len(observations), normal_count_range=[min(counts), max(counts)],
                               normal_distance_range_m=[min(distances), max(distances)],
-                              normal_one_to_four=sum(c < 5 for c in counts),
+                              minimum_observation_points=5,
                               normal_preserved_in_eligible_scan=sum(r["normal_sample_world"] is not None for r in observations),
                               exact_count_nearest_observations=len(matched),
                               nearest_range_gap_m=quantiles([r["range_difference_m"] for r in matched]),
