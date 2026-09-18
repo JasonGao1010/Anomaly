@@ -1,4 +1,4 @@
-"""Run the fixed F240-R1 budget. --check validates without updating any parameter."""
+"""Run F240-R2: seed 0, 8 base epochs, then 4 epochs per second-stage method."""
 
 import argparse
 import gc
@@ -27,7 +27,7 @@ from .model import (POINT_CHUNK, Segmentor, balanced_loss, scatter_scores, to_de
 from vendor.stu.compute_point_level_ood import PointOODMetricsCalculator
 
 
-EPOCHS = (50, 20)
+EPOCHS = (8, 4)
 BATCH_SIZE = 8
 PEAK_LR = ((2e-4, 2e-3), (2e-5, 2e-4))
 STOP = False
@@ -74,7 +74,7 @@ def optimizer_for(model, stage):
                 for p in m.parameters(recurse=False)}
     for name, parameter in model.named_parameters():
         if not parameter.requires_grad:
-            raise ValueError(f"all F240-R1 model parameters must be trainable: {name}")
+            raise ValueError(f"all V4 model parameters must be trainable: {name}")
         loaded = name.startswith("backbone.") if stage == 1 else not name.startswith(
             ("interaction.", "interaction_weight."))
         rate = PEAK_LR[stage - 1][0 if loaded else 1]
@@ -184,7 +184,8 @@ def code_record():
 
 
 def configuration(train, val, device, world_size):
-    return dict(version=VERSION, train_manifest=train["sha256"], val_manifest=val["sha256"],
+    return dict(version=VERSION, data_version=train["version"], seeds=[0],
+                train_manifest=train["sha256"], val_manifest=val["sha256"],
                 val_directory=val["directory"], samples=len(train["records"]), epochs=EPOCHS,
                 batch_size=BATCH_SIZE, microbatch=1, peak_lr=PEAK_LR, weight_decay=.005,
                 adam_betas=(.9, .999), adam_eps=1e-8, gradient_clip=1.,
@@ -231,6 +232,7 @@ def validate_all(model, val, device, workers):
 
 def write_result(directory, state, config):
     write_json(directory / "result.json", dict(version=VERSION, seed=state["seed"], method=state["method"],
+               complete=state["complete"], epochs=EPOCHS,
                best_epoch=state["best_epoch"], best_metrics=state["best_metrics"],
                planned_updates=state["planned_updates"], successful_updates=state["successful_updates"],
                overflows=state["overflows"], parameters=state["parameters"],
@@ -240,6 +242,8 @@ def write_result(directory, state, config):
 
 def train_stage(args, train, val, seed, method, device, config):
     global STOP
+    if seed != 0:
+        raise ValueError("F240-R2 fixes the sole experiment seed to 0")
     rank, world_size = rank_info()
     stage = 1 if method == "base" else 2
     mode = "base" if method in ("base", "continue") else method
@@ -533,8 +537,9 @@ def main():
     parser.add_argument("--train-manifest", type=Path, default=Path("assets/train.json"))
     parser.add_argument("--val-manifest", type=Path, default=Path("assets/val.json"))
     parser.add_argument("--weights", type=Path, default=Path("/home/jasongao/Study/AJAE/results/pretrain/nuscenes.pth"))
-    parser.add_argument("--output", type=Path, default=Path("results/train"))
-    parser.add_argument("--seeds", type=int, nargs="+", choices=(0, 1, 2), default=[0, 1, 2])
+    parser.add_argument("--output", type=Path, default=Path("results/train/r2"))
+    parser.add_argument("--seeds", type=int, nargs="+", choices=(0,), default=[0],
+                        help="F240-R2 uses only seed 0")
     parser.add_argument("--workers", type=int, default=2)
     parser.add_argument("--threads", type=int, default=2)
     parser.add_argument("--save-every", type=int, default=500)
@@ -557,7 +562,7 @@ def main():
         parser.error("at most eight GPUs for effective batch eight")
     train, val = load_manifest(args.train_manifest, "train"), load_manifest(args.val_manifest, "val")
     if len(train["worlds"]) != 240:
-        parser.error("F240-R1 requires all 240 training worlds")
+        parser.error("F240-R2 requires all 240 training worlds")
     config = configuration(train, val, device, world_size)
     resources = runtime_snapshot() if rank == 0 else None
     if args.workers * world_size + args.threads * world_size > len(os.sched_getaffinity(0)):
@@ -573,8 +578,8 @@ def main():
     other = [int(p.strip()) for p in gpu_processes if p.strip().isdigit() and int(p.strip()) not in processes]
     if other:
         raise RuntimeError(f"other CUDA processes must finish before this run: {other}")
-    # All twelve runs retain best/last optimizer states; include atomic replacement.
-    disk_check(6_000_000_000 if not args.check else 100_000_000)
+    # Four runs retain best/last optimizer states; include atomic replacement.
+    disk_check(2_000_000_000 if not args.check else 100_000_000)
     free, _ = torch.cuda.mem_get_info(device)
     if free < 7_000_000_000:
         raise RuntimeError(f"full-scan training verification needs a free GPU; only {free / 1e9:.1f} GB available")
@@ -588,11 +593,18 @@ def main():
         return
     signal.signal(signal.SIGINT, stop_requested)
     signal.signal(signal.SIGTERM, stop_requested)
+    if rank == 0:
+        print(json.dumps(dict(version=VERSION, seeds=args.seeds, epochs=EPOCHS,
+                              methods=["base", "attention", "continue", "fusion"],
+                              samples=len(train["records"]),
+                              planned_updates=math.ceil(len(train["records"]) / BATCH_SIZE)
+                                              * (EPOCHS[0] + 3 * EPOCHS[1]),
+                              output=str(args.output.resolve()))), flush=True)
     for seed in args.seeds:
         for method in ("base", "attention", "continue", "fusion"):
             if not train_stage(args, train, val, seed, method, device, config):
                 return
-    if rank == 0 and set(args.seeds) == {0, 1, 2}:
+    if rank == 0:
         summarize(args.output)
     if dist.is_initialized():
         dist.destroy_process_group()

@@ -1,4 +1,4 @@
-"""F240-R1: full-return LitePT-S segmentation and one five-scale interaction."""
+"""V4: full-return LitePT-S segmentation and one five-scale interaction."""
 
 from pathlib import Path
 

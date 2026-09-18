@@ -30,7 +30,9 @@ LABELS = {
     257: "运动公共汽车", 258: "运动卡车", 259: "运动其他车辆",
 }
 RAYS_PATH = Path(__file__).resolve().parents[1] / "assets" / "rays.npz"
-VERSION = "AJAE-V4-F240-R1"
+VERSION = "AJAE-V4-F240-R2"
+# R2 changes the training budget; retain the exact R1 observations and manifests.
+MANIFEST_VERSION = "AJAE-V4-F240-R1"
 DATA_ROOT = Path("/home/jasongao/Data/STU")
 POOL_ROOT = Path("/home/jasongao/Study/AJAE/results/synthetic")
 
@@ -435,7 +437,7 @@ def make_manifest(data_root=DATA_ROOT, pool_root=POOL_ROOT, workers=4):
     pool = json.loads(pool_path.read_text())
     split = pool["splits"]["train"]
     if split["source_sequence"] != 206:
-        raise ValueError("F240-R1 requires the saved 206 training pool")
+        raise ValueError("F240 requires the saved 206 training pool")
     worlds = {}
     for entry in split["worlds"]:
         path, key = entry["path"], entry["world_identity"]
@@ -470,7 +472,7 @@ def make_manifest(data_root=DATA_ROOT, pool_root=POOL_ROOT, workers=4):
             if i % 25 == 0 or i == len(tasks):
                 print(f"206 census {i}/{len(tasks)}: eligible={len(records)} skipped={skipped}", flush=True)
     records.sort(key=lambda r: (r["world"], r["frame"]))
-    result = dict(version=VERSION, kind="train", data_root=str(data_root), pool_root=str(pool_root),
+    result = dict(version=MANIFEST_VERSION, kind="train", data_root=str(data_root), pool_root=str(pool_root),
                   pool_version=pool["configuration_identity"], pool_sha256=file_sha256(pool_path),
                   worlds=ordered, sources=sources, records=records, skipped=skipped,
                   calibration_sha256=file_sha256(data_root / "train/206/calib.txt"),
@@ -493,7 +495,7 @@ def make_real_manifest(directory, *, partition="val", workers=4):
         tasks.extend((s, t, partition) for s, t in zip(scans, labels))
     with ProcessPoolExecutor(max_workers=workers) as executor:
         records = list(executor.map(_census_real, tasks, chunksize=8))
-    result = dict(version=VERSION, kind=partition, directory=str(directory),
+    result = dict(version=MANIFEST_VERSION, kind=partition, directory=str(directory),
                   sequences=[p.name for p in sequences], records=records)
     result["sha256"] = identity(result)
     return result
@@ -502,7 +504,7 @@ def make_real_manifest(directory, *, partition="val", workers=4):
 def load_manifest(path, kind):
     value = json.loads(Path(path).read_text())
     expected = value.pop("sha256")
-    if identity(value) != expected or value["version"] != VERSION or value["kind"] != kind:
+    if identity(value) != expected or value["version"] != MANIFEST_VERSION or value["kind"] != kind:
         raise ValueError(f"invalid {kind} manifest identity: {path}")
     value["sha256"] = expected
     return value
@@ -572,7 +574,7 @@ class Scans:
 
 def main():
     import argparse
-    parser = argparse.ArgumentParser(description="Rebuild the F240-R1 manifests; does not train.")
+    parser = argparse.ArgumentParser(description="Rebuild the unchanged F240 data manifests; does not train.")
     parser.add_argument("--data-root", type=Path, default=DATA_ROOT)
     parser.add_argument("--pool-root", type=Path, default=POOL_ROOT)
     parser.add_argument("--train", type=Path, default=Path("assets/train.json"))

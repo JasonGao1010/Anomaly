@@ -1,6 +1,7 @@
 """Scientific-semantic regressions for the fixed V4 training implementation."""
 
 from copy import deepcopy
+import json
 import math
 from pathlib import Path
 from types import SimpleNamespace
@@ -11,12 +12,12 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
-from src.data import (Frame, Scans, load_manifest, point_targets, read_delta,
+from src.data import (Frame, Scans, MANIFEST_VERSION, VERSION, load_manifest, point_targets, read_delta,
                       STUSequence, restore_delta, supervision, unified_labels)
-from src.evaluate import better
+from src.evaluate import better, summarize
 from src.model import (CHANNELS, Interaction, Segmentor, balanced_loss, prepare_scan,
                        scatter_scores, voxelize)
-from src.train import (effective_batches, epoch_order, lr_factor, optimizer_for,
+from src.train import (EPOCHS, configuration, effective_batches, epoch_order, lr_factor, optimizer_for,
                        rng_state, restore_rng, seed_all)
 from vendor.litept.pointrope import PointROPE
 from vendor.stu.compute_point_level_ood import PointOODMetricsCalculator
@@ -106,7 +107,8 @@ def test_distributed_tail_and_order_are_unique_and_method_independent():
 
 
 def test_schedule_selection_optimizer_and_random_state():
-    for total in (250950, 100380):
+    assert EPOCHS == (8, 4)
+    for total in (40152, 20076):
         warmup = math.ceil(.05 * total)
         assert lr_factor(1, total) == .1
         assert lr_factor(warmup, total) == 1.
@@ -223,6 +225,11 @@ def test_manifest_decoding_on_real_saved_scans():
     assert len({(r["world"], r["frame"]) for r in manifest["records"]}) == len(dataset)
     assert all(r["anomaly"] >= 5 for r in manifest["records"])
     real = load_manifest("assets/val.json", "val")
+    assert manifest["version"] == real["version"] == MANIFEST_VERSION == "AJAE-V4-F240-R1"
+    config = configuration(manifest, real, torch.device("cpu"), 1)
+    assert config["version"] == VERSION == "AJAE-V4-F240-R2"
+    assert config["data_version"] == MANIFEST_VERSION
+    assert config["seeds"] == [0] and config["epochs"] == (8, 4)
     reader = Scans(real)
     index = next(i for i, r in enumerate(real["records"]) if r["eligible"])
     sample = reader[index]
@@ -273,7 +280,6 @@ def test_actual_training_loop_resume_inheritance_epoch_zero_and_tail(tmp_path, m
     import src.train as training
     monkeypatch.setattr(training, "Segmentor", _ToyModel)
     monkeypatch.setattr(training, "PreparedScans", _ToyScans)
-    monkeypatch.setattr(training, "EPOCHS", (2, 2))
     monkeypatch.setattr(torch.cuda, "reset_peak_memory_stats", lambda *a: None)
     monkeypatch.setattr(torch.cuda, "max_memory_allocated", lambda *a: 0)
     def validate(model, *args):
@@ -281,12 +287,14 @@ def test_actual_training_loop_resume_inheritance_epoch_zero_and_tail(tmp_path, m
         return dict(metrics=dict(AP=2., AUROC=51., FPR95=93., threshold=.5))
     monkeypatch.setattr(training, "validate_all", validate)
     manifest = dict(records=[dict(normal=3 + i % 3, anomaly=5 + i % 2) for i in range(19)])
-    config, device = dict(fixture=True), torch.device("cpu")
+    config = dict(fixture=True, val_manifest="fixture-val", train_manifest="fixture-train")
+    device = torch.device("cpu")
     args = SimpleNamespace(output=tmp_path / "full", resume=True, weights=None, workers=0, save_every=500)
     monkeypatch.setattr(training, "STOP", False)
     assert training.train_stage(args, manifest, {}, 0, "base", device, config)
     full = torch.load(args.output / "0/base/last.pt", weights_only=False)
-    assert full["planned_updates"] == full["successful_updates"] == 6
+    assert full["epoch"] == 8 and full["planned_updates"] == full["successful_updates"] == 24
+    assert all(group["lr"] == group["peak_lr"] * .01 for group in full["optimizer"]["param_groups"])
     args.output = tmp_path / "resumed"
     training.STOP = True
     assert not training.train_stage(args, manifest, {}, 0, "base", device, config)
@@ -299,12 +307,35 @@ def test_actual_training_loop_resume_inheritance_epoch_zero_and_tail(tmp_path, m
         torch.testing.assert_close(value, resumed["model"][name], atol=0, rtol=0)
     for method in ("attention", "continue", "fusion"):
         assert training.train_stage(args, manifest, {}, 0, method, device, config)
+        last = torch.load(args.output / f"0/{method}/last.pt", weights_only=False)
+        assert last["epoch"] == 4 and last["planned_updates"] == last["successful_updates"] == 12
+        assert all(group["lr"] == group["peak_lr"] * .01 for group in last["optimizer"]["param_groups"])
         selected = torch.load(args.output / f"0/{method}/best.pt", weights_only=False)
         assert selected["best_epoch"] == selected["epoch"] == 0
         assert selected["complete"] and selected["selected"]
         parent = torch.load(args.output / "0/base/best.pt", weights_only=False)
         for name, value in parent["model"].items():
             torch.testing.assert_close(value, selected["model"][name], atol=0, rtol=0)
+    summarize(args.output)
+    summary = json.loads((args.output / "summary.json").read_text())
+    assert summary["version"] == VERSION and summary["seeds"] == [0]
+    assert summary["repeat_uncertainty_estimated"] is False
+    assert set(summary["methods"]) == {"base", "attention", "continue", "fusion"}
+    assert summary["methods"]["base"]["epoch"] == 1
+    for method in ("attention", "continue", "fusion"):
+        assert summary["methods"][method]["epoch"] == 0
+        assert summary["methods"][method]["validation_improved_from_epoch0"] is False
+        assert "population_std" not in summary["methods"][method]
+    with pytest.raises(ValueError, match="sole experiment seed"):
+        training.train_stage(args, manifest, {}, 1, "base", device, config)
+    result_path = args.output / "0/attention/result.json"
+    result = json.loads(result_path.read_text())
+    result_path.write_text(json.dumps(dict(result, version=MANIFEST_VERSION)))
+    with pytest.raises(ValueError, match="incorrect experiment identity"):
+        summarize(args.output)
+    result_path.write_text(json.dumps(dict(result, complete=False)))
+    with pytest.raises(ValueError, match="unfinished experiment"):
+        summarize(args.output)
 
 
 def _distributed_gradient_worker(rank, rendezvous, output):

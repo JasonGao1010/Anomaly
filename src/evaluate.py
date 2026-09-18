@@ -105,7 +105,7 @@ def evaluate(model, manifest, device, workers=4):
 def load_model(path, device):
     saved = torch.load(path, map_location="cpu", weights_only=False)
     if saved.get("version") != VERSION:
-        raise ValueError("checkpoint does not belong to F240-R1")
+        raise ValueError("checkpoint does not belong to F240-R2")
     model = Segmentor(saved["mode"])
     model.load_state_dict(saved["model"], strict=True)
     return model.to(device).eval(), saved
@@ -141,31 +141,31 @@ def infer(model, scan, device):
 
 
 def summarize(output, split="val"):
+    """Report the fixed seed-0 comparison without invented repeat uncertainty."""
     output = Path(output)
     report = {}
     identities = set()
     for method in ("base", "attention", "continue", "fusion"):
-        rows = []
-        for seed in (0, 1, 2):
-            path = output / str(seed) / method / ("result.json" if split == "val" else "test.json")
-            if not path.is_file():
-                raise ValueError(f"incomplete three-seed result set: {path}")
-            row = json.loads(path.read_text())
-            if row["seed"] != seed:
-                raise ValueError(f"incorrect seed identity: {path}")
-            if row["method"] != method:
-                raise ValueError(f"incorrect method identity: {path}")
-            identities.add(row["val_manifest_sha256"] if split == "val" else row["manifest_sha256"])
-            metrics = row["best_metrics"] if split == "val" else row["metrics"]
-            epoch = row["best_epoch"] if split == "val" else row["checkpoint_epoch"]
-            rows.append(dict(seed=seed, epoch=epoch, **metrics))
-        values = np.array([[r[k] for k in ("AP", "FPR95", "AUROC")] for r in rows])
-        report[method] = dict(seeds=rows, mean=dict(zip(("AP", "FPR95", "AUROC"), values.mean(0).tolist())),
-                              population_std=dict(zip(("AP", "FPR95", "AUROC"), values.std(0, ddof=0).tolist())))
+        path = output / "0" / method / ("result.json" if split == "val" else "test.json")
+        if not path.is_file():
+            raise ValueError(f"incomplete seed-0 comparison: {path}")
+        row = json.loads(path.read_text())
+        if row.get("version") != VERSION or row["seed"] != 0 or row["method"] != method:
+            raise ValueError(f"incorrect experiment identity: {path}")
+        if not row.get("complete"):
+            raise ValueError(f"unfinished experiment: {path}")
+        identities.add(row["val_manifest_sha256"] if split == "val" else row["manifest_sha256"])
+        metrics = row["best_metrics"] if split == "val" else row["metrics"]
+        better(metrics, None)
+        epoch = row["best_epoch"] if split == "val" else row["checkpoint_epoch"]
+        report[method] = dict(seed=0, epoch=epoch, **metrics)
+        if split == "val":
+            report[method]["validation_improved_from_epoch0"] = row["validation_improved_from_epoch0"]
     if len(identities) != 1:
         raise ValueError("results use different evaluation sets")
     write_json(output / ("summary.json" if split == "val" else "test_summary.json"),
-               dict(version=VERSION, primary_seed=0, split=split, methods=report))
+               dict(version=VERSION, seeds=[0], repeat_uncertainty_estimated=False,
+                    split=split, methods=report))
 
 
 def main():
@@ -206,7 +206,8 @@ def main():
         else:
             manifest = load_manifest(args.manifest, "val")
         result = evaluate(model, manifest, device, args.workers)
-        write_json(args.output, dict(checkpoint=str(args.checkpoint.resolve()), seed=saved["seed"],
+        write_json(args.output, dict(version=VERSION, complete=saved["complete"],
+                                    checkpoint=str(args.checkpoint.resolve()), seed=saved["seed"],
                                     mode=saved["mode"], method=saved["method"],
                                     checkpoint_epoch=saved["epoch"], **result))
     elif args.action == "infer":
