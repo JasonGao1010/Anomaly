@@ -192,9 +192,9 @@
       "frames_5_19": 1113
     }
   ],
-  "seconds": 23.506905792979524,
+  "seconds": 51.45767534303013,
   "workers": 6,
-  "worker_peak_rss_bytes": 191795200,
+  "worker_peak_rss_bytes": 196833280,
   "main_root": "/home/jasongao/Study/AJAE/results/synthetic",
   "mirror_root": "/home/jasongao/Study/AJAE-v3/samples",
   "data_root": "/home/jasongao/Data/STU",
@@ -204,6 +204,18 @@
       "reference": "206:10:78",
       "start_frame": 164,
       "end_frame": 240,
+      "reference_observed_frames": 77,
+      "reference_empty_frames": [],
+      "reference_other_frames_nn_p95_m": {
+        "min": 0.02103029609662282,
+        "p05": 0.038170289088795134,
+        "p25": 0.056291985421901,
+        "median": 0.06744559018621255,
+        "p75": 0.0855589567558617,
+        "p95": 0.1521812338176908,
+        "p99": 0.3143238658740888,
+        "max": 0.3791419633150336
+      },
       "normal_observations": 69,
       "normal_count_range": [
         5,
@@ -234,6 +246,18 @@
       "reference": "206:11:1",
       "start_frame": 293,
       "end_frame": 316,
+      "reference_observed_frames": 24,
+      "reference_empty_frames": [],
+      "reference_other_frames_nn_p95_m": {
+        "min": 0.014867218644552292,
+        "p05": 0.01844999413607732,
+        "p25": 0.0536109587435576,
+        "median": 0.061865849645981345,
+        "p75": 0.08274939667682782,
+        "p95": 0.17271154760427476,
+        "p99": 0.18693517003659493,
+        "max": 0.18743251832386598
+      },
       "normal_observations": 14,
       "normal_count_range": [
         5,
@@ -264,6 +288,18 @@
       "reference": "206:15:6",
       "start_frame": 45,
       "end_frame": 85,
+      "reference_observed_frames": 41,
+      "reference_empty_frames": [],
+      "reference_other_frames_nn_p95_m": {
+        "min": 0.03391617821814447,
+        "p05": 0.04237641523270899,
+        "p25": 0.04772747651641613,
+        "median": 0.057639558175220554,
+        "p75": 0.07531950733930494,
+        "p95": 0.08432071797674778,
+        "p99": 0.08795543503130704,
+        "max": 0.0900559778340153
+      },
       "normal_observations": 40,
       "normal_count_range": [
         5,
@@ -291,6 +327,104 @@
       "joint_range_candidate_worlds": 109
     }
   ],
+  "coverage": {
+    "coarse_match_worlds": 66,
+    "neighbor_worlds": 185,
+    "count_span_worlds": 235,
+    "distance_span_worlds": 119,
+    "neighbor_and_count_span": 181,
+    "neighbor_or_count_span": 239,
+    "neither_neighbor_nor_count_span": [
+      "train/solid_low_rough_6"
+    ]
+  },
+  "usable_pairs": {
+    "pairs": 123,
+    "excluded": 0,
+    "labeled_references": 3,
+    "anomaly_worlds": 66,
+    "normal_worlds": 23,
+    "extra_normal_worlds": 14,
+    "total_worlds": 80,
+    "normal_observations": 123,
+    "anomaly_observations": 106,
+    "normal_scans": 123,
+    "total_scans": 228
+  },
+  "small_objects": {
+    "all_worlds": {
+      "worlds": 240,
+      "eligible_scans": 40152,
+      "scans_with_small_normal_objects": 39631,
+      "normal_object_observations": 151331,
+      "normal_point_observations": 321318,
+      "distinct_retained_observations": 1867,
+      "distinct_source_observations": 1800,
+      "labeled_normal_identities": 60,
+      "observations_reduced_from_at_least_5": 173,
+      "distinct_retained_reduced_from_at_least_5": 145,
+      "anomaly_object_observations": 0,
+      "anomaly_worlds": 0,
+      "counts": [
+        {
+          "points": 1,
+          "object_observations": 58657,
+          "distinct_retained_observations": 685
+        },
+        {
+          "points": 2,
+          "object_observations": 39437,
+          "distinct_retained_observations": 470
+        },
+        {
+          "points": 3,
+          "object_observations": 29161,
+          "distinct_retained_observations": 377
+        },
+        {
+          "points": 4,
+          "object_observations": 24076,
+          "distinct_retained_observations": 335
+        }
+      ]
+    },
+    "coarse_worlds": {
+      "worlds": 66,
+      "eligible_scans": 14105,
+      "scans_with_small_normal_objects": 13920,
+      "normal_object_observations": 51837,
+      "normal_point_observations": 110281,
+      "distinct_retained_observations": 1729,
+      "distinct_source_observations": 1714,
+      "labeled_normal_identities": 60,
+      "observations_reduced_from_at_least_5": 16,
+      "distinct_retained_reduced_from_at_least_5": 16,
+      "anomaly_object_observations": 0,
+      "anomaly_worlds": 0,
+      "counts": [
+        {
+          "points": 1,
+          "object_observations": 20206,
+          "distinct_retained_observations": 659
+        },
+        {
+          "points": 2,
+          "object_observations": 13225,
+          "distinct_retained_observations": 446
+        },
+        {
+          "points": 3,
+          "object_observations": 9999,
+          "distinct_retained_observations": 339
+        },
+        {
+          "points": 4,
+          "object_observations": 8407,
+          "distinct_retained_observations": 285
+        }
+      ]
+    }
+  },
   "normal_observations": 7150,
   "preserved_normal_observations": 7150,
   "normal_structures": 66

@@ -70,10 +70,13 @@ def analyze_pair(task):
     original = _sequence[normal_frame]
     n_world = next(w for w in _worlds if w["path"] == normal_world)
     normal = restore_delta(_root / normal_world / "frames" / f"{normal_frame:06d}.npz", original, n_world["world_id"])
+    n_targets = point_targets(normal)
     if native_slots is None:
         _, semantic, instance = map(int, identity.split(":"))
         excluded = np.flatnonzero((normal.semantic == semantic) & (normal.instance == instance))
-        slots = excluded[point_targets(normal)[excluded] == 0]
+        slots = excluded[n_targets[excluded] == 0]
+        original_slots = np.flatnonzero((point_targets(original) == 0) &
+                                       (original.semantic == semantic) & (original.instance == instance))
     else:
         excluded = np.asarray(native_slots, int)
         slots = excluded[point_targets(normal)[excluded] == 0]
@@ -81,7 +84,8 @@ def analyze_pair(task):
         return None
     a_world = next(w for w in _worlds if w["path"] == anomaly_world)
     anomaly = restore_delta(_root / anomaly_world / "frames" / f"{anomaly_frame:06d}.npz", _sequence[anomaly_frame], a_world["world_id"])
-    a_slots = np.flatnonzero(point_targets(anomaly) == 1)
+    a_targets = point_targets(anomaly)
+    a_slots = np.flatnonzero(a_targets == 1)
     if len(a_slots) < 5:
         return None
     n, a = region_context(normal, slots, excluded), region_context(anomaly, a_slots, np.flatnonzero(anomaly.semantic == 2))
@@ -97,6 +101,19 @@ def analyze_pair(task):
     result.update(spread_ratio=max(n["spread_m"], a["spread_m"])/min(n["spread_m"], a["spread_m"]),
                   shape_difference=max(abs(n[k]-a[k]) for k in ("linearity", "planarity", "scattering")),
                   range_difference_m=abs(result["normal_range_m"]-result["anomaly_range_m"]))
+    if native_slots is None:
+        unchanged = (np.array_equal(slots, original_slots) and
+                     np.array_equal(normal.xyzi[slots], original.xyzi[original_slots]) and
+                     np.array_equal(normal.labels[slots], original.labels[original_slots]))
+        # This validates supervision and provenance, not learned contextual benefit.
+        result["verification"] = dict(
+            usable=unchanged and int((n_targets == 1).sum()) >= 5 and len(a_slots) >= 5,
+            normal_source_unchanged=unchanged,
+            normal_scan_anomaly_points=int((n_targets == 1).sum()),
+            anomaly_scan_anomaly_points=len(a_slots),
+            normal_world_identity=n_world["world_id"], anomaly_world_identity=a_world["world_id"],
+            normal_slots=";".join(map(str, slots)), anomaly_slots=";".join(map(str, a_slots)),
+            anomaly_instance_ids=";".join(map(str, np.unique(anomaly.instance[a_slots]))))
     return result
 
 
@@ -193,6 +210,8 @@ def analyze_frame(frame_id):
     source = _sequence[frame_id]
     binding = legacy_source_identity(source)
     targets = point_targets(source)
+    if np.any(targets == 1):
+        raise ValueError("this single-object pool requires an anomaly-free 206 background")
     normal = targets == 0
     native_depth = np.sum((source.xyzi[:, :3].astype(float) - _rays.origins) * _rays.directions, axis=1)
     native_depth[~source.actual] = np.inf
@@ -209,7 +228,7 @@ def analyze_frame(frame_id):
     tree = cKDTree(world_points)
     neighborhoods = tree.query_ball_point(np.asarray([w["translation"] for w in _worlds]),
                                          np.asarray([w["radius"] for w in _worlds]))
-    rows, equivalent = [], {}
+    rows, equivalent, small = [], {}, {}
     for w, nearby in zip(_worlds, neighborhoods):
         relative = Path(w["path"]) / "frames" / f"{frame_id:06d}.npz"
         content = (_root / relative).read_bytes()
@@ -249,6 +268,8 @@ def analyze_frame(frame_id):
                    foreground_order_violations=0, surface_level_abs_max=0.,
                    background_interior_points=0, historical_collision_unresolved=0,
                    same_count_normal_id=None, same_count_normal_range_m=None, same_count_range_difference_m=None)
+        row.update({f"eligible_normal_objects_{n}_point": 0 for n in range(1, 5)})
+        row["eligible_normal_objects_reduced_to_1_4"] = 0
         if len(inserted):
             xyz = anomaly[:, :3].astype(float)
             dirs, origins = _rays.directions[inserted], _rays.origins[inserted]
@@ -276,6 +297,17 @@ def analyze_frame(frame_id):
                 kept = slots[~np.isin(slots, occluded, assume_unique=True)]
                 if key in normal_rows and normal_rows[key]["preserved_world"] is None and len(kept) == len(slots):
                     normal_rows[key]["preserved_world"] = w["path"]
+                if row["selected"] and 1 <= len(kept) <= 4:
+                    row[f"eligible_normal_objects_{len(kept)}_point"] += 1
+                    row["eligible_normal_objects_reduced_to_1_4"] += int(len(slots) >= 5)
+                    # Shared backgrounds count once only when the retained slots agree.
+                    identity = key, tuple(map(int, kept))
+                    if identity not in small:
+                        small[identity] = dict(structure=f"206:{key >> 16}:{key & 65535}",
+                            frame=frame_id, points=len(kept), original_points=len(slots),
+                            slots=";".join(map(str, kept)), range_m=float(np.median(source.range_m[kept])),
+                            worlds=[])
+                    small[identity]["worlds"].append(w["path"])
                 if len(kept) == count:
                     median = float(np.median(source.range_m[kept]))
                     matches.append((abs(median - row["range_median_m"]), key, median))
@@ -289,7 +321,7 @@ def analyze_frame(frame_id):
             row["historical_reference_changed_points"] = int(np.isin(slots, delta["source_slot"]).sum())
             row["historical_reference_valid_points"] = int(normal[slots].sum())
         rows.append(row)
-    return rows, list(normal_rows.values()), resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024
+    return rows, list(normal_rows.values()), list(small.values()), resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024
 
 
 def summarize(rows, worlds, inventory, allowance, seconds, workers, rss):
@@ -384,12 +416,16 @@ def compare_references(rows, data_root, root):
         by_frame[row["frame"]].append(row)
     sequence, matches, summaries = STUSequence(data_root), [], []
     for semantic, instance, start, end in REFERENCES:
-        observations = []
+        observations, clouds = [], []
         for frame_id in range(start, end + 1):
             original = sequence[frame_id]
+            actual_slots = np.flatnonzero(original.actual & (original.semantic == semantic) &
+                                          (original.instance == instance))
+            cloud = original.xyzi[actual_slots, :3].astype(float)
+            clouds.append(cloud @ original.pose[:3, :3].T + original.pose[:3, 3])
             slots = np.flatnonzero((point_targets(original) == 0) &
                                   (original.semantic == semantic) & (original.instance == instance))
-            # The user excludes 1-4 return objects from the targeted data objective.
+            # Eligible single-object anomaly scans cannot supply equal counts below 5.
             if len(slots) < 5:
                 continue
             median = float(np.median(original.range_m[slots]))
@@ -415,7 +451,13 @@ def compare_references(rows, data_root, root):
         joint = [r for r in candidates if min(counts) <= r["anomaly_points"] <= max(counts) and
                  min(distances) <= r["range_median_m"] <= max(distances)]
         matched = [r for r in observations if r["anomaly_world"] is not None]
+        support = [float(np.quantile(cKDTree(np.concatenate([c for j, c in enumerate(clouds)
+                    if j != i and len(c)])).query(cloud)[0], .95))
+                   for i, cloud in enumerate(clouds) if len(cloud)]
         summaries.append(dict(reference=f"206:{semantic}:{instance}", start_frame=start, end_frame=end,
+                              reference_observed_frames=sum(len(c) > 0 for c in clouds),
+                              reference_empty_frames=[start+i for i,c in enumerate(clouds) if not len(c)],
+                              reference_other_frames_nn_p95_m=quantiles(support),
                               normal_observations=len(observations), normal_count_range=[min(counts), max(counts)],
                               normal_distance_range_m=[min(distances), max(distances)],
                               minimum_observation_points=5,
@@ -429,18 +471,85 @@ def compare_references(rows, data_root, root):
     return matches, summaries
 
 
+def organize(rows, inventory, matches, pairs, small):
+    """Attach overlapping coverage and count sparse objects after whole-frame selection."""
+    eligible = [r for r in rows if r["selected"]]
+    usable = [r for r in matches if r["usable"]]
+    coarse = {r["anomaly_world"] for r in usable}
+    neighbor = {r["anomaly_world"] for r in pairs if r["kind"] == "legacy_neighbor"}
+    groups = defaultdict(list)
+    for row in eligible:
+        groups[row["world"]].append(row)
+    count_span = {w for w, obs in groups.items()
+                  if min(r["anomaly_points"] for r in obs) < 20 <= max(r["anomaly_points"] for r in obs)}
+    range_span = {w for w, obs in groups.items()
+                  if min(r["range_median_m"] for r in obs) < 10 and max(r["range_median_m"] for r in obs) >= 35}
+    for row in inventory:
+        w = row["world"]
+        if w not in groups:
+            continue
+        row.update(coarse_pairs=sum(r["anomaly_world"] == w for r in usable),
+                   has_coarse_pair=w in coarse, has_neighbor_pair=w in neighbor,
+                   spans_count_bins=w in count_span, spans_distance_bins=w in range_span,
+                   eligible_normal_objects_1_4=sum(r[f"eligible_normal_objects_{n}_point"]
+                                                  for r in groups[w] for n in range(1, 5)))
+    sparse = {}
+    for name, worlds in (("all_worlds", set(groups)), ("coarse_worlds", coarse)):
+        observations = [(r, len(worlds.intersection(r["worlds"]))) for r in small]
+        observations = [(r, copies) for r, copies in observations if copies]
+        scope = [r for r in eligible if r["world"] in worlds]
+        bins = [dict(points=n, object_observations=sum(c for r,c in observations if r["points"] == n),
+                     distinct_retained_observations=sum(r["points"] == n for r,c in observations))
+                for n in range(1, 5)]
+        sparse[name] = dict(worlds=len(worlds), eligible_scans=len(scope),
+            scans_with_small_normal_objects=sum(any(r[f"eligible_normal_objects_{n}_point"] for n in range(1, 5)) for r in scope),
+            normal_object_observations=sum(c for r,c in observations),
+            normal_point_observations=sum(r["points"]*c for r,c in observations),
+            distinct_retained_observations=len(observations),
+            distinct_source_observations=len({(r["structure"], r["frame"]) for r,c in observations}),
+            labeled_normal_identities=len({r["structure"] for r,c in observations}),
+            observations_reduced_from_at_least_5=sum(c for r,c in observations if r["original_points"] >= 5),
+            distinct_retained_reduced_from_at_least_5=sum(r["original_points"] >= 5 for r,c in observations),
+            # load_worlds verifies exactly one inserted object in each saved world.
+            anomaly_object_observations=sum(1 <= r["anomaly_points"] <= 4 for r in scope),
+            anomaly_worlds=len({r["world"] for r in scope if 1 <= r["anomaly_points"] <= 4}), counts=bins)
+        if sparse[name]["normal_object_observations"] != sum(r[f"eligible_normal_objects_{n}_point"] for r in scope for n in range(1, 5)):
+            raise ValueError("sparse object and scan counts disagree")
+    for row in small:
+        worlds = row.pop("worlds")
+        chosen = [w for w in worlds if w in coarse]
+        row.update(world_copies=len(worlds), example_world=worlds[0],
+                   coarse_world_copies=len(chosen), coarse_example_world=chosen[0] if chosen else None)
+    normal_scans = {(r["normal_sample_world"], r["normal_frame"]) for r in usable}
+    anomaly_scans = {(r["anomaly_world"], r["anomaly_frame"]) for r in usable}
+    normal_worlds = {w for w,f in normal_scans}
+    return dict(coverage=dict(coarse_match_worlds=len(coarse), neighbor_worlds=len(neighbor),
+                count_span_worlds=len(count_span), distance_span_worlds=len(range_span),
+                neighbor_and_count_span=len(neighbor & count_span),
+                neighbor_or_count_span=len(neighbor | count_span),
+                neither_neighbor_nor_count_span=sorted(set(groups) - neighbor - count_span)),
+                usable_pairs=dict(pairs=len(usable), excluded=len(matches)-len(usable),
+                labeled_references=len({r["reference"] for r in usable}),
+                anomaly_worlds=len(coarse), normal_worlds=len(normal_worlds),
+                extra_normal_worlds=len(normal_worlds-coarse), total_worlds=len(coarse | normal_worlds),
+                normal_observations=len({(r["reference"], r["normal_frame"]) for r in usable}),
+                anomaly_observations=len(anomaly_scans), normal_scans=len(normal_scans),
+                total_scans=len(normal_scans | anomaly_scans)), small_objects=sparse)
+
+
 def run(args):
     started = time.monotonic()
     worlds, inventory, allowance = load_worlds(args.root, args.mirror)
     frames = list(range(449)) if args.frames is None else args.frames
     if args.output.exists() and any(args.output.iterdir()) and args.frames is not None:
         raise ValueError("pilot must not overwrite a full analysis")
-    rows, normals, peak = [], [], 0
+    rows, normals, small, peak = [], [], [], 0
     with ProcessPoolExecutor(args.workers, initializer=initialize,
                              initargs=(args.root, args.mirror, args.data_root, worlds, allowance)) as pool:
-        for i, (part, native, rss) in enumerate(pool.map(analyze_frame, frames), 1):
+        for i, (part, native, sparse, rss) in enumerate(pool.map(analyze_frame, frames), 1):
             rows.extend(part)
             normals.extend(native)
+            small.extend(sparse)
             peak = max(peak, rss)
             if i % 25 == 0 or i == len(frames):
                 print(f"source_frames={i}/{len(frames)} saved_samples={len(rows)} seconds={time.monotonic()-started:.1f}", flush=True)
@@ -460,6 +569,18 @@ def run(args):
         with ProcessPoolExecutor(args.workers, initializer=initialize,
                                  initargs=(args.root, args.mirror, args.data_root, worlds, allowance)) as pool:
             pairs = [r for r in pool.map(analyze_pair, tasks) if r is not None]
+        verified = {(r["reference"], r["normal_frame"]): r for r in pairs if r["kind"] == "count_range"}
+        for match in matches:
+            pair = verified.get((match["reference"], match["normal_frame"]))
+            if pair is None:
+                match["usable"] = False
+                continue
+            for field in ("normal_points", "anomaly_points", "normal_range_m", "anomaly_range_m"):
+                if match[field] != pair[field]:
+                    raise ValueError(f"restored pair differs from candidate: {field}")
+            match.update(pair.pop("verification"))
+            match["usable"] &= match["normal_points"] == match["anomaly_points"]
+        summary.update(organize(rows, inventory, matches, pairs, small))
         summary["normal_observations"] = len(normals)
         summary["preserved_normal_observations"] = sum(r["preserved_world"] is not None for r in normals)
         summary["normal_structures"] = len({r["structure"] for r in normals})
@@ -471,6 +592,7 @@ def run(args):
     if matches:
         write_csv(args.output / "matches.csv", matches)
         write_csv(args.output / "pairs.csv", pairs)
+        write_csv(args.output / "small.csv", small)
     (args.output / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2) + "\n")
     print(json.dumps({k: summary[k] for k in ("read_frames", "eligible_frames", "metadata_count_mismatches", "ray_roundoff_violations", "foreground_order_violations", "surface_level_abs_max", "historical_collision_unresolved", "same_count_normal_frames", "seconds", "worker_peak_rss_bytes")}), flush=True)
 
