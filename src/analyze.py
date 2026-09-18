@@ -10,7 +10,6 @@ from __future__ import annotations
 import argparse
 import csv
 import json
-import math
 import os
 from collections import defaultdict
 from concurrent.futures import ProcessPoolExecutor
@@ -25,18 +24,8 @@ import numpy as np
 from scipy.spatial import cKDTree
 from scipy.stats import spearmanr
 
+from .data import LABELS, RAYS_PATH, STUSequence, point_targets, read_rays
 
-LABELS = {
-    0: "未标注", 1: "离群标签", 2: "异常", 10: "汽车", 11: "自行车",
-    13: "公共汽车", 15: "摩托车", 16: "轨道车辆", 18: "卡车",
-    20: "其他车辆", 30: "行人", 31: "骑自行车者", 32: "骑摩托车者",
-    40: "道路", 44: "停车区域", 48: "人行道", 49: "其他地面",
-    50: "建筑", 51: "围栏", 52: "其他结构", 60: "车道标线",
-    70: "植被", 71: "树干", 72: "地形", 80: "杆状物", 81: "交通标志",
-    99: "其他物体", 252: "运动汽车", 253: "运动骑自行车者",
-    254: "运动行人", 255: "运动骑摩托车者", 256: "运动轨道车辆",
-    257: "运动公共汽车", 258: "运动卡车", 259: "运动其他车辆",
-}
 QUANTILES = (0, .05, .25, .5, .75, .95, .99, 1)
 Q_NAMES = ("min", "p05", "p25", "median", "p75", "p95", "p99", "max")
 RANGE_EDGES = np.r_[2.5, np.arange(3, 51)]
@@ -65,65 +54,21 @@ def write_csv(path, rows):
         writer.writerows(rows)
 
 
-def read_inputs(root, rays_path):
-    directory = root / "train" / "206"
-    scans = sorted(p.stem for p in (directory / "velodyne").glob("*.bin"))
-    labels = sorted(p.stem for p in (directory / "labels").glob("*.label"))
-    expected = [f"{i:06d}" for i in range(449)]
-    if scans != expected or labels != expected:
-        raise ValueError("206 must have corresponding scans/labels for all frames 0..448")
-    calibration = {}
-    for line in (directory / "calib.txt").read_text().splitlines():
-        key, text = line.split(":", 1)
-        matrix = np.eye(4)
-        matrix[:3] = np.fromstring(text, sep=" ").reshape(3, 4)
-        calibration[key] = matrix
-    camera = np.loadtxt(directory / "poses.txt").reshape(-1, 3, 4)
-    if len(camera) != 449 or not np.isfinite(camera).all():
-        raise ValueError("invalid or missing source poses")
-    poses = np.broadcast_to(np.eye(4), (449, 4, 4)).copy()
-    poses[:, :3] = camera
-    transform = calibration["Tr"]
-    # Preserve the published camera-to-LiDAR composition and source frame order.
-    poses = np.stack([np.linalg.inv(transform) @ pose @ transform for pose in poses])
-    with np.load(rays_path, allow_pickle=False) as saved:
-        gamma, origin_x, origin_z = saved["even_params"]
-        local, shift = saved["even_local"], saved["integer_shift"]
-    angle = math.pi + gamma - 2 * math.pi * (np.arange(1024)[None] - shift[:, None]) / 1024
-    cosine, sine = np.cos(angle), np.sin(angle)
-    directions = np.stack((cosine * local[:, None, 0] - sine * local[:, None, 1],
-                           sine * local[:, None, 0] + cosine * local[:, None, 1],
-                           np.broadcast_to(local[:, None, 2], angle.shape)), axis=-1)
-    origins = np.stack((origin_x * cosine, origin_x * sine,
-                        np.full_like(cosine, origin_z)), axis=-1)
-    canonical = np.arange(128)[:, None] * 1024 + (np.arange(1024)[None] - shift[:, None]) % 1024
-    return directory, poses, directions.reshape(-1, 3), origins.reshape(-1, 3), np.argsort(canonical.ravel()), local
-
-
-def init_worker(directory, poses, directions, origins, canonical_order):
-    global _directory, _poses, _directions, _origins, _canonical_order
-    _directory, _poses = directory, poses
-    _directions, _origins, _canonical_order = directions, origins, canonical_order
+def init_worker(sequence, rays):
+    global _sequence, _poses, _directions, _origins, _canonical_order
+    _sequence, _poses = sequence, sequence.poses
+    _directions, _origins = rays.directions, rays.origins
+    _canonical_order = np.argsort(rays.canonical_ids)
 
 
 def frame_analysis(frame_id):
-    scan_path = _directory / "velodyne" / f"{frame_id:06d}.bin"
-    label_path = _directory / "labels" / f"{frame_id:06d}.label"
-    if scan_path.stat().st_size % 16 or label_path.stat().st_size % 4:
-        raise ValueError(f"malformed binary lengths at frame {frame_id}")
-    xyzi = np.fromfile(scan_path, dtype="<f4").reshape(-1, 4)
-    packed = np.fromfile(label_path, dtype="<u4")
-    if len(xyzi) != 131072 or len(packed) != len(xyzi) or not np.isfinite(xyzi).all():
-        raise ValueError(f"invalid point/label layout or nonfinite value at frame {frame_id}")
-    raw, instance = packed & 65535, packed >> 16
-    unknown = set(map(int, np.unique(raw))) - set(LABELS)
-    if unknown:
-        raise ValueError(f"unknown raw semantics at frame {frame_id}: {unknown}")
-    actual = np.any(xyzi[:, :3] != 0, axis=1)
-    radius = np.linalg.norm(xyzi[:, :3], axis=1)
+    source = _sequence[frame_id]
+    xyzi, packed = source.xyzi, source.labels
+    raw, instance = source.semantic, source.instance
+    actual, radius = source.actual, source.range_m
     inside = actual & (radius >= 2.5) & (radius <= 50)
-    normal = inside & (raw != 0) & (raw != 2)
-    anomaly = inside & (raw == 2)
+    targets = point_targets(source)
+    normal, anomaly = targets == 0, targets == 1
     row = dict(frame=frame_id, slots=len(xyzi), returns_all=int(actual.sum()),
                empty_slots=int((~actual).sum()), empty_nonzero_label=int(np.count_nonzero(packed[~actual])),
                empty_nonzero_intensity=int(np.count_nonzero(xyzi[~actual, 3])),
@@ -266,13 +211,14 @@ def track_analysis(item):
 def analyze(args):
     import psutil
     started = time.monotonic()
-    inputs = read_inputs(args.data_root, args.rays)
-    directory, poses, directions, origins, order, local = inputs
-    init_worker(*inputs[:5])
+    inputs = STUSequence(args.data_root), read_rays(args.rays)
+    sequence, rays = inputs
+    directory, poses, local = sequence.directory, sequence.poses, rays.local
+    init_worker(*inputs)
     frames, class_frames, tracks = [], [], defaultdict(list)
     ranges, intensities, residuals = [], [], []
     peak_rss = 0
-    with ProcessPoolExecutor(args.workers, initializer=init_worker, initargs=inputs[:5]) as pool:
+    with ProcessPoolExecutor(args.workers, initializer=init_worker, initargs=inputs) as pool:
         for result in pool.map(frame_analysis, range(449), chunksize=2):
             row, classes, objects, distance, intensity, residual = result
             frames.append(row)
@@ -359,8 +305,8 @@ def analyze(args):
                                     segments="maximal consecutive frame runs with >=1 in-range return of one labeled identity",
                                     geometry="observed surfaces in inv(Tr) @ pose_camera @ Tr world; no registration; not full object shape/height",
                                     binning="display-only distance/count bins; no V4 coverage or acceptance thresholds are defined",
-                                    frame_counts="normal reference observations retain 1-4 returns; anomaly >=5 frame eligibility is not imposed on pure normal data",
-                                    normal_training="user confirmed zero-anomaly scans may supply only normal supervision; sampler/loss unspecified"))
+                                    frame_counts="offline normal reference observations retain 1-4 returns; these census counts do not imply training eligibility",
+                                    normal_training="updated V4 plan: fewer than 5 valid anomalies skips the entire frame, including zero-anomaly scans; normal supervision comes from eligible inserted scans"))
     summary["structures"]["structure_equal_weight_fraction_1_to_4"] = float(np.mean([
         s["frames_1_to_4"] / s["observed_frames_in_range"] for s in structures if s["observed_frames_in_range"]]))
     summary["structures"]["reused_numeric_ids"] = sorted({int(i) for row in frames
@@ -401,7 +347,7 @@ def analyze(args):
         row["travel_from_previous_m"] = None if i==0 else float(steps[i-1])
     summary["execution"] = dict(workers=args.workers, numerical_threads=1, elapsed_seconds=time.monotonic()-started,
                                 sampled_peak_process_rss_bytes=peak_rss,
-                                command=f"python src/analyze.py --data-root {args.data_root} --rays {args.rays} --output {args.output} --workers {args.workers}")
+                                command=f"python -m src.analyze --data-root {args.data_root} --rays {args.rays} --output {args.output} --workers {args.workers}")
     output = args.output
     output.mkdir(parents=True, exist_ok=True)
     for name, rows in (("frames",frames),("labels",classes),("observations",observations),("structures",structures),("segments",segments)):
@@ -486,8 +432,8 @@ def report(output):
     ])
     text("449 帧扫描、449 份标签和 449 个位姿逐帧对应，帧号为 0–448。扫描均为 131,072 条四维记录，坐标和强度均为有限数。未发现帧内相同坐标或相同四维记录的额外副本；统计保留原始文件记录，未按坐标删点。")
     text(f"全部 {total['empty_slots']:,} 个空记录都具有非零强度，且原始标签为 0。判定实际回波必须检查坐标是否全零，不能仅检查强度。范围外的 {total['returns_below_2p5m']+total['returns_above_50m']:,} 个实际回波仍属于模型完整扫描输入。")
-    text("206 的原生异常点数为零。按照用户已确认的规则，除合格植入帧外，另纳入零异常点的纯正常帧，仅提供正常监督。异常分割训练还需要合成异常。本文所称有效正常点，指坐标非全零、三维欧氏距离位于含边界的 2.5–50 米、原始标签非 0 且非 2 的点。")
-    text("这些结果确认原始数据的读取与监督支持，不能证明异常可学习、合成数据充分或模型性能提升。")
+    text("206 的原生异常点数为零。更新后的总方案第 2.5、3.5 节规定，整帧有效异常点不足 5 点均跳过，包括零异常纯正常帧。原始正常扫描用于背景构造与离线参照，训练中的正常监督来自合格植入扫描内仍可见的正常点。本文所称有效正常点，指坐标非全零、三维欧氏距离位于含边界的 2.5–50 米、原始标签非 0 且非 2 的点；该统计定义不等于原始纯正常帧可直接参加训练。")
+    text("这些结果确认原始背景读取与离线参照统计，不能证明异常可学习、合成数据充分或模型性能提升。")
 
     section("语义组成与实例身份覆盖")
     text("下表列出实际出现的原始语义类别。比例以范围内有效正常点为分母；原始标签 0 不参与正常监督。实例身份必须同时包含序列、原始语义类别和非零编号。")
@@ -603,7 +549,7 @@ def report(output):
     for title, body in (
         ("基础数据", "206 提供完整正常背景、可用的位姿轨迹及多种语义结构。点分布明显偏向近处，而不同正常物体的可见区间和回波数量差异较大。首轮合成需要在整个数据池检查几何、位置与实际观测覆盖，不能用多次重复同一背景的累计点数替代多样性。"),
         ("针对性数据", "本次为全部标注身份保留逐帧数量、距离、观测间隔和世界几何证据，并给出连续可见片段。后续可据具体可信参照选择异常几何、尺寸与世界位置，再由原始射线自然形成观测；本次没有确定匹配容差，也没有逐帧增删点来拟合曲线。"),
-        ("少回波监督", f"{identities['identities_with_1_to_4']} 个标注身份出现过范围内 1–4 点观测，说明少回波正常观测实际存在。它们属于正常参照统计，不受异常整帧至少 5 点的门槛排除。合成之后须先计算所有物体的联合遮挡，再应用整帧异常计数规则。"),
+        ("少回波监督", f"{identities['identities_with_1_to_4']} 个标注身份出现过范围内 1–4 点观测，说明少回波正常观测实际存在。它们保留在离线参照统计中；训练时能否使用对应正常点，取决于植入后该点仍可见且整帧有效异常点达到 5 点。合成之后须先计算所有物体的联合遮挡，再应用整帧异常计数规则。"),
         ("尚不能从原始序列给出的结论", "没有植入异常，便没有异常引起的背景变化真值，也不能判断弱背景变化异常是否覆盖充分。缺少完整物体几何和具体放置，就不能给出低矮异常覆盖数或合法放置数量。没有模型预测，便不能计算 AP、AUROC、FPR95，也不能确认对 COVAL 的性能增益。"),
         ("独立性", "206 始终只是一条原始背景序列。其不同帧、同一物体的多个片段以及未来的多个合成版本都有关联。本次没有读取 STU 真实异常评价集来构造训练分布，所得统计不构成独立泛化证据。"),
     ):
@@ -611,7 +557,7 @@ def report(output):
     text("下一项能改变数据构造判断的动作，是在实际开展异常放置时，依据明确的正常参照和覆盖目标，核查自然生成的数量—距离变化、接地、穿插与联合遮挡。相关未定数值在落实时再逐项确认。")
 
     section("复算入口、统计单位与交付文件")
-    text(f"原始输入：{code(summary['source'])}。射线参考：{code(summary['ray_model']['source'])}。[分析程序](../../src/analyze.py)独立读取数据，没有导入旧训练代码、旧合成池或旧实验成绩。")
+    text(f"原始输入：{code(summary['source'])}。射线参考：{code(summary['ray_model']['source'])}。[分析程序](../../src/analyze.py)与物理观测共用 [V4 数据读取实现](../../src/data.py)，没有导入旧训练代码、旧合成池或旧实验成绩。射线参数原始来源为 AJAE/assets/rays.npz，迁入 V4 后重新核对实际回波。")
     table(["文件", "统计单位与用途"], [
         ["[frames.csv](frames.csv)", "449 行；完整扫描、标签、距离、强度、射线与位姿统计"],
         ["[labels.csv](labels.csv)", "原始语义类别；回波和实例身份覆盖"],
@@ -626,7 +572,7 @@ def report(output):
     text("正文和表格为可编辑的 Markdown，五组图片保存于同一目录并通过相对路径引用。图中文字使用已核对的 Times New Roman；正文的实际字体由 Markdown 阅读器控制，按项目要求阅读时应将中文设为宋体、英文设为 Times New Roman。")
     text("运行环境使用已有 AJAE Python 环境，在 AJAE-v4 根目录运行：")
     fence = chr(96) * 3
-    text(f"{fence}bash\nPYTHONDONTWRITEBYTECODE=1 /home/jasongao/Study/AJAE/.venv/bin/python src/analyze.py --workers 6\n{fence}")
+    text(f"{fence}bash\nPYTHONDONTWRITEBYTECODE=1 /home/jasongao/Study/AJAE/.venv/bin/python -m src.analyze --workers 6\n{fence}")
     text(f"仅重建报告：在上述命令后加 {code('--report-only')}；读取已保存统计表，生成 {code('report.md')} 和文中图片，不重新分析原始扫描。")
     text("标签和评价依据：[STU 官方逐点评测代码](https://github.com/kumuji/stu_dataset/blob/main/compute_point_level_ood.py)与[官方语义标签配置](https://github.com/kumuji/stu_dataset/blob/main/Mask4Former3D/conf/semantic-kitti.yaml)。报告中的数字均来自本次 206 实际读取；没有模拟数字或预测成绩。")
     (output / "report.md").write_text("\n\n".join(document) + "\n", encoding="utf-8")
@@ -634,7 +580,7 @@ def report(output):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data-root",type=Path,default=Path("/home/jasongao/Data/STU"))
-    parser.add_argument("--rays",type=Path,default=Path("/home/jasongao/Study/AJAE/assets/rays.npz"))
+    parser.add_argument("--rays",type=Path,default=RAYS_PATH)
     parser.add_argument("--output",type=Path,default=Path("results/206"))
     parser.add_argument("--workers",type=int,required=True)
     parser.add_argument("--report-only",action="store_true")

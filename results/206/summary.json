@@ -52,7 +52,7 @@
     "timestamps_present": false
   },
   "ray_model": {
-    "source": "/home/jasongao/Study/AJAE/assets/rays.npz",
+    "source": "/home/jasongao/Study/AJAE-v4/assets/rays.npz",
     "beams": 128,
     "columns": 1024,
     "horizontal_step_deg": 0.3515625,
@@ -1638,8 +1638,8 @@
     "segments": "maximal consecutive frame runs with >=1 in-range return of one labeled identity",
     "geometry": "observed surfaces in inv(Tr) @ pose_camera @ Tr world; no registration; not full object shape/height",
     "binning": "display-only distance/count bins; no V4 coverage or acceptance thresholds are defined",
-    "frame_counts": "normal reference observations retain 1-4 returns; anomaly >=5 frame eligibility is not imposed on pure normal data",
-    "normal_training": "user confirmed zero-anomaly scans may supply only normal supervision; sampler/loss unspecified"
+    "frame_counts": "offline normal reference observations retain 1-4 returns; these census counts do not imply training eligibility",
+    "normal_training": "updated V4 plan: fewer than 5 valid anomalies skips the entire frame, including zero-anomaly scans; normal supervision comes from eligible inserted scans"
   },
   "reference_examples": [
     {
@@ -1840,8 +1840,8 @@
   "execution": {
     "workers": 6,
     "numerical_threads": 1,
-    "elapsed_seconds": 11.130865223007277,
-    "sampled_peak_process_rss_bytes": 1765703680,
-    "command": "python src/analyze.py --data-root /home/jasongao/Data/STU --rays /home/jasongao/Study/AJAE/assets/rays.npz --output results/206 --workers 6"
+    "elapsed_seconds": 11.267242026980966,
+    "sampled_peak_process_rss_bytes": 1761931264,
+    "command": "python -m src.analyze --data-root /home/jasongao/Data/STU --rays /home/jasongao/Study/AJAE-v4/assets/rays.npz --output results/206 --workers 6"
   }
 }
