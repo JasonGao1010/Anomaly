@@ -411,15 +411,14 @@ def analyze(args):
 
 
 def report(output):
-    """Render the reviewed measurements with explicit Chinese/Latin font runs."""
+    """Write editable Markdown and render its plots from the saved measurements."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    from matplotlib.backends.backend_pdf import PdfPages
     from matplotlib.colors import LogNorm
-    from matplotlib.font_manager import FontProperties, fontManager
+    from matplotlib.font_manager import FontProperties, findfont, fontManager
     from matplotlib.ft2font import FT2Font
-    from matplotlib.textpath import TextToPath
+    from matplotlib.text import Text
 
     def load(name):
         with (output / f"{name}.csv").open(encoding="utf-8-sig", newline="") as stream:
@@ -428,80 +427,44 @@ def report(output):
     frames, labels, observations, structures = [load(n) for n in ("frames", "labels", "observations", "structures")]
     summary = json.loads((output / "summary.json").read_text())
     total, identities = summary["totals"], summary["structures"]
-    paths = ("/mnt/c/Windows/Fonts/times.ttf", "/mnt/c/Windows/Fonts/simsun.ttc")
-    faces = [FT2Font(path) for path in paths]
-    if [face.family_name for face in faces] != ["Times New Roman", "SimSun"]:
-        raise ValueError("required original fonts are unavailable")
-    for path in paths:
-        fontManager.addfont(path)
-    plt.rcParams.update({"font.family":"Times New Roman", "pdf.fonttype":42,
-                         "axes.spines.top":False, "axes.spines.right":False,
-                         "font.size":9, "axes.titlesize":11, "axes.labelsize":9,
-                         "savefig.dpi":220})
-    metrics = TextToPath()
-    widths = {}
-    figure = None
-    page_number = 0
-    pdf = PdfPages(output / "report.pdf", metadata={"Title":"206 序列分析", "Author":"AJAE V4"})
+    font_path = "/mnt/c/Windows/Fonts/times.ttf"
+    face = FT2Font(font_path)
+    if face.family_name != "Times New Roman":
+        raise ValueError("required original plot font is unavailable")
+    fontManager.addfont(font_path)
+    plt.rcParams.update({"font.family": "Times New Roman", "font.size": 11,
+                         "axes.spines.top": False, "axes.spines.right": False,
+                         "axes.titlesize": 12, "axes.labelsize": 11})
+    document = ["# 206 序列分析"]
 
-    def font_index(c):
-        return int("\u2e80" <= c <= "\u9fff" or "\uff00" <= c <= "\uffef")
+    def section(title):
+        document.append(f"## {title}")
 
-    def advance(c, size):
-        key = (c, size)
-        if key not in widths:
-            index = font_index(c)
-            if not faces[index].get_char_index(ord(c)):
-                raise ValueError(f"required font lacks character {c!r}")
-            widths[key] = metrics.get_text_width_height_descent(c, FontProperties(fname=paths[index], size=size), False)[0]
-        return widths[key]
+    def text(value):
+        document.append(value)
 
-    def rich(text, x, y, size=10.5, color="#20252b"):
-        # Coordinates and advances are physical PDF points, independent of DPI.
-        start = 0
-        while start < len(text):
-            index = font_index(text[start]); end = start + 1
-            while end < len(text) and font_index(text[end]) == index:
-                end += 1
-            span = text[start:end]
-            figure.text(x / 595.44, y / 841.68, span,
-                        fontproperties=FontProperties(fname=paths[index], size=size), color=color)
-            x += sum(advance(c, size) for c in span)
-            start = end
+    def code(value):
+        return chr(96) + str(value) + chr(96)
 
-    def text(value, y, size=10.5, x=45, width=505, leading=17):
-        line = ""; used = 0
-        for character in str(value) + "\n":
-            if character == "\n":
-                rich(line,x,y,size); y -= leading; line=""; used=0
+    def table(headers, rows):
+        document.append("\n".join("| " + " | ".join(map(str, row)) + " |"
+                                 for row in [headers, ["---"] * len(headers)] + rows))
+
+    def save_plot(figure, name, caption):
+        # Inspect the actual plotted text before rasterization; no font fallback.
+        figure.canvas.draw()
+        for item in figure.findobj(Text):
+            if not item.get_visible() or not item.get_text():
                 continue
-            length = advance(character,size)
-            if used + length > width:
-                rich(line,x,y,size); y -= leading; line=""; used=0
-            line += character; used += length
-        return y - 7
-
-    def page(title):
-        nonlocal figure,page_number
-        if figure is not None:
-            pdf.savefig(figure); plt.close(figure)
-        page_number += 1
-        figure = plt.figure(figsize=(8.27,11.69))
-        rich("AJAE V4 · 206 序列分析",45,808,10,"#56606b")
-        rich(title,45,775,18)
-        rich(str(page_number),540,25,9,"#56606b")
-        figure.add_artist(plt.Line2D([45/595.44,550/595.44],[794/841.68]*2,
-                                    transform=figure.transFigure,color="#b0b7be",lw=.7))
-        return 745
-
-    def table(headers, rows, y, columns, size=9.5, height=21):
-        for values in [headers] + rows:
-            x=45
-            for value,width in zip(values,columns):
-                rich(str(value),x,y,size)
-                x += width
-            y -= height
-        return y - 12
+            resolved = findfont(item.get_fontproperties(), fallback_to_default=False)
+            if FontProperties(fname=resolved).get_name() != "Times New Roman":
+                raise ValueError(f"unexpected plot font: {resolved}")
+            for character in item.get_text():
+                if not character.isspace() and not face.get_char_index(ord(character)):
+                    raise ValueError(f"required plot font lacks character {character!r}")
+        figure.savefig(output / f"{name}.png", dpi=180, bbox_inches="tight", facecolor="white")
+        plt.close(figure)
+        document.append(f"![{caption}]({name}.png)")
 
     def numbers(key):
         return np.array([float(r[key]) for r in frames])
@@ -509,150 +472,164 @@ def report(output):
     def pct(value, denominator):
         return f"{100*value/denominator:.2f}%"
 
-    y=page("数据基础与主要结论")
-    y=text("本次读取 STU/train/206 的全部 449 帧原始扫描、标签、相机位姿和标定。统计服务于总方案的广覆盖数据构造、正常观测参照及单帧分割监督；没有生成异常、训练模型或计算异常检测成绩。",y)
-    y=table(["项目","全序列结果"],[
-        ["原始文件记录",f"{total['slots']:,}"],
-        ["实际回波",f"{total['returns_all']:,}"],
-        ["坐标全零的空记录",f"{total['empty_slots']:,}"],
-        ["2.5–50 米内实际回波",f"{total['returns_2p5_50m']:,}"],
-        ["范围内有效正常点",f"{total['valid_normal']:,}"],
-        ["范围内忽略标签点",f"{total['ignored_in_range']:,}"],
-        ["全扫描原生异常回波",f"{total['native_anomaly_all']:,}"],
-        ["每帧实际回波最少／中位／最多", " / ".join(f"{int(v):,}" for v in np.quantile(numbers('returns_all'),[0,.5,1]))],
-    ],y,[285,220])
-    y=text("449 帧扫描、449 份标签和 449 个位姿逐帧对应，帧号为 0–448。扫描均为 131,072 条四维记录，坐标和强度均为有限数。未发现帧内相同坐标或相同四维记录的额外副本；统计保留原始文件记录，未按坐标删点。",y)
-    y=text(f"全部 {total['empty_slots']:,} 个空记录都具有非零强度，且原始标签为 0。判定实际回波必须检查坐标是否全零，不能仅检查强度。范围外的 {total['returns_below_2p5m']+total['returns_above_50m']:,} 个实际回波仍属于模型完整扫描输入。",y)
-    y=text("206 的原生异常点数为零。按照本轮已确认的规则，这些纯正常帧可提供正常监督；异常分割训练还需要合成异常。本文所称有效正常点，指坐标非全零、三维欧氏距离位于含边界的 2.5–50 米、原始标签非 0 且非 2 的点。",y)
-    text("这些结果确认原始数据的读取与监督支持，不能证明异常可学习、合成数据充分或模型性能提升。",y)
+    section("数据基础与主要结论")
+    text("本次读取 STU/train/206 的全部 449 帧原始扫描、标签、相机位姿和标定。统计服务于总方案的广覆盖数据构造、正常观测参照及单帧分割监督；没有生成异常、训练模型或计算异常检测成绩。")
+    table(["项目", "全序列结果"], [
+        ["原始文件记录", f"{total['slots']:,}"],
+        ["实际回波", f"{total['returns_all']:,}"],
+        ["坐标全零的空记录", f"{total['empty_slots']:,}"],
+        ["2.5–50 米内实际回波", f"{total['returns_2p5_50m']:,}"],
+        ["范围内有效正常点", f"{total['valid_normal']:,}"],
+        ["范围内忽略标签点", f"{total['ignored_in_range']:,}"],
+        ["全扫描原生异常回波", f"{total['native_anomaly_all']:,}"],
+        ["每帧实际回波最少／中位／最多", " / ".join(f"{int(v):,}" for v in np.quantile(numbers("returns_all"), [0, .5, 1]))],
+    ])
+    text("449 帧扫描、449 份标签和 449 个位姿逐帧对应，帧号为 0–448。扫描均为 131,072 条四维记录，坐标和强度均为有限数。未发现帧内相同坐标或相同四维记录的额外副本；统计保留原始文件记录，未按坐标删点。")
+    text(f"全部 {total['empty_slots']:,} 个空记录都具有非零强度，且原始标签为 0。判定实际回波必须检查坐标是否全零，不能仅检查强度。范围外的 {total['returns_below_2p5m']+total['returns_above_50m']:,} 个实际回波仍属于模型完整扫描输入。")
+    text("206 的原生异常点数为零。按照用户已确认的规则，除合格植入帧外，另纳入零异常点的纯正常帧，仅提供正常监督。异常分割训练还需要合成异常。本文所称有效正常点，指坐标非全零、三维欧氏距离位于含边界的 2.5–50 米、原始标签非 0 且非 2 的点。")
+    text("这些结果确认原始数据的读取与监督支持，不能证明异常可学习、合成数据充分或模型性能提升。")
 
-    y=page("语义组成与实例身份覆盖")
-    y=text("下表列出实际出现的原始语义类别。比例以范围内有效正常点为分母；原始标签 0 不参与正常监督。实例身份必须同时包含序列、原始语义类别和非零编号。",y)
-    rows=[]
-    for r in labels:
-        if int(r["returns_all"]):
-            rows.append([r["semantic"],r["category"],f"{int(r['returns_2p5_50m']):,}",
-                         "—" if int(r["semantic"]) in (0,2) else pct(int(r["returns_2p5_50m"]),total["valid_normal"]),r["labeled_identities"]])
-    y=table(["原始标签","类别","范围内回波","正常占比","实例身份"],rows,y,[60,132,135,90,70],height=19,size=9)
-    y=text(f"有效正常点中，仅 {total['normal_with_instance']:,} 点具有非零实例编号，占 {pct(total['normal_with_instance'],total['valid_normal'])}。道路、建筑、植被、树干、杆状物、交通标志等在本序列中没有非零实例编号。它们继续提供正常背景监督，不能把整类点当成一个物体统计。",y)
-    extra = {int(r['semantic']):int(r['returns_2p5_50m']) for r in labels}
-    text(f"原始标签 1、52、99 分别有 {extra[1]:,}、{extra[52]:,}、{extra[99]:,} 个范围内回波。它们在官方二元口径中属于正常点，不能沿用旧语义训练映射将其丢弃。标签 1 缺乏明确正常结构语义，因此不据此构造实例参照。",y)
+    section("语义组成与实例身份覆盖")
+    text("下表列出实际出现的原始语义类别。比例以范围内有效正常点为分母；原始标签 0 不参与正常监督。实例身份必须同时包含序列、原始语义类别和非零编号。")
+    rows = []
+    for row in labels:
+        if int(row["returns_all"]):
+            rows.append([row["semantic"], row["category"], f"{int(row['returns_2p5_50m']):,}",
+                         "—" if int(row["semantic"]) in (0, 2) else pct(int(row["returns_2p5_50m"]), total["valid_normal"]),
+                         row["labeled_identities"]])
+    table(["原始标签", "类别", "范围内回波", "正常占比", "实例身份"], rows)
+    text(f"有效正常点中，仅 {total['normal_with_instance']:,} 点具有非零实例编号，占 {pct(total['normal_with_instance'], total['valid_normal'])}。道路、建筑、植被、树干、杆状物、交通标志等在本序列中没有非零实例编号。它们继续提供正常背景监督，不能把整类点当成一个物体统计。")
+    extra = {int(row["semantic"]): int(row["returns_2p5_50m"]) for row in labels}
+    text(f"原始标签 1、52、99 分别有 {extra[1]:,}、{extra[52]:,}、{extra[99]:,} 个范围内回波。它们在官方二元口径中属于正常点，不能沿用旧语义训练映射将其丢弃。标签 1 缺乏明确正常结构语义，因此不据此构造实例参照。")
 
-    y=page("轨迹、位姿与射线一致性")
-    trajectory=summary["trajectory"]
-    y=text(f"传感器沿原始位姿累计移动 {trajectory['length_m']:.3f} 米，首尾位移 {trajectory['start_end_displacement_m']:.3f} 米。每相邻帧的移动中位数为 {trajectory['step_m']['median']:.3f} 米，最大为 {trajectory['step_m']['max']:.3f} 米。文件没有时间戳，因此不将这些量换算为速度。",y)
-    ax=figure.add_axes([.12,.47,.78,.32])
-    xy=np.column_stack((numbers("sensor_world_x_m"),numbers("sensor_world_y_m")))
-    ax.plot(*xy.T,color="#bcc3cc",lw=1)
-    points=ax.scatter(*xy.T,c=np.arange(449),s=9,cmap="viridis")
-    ax.scatter(*xy[0],marker="o",s=35,c="#1b6b48",label="Start")
-    ax.scatter(*xy[-1],marker="s",s=35,c="#943f36",label="End")
-    ax.set(xlabel="World x (m)",ylabel="World y (m)");ax.set_aspect("equal",adjustable="datalim")
-    figure.colorbar(points,ax=ax,label="Frame",pad=.03);ax.legend(loc="best",frameon=False)
-    y=345
-    ray=summary["ray_model"]; residual=summary["ray_residual_m"]
-    y=text(f"世界坐标采用 inv(Tr) × pose_camera × Tr，旋转矩阵的最大正交误差约为 {trajectory['rotation_orthogonality_error_max']:.2e}。该世界坐标继承初始雷达参考轴，不代表地理方位；没有重新配准或改变原始轨迹。",y)
-    y=text(f"已有射线标定包含 128 束、每圈 1,024 列，名义水平间隔 {ray['horizontal_step_deg']:.7f} 度。束仰角从 {ray['elevations_deg']['min']:.3f} 至 {ray['elevations_deg']['max']:.3f} 度，相邻束仰角间隔中位数为 {ray['vertical_gap_deg']['median']:.3f} 度。",y)
-    y=text(f"本次对全部实际回波计算到对应标定射线的垂直距离，中位数 {residual['median']*1000:.3f} 毫米，95 分位 {residual['p95']*1000:.3f} 毫米，99 分位 {residual['p99']*1000:.3f} 毫米，最大 {residual['max']*1000:.3f} 毫米；没有回波位于射线原点后方。",y)
-    text("这支持已有标定与 206 文件记录的几何一致性。该标定原本由 206 拟合，因此这不是独立传感器精度验证，也不自动确定 V4 允许的合成误差。",y)
+    section("轨迹、位姿与射线一致性")
+    trajectory = summary["trajectory"]
+    text(f"传感器沿原始位姿累计移动 {trajectory['length_m']:.3f} 米，首尾位移 {trajectory['start_end_displacement_m']:.3f} 米。每相邻帧的移动中位数为 {trajectory['step_m']['median']:.3f} 米，最大为 {trajectory['step_m']['max']:.3f} 米。文件没有时间戳，因此不将这些量换算为速度。")
+    figure, ax = plt.subplots(figsize=(8, 6), layout="constrained")
+    xy = np.column_stack((numbers("sensor_world_x_m"), numbers("sensor_world_y_m")))
+    ax.plot(*xy.T, color="#bcc3cc", lw=1)
+    points = ax.scatter(*xy.T, c=np.arange(449), s=9, cmap="viridis")
+    ax.scatter(*xy[0], marker="o", s=35, c="#1b6b48", label="Start")
+    ax.scatter(*xy[-1], marker="s", s=35, c="#943f36", label="End")
+    ax.set(xlabel="World x (m)", ylabel="World y (m)")
+    ax.set_aspect("equal", adjustable="datalim")
+    figure.colorbar(points, ax=ax, label="Frame", pad=.03)
+    ax.legend(loc="best", frameon=False)
+    save_plot(figure, "trajectory", "图 1：206 原始位姿轨迹，颜色表示帧号")
+    ray, residual = summary["ray_model"], summary["ray_residual_m"]
+    text(f"世界坐标采用 {code('inv(Tr) @ pose_camera @ Tr')}，旋转矩阵的最大正交误差约为 {trajectory['rotation_orthogonality_error_max']:.2e}。该世界坐标继承初始雷达参考轴，不代表地理方位；没有重新配准或改变原始轨迹。")
+    text(f"已有射线标定包含 128 束、每圈 1,024 列，名义水平间隔 {ray['horizontal_step_deg']:.7f} 度。束仰角从 {ray['elevations_deg']['min']:.3f} 至 {ray['elevations_deg']['max']:.3f} 度，相邻束仰角间隔中位数为 {ray['vertical_gap_deg']['median']:.3f} 度。")
+    text(f"本次对全部实际回波计算到对应标定射线的垂直距离，中位数 {residual['median']*1000:.3f} 毫米，95 分位 {residual['p95']*1000:.3f} 毫米，99 分位 {residual['p99']*1000:.3f} 毫米，最大 {residual['max']*1000:.3f} 毫米；没有回波位于射线原点后方。")
+    text("这支持已有标定与 206 文件记录的几何一致性。该标定原本由 206 拟合，因此这不是独立传感器精度验证，也不自动确定 V4 允许的合成误差。")
 
-    page("回波距离、强度与采样间距")
-    ax=figure.add_axes([.13,.61,.77,.24])
-    ax.plot(np.arange(449),numbers("returns_all"),label="All actual returns",lw=1)
-    ax.plot(np.arange(449),numbers("valid_normal"),label="Valid normal returns",lw=1)
-    ax.set(xlabel="Frame",ylabel="Return count");ax.legend(frameon=False)
-    ax=figure.add_axes([.13,.32,.77,.21])
-    edges=np.array(summary["joint_distribution"]["distance_edges_m"])
-    ax.bar(edges[:-1],np.array(summary["normal_range_histogram"])/total["valid_normal"]*100,
-           width=np.diff(edges),align="edge",color="#356b88",edgecolor="white",linewidth=.3)
-    ax.set(xlabel="Range (m)",ylabel="Normal returns (%)",xlim=(2.5,50))
-    y=218
-    distance=summary["normal_range_m"]; intensity=summary["normal_intensity"]
-    y=text(f"范围内正常点的距离中位数为 {distance['median']:.3f} 米，75 分位为 {distance['p75']:.3f} 米，95 分位为 {distance['p95']:.3f} 米。全扫描中最远实际回波为 {numbers('range_all_max').max():.3f} 米。点数多集中在近处，不能用累计点数代替不同位置的覆盖。",y)
-    y=text(f"有效正常点原始强度范围为 {intensity['min']:.6f}–{intensity['max']:.6f}，中位数 {intensity['median']:.6f}。强度可以超过 1；分析未截断或重新归一化。逐帧的相邻水平射线正常回波间距中位数再取中位数为 {np.median(numbers('horizontal_spacing_m_median')):.4f} 米，垂直方向为 {np.median(numbers('vertical_spacing_m_median')):.4f} 米。",y)
-    text("间距统计要求两条相邻射线均有范围内正常回波，但不要求属于同一表面；距离跳变可能跨越物体边界或遮挡边界，不能直接解释为表面粗糙度。",y)
+    section("回波距离、强度与采样间距")
+    figure, axes = plt.subplots(2, 1, figsize=(10, 7), layout="constrained")
+    axes[0].plot(np.arange(449), numbers("returns_all"), label="All actual returns", lw=1)
+    axes[0].plot(np.arange(449), numbers("valid_normal"), label="Valid normal returns", lw=1)
+    axes[0].set(xlabel="Frame", ylabel="Return count")
+    axes[0].legend(frameon=False)
+    edges = np.array(summary["joint_distribution"]["distance_edges_m"])
+    axes[1].bar(edges[:-1], np.array(summary["normal_range_histogram"])/total["valid_normal"]*100,
+                width=np.diff(edges), align="edge", color="#356b88", edgecolor="white", linewidth=.3)
+    axes[1].set(xlabel="Range (m)", ylabel="Normal returns (%)", xlim=(2.5, 50))
+    save_plot(figure, "sampling", "图 2：逐帧实际回波与有效正常点数量，以及正常点距离分布")
+    distance, intensity = summary["normal_range_m"], summary["normal_intensity"]
+    text(f"范围内正常点的距离中位数为 {distance['median']:.3f} 米，75 分位为 {distance['p75']:.3f} 米，95 分位为 {distance['p95']:.3f} 米。全扫描中最远实际回波为 {numbers('range_all_max').max():.3f} 米。点数多集中在近处，不能用累计点数代替不同位置的覆盖。")
+    text(f"有效正常点原始强度范围为 {intensity['min']:.6f}–{intensity['max']:.6f}，中位数 {intensity['median']:.6f}。强度可以超过 1；分析未截断或重新归一化。逐帧的相邻水平射线正常回波间距中位数再取中位数为 {np.median(numbers('horizontal_spacing_m_median')):.4f} 米，垂直方向为 {np.median(numbers('vertical_spacing_m_median')):.4f} 米。")
+    text("间距统计要求两条相邻射线均有范围内正常回波，但不要求属于同一表面；距离跳变可能跨越物体边界或遮挡边界，不能直接解释为表面粗糙度。")
 
-    page("正常观测的回波数量与距离")
-    joint=summary["joint_distribution"]
-    distributions=[np.array(joint["observation_counts"])/identities["observed_instance_frames_in_range"]*100,
-                   np.array(joint["structure_equal_weight"])*100]
-    positive=np.concatenate([a[a>0] for a in distributions]);norm=LogNorm(positive.min(),positive.max())
-    count_labels=["1","2","3","4","5–9","10–19","20–49","50–99","100–199","200–499","500–999","1000–1999","2000+"]
-    for i,(values,title) in enumerate(zip(distributions,("Each observed instance-frame has equal weight","Each labeled identity has equal total weight"))):
-        ax=figure.add_axes([.13,.57-i*.31,.70,.235])
-        mesh=ax.pcolormesh(edges,np.arange(14),np.ma.masked_equal(values.T,0),norm=norm,cmap="viridis",rasterized=True)
-        ax.set(yticks=np.arange(13)+.5,yticklabels=count_labels,xlabel="Median range of in-range returns (m)",ylabel="Return count",title=title)
-        figure.colorbar(mesh,cax=figure.add_axes([.855,.57-i*.31,.022,.235]),label="Mass (%)")
-    y=170
-    y=text(f"有范围内回波的实例观测共 {identities['observed_instance_frames_in_range']:,} 次，其中 {identities['frames_1_to_4']:,} 次只有 1–4 个回波，占 {pct(identities['frames_1_to_4'],identities['observed_instance_frames_in_range'])}，涉及 {identities['identities_with_1_to_4']} 个标注身份。每个身份等权后，这一比例为 {100*identities['structure_equal_weight_fraction_1_to_4']:.2f}%。",y)
-    text("两图分别归一化为 100%。第一图容易受到长期可见物体的影响；第二图用于观察身份覆盖差异，不规定训练抽样权重。图中分箱只用于显示，不是 V4 的正式覆盖组合、远距定义或匹配容差。",y)
+    section("正常观测的回波数量与距离")
+    joint = summary["joint_distribution"]
+    distributions = [np.array(joint["observation_counts"])/identities["observed_instance_frames_in_range"]*100,
+                     np.array(joint["structure_equal_weight"])*100]
+    positive = np.concatenate([array[array > 0] for array in distributions])
+    norm = LogNorm(positive.min(), positive.max())
+    count_labels = ["1", "2", "3", "4", "5–9", "10–19", "20–49", "50–99", "100–199", "200–499", "500–999", "1000–1999", "2000+"]
+    figure, axes = plt.subplots(2, 1, figsize=(10, 8), layout="constrained")
+    titles = ("Each observed instance-frame has equal weight", "Each labeled identity has equal total weight")
+    for ax, values, title in zip(axes, distributions, titles):
+        mesh = ax.pcolormesh(edges, np.arange(14), np.ma.masked_equal(values.T, 0), norm=norm, cmap="viridis")
+        ax.set(yticks=np.arange(13)+.5, yticklabels=count_labels,
+               xlabel="Median range of in-range returns (m)", ylabel="Return count", title=title)
+        figure.colorbar(mesh, ax=ax, label="Mass (%)", pad=.02)
+    save_plot(figure, "joint", "图 3：数量与距离联合分布，上图每次观测等权，下图每个标注身份具有相同总权重")
+    text(f"有范围内回波的实例观测共 {identities['observed_instance_frames_in_range']:,} 次，其中 {identities['frames_1_to_4']:,} 次只有 1–4 个回波，占 {pct(identities['frames_1_to_4'], identities['observed_instance_frames_in_range'])}，涉及 {identities['identities_with_1_to_4']} 个标注身份。每个身份等权后，这一比例为 {100*identities['structure_equal_weight_fraction_1_to_4']:.2f}%。")
+    text("两图分别归一化为 100%。第一图容易受到长期可见物体的影响；第二图用于观察身份覆盖差异，不规定训练抽样权重。图中分箱只用于显示，不是 V4 的正式覆盖组合、远距定义或匹配容差。")
 
-    page("全部标注身份的可见区间")
-    keys=[s["structure_id"] for s in structures]
-    matrix=np.zeros((len(keys),449));indices={key:i for i,key in enumerate(keys)}
+    section("全部标注身份的可见区间")
+    keys = [s["structure_id"] for s in structures]
+    matrix = np.zeros((len(keys), 449))
+    indices = {key: i for i, key in enumerate(keys)}
     for row in observations:
-        matrix[indices[row["structure_id"]],int(row["frame"])]=int(row["returns_2p5_50m"])
-    ax=figure.add_axes([.19,.19,.69,.65])
-    mesh=ax.imshow(np.ma.masked_equal(np.log10(1+matrix),0),aspect="auto",interpolation="nearest",cmap="viridis",extent=(-.5,448.5,len(keys)-.5,-.5),rasterized=True)
-    ax.set(yticks=np.arange(len(keys)),yticklabels=keys,xlabel="Frame",ylabel="Labeled identity")
-    ax.tick_params(axis="y",labelsize=6.2,length=0)
-    figure.colorbar(mesh,cax=figure.add_axes([.90,.19,.02,.65]),label="log10(1 + in-range returns)")
-    y=130
-    y=text(f"{identities['identities']} 个标注身份中，{identities['repeated_identities']} 个跨帧出现，{identities['moving_label_identities']} 个带运动语义标签。全部实际观测有 {identities['observed_instance_frames_all']:,} 次，其中 {identities['observed_instance_frames_in_range']:,} 次具有范围内回波；按连续有范围内回波分成 {identities['contiguous_segments']} 段。多个片段仍属于原标注身份，不作为新增独立结构。",y)
-    text("空白只表示该帧没有该标注身份的范围内回波，不能区分距离过远、遮挡、漏标或物体离开。时间片段应据这些真实观测安排，不能用插值补出回波。",y)
+        matrix[indices[row["structure_id"]], int(row["frame"])] = int(row["returns_2p5_50m"])
+    figure, ax = plt.subplots(figsize=(10, 12), layout="constrained")
+    mesh = ax.imshow(np.ma.masked_equal(np.log10(1+matrix), 0), aspect="auto", interpolation="nearest",
+                     cmap="viridis", extent=(-.5, 448.5, len(keys)-.5, -.5))
+    ax.set(yticks=np.arange(len(keys)), yticklabels=keys, xlabel="Frame", ylabel="Labeled identity")
+    ax.tick_params(axis="y", labelsize=8, length=0)
+    figure.colorbar(mesh, ax=ax, label="log10(1 + in-range returns)", pad=.02)
+    save_plot(figure, "visibility", "图 4：全部标注身份逐帧可见回波数量，空白表示无范围内回波")
+    text(f"{identities['identities']} 个标注身份中，{identities['repeated_identities']} 个跨帧出现，{identities['moving_label_identities']} 个带运动语义标签。全部实际观测有 {identities['observed_instance_frames_all']:,} 次，其中 {identities['observed_instance_frames_in_range']:,} 次具有范围内回波；按连续有范围内回波分成 {identities['contiguous_segments']} 段。多个片段仍属于原标注身份，不作为新增独立结构。")
+    text("空白只表示该帧没有该标注身份的范围内回波，不能区分距离过远、遮挡、漏标或物体离开。时间片段应据这些真实观测安排，不能用插值补出回波。")
 
-    y=page("跨帧关联的证据与限制")
-    y=text(f"同一实例数字在不同语义类别间重复使用。本次发现同时复用的数字包括 {'、'.join(map(str,identities['reused_numeric_ids']))}，因此仅使用实例数字会把不同对象混在一起。完整标识保留原始语义类别，运动与非运动标签也不自动合并。",y)
-    y=text("对每个身份，将所有观测按原始位姿变换至世界坐标。相继两次观测分别计算双向最近点距离，再取两个方向中位数及 95 分位的较大值。另将按帧序排列的观测等分为三组，比较相邻两组汇集表面的距离。它们描述观测表面一致性，不是物体速度或身份真值。",y)
-    jumps=sorted([r for r in observations if r.get("nn_world_median_m")],key=lambda r:float(r["nn_world_median_m"]),reverse=True)[:6]
-    y=table(["标注身份","前帧→后帧","间隔帧数","双向中位距离"],
-            [[r["structure_id"],f"{r['previous_observed_frame']}→{r['frame']}",r["gap_frames"],f"{float(r['nn_world_median_m']):.3f} 米"] for r in jumps],y,[140,130,90,140],size=9)
-    y=text("较大的跨帧距离并不自动表明标注错误。运动、长时间无回波、物体不同部位被观测以及位姿误差，都可能造成变化。反过来，重复编号和较小距离也不能单独认证固定物体。本次保留全部观测与间隔，不设自动通过或剔除阈值。",y)
-    y=text("没有实例编号的杆状物、树干和交通标志等，仍提供正常点及同帧上下文。若后续需要把其中某片区域作为跨帧参照，必须在落实时明确具体区域及关联依据；当前不能把未定义的区域曲线补写成已测得结果。",y)
-    text("可见点的世界包围范围只覆盖已观测表面，不能当作完整物体尺寸、真实高度、接地状态或可放置空间。206 的本轮分析没有把任何候选位置认定为已经满足异常接地与无穿插要求。",y)
+    section("跨帧关联的证据与限制")
+    text(f"同一实例数字在不同语义类别间重复使用。本次发现同时复用的数字包括 {'、'.join(map(str, identities['reused_numeric_ids']))}，因此仅使用实例数字会把不同对象混在一起。完整标识保留原始语义类别，运动与非运动标签也不自动合并。")
+    text("对每个身份，将所有观测按原始位姿变换至世界坐标。相继两次观测分别计算双向最近点距离，再取两个方向中位数及 95 分位的较大值。另将按帧序排列的观测等分为三组，比较相邻两组汇集表面的距离。它们描述观测表面一致性，不是物体速度或身份真值。")
+    jumps = sorted([r for r in observations if r.get("nn_world_median_m")],
+                   key=lambda row: float(row["nn_world_median_m"]), reverse=True)[:6]
+    table(["标注身份", "前帧→后帧", "间隔帧数", "双向中位距离"],
+          [[code(r["structure_id"]), f"{r['previous_observed_frame']}→{r['frame']}", r["gap_frames"],
+            f"{float(r['nn_world_median_m']):.3f} 米"] for r in jumps])
+    text("较大的跨帧距离并不自动表明标注错误。运动、长时间无回波、物体不同部位被观测以及位姿误差，都可能造成变化。反过来，重复编号和较小距离也不能单独认证固定物体。本次保留全部观测与间隔，不设自动通过或剔除阈值。")
+    text("没有实例编号的杆状物、树干和交通标志等，仍提供正常点及同帧上下文。若后续需要把其中某片区域作为跨帧参照，必须在落实时明确具体区域及关联依据；当前不能把未定义的区域曲线补写成已测得结果。")
+    text("可见点的世界包围范围只覆盖已观测表面，不能当作完整物体尺寸、真实高度、接地状态或可放置空间。206 的本轮分析没有把任何候选位置认定为已经满足异常接地与无穿插要求。")
 
-    page("此前三个参照片段的全段复核")
-    for i,example in enumerate(summary["reference_examples"]):
-        rows=[r for r in observations if r["structure_id"]==example["structure_id"] and example["start_frame"]<=int(r["frame"])<=example["end_frame"]]
-        x=[int(r["frame"]) for r in rows]
-        for j,(field,title) in enumerate((("returns_2p5_50m","Return count"),("range_valid_m_median","Median range (m)"))):
-            ax=figure.add_axes([.12+j*.43,.64-i*.205,.34,.13])
-            ax.plot(x,[float(r[field]) for r in rows],color="#356b88",lw=1)
-            ax.set(xlabel="Frame",ylabel=title,title=example["structure_id"] if j==0 else "")
-    y=155
-    for example,category in zip(summary['reference_examples'],('汽车','自行车','摩托车')):
-        y=text(f"{category} {example['structure_id']}，第 {example['start_frame']}–{example['end_frame']} 帧：{example['count']['min']:.0f}–{example['count']['max']:.0f} 个回波，距离中位数范围 {example['distance_m']['min']:.2f}–{example['distance_m']['max']:.2f} 米。",y,size=10)
-    text(f"三个片段共 {sum(r['observed_frames'] for r in summary['reference_examples'])} 次观测、{sum(r['frames_1_to_4'] for r in summary['reference_examples'])} 次 1–4 点观测。摩托车例显示相近距离可以对应不同回波数量；原因尚不能归结为单一遮挡因素。三例不作为 V4 的唯一参照，也不构成总体代表性或已完成异常匹配的证据。",y,size=10)
+    section("此前三个参照片段的全段复核")
+    figure, axes = plt.subplots(3, 2, figsize=(10, 9), layout="constrained")
+    for index, example in enumerate(summary["reference_examples"]):
+        rows = [r for r in observations if r["structure_id"] == example["structure_id"]
+                and example["start_frame"] <= int(r["frame"]) <= example["end_frame"]]
+        x = [int(r["frame"]) for r in rows]
+        for ax, field, title in zip(axes[index], ("returns_2p5_50m", "range_valid_m_median"),
+                                   ("Return count", "Median range (m)")):
+            ax.plot(x, [float(r[field]) for r in rows], color="#356b88", lw=1)
+            ax.set(xlabel="Frame", ylabel=title, title=example["structure_id"])
+    save_plot(figure, "references", "图 5：三个历史参照片段的完整数量与距离曲线")
+    for example, category in zip(summary["reference_examples"], ("汽车", "自行车", "摩托车")):
+        text(f"{category} {code(example['structure_id'])}，第 {example['start_frame']}–{example['end_frame']} 帧：{example['count']['min']:.0f}–{example['count']['max']:.0f} 个回波，距离中位数范围 {example['distance_m']['min']:.2f}–{example['distance_m']['max']:.2f} 米。")
+    text(f"三个片段共 {sum(r['observed_frames'] for r in summary['reference_examples'])} 次观测、{sum(r['frames_1_to_4'] for r in summary['reference_examples'])} 次 1–4 点观测。摩托车例显示相近距离可以对应不同回波数量；原因尚不能归结为单一遮挡因素。三例不作为 V4 的唯一参照，也不构成总体代表性或已完成异常匹配的证据。")
 
-    y=page("对两阶段数据构造的具体支持")
-    for title,body in (
+    section("对两阶段数据构造的具体支持")
+    for title, body in (
         ("基础数据", "206 提供完整正常背景、可用的位姿轨迹及多种语义结构。点分布明显偏向近处，而不同正常物体的可见区间和回波数量差异较大。首轮合成需要在整个数据池检查几何、位置与实际观测覆盖，不能用多次重复同一背景的累计点数替代多样性。"),
         ("针对性数据", "本次为全部标注身份保留逐帧数量、距离、观测间隔和世界几何证据，并给出连续可见片段。后续可据具体可信参照选择异常几何、尺寸与世界位置，再由原始射线自然形成观测；本次没有确定匹配容差，也没有逐帧增删点来拟合曲线。"),
         ("少回波监督", f"{identities['identities_with_1_to_4']} 个标注身份出现过范围内 1–4 点观测，说明少回波正常观测实际存在。它们属于正常参照统计，不受异常整帧至少 5 点的门槛排除。合成之后须先计算所有物体的联合遮挡，再应用整帧异常计数规则。"),
         ("尚不能从原始序列给出的结论", "没有植入异常，便没有异常引起的背景变化真值，也不能判断弱背景变化异常是否覆盖充分。缺少完整物体几何和具体放置，就不能给出低矮异常覆盖数或合法放置数量。没有模型预测，便不能计算 AP、AUROC、FPR95，也不能确认对 COVAL 的性能增益。"),
         ("独立性", "206 始终只是一条原始背景序列。其不同帧、同一物体的多个片段以及未来的多个合成版本都有关联。本次没有读取 STU 真实异常评价集来构造训练分布，所得统计不构成独立泛化证据。"),
     ):
-        y=text(title,y,size=12)
-        y=text(body,y)
-    text("下一项能改变数据构造判断的动作，是在实际开展异常放置时，依据明确的正常参照和覆盖目标，核查自然生成的数量—距离变化、接地、穿插与联合遮挡。相关未定数值在落实时再逐项确认。",y)
+        text(f"**{title}。** {body}")
+    text("下一项能改变数据构造判断的动作，是在实际开展异常放置时，依据明确的正常参照和覆盖目标，核查自然生成的数量—距离变化、接地、穿插与联合遮挡。相关未定数值在落实时再逐项确认。")
 
-    y=page("复算入口、统计单位与交付文件")
-    y=text("原始输入：/home/jasongao/Data/STU/train/206。射线参考：/home/jasongao/Study/AJAE/assets/rays.npz。脚本独立读取数据，没有导入旧训练代码、旧合成池或旧实验成绩。",y)
-    y=table(["文件","统计单位与用途"],[
-        ["frames.csv","449 行；完整扫描、标签、距离、强度、射线与位姿统计"],
-        ["labels.csv","原始语义类别；回波和实例身份覆盖"],
-        ["observations.csv",f"{len(observations):,} 行；{len(structures)} 个标注身份 × 449 帧，含零观测"],
-        ["structures.csv",f"{len(structures)} 行；每个标注身份的观测与几何汇总"],
-        ["segments.csv",f"{identities['contiguous_segments']} 行；连续具有范围内回波的自然片段"],
-        ["summary.json","总体统计、分箱数据、定义与执行信息"],
-    ],y,[140,365],height=24,size=9)
-    y=text("距离：原始 float32 坐标的三维欧氏距离，含 2.5 与 50 米边界。观测表同时保存全部回波距离与范围内距离的最小值、中位数和最大值；联合图用范围内距离中位数。中位数使用 np.median，其中 float32 距离保持原精度；其他分位数使用线性插值。观测之间存在相关性，本文不把分位数或相关系数解释为独立样本推断。",y)
-    y=text("数量：按实际文件回波计数。零回波的距离、强度和几何字段为空，不能按数值 0 使用。连续片段由相邻帧是否至少有一个范围内回波直接确定，没有附加最短长度。标注身份、物理物体数、片段数和实例观测次数分别报告。",y)
-    y=text("完整扫描的坐标、标签与文件长度已经逐帧核查；总体点数、距离分区、标签分区、实例观测与片段计数相互核对。图表使用同一批保存的统计表，不另行抽样计算。中文逐字符使用宋体，英文、数字与图轴使用 Times New Roman。",y)
-    y=text("运行环境使用已有 AJAE Python 环境，在 AJAE-v4 根目录运行：\nPYTHONDONTWRITEBYTECODE=1 /home/jasongao/Study/AJAE/.venv/bin/python src/analyze.py --workers 6\n仅重建报告：在上述命令后加 --report-only。",y,size=9.5)
-    text("标签和评价依据：STU 官方 compute_point_level_ood.py 与 Mask4Former3D/conf/semantic-kitti.yaml。报告中的数字均来自本次 206 实际读取；没有模拟数字或预测成绩。",y)
-    pdf.savefig(figure);plt.close(figure);pdf.close()
-
+    section("复算入口、统计单位与交付文件")
+    text(f"原始输入：{code(summary['source'])}。射线参考：{code(summary['ray_model']['source'])}。[分析程序](../../src/analyze.py)独立读取数据，没有导入旧训练代码、旧合成池或旧实验成绩。")
+    table(["文件", "统计单位与用途"], [
+        ["[frames.csv](frames.csv)", "449 行；完整扫描、标签、距离、强度、射线与位姿统计"],
+        ["[labels.csv](labels.csv)", "原始语义类别；回波和实例身份覆盖"],
+        ["[observations.csv](observations.csv)", f"{len(observations):,} 行；{len(structures)} 个标注身份 × 449 帧，含零观测"],
+        ["[structures.csv](structures.csv)", f"{len(structures)} 行；每个标注身份的观测与几何汇总"],
+        ["[segments.csv](segments.csv)", f"{identities['contiguous_segments']} 行；连续具有范围内回波的自然片段"],
+        ["[summary.json](summary.json)", "总体统计、分箱数据、定义与执行信息"],
+    ])
+    text(f"距离：原始 {code('float32')} 坐标的三维欧氏距离，含 2.5 与 50 米边界。观测表同时保存全部回波距离与范围内距离的最小值、中位数和最大值；联合图用范围内距离中位数。中位数使用 {code('np.median')}，其中 {code('float32')} 距离保持原精度；其他分位数使用线性插值。观测之间存在相关性，本文不把分位数或相关系数解释为独立样本推断。")
+    text("数量：按实际文件回波计数。零回波的距离、强度和几何字段为空，不能按数值 0 使用。连续片段由相邻帧是否至少有一个范围内回波直接确定，没有附加最短长度。标注身份、物理物体数、片段数和实例观测次数分别报告。")
+    text("完整扫描的坐标、标签与文件长度已经逐帧核查；总体点数、距离分区、标签分区、实例观测与片段计数相互核对。图表使用同一批保存的统计表，不另行抽样计算。")
+    text("正文和表格为可编辑的 Markdown，五组图片保存于同一目录并通过相对路径引用。图中文字使用已核对的 Times New Roman；正文的实际字体由 Markdown 阅读器控制，按项目要求阅读时应将中文设为宋体、英文设为 Times New Roman。")
+    text("运行环境使用已有 AJAE Python 环境，在 AJAE-v4 根目录运行：")
+    fence = chr(96) * 3
+    text(f"{fence}bash\nPYTHONDONTWRITEBYTECODE=1 /home/jasongao/Study/AJAE/.venv/bin/python src/analyze.py --workers 6\n{fence}")
+    text(f"仅重建报告：在上述命令后加 {code('--report-only')}；读取已保存统计表，生成 {code('report.md')} 和文中图片，不重新分析原始扫描。")
+    text("标签和评价依据：[STU 官方逐点评测代码](https://github.com/kumuji/stu_dataset/blob/main/compute_point_level_ood.py)与[官方语义标签配置](https://github.com/kumuji/stu_dataset/blob/main/Mask4Former3D/conf/semantic-kitti.yaml)。报告中的数字均来自本次 206 实际读取；没有模拟数字或预测成绩。")
+    (output / "report.md").write_text("\n\n".join(document) + "\n", encoding="utf-8")
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
