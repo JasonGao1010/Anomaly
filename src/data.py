@@ -5,9 +5,15 @@ uses AJAE/assets/rays.npz and the formula already measured in the 206 analysis.
 """
 
 from dataclasses import dataclass, field
+from collections import OrderedDict
+from concurrent.futures import ProcessPoolExecutor
 import hashlib
+import io
+import json
 from pathlib import Path
 import math
+import os
+import time
 
 import numpy as np
 
@@ -24,6 +30,9 @@ LABELS = {
     257: "运动公共汽车", 258: "运动卡车", 259: "运动其他车辆",
 }
 RAYS_PATH = Path(__file__).resolve().parents[1] / "assets" / "rays.npz"
+VERSION = "AJAE-V4-F240-R1"
+DATA_ROOT = Path("/home/jasongao/Data/STU")
+POOL_ROOT = Path("/home/jasongao/Study/AJAE/results/synthetic")
 
 
 def readonly(values):
@@ -154,10 +163,20 @@ def point_targets(frame):
     """Return -1/0/1 for ignored/normal/anomalous points before frame selection."""
     if frame.labels is None:
         raise ValueError("supervision requires ground-truth labels")
-    valid = frame.actual & (frame.range_m >= 2.5) & (frame.range_m <= 50) & (frame.semantic != 0)
+    labels = unified_labels(frame.labels)
+    valid = frame.actual & (frame.range_m >= 2.5) & (frame.range_m <= 50) & (labels != 0)
     targets = np.full(len(frame.xyzi), -1, dtype=np.int8)
-    targets[valid] = (frame.semantic[valid] == 2).astype(np.int8)
+    targets[valid] = (labels[valid] == 2).astype(np.int8)
     return targets
+
+
+def unified_labels(packed):
+    """STU stores raw semantics in the low 16 bits; raw 1 is a valid inlier."""
+    raw = np.asarray(packed) & 65535
+    unknown = np.setdiff1d(np.unique(raw), list(LABELS))
+    if len(unknown):
+        raise ValueError(f"unrecognized raw STU semantic labels: {unknown.tolist()}")
+    return np.where(raw == 0, 0, np.where(raw == 2, 2, 1)).astype(np.uint8)
 
 
 @dataclass(frozen=True, slots=True)
@@ -301,3 +320,276 @@ def read_rays(path=RAYS_PATH):
     origins = np.stack((origin_x * cosine, origin_x * sine, np.full_like(cosine, origin_z)), axis=-1)
     canonical = np.arange(128)[:, None] * 1024 + (np.arange(1024)[None] - shifts[:, None]) % 1024
     return Rays(directions.reshape(-1, 3), origins.reshape(-1, 3), canonical.ravel(), local)
+
+
+def file_sha256(path):
+    with open(path, "rb") as stream:
+        return hashlib.file_digest(stream, "sha256").hexdigest()
+
+
+def identity(value):
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"),
+                                     ensure_ascii=False, allow_nan=False).encode()).hexdigest()
+
+
+def write_json(path, value):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    try:
+        temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2, allow_nan=False) + "\n")
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def read_scan(scan, label=None, *, partition="val", expected=None, io_timing=None):
+    """Decode unchanged file slots; optionally measure file reads without decoding."""
+    scan = Path(scan)
+    start = time.perf_counter()
+    raw_scan = scan.read_bytes()
+    read_seconds = time.perf_counter() - start
+    size = len(raw_scan)
+    if not size or size % 16:
+        raise ValueError(f"invalid XYZI byte length: {scan}")
+    xyzi = np.frombuffer(raw_scan, dtype="<f4").reshape(-1, 4)
+    packed = None
+    if label is not None:
+        label = Path(label)
+        start = time.perf_counter()
+        raw_label = label.read_bytes()
+        read_seconds += time.perf_counter() - start
+        if len(raw_label) != len(xyzi) * 4:
+            raise ValueError(f"point/label count mismatch: {scan}")
+        packed = np.frombuffer(raw_label, dtype="<u4")
+        unified_labels(packed)
+        if expected is not None and (hashlib.sha256(raw_scan).hexdigest(),
+                                     hashlib.sha256(raw_label).hexdigest()) != expected:
+            raise ValueError(f"STU observation changed after manifest creation: {scan}")
+    result = Frame(int(scan.stem), xyzi, np.eye(4), packed,
+                   sequence_id=int(scan.parent.parent.name), partition=partition)
+    if io_timing is not None:
+        io_timing["seconds"] = read_seconds
+    return result
+
+
+def _census_source(task):
+    data_root, pool_root, frame_id, worlds = task
+    sequence = STUSequence(data_root)
+    original = sequence[frame_id]
+    source = legacy_source_identity(original)
+    target = point_targets(original)
+    normal, anomaly = int((target == 0).sum()), int((target == 1).sum())
+    source_record = dict(frame=frame_id, source_identity=source,
+                         scan=str(sequence.directory / "velodyne" / f"{frame_id:06d}.bin"),
+                         label=str(sequence.directory / "labels" / f"{frame_id:06d}.label"))
+    source_record["scan_sha256"] = file_sha256(source_record["scan"])
+    source_record["label_sha256"] = file_sha256(source_record["label"])
+    rows, skipped = [], 0
+    for world in worlds:
+        paths = [Path(pool_root) / p / "frames" / f"{frame_id:06d}.npz" for p in world["paths"]
+                 if frame_id in world["frames_by_path"][p]]
+        if not paths:
+            continue
+        hashes = [file_sha256(p) for p in paths]
+        if len(set(hashes)) != 1:
+            raise ValueError(f"conflicting duplicate world/frame: {world['id']}/{frame_id}")
+        delta = read_delta(paths[0])
+        validate_delta(delta, original, world["id"], source_identity=source)
+        changed = delta["source_slot"]
+        replacement = delta["xyzi"]
+        replacement_labels = unified_labels(delta["packed_labels"])
+        distance = np.linalg.norm(replacement[:, :3], axis=1)
+        actual = np.any(replacement[:, :3] != 0, axis=1)
+        valid = actual & (distance >= 2.5) & (distance <= 50) & (replacement_labels != 0)
+        # Exact sparse replacement of full-scan counts; no object-level filtering.
+        n_normal = normal - int((target[changed] == 0).sum()) + int((valid & (replacement_labels == 1)).sum())
+        n_anomaly = anomaly - int((target[changed] == 1).sum()) + int((valid & (replacement_labels == 2)).sum())
+        n_real = int(original.actual.sum() - original.actual[changed].sum() + actual.sum())
+        if n_anomaly < 5:
+            skipped += 1
+            continue
+        row = dict(world=world["id"], frame=frame_id, delta=str(paths[0].resolve()),
+                   delta_sha256=hashes[0], source_identity=source, points=n_real,
+                   normal=n_normal, anomaly=n_anomaly, slots=len(original.xyzi))
+        row["content_sha256"] = identity(row)
+        rows.append(row)
+    return source_record, rows, skipped
+
+
+def _census_real(task):
+    scan, label, partition = task
+    frame = read_scan(scan, label, partition=partition)
+    selected = supervision(frame)
+    return dict(sequence=frame.sequence_id, frame=frame.frame_id, scan=str(scan),
+                label=str(label), scan_sha256=hashlib.sha256(frame.xyzi.tobytes()).hexdigest(),
+                label_sha256=hashlib.sha256(frame.labels.tobytes()).hexdigest(),
+                points=int(frame.actual.sum()), slots=len(frame.xyzi),
+                normal=selected.normal_count, anomaly=selected.anomaly_count,
+                eligible=selected.eligible)
+
+
+def make_manifest(data_root=DATA_ROOT, pool_root=POOL_ROOT, workers=4):
+    data_root, pool_root = Path(data_root).resolve(), Path(pool_root).resolve()
+    pool_path = pool_root / "manifest.json"
+    pool = json.loads(pool_path.read_text())
+    split = pool["splits"]["train"]
+    if split["source_sequence"] != 206:
+        raise ValueError("F240-R1 requires the saved 206 training pool")
+    worlds = {}
+    for entry in split["worlds"]:
+        path, key = entry["path"], entry["world_identity"]
+        folder = pool_root / path
+        saved = json.loads((folder / "manifest.json").read_text())
+        if saved["world_identity"] != key or saved["source_sequence"] != 206:
+            raise ValueError(f"world source mismatch: {folder}")
+        files = sorted((folder / "frames").glob("*.npz"))
+        frames = sorted({int(p.stem) for p in files})
+        if not frames or frames != sorted({int(r["frame"]) for r in saved["frames"]}):
+            raise ValueError(f"saved frame index differs from actual files: {folder}")
+        if len(frames) != len(files) or frames[0] < 0 or frames[-1] >= 449:
+            raise ValueError(f"invalid or ambiguous frame names: {folder}")
+        world = worlds.setdefault(key, dict(id=key, paths=[], frames_by_path={}, sources={}))
+        if path not in world["paths"]:
+            world["paths"].append(path)
+            world["frames_by_path"][path] = frames
+            world["sources"][path] = dict(manifest_sha256=file_sha256(folder / "manifest.json"),
+                                          world_sha256=file_sha256(folder / "world.json"),
+                                          generation_version=saved["configuration_identity"])
+    if len(worlds) != 240:
+        raise ValueError(f"expected exactly 240 distinct saved worlds, got {len(worlds)}")
+    ordered = sorted(worlds.values(), key=lambda w: w["id"])
+    frame_ids = sorted({f for w in ordered for fs in w["frames_by_path"].values() for f in fs})
+    tasks = [(str(data_root), str(pool_root), f, ordered) for f in frame_ids]
+    records, sources, skipped = [], [], 0
+    with ProcessPoolExecutor(max_workers=workers) as executor:
+        for i, (source, rows, omitted) in enumerate(executor.map(_census_source, tasks), 1):
+            sources.append(source)
+            records.extend(rows)
+            skipped += omitted
+            if i % 25 == 0 or i == len(tasks):
+                print(f"206 census {i}/{len(tasks)}: eligible={len(records)} skipped={skipped}", flush=True)
+    records.sort(key=lambda r: (r["world"], r["frame"]))
+    result = dict(version=VERSION, kind="train", data_root=str(data_root), pool_root=str(pool_root),
+                  pool_version=pool["configuration_identity"], pool_sha256=file_sha256(pool_path),
+                  worlds=ordered, sources=sources, records=records, skipped=skipped,
+                  calibration_sha256=file_sha256(data_root / "train/206/calib.txt"),
+                  poses_sha256=file_sha256(data_root / "train/206/poses.txt"))
+    result["sha256"] = identity(result)
+    return result
+
+
+def make_real_manifest(directory, *, partition="val", workers=4):
+    directory = Path(directory).resolve(strict=True)
+    sequences = sorted(p for p in directory.glob("1[0-9][0-9]") if p.is_dir())
+    if not sequences:
+        raise ValueError(f"no official STU sequences in {directory}")
+    tasks = []
+    for sequence in sequences:
+        scans = sorted((sequence / "velodyne").glob("*.bin"))
+        labels = sorted((sequence / "labels").glob("*.label"))
+        if not scans or [p.stem for p in scans] != [p.stem for p in labels]:
+            raise ValueError(f"missing or unmatched STU scans/labels: {sequence}")
+        tasks.extend((s, t, partition) for s, t in zip(scans, labels))
+    with ProcessPoolExecutor(max_workers=workers) as executor:
+        records = list(executor.map(_census_real, tasks, chunksize=8))
+    result = dict(version=VERSION, kind=partition, directory=str(directory),
+                  sequences=[p.name for p in sequences], records=records)
+    result["sha256"] = identity(result)
+    return result
+
+
+def load_manifest(path, kind):
+    value = json.loads(Path(path).read_text())
+    expected = value.pop("sha256")
+    if identity(value) != expected or value["version"] != VERSION or value["kind"] != kind:
+        raise ValueError(f"invalid {kind} manifest identity: {path}")
+    value["sha256"] = expected
+    return value
+
+
+class Scans:
+    """Fixed manifest reader. Metadata and truth never enter model features."""
+
+    def __init__(self, manifest, *, cache_size=8):
+        self.manifest = manifest
+        self.records = manifest["records"]
+        self.cache_size = cache_size
+        self.cache = OrderedDict()
+        self.sequence = STUSequence(manifest["data_root"]) if manifest["kind"] == "train" else None
+        if self.sequence is not None:
+            for name, expected in (("calib.txt", manifest["calibration_sha256"]),
+                                   ("poses.txt", manifest["poses_sha256"])):
+                if file_sha256(self.sequence.directory / name) != expected:
+                    raise ValueError(f"206 coordinate metadata changed: {name}")
+            self.sources = {r["frame"]: r for r in manifest["sources"]}
+
+    def __len__(self):
+        return len(self.records)
+
+    def _source(self, frame_id):
+        record = self.sources[frame_id]
+        stamp = tuple((Path(record[k]).stat().st_size, Path(record[k]).stat().st_mtime_ns)
+                      for k in ("scan", "label"))
+        if frame_id in self.cache:
+            old_stamp, frame = self.cache.pop(frame_id)
+            if old_stamp != stamp:
+                raise ValueError("source scan changed after being read")
+        else:
+            frame = self.sequence[frame_id]
+            if legacy_source_identity(frame) != record["source_identity"]:
+                raise ValueError("source scan differs from the fixed manifest")
+        self.cache[frame_id] = stamp, frame
+        if len(self.cache) > self.cache_size:
+            self.cache.popitem(last=False)
+        return frame
+
+    def __getitem__(self, index):
+        record = self.records[index]
+        if self.sequence is not None:
+            original = self._source(record["frame"])
+            raw = Path(record["delta"]).read_bytes()
+            if hashlib.sha256(raw).hexdigest() != record["delta_sha256"]:
+                raise ValueError(f"saved delta changed: {record['delta']}")
+            delta = read_delta(io.BytesIO(raw))
+            validate_delta(delta, original, record["world"], source_identity=record["source_identity"])
+            xyzi, labels = original.xyzi.copy(), original.labels.copy()
+            xyzi[delta["source_slot"]] = delta["xyzi"]
+            labels[delta["source_slot"]] = delta["packed_labels"]
+            frame = Frame(original.frame_id, xyzi, original.pose, labels)
+        else:
+            frame = read_scan(record["scan"], record["label"], partition=self.manifest["kind"],
+                              expected=(record["scan_sha256"], record["label_sha256"]))
+        selected = supervision(frame)
+        observed = (int(frame.actual.sum()), selected.normal_count, selected.anomaly_count, len(frame.xyzi))
+        expected = tuple(record[k] for k in ("points", "normal", "anomaly", "slots"))
+        if observed != expected:
+            raise ValueError(f"decoded counts differ from manifest: {observed} != {expected}")
+        return dict(xyzi=frame.xyzi[frame.actual].copy(), slots=frame.return_slots,
+                    targets=point_targets(frame)[frame.actual].copy(),
+                    slot_count=len(frame.xyzi), index=index)
+
+
+def main():
+    import argparse
+    parser = argparse.ArgumentParser(description="Rebuild the F240-R1 manifests; does not train.")
+    parser.add_argument("--data-root", type=Path, default=DATA_ROOT)
+    parser.add_argument("--pool-root", type=Path, default=POOL_ROOT)
+    parser.add_argument("--train", type=Path, default=Path("assets/train.json"))
+    parser.add_argument("--val", type=Path, default=Path("assets/val.json"))
+    parser.add_argument("--workers", type=int, default=min(4, len(os.sched_getaffinity(0))))
+    args = parser.parse_args()
+    if args.train.exists() or args.val.exists():
+        parser.error("manifest already exists; fixed manifests must not be silently replaced")
+    train = make_manifest(args.data_root, args.pool_root, args.workers)
+    val = make_real_manifest(args.data_root / "val", workers=args.workers)
+    write_json(args.train, train)
+    write_json(args.val, val)
+    print(json.dumps(dict(train=len(train["records"]), worlds=len(train["worlds"]),
+                          train_sha256=train["sha256"], val=len(val["records"]),
+                          val_eligible=sum(r["eligible"] for r in val["records"]),
+                          val_sha256=val["sha256"]), indent=2))
+
+
+if __name__ == "__main__":
+    main()

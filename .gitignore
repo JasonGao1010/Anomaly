@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+/.venv/
+/results/train/
+/results/preflight/
+/assets/train.json
+/assets/val.json
+/assets/nuscenes.pth
