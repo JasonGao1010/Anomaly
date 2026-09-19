@@ -10,7 +10,7 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
-from .data import (Scans, VERSION, PILOT_VERSION, load_manifest, make_real_manifest,
+from .data import (Scans, VERSION, PILOT_VERSION, CONTINUATION_VERSION, load_manifest, make_real_manifest,
                    read_scan, write_json)
 from .model import Segmentor, prepare_scan, scatter_scores, to_device
 from vendor.stu.compute_point_level_ood import PointOODMetricsCalculator
@@ -104,7 +104,7 @@ def evaluate(model, manifest, device, workers=4):
 
 def load_model(path, device):
     saved = torch.load(path, map_location="cpu", weights_only=False)
-    if saved.get("version") not in (VERSION, PILOT_VERSION):
+    if saved.get("version") not in (VERSION, PILOT_VERSION, CONTINUATION_VERSION):
         raise ValueError("checkpoint does not belong to a supported V4 experiment")
     model = Segmentor(saved["mode"])
     model.load_state_dict(saved["model"], strict=True)
@@ -168,19 +168,117 @@ def summarize(output, split="val"):
                     split=split, methods=report))
 
 
+def mining_indices(manifest):
+    """Bounded training-source inspection, chosen before seeing model scores."""
+    groups = {}
+    for index, row in enumerate(manifest["records"]):
+        if row.get("subset") != "train":
+            raise ValueError("hard-example mining must exclude internal checks and validation")
+        key = (row["group"], row.get("scene", row.get("geometry", row.get("world", "206"))))
+        groups.setdefault(key, []).append(index)
+    indices = []
+    for (group, _), rows in sorted(groups.items()):
+        count = {"base": 1, "targeted": 3, "normal_nuscenes": 3, "normal_stu": 31}[group]
+        key = "anomaly" if group == "targeted" else "frame"
+        rows.sort(key=lambda i: (manifest["records"][i][key], manifest["records"][i]["frame"]))
+        positions = [len(rows) // 2] if count == 1 else np.linspace(0, len(rows) - 1, min(count, len(rows))).round().astype(int)
+        indices.extend(rows[int(p)] for p in positions)
+    return sorted(set(indices))
+
+
+@torch.no_grad()
+def mine(model, manifest, checkpoint, output, device, workers=4):
+    """Store both ranking tails as candidates; never modify training supervision."""
+    from collections import Counter
+    if manifest["kind"] != "train":
+        raise ValueError("mining requires training sources")
+    indices = mining_indices(manifest)
+    dataset = PreparedScans(manifest)
+    loader = DataLoader(dataset, batch_size=None, sampler=indices, num_workers=workers,
+                        pin_memory=device.type == "cuda",
+                        **({"prefetch_factor": 1} if workers else {}),
+                        generator=torch.Generator().manual_seed(0))
+    model.eval()
+    candidates, scans = [], []
+    for number, sample in enumerate(loader, 1):
+        index = int(sample["index"])
+        row = manifest["records"][index]
+        batch = to_device(sample, device)
+        with autocast(device):
+            prediction = model(batch)
+        scores = prediction.float().cpu().numpy()
+        if not np.isfinite(scores).all():
+            raise ValueError("nonfinite mining scores")
+        xyz, labels, slots = sample["xyzi"][:, :3].numpy(), sample["targets"].numpy(), sample["slots"].numpy()
+        summary = dict(index=index, group=row["group"], frame=row["frame"])
+        for label, name in ((0, "high_normal"), (1, "low_anomaly")):
+            selected = np.flatnonzero(labels == label)
+            if not len(selected):
+                continue
+            values = scores[selected]
+            summary[name] = dict(points=len(selected), quantiles=np.quantile(values, [0, .1, .5, .9, 1]).tolist())
+            center = selected[np.argmax(values) if label == 0 else np.argmin(values)]
+            local = selected[np.linalg.norm(xyz[selected] - xyz[center], axis=1) <= .35]
+            candidate = dict(index=index, source=row, kind=name, score=float(scores[center]),
+                             center_slot=int(slots[center]), sensor_xyz=xyz[center].tolist(),
+                             radius_m=.35, slots=slots[local].tolist(), scores=scores[local].tolist(),
+                             patch_median=float(np.median(scores[local])))
+            if row.get("source") == "nuscenes":
+                raw = np.fromfile(row["label"], np.uint8)
+                category = manifest["mapping"][int(raw[slots[center]])]
+                candidate.update(raw_semantic=category["raw"], semantic_name=category["name"])
+            else:
+                original = dataset._source(row["frame"])
+                candidate.update(raw_semantic=int(original.semantic[slots[center]]) if label == 0 else 2,
+                                 world_xyz=(xyz[center] @ original.pose[:3, :3].T + original.pose[:3, 3]).tolist())
+            candidates.append(candidate)
+        scans.append(summary)
+        if number % 50 == 0 or number == len(indices):
+            print(f"training-source inspection {number}/{len(indices)} scans", flush=True)
+        del batch, prediction
+    kept = []
+    for kind in ("high_normal", "low_anomaly"):
+        for group in ("base", "targeted", "normal_nuscenes", "normal_stu"):
+            chosen = []
+            pool = sorted((r for r in candidates if r["kind"] == kind and r["source"]["group"] == group),
+                          key=lambda r: r["score"], reverse=kind == "high_normal")
+            for row in pool:
+                source = row["source"]
+                if kind == "low_anomaly":
+                    same = lambda old: source.get("geometry", source.get("world")) == old["source"].get("geometry", old["source"].get("world"))
+                elif source.get("source") == "nuscenes":
+                    same = lambda old: source["scene"] == old["source"]["scene"]
+                else:
+                    same = lambda old: np.linalg.norm(np.array(row["world_xyz"]) - old["world_xyz"]) < 1.
+                if any(same(old) for old in chosen):
+                    continue
+                chosen.append(row)
+                if len(chosen) == 8:
+                    break
+            kept.extend(chosen)
+    output = Path(output)
+    write_json(output / "candidates.json", dict(checkpoint=str(Path(checkpoint).resolve()),
+        train_manifest=manifest["sha256"], inspected_scans=dict(Counter(r["group"] for r in scans)),
+        score="raw anomaly logit; larger means more anomalous", scans=scans, candidates=kept,
+        scope="Training-source candidates only; no validation threshold, new supervision, or claim of cross-scene anomaly generalization."))
+    print(json.dumps(dict(inspected=len(indices), candidates=dict(Counter(r["kind"] for r in kept)))), flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="action", required=True)
-    for name in ("validate", "test", "infer", "benchmark"):
+    for name in ("validate", "test", "infer", "benchmark", "mine"):
         command = sub.add_parser(name)
         command.add_argument("--checkpoint", type=Path, required=True)
         command.add_argument("--output", type=Path, required=True)
         command.add_argument("--device", default="cuda")
         if name == "validate":
             command.add_argument("--manifest", type=Path, default=Path("assets/val.json"))
+        if name == "mine":
+            command.add_argument("--manifest", type=Path, default=Path("results/data/train.json"))
         if name == "test":
             command.add_argument("--data", type=Path, required=True)
-        if name in ("validate", "test"):
+        if name in ("validate", "test", "mine"):
             command.add_argument("--workers", type=int, default=4)
         else:
             command.add_argument("--scans", type=Path, nargs="+", required=True)
@@ -195,8 +293,12 @@ def main():
         summarize(args.output, args.split)
         return
     device = torch.device(args.device)
+    torch.set_num_threads(2)
+    torch.set_num_interop_threads(1)
     model, saved = load_model(args.checkpoint, device)
-    if args.action in ("validate", "test"):
+    if args.action == "mine":
+        mine(model, load_manifest(args.manifest, "train"), args.checkpoint, args.output, device, args.workers)
+    elif args.action in ("validate", "test"):
         if args.action == "test":
             if not saved.get("selected") or not saved.get("complete"):
                 raise ValueError("test requires a selected checkpoint from a completed fixed budget")

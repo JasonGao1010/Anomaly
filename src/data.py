@@ -32,6 +32,7 @@ LABELS = {
 RAYS_PATH = Path(__file__).resolve().parents[1] / "assets" / "rays.npz"
 VERSION = "AJAE-V4-F240-R2"
 PILOT_VERSION = "AJAE-V4-P1"
+CONTINUATION_VERSION = "AJAE-V4-P2"
 # R2 changes the training budget; retain the exact R1 observations and manifests.
 MANIFEST_VERSION = "AJAE-V4-F240-R1"
 DATA_ROOT = Path("/home/jasongao/Data/STU")

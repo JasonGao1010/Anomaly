@@ -354,6 +354,67 @@ def test_pilot_budget_single_validation_and_resume(tmp_path, monkeypatch):
         torch.testing.assert_close(value, resumed["model"][name], atol=0, rtol=0)
 
 
+def test_continuation_keeps_optimizer_and_best_across_intervals(tmp_path, monkeypatch):
+    import src.train as training
+    monkeypatch.setattr(training, "Segmentor", _ToyModel)
+    monkeypatch.setattr(training, "PreparedScans", _ToyScans)
+    monkeypatch.setattr(torch.cuda, "reset_peak_memory_stats", lambda *a: None)
+    monkeypatch.setattr(torch.cuda, "max_memory_allocated", lambda *a: 0)
+    sampling = dict(base=4, targeted=2, normal_nuscenes=1, normal_stu=1)
+    manifest = dict(sha256="fixture-train", records=[
+        dict(group=group, normal=5, anomaly=5 if group in ("base", "targeted") else 0)
+        for group in sampling for _ in range(9)])
+    initial = tmp_path / "initial.pt"
+    base_metrics = dict(AP=2., AUROC=51., FPR95=93.)
+    torch.save(dict(mode="base", model=_ToyModel("base").state_dict(), complete=True, selected=True,
+                    validation=dict(metrics=base_metrics, manifest_sha256="fixture-val")), initial)
+    config = dict(updates=7, sampling=sampling, world_size=1, train_manifest="fixture-train", fixture=True)
+    args = SimpleNamespace(output=tmp_path / "parent", initial=initial, resume=True, workers=0, save_every=500)
+    val, device = dict(sha256="fixture-val"), torch.device("cpu")
+    def validate_parent(model, *unused):
+        model.eval()
+        return dict(metrics=dict(base_metrics, AP=3.), manifest_sha256="fixture-val")
+    monkeypatch.setattr(training, "validate_all", validate_parent)
+    monkeypatch.setattr(training, "STOP", False)
+    assert training.train_stage(args, manifest, val, 0, "pilot", device, config)
+    args.initial = args.output / "0/pilot/best.pt"
+    config = dict(config, updates=9, eval_every=3, optimizer_state="inherit", sampling_segment=7)
+    calls = []
+    stop_after_first = False
+    def validate(model, *unused):
+        model.eval()
+        ap = [4., 2., 3.5][len(calls)]
+        calls.append(ap)
+        if stop_after_first and len(calls) == 1:
+            training.STOP = True
+        return dict(metrics=dict(base_metrics, AP=ap), manifest_sha256="fixture-val")
+    monkeypatch.setattr(training, "validate_all", validate)
+    args.output = tmp_path / "full"
+    assert training.train_stage(args, manifest, val, 0, "pilot", device, config)
+    full = torch.load(args.output / "0/pilot/last.pt", weights_only=False)
+    best = torch.load(args.output / "0/pilot/best.pt", weights_only=False)
+    assert calls == [4., 2., 3.5] and full["successful_updates"] == 9
+    assert best["best_epoch"] == 1 and best["successful_updates"] == 3
+    assert all(int(state["step"]) == 16 for state in full["optimizer"]["state"].values())
+    assert all(g["lr"] == g["peak_lr"] * .01 for g in full["optimizer"]["param_groups"])
+    calls.clear()
+    stop_after_first = True
+    args.output = tmp_path / "resumed"
+    assert not training.train_stage(args, manifest, val, 0, "pilot", device, config)
+    stopped = torch.load(args.output / "0/pilot/last.pt", weights_only=False)
+    assert stopped["epoch"] == 1 and stopped["next_batch"] == 1 and stopped["successful_updates"] == 4
+    training.STOP = False
+    assert training.train_stage(args, manifest, val, 0, "pilot", device, config)
+    resumed = torch.load(args.output / "0/pilot/last.pt", weights_only=False)
+    assert calls == [4., 2., 3.5]
+    for name, value in full["model"].items():
+        torch.testing.assert_close(value, resumed["model"][name], atol=0, rtol=0)
+    old_order = pilot_order(manifest, 0, 500, sampling=dict(base=8))
+    assert len(old_order) == 4000 and all(manifest["records"][i]["group"] == "base" for i in old_order)
+    assert lr_factor(1, 1500) == .1 and lr_factor(75, 1500) == 1 and lr_factor(1500, 1500) == .01
+    assert lr_factor(500, 1500) > .01
+
+
 def test_actual_training_loop_resume_inheritance_epoch_zero_and_tail(tmp_path, monkeypatch):
     import src.train as training
     monkeypatch.setattr(training, "Segmentor", _ToyModel)

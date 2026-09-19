@@ -1,0 +1,13 @@
+{
+  "metrics": {
+    "AP": 64.35851028490791,
+    "FPR95": 0.6038578279125086,
+    "AUROC": 99.85105703996068,
+    "threshold": -7.5625
+  },
+  "scans": 1960,
+  "points": 193879969,
+  "seconds": 223.11307139499968,
+  "manifest_sha256": "918524fd271f896bf9288ebfe4131941a20cbd00a0925e91c8ccedf4d7574855",
+  "official_commit": "8f0f09c2ca4bf7b665e0ae5919b4092ddae140a2"
+}
