@@ -1,0 +1,66 @@
+{
+  "checked_at": "2026-09-19T20:10:51.290351+08:00",
+  "official_url": "https://omnomnom.vision.rwth-aachen.de/data/stu-dataset/val.zip",
+  "archive_size": 13947327341,
+  "etag": "\"67e17858-33f53536d\"",
+  "published_archive_sha256": "7d3d9ad2ec588700aa51930db82185a8ecb3dbb2e5ba9e97d73609dd293a81d2",
+  "whole_archive_sha256_recomputed": false,
+  "members": [
+    {
+      "member": "val/125/velodyne/000145.bin",
+      "local_file": "/home/jasongao/Data/STU/val/125/velodyne/000145.bin",
+      "bytes": 2097152,
+      "zip_crc32": "1a634caf",
+      "official_sha256": "829253c35d10bdbf7d9dca484ae640ecd042506f0adda8f928d7e6509e3e4138",
+      "local_sha256": "829253c35d10bdbf7d9dca484ae640ecd042506f0adda8f928d7e6509e3e4138",
+      "bytewise_equal": true
+    },
+    {
+      "member": "val/125/labels/000145.label",
+      "local_file": "/home/jasongao/Data/STU/val/125/labels/000145.label",
+      "bytes": 524288,
+      "zip_crc32": "76ed8805",
+      "official_sha256": "de617105ffe9da6bb4621ddeb72432d0fc1e86333ddd7da093052a8591ed580e",
+      "local_sha256": "de617105ffe9da6bb4621ddeb72432d0fc1e86333ddd7da093052a8591ed580e",
+      "bytewise_equal": true
+    },
+    {
+      "member": "val/125/velodyne/000146.bin",
+      "local_file": "/home/jasongao/Data/STU/val/125/velodyne/000146.bin",
+      "bytes": 2097152,
+      "zip_crc32": "cf5be010",
+      "official_sha256": "762206ae619514bade36343fc113c970fc5cea42e274a89a5b451c68d9fa81e7",
+      "local_sha256": "762206ae619514bade36343fc113c970fc5cea42e274a89a5b451c68d9fa81e7",
+      "bytewise_equal": true
+    },
+    {
+      "member": "val/125/labels/000146.label",
+      "local_file": "/home/jasongao/Data/STU/val/125/labels/000146.label",
+      "bytes": 524288,
+      "zip_crc32": "5800a71f",
+      "official_sha256": "c1a38db6335ff9cfb4f5b0e89941178f7842ecf09c9b6fd16da4cd03f2f861c7",
+      "local_sha256": "c1a38db6335ff9cfb4f5b0e89941178f7842ecf09c9b6fd16da4cd03f2f861c7",
+      "bytewise_equal": true
+    },
+    {
+      "member": "val/125/velodyne/000147.bin",
+      "local_file": "/home/jasongao/Data/STU/val/125/velodyne/000147.bin",
+      "bytes": 2097152,
+      "zip_crc32": "8cda3cd2",
+      "official_sha256": "62662a392d27cd34a5d877408b7b88e3c9ac32f64b23aead1065d6f7d0ed33c9",
+      "local_sha256": "62662a392d27cd34a5d877408b7b88e3c9ac32f64b23aead1065d6f7d0ed33c9",
+      "bytewise_equal": true
+    },
+    {
+      "member": "val/125/labels/000147.label",
+      "local_file": "/home/jasongao/Data/STU/val/125/labels/000147.label",
+      "bytes": 524288,
+      "zip_crc32": "a6d07008",
+      "official_sha256": "016fe044d8e722bdcd83f37e6bdb3dff3a124250d36f309673fc36b25e2d857a",
+      "local_sha256": "016fe044d8e722bdcd83f37e6bdb3dff3a124250d36f309673fc36b25e2d857a",
+      "bytewise_equal": true
+    }
+  ],
+  "downloaded_bytes": 7406692,
+  "range_requests": 13
+}

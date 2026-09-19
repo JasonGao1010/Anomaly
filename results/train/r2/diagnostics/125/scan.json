@@ -1,0 +1,321 @@
+{
+  "created_at": "2026-09-19T20:10:03.025301+08:00",
+  "checkpoint": "/home/jasongao/Study/AJAE-v4/results/train/r2/0/base/best.pt",
+  "checkpoint_sha256": "7d984bb7f10860e80f5e6d02f2b6a547781651a7322a69d76d88400901c95fa1",
+  "threshold": -7.96875,
+  "frames": [
+    {
+      "frame": 145,
+      "scan": "/home/jasongao/Data/STU/val/125/velodyne/000145.bin",
+      "label": "/home/jasongao/Data/STU/val/125/labels/000145.label",
+      "scan_sha256": "829253c35d10bdbf7d9dca484ae640ecd042506f0adda8f928d7e6509e3e4138",
+      "label_sha256": "de617105ffe9da6bb4621ddeb72432d0fc1e86333ddd7da093052a8591ed580e",
+      "slots": 131072,
+      "real_points": 125806,
+      "normal": 107143,
+      "anomaly": 278,
+      "nonfinite_values": 0,
+      "zero_xyz_slots": 5266,
+      "checks": {
+        "reader_raw_xyzi_exact": true,
+        "reader_raw_labels_exact": true,
+        "sample_slots_exact": true,
+        "sample_xyzi_exact": true,
+        "sample_targets_exact": true,
+        "voxel_grid_inverse_exact": true,
+        "scatter_slot_identity_exact": true,
+        "source_hashes_match_manifest": true,
+        "inference_vs_validation_pointwise_exact": true,
+        "previous_FN_FP_exact": true
+      },
+      "normalization_inverse_max_abs_m": 7.62939453125e-06,
+      "voxel_offset_inverse_max_abs_m": 7.450580603862722e-10,
+      "FN": 0,
+      "FP": 388,
+      "anomaly_score_quantiles": [
+        -0.134765625,
+        3.021875,
+        4.6875,
+        6.6593750000000025,
+        8.625
+      ],
+      "normal_score_quantiles": [
+        -24.125,
+        -11.3125,
+        -1.4295937500007767,
+        11.1875
+      ],
+      "anomaly_centroid": [
+        3.8366413125031285,
+        1.8327084449555378,
+        -1.4467397718120822
+      ],
+      "anomaly_bbox_min": [
+        3.5348989963531494,
+        1.4603298902511597,
+        -1.7801198959350586
+      ],
+      "anomaly_bbox_max": [
+        4.211399078369141,
+        2.17791748046875,
+        -1.16329026222229
+      ],
+      "anomaly_range_quantiles": [
+        4.140005111694336,
+        4.4974446296691895,
+        4.962969779968262
+      ],
+      "anomaly_intensity_quantiles": [
+        0.0025714286603033543,
+        0.00828571431338787,
+        0.013142856769263744,
+        0.06121428497135639,
+        0.30628570914268494
+      ],
+      "anomaly_covariance_eigenvalues": [
+        0.014745684512132628,
+        0.017637798508347933,
+        0.02770456636859752
+      ],
+      "anomaly_nearest_neighbor_quantiles_m": [
+        0.02627621627308678,
+        0.035476584056615634,
+        0.20060242220926508
+      ],
+      "anomaly_occupied_voxels": 159,
+      "anomaly_voxels_also_containing_normal": 0,
+      "total_voxels": 109913,
+      "inference": {
+        "read_seconds": 0.0002972899819724262,
+        "seconds": 3.2484624760109,
+        "peak_vram_bytes": 648214016,
+        "real_points": 125806,
+        "slots": 131072
+      }
+    },
+    {
+      "frame": 146,
+      "scan": "/home/jasongao/Data/STU/val/125/velodyne/000146.bin",
+      "label": "/home/jasongao/Data/STU/val/125/labels/000146.label",
+      "scan_sha256": "762206ae619514bade36343fc113c970fc5cea42e274a89a5b451c68d9fa81e7",
+      "label_sha256": "c1a38db6335ff9cfb4f5b0e89941178f7842ecf09c9b6fd16da4cd03f2f861c7",
+      "slots": 131072,
+      "real_points": 125787,
+      "normal": 107097,
+      "anomaly": 286,
+      "nonfinite_values": 0,
+      "zero_xyz_slots": 5285,
+      "checks": {
+        "reader_raw_xyzi_exact": true,
+        "reader_raw_labels_exact": true,
+        "sample_slots_exact": true,
+        "sample_xyzi_exact": true,
+        "sample_targets_exact": true,
+        "voxel_grid_inverse_exact": true,
+        "scatter_slot_identity_exact": true,
+        "source_hashes_match_manifest": true,
+        "inference_vs_validation_pointwise_exact": true,
+        "previous_FN_FP_exact": true
+      },
+      "normalization_inverse_max_abs_m": 7.62939453125e-06,
+      "voxel_offset_inverse_max_abs_m": 7.450580603862722e-10,
+      "FN": 278,
+      "FP": 533,
+      "anomaly_score_quantiles": [
+        -20.375,
+        -16.9375,
+        -12.375,
+        -9.4375,
+        -5.78125
+      ],
+      "normal_score_quantiles": [
+        -22.625,
+        -10.5,
+        -1.3083750000022292,
+        11.1875
+      ],
+      "anomaly_centroid": [
+        3.8557251366701992,
+        1.8364076918655343,
+        -1.4503412780228195
+      ],
+      "anomaly_bbox_min": [
+        3.5425524711608887,
+        1.4606493711471558,
+        -1.763260841369629
+      ],
+      "anomaly_bbox_max": [
+        4.375580310821533,
+        2.2144086360931396,
+        -1.1702470779418945
+      ],
+      "anomaly_range_quantiles": [
+        4.1490044593811035,
+        4.515253782272339,
+        5.066086769104004
+      ],
+      "anomaly_intensity_quantiles": [
+        0.0025714286603033543,
+        0.00800000037997961,
+        0.012714285869151354,
+        0.05578571557998657,
+        0.30657142400741577
+      ],
+      "anomaly_covariance_eigenvalues": [
+        0.014771431879123912,
+        0.01846262588764201,
+        0.027730243348810565
+      ],
+      "anomaly_nearest_neighbor_quantiles_m": [
+        0.026971992050145787,
+        0.03591174598974572,
+        0.2915482355870972
+      ],
+      "anomaly_occupied_voxels": 164,
+      "anomaly_voxels_also_containing_normal": 0,
+      "total_voxels": 109924,
+      "inference": {
+        "read_seconds": 0.00022284098668023944,
+        "seconds": 0.16126397205516696,
+        "peak_vram_bytes": 648316416,
+        "real_points": 125787,
+        "slots": 131072
+      }
+    },
+    {
+      "frame": 147,
+      "scan": "/home/jasongao/Data/STU/val/125/velodyne/000147.bin",
+      "label": "/home/jasongao/Data/STU/val/125/labels/000147.label",
+      "scan_sha256": "62662a392d27cd34a5d877408b7b88e3c9ac32f64b23aead1065d6f7d0ed33c9",
+      "label_sha256": "016fe044d8e722bdcd83f37e6bdb3dff3a124250d36f309673fc36b25e2d857a",
+      "slots": 131072,
+      "real_points": 125853,
+      "normal": 107080,
+      "anomaly": 283,
+      "nonfinite_values": 0,
+      "zero_xyz_slots": 5219,
+      "checks": {
+        "reader_raw_xyzi_exact": true,
+        "reader_raw_labels_exact": true,
+        "sample_slots_exact": true,
+        "sample_xyzi_exact": true,
+        "sample_targets_exact": true,
+        "voxel_grid_inverse_exact": true,
+        "scatter_slot_identity_exact": true,
+        "source_hashes_match_manifest": true,
+        "inference_vs_validation_pointwise_exact": true,
+        "previous_FN_FP_exact": true
+      },
+      "normalization_inverse_max_abs_m": 7.62939453125e-06,
+      "voxel_offset_inverse_max_abs_m": 7.450580603862722e-10,
+      "FN": 1,
+      "FP": 423,
+      "anomaly_score_quantiles": [
+        -9.875,
+        1.0875,
+        2.96875,
+        4.84375,
+        7.84375
+      ],
+      "normal_score_quantiles": [
+        -23.25,
+        -11.0625,
+        -2.005992187498805,
+        10.375
+      ],
+      "anomaly_centroid": [
+        3.846870363390488,
+        1.8391721808868247,
+        -1.45194869412129
+      ],
+      "anomaly_bbox_min": [
+        3.4878973960876465,
+        1.4683172702789307,
+        -1.7977118492126465
+      ],
+      "anomaly_bbox_max": [
+        4.167423248291016,
+        2.306621789932251,
+        -1.1608819961547852
+      ],
+      "anomaly_range_quantiles": [
+        4.096006870269775,
+        4.515643119812012,
+        5.0109686851501465
+      ],
+      "anomaly_intensity_quantiles": [
+        0.0022857142612338066,
+        0.00800000037997961,
+        0.012857142835855484,
+        0.056285714730620384,
+        0.3140000104904175
+      ],
+      "anomaly_covariance_eigenvalues": [
+        0.01482343623019546,
+        0.01866586895722076,
+        0.02796401167214838
+      ],
+      "anomaly_nearest_neighbor_quantiles_m": [
+        0.026638010370047763,
+        0.03595151139545341,
+        0.2105918779723044
+      ],
+      "anomaly_occupied_voxels": 155,
+      "anomaly_voxels_also_containing_normal": 0,
+      "total_voxels": 109875,
+      "inference": {
+        "read_seconds": 0.0002302930224686861,
+        "seconds": 0.2713378840126097,
+        "peak_vram_bytes": 649436672,
+        "real_points": 125853,
+        "slots": 131072
+      }
+    }
+  ],
+  "raw_view_uses_pose": false,
+  "raw_view_multiframe_overlay": false,
+  "pairs": [
+    {
+      "frames": [
+        145,
+        146
+      ],
+      "anomaly_centroid_shift_m": 0.019769866451920533,
+      "raw_anomaly_bidirectional_nearest_neighbor_median_p95_max_m": [
+        0.01800004764298661,
+        0.05094109116481647,
+        0.18632461405836892
+      ]
+    },
+    {
+      "frames": [
+        146,
+        147
+      ],
+      "anomaly_centroid_shift_m": 0.009414520481551144,
+      "raw_anomaly_bidirectional_nearest_neighbor_median_p95_max_m": [
+        0.017000072939418992,
+        0.039764055780054125,
+        0.25488782429681367
+      ]
+    },
+    {
+      "frames": [
+        145,
+        147
+      ],
+      "anomaly_centroid_shift_m": 0.013173694844991729,
+      "raw_anomaly_bidirectional_nearest_neighbor_median_p95_max_m": [
+        0.01500005270371642,
+        0.040480154015577204,
+        0.2423363790350748
+      ]
+    }
+  ],
+  "seconds": 4.540124761988409,
+  "notes": [
+    "All inference uses full unmodified scans; ROI selection is visualization only.",
+    "The three inference outputs are independently reproduced by the validation reader and match point by point.",
+    "Local manifest checksums bind existing files, not official download authenticity."
+  ]
+}

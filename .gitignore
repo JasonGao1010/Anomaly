@@ -3,7 +3,14 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 /.venv/
-/results/train/
+# Keep metrics and diagnostic reports; exclude checkpoints and intermediate arrays.
+/results/train/**
+!/results/train/**/
+!/results/train/**/*.json
+!/results/train/**/diagnostics/**/*.csv
+!/results/train/**/diagnostics/**/*.png
+!/results/train/**/diagnostics/**/*.pdf
+!/results/train/**/diagnostics/**/*.py
 /results/preflight/
 /assets/train.json
 /assets/val.json

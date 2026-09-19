@@ -1,0 +1,28 @@
+{
+  "epoch": 8,
+  "mean_batch_loss": 0.00036699578892655663,
+  "frames": 40152,
+  "class_points": [
+    4871047653,
+    5358880
+  ],
+  "planned_updates": 40152,
+  "successful_updates": 40152,
+  "overflows": 0,
+  "validation": {
+    "metrics": {
+      "AP": 62.57595777404128,
+      "FPR95": 0.47302560311037883,
+      "AUROC": 99.86368090200736,
+      "threshold": -7.96875
+    },
+    "scans": 1960,
+    "points": 193879969,
+    "seconds": 193.90557531197555,
+    "manifest_sha256": "918524fd271f896bf9288ebfe4131941a20cbd00a0925e91c8ccedf4d7574855",
+    "official_commit": "8f0f09c2ca4bf7b665e0ae5919b4092ddae140a2"
+  },
+  "selected": true,
+  "seconds": 11561.349185040977,
+  "peak_vram_bytes": 4042880000
+}

@@ -1,0 +1,140 @@
+{
+  "created_at": "2026-09-19T17:35:33.602926+08:00",
+  "train_manifest_sha256": "a104c3684bac771c56112158cc19f96f3e13f4014ac0935af518fd50c5ebac8d",
+  "val_manifest_sha256": "918524fd271f896bf9288ebfe4131941a20cbd00a0925e91c8ccedf4d7574855",
+  "train_frames": 40152,
+  "val_frames": 1960,
+  "unique_train_background_frames": 449,
+  "train_worlds": 240,
+  "anomaly_count_bins": [
+    {
+      "min_anomaly_per_frame": 5,
+      "max_anomaly_per_frame": 9,
+      "train_frames": 7599,
+      "train_frame_pct": 18.925582785415422,
+      "train_anomaly_points": 51228,
+      "train_anomaly_point_pct": 0.9559460185710447,
+      "val_frames": 528,
+      "val_frame_pct": 26.93877551020408,
+      "val_anomaly_points": 3499,
+      "val_anomaly_point_pct": 3.9989028446039385,
+      "train_positive_loss_normalization_weight_pct": 1.937356493256918
+    },
+    {
+      "min_anomaly_per_frame": 10,
+      "max_anomaly_per_frame": 19,
+      "train_frames": 7239,
+      "train_frame_pct": 18.02898983861327,
+      "train_anomaly_points": 100691,
+      "train_anomaly_point_pct": 1.8789560505180187,
+      "val_frames": 447,
+      "val_frame_pct": 22.806122448979593,
+      "val_anomaly_points": 6206,
+      "val_anomaly_point_pct": 7.092652487456999,
+      "train_positive_loss_normalization_weight_pct": 3.7317785874885225
+    },
+    {
+      "min_anomaly_per_frame": 20,
+      "max_anomaly_per_frame": 49,
+      "train_frames": 8716,
+      "train_frame_pct": 21.707511456465433,
+      "train_anomaly_points": 274823,
+      "train_anomaly_point_pct": 5.128366375063446,
+      "val_frames": 511,
+      "val_frame_pct": 26.071428571428573,
+      "val_anomaly_points": 15649,
+      "val_anomaly_point_pct": 17.88477582600944,
+      "train_positive_loss_normalization_weight_pct": 9.562262856932577
+    },
+    {
+      "min_anomaly_per_frame": 50,
+      "max_anomaly_per_frame": 99,
+      "train_frames": 5245,
+      "train_frame_pct": 13.062861127714685,
+      "train_anomaly_points": 372717,
+      "train_anomaly_point_pct": 6.95512868360553,
+      "val_frames": 222,
+      "val_frame_pct": 11.326530612244898,
+      "val_anomaly_points": 15653,
+      "val_anomaly_point_pct": 17.889347306826362,
+      "train_positive_loss_normalization_weight_pct": 11.709050771938145
+    },
+    {
+      "min_anomaly_per_frame": 100,
+      "max_anomaly_per_frame": 199,
+      "train_frames": 4610,
+      "train_frame_pct": 11.481370790994221,
+      "train_anomaly_points": 654056,
+      "train_anomaly_point_pct": 12.205087630251096,
+      "val_frames": 160,
+      "val_frame_pct": 8.16326530612245,
+      "val_anomaly_points": 21328,
+      "val_anomaly_point_pct": 24.375135715836752,
+      "train_positive_loss_normalization_weight_pct": 17.683836631820416
+    },
+    {
+      "min_anomaly_per_frame": 200,
+      "max_anomaly_per_frame": 499,
+      "train_frames": 4203,
+      "train_frame_pct": 10.467722653915123,
+      "train_anomaly_points": 1333995,
+      "train_anomaly_point_pct": 24.893167975397844,
+      "val_frames": 92,
+      "val_frame_pct": 4.6938775510204085,
+      "val_anomaly_points": 25164,
+      "val_anomaly_point_pct": 28.759185819266506,
+      "train_positive_loss_normalization_weight_pct": 27.31847769509226
+    },
+    {
+      "min_anomaly_per_frame": 500,
+      "max_anomaly_per_frame": 1000000000,
+      "train_frames": 2540,
+      "train_frame_pct": 6.325961346881849,
+      "train_anomaly_points": 2571370,
+      "train_anomaly_point_pct": 47.98334726659302,
+      "val_frames": 0,
+      "val_frame_pct": 0.0,
+      "val_anomaly_points": 0,
+      "val_anomaly_point_pct": 0.0,
+      "train_positive_loss_normalization_weight_pct": 28.057236963471162
+    }
+  ],
+  "geometry": {
+    "sheet": {
+      "worlds": 48,
+      "frames": 7523,
+      "anomaly": 919850,
+      "normal": 911031147,
+      "loss_weight": 0.19654951418669164
+    },
+    "solid": {
+      "worlds": 48,
+      "frames": 8357,
+      "anomaly": 1825300,
+      "normal": 1013038889,
+      "loss_weight": 0.25907662356947664
+    },
+    "elongated": {
+      "worlds": 48,
+      "frames": 7525,
+      "anomaly": 522475,
+      "normal": 913201739,
+      "loss_weight": 0.12748048158451633
+    },
+    "contacts": {
+      "worlds": 48,
+      "frames": 9012,
+      "anomaly": 1293641,
+      "normal": 1094782279,
+      "loss_weight": 0.23928447222500537
+    },
+    "branched": {
+      "worlds": 48,
+      "frames": 7735,
+      "anomaly": 797614,
+      "normal": 938993599,
+      "loss_weight": 0.17760890843431057
+    }
+  },
+  "normalization_note": "Shares of the positive-class loss normalization coefficient across actual seed-0 base-stage batches, averaged over epochs 1 through 8. These are not measured gradient contributions."
+}

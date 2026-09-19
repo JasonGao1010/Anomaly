@@ -1,0 +1,242 @@
+{
+  "created_at": "2026-09-19T17:34:26.950904+08:00",
+  "finished_at": "2026-09-19T17:39:49.130788+08:00",
+  "checkpoint": "/home/jasongao/Study/AJAE-v4/results/train/r2/0/base/best.pt",
+  "checkpoint_sha256": "7d984bb7f10860e80f5e6d02f2b6a547781651a7322a69d76d88400901c95fa1",
+  "method": "base",
+  "epoch": 8,
+  "validation_manifest_sha256": "918524fd271f896bf9288ebfe4131941a20cbd00a0925e91c8ccedf4d7574855",
+  "scans": 1960,
+  "metrics": {
+    "normal": 193792470,
+    "anomaly": 87499,
+    "AP": 62.57595777404127,
+    "AUROC": 99.86368090200735,
+    "FPR95": 0.47302560311037883,
+    "threshold": -7.96875
+  },
+  "previous_metrics": {
+    "AP": 62.57595777404128,
+    "FPR95": 0.47302560311037883,
+    "AUROC": 99.86368090200736,
+    "threshold": -7.96875
+  },
+  "metric_differences": {
+    "AP": -7.105427357601002e-15,
+    "AUROC": -1.4210854715202004e-14,
+    "FPR95": 0.0,
+    "threshold": 0.0
+  },
+  "sklearn_weighted_reference": {
+    "AP": 62.57595777404128,
+    "AUROC": 99.86368090200736
+  },
+  "exact_saved_metric_match": true,
+  "operating_points": [
+    {
+      "target_recall_pct": 50.0,
+      "threshold": 10.0625,
+      "TP": 44000,
+      "FP": 11690,
+      "FN": 43499,
+      "TN": 193780780,
+      "precision_pct": 79.00879870712875,
+      "recall_pct": 50.28628898615984,
+      "fpr_pct": 0.006032226123130584
+    },
+    {
+      "target_recall_pct": 75.0,
+      "threshold": 2.96875,
+      "TP": 65655,
+      "FP": 80815,
+      "FN": 21844,
+      "TN": 193711655,
+      "precision_pct": 44.82487881477436,
+      "recall_pct": 75.0351432587801,
+      "fpr_pct": 0.04170182670152251
+    },
+    {
+      "target_recall_pct": 90.0,
+      "threshold": -3.671875,
+      "TP": 78758,
+      "FP": 372893,
+      "FN": 8741,
+      "TN": 193419577,
+      "precision_pct": 17.437800425549817,
+      "recall_pct": 90.01017154481765,
+      "fpr_pct": 0.1924187250412774
+    },
+    {
+      "target_recall_pct": 95.0,
+      "threshold": -7.96875,
+      "TP": 83136,
+      "FP": 916688,
+      "FN": 4363,
+      "TN": 192875782,
+      "precision_pct": 8.315063451167406,
+      "recall_pct": 95.01365729894056,
+      "fpr_pct": 0.47302560311037883
+    },
+    {
+      "target_recall_pct": 99.0,
+      "threshold": -14.6875,
+      "TP": 86632,
+      "FP": 4955243,
+      "FN": 867,
+      "TN": 188837227,
+      "precision_pct": 1.7182496591049956,
+      "recall_pct": 99.0091315329318,
+      "fpr_pct": 2.5569842832386627
+    }
+  ],
+  "inference_seconds": 320.88542414002586,
+  "peak_cuda_bytes": 737736192,
+  "threshold_used_for_example_selection": -7.96875,
+  "examples": [
+    {
+      "prefix": "fp0",
+      "kind": "fp",
+      "rank": [
+        3174
+      ],
+      "sequence": 141,
+      "frame": 323,
+      "global95_FP": 3174,
+      "global95_FN": 0,
+      "anomaly": 33
+    },
+    {
+      "prefix": "fp1",
+      "kind": "fp",
+      "rank": [
+        3103
+      ],
+      "sequence": 139,
+      "frame": 331,
+      "global95_FP": 3103,
+      "global95_FN": 0,
+      "anomaly": 12
+    },
+    {
+      "prefix": "fp2",
+      "kind": "fp",
+      "rank": [
+        3021
+      ],
+      "sequence": 146,
+      "frame": 331,
+      "global95_FP": 3021,
+      "global95_FN": 0,
+      "anomaly": 8
+    },
+    {
+      "prefix": "fn0",
+      "kind": "fn",
+      "rank": [
+        278
+      ],
+      "sequence": 125,
+      "frame": 146,
+      "global95_FP": 533,
+      "global95_FN": 278,
+      "anomaly": 286
+    },
+    {
+      "prefix": "fn1",
+      "kind": "fn",
+      "rank": [
+        74
+      ],
+      "sequence": 142,
+      "frame": 343,
+      "global95_FP": 671,
+      "global95_FN": 74,
+      "anomaly": 103
+    },
+    {
+      "prefix": "fn2",
+      "kind": "fn",
+      "rank": [
+        32
+      ],
+      "sequence": 152,
+      "frame": 397,
+      "global95_FP": 153,
+      "global95_FN": 32,
+      "anomaly": 40
+    },
+    {
+      "prefix": "fn_rate0",
+      "kind": "fn_rate",
+      "rank": [
+        1.0,
+        110
+      ],
+      "sequence": 125,
+      "frame": 252,
+      "global95_FP": 69,
+      "global95_FN": 110,
+      "anomaly": 110
+    },
+    {
+      "prefix": "fn_rate1",
+      "kind": "fn_rate",
+      "rank": [
+        1.0,
+        25
+      ],
+      "sequence": 142,
+      "frame": 304,
+      "global95_FP": 255,
+      "global95_FN": 25,
+      "anomaly": 25
+    },
+    {
+      "prefix": "fn_rate2",
+      "kind": "fn_rate",
+      "rank": [
+        0.8,
+        40
+      ],
+      "sequence": 152,
+      "frame": 397,
+      "global95_FP": 153,
+      "global95_FN": 32,
+      "anomaly": 40
+    }
+  ],
+  "group_definitions": {
+    "range": [
+      "[2.5,10)",
+      "[10,20)",
+      "[20,30)",
+      "[30,40)",
+      "[40,50]"
+    ],
+    "sensor_z": [
+      "(-inf,-2)",
+      "[-2,-1)",
+      "[-1,0)",
+      "[0,1)",
+      "[1,2)",
+      "[2,inf)"
+    ],
+    "azimuth": [
+      "[-180,-135)",
+      "[-135,-90)",
+      "[-90,-45)",
+      "[-45,0)",
+      "[0,45)",
+      "[45,90)",
+      "[90,135)",
+      "[135,180]"
+    ]
+  },
+  "notes": [
+    "All valid original points and the original official mask are preserved.",
+    "Exact repeated score counts retain every tie without score rounding.",
+    "Group AP values have different anomaly prevalences and are diagnostic only.",
+    "Example selection is deliberately based on errors, not representative sampling.",
+    "Sensor z is not height above the road; azimuth uses stored sensor coordinates."
+  ]
+}

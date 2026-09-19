@@ -1,0 +1,369 @@
+{
+  "created_at": "2026-09-19T20:26:03.996971+08:00",
+  "near_center_xyz": [
+    3.846503973007202,
+    1.8361163139343262,
+    -1.4496961832046509
+  ],
+  "near_radius_m": 2,
+  "match_max_distance_m": 0.05,
+  "matching": "mutual nearest neighbors in sensor XYZ, separately inside anomaly and background sets; no point-index matching",
+  "frames": [
+    {
+      "frame": 145,
+      "regions": {
+        "anomaly": {
+          "points": 278,
+          "intensity_mean": 0.05401952564716339,
+          "intensity_quantiles": [
+            0.0025714286603033543,
+            0.006285714451223612,
+            0.00828571431338787,
+            0.013142856769263744,
+            0.06121428497135639,
+            0.19925713986158386,
+            0.30628570914268494
+          ]
+        },
+        "near_background": {
+          "points": 1537,
+          "intensity_mean": 0.05499618873000145,
+          "intensity_quantiles": [
+            0.0077142855152487755,
+            0.025428570806980133,
+            0.03342857211828232,
+            0.04828571528196335,
+            0.06914285570383072,
+            0.09542857110500336,
+            0.1931428611278534
+          ]
+        },
+        "full_background": {
+          "points": 125528,
+          "intensity_mean": 0.19702383875846863,
+          "intensity_quantiles": [
+            0.0020000000949949026,
+            0.04342857003211975,
+            0.08028571307659149,
+            0.15399999916553497,
+            0.259714275598526,
+            0.4011428654193878,
+            1.6260000467300415
+          ]
+        }
+      }
+    },
+    {
+      "frame": 146,
+      "regions": {
+        "anomaly": {
+          "points": 286,
+          "intensity_mean": 0.052495501935482025,
+          "intensity_quantiles": [
+            0.0025714286603033543,
+            0.0057142856530845165,
+            0.00800000037997961,
+            0.012714285869151354,
+            0.05578571557998657,
+            0.20714285969734192,
+            0.30657142400741577
+          ]
+        },
+        "near_background": {
+          "points": 1529,
+          "intensity_mean": 0.055429134517908096,
+          "intensity_quantiles": [
+            0.00828571431338787,
+            0.026000000536441803,
+            0.03342857211828232,
+            0.04828571528196335,
+            0.0714285746216774,
+            0.09685714542865753,
+            0.20971427857875824
+          ]
+        },
+        "full_background": {
+          "points": 125501,
+          "intensity_mean": 0.19702668488025665,
+          "intensity_quantiles": [
+            0.0011428571306169033,
+            0.04342857003211975,
+            0.08028571307659149,
+            0.15399999916553497,
+            0.25942856073379517,
+            0.4017142951488495,
+            1.6308571100234985
+          ]
+        }
+      }
+    },
+    {
+      "frame": 147,
+      "regions": {
+        "anomaly": {
+          "points": 283,
+          "intensity_mean": 0.052391719073057175,
+          "intensity_quantiles": [
+            0.0022857142612338066,
+            0.0051428573206067085,
+            0.00800000037997961,
+            0.012857142835855484,
+            0.056285714730620384,
+            0.1972571432590485,
+            0.3140000104904175
+          ]
+        },
+        "near_background": {
+          "points": 1534,
+          "intensity_mean": 0.05371372401714325,
+          "intensity_quantiles": [
+            0.007428571581840515,
+            0.025142857804894447,
+            0.03257142752408981,
+            0.04714285582304001,
+            0.06800000369548798,
+            0.0927714303135872,
+            0.20742857456207275
+          ]
+        },
+        "full_background": {
+          "points": 125570,
+          "intensity_mean": 0.19498875737190247,
+          "intensity_quantiles": [
+            0.0022857142612338066,
+            0.043142858892679214,
+            0.07942856848239899,
+            0.15228570997714996,
+            0.2565714418888092,
+            0.39714285731315613,
+            1.636285662651062
+          ]
+        }
+      }
+    }
+  ],
+  "pairs": [
+    {
+      "frames": [
+        145,
+        146
+      ],
+      "regions": {
+        "anomaly": {
+          "matched_points": 193,
+          "matched_source_fraction_pct": 69.42446043165468,
+          "bidirectional_NN_distance_quantiles_m": [
+            0.01800004764298661,
+            0.04138322468437918,
+            0.05094109116481647,
+            0.09287005393469443,
+            0.18632461405836892
+          ],
+          "points_beyond_10cm_pct": 0.7092198581560284,
+          "points_beyond_50cm_pct": 0.0,
+          "points_beyond_1m_pct": 0.0,
+          "intensity_wasserstein": 0.0030027885409931805,
+          "matched_abs_intensity_difference_quantiles": [
+            0.003999999724328518,
+            0.028800000250339512,
+            0.04011428803205489,
+            0.05497143328189836,
+            0.06342856585979462
+          ]
+        },
+        "near_background": {
+          "matched_points": 1385,
+          "matched_source_fraction_pct": 90.11060507482108,
+          "bidirectional_NN_distance_quantiles_m": [
+            0.012999842110965812,
+            0.03200013309149358,
+            0.03600015959173083,
+            0.04599996644016525,
+            0.09290631525482171
+          ],
+          "points_beyond_10cm_pct": 0.0,
+          "points_beyond_50cm_pct": 0.0,
+          "points_beyond_1m_pct": 0.0,
+          "intensity_wasserstein": 0.0006270047317231606,
+          "matched_abs_intensity_difference_quantiles": [
+            0.004571428522467613,
+            0.012285716831684113,
+            0.015942853689193712,
+            0.024045717120170618,
+            0.041999995708465576
+          ]
+        },
+        "full_background": {
+          "matched_points": 108700,
+          "matched_source_fraction_pct": 86.59422598942069,
+          "bidirectional_NN_distance_quantiles_m": [
+            0.013000171282836294,
+            0.055000450917378076,
+            0.09099962596345036,
+            0.26711911105259084,
+            8.428051220264726
+          ],
+          "points_beyond_10cm_pct": 4.356468774524059,
+          "points_beyond_50cm_pct": 0.32904564811236947,
+          "points_beyond_1m_pct": 0.07289994383119082,
+          "intensity_wasserstein": 0.00023413839178039637,
+          "matched_abs_intensity_difference_quantiles": [
+            0.009142853319644928,
+            0.03285713493824005,
+            0.051142871379852295,
+            0.10799998044967651,
+            0.8131428360939026
+          ]
+        }
+      }
+    },
+    {
+      "frames": [
+        146,
+        147
+      ],
+      "regions": {
+        "anomaly": {
+          "matched_points": 214,
+          "matched_source_fraction_pct": 74.82517482517483,
+          "bidirectional_NN_distance_quantiles_m": [
+            0.017000072939418992,
+            0.03444825846686557,
+            0.039764055780054125,
+            0.07645113161264853,
+            0.25488782429681367
+          ],
+          "points_beyond_10cm_pct": 1.054481546572935,
+          "points_beyond_50cm_pct": 0.0,
+          "points_beyond_1m_pct": 0.0,
+          "intensity_wasserstein": 0.0017601761964855297,
+          "matched_abs_intensity_difference_quantiles": [
+            0.0035714288242161274,
+            0.02117143720388414,
+            0.026414299011230456,
+            0.04053428590297699,
+            0.04657142981886864
+          ]
+        },
+        "near_background": {
+          "matched_points": 1405,
+          "matched_source_fraction_pct": 91.89012426422498,
+          "bidirectional_NN_distance_quantiles_m": [
+            0.01200023144428417,
+            0.03100021042010839,
+            0.03530082260084165,
+            0.04493044224671065,
+            0.09761013842657437
+          ],
+          "points_beyond_10cm_pct": 0.0,
+          "points_beyond_50cm_pct": 0.0,
+          "points_beyond_1m_pct": 0.0,
+          "intensity_wasserstein": 0.0017253861259547728,
+          "matched_abs_intensity_difference_quantiles": [
+            0.004571426659822464,
+            0.011714287102222443,
+            0.01428571343421936,
+            0.021714285016059875,
+            0.04285714402794838
+          ]
+        },
+        "full_background": {
+          "matched_points": 115043,
+          "matched_source_fraction_pct": 91.66699866933331,
+          "bidirectional_NN_distance_quantiles_m": [
+            0.011000010681876152,
+            0.03824322974914166,
+            0.06400001119910356,
+            0.21808488542796917,
+            10.395366282658953
+          ],
+          "points_beyond_10cm_pct": 2.9254672980949614,
+          "points_beyond_50cm_pct": 0.2497301560116461,
+          "points_beyond_1m_pct": 0.05775258791337908,
+          "intensity_wasserstein": 0.002049032073092409,
+          "matched_abs_intensity_difference_quantiles": [
+            0.00828571617603302,
+            0.024857133626937866,
+            0.032285720109939575,
+            0.05342856049537659,
+            0.5394285917282104
+          ]
+        }
+      }
+    },
+    {
+      "frames": [
+        145,
+        147
+      ],
+      "regions": {
+        "anomaly": {
+          "matched_points": 205,
+          "matched_source_fraction_pct": 73.7410071942446,
+          "bidirectional_NN_distance_quantiles_m": [
+            0.01500005270371642,
+            0.03261112836083708,
+            0.040480154015577204,
+            0.08184572901263155,
+            0.2423363790350748
+          ],
+          "points_beyond_10cm_pct": 0.8912655971479502,
+          "points_beyond_50cm_pct": 0.0,
+          "points_beyond_1m_pct": 0.0,
+          "intensity_wasserstein": 0.003071790004939863,
+          "matched_abs_intensity_difference_quantiles": [
+            0.00342857139185071,
+            0.02177142798900604,
+            0.03228572010993955,
+            0.04313144087791443,
+            0.05342857539653778
+          ]
+        },
+        "near_background": {
+          "matched_points": 1407,
+          "matched_source_fraction_pct": 91.54196486662329,
+          "bidirectional_NN_distance_quantiles_m": [
+            0.012999984776325904,
+            0.03105545402632038,
+            0.03560464090178038,
+            0.04570941502023275,
+            0.07942581208471357
+          ],
+          "points_beyond_10cm_pct": 0.0,
+          "points_beyond_50cm_pct": 0.0,
+          "points_beyond_1m_pct": 0.0,
+          "intensity_wasserstein": 0.0013444342519156611,
+          "matched_abs_intensity_difference_quantiles": [
+            0.004857143387198448,
+            0.011999998241662979,
+            0.01485714316368103,
+            0.020839997529983535,
+            0.0462857186794281
+          ]
+        },
+        "full_background": {
+          "matched_points": 108351,
+          "matched_source_fraction_pct": 86.31620036963865,
+          "bidirectional_NN_distance_quantiles_m": [
+            0.013000180049175481,
+            0.05699964901193341,
+            0.09500084083950701,
+            0.27400293464833086,
+            10.321527505679628
+          ],
+          "points_beyond_10cm_pct": 4.647587794406965,
+          "points_beyond_50cm_pct": 0.3393097515710997,
+          "points_beyond_1m_pct": 0.08363268524639782,
+          "intensity_wasserstein": 0.002068291316293443,
+          "matched_abs_intensity_difference_quantiles": [
+            0.009142853319644928,
+            0.03428572416305542,
+            0.05485714226961136,
+            0.11742857098579407,
+            1.229714274406433
+          ]
+        }
+      }
+    }
+  ]
+}
