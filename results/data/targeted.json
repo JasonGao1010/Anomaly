@@ -1,0 +1,137 @@
+{
+  "version": "AJAE-V4-P1",
+  "trace": {
+    "steps": 96,
+    "adaptive_depth": 8,
+    "bisections": 24,
+    "near_m": 1e-05,
+    "proximity_factor": 4.0,
+    "gradient_step_m": 1e-05,
+    "gradient_relative": 1e-05,
+    "gradient_min": 1e-09
+  },
+  "response": "/home/jasongao/Study/AJAE/results/synthetic/calibration.pt; fitted from original STU 206 only",
+  "worlds": [
+    {
+      "geometry": "proxy-000",
+      "subset": "train",
+      "accepted": true,
+      "scans": 99,
+      "candidate_score": 0.8824762963292361,
+      "path": "/home/jasongao/Study/AJAE-v4/results/data/proxy-000/world.json"
+    },
+    {
+      "geometry": "proxy-001",
+      "subset": "train",
+      "accepted": true,
+      "scans": 53,
+      "candidate_score": 1.2789593687677212,
+      "path": "/home/jasongao/Study/AJAE-v4/results/data/proxy-001/world.json"
+    },
+    {
+      "geometry": "proxy-002",
+      "subset": "train",
+      "accepted": true,
+      "scans": 32,
+      "candidate_score": 1.39240689078025,
+      "path": "/home/jasongao/Study/AJAE-v4/results/data/proxy-002/world.json"
+    },
+    {
+      "geometry": "proxy-003",
+      "subset": "train",
+      "accepted": true,
+      "scans": 86,
+      "candidate_score": 0.8117913317051566,
+      "path": "/home/jasongao/Study/AJAE-v4/results/data/proxy-003/world.json"
+    },
+    {
+      "geometry": "proxy-004",
+      "subset": "train",
+      "accepted": true,
+      "scans": 27,
+      "candidate_score": 0.6170518645329177,
+      "path": "/home/jasongao/Study/AJAE-v4/results/data/proxy-004/world.json"
+    },
+    {
+      "geometry": "proxy-005",
+      "subset": "train",
+      "accepted": true,
+      "scans": 114,
+      "candidate_score": 0.8035232746150709,
+      "path": "/home/jasongao/Study/AJAE-v4/results/data/proxy-005/world.json"
+    },
+    {
+      "geometry": "proxy-006",
+      "subset": "train",
+      "accepted": true,
+      "scans": 26,
+      "candidate_score": 1.0011093974937875,
+      "path": "/home/jasongao/Study/AJAE-v4/results/data/proxy-006/world.json"
+    },
+    {
+      "geometry": "proxy-007",
+      "subset": "train",
+      "accepted": true,
+      "scans": 63,
+      "candidate_score": 0.7094564168737276,
+      "path": "/home/jasongao/Study/AJAE-v4/results/data/proxy-007/world.json"
+    },
+    {
+      "geometry": "proxy-008",
+      "subset": "train",
+      "accepted": true,
+      "scans": 123,
+      "candidate_score": 0.8148629621436623,
+      "path": "/home/jasongao/Study/AJAE-v4/results/data/proxy-008/world.json"
+    },
+    {
+      "geometry": "proxy-009",
+      "subset": "train",
+      "accepted": true,
+      "scans": 217,
+      "candidate_score": 0.9133406582653748,
+      "path": "/home/jasongao/Study/AJAE-v4/results/data/proxy-009/world.json"
+    },
+    {
+      "geometry": "proxy-010",
+      "subset": "train",
+      "accepted": true,
+      "scans": 12,
+      "candidate_score": 0.32639825529266125,
+      "path": "/home/jasongao/Study/AJAE-v4/results/data/proxy-010/world.json"
+    },
+    {
+      "geometry": "proxy-011",
+      "subset": "train",
+      "accepted": true,
+      "scans": 156,
+      "candidate_score": 0.5883997195400591,
+      "path": "/home/jasongao/Study/AJAE-v4/results/data/proxy-011/world.json"
+    },
+    {
+      "geometry": "proxy-012",
+      "subset": "check",
+      "accepted": true,
+      "scans": 54,
+      "candidate_score": 0.7679789273065694,
+      "path": "/home/jasongao/Study/AJAE-v4/results/data/proxy-012/world.json"
+    },
+    {
+      "geometry": "proxy-013",
+      "subset": "check",
+      "accepted": true,
+      "scans": 38,
+      "candidate_score": 0.5978011061516625,
+      "path": "/home/jasongao/Study/AJAE-v4/results/data/proxy-013/world.json"
+    },
+    {
+      "geometry": "proxy-014",
+      "subset": "check",
+      "accepted": true,
+      "scans": 96,
+      "candidate_score": 1.532628972917235,
+      "path": "/home/jasongao/Study/AJAE-v4/results/data/proxy-014/world.json"
+    }
+  ],
+  "interpretation": "normal-reference candidates; local confusion and context utility unproven"
+}

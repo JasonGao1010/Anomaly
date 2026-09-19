@@ -1,4 +1,4 @@
-"""Run F240-R2: seed 0, 8 base epochs, then 4 epochs per second-stage method."""
+"""Continue the selected V4 model for a bounded data pilot, then validate once."""
 
 import argparse
 import gc
@@ -19,12 +19,10 @@ import torch.distributed as dist
 from torch import nn
 from torch.utils.data import DataLoader
 
-from .data import VERSION, file_sha256, identity, load_manifest, read_scan, write_json
-from .evaluate import (PreparedScans, autocast, better, evaluate, infer, memory_available,
-                       precision, summarize)
-from .model import (POINT_CHUNK, Segmentor, balanced_loss, scatter_scores, to_device,
+from .data import VERSION, PILOT_VERSION, file_sha256, identity, load_manifest, write_json
+from .evaluate import PreparedScans, autocast, better, evaluate, memory_available, precision
+from .model import (POINT_CHUNK, Segmentor, balanced_loss, to_device,
                     LITEPT_COMMIT, WEIGHTS_REVISION, WEIGHTS_SHA256)
-from vendor.stu.compute_point_level_ood import PointOODMetricsCalculator
 
 
 EPOCHS = (8, 4)
@@ -51,6 +49,21 @@ def epoch_order(count, seed, stage, epoch):
 def effective_batches(order, rank=0, world_size=1):
     for start in range(0, len(order), BATCH_SIZE):
         yield order[start:start + BATCH_SIZE][rank::world_size]
+
+
+def pilot_order(manifest, seed, updates):
+    """Four base, two targeted and one normal scan per sensor domain per update."""
+    rng = np.random.default_rng(np.random.SeedSequence([seed, 2064]))
+    streams = []
+    for group, quota in (("base", 4), ("targeted", 2), ("normal_nuscenes", 1), ("normal_stu", 1)):
+        indices = np.asarray([i for i, row in enumerate(manifest["records"]) if row["group"] == group])
+        if not len(indices):
+            raise ValueError(f"pilot training group is empty: {group}")
+        cycles = math.ceil(updates * quota / len(indices))
+        draws = np.concatenate([rng.permutation(indices) for _ in range(cycles)])[:updates * quota]
+        streams.append(draws.reshape(updates, quota))
+    batches = np.concatenate(streams, axis=1)
+    return np.concatenate([rng.permutation(batch) for batch in batches]).tolist()
 
 
 def lr_factor(step, total):
@@ -183,8 +196,8 @@ def code_record():
                 weights_revision=WEIGHTS_REVISION, weights_sha256=WEIGHTS_SHA256)
 
 
-def configuration(train, val, device, world_size):
-    return dict(version=VERSION, data_version=train["version"], seeds=[0],
+def configuration(train, val, device, world_size, *, updates=None, initial=None):
+    result = dict(version=PILOT_VERSION if updates is not None else VERSION, data_version=train["version"], seeds=[0],
                 train_manifest=train["sha256"], val_manifest=val["sha256"],
                 val_directory=val["directory"], samples=len(train["records"]), epochs=EPOCHS,
                 batch_size=BATCH_SIZE, microbatch=1, peak_lr=PEAK_LR, weight_decay=.005,
@@ -193,6 +206,12 @@ def configuration(train, val, device, world_size):
                 augmentation=False, point_chunk=POINT_CHUNK, grid_size=.05,
                 precision=str(precision(device)), sparse_precision="float32", world_size=world_size,
                 code=code_record())
+    if updates is not None:
+        result.update(updates=updates, epochs=None, initial=str(initial.resolve()),
+                      initial_sha256=file_sha256(initial), peak_lr=2e-5,
+                      sampling={"base": 4, "targeted": 2, "normal_nuscenes": 1, "normal_stu": 1},
+                      validation="once_after_all_updates; inherited_full_validation_is_step_zero")
+    return result
 
 
 def stop_requested(signum, frame):
@@ -210,7 +229,7 @@ def capture(model, optimizer, scaler, state, config, device, **extra):
         states = [local_rng]
     if rank:
         return None
-    return dict(version=VERSION, mode=model.mode, model=model.state_dict(),
+    return dict(version=config.get("version", VERSION), mode=model.mode, model=model.state_dict(),
                 optimizer=optimizer.state_dict(), scaler=scaler.state_dict(),
                 rng=states, config=config, **state, **extra)
 
@@ -231,9 +250,10 @@ def validate_all(model, val, device, workers):
 
 
 def write_result(directory, state, config):
-    write_json(directory / "result.json", dict(version=VERSION, seed=state["seed"], method=state["method"],
-               complete=state["complete"], epochs=EPOCHS,
+    write_json(directory / "result.json", dict(version=config.get("version", VERSION), seed=state["seed"], method=state["method"],
+               complete=state["complete"], epochs=config.get("epochs", EPOCHS), updates=config.get("updates"),
                best_epoch=state["best_epoch"], best_metrics=state["best_metrics"],
+               final_metrics=state.get("final_metrics"),
                planned_updates=state["planned_updates"], successful_updates=state["successful_updates"],
                overflows=state["overflows"], parameters=state["parameters"],
                train_manifest_sha256=config.get("train_manifest"), val_manifest_sha256=config.get("val_manifest"),
@@ -245,8 +265,10 @@ def train_stage(args, train, val, seed, method, device, config):
     if seed != 0:
         raise ValueError("F240-R2 fixes the sole experiment seed to 0")
     rank, world_size = rank_info()
+    pilot = method == "pilot"
     stage = 1 if method == "base" else 2
-    mode = "base" if method in ("base", "continue") else method
+    parent = torch.load(args.initial, map_location="cpu", weights_only=False) if pilot else None
+    mode = parent["mode"] if pilot else "base" if method in ("base", "continue") else method
     directory = args.output / str(seed) / method
     if rank == 0:
         directory.mkdir(parents=True, exist_ok=True)
@@ -271,6 +293,12 @@ def train_stage(args, train, val, seed, method, device, config):
         model.load_state_dict(saved["model"], strict=True)
     elif stage == 1:
         load_record = model.load_pretrained(args.weights)
+    elif pilot:
+        if (not parent.get("complete") or not parent.get("selected") or
+                parent["validation"]["manifest_sha256"] != val["sha256"]):
+            raise ValueError("pilot initial model must have completed full validation on this exact set")
+        model.load_state_dict(parent["model"], strict=True)
+        load_record = dict(parent=str(args.initial), inherited_full_validation=parent["validation"])
     else:
         parent_path = args.output / str(seed) / "base/best.pt"
         parent = torch.load(parent_path, map_location="cpu", weights_only=False)
@@ -290,12 +318,12 @@ def train_stage(args, train, val, seed, method, device, config):
     model.to(device)
     optimizer = optimizer_for(model, stage)
     scaler = torch.amp.GradScaler("cuda", enabled=precision(device) == torch.float16)
-    steps_per_epoch = math.ceil(len(train["records"]) / BATCH_SIZE)
-    total = EPOCHS[stage - 1] * steps_per_epoch
+    steps_per_epoch = config["updates"] if pilot else math.ceil(len(train["records"]) / BATCH_SIZE)
+    total = steps_per_epoch if pilot else EPOCHS[stage - 1] * steps_per_epoch
     state = dict(seed=seed, method=method, stage=stage, epoch=0, next_batch=0, planned_updates=0,
                  successful_updates=0, overflows=0, best_epoch=None, best_metrics=None,
                  epoch_loss=0., epoch_points=[0, 0], epoch_frames=0, complete=False,
-                 parameters=sum(p.numel() for p in model.parameters()))
+                 parameters=sum(p.numel() for p in model.parameters()), final_metrics=None)
     if resume:
         optimizer.load_state_dict(saved["optimizer"])
         scaler.load_state_dict(saved["scaler"])
@@ -309,7 +337,7 @@ def train_stage(args, train, val, seed, method, device, config):
             write_json(directory / "config.json", dict(configuration=config, load=load_record,
                                                        seed=seed, method=method, parameters=state["parameters"]))
         if stage == 2:
-            result = validate_all(model, val, device, args.workers)
+            result = parent["validation"] if pilot else validate_all(model, val, device, args.workers)
             state.update(best_metrics=result["metrics"], best_epoch=0)
             saved = capture(model, optimizer, scaler, state, config, device, selected=True, validation=result)
             if rank == 0:
@@ -318,9 +346,11 @@ def train_stage(args, train, val, seed, method, device, config):
                 write_json(directory / "epoch0.json", result)
             del saved
     dataset = PreparedScans(train)
-    for epoch in range(state["epoch"], EPOCHS[stage - 1]):
+    if pilot:
+        del parent
+    for epoch in range(state["epoch"], 1 if pilot else EPOCHS[stage - 1]):
         start = time.perf_counter()
-        order = epoch_order(len(dataset), seed, stage, epoch)
+        order = pilot_order(train, seed, total) if pilot else epoch_order(len(dataset), seed, stage, epoch)
         batches = list(effective_batches(order, rank, world_size))
         first_batch = state["next_batch"]
         local_indices = [i for group in batches[first_batch:] for i in group]
@@ -413,7 +443,7 @@ def train_stage(args, train, val, seed, method, device, config):
             if need_stop:
                 return False
         del iterator, loader
-        if state["epoch_frames"] != len(dataset):
+        if state["epoch_frames"] != len(order):
             raise ValueError("epoch did not visit every fixed sample exactly once")
         # Save completed training before validation so an evaluation failure is resumable.
         state["next_batch"] = steps_per_epoch
@@ -422,6 +452,7 @@ def train_stage(args, train, val, seed, method, device, config):
             atomic_save(last, saved)
         del saved
         result = validate_all(model, val, device, args.workers)
+        state["final_metrics"] = result["metrics"]
         selected = better(result["metrics"], state["best_metrics"])
         if selected:
             state.update(best_metrics=result["metrics"], best_epoch=epoch + 1)
@@ -457,96 +488,59 @@ def train_stage(args, train, val, seed, method, device, config):
 
 
 def preflight(args, train, val, device, config, resources):
-    """Real-data forward/backward acceptance; no optimizer or parameter updates."""
+    """Measure the actual mixed update without changing the initial checkpoint."""
     seed_all(0)
     dataset = PreparedScans(train)
-    index = max(range(len(dataset)), key=lambda i: train["records"][i]["points"])
-    sample = to_device(dataset[index], device)
-    model = Segmentor().to(device).eval()
-    loaded = model.load_pretrained(args.weights)
+    indices = pilot_order(train, 0, args.updates)[:BATCH_SIZE]
+    parent = torch.load(args.initial, map_location="cpu", weights_only=False)
+    model = Segmentor(parent["mode"]).to(device)
+    model.load_state_dict(parent["model"], strict=True)
+    del parent
+    model.train()
+    counts = torch.tensor([sum(train["records"][i][key] for i in indices)
+                           for key in ("normal", "anomaly")], device=device)
+    records = []
     torch.cuda.reset_peak_memory_stats(device)
-    with torch.no_grad(), autocast(device):
-        original = model(sample)
-        stored = scatter_scores(original, sample["slots"], sample["slot_count"])
-    if len(original) != train["records"][index]["points"] or not torch.isfinite(original).all():
-        raise ValueError("missing or nonfinite full-scan predictions")
-    empty = torch.ones(sample["slot_count"], dtype=torch.bool, device=device)
-    empty[sample["slots"]] = False
-    if torch.count_nonzero(stored[empty]):
-        raise ValueError("empty-slot predictions must equal zero")
-    base_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
-    records = {}
-    for mode in ("base", "attention", "fusion"):
-        if mode != "base":
-            del model
-            model = Segmentor(mode).to(device)
-            current = model.state_dict()
-            current.update(base_state)
-            model.load_state_dict(current, strict=True)
-        model.eval()
-        with torch.no_grad(), autocast(device):
-            prediction = model(sample)
-        delta = float((prediction - original).abs().max())
-        if not torch.equal(prediction, original):
-            raise ValueError(f"zero-initialized stage switch changed inference: {mode}, max={delta}")
-        model.train()
-        model.zero_grad(set_to_none=True)
-        counts = torch.stack([(sample["targets"] == label).sum() for label in (0, 1)])
+    for index in indices:
+        start = time.perf_counter()
+        sample = to_device(dataset[index], device)
         with autocast(device):
             prediction = model(sample)
             loss = balanced_loss(prediction, sample["targets"], counts)
         loss.backward()
+        torch.cuda.synchronize(device)
         if not torch.isfinite(loss) or any(p.grad is not None and not torch.isfinite(p.grad).all()
                                           for p in model.parameters()):
-            raise ValueError(f"nonfinite full-scan backward: {mode}")
-        if model.detail[0].weight.grad is None or model.backbone.embedding.stem.conv.weight.grad is None:
-            raise ValueError("the detail branch or backbone is detached")
-        records[mode] = dict(loss=float(loss.detach()), stage_switch_max_error=delta,
-                             parameters=sum(p.numel() for p in model.parameters()),
-                             peak_vram_bytes=torch.cuda.max_memory_allocated(device))
-        del prediction, loss
-    model.zero_grad(set_to_none=True)
-    del sample
-    eligible = [r for r in val["records"] if r["eligible"]]
-    chosen = [eligible[0], eligible[len(eligible) // 2], eligible[-1]]
-    subset = dict(val, records=chosen)
-    subset.pop("sha256")
-    subset["sha256"] = identity(subset)
-    # This subset checks the evaluator, not validation performance or model selection.
-    observed = evaluate(model, subset, device, args.workers)
-    official = PointOODMetricsCalculator()
-    for row in chosen:
-        frame = read_scan(row["scan"], row["label"])
-        prediction, _ = infer(model, row["scan"], device)
-        official.update(frame.xyzi[:, :3], prediction, frame.semantic)
-    reference = {k: float(v) for k, v in official.compute_metrics().items()}
-    if observed["metrics"] != reference:
-        raise ValueError("pooled evaluation differs from independent official raw-slot evaluation")
-    write_json(args.output / "preflight.json", dict(version=VERSION, configuration=config,
-               resources=resources, sample=dict(index=index, world=train["records"][index]["world"],
-                                                frame=train["records"][index]["frame"]),
-               loaded=loaded, checks=records, parameter_updates=0,
-               evaluation_check=dict(diagnostic_only=True, scans=len(chosen), points=observed["points"],
-                    official_metrics_exact_match=True, full_val_manifest=val["sha256"],
-                    identities=[dict(sequence=r["sequence"], frame=r["frame"]) for r in chosen])))
-    print(json.dumps(records, indent=2))
+            raise ValueError("nonfinite mixed-batch backward")
+        records.append(dict(index=index, group=train["records"][index]["group"],
+                            points=len(prediction), seconds=time.perf_counter() - start,
+                            loss=float(loss.detach())))
+        del sample, prediction, loss
+    result = dict(version=PILOT_VERSION, configuration=config, resources=resources,
+                  scans=records, parameter_updates=0,
+                  mixed_batch_seconds=sum(row["seconds"] for row in records),
+                  peak_vram_bytes=torch.cuda.max_memory_allocated(device))
+    write_json(args.output / "preflight.json", result)
+    print(json.dumps({key: result[key] for key in
+                     ("mixed_batch_seconds", "peak_vram_bytes", "parameter_updates", "scans")}))
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--train-manifest", type=Path, default=Path("assets/train.json"))
+    parser.add_argument("--train-manifest", type=Path, default=Path("results/data/train.json"))
     parser.add_argument("--val-manifest", type=Path, default=Path("assets/val.json"))
-    parser.add_argument("--weights", type=Path, default=Path("/home/jasongao/Study/AJAE/results/pretrain/nuscenes.pth"))
-    parser.add_argument("--output", type=Path, default=Path("results/train/r2"))
+    parser.add_argument("--output", type=Path, default=Path("results/train/p1"))
+    parser.add_argument("--initial", type=Path, default=Path("results/train/r2/0/base/best.pt"))
+    parser.add_argument("--updates", type=int, default=500)
     parser.add_argument("--seeds", type=int, nargs="+", choices=(0,), default=[0],
-                        help="F240-R2 uses only seed 0")
+                        help="this pilot uses only seed 0")
     parser.add_argument("--workers", type=int, default=2)
     parser.add_argument("--threads", type=int, default=2)
     parser.add_argument("--save-every", type=int, default=500)
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--check", action="store_true")
     args = parser.parse_args()
-    if args.workers < 0 or args.threads < 1 or args.save_every < 1 or len(set(args.seeds)) != len(args.seeds):
+    if args.workers < 0 or args.threads < 1 or args.save_every < 1 or args.updates < 1 or len(set(args.seeds)) != len(args.seeds):
         parser.error("invalid runtime resource settings or duplicate seeds")
     torch.set_num_threads(args.threads)
     torch.set_num_interop_threads(1)
@@ -561,9 +555,9 @@ def main():
     if world_size > BATCH_SIZE:
         parser.error("at most eight GPUs for effective batch eight")
     train, val = load_manifest(args.train_manifest, "train"), load_manifest(args.val_manifest, "val")
-    if len(train["worlds"]) != 240:
-        parser.error("F240-R2 requires all 240 training worlds")
-    config = configuration(train, val, device, world_size)
+    if train["version"] != PILOT_VERSION:
+        parser.error("the pilot requires the new mixed training manifest")
+    config = configuration(train, val, device, world_size, updates=args.updates, initial=args.initial)
     resources = runtime_snapshot() if rank == 0 else None
     if args.workers * world_size + args.threads * world_size > len(os.sched_getaffinity(0)):
         parser.error("worker and BLAS thread counts exceed the available CPU affinity")
@@ -578,8 +572,8 @@ def main():
     other = [int(p.strip()) for p in gpu_processes if p.strip().isdigit() and int(p.strip()) not in processes]
     if other:
         raise RuntimeError(f"other CUDA processes must finish before this run: {other}")
-    # Four runs retain best/last optimizer states; include atomic replacement.
-    disk_check(2_000_000_000 if not args.check else 100_000_000)
+    # Include best/last optimizer states and the largest atomic replacement.
+    disk_check(1_000_000_000 if not args.check else 100_000_000)
     free, _ = torch.cuda.mem_get_info(device)
     if free < 7_000_000_000:
         raise RuntimeError(f"full-scan training verification needs a free GPU; only {free / 1e9:.1f} GB available")
@@ -594,18 +588,14 @@ def main():
     signal.signal(signal.SIGINT, stop_requested)
     signal.signal(signal.SIGTERM, stop_requested)
     if rank == 0:
-        print(json.dumps(dict(version=VERSION, seeds=args.seeds, epochs=EPOCHS,
-                              methods=["base", "attention", "continue", "fusion"],
+        print(json.dumps(dict(version=PILOT_VERSION, seeds=args.seeds,
+                              methods=["pilot"],
                               samples=len(train["records"]),
-                              planned_updates=math.ceil(len(train["records"]) / BATCH_SIZE)
-                                              * (EPOCHS[0] + 3 * EPOCHS[1]),
+                              planned_updates=args.updates,
                               output=str(args.output.resolve()))), flush=True)
     for seed in args.seeds:
-        for method in ("base", "attention", "continue", "fusion"):
-            if not train_stage(args, train, val, seed, method, device, config):
-                return
-    if rank == 0:
-        summarize(args.output)
+        if not train_stage(args, train, val, seed, "pilot", device, config):
+            return
     if dist.is_initialized():
         dist.destroy_process_group()
 

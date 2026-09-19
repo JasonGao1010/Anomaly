@@ -1,0 +1,353 @@
+{
+  "unified": {
+    "0": "忽略",
+    "1": "正常",
+    "2": "合成异常代理"
+  },
+  "nuscenes": [
+    {
+      "raw": 0,
+      "name": "noise",
+      "target": 0
+    },
+    {
+      "raw": 1,
+      "name": "animal",
+      "target": 0
+    },
+    {
+      "raw": 2,
+      "name": "human.pedestrian.adult",
+      "target": 1
+    },
+    {
+      "raw": 3,
+      "name": "human.pedestrian.child",
+      "target": 1
+    },
+    {
+      "raw": 4,
+      "name": "human.pedestrian.construction_worker",
+      "target": 1
+    },
+    {
+      "raw": 5,
+      "name": "human.pedestrian.personal_mobility",
+      "target": 0
+    },
+    {
+      "raw": 6,
+      "name": "human.pedestrian.police_officer",
+      "target": 1
+    },
+    {
+      "raw": 7,
+      "name": "human.pedestrian.stroller",
+      "target": 0
+    },
+    {
+      "raw": 8,
+      "name": "human.pedestrian.wheelchair",
+      "target": 0
+    },
+    {
+      "raw": 9,
+      "name": "movable_object.barrier",
+      "target": 1
+    },
+    {
+      "raw": 10,
+      "name": "movable_object.debris",
+      "target": 0
+    },
+    {
+      "raw": 11,
+      "name": "movable_object.pushable_pullable",
+      "target": 0
+    },
+    {
+      "raw": 12,
+      "name": "movable_object.trafficcone",
+      "target": 1
+    },
+    {
+      "raw": 13,
+      "name": "static_object.bicycle_rack",
+      "target": 0
+    },
+    {
+      "raw": 14,
+      "name": "vehicle.bicycle",
+      "target": 1
+    },
+    {
+      "raw": 15,
+      "name": "vehicle.bus.bendy",
+      "target": 1
+    },
+    {
+      "raw": 16,
+      "name": "vehicle.bus.rigid",
+      "target": 1
+    },
+    {
+      "raw": 17,
+      "name": "vehicle.car",
+      "target": 1
+    },
+    {
+      "raw": 18,
+      "name": "vehicle.construction",
+      "target": 1
+    },
+    {
+      "raw": 19,
+      "name": "vehicle.emergency.ambulance",
+      "target": 0
+    },
+    {
+      "raw": 20,
+      "name": "vehicle.emergency.police",
+      "target": 0
+    },
+    {
+      "raw": 21,
+      "name": "vehicle.motorcycle",
+      "target": 1
+    },
+    {
+      "raw": 22,
+      "name": "vehicle.trailer",
+      "target": 1
+    },
+    {
+      "raw": 23,
+      "name": "vehicle.truck",
+      "target": 1
+    },
+    {
+      "raw": 24,
+      "name": "flat.driveable_surface",
+      "target": 1
+    },
+    {
+      "raw": 25,
+      "name": "flat.other",
+      "target": 1
+    },
+    {
+      "raw": 26,
+      "name": "flat.sidewalk",
+      "target": 1
+    },
+    {
+      "raw": 27,
+      "name": "flat.terrain",
+      "target": 1
+    },
+    {
+      "raw": 28,
+      "name": "static.manmade",
+      "target": 1
+    },
+    {
+      "raw": 29,
+      "name": "static.other",
+      "target": 0
+    },
+    {
+      "raw": 30,
+      "name": "static.vegetation",
+      "target": 1
+    },
+    {
+      "raw": 31,
+      "name": "vehicle.ego",
+      "target": 0
+    }
+  ],
+  "stu": [
+    {
+      "raw": 0,
+      "name": "未标注",
+      "target": 0
+    },
+    {
+      "raw": 1,
+      "name": "离群标签",
+      "target": 1
+    },
+    {
+      "raw": 2,
+      "name": "异常",
+      "target": 2
+    },
+    {
+      "raw": 10,
+      "name": "汽车",
+      "target": 1
+    },
+    {
+      "raw": 11,
+      "name": "自行车",
+      "target": 1
+    },
+    {
+      "raw": 13,
+      "name": "公共汽车",
+      "target": 1
+    },
+    {
+      "raw": 15,
+      "name": "摩托车",
+      "target": 1
+    },
+    {
+      "raw": 16,
+      "name": "轨道车辆",
+      "target": 1
+    },
+    {
+      "raw": 18,
+      "name": "卡车",
+      "target": 1
+    },
+    {
+      "raw": 20,
+      "name": "其他车辆",
+      "target": 1
+    },
+    {
+      "raw": 30,
+      "name": "行人",
+      "target": 1
+    },
+    {
+      "raw": 31,
+      "name": "骑自行车者",
+      "target": 1
+    },
+    {
+      "raw": 32,
+      "name": "骑摩托车者",
+      "target": 1
+    },
+    {
+      "raw": 40,
+      "name": "道路",
+      "target": 1
+    },
+    {
+      "raw": 44,
+      "name": "停车区域",
+      "target": 1
+    },
+    {
+      "raw": 48,
+      "name": "人行道",
+      "target": 1
+    },
+    {
+      "raw": 49,
+      "name": "其他地面",
+      "target": 1
+    },
+    {
+      "raw": 50,
+      "name": "建筑",
+      "target": 1
+    },
+    {
+      "raw": 51,
+      "name": "围栏",
+      "target": 1
+    },
+    {
+      "raw": 52,
+      "name": "其他结构",
+      "target": 1
+    },
+    {
+      "raw": 60,
+      "name": "车道标线",
+      "target": 1
+    },
+    {
+      "raw": 70,
+      "name": "植被",
+      "target": 1
+    },
+    {
+      "raw": 71,
+      "name": "树干",
+      "target": 1
+    },
+    {
+      "raw": 72,
+      "name": "地形",
+      "target": 1
+    },
+    {
+      "raw": 80,
+      "name": "杆状物",
+      "target": 1
+    },
+    {
+      "raw": 81,
+      "name": "交通标志",
+      "target": 1
+    },
+    {
+      "raw": 99,
+      "name": "其他物体",
+      "target": 1
+    },
+    {
+      "raw": 252,
+      "name": "运动汽车",
+      "target": 1
+    },
+    {
+      "raw": 253,
+      "name": "运动骑自行车者",
+      "target": 1
+    },
+    {
+      "raw": 254,
+      "name": "运动行人",
+      "target": 1
+    },
+    {
+      "raw": 255,
+      "name": "运动骑摩托车者",
+      "target": 1
+    },
+    {
+      "raw": 256,
+      "name": "运动轨道车辆",
+      "target": 1
+    },
+    {
+      "raw": 257,
+      "name": "运动公共汽车",
+      "target": 1
+    },
+    {
+      "raw": 258,
+      "name": "运动卡车",
+      "target": 1
+    },
+    {
+      "raw": 259,
+      "name": "运动其他车辆",
+      "target": 1
+    }
+  ],
+  "intensity": {
+    "STU": "原始值",
+    "nuScenes": "原始强度除以固定常数255"
+  },
+  "train_frames": "可信正常且有有效监督，或2.5–50米内异常总数不少于5；1–4跳过",
+  "evaluation": "固定官方实现；异常总数少于5均跳过，包括零异常帧",
+  "category_source": "/home/jasongao/Data/Nuscenes/lidarseg/category.json"
+}

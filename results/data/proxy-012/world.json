@@ -1,0 +1,827 @@
+{
+  "version": "AJAE-V4-P1",
+  "geometry": "proxy-012",
+  "subset": "check",
+  "accepted": true,
+  "seed": 12076,
+  "shape": {
+    "scales": [
+      [
+        0.34121685921729167,
+        0.06192641104987663,
+        0.06086417288981209
+      ]
+    ],
+    "offsets": [
+      [
+        0.0,
+        0.0,
+        0.0
+      ]
+    ],
+    "exponents": [
+      [
+        0.7650126960367676,
+        1.2392210782379312
+      ]
+    ],
+    "yaws": [
+      0.0
+    ],
+    "operations": [
+      "union"
+    ],
+    "twist": 0.0,
+    "bend": [
+      0.0,
+      0.0
+    ],
+    "taper": [
+      0.0,
+      0.0
+    ],
+    "amplitude": 0.0,
+    "frequency": [
+      1.0,
+      1.0,
+      1.0
+    ],
+    "phase": [
+      0.0,
+      0.0,
+      0.0
+    ]
+  },
+  "material": {
+    "quantile": 0.7092821129534417,
+    "roughness": 0.34497412399300087,
+    "return_bias": 0.0
+  },
+  "pose": [
+    [
+      0.9868557324688161,
+      -0.1566131443777356,
+      -0.03985080051335179,
+      27.51215141302335
+    ],
+    [
+      0.15504674733525556,
+      0.9871061421393897,
+      -0.039773990137379554,
+      -30.045647858738057
+    ],
+    [
+      0.04556609961576515,
+      0.03307245317192984,
+      0.9984137135511495,
+      -1.2590825102354175
+    ],
+    [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ]
+  ],
+  "reference": {
+    "frame": 185,
+    "normal_slots": [
+      94882,
+      94883,
+      94884,
+      94885,
+      94886,
+      94887,
+      94888,
+      94889,
+      94890
+    ],
+    "anomaly_slots": [
+      95897,
+      95898,
+      95899,
+      95900,
+      95901,
+      95902,
+      95903,
+      96929,
+      96930,
+      96931,
+      96932,
+      96933
+    ],
+    "normal": {
+      "count": 9,
+      "range_m": 11.954996865226144,
+      "spread_m": [
+        0.3994061604977794,
+        0.007400745815358277,
+        0.00031917165077702616
+      ],
+      "linearity": 0.9996566623279693,
+      "planarity": 0.00034269908645983963,
+      "intensity": [
+        0.1557142913341522,
+        0.16571427881717682,
+        0.17245714664459227
+      ]
+    },
+    "anomaly": {
+      "count": 12,
+      "range_m": 10.736770638864508,
+      "spread_m": [
+        0.31402605548411033,
+        0.06536510999225531,
+        0.020737017009774726
+      ],
+      "linearity": 0.9566727999242505,
+      "planarity": 0.03896644997199814,
+      "intensity": [
+        0.21176454573869707,
+        0.3925864100456238,
+        0.4758182466030121
+      ]
+    },
+    "semantic": 40,
+    "radius_m": 0.35,
+    "support_plane": {
+      "anchor_world_m": [
+        27.514576899031233,
+        -30.04322704773017,
+        -1.319850135003337
+      ],
+      "normal_world": [
+        -0.03985080051335178,
+        -0.03977399013737955,
+        0.9984137135511494
+      ],
+      "offset": 1.2192953735407643
+    },
+    "source_anchor": 176
+  },
+  "candidate_score": 0.7679789273065694,
+  "compared_proposals": 6,
+  "rejected": {
+    "reference": 12,
+    "support": 0,
+    "collision": 0,
+    "visibility": 2
+  },
+  "label": "anomaly-proxy",
+  "collision": "all observed non-ground returns in all 449 frames",
+  "unobserved_geometry": "not certified",
+  "frames": [
+    {
+      "source": "targeted",
+      "group": "targeted",
+      "subset": "check",
+      "geometry": "proxy-012",
+      "frame": 169,
+      "delta": "/home/jasongao/Study/AJAE-v4/results/data/proxy-012/000169.npz",
+      "normal": 123933,
+      "anomaly": 8,
+      "points": 126904,
+      "slots": 131072
+    },
+    {
+      "source": "targeted",
+      "group": "targeted",
+      "subset": "check",
+      "geometry": "proxy-012",
+      "frame": 170,
+      "delta": "/home/jasongao/Study/AJAE-v4/results/data/proxy-012/000170.npz",
+      "normal": 119866,
+      "anomaly": 7,
+      "points": 126744,
+      "slots": 131072
+    },
+    {
+      "source": "targeted",
+      "group": "targeted",
+      "subset": "check",
+      "geometry": "proxy-012",
+      "frame": 171,
+      "delta": "/home/jasongao/Study/AJAE-v4/results/data/proxy-012/000171.npz",
+      "normal": 114940,
+      "anomaly": 8,
+      "points": 126721,
+      "slots": 131072
+    },
+    {
+      "source": "targeted",
+      "group": "targeted",
+      "subset": "check",
+      "geometry": "proxy-012",
+      "frame": 172,
+      "delta": "/home/jasongao/Study/AJAE-v4/results/data/proxy-012/000172.npz",
+      "normal": 112012,
+      "anomaly": 8,
+      "points": 126692,
+      "slots": 131072
+    },
+    {
+      "source": "targeted",
+      "group": "targeted",
+      "subset": "check",
+      "geometry": "proxy-012",
+      "frame": 173,
+      "delta": "/home/jasongao/Study/AJAE-v4/results/data/proxy-012/000173.npz",
+      "normal": 111957,
+      "anomaly": 8,
+      "points": 126678,
+      "slots": 131072
+    },
+    {
+      "source": "targeted",
+      "group": "targeted",
+      "subset": "check",
+      "geometry": "proxy-012",
+      "frame": 174,
+      "delta": "/home/jasongao/Study/AJAE-v4/results/data/proxy-012/000174.npz",
+      "normal": 112820,
+      "anomaly": 13,
+      "points": 126614,
+      "slots": 131072
+    },
+    {
+      "source": "targeted",
+      "group": "targeted",
+      "subset": "check",
+      "geometry": "proxy-012",
+      "frame": 175,
+      "delta": "/home/jasongao/Study/AJAE-v4/results/data/proxy-012/000175.npz",
+      "normal": 114060,
+      "anomaly": 7,
+      "points": 126875,
+      "slots": 131072
+    },
+    {
+      "source": "targeted",
+      "group": "targeted",
+      "subset": "check",
+      "geometry": "proxy-012",
+      "frame": 176,
+      "delta": "/home/jasongao/Study/AJAE-v4/results/data/proxy-012/000176.npz",
+      "normal": 115430,
+      "anomaly": 13,
+      "points": 127058,
+      "slots": 131072
+    },
+    {
+      "source": "targeted",
+      "group": "targeted",
+      "subset": "check",
+      "geometry": "proxy-012",
+      "frame": 177,
+      "delta": "/home/jasongao/Study/AJAE-v4/results/data/proxy-012/000177.npz",
+      "normal": 116512,
+      "anomaly": 12,
+      "points": 127087,
+      "slots": 131072
+    },
+    {
+      "source": "targeted",
+      "group": "targeted",
+      "subset": "check",
+      "geometry": "proxy-012",
+      "frame": 178,
+      "delta": "/home/jasongao/Study/AJAE-v4/results/data/proxy-012/000178.npz",
+      "normal": 117462,
+      "anomaly": 14,
+      "points": 127174,
+      "slots": 131072
+    },
+    {
+      "source": "targeted",
+      "group": "targeted",
+      "subset": "check",
+      "geometry": "proxy-012",
+      "frame": 179,
+      "delta": "/home/jasongao/Study/AJAE-v4/results/data/proxy-012/000179.npz",
+      "normal": 118067,
+      "anomaly": 13,
+      "points": 127009,
+      "slots": 131072
+    },
+    {
+      "source": "targeted",
+      "group": "targeted",
+      "subset": "check",
+      "geometry": "proxy-012",
+      "frame": 180,
+      "delta": "/home/jasongao/Study/AJAE-v4/results/data/proxy-012/000180.npz",
+      "normal": 118779,
+      "anomaly": 12,
+      "points": 126946,
+      "slots": 131072
+    },
+    {
+      "source": "targeted",
+      "group": "targeted",
+      "subset": "check",
+      "geometry": "proxy-012",
+      "frame": 181,
+      "delta": "/home/jasongao/Study/AJAE-v4/results/data/proxy-012/000181.npz",
+      "normal": 119681,
+      "anomaly": 14,
+      "points": 126919,
+      "slots": 131072
+    },
+    {
+      "source": "targeted",
+      "group": "targeted",
+      "subset": "check",
+      "geometry": "proxy-012",
+      "frame": 182,
+      "delta": "/home/jasongao/Study/AJAE-v4/results/data/proxy-012/000182.npz",
+      "normal": 120599,
+      "anomaly": 13,
+      "points": 127018,
+      "slots": 131072
+    },
+    {
+      "source": "targeted",
+      "group": "targeted",
+      "subset": "check",
+      "geometry": "proxy-012",
+      "frame": 183,
+      "delta": "/home/jasongao/Study/AJAE-v4/results/data/proxy-012/000183.npz",
+      "normal": 121417,
+      "anomaly": 13,
+      "points": 126803,
+      "slots": 131072
+    },
+    {
+      "source": "targeted",
+      "group": "targeted",
+      "subset": "check",
+      "geometry": "proxy-012",
+      "frame": 184,
+      "delta": "/home/jasongao/Study/AJAE-v4/results/data/proxy-012/000184.npz",
+      "normal": 122273,
+      "anomaly": 14,
+      "points": 126876,
+      "slots": 131072
+    },
+    {
+      "source": "targeted",
+      "group": "targeted",
+      "subset": "check",
+      "geometry": "proxy-012",
+      "frame": 185,
+      "delta": "/home/jasongao/Study/AJAE-v4/results/data/proxy-012/000185.npz",
+      "normal": 122875,
+      "anomaly": 12,
+      "points": 126702,
+      "slots": 131072
+    },
+    {
+      "source": "targeted",
+      "group": "targeted",
+      "subset": "check",
+      "geometry": "proxy-012",
+      "frame": 186,
+      "delta": "/home/jasongao/Study/AJAE-v4/results/data/proxy-012/000186.npz",
+      "normal": 124159,
+      "anomaly": 11,
+      "points": 126888,
+      "slots": 131072
+    },
+    {
+      "source": "targeted",
+      "group": "targeted",
+      "subset": "check",
+      "geometry": "proxy-012",
+      "frame": 187,
+      "delta": "/home/jasongao/Study/AJAE-v4/results/data/proxy-012/000187.npz",
+      "normal": 124894,
+      "anomaly": 11,
+      "points": 126782,
+      "slots": 131072
+    },
+    {
+      "source": "targeted",
+      "group": "targeted",
+      "subset": "check",
+      "geometry": "proxy-012",
+      "frame": 188,
+      "delta": "/home/jasongao/Study/AJAE-v4/results/data/proxy-012/000188.npz",
+      "normal": 124929,
+      "anomaly": 12,
+      "points": 126922,
+      "slots": 131072
+    },
+    {
+      "source": "targeted",
+      "group": "targeted",
+      "subset": "check",
+      "geometry": "proxy-012",
+      "frame": 189,
+      "delta": "/home/jasongao/Study/AJAE-v4/results/data/proxy-012/000189.npz",
+      "normal": 125004,
+      "anomaly": 13,
+      "points": 126976,
+      "slots": 131072
+    },
+    {
+      "source": "targeted",
+      "group": "targeted",
+      "subset": "check",
+      "geometry": "proxy-012",
+      "frame": 190,
+      "delta": "/home/jasongao/Study/AJAE-v4/results/data/proxy-012/000190.npz",
+      "normal": 124906,
+      "anomaly": 13,
+      "points": 126888,
+      "slots": 131072
+    },
+    {
+      "source": "targeted",
+      "group": "targeted",
+      "subset": "check",
+      "geometry": "proxy-012",
+      "frame": 191,
+      "delta": "/home/jasongao/Study/AJAE-v4/results/data/proxy-012/000191.npz",
+      "normal": 124958,
+      "anomaly": 14,
+      "points": 126898,
+      "slots": 131072
+    },
+    {
+      "source": "targeted",
+      "group": "targeted",
+      "subset": "check",
+      "geometry": "proxy-012",
+      "frame": 192,
+      "delta": "/home/jasongao/Study/AJAE-v4/results/data/proxy-012/000192.npz",
+      "normal": 124761,
+      "anomaly": 12,
+      "points": 126820,
+      "slots": 131072
+    },
+    {
+      "source": "targeted",
+      "group": "targeted",
+      "subset": "check",
+      "geometry": "proxy-012",
+      "frame": 193,
+      "delta": "/home/jasongao/Study/AJAE-v4/results/data/proxy-012/000193.npz",
+      "normal": 124599,
+      "anomaly": 12,
+      "points": 126751,
+      "slots": 131072
+    },
+    {
+      "source": "targeted",
+      "group": "targeted",
+      "subset": "check",
+      "geometry": "proxy-012",
+      "frame": 194,
+      "delta": "/home/jasongao/Study/AJAE-v4/results/data/proxy-012/000194.npz",
+      "normal": 124380,
+      "anomaly": 13,
+      "points": 126624,
+      "slots": 131072
+    },
+    {
+      "source": "targeted",
+      "group": "targeted",
+      "subset": "check",
+      "geometry": "proxy-012",
+      "frame": 195,
+      "delta": "/home/jasongao/Study/AJAE-v4/results/data/proxy-012/000195.npz",
+      "normal": 124274,
+      "anomaly": 14,
+      "points": 126549,
+      "slots": 131072
+    },
+    {
+      "source": "targeted",
+      "group": "targeted",
+      "subset": "check",
+      "geometry": "proxy-012",
+      "frame": 196,
+      "delta": "/home/jasongao/Study/AJAE-v4/results/data/proxy-012/000196.npz",
+      "normal": 124161,
+      "anomaly": 14,
+      "points": 126424,
+      "slots": 131072
+    },
+    {
+      "source": "targeted",
+      "group": "targeted",
+      "subset": "check",
+      "geometry": "proxy-012",
+      "frame": 197,
+      "delta": "/home/jasongao/Study/AJAE-v4/results/data/proxy-012/000197.npz",
+      "normal": 124152,
+      "anomaly": 14,
+      "points": 126419,
+      "slots": 131072
+    },
+    {
+      "source": "targeted",
+      "group": "targeted",
+      "subset": "check",
+      "geometry": "proxy-012",
+      "frame": 198,
+      "delta": "/home/jasongao/Study/AJAE-v4/results/data/proxy-012/000198.npz",
+      "normal": 124376,
+      "anomaly": 13,
+      "points": 126686,
+      "slots": 131072
+    },
+    {
+      "source": "targeted",
+      "group": "targeted",
+      "subset": "check",
+      "geometry": "proxy-012",
+      "frame": 199,
+      "delta": "/home/jasongao/Study/AJAE-v4/results/data/proxy-012/000199.npz",
+      "normal": 124419,
+      "anomaly": 13,
+      "points": 126735,
+      "slots": 131072
+    },
+    {
+      "source": "targeted",
+      "group": "targeted",
+      "subset": "check",
+      "geometry": "proxy-012",
+      "frame": 200,
+      "delta": "/home/jasongao/Study/AJAE-v4/results/data/proxy-012/000200.npz",
+      "normal": 124426,
+      "anomaly": 11,
+      "points": 126771,
+      "slots": 131072
+    },
+    {
+      "source": "targeted",
+      "group": "targeted",
+      "subset": "check",
+      "geometry": "proxy-012",
+      "frame": 201,
+      "delta": "/home/jasongao/Study/AJAE-v4/results/data/proxy-012/000201.npz",
+      "normal": 124468,
+      "anomaly": 11,
+      "points": 126804,
+      "slots": 131072
+    },
+    {
+      "source": "targeted",
+      "group": "targeted",
+      "subset": "check",
+      "geometry": "proxy-012",
+      "frame": 202,
+      "delta": "/home/jasongao/Study/AJAE-v4/results/data/proxy-012/000202.npz",
+      "normal": 124332,
+      "anomaly": 13,
+      "points": 126677,
+      "slots": 131072
+    },
+    {
+      "source": "targeted",
+      "group": "targeted",
+      "subset": "check",
+      "geometry": "proxy-012",
+      "frame": 203,
+      "delta": "/home/jasongao/Study/AJAE-v4/results/data/proxy-012/000203.npz",
+      "normal": 123981,
+      "anomaly": 13,
+      "points": 126363,
+      "slots": 131072
+    },
+    {
+      "source": "targeted",
+      "group": "targeted",
+      "subset": "check",
+      "geometry": "proxy-012",
+      "frame": 204,
+      "delta": "/home/jasongao/Study/AJAE-v4/results/data/proxy-012/000204.npz",
+      "normal": 124112,
+      "anomaly": 14,
+      "points": 126535,
+      "slots": 131072
+    },
+    {
+      "source": "targeted",
+      "group": "targeted",
+      "subset": "check",
+      "geometry": "proxy-012",
+      "frame": 205,
+      "delta": "/home/jasongao/Study/AJAE-v4/results/data/proxy-012/000205.npz",
+      "normal": 123989,
+      "anomaly": 13,
+      "points": 126405,
+      "slots": 131072
+    },
+    {
+      "source": "targeted",
+      "group": "targeted",
+      "subset": "check",
+      "geometry": "proxy-012",
+      "frame": 206,
+      "delta": "/home/jasongao/Study/AJAE-v4/results/data/proxy-012/000206.npz",
+      "normal": 124072,
+      "anomaly": 13,
+      "points": 126539,
+      "slots": 131072
+    },
+    {
+      "source": "targeted",
+      "group": "targeted",
+      "subset": "check",
+      "geometry": "proxy-012",
+      "frame": 207,
+      "delta": "/home/jasongao/Study/AJAE-v4/results/data/proxy-012/000207.npz",
+      "normal": 123843,
+      "anomaly": 13,
+      "points": 126326,
+      "slots": 131072
+    },
+    {
+      "source": "targeted",
+      "group": "targeted",
+      "subset": "check",
+      "geometry": "proxy-012",
+      "frame": 208,
+      "delta": "/home/jasongao/Study/AJAE-v4/results/data/proxy-012/000208.npz",
+      "normal": 123701,
+      "anomaly": 13,
+      "points": 126182,
+      "slots": 131072
+    },
+    {
+      "source": "targeted",
+      "group": "targeted",
+      "subset": "check",
+      "geometry": "proxy-012",
+      "frame": 209,
+      "delta": "/home/jasongao/Study/AJAE-v4/results/data/proxy-012/000209.npz",
+      "normal": 123596,
+      "anomaly": 12,
+      "points": 126070,
+      "slots": 131072
+    },
+    {
+      "source": "targeted",
+      "group": "targeted",
+      "subset": "check",
+      "geometry": "proxy-012",
+      "frame": 210,
+      "delta": "/home/jasongao/Study/AJAE-v4/results/data/proxy-012/000210.npz",
+      "normal": 123598,
+      "anomaly": 12,
+      "points": 126057,
+      "slots": 131072
+    },
+    {
+      "source": "targeted",
+      "group": "targeted",
+      "subset": "check",
+      "geometry": "proxy-012",
+      "frame": 211,
+      "delta": "/home/jasongao/Study/AJAE-v4/results/data/proxy-012/000211.npz",
+      "normal": 123622,
+      "anomaly": 11,
+      "points": 126037,
+      "slots": 131072
+    },
+    {
+      "source": "targeted",
+      "group": "targeted",
+      "subset": "check",
+      "geometry": "proxy-012",
+      "frame": 212,
+      "delta": "/home/jasongao/Study/AJAE-v4/results/data/proxy-012/000212.npz",
+      "normal": 123789,
+      "anomaly": 11,
+      "points": 126197,
+      "slots": 131072
+    },
+    {
+      "source": "targeted",
+      "group": "targeted",
+      "subset": "check",
+      "geometry": "proxy-012",
+      "frame": 213,
+      "delta": "/home/jasongao/Study/AJAE-v4/results/data/proxy-012/000213.npz",
+      "normal": 123949,
+      "anomaly": 10,
+      "points": 126275,
+      "slots": 131072
+    },
+    {
+      "source": "targeted",
+      "group": "targeted",
+      "subset": "check",
+      "geometry": "proxy-012",
+      "frame": 214,
+      "delta": "/home/jasongao/Study/AJAE-v4/results/data/proxy-012/000214.npz",
+      "normal": 123973,
+      "anomaly": 11,
+      "points": 126264,
+      "slots": 131072
+    },
+    {
+      "source": "targeted",
+      "group": "targeted",
+      "subset": "check",
+      "geometry": "proxy-012",
+      "frame": 215,
+      "delta": "/home/jasongao/Study/AJAE-v4/results/data/proxy-012/000215.npz",
+      "normal": 124171,
+      "anomaly": 9,
+      "points": 126421,
+      "slots": 131072
+    },
+    {
+      "source": "targeted",
+      "group": "targeted",
+      "subset": "check",
+      "geometry": "proxy-012",
+      "frame": 216,
+      "delta": "/home/jasongao/Study/AJAE-v4/results/data/proxy-012/000216.npz",
+      "normal": 124293,
+      "anomaly": 10,
+      "points": 126468,
+      "slots": 131072
+    },
+    {
+      "source": "targeted",
+      "group": "targeted",
+      "subset": "check",
+      "geometry": "proxy-012",
+      "frame": 217,
+      "delta": "/home/jasongao/Study/AJAE-v4/results/data/proxy-012/000217.npz",
+      "normal": 124431,
+      "anomaly": 10,
+      "points": 126594,
+      "slots": 131072
+    },
+    {
+      "source": "targeted",
+      "group": "targeted",
+      "subset": "check",
+      "geometry": "proxy-012",
+      "frame": 218,
+      "delta": "/home/jasongao/Study/AJAE-v4/results/data/proxy-012/000218.npz",
+      "normal": 124747,
+      "anomaly": 9,
+      "points": 126833,
+      "slots": 131072
+    },
+    {
+      "source": "targeted",
+      "group": "targeted",
+      "subset": "check",
+      "geometry": "proxy-012",
+      "frame": 219,
+      "delta": "/home/jasongao/Study/AJAE-v4/results/data/proxy-012/000219.npz",
+      "normal": 124636,
+      "anomaly": 7,
+      "points": 127272,
+      "slots": 131072
+    },
+    {
+      "source": "targeted",
+      "group": "targeted",
+      "subset": "check",
+      "geometry": "proxy-012",
+      "frame": 220,
+      "delta": "/home/jasongao/Study/AJAE-v4/results/data/proxy-012/000220.npz",
+      "normal": 123188,
+      "anomaly": 9,
+      "points": 127810,
+      "slots": 131072
+    },
+    {
+      "source": "targeted",
+      "group": "targeted",
+      "subset": "check",
+      "geometry": "proxy-012",
+      "frame": 221,
+      "delta": "/home/jasongao/Study/AJAE-v4/results/data/proxy-012/000221.npz",
+      "normal": 121546,
+      "anomaly": 8,
+      "points": 128343,
+      "slots": 131072
+    },
+    {
+      "source": "targeted",
+      "group": "targeted",
+      "subset": "check",
+      "geometry": "proxy-012",
+      "frame": 222,
+      "delta": "/home/jasongao/Study/AJAE-v4/results/data/proxy-012/000222.npz",
+      "normal": 119417,
+      "anomaly": 8,
+      "points": 128342,
+      "slots": 131072
+    }
+  ],
+  "skipped": {
+    "zero": 391,
+    "one_to_four": 4
+  }
+}

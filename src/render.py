@@ -1,10 +1,10 @@
-"""Fixed-world single-scan observation, selected from AJAE/src/render.py.
+"""Fixed-world observation and the bounded 206 normal-reference pilot generator.
 
-All geometry, response tables, tolerances and seeds are supplied explicitly.
-This module provides no V4 sampling distribution or fitted sensor default.
+The core ray renderer accepts explicit geometry, response tables and tolerances.
+The pilot uses only training placements and the existing 206 response calibration.
 """
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from itertools import product
 import math
 
@@ -12,8 +12,9 @@ import numpy as np
 from scipy.special import expit
 from scipy.stats import qmc
 
-from .data import Frame, readonly, rigid, supervision
-from .shape import Shape, unresolved_penetration
+from .data import (Frame, PILOT_VERSION, STUSequence, legacy_source_identity,
+                   point_targets, readonly, rigid, supervision, read_rays, write_json)
+from .shape import Shape, Trace, unresolved_penetration
 
 
 @dataclass(frozen=True, slots=True)
@@ -334,3 +335,208 @@ def pair_collision(left, right, *, trace, surface_count, residual_tolerance,
         if unresolved.any():
             return True, minimum
     return False, minimum
+
+
+def observation_features(xyzi):
+    """Measured local descriptors nominate candidates; they never determine labels."""
+    xyz = xyzi[:, :3].astype(np.float64)
+    eigen = np.linalg.eigvalsh(np.cov(xyz.T))[::-1]
+    eigen = np.maximum(eigen, 0)
+    return dict(count=len(xyzi), range_m=float(np.median(np.linalg.norm(xyz, axis=1))),
+                spread_m=(2 * np.sqrt(eigen)).tolist(),
+                linearity=float((eigen[0] - eigen[1]) / max(eigen[0], 1e-12)),
+                planarity=float((eigen[1] - eigen[2]) / max(eigen[0], 1e-12)),
+                intensity=np.quantile(xyzi[:, 3], [.1, .5, .9]).tolist())
+
+
+def candidate_distance(left, right):
+    # Each quantity has fixed units; this is a ranking heuristic, not a difficulty label.
+    a = np.r_[left["count"], left["range_m"], np.asarray(left["spread_m"]) + .02]
+    b = np.r_[right["count"], right["range_m"], np.asarray(right["spread_m"]) + .02]
+    return float(np.mean(np.abs(np.log(a / b))) +
+                 abs(left["linearity"] - right["linearity"]) +
+                 abs(left["planarity"] - right["planarity"]) +
+                 np.mean(np.abs(np.asarray(left["intensity"]) - right["intensity"])))
+
+
+def _generate_candidate(task):
+    import json
+    from pathlib import Path
+    geometry_id, subset, seed, output = task
+    saved = Path(output) / geometry_id / "world.json"
+    if saved.exists():
+        row = json.loads(saved.read_text())
+        if (row["version"], row["geometry"], row["subset"], row["seed"]) != (PILOT_VERSION, geometry_id, subset, seed):
+            raise ValueError("existing candidate has a different identity")
+        if not all(Path(frame["delta"]).is_file() for frame in row["frames"]):
+            raise ValueError("completed candidate has missing observations")
+        return row
+    rng = np.random.default_rng(seed)
+    index = int(geometry_id.rsplit("-", 1)[1])
+    # Detached solids expose unknown obstacles without assigning real anomaly species.
+    extents = np.asarray(((.8, .12, .14), (.55, .38, .09), (.24, .22, .28))[index % 3])
+    extents *= rng.uniform(.75, 1.3, 3)
+    shape = Shape((tuple(extents / 2),), ((0., 0., 0.),),
+                  (tuple(rng.uniform(.5, 1.3, 2)),), (0.,), ("union",),
+                  0., (0., 0.), (0., 0.), 0., (1., 1., 1.), (0., 0., 0.))
+    material = Material(float(rng.uniform(.15, .85)), float(rng.uniform(.1, .35)), 0.)
+    grounding = check_grounding(shape, coarse=dict(xy_resolution=33, z_steps=129, bisections=24, refinements=5),
+                                fine=dict(xy_resolution=65, z_steps=257, bisections=24, refinements=5),
+                                trace=_trace, surface_count=128, residual_tolerance=1e-5,
+                                convergence_m=1e-4, buried_depth_m=1e-4, max_buried_fraction=0.)
+    if not grounding.accepted:
+        return dict(geometry=geometry_id, subset=subset, accepted=False, reason="grounding")
+    proposals = []
+    rejected = dict(reference=0, support=0, collision=0, visibility=0)
+    for anchor_id in rng.permutation(len(_anchors))[:32]:
+        anchor = _anchors[anchor_id]
+        ref = anchor["generation"].get("normal_reference")
+        if not ref or "support_plane" not in anchor["generation"] or "geometry" not in anchor["generation"]:
+            rejected["reference"] += 1
+            continue
+        source = _frames[ref["frame"]]
+        slots = np.asarray(ref["slots"], dtype=int)
+        normal_slots = np.flatnonzero(point_targets(source) == 0)
+        center = np.median(source.xyzi[slots, :3], axis=0)
+        central = normal_slots[np.argmin(np.linalg.norm(source.xyzi[normal_slots, :3] - center, axis=1))]
+        center = source.xyzi[central, :3]
+        slots = normal_slots[(source.semantic[normal_slots] == source.semantic[central]) &
+                            (np.linalg.norm(source.xyzi[normal_slots, :3] - center, axis=1) <= .35)]
+        if len(slots) < 5:
+            rejected["reference"] += 1
+            continue
+        plane = anchor["generation"]["support_plane"]
+        radius = float(np.linalg.norm(extents[:2] / 2))
+        if radius > anchor["generation"]["geometry"]["footprint_radius_m"]:
+            rejected["support"] += 1
+            continue
+        item = ground_object(grounding, material, object_id=1, geometry_id=geometry_id,
+                             anchor_world=plane["anchor_world_m"], normal_world=plane["normal_world"],
+                             plane_offset=plane["offset"], yaw=anchor["generation"]["yaw_rad"])
+        # Check every original scan, including moving obstacles, before rendering.
+        if any(len(observed_collision(item, points, allowance_m=.05, gradient_step_m=1e-6,
+                                      witness_fraction=1 - 1e-6)[0]) for points in _obstacles):
+            rejected["collision"] += 1
+            continue
+        world = World(PILOT_VERSION, 206, seed, (item,), 1e-6)
+        observed = render_frame(source, world, _rays, _response, _trace)
+        selected = supervision(observed.frame)
+        anomaly = np.flatnonzero(selected.targets == 1)
+        if len(anomaly) < 5 or not np.all(observed.visible_normal[slots]):
+            rejected["visibility"] += 1
+            continue
+        xyzi = observed.frame.xyzi
+        nearest = anomaly[np.argmin(np.linalg.norm(xyzi[anomaly, :3] - np.median(xyzi[anomaly, :3], axis=0), axis=1))]
+        local = anomaly[np.linalg.norm(xyzi[anomaly, :3] - xyzi[nearest, :3], axis=1) <= .35]
+        if len(local) < 5:
+            rejected["visibility"] += 1
+            continue
+        normal_feature, anomaly_feature = observation_features(source.xyzi[slots]), observation_features(xyzi[local])
+        score = candidate_distance(normal_feature, anomaly_feature)
+        proposals.append((score, world, dict(frame=source.frame_id, normal_slots=slots.tolist(),
+                          anomaly_slots=local.tolist(), normal=normal_feature, anomaly=anomaly_feature,
+                          semantic=int(source.semantic[central]), radius_m=.35,
+                          support_plane=plane, source_anchor=int(anchor_id))))
+        if len(proposals) == 6:
+            break
+    if not proposals:
+        return dict(geometry=geometry_id, subset=subset, accepted=False,
+                    reason="no_legal_visible_candidate", rejected=rejected)
+    score, world, reference = min(proposals, key=lambda item: item[0])
+    directory = Path(output) / geometry_id
+    directory.mkdir()
+    item = world.objects[0]
+    metadata = dict(version=PILOT_VERSION, geometry=geometry_id, subset=subset,
+                    accepted=True, seed=seed, shape=asdict(shape), material=asdict(material),
+                    pose=item.pose.tolist(), reference=reference, candidate_score=score,
+                    compared_proposals=len(proposals), rejected=rejected,
+                    label="anomaly-proxy", collision="all observed non-ground returns in all 449 frames",
+                    unobserved_geometry="not certified", frames=[], skipped={"zero": 0, "one_to_four": 0})
+    for source in _frames:
+        observed = render_frame(source, world, _rays, _response, _trace)
+        selected = supervision(observed.frame)
+        if not selected.eligible:
+            metadata["skipped"]["zero" if selected.anomaly_count == 0 else "one_to_four"] += 1
+            continue
+        slots = np.flatnonzero(observed.inserted | observed.occluded_original).astype(np.int32)
+        path = directory / f"{source.frame_id:06d}.npz"
+        np.savez_compressed(path, slots=slots, xyzi=observed.frame.xyzi[slots],
+                            labels=observed.frame.labels[slots],
+                            inserted=np.flatnonzero(observed.inserted).astype(np.int32),
+                            occluded=np.flatnonzero(observed.occluded_original).astype(np.int32),
+                            frame=np.int64(source.frame_id), source_identity=_source_ids[source.frame_id])
+        metadata["frames"].append(dict(source="targeted", group="targeted", subset=subset,
+            geometry=geometry_id, frame=source.frame_id, delta=str(path.resolve()),
+            normal=selected.normal_count, anomaly=selected.anomaly_count,
+            points=int(observed.frame.actual.sum()), slots=len(source.xyzi)))
+    write_json(directory / "world.json", metadata)
+    return metadata
+
+
+def generate_candidates(output, *, data_root, pool_root, workers=8):
+    import json
+    import multiprocessing as mp
+    from concurrent.futures import ProcessPoolExecutor
+    from pathlib import Path
+    import torch
+    global _frames, _obstacles, _anchors, _rays, _response, _trace, _source_ids
+    output, pool_root = Path(output), Path(pool_root)
+    split = json.loads((output / "split.json").read_text())
+    sequence = STUSequence(data_root)
+    _frames = [sequence[i] for i in range(len(sequence))]
+    _source_ids = [legacy_source_identity(frame) for frame in _frames]
+    _obstacles = []
+    for frame in _frames:
+        selected = frame.actual & ~np.isin(frame.semantic, [40, 44, 48, 49, 60])
+        _obstacles.append(readonly(frame.xyzi[selected, :3].astype(np.float64) @
+                                  frame.pose[:3, :3].T + frame.pose[:3, 3]))
+    pool = json.loads((pool_root / "manifest.json").read_text())
+    _anchors = [json.loads((pool_root / row["path"] / "world.json").read_text())
+                for row in pool["splits"]["train"]["worlds"]]
+    if not any(row["generation"].get("normal_reference") for row in _anchors):
+        raise ValueError("no training placement has a measured normal reference")
+    if pool["splits"]["train"]["source_sequence"] != 206:
+        raise ValueError("placement references must come only from STU 206")
+    calibration = torch.load(pool_root / "calibration.pt", map_location="cpu", weights_only=False)
+    sensor = calibration["sensor"]
+    if sensor["source_sequence_id"] != 206:
+        raise ValueError("response calibration must use only STU 206")
+    _rays = read_rays()
+    _response = Response(sensor["range_edges_m"], sensor["incidence_edges_rad"], sensor["quantile_levels"],
+                         sensor["return_probability"], sensor["intensity_quantiles"],
+                         (sensor["intensity_min"], sensor["intensity_max"]), None,
+                         str(pool_root / "calibration.pt") + "; fitted from original STU 206 only")
+    _trace = Trace(96, 8, 24, 1e-5, 4., 1e-5, 1e-5, 1e-9)
+    tasks = [(geometry, subset, split["seed"] + 10000 + int(geometry.rsplit("-", 1)[1]), str(output))
+             for subset in ("train", "check") for geometry in split["geometry_" + subset]]
+    if any((output / geometry).exists() and not (output / geometry / "world.json").exists()
+           for geometry, _, _, _ in tasks):
+        raise FileExistsError("incomplete candidate outputs require inspection before restarting")
+    records = []
+    # Read-only source arrays are shared after fork; no repeated 206 decoding per worker.
+    with ProcessPoolExecutor(max_workers=workers, mp_context=mp.get_context("fork")) as executor:
+        for row in executor.map(_generate_candidate, tasks):
+            records.append(dict(geometry=row["geometry"], subset=row["subset"], accepted=row["accepted"],
+                                scans=len(row.get("frames", [])), candidate_score=row.get("candidate_score"),
+                                path=str((output / row["geometry"] / "world.json").resolve()))
+                           if row["accepted"] else row)
+            print(json.dumps(dict(geometry=row["geometry"], accepted=row["accepted"],
+                                  scans=len(row.get("frames", [])), score=row.get("candidate_score"))), flush=True)
+    write_json(output / "targeted.json", dict(version=PILOT_VERSION, trace=asdict(_trace),
+               response=_response.provenance, worlds=records,
+               interpretation="normal-reference candidates; local confusion and context utility unproven"))
+
+
+if __name__ == "__main__":
+    import argparse
+    import os
+    from pathlib import Path
+    parser = argparse.ArgumentParser(description="Build a bounded 206 normal-reference candidate batch.")
+    parser.add_argument("--output", type=Path, default=Path("results/data"))
+    parser.add_argument("--data-root", type=Path, default=Path("/home/jasongao/Data/STU"))
+    parser.add_argument("--pool-root", type=Path, default=Path("/home/jasongao/Study/AJAE/results/synthetic"))
+    parser.add_argument("--workers", type=int, default=8)
+    args = parser.parse_args()
+    if not 1 <= args.workers <= len(os.sched_getaffinity(0)):
+        parser.error("workers must fit the current CPU affinity")
+    generate_candidates(args.output, data_root=args.data_root, pool_root=args.pool_root, workers=args.workers)

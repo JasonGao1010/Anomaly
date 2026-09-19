@@ -11,3 +11,4 @@ torch_scatter==2.1.2+pt212cu130
 spconv-cu126==2.3.8
 cumm-cu126==0.7.11
 pytest==8.4.2
+ijson==3.5.1

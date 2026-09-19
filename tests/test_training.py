@@ -17,7 +17,7 @@ from src.data import (Frame, Scans, MANIFEST_VERSION, VERSION, load_manifest, po
 from src.evaluate import better, summarize
 from src.model import (CHANNELS, Interaction, Segmentor, balanced_loss, prepare_scan,
                        scatter_scores, voxelize)
-from src.train import (EPOCHS, configuration, effective_batches, epoch_order, lr_factor, optimizer_for,
+from src.train import (EPOCHS, configuration, effective_batches, epoch_order, lr_factor, optimizer_for, pilot_order,
                        rng_state, restore_rng, seed_all)
 from vendor.litept.pointrope import PointROPE
 from vendor.stu.compute_point_level_ood import PointOODMetricsCalculator
@@ -66,6 +66,45 @@ def test_all_return_voxels_origin_and_slot_scattering():
     output.sum().backward()
     with pytest.raises(ValueError, match="empty ray"):
         voxelize(np.zeros((1, 4), np.float32))
+
+
+def test_pilot_normal_rule_and_balanced_source_schedule():
+    xyz = np.tile(np.array([[4., 0, 0, .5]], np.float32), (10, 1))
+    for anomaly in (0, 1, 4, 5):
+        frame = Frame(0, xyz, np.eye(4), np.array([2] * anomaly + [40] * (10 - anomaly), np.uint32))
+        assert supervision(frame, allow_normal=True).eligible == (anomaly == 0 or anomaly >= 5)
+        assert supervision(frame).eligible == (anomaly >= 5)
+    records = [dict(group=group) for group in ("base", "targeted", "normal_nuscenes", "normal_stu")
+               for _ in range(37)]
+    order = pilot_order(dict(records=records), 0, 500)
+    assert order == pilot_order(dict(records=records), 0, 500)
+    assert len(order) == 4000
+    for batch in effective_batches(order):
+        assert [sum(records[i]["group"] == group for i in batch) for group in
+                ("base", "targeted", "normal_nuscenes", "normal_stu")] == [4, 2, 1, 1]
+
+
+def test_nuscenes_raw_order_intensity_and_ignored_context(tmp_path):
+    from src.data import nuscenes_mapping, read_nuscenes
+    categories = json.loads(Path("results/data/labels.json").read_text())["nuscenes"]
+    (tmp_path / "lidarseg").mkdir()
+    (tmp_path / "lidarseg/category.json").write_text(json.dumps(
+        [dict(index=row["raw"], name=row["name"]) for row in categories]))
+    mapping = nuscenes_mapping(tmp_path)
+    assert mapping == categories
+    assert len(mapping) == 32 and sum(row["target"] for row in mapping) == 20
+    indices = {row["name"]: row["raw"] for row in mapping}
+    raw = np.array([[4, 0, 0, 255, 0], [70, 0, 0, 127.5, 31],
+                    [5, 0, 0, 128, 15], [6, 0, 0, 10, 3]], np.float32)
+    labels = np.array([indices[name] for name in
+                       ("vehicle.car", "vehicle.car", "static.other", "noise")], np.uint8)
+    scan, label = tmp_path / "scan.bin", tmp_path / "label.bin"
+    raw.tofile(scan); labels.tofile(label)
+    frame = read_nuscenes(dict(scan=scan, label=label, frame=0), mapping)
+    np.testing.assert_array_equal(frame.xyzi[:, :3], raw[:, :3])
+    np.testing.assert_array_equal(frame.xyzi[:, 3], raw[:, 3] / 255.)
+    np.testing.assert_array_equal(point_targets(frame), [0, -1, -1, -1])
+    assert frame.actual.all() and supervision(frame, allow_normal=True).eligible
 
 
 @pytest.mark.parametrize("sizes", [[(3, 20), (11, 2), (1, 1)], [(0, 5), (0, 3)], [(8, 0)]])
@@ -274,6 +313,45 @@ class _ToyScans:
         normal, anomaly = self.records[index]["normal"], self.records[index]["anomaly"]
         x = torch.arange((normal + anomaly) * 3).reshape(-1, 3).float() / 30 + index / 40
         return dict(xyzi=x, targets=torch.tensor([0] * normal + [1] * anomaly))
+
+
+def test_pilot_budget_single_validation_and_resume(tmp_path, monkeypatch):
+    import src.train as training
+    from src.data import PILOT_VERSION
+    monkeypatch.setattr(training, "Segmentor", _ToyModel)
+    monkeypatch.setattr(training, "PreparedScans", _ToyScans)
+    monkeypatch.setattr(torch.cuda, "reset_peak_memory_stats", lambda *a: None)
+    monkeypatch.setattr(torch.cuda, "max_memory_allocated", lambda *a: 0)
+    evaluations = []
+    metrics = dict(AP=2., AUROC=51., FPR95=93., threshold=.5)
+    def validate(*args):
+        evaluations.append(1)
+        return dict(metrics=metrics, manifest_sha256="fixture-val")
+    monkeypatch.setattr(training, "validate_all", validate)
+    initial = tmp_path / "initial.pt"
+    torch.save(dict(mode="base", model=_ToyModel("base").state_dict(), complete=True, selected=True,
+                    validation=dict(metrics=metrics, manifest_sha256="fixture-val")), initial)
+    manifest = dict(records=[dict(group=group, normal=5, anomaly=5 if group in ("base", "targeted") else 0)
+                            for group in ("base", "targeted", "normal_nuscenes", "normal_stu")
+                            for _ in range(9)])
+    config = dict(version=PILOT_VERSION, updates=7, epochs=None, fixture=True)
+    args = SimpleNamespace(output=tmp_path / "full", initial=initial, resume=True, workers=0, save_every=500)
+    val, device = dict(sha256="fixture-val"), torch.device("cpu")
+    monkeypatch.setattr(training, "STOP", False)
+    assert training.train_stage(args, manifest, val, 0, "pilot", device, config)
+    full = torch.load(args.output / "0/pilot/last.pt", weights_only=False)
+    assert len(evaluations) == 1 and full["planned_updates"] == full["successful_updates"] == 7
+    assert full["final_metrics"] == metrics and full["complete"]
+    args.output = tmp_path / "resumed"
+    training.STOP = True
+    assert not training.train_stage(args, manifest, val, 0, "pilot", device, config)
+    assert len(evaluations) == 1
+    training.STOP = False
+    assert training.train_stage(args, manifest, val, 0, "pilot", device, config)
+    assert len(evaluations) == 2
+    resumed = torch.load(args.output / "0/pilot/last.pt", weights_only=False)
+    for name, value in full["model"].items():
+        torch.testing.assert_close(value, resumed["model"][name], atol=0, rtol=0)
 
 
 def test_actual_training_loop_resume_inheritance_epoch_zero_and_tail(tmp_path, monkeypatch):

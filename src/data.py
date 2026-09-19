@@ -1,4 +1,4 @@
-"""Read complete STU/206 observations and apply the V4 supervision rules.
+"""Read complete STU and nuScenes observations with separate training/evaluation rules.
 
 File and pose conventions are taken from AJAE-v3/src/scene.py. Ray calibration
 uses AJAE/assets/rays.npz and the formula already measured in the 206 analysis.
@@ -31,10 +31,21 @@ LABELS = {
 }
 RAYS_PATH = Path(__file__).resolve().parents[1] / "assets" / "rays.npz"
 VERSION = "AJAE-V4-F240-R2"
+PILOT_VERSION = "AJAE-V4-P1"
 # R2 changes the training budget; retain the exact R1 observations and manifests.
 MANIFEST_VERSION = "AJAE-V4-F240-R1"
 DATA_ROOT = Path("/home/jasongao/Data/STU")
 POOL_ROOT = Path("/home/jasongao/Study/AJAE/results/synthetic")
+NUSCENES_ROOT = Path("/home/jasongao/Data/Nuscenes")
+# Retain known road-scene classes; ambiguous entities and noise receive no target.
+NUSCENES_NORMAL = frozenset((
+    "human.pedestrian.adult", "human.pedestrian.child",
+    "human.pedestrian.construction_worker", "human.pedestrian.police_officer",
+    "movable_object.barrier", "movable_object.trafficcone", "vehicle.bicycle",
+    "vehicle.bus.bendy", "vehicle.bus.rigid", "vehicle.car", "vehicle.construction",
+    "vehicle.motorcycle", "vehicle.trailer", "vehicle.truck", "flat.driveable_surface",
+    "flat.other", "flat.sidewalk", "flat.terrain", "static.manmade", "static.vegetation",
+))
 
 
 def readonly(values):
@@ -186,20 +197,22 @@ class Supervision:
     targets: np.ndarray
     normal_count: int
     anomaly_count: int
+    allow_normal: bool = False
 
     @property
     def eligible(self):
-        return self.anomaly_count >= 5
+        return self.anomaly_count >= 5 or (
+            self.allow_normal and self.anomaly_count == 0 and self.normal_count > 0)
 
 
-def supervision(frame):
-    """Apply the updated plan: every frame with fewer than five anomalies is skipped."""
+def supervision(frame, *, allow_normal=False):
+    """Training may retain trusted normal scans; official evaluation never does."""
     targets = point_targets(frame)
     normal, anomaly = int((targets == 0).sum()), int((targets == 1).sum())
-    if anomaly < 5:
+    if anomaly < 5 and not (allow_normal and anomaly == 0 and normal > 0):
         targets.fill(-1)
     # No per-object threshold: 1-4 point objects stay anomalous in eligible frames.
-    return Supervision(readonly(targets), normal, anomaly)
+    return Supervision(readonly(targets), normal, anomaly, allow_normal)
 
 
 def legacy_source_identity(frame):
@@ -504,10 +517,168 @@ def make_real_manifest(directory, *, partition="val", workers=4):
 def load_manifest(path, kind):
     value = json.loads(Path(path).read_text())
     expected = value.pop("sha256")
-    if identity(value) != expected or value["version"] != MANIFEST_VERSION or value["kind"] != kind:
+    if identity(value) != expected or value["version"] not in (MANIFEST_VERSION, PILOT_VERSION) or value["kind"] != kind:
         raise ValueError(f"invalid {kind} manifest identity: {path}")
     value["sha256"] = expected
     return value
+
+
+def nuscenes_mapping(root=NUSCENES_ROOT):
+    categories = json.loads((Path(root) / "lidarseg/category.json").read_text())
+    if sorted(row["index"] for row in categories) != list(range(32)):
+        raise ValueError("the original 32-class lidarseg taxonomy is required")
+    if not NUSCENES_NORMAL <= {row["name"] for row in categories}:
+        raise ValueError("known normal classes are absent from the lidarseg taxonomy")
+    return [dict(raw=row["index"], name=row["name"],
+                 target=int(row["name"] in NUSCENES_NORMAL))
+            for row in sorted(categories, key=lambda row: row["index"])]
+
+
+def read_nuscenes(record, mapping):
+    """Keep one native sweep; only convert the sensor's fixed intensity units."""
+    raw = np.fromfile(record["scan"], dtype="<f4")
+    labels = np.fromfile(record["label"], dtype=np.uint8)
+    if raw.size % 5 or raw.size // 5 != labels.size or not labels.size:
+        raise ValueError("nuScenes point/label records do not correspond")
+    raw = raw.reshape(-1, 5)
+    if not np.isfinite(raw).all() or np.any((raw[:, 4] < 0) | (raw[:, 4] > 31)):
+        raise ValueError("invalid native nuScenes returns")
+    if np.any(labels >= len(mapping)):
+        raise ValueError("unknown nuScenes lidarseg label")
+    xyzi = raw[:, :4].copy()
+    # This is the official LitePT nuScenes input convention, not per-frame scaling.
+    xyzi[:, 3] /= 255.
+    truth = np.asarray([row["target"] for row in mapping], np.uint32)[labels]
+    return Frame(record["frame"], xyzi, np.eye(4), truth, sequence_id=0, partition="train")
+
+
+def make_normal_manifest(root, output, *, scenes=16, check_scenes=4, seed=2064):
+    """Select official train scenes before reading labels; hold out whole logs."""
+    import ast
+    import urllib.request
+    import ijson
+    root, output = Path(root).resolve(), Path(output)
+    output.mkdir(parents=True, exist_ok=True)
+    url = "https://raw.githubusercontent.com/nutonomy/nuscenes-devkit/master/python-sdk/nuscenes/utils/splits.py"
+    with urllib.request.urlopen(url, timeout=30) as response:
+        split_source = response.read()
+    lists = {}
+    for node in ast.parse(split_source).body:
+        if isinstance(node, ast.Assign) and isinstance(node.value, ast.List):
+            for name in node.targets:
+                if isinstance(name, ast.Name):
+                    lists[name.id] = ast.literal_eval(node.value)
+    official = set(lists["train_detect"] + lists["train_track"])
+    scene_rows = json.loads((root / "v1.0-trainval/scene.json").read_text())
+    groups = {}
+    for row in scene_rows:
+        if row["name"] in official:
+            groups.setdefault(row["log_token"], []).append(row)
+    rng = np.random.default_rng(seed)
+    logs = sorted(groups)
+    selected = []
+    for idx in rng.permutation(len(logs))[:scenes + check_scenes]:
+        choices = sorted(groups[logs[idx]], key=lambda row: row["name"])
+        selected.append(choices[int(rng.integers(len(choices)))])
+    if len(selected) != scenes + check_scenes:
+        raise ValueError("insufficient independent training logs")
+    split = dict(seed=seed, official_source=url,
+                 source_sha256=hashlib.sha256(split_source).hexdigest(),
+                 train=[row["name"] for row in selected[:scenes]],
+                 check=[row["name"] for row in selected[scenes:]],
+                 logs={row["name"]: row["log_token"] for row in selected},
+                 geometry_train=[f"proxy-{i:03d}" for i in range(12)],
+                 geometry_check=[f"proxy-{i:03d}" for i in range(12, 15)],
+                 excluded_stu=[201], stu_train=[206])
+    write_json(output / "split.json", split)
+    mapping = nuscenes_mapping(root)
+    write_json(output / "labels.json", dict(
+        unified={"0": "忽略", "1": "正常", "2": "合成异常代理"},
+        nuscenes=mapping,
+        stu=[dict(raw=k, name=v, target=0 if k == 0 else 2 if k == 2 else 1)
+             for k, v in LABELS.items()],
+        intensity={"STU": "原始值", "nuScenes": "原始强度除以固定常数255"},
+        train_frames="可信正常且有有效监督，或2.5–50米内异常总数不少于5；1–4跳过",
+        evaluation="固定官方实现；异常总数少于5均跳过，包括零异常帧",
+        category_source=str(root / "lidarseg/category.json")))
+    tokens = {row["token"]: row["name"] for row in selected}
+    samples = {row["token"]: tokens[row["scene_token"]]
+               for row in json.loads((root / "v1.0-trainval/sample.json").read_text())
+               if row["scene_token"] in tokens}
+    labels = {row["sample_data_token"]: row["filename"]
+              for row in json.loads((root / "v1.0-trainval/lidarseg.json").read_text())}
+    records = []
+    with (root / "v1.0-trainval/sample_data.json").open("rb") as stream:
+        for row in ijson.items(stream, "item"):
+            if (not row["is_key_frame"] or row["sample_token"] not in samples
+                    or not row["filename"].startswith("samples/LIDAR_TOP/")):
+                continue
+            scene = samples[row["sample_token"]]
+            record = dict(source="nuscenes", scene=scene, token=row["token"],
+                          frame=len(records), scan=str(root / row["filename"]),
+                          label=str(root / labels[row["token"]]),
+                          subset="train" if scene in split["train"] else "check",
+                          group="normal_nuscenes")
+            frame = read_nuscenes(record, mapping)
+            target = point_targets(frame)
+            record.update(points=int(frame.actual.sum()), slots=len(frame.xyzi),
+                          normal=int((target == 0).sum()), anomaly=int((target == 1).sum()))
+            if record["anomaly"] or not record["normal"]:
+                raise ValueError("normal nuScenes scan has inconsistent supervision")
+            records.append(record)
+    counts = {row["name"]: sum(r["scene"] == row["name"] for r in records) for row in selected}
+    if any(counts[row["name"]] != row["nbr_samples"] for row in selected):
+        raise ValueError("selected scenes have missing labeled keyframes")
+    result = dict(version=PILOT_VERSION, kind="normal", mapping=mapping,
+                  split=split, records=records, scene_counts=counts,
+                  source=json.loads((root / "lidarseg/source.json").read_text()))
+    result["sha256"] = identity(result)
+    write_json(output / "normal.json", result)
+    print(json.dumps(dict(normal_scans=len(records), scenes=counts)), flush=True)
+    return result
+
+
+def make_pilot_manifest(base_path, output):
+    """Mix existing exposure with new training sources; checks never enter training."""
+    output = Path(output)
+    base = load_manifest(base_path, "train")
+    normal = load_manifest(output / "normal.json", "normal")
+    targeted = json.loads((output / "targeted.json").read_text())
+    split = json.loads((output / "split.json").read_text())
+    if normal["split"] != split or split["stu_train"] != [206] or split["excluded_stu"] != [201]:
+        raise ValueError("inconsistent training source split")
+    if set(split["train"]) & set(split["check"]) or set(split["geometry_train"]) & set(split["geometry_check"]):
+        raise ValueError("internal check sources overlap training")
+    records = [dict(row, group="base", subset="train") for row in base["records"]]
+    for entry in targeted["worlds"]:
+        if entry["accepted"] and entry["subset"] == "train":
+            world = json.loads(Path(entry["path"]).read_text())
+            if world["geometry"] not in split["geometry_train"]:
+                raise ValueError("unexpected targeted training geometry")
+            records.extend(world["frames"])
+    records.extend(row for row in normal["records"] if row["subset"] == "train")
+    sequence = STUSequence(base["data_root"])
+    for source in base["sources"]:
+        frame = sequence[source["frame"]]
+        selected = supervision(frame, allow_normal=True)
+        if (not selected.eligible or selected.anomaly_count or
+                legacy_source_identity(frame) != source["source_identity"]):
+            raise ValueError("raw 206 scan is not the trusted normal source")
+        records.append(dict(source="normal_stu", group="normal_stu", subset="train",
+                            frame=frame.frame_id, points=int(frame.actual.sum()), slots=len(frame.xyzi),
+                            normal=selected.normal_count, anomaly=0))
+    if any(row["subset"] != "train" or 1 <= row["anomaly"] <= 4 for row in records):
+        raise ValueError("an ineligible scan entered pilot training")
+    result = dict(base, version=PILOT_VERSION, records=records, mapping=normal["mapping"],
+                  split=split, base_manifest=base["sha256"], normal_manifest=normal["sha256"],
+                  targeted_source=str((output / "targeted.json").resolve()))
+    result.pop("sha256")
+    result["sha256"] = identity(result)
+    write_json(output / "train.json", result)
+    counts = {group: sum(row["group"] == group for row in records)
+              for group in ("base", "targeted", "normal_nuscenes", "normal_stu")}
+    print(json.dumps(dict(training_scans=counts, sha256=result["sha256"])), flush=True)
+    return result
 
 
 class Scans:
@@ -518,7 +689,7 @@ class Scans:
         self.records = manifest["records"]
         self.cache_size = cache_size
         self.cache = OrderedDict()
-        self.sequence = STUSequence(manifest["data_root"]) if manifest["kind"] == "train" else None
+        self.sequence = STUSequence(manifest["data_root"]) if "sources" in manifest else None
         if self.sequence is not None:
             for name, expected in (("calib.txt", manifest["calibration_sha256"]),
                                    ("poses.txt", manifest["poses_sha256"])):
@@ -548,7 +719,20 @@ class Scans:
 
     def __getitem__(self, index):
         record = self.records[index]
-        if self.sequence is not None:
+        if record.get("source") == "nuscenes":
+            frame = read_nuscenes(record, self.manifest["mapping"])
+        elif record.get("source") == "normal_stu":
+            frame = self._source(record["frame"])
+        elif record.get("source") == "targeted":
+            original = self._source(record["frame"])
+            with np.load(record["delta"], allow_pickle=False) as delta:
+                if (int(delta["frame"]) != original.frame_id or
+                        str(delta["source_identity"]) != self.sources[original.frame_id]["source_identity"]):
+                    raise ValueError("targeted observation belongs to a different original scan")
+                xyzi, labels = original.xyzi.copy(), original.labels.copy()
+                xyzi[delta["slots"]], labels[delta["slots"]] = delta["xyzi"], delta["labels"]
+            frame = Frame(original.frame_id, xyzi, original.pose, labels)
+        elif self.sequence is not None:
             original = self._source(record["frame"])
             raw = Path(record["delta"]).read_bytes()
             if hashlib.sha256(raw).hexdigest() != record["delta_sha256"]:
@@ -562,7 +746,9 @@ class Scans:
         else:
             frame = read_scan(record["scan"], record["label"], partition=self.manifest["kind"],
                               expected=(record["scan_sha256"], record["label_sha256"]))
-        selected = supervision(frame)
+        selected = supervision(frame, allow_normal=self.manifest["version"] == PILOT_VERSION)
+        if self.manifest["kind"] == "train" and not selected.eligible:
+            raise ValueError("training scan is ineligible under the frame rule")
         observed = (int(frame.actual.sum()), selected.normal_count, selected.anomaly_count, len(frame.xyzi))
         expected = tuple(record[k] for k in ("points", "normal", "anomaly", "slots"))
         if observed != expected:
@@ -574,13 +760,24 @@ class Scans:
 
 def main():
     import argparse
-    parser = argparse.ArgumentParser(description="Rebuild the unchanged F240 data manifests; does not train.")
+    parser = argparse.ArgumentParser(description="Prepare labeled normal sources or mix the pilot training set.")
+    parser.add_argument("operation", choices=("normal", "mix", "legacy"))
+    parser.add_argument("--output", type=Path, default=Path("results/data"))
+    parser.add_argument("--nuscenes-root", type=Path, default=NUSCENES_ROOT)
     parser.add_argument("--data-root", type=Path, default=DATA_ROOT)
     parser.add_argument("--pool-root", type=Path, default=POOL_ROOT)
     parser.add_argument("--train", type=Path, default=Path("assets/train.json"))
     parser.add_argument("--val", type=Path, default=Path("assets/val.json"))
     parser.add_argument("--workers", type=int, default=min(4, len(os.sched_getaffinity(0))))
     args = parser.parse_args()
+    if args.operation == "normal":
+        if (args.output / "normal.json").exists():
+            parser.error("normal sources already exist")
+        make_normal_manifest(args.nuscenes_root, args.output)
+        return
+    if args.operation == "mix":
+        make_pilot_manifest(args.train, args.output)
+        return
     if args.train.exists() or args.val.exists():
         parser.error("manifest already exists; fixed manifests must not be silently replaced")
     train = make_manifest(args.data_root, args.pool_root, args.workers)

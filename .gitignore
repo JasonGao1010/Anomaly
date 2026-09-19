@@ -15,3 +15,10 @@ __pycache__/
 /assets/train.json
 /assets/val.json
 /assets/nuscenes.pth
+/results/data/**
+!/results/data/**/
+!/results/data/**/*.json
+!/results/data/**/*.csv
+!/results/data/**/*.png
+!/results/data/**/*.pdf
+/results/data/train.json
