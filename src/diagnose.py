@@ -1057,14 +1057,23 @@ def mining_result(output):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("collect", "analyze", "gradients", "replay", "cases", "mine", "match", "coverage", "mining-result"))
+    parser.add_argument("action", choices=("collect", "analyze", "gradients", "replay", "cases", "mine", "match", "coverage", "mining-result", "account", "materials", "attribute"))
     parser.add_argument("--output", type=Path, default=OUTPUT)
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--names", nargs="+", default=list(CHECKPOINTS))
     args = parser.parse_args()
     torch.set_num_threads(2)
     torch.set_num_interop_threads(1)
-    if args.action == "collect":
+    if args.action == "attribute":
+        from .attribute import evidence
+        evidence(args.output,args.workers)
+    elif args.action == "materials":
+        from .attribute import materials
+        materials(args.output,args.workers)
+    elif args.action == "account":
+        from .attribute import account
+        account(args.output,args.workers)
+    elif args.action == "collect":
         collect(args.output, args.workers)
     elif args.action == "analyze":
         analyze(args.output, args.names)

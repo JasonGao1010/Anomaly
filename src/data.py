@@ -361,12 +361,12 @@ def identity(value):
                                      ensure_ascii=False, allow_nan=False).encode()).hexdigest()
 
 
-def write_json(path, value):
+def write_json(path, value, *, indent=2):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")
     try:
-        temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2, allow_nan=False) + "\n")
+        temporary.write_text(json.dumps(value, ensure_ascii=False, indent=indent, allow_nan=False) + "\n")
         temporary.replace(path)
     finally:
         temporary.unlink(missing_ok=True)
