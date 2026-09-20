@@ -107,6 +107,29 @@ def test_nuscenes_raw_order_intensity_and_ignored_context(tmp_path):
     assert frame.actual.all() and supervision(frame, allow_normal=True).eligible
 
 
+def test_paired_control_preserves_p1_updates_and_microbatch_positions():
+    records = ([dict(group="base") for _ in range(4000)] +
+               [dict(group=group) for group in ("targeted", "normal_nuscenes", "normal_stu") for _ in range(37)])
+    manifest = dict(records=records)
+    reference = pilot_order(manifest, 0, 500)
+    sampling = dict(base=6, normal_nuscenes=1, normal_stu=1)
+    paired = pilot_order(manifest, 0, 500, sampling=sampling, paired=True)
+    old_base = {i for i in reference if records[i]["group"] == "base"}
+    replacements = []
+    for left, right in zip(effective_batches(reference), effective_batches(paired)):
+        assert [sum(records[i]["group"] == g for i in right) for g in sampling] == [6, 1, 1]
+        for before, after in zip(left, right):
+            if records[before]["group"] == "targeted":
+                assert records[after]["group"] == "base" and after not in old_base
+                replacements.append(after)
+            else:
+                assert before == after
+    assert len(set(replacements)) == len(replacements) == 1000
+    assert paired == pilot_order(manifest, 0, 500, sampling=sampling, paired=True)
+    with pytest.raises(ValueError, match="paired control"):
+        pilot_order(manifest, 0, 500, sampling=sampling, segment=500, paired=True)
+
+
 @pytest.mark.parametrize("sizes", [[(3, 20), (11, 2), (1, 1)], [(0, 5), (0, 3)], [(8, 0)]])
 def test_global_class_weighted_accumulation(sizes):
     torch.manual_seed(7)

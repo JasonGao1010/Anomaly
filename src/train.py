@@ -51,8 +51,22 @@ def effective_batches(order, rank=0, world_size=1):
         yield order[start:start + BATCH_SIZE][rank::world_size]
 
 
-def pilot_order(manifest, seed, updates, *, sampling=None, segment=0):
+def pilot_order(manifest, seed, updates, *, sampling=None, segment=0, paired=False):
     """Source quotas stay fixed; a new segment gets its own reproducible permutation."""
+    if paired:
+        if segment != 0 or sampling != dict(base=6, normal_nuscenes=1, normal_stu=1):
+            raise ValueError("the paired control replaces only P1's two targeted scans")
+        reference = pilot_order(manifest, seed, updates)
+        used_base = {i for i in reference if manifest["records"][i]["group"] == "base"}
+        available = [i for i, row in enumerate(manifest["records"])
+                     if row["group"] == "base" and i not in used_base]
+        if len(available) < 2 * updates:
+            raise ValueError("not enough unused base scans for unique paired replacements")
+        # Keep all six shared scans at their exact P1 update and microbatch positions.
+        rng = np.random.default_rng(np.random.SeedSequence([seed, 611]))
+        replacements = iter(rng.permutation(available)[:2 * updates].tolist())
+        return [next(replacements) if manifest["records"][i]["group"] == "targeted" else i
+                for i in reference]
     sampling = sampling or dict(base=4, targeted=2, normal_nuscenes=1, normal_stu=1)
     if sum(sampling.values()) != BATCH_SIZE or min(sampling.values()) < 1:
         raise ValueError("source quotas must be positive and sum to eight")
@@ -213,13 +227,24 @@ def configuration(train, val, device, world_size, *, updates=None, initial=None,
                 precision=str(precision(device)), sparse_precision="float32", world_size=world_size,
                 code=code_record())
     if updates is not None:
-        sampling = dict(base=4, targeted=2, normal_nuscenes=1, normal_stu=1) if recipe == "mixed" else dict(base=8)
+        sampling = {"mixed": dict(base=4, targeted=2, normal_nuscenes=1, normal_stu=1),
+                    "old": dict(base=8), "paired": dict(base=6, normal_nuscenes=1, normal_stu=1)}[recipe]
         result.update(updates=updates, epochs=None, initial=str(initial.resolve()),
                       initial_sha256=file_sha256(initial), peak_lr=2e-5,
                       samples=sum(row["group"] in sampling for row in train["records"]),
                       sampling=sampling, sampling_segment=segment, recipe=recipe,
                       optimizer_state=optimizer_state, eval_every=eval_every or updates,
                       validation="full_set_at_each_interval; inherited_full_validation_is_step_zero")
+        if recipe == "paired":
+            reference_path = ROOT / "results/train/p1/0/pilot/config.json"
+            reference = json.loads(reference_path.read_text())["configuration"]
+            keys = ("train_manifest", "val_manifest", "initial_sha256", "updates", "batch_size", "microbatch",
+                    "peak_lr", "weight_decay", "adam_betas", "adam_eps", "gradient_clip", "warmup_fraction",
+                    "initial_lr_fraction", "final_lr_fraction", "augmentation", "precision", "world_size")
+            if (optimizer_state != "reset" or segment != 0 or (eval_every or updates) != updates
+                    or any(identity(result[k]) != identity(reference[k]) for k in keys)):
+                raise ValueError("paired comparison must keep P1's initial weights and optimization settings")
+            result["paired_reference"] = str(reference_path)
     return result
 
 
@@ -369,7 +394,13 @@ def train_stage(args, train, val, seed, method, device, config):
     if pilot:
         del parent
         full_order = pilot_order(train, seed, total, sampling=config.get("sampling"),
-                                 segment=config.get("sampling_segment", 0))
+                                 segment=config.get("sampling_segment", 0), paired=config.get("recipe") == "paired")
+        if config.get("recipe") == "paired" and rank == 0:
+            reference = pilot_order(train, seed, total)
+            write_json(directory / "sampling.json", dict(reference=config["paired_reference"],
+                       train_manifest=train["sha256"], preserved_visits=6 * total, replaced_visits=2 * total,
+                       reference_order=reference, order=full_order,
+                       replacement="without replacement from base scans unused by P1 in this segment"))
     for epoch in range(state["epoch"], epochs):
         start = time.perf_counter()
         order = full_order[epoch * steps_per_epoch * BATCH_SIZE:
@@ -516,7 +547,7 @@ def preflight(args, train, val, device, config, resources):
     seed_all(0)
     dataset = PreparedScans(train)
     indices = pilot_order(train, 0, args.updates, sampling=config["sampling"],
-                          segment=config["sampling_segment"])[:BATCH_SIZE]
+                          segment=config["sampling_segment"], paired=config.get("recipe") == "paired")[:BATCH_SIZE]
     parent = torch.load(args.initial, map_location="cpu", weights_only=False)
     model = Segmentor(parent["mode"]).to(device)
     model.load_state_dict(parent["model"], strict=True)
@@ -554,13 +585,13 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--train-manifest", type=Path, default=Path("results/data/train.json"))
     parser.add_argument("--val-manifest", type=Path, default=Path("assets/val.json"))
-    parser.add_argument("--output", type=Path, default=Path("results/train/p2"))
-    parser.add_argument("--initial", type=Path, default=Path("results/train/p1/0/pilot/best.pt"))
-    parser.add_argument("--updates", type=int, default=1500)
+    parser.add_argument("--output", type=Path, default=Path("results/train/paired"))
+    parser.add_argument("--initial", type=Path, default=Path("results/train/r2/0/base/best.pt"))
+    parser.add_argument("--updates", type=int, default=500)
     parser.add_argument("--eval-every", type=int, default=500)
-    parser.add_argument("--recipe", choices=("mixed", "old"), default="mixed")
-    parser.add_argument("--optimizer-state", choices=("inherit", "reset"), default="inherit")
-    parser.add_argument("--sampling-segment", type=int, default=500)
+    parser.add_argument("--recipe", choices=("mixed", "old", "paired"), default="paired")
+    parser.add_argument("--optimizer-state", choices=("inherit", "reset"), default="reset")
+    parser.add_argument("--sampling-segment", type=int, default=0)
     parser.add_argument("--seeds", type=int, nargs="+", choices=(0,), default=[0],
                         help="this pilot uses only seed 0")
     parser.add_argument("--workers", type=int, default=2)
