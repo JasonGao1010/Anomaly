@@ -1,6 +1,7 @@
 """Run a bounded V4 training segment with explicit sampling and validation intervals."""
 
 import argparse
+from collections import Counter
 import gc
 import importlib.metadata
 import json
@@ -19,7 +20,8 @@ import torch.distributed as dist
 from torch import nn
 from torch.utils.data import DataLoader
 
-from .data import VERSION, PILOT_VERSION, CONTINUATION_VERSION, file_sha256, identity, load_manifest, write_json
+from .data import (VERSION, PILOT_VERSION, CONTINUATION_VERSION, file_sha256, identity,
+                   load_manifest, replace_background, write_json)
 from .evaluate import PreparedScans, autocast, better, evaluate, memory_available, precision
 from .model import (POINT_CHUNK, Segmentor, balanced_loss, to_device,
                     LITEPT_COMMIT, WEIGHTS_REVISION, WEIGHTS_SHA256)
@@ -52,8 +54,35 @@ def effective_batches(order, rank=0, world_size=1):
         yield order[start:start + BATCH_SIZE][rank::world_size]
 
 
-def pilot_order(manifest, seed, updates, *, sampling=None, segment=0, paired=False):
+def pilot_order(manifest, seed, updates, *, sampling=None, segment=0, paired=False, background=None):
     """Source quotas stay fixed; a new segment gets its own reproducible permutation."""
+    if background:
+        reference = load_manifest(background["manifest"], "train")
+        saved = json.loads(Path(background["sampling"]).read_text())
+        if saved["train_manifest"] != reference["sha256"] or len(saved["order"]) != updates * BATCH_SIZE:
+            raise ValueError("background reference must be the actual completed training order")
+        indices = {identity(row): i for i, row in enumerate(manifest["records"])
+                   if row["group"] != "normal_nuscenes"}
+        scenes = {}
+        for i, row in enumerate(manifest["records"]):
+            if row["group"] == "normal_nuscenes":
+                scenes.setdefault(row["scene"], []).append(i)
+        if not scenes:
+            raise ValueError("expanded background pool is empty")
+        rng = np.random.default_rng(np.random.SeedSequence([seed, 611, 8]))
+        remaining = {scene: rng.permutation(rows).tolist() for scene, rows in sorted(scenes.items())}
+        draws = []
+        # Each round visits every scene once; frames within a scene are used before reuse.
+        while len(draws) < updates:
+            for scene in rng.permutation(sorted(scenes)):
+                if not remaining[scene]:
+                    remaining[scene] = rng.permutation(scenes[scene]).tolist()
+                draws.append(remaining[scene].pop())
+                if len(draws) == updates:
+                    break
+        replacements = iter(draws)
+        return [next(replacements) if reference["records"][i]["group"] == "normal_nuscenes"
+                else indices[identity(reference["records"][i])] for i in saved["order"]]
     if paired:
         if segment != 0 or sampling != dict(base=6, normal_nuscenes=1, normal_stu=1):
             raise ValueError("the paired control replaces only P1's two targeted scans")
@@ -89,6 +118,17 @@ def pilot_order(manifest, seed, updates, *, sampling=None, segment=0, paired=Fal
         streams.append(draws.reshape(updates, quota))
     batches = np.concatenate(streams, axis=1)
     return np.concatenate([rng.permutation(batch) for batch in batches]).tolist()
+
+
+def source_counts(manifest, order):
+    result = {}
+    for index in order:
+        row = manifest["records"][index]
+        counts = result.setdefault(row["group"], dict(frames=0, normal=0, anomaly=0))
+        counts["frames"] += 1
+        counts["normal"] += row["normal"]
+        counts["anomaly"] += row["anomaly"]
+    return result
 
 
 def lr_factor(step, total):
@@ -234,7 +274,8 @@ def configuration(train, val, device, world_size, *, updates=None, initial=None,
                 code=code_record())
     if updates is not None:
         sampling = {"mixed": dict(base=4, targeted=2, normal_nuscenes=1, normal_stu=1),
-                    "old": dict(base=8), "paired": dict(base=6, normal_nuscenes=1, normal_stu=1)}[recipe]
+                    "old": dict(base=8), "paired": dict(base=6, normal_nuscenes=1, normal_stu=1),
+                    "background": dict(base=6, normal_nuscenes=1, normal_stu=1)}[recipe]
         result.update(updates=updates, epochs=None, initial=str(initial.resolve()),
                       initial_sha256=file_sha256(initial), peak_lr=2e-5,
                       samples=sum(row["group"] in sampling for row in train["records"]),
@@ -253,6 +294,20 @@ def configuration(train, val, device, world_size, *, updates=None, initial=None,
                 raise ValueError("paired runs keep P1's initialization and optimizer settings; validate every 500 updates")
             result["paired_reference"] = str(reference_path)
             result["paired_prefix_updates"] = PAIRED_UPDATES
+        if recipe == "background":
+            reference_dir = ROOT / "results/train/main/0/pilot"
+            reference = json.loads((reference_dir / "config.json").read_text())["configuration"]
+            keys = ("updates", "eval_every", "val_manifest", "initial_sha256", "batch_size", "microbatch",
+                    "peak_lr", "weight_decay", "adam_betas", "adam_eps", "gradient_clip", "warmup_fraction",
+                    "initial_lr_fraction", "final_lr_fraction", "augmentation", "precision", "world_size", "sampling")
+            if (optimizer_state != "reset" or segment != 0
+                    or train["reference_train_manifest"] != reference["train_manifest"]
+                    or any(identity(result[k]) != identity(reference[k]) for k in keys)):
+                raise ValueError("background comparison must preserve the main run's optimization and other sources")
+            result.update(normal_manifest=train["normal_manifest"], normal_path=train["normal_path"],
+                          background_reference=dict(manifest=train["reference_train_path"],
+                                                    sampling=str(reference_dir / "sampling.json")),
+                          reference_sampling_sha256=file_sha256(reference_dir / "sampling.json"))
     return result
 
 
@@ -402,7 +457,8 @@ def train_stage(args, train, val, seed, method, device, config):
     if pilot:
         del parent
         full_order = pilot_order(train, seed, total, sampling=config.get("sampling"),
-                                 segment=config.get("sampling_segment", 0), paired=config.get("recipe") == "paired")
+                                 segment=config.get("sampling_segment", 0), paired=config.get("recipe") == "paired",
+                                 background=config.get("background_reference"))
         if config.get("recipe") == "paired" and rank == 0:
             paired_updates = min(total, PAIRED_UPDATES)
             reference = pilot_order(train, seed, paired_updates)
@@ -412,6 +468,17 @@ def train_stage(args, train, val, seed, method, device, config):
                        reference_order=reference, order=full_order,
                        replacement="without replacement from base scans unused by P1 in the first 500 updates",
                        extension="same-pool 6/1/1 permutations with sampling segment 1" if total > paired_updates else None))
+        if config.get("recipe") == "background" and rank == 0:
+            reference = load_manifest(config["background_reference"]["manifest"], "train")
+            reference_order = json.loads(Path(config["background_reference"]["sampling"]).read_text())["order"]
+            visits = [train["records"][i] for i in full_order if train["records"][i]["group"] == "normal_nuscenes"]
+            write_json(directory / "sampling.json", dict(reference=config["background_reference"],
+                       reference_train_manifest=reference["sha256"], train_manifest=train["sha256"],
+                       preserved_visits=7 * total, replaced_visits=total, reference_order=reference_order,
+                       order=full_order, reference_sources=source_counts(reference, reference_order),
+                       sources=source_counts(train, full_order), scene_visits=dict(Counter(r["scene"] for r in visits)),
+                       distinct_nuscenes_frames=len({r["token"] for r in visits}),
+                       replacement="scene-balanced rounds; use unseen frames within each scene before reuse"))
     for epoch in range(state["epoch"], epochs):
         start = time.perf_counter()
         order = full_order[epoch * steps_per_epoch * BATCH_SIZE:
@@ -524,6 +591,7 @@ def train_stage(args, train, val, seed, method, device, config):
             state.update(best_metrics=result["metrics"], best_epoch=epoch + 1)
         report = dict(epoch=epoch + 1, mean_batch_loss=state["epoch_loss"] / len(batches),
                       frames=state["epoch_frames"], class_points=state["epoch_points"],
+                      source_points=source_counts(train, order) if pilot else None,
                       planned_updates=state["planned_updates"], successful_updates=state["successful_updates"],
                       overflows=state["overflows"], validation=result, selected=selected,
                       seconds=time.perf_counter() - start, peak_vram_bytes=torch.cuda.max_memory_allocated(device))
@@ -558,7 +626,8 @@ def preflight(args, train, val, device, config, resources):
     seed_all(0)
     dataset = PreparedScans(train)
     indices = pilot_order(train, 0, args.updates, sampling=config["sampling"],
-                          segment=config["sampling_segment"], paired=config.get("recipe") == "paired")[:BATCH_SIZE]
+                          segment=config["sampling_segment"], paired=config.get("recipe") == "paired",
+                          background=config.get("background_reference"))[:BATCH_SIZE]
     parent = torch.load(args.initial, map_location="cpu", weights_only=False)
     model = Segmentor(parent["mode"]).to(device)
     model.load_state_dict(parent["model"], strict=True)
@@ -596,11 +665,12 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--train-manifest", type=Path, default=Path("results/data/train.json"))
     parser.add_argument("--val-manifest", type=Path, default=Path("assets/val.json"))
+    parser.add_argument("--normal-manifest", type=Path)
     parser.add_argument("--output", type=Path, default=Path("results/train/main"))
     parser.add_argument("--initial", type=Path, default=Path("results/train/r2/0/base/best.pt"))
     parser.add_argument("--updates", type=int, default=2000)
     parser.add_argument("--eval-every", type=int, default=500)
-    parser.add_argument("--recipe", choices=("mixed", "old", "paired"), default="paired")
+    parser.add_argument("--recipe", choices=("mixed", "old", "paired", "background"), default="paired")
     parser.add_argument("--optimizer-state", choices=("inherit", "reset"), default="reset")
     parser.add_argument("--sampling-segment", type=int, default=0)
     parser.add_argument("--seeds", type=int, nargs="+", choices=(0,), default=[0],
@@ -627,6 +697,10 @@ def main():
     if world_size > BATCH_SIZE:
         parser.error("at most eight GPUs for effective batch eight")
     train, val = load_manifest(args.train_manifest, "train"), load_manifest(args.val_manifest, "val")
+    if (args.recipe == "background") != bool(args.normal_manifest):
+        parser.error("background comparison requires --normal-manifest and no other recipe accepts it")
+    if args.normal_manifest:
+        train = replace_background(train, args.normal_manifest, args.train_manifest)
     if train["version"] != PILOT_VERSION:
         parser.error("the pilot requires the new mixed training manifest")
     config = configuration(train, val, device, world_size, updates=args.updates, initial=args.initial,

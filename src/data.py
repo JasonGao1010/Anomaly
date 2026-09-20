@@ -553,7 +553,21 @@ def read_nuscenes(record, mapping):
     return Frame(record["frame"], xyzi, np.eye(4), truth, sequence_id=0, partition="train")
 
 
-def make_normal_manifest(root, output, *, scenes=16, check_scenes=4, seed=2064):
+def _census_normal(task):
+    record, mapping = task
+    try:
+        frame = read_nuscenes(record, mapping)
+        target = point_targets(frame)
+        record = dict(record, points=int(frame.actual.sum()), slots=len(frame.xyzi),
+                      normal=int((target == 0).sum()), anomaly=int((target == 1).sum()))
+        if record["anomaly"] or not record["normal"]:
+            raise ValueError("normal nuScenes scan has inconsistent supervision")
+        return record, None
+    except (OSError, ValueError) as error:
+        return None, dict(record, error=f"{type(error).__name__}: {error}")
+
+
+def make_normal_manifest(root, output, *, scenes=16, check_scenes=4, seed=2064, expanded=False, workers=4):
     """Select official train scenes before reading labels; hold out whole logs."""
     import ast
     import urllib.request
@@ -591,17 +605,37 @@ def make_normal_manifest(root, output, *, scenes=16, check_scenes=4, seed=2064):
                  geometry_train=[f"proxy-{i:03d}" for i in range(12)],
                  geometry_check=[f"proxy-{i:03d}" for i in range(12, 15)],
                  excluded_stu=[201], stu_train=[206])
-    write_json(output / "split.json", split)
+    reference = load_manifest(output / "normal.json", "normal") if expanded else None
+    if expanded:
+        original = reference["split"]
+        blocked = {original["logs"][name] for name in original["check"]}
+        by_name = {row["name"]: row for row in scene_rows}
+        if any(by_name[name]["log_token"] != original["logs"][name] for name in original["check"]):
+            raise ValueError("internal check scene/log identity changed")
+        excluded = sorted(row["name"] for row in scene_rows
+                          if row["name"] in official and row["log_token"] in blocked)
+        selected = sorted((row for row in scene_rows if row["name"] in official
+                           and row["log_token"] not in blocked), key=lambda row: row["name"])
+        split = dict(original, official_source=url, source_sha256=hashlib.sha256(split_source).hexdigest(),
+                     train=[row["name"] for row in selected],
+                     logs={**{name: original["logs"][name] for name in original["check"]},
+                           **{row["name"]: row["log_token"] for row in selected}},
+                     excluded_logs=sorted(blocked), excluded_scenes=excluded)
+    else:
+        write_json(output / "split.json", split)
     mapping = nuscenes_mapping(root)
-    write_json(output / "labels.json", dict(
-        unified={"0": "忽略", "1": "正常", "2": "合成异常代理"},
-        nuscenes=mapping,
-        stu=[dict(raw=k, name=v, target=0 if k == 0 else 2 if k == 2 else 1)
-             for k, v in LABELS.items()],
-        intensity={"STU": "原始值", "nuScenes": "原始强度除以固定常数255"},
-        train_frames="可信正常且有有效监督，或2.5–50米内异常总数不少于5；1–4跳过",
-        evaluation="固定官方实现；异常总数少于5均跳过，包括零异常帧",
-        category_source=str(root / "lidarseg/category.json")))
+    if expanded and mapping != reference["mapping"]:
+        raise ValueError("background expansion must preserve the verified label mapping")
+    if not expanded:
+        write_json(output / "labels.json", dict(
+            unified={"0": "忽略", "1": "正常", "2": "合成异常代理"},
+            nuscenes=mapping,
+            stu=[dict(raw=k, name=v, target=0 if k == 0 else 2 if k == 2 else 1)
+                 for k, v in LABELS.items()],
+            intensity={"STU": "原始值", "nuScenes": "原始强度除以固定常数255"},
+            train_frames="可信正常且有有效监督，或2.5–50米内异常总数不少于5；1–4跳过",
+            evaluation="固定官方实现；异常总数少于5均跳过，包括零异常帧",
+            category_source=str(root / "lidarseg/category.json")))
     tokens = {row["token"]: row["name"] for row in selected}
     samples = {row["token"]: tokens[row["scene_token"]]
                for row in json.loads((root / "v1.0-trainval/sample.json").read_text())
@@ -620,22 +654,71 @@ def make_normal_manifest(root, output, *, scenes=16, check_scenes=4, seed=2064):
                           label=str(root / labels[row["token"]]),
                           subset="train" if scene in split["train"] else "check",
                           group="normal_nuscenes")
-            frame = read_nuscenes(record, mapping)
-            target = point_targets(frame)
-            record.update(points=int(frame.actual.sum()), slots=len(frame.xyzi),
-                          normal=int((target == 0).sum()), anomaly=int((target == 1).sum()))
-            if record["anomaly"] or not record["normal"]:
-                raise ValueError("normal nuScenes scan has inconsistent supervision")
+            if expanded:
+                record.update(timestamp=int(row["timestamp"]), sample_token=row["sample_token"],
+                              log_token=split["logs"][scene])
             records.append(record)
     counts = {row["name"]: sum(r["scene"] == row["name"] for r in records) for row in selected}
     if any(counts[row["name"]] != row["nbr_samples"] for row in selected):
         raise ValueError("selected scenes have missing labeled keyframes")
+    if expanded:
+        chosen = []
+        for scene in split["train"]:
+            rows = sorted((r for r in records if r["scene"] == scene), key=lambda r: r["timestamp"])
+            # Select temporal coverage before examining labels or model scores.
+            indices = np.rint(np.linspace(0, len(rows) - 1, min(8, len(rows)))).astype(int)
+            chosen.extend(rows[i] for i in indices)
+        records = chosen
+    candidate_count = len(records)
+    valid, skipped = [], []
+    with ProcessPoolExecutor(max_workers=workers) as executor:
+        for number, (record, error) in enumerate(executor.map(
+                _census_normal, ((row, mapping) for row in records), chunksize=16), 1):
+            if error:
+                if not expanded:
+                    raise ValueError(error)
+                skipped.append(error)
+            else:
+                valid.append(record)
+            if number % 500 == 0 or number == candidate_count:
+                print(f"normal census {number}/{candidate_count}: valid={len(valid)} skipped={len(skipped)}", flush=True)
+    records = valid
+    counts = {row["name"]: sum(r["scene"] == row["name"] for r in records) for row in selected}
     result = dict(version=PILOT_VERSION, kind="normal", mapping=mapping,
                   split=split, records=records, scene_counts=counts,
                   source=json.loads((root / "lidarseg/source.json").read_text()))
+    if expanded:
+        result.update(reference_manifest=reference["sha256"], selection=dict(
+            official_train_scenes=len(official), excluded_scenes=len(excluded),
+            candidate_scenes=len(selected), available_scenes=sum(n > 0 for n in counts.values()),
+            available_logs=len({r["log_token"] for r in records}), frames_per_scene=8,
+            method="rounded linspace over chronological native keyframes, including endpoints",
+            candidate_frames=candidate_count, valid_frames=len(records), skipped=skipped,
+            normal_points=sum(r["normal"] for r in records)))
     result["sha256"] = identity(result)
-    write_json(output / "normal.json", result)
-    print(json.dumps(dict(normal_scans=len(records), scenes=counts)), flush=True)
+    write_json(output / ("background.json" if expanded else "normal.json"), result)
+    print(json.dumps(dict(normal_scans=len(records), scenes=sum(n > 0 for n in counts.values()),
+                          selection=result.get("selection"))), flush=True)
+    return result
+
+
+def replace_background(train, normal_path, reference_path):
+    """Replace only native nuScenes records; retain every other record verbatim."""
+    normal = load_manifest(normal_path, "normal")
+    blocked = {train["split"]["logs"][name] for name in train["split"]["check"]}
+    rows = normal["records"]
+    if (normal["mapping"] != train["mapping"] or normal["reference_manifest"] != train["normal_manifest"]
+            or set(normal["split"]["excluded_logs"]) != blocked
+            or normal["split"]["check"] != train["split"]["check"]
+            or len({r["token"] for r in rows}) != len(rows)
+            or any(r["log_token"] in blocked or r["subset"] != "train" or r["source"] != "nuscenes"
+                   or r["group"] != "normal_nuscenes" or r["anomaly"] or r["normal"] <= 0 for r in rows)):
+        raise ValueError("expanded normal sources violate label or held-out-log boundaries")
+    result = dict(train, records=[r for r in train["records"] if r["group"] != "normal_nuscenes"] + rows,
+                  split=normal["split"], normal_manifest=normal["sha256"], normal_path=str(Path(normal_path).resolve()),
+                  reference_train_manifest=train["sha256"], reference_train_path=str(Path(reference_path).resolve()))
+    result.pop("sha256")
+    result["sha256"] = identity(result)
     return result
 
 
@@ -762,7 +845,7 @@ class Scans:
 def main():
     import argparse
     parser = argparse.ArgumentParser(description="Prepare labeled normal sources or mix the pilot training set.")
-    parser.add_argument("operation", choices=("normal", "mix", "legacy"))
+    parser.add_argument("operation", choices=("normal", "expand", "mix", "legacy"))
     parser.add_argument("--output", type=Path, default=Path("results/data"))
     parser.add_argument("--nuscenes-root", type=Path, default=NUSCENES_ROOT)
     parser.add_argument("--data-root", type=Path, default=DATA_ROOT)
@@ -771,10 +854,10 @@ def main():
     parser.add_argument("--val", type=Path, default=Path("assets/val.json"))
     parser.add_argument("--workers", type=int, default=min(4, len(os.sched_getaffinity(0))))
     args = parser.parse_args()
-    if args.operation == "normal":
-        if (args.output / "normal.json").exists():
+    if args.operation in ("normal", "expand"):
+        if (args.output / ("background.json" if args.operation == "expand" else "normal.json")).exists():
             parser.error("normal sources already exist")
-        make_normal_manifest(args.nuscenes_root, args.output)
+        make_normal_manifest(args.nuscenes_root, args.output, expanded=args.operation == "expand", workers=args.workers)
         return
     if args.operation == "mix":
         make_pilot_manifest(args.train, args.output)

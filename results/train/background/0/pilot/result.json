@@ -1,0 +1,29 @@
+{
+  "version": "AJAE-V4-P2",
+  "seed": 0,
+  "method": "pilot",
+  "complete": true,
+  "epochs": null,
+  "updates": 2000,
+  "best_epoch": 4,
+  "best_metrics": {
+    "AP": 68.65256308095412,
+    "FPR95": 0.5738783349012477,
+    "AUROC": 99.84052401500311,
+    "threshold": -10.6875
+  },
+  "best_update": 2000,
+  "final_metrics": {
+    "AP": 68.65256308095412,
+    "FPR95": 0.5738783349012477,
+    "AUROC": 99.84052401500311,
+    "threshold": -10.6875
+  },
+  "planned_updates": 2000,
+  "successful_updates": 2000,
+  "overflows": 0,
+  "parameters": 12743201,
+  "train_manifest_sha256": "3bb6c2d65dd8c25c3e1b43c8b1a68c13e1795b34df1f3d176726d8a8ff74e0ca",
+  "val_manifest_sha256": "918524fd271f896bf9288ebfe4131941a20cbd00a0925e91c8ccedf4d7574855",
+  "validation_improved_from_epoch0": true
+}

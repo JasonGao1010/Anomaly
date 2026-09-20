@@ -136,6 +136,48 @@ def test_paired_control_preserves_p1_updates_and_microbatch_positions():
         pilot_order(manifest, 0, 500, sampling=sampling, segment=500, paired=True)
 
 
+def test_background_replacement_preserves_positions_and_excludes_check_logs(tmp_path):
+    from collections import Counter
+    from src.data import PILOT_VERSION, identity, replace_background
+    records = [dict(group=g, frame=i, normal=7, anomaly=5 if g == "base" else 0)
+               for g, size in (("base", 18), ("normal_nuscenes", 5), ("normal_stu", 3))
+               for i in range(size)]
+    reference = dict(version=PILOT_VERSION, kind="train", records=records, mapping=[],
+                     normal_manifest="original-normal", split=dict(check=["hold"], logs={"hold": "blocked"}))
+    reference["sha256"] = identity(reference)
+    reference_path = tmp_path / "train.json"
+    reference_path.write_text(json.dumps(reference))
+    order = []
+    for step in range(31):
+        batch = [(step * 6 + i) % 18 for i in range(6)] + [23 + step % 3]
+        batch.insert(step % 8, 18 + step % 5)
+        order.extend(batch)
+    sampling_path = tmp_path / "sampling.json"
+    sampling_path.write_text(json.dumps(dict(train_manifest=reference["sha256"], order=order)))
+    rows = [dict(source="nuscenes", group="normal_nuscenes", subset="train", normal=10, anomaly=0,
+                 scene=f"scene-{scene}", token=f"{scene}-{frame}", log_token=f"log-{scene}")
+            for scene in range(11) for frame in range(8)]
+    normal = dict(version=PILOT_VERSION, kind="normal", mapping=[], reference_manifest="original-normal",
+                  records=rows, split=dict(check=["hold"], excluded_logs=["blocked"]))
+    normal_path = tmp_path / "normal.json"
+    normal_path.write_text(json.dumps(dict(normal, sha256=identity(normal))))
+    expanded = replace_background(reference, normal_path, reference_path)
+    actual = pilot_order(expanded, 0, 31, background=dict(manifest=reference_path, sampling=sampling_path))
+    replacements = []
+    for before, after in zip(order, actual):
+        if records[before]["group"] == "normal_nuscenes":
+            replacements.append(expanded["records"][after])
+        else:
+            assert records[before] == expanded["records"][after]
+    counts = Counter(r["scene"] for r in replacements)
+    assert len(replacements) == len({r["token"] for r in replacements}) == 31
+    assert len(counts) == 11 and max(counts.values()) - min(counts.values()) == 1
+    rows[0]["log_token"] = "blocked"
+    normal_path.write_text(json.dumps(dict(normal, sha256=identity(normal))))
+    with pytest.raises(ValueError, match="held-out-log"):
+        replace_background(reference, normal_path, reference_path)
+
+
 @pytest.mark.parametrize("sizes", [[(3, 20), (11, 2), (1, 1)], [(0, 5), (0, 3)], [(8, 0)]])
 def test_global_class_weighted_accumulation(sizes):
     torch.manual_seed(7)
