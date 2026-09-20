@@ -11,6 +11,9 @@ __pycache__/
 !/results/train/**/diagnostics/**/*.png
 !/results/train/**/diagnostics/**/*.pdf
 !/results/train/**/diagnostics/**/*.py
+!/results/train/**/errors/**/*.csv
+!/results/train/**/errors/**/*.png
+!/results/train/**/errors/**/*.pdf
 /results/preflight/
 /assets/train.json
 /assets/val.json

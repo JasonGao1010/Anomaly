@@ -504,7 +504,8 @@ class _ToyScans:
         return dict(xyzi=x, targets=torch.tensor([0] * normal + [1] * anomaly))
 
 
-def test_native_branch_restores_moments_rng_sampling_and_remaining_schedule(tmp_path, monkeypatch):
+@pytest.mark.parametrize("start_update", [500, 1000])
+def test_native_branch_restores_moments_rng_sampling_and_remaining_schedule(tmp_path, monkeypatch, start_update):
     import copy
     import src.train as training
     from src.data import NATIVE_VERSION, file_sha256
@@ -524,27 +525,28 @@ def test_native_branch_restores_moments_rng_sampling_and_remaining_schedule(tmp_
     sum(p.square().sum() for p in model.parameters()).backward()
     optimizer.step()
     for state in optimizer.state.values():
-        state["step"].fill_(500)
+        state["step"].fill_(start_update)
     metrics = dict(AP=75., FPR95=.2, AUROC=99.9)
     parent = dict(model=copy.deepcopy(model.state_dict()), optimizer=copy.deepcopy(optimizer.state_dict()),
                   scaler={}, rng=[training.rng_state(device)],
                   validation=dict(metrics=metrics, manifest_sha256="fixture-val"))
     initial = tmp_path / "best.pt"
     torch.save(parent, initial)
-    config = dict(version=NATIVE_VERSION, updates=1000, schedule_updates=1547, start_update=500,
-                  eval_every=500, epochs=None, microbatch=2, branch="lr", recipe="native", objective="metrics",
+    config = dict(version=NATIVE_VERSION, updates=start_update+500, schedule_updates=1547, start_update=start_update,
+                  eval_every=500, epochs=None, microbatch=2, branch="lr" if start_update==500 else "control", recipe="native", objective="metrics",
                   loss=dict(auc_weight=.1, fpr95_weight=.1), lr_scale=.3,
                   reference_sampling=str(sampling), initial_sha256=file_sha256(initial))
     optimizer.zero_grad(set_to_none=True)
     counts = torch.tensor([40,40], dtype=torch.int64)
     dataset = _ToyScans(manifest)
+    offset = start_update*8
     for k in range(4):
-        loss,_ = training.forward_loss(model,[dataset[i] for i in order[4000+k*2:4002+k*2]],counts,
-                                       rank_weight=.25,rank_seed=501*8+k)
+        loss,_ = training.forward_loss(model,[dataset[i] for i in order[offset+k*2:offset+2+k*2]],counts,
+                                       rank_weight=.25,rank_seed=(start_update+1)*8+k)
         loss.backward()
     torch.nn.utils.clip_grad_norm_(model.parameters(),1.)
     for group in optimizer.param_groups:
-        group["lr"] = group["peak_lr"] * lr_factor(501,1547) * .3
+        group["lr"] = group["peak_lr"] * lr_factor(start_update+1,1547) * .3
     optimizer.step()
     expected_rng = training.rng_state(device)
     args = SimpleNamespace(output=tmp_path / "branch", initial=initial, resume=False, workers=0,
@@ -552,12 +554,27 @@ def test_native_branch_restores_moments_rng_sampling_and_remaining_schedule(tmp_
     monkeypatch.setattr(training, "STOP", True)
     assert not training.train_stage(args,manifest,dict(sha256="fixture-val"),0,"conditional",device,config)
     saved = torch.load(args.output / "0/conditional/last.pt",weights_only=False)
-    assert saved["planned_updates"] == saved["successful_updates"] == 501
-    assert all(int(s["step"])==501 for s in saved["optimizer"]["state"].values())
+    assert saved["planned_updates"] == saved["successful_updates"] == start_update+1
+    assert all(int(s["step"])==start_update+1 for s in saved["optimizer"]["state"].values())
     assert saved["best_metrics"] == metrics and saved["epoch_frames"] == 8
     assert torch.equal(saved["rng"][0]["torch"],expected_rng["torch"])
     for name,value in model.state_dict().items():
         torch.testing.assert_close(value,saved["model"][name],rtol=0,atol=0)
+
+
+def test_hard_sampling_preserves_six_positions_sources_and_prefix():
+    from src.train import hard_order
+    groups = ("normal_nuscenes","anomaly_nuscenes","normal_stu","anomaly_stu")
+    manifest = dict(records=[dict(group=groups[i%4]) for i in range(128)])
+    pool = dict(groups={g:[i for i in range(128) if groups[i%4]==g] for g in groups})
+    original = np.random.default_rng(29).permutation(128).tolist()
+    changed = hard_order(original,manifest,pool,2,14)
+    assert changed[:16]==original[:16] and changed[112:]==original[112:]
+    for start in range(16,112,8):
+        assert sum(a!=b for a,b in zip(original[start:start+8],changed[start:start+8]))==2
+        assert len(set(changed[start:start+8]))==8
+        assert [manifest['records'][i]['group'] for i in changed[start:start+8]]==[manifest['records'][i]['group'] for i in original[start:start+8]]
+    assert changed==hard_order(original,manifest,pool,2,14)
 
 
 def test_pilot_budget_single_validation_and_resume(tmp_path, monkeypatch):

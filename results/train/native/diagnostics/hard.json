@@ -1,0 +1,59 @@
+{
+  "checkpoint": "results/train/native/mining/hard/0/conditional/last.pt",
+  "checkpoint_sha256": "f0a9117c8008f5ee889f1818088a4f3ab8d45eeefe95921e54ef3e873a1b6e83",
+  "update": 1500,
+  "splits": {
+    "val": {
+      "metrics": {
+        "AP": 73.94484954774484,
+        "FPR95": 0.1690633284151856,
+        "AUROC": 99.94724609278839,
+        "threshold": -0.96875
+      },
+      "scans": 1960,
+      "points": 193879969,
+      "seconds": 185.67176884799846,
+      "manifest_sha256": "918524fd271f896bf9288ebfe4131941a20cbd00a0925e91c8ccedf4d7574855",
+      "official_commit": "8f0f09c2ca4bf7b665e0ae5919b4092ddae140a2"
+    }
+  },
+  "training": {
+    "version": "AJAE-V4-N1",
+    "seed": 0,
+    "method": "conditional",
+    "complete": true,
+    "epochs": null,
+    "updates": 1500,
+    "best_epoch": 2,
+    "best_metrics": {
+      "AP": 76.25949290150298,
+      "FPR95": 0.13001795167789543,
+      "AUROC": 99.95131297463408,
+      "threshold": -1.328125
+    },
+    "best_update": 1000,
+    "final_metrics": {
+      "AP": 73.94484954774484,
+      "FPR95": 0.1690633284151856,
+      "AUROC": 99.94724609278839,
+      "threshold": -0.96875
+    },
+    "objective": "metrics",
+    "branch": "hard",
+    "start_update": 1000,
+    "additional_updates": 500,
+    "gradient_steps": 500,
+    "clipped_steps": 140,
+    "gradient_norm_sum": 609.2329060770571,
+    "gradient_norm_max": 22.368497848510742,
+    "training_seconds": 570.9540644188528,
+    "validation_seconds": 185.67760032200022,
+    "planned_updates": 1500,
+    "successful_updates": 1500,
+    "overflows": 0,
+    "parameters": 12880513,
+    "train_manifest_sha256": "e3c32d0b83ffb9eda2e095ffddd08828509e97d1d34509805dd2584951b2b3c6",
+    "val_manifest_sha256": "918524fd271f896bf9288ebfe4131941a20cbd00a0925e91c8ccedf4d7574855",
+    "validation_improved_from_epoch0": null
+  }
+}

@@ -2,7 +2,7 @@
 
 import argparse
 import copy
-from collections import Counter
+from collections import Counter, defaultdict
 import gc
 import importlib.metadata
 import json
@@ -286,24 +286,33 @@ def code_record():
 
 
 def configuration(train, val, device, world_size, *, updates=None, initial=None,
-                  eval_every=None, recipe="mixed", optimizer_state="reset", segment=0, objective="bce", branch=None):
+                  eval_every=None, recipe="mixed", optimizer_state="reset", segment=0, objective="bce", branch=None,
+                  hard_pool=None):
     if branch:
         parent = torch.load(initial, map_location="cpu", weights_only=False)
         previous = parent["config"]
+        mining = branch in ("control", "hard")
+        start_update = 1000 if mining else 500
         if (recipe != "native" or objective != "metrics" or updates != 500 or eval_every != 500
-                or world_size != 1 or parent["successful_updates"] != 500 or parent["planned_updates"] != 500
-                or parent["next_batch"] != 0 or parent["epoch"] != 1 or not parent["complete"]
+                or world_size != 1 or parent["successful_updates"] != start_update or parent["planned_updates"] != start_update
+                or parent["next_batch"] != 0 or parent["epoch"] != start_update // 500 or not parent["complete"]
                 or previous["train_manifest"] != train["sha256"] or previous["val_manifest"] != val["sha256"]
                 or previous["recipe"] != "native" or previous["objective"] != "metrics"
-                or {int(s["step"]) for s in parent["optimizer"]["state"].values()} != {500}):
-            raise ValueError("diagnostic branches require the complete native metric state at update 500")
+                or {int(s["step"]) for s in parent["optimizer"]["state"].values()} != {start_update}
+                or (mining and (previous.get("branch") != "lr" or previous.get("lr_scale") != .3))):
+            raise ValueError("diagnostic branch requires its specified complete parent training state")
         result = copy.deepcopy(previous)
         result.update(code=code_record(), initial=str(initial.resolve()), initial_sha256=file_sha256(initial),
-                      parent_configuration=identity(previous), branch=branch, start_update=500,
-                      updates=1000, additional_updates=500, schedule_updates=previous["updates"],
-                      epochs=None, scan_visits=4000, optimizer_state="inherit", lr_scale=.3 if branch == "lr" else 1.,
-                      validation="inherited update 500 plus one full validation at update 1000",
+                      parent_configuration=identity(previous), branch=branch, start_update=start_update,
+                      updates=start_update+500, additional_updates=500, schedule_updates=previous.get("schedule_updates",previous["updates"]),
+                      epochs=None, scan_visits=4000, optimizer_state="inherit", lr_scale=.3 if mining or branch == "lr" else 1.,
+                      validation=f"inherited update {start_update} plus one full validation at update {start_update+500}",
                       reference_sampling=str(initial.parent / "sampling.json"))
+        if mining:
+            pool = json.loads(Path(hard_pool).read_text())
+            if pool["train_manifest"] != train["sha256"] or pool["checkpoint_sha256"] != result["initial_sha256"]:
+                raise ValueError("hard pool must be scored by the same C checkpoint on the current training manifest")
+            result.update(hard_pool=str(Path(hard_pool).resolve()),hard_pool_sha256=file_sha256(hard_pool))
         if branch == "ap":
             result["loss"].update(auc_weight=0., fpr95_weight=0.)
         return result
@@ -373,6 +382,31 @@ def configuration(train, val, device, world_size, *, updates=None, initial=None,
                           background_reference=dict(manifest=train["reference_train_path"],
                                                     sampling=str(reference_dir / "sampling.json")),
                           reference_sampling_sha256=file_sha256(reference_dir / "sampling.json"))
+    return result
+
+
+def hard_order(order, train, pool, start_update, updates):
+    """Replace exactly one rotating pair per batch; keep source/type and six positions."""
+    rng = np.random.default_rng(0)
+    queues, used = {}, defaultdict(int)
+    for group,indices in pool["groups"].items():
+        if not indices or len(indices)!=len(set(indices)) or any(train["records"][i]["group"]!=group for i in indices):
+            raise ValueError("invalid training-only hard pool")
+        queues[group] = rng.permutation(indices).tolist()
+    result = list(order)
+    for step in range(start_update,updates):
+        batch = order[step*BATCH_SIZE:(step+1)*BATCH_SIZE]
+        for offset in ((step-start_update)%4*2, (step-start_update)%4*2+1):
+            group = train["records"][batch[offset]]["group"]
+            candidates = queues[group]
+            # Avoid unchanged replacements and duplicate scans within the same batch.
+            for _ in range(len(candidates)):
+                chosen = candidates[used[group]%len(candidates)]
+                used[group] += 1
+                if chosen not in result[step*BATCH_SIZE:(step+1)*BATCH_SIZE]:break
+            else:
+                raise ValueError("hard pool too small to provide distinct replacements")
+            result[step*BATCH_SIZE+offset] = chosen
     return result
 
 
@@ -466,8 +500,8 @@ def train_stage(args, train, val, seed, method, device, config):
     elif branch:
         model.load_state_dict(parent["model"], strict=True)
         load_record = dict(parent=str(args.initial), parent_sha256=config["initial_sha256"],
-                           inherited_full_validation=parent["validation"], inherited_optimizer_updates=500,
-                           inherited_rng=True, inherited_sampling_offset=4000)
+                           inherited_full_validation=parent["validation"], inherited_optimizer_updates=config["start_update"],
+                           inherited_rng=True, inherited_sampling_offset=config["start_update"]*BATCH_SIZE)
     elif stage == 1:
         load_record = model.load_pretrained(args.initial if native else args.weights)
     elif pilot:
@@ -517,14 +551,15 @@ def train_stage(args, train, val, seed, method, device, config):
         if branch:
             optimizer.load_state_dict(parent["optimizer"])
             scaler.load_state_dict(parent["scaler"])
-            state.update(epoch=1, planned_updates=500, successful_updates=500,
-                         best_epoch=1, best_metrics=parent["validation"]["metrics"])
+            start_update = config["start_update"]
+            state.update(epoch=start_update//steps_per_epoch, planned_updates=start_update, successful_updates=start_update,
+                         best_epoch=start_update//steps_per_epoch, best_metrics=parent["validation"]["metrics"])
             restore_rng(parent["rng"][rank], device)
             saved = capture(model, optimizer, scaler, state, config, device,
                             selected=True, validation=parent["validation"])
             if rank == 0:
                 atomic_save(best_path, saved)
-                write_json(directory / "epoch1.json", dict(inherited=True, **parent["validation"]))
+                write_json(directory / f"epoch{state['epoch']}.json", dict(inherited=True, **parent["validation"]))
             del saved
         elif pilot and config.get("optimizer_state") == "inherit":
             if (parent["config"]["world_size"] != world_size or parent["config"]["sampling"] != config["sampling"]
@@ -552,13 +587,20 @@ def train_stage(args, train, val, seed, method, device, config):
         full_order = pilot_order(train, seed, schedule_total, sampling=config.get("sampling"),
                                  segment=config.get("sampling_segment", 0), paired=config.get("recipe") == "paired",
                                  background=config.get("background_reference"))
+        if branch and full_order != json.loads(Path(config["reference_sampling"]).read_text())["order"]:
+            raise ValueError("branch scan order differs from the original recorded stream")
+        reference_order = full_order
+        if branch == "hard":
+            if file_sha256(config["hard_pool"]) != config["hard_pool_sha256"]:
+                raise ValueError("hard pool changed after configuration")
+            full_order = hard_order(full_order,train,json.loads(Path(config["hard_pool"]).read_text()),
+                                    config["start_update"],total)
         if native and rank == 0:
-            if branch and full_order != json.loads(Path(config["reference_sampling"]).read_text())["order"]:
-                raise ValueError("branch scan order differs from the original recorded stream")
             executed = full_order[config.get("start_update", 0) * BATCH_SIZE:total * BATCH_SIZE]
             write_json(directory / "sampling.json", dict(train_manifest=train["sha256"], order=full_order,
                 sources=source_counts(train, executed), distinct_records=len(set(executed)),
                 executed_order=executed, start_update=config.get("start_update", 0),
+                replaced_visits=sum(a!=b for a,b in zip(reference_order,full_order)),
                 passes=None if branch else 2, scans_per_pass=len(train["records"]), visits=len(executed)))
         if config.get("recipe") == "paired" and rank == 0:
             paired_updates = min(total, PAIRED_UPDATES)
@@ -816,7 +858,8 @@ def main():
     parser.add_argument("--eval-every", type=int, default=500)
     parser.add_argument("--recipe", choices=("mixed", "old", "paired", "background", "native"), default="paired")
     parser.add_argument("--objective", choices=("bce", "metrics"), default="bce")
-    parser.add_argument("--branch", choices=("replay", "ap", "lr"))
+    parser.add_argument("--branch", choices=("replay", "ap", "lr", "control", "hard"))
+    parser.add_argument("--hard-pool", type=Path)
     parser.add_argument("--score-path", type=Path, help="export exact endpoint validation scores in official point order")
     parser.add_argument("--optimizer-state", choices=("inherit", "reset"), default="reset")
     parser.add_argument("--sampling-segment", type=int, default=0)
@@ -852,6 +895,8 @@ def main():
         parser.error("training requires a mixed or native two-domain manifest")
     if args.branch and (args.recipe != "native" or args.check):
         parser.error("diagnostic branches require native training, not preflight")
+    if bool(args.hard_pool) != (args.branch in ("control","hard")):
+        parser.error("control/hard branches require the C-scored hard pool")
     if args.recipe == "native" and not args.branch:
         args.updates = math.ceil(2 * len(train["records"]) / BATCH_SIZE)
     elif args.recipe != "native" and args.objective != "bce":
@@ -859,7 +904,7 @@ def main():
     config = configuration(train, val, device, world_size, updates=args.updates, initial=args.initial,
                            eval_every=args.eval_every, recipe=args.recipe,
                            optimizer_state=args.optimizer_state, segment=args.sampling_segment,
-                           objective=args.objective, branch=args.branch)
+                           objective=args.objective, branch=args.branch, hard_pool=args.hard_pool)
     resources = runtime_snapshot() if rank == 0 else None
     if args.workers * world_size + args.threads * world_size > len(os.sched_getaffinity(0)):
         parser.error("worker and BLAS thread counts exceed the available CPU affinity")

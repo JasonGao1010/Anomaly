@@ -2,6 +2,7 @@
 
 import argparse
 from collections import defaultdict
+from concurrent.futures import ProcessPoolExecutor
 import csv
 import gc
 import json
@@ -28,11 +29,12 @@ RECALLS = (.5, .75, .9, .95, .99)
 RECALL_BINS = (0., .25, .5, .75, .9, .95, .99, 1.)
 META = np.dtype([("target", "u1"), ("slot", "u4"), ("semantic", "u2"),
                  ("instance", "u2"), ("range", "f4")])
+BEST_C = ROOT / "branches/lr/0/conditional/best.pt"
 
 
 def write_csv(path, rows):
     with Path(path).open("w", encoding="utf-8-sig", newline="") as stream:
-        writer = csv.DictWriter(stream, list(rows[0]))
+        writer = csv.DictWriter(stream, list(rows[0]), lineterminator="\n")
         writer.writeheader()
         writer.writerows(rows)
 
@@ -228,14 +230,16 @@ def analyze(output, names):
             summaries.setdefault(name, {})[split] = curve_summary(curve)
             print(name, split, {k: curve[k] for k in ("AP", "FPR95", "AUROC")}, flush=True)
             if split == "val":
-                if name in ("replay", "ap", "lr"):
-                    directory = ROOT / "branches" / name / "0/conditional"
+                if name in ("replay", "ap", "lr", "control", "hard"):
+                    mining = name in ("control","hard")
+                    directory = ROOT / ("mining" if mining else "branches") / name / "0/conditional"
                     result = json.loads((directory / "result.json").read_text())
-                    if not result["complete"] or result["successful_updates"] != 1000:
+                    update = 1500 if mining else 1000
+                    if not result["complete"] or result["successful_updates"] != update:
                         raise ValueError("short branch is unfinished")
-                    validation = json.loads((directory / "epoch2.json").read_text())["validation"]
+                    validation = json.loads((directory / f"epoch{update//500}.json").read_text())["validation"]
                     write_json(output / f"{name}.json", dict(checkpoint=str(directory / "last.pt"),
-                        checkpoint_sha256=file_sha256(directory / "last.pt"), update=1000,
+                        checkpoint_sha256=file_sha256(directory / "last.pt"), update=update,
                         splits=dict(val=validation), training=result))
                 official = json.loads((output / f"{name}.json").read_text())["splits"]["val"]["metrics"]
                 if any(abs(curve[k] - official[k]) > 1e-9 for k in ("AP", "FPR95", "AUROC")):
@@ -288,6 +292,7 @@ def grouped_errors(output, names, curves):
     pairs = [(names[0], name) for name in names[1:]]
     if "replay" in names:
         pairs.extend(("replay", name) for name in ("ap", "lr") if name in names)
+    pairs.extend((a,b) for a,b in (("lr","control"),("lr","hard"),("control","hard")) if a in names and b in names)
     for row in offsets:
         start, stop, seq = row["start"], row["stop"], row["sequence"]
         meta = points[start:stop]
@@ -522,9 +527,537 @@ def replay(output):
     print(json.loads((output/"numeric.json").read_text()),flush=True)
 
 
+def observation(xyzi, targets, scores, slots, chosen, **identity_fields):
+    """Describe measured returns, not the unseen physical shape or material."""
+    from scipy.spatial import cKDTree
+    from .render import observation_features
+    cloud = xyzi[chosen]
+    if len(cloud) > 1:
+        features = observation_features(cloud)
+    else:
+        features = dict(count=1, range_m=float(np.linalg.norm(cloud[0,:3])),
+                        spread_m=[0.,0.,0.], linearity=0., planarity=0., intensity=[float(cloud[0,3])]*3)
+    center = np.median(cloud[:,:3], axis=0)
+    near = np.linalg.norm(xyzi[:,:3]-center,axis=1) <= 2.
+    near[chosen] = False
+    normal = xyzi[near & (targets==0),:3]
+    other = xyzi[near,:3]
+    features.update(z_span=float(np.ptp(cloud[:,2])), surrounding_normal=len(normal),
+                    relative_z=None if not len(normal) else float(center[2]-np.quantile(normal[:,2],.1)),
+                    nearest_other_m=None if not len(other) else float(cKDTree(other).query(cloud[:,:3])[0].min()))
+    s = scores[chosen]
+    label = int(targets[chosen[0]])
+    return dict(**identity_fields, label=label, slots=slots[chosen].astype(int).tolist(),
+                center=center.tolist(), features=features,
+                score_quantiles=np.quantile(s,[.1,.5,.9]).tolist(),
+                bce=float(np.logaddexp(0., s if label==0 else -s).mean()))
+
+
+def normal_cells(xyzi, targets, scores, *, low=None, high=None):
+    """Fixed 0.75 m cells are inspection units, never training crops or labels."""
+    eligible = np.flatnonzero(targets==0)
+    if low is not None:
+        eligible = eligible[(scores[eligible]>=low)&(scores[eligible]<high)]
+    elif len(eligible)>512:
+        eligible = eligible[np.argpartition(scores[eligible],-512)[-512:]]
+    if not len(eligible):
+        return []
+    cells, counts = np.unique(np.floor(xyzi[eligible,:3]/.75).astype(np.int32),axis=0,return_counts=True)
+    grid = np.floor(xyzi[:,:3]/.75).astype(np.int32)
+    return [np.flatnonzero((targets==0)&np.all(grid==cell,axis=1))
+            for cell in cells[np.argsort(-counts,kind="stable")[:2]]]
+
+
+def validation_arrays(row,record):
+    scored = np.load(OUTPUT / "lr_val.npy",mmap_mode="r")[row["start"]:row["stop"]]
+    evaluated = np.load(OUTPUT / "val_points.npy",mmap_mode="r")[row["start"]:row["stop"]]
+    raw = np.fromfile(record["scan"],dtype="<f4").reshape(-1,4)
+    slots = np.flatnonzero(np.any(raw[:,:3]!=0,axis=1))
+    xyzi = raw[slots]
+    positions = np.searchsorted(slots,evaluated["slot"])
+    target,scores = np.full(len(slots),-1,np.int8),np.full(len(slots),np.nan,np.float32)
+    target[positions],scores[positions] = evaluated["target"],scored
+    meta = {"slot":slots,"instance":np.zeros(len(slots),np.uint16),"semantic":np.zeros(len(slots),np.uint16)}
+    meta["instance"][positions],meta["semantic"][positions] = evaluated["instance"],evaluated["semantic"]
+    return xyzi,target,scores,meta
+
+
+def _validation_cases(task):
+    row, record, thresholds = task
+    xyzi,target,scores,meta = validation_arrays(row,record)
+    result = []
+    common = dict(index=row["index"], sequence=row["sequence"], frame=row["frame"], group="STU_validation")
+    for instance in np.unique(meta["instance"][target==1]):
+        selected = np.flatnonzero((target==1)&(meta["instance"]==instance))
+        item = observation(xyzi,target,scores,meta["slot"],selected,**common,instance=int(instance),
+                           unit=f"{row['sequence']}:{instance}",kind="anomaly")
+        item["missed"] = {str(q):int((scores[selected]<thresholds[str(q)]).sum()) for q in (50,75,90)}
+        result.append(item)
+    for chosen in normal_cells(xyzi,target,scores,low=thresholds["90"],high=thresholds["50"]):
+        item = observation(xyzi,target,scores,meta["slot"],chosen,**common,instance=0,
+                           unit=str(row["sequence"]),kind="normal")
+        item["semantic_counts"] = {str(v):int((meta["semantic"][chosen]==v).sum()) for v in np.unique(meta["semantic"][chosen])}
+        item["band_points"] = int(((scores[chosen]>=thresholds["90"])&(scores[chosen]<thresholds["50"])).sum())
+        item["false_positive"] = {str(q):int((scores[chosen]>=thresholds[str(q)]).sum()) for q in (50,75,90)}
+        result.append(item)
+    return result
+
+
+def cases(output, workers):
+    """Locate C's remaining errors using its already frozen official predictions."""
+    output.mkdir(parents=True,exist_ok=True)
+    saved = json.loads((OUTPUT/"lr.json").read_text())
+    if saved["checkpoint_sha256"] != file_sha256(ROOT/"branches/lr/0/conditional/last.pt"):
+        raise ValueError("C prediction identity changed")
+    curves = json.loads((OUTPUT/"curves.json").read_text())["models"]["lr"]["val"]
+    thresholds = {str(int(100*r["target"])):r["threshold"] for r in curves["operating"]}
+    manifest = load_manifest("assets/val.json","val")
+    offsets = json.loads((OUTPUT/"val_offsets.json").read_text())["rows"]
+    tasks = [(r,manifest["records"][r["index"]],thresholds) for r in offsets]
+    observations = []
+    with ProcessPoolExecutor(max_workers=workers) as executor:
+        for i,result in enumerate(executor.map(_validation_cases,tasks,chunksize=8),1):
+            observations.extend(result)
+            if i%400==0:
+                print(f"C validation observations {i}/{len(tasks)}",flush=True)
+    queries = []
+    for sequence in (125,169,143):
+        rows = [r for r in observations if r["kind"]=="anomaly" and r["sequence"]==sequence]
+        # Prioritize missed points, but retain successful observations of the same annotation.
+        hard = sorted(rows,key=lambda r:(-r["missed"]["75"],r["frame"]))[:3]
+        for row in hard:
+            queries.append(dict(row,role="miss"))
+        units = {r["unit"] for r in hard}
+        good = sorted([r for r in rows if r["unit"] in units],
+                      key=lambda r:(r["missed"]["75"]/r["features"]["count"],-r["features"]["count"]))[:2]
+        for row in good:
+            queries.append(dict(row,role="success_reference"))
+    normal = sorted([r for r in observations if r["kind"]=="normal"],key=lambda r:-r["band_points"])
+    sequences = set()
+    for row in normal:
+        if row["sequence"] not in sequences:
+            queries.append(dict(row,role="false_positive"))
+            sequences.add(row["sequence"])
+        if len(sequences)==6:
+            break
+    from .render import candidate_distance
+    offsets_by_index = {r["index"]:r for r in offsets}
+    for query in list(queries):
+        if query["kind"]!="normal":continue
+        xyzi,target,scores,meta = validation_arrays(offsets_by_index[query["index"]],manifest["records"][query["index"]])
+        radius = np.linalg.norm(xyzi[:,:3],axis=1)
+        eligible = np.flatnonzero((target==0)&(scores<thresholds["90"])&
+            (np.abs(radius-query["features"]["range_m"])<2.))
+        grid = np.floor(xyzi[:,:3]/.75).astype(np.int32)
+        candidates=[]
+        for j in np.linspace(0,len(eligible)-1,min(24,len(eligible))).round().astype(int):
+            chosen=np.flatnonzero((target==0)&np.all(grid==grid[eligible[j]],axis=1))
+            if len(chosen)<5 or np.any(scores[chosen]>=thresholds["90"]):continue
+            candidates.append(observation(xyzi,target,scores,meta["slot"],chosen,
+                **{k:query[k] for k in ("index","sequence","frame","group","instance","unit","kind")},
+                role="normal_success_reference"))
+        if candidates:
+            queries.append(min(candidates,key=lambda r:candidate_distance(query["features"],r["features"])))
+    groups=list(csv.DictReader((OUTPUT/"groups.csv").open(encoding="utf-8-sig")))
+    positives=curves["operating"][0]["tp"]+curves["operating"][0]["fn"]
+    deficit=[dict(kind=r["kind"],key=r["key"],anomaly=int(r["anomaly"]),
+                  AP_deficit=100*int(r["anomaly"])/positives-float(r["pooled_AP_credit"]))
+             for r in groups if r["model"]=="lr" and r["kind"] in ("sequence","object","unassigned_anomaly")]
+    # Unassigned instance zero still participates in official point evaluation.
+    for partition in (("sequence",),("object","unassigned_anomaly")):
+        if abs(sum(r["AP_deficit"] for r in deficit if r["kind"] in partition)-(100-curves["AP"]))>1e-7:
+            raise ValueError("anomaly AP deficit decomposition is incomplete")
+    pr=list(csv.DictReader((OUTPUT/"lr_pr.csv").open(encoding="utf-8-sig")))
+    values=np.asarray([float(r["threshold"]) for r in pr])[::-1]
+    tp=np.asarray([int(r["tp"]) for r in pr]);fp=np.asarray([int(r["fp"]) for r in pr])
+    # Each normal point contributes to every positive ranked below it (ties retained).
+    penalty=np.cumsum(np.diff(np.r_[0,tp])[::-1]/(tp+fp)[::-1])*100/positives
+    scores=np.load(OUTPUT/"lr_val.npy",mmap_mode="r")
+    points=np.load(OUTPUT/"val_points.npy",mmap_mode="r")
+    semantic=np.zeros(65536);distance=np.zeros(5)
+    for start in range(0,len(scores),1000000):
+        part=points[start:start+1000000];normal=part["target"]==0
+        weight=penalty[np.searchsorted(values,scores[start:start+1000000][normal])]
+        semantic+=np.bincount(part["semantic"][normal],weights=weight,minlength=65536)
+        distance+=np.bincount(np.digitize(part["range"][normal],[5,10,20,30]),weights=weight,minlength=5)
+    if abs(distance.sum()-(100-curves["AP"]))>1e-7:
+        raise ValueError("normal AP deficit decomposition does not sum to 100-AP")
+    write_json(output/"cases.json",dict(checkpoint=str(BEST_C),checkpoint_sha256=file_sha256(BEST_C),
+        metrics=curves,thresholds=thresholds,queries=queries,observations=observations,
+        AP_deficit=sorted(deficit,key=lambda r:-r["AP_deficit"]),
+        normal_AP_deficit=dict(semantic={str(i):float(semantic[i]) for i in np.flatnonzero(semantic)},
+                              distance=distance.tolist(),
+                              definition="100/P sum over positives of FP_group_at_positive_score/(TP+FP); descriptive additive partition of 100-AP, not causal or attainable improvement"),
+        limitations="Point/annotation observations; identities are not certified tracks. Descriptor proximity does not certify geometry/material coverage."))
+    write_csv(output/"cases.csv",[dict(role=r["role"],sequence=r["sequence"],frame=r["frame"],instance=r["instance"],
+        val_index=r["index"],label=r["label"],points=r["features"]["count"],range_m=r["features"]["range_m"],
+        score_p10=r["score_quantiles"][0],score_median=r["score_quantiles"][1],score_p90=r["score_quantiles"][2],
+        **{f"errors{q}":r.get("missed",r.get("false_positive",{})).get(str(q),0) for q in (50,75,90)},
+        intensity_p10=r["features"]["intensity"][0],intensity_median=r["features"]["intensity"][1],
+        intensity_p90=r["features"]["intensity"][2],surrounding_normal=r["features"]["surrounding_normal"],
+        nearest_other_m=r["features"]["nearest_other_m"]) for r in queries])
+    print(f"C cases: {len(observations)} observations, {len(queries)} inspection queries",flush=True)
+
+
+class MiningScans(PreparedScans):
+    def __getitem__(self,index):
+        sample = super().__getitem__(index)
+        row = self.records[index]
+        ids = np.zeros(sample["slot_count"],np.int32)
+        if row["anomaly"]:
+            with np.load(row["delta"],allow_pickle=False) as delta:
+                if row.get("source")=="nuscenes":
+                    ids[delta["slots"]] = delta["object_ids"]
+                else:
+                    ids[delta["source_slot"]] = (delta["packed_labels"]>>16).astype(np.int32)
+            if np.any(ids[sample["slots"].numpy()][sample["targets"].numpy()==1]==0):
+                raise ValueError("missing synthetic object identity")
+        sample["object_ids"] = torch.from_numpy(ids[sample["slots"].numpy()])
+        return sample
+
+
+@torch.no_grad()
+def mine(output,workers):
+    """Score the entire training pool with C; hard-pool selection uses training only."""
+    output.mkdir(parents=True,exist_ok=True)
+    disk_check(3_000_000_000)
+    write_json(output/"resources.json",runtime_snapshot())
+    manifest = load_manifest("results/data/native/train.json","train")
+    count = sum(r["normal"]+r["anomaly"] for r in manifest["records"])
+    scores_file = np.lib.format.open_memmap(output/"train_scores.npy",mode="w+",dtype=np.float32,shape=(count,))
+    labels_file = np.lib.format.open_memmap(output/"train_labels.npy",mode="w+",dtype=np.int8,shape=(count,))
+    device = torch.device("cuda")
+    model,saved = load_model(BEST_C,device)
+    del saved
+    loader = DataLoader(MiningScans(manifest),batch_size=None,num_workers=workers,pin_memory=True,
+                        prefetch_factor=1,generator=torch.Generator().manual_seed(0))
+    frames,observations,cursor = [],[],0
+    start = time.perf_counter()
+    original_order = json.loads((ROOT/"branches/lr/0/conditional/sampling.json").read_text())["order"]
+    visits = np.bincount(original_order[:8000],minlength=len(manifest["records"]))
+    for sample in loader:
+        index = int(sample["index"])
+        row = manifest["records"][index]
+        ids = sample.pop("object_ids").numpy()
+        with autocast(device):
+            prediction = model(to_device(sample,device))
+        scores = prediction.cpu().numpy()
+        xyzi,targets,slots = [sample[k].numpy() for k in ("xyzi","targets","slots")]
+        if not np.isfinite(scores).all():
+            raise ValueError("nonfinite C mining scores")
+        valid = targets>=0
+        stop = cursor+int(valid.sum())
+        scores_file[cursor:stop],labels_file[cursor:stop] = scores[valid],targets[valid]
+        normal,positive = scores[targets==0],scores[targets==1]
+        top = np.partition(normal,max(0,len(normal)-512))[-512:]
+        unit = row.get("scene",row.get("world","206"))
+        common = dict(index=index,frame=row["frame"],group=row["group"],unit=unit,sequence=206 if "stu" in row["group"] else 0)
+        frames.append(dict(**common,start=cursor,stop=stop,normal=len(normal),anomaly=len(positive),
+            normal_tail_bce=float(np.logaddexp(0.,top).mean()),
+            anomaly_bce=None if not len(positive) else float(np.logaddexp(0.,-positive).mean()),
+            normal_quantiles=np.quantile(normal,[.1,.5,.9,.99]).tolist(),
+            anomaly_quantiles=None if not len(positive) else np.quantile(positive,[.1,.5,.9]).tolist(),
+            visits_before_C=int(visits[index])))
+        for instance in np.unique(ids[targets==1]):
+            chosen = np.flatnonzero((targets==1)&(ids==instance))
+            observations.append(observation(xyzi,targets,scores,slots,chosen,**common,instance=int(instance),kind="anomaly"))
+        for chosen in normal_cells(xyzi,targets,scores):
+            observations.append(observation(xyzi,targets,scores,slots,chosen,**common,instance=0,kind="normal"))
+        cursor = stop
+        if (index+1)%200==0 or index+1==len(manifest["records"]):
+            print(f"C training mining {index+1}/{len(manifest['records'])}, {time.perf_counter()-start:.1f}s",flush=True)
+    assert cursor==count
+    scores_file.flush()
+    labels_file.flush()
+    del model,loader,prediction
+    torch.cuda.empty_cache()
+    # Rank within each source/type to prevent a sensor-domain quota change.
+    from scipy.stats import rankdata
+    pools = {}
+    for group in sorted({r["group"] for r in frames}):
+        rows = [r for r in frames if r["group"]==group]
+        difficulty = rankdata([r["normal_tail_bce"] for r in rows],method="average")/len(rows)
+        if rows[0]["anomaly"]:
+            difficulty = (difficulty+rankdata([r["anomaly_bce"] for r in rows],method="average")/len(rows))/2
+        for row,value in zip(rows,difficulty):
+            row["difficulty"] = float(value)
+        pools[group] = [r["index"] for r in sorted(rows,key=lambda r:(-r["difficulty"],r["index"]))[:int(np.ceil(.2*len(rows)))]]
+    curve = score_curve(scores_file,labels_file)
+    report = dict(checkpoint=str(BEST_C),checkpoint_sha256=file_sha256(BEST_C),
+        train_manifest=manifest["sha256"],frames=frames,observations=observations,
+        pooled_training=curve_summary(curve),seconds=time.perf_counter()-start,
+        selection="Top 20% in each source/type by percentile of mean top-512 normal BCE; anomaly sources average that percentile with all-positive BCE percentile. No validation scores, labels or queries enter selection.",
+        groups=pools)
+    write_json(output/"train.json",report)
+    write_json(output/"pool.json",{k:report[k] for k in ("checkpoint","checkpoint_sha256","train_manifest","selection","groups")})
+    print({"mining_seconds":report["seconds"],"training_AP":curve["AP"],"pool_sizes":{k:len(v) for k,v in pools.items()}},flush=True)
+
+
+def match_cases(output):
+    """Retrieve measured analogues; keep absence and representation claims provisional."""
+    from scipy.spatial import cKDTree
+    data = json.loads((output/"cases.json").read_text())
+    train = json.loads((output/"train.json").read_text())
+    fields = ["log_count","log_range","log_spread0","log_spread1","log_spread2",
+              "linearity","planarity","intensity10","intensity50","intensity90",
+              "log_z_span","log_surrounding_normal","relative_z"]
+    def vector(row):
+        f = row["features"]
+        return np.r_[np.log1p([f["count"],f["range_m"],*f["spread_m"]]),f["linearity"],f["planarity"],
+                     f["intensity"],np.log1p([f["z_span"],f["surrounding_normal"]]),f["relative_z"] or 0.]
+    matches=[]
+    for kind in ("anomaly","normal"):
+        rows = [r for r in train["observations"] if r["kind"]==kind]
+        if kind=="normal":
+            rows += json.loads((output/"coverage.json").read_text())["observations"] if (output/"coverage.json").exists() else []
+            rows=list({(r["index"],tuple(r["slots"])):r for r in rows}.values())
+        # Every STU normal patch still shares background 206, including synthetic worlds.
+        units = ["206" if kind=="normal" and "stu" in r["group"] else r["unit"] for r in rows]
+        unit_ids=np.unique(units,return_inverse=True)[1]
+        values = np.stack([vector(r) for r in rows])
+        center = np.median(values,axis=0)
+        scale = np.maximum(np.quantile(values,.75,axis=0)-np.quantile(values,.25,axis=0),.05)
+        transformed = (values-center)/scale
+        tree = cKDTree(transformed)
+        # Calibrate distances against other training worlds/scenes, never validation.
+        reference=np.full(len(rows),np.nan)
+        k=8
+        while np.isnan(reference).any():
+            missing=np.flatnonzero(np.isnan(reference))
+            distances,neighbors=tree.query(transformed[missing],k=min(k,len(rows)),workers=4)
+            different=unit_ids[neighbors]!=unit_ids[missing,None]
+            found=different.any(axis=1)
+            reference[missing[found]]=distances[found,different[found].argmax(axis=1)]
+            if k>=len(rows):break
+            k*=4
+        reference=np.sort(reference[np.isfinite(reference)])
+        for query in [r for r in data["queries"] if r["kind"]==kind]:
+            delta = np.linalg.norm(transformed-(vector(query)-center)/scale,axis=1)
+            selected=[]
+            for domain in ("stu","nuscenes"):
+                seen=set()
+                for i in np.argsort(delta,kind="stable"):
+                    if domain not in rows[i]["group"] or units[i] in seen:continue
+                    selected.append(dict(rows[i],distance=float(delta[i]),
+                        training_neighbor_percentile=float(np.searchsorted(reference,delta[i],side="right")/len(reference)) if len(reference) else None,
+                        visits_before_C=train["frames"][rows[i]["index"]]["visits_before_C"]))
+                    seen.add(units[i])
+                    if len(seen)==3:break
+            matches.append(dict(query=query,neighbors=selected))
+    write_json(output/"matches.json",dict(matches=matches,features=fields,
+        distance="Euclidean distance after training-only median/IQR scaling, scale floor 0.05; heuristic measured-observation retrieval, not proof of full shape, reflectance or semantic equivalence.",
+        limitations="Normal bank: two high-score cells per training scan plus observed cells at query sensor locations in original normal scans; not all normal structures. All STU normal worlds count as one background. Cross-sensor intensity is in native normalized units, not radiometric calibration."))
+    print(f"Retrieved training analogues for {len(matches)} C cases",flush=True)
+    plot_cases(output)
+
+
+def _coverage_init(manifest,frames,cells,output):
+    global _coverage_scans,_coverage_frames,_coverage_cells,_coverage_scores
+    _coverage_scans=Scans(manifest)
+    _coverage_frames=frames
+    _coverage_cells=cells
+    _coverage_scores=np.load(Path(output)/"train_scores.npy",mmap_mode="r")
+
+
+def _coverage_frame(index):
+    sample=_coverage_scans[index]
+    row=_coverage_scans.records[index]
+    frame=_coverage_frames[index]
+    xyzi,target,slots=[sample[k] for k in ("xyzi","targets","slots")]
+    score=np.full(len(target),np.nan,np.float32)
+    score[target>=0]=_coverage_scores[frame["start"]:frame["stop"]]
+    grid=np.floor(xyzi[:,:3]/.75).astype(np.int32)
+    inside=(np.linalg.norm(xyzi[:,:3],axis=1)>=2.5)&(np.linalg.norm(xyzi[:,:3],axis=1)<=50)
+    counts,observations=[],[]
+    for cell in _coverage_cells:
+        mask=np.all(grid==cell,axis=1)&inside
+        normal=np.flatnonzero(mask&(target==0))
+        counts.append(dict(index=index,group=row["group"],cell=cell,actual=int(mask.sum()),normal=len(normal),
+                           ignored=int((mask&(target<0)).sum())))
+        if len(normal)<5:continue
+        observations.append(observation(xyzi,target,score,slots,normal,index=index,frame=row["frame"],
+            group=row["group"],unit=row.get("scene","206"),sequence=206 if "stu" in row["group"] else 0,
+            instance=0,kind="normal"))
+    return counts,observations
+
+
+def normal_coverage(output,workers):
+    """Check near-sensor support without assuming the same cell is the same object."""
+    cases=json.loads((output/"cases.json").read_text())
+    manifest=load_manifest("results/data/native/train.json","train")
+    frames=json.loads((output/"train.json").read_text())["frames"]
+    cells=sorted({tuple(np.floor(np.asarray(r["center"])/.75).astype(int).tolist())
+                  for r in cases["queries"] if r["role"]=="false_positive"})
+    indices=[i for i,r in enumerate(manifest["records"]) if r["group"] in ("normal_nuscenes","normal_stu")]
+    counts,observations=[],[]
+    with ProcessPoolExecutor(max_workers=workers,initializer=_coverage_init,
+                             initargs=(manifest,frames,cells,str(output))) as executor:
+        for c,o in executor.map(_coverage_frame,indices,chunksize=8):
+            counts.extend(c);observations.extend(o)
+    summary=[]
+    for group in ("normal_nuscenes","normal_stu"):
+        for cell in cells:
+            selected=[r for r in counts if r["group"]==group and tuple(r["cell"])==cell]
+            summary.append(dict(group=group,cell=cell,scans=len(selected),
+                frames_with_returns=sum(r["actual"]>0 for r in selected),
+                frames_with_normal=sum(r["normal"]>0 for r in selected),
+                normal=sum(r["normal"] for r in selected),ignored=sum(r["ignored"] for r in selected)))
+    write_json(output/"coverage.json",dict(summary=summary,counts=counts,observations=observations,
+        meaning="Same native-sensor 0.75 m cells, official 2.5-50 m supervision range, original normal scans only. Spatial support is not identity or semantic equivalence. No training labels or hard-pool membership changed."))
+    print(summary,flush=True)
+
+
+def plot_cases(output):
+    """Inspect full-scan predictions in local views; no cropped network inference."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.font_manager import fontManager,findfont
+    from matplotlib.ft2font import FT2Font
+    fontManager.addfont("/mnt/c/Windows/Fonts/times.ttf")
+    plt.rcParams.update({"font.family":"Times New Roman","pdf.fonttype":42,"font.size":10})
+    data=json.loads((output/"cases.json").read_text())
+    matches=json.loads((output/"matches.json").read_text())["matches"]
+    val=load_manifest("assets/val.json","val")
+    offsets={r["index"]:r for r in json.loads((OUTPUT/"val_offsets.json").read_text())["rows"]}
+    training=json.loads((output/"train.json").read_text())
+    train_data=Scans(load_manifest("results/data/native/train.json","train"))
+    train_scores=np.load(output/"train_scores.npy",mmap_mode="r")
+    rows=[]
+    for seq in (125,169,143):
+        bad=next(r for r in data["queries"] if r["sequence"]==seq and r["role"]=="miss")
+        good=next(r for r in data["queries"] if r["sequence"]==seq and r["role"]=="success_reference")
+        matched=next(r for r in matches if r["query"]==bad)
+        rows.append((bad,good,min(matched["neighbors"],key=lambda x:x["distance"])))
+    for bad in [r for r in data["queries"] if r["role"]=="false_positive"][:2]:
+        good=next((r for r in data["queries"] if r["role"]=="normal_success_reference" and r["index"]==bad["index"]),None)
+        if good is None:continue
+        matched=next(r for r in matches if r["query"]==bad)
+        rows.append((bad,good,min(matched["neighbors"],key=lambda x:x["distance"])))
+    fig=plt.figure(figsize=(13,3.1*len(rows)))
+    for row_number,row in enumerate(rows):
+        recall=90 if row[0]["kind"]=="normal" and row[0]["false_positive"]["75"]==0 else 75
+        for col,item in enumerate(row):
+            ax=fig.add_subplot(len(rows),3,row_number*3+col+1,projection="3d")
+            if col<2:
+                xyzi,target,scores,meta=validation_arrays(offsets[item["index"]],val["records"][item["index"]])
+                slots=meta["slot"]
+                title=f"STU {item['sequence']}/{item['frame']:06d}"
+            else:
+                sample=train_data[item["index"]]
+                xyzi,target,slots=[sample[k] for k in ("xyzi","targets","slots")]
+                scores=np.full(len(target),np.nan,np.float32)
+                frame=training["frames"][item["index"]]
+                scores[target>=0]=train_scores[frame["start"]:frame["stop"]]
+                domain="STU" if "stu" in item["group"] else "nuScenes"
+                title=f"Train {item['kind']}: {domain} #{item['index']}"
+            chosen=np.searchsorted(slots,np.asarray(item["slots"]))
+            assert np.array_equal(slots[chosen],item["slots"])
+            xyz=xyzi[:,:3]-np.asarray(item["center"])
+            near=np.flatnonzero(np.linalg.norm(xyz,axis=1)<=1.8)
+            background=near[np.linspace(0,len(near)-1,min(2500,len(near))).round().astype(int)]
+            ax.scatter(*xyz[background].T,s=.5,c="0.75",alpha=.4,rasterized=True)
+            wrong=(scores[chosen]>=data["thresholds"][str(recall)])!=(target[chosen]==1)
+            ax.scatter(*xyz[chosen].T,s=5,c=np.where(wrong,"#d62728","#1f77b4"),rasterized=True)
+            ax.set(xlim=(-1.5,1.5),ylim=(-1.5,1.5),zlim=(-1.,1.2),xlabel="x (m)",ylabel="y (m)",zlabel="z (m)")
+            ax.view_init(elev=25,azim=-55)
+            ax.set_title(f"{title}\nR{recall}, n={len(chosen)}, median score={np.median(scores[chosen]):.2f}")
+    fig.suptitle("C: selected error | successful reference | retrieved training observation\nRed: error at the row's C recall threshold; blue: correct. Training panels are diagnostic only.",y=.995)
+    fig.tight_layout(rect=(0,0,1,.96))
+    fig.canvas.draw()
+    for item in fig.findobj(matplotlib.text.Text):
+        if item.get_text() and FT2Font(findfont(item.get_fontproperties(),fallback_to_default=False)).family_name!="Times New Roman":
+            raise ValueError("unexpected case-figure font")
+    fig.savefig(output/"cases.pdf")
+    fig.savefig(output/"cases.png",dpi=180)
+    plt.close(fig)
+
+
+def mining_result(output):
+    """Compare the two authorized endpoints and the same raw-slot case identities."""
+    report = dict(parent=str(BEST_C),parent_sha256=file_sha256(BEST_C),
+                  updates_per_branch=500,scan_visits_per_branch=4000,branches={})
+    orders,configs = {},{}
+    for name in ("control","hard"):
+        directory=ROOT/"mining"/name/"0/conditional"
+        result=json.loads((directory/"result.json").read_text())
+        if not result["complete"] or result["successful_updates"]!=1500:
+            raise ValueError("mining branch is not complete")
+        configs[name]=json.loads((directory/"config.json").read_text())["configuration"]
+        if configs[name]["initial_sha256"]!=report["parent_sha256"]:
+            raise ValueError("C parent checkpoint changed")
+        orders[name]=json.loads((directory/"sampling.json").read_text())["order"]
+        report["branches"][name]=result
+    a,b=np.asarray(orders["control"]),np.asarray(orders["hard"])
+    changed=a!=b
+    if changed[:8000].any() or changed[12000:].any() or not (changed[8000:12000].reshape(500,8).sum(1)==2).all():
+        raise ValueError("paired replacement is not exactly two positions per update")
+    records=load_manifest("results/data/native/train.json","train")["records"]
+    legacy=load_manifest("assets/train.json","train")
+    selected={(r["world"],r["frame"],r["delta_sha256"]) for r in records if r["group"]=="anomaly_stu"}
+    available={(r["world"],r["frame"],r["delta_sha256"]) for r in legacy["records"]}
+    if not selected<=available:
+        raise ValueError("selected STU observations do not belong to the existing source pool")
+    unused=[r for r in legacy["records"] if (r["world"],r["frame"],r["delta_sha256"]) not in selected]
+    report["existing_STU_observations"]=dict(manifest=legacy["sha256"],available=len(available),
+        selected=len(selected),unused=len(unused),unused_with_at_least_100_anomaly_points=sum(r["anomaly"]>=100 for r in unused),
+        scope="Manifest inventory only. Unselected observations were not scored or used by these branches; all share background 206.")
+    if any(records[x]["group"]!=records[y]["group"] for x,y in zip(a,b)):
+        raise ValueError("sampling changed a source/type position")
+    report.update(retained_scan_visits=3000,replaced_scan_visits=1000,
+                  config_differences=[k for k in configs["control"] if configs["control"][k]!=configs["hard"].get(k)])
+    report["pairs"]={name:dict(total=2000,no_anomaly=sum(not any(records[j]["anomaly"] for j in order[i:i+2])
+                                  for i in range(8000,12000,2))) for name,order in orders.items()}
+    pool=json.loads((output/"pool.json").read_text())
+    hard_indices={i for group in pool["groups"].values() for i in group}
+    for name,order in orders.items():
+        pairs=[order[i:i+2] for i in range(8000,12000,2)]
+        normal=[(i,any(records[j]["anomaly"] for j in pair)) for pair in pairs
+                for i in pair if i in hard_indices and not records[i]["anomaly"]]
+        report["pairs"][name].update(hard_visits=sum(i in hard_indices for i in order[8000:12000]),
+            hard_normal_visits=len(normal),hard_normal_in_positive_pairs=sum(present for _,present in normal))
+    report["retrieval_exposure"]=[dict(query={k:r["query"][k] for k in ("sequence","frame","instance","role")},
+        neighbors=[dict(index=n["index"],group=n["group"],in_hard_pool=n["index"] in hard_indices,
+            visits={name:order[8000:12000].count(n["index"]) for name,order in orders.items()}) for n in r["neighbors"]])
+        for r in json.loads((output/"matches.json").read_text())["matches"]]
+    training=json.loads((output/"train.json").read_text())
+    score_file=np.load(output/"train_scores.npy",mmap_mode="r")
+    label_file=np.load(output/"train_labels.npy",mmap_mode="r")
+    report["C_training_positive_scores"]={}
+    for group in ("anomaly_nuscenes","anomaly_stu"):
+        positive=np.concatenate([score_file[r["start"]:r["stop"]][label_file[r["start"]:r["stop"]]==1]
+                                 for r in training["frames"] if r["group"]==group])
+        report["C_training_positive_scores"][group]=dict(count=len(positive),
+            quantiles=np.quantile(positive,[.01,.1,.5,.9,.99]).tolist())
+    curves=json.loads((OUTPUT/"curves.json").read_text())["models"]
+    cases=json.loads((output/"cases.json").read_text())
+    meta=np.load(OUTPUT/"val_points.npy",mmap_mode="r")
+    offsets={r["index"]:r for r in json.loads((OUTPUT/"val_offsets.json").read_text())["rows"]}
+    score={name:np.load(OUTPUT/f"{name}_val.npy",mmap_mode="r") for name in ("lr","control","hard")}
+    effects=[]
+    for query in cases["queries"]:
+        offset=offsets[query["index"]]
+        points=meta[offset["start"]:offset["stop"]]
+        chosen=np.searchsorted(points["slot"],query["slots"])
+        if not np.array_equal(points["slot"][chosen],query["slots"]):
+            raise ValueError("case point correspondence changed")
+        item={k:query[k] for k in ("index","sequence","frame","instance","role","kind")}
+        item["count"]=len(chosen)
+        item["models"]={}
+        for name in score:
+            s=score[name][offset["start"]:offset["stop"]][chosen]
+            item["models"][name]={str(int(r["target"]*100)):int(((s<r["threshold"]) if query["label"] else (s>=r["threshold"])).sum())
+                                    for r in curves[name]["val"]["operating"]}
+        effects.append(item)
+    report["cases"]=effects
+    report["interpretation"]="Single-seed C continuations; test one training-only sampling rule. Endpoints and inherited-start best are separate. C-domain numerical sensitivity remains a quality limitation, not a gate."
+    write_json(ROOT/"mining/comparison.json",report)
+    print({name:r["final_metrics"] for name,r in report["branches"].items()},flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("collect", "analyze", "gradients", "replay"))
+    parser.add_argument("action", choices=("collect", "analyze", "gradients", "replay", "cases", "mine", "match", "coverage", "mining-result"))
     parser.add_argument("--output", type=Path, default=OUTPUT)
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--names", nargs="+", default=list(CHECKPOINTS))
@@ -537,6 +1070,16 @@ def main():
         analyze(args.output, args.names)
     elif args.action == "gradients":
         gradients(args.output)
+    elif args.action == "cases":
+        cases(args.output,args.workers)
+    elif args.action == "mine":
+        mine(args.output,args.workers)
+    elif args.action == "match":
+        match_cases(args.output)
+    elif args.action == "coverage":
+        normal_coverage(args.output,args.workers)
+    elif args.action == "mining-result":
+        mining_result(args.output)
     else:
         replay(args.output)
 

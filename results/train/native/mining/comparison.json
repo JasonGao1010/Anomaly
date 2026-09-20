@@ -1,0 +1,2518 @@
+{
+  "parent": "results/train/native/branches/lr/0/conditional/best.pt",
+  "parent_sha256": "7f2737b41bb5249f037721195f069f0f6c7de22b0e40038a1f5de2e6024539ef",
+  "updates_per_branch": 500,
+  "scan_visits_per_branch": 4000,
+  "branches": {
+    "control": {
+      "version": "AJAE-V4-N1",
+      "seed": 0,
+      "method": "conditional",
+      "complete": true,
+      "epochs": null,
+      "updates": 1500,
+      "best_epoch": 2,
+      "best_metrics": {
+        "AP": 76.25949290150298,
+        "FPR95": 0.13001795167789543,
+        "AUROC": 99.95131297463408,
+        "threshold": -1.328125
+      },
+      "best_update": 1000,
+      "final_metrics": {
+        "AP": 75.79741404947549,
+        "FPR95": 0.14524816160297663,
+        "AUROC": 99.95099477120068,
+        "threshold": -0.890625
+      },
+      "objective": "metrics",
+      "branch": "control",
+      "start_update": 1000,
+      "additional_updates": 500,
+      "gradient_steps": 500,
+      "clipped_steps": 124,
+      "gradient_norm_sum": 605.5232439562678,
+      "gradient_norm_max": 22.442312240600586,
+      "training_seconds": 549.8631124539534,
+      "validation_seconds": 195.92231843499758,
+      "planned_updates": 1500,
+      "successful_updates": 1500,
+      "overflows": 0,
+      "parameters": 12880513,
+      "train_manifest_sha256": "e3c32d0b83ffb9eda2e095ffddd08828509e97d1d34509805dd2584951b2b3c6",
+      "val_manifest_sha256": "918524fd271f896bf9288ebfe4131941a20cbd00a0925e91c8ccedf4d7574855",
+      "validation_improved_from_epoch0": null
+    },
+    "hard": {
+      "version": "AJAE-V4-N1",
+      "seed": 0,
+      "method": "conditional",
+      "complete": true,
+      "epochs": null,
+      "updates": 1500,
+      "best_epoch": 2,
+      "best_metrics": {
+        "AP": 76.25949290150298,
+        "FPR95": 0.13001795167789543,
+        "AUROC": 99.95131297463408,
+        "threshold": -1.328125
+      },
+      "best_update": 1000,
+      "final_metrics": {
+        "AP": 73.94484954774484,
+        "FPR95": 0.1690633284151856,
+        "AUROC": 99.94724609278839,
+        "threshold": -0.96875
+      },
+      "objective": "metrics",
+      "branch": "hard",
+      "start_update": 1000,
+      "additional_updates": 500,
+      "gradient_steps": 500,
+      "clipped_steps": 140,
+      "gradient_norm_sum": 609.2329060770571,
+      "gradient_norm_max": 22.368497848510742,
+      "training_seconds": 570.9540644188528,
+      "validation_seconds": 185.67760032200022,
+      "planned_updates": 1500,
+      "successful_updates": 1500,
+      "overflows": 0,
+      "parameters": 12880513,
+      "train_manifest_sha256": "e3c32d0b83ffb9eda2e095ffddd08828509e97d1d34509805dd2584951b2b3c6",
+      "val_manifest_sha256": "918524fd271f896bf9288ebfe4131941a20cbd00a0925e91c8ccedf4d7574855",
+      "validation_improved_from_epoch0": null
+    }
+  },
+  "existing_STU_observations": {
+    "manifest": "a104c3684bac771c56112158cc19f96f3e13f4014ac0935af518fd50c5ebac8d",
+    "available": 40152,
+    "selected": 720,
+    "unused": 39432,
+    "unused_with_at_least_100_anomaly_points": 11208,
+    "scope": "Manifest inventory only. Unselected observations were not scored or used by these branches; all share background 206."
+  },
+  "retained_scan_visits": 3000,
+  "replaced_scan_visits": 1000,
+  "config_differences": [
+    "branch"
+  ],
+  "pairs": {
+    "control": {
+      "total": 2000,
+      "no_anomaly": 461,
+      "hard_visits": 806,
+      "hard_normal_visits": 374,
+      "hard_normal_in_positive_pairs": 181
+    },
+    "hard": {
+      "total": 2000,
+      "no_anomaly": 461,
+      "hard_visits": 1618,
+      "hard_normal_visits": 766,
+      "hard_normal_in_positive_pairs": 393
+    }
+  },
+  "retrieval_exposure": [
+    {
+      "query": {
+        "sequence": 125,
+        "frame": 127,
+        "instance": 1,
+        "role": "miss"
+      },
+      "neighbors": [
+        {
+          "index": 5340,
+          "group": "anomaly_stu",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 1,
+            "hard": 1
+          }
+        },
+        {
+          "index": 5139,
+          "group": "anomaly_stu",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 0,
+            "hard": 0
+          }
+        },
+        {
+          "index": 5117,
+          "group": "anomaly_stu",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 1,
+            "hard": 1
+          }
+        },
+        {
+          "index": 3835,
+          "group": "anomaly_nuscenes",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 0,
+            "hard": 0
+          }
+        },
+        {
+          "index": 1608,
+          "group": "anomaly_nuscenes",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 1,
+            "hard": 0
+          }
+        },
+        {
+          "index": 4412,
+          "group": "anomaly_nuscenes",
+          "in_hard_pool": true,
+          "visits": {
+            "control": 1,
+            "hard": 2
+          }
+        }
+      ]
+    },
+    {
+      "query": {
+        "sequence": 125,
+        "frame": 128,
+        "instance": 1,
+        "role": "miss"
+      },
+      "neighbors": [
+        {
+          "index": 5340,
+          "group": "anomaly_stu",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 1,
+            "hard": 1
+          }
+        },
+        {
+          "index": 5225,
+          "group": "anomaly_stu",
+          "in_hard_pool": true,
+          "visits": {
+            "control": 1,
+            "hard": 2
+          }
+        },
+        {
+          "index": 5117,
+          "group": "anomaly_stu",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 1,
+            "hard": 1
+          }
+        },
+        {
+          "index": 1608,
+          "group": "anomaly_nuscenes",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 1,
+            "hard": 0
+          }
+        },
+        {
+          "index": 3835,
+          "group": "anomaly_nuscenes",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 0,
+            "hard": 0
+          }
+        },
+        {
+          "index": 4306,
+          "group": "anomaly_nuscenes",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 0,
+            "hard": 0
+          }
+        }
+      ]
+    },
+    {
+      "query": {
+        "sequence": 125,
+        "frame": 126,
+        "instance": 1,
+        "role": "miss"
+      },
+      "neighbors": [
+        {
+          "index": 5340,
+          "group": "anomaly_stu",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 1,
+            "hard": 1
+          }
+        },
+        {
+          "index": 5139,
+          "group": "anomaly_stu",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 0,
+            "hard": 0
+          }
+        },
+        {
+          "index": 5117,
+          "group": "anomaly_stu",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 1,
+            "hard": 1
+          }
+        },
+        {
+          "index": 4412,
+          "group": "anomaly_nuscenes",
+          "in_hard_pool": true,
+          "visits": {
+            "control": 1,
+            "hard": 2
+          }
+        },
+        {
+          "index": 3835,
+          "group": "anomaly_nuscenes",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 0,
+            "hard": 0
+          }
+        },
+        {
+          "index": 2503,
+          "group": "anomaly_nuscenes",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 0,
+            "hard": 0
+          }
+        }
+      ]
+    },
+    {
+      "query": {
+        "sequence": 125,
+        "frame": 156,
+        "instance": 1,
+        "role": "success_reference"
+      },
+      "neighbors": [
+        {
+          "index": 5340,
+          "group": "anomaly_stu",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 1,
+            "hard": 1
+          }
+        },
+        {
+          "index": 5139,
+          "group": "anomaly_stu",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 0,
+            "hard": 0
+          }
+        },
+        {
+          "index": 5046,
+          "group": "anomaly_stu",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 1,
+            "hard": 0
+          }
+        },
+        {
+          "index": 632,
+          "group": "anomaly_nuscenes",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 1,
+            "hard": 0
+          }
+        },
+        {
+          "index": 3438,
+          "group": "anomaly_nuscenes",
+          "in_hard_pool": true,
+          "visits": {
+            "control": 1,
+            "hard": 1
+          }
+        },
+        {
+          "index": 3372,
+          "group": "anomaly_nuscenes",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 1,
+            "hard": 1
+          }
+        }
+      ]
+    },
+    {
+      "query": {
+        "sequence": 125,
+        "frame": 160,
+        "instance": 1,
+        "role": "success_reference"
+      },
+      "neighbors": [
+        {
+          "index": 5225,
+          "group": "anomaly_stu",
+          "in_hard_pool": true,
+          "visits": {
+            "control": 1,
+            "hard": 2
+          }
+        },
+        {
+          "index": 5452,
+          "group": "anomaly_stu",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 0,
+            "hard": 0
+          }
+        },
+        {
+          "index": 5601,
+          "group": "anomaly_stu",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 1,
+            "hard": 1
+          }
+        },
+        {
+          "index": 3438,
+          "group": "anomaly_nuscenes",
+          "in_hard_pool": true,
+          "visits": {
+            "control": 1,
+            "hard": 1
+          }
+        },
+        {
+          "index": 3603,
+          "group": "anomaly_nuscenes",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 1,
+            "hard": 1
+          }
+        },
+        {
+          "index": 632,
+          "group": "anomaly_nuscenes",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 1,
+            "hard": 0
+          }
+        }
+      ]
+    },
+    {
+      "query": {
+        "sequence": 169,
+        "frame": 365,
+        "instance": 1,
+        "role": "miss"
+      },
+      "neighbors": [
+        {
+          "index": 5589,
+          "group": "anomaly_stu",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 1,
+            "hard": 1
+          }
+        },
+        {
+          "index": 5466,
+          "group": "anomaly_stu",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 1,
+            "hard": 1
+          }
+        },
+        {
+          "index": 5645,
+          "group": "anomaly_stu",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 1,
+            "hard": 1
+          }
+        },
+        {
+          "index": 4778,
+          "group": "anomaly_nuscenes",
+          "in_hard_pool": true,
+          "visits": {
+            "control": 1,
+            "hard": 1
+          }
+        },
+        {
+          "index": 1964,
+          "group": "anomaly_nuscenes",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 0,
+            "hard": 0
+          }
+        },
+        {
+          "index": 4540,
+          "group": "anomaly_nuscenes",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 0,
+            "hard": 0
+          }
+        }
+      ]
+    },
+    {
+      "query": {
+        "sequence": 169,
+        "frame": 352,
+        "instance": 1,
+        "role": "miss"
+      },
+      "neighbors": [
+        {
+          "index": 5589,
+          "group": "anomaly_stu",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 1,
+            "hard": 1
+          }
+        },
+        {
+          "index": 5466,
+          "group": "anomaly_stu",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 1,
+            "hard": 1
+          }
+        },
+        {
+          "index": 5141,
+          "group": "anomaly_stu",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 1,
+            "hard": 1
+          }
+        },
+        {
+          "index": 2824,
+          "group": "anomaly_nuscenes",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 1,
+            "hard": 1
+          }
+        },
+        {
+          "index": 1964,
+          "group": "anomaly_nuscenes",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 0,
+            "hard": 0
+          }
+        },
+        {
+          "index": 3138,
+          "group": "anomaly_nuscenes",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 1,
+            "hard": 1
+          }
+        }
+      ]
+    },
+    {
+      "query": {
+        "sequence": 169,
+        "frame": 366,
+        "instance": 1,
+        "role": "miss"
+      },
+      "neighbors": [
+        {
+          "index": 5141,
+          "group": "anomaly_stu",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 1,
+            "hard": 1
+          }
+        },
+        {
+          "index": 5589,
+          "group": "anomaly_stu",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 1,
+            "hard": 1
+          }
+        },
+        {
+          "index": 5137,
+          "group": "anomaly_stu",
+          "in_hard_pool": true,
+          "visits": {
+            "control": 1,
+            "hard": 2
+          }
+        },
+        {
+          "index": 1964,
+          "group": "anomaly_nuscenes",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 0,
+            "hard": 0
+          }
+        },
+        {
+          "index": 680,
+          "group": "anomaly_nuscenes",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 0,
+            "hard": 0
+          }
+        },
+        {
+          "index": 3292,
+          "group": "anomaly_nuscenes",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 1,
+            "hard": 1
+          }
+        }
+      ]
+    },
+    {
+      "query": {
+        "sequence": 169,
+        "frame": 353,
+        "instance": 1,
+        "role": "success_reference"
+      },
+      "neighbors": [
+        {
+          "index": 5589,
+          "group": "anomaly_stu",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 1,
+            "hard": 1
+          }
+        },
+        {
+          "index": 5645,
+          "group": "anomaly_stu",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 1,
+            "hard": 1
+          }
+        },
+        {
+          "index": 5314,
+          "group": "anomaly_stu",
+          "in_hard_pool": true,
+          "visits": {
+            "control": 1,
+            "hard": 2
+          }
+        },
+        {
+          "index": 4778,
+          "group": "anomaly_nuscenes",
+          "in_hard_pool": true,
+          "visits": {
+            "control": 1,
+            "hard": 1
+          }
+        },
+        {
+          "index": 1964,
+          "group": "anomaly_nuscenes",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 0,
+            "hard": 0
+          }
+        },
+        {
+          "index": 4310,
+          "group": "anomaly_nuscenes",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 1,
+            "hard": 0
+          }
+        }
+      ]
+    },
+    {
+      "query": {
+        "sequence": 169,
+        "frame": 373,
+        "instance": 1,
+        "role": "success_reference"
+      },
+      "neighbors": [
+        {
+          "index": 5355,
+          "group": "anomaly_stu",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 0,
+            "hard": 0
+          }
+        },
+        {
+          "index": 5715,
+          "group": "anomaly_stu",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 1,
+            "hard": 0
+          }
+        },
+        {
+          "index": 5141,
+          "group": "anomaly_stu",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 1,
+            "hard": 1
+          }
+        },
+        {
+          "index": 1740,
+          "group": "anomaly_nuscenes",
+          "in_hard_pool": true,
+          "visits": {
+            "control": 1,
+            "hard": 2
+          }
+        },
+        {
+          "index": 4638,
+          "group": "anomaly_nuscenes",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 0,
+            "hard": 0
+          }
+        },
+        {
+          "index": 680,
+          "group": "anomaly_nuscenes",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 0,
+            "hard": 0
+          }
+        }
+      ]
+    },
+    {
+      "query": {
+        "sequence": 143,
+        "frame": 271,
+        "instance": 3,
+        "role": "miss"
+      },
+      "neighbors": [
+        {
+          "index": 5140,
+          "group": "anomaly_stu",
+          "in_hard_pool": true,
+          "visits": {
+            "control": 1,
+            "hard": 2
+          }
+        },
+        {
+          "index": 5380,
+          "group": "anomaly_stu",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 0,
+            "hard": 0
+          }
+        },
+        {
+          "index": 5466,
+          "group": "anomaly_stu",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 1,
+            "hard": 1
+          }
+        },
+        {
+          "index": 4490,
+          "group": "anomaly_nuscenes",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 0,
+            "hard": 0
+          }
+        },
+        {
+          "index": 4023,
+          "group": "anomaly_nuscenes",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 1,
+            "hard": 1
+          }
+        },
+        {
+          "index": 227,
+          "group": "anomaly_nuscenes",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 0,
+            "hard": 0
+          }
+        }
+      ]
+    },
+    {
+      "query": {
+        "sequence": 143,
+        "frame": 312,
+        "instance": 3,
+        "role": "miss"
+      },
+      "neighbors": [
+        {
+          "index": 5140,
+          "group": "anomaly_stu",
+          "in_hard_pool": true,
+          "visits": {
+            "control": 1,
+            "hard": 2
+          }
+        },
+        {
+          "index": 5380,
+          "group": "anomaly_stu",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 0,
+            "hard": 0
+          }
+        },
+        {
+          "index": 5662,
+          "group": "anomaly_stu",
+          "in_hard_pool": true,
+          "visits": {
+            "control": 1,
+            "hard": 2
+          }
+        },
+        {
+          "index": 4490,
+          "group": "anomaly_nuscenes",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 0,
+            "hard": 0
+          }
+        },
+        {
+          "index": 4023,
+          "group": "anomaly_nuscenes",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 1,
+            "hard": 1
+          }
+        },
+        {
+          "index": 121,
+          "group": "anomaly_nuscenes",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 1,
+            "hard": 1
+          }
+        }
+      ]
+    },
+    {
+      "query": {
+        "sequence": 143,
+        "frame": 273,
+        "instance": 3,
+        "role": "miss"
+      },
+      "neighbors": [
+        {
+          "index": 5140,
+          "group": "anomaly_stu",
+          "in_hard_pool": true,
+          "visits": {
+            "control": 1,
+            "hard": 2
+          }
+        },
+        {
+          "index": 5552,
+          "group": "anomaly_stu",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 0,
+            "hard": 0
+          }
+        },
+        {
+          "index": 5452,
+          "group": "anomaly_stu",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 0,
+            "hard": 0
+          }
+        },
+        {
+          "index": 4023,
+          "group": "anomaly_nuscenes",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 1,
+            "hard": 1
+          }
+        },
+        {
+          "index": 4490,
+          "group": "anomaly_nuscenes",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 0,
+            "hard": 0
+          }
+        },
+        {
+          "index": 227,
+          "group": "anomaly_nuscenes",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 0,
+            "hard": 0
+          }
+        }
+      ]
+    },
+    {
+      "query": {
+        "sequence": 143,
+        "frame": 275,
+        "instance": 3,
+        "role": "success_reference"
+      },
+      "neighbors": [
+        {
+          "index": 5225,
+          "group": "anomaly_stu",
+          "in_hard_pool": true,
+          "visits": {
+            "control": 1,
+            "hard": 2
+          }
+        },
+        {
+          "index": 5260,
+          "group": "anomaly_stu",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 0,
+            "hard": 0
+          }
+        },
+        {
+          "index": 5466,
+          "group": "anomaly_stu",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 1,
+            "hard": 1
+          }
+        },
+        {
+          "index": 227,
+          "group": "anomaly_nuscenes",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 0,
+            "hard": 0
+          }
+        },
+        {
+          "index": 4023,
+          "group": "anomaly_nuscenes",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 1,
+            "hard": 1
+          }
+        },
+        {
+          "index": 2686,
+          "group": "anomaly_nuscenes",
+          "in_hard_pool": true,
+          "visits": {
+            "control": 0,
+            "hard": 1
+          }
+        }
+      ]
+    },
+    {
+      "query": {
+        "sequence": 143,
+        "frame": 276,
+        "instance": 3,
+        "role": "success_reference"
+      },
+      "neighbors": [
+        {
+          "index": 5278,
+          "group": "anomaly_stu",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 1,
+            "hard": 1
+          }
+        },
+        {
+          "index": 5552,
+          "group": "anomaly_stu",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 0,
+            "hard": 0
+          }
+        },
+        {
+          "index": 5466,
+          "group": "anomaly_stu",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 1,
+            "hard": 1
+          }
+        },
+        {
+          "index": 4556,
+          "group": "anomaly_nuscenes",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 1,
+            "hard": 1
+          }
+        },
+        {
+          "index": 2686,
+          "group": "anomaly_nuscenes",
+          "in_hard_pool": true,
+          "visits": {
+            "control": 0,
+            "hard": 1
+          }
+        },
+        {
+          "index": 4089,
+          "group": "anomaly_nuscenes",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 1,
+            "hard": 1
+          }
+        }
+      ]
+    },
+    {
+      "query": {
+        "sequence": 143,
+        "frame": 271,
+        "instance": 0,
+        "role": "false_positive"
+      },
+      "neighbors": [
+        {
+          "index": 5874,
+          "group": "normal_stu",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 1,
+            "hard": 1
+          }
+        },
+        {
+          "index": 4430,
+          "group": "anomaly_nuscenes",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 0,
+            "hard": 0
+          }
+        },
+        {
+          "index": 2185,
+          "group": "normal_nuscenes",
+          "in_hard_pool": true,
+          "visits": {
+            "control": 1,
+            "hard": 1
+          }
+        },
+        {
+          "index": 2562,
+          "group": "normal_nuscenes",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 1,
+            "hard": 1
+          }
+        }
+      ]
+    },
+    {
+      "query": {
+        "sequence": 138,
+        "frame": 336,
+        "instance": 0,
+        "role": "false_positive"
+      },
+      "neighbors": [
+        {
+          "index": 5109,
+          "group": "anomaly_stu",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 0,
+            "hard": 0
+          }
+        },
+        {
+          "index": 1959,
+          "group": "normal_nuscenes",
+          "in_hard_pool": true,
+          "visits": {
+            "control": 0,
+            "hard": 0
+          }
+        },
+        {
+          "index": 2561,
+          "group": "anomaly_nuscenes",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 0,
+            "hard": 0
+          }
+        },
+        {
+          "index": 2955,
+          "group": "normal_nuscenes",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 0,
+            "hard": 0
+          }
+        }
+      ]
+    },
+    {
+      "query": {
+        "sequence": 141,
+        "frame": 331,
+        "instance": 0,
+        "role": "false_positive"
+      },
+      "neighbors": [
+        {
+          "index": 5924,
+          "group": "normal_stu",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 0,
+            "hard": 0
+          }
+        },
+        {
+          "index": 2265,
+          "group": "anomaly_nuscenes",
+          "in_hard_pool": true,
+          "visits": {
+            "control": 1,
+            "hard": 2
+          }
+        },
+        {
+          "index": 4328,
+          "group": "anomaly_nuscenes",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 1,
+            "hard": 0
+          }
+        },
+        {
+          "index": 2785,
+          "group": "normal_nuscenes",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 0,
+            "hard": 0
+          }
+        }
+      ]
+    },
+    {
+      "query": {
+        "sequence": 147,
+        "frame": 239,
+        "instance": 0,
+        "role": "false_positive"
+      },
+      "neighbors": [
+        {
+          "index": 5109,
+          "group": "anomaly_stu",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 0,
+            "hard": 0
+          }
+        },
+        {
+          "index": 2726,
+          "group": "anomaly_nuscenes",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 1,
+            "hard": 1
+          }
+        },
+        {
+          "index": 4609,
+          "group": "normal_nuscenes",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 1,
+            "hard": 1
+          }
+        },
+        {
+          "index": 3970,
+          "group": "normal_nuscenes",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 1,
+            "hard": 0
+          }
+        }
+      ]
+    },
+    {
+      "query": {
+        "sequence": 140,
+        "frame": 271,
+        "instance": 0,
+        "role": "false_positive"
+      },
+      "neighbors": [
+        {
+          "index": 5921,
+          "group": "normal_stu",
+          "in_hard_pool": true,
+          "visits": {
+            "control": 0,
+            "hard": 1
+          }
+        },
+        {
+          "index": 4328,
+          "group": "anomaly_nuscenes",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 1,
+            "hard": 0
+          }
+        },
+        {
+          "index": 2924,
+          "group": "anomaly_nuscenes",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 0,
+            "hard": 0
+          }
+        },
+        {
+          "index": 3789,
+          "group": "anomaly_nuscenes",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 0,
+            "hard": 0
+          }
+        }
+      ]
+    },
+    {
+      "query": {
+        "sequence": 144,
+        "frame": 254,
+        "instance": 0,
+        "role": "false_positive"
+      },
+      "neighbors": [
+        {
+          "index": 5921,
+          "group": "normal_stu",
+          "in_hard_pool": true,
+          "visits": {
+            "control": 0,
+            "hard": 1
+          }
+        },
+        {
+          "index": 2924,
+          "group": "anomaly_nuscenes",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 0,
+            "hard": 0
+          }
+        },
+        {
+          "index": 3789,
+          "group": "anomaly_nuscenes",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 0,
+            "hard": 0
+          }
+        },
+        {
+          "index": 3586,
+          "group": "anomaly_nuscenes",
+          "in_hard_pool": true,
+          "visits": {
+            "control": 0,
+            "hard": 0
+          }
+        }
+      ]
+    },
+    {
+      "query": {
+        "sequence": 143,
+        "frame": 271,
+        "instance": 0,
+        "role": "normal_success_reference"
+      },
+      "neighbors": [
+        {
+          "index": 6019,
+          "group": "normal_stu",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 1,
+            "hard": 0
+          }
+        },
+        {
+          "index": 523,
+          "group": "normal_nuscenes",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 1,
+            "hard": 0
+          }
+        },
+        {
+          "index": 256,
+          "group": "normal_nuscenes",
+          "in_hard_pool": true,
+          "visits": {
+            "control": 1,
+            "hard": 2
+          }
+        },
+        {
+          "index": 1324,
+          "group": "anomaly_nuscenes",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 1,
+            "hard": 1
+          }
+        }
+      ]
+    },
+    {
+      "query": {
+        "sequence": 138,
+        "frame": 336,
+        "instance": 0,
+        "role": "normal_success_reference"
+      },
+      "neighbors": [
+        {
+          "index": 5873,
+          "group": "normal_stu",
+          "in_hard_pool": true,
+          "visits": {
+            "control": 1,
+            "hard": 2
+          }
+        },
+        {
+          "index": 2562,
+          "group": "normal_nuscenes",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 1,
+            "hard": 1
+          }
+        },
+        {
+          "index": 260,
+          "group": "normal_nuscenes",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 1,
+            "hard": 1
+          }
+        },
+        {
+          "index": 809,
+          "group": "normal_nuscenes",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 1,
+            "hard": 1
+          }
+        }
+      ]
+    },
+    {
+      "query": {
+        "sequence": 141,
+        "frame": 331,
+        "instance": 0,
+        "role": "normal_success_reference"
+      },
+      "neighbors": [
+        {
+          "index": 6004,
+          "group": "normal_stu",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 1,
+            "hard": 1
+          }
+        },
+        {
+          "index": 3395,
+          "group": "normal_nuscenes",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 1,
+            "hard": 1
+          }
+        },
+        {
+          "index": 4560,
+          "group": "anomaly_nuscenes",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 1,
+            "hard": 1
+          }
+        },
+        {
+          "index": 1917,
+          "group": "normal_nuscenes",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 0,
+            "hard": 0
+          }
+        }
+      ]
+    },
+    {
+      "query": {
+        "sequence": 147,
+        "frame": 239,
+        "instance": 0,
+        "role": "normal_success_reference"
+      },
+      "neighbors": [
+        {
+          "index": 5324,
+          "group": "anomaly_stu",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 0,
+            "hard": 0
+          }
+        },
+        {
+          "index": 260,
+          "group": "normal_nuscenes",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 1,
+            "hard": 1
+          }
+        },
+        {
+          "index": 2562,
+          "group": "normal_nuscenes",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 1,
+            "hard": 1
+          }
+        },
+        {
+          "index": 747,
+          "group": "normal_nuscenes",
+          "in_hard_pool": true,
+          "visits": {
+            "control": 1,
+            "hard": 1
+          }
+        }
+      ]
+    },
+    {
+      "query": {
+        "sequence": 140,
+        "frame": 271,
+        "instance": 0,
+        "role": "normal_success_reference"
+      },
+      "neighbors": [
+        {
+          "index": 5925,
+          "group": "normal_stu",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 0,
+            "hard": 0
+          }
+        },
+        {
+          "index": 2265,
+          "group": "anomaly_nuscenes",
+          "in_hard_pool": true,
+          "visits": {
+            "control": 1,
+            "hard": 2
+          }
+        },
+        {
+          "index": 4328,
+          "group": "anomaly_nuscenes",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 1,
+            "hard": 0
+          }
+        },
+        {
+          "index": 4896,
+          "group": "anomaly_nuscenes",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 0,
+            "hard": 0
+          }
+        }
+      ]
+    },
+    {
+      "query": {
+        "sequence": 144,
+        "frame": 254,
+        "instance": 0,
+        "role": "normal_success_reference"
+      },
+      "neighbors": [
+        {
+          "index": 6007,
+          "group": "normal_stu",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 0,
+            "hard": 0
+          }
+        },
+        {
+          "index": 583,
+          "group": "normal_nuscenes",
+          "in_hard_pool": true,
+          "visits": {
+            "control": 1,
+            "hard": 1
+          }
+        },
+        {
+          "index": 50,
+          "group": "normal_nuscenes",
+          "in_hard_pool": false,
+          "visits": {
+            "control": 1,
+            "hard": 0
+          }
+        },
+        {
+          "index": 1775,
+          "group": "normal_nuscenes",
+          "in_hard_pool": true,
+          "visits": {
+            "control": 0,
+            "hard": 1
+          }
+        }
+      ]
+    }
+  ],
+  "C_training_positive_scores": {
+    "anomaly_nuscenes": {
+      "count": 447724,
+      "quantiles": [
+        5.125,
+        25.25,
+        35.0,
+        36.25,
+        36.5
+      ]
+    },
+    "anomaly_stu": {
+      "count": 68426,
+      "quantiles": [
+        -4.53125,
+        1.9375,
+        22.125,
+        35.75,
+        36.25
+      ]
+    }
+  },
+  "cases": [
+    {
+      "index": 127,
+      "sequence": 125,
+      "frame": 127,
+      "instance": 1,
+      "role": "miss",
+      "kind": "anomaly",
+      "count": 316,
+      "models": {
+        "lr": {
+          "50": 316,
+          "75": 316,
+          "90": 214,
+          "95": 75,
+          "99": 3
+        },
+        "control": {
+          "50": 316,
+          "75": 316,
+          "90": 239,
+          "95": 82,
+          "99": 3
+        },
+        "hard": {
+          "50": 316,
+          "75": 316,
+          "90": 237,
+          "95": 85,
+          "99": 3
+        }
+      }
+    },
+    {
+      "index": 128,
+      "sequence": 125,
+      "frame": 128,
+      "instance": 1,
+      "role": "miss",
+      "kind": "anomaly",
+      "count": 308,
+      "models": {
+        "lr": {
+          "50": 308,
+          "75": 308,
+          "90": 231,
+          "95": 74,
+          "99": 17
+        },
+        "control": {
+          "50": 308,
+          "75": 308,
+          "90": 256,
+          "95": 114,
+          "99": 18
+        },
+        "hard": {
+          "50": 308,
+          "75": 308,
+          "90": 278,
+          "95": 169,
+          "99": 26
+        }
+      }
+    },
+    {
+      "index": 126,
+      "sequence": 125,
+      "frame": 126,
+      "instance": 1,
+      "role": "miss",
+      "kind": "anomaly",
+      "count": 307,
+      "models": {
+        "lr": {
+          "50": 307,
+          "75": 307,
+          "90": 243,
+          "95": 80,
+          "99": 0
+        },
+        "control": {
+          "50": 307,
+          "75": 307,
+          "90": 276,
+          "95": 94,
+          "99": 0
+        },
+        "hard": {
+          "50": 307,
+          "75": 307,
+          "90": 295,
+          "95": 149,
+          "99": 4
+        }
+      }
+    },
+    {
+      "index": 156,
+      "sequence": 125,
+      "frame": 156,
+      "instance": 1,
+      "role": "success_reference",
+      "kind": "anomaly",
+      "count": 250,
+      "models": {
+        "lr": {
+          "50": 218,
+          "75": 0,
+          "90": 0,
+          "95": 0,
+          "99": 0
+        },
+        "control": {
+          "50": 227,
+          "75": 0,
+          "90": 0,
+          "95": 0,
+          "99": 0
+        },
+        "hard": {
+          "50": 229,
+          "75": 0,
+          "90": 0,
+          "95": 0,
+          "99": 0
+        }
+      }
+    },
+    {
+      "index": 160,
+      "sequence": 125,
+      "frame": 160,
+      "instance": 1,
+      "role": "success_reference",
+      "kind": "anomaly",
+      "count": 201,
+      "models": {
+        "lr": {
+          "50": 198,
+          "75": 0,
+          "90": 0,
+          "95": 0,
+          "99": 0
+        },
+        "control": {
+          "50": 176,
+          "75": 0,
+          "90": 0,
+          "95": 0,
+          "99": 0
+        },
+        "hard": {
+          "50": 201,
+          "75": 0,
+          "90": 0,
+          "95": 0,
+          "99": 0
+        }
+      }
+    },
+    {
+      "index": 8424,
+      "sequence": 169,
+      "frame": 365,
+      "instance": 1,
+      "role": "miss",
+      "kind": "anomaly",
+      "count": 191,
+      "models": {
+        "lr": {
+          "50": 191,
+          "75": 187,
+          "90": 114,
+          "95": 60,
+          "99": 5
+        },
+        "control": {
+          "50": 191,
+          "75": 187,
+          "90": 91,
+          "95": 46,
+          "99": 5
+        },
+        "hard": {
+          "50": 191,
+          "75": 188,
+          "90": 128,
+          "95": 73,
+          "99": 5
+        }
+      }
+    },
+    {
+      "index": 8411,
+      "sequence": 169,
+      "frame": 352,
+      "instance": 1,
+      "role": "miss",
+      "kind": "anomaly",
+      "count": 149,
+      "models": {
+        "lr": {
+          "50": 149,
+          "75": 149,
+          "90": 149,
+          "95": 146,
+          "99": 11
+        },
+        "control": {
+          "50": 149,
+          "75": 149,
+          "90": 148,
+          "95": 136,
+          "99": 3
+        },
+        "hard": {
+          "50": 149,
+          "75": 149,
+          "90": 148,
+          "95": 146,
+          "99": 28
+        }
+      }
+    },
+    {
+      "index": 8425,
+      "sequence": 169,
+      "frame": 366,
+      "instance": 1,
+      "role": "miss",
+      "kind": "anomaly",
+      "count": 134,
+      "models": {
+        "lr": {
+          "50": 134,
+          "75": 134,
+          "90": 112,
+          "95": 40,
+          "99": 3
+        },
+        "control": {
+          "50": 134,
+          "75": 134,
+          "90": 83,
+          "95": 20,
+          "99": 3
+        },
+        "hard": {
+          "50": 134,
+          "75": 134,
+          "90": 115,
+          "95": 54,
+          "99": 3
+        }
+      }
+    },
+    {
+      "index": 8412,
+      "sequence": 169,
+      "frame": 353,
+      "instance": 1,
+      "role": "success_reference",
+      "kind": "anomaly",
+      "count": 209,
+      "models": {
+        "lr": {
+          "50": 205,
+          "75": 12,
+          "90": 8,
+          "95": 7,
+          "99": 6
+        },
+        "control": {
+          "50": 192,
+          "75": 10,
+          "90": 7,
+          "95": 7,
+          "99": 6
+        },
+        "hard": {
+          "50": 209,
+          "75": 12,
+          "90": 8,
+          "95": 7,
+          "99": 6
+        }
+      }
+    },
+    {
+      "index": 8432,
+      "sequence": 169,
+      "frame": 373,
+      "instance": 1,
+      "role": "success_reference",
+      "kind": "anomaly",
+      "count": 28,
+      "models": {
+        "lr": {
+          "50": 16,
+          "75": 2,
+          "90": 1,
+          "95": 1,
+          "99": 1
+        },
+        "control": {
+          "50": 19,
+          "75": 2,
+          "90": 1,
+          "95": 1,
+          "99": 1
+        },
+        "hard": {
+          "50": 23,
+          "75": 2,
+          "90": 1,
+          "95": 1,
+          "99": 1
+        }
+      }
+    },
+    {
+      "index": 3859,
+      "sequence": 143,
+      "frame": 271,
+      "instance": 3,
+      "role": "miss",
+      "kind": "anomaly",
+      "count": 110,
+      "models": {
+        "lr": {
+          "50": 110,
+          "75": 110,
+          "90": 20,
+          "95": 0,
+          "99": 0
+        },
+        "control": {
+          "50": 110,
+          "75": 110,
+          "90": 27,
+          "95": 0,
+          "99": 0
+        },
+        "hard": {
+          "50": 110,
+          "75": 110,
+          "90": 52,
+          "95": 1,
+          "99": 0
+        }
+      }
+    },
+    {
+      "index": 3900,
+      "sequence": 143,
+      "frame": 312,
+      "instance": 3,
+      "role": "miss",
+      "kind": "anomaly",
+      "count": 105,
+      "models": {
+        "lr": {
+          "50": 105,
+          "75": 105,
+          "90": 105,
+          "95": 27,
+          "99": 0
+        },
+        "control": {
+          "50": 105,
+          "75": 105,
+          "90": 105,
+          "95": 47,
+          "99": 0
+        },
+        "hard": {
+          "50": 105,
+          "75": 105,
+          "90": 105,
+          "95": 45,
+          "99": 0
+        }
+      }
+    },
+    {
+      "index": 3861,
+      "sequence": 143,
+      "frame": 273,
+      "instance": 3,
+      "role": "miss",
+      "kind": "anomaly",
+      "count": 131,
+      "models": {
+        "lr": {
+          "50": 131,
+          "75": 103,
+          "90": 0,
+          "95": 0,
+          "99": 0
+        },
+        "control": {
+          "50": 131,
+          "75": 105,
+          "90": 0,
+          "95": 0,
+          "99": 0
+        },
+        "hard": {
+          "50": 131,
+          "75": 109,
+          "90": 0,
+          "95": 0,
+          "99": 0
+        }
+      }
+    },
+    {
+      "index": 3863,
+      "sequence": 143,
+      "frame": 275,
+      "instance": 3,
+      "role": "success_reference",
+      "kind": "anomaly",
+      "count": 158,
+      "models": {
+        "lr": {
+          "50": 3,
+          "75": 0,
+          "90": 0,
+          "95": 0,
+          "99": 0
+        },
+        "control": {
+          "50": 4,
+          "75": 0,
+          "90": 0,
+          "95": 0,
+          "99": 0
+        },
+        "hard": {
+          "50": 3,
+          "75": 0,
+          "90": 0,
+          "95": 0,
+          "99": 0
+        }
+      }
+    },
+    {
+      "index": 3864,
+      "sequence": 143,
+      "frame": 276,
+      "instance": 3,
+      "role": "success_reference",
+      "kind": "anomaly",
+      "count": 133,
+      "models": {
+        "lr": {
+          "50": 80,
+          "75": 0,
+          "90": 0,
+          "95": 0,
+          "99": 0
+        },
+        "control": {
+          "50": 41,
+          "75": 0,
+          "90": 0,
+          "95": 0,
+          "99": 0
+        },
+        "hard": {
+          "50": 66,
+          "75": 0,
+          "90": 0,
+          "95": 0,
+          "99": 0
+        }
+      }
+    },
+    {
+      "index": 3859,
+      "sequence": 143,
+      "frame": 271,
+      "instance": 0,
+      "role": "false_positive",
+      "kind": "normal",
+      "count": 484,
+      "models": {
+        "lr": {
+          "50": 0,
+          "75": 402,
+          "90": 484,
+          "95": 484,
+          "99": 484
+        },
+        "control": {
+          "50": 0,
+          "75": 454,
+          "90": 484,
+          "95": 484,
+          "99": 484
+        },
+        "hard": {
+          "50": 3,
+          "75": 482,
+          "90": 484,
+          "95": 484,
+          "99": 484
+        }
+      }
+    },
+    {
+      "index": 1151,
+      "sequence": 138,
+      "frame": 336,
+      "instance": 0,
+      "role": "false_positive",
+      "kind": "normal",
+      "count": 481,
+      "models": {
+        "lr": {
+          "50": 0,
+          "75": 0,
+          "90": 468,
+          "95": 481,
+          "99": 481
+        },
+        "control": {
+          "50": 0,
+          "75": 13,
+          "90": 479,
+          "95": 481,
+          "99": 481
+        },
+        "hard": {
+          "50": 0,
+          "75": 43,
+          "90": 480,
+          "95": 481,
+          "99": 481
+        }
+      }
+    },
+    {
+      "index": 2685,
+      "sequence": 141,
+      "frame": 331,
+      "instance": 0,
+      "role": "false_positive",
+      "kind": "normal",
+      "count": 514,
+      "models": {
+        "lr": {
+          "50": 0,
+          "75": 384,
+          "90": 456,
+          "95": 460,
+          "99": 460
+        },
+        "control": {
+          "50": 0,
+          "75": 384,
+          "90": 459,
+          "95": 460,
+          "99": 460
+        },
+        "hard": {
+          "50": 0,
+          "75": 385,
+          "90": 460,
+          "95": 460,
+          "99": 460
+        }
+      }
+    },
+    {
+      "index": 5330,
+      "sequence": 147,
+      "frame": 239,
+      "instance": 0,
+      "role": "false_positive",
+      "kind": "normal",
+      "count": 446,
+      "models": {
+        "lr": {
+          "50": 0,
+          "75": 14,
+          "90": 445,
+          "95": 446,
+          "99": 446
+        },
+        "control": {
+          "50": 0,
+          "75": 100,
+          "90": 446,
+          "95": 446,
+          "99": 446
+        },
+        "hard": {
+          "50": 0,
+          "75": 362,
+          "90": 446,
+          "95": 446,
+          "99": 446
+        }
+      }
+    },
+    {
+      "index": 2144,
+      "sequence": 140,
+      "frame": 271,
+      "instance": 0,
+      "role": "false_positive",
+      "kind": "normal",
+      "count": 444,
+      "models": {
+        "lr": {
+          "50": 0,
+          "75": 444,
+          "90": 444,
+          "95": 444,
+          "99": 444
+        },
+        "control": {
+          "50": 0,
+          "75": 444,
+          "90": 444,
+          "95": 444,
+          "99": 444
+        },
+        "hard": {
+          "50": 0,
+          "75": 444,
+          "90": 444,
+          "95": 444,
+          "99": 444
+        }
+      }
+    },
+    {
+      "index": 4311,
+      "sequence": 144,
+      "frame": 254,
+      "instance": 0,
+      "role": "false_positive",
+      "kind": "normal",
+      "count": 396,
+      "models": {
+        "lr": {
+          "50": 0,
+          "75": 396,
+          "90": 396,
+          "95": 396,
+          "99": 396
+        },
+        "control": {
+          "50": 0,
+          "75": 396,
+          "90": 396,
+          "95": 396,
+          "99": 396
+        },
+        "hard": {
+          "50": 0,
+          "75": 396,
+          "90": 396,
+          "95": 396,
+          "99": 396
+        }
+      }
+    },
+    {
+      "index": 3859,
+      "sequence": 143,
+      "frame": 271,
+      "instance": 0,
+      "role": "normal_success_reference",
+      "kind": "normal",
+      "count": 580,
+      "models": {
+        "lr": {
+          "50": 0,
+          "75": 0,
+          "90": 0,
+          "95": 0,
+          "99": 0
+        },
+        "control": {
+          "50": 0,
+          "75": 0,
+          "90": 0,
+          "95": 0,
+          "99": 0
+        },
+        "hard": {
+          "50": 0,
+          "75": 0,
+          "90": 0,
+          "95": 0,
+          "99": 0
+        }
+      }
+    },
+    {
+      "index": 1151,
+      "sequence": 138,
+      "frame": 336,
+      "instance": 0,
+      "role": "normal_success_reference",
+      "kind": "normal",
+      "count": 440,
+      "models": {
+        "lr": {
+          "50": 0,
+          "75": 0,
+          "90": 0,
+          "95": 0,
+          "99": 0
+        },
+        "control": {
+          "50": 0,
+          "75": 0,
+          "90": 0,
+          "95": 0,
+          "99": 0
+        },
+        "hard": {
+          "50": 0,
+          "75": 0,
+          "90": 0,
+          "95": 0,
+          "99": 0
+        }
+      }
+    },
+    {
+      "index": 2685,
+      "sequence": 141,
+      "frame": 331,
+      "instance": 0,
+      "role": "normal_success_reference",
+      "kind": "normal",
+      "count": 791,
+      "models": {
+        "lr": {
+          "50": 0,
+          "75": 0,
+          "90": 0,
+          "95": 0,
+          "99": 0
+        },
+        "control": {
+          "50": 0,
+          "75": 0,
+          "90": 0,
+          "95": 0,
+          "99": 0
+        },
+        "hard": {
+          "50": 0,
+          "75": 0,
+          "90": 0,
+          "95": 0,
+          "99": 0
+        }
+      }
+    },
+    {
+      "index": 5330,
+      "sequence": 147,
+      "frame": 239,
+      "instance": 0,
+      "role": "normal_success_reference",
+      "kind": "normal",
+      "count": 411,
+      "models": {
+        "lr": {
+          "50": 0,
+          "75": 0,
+          "90": 0,
+          "95": 0,
+          "99": 0
+        },
+        "control": {
+          "50": 0,
+          "75": 0,
+          "90": 0,
+          "95": 0,
+          "99": 0
+        },
+        "hard": {
+          "50": 0,
+          "75": 0,
+          "90": 0,
+          "95": 0,
+          "99": 0
+        }
+      }
+    },
+    {
+      "index": 2144,
+      "sequence": 140,
+      "frame": 271,
+      "instance": 0,
+      "role": "normal_success_reference",
+      "kind": "normal",
+      "count": 480,
+      "models": {
+        "lr": {
+          "50": 0,
+          "75": 0,
+          "90": 0,
+          "95": 0,
+          "99": 3
+        },
+        "control": {
+          "50": 0,
+          "75": 0,
+          "90": 0,
+          "95": 0,
+          "99": 0
+        },
+        "hard": {
+          "50": 0,
+          "75": 0,
+          "90": 0,
+          "95": 0,
+          "99": 0
+        }
+      }
+    },
+    {
+      "index": 4311,
+      "sequence": 144,
+      "frame": 254,
+      "instance": 0,
+      "role": "normal_success_reference",
+      "kind": "normal",
+      "count": 742,
+      "models": {
+        "lr": {
+          "50": 0,
+          "75": 0,
+          "90": 0,
+          "95": 0,
+          "99": 0
+        },
+        "control": {
+          "50": 0,
+          "75": 0,
+          "90": 0,
+          "95": 0,
+          "99": 0
+        },
+        "hard": {
+          "50": 0,
+          "75": 0,
+          "90": 0,
+          "95": 0,
+          "99": 0
+        }
+      }
+    }
+  ],
+  "interpretation": "Single-seed C continuations; test one training-only sampling rule. Endpoints and inherited-start best are separate. C-domain numerical sensitivity remains a quality limitation, not a gate."
+}
