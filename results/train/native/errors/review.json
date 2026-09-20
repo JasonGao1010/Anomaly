@@ -1742,18 +1742,18 @@
     "report": "results/train/native/errors/transfer.json",
     "findings": {
       "P125:1": {
-        "supported": "修正后重算三个既有训练世界的543个观测，9个已选观测415点的BCE为0.000274，未选观测42731点的BCE为0.002274；这些候选大多已识别，真实125仍持续失分。",
+        "supported": "修正后重算三个既有训练世界的543个观测，9个已选观测415点的BCE为0.000274，未选观测42731点的BCE为0.002274；这些候选大多已识别，真实125仍持续失分。 本次仅改变正常局部监督，P125失分由未加权组的11.001595变为10.149511，75%全局召回下漏检由14400变为13881。该变化包含共享参数与全局排序的影响，不能据此解释为异常几何覆盖已经补齐。",
         "excluded": "当前结果不支持优先增加这三个世界的重复观测；尚不能排除其他几何、响应或背景关系覆盖不足。",
         "missing": "真实物体与候选的形态、表面响应和背景关系仍未证实等价；AP分摊下降不能直接等同于本物体各召回点的漏检减少。",
         "modification": "保留精度修正和已验证候选，不据此扩产这三个几何，也不更换交互模块。",
         "next_test": "固定现有异常候选的几何、位姿和射线，逐项核验其表面响应及邻接关系与失败/成功观测的差异；只在训练来源构造单因素对照，真实125仅评价。"
       },
       "N125:30": {
-        "supported": "记录6006为可信道路局部，但重复31次后BCE为0.975397，原顺序对照为0.982049，均未低于修正C的0.791767。两目标连续片段失分为0.753421→0.770654，75%召回误报为1671→1680。整体AP增益未验证预设的局部学习与迁移解释。",
-        "excluded": "这24点均受到正常监督，损失对分数的梯度方向正确；未发现忽略标签或损失到分数这一段的梯度中断。该检查未追踪实际更新中分数到共享参数的梯度。全局AP提高不等于这两个道路片段学好了。5757局部为45点地形和5点人行道，不能直接充当同类道路证据。",
-        "missing": "仍未区分局部监督强度不足与共享参数更新的影响；不能确认真实N125主要属于没学够，亦不能确认它缺样本或学错关联。单次0.53028个百分点额外AP收益的重复性未检验。",
-        "modification": "保存80.53251%候选和80.00223%对照，保留78.06939%基线；不将6006重复配方直接推广，也不由这次AP提高宣布N125归因完成。",
-        "next_test": "下一项可固定本轮6006重复输入、C完整起点和40步预算，仅比较原组合损失与原损失加1.0倍这24个训练正常点的局部均值BCE。先判断目标局部能否拟合，再看未参与更新观测、两个真实道路片段及完整AP；仅训练局部改善不能解释真实失分。该改变损失权重的实验本轮未执行。"
+        "supported": "记录6006为可信道路局部，但重复31次后BCE为0.975397，原顺序对照为0.982049，均未低于修正C的0.791767。两目标连续片段失分为0.753421→0.770654，75%召回误报为1671→1680。整体AP增益未验证预设的局部学习与迁移解释。 局部权重1.0的40步诊断中，实际逐步记录的训练24点BCE由0.784512变为0.000976，零分错误由11变为0；其他观测BCE为0.000631。两道路片段失分为0.657424，75%召回误报为1397；完整AP为81.63721%，相对未加权素材组变化+1.10469个百分点。 训练局部、其他观测与预选真实片段均改善，支持这处局部监督的迁移价值；不只是重复增加扫描次数。",
+        "excluded": "这24点均受到正常监督，损失对分数的梯度方向正确；未发现忽略标签或损失到分数这一段的梯度中断。该检查未追踪实际更新中分数到共享参数的梯度。全局AP提高不等于这两个道路片段学好了。5757局部为45点地形和5点人行道，不能直接充当同类道路证据。 加强局部监督后该训练局部能够改善，因此不支持该局部在当前表示下完全不可拟合。",
+        "missing": "val19已反复参与开发与素材选择，本次迁移不是独立泛化证据；尚缺统一局部规则在隔离背景和源几何上的对照、随机种子复核及极高召回误报变化解释。",
+        "modification": "分别保留局部加权81.63721%与未加权80.53251%候选，固定78.06939%诊断起点；局部加权仅作为有迁移迹象的诊断候选，尚不固化正式规则。",
+        "next_test": "先明确内部开发与最终留出来源，核对异常任务和预训练暴露；已有350条检查数据只作内部开发。再预先固定只依赖训练来源标签与误报的统一局部规则，在多种结构上做同输入同预算对照和种子复核，日常选择只依靠内部开发，val19仅在约定节点评价。"
       }
     },
     "comparison": {
@@ -1799,6 +1799,20 @@
             "P125:1": 14400,
             "N125:30": 4424
           }
+        },
+        "local": {
+          "training_patch_BCE": 0.0009757106308825314,
+          "training_patch_wrong_at_zero": 0,
+          "unfitted_views": 9,
+          "unfitted_points": 556,
+          "unfitted_BCE": 0.0006308587596564563,
+          "unfitted_FP95": 0,
+          "focused_normal_AP_loss": 0.6574239090306017,
+          "focused_normal_FP75": 1397,
+          "case_errors75": {
+            "P125:1": 13881,
+            "N125:30": 3587
+          }
         }
       },
       "configuration_differences": [
@@ -1807,6 +1821,189 @@
       "AP_gain_over_control": 0.5302832325092197,
       "scope": "One paired seed; identical initial RNG and per-pair rank seeds. Changing scan sizes can change subsequent stochastic-depth draws, so repeat uncertainty is not estimated."
     },
-    "scope": "Complete official ranking for all endpoints; focused material intervention, not a completed attribution of all remaining AP loss. Positive and normal AP allocations are separate margins."
+    "scope": "Complete official ranking for all endpoints; focused material intervention, not a completed attribution of all remaining AP loss. Positive and normal AP allocations are separate margins.",
+    "local_comparison": {
+      "plan": {
+        "index": 6006,
+        "slots": [
+          89577,
+          89578,
+          89579,
+          89580,
+          89581,
+          89582,
+          89583,
+          89584,
+          89585,
+          89586,
+          89587,
+          89588,
+          90576,
+          90577,
+          90578,
+          90579,
+          90580,
+          90581,
+          90582,
+          90583,
+          90584,
+          90585,
+          90586,
+          90587
+        ],
+        "cell": [
+          13,
+          2,
+          -3
+        ],
+        "cell_size": 0.75,
+        "weight": 1.0,
+        "label": 0,
+        "normalization": "mean over all selected point occurrences in the effective batch; zero when absent",
+        "control": "results/train/native/transfer/material/0/conditional",
+        "start": "C update 1000 full state",
+        "updates": 40,
+        "fixed": "material arm's exact 320 scan visits, remaining schedule, optimizer/RNG, model and original composite loss",
+        "changed": "add weight 1.0 normal BCE averaged over the 24 selected points and their occurrences within each effective batch",
+        "decisions": {
+          "all_improve": "supports local-supervision transfer; assess full AP before adoption",
+          "training_only": "fitting is possible; examine observation coverage and generalization",
+          "no_fitting": "inspect actual gradients, shared updates and optimization; no capacity conclusion"
+        }
+      },
+      "configuration_differences": [
+        "branch",
+        "code",
+        "local"
+      ],
+      "identical_input_order": true,
+      "identical_final_rng": true,
+      "trace": "results/train/native/transfer/local/0/conditional/local.json",
+      "initial": {
+        "scores": [
+          1.6796875,
+          1.421875,
+          1.3046875,
+          1.4140625,
+          0.9453125,
+          1.6640625,
+          1.6328125,
+          0.98046875,
+          1.2890625,
+          0.8359375,
+          0.486328125,
+          -0.9765625,
+          -0.29296875,
+          -0.6875,
+          -1.03125,
+          -1.03125,
+          -2.953125,
+          -2.9375,
+          -2.65625,
+          -2.96875,
+          -3.03125,
+          -3.25,
+          -3.75,
+          -3.6875
+        ],
+        "mean_BCE": 0.7845115065574646,
+        "wrong_at_zero": 11
+      },
+      "final": {
+        "scores": [
+          -6.53125,
+          -6.6875,
+          -6.625,
+          -6.65625,
+          -6.53125,
+          -6.28125,
+          -6.125,
+          -6.53125,
+          -6.5625,
+          -6.6875,
+          -6.6875,
+          -7.375,
+          -6.875,
+          -7.09375,
+          -7.1875,
+          -7.1875,
+          -7.8125,
+          -7.78125,
+          -7.65625,
+          -7.6875,
+          -7.6875,
+          -7.75,
+          -8.125,
+          -8.125
+        ],
+        "mean_BCE": 0.0009757107472978532,
+        "wrong_at_zero": 0
+      },
+      "actual_updates": {
+        "count": 40,
+        "improved": 32,
+        "worsened": 8,
+        "unchanged": 0,
+        "with_local_supervision": 22,
+        "clipped": 12,
+        "parameter_delta_min": 0.010315707108865795
+      },
+      "baseline_readout_note": "The cached C material readout has BCE 0.791767; this run starts at 0.784512. Repeated fixed-state monitor inference was identical. These separate executions are retained separately, not presented as one bitwise-identical prediction stream.",
+      "change_from_material": {
+        "training_patch_BCE": -0.9744211013312452,
+        "training_patch_wrong_at_zero": -12,
+        "unfitted_BCE": -0.036395197346962095,
+        "unfitted_FP95": -12,
+        "focused_normal_AP_loss": -0.11322977883429874,
+        "focused_normal_FP75": -283
+      },
+      "AP_gain_over_material": 1.104694474088518,
+      "scope": "Single paired diagnostic on repeatedly used val19. Case-guided selection is development even without validation gradients; observed transfer is not independent cross-scene or cross-object generalization evidence."
+    },
+    "evidence_scope": {
+      "val19": "Repeatedly used for development, model selection and case-guided material selection; not an independent generalization test, despite never entering gradients",
+      "local_weighting": "Diagnostic intervention only; fixed record 6006 and its 24 slots are not a proposed general training rule",
+      "internal_development": {
+        "manifest": "results/train/native/diagnostics/check.json",
+        "records": 350,
+        "normal_scans": 162,
+        "synthetic_scans": 188,
+        "logs": [
+          "343d984344e440c7952d1e403b572b2a",
+          "6175c3299ae0482791f4ab1e9d54b326",
+          "853a9f9fe7e84bb8b24bff8ebf23f287",
+          "8fefc430cbfa4c2191978c0df302eb98"
+        ],
+        "anomaly_training_log_overlap": [],
+        "geometries": [
+          "proxy-012",
+          "proxy-013",
+          "proxy-014"
+        ],
+        "already_evaluated_in": [
+          "results/train/native/diagnostics/m500.json",
+          "results/train/native/diagnostics/m1547.json",
+          "results/train/native/diagnostics/b1547.json"
+        ],
+        "limits": "Normal-only nuScenes checks and new geometries on the same STU 206 background; cannot jointly establish unseen-background anomaly recognition"
+      },
+      "pretraining": {
+        "config": "https://github.com/prs-eth/LitePT/blob/436d04801c8151faebe66a1b2d368a9711e7e6aa/configs/nuscenes/semseg-litept-small-v1m1.py",
+        "dataset": "https://github.com/prs-eth/LitePT/blob/436d04801c8151faebe66a1b2d368a9711e7e6aa/datasets/nuscenes.py",
+        "declared_split": "train",
+        "exposure": "The four check scenes belong to official nuScenes train; treat their backgrounds as pretraining-exposed under the published recipe. Author per-scan visit records are unavailable."
+      },
+      "final_holdout": {
+        "established": false,
+        "reason": "Current internal checks and val19 have already informed development; repartitioning them does not undo that exposure"
+      },
+      "adoption_requires": [
+        "task-based sample and sensor rationale",
+        "one uniform mechanism across structures",
+        "log/source-geometry-isolated controls with explicit pretraining exposure",
+        "bounded search, failed results and seed variability records"
+      ],
+      "next_step": "Define development and final-holdout roles before new training; use development for daily selection, val19 only at predeclared milestones, and independent testing after the final recipe is fixed"
+    }
   }
 }

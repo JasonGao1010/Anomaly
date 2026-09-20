@@ -19,9 +19,10 @@ import numpy as np
 import torch
 import torch.distributed as dist
 from torch import nn
+from torch.nn import functional as F
 from torch.utils.data import DataLoader
 
-from .data import (VERSION, PILOT_VERSION, CONTINUATION_VERSION, NATIVE_VERSION, file_sha256, identity,
+from .data import (VERSION, PILOT_VERSION, CONTINUATION_VERSION, NATIVE_VERSION, Scans, file_sha256, identity,
                    load_manifest, replace_background, write_json)
 from .evaluate import PreparedScans, autocast, better, evaluate, memory_available, precision
 from .model import (POINT_CHUNK, Segmentor, balanced_loss, ranking_loss, to_device,
@@ -168,7 +169,15 @@ def ranking_weight(step, total):
     return min(1., max(0., (step / total - .1) / .1))
 
 
-def forward_loss(model, samples, counts, *, rank_weight=0., rank_seed=0, auc_weight=.1, fpr95_weight=.1):
+def local_mask(sample, local):
+    mask = torch.isin(sample["slots"], torch.as_tensor(local["slots"], device=sample["slots"].device))
+    if int(mask.sum()) != len(local["slots"]) or not bool((sample["targets"][mask] == 0).all()):
+        raise ValueError("local supervision must address the same verified normal returns")
+    return mask
+
+
+def forward_loss(model, samples, counts, *, rank_weight=0., rank_seed=0, auc_weight=.1, fpr95_weight=.1,
+                 local=None, local_count=0):
     """Retain both full-scan graphs; concatenate scores only for the training objective."""
     predictions = [model(sample) for sample in samples]
     prediction = torch.cat(predictions)
@@ -179,7 +188,14 @@ def forward_loss(model, samples, counts, *, rank_weight=0., rank_seed=0, auc_wei
                                      auc_weight=auc_weight, fpr95_weight=fpr95_weight)
     else:
         rank, details = bce * 0, {}
-    return bce + rank_weight * rank, dict(bce=bce.detach(), **details)
+    loss = bce + rank_weight * rank
+    if local is not None:
+        chosen = [p[local_mask(s, local)] for s, p in zip(samples, predictions) if int(s["index"]) == local["index"]]
+        # Normalize across all occurrences in the effective batch, not per microbatch.
+        extra = local["weight"] * F.softplus(torch.cat(chosen).float()).sum() / local_count if chosen else bce * 0
+        loss = loss + extra
+        details.update(local=extra.detach(), local_scores=[p.detach().cpu().tolist() for p in chosen])
+    return loss, dict(bce=bce.detach(), **details)
 
 
 def optimizer_for(model, stage):
@@ -211,6 +227,27 @@ def restore_rng(saved, device):
     torch.set_rng_state(saved["torch"])
     if saved["cuda"] is not None:
         torch.cuda.set_rng_state(saved["cuda"], device)
+
+
+@torch.no_grad()
+def observe_local(model, sample, local, device):
+    """Compare parameter updates with fixed inference, without consuming training RNG or updating BN."""
+    state = rng_state(device)
+    modes = [(module, module.training) for module in model.modules()]
+    buffers = [value.clone() for value in model.buffers()]
+    try:
+        seed_all(0)
+        model.eval()
+        with autocast(device):
+            scores = model(sample)[local_mask(sample, local)].float().cpu()
+        if any(not torch.equal(a, b) for a, b in zip(buffers, model.buffers())):
+            raise ValueError("diagnostic inference changed a model buffer")
+        return dict(scores=scores.tolist(), mean_BCE=float(F.softplus(scores).mean()),
+                    wrong_at_zero=int((scores >= 0).sum()))
+    finally:
+        for module, training in modes:
+            module.training = training
+        restore_rng(state, device)
 
 
 def rank_info():
@@ -305,7 +342,7 @@ def configuration(train, val, device, world_size, *, updates=None, initial=None,
         parent = torch.load(initial, map_location="cpu", weights_only=False)
         previous = parent["config"]
         mining = branch in ("control", "hard")
-        material = branch in ("material-control", "material")
+        material = branch in ("material-control", "material", "local")
         continuation = mining or material
         start_update = 1000 if continuation else 500
         budget = 40 if material else 500
@@ -334,6 +371,18 @@ def configuration(train, val, device, world_size, *, updates=None, initial=None,
                 raise ValueError("material diagnosis requires corrected C and verified STU normal materials")
             result.update(material_indices=material_indices, initial_validation=baseline,
                           baseline_eval=str(baseline_eval))
+            if branch == "local":
+                if material_indices != [6006]:
+                    raise ValueError("the local diagnostic is specified only for record 6006")
+                data = Scans(train)
+                sample = data[6006]
+                chosen = (sample["targets"] == 0) & np.all(np.floor(sample["xyzi"][:, :3] / .75) == [13, 2, -3], axis=1)
+                slots = sample["slots"][chosen]
+                if len(slots) != 24 or not np.all(data._source(train["records"][6006]["frame"]).semantic[slots] == 40):
+                    raise ValueError("the preselected 24-point road patch changed")
+                result["local"] = dict(index=6006, slots=slots.tolist(), cell=[13, 2, -3], cell_size=.75,
+                    weight=1., label=0, normalization="mean over all selected point occurrences in the effective batch; zero when absent",
+                    control="results/train/native/transfer/material/0/conditional")
         if mining:
             pool = json.loads(Path(hard_pool).read_text())
             if pool["train_manifest"] != train["sha256"] or pool["checkpoint_sha256"] != result["initial_sha256"]:
@@ -622,8 +671,10 @@ def train_stage(args, train, val, seed, method, device, config):
                 raise ValueError("hard pool changed after configuration")
             full_order = hard_order(full_order,train,json.loads(Path(config["hard_pool"]).read_text()),
                                     config["start_update"],total)
-        elif branch == "material":
+        elif branch in ("material", "local"):
             full_order = material_order(full_order, train, config["material_indices"], config["start_update"], total)
+        if branch == "local" and full_order != json.loads((Path(config["local"]["control"]) / "sampling.json").read_text())["order"]:
+            raise ValueError("local weighting must reuse every material-control input position")
         if native and rank == 0:
             executed = full_order[config.get("start_update", 0) * BATCH_SIZE:total * BATCH_SIZE]
             write_json(directory / "sampling.json", dict(train_manifest=train["sha256"], order=full_order,
@@ -651,6 +702,14 @@ def train_stage(args, train, val, seed, method, device, config):
                        sources=source_counts(train, full_order), scene_visits=dict(Counter(r["scene"] for r in visits)),
                        distinct_nuscenes_frames=len({r["token"] for r in visits}),
                        replacement="scene-balanced rounds; use unseen frames within each scene before reuse"))
+    local = config.get("local")
+    if local:
+        local_sample = to_device(dataset[local["index"]], device)
+        trace_path = directory / "local.json"
+        trace = json.loads(trace_path.read_text()) if resume and trace_path.exists() else dict(
+            definition=local, initial=observe_local(model, local_sample, local, device), updates=[],
+            interpretation="Before/after optimizer scores share the post-forward BN buffers; changes between consecutive updates also include training BN updates. Training-mode scores are recorded separately.")
+        write_json(trace_path, trace)
     for epoch in range(state["epoch"], epochs):
         start = time.perf_counter()
         order = full_order[epoch * steps_per_epoch * BATCH_SIZE:
@@ -687,6 +746,9 @@ def train_stage(args, train, val, seed, method, device, config):
             sync_buffers(model)
             loss_sum = torch.zeros((), device=device)
             components, pair_details = dict(bce=0., ap=0., auc=0., fpr95=0.), []
+            if local:
+                components["local"] = 0.
+            local_count = len(local["slots"]) * global_indices.count(local["index"]) if local else 0
             pair_size = config["microbatch"] if native else 1
             pair_count = math.ceil(len(samples) / pair_size)
             ramp = ranking_weight(step, schedule_total) if config.get("objective") == "metrics" else 0.
@@ -696,7 +758,8 @@ def train_stage(args, train, val, seed, method, device, config):
                     loss, details = forward_loss(model, pair, counts, rank_weight=ramp / pair_count,
                                                 rank_seed=seed * 100000000 + step * 8 + pair_index,
                                                 auc_weight=config.get("loss", {}).get("auc_weight", .1),
-                                                fpr95_weight=config.get("loss", {}).get("fpr95_weight", .1))
+                                                fpr95_weight=config.get("loss", {}).get("fpr95_weight", .1),
+                                                local=local, local_count=local_count)
                 if not torch.isfinite(loss):
                     raise FloatingPointError("nonfinite segmentation loss")
                 if details.get("recall") is not None and abs(float(details["recall"]) - .95) > 2e-6:
@@ -704,7 +767,7 @@ def train_stage(args, train, val, seed, method, device, config):
                 scaler.scale(loss).backward()
                 loss_sum += loss.detach()
                 for key in components:
-                    components[key] += float(details.get(key, 0.)) / (1 if key == "bce" else pair_count)
+                    components[key] += float(details.get(key, 0.)) / (1 if key in ("bce", "local") else pair_count)
                 pair_details.append({key: float(value) if isinstance(value, torch.Tensor) else value
                                      for key, value in details.items() if key not in components})
                 del pair, loss, details
@@ -721,9 +784,22 @@ def train_stage(args, train, val, seed, method, device, config):
             if not scaler.is_enabled() and not finite:
                 raise FloatingPointError("nonfinite BF16 gradient; no silent skipped update")
             before = scaler.get_scale()
+            if local:
+                before_update = observe_local(model, local_sample, local, device)
+                parameters_before = [p.detach().clone() for p in model.parameters()]
             scaler.step(optimizer)
             scaler.update()
             overflow = scaler.is_enabled() and scaler.get_scale() < before
+            if local:
+                after_update = observe_local(model, local_sample, local, device)
+                delta = sum((p.detach() - previous).double().square().sum()
+                            for p, previous in zip(model.parameters(), parameters_before)).sqrt()
+                del parameters_before
+                trace["updates"].append(dict(step=step, indices=global_indices, local_point_visits=local_count,
+                    before_optimizer=before_update, after_optimizer=after_update, parameter_delta_l2=float(delta),
+                    gradient_norm=float(norm), overflow=bool(overflow), local_loss=components["local"],
+                    training_scores=[s for pair in pair_details for s in pair.get("local_scores", [])]))
+                write_json(trace_path, trace)
             state["planned_updates"] += 1
             state["successful_updates"] += int(not overflow)
             state["overflows"] += int(overflow)
@@ -887,7 +963,7 @@ def main():
     parser.add_argument("--eval-every", type=int, default=500)
     parser.add_argument("--recipe", choices=("mixed", "old", "paired", "background", "native"), default="paired")
     parser.add_argument("--objective", choices=("bce", "metrics"), default="bce")
-    parser.add_argument("--branch", choices=("replay", "ap", "lr", "control", "hard", "material-control", "material"))
+    parser.add_argument("--branch", choices=("replay", "ap", "lr", "control", "hard", "material-control", "material", "local"))
     parser.add_argument("--hard-pool", type=Path)
     parser.add_argument("--material-indices", type=int, nargs="+")
     parser.add_argument("--baseline-eval", type=Path)
@@ -928,7 +1004,7 @@ def main():
         parser.error("diagnostic branches require native training, not preflight")
     if bool(args.hard_pool) != (args.branch in ("control","hard")):
         parser.error("control/hard branches require the C-scored hard pool")
-    if (bool(args.material_indices) != (args.branch in ("material-control", "material"))
+    if (bool(args.material_indices) != (args.branch in ("material-control", "material", "local"))
             or bool(args.baseline_eval) != bool(args.material_indices)):
         parser.error("material branches require verified indices and the corrected initial evaluation")
     if args.recipe == "native" and not args.branch:

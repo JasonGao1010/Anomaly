@@ -103,6 +103,69 @@ def test_cross_scan_ranking_reaches_both_graphs_and_bce_only_pairs():
     assert details["positive"] == 2 and details["negative"] == 3
     only, details = ranking_loss(negative, pair[1]["targets"], 8)
     assert float(only.detach()) == 0 and details["threshold"] is None
+
+
+def test_local_supervision_uses_original_slots_and_effective_batch_mean():
+    class Score(nn.Module):
+        def forward(self, sample):
+            return sample["score"]
+    local = dict(index=6006, slots=[7, 91], weight=1.)
+    samples = [dict(index=i, slots=torch.tensor([7, 8, 91]), targets=torch.zeros(3, dtype=torch.long),
+                    score=torch.tensor([-.2, 2., .8], requires_grad=True)) for i in (6006, 8, 6006, 9)]
+    counts = torch.tensor([12, 0])
+    extra = 0.
+    for begin in (0, 2):
+        pair = samples[begin:begin + 2]
+        weighted, _ = forward_loss(Score(), pair, counts, local=local, local_count=4)
+        original, _ = forward_loss(Score(), pair, counts)
+        extra = extra + weighted - original
+    expected = F.softplus(torch.cat([samples[i]["score"][[0, 2]] for i in (0, 2)])).mean()
+    torch.testing.assert_close(extra, expected)
+    extra.backward()
+    for sample in samples:
+        gradient = sample["score"].grad
+        if sample["index"] == 6006:
+            torch.testing.assert_close(gradient[[0, 2]], sample["score"][[0, 2]].detach().sigmoid() / 4)
+            assert gradient[1] == 0
+        else:
+            assert torch.equal(gradient, torch.zeros_like(gradient))
+    samples[0]["targets"][0] = -1
+    with pytest.raises(ValueError, match="same verified normal returns"):
+        forward_loss(Score(), samples[:2], counts, local=local, local_count=2)
+
+
+def test_local_observation_preserves_rng_buffers_modes_and_next_training_update():
+    from src.train import observe_local
+    class Score(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.layers = nn.Sequential(nn.BatchNorm1d(3), nn.Dropout(.5), nn.Linear(3, 1))
+        def forward(self, sample):
+            return self.layers(sample["xyzi"]).squeeze(-1)
+    seed_all(9)
+    model = Score().train()
+    sample = dict(xyzi=torch.arange(12).reshape(4, 3).float(), slots=torch.tensor([0, 7, 8, 91]),
+                  targets=torch.zeros(4, dtype=torch.long))
+    local = dict(slots=[7, 91])
+    initial = deepcopy(model.state_dict())
+    saved_rng = rng_state(torch.device("cpu"))
+    expected = model(sample)
+    expected.sum().backward()
+    expected_state = deepcopy(model.state_dict())
+    expected_grad = [p.grad.clone() for p in model.parameters()]
+    model.load_state_dict(initial)
+    model.zero_grad(set_to_none=True)
+    restore_rng(saved_rng, torch.device("cpu"))
+    first = observe_local(model, sample, local, torch.device("cpu"))
+    assert first == observe_local(model, sample, local, torch.device("cpu"))
+    assert all(m.training for m in model.modules())
+    actual = model(sample)
+    actual.sum().backward()
+    torch.testing.assert_close(actual, expected, atol=0, rtol=0)
+    for key, value in model.state_dict().items():
+        torch.testing.assert_close(value, expected_state[key], atol=0, rtol=0)
+    for parameter, gradient in zip(model.parameters(), expected_grad):
+        torch.testing.assert_close(parameter.grad, gradient, atol=0, rtol=0)
     assert ranking_weight(1, 1000) == ranking_weight(100, 1000) == 0
     assert ranking_weight(150, 1000) == pytest.approx(.5)
     assert ranking_weight(200, 1000) == ranking_weight(1000, 1000) == 1

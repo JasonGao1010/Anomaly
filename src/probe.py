@@ -303,6 +303,28 @@ def transfer(output, workers):
     report = json.loads(path.read_text()) if path.exists() else dict(plan=plan, resources=runtime_snapshot(), arms={})
     if report["plan"] != plan:
         raise ValueError("the predeclared transfer comparison changed")
+    checks = load_manifest(OUTPUT / "check.json", "train")
+    check_logs = {checks["split"]["logs"][r["scene"]] for r in checks["records"] if "scene" in r}
+    train_logs = {r["log_token"] for r in train["records"] if "log_token" in r}
+    prior_checks = [str(OUTPUT / f"{name}.json") for name in ("m500", "m1547", "b1547")
+                    if "check" in json.loads((OUTPUT / f"{name}.json").read_text())["splits"]]
+    report["evidence_scope"] = dict(
+        val19="Repeatedly used for development, model selection and case-guided material selection; not an independent generalization test, despite never entering gradients",
+        local_weighting="Diagnostic intervention only; fixed record 6006 and its 24 slots are not a proposed general training rule",
+        internal_development=dict(manifest=str(OUTPUT / "check.json"), records=len(checks["records"]),
+            normal_scans=sum(r["group"] == "normal_nuscenes" for r in checks["records"]),
+            synthetic_scans=sum(r["group"] == "targeted" for r in checks["records"]),
+            logs=sorted(check_logs), anomaly_training_log_overlap=sorted(check_logs & train_logs),
+            geometries=sorted({r["geometry"] for r in checks["records"] if "geometry" in r}),
+            already_evaluated_in=prior_checks,
+            limits="Normal-only nuScenes checks and new geometries on the same STU 206 background; cannot jointly establish unseen-background anomaly recognition"),
+        pretraining=dict(config="https://github.com/prs-eth/LitePT/blob/436d04801c8151faebe66a1b2d368a9711e7e6aa/configs/nuscenes/semseg-litept-small-v1m1.py",
+            dataset="https://github.com/prs-eth/LitePT/blob/436d04801c8151faebe66a1b2d368a9711e7e6aa/datasets/nuscenes.py",
+            declared_split="train", exposure="The four check scenes belong to official nuScenes train; treat their backgrounds as pretraining-exposed under the published recipe. Author per-scan visit records are unavailable."),
+        final_holdout=dict(established=False, reason="Current internal checks and val19 have already informed development; repartitioning them does not undo that exposure"),
+        adoption_requires=["task-based sample and sensor rationale", "one uniform mechanism across structures",
+                           "log/source-geometry-isolated controls with explicit pretraining exposure", "bounded search, failed results and seed variability records"],
+        next_step="Define development and final-holdout roles before new training; use development for daily selection, val19 only at predeclared milestones, and independent testing after the final recipe is fixed")
     write_json(path, report)
     meta = np.load(OUTPUT / "val_points.npy", mmap_mode="r")
     offsets = json.loads((OUTPUT / "val_offsets.json").read_text())["rows"]
@@ -310,7 +332,7 @@ def transfer(output, workers):
     val_poses = poses_for(Path(val["records"][0]["scan"]).parents[1])
     episodes = next(r for r in focus_plan["normal"] if r["parent"] == "N125:30")["episodes"][:2]
     sources = dict(baseline=(BEST_C, output / "precision_deployed.npy", baseline))
-    for name in ("material-control", "material"):
+    for name in ("material-control", "material", "local"):
         directory = output.parent / "transfer" / name / "0/conditional"
         if (directory / "result.json").exists():
             result = json.loads((directory / "result.json").read_text())
@@ -549,6 +571,78 @@ def transfer(output, workers):
                 next_test="下一项可固定本轮6006重复输入、C完整起点和40步预算，仅比较原组合损失与原损失加1.0倍这24个训练正常点的局部均值BCE。先判断目标局部能否拟合，再看未参与更新观测、两个真实道路片段及完整AP；仅训练局部改善不能解释真实失分。该改变损失权重的实验本轮未执行。")}
         report["exclusive_additional_cause_AP"] = 0.
         report["scope"] = "Complete official ranking for all endpoints; focused material intervention, not a completed attribution of all remaining AP loss. Positive and normal AP allocations are separate margins."
+        if "local" in report["arms"]:
+            directory = root / "local/0/conditional"
+            config = json.loads((directory / "config.json").read_text())["configuration"]
+            trace = json.loads((directory / "local.json").read_text())
+            control = configurations[1]
+            differences = [k for k in set(config) | set(control) if config.get(k) != control.get(k)]
+            if set(differences) != {"code", "branch", "local"}:
+                raise ValueError("local diagnostic changed an additional training setting")
+            streams = [json.loads((root / name / "0/conditional/sampling.json").read_text())["order"] for name in ("material", "local")]
+            if streams[0] != streams[1] or [r["step"] for r in trace["updates"]] != list(range(1001, 1041)):
+                raise ValueError("local diagnostic did not preserve all inputs and forty updates")
+            if sum(r["local_point_visits"] for r in trace["updates"]) != 24 * 31 or any(
+                    r["overflow"] or r["parameter_delta_l2"] <= 0 for r in trace["updates"]):
+                raise ValueError("local diagnostic did not execute every planned update")
+            checkpoints = [torch.load(root / name / "0/conditional/last.pt", map_location="cpu", weights_only=False)
+                           for name in ("material", "local")]
+            randoms = [r["rng"][0] for r in checkpoints]
+            same_rng = all(torch.equal(randoms[0][k], randoms[1][k]) for k in ("torch", "cuda"))
+            same_rng &= randoms[0]["python"] == randoms[1]["python"]
+            same_rng &= (randoms[0]["numpy"][0] == randoms[1]["numpy"][0]
+                         and np.array_equal(randoms[0]["numpy"][1], randoms[1]["numpy"][1])
+                         and randoms[0]["numpy"][2:] == randoms[1]["numpy"][2:])
+            del checkpoints
+            w = readings["local"]
+            steps = trace["updates"]
+            effects = np.array([r["after_optimizer"]["mean_BCE"] - r["before_optimizer"]["mean_BCE"] for r in steps])
+            local_ap = report["arms"]["local"]["metrics"]["AP"]
+            report["local_comparison"] = dict(
+                plan=dict(**config["local"], start="C update 1000 full state", updates=40,
+                    fixed="material arm's exact 320 scan visits, remaining schedule, optimizer/RNG, model and original composite loss",
+                    changed="add weight 1.0 normal BCE averaged over the 24 selected points and their occurrences within each effective batch",
+                    decisions=dict(all_improve="supports local-supervision transfer; assess full AP before adoption",
+                        training_only="fitting is possible; examine observation coverage and generalization",
+                        no_fitting="inspect actual gradients, shared updates and optimization; no capacity conclusion")),
+                configuration_differences=sorted(differences), identical_input_order=True, identical_final_rng=bool(same_rng),
+                trace=str(directory / "local.json"), initial=trace["initial"], final=steps[-1]["after_optimizer"],
+                actual_updates=dict(count=len(steps), improved=int((effects < 0).sum()), worsened=int((effects > 0).sum()),
+                    unchanged=int((effects == 0).sum()), with_local_supervision=sum(r["local_point_visits"] > 0 for r in steps),
+                    clipped=sum(r["gradient_norm"] > 1 for r in steps), parameter_delta_min=min(r["parameter_delta_l2"] for r in steps)),
+                baseline_readout_note=(f"The cached C material readout has BCE {b['training_patch_BCE']:.6f}; this run starts at {trace['initial']['mean_BCE']:.6f}. "
+                    "Repeated fixed-state monitor inference was identical. These separate executions are retained separately, not presented as one bitwise-identical prediction stream."),
+                change_from_material={k: w[k] - m[k] for k in ("training_patch_BCE", "training_patch_wrong_at_zero", "unfitted_BCE", "unfitted_FP95", "focused_normal_AP_loss", "focused_normal_FP75")},
+                AP_gain_over_material=local_ap-material_ap,
+                scope="Single paired diagnostic on repeatedly used val19. Case-guided selection is development even without validation gradients; observed transfer is not independent cross-scene or cross-object generalization evidence.")
+            finding = report["findings"]["N125:30"]
+            fitted = w["training_patch_BCE"] < min(b["training_patch_BCE"], m["training_patch_BCE"])
+            transferred = w["focused_normal_AP_loss"] < m["focused_normal_AP_loss"] and w["focused_normal_FP75"] < m["focused_normal_FP75"]
+            finding["supported"] += (f" 局部权重1.0的40步诊断中，实际逐步记录的训练24点BCE由{trace['initial']['mean_BCE']:.6f}变为{steps[-1]['after_optimizer']['mean_BCE']:.6f}，"
+                f"零分错误由{b['training_patch_wrong_at_zero']}变为{w['training_patch_wrong_at_zero']}；其他观测BCE为{w['unfitted_BCE']:.6f}。"
+                f"两道路片段失分为{w['focused_normal_AP_loss']:.6f}，75%召回误报为{w['focused_normal_FP75']}；完整AP为{local_ap:.5f}%，"
+                f"相对未加权素材组变化{local_ap-material_ap:+.5f}个百分点。")
+            if fitted:
+                finding["excluded"] += " 加强局部监督后该训练局部能够改善，因此不支持该局部在当前表示下完全不可拟合。"
+                if transferred and w["unfitted_BCE"] < m["unfitted_BCE"]:
+                    finding["supported"] += " 训练局部、其他观测与预选真实片段均改善，支持这处局部监督的迁移价值；不只是重复增加扫描次数。"
+                    finding["missing"] = "val19已反复参与开发与素材选择，本次迁移不是独立泛化证据；尚缺统一局部规则在隔离背景和源几何上的对照、随机种子复核及极高召回误报变化解释。"
+                    finding["next_test"] = ("先明确内部开发与最终留出来源，核对异常任务和预训练暴露；已有350条检查数据只作内部开发。"
+                        "再预先固定只依赖训练来源标签与误报的统一局部规则，在多种结构上做同输入同预算对照和种子复核，日常选择只依靠内部开发，val19仅在约定节点评价。")
+                else:
+                    finding["missing"] = "训练局部可拟合不等于真实道路覆盖充分；仍缺少形态、响应、背景关系的受控迁移证据和重复性估计。"
+                    finding["next_test"] = ("固定几何与背景，先在训练来源对目标道路的表面响应和观测条件作单因素变化，"
+                        "保留未用于拟合的观测检验；对真实两道路片段只评价，判断已有素材与失败观测的差异是否解释迁移不足。")
+            else:
+                finding["missing"] = "局部拟合仍不足，需要区分梯度经过共享参数后的影响、优化器历史与训练/推理统计量的变化；不能据此归因于模型容量。"
+                finding["next_test"] = "依据逐步前后分数，选择一次局部损失存在却未改善的实际更新，分解局部项与其余项的共享参数梯度及Adam更新方向，固定统计量检查其影响。"
+            finding["modification"] = (f"分别保留局部加权{local_ap:.5f}%与未加权{material_ap:.5f}%候选，固定{baseline['metrics']['AP']:.5f}%诊断起点；"
+                + ("局部加权仅作为有迁移迹象的诊断候选，尚不固化正式规则。" if transferred
+                   else "本次加权未同时改善两道路片段的排序失分与误报，不采用为正式训练规则；后续由观测覆盖与泛化检验决定样本修改。"))
+            report["findings"]["P125:1"]["supported"] += (
+                f" 本次仅改变正常局部监督，P125失分由未加权组的{report['arms']['material']['cases']['P125:1']['AP_loss']:.6f}"
+                f"变为{report['arms']['local']['cases']['P125:1']['AP_loss']:.6f}，75%全局召回下漏检由{m['case_errors75']['P125:1']}"
+                f"变为{w['case_errors75']['P125:1']}。该变化包含共享参数与全局排序的影响，不能据此解释为异常几何覆盖已经补齐。")
         write_json(path, report)
 
 
@@ -856,6 +950,9 @@ def review(output):
         if "findings" in transfer_report:
             summary["material_intervention"] = dict(report=str(path), findings=transfer_report["findings"],
                 comparison=transfer_report["comparison"], scope=transfer_report["scope"])
+            if "local_comparison" in transfer_report:
+                summary["material_intervention"]["local_comparison"] = transfer_report["local_comparison"]
+            summary["material_intervention"]["evidence_scope"] = transfer_report["evidence_scope"]
     write_json(output/"review.json",summary)
 
 
