@@ -440,12 +440,21 @@ def _profiles(index):
             grid = np.floor(xyzi[:, :3] / .75).astype(np.int32)
             for obs in surface_queries:
                 candidates = np.flatnonzero(component == obs["component"])
-                cells, inverse = np.unique(grid[normal[candidates]], axis=0, return_inverse=True)
-                mass = np.bincount(inverse, weights=weights[candidates])
-                cell = int(np.argmax(mass))
-                chosen = normal[candidates[inverse == cell]]
-                items.append((chosen, dict(case=obs["case"], kind="normal", selector=dict(component=obs["component"], cell=cells[cell].tolist()),
-                    represented_AP_loss=float(mass[cell]), semantic=obs["semantic"])))
+                if "world_cell" in obs:
+                    picked = candidates[np.all(np.floor(world[candidates]/.75).astype(int)==obs["world_cell"],axis=1)]
+                    chosen = normal[picked]
+                    mass = float(weights[picked].sum())
+                    if len(chosen)!=obs["expected_points"] or abs(mass-obs["expected_AP"])>1e-8:
+                        raise ValueError("focused local points differ from their AP fragment")
+                    selector = dict(component=obs["component"],world_cell=obs["world_cell"],fragment=obs["fragment"])
+                else:
+                    cells, inverse = np.unique(grid[normal[candidates]], axis=0, return_inverse=True)
+                    losses = np.bincount(inverse, weights=weights[candidates])
+                    cell = int(np.argmax(losses))
+                    chosen, mass = normal[candidates[inverse == cell]], float(losses[cell])
+                    selector = dict(component=obs["component"],cell=cells[cell].tolist())
+                items.append((chosen, dict(case=obs["case"], kind="normal", selector=selector,
+                    represented_AP_loss=mass, semantic=obs["semantic"])))
         common = dict(index=index, frame=row["frame"], sequence=row["sequence"], domain="stu", group="validation")
     output = []
     sorted_class = [np.sort(scores[targets==label]) for label in (0,1)]
@@ -485,8 +494,12 @@ def materials(output, workers):
     for obj in ledger["objects"]:
         for obs in obj["observations"]:
             val_queries[obs["index"]][1].append(dict(case=obj["id"], instance=obj["instance"], AP_loss=obs["AP_loss"]))
+    focused = json.loads((output/"focus.json").read_text()).get("normal",[]) if (output/"focus.json").exists() else []
+    for case in focused:
+        for obs in case["profile_queries"]:
+            val_queries[obs["index"]][2].append(obs)
     for surface in ledger["surfaces"]:
-        if surface["AP_loss"] <= 0:
+        if surface["AP_loss"] <= 0 or any(r["parent"]==surface["id"] for r in focused):
             continue
         # The uninspected part of a surface remains explicitly unresolved.
         obs = max(surface["observations"], key=lambda r:r[3])
@@ -516,7 +529,7 @@ def materials(output, workers):
                 AP=curve["AP"] if mode=="train" else ledger["metrics"]["AP"],
                 definition="Opposite-class outranking fraction, half credit for ties. Training profiles use all frozen training points; validation profiles use all eligible validation points. Within-scan rates use only that frame; null means no opposite class. Different reference populations are not a causal calibration comparison."),
             scope="Measured observation profiles, not proof of physical material/shape equivalence. Native intensities are not cross-sensor calibrated.",
-            normal_selection="Training: prior high-score cells plus most populated 0.75 m cell per range band. Validation: max-loss cell of max-loss observation per spatial surface; remaining AP is explicitly unresolved."), indent=None)
+            normal_selection="Training: prior high-score cells plus most populated 0.75 m cell per range band. Validation: focused parents use all observations of selected world-cell episodes in focus.json; other surfaces use one max-loss patch. Remaining AP is explicitly unresolved."), indent=None)
         print(f"material profiles {mode}: {len(rows)} observations, {time.perf_counter()-start:.1f}s", flush=True)
 
 
@@ -524,6 +537,7 @@ def evidence(output, workers):
     """Attach inspected material candidates and explicit causal unknowns to all cases."""
     from scipy.spatial import cKDTree
     ledger = json.loads((output / "ledger.json").read_text())
+    focus = json.loads((output/"focus.json").read_text()) if (output/"focus.json").exists() else None
     train = json.loads((output / "train_profiles.json").read_text())
     val = json.loads((output / "val_profiles.json").read_text())
     if train["checkpoint_sha256"] != val["checkpoint_sha256"] or train["checkpoint_sha256"] != ledger["checkpoint_sha256"]:
@@ -580,7 +594,12 @@ def evidence(output, workers):
     links = [dict(query=i,case=r["case"],neighbors=neighbors[i]) for i,r in enumerate(val["records"])]
     write_json(output / "material_links.json", dict(records=links,normalizations=calibrations,
         training_manifest=train["source_manifest"], validation_manifest=val["source_manifest"],
-        scope="All anomaly observations; one measured patch per loss-bearing spatial normal case. Exact measured nearest candidates, not certified material equivalence."), indent=None)
+        scope="All anomaly observations; focused normal parents use multiple world-cell episodes, other normal surfaces one representative. Exact measured nearest candidates, not certified material equivalence."), indent=None)
+    reviewed = {}
+    if focus:
+        from .probe import review
+        review(output)
+        reviewed = json.loads((output/"review.json").read_text())
     report, rows = [], []
     total = ledger["AP_loss"]
     for kind, cases in (("anomaly",ledger["objects"]),("normal",ledger["surfaces"])):
@@ -628,6 +647,39 @@ def evidence(output, workers):
             if kind=="anomaly" and loss>0:
                 clue += ("；同帧错序率不低于跨帧，不支持用跨扫描偏移统一解释" if case["within_scan_rank_error"]>=case["cross_scan_rank_error"]
                          else "；跨帧错序率较高，但尚未排除正常结构组成差异")
+            modification = "待原因证据，不改变数据、模型或训练设置" if loss>0 else "无需修改"
+            if focus and loss>0:
+                if case_id=="P125:1":
+                    views = reviewed.get("case_findings",{}).get(case_id,{}).get("same_world_observations")
+                    if views:
+                        clue += f"；前三个近邻世界的{views['scans']}条既有观测已检查，未选最近素材按查询失分加权BCE={views['weighted_candidate_BCE']['unselected']:.6g}；描述更近不等于几何与响应已覆盖"
+                    test = "固定125第133、127帧及原始扫描，比较当前记录5340与同世界未选观测的几何、响应和相邻结构；只改变候选观测，只有实际相关性改善才支持重选代表帧，总描述距离下降不作为充分证据"
+                    modification = "不优先增加已检查三个世界的重复训练；下一项核验独立形态、响应及背景关系，确认具体覆盖缺口后再选择或补充对应观测"
+                elif case_id=="P141:4":
+                    audit_rows=[r for r in focus["candidate_audit"] if r["case"]==case_id]
+                    full=sum(r["AP_loss"] for r in audit_rows if r["neighbors"]["full"]["index"]==5080)
+                    geometry=sum(r["AP_loss"] for r in audit_rows if r["neighbors"]["geometry"]["index"]==5080)
+                    clue += f"；5080在全描述最近邻中对应{full:.5f}个AP百分点，仅几何最近邻中对应{geometry:.5f}；尚未确认其相关性，不能归为没学够"
+                    test = "先复核141仅几何近邻与真实失败观测，5080暂不作为拟合依据；相关素材确认后执行focus.json中最多40步的四帧拟合检查，并同时检查独立观测"
+                    modification = "暂不依据5080提高取样频次或启动拟合；确认相关素材后，仅当拟合同时改善独立相关观测才考虑增加其使用，训练样本单独改善仅说明局部拟合成功"
+                elif kind=="normal" and any(r["parent"]==case_id for r in focus.get("normal",[])):
+                    clue += f"；已分解连续局部片段并计算{len(query_ids)}个实际观测描述，代表{represented:.5f}个AP百分点；固定特征对照见features.json，不能直接作融合因果结论"
+                    patches = [r for r in reviewed.get("feature_readout",{}).get("normal_cases",[]) if r["parent"]==case_id]
+                    if patches:
+                        before,after=(sum(r["FP"][name] for r in patches) for name in ("input","context_post"))
+                        clue += f"；相同上下文的449参数读出在本项{sum(r['points'] for r in patches)}个检查点上误报为{before}/{after}，阈值分别按诊断子集75%召回确定，不能当作完整AP变化"
+                    if case_id=="N141:75":
+                        test = "固定314–380连续片段及原始正常标签，核验377帧高分局部与训练记录5059的形态、表面和邻接结构；只改变用于比较的训练正常候选，先区分相似描述与可信相关素材，再考虑增加相关训练观测使用"
+                        modification = "优先核对5059自身误报和实际相关性；相关性成立再做正常观测拟合及独立观测检查，现有读出结果不支持直接替换融合模块"
+                    else:
+                        test = "固定87–168连续片段，核验135帧两个高分局部与记录5757、6006中已低分正常局部的实际形态和背景；只改变用于比较的训练正常候选，缺少可信对应才支持补正常覆盖，不能仅凭读出分数差认定融合削弱"
+                        modification = "先核对真实高分局部与已识别训练正常素材之间的形态及背景差异；保留C和现有融合，确认缺失观测后再补相应正常素材"
+                elif kind=="anomaly":
+                    worst=max(case["observations"],key=lambda r:r["AP_loss"])
+                    test = f"本轮未启动本项原因实验；后续从{case_id}的第{worst['frame']}帧及正常侧{case['normal_drivers'][0][0]}核验素材，再指定唯一改动"
+                else:
+                    worst=max(case["observations"],key=lambda r:r[3])
+                    test = f"本轮未启动本项原因实验；后续先细分{case_id}第{worst[1]}帧的实际高分局部，确认原始编码{case['semantic']}所对应的物理结构"
             item = dict(case=case_id, kind=kind, AP_loss=loss, cumulative_loss_percent=100*cumulative/total,
                 points=case["points"], observations=len(case["observations"]),
                 AP_loss_by_recall=case.get("AP_loss_by_recall"),
@@ -639,7 +691,7 @@ def evidence(output, workers):
                 weighted_validation_rank_error=val_rank/denominator if denominator else None,
                 within_scan_rank_error=case.get("within_scan_rank_error"),cross_scan_rank_error=case.get("cross_scan_rank_error"),
                 cause=cause, evidence=clue, next_discriminating_test=test,
-                proposed_modification="待原因证据，不改变数据、模型或训练设置" if loss>0 else "无需修改",
+                proposed_modification=modification,
                 counterevidence="观测描述近邻不证明覆盖；低训练损失不证明学对或学错；一两次访问不证明训练不足",
                 identity_basis="序列和原始异常实例号；连续观测分段保存在 ledger.json" if kind=="anomaly" else "同序列、原始标签、几何方向及世界坐标连通表面；没有正常实例真值",
                 drivers=(case["normal_drivers"] if kind=="anomaly" else case["anomaly_drivers"])[:5])
