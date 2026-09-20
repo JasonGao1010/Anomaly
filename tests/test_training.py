@@ -153,6 +153,47 @@ def test_all_return_voxels_origin_and_slot_scattering():
     output.sum().backward()
     with pytest.raises(ValueError, match="empty ray"):
         voxelize(np.zeros((1, 4), np.float32))
+    # FP32 0.7 lies below the exact cell boundary; rounded division hides this.
+    edge=np.float32(.7)
+    boundary=np.array([[edge,0,3,.1],[np.nextafter(edge,np.float32(np.inf)),0,3,.1],
+        [-edge,0,3,.1],[np.nextafter(-edge,np.float32(-np.inf)),0,3,.1]],np.float32)
+    b=voxelize(boundary)
+    torch.testing.assert_close(b["grid"][b["inverse"],0]-16,torch.tensor([13,14,-14,-15]),rtol=0,atol=0)
+
+
+def test_spatial_codes_roundtrip_without_axis_or_bit_loss():
+    from vendor.litept.serialization.default import encode, decode
+    torch.manual_seed(73)
+    for depth in (1,8,9,16):
+        bound=2**depth
+        grid=torch.cat((torch.randint(0,bound,(128,3)),torch.tensor([[0,0,0],[bound-1,bound-1,bound-1]])))
+        batch=torch.arange(len(grid))%3
+        for order in ("z","z-trans","hilbert","hilbert-trans"):
+            code=encode(grid,batch,depth=depth,order=order)
+            restored,groups=decode(code,depth=depth,order=order.removesuffix("-trans"))
+            if order.endswith("-trans"):restored=restored[:,[1,0,2]]
+            torch.testing.assert_close(restored,grid,rtol=0,atol=0)
+            torch.testing.assert_close(groups,batch,rtol=0,atol=0)
+            assert len(torch.unique(code))==len(torch.unique(torch.cat((batch[:,None],grid),1),dim=0))
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is unavailable")
+def test_sparse_embedding_uses_centered_xyz_neighbors_under_autocast():
+    from vendor.litept.model import Embedding,Point
+    layer=Embedding(1,1).cuda()
+    grid=torch.cartesian_prod(*(torch.arange(10,14,device="cuda") for _ in range(3)))
+    values=torch.arange(1,len(grid)+1,device="cuda",dtype=torch.float32)[:,None]
+    for displacement in (0,1):
+        with torch.no_grad():
+            layer.stem.conv.weight.zero_()
+            layer.stem.conv.weight[0,2+displacement,2,2,0]=1.
+        point=Point(coord=grid.float()*.05,grid_coord=grid,feat=values.clone(),
+                    offset=torch.tensor([len(grid)],device="cuda"))
+        point.sparsify()
+        with torch.autocast("cuda",dtype=torch.bfloat16):result=layer(point)
+        expected=values.clone() if displacement==0 else torch.where(grid[:,0,None]<13,values+16,0.)
+        torch.testing.assert_close(result.feat,expected,rtol=0,atol=0)
+        torch.testing.assert_close(result.sparse_conv_feat.indices[:,1:].long(),grid,rtol=0,atol=0)
 
 
 def test_pilot_normal_rule_and_balanced_source_schedule():
@@ -426,6 +467,40 @@ def test_pointrope_matches_direct_axis_rotations_and_bounded_cache():
     assert torch.isfinite(tokens.grad).all()
     module(tokens, positions // 2)
     assert len(module.cache) == 1
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is unavailable")
+def test_attention_preserves_fp32_rotary_phases_under_bf16_autocast():
+    from vendor.litept.model import Point, PointROPEAttention
+    torch.manual_seed(73)
+    attention = PointROPEAttention(36, 2, 16, 100.).cuda().eval()
+    point = Point(feat=torch.randn(32, 36, device="cuda"),
+                  grid_coord=torch.randint(700, 2300, (32, 3), device="cuda"),
+                  offset=torch.tensor([32], device="cuda"))
+    point.serialization(order=["z"])
+    calls = []
+
+    def compare_phases(module, inputs, result):
+        tokens, positions = inputs
+        axes = []
+        for axis, part in enumerate(tokens.chunk(3, -1)):
+            frequency = 1. / 100 ** (torch.arange(0, 6, 2, device="cuda").float() / 6)
+            angles = positions[:, :, axis, None].float() * frequency
+            angles = torch.cat((angles, angles), -1)[:, None]
+            left, right = part.chunk(2, -1)
+            axes.append(part * angles.cos() + torch.cat((-right, left), -1) * angles.sin())
+        torch.testing.assert_close(result, torch.cat(axes, -1), atol=1e-6, rtol=1e-5)
+        calls.append(result.shape)
+
+    hook = attention.rope.register_forward_hook(compare_phases)
+    try:
+        with torch.autocast("cuda", dtype=torch.bfloat16):
+            result = attention(point)
+            loss = result.feat.float().square().mean()
+        loss.backward()
+    finally:
+        hook.remove()
+    assert len(calls) == 2 and torch.isfinite(attention.qkv.weight.grad).all()
 
 
 def test_manifest_decoding_on_real_saved_scans():

@@ -538,6 +538,13 @@ def review(output):
             finding="The query-only reference omits backbone context and cannot diagnose its loss in fusion. Compare input/context_post for equal context and capacity, and treat any gain from bypassing context compression as a clue requiring a trained architecture control.",
             limitation=probe["interpretation"])
         summary["feature_readout"].update(_readout_cases(output,plan,probe,val,links,train))
+    path=output/"precision.json"
+    numerical=json.loads(path.read_text()) if path.exists() else None
+    if numerical and numerical.get("complete_validation") and "metrics" in numerical:
+        if numerical["checkpoint_sha256"]!=plan["checkpoint_sha256"]:raise ValueError("numerical C differs")
+        summary["numerical_intervention"]=dict(report=str(path),metrics=numerical["metrics"],
+            finding="A controlled change of rotary-position arithmetic isolated a numerical information defect and measured its complete-ranking effect. The remaining material and learning causes are not thereby identified.")
+        summary["historical_AP_partition_scope"]="cause_confirmed_AP is an exclusive historical partition, not a claim that no numerical mechanism has been identified; use numerical_intervention for its measured effect."
     write_json(output/"review.json",summary)
 
 
@@ -612,3 +619,459 @@ def _readout_cases(output,plan,probe,queries,links,training):
             mean_absolute_score_change=float(difference.mean()),cached_C_subset_AP=reference["AP"],
             fresh_C_subset_AP=probe["metrics"]["val"]["models"]["C"]["AP"],
             interpretation="Compare the same C and raw point identities. Agreement on this subset does not establish universal deterministic inference. The complete AP ledger continues to use the original official predictions."))
+
+
+def precision(output,workers,limit=None):
+    """Isolate rotary-position arithmetic and compare every exposed feature element."""
+    import torch
+    from torch.utils.data import DataLoader
+    from .evaluate import PreparedScans,autocast,load_model
+    from .model import GRID_SIZE,to_device
+    from .diagnose import score_curve,curve_summary
+    from .attribute import loss_weights
+    disk_check(3_000_000_000)
+    ledger=json.loads((output/"ledger.json").read_text())
+    manifest=load_manifest("assets/val.json","val")
+    offsets={r["index"]:r for r in json.loads((OUTPUT/"val_offsets.json").read_text())["rows"]}
+    indices=sorted(offsets)
+    probes={}
+    for case in ledger["objects"]:
+        failure=max(case["observations"],key=lambda r:r["AP_loss"])
+        success=min(case["observations"],key=lambda r:r["AP_loss"]/r["count"])
+        for role,row in (("failure",failure),("reference",success)):
+            probes.setdefault(row["index"],[]).append((case["id"],role))
+    for case in ledger["surfaces"][:2]:
+        worst=max(case["observations"],key=lambda r:r[3])
+        probes.setdefault(worst[0],[]).append((case["id"],"failure"))
+    if limit is not None:
+        priority=list(probes)
+        priority=priority[:4]+priority[-2:]+priority[4:-2]
+        indices=list(dict.fromkeys(priority))[:limit]
+    cases=ledger["objects"]+ledger["surfaces"]
+    case_number={r["id"]:i for i,r in enumerate(cases)}
+    report=dict(checkpoint=str(BEST_C),checkpoint_sha256=file_sha256(BEST_C),resources=runtime_snapshot(),
+        model_source=file_sha256("vendor/litept/pointrope.py"),manifest=manifest["sha256"],indices=indices,
+        complete_validation=limit is None,
+        intervention=dict(fixed="C weights, full raw scans, labels, point order, voxel membership, neighborhoods, all other mixed-precision operations",
+            changed="Only PointROPE arithmetic executes outside autocast; clear both arms' rotary lookup caches before each scan",
+            controls="Original arithmetic, repeated original pass on the first scan, corrected rotary arithmetic; no optimizer or training updates",
+            supports="Identical pre-rotary features followed by changed rotary coordinates and downstream features isolates a computational information error. Only measured full-ranking improvement supports it as a remediable factor for a case.",
+            excludes="Any observed paired difference cannot be caused by adding training material or training updates; these causes may still contribute to remaining errors.",
+            limits="An inference repair does not identify every historical learning cause or establish benefits after retraining. Opposite AP marginal views must not be added."),
+        feature_scope="Every scalar of point detail, embedding, five encoders, decoder, every attention QKV and rotated Q/K, initial query, six context tokens, two fused states, point state, and hidden scoring state. Shared voxel vectors are compared once and mapped to every original point. Other temporary arithmetic tensors are not claimed as stored or inspected.")
+    if report["checkpoint_sha256"]!=ledger["checkpoint_sha256"]:raise ValueError("C differs from ledger")
+    write_json(output/"precision.json",report)
+    count=sum(offsets[i]["stop"]-offsets[i]["start"] for i in indices)
+    before=np.lib.format.open_memmap(output/"precision_base.npy",mode="w+",dtype=np.float32,shape=(count,))
+    after=np.lib.format.open_memmap(output/"precision_fixed.npy",mode="w+",dtype=np.float32,shape=(count,))
+    first_file=np.lib.format.open_memmap(output/"precision_stages.npy",mode="w+",dtype=np.uint8,shape=(count,))
+    point_cases=np.empty(count,np.int32)
+    labels=np.empty(count,np.int8)
+    device=torch.device("cuda")
+    model,saved_model=load_model(BEST_C,device)
+    torch.cuda.reset_peak_memory_stats()
+    corrected=False
+    captures,levels,attention,inverse_maps={},{},{},[]
+    contexts={}
+    def emit(name,value,level):
+        captures.setdefault(name,[]).append(value.detach().clone())
+        levels[name]=level
+    def point_hook(name):
+        def receive(module,inputs,result):emit(name,result,"point")
+        return receive
+    def sparse_hook(name,level):
+        def receive(module,inputs,result):emit(name,result.feat,level)
+        return receive
+    def conditional_input(module,inputs):
+        inverse_maps.extend(inputs[2])
+    def tensor_input(name):
+        def receive(module,inputs):emit(name,inputs[0].flatten(1),0)
+        return receive
+    handles=[model.detail.register_forward_hook(point_hook("point_detail")),
+        model.backbone.embedding.register_forward_hook(sparse_hook("embedding",0)),
+        model.backbone.dec.register_forward_hook(sparse_hook("decoder",0)),
+        model.conditional.register_forward_pre_hook(conditional_input),
+        model.conditional.layers[0]["query"].register_forward_pre_hook(tensor_input("initial_query")),
+        model.conditional.layers[0]["key"].register_forward_pre_hook(tensor_input("context_tokens")),
+        model.head.register_forward_pre_hook(lambda module,inputs:emit("point_state",inputs[0],"point")),
+        model.head[2].register_forward_hook(point_hook("score_hidden"))]
+    for i,encoder in enumerate(model.backbone.enc):handles.append(encoder.register_forward_hook(sparse_hook(f"encoder_{i}",i)))
+    for i,layer in enumerate(model.conditional.layers):
+        handles.append(layer["final_norm"].register_forward_hook(
+            lambda module,inputs,result,n=f"fusion_{i}":emit(n,result,0)))
+    for name,module in model.named_modules():
+        if type(module).__name__!="PointROPEAttention":continue
+        def attention_input(module,inputs,n=name):
+            point=inputs[0]
+            _,unpad,_=point.get_padding_and_inverse(module.patch_size)
+            attention[n]=dict(level=round(np.log2(point.grid_size/GRID_SIZE)),
+                inverse=unpad[point.serialized_inverse[module.order_index]],calls=0)
+        def qkv_output(module,inputs,result,n=name):emit(n+".qkv",result,attention[n]["level"])
+        def rotary_input(module,inputs,n=name):
+            # Explicit arms also reproduce the original arithmetic after a call-site repair.
+            context=torch.autocast("cuda",dtype=torch.bfloat16,enabled=not corrected)
+            context.__enter__()
+            contexts[n]=context
+        def rotary_output(module,inputs,result,n=name):
+            if n in contexts:contexts.pop(n).__exit__(None,None,None)
+            if result is None:return
+            info=attention[n]
+            # Undo attention serialization/padding before tracing original points.
+            value=result[0].transpose(0,1).reshape(result.shape[2],-1)[info["inverse"]]
+            emit(n+(".rotary_q" if info["calls"]==0 else ".rotary_k"),value,info["level"])
+            info["calls"]+=1
+        handles.extend((module.register_forward_pre_hook(attention_input),module.qkv.register_forward_hook(qkv_output),
+            module.rope.register_forward_pre_hook(rotary_input),
+            module.rope.register_forward_hook(rotary_output,always_call=True)))
+    rotary=[m for m in model.modules() if type(m).__name__=="PointROPE"]
+    stage_names=None
+    totals={}
+    feature_cases=None
+    examples=[]
+    rows=[]
+    pose_cache,surface_cache={},{}
+    cached_scores=np.load(OUTPUT/"lr_val.npy",mmap_mode="r")
+    cached_meta=np.load(OUTPUT/"val_points.npy",mmap_mode="r")
+    baseline_difference=dict(changed=0,max_absolute=0.,sum_absolute=0.)
+    loader=DataLoader(PreparedScans(manifest),batch_size=None,sampler=indices,num_workers=workers,
+        prefetch_factor=1,pin_memory=True,generator=torch.Generator().manual_seed(0))
+    start=time.perf_counter()
+    cursor=0
+    with torch.no_grad():
+        for number,sample in enumerate(loader,1):
+            index=int(sample["index"])
+            row=manifest["records"][index]
+            target=sample["targets"].numpy()
+            valid=target>=0
+            offset=offsets[index]
+            meta=cached_meta[offset["start"]:offset["stop"]]
+            if not np.array_equal(sample["slots"].numpy()[valid],meta["slot"]) or not np.array_equal(target[valid],meta["target"]):
+                raise ValueError("precision probe changed official point identities")
+            batch=to_device(sample,device)
+            states=[]
+            maps=[]
+            predictions=[]
+            for arm in (("original","repeat","corrected") if number==1 else ("original","corrected")):
+                corrected=arm=="corrected"
+                captures.clear();levels.clear();attention.clear();inverse_maps.clear()
+                for module in rotary:module.cache.clear()
+                with autocast(device):prediction=model(batch)
+                current={k:torch.cat(v) for k,v in captures.items()}
+                if not torch.isfinite(prediction).all():raise ValueError("nonfinite paired prediction")
+                if arm=="repeat":
+                    difference=np.abs(prediction.cpu().numpy()-predictions[0])
+                    report["repeat_control"]=dict(index=index,changed=int((difference!=0).sum()),
+                        max_absolute=float(difference.max()),feature_changed_values={
+                            k:int((v!=states[0][k]).sum()) for k,v in current.items()})
+                    if any(not torch.equal(a,b) for a,b in zip(maps[0],inverse_maps)):
+                        raise ValueError("repeat changed voxel membership")
+                    del current
+                    continue
+                predictions.append(prediction.cpu().numpy())
+                states.append(current)
+                maps.append([v.clone() for v in inverse_maps])
+            if any(not torch.equal(a,b) for a,b in zip(*maps)):raise ValueError("numerical intervention changed voxel membership")
+            if stage_names is None:
+                stage_names=list(states[0])
+                if len(stage_names)>=255:raise ValueError("too many traced stages")
+                feature_cases=np.zeros((len(cases),len(stage_names)+1),np.int64)
+                totals={k:dict(values=0,changed=0,sum_absolute=0.,max_absolute=0.) for k in stage_names}
+            if list(states[1])!=stage_names:raise ValueError("feature identities differ between arms")
+            first=torch.zeros(len(target),dtype=torch.uint8,device=device)
+            raw_points=np.flatnonzero(valid)
+            ids=np.full(len(meta),-1,np.int32)
+            positive=meta["target"]==1
+            for instance in np.unique(meta["instance"][positive]):
+                ids[positive&(meta["instance"]==instance)]=case_number[f"P{row['sequence']}:{instance}"]
+            sequence=row["sequence"]
+            if sequence not in pose_cache:
+                pose_cache[sequence]=poses_for(Path(row["scan"]).parents[1])
+                with np.load(output/f"surface_{sequence}.npz") as surface:surface_cache[sequence]={k:surface[k] for k in ("keys","component")}
+            normal=np.flatnonzero(~positive)
+            pose=pose_cache[sequence][row["frame"]]
+            world=sample["xyzi"].numpy()[raw_points[normal],:3].astype(float)@pose[:3,:3].T+pose[:3,3]
+            surface=surface_cache[sequence]
+            components=surface["component"][np.searchsorted(surface["keys"],cell_keys(world,meta["semantic"][normal]))]
+            translation=np.array([case_number[f"N{sequence}:{j}"] for j in range(int(surface["component"].max())+1)])
+            ids[normal]=translation[components]
+            if (ids<0).any():raise ValueError("unassigned official point")
+            chosen=[]
+            for case,role in probes.get(index,[]):
+                if case not in ("P125:1","P141:4",*PARENTS):continue
+                positions=np.flatnonzero(ids==case_number[case])
+                if not len(positions):continue
+                score=predictions[0][raw_points[positions]]
+                chosen_index=np.argmin(score) if (case.startswith("P")== (role=="failure")) else np.argmax(score)
+                p=int(raw_points[positions[chosen_index]])
+                chosen.append((p,dict(case=case,role=role,index=index,frame=row["frame"],slot=int(sample["slots"][p]),
+                    original_score=float(predictions[0][p]),corrected_score=float(predictions[1][p]),features={})))
+            for si,name in enumerate(stage_names,1):
+                a,b=states[0][name],states[1][name]
+                if a.shape!=b.shape:raise ValueError("feature shape changed")
+                delta=(a.float()-b.float()).abs()
+                per_row=(delta!=0).any(1)
+                mapping=None if levels[name]=="point" else maps[0][levels[name]][batch["inverse"]]
+                changed=per_row if mapping is None else per_row[mapping]
+                first[(first==0)&changed]=si
+                stat=totals[name]
+                stat["values"]+=delta.numel()
+                stat["changed"]+=int((delta!=0).sum())
+                stat["sum_absolute"]+=float(delta.sum(dtype=torch.float64))
+                stat["max_absolute"]=max(stat["max_absolute"],float(delta.max()))
+                for p,example in chosen:
+                    at=p if mapping is None else int(mapping[p])
+                    example["features"][name]=dict(original=a[at].float().cpu().tolist(),corrected=b[at].float().cpu().tolist())
+            stop=cursor+len(meta)
+            before[cursor:stop]=predictions[0][valid]
+            after[cursor:stop]=predictions[1][valid]
+            first_file[cursor:stop]=first.cpu().numpy()[valid]
+            labels[cursor:stop]=meta["target"]
+            point_cases[cursor:stop]=ids
+            np.add.at(feature_cases,(ids,first_file[cursor:stop]),1)
+            difference=np.abs(before[cursor:stop]-cached_scores[offset["start"]:offset["stop"]])
+            baseline_difference["changed"]+=int((difference>0).sum())
+            baseline_difference["sum_absolute"]+=float(difference.sum(dtype=np.float64))
+            baseline_difference["max_absolute"]=max(baseline_difference["max_absolute"],float(difference.max()))
+            examples.extend(e for _,e in chosen)
+            rows.append(dict(index=index,sequence=sequence,frame=row["frame"],start=cursor,stop=stop))
+            cursor=stop
+            del states,current,maps,prediction,delta,a,b,batch,captures,first
+            captures={}
+            if number%50==0 or number==1:print(f"precision pair {number}/{len(indices)}; {time.perf_counter()-start:.1f}s",flush=True)
+    for handle in handles:handle.remove()
+    if cursor!=count:raise ValueError("incomplete paired point stream")
+    report["parameters_unchanged"]=all(torch.equal(v.detach().cpu(),saved_model["model"][k]) for k,v in model.state_dict().items())
+    if not report["parameters_unchanged"]:raise ValueError("C changed during diagnostic")
+    before.flush();after.flush();first_file.flush()
+    report.update(forward_seconds=time.perf_counter()-start,peak_cuda_bytes=torch.cuda.max_memory_allocated(),
+        point_count=count,offsets=rows,stages=stage_names,feature_comparison=totals,baseline_difference=baseline_difference)
+    del model,saved_model
+    torch.cuda.empty_cache()
+    curves={name:score_curve(scores,labels) for name,scores in (("original",before),("corrected",after))}
+    report["metrics"]={k:curve_summary(v) for k,v in curves.items()}
+    counts=np.bincount(point_cases,minlength=len(cases))
+    losses,errors={},{}
+    for name,scores in (("original",before),("corrected",after)):
+        curve=curves[name]
+        _,ploss,nloss=loss_weights(curve["positive"],curve["negative"])
+        losses[name]=np.zeros(len(cases),np.float64)
+        errors[name]=np.zeros((len(cases),len(curve["operating"])),np.int64)
+        # One streamed point pass replaces a full-data search for every case.
+        for begin in range(0,count,1_000_000):
+            end=min(begin+1_000_000,count)
+            ids=point_cases[begin:end]
+            score=np.asarray(scores[begin:end])
+            positive=labels[begin:end]==1
+            rank=np.searchsorted(curve["values"],score)
+            weights=np.where(positive,ploss[rank],nloss[rank])
+            losses[name]+=np.bincount(ids,weights=weights,minlength=len(cases))
+            for j,op in enumerate(curve["operating"]):
+                wrong=np.where(positive,score<op["threshold"],score>=op["threshold"])
+                errors[name][:,j]+=np.bincount(ids[wrong],minlength=len(cases))
+        expected=100-curve["AP"]
+        for selected in (slice(0,len(ledger["objects"])),slice(len(ledger["objects"]),None)):
+            if not np.isclose(losses[name][selected].sum(),expected,atol=1e-8,rtol=0):
+                raise ValueError("case AP attribution does not sum to the measured gap")
+    case_rows=[]
+    for ci,case in enumerate(cases):
+        if not counts[ci]:continue
+        entry=dict(case=case["id"],points=int(counts[ci]),original_full_AP_loss=case["AP_loss"],
+            first_feature_change_counts=feature_cases[ci].tolist(),arms={})
+        for name in curves:
+            curve=curves[name]
+            operating={str(op["target"]):int(errors[name][ci,j]) for j,op in enumerate(curve["operating"])}
+            entry["arms"][name]=dict(AP_loss=float(losses[name][ci]),errors=operating)
+        entry["loss_reduction"]=entry["arms"]["original"]["AP_loss"]-entry["arms"]["corrected"]["AP_loss"]
+        case_rows.append(entry)
+    report["cases"]=case_rows
+    report["seconds"]=time.perf_counter()-start
+    write_json(output/"precision.json",report,indent=None)
+    write_json(output/"feature_values.json",dict(checkpoint_sha256=report["checkpoint_sha256"],examples=examples,
+        scope="Complete vectors for selected failure/reference points; every exposed scalar for all input points was compared in the streamed pass. Values diagnose a paired numerical intervention, not a learned-feature semantic label."),indent=None)
+    print(report["metrics"],flush=True)
+
+
+def _geometry_init():
+    global _geometry_sources
+    import torch
+    torch.set_num_threads(1)
+    _geometry_sources={name:Scans(load_manifest(path,kind),cache_size=2) for name,path,kind in
+        (("train","results/data/native/train.json","train"),("val","assets/val.json","val"))}
+
+
+def _geometry_scan(task):
+    """Use exact multiplication by 20 as an independent 5 cm cell reference."""
+    from .model import voxelize
+    split,index=task
+    sample=_geometry_sources[split][index]
+    xyz=sample["xyzi"]
+    target=sample["targets"]
+    batch=voxelize(xyz)
+    inv,order,ptr,grid,mean,offset=[batch[k].numpy() for k in
+        ("inverse","order","pointer","grid","voxel_xyzi","offset")]
+    raw=np.floor(xyz[:,:3].astype(np.float64)*20).astype(np.int64)
+    shift=(raw.min(0)//16)*16
+    mismatch=np.any(grid[inv]+shift!=raw,axis=1)
+    counts=np.bincount(inv,minlength=len(grid))
+    reference=np.stack([np.bincount(inv,weights=xyz[:,j],minlength=len(grid))/counts for j in range(4)],1).astype(np.float32)
+    expected_offset=(xyz[:,:3].astype(np.float64)*20-raw-.5).astype(np.float32)
+    normal=np.bincount(inv[target==0],minlength=len(grid))
+    positive=np.bincount(inv[target==1],minlength=len(grid))
+    mixed=(normal>0)&(positive>0)
+    take=mixed[inv]&(target>=0)
+    conflict=np.zeros(len(xyz),bool)
+    if take.any():
+        _,at=np.unique(xyz[take],axis=0,return_inverse=True)
+        p=np.bincount(at[target[take]==1],minlength=at.max()+1)
+        n=np.bincount(at[target[take]==0],minlength=at.max()+1)
+        conflict[take]=((p>0)&(n>0))[at]
+    row=_geometry_sources[split].records[index]
+    result=dict(split=split,index=index,group=row.get("group","STU_validation"),points=len(xyz),voxels=len(grid),
+        grid_mismatch=int(mismatch.sum()),invalid_point_order=int(not np.array_equal(np.sort(order),np.arange(len(xyz)))),
+        segment_mismatch=int(not np.array_equal(inv[order],np.repeat(np.arange(len(grid)),np.diff(ptr)))),
+        mean_max_error=float(np.abs(mean-reference).max()),offset_max_error=float(np.abs(offset-expected_offset).max()),
+        offset_max_absolute=float(np.abs(offset).max()),max_point_centroid_distance=float(np.linalg.norm(xyz[:,:3]-mean[inv,:3],axis=1).max()),
+        hierarchy_mismatch=sum(int(np.any((grid[inv]//factor)!=(raw//factor-shift//factor),axis=1).sum()) for factor in (2,4,8,16)),
+        naive_fp32_grid_differences=int(np.any(np.floor(xyz[:,:3]/np.float32(.05)).astype(np.int64)!=raw,axis=1).sum()),
+        mixed_voxels=int(mixed.sum()),mixed_normal_points=int(normal[mixed].sum()),mixed_anomaly_points=int(positive[mixed].sum()),
+        identical_input_normal=int((conflict&(target==0)).sum()),identical_input_anomaly=int((conflict&(target==1)).sum()))
+    if result["grid_mismatch"] or result["invalid_point_order"] or result["segment_mismatch"] or result["hierarchy_mismatch"]:
+        raise ValueError(f"incorrect point membership: {result}")
+    if result["mean_max_error"]>1e-6 or result["offset_max_error"]>2e-7:
+        raise ValueError(f"voxel arithmetic exceeds its FP32 representation tolerance: {result}")
+    return result
+
+
+def model_check(output,workers):
+    """Check cell membership on both complete pools, then trace actual model indices."""
+    import torch
+    from .evaluate import autocast,load_model
+    from .model import to_device
+    from vendor.litept.model import PointROPEAttention,GridPooling,GridUnpooling
+    manifest={"train":load_manifest("results/data/native/train.json","train"),"val":load_manifest("assets/val.json","val")}
+    selected={"train":list(range(len(manifest["train"]["records"]))),
+        "val":[i for i,r in enumerate(manifest["val"]["records"]) if r["eligible"]]}
+    report=dict(checkpoint_sha256=file_sha256(BEST_C),sources={k:v["sha256"] for k,v in manifest.items()},
+        resources=runtime_snapshot(),scope="All current training scans and eligible official validation scans for CPU geometry; explicitly selected full scans for GPU layer semantics. No input, label, grid size, weight or training change.",
+        tolerances=dict(voxel_mean_absolute=1e-6,normalized_offset_absolute=2e-7,pooling_coordinate_absolute=1e-5,pooled_detail_absolute=2e-5))
+    disk_check(100_000_000)
+    start=time.perf_counter()
+    tasks=[(name,i) for name,indices in selected.items() for i in indices]
+    with ProcessPoolExecutor(max_workers=workers,initializer=_geometry_init) as executor:
+        rows=[]
+        for i,row in enumerate(executor.map(_geometry_scan,tasks,chunksize=8),1):
+            rows.append(row)
+            if i%500==0:print(f"geometry {i}/{len(tasks)}; {time.perf_counter()-start:.1f}s",flush=True)
+    report["geometry_seconds"]=time.perf_counter()-start
+    report["geometry_frames"]=rows
+    report["geometry_groups"]={}
+    maximum=("mean_max_error","offset_max_error","offset_max_absolute","max_point_centroid_distance")
+    sums=("points","voxels","grid_mismatch","invalid_point_order","segment_mismatch","hierarchy_mismatch",
+        "naive_fp32_grid_differences","mixed_voxels","mixed_normal_points","mixed_anomaly_points","identical_input_normal","identical_input_anomaly")
+    for group in sorted({r["group"] for r in rows}):
+        group_rows=[r for r in rows if r["group"]==group]
+        report["geometry_groups"][group]=dict(scans=len(group_rows),**{k:sum(r[k] for r in group_rows) for k in sums},
+            **{k:max(r[k] for r in group_rows) for k in maximum})
+    write_json(output/"model_check.json",report,indent=None)
+    chosen={"val":set(_even(selected["val"],16)),"train":set()}
+    examples=json.loads((output/"feature_values.json").read_text())["examples"]
+    chosen["val"].update(e["index"] for e in examples)
+    for group in sorted({r["group"] for r in manifest["train"]["records"]}):
+        chosen["train"].update(_even([i for i,r in enumerate(manifest["train"]["records"]) if r["group"]==group],4))
+    # Target the largest label-sharing case before seeing its internal model values.
+    for split in chosen:
+        chosen[split].add(max((r for r in rows if r["split"]==split),key=lambda r:r["mixed_anomaly_points"])["index"])
+    device=torch.device("cuda")
+    model,saved=load_model(BEST_C,device)
+    sources={k:Scans(v,cache_size=2) for k,v in manifest.items()}
+    torch.cuda.reset_peak_memory_stats()
+    frame,projection,geometry,ancestry,details,handles={},{},{},None,[],[]
+    def check_close(name,a,b,tolerance=0.):
+        error=float((a.double()-b.double()).abs().max()) if a.numel() else 0.
+        frame[name]=max(frame.get(name,0.),error)
+        if error>tolerance:raise ValueError(f"model semantic mismatch {name}: {error}")
+    def pooling_input(module,inputs,n):
+        parent=inputs[0]
+        geometry[n]=(parent.grid_coord.clone(),parent.coord.clone())
+    def projected(module,inputs,result,n):projection[n]=result.detach()
+    def pooled_before_norm(module,inputs,n):
+        point=inputs[0]
+        parent_grid,parent_coord=geometry[n]
+        inv=point.pooling_inverse
+        check_close("pool_membership",point.grid_coord[inv],parent_grid//2)
+        counts=torch.bincount(inv,minlength=len(point.coord))
+        expected=torch.zeros_like(point.coord,dtype=torch.float64).index_add_(0,inv,parent_coord.double())/counts[:,None]
+        check_close("pool_coordinate",point.coord,expected,1e-5)
+        value=projection.pop(n)
+        expected=value.new_full((len(point.coord),value.shape[1]),-torch.inf)
+        expected.scatter_reduce_(0,inv[:,None].expand_as(value),value,reduce="amax",include_self=True)
+        check_close("pool_max",point.feat,expected)
+    def unpool_input(module,inputs,n):geometry[n]=inputs[0].pooling_parent.grid_coord.clone()
+    def unpool_output(module,inputs,result,n):check_close("unpool_parent_order",result.grid_coord,geometry[n])
+    for name,module in model.named_modules():
+        if isinstance(module,GridPooling):
+            handles.extend((module.register_forward_pre_hook(lambda m,a,n=name:pooling_input(m,a,n)),
+                module.proj.register_forward_hook(lambda m,a,r,n=name:projected(m,a,r,n)),
+                module.norm.register_forward_pre_hook(lambda m,a,n=name:pooled_before_norm(m,a,n))))
+        elif isinstance(module,GridUnpooling):
+            handles.extend((module.register_forward_pre_hook(lambda m,a,n=name:unpool_input(m,a,n)),
+                module.register_forward_hook(lambda m,a,r,n=name:unpool_output(m,a,r,n))))
+        elif isinstance(module,PointROPEAttention):
+            def verify_attention(module,inputs):
+                point=inputs[0]
+                pad,unpad,cu=point.get_padding_and_inverse(module.patch_size)
+                order=point.serialized_order[module.order_index][pad]
+                inverse=unpad[point.serialized_inverse[module.order_index]]
+                check_close("attention_restore",order[inverse],torch.arange(len(point.feat),device=device))
+                if int(cu[0])!=0 or int(cu[-1])!=len(order) or int(torch.diff(cu).max())>module.patch_size:
+                    raise ValueError("invalid attention segment boundaries")
+                frame["attention_calls"]=frame.get("attention_calls",0)+1
+            handles.append(module.register_forward_pre_hook(verify_attention))
+    handles.append(model.detail.register_forward_hook(lambda m,a,r:details.append(r.detach())))
+    def encoder_output(module,inputs,result,level):
+        nonlocal ancestry
+        if level:ancestry=result.pooling_inverse[ancestry]
+        geometry[f"level{level}"]=(result.grid_coord.clone(),result.coord.clone(),ancestry.clone())
+    for level,encoder in enumerate(model.backbone.enc):
+        handles.append(encoder.register_forward_hook(lambda m,a,r,level=level:encoder_output(m,a,r,level)))
+    def conditional_input(module,inputs):
+        pooled,xyz,indices,coords,features=inputs
+        root_grid=geometry["level0"][0]
+        for level,index in enumerate(indices):
+            at=0 if level==5 else level
+            grid,coordinate,expected=geometry[f"level{at}"]
+            check_close("conditional_index",index,expected)
+            check_close("conditional_cell",grid[index],root_grid//(2**at))
+            check_close("conditional_coordinate",coords[level],coordinate)
+        if not torch.equal(coords[5][indices[5]],xyz):raise ValueError("decoder token is not at its original root voxel")
+        value=torch.cat(details).double()
+        inv=current_batch["inverse"]
+        counts=torch.bincount(inv,minlength=len(xyz))
+        mean=value.new_zeros((len(xyz),64)).index_add_(0,inv,value)/counts[:,None]
+        maximum=value.new_full((len(xyz),64),-torch.inf)
+        maximum.scatter_reduce_(0,inv[:,None].expand_as(value),value,reduce="amax",include_self=True)
+        check_close("detail_mean",pooled[:,:64],mean,2e-5)
+        check_close("detail_max",pooled[:,64:],maximum)
+    handles.append(model.conditional.register_forward_pre_hook(conditional_input))
+    report["gpu_frames"]=[]
+    with torch.no_grad():
+        for split in ("train","val"):
+            for index in sorted(chosen[split]):
+                sample=sources[split][index]
+                current_batch=to_device(prepare_scan(sample),device)
+                frame=dict(split=split,index=index,points=len(sample["xyzi"]))
+                details.clear();geometry.clear();projection.clear()
+                ancestry=torch.arange(len(current_batch["grid"]),device=device)
+                with autocast(device):score=model(current_batch)
+                if len(score)!=len(sample["slots"]) or not torch.isfinite(score).all():raise ValueError("point output identity differs")
+                frame["normal_points"]=int((sample["targets"]==0).sum())
+                frame["anomaly_points"]=int((sample["targets"]==1).sum())
+                report["gpu_frames"].append(frame)
+    for handle in handles:handle.remove()
+    report["parameters_unchanged"]=all(torch.equal(v.detach().cpu(),saved["model"][k]) for k,v in model.state_dict().items())
+    if not report["parameters_unchanged"]:raise ValueError("model checking changed C")
+    report["seconds"]=time.perf_counter()-start
+    report["peak_cuda_bytes"]=torch.cuda.max_memory_allocated()
+    report["interpretation"]="Exact membership and index checks diagnose implementation. Mixed-label cells quantify a modeling limitation, not a proven AP cause: point details and point labels remain separate. Coarse coordinates are equal-child-voxel means by design, not point-count-weighted centroids."
+    write_json(output/"model_check.json",report,indent=None)
+    print(dict(groups=report["geometry_groups"],gpu_scans=len(report["gpu_frames"]),seconds=report["seconds"]),flush=True)

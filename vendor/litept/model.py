@@ -364,9 +364,10 @@ class PointROPEAttention(PointModule):
         q = q.reshape(-1, H, C // H).transpose(0,1)[None] # [1, H, N, head_dim]
         k = k.reshape(-1, H, C // H).transpose(0,1)[None] # [1, H, N, head_dim]
 
-        # workround to make pointrope cuda float32 happy
-        q = self.rope(q.float(), pos).to(q.dtype) # [1, H, N, head_dim]
-        k = self.rope(k.float(), pos).to(k.dtype) # [1, H, N, head_dim]
+        # FP32 inputs alone do not stop autocast from quantizing rotary phases.
+        with torch.autocast(q.device.type, enabled=False):
+            q = self.rope(q.float(), pos).to(q.dtype) # [1, H, N, head_dim]
+            k = self.rope(k.float(), pos).to(k.dtype) # [1, H, N, head_dim]
 
         # assemble input for flash attention
         qkv_rotated = torch.stack([

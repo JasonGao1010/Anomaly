@@ -600,6 +600,17 @@ def evidence(output, workers):
         from .probe import review
         review(output)
         reviewed = json.loads((output/"review.json").read_text())
+    numerical = json.loads((output/"precision.json").read_text()) if (output/"precision.json").exists() else None
+    if numerical and (not numerical.get("complete_validation") or "cases" not in numerical):
+        numerical = None
+    effects = {}
+    if numerical:
+        if numerical["checkpoint_sha256"]!=ledger["checkpoint_sha256"] or not numerical["parameters_unchanged"]:
+            raise ValueError("numerical intervention did not preserve C")
+        first_rotary=next(i for i,k in enumerate(numerical["stages"]) if k.endswith("rotary_q"))
+        if any(numerical["feature_comparison"][k]["changed"] for k in numerical["stages"][:first_rotary]):
+            raise ValueError("features changed before the intended numerical intervention")
+        effects={r["case"]:r for r in numerical["cases"]}
     report, rows = [], []
     total = ledger["AP_loss"]
     for kind, cases in (("anomaly",ledger["objects"]),("normal",ledger["surfaces"])):
@@ -680,6 +691,22 @@ def evidence(output, workers):
                 else:
                     worst=max(case["observations"],key=lambda r:r[3])
                     test = f"本轮未启动本项原因实验；后续先细分{case_id}第{worst[1]}帧的实际高分局部，确认原始编码{case['semantic']}所对应的物理结构"
+            effect=effects.get(case_id)
+            supported,excluded,missing="尚未确认该项失分原因","尚不能排除覆盖、训练使用或表示问题",test
+            if effect:
+                original,corrected=(effect["arms"][k]["AP_loss"] for k in ("original","corrected"))
+                supported=(f"固定权重和全部输入，仅修正位置编码运算精度，本项配对失分为{original:.8f}→{corrected:.8f}个百分点，"
+                    f"减少{effect['loss_reduction']:.8f}个百分点；上游被检查的全部特征值相同，差异首次出现在旋转位置编码")
+                excluded="增加素材、改变标签、增加更新次数不能解释本次配对变化；仍未排除它们与剩余错误有关"
+                missing="尚未区分剩余错误的覆盖、优化和泛化原因；本次排序分摊变化含其他点改变排名的影响，不能全部当作该点自身修复"
+                clue += "；"+supported
+                if loss>0:
+                    cause=("位置编码数值损失有正向干预证据；其余原因待查" if effect["loss_reduction"]>0
+                           else "位置编码数值缺陷已定位；本项未获益，失分原因待查")
+                if numerical["metrics"]["corrected"]["AP"]>numerical["metrics"]["original"]["AP"]:
+                    modification="先修正位置编码精度并单独保留修正后评价；原C权重与原结果保留。剩余错误按原素材核验继续，不由本实验增加训练量或改取样"
+                else:
+                    modification="保留原C作为实际基准；本次结果不支持直接切换推理精度。先检验训练阶段对原数值计算的适应，再决定是否按修正实现重新训练"
             item = dict(case=case_id, kind=kind, AP_loss=loss, cumulative_loss_percent=100*cumulative/total,
                 points=case["points"], observations=len(case["observations"]),
                 AP_loss_by_recall=case.get("AP_loss_by_recall"),
@@ -691,6 +718,10 @@ def evidence(output, workers):
                 weighted_validation_rank_error=val_rank/denominator if denominator else None,
                 within_scan_rank_error=case.get("within_scan_rank_error"),cross_scan_rank_error=case.get("cross_scan_rank_error"),
                 cause=cause, evidence=clue, next_discriminating_test=test,
+                supported_explanation=supported,excluded_explanation=excluded,missing_evidence=missing,
+                numerical_intervention=None if effect is None else dict(report="precision.json",case=case_id,
+                    original_AP_loss=effect["arms"]["original"]["AP_loss"],
+                    corrected_AP_loss=effect["arms"]["corrected"]["AP_loss"],loss_reduction=effect["loss_reduction"]),
                 proposed_modification=modification,
                 counterevidence="观测描述近邻不证明覆盖；低训练损失不证明学对或学错；一两次访问不证明训练不足",
                 identity_basis="序列和原始异常实例号；连续观测分段保存在 ledger.json" if kind=="anomaly" else "同序列、原始标签、几何方向及世界坐标连通表面；没有正常实例真值",
@@ -703,6 +734,10 @@ def evidence(output, workers):
                 对应训练素材=refs,训练素材学习表现=f"近邻训练 BCE={comparable_bce}; 验证观测 BCE={actual_bce}; 均仅为分类诊断",
                 训练素材池内错序概率=item["weighted_training_rank_error"],验证观测池内错序概率=item["weighted_validation_rank_error"],
                 原因类别=cause,原因证据=clue,修改方案=item["proposed_modification"],区分原因的小实验=test,
+                支持的解释=supported,已排除的解释=excluded,仍缺的证据=missing,
+                本次原计算失分=None if effect is None else effect["arms"]["original"]["AP_loss"],
+                精度修正后失分=None if effect is None else effect["arms"]["corrected"]["AP_loss"],
+                配对失分减少=None if effect is None else effect["loss_reduction"],
                 尚未核对素材的失分百分点=item["material_unprofiled_AP"],尚未确认原因的失分百分点=loss,
                 主要对侧案例="；".join(f"{key}:{value:.6g}" for key,value in item["drivers"][:5])))
     write_csv(output / "attribution.csv", [r for r in rows if r["视角"]=="异常对象"])
@@ -712,10 +747,27 @@ def evidence(output, workers):
         normal_positive_loss_cases=sum(r["AP_loss"]>0 for r in ledger["surfaces"]),
         material_profiled_AP={kind:sum(r["material_profiled_AP"] for r in report if r["kind"]==kind) for kind in ("anomaly","normal")},
         material_unprofiled_AP={kind:sum(r["material_unprofiled_AP"] for r in report if r["kind"]==kind) for kind in ("anomaly","normal")},
-        confirmed_causes={"样本覆盖不足":0.,"样本有了但没学够":0.,"样本有了但学错了":0.,"证据不足":total},
+        exclusive_historical_cause_partition=dict(assigned=0.,unassigned=total,
+            meaning="Historical AP loss has not been uniquely divided between coverage, training use and erroneous associations. This does not negate an independently identified numerical mechanism or its measured intervention effect."),
         normal_case_identity="Automatically linked surface candidates, not certified physical objects",
         interpretation="Complete rank accounting is not completed causal attribution. The two marginal views overlap and must not be added.",
         results=report)
+    if numerical:
+        summary["numerical_intervention"]=dict(metrics=numerical["metrics"],
+            baseline_recomputed_difference=numerical["baseline_difference"],
+            net_AP_change=numerical["metrics"]["corrected"]["AP"]-numerical["metrics"]["original"]["AP"],
+            case_effects={kind:dict(improved=sum(r["loss_reduction"]>0 for r in numerical["cases"] if r["case"].startswith(prefix)),
+                worsened=sum(r["loss_reduction"]<0 for r in numerical["cases"] if r["case"].startswith(prefix)),
+                gross_reduction=sum(max(0.,r["loss_reduction"]) for r in numerical["cases"] if r["case"].startswith(prefix)),
+                gross_increase=sum(max(0.,-r["loss_reduction"]) for r in numerical["cases"] if r["case"].startswith(prefix)))
+                for kind,prefix in (("anomaly","P"),("normal","N"))},
+            interpretation="The single numerical intervention has a measured causal effect on this fixed model's predictions and ranking. Gross case effects are not an exclusive decomposition of historical causes; positive and normal marginal views must not be added. Residual coverage and learning causes remain unresolved.")
+        regular=output/"precision_eval.json"
+        if regular.exists():
+            checked=json.loads(regular.read_text())
+            if checked["checkpoint_sha256"]!=ledger["checkpoint_sha256"]:raise ValueError("regular evaluation uses different weights")
+            summary["numerical_intervention"]["regular_evaluation"]=dict(report=str(regular),metrics=checked["metrics"],
+                scope="Separate regular invocation; use paired arms for case intervention effects")
     write_json(output / "attribution.json", summary, indent=None)
     plot_evidence(output,ledger,train,val,links)
     print({k:v for k,v in summary.items() if k!="results"},flush=True)

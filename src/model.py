@@ -1,4 +1,4 @@
-"""V4: full-return LitePT-S segmentation and one five-scale interaction."""
+"""V4 full-return LitePT-S segmentation with sampling-conditioned context."""
 
 from pathlib import Path
 

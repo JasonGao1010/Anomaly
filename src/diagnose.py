@@ -1057,14 +1057,21 @@ def mining_result(output):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("collect", "analyze", "gradients", "replay", "cases", "mine", "match", "coverage", "mining-result", "account", "materials", "attribute", "focus", "observe", "features"))
+    parser.add_argument("action", choices=("collect", "analyze", "gradients", "replay", "cases", "mine", "match", "coverage", "mining-result", "account", "materials", "attribute", "focus", "observe", "features", "precision", "model-check"))
     parser.add_argument("--output", type=Path, default=OUTPUT)
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--names", nargs="+", default=list(CHECKPOINTS))
+    parser.add_argument("--limit",type=int,help="Bound the precision diagnosis to its preselected case scans")
     args = parser.parse_args()
     torch.set_num_threads(2)
     torch.set_num_interop_threads(1)
-    if args.action == "features":
+    if args.action == "model-check":
+        from .probe import model_check
+        model_check(args.output,args.workers)
+    elif args.action == "precision":
+        from .probe import precision
+        precision(args.output,args.workers,args.limit)
+    elif args.action == "features":
         from .probe import features
         features(args.output,args.workers)
     elif args.action == "observe":

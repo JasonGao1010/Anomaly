@@ -1598,5 +1598,144 @@
       "fresh_C_subset_AP": 90.68923203161751,
       "interpretation": "Compare the same C and raw point identities. Agreement on this subset does not establish universal deterministic inference. The complete AP ledger continues to use the original official predictions."
     }
-  }
+  },
+  "numerical_intervention": {
+    "report": "results/train/native/errors/precision.json",
+    "metrics": {
+      "original": {
+        "AP": 76.25381010430785,
+        "AUROC": 99.95130047088578,
+        "FPR95": 0.13005871693569931,
+        "operating": [
+          {
+            "target": 0.5,
+            "recall": 0.5000057143510211,
+            "threshold": 11.25,
+            "tp": 43750,
+            "fp": 5792,
+            "fn": 43749,
+            "fpr": 2.988764217722185e-05,
+            "precision": 0.8830890961204635
+          },
+          {
+            "target": 0.75,
+            "recall": 0.7502828603755471,
+            "threshold": 3.3125,
+            "tp": 65649,
+            "fp": 44184,
+            "fn": 21850,
+            "fpr": 0.00022799647478563022,
+            "precision": 0.5977165332823469
+          },
+          {
+            "target": 0.9,
+            "recall": 0.9000674293420496,
+            "threshold": 0.1357421875,
+            "tp": 78755,
+            "fp": 128878,
+            "fn": 8744,
+            "fpr": 0.0006650309993984803,
+            "precision": 0.3792990516921684
+          },
+          {
+            "target": 0.95,
+            "recall": 0.9502051452016594,
+            "threshold": -1.328125,
+            "tp": 83142,
+            "fp": 252044,
+            "fn": 4357,
+            "fpr": 0.001300587169356993,
+            "precision": 0.24804735281306498
+          },
+          {
+            "target": 0.99,
+            "recall": 0.9900113144150219,
+            "threshold": -3.9375,
+            "tp": 86625,
+            "fp": 1216834,
+            "fn": 874,
+            "fpr": 0.0062790571790534485,
+            "precision": 0.06645778655101542
+          }
+        ],
+        "AP_bands": [
+          24.428059328173685,
+          23.42993958908883,
+          18.579374477408138,
+          7.527260983908114,
+          1.599871415934592,
+          0.656018836831344,
+          0.03328547296314549
+        ]
+      },
+      "corrected": {
+        "AP": 78.06973075256532,
+        "AUROC": 99.95955058556983,
+        "FPR95": 0.09857348946530275,
+        "operating": [
+          {
+            "target": 0.5,
+            "recall": 0.5010914410450406,
+            "threshold": 11.875,
+            "tp": 43845,
+            "fp": 5742,
+            "fn": 43654,
+            "fpr": 2.962963421643782e-05,
+            "precision": 0.8842035210841551
+          },
+          {
+            "target": 0.75,
+            "recall": 0.7509914399021703,
+            "threshold": 4.125,
+            "tp": 65711,
+            "fp": 36221,
+            "fn": 21788,
+            "fpr": 0.00018690612695116586,
+            "precision": 0.6446552603696583
+          },
+          {
+            "target": 0.9,
+            "recall": 0.9000788580440919,
+            "threshold": 0.78125,
+            "tp": 78756,
+            "fp": 101478,
+            "fn": 8743,
+            "fpr": 0.0005236426368888326,
+            "precision": 0.4369652784713206
+          },
+          {
+            "target": 0.95,
+            "recall": 0.9500565720751094,
+            "threshold": -0.77734375,
+            "tp": 83129,
+            "fp": 191028,
+            "fn": 4370,
+            "fpr": 0.0009857348946530275,
+            "precision": 0.30321676995298313
+          },
+          {
+            "target": 0.99,
+            "recall": 0.9900227431170642,
+            "threshold": -3.65625,
+            "tp": 86626,
+            "fp": 1000791,
+            "fn": 873,
+            "fpr": 0.005164240901620171,
+            "precision": 0.07966217191748888
+          }
+        ],
+        "AP_bands": [
+          24.433164459883884,
+          23.433506641347712,
+          19.17589617337096,
+          8.2825995140363,
+          1.8902670889761788,
+          0.8148777052529474,
+          0.039419169697339475
+        ]
+      }
+    },
+    "finding": "A controlled change of rotary-position arithmetic isolated a numerical information defect and measured its complete-ranking effect. The remaining material and learning causes are not thereby identified."
+  },
+  "historical_AP_partition_scope": "cause_confirmed_AP is an exclusive historical partition, not a claim that no numerical mechanism has been identified; use numerical_intervention for its measured effect."
 }

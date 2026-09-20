@@ -51,7 +51,8 @@ def z_order_encode(grid_coord: torch.Tensor, depth: int = 16):
 
 
 def z_order_decode(code: torch.Tensor, depth):
-    x, y, z = z_order_decode_(code, depth=depth)
+    # The outer decoder handles batch bits; this helper returns coordinates only.
+    x, y, z, _ = z_order_decode_(code, depth=depth)
     grid_coord = torch.stack([x, y, z], dim=-1)  # (N,  3)
     return grid_coord
 
