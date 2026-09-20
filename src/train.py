@@ -27,6 +27,7 @@ from .model import (POINT_CHUNK, Segmentor, balanced_loss, to_device,
 
 EPOCHS = (8, 4)
 BATCH_SIZE = 8
+PAIRED_UPDATES = 500
 PEAK_LR = ((2e-4, 2e-3), (2e-5, 2e-4))
 STOP = False
 ROOT = Path(__file__).resolve().parents[1]
@@ -56,6 +57,11 @@ def pilot_order(manifest, seed, updates, *, sampling=None, segment=0, paired=Fal
     if paired:
         if segment != 0 or sampling != dict(base=6, normal_nuscenes=1, normal_stu=1):
             raise ValueError("the paired control replaces only P1's two targeted scans")
+        if updates > PAIRED_UPDATES:
+            # Extending the budget must not reshuffle the measured 500-update control.
+            prefix = pilot_order(manifest, seed, PAIRED_UPDATES, sampling=sampling, paired=True)
+            return prefix + pilot_order(manifest, seed, updates - PAIRED_UPDATES,
+                                        sampling=sampling, segment=1)
         reference = pilot_order(manifest, seed, updates)
         used_base = {i for i in reference if manifest["records"][i]["group"] == "base"}
         available = [i for i, row in enumerate(manifest["records"])
@@ -238,13 +244,15 @@ def configuration(train, val, device, world_size, *, updates=None, initial=None,
         if recipe == "paired":
             reference_path = ROOT / "results/train/p1/0/pilot/config.json"
             reference = json.loads(reference_path.read_text())["configuration"]
-            keys = ("train_manifest", "val_manifest", "initial_sha256", "updates", "batch_size", "microbatch",
+            keys = ("train_manifest", "val_manifest", "initial_sha256", "batch_size", "microbatch",
                     "peak_lr", "weight_decay", "adam_betas", "adam_eps", "gradient_clip", "warmup_fraction",
                     "initial_lr_fraction", "final_lr_fraction", "augmentation", "precision", "world_size")
-            if (optimizer_state != "reset" or segment != 0 or (eval_every or updates) != updates
+            if (optimizer_state != "reset" or segment != 0 or updates < PAIRED_UPDATES
+                    or reference["updates"] != PAIRED_UPDATES or (eval_every or updates) != PAIRED_UPDATES
                     or any(identity(result[k]) != identity(reference[k]) for k in keys)):
-                raise ValueError("paired comparison must keep P1's initial weights and optimization settings")
+                raise ValueError("paired runs keep P1's initialization and optimizer settings; validate every 500 updates")
             result["paired_reference"] = str(reference_path)
+            result["paired_prefix_updates"] = PAIRED_UPDATES
     return result
 
 
@@ -396,11 +404,14 @@ def train_stage(args, train, val, seed, method, device, config):
         full_order = pilot_order(train, seed, total, sampling=config.get("sampling"),
                                  segment=config.get("sampling_segment", 0), paired=config.get("recipe") == "paired")
         if config.get("recipe") == "paired" and rank == 0:
-            reference = pilot_order(train, seed, total)
+            paired_updates = min(total, PAIRED_UPDATES)
+            reference = pilot_order(train, seed, paired_updates)
             write_json(directory / "sampling.json", dict(reference=config["paired_reference"],
-                       train_manifest=train["sha256"], preserved_visits=6 * total, replaced_visits=2 * total,
+                       train_manifest=train["sha256"], preserved_visits=6 * paired_updates,
+                       replaced_visits=2 * paired_updates, paired_prefix_updates=paired_updates,
                        reference_order=reference, order=full_order,
-                       replacement="without replacement from base scans unused by P1 in this segment"))
+                       replacement="without replacement from base scans unused by P1 in the first 500 updates",
+                       extension="same-pool 6/1/1 permutations with sampling segment 1" if total > paired_updates else None))
     for epoch in range(state["epoch"], epochs):
         start = time.perf_counter()
         order = full_order[epoch * steps_per_epoch * BATCH_SIZE:
@@ -585,9 +596,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--train-manifest", type=Path, default=Path("results/data/train.json"))
     parser.add_argument("--val-manifest", type=Path, default=Path("assets/val.json"))
-    parser.add_argument("--output", type=Path, default=Path("results/train/paired"))
+    parser.add_argument("--output", type=Path, default=Path("results/train/main"))
     parser.add_argument("--initial", type=Path, default=Path("results/train/r2/0/base/best.pt"))
-    parser.add_argument("--updates", type=int, default=500)
+    parser.add_argument("--updates", type=int, default=2000)
     parser.add_argument("--eval-every", type=int, default=500)
     parser.add_argument("--recipe", choices=("mixed", "old", "paired"), default="paired")
     parser.add_argument("--optimizer-state", choices=("inherit", "reset"), default="reset")

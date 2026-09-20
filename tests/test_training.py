@@ -126,6 +126,12 @@ def test_paired_control_preserves_p1_updates_and_microbatch_positions():
                 assert before == after
     assert len(set(replacements)) == len(replacements) == 1000
     assert paired == pilot_order(manifest, 0, 500, sampling=sampling, paired=True)
+    extended = pilot_order(manifest, 0, 2000, sampling=sampling, paired=True)
+    assert extended[:4000] == paired
+    assert extended[4000:] == pilot_order(manifest, 0, 1500, sampling=sampling, segment=1)
+    assert len(extended) == 16000
+    for batch in effective_batches(extended):
+        assert [sum(records[i]["group"] == g for i in batch) for g in sampling] == [6, 1, 1]
     with pytest.raises(ValueError, match="paired control"):
         pilot_order(manifest, 0, 500, sampling=sampling, segment=500, paired=True)
 
@@ -170,7 +176,7 @@ def test_distributed_tail_and_order_are_unique_and_method_independent():
 
 def test_schedule_selection_optimizer_and_random_state():
     assert EPOCHS == (8, 4)
-    for total in (40152, 20076):
+    for total in (2000, 40152, 20076):
         warmup = math.ceil(.05 * total)
         assert lr_factor(1, total) == .1
         assert lr_factor(warmup, total) == 1.
