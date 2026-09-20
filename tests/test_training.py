@@ -504,6 +504,62 @@ class _ToyScans:
         return dict(xyzi=x, targets=torch.tensor([0] * normal + [1] * anomaly))
 
 
+def test_native_branch_restores_moments_rng_sampling_and_remaining_schedule(tmp_path, monkeypatch):
+    import copy
+    import src.train as training
+    from src.data import NATIVE_VERSION, file_sha256
+    monkeypatch.setattr(training, "Segmentor", _ToyModel)
+    monkeypatch.setattr(training, "PreparedScans", _ToyScans)
+    monkeypatch.setattr(torch.cuda, "reset_peak_memory_stats", lambda *a: None)
+    monkeypatch.setattr(torch.cuda, "max_memory_allocated", lambda *a: 0)
+    device = torch.device("cpu")
+    manifest = dict(version=NATIVE_VERSION, sha256="fixture-train", records=[
+        dict(group="anomaly_stu", normal=5, anomaly=5) for _ in range(6185)])
+    order = pilot_order(manifest, 0, 1547)
+    sampling = tmp_path / "sampling.json"
+    sampling.write_text(json.dumps(dict(order=order)))
+    training.seed_all(7)
+    model = _ToyModel("conditional")
+    optimizer = optimizer_for(model, 1)
+    sum(p.square().sum() for p in model.parameters()).backward()
+    optimizer.step()
+    for state in optimizer.state.values():
+        state["step"].fill_(500)
+    metrics = dict(AP=75., FPR95=.2, AUROC=99.9)
+    parent = dict(model=copy.deepcopy(model.state_dict()), optimizer=copy.deepcopy(optimizer.state_dict()),
+                  scaler={}, rng=[training.rng_state(device)],
+                  validation=dict(metrics=metrics, manifest_sha256="fixture-val"))
+    initial = tmp_path / "best.pt"
+    torch.save(parent, initial)
+    config = dict(version=NATIVE_VERSION, updates=1000, schedule_updates=1547, start_update=500,
+                  eval_every=500, epochs=None, microbatch=2, branch="lr", recipe="native", objective="metrics",
+                  loss=dict(auc_weight=.1, fpr95_weight=.1), lr_scale=.3,
+                  reference_sampling=str(sampling), initial_sha256=file_sha256(initial))
+    optimizer.zero_grad(set_to_none=True)
+    counts = torch.tensor([40,40], dtype=torch.int64)
+    dataset = _ToyScans(manifest)
+    for k in range(4):
+        loss,_ = training.forward_loss(model,[dataset[i] for i in order[4000+k*2:4002+k*2]],counts,
+                                       rank_weight=.25,rank_seed=501*8+k)
+        loss.backward()
+    torch.nn.utils.clip_grad_norm_(model.parameters(),1.)
+    for group in optimizer.param_groups:
+        group["lr"] = group["peak_lr"] * lr_factor(501,1547) * .3
+    optimizer.step()
+    expected_rng = training.rng_state(device)
+    args = SimpleNamespace(output=tmp_path / "branch", initial=initial, resume=False, workers=0,
+                           save_every=500, score_path=None)
+    monkeypatch.setattr(training, "STOP", True)
+    assert not training.train_stage(args,manifest,dict(sha256="fixture-val"),0,"conditional",device,config)
+    saved = torch.load(args.output / "0/conditional/last.pt",weights_only=False)
+    assert saved["planned_updates"] == saved["successful_updates"] == 501
+    assert all(int(s["step"])==501 for s in saved["optimizer"]["state"].values())
+    assert saved["best_metrics"] == metrics and saved["epoch_frames"] == 8
+    assert torch.equal(saved["rng"][0]["torch"],expected_rng["torch"])
+    for name,value in model.state_dict().items():
+        torch.testing.assert_close(value,saved["model"][name],rtol=0,atol=0)
+
+
 def test_pilot_budget_single_validation_and_resume(tmp_path, monkeypatch):
     import src.train as training
     from src.data import PILOT_VERSION
@@ -513,7 +569,7 @@ def test_pilot_budget_single_validation_and_resume(tmp_path, monkeypatch):
     monkeypatch.setattr(torch.cuda, "max_memory_allocated", lambda *a: 0)
     evaluations = []
     metrics = dict(AP=2., AUROC=51., FPR95=93., threshold=.5)
-    def validate(*args):
+    def validate(*args, score_path=None):
         evaluations.append(1)
         return dict(metrics=metrics, manifest_sha256="fixture-val")
     monkeypatch.setattr(training, "validate_all", validate)
@@ -524,7 +580,7 @@ def test_pilot_budget_single_validation_and_resume(tmp_path, monkeypatch):
                             for group in ("base", "targeted", "normal_nuscenes", "normal_stu")
                             for _ in range(9)])
     config = dict(version=PILOT_VERSION, updates=7, epochs=None, fixture=True)
-    args = SimpleNamespace(output=tmp_path / "full", initial=initial, resume=True, workers=0, save_every=500)
+    args = SimpleNamespace(output=tmp_path / "full", initial=initial, resume=True, workers=0, save_every=500, score_path=None)
     val, device = dict(sha256="fixture-val"), torch.device("cpu")
     monkeypatch.setattr(training, "STOP", False)
     assert training.train_stage(args, manifest, val, 0, "pilot", device, config)
@@ -558,9 +614,9 @@ def test_continuation_keeps_optimizer_and_best_across_intervals(tmp_path, monkey
     torch.save(dict(mode="base", model=_ToyModel("base").state_dict(), complete=True, selected=True,
                     validation=dict(metrics=base_metrics, manifest_sha256="fixture-val")), initial)
     config = dict(updates=7, sampling=sampling, world_size=1, train_manifest="fixture-train", fixture=True)
-    args = SimpleNamespace(output=tmp_path / "parent", initial=initial, resume=True, workers=0, save_every=500)
+    args = SimpleNamespace(output=tmp_path / "parent", initial=initial, resume=True, workers=0, save_every=500, score_path=None)
     val, device = dict(sha256="fixture-val"), torch.device("cpu")
-    def validate_parent(model, *unused):
+    def validate_parent(model, *unused, score_path=None):
         model.eval()
         return dict(metrics=dict(base_metrics, AP=3.), manifest_sha256="fixture-val")
     monkeypatch.setattr(training, "validate_all", validate_parent)
@@ -570,7 +626,7 @@ def test_continuation_keeps_optimizer_and_best_across_intervals(tmp_path, monkey
     config = dict(config, updates=9, eval_every=3, optimizer_state="inherit", sampling_segment=7)
     calls = []
     stop_after_first = False
-    def validate(model, *unused):
+    def validate(model, *unused, score_path=None):
         model.eval()
         ap = [4., 2., 3.5][len(calls)]
         calls.append(ap)
@@ -610,14 +666,14 @@ def test_actual_training_loop_resume_inheritance_epoch_zero_and_tail(tmp_path, m
     monkeypatch.setattr(training, "PreparedScans", _ToyScans)
     monkeypatch.setattr(torch.cuda, "reset_peak_memory_stats", lambda *a: None)
     monkeypatch.setattr(torch.cuda, "max_memory_allocated", lambda *a: 0)
-    def validate(model, *args):
+    def validate(model, *args, score_path=None):
         model.eval()
         return dict(metrics=dict(AP=2., AUROC=51., FPR95=93., threshold=.5))
     monkeypatch.setattr(training, "validate_all", validate)
     manifest = dict(records=[dict(normal=3 + i % 3, anomaly=5 + i % 2) for i in range(19)])
     config = dict(fixture=True, val_manifest="fixture-val", train_manifest="fixture-train")
     device = torch.device("cpu")
-    args = SimpleNamespace(output=tmp_path / "full", resume=True, weights=None, workers=0, save_every=500)
+    args = SimpleNamespace(output=tmp_path / "full", resume=True, weights=None, workers=0, save_every=500, score_path=None)
     monkeypatch.setattr(training, "STOP", False)
     assert training.train_stage(args, manifest, {}, 0, "base", device, config)
     full = torch.load(args.output / "0/base/last.pt", weights_only=False)

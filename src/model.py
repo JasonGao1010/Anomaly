@@ -320,15 +320,18 @@ def rank_sample(positive, negative, seed):
     return positive[anchors], negative[indices], weights, 512
 
 
-def ranking_loss(logits, targets, seed, tau=1.):
+def ranking_loss(logits, targets, seed, tau=1., *, auc_weight=.1, fpr95_weight=.1, return_terms=False):
     """One two-scan proxy, with all positives and weighted sampled negatives."""
     with torch.autocast(logits.device.type, enabled=False):
         positive, negative = logits[targets == 1].float(), logits[targets == 0].float()
         zero = logits.float().sum() * 0
         if not len(positive) or not len(negative):
-            return zero, dict(ap=zero.detach(), auc=zero.detach(), fpr95=zero.detach(),
+            details = dict(ap=zero.detach(), auc=zero.detach(), fpr95=zero.detach(),
                               positive=len(positive), negative=len(negative), anchors=0, negatives=0,
                               top=0, random_weight=0., threshold=None, recall=None)
+            if return_terms:
+                details["terms"] = dict(ap=zero, auc=zero, fpr95=zero)
+            return zero, details
         anchors, sampled, weights, top = rank_sample(positive, negative, seed)
         # Each anchor is a member of P: subtract its self-comparison sigmoid(0).
         positive_rank = .5 + torch.sigmoid((positive[None, :] - anchors[:, None]) / tau).sum(1)
@@ -339,8 +342,11 @@ def ranking_loss(logits, targets, seed, tau=1.):
         threshold = RecallThreshold.apply(positive, tau, .95)
         recall = torch.sigmoid((positive - threshold) / tau).mean()
         fpr95 = (torch.sigmoid((sampled - threshold) / tau) * weights).sum() / len(negative)
-        return ap + .1 * auc + .1 * fpr95, dict(
+        details = dict(
             ap=ap.detach(), auc=auc.detach(), fpr95=fpr95.detach(),
             positive=len(positive), negative=len(negative), anchors=len(anchors), negatives=len(sampled),
             top=top, random_weight=(len(negative) - 512) / 3584 if len(negative) > 4096 else 1.,
             threshold=threshold.detach(), recall=recall.detach())
+        if return_terms:
+            details["terms"] = dict(ap=ap, auc=auc, fpr95=fpr95)
+        return ap + auc_weight * auc + fpr95_weight * fpr95, details

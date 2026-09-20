@@ -1,0 +1,99 @@
+{
+  "updates_per_probe": 8,
+  "scan_visits_per_probe": 64,
+  "probes": [
+    [
+      {
+        "update": 501,
+        "loss": 0.29843648878159,
+        "gradient_norm": 0.40859347581863403
+      },
+      {
+        "update": 502,
+        "loss": 0.042706649750471115,
+        "gradient_norm": 1.3409420251846313
+      },
+      {
+        "update": 503,
+        "loss": 0.5019111791625619,
+        "gradient_norm": 2.6105399131774902
+      },
+      {
+        "update": 504,
+        "loss": 0.08156990515999496,
+        "gradient_norm": 1.187760829925537
+      },
+      {
+        "update": 505,
+        "loss": 0.2600126824108884,
+        "gradient_norm": 2.1749234199523926
+      },
+      {
+        "update": 506,
+        "loss": 0.029770111432299018,
+        "gradient_norm": 0.3392993211746216
+      },
+      {
+        "update": 507,
+        "loss": 0.4332644138485193,
+        "gradient_norm": 4.9894914627075195
+      },
+      {
+        "update": 508,
+        "loss": 0.3543832888826728,
+        "gradient_norm": 1.592879295349121
+      }
+    ],
+    [
+      {
+        "update": 501,
+        "loss": 0.29843648878159,
+        "gradient_norm": 0.4084838628768921
+      },
+      {
+        "update": 502,
+        "loss": 0.04235549014993012,
+        "gradient_norm": 1.3225085735321045
+      },
+      {
+        "update": 503,
+        "loss": 0.5027676708996296,
+        "gradient_norm": 2.5883069038391113
+      },
+      {
+        "update": 504,
+        "loss": 0.0817271979758516,
+        "gradient_norm": 1.1767503023147583
+      },
+      {
+        "update": 505,
+        "loss": 0.26066284242551774,
+        "gradient_norm": 2.094341993331909
+      },
+      {
+        "update": 506,
+        "loss": 0.02962075942195952,
+        "gradient_norm": 0.34102851152420044
+      },
+      {
+        "update": 507,
+        "loss": 0.4343220288865268,
+        "gradient_norm": 5.026142597198486
+      },
+      {
+        "update": 508,
+        "loss": 0.35477874521166086,
+        "gradient_norm": 1.5962780714035034
+      }
+    ]
+  ],
+  "same_final_torch_rng": true,
+  "same_final_cuda_rng": true,
+  "parameter_max_abs": 0.006871536374092102,
+  "parameter_rms": 8.252198313130066e-06,
+  "parameter_unequal": 12875419,
+  "prediction_max_abs": 0.59375,
+  "prediction_mean_abs": 0.012858602218329906,
+  "prediction_unequal": 82879,
+  "interpretation": "Eight-update numerical sensitivity only; does not estimate full-validation AP variance"
+}

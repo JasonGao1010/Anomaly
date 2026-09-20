@@ -1,0 +1,45 @@
+{
+  "checkpoint": "results/train/native/metrics/0/conditional/last.pt",
+  "checkpoint_sha256": "e2668c9ab55b28a4e65b16a22ba21e53a2e10c34520ee3b5ecbb2e1814e2af4a",
+  "update": 1547,
+  "splits": {
+    "val": {
+      "metrics": {
+        "AP": 71.99034900101081,
+        "FPR95": 0.16476491578852367,
+        "AUROC": 99.93948083071638,
+        "threshold": -1.453125
+      },
+      "scans": 1960,
+      "points": 193879969,
+      "seconds": 198.67860312300036,
+      "manifest_sha256": "918524fd271f896bf9288ebfe4131941a20cbd00a0925e91c8ccedf4d7574855",
+      "official_commit": "8f0f09c2ca4bf7b665e0ae5919b4092ddae140a2",
+      "saved_metrics": {
+        "AP": 71.97328654954123,
+        "FPR95": 0.16405642592821074,
+        "AUROC": 99.93955514612645,
+        "threshold": -1.4453125
+      },
+      "metric_differences": {
+        "AP": 0.017062451469584516,
+        "FPR95": 0.0007084898603129386,
+        "AUROC": -7.431541007463238e-05
+      }
+    },
+    "train": {
+      "scans": 128,
+      "points": 9293620,
+      "seconds": 9.529399409999314,
+      "manifest_sha256": "5c0fe5e5b8a27d65fd87e383623204b9b3540bb5dff0305f666fb4147c663561",
+      "scope": "diagnostic supervised points, including trusted normal frames; not official validation"
+    },
+    "check": {
+      "scans": 350,
+      "points": 26725088,
+      "seconds": 26.55241121599829,
+      "manifest_sha256": "703f5eee325e95dd72d53eadded25b5ddd64b65a2fed737ea528f87e284813e3",
+      "scope": "diagnostic supervised points, including trusted normal frames; not official validation"
+    }
+  }
+}

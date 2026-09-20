@@ -49,7 +49,7 @@ def better(metrics, previous):
 
 
 @torch.no_grad()
-def evaluate(model, manifest, device, workers=4):
+def evaluate(model, manifest, device, workers=4, score_path=None):
     """Call the pinned official implementation once across the complete valid set."""
     if manifest["kind"] not in ("val", "test"):
         raise ValueError("evaluation requires a real held-out STU manifest")
@@ -68,7 +68,9 @@ def evaluate(model, manifest, device, workers=4):
                         generator=torch.Generator().manual_seed(0))
     model.eval()
     calculator = PointOODMetricsCalculator()
-    scores = np.empty(count, np.float32)
+    # Optional diagnostic export preserves official point order and exact scores.
+    scores = (np.lib.format.open_memmap(score_path, mode="w+", dtype=np.float32, shape=(count,))
+              if score_path is not None else np.empty(count, np.float32))
     labels = np.empty(count, np.int8)
     cursor = 0
     start = time.perf_counter()
@@ -91,6 +93,8 @@ def evaluate(model, manifest, device, workers=4):
             print(f"validation {number}/{len(indices)} scans, {cursor}/{count} points", flush=True)
     if cursor != count:
         raise ValueError("official evaluation count differs from the fixed manifest")
+    if score_path is not None:
+        scores.flush()
     del batch, sample, dataset, loader
     gc.collect()
     # Integer 0/1 labels are exact in int8; sklearn still uses its own float64 sums.

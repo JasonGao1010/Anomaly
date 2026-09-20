@@ -1,0 +1,59 @@
+{
+  "checkpoint": "results/train/native/branches/ap/0/conditional/last.pt",
+  "checkpoint_sha256": "8f08286fb52bef82c52a915875583013f03154f076d190fc13445d427a55e5e7",
+  "update": 1000,
+  "splits": {
+    "val": {
+      "metrics": {
+        "AP": 73.55010413934303,
+        "FPR95": 0.14828646334916934,
+        "AUROC": 99.9211098258213,
+        "threshold": -2.390625
+      },
+      "scans": 1960,
+      "points": 193879969,
+      "seconds": 192.61088861399912,
+      "manifest_sha256": "918524fd271f896bf9288ebfe4131941a20cbd00a0925e91c8ccedf4d7574855",
+      "official_commit": "8f0f09c2ca4bf7b665e0ae5919b4092ddae140a2"
+    }
+  },
+  "training": {
+    "version": "AJAE-V4-N1",
+    "seed": 0,
+    "method": "conditional",
+    "complete": true,
+    "epochs": null,
+    "updates": 1000,
+    "best_epoch": 1,
+    "best_metrics": {
+      "AP": 75.90826681775461,
+      "FPR95": 0.2358399167934647,
+      "AUROC": 99.91929637877914,
+      "threshold": -2.234375
+    },
+    "best_update": 500,
+    "final_metrics": {
+      "AP": 73.55010413934303,
+      "FPR95": 0.14828646334916934,
+      "AUROC": 99.9211098258213,
+      "threshold": -2.390625
+    },
+    "objective": "metrics",
+    "branch": "ap",
+    "start_update": 500,
+    "additional_updates": 500,
+    "gradient_steps": 500,
+    "clipped_steps": 194,
+    "gradient_norm_sum": 921.2482908200473,
+    "gradient_norm_max": 33.625518798828125,
+    "training_seconds": 561.4319363489121,
+    "validation_seconds": 192.6159110199951,
+    "planned_updates": 1000,
+    "successful_updates": 1000,
+    "overflows": 0,
+    "parameters": 12880513,
+    "train_manifest_sha256": "e3c32d0b83ffb9eda2e095ffddd08828509e97d1d34509805dd2584951b2b3c6",
+    "val_manifest_sha256": "918524fd271f896bf9288ebfe4131941a20cbd00a0925e91c8ccedf4d7574855",
+    "validation_improved_from_epoch0": null
+  }
+}
