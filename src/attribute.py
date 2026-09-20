@@ -707,6 +707,13 @@ def evidence(output, workers):
                     modification="先修正位置编码精度并单独保留修正后评价；原C权重与原结果保留。剩余错误按原素材核验继续，不由本实验增加训练量或改取样"
                 else:
                     modification="保留原C作为实际基准；本次结果不支持直接切换推理精度。先检验训练阶段对原数值计算的适应，再决定是否按修正实现重新训练"
+            followup = reviewed.get("material_intervention", {}).get("findings", {}).get(case_id)
+            if followup:
+                supported += "；" + followup["supported"]
+                excluded += "；" + followup["excluded"]
+                missing, test = followup["missing"], followup["next_test"]
+                modification = followup["modification"]
+                clue += "；修正C起点的素材干预见transfer.json：" + followup["supported"]
             item = dict(case=case_id, kind=kind, AP_loss=loss, cumulative_loss_percent=100*cumulative/total,
                 points=case["points"], observations=len(case["observations"]),
                 AP_loss_by_recall=case.get("AP_loss_by_recall"),
@@ -726,6 +733,8 @@ def evidence(output, workers):
                 counterevidence="观测描述近邻不证明覆盖；低训练损失不证明学对或学错；一两次访问不证明训练不足",
                 identity_basis="序列和原始异常实例号；连续观测分段保存在 ledger.json" if kind=="anomaly" else "同序列、原始标签、几何方向及世界坐标连通表面；没有正常实例真值",
                 drivers=(case["normal_drivers"] if kind=="anomaly" else case["anomaly_drivers"])[:5])
+            if followup:
+                item["material_intervention"] = dict(report="transfer.json", case=case_id, **followup)
             report.append(item)
             refs = "；".join(f"{r['domain']} 记录{r['index']} / 素材{r['profile']} / BCE={r['mean_BCE']:.5g} / 错序率={r['reference_pair_error']:.5g} / 访问{r['visits']}次" for r in references)
             rows.append(dict(案例=case_id,视角="异常对象" if kind=="anomaly" else "正常结构候选",

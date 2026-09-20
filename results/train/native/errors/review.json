@@ -119,7 +119,7 @@
   },
   "cause_confirmed_AP": 0.0,
   "causal_unresolved_AP": 23.74050709849702,
-  "interpretation": "Hypothesis checks narrow next actions; no controlled intervention yet identifies the cause of a positive amount of complete-validation AP loss.",
+  "interpretation": "The material/readout fields are historical observations before the rotary fix. Numerical and material interventions below retain their separate initializations, score populations and causal limits.",
   "feature_readout": {
     "metrics": {
       "train": {
@@ -1737,5 +1737,76 @@
     },
     "finding": "A controlled change of rotary-position arithmetic isolated a numerical information defect and measured its complete-ranking effect. The remaining material and learning causes are not thereby identified."
   },
-  "historical_AP_partition_scope": "cause_confirmed_AP is an exclusive historical partition, not a claim that no numerical mechanism has been identified; use numerical_intervention for its measured effect."
+  "historical_AP_partition_scope": "cause_confirmed_AP is an exclusive historical partition, not a claim that no numerical mechanism has been identified; use numerical_intervention for its measured effect.",
+  "material_intervention": {
+    "report": "results/train/native/errors/transfer.json",
+    "findings": {
+      "P125:1": {
+        "supported": "修正后重算三个既有训练世界的543个观测，9个已选观测415点的BCE为0.000274，未选观测42731点的BCE为0.002274；这些候选大多已识别，真实125仍持续失分。",
+        "excluded": "当前结果不支持优先增加这三个世界的重复观测；尚不能排除其他几何、响应或背景关系覆盖不足。",
+        "missing": "真实物体与候选的形态、表面响应和背景关系仍未证实等价；AP分摊下降不能直接等同于本物体各召回点的漏检减少。",
+        "modification": "保留精度修正和已验证候选，不据此扩产这三个几何，也不更换交互模块。",
+        "next_test": "固定现有异常候选的几何、位姿和射线，逐项核验其表面响应及邻接关系与失败/成功观测的差异；只在训练来源构造单因素对照，真实125仅评价。"
+      },
+      "N125:30": {
+        "supported": "记录6006为可信道路局部，但重复31次后BCE为0.975397，原顺序对照为0.982049，均未低于修正C的0.791767。两目标连续片段失分为0.753421→0.770654，75%召回误报为1671→1680。整体AP增益未验证预设的局部学习与迁移解释。",
+        "excluded": "这24点均受到正常监督且损失梯度方向正确，未发现忽略标签或梯度中断；全局AP提高不等于这两个道路片段学好了。5757局部为45点地形和5点人行道，不能直接充当同类道路证据。",
+        "missing": "仍未区分局部监督强度不足与共享参数更新的影响；不能确认真实N125主要属于没学够，亦不能确认它缺样本或学错关联。单次0.53028个百分点额外AP收益的重复性未检验。",
+        "modification": "保存80.53251%候选和80.00223%对照，保留78.06939%基线；不将6006重复配方直接推广，也不由这次AP提高宣布N125归因完成。",
+        "next_test": "下一项可固定本轮6006重复输入、C完整起点和40步预算，仅比较原组合损失与原损失加1.0倍这24个训练正常点的局部均值BCE。先判断目标局部能否拟合，再看未参与更新观测、两个真实道路片段及完整AP；仅训练局部改善不能解释真实失分。该改变损失权重的实验本轮未执行。"
+      }
+    },
+    "comparison": {
+      "readings": {
+        "baseline": {
+          "training_patch_BCE": 0.7917672991752625,
+          "training_patch_wrong_at_zero": 11,
+          "unfitted_views": 9,
+          "unfitted_points": 556,
+          "unfitted_BCE": 0.033463017694047394,
+          "unfitted_FP95": 13,
+          "focused_normal_AP_loss": 0.8779536289974161,
+          "focused_normal_FP75": 1871,
+          "case_errors75": {
+            "P125:1": 13800,
+            "N125:30": 4987
+          }
+        },
+        "material-control": {
+          "training_patch_BCE": 0.9820491671562195,
+          "training_patch_wrong_at_zero": 12,
+          "unfitted_views": 9,
+          "unfitted_points": 556,
+          "unfitted_BCE": 0.0389131106108154,
+          "unfitted_FP95": 13,
+          "focused_normal_AP_loss": 0.7534211949065874,
+          "focused_normal_FP75": 1671,
+          "case_errors75": {
+            "P125:1": 14379,
+            "N125:30": 4504
+          }
+        },
+        "material": {
+          "training_patch_BCE": 0.9753968119621277,
+          "training_patch_wrong_at_zero": 12,
+          "unfitted_views": 9,
+          "unfitted_points": 556,
+          "unfitted_BCE": 0.03702605610661855,
+          "unfitted_FP95": 12,
+          "focused_normal_AP_loss": 0.7706536878649004,
+          "focused_normal_FP75": 1680,
+          "case_errors75": {
+            "P125:1": 14400,
+            "N125:30": 4424
+          }
+        }
+      },
+      "configuration_differences": [
+        "branch"
+      ],
+      "AP_gain_over_control": 0.5302832325092197,
+      "scope": "One paired seed; identical initial RNG and per-pair rank seeds. Changing scan sizes can change subsequent stochastic-depth draws, so repeat uncertainty is not estimated."
+    },
+    "scope": "Complete official ranking for all endpoints; focused material intervention, not a completed attribution of all remaining AP loss. Positive and normal AP allocations are separate margins."
+  }
 }

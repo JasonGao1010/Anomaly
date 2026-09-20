@@ -1057,7 +1057,7 @@ def mining_result(output):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("collect", "analyze", "gradients", "replay", "cases", "mine", "match", "coverage", "mining-result", "account", "materials", "attribute", "focus", "observe", "features", "precision", "model-check"))
+    parser.add_argument("action", choices=("collect", "analyze", "gradients", "replay", "cases", "mine", "match", "coverage", "mining-result", "account", "materials", "attribute", "focus", "observe", "features", "precision", "model-check", "transfer"))
     parser.add_argument("--output", type=Path, default=OUTPUT)
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--names", nargs="+", default=list(CHECKPOINTS))
@@ -1065,7 +1065,10 @@ def main():
     args = parser.parse_args()
     torch.set_num_threads(2)
     torch.set_num_interop_threads(1)
-    if args.action == "model-check":
+    if args.action == "transfer":
+        from .probe import transfer
+        transfer(args.output,args.workers)
+    elif args.action == "model-check":
         from .probe import model_check
         model_check(args.output,args.workers)
     elif args.action == "precision":

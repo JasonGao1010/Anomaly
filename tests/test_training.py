@@ -579,8 +579,8 @@ class _ToyScans:
         return dict(xyzi=x, targets=torch.tensor([0] * normal + [1] * anomaly))
 
 
-@pytest.mark.parametrize("start_update", [500, 1000])
-def test_native_branch_restores_moments_rng_sampling_and_remaining_schedule(tmp_path, monkeypatch, start_update):
+@pytest.mark.parametrize("start_update,material", [(500,False),(1000,False),(1000,True)])
+def test_native_branch_restores_moments_rng_sampling_and_remaining_schedule(tmp_path, monkeypatch, start_update, material):
     import copy
     import src.train as training
     from src.data import NATIVE_VERSION, file_sha256
@@ -611,6 +611,10 @@ def test_native_branch_restores_moments_rng_sampling_and_remaining_schedule(tmp_
                   eval_every=500, epochs=None, microbatch=2, branch="lr" if start_update==500 else "control", recipe="native", objective="metrics",
                   loss=dict(auc_weight=.1, fpr95_weight=.1), lr_scale=.3,
                   reference_sampling=str(sampling), initial_sha256=file_sha256(initial))
+    if material:
+        metrics = dict(AP=78., FPR95=.1, AUROC=99.95)
+        config.update(branch="material-control", updates=start_update+40, eval_every=40,
+                      initial_validation=dict(metrics=metrics, manifest_sha256="fixture-val"))
     optimizer.zero_grad(set_to_none=True)
     counts = torch.tensor([40,40], dtype=torch.int64)
     dataset = _ToyScans(manifest)
@@ -635,6 +639,17 @@ def test_native_branch_restores_moments_rng_sampling_and_remaining_schedule(tmp_
     assert torch.equal(saved["rng"][0]["torch"],expected_rng["torch"])
     for name,value in model.state_dict().items():
         torch.testing.assert_close(value,saved["model"][name],rtol=0,atol=0)
+
+
+def test_material_sampling_reuses_every_other_source_position():
+    from src.train import material_order
+    manifest = dict(records=[dict(group="normal_stu" if i % 7 == 0 else "anomaly_stu") for i in range(80)])
+    order = np.random.default_rng(19).permutation(80).tolist()
+    changed = material_order(order, manifest, [0], 2, 8)
+    assert changed[:16] == order[:16] and changed[64:] == order[64:]
+    for position in range(16, 64):
+        assert changed[position] == (0 if manifest["records"][order[position]]["group"] == "normal_stu" else order[position])
+    assert material_order(order, manifest, [0], 2, 8) == changed
 
 
 def test_hard_sampling_preserves_six_positions_sources_and_prefix():

@@ -248,6 +248,310 @@ def _even(values,count):
     return [values[i] for i in np.unique(np.linspace(0,len(values)-1,min(count,len(values))).round().astype(int))]
 
 
+def transfer(output, workers):
+    """Test material learning and transfer under corrected C without changing truth."""
+    import torch
+    from torch.utils.data import DataLoader
+    from .attribute import loss_weights, pair_errors
+    from .diagnose import curve_summary, score_curve
+    from .evaluate import PreparedScans, autocast, load_model
+    from .model import to_device
+    from .train import material_order
+
+    path = output / "transfer.json"
+    train = load_manifest("results/data/native/train.json", "train")
+    old = load_manifest("assets/train.json", "train")
+    val = load_manifest("assets/val.json", "val")
+    baseline = json.loads((output / "precision_eval.json").read_text())
+    focus_plan = json.loads((output / "focus.json").read_text())
+    original = json.loads((BEST_C.parent / "sampling.json").read_text())["order"]
+    modified = material_order(original, train, [6006], 1000, 1040)
+    train_data = Scans(train)
+    seed_sample = train_data[6006]
+    seed_cell = [13, 2, -3]
+    seed_indices = np.flatnonzero((seed_sample["targets"] == 0) &
+        np.all(np.floor(seed_sample["xyzi"][:, :3] / PATCH).astype(int) == seed_cell, axis=1))
+    pose = train_data.sequence[270].pose
+    track_center = (seed_sample["xyzi"][seed_indices, :3].astype(float) @ pose[:3, :3].T + pose[:3, 3]).mean(0)
+    used_frames = {train["records"][i]["frame"] for i in set(original[8000:8320] + modified[8000:8320])
+                   if train["records"][i]["group"].endswith("_stu")}
+    unseen = [i for i, r in enumerate(train["records"]) if r["group"] == "normal_stu"
+              and abs(r["frame"] - 270) <= 40 and r["frame"] not in used_frames]
+    unseen = _even(unseen, 12)
+    worlds = focus_plan["observation_worlds"]
+    observations = [r for world in worlds for r in world["scans"]]
+    representative = {r["old_index"] for world in worlds for r in world["scans"] if r["selected_index"] is not None}
+    for world in worlds:
+        representative.update(r["old_index"] for r in _even([r for r in world["scans"] if r["selected_index"] is None], 12))
+    plan = dict(checkpoint=str(BEST_C), checkpoint_sha256=file_sha256(BEST_C),
+        attention_source=file_sha256(Path("vendor/litept/model.py")), train_manifest=train["sha256"],
+        baseline=str(output / "precision_eval.json"), cases=["P125:1", "N125:30"],
+        fixed="C state including optimizer and RNG; updates 1001-1040 of the original 1547-update schedule times 0.3; full scans, labels, loss, 5 cm voxels and corrected FP32 rotary arithmetic",
+        changed="Only the identity of existing normal_stu input positions: original order versus record 6006",
+        updates_per_arm=40, scans_per_arm=320, replaced_visits=sum(a != b for a, b in zip(original, modified)),
+        material_index=6006, material_cell=seed_cell, material_points=len(seed_indices),
+        track_center_world=track_center.tolist(), track_radius_m=.5, unfitted_view_indices=unseen,
+        unfitted_scope="Existing 206 observations excluded by source frame from both new training segments; these are not new geometries or backgrounds and may have been seen before C",
+        other_materials={"5757": "Semantic relevance audit only; not selected for extra use", "P125": "All 543 observations of the three previously chosen training worlds at baseline; fixed 45-observation subset at both endpoints"},
+        interpretation=dict(
+            learning="Lower error on the verified training road patch than control supports learnability and insufficient fitting of this patch at C",
+            transfer="Improvement on unfitted observations AND N125/full AP beyond control supports usefulness of repeating this material; training-only improvement does not",
+            stop="If training improves but real-case/full AP does not, do not increase repetitions of this material; coverage and representation/generalization remain unresolved",
+            attribution="AP allocations are descriptive and their positive/normal margins cannot be added; no exclusive cause percentage is assigned"))
+    if baseline["checkpoint_sha256"] != plan["checkpoint_sha256"] or baseline["attention_source"] != plan["attention_source"]:
+        raise ValueError("transfer diagnosis must use the corrected C baseline")
+    report = json.loads(path.read_text()) if path.exists() else dict(plan=plan, resources=runtime_snapshot(), arms={})
+    if report["plan"] != plan:
+        raise ValueError("the predeclared transfer comparison changed")
+    write_json(path, report)
+    meta = np.load(OUTPUT / "val_points.npy", mmap_mode="r")
+    offsets = json.loads((OUTPUT / "val_offsets.json").read_text())["rows"]
+    surface = np.load(output / "surface_125.npz")
+    val_poses = poses_for(Path(val["records"][0]["scan"]).parents[1])
+    episodes = next(r for r in focus_plan["normal"] if r["parent"] == "N125:30")["episodes"][:2]
+    sources = dict(baseline=(BEST_C, output / "precision_deployed.npy", baseline))
+    for name in ("material-control", "material"):
+        directory = output.parent / "transfer" / name / "0/conditional"
+        if (directory / "result.json").exists():
+            result = json.loads((directory / "result.json").read_text())
+            sources[name] = (directory / "last.pt", directory / "scores.npy", result)
+
+    def stats(xyzi, target, scores, chosen, label, curve):
+        if not len(chosen):
+            return dict(points=0)
+        cloud, values = xyzi[chosen], scores[chosen]
+        # Readouts use each model's own complete-ranking thresholds and reference classes.
+        rank = np.searchsorted(curve["values"], values)
+        if np.any(rank == len(curve["values"])) or not np.array_equal(curve["values"][rank], values):
+            # Training values need not be present in the validation score alphabet.
+            population = curve["negative" if label else "positive"]
+            cumulative = np.r_[0, np.cumsum(population)]
+            lo = np.searchsorted(curve["values"], values, side="left")
+            hi = np.searchsorted(curve["values"], values, side="right")
+            below = (cumulative[lo] + cumulative[hi]) / (2 * cumulative[-1])
+            error = 1 - below if label else below
+        else:
+            error = pair_errors(curve["positive"], curve["negative"])[0 if label else 1][rank]
+        eigen, axes = np.linalg.eigh(np.cov(cloud[:, :3].astype(float).T)) if len(cloud) > 2 else (np.zeros(3), np.eye(3))
+        reference = np.sort(scores[target == (0 if label else 1)])
+        within = None
+        if len(reference):
+            below = (np.searchsorted(reference, values, side="left") + np.searchsorted(reference, values, side="right")) / (2 * len(reference))
+            within = float((1 - below if label else below).mean())
+        return dict(points=len(chosen), score_quantiles=np.quantile(values, [.1, .5, .9]).tolist(),
+            mean_BCE=float(np.logaddexp(0., -values if label else values).mean()),
+            fraction_wrong_at_zero=float(((values < 0) if label else (values >= 0)).mean()),
+            reference_pair_error=float(error.mean()), within_scan_pair_error=within,
+            errors_at_recall={str(int(r["target"] * 100)): int(((values < r["threshold"]) if label else (values >= r["threshold"])).sum()) for r in curve["operating"]},
+            xyz_span=np.ptp(cloud[:, :3], axis=0).tolist(), intensity_quantiles=np.quantile(cloud[:, 3], [.1, .5, .9]).tolist(),
+            plane_residual_m=float(np.sqrt(max(0., eigen[0]))), plane_normal_vertical=float(abs(axes[2, 0])))
+
+    for name, (checkpoint, score_path, result) in sources.items():
+        if name in report["arms"]:
+            continue
+        started = time.perf_counter()
+        scores = np.load(score_path, mmap_mode="r")
+        curve = score_curve(scores, meta["target"])
+        expected = result["metrics"] if name == "baseline" else result["final_metrics"]
+        if any(abs(curve[k] - expected[k]) > 1e-8 for k in ("AP", "FPR95", "AUROC")):
+            raise ValueError("material endpoint disagrees with the complete official evaluation")
+        _, positive_loss, normal_loss = loss_weights(curve["positive"], curve["negative"])
+        arm = dict(checkpoint=str(checkpoint), checkpoint_sha256=file_sha256(checkpoint), metrics=curve_summary(curve),
+                   cases={key: dict(points=0, AP_loss=0., observations=[]) for key in plan["cases"]},
+                   fragments={r["id"]: dict(points=0, AP_loss=0., observations=[]) for r in episodes}, materials=[], observations=[])
+        for offset in offsets:
+            if offset["sequence"] != 125:
+                continue
+            record = val["records"][offset["index"]]
+            points = meta[offset["start"]:offset["stop"]]
+            s = scores[offset["start"]:offset["stop"]]
+            x = np.fromfile(record["scan"], dtype="<f4").reshape(-1, 4)[points["slot"]]
+            y = points["target"]
+            pose = val_poses[record["frame"]]
+            world = x[:, :3].astype(float) @ pose[:3, :3].T + pose[:3, 3]
+            normal = np.flatnonzero(y == 0)
+            keys = cell_keys(world[normal], points["semantic"][normal])
+            positions = np.searchsorted(surface["keys"], keys)
+            if not np.array_equal(surface["keys"][positions], keys):
+                raise ValueError("normal case identity changed")
+            component = surface["component"][positions]
+            chosen = dict(P125=np.flatnonzero((y == 1) & (points["instance"] == 1)), N125=normal[component == 30])
+            for key, indices in chosen.items():
+                case = arm["cases"]["P125:1" if key == "P125" else "N125:30"]
+                label = key == "P125"
+                row = stats(x, y, s, indices, label, curve)
+                mass = float((positive_loss if label else normal_loss)[np.searchsorted(curve["values"], s[indices])].sum())
+                case["points"] += len(indices)
+                case["AP_loss"] += mass
+                case["observations"].append(dict(index=offset["index"], frame=record["frame"], AP_loss=mass, **row))
+            for episode in episodes:
+                if record["frame"] not in {r[1] for r in episode["observations"]}:
+                    continue
+                indices = chosen["N125"][np.all(np.floor(world[chosen["N125"]] / PATCH).astype(int) == episode["world_cell"], axis=1)]
+                fragment = arm["fragments"][episode["id"]]
+                mass = float(normal_loss[np.searchsorted(curve["values"], s[indices])].sum())
+                fragment["points"] += len(indices)
+                fragment["AP_loss"] += mass
+                fragment["observations"].append(dict(index=offset["index"], frame=record["frame"], AP_loss=mass, **stats(x, y, s, indices, False, curve)))
+        device = torch.device("cuda")
+        model, _ = load_model(checkpoint, device)
+        # All old views are rescored after the arithmetic fix, including the nine training representatives.
+        selections = dict(train=sorted(set([5757, 6006] + unseen)),
+                          old=[r["old_index"] for r in observations if name == "baseline" or r["old_index"] in representative])
+        for split, indices in selections.items():
+            manifest = train if split == "train" else old
+            loader = DataLoader(PreparedScans(manifest), batch_size=None, sampler=indices, num_workers=workers,
+                prefetch_factor=1, pin_memory=True, generator=torch.Generator().manual_seed(0))
+            with torch.no_grad():
+                for number, sample in enumerate(loader, 1):
+                    index = int(sample["index"])
+                    with autocast(device):
+                        prediction = model(to_device(sample, device)).cpu().numpy()
+                    x, y = sample["xyzi"].numpy(), sample["targets"].numpy()
+                    row = manifest["records"][index]
+                    if split == "old":
+                        identity_row = next(r for r in observations if r["old_index"] == index)
+                        arm["observations"].append(dict(world=row["world"], **identity_row,
+                            **stats(x, y, prediction, np.flatnonzero(y == 1), True, curve)))
+                    else:
+                        source = train_data._source(row["frame"])
+                        semantic = source.semantic[sample["slots"].numpy()]
+                        if index in (5757, 6006):
+                            cell = [4, 10, -3] if index == 5757 else seed_cell
+                            chosen = np.flatnonzero((y == 0) & np.all(np.floor(x[:, :3] / PATCH).astype(int) == cell, axis=1))
+                            labels, counts = np.unique(semantic[chosen], return_counts=True)
+                            arm["materials"].append(dict(index=index, frame=row["frame"], selector=dict(cell=cell), role="retrieved_training_patch",
+                                semantics={str(int(k)): int(v) for k, v in zip(labels, counts)},
+                                **stats(x, y, prediction, chosen, False, curve)))
+                        world = x[:, :3].astype(float) @ source.pose[:3, :3].T + source.pose[:3, 3]
+                        chosen = np.flatnonzero((y == 0) & (semantic == 40) & (np.linalg.norm(world - track_center, axis=1) <= .5))
+                        arm["materials"].append(dict(index=index, frame=row["frame"], selector=dict(world_center=track_center.tolist(), radius=.5),
+                            role="fitted_track" if index == 6006 else "unfitted_track", **stats(x, y, prediction, chosen, False, curve)))
+                    if number % 100 == 0:
+                        print(f"material learning {name} {split} {number}/{len(indices)}", flush=True)
+        arm["seconds"] = time.perf_counter() - started
+        report["arms"][name] = arm
+        write_json(path, report)
+        del model
+        torch.cuda.empty_cache()
+        print(dict(arm=name, AP=curve["AP"], cases={k: v["AP_loss"] for k, v in arm["cases"].items()}, seconds=arm["seconds"]), flush=True)
+
+    if "supervision" not in report:
+        from .model import balanced_loss, ranking_loss, rank_sample
+        device = torch.device("cuda")
+        model, _ = load_model(BEST_C, device)
+        prepared = PreparedScans(train)
+        cache, rows = {}, []
+        for begin in range(8000, 8320, 8):
+            batch = modified[begin:begin + 8]
+            counts = torch.tensor([sum(train["records"][i][key] for i in batch) for key in ("normal", "anomaly")], device=device)
+            for pair_index in range(4):
+                pair = batch[pair_index * 2:pair_index * 2 + 2]
+                if 6006 not in pair:
+                    continue
+                for index in pair:
+                    if index not in cache:
+                        sample = prepared[index]
+                        with torch.no_grad(), autocast(device):
+                            values = model(to_device(sample, device)).cpu()
+                        cache[index] = values, sample["targets"]
+                scores = torch.cat([cache[i][0] for i in pair]).to(device).requires_grad_()
+                targets = torch.cat([cache[i][1] for i in pair]).to(device)
+                selected, cursor = [], 0
+                for index in pair:
+                    if index == 6006:
+                        selected.extend((seed_indices + cursor).tolist())
+                    cursor += len(cache[index][0])
+                selected = torch.tensor(selected, device=device)
+                if not torch.all(targets[selected] == 0):
+                    raise ValueError("verified road points are not receiving normal supervision")
+                seed = (begin // 8 + 1) * 8 + pair_index
+                bce = balanced_loss(scores, targets, counts)
+                _, details = ranking_loss(scores, targets, seed, return_terms=True)
+                losses = dict(bce=bce, ap=details["terms"]["ap"] / 4,
+                              auc=details["terms"]["auc"] * .1 / 4, fpr95=details["terms"]["fpr95"] * .1 / 4)
+                gradients = {}
+                for term, loss in losses.items():
+                    gradient = torch.autograd.grad(loss, scores, retain_graph=True)[0]
+                    local = gradient[selected]
+                    if not torch.isfinite(gradient).all() or torch.any(local < 0) or torch.any(gradient[targets < 0] != 0):
+                        raise ValueError("invalid score-gradient or ignored-point supervision")
+                    gradients[term] = dict(sum=float(local.sum()), nonzero=int((local != 0).sum()),
+                        all_points_abs_sum=float(gradient.abs().sum()))
+                included = 0
+                if details["positive"]:
+                    _, sampled, _, _ = rank_sample(scores[targets == 1], scores[targets == 0], seed)
+                    membership = torch.autograd.grad(sampled.sum(), scores)[0]
+                    included = int((membership[selected] != 0).sum())
+                rows.append(dict(update=begin // 8 + 1, pair_index=pair_index, indices=pair, seed=seed,
+                    patch_point_visits=len(selected), included_in_ranking=included,
+                    positive=details["positive"], positive_score_quantiles=torch.quantile(scores[targets == 1].detach(),
+                        torch.tensor([.1, .5, .9], device=device)).tolist() if details["positive"] else None,
+                    gradients=gradients))
+        report["supervision"] = dict(scope="Fixed corrected C scores at all prescribed pair positions; a loss/gradient implementation check, not the gradients observed during the 40 updates or a causal optimization diagnosis",
+            parameter_updates=0, records=rows, point_visits=sum(r["patch_point_visits"] for r in rows),
+            included_in_ranking=sum(r["included_in_ranking"] for r in rows),
+            point_visits_without_anomaly_partner=sum(r["patch_point_visits"] for r in rows if not r["positive"]),
+            gradients={k: sum(r["gradients"][k]["sum"] for r in rows) for k in ("bce", "ap", "auc", "fpr95")},
+            interpretation="All patch points have valid normal targets and correctly directed BCE gradients; ranking gradients depend on anomaly partners and score separation. This does not distinguish small effective supervision from interference through shared parameters.")
+        write_json(path, report)
+
+    if all(name in report["arms"] for name in ("baseline", "material-control", "material")):
+        readings = {}
+        for name, arm in report["arms"].items():
+            patch = next(r for r in arm["materials"] if r["index"] == 6006 and r["role"] == "retrieved_training_patch")
+            views = [r for r in arm["materials"] if r["role"] == "unfitted_track" and r["points"]]
+            points = sum(r["points"] for r in views)
+            fragments = arm["fragments"].values()
+            readings[name] = dict(training_patch_BCE=patch["mean_BCE"],
+                training_patch_wrong_at_zero=round(patch["points"] * patch["fraction_wrong_at_zero"]),
+                unfitted_views=len(views), unfitted_points=points,
+                unfitted_BCE=sum(r["points"] * r["mean_BCE"] for r in views) / points,
+                unfitted_FP95=sum(r["errors_at_recall"]["95"] for r in views),
+                focused_normal_AP_loss=sum(r["AP_loss"] for r in fragments),
+                focused_normal_FP75=sum(o["errors_at_recall"]["75"] for r in fragments for o in r["observations"]),
+                case_errors75={k: sum(r["errors_at_recall"]["75"] for r in v["observations"]) for k, v in arm["cases"].items()})
+        root = output.parent / "transfer"
+        configurations = [json.loads((root / name / "0/conditional/config.json").read_text())["configuration"]
+                          for name in ("material-control", "material")]
+        differences = [k for k in configurations[0] if configurations[0][k] != configurations[1][k]]
+        if differences != ["branch"]:
+            raise ValueError("the material comparison changed more than its input replacement")
+        report["comparison"] = dict(readings=readings, configuration_differences=differences,
+            AP_gain_over_control=report["arms"]["material"]["metrics"]["AP"] - report["arms"]["material-control"]["metrics"]["AP"],
+            scope="One paired seed; identical initial RNG and per-pair rank seeds. Changing scan sizes can change subsequent stochastic-depth draws, so repeat uncertainty is not estimated.")
+        b, c, m = (readings[k] for k in ("baseline", "material-control", "material"))
+        learning = []
+        for selected in (True, False):
+            views = [r for r in report["arms"]["baseline"]["observations"] if (r["selected_index"] is not None) == selected]
+            count = sum(r["points"] for r in views)
+            learning.append(dict(scans=len(views), points=count, BCE=sum(r["points"] * r["mean_BCE"] for r in views) / count))
+        control_ap = report["arms"]["material-control"]["metrics"]["AP"]
+        material_ap = report["arms"]["material"]["metrics"]["AP"]
+        report["findings"] = {
+            "P125:1": dict(
+                supported=(f"修正后重算三个既有训练世界的{sum(r['scans'] for r in learning)}个观测，"
+                    f"{learning[0]['scans']}个已选观测{learning[0]['points']}点的BCE为{learning[0]['BCE']:.6f}，"
+                    f"未选观测{learning[1]['points']}点的BCE为{learning[1]['BCE']:.6f}；这些候选大多已识别，真实125仍持续失分。"),
+                excluded="当前结果不支持优先增加这三个世界的重复观测；尚不能排除其他几何、响应或背景关系覆盖不足。",
+                missing="真实物体与候选的形态、表面响应和背景关系仍未证实等价；AP分摊下降不能直接等同于本物体各召回点的漏检减少。",
+                modification="保留精度修正和已验证候选，不据此扩产这三个几何，也不更换交互模块。",
+                next_test="固定现有异常候选的几何、位姿和射线，逐项核验其表面响应及邻接关系与失败/成功观测的差异；只在训练来源构造单因素对照，真实125仅评价。"),
+            "N125:30": dict(
+                supported=(f"记录6006为可信道路局部，但重复31次后BCE为{m['training_patch_BCE']:.6f}，原顺序对照为{c['training_patch_BCE']:.6f}，"
+                    f"均未低于修正C的{b['training_patch_BCE']:.6f}。两目标连续片段失分为{c['focused_normal_AP_loss']:.6f}→{m['focused_normal_AP_loss']:.6f}，"
+                    f"75%召回误报为{c['focused_normal_FP75']}→{m['focused_normal_FP75']}。整体AP增益未验证预设的局部学习与迁移解释。"),
+                excluded="这24点均受到正常监督且损失梯度方向正确，未发现忽略标签或梯度中断；全局AP提高不等于这两个道路片段学好了。5757局部为45点地形和5点人行道，不能直接充当同类道路证据。",
+                missing=(f"仍未区分局部监督强度不足与共享参数更新的影响；不能确认真实N125主要属于没学够，亦不能确认它缺样本或学错关联。"
+                    f"单次{material_ap-control_ap:.5f}个百分点额外AP收益的重复性未检验。"),
+                modification=(f"保存{material_ap:.5f}%候选和{control_ap:.5f}%对照，保留{baseline['metrics']['AP']:.5f}%基线；"
+                    "不将6006重复配方直接推广，也不由这次AP提高宣布N125归因完成。"),
+                next_test="下一项可固定本轮6006重复输入、C完整起点和40步预算，仅比较原组合损失与原损失加1.0倍这24个训练正常点的局部均值BCE。先判断目标局部能否拟合，再看未参与更新观测、两个真实道路片段及完整AP；仅训练局部改善不能解释真实失分。该改变损失权重的实验本轮未执行。")}
+        report["exclusive_additional_cause_AP"] = 0.
+        report["scope"] = "Complete official ranking for all endpoints; focused material intervention, not a completed attribution of all remaining AP loss. Positive and normal AP allocations are separate margins."
+        write_json(path, report)
+
+
 def features(output,workers):
     """Measure accessible information with matched readouts of frozen C states."""
     import torch
@@ -545,6 +849,13 @@ def review(output):
         summary["numerical_intervention"]=dict(report=str(path),metrics=numerical["metrics"],
             finding="A controlled change of rotary-position arithmetic isolated a numerical information defect and measured its complete-ranking effect. The remaining material and learning causes are not thereby identified.")
         summary["historical_AP_partition_scope"]="cause_confirmed_AP is an exclusive historical partition, not a claim that no numerical mechanism has been identified; use numerical_intervention for its measured effect."
+        summary["interpretation"]="The material/readout fields are historical observations before the rotary fix. Numerical and material interventions below retain their separate initializations, score populations and causal limits."
+    path = output / "transfer.json"
+    if path.exists():
+        transfer_report = json.loads(path.read_text())
+        if "findings" in transfer_report:
+            summary["material_intervention"] = dict(report=str(path), findings=transfer_report["findings"],
+                comparison=transfer_report["comparison"], scope=transfer_report["scope"])
     write_json(output/"review.json",summary)
 
 

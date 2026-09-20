@@ -55,6 +55,19 @@ def effective_batches(order, rank=0, world_size=1):
         yield order[start:start + BATCH_SIZE][rank::world_size]
 
 
+def material_order(order, manifest, indices, start, stop):
+    """Repeat verified materials only in their existing source/type positions."""
+    groups = {manifest["records"][i]["group"] for i in indices}
+    if len(groups) != 1 or not indices:
+        raise ValueError("material comparison requires one source/type group")
+    result, cursor = list(order), 0
+    for position in range(start * BATCH_SIZE, stop * BATCH_SIZE):
+        if manifest["records"][order[position]]["group"] in groups:
+            result[position] = indices[cursor % len(indices)]
+            cursor += 1
+    return result
+
+
 def pilot_order(manifest, seed, updates, *, sampling=None, segment=0, paired=False, background=None):
     """Source quotas stay fixed; a new segment gets its own reproducible permutation."""
     if manifest.get("version") == NATIVE_VERSION:
@@ -287,27 +300,40 @@ def code_record():
 
 def configuration(train, val, device, world_size, *, updates=None, initial=None,
                   eval_every=None, recipe="mixed", optimizer_state="reset", segment=0, objective="bce", branch=None,
-                  hard_pool=None):
+                  hard_pool=None, material_indices=None, baseline_eval=None):
     if branch:
         parent = torch.load(initial, map_location="cpu", weights_only=False)
         previous = parent["config"]
         mining = branch in ("control", "hard")
-        start_update = 1000 if mining else 500
-        if (recipe != "native" or objective != "metrics" or updates != 500 or eval_every != 500
+        material = branch in ("material-control", "material")
+        continuation = mining or material
+        start_update = 1000 if continuation else 500
+        budget = 40 if material else 500
+        if (recipe != "native" or objective != "metrics" or updates != budget or eval_every != budget
                 or world_size != 1 or parent["successful_updates"] != start_update or parent["planned_updates"] != start_update
                 or parent["next_batch"] != 0 or parent["epoch"] != start_update // 500 or not parent["complete"]
                 or previous["train_manifest"] != train["sha256"] or previous["val_manifest"] != val["sha256"]
                 or previous["recipe"] != "native" or previous["objective"] != "metrics"
                 or {int(s["step"]) for s in parent["optimizer"]["state"].values()} != {start_update}
-                or (mining and (previous.get("branch") != "lr" or previous.get("lr_scale") != .3))):
+                or (continuation and (previous.get("branch") != "lr" or previous.get("lr_scale") != .3))):
             raise ValueError("diagnostic branch requires its specified complete parent training state")
         result = copy.deepcopy(previous)
         result.update(code=code_record(), initial=str(initial.resolve()), initial_sha256=file_sha256(initial),
                       parent_configuration=identity(previous), branch=branch, start_update=start_update,
-                      updates=start_update+500, additional_updates=500, schedule_updates=previous.get("schedule_updates",previous["updates"]),
-                      epochs=None, scan_visits=4000, optimizer_state="inherit", lr_scale=.3 if mining or branch == "lr" else 1.,
-                      validation=f"inherited update {start_update} plus one full validation at update {start_update+500}",
+                      updates=start_update+budget, additional_updates=budget, schedule_updates=previous.get("schedule_updates",previous["updates"]),
+                      epochs=None, scan_visits=BATCH_SIZE*budget, eval_every=eval_every,
+                      optimizer_state="inherit", lr_scale=.3 if continuation or branch == "lr" else 1.,
+                      validation=f"inherited update {start_update} plus one full validation at update {start_update+budget}",
                       reference_sampling=str(initial.parent / "sampling.json"))
+        if material:
+            baseline = json.loads(Path(baseline_eval).read_text())
+            if (baseline["checkpoint_sha256"] != result["initial_sha256"]
+                    or baseline["manifest_sha256"] != val["sha256"] or not material_indices
+                    or baseline["attention_source"] != file_sha256(ROOT / "vendor/litept/model.py")
+                    or any(train["records"][i]["group"] != "normal_stu" for i in material_indices)):
+                raise ValueError("material diagnosis requires corrected C and verified STU normal materials")
+            result.update(material_indices=material_indices, initial_validation=baseline,
+                          baseline_eval=str(baseline_eval))
         if mining:
             pool = json.loads(Path(hard_pool).read_text())
             if pool["train_manifest"] != train["sha256"] or pool["checkpoint_sha256"] != result["initial_sha256"]:
@@ -500,7 +526,7 @@ def train_stage(args, train, val, seed, method, device, config):
     elif branch:
         model.load_state_dict(parent["model"], strict=True)
         load_record = dict(parent=str(args.initial), parent_sha256=config["initial_sha256"],
-                           inherited_full_validation=parent["validation"], inherited_optimizer_updates=config["start_update"],
+                           inherited_full_validation=config.get("initial_validation", parent["validation"]), inherited_optimizer_updates=config["start_update"],
                            inherited_rng=True, inherited_sampling_offset=config["start_update"]*BATCH_SIZE)
     elif stage == 1:
         load_record = model.load_pretrained(args.initial if native else args.weights)
@@ -552,14 +578,15 @@ def train_stage(args, train, val, seed, method, device, config):
             optimizer.load_state_dict(parent["optimizer"])
             scaler.load_state_dict(parent["scaler"])
             start_update = config["start_update"]
+            initial_validation = config.get("initial_validation", parent["validation"])
             state.update(epoch=start_update//steps_per_epoch, planned_updates=start_update, successful_updates=start_update,
-                         best_epoch=start_update//steps_per_epoch, best_metrics=parent["validation"]["metrics"])
+                         best_epoch=start_update//steps_per_epoch, best_metrics=initial_validation["metrics"])
             restore_rng(parent["rng"][rank], device)
             saved = capture(model, optimizer, scaler, state, config, device,
-                            selected=True, validation=parent["validation"])
+                            selected=True, validation=initial_validation)
             if rank == 0:
                 atomic_save(best_path, saved)
-                write_json(directory / f"epoch{state['epoch']}.json", dict(inherited=True, **parent["validation"]))
+                write_json(directory / f"epoch{state['epoch']}.json", dict(inherited=True, **initial_validation))
             del saved
         elif pilot and config.get("optimizer_state") == "inherit":
             if (parent["config"]["world_size"] != world_size or parent["config"]["sampling"] != config["sampling"]
@@ -595,6 +622,8 @@ def train_stage(args, train, val, seed, method, device, config):
                 raise ValueError("hard pool changed after configuration")
             full_order = hard_order(full_order,train,json.loads(Path(config["hard_pool"]).read_text()),
                                     config["start_update"],total)
+        elif branch == "material":
+            full_order = material_order(full_order, train, config["material_indices"], config["start_update"], total)
         if native and rank == 0:
             executed = full_order[config.get("start_update", 0) * BATCH_SIZE:total * BATCH_SIZE]
             write_json(directory / "sampling.json", dict(train_manifest=train["sha256"], order=full_order,
@@ -858,8 +887,10 @@ def main():
     parser.add_argument("--eval-every", type=int, default=500)
     parser.add_argument("--recipe", choices=("mixed", "old", "paired", "background", "native"), default="paired")
     parser.add_argument("--objective", choices=("bce", "metrics"), default="bce")
-    parser.add_argument("--branch", choices=("replay", "ap", "lr", "control", "hard"))
+    parser.add_argument("--branch", choices=("replay", "ap", "lr", "control", "hard", "material-control", "material"))
     parser.add_argument("--hard-pool", type=Path)
+    parser.add_argument("--material-indices", type=int, nargs="+")
+    parser.add_argument("--baseline-eval", type=Path)
     parser.add_argument("--score-path", type=Path, help="export exact endpoint validation scores in official point order")
     parser.add_argument("--optimizer-state", choices=("inherit", "reset"), default="reset")
     parser.add_argument("--sampling-segment", type=int, default=0)
@@ -897,6 +928,9 @@ def main():
         parser.error("diagnostic branches require native training, not preflight")
     if bool(args.hard_pool) != (args.branch in ("control","hard")):
         parser.error("control/hard branches require the C-scored hard pool")
+    if (bool(args.material_indices) != (args.branch in ("material-control", "material"))
+            or bool(args.baseline_eval) != bool(args.material_indices)):
+        parser.error("material branches require verified indices and the corrected initial evaluation")
     if args.recipe == "native" and not args.branch:
         args.updates = math.ceil(2 * len(train["records"]) / BATCH_SIZE)
     elif args.recipe != "native" and args.objective != "bce":
@@ -904,7 +938,8 @@ def main():
     config = configuration(train, val, device, world_size, updates=args.updates, initial=args.initial,
                            eval_every=args.eval_every, recipe=args.recipe,
                            optimizer_state=args.optimizer_state, segment=args.sampling_segment,
-                           objective=args.objective, branch=args.branch, hard_pool=args.hard_pool)
+                           objective=args.objective, branch=args.branch, hard_pool=args.hard_pool,
+                           material_indices=args.material_indices, baseline_eval=args.baseline_eval)
     resources = runtime_snapshot() if rank == 0 else None
     if args.workers * world_size + args.threads * world_size > len(os.sched_getaffinity(0)):
         parser.error("worker and BLAS thread counts exceed the available CPU affinity")
