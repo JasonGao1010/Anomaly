@@ -541,7 +541,7 @@ def transfer(output, workers):
                 supported=(f"记录6006为可信道路局部，但重复31次后BCE为{m['training_patch_BCE']:.6f}，原顺序对照为{c['training_patch_BCE']:.6f}，"
                     f"均未低于修正C的{b['training_patch_BCE']:.6f}。两目标连续片段失分为{c['focused_normal_AP_loss']:.6f}→{m['focused_normal_AP_loss']:.6f}，"
                     f"75%召回误报为{c['focused_normal_FP75']}→{m['focused_normal_FP75']}。整体AP增益未验证预设的局部学习与迁移解释。"),
-                excluded="这24点均受到正常监督且损失梯度方向正确，未发现忽略标签或梯度中断；全局AP提高不等于这两个道路片段学好了。5757局部为45点地形和5点人行道，不能直接充当同类道路证据。",
+                excluded="这24点均受到正常监督，损失对分数的梯度方向正确；未发现忽略标签或损失到分数这一段的梯度中断。该检查未追踪实际更新中分数到共享参数的梯度。全局AP提高不等于这两个道路片段学好了。5757局部为45点地形和5点人行道，不能直接充当同类道路证据。",
                 missing=(f"仍未区分局部监督强度不足与共享参数更新的影响；不能确认真实N125主要属于没学够，亦不能确认它缺样本或学错关联。"
                     f"单次{material_ap-control_ap:.5f}个百分点额外AP收益的重复性未检验。"),
                 modification=(f"保存{material_ap:.5f}%候选和{control_ap:.5f}%对照，保留{baseline['metrics']['AP']:.5f}%基线；"
