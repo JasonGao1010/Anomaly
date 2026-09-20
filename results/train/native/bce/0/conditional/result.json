@@ -1,0 +1,32 @@
+{
+  "version": "AJAE-V4-N1",
+  "seed": 0,
+  "method": "conditional",
+  "complete": true,
+  "epochs": 2,
+  "updates": 1547,
+  "best_epoch": 4,
+  "best_metrics": {
+    "AP": 70.17733233674957,
+    "FPR95": 0.1238412410967258,
+    "AUROC": 99.93452139155069,
+    "threshold": -0.22265625
+  },
+  "best_update": 1547,
+  "final_metrics": {
+    "AP": 70.17733233674957,
+    "FPR95": 0.1238412410967258,
+    "AUROC": 99.93452139155069,
+    "threshold": -0.22265625
+  },
+  "objective": "bce",
+  "training_seconds": 1630.397442034904,
+  "validation_seconds": 721.8411154050045,
+  "planned_updates": 1547,
+  "successful_updates": 1547,
+  "overflows": 0,
+  "parameters": 12880513,
+  "train_manifest_sha256": "e3c32d0b83ffb9eda2e095ffddd08828509e97d1d34509805dd2584951b2b3c6",
+  "val_manifest_sha256": "918524fd271f896bf9288ebfe4131941a20cbd00a0925e91c8ccedf4d7574855",
+  "validation_improved_from_epoch0": null
+}

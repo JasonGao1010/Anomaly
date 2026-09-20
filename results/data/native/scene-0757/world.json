@@ -1,0 +1,865 @@
+{
+  "scene": "scene-0757",
+  "log_token": "3a43824b84534c98bda1d07548db5817",
+  "seed": 41496,
+  "objects": [
+    {
+      "object_id": 1,
+      "geometry": "7d5be310c7312355b926ea7f791ed688aeca7616cb3f81d7d0ff9110bc36487f",
+      "anchor_frame": 1,
+      "support_points": 279,
+      "support_p95_m": 0.006139816602303925,
+      "normal_world": [
+        -0.022285493696333845,
+        0.01566868275609612,
+        0.9996288557016545
+      ],
+      "pose": [
+        [
+          0.7520514087253902,
+          0.6587275881613481,
+          -0.022285493696333848,
+          315.8817225356678
+        ],
+        [
+          -0.6585475637936862,
+          0.752375968915867,
+          0.015668682756096123,
+          663.5586244510264
+        ],
+        [
+          0.027088463514136126,
+          0.0028924026420668867,
+          0.9996288557016547,
+          0.49987244437471934
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "material": {
+        "quantile": 0.39822462649087076,
+        "roughness": 0.33745473639169243,
+        "return_bias": 0.0
+      },
+      "rejected": {
+        "support": 3,
+        "collision": 0,
+        "visibility": 0
+      }
+    },
+    {
+      "object_id": 2,
+      "geometry": "7dce9a3a6cded3f96d937bb2ecc6a034dfa5fe22f326175dd1c23078d4e50414",
+      "anchor_frame": 3,
+      "support_points": 221,
+      "support_p95_m": 0.005546884840256243,
+      "normal_world": [
+        -0.0066002509048157,
+        0.0341374262157757,
+        0.9993953536110503
+      ],
+      "pose": [
+        [
+          0.7824026071695825,
+          0.6227379842134518,
+          -0.0066002509048157,
+          303.8791309439704
+        ],
+        [
+          -0.622212266071243,
+          0.7821039138642968,
+          0.0341374262157757,
+          669.996648561418
+        ],
+        [
+          0.026420754052990335,
+          -0.022602454201158015,
+          0.9993953536110503,
+          0.05348069813482126
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "material": {
+        "quantile": 0.26479499445470633,
+        "roughness": 0.14941752209190204,
+        "return_bias": 0.0
+      },
+      "rejected": {
+        "support": 2,
+        "collision": 0,
+        "visibility": 0
+      }
+    },
+    {
+      "object_id": 3,
+      "geometry": "7e619a9d37a4e32a0c4e419b70d2a209e4be55b4f2cf8848ea6fc95e4f706666",
+      "anchor_frame": 5,
+      "support_points": 333,
+      "support_p95_m": 0.00844487045316944,
+      "normal_world": [
+        0.0009062624434648236,
+        0.07240880468282007,
+        0.9973746255508955
+      ],
+      "pose": [
+        [
+          0.6155937375425378,
+          0.7880631503799633,
+          0.0009062624434648236,
+          304.2651013887463
+        ],
+        [
+          -0.7860352312112783,
+          0.6139263639061591,
+          0.07240880468282007,
+          672.1004633858532
+        ],
+        [
+          0.056506332326929566,
+          -0.04528676091497179,
+          0.9973746255508955,
+          -0.13391497395262741
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "material": {
+        "quantile": 0.25499505525218047,
+        "roughness": 0.3352651370273839,
+        "return_bias": 0.0
+      },
+      "rejected": {
+        "support": 1,
+        "collision": 0,
+        "visibility": 0
+      }
+    },
+    {
+      "object_id": 4,
+      "geometry": "7f5d0e2fd5d44ddd51cd04446636b590d04d5dc672b47bfa3daeca2df9e32cc6",
+      "anchor_frame": 7,
+      "support_points": 390,
+      "support_p95_m": 0.007186354154098706,
+      "normal_world": [
+        -0.014875029576228035,
+        0.03556047425462183,
+        0.9992568169224028
+      ],
+      "pose": [
+        [
+          0.47523723225046377,
+          0.8797319515500304,
+          -0.014875029576228039,
+          301.96608346153295
+        ],
+        [
+          -0.8790212646511814,
+          0.47545459190318484,
+          0.03556047425462184,
+          670.3040922345292
+        ],
+        [
+          0.038356086530776386,
+          -0.0038241940524606586,
+          0.999256816922403,
+          -0.06772962048824999
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "material": {
+        "quantile": 0.5039581161446646,
+        "roughness": 0.33601789547380806,
+        "return_bias": 0.0
+      },
+      "rejected": {
+        "support": 1,
+        "collision": 0,
+        "visibility": 0
+      }
+    }
+  ],
+  "rays": [
+    {
+      "token": "ca63bdf665f04b4ca918b41f9e51712e",
+      "columns": 1084,
+      "beams": 32,
+      "measured_returns": 29464,
+      "inferred_empty_rays": 5224,
+      "duration_seconds": 0.049723,
+      "angular_residual_deg": {
+        "median": 0.0027252434730441455,
+        "p95": 0.00856759434259815,
+        "p99": 0.009603798758420505,
+        "max": 0.011102517716391138
+      },
+      "origin_correction_max_m": 0.006311570209518543
+    },
+    {
+      "token": "b4d658f986c3487baaec8a3aa0d1eca3",
+      "columns": 1086,
+      "beams": 32,
+      "measured_returns": 30550,
+      "inferred_empty_rays": 4202,
+      "duration_seconds": 0.05004288,
+      "angular_residual_deg": {
+        "median": 0.0017764434426527133,
+        "p95": 0.007018427170743198,
+        "p99": 0.008099952205698693,
+        "max": 0.01264213211604159
+      },
+      "origin_correction_max_m": 0.0017202061122065947
+    },
+    {
+      "token": "77a638bad2e740aaa0c7dfb12de3a509",
+      "columns": 1085,
+      "beams": 32,
+      "measured_returns": 30261,
+      "inferred_empty_rays": 4459,
+      "duration_seconds": 0.0499968,
+      "angular_residual_deg": {
+        "median": 0.0024273623875498166,
+        "p95": 0.0058885022840608,
+        "p99": 0.008056391870985637,
+        "max": 0.014741562392860775
+      },
+      "origin_correction_max_m": 0.0001606463682458085
+    },
+    {
+      "token": "46e855a9aa094a2b9c465ef7524d101a",
+      "columns": 1085,
+      "beams": 32,
+      "measured_returns": 30337,
+      "inferred_empty_rays": 4383,
+      "duration_seconds": 0.049768,
+      "angular_residual_deg": {
+        "median": 0.0023091224119412912,
+        "p95": 0.006432719611291537,
+        "p99": 0.008093750177846982,
+        "max": 0.013736897606720434
+      },
+      "origin_correction_max_m": 0.00010620453815220981
+    }
+  ],
+  "records": [
+    {
+      "source": "nuscenes",
+      "scene": "scene-0757",
+      "token": "80bddcd6f16b4bcaa645e3fcbd0de6ef",
+      "frame": 19906,
+      "scan": "/home/jasongao/Data/Nuscenes/samples/LIDAR_TOP/n008-2018-08-30-15-16-55-0400__LIDAR_TOP__1535657108301401.pcd.bin",
+      "label": "/home/jasongao/Data/Nuscenes/lidarseg/v1.0-trainval/80bddcd6f16b4bcaa645e3fcbd0de6ef_lidarseg.bin",
+      "subset": "train",
+      "group": "normal_nuscenes",
+      "timestamp": 1535657108301401,
+      "sample_token": "cd9964f8c3d34383b16e9c2997de1ed0",
+      "log_token": "3a43824b84534c98bda1d07548db5817",
+      "points": 34656,
+      "slots": 34656,
+      "normal": 22496,
+      "anomaly": 0,
+      "pose": [
+        [
+          0.25942872235482467,
+          -0.9639788963722135,
+          -0.05866366308332157,
+          333.5605341293686
+        ],
+        [
+          0.9657622323881974,
+          0.258935805689625,
+          0.015986213573923668,
+          658.959836494946
+        ],
+        [
+          -0.00022024965297685374,
+          -0.060802433182192056,
+          0.9981497961775156,
+          1.825601173575906
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "adjacent_pose": [
+        [
+          0.2627019073572716,
+          -0.9630880131491592,
+          -0.05872977778994829,
+          333.3144508287251
+        ],
+        [
+          0.9648769600731406,
+          0.2621895784834795,
+          0.016403562255519456,
+          659.0333607719673
+        ],
+        [
+          -0.0003997384980618176,
+          -0.060976256551715055,
+          0.9981391367670506,
+          1.8254257820858457
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "adjacent_seconds": -0.049756,
+      "calibrated_sensor": "fdf7783dc28e42a684796c5822f79403"
+    },
+    {
+      "source": "nuscenes",
+      "scene": "scene-0757",
+      "token": "ca63bdf665f04b4ca918b41f9e51712e",
+      "frame": 19908,
+      "scan": "/home/jasongao/Data/Nuscenes/samples/LIDAR_TOP/n008-2018-08-30-15-16-55-0400__LIDAR_TOP__1535657111149672.pcd.bin",
+      "label": "/home/jasongao/Data/Nuscenes/lidarseg/v1.0-trainval/ca63bdf665f04b4ca918b41f9e51712e_lidarseg.bin",
+      "subset": "train",
+      "group": "anomaly_nuscenes",
+      "timestamp": 1535657111149672,
+      "sample_token": "407969e29bf741f184bf8405af03588e",
+      "log_token": "3a43824b84534c98bda1d07548db5817",
+      "points": 34685,
+      "slots": 34688,
+      "normal": 23920,
+      "anomaly": 260,
+      "pose": [
+        [
+          0.3531035394842294,
+          -0.9338840334419793,
+          -0.05637820931751152,
+          320.4099537374943
+        ],
+        [
+          0.9352829506198794,
+          0.35081913496251727,
+          0.046601897213776056,
+          663.5627358614147
+        ],
+        [
+          -0.023742213112544604,
+          -0.06918487281401192,
+          0.997321292608469,
+          1.8166394689304648
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "adjacent_pose": [
+        [
+          0.3506136781034779,
+          -0.9347827225855997,
+          -0.05702026203206313,
+          320.5954622697554
+        ],
+        [
+          0.9363296953203257,
+          0.34866408848731456,
+          0.04147354651650242,
+          663.4777260569772
+        ],
+        [
+          -0.01888783704125951,
+          -0.0679309572637134,
+          0.9975112203164127,
+          1.818096379359222
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "adjacent_seconds": 0.049723,
+      "calibrated_sensor": "fdf7783dc28e42a684796c5822f79403",
+      "delta": "/home/jasongao/Study/AJAE-v4/results/data/native/scene-0757/1.npz",
+      "geometry": [
+        "7d5be310c7312355b926ea7f791ed688aeca7616cb3f81d7d0ff9110bc36487f",
+        "7dce9a3a6cded3f96d937bb2ecc6a034dfa5fe22f326175dd1c23078d4e50414",
+        "7e619a9d37a4e32a0c4e419b70d2a209e4be55b4f2cf8848ea6fc95e4f706666",
+        "7f5d0e2fd5d44ddd51cd04446636b590d04d5dc672b47bfa3daeca2df9e32cc6"
+      ],
+      "world": "/home/jasongao/Study/AJAE-v4/results/data/native/scene-0757/world.json"
+    },
+    {
+      "source": "nuscenes",
+      "scene": "scene-0757",
+      "token": "fb2afec3d43d48b9abbe5a3aa41fb87b",
+      "frame": 19914,
+      "scan": "/home/jasongao/Data/Nuscenes/samples/LIDAR_TOP/n008-2018-08-30-15-16-55-0400__LIDAR_TOP__1535657113648526.pcd.bin",
+      "label": "/home/jasongao/Data/Nuscenes/lidarseg/v1.0-trainval/fb2afec3d43d48b9abbe5a3aa41fb87b_lidarseg.bin",
+      "subset": "train",
+      "group": "normal_nuscenes",
+      "timestamp": 1535657113648526,
+      "sample_token": "0307afa1ec7e48ce90295acabf8cb6dd",
+      "log_token": "3a43824b84534c98bda1d07548db5817",
+      "points": 34720,
+      "slots": 34720,
+      "normal": 25773,
+      "anomaly": 0,
+      "pose": [
+        [
+          0.40096479960777565,
+          -0.9138546348285337,
+          -0.0640073111285227,
+          312.7829330173878
+        ],
+        [
+          0.9158772475028994,
+          0.3983725582338621,
+          0.04968070402803206,
+          666.9632076180983
+        ],
+        [
+          -0.019902185357621355,
+          -0.07854305347142615,
+          0.9967120405460022,
+          1.8070496150783948
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "adjacent_pose": [
+        [
+          0.40134300165311876,
+          -0.9136655485333891,
+          -0.06433553020879094,
+          312.8990891686099
+        ],
+        [
+          0.9157436320469474,
+          0.3988625622098843,
+          0.04818980009121774,
+          666.9069957594251
+        ],
+        [
+          -0.018368325713847045,
+          -0.07825549112073739,
+          0.9967641058545008,
+          1.8073972488289687
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "adjacent_seconds": 0.050309,
+      "calibrated_sensor": "fdf7783dc28e42a684796c5822f79403"
+    },
+    {
+      "source": "nuscenes",
+      "scene": "scene-0757",
+      "token": "b4d658f986c3487baaec8a3aa0d1eca3",
+      "frame": 19917,
+      "scan": "/home/jasongao/Data/Nuscenes/samples/LIDAR_TOP/n008-2018-08-30-15-16-55-0400__LIDAR_TOP__1535657116649423.pcd.bin",
+      "label": "/home/jasongao/Data/Nuscenes/lidarseg/v1.0-trainval/b4d658f986c3487baaec8a3aa0d1eca3_lidarseg.bin",
+      "subset": "train",
+      "group": "anomaly_nuscenes",
+      "timestamp": 1535657116649423,
+      "sample_token": "a9def8f915cf4bfe9c74b864384ec6c7",
+      "log_token": "3a43824b84534c98bda1d07548db5817",
+      "points": 34751,
+      "slots": 34752,
+      "normal": 25859,
+      "anomaly": 185,
+      "pose": [
+        [
+          0.44550839600483466,
+          -0.893757436602447,
+          -0.05215279098017914,
+          308.41127515006514
+        ],
+        [
+          0.8941177457877174,
+          0.44121111573362926,
+          0.07672162681132765,
+          669.1277532679405
+        ],
+        [
+          -0.04556013341387417,
+          -0.08081086480733188,
+          0.9956876409659814,
+          1.8032327532868593
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "adjacent_pose": [
+        [
+          0.4448644231998339,
+          -0.8940749417828575,
+          -0.0522076952858431,
+          308.4314818926055
+        ],
+        [
+          0.8944284789327336,
+          0.4405499923877073,
+          0.07689863640707911,
+          669.1168899198409
+        ],
+        [
+          -0.04575304410808245,
+          -0.08090551701318927,
+          0.9956711084849619,
+          1.8031176058499894
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "adjacent_seconds": 0.050315,
+      "calibrated_sensor": "fdf7783dc28e42a684796c5822f79403",
+      "delta": "/home/jasongao/Study/AJAE-v4/results/data/native/scene-0757/3.npz",
+      "geometry": [
+        "7d5be310c7312355b926ea7f791ed688aeca7616cb3f81d7d0ff9110bc36487f",
+        "7dce9a3a6cded3f96d937bb2ecc6a034dfa5fe22f326175dd1c23078d4e50414",
+        "7e619a9d37a4e32a0c4e419b70d2a209e4be55b4f2cf8848ea6fc95e4f706666",
+        "7f5d0e2fd5d44ddd51cd04446636b590d04d5dc672b47bfa3daeca2df9e32cc6"
+      ],
+      "world": "/home/jasongao/Study/AJAE-v4/results/data/native/scene-0757/world.json"
+    },
+    {
+      "source": "nuscenes",
+      "scene": "scene-0757",
+      "token": "5933b3acbae44b6a92b36327b134e56c",
+      "frame": 19934,
+      "scan": "/home/jasongao/Data/Nuscenes/samples/LIDAR_TOP/n008-2018-08-30-15-16-55-0400__LIDAR_TOP__1535657119649820.pcd.bin",
+      "label": "/home/jasongao/Data/Nuscenes/lidarseg/v1.0-trainval/5933b3acbae44b6a92b36327b134e56c_lidarseg.bin",
+      "subset": "train",
+      "group": "normal_nuscenes",
+      "timestamp": 1535657119649820,
+      "sample_token": "00889f8a9549450aa2f32cf310a3e305",
+      "log_token": "3a43824b84534c98bda1d07548db5817",
+      "points": 34688,
+      "slots": 34688,
+      "normal": 24495,
+      "anomaly": 0,
+      "pose": [
+        [
+          0.4482490525115057,
+          -0.8925017077504986,
+          -0.05013470439706431,
+          308.2863432458671
+        ],
+        [
+          0.8928041670877926,
+          0.4442032905396055,
+          0.07472720993359713,
+          669.2001970742293
+        ],
+        [
+          -0.04442416181775907,
+          -0.07825687405097699,
+          0.9959429479194877,
+          1.8060046531262732
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "adjacent_pose": [
+        [
+          0.4482516422878313,
+          -0.8925006541060014,
+          -0.05013030626897938,
+          308.2863246779343
+        ],
+        [
+          0.8928016954932436,
+          0.44420416662585466,
+          0.07475152758719664,
+          669.2001996498433
+        ],
+        [
+          -0.044447696348084965,
+          -0.07826391743702539,
+          0.9959413444158038,
+          1.8059954362614754
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "adjacent_seconds": 0.050327,
+      "calibrated_sensor": "fdf7783dc28e42a684796c5822f79403"
+    },
+    {
+      "source": "nuscenes",
+      "scene": "scene-0757",
+      "token": "77a638bad2e740aaa0c7dfb12de3a509",
+      "frame": 19924,
+      "scan": "/home/jasongao/Data/Nuscenes/samples/LIDAR_TOP/n008-2018-08-30-15-16-55-0400__LIDAR_TOP__1535657122649085.pcd.bin",
+      "label": "/home/jasongao/Data/Nuscenes/lidarseg/v1.0-trainval/77a638bad2e740aaa0c7dfb12de3a509_lidarseg.bin",
+      "subset": "train",
+      "group": "anomaly_nuscenes",
+      "timestamp": 1535657122649085,
+      "sample_token": "9ecb1b79dbe140ca860efc4adebe854b",
+      "log_token": "3a43824b84534c98bda1d07548db5817",
+      "points": 34720,
+      "slots": 34720,
+      "normal": 20903,
+      "anomaly": 214,
+      "pose": [
+        [
+          0.4482425904139771,
+          -0.8924944300814521,
+          -0.05032168928555526,
+          308.28688321697587
+        ],
+        [
+          0.8928167343888745,
+          0.4441977022340356,
+          0.07461018781097607,
+          669.2016972346344
+        ],
+        [
+          -0.044236398295448454,
+          -0.07837151015252632,
+          0.995942291230902,
+          1.805899161124889
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "adjacent_pose": [
+        [
+          0.4482506071012249,
+          -0.8924925934238447,
+          -0.05028283918956457,
+          308.28695277149603
+        ],
+        [
+          0.8928123990907912,
+          0.4442083577475141,
+          0.0745986255704673,
+          669.2016657370315
+        ],
+        [
+          -0.04424266338196188,
+          -0.0783320214908105,
+          0.995945119545266,
+          1.8059400530437946
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "adjacent_seconds": 0.050345,
+      "calibrated_sensor": "fdf7783dc28e42a684796c5822f79403",
+      "delta": "/home/jasongao/Study/AJAE-v4/results/data/native/scene-0757/5.npz",
+      "geometry": [
+        "7d5be310c7312355b926ea7f791ed688aeca7616cb3f81d7d0ff9110bc36487f",
+        "7dce9a3a6cded3f96d937bb2ecc6a034dfa5fe22f326175dd1c23078d4e50414",
+        "7e619a9d37a4e32a0c4e419b70d2a209e4be55b4f2cf8848ea6fc95e4f706666",
+        "7f5d0e2fd5d44ddd51cd04446636b590d04d5dc672b47bfa3daeca2df9e32cc6"
+      ],
+      "world": "/home/jasongao/Study/AJAE-v4/results/data/native/scene-0757/world.json"
+    },
+    {
+      "source": "nuscenes",
+      "scene": "scene-0757",
+      "token": "b59ea461938c4bdba28921a8ae3d5878",
+      "frame": 19937,
+      "scan": "/home/jasongao/Data/Nuscenes/samples/LIDAR_TOP/n008-2018-08-30-15-16-55-0400__LIDAR_TOP__1535657125148970.pcd.bin",
+      "label": "/home/jasongao/Data/Nuscenes/lidarseg/v1.0-trainval/b59ea461938c4bdba28921a8ae3d5878_lidarseg.bin",
+      "subset": "train",
+      "group": "normal_nuscenes",
+      "timestamp": 1535657125148970,
+      "sample_token": "e3bcde4a06124931a097ef2a211aaaef",
+      "log_token": "3a43824b84534c98bda1d07548db5817",
+      "points": 34752,
+      "slots": 34752,
+      "normal": 21221,
+      "anomaly": 0,
+      "pose": [
+        [
+          0.4483024793840892,
+          -0.8924438158702672,
+          -0.05068453899361553,
+          308.28658033928207
+        ],
+        [
+          0.8928113590086093,
+          0.444270937470808,
+          0.07423753325650091,
+          669.2016516112932
+        ],
+        [
+          -0.043735159806258236,
+          -0.07853260236186285,
+          0.995951738872419,
+          1.8057690373548767
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "adjacent_pose": [
+        [
+          0.4483025710923425,
+          -0.8924422119342639,
+          -0.05071196219703745,
+          308.2865250907312
+        ],
+        [
+          0.8928121101120927,
+          0.4442701792576065,
+          0.07423303752108572,
+          669.2016348556177
+        ],
+        [
+          -0.04371888366813416,
+          -0.07855511555775874,
+          0.9959506780109743,
+          1.805746687419478
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "adjacent_seconds": 0.05031,
+      "calibrated_sensor": "fdf7783dc28e42a684796c5822f79403"
+    },
+    {
+      "source": "nuscenes",
+      "scene": "scene-0757",
+      "token": "46e855a9aa094a2b9c465ef7524d101a",
+      "frame": 19941,
+      "scan": "/home/jasongao/Data/Nuscenes/samples/LIDAR_TOP/n008-2018-08-30-15-16-55-0400__LIDAR_TOP__1535657128149910.pcd.bin",
+      "label": "/home/jasongao/Data/Nuscenes/lidarseg/v1.0-trainval/46e855a9aa094a2b9c465ef7524d101a_lidarseg.bin",
+      "subset": "train",
+      "group": "anomaly_nuscenes",
+      "timestamp": 1535657128149910,
+      "sample_token": "8fe9664cec514a58b1184c4fcefda6b5",
+      "log_token": "3a43824b84534c98bda1d07548db5817",
+      "points": 34716,
+      "slots": 34720,
+      "normal": 21015,
+      "anomaly": 208,
+      "pose": [
+        [
+          0.44839185637149975,
+          -0.8924052608261922,
+          -0.05057265653944365,
+          308.2870500299841
+        ],
+        [
+          0.8927814868917513,
+          0.4443959487758281,
+          0.07384752788675995,
+          669.2013168277837
+        ],
+        [
+          -0.04342763870019338,
+          -0.07826296161894072,
+          0.9959864201059963,
+          1.8060751201475849
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "adjacent_pose": [
+        [
+          0.4483801527125729,
+          -0.8924121878105198,
+          -0.0505541857880422,
+          308.2870743958611
+        ],
+        [
+          0.8927863926484526,
+          0.4443841072154707,
+          0.07385947709043639,
+          669.2013267178859
+        ],
+        [
+          -0.043447620823393124,
+          -0.0782512127800665,
+          0.9959864717671801,
+          1.8060859067682402
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "adjacent_seconds": 0.049768,
+      "calibrated_sensor": "fdf7783dc28e42a684796c5822f79403",
+      "delta": "/home/jasongao/Study/AJAE-v4/results/data/native/scene-0757/7.npz",
+      "geometry": [
+        "7d5be310c7312355b926ea7f791ed688aeca7616cb3f81d7d0ff9110bc36487f",
+        "7dce9a3a6cded3f96d937bb2ecc6a034dfa5fe22f326175dd1c23078d4e50414",
+        "7e619a9d37a4e32a0c4e419b70d2a209e4be55b4f2cf8848ea6fc95e4f706666",
+        "7f5d0e2fd5d44ddd51cd04446636b590d04d5dc672b47bfa3daeca2df9e32cc6"
+      ],
+      "world": "/home/jasongao/Study/AJAE-v4/results/data/native/scene-0757/world.json"
+    }
+  ],
+  "skipped": [],
+  "collision_scope": "all measured non-ground points in the eight selected scans; unseen surfaces unknown"
+}

@@ -33,6 +33,7 @@ RAYS_PATH = Path(__file__).resolve().parents[1] / "assets" / "rays.npz"
 VERSION = "AJAE-V4-F240-R2"
 PILOT_VERSION = "AJAE-V4-P1"
 CONTINUATION_VERSION = "AJAE-V4-P2"
+NATIVE_VERSION = "AJAE-V4-N1"
 # R2 changes the training budget; retain the exact R1 observations and manifests.
 MANIFEST_VERSION = "AJAE-V4-F240-R1"
 DATA_ROOT = Path("/home/jasongao/Data/STU")
@@ -299,6 +300,8 @@ class Rays:
     origins: np.ndarray
     canonical_ids: np.ndarray
     local: np.ndarray
+    beam_ids: np.ndarray | None = None
+    returned: np.ndarray | None = None
 
     def __post_init__(self):
         count = len(self.directions)
@@ -314,6 +317,16 @@ class Rays:
             raise ValueError("local beam vectors must be finite [beam,3] dividing the slot count")
         for name in ("directions", "origins", "canonical_ids", "local"):
             object.__setattr__(self, name, readonly(getattr(self, name).copy()))
+        if self.beam_ids is not None:
+            beam = np.asarray(self.beam_ids)
+            if beam.shape != (count,) or not np.issubdtype(beam.dtype, np.integer) or np.any((beam < 0) | (beam >= len(self.local))):
+                raise ValueError("explicit beam IDs must identify every native firing slot")
+            object.__setattr__(self, "beam_ids", readonly(beam.copy()))
+        if self.returned is not None:
+            returned = np.asarray(self.returned)
+            if returned.shape != (count,) or returned.dtype != np.bool_:
+                raise ValueError("native return flags must align with the firing slots")
+            object.__setattr__(self, "returned", readonly(returned.copy()))
 
 
 def read_rays(path=RAYS_PATH):
@@ -518,7 +531,7 @@ def make_real_manifest(directory, *, partition="val", workers=4):
 def load_manifest(path, kind):
     value = json.loads(Path(path).read_text())
     expected = value.pop("sha256")
-    if identity(value) != expected or value["version"] not in (MANIFEST_VERSION, PILOT_VERSION) or value["kind"] != kind:
+    if identity(value) != expected or value["version"] not in (MANIFEST_VERSION, PILOT_VERSION, NATIVE_VERSION) or value["kind"] != kind:
         raise ValueError(f"invalid {kind} manifest identity: {path}")
     value["sha256"] = expected
     return value
@@ -533,6 +546,121 @@ def nuscenes_mapping(root=NUSCENES_ROOT):
     return [dict(raw=row["index"], name=row["name"],
                  target=int(row["name"] in NUSCENES_NORMAL))
             for row in sorted(categories, key=lambda row: row["index"])]
+
+
+def nuscenes_poses(records, root=NUSCENES_ROOT):
+    """Stream only selected sweeps and preceding poses, retaining world coordinates."""
+    import ijson
+    from scipy.spatial.transform import Rotation
+    root = Path(root) / "v1.0-trainval"
+    selected = {r["token"] for r in records}
+    with (root / "sample_data.json").open("rb") as stream:
+        scans = {r["token"]: r for r in ijson.items(stream, "item") if r["token"] in selected}
+    if set(scans) != selected:
+        raise ValueError("selected nuScenes sweep metadata is incomplete")
+    adjacent = {r["prev"] or r["next"] for r in scans.values()} - set(scans)
+    with (root / "sample_data.json").open("rb") as stream:
+        scans.update({r["token"]: r for r in ijson.items(stream, "item") if r["token"] in adjacent})
+    pose_tokens = {r["ego_pose_token"] for r in scans.values()}
+    with (root / "ego_pose.json").open("rb") as stream:
+        poses = {r["token"]: r for r in ijson.items(stream, "item") if r["token"] in pose_tokens}
+    calibrations = {r["token"]: r for r in json.loads((root / "calibrated_sensor.json").read_text())}
+
+    def matrix(row):
+        result = np.eye(4)
+        q = np.asarray(row["rotation"], float)
+        result[:3, :3] = Rotation.from_quat(q[[1, 2, 3, 0]]).as_matrix()
+        result[:3, 3] = np.asarray(row["translation"], float)
+        return result
+
+    output = []
+    for record in records:
+        row = scans[record["token"]]
+        neighbor = scans[row["prev"] or row["next"]]
+        transform = matrix(calibrations[row["calibrated_sensor_token"]])
+        pose = matrix(poses[row["ego_pose_token"]]) @ transform
+        other = matrix(poses[neighbor["ego_pose_token"]]) @ transform
+        dt = (int(row["timestamp"]) - int(neighbor["timestamp"])) / 1e6
+        if dt == 0 or (row["prev"] and dt < 0) or (not row["prev"] and dt > 0):
+            raise ValueError("adjacent native sweep timestamps are not ordered")
+        output.append(dict(record, pose=pose.tolist(), adjacent_pose=other.tolist(),
+                           adjacent_seconds=dt, calibrated_sensor=row["calibrated_sensor_token"]))
+    return output
+
+
+def nuscenes_rays(record):
+    """Recover native 32-beam slots in the motion-compensated reference frame.
+
+    Column times interpolate adjacent poses; zero-range records refine translation.
+    Observed directions are measured, whereas missing-return directions are fitted.
+    This is an empirical acquisition model, not recovered raw firing timestamps.
+    """
+    import warnings
+    from scipy.spatial.transform import Rotation
+    raw = np.fromfile(record["scan"], dtype="<f4").reshape(-1, 5)
+    if len(raw) % 32 or not np.array_equal(raw[:, 4], np.tile(np.arange(32), len(raw) // 32)):
+        raise ValueError("nuScenes firing order is not the native 32-beam column layout")
+    count = len(raw) // 32
+    xyz = raw[:, :3].astype(float).reshape(count, 32, 3)
+    relative = np.linalg.inv(np.asarray(record["pose"])) @ np.asarray(record["adjacent_pose"])
+    # A skipped preceding sweep must not double the current scan's rotation period.
+    duration = min(abs(record["adjacent_seconds"]), count * 46.08e-6)
+    fraction = (1 - np.arange(count) / count) * duration / record["adjacent_seconds"]
+    rotations = Rotation.from_rotvec(fraction[:, None] * Rotation.from_matrix(relative[:3, :3]).as_rotvec()).as_matrix()
+    origin = fraction[:, None] * relative[:3, 3]
+    # Distinct beams cannot produce exactly coincident near-origin surface hits.
+    # Repeated XYZ values therefore recover motion-shifted zero-depth slots even
+    # when adjacent-pose interpolation is inaccurate during rapid ego motion.
+    multiplicity = (xyz[:, :, None] == xyz[:, None, :]).all(-1).sum(-1)
+    most = multiplicity.argmax(1)
+    measured = xyz[np.arange(count), most]
+    valid_origin = (multiplicity.max(1) >= 2) & (np.linalg.norm(measured - origin, axis=1) < 1.)
+    correction = measured[valid_origin] - origin[valid_origin]
+    if valid_origin.any():
+        for axis in range(3):
+            origin[:, axis] += np.interp(np.arange(count), np.flatnonzero(valid_origin), correction[:, axis])
+    local = np.einsum("ncj,njk->nck", xyz - origin[:, None], rotations)
+    distance = np.linalg.norm(local, axis=2)
+    returned = distance > .05
+    azimuth = np.arctan2(local[:, :, 1], local[:, :, 0])
+    elevation = np.arcsin(np.clip(local[:, :, 2] / np.maximum(distance, 1e-12), -1, 1))
+    usable = returned & (distance >= 2.5) & (distance <= 80)
+    expected = -2 * np.pi * np.arange(count) / count
+    wrap = lambda value: (value + np.pi) % (2 * np.pi) - np.pi
+    phase = np.median(wrap(azimuth - expected[:, None])[usable])
+    column = expected + phase
+    row_offset = np.zeros(32)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        for _ in range(2):
+            residual = np.where(usable, wrap(azimuth - column[:, None]), np.nan)
+            row_offset = np.nan_to_num(np.nanmedian(residual, axis=0))
+            residual = np.where(usable, wrap(azimuth - column[:, None] - row_offset), np.nan)
+            adjustment = np.nanmedian(residual, axis=1)
+            valid = np.isfinite(adjustment)
+            if not valid.any():
+                raise ValueError("no measured directions support the native firing model")
+            column += np.interp(np.arange(count), np.flatnonzero(valid), adjustment[valid])
+        angles = np.nanmedian(np.where(usable, elevation, np.nan), axis=0)
+    nominal = np.deg2rad(-30.6666666667 + np.arange(32) * 4 / 3)
+    angles = np.where(np.isfinite(angles), angles, nominal)
+    az = column[:, None] + row_offset
+    fitted = np.stack((np.cos(angles)[None] * np.cos(az), np.cos(angles)[None] * np.sin(az),
+                       np.broadcast_to(np.sin(angles), az.shape)), -1)
+    measured_direction = local / np.maximum(distance[..., None], 1e-12)
+    angular_error = np.rad2deg(np.arccos(np.clip((fitted * measured_direction).sum(-1)[usable], -1, 1)))
+    direction = np.where(returned[..., None], measured_direction, fitted)
+    direction = np.einsum("ncj,nkj->nck", direction, rotations)
+    direction /= np.linalg.norm(direction, axis=-1, keepdims=True)
+    local_beams = np.column_stack((np.cos(angles), np.zeros(32), np.sin(angles)))
+    rays = Rays(direction.reshape(-1, 3), np.repeat(origin, 32, axis=0), np.arange(len(raw)),
+                local_beams, np.tile(np.arange(32), count), returned.ravel())
+    diagnostics = dict(columns=count, beams=32, measured_returns=int(returned.sum()),
+                       inferred_empty_rays=int((~returned).sum()), duration_seconds=float(duration),
+                       angular_residual_deg=dict(zip(("median", "p95", "p99", "max"),
+                           map(float, np.quantile(angular_error, [.5, .95, .99, 1])))),
+                       origin_correction_max_m=float(np.linalg.norm(correction, axis=1).max()) if len(correction) else None)
+    return rays, diagnostics
 
 
 def read_nuscenes(record, mapping):
@@ -550,7 +678,13 @@ def read_nuscenes(record, mapping):
     # This is the official LitePT nuScenes input convention, not per-frame scaling.
     xyzi[:, 3] /= 255.
     truth = np.asarray([row["target"] for row in mapping], np.uint32)[labels]
-    return Frame(record["frame"], xyzi, np.eye(4), truth, sequence_id=0, partition="train")
+    if "delta" in record:
+        with np.load(record["delta"], allow_pickle=False) as delta:
+            if str(delta["token"]) != record["token"]:
+                raise ValueError("nuScenes delta belongs to a different original sweep")
+            xyzi[delta["slots"]], truth[delta["slots"]] = delta["xyzi"], delta["labels"]
+    return Frame(record["frame"], xyzi, np.asarray(record.get("pose", np.eye(4)), dtype=float),
+                 truth, sequence_id=0, partition="train")
 
 
 def _census_normal(task):
@@ -765,6 +899,66 @@ def make_pilot_manifest(base_path, output):
     return result
 
 
+def make_native_manifest(base_path, output):
+    """One finite two-domain pool: native 4+4 scenes and three STU views per world."""
+    output = Path(output)
+    base = load_manifest(base_path, "train")
+    native = load_manifest(output / "native/manifest.json", "native")
+    original = load_manifest(output / "train.json", "train")
+    blocked = {native["split"]["logs"][name] for name in native["split"]["check"]}
+    if any(r["log_token"] in blocked or r["subset"] != "train" for r in native["records"]):
+        raise ValueError("internal-check acquisition log entered native training")
+    if native["mapping"] != original["mapping"] or base["sha256"] != original["base_manifest"]:
+        raise ValueError("the established normal labels or STU source pool changed")
+    grouped = {}
+    for row in base["records"]:
+        grouped.setdefault(row["world"], []).append(row)
+    representatives, selection = [], []
+    for world in base["worlds"]:
+        rows = sorted(grouped[world["id"]], key=lambda r: r["frame"])
+        saved = json.loads((Path(base["pool_root"]) / world["paths"][0] / "manifest.json").read_text())
+        observed = {r["frame"]: r for r in saved["frames"]}
+        features = np.asarray([[np.log1p(r["anomaly"]), observed[r["frame"]]["range"] / 10,
+            np.log1p(observed[r["frame"]]["occluded"]), observed[r["frame"]]["linearity"],
+            observed[r["frame"]]["planarity"]] for r in rows], dtype=float)
+        # Older summaries omit shape statistics for sparse objects. Recompute
+        # those descriptors from actual anomaly returns instead of inventing zeros.
+        for index in np.flatnonzero(~np.isfinite(features).all(1)):
+            delta = read_delta(rows[index]["delta"])
+            xyz = delta["xyzi"][:, :3].astype(float)
+            distance = np.linalg.norm(xyz, axis=1)
+            points = xyz[((delta["packed_labels"] & 65535) == 2) & (distance >= 2.5) & (distance <= 50)]
+            eig = np.maximum(np.linalg.eigvalsh(np.cov(points.T)), 0)
+            features[index, 3:] = ((eig[2]-eig[1])/max(eig[2], 1e-12),
+                                   (eig[1]-eig[0])/max(eig[2], 1e-12))
+        if not np.isfinite(features).all():
+            raise ValueError("STU observation descriptors must be measured and finite")
+        scale = np.maximum(np.quantile(features, .75, axis=0) - np.quantile(features, .25, axis=0), .1)
+        normalized = (features - np.median(features, axis=0)) / scale
+        chosen = [int(np.argmin(np.square(normalized).sum(1)))]
+        while len(chosen) < min(3, len(rows)):
+            distance = np.square(normalized[:, None] - normalized[chosen]).sum(-1).min(1)
+            distance[chosen] = -1
+            chosen.append(int(np.argmax(distance)))
+        representatives.extend(dict(rows[i], group="anomaly_stu", subset="train") for i in chosen)
+        selection.append(dict(world=world["id"], frames=[rows[i]["frame"] for i in chosen],
+                              descriptors=features[chosen].tolist()))
+    stu_normal = [r for r in original["records"] if r.get("source") == "normal_stu"]
+    if len(stu_normal) != 449 or len(representatives) != 720:
+        raise ValueError("the STU supplement requires 449 original and 3 x 240 representative scans")
+    records = native["records"] + representatives + stu_normal
+    if any(1 <= r["anomaly"] <= 4 or r["normal"] + r["anomaly"] == 0 for r in records):
+        raise ValueError("an ineligible scan entered the two-domain pool")
+    result = dict(base, version=NATIVE_VERSION, records=records, mapping=native["mapping"],
+        split=native["split"], native_manifest=native["sha256"], base_manifest=base["sha256"],
+        selection=selection, representative_rule="median observation then farthest observations in point count, range, occlusion and local shape")
+    result.pop("sha256")
+    result["sha256"] = identity(result)
+    write_json(output / "native/train.json", result)
+    print(json.dumps(dict(samples=len(records), native=len(native["records"]), stu=len(representatives)+449)), flush=True)
+    return result
+
+
 class Scans:
     """Fixed manifest reader. Metadata and truth never enter model features."""
 
@@ -830,7 +1024,7 @@ class Scans:
         else:
             frame = read_scan(record["scan"], record["label"], partition=self.manifest["kind"],
                               expected=(record["scan_sha256"], record["label_sha256"]))
-        selected = supervision(frame, allow_normal=self.manifest["version"] == PILOT_VERSION)
+        selected = supervision(frame, allow_normal=self.manifest["version"] in (PILOT_VERSION, NATIVE_VERSION))
         if self.manifest["kind"] == "train" and not selected.eligible:
             raise ValueError("training scan is ineligible under the frame rule")
         observed = (int(frame.actual.sum()), selected.normal_count, selected.anomaly_count, len(frame.xyzi))
@@ -845,7 +1039,7 @@ class Scans:
 def main():
     import argparse
     parser = argparse.ArgumentParser(description="Prepare labeled normal sources or mix the pilot training set.")
-    parser.add_argument("operation", choices=("normal", "expand", "mix", "legacy"))
+    parser.add_argument("operation", choices=("normal", "expand", "mix", "native", "legacy"))
     parser.add_argument("--output", type=Path, default=Path("results/data"))
     parser.add_argument("--nuscenes-root", type=Path, default=NUSCENES_ROOT)
     parser.add_argument("--data-root", type=Path, default=DATA_ROOT)
@@ -861,6 +1055,9 @@ def main():
         return
     if args.operation == "mix":
         make_pilot_manifest(args.train, args.output)
+        return
+    if args.operation == "native":
+        make_native_manifest(args.train, args.output)
         return
     if args.train.exists() or args.val.exists():
         parser.error("manifest already exists; fixed manifests must not be silently replaced")

@@ -106,6 +106,42 @@ class Interaction(nn.Module):
         return self.output(result.to(sampling.dtype))
 
 
+class Conditional(nn.Module):
+    """Update one voxel state by sampling-conditioned attention to six context scales."""
+
+    def __init__(self):
+        super().__init__()
+        self.detail = nn.Linear(128, 64)
+        self.sensor = mlp(4, 32, 64)
+        self.projections = nn.ModuleList(nn.Linear(c, 64) for c in (*CHANNELS, 72))
+        self.scale = nn.Parameter(torch.zeros(6, 64))
+        self.relative = mlp(3, 32, 64)
+        self.layers = nn.ModuleList(nn.ModuleDict(dict(
+            query=nn.Linear(64, 64), key=nn.Linear(64, 64), value=nn.Linear(64, 64),
+            output=nn.Linear(64, 64), norm=nn.LayerNorm(64),
+            feedforward=mlp(64, 128, 64), final_norm=nn.LayerNorm(64),
+        )) for _ in range(2))
+
+    def forward(self, pooled, xyz, indices, coords, features):
+        distance = torch.linalg.vector_norm(xyz.float(), dim=-1, keepdim=True)
+        state = self.detail(pooled) + self.sensor(torch.cat((distance / 50, xyz / distance.clamp_min(1e-12)), -1))
+        tokens = []
+        for level, (project, feat, coord, index) in enumerate(zip(self.projections, features, coords, indices)):
+            relative = (coord[index] - xyz) / (GRID_SIZE * 2**min(level, 4))
+            tokens.append(project(feat)[index] + self.scale[level] + self.relative(relative))
+        tokens = torch.stack(tokens, 1)
+        for layer in self.layers:
+            query = layer["query"](state).reshape(-1, 4, 16)
+            keys = layer["key"](tokens).reshape(-1, 6, 4, 16)
+            values = layer["value"](tokens).reshape(-1, 6, 4, 16)
+            # Six tokens per voxel: no quadratic attention across all scene points.
+            weights = ((query[:, None].float() * keys.float()).sum(-1) / 4).softmax(1)
+            context = (weights[..., None] * values.float()).sum(1).flatten(1)
+            state = layer["norm"](state + layer["output"](context.to(state.dtype)))
+            state = layer["final_norm"](state + layer["feedforward"](state))
+        return state
+
+
 class Segmentor(nn.Module):
     def __init__(self, mode="base", *, recompute=True):
         super().__init__()
@@ -115,12 +151,18 @@ class Segmentor(nn.Module):
         self.adapter = mlp(128, 64, 36)
         nn.init.zeros_(self.adapter[-1].weight)
         nn.init.zeros_(self.adapter[-1].bias)
-        self.sampling = mlp(100, 64, 64)
-        self.context = nn.Linear(72, 64)
-        self.head = nn.Sequential(nn.Linear(128, 64), nn.GELU(), nn.Linear(64, 1))
+        if mode == "conditional":
+            self.conditional = Conditional()
+            self.point_detail = nn.Linear(64, 64)
+            self.point_position = mlp(3, 32, 64)
+            self.head = nn.Sequential(nn.LayerNorm(64), nn.Linear(64, 64), nn.GELU(), nn.Linear(64, 1))
+        else:
+            self.sampling = mlp(100, 64, 64)
+            self.context = nn.Linear(72, 64)
+            self.head = nn.Sequential(nn.Linear(128, 64), nn.GELU(), nn.Linear(64, 1))
         self.interaction = None
         self.interaction_weight = None
-        if mode != "base":
+        if mode not in ("base", "conditional"):
             self.add_interaction(mode)
 
     def add_interaction(self, mode):
@@ -169,17 +211,32 @@ class Segmentor(nn.Module):
         point = self.backbone.embedding(point)
         point.feat = point.feat + self.adapter(pooled)
         point.sparse_conv_feat = point.sparse_conv_feat.replace_feature(point.feat)
-        features, coords, ancestors = [], [], []
+        features, coords, ancestors, voxel_ancestors = [], [], [], []
         ancestry = inverse
+        voxel_ancestry = torch.arange(len(sample["grid"]), device=xyzi.device)
         for level, encoder in enumerate(self.backbone.enc):
             point = encoder(point)
             if level:
                 ancestry = point.pooling_inverse[ancestry]
+                voxel_ancestry = point.pooling_inverse[voxel_ancestry]
             # Store tensors before decoder mutation of the Point containers.
             features.append(point.feat)
             coords.append(point.coord)
             ancestors.append(ancestry)
+            voxel_ancestors.append(voxel_ancestry)
         point = self.backbone.dec(point)
+        if self.mode == "conditional":
+            unified = self._checkpoint(self.conditional, pooled, sample["voxel_xyzi"][:, :3],
+                voxel_ancestors + [voxel_ancestors[0]], coords + [point.coord], features + [point.feat])
+            output = []
+            for start in range(0, len(xyzi), POINT_CHUNK):
+                end = min(start + POINT_CHUNK, len(xyzi))
+                def score_points(e, context, offset):
+                    state = context + self.point_detail(e) + self.point_position(offset)
+                    return self.head(state).squeeze(-1).float()
+                output.append(self._checkpoint(score_points, detail[start:end], unified[inverse[start:end]],
+                                               sample["offset"][start:end]))
+            return torch.cat(output)
         context = self.context(point.feat)
         keys, values = self.interaction.project(features) if self.interaction is not None else ((), ())
 
@@ -221,3 +278,69 @@ def balanced_loss(logits, targets, counts):
         if counts[label] > 0:
             result = result + F.softplus(sign * logits[targets == label].float()).sum() / (present * counts[label])
     return result
+
+
+class RecallThreshold(torch.autograd.Function):
+    """Implicit derivative of mean(sigmoid((positive - t) / tau)) = recall."""
+
+    @staticmethod
+    def forward(ctx, positive, tau, recall):
+        low, high = positive.min() - 32 * tau, positive.max() + 32 * tau
+        for _ in range(40):
+            middle = (low + high) / 2
+            above = torch.sigmoid((positive - middle) / tau).mean() > recall
+            low, high = torch.where(above, middle, low), torch.where(above, high, middle)
+        threshold = (low + high) / 2
+        scaled = (positive - threshold) / tau
+        # log-space normalization also handles a sharply separated positive tail.
+        derivative = (F.logsigmoid(scaled) + F.logsigmoid(-scaled)).softmax(0)
+        ctx.save_for_backward(derivative)
+        return threshold
+
+    @staticmethod
+    def backward(ctx, gradient):
+        (derivative,) = ctx.saved_tensors
+        return gradient * derivative, None, None
+
+
+def rank_sample(positive, negative, seed):
+    """Uniform positive anchors; certain top negatives plus inverse-probability sampling."""
+    generator = torch.Generator(device=positive.device).manual_seed(seed)
+    anchors = (torch.randperm(len(positive), device=positive.device, generator=generator)[:256]
+               if len(positive) > 256 else torch.arange(len(positive), device=positive.device))
+    if len(negative) <= 4096:
+        return positive[anchors], negative, torch.ones_like(negative), min(512, len(negative))
+    top = negative.detach().topk(512).indices
+    remaining = torch.ones(len(negative), device=negative.device, dtype=torch.bool)
+    remaining[top] = False
+    rest = remaining.nonzero().flatten()
+    selected = rest[torch.randperm(len(rest), device=negative.device, generator=generator)[:3584]]
+    indices = torch.cat((top, selected))
+    weights = torch.cat((negative.new_ones(512), negative.new_full((3584,), len(rest) / 3584)))
+    return positive[anchors], negative[indices], weights, 512
+
+
+def ranking_loss(logits, targets, seed, tau=1.):
+    """One two-scan proxy, with all positives and weighted sampled negatives."""
+    with torch.autocast(logits.device.type, enabled=False):
+        positive, negative = logits[targets == 1].float(), logits[targets == 0].float()
+        zero = logits.float().sum() * 0
+        if not len(positive) or not len(negative):
+            return zero, dict(ap=zero.detach(), auc=zero.detach(), fpr95=zero.detach(),
+                              positive=len(positive), negative=len(negative), anchors=0, negatives=0,
+                              top=0, random_weight=0., threshold=None, recall=None)
+        anchors, sampled, weights, top = rank_sample(positive, negative, seed)
+        # Each anchor is a member of P: subtract its self-comparison sigmoid(0).
+        positive_rank = .5 + torch.sigmoid((positive[None, :] - anchors[:, None]) / tau).sum(1)
+        difference = (sampled[None, :] - anchors[:, None]) / tau
+        negative_rank = (torch.sigmoid(difference) * weights).sum(1)
+        ap = 1 - (positive_rank / (positive_rank + negative_rank)).mean()
+        auc = (F.softplus(difference) * weights).sum(1).mean() / len(negative)
+        threshold = RecallThreshold.apply(positive, tau, .95)
+        recall = torch.sigmoid((positive - threshold) / tau).mean()
+        fpr95 = (torch.sigmoid((sampled - threshold) / tau) * weights).sum() / len(negative)
+        return ap + .1 * auc + .1 * fpr95, dict(
+            ap=ap.detach(), auc=auc.detach(), fpr95=fpr95.detach(),
+            positive=len(positive), negative=len(negative), anchors=len(anchors), negatives=len(sampled),
+            top=top, random_weight=(len(negative) - 512) / 3584 if len(negative) > 4096 else 1.,
+            threshold=threshold.detach(), recall=recall.detach())

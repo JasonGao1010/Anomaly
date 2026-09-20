@@ -1,0 +1,50 @@
+{
+  "epoch": 1,
+  "mean_batch_loss": 0.16475967993121593,
+  "frames": 4000,
+  "class_points": [
+    166338833,
+    339412
+  ],
+  "source_points": {
+    "normal_stu": {
+      "frames": 286,
+      "normal": 34820010,
+      "anomaly": 0
+    },
+    "anomaly_nuscenes": {
+      "frames": 1600,
+      "normal": 37439111,
+      "anomaly": 292255
+    },
+    "normal_nuscenes": {
+      "frames": 1662,
+      "normal": 39270864,
+      "anomaly": 0
+    },
+    "anomaly_stu": {
+      "frames": 452,
+      "normal": 54808848,
+      "anomaly": 47157
+    }
+  },
+  "planned_updates": 500,
+  "successful_updates": 500,
+  "overflows": 0,
+  "validation": {
+    "metrics": {
+      "AP": 75.90826681775461,
+      "FPR95": 0.2358399167934647,
+      "AUROC": 99.91929637877914,
+      "threshold": -2.234375
+    },
+    "scans": 1960,
+    "points": 193879969,
+    "seconds": 194.14911007499904,
+    "manifest_sha256": "918524fd271f896bf9288ebfe4131941a20cbd00a0925e91c8ccedf4d7574855",
+    "official_commit": "8f0f09c2ca4bf7b665e0ae5919b4092ddae140a2"
+  },
+  "selected": true,
+  "seconds": 763.4483379240046,
+  "peak_vram_bytes": 9985457152
+}

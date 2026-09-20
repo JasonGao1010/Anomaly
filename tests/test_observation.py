@@ -49,6 +49,22 @@ def response(probabilities=(1.,), intensity=1.234567):
                     "Diagnostic constant response; not fitted data or a V4 default")
 
 
+def test_native_column_beams_and_motion_shifted_empty_slots():
+    directions = np.tile([1., 0, 0], (4, 1))
+    rays = Rays(directions, np.tile([.1, 0, 0], (4, 1)), np.arange(4),
+                np.tile([1., 0, 0], (2, 1)), np.array([0, 1, 0, 1]), np.array([True, True, False, False]))
+    source = Frame(0, np.array([[7, 0, 0, .2], [7, 0, 0, .2], [.1, 0, 0, 0], [.1, 0, 0, 0]], np.float32),
+                   np.eye(4), np.array([1, 1, 0, 0], np.uint32), sequence_id=0)
+    response = Response(np.array([0., 100.]), np.array([0., math.pi/2]), np.array([0., 1.]),
+        np.ones((2, 1, 1)), np.array([.1, .8])[:, None, None, None] * np.ones((2, 1, 1, 2)),
+        (0., 1.), None, "Diagnostic beam identity fixture")
+    world = World("diagnostic", 0, 19, (object_at(1, [3.5, 0, 0]),), 1e-6)
+    result = render_frame(source, world, rays, response, TRACE)
+    assert result.inserted.all() and (result.frame.labels == 2).all()
+    np.testing.assert_allclose(result.frame.xyzi[:, 3], [.1, .8, .1, .8])
+    np.testing.assert_allclose(result.frame.xyzi[:, 0], 3., atol=2e-7)
+
+
 @pytest.mark.parametrize("count", [0, 1, 4, 5])
 def test_frame_selection_and_full_input(count):
     xyzi = np.array([[3., 0, 0, 1.2]] * 5 + [[0, 0, 0, 9], [2.5, 0, 0, .2],

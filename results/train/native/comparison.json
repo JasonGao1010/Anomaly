@@ -1,0 +1,225 @@
+{
+  "version": "AJAE-V4-N1",
+  "complete": true,
+  "seed": 0,
+  "train_manifest": "e3c32d0b83ffb9eda2e095ffddd08828509e97d1d34509805dd2584951b2b3c6",
+  "val_manifest": "918524fd271f896bf9288ebfe4131941a20cbd00a0925e91c8ccedf4d7574855",
+  "scans": 6185,
+  "visits_per_run": 12370,
+  "updates_per_run": 1547,
+  "scans_per_validation": 1960,
+  "points_per_validation": 193879969,
+  "configuration_differences": [
+    "objective"
+  ],
+  "identical_sampling": true,
+  "final_network_rng_equal": {
+    "python": true,
+    "numpy": true,
+    "torch": true,
+    "cuda": true
+  },
+  "bce_warmup_comparison": [
+    {
+      "update": 25,
+      "bce": 0.5448164939880371,
+      "metrics": 0.5457778573036194,
+      "difference": 0.0009613633155822754
+    },
+    {
+      "update": 50,
+      "bce": 0.037440214306116104,
+      "metrics": 0.035453032702207565,
+      "difference": -0.001987181603908539
+    },
+    {
+      "update": 75,
+      "bce": 0.035350896418094635,
+      "metrics": 0.0332840271294117,
+      "difference": -0.0020668692886829376
+    },
+    {
+      "update": 100,
+      "bce": 0.03334600478410721,
+      "metrics": 0.04465234652161598,
+      "difference": 0.011306341737508774
+    },
+    {
+      "update": 125,
+      "bce": 0.026402883231639862,
+      "metrics": 0.029657067731022835,
+      "difference": 0.0032541844993829727
+    },
+    {
+      "update": 150,
+      "bce": 0.4941861629486084,
+      "metrics": 0.28819018602371216,
+      "difference": -0.20599597692489624
+    }
+  ],
+  "numerical_limit": "The pure-BCE prefix is not bitwise identical. The frozen backbone uses default nondeterministic FlashAttention backward; the sole cause and full-run numerical variance have not been isolated.",
+  "gradient_validation": "Implicit threshold gradient agrees with independent float64 finite differences; shared-shift gradient sums to zero; two separate scan graphs both receive ranking gradients.",
+  "logged_recall_max_abs_error": 1.6689300541550267e-07,
+  "logged_ranking_pairs": 164,
+  "normal_only_pairs_in_log": 56,
+  "methods": {
+    "bce": {
+      "result": {
+        "version": "AJAE-V4-N1",
+        "seed": 0,
+        "method": "conditional",
+        "complete": true,
+        "epochs": 2,
+        "updates": 1547,
+        "best_epoch": 4,
+        "best_metrics": {
+          "AP": 70.17733233674957,
+          "FPR95": 0.1238412410967258,
+          "AUROC": 99.93452139155069,
+          "threshold": -0.22265625
+        },
+        "best_update": 1547,
+        "final_metrics": {
+          "AP": 70.17733233674957,
+          "FPR95": 0.1238412410967258,
+          "AUROC": 99.93452139155069,
+          "threshold": -0.22265625
+        },
+        "objective": "bce",
+        "training_seconds": 1630.397442034904,
+        "validation_seconds": 721.8411154050045,
+        "planned_updates": 1547,
+        "successful_updates": 1547,
+        "overflows": 0,
+        "parameters": 12880513,
+        "train_manifest_sha256": "e3c32d0b83ffb9eda2e095ffddd08828509e97d1d34509805dd2584951b2b3c6",
+        "val_manifest_sha256": "918524fd271f896bf9288ebfe4131941a20cbd00a0925e91c8ccedf4d7574855",
+        "validation_improved_from_epoch0": null
+      },
+      "validation_curve": [
+        {
+          "update": 500,
+          "AP": 50.46898762715701,
+          "FPR95": 1.7451307576605013,
+          "AUROC": 99.64590865689107,
+          "threshold": -4.09375
+        },
+        {
+          "update": 1000,
+          "AP": 68.42420973497455,
+          "FPR95": 0.2133096296259602,
+          "AUROC": 99.82610057497669,
+          "threshold": -2.5625
+        },
+        {
+          "update": 1500,
+          "AP": 69.96067490059109,
+          "FPR95": 0.13182710349891302,
+          "AUROC": 99.93239407047756,
+          "threshold": -0.421875
+        },
+        {
+          "update": 1547,
+          "AP": 70.17733233674957,
+          "FPR95": 0.1238412410967258,
+          "AUROC": 99.93452139155069,
+          "threshold": -0.22265625
+        }
+      ],
+      "interval_wall_seconds": 2375.0583132719985,
+      "peak_vram_bytes": 9985457152
+    },
+    "metrics": {
+      "result": {
+        "version": "AJAE-V4-N1",
+        "seed": 0,
+        "method": "conditional",
+        "complete": true,
+        "epochs": 2,
+        "updates": 1547,
+        "best_epoch": 1,
+        "best_metrics": {
+          "AP": 75.90826681775461,
+          "FPR95": 0.2358399167934647,
+          "AUROC": 99.91929637877914,
+          "threshold": -2.234375
+        },
+        "best_update": 500,
+        "final_metrics": {
+          "AP": 71.97328654954123,
+          "FPR95": 0.16405642592821074,
+          "AUROC": 99.93955514612645,
+          "threshold": -1.4453125
+        },
+        "objective": "metrics",
+        "training_seconds": 1695.6069723240362,
+        "validation_seconds": 762.3513633309994,
+        "planned_updates": 1547,
+        "successful_updates": 1547,
+        "overflows": 0,
+        "parameters": 12880513,
+        "train_manifest_sha256": "e3c32d0b83ffb9eda2e095ffddd08828509e97d1d34509805dd2584951b2b3c6",
+        "val_manifest_sha256": "918524fd271f896bf9288ebfe4131941a20cbd00a0925e91c8ccedf4d7574855",
+        "validation_improved_from_epoch0": null
+      },
+      "validation_curve": [
+        {
+          "update": 500,
+          "AP": 75.90826681775461,
+          "FPR95": 0.2358399167934647,
+          "AUROC": 99.91929637877914,
+          "threshold": -2.234375
+        },
+        {
+          "update": 1000,
+          "AP": 71.1409608988297,
+          "FPR95": 0.219874384180149,
+          "AUROC": 99.91992539354196,
+          "threshold": -3.421875
+        },
+        {
+          "update": 1500,
+          "AP": 71.57002351659068,
+          "FPR95": 0.16814636812255915,
+          "AUROC": 99.93796649251637,
+          "threshold": -1.5390625
+        },
+        {
+          "update": 1547,
+          "AP": 71.97328654954123,
+          "FPR95": 0.16405642592821074,
+          "AUROC": 99.93955514612645,
+          "threshold": -1.4453125
+        }
+      ],
+      "interval_wall_seconds": 2480.282697267001,
+      "peak_vram_bytes": 9985457152
+    }
+  },
+  "old_baseline": {
+    "AP": 68.65256308095412,
+    "FPR95": 0.5738783349012477,
+    "AUROC": 99.84052401500311,
+    "threshold": -10.6875
+  },
+  "endpoint_metrics_minus_bce": {
+    "AP": 1.7959542127916563,
+    "FPR95": 0.04021518483148494,
+    "AUROC": 0.005033754575762828
+  },
+  "selected_metrics_minus_bce": {
+    "AP": 5.730934481005036,
+    "FPR95": 0.1119986756967389,
+    "AUROC": -0.01522501277155186
+  },
+  "selected_metrics_minus_old": {
+    "AP": 7.255703736800484,
+    "FPR95": -0.338038418107783,
+    "AUROC": 0.07877236377602514
+  },
+  "selected_checkpoint": "/home/jasongao/Study/AJAE-v4/results/train/native/metrics/0/conditional/best.pt",
+  "selected_checkpoint_update": 500,
+  "selected_checkpoint_training_visits": 4000,
+  "independent_test_evaluated": false,
+  "scope": "One paired input/initialization experiment with numerical nondeterminism. No claim of repeat stability or isolation of individual loss, data, or interaction contributions."
+}

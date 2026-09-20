@@ -13,7 +13,8 @@ from scipy.special import expit
 from scipy.stats import qmc
 
 from .data import (Frame, PILOT_VERSION, STUSequence, legacy_source_identity,
-                   point_targets, readonly, rigid, supervision, read_rays, write_json)
+                   point_targets, readonly, rigid, supervision, read_rays, write_json,
+                   nuscenes_rays, nuscenes_poses, read_nuscenes, identity, NATIVE_VERSION)
 from .shape import Shape, Trace, unresolved_penetration
 
 
@@ -139,8 +140,8 @@ class World:
     tie_tolerance_m: float
 
     def __post_init__(self):
-        if not isinstance(self.version, str) or not self.version.strip() or self.sequence_id != 206:
-            raise ValueError("a V4 world must identify its version and source sequence 206")
+        if not isinstance(self.version, str) or not self.version.strip() or self.sequence_id not in (0, 206):
+            raise ValueError("a V4 world must identify its version and nuScenes or STU 206 source")
         if type(self.seed) is not int or not 0 <= self.seed < 2**64:
             raise ValueError("world seed must be a uint64 integer")
         if not np.isfinite(self.tie_tolerance_m) or self.tie_tolerance_m < 0:
@@ -190,7 +191,7 @@ class Observation:
 def render_frame(source, world, rays, response, trace):
     """Resolve all opaque surfaces jointly, then sample the winning surface's return."""
     if source.partition != "train" or source.sequence_id != world.sequence_id:
-        raise ValueError("the supplied world belongs to training sequence 206")
+        raise ValueError("the supplied world and training scan belong to different sensors")
     if source.labels is None:
         raise ValueError("background construction requires original labels")
     if len(source.xyzi) != len(rays.directions) or response.probability.shape[0] != len(rays.local):
@@ -204,6 +205,8 @@ def render_frame(source, world, rays, response, trace):
     native_world = source.xyzi[:, :3] @ rotation.T + translation
     native_t = np.sum((native_world - world_origins) * unit_world, axis=1)
     native_t[~source.actual] = np.inf
+    if rays.returned is not None:
+        native_t[~rays.returned] = np.inf
     if np.any(native_t <= 0):
         raise ValueError("a native return lies behind its ray origin")
     count = len(source.xyzi)
@@ -233,7 +236,8 @@ def render_frame(source, world, rays, response, trace):
         if not len(slots):
             continue
         returned, intensity = response.sample(
-            slots // columns, nearest[slots], incidence[slots], item.material,
+            slots // columns if rays.beam_ids is None else rays.beam_ids[slots],
+            nearest[slots], incidence[slots], item.material,
             slot_uniform(world, source.frame_id, slots, item.object_id, 0),
             slot_uniform(world, source.frame_id, slots, item.object_id, 1),
         )
@@ -527,6 +531,263 @@ def generate_candidates(output, *, data_root, pool_root, workers=8):
                interpretation="normal-reference candidates; local confusion and context utility unproven"))
 
 
+def _native_statistics(task):
+    """Estimate response only inside locally supported, same-class planar patches."""
+    record, mapping = task
+    frame = read_nuscenes(record, mapping)
+    rays, diagnostic = nuscenes_rays(record)
+    raw = np.fromfile(record["label"], np.uint8)
+    count = len(raw)
+    slots = np.arange(33, count - 33)
+    slots = slots[(slots % 32 > 0) & (slots % 32 < 31)]
+    neighbor = slots[:, None] + np.array([-32, -1, 32, 1])
+    keep = (point_targets(frame)[neighbor] == 0).all(1) & (raw[neighbor] == raw[neighbor[:, :1]]).all(1)
+    slots, neighbor = slots[keep], neighbor[keep]
+    points = frame.xyzi[neighbor, :3].astype(float)
+    center = points.mean(1)
+    centered = points - center[:, None]
+    eig, vectors = np.linalg.eigh(np.einsum("nki,nkj->nij", centered, centered) / 4)
+    normal = vectors[:, :, 0]
+    denom = (rays.directions[slots] * normal).sum(1)
+    t = ((center - rays.origins[slots]) * normal).sum(1) / np.where(abs(denom) > 1e-8, denom, np.nan)
+    intersection = rays.origins[slots] + t[:, None] * rays.directions[slots]
+    radius = np.linalg.norm(centered, axis=-1).max(1)
+    valid = (eig[:, 0] < .02**2) & (eig[:, 1] > 1e-5) & (radius < 2.) & (t >= 2.5) & (t <= 50)
+    valid &= np.linalg.norm(intersection - center, axis=1) < radius * .7
+    depth = ((frame.xyzi[slots, :3] - rays.origins[slots]) * rays.directions[slots]).sum(1)
+    hit = rays.returned[slots] & (abs(depth - t) <= .08) & (point_targets(frame)[slots] == 0)
+    # A real foreground/edge is not a failed return from the extrapolated plane.
+    valid &= hit | ~rays.returned[slots]
+    slots, t, denom, hit = slots[valid], t[valid], denom[valid], hit[valid]
+    return dict(scene=record["scene"], token=record["token"], rays=diagnostic,
+                beam=slots % 32, distance=t, incidence=np.arccos(np.clip(abs(denom), 0, 1)),
+                returned=hit, intensity=frame.xyzi[slots, 3])
+
+
+def fit_native_response(records, mapping, workers):
+    """Fit training-only empirical response; unobserved bin support is explicit."""
+    import multiprocessing as mp
+    from concurrent.futures import ProcessPoolExecutor
+    by_log = {}
+    for row in records:
+        by_log.setdefault(row["log_token"], row)
+    with ProcessPoolExecutor(max_workers=workers, mp_context=mp.get_context("fork")) as pool:
+        rows = list(pool.map(_native_statistics, [(r, mapping) for r in by_log.values()]))
+    values = {k: np.concatenate([r[k] for r in rows]) for k in
+              ("beam", "distance", "incidence", "returned", "intensity")}
+    ranges, angles, quantiles = np.array([2.5, 5., 10., 20., 35., 50.]), np.deg2rad([0., 30., 60., 90.]), np.linspace(0, 1, 9)
+    rbin = np.clip(np.searchsorted(ranges, values["distance"], side="right") - 1, 0, 4)
+    abin = np.clip(np.searchsorted(angles, values["incidence"], side="right") - 1, 0, 2)
+    probability, intensity = np.empty((32, 5, 3)), np.empty((32, 5, 3, 9))
+    support, fallback = np.zeros((32, 5, 3), int), np.zeros((32, 5, 3), bool)
+    for beam, r, a in product(range(32), range(5), range(3)):
+        selected = (values["beam"] == beam) & (rbin == r) & (abin == a)
+        support[beam, r, a] = selected.sum()
+        if selected.sum() < 32:
+            selected = (rbin == r) & (abin == a)
+            fallback[beam, r, a] = True
+        if selected.sum() < 32:
+            selected = rbin == r
+        if selected.sum() < 32:
+            selected = np.ones(len(rbin), bool)
+        probability[beam, r, a] = values["returned"][selected].mean()
+        emitted = values["intensity"][selected & values["returned"]]
+        if not len(emitted):
+            raise ValueError("no real normal intensity supports a native response bin")
+        intensity[beam, r, a] = np.quantile(emitted, quantiles)
+    response = Response(ranges, angles, quantiles, probability, intensity, (0., 1.), 1 / 255,
+                        "nuScenes training logs; supported planar interiors; empirical counterfactual approximation")
+    report = dict(sources=[{k: r[k] for k in ("scene", "token", "rays")} for r in rows],
+                  opportunities=len(rbin), observed_returns=int(values["returned"].sum()),
+                  support=support.tolist(), pooled_fallback=fallback.tolist(),
+                  probability=probability.tolist(), intensity=intensity.tolist(),
+                  range_edges=ranges.tolist(), incidence_edges=angles.tolist(), quantiles=quantiles.tolist(),
+                  limitation="Planar interior response is not ground truth for arbitrary new materials or missing geometry.")
+    return response, report
+
+
+def _native_geometry(task):
+    name, shape_record = task
+    shape = Shape(shape_record["primitive_scales_m"], shape_record["primitive_offsets_m"],
+                  shape_record["primitive_exponents"], shape_record["primitive_yaws_rad"], shape_record["operations"],
+                  shape_record["twist_rad_per_m"], shape_record["bend_per_m"], shape_record["taper_per_m"],
+                  shape_record["surface_amplitude_m"], shape_record["surface_frequency_per_m"], shape_record["surface_phase_rad"])
+    grounding = check_grounding(shape, coarse=dict(xy_resolution=33, z_steps=129, bisections=24, refinements=5),
+        fine=dict(xy_resolution=65, z_steps=257, bisections=24, refinements=5),
+        trace=Trace(96, 8, 24, 1e-5, 4., 1e-5, 1e-5, 1e-9), surface_count=128,
+        residual_tolerance=1e-5, convergence_m=1e-4, buried_depth_m=1e-4, max_buried_fraction=0.)
+    return name, grounding
+
+
+def _native_scene(task):
+    """Place a world once; observe its objects jointly from four original keyframes."""
+    import json
+    from pathlib import Path
+    from scipy.spatial import cKDTree, ConvexHull
+    scene_index, records, output = task
+    destination = Path(output) / records[0]["scene"]
+    metadata_path = destination / "world.json"
+    if metadata_path.exists():
+        return json.loads(metadata_path.read_text())
+    rng = np.random.default_rng(41000 + scene_index)
+    frames = [read_nuscenes(r, _native_mapping) for r in records]
+    truth = [np.fromfile(r["label"], np.uint8) for r in records]
+    ground_ids = [r["raw"] for r in _native_mapping if r["name"] in ("flat.driveable_surface", "flat.sidewalk", "flat.other")]
+    world_points = [f.xyzi[:, :3].astype(float) @ f.pose[:3, :3].T + f.pose[:3, 3] for f in frames]
+    obstacles = np.concatenate([p[f.actual & (f.range_m >= 2.5) & ~np.isin(t, ground_ids)]
+                               for p, f, t in zip(world_points, frames, truth)])
+    objects, proposals, diagnostics = [], [], []
+    chosen = (1, 3, 5, 7)
+    rays = {}
+    for ordinal, frame_index in enumerate(chosen):
+        source, points = frames[frame_index], world_points[frame_index]
+        ray, diagnostic = nuscenes_rays(records[frame_index])
+        rays[frame_index] = ray
+        diagnostics.append(dict(token=records[frame_index]["token"], **diagnostic))
+        geometry_name, grounding = _native_shapes[(scene_index * 4 + ordinal) % len(_native_shapes)]
+        lower, upper = grounding.shape.bounds()
+        footprint = float(np.linalg.norm(np.maximum(abs(lower[:2]), abs(upper[:2]))))
+        ground = points[np.isin(truth[frame_index], ground_ids) & source.actual & (source.range_m >= 2.5)]
+        tree = cKDTree(ground[:, :2]) if len(ground) else None
+        available = np.flatnonzero(np.isin(truth[frame_index], ground_ids) & (source.range_m >= 4) & (source.range_m <= 35))
+        accepted, reasons = None, dict(support=0, collision=0, visibility=0)
+        for slot in rng.permutation(available)[:96]:
+            anchor = points[slot]
+            nearby = ground[tree.query_ball_point(anchor[:2], footprint + .3)]
+            if len(nearby) < 12:
+                reasons["support"] += 1
+                continue
+            center = nearby.mean(0)
+            _, _, vh = np.linalg.svd(nearby - center, full_matrices=False)
+            up = vh[-1] * (1 if vh[-1, 2] > 0 else -1)
+            residual = abs((nearby - center) @ up)
+            if up[2] < .95 or np.quantile(residual, .95) > .04:
+                reasons["support"] += 1
+                continue
+            hull = ConvexHull(nearby[:, :2])
+            # The complete circular footprint must be supported, not just its center.
+            if np.max(hull.equations[:, :2] @ anchor[:2] + hull.equations[:, 2] + footprint) > 0:
+                reasons["support"] += 1
+                continue
+            material = Material(float(rng.uniform(.1, .9)), float(rng.uniform(.1, .35)), 0.)
+            item = ground_object(grounding, material, object_id=ordinal + 1, geometry_id=geometry_name,
+                anchor_world=anchor, normal_world=up, plane_offset=-float(up @ center), yaw=float(rng.uniform(-np.pi, np.pi)))
+            if len(observed_collision(item, obstacles, allowance_m=.03, gradient_step_m=1e-6, witness_fraction=1-1e-6)[0]):
+                reasons["collision"] += 1
+                continue
+            lo, hi = item.bounds()
+            if any(np.all(hi >= other.bounds()[0]) and np.all(other.bounds()[1] >= lo) for other in objects):
+                reasons["collision"] += 1
+                continue
+            world = World(NATIVE_VERSION, 0, 41000 + scene_index, tuple(objects + [item]), 1e-6)
+            observation = render_frame(source, world, ray, _native_response, _native_trace)
+            if np.count_nonzero((observation.object_ids == item.object_id) & (point_targets(observation.frame) == 1)) < 5:
+                reasons["visibility"] += 1
+                continue
+            accepted = item
+            proposals.append(dict(object_id=item.object_id, geometry=geometry_name, anchor_frame=frame_index,
+                support_points=len(nearby), support_p95_m=float(np.quantile(residual, .95)),
+                normal_world=up.tolist(), pose=item.pose.tolist(), material=asdict(material), rejected=reasons))
+            objects.append(item)
+            break
+        if accepted is None:
+            proposals.append(dict(object_id=ordinal + 1, geometry=geometry_name, accepted=False, rejected=reasons))
+    world = World(NATIVE_VERSION, 0, 41000 + scene_index, tuple(objects), 1e-6)
+    destination.mkdir(parents=True, exist_ok=True)
+    output_records, skipped = [], []
+    for index, record in enumerate(records):
+        if index not in chosen:
+            output_records.append(record)
+            continue
+        observed = render_frame(frames[index], world, rays[index], _native_response, _native_trace)
+        selected = supervision(observed.frame)
+        if not selected.eligible:
+            skipped.append(dict(token=record["token"], anomaly=selected.anomaly_count))
+            continue
+        slots = np.flatnonzero(observed.inserted | observed.occluded_original).astype(np.int32)
+        path = destination / f"{index}.npz"
+        np.savez_compressed(path, token=record["token"], slots=slots, xyzi=observed.frame.xyzi[slots],
+                            labels=observed.frame.labels[slots], inserted=np.flatnonzero(observed.inserted),
+                            occluded=np.flatnonzero(observed.occluded_original), object_ids=observed.object_ids[slots])
+        output_records.append(dict(record, group="anomaly_nuscenes", delta=str(path.resolve()),
+            geometry=[item.geometry_id for item in objects], world=str(metadata_path.resolve()),
+            normal=selected.normal_count, anomaly=selected.anomaly_count, points=int(observed.frame.actual.sum())))
+    result = dict(scene=records[0]["scene"], log_token=records[0]["log_token"], seed=world.seed,
+                  objects=proposals, rays=diagnostics, records=output_records, skipped=skipped,
+                  collision_scope="all measured non-ground points in the eight selected scans; unseen surfaces unknown")
+    write_json(metadata_path, result)
+    return result
+
+
+def generate_native(output, *, pool_root, workers=8, limit=None):
+    import json
+    import multiprocessing as mp
+    from concurrent.futures import ProcessPoolExecutor
+    from pathlib import Path
+    global _native_mapping, _native_shapes, _native_response, _native_trace
+    output, pool_root = Path(output), Path(pool_root)
+    normal = json.loads((output.parent / "background.json").read_text())
+    pose_path = output / "poses.json"
+    if not pose_path.exists():
+        write_json(pose_path, dict(records=nuscenes_poses(normal["records"]), source_manifest=normal["sha256"]))
+    poses = json.loads(pose_path.read_text())
+    if poses["source_manifest"] != normal["sha256"]:
+        raise ValueError("native poses belong to another background pool")
+    _native_mapping = normal["mapping"]
+    response_path = output / "response.json"
+    if response_path.exists():
+        response = json.loads(response_path.read_text())
+        _native_response = Response(response["range_edges"], response["incidence_edges"], response["quantiles"],
+            response["probability"], response["intensity"], (0., 1.), 1 / 255, "saved nuScenes training-only planar response")
+    else:
+        _native_response, response = fit_native_response(poses["records"], normal["mapping"], workers)
+        write_json(response_path, response)
+    base = json.loads(Path("assets/train.json").read_text())
+    shapes = {}
+    for world in base["worlds"]:
+        saved = json.loads((pool_root / world["paths"][0] / "world.json").read_text())
+        for item in saved["world"]["objects"]:
+            shape = item["shape"]
+            shapes.setdefault(identity(shape), shape)
+    _native_trace = Trace(96, 8, 24, 1e-5, 4., 1e-5, 1e-5, 1e-9)
+    geometry_path = output / "geometry.json"
+    cached = json.loads(geometry_path.read_text()) if geometry_path.exists() else None
+    if cached is not None and cached.get("source_shapes") == sorted(shapes) and cached["trace"] == asdict(_native_trace):
+        _native_shapes = [(r["id"], Grounding(Shape(**r["shape"]), r["lower_z"], r["refined_lower_z"],
+                           r["buried_fraction"], np.empty((0, 3)), True)) for r in cached["records"]]
+        rejected_shapes = cached["rejected"]
+    else:
+        with ProcessPoolExecutor(max_workers=workers, mp_context=mp.get_context("fork")) as pool:
+            checked = list(pool.map(_native_geometry, sorted(shapes.items())))
+        _native_shapes = [(name, grounding) for name, grounding in checked if grounding.accepted]
+        rejected_shapes = [name for name, grounding in checked if not grounding.accepted]
+    if not _native_shapes:
+        raise ValueError("no reused geometry passed direct grounding checks")
+    write_json(geometry_path, dict(records=[dict(id=name, shape=asdict(g.shape), lower_z=g.lower_z,
+        refined_lower_z=g.refined_lower_z, buried_fraction=g.buried_fraction) for name, g in _native_shapes],
+        candidate_geometries=len(shapes), source_shapes=sorted(shapes), rejected=rejected_shapes, trace=asdict(_native_trace)))
+    scenes = {}
+    for record in poses["records"]:
+        scenes.setdefault(record["scene"], []).append(record)
+    tasks = [(i, sorted(records, key=lambda r: r["timestamp"]), str(output)) for i, (_, records) in enumerate(sorted(scenes.items()))]
+    if any(len(records) != 8 for _, records, _ in tasks):
+        raise ValueError("the 4+4 native design requires exactly eight selected keyframes per scene")
+    if limit is not None:
+        tasks = tasks[:limit]
+    completed = []
+    with ProcessPoolExecutor(max_workers=workers, mp_context=mp.get_context("fork")) as pool:
+        for row in pool.map(_native_scene, tasks):
+            completed.append(row)
+            print(json.dumps(dict(scene=row["scene"], scans=len(row["records"]), skipped=len(row["skipped"]))), flush=True)
+    result = dict(version=NATIVE_VERSION, kind="native", mapping=normal["mapping"], split=normal["split"],
+                  normal_manifest=normal["sha256"], scenes=[r["scene"] for r in completed],
+                  records=[r for row in completed for r in row["records"]],
+                  skipped=[r for row in completed for r in row["skipped"]],
+                  response=str(response_path.resolve()), geometry=str((output / "geometry.json").resolve()))
+    result["sha256"] = identity(result)
+    write_json(output / "manifest.json", result)
+
+
 if __name__ == "__main__":
     import argparse
     import os
@@ -536,7 +797,12 @@ if __name__ == "__main__":
     parser.add_argument("--data-root", type=Path, default=Path("/home/jasongao/Data/STU"))
     parser.add_argument("--pool-root", type=Path, default=Path("/home/jasongao/Study/AJAE/results/synthetic"))
     parser.add_argument("--workers", type=int, default=8)
+    parser.add_argument("--native", action="store_true")
+    parser.add_argument("--limit", type=int)
     args = parser.parse_args()
     if not 1 <= args.workers <= len(os.sched_getaffinity(0)):
         parser.error("workers must fit the current CPU affinity")
-    generate_candidates(args.output, data_root=args.data_root, pool_root=args.pool_root, workers=args.workers)
+    if args.native:
+        generate_native(args.output, pool_root=args.pool_root, workers=args.workers, limit=args.limit)
+    else:
+        generate_candidates(args.output, data_root=args.data_root, pool_root=args.pool_root, workers=args.workers)

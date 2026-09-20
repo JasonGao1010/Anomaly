@@ -20,10 +20,10 @@ import torch.distributed as dist
 from torch import nn
 from torch.utils.data import DataLoader
 
-from .data import (VERSION, PILOT_VERSION, CONTINUATION_VERSION, file_sha256, identity,
+from .data import (VERSION, PILOT_VERSION, CONTINUATION_VERSION, NATIVE_VERSION, file_sha256, identity,
                    load_manifest, replace_background, write_json)
 from .evaluate import PreparedScans, autocast, better, evaluate, memory_available, precision
-from .model import (POINT_CHUNK, Segmentor, balanced_loss, to_device,
+from .model import (POINT_CHUNK, Segmentor, balanced_loss, ranking_loss, to_device,
                     LITEPT_COMMIT, WEIGHTS_REVISION, WEIGHTS_SHA256)
 
 
@@ -56,6 +56,11 @@ def effective_batches(order, rank=0, world_size=1):
 
 def pilot_order(manifest, seed, updates, *, sampling=None, segment=0, paired=False, background=None):
     """Source quotas stay fixed; a new segment gets its own reproducible permutation."""
+    if manifest.get("version") == NATIVE_VERSION:
+        order = epoch_order(len(manifest["records"]), seed, 1, 0) + epoch_order(len(manifest["records"]), seed, 1, 1)
+        if updates != math.ceil(len(order) / BATCH_SIZE):
+            raise ValueError("native training visits every fixed record exactly twice")
+        return order
     if background:
         reference = load_manifest(background["manifest"], "train")
         saved = json.loads(Path(background["sampling"]).read_text())
@@ -143,6 +148,23 @@ def lr_factor(step, total):
     if step <= warmup:
         return .1 + .9 * (step - 1) / (warmup - 1)
     return .01 + .99 * .5 * (1 + math.cos(math.pi * (step - warmup) / (total - warmup)))
+
+
+def ranking_weight(step, total):
+    return min(1., max(0., (step / total - .1) / .1))
+
+
+def forward_loss(model, samples, counts, *, rank_weight=0., rank_seed=0):
+    """Retain both full-scan graphs; concatenate scores only for the training objective."""
+    predictions = [model(sample) for sample in samples]
+    prediction = torch.cat(predictions)
+    targets = torch.cat([sample["targets"] for sample in samples])
+    bce = balanced_loss(prediction, targets, counts)
+    if rank_weight:
+        rank, details = ranking_loss(prediction, targets, rank_seed)
+    else:
+        rank, details = bce * 0, {}
+    return bce + rank_weight * rank, dict(bce=bce.detach(), **details)
 
 
 def optimizer_for(model, stage):
@@ -262,7 +284,7 @@ def code_record():
 
 
 def configuration(train, val, device, world_size, *, updates=None, initial=None,
-                  eval_every=None, recipe="mixed", optimizer_state="reset", segment=0):
+                  eval_every=None, recipe="mixed", optimizer_state="reset", segment=0, objective="bce"):
     result = dict(version=CONTINUATION_VERSION if updates is not None else VERSION, data_version=train["version"], seeds=[0],
                 train_manifest=train["sha256"], val_manifest=val["sha256"],
                 val_directory=val["directory"], samples=len(train["records"]), epochs=EPOCHS,
@@ -272,6 +294,27 @@ def configuration(train, val, device, world_size, *, updates=None, initial=None,
                 augmentation=False, point_chunk=POINT_CHUNK, grid_size=.05,
                 precision=str(precision(device)), sparse_precision="float32", world_size=world_size,
                 code=code_record())
+    if recipe == "native":
+        visits = 2 * len(train["records"])
+        if (train["version"] != NATIVE_VERSION or updates != math.ceil(visits / BATCH_SIZE)
+                or optimizer_state != "reset" or file_sha256(initial) != WEIGHTS_SHA256 or world_size != 1):
+            raise ValueError("native training requires two complete passes and fresh public nuScenes initialization")
+        result.update(version=NATIVE_VERSION, updates=updates, epochs=2,
+                      initial=str(initial.resolve()), initial_sha256=WEIGHTS_SHA256,
+                      peak_lr=PEAK_LR[0], scan_visits=visits,
+                      sampling="two complete shuffled passes; final batch may contain fewer than eight scans",
+                      sampling_segment=0, recipe=recipe, optimizer_state="reset", eval_every=eval_every,
+                      microbatch=2, objective=objective,
+                      loss=dict(bce="class means over all effective-batch supervised points",
+                                pairs="consecutive pairs, averaged within each effective batch",
+                                tau=1., ap_weight=1., auc_weight=.1, fpr95_weight=.1,
+                                positive_anchors=256, positive_references="all", normal_top=512, normal_random=3584,
+                                normal_weights="top: 1; rest: population / sample; normalize by full normal count",
+                                auc_positives="uniform anchors", threshold_recall=.95,
+                                threshold_gradient="implicit", bce_only_fraction=.1, ramp_end_fraction=.2,
+                                rank_seed="seed * 100000000 + update * 8 + pair_index; independent torch generator"),
+                      validation="full STU validation every interval and at the fixed endpoint; no inherited anomaly-task weights")
+        return result
     if updates is not None:
         sampling = {"mixed": dict(base=4, targeted=2, normal_nuscenes=1, normal_stu=1),
                     "old": dict(base=8), "paired": dict(base=6, normal_nuscenes=1, normal_stu=1),
@@ -353,6 +396,8 @@ def write_result(directory, state, config):
                best_update=min(state["best_epoch"] * config.get("eval_every", config.get("updates", 0)),
                                config.get("updates", 0)) if config.get("updates") else None,
                final_metrics=state.get("final_metrics"),
+               objective=config.get("objective", "bce"),
+               training_seconds=state.get("training_seconds"), validation_seconds=state.get("validation_seconds"),
                planned_updates=state["planned_updates"], successful_updates=state["successful_updates"],
                overflows=state["overflows"], parameters=state["parameters"],
                train_manifest_sha256=config.get("train_manifest"), val_manifest_sha256=config.get("val_manifest"),
@@ -364,10 +409,11 @@ def train_stage(args, train, val, seed, method, device, config):
     if seed != 0:
         raise ValueError("F240-R2 fixes the sole experiment seed to 0")
     rank, world_size = rank_info()
-    pilot = method == "pilot"
-    stage = 1 if method == "base" else 2
-    parent = torch.load(args.initial, map_location="cpu", weights_only=False) if pilot else None
-    mode = parent["mode"] if pilot else "base" if method in ("base", "continue") else method
+    native = method == "conditional"
+    pilot = method in ("pilot", "conditional")
+    stage = 1 if method == "base" or native else 2
+    parent = torch.load(args.initial, map_location="cpu", weights_only=False) if pilot and not native else None
+    mode = "conditional" if native else parent["mode"] if pilot else "base" if method in ("base", "continue") else method
     directory = args.output / str(seed) / method
     if rank == 0:
         directory.mkdir(parents=True, exist_ok=True)
@@ -391,7 +437,7 @@ def train_stage(args, train, val, seed, method, device, config):
             return True
         model.load_state_dict(saved["model"], strict=True)
     elif stage == 1:
-        load_record = model.load_pretrained(args.weights)
+        load_record = model.load_pretrained(args.initial if native else args.weights)
     elif pilot:
         if (not parent.get("complete") or not parent.get("selected") or
                 parent["validation"]["manifest_sha256"] != val["sha256"]):
@@ -423,12 +469,13 @@ def train_stage(args, train, val, seed, method, device, config):
     state = dict(seed=seed, method=method, stage=stage, epoch=0, next_batch=0, planned_updates=0,
                  successful_updates=0, overflows=0, best_epoch=None, best_metrics=None,
                  epoch_loss=0., epoch_points=[0, 0], epoch_frames=0, complete=False,
-                 parameters=sum(p.numel() for p in model.parameters()), final_metrics=None)
+                 parameters=sum(p.numel() for p in model.parameters()), final_metrics=None,
+                 training_seconds=0., validation_seconds=0.)
     if resume:
         optimizer.load_state_dict(saved["optimizer"])
         scaler.load_state_dict(saved["scaler"])
         for key in state:
-            state[key] = saved[key]
+            state[key] = saved.get(key, state[key])
         restore_rng(saved["rng"][rank], device)
         del saved
     else:
@@ -459,6 +506,10 @@ def train_stage(args, train, val, seed, method, device, config):
         full_order = pilot_order(train, seed, total, sampling=config.get("sampling"),
                                  segment=config.get("sampling_segment", 0), paired=config.get("recipe") == "paired",
                                  background=config.get("background_reference"))
+        if native and rank == 0:
+            write_json(directory / "sampling.json", dict(train_manifest=train["sha256"], order=full_order,
+                sources=source_counts(train, full_order), distinct_records=len(set(full_order)),
+                passes=2, scans_per_pass=len(train["records"]), visits=len(full_order)))
         if config.get("recipe") == "paired" and rank == 0:
             paired_updates = min(total, PAIRED_UPDATES)
             reference = pilot_order(train, seed, paired_updates)
@@ -495,6 +546,7 @@ def train_stage(args, train, val, seed, method, device, config):
         model.train()
         torch.cuda.reset_peak_memory_stats(device)
         for batch_number in range(first_batch, len(batches)):
+            update_start = time.perf_counter()
             local_indices = batches[batch_number]
             samples = [next(iterator) for _ in local_indices]
             counts = torch.zeros(2, dtype=torch.int64, device=device)
@@ -513,16 +565,26 @@ def train_stage(args, train, val, seed, method, device, config):
                 group["lr"] = group["peak_lr"] * lr_factor(step, total)
             sync_buffers(model)
             loss_sum = torch.zeros((), device=device)
-            for sample in samples:
-                batch = to_device(sample, device)
+            components, pair_details = dict(bce=0., ap=0., auc=0., fpr95=0.), []
+            pair_size = config["microbatch"] if native else 1
+            pair_count = math.ceil(len(samples) / pair_size)
+            ramp = ranking_weight(step, total) if config.get("objective") == "metrics" else 0.
+            for pair_index, begin in enumerate(range(0, len(samples), pair_size)):
+                pair = [to_device(sample, device) for sample in samples[begin:begin + pair_size]]
                 with autocast(device):
-                    prediction = model(batch)
-                    loss = balanced_loss(prediction, batch["targets"], counts)
+                    loss, details = forward_loss(model, pair, counts, rank_weight=ramp / pair_count,
+                                                rank_seed=seed * 100000000 + step * 8 + pair_index)
                 if not torch.isfinite(loss):
                     raise FloatingPointError("nonfinite segmentation loss")
+                if details.get("recall") is not None and abs(float(details["recall"]) - .95) > 2e-6:
+                    raise FloatingPointError("smooth recall threshold did not reach 0.95")
                 scaler.scale(loss).backward()
                 loss_sum += loss.detach()
-                del batch, prediction, loss
+                for key in components:
+                    components[key] += float(details.get(key, 0.)) / (1 if key == "bce" else pair_count)
+                pair_details.append({key: float(value) if isinstance(value, torch.Tensor) else value
+                                     for key, value in details.items() if key not in components})
+                del pair, loss, details
             sync_gradients(model)
             if world_size > 1:
                 dist.all_reduce(loss_sum)
@@ -542,6 +604,7 @@ def train_stage(args, train, val, seed, method, device, config):
             state["epoch_points"] = [a + b for a, b in zip(state["epoch_points"], counts.tolist())]
             state["epoch_frames"] += len(global_indices)
             state["next_batch"] = batch_number + 1
+            state["training_seconds"] += time.perf_counter() - update_start
             need_stop = torch.tensor(int(STOP), device=device)
             if world_size > 1:
                 dist.all_reduce(need_stop, op=dist.ReduceOp.MAX)
@@ -569,6 +632,8 @@ def train_stage(args, train, val, seed, method, device, config):
                            successful=state["successful_updates"], overflow=bool(overflow),
                            lr=[g["lr"] for g in optimizer.param_groups],
                            elapsed_seconds=time.perf_counter() - start,
+                           objective=config.get("objective", "bce"), ranking_weight=ramp,
+                           loss_components=components, pairs=pair_details,
                            peak_vram_bytes=torch.cuda.max_memory_allocated(device))
                 with (directory / "log.jsonl").open("a") as stream:
                     stream.write(json.dumps(row, allow_nan=False) + "\n")
@@ -584,7 +649,9 @@ def train_stage(args, train, val, seed, method, device, config):
         if rank == 0:
             atomic_save(last, saved)
         del saved
+        validation_start = time.perf_counter()
         result = validate_all(model, val, device, args.workers)
+        state["validation_seconds"] += time.perf_counter() - validation_start
         state["final_metrics"] = result["metrics"]
         selected = better(result["metrics"], state["best_metrics"])
         if selected:
@@ -625,36 +692,55 @@ def preflight(args, train, val, device, config, resources):
     """Measure the actual mixed update without changing the initial checkpoint."""
     seed_all(0)
     dataset = PreparedScans(train)
-    indices = pilot_order(train, 0, args.updates, sampling=config["sampling"],
+    order = pilot_order(train, 0, args.updates, sampling=config["sampling"],
                           segment=config["sampling_segment"], paired=config.get("recipe") == "paired",
-                          background=config.get("background_reference"))[:BATCH_SIZE]
-    parent = torch.load(args.initial, map_location="cpu", weights_only=False)
-    model = Segmentor(parent["mode"]).to(device)
-    model.load_state_dict(parent["model"], strict=True)
-    del parent
+                          background=config.get("background_reference"))
+    indices = order[:BATCH_SIZE]
+    if config.get("recipe") == "native":
+        model = Segmentor("conditional").to(device)
+        model.load_pretrained(args.initial)
+    else:
+        parent = torch.load(args.initial, map_location="cpu", weights_only=False)
+        model = Segmentor(parent["mode"]).to(device)
+        model.load_state_dict(parent["model"], strict=True)
+        del parent
     model.train()
     counts = torch.tensor([sum(train["records"][i][key] for i in indices)
                            for key in ("normal", "anomaly")], device=device)
     records = []
     torch.cuda.reset_peak_memory_stats(device)
-    for index in indices:
+    pair_size = config["microbatch"] if config.get("recipe") == "native" else 1
+    groups = [indices[begin:begin + pair_size] for begin in range(0, len(indices), pair_size)]
+    if pair_size == 2:
+        groups.append(max((order[i:i + 2] for i in range(0, len(order), 2)),
+                          key=lambda pair: sum(train["records"][i]["points"] for i in pair)))
+    for pair_index, selected in enumerate(groups):
         start = time.perf_counter()
-        sample = to_device(dataset[index], device)
+        stress = pair_index * pair_size >= len(indices)
+        if stress:
+            model.zero_grad(set_to_none=True)
+            counts = torch.tensor([sum(train["records"][i][key] for i in selected)
+                                   for key in ("normal", "anomaly")], device=device)
+        pair = [to_device(dataset[index], device) for index in selected]
         with autocast(device):
-            prediction = model(sample)
-            loss = balanced_loss(prediction, sample["targets"], counts)
+            loss, details = forward_loss(model, pair, counts,
+                                        rank_weight=(1. if stress else pair_size / len(indices))
+                                        if config.get("objective") == "metrics" else 0.,
+                                        rank_seed=8 + pair_index)
         loss.backward()
         torch.cuda.synchronize(device)
         if not torch.isfinite(loss) or any(p.grad is not None and not torch.isfinite(p.grad).all()
                                           for p in model.parameters()):
             raise ValueError("nonfinite mixed-batch backward")
-        records.append(dict(index=index, group=train["records"][index]["group"],
-                            points=len(prediction), seconds=time.perf_counter() - start,
-                            loss=float(loss.detach())))
-        del sample, prediction, loss
-    result = dict(version=PILOT_VERSION, configuration=config, resources=resources,
+        records.append(dict(indices=selected, stress=stress, groups=[train["records"][i]["group"] for i in selected],
+                            points=[len(sample["xyzi"]) for sample in pair], seconds=time.perf_counter() - start,
+                            loss=float(loss.detach()),
+                            details={key: float(value) if isinstance(value, torch.Tensor) else value
+                                     for key, value in details.items()}))
+        del pair, loss, details
+    result = dict(version=config["version"], configuration=config, resources=resources,
                   scans=records, parameter_updates=0,
-                  mixed_batch_seconds=sum(row["seconds"] for row in records),
+                  mixed_batch_seconds=sum(row["seconds"] for row in records if not row["stress"]),
                   peak_vram_bytes=torch.cuda.max_memory_allocated(device))
     write_json(args.output / "preflight.json", result)
     print(json.dumps({key: result[key] for key in
@@ -670,7 +756,8 @@ def main():
     parser.add_argument("--initial", type=Path, default=Path("results/train/r2/0/base/best.pt"))
     parser.add_argument("--updates", type=int, default=2000)
     parser.add_argument("--eval-every", type=int, default=500)
-    parser.add_argument("--recipe", choices=("mixed", "old", "paired", "background"), default="paired")
+    parser.add_argument("--recipe", choices=("mixed", "old", "paired", "background", "native"), default="paired")
+    parser.add_argument("--objective", choices=("bce", "metrics"), default="bce")
     parser.add_argument("--optimizer-state", choices=("inherit", "reset"), default="reset")
     parser.add_argument("--sampling-segment", type=int, default=0)
     parser.add_argument("--seeds", type=int, nargs="+", choices=(0,), default=[0],
@@ -701,11 +788,16 @@ def main():
         parser.error("background comparison requires --normal-manifest and no other recipe accepts it")
     if args.normal_manifest:
         train = replace_background(train, args.normal_manifest, args.train_manifest)
-    if train["version"] != PILOT_VERSION:
-        parser.error("the pilot requires the new mixed training manifest")
+    if train["version"] not in (PILOT_VERSION, NATIVE_VERSION):
+        parser.error("training requires a mixed or native two-domain manifest")
+    if args.recipe == "native":
+        args.updates = math.ceil(2 * len(train["records"]) / BATCH_SIZE)
+    elif args.objective != "bce":
+        parser.error("the paired metric objective is only defined for the native experiment")
     config = configuration(train, val, device, world_size, updates=args.updates, initial=args.initial,
                            eval_every=args.eval_every, recipe=args.recipe,
-                           optimizer_state=args.optimizer_state, segment=args.sampling_segment)
+                           optimizer_state=args.optimizer_state, segment=args.sampling_segment,
+                           objective=args.objective)
     resources = runtime_snapshot() if rank == 0 else None
     if args.workers * world_size + args.threads * world_size > len(os.sched_getaffinity(0)):
         parser.error("worker and BLAS thread counts exceed the available CPU affinity")
@@ -737,13 +829,13 @@ def main():
     signal.signal(signal.SIGTERM, stop_requested)
     if rank == 0:
         print(json.dumps(dict(version=config["version"], seeds=args.seeds,
-                              methods=["pilot"],
+                              methods=["conditional" if args.recipe == "native" else "pilot"],
                               samples=config["samples"], sampling=config["sampling"],
                               eval_every=args.eval_every, optimizer_state=args.optimizer_state,
                               planned_updates=args.updates,
                               output=str(args.output.resolve()))), flush=True)
     for seed in args.seeds:
-        if not train_stage(args, train, val, seed, "pilot", device, config):
+        if not train_stage(args, train, val, seed, "conditional" if args.recipe == "native" else "pilot", device, config):
             return
     if dist.is_initialized():
         dist.destroy_process_group()

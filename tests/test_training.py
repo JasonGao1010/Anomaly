@@ -15,10 +15,97 @@ from torch.nn import functional as F
 from src.data import (Frame, Scans, MANIFEST_VERSION, VERSION, load_manifest, point_targets, read_delta,
                       STUSequence, restore_delta, supervision, unified_labels)
 from src.evaluate import better, summarize
-from src.model import (CHANNELS, Interaction, Segmentor, balanced_loss, prepare_scan,
-                       scatter_scores, voxelize)
+from src.model import (CHANNELS, Conditional, Interaction, Segmentor, balanced_loss, prepare_scan,
+                       ranking_loss, rank_sample, RecallThreshold, scatter_scores, voxelize)
 from src.train import (EPOCHS, configuration, effective_batches, epoch_order, lr_factor, optimizer_for, pilot_order,
-                       rng_state, restore_rng, seed_all)
+                       forward_loss, ranking_weight, rng_state, restore_rng, seed_all)
+
+
+def test_metric_proxies_match_complete_small_ranking_and_ignore_unlabelled():
+    scores = torch.tensor([-.2, 2., .7, -1., 1.2, 999.], requires_grad=True)
+    labels = torch.tensor([0, 1, 1, 0, 0, -1])
+    loss, detail = ranking_loss(scores, labels, 7)
+    p, n = scores[labels == 1], scores[labels == 0]
+    precisions = []
+    for i, anchor in enumerate(p):
+        ahead = 1 + sum(torch.sigmoid(other - anchor) for j, other in enumerate(p) if i != j)
+        precisions.append(ahead / (ahead + sum(torch.sigmoid(other - anchor) for other in n)))
+    ap = 1 - torch.stack(precisions).mean()
+    auc = torch.stack([F.softplus(normal - anomaly) for anomaly in p for normal in n]).mean()
+    t = detail["threshold"]
+    fpr = torch.sigmoid(n - t).mean()
+    torch.testing.assert_close(detail["ap"], ap)
+    torch.testing.assert_close(detail["auc"], auc)
+    torch.testing.assert_close(detail["fpr95"], fpr)
+    torch.testing.assert_close(loss, ap + .1 * auc + .1 * fpr)
+    assert abs(float(detail["recall"]) - .95) < 2e-6
+    loss.backward()
+    assert scores.grad[-1] == 0 and torch.isfinite(scores.grad).all()
+    assert abs(float(scores.grad.sum())) < 2e-7
+
+
+def test_recall_threshold_implicit_gradient_and_positive_tail_direction():
+    from scipy.optimize import brentq
+    from scipy.special import expit
+    positive = torch.tensor([-1.3, -.2, .8, 2.1], requires_grad=True)
+    threshold = RecallThreshold.apply(positive, 1., .95)
+    threshold.backward()
+    differences = []
+    values = positive.detach().numpy().astype(float)
+    for i in range(len(positive)):
+        direction = np.zeros_like(values)
+        direction[i] = .001
+        roots = [brentq(lambda t: expit(values + sign * direction - t).mean() - .95, -40, 40)
+                 for sign in (1, -1)]
+        differences.append((roots[0] - roots[1]) / .002)
+    torch.testing.assert_close(positive.grad, torch.tensor(differences, dtype=torch.float32), atol=2e-6, rtol=2e-5)
+    torch.testing.assert_close(positive.grad.sum(), torch.tensor(1.))
+    assert positive.grad[0] > positive.grad[-1] > 0
+    positive.grad = None
+    negative = torch.tensor([-.3, 1.], requires_grad=True)
+    fpr = torch.sigmoid(negative - RecallThreshold.apply(positive, 1., .95)).mean()
+    fpr.backward()
+    assert torch.all(positive.grad < 0) and torch.all(negative.grad > 0)
+    assert abs(float(positive.grad.sum() + negative.grad.sum())) < 1e-7
+
+
+def test_rank_sampling_inclusion_weights_and_independent_random_stream():
+    torch.manual_seed(71)
+    state = torch.get_rng_state().clone()
+    p, n = torch.linspace(-2, 3, 1000), torch.arange(9000, dtype=torch.float32)
+    a, selected, weights, top = rank_sample(p, n, 91)
+    assert len(a) == 256 and len(a.unique()) == 256
+    assert len(selected) == 4096 and len(selected.unique()) == 4096 and top == 512
+    assert set(selected[:512].tolist()) == set(range(8488, 9000))
+    torch.testing.assert_close(weights.sum(), torch.tensor(9000.))
+    torch.testing.assert_close(weights[512:], torch.full((3584,), 8488 / 3584))
+    assert torch.equal(torch.get_rng_state(), state)
+    for first, repeated in zip((a, selected, weights), rank_sample(p, n, 91)[:3]):
+        assert torch.equal(first, repeated)
+    for count in (1, 511, 512, 4096):
+        _, selected, weights, _ = rank_sample(p[:1], n[:count], 91)
+        assert len(selected) == count and torch.equal(weights, torch.ones(count))
+
+
+def test_cross_scan_ranking_reaches_both_graphs_and_bce_only_pairs():
+    class Score(nn.Module):
+        def forward(self, sample):
+            return sample["score"]
+    positive = torch.tensor([.2, .7], requires_grad=True)
+    negative = torch.tensor([-.1, .5, 1.], requires_grad=True)
+    pair = [dict(score=positive, targets=torch.ones(2, dtype=torch.long)),
+            dict(score=negative, targets=torch.zeros(3, dtype=torch.long))]
+    counts = torch.tensor([3, 2])
+    combined, details = forward_loss(Score(), pair, counts, rank_weight=1., rank_seed=8)
+    bce, _ = forward_loss(Score(), pair, counts)
+    (combined - bce).backward()
+    assert torch.all(positive.grad < 0) and torch.all(negative.grad > 0)
+    assert details["positive"] == 2 and details["negative"] == 3
+    only, details = ranking_loss(negative, pair[1]["targets"], 8)
+    assert float(only.detach()) == 0 and details["threshold"] is None
+    assert ranking_weight(1, 1000) == ranking_weight(100, 1000) == 0
+    assert ranking_weight(150, 1000) == pytest.approx(.5)
+    assert ranking_weight(200, 1000) == ranking_weight(1000, 1000) == 1
 from vendor.litept.pointrope import PointROPE
 from vendor.stu.compute_point_level_ood import PointOODMetricsCalculator
 
@@ -82,6 +169,37 @@ def test_pilot_normal_rule_and_balanced_source_schedule():
     for batch in effective_batches(order):
         assert [sum(records[i]["group"] == group for i in batch) for group in
                 ("base", "targeted", "normal_nuscenes", "normal_stu")] == [4, 2, 1, 1]
+
+
+def test_native_two_passes_preserve_every_record_and_partial_final_batch():
+    from src.data import NATIVE_VERSION
+    manifest = dict(version=NATIVE_VERSION, records=[dict(group="normal_nuscenes") for _ in range(19)])
+    order = pilot_order(manifest, 0, 5)
+    assert len(order) == 38 and sorted(order[:19]) == sorted(order[19:]) == list(range(19))
+    assert len(list(effective_batches(order))[-1]) == 6
+    assert order == pilot_order(manifest, 0, 5)
+    with pytest.raises(ValueError, match="exactly twice"):
+        pilot_order(manifest, 0, 6)
+
+
+def test_conditional_interaction_learns_from_sampling_and_each_context_scale():
+    torch.manual_seed(41)
+    layer = Conditional()
+    detail = torch.randn(7, 128, requires_grad=True)
+    xyz = torch.randn(7, 3)
+    sizes = [7, 5, 3, 2, 1, 7]
+    features = [torch.randn(n, c, requires_grad=True) for n, c in zip(sizes, (*CHANNELS, 72))]
+    indices = [torch.arange(7) % n for n in sizes]
+    coords = [torch.randn(n, 3) for n in sizes]
+    output = layer(detail, xyz, indices, coords, features)
+    (output * torch.randn_like(output)).sum().backward()
+    assert detail.grad.abs().sum() > 0
+    assert all(x.grad.abs().sum() > 0 for x in features)
+    assert all(p.grad is not None and torch.isfinite(p.grad).all() for p in layer.parameters())
+    for update in layer.layers:
+        assert update["query"].weight.grad.abs().sum() > 0
+    changed = layer(detail.detach() + torch.randn_like(detail), xyz, indices, coords, features)
+    assert not torch.allclose(output, changed)
 
 
 def test_nuscenes_raw_order_intensity_and_ignored_context(tmp_path):

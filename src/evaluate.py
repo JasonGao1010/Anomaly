@@ -10,7 +10,7 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
-from .data import (Scans, VERSION, PILOT_VERSION, CONTINUATION_VERSION, load_manifest, make_real_manifest,
+from .data import (Scans, VERSION, PILOT_VERSION, CONTINUATION_VERSION, NATIVE_VERSION, load_manifest, make_real_manifest,
                    read_scan, write_json)
 from .model import Segmentor, prepare_scan, scatter_scores, to_device
 from vendor.stu.compute_point_level_ood import PointOODMetricsCalculator
@@ -104,7 +104,7 @@ def evaluate(model, manifest, device, workers=4):
 
 def load_model(path, device):
     saved = torch.load(path, map_location="cpu", weights_only=False)
-    if saved.get("version") not in (VERSION, PILOT_VERSION, CONTINUATION_VERSION):
+    if saved.get("version") not in (VERSION, PILOT_VERSION, CONTINUATION_VERSION, NATIVE_VERSION):
         raise ValueError("checkpoint does not belong to a supported V4 experiment")
     model = Segmentor(saved["mode"])
     model.load_state_dict(saved["model"], strict=True)
