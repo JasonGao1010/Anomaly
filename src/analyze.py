@@ -890,7 +890,7 @@ def anomaly_views(directory):
                 mask = np.array([r["group"] == group for r in rows])
                 coordinates = (values[mask,0],np.log10(values[mask,1]),values[mask,2]) if three else (values[mask,x],values[mask,y])
                 options = dict(depthshade=False) if three else {}
-                ax.scatter(*coordinates,s=.55,alpha=.4,c=color,marker=marker,linewidths=0,
+                ax.scatter(*coordinates,s=2,alpha=.6,c=color,marker=marker,linewidths=0,
                            rasterized=True,label=f"{label}  ({mask.sum():,})",**options)
             if three:
                 ax.set_box_aspect((1,1,1))
@@ -924,7 +924,7 @@ def anomaly_views(directory):
                 ax.tick_params(colors="#333d48")
             fig.suptitle(title,fontproperties=FontProperties(fname=fonts["zh"],size=22),y=.96)
             handles,names = ax.get_legend_handles_labels()
-            legend=fig.legend(handles,names,loc="upper center",bbox_to_anchor=(.54,.905),ncol=2,frameon=False,markerscale=8)
+            legend=fig.legend(handles,names,loc="upper center",bbox_to_anchor=(.54,.905),ncol=2,frameon=False,markerscale=4)
             for handle in legend.legend_handles:
                 handle.set_alpha(1.)
             fig.text(.12,.083,"每点对应一帧，仅统计异常点；全部异常帧均保留，无抽帧或坐标扰动。",fontproperties=chinese)
@@ -943,7 +943,7 @@ def anomaly_views(directory):
             fig.savefig(path,dpi=240,facecolor="white")
             pdf.savefig(fig,facecolor="white",dpi=240)
             files.append(str(path));plt.close(fig)
-    print(json.dumps(dict(figures=files,anomalous_scans=len(rows),point_area=0.55,image_pixels=[2880,2400])))
+    print(json.dumps(dict(figures=files,anomalous_scans=len(rows),point_area=2,image_pixels=[2880,2400])))
 
 
 def main():
