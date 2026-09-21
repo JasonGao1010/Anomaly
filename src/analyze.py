@@ -594,16 +594,34 @@ def native_relations_scene(records):
     """Count actual supervised views per placed object, including 1--4 point views."""
     anomalous = [r for r in records if r["anomaly"]]
     paths = {r["world"] for r in anomalous}
+    keys = {}
+    for path in paths:
+        saved = json.loads(Path(path).read_text())
+        keys[path] = identity(dict(seed=saved["seed"],objects=saved["objects"]))
+    grouped = defaultdict(list)
+    for record in anomalous:
+        grouped[keys[record["world"]]].append(record)
+    return [row for group in grouped.values() for row in fixed_world_relations(group)]
+
+
+def fixed_world_relations(anomalous):
+    """Multiple counterfactual worlds may use the same original acquisition scene."""
+    paths = {r["world"] for r in anomalous}
     worlds = [json.loads(Path(p).read_text()) for p in sorted(paths)]
     saved = worlds[0]
     # Retained and added scans can reference separate files for the same world.
     if any((w["seed"], w["objects"]) != (saved["seed"], saved["objects"]) for w in worlds[1:]):
-        raise ValueError("one native scene must identify one fixed synthetic world")
+        raise ValueError("object views must identify one fixed synthetic world")
     objects = {o["object_id"]: o for o in saved["objects"] if o.get("accepted", True)}
     observations = defaultdict(list)
     for record in anomalous:
         with np.load(record["delta"], allow_pickle=False) as delta:
-            if str(delta["token"]) != record["token"]:
+            if record.get("source") == "rendered_stu":
+                if (int(delta["frame"]) != record["frame"] or
+                        str(delta["world"]) != record["world"] or
+                        str(delta["source_identity"]) != record["source_identity"]):
+                    raise ValueError("STU delta belongs to another scan or world")
+            elif str(delta["token"]) != record["token"]:
                 raise ValueError("native delta belongs to another scan")
             frame = Frame(record["frame"], delta["xyzi"], np.asarray(record["pose"]), delta["labels"])
             valid = point_targets(frame) == 1
@@ -612,7 +630,7 @@ def native_relations_scene(records):
                 raise ValueError("native object views do not reproduce supervised anomaly counts")
             for number in np.unique(ids[valid]):
                 mask = valid & (ids == number)
-                observations[int(number)].append(dict(token=record["token"], frame=record["frame"],
+                observations[int(number)].append(dict(token=record.get("token", ""), frame=record["frame"],
                     count=int(mask.sum()), return_range_m=float(np.median(frame.range_m[mask])),
                     origin=np.asarray(record["pose"])[:3, 3]))
     rows = []
@@ -622,7 +640,8 @@ def native_relations_scene(records):
         directions = view_directions([s["origin"] for s in seen], pose[:3, 3], pose[:3, :3]) if seen else []
         ranges = [s["return_range_m"] for s in seen]
         rows.append(dict(scene=saved["scene"], log_token=saved["log_token"], object_id=number,
-            geometry=obj["geometry"], anchor_index=obj["anchor_frame"], views=len(seen),
+            world=str(sorted(paths)[0]),geometry=obj.get("source_geometry",obj["geometry"]),
+            variant_geometry=obj["geometry"],anchor_index=obj["anchor_frame"], views=len(seen),
             views_1_to_4_points=sum(s["count"] < 5 for s in seen),
             points=sum(s["count"] for s in seen), view_angle_span_deg=angular_span(directions),
             return_range_min_m=min(ranges) if ranges else None,
@@ -682,7 +701,7 @@ def sampling_relations(args):
     for record in base["records"]:
         grouped[record["world"]].append(record)
     for record in train["records"]:
-        if record["group"] == "anomaly_stu":
+        if record["group"] == "anomaly_stu" and record.get("source") != "rendered_stu":
             selected[record["world"]].add(record["frame"])
     with ProcessPoolExecutor(max_workers=args.workers) as pool:
         distances = dict(zip(((r["world"], r["frame"]) for r in base["records"]),
@@ -745,6 +764,10 @@ def sampling_relations(args):
             native[record["scene"]].append(record)
     with ProcessPoolExecutor(max_workers=args.workers) as pool:
         objects = [row for scene in pool.map(native_relations_scene, native.values()) for row in scene]
+        directed_stu = [r for r in train["records"] if r.get("source") == "rendered_stu"]
+        directed = native_relations_scene(directed_stu) if directed_stu else []
+    for row in directed:
+        geometry[row["geometry"]]["stu_worlds"].add(row["world"])
     for row in objects:
         group = geometry[row["geometry"]]
         group["scenes"].add(row["scene"])
@@ -769,8 +792,10 @@ def sampling_relations(args):
     # Descriptive bins only: marginal overlap is not geometric similarity or a
     # test of contextual reasoning. Normal instance rows omit uninstanced roads.
     range_edges, count_edges = [2.5, 10, 20, 35, 50.00001], [1, 5, 10, 20, 50, 100, 500, float("inf")]
+    directed_views = [(float(d), int(n)) for o in directed
+                      for d, n in zip(o["return_ranges_m"].split(";"), o["counts"].split(";")) if n]
     populations = dict(stu_normal_instances=[(float(r["range_valid_m_median"]), int(r["returns_2p5_50m"])) for r in normal],
-                       stu_anomaly_all=all_stu, stu_anomaly_selected=selected_stu,
+                       stu_anomaly_existing_candidates=all_stu, stu_anomaly_selected=selected_stu+directed_views,
                        nuscenes_anomaly_objects=[(float(d), int(n)) for o in objects
                            for d, n in zip(o["return_ranges_m"].split(";"), o["counts"].split(";")) if n])
     histograms = {}
@@ -799,12 +824,16 @@ def sampling_relations(args):
         definitions=dict(view_angle="Maximum angle between object-to-sensor reference-pose unit vectors; not incidence.",
             span_fraction="Selected min-max span divided by all eligible min-max span, equal weight per world; not coverage probability.",
             missing_views="A zero-view placed object has no supervised anomaly return in retained scans, not necessarily zero physical visibility.",
-            geometry="Exact original procedural shape parameters; no equivalence under symmetry or shape-family identity is claimed.",
+            geometry="Original procedural shape parameters identify a source; uniformly scaled variants retain that source. No independence of semantic shape families is claimed.",
             normal_overlap="Object-instance count/range bins describe a subset of normal points, not matched local geometry or context.",
             return_range="Median of actual anomaly returns passing the unchanged point_targets rule, recomputed from every existing delta.",
             background_occlusion="Removed original background returns, not object visible fraction."),
-        stu=dict(worlds=len(worlds), exact_geometries=sum(g["stu_worlds"] > 0 for g in geometries),
-            eligible_views=len(all_stu), selected_views=len(selected_stu), unselected_views=len(all_stu)-len(selected_stu),
+        stu=dict(worlds=len(worlds)+len({r["world"] for r in directed_stu}),
+            source_geometries=sum(g["stu_worlds"] > 0 for g in geometries),
+            existing_candidate_views=len(all_stu), selected_views=len(selected_stu)+len(directed_stu),
+            selected_existing_views=len(selected_stu),directed_views=len(directed_stu),
+            unselected_views=len(all_stu)-len(selected_stu),
+            existing_world_statistics_scope="range/view span statistics below describe the 240 original worlds only",
             legacy_descriptor_ranges_outside_supervision=old_range_outside,
             normal_scans=len(normal_records), normal_instance_views=len(normal),
             normal_instance_points=sum(int(r["returns_2p5_50m"]) for r in normal),
@@ -820,10 +849,10 @@ def sampling_relations(args):
             placed_objects=len(objects), object_views=sum(r["views"] for r in objects),
             views_1_to_4_points=sum(r["views_1_to_4_points"] for r in objects),
             supervised_points=sum(r["points"] for r in objects), objects_by_view_count=dict(sorted(Counter(r["views"] for r in objects).items())),
-            observed_geometries=len(same_geom_scenes), scenes_per_observed_geometry=quantiles(same_geom_scenes),
+            observed_source_geometries=len(same_geom_scenes), scenes_per_observed_geometry=quantiles(same_geom_scenes),
             logs_per_observed_geometry=quantiles([g["observed_logs"] for g in geometries if g["observed_logs"]]),
             view_angle_span_multiview_deg=quantiles([r["view_angle_span_deg"] for r in objects if r["views"] >= 2])),
-        cross_domain_observed_geometries=sum(g["stu_worlds"] > 0 and g["observed_scenes"] > 0 for g in geometries),
+        cross_domain_observed_source_geometries=sum(g["stu_worlds"] > 0 and g["observed_scenes"] > 0 for g in geometries),
         full_scan_census=dict(census),
         overlap=dict(range_edges_m=range_edges, count_edges=[1, 5, 10, 20, 50, 100, 500, "inf"],
             observation_counts=histograms, occupied_selected_anomaly_cells=int((selected_hist > 0).sum()),
@@ -837,6 +866,8 @@ def sampling_relations(args):
     args.output.mkdir(parents=True, exist_ok=True)
     write_csv(args.output / "stu_worlds.csv", worlds)
     write_csv(args.output / "nuscenes_objects.csv", objects)
+    if directed:
+        write_csv(args.output / "stu_objects.csv", directed)
     write_csv(args.output / "geometries.csv", geometries)
     write_csv(args.output / "scans.csv", scans)
     write_json(args.output / "summary.json", report)

@@ -1043,21 +1043,12 @@ def _stu_diversity_frame(task):
     return result
 
 
-def expand_stu(reference, output, workers):
-    """Add nonredundant existing views while retaining every baseline STU record."""
+def stu_observations(base, workers):
+    """Measure every eligible existing STU view with one raw read per time step."""
     import multiprocessing as mp
     global _diversity_sequence, _diversity_worlds
-    base = load_manifest(Path(__file__).resolve().parents[1]/"assets/train.json", "train")
-    if base["sha256"] != reference["base_manifest"]:
-        raise ValueError("expanded STU observations must come from the original eligible pool")
-    destination = Path(output)/"stu.json"
-    if destination.exists():
-        saved = json.loads(destination.read_text())
-        if saved["reference"] != reference["sha256"] or saved["tolerances"] != DIVERSITY:
-            raise ValueError("existing STU selection belongs to another specification")
-        return saved
     _diversity_sequence = STUSequence(base["data_root"])
-    _diversity_worlds, by_frame, by_world = {}, {}, {}
+    _diversity_worlds, by_frame = {}, {}
     for entry in base["worlds"]:
         directory = Path(base["pool_root"])/entry["paths"][0]
         obj = json.loads((directory/"world.json").read_text())["world"]["objects"][0]
@@ -1068,11 +1059,28 @@ def expand_stu(reference, output, workers):
             source_family=metadata.get("family_id", "unrecorded:"+identity(obj["shape"])))
     for record in base["records"]:
         by_frame.setdefault(record["frame"], []).append(record)
-        by_world.setdefault(record["world"], []).append(record)
     features = {}
     with ProcessPoolExecutor(max_workers=workers, mp_context=mp.get_context("fork")) as pool:
         for rows in pool.map(_stu_diversity_frame, sorted(by_frame.items())):
             features.update({(world, frame): vector for world, frame, vector in rows})
+    return _diversity_worlds, features
+
+
+def expand_stu(reference, output, workers):
+    """Add nonredundant existing views while retaining every baseline STU record."""
+    base = load_manifest(Path(__file__).resolve().parents[1]/"assets/train.json", "train")
+    if base["sha256"] != reference["base_manifest"]:
+        raise ValueError("expanded STU observations must come from the original eligible pool")
+    destination = Path(output)/"stu.json"
+    if destination.exists():
+        saved = json.loads(destination.read_text())
+        if saved["reference"] != reference["sha256"] or saved["tolerances"] != DIVERSITY:
+            raise ValueError("existing STU selection belongs to another specification")
+        return saved
+    worlds, features = stu_observations(base, workers)
+    by_world = {}
+    for record in base["records"]:
+        by_world.setdefault(record["world"], []).append(record)
     mandatory = {(r["world"], r["frame"]) for r in reference["records"] if r["group"] == "anomaly_stu"}
     chosen, summaries = [], []
     for world, records in sorted(by_world.items()):
@@ -1081,8 +1089,8 @@ def expand_stu(reference, output, workers):
         required = [i for i, r in enumerate(records) if (world, r["frame"]) in mandatory]
         keep, nearest = select_observations(vectors, required)
         chosen.extend(dict(records[i], group="anomaly_stu", subset="train", observation=vectors[i],
-                           geometry=[_diversity_worlds[world]["geometry"]],
-                           source_family=_diversity_worlds[world]["source_family"]) for i in keep)
+                           geometry=[worlds[world]["geometry"]],
+                           source_family=worlds[world]["source_family"]) for i in keep)
         summaries.append(dict(world=world, candidates=len(records), base=len(required), retained=len(keep),
             frames=[records[i]["frame"] for i in keep], omitted_max_distance=float(nearest.max())))
     result = dict(reference=reference["sha256"], source=base["sha256"], tolerances=DIVERSITY,
@@ -1194,12 +1202,14 @@ class Scans:
             frame = read_nuscenes(record, self.manifest["mapping"])
         elif record.get("source") == "normal_stu":
             frame = self._source(record["frame"])
-        elif record.get("source") == "targeted":
+        elif record.get("source") in ("targeted", "rendered_stu"):
             original = self._source(record["frame"])
             with np.load(record["delta"], allow_pickle=False) as delta:
                 if (int(delta["frame"]) != original.frame_id or
                         str(delta["source_identity"]) != self.sources[original.frame_id]["source_identity"]):
                     raise ValueError("targeted observation belongs to a different original scan")
+                if record["source"] == "rendered_stu" and str(delta["world"]) != record["world"]:
+                    raise ValueError("rendered STU observation belongs to another fixed world")
                 xyzi, labels = original.xyzi.copy(), original.labels.copy()
                 xyzi[delta["slots"]], labels[delta["slots"]] = delta["xyzi"], delta["labels"]
             frame = Frame(original.frame_id, xyzi, original.pose, labels)

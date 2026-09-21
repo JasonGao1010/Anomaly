@@ -4,9 +4,13 @@ The core ray renderer accepts explicit geometry, response tables and tolerances.
 The pilot uses only training placements and the existing 206 response calibration.
 """
 
-from dataclasses import asdict, dataclass
+from collections import Counter, OrderedDict, defaultdict
+from dataclasses import asdict, dataclass, replace
 from itertools import product
+import json
 import math
+from pathlib import Path
+import time
 
 import numpy as np
 from scipy.special import expit
@@ -16,7 +20,7 @@ from .data import (Frame, PILOT_VERSION, STUSequence, legacy_source_identity,
                    point_targets, readonly, rigid, supervision, read_rays, write_json,
                    nuscenes_rays, nuscenes_poses, read_nuscenes, identity, NATIVE_VERSION,
                    DIVERSITY, context_groups, observation_descriptor, normal_descriptor,
-                   select_observations, native_keyframes, expand_stu, load_manifest)
+                   select_observations, native_keyframes, expand_stu, load_manifest, stu_observations)
 from .shape import Shape, Trace, unresolved_penetration
 
 
@@ -918,6 +922,471 @@ def expand_native(output, reference_path, workers, limit=None):
     print(json.dumps(result["expansion"]), flush=True)
 
 
+def condition_cell(descriptor, intensity_edges):
+    """Coarse inspection regions, not uniform-distribution targets or labels."""
+    distance, count, intensity = np.exp(descriptor[0]), round(np.exp(descriptor[4])), np.expm1(descriptor[11])
+    if count < 5:
+        return None
+    return tuple(map(int, (np.searchsorted([10., 20., 35.], distance, side="right"),
+                          np.searchsorted([20, 50, 200], count, side="right"),
+                          np.searchsorted(intensity_edges, intensity, side="right"))))
+
+
+def condition_coverage(views, edges):
+    cells = {(domain, *cell): dict(observations=0, geometries=set(), logs=set(), contexts=set(), views=set())
+             for domain in edges for cell in product(range(4), range(4), range(3))}
+    for row in views:
+        cell = condition_cell(row["descriptor"], edges[row["domain"]])
+        if cell is None:
+            continue
+        group = cells[row["domain"], *cell]
+        group["observations"] += 1
+        group["geometries"].add(row["geometry"])
+        group["logs"].add(row["log"])
+        vector = row["descriptor"]
+        surrounding = np.asarray(vector[14:])
+        group["contexts"].add("open_ground" if surrounding[:2].sum() >= .9 else str(int(surrounding.argmax())))
+        angle = np.rad2deg(np.arctan2(abs(vector[2]), abs(vector[1])))
+        group["views"].add(int(np.searchsorted([30., 60.], angle)))
+    return cells
+
+
+def _condition_rows(cells):
+    return [dict(domain=key[0], cell=list(key[1:]), **{name: sorted(value) if isinstance(value, set) else value
+                                                    for name, value in row.items()}) for key, row in sorted(cells.items())]
+
+
+def _completion_context(domain, scene):
+    """Bounded per-process scene cache; the STU arrays are shared after fork."""
+    from scipy.spatial import cKDTree
+    key = domain, scene
+    if key in _completion_contexts:
+        _completion_contexts.move_to_end(key)
+        return _completion_contexts[key]
+    records = _completion["scenes"][scene]
+    if domain == "STU":
+        frames, raw = _completion["stu_frames"], [f.semantic for f in _completion["stu_frames"]]
+        ground_ids = [40, 44, 48, 49, 60]
+    else:
+        frames = [read_nuscenes(r, _completion["mapping"]) for r in records]
+        raw = [np.fromfile(r["label"], np.uint8) for r in records]
+        ground_ids = [r["raw"] for r in _completion["mapping"] if r["name"] in
+                      ("flat.driveable_surface", "flat.sidewalk", "flat.other")]
+    ground, obstacle = [], []
+    for frame, labels in zip(frames, raw):
+        xyz = frame.xyzi[:, :3].astype(float) @ frame.pose[:3, :3].T + frame.pose[:3, 3]
+        valid = frame.actual & (frame.range_m >= 2.5)
+        on_ground = np.isin(labels, ground_ids)
+        ground.append(xyz[valid & on_ground]); obstacle.append(xyz[valid & ~on_ground])
+    ground, obstacle = np.concatenate(ground), np.concatenate(obstacle)
+    result = dict(records=records, frames=frames, raw=raw, ground_ids=ground_ids, ground=ground, obstacle=obstacle,
+                  ground_tree=cKDTree(ground[:, :2]), obstacle_tree=cKDTree(obstacle), rays={})
+    _completion_contexts[key] = result
+    # STU is shared; retain at most two native scenes in each worker.
+    native_keys = [k for k in _completion_contexts if k[0] != "STU"]
+    for old in native_keys[:-2]:
+        del _completion_contexts[old]
+    return result
+
+
+def _completion_collision(item, context):
+    center = item.pose[:3, 3]
+    nearby = context["obstacle_tree"].query_ball_point(center, item.shape.radius + .01)
+    return len(observed_collision(item, context["obstacle"][nearby], allowance_m=.03,
+                                 gradient_step_m=1e-6, witness_fraction=1-1e-6)[0]) > 0
+
+
+def _completion_rays(context, index, domain):
+    if domain == "STU":
+        return _completion["stu_rays"]
+    if index not in context["rays"]:
+        context["rays"][index] = nuscenes_rays(context["records"][index])[0]
+    return context["rays"][index]
+
+
+def _completion_descriptor(observed, item, source, raw, domain):
+    from scipy.spatial import cKDTree
+    mask = (point_targets(observed.frame) == 1) & (observed.object_ids == item.object_id)
+    if not mask.any():
+        return None
+    normal_ids = np.flatnonzero(observed.frame.actual & (observed.object_ids < 0))
+    center = (item.pose[:3, 3]-source.pose[:3, 3]) @ source.pose[:3, :3]
+    tree = cKDTree(observed.frame.xyzi[normal_ids, :3])
+    nearby = normal_ids[tree.query_ball_point(center, DIVERSITY["context_radius_m"])]
+    groups = context_groups(raw, _completion["mapping"] if domain == "nuScenes" else None)
+    return observation_descriptor(observed.frame.xyzi[mask], item.pose, source.pose,
+                                  np.bincount(groups[nearby], minlength=8))
+
+
+def _completion_world(task):
+    """One deliberate placement, observed along the unchanged source trajectory."""
+    from scipy.spatial import ConvexHull, QhullError
+    domain, scene = task["domain"], task["scene"]
+    destination = Path(_completion["output"])/task["name"]
+    metadata_path = destination/"world.json"
+    specification = identity(dict(reference=_completion["reference"], task=task,
+                                  response=_completion["response_identity"], policy=_completion["policy"]))
+    if metadata_path.exists():
+        saved = json.loads(metadata_path.read_text())
+        if saved["specification"] != specification:
+            raise ValueError("existing directed world has different construction inputs")
+        return saved
+    ctx = _completion_context(domain, scene)
+    response = _completion["responses"][domain]
+    trace = _completion["trace"]
+    rejected, attempts = Counter(), []
+    best, anchor_result = None, None
+    if "reuse" in task:
+        saved = json.loads(Path(task["reuse"]).read_text())
+        proposals, seed = saved["objects"], saved["seed"]
+        objects = [Object(o["object_id"], o["geometry"], _completion["geometry"][o["geometry"]].shape,
+                          Material(**o["material"]), np.asarray(o["pose"]))
+                   for o in proposals if o.get("accepted", True)]
+    else:
+        cell = task["cell"]
+        source_geometry = task["geometry"]
+        original = _completion["geometry"][source_geometry]
+        target_range, target_count = [6., 15., 27., 42.][cell[0]], [12., 32., 100., 300.][cell[1]]
+        extent = np.subtract(*original.shape.bounds()[::-1])
+        limit = min(4., float(np.min(_completion["extent_limit"]/extent)))
+        estimated = _completion["areas"].get((domain, source_geometry), 1000.)
+        scale = float(np.clip(np.sqrt(target_count*target_range**2/max(estimated, 1.)), .35, max(.35, limit)))
+        material = Material(([.08,.5,.92] if task["round"] == 0 else [.02,.65,.99])[cell[2]], .1, 0.)
+        seed = 700000+task["number"]
+        # Candidate order follows the requested distance and surrounding structure, never a random permutation.
+        anchors = []
+        for index in sorted(set(int((len(ctx["frames"])-1)*f) for f in (.25,.5,.75))):
+            frame, raw = ctx["frames"][index], ctx["raw"][index]
+            valid = frame.actual & np.isin(raw, ctx["ground_ids"]) & (frame.xyzi[:,0] > 0)
+            lower, upper = [2.5,10,20,35][cell[0]], [10,20,35,50][cell[0]]
+            slots = np.flatnonzero(valid & (frame.range_m >= lower) & (frame.range_m < upper))
+            xyz = frame.xyzi[slots,:3].astype(float) @ frame.pose[:3,:3].T+frame.pose[:3,3]
+            if not len(slots):
+                continue
+            _, keep = np.unique(np.floor(xyz[:,:2]), axis=0, return_index=True)
+            slots, xyz = slots[keep], xyz[keep]
+            separation = ctx["obstacle_tree"].query(xyz, workers=1)[0]
+            preferred = (3., 1.2, .6)[task["number"] % 3]
+            score = abs(frame.range_m[slots]-target_range)/target_range + .2*abs(np.log1p(separation)-np.log1p(preferred))
+            for j in np.argsort(score, kind="stable")[:4]:
+                anchors.append((float(score[j]), index, xyz[j]))
+        for _, index, anchor in sorted(anchors, key=lambda x:x[0]):
+            current_scale = scale
+            for adjustment in range(2):
+                shape = replace(original.shape, scales=np.asarray(original.shape.scales)*current_scale,
+                                offsets=np.asarray(original.shape.offsets)*current_scale)
+                grounding = Grounding(shape, original.lower_z*current_scale, original.refined_lower_z*current_scale,
+                                      original.buried_fraction, np.empty((0,3)), True)
+                lo, hi = shape.bounds()
+                footprint = float(np.linalg.norm(np.maximum(abs(lo[:2]),abs(hi[:2]))))
+                ground = ctx["ground"][ctx["ground_tree"].query_ball_point(anchor[:2], footprint+.3)]
+                if len(ground) < 12:
+                    rejected["support"] += 1; break
+                center = ground.mean(0)
+                _,_,vh = np.linalg.svd(ground-center, full_matrices=False)
+                up = vh[-1]*(1 if vh[-1,2]>0 else -1)
+                residual = float(np.quantile(abs((ground-center)@up),.95))
+                if up[2] < .95 or residual > .04:
+                    rejected["support"] += 1; break
+                try:
+                    hull = ConvexHull(ground[:,:2])
+                except QhullError:
+                    rejected["support"] += 1; break
+                if np.max(hull.equations[:,:2]@anchor[:2]+hull.equations[:,2]+footprint) > 0:
+                    rejected["support"] += 1; break
+                source = ctx["frames"][index]
+                direction = source.pose[:3,3]-anchor
+                yaw = math.atan2(direction[1],direction[0]) + (task["number"]%3)*math.pi/4
+                item = ground_object(grounding,material,object_id=1,geometry_id=identity(asdict(shape)),
+                    anchor_world=anchor,normal_world=up,plane_offset=-float(up@center),yaw=yaw)
+                if _completion_collision(item,ctx):
+                    rejected["collision"] += 1; break
+                world = World(NATIVE_VERSION,206 if domain=="STU" else 0,seed,(item,),1e-6)
+                observed = render_frame(source,world,_completion_rays(ctx,index,domain),response,trace)
+                count = supervision(observed.frame).anomaly_count
+                descriptor = _completion_descriptor(observed,item,source,ctx["raw"][index],domain)
+                actual = condition_cell(descriptor,_completion["edges"][domain]) if descriptor is not None else None
+                attempts.append(dict(frame=source.frame_id,scale=current_scale,count=count,cell=actual,
+                                     support_p95_m=residual))
+                if count >= 5:
+                    loss = abs(math.log(count/target_count)) + abs(descriptor[0]-math.log(target_range))
+                    loss += 2*(actual[2]!=cell[2])
+                    proposal = dict(object_id=1,geometry=item.geometry_id,source_geometry=source_geometry,
+                        shape=asdict(shape),material=asdict(material),pose=item.pose.tolist(),scale=current_scale,
+                        anchor_frame=index,support_points=len(ground),support_p95_m=residual,normal_world=up.tolist())
+                    if best is None or loss < best[0]:
+                        best = loss,item,proposal
+                        anchor_result = index,observed
+                    if actual == tuple(cell):
+                        break
+                if count:
+                    changed = float(np.clip(current_scale*np.sqrt(target_count/count),.35,max(.35,limit)))
+                    if abs(changed/current_scale-1)<.1:
+                        break
+                    current_scale = changed
+                else:
+                    rejected["visibility"] += 1; break
+            if best is not None and condition_cell(_completion_descriptor(anchor_result[1],best[1],
+                    ctx["frames"][anchor_result[0]],ctx["raw"][anchor_result[0]],domain),_completion["edges"][domain]) == tuple(cell):
+                break
+        if best is None:
+            destination.mkdir(parents=True,exist_ok=True)
+            result = dict(specification=specification,task=task,accepted=False,records=[],observations=[],
+                          reason="not_resolved_by_bounded_supported_placements",rejected=dict(rejected),attempts=attempts)
+            write_json(metadata_path,result)
+            return result
+        objects, proposals = [best[1]],[best[2]]
+    world = World(NATIVE_VERSION,206 if domain=="STU" else 0,seed,tuple(objects),1e-6)
+    candidates, payloads, observations, sampling = [], [], [], []
+    required = set(task.get("tokens",[]))
+    for index,(record,source,raw) in enumerate(zip(ctx["records"],ctx["frames"],ctx["raw"])):
+        if required and record.get("token") not in required:
+            continue
+        if not any(np.linalg.norm(source.pose[:3,3]-o.pose[:3,3])-o.shape.radius<=50 for o in objects):
+            continue
+        if "reuse" in task and any(_completion_collision(o,ctx) for o in objects):
+            rejected["collision"] += 1; break
+        observed = anchor_result[1] if anchor_result is not None and index==anchor_result[0] else render_frame(
+            source,world,_completion_rays(ctx,index,domain),response,trace)
+        selected = supervision(observed.frame)
+        if not selected.eligible:
+            rejected["zero" if selected.anomaly_count==0 else "one_to_four"] += 1
+            continue
+        slots = np.flatnonzero(observed.inserted|observed.occluded_original).astype(np.int32)
+        path = destination/f"{source.frame_id}.npz"
+        payload = dict(slots=slots,xyzi=observed.frame.xyzi[slots],labels=observed.frame.labels[slots],
+            inserted=np.flatnonzero(observed.inserted),occluded=np.flatnonzero(observed.occluded_original),
+            object_ids=observed.object_ids[slots])
+        if domain=="nuScenes":
+            payload["token"] = record["token"]
+        else:
+            payload.update(frame=np.int64(source.frame_id),source_identity=record["source_identity"],world=str(metadata_path.resolve()))
+        row = dict(record,source="nuscenes" if domain=="nuScenes" else "rendered_stu",subset="train",
+            group="anomaly_nuscenes" if domain=="nuScenes" else "anomaly_stu",scene=scene,
+            frame=source.frame_id,pose=source.pose.tolist(),world=str(metadata_path.resolve()),delta=str(path.resolve()),
+            geometry=[o.geometry_id for o in objects],points=int(observed.frame.actual.sum()),slots=len(source.xyzi),
+            normal=selected.normal_count,anomaly=selected.anomaly_count)
+        observations_here = []
+        for item,proposal in zip(objects,[p for p in proposals if p.get("accepted",True)]):
+            descriptor = _completion_descriptor(observed,item,source,raw,domain)
+            if descriptor is not None:
+                observations_here.append(dict(domain=domain,scene=scene,log=record.get("log_token","206"),
+                    world=str(metadata_path.resolve()),frame=source.frame_id,token=record.get("token",""),
+                    object_id=item.object_id,geometry=proposal.get("source_geometry",item.geometry_id),
+                    variant=item.geometry_id,descriptor=descriptor,index=len(candidates)))
+        observations.extend(observations_here)
+        candidates.append(row);payloads.append(payload)
+        sampling.append(dict(frame=source.frame_id,objects=observed.sampling))
+    chosen = set(range(len(candidates))) if required else set()
+    for item in objects:
+        rows = [r for r in observations if r["object_id"]==item.object_id]
+        if not rows:
+            continue
+        representatives = {}
+        for i,r in enumerate(rows):
+            representatives.setdefault(condition_cell(r["descriptor"],_completion["edges"][domain]),i)
+        keep,_ = select_observations([r["descriptor"] for r in rows],representatives.values())
+        chosen.update(rows[i]["index"] for i in keep)
+    destination.mkdir(parents=True,exist_ok=True)
+    for i in sorted(chosen):
+        np.savez_compressed(candidates[i]["delta"],**payloads[i])
+    result = dict(specification=specification,task=task,accepted=bool(chosen),domain=domain,scene=scene,
+        log_token=ctx["records"][0].get("log_token","206"),seed=seed,objects=proposals,
+        records=[candidates[i] for i in sorted(chosen)],observations=[r for r in observations if r["index"] in chosen],
+        eligible_candidates=len(candidates),attempts=attempts,rejected=dict(rejected),sampling=sampling,
+        collision_scope="all supplied trajectory scans; unseen surfaces remain unknown")
+    write_json(metadata_path,result)
+    return result
+
+
+def complete_pool(reference_path, output, workers):
+    """Reuse candidates, deliberately fill weak conditions, make one repair pass, then stop."""
+    import multiprocessing as mp
+    from concurrent.futures import ProcessPoolExecutor
+    import torch
+    global _completion, _completion_contexts
+    start = time.monotonic()
+    output,reference_path = Path(output).resolve(),Path(reference_path).resolve()
+    reference = load_manifest(reference_path,"train")
+    base = load_manifest(Path(__file__).resolve().parents[1]/"assets/train.json","train")
+    if reference["base_manifest"] != base["sha256"] or reference.get("dataset_revision") != "expanded_observations":
+        raise ValueError("directed completion requires the existing expanded two-domain pool")
+    output.mkdir(parents=True,exist_ok=True)
+    geometry_path = Path(reference["expansion"]["geometry"])
+    library = json.loads(geometry_path.read_text())
+    geometry = {r["id"]:Grounding(Shape(**r["shape"]),r["lower_z"],r["refined_lower_z"],r["buried_fraction"],
+                                 np.empty((0,3)),True) for r in library["records"]}
+    normal_response = json.loads((geometry_path.parent/"response.json").read_text())
+    sensor = torch.load(Path(base["pool_root"])/"calibration.pt",map_location="cpu",weights_only=False)["sensor"]
+    if sensor["source_sequence_id"] != 206:
+        raise ValueError("STU response must come from training sequence 206")
+    responses = dict(STU=Response(sensor["range_edges_m"],sensor["incidence_edges_rad"],sensor["quantile_levels"],
+        sensor["return_probability"],sensor["intensity_quantiles"],(sensor["intensity_min"],sensor["intensity_max"]),None,
+        "unchanged STU 206 empirical response"),nuScenes=Response(normal_response["range_edges"],normal_response["incidence_edges"],
+        normal_response["quantiles"],normal_response["probability"],normal_response["intensity"],(0.,1.),1/255,
+        "unchanged native training-log empirical response"))
+    worlds,features = stu_observations(base,workers)
+    sequence = STUSequence(base["data_root"])
+    frames = [sequence[i] for i in range(len(sequence))]
+    if any(legacy_source_identity(f)!=r["source_identity"] for f,r in zip(frames,base["sources"])):
+        raise ValueError("STU completion background changed")
+    poses = json.loads(Path(reference["expansion"]["trajectories"]).read_text())["records"]
+    scenes = defaultdict(list)
+    for record in poses:
+        if record["log_token"] in reference["split"]["excluded_logs"] or record["subset"]!="train":
+            raise ValueError("an isolated log entered directed generation")
+        scenes[record["scene"]].append(record)
+    scenes = {name:sorted(rows,key=lambda r:r["timestamp"]) for name,rows in scenes.items()}
+    scenes["206"] = base["sources"]
+    # Intensity bands use real trusted training returns, never synthetic values or validation extrema.
+    normal_values = [f.xyzi[point_targets(f)==0,3] for f in frames]
+    edges = {"STU":np.quantile(np.concatenate(normal_values),[1/3,2/3]).tolist()}
+    del normal_values
+    by_log = {}
+    for scene in sorted(scenes):
+        if scene!="206":
+            row = scenes[scene][0]
+            by_log.setdefault(row["log_token"],row)
+    normal_values = []
+    for row in by_log.values():
+        frame = read_nuscenes(row,reference["mapping"])
+        normal_values.append(frame.xyzi[point_targets(frame)==0,3])
+    edges["nuScenes"] = np.quantile(np.concatenate(normal_values),[1/3,2/3]).tolist()
+    del normal_values
+    all_views,views = [],[]
+    retained = {(r["world"],r["frame"]) for r in reference["records"] if r["group"]=="anomaly_stu"}
+    stu_rows = {(r["world"],r["frame"]):r for r in base["records"]}
+    for key,vector in features.items():
+        row = dict(domain="STU",scene="206",log="206",world=key[0],frame=key[1],token="",
+                   geometry=worlds[key[0]]["geometry"],descriptor=vector)
+        all_views.append(row)
+        if key in retained:views.append(row)
+    native_retained = {(r["scene"],r["token"]) for r in reference["records"] if r["group"]=="anomaly_nuscenes"}
+    native_worlds = {}
+    for scene in sorted(scenes):
+        if scene=="206":continue
+        path = reference_path.parent/scene/"world.json"
+        saved = json.loads(path.read_text());native_worlds[scene]=str(path)
+        frame_ids = {r["token"]:r["frame"] for r in scenes[scene]}
+        for item in saved["observation_selection"]:
+            for r in item["observations"]:
+                row = dict(domain="nuScenes",scene=scene,log=saved["log_token"],world=str(path),
+                    frame=frame_ids[r["token"]],token=r["token"],geometry=r["geometry"],descriptor=r["descriptor"])
+                all_views.append(row)
+                if (scene,row["token"]) in native_retained:views.append(row)
+    before = condition_coverage(views,edges)
+    cells = condition_coverage(views,edges)
+    records,added_stu,reuse = list(reference["records"]),[],defaultdict(set)
+    # Three source parameter sets/logs is a support heuristic, not independent shape families or a frame quota.
+    for row in sorted(all_views,key=lambda r:(r["domain"],r["geometry"],r["scene"],r["frame"])):
+        cell = condition_cell(row["descriptor"],edges[row["domain"]])
+        if cell is None:continue
+        group = cells[row["domain"],*cell]
+        useful = (len(group["geometries"])<3 and row["geometry"] not in group["geometries"]) or (
+            row["domain"]=="nuScenes" and len(group["logs"])<3 and row["log"] not in group["logs"])
+        if not useful:continue
+        if row["domain"]=="STU":
+            key=row["world"],row["frame"]
+            if key in retained:continue
+            source=stu_rows[key]
+            added_stu.append(dict(source,group="anomaly_stu",subset="train",observation=row["descriptor"],
+                                  geometry=[row["geometry"]],source_family=worlds[row["world"]]["source_family"]))
+            retained.add(key);views.append(row)
+        else:
+            if (row["scene"],row["token"]) in native_retained:continue
+            reuse[row["scene"]].add(row["token"])
+        group["geometries"].add(row["geometry"]);group["logs"].add(row["log"])
+    records.extend(added_stu)
+    simple = {k:v for k,v in geometry.items() if len(v.shape.scales)==1 and v.shape.twist==v.shape.amplitude==0
+              and not np.any(v.shape.bend) and not np.any(v.shape.taper)}
+    areas=defaultdict(list)
+    for row in all_views:
+        if row["geometry"] in simple:
+            areas[row["domain"],row["geometry"]].append(np.exp(row["descriptor"][4]+2*row["descriptor"][0]))
+    areas={k:float(np.quantile(v,.75)) for k,v in areas.items()}
+    extent_limit=np.max([np.subtract(*g.shape.bounds()[::-1]) for g in simple.values()],axis=0)
+    policy=dict(range_edges=[2.5,10,20,35,50],count_edges=[5,20,50,200],intensity_edges=edges,
+        support_geometries=3,support_logs_nuscenes=3,construction_rounds=2,candidate_anchors=12,
+        scale_adjustments=1,extent_limit_m=extent_limit.tolist(),new_independent_geometries=0,
+        intensity_source="all valid normal returns in 449 STU 206 scans; first authorized keyframe of each of 46 native train logs",
+        intensity_native_sources=[dict(scene=r["scene"],token=r["token"],log=r["log_token"]) for r in by_log.values()],
+        excluded_logs=reference["split"]["excluded_logs"],validation_used=False,
+        scope="Reuse training-source geometry and original backgrounds; scaled variants retain their source identity. No independent final holdout is newly created.")
+    _completion=dict(output=str(output),reference=reference["sha256"],mapping=reference["mapping"],geometry=geometry,
+        responses=responses,response_identity=identity({d:{k:v.tolist() if isinstance(v,np.ndarray) else v
+            for k,v in asdict(r).items()} for d,r in responses.items()}),
+        edges=edges,trace=Trace(**library["trace"]),scenes=scenes,stu_frames=frames,stu_rays=read_rays(),
+        areas=areas,extent_limit=extent_limit,policy=policy)
+    _completion_contexts=OrderedDict()
+    _completion_context("STU","206")
+    tasks=[dict(name=f"reuse-{scene}",domain="nuScenes",scene=scene,reuse=native_worlds[scene],tokens=sorted(tokens))
+           for scene,tokens in sorted(reuse.items())]
+    results=[]
+    native_order=sorted(by_log.values(),key=lambda r:(r["log_token"],r["scene"]))
+    number=0
+    with ProcessPoolExecutor(max_workers=workers,mp_context=mp.get_context("fork")) as pool:
+        for result in pool.map(_completion_world,tasks):
+            results.append(result);records.extend(result["records"]);views.extend(result["observations"])
+        reused=condition_coverage(views,edges)
+        for round_id in range(2):
+            cells=condition_coverage(views,edges)
+            tasks=[]
+            for key,group in sorted(cells.items()):
+                domain,*cell=key
+                missing=max(0,3-len(group["geometries"]),3-len(group["logs"]) if domain=="nuScenes" else 0)
+                if not missing:continue
+                target_area=[12,32,100,300][cell[1]]*[6,15,27,42][cell[0]]**2
+                roots=sorted(simple,key=lambda g:(g in group["geometries"],
+                    abs(math.log(max(areas.get((domain,g),1000.),1)/target_area)),g))
+                # A repair uses different source geometry and acquisition logs from the first attempt.
+                tried={r["task"].get("geometry") for r in results if r["task"]["domain"]==domain and r["task"].get("cell")==cell}
+                roots=[g for g in roots if g not in tried]
+                tried_logs={scenes[r["task"]["scene"]][0].get("log_token","206") for r in results
+                    if r["task"]["domain"]==domain and r["task"].get("cell")==cell}
+                available=[r for r in native_order if r["log_token"] not in group["logs"]|tried_logs] or native_order
+                for j,root in enumerate(roots[:missing]):
+                    scene="206" if domain=="STU" else available[(number+j)%len(available)]["scene"]
+                    tasks.append(dict(name=f"{domain.lower()}-{number:03d}",number=number,round=round_id,
+                                      domain=domain,scene=scene,geometry=root,cell=cell))
+                    number+=1
+            print(json.dumps(dict(round=round_id,world_tasks=len(tasks),reused_stu=len(added_stu),reused_native=len(reuse),
+                                  intensity_edges=edges)),flush=True)
+            for result in pool.map(_completion_world,tasks):
+                results.append(result);records.extend(result["records"]);views.extend(result["observations"])
+                print(json.dumps(dict(world=result["task"]["name"],accepted=result["accepted"],scans=len(result["records"]))),flush=True)
+    # Preserve real normal counterparts of newly used native source scans without duplicating them.
+    normal_tokens={r["token"] for r in records if r["group"]=="normal_nuscenes"}
+    originals={r["token"]:r for name,rows in scenes.items() if name!="206" for r in rows}
+    counterparts=[]
+    for r in records[len(reference["records"]):]:
+        if r["group"]!="anomaly_nuscenes" or r["token"] in normal_tokens:continue
+        raw=originals[r["token"]];frame=read_nuscenes(raw,reference["mapping"]);target=point_targets(frame)
+        counterparts.append(dict(raw,group="normal_nuscenes",points=int(frame.actual.sum()),slots=len(frame.xyzi),
+                                 normal=int((target==0).sum()),anomaly=0))
+        normal_tokens.add(r["token"])
+    records.extend(counterparts)
+    after=condition_coverage(views,edges)
+    report=dict(reference=str(reference_path),policy=policy,before=_condition_rows(before),after_reuse=_condition_rows(reused),
+        after=_condition_rows(after),added_existing_stu=len(added_stu),added_normal_counterparts=len(counterparts),
+        worlds=[dict(task=r["task"],accepted=r["accepted"],scans=len(r["records"]),rejected=r["rejected"],
+                     path=str(output/r["task"]["name"]/"world.json")) for r in results],
+        unresolved=[dict(domain=k[0],cell=list(k[1:]),observations=v["observations"],geometries=len(v["geometries"]),
+                        logs=len(v["logs"]),status="not_resolved_in_two_construction_rounds; not proof of physical impossibility")
+                    for k,v in after.items() if len(v["geometries"])<3 or (k[0]=="nuScenes" and len(v["logs"])<3)],
+        groups=dict(Counter(r["group"] for r in records)),seconds=time.monotonic()-start)
+    result=dict(reference,records=records,dataset_revision="directed_conditions",representative_rule=
+        "retain expanded pool; recover existing weak-region observations; one directed construction and one repair; reduce near repeats",
+        completion=dict(reference=str(reference_path),report=str(output/"conditions.json"),base_records=len(reference["records"]),
+                        new_records=len(records)-len(reference["records"]),new_independent_geometries=0,
+                        worlds=[str(output/r["task"]["name"]/"world.json") for r in results if r["accepted"]]))
+    result["expansion"]=dict(reference["expansion"],base_records=len(reference["records"]),train_records=len(records),
+                             complete_pass_visits=len(records),two_pass_updates=math.ceil(2*len(records)/8),groups=report["groups"])
+    result.pop("sha256");result["sha256"]=identity(result)
+    write_json(output/"conditions.json",report)
+    write_json(output/"train.json",result,indent=None)
+    print(json.dumps(dict(scans=len(records),unresolved_regions=len(report["unresolved"]),seconds=report["seconds"])),flush=True)
+
+
 def generate_native(output, *, pool_root, workers=8, limit=None, extend_from=None):
     if extend_from is not None:
         return expand_native(output, extend_from, workers, limit)
@@ -1001,10 +1470,15 @@ if __name__ == "__main__":
     parser.add_argument("--native", action="store_true")
     parser.add_argument("--limit", type=int)
     parser.add_argument("--extend-from", type=Path)
+    parser.add_argument("--complete-from", type=Path)
     args = parser.parse_args()
     if not 1 <= args.workers <= len(os.sched_getaffinity(0)):
         parser.error("workers must fit the current CPU affinity")
-    if args.native:
+    if args.complete_from:
+        if args.extend_from or args.limit:
+            parser.error("completion includes its own fixed construction and repair passes")
+        complete_pool(args.complete_from,args.output,args.workers)
+    elif args.native:
         generate_native(args.output, pool_root=args.pool_root, workers=args.workers, limit=args.limit, extend_from=args.extend_from)
     else:
         generate_candidates(args.output, data_root=args.data_root, pool_root=args.pool_root, workers=args.workers)

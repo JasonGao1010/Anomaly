@@ -13,7 +13,8 @@ from src.data import (Frame, Rays, STUSequence, point_targets, read_delta, read_
                       restore_delta, supervision, validate_delta)
 from src.shape import Shape, Trace, unresolved_penetration
 from src.render import (Material, Object, Response, World, check_grounding,
-                        ground_object, observed_collision, pair_collision, render_frame)
+                        ground_object, observed_collision, pair_collision, render_frame,
+                        condition_cell, condition_coverage)
 
 
 # Explicit numerical and response fixtures test semantics, not scientific coverage.
@@ -22,6 +23,47 @@ MATERIAL = Material(.5, .1, 0.)
 SUPPORT = dict(xy_resolution=33, z_steps=129, bisections=24, refinements=5)
 FINE_SUPPORT = dict(xy_resolution=65, z_steps=257, bisections=24, refinements=5)
 PENETRATION = dict(allowance_m=.05, gradient_step_m=1e-6, witness_fraction=1 - 1e-6)
+
+
+def test_condition_coverage_counts_source_geometry_not_scaled_variants():
+    descriptor = [math.log(15),1,0,0,math.log(30),0,0,0,0,0,0,math.log1p(.3),0,0,1,0,0,0,0,0,0,0]
+    row = dict(domain="nuScenes",geometry="same-source",log="log-a",descriptor=descriptor)
+    rows = [dict(row,variant="small"),dict(row,variant="large")]
+    cells = condition_coverage(rows,{"nuScenes":[.1,.2]})
+    assert condition_cell(descriptor,[.1,.2]) == (1,1,2)
+    assert cells["nuScenes",1,1,2]["observations"] == 2
+    assert cells["nuScenes",1,1,2]["geometries"] == {"same-source"}
+    tiny = descriptor.copy();tiny[4] = math.log(4)
+    assert condition_cell(tiny,[.1,.2]) is None  # Kept in a qualified multi-object scan, outside this >=5 view table.
+
+
+@pytest.mark.parametrize("source", ["rendered_stu", "nuscenes"])
+def test_object_relations_separate_worlds_and_check_scan_identity(tmp_path, source):
+    from src.analyze import native_relations_scene
+    records = []
+    for number in range(2):
+        pose = np.eye(4); pose[0, 3] = 5
+        world = tmp_path / f"world-{number}.json"
+        world.write_text(json.dumps(dict(seed=number, scene="same-scene", log_token="same-log",
+            objects=[dict(object_id=1, geometry=f"variant-{number}", source_geometry="one-source",
+                          anchor_frame=0, pose=pose.tolist())])))
+        delta = tmp_path / f"frame-{number}.npz"
+        record = dict(source=source, frame=0, token="one-token", source_identity="one-scan",
+                      world=str(world), delta=str(delta), anomaly=5, pose=np.eye(4).tolist())
+        payload = dict(frame=0, token="one-token", source_identity="one-scan", world=str(world),
+                       xyzi=np.tile([4.,0,0,.2], (5,1)).astype(np.float32),
+                       labels=np.full(5,2,np.uint32), object_ids=np.ones(5,np.int64))
+        if source == "rendered_stu":
+            record.pop("token"); payload.pop("token")
+        np.savez(delta, **payload)
+        records.append(record)
+    rows = native_relations_scene(records)
+    assert len(rows) == 2 and sum(row["views"] for row in rows) == 2
+    assert {row["geometry"] for row in rows} == {"one-source"}
+    field = "source_identity" if source == "rendered_stu" else "token"
+    records[0][field] = "wrong-scan"
+    with pytest.raises(ValueError, match="another scan"):
+        native_relations_scene(records)
 
 
 def sphere(radius=.5):

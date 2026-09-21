@@ -1,0 +1,24 @@
+{
+  "specification": "7e456f7b12701072fae99c45cb84fc6dcedb675d336d2801742aa4a684503bf2",
+  "task": {
+    "name": "nuscenes-076",
+    "number": 76,
+    "round": 0,
+    "domain": "nuScenes",
+    "scene": "scene-0440",
+    "geometry": "8261706707791275299a9437e481d601f139f604de0415d81c83e3ae34e3fb26",
+    "cell": [
+      3,
+      3,
+      0
+    ]
+  },
+  "accepted": false,
+  "records": [],
+  "observations": [],
+  "reason": "not_resolved_by_bounded_supported_placements",
+  "rejected": {
+    "support": 2
+  },
+  "attempts": []
+}

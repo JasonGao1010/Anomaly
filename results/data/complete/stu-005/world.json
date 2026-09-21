@@ -1,0 +1,25 @@
+{
+  "specification": "49919ba7dbe7519ec7a2fc4adeb4b8501730152a4e13fa85a682d4664d818a44",
+  "task": {
+    "name": "stu-005",
+    "number": 5,
+    "round": 0,
+    "domain": "STU",
+    "scene": "206",
+    "geometry": "8faa631d821de86e3f2c716b7bddad9a89876338c772c3a3b7635bd0f08c7131",
+    "cell": [
+      2,
+      3,
+      1
+    ]
+  },
+  "accepted": false,
+  "records": [],
+  "observations": [],
+  "reason": "not_resolved_by_bounded_supported_placements",
+  "rejected": {
+    "support": 9,
+    "collision": 3
+  },
+  "attempts": []
+}
