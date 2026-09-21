@@ -22,6 +22,7 @@ from .train import disk_check, runtime_snapshot
 
 CELL = .5
 RECALL_BANDS = (0., .25, .5, .75, .9, .95, .99, 1.)
+ROOT_ERRORS = OUTPUT.parent / "errors"
 
 
 def poses_for(directory):
@@ -87,8 +88,8 @@ def surface_orientation(centers):
                     np.where(vertical <= .5, 1, 2))).astype(np.int8)
 
 
-def rank_data():
-    rows = list(csv.DictReader((OUTPUT / "lr_pr.csv").open(encoding="utf-8-sig")))
+def rank_data(path=None):
+    rows = list(csv.DictReader((path or OUTPUT / "lr_pr.csv").open(encoding="utf-8-sig")))
     values = np.array([float(r["threshold"]) for r in rows])[::-1]
     tp, fp = (np.array([int(r[k]) for r in rows]) for k in ("tp", "fp"))
     positive, negative = np.diff(np.r_[0, tp])[::-1], np.diff(np.r_[0, fp])[::-1]
@@ -114,11 +115,11 @@ def recall_loss_weights(positive, negative):
 
 
 def _sequence(task):
-    sequence, records, offsets, destination = task
+    sequence, records, offsets, destination, prediction, curve_path, geometry = task
     start_time = time.perf_counter()
-    values, positive, negative, denominator, ploss, nloss = rank_data()
+    values, positive, negative, denominator, ploss, nloss = rank_data(Path(curve_path))
     global_neg_above = np.cumsum(negative[::-1])[::-1]
-    score_file = np.load(OUTPUT / "lr_val.npy", mmap_mode="r")
+    score_file = np.load(prediction, mmap_mode="r")
     meta_file = np.load(OUTPUT / "val_points.npy", mmap_mode="r")
     directory = Path(records[0]["scan"]).parents[1]
     poses = poses_for(directory)
@@ -132,39 +133,61 @@ def _sequence(task):
         normal = meta["target"] == 0
         return meta, score, xyzi, world, normal
 
-    key_parts, centers_parts, count_parts = [], [], []
-    for record, offset in zip(records, offsets):
-        meta, _, _, world, normal = read(record, offset)
-        unique, inverse, frequency = np.unique(cell_keys(world[normal], meta["semantic"][normal]), return_inverse=True, return_counts=True)
-        key_parts.append(unique)
-        centers_parts.append(np.stack([np.bincount(inverse, weights=world[normal, j]) for j in range(3)], axis=1))
-        count_parts.append(frequency)
-    keys, inverse = np.unique(np.concatenate(key_parts), return_inverse=True)
-    mass = np.bincount(inverse, weights=np.concatenate(count_parts))
-    totals = np.concatenate(centers_parts)
-    centers = np.stack([np.bincount(inverse, weights=totals[:, j]) / mass for j in range(3)], axis=1)
-    del key_parts, centers_parts, count_parts, totals, inverse
-    orientation = surface_orientation(centers)
-    component = surface_groups(keys, orientation)
+    if geometry:
+        cached = np.load(Path(geometry) / f"surface_{sequence}.npz")
+        for name, path in (("pose_sha256", "poses.txt"), ("calibration_sha256", "calib.txt")):
+            if str(cached[name]) != file_sha256(directory / path):
+                raise ValueError("surface grouping uses different physical coordinates")
+        keys, component, orientation = [cached[k] for k in ("keys", "component", "orientation")]
+    else:
+        key_parts, centers_parts, count_parts = [], [], []
+        for record, offset in zip(records, offsets):
+            meta, _, _, world, normal = read(record, offset)
+            unique, inverse, frequency = np.unique(cell_keys(world[normal], meta["semantic"][normal]), return_inverse=True, return_counts=True)
+            key_parts.append(unique)
+            centers_parts.append(np.stack([np.bincount(inverse, weights=world[normal, j]) for j in range(3)], axis=1))
+            count_parts.append(frequency)
+        keys, inverse = np.unique(np.concatenate(key_parts), return_inverse=True)
+        mass = np.bincount(inverse, weights=np.concatenate(count_parts))
+        totals = np.concatenate(centers_parts)
+        centers = np.stack([np.bincount(inverse, weights=totals[:, j]) / mass for j in range(3)], axis=1)
+        del key_parts, centers_parts, count_parts, totals, inverse
+        orientation = surface_orientation(centers)
+        component = surface_groups(keys, orientation)
     count, width = int(component.max()) + 1, len(values)
-    np.savez_compressed(Path(destination) / f"surface_{sequence}.npz", keys=keys, component=component, orientation=orientation,
-                        cell=CELL, pose_sha256=file_sha256(directory / "poses.txt"),
-                        calibration_sha256=file_sha256(directory / "calib.txt"))
+    if not geometry:
+        np.savez_compressed(Path(destination) / f"surface_{sequence}.npz", keys=keys, component=component, orientation=orientation,
+                            cell=CELL, pose_sha256=file_sha256(directory / "poses.txt"),
+                            calibration_sha256=file_sha256(directory / "calib.txt"))
     # Sparse histograms retain every normal point without writing duplicate clouds.
     histograms, observations, anomaly = [], defaultdict(list), defaultdict(list)
+    examples = defaultdict(list)
     for record, offset in zip(records, offsets):
         meta, score, xyzi, world, normal = read(record, offset)
         rank = np.searchsorted(values, score)
         if not np.array_equal(values[rank], score):
             raise ValueError("saved point scores do not match exact PR ties")
         key = cell_keys(world[normal], meta["semantic"][normal])
-        group = component[np.searchsorted(keys, key)]
+        locations = np.searchsorted(keys, key)
+        if not np.array_equal(keys[locations], key):
+            raise ValueError("current normal points do not belong to saved surfaces")
+        group = component[locations]
         code, frequency = np.unique(group.astype(np.int64) * width + rank[normal], return_counts=True)
         histograms.append(coo_matrix((frequency, (code // width, code % width)), shape=(count, width)).tocsr())
         sizes = np.bincount(group, minlength=count)
         losses = np.bincount(group, weights=nloss[rank[normal]], minlength=count)
         frame_normal_hist = np.bincount(rank[normal], minlength=width)
         frame_neg_above = np.cumsum(frame_normal_hist[::-1])[::-1]
+        frame_pos_hist = np.bincount(rank[~normal], minlength=width)
+        frame_pos_above = np.cumsum(frame_pos_hist[::-1])[::-1]
+        # One highest-score point per surface and frame; raw identity is retained.
+        normal_at = np.flatnonzero(normal)
+        ordered = np.lexsort((meta["slot"][normal], -score[normal], group))
+        first = ordered[np.r_[True, np.diff(group[ordered]) != 0]]
+        for j in first:
+            at = normal_at[j]
+            examples[int(group[j])].append(dict(index=offset["index"], frame=record["frame"],
+                slot=int(meta["slot"][at]), score=float(score[at]), AP_loss=float(nloss[rank[at]])))
         for c in np.flatnonzero(sizes):
             observations[int(c)].append([offset["index"], record["frame"], int(sizes[c]), float(losses[c])])
         for instance in np.unique(meta["instance"][~normal]):
@@ -172,6 +195,14 @@ def _sequence(task):
             ranks, counts = np.unique(rank[chosen], return_counts=True)
             within = frame_neg_above[rank[chosen]] - .5*frame_normal_hist[rank[chosen]]
             across = global_neg_above[rank[chosen]] - .5*negative[rank[chosen]] - within
+            losses = ploss[rank[chosen]]
+            local_fp = frame_neg_above[rank[chosen]]
+            local_tp = frame_pos_above[rank[chosen]]
+            detail_points = []
+            for role, at in (("largest_loss", chosen[np.argmax(losses)]), ("highest_score", chosen[np.argmax(score[chosen])])):
+                detail_points.append(dict(role=role, slot=int(meta["slot"][at]), score=float(score[at]),
+                    AP_loss=float(ploss[rank[at]]), same_scan_normals_at_or_above=int(frame_neg_above[rank[at]]),
+                    other_scan_normals_at_or_above=int(global_neg_above[rank[at]]-frame_neg_above[rank[at]])))
             anomaly[int(instance)].append(dict(index=offset["index"], frame=record["frame"],
                 count=len(chosen), AP_loss=float(ploss[rank[chosen]].sum()),
                 ranks=ranks.tolist(), counts=counts.tolist(),
@@ -179,6 +210,10 @@ def _sequence(task):
                 within_scan_rank_error=float((within/normal.sum()).mean()),
                 cross_scan_rank_error=float((across/(negative.sum()-normal.sum())).mean()),
                 within_scan_AP_loss=float((frame_neg_above[rank[chosen]]/denominator[rank[chosen]]).sum()*100/positive.sum()),
+                local_AP_credit=float((local_tp/(local_tp+local_fp)).sum()*100/positive.sum()),
+                cross_only_points=int((local_fp==0).sum()),
+                cross_only_AP_loss=float(losses[local_fp==0].sum()),
+                points_with_local_confusion=int((local_fp>0).sum()), point_examples=detail_points,
                 score_quantiles=np.quantile(score[chosen], [.1, .5, .9]).tolist(),
                 range_quantiles=np.quantile(meta["range"][chosen], [.1, .5, .9]).tolist()))
         if len(histograms) == 16:
@@ -194,6 +229,7 @@ def _sequence(task):
             semantic=int(positions[0] >> np.uint64(48)), cells=len(positions),
             orientation=int(orientation[np.flatnonzero(component==c)[0]]),
             bounds_world=[(grid.min(0) * CELL).tolist(), ((grid.max(0) + 1) * CELL).tolist()],
+            point_examples=sorted(examples[c], key=lambda r:-r["score"])[:3],
             observations=obs, points=sum(r[2] for r in obs), AP_loss=sum(r[3] for r in obs)))
     objects = []
     for instance, obs in sorted(anomaly.items()):
@@ -208,6 +244,9 @@ def _sequence(task):
             within_scan_rank_error=sum(r["within_scan_rank_error"]*r["count"] for r in obs)/sum(r["count"] for r in obs),
             cross_scan_rank_error=sum(r["cross_scan_rank_error"]*r["count"] for r in obs)/sum(r["count"] for r in obs),
             within_scan_AP_loss=sum(r["within_scan_AP_loss"] for r in obs),
+            local_AP_credit=sum(r["local_AP_credit"] for r in obs),
+            cross_only_points=sum(r["cross_only_points"] for r in obs),
+            cross_only_AP_loss=sum(r["cross_only_AP_loss"] for r in obs),
             center_world_span=np.ptp([r["center_world"] for r in obs], axis=0).tolist()))
     # Check the physical meaning of pose-based linking, not just matrix shape.
     from scipy.spatial import cKDTree
@@ -231,22 +270,41 @@ def _sequence(task):
                 calibration_sha256=file_sha256(directory / "calib.txt"))
 
 
-def account(output, workers):
+def account(output, workers, run=None):
     """Partition 100-AP exactly; retain both sides without double counting them."""
     output.mkdir(parents=True, exist_ok=True)
     disk_check(1_000_000_000)
     write_json(output / "ledger_resources.json", runtime_snapshot())
     manifest = load_manifest("assets/val.json", "val")
-    source = json.loads((OUTPUT / "lr.json").read_text())
-    prediction_checkpoint = Path(source["checkpoint"])
-    if source["checkpoint_sha256"] != file_sha256(prediction_checkpoint):
-        raise ValueError("C source predictions have changed")
-    import torch
-    retained = torch.load(BEST_C,map_location="cpu",weights_only=False)["model"]
-    predicted = torch.load(prediction_checkpoint,map_location="cpu",weights_only=False)["model"]
-    if retained.keys()!=predicted.keys() or any(not torch.equal(retained[k],predicted[k]) for k in retained):
-        raise ValueError("retained C parameters differ from the prediction model")
-    del retained,predicted
+    if run is None:
+        source = json.loads((OUTPUT / "lr.json").read_text())
+        prediction_checkpoint = Path(source["checkpoint"])
+        if source["checkpoint_sha256"] != file_sha256(prediction_checkpoint):
+            raise ValueError("C source predictions have changed")
+        import torch
+        retained = torch.load(BEST_C,map_location="cpu",weights_only=False)["model"]
+        predicted = torch.load(prediction_checkpoint,map_location="cpu",weights_only=False)["model"]
+        if retained.keys()!=predicted.keys() or any(not torch.equal(retained[k],predicted[k]) for k in retained):
+            raise ValueError("retained C parameters differ from the prediction model")
+        del retained,predicted
+        checkpoint, scores, curve_path, geometry = BEST_C, OUTPUT/"lr_val.npy", OUTPUT/"lr_pr.csv", None
+    else:
+        from .diagnose import score_curve, curve_summary
+        result = json.loads((run/"result.json").read_text())
+        validation = json.loads((run/"val.json").read_text())
+        if not result["complete"] or validation["manifest_sha256"] != manifest["sha256"]:
+            raise ValueError("endpoint predictions must use the completed declared validation population")
+        checkpoint = prediction_checkpoint = run/"last.pt"
+        scores = run/f"val{result['successful_updates']}.npy"
+        curve_path, geometry = output/"curve.csv", ROOT_ERRORS
+        meta = np.load(OUTPUT/"val_points.npy", mmap_mode="r")
+        curve = score_curve(np.load(scores,mmap_mode="r"), meta["target"])
+        if any(abs(curve[k]-result["final_metrics"][k])>1e-9 for k in ("AP","FPR95","AUROC")):
+            raise ValueError("current endpoint AP does not match exact point identities")
+        write_csv(curve_path, [dict(threshold=float(v),tp=int(t),fp=int(f),precision=float(p),recall=float(r))
+                  for v,t,f,p,r in zip(curve["values"][::-1],curve["tp"],curve["fp"],curve["precision"],curve["recall"])])
+        source = dict(checkpoint_sha256=file_sha256(checkpoint), splits=dict(val=dict(
+            manifest_sha256=manifest["sha256"], metrics=curve_summary(curve))))
     metadata = json.loads((OUTPUT / "val_offsets.json").read_text())
     if metadata["manifest"]!=manifest["sha256"] or source["splits"]["val"]["manifest_sha256"]!=manifest["sha256"]:
         raise ValueError("C prediction and point identities use different validation manifests")
@@ -254,12 +312,13 @@ def account(output, workers):
     tasks = []
     for sequence in sorted({r["sequence"] for r in offsets}):
         selected = [r for r in offsets if r["sequence"] == sequence]
-        tasks.append((sequence, [manifest["records"][r["index"]] for r in selected], selected, str(output)))
+        tasks.append((sequence, [manifest["records"][r["index"]] for r in selected], selected, str(output),
+                      str(scores), str(curve_path), str(geometry) if geometry else None))
     with ProcessPoolExecutor(max_workers=workers) as executor:
         sequences = list(executor.map(_sequence, tasks))
     objects = sorted([r for s in sequences for r in s["objects"]], key=lambda r:-r["AP_loss"])
     surfaces = [r for s in sequences for r in s["surfaces"]]
-    values, positive, negative, denominator, ploss, nloss = rank_data()
+    values, positive, negative, denominator, ploss, nloss = rank_data(curve_path)
     object_histogram = np.zeros((len(objects), len(values)), np.int64)
     for i, obj in enumerate(objects):
         for obs in obj["observations"]:
@@ -293,7 +352,8 @@ def account(output, workers):
     edges = [dict(anomaly=objects[i]["id"], normal=surfaces[j]["id"], AP_loss=float(matrix[j, i]))
              for j, i in zip(*np.nonzero(matrix))]
     write_csv(output / "relations.csv", sorted(edges, key=lambda r:-r["AP_loss"]))
-    result = dict(checkpoint=str(BEST_C), checkpoint_sha256=file_sha256(BEST_C),
+    result = dict(checkpoint=str(checkpoint), checkpoint_sha256=file_sha256(checkpoint),
+        predictions=str(scores), geometry_source=str(geometry or output),
         prediction_checkpoint=str(prediction_checkpoint), prediction_checkpoint_sha256=source["checkpoint_sha256"],
         retained_parameters_equal_prediction=True,
         validation_manifest=manifest["sha256"], metrics=source["splits"]["val"]["metrics"],
@@ -302,6 +362,13 @@ def account(output, workers):
         unassigned_AP_loss=0., accounting_residual=float(expected-matrix.sum()), zero_loss_normal_points=int(negative[nloss==0].sum()),
         zero_loss_anomaly_points=int(positive[ploss==0].sum()),
         recall_bands=RECALL_BANDS,AP_loss_by_recall=band_loss.sum(0).tolist(),
+        rank_comparison=dict(
+            point_weighted_within_scan_AP=sum(r["local_AP_credit"] for r in objects),
+            within_scan_pair_error=sum(r["within_scan_rank_error"]*r["points"] for r in objects)/int(positive.sum()),
+            cross_scan_pair_error=sum(r["cross_scan_rank_error"]*r["points"] for r in objects)/int(positive.sum()),
+            cross_only_points=sum(r["cross_only_points"] for r in objects),
+            cross_only_AP_loss=sum(r["cross_only_AP_loss"] for r in objects),
+            interpretation="Cross-only means no same-scan normal at or above this anomalous point. Local AP changes class prevalence and reference population; its difference from global AP is not an attainable calibration gain."),
         definitions=dict(point_loss="100/P * FP(s)/(TP(s)+FP(s)); every positive and complete score tie retained",
             relation="100/P * sum over positives in object of N_surface(score>=s)/(TP(s)+FP(s))",
             aggregation="Repeated observations are merged into cases, never removed from official point counts",

@@ -1057,15 +1057,21 @@ def mining_result(output):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("collect", "analyze", "gradients", "replay", "cases", "mine", "match", "coverage", "mining-result", "account", "materials", "attribute", "focus", "observe", "features", "precision", "model-check", "transfer"))
+    parser.add_argument("action", choices=("collect", "analyze", "gradients", "replay", "cases", "mine", "match", "coverage", "mining-result", "account", "learning", "materials", "attribute", "focus", "observe", "features", "precision", "model-check", "transfer"))
     parser.add_argument("--output", type=Path, default=OUTPUT)
     parser.add_argument("--workers", type=int, default=4)
+    parser.add_argument("--run", type=Path, help="Completed run with retained full point predictions")
     parser.add_argument("--names", nargs="+", default=list(CHECKPOINTS))
     parser.add_argument("--limit",type=int,help="Bound the precision diagnosis to its preselected case scans")
     args = parser.parse_args()
     torch.set_num_threads(2)
     torch.set_num_interop_threads(1)
-    if args.action == "transfer":
+    if args.action == "learning":
+        from .learning import analyze_records
+        if args.run is None:
+            parser.error("learning requires --run")
+        analyze_records(args.run, args.output, args.workers)
+    elif args.action == "transfer":
         from .probe import transfer
         transfer(args.output,args.workers)
     elif args.action == "model-check":
@@ -1091,7 +1097,7 @@ def main():
         materials(args.output,args.workers)
     elif args.action == "account":
         from .attribute import account
-        account(args.output,args.workers)
+        account(args.output,args.workers,args.run)
     elif args.action == "collect":
         collect(args.output, args.workers)
     elif args.action == "analyze":

@@ -40,3 +40,20 @@ def test_surface_groups_merge_repeated_cells_without_crossing_semantics():
     orientation[np.searchsorted(unique,keys[2])]=1
     separated=surface_groups(unique,orientation)[np.searchsorted(unique,keys)]
     assert separated[0]!=separated[2]
+
+
+def test_two_training_visits_preserve_point_identity_and_opposite_class_ties():
+    from src.learning import point_order, two_visits
+    targets=np.array([0,1,1,0,-1])
+    slots=np.array([2,7,19,51,90],dtype=np.uint32)
+    first=np.array([0.,0.,-1.,-2.,99.],dtype=np.float32)
+    second=np.array([1.,2.,3.,-3.,-99.],dtype=np.float32)
+    rows,_,_,_=two_visits([first,second],targets,slots)
+    assert rows[0]['wrong_both']==1 and rows[1]['corrected']==1
+    assert rows[0]['point_examples'][0]['slot']==2
+    ranks,ap=point_order(first,targets)
+    np.testing.assert_allclose(ranks[:4],[.75,.25,.5,0.])
+    np.testing.assert_allclose(ap,100*(.5+2/3)/2)
+    assert np.isnan(ranks[-1])
+    ranks,ap=point_order(second[:1],targets[:1])
+    assert ap is None and np.isnan(ranks).all()
