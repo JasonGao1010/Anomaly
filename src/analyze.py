@@ -902,7 +902,7 @@ def sampling_relations(args):
     print(json.dumps(report, ensure_ascii=False, allow_nan=False), flush=True)
 
 
-def anomaly_views(directory):
+def anomaly_views(directory, limits=None):
     """Three projections and one oblique view; one point per anomalous scan."""
     import matplotlib
     matplotlib.use("Agg")
@@ -933,32 +933,49 @@ def anomaly_views(directory):
         raise ValueError("invalid anomaly-only scan statistics")
     plots = [(0,1,"距离与回波数","xy"),(0,2,"距离与强度","xz"),
              (1,2,"回波数与强度","yz"),(None,None,"异常观测三维斜视图","3d")]
-    labels = ["距离中位数（米）", "异常回波数（个，对数刻度）", "强度中位数"]
-    count_limit = np.ceil(values[:,1].max()/500)*500
-    count_ticks = [5]+[factor*10**power for power in range(1, int(np.log10(count_limit))+1)
-                      for factor in (1,3) if factor*10**power<=count_limit]
-    intensity_limit = np.ceil(values[:,2].max()*10)/10
+    labels = ["距离中位数（米）", "异常回波数（个）", "强度中位数"]
+    if limits is None:
+        limits = [[0,50],[0,float(np.ceil(values[:,1].max()/500)*500)],
+                  [0,float(np.ceil(values[:,2].max()*10)/10)]]
+    limits = np.asarray(limits,dtype=float).reshape(3,2)
+    if not np.isfinite(limits).all() or (limits[:,0] >= limits[:,1]).any():
+        raise ValueError("display limits must be finite and ordered")
+    # Keep identical point identities in all projections; clipping changes display only.
+    visible = ((values >= limits[:,0]) & (values <= limits[:,1])).all(axis=1)
+    count_ticks = [v for v in matplotlib.ticker.MaxNLocator(nbins=5,integer=True).tick_values(*limits[1])
+                   if limits[1,0] <= v < limits[1,1]]+[limits[1,1]]
+    distance_ticks = [limits[0,0]]+[v for v in matplotlib.ticker.MaxNLocator(nbins=5).tick_values(*limits[0])
+                                   if limits[0,0] < v <= limits[0,1]]
+    intensity_ticks = np.linspace(*limits[2],6)
+    groups = {}
+    for group in sorted({r["group"] for r in rows}):
+        mask = np.array([r["group"] == group for r in rows])
+        groups[group] = dict(total=int(mask.sum()),shown=int((mask & visible).sum()),
+                             outside=int((mask & ~visible).sum()),
+                             outside_by_axis=[int((mask & ((values[:,i] < limits[i,0]) |
+                                                          (values[:,i] > limits[i,1]))).sum()) for i in range(3)])
     files = []
     with PdfPages(directory/"views.pdf") as pdf:
         for x,y,title,name in plots:
             three = name == "3d"
             fig = plt.figure(figsize=(12,10))
             ax = fig.add_subplot(projection="3d" if three else None)
-            fig.subplots_adjust(left=.12,right=.97,bottom=.18,top=.83)
+            fig.subplots_adjust(left=.12,right=.97,bottom=.21,top=.83)
             for group,color,marker,label in (("anomaly_nuscenes","#2864a0","o","nuScenes"),
                                              ("anomaly_stu","#bb6526","^","STU")):
-                mask = np.array([r["group"] == group for r in rows])
-                coordinates = (values[mask,0],np.log10(values[mask,1]),values[mask,2]) if three else (values[mask,x],values[mask,y])
+                mask = np.array([r["group"] == group for r in rows]) & visible
+                coordinates = tuple(values[mask].T) if three else (values[mask,x],values[mask,y])
                 options = dict(depthshade=False) if three else {}
                 ax.scatter(*coordinates,s=2,alpha=.6,c=color,marker=marker,linewidths=0,
-                           rasterized=True,label=f"{label}  ({mask.sum():,})",**options)
+                           rasterized=True,label=f"{label}  ({mask.sum():,} / {groups[group]['total']:,})",**options)
             if three:
                 ax.set_box_aspect((1,1,1))
                 ax.set_proj_type("ortho")
                 ax.view_init(elev=24,azim=-55)
-                ax.set_xlim(0,50);ax.set_ylim(np.log10(4.5),np.log10(count_limit));ax.set_zlim(0,intensity_limit)
-                ax.set_yticks(np.log10(count_ticks),[f"{n:,}" for n in count_ticks])
-                ax.set_zticks([0,.4,.8,1.2,1.6])
+                ax.set_xlim(*limits[0]);ax.set_ylim(*limits[1]);ax.set_zlim(*limits[2])
+                ax.set_xticks(distance_ticks)
+                ax.set_yticks(count_ticks)
+                ax.set_zticks(intensity_ticks)
                 for dimension,label in zip("xyz",labels):
                     getattr(ax,"set_"+dimension+"label")(label,fontproperties=chinese,labelpad=13)
                     getattr(ax,dimension+"axis").set_pane_color((.99,.995,1.,1.))
@@ -967,17 +984,15 @@ def anomaly_views(directory):
                 ax.set_xlabel(labels[x],fontproperties=chinese,labelpad=12)
                 ax.set_ylabel(labels[y],fontproperties=chinese,labelpad=12)
                 for dimension,index in (("x",x),("y",y)):
-                    axis = getattr(ax,dimension+"axis")
                     if index == 1:
-                        getattr(ax,"set_"+dimension+"scale")("log")
-                        getattr(ax,"set_"+dimension+"lim")(4.5,count_limit)
-                        getattr(ax,"set_"+dimension+"ticks")(count_ticks,[f"{n:,}" for n in count_ticks])
-                        axis.set_minor_locator(matplotlib.ticker.NullLocator())
+                        getattr(ax,"set_"+dimension+"lim")(*limits[1])
+                        getattr(ax,"set_"+dimension+"ticks")(count_ticks)
                     elif index == 0:
-                        getattr(ax,"set_"+dimension+"lim")(0,50)
+                        getattr(ax,"set_"+dimension+"lim")(*limits[0])
+                        getattr(ax,"set_"+dimension+"ticks")(distance_ticks)
                     else:
-                        getattr(ax,"set_"+dimension+"lim")(0,intensity_limit)
-                        getattr(ax,"set_"+dimension+"ticks")([0,.4,.8,1.2,1.6])
+                        getattr(ax,"set_"+dimension+"lim")(*limits[2])
+                        getattr(ax,"set_"+dimension+"ticks")(intensity_ticks)
                 ax.grid(color="#e2e6ea",linewidth=.6);ax.set_axisbelow(True)
                 ax.spines[["top","right"]].set_visible(False)
                 ax.spines[["left","bottom"]].set_color("#66717d")
@@ -987,8 +1002,9 @@ def anomaly_views(directory):
             legend=fig.legend(handles,names,loc="upper center",bbox_to_anchor=(.54,.905),ncol=2,frameon=False,markerscale=4)
             for handle in legend.legend_handles:
                 handle.set_alpha(1.)
-            fig.text(.12,.083,"每点对应一帧，仅统计异常点；全部异常帧均保留，无抽帧或坐标扰动。",fontproperties=chinese)
-            fig.text(.12,.048,"点数使用对数刻度；距离和强度为中位数。两域强度并非统一标定的物理反射率。",fontproperties=chinese,color="#505965")
+            fig.text(.12,.108,"每点对应一帧，仅统计异常点；四图使用同一个三维显示窗口。",fontproperties=chinese)
+            fig.text(.12,.077,"图例为窗口内帧数／全部异常帧数；窗口外样本仍保留在样本池。",fontproperties=chinese)
+            fig.text(.12,.046,"三轴均为线性刻度；距离和强度为中位数。两域强度并非统一标定的物理反射率。",fontproperties=chinese,color="#505965")
             # Verify actual typefaces and glyphs before raster and PDF export.
             fig.canvas.draw()
             for item in fig.findobj(Text):
@@ -1003,7 +1019,13 @@ def anomaly_views(directory):
             fig.savefig(path,dpi=240,facecolor="white")
             pdf.savefig(fig,facecolor="white",dpi=240)
             files.append(str(path));plt.close(fig)
-    print(json.dumps(dict(figures=files,anomalous_scans=len(rows),point_area=2,image_pixels=[2880,2400])))
+    result = dict(figures=files,source=str(directory/"scans.csv"),train_identity=summary["inputs"]["train_identity"],
+                  anomalous_scans=len(rows),shown=int(visible.sum()),outside=int((~visible).sum()),groups=groups,
+                  axes=["anomaly_range_median_m","anomaly_count","anomaly_intensity_median"],limits=limits.tolist(),scale="linear",
+                  scope="Display window only; all four views share point identities; no training records or stored statistics are changed.",
+                  point_area=2,image_pixels=[2880,2400])
+    write_json(directory/"views.json",result)
+    print(json.dumps(result))
 
 
 def main():
@@ -1015,14 +1037,17 @@ def main():
     parser.add_argument("--report-only",action="store_true")
     parser.add_argument("--coverage",type=Path,help="Inspect sampling relations in this native training manifest")
     parser.add_argument("--views",type=Path,help="Draw four static anomaly-frame views from this coverage directory")
+    parser.add_argument("--view-limits",type=float,nargs=6,help="Display-only min/max bounds for distance, anomaly count and intensity")
     args=parser.parse_args()
     if args.workers < 1:
         parser.error("workers must be positive")
     if args.views:
         if args.coverage or args.report_only:
             parser.error("--views reads completed scan statistics")
-        anomaly_views(args.views)
+        anomaly_views(args.views,args.view_limits)
         return
+    if args.view_limits is not None:
+        parser.error("--view-limits requires --views")
     if args.coverage:
         if args.report_only or args.output == Path("results/206"):
             parser.error("--coverage needs a separate --output and cannot be combined with --report-only")

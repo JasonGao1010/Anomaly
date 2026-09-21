@@ -67,7 +67,17 @@
 
 数值检查发现，一条近距离掠过细边缘的 STU 射线会被原来较浅的求交搜索漏掉，影响其遮挡和标签。该点约 1.32 米，在监督距离外，但仍可能作为上下文输入。因此，本轮未用于训练的中间版本已撤下，直接从保留的 44,569 条池重新生成补充数据；新世界明确记录 192 个搜索步、12 层细分，再用 384 步、14 层逐帧复算。已检查全部 **1,276 个新增合成帧**，标签、物体归属、插入点、被遮挡点和未修改背景均一致，坐标及强度最大绝对差为 **3.81470×10⁻⁶**，低于预先采用的 10⁻⁵ 容差。162 个代表帧的同精度重放逐元素一致；54 个世界的解析接地高度最大差为 1.51985×10⁻⁹ 米。该具体掠射射线另用独立求根方法核对，回归检查覆盖三档加密精度。详见[新增帧复算记录](results/data/wide/inspection.json)。历史保留池只承接其既有检查，不能将本次全新增帧复算扩称为历史全部扫描已完成相同加密验证；数值稳定也不能替代真实材质与未观测表面验证。
 
-更新后的四张静态大图为[距离—回波数](results/data/wide/coverage/views_xy.png)、[距离—强度](results/data/wide/coverage/views_xz.png)、[回波数—强度](results/data/wide/coverage/views_yz.png)和[三维斜视图](results/data/wide/coverage/views_3d.png)，另有[四页 PDF](results/data/wide/coverage/views.pdf)。每张图绘制全部 27,617 个异常帧，每帧一点，仅统计有效异常点。图像为 2,880×2,400 像素，散点面积 2 平方磅、透明度 0.6；回波数使用明确标注的对数刻度。四图已逐张查看，四页 PDF 实际嵌入宋体和 Times New Roman。完整帧身份和数值见[扫描统计](results/data/wide/coverage/scans.csv)。
+更新后的四张静态大图为[距离—回波数](results/data/wide/coverage/views_xy.png)、[距离—强度](results/data/wide/coverage/views_xz.png)、[回波数—强度](results/data/wide/coverage/views_yz.png)和[三维斜视图](results/data/wide/coverage/views_3d.png)，另有[四页 PDF](results/data/wide/coverage/views.pdf)。按用户要求，当前显示窗口参照真实 val19 的值域，稍向外留边距。复算读取 `assets/val.json` 中正式评价合格的 1,960 帧、19 个序列，核对原始点云和标签身份，再按同一有效异常点口径计算；每帧作为一个观测，不使用单点距离极值或模型预测。清单身份为 `918524fd271f896bf9288ebfe4131941a20cbd00a0925e91c8ccedf4d7574855`。
+
+| 每帧异常点统计量 | val19 实际最小值 | val19 实际最大值 | 当前显示范围 |
+| --- | ---: | ---: | ---: |
+| 距离中位数（米） | 3.584873 | 49.507874 | 2.5–50 |
+| 异常回波数 | 5 | 406 | 0–450 |
+| 强度中位数 | 0.011714 | 0.932714 | 0–1.0 |
+
+四图均显示同一个三维窗口内的 **25,548 帧**，包含 17,321 帧 nuScenes 和 8,227 帧 STU；图例分别标出窗口内帧数与全部异常帧数。窗口外 2,069 帧仍保留在 45,867 条训练记录及完整扫描统计中，未删除或改写：nuScenes 为 764 帧、STU 为 1,305 帧。其中回波数超过 450 的有 2,034 帧，强度超过 1.0 的有 37 帧，二者重叠 2 帧；距离窗口没有排除样本。各轴范围和窗外计数由绘图程序保存至[显示记录](results/data/wide/coverage/views.json)。此次 val19 统计仅用于用户指定的显示范围，没有据此改变生成、选样、训练或评价规则；前述全池粗范围统计仍描述全部异常帧。
+
+每点仍对应一帧，仅统计有效异常点。图像为 2,880×2,400 像素，散点面积 2 平方磅、透明度 0.6；按用户最新要求，三条轴均使用线性刻度，三维图中的回波数坐标也使用原始计数。四图已逐张查看，四页 PDF 实际嵌入宋体和 Times New Roman。重绘命令为 `python -m src.analyze --views results/data/wide/coverage --view-limits 2.5 50 0 450 0 1`。完整帧身份和数值见[扫描统计](results/data/wide/coverage/scans.csv)。
 
 生成命令为 `python -m src.render --complete-from results/data/complete/train.json --output results/data/wide --size-multiplier 2 --workers 12`；统计和绘图继续使用 `src.analyze --coverage` 与 `--views`。最终生成用时 547.98 秒，加密复算 344.11 秒，全量读取统计 45.66 秒，使用既有 Python 环境、12 个 CPU 工作进程，底层数值库线程为一。新保存扫描差量约 268.61 MB。结束前 Windows E 盘剩余约 26.49 GB，高于 10 GB 保留线；删除此前中间文件后宿主空间未即时恢复，不能把 WSL 内文件减少当作 E 盘物理空间已回收。
 
