@@ -996,6 +996,68 @@ def _completion_collision(item, context):
                                  gradient_step_m=1e-6, witness_fraction=1-1e-6)[0]) > 0
 
 
+def _support_plane(context, anchor, footprint):
+    """Require the same measured support for both site search and final placement."""
+    from scipy.spatial import ConvexHull, QhullError
+    ground = context["ground"][context["ground_tree"].query_ball_point(anchor[:2], footprint+.3)]
+    if len(ground) < 12:
+        return None
+    center = ground.mean(0)
+    _, _, vh = np.linalg.svd(ground-center, full_matrices=False)
+    up = vh[-1]*(1 if vh[-1, 2] > 0 else -1)
+    residual = float(np.quantile(abs((ground-center)@up), .95))
+    if up[2] < .95 or residual > .04:
+        return None
+    try:
+        hull = ConvexHull(ground[:, :2])
+    except QhullError:
+        return None
+    if np.max(hull.equations[:, :2]@anchor[:2]+hull.equations[:, 2]+footprint) > 0:
+        return None
+    return dict(normal=up.tolist(), offset=-float(up@center), points=len(ground), residual=residual)
+
+
+def _completion_sites(task):
+    """Find supported ground before choosing objects; no random placement trials."""
+    domain, scene, bands = task
+    ctx = _completion_context(domain, scene)
+    # Cell centers avoid repeatedly choosing measured points on a support boundary.
+    grid, first, counts = np.unique(np.floor(ctx["ground"][:, :2]/2).astype(np.int32),
+                                   axis=0, return_index=True, return_counts=True)
+    anchors = ctx["ground"][first].copy()
+    anchors[:, :2] = grid*2+1
+    rows = []
+    for band in bands:
+        lower, upper = [2.5, 10, 20, 35][band], [10, 20, 35, 50][band]
+        target = lower+.2*(upper-lower)
+        candidates = []
+        for index in sorted(set(np.linspace(0, len(ctx["frames"])-1, 7).round().astype(int))):
+            frame = ctx["frames"][index]
+            local = (anchors-frame.pose[:3, 3])@frame.pose[:3, :3]
+            distance = np.linalg.norm(local, axis=1)
+            valid = np.flatnonzero((distance >= lower+1) & (distance < upper-1) & (local[:, 0] > 0))
+            score = abs(distance[valid]-target)/target-.02*np.log1p(counts[valid])
+            for j in np.argsort(score, kind="stable")[:24]:
+                candidates.append((float(score[j]), int(index), int(valid[j])))
+        used = set()
+        for radius in _completion["policy"]["site_radius_m"]:
+            found = 0
+            for _, index, cell in sorted(candidates):
+                if cell in used:
+                    continue
+                anchor = anchors[cell]
+                support = _support_plane(ctx, anchor, radius)
+                if support is None:
+                    continue
+                used.add(cell); found += 1
+                rows.append(dict(domain=domain, scene=scene, log=ctx["records"][0].get("log_token", "206"),
+                    range_bin=band, frame_index=index, anchor=anchor.tolist(), support_radius=radius,
+                    support=support))
+                if found == 3:
+                    break
+    return rows
+
+
 def _completion_rays(context, index, domain):
     if domain == "STU":
         return _completion["stu_rays"]
@@ -1020,7 +1082,6 @@ def _completion_descriptor(observed, item, source, raw, domain):
 
 def _completion_world(task):
     """One deliberate placement, observed along the unchanged source trajectory."""
-    from scipy.spatial import ConvexHull, QhullError
     domain, scene = task["domain"], task["scene"]
     destination = Path(_completion["output"])/task["name"]
     metadata_path = destination/"world.json"
@@ -1039,23 +1100,24 @@ def _completion_world(task):
     if "reuse" in task:
         saved = json.loads(Path(task["reuse"]).read_text())
         proposals, seed = saved["objects"], saved["seed"]
-        objects = [Object(o["object_id"], o["geometry"], _completion["geometry"][o["geometry"]].shape,
+        objects = [Object(o["object_id"], o["geometry"], Shape(**o["shape"]) if "shape" in o else _completion["geometry"][o["geometry"]].shape,
                           Material(**o["material"]), np.asarray(o["pose"]))
                    for o in proposals if o.get("accepted", True)]
     else:
         cell = task["cell"]
         source_geometry = task["geometry"]
         original = _completion["geometry"][source_geometry]
-        target_range, target_count = [6., 15., 27., 42.][cell[0]], [12., 32., 100., 300.][cell[1]]
+        target_range = task.get("target_range", [6., 15., 27., 42.][cell[0]])
+        target_count = [12., 32., 100., 300.][cell[1]]
         extent = np.subtract(*original.shape.bounds()[::-1])
         limit = min(4., float(np.min(_completion["extent_limit"]/extent)))
         estimated = _completion["areas"].get((domain, source_geometry), 1000.)
-        scale = float(np.clip(np.sqrt(target_count*target_range**2/max(estimated, 1.)), .35, max(.35, limit)))
-        material = Material(([.08,.5,.92] if task["round"] == 0 else [.02,.65,.99])[cell[2]], .1, 0.)
+        scale = task.get("scale", float(np.clip(np.sqrt(target_count*target_range**2/max(estimated, 1.)), .35, max(.35, limit))))
+        material = Material(task.get("material_quantile", ([.08,.5,.92] if task["round"] == 0 else [.02,.65,.99])[cell[2]]), .1, 0.)
         seed = 700000+task["number"]
         # Candidate order follows the requested distance and surrounding structure, never a random permutation.
-        anchors = []
-        for index in sorted(set(int((len(ctx["frames"])-1)*f) for f in (.25,.5,.75))):
+        anchors = [(float(i), r["frame_index"], np.asarray(r["anchor"])) for i, r in enumerate(task.get("sites", []))]
+        for index in ([] if anchors else sorted(set(int((len(ctx["frames"])-1)*f) for f in (.25,.5,.75)))):
             frame, raw = ctx["frames"][index], ctx["raw"][index]
             valid = frame.actual & np.isin(raw, ctx["ground_ids"]) & (frame.xyzi[:,0] > 0)
             lower, upper = [2.5,10,20,35][cell[0]], [10,20,35,50][cell[0]]
@@ -1079,26 +1141,15 @@ def _completion_world(task):
                                       original.buried_fraction, np.empty((0,3)), True)
                 lo, hi = shape.bounds()
                 footprint = float(np.linalg.norm(np.maximum(abs(lo[:2]),abs(hi[:2]))))
-                ground = ctx["ground"][ctx["ground_tree"].query_ball_point(anchor[:2], footprint+.3)]
-                if len(ground) < 12:
+                support = _support_plane(ctx, anchor, footprint)
+                if support is None:
                     rejected["support"] += 1; break
-                center = ground.mean(0)
-                _,_,vh = np.linalg.svd(ground-center, full_matrices=False)
-                up = vh[-1]*(1 if vh[-1,2]>0 else -1)
-                residual = float(np.quantile(abs((ground-center)@up),.95))
-                if up[2] < .95 or residual > .04:
-                    rejected["support"] += 1; break
-                try:
-                    hull = ConvexHull(ground[:,:2])
-                except QhullError:
-                    rejected["support"] += 1; break
-                if np.max(hull.equations[:,:2]@anchor[:2]+hull.equations[:,2]+footprint) > 0:
-                    rejected["support"] += 1; break
+                up, residual = np.asarray(support["normal"]), support["residual"]
                 source = ctx["frames"][index]
                 direction = source.pose[:3,3]-anchor
-                yaw = math.atan2(direction[1],direction[0]) + (task["number"]%3)*math.pi/4
+                yaw = math.atan2(direction[1],direction[0]) + task.get("yaw_offset", (task["number"]%3)*math.pi/4)
                 item = ground_object(grounding,material,object_id=1,geometry_id=identity(asdict(shape)),
-                    anchor_world=anchor,normal_world=up,plane_offset=-float(up@center),yaw=yaw)
+                    anchor_world=anchor,normal_world=up,plane_offset=support["offset"],yaw=yaw)
                 if _completion_collision(item,ctx):
                     rejected["collision"] += 1; break
                 world = World(NATIVE_VERSION,206 if domain=="STU" else 0,seed,(item,),1e-6)
@@ -1113,7 +1164,7 @@ def _completion_world(task):
                     loss += 2*(actual[2]!=cell[2])
                     proposal = dict(object_id=1,geometry=item.geometry_id,source_geometry=source_geometry,
                         shape=asdict(shape),material=asdict(material),pose=item.pose.tolist(),scale=current_scale,
-                        anchor_frame=index,support_points=len(ground),support_p95_m=residual,normal_world=up.tolist())
+                        anchor_frame=index,support_points=support["points"],support_p95_m=residual,normal_world=up.tolist())
                     if best is None or loss < best[0]:
                         best = loss,item,proposal
                         anchor_result = index,observed
@@ -1137,6 +1188,39 @@ def _completion_world(task):
             return result
         objects, proposals = [best[1]],[best[2]]
     world = World(NATIVE_VERSION,206 if domain=="STU" else 0,seed,tuple(objects),1e-6)
+    if "response_target" in task:
+        # Change one constant material, not individual point intensities or return counts.
+        index = next(i for i,f in enumerate(ctx["frames"]) if f.frame_id==task["frame"])
+        lower,upper = task["response_target"]
+        target = (lower+upper)/2
+        lo,hi = 0.,1.
+        matched=None
+        for step in range(10):
+            quantile = 0. if step==0 else 1. if step==1 else (lo+hi)/2
+            trial_objects=tuple(replace(o,material=replace(o.material,quantile=quantile))
+                                if o.object_id==task["object_id"] else o for o in objects)
+            trial=replace(world,objects=trial_objects)
+            observed=render_frame(ctx["frames"][index],trial,_completion_rays(ctx,index,domain),response,trace)
+            mask=(point_targets(observed.frame)==1)&(observed.object_ids==task["object_id"])
+            value=float(np.median(observed.frame.xyzi[mask,3]))
+            attempts.append(dict(frame=task["frame"],material_quantile=quantile,intensity_median=value,count=int(mask.sum())))
+            if lower<=value<upper:
+                matched=trial,observed
+                break
+            if value<target:lo=quantile
+            else:hi=quantile
+            if (step==0 and value>=upper) or (step==1 and value<lower):
+                break
+        if matched is None:
+            destination.mkdir(parents=True,exist_ok=True)
+            result=dict(specification=specification,task=task,accepted=False,records=[],observations=[],
+                        reason="response_interval_not_reached_for_this_observation",rejected=dict(response=1),attempts=attempts)
+            write_json(metadata_path,result)
+            return result
+        world,anchor_result = matched[0],(index,matched[1])
+        objects=list(world.objects)
+        proposals=[dict(p,material=asdict(next(o.material for o in objects if o.object_id==p["object_id"])))
+                   if p.get("accepted",True) else p for p in proposals]
     candidates, payloads, observations, sampling = [], [], [], []
     required = set(task.get("tokens",[]))
     for index,(record,source,raw) in enumerate(zip(ctx["records"],ctx["frames"],ctx["raw"])):
@@ -1191,7 +1275,7 @@ def _completion_world(task):
     for i in sorted(chosen):
         np.savez_compressed(candidates[i]["delta"],**payloads[i])
     result = dict(specification=specification,task=task,accepted=bool(chosen),domain=domain,scene=scene,
-        log_token=ctx["records"][0].get("log_token","206"),seed=seed,objects=proposals,
+        log_token=ctx["records"][0].get("log_token","206"),seed=seed,objects=proposals,trace=asdict(trace),
         records=[candidates[i] for i in sorted(chosen)],observations=[r for r in observations if r["index"] in chosen],
         eligible_candidates=len(candidates),attempts=attempts,rejected=dict(rejected),sampling=sampling,
         collision_scope="all supplied trajectory scans; unseen surfaces remain unknown")
@@ -1199,7 +1283,7 @@ def _completion_world(task):
     return result
 
 
-def complete_pool(reference_path, output, workers):
+def complete_pool(reference_path, output, workers, *, response_only=False, size_multiplier=1.):
     """Reuse candidates, deliberately fill weak conditions, make one repair pass, then stop."""
     import multiprocessing as mp
     from concurrent.futures import ProcessPoolExecutor
@@ -1209,8 +1293,17 @@ def complete_pool(reference_path, output, workers):
     output,reference_path = Path(output).resolve(),Path(reference_path).resolve()
     reference = load_manifest(reference_path,"train")
     base = load_manifest(Path(__file__).resolve().parents[1]/"assets/train.json","train")
-    if reference["base_manifest"] != base["sha256"] or reference.get("dataset_revision") != "expanded_observations":
+    supplement = reference.get("dataset_revision") == "directed_conditions"
+    if response_only and not supplement:
+        raise ValueError("response completion needs an already constructed observation pool")
+    if reference["base_manifest"] != base["sha256"] or reference.get("dataset_revision") not in ("expanded_observations", "directed_conditions"):
         raise ValueError("directed completion requires the existing expanded two-domain pool")
+    if output/"train.json" == reference_path:
+        raise ValueError("keep the input pool while constructing additional observations")
+    original_path, original_pool = reference_path, reference
+    while original_pool.get("dataset_revision") == "directed_conditions":
+        original_path = Path(original_pool["completion"]["reference"])
+        original_pool = load_manifest(original_path, "train")
     output.mkdir(parents=True,exist_ok=True)
     geometry_path = Path(reference["expansion"]["geometry"])
     library = json.loads(geometry_path.read_text())
@@ -1261,11 +1354,13 @@ def complete_pool(reference_path, output, workers):
                    geometry=worlds[key[0]]["geometry"],descriptor=vector)
         all_views.append(row)
         if key in retained:views.append(row)
-    native_retained = {(r["scene"],r["token"]) for r in reference["records"] if r["group"]=="anomaly_nuscenes"}
+    prior_worlds = reference.get("completion", {}).get("worlds", [])
+    native_retained = {(r["scene"],r["token"]) for r in reference["records"]
+                       if r["group"]=="anomaly_nuscenes" and r["world"] not in prior_worlds}
     native_worlds = {}
     for scene in sorted(scenes):
         if scene=="206":continue
-        path = reference_path.parent/scene/"world.json"
+        path = original_path.parent/scene/"world.json"
         saved = json.loads(path.read_text());native_worlds[scene]=str(path)
         frame_ids = {r["token"]:r["frame"] for r in scenes[scene]}
         for item in saved["observation_selection"]:
@@ -1274,7 +1369,13 @@ def complete_pool(reference_path, output, workers):
                     frame=frame_ids[r["token"]],token=r["token"],geometry=r["geometry"],descriptor=r["descriptor"])
                 all_views.append(row)
                 if (scene,row["token"]) in native_retained:views.append(row)
+    for path in prior_worlds:
+        views.extend(json.loads(Path(path).read_text())["observations"])
     before = condition_coverage(views,edges)
+    if supplement:
+        previous = json.loads(Path(reference["completion"]["report"]).read_text())
+        if _condition_rows(before) != previous["after"]:
+            raise ValueError("retained object observations do not reproduce the input pool's coverage")
     cells = condition_coverage(views,edges)
     records,added_stu,reuse = list(reference["records"]),[],defaultdict(set)
     # Three source parameter sets/logs is a support heuristic, not independent shape families or a frame quota.
@@ -1304,18 +1405,30 @@ def complete_pool(reference_path, output, workers):
         if row["geometry"] in simple:
             areas[row["domain"],row["geometry"]].append(np.exp(row["descriptor"][4]+2*row["descriptor"][0]))
     areas={k:float(np.quantile(v,.75)) for k,v in areas.items()}
-    extent_limit=np.max([np.subtract(*g.shape.bounds()[::-1]) for g in simple.values()],axis=0)
+    extent_limit=np.max([np.subtract(*g.shape.bounds()[::-1]) for g in simple.values()],axis=0)*size_multiplier
+    # A close grazing ray missed the former depth-8 search; preserve the deeper resolution in every new world.
+    trace=replace(Trace(**library["trace"]),steps=192,adaptive_depth=12)
     policy=dict(range_edges=[2.5,10,20,35,50],count_edges=[5,20,50,200],intensity_edges=edges,
-        support_geometries=3,support_logs_nuscenes=3,construction_rounds=2,candidate_anchors=12,
-        scale_adjustments=1,extent_limit_m=extent_limit.tolist(),new_independent_geometries=0,
+        support_geometries=3,support_logs_nuscenes=3,construction_rounds=0 if response_only else 1 if supplement else 2,candidate_anchors=12,
+        scale_adjustments=1,extent_limit_m=extent_limit.tolist(),size_multiplier=size_multiplier,new_independent_geometries=0,trace=asdict(trace),
         intensity_source="all valid normal returns in 449 STU 206 scans; first authorized keyframe of each of 46 native train logs",
         intensity_native_sources=[dict(scene=r["scene"],token=r["token"],log=r["log_token"]) for r in by_log.values()],
         excluded_logs=reference["split"]["excluded_logs"],validation_used=False,
         scope="Reuse training-source geometry and original backgrounds; scaled variants retain their source identity. No independent final holdout is newly created.")
+    if supplement and not response_only:
+        policy.update(site_search="all authorized scenes; measured ground cell centers; unchanged support and collision rules",
+                      site_radius_m=[1.7*size_multiplier,.9*size_multiplier], site_frames_per_scene=7, site_candidates_per_frame=24,
+                      placement="prefer supported broad-facing simple geometry at the lower part of a deficient range interval")
+    if response_only:
+        policy.update(response_completion="choose constant material quantile through unchanged empirical response, on existing supported worlds",
+                      response_search_steps=10, geometry_and_placement_changed=False)
+    elif size_multiplier>1:
+        policy.update(response_completion="one response correction pass after larger supported placements",response_search_steps=10,
+                      native_initial_material_quantiles=[.02,.25,.99])
     _completion=dict(output=str(output),reference=reference["sha256"],mapping=reference["mapping"],geometry=geometry,
         responses=responses,response_identity=identity({d:{k:v.tolist() if isinstance(v,np.ndarray) else v
             for k,v in asdict(r).items()} for d,r in responses.items()}),
-        edges=edges,trace=Trace(**library["trace"]),scenes=scenes,stu_frames=frames,stu_rays=read_rays(),
+        edges=edges,trace=trace,scenes=scenes,stu_frames=frames,stu_rays=read_rays(),
         areas=areas,extent_limit=extent_limit,policy=policy)
     _completion_contexts=OrderedDict()
     _completion_context("STU","206")
@@ -1324,18 +1437,29 @@ def complete_pool(reference_path, output, workers):
     results=[]
     native_order=sorted(by_log.values(),key=lambda r:(r["log_token"],r["scene"]))
     number=0
+    sites=[]
     with ProcessPoolExecutor(max_workers=workers,mp_context=mp.get_context("fork")) as pool:
         for result in pool.map(_completion_world,tasks):
             results.append(result);records.extend(result["records"]);views.extend(result["observations"])
         reused=condition_coverage(views,edges)
-        for round_id in range(2):
+        if supplement and not response_only:
+            bands={domain:sorted({key[1] for key,g in reused.items() if key[0]==domain and
+                (len(g["geometries"])<3 or (domain=="nuScenes" and len(g["logs"])<3))}) for domain in edges}
+            survey=[("STU" if scene=="206" else "nuScenes",scene,bands["STU" if scene=="206" else "nuScenes"])
+                    for scene in sorted(scenes)]
+            for index, found in enumerate(pool.map(_completion_sites,survey),1):
+                sites.extend(found)
+                if index%50==0 or index==len(survey):
+                    print(json.dumps(dict(surveyed_scenes=index,supported_sites=len(sites))),flush=True)
+        for round_id in range(policy["construction_rounds"]):
             cells=condition_coverage(views,edges)
             tasks=[]
             for key,group in sorted(cells.items()):
                 domain,*cell=key
                 missing=max(0,3-len(group["geometries"]),3-len(group["logs"]) if domain=="nuScenes" else 0)
                 if not missing:continue
-                target_area=[12,32,100,300][cell[1]]*[6,15,27,42][cell[0]]**2
+                target_range = ([2.5,10,20,35][cell[0]]+.2*([10,20,35,50][cell[0]]-[2.5,10,20,35][cell[0]])) if supplement else [6,15,27,42][cell[0]]
+                target_area=[12,32,100,300][cell[1]]*target_range**2
                 roots=sorted(simple,key=lambda g:(g in group["geometries"],
                     abs(math.log(max(areas.get((domain,g),1000.),1)/target_area)),g))
                 # A repair uses different source geometry and acquisition logs from the first attempt.
@@ -1344,13 +1468,62 @@ def complete_pool(reference_path, output, workers):
                 tried_logs={scenes[r["task"]["scene"]][0].get("log_token","206") for r in results
                     if r["task"]["domain"]==domain and r["task"].get("cell")==cell}
                 available=[r for r in native_order if r["log_token"] not in group["logs"]|tried_logs] or native_order
+                chosen_logs=set()
+                if supplement:
+                    # Select broad projected faces within the configured size limit; keep shape complexity unchanged.
+                    def capacity(name):
+                        extent=np.subtract(*simple[name].shape.bounds()[::-1])
+                        scale=min(4.,float(np.min(extent_limit/extent)))
+                        return max(extent[:2])*extent[2]*scale**2
+                    roots=sorted(roots,key=lambda g:(g in group["geometries"],-capacity(g),g))
                 for j,root in enumerate(roots[:missing]):
-                    scene="206" if domain=="STU" else available[(number+j)%len(available)]["scene"]
-                    tasks.append(dict(name=f"{domain.lower()}-{number:03d}",number=number,round=round_id,
-                                      domain=domain,scene=scene,geometry=root,cell=cell))
+                    extra={}
+                    if supplement:
+                        available_sites=[s for s in sites if s["domain"]==domain and s["range_bin"]==cell[0]
+                                         and (domain=="STU" or s["log"] not in chosen_logs)]
+                        if not available_sites:
+                            continue
+                        selected=min(available_sites,key=lambda s:(s["log"] in group["logs"],-s["support_radius"],
+                            s["support"]["residual"],-s["support"]["points"],s["scene"],s["frame_index"]))
+                        scene=selected["scene"]; chosen_logs.add(selected["log"])
+                        local_sites=[s for s in available_sites if s["scene"]==scene]
+                        extent=np.subtract(*simple[root].shape.bounds()[::-1])
+                        scale=min(4.,float(np.min(extent_limit/extent)))
+                        extra=dict(sites=local_sites,scale=scale,target_range=target_range,
+                                   yaw_offset=math.pi/2 if extent[0]>=extent[1] else 0.)
+                        if domain=="nuScenes" and size_multiplier>1:
+                            extra["material_quantile"]=[.02,.25,.99][cell[2]]
+                    else:
+                        scene="206" if domain=="STU" else available[(number+j)%len(available)]["scene"]
+                    tasks.append(dict(name=f"{domain.lower()}-{number:03d}",number=number,round=round_id+2 if supplement else round_id,
+                                      domain=domain,scene=scene,geometry=root,cell=cell,**extra))
                     number+=1
             print(json.dumps(dict(round=round_id,world_tasks=len(tasks),reused_stu=len(added_stu),reused_native=len(reuse),
                                   intensity_edges=edges)),flush=True)
+            for result in pool.map(_completion_world,tasks):
+                results.append(result);records.extend(result["records"]);views.extend(result["observations"])
+                print(json.dumps(dict(world=result["task"]["name"],accepted=result["accepted"],scans=len(result["records"]))),flush=True)
+        if response_only or size_multiplier>1:
+            cells=condition_coverage(views,edges)
+            tasks=[]
+            material_worlds=set(prior_worlds)|{str(output/r["task"]["name"]/"world.json") for r in results if r["accepted"]}
+            for key,group in sorted(cells.items()):
+                domain,*cell=key
+                missing=max(0,3-len(group["geometries"]),3-len(group["logs"]) if domain=="nuScenes" else 0)
+                candidates=[r for r in views if r["domain"]==domain and r["world"] in material_worlds and
+                            (observed_cell:=condition_cell(r["descriptor"],edges[domain])) is not None and
+                            observed_cell[:2]==tuple(cell[:2])]
+                roots,logs=set(group["geometries"]),set(group["logs"])
+                for _ in range(missing):
+                    options=[r for r in candidates if r["geometry"] not in roots or (domain=="nuScenes" and r["log"] not in logs)]
+                    if not options:break
+                    row=min(options,key=lambda r:(r["geometry"] in roots,r["log"] in logs,-r["descriptor"][4],r["world"],r["frame"]))
+                    a,b=edges[domain]
+                    interval=[(0.,a),(a,b),(b,min(responses[domain].intensity_bounds[1]+1e-6,b*2))][cell[2]]
+                    tasks.append(dict(name=f"response-{number:03d}",domain=domain,scene=row["scene"],number=number,round=3,
+                        cell=cell,reuse=row["world"],frame=row["frame"],object_id=row["object_id"],response_target=interval))
+                    roots.add(row["geometry"]);logs.add(row["log"]);number+=1
+            print(json.dumps(dict(response_tasks=len(tasks))),flush=True)
             for result in pool.map(_completion_world,tasks):
                 results.append(result);records.extend(result["records"]);views.extend(result["observations"])
                 print(json.dumps(dict(world=result["task"]["name"],accepted=result["accepted"],scans=len(result["records"]))),flush=True)
@@ -1368,17 +1541,18 @@ def complete_pool(reference_path, output, workers):
     after=condition_coverage(views,edges)
     report=dict(reference=str(reference_path),policy=policy,before=_condition_rows(before),after_reuse=_condition_rows(reused),
         after=_condition_rows(after),added_existing_stu=len(added_stu),added_normal_counterparts=len(counterparts),
+        supported_sites=sites,
         worlds=[dict(task=r["task"],accepted=r["accepted"],scans=len(r["records"]),rejected=r["rejected"],
                      path=str(output/r["task"]["name"]/"world.json")) for r in results],
         unresolved=[dict(domain=k[0],cell=list(k[1:]),observations=v["observations"],geometries=len(v["geometries"]),
-                        logs=len(v["logs"]),status="not_resolved_in_two_construction_rounds; not proof of physical impossibility")
+                        logs=len(v["logs"]),status="not_resolved_by_recorded_placements; not proof of physical impossibility")
                     for k,v in after.items() if len(v["geometries"])<3 or (k[0]=="nuScenes" and len(v["logs"])<3)],
         groups=dict(Counter(r["group"] for r in records)),seconds=time.monotonic()-start)
     result=dict(reference,records=records,dataset_revision="directed_conditions",representative_rule=
-        "retain expanded pool; recover existing weak-region observations; one directed construction and one repair; reduce near repeats",
+        "retain every reference record; add measured observation changes using the recorded construction policy",
         completion=dict(reference=str(reference_path),report=str(output/"conditions.json"),base_records=len(reference["records"]),
                         new_records=len(records)-len(reference["records"]),new_independent_geometries=0,
-                        worlds=[str(output/r["task"]["name"]/"world.json") for r in results if r["accepted"]]))
+                        worlds=prior_worlds+[str(output/r["task"]["name"]/"world.json") for r in results if r["accepted"]]))
     result["expansion"]=dict(reference["expansion"],base_records=len(reference["records"]),train_records=len(records),
                              complete_pass_visits=len(records),two_pass_updates=math.ceil(2*len(records)/8),groups=report["groups"])
     result.pop("sha256");result["sha256"]=identity(result)
@@ -1471,13 +1645,19 @@ if __name__ == "__main__":
     parser.add_argument("--limit", type=int)
     parser.add_argument("--extend-from", type=Path)
     parser.add_argument("--complete-from", type=Path)
+    parser.add_argument("--response-only", action="store_true")
+    parser.add_argument("--size-multiplier", type=float, default=1.)
     args = parser.parse_args()
     if not 1 <= args.workers <= len(os.sched_getaffinity(0)):
         parser.error("workers must fit the current CPU affinity")
     if args.complete_from:
         if args.extend_from or args.limit:
             parser.error("completion includes its own fixed construction and repair passes")
-        complete_pool(args.complete_from,args.output,args.workers)
+        if not np.isfinite(args.size_multiplier) or args.size_multiplier<1 or (args.response_only and args.size_multiplier!=1):
+            parser.error("a size extension must be finite, at least one, and cannot be response-only")
+        complete_pool(args.complete_from,args.output,args.workers,response_only=args.response_only,size_multiplier=args.size_multiplier)
+    elif args.response_only or args.size_multiplier != 1:
+        parser.error("response or size completion requires --complete-from")
     elif args.native:
         generate_native(args.output, pool_root=args.pool_root, workers=args.workers, limit=args.limit, extend_from=args.extend_from)
     else:

@@ -863,6 +863,34 @@ def sampling_relations(args):
                   "Only retained trajectory observations are training records; visibility and physics can exclude other keyframes.",
                   "Condition overlap does not establish local ambiguity, use of context or unseen-source generalization."],
         workers=args.workers, seconds=time.monotonic()-started)
+    if "completion" in train:
+        policy = json.loads(Path(train["completion"]["report"]).read_text())["policy"]
+        boundary = train["completion"]["base_records"]
+        frame_conditions = dict(
+            unit="One retained anomalous full scan; all supervised anomaly objects in that scan are combined, exactly as in the four views.",
+            reference_records=boundary, range_edges_m=policy["range_edges"],
+            count_edges=policy["count_edges"]+["inf"], intensity_edges=policy["intensity_edges"],
+            limitation="Occupied coarse cells do not imply uniform density, continuous-space coverage or independent observations.",
+            domains={})
+        for domain, group in (("STU", "anomaly_stu"), ("nuScenes", "anomaly_nuscenes")):
+            rows = [r for r in scans if r["group"] == group]
+            values = np.asarray([[r["anomaly_range_median"], r["anomaly"], r["anomaly_intensity_median"]] for r in rows])
+            bins = (policy["range_edges"], policy["count_edges"]+[np.inf],
+                    [-np.inf]+policy["intensity_edges"][domain]+[np.inf])
+            # Histograms use actual full-frame medians/counts, not per-object descriptors.
+            after = np.histogramdd(values, bins=bins)[0].astype(int)
+            before = np.histogramdd(values[[r["index"] < boundary for r in rows]], bins=bins)[0].astype(int)
+            if after.sum() != len(rows) or before.sum() != sum(r["index"] < boundary for r in rows):
+                raise ValueError("frame condition bins lost anomaly scans")
+            frame_conditions["domains"][domain] = dict(
+                before_frames=int(before.sum()), after_frames=int(after.sum()),
+                before_occupied=int((before > 0).sum()), after_occupied=int((after > 0).sum()),
+                newly_occupied=int(((before == 0) & (after > 0)).sum()),
+                cells=[dict(cell=list(index), before=int(before[index]), after=int(after[index]))
+                       for index in np.ndindex(after.shape)],
+                empty_cells=[list(index) for index in np.ndindex(after.shape) if not after[index]])
+        report["frame_conditions"] = frame_conditions
+    report["seconds"] = time.monotonic()-started
     args.output.mkdir(parents=True, exist_ok=True)
     write_csv(args.output / "stu_worlds.csv", worlds)
     write_csv(args.output / "nuscenes_objects.csv", objects)
@@ -906,8 +934,9 @@ def anomaly_views(directory):
     plots = [(0,1,"距离与回波数","xy"),(0,2,"距离与强度","xz"),
              (1,2,"回波数与强度","yz"),(None,None,"异常观测三维斜视图","3d")]
     labels = ["距离中位数（米）", "异常回波数（个，对数刻度）", "强度中位数"]
-    count_ticks = [5,10,30,100,300,1000,3000]
     count_limit = np.ceil(values[:,1].max()/500)*500
+    count_ticks = [5]+[factor*10**power for power in range(1, int(np.log10(count_limit))+1)
+                      for factor in (1,3) if factor*10**power<=count_limit]
     intensity_limit = np.ceil(values[:,2].max()*10)/10
     files = []
     with PdfPages(directory/"views.pdf") as pdf:

@@ -1,0 +1,169 @@
+{
+  "specification": "f7396619035e15f9ed1fb75e6b01a619a06451529d440490d9c7b29a3c51e796",
+  "task": {
+    "name": "nuscenes-040",
+    "number": 40,
+    "round": 2,
+    "domain": "nuScenes",
+    "scene": "scene-0509",
+    "geometry": "58df2f378fa2a0f8298ee29a4db670ff93ec9f3c2d18b8309f742c3362a1934b",
+    "cell": [
+      3,
+      1,
+      0
+    ],
+    "sites": [
+      {
+        "domain": "nuScenes",
+        "scene": "scene-0509",
+        "log": "20db5722b62c4c17bbff2d7b265a3c51",
+        "range_bin": 3,
+        "frame_index": 6,
+        "anchor": [
+          1993.0,
+          1005.0,
+          0.02303303351658581
+        ],
+        "support_radius": 3.4,
+        "support": {
+          "normal": [
+            -0.007329861985939035,
+            -0.01085569226466239,
+            0.9999142098543865
+          ],
+          "offset": 25.503441761540888,
+          "points": 6013,
+          "residual": 0.013293476619417127
+        }
+      },
+      {
+        "domain": "nuScenes",
+        "scene": "scene-0509",
+        "log": "20db5722b62c4c17bbff2d7b265a3c51",
+        "range_bin": 3,
+        "frame_index": 26,
+        "anchor": [
+          2017.0,
+          989.0,
+          -0.019052991590369217
+        ],
+        "support_radius": 3.4,
+        "support": {
+          "normal": [
+            -0.006095074971413215,
+            -0.014721363160254575,
+            0.9998730577067254
+          ],
+          "offset": 26.871104565770523,
+          "points": 6863,
+          "residual": 0.03596727860276184
+        }
+      },
+      {
+        "domain": "nuScenes",
+        "scene": "scene-0509",
+        "log": "20db5722b62c4c17bbff2d7b265a3c51",
+        "range_bin": 3,
+        "frame_index": 20,
+        "anchor": [
+          1991.0,
+          1005.0,
+          -0.001117899781598819
+        ],
+        "support_radius": 3.4,
+        "support": {
+          "normal": [
+            -0.006334369228257367,
+            -0.008216221694614355,
+            0.9999461832856532
+          ],
+          "offset": 20.86891362632495,
+          "points": 6944,
+          "residual": 0.021138617777033252
+        }
+      },
+      {
+        "domain": "nuScenes",
+        "scene": "scene-0509",
+        "log": "20db5722b62c4c17bbff2d7b265a3c51",
+        "range_bin": 3,
+        "frame_index": 26,
+        "anchor": [
+          2081.0,
+          947.0,
+          -0.08008827626841142
+        ],
+        "support_radius": 1.8,
+        "support": {
+          "normal": [
+            -0.005464656388650492,
+            -0.009812703192307884,
+            0.9999369222039027
+          ],
+          "offset": 20.699761593977808,
+          "points": 4359,
+          "residual": 0.030699578160185134
+        }
+      },
+      {
+        "domain": "nuScenes",
+        "scene": "scene-0509",
+        "log": "20db5722b62c4c17bbff2d7b265a3c51",
+        "range_bin": 3,
+        "frame_index": 20,
+        "anchor": [
+          1991.0,
+          1003.0,
+          -0.0018723488360699037
+        ],
+        "support_radius": 1.8,
+        "support": {
+          "normal": [
+            -0.0035991871522454274,
+            0.000673007794840863,
+            0.9999932964337068
+          ],
+          "offset": 6.508601523884178,
+          "points": 3392,
+          "residual": 0.03494521698981085
+        }
+      },
+      {
+        "domain": "nuScenes",
+        "scene": "scene-0509",
+        "log": "20db5722b62c4c17bbff2d7b265a3c51",
+        "range_bin": 3,
+        "frame_index": 26,
+        "anchor": [
+          2017.0,
+          987.0,
+          -0.03354407313284247
+        ],
+        "support_radius": 1.8,
+        "support": {
+          "normal": [
+            -0.005061048970107306,
+            -0.014631445172331836,
+            0.9998801461152687
+          ],
+          "offset": 24.694946568868748,
+          "points": 3161,
+          "residual": 0.03932790342414762
+        }
+      }
+    ],
+    "scale": 3.0926142317608853,
+    "target_range": 38.0,
+    "yaw_offset": 1.5707963267948966,
+    "material_quantile": 0.02
+  },
+  "accepted": false,
+  "records": [],
+  "observations": [],
+  "reason": "not_resolved_by_bounded_supported_placements",
+  "rejected": {
+    "collision": 3,
+    "support": 3
+  },
+  "attempts": []
+}

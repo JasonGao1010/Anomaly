@@ -66,6 +66,18 @@ def test_object_relations_separate_worlds_and_check_scan_identity(tmp_path, sour
         native_relations_scene(records)
 
 
+def test_ground_site_search_keeps_full_footprint_support():
+    from scipy.spatial import cKDTree
+    from src.render import _support_plane
+    x, y = np.meshgrid(np.linspace(-2,2,31),np.linspace(-2,2,31))
+    ground = np.column_stack((x.ravel(),y.ravel(),np.zeros(x.size)))
+    context = dict(ground=ground,ground_tree=cKDTree(ground[:,:2]))
+    support = _support_plane(context,np.zeros(3),1.7)
+    assert support is not None and support["residual"] == 0
+    np.testing.assert_array_equal(support["normal"],[0,0,1])
+    assert _support_plane(context,np.array([1.9,0,0]),1.7) is None
+
+
 def sphere(radius=.5):
     return Shape(((radius, radius, radius),), ((0, 0, 0),), ((1, 1),), (0,),
                  ("union",), 0., (0., 0.), (0., 0.), 0., (1., 1., 1.), (0., 0., 0.))
@@ -222,6 +234,20 @@ def test_thin_csg_and_deformed_bounds():
     np.testing.assert_allclose(first, dense, atol=2e-7, rtol=0)
 
 
+def test_grazing_stu_ray_converges_at_directed_generation_resolution():
+    from scipy.optimize import brentq
+    shape = replace(sphere(),scales=((1.515522358000158,.09499110760264762,.7640468477787957),),
+                    exponents=((.3110289873700459,1.5780231404014864),))
+    origin = np.array([[.6411699450929503,-.9937730547190656,1.1998403818035264]])
+    direction = np.array([[.5360949500428284,.7513962861510644,-.38471525274800933]])
+    direction /= np.linalg.norm(direction,axis=1,keepdims=True)
+    expected = brentq(lambda t:float(shape.level(origin+t*direction)[0]),1.32255,1.32256,xtol=1e-14)
+    for steps,depth in ((192,12),(384,14),(768,16)):
+        distance,_,valid = shape.intersect(origin,direction,replace(TRACE,steps=steps,adaptive_depth=depth))
+        assert valid[0]
+        np.testing.assert_allclose(distance,[expected],rtol=0,atol=2e-12)
+
+
 def test_joint_occlusion_missing_return_and_unchanged_background():
     rays = rays_for([[1, 0, 0], [1, 0, 0], [0, 1, 0], [1, 0, 0], [0, 1, 0]])
     xyzi = np.array([[7, 0, 0, .2], [2, 0, 0, .3], [0, 4, 0, .4], [0, 0, 0, .9], [0, 6, 0, .8]], np.float32)
@@ -334,6 +360,14 @@ def test_response_bins_quantiles_and_probability_endpoints():
     expected = np.array([np.interp(q, sensor.quantiles, values[cell]) for cell, q in zip(cells, quantiles)], np.float32)
     expected = np.rint(expected.astype(float) * 3500) / 3500
     np.testing.assert_allclose(intensity, expected, atol=1e-15, rtol=0)
+    previous = None
+    for quantile in (0., .25, .5, 1.):
+        mask, values = sensor.sample(beam, ranges, angles, replace(material,quantile=quantile),
+                                     np.array([0.,1.,.59,.60]), random)
+        np.testing.assert_array_equal(mask, returned)
+        if previous is not None:
+            assert (values >= previous).all()
+        previous = values
 
 
 def test_real_206_observation():
