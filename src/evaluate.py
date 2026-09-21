@@ -49,7 +49,7 @@ def better(metrics, previous):
 
 
 @torch.no_grad()
-def evaluate(model, manifest, device, workers=4, score_path=None):
+def evaluate(model, manifest, device, workers=4, score_path=None, record_points=False):
     """Call the pinned official implementation once across the complete valid set."""
     if manifest["kind"] not in ("val", "test"):
         raise ValueError("evaluation requires a real held-out STU manifest")
@@ -72,6 +72,18 @@ def evaluate(model, manifest, device, workers=4, score_path=None):
     scores = (np.lib.format.open_memmap(score_path, mode="w+", dtype=np.float32, shape=(count,))
               if score_path is not None else np.empty(count, np.float32))
     labels = np.empty(count, np.int8)
+    raw_scores = identities = None
+    frames, raw_cursor = [], 0
+    if record_points:
+        if score_path is None:
+            raise ValueError("point recording needs a persistent evaluation score path")
+        score_path = Path(score_path)
+        raw_count = sum(manifest["records"][i]["points"] for i in indices)
+        raw_scores = np.lib.format.open_memmap(score_path.with_stem(score_path.stem + "_all"), mode="w+",
+                                               dtype=np.float32, shape=(raw_count,))
+        identity_path = score_path.parent / "val_points.npy"
+        identities = np.lib.format.open_memmap(identity_path, mode="r+" if identity_path.exists() else "w+",
+            dtype=np.dtype([("slot", "<u4"), ("target", "i1")]), shape=(raw_count,))
     cursor = 0
     start = time.perf_counter()
     for number, sample in enumerate(loader, 1):
@@ -88,6 +100,14 @@ def evaluate(model, manifest, device, workers=4, score_path=None):
         selected_labels = calculator.all_labels.pop()
         stop = cursor + len(selected_scores)
         scores[cursor:stop], labels[cursor:stop] = selected_scores, selected_labels
+        if record_points:
+            raw_stop = raw_cursor + len(prediction)
+            raw_scores[raw_cursor:raw_stop] = prediction
+            identities[raw_cursor:raw_stop]["slot"] = sample["slots"].numpy()
+            identities[raw_cursor:raw_stop]["target"] = sample["targets"].numpy()
+            frames.append(dict(index=int(sample["index"]), start=raw_cursor, stop=raw_stop,
+                               metric_start=cursor, metric_stop=stop))
+            raw_cursor = raw_stop
         cursor = stop
         if number % 100 == 0 or number == len(indices):
             print(f"validation {number}/{len(indices)} scans, {cursor}/{count} points", flush=True)
@@ -95,6 +115,15 @@ def evaluate(model, manifest, device, workers=4, score_path=None):
         raise ValueError("official evaluation count differs from the fixed manifest")
     if score_path is not None:
         scores.flush()
+    if record_points:
+        if raw_cursor != raw_count:
+            raise ValueError("full-return evaluation recording omitted points")
+        raw_scores.flush()
+        identities.flush()
+        write_json(score_path.parent / "val.json", dict(manifest_sha256=manifest["sha256"], frames=frames,
+            points=raw_count, metric_points=count, identities="val_points.npy",
+            scope="Each val*.npy is the exact official metric population; its *_all.npy companion preserves every actual return, including ignored context, in the eligible full scans. Ineligible scans remain excluded under the fixed evaluation rule."))
+        del raw_scores, identities
     del batch, sample, dataset, loader
     gc.collect()
     # Integer 0/1 labels are exact in int8; sklearn still uses its own float64 sums.

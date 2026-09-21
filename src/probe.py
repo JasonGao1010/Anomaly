@@ -248,6 +248,86 @@ def _even(values,count):
     return [values[i] for i in np.unique(np.linspace(0,len(values)-1,min(count,len(values))).round().astype(int))]
 
 
+def _local_states(trace, checkpoints):
+    """Separate saved training scores, buffer-update intervals and optimizer intervals; no forward pass."""
+    import inspect
+    import torch
+    from timm.layers import DropPath, drop_path
+    from .model import Segmentor
+
+    # Module construction inspects the deployed configuration without consuming caller RNG.
+    with torch.random.fork_rng(devices=[]):
+        model = Segmentor("conditional")
+    norms = {name: module for name, module in model.named_modules() if isinstance(module, torch.nn.BatchNorm1d)}
+    buffers = []
+    for name, module in norms.items():
+        buffers.append(dict(module=name, momentum=module.momentum, eps=module.eps,
+            counts={arm: int(state[name + ".num_batches_tracked"]) for arm, state in checkpoints.items()},
+            finite_nonnegative_variance=all(torch.isfinite(state[name + ".running_mean"]).all().item()
+                and torch.isfinite(state[name + ".running_var"]).all().item()
+                and (state[name + ".running_var"] >= 0).all().item() for state in checkpoints.values())))
+    stochastic = [dict(module=name, probability=module.drop_prob) for name, module in model.named_modules()
+                  if isinstance(module, DropPath)]
+    other_buffers = [name for name, _ in model.named_buffers()
+                     if not any(name == prefix + suffix for prefix in norms
+                                for suffix in (".running_mean", ".running_var", ".num_batches_tracked"))]
+    inactive_dropout = all(module.p == 0 for module in model.modules() if isinstance(module, torch.nn.Dropout))
+    del model
+
+    rows, training, previous = [], [], trace["initial"]
+    for step in trace["updates"]:
+        before, after = (step[key] for key in ("before_optimizer", "after_optimizer"))
+        prior_scores, pre_scores, post_scores = (np.asarray(value["scores"], float) for value in (previous, before, after))
+        scores = np.asarray(step["training_scores"], float).reshape(-1, len(pre_scores))
+        if scores.size != step["local_point_visits"]:
+            raise ValueError("recorded training scores omit selected point visits")
+        row = dict(step=step["step"], scan_visits=len(scores),
+            positions=[i + 1 for i, index in enumerate(step["indices"]) if index == 6006],
+            previous_eval_BCE=previous["mean_BCE"], pre_eval_BCE=before["mean_BCE"],
+            pre_eval_wrong=before["wrong_at_zero"], post_eval_wrong=after["wrong_at_zero"],
+            buffer_interval_BCE_change=before["mean_BCE"] - previous["mean_BCE"],
+            buffer_interval_max_abs_score_change=float(np.abs(pre_scores - prior_scores).max()),
+            optimizer_interval_BCE_change=after["mean_BCE"] - before["mean_BCE"])
+        if len(scores):
+            bce = float(np.logaddexp(0, scores).mean())
+            if not np.isclose(bce, step["local_loss"], rtol=1e-6, atol=1e-8):
+                raise ValueError("saved local loss does not match its actual training scores")
+            training.extend(scores)
+            row.update(train_BCE=bce, train_wrong=int((scores >= 0).sum()),
+                train_score_range=[float(scores.min()), float(scores.max())],
+                mean_eval_minus_train=float((pre_scores[None] - scores).mean()),
+                same_update_max_point_range=float(np.ptp(scores, axis=0).max()))
+        rows.append(row)
+        previous = after
+    training = np.asarray(training)
+    buffer_change = sum(row["buffer_interval_BCE_change"] for row in rows)
+    optimizer_change = sum(row["optimizer_interval_BCE_change"] for row in rows)
+    if not np.isclose(buffer_change + optimizer_change, previous["mean_BCE"] - trace["initial"]["mean_BCE"], atol=1e-10):
+        raise ValueError("saved intervals do not account for the observed endpoint change")
+    return dict(scope="Static recomputation of existing logs, checkpoint buffers and deployed module definitions; zero new model forwards or parameter updates",
+        training=dict(unique_points=training.shape[1], scan_visits=len(training), point_visits=training.size,
+            updates_with_visits=sum(row["scan_visits"] > 0 for row in rows),
+            wrong_at_zero=int((training >= 0).sum()), mean_BCE=float(np.logaddexp(0, training).mean()),
+            score_range=[float(training.min()), float(training.max())],
+            first_logged_step=next(row["step"] for row in rows if row["scan_visits"]),
+            limitation="Repeated visits to the same 24 points, not 744 independent points. No C-step-1000 training-mode scores or complete training-mode rankings were saved."),
+        updates=rows,
+        intervals=dict(buffer_BCE_change=buffer_change, optimizer_BCE_change=optimizer_change,
+            scope="A telescoping decomposition along the actual trajectory, not independent causal percentages. Between monitors before an optimizer step, BN buffers are the only mutable model state; stochastic training changes their inputs. Small GPU numerical variation was not bounded at every step."),
+        batchnorm=dict(modules=buffers, other_registered_buffers=other_buffers,
+            training_population="Voxel rows of one full scan; two scans share only the ranking objective and eight scans accumulate gradients",
+            first_possible_mode_difference="backbone.embedding.stem.norm, before context fusion; no paired train/eval intermediate features were saved",
+            old_state_weight_after_320_scans=.99**320, half_life_scans=float(np.log(.5) / np.log(.99)),
+            interpretation="All 13 counters rise by exactly 320. No extra updates from diagnostic inference or checkpoint recomputation are indicated; finite buffers do not establish representative population statistics."),
+        stochastic_depth=dict(modules=stochastic, source=inspect.getfile(drop_path),
+            mask="[N_voxels, 1] independent Bernoulli masks, one draw per attention/MLP residual call; identity in eval mode",
+            interpretation="Same-scan repeated training forwards vary without an optimizer step. DropPath is the active explicit random operation; its share of the train/eval gap is not isolated."),
+        other_paths=dict(dropout_probabilities_zero=inactive_dropout, serialization_shuffle=False,
+            recomputation="Only detail, conditional interaction and point head are checkpointed; they contain neither BN nor DropPath",
+            inputs="Same full scan, raw slots, labels, voxelization and precision correction; no mode-dependent augmentation",
+            caveat="Flash-attention/autograd kernels can also select different numerical execution paths; no claim of bitwise train/eval equivalence is made."))
+
+
 def transfer(output, workers):
     """Test material learning and transfer under corrected C without changing truth."""
     import torch
@@ -519,6 +599,9 @@ def transfer(output, workers):
         write_json(path, report)
 
     if all(name in report["arms"] for name in ("baseline", "material-control", "material")):
+        report["supervision"]["actual_training_scope"] = (
+            "The 315/744 ranking inclusions were computed from fixed eval-mode C scores, not actual training forwards. "
+            "They cannot quantify actual local supervision or identify shared-parameter conflicts during the forty updates.")
         readings = {}
         for name, arm in report["arms"].items():
             patch = next(r for r in arm["materials"] if r["index"] == 6006 and r["role"] == "retrieved_training_patch")
@@ -541,7 +624,36 @@ def transfer(output, workers):
             raise ValueError("the material comparison changed more than its input replacement")
         report["comparison"] = dict(readings=readings, configuration_differences=differences,
             AP_gain_over_control=report["arms"]["material"]["metrics"]["AP"] - report["arms"]["material-control"]["metrics"]["AP"],
+            measurement_scope="All material BCE and threshold readouts use eval mode, including fields named training_patch_BCE; actual train-mode point scores are separate in local_comparison.state_analysis",
             scope="One paired seed; identical initial RNG and per-pair rank seeds. Changing scan sizes can change subsequent stochastic-depth draws, so repeat uncertainty is not estimated.")
+        material_rows = []
+        # Decode existing measured descriptors, not learned feature coordinates or new predictions.
+        for stem, select in (
+                ("val", lambda row: row["case"] == "P125:1" and row["frame"] in (127, 133, 166)),
+                ("train", lambda row: row["index"] == 5340 and row["kind"] == "anomaly"),
+                ("observation", lambda row: row["old_index"] in (18286, 18307))):
+            source = output / ("observations.json" if stem == "observation" else f"{stem}_profiles.json")
+            profiles = json.loads(source.read_text())["records"]
+            vectors = np.load(output / f"{stem}_profiles.npy", mmap_mode="r")
+            for i, row in enumerate(profiles):
+                if not select(row):
+                    continue
+                value = vectors[i].astype(float)
+                material_rows.append(dict(source=str(source), profile=i, index=row.get("index", row.get("old_index")),
+                    frame=row["frame"], points=row["points"],
+                    extent_5_95_m=np.expm1(value[:3]).tolist(), range_quantiles_m=np.expm1(value[18:21]).tolist(),
+                    intensity_quantiles=value[24:27].tolist(), nearest_normal_quantiles_m=np.expm1(value[31:34]).tolist(),
+                    local_plane_residual_ratio_quantiles=value[14:17].tolist()))
+            del profiles, vectors
+        feature_values = json.loads((output / "feature_values.json").read_text())
+        report["static_materials"] = dict(P125=material_rows,
+            N125=[dict(source=f"baseline/fragments/{key}", **row)
+                  for key, value in report["arms"]["baseline"]["fragments"].items()
+                  for row in value["observations"] if row["frame"] == 135],
+            feature_records=[dict(case=row["case"], role=row["role"], index=row["index"], slot=row["slot"],
+                stages=len(row["features"]), first_precision_difference=next((name for name, value in row["features"].items()
+                    if not np.array_equal(value["original"], value["corrected"])), None)) for row in feature_values["examples"]],
+            scope="Existing geometry/intensity/context descriptors and saved raw-return figures only. Selected candidates are not proof of coverage of the whole pool. Feature-value pairs compare original versus corrected rotary arithmetic in eval mode; none is a paired train/eval feature trace.")
         b, c, m = (readings[k] for k in ("baseline", "material-control", "material"))
         learning = []
         for selected in (True, False):
@@ -554,17 +666,17 @@ def transfer(output, workers):
             "P125:1": dict(
                 supported=(f"修正后重算三个既有训练世界的{sum(r['scans'] for r in learning)}个观测，"
                     f"{learning[0]['scans']}个已选观测{learning[0]['points']}点的BCE为{learning[0]['BCE']:.6f}，"
-                    f"未选观测{learning[1]['points']}点的BCE为{learning[1]['BCE']:.6f}；这些候选大多已识别，真实125仍持续失分。"),
+                    f"未选观测{learning[1]['points']}点的BCE为{learning[1]['BCE']:.6f}；这些均为推理模式读数，候选大多已识别，真实125仍持续失分。"),
                 excluded="当前结果不支持优先增加这三个世界的重复观测；尚不能排除其他几何、响应或背景关系覆盖不足。",
                 missing="真实物体与候选的形态、表面响应和背景关系仍未证实等价；AP分摊下降不能直接等同于本物体各召回点的漏检减少。",
                 modification="保留精度修正和已验证候选，不据此扩产这三个几何，也不更换交互模块。",
-                next_test="固定现有异常候选的几何、位姿和射线，逐项核验其表面响应及邻接关系与失败/成功观测的差异；只在训练来源构造单因素对照，真实125仅评价。"),
+                next_test="先用已保存原始扫描核验真实125第133帧失败、166帧成功参照与训练5340及同世界未选观测的形态、强度、采样和周围结构；现有特征逐值记录用于追踪计算，不能把通道值直接解释成语义或直接启动训练。"),
             "N125:30": dict(
-                supported=(f"记录6006为可信道路局部，但重复31次后BCE为{m['training_patch_BCE']:.6f}，原顺序对照为{c['training_patch_BCE']:.6f}，"
+                supported=(f"记录6006为可信道路局部，但重复31次后推理模式BCE为{m['training_patch_BCE']:.6f}，原顺序对照为{c['training_patch_BCE']:.6f}，"
                     f"均未低于修正C的{b['training_patch_BCE']:.6f}。两目标连续片段失分为{c['focused_normal_AP_loss']:.6f}→{m['focused_normal_AP_loss']:.6f}，"
                     f"75%召回误报为{c['focused_normal_FP75']}→{m['focused_normal_FP75']}。整体AP增益未验证预设的局部学习与迁移解释。"),
                 excluded="这24点均受到正常监督，损失对分数的梯度方向正确；未发现忽略标签或损失到分数这一段的梯度中断。该检查未追踪实际更新中分数到共享参数的梯度。全局AP提高不等于这两个道路片段学好了。5757局部为45点地形和5点人行道，不能直接充当同类道路证据。",
-                missing=(f"仍未区分局部监督强度不足与共享参数更新的影响；不能确认真实N125主要属于没学够，亦不能确认它缺样本或学错关联。"
+                missing=(f"尚未核对实际训练模式与推理模式是否一致；不能以推理损失确认真实N125主要属于没学够，亦不能确认它缺样本或学错关联。"
                     f"单次{material_ap-control_ap:.5f}个百分点额外AP收益的重复性未检验。"),
                 modification=(f"保存{material_ap:.5f}%候选和{control_ap:.5f}%对照，保留{baseline['metrics']['AP']:.5f}%基线；"
                     "不将6006重复配方直接推广，也不由这次AP提高宣布N125归因完成。"),
@@ -585,15 +697,24 @@ def transfer(output, workers):
             if sum(r["local_point_visits"] for r in trace["updates"]) != 24 * 31 or any(
                     r["overflow"] or r["parameter_delta_l2"] <= 0 for r in trace["updates"]):
                 raise ValueError("local diagnostic did not execute every planned update")
-            checkpoints = [torch.load(root / name / "0/conditional/last.pt", map_location="cpu", weights_only=False)
-                           for name in ("material", "local")]
-            randoms = [r["rng"][0] for r in checkpoints]
-            same_rng = all(torch.equal(randoms[0][k], randoms[1][k]) for k in ("torch", "cuda"))
-            same_rng &= randoms[0]["python"] == randoms[1]["python"]
-            same_rng &= (randoms[0]["numpy"][0] == randoms[1]["numpy"][0]
-                         and np.array_equal(randoms[0]["numpy"][1], randoms[1]["numpy"][1])
-                         and randoms[0]["numpy"][2:] == randoms[1]["numpy"][2:])
-            del checkpoints
+            checkpoint_paths = [root / name / "0/conditional/last.pt" for name in ("material", "local")]
+            if all(p.exists() for p in checkpoint_paths):
+                checkpoints = [torch.load(p, map_location="cpu", weights_only=False, mmap=True) for p in checkpoint_paths]
+                randoms = [r["rng"][0] for r in checkpoints]
+                same_rng = all(torch.equal(randoms[0][k], randoms[1][k]) for k in ("torch", "cuda"))
+                same_rng &= randoms[0]["python"] == randoms[1]["python"]
+                same_rng &= (randoms[0]["numpy"][0] == randoms[1]["numpy"][0]
+                             and np.array_equal(randoms[0]["numpy"][1], randoms[1]["numpy"][1])
+                             and randoms[0]["numpy"][2:] == randoms[1]["numpy"][2:])
+                initial = torch.load(BEST_C, map_location="cpu", weights_only=False, mmap=True)
+                state_analysis = _local_states(trace, dict(C=initial["model"], material=checkpoints[0]["model"], local=checkpoints[1]["model"]))
+                del initial, checkpoints
+            else:
+                # Old states may be deleted after their completed diagnostic has been retained.
+                previous = report["local_comparison"]
+                state_analysis = previous["state_analysis"]
+                same_rng = previous["identical_final_rng"]
+                state_analysis["retention"] = "Previously measured checkpoint comparison; temporary endpoint files were removed. Values are retained evidence, not a new checkpoint inspection."
             w = readings["local"]
             steps = trace["updates"]
             effects = np.array([r["after_optimizer"]["mean_BCE"] - r["before_optimizer"]["mean_BCE"] for r in steps])
@@ -607,6 +728,8 @@ def transfer(output, workers):
                         no_fitting="inspect actual gradients, shared updates and optimization; no capacity conclusion")),
                 configuration_differences=sorted(differences), identical_input_order=True, identical_final_rng=bool(same_rng),
                 trace=str(directory / "local.json"), initial=trace["initial"], final=steps[-1]["after_optimizer"],
+                state_analysis=state_analysis,
+                interpretation_revision="The original diagnostic plan used eval-mode fitting as its outcome. Actual training-mode scores were already zero-threshold correct; the endpoint gain does not identify insufficient training-mode fitting or weak supervision as its cause.",
                 actual_updates=dict(count=len(steps), improved=int((effects < 0).sum()), worsened=int((effects > 0).sum()),
                     unchanged=int((effects == 0).sum()), with_local_supervision=sum(r["local_point_visits"] > 0 for r in steps),
                     clipped=sum(r["gradient_norm"] > 1 for r in steps), parameter_delta_min=min(r["parameter_delta_l2"] for r in steps)),
@@ -618,17 +741,17 @@ def transfer(output, workers):
             finding = report["findings"]["N125:30"]
             fitted = w["training_patch_BCE"] < min(b["training_patch_BCE"], m["training_patch_BCE"])
             transferred = w["focused_normal_AP_loss"] < m["focused_normal_AP_loss"] and w["focused_normal_FP75"] < m["focused_normal_FP75"]
-            finding["supported"] += (f" 局部权重1.0的40步诊断中，实际逐步记录的训练24点BCE由{trace['initial']['mean_BCE']:.6f}变为{steps[-1]['after_optimizer']['mean_BCE']:.6f}，"
+            finding["supported"] += (f" 局部权重1.0的40步诊断中，逐步记录的这24点推理模式BCE由{trace['initial']['mean_BCE']:.6f}变为{steps[-1]['after_optimizer']['mean_BCE']:.6f}，"
                 f"零分错误由{b['training_patch_wrong_at_zero']}变为{w['training_patch_wrong_at_zero']}；其他观测BCE为{w['unfitted_BCE']:.6f}。"
                 f"两道路片段失分为{w['focused_normal_AP_loss']:.6f}，75%召回误报为{w['focused_normal_FP75']}；完整AP为{local_ap:.5f}%，"
                 f"相对未加权素材组变化{local_ap-material_ap:+.5f}个百分点。")
             if fitted:
-                finding["excluded"] += " 加强局部监督后该训练局部能够改善，因此不支持该局部在当前表示下完全不可拟合。"
+                finding["excluded"] += " 加强局部监督后该局部的推理表现能够改善，不支持它在当前模型下完全不可拟合；该干预未隔离归一化统计量与随机残差屏蔽。"
                 if transferred and w["unfitted_BCE"] < m["unfitted_BCE"]:
-                    finding["supported"] += " 训练局部、其他观测与预选真实片段均改善，支持这处局部监督的迁移价值；不只是重复增加扫描次数。"
-                    finding["missing"] = "val19已反复参与开发与素材选择，本次迁移不是独立泛化证据；尚缺统一局部规则在隔离背景和源几何上的对照、随机种子复核及极高召回误报变化解释。"
-                    finding["next_test"] = ("先明确内部开发与最终留出来源，核对异常任务和预训练暴露；已有350条检查数据只作内部开发。"
-                        "再预先固定只依赖训练来源标签与误报的统一局部规则，在多种结构上做同输入同预算对照和种子复核，日常选择只依靠内部开发，val19仅在约定节点评价。")
+                    finding["supported"] += " 训练素材、其他观测与预选真实片段的推理表现均改善，但原因尚未归结为监督分配。"
+                    finding["missing"] = "同参数下训练与推理的归一化、随机残差屏蔽及数值路径未独立分解；尚无这24点同状态的逐层训练/推理特征。val19已参与开发，独立泛化、种子波动及极高召回代价仍未确认。"
+                    finding["next_test"] = ("优先分析已保存训练分数、相邻固定推理和归一化缓冲量；仅当归一化与随机层仍无法区分且会改变修正选择时，"
+                        "在一个固定权重和完整训练扫描上做不更新参数的最小模式对照，分别固定随机层和归一化状态，检查首次差异所在层。未启动新推理或训练分支。")
                 else:
                     finding["missing"] = "训练局部可拟合不等于真实道路覆盖充分；仍缺少形态、响应、背景关系的受控迁移证据和重复性估计。"
                     finding["next_test"] = ("固定几何与背景，先在训练来源对目标道路的表面响应和观测条件作单因素变化，"
@@ -639,10 +762,28 @@ def transfer(output, workers):
             finding["modification"] = (f"分别保留局部加权{local_ap:.5f}%与未加权{material_ap:.5f}%候选，固定{baseline['metrics']['AP']:.5f}%诊断起点；"
                 + ("局部加权仅作为有迁移迹象的诊断候选，尚不固化正式规则。" if transferred
                    else "本次加权未同时改善两道路片段的排序失分与误报，不采用为正式训练规则；后续由观测覆盖与泛化检验决定样本修改。"))
+            first = next(row for row in state_analysis["updates"] if row["scan_visits"])
+            repeated = max(state_analysis["updates"], key=lambda row: row.get("same_update_max_point_range", 0.))
+            finding["supported"] += (f" 静态复算确认全部744个实际训练点次零阈值错误为0；第{first['step']}步训练BCE={first['train_BCE']:.6f}，"
+                f"同参数更新前推理BCE={first['pre_eval_BCE']:.6f}、错误{first['pre_eval_wrong']}/24。"
+                f"第{repeated['step']}步同扫描重复训练前向、未更新参数，同一点分数范围最大为{repeated['same_update_max_point_range']:.6f}。"
+                "13处批归一化计数均仅增加320；训练按单扫描体素行归一化，推理使用跨扫描运行统计量，8处随机残差屏蔽仅训练启用。")
+            finding["excluded"] += " 不能再将推理误差直接称为这些点在训练前向中没学好；零阈值正确也不能证明AP排序正确。未发现监测额外更新归一化统计量、标签被忽略或整帧增强不一致。"
+            finding["modification"] += (" 当前先修正诊断中的模式混用；以训练/推理状态不一致为优先原因候选。"
+                "若最小固定权重检查支持运行统计量偏移，再检验统一的统计估计方式；若支持随机层影响，再检验其使用方式。当前不直接冻结归一化、不关闭随机层、不固化特定点加权。")
             report["findings"]["P125:1"]["supported"] += (
                 f" 本次仅改变正常局部监督，P125失分由未加权组的{report['arms']['material']['cases']['P125:1']['AP_loss']:.6f}"
                 f"变为{report['arms']['local']['cases']['P125:1']['AP_loss']:.6f}，75%全局召回下漏检由{m['case_errors75']['P125:1']}"
                 f"变为{w['case_errors75']['P125:1']}。该变化包含共享参数与全局排序的影响，不能据此解释为异常几何覆盖已经补齐。")
+            real, reference, candidate, unselected = (next(row for row in material_rows if row["index"] == index)
+                                                     for index in (133, 166, 5340, 18307))
+            report["findings"]["P125:1"]["supported"] += (
+                f" 已有原始观测描述显示：133帧失败观测{real['points']}点，强度中位{real['intensity_quantiles'][1]:.5f}；"
+                f"166帧成功参照{reference['points']}点、到周围正常点距离中位{reference['nearest_normal_quantiles_m'][1]:.5f}米。"
+                f"近邻5340仅{candidate['points']}点、距离中位{candidate['range_quantiles_m'][1]:.5f}米；"
+                f"同世界356帧虽有{unselected['points']}点、距离{unselected['range_quantiles_m'][1]:.5f}米，"
+                f"强度中位仍为{unselected['intensity_quantiles'][1]:.5f}，局部平面残差比例中位{unselected['local_plane_residual_ratio_quantiles'][1]:.5f}，"
+                f"而真实133帧为{real['local_plane_residual_ratio_quantiles'][1]:.5f}。点数接近并未消除形态、响应和背景差异；这些同时变化的因素不能单独作原因。")
         write_json(path, report)
 
 

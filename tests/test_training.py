@@ -134,6 +134,72 @@ def test_local_supervision_uses_original_slots_and_effective_batch_mean():
         forward_loss(Score(), samples[:2], counts, local=local, local_count=2)
 
 
+def test_point_record_preserves_training_and_original_point_identity(tmp_path):
+    from src.train import point_record, record_scan, record_state
+    class Score(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.layers = nn.Sequential(nn.BatchNorm1d(3), nn.Dropout(.5), nn.Linear(3, 1))
+        def forward(self, sample):
+            return self.layers(sample["xyzi"]).squeeze(-1)
+    seed_all(18)
+    model = Score().train()
+    samples = [dict(index=i, xyzi=torch.arange(12).reshape(4, 3).float() + i,
+                    slots=torch.tensor([0, 7, 8, 91]), targets=torch.tensor([0, 1, -1, i])) for i in range(2)]
+    counts = torch.tensor([3, 3])
+    initial, random = deepcopy(model.state_dict()), rng_state(torch.device("cpu"))
+    expected, _ = forward_loss(model, samples, counts, rank_weight=1, rank_seed=37)
+    expected.backward()
+    gradients = [p.grad.clone() for p in model.parameters()]
+    expected_state, expected_rng = deepcopy(model.state_dict()), rng_state(torch.device("cpu"))
+    model.load_state_dict(initial)
+    model.zero_grad(set_to_none=True)
+    restore_rng(random, torch.device("cpu"))
+    manifest = dict(sha256="fixture", records=[dict(points=4), dict(points=4)])
+    recorded = point_record(tmp_path, manifest, [0, 1], model, torch.device("cpu"), 1)
+    record_state(recorded, 0)
+    actual, details = forward_loss(model, samples, counts, rank_weight=1, rank_seed=37, record_points=True)
+    actual.backward()
+    for visit, (sample, scores) in enumerate(zip(samples, details["point_scores"])):
+        record_scan(recorded, sample, scores, visit)
+    record_state(recorded, 1)
+    torch.testing.assert_close(actual, expected, atol=0, rtol=0)
+    for parameter, gradient in zip(model.parameters(), gradients):
+        torch.testing.assert_close(parameter.grad, gradient, atol=0, rtol=0)
+    for name, value in model.state_dict().items():
+        torch.testing.assert_close(value, expected_state[name], atol=0, rtol=0)
+    assert torch.equal(rng_state(torch.device("cpu"))["torch"], expected_rng["torch"])
+    for array in recorded["arrays"].values():
+        array.flush()
+    reopened = point_record(tmp_path, manifest, [0, 1], model, torch.device("cpu"), 1, resume=True)
+    np.testing.assert_array_equal(reopened["arrays"]["train"], torch.cat(details["point_scores"]).numpy())
+    np.testing.assert_array_equal(reopened["arrays"]["points"]["slot"], np.tile([0, 7, 8, 91], 2))
+    np.testing.assert_array_equal(reopened["arrays"]["points"]["target"], torch.cat([s["targets"] for s in samples]).numpy())
+    with pytest.raises(ValueError, match="input point population"):
+        record_scan(reopened, samples[0], details["point_scores"][0][:-1], 0)
+
+
+def test_evaluation_record_preserves_official_population_and_ignored_returns(tmp_path, monkeypatch):
+    import src.evaluate as evaluation
+    class Score(nn.Module):
+        def forward(self, sample):
+            return sample["prediction"]
+    sample = dict(index=0, xyzi=torch.arange(36).reshape(9, 4).float() + 1,
+                  slots=torch.tensor([0, 2, 3, 5, 8, 9, 12, 15, 18]),
+                  targets=torch.tensor([1, 1, 1, 1, 1, 0, 0, -1, -1]),
+                  prediction=torch.tensor([2., 1., 3., 1., 4., .5, 1.5, 100., -100.]))
+    monkeypatch.setattr(evaluation, "PreparedScans", lambda manifest: [sample])
+    manifest = dict(kind="val", sha256="fixture", records=[dict(eligible=True, normal=2, anomaly=5, points=9)])
+    expected = evaluation.evaluate(Score(), manifest, torch.device("cpu"), 0)
+    actual = evaluation.evaluate(Score(), manifest, torch.device("cpu"), 0, tmp_path / "val1.npy", record_points=True)
+    assert actual["metrics"] == expected["metrics"]
+    np.testing.assert_array_equal(np.load(tmp_path / "val1.npy"), sample["prediction"][:7].numpy())
+    np.testing.assert_array_equal(np.load(tmp_path / "val1_all.npy"), sample["prediction"].numpy())
+    identities = np.load(tmp_path / "val_points.npy")
+    np.testing.assert_array_equal(identities["slot"], sample["slots"].numpy())
+    np.testing.assert_array_equal(identities["target"], sample["targets"].numpy())
+
+
 def test_local_observation_preserves_rng_buffers_modes_and_next_training_update():
     from src.train import observe_local
     class Score(nn.Module):

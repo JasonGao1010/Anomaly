@@ -1742,18 +1742,18 @@
     "report": "results/train/native/errors/transfer.json",
     "findings": {
       "P125:1": {
-        "supported": "修正后重算三个既有训练世界的543个观测，9个已选观测415点的BCE为0.000274，未选观测42731点的BCE为0.002274；这些候选大多已识别，真实125仍持续失分。 本次仅改变正常局部监督，P125失分由未加权组的11.001595变为10.149511，75%全局召回下漏检由14400变为13881。该变化包含共享参数与全局排序的影响，不能据此解释为异常几何覆盖已经补齐。",
+        "supported": "修正后重算三个既有训练世界的543个观测，9个已选观测415点的BCE为0.000274，未选观测42731点的BCE为0.002274；这些均为推理模式读数，候选大多已识别，真实125仍持续失分。 本次仅改变正常局部监督，P125失分由未加权组的11.001595变为10.149511，75%全局召回下漏检由14400变为13881。该变化包含共享参数与全局排序的影响，不能据此解释为异常几何覆盖已经补齐。 已有原始观测描述显示：133帧失败观测327点，强度中位0.01771；166帧成功参照24点、到周围正常点距离中位1.38377米。近邻5340仅81点、距离中位10.67269米；同世界356帧虽有366点、距离5.48981米，强度中位仍为0.12143，局部平面残差比例中位0.00221，而真实133帧为0.04593。点数接近并未消除形态、响应和背景差异；这些同时变化的因素不能单独作原因。",
         "excluded": "当前结果不支持优先增加这三个世界的重复观测；尚不能排除其他几何、响应或背景关系覆盖不足。",
         "missing": "真实物体与候选的形态、表面响应和背景关系仍未证实等价；AP分摊下降不能直接等同于本物体各召回点的漏检减少。",
         "modification": "保留精度修正和已验证候选，不据此扩产这三个几何，也不更换交互模块。",
-        "next_test": "固定现有异常候选的几何、位姿和射线，逐项核验其表面响应及邻接关系与失败/成功观测的差异；只在训练来源构造单因素对照，真实125仅评价。"
+        "next_test": "先用已保存原始扫描核验真实125第133帧失败、166帧成功参照与训练5340及同世界未选观测的形态、强度、采样和周围结构；现有特征逐值记录用于追踪计算，不能把通道值直接解释成语义或直接启动训练。"
       },
       "N125:30": {
-        "supported": "记录6006为可信道路局部，但重复31次后BCE为0.975397，原顺序对照为0.982049，均未低于修正C的0.791767。两目标连续片段失分为0.753421→0.770654，75%召回误报为1671→1680。整体AP增益未验证预设的局部学习与迁移解释。 局部权重1.0的40步诊断中，实际逐步记录的训练24点BCE由0.784512变为0.000976，零分错误由11变为0；其他观测BCE为0.000631。两道路片段失分为0.657424，75%召回误报为1397；完整AP为81.63721%，相对未加权素材组变化+1.10469个百分点。 训练局部、其他观测与预选真实片段均改善，支持这处局部监督的迁移价值；不只是重复增加扫描次数。",
-        "excluded": "这24点均受到正常监督，损失对分数的梯度方向正确；未发现忽略标签或损失到分数这一段的梯度中断。该检查未追踪实际更新中分数到共享参数的梯度。全局AP提高不等于这两个道路片段学好了。5757局部为45点地形和5点人行道，不能直接充当同类道路证据。 加强局部监督后该训练局部能够改善，因此不支持该局部在当前表示下完全不可拟合。",
-        "missing": "val19已反复参与开发与素材选择，本次迁移不是独立泛化证据；尚缺统一局部规则在隔离背景和源几何上的对照、随机种子复核及极高召回误报变化解释。",
-        "modification": "分别保留局部加权81.63721%与未加权80.53251%候选，固定78.06939%诊断起点；局部加权仅作为有迁移迹象的诊断候选，尚不固化正式规则。",
-        "next_test": "先明确内部开发与最终留出来源，核对异常任务和预训练暴露；已有350条检查数据只作内部开发。再预先固定只依赖训练来源标签与误报的统一局部规则，在多种结构上做同输入同预算对照和种子复核，日常选择只依靠内部开发，val19仅在约定节点评价。"
+        "supported": "记录6006为可信道路局部，但重复31次后推理模式BCE为0.975397，原顺序对照为0.982049，均未低于修正C的0.791767。两目标连续片段失分为0.753421→0.770654，75%召回误报为1671→1680。整体AP增益未验证预设的局部学习与迁移解释。 局部权重1.0的40步诊断中，逐步记录的这24点推理模式BCE由0.784512变为0.000976，零分错误由11变为0；其他观测BCE为0.000631。两道路片段失分为0.657424，75%召回误报为1397；完整AP为81.63721%，相对未加权素材组变化+1.10469个百分点。 训练素材、其他观测与预选真实片段的推理表现均改善，但原因尚未归结为监督分配。 静态复算确认全部744个实际训练点次零阈值错误为0；第1004步训练BCE=0.067031，同参数更新前推理BCE=0.802252、错误11/24。第1006步同扫描重复训练前向、未更新参数，同一点分数范围最大为4.050781。13处批归一化计数均仅增加320；训练按单扫描体素行归一化，推理使用跨扫描运行统计量，8处随机残差屏蔽仅训练启用。",
+        "excluded": "这24点均受到正常监督，损失对分数的梯度方向正确；未发现忽略标签或损失到分数这一段的梯度中断。该检查未追踪实际更新中分数到共享参数的梯度。全局AP提高不等于这两个道路片段学好了。5757局部为45点地形和5点人行道，不能直接充当同类道路证据。 加强局部监督后该局部的推理表现能够改善，不支持它在当前模型下完全不可拟合；该干预未隔离归一化统计量与随机残差屏蔽。 不能再将推理误差直接称为这些点在训练前向中没学好；零阈值正确也不能证明AP排序正确。未发现监测额外更新归一化统计量、标签被忽略或整帧增强不一致。",
+        "missing": "同参数下训练与推理的归一化、随机残差屏蔽及数值路径未独立分解；尚无这24点同状态的逐层训练/推理特征。val19已参与开发，独立泛化、种子波动及极高召回代价仍未确认。",
+        "modification": "分别保留局部加权81.63721%与未加权80.53251%候选，固定78.06939%诊断起点；局部加权仅作为有迁移迹象的诊断候选，尚不固化正式规则。 当前先修正诊断中的模式混用；以训练/推理状态不一致为优先原因候选。若最小固定权重检查支持运行统计量偏移，再检验统一的统计估计方式；若支持随机层影响，再检验其使用方式。当前不直接冻结归一化、不关闭随机层、不固化特定点加权。",
+        "next_test": "优先分析已保存训练分数、相邻固定推理和归一化缓冲量；仅当归一化与随机层仍无法区分且会改变修正选择时，在一个固定权重和完整训练扫描上做不更新参数的最小模式对照，分别固定随机层和归一化状态，检查首次差异所在层。未启动新推理或训练分支。"
       }
     },
     "comparison": {
@@ -1819,6 +1819,7 @@
         "branch"
       ],
       "AP_gain_over_control": 0.5302832325092197,
+      "measurement_scope": "All material BCE and threshold readouts use eval mode, including fields named training_patch_BCE; actual train-mode point scores are separate in local_comparison.state_analysis",
       "scope": "One paired seed; identical initial RNG and per-pair rank seeds. Changing scan sizes can change subsequent stochastic-depth draws, so repeat uncertainty is not estimated."
     },
     "scope": "Complete official ranking for all endpoints; focused material intervention, not a completed attribution of all remaining AP loss. Positive and normal AP allocations are separate margins.",
@@ -1939,6 +1940,939 @@
         "mean_BCE": 0.0009757107472978532,
         "wrong_at_zero": 0
       },
+      "state_analysis": {
+        "scope": "Static recomputation of existing logs, checkpoint buffers and deployed module definitions; zero new model forwards or parameter updates",
+        "training": {
+          "unique_points": 24,
+          "scan_visits": 31,
+          "point_visits": 744,
+          "updates_with_visits": 22,
+          "wrong_at_zero": 0,
+          "mean_BCE": 0.009519875933664101,
+          "score_range": [
+            -8.8125,
+            -0.76953125
+          ],
+          "first_logged_step": 1004,
+          "limitation": "Repeated visits to the same 24 points, not 744 independent points. No C-step-1000 training-mode scores or complete training-mode rankings were saved."
+        },
+        "updates": [
+          {
+            "step": 1001,
+            "scan_visits": 0,
+            "positions": [],
+            "previous_eval_BCE": 0.7845115065574646,
+            "pre_eval_BCE": 0.7507613301277161,
+            "pre_eval_wrong": 11,
+            "post_eval_wrong": 11,
+            "buffer_interval_BCE_change": -0.033750176429748535,
+            "buffer_interval_max_abs_score_change": 0.1171875,
+            "optimizer_interval_BCE_change": 0.028944849967956543
+          },
+          {
+            "step": 1002,
+            "scan_visits": 0,
+            "positions": [],
+            "previous_eval_BCE": 0.7797061800956726,
+            "pre_eval_BCE": 0.8072100281715393,
+            "pre_eval_wrong": 11,
+            "post_eval_wrong": 11,
+            "buffer_interval_BCE_change": 0.0275038480758667,
+            "buffer_interval_max_abs_score_change": 0.09375,
+            "optimizer_interval_BCE_change": -0.007764697074890137
+          },
+          {
+            "step": 1003,
+            "scan_visits": 0,
+            "positions": [],
+            "previous_eval_BCE": 0.7994453310966492,
+            "pre_eval_BCE": 0.7843470573425293,
+            "pre_eval_wrong": 11,
+            "post_eval_wrong": 11,
+            "buffer_interval_BCE_change": -0.015098273754119873,
+            "buffer_interval_max_abs_score_change": 0.140625,
+            "optimizer_interval_BCE_change": 0.010765373706817627
+          },
+          {
+            "step": 1004,
+            "scan_visits": 1,
+            "positions": [
+              6
+            ],
+            "previous_eval_BCE": 0.7951124310493469,
+            "pre_eval_BCE": 0.802252471446991,
+            "pre_eval_wrong": 11,
+            "post_eval_wrong": 11,
+            "buffer_interval_BCE_change": 0.007140040397644043,
+            "buffer_interval_max_abs_score_change": 0.08984375,
+            "optimizer_interval_BCE_change": -0.06105232238769531,
+            "train_BCE": 0.06703124093529413,
+            "train_wrong": 0,
+            "train_score_range": [
+              -5.21875,
+              -1.7109375
+            ],
+            "mean_eval_minus_train": 2.3444010416666665,
+            "same_update_max_point_range": 0.0
+          },
+          {
+            "step": 1005,
+            "scan_visits": 1,
+            "positions": [
+              8
+            ],
+            "previous_eval_BCE": 0.7412001490592957,
+            "pre_eval_BCE": 0.7284929752349854,
+            "pre_eval_wrong": 11,
+            "post_eval_wrong": 11,
+            "buffer_interval_BCE_change": -0.012707173824310303,
+            "buffer_interval_max_abs_score_change": 0.0546875,
+            "optimizer_interval_BCE_change": -0.14897841215133667,
+            "train_BCE": 0.07419883281968251,
+            "train_wrong": 0,
+            "train_score_range": [
+              -5.34375,
+              -1.390625
+            ],
+            "mean_eval_minus_train": 2.2180989583333335,
+            "same_update_max_point_range": 0.0
+          },
+          {
+            "step": 1006,
+            "scan_visits": 3,
+            "positions": [
+              2,
+              4,
+              6
+            ],
+            "previous_eval_BCE": 0.5795145630836487,
+            "pre_eval_BCE": 0.5666258931159973,
+            "pre_eval_wrong": 10,
+            "post_eval_wrong": 7,
+            "buffer_interval_BCE_change": -0.012888669967651367,
+            "buffer_interval_max_abs_score_change": 0.0625,
+            "optimizer_interval_BCE_change": -0.18417027592658997,
+            "train_BCE": 0.041797191991707,
+            "train_wrong": 0,
+            "train_score_range": [
+              -5.375,
+              -0.76953125
+            ],
+            "mean_eval_minus_train": 2.599643283420139,
+            "same_update_max_point_range": 4.05078125
+          },
+          {
+            "step": 1007,
+            "scan_visits": 0,
+            "positions": [],
+            "previous_eval_BCE": 0.38245561718940735,
+            "pre_eval_BCE": 0.38858911395072937,
+            "pre_eval_wrong": 7,
+            "post_eval_wrong": 0,
+            "buffer_interval_BCE_change": 0.0061334967613220215,
+            "buffer_interval_max_abs_score_change": 0.0625,
+            "optimizer_interval_BCE_change": -0.14724811911582947
+          },
+          {
+            "step": 1008,
+            "scan_visits": 0,
+            "positions": [],
+            "previous_eval_BCE": 0.2413409948348999,
+            "pre_eval_BCE": 0.2514254152774811,
+            "pre_eval_wrong": 0,
+            "post_eval_wrong": 0,
+            "buffer_interval_BCE_change": 0.010084420442581177,
+            "buffer_interval_max_abs_score_change": 0.078125,
+            "optimizer_interval_BCE_change": -0.08162035048007965
+          },
+          {
+            "step": 1009,
+            "scan_visits": 0,
+            "positions": [],
+            "previous_eval_BCE": 0.16980506479740143,
+            "pre_eval_BCE": 0.18200533092021942,
+            "pre_eval_wrong": 0,
+            "post_eval_wrong": 0,
+            "buffer_interval_BCE_change": 0.012200266122817993,
+            "buffer_interval_max_abs_score_change": 0.10546875,
+            "optimizer_interval_BCE_change": -0.05202662944793701
+          },
+          {
+            "step": 1010,
+            "scan_visits": 1,
+            "positions": [
+              2
+            ],
+            "previous_eval_BCE": 0.1299787014722824,
+            "pre_eval_BCE": 0.13128362596035004,
+            "pre_eval_wrong": 0,
+            "post_eval_wrong": 0,
+            "buffer_interval_BCE_change": 0.001304924488067627,
+            "buffer_interval_max_abs_score_change": 0.03125,
+            "optimizer_interval_BCE_change": -0.03878362476825714,
+            "train_BCE": 0.004640260791268781,
+            "train_wrong": 0,
+            "train_score_range": [
+              -7.15625,
+              -4.28125
+            ],
+            "mean_eval_minus_train": 2.9161783854166665,
+            "same_update_max_point_range": 0.0
+          },
+          {
+            "step": 1011,
+            "scan_visits": 2,
+            "positions": [
+              4,
+              5
+            ],
+            "previous_eval_BCE": 0.0925000011920929,
+            "pre_eval_BCE": 0.08095433562994003,
+            "pre_eval_wrong": 0,
+            "post_eval_wrong": 0,
+            "buffer_interval_BCE_change": -0.011545665562152863,
+            "buffer_interval_max_abs_score_change": 0.203125,
+            "optimizer_interval_BCE_change": -0.029850266873836517,
+            "train_BCE": 0.005167373020010247,
+            "train_wrong": 0,
+            "train_score_range": [
+              -8.1875,
+              -3.5
+            ],
+            "mean_eval_minus_train": 2.6412760416666665,
+            "same_update_max_point_range": 2.96875
+          },
+          {
+            "step": 1012,
+            "scan_visits": 2,
+            "positions": [
+              6,
+              8
+            ],
+            "previous_eval_BCE": 0.051104068756103516,
+            "pre_eval_BCE": 0.04761502146720886,
+            "pre_eval_wrong": 0,
+            "post_eval_wrong": 0,
+            "buffer_interval_BCE_change": -0.0034890472888946533,
+            "buffer_interval_max_abs_score_change": 0.109375,
+            "optimizer_interval_BCE_change": -0.014155473560094833,
+            "train_BCE": 0.001467723154314153,
+            "train_wrong": 0,
+            "train_score_range": [
+              -7.46875,
+              -5.875
+            ],
+            "mean_eval_minus_train": 2.9049479166666665,
+            "same_update_max_point_range": 0.34375
+          },
+          {
+            "step": 1013,
+            "scan_visits": 0,
+            "positions": [],
+            "previous_eval_BCE": 0.03345954790711403,
+            "pre_eval_BCE": 0.03375138342380524,
+            "pre_eval_wrong": 0,
+            "post_eval_wrong": 0,
+            "buffer_interval_BCE_change": 0.0002918355166912079,
+            "buffer_interval_max_abs_score_change": 0.03125,
+            "optimizer_interval_BCE_change": -0.011859739199280739
+          },
+          {
+            "step": 1014,
+            "scan_visits": 1,
+            "positions": [
+              6
+            ],
+            "previous_eval_BCE": 0.021891644224524498,
+            "pre_eval_BCE": 0.021605513989925385,
+            "pre_eval_wrong": 0,
+            "post_eval_wrong": 0,
+            "buffer_interval_BCE_change": -0.00028613023459911346,
+            "buffer_interval_max_abs_score_change": 0.0625,
+            "optimizer_interval_BCE_change": -0.0057745762169361115,
+            "train_BCE": 0.0010424657242502527,
+            "train_wrong": 0,
+            "train_score_range": [
+              -8.0625,
+              -6.125
+            ],
+            "mean_eval_minus_train": 2.5397135416666665,
+            "same_update_max_point_range": 0.0
+          },
+          {
+            "step": 1015,
+            "scan_visits": 0,
+            "positions": [],
+            "previous_eval_BCE": 0.015830937772989273,
+            "pre_eval_BCE": 0.0159071646630764,
+            "pre_eval_wrong": 0,
+            "post_eval_wrong": 0,
+            "buffer_interval_BCE_change": 7.622689008712769e-05,
+            "buffer_interval_max_abs_score_change": 0.0625,
+            "optimizer_interval_BCE_change": -0.0033314116299152374
+          },
+          {
+            "step": 1016,
+            "scan_visits": 1,
+            "positions": [
+              8
+            ],
+            "previous_eval_BCE": 0.012575753033161163,
+            "pre_eval_BCE": 0.011303712613880634,
+            "pre_eval_wrong": 0,
+            "post_eval_wrong": 0,
+            "buffer_interval_BCE_change": -0.001272040419280529,
+            "buffer_interval_max_abs_score_change": 0.15625,
+            "optimizer_interval_BCE_change": -0.002193249762058258,
+            "train_BCE": 0.0007030793910580564,
+            "train_wrong": 0,
+            "train_score_range": [
+              -8.1875,
+              -6.46875
+            ],
+            "mean_eval_minus_train": 2.3515625,
+            "same_update_max_point_range": 0.0
+          },
+          {
+            "step": 1017,
+            "scan_visits": 0,
+            "positions": [],
+            "previous_eval_BCE": 0.009110462851822376,
+            "pre_eval_BCE": 0.008738069795072079,
+            "pre_eval_wrong": 0,
+            "post_eval_wrong": 0,
+            "buffer_interval_BCE_change": -0.00037239305675029755,
+            "buffer_interval_max_abs_score_change": 0.0625,
+            "optimizer_interval_BCE_change": -0.0025335229001939297
+          },
+          {
+            "step": 1018,
+            "scan_visits": 0,
+            "positions": [],
+            "previous_eval_BCE": 0.006204546894878149,
+            "pre_eval_BCE": 0.007239401340484619,
+            "pre_eval_wrong": 0,
+            "post_eval_wrong": 0,
+            "buffer_interval_BCE_change": 0.00103485444560647,
+            "buffer_interval_max_abs_score_change": 0.1875,
+            "optimizer_interval_BCE_change": -0.0012163948267698288
+          },
+          {
+            "step": 1019,
+            "scan_visits": 2,
+            "positions": [
+              2,
+              8
+            ],
+            "previous_eval_BCE": 0.00602300651371479,
+            "pre_eval_BCE": 0.0045955306850373745,
+            "pre_eval_wrong": 0,
+            "post_eval_wrong": 0,
+            "buffer_interval_BCE_change": -0.0014274758286774158,
+            "buffer_interval_max_abs_score_change": 0.34375,
+            "optimizer_interval_BCE_change": -0.0005737878382205963,
+            "train_BCE": 0.0006282809768057039,
+            "train_wrong": 0,
+            "train_score_range": [
+              -8.375,
+              -5.625
+            ],
+            "mean_eval_minus_train": 1.9602864583333333,
+            "same_update_max_point_range": 2.125
+          },
+          {
+            "step": 1020,
+            "scan_visits": 1,
+            "positions": [
+              2
+            ],
+            "previous_eval_BCE": 0.004021742846816778,
+            "pre_eval_BCE": 0.003235854906961322,
+            "pre_eval_wrong": 0,
+            "post_eval_wrong": 0,
+            "buffer_interval_BCE_change": -0.0007858879398554564,
+            "buffer_interval_max_abs_score_change": 0.28125,
+            "optimizer_interval_BCE_change": -0.000368394423276186,
+            "train_BCE": 0.0003382552227841175,
+            "train_wrong": 0,
+            "train_score_range": [
+              -8.625,
+              -7.5625
+            ],
+            "mean_eval_minus_train": 1.9908854166666667,
+            "same_update_max_point_range": 0.0
+          },
+          {
+            "step": 1021,
+            "scan_visits": 0,
+            "positions": [],
+            "previous_eval_BCE": 0.002867460483685136,
+            "pre_eval_BCE": 0.003194837598130107,
+            "pre_eval_wrong": 0,
+            "post_eval_wrong": 0,
+            "buffer_interval_BCE_change": 0.0003273771144449711,
+            "buffer_interval_max_abs_score_change": 0.15625,
+            "optimizer_interval_BCE_change": -0.0005354220047593117
+          },
+          {
+            "step": 1022,
+            "scan_visits": 2,
+            "positions": [
+              1,
+              4
+            ],
+            "previous_eval_BCE": 0.0026594155933707952,
+            "pre_eval_BCE": 0.0023138888645917177,
+            "pre_eval_wrong": 0,
+            "post_eval_wrong": 0,
+            "buffer_interval_BCE_change": -0.00034552672877907753,
+            "buffer_interval_max_abs_score_change": 0.1875,
+            "optimizer_interval_BCE_change": -0.00030255597084760666,
+            "train_BCE": 0.0009504530108592306,
+            "train_wrong": 0,
+            "train_score_range": [
+              -8.375,
+              -4.9375
+            ],
+            "mean_eval_minus_train": 1.1087239583333333,
+            "same_update_max_point_range": 1.875
+          },
+          {
+            "step": 1023,
+            "scan_visits": 0,
+            "positions": [],
+            "previous_eval_BCE": 0.002011332893744111,
+            "pre_eval_BCE": 0.0021922187879681587,
+            "pre_eval_wrong": 0,
+            "post_eval_wrong": 0,
+            "buffer_interval_BCE_change": 0.00018088589422404766,
+            "buffer_interval_max_abs_score_change": 0.125,
+            "optimizer_interval_BCE_change": -0.00021727290004491806
+          },
+          {
+            "step": 1024,
+            "scan_visits": 0,
+            "positions": [],
+            "previous_eval_BCE": 0.0019749458879232407,
+            "pre_eval_BCE": 0.0025155527982860804,
+            "pre_eval_wrong": 0,
+            "post_eval_wrong": 0,
+            "buffer_interval_BCE_change": 0.0005406069103628397,
+            "buffer_interval_max_abs_score_change": 0.3125,
+            "optimizer_interval_BCE_change": -0.00019436515867710114
+          },
+          {
+            "step": 1025,
+            "scan_visits": 0,
+            "positions": [],
+            "previous_eval_BCE": 0.0023211876396089792,
+            "pre_eval_BCE": 0.0025786750484257936,
+            "pre_eval_wrong": 0,
+            "post_eval_wrong": 0,
+            "buffer_interval_BCE_change": 0.0002574874088168144,
+            "buffer_interval_max_abs_score_change": 0.15625,
+            "optimizer_interval_BCE_change": -0.00035648630000650883
+          },
+          {
+            "step": 1026,
+            "scan_visits": 2,
+            "positions": [
+              5,
+              7
+            ],
+            "previous_eval_BCE": 0.002222188748419285,
+            "pre_eval_BCE": 0.0020154512021690607,
+            "pre_eval_wrong": 0,
+            "post_eval_wrong": 0,
+            "buffer_interval_BCE_change": -0.0002067375462502241,
+            "buffer_interval_max_abs_score_change": 0.15625,
+            "optimizer_interval_BCE_change": -0.00018968363292515278,
+            "train_BCE": 0.00026547182690953296,
+            "train_wrong": 0,
+            "train_score_range": [
+              -8.625,
+              -7.5625
+            ],
+            "mean_eval_minus_train": 1.7884114583333333,
+            "same_update_max_point_range": 0.625
+          },
+          {
+            "step": 1027,
+            "scan_visits": 1,
+            "positions": [
+              1
+            ],
+            "previous_eval_BCE": 0.001825767569243908,
+            "pre_eval_BCE": 0.001678120344877243,
+            "pre_eval_wrong": 0,
+            "post_eval_wrong": 0,
+            "buffer_interval_BCE_change": -0.0001476472243666649,
+            "buffer_interval_max_abs_score_change": 0.125,
+            "optimizer_interval_BCE_change": 9.892822708934546e-05,
+            "train_BCE": 0.00038274798126378395,
+            "train_wrong": 0,
+            "train_score_range": [
+              -8.3125,
+              -7.03125
+            ],
+            "mean_eval_minus_train": 1.3294270833333333,
+            "same_update_max_point_range": 0.0
+          },
+          {
+            "step": 1028,
+            "scan_visits": 1,
+            "positions": [
+              1
+            ],
+            "previous_eval_BCE": 0.0017770485719665885,
+            "pre_eval_BCE": 0.00153679633513093,
+            "pre_eval_wrong": 0,
+            "post_eval_wrong": 0,
+            "buffer_interval_BCE_change": -0.00024025223683565855,
+            "buffer_interval_max_abs_score_change": 0.21875,
+            "optimizer_interval_BCE_change": 3.3868709579110146e-06,
+            "train_BCE": 0.0002568152503287375,
+            "train_wrong": 0,
+            "train_score_range": [
+              -8.5625,
+              -7.875
+            ],
+            "mean_eval_minus_train": 1.59375,
+            "same_update_max_point_range": 0.0
+          },
+          {
+            "step": 1029,
+            "scan_visits": 1,
+            "positions": [
+              3
+            ],
+            "previous_eval_BCE": 0.001540183206088841,
+            "pre_eval_BCE": 0.0014822408556938171,
+            "pre_eval_wrong": 0,
+            "post_eval_wrong": 0,
+            "buffer_interval_BCE_change": -5.794235039502382e-05,
+            "buffer_interval_max_abs_score_change": 0.0625,
+            "optimizer_interval_BCE_change": -9.789364412426949e-07,
+            "train_BCE": 0.00025110284672703263,
+            "train_wrong": 0,
+            "train_score_range": [
+              -8.75,
+              -7.78125
+            ],
+            "mean_eval_minus_train": 1.6015625,
+            "same_update_max_point_range": 0.0
+          },
+          {
+            "step": 1030,
+            "scan_visits": 2,
+            "positions": [
+              3,
+              4
+            ],
+            "previous_eval_BCE": 0.0014812619192525744,
+            "pre_eval_BCE": 0.0014688599621877074,
+            "pre_eval_wrong": 0,
+            "post_eval_wrong": 0,
+            "buffer_interval_BCE_change": -1.240195706486702e-05,
+            "buffer_interval_max_abs_score_change": 0.09375,
+            "optimizer_interval_BCE_change": -7.885601371526718e-05,
+            "train_BCE": 0.0006045563452652703,
+            "train_wrong": 0,
+            "train_score_range": [
+              -8.75,
+              -5.8125
+            ],
+            "mean_eval_minus_train": 1.0709635416666667,
+            "same_update_max_point_range": 2.3125
+          },
+          {
+            "step": 1031,
+            "scan_visits": 1,
+            "positions": [
+              5
+            ],
+            "previous_eval_BCE": 0.0013900039484724402,
+            "pre_eval_BCE": 0.001162360655143857,
+            "pre_eval_wrong": 0,
+            "post_eval_wrong": 0,
+            "buffer_interval_BCE_change": -0.00022764329332858324,
+            "buffer_interval_max_abs_score_change": 0.25,
+            "optimizer_interval_BCE_change": 7.193069905042648e-06,
+            "train_BCE": 0.0007212239262330793,
+            "train_wrong": 0,
+            "train_score_range": [
+              -8.625,
+              -6.34375
+            ],
+            "mean_eval_minus_train": 0.4752604166666667,
+            "same_update_max_point_range": 0.0
+          },
+          {
+            "step": 1032,
+            "scan_visits": 2,
+            "positions": [
+              3,
+              8
+            ],
+            "previous_eval_BCE": 0.0011695537250488997,
+            "pre_eval_BCE": 0.0009972817497327924,
+            "pre_eval_wrong": 0,
+            "post_eval_wrong": 0,
+            "buffer_interval_BCE_change": -0.00017227197531610727,
+            "buffer_interval_max_abs_score_change": 0.21875,
+            "optimizer_interval_BCE_change": -7.543613901361823e-05,
+            "train_BCE": 0.0002908685414640486,
+            "train_wrong": 0,
+            "train_score_range": [
+              -8.8125,
+              -7.25
+            ],
+            "mean_eval_minus_train": 1.1438802083333333,
+            "same_update_max_point_range": 0.875
+          },
+          {
+            "step": 1033,
+            "scan_visits": 1,
+            "positions": [
+              7
+            ],
+            "previous_eval_BCE": 0.0009218456107191741,
+            "pre_eval_BCE": 0.001040133647620678,
+            "pre_eval_wrong": 0,
+            "post_eval_wrong": 0,
+            "buffer_interval_BCE_change": 0.0001182880369015038,
+            "buffer_interval_max_abs_score_change": 0.1875,
+            "optimizer_interval_BCE_change": -4.397646989673376e-05,
+            "train_BCE": 0.0002248528408184211,
+            "train_wrong": 0,
+            "train_score_range": [
+              -8.75,
+              -8.1875
+            ],
+            "mean_eval_minus_train": 1.3802083333333333,
+            "same_update_max_point_range": 0.0
+          },
+          {
+            "step": 1034,
+            "scan_visits": 1,
+            "positions": [
+              2
+            ],
+            "previous_eval_BCE": 0.0009961571777239442,
+            "pre_eval_BCE": 0.0009914888069033623,
+            "pre_eval_wrong": 0,
+            "post_eval_wrong": 0,
+            "buffer_interval_BCE_change": -4.668370820581913e-06,
+            "buffer_interval_max_abs_score_change": 0.03125,
+            "optimizer_interval_BCE_change": -1.7599144484847784e-05,
+            "train_BCE": 0.0003994808872484219,
+            "train_wrong": 0,
+            "train_score_range": [
+              -8.8125,
+              -6.65625
+            ],
+            "mean_eval_minus_train": 0.9296875,
+            "same_update_max_point_range": 0.0
+          },
+          {
+            "step": 1035,
+            "scan_visits": 0,
+            "positions": [],
+            "previous_eval_BCE": 0.0009738896624185145,
+            "pre_eval_BCE": 0.0010209042811766267,
+            "pre_eval_wrong": 0,
+            "post_eval_wrong": 0,
+            "buffer_interval_BCE_change": 4.701461875811219e-05,
+            "buffer_interval_max_abs_score_change": 0.0625,
+            "optimizer_interval_BCE_change": 4.693283699452877e-06
+          },
+          {
+            "step": 1036,
+            "scan_visits": 0,
+            "positions": [],
+            "previous_eval_BCE": 0.0010255975648760796,
+            "pre_eval_BCE": 0.0011070097098127007,
+            "pre_eval_wrong": 0,
+            "post_eval_wrong": 0,
+            "buffer_interval_BCE_change": 8.141214493662119e-05,
+            "buffer_interval_max_abs_score_change": 0.125,
+            "optimizer_interval_BCE_change": -1.526111736893654e-05
+          },
+          {
+            "step": 1037,
+            "scan_visits": 0,
+            "positions": [],
+            "previous_eval_BCE": 0.0010917485924437642,
+            "pre_eval_BCE": 0.001270201406441629,
+            "pre_eval_wrong": 0,
+            "post_eval_wrong": 0,
+            "buffer_interval_BCE_change": 0.00017845281399786472,
+            "buffer_interval_max_abs_score_change": 0.21875,
+            "optimizer_interval_BCE_change": -7.2270049713552e-05
+          },
+          {
+            "step": 1038,
+            "scan_visits": 1,
+            "positions": [
+              3
+            ],
+            "previous_eval_BCE": 0.001197931356728077,
+            "pre_eval_BCE": 0.0011124290758743882,
+            "pre_eval_wrong": 0,
+            "post_eval_wrong": 0,
+            "buffer_interval_BCE_change": -8.550228085368872e-05,
+            "buffer_interval_max_abs_score_change": 0.125,
+            "optimizer_interval_BCE_change": -5.795923061668873e-05,
+            "train_BCE": 0.0005972076724484051,
+            "train_wrong": 0,
+            "train_score_range": [
+              -8.6875,
+              -5.96875
+            ],
+            "mean_eval_minus_train": 0.8776041666666666,
+            "same_update_max_point_range": 0.0
+          },
+          {
+            "step": 1039,
+            "scan_visits": 1,
+            "positions": [
+              4
+            ],
+            "previous_eval_BCE": 0.0010544698452576995,
+            "pre_eval_BCE": 0.0009069211664609611,
+            "pre_eval_wrong": 0,
+            "post_eval_wrong": 0,
+            "buffer_interval_BCE_change": -0.00014754867879673839,
+            "buffer_interval_max_abs_score_change": 0.21875,
+            "optimizer_interval_BCE_change": 6.7453947849571705e-06,
+            "train_BCE": 0.00018755792780403023,
+            "train_wrong": 0,
+            "train_score_range": [
+              -8.8125,
+              -8.1875
+            ],
+            "mean_eval_minus_train": 1.43359375,
+            "same_update_max_point_range": 0.0
+          },
+          {
+            "step": 1040,
+            "scan_visits": 0,
+            "positions": [],
+            "previous_eval_BCE": 0.0009136665612459183,
+            "pre_eval_BCE": 0.0008980333805084229,
+            "pre_eval_wrong": 0,
+            "post_eval_wrong": 0,
+            "buffer_interval_BCE_change": -1.5633180737495422e-05,
+            "buffer_interval_max_abs_score_change": 0.0625,
+            "optimizer_interval_BCE_change": 7.767736678943038e-05
+          }
+        ],
+        "intervals": {
+          "buffer_BCE_change": -0.027785272046457976,
+          "optimizer_BCE_change": -0.7557505237637088,
+          "scope": "A telescoping decomposition along the actual trajectory, not independent causal percentages. Between monitors before an optimizer step, BN buffers are the only mutable model state; stochastic training changes their inputs. Small GPU numerical variation was not bounded at every step."
+        },
+        "batchnorm": {
+          "modules": [
+            {
+              "module": "backbone.embedding.stem.norm",
+              "momentum": 0.01,
+              "eps": 0.001,
+              "counts": {
+                "C": 108792,
+                "material": 109112,
+                "local": 109112
+              },
+              "finite_nonnegative_variance": true
+            },
+            {
+              "module": "backbone.enc.enc1.down.norm.0",
+              "momentum": 0.01,
+              "eps": 0.001,
+              "counts": {
+                "C": 108792,
+                "material": 109112,
+                "local": 109112
+              },
+              "finite_nonnegative_variance": true
+            },
+            {
+              "module": "backbone.enc.enc2.down.norm.0",
+              "momentum": 0.01,
+              "eps": 0.001,
+              "counts": {
+                "C": 108792,
+                "material": 109112,
+                "local": 109112
+              },
+              "finite_nonnegative_variance": true
+            },
+            {
+              "module": "backbone.enc.enc3.down.norm.0",
+              "momentum": 0.01,
+              "eps": 0.001,
+              "counts": {
+                "C": 108792,
+                "material": 109112,
+                "local": 109112
+              },
+              "finite_nonnegative_variance": true
+            },
+            {
+              "module": "backbone.enc.enc4.down.norm.0",
+              "momentum": 0.01,
+              "eps": 0.001,
+              "counts": {
+                "C": 108792,
+                "material": 109112,
+                "local": 109112
+              },
+              "finite_nonnegative_variance": true
+            },
+            {
+              "module": "backbone.dec.dec3.up.proj.1",
+              "momentum": 0.01,
+              "eps": 0.001,
+              "counts": {
+                "C": 108792,
+                "material": 109112,
+                "local": 109112
+              },
+              "finite_nonnegative_variance": true
+            },
+            {
+              "module": "backbone.dec.dec3.up.proj_skip.1",
+              "momentum": 0.01,
+              "eps": 0.001,
+              "counts": {
+                "C": 108792,
+                "material": 109112,
+                "local": 109112
+              },
+              "finite_nonnegative_variance": true
+            },
+            {
+              "module": "backbone.dec.dec2.up.proj.1",
+              "momentum": 0.01,
+              "eps": 0.001,
+              "counts": {
+                "C": 108792,
+                "material": 109112,
+                "local": 109112
+              },
+              "finite_nonnegative_variance": true
+            },
+            {
+              "module": "backbone.dec.dec2.up.proj_skip.1",
+              "momentum": 0.01,
+              "eps": 0.001,
+              "counts": {
+                "C": 108792,
+                "material": 109112,
+                "local": 109112
+              },
+              "finite_nonnegative_variance": true
+            },
+            {
+              "module": "backbone.dec.dec1.up.proj.1",
+              "momentum": 0.01,
+              "eps": 0.001,
+              "counts": {
+                "C": 108792,
+                "material": 109112,
+                "local": 109112
+              },
+              "finite_nonnegative_variance": true
+            },
+            {
+              "module": "backbone.dec.dec1.up.proj_skip.1",
+              "momentum": 0.01,
+              "eps": 0.001,
+              "counts": {
+                "C": 108792,
+                "material": 109112,
+                "local": 109112
+              },
+              "finite_nonnegative_variance": true
+            },
+            {
+              "module": "backbone.dec.dec0.up.proj.1",
+              "momentum": 0.01,
+              "eps": 0.001,
+              "counts": {
+                "C": 108792,
+                "material": 109112,
+                "local": 109112
+              },
+              "finite_nonnegative_variance": true
+            },
+            {
+              "module": "backbone.dec.dec0.up.proj_skip.1",
+              "momentum": 0.01,
+              "eps": 0.001,
+              "counts": {
+                "C": 108792,
+                "material": 109112,
+                "local": 109112
+              },
+              "finite_nonnegative_variance": true
+            }
+          ],
+          "other_registered_buffers": [],
+          "training_population": "Voxel rows of one full scan; two scans share only the ranking objective and eight scans accumulate gradients",
+          "first_possible_mode_difference": "backbone.embedding.stem.norm, before context fusion; no paired train/eval intermediate features were saved",
+          "old_state_weight_after_320_scans": 0.040110887486875496,
+          "half_life_scans": 68.96756393652842,
+          "interpretation": "All 13 counters rise by exactly 320. No extra updates from diagnostic inference or checkpoint recomputation are indicated; finite buffers do not establish representative population statistics."
+        },
+        "stochastic_depth": {
+          "modules": [
+            {
+              "module": "backbone.enc.enc3.block0.drop_path.0",
+              "probability": 0.13846154510974884
+            },
+            {
+              "module": "backbone.enc.enc3.block1.drop_path.0",
+              "probability": 0.16153846681118011
+            },
+            {
+              "module": "backbone.enc.enc3.block2.drop_path.0",
+              "probability": 0.1846153885126114
+            },
+            {
+              "module": "backbone.enc.enc3.block3.drop_path.0",
+              "probability": 0.20769232511520386
+            },
+            {
+              "module": "backbone.enc.enc3.block4.drop_path.0",
+              "probability": 0.23076924681663513
+            },
+            {
+              "module": "backbone.enc.enc3.block5.drop_path.0",
+              "probability": 0.2538461685180664
+            },
+            {
+              "module": "backbone.enc.enc4.block0.drop_path.0",
+              "probability": 0.2769230902194977
+            },
+            {
+              "module": "backbone.enc.enc4.block1.drop_path.0",
+              "probability": 0.30000001192092896
+            }
+          ],
+          "source": "/home/jasongao/miniforge3/lib/python3.13/site-packages/timm/layers/drop.py",
+          "mask": "[N_voxels, 1] independent Bernoulli masks, one draw per attention/MLP residual call; identity in eval mode",
+          "interpretation": "Same-scan repeated training forwards vary without an optimizer step. DropPath is the active explicit random operation; its share of the train/eval gap is not isolated."
+        },
+        "other_paths": {
+          "dropout_probabilities_zero": true,
+          "serialization_shuffle": false,
+          "recomputation": "Only detail, conditional interaction and point head are checkpointed; they contain neither BN nor DropPath",
+          "inputs": "Same full scan, raw slots, labels, voxelization and precision correction; no mode-dependent augmentation",
+          "caveat": "Flash-attention/autograd kernels can also select different numerical execution paths; no claim of bitwise train/eval equivalence is made."
+        }
+      },
+      "interpretation_revision": "The original diagnostic plan used eval-mode fitting as its outcome. Actual training-mode scores were already zero-threshold correct; the endpoint gain does not identify insufficient training-mode fitting or weak supervision as its cause.",
       "actual_updates": {
         "count": 40,
         "improved": 32,

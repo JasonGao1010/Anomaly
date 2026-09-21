@@ -671,7 +671,7 @@ def evidence(output, workers):
                     full=sum(r["AP_loss"] for r in audit_rows if r["neighbors"]["full"]["index"]==5080)
                     geometry=sum(r["AP_loss"] for r in audit_rows if r["neighbors"]["geometry"]["index"]==5080)
                     clue += f"；5080在全描述最近邻中对应{full:.5f}个AP百分点，仅几何最近邻中对应{geometry:.5f}；尚未确认其相关性，不能归为没学够"
-                    test = "先复核141仅几何近邻与真实失败观测，5080暂不作为拟合依据；相关素材确认后执行focus.json中最多40步的四帧拟合检查，并同时检查独立观测"
+                    test = "先静态复核141仅几何近邻与真实失败观测的形态、响应、上下文和计算状态；5080暂不作为拟合依据。只有相关素材确认且已有记录无法区分关键原因时，再确定最小必要检查，不默认启动拟合训练"
                     modification = "暂不依据5080提高取样频次或启动拟合；确认相关素材后，仅当拟合同时改善独立相关观测才考虑增加其使用，训练样本单独改善仅说明局部拟合成功"
                 elif kind=="normal" and any(r["parent"]==case_id for r in focus.get("normal",[])):
                     clue += f"；已分解连续局部片段并计算{len(query_ids)}个实际观测描述，代表{represented:.5f}个AP百分点；固定特征对照见features.json，不能直接作融合因果结论"
@@ -681,7 +681,7 @@ def evidence(output, workers):
                         clue += f"；相同上下文的449参数读出在本项{sum(r['points'] for r in patches)}个检查点上误报为{before}/{after}，阈值分别按诊断子集75%召回确定，不能当作完整AP变化"
                     if case_id=="N141:75":
                         test = "固定314–380连续片段及原始正常标签，核验377帧高分局部与训练记录5059的形态、表面和邻接结构；只改变用于比较的训练正常候选，先区分相似描述与可信相关素材，再考虑增加相关训练观测使用"
-                        modification = "优先核对5059自身误报和实际相关性；相关性成立再做正常观测拟合及独立观测检查，现有读出结果不支持直接替换融合模块"
+                        modification = "优先静态核对5059自身推理误报、实际相关性和已有训练记录；不能从推理损失直接判定训练不足，现有读出结果不支持直接替换融合模块"
                     else:
                         test = "固定87–168连续片段，核验135帧两个高分局部与记录5757、6006中已低分正常局部的实际形态和背景；只改变用于比较的训练正常候选，缺少可信对应才支持补正常覆盖，不能仅凭读出分数差认定融合削弱"
                         modification = "先核对真实高分局部与已识别训练正常素材之间的形态及背景差异；保留C和现有融合，确认缺失观测后再补相应正常素材"
@@ -740,7 +740,7 @@ def evidence(output, workers):
             rows.append(dict(案例=case_id,视角="异常对象" if kind=="anomaly" else "正常结构候选",
                 固定排序失分百分点=loss,该视角累计失分比例=100*cumulative/total,有效点次=case["points"],观测次数=len(case["observations"]),
                 各召回区间失分=case.get("AP_loss_by_recall"),同帧错序概率=case.get("within_scan_rank_error"),跨帧错序概率=case.get("cross_scan_rank_error"),
-                对应训练素材=refs,训练素材学习表现=f"近邻训练 BCE={comparable_bce}; 验证观测 BCE={actual_bce}; 均仅为分类诊断",
+                对应训练素材=refs,训练素材的推理模式表现=f"近邻训练 BCE={comparable_bce}; 验证观测 BCE={actual_bce}; 均仅为分类诊断",
                 训练素材池内错序概率=item["weighted_training_rank_error"],验证观测池内错序概率=item["weighted_validation_rank_error"],
                 原因类别=cause,原因证据=clue,修改方案=item["proposed_modification"],区分原因的小实验=test,
                 支持的解释=supported,已排除的解释=excluded,仍缺的证据=missing,
@@ -759,6 +759,7 @@ def evidence(output, workers):
         exclusive_historical_cause_partition=dict(assigned=0.,unassigned=total,
             meaning="Historical AP loss has not been uniquely divided between coverage, training use and erroneous associations. This does not negate an independently identified numerical mechanism or its measured intervention effect."),
         normal_case_identity="Automatically linked surface candidates, not certified physical objects",
+        material_measurement_scope="Training/validation profile BCE and rank readouts are eval-mode measurements on their respective data sources, not losses recorded during training. Actual local training-mode scores are in transfer.json/local_comparison/state_analysis.",
         interpretation="Complete rank accounting is not completed causal attribution. The two marginal views overlap and must not be added.",
         results=report)
     if numerical:

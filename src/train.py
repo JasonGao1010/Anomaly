@@ -177,7 +177,7 @@ def local_mask(sample, local):
 
 
 def forward_loss(model, samples, counts, *, rank_weight=0., rank_seed=0, auc_weight=.1, fpr95_weight=.1,
-                 local=None, local_count=0):
+                 local=None, local_count=0, record_points=False):
     """Retain both full-scan graphs; concatenate scores only for the training objective."""
     predictions = [model(sample) for sample in samples]
     prediction = torch.cat(predictions)
@@ -189,6 +189,8 @@ def forward_loss(model, samples, counts, *, rank_weight=0., rank_seed=0, auc_wei
     else:
         rank, details = bce * 0, {}
     loss = bce + rank_weight * rank
+    if record_points:
+        details["point_scores"] = [value.detach() for value in predictions]
     if local is not None:
         chosen = [p[local_mask(s, local)] for s, p in zip(samples, predictions) if int(s["index"]) == local["index"]]
         # Normalize across all occurrences in the effective batch, not per microbatch.
@@ -227,6 +229,61 @@ def restore_rng(saved, device):
     torch.set_rng_state(saved["torch"])
     if saved["cuda"] is not None:
         torch.cuda.set_rng_state(saved["cuda"], device)
+
+
+def point_record(directory, train, order, model, device, updates, resume=False):
+    """Retain exact scores and point identities; large activations remain reproducible at saved checkpoints."""
+    input_offsets = np.r_[0, np.cumsum([row["points"] for row in train["records"]])]
+    visit_offsets = np.r_[0, np.cumsum([train["records"][i]["points"] for i in order])]
+    buffers = list(model.named_buffers())
+    buffer_offsets = np.r_[0, np.cumsum([value.numel() for _, value in buffers])]
+    random = rng_state(device)
+    random_sizes = {key: random[key].numel() for key in ("torch", "cuda") if random[key] is not None}
+    definition = dict(train_manifest=train["sha256"], sampling="sampling.json/order",
+        inputs="Existing manifest sources are retained without duplicating raw scans; points.npy gives each record's actual-return slots and supervision",
+        input_offsets=input_offsets.tolist(), visit_offsets=visit_offsets.tolist(),
+        scores="train.npy: float32 actual training-forward logits, ordered by scan visit then original return slot; includes ignored context points",
+        buffers=[dict(name=name, shape=list(value.shape), start=int(buffer_offsets[i]), stop=int(buffer_offsets[i+1]))
+                 for i, (name, value) in enumerate(buffers)], rng_sizes=random_sizes,
+        states="buffers.npy/rng.npy row 0 precedes training; row u follows update u. Full parameter/optimizer states are retained at step*.pt",
+        valid_prefix="Use the last resumable checkpoint's planned_updates after interruption; later file entries are not completed evidence",
+        feature_scope="All logits and point identities are retained. Full per-point activations at every update are not stored; checkpoints support later fixed-state layer inspection, not bitwise reconstruction of every unsaved intermediate training state.")
+    path = directory / "record.json"
+    if resume:
+        if json.loads(path.read_text()) != definition:
+            raise ValueError("recorded point population or state layout changed")
+    else:
+        write_json(path, definition)
+    specifications = dict(points=((int(input_offsets[-1]),), np.dtype([("slot", "<u4"), ("target", "i1")])),
+        train=((int(visit_offsets[-1]),), np.float32), buffers=((updates + 1, int(buffer_offsets[-1])), np.float32),
+        rng=((updates + 1, sum(random_sizes.values())), np.uint8))
+    arrays = {name: np.lib.format.open_memmap(directory / f"{name}.npy", mode="r+" if resume else "w+", dtype=dtype, shape=shape)
+              for name, (shape, dtype) in specifications.items()}
+    if any(arrays[name].shape != shape or arrays[name].dtype != np.dtype(dtype)
+           for name, (shape, dtype) in specifications.items()):
+        raise ValueError("record arrays differ from their declared population")
+    return dict(arrays=arrays, input_offsets=input_offsets, visit_offsets=visit_offsets, buffers=buffers, device=device)
+
+
+def record_state(record, step):
+    """Reading buffers and generators must not change model state or consume random draws."""
+    record["arrays"]["buffers"][step] = torch.cat([value.detach().reshape(-1).float()
+        for _, value in record["buffers"]]).cpu().numpy()
+    random = rng_state(record["device"])
+    record["arrays"]["rng"][step] = torch.cat([random[key].cpu() for key in ("torch", "cuda")
+                                              if random[key] is not None]).numpy()
+
+
+def record_scan(record, sample, scores, visit):
+    """The scan's raw slots identify all supervised and ignored model outputs."""
+    index = int(sample["index"])
+    begin, end = record["input_offsets"][index:index + 2]
+    start, stop = record["visit_offsets"][visit:visit + 2]
+    if end - begin != len(scores) or stop - start != len(scores):
+        raise ValueError("recorded logits differ from their input point population")
+    record["arrays"]["points"][begin:end]["slot"] = sample["slots"].cpu().numpy()
+    record["arrays"]["points"][begin:end]["target"] = sample["targets"].cpu().numpy()
+    record["arrays"]["train"][start:stop] = scores.float().cpu().numpy()
 
 
 @torch.no_grad()
@@ -505,13 +562,14 @@ def capture(model, optimizer, scaler, state, config, device, **extra):
                 rng=states, config=config, **state, **extra)
 
 
-def validate_all(model, val, device, workers, score_path=None):
+def validate_all(model, val, device, workers, score_path=None, record_points=False):
     rank, _ = rank_info()
     sync_buffers(model)
     result = None
     if rank == 0:
         try:
-            result = dict(ok=True, result=evaluate(model, val, device, workers, score_path=score_path))
+            result = dict(ok=True, result=evaluate(model, val, device, workers, score_path=score_path,
+                                                  **(dict(record_points=True) if record_points else {})))
         except Exception as error:
             result = dict(ok=False, error=f"{type(error).__name__}: {error}")
     result = broadcast_object(result)
@@ -703,6 +761,12 @@ def train_stage(args, train, val, seed, method, device, config):
                        distinct_nuscenes_frames=len({r["token"] for r in visits}),
                        replacement="scene-balanced rounds; use unseen frames within each scene before reuse"))
     local = config.get("local")
+    recording = None
+    if config.get("recording"):
+        recording = point_record(directory, train, full_order, model, device, total, resume)
+        if not resume:
+            record_state(recording, 0)
+            atomic_save(directory / "step0.pt", capture(model, optimizer, scaler, state, config, device, selected=False))
     if local:
         local_sample = to_device(dataset[local["index"]], device)
         trace_path = directory / "local.json"
@@ -759,12 +823,15 @@ def train_stage(args, train, val, seed, method, device, config):
                                                 rank_seed=seed * 100000000 + step * 8 + pair_index,
                                                 auc_weight=config.get("loss", {}).get("auc_weight", .1),
                                                 fpr95_weight=config.get("loss", {}).get("fpr95_weight", .1),
-                                                local=local, local_count=local_count)
+                                                local=local, local_count=local_count, record_points=recording is not None)
                 if not torch.isfinite(loss):
                     raise FloatingPointError("nonfinite segmentation loss")
                 if details.get("recall") is not None and abs(float(details["recall"]) - .95) > 2e-6:
                     raise FloatingPointError("smooth recall threshold did not reach 0.95")
                 scaler.scale(loss).backward()
+                if recording is not None:
+                    for offset, (sample, scores) in enumerate(zip(pair, details.pop("point_scores"))):
+                        record_scan(recording, sample, scores, (step - 1) * BATCH_SIZE + begin + offset)
                 loss_sum += loss.detach()
                 for key in components:
                     components[key] += float(details.get(key, 0.)) / (1 if key in ("bce", "local") else pair_count)
@@ -807,6 +874,8 @@ def train_stage(args, train, val, seed, method, device, config):
             state["epoch_points"] = [a + b for a, b in zip(state["epoch_points"], counts.tolist())]
             state["epoch_frames"] += len(global_indices)
             state["next_batch"] = batch_number + 1
+            if recording is not None:
+                record_state(recording, step)
             state["training_seconds"] += time.perf_counter() - update_start
             need_stop = torch.tensor(int(STOP), device=device)
             if world_size > 1:
@@ -824,11 +893,16 @@ def train_stage(args, train, val, seed, method, device, config):
                     print(error, flush=True)
                     need_stop.fill_(1)
             if check_disk or need_stop:
+                if recording is not None:
+                    for array in recording["arrays"].values():
+                        array.flush()
                 saved = capture(model, optimizer, scaler, state, config, device, selected=False)
                 if rank == 0:
                     atomic_save(last, saved)
+                    if recording is not None:
+                        atomic_save(directory / f"step{step}.pt", saved)
                 del saved
-            if rank == 0 and (step % 25 == 0 or overflow or need_stop):
+            if rank == 0 and (recording is not None or step % 25 == 0 or overflow or need_stop):
                 row = dict(event="update", seed=seed, method=method, epoch=epoch + 1,
                            batch=batch_number + 1, batches=steps_per_epoch, loss=loss_sum.item(),
                            normal=int(counts[0]), anomaly=int(counts[1]), planned=step,
@@ -841,7 +915,8 @@ def train_stage(args, train, val, seed, method, device, config):
                            peak_vram_bytes=torch.cuda.max_memory_allocated(device))
                 with (directory / "log.jsonl").open("a") as stream:
                     stream.write(json.dumps(row, allow_nan=False) + "\n")
-                print(json.dumps(row, allow_nan=False), flush=True)
+                if step % 25 == 0 or overflow or need_stop:
+                    print(json.dumps(row, allow_nan=False), flush=True)
             if need_stop:
                 return False
         del iterator, loader
@@ -854,8 +929,10 @@ def train_stage(args, train, val, seed, method, device, config):
             atomic_save(last, saved)
         del saved
         validation_start = time.perf_counter()
+        evaluation_scores = directory / f"val{state['planned_updates']}.npy" if recording is not None else (
+            args.score_path if (epoch + 1) * steps_per_epoch >= total else None)
         result = validate_all(model, val, device, args.workers,
-                              score_path=args.score_path if (epoch + 1) * steps_per_epoch >= total else None)
+                              score_path=evaluation_scores, **(dict(record_points=True) if recording is not None else {}))
         state["validation_seconds"] += time.perf_counter() - validation_start
         state["final_metrics"] = result["metrics"]
         selected = better(result["metrics"], state["best_metrics"])
@@ -874,6 +951,10 @@ def train_stage(args, train, val, seed, method, device, config):
                 atomic_save(best_path, dict(saved, selected=True))
             # Commit the new best before advancing the resumable epoch boundary.
             atomic_save(last, saved)
+            if recording is not None:
+                for array in recording["arrays"].values():
+                    array.flush()
+                atomic_save(directory / f"step{state['planned_updates']}.pt", saved)
             write_json(directory / f"epoch{epoch + 1}.json", report)
             print(json.dumps(dict(seed=seed, method=method, **report)), flush=True)
         del saved
@@ -885,7 +966,7 @@ def train_stage(args, train, val, seed, method, device, config):
         atomic_save(best_path, best)
         atomic_save(last, saved)
         write_result(directory, state, config)
-    del saved, model, optimizer, dataset
+    del saved, model, optimizer, dataset, recording
     gc.collect()
     torch.cuda.empty_cache()
     if dist.is_initialized():
@@ -931,8 +1012,15 @@ def preflight(args, train, val, device, config, resources):
             loss, details = forward_loss(model, pair, counts,
                                         rank_weight=(1. if stress else pair_size / len(indices))
                                         if config.get("objective") == "metrics" else 0.,
-                                        rank_seed=8 + pair_index)
+                                        rank_seed=8 + pair_index, record_points=bool(config.get("recording")))
         loss.backward()
+        if config.get("recording"):
+            scores = details.pop("point_scores")
+            if any(len(value) != len(sample["xyzi"]) or not torch.isfinite(value).all()
+                   for sample, value in zip(pair, scores)):
+                raise ValueError("recording did not retain every finite point logit")
+            details["recorded_points"] = sum(len(value.float().cpu().numpy()) for value in scores)
+            del scores
         torch.cuda.synchronize(device)
         if not torch.isfinite(loss) or any(p.grad is not None and not torch.isfinite(p.grad).all()
                                           for p in model.parameters()):
@@ -968,6 +1056,8 @@ def main():
     parser.add_argument("--material-indices", type=int, nargs="+")
     parser.add_argument("--baseline-eval", type=Path)
     parser.add_argument("--score-path", type=Path, help="export exact endpoint validation scores in official point order")
+    parser.add_argument("--record-points", action="store_true",
+                        help="retain every training-point logit, identities, per-update buffers/RNG, interval checkpoints and validation scores")
     parser.add_argument("--optimizer-state", choices=("inherit", "reset"), default="reset")
     parser.add_argument("--sampling-segment", type=int, default=0)
     parser.add_argument("--seeds", type=int, nargs="+", choices=(0,), default=[0],
@@ -1016,6 +1106,27 @@ def main():
                            optimizer_state=args.optimizer_state, segment=args.sampling_segment,
                            objective=args.objective, branch=args.branch, hard_pool=args.hard_pool,
                            material_indices=args.material_indices, baseline_eval=args.baseline_eval)
+    if args.record_points:
+        if args.recipe != "native" or args.branch or world_size != 1 or args.score_path:
+            parser.error("complete point recording uses one native training run and its own interval score paths")
+        train_points = sum(row["points"] for row in train["records"])
+        val_points = sum(row["normal"] + row["anomaly"] for row in val["records"] if row["eligible"])
+        val_returns = sum(row["points"] for row in val["records"] if row["eligible"])
+        evaluations = math.ceil(args.updates / args.eval_every)
+        checkpoints = sorted(set(range(args.save_every, args.updates + 1, args.save_every))
+                             | set(range(args.eval_every, args.updates + 1, args.eval_every)) | {0, args.updates})
+        # Scores/identities, all interval states, an atomic copy, and bounded follow-up diagnostics.
+        budget = dict(training_scores_and_identities=13 * train_points,
+            validation_metric_scores=4 * evaluations * val_points,
+            validation_all_returns_and_identities=(4 * evaluations + 5) * val_returns,
+            checkpoints_and_atomic_copy=(len(checkpoints) + 3) * 160_000_000,
+            per_update_history_and_logs=100_000_000, followup_and_temporary=4_000_000_000)
+        peak = sum(budget.values())
+        config["recording"] = dict(training_point_visits=2 * train_points, checkpoint_updates=checkpoints,
+            validation_updates=list(range(args.eval_every, args.updates, args.eval_every)) + [args.updates],
+            additional_peak_bytes=peak, budget_bytes=budget, dataset_use="val19 development milestones; no independent test claim",
+            inference="Full single scans with corrected rotary arithmetic; no changes to BN, DropPath, losses or sampling",
+            full_activation_limit="All-update per-point activations are not retained; preserve complete inputs, scores, buffer/RNG history and interval training states for subsequent comparisons")
     resources = runtime_snapshot() if rank == 0 else None
     if args.workers * world_size + args.threads * world_size > len(os.sched_getaffinity(0)):
         parser.error("worker and BLAS thread counts exceed the available CPU affinity")
@@ -1031,7 +1142,8 @@ def main():
     if other:
         raise RuntimeError(f"other CUDA processes must finish before this run: {other}")
     # Include best/last optimizer states and the largest atomic replacement.
-    disk_check((2_000_000_000 if args.score_path else 1_000_000_000) if not args.check else 100_000_000)
+    disk_check((config.get("recording", {}).get("additional_peak_bytes",
+                2_000_000_000 if args.score_path else 1_000_000_000)) if not args.check else 100_000_000)
     free, _ = torch.cuda.mem_get_info(device)
     if free < 7_000_000_000:
         raise RuntimeError(f"full-scan training verification needs a free GPU; only {free / 1e9:.1f} GB available")
