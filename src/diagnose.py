@@ -215,6 +215,132 @@ def curve_summary(curve):
     return {key: curve[key] for key in ("AP", "AUROC", "FPR95", "operating", "AP_bands")}
 
 
+@torch.no_grad()
+def development(run, output, workers, name):
+    """Fixed training-source probes and existing internal checks; never select by val19 errors."""
+    output.mkdir(parents=True, exist_ok=True)
+    disk_check(1_000_000_000)
+    manifests = {split: json.loads((OUTPUT / f"{split}.json").read_text()) for split in ("train", "check")}
+    full = load_manifest("results/data/native/train.json", "train")
+    normal = load_manifest("results/data/normal.json", "normal")
+    fixed, check = manifests["train"], manifests["check"]
+    if fixed["parent_manifest"] != full["sha256"] or fixed["records"] != [full["records"][i] for i in fixed["parent_indices"]]:
+        raise ValueError("training probes no longer refer to the fixed training pool")
+    logs = {normal["split"]["logs"][r["scene"]] for r in check["records"] if r["source"] == "nuscenes"}
+    if logs & {r.get("log_token") for r in full["records"]} or any(r["subset"] != "check" for r in check["records"]):
+        raise ValueError("internal development logs overlap task training")
+    geometries = sorted({r["geometry"] for r in check["records"] if r.get("geometry")})
+    if set(geometries) != set(normal["split"]["geometry_check"]):
+        raise ValueError("reserved geometry population changed")
+    groups = defaultdict(list)
+    for i, row in enumerate(fixed["records"]):
+        groups[row["group"]].append(i)
+    selected = sorted(i for rows in groups.values() for i in
+                      (rows[j] for j in np.linspace(0, len(rows)-1, 8).round().astype(int)))
+    plan = dict(train_manifest=full["sha256"], manifests={k:v["sha256"] for k,v in manifests.items()},
+        training_records=fixed["parent_indices"], normalization_records=[fixed["parent_indices"][i] for i in selected],
+        selection="32 evenly spaced records per source for fixed-state training evaluation; eight evenly spaced within each source for BN-only comparison",
+        normalization="same checkpoint and full scan; stochastic layers disabled in both forwards; only all BatchNorm layers switch from running statistics to current-scan statistics; buffers and RNG preserved",
+        check_logs=sorted(logs), check_geometries=geometries,
+        decisions="AP on reserved STU geometries and normal-nuScenes false positives at each checkpoint's reserved-geometry 95% recall threshold; report each scene/geometry, not only their pooled score",
+        limitations="These are previously used internal development sets. nuScenes logs are task-training-disjoint, not established pretraining-unseen. Reserved anomalies share STU 206 backgrounds. No independent test or cross-scene anomaly claim.")
+    plan_path = output / "plan.json"
+    if plan_path.exists() and json.loads(plan_path.read_text()) != plan:
+        raise ValueError("development population or interpretation changed between checkpoints")
+    write_json(plan_path, plan)
+    device = torch.device("cuda")
+    model, saved = load_model(run / "last.pt", device)
+    record = dict(checkpoint=str(run / "last.pt"), checkpoint_sha256=file_sha256(run / "last.pt"),
+        cumulative_updates=saved["successful_updates"] + saved["config"].get("parent_updates", 0), splits={})
+    for split, manifest in manifests.items():
+        offsets = json.loads((OUTPUT / f"{split}_offsets.json").read_text())
+        if offsets["manifest"] != manifest["sha256"]:
+            raise ValueError("development score identities differ from manifest")
+        points = np.load(OUTPUT / f"{split}_points.npy", mmap_mode="r")
+        destination = output / f"{name}_{split}.npy"
+        info = predict_fixed(model, manifest, destination, device, workers)
+        scores = np.load(destination, mmap_mode="r")
+        aggregate = curve_summary(score_curve(scores, points["target"]))
+        subdivisions = defaultdict(list)
+        for row in offsets["rows"]:
+            source = manifest["records"][row["index"]]
+            subdivisions[row["group"]].append(row)
+            for field in ("scene", "geometry"):
+                if source.get(field):
+                    subdivisions[f"{field}:{source[field]}"].append(row)
+        summaries = {}
+        for key, rows in subdivisions.items():
+            values = np.concatenate([scores[r["start"]:r["stop"]] for r in rows])
+            labels = np.concatenate([points["target"][r["start"]:r["stop"]] for r in rows])
+            summary = curve_summary(score_curve(values, labels))
+            summary.update(scans=len(rows), normal=int((labels == 0).sum()), anomaly=int((labels == 1).sum()),
+                normal_bce=float(np.logaddexp(0., values[labels == 0]).astype(np.float64).mean()),
+                anomaly_bce=float(np.logaddexp(0., -values[labels == 1]).astype(np.float64).mean()) if labels.any() else None)
+            summaries[key] = summary
+        if split == "check":
+            threshold = summaries["targeted"]["operating"][3]["threshold"]
+            for key, rows in subdivisions.items():
+                false, count = 0, 0
+                for row in rows:
+                    mask = points["target"][row["start"]:row["stop"]] == 0
+                    false += int((scores[row["start"]:row["stop"]][mask] >= threshold).sum())
+                    count += int(mask.sum())
+                summaries[key].update(FPR_at_geometry_recall95=100 * false / count, geometry_threshold=threshold)
+        record["splits"][split] = dict(**info, pooled=aggregate, groups=summaries)
+        print(name, split, {k:aggregate[k] for k in ("AP", "FPR95", "AUROC")}, flush=True)
+    # Isolate normalization from DropPath: this is not the complete stochastic training mode.
+    saved_buffers = {key:value.clone() for key,value in model.named_buffers()}
+    random = rng_state(device)
+    normalizations = [module for module in model.modules() if isinstance(module, torch.nn.modules.batchnorm._BatchNorm)]
+    offsets = json.loads((OUTPUT / "train_offsets.json").read_text())["rows"]
+    baseline = np.load(output / f"{name}_train.npy", mmap_mode="r")
+    changes, current_scores = [], []
+    loader = DataLoader(PreparedScans(fixed), batch_size=None, sampler=selected, num_workers=workers,
+        pin_memory=True, **({"prefetch_factor":1} if workers else {}), generator=torch.Generator().manual_seed(0))
+    try:
+        for module in normalizations:
+            module.train()
+            module.track_running_stats = False
+        for sample in loader:
+            index = int(sample["index"])
+            with autocast(device):
+                result = model(to_device(sample, device))
+            labels = sample["targets"].numpy()
+            mask = labels >= 0
+            values = result.cpu().numpy()[mask]
+            if not np.isfinite(values).all():
+                raise ValueError("nonfinite current-scan BN prediction")
+            row = offsets[index]
+            original = baseline[row["start"]:row["stop"]]
+            labels = labels[mask]
+            current_scores.append(values)
+            item = dict(index=fixed["parent_indices"][index], group=fixed["records"][index]["group"],
+                points=len(values), mean_abs_change=float(np.abs(values-original).mean()),
+                zero_threshold_flips=int(((values >= 0) != (original >= 0)).sum()))
+            for label in (0, 1):
+                selected_class = labels == label
+                if selected_class.any():
+                    sign = 1 - 2 * label
+                    for key, array in (("running", original), ("current", values)):
+                        item[f"{key}_bce_{label}"] = float(np.logaddexp(0., sign * array[selected_class]).astype(np.float64).mean())
+                else:
+                    item[f"running_bce_{label}"] = item[f"current_bce_{label}"] = None
+            item.update(running_AP=score_curve(original, labels)["AP"], current_AP=score_curve(values, labels)["AP"])
+            changes.append(item)
+    finally:
+        for module in normalizations:
+            module.eval()
+            module.track_running_stats = True
+        for key, value in model.named_buffers():
+            if not torch.equal(value, saved_buffers[key]):
+                raise ValueError("normalization diagnosis changed the checkpoint buffers")
+        restore_rng(random, device)
+    np.save(output / f"{name}_bn.npy", np.concatenate(current_scores))
+    record["normalization"] = dict(layers=len(normalizations), scans=changes, buffers_unchanged=True,
+        scores=f"{name}_bn.npy: selected train records in plan order, supervised point slots from diagnostics/train_points.npy")
+    write_json(output / f"{name}.json", record)
+
+
 def analyze(output, names):
     summaries, curves = {}, {}
     for split in ("val", "train", "check"):
@@ -1057,20 +1183,25 @@ def mining_result(output):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("collect", "analyze", "gradients", "replay", "cases", "mine", "match", "coverage", "mining-result", "account", "learning", "materials", "attribute", "focus", "observe", "features", "precision", "model-check", "transfer"))
+    parser.add_argument("action", choices=("development", "collect", "analyze", "gradients", "replay", "cases", "mine", "match", "coverage", "mining-result", "account", "learning", "materials", "attribute", "focus", "observe", "features", "precision", "model-check", "transfer"))
     parser.add_argument("--output", type=Path, default=OUTPUT)
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--run", type=Path, help="Completed run with retained full point predictions")
+    parser.add_argument("--summary", action="store_true", help="summarize a completed uniform continuation without case mining")
     parser.add_argument("--names", nargs="+", default=list(CHECKPOINTS))
     parser.add_argument("--limit",type=int,help="Bound the precision diagnosis to its preselected case scans")
     args = parser.parse_args()
     torch.set_num_threads(2)
     torch.set_num_interop_threads(1)
-    if args.action == "learning":
-        from .learning import analyze_records
+    if args.action == "development":
+        if args.run is None or len(args.names) != 1:
+            parser.error("development requires --run and one --names label")
+        development(args.run, args.output, args.workers, args.names[0])
+    elif args.action == "learning":
+        from .learning import analyze_records, continuation_summary
         if args.run is None:
             parser.error("learning requires --run")
-        analyze_records(args.run, args.output, args.workers)
+        (continuation_summary if args.summary else analyze_records)(args.run, args.output, args.workers)
     elif args.action == "transfer":
         from .probe import transfer
         transfer(args.output,args.workers)

@@ -1,0 +1,1853 @@
+{
+  "training": {
+    "version": "AJAE-V4-N1",
+    "seed": 0,
+    "method": "conditional",
+    "complete": true,
+    "epochs": 2,
+    "updates": 1547,
+    "best_epoch": 0,
+    "best_metrics": {
+      "AP": 80.91120595664545,
+      "FPR95": 0.09171770193134955,
+      "AUROC": 99.95311388619406,
+      "threshold": 0.66796875
+    },
+    "best_update": 0,
+    "final_metrics": {
+      "AP": 80.44877952761308,
+      "FPR95": 0.0910690699179385,
+      "AUROC": 99.94201716145481,
+      "threshold": -0.50390625
+    },
+    "objective": "metrics",
+    "branch": null,
+    "start_update": 0,
+    "additional_updates": 1547,
+    "parent_updates": 1547,
+    "cumulative_updates": 3094,
+    "gradient_steps": 1547,
+    "clipped_steps": 248,
+    "gradient_norm_sum": 1231.562395929359,
+    "gradient_norm_max": 62.23674774169922,
+    "training_seconds": 1690.176842626097,
+    "validation_seconds": 187.76607456500642,
+    "planned_updates": 1547,
+    "successful_updates": 1547,
+    "overflows": 0,
+    "parameters": 12880513,
+    "train_manifest_sha256": "e3c32d0b83ffb9eda2e095ffddd08828509e97d1d34509805dd2584951b2b3c6",
+    "val_manifest_sha256": "918524fd271f896bf9288ebfe4131941a20cbd00a0925e91c8ccedf4d7574855",
+    "validation_improved_from_epoch0": null
+  },
+  "validation": {
+    "AP": {
+      "before": 80.91120595664545,
+      "after": 80.44877952761308,
+      "difference": -0.4624264290323623
+    },
+    "FPR95": {
+      "before": 0.09171770193134955,
+      "after": 0.0910690699179385,
+      "difference": -0.0006486320134110463
+    },
+    "AUROC": {
+      "before": 99.95311388619406,
+      "after": 99.94201716145481,
+      "difference": -0.01109672473924661
+    }
+  },
+  "training_passes": [
+    {
+      "group": "anomaly_nuscenes",
+      "data_pass": 3,
+      "label": 0,
+      "points": 58707942,
+      "bce": 0.014021437990707604,
+      "zero_threshold_errors": 185188
+    },
+    {
+      "group": "anomaly_nuscenes",
+      "data_pass": 3,
+      "label": 1,
+      "points": 447724,
+      "bce": 0.005576983169034024,
+      "zero_threshold_errors": 831
+    },
+    {
+      "group": "anomaly_nuscenes",
+      "data_pass": 4,
+      "label": 0,
+      "points": 58707942,
+      "bce": 0.011312543120871375,
+      "zero_threshold_errors": 148241
+    },
+    {
+      "group": "anomaly_nuscenes",
+      "data_pass": 4,
+      "label": 1,
+      "points": 447724,
+      "bce": 0.004641027294564121,
+      "zero_threshold_errors": 669
+    },
+    {
+      "group": "anomaly_stu",
+      "data_pass": 3,
+      "label": 0,
+      "points": 87368607,
+      "bce": 0.004323794089928998,
+      "zero_threshold_errors": 81709
+    },
+    {
+      "group": "anomaly_stu",
+      "data_pass": 3,
+      "label": 1,
+      "points": 68426,
+      "bce": 0.030325504138924198,
+      "zero_threshold_errors": 492
+    },
+    {
+      "group": "anomaly_stu",
+      "data_pass": 4,
+      "label": 0,
+      "points": 87368607,
+      "bce": 0.003618985725829246,
+      "zero_threshold_errors": 66466
+    },
+    {
+      "group": "anomaly_stu",
+      "data_pass": 4,
+      "label": 1,
+      "points": 68426,
+      "bce": 0.023010374044043085,
+      "zero_threshold_errors": 338
+    },
+    {
+      "group": "normal_nuscenes",
+      "data_pass": 3,
+      "label": 0,
+      "points": 59301266,
+      "bce": 0.004765226142757889,
+      "zero_threshold_errors": 67124
+    },
+    {
+      "group": "normal_nuscenes",
+      "data_pass": 4,
+      "label": 0,
+      "points": 59301266,
+      "bce": 0.0033492613049385376,
+      "zero_threshold_errors": 47162
+    },
+    {
+      "group": "normal_stu",
+      "data_pass": 3,
+      "label": 0,
+      "points": 54631044,
+      "bce": 0.002520106815772185,
+      "zero_threshold_errors": 32874
+    },
+    {
+      "group": "normal_stu",
+      "data_pass": 4,
+      "label": 0,
+      "points": 54631044,
+      "bce": 0.0018092583355994167,
+      "zero_threshold_errors": 23081
+    }
+  ],
+  "development": [
+    {
+      "split": "train",
+      "group": "normal_nuscenes",
+      "scans": 32,
+      "normal": 755648,
+      "anomaly": 0,
+      "metrics": {
+        "AP": {
+          "before": null,
+          "after": null,
+          "difference": null
+        },
+        "FPR95": {
+          "before": null,
+          "after": null,
+          "difference": null
+        },
+        "AUROC": {
+          "before": null,
+          "after": null,
+          "difference": null
+        },
+        "normal_bce": {
+          "before": 0.01162077894641054,
+          "after": 0.006751940800817868,
+          "difference": -0.004868838145592672
+        },
+        "anomaly_bce": {
+          "before": null,
+          "after": null,
+          "difference": null
+        }
+      }
+    },
+    {
+      "split": "train",
+      "group": "scene:scene-0001",
+      "scans": 2,
+      "normal": 48932,
+      "anomaly": 22,
+      "metrics": {
+        "AP": {
+          "before": 100.0,
+          "after": 100.0,
+          "difference": 0.0
+        },
+        "FPR95": {
+          "before": 0.0,
+          "after": 0.0,
+          "difference": 0.0
+        },
+        "AUROC": {
+          "before": 99.99999999999999,
+          "after": 100.0,
+          "difference": 1.4210854715202004e-14
+        },
+        "normal_bce": {
+          "before": 0.005234384243059332,
+          "after": 0.003164231923033355,
+          "difference": -0.002070152320025977
+        },
+        "anomaly_bce": {
+          "before": 2.829103172052814e-13,
+          "after": 4.786169770952984e-14,
+          "difference": -2.3504861949575154e-13
+        }
+      }
+    },
+    {
+      "split": "train",
+      "group": "anomaly_nuscenes",
+      "scans": 32,
+      "normal": 741782,
+      "anomaly": 6217,
+      "metrics": {
+        "AP": {
+          "before": 99.78538258282833,
+          "after": 99.83913089513177,
+          "difference": 0.05374831230344057
+        },
+        "FPR95": {
+          "before": 0.0024265889439215294,
+          "after": 0.0022917784470370003,
+          "difference": -0.00013481049688452915
+        },
+        "AUROC": {
+          "before": 99.9974884199442,
+          "after": 99.99818886206585,
+          "difference": 0.0007004421216407763
+        },
+        "normal_bce": {
+          "before": 0.017036379553821823,
+          "after": 0.010891251269657141,
+          "difference": -0.006145128284164681
+        },
+        "anomaly_bce": {
+          "before": 0.0020418720118457055,
+          "after": 0.0023019780552123955,
+          "difference": 0.00026010604336669
+        }
+      }
+    },
+    {
+      "split": "train",
+      "group": "scene:scene-0029",
+      "scans": 2,
+      "normal": 51294,
+      "anomaly": 323,
+      "metrics": {
+        "AP": {
+          "before": 99.5224515625635,
+          "after": 99.54373876601765,
+          "difference": 0.021287203454150472
+        },
+        "FPR95": {
+          "before": 0.017545911802550006,
+          "after": 0.015596366046711116,
+          "difference": -0.0019495457558388902
+        },
+        "AUROC": {
+          "before": 99.99311019665544,
+          "after": 99.9935658954312,
+          "difference": 0.0004556987757666775
+        },
+        "normal_bce": {
+          "before": 0.015666439373596415,
+          "after": 0.015488177549494175,
+          "difference": -0.0001782618241022403
+        },
+        "anomaly_bce": {
+          "before": 0.012155638289987121,
+          "after": 0.015692951150277423,
+          "difference": 0.0035373128602903016
+        }
+      }
+    },
+    {
+      "split": "train",
+      "group": "scene:scene-0055",
+      "scans": 2,
+      "normal": 50751,
+      "anomaly": 31,
+      "metrics": {
+        "AP": {
+          "before": 100.0,
+          "after": 100.0,
+          "difference": 0.0
+        },
+        "FPR95": {
+          "before": 0.0,
+          "after": 0.0,
+          "difference": 0.0
+        },
+        "AUROC": {
+          "before": 99.99999999999999,
+          "after": 100.0,
+          "difference": 1.4210854715202004e-14
+        },
+        "normal_bce": {
+          "before": 0.007578953323001626,
+          "after": 0.004920047582400091,
+          "difference": -0.0026589057406015346
+        },
+        "anomaly_bce": {
+          "before": 2.8682781941019222e-11,
+          "after": 4.4918540248888335e-12,
+          "difference": -2.419092791613039e-11
+        }
+      }
+    },
+    {
+      "split": "train",
+      "group": "scene:scene-0075",
+      "scans": 2,
+      "normal": 49684,
+      "anomaly": 27,
+      "metrics": {
+        "AP": {
+          "before": 100.0,
+          "after": 100.0,
+          "difference": 0.0
+        },
+        "FPR95": {
+          "before": 0.0,
+          "after": 0.0,
+          "difference": 0.0
+        },
+        "AUROC": {
+          "before": 100.0,
+          "after": 100.0,
+          "difference": 0.0
+        },
+        "normal_bce": {
+          "before": 0.007913802429807557,
+          "after": 0.004971481938063747,
+          "difference": -0.0029423204917438097
+        },
+        "anomaly_bce": {
+          "before": 1.8269572120104206e-16,
+          "after": 5.812013003537154e-19,
+          "difference": -1.8211451990068834e-16
+        }
+      }
+    },
+    {
+      "split": "train",
+      "group": "scene:scene-0160",
+      "scans": 2,
+      "normal": 49601,
+      "anomaly": 244,
+      "metrics": {
+        "AP": {
+          "before": 99.97522134935939,
+          "after": 99.96187327571593,
+          "difference": -0.01334807364345636
+        },
+        "FPR95": {
+          "before": 0.0,
+          "after": 0.0,
+          "difference": 0.0
+        },
+        "AUROC": {
+          "before": 99.99988845412624,
+          "after": 99.99980995888171,
+          "difference": -7.849524452296919e-05
+        },
+        "normal_bce": {
+          "before": 0.018511054116248694,
+          "after": 0.013545505582376851,
+          "difference": -0.004965548533871843
+        },
+        "anomaly_bce": {
+          "before": 1.772501738284463e-10,
+          "after": 6.441755750128692e-10,
+          "difference": 4.669254011844229e-10
+        }
+      }
+    },
+    {
+      "split": "train",
+      "group": "scene:scene-0181",
+      "scans": 2,
+      "normal": 49768,
+      "anomaly": 185,
+      "metrics": {
+        "AP": {
+          "before": 99.55725836635665,
+          "after": 99.7531647000767,
+          "difference": 0.19590633372004618
+        },
+        "FPR95": {
+          "before": 0.00602796977977817,
+          "after": 0.00602796977977817,
+          "difference": 0.0
+        },
+        "AUROC": {
+          "before": 99.99818617846266,
+          "after": 99.99901706078367,
+          "difference": 0.0008308823210114724
+        },
+        "normal_bce": {
+          "before": 0.02955341027183066,
+          "after": 0.01715234005138217,
+          "difference": -0.01240107022044849
+        },
+        "anomaly_bce": {
+          "before": 9.203642128132078e-06,
+          "after": 9.625271884638367e-06,
+          "difference": 4.2162975650628966e-07
+        }
+      }
+    },
+    {
+      "split": "train",
+      "group": "scene:scene-0207",
+      "scans": 2,
+      "normal": 49634,
+      "anomaly": 276,
+      "metrics": {
+        "AP": {
+          "before": 99.98073831820915,
+          "after": 100.0,
+          "difference": 0.019261681790851526
+        },
+        "FPR95": {
+          "before": 0.0,
+          "after": 0.0,
+          "difference": 0.0
+        },
+        "AUROC": {
+          "before": 99.99989780263996,
+          "after": 99.99999999999999,
+          "difference": 0.00010219736002170521
+        },
+        "normal_bce": {
+          "before": 0.012134574031738555,
+          "after": 0.007151886110855448,
+          "difference": -0.004982687920883107
+        },
+        "anomaly_bce": {
+          "before": 5.445968083304984e-10,
+          "after": 8.078143038621367e-11,
+          "difference": -4.638153779442847e-10
+        }
+      }
+    },
+    {
+      "split": "train",
+      "group": "scene:scene-0232",
+      "scans": 1,
+      "normal": 26080,
+      "anomaly": 0,
+      "metrics": {
+        "AP": {
+          "before": null,
+          "after": null,
+          "difference": null
+        },
+        "FPR95": {
+          "before": null,
+          "after": null,
+          "difference": null
+        },
+        "AUROC": {
+          "before": null,
+          "after": null,
+          "difference": null
+        },
+        "normal_bce": {
+          "before": 0.008882101047947798,
+          "after": 0.003902934846408165,
+          "difference": -0.004979166201539633
+        },
+        "anomaly_bce": {
+          "before": null,
+          "after": null,
+          "difference": null
+        }
+      }
+    },
+    {
+      "split": "train",
+      "group": "scene:scene-0233",
+      "scans": 1,
+      "normal": 18750,
+      "anomaly": 324,
+      "metrics": {
+        "AP": {
+          "before": 99.88774382621702,
+          "after": 99.90235666238144,
+          "difference": 0.014612836164417331
+        },
+        "FPR95": {
+          "before": 0.0,
+          "after": 0.0,
+          "difference": 0.0
+        },
+        "AUROC": {
+          "before": 99.99772839506171,
+          "after": 99.99809053497944,
+          "difference": 0.0003621399177262674
+        },
+        "normal_bce": {
+          "before": 0.0254466497977792,
+          "after": 0.0149266143675067,
+          "difference": -0.010520035430272499
+        },
+        "anomaly_bce": {
+          "before": 0.0012570486658365692,
+          "after": 0.0020827497358120095,
+          "difference": 0.0008257010699754402
+        }
+      }
+    },
+    {
+      "split": "train",
+      "group": "scene:scene-0253",
+      "scans": 2,
+      "normal": 37235,
+      "anomaly": 164,
+      "metrics": {
+        "AP": {
+          "before": 99.04875226617416,
+          "after": 99.0989043202043,
+          "difference": 0.05015205403013567
+        },
+        "FPR95": {
+          "before": 0.042970323620249766,
+          "after": 0.040284678393984155,
+          "difference": -0.002685645226265611
+        },
+        "AUROC": {
+          "before": 99.9955948867935,
+          "after": 99.99579958536256,
+          "difference": 0.00020469856906402129
+        },
+        "normal_bce": {
+          "before": 0.011531419079568173,
+          "after": 0.005800906729153657,
+          "difference": -0.005730512350414515
+        },
+        "anomaly_bce": {
+          "before": 0.0018405774764421348,
+          "after": 0.008494146760956316,
+          "difference": 0.006653569284514181
+        }
+      }
+    },
+    {
+      "split": "train",
+      "group": "scene:scene-0291",
+      "scans": 2,
+      "normal": 40109,
+      "anomaly": 51,
+      "metrics": {
+        "AP": {
+          "before": 100.0,
+          "after": 100.0,
+          "difference": 0.0
+        },
+        "FPR95": {
+          "before": 0.0,
+          "after": 0.0,
+          "difference": 0.0
+        },
+        "AUROC": {
+          "before": 100.0,
+          "after": 100.0,
+          "difference": 0.0
+        },
+        "normal_bce": {
+          "before": 0.007168190609980979,
+          "after": 0.003333060185356667,
+          "difference": -0.0038351304246243122
+        },
+        "anomaly_bce": {
+          "before": 3.1264096841635698e-09,
+          "after": 1.1392608382931445e-09,
+          "difference": -1.987148845870425e-09
+        }
+      }
+    },
+    {
+      "split": "train",
+      "group": "scene:scene-0321",
+      "scans": 2,
+      "normal": 39859,
+      "anomaly": 232,
+      "metrics": {
+        "AP": {
+          "before": 100.0,
+          "after": 100.0,
+          "difference": 0.0
+        },
+        "FPR95": {
+          "before": 0.0,
+          "after": 0.0,
+          "difference": 0.0
+        },
+        "AUROC": {
+          "before": 100.0,
+          "after": 100.0,
+          "difference": 0.0
+        },
+        "normal_bce": {
+          "before": 0.015078303592563168,
+          "after": 0.0075550885886306535,
+          "difference": -0.007523215003932515
+        },
+        "anomaly_bce": {
+          "before": 3.7162346946979852e-09,
+          "after": 6.155143737550437e-09,
+          "difference": 2.4389090428524518e-09
+        }
+      }
+    },
+    {
+      "split": "train",
+      "group": "scene:scene-0363",
+      "scans": 2,
+      "normal": 51863,
+      "anomaly": 195,
+      "metrics": {
+        "AP": {
+          "before": 99.98695673874104,
+          "after": 99.99475372002844,
+          "difference": 0.007796981287398808
+        },
+        "FPR95": {
+          "before": 0.0,
+          "after": 0.0,
+          "difference": 0.0
+        },
+        "AUROC": {
+          "before": 99.99995056008015,
+          "after": 99.99998516802404,
+          "difference": 3.460794388843169e-05
+        },
+        "normal_bce": {
+          "before": 0.0042705408077592395,
+          "after": 0.002326363859471291,
+          "difference": -0.0019441769482879483
+        },
+        "anomaly_bce": {
+          "before": 2.6767413156298466e-05,
+          "after": 1.6798014239146077e-05,
+          "difference": -9.969398917152389e-06
+        }
+      }
+    },
+    {
+      "split": "train",
+      "group": "scene:scene-0384",
+      "scans": 2,
+      "normal": 53043,
+      "anomaly": 112,
+      "metrics": {
+        "AP": {
+          "before": 99.8346921443413,
+          "after": 99.77619198558523,
+          "difference": -0.05850015875607539
+        },
+        "FPR95": {
+          "before": 0.0018852628999113928,
+          "after": 0.0018852628999113928,
+          "difference": 0.0
+        },
+        "AUROC": {
+          "before": 99.99964651320626,
+          "after": 99.99949501886609,
+          "difference": -0.00015149434017303065
+        },
+        "normal_bce": {
+          "before": 0.0028804987669331272,
+          "after": 0.001944284707890966,
+          "difference": -0.0009362140590421612
+        },
+        "anomaly_bce": {
+          "before": 0.0024827665861377004,
+          "after": 0.0023866855989869416,
+          "difference": -9.608098715075883e-05
+        }
+      }
+    },
+    {
+      "split": "train",
+      "group": "scene:scene-0406",
+      "scans": 2,
+      "normal": 53474,
+      "anomaly": 156,
+      "metrics": {
+        "AP": {
+          "before": 99.92848000094376,
+          "after": 99.90236183700182,
+          "difference": -0.026118163941944772
+        },
+        "FPR95": {
+          "before": 0.0,
+          "after": 0.0018700676964506114,
+          "difference": 0.0018700676964506114
+        },
+        "AUROC": {
+          "before": 99.9997842229581,
+          "after": 99.99971829108419,
+          "difference": -6.593187390535604e-05
+        },
+        "normal_bce": {
+          "before": 0.007643192827920501,
+          "after": 0.0050055820111047054,
+          "difference": -0.002637610816815796
+        },
+        "anomaly_bce": {
+          "before": 1.8560191742822786e-06,
+          "after": 2.02465616252388e-05,
+          "difference": 1.839054245095652e-05
+        }
+      }
+    },
+    {
+      "split": "train",
+      "group": "scene:scene-0427",
+      "scans": 2,
+      "normal": 53619,
+      "anomaly": 154,
+      "metrics": {
+        "AP": {
+          "before": 95.02375171483683,
+          "after": 96.0105126651932,
+          "difference": 0.9867609503563699
+        },
+        "FPR95": {
+          "before": 0.08579048471623865,
+          "after": 0.06341035826852422,
+          "difference": -0.022380126447714435
+        },
+        "AUROC": {
+          "before": 99.98140439168807,
+          "after": 99.98686620826162,
+          "difference": 0.005461816573543388
+        },
+        "normal_bce": {
+          "before": 0.049245330543671376,
+          "after": 0.03590230386661785,
+          "difference": -0.013343026677053525
+        },
+        "anomaly_bce": {
+          "before": 6.414364341068129e-05,
+          "after": 4.1666073544338585e-05,
+          "difference": -2.24775698663427e-05
+        }
+      }
+    },
+    {
+      "split": "train",
+      "group": "scene:scene-0447",
+      "scans": 2,
+      "normal": 36304,
+      "anomaly": 88,
+      "metrics": {
+        "AP": {
+          "before": 99.55329153605017,
+          "after": 99.6833084947839,
+          "difference": 0.13001695873373365
+        },
+        "FPR95": {
+          "before": 0.0,
+          "after": 0.0,
+          "difference": 0.0
+        },
+        "AUROC": {
+          "before": 99.99821582395127,
+          "after": 99.99893575463761,
+          "difference": 0.0007199306863441279
+        },
+        "normal_bce": {
+          "before": 0.004192267248416229,
+          "after": 0.0018079891295230638,
+          "difference": -0.0023842781188931654
+        },
+        "anomaly_bce": {
+          "before": 0.009354515509211524,
+          "after": 0.011973871426204067,
+          "difference": 0.002619355916992543
+        }
+      }
+    },
+    {
+      "split": "train",
+      "group": "scene:scene-0471",
+      "scans": 2,
+      "normal": 31522,
+      "anomaly": 22,
+      "metrics": {
+        "AP": {
+          "before": 100.0,
+          "after": 100.0,
+          "difference": 0.0
+        },
+        "FPR95": {
+          "before": 0.0,
+          "after": 0.0,
+          "difference": 0.0
+        },
+        "AUROC": {
+          "before": 99.99999999999999,
+          "after": 100.0,
+          "difference": 1.4210854715202004e-14
+        },
+        "normal_bce": {
+          "before": 0.010462375665064305,
+          "after": 0.003370750204466462,
+          "difference": -0.0070916254605978436
+        },
+        "anomaly_bce": {
+          "before": 1.628067716914604e-11,
+          "after": 1.5961017463912435e-13,
+          "difference": -1.6121066994506917e-11
+        }
+      }
+    },
+    {
+      "split": "train",
+      "group": "scene:scene-0511",
+      "scans": 2,
+      "normal": 50263,
+      "anomaly": 26,
+      "metrics": {
+        "AP": {
+          "before": 100.0,
+          "after": 100.0,
+          "difference": 0.0
+        },
+        "FPR95": {
+          "before": 0.0,
+          "after": 0.0,
+          "difference": 0.0
+        },
+        "AUROC": {
+          "before": 100.0,
+          "after": 100.0,
+          "difference": 0.0
+        },
+        "normal_bce": {
+          "before": 0.00814891641610243,
+          "after": 0.0034619000143176477,
+          "difference": -0.004687016401784781
+        },
+        "anomaly_bce": {
+          "before": 1.1090213927114492e-18,
+          "after": 4.438649967696789e-20,
+          "difference": -1.0646348930344812e-18
+        }
+      }
+    },
+    {
+      "split": "train",
+      "group": "scene:scene-0538",
+      "scans": 2,
+      "normal": 45188,
+      "anomaly": 68,
+      "metrics": {
+        "AP": {
+          "before": 100.0,
+          "after": 100.0,
+          "difference": 0.0
+        },
+        "FPR95": {
+          "before": 0.0,
+          "after": 0.0,
+          "difference": 0.0
+        },
+        "AUROC": {
+          "before": 100.0,
+          "after": 99.99999999999999,
+          "difference": -1.4210854715202004e-14
+        },
+        "normal_bce": {
+          "before": 0.015298761749025327,
+          "after": 0.008115792571479034,
+          "difference": -0.007182969177546293
+        },
+        "anomaly_bce": {
+          "before": 7.853494308680723e-09,
+          "after": 3.2092910062787906e-10,
+          "difference": -7.532565208052844e-09
+        }
+      }
+    },
+    {
+      "split": "train",
+      "group": "scene:scene-0582",
+      "scans": 2,
+      "normal": 47752,
+      "anomaly": 417,
+      "metrics": {
+        "AP": {
+          "before": 100.0,
+          "after": 100.0,
+          "difference": 0.0
+        },
+        "FPR95": {
+          "before": 0.0,
+          "after": 0.0,
+          "difference": 0.0
+        },
+        "AUROC": {
+          "before": 100.0,
+          "after": 99.99999999999999,
+          "difference": -1.4210854715202004e-14
+        },
+        "normal_bce": {
+          "before": 0.003390716361496535,
+          "after": 0.0022811116659493063,
+          "difference": -0.001109604695547229
+        },
+        "anomaly_bce": {
+          "before": 4.80772041398222e-18,
+          "after": 1.1015705742801599e-19,
+          "difference": -4.697563356554204e-18
+        }
+      }
+    },
+    {
+      "split": "train",
+      "group": "scene:scene-0641",
+      "scans": 2,
+      "normal": 35730,
+      "anomaly": 116,
+      "metrics": {
+        "AP": {
+          "before": 99.76686185209282,
+          "after": 99.88981073373088,
+          "difference": 0.12294888163806661
+        },
+        "FPR95": {
+          "before": 0.0,
+          "after": 0.0,
+          "difference": 0.0
+        },
+        "AUROC": {
+          "before": 99.99896252545433,
+          "after": 99.99960189930223,
+          "difference": 0.0006393738479033573
+        },
+        "normal_bce": {
+          "before": 0.058588759100859374,
+          "after": 0.03880681832960132,
+          "difference": -0.019781940771258055
+        },
+        "anomaly_bce": {
+          "before": 2.5114492374045624e-09,
+          "after": 2.1951426727234173e-09,
+          "difference": -3.1630656468114505e-10
+        }
+      }
+    },
+    {
+      "split": "train",
+      "group": "scene:scene-0661",
+      "scans": 2,
+      "normal": 52572,
+      "anomaly": 71,
+      "metrics": {
+        "AP": {
+          "before": 100.0,
+          "after": 100.0,
+          "difference": 0.0
+        },
+        "FPR95": {
+          "before": 0.0,
+          "after": 0.0,
+          "difference": 0.0
+        },
+        "AUROC": {
+          "before": 99.99999999999999,
+          "after": 100.0,
+          "difference": 1.4210854715202004e-14
+        },
+        "normal_bce": {
+          "before": 0.005271160588672628,
+          "after": 0.002475039671684843,
+          "difference": -0.0027961209169877856
+        },
+        "anomaly_bce": {
+          "before": 2.7978760203349728e-11,
+          "after": 1.8831717809128126e-10,
+          "difference": 1.6033841788793152e-10
+        }
+      }
+    },
+    {
+      "split": "train",
+      "group": "scene:scene-0683",
+      "scans": 2,
+      "normal": 51141,
+      "anomaly": 271,
+      "metrics": {
+        "AP": {
+          "before": 99.94097851340322,
+          "after": 99.95537711810327,
+          "difference": 0.014398604700048168
+        },
+        "FPR95": {
+          "before": 0.0,
+          "after": 0.0,
+          "difference": 0.0
+        },
+        "AUROC": {
+          "before": 99.9996897370276,
+          "after": 99.99976189120724,
+          "difference": 7.215417964800963e-05
+        },
+        "normal_bce": {
+          "before": 0.016487508263946085,
+          "after": 0.010119206924707342,
+          "difference": -0.006368301339238743
+        },
+        "anomaly_bce": {
+          "before": 2.424655617532001e-08,
+          "after": 2.3759251870794705e-08,
+          "difference": -4.873043045253057e-10
+        }
+      }
+    },
+    {
+      "split": "train",
+      "group": "scene:scene-0710",
+      "scans": 2,
+      "normal": 49576,
+      "anomaly": 491,
+      "metrics": {
+        "AP": {
+          "before": 99.99052978547017,
+          "after": 99.97815498595382,
+          "difference": -0.012374799516351231
+        },
+        "FPR95": {
+          "before": 0.0,
+          "after": 0.0,
+          "difference": 0.0
+        },
+        "AUROC": {
+          "before": 99.9999055123907,
+          "after": 99.99978226768289,
+          "difference": -0.00012324470780811225
+        },
+        "normal_bce": {
+          "before": 0.01934157651881655,
+          "after": 0.00869941797996813,
+          "difference": -0.010642158538848421
+        },
+        "anomaly_bce": {
+          "before": 1.2046902554761119e-08,
+          "after": 1.3352752615532873e-06,
+          "difference": 1.3232283589985261e-06
+        }
+      }
+    },
+    {
+      "split": "train",
+      "group": "scene:scene-0739",
+      "scans": 2,
+      "normal": 46591,
+      "anomaly": 1062,
+      "metrics": {
+        "AP": {
+          "before": 99.99788175181594,
+          "after": 99.99691148086718,
+          "difference": -0.0009702709487555694
+        },
+        "FPR95": {
+          "before": 0.0,
+          "after": 0.0,
+          "difference": 0.0
+        },
+        "AUROC": {
+          "before": 99.99995149520281,
+          "after": 99.99992926383744,
+          "difference": -2.2231365363722944e-05
+        },
+        "normal_bce": {
+          "before": 0.015067106142250519,
+          "after": 0.010211646402703533,
+          "difference": -0.004855459739546986
+        },
+        "anomaly_bce": {
+          "before": 1.6822845557630007e-07,
+          "after": 3.236331031342187e-07,
+          "difference": 1.5540464755791863e-07
+        }
+      }
+    },
+    {
+      "split": "train",
+      "group": "scene:scene-0768",
+      "scans": 2,
+      "normal": 45136,
+      "anomaly": 146,
+      "metrics": {
+        "AP": {
+          "before": 98.95347702744216,
+          "after": 99.54769121448463,
+          "difference": 0.5942141870424678
+        },
+        "FPR95": {
+          "before": 0.004431052818149593,
+          "after": 0.0,
+          "difference": -0.004431052818149593
+        },
+        "AUROC": {
+          "before": 99.99548548557055,
+          "after": 99.99833076777398,
+          "difference": 0.002845282203423949
+        },
+        "normal_bce": {
+          "before": 0.009569480839407247,
+          "after": 0.005758862793436927,
+          "difference": -0.0038106180459703196
+        },
+        "anomaly_bce": {
+          "before": 0.006151342221120831,
+          "after": 0.0023692426161739406,
+          "difference": -0.00378209960494689
+        }
+      }
+    },
+    {
+      "split": "train",
+      "group": "scene:scene-0817",
+      "scans": 2,
+      "normal": 43379,
+      "anomaly": 14,
+      "metrics": {
+        "AP": {
+          "before": 100.0,
+          "after": 100.0,
+          "difference": 0.0
+        },
+        "FPR95": {
+          "before": 0.0,
+          "after": 0.0,
+          "difference": 0.0
+        },
+        "AUROC": {
+          "before": 100.0,
+          "after": 100.0,
+          "difference": 0.0
+        },
+        "normal_bce": {
+          "before": 0.013555488845648316,
+          "after": 0.0038223931983842347,
+          "difference": -0.009733095647264082
+        },
+        "anomaly_bce": {
+          "before": 6.870149117826e-06,
+          "after": 6.203459848551068e-05,
+          "difference": 5.516444936768469e-05
+        }
+      }
+    },
+    {
+      "split": "train",
+      "group": "scene:scene-0864",
+      "scans": 2,
+      "normal": 50948,
+      "anomaly": 184,
+      "metrics": {
+        "AP": {
+          "before": 99.99999999999999,
+          "after": 100.0,
+          "difference": 1.4210854715202004e-14
+        },
+        "FPR95": {
+          "before": 0.0,
+          "after": 0.0,
+          "difference": 0.0
+        },
+        "AUROC": {
+          "before": 100.0,
+          "after": 100.0,
+          "difference": 0.0
+        },
+        "normal_bce": {
+          "before": 0.00794931086142779,
+          "after": 0.003192362865845116,
+          "difference": -0.004756947995582674
+        },
+        "anomaly_bce": {
+          "before": 4.481143835532575e-09,
+          "after": 1.3032916716888434e-08,
+          "difference": 8.55177288135586e-09
+        }
+      }
+    },
+    {
+      "split": "train",
+      "group": "scene:scene-0889",
+      "scans": 2,
+      "normal": 35825,
+      "anomaly": 341,
+      "metrics": {
+        "AP": {
+          "before": 99.37495230114772,
+          "after": 99.54949158335829,
+          "difference": 0.17453928221057424
+        },
+        "FPR95": {
+          "before": 0.0,
+          "after": 0.0,
+          "difference": 0.0
+        },
+        "AUROC": {
+          "before": 99.98773771981344,
+          "after": 99.9921457557817,
+          "difference": 0.004408035968268109
+        },
+        "normal_bce": {
+          "before": 0.016646941009830843,
+          "after": 0.012418095912801073,
+          "difference": -0.00422884509702977
+        },
+        "anomaly_bce": {
+          "before": 0.012305219713426217,
+          "after": 0.011265868422173345,
+          "difference": -0.0010393512912528716
+        }
+      }
+    },
+    {
+      "split": "train",
+      "group": "scene:scene-0955",
+      "scans": 2,
+      "normal": 53774,
+      "anomaly": 68,
+      "metrics": {
+        "AP": {
+          "before": 99.12464985994399,
+          "after": 99.34908389585343,
+          "difference": 0.22443403590943944
+        },
+        "FPR95": {
+          "before": 0.0,
+          "after": 0.0,
+          "difference": 0.0
+        },
+        "AUROC": {
+          "before": 99.99726524298865,
+          "after": 99.99852323121385,
+          "difference": 0.0012579882252055086
+        },
+        "normal_bce": {
+          "before": 0.007367933476268824,
+          "after": 0.006579405966134242,
+          "difference": -0.000788527510134582
+        },
+        "anomaly_bce": {
+          "before": 0.008859683485592733,
+          "after": 0.011248308069565758,
+          "difference": 0.002388624583973025
+        }
+      }
+    },
+    {
+      "split": "train",
+      "group": "scene:scene-0991",
+      "scans": 2,
+      "normal": 50334,
+      "anomaly": 297,
+      "metrics": {
+        "AP": {
+          "before": 98.015810113362,
+          "after": 98.78137884797316,
+          "difference": 0.7655687346111648
+        },
+        "FPR95": {
+          "before": 0.06158858823061946,
+          "after": 0.05761513092541821,
+          "difference": -0.003973457305201253
+        },
+        "AUROC": {
+          "before": 99.9853035594284,
+          "after": 99.99209991064403,
+          "difference": 0.006796351215626828
+        },
+        "normal_bce": {
+          "before": 0.035363009144435596,
+          "after": 0.020994992063884273,
+          "difference": -0.014368017080551323
+        },
+        "anomaly_bce": {
+          "before": 0.004187295923990963,
+          "after": 0.002978951055931339,
+          "difference": -0.0012083448680596243
+        }
+      }
+    },
+    {
+      "split": "train",
+      "group": "scene:scene-1110",
+      "scans": 2,
+      "normal": 47699,
+      "anomaly": 39,
+      "metrics": {
+        "AP": {
+          "before": 100.0,
+          "after": 100.0,
+          "difference": 0.0
+        },
+        "FPR95": {
+          "before": 0.0,
+          "after": 0.0,
+          "difference": 0.0
+        },
+        "AUROC": {
+          "before": 99.99999999999999,
+          "after": 100.0,
+          "difference": 1.4210854715202004e-14
+        },
+        "normal_bce": {
+          "before": 0.006765167790668908,
+          "after": 0.00417078605251324,
+          "difference": -0.0025943817381556674
+        },
+        "anomaly_bce": {
+          "before": 1.62804863203695e-10,
+          "after": 8.713549369663069e-11,
+          "difference": -7.566936950706431e-11
+        }
+      }
+    },
+    {
+      "split": "train",
+      "group": "anomaly_stu",
+      "scans": 32,
+      "normal": 3901121,
+      "anomaly": 3583,
+      "metrics": {
+        "AP": {
+          "before": 98.8598255397793,
+          "after": 99.09930933883257,
+          "difference": 0.239483799053275
+        },
+        "FPR95": {
+          "before": 0.0026915340488028955,
+          "after": 0.00189689066296585,
+          "difference": -0.0007946433858370455
+        },
+        "AUROC": {
+          "before": 99.99806590726627,
+          "after": 99.99876945208132,
+          "difference": 0.000703544815053192
+        },
+        "normal_bce": {
+          "before": 0.004861712753068345,
+          "after": 0.0028580741326523613,
+          "difference": -0.002003638620415984
+        },
+        "anomaly_bce": {
+          "before": 0.006985512314734103,
+          "after": 0.008677454535685178,
+          "difference": 0.0016919422209510752
+        }
+      }
+    },
+    {
+      "split": "train",
+      "group": "normal_stu",
+      "scans": 32,
+      "normal": 3885269,
+      "anomaly": 0,
+      "metrics": {
+        "AP": {
+          "before": null,
+          "after": null,
+          "difference": null
+        },
+        "FPR95": {
+          "before": null,
+          "after": null,
+          "difference": null
+        },
+        "AUROC": {
+          "before": null,
+          "after": null,
+          "difference": null
+        },
+        "normal_bce": {
+          "before": 0.003069142519681272,
+          "after": 0.0014783544252670578,
+          "difference": -0.0015907880944142142
+        },
+        "anomaly_bce": {
+          "before": null,
+          "after": null,
+          "difference": null
+        }
+      }
+    },
+    {
+      "split": "check",
+      "group": "normal_nuscenes",
+      "scans": 162,
+      "normal": 4188321,
+      "anomaly": 0,
+      "metrics": {
+        "AP": {
+          "before": null,
+          "after": null,
+          "difference": null
+        },
+        "FPR95": {
+          "before": null,
+          "after": null,
+          "difference": null
+        },
+        "AUROC": {
+          "before": null,
+          "after": null,
+          "difference": null
+        },
+        "normal_bce": {
+          "before": 0.018636940086253287,
+          "after": 0.010631043573797535,
+          "difference": -0.008005896512455752
+        },
+        "anomaly_bce": {
+          "before": null,
+          "after": null,
+          "difference": null
+        },
+        "FPR_at_geometry_recall95": {
+          "before": 2.1223779170698713,
+          "after": 2.4822118457491675,
+          "difference": 0.3598339286792962
+        }
+      }
+    },
+    {
+      "split": "check",
+      "group": "scene:scene-0130",
+      "scans": 40,
+      "normal": 1014361,
+      "anomaly": 0,
+      "metrics": {
+        "AP": {
+          "before": null,
+          "after": null,
+          "difference": null
+        },
+        "FPR95": {
+          "before": null,
+          "after": null,
+          "difference": null
+        },
+        "AUROC": {
+          "before": null,
+          "after": null,
+          "difference": null
+        },
+        "normal_bce": {
+          "before": 0.032005700897032516,
+          "after": 0.018798575532011093,
+          "difference": -0.013207125365021423
+        },
+        "anomaly_bce": {
+          "before": null,
+          "after": null,
+          "difference": null
+        },
+        "FPR_at_geometry_recall95": {
+          "before": 3.405592289135722,
+          "after": 4.265148206604946,
+          "difference": 0.8595559174692244
+        }
+      }
+    },
+    {
+      "split": "check",
+      "group": "scene:scene-1003",
+      "scans": 41,
+      "normal": 1054945,
+      "anomaly": 0,
+      "metrics": {
+        "AP": {
+          "before": null,
+          "after": null,
+          "difference": null
+        },
+        "FPR95": {
+          "before": null,
+          "after": null,
+          "difference": null
+        },
+        "AUROC": {
+          "before": null,
+          "after": null,
+          "difference": null
+        },
+        "normal_bce": {
+          "before": 0.014038868714904305,
+          "after": 0.008908102560101166,
+          "difference": -0.005130766154803139
+        },
+        "anomaly_bce": {
+          "before": null,
+          "after": null,
+          "difference": null
+        },
+        "FPR_at_geometry_recall95": {
+          "before": 1.8228438449397837,
+          "after": 2.304290745015143,
+          "difference": 0.4814469000753592
+        }
+      }
+    },
+    {
+      "split": "check",
+      "group": "scene:scene-1058",
+      "scans": 40,
+      "normal": 1056383,
+      "anomaly": 0,
+      "metrics": {
+        "AP": {
+          "before": null,
+          "after": null,
+          "difference": null
+        },
+        "FPR95": {
+          "before": null,
+          "after": null,
+          "difference": null
+        },
+        "AUROC": {
+          "before": null,
+          "after": null,
+          "difference": null
+        },
+        "normal_bce": {
+          "before": 0.013140119536531034,
+          "after": 0.005829807583906483,
+          "difference": -0.00731031195262455
+        },
+        "anomaly_bce": {
+          "before": null,
+          "after": null,
+          "difference": null
+        },
+        "FPR_at_geometry_recall95": {
+          "before": 1.6275347104222617,
+          "after": 1.6080342072903482,
+          "difference": -0.019500503131913538
+        }
+      }
+    },
+    {
+      "split": "check",
+      "group": "scene:scene-1092",
+      "scans": 41,
+      "normal": 1062632,
+      "anomaly": 0,
+      "metrics": {
+        "AP": {
+          "before": null,
+          "after": null,
+          "difference": null
+        },
+        "FPR95": {
+          "before": null,
+          "after": null,
+          "difference": null
+        },
+        "AUROC": {
+          "before": null,
+          "after": null,
+          "difference": null
+        },
+        "normal_bce": {
+          "before": 0.01590477184818232,
+          "after": 0.009318007830226417,
+          "difference": -0.006586764017955904
+        },
+        "anomaly_bce": {
+          "before": null,
+          "after": null,
+          "difference": null
+        },
+        "FPR_at_geometry_recall95": {
+          "before": 1.6867551513600192,
+          "after": 1.825937859955281,
+          "difference": 0.13918270859526172
+        }
+      }
+    },
+    {
+      "split": "check",
+      "group": "targeted",
+      "scans": 188,
+      "normal": 22531822,
+      "anomaly": 4945,
+      "metrics": {
+        "AP": {
+          "before": 21.463349296128087,
+          "after": 21.106592678642496,
+          "difference": -0.3567566174855905
+        },
+        "FPR95": {
+          "before": 1.3751262547698095,
+          "after": 1.7826032888063823,
+          "difference": 0.40747703403657276
+        },
+        "AUROC": {
+          "before": 99.72371167933598,
+          "after": 99.65875676677695,
+          "difference": -0.06495491255903119
+        },
+        "normal_bce": {
+          "before": 0.0041910989738111,
+          "after": 0.002442135840789041,
+          "difference": -0.0017489631330220592
+        },
+        "anomaly_bce": {
+          "before": 1.0816207245177758,
+          "after": 1.7072376350985228,
+          "difference": 0.625616910580747
+        },
+        "FPR_at_geometry_recall95": {
+          "before": 1.3751262547698095,
+          "after": 1.7826032888063823,
+          "difference": 0.40747703403657276
+        }
+      }
+    },
+    {
+      "split": "check",
+      "group": "geometry:proxy-012",
+      "scans": 54,
+      "normal": 6592535,
+      "anomaly": 619,
+      "metrics": {
+        "AP": {
+          "before": 87.68862455696771,
+          "after": 90.94579856177882,
+          "difference": 3.2571740048111053
+        },
+        "FPR95": {
+          "before": 0.009131540446884242,
+          "after": 0.007462986544629645,
+          "difference": -0.0016685539022545971
+        },
+        "AUROC": {
+          "before": 99.98853443224732,
+          "after": 99.99270743434116,
+          "difference": 0.004173002093835976
+        },
+        "normal_bce": {
+          "before": 0.006562611851122939,
+          "after": 0.004399069871548818,
+          "difference": -0.002163541979574121
+        },
+        "anomaly_bce": {
+          "before": 0.03388251251423621,
+          "after": 0.032170040747590875,
+          "difference": -0.0017124717666453376
+        },
+        "FPR_at_geometry_recall95": {
+          "before": 1.41880172043076,
+          "after": 1.897858714439893,
+          "difference": 0.47905699400913315
+        }
+      }
+    },
+    {
+      "split": "check",
+      "group": "geometry:proxy-013",
+      "scans": 38,
+      "normal": 4467469,
+      "anomaly": 441,
+      "metrics": {
+        "AP": {
+          "before": 2.735095912430036,
+          "after": 4.372132017247125,
+          "difference": 1.6370361048170894
+        },
+        "FPR95": {
+          "before": 1.2791582885074302,
+          "after": 1.4992381592351285,
+          "difference": 0.2200798707276983
+        },
+        "AUROC": {
+          "before": 99.60175328014958,
+          "after": 99.55398289866227,
+          "difference": -0.04777038148731094
+        },
+        "normal_bce": {
+          "before": 0.0030465179747164563,
+          "after": 0.0016804413870781993,
+          "difference": -0.001366076587638257
+        },
+        "anomaly_bce": {
+          "before": 1.7081060289783305,
+          "after": 2.306801377338093,
+          "difference": 0.5986953483597623
+        },
+        "FPR_at_geometry_recall95": {
+          "before": 1.3600318211497382,
+          "after": 1.7948417773016443,
+          "difference": 0.4348099561519061
+        }
+      }
+    },
+    {
+      "split": "check",
+      "group": "geometry:proxy-014",
+      "scans": 96,
+      "normal": 11471818,
+      "anomaly": 3885,
+      "metrics": {
+        "AP": {
+          "before": 18.738910355640765,
+          "after": 16.597796303106175,
+          "difference": -2.14111405253459
+        },
+        "FPR95": {
+          "before": 1.5609993115302212,
+          "after": 1.8742016304651974,
+          "difference": 0.3132023189349762
+        },
+        "AUROC": {
+          "before": 99.7135956494168,
+          "after": 99.64479328089263,
+          "difference": -0.06880236852417454
+        },
+        "normal_bce": {
+          "before": 0.0032739904984862077,
+          "after": 0.0016141668361334778,
+          "difference": -0.00165982366235273
+        },
+        "anomaly_bce": {
+          "before": 1.177443101342251,
+          "after": 1.9060688398798806,
+          "difference": 0.7286257385376296
+        },
+        "FPR_at_geometry_recall95": {
+          "before": 1.3559054022649244,
+          "after": 1.7116031652524473,
+          "difference": 0.35569776298752287
+        }
+      }
+    }
+  ],
+  "normalization": [
+    {
+      "endpoint": "start",
+      "group": "anomaly_nuscenes",
+      "scans": 8,
+      "mean_abs_logit_difference": 0.23600135743618011,
+      "normal_loss_improved_scans": 5,
+      "running_normal_bce": 0.014702531977813627,
+      "current_normal_bce": 0.015417606539720012,
+      "running_anomaly_bce": 2.8761104110171387e-07,
+      "current_anomaly_bce": 1.7285498244503057e-06
+    },
+    {
+      "endpoint": "start",
+      "group": "anomaly_stu",
+      "scans": 8,
+      "mean_abs_logit_difference": 0.2926563434302807,
+      "normal_loss_improved_scans": 4,
+      "running_normal_bce": 0.005759217077867111,
+      "current_normal_bce": 0.0076576279681082665,
+      "running_anomaly_bce": 0.00013645798267758206,
+      "current_anomaly_bce": 2.4512901331837247e-06
+    },
+    {
+      "endpoint": "start",
+      "group": "normal_nuscenes",
+      "scans": 8,
+      "mean_abs_logit_difference": 0.3032749779522419,
+      "normal_loss_improved_scans": 7,
+      "running_normal_bce": 0.006527576229475662,
+      "current_normal_bce": 0.00481006030944896
+    },
+    {
+      "endpoint": "start",
+      "group": "normal_stu",
+      "scans": 8,
+      "mean_abs_logit_difference": 0.27659185230731964,
+      "normal_loss_improved_scans": 1,
+      "running_normal_bce": 0.0029337498172001186,
+      "current_normal_bce": 0.003755864873619856
+    },
+    {
+      "endpoint": "end",
+      "group": "anomaly_nuscenes",
+      "scans": 8,
+      "mean_abs_logit_difference": 0.23250276409089565,
+      "normal_loss_improved_scans": 4,
+      "running_normal_bce": 0.009153365056376034,
+      "current_normal_bce": 0.010861625751906034,
+      "running_anomaly_bce": 3.0604260204147403e-06,
+      "current_anomaly_bce": 6.975290190534103e-06
+    },
+    {
+      "endpoint": "end",
+      "group": "anomaly_stu",
+      "scans": 8,
+      "mean_abs_logit_difference": 0.2705644331872463,
+      "normal_loss_improved_scans": 1,
+      "running_normal_bce": 0.003679585264466049,
+      "current_normal_bce": 0.006180167483657539,
+      "running_anomaly_bce": 0.00026814065349794856,
+      "current_anomaly_bce": 1.3405125324413697e-06
+    },
+    {
+      "endpoint": "end",
+      "group": "normal_nuscenes",
+      "scans": 8,
+      "mean_abs_logit_difference": 0.3114400263875723,
+      "normal_loss_improved_scans": 7,
+      "running_normal_bce": 0.003544470299877163,
+      "current_normal_bce": 0.0019574580499798133
+    },
+    {
+      "endpoint": "end",
+      "group": "normal_stu",
+      "scans": 8,
+      "mean_abs_logit_difference": 0.24413874559104443,
+      "normal_loss_improved_scans": 1,
+      "running_normal_bce": 0.0012489072253755384,
+      "current_normal_bce": 0.002182990202749554
+    }
+  ],
+  "training_summary_seconds": 4.154485366001609,
+  "scope": "Training-pass logits use changing weights and stochastic states. Development comparisons use fixed checkpoints. BN-only comparisons share weights/inputs and disable stochastic layers. Dataset AP levels are not matched for prevalence or observation difficulty. No independent test or causal coverage claim."
+}

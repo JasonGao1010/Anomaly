@@ -72,7 +72,8 @@ def material_order(order, manifest, indices, start, stop):
 def pilot_order(manifest, seed, updates, *, sampling=None, segment=0, paired=False, background=None):
     """Source quotas stay fixed; a new segment gets its own reproducible permutation."""
     if manifest.get("version") == NATIVE_VERSION:
-        order = epoch_order(len(manifest["records"]), seed, 1, 0) + epoch_order(len(manifest["records"]), seed, 1, 1)
+        order = sum((epoch_order(len(manifest["records"]), seed, 1, epoch)
+                     for epoch in range(2 * segment, 2 * segment + 2)), [])
         if updates != math.ceil(len(order) / BATCH_SIZE):
             raise ValueError("native training visits every fixed record exactly twice")
         return order
@@ -169,6 +170,13 @@ def ranking_weight(step, total):
     return min(1., max(0., (step / total - .1) / .1))
 
 
+def continuation_factor(step, total):
+    """One fixed, un-warmed cosine segment: 10% to 1% of the original peak."""
+    if not 1 <= step <= total or total < 2:
+        raise ValueError("continuation step outside the fixed execution budget")
+    return .01 + .09 * .5 * (1 + math.cos(math.pi * (step - 1) / (total - 1)))
+
+
 def local_mask(sample, local):
     mask = torch.isin(sample["slots"], torch.as_tensor(local["slots"], device=sample["slots"].device))
     if int(mask.sum()) != len(local["slots"]) or not bool((sample["targets"][mask] == 0).all()):
@@ -231,7 +239,7 @@ def restore_rng(saved, device):
         torch.cuda.set_rng_state(saved["cuda"], device)
 
 
-def point_record(directory, train, order, model, device, updates, resume=False):
+def point_record(directory, train, order, model, device, updates, resume=False, identity_source=None):
     """Retain exact scores and point identities; large activations remain reproducible at saved checkpoints."""
     input_offsets = np.r_[0, np.cumsum([row["points"] for row in train["records"]])]
     visit_offsets = np.r_[0, np.cumsum([train["records"][i]["points"] for i in order])]
@@ -249,6 +257,13 @@ def point_record(directory, train, order, model, device, updates, resume=False):
         valid_prefix="Use the last resumable checkpoint's planned_updates after interruption; later file entries are not completed evidence",
         feature_scope="All logits and point identities are retained. Full per-point activations at every update are not stored; checkpoints support later fixed-state layer inspection, not bitwise reconstruction of every unsaved intermediate training state.")
     path = directory / "record.json"
+    if identity_source is not None:
+        previous = json.loads((identity_source / "record.json").read_text())
+        if previous["train_manifest"] != train["sha256"] or previous["input_offsets"] != input_offsets.tolist():
+            raise ValueError("shared point identities must describe exactly the same training inputs")
+        definition["identity_source"] = str(identity_source.resolve())
+        if not (directory / "points.npy").exists():
+            os.link(identity_source / "points.npy", directory / "points.npy")
     if resume:
         if json.loads(path.read_text()) != definition:
             raise ValueError("recorded point population or state layout changed")
@@ -257,7 +272,8 @@ def point_record(directory, train, order, model, device, updates, resume=False):
     specifications = dict(points=((int(input_offsets[-1]),), np.dtype([("slot", "<u4"), ("target", "i1")])),
         train=((int(visit_offsets[-1]),), np.float32), buffers=((updates + 1, int(buffer_offsets[-1])), np.float32),
         rng=((updates + 1, sum(random_sizes.values())), np.uint8))
-    arrays = {name: np.lib.format.open_memmap(directory / f"{name}.npy", mode="r+" if resume else "w+", dtype=dtype, shape=shape)
+    arrays = {name: np.lib.format.open_memmap(directory / f"{name}.npy",
+              mode="r" if name == "points" and identity_source else "r+" if resume else "w+", dtype=dtype, shape=shape)
               for name, (shape, dtype) in specifications.items()}
     if any(arrays[name].shape != shape or arrays[name].dtype != np.dtype(dtype)
            for name, (shape, dtype) in specifications.items()):
@@ -281,8 +297,13 @@ def record_scan(record, sample, scores, visit):
     start, stop = record["visit_offsets"][visit:visit + 2]
     if end - begin != len(scores) or stop - start != len(scores):
         raise ValueError("recorded logits differ from their input point population")
-    record["arrays"]["points"][begin:end]["slot"] = sample["slots"].cpu().numpy()
-    record["arrays"]["points"][begin:end]["target"] = sample["targets"].cpu().numpy()
+    identities = record["arrays"]["points"][begin:end]
+    for key, source in (("slot", "slots"), ("target", "targets")):
+        values = sample[source].cpu().numpy()
+        if identities.flags.writeable:
+            identities[key] = values
+        elif not np.array_equal(identities[key], values):
+            raise ValueError("continued training changed a raw point identity or label")
     record["arrays"]["train"][start:stop] = scores.float().cpu().numpy()
 
 
@@ -459,6 +480,34 @@ def configuration(train, val, device, world_size, *, updates=None, initial=None,
                 code=code_record())
     if recipe == "native":
         visits = 2 * len(train["records"])
+        if optimizer_state == "inherit":
+            parent = torch.load(initial, map_location="cpu", weights_only=False)
+            previous = parent["config"]
+            inherited = parent["successful_updates"] + previous.get("parent_updates", 0)
+            if (not parent["complete"] or parent["overflows"] or previous.get("branch")
+                    or previous["train_manifest"] != train["sha256"] or previous["val_manifest"] != val["sha256"]
+                    or previous.get("recipe") != "native" or previous["objective"] != objective
+                    or updates != math.ceil(visits / BATCH_SIZE) or eval_every != updates
+                    or segment != previous["sampling_segment"] + 1 or world_size != 1
+                    or {int(s["step"]) for s in parent["optimizer"]["state"].values()} != {inherited}):
+                raise ValueError("native continuation requires a completed uniform parent and two full passes")
+            # Analysis code may evolve; the data reader, model and numerical kernels must not.
+            for name, digest in previous["code"]["files"].items():
+                if name in ("src/data.py", "src/model.py") or name.startswith("vendor/"):
+                    if result["code"]["files"][name] != digest:
+                        raise ValueError(f"continuation changed model or data mathematics: {name}")
+            result = copy.deepcopy(previous)
+            result.pop("recording", None)
+            result.update(code=code_record(), initial=str(initial.resolve()), initial_sha256=file_sha256(initial),
+                parent_updates=inherited, parent_configuration=identity(previous), updates=updates,
+                additional_updates=updates, scan_visits=visits, sampling_segment=segment,
+                data_passes=[2 * segment + 1, 2 * segment + 2], optimizer_state="inherit", eval_every=eval_every,
+                continuation_schedule=dict(initial_fraction=.1, final_fraction=.01, warmup=False,
+                    definition="cosine over this segment only; multiply each inherited original peak_lr"),
+                validation="internal development before/after continuation; val19 only at the fixed endpoint",
+                initial_validation=dict(metrics=parent["final_metrics"], manifest_sha256=val["sha256"],
+                                        inherited=True, source=str(initial.resolve())))
+            return result
         if (train["version"] != NATIVE_VERSION or updates != math.ceil(visits / BATCH_SIZE)
                 or optimizer_state != "reset" or file_sha256(initial) != WEIGHTS_SHA256 or world_size != 1):
             raise ValueError("native training requires two complete passes and fresh public nuScenes initialization")
@@ -588,6 +637,8 @@ def write_result(directory, state, config):
                objective=config.get("objective", "bce"),
                branch=config.get("branch"), start_update=config.get("start_update", 0),
                additional_updates=config.get("additional_updates"),
+               parent_updates=config.get("parent_updates", 0),
+               cumulative_updates=state["successful_updates"] + config.get("parent_updates", 0),
                gradient_steps=state.get("gradient_steps"), clipped_steps=state.get("clipped_steps"),
                gradient_norm_sum=state.get("gradient_norm_sum"), gradient_norm_max=state.get("gradient_norm_max"),
                training_seconds=state.get("training_seconds"), validation_seconds=state.get("validation_seconds"),
@@ -603,10 +654,11 @@ def train_stage(args, train, val, seed, method, device, config):
         raise ValueError("F240-R2 fixes the sole experiment seed to 0")
     rank, world_size = rank_info()
     native = method == "conditional"
+    continuation = bool(config.get("continuation_schedule"))
     branch = config.get("branch")
     pilot = method in ("pilot", "conditional")
     stage = 1 if method == "base" or native else 2
-    parent = torch.load(args.initial, map_location="cpu", weights_only=False) if (pilot and not native) or branch else None
+    parent = torch.load(args.initial, map_location="cpu", weights_only=False) if (pilot and not native) or branch or continuation else None
     mode = "conditional" if native else parent["mode"] if pilot else "base" if method in ("base", "continue") else method
     directory = args.output / str(seed) / method
     if rank == 0:
@@ -630,11 +682,12 @@ def train_stage(args, train, val, seed, method, device, config):
                 print(f"completed: seed={seed} method={method}", flush=True)
             return True
         model.load_state_dict(saved["model"], strict=True)
-    elif branch:
+    elif branch or continuation:
         model.load_state_dict(parent["model"], strict=True)
         load_record = dict(parent=str(args.initial), parent_sha256=config["initial_sha256"],
-                           inherited_full_validation=config.get("initial_validation", parent["validation"]), inherited_optimizer_updates=config["start_update"],
-                           inherited_rng=True, inherited_sampling_offset=config["start_update"]*BATCH_SIZE)
+                           inherited_full_validation=config.get("initial_validation") or parent["validation"],
+                           inherited_optimizer_updates=config.get("parent_updates", config.get("start_update")),
+                           inherited_rng=True, inherited_sampling_offset=config.get("start_update", 0)*BATCH_SIZE)
     elif stage == 1:
         load_record = model.load_pretrained(args.initial if native else args.weights)
     elif pilot:
@@ -702,7 +755,11 @@ def train_stage(args, train, val, seed, method, device, config):
             optimizer.load_state_dict(parent["optimizer"])
             scaler.load_state_dict(parent["scaler"])
             restore_rng(parent["rng"][rank], device)
-            load_record["inherited_optimizer_updates"] = parent["successful_updates"]
+            load_record["inherited_optimizer_updates"] = config.get("parent_updates", parent["successful_updates"])
+            if continuation:
+                state.update(best_metrics=config["initial_validation"]["metrics"], best_epoch=0)
+                atomic_save(best_path, capture(model, optimizer, scaler, state, config, device,
+                                              selected=True, validation=config["initial_validation"]))
         if rank == 0:
             write_json(directory / "config.json", dict(configuration=config, load=load_record,
                                                        seed=seed, method=method, parameters=state["parameters"]))
@@ -763,7 +820,10 @@ def train_stage(args, train, val, seed, method, device, config):
     local = config.get("local")
     recording = None
     if config.get("recording"):
-        recording = point_record(directory, train, full_order, model, device, total, resume)
+        source = args.initial.parent if continuation else None
+        recording = point_record(directory, train, full_order, model, device, total, resume, identity_source=source)
+        if source is not None and not (directory / "val_points.npy").exists():
+            os.link(source / "val_points.npy", directory / "val_points.npy")
         if not resume:
             record_state(recording, 0)
             atomic_save(directory / "step0.pt", capture(model, optimizer, scaler, state, config, device, selected=False))
@@ -806,7 +866,8 @@ def train_stage(args, train, val, seed, method, device, config):
             optimizer.zero_grad(set_to_none=True)
             step = state["planned_updates"] + 1
             for group in optimizer.param_groups:
-                group["lr"] = group["peak_lr"] * lr_factor(step, schedule_total) * config.get("lr_scale", 1.)
+                factor = continuation_factor(step, total) if continuation else lr_factor(step, schedule_total)
+                group["lr"] = group["peak_lr"] * factor * config.get("lr_scale", 1.)
             sync_buffers(model)
             loss_sum = torch.zeros((), device=device)
             components, pair_details = dict(bce=0., ap=0., auc=0., fpr95=0.), []
@@ -815,12 +876,12 @@ def train_stage(args, train, val, seed, method, device, config):
             local_count = len(local["slots"]) * global_indices.count(local["index"]) if local else 0
             pair_size = config["microbatch"] if native else 1
             pair_count = math.ceil(len(samples) / pair_size)
-            ramp = ranking_weight(step, schedule_total) if config.get("objective") == "metrics" else 0.
+            ramp = (1. if continuation else ranking_weight(step, schedule_total)) if config.get("objective") == "metrics" else 0.
             for pair_index, begin in enumerate(range(0, len(samples), pair_size)):
                 pair = [to_device(sample, device) for sample in samples[begin:begin + pair_size]]
                 with autocast(device):
                     loss, details = forward_loss(model, pair, counts, rank_weight=ramp / pair_count,
-                                                rank_seed=seed * 100000000 + step * 8 + pair_index,
+                                                rank_seed=seed * 100000000 + (step + config.get("parent_updates", 0)) * 8 + pair_index,
                                                 auc_weight=config.get("loss", {}).get("auc_weight", .1),
                                                 fpr95_weight=config.get("loss", {}).get("fpr95_weight", .1),
                                                 local=local, local_count=local_count, record_points=recording is not None)
@@ -899,7 +960,7 @@ def train_stage(args, train, val, seed, method, device, config):
                 saved = capture(model, optimizer, scaler, state, config, device, selected=False)
                 if rank == 0:
                     atomic_save(last, saved)
-                    if recording is not None:
+                    if recording is not None and step in config["recording"]["checkpoint_updates"]:
                         atomic_save(directory / f"step{step}.pt", saved)
                 del saved
             if rank == 0 and (recording is not None or step % 25 == 0 or overflow or need_stop):
@@ -907,6 +968,7 @@ def train_stage(args, train, val, seed, method, device, config):
                            batch=batch_number + 1, batches=steps_per_epoch, loss=loss_sum.item(),
                            normal=int(counts[0]), anomaly=int(counts[1]), planned=step,
                            successful=state["successful_updates"], overflow=bool(overflow),
+                           cumulative_update=step + config.get("parent_updates", 0),
                            lr=[g["lr"] for g in optimizer.param_groups],
                            elapsed_seconds=time.perf_counter() - start,
                            objective=config.get("objective", "bce"), ranking_weight=ramp,
@@ -1115,10 +1177,13 @@ def main():
         evaluations = math.ceil(args.updates / args.eval_every)
         checkpoints = sorted(set(range(args.save_every, args.updates + 1, args.save_every))
                              | set(range(args.eval_every, args.updates + 1, args.eval_every)) | {0, args.updates})
+        continuing = bool(config.get("continuation_schedule"))
+        if continuing:
+            checkpoints = [0, args.updates]
         # Scores/identities, all interval states, an atomic copy, and bounded follow-up diagnostics.
-        budget = dict(training_scores_and_identities=13 * train_points,
+        budget = dict(training_scores_and_identities=(8 if continuing else 13) * train_points,
             validation_metric_scores=4 * evaluations * val_points,
-            validation_all_returns_and_identities=(4 * evaluations + 5) * val_returns,
+            validation_all_returns_and_identities=(4 * evaluations + (0 if continuing else 5)) * val_returns,
             checkpoints_and_atomic_copy=(len(checkpoints) + 3) * 160_000_000,
             per_update_history_and_logs=100_000_000, followup_and_temporary=4_000_000_000)
         peak = sum(budget.values())

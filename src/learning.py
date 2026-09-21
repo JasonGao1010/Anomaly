@@ -5,7 +5,7 @@ cannot isolate train/eval effects or establish a causal data-coverage diagnosis.
 """
 
 from collections import defaultdict
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 import json
 from pathlib import Path
 import time
@@ -17,6 +17,92 @@ from .attribute import ROOT_ERRORS, cell_keys, poses_for, rank_data
 from .data import Scans, load_manifest, write_json
 from .diagnose import OUTPUT, write_csv
 from .train import runtime_snapshot
+
+
+def continuation_summary(run, output, workers):
+    """Compare complete passes and fixed-state development endpoints, without selecting cases."""
+    run, output = Path(run), Path(output)
+    result = json.loads((run / "result.json").read_text())
+    config = json.loads((run / "config.json").read_text())["configuration"]
+    if not result["complete"] or not config.get("continuation_schedule"):
+        raise ValueError("summary requires the completed uniform continuation")
+    train = load_manifest("results/data/native/train.json", "train")
+    if train["sha256"] != config["train_manifest"]:
+        raise ValueError("continuation training population changed")
+    record = json.loads((run / "record.json").read_text())
+    order = json.loads((run / "sampling.json").read_text())["executed_order"]
+    visits = defaultdict(list)
+    for visit, index in enumerate(order):
+        visits[index].append(visit)
+    if len(visits) != len(train["records"]) or any(len(v) != 2 for v in visits.values()):
+        raise ValueError("continuation did not contain two complete passes")
+    scores, points = [np.load(run / f"{name}.npy", mmap_mode="r") for name in ("train", "points")]
+    def scan(index):
+        row = train["records"][index]
+        lo, hi = record["input_offsets"][index:index+2]
+        labels = points["target"][lo:hi]
+        observed = []
+        for number, visit in enumerate(visits[index]):
+            values = scores[slice(*record["visit_offsets"][visit:visit+2])]
+            if len(values) != len(labels) or not np.isfinite(values).all():
+                raise ValueError("missing or nonfinite completed training scores")
+            for label, key in ((0, "normal"), (1, "anomaly")):
+                selected = values[labels == label].astype(np.float64)
+                if len(selected) != row[key]:
+                    raise ValueError("recorded training supervision differs from manifest")
+                if len(selected):
+                    observed.append((row["group"], number, label, len(selected),
+                        float(np.logaddexp(0., selected * (1-2*label)).sum()),
+                        int(((selected >= 0) if label == 0 else (selected < 0)).sum())))
+        return observed
+    totals = defaultdict(lambda: [0, 0., 0])
+    started = time.perf_counter()
+    # NumPy releases the GIL; shared read-only maps avoid per-process copies.
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        for observed in pool.map(scan, range(len(train["records"]))):
+            for group, number, label, count, loss, wrong in observed:
+                total = totals[group, number, label]
+                total[0] += count
+                total[1] += loss
+                total[2] += wrong
+    passes = [dict(group=group, data_pass=config["data_passes"][number], label=label,
+        points=count, bce=loss/count, zero_threshold_errors=wrong)
+        for (group, number, label), (count, loss, wrong) in sorted(totals.items())]
+    dev = {name:json.loads((output / "development" / f"{name}.json").read_text()) for name in ("start", "end")}
+    changes = []
+    for split in ("train", "check"):
+        for group, before in dev["start"]["splits"][split]["groups"].items():
+            # Source, reserved geometry and independent normal scene summaries suffice here.
+            if group.startswith("geometry:") and split == "train":
+                continue
+            after = dev["end"]["splits"][split]["groups"][group]
+            changes.append(dict(split=split, group=group, scans=before["scans"],
+                normal=before["normal"], anomaly=before["anomaly"],
+                metrics={key:dict(before=before.get(key), after=after.get(key),
+                    difference=after[key]-before[key] if before.get(key) is not None else None)
+                    for key in ("AP", "FPR95", "AUROC", "normal_bce", "anomaly_bce", "FPR_at_geometry_recall95")
+                    if key in before}))
+    normalization = []
+    for name, endpoint in dev.items():
+        for group in sorted({r["group"] for r in endpoint["normalization"]["scans"]}):
+            rows = [r for r in endpoint["normalization"]["scans"] if r["group"] == group]
+            item = dict(endpoint=name, group=group, scans=len(rows),
+                mean_abs_logit_difference=float(np.mean([r["mean_abs_change"] for r in rows])),
+                normal_loss_improved_scans=sum(r["current_bce_0"] < r["running_bce_0"] for r in rows))
+            for label, key in ((0, "normal"), (1, "anomaly")):
+                count = sum(train["records"][r["index"]][key] for r in rows)
+                if count:
+                    for state in ("running", "current"):
+                        item[f"{state}_{key}_bce"] = sum((r[f"{state}_bce_{label}"] or 0.) *
+                            train["records"][r["index"]][key] for r in rows) / count
+            normalization.append(item)
+    parent = json.loads((Path(config["initial"]).parent / "result.json").read_text())
+    validation = {key:dict(before=parent["final_metrics"][key], after=result["final_metrics"][key],
+        difference=result["final_metrics"][key]-parent["final_metrics"][key]) for key in ("AP", "FPR95", "AUROC")}
+    write_json(output / "comparison.json", dict(training=result, validation=validation,
+        training_passes=passes, development=changes, normalization=normalization,
+        training_summary_seconds=time.perf_counter()-started,
+        scope="Training-pass logits use changing weights and stochastic states. Development comparisons use fixed checkpoints. BN-only comparisons share weights/inputs and disable stochastic layers. Dataset AP levels are not matched for prevalence or observation difficulty. No independent test or causal coverage claim."))
 
 
 def point_order(scores, targets):

@@ -177,6 +177,15 @@ def test_point_record_preserves_training_and_original_point_identity(tmp_path):
     np.testing.assert_array_equal(reopened["arrays"]["points"]["target"], torch.cat([s["targets"] for s in samples]).numpy())
     with pytest.raises(ValueError, match="input point population"):
         record_scan(reopened, samples[0], details["point_scores"][0][:-1], 0)
+    continuation = tmp_path / "continuation"
+    continuation.mkdir()
+    shared = point_record(continuation, manifest, [1, 0], model, torch.device("cpu"), 1, identity_source=tmp_path)
+    record_scan(shared, samples[1], details["point_scores"][1], 0)
+    assert not shared["arrays"]["points"].flags.writeable
+    assert (continuation / "points.npy").stat().st_ino == (tmp_path / "points.npy").stat().st_ino
+    changed = dict(samples[1], targets=torch.zeros_like(samples[1]["targets"]))
+    with pytest.raises(ValueError, match="point identity or label"):
+        record_scan(shared, changed, details["point_scores"][1], 0)
 
 
 def test_evaluation_record_preserves_official_population_and_ignored_returns(tmp_path, monkeypatch):
@@ -768,6 +777,73 @@ def test_native_branch_restores_moments_rng_sampling_and_remaining_schedule(tmp_
     assert torch.equal(saved["rng"][0]["torch"],expected_rng["torch"])
     for name,value in model.state_dict().items():
         torch.testing.assert_close(value,saved["model"][name],rtol=0,atol=0)
+
+
+def test_uniform_native_continuation_keeps_moments_rng_and_full_passes(tmp_path, monkeypatch):
+    import src.train as training
+    from src.data import NATIVE_VERSION, file_sha256
+    monkeypatch.setattr(training, "Segmentor", _ToyModel)
+    monkeypatch.setattr(training, "PreparedScans", _ToyScans)
+    monkeypatch.setattr(torch.cuda, "reset_peak_memory_stats", lambda *a: None)
+    monkeypatch.setattr(torch.cuda, "max_memory_allocated", lambda *a: 0)
+    device = torch.device("cpu")
+    manifest = dict(version=NATIVE_VERSION, sha256="fixture-train", records=[
+        dict(group="anomaly_stu", normal=5, anomaly=5) for _ in range(11)])
+    order = pilot_order(manifest, 0, 3, segment=1)
+    assert order == epoch_order(11, 0, 1, 2) + epoch_order(11, 0, 1, 3)
+    assert all(order.count(i) == 2 for i in range(11))
+    assert training.continuation_factor(1, 3) == pytest.approx(.1)
+    assert training.continuation_factor(3, 3) == pytest.approx(.01)
+    seed_all(7)
+    model = _ToyModel("conditional")
+    optimizer = optimizer_for(model, 1)
+    sum(p.square().sum() for p in model.parameters()).backward()
+    optimizer.step()
+    for value in optimizer.state.values():
+        value["step"].fill_(1547)
+    metrics = dict(AP=75., FPR95=.2, AUROC=99.9)
+    config = dict(version=NATIVE_VERSION, updates=3, eval_every=3, epochs=2, microbatch=2,
+        recipe="native", objective="metrics", loss=dict(auc_weight=.1, fpr95_weight=.1),
+        world_size=1, train_manifest="fixture-train", sampling="two passes", sampling_segment=1,
+        optimizer_state="inherit", parent_updates=1547, continuation_schedule=dict(warmup=False),
+        initial_validation=dict(metrics=metrics, manifest_sha256="fixture-val"))
+    initial = tmp_path / "initial.pt"
+    torch.save(dict(model=deepcopy(model.state_dict()), optimizer=deepcopy(optimizer.state_dict()),
+        scaler={}, rng=[rng_state(device)], config=dict(config, sampling_segment=0), successful_updates=1547), initial)
+    config["initial_sha256"] = file_sha256(initial)
+    optimizer.zero_grad(set_to_none=True)
+    data = _ToyScans(manifest)
+    for k in range(4):
+        loss, _ = forward_loss(model, [data[i] for i in order[k*2:k*2+2]], torch.tensor([40, 40]),
+                               rank_weight=.25, rank_seed=1548*8+k)
+        loss.backward()
+    torch.nn.utils.clip_grad_norm_(model.parameters(), 1.)
+    for group in optimizer.param_groups:
+        group["lr"] = group["peak_lr"] * training.continuation_factor(1, 3)
+    optimizer.step()
+    expected_rng = rng_state(device)
+    args = SimpleNamespace(output=tmp_path / "continued", initial=initial, resume=True,
+                           workers=0, save_every=100, score_path=None)
+    monkeypatch.setattr(training, "STOP", True)
+    assert not training.train_stage(args, manifest, dict(sha256="fixture-val"), 0, "conditional", device, config)
+    saved = torch.load(args.output / "0/conditional/last.pt", weights_only=False)
+    assert {int(s["step"]) for s in saved["optimizer"]["state"].values()} == {1548}
+    assert saved["planned_updates"] == 1 and saved["best_metrics"] == metrics
+    assert torch.equal(saved["rng"][0]["torch"], expected_rng["torch"])
+    for key, value in model.state_dict().items():
+        torch.testing.assert_close(value, saved["model"][key], rtol=0, atol=0)
+    calls = []
+    def validate(*unused, **kwargs):
+        calls.append(1)
+        return dict(metrics=metrics, manifest_sha256="fixture-val")
+    monkeypatch.setattr(training, "validate_all", validate)
+    monkeypatch.setattr(training, "STOP", False)
+    assert training.train_stage(args, manifest, dict(sha256="fixture-val"), 0, "conditional", device, config)
+    saved = torch.load(args.output / "0/conditional/last.pt", weights_only=False)
+    assert len(calls) == 1 and saved["complete"] and saved["planned_updates"] == 3
+    assert {int(s["step"]) for s in saved["optimizer"]["state"].values()} == {1550}
+    report = json.loads((args.output / "0/conditional/epoch1.json").read_text())
+    assert report["frames"] == 22
 
 
 def test_material_sampling_reuses_every_other_source_position():

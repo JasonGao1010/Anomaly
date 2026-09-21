@@ -82,7 +82,7 @@ def evaluate(model, manifest, device, workers=4, score_path=None, record_points=
         raw_scores = np.lib.format.open_memmap(score_path.with_stem(score_path.stem + "_all"), mode="w+",
                                                dtype=np.float32, shape=(raw_count,))
         identity_path = score_path.parent / "val_points.npy"
-        identities = np.lib.format.open_memmap(identity_path, mode="r+" if identity_path.exists() else "w+",
+        identities = np.lib.format.open_memmap(identity_path, mode="r" if identity_path.exists() else "w+",
             dtype=np.dtype([("slot", "<u4"), ("target", "i1")]), shape=(raw_count,))
     cursor = 0
     start = time.perf_counter()
@@ -103,8 +103,12 @@ def evaluate(model, manifest, device, workers=4, score_path=None, record_points=
         if record_points:
             raw_stop = raw_cursor + len(prediction)
             raw_scores[raw_cursor:raw_stop] = prediction
-            identities[raw_cursor:raw_stop]["slot"] = sample["slots"].numpy()
-            identities[raw_cursor:raw_stop]["target"] = sample["targets"].numpy()
+            for key, source in (("slot", "slots"), ("target", "targets")):
+                values = sample[source].numpy()
+                if identities.flags.writeable:
+                    identities[raw_cursor:raw_stop][key] = values
+                elif not np.array_equal(identities[raw_cursor:raw_stop][key], values):
+                    raise ValueError("evaluation point identity or label changed")
             frames.append(dict(index=int(sample["index"]), start=raw_cursor, stop=raw_stop,
                                metric_start=cursor, metric_stop=stop))
             raw_cursor = raw_stop
