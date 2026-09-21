@@ -63,6 +63,25 @@ def test_native_column_beams_and_motion_shifted_empty_slots():
     assert result.inserted.all() and (result.frame.labels == 2).all()
     np.testing.assert_allclose(result.frame.xyzi[:, 3], [.1, .8, .1, .8])
     np.testing.assert_allclose(result.frame.xyzi[:, 0], 3., atol=2e-7)
+    assert result.sampling[0]["potential_surface_rays"] == 4
+    assert result.sampling[0]["foreground_surface_rays"] == 4
+    assert result.sampling[0]["returned_rays"] == 4
+
+
+def test_observation_selection_preserves_base_and_real_view_changes_without_quotas():
+    from src.data import observation_descriptor, select_observations
+    cloud = np.array([[5,0,0,.2],[5,.1,0,.2],[5,0,.1,.2],[5,.1,.1,.2],[5,.2,0,.2]], np.float32)
+    obj = np.eye(4)
+    descriptors = []
+    for angle in np.deg2rad(np.arange(0,180,20)):
+        pose = np.eye(4)
+        pose[:3,3] = [5*np.cos(angle),5*np.sin(angle),0]
+        descriptors.append(observation_descriptor(cloud,obj,pose,[20,0,0,0,0,0,0,0]))
+    descriptors.append(descriptors[0])
+    kept, distance = select_observations(descriptors, [0,9])
+    assert kept == list(range(10)) and distance.max() == 0
+    kept, distance = select_observations(descriptors, [0])
+    assert kept == list(range(9)) and distance.max() < 1e-6
 
 
 @pytest.mark.parametrize("count", [0, 1, 4, 5])

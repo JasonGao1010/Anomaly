@@ -49,6 +49,88 @@ NUSCENES_NORMAL = frozenset((
     "flat.other", "flat.sidewalk", "flat.terrain", "static.manmade", "static.vegetation",
 ))
 
+# Empirical redundancy tolerances, fixed before model evaluation. They organize
+# observations; none of them changes point labels, network inputs or evaluation.
+DIVERSITY = dict(range_ratio=1.25, view_degrees=15., count_ratio=1.6,
+                 spread_ratio=1.6, shape_change=.15, intensity_change=.15,
+                 context_change=.35, context_count_ratio=2., context_radius_m=3.,
+                 normal_translation_m=3., normal_rotation_degrees=10.,
+                 normal_cell_count_scale=32., normal_cell_count_ratio=2.)
+
+
+def observation_descriptor(xyzi, object_pose, sensor_pose, context):
+    """Describe a measured object view; context is counts in fixed semantic groups."""
+    xyz = xyzi[:, :3].astype(float)
+    eig = np.maximum(np.linalg.eigvalsh(np.cov(xyz.T)), 0)[::-1] if len(xyz) >= 3 else np.zeros(3)
+    direction = (np.asarray(sensor_pose)[:3, 3] - np.asarray(object_pose)[:3, 3]) @ np.asarray(object_pose)[:3, :3]
+    direction /= np.linalg.norm(direction)
+    context = np.asarray(context, float)
+    return np.r_[np.log(np.median(np.linalg.norm(xyz, axis=1))), direction, np.log(len(xyz)),
+                 np.log(.05 + 2 * np.sqrt(eig)),
+                 (eig[0]-eig[1])/max(eig[0], 1e-12), (eig[1]-eig[2])/max(eig[0], 1e-12),
+                 np.log1p(np.quantile(xyzi[:, 3], [.1, .5, .9])), np.log1p(context.sum()),
+                 context/max(context.sum(), 1.)].tolist()
+
+
+def observation_distance(features, reference):
+    """A view is redundant only when all recorded conditions/outcomes are close."""
+    x, y, p = np.asarray(features), np.asarray(reference), DIVERSITY
+    delta = abs(x-y)
+    angle = np.arccos(np.clip(x[:, 1:4] @ y[1:4], -1, 1))
+    return np.maximum.reduce((delta[:, 0]/np.log(p["range_ratio"]),
+        angle/np.deg2rad(p["view_degrees"]), delta[:, 4]/np.log(p["count_ratio"]),
+        delta[:, 5:8].max(1)/np.log(p["spread_ratio"]), delta[:, 8:10].max(1)/p["shape_change"],
+        delta[:, 10:13].max(1)/p["intensity_change"], delta[:, 13]/np.log(p["context_count_ratio"]),
+        delta[:, 14:].sum(1)/p["context_change"]))
+
+
+def select_observations(features, required=(), *, normal=False):
+    """Farthest-first covering with a distance tolerance, never a frame quota."""
+    x = np.asarray(features, float)
+    if x.ndim != 2 or not len(x) or not np.isfinite(x).all():
+        raise ValueError("observation descriptors must be a nonempty finite matrix")
+    chosen = list(dict.fromkeys(map(int, required)))
+    distance = lambda i: np.max(abs(x-x[i]), axis=1) if normal else observation_distance(x, x[i])
+    if not chosen:
+        chosen = [int(np.argmin(np.square(x-np.median(x, axis=0)).mean(1)))]
+    nearest = np.full(len(x), np.inf)
+    for index in chosen:
+        nearest = np.minimum(nearest, distance(index))
+    nearest[chosen] = 0
+    while nearest.max() > 1. + 1e-9:
+        index = int(np.argmax(nearest))
+        chosen.append(index)
+        nearest = np.minimum(nearest, distance(index))
+        nearest[chosen] = 0
+    return sorted(chosen), nearest
+
+
+def context_groups(semantic, mapping=None):
+    """Road/other ground, vegetation, vehicles, fence/barrier, built, people, other."""
+    if mapping is None:
+        groups = ((40, 44), (48, 49, 72), (70, 71), (10, 11, 13, 15, 16, 18, 20, 252, 256, 257, 258, 259),
+                  (51,), (50, 52, 80, 81), (30, 31, 32, 253, 254, 255))
+        return np.select([np.isin(semantic, g) for g in groups], np.arange(len(groups)), default=7)
+    table = []
+    for row in mapping:
+        name = row["name"]
+        table.append(0 if name == "flat.driveable_surface" else 1 if name.startswith("flat.") else
+            2 if name == "static.vegetation" else 3 if name.startswith("vehicle.") else
+            4 if name == "movable_object.barrier" else 5 if name == "static.manmade" else
+            6 if name.startswith("human.") else 7)
+    return np.asarray(table)[semantic]
+
+
+def normal_descriptor(frame, raw_labels):
+    """Whole-scan pose and trusted-normal class/range distribution; no cropping."""
+    normal = point_targets(frame) == 0
+    band = np.searchsorted([10., 20., 35.], frame.range_m[normal], side="right")
+    counts = np.bincount(np.asarray(raw_labels)[normal]*4+band, minlength=128)
+    p = DIVERSITY
+    return np.r_[frame.pose[:3, 3]/p["normal_translation_m"],
+        frame.pose[:3, :3].ravel()/(2*np.sin(np.deg2rad(p["normal_rotation_degrees"])/2)),
+        np.log1p(counts/p["normal_cell_count_scale"])/np.log(p["normal_cell_count_ratio"])].tolist()
+
 
 def readonly(values):
     result = np.ascontiguousarray(values)
@@ -588,6 +670,38 @@ def nuscenes_poses(records, root=NUSCENES_ROOT):
     return output
 
 
+def native_keyframes(reference, root=NUSCENES_ROOT):
+    """All labeled keyframes in the already authorized training logs/scenes."""
+    import ijson
+    root = Path(root)
+    split = reference["split"]
+    allowed = set(split["train"])
+    blocked = {split["logs"][s] for s in split["check"]}
+    scenes = {r["token"]: r for r in json.loads((root/"v1.0-trainval/scene.json").read_text()) if r["name"] in allowed}
+    if any(r["log_token"] in blocked for r in scenes.values()):
+        raise ValueError("a held-out acquisition log entered expansion")
+    samples = {r["token"]: scenes[r["scene_token"]] for r in json.loads((root/"v1.0-trainval/sample.json").read_text())
+               if r["scene_token"] in scenes}
+    labels = {r["sample_data_token"]: r["filename"] for r in json.loads((root/"v1.0-trainval/lidarseg.json").read_text())}
+    old = {r["token"]: r for r in reference["records"] if r.get("source") == "nuscenes"}
+    records = []
+    with (root/"v1.0-trainval/sample_data.json").open("rb") as stream:
+        for row in ijson.items(stream, "item"):
+            if not row["is_key_frame"] or row["sample_token"] not in samples or not row["filename"].startswith("samples/LIDAR_TOP/"):
+                continue
+            scene = samples[row["sample_token"]]
+            record = dict(source="nuscenes", scene=scene["name"], token=row["token"], frame=len(records),
+                scan=str(root/row["filename"]), label=str(root/labels[row["token"]]),
+                subset="train", group="normal_nuscenes", timestamp=int(row["timestamp"]),
+                sample_token=row["sample_token"], log_token=scene["log_token"])
+            if record["token"] in old and record["frame"] != old[record["token"]]["frame"]:
+                raise ValueError("frame identity changed in the stateless observation random stream")
+            records.append(record)
+    if len(records) != sum(r["nbr_samples"] for r in scenes.values()) or not set(old) <= {r["token"] for r in records}:
+        raise ValueError("incomplete labeled trajectory keyframes")
+    return nuscenes_poses(records, root)
+
+
 def nuscenes_rays(record):
     """Recover native 32-beam slots in the motion-compensated reference frame.
 
@@ -896,6 +1010,85 @@ def make_pilot_manifest(base_path, output):
     counts = {group: sum(row["group"] == group for row in records)
               for group in ("base", "targeted", "normal_nuscenes", "normal_stu")}
     print(json.dumps(dict(training_scans=counts, sha256=result["sha256"])), flush=True)
+    return result
+
+
+def _stu_diversity_frame(task):
+    """Read a raw frame once for all existing world observations at that time."""
+    from scipy.spatial import cKDTree
+    frame_id, records = task
+    source = _diversity_sequence[frame_id]
+    if legacy_source_identity(source) != records[0]["source_identity"]:
+        raise ValueError("STU training background changed")
+    original_ids = np.flatnonzero(source.actual)
+    tree = cKDTree(source.xyzi[original_ids, :3])
+    groups = context_groups(source.semantic)
+    result = []
+    for record in records:
+        delta = read_delta(record["delta"])
+        if str(delta["world_identity"]) != record["world"] or str(delta["source_identity"]) != record["source_identity"]:
+            raise ValueError("STU observation has the wrong source identity")
+        xyz = delta["xyzi"]
+        radius = np.linalg.norm(xyz[:, :3], axis=1)
+        mask = ((delta["packed_labels"] & 65535) == 2) & (radius >= 2.5) & (radius <= 50)
+        if int(mask.sum()) != record["anomaly"]:
+            raise ValueError("STU anomaly supervision changed during expansion")
+        obj = _diversity_worlds[record["world"]]
+        center = (obj["pose"][:3, 3]-source.pose[:3, 3]) @ source.pose[:3, :3]
+        context = original_ids[tree.query_ball_point(center, DIVERSITY["context_radius_m"])]
+        context = context[~np.isin(context, delta["occluded_slot"])]
+        features = observation_descriptor(xyz[mask], obj["pose"], source.pose,
+                                         np.bincount(groups[context], minlength=8))
+        result.append((record["world"], frame_id, features))
+    return result
+
+
+def expand_stu(reference, output, workers):
+    """Add nonredundant existing views while retaining every baseline STU record."""
+    import multiprocessing as mp
+    global _diversity_sequence, _diversity_worlds
+    base = load_manifest(Path(__file__).resolve().parents[1]/"assets/train.json", "train")
+    if base["sha256"] != reference["base_manifest"]:
+        raise ValueError("expanded STU observations must come from the original eligible pool")
+    destination = Path(output)/"stu.json"
+    if destination.exists():
+        saved = json.loads(destination.read_text())
+        if saved["reference"] != reference["sha256"] or saved["tolerances"] != DIVERSITY:
+            raise ValueError("existing STU selection belongs to another specification")
+        return saved
+    _diversity_sequence = STUSequence(base["data_root"])
+    _diversity_worlds, by_frame, by_world = {}, {}, {}
+    for entry in base["worlds"]:
+        directory = Path(base["pool_root"])/entry["paths"][0]
+        obj = json.loads((directory/"world.json").read_text())["world"]["objects"][0]
+        metadata = json.loads((directory/"manifest.json").read_text())
+        pose = np.eye(4)
+        pose[:3, :3], pose[:3, 3] = obj["rotation_world_from_local"], obj["translation_world_m"]
+        _diversity_worlds[entry["id"]] = dict(pose=pose, geometry=identity(obj["shape"]),
+            source_family=metadata.get("family_id", "unrecorded:"+identity(obj["shape"])))
+    for record in base["records"]:
+        by_frame.setdefault(record["frame"], []).append(record)
+        by_world.setdefault(record["world"], []).append(record)
+    features = {}
+    with ProcessPoolExecutor(max_workers=workers, mp_context=mp.get_context("fork")) as pool:
+        for rows in pool.map(_stu_diversity_frame, sorted(by_frame.items())):
+            features.update({(world, frame): vector for world, frame, vector in rows})
+    mandatory = {(r["world"], r["frame"]) for r in reference["records"] if r["group"] == "anomaly_stu"}
+    chosen, summaries = [], []
+    for world, records in sorted(by_world.items()):
+        records = sorted(records, key=lambda r: r["frame"])
+        vectors = [features[world, r["frame"]] for r in records]
+        required = [i for i, r in enumerate(records) if (world, r["frame"]) in mandatory]
+        keep, nearest = select_observations(vectors, required)
+        chosen.extend(dict(records[i], group="anomaly_stu", subset="train", observation=vectors[i],
+                           geometry=[_diversity_worlds[world]["geometry"]],
+                           source_family=_diversity_worlds[world]["source_family"]) for i in keep)
+        summaries.append(dict(world=world, candidates=len(records), base=len(required), retained=len(keep),
+            frames=[records[i]["frame"] for i in keep], omitted_max_distance=float(nearest.max())))
+    result = dict(reference=reference["sha256"], source=base["sha256"], tolerances=DIVERSITY,
+                  candidates=len(base["records"]), records=chosen, worlds=summaries,
+                  selection="all baseline views retained; farthest-first until every omitted view is within tolerance of a retained view")
+    write_json(destination, result)
     return result
 
 

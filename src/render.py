@@ -14,7 +14,9 @@ from scipy.stats import qmc
 
 from .data import (Frame, PILOT_VERSION, STUSequence, legacy_source_identity,
                    point_targets, readonly, rigid, supervision, read_rays, write_json,
-                   nuscenes_rays, nuscenes_poses, read_nuscenes, identity, NATIVE_VERSION)
+                   nuscenes_rays, nuscenes_poses, read_nuscenes, identity, NATIVE_VERSION,
+                   DIVERSITY, context_groups, observation_descriptor, normal_descriptor,
+                   select_observations, native_keyframes, expand_stu, load_manifest)
 from .shape import Shape, Trace, unresolved_penetration
 
 
@@ -180,6 +182,7 @@ class Observation:
     occluded_original: np.ndarray
     visible_normal: np.ndarray
     object_ids: np.ndarray
+    sampling: tuple = ()
 
     def effective_counts(self):
         """Apply frame selection first; keep 1-4 point objects within eligible frames."""
@@ -213,11 +216,13 @@ def render_frame(source, world, rays, response, trace):
     nearest = np.full(count, np.inf)
     owner = np.full(count, -1, dtype=np.int64)
     incidence = np.zeros(count)
+    potential = {}
     for item in world.objects:
         object_rotation = item.pose[:3, :3]
         local_origins = (world_origins - item.pose[:3, 3]) @ object_rotation
         local_directions = unit_world @ object_rotation
         distances, normals, valid = item.shape.intersect(local_origins, local_directions, trace)
+        potential[item.object_id] = int(valid.sum())
         # Sorted IDs give reproducible ownership to coincident surfaces.
         take = valid & (distances < nearest - world.tie_tolerance_m)
         nearest[take], owner[take] = distances[take], item.object_id
@@ -231,8 +236,13 @@ def render_frame(source, world, rays, response, trace):
     xyzi[occluded], labels[occluded] = 0, 0
     object_ids = np.full(count, -1, dtype=np.int64)
     columns = count // len(rays.local)
+    sampling = []
     for item in world.objects:
         slots = np.flatnonzero(foreground & (owner == item.object_id))
+        info = dict(object_id=item.object_id, potential_surface_rays=potential[item.object_id],
+                    foreground_surface_rays=len(slots), returned_rays=0,
+                    incidence_degrees=[] if not len(slots) else np.rad2deg(np.quantile(incidence[slots], [.1,.5,.9])).tolist())
+        sampling.append(info)
         if not len(slots):
             continue
         returned, intensity = response.sample(
@@ -242,6 +252,7 @@ def render_frame(source, world, rays, response, trace):
             slot_uniform(world, source.frame_id, slots, item.object_id, 1),
         )
         kept = slots[returned]
+        info["returned_rays"] = len(kept)
         inserted[kept], object_ids[kept] = True, item.object_id
         ray_parameter = nearest[kept] / direction_norm[kept]
         xyzi[kept, :3] = rays.origins[kept] + ray_parameter[:, None] * rays.directions[kept]
@@ -250,7 +261,8 @@ def render_frame(source, world, rays, response, trace):
         labels[kept] = 2
     frame = Frame(source.frame_id, xyzi, source.pose, labels, source.sequence_id, source.partition)
     normal = source.actual & (source.semantic != 0) & (source.semantic != 2) & ~foreground
-    return Observation(frame, world, readonly(inserted), readonly(occluded), readonly(normal), readonly(object_ids))
+    # Potential/foreground count ray opportunities, not visible surface area.
+    return Observation(frame, world, readonly(inserted), readonly(occluded), readonly(normal), readonly(object_ids), tuple(sampling))
 
 
 @dataclass(frozen=True, slots=True)
@@ -719,7 +731,196 @@ def _native_scene(task):
     return result
 
 
-def generate_native(output, *, pool_root, workers=8, limit=None):
+def _expand_native_scene(task):
+    """Observe one fixed world along its real trajectory, then remove near repeats."""
+    import json
+    from pathlib import Path
+    from scipy.spatial import cKDTree
+    records, baseline, destination = task
+    destination = Path(destination)
+    metadata_path = destination/"world.json"
+    specification = identity(dict(records=records, baseline=baseline, context=_expanded_key))
+    if metadata_path.exists():
+        saved = json.loads(metadata_path.read_text())
+        if saved.get("specification") != specification:
+            raise ValueError("cached trajectory selection has different inputs or construction settings")
+        return saved
+    frames = [read_nuscenes(r, _native_mapping) for r in records]
+    truth = [np.fromfile(r["label"], np.uint8) for r in records]
+    inherited = json.loads(Path(next(r["world"] for r in baseline if r["anomaly"])).read_text())
+    objects = [Object(o["object_id"], o["geometry"], _expanded_shapes[o["geometry"]].shape,
+                      Material(**o["material"]), np.asarray(o["pose"]))
+               for o in inherited["objects"] if o.get("accepted", True)]
+    seed, proposals = inherited["seed"], inherited["objects"]
+    world = World(NATIVE_VERSION, 0, seed, tuple(objects), 1e-6)
+    old_normal = {r["token"] for r in baseline if not r["anomaly"]}
+    old_anomaly = {r["token"]: r for r in baseline if r["anomaly"]}
+    normal_rows, histograms = [], []
+    for record, frame, raw in zip(records, frames, truth):
+        targets = point_targets(frame)
+        if (targets == 1).any() or not (targets == 0).any():
+            raise ValueError("expanded native normal supervision is not trustworthy")
+        normal_rows.append(dict(record, points=int(frame.actual.sum()), slots=len(frame.xyzi),
+                                normal=int((targets == 0).sum()), anomaly=0))
+        histograms.append(np.bincount(raw[targets == 0], minlength=32))
+    keep_normal, _ = select_observations([normal_descriptor(f,t) for f,t in zip(frames,truth)],
+        [i for i,r in enumerate(records) if r["token"] in old_normal], normal=True)
+    extra_normal = [normal_rows[i] for i in keep_normal if records[i]["token"] not in old_normal]
+    candidates, payloads, observations, skipped, ray_checks, sampling = [], {}, {}, [], [], []
+    ground_ids = [r["raw"] for r in _native_mapping if r["name"] in ("flat.driveable_surface", "flat.sidewalk", "flat.other")]
+    for record, source, raw in zip(records, frames, truth):
+        token = record["token"]
+        if token in old_anomaly:
+            observed = read_nuscenes(old_anomaly[token], _native_mapping)
+            with np.load(old_anomaly[token]["delta"], allow_pickle=False) as delta:
+                owners = np.full(len(source.xyzi), -1, dtype=np.int64)
+                owners[delta["slots"]] = delta["object_ids"]
+            candidate = old_anomaly[token]
+        else:
+            # Bounds only skip frames that cannot contain supervised anomaly hits.
+            if not any(np.linalg.norm(source.pose[:3,3]-o.pose[:3,3])-o.shape.radius <= 50 for o in objects):
+                skipped.append(dict(token=token, reason="outside_supervised_range"))
+                continue
+            obstacle = source.xyzi[source.actual & (source.range_m >= 2.5) & ~np.isin(raw, ground_ids), :3].astype(float)
+            obstacle = obstacle @ source.pose[:3,:3].T+source.pose[:3,3]
+            collisions = [o.object_id for o in objects if len(observed_collision(o, obstacle,
+                allowance_m=.03, gradient_step_m=1e-6, witness_fraction=1-1e-6)[0])]
+            if collisions:
+                skipped.append(dict(token=token, reason="observed_collision", objects=collisions))
+                continue
+            rays, diagnostic = nuscenes_rays(record)
+            result = render_frame(source, world, rays, _native_response, _native_trace)
+            ray_checks.append(dict(token=token, **diagnostic))
+            sampling.append(dict(token=token, objects=result.sampling))
+            selected = supervision(result.frame)
+            if not selected.eligible:
+                skipped.append(dict(token=token, reason="zero_or_1_to_4_anomalies", anomaly=selected.anomaly_count))
+                continue
+            observed, owners = result.frame, result.object_ids
+            slots = np.flatnonzero(result.inserted | result.occluded_original).astype(np.int32)
+            path = destination/f"{record['frame']}.npz"
+            payloads[token] = dict(token=token, slots=slots, xyzi=observed.xyzi[slots], labels=observed.labels[slots],
+                inserted=np.flatnonzero(result.inserted), occluded=np.flatnonzero(result.occluded_original), object_ids=owners[slots])
+            candidate = dict(record, group="anomaly_nuscenes", delta=str(path.resolve()), world=str(metadata_path.resolve()),
+                geometry=[o.geometry_id for o in objects], points=int(observed.actual.sum()), slots=len(observed.xyzi),
+                normal=selected.normal_count, anomaly=selected.anomaly_count)
+        candidate_index = len(candidates)
+        candidates.append(candidate)
+        normal_ids = np.flatnonzero(observed.actual & (owners < 0))
+        tree = cKDTree(observed.xyzi[normal_ids, :3])
+        groups = context_groups(raw, _native_mapping)
+        targets = point_targets(observed)
+        for obj in objects:
+            mask = (owners == obj.object_id) & (targets == 1)
+            if not mask.any():
+                continue
+            center = (obj.pose[:3,3]-source.pose[:3,3]) @ source.pose[:3,:3]
+            neighbors = normal_ids[tree.query_ball_point(center, DIVERSITY["context_radius_m"])]
+            descriptor = observation_descriptor(observed.xyzi[mask], obj.pose, source.pose,
+                                               np.bincount(groups[neighbors], minlength=8))
+            observations.setdefault(obj.object_id, []).append(dict(index=candidate_index, token=token,
+                geometry=obj.geometry_id, count=int(mask.sum()), descriptor=descriptor))
+    chosen = {i for i,r in enumerate(candidates) if r["token"] in old_anomaly}
+    objects_report = []
+    for number, rows in observations.items():
+        keep, _ = select_observations([r["descriptor"] for r in rows],
+                                     [i for i,r in enumerate(rows) if r["token"] in old_anomaly])
+        chosen.update(rows[i]["index"] for i in keep)
+        objects_report.append(dict(object_id=number, geometry=rows[0]["geometry"], candidates=len(rows),
+                                   observations=rows))
+    selected_tokens = {candidates[i]["token"] for i in chosen}
+    for row in objects_report:
+        row["retained"] = sum(r["token"] in selected_tokens for r in row["observations"])
+    destination.mkdir(parents=True, exist_ok=True)
+    extra_anomaly = []
+    for i in sorted(chosen):
+        record = candidates[i]
+        if record["token"] not in old_anomaly:
+            np.savez_compressed(record["delta"], **payloads[record["token"]])
+            extra_anomaly.append(record)
+    result = dict(scene=records[0]["scene"], log_token=records[0]["log_token"], seed=seed, specification=specification,
+        objects=proposals, records=extra_normal+extra_anomaly, tolerances=DIVERSITY,
+        candidate_keyframes=len(records), eligible_anomaly_frames=len(candidates),
+        retained_anomaly_frames=len(chosen), retained_normal_frames=len(keep_normal),
+        normal_semantic_counts=np.sum(np.asarray(histograms)[keep_normal], axis=0).tolist(),
+        observation_selection=objects_report, skipped=skipped, rays=ray_checks, sampling=sampling,
+        collision_scope="all newly used original scans; unseen geometry remains unknown",
+        sampling_definition="Potential surface rays precede external occlusion; foreground rays precede response. Counts cover all ranges, not visible surface area.")
+    write_json(metadata_path, result)
+    return result
+
+
+def expand_native(output, reference_path, workers, limit=None):
+    import json
+    import multiprocessing as mp
+    from concurrent.futures import ProcessPoolExecutor
+    from pathlib import Path
+    from collections import Counter
+    global _native_mapping, _native_response, _native_trace, _expanded_shapes, _expanded_key
+    output, reference_path = Path(output), Path(reference_path)
+    reference = load_manifest(reference_path, "train")
+    output.mkdir(parents=True, exist_ok=True)
+    stu = expand_stu(reference, output, workers)
+    pose_path = output/"poses.json"
+    if not pose_path.exists():
+        write_json(pose_path, dict(reference=reference["sha256"], records=native_keyframes(reference)))
+    poses = json.loads(pose_path.read_text())
+    if poses["reference"] != reference["sha256"]:
+        raise ValueError("expanded trajectories belong to another base dataset")
+    _native_mapping = reference["mapping"]
+    response = json.loads((reference_path.parent/"response.json").read_text())
+    _native_response = Response(response["range_edges"], response["incidence_edges"], response["quantiles"],
+        response["probability"], response["intensity"], (0.,1.), 1/255, "unchanged native training response")
+    previous_geometry = json.loads((reference_path.parent/"geometry.json").read_text())
+    _native_trace = Trace(**previous_geometry["trace"])
+    _expanded_shapes = {r["id"]: Grounding(Shape(**r["shape"]), r["lower_z"], r["refined_lower_z"],
+        r["buried_fraction"], np.empty((0,3)), True) for r in previous_geometry["records"]}
+    _expanded_key = identity(dict(reference=reference["sha256"], response=response, trace=asdict(_native_trace),
+        geometry=previous_geometry, tolerances=DIVERSITY,
+        construction="fixed existing worlds, all labeled keyframes, unchanged geometry and response"))
+    scenes, baseline = {}, {}
+    for r in poses["records"]:
+        scenes.setdefault(r["scene"], []).append(r)
+    for r in reference["records"]:
+        if r.get("source") == "nuscenes":
+            baseline.setdefault(r["scene"], []).append(r)
+    ordered = sorted(scenes)
+    if limit is not None:
+        ordered = ordered[:limit]
+    tasks = [(sorted(scenes[s], key=lambda r:r["timestamp"]), baseline[s], str(output/s))
+             for s in ordered]
+    completed = []
+    with ProcessPoolExecutor(max_workers=workers, mp_context=mp.get_context("fork")) as pool:
+        for row in pool.map(_expand_native_scene, tasks):
+            completed.append(row)
+            if len(completed) % 50 == 0 or len(completed) == len(tasks):
+                print(json.dumps(dict(scenes=len(completed), additions=sum(len(r["records"]) for r in completed))), flush=True)
+    if limit is not None:
+        return
+    old_stu = {(r["world"],r["frame"]) for r in reference["records"] if r["group"] == "anomaly_stu"}
+    records = reference["records"]+[r for r in stu["records"] if (r["world"],r["frame"]) not in old_stu]
+    records += [r for row in completed for r in row["records"]]
+    if any(1 <= r["anomaly"] <= 4 or r["normal"]+r["anomaly"] == 0 for r in records):
+        raise ValueError("ineligible expanded training scan")
+    result = dict(reference, records=records, selection=stu["worlds"],
+        representative_rule="preserve all base records; retain measured changes without frame quotas",
+        dataset_revision="expanded_observations", expansion=dict(reference=str(reference_path), reference_identity=reference["sha256"],
+        tolerances=DIVERSITY, method="retain baseline; add measured changes without per-world or per-scene frame caps",
+        stu_selection=str((output/"stu.json").resolve()), geometry=str((reference_path.parent/"geometry.json").resolve()),
+        trajectories=str(pose_path.resolve()), new_geometry=0,
+        independent_train_logs=len({r["log_token"] for r in records if r.get("source") == "nuscenes"}),
+        groups=dict(Counter(r["group"] for r in records)), base_records=len(reference["records"]),
+        train_records=len(records), complete_pass_visits=len(records), two_pass_updates=math.ceil(2*len(records)/8)))
+    result["base_native_manifest"] = result.pop("native_manifest")
+    result.pop("sha256")
+    result["sha256"] = identity(result)
+    write_json(output/"train.json", result, indent=None)
+    print(json.dumps(result["expansion"]), flush=True)
+
+
+def generate_native(output, *, pool_root, workers=8, limit=None, extend_from=None):
+    if extend_from is not None:
+        return expand_native(output, extend_from, workers, limit)
     import json
     import multiprocessing as mp
     from concurrent.futures import ProcessPoolExecutor
@@ -799,10 +1000,11 @@ if __name__ == "__main__":
     parser.add_argument("--workers", type=int, default=8)
     parser.add_argument("--native", action="store_true")
     parser.add_argument("--limit", type=int)
+    parser.add_argument("--extend-from", type=Path)
     args = parser.parse_args()
     if not 1 <= args.workers <= len(os.sched_getaffinity(0)):
         parser.error("workers must fit the current CPU affinity")
     if args.native:
-        generate_native(args.output, pool_root=args.pool_root, workers=args.workers, limit=args.limit)
+        generate_native(args.output, pool_root=args.pool_root, workers=args.workers, limit=args.limit, extend_from=args.extend_from)
     else:
         generate_candidates(args.output, data_root=args.data_root, pool_root=args.pool_root, workers=args.workers)

@@ -24,8 +24,8 @@ import numpy as np
 from scipy.spatial import cKDTree
 from scipy.stats import spearmanr
 
-from .data import (LABELS, RAYS_PATH, Frame, STUSequence, file_sha256,
-                   identity, point_targets, read_delta, read_rays, write_json)
+from .data import (LABELS, RAYS_PATH, Frame, STUSequence, Scans, file_sha256,
+                   identity, load_manifest, point_targets, read_delta, read_rays, write_json)
 
 QUANTILES = (0, .05, .25, .5, .75, .95, .99, 1)
 Q_NAMES = ("min", "p05", "p25", "median", "p75", "p95", "p99", "max")
@@ -594,9 +594,11 @@ def native_relations_scene(records):
     """Count actual supervised views per placed object, including 1--4 point views."""
     anomalous = [r for r in records if r["anomaly"]]
     paths = {r["world"] for r in anomalous}
-    if len(paths) != 1:
+    worlds = [json.loads(Path(p).read_text()) for p in sorted(paths)]
+    saved = worlds[0]
+    # Retained and added scans can reference separate files for the same world.
+    if any((w["seed"], w["objects"]) != (saved["seed"], saved["objects"]) for w in worlds[1:]):
         raise ValueError("one native scene must identify one fixed synthetic world")
-    saved = json.loads(Path(next(iter(paths))).read_text())
     objects = {o["object_id"]: o for o in saved["objects"] if o.get("accepted", True)}
     observations = defaultdict(list)
     for record in anomalous:
@@ -643,12 +645,33 @@ def stu_supervised_range(record):
     return float(np.median(frame.range_m[mask]))
 
 
+def init_scan_census(manifest):
+    global _census_scans
+    _census_scans = Scans(manifest)
+
+
+def supervised_scan_counts(index):
+    # The actual training reader checks full-scan identity and all target counts.
+    item = _census_scans[index]
+    targets, xyz = item["targets"], item["xyzi"]
+    valid, anomaly = targets >= 0, targets == 1
+    record = _census_scans.records[index]
+    return dict(index=index, group=record["group"], frame=record["frame"],
+        scene=record.get("scene", "206"), world=record.get("world", ""), token=record.get("token", ""),
+        base=index < _census_scans.manifest.get("expansion", {}).get("base_records", len(_census_scans)),
+        points=len(targets), normal=int((targets == 0).sum()), anomaly=int(anomaly.sum()),
+        valid=int(valid.sum()), range_median=float(np.median(np.linalg.norm(xyz[valid, :3], axis=1))),
+        intensity_median=float(np.median(xyz[valid, 3])),
+        anomaly_range_median=float(np.median(np.linalg.norm(xyz[anomaly, :3], axis=1))) if anomaly.any() else None,
+        anomaly_intensity_median=float(np.median(xyz[anomaly, 3])) if anomaly.any() else None)
+
+
 def sampling_relations(args):
     """Inspect existing observations only; no new selection, rendering or model calls."""
     started = time.monotonic()
     base_path = Path(__file__).resolve().parent.parent / "assets/train.json"
     base = json.loads(base_path.read_text())
-    train = json.loads(args.coverage.read_text())
+    train = load_manifest(args.coverage, "train")
     if train["base_manifest"] != base["sha256"]:
         raise ValueError("coverage requires the native manifest's original STU pool")
     sequence = STUSequence(base["data_root"])
@@ -760,6 +783,16 @@ def sampling_relations(args):
     normal_hist = np.asarray(histograms["stu_normal_instances"])
     selected_hist = np.asarray(histograms["stu_anomaly_selected"])
     same_geom_scenes = [g["observed_scenes"] for g in geometries if g["observed_scenes"]]
+    census = defaultdict(lambda: dict(scans=0, points=0, normal=0, anomaly=0))
+    scans = []
+    with ProcessPoolExecutor(max_workers=args.workers, initializer=init_scan_census,
+                             initargs=(train,)) as pool:
+        for row in pool.map(
+                supervised_scan_counts, range(len(train["records"])), chunksize=64):
+            scans.append(row)
+            census[row["group"]]["scans"] += 1
+            for key in ("points", "normal", "anomaly"):
+                census[row["group"]][key] += row[key]
     report = dict(scope="Existing training-source observations only; no rendering, learning or validation scores.",
         inputs=dict(base_manifest=str(base_path), base_identity=base["sha256"],
                     train_manifest=str(args.coverage), train_identity=train["sha256"], normal_structures=str(normal_path)),
@@ -791,21 +824,126 @@ def sampling_relations(args):
             logs_per_observed_geometry=quantiles([g["observed_logs"] for g in geometries if g["observed_logs"]]),
             view_angle_span_multiview_deg=quantiles([r["view_angle_span_deg"] for r in objects if r["views"] >= 2])),
         cross_domain_observed_geometries=sum(g["stu_worlds"] > 0 and g["observed_scenes"] > 0 for g in geometries),
+        full_scan_census=dict(census),
         overlap=dict(range_edges_m=range_edges, count_edges=[1, 5, 10, 20, 50, 100, 500, "inf"],
             observation_counts=histograms, occupied_selected_anomaly_cells=int((selected_hist > 0).sum()),
             occupied_normal_cells=int((normal_hist > 0).sum()),
             shared_cells=int(((selected_hist > 0) & (normal_hist > 0)).sum())),
         unknowns=["Object self-occlusion fractions and per-return incidence are not logged for the complete pool.",
                   "Normal object geometry/pose and material response are not matched to synthetic objects.",
-                  "Other nuScenes keyframes have raw scans but no corresponding synthetic anomaly observations in this pool.",
+                  "Only retained trajectory observations are training records; visibility and physics can exclude other keyframes.",
                   "Condition overlap does not establish local ambiguity, use of context or unseen-source generalization."],
         workers=args.workers, seconds=time.monotonic()-started)
     args.output.mkdir(parents=True, exist_ok=True)
     write_csv(args.output / "stu_worlds.csv", worlds)
     write_csv(args.output / "nuscenes_objects.csv", objects)
     write_csv(args.output / "geometries.csv", geometries)
+    write_csv(args.output / "scans.csv", scans)
     write_json(args.output / "summary.json", report)
     print(json.dumps(report, ensure_ascii=False, allow_nan=False), flush=True)
+
+
+def anomaly_views(directory):
+    """Three projections and one oblique view; one point per anomalous scan."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.font_manager import FontProperties, findfont, fontManager
+    from matplotlib.ft2font import FT2Font
+    from matplotlib.text import Text
+    from matplotlib.backends.backend_pdf import PdfPages
+    directory = Path(directory)
+    with (directory/"scans.csv").open(encoding="utf-8-sig", newline="") as stream:
+        rows = [r for r in csv.DictReader(stream) if int(r["anomaly"]) > 0]
+    summary = json.loads((directory/"summary.json").read_text())
+    expected = sum(r["scans"] for g,r in summary["full_scan_census"].items() if g.startswith("anomaly_"))
+    if len(rows) != expected or len({r["index"] for r in rows}) != len(rows):
+        raise ValueError("every anomalous scan must appear exactly once in each view")
+    fonts = {"zh": "/mnt/c/Windows/Fonts/simsun.ttc", "en": "/mnt/c/Windows/Fonts/times.ttf"}
+    for language, path in fonts.items():
+        face = FT2Font(path)
+        if face.family_name != ("SimSun" if language == "zh" else "Times New Roman"):
+            raise ValueError("required original figure font is unavailable")
+        fontManager.addfont(path)
+    chinese = FontProperties(fname=fonts["zh"], size=13)
+    plt.rcParams.update({"font.family":"Times New Roman", "font.size":12,
+                         "axes.unicode_minus":False, "pdf.fonttype":42, "ps.fonttype":42})
+    values = np.array([[float(r["anomaly_range_median"]), int(r["anomaly"]),
+                       float(r["anomaly_intensity_median"])] for r in rows])
+    if not np.isfinite(values).all() or (values[:,1] < 5).any():
+        raise ValueError("invalid anomaly-only scan statistics")
+    plots = [(0,1,"距离与回波数","xy"),(0,2,"距离与强度","xz"),
+             (1,2,"回波数与强度","yz"),(None,None,"异常观测三维斜视图","3d")]
+    labels = ["距离中位数（米）", "异常回波数（个，对数刻度）", "强度中位数"]
+    count_ticks = [5,10,30,100,300,1000,3000]
+    count_limit = np.ceil(values[:,1].max()/500)*500
+    intensity_limit = np.ceil(values[:,2].max()*10)/10
+    files = []
+    with PdfPages(directory/"views.pdf") as pdf:
+        for x,y,title,name in plots:
+            three = name == "3d"
+            fig = plt.figure(figsize=(12,10))
+            ax = fig.add_subplot(projection="3d" if three else None)
+            fig.subplots_adjust(left=.12,right=.97,bottom=.18,top=.83)
+            for group,color,marker,label in (("anomaly_nuscenes","#2864a0","o","nuScenes"),
+                                             ("anomaly_stu","#bb6526","^","STU")):
+                mask = np.array([r["group"] == group for r in rows])
+                coordinates = (values[mask,0],np.log10(values[mask,1]),values[mask,2]) if three else (values[mask,x],values[mask,y])
+                options = dict(depthshade=False) if three else {}
+                ax.scatter(*coordinates,s=.55,alpha=.4,c=color,marker=marker,linewidths=0,
+                           rasterized=True,label=f"{label}  ({mask.sum():,})",**options)
+            if three:
+                ax.set_box_aspect((1,1,1))
+                ax.set_proj_type("ortho")
+                ax.view_init(elev=24,azim=-55)
+                ax.set_xlim(0,50);ax.set_ylim(np.log10(4.5),np.log10(count_limit));ax.set_zlim(0,intensity_limit)
+                ax.set_yticks(np.log10(count_ticks),[f"{n:,}" for n in count_ticks])
+                ax.set_zticks([0,.4,.8,1.2,1.6])
+                for dimension,label in zip("xyz",labels):
+                    getattr(ax,"set_"+dimension+"label")(label,fontproperties=chinese,labelpad=13)
+                    getattr(ax,dimension+"axis").set_pane_color((.99,.995,1.,1.))
+                ax.grid(color="#e2e6ea",linewidth=.6)
+            else:
+                ax.set_xlabel(labels[x],fontproperties=chinese,labelpad=12)
+                ax.set_ylabel(labels[y],fontproperties=chinese,labelpad=12)
+                for dimension,index in (("x",x),("y",y)):
+                    axis = getattr(ax,dimension+"axis")
+                    if index == 1:
+                        getattr(ax,"set_"+dimension+"scale")("log")
+                        getattr(ax,"set_"+dimension+"lim")(4.5,count_limit)
+                        getattr(ax,"set_"+dimension+"ticks")(count_ticks,[f"{n:,}" for n in count_ticks])
+                        axis.set_minor_locator(matplotlib.ticker.NullLocator())
+                    elif index == 0:
+                        getattr(ax,"set_"+dimension+"lim")(0,50)
+                    else:
+                        getattr(ax,"set_"+dimension+"lim")(0,intensity_limit)
+                        getattr(ax,"set_"+dimension+"ticks")([0,.4,.8,1.2,1.6])
+                ax.grid(color="#e2e6ea",linewidth=.6);ax.set_axisbelow(True)
+                ax.spines[["top","right"]].set_visible(False)
+                ax.spines[["left","bottom"]].set_color("#66717d")
+                ax.tick_params(colors="#333d48")
+            fig.suptitle(title,fontproperties=FontProperties(fname=fonts["zh"],size=22),y=.96)
+            handles,names = ax.get_legend_handles_labels()
+            legend=fig.legend(handles,names,loc="upper center",bbox_to_anchor=(.54,.905),ncol=2,frameon=False,markerscale=8)
+            for handle in legend.legend_handles:
+                handle.set_alpha(1.)
+            fig.text(.12,.083,"每点对应一帧，仅统计异常点；全部异常帧均保留，无抽帧或坐标扰动。",fontproperties=chinese)
+            fig.text(.12,.048,"点数使用对数刻度；距离和强度为中位数。两域强度并非统一标定的物理反射率。",fontproperties=chinese,color="#505965")
+            # Verify actual typefaces and glyphs before raster and PDF export.
+            fig.canvas.draw()
+            for item in fig.findobj(Text):
+                if not item.get_text():
+                    continue
+                face=FT2Font(findfont(item.get_fontproperties(),fallback_to_default=False))
+                if face.family_name not in ("SimSun","Times New Roman"):
+                    raise ValueError("unexpected figure font fallback")
+                if any(ord(c) not in face.get_charmap() for c in item.get_text() if not c.isspace()):
+                    raise ValueError("figure text contains missing glyphs")
+            path=directory/f"views_{name}.png"
+            fig.savefig(path,dpi=240,facecolor="white")
+            pdf.savefig(fig,facecolor="white",dpi=240)
+            files.append(str(path));plt.close(fig)
+    print(json.dumps(dict(figures=files,anomalous_scans=len(rows),point_area=0.55,image_pixels=[2880,2400])))
 
 
 def main():
@@ -813,12 +951,18 @@ def main():
     parser.add_argument("--data-root",type=Path,default=Path("/home/jasongao/Data/STU"))
     parser.add_argument("--rays",type=Path,default=RAYS_PATH)
     parser.add_argument("--output",type=Path,default=Path("results/206"))
-    parser.add_argument("--workers",type=int,required=True)
+    parser.add_argument("--workers",type=int,default=8)
     parser.add_argument("--report-only",action="store_true")
     parser.add_argument("--coverage",type=Path,help="Inspect sampling relations in this native training manifest")
+    parser.add_argument("--views",type=Path,help="Draw four static anomaly-frame views from this coverage directory")
     args=parser.parse_args()
     if args.workers < 1:
         parser.error("workers must be positive")
+    if args.views:
+        if args.coverage or args.report_only:
+            parser.error("--views reads completed scan statistics")
+        anomaly_views(args.views)
+        return
     if args.coverage:
         if args.report_only or args.output == Path("results/206"):
             parser.error("--coverage needs a separate --output and cannot be combined with --report-only")

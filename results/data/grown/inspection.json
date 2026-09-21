@@ -1,0 +1,173 @@
+{
+  "train_manifest": "results/data/grown/train.json",
+  "train_identity": "4062dceaa4a1901e4afec58b154a5e4bd29bbcc0562b4e725367fd6b0c33994b",
+  "selection": "Six evenly spaced scenes with added anomaly scans; smallest and largest anomaly count in each, without model scores.",
+  "trace": {
+    "steps": 96,
+    "adaptive_depth": 8,
+    "bisections": 24,
+    "near_m": 1e-05,
+    "proximity_factor": 4.0,
+    "gradient_step_m": 1e-05,
+    "gradient_relative": 1e-05,
+    "gradient_min": 1e-09
+  },
+  "refined_trace": {
+    "steps": 192,
+    "adaptive_depth": 10,
+    "bisections": 24,
+    "near_m": 1e-05,
+    "proximity_factor": 4.0,
+    "gradient_step_m": 1e-05,
+    "gradient_relative": 1e-05,
+    "gradient_min": 1e-09
+  },
+  "scans": [
+    {
+      "scene": "scene-0001",
+      "token": "cfb01344b1e84b6b9422c27cc912d1d3",
+      "frame": 34,
+      "anomaly": 7,
+      "unchanged_slots": 34745,
+      "same_trace_max_error": 0.0,
+      "refined_max_error": 0.0,
+      "labels_equal": true,
+      "object_ownership_equal": true,
+      "background_equal": true
+    },
+    {
+      "scene": "scene-0001",
+      "token": "cad306a971704749aae7674f5cd4f2f4",
+      "frame": 19,
+      "anomaly": 324,
+      "unchanged_slots": 34395,
+      "same_trace_max_error": 0.0,
+      "refined_max_error": 0.0,
+      "labels_equal": true,
+      "object_ownership_equal": true,
+      "background_equal": true
+    },
+    {
+      "scene": "scene-0207",
+      "token": "b2729adda34b44debe45b9d2db237721",
+      "frame": 4803,
+      "anomaly": 11,
+      "unchanged_slots": 34675,
+      "same_trace_max_error": 0.0,
+      "refined_max_error": 0.0,
+      "labels_equal": true,
+      "object_ownership_equal": true,
+      "background_equal": true
+    },
+    {
+      "scene": "scene-0207",
+      "token": "247aa72f626e43138295bc9b724c1e50",
+      "frame": 4831,
+      "anomaly": 321,
+      "unchanged_slots": 34425,
+      "same_trace_max_error": 0.0,
+      "refined_max_error": 0.0,
+      "labels_equal": true,
+      "object_ownership_equal": true,
+      "background_equal": true
+    },
+    {
+      "scene": "scene-0385",
+      "token": "b60c5b615e1a4969a9bc72147892c57c",
+      "frame": 9704,
+      "anomaly": 7,
+      "unchanged_slots": 34745,
+      "same_trace_max_error": 0.0,
+      "refined_max_error": 0.0,
+      "labels_equal": true,
+      "object_ownership_equal": true,
+      "background_equal": true
+    },
+    {
+      "scene": "scene-0385",
+      "token": "d5bf031ef12f4d8ba1f7a693cd5ba0fd",
+      "frame": 9721,
+      "anomaly": 150,
+      "unchanged_slots": 34535,
+      "same_trace_max_error": 0.0,
+      "refined_max_error": 2.9103830456733704e-11,
+      "labels_equal": true,
+      "object_ownership_equal": true,
+      "background_equal": true
+    },
+    {
+      "scene": "scene-0542",
+      "token": "eeaf20e5588a4a29b7709e4f6968d333",
+      "frame": 14675,
+      "anomaly": 96,
+      "unchanged_slots": 34590,
+      "same_trace_max_error": 0.0,
+      "refined_max_error": 0.0,
+      "labels_equal": true,
+      "object_ownership_equal": true,
+      "background_equal": true
+    },
+    {
+      "scene": "scene-0542",
+      "token": "81e2b201dbce4f51a0600e631e754129",
+      "frame": 14702,
+      "anomaly": 282,
+      "unchanged_slots": 34434,
+      "same_trace_max_error": 0.0,
+      "refined_max_error": 0.0,
+      "labels_equal": true,
+      "object_ownership_equal": true,
+      "background_equal": true
+    },
+    {
+      "scene": "scene-0752",
+      "token": "4eea84fd395548398b6d944734805df0",
+      "frame": 19880,
+      "anomaly": 11,
+      "unchanged_slots": 34741,
+      "same_trace_max_error": 0.0,
+      "refined_max_error": 0.0,
+      "labels_equal": true,
+      "object_ownership_equal": true,
+      "background_equal": true
+    },
+    {
+      "scene": "scene-0752",
+      "token": "81ef8732414c4a12a71aca1f4bbd73a8",
+      "frame": 19862,
+      "anomaly": 280,
+      "unchanged_slots": 34406,
+      "same_trace_max_error": 0.0,
+      "refined_max_error": 1.1920928955078125e-07,
+      "labels_equal": true,
+      "object_ownership_equal": true,
+      "background_equal": true
+    },
+    {
+      "scene": "scene-1110",
+      "token": "df2a1cae0e4443308e802755f914c259",
+      "frame": 25211,
+      "anomaly": 5,
+      "unchanged_slots": 34683,
+      "same_trace_max_error": 0.0,
+      "refined_max_error": 0.0,
+      "labels_equal": true,
+      "object_ownership_equal": true,
+      "background_equal": true
+    },
+    {
+      "scene": "scene-1110",
+      "token": "1cbbd114711f4c1dbbcbc1e57cc5e74e",
+      "frame": 25199,
+      "anomaly": 452,
+      "unchanged_slots": 34257,
+      "same_trace_max_error": 0.0,
+      "refined_max_error": 0.0,
+      "labels_equal": true,
+      "object_ownership_equal": true,
+      "background_equal": true
+    }
+  ],
+  "seconds": 0.3574269380187616,
+  "scope": "Numerical intersection, ownership, labels and preservation of original background; not complete physical sensor validation."
+}
