@@ -1,4 +1,4 @@
-"""Describe every raw STU/206 scan for the V4 data design, without synthesizing data.
+"""Describe raw STU/206 scans and existing sampling relations without synthesis.
 
 The source/pose and instance-distance conventions follow AJAE-v3/observations.py.
 Counts use original return records; no model, crop, registration or point removal
@@ -11,7 +11,7 @@ import argparse
 import csv
 import json
 import os
-from collections import defaultdict
+from collections import Counter, defaultdict
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 import time
@@ -24,7 +24,8 @@ import numpy as np
 from scipy.spatial import cKDTree
 from scipy.stats import spearmanr
 
-from .data import LABELS, RAYS_PATH, STUSequence, point_targets, read_rays
+from .data import (LABELS, RAYS_PATH, Frame, STUSequence, file_sha256,
+                   identity, point_targets, read_delta, read_rays, write_json)
 
 QUANTILES = (0, .05, .25, .5, .75, .95, .99, 1)
 Q_NAMES = ("min", "p05", "p25", "median", "p75", "p95", "p99", "max")
@@ -577,6 +578,236 @@ def report(output):
     text("标签和评价依据：[STU 官方逐点评测代码](https://github.com/kumuji/stu_dataset/blob/main/compute_point_level_ood.py)与[官方语义标签配置](https://github.com/kumuji/stu_dataset/blob/main/Mask4Former3D/conf/semantic-kitti.yaml)。报告中的数字均来自本次 206 实际读取；没有模拟数字或预测成绩。")
     (output / "report.md").write_text("\n\n".join(document) + "\n", encoding="utf-8")
 
+def view_directions(origins, translation, rotation):
+    """Reference-pose object-to-sensor directions, not per-ray incidence angles."""
+    vectors = (np.asarray(origins) - translation) @ rotation
+    return vectors / np.linalg.norm(vectors, axis=1, keepdims=True)
+
+
+def angular_span(directions):
+    if len(directions) < 2:
+        return 0.0
+    return float(np.rad2deg(np.arccos(np.clip((directions @ directions.T).min(), -1, 1))))
+
+
+def native_relations_scene(records):
+    """Count actual supervised views per placed object, including 1--4 point views."""
+    anomalous = [r for r in records if r["anomaly"]]
+    paths = {r["world"] for r in anomalous}
+    if len(paths) != 1:
+        raise ValueError("one native scene must identify one fixed synthetic world")
+    saved = json.loads(Path(next(iter(paths))).read_text())
+    objects = {o["object_id"]: o for o in saved["objects"] if o.get("accepted", True)}
+    observations = defaultdict(list)
+    for record in anomalous:
+        with np.load(record["delta"], allow_pickle=False) as delta:
+            if str(delta["token"]) != record["token"]:
+                raise ValueError("native delta belongs to another scan")
+            frame = Frame(record["frame"], delta["xyzi"], np.asarray(record["pose"]), delta["labels"])
+            valid = point_targets(frame) == 1
+            ids = delta["object_ids"]
+            if int(valid.sum()) != record["anomaly"] or not set(ids[valid]).issubset(objects):
+                raise ValueError("native object views do not reproduce supervised anomaly counts")
+            for number in np.unique(ids[valid]):
+                mask = valid & (ids == number)
+                observations[int(number)].append(dict(token=record["token"], frame=record["frame"],
+                    count=int(mask.sum()), return_range_m=float(np.median(frame.range_m[mask])),
+                    origin=np.asarray(record["pose"])[:3, 3]))
+    rows = []
+    for number, obj in objects.items():
+        seen = observations[number]
+        pose = np.asarray(obj["pose"])
+        directions = view_directions([s["origin"] for s in seen], pose[:3, 3], pose[:3, :3]) if seen else []
+        ranges = [s["return_range_m"] for s in seen]
+        rows.append(dict(scene=saved["scene"], log_token=saved["log_token"], object_id=number,
+            geometry=obj["geometry"], anchor_index=obj["anchor_frame"], views=len(seen),
+            views_1_to_4_points=sum(s["count"] < 5 for s in seen),
+            points=sum(s["count"] for s in seen), view_angle_span_deg=angular_span(directions),
+            return_range_min_m=min(ranges) if ranges else None,
+            return_range_max_m=max(ranges) if ranges else None,
+            frames=";".join(str(s["frame"]) for s in seen),
+            counts=";".join(str(s["count"]) for s in seen),
+            return_ranges_m=";".join(str(s["return_range_m"]) for s in seen)))
+    return rows
+
+
+def stu_supervised_range(record):
+    delta = read_delta(record["delta"])
+    if (str(delta["world_identity"]) != record["world"] or
+            str(delta["source_identity"]) != record["source_identity"]):
+        raise ValueError("STU delta has a different object or original scan")
+    frame = Frame(record["frame"], delta["xyzi"], np.eye(4), delta["packed_labels"])
+    mask = point_targets(frame) == 1
+    if int(mask.sum()) != record["anomaly"]:
+        raise ValueError("STU effective anomaly counts changed")
+    return float(np.median(frame.range_m[mask]))
+
+
+def sampling_relations(args):
+    """Inspect existing observations only; no new selection, rendering or model calls."""
+    started = time.monotonic()
+    base_path = Path(__file__).resolve().parent.parent / "assets/train.json"
+    base = json.loads(base_path.read_text())
+    train = json.loads(args.coverage.read_text())
+    if train["base_manifest"] != base["sha256"]:
+        raise ValueError("coverage requires the native manifest's original STU pool")
+    sequence = STUSequence(base["data_root"])
+    for name, key in (("calib.txt", "calibration_sha256"), ("poses.txt", "poses_sha256")):
+        if file_sha256(sequence.directory / name) != base[key]:
+            raise ValueError("STU reference poses changed")
+    grouped, selected = defaultdict(list), defaultdict(set)
+    for record in base["records"]:
+        grouped[record["world"]].append(record)
+    for record in train["records"]:
+        if record["group"] == "anomaly_stu":
+            selected[record["world"]].add(record["frame"])
+    with ProcessPoolExecutor(max_workers=args.workers) as pool:
+        distances = dict(zip(((r["world"], r["frame"]) for r in base["records"]),
+                            pool.map(stu_supervised_range, base["records"], chunksize=64)))
+    worlds, all_stu, selected_stu = [], [], []
+    old_range_outside = 0
+    geometry = defaultdict(lambda: dict(stu_worlds=set(), scenes=set(), logs=set(), placements=0,
+                                       observed_scenes=set(), observed_logs=set(), observed_placements=0))
+    for entry in base["worlds"]:
+        directory = Path(base["pool_root"]) / entry["paths"][0]
+        saved = json.loads((directory / "manifest.json").read_text())
+        world = json.loads((directory / "world.json").read_text())["world"]
+        if len(world["objects"]) != 1:
+            raise ValueError("STU descriptor comparison requires one fixed object per world")
+        obj = world["objects"][0]
+        shape = identity(obj["shape"])
+        geometry[shape]["stu_worlds"].add(entry["id"])
+        descriptors = {r["frame"]: r for r in saved["frames"]}
+        records = sorted(grouped[entry["id"]], key=lambda r: r["frame"])
+        frames = [r["frame"] for r in records]
+        chosen = np.array([f in selected[entry["id"]] for f in frames])
+        if chosen.sum() != len(selected[entry["id"]]) or not chosen.any():
+            raise ValueError("selected STU observations absent from the source pool")
+        observed = [descriptors[f] for f in frames]
+        if any(r["anomaly"] != d["in_range"] for r, d in zip(records, observed)):
+            raise ValueError("saved STU descriptors and effective anomaly counts disagree")
+        ranges = [distances[entry["id"], f] for f in frames]
+        old_range_outside += sum(not 2.5 <= d["range"] <= 50 for d in observed)
+        directions = view_directions(sequence.poses[frames, :3, 3],
+            np.asarray(obj["translation_world_m"]), np.asarray(obj["rotation_world_from_local"]))
+        nearest_angle = np.rad2deg(np.arccos(np.clip((directions @ directions[chosen].T).max(1), -1, 1)))
+        row = dict(world=entry["id"], path=entry["paths"][0], geometry=shape,
+            eligible_views=len(frames), selected_frames=";".join(str(f) for f, yes in zip(frames, chosen) if yes),
+            view_angle_span_all_deg=angular_span(directions),
+            view_angle_span_selected_deg=angular_span(directions[chosen]),
+            nearest_selected_view_angle_max_deg=float(nearest_angle.max()))
+        # These are observed outcomes. In particular, occluded counts background
+        # returns removed by insertion, not the object's own visible surface fraction.
+        for name, values in (("return_range_m", ranges),
+                             ("points", [r["anomaly"] for r in records]),
+                             ("removed_background_returns", [d["occluded"] for d in observed]),
+                             ("intensity_contrast", [d["intensity_contrast"] for d in observed])):
+            values = np.asarray(values, dtype=float)
+            finite = values[np.isfinite(values)]
+            kept = values[chosen & np.isfinite(values)]
+            for prefix, items in (("all", finite), ("selected", kept)):
+                row[f"{name}_{prefix}_min"] = float(items.min()) if len(items) else None
+                row[f"{name}_{prefix}_max"] = float(items.max()) if len(items) else None
+            row[f"{name}_missing"] = int((~np.isfinite(values)).sum())
+            if len(kept) and len(finite):
+                span = float(np.ptp(finite))
+                row[f"{name}_span_fraction"] = float(np.ptp(kept) / span) if span else None
+                row[f"{name}_outside_selected_interval"] = int(((finite < kept.min()) | (finite > kept.max())).sum())
+        all_stu.extend((d, r["anomaly"]) for r, d in zip(records, ranges))
+        selected_stu.extend((d, r["anomaly"]) for r, d, yes in zip(records, ranges, chosen) if yes)
+        worlds.append(row)
+    native = defaultdict(list)
+    for record in train["records"]:
+        if record.get("source") == "nuscenes":
+            native[record["scene"]].append(record)
+    with ProcessPoolExecutor(max_workers=args.workers) as pool:
+        objects = [row for scene in pool.map(native_relations_scene, native.values()) for row in scene]
+    for row in objects:
+        group = geometry[row["geometry"]]
+        group["scenes"].add(row["scene"])
+        group["logs"].add(row["log_token"])
+        group["placements"] += 1
+        if row["views"]:
+            group["observed_scenes"].add(row["scene"])
+            group["observed_logs"].add(row["log_token"])
+            group["observed_placements"] += 1
+    geometries = [dict(geometry=key, **{k: len(v) if isinstance(v, set) else v for k, v in value.items()})
+                  for key, value in sorted(geometry.items())]
+    normal_path = Path("results/206/observations.csv")
+    with normal_path.open(encoding="utf-8-sig", newline="") as stream:
+        normal = [r for r in csv.DictReader(stream)
+                  if int(r["semantic"]) not in (0, 2) and int(r["returns_2p5_50m"]) > 0]
+    normal_summary = json.loads(normal_path.with_name("summary.json").read_text())
+    normal_records = [r for r in train["records"] if r.get("source") == "normal_stu"]
+    if (Path(normal_summary["source"]) != sequence.directory or
+            {r["frame"] for r in normal_records} != set(range(len(sequence))) or
+            sum(r["normal"] for r in normal_records) != normal_summary["totals"]["valid_normal"]):
+        raise ValueError("normal structure table must describe the same retained STU scans")
+    # Descriptive bins only: marginal overlap is not geometric similarity or a
+    # test of contextual reasoning. Normal instance rows omit uninstanced roads.
+    range_edges, count_edges = [2.5, 10, 20, 35, 50.00001], [1, 5, 10, 20, 50, 100, 500, float("inf")]
+    populations = dict(stu_normal_instances=[(float(r["range_valid_m_median"]), int(r["returns_2p5_50m"])) for r in normal],
+                       stu_anomaly_all=all_stu, stu_anomaly_selected=selected_stu,
+                       nuscenes_anomaly_objects=[(float(d), int(n)) for o in objects
+                           for d, n in zip(o["return_ranges_m"].split(";"), o["counts"].split(";")) if n])
+    histograms = {}
+    for name, values in populations.items():
+        data = np.asarray(values)
+        histogram = np.histogram2d(data[:, 0], data[:, 1], bins=(range_edges, count_edges))[0].astype(int)
+        if int(histogram.sum()) != len(values):
+            raise ValueError(f"descriptive bins lost observations: {name}")
+        histograms[name] = histogram.tolist()
+    normal_hist = np.asarray(histograms["stu_normal_instances"])
+    selected_hist = np.asarray(histograms["stu_anomaly_selected"])
+    same_geom_scenes = [g["observed_scenes"] for g in geometries if g["observed_scenes"]]
+    report = dict(scope="Existing training-source observations only; no rendering, learning or validation scores.",
+        inputs=dict(base_manifest=str(base_path), base_identity=base["sha256"],
+                    train_manifest=str(args.coverage), train_identity=train["sha256"], normal_structures=str(normal_path)),
+        definitions=dict(view_angle="Maximum angle between object-to-sensor reference-pose unit vectors; not incidence.",
+            span_fraction="Selected min-max span divided by all eligible min-max span, equal weight per world; not coverage probability.",
+            missing_views="A zero-view placed object has no supervised anomaly return in retained scans, not necessarily zero physical visibility.",
+            geometry="Exact original procedural shape parameters; no equivalence under symmetry or shape-family identity is claimed.",
+            normal_overlap="Object-instance count/range bins describe a subset of normal points, not matched local geometry or context.",
+            return_range="Median of actual anomaly returns passing the unchanged point_targets rule, recomputed from every existing delta.",
+            background_occlusion="Removed original background returns, not object visible fraction."),
+        stu=dict(worlds=len(worlds), exact_geometries=sum(g["stu_worlds"] > 0 for g in geometries),
+            eligible_views=len(all_stu), selected_views=len(selected_stu), unselected_views=len(all_stu)-len(selected_stu),
+            legacy_descriptor_ranges_outside_supervision=old_range_outside,
+            normal_scans=len(normal_records), normal_instance_views=len(normal),
+            normal_instance_points=sum(int(r["returns_2p5_50m"]) for r in normal),
+            normal_points=sum(r["normal"] for r in normal_records),
+            return_range_span_fraction=quantiles([r["return_range_m_span_fraction"] for r in worlds if r["return_range_m_span_fraction"] is not None]),
+            view_angle_span_all_deg=quantiles([r["view_angle_span_all_deg"] for r in worlds]),
+            view_angle_span_selected_deg=quantiles([r["view_angle_span_selected_deg"] for r in worlds]),
+            nearest_selected_view_angle_max_deg=quantiles([r["nearest_selected_view_angle_max_deg"] for r in worlds]),
+            views_outside_selected_range_interval=sum(r["return_range_m_outside_selected_interval"] for r in worlds)),
+        nuscenes=dict(scenes=len(native), logs=len({r["log_token"] for rs in native.values() for r in rs}),
+            anomaly_scans=sum(bool(r["anomaly"]) for rs in native.values() for r in rs),
+            normal_scans=sum(not r["anomaly"] for rs in native.values() for r in rs),
+            placed_objects=len(objects), object_views=sum(r["views"] for r in objects),
+            views_1_to_4_points=sum(r["views_1_to_4_points"] for r in objects),
+            supervised_points=sum(r["points"] for r in objects), objects_by_view_count=dict(sorted(Counter(r["views"] for r in objects).items())),
+            observed_geometries=len(same_geom_scenes), scenes_per_observed_geometry=quantiles(same_geom_scenes),
+            logs_per_observed_geometry=quantiles([g["observed_logs"] for g in geometries if g["observed_logs"]]),
+            view_angle_span_multiview_deg=quantiles([r["view_angle_span_deg"] for r in objects if r["views"] >= 2])),
+        cross_domain_observed_geometries=sum(g["stu_worlds"] > 0 and g["observed_scenes"] > 0 for g in geometries),
+        overlap=dict(range_edges_m=range_edges, count_edges=[1, 5, 10, 20, 50, 100, 500, "inf"],
+            observation_counts=histograms, occupied_selected_anomaly_cells=int((selected_hist > 0).sum()),
+            occupied_normal_cells=int((normal_hist > 0).sum()),
+            shared_cells=int(((selected_hist > 0) & (normal_hist > 0)).sum())),
+        unknowns=["Object self-occlusion fractions and per-return incidence are not logged for the complete pool.",
+                  "Normal object geometry/pose and material response are not matched to synthetic objects.",
+                  "Other nuScenes keyframes have raw scans but no corresponding synthetic anomaly observations in this pool.",
+                  "Condition overlap does not establish local ambiguity, use of context or unseen-source generalization."],
+        workers=args.workers, seconds=time.monotonic()-started)
+    args.output.mkdir(parents=True, exist_ok=True)
+    write_csv(args.output / "stu_worlds.csv", worlds)
+    write_csv(args.output / "nuscenes_objects.csv", objects)
+    write_csv(args.output / "geometries.csv", geometries)
+    write_json(args.output / "summary.json", report)
+    print(json.dumps(report, ensure_ascii=False, allow_nan=False), flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data-root",type=Path,default=Path("/home/jasongao/Data/STU"))
@@ -584,9 +815,15 @@ def main():
     parser.add_argument("--output",type=Path,default=Path("results/206"))
     parser.add_argument("--workers",type=int,required=True)
     parser.add_argument("--report-only",action="store_true")
+    parser.add_argument("--coverage",type=Path,help="Inspect sampling relations in this native training manifest")
     args=parser.parse_args()
     if args.workers < 1:
         parser.error("workers must be positive")
+    if args.coverage:
+        if args.report_only or args.output == Path("results/206"):
+            parser.error("--coverage needs a separate --output and cannot be combined with --report-only")
+        sampling_relations(args)
+        return
     if not args.report_only:
         analyze(args)
     report(args.output)
