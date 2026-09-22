@@ -2,6 +2,7 @@
 
 from copy import deepcopy
 import math
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -9,7 +10,7 @@ import torch
 
 from src.normal import (NORMAL_MODES, NormalDistribution, angular_observation, component_log_prob,
                         joint_nll, point_evidence, quantiles, ray_planes)
-from src.model import Segmentor, to_device
+from src.model import Segmentor, prepare_scan, to_device
 from src.train import seed_all
 
 
@@ -137,6 +138,60 @@ def test_new_branches_preserve_every_n1_parameter_and_rng(mode):
     for key, value in original.state_dict().items():
         assert torch.equal(value, candidate.state_dict()[key]), key
     assert torch.count_nonzero(candidate.normal_evidence.weight) == 0
+
+
+@pytest.mark.parametrize("mode", NORMAL_MODES)
+def test_single_scan_inference_builds_observation_and_preserves_raw_slots(mode, monkeypatch):
+    import src.evaluate as evaluation
+    xyzi, _ = angular_scan()
+    slots = np.arange(len(xyzi)) * 2
+    raw = np.zeros((2 * len(xyzi), 4), np.float32)
+    raw[slots] = xyzi
+    frame = SimpleNamespace(xyzi=raw, actual=np.arange(len(raw)) % 2 == 0,
+                            return_slots=slots, frame_id=0)
+    def read_scan(path, *, io_timing):
+        io_timing["seconds"] = 0.
+        return frame
+    monkeypatch.setattr(evaluation, "read_scan", read_scan)
+    class Score(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.normal = NormalDistribution(mode)
+        def forward(self, sample):
+            observation = sample["observation"]
+            return point_evidence(self.normal(observation), observation["log_range"])[:, 0]
+    model = Score().eval()
+    expected = model(dict(observation=angular_observation(xyzi))).detach().numpy()
+    actual, timing = evaluation.infer(model, "fixture", torch.device("cpu"))
+    np.testing.assert_array_equal(actual[slots], expected)
+    np.testing.assert_array_equal(actual[1::2], 0.)
+    assert timing["real_points"] == len(xyzi)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="LitePT requires CUDA")
+def test_anomaly_loss_reaches_normal_predictor_through_complete_segmentor():
+    from src.evaluate import autocast
+    xyzi, _ = angular_scan()
+    sample = prepare_scan(dict(xyzi=xyzi, targets=np.arange(len(xyzi)) % 2,
+                               slots=np.arange(len(xyzi)), slot_count=len(xyzi), index=0))
+    sample.update(observation=angular_observation(xyzi), normal_training=False)
+    seed_all(13)
+    device = torch.device("cuda")
+    model = Segmentor("geometry").to(device).eval()
+    # The zero-initialized projection first learns to use the evidence. Activate
+    # it here to test the subsequent anomaly-gradient path independently of NLL.
+    with torch.no_grad():
+        model.normal_evidence.weight.normal_(std=.02)
+    sample = to_device(sample, device)
+    with autocast(device):
+        scores, auxiliary = model(sample, normal_loss=True)
+        loss = torch.nn.functional.binary_cross_entropy_with_logits(scores, sample["targets"].float())
+    assert auxiliary.item() == 0
+    loss.backward()
+    for module in (model.normal, model.backbone):
+        gradients = [p.grad for p in module.parameters() if p.grad is not None]
+        assert gradients and all(torch.isfinite(g).all() for g in gradients)
+        assert sum(g.abs().sum().item() for g in gradients) > 0
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA comparison")

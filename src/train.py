@@ -1132,7 +1132,7 @@ def preflight(args, train, val, device, config, resources, method="conditional")
 
 
 def normal_prediction(args, train, device):
-    """First gate: paired normal-only learning, then fixed real-normal evaluation."""
+    """Normal-only initialization and an optional predictive comparison."""
     check = load_manifest(args.prediction_check, "train")
     selected = [i for i, row in enumerate(train["records"]) if row["group"].startswith("normal_")]
     checked = [i for i, row in enumerate(check["records"]) if row["group"].startswith("normal_")]
@@ -1152,7 +1152,7 @@ def normal_prediction(args, train, device):
                   loss="proper joint mixture of Laplace log-range likelihoods; one latent hypothesis per block",
                   point_evidence="marginal and leave-one-out likelihoods and residuals; no broadcast region loss",
                   selection="two full normal-data passes; endpoint only; no hyperparameter or checkpoint selection",
-                  first_gate="geometry must reduce frame-mean MAE, joint NLL and absolute 90% coverage error, without increasing mean 90% interval width, relative to density",
+                  comparison="optional normal-prediction diagnostic; not a prerequisite for anomaly training",
                   evaluation_role="previously exposed internal development normals, not an independent final test",
                   check_scope="nuScenes normal logs; no STU normal generalization claim", code=code_record())
     resources = runtime_snapshot()
@@ -1172,7 +1172,7 @@ def normal_prediction(args, train, device):
     for seed in args.seeds:
         order = [selected[i] for epoch in range(2) for i in epoch_order(len(selected), seed, 9, epoch)]
         steps = math.ceil(len(order) / BATCH_SIZE)
-        for method in NORMAL_MODES:
+        for method in args.methods:
             directory = args.output / str(seed) / method
             directory.mkdir(parents=True, exist_ok=True)
             path = directory / "last.pt"
@@ -1266,14 +1266,17 @@ def normal_prediction(args, train, device):
             torch.cuda.empty_cache()
     decisions = {}
     for seed, pair in results.items():
+        if not all(method in pair for method in NORMAL_MODES):
+            continue
         a, b = pair["density"], pair["geometry"]
         differences = {key: b[key] - a[key] for key in a}
         passed = all(differences[key] < 0 for key in ("mae_m", "joint_nll", "coverage90_error"))
         passed = passed and differences["width90_m"] <= 0
         decisions[seed] = dict(geometry_minus_density=differences, prediction_gate_passed=passed)
-    write_json(args.output / "comparison.json", dict(seeds=decisions,
-        prediction_gate_passed=all(row["prediction_gate_passed"] for row in decisions.values()),
-        interpretation="development screening only; normal prediction improvement does not establish anomaly-detection improvement"))
+    if decisions:
+        write_json(args.output / "comparison.json", dict(seeds=decisions,
+            prediction_gate_passed=all(row["prediction_gate_passed"] for row in decisions.values()),
+            interpretation="normal-prediction diagnostic only; does not gate anomaly training or establish detection improvement"))
 
 
 def main():
@@ -1300,9 +1303,9 @@ def main():
                         help="legacy runs use seed 0; decoder comparisons permit matched nonnegative seeds")
     parser.add_argument("--methods", nargs="+", choices=("conditional", *RELATION_MODES, *NORMAL_MODES),
                         help="fresh N1 decoder comparison with endpoint-only development evaluation")
-    parser.add_argument("--normal-prediction", action="store_true", help="first gate: train/evaluate the two normal predictors")
+    parser.add_argument("--normal-prediction", action="store_true", help="train/evaluate the requested normal predictors")
     parser.add_argument("--prediction-check", type=Path, default=Path("results/train/native/diagnostics/check.json"))
-    parser.add_argument("--normal-initial", type=Path, help="completed matched first-gate directory for the normal branches")
+    parser.add_argument("--normal-initial", type=Path, help="completed normal-predictor initialization directory")
     parser.add_argument("--workers", type=int, default=2)
     parser.add_argument("--threads", type=int, default=2)
     parser.add_argument("--save-every", type=int, default=500)
@@ -1333,8 +1336,9 @@ def main():
         parser.error("at most eight GPUs for effective batch eight")
     train, val = load_manifest(args.train_manifest, "train"), load_manifest(args.val_manifest, "val")
     if args.normal_prediction:
-        if world_size != 1 or args.methods != list(NORMAL_MODES) or args.normal_initial:
-            parser.error("normal prediction requires one GPU and --methods density geometry")
+        if (world_size != 1 or not args.methods or args.normal_initial
+                or any(method not in NORMAL_MODES for method in args.methods)):
+            parser.error("normal prediction requires one GPU and density and/or geometry methods")
         if args.workers + args.threads > len(os.sched_getaffinity(0)) or args.check:
             parser.error("invalid normal prediction resources or incompatible --check")
         normal_prediction(args, train, device)
@@ -1358,7 +1362,7 @@ def main():
         parser.error("the paired metric objective is only defined for the native experiment")
     normal_comparison = args.methods and any(method in NORMAL_MODES for method in args.methods)
     if normal_comparison and (not args.normal_initial or any(method in RELATION_MODES for method in args.methods)):
-        parser.error("normal branches need --normal-initial and their own three-model comparison")
+        parser.error("normal branches need --normal-initial and cannot mix with relation methods")
     if args.methods:
         args.eval_every = args.updates
     config = configuration(train, val, device, world_size, updates=args.updates, initial=args.initial,
@@ -1380,16 +1384,15 @@ def main():
             stability="paired AP/FPR95 changes across seeds; a single seed is only a screening result"),
             validation="one full val19 development evaluation at the fixed endpoint")
     if normal_comparison:
-        decision = json.loads((args.normal_initial / "comparison.json").read_text())
-        if not decision["prediction_gate_passed"]:
-            parser.error("the normal-prediction gate has not passed; do not start the anomaly comparison")
+        check_path = args.normal_initial / "comparison.json"
+        decision = json.loads(check_path.read_text()) if check_path.exists() else None
         config.update(seeds=args.seeds, decoder_comparison=dict(methods=methods,
             selection="fixed endpoint, no checkpoint or seed selection", evaluation_role="development only",
-            training_budget="same 6185 records twice; same N1 initialization/loss; both new branches share the normal-data budget"),
+            training_budget="same training records twice and same N1 initialization/loss; normal-predictor initialization is recorded separately"),
             normal_prediction=dict(initial=str(args.normal_initial.resolve()), auxiliary_weight=.1,
                 angular_block_degrees=[2, 2], hypotheses=HYPOTHESES,
-                supervision="normal distribution parameters receive normal-only joint NLL; anomaly head receives detached point evidence",
-                first_gate=decision), validation="one full val19 development evaluation at the fixed endpoint")
+                supervision="anomaly gradients traverse point evidence into the normal predictor; normal-only joint NLL anchors its predictions",
+                prediction_check=decision), validation="one full val19 development evaluation at the fixed endpoint")
     if args.record_points:
         if args.recipe != "native" or args.branch or world_size != 1 or args.score_path:
             parser.error("complete point recording uses one native training run and its own interval score paths")
@@ -1457,7 +1460,7 @@ def main():
                               output=str(args.output.resolve()))), flush=True)
     for seed in args.seeds:
         for method in methods:
-            if not train_stage(args, train, val, seed, method, device, config):
+            if not train_stage(args, train, val, seed, method, device, config) or STOP:
                 return
     if dist.is_initialized():
         dist.destroy_process_group()

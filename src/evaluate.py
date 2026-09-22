@@ -172,10 +172,13 @@ def infer(model, scan, device):
     frame = read_scan(scan, io_timing=io_timing)
     read_seconds = io_timing["seconds"]
     if frame.actual.any():
-        sample = prepare_scan(dict(xyzi=frame.xyzi[frame.actual].copy(), slots=frame.return_slots,
+        xyzi = frame.xyzi[frame.actual].copy()
+        sample = prepare_scan(dict(xyzi=xyzi, slots=frame.return_slots,
                                    targets=np.full(int(frame.actual.sum()), -1, np.int8),
                                    slot_count=len(frame.xyzi), index=frame.frame_id),
                               relations=getattr(model, "relation", None) is not None)
+        if getattr(model, "normal", None) is not None:
+            sample["observation"] = angular_observation(xyzi)
         sample = to_device(sample, device)
         with autocast(device):
             prediction = model(sample)
@@ -245,7 +248,8 @@ def mine(model, manifest, checkpoint, output, device, workers=4):
     if manifest["kind"] != "train":
         raise ValueError("mining requires training sources")
     indices = mining_indices(manifest)
-    dataset = PreparedScans(manifest)
+    dataset = PreparedScans(manifest, relations=getattr(model, "relation", None) is not None,
+                            normal=getattr(model, "normal", None) is not None)
     loader = DataLoader(dataset, batch_size=None, sampler=indices, num_workers=workers,
                         pin_memory=device.type == "cuda",
                         **({"prefetch_factor": 1} if workers else {}),

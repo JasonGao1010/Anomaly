@@ -39,14 +39,14 @@
         "src/attribute.py": "19f632e8b6a68e58ed2372e1699d061152dcda9a11b0647451381edbb5f8b278",
         "src/data.py": "7bafbfb408e7901f5d97a2b41f938d60b3a89ee8dde3db4149872d088f1fa55c",
         "src/diagnose.py": "01b6d66472b78381d5f28ecc35b5b6b509feaab70512730ade90e52b15df3035",
-        "src/evaluate.py": "505829cfb2fb538f98a888f64bd028ba7ae72468f9e00d8684aed138eb91eda9",
+        "src/evaluate.py": "9633facea3400381c669b4b3cda2188159c1c2a896ee13e319091f4111b406e2",
         "src/learning.py": "8b46207cfe4e8e5f71a3bb6b522e24a1f33c331200839a6aa61fe117ef9b0003",
-        "src/model.py": "82c430a056ed6e2ff957f92c95fba41fdf4dd2854a754a7f546265c1d17cbc66",
+        "src/model.py": "12a1446c0c844b3f65d1350f243f557c03c41a5a47d8d5061616d012a3f15f66",
         "src/normal.py": "ba2d23583a75e3ab740e4cbade6d01c9b4ce995424a742e124205fbb2a63a5a3",
         "src/probe.py": "016acadbd38197547fa912266542f78723e2f643c5984c16789efe0831a10634",
         "src/render.py": "6cb949daf6d609ce007619a9abb16021eaf1a516e110ae41eb988a804c7c11a2",
         "src/shape.py": "f94f31e4da2d37f491fd94afd5df2c378bac3eda46a42c53846da0c332400299",
-        "src/train.py": "21b9b04c7244b6f4d656f101fc5dabf0b471b87a048557255d9a949c9f8a058c",
+        "src/train.py": "eb2852c3262bdd61824488621ae817f3e23b2979a7f264f5cff93c3bdfaea7b1",
         "vendor/litept/model.py": "342da27a8d65454347630ff65e806920b103165109f846a9273c84e85d2823a7",
         "vendor/litept/pointrope.py": "07dfd2a3f0d1ff66bd3e1e6094d5246f9692bcd291b812e017f3b4154152ad30",
         "vendor/litept/serialization/__init__.py": "e6461b37ccb5dcb24725943271259c4f74dac89d27b22becb97e48ce04c8a9b1",
@@ -105,13 +105,11 @@
     "validation": "one full val19 development evaluation at the fixed endpoint",
     "decoder_comparison": {
       "methods": [
-        "conditional",
-        "density",
         "geometry"
       ],
       "selection": "fixed endpoint, no checkpoint or seed selection",
       "evaluation_role": "development only",
-      "training_budget": "same 6185 records twice; same N1 initialization/loss; both new branches share the normal-data budget"
+      "training_budget": "same training records twice and same N1 initialization/loss; normal-predictor initialization is recorded separately"
     },
     "normal_prediction": {
       "initial": "/home/jasongao/Study/AJAE-v4/results/train/normal/prediction",
@@ -121,8 +119,8 @@
         2
       ],
       "hypotheses": 4,
-      "supervision": "normal distribution parameters receive normal-only joint NLL; anomaly head receives detached point evidence",
-      "first_gate": {
+      "supervision": "anomaly gradients traverse point evidence into the normal predictor; normal-only joint NLL anchors its predictions",
+      "prediction_check": {
         "seeds": {
           "0": {
             "geometry_minus_density": {
@@ -169,14 +167,14 @@
       23
     ],
     "cpu": "Architecture:                            x86_64\nCPU op-mode(s):                          32-bit, 64-bit\nAddress sizes:                           42 bits physical, 48 bits virtual\nByte Order:                              Little Endian\nCPU(s):                                  24\nOn-line CPU(s) list:                     0-23\nVendor ID:                               GenuineIntel\nModel name:                              Intel(R) Core(TM) Ultra 9 275HX\nCPU family:                              6\nModel:                                   198\nThread(s) per core:                      1\nCore(s) per socket:                      24\nSocket(s):                               1\nStepping:                                2\nBogoMIPS:                                6143.99\nFlags:                                   fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ss ht syscall nx pdpe1gb rdtscp lm constant_tsc rep_good nopl xtopology tsc_reliable nonstop_tsc cpuid tsc_known_freq pni pclmulqdq vmx ssse3 fma cx16 pcid sse4_1 sse4_2 x2apic movbe popcnt tsc_deadline_timer aes xsave avx f16c rdrand hypervisor lahf_lm abm 3dnowprefetch ssbd ibrs ibpb stibp ibrs_enhanced tpr_shadow ept vpid ept_ad fsgsbase tsc_adjust bmi1 avx2 smep bmi2 erms invpcid rdseed adx smap clflushopt clwb sha_ni xsaveopt xsavec xgetbv1 xsaves avx_vnni vnmi umip waitpkg gfni vaes vpclmulqdq rdpid movdiri movdir64b fsrm md_clear serialize ibt flush_l1d arch_capabilities\nVirtualization:                          VT-x\nHypervisor vendor:                       Microsoft\nVirtualization type:                     full\nL1d cache:                               1.1 MiB (24 instances)\nL1i cache:                               1.5 MiB (24 instances)\nL2 cache:                                72 MiB (24 instances)\nL3 cache:                                36 MiB (1 instance)\nNUMA node(s):                            1\nNUMA node0 CPU(s):                       0-23\nVulnerability Gather data sampling:      Not affected\nVulnerability Ghostwrite:                Not affected\nVulnerability Indirect target selection: Not affected\nVulnerability Itlb multihit:             Not affected\nVulnerability L1tf:                      Not affected\nVulnerability Mds:                       Not affected\nVulnerability Meltdown:                  Not affected\nVulnerability Mmio stale data:           Not affected\nVulnerability Old microcode:             Not affected\nVulnerability Reg file data sampling:    Not affected\nVulnerability Retbleed:                  Mitigation; Enhanced IBRS\nVulnerability Spec rstack overflow:      Not affected\nVulnerability Spec store bypass:         Mitigation; Speculative Store Bypass disabled via prctl\nVulnerability Spectre v1:                Mitigation; usercopy/swapgs barriers and __user pointer sanitization\nVulnerability Spectre v2:                Mitigation; Enhanced / Automatic IBRS; IBPB conditional; PBRSB-eIBRS SW sequence; BHI BHI_DIS_S\nVulnerability Srbds:                     Not affected\nVulnerability Tsa:                       Not affected\nVulnerability Tsx async abort:           Not affected\nVulnerability Vmscape:                   Not affected",
-    "memory_available": 21680697344,
-    "memory": "total        used        free      shared  buff/cache   available\nMem:     25196920832  3516223488 15302086656    80449536  6781272064 21680697344\nSwap:    17179869184    80535552 17099333632",
+    "memory_available": 21666734080,
+    "memory": "total        used        free      shared  buff/cache   available\nMem:     25196920832  3530186752  9321435136    80392192 12747726848 21666734080\nSwap:    17179869184    81113088 17098756096",
     "windows_e": {
       "Size": 484950659072,
-      "SizeRemaining": 28943196160
+      "SizeRemaining": 28315492352
     },
-    "gpu": "NVIDIA GeForce RTX 5080 Laptop GPU, 16303 MiB, 14426 MiB, 6 %",
-    "processes": "834139, [Not Found]"
+    "gpu": "NVIDIA GeForce RTX 5080 Laptop GPU, 16303 MiB, 14352 MiB, 2 %",
+    "processes": "845052, [Not Found]"
   },
   "scans": [
     {
@@ -193,22 +191,22 @@
         125909,
         34715
       ],
-      "seconds": 0.8917357850004919,
-      "loss": 0.5347997546195984,
+      "seconds": 9.571633234998444,
+      "loss": 0.5347799062728882,
       "details": {
-        "bce": 0.2600647807121277,
-        "ap": 0.9982547163963318,
-        "auc": 0.6892995238304138,
-        "fpr95": 0.9494028687477112,
+        "bce": 0.26006099581718445,
+        "ap": 0.9982537031173706,
+        "auc": 0.6887209415435791,
+        "fpr95": 0.9493478536605835,
         "positive": 262,
         "negative": 151391,
         "anchors": 256,
         "negatives": 4096,
         "top": 512,
         "random_weight": 42.097935267857146,
-        "threshold": -2.9278502464294434,
+        "threshold": -2.9278125762939453,
         "recall": 0.949999988079071,
-        "normal_nll": -0.015796218067407608
+        "normal_nll": -0.01579621620476246
       }
     },
     {
@@ -225,20 +223,20 @@
         34752,
         34720
       ],
-      "seconds": 0.3109265789971687,
-      "loss": 0.4210648238658905,
+      "seconds": 0.27834419600549154,
+      "loss": 0.42099446058273315,
       "details": {
-        "bce": 0.15960700809955597,
-        "ap": 0.9942770600318909,
-        "auc": 0.667739748954773,
-        "fpr95": 0.9473133087158203,
+        "bce": 0.15955498814582825,
+        "ap": 0.9942733645439148,
+        "auc": 0.6671004891395569,
+        "fpr95": 0.9472562074661255,
         "positive": 228,
         "negative": 40905,
         "anchors": 228,
         "negatives": 4096,
         "top": 512,
         "random_weight": 11.270368303571429,
-        "threshold": -2.9048948287963867,
+        "threshold": -2.904341220855713,
         "recall": 0.9500000476837158,
         "normal_nll": -0.027487773448228836
       }
@@ -257,10 +255,10 @@
         127340,
         34688
       ],
-      "seconds": 0.5100590220245067,
-      "loss": 0.059940021485090256,
+      "seconds": 0.5048333939921577,
+      "loss": 0.05994110926985741,
       "details": {
-        "bce": 0.10658220201730728,
+        "bce": 0.10658328980207443,
         "ap": 0.0,
         "auc": 0.0,
         "fpr95": 0.0,
@@ -289,21 +287,21 @@
         124740,
         34719
       ],
-      "seconds": 0.5139786929939874,
-      "loss": 0.4347566068172455,
+      "seconds": 0.49610636100987904,
+      "loss": 0.43476158380508423,
       "details": {
-        "bce": 0.15922057628631592,
-        "ap": 0.9993358254432678,
-        "auc": 0.6542657017707825,
-        "fpr95": 0.9459401369094849,
+        "bce": 0.15922799706459045,
+        "ap": 0.999335765838623,
+        "auc": 0.6541799306869507,
+        "fpr95": 0.9459285736083984,
         "positive": 95,
         "negative": 150678,
         "anchors": 95,
         "negatives": 4096,
         "top": 512,
         "random_weight": 41.898995535714285,
-        "threshold": -2.8555026054382324,
-        "recall": 0.9500000476837158,
+        "threshold": -2.8556928634643555,
+        "recall": 0.949999988079071,
         "normal_nll": -0.014303067699074745
       }
     },
@@ -321,26 +319,26 @@
         129022,
         128687
       ],
-      "seconds": 0.6080772300192621,
-      "loss": 1.8424715995788574,
+      "seconds": 0.588311341998633,
+      "loss": 1.842464804649353,
       "details": {
-        "bce": 0.6832066774368286,
-        "ap": 0.9971509575843811,
-        "auc": 0.6731550693511963,
-        "fpr95": 0.9479842782020569,
+        "bce": 0.6832267045974731,
+        "ap": 0.9971503615379333,
+        "auc": 0.6729112267494202,
+        "fpr95": 0.947966456413269,
         "positive": 651,
         "negative": 233067,
         "anchors": 256,
         "negatives": 4096,
         "top": 512,
         "random_weight": 64.88699776785714,
-        "threshold": -2.8990869522094727,
-        "recall": 0.9500001072883606,
+        "threshold": -2.8991384506225586,
+        "recall": 0.9499999284744263,
         "normal_nll": 0.0
       }
     }
   ],
   "parameter_updates": 0,
-  "mixed_batch_seconds": 2.2267000790161546,
-  "peak_vram_bytes": 6412981760
+  "mixed_batch_seconds": 10.850917186005972,
+  "peak_vram_bytes": 6430488576
 }

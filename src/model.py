@@ -302,10 +302,9 @@ class Segmentor(nn.Module):
         if self.normal is not None:
             observation = sample["observation"]
             prediction = self.normal(observation)
-            # The normal model receives only normal likelihood supervision. The
-            # anomaly objective learns to use evidence, not to widen its density.
-            with torch.no_grad():
-                evidence = point_evidence(prediction, observation["log_range"])
+            # Anomaly gradients pass through the predictive evidence. Normal-only
+            # likelihood remains an anchor against widening every explanation.
+            evidence = point_evidence(prediction, observation["log_range"])
             if normal_loss:
                 auxiliary = (joint_nll(prediction, observation["log_range"], sample["targets"] == 0)
                              if sample["normal_training"] else prediction["mu"].sum() * 0)
