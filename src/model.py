@@ -365,7 +365,10 @@ class Segmentor(nn.Module):
                 scores = torch.cat(output)
                 if normal_loss:
                     auxiliary = scores.sum() * 0
-                    if probabilities:
+                    if "normal_reference" in sample:
+                        reference = sample["normal_reference"]
+                        auxiliary = self.normal.likelihood(reference["observation"], reference["targets"])
+                    elif probabilities:
                         observation = sample["observation"]
                         selected = ((sample["targets"] == 0) & (observation["distance"] >= LOWER)
                                     & (observation["distance"] <= UPPER))

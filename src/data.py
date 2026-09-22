@@ -34,6 +34,7 @@ VERSION = "AJAE-V4-F240-R2"
 PILOT_VERSION = "AJAE-V4-P1"
 CONTINUATION_VERSION = "AJAE-V4-P2"
 NATIVE_VERSION = "AJAE-V4-N1"
+NDP_VERSION = "AJAE-V4-NDP"
 # R2 changes the training budget; retain the exact R1 observations and manifests.
 MANIFEST_VERSION = "AJAE-V4-F240-R1"
 DATA_ROOT = Path("/home/jasongao/Data/STU")
@@ -613,7 +614,7 @@ def make_real_manifest(directory, *, partition="val", workers=4):
 def load_manifest(path, kind):
     value = json.loads(Path(path).read_text())
     expected = value.pop("sha256")
-    if identity(value) != expected or value["version"] not in (MANIFEST_VERSION, PILOT_VERSION, NATIVE_VERSION) or value["kind"] != kind:
+    if identity(value) != expected or value["version"] not in (MANIFEST_VERSION, PILOT_VERSION, NATIVE_VERSION, NDP_VERSION) or value["kind"] != kind:
         raise ValueError(f"invalid {kind} manifest identity: {path}")
     value["sha256"] = expected
     return value
@@ -1160,6 +1161,67 @@ def make_native_manifest(base_path, output):
     return result
 
 
+def make_ndp_manifest(data_root, output):
+    """Generate the public fixed Perlin sequence; store only modified raw slots."""
+    from vendor.ndp.augmentation import perlin_raise, REVISION, SEED
+    output = Path(output).resolve()
+    if (output / "train.json").exists():
+        raise FileExistsError("the NDP training manifest already exists")
+    output.mkdir(parents=True, exist_ok=True)
+    sequence = STUSequence(data_root)
+    # Upstream uses TWO independent streams, both advanced in sorted frame order.
+    parameters, noise = np.random.RandomState(SEED), np.random.default_rng(SEED)
+    records, sources = [], []
+    started = time.perf_counter()
+    for index in range(len(sequence)):
+        original = sequence[index]
+        clean = point_targets(original)
+        if (clean == 1).any() or not (clean == 0).any():
+            raise ValueError("NDP requires unmodified normal 206 scans")
+        radius, strength = 1.25 + parameters.uniform(-.5, .25), .5 + parameters.uniform(-.25, .5)
+        xyzi, semantic = perlin_raise(original.xyzi.copy(), original.semantic.copy(),
+            patch_radius=radius, strength=strength, rng=noise, debug=False)
+        labels = (original.labels & 0xFFFF0000) | semantic.astype(np.uint32)
+        changed = np.flatnonzero((xyzi != original.xyzi).any(1) | (labels != original.labels))
+        frame = Frame(index, xyzi, original.pose, labels)
+        target = point_targets(frame)
+        source = dict(frame=index, source_identity=legacy_source_identity(original),
+            scan=str(sequence.directory / "velodyne" / f"{index:06d}.bin"),
+            label=str(sequence.directory / "labels" / f"{index:06d}.label"),
+            normal=int((clean == 0).sum()))
+        source.update(scan_sha256=file_sha256(source["scan"]), label_sha256=file_sha256(source["label"]))
+        sources.append(source)
+        delta = output / f"{index:06d}.npz"
+        np.savez_compressed(delta, frame=index, source_identity=source["source_identity"],
+                            slots=changed, xyzi=xyzi[changed], labels=labels[changed])
+        records.append(dict(source="perlin", group="perlin_stu", frame=index, subset="train",
+            delta=str(delta), delta_sha256=file_sha256(delta), points=int(frame.actual.sum()),
+            slots=len(xyzi), normal=int((target == 0).sum()), anomaly=int((target == 1).sum()),
+            changed=len(changed), radius_m=radius, strength_m=strength))
+        if (index + 1) % 50 == 0 or index + 1 == len(sequence):
+            print(f"Perlin 206: {index + 1}/{len(sequence)}", flush=True)
+    result = dict(version=NDP_VERSION, kind="train", data_root=str(Path(data_root).resolve()),
+        sources=sources, records=records,
+        calibration_sha256=file_sha256(sequence.directory / "calib.txt"),
+        poses_sha256=file_sha256(sequence.directory / "poses.txt"),
+        recipe=dict(repository="https://github.com/343gltysprk/ndp", revision=REVISION,
+            script="ood_augmentation.py", seed=SEED, sequence="206", frames=len(sequence),
+            radius_m=[.75, 1.5], strength_m=[.25, 1.], target_ratio=.3, grid_res=192,
+            base_res=[3, 3], octaves=3, persistence=.55, lacunarity=2.,
+            raise_threshold_m=.01, dbscan_eps_m=.1, dbscan_min_samples=1,
+            train_frame_filter="all 449 frames; no evaluation five-anomaly-point filter",
+            normal_reference="same unmodified source scan; auxiliary likelihood only",
+            augmentation=False,
+            targets="unchanged model labels: raw 2 anomaly, raw 0 ignored, other labels normal, range 2.5-50 m",
+            generation_seconds=time.perf_counter() - started))
+    result["sha256"] = identity(result)
+    write_json(output / "train.json", result)
+    print(json.dumps(dict(scans=len(records), anomaly_points=sum(r["anomaly"] for r in records),
+        sparse_anomaly_frames=sum(0 < r["anomaly"] < 5 for r in records),
+        unchanged_frames=sum(r["changed"] == 0 for r in records), seconds=result["recipe"]["generation_seconds"])), flush=True)
+    return result
+
+
 class Scans:
     """Fixed manifest reader. Metadata and truth never enter model features."""
 
@@ -1202,8 +1264,10 @@ class Scans:
             frame = read_nuscenes(record, self.manifest["mapping"])
         elif record.get("source") == "normal_stu":
             frame = self._source(record["frame"])
-        elif record.get("source") in ("targeted", "rendered_stu"):
+        elif record.get("source") in ("targeted", "rendered_stu", "perlin"):
             original = self._source(record["frame"])
+            if record["source"] == "perlin" and file_sha256(record["delta"]) != record["delta_sha256"]:
+                raise ValueError("Perlin modification changed after manifest creation")
             with np.load(record["delta"], allow_pickle=False) as delta:
                 if (int(delta["frame"]) != original.frame_id or
                         str(delta["source_identity"]) != self.sources[original.frame_id]["source_identity"]):
@@ -1227,22 +1291,25 @@ class Scans:
         else:
             frame = read_scan(record["scan"], record["label"], partition=self.manifest["kind"],
                               expected=(record["scan_sha256"], record["label_sha256"]))
-        selected = supervision(frame, allow_normal=self.manifest["version"] in (PILOT_VERSION, NATIVE_VERSION))
-        if self.manifest["kind"] == "train" and not selected.eligible:
+        target = point_targets(frame)
+        selected = (Supervision(target, int((target == 0).sum()), int((target == 1).sum()), True)
+                    if self.manifest["version"] == NDP_VERSION else
+                    supervision(frame, allow_normal=self.manifest["version"] in (PILOT_VERSION, NATIVE_VERSION)))
+        if self.manifest["kind"] == "train" and self.manifest["version"] != NDP_VERSION and not selected.eligible:
             raise ValueError("training scan is ineligible under the frame rule")
         observed = (int(frame.actual.sum()), selected.normal_count, selected.anomaly_count, len(frame.xyzi))
         expected = tuple(record[k] for k in ("points", "normal", "anomaly", "slots"))
         if observed != expected:
             raise ValueError(f"decoded counts differ from manifest: {observed} != {expected}")
         return dict(xyzi=frame.xyzi[frame.actual].copy(), slots=frame.return_slots,
-                    targets=point_targets(frame)[frame.actual].copy(),
+                    targets=target[frame.actual].copy(),
                     slot_count=len(frame.xyzi), index=index)
 
 
 def main():
     import argparse
     parser = argparse.ArgumentParser(description="Prepare labeled normal sources or mix the pilot training set.")
-    parser.add_argument("operation", choices=("normal", "expand", "mix", "native", "legacy"))
+    parser.add_argument("operation", choices=("normal", "expand", "mix", "native", "legacy", "ndp"))
     parser.add_argument("--output", type=Path, default=Path("results/data"))
     parser.add_argument("--nuscenes-root", type=Path, default=NUSCENES_ROOT)
     parser.add_argument("--data-root", type=Path, default=DATA_ROOT)
@@ -1251,6 +1318,9 @@ def main():
     parser.add_argument("--val", type=Path, default=Path("assets/val.json"))
     parser.add_argument("--workers", type=int, default=min(4, len(os.sched_getaffinity(0))))
     args = parser.parse_args()
+    if args.operation == "ndp":
+        make_ndp_manifest(args.data_root, args.output)
+        return
     if args.operation in ("normal", "expand"):
         if (args.output / ("background.json" if args.operation == "expand" else "normal.json")).exists():
             parser.error("normal sources already exist")

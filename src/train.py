@@ -22,7 +22,7 @@ from torch import nn
 from torch.nn import functional as F
 from torch.utils.data import DataLoader
 
-from .data import (VERSION, PILOT_VERSION, CONTINUATION_VERSION, NATIVE_VERSION, Scans, file_sha256, identity,
+from .data import (VERSION, PILOT_VERSION, CONTINUATION_VERSION, NATIVE_VERSION, NDP_VERSION, Scans, file_sha256, identity,
                    load_manifest, write_json)
 from .evaluate import PreparedScans, autocast, better, evaluate, memory_available, precision
 from .model import (POINT_CHUNK, Segmentor, balanced_loss, ranking_loss, to_device,
@@ -72,7 +72,7 @@ def material_order(order, manifest, indices, start, stop):
 
 def pilot_order(manifest, seed, updates, *, sampling=None, segment=0, paired=False, background=None, passes=2):
     """Source quotas stay fixed; a new segment gets its own reproducible permutation."""
-    if manifest.get("version") == NATIVE_VERSION:
+    if manifest.get("version") in (NATIVE_VERSION, NDP_VERSION):
         order = sum((epoch_order(len(manifest["records"]), seed, 1, epoch)
                      for epoch in range(passes * segment, passes * segment + passes)), [])
         if updates != math.ceil(len(order) / BATCH_SIZE):
@@ -277,8 +277,9 @@ def cached_backward(model, samples, device, *, rank_weight, rank_seed, microbatc
         raise FloatingPointError("effective-batch soft recall did not reach 0.95")
     gradient, = torch.autograd.grad(detection, leaf)
     # Equal weight per eligible normal scan, then scale/block means inside it.
+    references = [sample.get("normal_reference", sample) for sample in samples]
     normal_count = sum(bool(sample.get("normal_training", False)) and bool((sample["targets"] == 0).any())
-                       for sample in samples)
+                       for sample in references)
     auxiliary = leaf.new_zeros(())
     offset, replay_error = 0, 0.
     try:
@@ -557,12 +558,12 @@ def configuration(train, val, device, world_size, *, updates=None, initial=None,
                 precision=str(precision(device)), sparse_precision="float32", world_size=world_size,
                 code=code_record())
     if recipe == "field":
-        if (train["version"] != NATIVE_VERSION or world_size != 1 or not passes or passes < 1
+        if (train["version"] not in (NATIVE_VERSION, NDP_VERSION) or world_size != 1 or not passes or passes < 1
                 or file_sha256(initial) != WEIGHTS_SHA256 or optimizer_state != "reset"):
-            raise ValueError("field training requires fixed native data, public weights, explicit passes and one GPU")
+            raise ValueError("field training requires supported fixed data, public weights, explicit passes and one GPU")
         visits = passes * len(train["records"])
         updates = math.ceil(visits / BATCH_SIZE)
-        result.update(version=NATIVE_VERSION, model="field", recipe="field", epochs=passes, updates=updates,
+        result.update(version=train["version"], model="field", recipe="field", epochs=passes, updates=updates,
             scan_visits=visits, initial=str(initial.resolve()), initial_sha256=WEIGHTS_SHA256,
             optimizer_state="reset", peak_lr=PEAK_LR[0], microbatch=2, objective="metrics", precision="torch.float32",
             eval_every=eval_every or updates, sampling_segment=0,
@@ -581,6 +582,13 @@ def configuration(train, val, device, world_size, *, updates=None, initial=None,
             gradient_cache=dict(microbatch=2, score_atol=1e-5, score_rtol=1e-5,
                 forwards="one score pass plus one replay; per-scan activation release; BN advances once"),
             validation="val19 development; checkpoint selection permitted; no independent final-test claim")
+        if train["version"] == NDP_VERSION:
+            result.update(data_recipe=train["recipe"], normal_source_visits=visits,
+                comparison=dict(reference="NDP-EE, arXiv:2604.09232v2 Table 1",
+                    published_val_percent=dict(AP=74.24, FPR95=1.43, AUROC=99.53),
+                    shared="206 and fixed public Perlin generation; official STU validation protocol",
+                    differences="model/loss, nuScenes versus SemanticKITTI/Panoptic-CUDAL pretraining, learning-rate schedule, no NDP coordinate/instance augmentation or soft-void loss",
+                    checkpoint="one selected checkpoint for all three metrics; no hidden-test experiment"))
         return result
     if recipe == "native":
         visits = 2 * len(train["records"])
@@ -1056,7 +1064,7 @@ def train_stage(args, train, val, seed, method, device, config):
             need_stop = torch.tensor(int(STOP), device=device)
             if world_size > 1:
                 dist.all_reduce(need_stop, op=dist.ReduceOp.MAX)
-            check_disk = step % args.save_every == 0
+            check_disk = (method == "field" and step == 1) or step % args.save_every == 0
             if check_disk:
                 error = None
                 if rank == 0:
@@ -1078,7 +1086,7 @@ def train_stage(args, train, val, seed, method, device, config):
                     if recording is not None and step in config["recording"]["checkpoint_updates"]:
                         atomic_save(directory / f"step{step}.pt", saved)
                 del saved
-            if rank == 0 and (recording is not None or step % 25 == 0 or overflow or need_stop):
+            if rank == 0 and (recording is not None or step == 1 or step % 25 == 0 or overflow or need_stop):
                 row = dict(event="update", seed=seed, method=method, epoch=epoch + 1,
                            batch=batch_number + 1, batches=steps_per_epoch, loss=loss_sum.item(),
                            normal=int(counts[0]), anomaly=int(counts[1]), planned=step,
@@ -1092,7 +1100,7 @@ def train_stage(args, train, val, seed, method, device, config):
                            peak_vram_bytes=torch.cuda.max_memory_allocated(device))
                 with (directory / "log.jsonl").open("a") as stream:
                     stream.write(json.dumps(row, allow_nan=False) + "\n")
-                if step % 25 == 0 or overflow or need_stop:
+                if step == 1 or step % 25 == 0 or overflow or need_stop:
                     print(json.dumps(row, allow_nan=False), flush=True)
             if need_stop:
                 return False
@@ -1238,9 +1246,9 @@ def preflight(args, train, val, device, config, resources, method="field"):
 
 def main():
     parser = argparse.ArgumentParser(description="Train the complete observation-constrained normal-field segmentor.")
-    parser.add_argument("--train-manifest", type=Path, default=Path("results/data/native/train.json"))
+    parser.add_argument("--train-manifest", type=Path, default=Path("results/data/ndp/train.json"))
     parser.add_argument("--val-manifest", type=Path, default=Path("assets/val.json"))
-    parser.add_argument("--output", type=Path, default=Path("results/train/field"))
+    parser.add_argument("--output", type=Path, default=Path("results/train/ndp"))
     parser.add_argument("--initial", type=Path, default=Path("assets/nuscenes.pth"))
     parser.add_argument("--epochs", type=int, required=True, help="explicit complete training-data passes")
     parser.add_argument("--eval-every", type=int, help="updates between development evaluations; default: endpoint only")
@@ -1277,7 +1285,7 @@ def main():
     if other:
         raise RuntimeError(f"other CUDA processes must finish before this run: {other}")
     # Best/last optimizer states, atomic replacement, bounded logs and optional scores.
-    peak = 100_000_000 if args.check else 1_000_000_000 + (
+    peak = 100_000_000 if args.check else 2_000_000_000 + (
         4 * sum(row["normal"] + row["anomaly"] for row in val["records"] if row["eligible"])
         if args.score_path else 0)
     disk_check(peak)

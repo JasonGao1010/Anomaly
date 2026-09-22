@@ -164,6 +164,38 @@ def test_point_compatibility_never_reweights_prior_with_target_peer_ranges():
     assert decoder.tokens[0].weight.grad.abs().sum() > 0
 
 
+def test_clean_companion_likelihood_matches_shared_prediction_and_gradients():
+    xyzi, _ = angular_scan()
+    observation = angular_observation(xyzi)
+    targets = torch.zeros(len(xyzi), dtype=torch.long)
+    targets[::5] = -1
+    seed_all(17)
+    model = NormalField()
+    reference = deepcopy(model)
+    reference.recompute = False
+    fields = reference(observation)
+    _, probabilities = Compatibility()(torch.zeros(len(xyzi), 64), observation, fields, 0, len(xyzi))
+    losses = []
+    for scale, size in enumerate(SCALES):
+        group = observation["grids"][str(size)]["group"]
+        blocks = []
+        for index in torch.unique(group[targets == 0]):
+            selected = (group == index) & (targets == 0)
+            # One hypothesis explains all selected rays before marginalization.
+            joint = fields[str(size)]["log_weights"][index] + probabilities[selected, scale].sum(0)
+            blocks.append(-joint.logsumexp(0) / selected.sum())
+        losses.append(torch.stack(blocks).mean())
+    expected = torch.stack(losses).mean()
+    actual = model.likelihood(observation, targets)
+    torch.testing.assert_close(actual, expected, atol=1e-6, rtol=1e-6)
+    expected.backward()
+    actual.backward()
+    for parameter, original in zip(model.parameters(), reference.parameters()):
+        assert torch.isfinite(parameter.grad).all()
+        torch.testing.assert_close(parameter.grad, original.grad, atol=2e-6, rtol=2e-4)
+    assert model.encoder[0].weight.grad.abs().sum() > 0
+
+
 def test_field_preserves_actual_path_initialization_and_has_fresh_fp32_head():
     seed_all(31)
     baseline = Segmentor("conditional")
@@ -192,12 +224,16 @@ class CacheModel(nn.Module):
         x = self.encoder(sample["xyzi"])
         normal = self.normal(x)
         score = self.head(torch.cat((x, normal), 1)).flatten()
-        auxiliary = normal.square().mean() if sample["normal_training"] else normal.sum() * 0
+        if "normal_reference" in sample:
+            auxiliary = self.normal(F.pad(sample["normal_reference"]["xyzi"], (0, 8))).square().mean()
+        else:
+            auxiliary = normal.square().mean() if sample["normal_training"] else normal.sum() * 0
         return (score, auxiliary) if normal_loss else score
 
 
-@pytest.mark.parametrize("scans,all_normal", [(8, False), (3, False), (8, True)])
-def test_gradient_cache_equals_joint_graph_with_bn_dropout_and_one_rng_advance(scans, all_normal):
+@pytest.mark.parametrize("scans,all_normal,paired", [(8, False, False), (3, False, False),
+                                                   (8, True, False), (8, False, True)])
+def test_gradient_cache_equals_joint_graph_with_bn_dropout_and_one_rng_advance(scans, all_normal, paired):
     seed_all(71)
     model = CacheModel().train()
     reference = deepcopy(model)
@@ -208,6 +244,11 @@ def test_gradient_cache_equals_joint_graph_with_bn_dropout_and_one_rng_advance(s
             if i % 3:
                 sample["targets"][i % 5] = 1
             sample["targets"][-1] = -1
+    if paired:
+        for sample in samples:
+            sample["normal_reference"] = dict(xyzi=sample["xyzi"] + .3, normal_training=True,
+                targets=torch.zeros_like(sample["targets"]))
+            sample["normal_training"] = False
     device = torch.device("cpu")
     start = rng_state(device)
     outputs = [reference(sample, normal_loss=True) for sample in samples]
@@ -215,7 +256,8 @@ def test_gradient_cache_equals_joint_graph_with_bn_dropout_and_one_rng_advance(s
     targets = torch.cat([s["targets"] for s in samples])
     counts = torch.stack([(targets == label).sum() for label in (0, 1)])
     rank, detail = ranking_loss(scores, targets, 19)
-    normal = sum(v[1] for v in outputs) / sum(s["normal_training"] for s in samples)
+    normal_count = sum(s.get("normal_reference", s)["normal_training"] for s in samples)
+    normal = sum(v[1] for v in outputs) / normal_count
     loss = balanced_loss(scores, targets, counts) + rank + .1 * normal
     loss.backward()
     end = rng_state(device)
@@ -223,6 +265,7 @@ def test_gradient_cache_equals_joint_graph_with_bn_dropout_and_one_rng_advance(s
     cached, info = cached_backward(model, samples, device, rank_weight=1., rank_seed=19)
     torch.testing.assert_close(cached, loss.detach())
     assert info["ranking_scans"] == scans and info["replay_max_abs"] == 0
+    assert info["normal_scans"] == normal_count
     if not all_normal:
         torch.testing.assert_close(info["threshold"], detail["threshold"])
     else:

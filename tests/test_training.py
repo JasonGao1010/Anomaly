@@ -365,6 +365,33 @@ def test_native_two_passes_preserve_every_record_and_partial_final_batch():
     assert all(sorted(longer[start:start + 19]) == list(range(19)) for start in (0, 19, 38))
 
 
+def test_ndp_complete_passes_keep_sparse_anomalies_and_pair_original_geometry():
+    from src.data import NDP_VERSION
+    from src.evaluate import PreparedScans
+    path = Path("results/data/ndp/train.json")
+    if not path.exists():
+        pytest.skip("public STU 206 Perlin data not generated")
+    manifest = load_manifest(path, "train")
+    assert manifest["version"] == NDP_VERSION and len(manifest["records"]) == 449
+    order = pilot_order(manifest, 0, 562, passes=10)
+    assert len(order) == 4490 and len(list(effective_batches(order))[-1]) == 2
+    assert all(sorted(order[start:start + 449]) == list(range(449)) for start in range(0, 4490, 449))
+    data = PreparedScans(manifest, normal=True, voxel=False)
+    indices = [next(i for i, row in enumerate(data.records) if row["anomaly"] == count)
+               for count in (0, 1, 4)]
+    for index in indices:
+        sample = data[index]
+        original = data._source(data.records[index]["frame"])
+        reference = sample["normal_reference"]
+        assert int((sample["targets"] == 1).sum()) == data.records[index]["anomaly"]
+        assert not sample["normal_training"] and reference["normal_training"]
+        torch.testing.assert_close(reference["targets"],
+            torch.from_numpy(point_targets(original)[original.actual].copy()), atol=0, rtol=0)
+        expected = torch.from_numpy(np.linalg.norm(original.xyzi[original.actual, :3].astype(np.float64), axis=1).astype(np.float32))
+        torch.testing.assert_close(reference["observation"]["distance"], expected, atol=0, rtol=0)
+        assert not (reference["targets"] == 1).any()
+
+
 def test_conditional_interaction_learns_from_sampling_and_each_context_scale():
     torch.manual_seed(41)
     layer = Conditional()
@@ -1177,6 +1204,7 @@ def test_distributed_gradient_sum_with_empty_final_rank(tmp_path):
 def test_field_training_loop_uses_joint_cache_arbitrary_passes_and_exact_resume(tmp_path, monkeypatch):
     import src.train as training
     from src.data import NATIVE_VERSION
+    monkeypatch.setattr(training, "disk_check", lambda *a: None)
     class Model(_ToyModel):
         def __init__(self, mode):
             super().__init__(mode)

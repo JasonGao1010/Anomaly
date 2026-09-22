@@ -10,8 +10,8 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
-from .data import (Scans, VERSION, PILOT_VERSION, CONTINUATION_VERSION, NATIVE_VERSION, load_manifest, make_real_manifest,
-                   read_scan, write_json)
+from .data import (Scans, VERSION, PILOT_VERSION, CONTINUATION_VERSION, NATIVE_VERSION, NDP_VERSION,
+                   load_manifest, make_real_manifest, point_targets, read_scan, write_json)
 from .model import Segmentor, prepare_scan, scatter_scores, to_device
 from .normal import angular_observation, prediction_metrics, SCALES
 from vendor.stu.compute_point_level_ood import PointOODMetricsCalculator
@@ -41,6 +41,12 @@ class PreparedScans(Scans):
             result["observation"] = angular_observation(sample["xyzi"])
             # Only unmodified real-normal sources anchor the auxiliary task.
             result["normal_training"] = normal_record(self.records[index])
+            if self.manifest["version"] == NDP_VERSION:
+                original = self._source(self.records[index]["frame"])
+                # The paired likelihood never sees the Perlin-modified coordinates.
+                result["normal_reference"] = dict(normal_training=True,
+                    observation=angular_observation(original.xyzi[original.actual]),
+                    targets=torch.from_numpy(point_targets(original)[original.actual].copy()))
         return result
 
 
@@ -48,7 +54,8 @@ class PreparedScans(Scans):
 def evaluate_normal(model, manifest, device, workers=2):
     if model.normal is None:
         raise ValueError("this checkpoint has no normal return field")
-    indices = [i for i, row in enumerate(manifest["records"]) if normal_record(row)]
+    indices = [i for i, row in enumerate(manifest["records"])
+               if normal_record(row) or manifest["version"] == NDP_VERSION]
     if not indices:
         raise ValueError("manifest has no reliable unmodified normal scans")
     data = PreparedScans(manifest, normal=True, voxel=False)
@@ -59,6 +66,7 @@ def evaluate_normal(model, manifest, device, workers=2):
     model.eval()
     points, start = 0, time.perf_counter()
     for sample in loader:
+        sample = sample.get("normal_reference", sample)
         measured = prediction_metrics(model.normal, to_device(sample, device))
         points += measured["points"]
         for size, values in measured["scales"].items():
@@ -189,7 +197,7 @@ def evaluate(model, manifest, device, workers=4, score_path=None, record_points=
 
 def load_model(path, device):
     saved = torch.load(path, map_location="cpu", weights_only=False)
-    if saved.get("version") not in (VERSION, PILOT_VERSION, CONTINUATION_VERSION, NATIVE_VERSION):
+    if saved.get("version") not in (VERSION, PILOT_VERSION, CONTINUATION_VERSION, NATIVE_VERSION, NDP_VERSION):
         raise ValueError("checkpoint does not belong to a supported V4 experiment")
     model = Segmentor(saved["mode"])
     model.load_state_dict(saved["model"], strict=True)

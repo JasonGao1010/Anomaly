@@ -155,6 +155,25 @@ class NormalField(nn.Module):
                                               (torch.cat(items) for items in zip(*parts))))
             return fields
 
+    def likelihood(self, observation, targets):
+        """Normal auxiliary loss on a clean companion, without another backbone pass."""
+        fields = self(observation)
+        distance = observation["distance"]
+        selected = (targets == 0) & (distance >= LOWER) & (distance <= UPPER)
+        losses = []
+        for size in SCALES:
+            grid, field = observation["grids"][str(size)], fields[str(size)]
+            parts = []
+            for start in range(0, len(distance), RAY_CHUNK):
+                stop = min(start + RAY_CHUNK, len(distance))
+                def probability(group, origin, direction, measured, parameters=field):
+                    return ray_log_prob(*ray_parameters(parameters, group, origin, direction), measured)
+                parts.append(self._run(probability, grid["group"][start:stop],
+                    observation["origins"][start:stop], observation["directions"][start:stop],
+                    distance[start:stop].clamp(LOWER, UPPER)))
+            losses.append(joint_nll(torch.cat(parts), field["log_weights"], grid, selected))
+        return torch.stack(losses).mean()
+
 
 def ray_parameters(field, group, origin, direction):
     """Restrict each 3D Gaussian to a ray; covariance inverses are cached by block."""
