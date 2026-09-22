@@ -15,7 +15,8 @@ from torch.nn import functional as F
 from src.data import (Frame, Scans, MANIFEST_VERSION, VERSION, load_manifest, point_targets, read_delta,
                       STUSequence, restore_delta, supervision, unified_labels)
 from src.evaluate import better, summarize
-from src.model import (CHANNELS, Conditional, Interaction, Segmentor, balanced_loss, prepare_scan,
+from src.model import (CHANNELS, Conditional, Interaction, Relation, RELATION_MODES, relation_neighbors,
+                       Segmentor, balanced_loss, prepare_scan,
                        ranking_loss, rank_sample, RecallThreshold, scatter_scores, voxelize)
 from src.train import (EPOCHS, configuration, effective_batches, epoch_order, lr_factor, optimizer_for, pilot_order,
                        forward_loss, ranking_weight, rng_state, restore_rng, seed_all)
@@ -381,6 +382,77 @@ def test_conditional_interaction_learns_from_sampling_and_each_context_scale():
     assert not torch.allclose(output, changed)
 
 
+def test_relation_neighbors_match_independent_distances_and_exclude_self_duplicates():
+    xyz = np.random.default_rng(17).normal(size=(37, 3)) + [4, 0, 0]
+    actual = relation_neighbors(xyz).numpy()
+    expected = [set() for _ in xyz]
+    for coordinates in (xyz, xyz / np.linalg.norm(xyz, axis=1, keepdims=True)):
+        distances = ((coordinates[:, None] - coordinates[None]) ** 2).sum(-1)
+        np.fill_diagonal(distances, np.inf)
+        for i, row in enumerate(np.argsort(distances, axis=1)[:, :8]):
+            expected[i].update(row.tolist())
+    for i, row in enumerate(actual):
+        valid = row[row >= 0]
+        assert set(valid) == expected[i] and len(valid) == len(set(valid)) and i not in valid
+    assert (relation_neighbors(np.array([[1., 0, 0]])) == -1).all()
+    coincident_rays = relation_neighbors(np.array([[1., 0, 0], [2., 0, 0], [3., 0, 0]])).numpy()
+    for i, row in enumerate(coincident_rays):
+        assert set(row[row >= 0]) == set(range(3)) - {i}
+
+
+def test_decoder_variants_preserve_shared_n1_initialization_rng_and_matched_capacity():
+    seed_all(13)
+    baseline = Segmentor("conditional")
+    expected_rng = torch.get_rng_state()
+    relation_state, sizes = None, []
+    for mode in RELATION_MODES:
+        seed_all(13)
+        model = Segmentor(mode)
+        assert torch.equal(torch.get_rng_state(), expected_rng)
+        state = model.state_dict()
+        for name, value in baseline.state_dict().items():
+            assert torch.equal(state[name], value), name
+        current = model.relation.state_dict()
+        if relation_state is None:
+            relation_state = current
+        else:
+            assert all(torch.equal(value, relation_state[name]) for name, value in current.items())
+        sizes.append(sum(p.numel() for p in model.parameters()))
+    assert len(set(sizes)) == 1
+
+
+def test_relation_ablation_gradient_and_chunk_recomputation(monkeypatch):
+    import src.model as implementation
+    monkeypatch.setattr(implementation, "RELATION_CHUNK", 5)
+    torch.manual_seed(27)
+    xyz = torch.randn(13, 3) + torch.tensor([5., 0, 0])
+    neighbors = relation_neighbors(xyz.numpy())
+    state = torch.randn(13, 64, requires_grad=True)
+    model = Relation("relation")
+    reference = deepcopy(model)
+    output = model(state, xyz, neighbors, recompute=True)
+    direct_state = state.detach().clone().requires_grad_()
+    direct = reference(direct_state, xyz, neighbors, recompute=False)
+    target = torch.randn_like(output)
+    (output * target).sum().backward()
+    (direct * target).sum().backward()
+    torch.testing.assert_close(output, direct, atol=0, rtol=0)
+    torch.testing.assert_close(state.grad, direct_state.grad, atol=0, rtol=0)
+    for a, b in zip(model.parameters(), reference.parameters()):
+        assert a.grad is not None and torch.isfinite(a.grad).all()
+        torch.testing.assert_close(a.grad, b.grad, atol=0, rtol=0)
+    assert model.condition[0].weight.grad.abs().sum() > 0
+    reference.mode = "local_attention"
+    assert not torch.allclose(reference(state, xyz, neighbors, recompute=False), output)
+    reference.mode = "relation_no_difference"
+    assert not torch.allclose(reference(state, xyz, neighbors, recompute=False), output)
+    reference.mode = "relation_no_condition"
+    reference.zero_grad(set_to_none=True)
+    (reference(state, xyz, neighbors, recompute=False) * target).sum().backward()
+    assert torch.count_nonzero(reference.condition[0].weight.grad) == 0
+    assert torch.isfinite(reference(state[:1], xyz[:1], relation_neighbors(xyz[:1].numpy()))).all()
+
+
 def test_nuscenes_raw_order_intensity_and_ignored_context(tmp_path):
     from src.data import nuscenes_mapping, read_nuscenes
     categories = json.loads(Path("results/data/labels.json").read_text())["nuscenes"]
@@ -715,6 +787,40 @@ class _ToyScans:
         normal, anomaly = self.records[index]["normal"], self.records[index]["anomaly"]
         x = torch.arange((normal + anomaly) * 3).reshape(-1, 3).float() / 30 + index / 40
         return dict(xyzi=x, targets=torch.tensor([0] * normal + [1] * anomaly))
+
+
+def test_decoder_comparison_uses_fresh_native_budget_and_one_endpoint(tmp_path, monkeypatch):
+    import src.train as training
+    from src.data import NATIVE_VERSION
+    monkeypatch.setattr(training, "Segmentor", _ToyModel)
+    monkeypatch.setattr(training, "PreparedScans", lambda manifest, **kwargs: _ToyScans(manifest))
+    monkeypatch.setattr(torch.cuda, "reset_peak_memory_stats", lambda *a: None)
+    monkeypatch.setattr(torch.cuda, "max_memory_allocated", lambda *a: 0)
+    monkeypatch.setattr(training, "STOP", False)
+    calls = []
+    def validate(model, *args, **kwargs):
+        calls.append((model.mode, kwargs["score_path"]))
+        return dict(metrics=dict(AP=50., FPR95=5., AUROC=90.), manifest_sha256="fixture-val")
+    monkeypatch.setattr(training, "validate_all", validate)
+    manifest = dict(version=NATIVE_VERSION, sha256="fixture-train", records=[
+        dict(group="anomaly_stu", normal=5, anomaly=5) for _ in range(11)])
+    config = dict(version=NATIVE_VERSION, updates=3, eval_every=3, epochs=2, microbatch=2,
+        recipe="native", objective="metrics", world_size=1, train_manifest="fixture-train",
+        sampling="two passes", sampling_segment=0, optimizer_state="reset", decoder_comparison=dict(seed_plan=[0,1,2]))
+    args = SimpleNamespace(output=tmp_path, initial=tmp_path / "public.pth", resume=False,
+                           workers=0, save_every=100, score_path=None)
+    orders = []
+    for method in ("conditional", "local_attention", "relation"):
+        assert training.train_stage(args, manifest, dict(sha256="fixture-val"), 1, method,
+                                    torch.device("cpu"), config)
+        directory = tmp_path / "1" / method
+        saved = torch.load(directory / "last.pt", weights_only=False)
+        assert saved["complete"] and saved["stage"] == 1 and saved["successful_updates"] == 3
+        assert saved["mode"] == method and saved["epoch"] == 1
+        assert {int(s["step"]) for s in saved["optimizer"]["state"].values()} == {3}
+        orders.append(json.loads((directory / "sampling.json").read_text())["order"])
+    assert orders[0] == orders[1] == orders[2] == pilot_order(manifest, 1, 3)
+    assert calls == [(m, tmp_path / "1" / m / "val.npy") for m in ("conditional", "local_attention", "relation")]
 
 
 @pytest.mark.parametrize("start_update,material", [(500,False),(1000,False),(1000,True)])

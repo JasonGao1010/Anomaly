@@ -20,8 +20,12 @@ STU_COMMIT = "8f0f09c2ca4bf7b665e0ae5919b4092ddae140a2"
 
 
 class PreparedScans(Scans):
+    def __init__(self, manifest, *, relations=False):
+        super().__init__(manifest)
+        self.relations = relations
+
     def __getitem__(self, index):
-        return prepare_scan(super().__getitem__(index))
+        return prepare_scan(super().__getitem__(index), relations=self.relations)
 
 
 def precision(device):
@@ -61,7 +65,8 @@ def evaluate(model, manifest, device, workers=4, score_path=None, record_points=
     required = 64 * count + 1_000_000_000
     if memory_available() < required:
         raise RuntimeError(f"official metrics require about {required / 1e9:.1f} GB free RAM")
-    dataset = PreparedScans(manifest)
+    dataset = (PreparedScans(manifest, relations=True) if getattr(model, "relation", None) is not None
+               else PreparedScans(manifest))
     loader = DataLoader(dataset, batch_size=None, sampler=indices, num_workers=workers,
                         pin_memory=device.type == "cuda",
                         **({"prefetch_factor": 1} if workers else {}),
@@ -160,7 +165,8 @@ def infer(model, scan, device):
     if frame.actual.any():
         sample = prepare_scan(dict(xyzi=frame.xyzi[frame.actual].copy(), slots=frame.return_slots,
                                    targets=np.full(int(frame.actual.sum()), -1, np.int8),
-                                   slot_count=len(frame.xyzi), index=frame.frame_id))
+                                   slot_count=len(frame.xyzi), index=frame.frame_id),
+                              relations=getattr(model, "relation", None) is not None)
         sample = to_device(sample, device)
         with autocast(device):
             prediction = model(sample)

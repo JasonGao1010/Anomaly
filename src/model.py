@@ -3,6 +3,7 @@
 from pathlib import Path
 
 import numpy as np
+from scipy.spatial import cKDTree
 import torch
 from torch import nn
 from torch.nn import functional as F
@@ -19,6 +20,8 @@ WEIGHTS_SHA256 = "95f151f6edcfbf315cd06df6afd261f2a2fde300d3c693dd26b1305d642ecc
 CHANNELS = (36, 72, 144, 252, 504)
 GRID_SIZE = .05
 POINT_CHUNK = 65536
+RELATION_CHUNK = 4096
+RELATION_MODES = ("local_attention", "relation", "relation_no_condition", "relation_no_difference")
 
 
 def mlp(inputs, hidden, outputs):
@@ -48,8 +51,34 @@ def voxelize(xyzi):
                                           - (grid + .5) * GRID_SIZE) / GRID_SIZE).astype(np.float32)))
 
 
-def prepare_scan(sample):
+def relation_neighbors(xyz, neighbors=8):
+    """Union of spatial and ray-direction kNN; no labels, padding returns or free-space inference."""
+    xyz = np.asarray(xyz, dtype=np.float64)
+    count = len(xyz)
+    width = min(neighbors + 1, count)
+    direction = xyz / np.maximum(np.linalg.norm(xyz, axis=1, keepdims=True), 1e-12)
+    indices = []
+    for coordinates in (xyz, direction):
+        _, nearest = cKDTree(coordinates).query(coordinates, k=list(range(1, width + 1)), workers=1)
+        nearest[nearest == np.arange(count)[:, None]] = count
+        # Stable compaction removes self even when coincident directions precede it.
+        order = np.argsort(nearest == count, axis=1, kind="stable")
+        indices.append(np.take_along_axis(nearest, order, axis=1)[:, :min(neighbors, count - 1)])
+    joined = np.concatenate(indices, axis=1)
+    # Sorting also removes overlap between spatial and angular neighbors.
+    joined.sort(axis=1)
+    valid = joined != count
+    if joined.shape[1] > 1:
+        valid[:, 1:] &= joined[:, 1:] != joined[:, :-1]
+    result = np.full((count, 2 * neighbors), -1, dtype=np.int64)
+    result[:, :joined.shape[1]] = np.where(valid, joined, -1)
+    return torch.from_numpy(result)
+
+
+def prepare_scan(sample, *, relations=False):
     result = voxelize(sample["xyzi"])
+    if relations:
+        result["neighbors"] = relation_neighbors(result["voxel_xyzi"][:, :3].numpy())
     for name in ("targets", "slots"):
         result[name] = torch.from_numpy(sample[name])
     result["slot_count"], result["index"] = sample["slot_count"], sample["index"]
@@ -142,6 +171,68 @@ class Conditional(nn.Module):
         return state
 
 
+class Relation(nn.Module):
+    """Matched edge inputs/capacity; compare normalized attention with signed differences."""
+
+    def __init__(self, mode):
+        super().__init__()
+        if mode not in RELATION_MODES:
+            raise ValueError(mode)
+        self.mode = mode
+        self.query = nn.Linear(64, 128)
+        self.key = nn.Linear(64, 128)
+        self.value = nn.Linear(64, 64)
+        self.geometry = mlp(3, 32, 72)
+        self.condition = mlp(10, 32, 8)
+        self.output = nn.Linear(128, 64)
+        self.norm = nn.LayerNorm(64)
+
+    def messages(self, state, xyz, radii, rays, neighbors, query, keys, values, begin, end):
+        indices = neighbors[begin:end]
+        valid = indices >= 0
+        indices = indices.clamp_min(0)
+        origin, other = xyz[begin:end, None].float(), xyz[indices].float()
+        delta = other - origin  # Sensor coordinates in metres, before any learned scaling.
+        ri, rj = radii[begin:end, None].expand_as(radii[indices]), radii[indices]
+        ui, uj = rays[begin:end, None].expand_as(rays[indices]), rays[indices]
+        condition = torch.cat((ri / 50, rj / 50, ui, uj, (rj - ri) / 50, (ui * uj).sum(-1, keepdim=True)), -1)
+        if self.mode == "relation_no_condition":
+            condition = torch.zeros_like(condition)
+        geometry = self.geometry(delta)
+        logits = (query[begin:end, None].float() * keys[indices].float()).reshape(
+            end - begin, indices.shape[1], 8, 16).sum(-1) / 4
+        logits = logits + geometry[..., :8].float() + self.condition(condition).float()
+        # Mask padding after softmax as well, so a singleton scan has zero messages.
+        weights = logits.masked_fill(~valid[..., None], -1e9).softmax(1) * valid[..., None]
+        common = (weights[..., :4, None] * values[indices].float().reshape(
+            end - begin, indices.shape[1], 4, 16)).sum(1).flatten(1)
+        difference = F.gelu(values[indices] - values[begin:end, None] + geometry[..., 8:])
+        if self.mode != "local_attention":
+            # Bounded signed contributions retain deviations instead of averaging them away.
+            weights = torch.tanh(logits) * valid[..., None] / valid.sum(1).clamp_min(1)[:, None, None]
+        contrast = (weights[..., 4:, None] * difference.float().reshape(
+            end - begin, indices.shape[1], 4, 16)).sum(1).flatten(1)
+        if self.mode == "relation_no_difference":
+            contrast = contrast * 0
+        return self.norm(state[begin:end] + self.output(torch.cat((common, contrast), -1).to(state.dtype)))
+
+    def forward(self, state, xyz, neighbors, *, recompute=True):
+        # Project node features once; only bounded edge chunks are materialized.
+        query, keys, values = self.query(state), self.key(state), self.value(state)
+        radii = torch.linalg.vector_norm(xyz.float(), dim=-1, keepdim=True).clamp_min(1e-12)
+        rays = xyz.float() / radii
+        result = []
+        for begin in range(0, len(state), RELATION_CHUNK):
+            end = min(begin + RELATION_CHUNK, len(state))
+            def block(s, q, k, v, start=begin, stop=end):
+                return self.messages(s, xyz, radii, rays, neighbors, q, k, v, start, stop)
+            if self.training and recompute and torch.is_grad_enabled():
+                result.append(checkpoint(block, state, query, keys, values, use_reentrant=False))
+            else:
+                result.append(block(state, query, keys, values))
+        return torch.cat(result)
+
+
 class Segmentor(nn.Module):
     def __init__(self, mode="base", *, recompute=True):
         super().__init__()
@@ -151,7 +242,7 @@ class Segmentor(nn.Module):
         self.adapter = mlp(128, 64, 36)
         nn.init.zeros_(self.adapter[-1].weight)
         nn.init.zeros_(self.adapter[-1].bias)
-        if mode == "conditional":
+        if mode == "conditional" or mode in RELATION_MODES:
             self.conditional = Conditional()
             self.point_detail = nn.Linear(64, 64)
             self.point_position = mlp(3, 32, 64)
@@ -162,8 +253,13 @@ class Segmentor(nn.Module):
             self.head = nn.Sequential(nn.Linear(128, 64), nn.GELU(), nn.Linear(64, 1))
         self.interaction = None
         self.interaction_weight = None
-        if mode not in ("base", "conditional"):
+        if mode not in ("base", "conditional", *RELATION_MODES):
             self.add_interaction(mode)
+        self.relation = None
+        if mode in RELATION_MODES:
+            # Preserve all shared N1 initialization and the post-construction random stream.
+            with torch.random.fork_rng(devices=[]):
+                self.relation = Relation(mode)
 
     def add_interaction(self, mode):
         if self.interaction is not None:
@@ -225,9 +321,12 @@ class Segmentor(nn.Module):
             ancestors.append(ancestry)
             voxel_ancestors.append(voxel_ancestry)
         point = self.backbone.dec(point)
-        if self.mode == "conditional":
+        if self.mode == "conditional" or self.mode in RELATION_MODES:
             unified = self._checkpoint(self.conditional, pooled, sample["voxel_xyzi"][:, :3],
                 voxel_ancestors + [voxel_ancestors[0]], coords + [point.coord], features + [point.feat])
+            if self.relation is not None:
+                unified = self.relation(unified, sample["voxel_xyzi"][:, :3], sample["neighbors"],
+                                        recompute=self.recompute)
             output = []
             for start in range(0, len(xyzi), POINT_CHUNK):
                 end = min(start + POINT_CHUNK, len(xyzi))

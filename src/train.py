@@ -26,7 +26,7 @@ from .data import (VERSION, PILOT_VERSION, CONTINUATION_VERSION, NATIVE_VERSION,
                    load_manifest, replace_background, write_json)
 from .evaluate import PreparedScans, autocast, better, evaluate, memory_available, precision
 from .model import (POINT_CHUNK, Segmentor, balanced_loss, ranking_loss, to_device,
-                    LITEPT_COMMIT, WEIGHTS_REVISION, WEIGHTS_SHA256)
+                    LITEPT_COMMIT, WEIGHTS_REVISION, WEIGHTS_SHA256, RELATION_MODES, RELATION_CHUNK)
 
 
 EPOCHS = (8, 4)
@@ -650,16 +650,16 @@ def write_result(directory, state, config):
 
 def train_stage(args, train, val, seed, method, device, config):
     global STOP
-    if seed != 0:
+    if seed != 0 and not config.get("decoder_comparison"):
         raise ValueError("F240-R2 fixes the sole experiment seed to 0")
     rank, world_size = rank_info()
-    native = method == "conditional"
+    native = method == "conditional" or method in RELATION_MODES
     continuation = bool(config.get("continuation_schedule"))
     branch = config.get("branch")
-    pilot = method in ("pilot", "conditional")
+    pilot = method == "pilot" or native
     stage = 1 if method == "base" or native else 2
     parent = torch.load(args.initial, map_location="cpu", weights_only=False) if (pilot and not native) or branch or continuation else None
-    mode = "conditional" if native else parent["mode"] if pilot else "base" if method in ("base", "continue") else method
+    mode = method if native else parent["mode"] if pilot else "base" if method in ("base", "continue") else method
     directory = args.output / str(seed) / method
     if rank == 0:
         directory.mkdir(parents=True, exist_ok=True)
@@ -772,7 +772,7 @@ def train_stage(args, train, val, seed, method, device, config):
                 atomic_save(last, dict(saved, selected=False))
                 write_json(directory / "epoch0.json", result)
             del saved
-    dataset = PreparedScans(train)
+    dataset = PreparedScans(train, relations=True) if method in RELATION_MODES else PreparedScans(train)
     if pilot:
         del parent
         full_order = pilot_order(train, seed, schedule_total, sampling=config.get("sampling"),
@@ -993,6 +993,8 @@ def train_stage(args, train, val, seed, method, device, config):
         validation_start = time.perf_counter()
         evaluation_scores = directory / f"val{state['planned_updates']}.npy" if recording is not None else (
             args.score_path if (epoch + 1) * steps_per_epoch >= total else None)
+        if config.get("decoder_comparison"):
+            evaluation_scores = directory / "val.npy"
         result = validate_all(model, val, device, args.workers,
                               score_path=evaluation_scores, **(dict(record_points=True) if recording is not None else {}))
         state["validation_seconds"] += time.perf_counter() - validation_start
@@ -1036,16 +1038,16 @@ def train_stage(args, train, val, seed, method, device, config):
     return True
 
 
-def preflight(args, train, val, device, config, resources):
+def preflight(args, train, val, device, config, resources, method="conditional"):
     """Measure the actual mixed update without changing the initial checkpoint."""
     seed_all(0)
-    dataset = PreparedScans(train)
+    dataset = PreparedScans(train, relations=True) if method in RELATION_MODES else PreparedScans(train)
     order = pilot_order(train, 0, args.updates, sampling=config["sampling"],
                           segment=config["sampling_segment"], paired=config.get("recipe") == "paired",
                           background=config.get("background_reference"))
     indices = order[:BATCH_SIZE]
     if config.get("recipe") == "native":
-        model = Segmentor("conditional").to(device)
+        model = Segmentor(method).to(device)
         model.load_pretrained(args.initial)
     else:
         parent = torch.load(args.initial, map_location="cpu", weights_only=False)
@@ -1097,7 +1099,7 @@ def preflight(args, train, val, device, config, resources):
                   scans=records, parameter_updates=0,
                   mixed_batch_seconds=sum(row["seconds"] for row in records if not row["stress"]),
                   peak_vram_bytes=torch.cuda.max_memory_allocated(device))
-    write_json(args.output / "preflight.json", result)
+    write_json(args.output / (f"preflight_{method}.json" if config.get("decoder_comparison") else "preflight.json"), result)
     print(json.dumps({key: result[key] for key in
                      ("mixed_batch_seconds", "peak_vram_bytes", "parameter_updates", "scans")}))
 
@@ -1122,8 +1124,10 @@ def main():
                         help="retain every training-point logit, identities, per-update buffers/RNG, interval checkpoints and validation scores")
     parser.add_argument("--optimizer-state", choices=("inherit", "reset"), default="reset")
     parser.add_argument("--sampling-segment", type=int, default=0)
-    parser.add_argument("--seeds", type=int, nargs="+", choices=(0,), default=[0],
-                        help="this pilot uses only seed 0")
+    parser.add_argument("--seeds", type=int, nargs="+", default=[0],
+                        help="legacy runs use seed 0; decoder comparisons permit matched nonnegative seeds")
+    parser.add_argument("--methods", nargs="+", choices=("conditional", *RELATION_MODES),
+                        help="fresh N1 decoder comparison with endpoint-only development evaluation")
     parser.add_argument("--workers", type=int, default=2)
     parser.add_argument("--threads", type=int, default=2)
     parser.add_argument("--save-every", type=int, default=500)
@@ -1131,8 +1135,15 @@ def main():
     parser.add_argument("--check", action="store_true")
     args = parser.parse_args()
     if (args.workers < 0 or args.threads < 1 or args.save_every < 1 or args.updates < 1
-            or args.eval_every < 1 or args.sampling_segment < 0 or len(set(args.seeds)) != len(args.seeds)):
+            or args.eval_every < 1 or args.sampling_segment < 0 or min(args.seeds) < 0
+            or len(set(args.seeds)) != len(args.seeds)):
         parser.error("invalid runtime resource settings or duplicate seeds")
+    if not args.methods and args.seeds != [0]:
+        parser.error("legacy experiments retain seed 0; repeated seeds require --methods")
+    if args.methods and (args.recipe != "native" or args.objective != "metrics" or args.branch
+                         or args.optimizer_state != "reset" or args.sampling_segment or args.record_points
+                         or args.score_path or len(set(args.methods)) != len(args.methods)):
+        parser.error("decoder comparison requires fresh native metric training, unique methods and dedicated outputs")
     torch.set_num_threads(args.threads)
     torch.set_num_interop_threads(1)
     if not torch.cuda.is_available():
@@ -1163,11 +1174,26 @@ def main():
         args.updates = math.ceil(2 * len(train["records"]) / BATCH_SIZE)
     elif args.recipe != "native" and args.objective != "bce":
         parser.error("the paired metric objective is only defined for the native experiment")
+    if args.methods:
+        args.eval_every = args.updates
     config = configuration(train, val, device, world_size, updates=args.updates, initial=args.initial,
                            eval_every=args.eval_every, recipe=args.recipe,
                            optimizer_state=args.optimizer_state, segment=args.sampling_segment,
                            objective=args.objective, branch=args.branch, hard_pool=args.hard_pool,
                            material_indices=args.material_indices, baseline_eval=args.baseline_eval)
+    methods = args.methods or ["conditional" if args.recipe == "native" else "pilot"]
+    if args.methods:
+        config.update(seeds=args.seeds, decoder_comparison=dict(methods=methods,
+            neighbors="union of eight spatial and eight ray-direction nearest voxels; self/duplicates excluded",
+            edge_chunk=RELATION_CHUNK, selection="fixed endpoint, no checkpoint or seed selection",
+            inputs="shared N1 state, relative position, range and unit ray directions; no labels or missing-ray claims",
+            condition_ablation="zero explicit conditions in the added relation operator only; N1 and neighbors unchanged",
+            evaluation_role="val19 is previously used development data, not an independent final test",
+            training_budget="identical two complete passes, updates, loss, initialization and sample stream per seed",
+            seed_plan=[0, 1, 2],
+            screening="seed 0 first; stop expansion if the candidate is no better in both AP and FPR95 than either control; otherwise repeat paired seeds 1 and 2 before a stability claim",
+            stability="paired AP/FPR95 changes across seeds; a single seed is only a screening result"),
+            validation="one full val19 development evaluation at the fixed endpoint")
     if args.record_points:
         if args.recipe != "native" or args.branch or world_size != 1 or args.score_path:
             parser.error("complete point recording uses one native training run and its own interval score paths")
@@ -1207,8 +1233,11 @@ def main():
     if other:
         raise RuntimeError(f"other CUDA processes must finish before this run: {other}")
     # Include best/last optimizer states and the largest atomic replacement.
+    comparison_peak = len(methods) * len(args.seeds) * (
+        600_000_000 + 4 * sum(r["normal"] + r["anomaly"] for r in val["records"] if r["eligible"]))
     disk_check((config.get("recording", {}).get("additional_peak_bytes",
-                2_000_000_000 if args.score_path else 1_000_000_000)) if not args.check else 100_000_000)
+                comparison_peak if args.methods else 2_000_000_000 if args.score_path else 1_000_000_000))
+               if not args.check else 100_000_000)
     free, _ = torch.cuda.mem_get_info(device)
     if free < 7_000_000_000:
         raise RuntimeError(f"full-scan training verification needs a free GPU; only {free / 1e9:.1f} GB available")
@@ -1218,20 +1247,22 @@ def main():
     if args.check:
         if world_size != 1:
             parser.error("--check uses one GPU; accumulation equivalence is tested separately")
-        preflight(args, train, val, device, config, resources)
+        for method in methods:
+            preflight(args, train, val, device, config, resources, method)
         return
     signal.signal(signal.SIGINT, stop_requested)
     signal.signal(signal.SIGTERM, stop_requested)
     if rank == 0:
         print(json.dumps(dict(version=config["version"], seeds=args.seeds,
-                              methods=["conditional" if args.recipe == "native" else "pilot"],
+                              methods=methods,
                               samples=config["samples"], sampling=config["sampling"],
                               eval_every=args.eval_every, optimizer_state=config["optimizer_state"],
                               start_update=config.get("start_update", 0), planned_updates=config["updates"],
                               output=str(args.output.resolve()))), flush=True)
     for seed in args.seeds:
-        if not train_stage(args, train, val, seed, "conditional" if args.recipe == "native" else "pilot", device, config):
-            return
+        for method in methods:
+            if not train_stage(args, train, val, seed, method, device, config):
+                return
     if dist.is_initialized():
         dist.destroy_process_group()
 

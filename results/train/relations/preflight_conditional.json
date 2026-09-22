@@ -1,0 +1,324 @@
+{
+  "version": "AJAE-V4-N1",
+  "configuration": {
+    "version": "AJAE-V4-N1",
+    "data_version": "AJAE-V4-N1",
+    "seeds": [
+      0
+    ],
+    "train_manifest": "e3c32d0b83ffb9eda2e095ffddd08828509e97d1d34509805dd2584951b2b3c6",
+    "val_manifest": "918524fd271f896bf9288ebfe4131941a20cbd00a0925e91c8ccedf4d7574855",
+    "val_directory": "/home/jasongao/Data/STU/val",
+    "samples": 6185,
+    "epochs": 2,
+    "batch_size": 8,
+    "microbatch": 2,
+    "peak_lr": [
+      0.0002,
+      0.002
+    ],
+    "weight_decay": 0.005,
+    "adam_betas": [
+      0.9,
+      0.999
+    ],
+    "adam_eps": 1e-08,
+    "gradient_clip": 1.0,
+    "warmup_fraction": 0.05,
+    "initial_lr_fraction": 0.1,
+    "final_lr_fraction": 0.01,
+    "augmentation": false,
+    "point_chunk": 65536,
+    "grid_size": 0.05,
+    "precision": "torch.bfloat16",
+    "sparse_precision": "float32",
+    "world_size": 1,
+    "code": {
+      "files": {
+        "src/analyze.py": "f5789db1fe9c4f6b6862c8c31aa452fc2ae7276ef345dc391ed7d469fb1b4230",
+        "src/attribute.py": "19f632e8b6a68e58ed2372e1699d061152dcda9a11b0647451381edbb5f8b278",
+        "src/data.py": "7bafbfb408e7901f5d97a2b41f938d60b3a89ee8dde3db4149872d088f1fa55c",
+        "src/diagnose.py": "01b6d66472b78381d5f28ecc35b5b6b509feaab70512730ade90e52b15df3035",
+        "src/evaluate.py": "eb4757b685c2a236592565cf2657f3a10fc16567515960c671cbfb17171f1a49",
+        "src/learning.py": "8b46207cfe4e8e5f71a3bb6b522e24a1f33c331200839a6aa61fe117ef9b0003",
+        "src/model.py": "948d31539fe1b4789030aa699fb0f51195fdc177ee6f496df6d8ae87956850c5",
+        "src/probe.py": "016acadbd38197547fa912266542f78723e2f643c5984c16789efe0831a10634",
+        "src/render.py": "6cb949daf6d609ce007619a9abb16021eaf1a516e110ae41eb988a804c7c11a2",
+        "src/shape.py": "f94f31e4da2d37f491fd94afd5df2c378bac3eda46a42c53846da0c332400299",
+        "src/train.py": "058da1ce6e9253db8d5c561146231a5fa8f79fca82380898dbfac0a888ab32c1",
+        "vendor/litept/model.py": "342da27a8d65454347630ff65e806920b103165109f846a9273c84e85d2823a7",
+        "vendor/litept/pointrope.py": "07dfd2a3f0d1ff66bd3e1e6094d5246f9692bcd291b812e017f3b4154152ad30",
+        "vendor/litept/serialization/__init__.py": "e6461b37ccb5dcb24725943271259c4f74dac89d27b22becb97e48ce04c8a9b1",
+        "vendor/litept/serialization/default.py": "22a1ccdb089bf7dc4d4de02cb8d642f11f91dc002c8a691369ba7bfd211334d5",
+        "vendor/litept/serialization/hilbert.py": "60cb8365656312bb49a7a4c45859d35c60d764b613fab53bb0d97178a9c2f25a",
+        "vendor/litept/serialization/z_order.py": "81101b623cf80aedf376202d4b4cb9c5f8e74a320390bd33ee67af662e3e05a4",
+        "vendor/stu/compute_point_level_ood.py": "1cb7606a3112dd9aa3f84ac02e5c028eafd57cc3389f7054314ae16edfa16f23"
+      },
+      "dependencies": {
+        "torch": "2.12.0",
+        "numpy": "2.4.6",
+        "scipy": "1.17.1",
+        "scikit-learn": "1.8.0",
+        "timm": "1.0.27",
+        "addict": "2.4.0",
+        "flash_attn": "2.8.3.post1",
+        "torch_scatter": "2.1.2+pt212cu130",
+        "spconv-cu126": "2.3.8",
+        "cumm-cu126": "0.7.11"
+      },
+      "python": "3.13.12 | packaged by conda-forge | (main, Feb  5 2026, 05:53:46) [GCC 14.3.0]",
+      "litept_commit": "436d04801c8151faebe66a1b2d368a9711e7e6aa",
+      "stu_commit": "8f0f09c2ca4bf7b665e0ae5919b4092ddae140a2",
+      "weights_revision": "a8e76e92efbb2061639f5c683968bc5d248ee002",
+      "weights_sha256": "95f151f6edcfbf315cd06df6afd261f2a2fde300d3c693dd26b1305d642ecc30"
+    },
+    "updates": 1547,
+    "initial": "/home/jasongao/Study/AJAE-v4/assets/nuscenes.pth",
+    "initial_sha256": "95f151f6edcfbf315cd06df6afd261f2a2fde300d3c693dd26b1305d642ecc30",
+    "scan_visits": 12370,
+    "sampling": "two complete shuffled passes; final batch may contain fewer than eight scans",
+    "sampling_segment": 0,
+    "recipe": "native",
+    "optimizer_state": "reset",
+    "eval_every": 1547,
+    "objective": "metrics",
+    "loss": {
+      "bce": "class means over all effective-batch supervised points",
+      "pairs": "consecutive pairs, averaged within each effective batch",
+      "tau": 1.0,
+      "ap_weight": 1.0,
+      "auc_weight": 0.1,
+      "fpr95_weight": 0.1,
+      "positive_anchors": 256,
+      "positive_references": "all",
+      "normal_top": 512,
+      "normal_random": 3584,
+      "normal_weights": "top: 1; rest: population / sample; normalize by full normal count",
+      "auc_positives": "uniform anchors",
+      "threshold_recall": 0.95,
+      "threshold_gradient": "implicit",
+      "bce_only_fraction": 0.1,
+      "ramp_end_fraction": 0.2,
+      "rank_seed": "seed * 100000000 + update * 8 + pair_index; independent torch generator"
+    },
+    "validation": "one full val19 development evaluation at the fixed endpoint",
+    "decoder_comparison": {
+      "methods": [
+        "conditional",
+        "local_attention",
+        "relation"
+      ],
+      "neighbors": "union of eight spatial and eight ray-direction nearest voxels; self/duplicates excluded",
+      "edge_chunk": 4096,
+      "selection": "fixed endpoint, no checkpoint or seed selection",
+      "inputs": "shared N1 state, relative position, range and unit ray directions; no labels or missing-ray claims",
+      "condition_ablation": "zero explicit conditions in the added relation operator only; N1 and neighbors unchanged",
+      "evaluation_role": "val19 is previously used development data, not an independent final test",
+      "training_budget": "identical two complete passes, updates, loss, initialization and sample stream per seed",
+      "seed_plan": [
+        0,
+        1,
+        2
+      ],
+      "screening": "seed 0 first; stop expansion if the candidate is no better in both AP and FPR95 than either control; otherwise repeat paired seeds 1 and 2 before a stability claim",
+      "stability": "paired AP/FPR95 changes across seeds; a single seed is only a screening result"
+    }
+  },
+  "resources": {
+    "cpu_affinity": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23
+    ],
+    "cpu": "Architecture:                            x86_64\nCPU op-mode(s):                          32-bit, 64-bit\nAddress sizes:                           42 bits physical, 48 bits virtual\nByte Order:                              Little Endian\nCPU(s):                                  24\nOn-line CPU(s) list:                     0-23\nVendor ID:                               GenuineIntel\nModel name:                              Intel(R) Core(TM) Ultra 9 275HX\nCPU family:                              6\nModel:                                   198\nThread(s) per core:                      1\nCore(s) per socket:                      24\nSocket(s):                               1\nStepping:                                2\nBogoMIPS:                                6143.99\nFlags:                                   fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ss ht syscall nx pdpe1gb rdtscp lm constant_tsc rep_good nopl xtopology tsc_reliable nonstop_tsc cpuid tsc_known_freq pni pclmulqdq vmx ssse3 fma cx16 pcid sse4_1 sse4_2 x2apic movbe popcnt tsc_deadline_timer aes xsave avx f16c rdrand hypervisor lahf_lm abm 3dnowprefetch ssbd ibrs ibpb stibp ibrs_enhanced tpr_shadow ept vpid ept_ad fsgsbase tsc_adjust bmi1 avx2 smep bmi2 erms invpcid rdseed adx smap clflushopt clwb sha_ni xsaveopt xsavec xgetbv1 xsaves avx_vnni vnmi umip waitpkg gfni vaes vpclmulqdq rdpid movdiri movdir64b fsrm md_clear serialize ibt flush_l1d arch_capabilities\nVirtualization:                          VT-x\nHypervisor vendor:                       Microsoft\nVirtualization type:                     full\nL1d cache:                               1.1 MiB (24 instances)\nL1i cache:                               1.5 MiB (24 instances)\nL2 cache:                                72 MiB (24 instances)\nL3 cache:                                36 MiB (1 instance)\nNUMA node(s):                            1\nNUMA node0 CPU(s):                       0-23\nVulnerability Gather data sampling:      Not affected\nVulnerability Ghostwrite:                Not affected\nVulnerability Indirect target selection: Not affected\nVulnerability Itlb multihit:             Not affected\nVulnerability L1tf:                      Not affected\nVulnerability Mds:                       Not affected\nVulnerability Meltdown:                  Not affected\nVulnerability Mmio stale data:           Not affected\nVulnerability Old microcode:             Not affected\nVulnerability Reg file data sampling:    Not affected\nVulnerability Retbleed:                  Mitigation; Enhanced IBRS\nVulnerability Spec rstack overflow:      Not affected\nVulnerability Spec store bypass:         Mitigation; Speculative Store Bypass disabled via prctl\nVulnerability Spectre v1:                Mitigation; usercopy/swapgs barriers and __user pointer sanitization\nVulnerability Spectre v2:                Mitigation; Enhanced / Automatic IBRS; IBPB conditional; PBRSB-eIBRS SW sequence; BHI BHI_DIS_S\nVulnerability Srbds:                     Not affected\nVulnerability Tsa:                       Not affected\nVulnerability Tsx async abort:           Not affected\nVulnerability Vmscape:                   Not affected",
+    "memory_available": 22186971136,
+    "memory": "total        used        free      shared  buff/cache   available\nMem:     25196920832  3009949696 17564213248    80060416  5024833536 22186971136\nSwap:    17179869184  1083310080 16096559104",
+    "windows_e": {
+      "Size": 484950659072,
+      "SizeRemaining": 26127179776
+    },
+    "gpu": "NVIDIA GeForce RTX 5080 Laptop GPU, 16303 MiB, 14318 MiB, 4 %",
+    "processes": "741733, [Not Found]"
+  },
+  "scans": [
+    {
+      "indices": [
+        6111,
+        356
+      ],
+      "stress": false,
+      "groups": [
+        "normal_stu",
+        "anomaly_nuscenes"
+      ],
+      "points": [
+        125909,
+        34715
+      ],
+      "seconds": 16.790049309987808,
+      "loss": 0.5505761504173279,
+      "details": {
+        "bce": 0.26006099581718445,
+        "ap": 0.9982537031173706,
+        "auc": 0.6887209415435791,
+        "fpr95": 0.9493478536605835,
+        "positive": 262,
+        "negative": 151391,
+        "anchors": 256,
+        "negatives": 4096,
+        "top": 512,
+        "random_weight": 42.097935267857146,
+        "threshold": -2.9278125762939453,
+        "recall": 0.949999988079071
+      }
+    },
+    {
+      "indices": [
+        3132,
+        2560
+      ],
+      "stress": false,
+      "groups": [
+        "anomaly_nuscenes",
+        "normal_nuscenes"
+      ],
+      "points": [
+        34752,
+        34720
+      ],
+      "seconds": 0.23845240697846748,
+      "loss": 0.4484822452068329,
+      "details": {
+        "bce": 0.15955498814582825,
+        "ap": 0.9942733645439148,
+        "auc": 0.6671004891395569,
+        "fpr95": 0.9472562074661255,
+        "positive": 228,
+        "negative": 40905,
+        "anchors": 228,
+        "negatives": 4096,
+        "top": 512,
+        "random_weight": 11.270368303571429,
+        "threshold": -2.904341220855713,
+        "recall": 0.9500000476837158
+      }
+    },
+    {
+      "indices": [
+        6048,
+        2867
+      ],
+      "stress": false,
+      "groups": [
+        "normal_stu",
+        "normal_nuscenes"
+      ],
+      "points": [
+        127340,
+        34688
+      ],
+      "seconds": 0.43736765600624494,
+      "loss": 0.10658328980207443,
+      "details": {
+        "bce": 0.10658328980207443,
+        "ap": 0.0,
+        "auc": 0.0,
+        "fpr95": 0.0,
+        "positive": 0,
+        "negative": 150556,
+        "anchors": 0,
+        "negatives": 0,
+        "top": 0,
+        "random_weight": 0.0,
+        "threshold": null,
+        "recall": null
+      }
+    },
+    {
+      "indices": [
+        6124,
+        4326
+      ],
+      "stress": false,
+      "groups": [
+        "normal_stu",
+        "anomaly_nuscenes"
+      ],
+      "points": [
+        124740,
+        34719
+      ],
+      "seconds": 0.45362760600983165,
+      "loss": 0.4490646421909332,
+      "details": {
+        "bce": 0.15922799706459045,
+        "ap": 0.999335765838623,
+        "auc": 0.6541799306869507,
+        "fpr95": 0.9459285736083984,
+        "positive": 95,
+        "negative": 150678,
+        "anchors": 95,
+        "negatives": 4096,
+        "top": 512,
+        "random_weight": 41.898995535714285,
+        "threshold": -2.8556928634643555,
+        "recall": 0.949999988079071
+      }
+    },
+    {
+      "indices": [
+        5605,
+        5059
+      ],
+      "stress": true,
+      "groups": [
+        "anomaly_stu",
+        "anomaly_stu"
+      ],
+      "points": [
+        129022,
+        128687
+      ],
+      "seconds": 0.5301226840238087,
+      "loss": 1.842464804649353,
+      "details": {
+        "bce": 0.6832267045974731,
+        "ap": 0.9971503615379333,
+        "auc": 0.6729112267494202,
+        "fpr95": 0.947966456413269,
+        "positive": 651,
+        "negative": 233067,
+        "anchors": 256,
+        "negatives": 4096,
+        "top": 512,
+        "random_weight": 64.88699776785714,
+        "threshold": -2.8991384506225586,
+        "recall": 0.9499999284744263
+      }
+    }
+  ],
+  "parameter_updates": 0,
+  "mixed_batch_seconds": 17.91949697898235,
+  "peak_vram_bytes": 6298161664
+}
