@@ -11,6 +11,7 @@ from torch.utils.checkpoint import checkpoint
 from torch_scatter import segment_csr
 
 from .data import file_sha256
+from .normal import NORMAL_MODES, NormalDistribution, joint_nll, point_evidence
 from vendor.litept.model import LitePT, Point
 
 
@@ -86,7 +87,8 @@ def prepare_scan(sample, *, relations=False):
 
 
 def to_device(sample, device):
-    return {k: v.to(device, non_blocking=True) if isinstance(v, torch.Tensor) else v
+    return {k: v.to(device, non_blocking=True) if isinstance(v, torch.Tensor)
+            else to_device(v, device) if isinstance(v, dict) else v
             for k, v in sample.items()}
 
 
@@ -242,7 +244,7 @@ class Segmentor(nn.Module):
         self.adapter = mlp(128, 64, 36)
         nn.init.zeros_(self.adapter[-1].weight)
         nn.init.zeros_(self.adapter[-1].bias)
-        if mode == "conditional" or mode in RELATION_MODES:
+        if mode == "conditional" or mode in (*RELATION_MODES, *NORMAL_MODES):
             self.conditional = Conditional()
             self.point_detail = nn.Linear(64, 64)
             self.point_position = mlp(3, 32, 64)
@@ -253,13 +255,19 @@ class Segmentor(nn.Module):
             self.head = nn.Sequential(nn.Linear(128, 64), nn.GELU(), nn.Linear(64, 1))
         self.interaction = None
         self.interaction_weight = None
-        if mode not in ("base", "conditional", *RELATION_MODES):
+        if mode not in ("base", "conditional", *RELATION_MODES, *NORMAL_MODES):
             self.add_interaction(mode)
         self.relation = None
         if mode in RELATION_MODES:
             # Preserve all shared N1 initialization and the post-construction random stream.
             with torch.random.fork_rng(devices=[]):
                 self.relation = Relation(mode)
+        self.normal = None
+        if mode in NORMAL_MODES:
+            with torch.random.fork_rng(devices=[]):
+                self.normal = NormalDistribution(mode)
+                self.normal_evidence = nn.Linear(6, 64, bias=False)
+                nn.init.zeros_(self.normal_evidence.weight)
 
     def add_interaction(self, mode):
         if self.interaction is not None:
@@ -289,7 +297,19 @@ class Segmentor(nn.Module):
         return dict(sha256=digest, revision=WEIGHTS_REVISION, loaded=sorted(state),
                     removed=ignored, trainable=sum(p.numel() for p in self.backbone.parameters()))
 
-    def forward(self, sample):
+    def forward(self, sample, *, normal_loss=False):
+        evidence, auxiliary = None, None
+        if self.normal is not None:
+            observation = sample["observation"]
+            prediction = self.normal(observation)
+            # The normal model receives only normal likelihood supervision. The
+            # anomaly objective learns to use evidence, not to widen its density.
+            with torch.no_grad():
+                evidence = point_evidence(prediction, observation["log_range"])
+            if normal_loss:
+                auxiliary = (joint_nll(prediction, observation["log_range"], sample["targets"] == 0)
+                             if sample["normal_training"] else prediction["mu"].sum() * 0)
+            del prediction
         xyzi, inverse = sample["xyzi"], sample["inverse"]
         detail = torch.cat([
             self._checkpoint(self.detail, torch.cat((xyzi[start:start + POINT_CHUNK, :3] / 50,
@@ -321,7 +341,7 @@ class Segmentor(nn.Module):
             ancestors.append(ancestry)
             voxel_ancestors.append(voxel_ancestry)
         point = self.backbone.dec(point)
-        if self.mode == "conditional" or self.mode in RELATION_MODES:
+        if self.mode == "conditional" or self.mode in (*RELATION_MODES, *NORMAL_MODES):
             unified = self._checkpoint(self.conditional, pooled, sample["voxel_xyzi"][:, :3],
                 voxel_ancestors + [voxel_ancestors[0]], coords + [point.coord], features + [point.feat])
             if self.relation is not None:
@@ -330,12 +350,16 @@ class Segmentor(nn.Module):
             output = []
             for start in range(0, len(xyzi), POINT_CHUNK):
                 end = min(start + POINT_CHUNK, len(xyzi))
-                def score_points(e, context, offset):
+                def score_points(e, context, offset, normal=None):
                     state = context + self.point_detail(e) + self.point_position(offset)
+                    if normal is not None:
+                        state = state + self.normal_evidence(normal)
                     return self.head(state).squeeze(-1).float()
                 output.append(self._checkpoint(score_points, detail[start:end], unified[inverse[start:end]],
-                                               sample["offset"][start:end]))
-            return torch.cat(output)
+                                               sample["offset"][start:end],
+                                               None if evidence is None else evidence[start:end]))
+            scores = torch.cat(output)
+            return (scores, auxiliary) if normal_loss else scores
         context = self.context(point.feat)
         keys, values = self.interaction.project(features) if self.interaction is not None else ((), ())
 

@@ -1,0 +1,62 @@
+{
+  "indices": {
+    "normal_nuscenes": 0,
+    "anomaly_nuscenes": 1,
+    "normal_stu": 5736,
+    "anomaly_stu": 5016
+  },
+  "checks": [
+    {
+      "source": "nuscenes",
+      "method": "density",
+      "returns": [
+        34720,
+        34784
+      ],
+      "n1_initial_scores_exact": true,
+      "loss": 1.8093540668487549,
+      "normal_gradient_l1": 6.6465806910418905,
+      "seconds": 15.47029780302546,
+      "peak_vram_bytes": 2947921920
+    },
+    {
+      "source": "nuscenes",
+      "method": "geometry",
+      "returns": [
+        34720,
+        34784
+      ],
+      "n1_initial_scores_exact": true,
+      "loss": 1.809348702430725,
+      "normal_gradient_l1": 7.667114328360185,
+      "seconds": 0.2891542410070542,
+      "peak_vram_bytes": 2862809600
+    },
+    {
+      "source": "stu",
+      "method": "density",
+      "returns": [
+        123181,
+        126170
+      ],
+      "n1_initial_scores_exact": true,
+      "loss": 1.8108551502227783,
+      "normal_gradient_l1": 5.582167404922075,
+      "seconds": 0.569597364985384,
+      "peak_vram_bytes": 8525430784
+    },
+    {
+      "source": "stu",
+      "method": "geometry",
+      "returns": [
+        123181,
+        126170
+      ],
+      "n1_initial_scores_exact": true,
+      "loss": 1.8108482360839844,
+      "normal_gradient_l1": 6.533169569229358,
+      "seconds": 0.5563380630046595,
+      "peak_vram_bytes": 8249623552
+    }
+  ]
+}

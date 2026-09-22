@@ -13,6 +13,7 @@ from torch.utils.data import DataLoader
 from .data import (Scans, VERSION, PILOT_VERSION, CONTINUATION_VERSION, NATIVE_VERSION, load_manifest, make_real_manifest,
                    read_scan, write_json)
 from .model import Segmentor, prepare_scan, scatter_scores, to_device
+from .normal import angular_observation
 from vendor.stu.compute_point_level_ood import PointOODMetricsCalculator
 
 
@@ -20,12 +21,20 @@ STU_COMMIT = "8f0f09c2ca4bf7b665e0ae5919b4092ddae140a2"
 
 
 class PreparedScans(Scans):
-    def __init__(self, manifest, *, relations=False):
+    def __init__(self, manifest, *, relations=False, normal=False, voxel=True):
         super().__init__(manifest)
         self.relations = relations
+        self.normal, self.voxel = normal, voxel
 
     def __getitem__(self, index):
-        return prepare_scan(super().__getitem__(index), relations=self.relations)
+        sample = super().__getitem__(index)
+        result = (prepare_scan(sample, relations=self.relations) if self.voxel else
+                  {key: torch.from_numpy(value) if isinstance(value, np.ndarray) else value
+                   for key, value in sample.items()})
+        if self.normal:
+            result["observation"] = angular_observation(sample["xyzi"])
+            result["normal_training"] = self.records[index].get("group", "").startswith("normal_")
+        return result
 
 
 def precision(device):
@@ -65,8 +74,8 @@ def evaluate(model, manifest, device, workers=4, score_path=None, record_points=
     required = 64 * count + 1_000_000_000
     if memory_available() < required:
         raise RuntimeError(f"official metrics require about {required / 1e9:.1f} GB free RAM")
-    dataset = (PreparedScans(manifest, relations=True) if getattr(model, "relation", None) is not None
-               else PreparedScans(manifest))
+    dataset = PreparedScans(manifest, relations=getattr(model, "relation", None) is not None,
+                            normal=getattr(model, "normal", None) is not None)
     loader = DataLoader(dataset, batch_size=None, sampler=indices, num_workers=workers,
                         pin_memory=device.type == "cuda",
                         **({"prefetch_factor": 1} if workers else {}),

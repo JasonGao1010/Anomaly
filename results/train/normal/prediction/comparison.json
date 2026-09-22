@@ -1,0 +1,17 @@
+{
+  "seeds": {
+    "0": {
+      "geometry_minus_density": {
+        "mae_m": -0.015288879474004036,
+        "mse_m2": -0.4872670026473056,
+        "coverage90": -0.004438757160563522,
+        "width90_m": -0.29723882086483044,
+        "joint_nll": -0.12357835342854617,
+        "coverage90_error": -0.004438757160563522
+      },
+      "prediction_gate_passed": true
+    }
+  },
+  "prediction_gate_passed": true,
+  "interpretation": "development screening only; normal prediction improvement does not establish anomaly-detection improvement"
+}

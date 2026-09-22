@@ -198,7 +198,7 @@ def test_evaluation_record_preserves_official_population_and_ignored_returns(tmp
                   slots=torch.tensor([0, 2, 3, 5, 8, 9, 12, 15, 18]),
                   targets=torch.tensor([1, 1, 1, 1, 1, 0, 0, -1, -1]),
                   prediction=torch.tensor([2., 1., 3., 1., 4., .5, 1.5, 100., -100.]))
-    monkeypatch.setattr(evaluation, "PreparedScans", lambda manifest: [sample])
+    monkeypatch.setattr(evaluation, "PreparedScans", lambda manifest, **kwargs: [sample])
     manifest = dict(kind="val", sha256="fixture", records=[dict(eligible=True, normal=2, anomaly=5, points=9)])
     expected = evaluation.evaluate(Score(), manifest, torch.device("cpu"), 0)
     actual = evaluation.evaluate(Score(), manifest, torch.device("cpu"), 0, tmp_path / "val1.npy", record_points=True)
@@ -777,7 +777,7 @@ class _ToyModel(nn.Module):
 
 
 class _ToyScans:
-    def __init__(self, manifest):
+    def __init__(self, manifest, **kwargs):
         self.records = manifest["records"]
 
     def __len__(self):
